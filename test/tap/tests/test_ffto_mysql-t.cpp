@@ -25,7 +25,7 @@
 void verify_digest(MYSQL* admin, const char* template_text, int expected_count, uint64_t expected_rows_affected = 0, uint64_t expected_rows_sent = 0) {
     char query[1024];
     // Use a more relaxed LIKE pattern to handle potential normalization differences
-    sprintf(query, "SELECT count_star, sum_rows_affected, sum_rows_sent, digest_text FROM stats_mysql_query_digest WHERE digest_text LIKE '%%%s%%'", template_text);
+    snprintf(query, sizeof(query), "SELECT count_star, sum_rows_affected, sum_rows_sent, digest_text FROM stats_mysql_query_digest WHERE digest_text LIKE '%%%s%%'", template_text);
     int rc = run_q(admin, query);
     if (rc != 0) {
         ok(0, "Failed to query stats_mysql_query_digest for %s", template_text);
@@ -86,7 +86,7 @@ int main(int argc, char** argv) {
 
     // Ensure backend server exists
     char server_query[1024];
-    sprintf(server_query, "INSERT OR REPLACE INTO mysql_servers (hostgroup_id, hostname, port) VALUES (0, '%s', %d)", cl.mysql_host, cl.mysql_port);
+    snprintf(server_query, sizeof(server_query), "INSERT OR REPLACE INTO mysql_servers (hostgroup_id, hostname, port) VALUES (0, '%s', %d)", cl.mysql_host, cl.mysql_port);
     MYSQL_QUERY(admin, server_query);
     MYSQL_QUERY(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 

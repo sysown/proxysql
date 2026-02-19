@@ -30,13 +30,13 @@ int main(int argc, char** argv) {
 
     // Ensure user exists
     char user_query[1024];
-    sprintf(user_query, "INSERT OR REPLACE INTO mysql_users (username, password, default_hostgroup, fast_forward) VALUES ('%s', '%s', 0, 1)", cl.username, cl.password);
+    snprintf(user_query, sizeof(user_query), "INSERT OR REPLACE INTO mysql_users (username, password, default_hostgroup, fast_forward) VALUES ('%s', '%s', 0, 1)", cl.username, cl.password);
     MYSQL_QUERY(admin, user_query);
     MYSQL_QUERY(admin, "LOAD MYSQL USERS TO RUNTIME");
 
     // Ensure backend server exists
     char server_query[1024];
-    sprintf(server_query, "INSERT OR REPLACE INTO mysql_servers (hostgroup_id, hostname, port) VALUES (0, '%s', %d)", cl.mysql_host, cl.mysql_port);
+    snprintf(server_query, sizeof(server_query), "INSERT OR REPLACE INTO mysql_servers (hostgroup_id, hostname, port) VALUES (0, '%s', %d)", cl.mysql_host, cl.mysql_port);
     MYSQL_QUERY(admin, server_query);
     MYSQL_QUERY(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 

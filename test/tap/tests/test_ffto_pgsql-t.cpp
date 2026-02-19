@@ -26,7 +26,7 @@ CommandLine cl;
 
 void verify_pg_digest(MYSQL* admin, const char* template_text, int expected_count, uint64_t expected_rows_affected = 0, uint64_t expected_rows_sent = 0) {
     char query[1024];
-    sprintf(query, "SELECT count_star, sum_rows_affected, sum_rows_sent, digest_text FROM stats_pgsql_query_digest WHERE digest_text LIKE '%%%s%%'", template_text);
+    snprintf(query, sizeof(query), "SELECT count_star, sum_rows_affected, sum_rows_sent, digest_text FROM stats_pgsql_query_digest WHERE digest_text LIKE '%%%s%%'", template_text);
     int rc = run_q(admin, query);
     if (rc != 0) {
         ok(0, "Failed to query stats_pgsql_query_digest for %s", template_text);
@@ -85,7 +85,7 @@ int main(int argc, char** argv) {
 
     // Ensure backend server exists
     char server_query[1024];
-    sprintf(server_query, "INSERT OR REPLACE INTO pgsql_servers (hostgroup_id, hostname, port) VALUES (0, '%s', %d)", cl.pgsql_server_host, cl.pgsql_server_port);
+    snprintf(server_query, sizeof(server_query), "INSERT OR REPLACE INTO pgsql_servers (hostgroup_id, hostname, port) VALUES (0, '%s', %d)", cl.pgsql_server_host, cl.pgsql_server_port);
     MYSQL_QUERY(admin, server_query);
     MYSQL_QUERY(admin, "LOAD PGSQL SERVERS TO RUNTIME");
 
@@ -93,7 +93,7 @@ int main(int argc, char** argv) {
 
     // Standard libpq connection using root (postgres)
     char conninfo[1024];
-    sprintf(conninfo, "host=%s port=%d user=%s password=%s dbname=postgres sslmode=disable", 
+    snprintf(conninfo, sizeof(conninfo), "host=%s port=%d user=%s password=%s dbname=postgres sslmode=disable", 
             cl.pgsql_host, cl.pgsql_port, cl.pgsql_root_username, cl.pgsql_root_password);
     
     PGconn* conn = PQconnectdb(conninfo);
