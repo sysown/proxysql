@@ -1246,6 +1246,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_pgsql_connection_pool = false;
 	bool stats_pgsql_connection_pool_reset = false;
 
+	bool stats_tsdb = false;
+
 	bool runtime_proxysql_servers=false;
 	bool runtime_checksums_values=false;
 
@@ -1384,6 +1386,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_pgsql_query_rules = true; refresh = true; }
 	if (strstr(query_no_space,"stats_mysql_users"))
 		{ stats_mysql_users=true; refresh=true; }
+	if (strstr(query_no_space,"stats_tsdb") || strcasestr(query_no_space,"showtsdbstatus"))
+		{ stats_tsdb=true; refresh=true; }
 	if (strstr(query_no_space,"stats_pgsql_users"))
 		{ stats_pgsql_users = true; refresh = true; }
 	if (strstr(query_no_space,"stats_mysql_gtid_executed"))
@@ -1607,6 +1611,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			stats___pgsql_commands_counters();
 		if (stats_mysql_users)
 			stats___mysql_users();
+		if (stats_tsdb)
+			stats___tsdb();
 		if (stats_pgsql_users)
 			stats___pgsql_users();
 		if (stats_mysql_gtid_executed)
@@ -1676,6 +1682,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				admindb->execute("DELETE FROM runtime_global_variables");	// extra
 				flush_admin_variables___runtime_to_database(admindb, false, false, false, true);
 				flush_mysql_variables___runtime_to_database(admindb, false, false, false, true);
+				flush_tsdb_variables___runtime_to_database(admindb, false, false, false, true);
 #ifdef PROXYSQLCLICKHOUSE
 				flush_clickhouse_variables___runtime_to_database(admindb, false, false, false, true);
 #endif /* PROXYSQLCLICKHOUSE */
@@ -2535,10 +2542,22 @@ __end_while_pool:
 				GloProxyStats->system_cpu_sets();
 			}
 #ifndef NOJEM
-			if (GloProxyStats->system_memory_timetoget(curtime)) {
-				GloProxyStats->system_memory_sets();
-			}
+				if (GloProxyStats->system_memory_timetoget(curtime)) {
+					GloProxyStats->system_memory_sets();
+				}
 #endif
+			if (GloProxyStats->tsdb_sampler_timetoget(curtime)) {
+				GloProxyStats->tsdb_sampler_loop();
+			}
+			if (GloProxyStats->tsdb_downsample_timetoget(curtime)) {
+				GloProxyStats->tsdb_downsample_metrics();
+			}
+			if (GloProxyStats->tsdb_monitor_timetoget(curtime)) {
+				GloProxyStats->tsdb_monitor_loop();
+			}
+			if (GloProxyStats->tsdb_retention_timetoget(curtime)) {
+				GloProxyStats->tsdb_retention_cleanup();
+			}
 		}
 		if (S_amll.get_version()!=version) {
 			S_amll.wrlock();
@@ -2769,6 +2788,7 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	generate_load_save_disk_commands("mcp_query_rules",   "MCP QUERY RULES");
 	generate_load_save_disk_commands("mcp_variables",     "MCP VARIABLES");
 	generate_load_save_disk_commands("genai_variables",   "GENAI VARIABLES");
+	generate_load_save_disk_commands("tsdb_variables",    "TSDB VARIABLES");
 	generate_load_save_disk_commands("scheduler",         "SCHEDULER");
 	generate_load_save_disk_commands("restapi",           "RESTAPI");
 	generate_load_save_disk_commands("proxysql_servers",  "PROXYSQL SERVERS");
@@ -3045,6 +3065,96 @@ void ProxySQL_Admin::init_genai_variables() {
 	flush_genai_variables___database_to_runtime(admindb, true);
 }
 #endif /* PROXYSQLGENAI */
+
+void ProxySQL_Admin::init_tsdb_variables() {
+	flush_tsdb_variables___runtime_to_database(configdb, false, false, false, false);
+	flush_tsdb_variables___runtime_to_database(admindb, false, true, false, false);
+	load_tsdb_variables_to_runtime();
+}
+
+void ProxySQL_Admin::flush_tsdb_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime) {
+	if (onlyifempty) {
+		char *error=NULL;
+		int cols=0;
+		int affected_rows=0;
+		SQLite3_result *resultset=NULL;
+		char *q=(char *)"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'tsdb-%'";
+		db->execute_statement(q, &error , &cols , &affected_rows , &resultset);
+		int matching_rows=0;
+		if (error) {
+			proxy_error("Error on %s : %s\n", q, error);
+			free(error);
+			if (resultset) delete resultset;
+			return;
+		} else {
+			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+				SQLite3_row *r=*it;
+				matching_rows+=atoi(r->fields[0]);
+			}
+		}
+		if (resultset) delete resultset;
+		if (matching_rows) {
+			return;
+		}
+	}
+	if (del) {
+		db->execute("DELETE FROM global_variables WHERE variable_name LIKE 'tsdb-%'");
+	}
+	if (runtime) {
+		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'tsdb-%'");
+	}
+
+	const char *query_a;
+	const char *query_b = "INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(?1, ?2)";
+	if (replace) {
+		query_a = "REPLACE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)";
+	} else {
+		query_a = "INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)";
+	}
+
+	stmt_unique_ptr u_stmt_a { nullptr };
+	stmt_unique_ptr u_stmt_b { nullptr };
+	int rc;
+
+	std::tie(rc, u_stmt_a) = db->prepare_v2(query_a);
+	ASSERT_SQLITE_OK(rc, db);
+	if (runtime) {
+		std::tie(rc, u_stmt_b) = db->prepare_v2(query_b);
+		ASSERT_SQLITE_OK(rc, db);
+	}
+
+	if (GloProxyStats == NULL) {
+		return;
+	}
+	char **varnames = GloProxyStats->get_variables_list();
+	for (int i=0; varnames[i]; i++) {
+		char *val = GloProxyStats->get_variable(varnames[i]);
+		const char* safe_val = (val ? val : "");
+		char qualified_name[128];
+		snprintf(qualified_name, sizeof(qualified_name), "tsdb-%s", varnames[i]);
+
+		// Bind and execute for query_a
+		rc = (*proxy_sqlite3_bind_text)(u_stmt_a.get(), 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_text)(u_stmt_a.get(), 2, safe_val, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_step)(u_stmt_a.get());
+		if (rc != SQLITE_DONE) { ASSERT_SQLITE_OK(rc, db); }
+		rc = (*proxy_sqlite3_reset)(u_stmt_a.get()); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_clear_bindings)(u_stmt_a.get()); ASSERT_SQLITE_OK(rc, db);
+
+		if (runtime) {
+			rc = (*proxy_sqlite3_bind_text)(u_stmt_b.get(), 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_text)(u_stmt_b.get(), 2, safe_val, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_step)(u_stmt_b.get());
+			if (rc != SQLITE_DONE) { ASSERT_SQLITE_OK(rc, db); }
+			rc = (*proxy_sqlite3_reset)(u_stmt_b.get()); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_clear_bindings)(u_stmt_b.get()); ASSERT_SQLITE_OK(rc, db);
+		}
+
+		if (val) free(val);
+		free(varnames[i]);
+	}
+	free(varnames);
+}
 
 void ProxySQL_Admin::admin_shutdown() {
 	int i;
@@ -8932,6 +9042,60 @@ void ProxySQL_Admin::enable_aurora_testing() {
 	load_mysql_query_rules_to_runtime();
 }
 #endif // TEST_AURORA
+
+void ProxySQL_Admin::load_tsdb_variables_to_runtime() {
+	if (GloProxyStats == NULL) {
+		return;
+	}
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	// TSDB variables are in global_variables named 'tsdb-%'
+	if (flush_GENERIC_variables__retrieve__database_to_runtime("tsdb", error, cols, affected_rows, resultset) == true) {
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			const char *name = r->fields[0];
+			const char *value = r->fields[1];
+			GloProxyStats->set_variable(name, value);
+		}
+		flush_tsdb_variables___runtime_to_database(admindb, false, false, false, true);
+	}
+	if (resultset) delete resultset;
+}
+
+void ProxySQL_Admin::save_tsdb_variables_from_runtime() {
+	if (GloProxyStats == NULL) {
+		return;
+	}
+	char **tsdb_vars = GloProxyStats->get_variables_list();
+	const char *query = "REPLACE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)";
+
+	stmt_unique_ptr u_stmt { nullptr };
+	int rc;
+
+	std::tie(rc, u_stmt) = admindb->prepare_v2(query);
+	ASSERT_SQLITE_OK(rc, admindb);
+
+	for (int i=0; tsdb_vars[i]; i++) {
+		char *val = GloProxyStats->get_variable(tsdb_vars[i]);
+		if (val) {
+			char qualified_name[128];
+			snprintf(qualified_name, sizeof(qualified_name), "tsdb-%s", tsdb_vars[i]);
+
+			rc = (*proxy_sqlite3_bind_text)(u_stmt.get(), 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_text)(u_stmt.get(), 2, val, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_step)(u_stmt.get());
+			if (rc != SQLITE_DONE) { ASSERT_SQLITE_OK(rc, admindb); }
+			rc = (*proxy_sqlite3_reset)(u_stmt.get()); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_clear_bindings)(u_stmt.get()); ASSERT_SQLITE_OK(rc, admindb);
+
+			free(val);
+		}
+		free(tsdb_vars[i]);
+	}
+	free(tsdb_vars);
+}
 
 #ifdef TEST_GROUPREP
 void ProxySQL_Admin::enable_grouprep_testing() {

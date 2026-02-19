@@ -301,6 +301,18 @@ const std::vector<std::string> SAVE_GENAI_VARIABLES_TO_MEMORY = {
 	"SAVE GENAI VARIABLES TO MEM" ,
 	"SAVE GENAI VARIABLES FROM RUNTIME" ,
 	"SAVE GENAI VARIABLES FROM RUN" };
+
+const std::vector<std::string> LOAD_TSDB_VARIABLES_FROM_MEMORY = {
+	"LOAD TSDB VARIABLES FROM MEMORY" ,
+	"LOAD TSDB VARIABLES FROM MEM" ,
+	"LOAD TSDB VARIABLES TO RUNTIME" ,
+	"LOAD TSDB VARIABLES TO RUN" };
+
+const std::vector<std::string> SAVE_TSDB_VARIABLES_TO_MEMORY = {
+	"SAVE TSDB VARIABLES TO MEMORY" ,
+	"SAVE TSDB VARIABLES TO MEM" ,
+	"SAVE TSDB VARIABLES FROM RUNTIME" ,
+	"SAVE TSDB VARIABLES FROM RUN" };
 //
 const std::vector<std::string> LOAD_COREDUMP_FROM_MEMORY = {
 	"LOAD COREDUMP FROM MEMORY" ,
@@ -963,6 +975,16 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	}
 #endif // DEBUG
 
+	if (query_no_space_length == strlen("PROXYSQL TSDB DOWNSAMPLE") && !strncasecmp("PROXYSQL TSDB DOWNSAMPLE", query_no_space, query_no_space_length)) {
+		proxy_info("Received PROXYSQL TSDB DOWNSAMPLE command\n");
+		if (GloProxyStats) {
+			GloProxyStats->tsdb_downsample_metrics();
+		}
+		ProxySQL_Admin *SPA = (ProxySQL_Admin *)pa;
+		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		return false;
+	}
+
 	if (strcasecmp("PROXYSQL RELOAD TLS",query_no_space) == 0) {
 		proxy_info("Received %s command\n", query_no_space);
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -1096,6 +1118,8 @@ bool is_valid_global_variable(const char *var_name) {
 	} else if (strlen(var_name) > 6 && !strncmp(var_name, "pgsql-", 6) && GloPTH->has_variable(var_name + 6)) {
 		return true;
 	} else if (strlen(var_name) > 6 && !strncmp(var_name, "admin-", 6) && SPA->has_variable(var_name + 6)) {
+		return true;
+	} else if (strlen(var_name) > 5 && !strncmp(var_name, "tsdb-", 5) && GloProxyStats && GloProxyStats->has_variable(var_name + 5)) {
 		return true;
 	} else if (strlen(var_name) > 5 && !strncmp(var_name, "ldap-", 5) && GloMyLdapAuth && GloMyLdapAuth->has_variable(var_name + 5)) {
 		return true;
@@ -1887,11 +1911,30 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 
 		if ((query_no_space_length > 21) && ((!strncasecmp("SAVE MYSQL VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD MYSQL VARIABLES ", query_no_space, 21)) ||
 			(!strncasecmp("SAVE PGSQL VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD PGSQL VARIABLES ", query_no_space, 21)) ||
-			(!strncasecmp("SAVE GENAI VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD GENAI VARIABLES ", query_no_space, 21)))) {
+			(!strncasecmp("SAVE GENAI VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD GENAI VARIABLES ", query_no_space, 21)) ||
+			(!strncasecmp("SAVE TSDB VARIABLES ", query_no_space, 20)) || (!strncasecmp("LOAD TSDB VARIABLES ", query_no_space, 20)))) {
 
-			const bool is_pgsql = (query_no_space[5] == 'P' || query_no_space[5] == 'p') ? true : false;
-			const bool is_genai = (query_no_space[5] == 'G' || query_no_space[5] == 'g') ? true : false;
-			const std::string modname = is_pgsql ? "pgsql_variables" : (is_genai ? "genai_variables" : "mysql_variables");
+			const bool is_pgsql = strcasestr(query_no_space, "PGSQL") ? true : false;
+			const bool is_genai = strcasestr(query_no_space, "GENAI") ? true : false;
+			const bool is_tsdb = strcasestr(query_no_space, "TSDB") ? true : false;
+			const std::string modname = is_pgsql ? "pgsql_variables" : (is_genai ? "genai_variables" : (is_tsdb ? "tsdb_variables" : "mysql_variables"));
+
+			if (is_tsdb) {
+				if (is_admin_command_or_alias(LOAD_TSDB_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length)) {
+					ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+					SPA->load_tsdb_variables_to_runtime();
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded tsdb variables to RUNTIME\n");
+					SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+					return false;
+				}
+				if (is_admin_command_or_alias(SAVE_TSDB_VARIABLES_TO_MEMORY, query_no_space, query_no_space_length)) {
+					ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+					SPA->save_tsdb_variables_from_runtime();
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved tsdb variables from RUNTIME\n");
+					SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+					return false;
+				}
+			}
 
 			tuple<string, vector<string>, vector<string>>& t = load_save_disk_commands[modname];
 			if (is_admin_command_or_alias(get<1>(t), query_no_space, query_no_space_length)) {
@@ -1901,6 +1944,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				}
 				else if (is_genai) {
 					*q = l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'genai-%'");
+				}
+				else if (is_tsdb) {
+					*q = l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'tsdb-%'");
 				}
 				else {
 					*q = l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'mysql-%'");
@@ -1916,6 +1962,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				}
 				else if (is_genai) {
 					*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'genai-%'");
+				}
+				else if (is_tsdb) {
+					*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'tsdb-%'");
 				}
 				else {
 					*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'mysql-%'");
@@ -1956,9 +2005,10 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		if (
-			(query_no_space_length==strlen("LOAD MYSQL VARIABLES FROM CONFIG") && (!strncasecmp("LOAD MYSQL VARIABLES FROM CONFIG",query_no_space, query_no_space_length) ||
-				!strncasecmp("LOAD PGSQL VARIABLES FROM CONFIG", query_no_space, query_no_space_length) ||
-				!strncasecmp("LOAD GENAI VARIABLES FROM CONFIG", query_no_space, query_no_space_length)))
+			(query_no_space_length==strlen("LOAD MYSQL VARIABLES FROM CONFIG") && !strncasecmp("LOAD MYSQL VARIABLES FROM CONFIG",query_no_space, query_no_space_length)) ||
+			(query_no_space_length==strlen("LOAD PGSQL VARIABLES FROM CONFIG") && !strncasecmp("LOAD PGSQL VARIABLES FROM CONFIG", query_no_space, query_no_space_length)) ||
+			(query_no_space_length==strlen("LOAD TSDB VARIABLES FROM CONFIG") && !strncasecmp("LOAD TSDB VARIABLES FROM CONFIG", query_no_space, query_no_space_length)) ||
+			(query_no_space_length==strlen("LOAD GENAI VARIABLES FROM CONFIG") && !strncasecmp("LOAD GENAI VARIABLES FROM CONFIG", query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			if (GloVars.configfile_open) {
@@ -1966,12 +2016,15 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				if (GloVars.confFile->OpenFile(NULL)==true) {
 					int rows=0;
 					ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-					if (query_no_space[5] == 'P' || query_no_space[5] == 'p') {
+					if (strcasestr(query_no_space, "PGSQL")) {
 						rows=SPA->proxysql_config().Read_Global_Variables_from_configfile("pgsql");
 						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql global variables from CONFIG\n");
-					} else if (query_no_space[5] == 'G' || query_no_space[5] == 'g') {
+					} else if (strcasestr(query_no_space, "GENAI")) {
 						rows=SPA->proxysql_config().Read_Global_Variables_from_configfile("genai");
 						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded genai global variables from CONFIG\n");
+					} else if (strcasestr(query_no_space, "TSDB")) {
+						rows=SPA->proxysql_config().Read_Global_Variables_from_configfile("tsdb");
+						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded tsdb global variables from CONFIG\n");
 					} else {
 						rows = SPA->proxysql_config().Read_Global_Variables_from_configfile("mysql");
 						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql global variables from CONFIG\n");
@@ -4676,6 +4729,21 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		l_free(query_length, query);
 		query = l_strdup("SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables WHERE variable_name LIKE 'pgsql-\%' ORDER BY variable_name");
 		query_length = strlen(query) + 1;
+		goto __run_query;
+	}
+
+	if (query_no_space_length == strlen("SHOW TSDB VARIABLES") && !strncasecmp("SHOW TSDB VARIABLES", query_no_space, query_no_space_length)) {
+		l_free(query_length, query);
+		query = l_strdup("SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables WHERE variable_name LIKE 'tsdb-%' ORDER BY variable_name");
+		query_length = strlen(query) + 1;
+		goto __run_query;
+	}
+
+	if (query_no_space_length == strlen("SHOW TSDB STATUS") && !strncasecmp("SHOW TSDB STATUS", query_no_space, query_no_space_length)) {
+		l_free(query_length, query);
+		query = l_strdup("SELECT Variable_Name AS Variable_name, Variable_Value AS Value FROM stats_tsdb ORDER BY Variable_name");
+		query_length = strlen(query) + 1;
+		SPA->stats___tsdb();
 		goto __run_query;
 	}
 

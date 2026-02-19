@@ -13,6 +13,7 @@
 #include "MySQL_PreparedStatement.h"
 #include "PgSQL_PreparedStatement.h"
 #include "ProxySQL_Cluster.hpp"
+#include "ProxySQL_Statistics.hpp"
 #include "MySQL_Query_Cache.h"
 #include "PgSQL_Query_Cache.h"
 #include "MySQL_Query_Processor.h"
@@ -50,7 +51,7 @@ extern PgSQL_STMT_Manager* GloPgStmt;
 extern MySQL_Query_Processor* GloMyQPro;
 extern PgSQL_Query_Processor* GloPgQPro;
 extern ProxySQL_Cluster *GloProxyCluster;
-
+extern ProxySQL_Statistics *GloProxyStats;
 extern MySQL_Logger *GloMyLogger;
 extern PgSQL_Logger *GloPgSQL_Logger;
 
@@ -801,6 +802,27 @@ void ProxySQL_Admin::stats___pgsql_global() {
 	}
 
 	statsdb->execute("COMMIT");
+}
+
+void ProxySQL_Admin::stats___tsdb() {
+	if (!GloProxyStats) return;
+	ProxySQL_Statistics::tsdb_status_t status = GloProxyStats->get_tsdb_status();
+	char query[512];
+	admindb->execute("BEGIN");
+	admindb->execute("DELETE FROM stats_tsdb");
+
+	auto insert_stat = [&](const char* name, unsigned long long value) {
+		snprintf(query, sizeof(query), "\
+INSERT INTO stats_tsdb (Variable_Name, Variable_Value) VALUES ('%s', '%llu')", name, value);
+		admindb->execute(query);
+	};
+
+	insert_stat("Total_Series", status.total_series);
+	insert_stat("Total_Datapoints", status.total_datapoints);
+	insert_stat("Disk_Size_Bytes", status.disk_size_bytes);
+	insert_stat("Oldest_Datapoint_TS", status.oldest_datapoint);
+	insert_stat("Newest_Datapoint_TS", status.newest_datapoint);
+	admindb->execute("COMMIT");
 }
 
 
