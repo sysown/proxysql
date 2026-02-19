@@ -60,16 +60,50 @@ const int DEFAULT_HOSTGROUP = 0;
 // SQLite3 Server port (ProxySQL's built-in SQLite backend)
 const int SQLITE3_SERVER_PORT = 6030;
 
+std::vector<std::string> build_cleanup_queries() {
+	// Clean up all configuration from any previous test runs
+	std::vector<std::string> queries = {
+		// Clean up mysql servers and related configurations
+		"DELETE FROM mysql_servers",
+		"DELETE FROM mysql_servers_ssl_params",
+		"DELETE FROM mysql_replication_hostgroups",
+		"DELETE FROM mysql_group_replication_hostgroups",
+		"DELETE FROM mysql_galera_hostgroups",
+		"DELETE FROM mysql_aws_aurora_hostgroups",
+		"DELETE FROM mysql_hostgroup_attributes",
+		// Clean up query rules
+		"DELETE FROM mysql_query_rules",
+		"DELETE FROM mysql_query_rules_fast_routing",
+		// Clean up users
+		"DELETE FROM mysql_users",
+		// Clean up firewall rules
+		"DELETE FROM mysql_firewall_whitelist_users",
+		"DELETE FROM mysql_firewall_whitelist_rules",
+		"DELETE FROM mysql_firewall_whitelist_sqli_fingerprints",
+		// Load to runtime
+		"LOAD MYSQL SERVERS TO RUNTIME",
+		"LOAD MYSQL QUERY RULES TO RUNTIME",
+		"LOAD MYSQL USERS TO RUNTIME"
+	};
+	return queries;
+}
+
+std::vector<std::string> build_user_queries(const char* username, const char* password) {
+	std::vector<std::string> queries = {
+		"INSERT INTO mysql_users (username, password, default_hostgroup) VALUES ('" +
+			std::string(username) + "', '" + std::string(password) + "', " +
+			std::to_string(DEFAULT_HOSTGROUP) + ")",
+		"LOAD MYSQL USERS TO RUNTIME"
+	};
+	return queries;
+}
+
 std::vector<std::string> build_setup_queries() {
 	std::vector<std::string> queries = {
-		"DELETE FROM mysql_servers WHERE hostgroup_id IN (0, 1, 2)",
 		"INSERT INTO mysql_servers (hostgroup_id, hostname, port) VALUES (0, '127.0.0.1', " + std::to_string(SQLITE3_SERVER_PORT) + ")",
 		"INSERT INTO mysql_servers (hostgroup_id, hostname, port) VALUES (1, '127.0.0.1', " + std::to_string(SQLITE3_SERVER_PORT) + ")",
 		"INSERT INTO mysql_servers (hostgroup_id, hostname, port) VALUES (2, '127.0.0.1', " + std::to_string(SQLITE3_SERVER_PORT) + ")",
-		"LOAD MYSQL SERVERS TO RUNTIME",
-		"DELETE FROM mysql_query_rules",
-		"DELETE FROM mysql_query_rules_fast_routing",
-		"LOAD MYSQL QUERY RULES TO RUNTIME"
+		"LOAD MYSQL SERVERS TO RUNTIME"
 	};
 	return queries;
 }
@@ -119,7 +153,23 @@ int main(int argc, char** argv) {
 	}
 	diag("Successfully connected to ProxySQL admin interface");
 
-	// Setup servers and clear rules
+	// Clean up any configuration from previous test runs
+	diag("=== Cleaning up previous test configuration ===");
+	std::vector<std::string> cleanup_queries = build_cleanup_queries();
+	if (run_queries(proxysql_admin, cleanup_queries)) {
+		return exit_status();
+	}
+	diag("Cleanup completed");
+
+	// Create test user
+	diag("=== Creating test user ===");
+	std::vector<std::string> user_queries = build_user_queries(cl.username, cl.password);
+	if (run_queries(proxysql_admin, user_queries)) {
+		return exit_status();
+	}
+	diag("Test user '%s' created", cl.username);
+
+	// Setup servers
 	diag("=== Setting up test environment ===");
 	std::vector<std::string> setup_queries = build_setup_queries();
 	if (run_queries(proxysql_admin, setup_queries)) {
