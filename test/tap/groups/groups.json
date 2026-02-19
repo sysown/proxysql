@@ -260,6 +260,7 @@
   "genai_embedding_rerank-t": [ "ai-g1" ],
   "genai_module-t": [ "ai-g1" ],
   "mcp_module-t": [ "ai-g1" ],
+  "mcp_show_connections_commands_inmemory-t": [ "ai-g1" ],
   "mcp_query_run_sql_readonly-t": [ "ai-g1" ],
   "nl2sql_integration-t": [ "ai-g1" ],
   "nl2sql_internal-t": [ "ai-g1" ],

@@ -91,6 +91,14 @@ public:
 			 * hardcoded safety maximum in `Stats_Tool_Handler`.
 			 */
 			int mcp_stats_show_processlist_max_rows;
+			/**
+			 * @brief Enables MCP debug-oriented stats tools.
+			 *
+			 * When set to `false` (default), tools intended primarily for
+			 * troubleshooting and development diagnostics are hidden/blocked
+			 * from regular MCP usage.
+			 */
+			bool mcp_stats_enable_debug_tools;
 		// MySQL Tool Handler configuration
 		char* mcp_mysql_hosts;                  ///< Comma-separated list of MySQL hosts
 		char* mcp_mysql_ports;                  ///< Comma-separated list of MySQL ports

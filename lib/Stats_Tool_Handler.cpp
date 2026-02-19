@@ -6,6 +6,7 @@
 #include <ctime>
 #include <cmath>
 #include <limits>
+#include <algorithm>
 
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
@@ -15,6 +16,10 @@ using json = nlohmann::json;
 #include "proxysql_debug.h"
 #include "proxysql_utils.h"
 #include "MySQL_Logger.hpp"
+#include "MySQL_Query_Processor.h"
+#include "PgSQL_Query_Processor.h"
+#include "MySQL_HostGroups_Manager.h"
+#include "PgSQL_HostGroups_Manager.h"
 
 #include "MCP_Thread.h"
 #include "Stats_Tool_Handler.h"
@@ -23,6 +28,11 @@ extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Logger *GloMyLogger;
 extern MySQL_Threads_Handler *GloMTH;
 extern PgSQL_Threads_Handler *GloPTH;
+
+extern MySQL_Query_Processor* GloMyQPro;
+extern PgSQL_Query_Processor* GloPgQPro;
+extern MySQL_HostGroups_Manager* MyHGM;
+extern PgSQL_HostGroups_Manager* PgHGM;
 
 // Latency bucket thresholds in microseconds for commands_counters histogram
 static const std::vector<int> LATENCY_BUCKET_THRESHOLDS = {
@@ -163,6 +173,70 @@ static bool parse_digest_filter(const std::string& digest_filter, uint64_t& dige
 	digest_value = parsed;
 	return true;
 }
+
+/**
+ * @brief Parse a nullable numeric SQLite field into signed 64-bit.
+ *
+ * Resultsets returned by in-memory ProxySQL snapshots expose numbers as
+ * null-terminated strings. This helper centralizes conversion semantics for MCP
+ * tools, treating null fields as zero and avoiding exceptions.
+ *
+ * @param value Nullable C string from `SQLite3_row::fields`.
+ * @return Parsed value, or zero when @p value is null.
+ */
+static long long parse_ll_or_zero(const char* value) {
+	return value ? atoll(value) : 0LL;
+}
+
+/**
+ * @brief Parse a nullable numeric SQLite field into signed int.
+ *
+ * This helper mirrors `parse_ll_or_zero()` for integer-sized fields and keeps
+ * conversion behavior consistent across MCP handlers.
+ *
+ * @param value Nullable C string from `SQLite3_row::fields`.
+ * @return Parsed value, or zero when @p value is null.
+ */
+static int parse_int_or_zero(const char* value) {
+	return value ? atoi(value) : 0;
+}
+
+/**
+ * @brief Snapshot row used by in-memory implementation of `show_commands`.
+ *
+ * Values are copied from `MySQL_Query_Processor::get_stats_commands_counters()`
+ * or `PgSQL_Query_Processor::get_stats_commands_counters()` once, then sorted,
+ * filtered, and paginated in C++ without querying `stats.*` tables.
+ */
+struct mcp_command_counter_row_t {
+	std::string command;             ///< Command name (for example `SELECT`).
+	long long total_time_us;         ///< Total observed execution time in microseconds.
+	long long total_count;           ///< Total observed executions for the command.
+	std::vector<int> latency_buckets;///< Histogram buckets from `cnt_100us` to `cnt_INFs`.
+};
+
+/**
+ * @brief Snapshot row used by in-memory implementation of `show_connections`.
+ *
+ * The row models both MySQL and PostgreSQL connection-pool snapshots. The
+ * `queries_gtid_sync` field is valid only for MySQL.
+ */
+struct mcp_connection_pool_row_t {
+	int hostgroup;                   ///< Runtime hostgroup id.
+	std::string srv_host;            ///< Backend hostname/ip.
+	int srv_port;                    ///< Backend TCP port.
+	std::string status;              ///< ONLINE/SHUNNED/OFFLINE_* textual status.
+	int conn_used;                   ///< Number of connections currently in use.
+	int conn_free;                   ///< Number of idle pooled connections.
+	long long conn_ok;               ///< Successful backend connects.
+	long long conn_err;              ///< Failed backend connects.
+	int max_conn_used;               ///< Maximum concurrently used pooled connections.
+	long long queries;               ///< Total queries sent through this backend.
+	long long queries_gtid_sync;     ///< GTID sync queries (MySQL only).
+	long long bytes_data_sent;       ///< Bytes sent to backend.
+	long long bytes_data_recv;       ///< Bytes received from backend.
+	int latency_us;                  ///< Last measured latency in microseconds.
+};
 
 // ============================================================================
 // Constructor / Destructor / Init / Close
@@ -378,7 +452,7 @@ json Stats_Tool_Handler::get_tool_list() {
 	json tools = json::array();
 
 	// =========================================================================
-	// Live Data Tools (12)
+	// Live Data Tools (13)
 	// =========================================================================
 
 	tools.push_back(create_tool_description(
@@ -597,11 +671,30 @@ json Stats_Tool_Handler::get_tool_list() {
 					{"type", "string"},
 					{"enum", {"ONLINE", "SHUNNED", "OFFLINE_SOFT", "OFFLINE_HARD"}},
 					{"description", "Filter by server status"}
+				}}
+			}}
+		}
+	));
+
+	tools.push_back(create_tool_description(
+		"show_free_connections",
+		"Returns debug free-connection pool snapshots. Requires mcp-stats_enable_debug_tools=true.",
+		{
+			{"type", "object"},
+			{"properties", {
+				{"db_type", {
+					{"type", "string"},
+					{"enum", {"mysql", "pgsql"}},
+					{"description", "Database type (default: mysql)"},
+					{"default", "mysql"}
 				}},
-				{"detail", {
-					{"type", "boolean"},
-					{"description", "Include free connection details (default: false)"},
-					{"default", false}
+				{"hostgroup", {
+					{"type", "integer"},
+					{"description", "Filter by hostgroup ID"}
+				}},
+				{"server", {
+					{"type", "string"},
+					{"description", "Filter by server (format: host:port)"}
 				}}
 			}}
 		}
@@ -1088,6 +1181,8 @@ json Stats_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 			result = handle_show_commands(arguments);
 		} else if (tool_name == "show_connections") {
 			result = handle_show_connections(arguments);
+		} else if (tool_name == "show_free_connections") {
+			result = handle_show_free_connections(arguments);
 		} else if (tool_name == "show_errors") {
 			result = handle_show_errors(arguments);
 		} else if (tool_name == "show_users") {
@@ -1615,9 +1710,16 @@ json Stats_Tool_Handler::handle_show_queries(const json& arguments) {
 /**
  * @brief Returns command execution statistics with latency histograms
  *
- * Queries the stats_mysql_commands_counters or stats_pgsql_commands_counters
- * tables for per-command metrics. Includes execution counts and latency
- * histogram data with calculated percentiles (p50, p95, p99).
+ * This implementation reads command counters directly from in-memory query
+ * processor snapshots (`get_stats_commands_counters()`), avoiding
+ * `stats_mysql_commands_counters` / `stats_pgsql_commands_counters` table reads.
+ *
+ * The handler keeps the external MCP contract unchanged by reproducing the same
+ * SQL semantics in C++:
+ * - exact `command` filtering
+ * - `total_count DESC` ordering
+ * - `limit` / `offset` pagination
+ * - per-row histogram/percentile projection
  *
  * @param arguments JSON object with optional parameters:
  *   - db_type: "mysql" (default) or "pgsql"
@@ -1633,77 +1735,113 @@ json Stats_Tool_Handler::handle_show_commands(const json& arguments) {
 	int limit = arguments.value("limit", 100);
 	int offset = arguments.value("offset", 0);
 
-	std::string table = (db_type == "pgsql") ? "stats_pgsql_commands_counters" : "stats_mysql_commands_counters";
-
-	std::string sql = "SELECT Command, Total_Time_us, Total_cnt, "
-		"cnt_100us, cnt_500us, cnt_1ms, cnt_5ms, cnt_10ms, cnt_50ms, "
-		"cnt_100ms, cnt_500ms, cnt_1s, cnt_5s, cnt_10s, cnt_INFs "
-		"FROM stats." + table;
-
-	if (!command.empty()) {
-		sql += " WHERE Command = '" + sql_escape(command) + "'";
+	if (db_type != "mysql" && db_type != "pgsql") {
+		return create_error_response("Invalid db_type: " + db_type);
 	}
-
-	sql += " ORDER BY Total_cnt DESC LIMIT " + std::to_string(limit) + " OFFSET " + std::to_string(offset);
+	if (limit < 0) {
+		return create_error_response("limit must be >= 0");
+	}
+	if (offset < 0) {
+		return create_error_response("offset must be >= 0");
+	}
 
 	SQLite3_result* resultset = NULL;
-	int cols = 0;
-	std::string err = execute_admin_query(sql.c_str(), &resultset, &cols);
-
-	if (!err.empty()) {
-		return create_error_response("Failed to query commands: " + err);
+	if (db_type == "pgsql") {
+		if (!GloPgQPro) {
+			return create_error_response("PgSQL Query Processor not available");
+		}
+		resultset = GloPgQPro->get_stats_commands_counters();
+	} else {
+		if (!GloMyQPro) {
+			return create_error_response("MySQL Query Processor not available");
+		}
+		resultset = GloMyQPro->get_stats_commands_counters();
 	}
+	if (!resultset) {
+		return create_error_response("Failed to read in-memory commands counters");
+	}
+
+	std::vector<mcp_command_counter_row_t> snapshots;
+	snapshots.reserve(resultset->rows.size());
+	if (resultset) {
+		for (const auto& row : resultset->rows) {
+			if (!row) {
+				continue;
+			}
+			const std::string row_command = row->fields[0] ? row->fields[0] : "";
+			if (!command.empty() && row_command != command) {
+				continue;
+			}
+
+			mcp_command_counter_row_t snapshot;
+			snapshot.command = row_command;
+			/**
+			 * `Command_Counter::get_row()` encodes values in this order:
+			 * [0]=Command, [1]=Total_Time_us, [2]=Total_Cnt, [3..14]=histogram.
+			 */
+			snapshot.total_time_us = parse_ll_or_zero(row->fields[1]);
+			snapshot.total_count = parse_ll_or_zero(row->fields[2]);
+			snapshot.latency_buckets.reserve(12);
+			for (int i = 3; i <= 14; i++) {
+				snapshot.latency_buckets.push_back(parse_int_or_zero(row->fields[i]));
+			}
+			snapshots.push_back(std::move(snapshot));
+		}
+		delete resultset;
+	}
+
+	std::sort(snapshots.begin(), snapshots.end(), [](const mcp_command_counter_row_t& lhs, const mcp_command_counter_row_t& rhs) {
+		if (lhs.total_count != rhs.total_count) {
+			return lhs.total_count > rhs.total_count;
+		}
+		if (lhs.total_time_us != rhs.total_time_us) {
+			return lhs.total_time_us > rhs.total_time_us;
+		}
+		return lhs.command < rhs.command;
+	});
+
+	const size_t page_begin = std::min(static_cast<size_t>(offset), snapshots.size());
+	const size_t page_end = std::min(page_begin + static_cast<size_t>(limit), snapshots.size());
 
 	json commands = json::array();
 	long long total_commands = 0;
 	long long total_time = 0;
 
-	if (resultset) {
-		for (const auto& row : resultset->rows) {
-			long long total_time_cmd = row->fields[1] ? std::stoll(row->fields[1]) : 0;
-			long long total_cnt = row->fields[2] ? std::stoll(row->fields[2]) : 0;
-			long long avg_time = (total_cnt > 0) ? total_time_cmd / total_cnt : 0;
+	for (size_t idx = page_begin; idx < page_end; ++idx) {
+		const auto& snapshot = snapshots[idx];
+		const long long avg_time = (snapshot.total_count > 0) ? (snapshot.total_time_us / snapshot.total_count) : 0;
 
-			total_commands += total_cnt;
-			total_time += total_time_cmd;
+		total_commands += snapshot.total_count;
+		total_time += snapshot.total_time_us;
 
-			// Parse histogram buckets
-			std::vector<int> buckets;
-			for (int i = 3; i <= 14; i++) {
-				buckets.push_back(row->fields[i] ? std::stoi(row->fields[i]) : 0);
-			}
+		const std::vector<int>& buckets = snapshot.latency_buckets;
+		json cmd;
+		cmd["command"] = snapshot.command;
+		cmd["total_count"] = snapshot.total_count;
+		cmd["total_time_us"] = snapshot.total_time_us;
+		cmd["avg_time_us"] = avg_time;
+		cmd["latency_histogram"] = {
+			{"cnt_100us", buckets.size() > 0 ? buckets[0] : 0},
+			{"cnt_500us", buckets.size() > 1 ? buckets[1] : 0},
+			{"cnt_1ms", buckets.size() > 2 ? buckets[2] : 0},
+			{"cnt_5ms", buckets.size() > 3 ? buckets[3] : 0},
+			{"cnt_10ms", buckets.size() > 4 ? buckets[4] : 0},
+			{"cnt_50ms", buckets.size() > 5 ? buckets[5] : 0},
+			{"cnt_100ms", buckets.size() > 6 ? buckets[6] : 0},
+			{"cnt_500ms", buckets.size() > 7 ? buckets[7] : 0},
+			{"cnt_1s", buckets.size() > 8 ? buckets[8] : 0},
+			{"cnt_5s", buckets.size() > 9 ? buckets[9] : 0},
+			{"cnt_10s", buckets.size() > 10 ? buckets[10] : 0},
+			{"cnt_INFs", buckets.size() > 11 ? buckets[11] : 0}
+		};
+		cmd["percentiles"] = {
+			{"p50_us", calculate_percentile(buckets, LATENCY_BUCKET_THRESHOLDS, 0.50)},
+			{"p90_us", calculate_percentile(buckets, LATENCY_BUCKET_THRESHOLDS, 0.90)},
+			{"p95_us", calculate_percentile(buckets, LATENCY_BUCKET_THRESHOLDS, 0.95)},
+			{"p99_us", calculate_percentile(buckets, LATENCY_BUCKET_THRESHOLDS, 0.99)}
+		};
 
-			json cmd;
-			cmd["command"] = row->fields[0] ? row->fields[0] : "";
-			cmd["total_count"] = total_cnt;
-			cmd["total_time_us"] = total_time_cmd;
-			cmd["avg_time_us"] = avg_time;
-			cmd["latency_histogram"] = {
-				{"cnt_100us", buckets.size() > 0 ? buckets[0] : 0},
-				{"cnt_500us", buckets.size() > 1 ? buckets[1] : 0},
-				{"cnt_1ms", buckets.size() > 2 ? buckets[2] : 0},
-				{"cnt_5ms", buckets.size() > 3 ? buckets[3] : 0},
-				{"cnt_10ms", buckets.size() > 4 ? buckets[4] : 0},
-				{"cnt_50ms", buckets.size() > 5 ? buckets[5] : 0},
-				{"cnt_100ms", buckets.size() > 6 ? buckets[6] : 0},
-				{"cnt_500ms", buckets.size() > 7 ? buckets[7] : 0},
-				{"cnt_1s", buckets.size() > 8 ? buckets[8] : 0},
-				{"cnt_5s", buckets.size() > 9 ? buckets[9] : 0},
-				{"cnt_10s", buckets.size() > 10 ? buckets[10] : 0},
-				{"cnt_INFs", buckets.size() > 11 ? buckets[11] : 0}
-			};
-
-			// Calculate percentiles
-			cmd["percentiles"] = {
-				{"p50_us", calculate_percentile(buckets, LATENCY_BUCKET_THRESHOLDS, 0.50)},
-				{"p90_us", calculate_percentile(buckets, LATENCY_BUCKET_THRESHOLDS, 0.90)},
-				{"p95_us", calculate_percentile(buckets, LATENCY_BUCKET_THRESHOLDS, 0.95)},
-				{"p99_us", calculate_percentile(buckets, LATENCY_BUCKET_THRESHOLDS, 0.99)}
-			};
-
-			commands.push_back(cmd);
-		}
-		delete resultset;
+		commands.push_back(cmd);
 	}
 
 	json result;
@@ -1720,118 +1858,167 @@ json Stats_Tool_Handler::handle_show_commands(const json& arguments) {
 /**
  * @brief Returns backend connection pool metrics
  *
- * Queries connection pool statistics for backend MySQL/PostgreSQL servers.
- * Shows connection counts, error rates, and latency metrics per server.
- * Optionally includes detailed free connection information.
+ * This implementation reads connection-pool snapshots directly from hostgroup
+ * managers (`SQL3_Connection_Pool()`), avoiding
+ * `stats_mysql_connection_pool` / `stats_pgsql_connection_pool` table reads.
+ *
+ * The MCP output contract is preserved:
+ * - same response fields and summary object
+ * - same filter semantics (`hostgroup`, `server`, `status`)
+ * - same server ordering (`hostgroup`, `srv_host`, `srv_port`)
+ *
+ * Free-connection row details were intentionally removed from this tool to keep
+ * it focused on operational metrics. Callers needing debug-level free-pool
+ * visibility must use `show_free_connections` instead.
  *
  * @param arguments JSON object with optional parameters:
  *   - db_type: "mysql" (default) or "pgsql"
  *   - hostgroup: Filter by hostgroup ID
  *   - server: Filter by server address (format: "host:port")
  *   - status: Filter by server status (ONLINE, SHUNNED, etc.)
- *   - detail: Include free connection details (default: false)
  *
- * @return JSON response with servers array and optional free_connections detail
+ * @return JSON response with connection-pool server rows and summary
  */
 json Stats_Tool_Handler::handle_show_connections(const json& arguments) {
 	std::string db_type = arguments.value("db_type", "mysql");
 	int hostgroup = arguments.value("hostgroup", -1);
 	std::string server = arguments.value("server", "");
 	std::string status = arguments.value("status", "");
-	bool detail = arguments.value("detail", false);
+	const bool detail_requested = arguments.value("detail", false);
 
-	std::string table = (db_type == "pgsql") ? "stats_pgsql_connection_pool" : "stats_mysql_connection_pool";
-	bool is_mysql = (db_type != "pgsql");
-
-	// Build main query - note: PostgreSQL doesn't have Queries_GTID_sync
-	std::string sql = "SELECT hostgroup, srv_host, srv_port, status, "
-		"ConnUsed, ConnFree, ConnOK, ConnERR, MaxConnUsed, Queries, ";
-	if (is_mysql) {
-		sql += "Queries_GTID_sync, ";
+	if (detail_requested) {
+		return create_error_response(
+			"Parameter 'detail' was removed from show_connections. "
+			"Use show_free_connections and enable mcp-stats_enable_debug_tools=true."
+		);
 	}
-	sql += "Bytes_data_sent, Bytes_data_recv, Latency_us "
-		"FROM stats." + table + " WHERE 1=1";
 
-	if (hostgroup >= 0) {
-		sql += " AND hostgroup = " + std::to_string(hostgroup);
+	if (db_type != "mysql" && db_type != "pgsql") {
+		return create_error_response("Invalid db_type: " + db_type);
 	}
+	const bool is_mysql = (db_type == "mysql");
+
+	std::string server_host;
+	int server_port = 0;
+	bool has_server_filter = false;
 	if (!server.empty()) {
-		std::string host;
-		int port = 0;
 		std::string parse_err;
-		if (!parse_server_filter(server, host, port, parse_err)) {
+		if (!parse_server_filter(server, server_host, server_port, parse_err)) {
 			proxy_error("show_connections: invalid server filter '%s': %s\n", server.c_str(), parse_err.c_str());
 			return create_error_response("Invalid server filter '" + server + "': " + parse_err);
 		}
-		sql += " AND srv_host = '" + sql_escape(host) + "' AND srv_port = " + std::to_string(port);
+		has_server_filter = true;
 	}
-	if (!status.empty()) {
-		sql += " AND status = '" + sql_escape(status) + "'";
-	}
-
-	sql += " ORDER BY hostgroup, srv_host, srv_port";
 
 	SQLite3_result* resultset = NULL;
-	int cols = 0;
-	std::string err = execute_admin_query(sql.c_str(), &resultset, &cols);
-
-	if (!err.empty()) {
-		return create_error_response("Failed to query connection pool: " + err);
+	if (is_mysql) {
+		if (!MyHGM) {
+			return create_error_response("MySQL HostGroups Manager not available");
+		}
+		resultset = MyHGM->SQL3_Connection_Pool(false, NULL);
+	} else {
+		if (!PgHGM) {
+			return create_error_response("PgSQL HostGroups Manager not available");
+		}
+		resultset = PgHGM->SQL3_Connection_Pool(false, NULL);
 	}
+	if (!resultset) {
+		return create_error_response("Failed to read in-memory connection pool");
+	}
+
+	std::vector<mcp_connection_pool_row_t> snapshots;
+	snapshots.reserve(resultset->rows.size());
+
+	for (const auto& row : resultset->rows) {
+		if (!row) {
+			continue;
+		}
+
+		mcp_connection_pool_row_t snapshot {};
+		snapshot.hostgroup = parse_int_or_zero(row->fields[0]);
+		snapshot.srv_host = row->fields[1] ? row->fields[1] : "";
+		snapshot.srv_port = parse_int_or_zero(row->fields[2]);
+		snapshot.status = row->fields[3] ? row->fields[3] : "";
+		snapshot.conn_used = parse_int_or_zero(row->fields[4]);
+		snapshot.conn_free = parse_int_or_zero(row->fields[5]);
+		snapshot.conn_ok = parse_ll_or_zero(row->fields[6]);
+		snapshot.conn_err = parse_ll_or_zero(row->fields[7]);
+		snapshot.max_conn_used = parse_int_or_zero(row->fields[8]);
+		snapshot.queries = parse_ll_or_zero(row->fields[9]);
+		if (is_mysql) {
+			snapshot.queries_gtid_sync = parse_ll_or_zero(row->fields[10]);
+			snapshot.bytes_data_sent = parse_ll_or_zero(row->fields[11]);
+			snapshot.bytes_data_recv = parse_ll_or_zero(row->fields[12]);
+			snapshot.latency_us = parse_int_or_zero(row->fields[13]);
+		} else {
+			snapshot.queries_gtid_sync = 0;
+			snapshot.bytes_data_sent = parse_ll_or_zero(row->fields[10]);
+			snapshot.bytes_data_recv = parse_ll_or_zero(row->fields[11]);
+			snapshot.latency_us = parse_int_or_zero(row->fields[12]);
+		}
+
+		if (hostgroup >= 0 && snapshot.hostgroup != hostgroup) {
+			continue;
+		}
+		if (has_server_filter &&
+			(snapshot.srv_host != server_host || snapshot.srv_port != server_port)) {
+			continue;
+		}
+		if (!status.empty() && snapshot.status != status) {
+			continue;
+		}
+		snapshots.push_back(std::move(snapshot));
+	}
+	delete resultset;
+
+	std::sort(snapshots.begin(), snapshots.end(), [](const mcp_connection_pool_row_t& lhs, const mcp_connection_pool_row_t& rhs) {
+		if (lhs.hostgroup != rhs.hostgroup) {
+			return lhs.hostgroup < rhs.hostgroup;
+		}
+		if (lhs.srv_host != rhs.srv_host) {
+			return lhs.srv_host < rhs.srv_host;
+		}
+		return lhs.srv_port < rhs.srv_port;
+	});
 
 	json servers = json::array();
 	int total_servers = 0, online_servers = 0;
 	long long total_used = 0, total_free = 0, total_queries = 0;
 	std::map<std::string, int> by_status;
 
-	if (resultset) {
-		for (const auto& row : resultset->rows) {
-			int conn_used = row->fields[4] ? std::stoi(row->fields[4]) : 0;
-			int conn_free = row->fields[5] ? std::stoi(row->fields[5]) : 0;
-			long long conn_ok = row->fields[6] ? std::stoll(row->fields[6]) : 0;
-			long long conn_err = row->fields[7] ? std::stoll(row->fields[7]) : 0;
-			long long queries = row->fields[9] ? std::stoll(row->fields[9]) : 0;
-			std::string srv_status = row->fields[3] ? row->fields[3] : "";
+	for (const auto& snapshot : snapshots) {
+		double utilization = (snapshot.conn_used + snapshot.conn_free > 0) ?
+			(double)snapshot.conn_used / (double)(snapshot.conn_used + snapshot.conn_free) * 100.0 : 0.0;
+		double error_rate = (snapshot.conn_ok + snapshot.conn_err > 0) ?
+			(double)snapshot.conn_err / (double)(snapshot.conn_ok + snapshot.conn_err) : 0.0;
 
-			double utilization = (conn_used + conn_free > 0) ?
-				(double)conn_used / (double)(conn_used + conn_free) * 100.0 : 0.0;
-			double error_rate = (conn_ok + conn_err > 0) ?
-				(double)conn_err / (double)(conn_ok + conn_err) : 0.0;
-
-			json srv;
-			srv["hostgroup"] = row->fields[0] ? std::stoi(row->fields[0]) : 0;
-			srv["srv_host"] = row->fields[1] ? row->fields[1] : "";
-			srv["srv_port"] = row->fields[2] ? std::stoi(row->fields[2]) : 0;
-			srv["status"] = srv_status;
-			srv["conn_used"] = conn_used;
-			srv["conn_free"] = conn_free;
-			srv["conn_ok"] = conn_ok;
-			srv["conn_err"] = conn_err;
-			srv["max_conn_used"] = row->fields[8] ? std::stoi(row->fields[8]) : 0;
-			srv["queries"] = queries;
-			if (is_mysql) {
-				srv["queries_gtid_sync"] = row->fields[10] ? std::stoll(row->fields[10]) : 0;
-				srv["bytes_data_sent"] = row->fields[11] ? std::stoll(row->fields[11]) : 0;
-				srv["bytes_data_recv"] = row->fields[12] ? std::stoll(row->fields[12]) : 0;
-				srv["latency_us"] = row->fields[13] ? std::stoi(row->fields[13]) : 0;
-			} else {
-				srv["bytes_data_sent"] = row->fields[10] ? std::stoll(row->fields[10]) : 0;
-				srv["bytes_data_recv"] = row->fields[11] ? std::stoll(row->fields[11]) : 0;
-				srv["latency_us"] = row->fields[12] ? std::stoi(row->fields[12]) : 0;
-			}
-			srv["utilization_pct"] = utilization;
-			srv["error_rate"] = error_rate;
-
-			servers.push_back(srv);
-
-			total_servers++;
-			if (srv_status == "ONLINE") online_servers++;
-			total_used += conn_used;
-			total_free += conn_free;
-			total_queries += queries;
-			by_status[srv_status]++;
+		json srv;
+		srv["hostgroup"] = snapshot.hostgroup;
+		srv["srv_host"] = snapshot.srv_host;
+		srv["srv_port"] = snapshot.srv_port;
+		srv["status"] = snapshot.status;
+		srv["conn_used"] = snapshot.conn_used;
+		srv["conn_free"] = snapshot.conn_free;
+		srv["conn_ok"] = snapshot.conn_ok;
+		srv["conn_err"] = snapshot.conn_err;
+		srv["max_conn_used"] = snapshot.max_conn_used;
+		srv["queries"] = snapshot.queries;
+		if (is_mysql) {
+			srv["queries_gtid_sync"] = snapshot.queries_gtid_sync;
 		}
-		delete resultset;
+		srv["bytes_data_sent"] = snapshot.bytes_data_sent;
+		srv["bytes_data_recv"] = snapshot.bytes_data_recv;
+		srv["latency_us"] = snapshot.latency_us;
+		srv["utilization_pct"] = utilization;
+		srv["error_rate"] = error_rate;
+		servers.push_back(srv);
+
+		total_servers++;
+		if (snapshot.status == "ONLINE") online_servers++;
+		total_used += snapshot.conn_used;
+		total_free += snapshot.conn_free;
+		total_queries += snapshot.queries;
+		by_status[snapshot.status]++;
 	}
 
 	json result;
@@ -1848,57 +2035,129 @@ json Stats_Tool_Handler::handle_show_connections(const json& arguments) {
 		{"by_status", by_status}
 	};
 
-	// Include free connections detail if requested
-	if (detail) {
-		std::string free_table = (db_type == "pgsql") ? "stats_pgsql_free_connections" : "stats_mysql_free_connections";
-		std::string schema_col = (db_type == "pgsql") ? "database" : "schema";
+	return create_success_response(result);
+}
 
-		std::string free_sql = "SELECT fd, hostgroup, srv_host, srv_port, user, " + schema_col;
-		if (is_mysql) {
-			free_sql += ", init_connect, time_zone, sql_mode, autocommit, idle_ms";
-		} else {
-			free_sql += ", init_connect, time_zone, sql_mode, idle_ms";
-		}
-		free_sql += " FROM stats." + free_table;
-
-		if (hostgroup >= 0) {
-			free_sql += " WHERE hostgroup = " + std::to_string(hostgroup);
-		}
-
-		SQLite3_result* free_rs = NULL;
-		int free_cols = 0;
-		std::string free_err = execute_admin_query(free_sql.c_str(), &free_rs, &free_cols);
-
-		if (free_err.empty() && free_rs) {
-			json free_connections = json::array();
-			for (const auto& row : free_rs->rows) {
-				json fc;
-				fc["fd"] = row->fields[0] ? std::stoi(row->fields[0]) : 0;
-				fc["hostgroup"] = row->fields[1] ? std::stoi(row->fields[1]) : 0;
-				fc["srv_host"] = row->fields[2] ? row->fields[2] : "";
-				fc["srv_port"] = row->fields[3] ? std::stoi(row->fields[3]) : 0;
-				fc["user"] = row->fields[4] ? row->fields[4] : "";
-				if (db_type == "pgsql") {
-					fc["database"] = row->fields[5] ? row->fields[5] : "";
-					fc["init_connect"] = row->fields[6] ? row->fields[6] : "";
-					fc["time_zone"] = row->fields[7] ? row->fields[7] : "";
-					fc["sql_mode"] = row->fields[8] ? row->fields[8] : "";
-					fc["idle_ms"] = row->fields[9] ? std::stoi(row->fields[9]) : 0;
-				} else {
-					fc["schema"] = row->fields[5] ? row->fields[5] : "";
-					fc["init_connect"] = row->fields[6] ? row->fields[6] : "";
-					fc["time_zone"] = row->fields[7] ? row->fields[7] : "";
-					fc["sql_mode"] = row->fields[8] ? row->fields[8] : "";
-					fc["autocommit"] = row->fields[9] ? row->fields[9] : "";
-					fc["idle_ms"] = row->fields[10] ? std::stoi(row->fields[10]) : 0;
-				}
-				free_connections.push_back(fc);
-			}
-			result["free_connections"] = free_connections;
-			delete free_rs;
-		}
+/**
+ * @brief Returns debug free-connection snapshots for backend connection pools.
+ *
+ * This tool intentionally exposes low-level free-connection details that are
+ * useful primarily during debugging and development. To avoid surfacing this
+ * heavier diagnostic payload in normal operational workflows, it is gated by
+ * MCP runtime variable `mcp-stats_enable_debug_tools`.
+ *
+ * The data source is fully in-memory:
+ * - MySQL: `MyHGM->SQL3_Free_Connections()`
+ * - PgSQL: `PgHGM->SQL3_Free_Connections()`
+ *
+ * @param arguments JSON object with optional parameters:
+ *   - db_type: "mysql" (default) or "pgsql"
+ *   - hostgroup: Filter by hostgroup ID
+ *   - server: Filter by server address (format: "host:port")
+ *
+ * @return JSON response with `free_connections` rows and summary counters.
+ */
+json Stats_Tool_Handler::handle_show_free_connections(const json& arguments) {
+	if (!mcp_handler || !mcp_handler->variables.mcp_stats_enable_debug_tools) {
+		return create_error_response(
+			"show_free_connections is disabled. "
+			"Set mcp-stats_enable_debug_tools=true and LOAD MCP VARIABLES TO RUNTIME."
+		);
 	}
 
+	std::string db_type = arguments.value("db_type", "mysql");
+	const int hostgroup = arguments.value("hostgroup", -1);
+	const std::string server = arguments.value("server", "");
+
+	if (db_type != "mysql" && db_type != "pgsql") {
+		return create_error_response("Invalid db_type: " + db_type);
+	}
+	const bool is_mysql = (db_type == "mysql");
+
+	std::string server_host;
+	int server_port = 0;
+	bool has_server_filter = false;
+	if (!server.empty()) {
+		std::string parse_err;
+		if (!parse_server_filter(server, server_host, server_port, parse_err)) {
+			proxy_error("show_free_connections: invalid server filter '%s': %s\n", server.c_str(), parse_err.c_str());
+			return create_error_response("Invalid server filter '" + server + "': " + parse_err);
+		}
+		has_server_filter = true;
+	}
+
+	SQLite3_result* free_rs = NULL;
+	if (is_mysql) {
+		if (!MyHGM) {
+			return create_error_response("MySQL HostGroups Manager not available");
+		}
+		free_rs = MyHGM->SQL3_Free_Connections();
+	} else {
+		if (!PgHGM) {
+			return create_error_response("PgSQL HostGroups Manager not available");
+		}
+		free_rs = PgHGM->SQL3_Free_Connections();
+	}
+	if (!free_rs) {
+		return create_error_response("Failed to read in-memory free connection pool");
+	}
+
+	json free_connections = json::array();
+	std::map<std::string, int> by_hostgroup;
+
+	for (const auto& row : free_rs->rows) {
+		if (!row) {
+			continue;
+		}
+
+		const int row_hostgroup = parse_int_or_zero(row->fields[1]);
+		const std::string row_host = row->fields[2] ? row->fields[2] : "";
+		const int row_port = parse_int_or_zero(row->fields[3]);
+
+		if (hostgroup >= 0 && row_hostgroup != hostgroup) {
+			continue;
+		}
+		if (has_server_filter && (row_host != server_host || row_port != server_port)) {
+			continue;
+		}
+
+		json fc;
+		fc["fd"] = parse_int_or_zero(row->fields[0]);
+		fc["hostgroup"] = row_hostgroup;
+		fc["srv_host"] = row_host;
+		fc["srv_port"] = row_port;
+		fc["user"] = row->fields[4] ? row->fields[4] : "";
+		if (is_mysql) {
+			fc["schema"] = row->fields[5] ? row->fields[5] : "";
+			fc["init_connect"] = row->fields[6] ? row->fields[6] : "";
+			fc["time_zone"] = row->fields[7] ? row->fields[7] : "";
+			fc["sql_mode"] = row->fields[8] ? row->fields[8] : "";
+			fc["autocommit"] = row->fields[9] ? row->fields[9] : "";
+			fc["idle_ms"] = parse_int_or_zero(row->fields[10]);
+			fc["statistics"] = row->fields[11] ? row->fields[11] : "";
+			fc["mysql_info"] = row->fields[12] ? row->fields[12] : "";
+		} else {
+			fc["database"] = row->fields[5] ? row->fields[5] : "";
+			fc["init_connect"] = row->fields[6] ? row->fields[6] : "";
+			fc["time_zone"] = row->fields[7] ? row->fields[7] : "";
+			fc["sql_mode"] = row->fields[8] ? row->fields[8] : "";
+			fc["idle_ms"] = parse_int_or_zero(row->fields[9]);
+			fc["statistics"] = row->fields[10] ? row->fields[10] : "";
+			fc["pgsql_info"] = row->fields[11] ? row->fields[11] : "";
+		}
+
+		free_connections.push_back(fc);
+		by_hostgroup[std::to_string(row_hostgroup)]++;
+	}
+	delete free_rs;
+
+	json result;
+	result["db_type"] = db_type;
+	result["free_connections"] = free_connections;
+	result["summary"] = {
+		{"total_free_connections", static_cast<int>(free_connections.size())},
+		{"by_hostgroup", by_hostgroup}
+	};
 	return create_success_response(result);
 }
 

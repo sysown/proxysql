@@ -16,12 +16,13 @@
  * This handler provides MCP tools for monitoring ProxySQL statistics and metrics.
  * Tools are organized into three categories:
  *
- * Live Data Tools (12):
+ * Live Data Tools (13):
  * - show_status: Global status variables and metrics
  * - show_processlist: Currently active sessions
  * - show_queries: Query digest performance statistics
  * - show_commands: Command execution counters with latency histograms
  * - show_connections: Backend connection pool metrics
+ * - show_free_connections: Debug free-connection pool snapshots
  * - show_errors: Error tracking and frequency
  * - show_users: User connection statistics
  * - show_client_cache: Client host error cache
@@ -76,9 +77,15 @@ private:
 
 	/**
 	 * @brief Returns backend connection pool metrics
-	 * @param arguments JSON with db_type, hostgroup, server, status, detail
+	 * @param arguments JSON with db_type, hostgroup, server, status
 	 */
 	json handle_show_connections(const json& arguments);
+
+	/**
+	 * @brief Returns debug free-connection snapshots from backend pools
+	 * @param arguments JSON with db_type, hostgroup, server
+	 */
+	json handle_show_free_connections(const json& arguments);
 
 	/**
 	 * @brief Returns error tracking statistics

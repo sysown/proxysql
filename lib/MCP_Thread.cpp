@@ -35,6 +35,7 @@ static const char* mcp_thread_variables_names[] = {
 	"timeout_ms",
 	"stats_show_queries_max_rows",
 	"stats_show_processlist_max_rows",
+	"stats_enable_debug_tools",
 	// MySQL Tool Handler configuration
 	"mysql_hosts",
 	"mysql_ports",
@@ -64,6 +65,7 @@ MCP_Threads_Handler::MCP_Threads_Handler() {
 	variables.mcp_timeout_ms = 30000;
 	variables.mcp_stats_show_queries_max_rows = 200;
 	variables.mcp_stats_show_processlist_max_rows = 200;
+	variables.mcp_stats_enable_debug_tools = false;
 	// MySQL Tool Handler default values
 	variables.mcp_mysql_hosts = strdup("127.0.0.1");
 	variables.mcp_mysql_ports = strdup("3306");
@@ -242,6 +244,10 @@ int MCP_Threads_Handler::get_variable(const char* name, char* val) {
 		sprintf(val, "%d", variables.mcp_stats_show_processlist_max_rows);
 		return 0;
 	}
+	if (!strcmp(name, "stats_enable_debug_tools")) {
+		sprintf(val, "%s", variables.mcp_stats_enable_debug_tools ? "true" : "false");
+		return 0;
+	}
 	// MySQL Tool Handler configuration
 	if (!strcmp(name, "mysql_hosts")) {
 		sprintf(val, "%s", variables.mcp_mysql_hosts ? variables.mcp_mysql_hosts : "");
@@ -372,6 +378,17 @@ int MCP_Threads_Handler::set_variable(const char* name, const char* value) {
 		int max_rows = atoi(value);
 		if (max_rows >= 1 && max_rows <= 1000) {
 			variables.mcp_stats_show_processlist_max_rows = max_rows;
+			return 0;
+		}
+		return -1;
+	}
+	if (!strcmp(name, "stats_enable_debug_tools")) {
+		if (strcasecmp(value, "true") == 0 || strcasecmp(value, "1") == 0) {
+			variables.mcp_stats_enable_debug_tools = true;
+			return 0;
+		}
+		if (strcasecmp(value, "false") == 0 || strcasecmp(value, "0") == 0) {
+			variables.mcp_stats_enable_debug_tools = false;
 			return 0;
 		}
 		return -1;
