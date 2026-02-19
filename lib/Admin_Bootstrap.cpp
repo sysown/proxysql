@@ -910,6 +910,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_query_digest", STATS_SQLITE_TABLE_PGSQL_QUERY_DIGEST);
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_query_digest_reset", STATS_SQLITE_TABLE_PGSQL_QUERY_DIGEST_RESET);
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_prepared_statements_info", STATS_SQLITE_TABLE_PGSQL_PREPARED_STATEMENTS_INFO);
+	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_query_events", STATS_SQLITE_TABLE_PGSQL_QUERY_EVENTS);
 
 	// ProxySQL Cluster
 	insert_into_tables_defs(tables_defs_admin,"proxysql_servers", ADMIN_SQLITE_TABLE_PROXYSQL_SERVERS);

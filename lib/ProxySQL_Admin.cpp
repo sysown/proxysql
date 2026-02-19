@@ -377,6 +377,8 @@ static char * admin_variables_names[]= {
 	(char *)"stats_mysql_connection_pool",
 	(char *)"stats_mysql_query_cache",
 	(char *)"stats_mysql_query_digest_to_disk",
+	(char *)"stats_mysql_eventslog_sync_buffer_to_disk",
+	(char *)"stats_pgsql_eventslog_sync_buffer_to_disk",
 	(char *)"stats_system_cpu",
 	(char *)"stats_system_memory",
 	(char *)"mysql_ifaces",
@@ -2048,6 +2050,8 @@ void ProxySQL_Admin::vacuum_stats(bool is_admin) {
 		"stats_mysql_query_digest_reset",
 		"stats_pgsql_query_digest",
 		"stats_pgsql_query_digest_reset",
+		"stats_mysql_query_events",
+		"stats_pgsql_query_events",
 		"stats_mysql_query_rules",
 		"stats_pgsql_query_rules",
 		"stats_mysql_users",
@@ -2514,6 +2518,26 @@ __end_while_pool:
 				curtime2 = curtime2/1000;
 				proxy_info("Automatically saved stats_mysql_query_digest to disk: %llums to write %d entries\n", curtime2-curtime1, r1);
 			}
+			if (GloProxyStats->MySQL_Logger_dump_eventslog_timetoget(curtime)) {
+				if (GloMyLogger != nullptr) {
+					unsigned long long curtime1 = monotonic_time();
+					int r1 = GloMyLogger->processEvents(nullptr, SPA->statsdb_disk);
+					unsigned long long curtime2 = monotonic_time();
+					curtime1 = curtime1 / 1000;
+					curtime2 = curtime2 / 1000;
+					proxy_info("Automatically dumped MySQL eventslog buffer to disk: %llums to write %d entries\n", curtime2 - curtime1, r1);
+				}
+			}
+			if (GloProxyStats->PgSQL_Logger_dump_eventslog_timetoget(curtime)) {
+				if (GloPgSQL_Logger != nullptr) {
+					unsigned long long curtime1 = monotonic_time();
+					int r1 = GloPgSQL_Logger->processEvents(nullptr, SPA->statsdb_disk);
+					unsigned long long curtime2 = monotonic_time();
+					curtime1 = curtime1 / 1000;
+					curtime2 = curtime2 / 1000;
+					proxy_info("Automatically dumped PgSQL eventslog buffer to disk: %llums to write %d entries\n", curtime2 - curtime1, r1);
+				}
+			}
 			if (GloProxyStats->system_cpu_timetoget(curtime)) {
 				GloProxyStats->system_cpu_sets();
 			}
@@ -2704,6 +2728,10 @@ void update_modules_metrics() {
 	if (GloMyLogger) {
 		GloMyLogger->p_update_metrics();
 	}
+	// Update PostgreSQL logger metrics
+	if (GloPgSQL_Logger) {
+		GloPgSQL_Logger->p_update_metrics();
+	}
 	// Update admin metrics
 	GloAdmin->p_update_metrics();
 }
@@ -2822,6 +2850,7 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.stats_mysql_query_cache = 60;
 	variables.stats_mysql_query_digest_to_disk = 0;
 	variables.stats_mysql_eventslog_sync_buffer_to_disk = 0;
+	variables.stats_pgsql_eventslog_sync_buffer_to_disk = 0;
 	variables.stats_system_cpu = 60;
 	variables.stats_system_memory = 60;
 	GloProxyStats->variables.stats_mysql_connection_pool = 60;
@@ -2829,6 +2858,7 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	GloProxyStats->variables.stats_mysql_query_cache = 60;
 	GloProxyStats->variables.stats_mysql_query_digest_to_disk = 0;
 	GloProxyStats->variables.stats_mysql_eventslog_sync_buffer_to_disk = 0;
+	GloProxyStats->variables.stats_pgsql_eventslog_sync_buffer_to_disk = 0;
 	GloProxyStats->variables.stats_system_cpu = 60;
 #ifndef NOJEM
 	GloProxyStats->variables.stats_system_memory = 60;
@@ -3756,6 +3786,10 @@ char * ProxySQL_Admin::get_variable(char *name) {
 			snprintf(intbuf, sizeof(intbuf),"%d",variables.stats_mysql_eventslog_sync_buffer_to_disk);
 			return strdup(intbuf);
 		}
+		if (!strcasecmp(name,"stats_pgsql_eventslog_sync_buffer_to_disk")) {
+			snprintf(intbuf, sizeof(intbuf),"%d",variables.stats_pgsql_eventslog_sync_buffer_to_disk);
+			return strdup(intbuf);
+		}
 		if (!strcasecmp(name,"stats_system_cpu")) {
 			snprintf(intbuf, sizeof(intbuf),"%d",variables.stats_system_cpu);
 			return strdup(intbuf);
@@ -4093,6 +4127,16 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 			if (intv >= 0 && intv <= 24*3600) {
 				variables.stats_mysql_eventslog_sync_buffer_to_disk=intv;
 				GloProxyStats->variables.stats_mysql_eventslog_sync_buffer_to_disk=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"stats_pgsql_eventslog_sync_buffer_to_disk")) {
+			int intv=atoi(value);
+			if (intv >= 0 && intv <= 24*3600) {
+				variables.stats_pgsql_eventslog_sync_buffer_to_disk=intv;
+				GloProxyStats->variables.stats_pgsql_eventslog_sync_buffer_to_disk=intv;
 				return true;
 			} else {
 				return false;

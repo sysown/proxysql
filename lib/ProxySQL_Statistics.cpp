@@ -278,6 +278,7 @@ void ProxySQL_Statistics::init() {
 
 
 	insert_into_tables_defs(tables_defs_statsdb_disk,"history_mysql_query_events", STATSDB_SQLITE_TABLE_HISTORY_MYSQL_QUERY_EVENTS);
+	insert_into_tables_defs(tables_defs_statsdb_disk,"history_pgsql_query_events", STATSDB_SQLITE_TABLE_HISTORY_PGSQL_QUERY_EVENTS);
 
 	// TSDB tables
 	insert_into_tables_defs(tables_defs_statsdb_disk,"tsdb_metrics", STATSDB_SQLITE_TABLE_TSDB_METRICS);
@@ -304,6 +305,9 @@ void ProxySQL_Statistics::init() {
 
 	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_mysql_query_events_start_time ON history_mysql_query_events(start_time)");
 	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_mysql_query_events_query_digest ON history_mysql_query_events(query_digest)");
+	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_pgsql_query_events_start_time ON history_pgsql_query_events(start_time)");
+	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_pgsql_query_events_query_digest ON history_pgsql_query_events(query_digest)");
+
 	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_tsdb_metrics_metric_time ON tsdb_metrics(metric_name, timestamp)");
 	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_tsdb_metrics_hour_metric_bucket ON tsdb_metrics_hour(metric_name, bucket)");
 	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_tsdb_backend_health_time ON tsdb_backend_health(timestamp)");
@@ -412,6 +416,18 @@ bool ProxySQL_Statistics::MySQL_Logger_dump_eventslog_timetoget(unsigned long lo
 		t = t * 1000 * 1000;
 		if (currentTimeMicros > last_timer_mysql_dump_eventslog_to_disk + t) {
 			last_timer_mysql_dump_eventslog_to_disk = currentTimeMicros;
+			return true;
+		}
+	}
+	return false;
+}
+
+bool ProxySQL_Statistics::PgSQL_Logger_dump_eventslog_timetoget(unsigned long long currentTimeMicros) {
+	if (variables.stats_pgsql_eventslog_sync_buffer_to_disk) { // only proceed if not zero
+		unsigned long long t = variables.stats_pgsql_eventslog_sync_buffer_to_disk; // originally in seconds
+		t = t * 1000 * 1000;
+		if (currentTimeMicros > last_timer_pgsql_dump_eventslog_to_disk + t) {
+			last_timer_pgsql_dump_eventslog_to_disk = currentTimeMicros;
 			return true;
 		}
 	}

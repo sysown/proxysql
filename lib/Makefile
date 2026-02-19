@@ -121,7 +121,8 @@ $(ODIR):
 
 
 clean:
-	rm -rf *.pid $(ODIR)/*.oo $(ODIR)/*.o $(ODIR)/*.gcno $(ODIR)/*.gcda *.ko *.so *~ core libproxysql.a $(ODIR)
+	rm -rf *.pid $(ODIR)/*.oo $(ODIR)/*.o $(ODIR)/*.gcno $(ODIR)/*.gcda *.ko *.so *~ core libproxysql.a $(ODIR) \
+		MySQL_Lexer.yy.c MySQL_Parser.output MySQL_Parser.tab.c MySQL_Parser.tab.h
 
 
 ## self note
