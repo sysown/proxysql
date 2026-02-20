@@ -90,9 +90,9 @@ std::vector<std::string> build_cleanup_queries() {
 
 std::vector<std::string> build_user_queries(const char* username, const char* password) {
 	std::vector<std::string> queries = {
-		"INSERT INTO mysql_users (username, password, default_hostgroup) VALUES ('" +
+		"INSERT INTO mysql_users (username, password, default_hostgroup, default_schema) VALUES ('" +
 			std::string(username) + "', '" + std::string(password) + "', " +
-			std::to_string(DEFAULT_HOSTGROUP) + ")",
+			std::to_string(DEFAULT_HOSTGROUP) + ", 'main')",
 		"LOAD MYSQL USERS TO RUNTIME"
 	};
 	return queries;
