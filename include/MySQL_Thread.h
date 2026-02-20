@@ -520,6 +520,14 @@ class MySQL_Threads_Handler
 		int default_query_delay;
 		int default_query_timeout;
 		int query_processor_iterations;
+		/**
+		 * @brief Defines when the first comment of a query needs to be processed.
+		 * 0 : comment ignored
+		 * 1 : comment processed before the query rules
+		 * 2 : comment processed after the query rules (default behavior)
+		 * 3 : comment processed before and after the query rules
+		 */
+		int query_processor_first_comment_parsing;
 		int query_processor_regex;
 		int set_query_lock_on_hostgroup;
 		int set_parser_algorithm;
