@@ -217,10 +217,10 @@ int main(int argc, char** argv) {
 
 	// Verify rules are loaded
 	diag("Verifying mysql_query_rules:");
-	MYSQL_QUERY(proxysql_admin, "SELECT rule_id, active, username, match_digest, mirror_hostgroup, apply FROM mysql_query_rules WHERE rule_id=1");
+	MYSQL_QUERY(proxysql_admin, "SELECT rule_id, active, username, match_pattern, mirror_hostgroup, apply FROM mysql_query_rules WHERE rule_id=1");
 	MYSQL_RES* rules_res = mysql_store_result(proxysql_admin);
 	while ((server_row = mysql_fetch_row(rules_res))) {
-		diag("  rule_id=%s, active=%s, username=%s, match_digest=%s, mirror_hostgroup=%s, apply=%s",
+		diag("  rule_id=%s, active=%s, username=%s, match_pattern=%s, mirror_hostgroup=%s, apply=%s",
 			server_row[0], server_row[1], server_row[2], server_row[3], server_row[4], server_row[5]);
 	}
 	mysql_free_result(rules_res);
