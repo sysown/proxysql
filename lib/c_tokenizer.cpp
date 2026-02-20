@@ -8,8 +8,8 @@ extern __thread int  mysql_thread___query_digests_max_query_length;
 extern __thread bool mysql_thread___query_digests_lowercase;
 extern __thread bool mysql_thread___query_digests_replace_null;
 extern __thread bool mysql_thread___query_digests_no_digits;
-extern __thread bool mysql_thread___query_digests_grouping_limit;
-extern __thread bool mysql_thread___query_digests_groups_grouping_limit;
+extern __thread int  mysql_thread___query_digests_grouping_limit;
+extern __thread int  mysql_thread___query_digests_groups_grouping_limit;
 extern __thread bool mysql_thread___query_digests_keep_comment;
 
 void tokenizer(tokenizer_t *result, const char* s, const char* delimiters, int empties )
