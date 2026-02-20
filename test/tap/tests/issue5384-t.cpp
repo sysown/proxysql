@@ -68,7 +68,11 @@ int main(int, char**) {
 	// Check stats to see if hostgroup 1000 was used
 	const char *q_stats = "SELECT destination_hostgroup FROM stats_mysql_query_digest WHERE digest_text='SELECT ?'";
 	diag("Running on Admin: %s", q_stats);
-	MYSQL_RES *res = MYSQL_QUERY_T(admin, q_stats);
+	if (mysql_query_t(admin, q_stats)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
+		return exit_status();
+	}
+	MYSQL_RES *res = mysql_store_result(admin);
 	MYSQL_ROW row = mysql_fetch_row(res);
 	if (row) {
 		int hg = atoi(row[0]);
@@ -93,7 +97,11 @@ int main(int, char**) {
 	run_q(proxy, query);
 
 	diag("Running on Admin: %s", q_stats);
-	res = MYSQL_QUERY_T(admin, q_stats);
+	if (mysql_query_t(admin, q_stats)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
+		return exit_status();
+	}
+	res = mysql_store_result(admin);
 	row = mysql_fetch_row(res);
 	if (row) {
 		int hg = atoi(row[0]);
