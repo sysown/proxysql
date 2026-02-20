@@ -5,10 +5,14 @@
 #include <atomic>
 #include <array>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+class LogBuffer;
+class LogBufferThreadContext;
 
 #define PROXYSQL_LOGGER_PTHREAD_MUTEX
 
@@ -112,43 +116,43 @@ class PgSQL_Event {
 	bool free_error_on_delete;
 	
 	public:
-	/**
-	 * @brief Builds an event object using session/query context.
-	 */
-	PgSQL_Event(PGSQL_LOG_EVENT_TYPE _et, uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest, char *_client, size_t _client_len);
-	/**
-	 * @brief Deep-copy constructor used by circular buffer insertion.
-	 */
-	PgSQL_Event(const PgSQL_Event& other);
-	/**
-	 * @brief Copy assignment is disabled to prevent shallow pointer ownership bugs.
-	 */
-	PgSQL_Event& operator=(const PgSQL_Event&) = delete;
-	/**
-	 * @brief Frees event-owned allocations for deep-copied instances.
-	 */
-	~PgSQL_Event();
-	/**
-	 * @brief Serializes this event into the configured events/audit file format.
-	 * @return Number of bytes written for binary format, 0 for JSON format.
-	 */
-	uint64_t write(std::fstream *f, PgSQL_Session *sess);
-	/**
-	 * @brief Writes binary format payload for query events.
-	 */
-	uint64_t write_query_format_1(std::fstream *f);
-	/**
-	 * @brief Writes JSON format payload for query events.
-	 */
-	uint64_t write_query_format_2_json(std::fstream *f);
-	/**
-	 * @brief Writes JSON payload for authentication/audit events.
-	 */
-	void write_auth(std::fstream *f, PgSQL_Session *sess);
-	/**
-	 * @brief Sets client prepared statement name associated with this event.
-	 */
-	void set_client_stmt_name(char* client_stmt_name);
+		/**
+		 * @brief Builds an event object using session/query context.
+		 */
+		PgSQL_Event(PGSQL_LOG_EVENT_TYPE _et, uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest, char *_client, size_t _client_len);
+		/**
+		 * @brief Deep-copy constructor used by circular buffer insertion.
+		 */
+		PgSQL_Event(const PgSQL_Event& other);
+		/**
+		 * @brief Copy assignment is disabled to prevent shallow pointer ownership bugs.
+		 */
+		PgSQL_Event& operator=(const PgSQL_Event&) = delete;
+		/**
+		 * @brief Frees event-owned allocations for deep-copied instances.
+		 */
+		~PgSQL_Event();
+		/**
+		 * @brief Serializes this event into the configured events/audit file format.
+		 * @return Number of bytes written for binary format, 0 for JSON format.
+		 */
+		uint64_t write(LogBuffer *f, PgSQL_Session *sess);
+		/**
+		 * @brief Writes binary format payload for query events.
+		 */
+		uint64_t write_query_format_1(LogBuffer *f);
+		/**
+		 * @brief Writes JSON format payload for query events.
+		 */
+		uint64_t write_query_format_2_json(LogBuffer *f);
+		/**
+		 * @brief Writes JSON payload for authentication/audit events.
+		 */
+		void write_auth(LogBuffer *f, PgSQL_Session *sess);
+		/**
+		 * @brief Sets client prepared statement name associated with this event.
+		 */
+		void set_client_stmt_name(char* client_stmt_name);
 	/**
 	 * @brief Sets event query text and effective query length.
 	 */
@@ -235,21 +239,24 @@ class PgSQL_Logger {
 		char *base_filename;
 		char *datadir;
 		unsigned int log_file_id;
+		unsigned int current_log_size;
 		unsigned int max_log_file_size;
 		std::fstream *logfile;
+		std::atomic<bool> logfile_open{false};
 	} events;
 	struct {
 		bool enabled;
 		char *base_filename;
 		char *datadir;
 		unsigned int log_file_id;
+		unsigned int current_log_size;
 		unsigned int max_log_file_size;
 		std::fstream *logfile;
+		std::atomic<bool> logfile_open{false};
 	} audit;
-
-	/**
-	 * @brief Accumulated runtime metrics for PostgreSQL advanced events logging.
-	 */
+		/**
+		 * @brief Accumulated runtime metrics for PostgreSQL advanced events logging.
+		 */
 	struct EventLogMetrics {
 		std::atomic<unsigned long long> memoryCopyCount;
 		std::atomic<unsigned long long> diskCopyCount;
@@ -262,16 +269,25 @@ class PgSQL_Logger {
 		std::atomic<unsigned long long> totalEventsCopiedToDisk;
 	} metrics;
 
-	struct {
-		std::array<prometheus::Counter*, p_pl_counter::__size> p_counter_array {};
-		std::array<prometheus::Gauge*, p_pl_gauge::__size> p_gauge_array {};
-	} prom_metrics;
-
+		struct {
+			std::atomic<unsigned long long> total_queries_logged { 0 };
+			prometheus::Counter* p_queries_logged_total { nullptr };
+			std::array<prometheus::Counter*, p_pl_counter::__size> p_counter_array {};
+			std::array<prometheus::Gauge*, p_pl_gauge::__size> p_gauge_array {};
+		} prom_metrics;
 #ifdef PROXYSQL_LOGGER_PTHREAD_MUTEX
 	pthread_mutex_t wmutex;
 #else
 	rwlock_t rwlock;
 #endif
+	std::unordered_map<pthread_t, std::unique_ptr<LogBufferThreadContext>> log_thread_contexts;
+ 	std::mutex log_thread_contexts_lock;
+
+ 	LogBufferThreadContext* get_log_thread_context();
+ 	bool is_events_logfile_open() const;
+ 	void set_events_logfile_open(bool open);
+ 	bool is_audit_logfile_open() const;
+ 	void set_audit_logfile_open(bool open);
 	void events_close_log_unlocked();
 	void events_open_log_unlocked();
 	void audit_close_log_unlocked();
@@ -297,7 +313,8 @@ class PgSQL_Logger {
 	void audit_set_base_filename();
 	void log_request(PgSQL_Session *, PgSQL_Data_Stream *);
 	void log_audit_entry(PGSQL_LOG_EVENT_TYPE, PgSQL_Session *, PgSQL_Data_Stream *, char *e = NULL);
-	void flush();
+	void flush(bool force = false);
+	void p_update_metrics();
 	void wrlock();
 	void wrunlock();
 	PgSQL_Logger_CircularBuffer* PgLogCB;
@@ -318,10 +335,6 @@ class PgSQL_Logger {
 	 */
 	std::unordered_map<std::string, unsigned long long> getAllMetrics() const;
 
-	/**
-	 * @brief Prometheus serial exposer update hook for PostgreSQL logger metrics.
-	 */
-	void p_update_metrics();
 };
 
 #endif /* __CLASS_PGSQL_LOGGER_H */

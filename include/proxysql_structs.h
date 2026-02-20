@@ -1172,6 +1172,8 @@ __thread int  pgsql_thread___query_digests_groups_grouping_limit;
 
 __thread char* pgsql_thread___auditlog_filename;
 __thread int pgsql_thread___auditlog_filesize;
+__thread int pgsql_thread___auditlog_flush_timeout;
+__thread int pgsql_thread___auditlog_flush_size;
 __thread char* pgsql_thread___eventslog_filename;
 __thread int pgsql_thread___eventslog_filesize;
 __thread int pgsql_thread___eventslog_buffer_history_size;
@@ -1179,6 +1181,9 @@ __thread int pgsql_thread___eventslog_table_memory_size;
 __thread int pgsql_thread___eventslog_buffer_max_query_length;
 __thread int pgsql_thread___eventslog_default_log;
 __thread int pgsql_thread___eventslog_format;
+__thread int pgsql_thread___eventslog_flush_timeout;
+__thread int pgsql_thread___eventslog_flush_size;
+__thread int pgsql_thread___eventslog_rate_limit;
 __thread char* pgsql_thread___firewall_whitelist_errormsg;
 __thread bool pgsql_thread___firewall_whitelist_enabled;
 __thread int pgsql_thread___query_processor_iterations;
@@ -1336,10 +1341,15 @@ __thread int mysql_thread___eventslog_buffer_max_query_length;
 __thread int mysql_thread___eventslog_default_log;
 __thread int mysql_thread___eventslog_format;
 __thread int mysql_thread___eventslog_stmt_parameters;
+__thread int mysql_thread___eventslog_flush_timeout;
+__thread int mysql_thread___eventslog_flush_size;
+__thread int mysql_thread___eventslog_rate_limit;
 
 /* variables used by audit log */
 __thread char * mysql_thread___auditlog_filename;
 __thread int mysql_thread___auditlog_filesize;
+__thread int mysql_thread___auditlog_flush_timeout;
+__thread int mysql_thread___auditlog_flush_size;
 
 /* variables used by the monitoring module */
 __thread int mysql_thread___monitor_enabled;
@@ -1479,6 +1489,8 @@ extern __thread int  pgsql_thread___query_digests_groups_grouping_limit;
 
 extern __thread char* pgsql_thread___auditlog_filename;
 extern __thread int pgsql_thread___auditlog_filesize;
+extern __thread int pgsql_thread___auditlog_flush_timeout;
+extern __thread int pgsql_thread___auditlog_flush_size;
 extern __thread char* pgsql_thread___eventslog_filename;
 extern __thread int pgsql_thread___eventslog_filesize;
 extern __thread int pgsql_thread___eventslog_buffer_history_size;
@@ -1486,6 +1498,9 @@ extern __thread int pgsql_thread___eventslog_table_memory_size;
 extern __thread int pgsql_thread___eventslog_buffer_max_query_length;
 extern __thread int pgsql_thread___eventslog_default_log;
 extern __thread int pgsql_thread___eventslog_format;
+extern __thread int pgsql_thread___eventslog_flush_timeout;
+extern __thread int pgsql_thread___eventslog_flush_size;
+extern __thread int pgsql_thread___eventslog_rate_limit;
 extern __thread char* pgsql_thread___firewall_whitelist_errormsg;
 extern __thread bool pgsql_thread___firewall_whitelist_enabled;
 extern __thread int pgsql_thread___query_processor_iterations;
@@ -1643,10 +1658,15 @@ extern __thread int mysql_thread___eventslog_buffer_max_query_length;
 extern __thread int mysql_thread___eventslog_default_log;
 extern __thread int mysql_thread___eventslog_format;
 extern __thread int mysql_thread___eventslog_stmt_parameters;
+extern __thread int mysql_thread___eventslog_flush_timeout;
+extern __thread int mysql_thread___eventslog_flush_size;
+extern __thread int mysql_thread___eventslog_rate_limit;
 
 /* variables used by audit log */
 extern __thread char * mysql_thread___auditlog_filename;
 extern __thread int mysql_thread___auditlog_filesize;
+extern __thread int mysql_thread___auditlog_flush_timeout;
+extern __thread int mysql_thread___auditlog_flush_size;
 
 /* variables used by the monitoring module */
 extern __thread int mysql_thread___monitor_enabled;

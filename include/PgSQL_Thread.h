@@ -1034,8 +1034,13 @@ public:
 		int eventslog_buffer_max_query_length;
 		int eventslog_default_log;
 		int eventslog_format;
+		int eventslog_flush_timeout;
+ 		int eventslog_flush_size;
+ 		int eventslog_rate_limit;
 		char* auditlog_filename;
 		int auditlog_filesize;
+		int auditlog_flush_timeout;
+ 		int auditlog_flush_size;
 		// SSL related, proxy to server
 		char* ssl_p2s_ca;
 		char* ssl_p2s_capath;
