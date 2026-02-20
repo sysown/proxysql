@@ -20,6 +20,9 @@ using json = nlohmann::json;
 #include "PgSQL_Query_Processor.h"
 #include "MySQL_HostGroups_Manager.h"
 #include "PgSQL_HostGroups_Manager.h"
+#include "MySQL_Authentication.hpp"
+#include "PgSQL_Authentication.h"
+#include "MySQL_LDAP_Authentication.hpp"
 
 #include "MCP_Thread.h"
 #include "Stats_Tool_Handler.h"
@@ -33,6 +36,9 @@ extern MySQL_Query_Processor* GloMyQPro;
 extern PgSQL_Query_Processor* GloPgQPro;
 extern MySQL_HostGroups_Manager* MyHGM;
 extern PgSQL_HostGroups_Manager* PgHGM;
+extern MySQL_Authentication* GloMyAuth;
+extern PgSQL_Authentication* GloPgAuth;
+extern MySQL_LDAP_Authentication* GloMyLdapAuth;
 
 // Latency bucket thresholds in microseconds for commands_counters histogram
 static const std::vector<int> LATENCY_BUCKET_THRESHOLDS = {
@@ -236,6 +242,19 @@ struct mcp_connection_pool_row_t {
 	long long bytes_data_sent;       ///< Bytes sent to backend.
 	long long bytes_data_recv;       ///< Bytes received from backend.
 	int latency_us;                  ///< Last measured latency in microseconds.
+};
+
+/**
+ * @brief Snapshot row used by in-memory implementation of `show_users`.
+ *
+ * The row models user-level frontend connection usage exported by authentication
+ * modules. It intentionally mirrors `stats_[mysql|pgsql]_users` columns while
+ * avoiding runtime-populated stats tables.
+ */
+struct mcp_frontend_user_row_t {
+	std::string username;            ///< Frontend username.
+	int frontend_connections;        ///< Current active frontend connections.
+	int frontend_max_connections;    ///< Configured per-user max connections.
 };
 
 // ============================================================================
@@ -2315,72 +2334,176 @@ json Stats_Tool_Handler::handle_show_errors(const json& arguments) {
 }
 
 /**
- * @brief Returns connection statistics per user
+ * @brief Returns connection statistics per frontend user.
  *
- * Queries stats_mysql_users or stats_pgsql_users for per-user connection
- * metrics including active connections, max connections, and utilization.
+ * This implementation reads user counters directly from authentication runtime
+ * state instead of querying `stats_mysql_users` / `stats_pgsql_users`.
+ *
+ * Data sources:
+ * - MySQL: `GloMyAuth->dump_all_users(..., false)` (+ LDAP users when enabled)
+ * - PgSQL: `GloPgAuth->dump_all_users(..., false)`
+ *
+ * Only non-admin/non-stats accounts are returned (`default_hostgroup >= 0`),
+ * matching Admin stats population semantics.
  *
  * @param arguments JSON object with optional parameters:
  *   - db_type: "mysql" (default) or "pgsql"
  *   - username: Filter by specific username
- *   - limit: Maximum number of results (default: 100)
+ *   - limit: Maximum number of results (default: 100, max: 1000)
  *   - offset: Skip first N results (default: 0)
  *
- * @return JSON response with users array containing connection statistics
+ * @return JSON response with `users` array and aggregate summary.
  */
 json Stats_Tool_Handler::handle_show_users(const json& arguments) {
-	std::string db_type = arguments.value("db_type", "mysql");
-	std::string username = arguments.value("username", "");
+	const std::string db_type = arguments.value("db_type", "mysql");
+	const std::string username_filter = arguments.value("username", "");
 	int limit = arguments.value("limit", 100);
 	int offset = arguments.value("offset", 0);
 
-	std::string table = (db_type == "pgsql") ? "stats_pgsql_users" : "stats_mysql_users";
-
-	std::string sql = "SELECT username, frontend_connections, frontend_max_connections "
-		"FROM stats." + table;
-
-	if (!username.empty()) {
-		sql += " WHERE username = '" + sql_escape(username) + "'";
+	if (db_type != "mysql" && db_type != "pgsql") {
+		return create_error_response("Invalid db_type: " + db_type);
 	}
 
-	sql += " ORDER BY frontend_connections DESC LIMIT " + std::to_string(limit) + " OFFSET " + std::to_string(offset);
+	/**
+	 * Keep behavior deterministic and bounded when callers pass invalid or
+	 * oversized pagination parameters.
+	 */
+	if (limit <= 0) limit = 100;
+	if (limit > 1000) limit = 1000;
+	if (offset < 0) offset = 0;
 
-	SQLite3_result* resultset = NULL;
-	int cols = 0;
-	std::string err = execute_admin_query(sql.c_str(), &resultset, &cols);
+	std::vector<mcp_frontend_user_row_t> snapshots;
 
-	if (!err.empty()) {
-		return create_error_response("Failed to query users: " + err);
+	if (db_type == "mysql") {
+		if (!GloMyAuth) {
+			return create_error_response("MySQL Authentication module not available");
+		}
+
+		account_details_t** ads = NULL;
+		const int num_users = GloMyAuth->dump_all_users(&ads, false);
+
+		for (int i = 0; i < num_users; ++i) {
+			account_details_t* ad = ads[i];
+			if (ad) {
+				/**
+				 * Match `stats___mysql_users()` semantics: expose only frontend-like
+				 * users (exclude admin/stats internal accounts).
+				 */
+				if (ad->default_hostgroup >= 0) {
+					const std::string row_username = ad->username ? ad->username : "";
+					if (username_filter.empty() || row_username == username_filter) {
+						mcp_frontend_user_row_t row {};
+						row.username = row_username;
+						row.frontend_connections = ad->num_connections_used;
+						row.frontend_max_connections = ad->max_connections;
+						snapshots.push_back(std::move(row));
+					}
+				}
+				free(ad->username);
+				free(ad);
+			}
+		}
+		free(ads);
+
+		/**
+		 * Keep parity with `stats___mysql_users()` by including LDAP frontend
+		 * users when the LDAP authentication module is loaded.
+		 */
+		if (GloMyLdapAuth) {
+			std::unique_ptr<SQLite3_result> ldap_users { GloMyLdapAuth->dump_all_users() };
+			if (ldap_users) {
+				for (const SQLite3_row* ldap_row : ldap_users->rows) {
+					if (!ldap_row) {
+						continue;
+					}
+					const std::string ldap_username = ldap_row->fields[LDAP_USER_FIELD_IDX::USERNAME]
+						? ldap_row->fields[LDAP_USER_FIELD_IDX::USERNAME] : "";
+					if (!username_filter.empty() && ldap_username != username_filter) {
+						continue;
+					}
+
+					mcp_frontend_user_row_t row {};
+					row.username = ldap_username;
+					row.frontend_connections = parse_int_or_zero(ldap_row->fields[LDAP_USER_FIELD_IDX::FRONTEND_CONNECTIONS]);
+					row.frontend_max_connections = parse_int_or_zero(ldap_row->fields[LDAP_USER_FIELD_IDX::FRONTED_MAX_CONNECTIONS]);
+					snapshots.push_back(std::move(row));
+				}
+			}
+		}
+	} else {
+		if (!GloPgAuth) {
+			return create_error_response("PgSQL Authentication module not available");
+		}
+
+		pgsql_account_details_t** ads = NULL;
+		const int num_users = GloPgAuth->dump_all_users(&ads, false);
+
+		for (int i = 0; i < num_users; ++i) {
+			pgsql_account_details_t* ad = ads[i];
+			if (ad) {
+				/**
+				 * Match `stats___pgsql_users()` semantics: expose only frontend-like
+				 * users (exclude admin/stats internal accounts).
+				 */
+				if (ad->default_hostgroup >= 0) {
+					const std::string row_username = ad->username ? ad->username : "";
+					if (username_filter.empty() || row_username == username_filter) {
+						mcp_frontend_user_row_t row {};
+						row.username = row_username;
+						row.frontend_connections = ad->num_connections_used;
+						row.frontend_max_connections = ad->max_connections;
+						snapshots.push_back(std::move(row));
+					}
+				}
+				free(ad->username);
+				free(ad);
+			}
+		}
+		free(ads);
 	}
+
+	std::sort(snapshots.begin(), snapshots.end(), [](
+		const mcp_frontend_user_row_t& lhs, const mcp_frontend_user_row_t& rhs) {
+		if (lhs.frontend_connections != rhs.frontend_connections) {
+			return lhs.frontend_connections > rhs.frontend_connections;
+		}
+		return lhs.username < rhs.username;
+	});
+
+	const size_t page_begin = std::min(static_cast<size_t>(offset), snapshots.size());
+	const size_t page_end = std::min(page_begin + static_cast<size_t>(limit), snapshots.size());
 
 	json users = json::array();
 	int total_users = 0;
-	long long total_connections = 0, total_capacity = 0;
+	long long total_connections = 0;
+	long long total_capacity = 0;
 
-	if (resultset) {
-		for (const auto& row : resultset->rows) {
-			int connections = row->fields[1] ? std::stoi(row->fields[1]) : 0;
-			int max_connections = row->fields[2] ? std::stoi(row->fields[2]) : 0;
-			double utilization = (max_connections > 0) ? (double)connections / (double)max_connections * 100.0 : 0.0;
+	for (size_t idx = page_begin; idx < page_end; ++idx) {
+		const mcp_frontend_user_row_t& snapshot = snapshots[idx];
+		const int connections = snapshot.frontend_connections;
+		const int max_connections = snapshot.frontend_max_connections;
+		const double utilization = (max_connections > 0)
+			? static_cast<double>(connections) / static_cast<double>(max_connections) * 100.0
+			: 0.0;
 
-			std::string status = "normal";
-			if (max_connections > 0 && connections >= max_connections) status = "at_limit";
-			else if (max_connections > 0 && utilization >= 80.0) status = "near_limit";
-
-			json user;
-			user["username"] = row->fields[0] ? row->fields[0] : "";
-			user["frontend_connections"] = connections;
-			user["frontend_max_connections"] = max_connections;
-			user["utilization_pct"] = utilization;
-			user["status"] = status;
-
-			users.push_back(user);
-
-			total_users++;
-			total_connections += connections;
-			total_capacity += max_connections;
+		std::string status = "normal";
+		if (max_connections > 0 && connections >= max_connections) {
+			status = "at_limit";
+		} else if (max_connections > 0 && utilization >= 80.0) {
+			status = "near_limit";
 		}
-		delete resultset;
+
+		json user;
+		user["username"] = snapshot.username;
+		user["frontend_connections"] = connections;
+		user["frontend_max_connections"] = max_connections;
+		user["utilization_pct"] = utilization;
+		user["status"] = status;
+		users.push_back(user);
+
+		total_users++;
+		total_connections += connections;
+		total_capacity += max_connections;
 	}
 
 	json result;
@@ -2390,7 +2513,9 @@ json Stats_Tool_Handler::handle_show_users(const json& arguments) {
 		{"total_users", total_users},
 		{"total_connections", total_connections},
 		{"total_capacity", total_capacity},
-		{"overall_utilization_pct", (total_capacity > 0) ? (double)total_connections / (double)total_capacity * 100.0 : 0.0}
+		{"overall_utilization_pct", (total_capacity > 0)
+			? static_cast<double>(total_connections) / static_cast<double>(total_capacity) * 100.0
+			: 0.0}
 	};
 
 	return create_success_response(result);
