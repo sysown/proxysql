@@ -8,7 +8,8 @@ When enabled, a TAP test can spawn one or more background "noise" tools. These t
 
 - **Global Toggle:** Controlled by an environment variable.
 - **Automatic Cleanup:** All spawned tools are automatically killed when the test finishes via `exit_status()`.
-- **Isolation:** Noise tools run in their own process groups with I/O redirected to `/dev/null` to avoid polluting TAP output.
+- **Fatal Failure Detection:** If a noise tool fails critically (e.g., permanent connection loss), the main TAP test will report a failure.
+- **Isolation:** Noise tools run in their own process groups (external) or threads (internal). External tool `stdout` is redirected to `/dev/null`, while `stderr` is preserved for debugging.
 
 ## Configuration
 
@@ -23,53 +24,78 @@ The framework is globally controlled by the `TAP_USE_NOISE` environment variable
 ### Path Resolution
 Noise tools are typically located in `test/tap/noise/`. When calling `spawn_noise`, you can provide the relative path to these scripts or absolute paths to system binaries.
 
-## Standard Noise Tools
+## Standard Noise Tools (External)
 
 Initial noise scripts are provided in `test/tap/noise/`:
 
-1.  **`noise_stats_poller.py`**:
-    *   **Action**: Periodically queries `stats_mysql_query_digest` and `stats_mysql_connection_pool`.
-    *   **Arguments**: `--host`, `--port`, `--user`, `--password`, `--interval`.
-2.  **`noise_admin_pinger.sh`**:
-    *   **Action**: Executes `SELECT 1` against the Admin interface.
-    *   **Arguments**: `[host] [port] [user] [pass] [interval]`.
-3.  **`noise_pgsql_poller.sh`**:
-    *   **Action**: Generates simple PostgreSQL traffic using `psql`.
-    *   **Arguments**: `[host] [port] [user] [pass] [interval]`.
+1.  **`noise_stats_poller.py`**: Periodically queries `stats_mysql_query_digest` and `stats_mysql_connection_pool`.
+2.  **`noise_admin_pinger.sh`**: Executes `SELECT 1` against the Admin interface.
+3.  **`noise_pgsql_poller.sh`**: Generates simple PostgreSQL traffic using `psql`.
+
+## Built-in Noise Routines (Internal)
+
+Internal routines run as threads within the TAP test process. This is **highly recommended for debugging with GDB**, as stopping the test process will also pause the noise.
+
+#### Standard Internal Noise Functions:
+- `internal_noise_admin_pinger`: Executes `SELECT 1` against Admin (default 500ms).
+- `internal_noise_stats_poller`: Polls various `stats_*` tables (default 200ms).
+- `internal_noise_prometheus_poller`: Fetches Prometheus metrics via both MySQL and PostgreSQL protocol (default 1000ms).
+- `internal_noise_random_stats_poller`: Shuffles and queries a set of MySQL and PostgreSQL stats tables (default 500ms).
+- `internal_noise_mysql_traffic`: Generates unprivileged query load on the main MySQL port (default 100ms).
+- `internal_noise_pgsql_traffic`: Generates unprivileged query load on the main PostgreSQL port (default 100ms).
 
 ## Usage in C++ TAP Tests
 
 Include `utils.h` and `noise_utils.h`.
 
-### External Tools
-Use `spawn_noise` to run scripts or binaries in a separate process.
 ```cpp
-spawn_noise(cl, "../noise/noise_stats_poller.py", {"--interval", "0.1"});
-```
-
-### Internal Threads
-Use `spawn_internal_noise` to run built-in C++ functions in background threads within the same process. This is **highly recommended for debugging with GDB**, as stopping the test process will also pause the noise.
-
-```cpp
+#include "tap.h"
+#include "command_line.h"
+#include "utils.h"
 #include "noise_utils.h"
 
-// ... inside main ...
-spawn_internal_noise(cl, internal_noise_admin_pinger);
-```
+int main(int argc, char** argv) {
+    CommandLine cl;
+    cl.getEnv(); 
 
-#### Standard Internal Noise Functions:
-- `internal_noise_admin_pinger`: Executes `SELECT 1` against Admin every 500ms.
-- `internal_noise_stats_poller`: Polls various `stats_*` tables every 200ms.
-- `internal_noise_prometheus_poller`: Fetches Prometheus metrics via both MySQL and PostgreSQL protocol every 1000ms.
-- `internal_noise_random_stats_poller`: Shuffles and queries a set of MySQL and PostgreSQL stats tables (e.g., `stats_mysql_query_digest`, `stats_pgsql_processlist`) every 500ms.
+    // --- Configuration ---
+    NoiseOptions opt;
+    opt["interval_ms"] = "100";
+    opt["max_retries"] = "10";
+
+    // --- Spawning ---
+    // External (separate process)
+    spawn_noise(cl, "../noise/noise_stats_poller.py", {"--interval", "0.1"});
+    
+    // Internal (same process, GDB-friendly)
+    spawn_internal_noise(cl, internal_noise_admin_pinger, opt);
+
+    // --- TAP Plan ---
+    // You MUST increase the plan count by the number of spawned noise tools
+    // only if noise is enabled.
+    int expected_functional_tests = 10;
+    if (cl.use_noise) {
+        plan(expected_functional_tests + 2); // 10 tests + 2 noise tools
+    } else {
+        plan(expected_functional_tests);
+    }
+    
+    // ... your test logic here ...
+    ok(perform_op(), "Functional test 1");
+    // ...
+
+    return exit_status(); // Automatically cleans up noise and verifies their success
+}
+```
 
 ## Internal Safety Mechanisms
 
-1.  **Process Group Isolation**: `spawn_noise` calls `setpgid(0, 0)` in the child. This ensures that signals like `SIGINT` (Ctrl+C) sent to the test runner are not automatically forwarded to the noise tools, allowing the `utils` library to manage their shutdown sequence explicitly.
-2.  **Double-Hook Cleanup**:
-    *   **Primary**: `exit_status()` calls `stop_noise_tools()`.
-    *   **Fallback**: An `atexit()` handler is registered during the first `spawn_noise` call to catch unexpected (but clean) exits.
-3.  **Graceful Termination**: The framework sends `SIGTERM` first, waits 100ms for the process to reap, and follows up with `SIGKILL` if the process is still alive.
+1.  **Process Group Isolation**: `spawn_noise` calls `setpgid(0, 0)` in the child. This ensures that signals like `SIGINT` (Ctrl+C) sent to the test runner are not automatically forwarded to the noise tools.
+2.  **Fatal Failure Propagation**: If an internal noise routine fails critically (e.g., exceeds `max_retries` during connection), it sets a global `noise_failure_detected` flag.
+3.  **Lifecycle Management**: 
+    *   `exit_status()` calls `stop_noise_tools()`. 
+    *   If `noise_failure_detected` is set, `exit_status()` returns `EXIT_FAILURE` even if all functional tests passed.
+4.  **Graceful Termination**: The framework sends `SIGTERM` first, waits 100ms for the process to reap, and follows up with `SIGKILL` if the process is still alive.
 
 ## Testing the Framework
 
@@ -78,4 +104,3 @@ A dedicated verification test is provided:
 # From test/tap/tests
 TAP_USE_NOISE=1 ./test_noise_injection-t
 ```
-This test spawns a bash sub-process, verifies it is alive via its PID, and then verifies it is successfully killed by the cleanup logic.
