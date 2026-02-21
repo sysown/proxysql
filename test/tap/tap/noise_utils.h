@@ -9,10 +9,22 @@
 #include <map>
 #include "command_line.h"
 
+#include <mutex>
+
 /**
  * @brief Configuration for internal noise routines.
  */
 typedef std::map<std::string, std::string> NoiseOptions;
+
+/**
+ * @brief Global mutex for synchronized reporting to stderr.
+ */
+extern std::mutex noise_report_mutex;
+
+/**
+ * @brief Thread-safe logging to stderr for noise routines.
+ */
+void noise_log(const std::string& msg);
 
 /**
  * @brief Type for internal noise functions.
@@ -73,8 +85,8 @@ void internal_noise_random_stats_poller(const CommandLine& cl, const NoiseOption
 void internal_noise_mysql_traffic(const CommandLine& cl, const NoiseOptions& opt, std::atomic<bool>& stop);
 
 /**
- * @brief Periodically executes simple queries against the main PostgreSQL port.
+ * @brief Periodically fetches Prometheus metrics via the REST API.
  */
-void internal_noise_pgsql_traffic(const CommandLine& cl, const NoiseOptions& opt, std::atomic<bool>& stop);
+void internal_noise_rest_prometheus_poller(const CommandLine& cl, const NoiseOptions& opt, std::atomic<bool>& stop);
 
 #endif // #ifndef NOISE_UTILS_H

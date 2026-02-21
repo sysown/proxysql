@@ -85,12 +85,13 @@ int main(int argc, char** argv) {
 
 	spawn_internal_noise(cl, internal_noise_admin_pinger);
 	spawn_internal_noise(cl, internal_noise_random_stats_poller);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller);
 
     /** @brief Minimum number of distinct variable_name strings in the history_mysql_status_variables_lookup table */
     const int min_distinct_variable_names = 50;
 
 	if (cl.use_noise) {
-		plan(5 + 2);
+		plan(5 + 3);
 	} else {
 		plan(5);
 	}
