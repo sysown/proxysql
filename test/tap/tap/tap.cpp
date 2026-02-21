@@ -29,6 +29,7 @@ typedef char my_bool;
 #include <signal.h>
 #include <time.h>
 #include <unistd.h>
+#include <atomic>
 
 #include <sys/time.h>
 
@@ -351,12 +352,18 @@ todo_end()
 }
 
 extern "C" void stop_noise_tools();
+extern std::atomic<bool> noise_failure_detected;
 
 int exit_status()
 {
   char buff[60];
 
   stop_noise_tools();
+
+  if (noise_failure_detected) {
+    diag("Noise failure detected! Failing test.");
+    return EXIT_FAILURE;
+  }
 
   /*
     If there were no plan, we write one last instead.

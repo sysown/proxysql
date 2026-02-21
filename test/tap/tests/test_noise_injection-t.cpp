@@ -42,7 +42,9 @@ int main(int argc, char** argv) {
     ok(pid > 0 && kill(pid, 0) == 0, "External noise process is alive");
 
     // --- Internal Noise Test ---
-    spawn_internal_noise(cl, internal_noise_admin_pinger);
+    NoiseOptions nopt;
+    nopt["interval_ms"] = "50"; // High intensity for testing
+    spawn_internal_noise(cl, internal_noise_admin_pinger, nopt);
     spawn_internal_noise(cl, internal_noise_prometheus_poller);
     spawn_internal_noise(cl, internal_noise_mysql_traffic);
     spawn_internal_noise(cl, internal_noise_pgsql_traffic);
