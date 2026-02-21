@@ -109,6 +109,9 @@ int main(int argc, char** argv) {
 		return -1;
 	}
 
+	// Clear history table to ensure all variables start with the same number of rows
+	MYSQL_QUERY(proxysql_admin, "DELETE FROM history_mysql_status_variables");
+
 	// Setup the interval of how often new status entries are created
 	uint16_t new_stats_interval_sec = 5; // @note: valid values 5, 10, 30, 60, 120, 300
 
