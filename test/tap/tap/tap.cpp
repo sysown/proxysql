@@ -352,18 +352,23 @@ todo_end()
 }
 
 extern "C" void stop_noise_tools();
+extern "C" int get_noise_tools_count();
 extern std::atomic<bool> noise_failure_detected;
 
 int exit_status()
 {
   char buff[60];
 
+  int noise_count = get_noise_tools_count();
   stop_noise_tools();
 
   if (noise_failure_detected) {
     diag("Noise failure detected! Failing test.");
     return EXIT_FAILURE;
   }
+
+  // Add noise tools to the count of executed tests if they didn't fail
+  __sync_add_and_fetch(&g_test.last, noise_count);
 
   /*
     If there were no plan, we write one last instead.

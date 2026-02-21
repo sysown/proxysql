@@ -49,6 +49,10 @@ void stop_internal_noise_threads() {
     internal_noise_threads.clear();
 }
 
+int get_internal_noise_threads_count() {
+    return (int)internal_noise_threads.size();
+}
+
 // --- Standard Internal Noise Functions Implementation ---
 
 void internal_noise_admin_pinger(const CommandLine& cl, const NoiseOptions& opt, std::atomic<bool>& stop) {

@@ -40,6 +40,11 @@ extern std::atomic<bool> noise_failure_detected;
  */
 void stop_internal_noise_threads();
 
+/**
+ * @brief Returns the number of active internal noise threads.
+ */
+int get_internal_noise_threads_count();
+
 // --- Standard Internal Noise Functions ---
 
 /**

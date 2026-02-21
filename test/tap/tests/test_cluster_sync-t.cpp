@@ -1147,7 +1147,8 @@ int main(int, char**) {
 		// Sync tests by values
 		16 +
 		// Module checkums tests; enabled and disabled checksums
-		check_modules_checksums_sync__tests
+		check_modules_checksums_sync__tests +
+		(cl.use_noise ? 3 : 0)
 	);
 
 	const std::string fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync.cnf";

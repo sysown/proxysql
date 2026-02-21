@@ -2456,6 +2456,10 @@ extern "C" void stop_noise_tools() {
 	background_noise_pids.clear();
 }
 
+extern "C" int get_noise_tools_count() {
+	return (int)background_noise_pids.size() + get_internal_noise_threads_count();
+}
+
 void spawn_noise(const CommandLine& cl, const std::string& tool_path, const std::vector<std::string>& args) {
 	if (!cl.use_noise) {
 		return;
@@ -2470,13 +2474,12 @@ void spawn_noise(const CommandLine& cl, const std::string& tool_path, const std:
 	if (pid == 0) {
 		// Child
 		setpgid(0, 0);
-		int fd = open("/dev/null", O_RDWR);
-		if (fd != -1) {
-			dup2(fd, STDIN_FILENO);
-			dup2(fd, STDOUT_FILENO);
-			dup2(fd, STDERR_FILENO);
-			if (fd > 2) {
-				close(fd);
+		int fd_null = open("/dev/null", O_RDWR);
+		if (fd_null != -1) {
+			dup2(fd_null, STDIN_FILENO);
+			dup2(fd_null, STDOUT_FILENO);
+			if (fd_null > 2) {
+				close(fd_null);
 			}
 		}
 

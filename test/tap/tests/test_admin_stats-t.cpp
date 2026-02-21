@@ -89,7 +89,11 @@ int main(int argc, char** argv) {
     /** @brief Minimum number of distinct variable_name strings in the history_mysql_status_variables_lookup table */
     const int min_distinct_variable_names = 50;
 
-	plan(5);
+	if (cl.use_noise) {
+		plan(5 + 2);
+	} else {
+		plan(5);
+	}
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
 
