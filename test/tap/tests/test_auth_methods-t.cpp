@@ -1088,6 +1088,8 @@ int main(int argc, char** argv) {
 
 	spawn_internal_noise(cl, internal_noise_admin_pinger);
 	spawn_internal_noise(cl, internal_noise_mysql_traffic);
+	spawn_internal_noise(cl, internal_noise_random_stats_poller);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
 
 	MYSQL* mysql = mysql_init(NULL);
 
@@ -1218,7 +1220,7 @@ int main(int argc, char** argv) {
 		+ non_warmup_tests_fail_count * NUM_CLIENT_THREADS
 		+ non_warmup_tests_scs_count * NUM_CLIENT_THREADS * 2
 		+ non_warmup_tests_scs_ratio
-		+ (cl.use_noise ? 2 : 0)
+		+ (cl.use_noise ? 4 : 0)
 	);
 
 	// sequential; verify correctness in the procedure; KNOWN passwords

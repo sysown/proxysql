@@ -650,9 +650,11 @@ int main(int argc, char** argv) {
 
     spawn_internal_noise(cl, internal_noise_mysql_traffic);
     spawn_internal_noise(cl, internal_noise_prometheus_poller);
+    spawn_internal_noise(cl, internal_noise_pgsql_traffic);
+    spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
 
     if (cl.use_noise) {
-        plan(176 + 2);
+        plan(176 + 4);
     } else {
         plan(176);
     }
