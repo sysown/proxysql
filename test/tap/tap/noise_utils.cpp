@@ -11,8 +11,17 @@
 
 static std::vector<std::thread> internal_noise_threads;
 static std::atomic<bool> stop_internal_noise{false};
-std::atomic<bool> noise_failure_detected{false};
 std::mutex noise_report_mutex;
+std::vector<std::string> noise_failures;
+std::mutex noise_failure_mutex;
+
+/**
+ * @brief Records a fatal failure for a specific noise routine.
+ */
+void register_noise_failure(const std::string& routine_name) {
+    std::lock_guard<std::mutex> lock(noise_failure_mutex);
+    noise_failures.push_back(routine_name);
+}
 
 /**
  * @brief Thread-safe logging to stderr for noise routines.
@@ -110,7 +119,7 @@ void internal_noise_admin_pinger(const CommandLine& cl, const NoiseOptions& opt,
             retries++;
             noise_log("[NOISE] Admin Pinger: Failed to connect to both MySQL and PgSQL admin (retry " + std::to_string(retries) + "/" + std::to_string(max_retries) + ")\n");
             if (retries >= max_retries) {
-                noise_failure_detected = true;
+                register_noise_failure("Admin Pinger");
                 break;
             }
         } else {
@@ -167,7 +176,7 @@ void internal_noise_stats_poller(const CommandLine& cl, const NoiseOptions& opt,
             retries++;
             noise_log("[NOISE] Stats Poller: Connection failure (retry " + std::to_string(retries) + "/" + std::to_string(max_retries) + ")\n");
             if (retries >= max_retries) {
-                noise_failure_detected = true;
+                register_noise_failure("Stats Poller");
                 break;
             }
         } else {
@@ -214,7 +223,7 @@ void internal_noise_prometheus_poller(const CommandLine& cl, const NoiseOptions&
             retries++;
             noise_log("[NOISE] Prometheus Poller: Connection failure (retry " + std::to_string(retries) + "/" + std::to_string(max_retries) + ")\n");
             if (retries >= max_retries) {
-                noise_failure_detected = true;
+                register_noise_failure("Prometheus Poller");
                 break;
             }
         } else {
@@ -238,8 +247,30 @@ void internal_noise_rest_prometheus_poller(const CommandLine& cl, const NoiseOpt
     int retries = 0;
     uint64_t total_scrapes = 0;
 
-    // Use default REST API port 6070 and admin:admin if not specified
-    std::string endpoint = "http://admin:admin@localhost:6070/metrics";
+    // Optional: explicitly enable REST API via Admin
+    bool enable_rest_api = false;
+    if (opt.find("enable_rest_api") != opt.end()) {
+        std::string val = opt.at("enable_rest_api");
+        if (val == "true" || val == "1" || val == "yes") {
+            enable_rest_api = true;
+        }
+    }
+
+    if (enable_rest_api) {
+        MYSQL* admin = mysql_init(NULL);
+        if (mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+            mysql_query(admin, "SET admin-restapi_enabled='true'");
+            mysql_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+            mysql_close(admin);
+        } else {
+            noise_log("[NOISE] REST Prometheus Poller: Failed to connect to Admin to enable REST API\n");
+            if (admin) mysql_close(admin);
+        }
+    }
+
+    // Port defaults to 6070
+    int port = get_opt_int(opt, "port", 6070);
+    std::string endpoint = "http://admin:admin@localhost:" + std::to_string(port) + "/metrics";
     if (opt.find("endpoint") != opt.end()) {
         endpoint = opt.at("endpoint");
     }
@@ -253,7 +284,7 @@ void internal_noise_rest_prometheus_poller(const CommandLine& cl, const NoiseOpt
             retries++;
             noise_log("[NOISE] REST Prometheus Poller: Failure (retry " + std::to_string(retries) + "/" + std::to_string(max_retries) + ") curl_rc=" + std::to_string(res) + " http_code=" + std::to_string(curl_res_code) + "\n");
             if (retries >= max_retries) {
-                noise_failure_detected = true;
+                register_noise_failure("REST Prometheus Poller");
                 break;
             }
         } else {
@@ -305,7 +336,7 @@ void internal_noise_random_stats_poller(const CommandLine& cl, const NoiseOption
             retries++;
             noise_log("[NOISE] Random Stats: Connection failure (retry " + std::to_string(retries) + "/" + std::to_string(max_retries) + ")\n");
             if (retries >= max_retries) {
-                noise_failure_detected = true;
+                register_noise_failure("Random Stats Poller");
                 break;
             }
         } else {
@@ -349,7 +380,7 @@ void internal_noise_mysql_traffic(const CommandLine& cl, const NoiseOptions& opt
                 retries++;
                 noise_log("[NOISE] MySQL Traffic: Connection failure (retry " + std::to_string(retries) + "/" + std::to_string(max_retries) + ")\n");
                 if (retries >= max_retries) {
-                    noise_failure_detected = true;
+                    register_noise_failure("MySQL Traffic");
                     break;
                 }
                 std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -391,7 +422,7 @@ void internal_noise_pgsql_traffic(const CommandLine& cl, const NoiseOptions& opt
                 retries++;
                 noise_log("[NOISE] PgSQL Traffic: Connection failure (retry " + std::to_string(retries) + "/" + std::to_string(max_retries) + ")\n");
                 if (retries >= max_retries) {
-                    noise_failure_detected = true;
+                    register_noise_failure("PgSQL Traffic");
                     break;
                 }
                 std::this_thread::sleep_for(std::chrono::seconds(1));

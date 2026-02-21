@@ -32,8 +32,14 @@ typedef char my_bool;
 #include <atomic>
 
 #include <sys/time.h>
+#include <mutex>
+#include <vector>
+#include <string>
 
 using std::size_t;
+
+extern std::vector<std::string> noise_failures;
+extern std::mutex noise_failure_mutex;
 
 static ulong start_timer(void);
 static void end_timer(ulong start_time,char *buff);
@@ -353,7 +359,6 @@ todo_end()
 
 extern "C" void stop_noise_tools();
 extern "C" int get_noise_tools_count();
-extern std::atomic<bool> noise_failure_detected;
 
 int exit_status()
 {
@@ -362,8 +367,11 @@ int exit_status()
   int noise_count = get_noise_tools_count();
   stop_noise_tools();
 
-  if (noise_failure_detected) {
-    diag("Noise failure detected! Failing test.");
+  if (!noise_failures.empty()) {
+    std::lock_guard<std::mutex> lock(noise_failure_mutex);
+    for (const auto& failed_routine : noise_failures) {
+        diag("Noise failure detected in: %s", failed_routine.c_str());
+    }
     return EXIT_FAILURE;
   }
 

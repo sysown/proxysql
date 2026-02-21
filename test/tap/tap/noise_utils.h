@@ -43,9 +43,15 @@ typedef std::function<void(const CommandLine&, const NoiseOptions&, std::atomic<
 void spawn_internal_noise(const CommandLine& cl, internal_noise_func_t func, const NoiseOptions& opt = NoiseOptions());
 
 /**
- * @brief Global flag indicating if any noise routine encountered a fatal error.
+ * @brief Global list of noise routines that encountered a fatal error.
  */
-extern std::atomic<bool> noise_failure_detected;
+extern std::vector<std::string> noise_failures;
+extern std::mutex noise_failure_mutex;
+
+/**
+ * @brief Records a fatal failure for a specific noise routine.
+ */
+void register_noise_failure(const std::string& routine_name);
 
 /**
  * @brief Stops all internal noise threads.
@@ -83,6 +89,11 @@ void internal_noise_random_stats_poller(const CommandLine& cl, const NoiseOption
  * @brief Periodically executes simple queries against the main MySQL port.
  */
 void internal_noise_mysql_traffic(const CommandLine& cl, const NoiseOptions& opt, std::atomic<bool>& stop);
+
+/**
+ * @brief Periodically executes simple queries against the main PostgreSQL port.
+ */
+void internal_noise_pgsql_traffic(const CommandLine& cl, const NoiseOptions& opt, std::atomic<bool>& stop);
 
 /**
  * @brief Periodically fetches Prometheus metrics via the REST API.
