@@ -22,6 +22,7 @@
 #include "mysql.h"
 #include "utils.h"
 #include "tap.h"
+#include "noise_utils.h"
 
 using std::pair;
 using std::map;
@@ -2441,6 +2442,7 @@ static std::vector<pid_t> background_noise_pids;
 static bool atexit_noise_registered = false;
 
 extern "C" void stop_noise_tools() {
+	stop_internal_noise_threads();
 	for (pid_t pid : background_noise_pids) {
 		kill(pid, SIGTERM);
 		// Small wait and reap

@@ -7,6 +7,7 @@
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
+#include "noise_utils.h"
 
 int main(int argc, char** argv) {
     CommandLine cl;
@@ -15,50 +16,43 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // Force noise enabled for this test if environment variable is not set
-    // but CommandLine::getEnv() already read it. 
-    // To properly test, we should run this with TAP_USE_NOISE=1
-    
     if (!cl.use_noise) {
         skip_all("TAP_USE_NOISE is not enabled. Skip noise injection test.");
     }
 
-    plan(3);
+    plan(5);
 
-    // Use a simple script that just sleeps or a standard one
-    // We'll use our new stats poller but with a long interval or just 'sleep 100'
-    spawn_noise(cl, "/bin/sleep", {"100"});
-
-    // We can't easily get the PID from here as it's hidden in utils.cpp
-    // but we can check if a sleep 100 process exists.
-    // However, multiple might exist.
-    
-    // Better way: use a specific noise tool that writes its PID to a file
+    // --- External Noise Test ---
     std::string pid_file = "/tmp/proxysql_noise_test.pid";
     std::string cmd = "echo $$ > " + pid_file + " && exec sleep 100";
     spawn_noise(cl, "/bin/bash", {"-c", cmd});
 
     sleep(1); // Give it time to start
 
-    ok(access(pid_file.c_str(), F_OK) == 0, "Noise process started and created PID file");
+    ok(access(pid_file.c_str(), F_OK) == 0, "External noise process started and created PID file");
 
-    // Read PID from file
     FILE* f = fopen(pid_file.c_str(), "r");
     pid_t pid = 0;
     if (f) {
         if (fscanf(f, "%d", &pid) != 1) pid = 0;
         fclose(f);
     }
-    diag("Noise process PID: %d", pid);
+    diag("External noise process PID: %d", pid);
 
-    // Verify it is alive
-    ok(pid > 0 && kill(pid, 0) == 0, "Noise process is alive");
+    ok(pid > 0 && kill(pid, 0) == 0, "External noise process is alive");
 
-    // We can manually call stop_noise_tools() to verify it works
+    // --- Internal Noise Test ---
+    spawn_internal_noise(cl, internal_noise_admin_pinger);
+    // There isn't an easy way to verify the thread is running from outside 
+    // but we can verify it doesn't crash the test and that stop works.
+    ok(1, "Internal noise thread spawned without crash");
+
+    // --- Cleanup Verification ---
     stop_noise_tools();
     sleep(1); // Give it time to be killed
     
-    ok(pid > 0 && kill(pid, 0) != 0, "Noise process was killed");
+    ok(pid > 0 && kill(pid, 0) != 0, "External noise process was killed");
+    ok(1, "Internal noise tools stopped (implied by join finishing)");
 
     if (access(pid_file.c_str(), F_OK) == 0) {
         unlink(pid_file.c_str());

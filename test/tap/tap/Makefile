@@ -59,17 +59,20 @@ utils_mysql8.o: utils.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.s
 tap.o: tap.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so -lssl -lcrypto libcpp_dotenv.so
 	$(CXX) -fPIC -c tap.cpp $(IDIRS) $(OPT)
 
+noise_utils.o: noise_utils.cpp noise_utils.h utils.h command_line.h
+	$(CXX) -fPIC -c noise_utils.cpp $(IDIRS) -I$(MARIADB_IDIR) -I$(POSTGRESQL_IDIR) $(OPT)
+
 mcp_client.o: mcp_client.cpp mcp_client.h libcurl.so
 	$(CXX) -fPIC -c mcp_client.cpp $(IDIRS) $(OPT)
 
-libtap_mariadb.a: tap.o command_line.o utils_mariadb.o mcp_client.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
-	ar rcs libtap_mariadb.a tap.o command_line.o utils_mariadb.o mcp_client.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
+libtap_mariadb.a: tap.o command_line.o utils_mariadb.o noise_utils.o mcp_client.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
+	ar rcs libtap_mariadb.a tap.o command_line.o utils_mariadb.o noise_utils.o mcp_client.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
 
-libtap_mysql57.a: tap.o command_line.o utils_mysql57.o mcp_client.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
-	ar rcs libtap_mysql57.a tap.o command_line.o utils_mysql57.o mcp_client.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
+libtap_mysql57.a: tap.o command_line.o utils_mysql57.o noise_utils.o mcp_client.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
+	ar rcs libtap_mysql57.a tap.o command_line.o utils_mysql57.o noise_utils.o mcp_client.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
 
-libtap_mysql8.a: tap.o command_line.o utils_mysql8.o mcp_client.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
-	ar rcs libtap_mysql8.a tap.o command_line.o utils_mysql8.o mcp_client.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
+libtap_mysql8.a: tap.o command_line.o utils_mysql8.o noise_utils.o mcp_client.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
+	ar rcs libtap_mysql8.a tap.o command_line.o utils_mysql8.o noise_utils.o mcp_client.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
 
 libtap.so: libtap_mariadb.a cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so libre2.so
 	$(CXX) -shared -o libtap.so -Wl,--whole-archive libtap_mariadb.a -Wl,--no-whole-archive $(LWGCOV)
