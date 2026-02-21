@@ -49,4 +49,14 @@ void internal_noise_prometheus_poller(const CommandLine& cl, std::atomic<bool>& 
  */
 void internal_noise_random_stats_poller(const CommandLine& cl, std::atomic<bool>& stop);
 
+/**
+ * @brief Periodically executes simple queries against the main MySQL port.
+ */
+void internal_noise_mysql_traffic(const CommandLine& cl, std::atomic<bool>& stop);
+
+/**
+ * @brief Periodically executes simple queries against the main PostgreSQL port.
+ */
+void internal_noise_pgsql_traffic(const CommandLine& cl, std::atomic<bool>& stop);
+
 #endif // #ifndef NOISE_UTILS_H

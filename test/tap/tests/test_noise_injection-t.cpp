@@ -43,9 +43,11 @@ int main(int argc, char** argv) {
 
     // --- Internal Noise Test ---
     spawn_internal_noise(cl, internal_noise_admin_pinger);
-    // There isn't an easy way to verify the thread is running from outside 
-    // but we can verify it doesn't crash the test and that stop works.
-    ok(1, "Internal noise thread spawned without crash");
+    spawn_internal_noise(cl, internal_noise_prometheus_poller);
+    spawn_internal_noise(cl, internal_noise_mysql_traffic);
+    spawn_internal_noise(cl, internal_noise_pgsql_traffic);
+    
+    ok(1, "Internal noise threads spawned without crash");
 
     // --- Cleanup Verification ---
     stop_noise_tools();
