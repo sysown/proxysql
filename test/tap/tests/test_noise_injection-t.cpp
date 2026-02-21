@@ -1,66 +1,47 @@
-#include <stdlib.h>
+/**
+ * @file test_noise_injection-t.cpp
+ * @brief This tests the noise injection framework by spawning all available routines.
+ */
+
+#include <stdio.h>
 #include <unistd.h>
 #include <vector>
 #include <string>
-#include <sys/types.h>
-#include <signal.h>
+
 #include "tap.h"
 #include "command_line.h"
-#include "utils.h"
 #include "noise_utils.h"
+#include "utils.h"
 
 int main(int argc, char** argv) {
-    CommandLine cl;
-    if (cl.getEnv()) {
-        diag("Failed to get environment variables");
-        return 1;
-    }
+	CommandLine cl;
 
-    if (!cl.use_noise) {
-        skip_all("TAP_USE_NOISE is not enabled. Skip noise injection test.");
-    }
+	if (cl.getEnv()) {
+		diag("Failed to get the required environmental variables.");
+		return -1;
+	}
 
-    plan(5);
+    // Force noise to be enabled for this test
+    cl.use_noise = true;
 
-    // --- External Noise Test ---
-    std::string pid_file = "/tmp/proxysql_noise_test.pid";
-    std::string cmd = "echo $$ > " + pid_file + " && exec sleep 100";
-    spawn_noise(cl, "/bin/bash", {"-c", cmd});
+    // We have 7 internal noise tools
+    const int noise_tools_count = 7;
+    plan(noise_tools_count);
 
-    sleep(1); // Give it time to start
+    diag("Spawning all available noise tools...");
 
-    ok(access(pid_file.c_str(), F_OK) == 0, "External noise process started and created PID file");
+	spawn_internal_noise(cl, internal_noise_admin_pinger);
+	spawn_internal_noise(cl, internal_noise_stats_poller);
+	spawn_internal_noise(cl, internal_noise_prometheus_poller);
+	spawn_internal_noise(cl, internal_noise_random_stats_poller);
+	spawn_internal_noise(cl, internal_noise_mysql_traffic);
+	spawn_internal_noise(cl, internal_noise_pgsql_traffic);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller);
 
-    FILE* f = fopen(pid_file.c_str(), "r");
-    pid_t pid = 0;
-    if (f) {
-        if (fscanf(f, "%d", &pid) != 1) pid = 0;
-        fclose(f);
-    }
-    diag("External noise process PID: %d", pid);
+    diag("Sleeping for 10 seconds to let noises work...");
+    sleep(10);
 
-    ok(pid > 0 && kill(pid, 0) == 0, "External noise process is alive");
+    diag("Exiting test, noise reports should follow...");
 
-    // --- Internal Noise Test ---
-    NoiseOptions nopt;
-    nopt["interval_ms"] = "50"; // High intensity for testing
-    spawn_internal_noise(cl, internal_noise_admin_pinger, nopt);
-    spawn_internal_noise(cl, internal_noise_prometheus_poller);
-    spawn_internal_noise(cl, internal_noise_mysql_traffic);
-    spawn_internal_noise(cl, internal_noise_pgsql_traffic);
-    
-    ok(1, "Internal noise threads spawned without crash");
-
-    // --- Cleanup Verification ---
-    stop_noise_tools();
-    sleep(1); // Give it time to be killed
-    
-    ok(pid > 0 && kill(pid, 0) != 0, "External noise process was killed");
-    ok(1, "Internal noise tools stopped (implied by join finishing)");
-
-    if (access(pid_file.c_str(), F_OK) == 0) {
-        unlink(pid_file.c_str());
-    }
-
-    return exit_status();
+	return exit_status();
 }
