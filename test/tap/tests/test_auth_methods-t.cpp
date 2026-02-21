@@ -39,6 +39,7 @@
 #include "command_line.h"
 #include "utils.h"
 #include "utils_auth.h"
+#include "noise_utils.h"
 
 // Additional env variables
 uint32_t MYSQL8_HG = get_env_int("TAP_MYSQL8_BACKEND_HG", 30);
@@ -1084,6 +1085,9 @@ int main(int argc, char** argv) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
+
+	spawn_internal_noise(cl, internal_noise_admin_pinger);
+	spawn_internal_noise(cl, internal_noise_mysql_traffic);
 
 	MYSQL* mysql = mysql_init(NULL);
 

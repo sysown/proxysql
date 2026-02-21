@@ -33,6 +33,7 @@ DELETE FROM history_mysql_status_variables;
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
+#include "noise_utils.h"
 
 using std::string;
 using std::to_string;
@@ -81,6 +82,9 @@ int main(int argc, char** argv) {
 		diag("Failed to get the required environmental variables.");
 		return -1;
 	}
+
+	spawn_internal_noise(cl, internal_noise_admin_pinger);
+	spawn_internal_noise(cl, internal_noise_random_stats_poller);
 
     /** @brief Minimum number of distinct variable_name strings in the history_mysql_status_variables_lookup table */
     const int min_distinct_variable_names = 50;

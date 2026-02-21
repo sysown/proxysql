@@ -84,6 +84,7 @@
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
+#include "noise_utils.h"
 
 #define MYSQL_QUERY__(mysql, query) \
 	do { \
@@ -1117,6 +1118,10 @@ int main(int, char**) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
+
+	spawn_internal_noise(cl, internal_noise_admin_pinger);
+	spawn_internal_noise(cl, internal_noise_prometheus_poller);
+	spawn_internal_noise(cl, internal_noise_random_stats_poller);
 
 	const size_t dis_mod_checks = 7;
 	const size_t ena_mod_checks = 5;
