@@ -107,7 +107,6 @@ int Discovery_Schema::resolve_run_id(const std::string& target_id, const std::st
 		(*proxy_sqlite3_bind_text)(stmt, 2, target_id.c_str(), -1, SQLITE_TRANSIENT);
 		SAFE_SQLITE3_STEP2(stmt);
 		bool found = (rc == SQLITE_ROW);
-		(*proxy_sqlite3_finalize)(stmt);
 		return found ? run_id : -1;
 	}
 
@@ -129,12 +128,10 @@ int Discovery_Schema::resolve_run_id(const std::string& target_id, const std::st
 	SAFE_SQLITE3_STEP2(stmt);
 	if (rc != SQLITE_ROW) {
 		proxy_warning("No run found for schema '%s'\n", run_id_or_schema.c_str());
-		(*proxy_sqlite3_finalize)(stmt);
 		return -1;
 	}
 
 	int run_id = (*proxy_sqlite3_column_int)(stmt, 0);
-	(*proxy_sqlite3_finalize)(stmt);
 	return run_id;
 }
 
