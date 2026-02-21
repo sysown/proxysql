@@ -1063,4 +1063,18 @@ bool get_env_bool(const char* envname, bool envdefault);
 MYSQL* init_mysql_conn(char* host, int port, char* user, char* pass, bool ssl=false, bool cmp=false);
 int run_q(MYSQL *mysql, const char *q);
 
+/**
+ * @brief Spawns a background noise tool if noise is enabled in CommandLine.
+ * @param cl The CommandLine object containing configuration.
+ * @param tool_path Path to the executable tool.
+ * @param args Vector of arguments to pass to the tool.
+ */
+void spawn_noise(const CommandLine& cl, const std::string& tool_path, const std::vector<std::string>& args);
+
+/**
+ * @brief Stops all background noise tools spawned by spawn_noise.
+ * @details This is intended to be called at the end of a TAP test.
+ */
+extern "C" void stop_noise_tools();
+
 #endif // #define UTILS_H

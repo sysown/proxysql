@@ -350,9 +350,13 @@ todo_end()
   *g_test.todo = '\0';
 }
 
+extern "C" void stop_noise_tools();
+
 int exit_status()
 {
   char buff[60];
+
+  stop_noise_tools();
 
   /*
     If there were no plan, we write one last instead.

@@ -8,6 +8,7 @@
 #include <string>
 #include <sstream>
 #include <random>
+#include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <utility>
@@ -2434,4 +2435,64 @@ MYSQL* init_mysql_conn(char* host, int port, char* user, char* pass, bool ssl, b
 int run_q(MYSQL *mysql, const char *q) {
 	MYSQL_QUERY_T(mysql,q);
 	return 0;
+}
+
+static std::vector<pid_t> background_noise_pids;
+static bool atexit_noise_registered = false;
+
+extern "C" void stop_noise_tools() {
+	for (pid_t pid : background_noise_pids) {
+		kill(pid, SIGTERM);
+		// Small wait and reap
+		usleep(100000);
+		int status;
+		if (waitpid(pid, &status, WNOHANG) == 0) {
+			kill(pid, SIGKILL);
+			waitpid(pid, &status, 0);
+		}
+	}
+	background_noise_pids.clear();
+}
+
+void spawn_noise(const CommandLine& cl, const std::string& tool_path, const std::vector<std::string>& args) {
+	if (!cl.use_noise) {
+		return;
+	}
+
+	if (!atexit_noise_registered) {
+		atexit(stop_noise_tools);
+		atexit_noise_registered = true;
+	}
+
+	pid_t pid = fork();
+	if (pid == 0) {
+		// Child
+		setpgid(0, 0);
+		int fd = open("/dev/null", O_RDWR);
+		if (fd != -1) {
+			dup2(fd, STDIN_FILENO);
+			dup2(fd, STDOUT_FILENO);
+			dup2(fd, STDERR_FILENO);
+			if (fd > 2) {
+				close(fd);
+			}
+		}
+
+		std::vector<char*> c_args;
+		c_args.push_back(const_cast<char*>(tool_path.c_str()));
+		for (const auto& arg : args) {
+			c_args.push_back(const_cast<char*>(arg.c_str()));
+		}
+		c_args.push_back(nullptr);
+
+		execvp(tool_path.c_str(), c_args.data());
+		// If we are here, exec failed
+		fprintf(stderr, "Failed to exec noise tool: %s\n", tool_path.c_str());
+		_exit(1);
+	} else if (pid > 0) {
+		background_noise_pids.push_back(pid);
+		diag("Spawned background noise tool '%s' with PID %d", tool_path.c_str(), pid);
+	} else {
+		fprintf(stderr, "Failed to fork for noise tool: %s\n", tool_path.c_str());
+	}
 }
