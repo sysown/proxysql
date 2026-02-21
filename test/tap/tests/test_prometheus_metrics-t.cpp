@@ -1,6 +1,14 @@
 /**
  * @file test_prometheus_metrics-t.cpp
- * @brief This test should be used to verify that added prometheus metrics are working properly.
+ * @brief Integration tests for ProxySQL Prometheus metrics.
+ * 
+ * This test suite verifies that various Prometheus metrics are correctly 
+ * incremented or updated when specific events occur within ProxySQL.
+ * It covers hostgroup-specific metrics, access denied errors, transaction 
+ * rollbacks, and connection pool statistics.
+ * 
+ * Each test follows a Setup -> Record -> Trigger -> Record -> Verify flow.
+ * 
  * @date 2021-03-01
  */
 
@@ -30,21 +38,40 @@ using std::pair;
 using std::string;
 using std::tuple;
 
+/**
+ * @brief Global command line options for the test.
+ */
 CommandLine cl;
 
-
+/**
+ * @brief Helper function to execute a MySQL query and log it to diagnostics.
+ * 
+ * @param mysql The MySQL connection handle.
+ * @param query The SQL query string to execute.
+ * @return int The result of mysql_query().
+ */
 int mysql_query_d(MYSQL* mysql, const char* query) {
 	diag("Query: Issuing query '%s' to ('%s':%d)", query, mysql->host, mysql->port);
 	return mysql_query(mysql, query);
 }
 
+/**
+ * @brief Fetches the current Prometheus metrics from ProxySQL Admin.
+ * 
+ * Issues 'SHOW PROMETHEUS METRICS' to the admin interface and parses the result
+ * into a map of metric names (including labels) to their current double values.
+ * 
+ * @param admin The MySQL connection handle to ProxySQL Admin.
+ * @param[out] metrics_vals Map to store the parsed metrics.
+ * @return int EXIT_SUCCESS on success, or an error code.
+ */
 int get_cur_metrics(MYSQL* admin, map<string,double>& metrics_vals) {
 	MYSQL_QUERY(admin, "SHOW PROMETHEUS METRICS\\G");
 	MYSQL_RES* p_resulset = mysql_store_result(admin);
 	MYSQL_ROW data_row = mysql_fetch_row(p_resulset);
 
 	std::string row_value {};
-	if (data_row[0]) {
+	if (data_row && data_row[0]) {
 		row_value = data_row[0];
 	} else {
 		row_value = "NULL";
@@ -57,10 +84,13 @@ int get_cur_metrics(MYSQL* admin, map<string,double>& metrics_vals) {
 }
 
 /**
- * @brief Triggers the increment of 'auto_increment_delay_multiplex_metric'.
- * @param proxy Oppened MYSQL handler to ProxySQL.
- * @param proxy MYSQL Oppened MYSQL handler to ProxySQL Admin.
- * @return True if the action was able to be performed correctly, false otherwise.
+ * @brief Triggers the increment of 'proxysql_myhgm_auto_increment_multiplex_total'.
+ * 
+ * Creates a temporary table and inserts a row to trigger the auto-increment 
+ * multiplexing logic.
+ * 
+ * @param proxy Opened MYSQL handler to ProxySQL.
+ * @return bool True if the action was successful, false otherwise.
  */
 bool trigger_auto_increment_delay_multiplex_metric(MYSQL* proxy, MYSQL*, const CommandLine&) {
 	int inc_query_res =
@@ -85,25 +115,42 @@ bool trigger_auto_increment_delay_multiplex_metric(MYSQL* proxy, MYSQL*, const C
 }
 
 /**
- * @brief Checks if the increment of 'auto_increment_delay_multiplex_metric' has been
- *   performed correctly.
- * @param prev_metrics Metrics values previous to executing the triggering action.
- * @param after_metrics Metrics values after executing the triggering action.
+ * @brief Verifies that 'proxysql_myhgm_auto_increment_multiplex_total' incremented.
+ * 
+ * Uses prefix matching to handle potential labels and allows for missing 
+ * previous metric value (defaults to 0).
+ * 
+ * @param prev_metrics Metrics values before the trigger.
+ * @param after_metrics Metrics values after the trigger.
  */
 void check_auto_increment_delay_multiplex_metric(
 	const std::map<std::string, double>& prev_metrics,
 	const std::map<std::string, double>& after_metrics
 ) {
-	auto prev_metric_key = prev_metrics.find("proxysql_myhgm_auto_increment_multiplex_total");
-	auto after_metric_key = after_metrics.find("proxysql_myhgm_auto_increment_multiplex_total");
+	auto prev_metric_key = prev_metrics.end();
+	auto after_metric_key = after_metrics.end();
 
-	bool metric_found =
-		prev_metric_key != prev_metrics.end() &&
-		after_metric_key != after_metrics.end();
+	for (auto it = prev_metrics.begin(); it != prev_metrics.end(); ++it) {
+		if (it->first.rfind("proxysql_myhgm_auto_increment_multiplex_total", 0) == 0) {
+			prev_metric_key = it;
+			break;
+		}
+	}
+	for (auto it = after_metrics.begin(); it != after_metrics.end(); ++it) {
+		if (it->first.rfind("proxysql_myhgm_auto_increment_multiplex_total", 0) == 0) {
+			after_metric_key = it;
+			break;
+		}
+	}
+
+	bool metric_found = after_metric_key != after_metrics.end();
 
 	ok(metric_found, "Metric was present in output from 'SHOW PROMETHEUS METRICS'");
 	if (metric_found) {
-		double prev_metric_val = prev_metric_key->second;
+		double prev_metric_val = 0;
+		if (prev_metric_key != prev_metrics.end()) {
+			prev_metric_val = prev_metric_key->second;
+		}
 		double after_metric_val = after_metric_key->second;
 
 		bool is_updated =
@@ -114,6 +161,14 @@ void check_auto_increment_delay_multiplex_metric(
 	}
 }
 
+/**
+ * @brief Triggers 'proxysql_access_denied_wrong_password_total' by failing login.
+ * 
+ * Attempts a connection with an invalid username/password combination.
+ * 
+ * @param cl Command line arguments containing host and port.
+ * @return bool True if the access denied error was correctly received.
+ */
 bool trigger_access_denied_wrong_password_total(MYSQL*, MYSQL*, const CommandLine& cl) {
 	// Initialize ProxySQL connection
 	MYSQL* proxysql = mysql_init(NULL);
@@ -122,7 +177,7 @@ bool trigger_access_denied_wrong_password_total(MYSQL*, MYSQL*, const CommandLin
 		return -1;
 	}
 
-	// Connect to ProxySQL
+	// Connect to ProxySQL with invalid credentials
 	bool access_denied_error = false;
 	void* connect_res = mysql_real_connect(proxysql, cl.host, "invalid_username", "invalid_password", NULL, cl.port, NULL, 0);
 	int access_errno = mysql_errno(proxysql);
@@ -139,20 +194,42 @@ bool trigger_access_denied_wrong_password_total(MYSQL*, MYSQL*, const CommandLin
 	return access_denied_error;
 }
 
+/**
+ * @brief Verifies that 'proxysql_access_denied_wrong_password_total' incremented.
+ * 
+ * Uses prefix matching because this metric includes a {protocol=\"mysql\"} label.
+ * 
+ * @param prev_metrics Metrics values before the trigger.
+ * @param after_metrics Metrics values after the trigger.
+ */
 void check_access_denied_wrong_password_total(
 	const std::map<std::string, double>& prev_metrics,
 	const std::map<std::string, double>& after_metrics
 ) {
-	auto prev_metric_key = prev_metrics.find("proxysql_access_denied_wrong_password_total");
-	auto after_metric_key = after_metrics.find("proxysql_access_denied_wrong_password_total");
+	auto prev_metric_key = prev_metrics.end();
+	auto after_metric_key = after_metrics.end();
 
-	bool metric_found =
-		prev_metric_key != prev_metrics.end() &&
-		after_metric_key != after_metrics.end();
+	for (auto it = prev_metrics.begin(); it != prev_metrics.end(); ++it) {
+		if (it->first.rfind("proxysql_access_denied_wrong_password_total", 0) == 0) {
+			prev_metric_key = it;
+			break;
+		}
+	}
+	for (auto it = after_metrics.begin(); it != after_metrics.end(); ++it) {
+		if (it->first.rfind("proxysql_access_denied_wrong_password_total", 0) == 0) {
+			after_metric_key = it;
+			break;
+		}
+	}
+
+	bool metric_found = after_metric_key != after_metrics.end();
 
 	ok(metric_found, "Metric was present in output from 'SHOW PROMETHEUS METRICS'");
 	if (metric_found) {
-		double prev_metric_val = prev_metric_key->second;
+		double prev_metric_val = 0;
+		if (prev_metric_key != prev_metrics.end()) {
+			prev_metric_val = prev_metric_key->second;
+		}
 		double after_metric_val = after_metric_key->second;
 
 		bool is_updated =
@@ -163,6 +240,12 @@ void check_access_denied_wrong_password_total(
 	}
 }
 
+/**
+ * @brief Triggers 'proxysql_com_rollback_total' by rolling back a transaction.
+ * 
+ * @param proxysql Opened MYSQL handler to ProxySQL.
+ * @return bool True if ROLLBACK command was successful.
+ */
 bool trigger_transaction_rollback_total(MYSQL* proxysql, MYSQL*, const CommandLine&) {
 	int st_err = mysql_query(proxysql, "BEGIN");
 	bool res = false;
@@ -178,20 +261,42 @@ bool trigger_transaction_rollback_total(MYSQL* proxysql, MYSQL*, const CommandLi
 	return res;
 }
 
+/**
+ * @brief Verifies that 'proxysql_com_rollback_total' incremented.
+ * 
+ * Uses prefix matching to handle potential labels.
+ * 
+ * @param prev_metrics Metrics values before the trigger.
+ * @param after_metrics Metrics values after the trigger.
+ */
 void check_transaction_rollback_total(
 	const std::map<std::string, double>& prev_metrics,
 	const std::map<std::string, double>& after_metrics
 ){
-	auto prev_metric_key = prev_metrics.find("proxysql_com_rollback_total");
-	auto after_metric_key = after_metrics.find("proxysql_com_rollback_total");
+	auto prev_metric_key = prev_metrics.end();
+	auto after_metric_key = after_metrics.end();
 
-	bool metric_found =
-		prev_metric_key != prev_metrics.end() &&
-		after_metric_key != after_metrics.end();
+	for (auto it = prev_metrics.begin(); it != prev_metrics.end(); ++it) {
+		if (it->first.rfind("proxysql_com_rollback_total", 0) == 0) {
+			prev_metric_key = it;
+			break;
+		}
+	}
+	for (auto it = after_metrics.begin(); it != after_metrics.end(); ++it) {
+		if (it->first.rfind("proxysql_com_rollback_total", 0) == 0) {
+			after_metric_key = it;
+			break;
+		}
+	}
+
+	bool metric_found = after_metric_key != after_metrics.end();
 
 	ok(metric_found, "Metric was present in output from 'SHOW PROMETHEUS METRICS'");
 	if (metric_found) {
-		double prev_metric_val = prev_metric_key->second;
+		double prev_metric_val = 0;
+		if (prev_metric_key != prev_metrics.end()) {
+			prev_metric_val = prev_metric_key->second;
+		}
 		double after_metric_val = after_metric_key->second;
 
 		bool is_updated =
@@ -202,8 +307,17 @@ void check_transaction_rollback_total(
 	}
 }
 
+/**
+ * @brief Global storage for the ProxySQL version string fetched during tests.
+ */
 string PROXYSQL_VERSION {};
 
+/**
+ * @brief Fetches the current ProxySQL version via 'SELECT @@version'.
+ * 
+ * @param admin Opened MYSQL handler to ProxySQL Admin.
+ * @return bool True if version was successfully fetched.
+ */
 bool get_proxysql_version_info(MYSQL*, MYSQL* admin, const CommandLine&) {
 	int v_err = mysql_query(admin, "SELECT @@version");
 	if (v_err) {
@@ -227,6 +341,13 @@ bool get_proxysql_version_info(MYSQL*, MYSQL* admin, const CommandLine&) {
 	}
 }
 
+/**
+ * @brief Verifies that 'proxysql_version_info' metric contains the correct version label.
+ * 
+ * This metric is a gauge with value 1.0 and labels containing the version information.
+ * 
+ * @param after_metrics Metrics values after the trigger.
+ */
 void check_proxysql_version_info(const map<string, double>& prev_metrics, const map<string, double>& after_metrics) {
 	map<string,double>::const_iterator after_metric_it { after_metrics.end() };
 
@@ -260,6 +381,13 @@ void check_proxysql_version_info(const map<string, double>& prev_metrics, const 
 	}
 }
 
+/**
+ * @brief Internal helper to extract the next label-value pair from a metric string.
+ * 
+ * @param metric_id The metric identifier string containing labels.
+ * @param st_pos Starting position for extraction.
+ * @return pair<pair<string,string>,string::size_type> The extracted {key, value} pair and the next position.
+ */
 pair<pair<string,string>,string::size_type> extract_next_tag(const string metric_id, string::size_type st_pos) {
 	string::size_type tag_eq_pos = metric_id.find("=\"", st_pos);
 	if (tag_eq_pos == string::npos) {
@@ -274,6 +402,14 @@ pair<pair<string,string>,string::size_type> extract_next_tag(const string metric
 	return { { key, val }, tag_val_end + 2 };
 }
 
+/**
+ * @brief Parses labels from a Prometheus metric identifier.
+ * 
+ * Example: 'metric_name{label1="val1",label2="val2"}' -> map {label1: val1, label2: val2}
+ * 
+ * @param metric_id The full metric identifier string.
+ * @return map<string,string> Map of label names to label values.
+ */
 map<string,string> extract_metric_tags(const string metric_id) {
 	string::size_type tags_init_pos = metric_id.find('{');
 	if (tags_init_pos == std::string::npos) {
@@ -297,6 +433,15 @@ map<string,string> extract_metric_tags(const string metric_id) {
 	return result;
 }
 
+/**
+ * @brief Triggers 'proxysql_message_count_total' increment via a parse failure.
+ * 
+ * Issues an incomplete/invalid query 'SET NAMES' without arguments to 
+ * force a parse error.
+ * 
+ * @param cl Command line arguments.
+ * @return bool True if the query failed as expected.
+ */
 bool trigger_message_count_parse_failure(MYSQL*, MYSQL*, const CommandLine& cl) {
 	// Initialize ProxySQL connection
 	MYSQL* proxysql = mysql_init(NULL);
@@ -328,12 +473,33 @@ bool trigger_message_count_parse_failure(MYSQL*, MYSQL*, const CommandLine& cl) 
 	return res;
 }
 
+/**
+ * @brief Hostgroup ID used for backend connection tests.
+ */
 int NEW_SRV_HG = get_env_int("TAP_PROMETHEUS_METRICS__NEW_SRV_HG", 1724090);
+
+/**
+ * @brief String representation of NEW_SRV_HG.
+ */
 string NEW_SRV_HG_STR { std::to_string(NEW_SRV_HG) };
 
+/**
+ * @brief Target MySQL port as string.
+ */
 string MY_PORT_STR {};
+
+/**
+ * @brief Target MySQL host as string.
+ */
 string MY_HOST_STR {};
 
+/**
+ * @brief Finds a hostgroup ID that is not currently in use.
+ * 
+ * @param nums Vector of currently used hostgroup IDs.
+ * @param offset Initial hostgroup ID to check.
+ * @return int A free hostgroup ID.
+ */
 int find_free_slot(const std::vector<int>& nums, int offset) {
     std::set<int> num_set(nums.begin(), nums.end());
 
@@ -345,6 +511,14 @@ int find_free_slot(const std::vector<int>& nums, int offset) {
 	}
 }
 
+/**
+ * @brief Updates the target hostgroup ID by finding an unused one.
+ * 
+ * Scans existing metrics for used hostgroups to avoid collisions.
+ * 
+ * @param admin Opened MYSQL handler to ProxySQL Admin.
+ * @return int EXIT_SUCCESS on success.
+ */
 int upd_tg_metric_hg(MYSQL* admin) {
 	// Forces a metrics refresh; all hostgroups from current servers should be present
 	map<string,double> cur_metrics {};
@@ -378,6 +552,16 @@ int upd_tg_metric_hg(MYSQL* admin) {
 	return EXIT_SUCCESS;
 }
 
+/**
+ * @brief Creates a new hostgroup and a connection to it.
+ * 
+ * This triggers the creation of connection pool metrics for a new hostgroup.
+ * 
+ * @param proxy Opened MYSQL handler to ProxySQL.
+ * @param admin Opened MYSQL handler to ProxySQL Admin.
+ * @param cl Command line arguments.
+ * @return bool True if setup and connection were successful.
+ */
 bool trigger_conn_in_new_backend_hg(MYSQL* proxy, MYSQL* admin, const CommandLine& cl) {
 	MY_HOST_STR = cl.mysql_host;
 	MY_PORT_STR = std::to_string(cl.mysql_port);
@@ -406,12 +590,23 @@ bool trigger_conn_in_new_backend_hg(MYSQL* proxy, MYSQL* admin, const CommandLin
 	return true;
 }
 
+/**
+ * @brief Triggers an update to an existing backend connection metric.
+ * 
+ * @param proxy Opened MYSQL handler to ProxySQL.
+ * @return bool True if query was successful.
+ */
 bool trigger_conn_in_prev_backend_hg(MYSQL* proxy, MYSQL* admin, const CommandLine& cl) {
 	// Create backend connection; we keep the connection open intentionally (gauge)
 	MYSQL_QUERY(proxy, ("/* hostgroup=" + NEW_SRV_HG_STR + ";create_new_connection=1 */ BEGIN").c_str());
 	return true;
 }
 
+/**
+ * @brief Validates that metrics were created after an action.
+ * 
+ * @return bool True if metrics were absent before and present after.
+ */
 bool check_metric_creation(
 	map<string,double>::const_iterator prev_metric_it_free,
 	map<string,double>::const_iterator prev_metric_it_used,
@@ -431,6 +626,11 @@ bool check_metric_creation(
 	return metric_found;
 }
 
+/**
+ * @brief Validates that metrics existed before and after an action.
+ * 
+ * @return bool True if metrics were present in both states.
+ */
 bool check_metric_update(
 	map<string,double>::const_iterator prev_metric_it_free,
 	map<string,double>::const_iterator prev_metric_it_used,
@@ -450,6 +650,9 @@ bool check_metric_update(
 	return metric_found;
 }
 
+/**
+ * @brief Function pointer for dynamic metric presence checking.
+ */
 bool (*check_metric_presence)(
 	map<string,double>::const_iterator prev_metric_it_free,
 	map<string,double>::const_iterator prev_metric_it_used,
@@ -459,6 +662,13 @@ bool (*check_metric_presence)(
 	const map<string, double>& after_metrics
 ) = check_metric_creation;
 
+/**
+ * @brief Checks if a metric identifier matches a set of label/value expectations.
+ * 
+ * @param metric_key Iterator to the metric entry.
+ * @param tags_chcks Map of label names to validation functions.
+ * @return pair<bool,map<string,string>> Success status and the actual tags.
+ */
 pair<bool,map<string,string>> check_matching_tags(
 	map<string,double>::const_iterator metric_key,
 	map<string,function<bool(string)>> tags_chcks
@@ -476,6 +686,12 @@ pair<bool,map<string,string>> check_matching_tags(
 	return { true, metric_tags };
 }
 
+/**
+ * @brief Verifies increment of 'proxysql_connpool_conns' gauge for 'used' connections.
+ * 
+ * @param prev_metrics Metrics values before the trigger.
+ * @param after_metrics Metrics values after the trigger.
+ */
 void check_conn_used_incr_on_hg(
 	const map<string, double>& prev_metrics, const map<string, double>& after_metrics
 ) {
@@ -567,6 +783,14 @@ void check_conn_used_incr_on_hg(
 	}
 }
 
+/**
+ * @brief Helper to find a specific metric with matching tags in a metrics map.
+ * 
+ * @param metrics The metrics map to search.
+ * @param key The metric name prefix to search for.
+ * @param tags_chcks Map of label validations.
+ * @return pair Iterator to the found entry and its parsed tags.
+ */
 pair<map<string,double>::const_iterator,map<string,string>> get_metric(
 	const map<string, double>& metrics,
 	const string& key,
@@ -585,6 +809,12 @@ pair<map<string,double>::const_iterator,map<string,string>> get_metric(
 	return { metrics.end(), {} };
 }
 
+/**
+ * @brief Verifies increment of 'proxysql_connpool_conns_total' counter.
+ * 
+ * @param prev_metrics Metrics values before the trigger.
+ * @param after_metrics Metrics values after the trigger.
+ */
 void check_conn_total_incr_on_hg(
 	const map<string, double>& prev_metrics, const map<string, double>& after_metrics
 ) {
@@ -629,6 +859,14 @@ void check_conn_total_incr_on_hg(
 	}
 }
 
+/**
+ * @brief Verifies 'proxysql_message_count_total' with specific code location labels.
+ * 
+ * These metrics include filename, func, and line labels where the error occurred.
+ * 
+ * @param prev_metrics Metrics values before the trigger.
+ * @param after_metrics Metrics values after the trigger.
+ */
 void check_message_count_parse_failure(const map<string, double>& prev_metrics, const map<string, double>& after_metrics) {
 	map<string,double>::const_iterator after_metric_it { after_metrics.end() };
 	map<string,double>::const_iterator prev_metric_it { prev_metrics.end() };
@@ -703,6 +941,14 @@ void check_message_count_parse_failure(const map<string, double>& prev_metrics, 
 	}
 }
 
+/**
+ * @brief Retrieves multiple target metrics from a metrics map.
+ * 
+ * @param metrics_map The source metrics map.
+ * @param metrics_ids List of full metric identifiers to find.
+ * @param[out] tg_metrics Map to store the found metrics.
+ * @return int EXIT_SUCCESS if all metrics were found.
+ */
 int get_target_metrics(
 	const map<string,double>& metrics_map, const vector<string>& metrics_ids, map<string,double>& tg_metrics
 ) {
@@ -723,6 +969,9 @@ int get_target_metrics(
 	return EXIT_SUCCESS;
 }
 
+/**
+ * @brief Prepares hostgroup 0 by issuing initial traffic.
+ */
 bool rm_add_server_connpool_setup(MYSQL* proxy, MYSQL* admin, const CommandLine& cl) {
 	// Exercise some load on the hostgroup 0
 	for (size_t i = 0; i < 10; i++) {
@@ -735,6 +984,11 @@ bool rm_add_server_connpool_setup(MYSQL* proxy, MYSQL* admin, const CommandLine&
 	return EXIT_SUCCESS;
 }
 
+/**
+ * @brief Triggers connection pool counters by removing and re-adding a server.
+ * 
+ * @return bool True if operations were successful.
+ */
 bool rm_add_server_connpool_counters(MYSQL* proxy, MYSQL* admin, const CommandLine& cl) {
 	// Delete server and add it again to hostgroup
 	diag("Removing current 'mysql_servers' for target hostgroup '0'");
@@ -757,9 +1011,17 @@ bool rm_add_server_connpool_counters(MYSQL* proxy, MYSQL* admin, const CommandLi
 	return true;
 }
 
+/**
+ * @brief Verifies data transmission and connection counters for a specific server.
+ * 
+ * Checks 'proxysql_connpool_data_bytes_total', 'proxysql_connpool_conns_total', 
+ * and 'proxysql_connpool_conns_queries_total'.
+ * 
+ * @param prev_metrics Metrics before the server flap.
+ * @param after_metrics Metrics after the server flap.
+ */
 void check_server_data_recv(const map<string,double>& prev_metrics, const map<string,double>& after_metrics) {
 	// Endpoint we are going to target
-//	const string endpoint_hg { "endpoint=\"127.0.0.1:13306\",hostgroup=\"0\"" };
 	const string endpoint_hg { "endpoint=\"" + std::string(cl.mysql_host) + ":" + std::to_string(cl.mysql_port) + "\",hostgroup=\"0\"" };
 
 	// Metrics identifiers
@@ -767,8 +1029,6 @@ void check_server_data_recv(const map<string,double>& prev_metrics, const map<st
 		{ "proxysql_connpool_data_bytes_total{" + endpoint_hg + ",traffic_flow=\"sent\"}" },
 		{ "proxysql_connpool_data_bytes_total{" + endpoint_hg + ",traffic_flow=\"recv\"}" },
 		{ "proxysql_connpool_conns_total{" + endpoint_hg + ",status=\"ok\"}" },
-		// TODO: Not trivial to simulate connection error to the server
-		// { "proxysql_connpool_conns_total{" + inv_endpoint_hg + ",status=\"err\"}" },
 		{ "proxysql_connpool_conns_queries_total{" + endpoint_hg + "}" }
 	};
 
@@ -813,32 +1073,47 @@ void check_server_data_recv(const map<string,double>& prev_metrics, const map<st
 	ok(failed_metrics.empty(), "All metric values were properly incremented after server rm/add from hostgroup");
 }
 
+/**
+ * @brief Test function signatures.
+ */
 using setup = function<bool(MYSQL*, MYSQL*, const CommandLine&)>;
 using metric_trigger = function<bool(MYSQL*, MYSQL*, const CommandLine&)>;
 using metric_check = function<void(const map<string, double>&, const map<string, double>&)>;
 
+/**
+ * @brief Indexing for metric_tests tuples.
+ */
 struct CHECK {
 	enum funcs { SETUP, TRIGGER, CHECKER, _END };
 };
 
+/**
+ * @brief Default setup function that does nothing.
+ */
 bool placeholder_setup(MYSQL*, MYSQL*, const CommandLine&) { return true; }
 
+/**
+ * @brief Configures the checker to expect metric creation.
+ */
 bool setup_metric_creation_check(MYSQL*, MYSQL*, const CommandLine&) {
 	check_metric_presence = check_metric_creation;
 	return true;
 }
 
+/**
+ * @brief Configures the checker to expect metric update.
+ */
 bool setup_metric_update_check(MYSQL*, MYSQL*, const CommandLine&) {
 	check_metric_presence = check_metric_update;
 	return true;
 }
 
 /**
- * @brief Map of test identifier and pair functions holding the metrics tests:
- *   - First function of the pair uses an open connection to ProxySQL and to ProxySQL Admin to perform
- *   the actions that should trigger the metric increment.
- *   - Second function performs the check to verify that the metric have been incremented properly.
- *     This function should execute **one** 'ok(...)' inside when the values have been properly checked.
+ * @brief Registry of all metrics tests.
+ * 
+ * Each entry consists of:
+ * - Test Name
+ * - Tuple containing {Setup Function, Trigger Function, Check Function}
  */
 const vector<pair<string, tuple<setup, metric_trigger, metric_check>>> metric_tests {
 	{
@@ -891,9 +1166,9 @@ const vector<pair<string, tuple<setup, metric_trigger, metric_check>>> metric_te
 	},
 };
 
-using std::map;
-
-
+/**
+ * @brief Main entry point for the TAP test suite.
+ */
 int main(int argc, char** argv) {
 
 	if (cl.getEnv()) {
