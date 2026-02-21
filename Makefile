@@ -1,5 +1,7 @@
 #!/bin/make -f
 
+# TEST COMMIT
+
 ### NOTES:
 ### version string is fetched from git history
 ### when not available, specify GIT_VERSION on commnad line:
