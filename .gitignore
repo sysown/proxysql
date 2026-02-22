@@ -63,17 +63,23 @@ oldcode/tests/connect_speed
 #pidfile and errorlog
 *.pid
 *.log
+*.log.*
 *.err
+*.pem
 
 #binary
 src/proxysql
-src/*pem
 binaries/*deb
 binaries/*rpm
 tools/eventslog_reader_sample
 tools/eventlog_reader_to_json
 src/proxysql-save.cfg
 src/*log*
+
+#test artifacts
+ci_infra_logs/
+test/tap/tap/*.mri
+test/tap/tap/st*
 
 proxysql-2.0.0/
 docker/images/proxysql/rhel-compliant/rpmmacros
