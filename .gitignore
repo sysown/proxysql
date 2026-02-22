@@ -184,6 +184,7 @@ test/tap/tests/test_cluster_sync_config/proxysql*.pem
 test/tap/tests/test_cluster_sync_config/test_cluster_sync.cnf
 .aider*
 GEMINI.md
+.gemini
 
 # generated MySQL parser artifacts
 lib/MySQL_Lexer.yy.c

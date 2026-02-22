@@ -27,6 +27,7 @@ using json = nlohmann::json;
 #include "MySQL_Variables.h"
 #include "ProxySQL_Cluster.hpp"
 #include "MySQL_Query_Cache.h"
+#include "MySQLFFTO.hpp"
 
 #include "libinjection.h"
 #include "libinjection_sqli.h"
@@ -648,6 +649,7 @@ MySQL_Session::MySQL_Session() {
 	user_attributes=NULL;
 	schema_locked=false;
 	session_fast_forward=SESSION_FORWARD_TYPE_NONE;
+	ffto_bypassed=false;
 	//started_sending_data_to_client=false;
 	handler_function=NULL;
 	client_myds=NULL;
@@ -727,14 +729,15 @@ void MySQL_Session::reset() {
 		delete mybes;
 		mybes=NULL;
 	}
-	mybe=NULL;
-
-	with_gtid = false;
-	backend_closed_in_fast_forward = false;
-	fast_forward_grace_start_time = 0;
-
-	//gtid_trxid = 0;
-	gtid_hid = -1;
+	        mybe=NULL;
+	
+	        with_gtid = false;
+	        backend_closed_in_fast_forward = false;
+	        fast_forward_grace_start_time = 0;
+	        ffto_bypassed = false;
+	        m_ffto.reset();
+	
+	        //gtid_trxid = 0;	gtid_hid = -1;
 	memset(gtid_buf,0,sizeof(gtid_buf));
 	if (session_type == PROXYSQL_SESSION_SQLITE) {
 		SQLite3_Session *sqlite_sess = (SQLite3_Session *)thread->gen_args;
@@ -756,8 +759,11 @@ void MySQL_Session::reset() {
  * @brief Destructor for the MySQL session.
  */
 MySQL_Session::~MySQL_Session() {
-
-	reset(); // we moved this out to allow CHANGE_USER
+	if (m_ffto) {
+		m_ffto->on_close();
+	}
+	reset();
+ // we moved this out to allow CHANGE_USER
 
 	if (locked_on_hostgroup >= 0) {
 		thread->status_variables.stvar[st_var_hostgroup_locked]--;
@@ -4741,6 +4747,7 @@ int MySQL_Session::GPFC_Statuses2(bool& wrong_pass, PtrSize_t& pkt) {
 			}
 			break;
 		case FAST_FORWARD:
+			observe_ffto_client_packet(pkt);
 			mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
 			/*
 			 * Fast Forward Grace Close Logic:
@@ -4787,6 +4794,7 @@ int MySQL_Session::GPFC_Statuses2(bool& wrong_pass, PtrSize_t& pkt) {
 		//  'FAST_FORWARD' should be pushed to 'PSarrayOUT'.
 		case CONNECTING_SERVER:
 			if (previous_status.empty() == false && previous_status.top() == FAST_FORWARD) {
+				observe_ffto_client_packet(pkt);
 				mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
 				break;
 			}
@@ -4798,6 +4806,24 @@ int MySQL_Session::GPFC_Statuses2(bool& wrong_pass, PtrSize_t& pkt) {
 			break;
 	}
 	return handler_ret;
+}
+
+void MySQL_Session::observe_ffto_client_packet(const PtrSize_t& pkt) {
+	if (!pkt.ptr || pkt.size == 0) return;
+	if (!mysql_thread___ffto_enabled || ffto_bypassed) return;
+
+	if (pkt.size > (size_t)mysql_thread___ffto_max_buffer_size) {
+		ffto_bypassed = true;
+		m_ffto.reset();
+		return;
+	}
+
+	if (!m_ffto) {
+		m_ffto = std::make_unique<MySQLFFTO>(this);
+	}
+	if (m_ffto) {
+		m_ffto->on_client_data((const char*)pkt.ptr, pkt.size);
+	}
 }
 
 void MySQL_Session::GPFC_DetectedMultiPacket_SetDDS() {
@@ -4832,6 +4858,7 @@ int MySQL_Session::GPFC_WaitingClientData_FastForwardSession(PtrSize_t& pkt) {
 
 	mybe=find_or_create_backend(current_hostgroup); // set a backend
 	mybe->server_myds->reinit_queues();             // reinitialize the queues in the myds . By default, they are not active
+	observe_ffto_client_packet(pkt);
 	mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size); // move the first packet
 	previous_status.push(FAST_FORWARD); // next status will be FAST_FORWARD . Now we need a connection
 
@@ -5979,7 +6006,16 @@ handler_again:
 				// register the mysql_data_stream
 				thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
 			}
-			client_myds->PSarrayOUT->copy_add(mybe->server_myds->PSarrayIN, 0, mybe->server_myds->PSarrayIN->len);
+			                        if (mysql_thread___ffto_enabled && !ffto_bypassed && m_ffto) {
+			                                for (unsigned int i = 0; i < mybe->server_myds->PSarrayIN->len; i++) {
+			                                        if (mybe->server_myds->PSarrayIN->pdata[i].size > (size_t)mysql_thread___ffto_max_buffer_size) {
+			                                                ffto_bypassed = true;
+			                                                m_ffto.reset();
+			                                                break;
+			                                        }
+			                                        m_ffto->on_server_data((const char*)mybe->server_myds->PSarrayIN->pdata[i].ptr, mybe->server_myds->PSarrayIN->pdata[i].size);
+			                                }
+			                        }			client_myds->PSarrayOUT->copy_add(mybe->server_myds->PSarrayIN, 0, mybe->server_myds->PSarrayIN->len);
 			while (mybe->server_myds->PSarrayIN->len) mybe->server_myds->PSarrayIN->remove_index(mybe->server_myds->PSarrayIN->len-1,NULL);
 			break;
 		case CONNECTING_CLIENT:

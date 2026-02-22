@@ -1085,6 +1085,8 @@ public:
 #endif
 		int show_processlist_extended;
 		int processlist_max_query_length;
+		bool ffto_enabled;
+		int ffto_max_buffer_size;
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;

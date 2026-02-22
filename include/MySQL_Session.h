@@ -139,6 +139,8 @@ inline void Query_Info::set_end_time(unsigned long long time) {
 #endif // CLOCK_MONOTONIC_RAW
 }
 
+class TrafficObserver;
+
 /**
  * @class MySQL_Session
  * @brief Manages a client session, including query parsing, backend connections, and state transitions.
@@ -272,6 +274,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	// GPFC_ functions are subfunctions of get_pkts_from_client()
 	int GPFC_Statuses2(bool&, PtrSize_t&);
 	void GPFC_DetectedMultiPacket_SetDDS();
+	void observe_ffto_client_packet(const PtrSize_t& pkt);
 	int GPFC_WaitingClientData_FastForwardSession(PtrSize_t&);
 	void GPFC_PreparedStatements(PtrSize_t&, unsigned char);
 	int GPFC_Replication_SwitchToFastForward(PtrSize_t&, unsigned char);
@@ -485,8 +488,12 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	StmtLongDataHandler *SLDH;
 
 	Session_Regex **match_regexes;
+	std::unique_ptr<TrafficObserver> m_ffto;
+	bool ffto_bypassed;
 
-	ProxySQL_Node_Address * proxysql_node_address; // this is used ONLY for Admin, and only if the other party is another proxysql instance part of a cluster
+	ProxySQL_Node_Address * proxysql_node_address;
+		
+	 // this is used ONLY for Admin, and only if the other party is another proxysql instance part of a cluster
 	bool use_ldap_auth;
 	// Fast forward grace close flags: track backend closure during fast forward mode
 	// to allow pending client data to drain before closing the session.
