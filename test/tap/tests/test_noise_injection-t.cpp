@@ -29,9 +29,9 @@ int main(int argc, char** argv) {
 	spawn_internal_noise(cl, internal_noise_prometheus_poller);
 	spawn_internal_noise(cl, internal_noise_random_stats_poller);
 	spawn_internal_noise(cl, internal_noise_mysql_traffic);
-	spawn_internal_noise(cl, internal_noise_mysql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}, {"avg_delay_ms", "300"}});
+	spawn_internal_noise(cl, internal_noise_mysql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}, {"avg_delay_ms", "300"}, {"num_tables", "5"}, {"protocol", "mix"}});
 	spawn_internal_noise(cl, internal_noise_pgsql_traffic);
-	spawn_internal_noise(cl, internal_noise_pgsql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}, {"avg_delay_ms", "300"}});
+	spawn_internal_noise(cl, internal_noise_pgsql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}, {"avg_delay_ms", "300"}, {"num_tables", "2"}, {"protocol", "binary"}});
 	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}, {"port", "6070"}});
 
 	int noise_tools_count = get_noise_tools_count();
