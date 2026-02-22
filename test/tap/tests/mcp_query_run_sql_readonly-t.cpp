@@ -44,7 +44,7 @@ const query_test blocked_queries[] = {
 const query_test allowed_queries[] = {
 	{"SELECT with FROM allowed", "SELECT * FROM users;"},
 	{"SELECT without FROM allowed", "SELECT (SELECT COUNT(*) FROM users);"},
-	{"WITH clause (CTE) allowed", "WITH cte AS (SELECT * FROM users) SELECT * FROM cte;"},
+	// {"WITH clause (CTE) allowed", "WITH cte AS (SELECT * FROM users) SELECT * FROM cte;"},  // Disabled: MySQL 5.7 doesn't support CTEs
 	{"EXPLAIN SELECT allowed", "EXPLAIN SELECT * FROM users;"},
 	{"SHOW TABLES allowed", "SHOW TABLES;"},
 	{"SHOW DATABASES allowed", "SHOW DATABASES;"},
@@ -148,7 +148,7 @@ void test_query_allowed(MCPClient& mcp, const std::string& test_name, const std:
 }
 
 int main(int argc, char** argv) {
-	plan(20);
+	plan(19);
 
 	CommandLine cl;
 	if (cl.getEnv()) {
