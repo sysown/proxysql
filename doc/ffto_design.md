@@ -27,14 +27,14 @@ Defined in `include/TrafficObserver.hpp`. This interface decouples protocol-spec
 
 ### 4.2. MySQL FFTO Implementation (`MySQLFFTO`)
 Implements the MySQL wire protocol (version 10) state machine.
-- **States**: `IDLE`, `WAITING_FOR_RESPONSE`, `READING_COLUMN_DEFS`, `READING_ROWS`, `SKIP_PREPARE_RESPONSE`.
+- **States**: `IDLE`, `AWAITING_PREPARE_OK`, `AWAITING_RESPONSE`, `READING_COLUMNS`, `READING_ROWS`.
 - **Prepared Statement Tracking**: Maintains a session-local map of `stmt_id` to query templates captured during the `PREPARE` phase.
 
 ### 4.3. PostgreSQL FFTO Implementation (`PgSQLFFTO`)
 Handles the message-oriented PostgreSQL protocol.
 - **Request Identification**: Detects `Query` ('Q'), `Parse` ('P'), `Bind` ('B'), and `Execute` ('E') messages.
-- **Response Identification**: Tracks `CommandComplete` ('C') and `ErrorResponse` ('E').
-- **Extended Query Tracking**: Tracks the association between Portals and Prepared Statements.
+- **Response Identification**: Tracks `CommandComplete` ('C'), `ReadyForQuery` ('Z'), and `ErrorResponse` ('E').
+- **Extended Query Tracking**: Tracks the association between Portals and Prepared Statements, and queues pipelined executes so responses are attributed to the correct query text.
 
 ## 5. Protocol and Security Details
 - **Encryption**: FFTO operates on protocol packets that are already decrypted by ProxySQL's session handler. This allows ProxySQL to mix encrypted and unencrypted backend/frontend connections while maintaining consistent monitoring in FF mode.
@@ -84,9 +84,10 @@ To verify that FFTO is capturing traffic in Fast Forward mode:
 
 ## 8. Protocol Support
 - **Text and Binary Protocols**: FFTO supports both standard text-based queries and the binary protocol used by prepared statements.
-- **MySQL Binary Protocol**: Corrects captures `COM_STMT_PREPARE` and `COM_STMT_EXECUTE`, tracking statement IDs to their respective SQL text.
+- **MySQL Binary Protocol**: Correctly captures `COM_STMT_PREPARE` and `COM_STMT_EXECUTE`, tracking statement IDs to their respective SQL text.
 - **PostgreSQL Extended Query**: Supports the multi-phase `Parse` -> `Bind` -> `Execute` sequence by tracking Statement and Portal mappings.
 
 ## 9. Limitations
 - **Large Payloads**: Packets exceeding the `*-ffto_max_buffer_size` threshold cause FFTO to be bypassed for that session.
 - **X-Protocol**: Currently optimized for classic MySQL and PostgreSQL protocols.
+- **PostgreSQL Command Tags**: `sum_rows_affected`/`sum_rows_sent` are derived from `CommandComplete` tags and currently cover common commands (`INSERT`, `UPDATE`, `DELETE`, `COPY`, `MERGE`, `SELECT`, `FETCH`, `MOVE`).

@@ -8,19 +8,32 @@
 #include "command_line.h"
 #include "utils.h"
 
-#define EXEC_QUERY(conn, q) \
-    if (mysql_query(conn, q)) { \
-        diag("Query failed: %s", mysql_error(conn)); \
-        ok(0, "Query failed: %s", q); \
-        return -1; \
-    } else { \
-        MYSQL_RES* dummy_res = mysql_store_result(conn); \
-        if (dummy_res) mysql_free_result(dummy_res); \
-        else if (mysql_field_count(conn) > 0) { \
-            diag("Error storing result: %s", mysql_error(conn)); \
-            return -1; \
+static constexpr int kPlannedTests = 22;
+
+#define FAIL_AND_SKIP_REMAINING(cleanup_label, fmt, ...) \
+    do { \
+        diag(fmt, ##__VA_ARGS__); \
+        int remaining = kPlannedTests - tests_last(); \
+        if (remaining > 0) { \
+            skip(remaining, "Skipping remaining assertions after setup failure"); \
         } \
-    }
+        goto cleanup_label; \
+    } while (0)
+
+#define EXEC_QUERY(conn, q) \
+    do { \
+        if (mysql_query(conn, q)) { \
+            ok(0, "Query failed: %s", q); \
+            FAIL_AND_SKIP_REMAINING(cleanup, "Query failed: %s", mysql_error(conn)); \
+        } \
+        MYSQL_RES* dummy_res = mysql_store_result(conn); \
+        if (dummy_res) { \
+            mysql_free_result(dummy_res); \
+        } else if (mysql_field_count(conn) > 0) { \
+            ok(0, "Failed to store result for query: %s", q); \
+            FAIL_AND_SKIP_REMAINING(cleanup, "Error storing result: %s", mysql_error(conn)); \
+        } \
+    } while (0)
 
 void verify_digest(MYSQL* admin, const char* template_text, int expected_count, uint64_t expected_rows_affected = 0, uint64_t expected_rows_sent = 0) {
     char query[1024];
@@ -67,9 +80,17 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    plan(1 + (6*3) + (1*3)); // 1 + 18 + 3 = 22
+    plan(kPlannedTests); // 1 + 18 + 3 = 22
 
     MYSQL* admin = mysql_init(NULL);
+    MYSQL* conn = NULL;
+    MYSQL_STMT* stmt = NULL;
+    char server_query[1024];
+    const char* ins_query = "INSERT INTO ffto_test (id, val) VALUES (?, ?)";
+    MYSQL_BIND bind[2];
+    int int_data = 10;
+    char str_data[20] = "binary_val";
+    unsigned long str_len = strlen(str_data);
     if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
         diag("Admin connection failed");
         return -1;
@@ -85,7 +106,6 @@ int main(int argc, char** argv) {
     MYSQL_QUERY(admin, "LOAD MYSQL USERS TO RUNTIME");
 
     // Ensure backend server exists
-    char server_query[1024];
     snprintf(server_query, sizeof(server_query), "INSERT OR REPLACE INTO mysql_servers (hostgroup_id, hostname, port) VALUES (0, '%s', %d)", cl.mysql_host, cl.mysql_port);
     MYSQL_QUERY(admin, server_query);
     MYSQL_QUERY(admin, "LOAD MYSQL SERVERS TO RUNTIME");
@@ -93,7 +113,7 @@ int main(int argc, char** argv) {
     MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest"); // Reset stats
 
     // USE ROOT FOR CLIENT CONNECTION
-    MYSQL* conn = mysql_init(NULL);
+    conn = mysql_init(NULL);
     if (!mysql_real_connect(conn, cl.host, "root", "root", NULL, cl.port, NULL, 0)) {
         diag("Client connection failed: %s", mysql_error(conn));
         return -1;
@@ -123,18 +143,11 @@ int main(int argc, char** argv) {
     // --- Part 2: Binary Protocol (Prepared Statements) ---
     MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest"); 
     
-    MYSQL_STMT *stmt = mysql_stmt_init(conn);
-    const char* ins_query = "INSERT INTO ffto_test (id, val) VALUES (?, ?)";
+    stmt = mysql_stmt_init(conn);
     if (mysql_stmt_prepare(stmt, ins_query, strlen(ins_query))) {
-        diag("mysql_stmt_prepare failed: %s", mysql_stmt_error(stmt));
         ok(0, "mysql_stmt_prepare failed");
-        return -1;
+        FAIL_AND_SKIP_REMAINING(cleanup, "mysql_stmt_prepare failed: %s", mysql_stmt_error(stmt));
     }
-
-    MYSQL_BIND bind[2];
-    int int_data = 10;
-    char str_data[20] = "binary_val";
-    unsigned long str_len = strlen(str_data);
 
     memset(bind, 0, sizeof(bind));
     bind[0].buffer_type = MYSQL_TYPE_LONG;
@@ -145,26 +158,26 @@ int main(int argc, char** argv) {
     bind[1].length = &str_len;
 
     if (mysql_stmt_bind_param(stmt, bind)) {
-        diag("mysql_stmt_bind_param failed: %s", mysql_stmt_error(stmt));
-        return -1;
+        ok(0, "mysql_stmt_bind_param failed");
+        FAIL_AND_SKIP_REMAINING(cleanup, "mysql_stmt_bind_param failed: %s", mysql_stmt_error(stmt));
     }
     if (mysql_stmt_execute(stmt)) {
-        diag("mysql_stmt_execute (1) failed: %s", mysql_stmt_error(stmt));
-        return -1;
+        ok(0, "mysql_stmt_execute (1) failed");
+        FAIL_AND_SKIP_REMAINING(cleanup, "mysql_stmt_execute (1) failed: %s", mysql_stmt_error(stmt));
     }
     int_data = 11; // Change ID for second insert
     if (mysql_stmt_execute(stmt)) {
-        diag("mysql_stmt_execute (2) failed: %s", mysql_stmt_error(stmt));
-        return -1;
+        ok(0, "mysql_stmt_execute (2) failed");
+        FAIL_AND_SKIP_REMAINING(cleanup, "mysql_stmt_execute (2) failed: %s", mysql_stmt_error(stmt));
     }
 
     // Verify Binary Stats
     verify_digest(admin, "INSERT INTO ffto_test (id,val) VALUES (?,?)", 2, 2, 0); 
 
-    mysql_stmt_close(stmt);
-
-    mysql_close(conn);
-    mysql_close(admin);
+cleanup:
+    if (stmt) mysql_stmt_close(stmt);
+    if (conn) mysql_close(conn);
+    if (admin) mysql_close(admin);
 
     return exit_status();
 }

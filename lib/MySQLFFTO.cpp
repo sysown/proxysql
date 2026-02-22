@@ -109,11 +109,24 @@ void MySQLFFTO::on_server_data(const char* buf, std::size_t len) {
 }
 
 void MySQLFFTO::on_close() {
-    if (m_state != IDLE && m_query_start_time != 0) {
+    if (is_in_flight_query_state() && m_query_start_time != 0) {
         unsigned long long duration = monotonic_time() - m_query_start_time;
         report_query_stats(m_current_query, duration, m_affected_rows, m_rows_sent);
-        m_state = IDLE;
     }
+    m_state = IDLE;
+    clear_active_query();
+    m_pending_prepare_query.clear();
+}
+
+bool MySQLFFTO::is_in_flight_query_state() const {
+    return m_state == AWAITING_RESPONSE || m_state == READING_COLUMNS || m_state == READING_ROWS;
+}
+
+void MySQLFFTO::clear_active_query() {
+    m_current_query.clear();
+    m_query_start_time = 0;
+    m_affected_rows = 0;
+    m_rows_sent = 0;
 }
 
 void MySQLFFTO::process_client_packet(const unsigned char* data, size_t len) {
@@ -162,8 +175,10 @@ void MySQLFFTO::process_server_packet(const unsigned char* data, size_t len) {
             uint32_t stmt_id; memcpy(&stmt_id, data + 1, 4);
             m_statements[stmt_id] = m_pending_prepare_query;
             m_state = IDLE;
+            m_pending_prepare_query.clear();
         } else if (first_byte == 0xFF) {
             m_state = IDLE;
+            m_pending_prepare_query.clear();
         }
     } else if (m_state == AWAITING_RESPONSE) {
         if (first_byte == 0x00) { // OK
@@ -172,12 +187,15 @@ void MySQLFFTO::process_server_packet(const unsigned char* data, size_t len) {
             unsigned long long duration = monotonic_time() - m_query_start_time;
             report_query_stats(m_current_query, duration, m_affected_rows, 0);
             m_state = IDLE;
+            clear_active_query();
         } else if (first_byte == 0xFF) { // ERR
             unsigned long long duration = monotonic_time() - m_query_start_time;
             report_query_stats(m_current_query, duration);
             m_state = IDLE;
+            clear_active_query();
         } else if (first_byte == 0xFE && len < 9) { // EOF
             m_state = IDLE;
+            clear_active_query();
         } else { // Result Set started (first_byte is column count)
             m_state = READING_COLUMNS;
         }
@@ -186,18 +204,28 @@ void MySQLFFTO::process_server_packet(const unsigned char* data, size_t len) {
             m_state = READING_ROWS;
         } else if (first_byte == 0xFE && len >= 9 && deprecate_eof) {
             m_state = READING_ROWS;
+        } else if (first_byte == 0xFF) { // ERR while reading column metadata
+            unsigned long long duration = monotonic_time() - m_query_start_time;
+            report_query_stats(m_current_query, duration);
+            m_state = IDLE;
+            clear_active_query();
         }
     } else if (m_state == READING_ROWS) {
         if (first_byte == 0xFE && len < 9) { // EOF after rows
             unsigned long long duration = monotonic_time() - m_query_start_time;
             report_query_stats(m_current_query, duration, 0, m_rows_sent);
             m_state = IDLE;
+            clear_active_query();
         } else if (first_byte == 0xFE && len >= 9 && deprecate_eof) {
             unsigned long long duration = monotonic_time() - m_query_start_time;
             report_query_stats(m_current_query, duration, 0, m_rows_sent);
             m_state = IDLE;
+            clear_active_query();
         } else if (first_byte == 0xFF) { // ERR
+            unsigned long long duration = monotonic_time() - m_query_start_time;
+            report_query_stats(m_current_query, duration, 0, m_rows_sent);
             m_state = IDLE;
+            clear_active_query();
         } else {
             m_rows_sent++;
         }

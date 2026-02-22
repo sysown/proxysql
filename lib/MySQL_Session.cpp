@@ -4747,19 +4747,7 @@ int MySQL_Session::GPFC_Statuses2(bool& wrong_pass, PtrSize_t& pkt) {
 			}
 			break;
 		case FAST_FORWARD:
-			if (mysql_thread___ffto_enabled && !ffto_bypassed) {
-				if (pkt.size > (size_t)mysql_thread___ffto_max_buffer_size) {
-					ffto_bypassed = true;
-					m_ffto.reset();
-				} else {
-					if (!m_ffto) {
-						m_ffto = std::make_unique<MySQLFFTO>(this);
-					}
-					if (m_ffto) {
-						m_ffto->on_client_data((const char*)pkt.ptr, pkt.size);
-					}
-				}
-			}
+			observe_ffto_client_packet(pkt);
 			mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
 			/*
 			 * Fast Forward Grace Close Logic:
@@ -4806,19 +4794,7 @@ int MySQL_Session::GPFC_Statuses2(bool& wrong_pass, PtrSize_t& pkt) {
 		//  'FAST_FORWARD' should be pushed to 'PSarrayOUT'.
 		case CONNECTING_SERVER:
 			if (previous_status.empty() == false && previous_status.top() == FAST_FORWARD) {
-				if (mysql_thread___ffto_enabled && !ffto_bypassed) {
-					if (pkt.size > (size_t)mysql_thread___ffto_max_buffer_size) {
-						ffto_bypassed = true;
-						m_ffto.reset();
-					} else {
-						if (!m_ffto) {
-							m_ffto = std::make_unique<MySQLFFTO>(this);
-						}
-						if (m_ffto) {
-							m_ffto->on_client_data((const char*)pkt.ptr, pkt.size);
-						}
-					}
-				}
+				observe_ffto_client_packet(pkt);
 				mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
 				break;
 			}
@@ -4830,6 +4806,24 @@ int MySQL_Session::GPFC_Statuses2(bool& wrong_pass, PtrSize_t& pkt) {
 			break;
 	}
 	return handler_ret;
+}
+
+void MySQL_Session::observe_ffto_client_packet(const PtrSize_t& pkt) {
+	if (!pkt.ptr || pkt.size == 0) return;
+	if (!mysql_thread___ffto_enabled || ffto_bypassed) return;
+
+	if (pkt.size > (size_t)mysql_thread___ffto_max_buffer_size) {
+		ffto_bypassed = true;
+		m_ffto.reset();
+		return;
+	}
+
+	if (!m_ffto) {
+		m_ffto = std::make_unique<MySQLFFTO>(this);
+	}
+	if (m_ffto) {
+		m_ffto->on_client_data((const char*)pkt.ptr, pkt.size);
+	}
 }
 
 void MySQL_Session::GPFC_DetectedMultiPacket_SetDDS() {
@@ -4864,19 +4858,7 @@ int MySQL_Session::GPFC_WaitingClientData_FastForwardSession(PtrSize_t& pkt) {
 
 	mybe=find_or_create_backend(current_hostgroup); // set a backend
 	mybe->server_myds->reinit_queues();             // reinitialize the queues in the myds . By default, they are not active
-	if (mysql_thread___ffto_enabled && !ffto_bypassed) {
-		if (pkt.size > (size_t)mysql_thread___ffto_max_buffer_size) {
-			ffto_bypassed = true;
-			m_ffto.reset();
-		} else {
-			if (!m_ffto) {
-				m_ffto = std::make_unique<MySQLFFTO>(this);
-			}
-			if (m_ffto) {
-				m_ffto->on_client_data((const char*)pkt.ptr, pkt.size);
-			}
-		}
-	}
+	observe_ffto_client_packet(pkt);
 	mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size); // move the first packet
 	previous_status.push(FAST_FORWARD); // next status will be FAST_FORWARD . Now we need a connection
 

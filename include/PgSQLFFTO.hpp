@@ -2,6 +2,7 @@
 #define PGSQL_FFTO_HPP
 
 #include "TrafficObserver.hpp"
+#include <deque>
 #include <vector>
 #include <string>
 #include <unordered_map>
@@ -69,6 +70,14 @@ private:
     unsigned long long m_query_start_time;  ///< Start timestamp of the current query in microseconds.
     uint64_t m_affected_rows {0};          ///< Accumulated affected rows for the current query.
     uint64_t m_rows_sent {0};              ///< Accumulated rows sent for the current query.
+    bool m_current_finalize_on_sync {false}; ///< Whether current query finalizes on ReadyForQuery ('Z').
+
+    struct PendingQuery {
+        std::string query;
+        unsigned long long start_time {0};
+        bool finalize_on_sync {false};
+    };
+    std::deque<PendingQuery> m_pending_queries; ///< Queued queries for pipelined traffic.
 
     // Binary Protocol Tracking (PostgreSQL Extended Query)
     std::unordered_map<std::string, std::string> m_statements; ///< Map of statement names to original SQL text.
@@ -89,6 +98,11 @@ private:
      * @param len Length of the message payload.
      */
     void process_server_message(char type, const unsigned char* payload, size_t len);
+
+    void track_query(std::string query, bool finalize_on_sync);
+    void clear_current_query();
+    void activate_next_query();
+    void finalize_current_query();
 
     /**
      * @brief Computes and records query metrics into the ProxySQL query digests.

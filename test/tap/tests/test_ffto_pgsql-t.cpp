@@ -12,14 +12,29 @@
 
 CommandLine cl;
 
+static constexpr int kPlannedTests = 22;
+
+#define FAIL_AND_SKIP_REMAINING(cleanup_label, fmt, ...) \
+    do { \
+        diag(fmt, ##__VA_ARGS__); \
+        int remaining = kPlannedTests - tests_last(); \
+        if (remaining > 0) { \
+            skip(remaining, "Skipping remaining assertions after setup failure"); \
+        } \
+        goto cleanup_label; \
+    } while (0)
+
 #define EXEC_PG_QUERY(conn, q) \
     { \
         PGresult* res_exec = PQexec(conn, q); \
+        if (!res_exec) { \
+            ok(0, "PG Query failed: %s", q); \
+            FAIL_AND_SKIP_REMAINING(cleanup, "PG Query returned no result: %s", PQerrorMessage(conn)); \
+        } \
         if (PQresultStatus(res_exec) != PGRES_COMMAND_OK && PQresultStatus(res_exec) != PGRES_TUPLES_OK) { \
-            diag("PG Query failed: %s", PQerrorMessage(conn)); \
             ok(0, "PG Query failed: %s", q); \
             PQclear(res_exec); \
-            return -1; \
+            FAIL_AND_SKIP_REMAINING(cleanup, "PG Query failed: %s", PQerrorMessage(conn)); \
         } \
         PQclear(res_exec); \
     }
@@ -66,9 +81,16 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    plan(1 + (6*3) + (1*3)); // 1 (connect) + 18 (simple) + 3 (extended) = 22
+    plan(kPlannedTests); // 1 (connect) + 18 (simple) + 3 (extended) = 22
 
     MYSQL* admin = mysql_init(NULL);
+    PGconn* conn = NULL;
+    char server_query[1024];
+    char conninfo[1024];
+    const char* ext_query = "SELECT data FROM ffto_pg_test WHERE id = $1";
+    PGresult* res_prep = NULL;
+    const char* paramValues[1] = {"1"};
+    PGresult* res_exec = NULL;
     if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
         diag("Admin connection failed");
         return -1;
@@ -84,7 +106,6 @@ int main(int argc, char** argv) {
     MYSQL_QUERY(admin, "LOAD PGSQL USERS TO RUNTIME");
 
     // Ensure backend server exists
-    char server_query[1024];
     snprintf(server_query, sizeof(server_query), "INSERT OR REPLACE INTO pgsql_servers (hostgroup_id, hostname, port) VALUES (0, '%s', %d)", cl.pgsql_server_host, cl.pgsql_server_port);
     MYSQL_QUERY(admin, server_query);
     MYSQL_QUERY(admin, "LOAD PGSQL SERVERS TO RUNTIME");
@@ -92,11 +113,10 @@ int main(int argc, char** argv) {
     MYSQL_QUERY(admin, "DELETE FROM stats_pgsql_query_digest");
 
     // Standard libpq connection using root (postgres)
-    char conninfo[1024];
     snprintf(conninfo, sizeof(conninfo), "host=%s port=%d user=%s password=%s dbname=postgres sslmode=disable", 
             cl.pgsql_host, cl.pgsql_port, cl.pgsql_root_username, cl.pgsql_root_password);
     
-    PGconn* conn = PQconnectdb(conninfo);
+    conn = PQconnectdb(conninfo);
     if (PQstatus(conn) != CONNECTION_OK) {
         diag("PG Connection failed: %s", PQerrorMessage(conn));
         return -1;
@@ -121,26 +141,35 @@ int main(int argc, char** argv) {
     // --- Part 2: Extended Query Protocol ---
     MYSQL_QUERY(admin, "DELETE FROM stats_pgsql_query_digest"); 
 
-    const char* ext_query = "SELECT data FROM ffto_pg_test WHERE id = $1";
-    PGresult* res_prep = PQprepare(conn, "stmt1", ext_query, 1, NULL);
+    res_prep = PQprepare(conn, "stmt1", ext_query, 1, NULL);
+    if (!res_prep) {
+        ok(0, "PQprepare failed");
+        FAIL_AND_SKIP_REMAINING(cleanup, "PQprepare returned no result: %s", PQerrorMessage(conn));
+    }
     if (PQresultStatus(res_prep) != PGRES_COMMAND_OK) {
-        diag("PQprepare failed: %s", PQerrorMessage(conn));
-        return -1;
+        ok(0, "PQprepare failed");
+        PQclear(res_prep);
+        FAIL_AND_SKIP_REMAINING(cleanup, "PQprepare failed: %s", PQerrorMessage(conn));
     }
     PQclear(res_prep);
 
-    const char* paramValues[1] = {"1"};
-    PGresult* res_exec = PQexecPrepared(conn, "stmt1", 1, paramValues, NULL, NULL, 0);
+    res_exec = PQexecPrepared(conn, "stmt1", 1, paramValues, NULL, NULL, 0);
+    if (!res_exec) {
+        ok(0, "PQexecPrepared failed");
+        FAIL_AND_SKIP_REMAINING(cleanup, "PQexecPrepared returned no result: %s", PQerrorMessage(conn));
+    }
     if (PQresultStatus(res_exec) != PGRES_TUPLES_OK) {
-        diag("PQexecPrepared failed: %s", PQerrorMessage(conn));
-        return -1;
+        ok(0, "PQexecPrepared failed");
+        PQclear(res_exec);
+        FAIL_AND_SKIP_REMAINING(cleanup, "PQexecPrepared failed: %s", PQerrorMessage(conn));
     }
     PQclear(res_exec);
 
     verify_pg_digest(admin, "SELECT data FROM ffto_pg_test WHERE id = $1", 1, 0, 1);
 
-    PQfinish(conn);
-    mysql_close(admin);
+cleanup:
+    if (conn) PQfinish(conn);
+    if (admin) mysql_close(admin);
 
     return exit_status();
 }

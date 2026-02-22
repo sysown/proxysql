@@ -11,8 +11,9 @@
 #endif
 #include "c_tokenizer.h"
 #include <arpa/inet.h>
+#include <cctype>
+#include <cstdlib>
 #include <cstring>
-#include <regex>
 
 extern class PgSQL_Query_Processor* GloPgQPro;
 
@@ -20,8 +21,8 @@ extern class PgSQL_Query_Processor* GloPgQPro;
  * @brief Parses the PostgreSQL CommandComplete ('C') message payload to extract row counts.
  * 
  * PostgreSQL encodes row counts into the message tag string (e.g., "INSERT 0 10", "SELECT 50").
- * This function uses regular expressions to extract these values and determine if the message
- * corresponds to a result-generating command (SELECT, FETCH, MOVE) or a DML command.
+ * This function performs lightweight token parsing to extract these values and determine if
+ * the message corresponds to a result-generating command (SELECT, FETCH, MOVE) or a DML command.
  * 
  * @param payload Pointer to the CommandComplete message payload (the tag string).
  * @param len Length of the payload.
@@ -29,20 +30,38 @@ extern class PgSQL_Query_Processor* GloPgQPro;
  * @return The number of rows affected or sent.
  */
 static uint64_t extract_pg_rows_affected(const unsigned char* payload, size_t len, bool& is_select) {
-    if (len == 0) return 0;
-    std::string command_tag(reinterpret_cast<const char*>(payload), len);
     is_select = false;
-    static const std::regex re("(INSERT|UPDATE|DELETE|SELECT|MOVE|FETCH)\\b.*?\\b(\\d+)$");
-    std::smatch matches;
-    if (std::regex_search(command_tag, matches, re)) {
-        if (matches.size() == 3) {
-            std::string command_type = matches[1].str();
-            uint64_t rows = std::stoull(matches[2].str());
-            if (command_type == "SELECT" || command_type == "FETCH" || command_type == "MOVE") is_select = true;
-            return rows;
-        }
+    if (len == 0) return 0;
+
+    size_t begin = 0;
+    while (begin < len && std::isspace(payload[begin])) begin++;
+    while (len > begin && (payload[len - 1] == '\0' || std::isspace(payload[len - 1]))) len--;
+    if (begin >= len) return 0;
+
+    std::string command_tag(reinterpret_cast<const char*>(payload + begin), len - begin);
+
+    size_t first_space = command_tag.find(' ');
+    if (first_space == std::string::npos) return 0;
+
+    std::string command_type = command_tag.substr(0, first_space);
+    if (command_type == "SELECT" || command_type == "FETCH" || command_type == "MOVE") {
+        is_select = true;
+    } else if (command_type != "INSERT" && command_type != "UPDATE" &&
+               command_type != "DELETE" && command_type != "COPY" &&
+               command_type != "MERGE") {
+        return 0;
     }
-    return 0;
+
+    size_t last_space = command_tag.rfind(' ');
+    if (last_space == std::string::npos || last_space + 1 >= command_tag.size()) return 0;
+
+    const char* rows_str = command_tag.c_str() + last_space + 1;
+    char* endptr = nullptr;
+    unsigned long long rows = std::strtoull(rows_str, &endptr, 10);
+    if (endptr == rows_str || *endptr != '\0') {
+        return 0;
+    }
+    return rows;
 }
 
 PgSQLFFTO::PgSQLFFTO(PgSQL_Session* session) 
@@ -110,20 +129,69 @@ void PgSQLFFTO::on_server_data(const char* buf, std::size_t len) {
 }
 
 void PgSQLFFTO::on_close() {
-    if (m_state != IDLE && m_query_start_time != 0) {
+    if (m_state == AWAITING_RESPONSE && !m_current_query.empty() && m_query_start_time != 0) {
         unsigned long long duration = monotonic_time() - m_query_start_time;
         report_query_stats(m_current_query, duration, m_affected_rows, m_rows_sent);
-        m_state = IDLE;
     }
+    clear_current_query();
+    m_pending_queries.clear();
+    m_state = IDLE;
+}
+
+void PgSQLFFTO::track_query(std::string query, bool finalize_on_sync) {
+    if (query.empty()) return;
+
+    PendingQuery pending { std::move(query), monotonic_time(), finalize_on_sync };
+    if (m_state == IDLE || m_current_query.empty()) {
+        m_current_query = std::move(pending.query);
+        m_query_start_time = pending.start_time;
+        m_current_finalize_on_sync = pending.finalize_on_sync;
+        m_affected_rows = 0;
+        m_rows_sent = 0;
+        m_state = AWAITING_RESPONSE;
+        return;
+    }
+
+    m_pending_queries.emplace_back(std::move(pending));
+}
+
+void PgSQLFFTO::clear_current_query() {
+    m_current_query.clear();
+    m_query_start_time = 0;
+    m_affected_rows = 0;
+    m_rows_sent = 0;
+    m_current_finalize_on_sync = false;
+}
+
+void PgSQLFFTO::activate_next_query() {
+    if (m_pending_queries.empty()) {
+        clear_current_query();
+        m_state = IDLE;
+        return;
+    }
+
+    PendingQuery next_query = std::move(m_pending_queries.front());
+    m_pending_queries.pop_front();
+    m_current_query = std::move(next_query.query);
+    m_query_start_time = next_query.start_time;
+    m_current_finalize_on_sync = next_query.finalize_on_sync;
+    m_affected_rows = 0;
+    m_rows_sent = 0;
+    m_state = AWAITING_RESPONSE;
+}
+
+void PgSQLFFTO::finalize_current_query() {
+    if (!m_current_query.empty() && m_query_start_time != 0) {
+        unsigned long long duration = monotonic_time() - m_query_start_time;
+        report_query_stats(m_current_query, duration, m_affected_rows, m_rows_sent);
+    }
+    activate_next_query();
 }
 
 void PgSQLFFTO::process_client_message(char type, const unsigned char* payload, size_t len) {
     if (type == 'Q') {
         size_t query_len = (len > 0 && payload[len - 1] == 0) ? len - 1 : len;
-        m_current_query = std::string(reinterpret_cast<const char*>(payload), query_len);
-        m_query_start_time = monotonic_time();
-        m_state = AWAITING_RESPONSE;
-        m_affected_rows = 0; m_rows_sent = 0;
+        track_query(std::string(reinterpret_cast<const char*>(payload), query_len), true);
     } else if (type == 'P') {
         const char* p = reinterpret_cast<const char*>(payload);
         size_t name_len = strnlen(p, len);
@@ -132,6 +200,7 @@ void PgSQLFFTO::process_client_message(char type, const unsigned char* payload, 
         const char* query_ptr = p + name_len + 1;
         size_t rem = len - (name_len + 1);
         size_t query_text_len = strnlen(query_ptr, rem);
+        if (query_text_len >= rem) return;
         m_statements[stmt_name] = std::string(query_ptr, query_text_len);
     } else if (type == 'B') {
         const char* p = reinterpret_cast<const char*>(payload);
@@ -146,25 +215,22 @@ void PgSQLFFTO::process_client_message(char type, const unsigned char* payload, 
     } else if (type == 'E') {
         const char* p = reinterpret_cast<const char*>(payload);
         size_t portal_len = strnlen(p, len);
-        std::string portal_name(p, std::min(portal_len, len));
+        if (portal_len >= len) return;
+        if (len < portal_len + 1 + 4) return; // portal name + '\0' + max-rows
+        std::string portal_name(p, portal_len);
         auto pit = m_portals.find(portal_name);
         if (pit != m_portals.end()) {
             auto sit = m_statements.find(pit->second);
             if (sit != m_statements.end()) {
-                if (m_state == AWAITING_RESPONSE) {
-                    on_close(); // Finalize previous if any
-                }
-                m_current_query = sit->second;
-                m_query_start_time = monotonic_time();
-                m_state = AWAITING_RESPONSE;
-                m_affected_rows = 0; m_rows_sent = 0;
+                track_query(sit->second, false);
             }
         }
     } else if (type == 'C') { // Frontend Close
-        if (len < 1) return;
+        if (len < 2) return;
         char close_type = static_cast<char>(payload[0]);
         const char* name_ptr = reinterpret_cast<const char*>(payload) + 1;
         size_t name_len = strnlen(name_ptr, len - 1);
+        if (name_len >= len - 1) return;
         std::string name(name_ptr, name_len);
         if (close_type == 'S') m_statements.erase(name);
         else if (close_type == 'P') m_portals.erase(name);
@@ -180,14 +246,19 @@ void PgSQLFFTO::process_server_message(char type, const unsigned char* payload, 
         uint64_t rows = extract_pg_rows_affected(payload, len, is_select);
         if (is_select) m_rows_sent += rows;
         else m_affected_rows += rows;
-    } else if (type == 'Z' || type == 'E') {
-        // ReadyForQuery or ErrorResponse
-        if (m_state == AWAITING_RESPONSE) {
+        if (!m_current_finalize_on_sync) {
+            finalize_current_query();
+        }
+    } else if (type == 'Z') {
+        finalize_current_query();
+    } else if (type == 'E') {
+        if (!m_current_query.empty() && m_query_start_time != 0) {
             unsigned long long duration = monotonic_time() - m_query_start_time;
             report_query_stats(m_current_query, duration, m_affected_rows, m_rows_sent);
         }
+        clear_current_query();
+        m_pending_queries.clear();
         m_state = IDLE;
-        m_affected_rows = 0; m_rows_sent = 0;
     }
 }
 

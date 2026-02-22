@@ -91,6 +91,9 @@ private:
      */
     void process_server_packet(const unsigned char* data, size_t len);
 
+    bool is_in_flight_query_state() const;
+    void clear_active_query();
+
     /**
      * @brief Computes and records query metrics into the ProxySQL query digests.
      * @param query The SQL query text.
