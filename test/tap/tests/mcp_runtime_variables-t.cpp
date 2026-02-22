@@ -25,6 +25,31 @@
 using std::string;
 
 /**
+ * @brief Get the value of an MCP variable as a string
+ *
+ * @param admin MySQL connection to admin interface
+ * @param var_name Variable name (without mcp- prefix)
+ * @return std::string The variable value, or empty string on error
+ */
+string get_mcp_variable(MYSQL* admin, const string& var_name) {
+	string query = "SELECT @@mcp-" + var_name;
+	if (mysql_query(admin, query.c_str()) != 0) {
+		return "";
+	}
+
+	MYSQL_RES* res = mysql_store_result(admin);
+	if (!res) {
+		return "";
+	}
+
+	MYSQL_ROW row = mysql_fetch_row(res);
+	string value = row && row[0] ? row[0] : "";
+
+	mysql_free_result(res);
+	return value;
+}
+
+/**
  * @brief Get the value of a variable from runtime_global_variables
  *
  * @param admin MySQL connection to admin interface
