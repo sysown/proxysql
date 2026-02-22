@@ -280,6 +280,7 @@
   "mcp_mysql_concurrency_stress-t": [ "ai-g1" ],
   "mcp_pgsql_concurrency_stress-t": [ "ai-g1" ],
   "mcp_query_run_sql_readonly-t": [ "ai-g1" ],
+  "mcp_runtime_variables-t": [ "ai-g1" ],
   "mcp_show_connections_commands_inmemory-t": [ "ai-g1" ],
   "mcp_show_queries_topk-t": [ "ai-g1" ],
   "mcp_stats_refresh-t": [ "ai-g1" ],
