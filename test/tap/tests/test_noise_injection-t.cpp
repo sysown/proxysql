@@ -24,8 +24,8 @@ int main(int argc, char** argv) {
     // Force noise to be enabled for this test
     cl.use_noise = true;
 
-    // We have 7 internal noise tools
-    const int noise_tools_count = 7;
+    // We have 8 internal noise tools
+    const int noise_tools_count = 8;
     plan(noise_tools_count);
 
     diag("Spawning all available noise tools...");
@@ -36,10 +36,11 @@ int main(int argc, char** argv) {
 	spawn_internal_noise(cl, internal_noise_random_stats_poller);
 	spawn_internal_noise(cl, internal_noise_mysql_traffic);
 	spawn_internal_noise(cl, internal_noise_pgsql_traffic);
+	spawn_internal_noise(cl, internal_noise_pgsql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}});
 	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}, {"port", "6070"}});
 
-    diag("Sleeping for 10 seconds to let noises work...");
-    sleep(10);
+    diag("Sleeping for 60 seconds to let noises work...");
+    sleep(60);
 
     diag("Exiting test, noise reports should follow...");
 

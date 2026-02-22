@@ -96,6 +96,11 @@ void internal_noise_mysql_traffic(const CommandLine& cl, const NoiseOptions& opt
 void internal_noise_pgsql_traffic(const CommandLine& cl, const NoiseOptions& opt, std::atomic<bool>& stop);
 
 /**
+ * @brief Version 2 of PgSQL Traffic: complex multi-threaded load with table setup and reconnections.
+ */
+void internal_noise_pgsql_traffic_v2(const CommandLine& cl, const NoiseOptions& opt, std::atomic<bool>& stop);
+
+/**
  * @brief Periodically fetches Prometheus metrics via the REST API.
  */
 void internal_noise_rest_prometheus_poller(const CommandLine& cl, const NoiseOptions& opt, std::atomic<bool>& stop);
