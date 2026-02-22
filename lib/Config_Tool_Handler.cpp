@@ -6,8 +6,9 @@
 using json = nlohmann::json;
 #define PROXYJSON
 
-#include "Config_Tool_Handler.h"
 #include "MCP_Thread.h"
+#include "MCP_Tool_Handler.h"
+#include "Config_Tool_Handler.h"
 #include "proxysql_debug.h"
 #include "proxysql_utils.h"
 

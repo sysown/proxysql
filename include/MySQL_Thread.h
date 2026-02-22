@@ -725,6 +725,17 @@ class MySQL_Threads_Handler
 	void start_listeners();
 	void stop_listeners();
 	void signal_all_threads(unsigned char _c=0);
+	/**
+	 * @brief Build an in-memory processlist snapshot for MySQL sessions.
+	 *
+	 * The returned resultset always uses the canonical `stats_mysql_processlist`
+	 * column layout. When `args.query_options.enabled=true`, the snapshot is
+	 * post-processed in memory using typed filters, deterministic sorting, and
+	 * pagination controls from `processlist_query_options_t`.
+	 *
+	 * @param args Processlist rendering options and optional query options.
+	 * @return Newly allocated resultset owned by the caller.
+	 */
 	SQLite3_result * SQL3_Processlist(processlist_config_t args);
 	SQLite3_result * SQL3_GlobalStatus(bool _memory);
 	bool kill_session(uint32_t _thread_session_id);

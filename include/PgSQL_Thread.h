@@ -1534,7 +1534,10 @@ public:
 	/**
 	 * @brief Retrieves a process list for all threads in the thread pool.
 	 *
-	 * @param args Processlist configuration of PgSQL.
+	 * @param args
+	 *   Processlist rendering options and optional typed query controls.
+	 *   When `args.query_options.enabled=true`, filtering/sorting/pagination is
+	 *   applied in memory after the live snapshot is collected.
 	 *
 	 * @return A `SQLite3_result` object containing the process list, or `NULL` if an error
 	 * occurred.

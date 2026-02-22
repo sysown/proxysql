@@ -223,6 +223,9 @@
   "eof_mixed_flags_queries-t" : [ "default-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4" ],
   "eof_packet_mixed_queries-t" : [ "default-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4" ],
   "ok_packet_mixed_queries-t" : [ "default-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4" ],
+  "test_ffto_bypass-t": [ "default-g4" ],
+  "test_ffto_mysql-t": [ "default-g4" ],
+  "test_ffto_pgsql-t": [ "default-g4" ],
   "test_load_from_config_validation-t" : [ "default-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4" ],
   "test_load_from_config_prefix_stripping-t" : [ "default-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4" ],
   "mysql-show_ssl_version-t": [ "default-g4", "mysql-auto_increment_delay_multiplex=0-g4", "mysql-multiplexing=false-g4", "mysql-query_digests=0-g4", "mysql-query_digests_keep_comment=1-g4" ],
@@ -271,6 +274,7 @@
   "genai_embedding_rerank-t": [ "ai-g1" ],
   "genai_module-t": [ "ai-g1" ],
   "mcp_module-t": [ "ai-g1" ],
+  "mcp_show_connections_commands_inmemory-t": [ "ai-g1" ],
   "mcp_query_run_sql_readonly-t": [ "ai-g1" ],
   "nl2sql_integration-t": [ "ai-g1" ],
   "nl2sql_internal-t": [ "ai-g1" ],
@@ -283,7 +287,6 @@
   "vector_features-t": [ "ai-g1" ],
   "test_mcp_claude_headless_flow-t": [ "ai-g1" ],
   "test_mcp_llm_discovery_phaseb-t": [ "ai-g1" ],
-  "vector_features-t": [ "ai-g1" ],
   "test_mcp_static_harvest-t": [ "ai-g1" ],
   "unit-strip_schema_from_query-t": [ "unit-tests-g1" ]
 

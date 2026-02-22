@@ -1087,6 +1087,42 @@ int ProxySQL_Admin::FlushDigestTableToDisk(SQLite3DB *_db) {
 	return r;
 }
 
+/**
+ * @brief Return Top-K query digest rows directly from in-memory digest maps.
+ *
+ * This wrapper centralizes access to Query Processor digest structures so
+ * callers (MCP/Web/Admin tools) do not need to read `stats.*` tables.
+ *
+ * @tparam pt Target protocol (`SERVER_TYPE_MYSQL` or `SERVER_TYPE_PGSQL`).
+ * @param filters In-memory digest filters.
+ * @param sort_by Primary sort metric.
+ * @param limit Requested page size.
+ * @param offset Requested page offset.
+ * @param max_window Maximum number of best rows to retain before pagination.
+ * @return Top-K resultset with matched counters and paged rows.
+ */
+template <enum SERVER_TYPE pt>
+query_digest_topk_result_t ProxySQL_Admin::QueryDigestTopK(
+	const query_digest_filter_opts_t& filters,
+	query_digest_sort_by_t sort_by,
+	uint32_t limit,
+	uint32_t offset,
+	uint32_t max_window
+) {
+	if constexpr (pt == SERVER_TYPE_MYSQL) {
+		if (!GloMyQPro) {
+			return {};
+		}
+		return GloMyQPro->get_query_digests_topk(filters, sort_by, limit, offset, max_window);
+	} else if constexpr (pt == SERVER_TYPE_PGSQL) {
+		if (!GloPgQPro) {
+			return {};
+		}
+		return GloPgQPro->get_query_digests_topk(filters, sort_by, limit, offset, max_window);
+	}
+	return {};
+}
+
 #include "Admin_ifaces.h"
 
 admin_main_loop_listeners S_amll;
@@ -1163,6 +1199,12 @@ void ProxySQL_Admin::flush_pgsql_stats() {
 // NOTE: send_ok_msg_to_client and send_error_msg_to_client instantiations moved to after definitions (near line 5730)
 template int ProxySQL_Admin::FlushDigestTableToDisk<(SERVER_TYPE)0>(SQLite3DB*);
 template int ProxySQL_Admin::FlushDigestTableToDisk<(SERVER_TYPE)1>(SQLite3DB*);
+template query_digest_topk_result_t ProxySQL_Admin::QueryDigestTopK<(SERVER_TYPE)0>(
+	const query_digest_filter_opts_t&, query_digest_sort_by_t, uint32_t, uint32_t, uint32_t
+);
+template query_digest_topk_result_t ProxySQL_Admin::QueryDigestTopK<(SERVER_TYPE)1>(
+	const query_digest_filter_opts_t&, query_digest_sort_by_t, uint32_t, uint32_t, uint32_t
+);
 
 void ProxySQL_Admin::flush_configdb() { // see #923
 	wrlock();
