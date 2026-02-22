@@ -1436,17 +1436,6 @@ void ProxySQL_Admin::flush_mcp_variables___runtime_to_database(SQLite3DB* db, bo
 	ASSERT_SQLITE_OK(rc1, db);
 	sqlite3_stmt* statement1 = statement1_unique.get();
 
-	// Only prepare runtime_global_variables statement if runtime flag is set
-	// (table may not exist during early initialization)
-	sqlite3_stmt* statement2 = nullptr;
-	std::unique_ptr<sqlite3_stmt, decltype(&sqlite3_finalize)> statement2_unique(nullptr, sqlite3_finalize);
-	if (runtime) {
-		auto [rc2, stmt2_unique] = db->prepare_v2("INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(?1, ?2)");
-		ASSERT_SQLITE_OK(rc2, db);
-		statement2 = stmt2_unique.get();
-		statement2_unique = std::move(stmt2_unique);
-	}
-
 	if (use_lock) {
 		GloMCPH->wrlock();
 	}
@@ -1460,18 +1449,20 @@ void ProxySQL_Admin::flush_mcp_variables___runtime_to_database(SQLite3DB* db, bo
 
 		// Insert into global_variables
 		rc = (*proxy_sqlite3_bind_text)(statement1, 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-		rc = (*proxy_sqlite3_bind_text)(statement1, 2, (val ? val : (char*)""), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 2, (val[0] ? val : (char*)""), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 		SAFE_SQLITE3_STEP2(statement1);
 		rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, db);
 		rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, db);
 
 		// Insert into runtime_global_variables if runtime flag is set
-		if (runtime && statement2) {
-			rc = (*proxy_sqlite3_bind_text)(statement2, 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-			rc = (*proxy_sqlite3_bind_text)(statement2, 2, (val ? val : (char*)""), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-			SAFE_SQLITE3_STEP2(statement2);
-			rc = (*proxy_sqlite3_clear_bindings)(statement2); ASSERT_SQLITE_OK(rc, db);
-			rc = (*proxy_sqlite3_reset)(statement2); ASSERT_SQLITE_OK(rc, db);
+		if (runtime) {
+			size_t query_len = qualified_name_len + strlen(val) + 100;
+			char* runtime_query = (char*)malloc(query_len);
+			snprintf(runtime_query, query_len,
+				"INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(\"%s\",\"%s\")",
+				qualified_name, (val[0] ? val : ""));
+			db->execute(runtime_query);
+			free(runtime_query);
 		}
 
 		free(qualified_name);
