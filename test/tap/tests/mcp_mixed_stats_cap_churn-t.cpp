@@ -116,6 +116,14 @@ int run_churn_profile(const churn_profile_t& profile, std::string& log_path) {
 int main() {
 	plan(4);
 
+	diag("=== MCP Mixed Stats Cap Churn Test ===");
+	diag("This test runs mcp_mixed_mysql_pgsql_concurrency_stress-t in churn-enabled");
+	diag("mode where mcp-stats_show_processlist_max_rows and mcp-stats_show_queries_max_rows");
+	diag("are updated repeatedly while mixed protocol traffic and MCP polling are active.");
+	diag("Profiles include 'moderate' and 'aggressive' churn rates. The goal is to validate");
+	diag("that MCP stats remains stable when cap variables change dynamically under load.");
+	diag("=======================================");
+
 	const bool child_available = (access("./mcp_mixed_mysql_pgsql_concurrency_stress-t", X_OK) == 0);
 	ok(child_available, "Child mixed-stress binary is available");
 	if (!child_available) {

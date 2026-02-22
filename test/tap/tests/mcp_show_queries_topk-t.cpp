@@ -227,6 +227,14 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
+	diag("=== MCP Stats show_queries Top-K Validation ===");
+	diag("This test validates the in-memory implementation used by stats.show_queries.");
+	diag("It populates digest in-memory structures using PROXYSQLTEST 1, optionally");
+	diag("runs the DEBUG-only internal validator (PROXYSQLTEST 56), then queries MCP");
+	diag("show_queries to verify pagination cap metadata, descending sort semantics,");
+	diag("and match_digest_text substring filtering behavior.");
+	diag("================================================");
+
 	MYSQL* admin = nullptr;
 	MCPClient* mcp = nullptr;
 	bool can_continue = true;

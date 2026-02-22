@@ -748,6 +748,15 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
+	diag("=== MCP PgSQL Concurrency Stress Test ===");
+	diag("This test generates sustained PgSQL traffic through ProxySQL while");
+	diag("concurrently querying MCP stats tools from multiple threads.");
+	diag("Workload includes: simple reads, INSERT/UPDATE/DELETE/SELECT on a test table,");
+	diag("and randomized pg_sleep calls. MCP polling validates show_processlist and show_queries");
+	diag("with sorting, cap metadata, and match_info/match_digest_text filtering.");
+	diag("The goal is to ensure MCP stats remains correct under concurrent PgSQL load.");
+	diag("==========================================");
+
 	MYSQL* admin = nullptr;
 	bool can_continue = true;
 

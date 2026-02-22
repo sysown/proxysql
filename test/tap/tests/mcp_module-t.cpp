@@ -351,6 +351,14 @@ int main() {
 		return EXIT_FAILURE;
 	}
 
+	diag("=== MCP Module TAP Test ===");
+	diag("This test validates the MCP (Model Context Protocol) module functionality.");
+	diag("It covers: LOAD/SAVE commands for MCP variables across all variants,");
+	diag("variable access (SET and SELECT) for MCP variables, persistence across");
+	diag("storage layers (memory, disk, runtime), CHECKSUM commands for MCP variables,");
+	diag("and LOAD/SAVE commands for MCP PROFILES (auth and target profiles).");
+	diag("============================");
+
 	// Initialize connection to admin interface
 	MYSQL* admin = mysql_init(NULL);
 	if (!admin) {

@@ -109,6 +109,15 @@ int main(int argc, char** argv) {
 
 	plan(8);
 
+	diag("=== MCP Runtime Variables Table Population Test ===");
+	diag("This test verifies that MCP variables are correctly populated into");
+	diag("runtime_global_variables after LOAD MCP VARIABLES TO RUNTIME.");
+	diag("Test cases:");
+	diag("  1. Verify runtime_global_variables contains MCP variables after LOAD");
+	diag("  2. Verify changed variables are reflected after LOAD");
+	diag("  3. Verify runtime values match global_variables values");
+	diag("===================================================");
+
 	MYSQL* admin = init_mysql_conn(cl.admin_host, cl.admin_port, cl.admin_username, cl.admin_password);
 	if (!admin) {
 		skip(8, "Cannot connect to admin");

@@ -732,6 +732,15 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
+	diag("=== MCP In-Memory Stats: Connections, Commands, Users ===");
+	diag("This test validates in-memory MCP stats tools for both MySQL and PgSQL:");
+	diag("  - show_connections: aggregate pool metrics without free_connections");
+	diag("  - show_free_connections: debug snapshots (requires debug tools enabled)");
+	diag("  - show_commands: command counters/histograms from in-memory data");
+	diag("  - show_users: per-user frontend connection counters from auth modules");
+	diag("All tools are tested for row shape, filtering, and db_type correctness.");
+	diag("==========================================================");
+
 	MYSQL* admin = init_mysql_conn(cl.admin_host, cl.admin_port, cl.admin_username, cl.admin_password);
 	ok(admin != nullptr, "Admin connection established");
 	if (!admin) {

@@ -169,6 +169,16 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
+	diag("=== MCP Stats Refresh Test ===");
+	diag("This test validates that the MCP stats endpoint can query runtime metrics");
+	diag("and that the metrics reflect actual ProxySQL state.");
+	diag("Test strategy:");
+	diag("  1. Query Client_Connections_connected via MCP stats endpoint");
+	diag("  2. Create several new MySQL connections to generate traffic");
+	diag("  3. Query the same metric again");
+	diag("  4. Verify the connection count has increased");
+	diag("===============================");
+
 	MYSQL* admin = nullptr;
 	MCPClient* mcp = nullptr;
 	bool can_continue = true;

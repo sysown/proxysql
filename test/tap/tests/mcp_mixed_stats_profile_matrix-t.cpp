@@ -120,6 +120,15 @@ int run_profile(const stress_profile_t& profile, std::string& log_path) {
 int main() {
 	plan(5);
 
+	diag("=== MCP Mixed Stats Profile Matrix Test ===");
+	diag("This test runs the mcp_mixed_mysql_pgsql_concurrency_stress-t binary");
+	diag("multiple times using different runtime/load/churn profiles. Profiles include:");
+	diag("  - quick: short runtime, no cap churn");
+	diag("  - churn: medium runtime with cap variable updates");
+	diag("  - heavy: longer runtime with more workers and cap churn");
+	diag("The goal is to validate MCP stats stability across diverse load scenarios.");
+	diag("============================================");
+
 	const bool child_available = (access("./mcp_mixed_mysql_pgsql_concurrency_stress-t", X_OK) == 0);
 	ok(child_available, "Child mixed-stress binary is available");
 	if (!child_available) {

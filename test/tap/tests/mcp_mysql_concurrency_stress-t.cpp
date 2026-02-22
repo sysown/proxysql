@@ -740,6 +740,15 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
+	diag("=== MCP MySQL Concurrency Stress Test ===");
+	diag("This test generates sustained MySQL traffic through ProxySQL while");
+	diag("concurrently querying MCP stats tools from multiple threads.");
+	diag("Workload includes: simple reads, INSERT/UPDATE/DELETE/SELECT on a test table,");
+	diag("and randomized SLEEP calls. MCP polling validates show_processlist and show_queries");
+	diag("with sorting, cap metadata, and match_info/match_digest_text filtering.");
+	diag("The goal is to ensure MCP stats remains correct under concurrent MySQL load.");
+	diag("==========================================");
+
 	MYSQL* admin = nullptr;
 	bool can_continue = true;
 

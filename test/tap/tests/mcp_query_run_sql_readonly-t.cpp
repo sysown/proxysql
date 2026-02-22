@@ -156,6 +156,14 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
+	diag("=== MCP Query Endpoint: run_sql_readonly Tool Validation ===");
+	diag("This test validates the MCP query endpoint's run_sql_readonly tool.");
+	diag("It ensures that only read-only SQL statements are allowed when routed");
+	diag("via a profile-based target_id. Blocked statements include INSERT, UPDATE,");
+	diag("DELETE, DROP, CREATE, ALTER, TRUNCATE, REPLACE, LOAD DATA, CALL, and EXECUTE.");
+	diag("Allowed statements include SELECT, WITH (CTE), EXPLAIN SELECT, SHOW, and DESCRIBE.");
+	diag("===========================================================================");
+
 	MYSQL* admin = NULL;
 	MYSQL* mysql = NULL;
 	MCPClient* mcp = NULL;

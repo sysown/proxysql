@@ -1120,6 +1120,15 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
+	diag("=== MCP Mixed MySQL+PgSQL Concurrency Stress Test ===");
+	diag("This test drives concurrent traffic through both MySQL and PgSQL frontends");
+	diag("while parallel MCP pollers query stats tools for both protocols.");
+	diag("Workload includes: simple reads, INSERT/UPDATE/DELETE/SELECT on test tables,");
+	diag("and randomized SLEEP/pg_sleep calls. MCP polling covers show_processlist");
+	diag("and show_queries with sorting, metadata, and substring filtering validation.");
+	diag("The goal is to validate MCP stats correctness under cross-protocol load.");
+	diag("=====================================================");
+
 	const int mysql_worker_threads = env_int_clamped(
 		"MCP_MIXED_STRESS_MYSQL_WORKERS",
 		k_default_mysql_worker_threads,
