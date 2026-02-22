@@ -194,7 +194,6 @@ int PgSQL_Static_Harvester::lookup_object_id(const std::string& schema_name, con
 	if (rc == SQLITE_ROW) {
 		object_id = (*proxy_sqlite3_column_int)(stmt, 0);
 	}
-	(*proxy_sqlite3_finalize)(stmt);
 	return object_id;
 }
 
@@ -552,7 +551,6 @@ int PgSQL_Static_Harvester::harvest_view_definitions(const std::string& only_sch
 				count++;
 			}
 		}
-		(*proxy_sqlite3_finalize)(stmt);
 	}
 	return count;
 }
