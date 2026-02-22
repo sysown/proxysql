@@ -81,7 +81,17 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    plan(kPlannedTests); // 1 (connect) + 18 (simple) + 3 (extended) = 22
+    plan(kPlannedTests); // 1 (connect) + 18 (simple) + 3 (extended) = 19
+
+    diag("=== FFTO PostgreSQL Test ===");
+    diag("This test validates FFTO (Fast Forward To Optimization) for PostgreSQL.");
+    diag("FFTO enables fast_forward mode where queries are passed directly to");
+    diag("the backend without full result set buffering in ProxySQL.");
+    diag("Tests cover both Simple Query Protocol (using ? placeholders) and");
+    diag("Extended Query Protocol (using $1, $2 named placeholders via PQprepare).");
+    diag("Verifies query digests are recorded with correct count_star,");
+    diag("sum_rows_affected, and sum_rows_sent metrics in stats_pgsql_query_digest.");
+    diag("============================");
 
     MYSQL* admin = mysql_init(NULL);
     PGconn* conn = NULL;

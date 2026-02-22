@@ -80,6 +80,15 @@ int main(int argc, char** argv) {
         return -1;
     }
 
+    diag("=== FFTO MySQL Test ===");
+    diag("This test validates FFTO (Fast Forward To Optimization) for MySQL.");
+    diag("FFTO enables fast_forward mode where queries are passed directly to");
+    diag("the backend without full result set buffering in ProxySQL.");
+    diag("Tests verify query digests are recorded in stats_mysql_query_digest");
+    diag("with correct count_star, sum_rows_affected, and sum_rows_sent metrics");
+    diag("for CREATE, INSERT, SELECT, UPDATE, and DELETE operations.");
+    diag("=======================");
+
     plan(kPlannedTests); // 1 + 18 + 3 = 22
 
     MYSQL* admin = mysql_init(NULL);

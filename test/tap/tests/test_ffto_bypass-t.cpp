@@ -17,6 +17,14 @@ int main(int argc, char** argv) {
 
     plan(2);
 
+    diag("=== FFTO Bypass Test ===");
+    diag("This test validates that queries larger than the FFTO max buffer size");
+    diag("bypass the FFTO (Fast Forward To Optimization) mechanism entirely.");
+    diag("When a query exceeds the threshold, it should NOT be recorded in");
+    diag("stats_mysql_query_digest since FFTO processing is skipped.");
+    diag("Test sets mysql-ffto_max_buffer_size=100 bytes and sends a 200+ byte query.");
+    diag("========================");
+
     MYSQL* admin = mysql_init(NULL);
     if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
         diag("Admin connection failed");
