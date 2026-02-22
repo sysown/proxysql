@@ -64,10 +64,12 @@ int main(int, char**) {
 	// We use hostgroup=1000 which likely doesn't exist or is different from default
 	const char *query = "/*+ hostgroup=1000 */ SELECT 1";
 	diag("Running on Proxy: %s", query);
-	run_q(proxy, query);
+	MYSQL_QUERY_T(proxy, query);
+	MYSQL_RES* proxy_res = mysql_store_result(proxy);
+	if (proxy_res) mysql_free_result(proxy_res);
 
 	// Check stats to see if hostgroup 1000 was used
-	const char *q_stats = "SELECT destination_hostgroup FROM stats_mysql_query_digest WHERE digest_text='SELECT ?'";
+	const char *q_stats = "SELECT hostgroup FROM stats_mysql_query_digest WHERE digest_text='SELECT ?'";
 	diag("Running on Admin: %s", q_stats);
 	if (mysql_query_t(admin, q_stats)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
@@ -99,7 +101,9 @@ int main(int, char**) {
 	MYSQL_QUERY_T(admin, q_truncate);
 
 	diag("Running on Proxy: %s", query);
-	run_q(proxy, query);
+	MYSQL_QUERY_T(proxy, query);
+	proxy_res = mysql_store_result(proxy);
+	if (proxy_res) mysql_free_result(proxy_res);
 
 	diag("Running on Admin: %s", q_stats);
 	if (mysql_query_t(admin, q_stats)) {
@@ -133,7 +137,9 @@ int main(int, char**) {
 	MYSQL_QUERY_T(admin, q_truncate);
 
 	diag("Running on Proxy: %s", query);
-	run_q(proxy, query);
+	MYSQL_QUERY_T(proxy, query);
+	proxy_res = mysql_store_result(proxy);
+	if (proxy_res) mysql_free_result(proxy_res);
 
 	diag("Running on Admin: %s", q_stats);
 	if (mysql_query_t(admin, q_stats)) {
