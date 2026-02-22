@@ -28,16 +28,16 @@ OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed $(WASAN)
 # being used inside ProxySQL linked 'SQLite3', which is also used by `libtap.so`.
 LWGCOV :=
 ifeq ($(WITHGCOV),1)
-	LWGCOV := -lgcov
+	LWGCOV := -lgcov --coverage
 endif
 
 
 ### main targets
 
-.PHONY: default
+.PHONY: default debug
 default: all
 
-.PHONY: all
+.PHONY: all debug
 all: libtap_mariadb.a libtap_mysql57.a libtap_mysql8.a \
 	libtap.a libtap.so libcpp_dotenv.so libre2.so
 
@@ -61,26 +61,26 @@ utils_mysql8.o: utils.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.s
 tap.o: tap.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so -lssl -lcrypto libcpp_dotenv.so
 	$(CXX) -fPIC -c tap.cpp $(IDIRS) $(OPT)
 
-noise_utils_mariadb.o: noise_utils.cpp noise_utils.h utils.h command_line.h
+noise_utils_mariadb.o: noise_utils.cpp noise_utils.h utils.h command_line.h cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so -lssl -lcrypto libcpp_dotenv.so
 	$(CXX) -DEXCLUDE_REPLACE_STR -fPIC -c noise_utils.cpp $(IDIRS) -I$(MARIADB_IDIR) -I$(POSTGRESQL_IDIR) $(OPT) -o $@
 
-noise_utils_mysql57.o: noise_utils.cpp noise_utils.h utils.h command_line.h
+noise_utils_mysql57.o: noise_utils.cpp noise_utils.h utils.h command_line.h cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so -lssl -lcrypto libcpp_dotenv.so
 	$(CXX) -DEXCLUDE_REPLACE_STR -DDISABLE_WARNING_COUNT_LOGGING -fPIC -c noise_utils.cpp $(IDIRS) -I$(TEST_MYSQL_IDIR) -I$(TEST_MYSQL_EDIR) -I$(POSTGRESQL_IDIR) $(OPT) -o $@
 
-noise_utils_mysql8.o: noise_utils.cpp noise_utils.h utils.h command_line.h
-	$(CXX) -DEXCLUDE_REPLACE_STR -DDISABLE_WARNING_COUNT_LOGGING -fPIC -c noise_utils.cpp $(IDIRS) -I$(TEST_MYSQL8_IDIR) -I$(TEST_MYSQL8_EDIR) -I$(POSTGRESQL_IDIR) $(OPT) -o $@
+noise_utils_mysql8.o: noise_utils.cpp noise_utils.h utils.h command_line.h cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so -lssl -lcrypto libcpp_dotenv.so
+	$(CXX) -DEXCLUDE_REPLACE_STR -DDISABLE_WARNING_COUNT_LOGGING -fPIC -c noise_utils.cpp $(IDIRS) -I$(TEST_MYSQL8_IDIR) -I$(TEST_MYSQL_EDIR) -I$(POSTGRESQL_IDIR) $(OPT) -o $@
 
 mcp_client.o: mcp_client.cpp mcp_client.h libcurl.so
 	$(CXX) -fPIC -c mcp_client.cpp $(IDIRS) $(OPT)
 
 libtap_mariadb.a: tap.o command_line.o utils_mariadb.o noise_utils_mariadb.o mcp_client.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
-	ar rcs libtap_mariadb.a tap.o command_line.o utils_mariadb.o noise_utils_mariadb.o mcp_client.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
+	$(AR) rcs libtap_mariadb.a tap.o command_line.o utils_mariadb.o noise_utils_mariadb.o mcp_client.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
 
 libtap_mysql57.a: tap.o command_line.o utils_mysql57.o noise_utils_mysql57.o mcp_client.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
-	ar rcs libtap_mysql57.a tap.o command_line.o utils_mysql57.o noise_utils_mysql57.o mcp_client.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
+	$(AR) rcs libtap_mysql57.a tap.o command_line.o utils_mysql57.o noise_utils_mysql57.o mcp_client.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
 
 libtap_mysql8.a: tap.o command_line.o utils_mysql8.o noise_utils_mysql8.o mcp_client.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
-	ar rcs libtap_mysql8.a tap.o command_line.o utils_mysql8.o noise_utils_mysql8.o mcp_client.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
+	$(AR) rcs libtap_mysql8.a tap.o command_line.o utils_mysql8.o noise_utils_mysql8.o mcp_client.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
 
 libtap.a: libtap_mariadb.a
 	cp libtap_mariadb.a libtap.a

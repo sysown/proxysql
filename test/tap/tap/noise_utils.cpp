@@ -86,14 +86,6 @@ void spawn_internal_noise(const CommandLine& cl, internal_noise_func_t func, con
 void stop_internal_noise_threads() {
     stop_internal_noise = true;
     
-    // Grace period for threads to report before joining
-    for (int i = 0; i < 50; ++i) { // max 5 seconds grace period
-        bool all_finished = true;
-        // We can't easily check if threads have finished without joining, 
-        // but we can at least wait a bit.
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-
     for (auto& t : internal_noise_threads) {
         if (t.joinable()) {
             t.join();
@@ -124,10 +116,18 @@ void internal_noise_admin_pinger(const CommandLine& cl, const NoiseOptions& opt,
 
         total_pings++;
 
-        if (admin_my && mysql_ping(admin_my) != 0) {
-            if (!mysql_real_connect(admin_my, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
-                my_ok = false;
+        if (admin_my == NULL) {
+            admin_my = mysql_init(NULL);
+        }
+
+        if (admin_my) {
+            if (mysql_ping(admin_my) != 0) {
+                if (!mysql_real_connect(admin_my, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+                    my_ok = false;
+                }
             }
+        } else {
+            my_ok = false;
         }
 
         if (!admin_pg || PQstatus(admin_pg) != CONNECTION_OK) {
@@ -181,10 +181,18 @@ void internal_noise_stats_poller(const CommandLine& cl, const NoiseOptions& opt,
         bool my_ok = true;
         bool pg_ok = true;
 
-        if (admin_my && mysql_ping(admin_my) != 0) {
-            if (!mysql_real_connect(admin_my, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
-                my_ok = false;
+        if (admin_my == NULL) {
+            admin_my = mysql_init(NULL);
+        }
+
+        if (admin_my) {
+            if (mysql_ping(admin_my) != 0) {
+                if (!mysql_real_connect(admin_my, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+                    my_ok = false;
+                }
             }
+        } else {
+            my_ok = false;
         }
 
         if (!admin_pg || PQstatus(admin_pg) != CONNECTION_OK) {
@@ -239,10 +247,18 @@ void internal_noise_prometheus_poller(const CommandLine& cl, const NoiseOptions&
     while (!stop) {
         bool my_ok = true;
 
-        if (admin_my && mysql_ping(admin_my) != 0) {
-            if (!mysql_real_connect(admin_my, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
-                my_ok = false;
+        if (admin_my == NULL) {
+            admin_my = mysql_init(NULL);
+        }
+
+        if (admin_my) {
+            if (mysql_ping(admin_my) != 0) {
+                if (!mysql_real_connect(admin_my, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+                    my_ok = false;
+                }
             }
+        } else {
+            my_ok = false;
         }
 
         if (!my_ok) {
@@ -284,19 +300,21 @@ void internal_noise_rest_prometheus_poller(const CommandLine& cl, const NoiseOpt
 
     if (enable_rest_api) {
         MYSQL* admin = mysql_init(NULL);
-        if (mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
-            mysql_query(admin, "SET admin-restapi_enabled='true'");
-            mysql_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+        if (admin) {
+            if (mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+                mysql_query(admin, "SET admin-restapi_enabled='true'");
+                mysql_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+            } else {
+                noise_log("[NOISE] REST Prometheus Poller: Failed to connect to Admin to enable REST API\n");
+            }
             mysql_close(admin);
-        } else {
-            noise_log("[NOISE] REST Prometheus Poller: Failed to connect to Admin to enable REST API\n");
-            if (admin) mysql_close(admin);
         }
     }
 
     // Port defaults to 6070
     int port = get_opt_int(opt, "port", 6070);
-    std::string endpoint = "http://admin:admin@localhost:" + std::to_string(port) + "/metrics";
+    std::string endpoint = "http://localhost:" + std::to_string(port) + "/metrics";
+    std::string auth = std::string(cl.admin_username) + ":" + std::string(cl.admin_password);
     if (opt.find("endpoint") != opt.end()) {
         endpoint = opt.at("endpoint");
     }
@@ -304,7 +322,7 @@ void internal_noise_rest_prometheus_poller(const CommandLine& cl, const NoiseOpt
     while (!stop) {
         uint64_t curl_res_code = 0;
         std::string curl_res_data;
-        CURLcode res = perform_simple_get(endpoint, curl_res_code, curl_res_data);
+        CURLcode res = perform_simple_get(endpoint, curl_res_code, curl_res_data, auth);
 
         if (res != CURLE_OK || curl_res_code != 200) {
             retries++;
@@ -343,10 +361,18 @@ void internal_noise_random_stats_poller(const CommandLine& cl, const NoiseOption
         bool my_ok = true;
         bool pg_ok = true;
 
-        if (admin_my && mysql_ping(admin_my) != 0) {
-            if (!mysql_real_connect(admin_my, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
-                my_ok = false;
+        if (admin_my == NULL) {
+            admin_my = mysql_init(NULL);
+        }
+
+        if (admin_my) {
+            if (mysql_ping(admin_my) != 0) {
+                if (!mysql_real_connect(admin_my, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+                    my_ok = false;
+                }
             }
+        } else {
+            my_ok = false;
         }
 
         if (!admin_pg || PQstatus(admin_pg) != CONNECTION_OK) {
@@ -432,7 +458,10 @@ void internal_noise_mysql_traffic(const CommandLine& cl, const NoiseOptions& opt
     std::mt19937 g(rd());
 
     while (!stop) {
-        if (mysql_ping(conn) != 0) {
+        if (conn == NULL) {
+            conn = mysql_init(NULL);
+        }
+        if (conn && mysql_ping(conn) != 0) {
             mysql_close(conn);
             conn = mysql_init(NULL);
             if (!conn || !mysql_real_connect(conn, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
@@ -502,12 +531,16 @@ void internal_noise_pgsql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
     std::string tablename = get_opt_str(opt, "tablename", "pgsql_noise_test");
     int num_connections = get_opt_int(opt, "num_connections", 20);
     int reconnect_interval = get_opt_int(opt, "reconnect_interval", 200);
+    if (reconnect_interval <= 0) reconnect_interval = 1;
     int max_retries = get_opt_int(opt, "max_retries", 5);
     int avg_delay_ms = get_opt_int(opt, "avg_delay_ms", 200);
 
-    // Use postgres user for setup and load to ensure permissions
+    const char* pg_user = cl.pgsql_username[0] ? cl.pgsql_username : "postgres";
+    const char* pg_pass = cl.pgsql_password[0] ? cl.pgsql_password : "postgres";
+
+    // Use CommandLine credentials for setup and load
     std::string conninfo = "host=" + std::string(cl.host) + " port=" + std::to_string(cl.pgsql_port) + 
-                           " user=postgres password=postgres" +
+                           " user=" + std::string(pg_user) + " password=" + std::string(pg_pass) +
                            " dbname=postgres connect_timeout=5";
 
     // --- Phase A: Ensure table exists ---
@@ -519,7 +552,13 @@ void internal_noise_pgsql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
         return;
     }
 
-    std::string check_table = "SELECT 1 FROM information_schema.tables WHERE table_name = '" + tablename + "'";
+    // Explicitly set search_path to public to avoid permission issues in some environments
+    pg_noise_query(setup_conn, "SET search_path TO public");
+
+    char* escaped_tablename = PQescapeIdentifier(setup_conn, tablename.c_str(), tablename.length());
+    std::string safe_tablename = escaped_tablename ? escaped_tablename : tablename;
+
+    std::string check_table = "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '" + tablename + "'";
     PGresult* res = PQexec(setup_conn, check_table.c_str());
     if (PQresultStatus(res) != PGRES_TUPLES_OK) {
         noise_log("[NOISE] PgSQL Traffic v2: Table verification query failed: " + std::string(PQresultErrorMessage(res)) + "\n");
@@ -532,7 +571,7 @@ void internal_noise_pgsql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
     if (PQntuples(res) == 0) {
         PQclear(res);
         noise_log("[NOISE] PgSQL Traffic v2: Creating table " + tablename + "\n");
-        std::string create_sql = "CREATE TABLE " + tablename + " (id SERIAL PRIMARY KEY, val TEXT, counter INT)";
+        std::string create_sql = "CREATE TABLE " + safe_tablename + " (id SERIAL PRIMARY KEY, val TEXT, counter INT)";
         res = PQexec(setup_conn, create_sql.c_str());
         if (PQresultStatus(res) != PGRES_COMMAND_OK) {
             noise_log("[NOISE] PgSQL Traffic v2: Table creation failed: " + std::string(PQresultErrorMessage(res)) + "\n");
@@ -548,14 +587,19 @@ void internal_noise_pgsql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
 
     // --- Phase B: Ensure 10,000 rows ---
     while (!stop) {
-        std::string count_sql = "SELECT COUNT(*) FROM " + tablename;
+        std::string count_sql = "SELECT COUNT(*) FROM " + safe_tablename;
         res = PQexec(setup_conn, count_sql.c_str());
         if (PQresultStatus(res) == PGRES_TUPLES_OK) {
-            long current_rows = std::stol(PQgetvalue(res, 0, 0));
+            long current_rows = 0;
+            try {
+                current_rows = std::stol(PQgetvalue(res, 0, 0));
+            } catch (...) {
+                current_rows = 0;
+            }
             PQclear(res);
             if (current_rows < 10000) {
                 noise_log("[NOISE] PgSQL Traffic v2: " + std::to_string(current_rows) + " rows found, adding 5000...\n");
-                std::string insert_sql = "INSERT INTO " + tablename + " (val, counter) SELECT 'noise_data', generate_series(1, 5000)";
+                std::string insert_sql = "INSERT INTO " + safe_tablename + " (val, counter) SELECT 'noise_data', generate_series(1, 5000)";
                 res = PQexec(setup_conn, insert_sql.c_str());
                 if (PQresultStatus(res) != PGRES_COMMAND_OK) {
                     noise_log("[NOISE] PgSQL Traffic v2: Row insertion failed: " + std::string(PQresultErrorMessage(res)) + "\n");
@@ -582,7 +626,7 @@ void internal_noise_pgsql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
     std::vector<std::thread> workers;
 
     for (int i = 0; i < num_connections; ++i) {
-        workers.emplace_back([&, conninfo, tablename, reconnect_interval, avg_delay_ms]() {
+        workers.emplace_back([&, conninfo, safe_tablename, reconnect_interval, avg_delay_ms]() {
             PGconn* conn = nullptr;
             uint64_t worker_queries = 0;
             std::random_device rd;
@@ -609,6 +653,7 @@ void internal_noise_pgsql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
                 conn = PQconnectdb(conninfo.c_str());
                 if (PQstatus(conn) == CONNECTION_OK) {
                     total_connections_opened++;
+                    pg_noise_query(conn, "SET search_path TO public");
                     return true;
                 }
                 return false;
@@ -626,16 +671,16 @@ void internal_noise_pgsql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
 
                 switch (op) {
                     case 0: // SELECT
-                        sql = "SELECT * FROM " + tablename + " WHERE id = " + std::to_string(target_id);
+                        sql = "SELECT * FROM " + safe_tablename + " WHERE id = " + std::to_string(target_id);
                         break;
                     case 1: // INSERT
-                        sql = "INSERT INTO " + tablename + " (val, counter) VALUES ('extra_noise', " + std::to_string(target_id) + ")";
+                        sql = "INSERT INTO " + safe_tablename + " (val, counter) VALUES ('extra_noise', " + std::to_string(target_id) + ")";
                         break;
                     case 2: // UPDATE
-                        sql = "UPDATE " + tablename + " SET counter = counter + 1 WHERE id = " + std::to_string(target_id);
+                        sql = "UPDATE " + safe_tablename + " SET counter = counter + 1 WHERE id = " + std::to_string(target_id);
                         break;
                     case 3: // DELETE
-                        sql = "DELETE FROM " + tablename + " WHERE id = " + std::to_string(target_id);
+                        sql = "DELETE FROM " + safe_tablename + " WHERE id = " + std::to_string(target_id);
                         break;
                 }
 
@@ -661,6 +706,8 @@ void internal_noise_pgsql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
     for (auto& w : workers) {
         if (w.joinable()) w.join();
     }
+
+    if (escaped_tablename) PQfreemem(escaped_tablename);
 
     noise_log("[NOISE] PgSQL Traffic v2 report: total_queries=" + std::to_string(total_queries) + 
               ", total_connections_opened=" + std::to_string(total_connections_opened) + 

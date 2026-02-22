@@ -127,11 +127,7 @@ int main(int argc, char** argv) {
 	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
 	spawn_internal_noise(cl, internal_noise_pgsql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}, {"avg_delay_ms", "300"}});
 
-	if (cl.use_noise) {
-		plan(48 + 3);
-	} else {
-		plan(48);
-	}
+	plan(48);
 
 	MYSQL* mysql = mysql_init(NULL);
 	if (!mysql)

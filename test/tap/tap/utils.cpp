@@ -766,7 +766,7 @@ CURLcode perform_simple_post(
 }
 
 CURLcode perform_simple_get(
-	const string& endpoint, uint64_t& curl_res_code, string& curl_res_data
+	const string& endpoint, uint64_t& curl_res_code, string& curl_res_data, const string& userpwd
 ) {
 	CURL *curl;
 	CURLcode res;
@@ -776,6 +776,9 @@ CURLcode perform_simple_get(
 	curl = curl_easy_init();
 	if(curl) {
 		curl_easy_setopt(curl, CURLOPT_URL, endpoint.c_str());
+		if (!userpwd.empty()) {
+			curl_easy_setopt(curl, CURLOPT_USERPWD, userpwd.c_str());
+		}
 		struct memory response = { 0 };
 		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
 		curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&response);
@@ -2423,9 +2426,12 @@ int run_q(MYSQL *mysql, const char *q) {
 }
 
 static std::vector<pid_t> background_noise_pids;
-static bool atexit_noise_registered = false;
-
 extern "C" void stop_noise_tools() {
+
+	static std::atomic<bool> already_stopped{false};
+	if (already_stopped.exchange(true)) {
+		return;
+	}
 	stop_internal_noise_threads();
 	for (pid_t pid : background_noise_pids) {
 		kill(pid, SIGTERM);
@@ -2449,10 +2455,10 @@ void spawn_noise(const CommandLine& cl, const std::string& tool_path, const std:
 		return;
 	}
 
-	if (!atexit_noise_registered) {
+	static std::once_flag atexit_flag;
+	std::call_once(atexit_flag, [](){
 		atexit(stop_noise_tools);
-		atexit_noise_registered = true;
-	}
+	});
 
 	pid_t pid = fork();
 	if (pid == 0) {
@@ -2462,6 +2468,7 @@ void spawn_noise(const CommandLine& cl, const std::string& tool_path, const std:
 		if (fd_null != -1) {
 			dup2(fd_null, STDIN_FILENO);
 			dup2(fd_null, STDOUT_FILENO);
+			dup2(fd_null, STDERR_FILENO);
 			if (fd_null > 2) {
 				close(fd_null);
 			}
@@ -2474,7 +2481,7 @@ void spawn_noise(const CommandLine& cl, const std::string& tool_path, const std:
 		}
 		c_args.push_back(nullptr);
 
-		execvp(tool_path.c_str(), c_args.data());
+		::execvp(tool_path.c_str(), c_args.data());
 		// If we are here, exec failed
 		fprintf(stderr, "Failed to exec noise tool: %s\n", tool_path.c_str());
 		_exit(1);

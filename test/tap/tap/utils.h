@@ -417,7 +417,7 @@ CURLcode perform_simple_post(
 	const std::string& endpoint, const std::string& params, uint64_t& curl_res_code, std::string& curl_res_data
 );
 
-CURLcode perform_simple_get(const std::string& endpoint, uint64_t& curl_res_code, std::string& curl_res_data);
+CURLcode perform_simple_get(const std::string& endpoint, uint64_t& curl_res_code, std::string& curl_res_data, const std::string& userpwd = "");
 
 /**
  * @brief Generates a random string of the length of the provider 'strSize'

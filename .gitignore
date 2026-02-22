@@ -65,7 +65,10 @@ oldcode/tests/connect_speed
 *.log
 *.log.*
 *.err
-*.pem
+
+# generated test pems
+test/tap/tests/*.pem
+test/tap/tests/test_cluster_sync_config/proxysql*.pem
 
 #binary
 src/proxysql
@@ -79,7 +82,6 @@ src/*log*
 #test artifacts
 ci_infra_logs/
 test/tap/tap/*.mri
-test/tap/tap/st*
 
 proxysql-2.0.0/
 docker/images/proxysql/rhel-compliant/rpmmacros

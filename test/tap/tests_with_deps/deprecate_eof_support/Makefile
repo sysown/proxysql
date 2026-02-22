@@ -37,7 +37,7 @@ LDIRS :=	-L$(TAP_LDIR) \
 			-L$(POSTGRESQL_LDIR) \
 			-L$(SSL_LDIR) 
 
-OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed -Wl,-rpath,"../../tap" $(WGCOV) $(WASAN)
+OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) $(WGCOV) $(WASAN)
 
 
 ### main targets
@@ -51,7 +51,7 @@ all: tests
 
 .PHONY: debug
 debug: DEBUG := -DDEBUG
-debug: OPT := $(STDCPP) -O0 -DDEBUG -ggdb -Wl,--no-as-needed -Wl,-rpath,"../../tap" $(WGCOV) $(WASAN)
+debug: OPT := $(STDCPP) -O0 -DDEBUG -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) $(WGCOV) $(WASAN)
 debug: tests
 
 
@@ -78,7 +78,7 @@ tests:
 	@echo "Removing empty .gcno files ..."
 	find -L . -type f -name '*.gcno' -empty -ls -delete
 
-COMMONARGS = $(OPT) -Wl,-rpath,$(TAP_LDIR) -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/libpq -Wl,-rpath,$(RE2_LDIR)/so -Wl,-Bdynamic -ltap -lcpp_dotenv -lcurl -lre2 -lssl -lcrypto -lz -ldl -lpthread -DGITVERSION=\"$(GIT_VERSION)\"
+COMMONARGS = $(OPT) -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/libpq -Wl,-rpath,$(RE2_LDIR) -Wl,-Bdynamic -ltap -lcpp_dotenv -lcurl -lre2 -lssl -lcrypto -lz -ldl -lpthread -DGITVERSION=\"$(GIT_VERSION)\"
 
 ok_packet_mixed_queries-t: eof_packet_mixed_queries-t.cpp
 	$(CXX) $< -I$(MARIADB_IDIR) $(IDIRS) -L$(MARIADB_LDIR) $(LDIRS) -lmariadbclient $(COMMONARGS) -o $@

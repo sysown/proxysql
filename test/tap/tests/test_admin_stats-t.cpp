@@ -85,7 +85,7 @@ int main(int argc, char** argv) {
 
 	spawn_internal_noise(cl, internal_noise_admin_pinger);
 	spawn_internal_noise(cl, internal_noise_random_stats_poller);
-	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
 
     /** @brief Minimum number of distinct variable_name strings in the history_mysql_status_variables_lookup table */
     const int min_distinct_variable_names = 50;
@@ -201,8 +201,7 @@ int main(int argc, char** argv) {
 	// In practice, they could differ if new metrics variables are added.
 
 	std::vector<int64_t> rows_per_var_id;
-	time_t two_mins_ago = time(nullptr) - 60*2;
-	const string query = "SELECT variable_id, COUNT(*) FROM history_mysql_status_variables WHERE timestamp < " + to_string(two_mins_ago) + " GROUP BY variable_id";
+	const string query = "SELECT variable_id, COUNT(*) FROM history_mysql_status_variables GROUP BY variable_id";
 	MYSQL_QUERY(proxysql_admin, query.c_str());
 	result = mysql_store_result(proxysql_admin);
 

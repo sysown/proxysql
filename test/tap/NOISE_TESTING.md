@@ -36,7 +36,7 @@ Initial noise scripts are provided in `test/tap/noise/`:
 
 Internal routines run as threads within the TAP test process. This is **highly recommended for debugging with GDB**, as stopping the test process will also pause the noise.
 
-#### Standard Internal Noise Functions:
+### Standard Internal Noise Functions:
 - `internal_noise_admin_pinger`: Executes `SELECT 1` against Admin (default 200ms).
 - `internal_noise_stats_poller`: Polls various `stats_*` tables (default 200ms).
 - `internal_noise_prometheus_poller`: Fetches Prometheus metrics via both MySQL and PostgreSQL protocol (default 1000ms).
@@ -56,7 +56,7 @@ Include `utils.h` and `noise_utils.h`.
 
 int main(int argc, char** argv) {
     CommandLine cl;
-    cl.getEnv(); 
+    if (cl.getEnv()) return exit_status();
 
     // --- Configuration ---
     NoiseOptions opt;
@@ -91,10 +91,10 @@ int main(int argc, char** argv) {
 ## Internal Safety Mechanisms
 
 1.  **Process Group Isolation**: `spawn_noise` calls `setpgid(0, 0)` in the child. This ensures that signals like `SIGINT` (Ctrl+C) sent to the test runner are not automatically forwarded to the noise tools.
-2.  **Fatal Failure Propagation**: If an internal noise routine fails critically (e.g., exceeds `max_retries` during connection), it sets a global `noise_failure_detected` flag.
+2.  **Fatal Failure Propagation**: If an internal noise routine fails critically (e.g., exceeds `max_retries` during connection), it calls `register_noise_failure(routine_name)` which appends the error to the global `noise_failures` vector.
 3.  **Lifecycle Management**: 
     *   `exit_status()` calls `stop_noise_tools()`. 
-    *   If `noise_failure_detected` is set, `exit_status()` returns `EXIT_FAILURE` even if all functional tests passed.
+    *   If `noise_failures` is not empty, `exit_status()` reports the failed routines and returns `EXIT_FAILURE` even if all functional tests passed.
 4.  **Graceful Termination**: The framework sends `SIGTERM` first, waits 100ms for the process to reap, and follows up with `SIGKILL` if the process is still alive.
 
 ## Testing the Framework
