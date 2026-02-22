@@ -61,16 +61,16 @@ OBJ := $(PROXYSQL_PATH)/src/obj/proxysql_global.o $(PROXYSQL_PATH)/src/obj/main.
 
 #SOURCES := ../tap/utils.cpp
 
-MYLIBS_DYNAMIC_PART := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -ltap -lcpp_dotenv -lcurl -lssl -lcrypto -luuid
+MYLIBS_DYNAMIC_PART := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -lcpp_dotenv -lcurl -lssl -lcrypto -luuid
 MYLIBS_STATIC_PART := -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core
-MYLIBS_PG_PART := -Wl,-Bstatic -lpq -lpgcommon -lpgport
+MYLIBS_PG_PART := 
 MYLIBS_LAST_PART := -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl $(EXTRALINK)
 MYLIBS := $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) $(MYLIBS_PG_PART) $(MYLIBS_LAST_PART)
 #MYLIBS_PG := $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) $(MYLIBS_PG_PART) $(MYLIBS_LAST_PART)
 #MYLIBS := -Wl,--export-dynamic -Wl,-Bdynamic -lssl -lcrypto -lgnutls -ltap -lcpp_dotenv -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core -luuid -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl $(EXTRALINK)
 
 MYLIBSJEMALLOC := -Wl,-Bstatic -ljemalloc
-STATIC_LIBS := $(CITYHASH_LDIR)/libcityhash.a
+STATIC_LIBS := $(CITYHASH_LDIR)/libcityhash.a $(TAP_LDIR)/libtap.a
 
 LIBCOREDUMPERAR :=
 ifeq ($(UNAME_S),Linux)

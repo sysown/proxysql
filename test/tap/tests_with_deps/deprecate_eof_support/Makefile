@@ -78,7 +78,7 @@ tests:
 	@echo "Removing empty .gcno files ..."
 	find -L . -type f -name '*.gcno' -empty -ls -delete
 
-COMMONARGS = $(OPT) -Wl,-Bdynamic -ltap -lcpp_dotenv -lcurl -lre2 -lssl -lcrypto -lz -ldl -lpthread -DGITVERSION=\"$(GIT_VERSION)\"
+COMMONARGS = $(OPT) -Wl,--start-group $(TAP_LDIR)/libtap.a -Wl,--end-group -Wl,-Bdynamic -lcpp_dotenv -lcurl -lre2 -lssl -lcrypto -lz -ldl -lpthread -DGITVERSION=\"$(GIT_VERSION)\"
 
 ok_packet_mixed_queries-t: eof_packet_mixed_queries-t.cpp
 	$(CXX) $< -I$(MARIADB_IDIR) $(IDIRS) -L$(MARIADB_LDIR) $(LDIRS) -lmariadbclient $(COMMONARGS) -o $@

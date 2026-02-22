@@ -247,22 +247,6 @@ string to_string(std::thread::id id) {
 	return helper.str();
 }
 
-string replace_str(const string& str, const string& match, const string& repl) {
-	if(match.empty()) {
-		return str;
-	}
-
-	string result { str };
-	size_t start_pos = 0;
-
-	while((start_pos = result.find(match, start_pos)) != std::string::npos) {
-		result.replace(start_pos, match.length(), repl);
-		start_pos += repl.length();
-	}
-
-	return result;
-}
-
 pair<int,vector<MYSQL*>> disable_core_nodes_scheduler(CommandLine& cl, MYSQL* admin) {
 	vector<MYSQL*> nodes_conns {};
 

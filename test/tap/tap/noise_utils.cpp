@@ -45,6 +45,24 @@ static std::string get_opt_str(const NoiseOptions& opt, const std::string& key, 
     return default_val;
 }
 
+#ifndef EXCLUDE_REPLACE_STR
+static std::string replace_str(const std::string& str, const std::string& match, const std::string& repl) {
+	if(match.empty()) {
+		return str;
+	}
+
+	std::string result = str;
+	size_t start_pos = 0;
+
+	while((start_pos = result.find(match, start_pos)) != std::string::npos) {
+		result.replace(start_pos, match.length(), repl);
+		start_pos += repl.length();
+	}
+
+	return result;
+}
+#endif
+
 // Helper to get int option from map
 static int get_opt_int(const NoiseOptions& opt, const std::string& key, int default_val) {
     if (opt.find(key) != opt.end()) {
