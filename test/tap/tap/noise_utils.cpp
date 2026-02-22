@@ -485,6 +485,7 @@ void internal_noise_pgsql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
     int num_connections = get_opt_int(opt, "num_connections", 20);
     int reconnect_interval = get_opt_int(opt, "reconnect_interval", 200);
     int max_retries = get_opt_int(opt, "max_retries", 5);
+    int avg_delay_ms = get_opt_int(opt, "avg_delay_ms", 200);
 
     // Use postgres user for setup and load to ensure permissions
     std::string conninfo = "host=" + std::string(cl.host) + " port=" + std::to_string(cl.pgsql_port) + 
@@ -502,9 +503,17 @@ void internal_noise_pgsql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
 
     std::string check_table = "SELECT 1 FROM information_schema.tables WHERE table_name = '" + tablename + "'";
     PGresult* res = PQexec(setup_conn, check_table.c_str());
-    if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) == 0) {
+    if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+        noise_log("[NOISE] PgSQL Traffic v2: Table verification query failed: " + std::string(PQresultErrorMessage(res)) + "\n");
         PQclear(res);
-        noise_log("[NOISE] PgSQL Traffic v2: Creating table " + tablename + " in postgres database\n");
+        PQfinish(setup_conn);
+        register_noise_failure("PgSQL Traffic v2 (Verification)");
+        return;
+    }
+
+    if (PQntuples(res) == 0) {
+        PQclear(res);
+        noise_log("[NOISE] PgSQL Traffic v2: Creating table " + tablename + "\n");
         std::string create_sql = "CREATE TABLE " + tablename + " (id SERIAL PRIMARY KEY, val TEXT, counter INT)";
         res = PQexec(setup_conn, create_sql.c_str());
         if (PQresultStatus(res) != PGRES_COMMAND_OK) {
@@ -515,7 +524,7 @@ void internal_noise_pgsql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
         PQclear(res);
         std::this_thread::sleep_for(std::chrono::seconds(1));
     } else {
-        noise_log("[NOISE] PgSQL Traffic v2: Table " + tablename + " already exists or verification failed\n");
+        noise_log("[NOISE] PgSQL Traffic v2: Table " + tablename + " verified\n");
         PQclear(res);
     }
 
@@ -555,14 +564,20 @@ void internal_noise_pgsql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
     std::vector<std::thread> workers;
 
     for (int i = 0; i < num_connections; ++i) {
-        workers.emplace_back([&, conninfo, tablename, reconnect_interval]() {
+        workers.emplace_back([&, conninfo, tablename, reconnect_interval, avg_delay_ms]() {
             PGconn* conn = nullptr;
             uint64_t worker_queries = 0;
             std::random_device rd;
             std::mt19937 gen(rd());
             std::uniform_int_distribution<> op_dist(0, 3);
             std::uniform_int_distribution<> id_dist(1, 10000);
-            std::uniform_int_distribution<> delay_dist(50, 200);
+
+            // Range is +/- 50% of average
+            int min_delay = avg_delay_ms / 2;
+            int max_delay = avg_delay_ms + (avg_delay_ms / 2);
+            if (min_delay < 1) min_delay = 1;
+            std::uniform_int_distribution<> delay_dist(min_delay, max_delay);
+
             std::uniform_int_distribution<> start_dist(0, 500);
 
             // Staggered start
@@ -610,11 +625,7 @@ void internal_noise_pgsql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
                 if (r) PQclear(r);
                 
                 worker_queries++;
-                uint64_t current_total = ++total_queries;
-
-                if (current_total % 1000 == 0) {
-                    noise_log("[NOISE] PgSQL Traffic v2 progress: " + std::to_string(current_total) + " queries executed...\n");
-                }
+                total_queries++;
 
                 if (worker_queries % reconnect_interval == 0) {
                     if (!connect()) break;
