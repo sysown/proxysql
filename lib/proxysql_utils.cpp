@@ -750,6 +750,7 @@ std::string get_client_addr(struct sockaddr* client_addr) {
  *
  * This function is intentionally SQLite-centric and escapes only single quotes
  * by doubling them (`'` -> `''`). Backslashes are preserved verbatim.
+ * NOT safe for MySQL backslash-escape mode.
  *
  * @param input Raw untrusted input value.
  * @return Escaped value suitable for `... WHERE col = '<escaped>'`.

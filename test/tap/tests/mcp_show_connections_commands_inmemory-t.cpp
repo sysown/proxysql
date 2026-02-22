@@ -761,10 +761,10 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
-	std::string mysql_error;
-	MYSQLConnPtr mysql_conn = create_mysql_connection(cl, mysql_error);
+	std::string mysql_conn_error;
+	MYSQLConnPtr mysql_conn = create_mysql_connection(cl, mysql_conn_error);
 	ok(mysql_conn != nullptr, "MySQL frontend connection established%s%s",
-		mysql_conn ? "" : ": ", mysql_conn ? "" : mysql_error.c_str());
+		mysql_conn ? "" : ": ", mysql_conn ? "" : mysql_conn_error.c_str());
 
 	std::string mysql_seed_error_1;
 	const bool mysql_seed_1 = execute_mysql_sql(mysql_conn.get(), "SELECT 1", mysql_seed_error_1);

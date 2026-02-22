@@ -1499,10 +1499,8 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 	ProxySQL_Main_init_main_modules();
 
 #ifdef PROXYSQLGENAI
-	if (GloVars.global.genai) {
-		ProxySQL_Main_init_GenAI_module();
-		ProxySQL_Main_init_MCP_module();
-	}
+	ProxySQL_Main_init_GenAI_module();
+	ProxySQL_Main_init_MCP_module();
 #endif /* PROXYSQLGENAI */
 
 	ProxySQL_Main_init_Admin_module(boostrap_info);
@@ -1665,12 +1663,10 @@ void ProxySQL_Main_init_phase3___start_all() {
 
 #ifdef PROXYSQLGENAI
 	// GenAI
-	if (GloVars.global.genai) {
-		if (GloGATH)
-			GloAdmin->init_genai_variables();
-		if (GloMCPH) {
-			GloAdmin->init_mcp_variables();
-		}
+	if (GloGATH)
+		GloAdmin->init_genai_variables();
+	if (GloMCPH) {
+		GloAdmin->init_mcp_variables();
 	}
 #endif /* PROXYSQLGENAI */
 

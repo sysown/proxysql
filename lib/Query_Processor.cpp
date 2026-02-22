@@ -206,22 +206,18 @@ static bool query_digest_text_matches(
 	 * Case-insensitive ASCII substring search. Digest text is generated from SQL
 	 * tokenization and does not require locale-dependent collation.
 	 */
-	const size_t needle_len = needle.size();
-	for (const char* p = digest_text; *p; ++p) {
-		size_t i = 0;
-		while (i < needle_len && p[i]) {
-			const unsigned char lhs = static_cast<unsigned char>(p[i]);
-			const unsigned char rhs = static_cast<unsigned char>(needle[i]);
-			if (std::tolower(lhs) != std::tolower(rhs)) {
-				break;
-			}
-			++i;
+	const char* digest_end = digest_text + std::strlen(digest_text);
+	const auto it = std::search(
+		digest_text,
+		digest_end,
+		needle.begin(),
+		needle.end(),
+		[](char lhs, char rhs) {
+			return std::tolower(static_cast<unsigned char>(lhs)) ==
+			       std::tolower(static_cast<unsigned char>(rhs));
 		}
-		if (i == needle_len) {
-			return true;
-		}
-	}
-	return false;
+	);
+	return it != digest_end;
 }
 
 static re2_t * compile_query_rule(QP_rule_t *qr, int i, int query_processor_regex) {

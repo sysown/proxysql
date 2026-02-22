@@ -4757,8 +4757,8 @@ static bool pgsql_pl_row_matches(const SQLite3_row* row, const processlist_query
 		return false;
 	}
 	if (opts.min_time_ms >= 0) {
-		const int row_time_ms = static_cast<int>(pgsql_pl_to_u64(pgsql_pl_field(row, pgsql_processlist_columns_t::time_ms)));
-		if (row_time_ms < opts.min_time_ms) {
+		const uint64_t row_time_ms = pgsql_pl_to_u64(pgsql_pl_field(row, pgsql_processlist_columns_t::time_ms));
+		if (row_time_ms < static_cast<uint64_t>(opts.min_time_ms)) {
 			return false;
 		}
 	}

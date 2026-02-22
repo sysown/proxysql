@@ -191,7 +191,18 @@ static bool parse_digest_filter(const std::string& digest_filter, uint64_t& dige
  * @return Parsed value, or zero when @p value is null.
  */
 static long long parse_ll_or_zero(const char* value) {
-	return value ? atoll(value) : 0LL;
+	if (!value || !value[0]) {
+		return 0LL;
+	}
+
+	char* end = nullptr;
+	errno = 0;
+	const long long parsed = strtoll(value, &end, 10);
+	if (end == value || *end != '\0' || errno == ERANGE) {
+		return 0LL;
+	}
+
+	return parsed;
 }
 
 /**
@@ -204,7 +215,14 @@ static long long parse_ll_or_zero(const char* value) {
  * @return Parsed value, or zero when @p value is null.
  */
 static int parse_int_or_zero(const char* value) {
-	return value ? atoi(value) : 0;
+	const long long parsed = parse_ll_or_zero(value);
+	if (parsed > std::numeric_limits<int>::max()) {
+		return std::numeric_limits<int>::max();
+	}
+	if (parsed < std::numeric_limits<int>::min()) {
+		return std::numeric_limits<int>::min();
+	}
+	return static_cast<int>(parsed);
 }
 
 /**

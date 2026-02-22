@@ -227,9 +227,6 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 #ifdef PROXYSQLCLICKHOUSE
 	global.clickhouse_server=false;
 #endif /* PROXYSQLCLICKHOUSE */
-#ifdef PROXYSQLGENAI
-	global.genai=false;
-#endif /* PROXYSQLGENAI */
 	global.gr_bootstrap_mode = 0;
 	global.gr_bootstrap_uri = nullptr;
 	global.gr_bootstrap_account = nullptr;
@@ -315,10 +312,6 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 #ifdef PROXYSQLCLICKHOUSE
 	opt->add((const char *)"",0,0,0,(const char *)"Enable ClickHouse Server",(const char *)"--clickhouse-server");
 #endif /* PROXYSQLCLICKHOUSE */
-
-#ifdef PROXYSQLGENAI
-	opt->add((const char *)"",0,0,0,(const char *)"Enable GenAI Features",(const char *)"--genai");
-#endif /* PROXYSQLGENAI */
 
 	confFile=new ProxySQL_ConfigFile();
 };
@@ -433,12 +426,6 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 		global.clickhouse_server=true;
 	}
 #endif /* PROXYSQLCLICKHOUSE */
-
-#ifdef PROXYSQLGENAI
-	if (opt->isSet("--genai")) {
-		global.genai=true;
-	}
-#endif /* PROXYSQLGENAI */
 
 	update_string_var_if_set(&global.gr_bootstrap_uri, opt, "--bootstrap");
 	global.gr_bootstrap_mode = opt->isSet("--bootstrap");

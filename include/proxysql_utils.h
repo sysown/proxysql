@@ -365,6 +365,7 @@ std::string get_client_addr(struct sockaddr* client_addr);
  * This helper follows SQLite/SQL literal escaping rules and doubles only
  * single quote characters (`'` -> `''`). It intentionally does not apply
  * backslash escaping.
+ * NOT safe for MySQL backslash-escape mode.
  *
  * @param input Raw untrusted value to place in a quoted SQL string literal.
  * @return Escaped value safe to embed between single quotes.
