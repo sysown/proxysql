@@ -592,7 +592,8 @@ void validate_show_free_connections_disabled(MCPClient& mcp, const std::string& 
 		"show_free_connections",
 		json{{"db_type", db_type}}
 	);
-	ok(resp.is_success(), "%s show_free_connections(disabled) transport/protocol success", db_type.c_str());
+	// When disabled, tool returns an error (not success), but transport should work
+	ok(!resp.is_transport_error(), "%s show_free_connections(disabled) transport success (tool error expected)", db_type.c_str());
 
 	json result_obj;
 	std::string err;
