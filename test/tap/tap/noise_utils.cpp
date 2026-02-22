@@ -291,13 +291,21 @@ void internal_noise_mysql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
     int max_retries = get_opt_int(opt, "max_retries", 5);
     int avg_delay_ms = get_opt_int(opt, "avg_delay_ms", 200);
 
+    const char* my_user = cl.root_username[0] ? cl.root_username : "root";
+    const char* my_pass = cl.root_password[0] ? cl.root_password : "";
+
     // --- Phase A: Ensure table exists ---
     MYSQL* setup_conn = mysql_init(NULL);
-    if (!mysql_real_connect(setup_conn, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+    if (!mysql_real_connect(setup_conn, cl.host, my_user, my_pass, NULL, cl.port, NULL, 0)) {
         noise_log("[NOISE] MySQL Traffic v2: Setup connection failure: " + std::string(mysql_error(setup_conn)) + "\n");
         mysql_close(setup_conn);
         register_noise_failure("MySQL Traffic v2 (Setup)");
         return;
+    }
+
+    mysql_query(setup_conn, "CREATE DATABASE IF NOT EXISTS test");
+    if (mysql_query(setup_conn, "USE test")) {
+        noise_log("[NOISE] MySQL Traffic v2: USE test failed: " + std::string(mysql_error(setup_conn)) + "\n");
     }
 
     std::string create_sql = "CREATE TABLE IF NOT EXISTS " + tablename + " (id INT AUTO_INCREMENT PRIMARY KEY, val TEXT, counter INT)";
@@ -307,7 +315,7 @@ void internal_noise_mysql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
         register_noise_failure("MySQL Traffic v2 (Create)");
         return;
     }
-    noise_log("[NOISE] MySQL Traffic v2: Table " + tablename + " verified\n");
+    noise_log("[NOISE] MySQL Traffic v2: Table test." + tablename + " verified\n");
 
     // --- Phase B: Ensure 10,000 rows ---
     while (!stop) {
@@ -320,9 +328,6 @@ void internal_noise_mysql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
 
             if (current_rows < 10000) {
                 noise_log("[NOISE] MySQL Traffic v2: " + std::to_string(current_rows) + " rows found, adding 5000...\n");
-                // MySQL doesn't have generate_series like PgSQL, so we use a loop or multiple inserts.
-                // For simplicity in noise, we just do one bulk insert of 5000 rows if possible, or multiple small ones.
-                // A better way is to use a recursive CTE or just a simple loop of 5000 inserts (slow) or one big INSERT with 5000 values.
                 std::string insert_sql = "INSERT INTO " + tablename + " (val, counter) VALUES ";
                 for (int i = 0; i < 5000; ++i) {
                     insert_sql += "('noise_data', " + std::to_string(i) + ")";
@@ -351,7 +356,7 @@ void internal_noise_mysql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
     std::vector<std::thread> workers;
 
     for (int i = 0; i < num_connections; ++i) {
-        workers.emplace_back([&, tablename, reconnect_interval, avg_delay_ms]() {
+        workers.emplace_back([&, my_user, my_pass, tablename, reconnect_interval, avg_delay_ms]() {
             MYSQL* conn = nullptr;
             uint64_t worker_queries = 0;
             std::random_device rd;
@@ -373,8 +378,9 @@ void internal_noise_mysql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
                     total_connections_closed++;
                 }
                 conn = mysql_init(NULL);
-                if (mysql_real_connect(conn, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+                if (mysql_real_connect(conn, cl.host, my_user, my_pass, NULL, cl.port, NULL, 0)) {
                     total_connections_opened++;
+                    mysql_query(conn, "USE test");
                     return true;
                 }
                 return false;
@@ -679,10 +685,10 @@ void internal_noise_pgsql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
     int max_retries = get_opt_int(opt, "max_retries", 5);
     int avg_delay_ms = get_opt_int(opt, "avg_delay_ms", 200);
 
-    const char* pg_user = cl.pgsql_username[0] ? cl.pgsql_username : "postgres";
-    const char* pg_pass = cl.pgsql_password[0] ? cl.pgsql_password : "postgres";
+    const char* pg_user = cl.pgsql_root_username[0] ? cl.pgsql_root_username : "postgres";
+    const char* pg_pass = cl.pgsql_root_password[0] ? cl.pgsql_root_password : "postgres";
 
-    // Use CommandLine credentials for setup and load
+    // Use root credentials for setup and load to ensure permissions
     std::string conninfo = "host=" + std::string(cl.host) + " port=" + std::to_string(cl.pgsql_port) + 
                            " user=" + std::string(pg_user) + " password=" + std::string(pg_pass) +
                            " dbname=postgres connect_timeout=5";
