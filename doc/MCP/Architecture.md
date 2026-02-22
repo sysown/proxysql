@@ -149,7 +149,7 @@ Each MCP endpoint has its own dedicated tool handler with specific tools designe
 
 ---
 
-#### `/mcp/observe` - Observability Endpoint
+#### `/mcp/stats` - Observability Endpoint
 
 **Purpose**: Real-time metrics, statistics, and monitoring data
 
@@ -166,7 +166,7 @@ Each MCP endpoint has its own dedicated tool handler with specific tools designe
 - Automated alerting and health checks
 - Performance analysis
 
-**Authentication**: `mcp-observe_endpoint_auth` (Bearer token)
+**Authentication**: `mcp-stats_endpoint_auth` (Bearer token)
 
 ---
 
@@ -379,8 +379,8 @@ bool MCP_JSONRPC_Resource::authenticate_request(const http_request& req) {
 
     if (endpoint_name == "config") {
         expected_token = handler->variables.mcp_config_endpoint_auth;
-    } else if (endpoint_name == "observe") {
-        expected_token = handler->variables.mcp_observe_endpoint_auth;
+    } else if (endpoint_name == "stats") {
+        expected_token = handler->variables.mcp_stats_endpoint_auth;
     } else if (endpoint_name == "query") {
         expected_token = handler->variables.mcp_query_endpoint_auth;
     } else if (endpoint_name == "admin") {
@@ -488,7 +488,7 @@ The migration to multiple tool handlers has been completed while maintaining bac
 ✅ Step 3: Move MySQL tools to /mcp/query (existing tools migrate)
 ✅ Step 4: Implement /mcp/admin (new functionality)
 ✅ Step 5: Implement /mcp/cache (new functionality)
-✅ Step 6: Implement /mcp/observe (new functionality)
+✅ Step 6: Implement /mcp/stats (new functionality)
 ✅ Step 7: Enable per-endpoint auth
 ✅ Step 8: Add /mcp/ai endpoint (new AI functionality)
 ```

@@ -68,7 +68,7 @@ private:
     std::vector<char> m_server_buffer; ///< Temporary buffer for server-side packet reassembly.
     std::size_t m_client_offset {0};   ///< Current read offset in m_client_buffer.
     std::size_t m_server_offset {0};   ///< Current read offset in m_server_buffer.
-    
+
     std::string m_current_query;          ///< The query currently being tracked.
     std::string m_pending_prepare_query;  ///< The SQL text of a pending prepare statement.
     unsigned long long m_query_start_time; ///< Start timestamp of the current query in microseconds.

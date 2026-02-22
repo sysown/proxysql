@@ -100,7 +100,7 @@ int main(int argc, char** argv) {
     MYSQL_QUERY(admin, "UPDATE global_variables SET variable_value='true' WHERE variable_name='mysql-ffto_enabled'");
     MYSQL_QUERY(admin, "UPDATE global_variables SET variable_value='1048576' WHERE variable_name='mysql-ffto_max_buffer_size'");
     MYSQL_QUERY(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
-    
+
     // Ensure root user has fast_forward enabled
     MYSQL_QUERY(admin, "INSERT OR REPLACE INTO mysql_users (username, password, default_hostgroup, fast_forward) VALUES ('root', 'root', 0, 1)");
     MYSQL_QUERY(admin, "LOAD MYSQL USERS TO RUNTIME");
@@ -133,16 +133,16 @@ int main(int argc, char** argv) {
     EXEC_QUERY(conn, "DELETE FROM ffto_test WHERE id = 2");
 
     // Verify Text Stats
-    verify_digest(admin, "DROP TABLE IF EXISTS ffto_test", 1, 0, 0); 
-    verify_digest(admin, "CREATE TABLE ffto_test", 1, 0, 0);       
+    verify_digest(admin, "DROP TABLE IF EXISTS ffto_test", 1, 0, 0);
+    verify_digest(admin, "CREATE TABLE ffto_test", 1, 0, 0);
     verify_digest(admin, "INSERT INTO ffto_test VALUES", 1, 2, 0);
     verify_digest(admin, "UPDATE ffto_test SET val", 1, 1, 0);
-    verify_digest(admin, "SELECT val FROM ffto_test WHERE id", 1, 0, 1); 
+    verify_digest(admin, "SELECT val FROM ffto_test WHERE id", 1, 0, 1);
     verify_digest(admin, "DELETE FROM ffto_test WHERE id", 1, 1, 0);
 
     // --- Part 2: Binary Protocol (Prepared Statements) ---
-    MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest"); 
-    
+    MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest");
+
     stmt = mysql_stmt_init(conn);
     if (mysql_stmt_prepare(stmt, ins_query, strlen(ins_query))) {
         ok(0, "mysql_stmt_prepare failed");
@@ -172,7 +172,7 @@ int main(int argc, char** argv) {
     }
 
     // Verify Binary Stats
-    verify_digest(admin, "INSERT INTO ffto_test (id,val) VALUES (?,?)", 2, 2, 0); 
+    verify_digest(admin, "INSERT INTO ffto_test (id,val) VALUES (?,?)", 2, 2, 0);
 
 cleanup:
     if (stmt) mysql_stmt_close(stmt);

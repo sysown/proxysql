@@ -20,10 +20,10 @@ extern class MySQL_Query_Processor* GloMyQPro;
 
 /**
  * @brief Helper function to read a length-encoded integer from a MySQL packet buffer.
- * 
+ *
  * Length-encoded integers are a variable-length data format used in the MySQL protocol
  * to represent integer values efficiently.
- * 
+ *
  * @param buf Reference to a pointer to the current position in the buffer. Updated on return.
  * @param len Reference to the remaining length of the buffer. Updated on return.
  * @return The decoded 64-bit integer value.
@@ -54,7 +54,7 @@ static uint64_t read_lenenc_int(const unsigned char* &buf, size_t &len) {
     return 0;
 }
 
-MySQLFFTO::MySQLFFTO(MySQL_Session* session) 
+MySQLFFTO::MySQLFFTO(MySQL_Session* session)
     : m_session(session), m_state(IDLE), m_query_start_time(0), m_affected_rows(0), m_rows_sent(0) {
     m_client_buffer.reserve(1024);
     m_server_buffer.reserve(4096);
@@ -249,7 +249,7 @@ void MySQLFFTO::report_query_stats(const std::string& query, unsigned long long 
 
     SQP_par_t qp; memset(&qp, 0, sizeof(qp));
     char* fst_cmnt = NULL;
-    char* digest_text = mysql_query_digest_and_first_comment(query.c_str(), query.length(), &fst_cmnt, 
+    char* digest_text = mysql_query_digest_and_first_comment(query.c_str(), query.length(), &fst_cmnt,
         ((query.length() < QUERY_DIGEST_BUF) ? qp.buf : NULL), &opts);
     if (digest_text) {
         qp.digest_text = digest_text;

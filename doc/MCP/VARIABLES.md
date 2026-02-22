@@ -62,14 +62,14 @@ The following variables control authentication (Bearer tokens) for specific MCP 
   LOAD MCP VARIABLES TO RUNTIME;
   ```
 
-#### `mcp-observe_endpoint_auth`
+#### `mcp-stats_endpoint_auth`
 - **Type:** String
 - **Default:** `""` (empty)
-- **Description:** Bearer token for `/mcp/observe` endpoint
+- **Description:** Bearer token for `/mcp/stats` endpoint
 - **Runtime:** Yes
 - **Example:**
   ```sql
-  SET mcp-observe_endpoint_auth='observe-token';
+  SET mcp-stats_endpoint_auth='stats-token';
   LOAD MCP VARIABLES TO RUNTIME;
   ```
 

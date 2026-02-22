@@ -113,9 +113,9 @@ int main(int argc, char** argv) {
     MYSQL_QUERY(admin, "DELETE FROM stats_pgsql_query_digest");
 
     // Standard libpq connection using root (postgres)
-    snprintf(conninfo, sizeof(conninfo), "host=%s port=%d user=%s password=%s dbname=postgres sslmode=disable", 
+    snprintf(conninfo, sizeof(conninfo), "host=%s port=%d user=%s password=%s dbname=postgres sslmode=disable",
             cl.pgsql_host, cl.pgsql_port, cl.pgsql_root_username, cl.pgsql_root_password);
-    
+
     conn = PQconnectdb(conninfo);
     if (PQstatus(conn) != CONNECTION_OK) {
         diag("PG Connection failed: %s", PQerrorMessage(conn));
@@ -131,15 +131,15 @@ int main(int argc, char** argv) {
     EXEC_PG_QUERY(conn, "UPDATE ffto_pg_test SET data = 'updated' WHERE id = 1");
     EXEC_PG_QUERY(conn, "DELETE FROM ffto_pg_test WHERE id = 2");
 
-    verify_pg_digest(admin, "DROP TABLE IF EXISTS ffto_pg_test", 1, 0, 0); 
-    verify_pg_digest(admin, "CREATE TABLE ffto_pg_test", 1, 0, 0);       
+    verify_pg_digest(admin, "DROP TABLE IF EXISTS ffto_pg_test", 1, 0, 0);
+    verify_pg_digest(admin, "CREATE TABLE ffto_pg_test", 1, 0, 0);
     verify_pg_digest(admin, "INSERT INTO ffto_pg_test VALUES", 1, 2, 0);
-    verify_pg_digest(admin, "SELECT data FROM ffto_pg_test WHERE id = $1", 1, 0, 1); 
+    verify_pg_digest(admin, "SELECT data FROM ffto_pg_test WHERE id = $1", 1, 0, 1);
     verify_pg_digest(admin, "UPDATE ffto_pg_test SET data", 1, 1, 0);
     verify_pg_digest(admin, "DELETE FROM ffto_pg_test WHERE id", 1, 1, 0);
 
     // --- Part 2: Extended Query Protocol ---
-    MYSQL_QUERY(admin, "DELETE FROM stats_pgsql_query_digest"); 
+    MYSQL_QUERY(admin, "DELETE FROM stats_pgsql_query_digest");
 
     res_prep = PQprepare(conn, "stmt1", ext_query, 1, NULL);
     if (!res_prep) {

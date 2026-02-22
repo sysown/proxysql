@@ -65,7 +65,7 @@ int main(int, char**) {
 	const char *query = "/*+ hostgroup=1000 */ SELECT 1";
 	diag("Running on Proxy: %s", query);
 	run_q(proxy, query);
-	
+
 	// Check stats to see if hostgroup 1000 was used
 	const char *q_stats = "SELECT destination_hostgroup FROM stats_mysql_query_digest WHERE digest_text='SELECT ?'";
 	diag("Running on Admin: %s", q_stats);

@@ -53,7 +53,7 @@ int main(int argc, char** argv) {
     std::string large_query = "SELECT '";
     for(int i=0; i<200; i++) large_query += "x";
     large_query += "'";
-    
+
     MYSQL_QUERY(conn, large_query.c_str());
 
     // Verify that NO digest was recorded for this query because it was bypassed
@@ -62,7 +62,7 @@ int main(int argc, char** argv) {
     MYSQL_ROW row = mysql_fetch_row(res);
     int count = atoi(row[0]);
     ok(count == 0, "No digests recorded for queries exceeding threshold (count: %d)", count);
-    
+
     mysql_free_result(res);
     mysql_close(conn);
     mysql_close(admin);

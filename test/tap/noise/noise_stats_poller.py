@@ -29,7 +29,7 @@ def main():
             autocommit=True
         )
         cursor = conn.cursor()
-        
+
         while True:
             cursor.execute("SELECT * FROM stats_mysql_query_digest")
             cursor.fetchall()

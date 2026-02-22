@@ -77,7 +77,7 @@ void spawn_internal_noise(const CommandLine& cl, internal_noise_func_t func, con
     if (!cl.use_noise) {
         return;
     }
-    
+
     stop_internal_noise = false;
     internal_noise_threads.emplace_back(func, std::ref(cl), opt, std::ref(stop_internal_noise));
     diag("Spawned internal noise thread");
@@ -85,7 +85,7 @@ void spawn_internal_noise(const CommandLine& cl, internal_noise_func_t func, con
 
 void stop_internal_noise_threads() {
     stop_internal_noise = true;
-    
+
     for (auto& t : internal_noise_threads) {
         if (t.joinable()) {
             t.join();
@@ -132,7 +132,7 @@ void internal_noise_admin_pinger(const CommandLine& cl, const NoiseOptions& opt,
 
         if (!admin_pg || PQstatus(admin_pg) != CONNECTION_OK) {
             if (admin_pg) PQfinish(admin_pg);
-            std::string conninfo = "host=" + std::string(cl.host) + " port=" + std::to_string(cl.pgsql_admin_port) + 
+            std::string conninfo = "host=" + std::string(cl.host) + " port=" + std::to_string(cl.pgsql_admin_port) +
                                    " user=" + std::string(cl.admin_username) + " password=" + std::string(cl.admin_password) +
                                    " dbname=stats connect_timeout=2";
             admin_pg = PQconnectdb(conninfo.c_str());
@@ -197,7 +197,7 @@ void internal_noise_stats_poller(const CommandLine& cl, const NoiseOptions& opt,
 
         if (!admin_pg || PQstatus(admin_pg) != CONNECTION_OK) {
             if (admin_pg) PQfinish(admin_pg);
-            std::string conninfo = "host=" + std::string(cl.host) + " port=" + std::to_string(cl.pgsql_admin_port) + 
+            std::string conninfo = "host=" + std::string(cl.host) + " port=" + std::to_string(cl.pgsql_admin_port) +
                                    " user=" + std::string(cl.admin_username) + " password=" + std::string(cl.admin_password) +
                                    " dbname=stats connect_timeout=2";
             admin_pg = PQconnectdb(conninfo.c_str());
@@ -435,7 +435,7 @@ void internal_noise_mysql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
                         mysql_stmt_close(stmt);
                     }
                 }
-                
+
                 worker_queries++;
                 total_queries++;
 
@@ -452,10 +452,10 @@ void internal_noise_mysql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
         if (w.joinable()) w.join();
     }
 
-    noise_log("[NOISE] MySQL Traffic v2 report: total_queries=" + std::to_string(total_queries) + 
+    noise_log("[NOISE] MySQL Traffic v2 report: total_queries=" + std::to_string(total_queries) +
               ", num_tables=" + std::to_string(num_tables) +
               ", protocol=" + protocol +
-              ", total_connections_opened=" + std::to_string(total_connections_opened) + 
+              ", total_connections_opened=" + std::to_string(total_connections_opened) +
               ", total_connections_closed=" + std::to_string(total_connections_closed) + "\n");
 }
 
@@ -553,7 +553,7 @@ void internal_noise_random_stats_poller(const CommandLine& cl, const NoiseOption
 
         if (!admin_pg || PQstatus(admin_pg) != CONNECTION_OK) {
             if (admin_pg) PQfinish(admin_pg);
-            std::string conninfo = "host=" + std::string(cl.host) + " port=" + std::to_string(cl.pgsql_admin_port) + 
+            std::string conninfo = "host=" + std::string(cl.host) + " port=" + std::to_string(cl.pgsql_admin_port) +
                                    " user=" + std::string(cl.admin_username) + " password=" + std::string(cl.admin_password) +
                                    " dbname=stats connect_timeout=2";
             admin_pg = PQconnectdb(conninfo.c_str());
@@ -602,7 +602,7 @@ void internal_noise_random_stats_poller(const CommandLine& cl, const NoiseOption
                 std::string table = stats_tables[i % stats_tables.size()];
                 int limit = limit_dist(g);
                 std::string query = "SELECT * FROM stats." + table + " LIMIT " + std::to_string(limit);
-                
+
                 if (my_ok) {
                     if (mysql_query(admin_my, query.c_str()) == 0) {
                         MYSQL_RES* res = mysql_store_result(admin_my);
@@ -678,7 +678,7 @@ void internal_noise_pgsql_traffic(const CommandLine& cl, const NoiseOptions& opt
     while (!stop) {
         if (!conn || PQstatus(conn) != CONNECTION_OK) {
             if (conn) PQfinish(conn);
-            std::string conninfo = "host=" + std::string(cl.host) + " port=" + std::to_string(cl.pgsql_port) + 
+            std::string conninfo = "host=" + std::string(cl.host) + " port=" + std::to_string(cl.pgsql_port) +
                                    " user=" + std::string(cl.pgsql_username) + " password=" + std::string(cl.pgsql_password) +
                                    " dbname=postgres connect_timeout=2";
             conn = PQconnectdb(conninfo.c_str());
@@ -717,7 +717,7 @@ void internal_noise_pgsql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
     const char* pg_pass = cl.pgsql_root_password[0] ? cl.pgsql_root_password : "postgres";
 
     // Use root credentials for setup and load to ensure permissions
-    std::string conninfo = "host=" + std::string(cl.host) + " port=" + std::to_string(cl.pgsql_port) + 
+    std::string conninfo = "host=" + std::string(cl.host) + " port=" + std::to_string(cl.pgsql_port) +
                            " user=" + std::string(pg_user) + " password=" + std::string(pg_pass) +
                            " dbname=postgres connect_timeout=5";
 
@@ -879,9 +879,9 @@ void internal_noise_pgsql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
 
     for (char* ptr : escaped_identifiers) PQfreemem(ptr);
 
-    noise_log("[NOISE] PgSQL Traffic v2 report: total_queries=" + std::to_string(total_queries) + 
+    noise_log("[NOISE] PgSQL Traffic v2 report: total_queries=" + std::to_string(total_queries) +
               ", num_tables=" + std::to_string(num_tables) +
               ", protocol=" + protocol +
-              ", total_connections_opened=" + std::to_string(total_connections_opened) + 
+              ", total_connections_opened=" + std::to_string(total_connections_opened) +
               ", total_connections_closed=" + std::to_string(total_connections_closed) + "\n");
 }

@@ -19,11 +19,11 @@ extern class PgSQL_Query_Processor* GloPgQPro;
 
 /**
  * @brief Parses the PostgreSQL CommandComplete ('C') message payload to extract row counts.
- * 
+ *
  * PostgreSQL encodes row counts into the message tag string (e.g., "INSERT 0 10", "SELECT 50").
  * This function performs lightweight token parsing to extract these values and determine if
  * the message corresponds to a result-generating command (SELECT, FETCH, MOVE) or a DML command.
- * 
+ *
  * @param payload Pointer to the CommandComplete message payload (the tag string).
  * @param len Length of the payload.
  * @param is_select [OUT] Boolean flag set to true if the command is a result-set operation.
@@ -64,7 +64,7 @@ static uint64_t extract_pg_rows_affected(const unsigned char* payload, size_t le
     return rows;
 }
 
-PgSQLFFTO::PgSQLFFTO(PgSQL_Session* session) 
+PgSQLFFTO::PgSQLFFTO(PgSQL_Session* session)
     : m_session(session), m_state(IDLE), m_query_start_time(0), m_affected_rows(0), m_rows_sent(0) {
     m_client_buffer.reserve(1024);
     m_server_buffer.reserve(4096);
@@ -279,7 +279,7 @@ void PgSQLFFTO::report_query_stats(const std::string& query, unsigned long long 
 
     SQP_par_t qp; memset(&qp, 0, sizeof(qp));
     char* fst_cmnt = NULL;
-    char* digest_text = pgsql_query_digest_and_first_comment(query.c_str(), query.length(), &fst_cmnt, 
+    char* digest_text = pgsql_query_digest_and_first_comment(query.c_str(), query.length(), &fst_cmnt,
         ((query.length() < QUERY_DIGEST_BUF) ? qp.buf : NULL), &opts);
     if (digest_text) {
         qp.digest_text = digest_text;

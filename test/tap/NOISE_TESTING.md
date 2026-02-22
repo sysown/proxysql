@@ -69,7 +69,7 @@ int main(int argc, char** argv) {
     // --- Spawning ---
     // External (separate process)
     spawn_noise(cl, "../noise/noise_stats_poller.py", {"--interval", "0.1"});
-    
+
     // Internal (same process, GDB-friendly)
     spawn_internal_noise(cl, internal_noise_admin_pinger, opt);
 
@@ -82,7 +82,7 @@ int main(int argc, char** argv) {
     } else {
         plan(expected_functional_tests);
     }
-    
+
     // ... your test logic here ...
     ok(perform_op(), "Functional test 1");
     // ...
@@ -95,8 +95,8 @@ int main(int argc, char** argv) {
 
 1.  **Process Group Isolation**: `spawn_noise` calls `setpgid(0, 0)` in the child. This ensures that signals like `SIGINT` (Ctrl+C) sent to the test runner are not automatically forwarded to the noise tools.
 2.  **Fatal Failure Propagation**: If an internal noise routine fails critically (e.g., exceeds `max_retries` during connection), it calls `register_noise_failure(routine_name)` which appends the error to the global `noise_failures` vector.
-3.  **Lifecycle Management**: 
-    *   `exit_status()` calls `stop_noise_tools()`. 
+3.  **Lifecycle Management**:
+    *   `exit_status()` calls `stop_noise_tools()`.
     *   If `noise_failures` is not empty, `exit_status()` reports the failed routines and returns `EXIT_FAILURE` even if all functional tests passed.
 4.  **Graceful Termination**: The framework sends `SIGTERM` first, waits 100ms for the process to reap, and follows up with `SIGKILL` if the process is still alive.
 

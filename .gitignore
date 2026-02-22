@@ -72,6 +72,7 @@ test/tap/tests/test_cluster_sync_config/proxysql*.pem
 
 #binary
 src/proxysql
+src/*.pem
 binaries/*deb
 binaries/*rpm
 tools/eventslog_reader_sample

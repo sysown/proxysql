@@ -96,15 +96,15 @@ int main(int argc, char** argv) {
 
 	diag(" ========== Test 1: Default behavior (parsed after rules) ==========");
 	PQclear(PQexec(admin.get(), "DELETE FROM pgsql_query_rules"));
-	
+
 	// Rule to strip the comment. PostgreSQL comments can be /* */ or --
 	// Note: the regex needs to match the comment format used in the test query.
 	PQclear(PQexec(admin.get(), "INSERT INTO pgsql_query_rules (rule_id, active, match_pattern, replace_pattern, apply) VALUES (1, 1, '/\\\\*.*?\\\\*/ ?', '', 1)"));
 	PQclear(PQexec(admin.get(), "LOAD PGSQL QUERY RULES TO RUNTIME"));
-	
+
 	PQclear(PQexec(admin.get(), "SET pgsql-query_processor_first_comment_parsing = 2"));
 	PQclear(PQexec(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME"));
-	
+
 	PQclear(PQexec(admin.get(), "TRUNCATE stats_pgsql_query_digest"));
 
 	const char *query = "/*+ hostgroup=1000 */ SELECT 1";

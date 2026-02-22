@@ -459,7 +459,7 @@ main() {
             echo "MCP server is now enabled (HTTP mode - unencrypted) and accessible at:"
         fi
         echo "  ${proto}://${PROXYSQL_ADMIN_HOST}:${MCP_PORT}/mcp/config  (config endpoint)"
-        echo "  ${proto}://${PROXYSQL_ADMIN_HOST}:${MCP_PORT}/mcp/observe (observe endpoint)"
+        echo "  ${proto}://${PROXYSQL_ADMIN_HOST}:${MCP_PORT}/mcp/stats   (stats endpoint)"
         echo "  ${proto}://${PROXYSQL_ADMIN_HOST}:${MCP_PORT}/mcp/query  (query endpoint)"
         echo "  ${proto}://${PROXYSQL_ADMIN_HOST}:${MCP_PORT}/mcp/admin  (admin endpoint)"
         echo "  ${proto}://${PROXYSQL_ADMIN_HOST}:${MCP_PORT}/mcp/cache  (cache endpoint)"

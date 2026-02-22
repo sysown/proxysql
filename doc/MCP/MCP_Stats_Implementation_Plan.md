@@ -98,18 +98,18 @@ json Stats_Tool_Handler::execute_query(const std::string& sql, SQLite3DB* db) {
     char* error = NULL;
     int cols = 0;
     int affected_rows = 0;
-    
+
     int rc = db->execute_statement(sql.c_str(), &error, &cols, &affected_rows, &resultset);
-    
+
     if (rc != SQLITE_OK) {
         std::string err_msg = error ? error : "Query execution failed";
         if (error) free(error);
         return create_error_response(err_msg);
     }
-    
+
     json rows = resultset_to_json(resultset, cols);
     delete resultset;
-    
+
     return rows;
 }
 ```
@@ -210,27 +210,27 @@ This tool calls `GloMyLogger->processEvents()` directly (see [Section 1.3](#13-a
 ```cpp
 json Stats_Tool_Handler::handle_flush_query_log(const json& arguments) {
     std::string destination = arguments.value("destination", "memory");
-    
+
     if (destination != "memory" && destination != "disk" && destination != "both") {
         return create_error_response("Invalid destination");
     }
-    
+
     if (!GloMyLogger || !GloAdmin) {
         return create_error_response("Required components not available");
     }
-    
+
     SQLite3DB* statsdb = nullptr;
     SQLite3DB* statsdb_disk = nullptr;
-    
+
     if (destination == "memory" || destination == "both") {
         statsdb = GloAdmin->statsdb;
     }
     if (destination == "disk" || destination == "both") {
         statsdb_disk = GloAdmin->statsdb_disk;
     }
-    
+
     int events_flushed = GloMyLogger->processEvents(statsdb, statsdb_disk);
-    
+
     json result;
     result["events_flushed"] = events_flushed;
     result["destination"] = destination;
@@ -279,22 +279,22 @@ Query digest statistics are maintained in an in-memory hash map, not SQLite.
 ```cpp
 json Stats_Tool_Handler::handle_flush_queries(const json& arguments) {
     std::string db_type = arguments.value("db_type", "mysql");
-    
+
     if (db_type != "mysql" && db_type != "pgsql") {
         return create_error_response("Invalid db_type");
     }
-    
+
     if (!GloAdmin || !GloAdmin->statsdb_disk) {
         return create_error_response("Stats disk database not available");
     }
-    
+
     int digests_saved;
     if (db_type == "mysql") {
         digests_saved = GloAdmin->FlushDigestTableToDisk<SERVER_TYPE_MYSQL>(GloAdmin->statsdb_disk);
     } else {
         digests_saved = GloAdmin->FlushDigestTableToDisk<SERVER_TYPE_PGSQL>(GloAdmin->statsdb_disk);
     }
-    
+
     json result;
     result["db_type"] = db_type;
     result["digests_saved"] = digests_saved;
@@ -402,7 +402,7 @@ std::string get_table_name(const std::string& base_table, const std::string& int
     if (it == interval_map.end()) {
         return base_table; // Default to raw
     }
-    
+
     if (it->second.use_hourly) {
         return base_table + "_hour";
     }
@@ -412,10 +412,10 @@ std::string get_table_name(const std::string& base_table, const std::string& int
 std::string build_time_range_query(const std::string& table, int seconds) {
     time_t now = time(NULL);
     time_t start = now - seconds;
-    
-    return "SELECT * FROM " + table + 
-           " WHERE timestamp BETWEEN " + std::to_string(start) + 
-           " AND " + std::to_string(now) + 
+
+    return "SELECT * FROM " + table +
+           " WHERE timestamp BETWEEN " + std::to_string(start) +
+           " AND " + std::to_string(now) +
            " ORDER BY timestamp";
 }
 ```
@@ -443,11 +443,11 @@ std::map<std::string, std::vector<std::string>> category_prefixes = {
     {"prepared_stmts", {"Stmt_"}},
     {"security", {"automatic_detected_sql_injection", "ai_", "mysql_whitelisted_"}},
     {"memory", {"_buffers_bytes", "_internal_bytes", "SQLite3_memory_bytes", "ConnPool_memory_bytes",
-                "jemalloc_", "Auth_memory", "query_digest_memory", "query_rules_memory", 
+                "jemalloc_", "Auth_memory", "query_digest_memory", "query_rules_memory",
                 "prepare_statement_", "firewall_", "stack_memory_"}},
     {"errors", {"generated_error_packets", "Access_Denied_", "client_host_error_", "mysql_unexpected_"}},
     {"logger", {"MySQL_Logger_"}},
-    {"system", {"ProxySQL_Uptime", "MySQL_Thread_Workers", "PgSQL_Thread_Workers", 
+    {"system", {"ProxySQL_Uptime", "MySQL_Thread_Workers", "PgSQL_Thread_Workers",
                 "Servers_table_version", "mysql_listener_paused", "pgsql_listener_paused", "OpenSSL_"}},
     {"mirror", {"Mirror_"}}
 };
@@ -457,19 +457,19 @@ std::map<std::string, std::vector<std::string>> category_prefixes = {
 
 ```sql
 -- For category filter
-SELECT Variable_Name, Variable_Value 
-FROM stats.stats_mysql_global 
+SELECT Variable_Name, Variable_Value
+FROM stats.stats_mysql_global
 WHERE Variable_Name LIKE 'Client_Connections_%'
    OR Variable_Name LIKE 'Server_Connections_%'
    OR Variable_Name = 'Active_Transactions';
 
 -- For variable_name filter (using LIKE)
-SELECT Variable_Name, Variable_Value 
-FROM stats.stats_mysql_global 
+SELECT Variable_Name, Variable_Value
+FROM stats.stats_mysql_global
 WHERE Variable_Name LIKE ?;
 
 -- Also query memory_metrics for 'memory' category
-SELECT Variable_Name, Variable_Value 
+SELECT Variable_Name, Variable_Value
 FROM stats.stats_memory_metrics;
 ```
 
@@ -496,7 +496,7 @@ std::map<std::string, std::string> variable_descriptions = {
 
 ```sql
 SELECT ThreadID, SessionID, user, db, cli_host, cli_port,
-       hostgroup, l_srv_host, l_srv_port, srv_host, srv_port, 
+       hostgroup, l_srv_host, l_srv_port, srv_host, srv_port,
        command, time_ms, info, status_flags, extended_info
 FROM stats.stats_mysql_processlist
 WHERE (user = ? OR ? IS NULL)
@@ -513,13 +513,13 @@ LIMIT ? OFFSET ?;
 ```cpp
 json build_summary(const json& sessions) {
     std::map<std::string, int> by_user, by_hostgroup, by_command;
-    
+
     for (const auto& session : sessions) {
         by_user[session["user"].get<std::string>()]++;
         by_hostgroup[std::to_string(session["hostgroup"].get<int>())]++;
         by_command[session["command"].get<std::string>()]++;
     }
-    
+
     json summary;
     summary["by_user"] = by_user;
     summary["by_hostgroup"] = by_hostgroup;
@@ -648,13 +648,13 @@ for (auto& server : servers) {
     int used = server["conn_used"].get<int>();
     int free = server["conn_free"].get<int>();
     int total = used + free;
-    
+
     server["utilization_pct"] = total > 0 ? (double)used / total * 100 : 0;
-    
+
     int ok = server["conn_ok"].get<int>();
     int err = server["conn_err"].get<int>();
     int total_conns = ok + err;
-    
+
     server["error_rate"] = total_conns > 0 ? (double)err / total_conns : 0;
 }
 ```
@@ -702,7 +702,7 @@ for (auto& error : errors) {
     int count = error["count_star"].get<int>();
     int first = error["first_seen"].get<int>();
     int last = error["last_seen"].get<int>();
-    
+
     double hours = (last - first) / 3600.0;
     error["frequency_per_hour"] = hours > 0 ? count / hours : count;
 }
@@ -741,15 +741,15 @@ FROM stats.stats_proxysql_servers_checksums;
 std::string calculate_cluster_health(const json& nodes) {
     int total = nodes.size();
     int healthy = 0;
-    
+
     for (const auto& node : nodes) {
         int ok = node["checks_ok"].get<int>();
         int err = node["checks_err"].get<int>();
         double success_rate = (ok + err) > 0 ? (double)ok / (ok + err) : 0;
-        
+
         if (success_rate >= 0.95) healthy++;
     }
-    
+
     if (healthy == total) return "healthy";
     if (healthy >= total / 2) return "degraded";
     return "unhealthy";
@@ -850,7 +850,7 @@ LIMIT ? OFFSET ?;
 ```cpp
 json group_by_snapshot(SQLite3_result* resultset) {
     std::map<int, json> snapshots;
-    
+
     for (each row in resultset) {
         int dump_time = atoi(row->fields[0]);
         if (snapshots.find(dump_time) == snapshots.end()) {
@@ -858,7 +858,7 @@ json group_by_snapshot(SQLite3_result* resultset) {
         }
         snapshots[dump_time].push_back(row_to_json(row));
     }
-    
+
     json result = json::array();
     for (const auto& [dump_time, queries] : snapshots) {
         json snapshot;
@@ -978,13 +978,13 @@ json calculate_percentiles(SQLite3_row* row) {
         atoi(row->fields[13]),  // cnt_10s
         atoi(row->fields[14])   // cnt_INFs
     };
-    
+
     json percentiles;
     percentiles["p50_us"] = calculate_percentile(counts, 0.50);
     percentiles["p90_us"] = calculate_percentile(counts, 0.90);
     percentiles["p95_us"] = calculate_percentile(counts, 0.95);
     percentiles["p99_us"] = calculate_percentile(counts, 0.99);
-    
+
     return percentiles;
 }
 ```
@@ -994,19 +994,19 @@ json calculate_percentiles(SQLite3_row* row) {
 ```cpp
 json resultset_to_json(SQLite3_result* resultset, int cols) {
     json rows = json::array();
-    
+
     if (!resultset || resultset->rows_count == 0) {
         return rows;
     }
-    
+
     for (size_t i = 0; i < resultset->rows_count; i++) {
         SQLite3_row* row = resultset->rows[i];
         json obj;
-        
+
         for (int j = 0; j < cols; j++) {
             const char* field = row->fields[j];
             const char* column = resultset->column_definition[j]->name;
-            
+
             if (field == nullptr) {
                 obj[column] = nullptr;
             } else if (is_numeric(field)) {
@@ -1024,13 +1024,13 @@ json resultset_to_json(SQLite3_result* resultset, int cols) {
         }
         rows.push_back(obj);
     }
-    
+
     return rows;
 }
 
 bool is_numeric(const char* str) {
     if (str == nullptr || *str == '\0') return false;
-    
+
     char* endptr;
     strtod(str, &endptr);
     return *endptr == '\0';
@@ -1045,10 +1045,10 @@ std::pair<time_t, time_t> get_time_range(const std::string& interval) {
     if (it == interval_map.end()) {
         throw std::invalid_argument("Invalid interval: " + interval);
     }
-    
+
     time_t now = time(NULL);
     time_t start = now - it->second.seconds;
-    
+
     return {start, now};
 }
 ```
@@ -1132,13 +1132,13 @@ Test each handler function independently:
 TEST(StatsToolHandler, ShowStatus) {
     Stats_Tool_Handler handler(GloMCPH);
     handler.init();
-    
+
     json args;
     args["db_type"] = "mysql";
     args["category"] = "connections";
-    
+
     json response = handler.execute_tool("show_status", args);
-    
+
     ASSERT_TRUE(response["success"].get<bool>());
     ASSERT_TRUE(response["result"].contains("variables"));
     ASSERT_GT(response["result"]["variables"].size(), 0);
@@ -1147,13 +1147,13 @@ TEST(StatsToolHandler, ShowStatus) {
 TEST(StatsToolHandler, ShowStatusWithVariableFilter) {
     Stats_Tool_Handler handler(GloMCPH);
     handler.init();
-    
+
     json args;
     args["db_type"] = "mysql";
     args["variable_name"] = "Client_Connections_%";
-    
+
     json response = handler.execute_tool("show_status", args);
-    
+
     ASSERT_TRUE(response["success"].get<bool>());
     for (const auto& var : response["result"]["variables"]) {
         std::string name = var["variable_name"].get<std::string>();
