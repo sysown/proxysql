@@ -37,7 +37,7 @@ Initial noise scripts are provided in `test/tap/noise/`:
 Internal routines run as threads within the TAP test process. This is **highly recommended for debugging with GDB**, as stopping the test process will also pause the noise.
 
 #### Standard Internal Noise Functions:
-- `internal_noise_admin_pinger`: Executes `SELECT 1` against Admin (default 500ms).
+- `internal_noise_admin_pinger`: Executes `SELECT 1` against Admin (default 200ms).
 - `internal_noise_stats_poller`: Polls various `stats_*` tables (default 200ms).
 - `internal_noise_prometheus_poller`: Fetches Prometheus metrics via both MySQL and PostgreSQL protocol (default 1000ms).
 - `internal_noise_random_stats_poller`: Shuffles and queries a set of MySQL and PostgreSQL stats tables (default 500ms).

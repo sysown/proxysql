@@ -12,6 +12,7 @@ IDIRS :=	-I$(PROXYSQL_IDIR) \
 			-I${CURL_IDIR} \
 			-I${SQLITE3_IDIR} \
 			-I$(DOTENV_IDIR) \
+			-I$(POSTGRESQL_IDIR) \
 			-I$(RE2_IDIR)
 
 
@@ -81,7 +82,7 @@ libtap_mysql8.a: tap.o command_line.o utils_mysql8.o noise_utils_mysql8.o mcp_cl
 	ar rcs libtap_mysql8.a tap.o command_line.o utils_mysql8.o noise_utils_mysql8.o mcp_client.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
 
 libtap.so: libtap_mariadb.a cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so libre2.so
-	$(CXX) -shared -o libtap.so -Wl,--whole-archive libtap_mariadb.a -Wl,--no-whole-archive -L$(POSTGRESQL_LDIR) -lpq $(LWGCOV)
+	$(CXX) -shared -o libtap.so -Wl,--whole-archive libtap_mariadb.a -Wl,--no-whole-archive -L$(POSTGRESQL_PATH)/interfaces/libpq -L$(POSTGRESQL_PATH)/common -L$(POSTGRESQL_PATH)/port -l:libpq.a $(LWGCOV)
 
 
 ### tap deps targets
