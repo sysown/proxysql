@@ -437,6 +437,8 @@ void internal_noise_mysql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
     }
 
     noise_log("[NOISE] MySQL Traffic v2 report: total_queries=" + std::to_string(total_queries) + 
+              ", num_tables=" + std::to_string(num_tables) +
+              ", protocol=" + protocol +
               ", total_connections_opened=" + std::to_string(total_connections_opened) + 
               ", total_connections_closed=" + std::to_string(total_connections_closed) + "\n");
 }
@@ -862,6 +864,8 @@ void internal_noise_pgsql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
     for (char* ptr : escaped_identifiers) PQfreemem(ptr);
 
     noise_log("[NOISE] PgSQL Traffic v2 report: total_queries=" + std::to_string(total_queries) + 
+              ", num_tables=" + std::to_string(num_tables) +
+              ", protocol=" + protocol +
               ", total_connections_opened=" + std::to_string(total_connections_opened) + 
               ", total_connections_closed=" + std::to_string(total_connections_closed) + "\n");
 }
