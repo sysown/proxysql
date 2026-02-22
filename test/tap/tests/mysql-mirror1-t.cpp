@@ -7,6 +7,7 @@
 
 #include "tap.h"
 #include "command_line.h"
+#include "noise_utils.h"
 #include "utils.h"
 
 
@@ -47,15 +48,23 @@ int create_connections(CommandLine& cl) {
 int main(int argc, char** argv) {
 	CommandLine cl;
 
+	if (cl.getEnv()) {
+		diag("Failed to get the required environmental variables.");
+		return -1;
+	}
+
+	spawn_internal_noise(cl, internal_noise_random_stats_poller);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
+	spawn_internal_noise(cl, internal_noise_pgsql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}, {"avg_delay_ms", "300"}});
+
 	int np = 0;
 	np += 6;
 	np += NUM_CONNS; // new admin connections
 
-	plan(np);
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
+	if (cl.use_noise) {
+		plan(np + 3);
+	} else {
+		plan(np);
 	}
 
 

@@ -1077,4 +1077,9 @@ void spawn_noise(const CommandLine& cl, const std::string& tool_path, const std:
  */
 extern "C" void stop_noise_tools();
 
+/**
+ * @brief Returns the number of background noise tools currently running.
+ */
+extern "C" int get_noise_tools_count();
+
 #endif // #define UTILS_H

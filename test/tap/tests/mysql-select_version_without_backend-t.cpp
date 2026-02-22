@@ -80,6 +80,7 @@
 
 #include "tap.h"
 #include "command_line.h"
+#include "noise_utils.h"
 #include "utils.h"
 
 using std::string;
@@ -181,13 +182,21 @@ int test_mode(MYSQL* admin, MYSQL* proxy, int mode, bool expect_success) {
 }
 
 int main(int argc, char** argv) {
-	// We have 2 queries × 2 modes = 4 tests total
-	plan(4);
-
 	CommandLine cl;
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
 		return exit_status();
+	}
+
+	spawn_internal_noise(cl, internal_noise_random_stats_poller);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
+	spawn_internal_noise(cl, internal_noise_pgsql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}, {"avg_delay_ms", "300"}});
+
+	// We have 2 queries × 2 modes = 4 tests total
+	if (cl.use_noise) {
+		plan(4 + 3);
+	} else {
+		plan(4);
 	}
 
 	MYSQL* admin = init_mysql_conn(cl.host, cl.admin_username, cl.admin_password, cl.admin_port);
