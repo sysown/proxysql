@@ -167,7 +167,21 @@ int main(int argc, char** argv) {
 
 	bool mcp_reachable = false;
 	if (can_continue) {
-		mcp_reachable = mcp->check_server();
+		// Retry loop: MCP server may need a moment to start after LOAD MCP VARIABLES TO RUNTIME
+		const int k_max_retries = 30;  // 30 retries * 100ms = 3 seconds max wait
+		const int k_retry_delay_ms = 100;
+		int retry_count = 0;
+
+		while (!mcp_reachable && retry_count < k_max_retries) {
+			usleep(k_retry_delay_ms * 1000);
+			mcp_reachable = mcp->check_server();
+			retry_count++;
+		}
+
+		if (mcp_reachable) {
+			diag("MCP server became reachable after %d retries (%dms)", retry_count, retry_count * k_retry_delay_ms);
+		}
+
 		ok(mcp_reachable, "MCP server reachable at %s", mcp->get_connection_info().c_str());
 		if (!mcp_reachable) {
 			skip(7, "Cannot continue without MCP connectivity");
