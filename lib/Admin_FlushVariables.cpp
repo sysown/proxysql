@@ -1436,6 +1436,14 @@ void ProxySQL_Admin::flush_mcp_variables___runtime_to_database(SQLite3DB* db, bo
 	ASSERT_SQLITE_OK(rc1, db);
 	sqlite3_stmt* statement1 = statement1_unique.get();
 
+	// Only prepare runtime_global_variables statement if runtime flag is set
+	// (table may not exist during early initialization)
+	sqlite3_stmt* statement2 = nullptr;
+	if (runtime) {
+		rc = db->prepare_v2("INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(?1, ?2)", &statement2);
+		ASSERT_SQLITE_OK(rc, db);
+	}
+
 	if (use_lock) {
 		GloMCPH->wrlock();
 	}
@@ -1455,17 +1463,20 @@ void ProxySQL_Admin::flush_mcp_variables___runtime_to_database(SQLite3DB* db, bo
 		rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, db);
 
 		// Insert into runtime_global_variables if runtime flag is set
-		if (runtime) {
-			size_t query_len = qualified_name_len + strlen(val) + 100;
-			char* runtime_query = (char*)malloc(query_len);
-			snprintf(runtime_query, query_len,
-				"INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(\"%s\",\"%s\")",
-				qualified_name, (val[0] ? val : ""));
-			db->execute(runtime_query);
-			free(runtime_query);
+		if (runtime && statement2) {
+			rc = (*proxy_sqlite3_bind_text)(statement2, 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_text)(statement2, 2, (val[0] ? val : (char*)""), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			SAFE_SQLITE3_STEP2(statement2);
+			rc = (*proxy_sqlite3_clear_bindings)(statement2); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_reset)(statement2); ASSERT_SQLITE_OK(rc, db);
 		}
 
 		free(qualified_name);
+	}
+
+	// Clean up statement2 if we allocated it
+	if (statement2) {
+		sqlite3_finalize(statement2);
 	}
 
 	if (use_lock) {
