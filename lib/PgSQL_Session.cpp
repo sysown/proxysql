@@ -4470,13 +4470,8 @@ __exit_set_destination_hostgroup:
 		next_query_flagIN = qpo->next_query_flagIN;
 	}
 
-	if (transaction_persistent_hostgroup == -1) {
-		if (qpo->destination_hostgroup >= 0) {
-			current_hostgroup = qpo->destination_hostgroup;
-		} else {
-			// No query rule matched - use default hostgroup
-			current_hostgroup = default_hostgroup;
-		}
+	if (qpo->destination_hostgroup >= 0 && transaction_persistent_hostgroup == -1) {
+		current_hostgroup = qpo->destination_hostgroup;
 	}
 
 	// Hostgroup locking check
