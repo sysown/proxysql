@@ -325,6 +325,18 @@ int main(int argc, char** argv) {
 				} else {
 					ok(true, "show_queries returned at least one row");
 
+					// Print top queries for visual confirmation
+					diag("Top %zu queries (showing first 5):", queries.size());
+					for (size_t i = 0; i < queries.size() && i < 5; ++i) {
+						const auto& q = queries[i];
+						diag("  [%zu] count=%llu rows=%llu bytes=%llu \"%s\"",
+							i + 1,
+							static_cast<unsigned long long>(q.value("count_star", static_cast<uint64_t>(0))),
+							static_cast<unsigned long long>(q.value("rows_sent", static_cast<uint64_t>(0))),
+							static_cast<unsigned long long>(q.value("sum_rows_affected", static_cast<uint64_t>(0))),
+							q.value("digest_text", std::string("")).substr(0, 80).c_str());
+					}
+
 					bool sorted_desc = true;
 					uint64_t prev = std::numeric_limits<uint64_t>::max();
 					for (const auto& row : queries) {
