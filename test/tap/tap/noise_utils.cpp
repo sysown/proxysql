@@ -305,7 +305,14 @@ void internal_noise_mysql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
         return;
     }
 
-    mysql_query(setup_conn, "CREATE DATABASE IF NOT EXISTS test");
+    mysql_query(setup_conn, "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'test'");
+    MYSQL_RES* db_res = mysql_store_result(setup_conn);
+    bool db_exists = db_res ? (mysql_num_rows(db_res) > 0) : false;
+    if (db_res) mysql_free_result(db_res);
+
+    if (!db_exists) {
+        mysql_query(setup_conn, "CREATE DATABASE test");
+    }
     mysql_query(setup_conn, "USE test");
 
     std::vector<std::string> tablenames;
@@ -313,10 +320,19 @@ void internal_noise_mysql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
         std::string tablename = base_tablename + "_" + std::to_string(t);
         tablenames.push_back(tablename);
 
-        std::string create_sql = "CREATE TABLE IF NOT EXISTS " + tablename + " (id INT AUTO_INCREMENT PRIMARY KEY, val TEXT, counter INT)";
-        if (mysql_query(setup_conn, create_sql.c_str())) {
-            noise_log("[NOISE] MySQL Traffic v2: Table creation failed for " + tablename + ": " + std::string(mysql_error(setup_conn)) + "\n");
-            continue;
+        std::string check_sql = "SELECT table_name FROM information_schema.tables WHERE table_schema = 'test' AND table_name = '" + tablename + "'";
+        mysql_query(setup_conn, check_sql.c_str());
+        MYSQL_RES* tbl_res = mysql_store_result(setup_conn);
+        bool tbl_exists = tbl_res ? (mysql_num_rows(tbl_res) > 0) : false;
+        if (tbl_res) mysql_free_result(tbl_res);
+
+        if (!tbl_exists) {
+            noise_log("[NOISE] MySQL Traffic v2: Creating table " + tablename + "\n");
+            std::string create_sql = "CREATE TABLE " + tablename + " (id INT AUTO_INCREMENT PRIMARY KEY, val TEXT, counter INT)";
+            if (mysql_query(setup_conn, create_sql.c_str())) {
+                noise_log("[NOISE] MySQL Traffic v2: Table creation failed for " + tablename + ": " + std::string(mysql_error(setup_conn)) + "\n");
+                continue;
+            }
         }
 
         while (!stop) {
@@ -737,8 +753,10 @@ void internal_noise_pgsql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
             continue;
         }
 
-        if (PQntuples(res) == 0) {
-            PQclear(res);
+        bool tbl_exists = (PQntuples(res) > 0);
+        PQclear(res);
+
+        if (!tbl_exists) {
             noise_log("[NOISE] PgSQL Traffic v2: Creating table " + tablename + "\n");
             std::string create_sql = "CREATE TABLE " + safe_tablenames.back() + " (id SERIAL PRIMARY KEY, val TEXT, counter INT)";
             res = PQexec(setup_conn, create_sql.c_str());
@@ -747,8 +765,6 @@ void internal_noise_pgsql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
             }
             PQclear(res);
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        } else {
-            PQclear(res);
         }
 
         // Ensure rows
