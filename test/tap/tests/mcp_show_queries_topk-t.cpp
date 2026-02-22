@@ -270,7 +270,7 @@ int main(int argc, char** argv) {
 	}
 
 	if (can_continue) {
-		const bool generated = run_admin_stmt(admin, "PROXYSQLTEST 1 20", "Generate digest rows for Top-K TAP");
+		const bool generated = run_admin_stmt(admin, "PROXYSQLTEST 1 1000", "Generate digest rows for Top-K TAP");
 		ok(generated, "Generated in-memory digest rows via PROXYSQLTEST 1");
 		if (!generated) {
 			skip(8, "Cannot continue without digest data");
