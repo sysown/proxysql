@@ -344,7 +344,17 @@ fn_create_test_database () {
 fn_getenv
 fn_plan
 
-echo "msg: # MCP Query Rules Test Suite"
+echo "msg: #"
+echo "msg: # === MCP Query Rules Test Suite ==="
+echo "msg: # This test validates MCP query rules functionality across multiple phases:"
+echo "msg: # - Phase 1-4: CRUD operations, LOAD/SAVE commands, runtime/stats tables"
+echo "msg: # - Phase 5: Query digest integration with rules"
+echo "msg: # - Phase 6-9: Rule evaluation (block, rewrite, timeout, OK message actions)"
+echo "msg: # - Phase 10: explain_sql rule evaluation"
+echo "msg: # - Phase 11: PostgreSQL target integration"
+echo "msg: # - Query Tool: run_sql_readonly validation"
+echo "msg: # Tests verify rule matching, action execution, and proper cleanup."
+echo "msg: # ==================================="
 echo "msg: #"
 
 # Ensure test scripts are executable

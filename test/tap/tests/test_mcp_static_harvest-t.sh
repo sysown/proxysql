@@ -63,7 +63,18 @@ json_has_kv() {
 }
 
 echo "msg: 1..${PLAN}"
-echo "msg: # MCP Static Harvest Test Suite"
+echo "msg: #"
+echo "msg: # === MCP Static Harvest Test Suite ==="
+echo "msg: # This test validates MCP static harvesting (phase A) across protocols:"
+echo "msg: # - MySQL target_id: harvests tables from MySQL backend via MCP"
+echo "msg: # - PostgreSQL target_id: harvests tables from PgSQL backend via MCP"
+echo "msg: # Tests cover:"
+echo "msg: # - discovery.run_static: triggers schema introspection"
+echo "msg: # - catalog.list_objects: queries harvested objects by run_id"
+echo "msg: # - Cross-target isolation: verifies run_ids cannot leak across targets"
+echo "msg: # Requires both mysql and pgsql backends to be configured."
+echo "msg: # ====================================="
+echo "msg: #"
 
 if check_proxysql_admin; then
     tap_ok "ProxySQL admin reachable"

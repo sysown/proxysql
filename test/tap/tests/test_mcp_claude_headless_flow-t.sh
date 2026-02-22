@@ -47,7 +47,16 @@ tap_skip() {
 }
 
 echo "msg: 1..${PLAN}"
-echo "msg: # MCP Claude Headless Flow Smoke Test"
+echo "msg: #"
+echo "msg: # === MCP Claude Headless Flow Smoke Test ==="
+echo "msg: # This test validates the ClaudeCode_Headless integration artifacts:"
+echo "msg: # - static_harvest.sh wrapper for schema introspection"
+echo "msg: # - two_phase_discovery.py orchestration script (dry-run mode)"
+echo "msg: # - optional real Claude execution (opt-in via TAP_RUN_REAL_CLAUDE=1)"
+echo "msg: # The test ensures the headless discovery pipeline scripts exist and"
+echo "msg: # can be invoked with proper MCP target configuration."
+echo "msg: # ==============================================="
+echo "msg: #"
 
 if [[ -x "${STATIC_HARVEST}" && -f "${TWO_PHASE}" ]]; then
     tap_ok "Claude headless scripts exist"

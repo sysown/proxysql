@@ -73,7 +73,20 @@ mcp_success_text() {
 }
 
 echo "msg: 1..${PLAN}"
-echo "msg: # MCP Phase-B LLM Discovery Tooling Test Suite"
+echo "msg: #"
+echo "msg: # === MCP Phase-B LLM Discovery Tooling Test Suite ==="
+echo "msg: # This test validates MCP phase-B (LLM-driven discovery primitives):"
+echo "msg: # - discovery.run_static: harvests schema metadata into catalog"
+echo "msg: # - catalog.list_objects: queries harvested schema objects"
+echo "msg: # - agent.run_start/run_finish: manages LLM agent sessions"
+echo "msg: # - llm.summary_upsert/get: persists and retrieves object summaries"
+echo "msg: # - llm.domain_upsert/set_members: manages semantic domains"
+echo "msg: # - llm.metric_upsert: registers derived metrics"
+echo "msg: # - llm.question_template_add: adds natural language templates"
+echo "msg: # - llm.search: searches across all LLM-generated artifacts"
+echo "msg: # No external LLM credentials required - CI-safe validation."
+echo "msg: # ========================================================"
+echo "msg: #"
 
 if check_proxysql_admin; then
     tap_ok "ProxySQL admin reachable"
