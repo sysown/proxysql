@@ -1359,6 +1359,16 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 		flagIN=sess->next_query_flagIN;
 	}
 	int reiterate=GET_THREAD_VARIABLE(query_processor_iterations);
+	int first_comment_parsing=GET_THREAD_VARIABLE(query_processor_first_comment_parsing);
+	if (sess->mirror==false) { // we process comments only on original queries, not on mirrors
+		if (qp && qp->first_comment) {
+			// Process first comment before query rules if configured (values 1 or 3)
+			if (first_comment_parsing == 1 || first_comment_parsing == 3) {
+				// we have a comment to parse
+				query_parser_first_comment(ret, qp->first_comment);
+			}
+		}
+	}
 	if (sess->mirror==true) {
 		// we are into a mirror session
 		// we immediately set a destination_hostgroup
@@ -1657,9 +1667,16 @@ __exit_process_mysql_query:
 	}
 	
 	if (sess->mirror==false) { // we process comments only on original queries, not on mirrors
-		if (qp && qp->first_comment) {
-			// we have a comment to parse
-			query_parser_first_comment(ret, qp->first_comment);
+		if (qp) {
+			if (ret->new_query) {
+				query_parser_free(qp);
+				query_parser_init(qp, ret->new_query->c_str(), ret->new_query->length(), 0);
+			}
+			// Process first comment after query rules if configured (values 2 or 3)
+			if (qp->first_comment && (first_comment_parsing == 2 || first_comment_parsing == 3)) {
+				// we have a comment to parse
+				query_parser_first_comment(ret, qp->first_comment);
+			}
 		}
 	}
 	if (GET_THREAD_VARIABLE(firewall_whitelist_enabled)) {
