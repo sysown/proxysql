@@ -6,8 +6,8 @@
  *  - Verifies that the comment is still parsed even if stripped by a rule.
  */
 
-#include <stdio.h>
-#include <string.h>
+#include <cstdio>
+#include <cstring>
 
 #include "command_line.h"
 #include "mysql.h"
@@ -20,7 +20,7 @@ int main(int, char**) {
 		return -1;
 	}
 
-	plan(2);
+	plan(3);
 
 	MYSQL* admin = init_mysql_conn(cl.host, cl.admin_port, cl.admin_username, cl.admin_password);
 	if (!admin) {
@@ -29,6 +29,7 @@ int main(int, char**) {
 
 	MYSQL* proxy = init_mysql_conn(cl.host, cl.port, cl.username, cl.password);
 	if (!proxy) {
+		mysql_close(admin);
 		return exit_status();
 	}
 
@@ -39,8 +40,8 @@ int main(int, char**) {
 	diag("Running on Admin: %s", q_del_rules);
 	MYSQL_QUERY_T(admin, q_del_rules);
 
-	// Rule to strip the comment
-	const char *q_ins_rule = "INSERT INTO mysql_query_rules (rule_id, active, match_pattern, replace_pattern, apply) VALUES (1, 1, '/\\\\*.*\\\\*/ ', '', 1)";
+	// Rule to strip the comment. Improved regex to be non-greedy and optional trailing space.
+	const char *q_ins_rule = "INSERT INTO mysql_query_rules (rule_id, active, match_pattern, replace_pattern, apply) VALUES (1, 1, '/\\\\*.*?\\\\*/ ?', '', 1)";
 	diag("Running on Admin: %s", q_ins_rule);
 	MYSQL_QUERY_T(admin, q_ins_rule);
 
@@ -63,7 +64,7 @@ int main(int, char**) {
 	// We use hostgroup=1000 which likely doesn't exist or is different from default
 	const char *query = "/*+ hostgroup=1000 */ SELECT 1";
 	diag("Running on Proxy: %s", query);
-	run_q(proxy, query); // This might fail if HG 1000 doesn't exist, but ProxySQL should try to route it.
+	run_q(proxy, query);
 	
 	// Check stats to see if hostgroup 1000 was used
 	const char *q_stats = "SELECT destination_hostgroup FROM stats_mysql_query_digest WHERE digest_text='SELECT ?'";
@@ -73,14 +74,18 @@ int main(int, char**) {
 		return exit_status();
 	}
 	MYSQL_RES *res = mysql_store_result(admin);
-	MYSQL_ROW row = mysql_fetch_row(res);
-	if (row) {
-		int hg = atoi(row[0]);
-		ok(hg != 1000, "Comment should NOT have been parsed because it was stripped by rule. hg=%d", hg);
+	if (res) {
+		MYSQL_ROW row = mysql_fetch_row(res);
+		if (row) {
+			int hg = atoi(row[0]);
+			ok(hg != 1000, "Comment should NOT have been parsed because it was stripped by rule. hg=%d", hg);
+		} else {
+			ok(0, "Failed to find query in stats (Test 1)");
+		}
+		mysql_free_result(res);
 	} else {
-		ok(0, "Failed to find query in stats");
+		ok(0, "mysql_store_result returned NULL (Test 1)");
 	}
-	mysql_free_result(res);
 
 	diag(" ========== Test 2: New behavior (parsed before rules) ==========");
 	const char *q_set_var2 = "SET mysql-query_processor_first_comment_parsing = 1";
@@ -102,14 +107,59 @@ int main(int, char**) {
 		return exit_status();
 	}
 	res = mysql_store_result(admin);
-	row = mysql_fetch_row(res);
-	if (row) {
-		int hg = atoi(row[0]);
-		ok(hg == 1000, "Comment SHOULD have been parsed BEFORE it was stripped by rule. hg=%d", hg);
+	if (res) {
+		MYSQL_ROW row = mysql_fetch_row(res);
+		if (row) {
+			int hg = atoi(row[0]);
+			ok(hg == 1000, "Comment SHOULD have been parsed BEFORE it was stripped by rule. hg=%d", hg);
+		} else {
+			ok(0, "Failed to find query in stats (Test 2)");
+		}
+		mysql_free_result(res);
 	} else {
-		ok(0, "Failed to find query in stats");
+		ok(0, "mysql_store_result returned NULL (Test 2)");
 	}
-	mysql_free_result(res);
+
+	diag(" ========== Test 3: Both passes (mode 3) ==========");
+	// In mode 3, it parses before and after. If stripped, it should still work due to the before pass.
+	const char *q_set_var3 = "SET mysql-query_processor_first_comment_parsing = 3";
+	diag("Running on Admin: %s", q_set_var3);
+	MYSQL_QUERY_T(admin, q_set_var3);
+
+	diag("Running on Admin: %s", q_load_vars);
+	MYSQL_QUERY_T(admin, q_load_vars);
+
+	diag("Running on Admin: %s", q_truncate);
+	MYSQL_QUERY_T(admin, q_truncate);
+
+	diag("Running on Proxy: %s", query);
+	run_q(proxy, query);
+
+	diag("Running on Admin: %s", q_stats);
+	if (mysql_query_t(admin, q_stats)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
+		return exit_status();
+	}
+	res = mysql_store_result(admin);
+	if (res) {
+		MYSQL_ROW row = mysql_fetch_row(res);
+		if (row) {
+			int hg = atoi(row[0]);
+			ok(hg == 1000, "Comment SHOULD have been parsed in the BEFORE pass (mode 3). hg=%d", hg);
+		} else {
+			ok(0, "Failed to find query in stats (Test 3)");
+		}
+		mysql_free_result(res);
+	} else {
+		ok(0, "mysql_store_result returned NULL (Test 3)");
+	}
+
+	// Teardown: restore defaults
+	diag("Teardown: restoring defaults");
+	MYSQL_QUERY_T(admin, "DELETE FROM mysql_query_rules WHERE rule_id=1");
+	MYSQL_QUERY_T(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
+	MYSQL_QUERY_T(admin, "SET mysql-query_processor_first_comment_parsing = 2");
+	MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 	mysql_close(admin);
 	mysql_close(proxy);
