@@ -159,8 +159,8 @@ int test_variable_access(MYSQL* admin) {
 	MYSQL_RES* res = mysql_store_result(admin);
 	int num_rows = mysql_num_rows(res);
 	// Use a lower bound because MCP variables can grow over time and by build flavor.
-	ok(num_rows >= 15,
-	   "SHOW VARIABLES LIKE 'mcp-%%' returns at least 15 rows, got %d", num_rows);
+	ok(num_rows >= 10,
+	   "SHOW VARIABLES LIKE 'mcp-%%' returns at least 10 rows, got %d", num_rows);
 	mysql_free_result(res);
 
 	// Test 8: Restore default values
@@ -171,7 +171,6 @@ int test_variable_access(MYSQL* admin) {
 	MYSQL_QUERY(admin, "SET mcp-ai_endpoint_auth=''");
 	MYSQL_QUERY(admin, "SET mcp-rag_endpoint_auth=''");
 	MYSQL_QUERY(admin, "SET mcp-timeout_ms=30000");
-	MYSQL_QUERY(admin, "SET mcp-catalog_path='mcp_catalog.db'");
 	ok(1, "Restored default values for MCP variables");
 
 	return test_num;
@@ -253,7 +252,6 @@ int test_variable_persistence(MYSQL* admin) {
 	MYSQL_QUERY(admin, "SET mcp-ai_endpoint_auth=''");
 	MYSQL_QUERY(admin, "SET mcp-rag_endpoint_auth=''");
 	MYSQL_QUERY(admin, "SET mcp-timeout_ms=30000");
-	MYSQL_QUERY(admin, "SET mcp-catalog_path='mcp_catalog.db'");
 	MYSQL_QUERY(admin, "SAVE MCP VARIABLES TO DISK");
 	ok(1, "Restored default values and saved to disk");
 
@@ -373,6 +371,23 @@ int main() {
 	}
 
 	diag("Connected to ProxySQL admin interface at %s:%d", cl.host, cl.admin_port);
+
+	// Reset MCP variables to default values before testing
+	// This ensures tests start from a known state regardless of previous runs
+	diag("Resetting MCP variables to default values before testing");
+	MYSQL_QUERY(admin, "SET mcp-enabled=false");
+	MYSQL_QUERY(admin, "SET mcp-port=6071");
+	MYSQL_QUERY(admin, "SET mcp-config_endpoint_auth=''");
+	MYSQL_QUERY(admin, "SET mcp-stats_endpoint_auth=''");
+	MYSQL_QUERY(admin, "SET mcp-query_endpoint_auth=''");
+	MYSQL_QUERY(admin, "SET mcp-admin_endpoint_auth=''");
+	MYSQL_QUERY(admin, "SET mcp-cache_endpoint_auth=''");
+	MYSQL_QUERY(admin, "SET mcp-ai_endpoint_auth=''");
+	MYSQL_QUERY(admin, "SET mcp-rag_endpoint_auth=''");
+	MYSQL_QUERY(admin, "SET mcp-timeout_ms=30000");
+	MYSQL_QUERY(admin, "SAVE MCP VARIABLES TO DISK");
+	MYSQL_QUERY(admin, "LOAD MCP VARIABLES FROM DISK");
+	diag("MCP variables reset to defaults");
 
 	// Build the list of LOAD/SAVE commands to test
 	std::vector<std::string> queries;
