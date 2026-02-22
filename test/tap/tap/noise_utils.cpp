@@ -283,6 +283,150 @@ void internal_noise_prometheus_poller(const CommandLine& cl, const NoiseOptions&
     noise_log("[NOISE] Prometheus Poller report: total_scrapes=" + std::to_string(total_scrapes) + "\n");
 }
 
+void internal_noise_mysql_traffic_v2(const CommandLine& cl, const NoiseOptions& opt, std::atomic<bool>& stop) {
+    std::string tablename = get_opt_str(opt, "tablename", "mysql_noise_test");
+    int num_connections = get_opt_int(opt, "num_connections", 20);
+    int reconnect_interval = get_opt_int(opt, "reconnect_interval", 200);
+    if (reconnect_interval <= 0) reconnect_interval = 1;
+    int max_retries = get_opt_int(opt, "max_retries", 5);
+    int avg_delay_ms = get_opt_int(opt, "avg_delay_ms", 200);
+
+    // --- Phase A: Ensure table exists ---
+    MYSQL* setup_conn = mysql_init(NULL);
+    if (!mysql_real_connect(setup_conn, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+        noise_log("[NOISE] MySQL Traffic v2: Setup connection failure: " + std::string(mysql_error(setup_conn)) + "\n");
+        mysql_close(setup_conn);
+        register_noise_failure("MySQL Traffic v2 (Setup)");
+        return;
+    }
+
+    std::string create_sql = "CREATE TABLE IF NOT EXISTS " + tablename + " (id INT AUTO_INCREMENT PRIMARY KEY, val TEXT, counter INT)";
+    if (mysql_query(setup_conn, create_sql.c_str())) {
+        noise_log("[NOISE] MySQL Traffic v2: Table creation failed: " + std::string(mysql_error(setup_conn)) + "\n");
+        mysql_close(setup_conn);
+        register_noise_failure("MySQL Traffic v2 (Create)");
+        return;
+    }
+    noise_log("[NOISE] MySQL Traffic v2: Table " + tablename + " verified\n");
+
+    // --- Phase B: Ensure 10,000 rows ---
+    while (!stop) {
+        std::string count_sql = "SELECT COUNT(*) FROM " + tablename;
+        if (mysql_query(setup_conn, count_sql.c_str()) == 0) {
+            MYSQL_RES* res = mysql_store_result(setup_conn);
+            MYSQL_ROW row = mysql_fetch_row(res);
+            long current_rows = row ? std::stol(row[0]) : 0;
+            mysql_free_result(res);
+
+            if (current_rows < 10000) {
+                noise_log("[NOISE] MySQL Traffic v2: " + std::to_string(current_rows) + " rows found, adding 5000...\n");
+                // MySQL doesn't have generate_series like PgSQL, so we use a loop or multiple inserts.
+                // For simplicity in noise, we just do one bulk insert of 5000 rows if possible, or multiple small ones.
+                // A better way is to use a recursive CTE or just a simple loop of 5000 inserts (slow) or one big INSERT with 5000 values.
+                std::string insert_sql = "INSERT INTO " + tablename + " (val, counter) VALUES ";
+                for (int i = 0; i < 5000; ++i) {
+                    insert_sql += "('noise_data', " + std::to_string(i) + ")";
+                    if (i < 4999) insert_sql += ",";
+                }
+                if (mysql_query(setup_conn, insert_sql.c_str())) {
+                    noise_log("[NOISE] MySQL Traffic v2: Row insertion failed: " + std::string(mysql_error(setup_conn)) + "\n");
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            } else {
+                break;
+            }
+        } else {
+            noise_log("[NOISE] MySQL Traffic v2: Row count failed: " + std::string(mysql_error(setup_conn)) + "\n");
+            break;
+        }
+    }
+    mysql_close(setup_conn);
+
+    if (stop) return;
+
+    // --- Phase C, D, E: Multi-threaded load ---
+    std::atomic<uint64_t> total_queries{0};
+    std::atomic<uint64_t> total_connections_opened{0};
+    std::atomic<uint64_t> total_connections_closed{0};
+    std::vector<std::thread> workers;
+
+    for (int i = 0; i < num_connections; ++i) {
+        workers.emplace_back([&, tablename, reconnect_interval, avg_delay_ms]() {
+            MYSQL* conn = nullptr;
+            uint64_t worker_queries = 0;
+            std::random_device rd;
+            std::mt19937 gen(rd());
+            std::uniform_int_distribution<> op_dist(0, 3);
+            std::uniform_int_distribution<> id_dist(1, 10000);
+
+            int min_delay = avg_delay_ms / 2;
+            int max_delay = avg_delay_ms + (avg_delay_ms / 2);
+            if (min_delay < 1) min_delay = 1;
+            std::uniform_int_distribution<> delay_dist(min_delay, max_delay);
+
+            std::uniform_int_distribution<> start_dist(0, 500);
+            std::this_thread::sleep_for(std::chrono::milliseconds(start_dist(gen)));
+
+            auto connect = [&]() {
+                if (conn) {
+                    mysql_close(conn);
+                    total_connections_closed++;
+                }
+                conn = mysql_init(NULL);
+                if (mysql_real_connect(conn, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+                    total_connections_opened++;
+                    return true;
+                }
+                return false;
+            };
+
+            if (!connect()) {
+                noise_log("[NOISE] MySQL Traffic v2: Worker failed initial connection\n");
+                return;
+            }
+
+            while (!stop) {
+                int op = op_dist(gen);
+                std::string sql;
+                int target_id = id_dist(gen);
+
+                switch (op) {
+                    case 0: sql = "SELECT * FROM " + tablename + " WHERE id = " + std::to_string(target_id); break;
+                    case 1: sql = "INSERT INTO " + tablename + " (val, counter) VALUES ('extra_noise', " + std::to_string(target_id) + ")"; break;
+                    case 2: sql = "UPDATE " + tablename + " SET counter = counter + 1 WHERE id = " + std::to_string(target_id); break;
+                    case 3: sql = "DELETE FROM " + tablename + " WHERE id = " + std::to_string(target_id); break;
+                }
+
+                if (mysql_query(conn, sql.c_str()) == 0) {
+                    MYSQL_RES* r = mysql_store_result(conn);
+                    if (r) mysql_free_result(r);
+                }
+                
+                worker_queries++;
+                total_queries++;
+
+                if (worker_queries % reconnect_interval == 0) {
+                    if (!connect()) break;
+                }
+
+                std::this_thread::sleep_for(std::chrono::milliseconds(delay_dist(gen)));
+            }
+            if (conn) {
+                mysql_close(conn);
+                total_connections_closed++;
+            }
+        });
+    }
+
+    for (auto& w : workers) {
+        if (w.joinable()) w.join();
+    }
+
+    noise_log("[NOISE] MySQL Traffic v2 report: total_queries=" + std::to_string(total_queries) + 
+              ", total_connections_opened=" + std::to_string(total_connections_opened) + 
+              ", total_connections_closed=" + std::to_string(total_connections_closed) + "\n");
+}
+
 void internal_noise_rest_prometheus_poller(const CommandLine& cl, const NoiseOptions& opt, std::atomic<bool>& stop) {
     int interval_ms = get_opt_int(opt, "interval_ms", 1000);
     int max_retries = get_opt_int(opt, "max_retries", 5);

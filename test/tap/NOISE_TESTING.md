@@ -43,6 +43,9 @@ Internal routines run as threads within the TAP test process. This is **highly r
 - `internal_noise_random_stats_poller`: Shuffles and queries a set of MySQL and PostgreSQL stats tables (default 500ms).
 - `internal_noise_mysql_traffic`: Generates unprivileged query load on the main MySQL port (default 100ms).
 - `internal_noise_pgsql_traffic`: Generates unprivileged query load on the main PostgreSQL port (default 100ms).
+- `internal_noise_pgsql_traffic_v2`: High-concurrency PostgreSQL load generator with automatic table setup, row population (10k rows), and multi-threaded workers (default 20 connections, 200ms delay).
+- `internal_noise_mysql_traffic_v2`: High-concurrency MySQL load generator with automatic table setup, row population (10k rows), and multi-threaded workers (default 20 connections, 200ms delay).
+- `internal_noise_rest_prometheus_poller`: Periodically scrapes metrics via the REST API (default 1000ms). Supports `enable_rest_api` auto-configuration.
 
 ## Usage in C++ TAP Tests
 
