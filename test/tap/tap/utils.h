@@ -397,7 +397,9 @@ int wait_post_enpoint_ready(
 	std::string endpoint, std::string post_params, uint32_t timeout, uint32_t delay=100
 );
 
-int wait_get_enpoint_ready(std::string endpoint, uint32_t timeout, uint32_t delay=100);
+int wait_get_enpoint_ready(
+	std::string endpoint, uint32_t timeout, uint32_t delay=100, const std::string& userpwd=""
+);
 
 /**
  * @brief Perform a simple POST query to the specified endpoint using the supplied

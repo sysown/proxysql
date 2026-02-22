@@ -12,6 +12,7 @@
 #include <tuple>
 #include <vector>
 #include <array>
+#include <limits>
 
 #include "ProxySQL_RESTAPI_Server.hpp"
 
@@ -280,7 +281,7 @@ struct processlist_query_options_t {
 	processlist_sort_by_t sort_by {processlist_sort_by_t::none}; ///< Optional primary sort key.
 	bool sort_desc {true};                  ///< Sort direction for @ref sort_by.
 	bool disable_pagination {false};        ///< If true, ignore @ref limit and @ref offset.
-	uint32_t limit {0};                     ///< Page size (`0` means return zero rows).
+	uint32_t limit {std::numeric_limits<uint32_t>::max()}; ///< Page size (defaults to no limit).
 	uint32_t offset {0};                    ///< Number of rows to skip before page.
 };
 

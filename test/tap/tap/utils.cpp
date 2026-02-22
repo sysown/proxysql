@@ -821,14 +821,14 @@ int wait_post_enpoint_ready(string endpoint, string post_params, uint32_t timeou
 	return res;
 }
 
-int wait_get_enpoint_ready(string endpoint, uint32_t timeout, uint32_t delay) {
+int wait_get_enpoint_ready(string endpoint, uint32_t timeout, uint32_t delay, const string& userpwd) {
 	double waited = 0;
 	int res = -1;
 
 	while (waited < timeout) {
 		string curl_resp_err {};
 		uint64_t curl_res_code = 0;
-		int curl_res = perform_simple_get(endpoint, curl_res_code, curl_resp_err);
+		int curl_res = perform_simple_get(endpoint, curl_res_code, curl_resp_err, userpwd);
 
 		if (curl_res != CURLE_OK || curl_res_code != 200) {
 			diag("'curl_res': %d, 'curl_err': '%s', waiting for '%d'ms...", curl_res, curl_resp_err.c_str(), delay);

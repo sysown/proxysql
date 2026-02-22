@@ -367,12 +367,14 @@ int exit_status()
   int noise_count = get_noise_tools_count();
   stop_noise_tools();
 
-  if (!noise_failures.empty()) {
+  {
     std::lock_guard<std::mutex> lock(noise_failure_mutex);
-    for (const auto& failed_routine : noise_failures) {
+    if (!noise_failures.empty()) {
+      for (const auto& failed_routine : noise_failures) {
         diag("Noise failure detected in: %s", failed_routine.c_str());
+      }
+      return EXIT_FAILURE;
     }
-    return EXIT_FAILURE;
   }
 
   // Add noise tools to the count of executed tests if they didn't fail

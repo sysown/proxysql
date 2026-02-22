@@ -729,15 +729,19 @@ void MySQL_Session::reset() {
 		delete mybes;
 		mybes=NULL;
 	}
-	        mybe=NULL;
+	mybe=NULL;
 
-	        with_gtid = false;
-	        backend_closed_in_fast_forward = false;
-	        fast_forward_grace_start_time = 0;
-	        ffto_bypassed = false;
-	        m_ffto.reset();
+	with_gtid = false;
+	backend_closed_in_fast_forward = false;
+	fast_forward_grace_start_time = 0;
+	ffto_bypassed = false;
+	if (m_ffto) {
+		m_ffto->on_close();
+	}
+	m_ffto.reset();
 
-	        //gtid_trxid = 0;	gtid_hid = -1;
+	//gtid_trxid = 0;
+	gtid_hid = -1;
 	memset(gtid_buf,0,sizeof(gtid_buf));
 	if (session_type == PROXYSQL_SESSION_SQLITE) {
 		SQLite3_Session *sqlite_sess = (SQLite3_Session *)thread->gen_args;
@@ -759,9 +763,6 @@ void MySQL_Session::reset() {
  * @brief Destructor for the MySQL session.
  */
 MySQL_Session::~MySQL_Session() {
-	if (m_ffto) {
-		m_ffto->on_close();
-	}
 	reset();
  // we moved this out to allow CHANGE_USER
 
@@ -4190,6 +4191,11 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___genai_s
 	if (written != sizeof(hdr)) {
 		proxy_error("GenAI: Failed to write request header to fd %d: %s\n",
 					fds[0], strerror(errno));
+		auto it = pending_genai_requests_.find(hdr.request_id);
+		if (it != pending_genai_requests_.end() && it->second.original_pkt) {
+			it->second.original_pkt->ptr = nullptr;
+			it->second.original_pkt->size = 0;
+		}
 		genai_cleanup_request(hdr.request_id);
 		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1263, (char*)"HY000",
 			"Failed to send request to GenAI module", true);
@@ -4207,6 +4213,11 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___genai_s
 			}
 			proxy_error("GenAI: Failed to write JSON query to fd %d: %s\n",
 						fds[0], strerror(errno));
+			auto it = pending_genai_requests_.find(hdr.request_id);
+			if (it != pending_genai_requests_.end() && it->second.original_pkt) {
+				it->second.original_pkt->ptr = nullptr;
+				it->second.original_pkt->size = 0;
+			}
 			genai_cleanup_request(hdr.request_id);
 			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1264, (char*)"HY000",
 				"Failed to send query to GenAI module", true);
@@ -4832,6 +4843,9 @@ void MySQL_Session::observe_ffto_client_packet(const PtrSize_t& pkt) {
 
 	if (pkt.size > (size_t)mysql_thread___ffto_max_buffer_size) {
 		ffto_bypassed = true;
+		if (m_ffto) {
+			m_ffto->on_close();
+		}
 		m_ffto.reset();
 		return;
 	}
@@ -6024,16 +6038,23 @@ handler_again:
 				// register the mysql_data_stream
 				thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
 			}
-			                        if (mysql_thread___ffto_enabled && !ffto_bypassed && m_ffto) {
-			                                for (unsigned int i = 0; i < mybe->server_myds->PSarrayIN->len; i++) {
-			                                        if (mybe->server_myds->PSarrayIN->pdata[i].size > (size_t)mysql_thread___ffto_max_buffer_size) {
-			                                                ffto_bypassed = true;
-			                                                m_ffto.reset();
-			                                                break;
-			                                        }
-			                                        m_ffto->on_server_data((const char*)mybe->server_myds->PSarrayIN->pdata[i].ptr, mybe->server_myds->PSarrayIN->pdata[i].size);
-			                                }
-			                        }			client_myds->PSarrayOUT->copy_add(mybe->server_myds->PSarrayIN, 0, mybe->server_myds->PSarrayIN->len);
+			if (mysql_thread___ffto_enabled && !ffto_bypassed && m_ffto) {
+				for (unsigned int i = 0; i < mybe->server_myds->PSarrayIN->len; i++) {
+					if (mybe->server_myds->PSarrayIN->pdata[i].size > (size_t)mysql_thread___ffto_max_buffer_size) {
+						ffto_bypassed = true;
+						if (m_ffto) {
+							m_ffto->on_close();
+						}
+						m_ffto.reset();
+						break;
+					}
+					m_ffto->on_server_data(
+						(const char*)mybe->server_myds->PSarrayIN->pdata[i].ptr,
+						mybe->server_myds->PSarrayIN->pdata[i].size
+					);
+				}
+			}
+			client_myds->PSarrayOUT->copy_add(mybe->server_myds->PSarrayIN, 0, mybe->server_myds->PSarrayIN->len);
 			while (mybe->server_myds->PSarrayIN->len) mybe->server_myds->PSarrayIN->remove_index(mybe->server_myds->PSarrayIN->len-1,NULL);
 			break;
 		case CONNECTING_CLIENT:
@@ -9085,6 +9106,10 @@ bool MySQL_Session::handle_command_query_kill(PtrSize_t *pkt) {
 					if (CurrentQuery.MyComQueryCmd == MYSQL_COM_QUERY_KILL) {
 						char* qu = mysql_query_strip_comments((char *)pkt->ptr+1+sizeof(mysql_hdr), pkt->size-1-sizeof(mysql_hdr),
 							mysql_thread___query_digests_lowercase);
+						if (!qu) {
+							proxy_error("Failed to normalize KILL query for digest matching (out of memory)\n");
+							return false;
+						}
 						string nq=string(qu,strlen(qu));
 						re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
 						opt2->set_case_sensitive(false);

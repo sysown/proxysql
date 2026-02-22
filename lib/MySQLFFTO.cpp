@@ -67,13 +67,18 @@ MySQLFFTO::~MySQLFFTO() {
 void MySQLFFTO::on_client_data(const char* buf, std::size_t len) {
     if (!buf || len == 0) return;
     m_client_buffer.insert(m_client_buffer.end(), buf, buf + len);
-    while (m_client_buffer.size() - m_client_offset >= sizeof(mysql_hdr)) {
-        const mysql_hdr* hdr = reinterpret_cast<const mysql_hdr*>(m_client_buffer.data() + m_client_offset);
-        uint32_t pkt_len = hdr->pkt_length;
-        if (m_client_buffer.size() - m_client_offset < sizeof(mysql_hdr) + pkt_len) break;
-        const unsigned char* payload = reinterpret_cast<const unsigned char*>(m_client_buffer.data()) + m_client_offset + sizeof(mysql_hdr);
-        process_client_packet(payload, pkt_len);
-        m_client_offset += sizeof(mysql_hdr) + pkt_len;
+	while (m_client_buffer.size() - m_client_offset >= sizeof(mysql_hdr)) {
+		const mysql_hdr* hdr = reinterpret_cast<const mysql_hdr*>(m_client_buffer.data() + m_client_offset);
+		uint32_t pkt_len = hdr->pkt_length;
+		if (pkt_len > (uint32_t)mysql_thread___ffto_max_buffer_size) {
+			m_session->ffto_bypassed = true;
+			on_close();
+			return;
+		}
+		if (m_client_buffer.size() - m_client_offset < sizeof(mysql_hdr) + pkt_len) break;
+		const unsigned char* payload = reinterpret_cast<const unsigned char*>(m_client_buffer.data()) + m_client_offset + sizeof(mysql_hdr);
+		process_client_packet(payload, pkt_len);
+		m_client_offset += sizeof(mysql_hdr) + pkt_len;
     }
     if (m_client_offset > 0) {
         if (m_client_offset >= m_client_buffer.size()) {
@@ -238,24 +243,25 @@ void MySQLFFTO::report_query_stats(const std::string& query, unsigned long long 
     auto* ui = m_session->client_myds->myconn->userinfo;
     if (!ui->username || !ui->schemaname) return;
 
-    options opts;
-    opts.lowercase = mysql_thread___query_digests_lowercase;
-    opts.replace_null = mysql_thread___query_digests_replace_null;
-    opts.replace_number = !mysql_thread___query_digests_no_digits;
-    opts.keep_comment = mysql_thread___query_digests_keep_comment;
-    opts.grouping_limit = mysql_thread___query_digests_grouping_limit;
-    opts.groups_grouping_limit = mysql_thread___query_digests_groups_grouping_limit;
-    opts.max_query_length = mysql_thread___query_digests_max_query_length;
+	options opts;
+	opts.lowercase = mysql_thread___query_digests_lowercase;
+	opts.replace_null = mysql_thread___query_digests_replace_null;
+	opts.replace_number = mysql_thread___query_digests_no_digits;
+	opts.keep_comment = mysql_thread___query_digests_keep_comment;
+	opts.grouping_limit = mysql_thread___query_digests_grouping_limit;
+	opts.groups_grouping_limit = mysql_thread___query_digests_groups_grouping_limit;
+	opts.max_query_length = mysql_thread___query_digests_max_query_length;
 
     SQP_par_t qp; memset(&qp, 0, sizeof(qp));
     char* fst_cmnt = NULL;
-    char* digest_text = mysql_query_digest_and_first_comment(query.c_str(), query.length(), &fst_cmnt,
-        ((query.length() < QUERY_DIGEST_BUF) ? qp.buf : NULL), &opts);
-    if (digest_text) {
-        qp.digest_text = digest_text;
-        qp.digest = SpookyHash::Hash64(digest_text, strlen(digest_text), 0);
-        char* ca = (char*)"";
-        if (mysql_thread___query_digests_track_hostname && m_session->client_myds->addr.addr) ca = m_session->client_myds->addr.addr;
+	char* digest_text = mysql_query_digest_and_first_comment(query.c_str(), query.length(), &fst_cmnt,
+		((query.length() < QUERY_DIGEST_BUF) ? qp.buf : NULL), &opts);
+	if (digest_text) {
+		qp.digest_text = digest_text;
+		const int digest_len = strnlen(digest_text, mysql_thread___query_digests_max_digest_length);
+		qp.digest = SpookyHash::Hash64(digest_text, digest_len, 0);
+		char* ca = (char*)"";
+		if (mysql_thread___query_digests_track_hostname && m_session->client_myds->addr.addr) ca = m_session->client_myds->addr.addr;
         uint64_t hash2; SpookyHash myhash; myhash.Init(19, 3);
         myhash.Update(ui->username, strlen(ui->username));
         myhash.Update(&qp.digest, sizeof(qp.digest));

@@ -80,6 +80,11 @@ void PgSQLFFTO::on_client_data(const char* buf, std::size_t len) {
     while (m_client_buffer.size() - m_client_offset >= 5) {
         char type = m_client_buffer[m_client_offset];
         uint32_t msg_len; memcpy(&msg_len, &m_client_buffer[m_client_offset + 1], 4); msg_len = ntohl(msg_len);
+        if (msg_len > (uint32_t)pgsql_thread___ffto_max_buffer_size) {
+            m_session->ffto_bypassed = true;
+            on_close();
+            return;
+        }
         if (msg_len < 4 || msg_len > 1024 * 1024 * 1024) { // Sanity check
             on_close();
             m_client_buffer.clear(); m_client_offset = 0;
@@ -271,7 +276,7 @@ void PgSQLFFTO::report_query_stats(const std::string& query, unsigned long long 
     options opts;
     opts.lowercase = pgsql_thread___query_digests_lowercase;
     opts.replace_null = pgsql_thread___query_digests_replace_null;
-    opts.replace_number = !pgsql_thread___query_digests_no_digits;
+    opts.replace_number = pgsql_thread___query_digests_no_digits;
     opts.keep_comment = pgsql_thread___query_digests_keep_comment;
     opts.grouping_limit = pgsql_thread___query_digests_grouping_limit;
     opts.groups_grouping_limit = pgsql_thread___query_digests_groups_grouping_limit;
@@ -283,7 +288,8 @@ void PgSQLFFTO::report_query_stats(const std::string& query, unsigned long long 
         ((query.length() < QUERY_DIGEST_BUF) ? qp.buf : NULL), &opts);
     if (digest_text) {
         qp.digest_text = digest_text;
-        qp.digest = SpookyHash::Hash64(digest_text, strlen(digest_text), 0);
+        const int digest_len = strnlen(digest_text, pgsql_thread___query_digests_max_digest_length);
+        qp.digest = SpookyHash::Hash64(digest_text, digest_len, 0);
         char* ca = (char*)"";
         if (pgsql_thread___query_digests_track_hostname && m_session->client_myds->addr.addr) ca = m_session->client_myds->addr.addr;
         uint64_t hash2; SpookyHash myhash; myhash.Init(19, 3);
