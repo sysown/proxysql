@@ -376,5 +376,12 @@ int CommandLine::getEnv() {
 		}
 	}
 
+	value = getenv("TAP_USE_NOISE");
+	if (value) {
+		if (strcmp(value, "1") == 0 || strcasecmp(value, "true") == 0) {
+			this->use_noise = true;
+		}
+	}
+
 	return 0;
 }

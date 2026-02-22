@@ -29,10 +29,17 @@ typedef char my_bool;
 #include <signal.h>
 #include <time.h>
 #include <unistd.h>
+#include <atomic>
 
 #include <sys/time.h>
+#include <mutex>
+#include <vector>
+#include <string>
 
 using std::size_t;
+
+extern std::vector<std::string> noise_failures;
+extern std::mutex noise_failure_mutex;
 
 static ulong start_timer(void);
 static void end_timer(ulong start_time,char *buff);
@@ -350,9 +357,26 @@ todo_end()
   *g_test.todo = '\0';
 }
 
+extern "C" void stop_noise_tools();
+extern "C" int get_noise_tools_count();
+
 int exit_status()
 {
   char buff[60];
+
+  int noise_count = get_noise_tools_count();
+  stop_noise_tools();
+
+  if (!noise_failures.empty()) {
+    std::lock_guard<std::mutex> lock(noise_failure_mutex);
+    for (const auto& failed_routine : noise_failures) {
+        diag("Noise failure detected in: %s", failed_routine.c_str());
+    }
+    return EXIT_FAILURE;
+  }
+
+  // Add noise tools to the count of executed tests if they didn't fail
+  __sync_add_and_fetch(&g_test.last, noise_count);
 
   /*
     If there were no plan, we write one last instead.

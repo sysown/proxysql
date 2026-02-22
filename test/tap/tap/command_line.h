@@ -12,6 +12,7 @@ class CommandLine {
 
 	bool checksum = true;
 	bool no_write = false;
+	bool use_noise = false;
 	int silent = false;
 
 	// unpriviliged test connection
