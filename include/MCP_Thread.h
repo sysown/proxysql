@@ -99,12 +99,6 @@ public:
 			 * from regular MCP usage.
 			 */
 			bool mcp_stats_enable_debug_tools;
-		// MySQL Tool Handler configuration
-		char* mcp_mysql_hosts;                  ///< Comma-separated list of MySQL hosts
-		char* mcp_mysql_ports;                  ///< Comma-separated list of MySQL ports
-		char* mcp_mysql_user;                   ///< MySQL username for tool connections
-		char* mcp_mysql_password;               ///< MySQL password for tool connections
-		char* mcp_mysql_schema;                 ///< Default schema/database
 		// Catalog path is hardcoded to mcp_catalog.db in the datadir
 	} variables;
 
