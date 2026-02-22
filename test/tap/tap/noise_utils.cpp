@@ -284,17 +284,19 @@ void internal_noise_prometheus_poller(const CommandLine& cl, const NoiseOptions&
 }
 
 void internal_noise_mysql_traffic_v2(const CommandLine& cl, const NoiseOptions& opt, std::atomic<bool>& stop) {
-    std::string tablename = get_opt_str(opt, "tablename", "mysql_noise_test");
+    std::string base_tablename = get_opt_str(opt, "tablename", "mysql_noise_test");
+    int num_tables = get_opt_int(opt, "num_tables", 4);
     int num_connections = get_opt_int(opt, "num_connections", 20);
     int reconnect_interval = get_opt_int(opt, "reconnect_interval", 200);
     if (reconnect_interval <= 0) reconnect_interval = 1;
     int max_retries = get_opt_int(opt, "max_retries", 5);
     int avg_delay_ms = get_opt_int(opt, "avg_delay_ms", 200);
+    std::string protocol = get_opt_str(opt, "protocol", "mix"); // text, binary, mix
 
     const char* my_user = cl.root_username[0] ? cl.root_username : "root";
     const char* my_pass = cl.root_password[0] ? cl.root_password : "";
 
-    // --- Phase A: Ensure table exists ---
+    // --- Phase A & B: Ensure tables exist and are populated ---
     MYSQL* setup_conn = mysql_init(NULL);
     if (!mysql_real_connect(setup_conn, cl.host, my_user, my_pass, NULL, cl.port, NULL, 0)) {
         noise_log("[NOISE] MySQL Traffic v2: Setup connection failure: " + std::string(mysql_error(setup_conn)) + "\n");
@@ -304,45 +306,39 @@ void internal_noise_mysql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
     }
 
     mysql_query(setup_conn, "CREATE DATABASE IF NOT EXISTS test");
-    if (mysql_query(setup_conn, "USE test")) {
-        noise_log("[NOISE] MySQL Traffic v2: USE test failed: " + std::string(mysql_error(setup_conn)) + "\n");
-    }
+    mysql_query(setup_conn, "USE test");
 
-    std::string create_sql = "CREATE TABLE IF NOT EXISTS " + tablename + " (id INT AUTO_INCREMENT PRIMARY KEY, val TEXT, counter INT)";
-    if (mysql_query(setup_conn, create_sql.c_str())) {
-        noise_log("[NOISE] MySQL Traffic v2: Table creation failed: " + std::string(mysql_error(setup_conn)) + "\n");
-        mysql_close(setup_conn);
-        register_noise_failure("MySQL Traffic v2 (Create)");
-        return;
-    }
-    noise_log("[NOISE] MySQL Traffic v2: Table test." + tablename + " verified\n");
+    std::vector<std::string> tablenames;
+    for (int t = 1; t <= num_tables; ++t) {
+        std::string tablename = base_tablename + "_" + std::to_string(t);
+        tablenames.push_back(tablename);
 
-    // --- Phase B: Ensure 10,000 rows ---
-    while (!stop) {
-        std::string count_sql = "SELECT COUNT(*) FROM " + tablename;
-        if (mysql_query(setup_conn, count_sql.c_str()) == 0) {
-            MYSQL_RES* res = mysql_store_result(setup_conn);
-            MYSQL_ROW row = mysql_fetch_row(res);
-            long current_rows = row ? std::stol(row[0]) : 0;
-            mysql_free_result(res);
+        std::string create_sql = "CREATE TABLE IF NOT EXISTS " + tablename + " (id INT AUTO_INCREMENT PRIMARY KEY, val TEXT, counter INT)";
+        if (mysql_query(setup_conn, create_sql.c_str())) {
+            noise_log("[NOISE] MySQL Traffic v2: Table creation failed for " + tablename + ": " + std::string(mysql_error(setup_conn)) + "\n");
+            continue;
+        }
 
-            if (current_rows < 10000) {
-                noise_log("[NOISE] MySQL Traffic v2: " + std::to_string(current_rows) + " rows found, adding 5000...\n");
-                std::string insert_sql = "INSERT INTO " + tablename + " (val, counter) VALUES ";
-                for (int i = 0; i < 5000; ++i) {
-                    insert_sql += "('noise_data', " + std::to_string(i) + ")";
-                    if (i < 4999) insert_sql += ",";
-                }
-                if (mysql_query(setup_conn, insert_sql.c_str())) {
-                    noise_log("[NOISE] MySQL Traffic v2: Row insertion failed: " + std::string(mysql_error(setup_conn)) + "\n");
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            } else {
-                break;
-            }
-        } else {
-            noise_log("[NOISE] MySQL Traffic v2: Row count failed: " + std::string(mysql_error(setup_conn)) + "\n");
-            break;
+        while (!stop) {
+            std::string count_sql = "SELECT COUNT(*) FROM " + tablename;
+            if (mysql_query(setup_conn, count_sql.c_str()) == 0) {
+                MYSQL_RES* res = mysql_store_result(setup_conn);
+                MYSQL_ROW row = mysql_fetch_row(res);
+                long current_rows = row ? std::stol(row[0]) : 0;
+                mysql_free_result(res);
+
+                if (current_rows < 10000) {
+                    std::string insert_sql = "INSERT INTO " + tablename + " (val, counter) VALUES ";
+                    for (int i = 0; i < 5000; ++i) {
+                        insert_sql += "('noise_data', " + std::to_string(i) + ")";
+                        if (i < 4999) insert_sql += ",";
+                    }
+                    if (mysql_query(setup_conn, insert_sql.c_str())) {
+                        noise_log("[NOISE] MySQL Traffic v2: Row insertion failed for " + tablename + "\n");
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                } else break;
+            } else break;
         }
     }
     mysql_close(setup_conn);
@@ -356,56 +352,72 @@ void internal_noise_mysql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
     std::vector<std::thread> workers;
 
     for (int i = 0; i < num_connections; ++i) {
-        workers.emplace_back([&, my_user, my_pass, tablename, reconnect_interval, avg_delay_ms]() {
+        workers.emplace_back([&, my_user, my_pass, tablenames, reconnect_interval, avg_delay_ms, protocol]() {
             MYSQL* conn = nullptr;
             uint64_t worker_queries = 0;
             std::random_device rd;
             std::mt19937 gen(rd());
             std::uniform_int_distribution<> op_dist(0, 3);
             std::uniform_int_distribution<> id_dist(1, 10000);
+            std::uniform_int_distribution<> table_dist(0, tablenames.size() - 1);
+            std::uniform_int_distribution<> proto_dist(0, 1);
 
             int min_delay = avg_delay_ms / 2;
             int max_delay = avg_delay_ms + (avg_delay_ms / 2);
             if (min_delay < 1) min_delay = 1;
             std::uniform_int_distribution<> delay_dist(min_delay, max_delay);
 
-            std::uniform_int_distribution<> start_dist(0, 500);
-            std::this_thread::sleep_for(std::chrono::milliseconds(start_dist(gen)));
-
             auto connect = [&]() {
-                if (conn) {
-                    mysql_close(conn);
-                    total_connections_closed++;
-                }
+                if (conn) { mysql_close(conn); total_connections_closed++; }
                 conn = mysql_init(NULL);
-                if (mysql_real_connect(conn, cl.host, my_user, my_pass, NULL, cl.port, NULL, 0)) {
+                if (mysql_real_connect(conn, cl.host, my_user, my_pass, "test", cl.port, NULL, 0)) {
                     total_connections_opened++;
-                    mysql_query(conn, "USE test");
                     return true;
                 }
                 return false;
             };
 
-            if (!connect()) {
-                noise_log("[NOISE] MySQL Traffic v2: Worker failed initial connection\n");
-                return;
-            }
+            if (!connect()) return;
 
             while (!stop) {
                 int op = op_dist(gen);
-                std::string sql;
+                std::string table = tablenames[table_dist(gen)];
                 int target_id = id_dist(gen);
+                bool use_binary = (protocol == "binary") || (protocol == "mix" && proto_dist(gen) == 1);
 
-                switch (op) {
-                    case 0: sql = "SELECT * FROM " + tablename + " WHERE id = " + std::to_string(target_id); break;
-                    case 1: sql = "INSERT INTO " + tablename + " (val, counter) VALUES ('extra_noise', " + std::to_string(target_id) + ")"; break;
-                    case 2: sql = "UPDATE " + tablename + " SET counter = counter + 1 WHERE id = " + std::to_string(target_id); break;
-                    case 3: sql = "DELETE FROM " + tablename + " WHERE id = " + std::to_string(target_id); break;
-                }
-
-                if (mysql_query(conn, sql.c_str()) == 0) {
-                    MYSQL_RES* r = mysql_store_result(conn);
-                    if (r) mysql_free_result(r);
+                if (!use_binary) {
+                    std::string sql;
+                    switch (op) {
+                        case 0: sql = "SELECT * FROM " + table + " WHERE id = " + std::to_string(target_id); break;
+                        case 1: sql = "INSERT INTO " + table + " (val, counter) VALUES ('extra_noise', " + std::to_string(target_id) + ")"; break;
+                        case 2: sql = "UPDATE " + table + " SET counter = counter + 1 WHERE id = " + std::to_string(target_id); break;
+                        case 3: sql = "DELETE FROM " + table + " WHERE id = " + std::to_string(target_id); break;
+                    }
+                    if (mysql_query(conn, sql.c_str()) == 0) {
+                        MYSQL_RES* r = mysql_store_result(conn);
+                        if (r) mysql_free_result(r);
+                    }
+                } else {
+                    // Binary protocol (Prepared Statements)
+                    std::string sql;
+                    switch (op) {
+                        case 0: sql = "SELECT * FROM " + table + " WHERE id = ?"; break;
+                        case 1: sql = "INSERT INTO " + table + " (val, counter) VALUES ('binary_noise', ?)"; break;
+                        case 2: sql = "UPDATE " + table + " SET counter = counter + 1 WHERE id = ?"; break;
+                        case 3: sql = "DELETE FROM " + table + " WHERE id = ?"; break;
+                    }
+                    MYSQL_STMT* stmt = mysql_stmt_init(conn);
+                    if (stmt) {
+                        if (mysql_stmt_prepare(stmt, sql.c_str(), sql.length()) == 0) {
+                            MYSQL_BIND bind[1];
+                            memset(bind, 0, sizeof(bind));
+                            bind[0].buffer_type = MYSQL_TYPE_LONG;
+                            bind[0].buffer = (char*)&target_id;
+                            mysql_stmt_bind_param(stmt, bind);
+                            mysql_stmt_execute(stmt);
+                        }
+                        mysql_stmt_close(stmt);
+                    }
                 }
                 
                 worker_queries++;
@@ -414,13 +426,9 @@ void internal_noise_mysql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
                 if (worker_queries % reconnect_interval == 0) {
                     if (!connect()) break;
                 }
-
                 std::this_thread::sleep_for(std::chrono::milliseconds(delay_dist(gen)));
             }
-            if (conn) {
-                mysql_close(conn);
-                total_connections_closed++;
-            }
+            if (conn) { mysql_close(conn); total_connections_closed++; }
         });
     }
 
@@ -678,12 +686,14 @@ void internal_noise_pgsql_traffic(const CommandLine& cl, const NoiseOptions& opt
 }
 
 void internal_noise_pgsql_traffic_v2(const CommandLine& cl, const NoiseOptions& opt, std::atomic<bool>& stop) {
-    std::string tablename = get_opt_str(opt, "tablename", "pgsql_noise_test");
+    std::string base_tablename = get_opt_str(opt, "tablename", "pgsql_noise_test");
+    int num_tables = get_opt_int(opt, "num_tables", 4);
     int num_connections = get_opt_int(opt, "num_connections", 20);
     int reconnect_interval = get_opt_int(opt, "reconnect_interval", 200);
     if (reconnect_interval <= 0) reconnect_interval = 1;
     int max_retries = get_opt_int(opt, "max_retries", 5);
     int avg_delay_ms = get_opt_int(opt, "avg_delay_ms", 200);
+    std::string protocol = get_opt_str(opt, "protocol", "mix"); // text, binary, mix
 
     const char* pg_user = cl.pgsql_root_username[0] ? cl.pgsql_root_username : "postgres";
     const char* pg_pass = cl.pgsql_root_password[0] ? cl.pgsql_root_password : "postgres";
@@ -693,7 +703,7 @@ void internal_noise_pgsql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
                            " user=" + std::string(pg_user) + " password=" + std::string(pg_pass) +
                            " dbname=postgres connect_timeout=5";
 
-    // --- Phase A: Ensure table exists ---
+    // --- Phase A & B: Ensure tables exist and are populated ---
     PGconn* setup_conn = PQconnectdb(conninfo.c_str());
     if (PQstatus(setup_conn) != CONNECTION_OK) {
         noise_log("[NOISE] PgSQL Traffic v2: Setup connection failure: " + std::string(PQerrorMessage(setup_conn)) + "\n");
@@ -702,72 +712,69 @@ void internal_noise_pgsql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
         return;
     }
 
-    // Explicitly set search_path to public to avoid permission issues in some environments
     pg_noise_query(setup_conn, "SET search_path TO public");
 
-    char* escaped_tablename = PQescapeIdentifier(setup_conn, tablename.c_str(), tablename.length());
-    std::string safe_tablename = escaped_tablename ? escaped_tablename : tablename;
+    std::vector<std::string> safe_tablenames;
+    std::vector<char*> escaped_identifiers;
 
-    std::string check_table = "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '" + tablename + "'";
-    PGresult* res = PQexec(setup_conn, check_table.c_str());
-    if (PQresultStatus(res) != PGRES_TUPLES_OK) {
-        noise_log("[NOISE] PgSQL Traffic v2: Table verification query failed: " + std::string(PQresultErrorMessage(res)) + "\n");
-        PQclear(res);
-        PQfinish(setup_conn);
-        register_noise_failure("PgSQL Traffic v2 (Verification)");
-        return;
-    }
-
-    if (PQntuples(res) == 0) {
-        PQclear(res);
-        noise_log("[NOISE] PgSQL Traffic v2: Creating table " + tablename + "\n");
-        std::string create_sql = "CREATE TABLE " + safe_tablename + " (id SERIAL PRIMARY KEY, val TEXT, counter INT)";
-        res = PQexec(setup_conn, create_sql.c_str());
-        if (PQresultStatus(res) != PGRES_COMMAND_OK) {
-            noise_log("[NOISE] PgSQL Traffic v2: Table creation failed: " + std::string(PQresultErrorMessage(res)) + "\n");
+    for (int t = 1; t <= num_tables; ++t) {
+        std::string tablename = base_tablename + "_" + std::to_string(t);
+        char* escaped = PQescapeIdentifier(setup_conn, tablename.c_str(), tablename.length());
+        if (escaped) {
+            safe_tablenames.push_back(escaped);
+            escaped_identifiers.push_back(escaped);
         } else {
-            noise_log("[NOISE] PgSQL Traffic v2: Table " + tablename + " created successfully\n");
+            safe_tablenames.push_back(tablename);
         }
-        PQclear(res);
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-    } else {
-        noise_log("[NOISE] PgSQL Traffic v2: Table " + tablename + " verified\n");
-        PQclear(res);
-    }
 
-    // --- Phase B: Ensure 10,000 rows ---
-    while (!stop) {
-        std::string count_sql = "SELECT COUNT(*) FROM " + safe_tablename;
-        res = PQexec(setup_conn, count_sql.c_str());
-        if (PQresultStatus(res) == PGRES_TUPLES_OK) {
-            long current_rows = 0;
-            try {
-                current_rows = std::stol(PQgetvalue(res, 0, 0));
-            } catch (...) {
-                current_rows = 0;
+        std::string check_table = "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '" + tablename + "'";
+        PGresult* res = PQexec(setup_conn, check_table.c_str());
+        if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+            noise_log("[NOISE] PgSQL Traffic v2: Table verification failed for " + tablename + ": " + std::string(PQresultErrorMessage(res)) + "\n");
+            PQclear(res);
+            continue;
+        }
+
+        if (PQntuples(res) == 0) {
+            PQclear(res);
+            noise_log("[NOISE] PgSQL Traffic v2: Creating table " + tablename + "\n");
+            std::string create_sql = "CREATE TABLE " + safe_tablenames.back() + " (id SERIAL PRIMARY KEY, val TEXT, counter INT)";
+            res = PQexec(setup_conn, create_sql.c_str());
+            if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+                noise_log("[NOISE] PgSQL Traffic v2: Table creation failed for " + tablename + ": " + std::string(PQresultErrorMessage(res)) + "\n");
             }
             PQclear(res);
-            if (current_rows < 10000) {
-                noise_log("[NOISE] PgSQL Traffic v2: " + std::to_string(current_rows) + " rows found, adding 5000...\n");
-                std::string insert_sql = "INSERT INTO " + safe_tablename + " (val, counter) SELECT 'noise_data', generate_series(1, 5000)";
-                res = PQexec(setup_conn, insert_sql.c_str());
-                if (PQresultStatus(res) != PGRES_COMMAND_OK) {
-                    noise_log("[NOISE] PgSQL Traffic v2: Row insertion failed: " + std::string(PQresultErrorMessage(res)) + "\n");
-                }
-                PQclear(res);
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            } else {
-                break;
-            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         } else {
-            noise_log("[NOISE] PgSQL Traffic v2: Row count failed: " + std::string(PQresultErrorMessage(res)) + "\n");
             PQclear(res);
-            break;
+        }
+
+        // Ensure rows
+        while (!stop) {
+            std::string count_sql = "SELECT COUNT(*) FROM " + safe_tablenames.back();
+            res = PQexec(setup_conn, count_sql.c_str());
+            if (PQresultStatus(res) == PGRES_TUPLES_OK) {
+                long current_rows = 0;
+                try { current_rows = std::stol(PQgetvalue(res, 0, 0)); } catch (...) {}
+                PQclear(res);
+                if (current_rows < 10000) {
+                    std::string insert_sql = "INSERT INTO " + safe_tablenames.back() + " (val, counter) SELECT 'noise_data', generate_series(1, 5000)";
+                    res = PQexec(setup_conn, insert_sql.c_str());
+                    if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+                        noise_log("[NOISE] PgSQL Traffic v2: Row insertion failed for " + tablename + "\n");
+                    }
+                    PQclear(res);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                } else break;
+            } else { PQclear(res); break; }
         }
     }
     PQfinish(setup_conn);
 
-    if (stop) return;
+    if (stop) {
+        for (char* ptr : escaped_identifiers) PQfreemem(ptr);
+        return;
+    }
 
     // --- Phase C, D, E: Multi-threaded load ---
     std::atomic<uint64_t> total_queries{0};
@@ -776,30 +783,23 @@ void internal_noise_pgsql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
     std::vector<std::thread> workers;
 
     for (int i = 0; i < num_connections; ++i) {
-        workers.emplace_back([&, conninfo, safe_tablename, reconnect_interval, avg_delay_ms]() {
+        workers.emplace_back([&, conninfo, safe_tablenames, reconnect_interval, avg_delay_ms, protocol]() {
             PGconn* conn = nullptr;
             uint64_t worker_queries = 0;
             std::random_device rd;
             std::mt19937 gen(rd());
             std::uniform_int_distribution<> op_dist(0, 3);
             std::uniform_int_distribution<> id_dist(1, 10000);
+            std::uniform_int_distribution<> table_dist(0, safe_tablenames.size() - 1);
+            std::uniform_int_distribution<> proto_dist(0, 1);
 
-            // Range is +/- 50% of average
             int min_delay = avg_delay_ms / 2;
             int max_delay = avg_delay_ms + (avg_delay_ms / 2);
             if (min_delay < 1) min_delay = 1;
             std::uniform_int_distribution<> delay_dist(min_delay, max_delay);
 
-            std::uniform_int_distribution<> start_dist(0, 500);
-
-            // Staggered start
-            std::this_thread::sleep_for(std::chrono::milliseconds(start_dist(gen)));
-
             auto connect = [&]() {
-                if (conn) {
-                    PQfinish(conn);
-                    total_connections_closed++;
-                }
+                if (conn) { PQfinish(conn); total_connections_closed++; }
                 conn = PQconnectdb(conninfo.c_str());
                 if (PQstatus(conn) == CONNECTION_OK) {
                     total_connections_opened++;
@@ -809,47 +809,49 @@ void internal_noise_pgsql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
                 return false;
             };
 
-            if (!connect()) {
-                noise_log("[NOISE] PgSQL Traffic v2: Worker failed initial connection\n");
-                return;
-            }
+            if (!connect()) return;
 
             while (!stop) {
                 int op = op_dist(gen);
-                std::string sql;
+                std::string table = safe_tablenames[table_dist(gen)];
                 int target_id = id_dist(gen);
+                bool use_binary = (protocol == "binary") || (protocol == "mix" && proto_dist(gen) == 1);
 
-                switch (op) {
-                    case 0: // SELECT
-                        sql = "SELECT * FROM " + safe_tablename + " WHERE id = " + std::to_string(target_id);
-                        break;
-                    case 1: // INSERT
-                        sql = "INSERT INTO " + safe_tablename + " (val, counter) VALUES ('extra_noise', " + std::to_string(target_id) + ")";
-                        break;
-                    case 2: // UPDATE
-                        sql = "UPDATE " + safe_tablename + " SET counter = counter + 1 WHERE id = " + std::to_string(target_id);
-                        break;
-                    case 3: // DELETE
-                        sql = "DELETE FROM " + safe_tablename + " WHERE id = " + std::to_string(target_id);
-                        break;
+                PGresult* r = nullptr;
+                if (!use_binary) {
+                    std::string sql;
+                    switch (op) {
+                        case 0: sql = "SELECT * FROM " + table + " WHERE id = " + std::to_string(target_id); break;
+                        case 1: sql = "INSERT INTO " + table + " (val, counter) VALUES ('extra_noise', " + std::to_string(target_id) + ")"; break;
+                        case 2: sql = "UPDATE " + table + " SET counter = counter + 1 WHERE id = " + std::to_string(target_id); break;
+                        case 3: sql = "DELETE FROM " + table + " WHERE id = " + std::to_string(target_id); break;
+                    }
+                    r = PQexec(conn, sql.c_str());
+                } else {
+                    // Extended protocol
+                    const char* paramValues[1];
+                    std::string id_str = std::to_string(target_id);
+                    paramValues[0] = id_str.c_str();
+                    std::string sql;
+                    switch (op) {
+                        case 0: sql = "SELECT * FROM " + table + " WHERE id = $1"; break;
+                        case 1: sql = "INSERT INTO " + table + " (val, counter) VALUES ('binary_noise', $1)"; break;
+                        case 2: sql = "UPDATE " + table + " SET counter = counter + 1 WHERE id = $1"; break;
+                        case 3: sql = "DELETE FROM " + table + " WHERE id = $1"; break;
+                    }
+                    r = PQexecParams(conn, sql.c_str(), 1, NULL, paramValues, NULL, NULL, 0);
                 }
 
-                PGresult* r = PQexec(conn, sql.c_str());
                 if (r) PQclear(r);
-                
                 worker_queries++;
                 total_queries++;
 
                 if (worker_queries % reconnect_interval == 0) {
                     if (!connect()) break;
                 }
-
                 std::this_thread::sleep_for(std::chrono::milliseconds(delay_dist(gen)));
             }
-            if (conn) {
-                PQfinish(conn);
-                total_connections_closed++;
-            }
+            if (conn) { PQfinish(conn); total_connections_closed++; }
         });
     }
 
@@ -857,7 +859,7 @@ void internal_noise_pgsql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
         if (w.joinable()) w.join();
     }
 
-    if (escaped_tablename) PQfreemem(escaped_tablename);
+    for (char* ptr : escaped_identifiers) PQfreemem(ptr);
 
     noise_log("[NOISE] PgSQL Traffic v2 report: total_queries=" + std::to_string(total_queries) + 
               ", total_connections_opened=" + std::to_string(total_connections_opened) + 
