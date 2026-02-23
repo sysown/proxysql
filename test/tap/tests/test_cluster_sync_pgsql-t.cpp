@@ -57,7 +57,7 @@ using std::string;
 
 int check_pgsql_servers_v2_sync(
 	const CommandLine& cl, MYSQL* proxy_admin, MYSQL* r_proxy_admin,
-	const vector<std::tuple<int, string, int, string, int, int, int, int, int, int, int, string>>& insert_pgsql_servers_values
+	const vector<std::tuple<int, string, int, string, int, int, int, int, int, int, string>>& insert_pgsql_servers_values
 ) {
 	// Configure 'pgsql_servers_v2' and check sync with NULL comments
 	const char* t_insert_pgsql_servers =
@@ -82,7 +82,7 @@ int check_pgsql_servers_v2_sync(
 			std::get<7>(values),  // max_replication_lag
 			std::get<8>(values),  // use_ssl
 			std::get<9>(values),  // max_latency_ms
-			std::get<11>(values).c_str()  // comment
+			std::get<10>(values).c_str()  // comment
 		);
 		insert_pgsql_servers_queries.push_back(insert_pgsql_servers_query);
 	}
@@ -124,7 +124,7 @@ int check_pgsql_servers_v2_sync(
 			std::get<7>(values),
 			std::get<8>(values),
 			std::get<9>(values),
-			std::get<11>(values).c_str()
+			std::get<10>(values).c_str()
 		);
 
 		// Check on replica
@@ -253,17 +253,22 @@ int main(int argc, char** argv) {
 
 		MYSQL_QUERY(proxysql_admin, query);
 		MYSQL_RES* result = mysql_store_result(proxysql_admin);
-		if (!result || mysql_num_rows(result) == 0) {
+		if (!result) {
+			diag("Failed to store result from query: %s", query);
+			ok(false, "PostgreSQL checksum '%s' found in runtime_checksums_values", checksum_name);
+			continue;
+		}
+		if (mysql_num_rows(result) == 0) {
 			diag("No results returned from query: %s", query);
-			if (result) {
-				mysql_free_result(result);
-			}
+			mysql_free_result(result);
+			ok(false, "PostgreSQL checksum '%s' found in runtime_checksums_values", checksum_name);
 			continue;
 		}
 		MYSQL_ROW row = mysql_fetch_row(result);
 		if (!row) {
 			diag("Failed to fetch row from result");
 			mysql_free_result(result);
+			ok(false, "PostgreSQL checksum '%s' found in runtime_checksums_values", checksum_name);
 			continue;
 		}
 		int count = atoi(row[0]);
@@ -328,8 +333,8 @@ int main(int argc, char** argv) {
 				sync_ok = false;
 				sync_msg = "Failed to connect to replica admin for PostgreSQL sync check";
 			} else {
-				const vector<std::tuple<int, string, int, string, int, int, int, int, int, int, int, string>> pgsql_servers_values {
-					{ 801, "127.0.0.1", 15432, "ONLINE", 1, 0, 200, 0, 0, 1000, 0, "cluster_sync_pgsql_test" }
+				const vector<std::tuple<int, string, int, string, int, int, int, int, int, int, string>> pgsql_servers_values {
+					{ 801, "127.0.0.1", 15432, "ONLINE", 1, 0, 200, 0, 0, 1000, "cluster_sync_pgsql_test" }
 				};
 				const int sync_res = check_pgsql_servers_v2_sync(cl, proxysql_admin, replica_admin, pgsql_servers_values);
 				sync_ok = (sync_res == EXIT_SUCCESS);

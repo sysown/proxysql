@@ -4849,8 +4849,14 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			checksum_variables.checksum_pgsql_variables=false;
 			variables.cluster_pgsql_variables_diffs_before_sync = 0;
+			variables.cluster_pgsql_query_rules_diffs_before_sync = 0;
+			variables.cluster_pgsql_servers_diffs_before_sync = 0;
+			variables.cluster_pgsql_users_diffs_before_sync = 0;
 			GloProxyCluster->cluster_pgsql_variables_diffs_before_sync = 0;
-			proxy_warning("Disabling deprecated 'admin-checksum_pgsql_variables', setting 'admin-cluster_pgsql_variables_diffs_before_sync=0'\n");
+			GloProxyCluster->cluster_pgsql_query_rules_diffs_before_sync = 0;
+			GloProxyCluster->cluster_pgsql_servers_diffs_before_sync = 0;
+			GloProxyCluster->cluster_pgsql_users_diffs_before_sync = 0;
+			proxy_warning("Disabling deprecated 'admin-checksum_pgsql_variables', setting all 'admin-cluster_pgsql_*_diffs_before_sync=0'\n");
 			return true;
 		}
 		return false;
