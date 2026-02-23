@@ -8,7 +8,7 @@
 
 #define PROXYSQL_EXTERN
 #define EXCLUDE_TRACKING_VARIABLES
-#define MAIN_PROXY_SQLITE3
+// Removed: #define MAIN_PROXY_SQLITE3  // libproxysql.a now provides canonical definitions
 
 #include <memory>
 #include <cstdint>

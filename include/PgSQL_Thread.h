@@ -228,9 +228,9 @@ public:
 #ifdef IDLE_THREADS
 	PtrArray* idle_mysql_sessions;
 	PtrArray* resume_mysql_sessions;
-	CopyCmdMatcher *copy_cmd_matcher;
 	pgsql_conn_exchange_t myexchange;
 #endif // IDLE_THREADS
+	CopyCmdMatcher *copy_cmd_matcher;
 
 	int pipefd[2];
 	PgSQL_Session_Interrupt_Queue_t sess_intrpt_queue;
@@ -1026,10 +1026,21 @@ public:
 		int poll_timeout_on_failure;
 		char* eventslog_filename;
 		int eventslog_filesize;
+		/** @brief Circular buffer size for PostgreSQL advanced events logging. */
+		int eventslog_buffer_history_size;
+		/** @brief Maximum rows retained in stats_pgsql_query_events in-memory table. */
+		int eventslog_table_memory_size;
+		/** @brief Maximum query length copied into PostgreSQL eventslog circular buffer. */
+		int eventslog_buffer_max_query_length;
 		int eventslog_default_log;
 		int eventslog_format;
+		int eventslog_flush_timeout;
+ 		int eventslog_flush_size;
+ 		int eventslog_rate_limit;
 		char* auditlog_filename;
 		int auditlog_filesize;
+		int auditlog_flush_timeout;
+ 		int auditlog_flush_size;
 		// SSL related, proxy to server
 		char* ssl_p2s_ca;
 		char* ssl_p2s_capath;
