@@ -652,7 +652,7 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 	// comments are not copied by while processed, boundary checks should rely on 'q_cur_pos' and 'q_len'.
 	if (shared_st->q_cur_pos <= (shared_st->q_len-2) && *shared_st->q == '/' && *(shared_st->q+1) == '*') {
 
-		if (c_t_1_st->nest_level == 0)
+		if (c_t_1_st->nest_level == 0) 
 			c_t_1_st->cur_cmd_cmnt_len = 0;
 
 		// Increment nesting level /*
@@ -677,15 +677,9 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 			c_t_1_st->fst_cmnt_len += 2;
 		}
 
-		// check for optimizer hint marker /*+
-		int is_optimizer_hint = 0;
-		if (shared_st->q_cur_pos <= (shared_st->q_len-3) && *(shared_st->q+2) == '+') {
-			is_optimizer_hint = 1;
-		}
-
-		// discard processed "/*" or "/*+"
-		shared_st->q += 2 + is_optimizer_hint;
-		shared_st->q_cur_pos += 2 + is_optimizer_hint;
+		// discard processed "/*"
+		shared_st->q += 2;
+		shared_st->q_cur_pos += 2;
 
 		// v1_crashing_payload_04
 		if (shared_st->q_cur_pos >= shared_st->q_len - 1) {
