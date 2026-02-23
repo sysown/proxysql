@@ -87,10 +87,11 @@ void diag_log_tail(const std::string& path, size_t max_lines) {
  * @brief Execute one cap-churn profile as a child process.
  *
  * @param profile Churn configuration.
+ * @param workdir Directory containing the test executables.
  * @param log_path Output log path used by the child command.
  * @return Normalized child exit code.
  */
-int run_churn_profile(const churn_profile_t& profile, std::string& log_path) {
+int run_churn_profile(const churn_profile_t& profile, const std::string& workdir, std::string& log_path) {
 	std::ostringstream log_name;
 	log_name << "/tmp/mcp_mixed_cap_churn_" << profile.name << "_" << getpid() << ".log";
 	log_path = log_name.str();
@@ -104,7 +105,7 @@ int run_churn_profile(const churn_profile_t& profile, std::string& log_path) {
 	    << "MCP_MIXED_STRESS_SHOW_QUERIES_CAP=" << profile.show_queries_cap << " "
 	    << "MCP_MIXED_STRESS_ENABLE_CAP_CHURN=1 "
 	    << "MCP_MIXED_STRESS_CAP_CHURN_INTERVAL_MS=" << profile.churn_interval_ms << " "
-	    << "./mcp_mixed_mysql_pgsql_concurrency_stress-t"
+	    << workdir << "/mcp_mixed_mysql_pgsql_concurrency_stress-t"
 	    << " > " << log_path << " 2>&1";
 
 	const int rc = std::system(cmd.str().c_str());
@@ -124,7 +125,14 @@ int main() {
 	diag("that MCP stats remains stable when cap variables change dynamically under load.");
 	diag("=======================================");
 
-	const bool child_available = (access("./mcp_mixed_mysql_pgsql_concurrency_stress-t", X_OK) == 0);
+	const char* workdir = getenv("TAP_WORKDIR");
+	if (!workdir) {
+		diag("Failed to get TAP_WORKDIR environment variable.");
+		return EXIT_FAILURE;
+	}
+
+	const std::string child_binary = std::string(workdir) + "/mcp_mixed_mysql_pgsql_concurrency_stress-t";
+	const bool child_available = (access(child_binary.c_str(), X_OK) == 0);
 	ok(child_available, "Child mixed-stress binary is available");
 	if (!child_available) {
 		skip(3, "Cannot run cap-churn scenarios without child mixed-stress binary");
@@ -139,7 +147,7 @@ int main() {
 	bool all_ok = true;
 	for (const auto& profile : profiles) {
 		std::string log_path;
-		const int exit_code = run_churn_profile(profile, log_path);
+		const int exit_code = run_churn_profile(profile, workdir, log_path);
 		const bool passed = (exit_code == 0);
 		ok(
 			passed,
