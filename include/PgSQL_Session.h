@@ -419,7 +419,7 @@ private:
 	 *
 	 * @return void.
 	 */
-	void switch_normal_to_fast_forward_mode(PtrSize_t& pkt, std::string_view command, SESSION_FORWARD_TYPE session_type);
+	bool switch_normal_to_fast_forward_mode(PtrSize_t& pkt, std::string_view command, SESSION_FORWARD_TYPE session_type);
 
 	/**
 	 * @brief Switches session from fast forward mode to normal mode.

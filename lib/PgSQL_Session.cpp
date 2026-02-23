@@ -2259,6 +2259,23 @@ __implicit_sync:
 							}
 						}
 							break;
+						// Handle PostgreSQL COPY protocol frontend messages that may arrive
+						// after an error during COPY FROM STDIN caused a switch back to normal mode.
+						//
+						// Race condition scenario:
+						// 1. COPY FROM STDIN starts -> session switches to fast_forward mode
+						// 2. Backend returns error during COPY -> session switches back to normal mode
+						// 3. Client has already pipelined CopyData('d')/CopyDone('c')/CopyFail('f') messages
+						// 4. These messages are now in the queue but session is no longer in fast_forward
+						//
+						// These messages are meant for fast_forward mode. Simply ignore them.
+						case 'd':
+						case 'c':
+						case 'f':
+							proxy_debug(PROXY_DEBUG_NET, 5, "Ignoring late COPY protocol message '%c' from client - COPY operation already terminated, session no longer in fast_forward mode\n", c);
+							l_free(pkt.size, pkt.ptr);
+							pkt = { 0, nullptr };
+							break;
 						default:
 							proxy_error("Not implemented yet. Message type:'%c'\n", c);
 							client_myds->setDSS_STATE_QUERY_SENT_NET();
@@ -2934,7 +2951,15 @@ handler_again:
 						goto __exit_DSS__STATE_NOT_INITIALIZED;
 					}
 
-					switch_normal_to_fast_forward_mode(pkt, std::string(matched.data(), matched.size()), SESSION_FORWARD_TYPE_COPY_FROM_STDIN_STDOUT);
+					if (!switch_normal_to_fast_forward_mode(pkt, std::string(matched.data(), matched.size()), SESSION_FORWARD_TYPE_COPY_FROM_STDIN_STDOUT)) {
+						// Failed to switch to fast forward mode due to pending packets
+						client_myds->setDSS_STATE_QUERY_SENT_NET();
+						client_myds->myprot.generate_error_packet(true, true, "Unexpected packet sequence during COPY command",
+							PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, false, true);
+						RequestEnd(myds, true);
+						finishQuery(myds, myconn, false);
+						goto __exit_DSS__STATE_NOT_INITIALIZED;
+					}
 					break;
 				}
 			}
@@ -5632,9 +5657,17 @@ void PgSQL_Session::set_previous_status_mode3(bool allow_execute) {
 	}
 }
 
-void PgSQL_Session::switch_normal_to_fast_forward_mode(PtrSize_t& pkt, std::string_view command, SESSION_FORWARD_TYPE session_type) {
+bool PgSQL_Session::switch_normal_to_fast_forward_mode(PtrSize_t& pkt, std::string_view command, SESSION_FORWARD_TYPE session_type) {
 
-	if (session_fast_forward || session_type == SESSION_FORWARD_TYPE_PERMANENT) return;
+	if (session_fast_forward || session_type == SESSION_FORWARD_TYPE_PERMANENT) return true;
+
+	// Check if there are pending packets in client_myds->PSarrayIN
+	// This is an error condition, we cannot switch to fast forward mode
+	if (client_myds->PSarrayIN->len) {
+		proxy_error("Cannot switch to fast forward mode: unexpected pending packets in client_myds->PSarrayIN (len=%d). Command: %s\n",
+			client_myds->PSarrayIN->len, command.data());
+		return false;
+	}
 
 	// we use a switch to write the command in the info message
 	std::string client_info;
@@ -5645,11 +5678,6 @@ void PgSQL_Session::switch_normal_to_fast_forward_mode(PtrSize_t& pkt, std::stri
 	proxy_info("Received command '%s'%s. Switching to Fast Forward mode (Session Type:0x%02X)\n",
 		command.data(), client_info.c_str(), session_type);
 	session_fast_forward = session_type;
-
-	if (client_myds->PSarrayIN->len) {
-		proxy_error("UNEXPECTED PACKET FROM CLIENT -- PLEASE REPORT A BUG\n");
-		assert(0);
-	}
 
 	mybe->server_myds->reinit_queues(); // reinitialize the queues in the myds . By default, they are not active
 	// We reinitialize the 'wait_until' since this session shouldn't wait for processing as
@@ -5690,6 +5718,8 @@ void PgSQL_Session::switch_normal_to_fast_forward_mode(PtrSize_t& pkt, std::stri
 	// need to reset mysql_real_query
 	mybe->server_myds->pgsql_real_query.reset();
 	CurrentQuery.end();
+
+	return true;
 }
 
 void PgSQL_Session::switch_fast_forward_to_normal_mode() {
