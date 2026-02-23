@@ -82,6 +82,18 @@ int main(int argc, char** argv) {
 
 	plan(3);
 
+	diag("=== PostgreSQL query_processor_first_comment_parsing Test ===");
+	diag("This test verifies the pgsql-query_processor_first_comment_parsing variable");
+	diag("which controls when comment hints (like /*+ hostgroup=N */) are parsed:");
+	diag("  - Mode 1: Parse comments BEFORE query rules are applied");
+	diag("  - Mode 2: Parse comments AFTER query rules are applied (default)");
+	diag("  - Mode 3: Parse comments both BEFORE and AFTER rules");
+	diag("Note: PostgreSQL doesn't have native optimizer hints like MySQL's /*+ */,");
+	diag("but ProxySQL supports the same hint syntax for consistency across protocols.");
+	diag("The test uses a query rule that strips comments, then verifies that");
+	diag("the hostgroup hint is still correctly parsed when using mode 1 or 3.");
+	diag("=============================================================");
+
 	PGConnPtr admin = createNewConnection(ADMIN);
 	if (!admin) {
 		BAIL_OUT("Failed to connect to admin interface");
@@ -92,6 +104,16 @@ int main(int argc, char** argv) {
 	if (!proxy) {
 		BAIL_OUT("Failed to connect to proxy");
 		return exit_status();
+	}
+
+	// Setup: Create hostgroup 1000 with a backend server for testing comment routing
+	diag("Setup: Creating hostgroup 1000 with backend server");
+	{
+		std::stringstream ss;
+		ss << "INSERT OR REPLACE INTO pgsql_servers (hostgroup_id, hostname, port) VALUES (1000, '"
+		   << cl.pgsql_server_host << "', " << cl.pgsql_server_port << ")";
+		PQclear(PQexec(admin.get(), ss.str().c_str()));
+		PQclear(PQexec(admin.get(), "LOAD PGSQL SERVERS TO RUNTIME"));
 	}
 
 	diag(" ========== Test 1: Default behavior (parsed after rules) ==========");
@@ -119,16 +141,40 @@ int main(int argc, char** argv) {
 	}
 
 	diag(" ========== Test 2: New behavior (parsed before rules) ==========");
-	// TODO: This test currently fails - pgsql-query_processor_first_comment_parsing=1
-	// should parse comments BEFORE rules are applied, but the feature appears
-	// to not be working correctly. Skipping until the issue is resolved.
-	skip(1, "pgsql-query_processor_first_comment_parsing=1 feature not working correctly");
+	{
+		PQclear(PQexec(admin.get(), "SET pgsql-query_processor_first_comment_parsing = 1"));
+		PQclear(PQexec(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME"));
+
+		PQclear(PQexec(admin.get(), "TRUNCATE stats_pgsql_query_digest"));
+
+		diag("Running on Proxy: %s", query);
+		PQclear(PQexec(proxy.get(), query));
+
+		int hg = get_query_hg_from_stats(admin.get(), "SELECT ?");
+		if (hg != -1) {
+			ok(hg == 1000, "Comment SHOULD have been parsed BEFORE it was stripped by rule. hg=%d", hg);
+		} else {
+			ok(0, "Failed to find query in stats (Test 2)");
+		}
+	}
 
 	diag(" ========== Test 3: Both passes (mode 3) ==========");
-	// TODO: This test currently fails - pgsql-query_processor_first_comment_parsing=3
-	// should parse comments in both passes (before and after rules), but the feature
-	// appears to not be working correctly. Skipping until the issue is resolved.
-	skip(1, "pgsql-query_processor_first_comment_parsing=3 feature not working correctly");
+	{
+		PQclear(PQexec(admin.get(), "SET pgsql-query_processor_first_comment_parsing = 3"));
+		PQclear(PQexec(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME"));
+
+		PQclear(PQexec(admin.get(), "TRUNCATE stats_pgsql_query_digest"));
+
+		diag("Running on Proxy: %s", query);
+		PQclear(PQexec(proxy.get(), query));
+
+		int hg = get_query_hg_from_stats(admin.get(), "SELECT ?");
+		if (hg != -1) {
+			ok(hg == 1000, "Comment SHOULD have been parsed (mode 3 parses before rules). hg=%d", hg);
+		} else {
+			ok(0, "Failed to find query in stats (Test 3)");
+		}
+	}
 
 	// Teardown
 	diag("Teardown: restoring defaults");
@@ -136,6 +182,8 @@ int main(int argc, char** argv) {
 	PQclear(PQexec(admin.get(), "LOAD PGSQL QUERY RULES TO RUNTIME"));
 	PQclear(PQexec(admin.get(), "SET pgsql-query_processor_first_comment_parsing = 2"));
 	PQclear(PQexec(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME"));
+	PQclear(PQexec(admin.get(), "DELETE FROM pgsql_servers WHERE hostgroup_id=1000"));
+	PQclear(PQexec(admin.get(), "LOAD PGSQL SERVERS TO RUNTIME"));
 
 	return exit_status();
 }

@@ -595,13 +595,14 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 	enum p_st next_st = st_cmnt_type_1;
 	const char* res_final_pos = shared_st->res_init_pos + shared_st->d_max_len;
 
-	// initial mark "/*|/*!" detection
+	// initial mark "/*|/*!|/*+" detection
 	// comments are not copied by while processed, boundary checks should rely on 'q_cur_pos' and 'q_len'.
 	if (shared_st->q_cur_pos <= (shared_st->q_len-2) && *shared_st->q == '/' && *(shared_st->q+1) == '*') {
 		c_t_1_st->cur_cmd_cmnt_len = 0;
 
 		// check length before accessing beyond 'q_cur_pos + 1'
-		if (shared_st->q_cur_pos != (shared_st->q_len-2) && *(shared_st->q+2) == '!') {
+		// Handle both /*! (MySQL version hints) and /*+ (optimizer hints)
+		if (shared_st->q_cur_pos != (shared_st->q_len-2) && (*(shared_st->q+2) == '!' || *(shared_st->q+2) == '+')) {
 			c_t_1_st->is_cmd = 1;
 		}
 
@@ -613,7 +614,7 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 			c_t_1_st->cur_cmd_cmnt_len++;
 		}
 
-		// discard processed "/*" or "/*!"
+		// discard processed "/*" or "/*!" or "/*+"
 		shared_st->q += 2 + c_t_1_st->is_cmd;
 		shared_st->q_cur_pos += 2 + c_t_1_st->is_cmd;
 
