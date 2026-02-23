@@ -90,6 +90,8 @@ enum MySQL_Thread_status_variable {
 	st_var_aws_aurora_replicas_skipped_during_query,
 	st_var_automatic_detected_sqli,
 	st_var_mysql_whitelisted_sqli_fingerprint,
+	st_var_ai_detected_anomalies,
+	st_var_ai_blocked_queries,
 	st_var_client_host_error_killed_connections,
 	st_var_set_wait_timeout_commands,
 	st_var_timeout_terminated_connections,
@@ -290,6 +292,8 @@ struct p_th_counter {
 		aws_aurora_replicas_skipped_during_query,
 		automatic_detected_sql_injection,
 		mysql_whitelisted_sqli_fingerprint,
+		ai_detected_anomalies,
+		ai_blocked_queries,
 		mysql_killed_backend_connections,
 		mysql_killed_backend_queries,
 		client_host_error_killed_connections,
@@ -589,8 +593,13 @@ class MySQL_Threads_Handler
 		int eventslog_default_log;
 		int eventslog_format;
 		int eventslog_stmt_parameters;
+		int eventslog_flush_timeout;
+ 		int eventslog_flush_size;
+ 		int eventslog_rate_limit;
 		char *auditlog_filename;
 		int auditlog_filesize;
+		int auditlog_flush_timeout;
+ 		int auditlog_flush_size;
 		// SSL related, proxy to server
 		char * ssl_p2s_ca;
 		char * ssl_p2s_capath;

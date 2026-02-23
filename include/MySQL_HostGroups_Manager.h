@@ -123,6 +123,13 @@
 
 typedef std::unordered_map<std::uint64_t, void *> umap_mysql_errors;
 
+// Forward declaration for WebUI monitoring metrics collector
+namespace ProxySQL {
+namespace Monitoring {
+class MetricsCollector;
+}
+}
+
 class MySrvConnList;
 class MySrvC;
 class MySrvList;
@@ -801,6 +808,9 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	void group_replication_lag_action_set_server_status(MyHGC* myhgc, char* address, int port, int lag_count, bool enable);
 
 	public:
+	// Friend declaration for WebUI monitoring metrics collector
+	friend class ProxySQL::Monitoring::MetricsCollector;
+
 	std::mutex galera_set_writer_mutex;
 	/**
 	 * @brief Mutex used to guard 'mysql_servers_to_monitor' resulset.

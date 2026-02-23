@@ -320,9 +320,9 @@ bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(
 unsigned int ProxySQL_Admin::ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(unsigned int cnt, bool empty) {
 	char *a = (char *)"INSERT OR IGNORE INTO mysql_query_rules_fast_routing VALUES (?1, ?2, ?3, ?4, '')";
 	int rc;
-	sqlite3_stmt *statement1=NULL;
-	rc=admindb->prepare_v2(a, &statement1);
-	ASSERT_SQLITE_OK(rc, admindb);
+	auto [rc1, statement1_unique] = admindb->prepare_v2(a);
+	ASSERT_SQLITE_OK(rc1, admindb);
+	sqlite3_stmt *statement1 = statement1_unique.get();
 	admindb->execute("DELETE FROM mysql_query_rules_fast_routing");
 	char * username_buf = (char *)malloc(128);
 	char * schemaname_buf = (char *)malloc(256);
@@ -363,7 +363,6 @@ unsigned int ProxySQL_Admin::ProxySQL_Test___GenerateRandom_mysql_query_rules_fa
 		rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, admindb);
 		rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, admindb);
 	}
-	(*proxy_sqlite3_finalize)(statement1);
 	free(username_buf);
 	free(schemaname_buf);
 	return cnt;
@@ -376,12 +375,12 @@ void ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_generate_many_clus
 	char *q1 = (char *)"INSERT INTO mysql_servers (hostgroup_id, hostname, port) VALUES (?1, ?2, ?3), (?4, ?5, ?6), (?7, ?8, ?9)";
 	char *q2 = (char *)"INSERT INTO mysql_replication_hostgroups (writer_hostgroup, reader_hostgroup) VALUES (?1, ?2)";
 	int rc;
-	sqlite3_stmt *statement1=NULL;
-	sqlite3_stmt *statement2=NULL;
-	rc=admindb->prepare_v2(q1, &statement1);
-	ASSERT_SQLITE_OK(rc, admindb);
-	rc=admindb->prepare_v2(q2, &statement2);
-	ASSERT_SQLITE_OK(rc, admindb);
+	auto [rc1, statement1_unique] = admindb->prepare_v2(q1);
+	ASSERT_SQLITE_OK(rc1, admindb);
+	auto [rc2, statement2_unique] = admindb->prepare_v2(q2);
+	ASSERT_SQLITE_OK(rc2, admindb);
+	sqlite3_stmt *statement1 = statement1_unique.get();
+	sqlite3_stmt *statement2 = statement2_unique.get();
 	char hostnamebuf1[32];
 	char hostnamebuf2[32];
 	char hostnamebuf3[32];
@@ -407,8 +406,6 @@ void ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_generate_many_clus
 		rc=(*proxy_sqlite3_clear_bindings)(statement2); ASSERT_SQLITE_OK(rc, admindb);
 		rc=(*proxy_sqlite3_reset)(statement2); ASSERT_SQLITE_OK(rc, admindb);
 	}
-	(*proxy_sqlite3_finalize)(statement1);
-	(*proxy_sqlite3_finalize)(statement2);
 	load_mysql_servers_to_runtime();
 	mysql_servers_wrunlock();
 }

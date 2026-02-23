@@ -70,13 +70,18 @@ ifeq ($(PROXYSQLCLICKHOUSE),1)
 	PSQLCH := -DPROXYSQLCLICKHOUSE
 endif
 
+PSQLGA :=
+ifeq ($(PROXYSQLGENAI),1)
+	PSQLGA := -DPROXYSQLGENAI
+endif
+
 
 
 MYCXXFLAGS := $(STDCPP)
 ifeq ($(CXX),clang++)
 	MYCXXFLAGS += -fuse-ld=lld
 endif
-MYCXXFLAGS += $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
+MYCXXFLAGS += $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) $(PSQLGA) -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
 
 
 STATICMYLIBS := -Wl,-Bstatic \
@@ -114,7 +119,7 @@ endif
 endif
 
 ifeq ($(UNAME_S),Darwin)
-	MYLIBS :=-lre2 -lmariadbclient -lpq -lpthread -lm -lz -liconv -lgnutls -lprometheus-cpp-pull -lprometheus-cpp-core -luuid
+	MYLIBS :=-lre2 -lmariadbclient -lssl -lcrypto -lpthread -lm -lz -liconv -lgnutls -lprometheus-cpp-pull -lprometheus-cpp-core -luuid
 else
 	CURL_DIR := $(DEPS_PATH)/curl/curl
 	IDIRS += -L$(CURL_DIR)/include
@@ -130,6 +135,8 @@ ifeq ($(CENTOSVER),6)
 	MYLIBS += -lgcrypt
 endif
 
+SQLITE_REMBED_LIB := $(DEPS_PATH)/sqlite3/libsqlite_rembed.a
+SQLITE_VEC_OBJ := $(DEPS_PATH)/sqlite3/sqlite3/vec.o
 LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
 ifeq ($(UNAME_S),Darwin)
 	LIBPROXYSQLAR += $(JEMALLOC_LDIR)/libjemalloc.a
@@ -144,8 +151,16 @@ ifeq ($(UNAME_S),Darwin)
 	LIBPROXYSQLAR += $(SQLITE3_LDIR)/sqlite3.o
 	LIBPROXYSQLAR += $(LIBINJECTION_LDIR)/libinjection.a
 	LIBPROXYSQLAR += $(EV_LDIR)/libev.a
+	LIBPROXYSQLAR += $(LIBSCRAM_LDIR)/libscram.a
+	LIBPROXYSQLAR += $(LIBUSUAL_LDIR)/libusual.a
+	LIBPROXYSQLAR += $(POSTGRESQL_PATH)/interfaces/libpq/libpq.a
+	LIBPROXYSQLAR += $(POSTGRESQL_PATH)/common/libpgcommon.a
+	LIBPROXYSQLAR += $(POSTGRESQL_PATH)/port/libpgport.a
 endif
 LIBPROXYSQLAR += $(CITYHASH_LDIR)/libcityhash.a
+ifeq ($(PROXYSQLGENAI),1)
+LIBPROXYSQLAR += $(SQLITE_REMBED_LIB) $(SQLITE_VEC_OBJ)
+endif
 
 ODIR := obj
 

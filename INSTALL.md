@@ -188,7 +188,16 @@ zypper install -y automake bzip2 cmake make gcc-c++ gcc git openssl openssl-deve
 
 ### macOS (using Homebrew):
 ```bash
-brew install automake bzip2 cmake make git gpatch gnutls ossp-uuid
+brew install automake bzip2 cmake make git gpatch gnutls openssl@3 icu4c pkg-config libiconv zlib
+```
+
+To compile on macOS, you must set the following environment variables to ensure the build system can find OpenSSL and Homebrew dependencies:
+
+```bash
+export PATH="/opt/homebrew/bin:$PATH"
+export PKG_CONFIG_PATH="/opt/homebrew/opt/openssl@3/lib/pkgconfig:$PKG_CONFIG_PATH"
+export OPENSSL_ROOT_DIR="/opt/homebrew/opt/openssl@3"
+make # or make debug
 ```
 
 For more details, inspect the docker build images:

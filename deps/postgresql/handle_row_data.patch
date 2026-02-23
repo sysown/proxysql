@@ -1,8 +1,7 @@
-diff --git src/interfaces/libpq/fe-exec.c src/interfaces/libpq/fe-exec.c
-index 2265ab5..56883ec 100644
---- src/interfaces/libpq/fe-exec.c
-+++ src/interfaces/libpq/fe-exec.c
-@@ -4484,3 +4484,9 @@ PQgetResultFromPGconn(PGconn *conn)
+diff -ruN ../tmp/src/interfaces/libpq/fe-exec.c ./src/interfaces/libpq/fe-exec.c
+--- ../tmp/src/interfaces/libpq/fe-exec.c	2026-02-06 13:03:06.060890335 +0000
++++ ./src/interfaces/libpq/fe-exec.c	2026-02-06 13:05:13.935067795 +0000
+@@ -4545,3 +4545,9 @@
         return conn->result;
  }
  
@@ -12,11 +11,10 @@ index 2265ab5..56883ec 100644
 +    return psHandleRowData(conn, is_first_packet, result);
 +}
 +
-diff --git src/interfaces/libpq/fe-misc.c src/interfaces/libpq/fe-misc.c
-index 488f7d6..65beb87 100644
---- src/interfaces/libpq/fe-misc.c
-+++ src/interfaces/libpq/fe-misc.c
-@@ -1344,3 +1344,39 @@ libpq_append_conn_error(PGconn *conn, const char *fmt,...)
+diff -ruN ../tmp/src/interfaces/libpq/fe-misc.c ./src/interfaces/libpq/fe-misc.c
+--- ../tmp/src/interfaces/libpq/fe-misc.c	2025-08-11 21:06:43.000000000 +0000
++++ ./src/interfaces/libpq/fe-misc.c	2026-02-06 13:05:13.936067804 +0000
+@@ -1367,3 +1367,39 @@
  
  	appendPQExpBufferChar(&conn->errorMessage, '\n');
  }
@@ -56,11 +54,10 @@ index 488f7d6..65beb87 100644
 +	*result = (int) pg_ntoh32(tmp4);
 +	return 0;
 +}
-diff --git src/interfaces/libpq/fe-protocol3.c src/interfaces/libpq/fe-protocol3.c
-index 9c4aa7e..de0746c 100644
---- src/interfaces/libpq/fe-protocol3.c
-+++ src/interfaces/libpq/fe-protocol3.c
-@@ -2299,3 +2299,109 @@ build_startup_packet(const PGconn *conn, char *packet,
+diff -ruN ../tmp/src/interfaces/libpq/fe-protocol3.c ./src/interfaces/libpq/fe-protocol3.c
+--- ../tmp/src/interfaces/libpq/fe-protocol3.c	2025-08-11 21:06:43.000000000 +0000
++++ ./src/interfaces/libpq/fe-protocol3.c	2026-02-06 13:05:13.936067804 +0000
+@@ -2299,3 +2299,109 @@
  
  	return packet_len;
  }
@@ -170,15 +167,13 @@ index 9c4aa7e..de0746c 100644
 +	return 1;
 +}
 +
-diff --git src/interfaces/libpq/libpq-fe.h src/interfaces/libpq/libpq-fe.h
-index c5170d1..3e3cc34 100644
---- src/interfaces/libpq/libpq-fe.h
-+++ src/interfaces/libpq/libpq-fe.h
-@@ -269,6 +269,18 @@ typedef struct pgresAttDesc
- 	int			atttypmod;		/* type-specific modifier info */
+diff -ruN ../tmp/src/interfaces/libpq/libpq-fe.h ./src/interfaces/libpq/libpq-fe.h
+--- ../tmp/src/interfaces/libpq/libpq-fe.h	2026-02-06 13:03:06.060890335 +0000
++++ ./src/interfaces/libpq/libpq-fe.h	2026-02-06 13:05:13.936067804 +0000
+@@ -270,6 +270,18 @@
  } PGresAttDesc;
  
-+/* ----------------
+ /* ----------------
 + * PSresult -- 
 + * ----------------
 + */
@@ -190,10 +185,11 @@ index c5170d1..3e3cc34 100644
 +    //int		    fieldcount;
 +} PSresult;
 +
- /* ----------------
++/* ----------------
   * Exported functions of libpq
   * ----------------
-@@ -671,6 +683,9 @@ extern int	PQdefaultSSLKeyPassHook_OpenSSL(char *buf, int size, PGconn *conn);
+  */
+@@ -671,6 +683,9 @@
  /* Get PGresult directly from PGconn. WARNING: DO NOT RELEASE THIS RESULT */
  extern const PGresult *PQgetResultFromPGconn(PGconn *conn);
  
@@ -203,11 +199,10 @@ index c5170d1..3e3cc34 100644
  #ifdef __cplusplus
  }
  #endif
-diff --git src/interfaces/libpq/libpq-int.h src/interfaces/libpq/libpq-int.h
-index a951f49..e1df8b5 100644
---- src/interfaces/libpq/libpq-int.h
-+++ src/interfaces/libpq/libpq-int.h
-@@ -727,6 +727,11 @@ extern PGresult *pqFunctionCall3(PGconn *conn, Oid fnid,
+diff -ruN ../tmp/src/interfaces/libpq/libpq-int.h ./src/interfaces/libpq/libpq-int.h
+--- ../tmp/src/interfaces/libpq/libpq-int.h	2025-08-11 21:06:43.000000000 +0000
++++ ./src/interfaces/libpq/libpq-int.h	2026-02-06 13:05:13.936067804 +0000
+@@ -728,6 +728,11 @@
  								 int result_is_int,
  								 const PQArgBlock *args, int nargs);
  
@@ -219,7 +214,7 @@ index a951f49..e1df8b5 100644
  /* === in fe-misc.c === */
  
   /*
-@@ -756,6 +761,13 @@ extern int	pqWaitTimed(int forRead, int forWrite, PGconn *conn,
+@@ -757,6 +762,13 @@
  extern int	pqReadReady(PGconn *conn);
  extern int	pqWriteReady(PGconn *conn);
  

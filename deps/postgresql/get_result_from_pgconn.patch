@@ -1,10 +1,9 @@
-diff --git src/interfaces/libpq/fe-exec.c src/interfaces/libpq/fe-exec.c
-index fa9d6aad..cd5cd23d 100644
---- src/interfaces/libpq/fe-exec.c
-+++ src/interfaces/libpq/fe-exec.c
-@@ -4467,3 +4467,20 @@ PQunescapeBytea(const unsigned char *strtext, size_t *retbuflen)
-        *retbuflen = buflen;
-        return tmpbuf;
+diff -ruN ../tmp/src/interfaces/libpq/fe-exec.c ./src/interfaces/libpq/fe-exec.c
+--- ../tmp/src/interfaces/libpq/fe-exec.c	2025-08-11 21:06:43.000000000 +0000
++++ ./src/interfaces/libpq/fe-exec.c	2026-02-06 13:03:06.060890335 +0000
+@@ -4528,3 +4528,20 @@
+ 	*retbuflen = buflen;
+ 	return tmpbuf;
  }
 +
 +/*
@@ -23,18 +22,16 @@ index fa9d6aad..cd5cd23d 100644
 +       return conn->result;
 +}
 +
-diff --git src/interfaces/libpq/libpq-fe.h src/interfaces/libpq/libpq-fe.h
-index 7476dbe0..472d0083 100644
---- src/interfaces/libpq/libpq-fe.h
-+++ src/interfaces/libpq/libpq-fe.h
-@@ -668,6 +668,9 @@ extern PQsslKeyPassHook_OpenSSL_type PQgetSSLKeyPassHook_OpenSSL(void);
+diff -ruN ../tmp/src/interfaces/libpq/libpq-fe.h ./src/interfaces/libpq/libpq-fe.h
+--- ../tmp/src/interfaces/libpq/libpq-fe.h	2025-08-11 21:06:43.000000000 +0000
++++ ./src/interfaces/libpq/libpq-fe.h	2026-02-06 13:03:06.060890335 +0000
+@@ -668,6 +668,9 @@
  extern void PQsetSSLKeyPassHook_OpenSSL(PQsslKeyPassHook_OpenSSL_type hook);
- extern int     PQdefaultSSLKeyPassHook_OpenSSL(char *buf, int size, PGconn *conn);
-
+ extern int	PQdefaultSSLKeyPassHook_OpenSSL(char *buf, int size, PGconn *conn);
+ 
 +/* Get PGresult directly from PGconn. WARNING: DO NOT RELEASE THIS RESULT */
 +extern const PGresult *PQgetResultFromPGconn(PGconn *conn);
 +
  #ifdef __cplusplus
  }
  #endif
-

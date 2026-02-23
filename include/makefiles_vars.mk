@@ -9,7 +9,7 @@ endif
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
 
-DISTRO := $(shell grep '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
+DISTRO := $(shell if [ -f /etc/os-release ]; then grep '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"'; else echo "unknown"; fi)
 
 CENTOSVER := Unknown
 ifneq (,$(wildcard /etc/system-release))

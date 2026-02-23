@@ -1,0 +1,21 @@
+# Discovery output files
+/discovery_*.md
+/database_discovery_report.md
+
+# Individual agent outputs (should use catalog, not Write tool)
+/*_QUESTION_CATALOG.md
+/*_round1_*.md
+/*_round2_*.md
+/*_round3_*.md
+/*_round4_*.md
+/*_COORDINATOR_SUMMARY.md
+/*_HYPOTHESIS_TESTING.md
+/*_INDEX.md
+/*_QUICK_REFERENCE.md
+/META_ANALYSIS_*.md
+/SECURITY_AGENT_*.txt
+/query_agent_*.md
+/security_agent_*.md
+/security_catalog_*.md
+/semantic_*.md
+/statistical_*.md

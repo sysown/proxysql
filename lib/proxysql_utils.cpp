@@ -19,7 +19,9 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <sys/syscall.h>
+#ifdef __linux__
 #include <linux/close_range.h>
+#endif
 
 using std::function;
 using std::string;

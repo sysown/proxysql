@@ -459,6 +459,7 @@ MySQL_Connection::MySQL_Connection() {
 	options.ldap_user_variable_sent=false;
 	options.session_track_gtids_int=0;
 	options.server_capabilities=0;
+	options.max_allowed_pkt=0;
 
 	compression_pkt_id=0;
 	mysql_result=NULL;
@@ -2986,7 +2987,7 @@ void MySQL_Connection::optimize() {
 // if avoids that a QUIT command stops forever
 // FIXME: currently doesn't support encryption and compression
 void MySQL_Connection::close_mysql() {
-	if ((send_quit) && (mysql->net.pvio) && ret_mysql) {
+	if ((send_quit) && (mysql->net.pvio) && ret_mysql && !mysql->options.use_ssl) {
 		char buff[5];
 		mysql_hdr myhdr;
 		myhdr.pkt_id=0;
