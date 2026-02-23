@@ -1225,14 +1225,18 @@ query_digest_topk_result_t Query_Processor<QP_DERIVED>::get_query_digests_topk(
 	};
 
 	/**
-	 * The priority queue uses `better` as comparator so the heap top is the
-	 * current "worst" row among retained candidates.
+	 * The priority queue uses `worse` as comparator so the heap top is the
+	 * current "worst" row among retained candidates. This allows us to
+	 * efficiently evict the worst candidate when the heap is full.
 	 */
+	const auto worse = [](const query_digest_topk_candidate_t& lhs, const query_digest_topk_candidate_t& rhs) -> bool {
+		return query_digest_candidate_better(rhs, lhs);
+	};
 	std::priority_queue<
 		query_digest_topk_candidate_t,
 		std::vector<query_digest_topk_candidate_t>,
 		std::function<bool(const query_digest_topk_candidate_t&, const query_digest_topk_candidate_t&)>
-	> heap(better);
+	> heap(worse);
 
 	pthread_rwlock_rdlock(&digest_rwlock);
 

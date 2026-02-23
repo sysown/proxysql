@@ -63,15 +63,24 @@ int main(int argc, char** argv) {
     large_query += "'";
 
     MYSQL_QUERY(conn, large_query.c_str());
+    {
+        // Consume the result to leave connection in clean state
+        MYSQL_RES* query_res = mysql_store_result(conn);
+        if (query_res) mysql_free_result(query_res);
+    }
 
     // Verify that NO digest was recorded for this query because it was bypassed
     int rc = run_q(admin, "SELECT count(*) FROM stats_mysql_query_digest");
     MYSQL_RES* res = mysql_store_result(admin);
-    MYSQL_ROW row = mysql_fetch_row(res);
-    int count = atoi(row[0]);
-    ok(count == 0, "No digests recorded for queries exceeding threshold (count: %d)", count);
+    if (!res) {
+        ok(0, "Failed to store result from stats query");
+    } else {
+        MYSQL_ROW row = mysql_fetch_row(res);
+        int count = row ? atoi(row[0]) : -1;
+        ok(count == 0, "No digests recorded for queries exceeding threshold (count: %d)", count);
+    }
 
-    mysql_free_result(res);
+    if (res) mysql_free_result(res);
     mysql_close(conn);
     mysql_close(admin);
 

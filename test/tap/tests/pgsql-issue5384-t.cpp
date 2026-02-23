@@ -74,6 +74,17 @@ int get_query_hg_from_stats(PGconn* admin, const char* query_digest_text) {
 	return hg;
 }
 
+// Helper to run admin command and check result for critical operations
+static bool run_admin_checked(PGconn* admin, const char* sql) {
+	PGresult* res = PQexec(admin, sql);
+	bool success = (PQresultStatus(res) == PGRES_COMMAND_OK || PQresultStatus(res) == PGRES_TUPLES_OK);
+	if (!success) {
+		diag("Admin command failed [%s]: %s", sql, PQerrorMessage(admin));
+	}
+	PQclear(res);
+	return success;
+}
+
 int main(int argc, char** argv) {
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
@@ -121,11 +132,17 @@ int main(int argc, char** argv) {
 
 	// Rule to strip the comment. PostgreSQL comments can be /* */ or --
 	// Note: the regex needs to match the comment format used in the test query.
-	PQclear(PQexec(admin.get(), "INSERT INTO pgsql_query_rules (rule_id, active, match_pattern, replace_pattern, apply) VALUES (1, 1, '/\\\\*.*?\\\\*/ ?', '', 1)"));
-	PQclear(PQexec(admin.get(), "LOAD PGSQL QUERY RULES TO RUNTIME"));
+	if (!run_admin_checked(admin.get(), "INSERT INTO pgsql_query_rules (rule_id, active, match_pattern, replace_pattern, apply) VALUES (1, 1, '/\\\\*.*?\\\\*/ ?', '', 1)") ||
+	    !run_admin_checked(admin.get(), "LOAD PGSQL QUERY RULES TO RUNTIME")) {
+		BAIL_OUT("Failed to set up query rules");
+		return exit_status();
+	}
 
-	PQclear(PQexec(admin.get(), "SET pgsql-query_processor_first_comment_parsing = 2"));
-	PQclear(PQexec(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME"));
+	if (!run_admin_checked(admin.get(), "SET pgsql-query_processor_first_comment_parsing = 2") ||
+	    !run_admin_checked(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME")) {
+		BAIL_OUT("Failed to set first_comment_parsing mode");
+		return exit_status();
+	}
 
 	PQclear(PQexec(admin.get(), "TRUNCATE stats_pgsql_query_digest"));
 
@@ -142,8 +159,11 @@ int main(int argc, char** argv) {
 
 	diag(" ========== Test 2: New behavior (parsed before rules) ==========");
 	{
-		PQclear(PQexec(admin.get(), "SET pgsql-query_processor_first_comment_parsing = 1"));
-		PQclear(PQexec(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME"));
+		if (!run_admin_checked(admin.get(), "SET pgsql-query_processor_first_comment_parsing = 1") ||
+		    !run_admin_checked(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME")) {
+			BAIL_OUT("Failed to set first_comment_parsing mode for Test 2");
+			return exit_status();
+		}
 
 		PQclear(PQexec(admin.get(), "TRUNCATE stats_pgsql_query_digest"));
 
@@ -160,8 +180,11 @@ int main(int argc, char** argv) {
 
 	diag(" ========== Test 3: Both passes (mode 3) ==========");
 	{
-		PQclear(PQexec(admin.get(), "SET pgsql-query_processor_first_comment_parsing = 3"));
-		PQclear(PQexec(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME"));
+		if (!run_admin_checked(admin.get(), "SET pgsql-query_processor_first_comment_parsing = 3") ||
+		    !run_admin_checked(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME")) {
+			BAIL_OUT("Failed to set first_comment_parsing mode for Test 3");
+			return exit_status();
+		}
 
 		PQclear(PQexec(admin.get(), "TRUNCATE stats_pgsql_query_digest"));
 

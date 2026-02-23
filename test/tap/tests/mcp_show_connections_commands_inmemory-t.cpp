@@ -599,8 +599,8 @@ void validate_show_free_connections_disabled(MCPClient& mcp, const std::string& 
 	std::string err;
 	const bool payload_ok = extract_tool_result(resp, result_obj, err);
 	ok(!payload_ok && contains_icase(err, "disabled"),
-		"%s show_free_connections(disabled) returns explicit disabled error%s%s",
-		db_type.c_str(), payload_ok ? "" : ": ", payload_ok ? "unexpected success" : err.c_str());
+		"%s show_free_connections(disabled) returns explicit disabled error: %s",
+		db_type.c_str(), payload_ok ? "unexpected success" : err.c_str());
 }
 
 /**

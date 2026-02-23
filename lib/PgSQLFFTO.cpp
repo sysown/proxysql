@@ -112,6 +112,11 @@ void PgSQLFFTO::on_server_data(const char* buf, std::size_t len) {
     while (m_server_buffer.size() - m_server_offset >= 5) {
         char type = m_server_buffer[m_server_offset];
         uint32_t msg_len; memcpy(&msg_len, &m_server_buffer[m_server_offset + 1], 4); msg_len = ntohl(msg_len);
+        if (msg_len > (uint32_t)pgsql_thread___ffto_max_buffer_size) {
+            if (m_session) m_session->ffto_bypassed = true;
+            on_close();
+            return;
+        }
         if (msg_len < 4 || msg_len > 1024 * 1024 * 1024) { // Sanity check
             on_close();
             m_server_buffer.clear(); m_server_offset = 0;

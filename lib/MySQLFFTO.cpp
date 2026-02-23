@@ -97,6 +97,11 @@ void MySQLFFTO::on_server_data(const char* buf, std::size_t len) {
     while (m_server_buffer.size() - m_server_offset >= sizeof(mysql_hdr)) {
         const mysql_hdr* hdr = reinterpret_cast<const mysql_hdr*>(m_server_buffer.data() + m_server_offset);
         uint32_t pkt_len = hdr->pkt_length;
+        if (pkt_len > (uint32_t)mysql_thread___ffto_max_buffer_size) {
+            if (m_session) m_session->ffto_bypassed = true;
+            on_close();
+            return;
+        }
         if (m_server_buffer.size() - m_server_offset < sizeof(mysql_hdr) + pkt_len) break;
         const unsigned char* payload = reinterpret_cast<const unsigned char*>(m_server_buffer.data()) + m_server_offset + sizeof(mysql_hdr);
         process_server_packet(payload, pkt_len);

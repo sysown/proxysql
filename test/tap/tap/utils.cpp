@@ -2472,6 +2472,9 @@ void spawn_noise(const CommandLine& cl, const std::string& tool_path, const std:
 			if (fd_null > 2) {
 				close(fd_null);
 			}
+		} else {
+			// Cannot redirect I/O; abort rather than pollute test output
+			_exit(1);
 		}
 
 		std::vector<char*> c_args;
