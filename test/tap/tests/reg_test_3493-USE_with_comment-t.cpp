@@ -68,6 +68,8 @@ int test_use_queries(MYSQL* proxysql_mysql, bool enabled_digests) {
 		const std::string& query = std::get<1>(*it);
 		const bool should_match = std::get<2>(*it);
 
+		diag("Testing query: '%s' (expected DB: '%s')", query.c_str(), name.c_str());
+
 		int err = mysql_query(proxysql_mysql, query.c_str());
 		if (err) {
 			diag(
@@ -132,24 +134,27 @@ int test_use_queries(MYSQL* proxysql_mysql, bool enabled_digests) {
 		if (enabled_digests == true) {
 			ok(
 				database_name == name && cur_tracked_schema == name,
+				"Digests ENABLED - Query: '%s'. "
 				"Selected and tracked DB names should be equal to actual DB name: "
 					"(Exp_SEL: '%s') == (Act_SEL: '%s'), (Exp_TRACKED: '%s') == (Act_TRACKED: '%s')",
-				name.c_str(), database_name.c_str(), name.c_str(), cur_tracked_schema.c_str()
+				query.c_str(), name.c_str(), database_name.c_str(), name.c_str(), cur_tracked_schema.c_str()
 			);
 		} else {
 			if (should_match == true) {
 				ok(
 					database_name == name && cur_tracked_schema == name,
+					"Digests DISABLED - Query: '%s'. "
 					"Selected and tracked DB names should be equal to actual DB name: "
 						"(Exp_SEL: '%s') == (Act_SEL: '%s'), (Exp_TRACKED: '%s') == (Act_TRACKED: '%s')",
-					name.c_str(), database_name.c_str(), name.c_str(), cur_tracked_schema.c_str()
+					query.c_str(), name.c_str(), database_name.c_str(), name.c_str(), cur_tracked_schema.c_str()
 				);
 			} else {
 				ok(
 					database_name == name && cur_tracked_schema != name,
+					"Digests DISABLED - Query: '%s'. "
 					"Selected DB name should be equal to actual DB name, but tracked DB name should differ: "
 						"(Exp_SEL: '%s') == (Act_SEL: '%s'), (Exp_TRACKED: '%s') == (Act_TRACKED: '%s')",
-					name.c_str(), database_name.c_str(), name.c_str(), cur_tracked_schema.c_str()
+					query.c_str(), name.c_str(), database_name.c_str(), name.c_str(), cur_tracked_schema.c_str()
 				);
 			}
 		}
@@ -166,8 +171,16 @@ int main(int argc, char** argv) {
 		return -1;
 	}
 
+	diag("Starting reg_test_3493-USE_with_comment-t");
+	diag("This test verifies that ProxySQL correctly tracks the 'USE' statement");
+	diag("even when it is preceded or contains comments and various whitespaces.");
+	diag("It tests tracking with both 'mysql-query_digests' enabled and disabled.");
+	diag("Tracking is verified by checking 'SELECT DATABASE()' on a new backend connection");
+	diag("and by inspecting 'PROXYSQL INTERNAL SESSION' output.");
+
 	MYSQL* proxysql_mysql = mysql_init(NULL);
 
+	// Define test cases: (Expected Database, Query to execute, Should Track when digests are disabled)
 	db_query.push_back(std::make_tuple("test_use_comment", "/*+ placeholder_comment */ USE test_use_comment", false));
 	db_query.push_back(std::make_tuple("`test_use_comment-a1`", "USE /*+ placeholder_comment */ `test_use_comment-a1`", true));
 	db_query.push_back(std::make_tuple("test_use_comment_1", "  USE /*+ placeholder_comment */   `test_use_comment_1`", false));

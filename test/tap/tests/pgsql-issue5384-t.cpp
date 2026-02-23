@@ -34,6 +34,22 @@ PGConnPtr createNewConnection(ConnType conn_type, const std::string& options = "
 	const char* username = (conn_type == BACKEND) ? cl.pgsql_username : cl.admin_username;
 	const char* password = (conn_type == BACKEND) ? cl.pgsql_password : cl.admin_password;
 
+	if (conn_type == ADMIN) {
+		// Use pgsql admin port if available from env, otherwise assume default 6132
+		if (cl.pgsql_admin_port > 0) {
+			port = cl.pgsql_admin_port;
+		} else {
+			port = 6132;
+		}
+	} else if (conn_type == BACKEND) {
+		// Use pgsql port if available from env, otherwise assume default 6133
+		if (cl.pgsql_port > 0) {
+			port = cl.pgsql_port;
+		} else {
+			port = 6133;
+		}
+	}
+
 	std::stringstream ss;
 	ss << "host=" << host << " port=" << port;
 	ss << " user=" << username << " password=" << password;
@@ -105,6 +121,18 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
+	// Setup: Create hostgroup 1000 with a backend server for testing comment routing
+	diag("Setup: Creating hostgroup 1000 with backend server and enabling digests");
+	{
+		run_admin_checked(admin.get(), "SET pgsql-query_digests='true'");
+		run_admin_checked(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
+		std::stringstream ss;
+		ss << "INSERT OR REPLACE INTO pgsql_servers (hostgroup_id, hostname, port) VALUES (1000, '"
+		   << cl.pgsql_server_host << "', " << cl.pgsql_server_port << ")";
+		run_admin_checked(admin.get(), ss.str().c_str());
+		run_admin_checked(admin.get(), "LOAD PGSQL SERVERS TO RUNTIME");
+	}
+
 	diag(" ========== Test 1: Default behavior (parsed after rules) ==========");
 	PQclear(PQexec(admin.get(), "DELETE FROM pgsql_query_rules"));
 
@@ -130,6 +158,7 @@ int main(int argc, char** argv) {
 
 	int hg = get_query_hg_from_stats(admin.get(), "SELECT ?");
 	if (hg != -1) {
+		diag("Found in stats: hg=%d", hg);
 		ok(hg != 1000, "Comment should NOT have been parsed because it was stripped by rule. hg=%d", hg);
 	} else {
 		ok(0, "Failed to find query in stats (Test 1)");
@@ -150,6 +179,7 @@ int main(int argc, char** argv) {
 
 		int hg = get_query_hg_from_stats(admin.get(), "SELECT ?");
 		if (hg != -1) {
+			diag("Found in stats: hg=%d", hg);
 			ok(hg == 1000, "Comment SHOULD have been parsed BEFORE it was stripped by rule. hg=%d", hg);
 		} else {
 			ok(0, "Failed to find query in stats (Test 2)");
@@ -171,6 +201,7 @@ int main(int argc, char** argv) {
 
 		int hg = get_query_hg_from_stats(admin.get(), "SELECT ?");
 		if (hg != -1) {
+			diag("Found in stats: hg=%d", hg);
 			ok(hg == 1000, "Comment SHOULD have been parsed (mode 3 parses before rules). hg=%d", hg);
 		} else {
 			ok(0, "Failed to find query in stats (Test 3)");
