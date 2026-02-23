@@ -1,13 +1,11 @@
 /**
- * @file pgsql-copy_freeze_error_recovery-t.cpp
- * @brief Tests COPY FROM ... FREEZE error recovery in ProxySQL
+ * @file pgsql-reg_test_5415_copy_error_recovery-t.cpp
+ * @brief Tests COPY FROM ... STDIN error recovery in ProxySQL
  *
- * This test reproduces the scenario where:
- * 1. COPY command enters fast_forward mode
- * 2. Backend returns ERROR + ReadyForQuery immediately (before client sends data)
- *    because FREEZE requires table to be created or truncated in the current subtransaction
- * 3. Session should correctly return to normal mode
- * 4. Subsequent queries should work normally
+ * When a COPY FROM STDIN operation encounters an error, the session switches back to normal mode. 
+ * However, the client may have already pipelined CopyData('d'), CopyDone('c'), or CopyFail('f') messages 
+ * that are still in the input queue. These messages fell through to the default case of message handler, 
+ * generating a spurious "Feature not supported" error.
  *
  * This is a regression test for proper session state recovery after a failed COPY
  * command that entered fast_forward mode.

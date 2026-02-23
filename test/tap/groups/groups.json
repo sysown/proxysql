@@ -251,6 +251,7 @@
   "pgsql-reg_test_5284_frontend_ssl_enforcement-t": [ "default-g4", "mysql-auto_increment_delay_multiplex=0-g4", "mysql-multiplexing=false-g4", "mysql-query_digests=0-g4", "mysql-query_digests_keep_comment=1-g4" ],
   "pgsql-reg_test_5273_bind_parameter_format-t": [ "default-g4", "mysql-auto_increment_delay_multiplex=0-g4", "mysql-multiplexing=false-g4", "mysql-query_digests=0-g4", "mysql-query_digests_keep_comment=1-g4" ],
   "pgsql-reg_test_5352_prepared_statement_refcount_race-t": [ "default-g4", "mysql-auto_increment_delay_multiplex=0-g4", "mysql-multiplexing=false-g4", "mysql-query_digests=0-g4", "mysql-query_digests_keep_comment=1-g4" ],
+  "pgsql-reg_test_5415_copy_error_recovery-t": [ "default-g4", "mysql-auto_increment_delay_multiplex=0-g4", "mysql-multiplexing=false-g4", "mysql-query_digests=0-g4", "mysql-query_digests_keep_comment=1-g4" ],
   "ai_error_handling_edge_cases-t": [ "ai-g1" ],
   "ai_llm_retry_scenarios-t": [ "ai-g1" ],
   "ai_validation-t": [ "ai-g1" ],
