@@ -4297,7 +4297,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 			GloProxyCluster->cluster_mysql_query_rules_diffs_before_sync = 0;
 			variables.cluster_pgsql_query_rules_diffs_before_sync = 0;
 			GloProxyCluster->cluster_pgsql_query_rules_diffs_before_sync = 0;
-			proxy_warning("Disabling deprecated 'admin-checksum_pgsql_query_rules', setting 'admin-cluster_pgsql_query_rules_diffs_before_sync=0'\n");
+			proxy_warning("Disabling deprecated 'admin-checksum_mysql_query_rules', setting 'admin-cluster_mysql_query_rules_diffs_before_sync=0' and 'admin-cluster_pgsql_query_rules_diffs_before_sync=0'\n");
 			return true;
 		}
 		return false;
@@ -4313,7 +4313,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 			GloProxyCluster->cluster_mysql_servers_diffs_before_sync = 0;
 			variables.cluster_pgsql_servers_diffs_before_sync = 0;
 			GloProxyCluster->cluster_pgsql_servers_diffs_before_sync = 0;
-			proxy_warning("Disabling deprecated 'admin-checksum_pgsql_servers', setting 'admin-cluster_pgsql_servers_diffs_before_sync=0'\n");
+			proxy_warning("Disabling deprecated 'admin-checksum_mysql_servers', setting 'admin-cluster_mysql_servers_diffs_before_sync=0' and 'admin-cluster_pgsql_servers_diffs_before_sync=0'\n");
 			return true;
 		}
 
@@ -4330,7 +4330,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 			GloProxyCluster->cluster_mysql_users_diffs_before_sync = 0;
 			variables.cluster_pgsql_users_diffs_before_sync = 0;
 			GloProxyCluster->cluster_pgsql_users_diffs_before_sync = 0;
-			proxy_warning("Disabling deprecated 'admin-checksum_pgsql_users', setting 'admin-cluster_pgsql_users_diffs_before_sync=0'\n");
+			proxy_warning("Disabling deprecated 'admin-checksum_mysql_users', setting 'admin-cluster_mysql_users_diffs_before_sync=0' and 'admin-cluster_pgsql_users_diffs_before_sync=0'\n");
 			return true;
 		}
 		return false;
@@ -7277,7 +7277,7 @@ void ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 11) + 1, atoi(r1->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
 				rc = (*proxy_sqlite3_bind_text)(statement32,  (idx * 11) + 2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 11) + 3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_text)(statement32,  (idx * 11) + 4, (_runtime ? r1->fields[3] : (strcmp(r1->fields[4], "SHUNNED") == 0 ? "ONLINE" : r1->fields[3])), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc = (*proxy_sqlite3_bind_text)(statement32,  (idx * 11) + 4, (_runtime ? r1->fields[3] : (strcmp(r1->fields[3], "SHUNNED") == 0 ? "ONLINE" : r1->fields[3])), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 11) + 5, atoi(r1->fields[4])); ASSERT_SQLITE_OK(rc, admindb);
 				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 11) + 6, atoi(r1->fields[5])); ASSERT_SQLITE_OK(rc, admindb);
 				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 11) + 7, atoi(r1->fields[6])); ASSERT_SQLITE_OK(rc, admindb);
@@ -8698,4 +8698,3 @@ void ProxySQL_Admin::enable_replicationlag_testing() {
 	mysql_servers_wrunlock();
 }
 #endif // TEST_REPLICATIONLAG
-

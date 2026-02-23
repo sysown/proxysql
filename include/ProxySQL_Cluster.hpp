@@ -491,6 +491,9 @@ struct p_cluster_counter {
 		sync_delayed_mysql_variables_version_one,
 		sync_delayed_admin_variables_version_one,
 		sync_delayed_ldap_variables_version_one,
+		sync_delayed_pgsql_query_rules_version_one,
+		sync_delayed_pgsql_servers_version_one,
+		sync_delayed_pgsql_users_version_one,
 		sync_delayed_pgsql_variables_version_one,
 
 		__size

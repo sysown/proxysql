@@ -28,6 +28,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <time.h>
 
 #include <atomic>
@@ -217,7 +218,7 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-plan(6);
+	plan(11);
 
 	// Connect to admin interfaces
 	MYSQL* proxysql_admin = mysql_init(NULL);
@@ -254,7 +255,9 @@ plan(6);
 		MYSQL_RES* result = mysql_store_result(proxysql_admin);
 		if (!result || mysql_num_rows(result) == 0) {
 			diag("No results returned from query: %s", query);
-			mysql_free_result(result);
+			if (result) {
+				mysql_free_result(result);
+			}
 			continue;
 		}
 		MYSQL_ROW row = mysql_fetch_row(result);
@@ -274,17 +277,72 @@ plan(6);
 
 	// Test basic PostgreSQL configuration is supported
 	MYSQL_QUERY(proxysql_admin, "SELECT 1 FROM pgsql_servers LIMIT 1");
+	MYSQL_RES* pgsql_servers_result = mysql_store_result(proxysql_admin);
 	ok(mysql_errno(proxysql_admin) == 0, "PostgreSQL servers table is accessible");
+	if (pgsql_servers_result) {
+		mysql_free_result(pgsql_servers_result);
+	}
 
 	MYSQL_QUERY(proxysql_admin, "SELECT 1 FROM pgsql_users LIMIT 1");
+	MYSQL_RES* pgsql_users_result = mysql_store_result(proxysql_admin);
 	ok(mysql_errno(proxysql_admin) == 0, "PostgreSQL users table is accessible");
+	if (pgsql_users_result) {
+		mysql_free_result(pgsql_users_result);
+	}
 
 	MYSQL_QUERY(proxysql_admin, "SELECT 1 FROM pgsql_query_rules LIMIT 1");
+	MYSQL_RES* pgsql_query_rules_result = mysql_store_result(proxysql_admin);
 	ok(mysql_errno(proxysql_admin) == 0, "PostgreSQL query rules table is accessible");
+	if (pgsql_query_rules_result) {
+		mysql_free_result(pgsql_query_rules_result);
+	}
 
 	// Check cluster variables exist
 	MYSQL_QUERY(proxysql_admin, "SHOW VARIABLES LIKE 'cluster_pgsql_%'");
+	MYSQL_RES* pgsql_cluster_vars_result = mysql_store_result(proxysql_admin);
 	ok(mysql_errno(proxysql_admin) == 0, "PostgreSQL cluster variables are accessible");
+	if (pgsql_cluster_vars_result) {
+		mysql_free_result(pgsql_cluster_vars_result);
+	}
+
+	{
+		bool sync_ok = true;
+		std::string sync_msg = "PostgreSQL servers_v2 sync check skipped (set TAP_PGSQL_SYNC_REPLICA_PORT to enable)";
+		const char* replica_port_env = getenv("TAP_PGSQL_SYNC_REPLICA_PORT");
+
+		if (replica_port_env && strlen(replica_port_env) > 0) {
+			MYSQL* replica_admin = mysql_init(NULL);
+			if (!replica_admin) {
+				sync_ok = false;
+				sync_msg = "Failed to initialize replica admin connection";
+			} else if (!mysql_real_connect(
+				replica_admin,
+				cl.host,
+				cl.admin_username,
+				cl.admin_password,
+				NULL,
+				static_cast<unsigned int>(atoi(replica_port_env)),
+				NULL,
+				0
+			)) {
+				sync_ok = false;
+				sync_msg = "Failed to connect to replica admin for PostgreSQL sync check";
+			} else {
+				const vector<std::tuple<int, string, int, string, int, int, int, int, int, int, int, string>> pgsql_servers_values {
+					{ 801, "127.0.0.1", 15432, "ONLINE", 1, 0, 200, 0, 0, 1000, 0, "cluster_sync_pgsql_test" }
+				};
+				const int sync_res = check_pgsql_servers_v2_sync(cl, proxysql_admin, replica_admin, pgsql_servers_values);
+				sync_ok = (sync_res == EXIT_SUCCESS);
+				sync_msg = sync_ok ? "PostgreSQL servers_v2 synced to replica" : "PostgreSQL servers_v2 sync to replica failed";
+			}
+
+			if (replica_admin) {
+				mysql_close(replica_admin);
+			}
+		}
+
+		ok(sync_ok, "%s", sync_msg.c_str());
+	}
 
 	mysql_close(proxysql_admin);
 
