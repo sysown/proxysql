@@ -417,7 +417,7 @@ private:
 	 * @param command Command that causes the session to switch to fast forward mode.
 	 * @param session_type SESSION_FORWARD_TYPE indicating the type of session.
 	 *
-	 * @return void.
+	 * @return bool.
 	 */
 	bool switch_normal_to_fast_forward_mode(PtrSize_t& pkt, std::string_view command, SESSION_FORWARD_TYPE session_type);
 

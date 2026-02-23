@@ -2951,7 +2951,7 @@ handler_again:
 						goto __exit_DSS__STATE_NOT_INITIALIZED;
 					}
 
-					if (!switch_normal_to_fast_forward_mode(pkt, std::string(matched.data(), matched.size()), SESSION_FORWARD_TYPE_COPY_FROM_STDIN_STDOUT)) {
+					if (!switch_normal_to_fast_forward_mode(pkt, std::string_view(matched.data(), matched.size()), SESSION_FORWARD_TYPE_COPY_FROM_STDIN_STDOUT)) {
 						// Failed to switch to fast forward mode due to pending packets
 						client_myds->setDSS_STATE_QUERY_SENT_NET();
 						client_myds->myprot.generate_error_packet(true, true, "Unexpected packet sequence during COPY command",
@@ -5664,8 +5664,8 @@ bool PgSQL_Session::switch_normal_to_fast_forward_mode(PtrSize_t& pkt, std::stri
 	// Check if there are pending packets in client_myds->PSarrayIN
 	// This is an error condition, we cannot switch to fast forward mode
 	if (client_myds->PSarrayIN->len) {
-		proxy_error("Cannot switch to fast forward mode: unexpected pending packets in client_myds->PSarrayIN (len=%d). Command: %s\n",
-			client_myds->PSarrayIN->len, command.data());
+		proxy_error("Cannot switch to fast forward mode: unexpected pending packets in client_myds->PSarrayIN (len=%u). Command: %.*s\n",
+			client_myds->PSarrayIN->len, (int)command.size(), command.data());
 		return false;
 	}
 
