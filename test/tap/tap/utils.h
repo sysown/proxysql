@@ -261,10 +261,10 @@ sq3_res_t sqlite3_execute_stmt(sqlite3* db, const std::string& query);
  * @param val The 'ext_val_t<T>' to be checked.
  * @return In case of failure, 'EXIT_FAILURE' after logging the error, continues otherwise.
  */
-#define CHECK_EXT_VAL(val)\
+#define CHECK_EXT_VAL(conn, val)\
 	do {\
 		if (val.err) {\
-			diag("%s:%d: Query failed   err=\"%s\"", __func__, __LINE__, val.str.c_str());\
+			diag("%s:%d: Query failed   err=\"%s\"", __func__, __LINE__, get_ext_val_err(conn, val).c_str());\
 			return EXIT_FAILURE;\
 		}\
 	} while(0)
