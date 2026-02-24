@@ -134,7 +134,8 @@ tests: tests-cpp \
 	test_tsdb_api-t \
 	test_ffto_mysql-t \
 	test_ffto_pgsql-t \
-	test_ffto_bypass-t
+	test_ffto_bypass-t \
+	mcp_query_rules-t
 tests:
 	@echo "Removing empty .gcno files ..."
 	find -L . -type f -name '*.gcno' -empty -ls -delete
