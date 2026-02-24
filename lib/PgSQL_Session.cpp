@@ -2277,6 +2277,7 @@ __implicit_sync:
 							pkt = { 0, nullptr };
 							break;
 						default:
+							reset_extended_query_frame();
 							proxy_error("Not implemented yet. Message type:'%c'\n", c);
 							client_myds->setDSS_STATE_QUERY_SENT_NET();
 							client_myds->myprot.generate_error_packet(true, true, "Feature not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
