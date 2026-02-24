@@ -322,7 +322,8 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"monitor_replication_lag_interval_window",
 	(char*)"monitor_replication_lag_timeout",
 	(char*)"monitor_replication_lag_count",
-	(char*)"monitor_replication_lag_use_percona_heartbeat",
+	// NOTE: Disabled until 'pt-heartbeat' supports PostgreSQL is fixed: https://perconadev.atlassian.net/browse/PT-2030
+	// (char*)"monitor_replication_lag_use_percona_heartbeat",
 /*
 	(char*)"monitor_aws_rds_topology_discovery_interval",
 	(char*)"monitor_replication_lag_group_by_host",
@@ -1285,7 +1286,8 @@ char* PgSQL_Threads_Handler::get_variable_string(char* name) {
 		if (!strcmp(name, "monitor_username")) return strdup(variables.monitor_username);
 		if (!strcmp(name, "monitor_password")) return strdup(variables.monitor_password);
 		if (!strcmp(name, "monitor_dbname")) return strdup(variables.monitor_dbname);
-		if (!strcmp(name, "monitor_replication_lag_use_percona_heartbeat")) return strdup(variables.monitor_replication_lag_use_percona_heartbeat);
+		// NOTE: Disabled until 'pt-heartbeat' supports PostgreSQL is fixed: https://perconadev.atlassian.net/browse/PT-2030
+		// if (!strcmp(name, "monitor_replication_lag_use_percona_heartbeat")) return strdup(variables.monitor_replication_lag_use_percona_heartbeat);
 	}
 	if (!strncmp(name, "ssl_", 4)) {
 		if (!strcmp(name, "ssl_p2s_ca")) {
@@ -3936,8 +3938,10 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___monitor_read_only_timeout = GloPTH->get_variable_int((char*)"monitor_read_only_timeout");
 	pgsql_thread___monitor_read_only_max_timeout_count = GloPTH->get_variable_int((char*)"monitor_read_only_max_timeout_count");
 	pgsql_thread___monitor_threads = GloPTH->get_variable_int((char*)"monitor_threads");
+	/* NOTE: Disabled until 'pt-heartbeat' supports PostgreSQL is fixed: https://perconadev.atlassian.net/browse/PT-2030
 	if (pgsql_thread___monitor_replication_lag_use_percona_heartbeat) free(pgsql_thread___monitor_replication_lag_use_percona_heartbeat);
 	pgsql_thread___monitor_replication_lag_use_percona_heartbeat = GloPTH->get_variable_string((char*)"monitor_replication_lag_use_percona_heartbeat");
+	*/
 	if (pgsql_thread___monitor_username) free(pgsql_thread___monitor_username);
 	pgsql_thread___monitor_username = GloPTH->get_variable_string((char*)"monitor_username");
 	if (pgsql_thread___monitor_password) free(pgsql_thread___monitor_password);
