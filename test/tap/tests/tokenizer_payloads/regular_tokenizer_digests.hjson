@@ -1053,7 +1053,39 @@
 				"grouping_limit": 3,
 				"groups_grouping_limit": 7,
 				"digest": "INSERT INTO db.table (col1,col2,col3) VALUES (?,?,?,...),(?,?,?,...),(?,?,?,...),(?,?,?,...),(?,?,?,...),(?,?,?,...),(?,?,?,...),... ON DUPLICATE KEY UPDATE col1 = VALUES(col2)"
-			}
-		]
-	}
-]
+			                        }
+			                ]
+			        },
+				{
+					"q": ["SELECT * FROM t WHERE id IN (1,2,3,4,5)"],
+					"mz": [
+						{
+							"grouping_limit": 1,
+							"digest": "SELECT * FROM t WHERE id IN (?,...)"
+						},
+						{
+							"grouping_limit": 2,
+							"digest": "SELECT * FROM t WHERE id IN (?,?,...)"
+						},
+						{
+							"grouping_limit": 3,
+							"digest": "SELECT * FROM t WHERE id IN (?,?,?,...)"
+						}
+					]
+				},
+				{
+					"q": ["INSERT INTO t VALUES (1,2,3),(4,5,6),(7,8,9)"],
+					"mz": [
+						{
+							"grouping_limit": 1,
+							"groups_grouping_limit": 1,
+							"digest": "INSERT INTO t VALUES (?,...),..."
+						},
+						{
+							"grouping_limit": 1,
+							"groups_grouping_limit": 2,
+							"digest": "INSERT INTO t VALUES (?,...),(?,...),..."
+						}
+					]
+				}
+			]

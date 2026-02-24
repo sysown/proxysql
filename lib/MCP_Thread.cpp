@@ -15,7 +15,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cctype>
 #include <pthread.h>
+#include <algorithm>
 
 // Define the array of variable names for the MCP module
 static const char* mcp_thread_variables_names[] = {
@@ -387,6 +389,67 @@ char** MCP_Threads_Handler::get_variables_list() {
 
 void MCP_Threads_Handler::print_version() {
 	fprintf(stderr, "MCP Threads Handler rev. %s -- %s -- %s\n", MCP_THREAD_VERSION, __FILE__, __TIMESTAMP__);
+}
+
+int MCP_Threads_Handler::load_target_auth_map(SQLite3_result* resultset) {
+	if (!resultset) {
+		return -1;
+	}
+	std::map<std::string, MCP_Target_Auth_Context> new_map;
+	for (auto row : resultset->rows) {
+		if (row->cnt < 12 || !row->fields[0] || !row->fields[1] || !row->fields[2] || !row->fields[3] ||
+			!row->fields[9] || !row->fields[10]) {
+			continue;
+		}
+
+		MCP_Target_Auth_Context ctx;
+		ctx.target_id = row->fields[0];
+		ctx.protocol = row->fields[1];
+		std::transform(ctx.protocol.begin(), ctx.protocol.end(), ctx.protocol.begin(), ::tolower);
+		ctx.hostgroup_id = atoi(row->fields[2]);
+		ctx.auth_profile_id = row->fields[3];
+		ctx.max_rows = row->fields[4] ? atoi(row->fields[4]) : 200;
+		ctx.timeout_ms = row->fields[5] ? atoi(row->fields[5]) : 2000;
+		ctx.allow_explain = row->fields[6] ? (atoi(row->fields[6]) != 0) : true;
+		ctx.allow_discovery = row->fields[7] ? (atoi(row->fields[7]) != 0) : true;
+		ctx.description = row->fields[8] ? row->fields[8] : "";
+		ctx.db_username = row->fields[9];
+		ctx.db_password = row->fields[10];
+		ctx.default_schema = row->fields[11] ? row->fields[11] : "";
+
+		new_map[ctx.target_id] = ctx;
+	}
+	delete resultset;
+
+	pthread_rwlock_wrlock(&rwlock);
+	target_auth_map.swap(new_map);
+	pthread_rwlock_unlock(&rwlock);
+
+	proxy_info("MCP_Threads_Handler: loaded %zu target auth profile mapping(s)\n", target_auth_map.size());
+	return 0;
+}
+
+bool MCP_Threads_Handler::get_target_auth_context(const std::string& target_id, MCP_Target_Auth_Context& out_ctx) {
+	pthread_rwlock_rdlock(&rwlock);
+	auto it = target_auth_map.find(target_id);
+	if (it == target_auth_map.end()) {
+		pthread_rwlock_unlock(&rwlock);
+		return false;
+	}
+	out_ctx = it->second;
+	pthread_rwlock_unlock(&rwlock);
+	return true;
+}
+
+std::vector<MCP_Threads_Handler::MCP_Target_Auth_Context> MCP_Threads_Handler::get_all_target_auth_contexts() {
+	std::vector<MCP_Target_Auth_Context> out;
+	pthread_rwlock_rdlock(&rwlock);
+	out.reserve(target_auth_map.size());
+	for (const auto& kv : target_auth_map) {
+		out.push_back(kv.second);
+	}
+	pthread_rwlock_unlock(&rwlock);
+	return out;
 }
 
 #endif /* PROXYSQLGENAI */

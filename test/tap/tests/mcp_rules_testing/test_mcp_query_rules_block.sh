@@ -450,7 +450,7 @@ main() {
         "Test 1: Block DROP TABLE statement" \
         "query" \
         "run_sql_readonly" \
-        '{"sql": "DROP TABLE IF EXISTS test_table;"}' \
+        '{"sql": "DROP TABLE IF EXISTS test_table;", "target_id": "'"${MCP_TARGET_ID}"'"}' \
         "DROP TABLE statements are not allowed" \
         "100"
 
@@ -459,7 +459,7 @@ main() {
         "Test 2: Block SELECT from customers table" \
         "query" \
         "run_sql_readonly" \
-        '{"sql": "SELECT * FROM customers;"}' \
+        '{"sql": "SELECT * FROM customers;", "target_id": "'"${MCP_TARGET_ID}"'"}' \
         "customers table is restricted" \
         "101"
 
@@ -468,7 +468,7 @@ main() {
         "Test 3: Allow SELECT from other tables" \
         "query" \
         "run_sql_readonly" \
-        '{"sql": "SELECT * FROM products;"}'
+        '{"sql": "SELECT * FROM products;", "target_id": "'"${MCP_TARGET_ID}"'"}'
 
     # Display final stats
     echo ""

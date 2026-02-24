@@ -563,8 +563,9 @@ std::string LLM_Bridge::call_generic_openai_with_retry(
 {
 	int attempt = 0;
 	int current_backoff_ms = initial_backoff_ms;
+	int limit = (max_retries < 0) ? 0 : max_retries;
 
-	while (attempt <= max_retries) {
+	while (attempt <= limit) {
 		// Call the base function (attempt 0 is the first try)
 		std::string result = call_generic_openai(prompt, model, url, key, req_id);
 
@@ -637,8 +638,9 @@ std::string LLM_Bridge::call_generic_anthropic_with_retry(
 {
 	int attempt = 0;
 	int current_backoff_ms = initial_backoff_ms;
+	int limit = (max_retries < 0) ? 0 : max_retries;
 
-	while (attempt <= max_retries) {
+	while (attempt <= limit) {
 		// Call the base function (attempt 0 is the first try)
 		std::string result = call_generic_anthropic(prompt, model, url, key, req_id);
 

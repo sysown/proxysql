@@ -301,6 +301,18 @@ const std::vector<std::string> SAVE_GENAI_VARIABLES_TO_MEMORY = {
 	"SAVE GENAI VARIABLES TO MEM" ,
 	"SAVE GENAI VARIABLES FROM RUNTIME" ,
 	"SAVE GENAI VARIABLES FROM RUN" };
+
+const std::vector<std::string> LOAD_TSDB_VARIABLES_FROM_MEMORY = {
+	"LOAD TSDB VARIABLES FROM MEMORY" ,
+	"LOAD TSDB VARIABLES FROM MEM" ,
+	"LOAD TSDB VARIABLES TO RUNTIME" ,
+	"LOAD TSDB VARIABLES TO RUN" };
+
+const std::vector<std::string> SAVE_TSDB_VARIABLES_TO_MEMORY = {
+	"SAVE TSDB VARIABLES TO MEMORY" ,
+	"SAVE TSDB VARIABLES TO MEM" ,
+	"SAVE TSDB VARIABLES FROM RUNTIME" ,
+	"SAVE TSDB VARIABLES FROM RUN" };
 //
 const std::vector<std::string> LOAD_COREDUMP_FROM_MEMORY = {
 	"LOAD COREDUMP FROM MEMORY" ,
@@ -963,6 +975,16 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	}
 #endif // DEBUG
 
+	if (query_no_space_length == strlen("PROXYSQL TSDB DOWNSAMPLE") && !strncasecmp("PROXYSQL TSDB DOWNSAMPLE", query_no_space, query_no_space_length)) {
+		proxy_info("Received PROXYSQL TSDB DOWNSAMPLE command\n");
+		if (GloProxyStats) {
+			GloProxyStats->tsdb_downsample_metrics();
+		}
+		ProxySQL_Admin *SPA = (ProxySQL_Admin *)pa;
+		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		return false;
+	}
+
 	if (strcasecmp("PROXYSQL RELOAD TLS",query_no_space) == 0) {
 		proxy_info("Received %s command\n", query_no_space);
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -1096,6 +1118,8 @@ bool is_valid_global_variable(const char *var_name) {
 	} else if (strlen(var_name) > 6 && !strncmp(var_name, "pgsql-", 6) && GloPTH->has_variable(var_name + 6)) {
 		return true;
 	} else if (strlen(var_name) > 6 && !strncmp(var_name, "admin-", 6) && SPA->has_variable(var_name + 6)) {
+		return true;
+	} else if (strlen(var_name) > 5 && !strncmp(var_name, "tsdb-", 5) && GloProxyStats && GloProxyStats->has_variable(var_name + 5)) {
 		return true;
 	} else if (strlen(var_name) > 5 && !strncmp(var_name, "ldap-", 5) && GloMyLdapAuth && GloMyLdapAuth->has_variable(var_name + 5)) {
 		return true;
@@ -1887,11 +1911,30 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 
 		if ((query_no_space_length > 21) && ((!strncasecmp("SAVE MYSQL VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD MYSQL VARIABLES ", query_no_space, 21)) ||
 			(!strncasecmp("SAVE PGSQL VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD PGSQL VARIABLES ", query_no_space, 21)) ||
-			(!strncasecmp("SAVE GENAI VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD GENAI VARIABLES ", query_no_space, 21)))) {
+			(!strncasecmp("SAVE GENAI VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD GENAI VARIABLES ", query_no_space, 21)) ||
+			(!strncasecmp("SAVE TSDB VARIABLES ", query_no_space, 20)) || (!strncasecmp("LOAD TSDB VARIABLES ", query_no_space, 20)))) {
 
-			const bool is_pgsql = (query_no_space[5] == 'P' || query_no_space[5] == 'p') ? true : false;
-			const bool is_genai = (query_no_space[5] == 'G' || query_no_space[5] == 'g') ? true : false;
-			const std::string modname = is_pgsql ? "pgsql_variables" : (is_genai ? "genai_variables" : "mysql_variables");
+			const bool is_pgsql = strcasestr(query_no_space, "PGSQL") ? true : false;
+			const bool is_genai = strcasestr(query_no_space, "GENAI") ? true : false;
+			const bool is_tsdb = strcasestr(query_no_space, "TSDB") ? true : false;
+			const std::string modname = is_pgsql ? "pgsql_variables" : (is_genai ? "genai_variables" : (is_tsdb ? "tsdb_variables" : "mysql_variables"));
+
+			if (is_tsdb) {
+				if (is_admin_command_or_alias(LOAD_TSDB_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length)) {
+					ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+					SPA->load_tsdb_variables_to_runtime();
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded tsdb variables to RUNTIME\n");
+					SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+					return false;
+				}
+				if (is_admin_command_or_alias(SAVE_TSDB_VARIABLES_TO_MEMORY, query_no_space, query_no_space_length)) {
+					ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+					SPA->save_tsdb_variables_from_runtime();
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved tsdb variables from RUNTIME\n");
+					SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+					return false;
+				}
+			}
 
 			tuple<string, vector<string>, vector<string>>& t = load_save_disk_commands[modname];
 			if (is_admin_command_or_alias(get<1>(t), query_no_space, query_no_space_length)) {
@@ -1901,6 +1944,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				}
 				else if (is_genai) {
 					*q = l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'genai-%'");
+				}
+				else if (is_tsdb) {
+					*q = l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'tsdb-%'");
 				}
 				else {
 					*q = l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'mysql-%'");
@@ -1916,6 +1962,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				}
 				else if (is_genai) {
 					*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'genai-%'");
+				}
+				else if (is_tsdb) {
+					*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'tsdb-%'");
 				}
 				else {
 					*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'mysql-%'");
@@ -1956,9 +2005,10 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		if (
-			(query_no_space_length==strlen("LOAD MYSQL VARIABLES FROM CONFIG") && (!strncasecmp("LOAD MYSQL VARIABLES FROM CONFIG",query_no_space, query_no_space_length) ||
-				!strncasecmp("LOAD PGSQL VARIABLES FROM CONFIG", query_no_space, query_no_space_length) ||
-				!strncasecmp("LOAD GENAI VARIABLES FROM CONFIG", query_no_space, query_no_space_length)))
+			(query_no_space_length==strlen("LOAD MYSQL VARIABLES FROM CONFIG") && !strncasecmp("LOAD MYSQL VARIABLES FROM CONFIG",query_no_space, query_no_space_length)) ||
+			(query_no_space_length==strlen("LOAD PGSQL VARIABLES FROM CONFIG") && !strncasecmp("LOAD PGSQL VARIABLES FROM CONFIG", query_no_space, query_no_space_length)) ||
+			(query_no_space_length==strlen("LOAD TSDB VARIABLES FROM CONFIG") && !strncasecmp("LOAD TSDB VARIABLES FROM CONFIG", query_no_space, query_no_space_length)) ||
+			(query_no_space_length==strlen("LOAD GENAI VARIABLES FROM CONFIG") && !strncasecmp("LOAD GENAI VARIABLES FROM CONFIG", query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			if (GloVars.configfile_open) {
@@ -1966,12 +2016,15 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				if (GloVars.confFile->OpenFile(NULL)==true) {
 					int rows=0;
 					ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-					if (query_no_space[5] == 'P' || query_no_space[5] == 'p') {
+					if (strcasestr(query_no_space, "PGSQL")) {
 						rows=SPA->proxysql_config().Read_Global_Variables_from_configfile("pgsql");
 						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql global variables from CONFIG\n");
-					} else if (query_no_space[5] == 'G' || query_no_space[5] == 'g') {
+					} else if (strcasestr(query_no_space, "GENAI")) {
 						rows=SPA->proxysql_config().Read_Global_Variables_from_configfile("genai");
 						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded genai global variables from CONFIG\n");
+					} else if (strcasestr(query_no_space, "TSDB")) {
+						rows=SPA->proxysql_config().Read_Global_Variables_from_configfile("tsdb");
+						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded tsdb global variables from CONFIG\n");
 					} else {
 						rows = SPA->proxysql_config().Read_Global_Variables_from_configfile("mysql");
 						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql global variables from CONFIG\n");
@@ -2534,6 +2587,168 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 	// MCP QUERY RULES COMMAND HANDLERS
 	// ============================================================
 #ifdef PROXYSQLGENAI
+	// ============================================================
+	// MCP PROFILES COMMAND HANDLERS (auth + target together)
+	// ============================================================
+	if ((query_no_space_length > 17) &&
+		((!strncasecmp("SAVE MCP PROFILES ", query_no_space, 18)) ||
+		 (!strncasecmp("LOAD MCP PROFILES ", query_no_space, 18)))) {
+
+		ProxySQL_Admin *SPA = (ProxySQL_Admin *)pa;
+		proxy_info("Received %s command\n", query_no_space);
+
+		const auto load_target_auth_map_from_runtime = [&]() -> bool {
+			char* error = NULL;
+			int cols = 0;
+			int affected_rows = 0;
+			SQLite3_result* resultset = NULL;
+			const char* q =
+				"SELECT t.target_id, t.protocol, t.hostgroup_id, t.auth_profile_id,"
+				" t.max_rows, t.timeout_ms, t.allow_explain, t.allow_discovery, t.description,"
+				" a.db_username, a.db_password, a.default_schema"
+				" FROM runtime_mcp_target_profiles t"
+				" JOIN runtime_mcp_auth_profiles a ON a.auth_profile_id=t.auth_profile_id"
+				" WHERE t.active=1"
+				" ORDER BY t.target_id";
+			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+			if (error) {
+				proxy_error("Failed to load MCP target auth map: %s\n", error);
+				free(error);
+				if (resultset) {
+					delete resultset;
+				}
+				return false;
+			}
+			if (GloMCPH) {
+				GloMCPH->load_target_auth_map(resultset);
+			} else if (resultset) {
+				delete resultset;
+			}
+			return true;
+		};
+
+		// LOAD MCP PROFILES FROM DISK / TO MEMORY
+		if (
+			(query_no_space_length == strlen("LOAD MCP PROFILES FROM DISK") &&
+			 !strncasecmp("LOAD MCP PROFILES FROM DISK", query_no_space, query_no_space_length)) ||
+			(query_no_space_length == strlen("LOAD MCP PROFILES TO MEMORY") &&
+			 !strncasecmp("LOAD MCP PROFILES TO MEMORY", query_no_space, query_no_space_length))
+		) {
+			if (!SPA->admindb->execute("BEGIN")) {
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to BEGIN transaction");
+				return false;
+			}
+			if (!SPA->admindb->execute("DELETE FROM main.mcp_auth_profiles") ||
+			    !SPA->admindb->execute("INSERT OR REPLACE INTO main.mcp_auth_profiles SELECT * FROM disk.mcp_auth_profiles") ||
+			    !SPA->admindb->execute("DELETE FROM main.mcp_target_profiles") ||
+			    !SPA->admindb->execute("INSERT OR REPLACE INTO main.mcp_target_profiles SELECT * FROM disk.mcp_target_profiles")) {
+				SPA->admindb->execute("ROLLBACK");
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to load MCP profiles from disk");
+				return false;
+			}
+			if (!SPA->admindb->execute("COMMIT")) {
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to COMMIT transaction");
+				return false;
+			}
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
+		}
+
+		// SAVE MCP PROFILES TO DISK
+		if (
+			(query_no_space_length == strlen("SAVE MCP PROFILES TO DISK") &&
+			 !strncasecmp("SAVE MCP PROFILES TO DISK", query_no_space, query_no_space_length))
+		) {
+			if (!SPA->admindb->execute("BEGIN")) {
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to BEGIN transaction");
+				return false;
+			}
+			if (!SPA->admindb->execute("DELETE FROM disk.mcp_auth_profiles") ||
+			    !SPA->admindb->execute("INSERT OR REPLACE INTO disk.mcp_auth_profiles SELECT * FROM main.mcp_auth_profiles") ||
+			    !SPA->admindb->execute("DELETE FROM disk.mcp_target_profiles") ||
+			    !SPA->admindb->execute("INSERT OR REPLACE INTO disk.mcp_target_profiles SELECT * FROM main.mcp_target_profiles")) {
+				SPA->admindb->execute("ROLLBACK");
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to save MCP profiles to disk");
+				return false;
+			}
+			if (!SPA->admindb->execute("COMMIT")) {
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to COMMIT transaction");
+				return false;
+			}
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
+		}
+
+		// LOAD MCP PROFILES TO RUNTIME / FROM MEMORY
+		if (
+			(query_no_space_length == strlen("LOAD MCP PROFILES TO RUNTIME") &&
+			 !strncasecmp("LOAD MCP PROFILES TO RUNTIME", query_no_space, query_no_space_length)) ||
+			(query_no_space_length == strlen("LOAD MCP PROFILES TO RUN") &&
+			 !strncasecmp("LOAD MCP PROFILES TO RUN", query_no_space, query_no_space_length)) ||
+			(query_no_space_length == strlen("LOAD MCP PROFILES FROM MEMORY") &&
+			 !strncasecmp("LOAD MCP PROFILES FROM MEMORY", query_no_space, query_no_space_length)) ||
+			(query_no_space_length == strlen("LOAD MCP PROFILES FROM MEM") &&
+			 !strncasecmp("LOAD MCP PROFILES FROM MEM", query_no_space, query_no_space_length))
+		) {
+			if (!SPA->admindb->execute("BEGIN")) {
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to BEGIN transaction");
+				return false;
+			}
+			if (!SPA->admindb->execute("DELETE FROM runtime_mcp_auth_profiles") ||
+			    !SPA->admindb->execute("INSERT OR REPLACE INTO runtime_mcp_auth_profiles SELECT * FROM main.mcp_auth_profiles") ||
+			    !SPA->admindb->execute("DELETE FROM runtime_mcp_target_profiles") ||
+			    !SPA->admindb->execute("INSERT OR REPLACE INTO runtime_mcp_target_profiles SELECT * FROM main.mcp_target_profiles")) {
+				SPA->admindb->execute("ROLLBACK");
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to load MCP profiles to runtime");
+				return false;
+			}
+			if (!SPA->admindb->execute("COMMIT")) {
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to COMMIT transaction");
+				return false;
+			}
+			if (!load_target_auth_map_from_runtime()) {
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to refresh MCP runtime profile map");
+				return false;
+			}
+			// Ensure MCP server/query handler reflects the newly loaded runtime profiles.
+			// This recovers cases where MCP server was started before profiles were available.
+			SPA->load_mcp_server();
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
+		}
+
+		// SAVE MCP PROFILES FROM RUNTIME / TO MEMORY
+		if (
+			(query_no_space_length == strlen("SAVE MCP PROFILES TO MEMORY") &&
+			 !strncasecmp("SAVE MCP PROFILES TO MEMORY", query_no_space, query_no_space_length)) ||
+			(query_no_space_length == strlen("SAVE MCP PROFILES TO MEM") &&
+			 !strncasecmp("SAVE MCP PROFILES TO MEM", query_no_space, query_no_space_length)) ||
+			(query_no_space_length == strlen("SAVE MCP PROFILES FROM RUNTIME") &&
+			 !strncasecmp("SAVE MCP PROFILES FROM RUNTIME", query_no_space, query_no_space_length)) ||
+			(query_no_space_length == strlen("SAVE MCP PROFILES FROM RUN") &&
+			 !strncasecmp("SAVE MCP PROFILES FROM RUN", query_no_space, query_no_space_length))
+		) {
+			if (!SPA->admindb->execute("BEGIN")) {
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to BEGIN transaction");
+				return false;
+			}
+			if (!SPA->admindb->execute("DELETE FROM main.mcp_auth_profiles") ||
+			    !SPA->admindb->execute("INSERT OR REPLACE INTO main.mcp_auth_profiles SELECT * FROM runtime_mcp_auth_profiles") ||
+			    !SPA->admindb->execute("DELETE FROM main.mcp_target_profiles") ||
+			    !SPA->admindb->execute("INSERT OR REPLACE INTO main.mcp_target_profiles SELECT * FROM runtime_mcp_target_profiles")) {
+				SPA->admindb->execute("ROLLBACK");
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to save MCP profiles from runtime");
+				return false;
+			}
+			if (!SPA->admindb->execute("COMMIT")) {
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to COMMIT transaction");
+				return false;
+			}
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
+		}
+	}
+
 	// Supported commands:
 	//   LOAD MCP QUERY RULES FROM DISK  - Copy from disk to memory
 	//   LOAD MCP QUERY RULES TO MEMORY  - Copy from disk to memory (alias)
@@ -3022,6 +3237,37 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		} else {
 			proxy_warning("Received invalid command DUMP EVENTSLOG: %s\n", query_no_space);
 			const string err_msg = "Invalid DUMP EVENTSLOG command";
+			SPA->send_error_msg_to_client(sess, const_cast<char*>(err_msg.c_str()));
+		}
+		run_query = false;
+		goto __run_query;
+	}
+
+	if (!strncasecmp("DUMP PGSQL EVENTSLOG ", query_no_space, strlen("DUMP PGSQL EVENTSLOG "))) {
+		int num_rows = 0;
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received command DUMP PGSQL EVENTSLOG: %s\n", query_no_space);
+		proxy_info("Received command DUMP PGSQL EVENTSLOG: %s\n", query_no_space);
+
+		std::map<std::string, std::pair<SQLite3DB*, SQLite3DB*>> commandMap = {
+			{"DUMP PGSQL EVENTSLOG FROM BUFFER TO MEMORY", {SPA->statsdb, nullptr}},
+			{"DUMP PGSQL EVENTSLOG FROM BUFFER TO DISK",   {nullptr,      SPA->statsdb_disk}},
+			{"DUMP PGSQL EVENTSLOG FROM BUFFER TO BOTH",   {SPA->statsdb, SPA->statsdb_disk}}
+		};
+
+		string s = string(query_no_space);
+		auto it = commandMap.find(s);
+		if (it != commandMap.end()) {
+			if (GloPgSQL_Logger == nullptr) {
+				proxy_warning("PgSQL logger not initialized for command: %s\n", query_no_space);
+				const string err_msg = "PgSQL logger not initialized";
+				SPA->send_error_msg_to_client(sess, const_cast<char*>(err_msg.c_str()));
+			} else {
+				num_rows = GloPgSQL_Logger->processEvents(it->second.first, it->second.second);
+				SPA->send_ok_msg_to_client(sess, NULL, num_rows, query_no_space);
+			}
+		} else {
+			proxy_warning("Received invalid command DUMP PGSQL EVENTSLOG: %s\n", query_no_space);
+			const string err_msg = "Invalid DUMP PGSQL EVENTSLOG command";
 			SPA->send_error_msg_to_client(sess, const_cast<char*>(err_msg.c_str()));
 		}
 		run_query = false;
@@ -4483,6 +4729,21 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		l_free(query_length, query);
 		query = l_strdup("SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables WHERE variable_name LIKE 'pgsql-\%' ORDER BY variable_name");
 		query_length = strlen(query) + 1;
+		goto __run_query;
+	}
+
+	if (query_no_space_length == strlen("SHOW TSDB VARIABLES") && !strncasecmp("SHOW TSDB VARIABLES", query_no_space, query_no_space_length)) {
+		l_free(query_length, query);
+		query = l_strdup("SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables WHERE variable_name LIKE 'tsdb-%' ORDER BY variable_name");
+		query_length = strlen(query) + 1;
+		goto __run_query;
+	}
+
+	if (query_no_space_length == strlen("SHOW TSDB STATUS") && !strncasecmp("SHOW TSDB STATUS", query_no_space, query_no_space_length)) {
+		l_free(query_length, query);
+		query = l_strdup("SELECT Variable_Name AS Variable_name, Variable_Value AS Value FROM stats_tsdb ORDER BY Variable_name");
+		query_length = strlen(query) + 1;
+		SPA->stats___tsdb();
 		goto __run_query;
 	}
 

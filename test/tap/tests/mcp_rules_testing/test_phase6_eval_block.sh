@@ -74,7 +74,7 @@ test_is_allowed() {
 
     local payload
     payload=$(cat <<EOF
-{"jsonrpc":"2.0","method":"tools/call","params":{"name":"${tool_name}","arguments":{"sql":"${sql}"}},"id":1}
+{"jsonrpc":"2.0","method":"tools/call","params":{"name":"${tool_name}","arguments":{"sql":"${sql}","target_id":"${MCP_TARGET_ID}"}},"id":1}
 EOF
 )
 
@@ -98,7 +98,7 @@ test_is_blocked() {
 
     local payload
     payload=$(cat <<EOF
-{"jsonrpc":"2.0","method":"tools/call","params":{"name":"${tool_name}","arguments":{"sql":"${sql}"}},"id":1}
+{"jsonrpc":"2.0","method":"tools/call","params":{"name":"${tool_name}","arguments":{"sql":"${sql}","target_id":"${MCP_TARGET_ID}"}},"id":1}
 EOF
 )
 
@@ -179,9 +179,9 @@ main() {
     log_info "Creating rule 102: Negate pattern - block everything except specific query"
     exec_admin_silent "INSERT INTO mcp_query_rules (rule_id, active, match_pattern, negate_match_pattern, error_msg, apply) VALUES (102, 1, '^SELECT phase6_allowed_col FROM fake_table$', 1, 'Only specific query is allowed', 1);" >/dev/null 2>&1
 
-    # T6.4: Block specific username
-    log_info "Creating rule 103: Block for specific user 'testuser'"
-    exec_admin_silent "INSERT INTO mcp_query_rules (rule_id, active, username, match_pattern, error_msg, apply) VALUES (103, 1, 'testuser', 'DROP', 'User testuser cannot DROP', 1);" >/dev/null 2>&1
+    # T6.4: Block specific username (resolved from MCP auth profile)
+    log_info "Creating rule 103: Block for runtime backend user '${MYSQL_USER}'"
+    exec_admin_silent "INSERT INTO mcp_query_rules (rule_id, active, username, match_pattern, error_msg, apply) VALUES (103, 1, '${MYSQL_USER}', 'phase6_user_filter', 'User-specific MCP rule fired', 1);" >/dev/null 2>&1
 
     # T6.5: Block specific schema
     log_info "Creating rule 104: Block for specific schema 'testdb'"
@@ -190,6 +190,14 @@ main() {
     # T6.6: Block specific tool_name
     log_info "Creating rule 105: Block for specific tool 'run_sql_readonly'"
     exec_admin_silent "INSERT INTO mcp_query_rules (rule_id, active, tool_name, match_pattern, error_msg, apply) VALUES (105, 1, 'run_sql_readonly', 'TRUNCATE', 'TRUNCATE not allowed in readonly mode', 1);" >/dev/null 2>&1
+
+    # T6.7: Block specific target_id
+    log_info "Creating rule 106: Block only for target_id '${MCP_TARGET_ID}'"
+    exec_admin_silent "INSERT INTO mcp_query_rules (rule_id, active, target_id, match_pattern, error_msg, apply) VALUES (106, 1, '${MCP_TARGET_ID}', 'phase6_target_filter', 'Target-specific MCP rule fired', 1);" >/dev/null 2>&1
+
+    # T6.8: Rule for non-selected target should never match this test traffic
+    log_info "Creating rule 107: Non-selected target_id should not match"
+    exec_admin_silent "INSERT INTO mcp_query_rules (rule_id, active, target_id, match_pattern, error_msg, apply) VALUES (107, 1, 'phase6_unused_target', 'phase6_unused_target_filter', 'Should not fire', 1);" >/dev/null 2>&1
 
     # Load to runtime
     exec_admin_silent "LOAD MCP QUERY RULES TO RUNTIME;" >/dev/null 2>&1
@@ -218,17 +226,13 @@ main() {
     run_test "T6.3: Negate pattern - exact pattern match should be allowed" \
         test_is_allowed "run_sql_readonly" "SELECT phase6_allowed_col FROM fake_table"
 
-    # T6.4: Block specific username
-    # Note: This test depends on the user context. For now, we test that the rule exists.
-    # Actual username filtering requires authentication context.
-    log_info "T6.4: Username-based filtering (rule 103 created - requires auth context to fully test)"
-    run_test "T6.4: Username rule exists in runtime" \
-        bash -c "[ $(exec_admin_silent 'SELECT COUNT(*) FROM runtime_mcp_query_rules WHERE rule_id = 103 AND username = "testuser"') -eq 1 ]"
+    run_test "T6.4: Username rule persisted in runtime" \
+        bash -c "[ \$(exec_admin_silent \"SELECT COUNT(*) FROM runtime_mcp_query_rules WHERE rule_id = 103 AND username = '${MYSQL_USER}'\") -eq 1 ]"
 
     # T6.5: Block specific schema
     log_info "T6.5: Schema-based filtering (rule 104 created for 'testdb')"
     run_test "T6.5: Schema rule exists in runtime" \
-        bash -c "[ $(exec_admin_silent 'SELECT COUNT(*) FROM runtime_mcp_query_rules WHERE rule_id = 104 AND schemaname = "testdb"') -eq 1 ]"
+        bash -c "[ \$(exec_admin_silent \"SELECT COUNT(*) FROM runtime_mcp_query_rules WHERE rule_id = 104 AND schemaname = 'testdb'\") -eq 1 ]"
 
     # T6.6: Block specific tool_name
     exec_admin_silent "DELETE FROM mcp_query_rules WHERE rule_id=102;" >/dev/null 2>&1
@@ -236,15 +240,29 @@ main() {
     run_test "T6.6: Block TRUNCATE in run_sql_readonly tool" \
         test_is_blocked "run_sql_readonly" "TRUNCATE TABLE test_table;" "TRUNCATE not allowed"
 
+    run_test "T6.6: Username filter blocks matching query" \
+        test_is_blocked "run_sql_readonly" "SELECT 'phase6_user_filter' AS phase6_user_filter;" "User-specific MCP rule fired"
+
+    # T6.7: Block specific target_id
+    run_test "T6.7: Target filter blocks matching query" \
+        test_is_blocked "run_sql_readonly" "SELECT 'phase6_target_filter' AS phase6_target_filter;" "Target-specific MCP rule fired"
+
+    run_test "T6.7: Target_id rule persisted in runtime" \
+        bash -c "[ \$(exec_admin_silent \"SELECT COUNT(*) FROM runtime_mcp_query_rules WHERE rule_id = 106 AND target_id = '${MCP_TARGET_ID}'\") -eq 1 ]"
+
+    # T6.8: Non-matching target_id rule should not apply
+    run_test "T6.8: Non-selected target_id rule does not match" \
+        test_is_allowed "run_sql_readonly" "SELECT 'phase6_unused_target_filter' AS phase6_unused_target_filter;"
+
     # Display runtime rules
     echo ""
     echo "Runtime rules created:"
-    exec_admin "SELECT rule_id, username, schemaname, tool_name, match_pattern, negate_match_pattern, error_msg FROM runtime_mcp_query_rules WHERE rule_id BETWEEN 100 AND 199 ORDER BY rule_id;"
+    exec_admin "SELECT rule_id, username, target_id, schemaname, tool_name, match_pattern, negate_match_pattern, error_msg FROM runtime_mcp_query_rules WHERE rule_id BETWEEN 100 AND 199 ORDER BY rule_id;"
 
     # Display stats
     echo ""
     echo "Rule hit statistics:"
-    exec_admin "SELECT rule_id, hits FROM stats_mcp_query_rules WHERE rule_id BETWEEN 100 AND 199 ORDER BY rule_id;"
+    exec_admin "SELECT rule_id, username, target_id, hits FROM stats_mcp_query_rules WHERE rule_id BETWEEN 100 AND 199 ORDER BY rule_id;"
 
     # Summary
     echo ""
