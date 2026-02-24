@@ -129,13 +129,7 @@ tests: tests-cpp \
 	fast_forward_grace_close_libmysql-t \
 	fast_forward_switch_replication_deprecate_eof_libmysql-t \
 	reg_test_mariadb_stmt_store_result_libmysql-t \
-	reg_test_mariadb_stmt_store_result_async-t \
-	test_tsdb_variables-t \
-	test_tsdb_api-t \
-	test_ffto_mysql-t \
-	test_ffto_pgsql-t \
-	test_ffto_bypass-t \
-	mcp_query_rules-t
+	reg_test_mariadb_stmt_store_result_async-t
 tests:
 	@echo "Removing empty .gcno files ..."
 	find -L . -type f -name '*.gcno' -empty -ls -delete
