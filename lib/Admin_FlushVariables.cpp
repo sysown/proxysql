@@ -1432,16 +1432,25 @@ void ProxySQL_Admin::flush_mcp_variables___runtime_to_database(SQLite3DB* db, bo
 		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'mcp-%'");
 	}
 	int rc;
-	auto [rc1, statement1_unique] = db->prepare_v2("REPLACE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)");
+	const char* a;
+	if (replace) {
+		a = "REPLACE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)";
+	} else {
+		a = "INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)";
+	}
+	auto [rc1, stmt1] = db->prepare_v2(a);
 	ASSERT_SQLITE_OK(rc1, db);
-	sqlite3_stmt* statement1 = statement1_unique.get();
+	sqlite3_stmt* statement1 = stmt1.get();
 
 	// Only prepare runtime_global_variables statement if runtime flag is set
 	// (table may not exist during early initialization)
 	sqlite3_stmt* statement2 = nullptr;
+	stmt_unique_ptr stmt2 {};
 	if (runtime) {
-		rc = db->prepare_v2("INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(?1, ?2)", &statement2);
-		ASSERT_SQLITE_OK(rc, db);
+		auto [rc2, st2] = db->prepare_v2("INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(?1, ?2)");
+		ASSERT_SQLITE_OK(rc2, db);
+		stmt2 = std::move(st2);
+		statement2 = stmt2.get();
 	}
 
 	if (use_lock) {
@@ -1472,11 +1481,6 @@ void ProxySQL_Admin::flush_mcp_variables___runtime_to_database(SQLite3DB* db, bo
 		}
 
 		free(qualified_name);
-	}
-
-	// Clean up statement2 if we allocated it
-	if (statement2) {
-		sqlite3_finalize(statement2);
 	}
 
 	if (use_lock) {
