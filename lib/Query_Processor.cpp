@@ -1230,7 +1230,7 @@ query_digest_topk_result_t Query_Processor<QP_DERIVED>::get_query_digests_topk(
 	 * efficiently evict the worst candidate when the heap is full.
 	 */
 	const auto worse = [](const query_digest_topk_candidate_t& lhs, const query_digest_topk_candidate_t& rhs) -> bool {
-		return query_digest_candidate_better(rhs, lhs);
+		return query_digest_candidate_better(lhs, rhs);
 	};
 	std::priority_queue<
 		query_digest_topk_candidate_t,
