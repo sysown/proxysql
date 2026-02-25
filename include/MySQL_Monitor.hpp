@@ -329,6 +329,9 @@ private:
 	MySQL_Monitor_State_Data_Task_Result galera_handler(short event_, short& wait_event) {
 		return generic_handler(event_, wait_event);
 	}
+
+	friend unique_ptr<MySQL_Monitor_State_Data> init_mmsd_with_conn(const gr_host_def_t srv_def, uint32_t writer_hg, 
+		uint64_t start_time);
 };
 
 template<typename T>

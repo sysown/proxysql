@@ -1,7 +1,7 @@
 // NOTE: Avoids the definition of 'global_variables glovars' in 'proxysql_structs.h'
 #define PROXYSQL_EXTERN
 // NOTE: Avoids definition of 'proxy_sqlite3_*' functions as 'extern'
-#define MAIN_PROXY_SQLITE3
+// Removed: #define MAIN_PROXY_SQLITE3  // libproxysql.a now provides canonical definitions
 
 #include "command_line.h"
 #include "tap.h"
@@ -136,6 +136,7 @@ static Test syntax_errors[] = {
 };
 
 static Test time_zone[] = {
+  // Original tests - 2 component timezone names
   { "SET @@time_zone = 'Europe/Paris'", { Expected("time_zone",  {"Europe/Paris"}) } },
   { "SET @@time_zone = '+00:00'", { Expected("time_zone",  {"+00:00"}) } },
   { "SET @@time_zone = \"Europe/Paris\"", { Expected("time_zone",  {"Europe/Paris"}) } },
@@ -144,6 +145,24 @@ static Test time_zone[] = {
   { "SET @@TIME_ZONE = @OLD_TIME_ZONE", { Expected("time_zone",  {"@OLD_TIME_ZONE"}) } },
   { "SET @@TIME_ZONE := 'SYSTEM'", { Expected("time_zone",  {"SYSTEM"}) } },
   { "SET time_zone := 'SYSTEM'", { Expected("time_zone",  {"SYSTEM"}) } },
+  // Special values - UTC and SYSTEM
+  { "SET time_zone = 'UTC'", { Expected("time_zone",  {"UTC"}) } },
+  { "SET time_zone = SYSTEM", { Expected("time_zone",  {"SYSTEM"}) } },
+  { "SET time_zone = UTC", { Expected("time_zone",  {"UTC"}) } },
+  // 3 component timezone names (bug fix for GitHub issue #4993)
+  { "SET time_zone = 'America/Argentina/Buenos_Aires'", { Expected("time_zone",  {"America/Argentina/Buenos_Aires"}) } },
+  { "SET time_zone = 'America/Indiana/Indianapolis'", { Expected("time_zone",  {"America/Indiana/Indianapolis"}) } },
+  { "SET time_zone = \"America/Kentucky/Louisville\"", { Expected("time_zone",  {"America/Kentucky/Louisville"}) } },
+  // Timezone names with hyphens (additional fix)
+  { "SET time_zone = 'America/Port-au-Prince'", { Expected("time_zone",  {"America/Port-au-Prince"}) } },
+  { "SET time_zone = 'America/Blanc-Sablon'", { Expected("time_zone",  {"America/Blanc-Sablon"}) } },
+  { "SET time_zone = \"US/East-Indiana\"", { Expected("time_zone",  {"US/East-Indiana"}) } },
+  // Various numeric offsets
+  { "SET time_zone = '+08:00'", { Expected("time_zone",  {"+08:00"}) } },
+  { "SET time_zone = '-05:30'", { Expected("time_zone",  {"-05:30"}) } },
+  { "SET time_zone = '-10:00'", { Expected("time_zone",  {"-10:00"}) } },
+  // Combined with other SET variables
+  { "SET time_zone = 'America/Argentina/Buenos_Aires', sql_mode = 'TRADITIONAL'", { Expected("time_zone",  {"America/Argentina/Buenos_Aires"}), Expected("sql_mode", {"TRADITIONAL"}) } },
 };
 
 static Test session_track_gtids[] = {

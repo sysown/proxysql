@@ -726,13 +726,24 @@ handler_again:
 		break;
 
 	case ASYNC_STMT_DESCRIBE_START:
+	{
 		stmt_describe_start();
+		__sync_fetch_and_add(&parent->queries_sent, 1);
+		size_t bytes_sent = 7 + 5; // 7 for DESCRIBE header, 5 for SYNC/FLUSH
+		if (query.extended_query_info->stmt_type == 'P') {
+			bytes_sent += query.extended_query_info->stmt_client_portal_name ? (strlen(query.extended_query_info->stmt_client_portal_name) + 1) : 0;
+		} else {
+			bytes_sent += query.backend_stmt_name ? (strlen(query.backend_stmt_name) + 1) : 0;
+		}
+		update_bytes_sent(bytes_sent);
+		statuses.questions++;
 		if (async_exit_status) {
 			next_event(ASYNC_STMT_DESCRIBE_CONT);
 		} else {
 			NEXT_IMMEDIATE(ASYNC_STMT_DESCRIBE_END);
 		}
-		break;
+	}
+	break;
 	case ASYNC_STMT_DESCRIBE_CONT:
 		if (event) {
 			stmt_describe_cont(event);
@@ -750,6 +761,9 @@ handler_again:
 
 	case ASYNC_STMT_EXECUTE_START:
 		stmt_execute_start();
+		__sync_fetch_and_add(&parent->queries_sent, 1);
+		update_bytes_sent(query.extended_query_info->bind_msg->get_raw_pkt().size + 5);
+		statuses.questions++;
 		if (async_exit_status) {
 			next_event(ASYNC_STMT_EXECUTE_CONT);
 		} else {
@@ -808,10 +822,11 @@ handler_again:
 
 	case ASYNC_RESYNC_START:
 		if (PQpipelineStatus(pgsql_conn) == PQ_PIPELINE_OFF) {
-			proxy_warning("Resync not required — connection already synchronized.\n");
+			proxy_warning("Resync not required - connection already synchronized.\n");
 			NEXT_IMMEDIATE(ASYNC_RESYNC_END);
 		}
 		resync_start();
+		update_bytes_sent(5); // SYNC message
 		if (async_exit_status) {
 			next_event(ASYNC_RESYNC_CONT);
 		} else {
@@ -1839,7 +1854,29 @@ void PgSQL_Connection::stmt_execute_start() {
 					"Failed to read param format", false);
 				return;
 			}
-			param_formats[i] = format;
+			param_formats[i] = format; // 0 = text, 1 = binary
+		}
+	}
+
+	// Normalize param formats for libpq:
+	// According to the PostgreSQL Bind message specification:
+	// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-BIND
+	//  - num_param_formats = 0 -> all parameters are TEXT
+	//  - num_param_formats = 1 -> the single format applies to all parameters
+	//  - num_param_formats = num_param_values -> formats are applied per-parameter in order
+	// Any other number of parameter formats is a protocol error.
+	if (!param_formats.empty()) {
+		if (param_formats.size() == 1 && param_values.size() > 1) {
+			// PostgreSQL protocol allows 1 format for all params,
+			// libpq DOES NOT, we must expand
+			int fmt = param_formats[0];
+			param_formats.resize(param_values.size(), fmt);
+		} else if (param_formats.size() != param_values.size()) {
+			proxy_error("Invalid param format count: got %zu, expected %zu\n",
+				param_formats.size(), param_values.size());
+			set_error(PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE,
+				"Invalid parameter format count", false);
+			return;
 		}
 	}
 
@@ -1858,8 +1895,13 @@ void PgSQL_Connection::stmt_execute_start() {
 		}
 	}
 
+	// If the client did not send any parameter formats (num_param_formats = 0),
+	// PostgreSQL protocol defines this as "all parameters are TEXT".
+	// libpq represents this case by passing paramFormats = nullptr.
+	const int* param_formats_data = (param_formats.empty() == false ? param_formats.data() : nullptr);
+
 	if (PQsendQueryPrepared(pgsql_conn, query.backend_stmt_name, param_values.size(),
-		param_values.data(), param_lengths.data(), param_formats.data(),
+		param_values.data(), param_lengths.data(), param_formats_data,
 		(result_formats.size() > 0) ? result_formats[0] : 0) == 0) {
 		set_error_from_PQerrorMessage();
 		proxy_error("Failed to send execute prepared statement. %s\n", get_error_code_with_message().c_str());

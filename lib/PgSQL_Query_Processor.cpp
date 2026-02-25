@@ -245,7 +245,9 @@ PgSQL_Query_Processor::~PgSQL_Query_Processor() {
 
 void PgSQL_Query_Processor::update_query_processor_stats() {
 	Query_Processor::update_query_processor_stats();
-	for (int i = 0; i < PGSQL_QUERY___NONE; i++) commands_counters[i]->add_and_reset(_thr_commands_counters[i]);
+	for (int i = 0; i < PGSQL_QUERY___NONE; i++) {
+		commands_counters[i]->add_and_reset(_thr_commands_counters[i]);
+	}
 }
 
 void PgSQL_Query_Processor::init_thread() {

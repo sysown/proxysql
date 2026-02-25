@@ -400,7 +400,7 @@ int set_admin_global_variable(MYSQL *mysql, const string& var_name, const string
 int get_server_version(MYSQL *mysql, string& version) {
 	char query[128];
 
-	if (mysql_query(mysql, "select @@version")) {
+	if (mysql_query(mysql, "select /* set_testing */ @@version")) {
 		fprintf(stderr, "Error %d, %s\n",
 				mysql_errno(mysql), mysql_error(mysql));
 		return exit_status();
@@ -857,26 +857,18 @@ int wait_get_enpoint_ready(string endpoint, uint32_t timeout, uint32_t delay) {
 string random_string(std::size_t strSize) {
 	string dic { "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" };
 
-	std::random_device rd {};
-	std::mt19937 generator { rd() };
+	std::random_device rd;
+	std::mt19937 gen(rd());
+	std::uniform_int_distribution<std::size_t> dist(0, dic.size() - 1);
 
-	std::shuffle(dic.begin(), dic.end(), generator);
+	std::string res;
+	res.reserve(strSize);
 
-	if (strSize < dic.size()) {
-		return dic.substr(0, strSize);
-	} else {
-		std::size_t req_modulus = static_cast<std::size_t>(strSize / dic.size());
-		std::size_t req_reminder = strSize % dic.size();
-		string random_str {};
-
-		for (std::size_t i = 0; i < req_modulus; i++) {
-			random_str.append(dic);
-		}
-
-		random_str.append(dic.substr(0, req_reminder));
-
-		return random_str;
+	for (std::size_t i = 0; i < strSize; ++i) {
+		res.push_back(dic[dist(gen)]);
 	}
+
+	return res;
 }
 
 const double COLISSION_PROB = 1e-8;

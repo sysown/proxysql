@@ -326,6 +326,8 @@ class ProxySQL_Admin {
 		int stats_mysql_query_cache;
 		int stats_mysql_query_digest_to_disk;
 		int stats_mysql_eventslog_sync_buffer_to_disk;
+		/** @brief Periodic disk sync interval (seconds) for PostgreSQL eventslog buffer. */
+		int stats_pgsql_eventslog_sync_buffer_to_disk;
 		int stats_system_cpu;
 		int stats_system_memory;
 		bool restapi_enabled;
@@ -343,6 +345,25 @@ class ProxySQL_Admin {
 #endif /* DEBUG */
 		int coredump_generation_interval_ms;
 		int coredump_generation_threshold;
+		/**
+		 * @brief Path to the SSL/TLS key log file for decrypting traffic
+		 *
+		 * When set, ProxySQL writes TLS secrets to this file in NSS Key Log Format.
+		 * This allows tools like Wireshark to decrypt SSL/TLS traffic for debugging.
+		 *
+		 * Format: "<Label> <ClientRandom> <Secret>\n"
+		 *
+		 * Path handling:
+		 * - Absolute path: used as-is (e.g., "/var/log/proxysql/keylog.txt")
+		 * - Relative path: resolved relative to ProxySQL data directory
+		 * - Empty string (""): disables key logging (default)
+		 *
+		 * Security: This file contains cryptographic secrets that can decrypt
+		 * all TLS traffic. Access must be tightly restricted. Only enable for debugging.
+		 *
+		 * @see https://wiki.wireshark.org/TLS#TLS_Decryption
+		 * @see https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSS/Key_Log_Format
+		 */
 		char* ssl_keylog_file;
 		/**
 		 *   Processlist configurations are owned by MySQL/PgSQL Threads_Handlers.
@@ -472,9 +493,19 @@ class ProxySQL_Admin {
 	void flush_pgsql_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
 	//
 
+#ifdef PROXYSQLGENAI
+	// GenAI
+	void flush_genai_variables___runtime_to_database(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime = false, bool use_lock = true);
+	void flush_genai_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum = "", const time_t epoch = 0, bool lock = true);
+
+	// MCP (Model Context Protocol)
+	void flush_mcp_variables___runtime_to_database(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime = false, bool use_lock = true);
+	void flush_mcp_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum = "", const time_t epoch = 0, bool lock = true);
+#endif /* PROXYSQLGENAI */
+
 	void flush_sqliteserver_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void flush_sqliteserver_variables___database_to_runtime(SQLite3DB *db, bool replace);
-	
+
 	// LDAP
 	void flush_ldap_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void flush_ldap_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
@@ -511,6 +542,9 @@ class ProxySQL_Admin {
 	SQLite3DB *configdb; // on disk
 	SQLite3DB *monitordb;	// in memory
 	SQLite3DB *statsdb_disk; // on disk
+#ifdef PROXYSQLGENAI
+	SQLite3DB *mcpdb; // MCP catalog database
+#endif /* PROXYSQLGENAI */
 #ifdef DEBUG
 	SQLite3DB *debugdb_disk; // on disk for debug
 	int debug_output;
@@ -538,6 +572,13 @@ class ProxySQL_Admin {
 	 * @details Modules ready when 'all_modules_started=true'. See 'all_modules_started'.
 	 */
 	void load_restapi_server();
+#ifdef PROXYSQLGENAI
+	/**
+	 * @brief Loads the MCP server config to runtime if all modules are ready, no-op otherwise.
+	 * @details Modules ready when 'all_modules_started=true'. See 'all_modules_started'.
+	 */
+	void load_mcp_server();
+#endif /* PROXYSQLGENAI */
 	bool get_read_only() { return variables.admin_read_only; }
 	bool set_read_only(bool ro) { variables.admin_read_only=ro; return variables.admin_read_only; }
 	bool has_variable(const char *name);
@@ -634,6 +675,12 @@ class ProxySQL_Admin {
 	void save_mysql_firewall_whitelist_rules_from_runtime(bool, SQLite3_result *);
 	void save_mysql_firewall_whitelist_sqli_fingerprints_from_runtime(bool, SQLite3_result *);
 
+#ifdef PROXYSQLGENAI
+	// MCP query rules
+	char* load_mcp_query_rules_to_runtime();
+	void save_mcp_query_rules_from_runtime(bool _runtime = false);
+#endif /* PROXYSQLGENAI */
+
 	char* load_pgsql_firewall_to_runtime();
 
 	void load_scheduler_to_runtime();
@@ -641,6 +688,12 @@ class ProxySQL_Admin {
 
 	void load_admin_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0, bool lock = true) { flush_admin_variables___database_to_runtime(admindb, true, checksum, epoch, lock); }
 	void save_admin_variables_from_runtime() { flush_admin_variables___runtime_to_database(admindb, true, true, false); }
+
+	// TSDB
+	void init_tsdb_variables();
+	void flush_tsdb_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
+	void load_tsdb_variables_to_runtime();
+	void save_tsdb_variables_from_runtime();
 
 	void load_or_update_global_settings(SQLite3DB *);
 
@@ -667,6 +720,7 @@ class ProxySQL_Admin {
 	void stats___mysql_errors(bool reset);
 	void stats___memory_metrics();
 	void stats___mysql_global();
+	void stats___tsdb();
 	void stats___mysql_users();
 
 	void stats___pgsql_global();
@@ -690,6 +744,12 @@ class ProxySQL_Admin {
 	void stats___mysql_prepared_statements_info();
 	void stats___mysql_gtid_executed();
 	void stats___mysql_client_host_cache(bool reset);
+
+#ifdef PROXYSQLGENAI
+	void stats___mcp_query_tools_counters(bool reset);
+	void stats___mcp_query_digest(bool reset);
+	void stats___mcp_query_rules();
+#endif /* PROXYSQLGENAI */
 
 	// Update prometheus metrics
 	void p_stats___memory_metrics();
@@ -754,6 +814,14 @@ class ProxySQL_Admin {
 	void init_pgsql_variables();
 	void load_pgsql_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_pgsql_variables___database_to_runtime(admindb, true, checksum, epoch); }
 	void save_pgsql_variables_from_runtime() { flush_pgsql_variables___runtime_to_database(admindb, true, true, false); }
+
+#ifdef PROXYSQLGENAI
+	//GenAI
+	void init_genai_variables();
+	void load_genai_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_genai_variables___database_to_runtime(admindb, true, checksum, epoch); }
+	void save_genai_variables_from_runtime() { flush_genai_variables___runtime_to_database(admindb, true, true, false); }
+#endif /* PROXYSQLGENAI */
+
 	void init_pgsql_users(std::unique_ptr<SQLite3_result>&& pgsql_users_resultset = nullptr, const std::string& checksum = "", const time_t epoch = 0);
 	void flush_pgsql_users__from_memory_to_disk();
 	void flush_pgsql_users__from_disk_to_memory();
@@ -762,6 +830,13 @@ class ProxySQL_Admin {
 
 	void load_pgsql_servers_to_runtime(const incoming_pgsql_servers_t& incoming_pgsql_servers = {}, const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server = {},
 		const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2 = {});
+
+#ifdef PROXYSQLGENAI
+	// MCP (Model Context Protocol)
+	void init_mcp_variables();
+	void load_mcp_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_mcp_variables___database_to_runtime(admindb, true, checksum, epoch); }
+	void save_mcp_variables_from_runtime() { flush_mcp_variables___runtime_to_database(admindb, true, true, false); }
+#endif /* PROXYSQLGENAI */
 
 	char* load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset = NULL, 
 		SQLite3_result* SQLite3_query_rules_fast_routing_resultset = NULL, const std::string& checksum = "", const time_t epoch = 0);
@@ -826,5 +901,12 @@ class ProxySQL_Admin {
 
 	// FLUSH LOGS
 	void flush_logs();
+
+#ifdef DEBUG
+	// FLUSH STATS
+	void flush_stats();           // Reset all statistics
+	void flush_mysql_stats();     // Reset MySQL statistics only
+	void flush_pgsql_stats();     // Reset PostgreSQL statistics only
+#endif // DEBUG
 };
 #endif /* __CLASS_PROXYSQL_ADMIN_H */

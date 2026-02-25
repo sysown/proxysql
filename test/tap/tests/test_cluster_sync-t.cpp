@@ -837,7 +837,15 @@ int check_module_checksums_sync(
 			diag("Enabling sync for module '%s'", module.c_str());
 
 			// NOTE: Redundant, but left as DOC since this should be the value
-			MYSQL_QUERY_T(r_admin, ("SET " + module_sync.checksum_variable + "=true").c_str());
+			/**
+			 * @brief Re-enable synchronization for the module.
+			 *
+			 * Module 'proxysql_servers' is an exception as it lacks an associated 'admin-checksum_*'
+			 * global variable. Attempting to set it would result in an 'Unknown global variable' error.
+			 */
+			if (module != "proxysql_servers") {
+				MYSQL_QUERY_T(r_admin, ("SET " + module_sync.checksum_variable + "=true").c_str());
+			}
 			MYSQL_QUERY_T(r_admin, string {"SET " + module_sync.sync_variable + "=" + std::to_string(3)}.c_str());
 			MYSQL_QUERY_T(r_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
 

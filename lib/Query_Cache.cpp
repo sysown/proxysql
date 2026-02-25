@@ -4,6 +4,7 @@
 #include "Query_Cache.h"
 #include "MySQL_Query_Cache.h"
 #include "PgSQL_Query_Cache.h"
+#include <type_traits>
 
 #ifdef DEBUG
 #define DEB "_DEBUG"
@@ -315,7 +316,7 @@ using qc_counter_vector = std::vector<qc_counter_tuple>;
 using qc_gauge_vector = std::vector<qc_gauge_tuple>;
 
 /**
- * @brief Metrics map holding the metrics for the 'Query_Cache' module.
+ * @brief Metrics map holding the metrics for the MySQL Query_Cache module.
  *
  * @note Many metrics in this map, share a common "id name", because
  *  they differ only by label, because of this, HELP is shared between
@@ -323,7 +324,7 @@ using qc_gauge_vector = std::vector<qc_gauge_tuple>;
  *  sepparated using a line separator comment.
  */
 const std::tuple<qc_counter_vector, qc_gauge_vector>
-qc_metrics_map = std::make_tuple(
+qc_metrics_map_mysql = std::make_tuple(
 	qc_counter_vector {
 		// ====================================================================
 		std::make_tuple (
@@ -331,7 +332,8 @@ qc_metrics_map = std::make_tuple(
 			"proxysql_query_cache_count_get_total",
 			"Number of failed read requests.",
 			metric_tags {
-				{ "status", "err" }
+				{ "status", "err" },
+				{ "protocol", "mysql" }
 			}
 		),
 		std::make_tuple (
@@ -339,7 +341,8 @@ qc_metrics_map = std::make_tuple(
 			"proxysql_query_cache_count_get_total",
 			"Number of successful read requests.",
 			metric_tags {
-				{ "status", "ok" }
+				{ "status", "ok" },
+				{ "protocol", "mysql" }
 			}
 		),
 		// ====================================================================
@@ -348,7 +351,9 @@ qc_metrics_map = std::make_tuple(
 			p_qc_counter::query_cache_count_set,
 			"proxysql_query_cache_count_set_total",
 			"Number of write requests.",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "mysql" }
+			}
 		),
 
 		// ====================================================================
@@ -357,7 +362,8 @@ qc_metrics_map = std::make_tuple(
 			"proxysql_query_cache_bytes_total",
 			"Number of bytes (read|written) into the Query Cache.",
 			metric_tags {
-				{ "op", "written" }
+				{ "op", "written" },
+				{ "protocol", "mysql" }
 			}
 		),
 		std::make_tuple (
@@ -365,7 +371,8 @@ qc_metrics_map = std::make_tuple(
 			"proxysql_query_cache_bytes_total",
 			"Number of bytes (read|written) into the Query Cache.",
 			metric_tags {
-				{ "op", "read" }
+				{ "op", "read" },
+				{ "protocol", "mysql" }
 			}
 		),
 		// ====================================================================
@@ -374,13 +381,17 @@ qc_metrics_map = std::make_tuple(
 			p_qc_counter::query_cache_purged,
 			"proxysql_query_cache_purged_total",
 			"Number of entries purged by the Query Cache due to TTL expiration.",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "mysql" }
+			}
 		),
 		std::make_tuple (
 			p_qc_counter::query_cache_entries,
 			"proxysql_query_cache_entries_total",
 			"Number of entries currently stored in the query cache.",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "mysql" }
+			}
 		)
 	},
 	qc_gauge_vector {
@@ -388,7 +399,100 @@ qc_metrics_map = std::make_tuple(
 			p_qc_gauge::query_cache_memory_bytes,
 			"proxysql_query_cache_memory_bytes",
 			"Memory currently used by the query cache.",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "mysql" }
+			}
+		)
+	}
+);
+
+/**
+ * @brief Metrics map holding the metrics for the PostgreSQL Query_Cache module.
+ *
+ * @note Many metrics in this map, share a common "id name", because
+ *  they differ only by label, because of this, HELP is shared between
+ *  them. For better visual identification of this groups they are
+ *  sepparated using a line separator comment.
+ */
+const std::tuple<qc_counter_vector, qc_gauge_vector>
+qc_metrics_map_pgsql = std::make_tuple(
+	qc_counter_vector {
+		// ====================================================================
+		std::make_tuple (
+			p_qc_counter::query_cache_count_get,
+			"proxysql_query_cache_count_get_total",
+			"Number of failed read requests.",
+			metric_tags {
+				{ "status", "err" },
+				{ "protocol", "pgsql" }
+			}
+		),
+		std::make_tuple (
+			p_qc_counter::query_cache_count_get_ok,
+			"proxysql_query_cache_count_get_total",
+			"Number of successful read requests.",
+			metric_tags {
+				{ "status", "ok" },
+				{ "protocol", "pgsql" }
+			}
+		),
+		// ====================================================================
+
+		std::make_tuple (
+			p_qc_counter::query_cache_count_set,
+			"proxysql_query_cache_count_set_total",
+			"Number of write requests.",
+			metric_tags {
+				{ "protocol", "pgsql" }
+			}
+		),
+
+		// ====================================================================
+		std::make_tuple (
+			p_qc_counter::query_cache_bytes_in,
+			"proxysql_query_cache_bytes_total",
+			"Number of bytes (read|written) into the Query Cache.",
+			metric_tags {
+				{ "op", "written" },
+				{ "protocol", "pgsql" }
+			}
+		),
+		std::make_tuple (
+			p_qc_counter::query_cache_bytes_out,
+			"proxysql_query_cache_bytes_total",
+			"Number of bytes (read|written) into the Query Cache.",
+			metric_tags {
+				{ "op", "read" },
+				{ "protocol", "pgsql" }
+			}
+		),
+		// ====================================================================
+
+		std::make_tuple (
+			p_qc_counter::query_cache_purged,
+			"proxysql_query_cache_purged_total",
+			"Number of entries purged by the Query Cache due to TTL expiration.",
+			metric_tags {
+				{ "protocol", "pgsql" }
+			}
+		),
+		std::make_tuple (
+			p_qc_counter::query_cache_entries,
+			"proxysql_query_cache_entries_total",
+			"Number of entries currently stored in the query cache.",
+			metric_tags {
+				{ "protocol", "pgsql" }
+			}
+		)
+	},
+	qc_gauge_vector {
+		std::make_tuple (
+			p_qc_gauge::query_cache_memory_bytes,
+			"proxysql_query_cache_memory_bytes",
+			"Memory currently used by the query cache.",
+			metric_tags {
+				{ "protocol", "pgsql" }
+			}
 		)
 	}
 );
@@ -435,8 +539,13 @@ Query_Cache<QC_DERIVED>::Query_Cache() {
 	//max_memory_size=DEFAULT_SQC_size;
 
 	// Initialize prometheus metrics
-	init_prometheus_counter_array<qc_metrics_map_idx, p_qc_counter>(qc_metrics_map, this->metrics.p_counter_array);
-	init_prometheus_gauge_array<qc_metrics_map_idx, p_qc_gauge>(qc_metrics_map, this->metrics.p_gauge_array);
+	if constexpr (std::is_same_v<QC_DERIVED, MySQL_Query_Cache>) {
+		init_prometheus_counter_array<qc_metrics_map_idx, p_qc_counter>(qc_metrics_map_mysql, this->metrics.p_counter_array);
+		init_prometheus_gauge_array<qc_metrics_map_idx, p_qc_gauge>(qc_metrics_map_mysql, this->metrics.p_gauge_array);
+	} else {
+		init_prometheus_counter_array<qc_metrics_map_idx, p_qc_counter>(qc_metrics_map_pgsql, this->metrics.p_counter_array);
+		init_prometheus_gauge_array<qc_metrics_map_idx, p_qc_gauge>(qc_metrics_map_pgsql, this->metrics.p_gauge_array);
+	}
 };
 
 template <typename QC_DERIVED>

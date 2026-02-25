@@ -1,0 +1,862 @@
+[
+	// ====================
+	// SECTION 1: COMMENTS
+	// ====================
+	{
+		"description": "PostgreSQL comments - /* */ style",
+		"q": [
+			"select /* COMMENT */ 1",
+			"select/* COMMENT */ 1",
+			"select/* COMMENT */1",
+			"/* COMMENT */select 1",
+			"/* COMMENT */ select 1 ",
+			"select 1/* COMMENT */  ",
+			"select 1 /* COMMENT */ ",
+			// Nested comments (PostgreSQL-specific)
+			"select /* outer /* inner */ still outer */ 1",
+			"select /* /* nested */ comment */ 1"
+		],
+		"s1": "select ?",
+		"s2": "select ?",
+		"s3": "select ?",
+		"s4": "select ?"
+	},
+	{
+		"description": "PostgreSQL comments -- style (no space required)",
+		"q": [
+			"--random_comment\n   select 1.1",
+			"--random_comment\nselect 1.1",
+			"   --random_comment\nselect 1.1",
+			"-- random_comment\n select 1.1",
+			"   --   random_comment\nselect 1.1",
+			"--random_comment\n select 1.1 --final_comment\n   ",
+			"--random_comment\n select 1.1--final_comment\n",
+			"select 1 --aaaa",
+			"select 1 -- a"
+		],
+		"s1": "select ?",
+		"s2": "select ?",
+		"s3": "select ?",
+		"s4": "select ?"
+	},
+	// ========================
+	// SECTION 2: STRING TYPES
+	// ========================
+	{
+		"description": "Basic string literals - single quotes only",
+		"q": [
+			"select * from \"t\" where t = 'foo'"
+		],
+		"s1": "select * from \"t\" where t = ?",
+		"s2": "select * from \"t\" where t = ?",
+		"s3": "select * from \"t\" where t = ?",
+		"s4": "select * from \"t\" where t = ?"
+	},
+	{
+		"description": "Basic string literals - single quotes only 2",
+		"q": [
+			"select '1+ 1, 1 -1, 1 * 1 , 1/1 , 100 % 3'",
+			"select ''''''''",
+			"select '\\''",
+			"select '\\\\'",
+			"select '''\\\\''\\''''"
+		],
+		"s1": "select ?",
+		"s2": "select ?",
+		"s3": "select ?",
+		"s4": "select ?"
+	},
+	{
+		"description": "Basic string literals - single quotes only 3",
+		"q": [
+			"select '', '\\'', 'foo''bar\\'', '\\\\str_\\'foo'''"
+		],
+		"s1": "select ?, ?, ?, ?",
+		"s2": "select ?,?,?,?",
+		"s3": "select ?,?,?,?",
+		"s4": "select ?,?,?,?"
+	},
+	{
+		"description": "Dollar-quoted strings (PostgreSQL-specific)",
+		"q": [
+			"select $$dollar quoted string$$",
+			"select $tag$custom tagged string$tag$",
+			"select $$multi\nline\nstring$$",
+			"select $outer$nested $$ quotes$outer$",
+			"select $func$BEGIN\n  RETURN 1;\nEND;$func$",
+			"select $$string with 'quotes'$$",
+			"select $$string with \\backslash$$",
+			"select $__$tag with underscores$__$"
+		],
+		"s1": "select ?",
+		"s2": "select ?",
+		"s3": "select ?",
+		"s4": "select ?"
+	},
+	{
+		"description": "Escape string constants (E'...')",
+		"q": [
+			"select E'escaped\\nstring'",
+			"select E'unicode\\u0020space'",
+			"select E'hex\\x0Anewline'",
+			"select E'quotes''inside''string'",
+			"select E'backslash\\\\escaped'",
+			"select E'tab\\ttest'",
+			"select E'carriage\\rreturn'"
+		],
+		"s1": "select ?",
+		"s2": "select ?",
+		"s3": "select ?",
+		"s4": "select ?"
+	},
+	{
+		"description": "Unicode escapes (U&'...')",
+		"q": [
+			"select U&'\\0441\\043B\\043E\\043D'",
+			"select U&'d\\0061t\\+000061'",
+			"select U&'\\0441\\043B\\043E\\043D' UESCAPE '!'",
+			"select U&'\\00A9'",
+			"select U&'hello\\0020world'"
+		],
+		"s1": "select ?",
+		"s2": "select ?",
+		"s3": "select ?",
+		"s4": "select ?"
+	},
+	// ========================
+	// SECTION 3: IDENTIFIERS
+	// ========================
+	{
+		"description": "Double-quoted identifiers (PostgreSQL-specific)",
+		"q": [
+			"select \"columnName\" from \"tableName\""
+		],
+		"s1": "select \"columnName\" from \"tableName\"",
+		"s2": "select \"columnName\" from \"tableName\"",
+		"s3": "select \"columnName\" from \"tableName\"",
+		"s4": "select \"columnName\" from \"tableName\""
+	},
+	// ========================
+	// SECTION 4: NUMERIC LITERALS
+	// ========================
+	{
+		"description": "PostgreSQL numeric and hex literals",
+		"q": [
+			"select 1.1",
+			"select 99.1929",
+			"select 1.1e9",
+			"select 1.1e+9",
+			"select 1.1e-9",
+			"select 1.1E9",
+			"select 1.1E+9",
+			"select 1.1E-9",
+			// PostgreSQL hex style
+			"select x'100'",
+			"select X'DEADBEEF'",
+			"select 0x100", // This might be interpreted differently
+			// Bit strings
+			"select B'1010'",
+			"select b'11001100'",
+			"select true",
+			"select '\\xDEADBEEF'::bytea"
+		],
+		"s1": "select ?",
+		"s2": "select ?",
+		"s3": "select ?",
+		"s4": "select ?"
+	},
+	{
+		"description": "BYTEA literals",
+		"q": [
+			"select '\\xDEADBEEF'::bytea",
+			"select '\\000\\001\\002'::bytea",
+			"select E'\\001\\002\\003'::bytea",
+			"select '\\x'::bytea",
+			"select '\\x1234567890ABCDEF'::bytea"
+		],
+		"s1": "select ?",
+		"s2": "select ?",
+		"s3": "select ?",
+		"s4": "select ?"
+	},
+	// ========================
+	// SECTION 5: ARRAYS
+	// ========================
+	{
+		"description": "Array literals (PostgreSQL-specific)",
+		"q": [
+			"select ARRAY[1,2,3]",
+			"select ARRAY[ARRAY[1,2],2,3]",
+			"select ARRAY['foo','bar','baz']",
+			"select ARRAY[1,null,3]",
+			"select ARRAY[ARRAY[']'],2,3]::int[]",
+			"select ARRAY[$$]$$,2]",
+			"select ARRAY[ E'\\n', E'\\t', E'\\\\' ]",
+			"select ARRAY[$test$1$test$]",
+			"select ARRAY[$1$ $test$ 1 $test$ $1$]",
+			"select ARRAY[NULL, NULL, NULL]",
+			"select ARRAY[\"]\"]"
+		],
+		"s1": "select ?",
+		"s2": "select ?",
+		"s3": "select ?",
+		"s4": "select ?"
+	},
+	{
+		"description": "Array literals (PostgreSQL-specific)",
+		"q": [
+			"select '{1,2,3}'::int[]",
+			"select '{{1,2},{3,4}}'::int[][]",
+			"select '{\"foo\",\"bar\"}'::text[]"
+		],
+		"s1": "select ?",
+		"s2": "select ?",
+		"s3": "select ?",
+		"s4": "select ?"
+	},
+	// ========================
+	// SECTION 6: TYPE CASTS
+	// ========================
+	{
+		"description": "Type casts (PostgreSQL-specific)",
+		"q": [
+			"select '100'::integer",
+			"select '2023-01-01'::date",
+			"select '1.234'::numeric(10,2)",
+			"select 'true'::boolean",
+			"select '{\"key\":\"value\"}'::json",
+			"select '1 day'::interval",
+			"select '12.34'::money",
+			"select '192.168.1.1'::inet",
+			"select '(1,2)'::point"
+		],
+		"s1": "select ?",
+		"s2": "select ?",
+		"s3": "select ?",
+		"s4": "select ?"
+	},
+	// ========================
+	// SECTION 7: OPERATORS
+	// ========================
+	{
+		"description": "PostgreSQL operators",
+		"q": [
+			"select 1 +1"
+		],
+		"s1": "select ? +?",
+		"s2": "select ?+?",
+		"s3": "select ?+?",
+		"s4": "select ?+?"
+	},
+	{
+		"description": "PostgreSQL string concatenation",
+		"q": [
+			"select 'foo' || 'bar' || 123",
+			"select 'foo' || 'bar' || 'baz'"
+		],
+		"s1": "select ? || ? || ?",
+		"s2": "select ? || ? || ?",
+		"s3": "select ? || ? || ?",
+		"s4": "select ? || ? || ?"
+	},
+	{
+		"description": "PostgreSQL pattern matching operators",
+		"q": [
+			"select 'foo' ~* '^f'",
+			"select 'foo' ~* 'FOO'",
+			"select 'foo' ~* 'bar'",
+			"select 'foo' ~* 'BAR'"
+		],
+		"s1": "select ? ~* ?",
+		"s2": "select ? ~*?",
+		"s3": "select ? ~*?",
+		"s4": "select ? ~*?"
+	},
+	{
+		"description": "JSON operators",
+		"q": [
+			"select '{\"key\":\"value\"}'::json -> 'key'",
+			"select '[1,2,3]'::json -> 1"
+		],
+		"s1": "select ?-> ?",
+		"s2": "select ?-> ?",
+		"s3": "select ?-> ?",
+		"s4": "select ?-> ?"
+	},
+	{
+		"description": "JSON operators",
+		"q": [
+			"select '{\"key\":\"value\"}'::jsonb @> '{\"key\":\"value\"}'"
+		],
+		"s1": "select ?@> ?",
+		"s2": "select ?@> ?",
+		"s3": "select ?@> ?",
+		"s4": "select ?@> ?"
+	},
+	// ========================
+	// SECTION 8: DOLLAR PARAMETERS
+	// ========================
+	{
+		"description": "Dollar parameter references",
+		"q": [
+			"select $1, $2, $3"
+		],
+		"s1": "select $1, $2, $3",
+		"s2": "select $1,$2,$3",
+		"s3": "select $1,$2,$3",
+		"s4": "select $1,$2,$3"
+	},
+	{
+		"description": "Dollar parameter references 2",
+		"q": [
+			"select $func$...$func$"
+		],
+		"s1": "select ?",
+		"s2": "select ?",
+		"s3": "select ?",
+		"s4": "select ?"
+	},
+	// ========================
+	// SECTION 9: INTERVAL LITERALS
+	// ========================
+	{
+		"description": "Interval literals",
+		"q": [
+			"select interval '1 day'",
+			"select interval '2 hours 30 minutes'",
+			"select interval 'P1Y2M3DT4H5M6S'",
+			"select interval '1 day 2:03:04'",
+			"select interval '1 year 2 months'"
+		],
+		"s1": "select interval ?",
+		"s2": "select interval ?",
+		"s3": "select interval ?",
+		"s4": "select interval ?"
+	},
+	// ========================
+	// SECTION 10: COMPLEX TYPES
+	// ========================
+	{
+		"description": "JSON/JSONB literals",
+		"q": [
+			"select '{\"key\": \"value\"}'::json",
+			"select '[1,2,3]'::jsonb",
+			"select '{\"a\": 1, \"b\": null}'::json",
+			"select '{\"array\": [1,2,3]}'::jsonb"
+		],
+		"s1": "select ?",
+		"s2": "select ?",
+		"s3": "select ?",
+		"s4": "select ?"
+	},
+	{
+		"description": "XML literals",
+		"q": [
+			"select xml '<foo/>'"
+		],
+		"s1": "select xml ?",
+		"s2": "select xml ?",
+		"s3": "select xml ?",
+		"s4": "select xml ?"
+	},
+	{
+		"description": "Geometric types",
+		"q": [
+			"select '(1,2)'::point",
+			"select '((0,0),(1,1))'::box",
+			"select '((0,0),1)'::circle",
+			"select '[(0,0),(1,1)]'::lseg",
+			"select '((0,0),(1,1),(2,0))'::path"
+		],
+		"s1": "select ?",
+		"s2": "select ?",
+		"s3": "select ?",
+		"s4": "select ?"
+	},
+	{
+		"description": "Network address types",
+		"q": [
+			"select '192.168.1.1'::inet",
+			"select '192.168.1.0/24'::cidr",
+			"select '08:00:2b:01:02:03'::macaddr",
+			"select '08:00:2b:01:02:03:04:05'::macaddr8"
+		],
+		"s1": "select ?",
+		"s2": "select ?",
+		"s3": "select ?",
+		"s4": "select ?"
+	},
+	// ========================
+	// SECTION 11: SPACE COMPRESSION TESTS
+	// ========================
+	{
+		"description": "Space compression with control characters",
+		"q": [
+			"SELECT\r\n\t1",
+			"SELECT\r\n\t 1",
+			"SELECT \r\n\t1",
+			"SELECT \r\n\t 1",
+			"SELECT \r\n\t 1\r\n\t",
+			"SELECT \r\n\t 1 \r\n\t"
+		],
+		"s1": "SELECT ?",
+		"s2": "SELECT ?",
+		"s3": "SELECT ?",
+		"s4": "SELECT ?"
+	},
+	{
+		"description": "Space compression with strings and arrays",
+		"q": [
+			"SELECT\n'foo',\n\t4\n\t",
+			"SELECT\n\t 'foo',\n\t4\n\t",
+			"SELECT\n\t 'foo' ,\n\t4\n\t",
+			"SELECT \n\t 'foo' ,\n\t4\n\t",
+			"SELECT \n\t 'foo' \n\t ,\n\t4\n\t",
+			"SELECT\n\t \n\t'foo',\n\t4\n\t"
+		],
+		"s2": "SELECT ?,?",
+		"s3": "SELECT ?,?",
+		"s4": "SELECT ?,?"
+	},
+	// ========================
+	// SECTION 12: NULL VALUES
+	// ========================
+	{
+		"description": "NULL values replacement",
+		"q": [
+			"SELECT * FROM table_NULL WHERE null_id IN (NULL,2,3,NULL,5,6,7,NULL8,9,10)"
+		],
+		"s1": "SELECT * FROM table_NULL WHERE null_id IN (?,?,?,?,?,?,?,NULL8,?,?)",
+		"s2": "SELECT * FROM table_NULL WHERE null_id IN (?,?,?,?,?,?,?,NULL8,?,?)",
+		"s3": "SELECT * FROM table_NULL WHERE null_id IN (?,?,?,...,NULL8,?,?)",
+		"s4": "SELECT * FROM table_NULL WHERE null_id IN (?,?,?,...,NULL8,?,?)"
+	},
+	// ========================
+	// SECTION 13: INSERT STATEMENTS
+	// ========================
+	{
+		"description": "INSERT statements with PostgreSQL syntax",
+		"q": [
+			"INSERT INTO db.table (col1,col2,col3,col4) VALUES (\"val\",2,3,'foo0')",
+			"INSERT INTO db.table (col1,col2,col3,col4) VALUES (\"val\",4,5,'foo1')"
+		],
+		"s1": "INSERT INTO db.table (col1,col2,col3,col4) VALUES (\"val\",?,?,?)",
+		"s2": "INSERT INTO db.table (col1,col2,col3,col4) VALUES (\"val\",?,?,?)",
+		"s3": "INSERT INTO db.table (col1,col2,col3,col4) VALUES (\"val\",?,?,?)",
+		"s4": "INSERT INTO db.table (col1,col2,col3,col4) VALUES (\"val\",?,?,?)"
+	},
+	{
+		"description": "INSERT with RETURNING clause (PostgreSQL-specific)",
+		"q": [
+			"INSERT INTO t (a,b) VALUES (1,2) RETURNING a,b"
+		],
+		"s1": "INSERT INTO t (a,b) VALUES (?,?) RETURNING a,b",
+		"s2": "INSERT INTO t (a,b) VALUES (?,?) RETURNING a,b",
+		"s3": "INSERT INTO t (a,b) VALUES (?,?) RETURNING a,b",
+		"s4": "INSERT INTO t (a,b) VALUES (?,?) RETURNING a,b"
+	},
+	// ========================
+	// SECTION 14: WITH QUERIES (CTEs)
+	// ========================
+	{
+		"description": "WITH queries (Common Table Expressions)",
+		"q": [
+			"WITH cte AS (SELECT 1) SELECT * FROM cte",
+			"WITH cte AS (SELECT $$123$$) SELECT * FROM cte"
+		],
+		"s1": "WITH cte AS (SELECT ?) SELECT * FROM cte",
+		"s2": "WITH cte AS (SELECT ?) SELECT * FROM cte",
+		"s3": "WITH cte AS (SELECT ?) SELECT * FROM cte",
+		"s4": "WITH cte AS (SELECT ?) SELECT * FROM cte"
+	},
+	// ========================
+	// SECTION 15: WINDOW FUNCTIONS
+	// ========================
+	{
+		"description": "Window functions",
+		"q": [
+			"SELECT ROW_NUMBER() OVER (ORDER BY id)"
+		],
+		"s1": "SELECT ROW_NUMBER() OVER (ORDER BY id)",
+		"s2": "SELECT ROW_NUMBER() OVER (ORDER BY id)",
+		"s3": "SELECT ROW_NUMBER() OVER (ORDER BY id)",
+		"s4": "SELECT ROW_NUMBER() OVER (ORDER BY id)"
+	},
+	// ========================
+	// SECTION 16: ROW CONSTRUCTORS
+	// ========================
+	{
+		"description": "Row constructors",
+		"q": [
+			"SELECT ROW(1, 'foo')"
+		],
+		"s1": "SELECT ROW(?, ?)",
+		"s2": "SELECT ROW(?,?)",
+		"s3": "SELECT ROW(?,?)",
+		"s4": "SELECT ROW(?,?)"
+	},
+	// ========================
+	// SECTION 17: DO BLOCKS
+	// ========================
+	{
+		"description": "DO blocks (anonymous code blocks)",
+		"q": [
+			"DO $$ BEGIN RAISE NOTICE 'test'; END $$",
+			"DO $$ DECLARE r RECORD; BEGIN FOR r IN SELECT * FROM t LOOP RAISE NOTICE '%', r; END LOOP; END $$"
+		],
+		"s1": "DO ?",
+		"s2": "DO ?",
+		"s3": "DO ?",
+		"s4": "DO ?"
+	},
+	// ========================
+	// SECTION 18: PREPARE/EXECUTE
+	// ========================
+	{
+		"description": "PREPARE and EXECUTE statements",
+		"q": [
+			"EXECUTE myplan(1)",
+			"EXECUTE myplan('test')"
+		],
+		"s1": "EXECUTE myplan(?)",
+		"s2": "EXECUTE myplan(?)",
+		"s3": "EXECUTE myplan(?)",
+		"s4": "EXECUTE myplan(?)"
+	},
+	{
+		"description": "PREPARE and EXECUTE statements",
+		"q": [
+			"PREPARE myplan (int) AS SELECT * FROM t WHERE id = $1"
+		],
+		"s1": "PREPARE myplan (int) AS SELECT * FROM t WHERE id = $1",
+		"s2": "PREPARE myplan (int) AS SELECT * FROM t WHERE id = $1",
+		"s3": "PREPARE myplan (int) AS SELECT * FROM t WHERE id = $1",
+		"s4": "PREPARE myplan (int) AS SELECT * FROM t WHERE id = $1"
+	},
+	// ========================
+	// SECTION 19: LOCK STATEMENTS
+	// ========================
+	{
+		"description": "LOCK statements",
+		"q": [
+			"LOCK TABLE table IN ACCESS EXCLUSIVE MODE"
+		],
+		"s1": "LOCK TABLE table IN ACCESS EXCLUSIVE MODE",
+		"s2": "LOCK TABLE table IN ACCESS EXCLUSIVE MODE",
+		"s3": "LOCK TABLE table IN ACCESS EXCLUSIVE MODE",
+		"s4": "LOCK TABLE table IN ACCESS EXCLUSIVE MODE"
+	},
+	// ========================
+	// SECTION 20: CREATE TYPE STATEMENTS
+	// ========================
+	{
+		"description": "CREATE TYPE statements",
+		"q": [
+			"CREATE TYPE mood AS ENUM ('sad', 'ok', 'happy')"
+		],
+		"s1": "CREATE TYPE mood AS ENUM (?, ?, ?)",
+		"s2": "CREATE TYPE mood AS ENUM (?,?,?)",
+		"s3": "CREATE TYPE mood AS ENUM (?,?,?)",
+		"s4": "CREATE TYPE mood AS ENUM (?,?,?)"
+	},
+	// ========================
+	// SECTION 21: COMPLEX EXAMPLES
+	// ========================
+	{
+		"description": "Complex mixed PostgreSQL examples",
+		"q": [
+			"SELECT jsonb_build_object('id', id, 'data', data->>'field') FROM t WHERE id = $1"
+		],
+		"s1": "SELECT jsonb_build_object(?, id, ?, data->>?) FROM t WHERE id = $1",
+		"s2": "SELECT jsonb_build_object(?,id,?,data->>?) FROM t WHERE id = $1",
+		"s3": "SELECT jsonb_build_object(?,id,?,data->>?) FROM t WHERE id = $1",
+		"s4": "SELECT jsonb_build_object(?,id,?,data->>?) FROM t WHERE id = $1"
+	},
+	// ========================
+	// SECTION 22: DIGEST COMPRESSION TESTS
+	// ========================
+	{
+		"description": "Digest compression with various limits",
+		"q": [
+			"INSERT INTO db.table (col1,col2,col3) VALUES (1.23234, 9.92381, 8.00)"
+		],
+		"mz": [
+			{
+				"digest_max_size": 57,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"digest": "INSERT INTO db.table (col1,col2,col3) VALUES (?,...)"
+			},
+			{
+				"digest_max_size": 56,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"digest": "INSERT INTO db.table (col1,col2,col3) VALUES (?,...)"
+			},
+			{
+				"digest_max_size": 55,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"digest": "INSERT INTO db.table (col1,col2,col3) VALUES (?,?"
+			},
+			{
+				"digest_max_size": 54,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"replace_digits": 1,
+				"digest": "INSERT INTO db.table (col?,col?,col?) VALUES (?,?"
+			}
+		]
+	},
+	{
+		"description": "Complex INSERT with multiple value groups",
+		"q": [
+			"INSERT INTO t (a,b,c) VALUES (1,2,3),(4,5,6),(7,8,9) ON CONFLICT (a) DO UPDATE SET b = EXCLUDED.b"
+		],
+		"mz": [
+			{
+				"digest_max_size": 100,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"digest": "INSERT INTO t (a,b,c) VALUES (?,...),... ON CONFLICT (a) DO UPDATE SET b = EXCLUDED.b"
+			}
+		]
+	},
+	// ========================
+	// SECTION 23: CORNER CASES
+	// ========================
+	{
+		"description": "Corner cases with comments and trimming",
+		"q": [
+			"SELECT '01JSQMJPDJEF'  -- cmt: foo",
+			"SELECT '01JSQMJPDJEF'  /* cmt: foo */"
+		],
+		"mz": [
+			{
+				"digest_max_size": 25,
+				"grouping_limit": 3,
+				"groups_grouping_limit": 10,
+				"digest": "SELECT ?"
+			},
+			{
+				"digest_max_size": 24,
+				"grouping_limit": 3,
+				"groups_grouping_limit": 10,
+				"digest": "SELECT ?"
+			}
+		]
+	},
+	// ========================
+	// SECTION 24: MONEY TYPE
+	// ========================
+	{
+		"description": "Money type literals",
+		"q": [
+			"select '$12.34'::money + '$5.66'::money",
+			"select '$1,000.00'::money + '$12.34'::money",
+			"select '12.34'::money + '5.66'::money"
+		],
+		"s1": "select ?+ ?",
+		"s2": "select ?+?",
+		"s3": "select ?+?",
+		"s4": "select ?+?"
+	},
+	// ========================
+	// SECTION 25: RANGE TYPES
+	// ========================
+	{
+		"description": "Range type literals",
+		"q": [
+			"select '[1,10]'::int4range",
+			"select '(1,10]'::int4range",
+			"select 'empty'::int4range",
+			"select '[2023-01-01,2023-12-31]'::daterange",
+			"select '[\"a\",\"z\"]'::textrange"
+		],
+		"s1": "select ?",
+		"s2": "select ?",
+		"s3": "select ?",
+		"s4": "select ?"
+	},
+	// ========================
+	// SECTION 26: FULL TEXT SEARCH
+	// ========================
+	{
+		"description": "Full text search",
+		"q": [
+			"select phraseto_tsquery('english', 'quick brown fox')"
+		],
+		"s1": "select phraseto_tsquery(?, ?)",
+		"s2": "select phraseto_tsquery(?,?)",
+		"s3": "select phraseto_tsquery(?,?)",
+		"s4": "select phraseto_tsquery(?,?)"
+	},
+	// ========================
+	// SECTION 27: SPECIAL CHARACTERS
+	// ========================
+	{
+		"description": "Special characters and edge cases",
+		"q": [
+			// Unicode in identifiers
+			"select \"café\", \"naïve\""
+		],
+		"s1": "select \"café\", \"naïve\"",
+		"s2": "select \"café\",\"naïve\"",
+		"s3": "select \"café\",\"naïve\"",
+		"s4": "select \"café\",\"naïve\""
+	},
+	{
+		"description": "Special characters and edge cases 2",
+		"q": [
+			"select $$don't$$, 'won''t', E'can\\'t'",
+			// Empty strings
+			"select ''::text, ''::varchar, ''::char(10)"
+		],
+		"s1": "select ?, ?, ?",
+		"s2": "select ?,?,?",
+		"s3": "select ?,?,?",
+		"s4": "select ?,?,?"
+	},
+	// ========================
+	// SECTION 28: NOTIFY/LISTEN
+	// ========================
+	{
+		"description": "NOTIFY and LISTEN commands",
+		"q": [
+			"NOTIFY channel"
+		],
+		"s1": "NOTIFY channel",
+		"s2": "NOTIFY channel",
+		"s3": "NOTIFY channel",
+		"s4": "NOTIFY channel"
+	},
+	{
+		"description": "NOTIFY and LISTEN commands 2",
+		"q": [
+			"NOTIFY channel, 'payload'"
+		],
+		"s1": "NOTIFY channel, ?",
+		"s2": "NOTIFY channel,?",
+		"s3": "NOTIFY channel,?",
+		"s4": "NOTIFY channel,?"
+	},
+	// ========================
+	// SECTION 29: TABLESPACE
+	// ========================
+	{
+		"description": "Tablespace references",
+		"q": [
+			"CREATE TABLE t (id int) TABLESPACE myspace"
+		],
+		"s1": "CREATE TABLE t (id int) TABLESPACE myspace",
+		"s2": "CREATE TABLE t (id int) TABLESPACE myspace",
+		"s3": "CREATE TABLE t (id int) TABLESPACE myspace",
+		"s4": "CREATE TABLE t (id int) TABLESPACE myspace"
+	},
+	// ========================
+	// SECTION 30: COMPLEX CREATE TABLE
+	// ========================
+	{
+		"description": "Complex CREATE TABLE with PostgreSQL features",
+		"q": "CREATE TABLE test_table (\n  id SERIAL PRIMARY KEY,\n  data JSONB NOT NULL,\n  tags TEXT[] DEFAULT '{}',\n  created_at TIMESTAMPTZ DEFAULT NOW(),\n  updated_at TIMESTAMPTZ,\n  status TEXT CHECK (status IN ('active','inactive','pending')),\n  metadata HSTORE,\n  geodata GEOGRAPHY(POINT,4326),\n  CONSTRAINT valid_data CHECK (data ? 'id')\n) WITH (fillfactor=70) TABLESPACE pg_default",
+		"mz": [
+			{
+				"digest_max_size": 512,
+				"grouping_limit": 0,
+				"groups_grouping_limit": 0,
+				"replace_null": false,
+				"digest": "CREATE TABLE test_table (id SERIAL PRIMARY KEY,data JSONB NOT NULL,tags TEXT[] DEFAULT ?,created_at TIMESTAMPTZ DEFAULT NOW(),updated_at TIMESTAMPTZ,status TEXT CHECK (status IN (?,?,?)),metadata HSTORE,geodata GEOGRAPHY(POINT,?),CONSTRAINT valid_data CHECK (data ? ?)) WITH (fillfactor=?) TABLESPACE pg_default"
+			}
+		]
+	},
+	// ========================
+	// SECTION 31: DOUBLE QUOTE
+	// ========================
+	{
+		"description": "PostgreSQL double-quote",
+		"q": [
+			"select \"ARRAY[1,2,3]\""
+		],
+		"s1": "select \"ARRAY[1,2,3]\"",
+		"s2": "select \"ARRAY[1,2,3]\"",
+		"s3": "select \"ARRAY[1,2,3]\"",
+		"s4": "select \"ARRAY[1,2,3]\""
+	},
+	// ========================
+	// SECTION 32: DOUBLE QUOTE 2
+	// ========================
+	{
+		"description": "PostgreSQL double-quote 2",
+		"q": [
+			"select \"user\"\"s\""
+		],
+		"s1": "select \"user\"\"s\"",
+		"s2": "select \"user\"\"s\"",
+		"s3": "select \"user\"\"s\"",
+		"s4": "select \"user\"\"s\""
+	},
+	// ========================
+	// SECTION 32: DOUBLE QUOTE 2
+	// ========================
+	{
+		"description": "PostgreSQL double-quote 2",
+		"q": [
+			"select \"user\"\"s\""
+		],
+		"s1": "select \"user\"\"s\"",
+		"s2": "select \"user\"\"s\"",
+		"s3": "select \"user\"\"s\"",
+		"s4": "select \"user\"\"s\""
+	},
+	// ========================
+	// SECTION 33: KEEP COMMENTS
+	// ========================
+	{
+		"description": "Keep Comments",
+		"q": "SELECT /*test*/ 1",
+		"mz": [
+			{
+				"digest_max_size": 512,
+				"grouping_limit": 0,
+				"groups_grouping_limit": 0,
+				"replace_null": false,
+				"keep_comment": true,
+				"digest": "SELECT /*test*/ ?"
+			}
+		]
+	},
+	// ========================
+	// SECTION 33: NESTED KEEP COMMENTS
+	// ========================
+	{
+		"description": "Nested Keep Comments",
+		"q": "SELECT /* outer /* inner */ outer */ 1",
+		"mz": [
+			{
+				"digest_max_size": 512,
+				"grouping_limit": 0,
+				"groups_grouping_limit": 0,
+				"replace_null": false,
+				"keep_comment": true,
+				"digest": "SELECT /* outer /* inner */ outer */ ?"
+			}
+		]
+	},
+	// ========================
+	// SECTION 34: MULTIPLE COMMENTS [KEEP COMMENTS]
+	// ========================
+	{
+		"description": "Multiple Comments [Keep Comments]",
+		"q": "SELECT /* comment 1 */ '1', /*comment 2*/ '2', /*comment 3*/ '3'",
+		"mz": [
+			{
+				"digest_max_size": 512,
+				"grouping_limit": 0,
+				"groups_grouping_limit": 0,
+				"replace_null": false,
+				"keep_comment": true,
+				"digest": "SELECT /* comment 1 */ ?,/*comment 2*/?,/*comment 3*/ ?"
+			}
+		]
+	}
+]

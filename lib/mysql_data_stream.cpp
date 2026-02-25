@@ -241,6 +241,8 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	connect_tries=0;
 	poll_fds_idx=-1;
 	resultset_length=0;
+	status=0;
+	fd=-1;
 
 	revents = 0;
 
@@ -259,6 +261,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	switching_auth_type = AUTH_UNKNOWN_PLUGIN;
 	switching_auth_sent = AUTH_UNKNOWN_PLUGIN;
 	auth_in_progress = 0;
+	tmp_charset = 0;
 	x509_subject_alt_name=NULL;
 	ssl=NULL;
 	rbio_ssl = NULL;
@@ -334,6 +337,24 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 		}
 	delete resultset;
 	}
+	/**
+	 * @brief Remove data stream from poll set during MySQL_Data_Stream destruction
+	 *
+	 * This usage pattern demonstrates how ProxySQL_Poll is used during data stream cleanup:
+	 * - Removes the data stream entry from the poll set to prevent polling on closed socket
+	 * - Uses the stored poll_fds_idx for efficient removal (O(1) operation)
+	 * - Called only if mypolls is not NULL (data stream is registered with a poll instance)
+	 *
+	 * Usage pattern: if (mypolls) mypolls->remove_index_fast(poll_fds_idx)
+	 * - mypolls: Check if data stream is registered with a poll instance
+	 * - remove_index_fast(poll_fds_idx): Remove by stored index from data stream
+	 *
+	 * Called during: MySQL_Data_Stream destructor
+	 * Purpose: Prevent memory leaks and ensure proper cleanup of poll entries
+	 *
+	 * Note: Each data stream maintains its poll_fds_idx to track its position in the poll array
+	 *       for efficient removal without requiring find_index() lookup.
+	 */
 	if (mypolls) mypolls->remove_index_fast(poll_fds_idx);
 
 
@@ -475,6 +496,42 @@ void MySQL_Data_Stream::shut_hard() {
  */
 void MySQL_Data_Stream::check_data_flow() {
 	if ( (PSarrayIN->len || queue_data(queueIN) ) && ( PSarrayOUT->len || queue_data(queueOUT) ) ){
+		// NOTE: Unexpected-Ping-Handling: Section 1-2
+		///////////////////////////////////////////////////////////////////////////////////////////////
+		// Implements part-1 of the temporary workaround for the handling of unexpected 'COM_PING' packets
+		// received during query processing, while a resultset is yet being streamed to the client. Received
+		// 'COM_PING' packets are queued in the form of a counter. This counter is later used to sent the
+		// corresponding number of 'OK' packets to the client. This should be ALWAYS done before
+		// 'MySQL_Session' transitions back to 'WAITING_CLIENT_DATA'.
+		//
+		// @note This is a "temporary" solution that should be removed if packet queueing is implemented, since
+		// it will make the 'unexp_com_pings' field obsolete.
+		///////////////////////////////////////////////////////////////////////////////////////////////
+		if (PSarrayIN->len >= 1 && PSarrayIN->pdata[0].size == 5) {
+			const uint8_t c = *(static_cast<uint8_t*>(PSarrayIN->pdata[0].ptr) + sizeof(mysql_hdr));
+
+			if (c == _MYSQL_COM_PING && this->sess->status != WAITING_CLIENT_DATA) {
+				const string cli_addr { get_client_addr(this->client_addr) };
+				proxy_warning(
+					"Handling unexpected COM_PING packet   client_addr=\"%s\" sess_status=%d myds_status=%d\n",
+					cli_addr.c_str(), this->sess->status, this->DSS
+				);
+
+				// Queue the COM_PING for later handling at MySQL_Session level
+				this->unexp_com_pings += 1;
+				this->sess->thread->status_variables.stvar[st_var_unexpected_com_ping] += 1;
+
+				// Discard the packet before session attempts to handle it
+				PtrSize_t pkt {};
+				PSarrayIN->remove_index(0, &pkt);
+				l_free(pkt.size, pkt.ptr);
+
+				// Return without further checks
+				return;
+			}
+		}
+		///////////////////////////////////////////////////////////////////////////////////////////////
+
 		if (sess && sess->status == FAST_FORWARD && sess->session_fast_forward == SESSION_FORWARD_TYPE_PERMANENT) {
 			// Permanent fast-forward sessions: log warning but continue
 			proxy_warning("Session=%p, DataStream=%p -- Data at both ends of a MySQL data stream: IN <%d bytes %d packets> , OUT <%d bytes %d packets>\n", sess, this, queue_data(queueIN), PSarrayIN->len, queue_data(queueOUT), PSarrayOUT->len);
@@ -532,10 +589,18 @@ int MySQL_Data_Stream::read_from_net() {
 				// to avoid issue with SSL, we will only read the header and eventually the first packet
 				r = recv(fd, queue_w_ptr(queueIN), 4, 0);
 				if (r == 4) {
-					// let's try to read a whole packet
-					mysql_hdr Hdr;
-					memcpy(&Hdr,queueIN.buffer,sizeof(mysql_hdr));
-					r += recv(fd, queue_w_ptr(queueIN)+4, Hdr.pkt_length, 0);
+					// Check for PROXY protocol before treating as MySQL header
+					// PROXY protocol starts with "PROXY " (6 bytes), but we only have 4 bytes here
+					// If first 4 bytes are "PROX", don't interpret as MySQL header
+					if (strncmp((char *)queueIN.buffer, "PROX", 4) == 0) {
+						// PROXY protocol detected - read more data without MySQL header parsing
+						r += recv(fd, queue_w_ptr(queueIN)+4, s-4, 0);
+					} else {
+						// let's try to read a whole packet
+						mysql_hdr Hdr;
+						memcpy(&Hdr,queueIN.buffer,sizeof(mysql_hdr));
+						r += recv(fd, queue_w_ptr(queueIN)+4, Hdr.pkt_length, 0);
+					}
 				}
 			} else {
 				r = recv(fd, queue_w_ptr(queueIN), s, 0);
@@ -702,6 +767,25 @@ int MySQL_Data_Stream::read_from_net() {
 	} else {
 		queue_w(queueIN,r);
 		bytes_info.bytes_recv+=r;
+		/**
+	 * @brief Update receive timestamp in ProxySQL_Poll for activity tracking
+	 *
+	 * This usage pattern demonstrates how ProxySQL_Poll is used for activity monitoring:
+	 * - Updates the last receive timestamp in the poll entry for timeout management
+	 * - Called after successful data reception to track connection activity
+	 * - Uses the stored poll_fds_idx for direct array access (O(1) operation)
+	 *
+	 * Usage pattern: if (mypolls) mypolls->last_recv[poll_fds_idx] = sess->thread->curtime
+	 * - mypolls: Check if data stream is registered with a poll instance
+	 * - last_recv[poll_fds_idx]: Update the receive timestamp for this data stream
+	 * - sess->thread->curtime: Current timestamp from the thread
+	 *
+	 * Called during: After receiving data on the data stream
+	 * Purpose: Enable timeout management and connection activity monitoring
+	 *
+	 * Note: This timestamp is used by the idle connection timeout system to detect
+	 *       inactive connections that should be closed.
+	 */
 		if (mypolls) mypolls->last_recv[poll_fds_idx]=sess->thread->curtime;
 	}
 	return r;
@@ -803,6 +887,26 @@ int MySQL_Data_Stream::write_to_net() {
 		}
 	} else {
 		queue_r(queueOUT, bytes_io);
+
+		/**
+		 * @brief Update send timestamp in ProxySQL_Poll for activity tracking
+		 *
+		 * This usage pattern demonstrates how ProxySQL_Poll is used for activity monitoring:
+		 * - Updates the last send timestamp in the poll entry for timeout management
+		 * - Called after successful data transmission to track connection activity
+		 * - Uses the stored poll_fds_idx for direct array access (O(1) operation)
+		 *
+		 * Usage pattern: if (mypolls) mypolls->last_sent[poll_fds_idx] = sess->thread->curtime
+		 * - mypolls: Check if data stream is registered with a poll instance
+		 * - last_sent[poll_fds_idx]: Update the send timestamp for this data stream
+		 * - sess->thread->curtime: Current timestamp from the thread
+		 *
+		 * Called during: After sending data on the data stream
+		 * Purpose: Enable timeout management and connection activity monitoring
+		 *
+		 * Note: This timestamp is used by the idle connection timeout system to detect
+		 *       inactive connections that should be closed.
+		 */
 		if (mypolls) mypolls->last_sent[poll_fds_idx]=sess->thread->curtime;
 		bytes_info.bytes_sent+=bytes_io;
 	}

@@ -455,7 +455,8 @@ hg_metrics_map = std::make_tuple(
 			"proxysql_server_connections_total",
 			"Total number of server connections (created|delayed|aborted).",
 			metric_tags {
-				{ "status", "created" }
+				{ "status", "created" },
+				{ "protocol", "pgsql" }
 			}
 		),
 		std::make_tuple (
@@ -463,7 +464,8 @@ hg_metrics_map = std::make_tuple(
 			"proxysql_server_connections_total",
 			"Total number of server connections (created|delayed|aborted).",
 			metric_tags {
-				{ "status", "delayed" }
+				{ "status", "delayed" },
+				{ "protocol", "pgsql" }
 			}
 		),
 		std::make_tuple (
@@ -471,7 +473,8 @@ hg_metrics_map = std::make_tuple(
 			"proxysql_server_connections_total",
 			"Total number of server connections (created|delayed|aborted).",
 			metric_tags {
-				{ "status", "aborted" }
+				{ "status", "aborted" },
+				{ "protocol", "pgsql" }
 			}
 		),
 		// ====================================================================
@@ -482,7 +485,8 @@ hg_metrics_map = std::make_tuple(
 			"proxysql_client_connections_total",
 			"Total number of client connections created.",
 			metric_tags {
-				{ "status", "created" }
+				{ "status", "created" },
+				{ "protocol", "pgsql" }
 			}
 		),
 		std::make_tuple (
@@ -490,7 +494,8 @@ hg_metrics_map = std::make_tuple(
 			"proxysql_client_connections_total",
 			"Total number of client failed connections (or closed improperly).",
 			metric_tags {
-				{ "status", "aborted" }
+				{ "status", "aborted" },
+				{ "protocol", "pgsql" }
 			}
 		),
 		// ====================================================================
@@ -577,19 +582,25 @@ hg_metrics_map = std::make_tuple(
 			PgSQL_p_hg_counter::access_denied_wrong_password,
 			"proxysql_access_denied_wrong_password_total",
 			"Total access denied \"wrong password\".",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "pgsql" }
+			}
 		),
 		std::make_tuple (
 			PgSQL_p_hg_counter::access_denied_max_connections,
 			"proxysql_access_denied_max_connections_total",
 			"Total access denied \"max connections\".",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "pgsql" }
+			}
 		),
 		std::make_tuple (
 			PgSQL_p_hg_counter::access_denied_max_user_connections,
 			"proxysql_access_denied_max_user_connections_total",
 			"Total access denied \"max user connections\".",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "pgsql" }
+			}
 		),
 
 		// ====================================================================
@@ -647,13 +658,17 @@ hg_metrics_map = std::make_tuple(
 			PgSQL_p_hg_gauge::server_connections_connected,
 			"proxysql_server_connections_connected",
 			"Backend connections that are currently connected.",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "pgsql" }
+			}
 		),
 		std::make_tuple (
 			PgSQL_p_hg_gauge::client_connections_connected,
 			"proxysql_client_connections_connected",
 			"Client connections that are currently connected.",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "pgsql" }
+			}
 		)
 	},
 	// prometheus dynamic counters
@@ -918,18 +933,15 @@ int PgSQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 	}
 	int rc;
 	mydb->execute("DELETE FROM pgsql_servers_incoming");
-	sqlite3_stmt *statement1=NULL;
-	sqlite3_stmt *statement32=NULL;
-	//sqlite3 *mydb3=mydb->get_db();
 	char *query1=(char *)"INSERT INTO pgsql_servers_incoming VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
 	std::string query32s = "INSERT INTO pgsql_servers_incoming VALUES " + generate_multi_rows_query(32,11);
 	char *query32 = (char *)query32s.c_str();
-	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query1, -1, &statement1, 0);
-	rc = mydb->prepare_v2(query1, &statement1);
-	ASSERT_SQLITE_OK(rc, mydb);
-	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query32, -1, &statement32, 0);
-	rc = mydb->prepare_v2(query32, &statement32);
-	ASSERT_SQLITE_OK(rc, mydb);
+	auto [rc1, statement1_unique] = mydb->prepare_v2(query1);
+	ASSERT_SQLITE_OK(rc1, mydb);
+	auto [rc2, statement32_unique] = mydb->prepare_v2(query32);
+	ASSERT_SQLITE_OK(rc2, mydb);
+	sqlite3_stmt *statement1 = statement1_unique.get();
+	sqlite3_stmt *statement32 = statement32_unique.get();
 	MySerStatus status1=MYSQL_SERVER_STATUS_ONLINE;
 	int row_idx=0;
 	int max_bulk_row_idx=resultset->rows_count/32;
@@ -986,8 +998,6 @@ int PgSQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 		}
 		row_idx++;
 	}
-	(*proxy_sqlite3_finalize)(statement1);
-	(*proxy_sqlite3_finalize)(statement32);
 	return 0;
 }
 
@@ -1368,17 +1378,14 @@ bool PgSQL_HostGroups_Manager::commit(
 		}
 		// optimization #829
 		int rc;
-		sqlite3_stmt *statement1=NULL;
-		sqlite3_stmt *statement2=NULL;
-		//sqlite3 *mydb3=mydb->get_db();
 		char *query1=(char *)"UPDATE pgsql_servers SET mem_pointer = ?1 WHERE hostgroup_id = ?2 AND hostname = ?3 AND port = ?4";
-		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query1, -1, &statement1, 0);
-		rc = mydb->prepare_v2(query1, &statement1);
-		ASSERT_SQLITE_OK(rc, mydb);
+		auto [rc1, statement1_unique] = mydb->prepare_v2(query1);
+		ASSERT_SQLITE_OK(rc1, mydb);
 		char *query2=(char *)"UPDATE pgsql_servers SET weight = ?1 , status = ?2 , compression = ?3 , max_connections = ?4 , max_replication_lag = ?5 , use_ssl = ?6 , max_latency_ms = ?7 , comment = ?8 WHERE hostgroup_id = ?9 AND hostname = ?10 AND port = ?11";
-		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query2, -1, &statement2, 0);
-		rc = mydb->prepare_v2(query2, &statement2);
-		ASSERT_SQLITE_OK(rc, mydb);
+		auto [rc2, statement2_unique] = mydb->prepare_v2(query2);
+		ASSERT_SQLITE_OK(rc2, mydb);
+		sqlite3_stmt *statement1 = statement1_unique.get();
+		sqlite3_stmt *statement2 = statement2_unique.get();
 
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
@@ -1475,8 +1482,7 @@ bool PgSQL_HostGroups_Manager::commit(
 				}
 			}
 		}
-		(*proxy_sqlite3_finalize)(statement1);
-		(*proxy_sqlite3_finalize)(statement2);
+		// RAII auto-finalizes statement1 and statement2
 	}
 	if (resultset) { delete resultset; resultset=NULL; }
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM pgsql_servers_incoming\n");
@@ -1616,20 +1622,17 @@ void PgSQL_HostGroups_Manager::purge_pgsql_servers_table() {
 
 void PgSQL_HostGroups_Manager::generate_pgsql_servers_table(int *_onlyhg) {
 	int rc;
-	sqlite3_stmt *statement1=NULL;
-	sqlite3_stmt *statement32=NULL;
-
 	PtrArray *lst=new PtrArray();
 	//sqlite3 *mydb3=mydb->get_db();
 	char *query1=(char *)"INSERT INTO pgsql_servers VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
-	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query1, -1, &statement1, 0);
-	rc = mydb->prepare_v2(query1, &statement1);
-	ASSERT_SQLITE_OK(rc, mydb);
+	auto [rc1, statement1_unique] = mydb->prepare_v2(query1);
+	ASSERT_SQLITE_OK(rc1, mydb);
 	std::string query32s = "INSERT INTO pgsql_servers VALUES " + generate_multi_rows_query(32,12);
 	char *query32 = (char *)query32s.c_str();
-	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query32, -1, &statement32, 0);
-	rc = mydb->prepare_v2(query32, &statement32);
-	ASSERT_SQLITE_OK(rc, mydb);
+	auto [rc2, statement32_unique] = mydb->prepare_v2(query32);
+	ASSERT_SQLITE_OK(rc2, mydb);
+	sqlite3_stmt *statement1 = statement1_unique.get();
+	sqlite3_stmt *statement32 = statement32_unique.get();
 
 	if (pgsql_thread___hostgroup_manager_verbose) {
 		if (_onlyhg==NULL) {
@@ -1717,8 +1720,6 @@ void PgSQL_HostGroups_Manager::generate_pgsql_servers_table(int *_onlyhg) {
 		rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, mydb);
 	}
-	(*proxy_sqlite3_finalize)(statement1);
-	(*proxy_sqlite3_finalize)(statement32);
 	if (pgsql_thread___hostgroup_manager_verbose) {
 		char *error=NULL;
 		int cols=0;
@@ -2779,7 +2780,7 @@ void PgSQL_HostGroups_Manager::drop_all_idle_connections() {
 					unsigned long long intv = pgsql_thread___connection_max_age_ms;
 					intv *= 1000;
 					if (curtime > mc->creation_time + intv) {
-						mc=mscl->remove(0);
+						mc=mscl->remove(i);
 						delete mc;
 						i--;
 					}
@@ -3324,352 +3325,6 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int
 	return result;
 }
 
-#if 0 // DELETE AFTER 2025-07-14
-void PgSQL_HostGroups_Manager::read_only_action(char *hostname, int port, int read_only) {
-	// define queries
-	const char *Q1B=(char *)"SELECT hostgroup_id,status FROM ( SELECT DISTINCT writer_hostgroup FROM pgsql_replication_hostgroups JOIN pgsql_servers WHERE (hostgroup_id=writer_hostgroup) AND hostname='%s' AND port=%d UNION SELECT DISTINCT writer_hostgroup FROM pgsql_replication_hostgroups JOIN pgsql_servers WHERE (hostgroup_id=reader_hostgroup) AND hostname='%s' AND port=%d) LEFT JOIN pgsql_servers ON hostgroup_id=writer_hostgroup AND hostname='%s' AND port=%d";
-	const char *Q2A=(char *)"DELETE FROM pgsql_servers WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT writer_hostgroup FROM pgsql_replication_hostgroups WHERE writer_hostgroup=pgsql_servers.hostgroup_id) AND status='OFFLINE_HARD'";
-	const char *Q2B=(char *)"UPDATE OR IGNORE pgsql_servers SET hostgroup_id=(SELECT writer_hostgroup FROM pgsql_replication_hostgroups WHERE reader_hostgroup=pgsql_servers.hostgroup_id) WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT reader_hostgroup FROM pgsql_replication_hostgroups WHERE reader_hostgroup=pgsql_servers.hostgroup_id)";
-	const char *Q3A=(char *)"INSERT OR IGNORE INTO pgsql_servers(hostgroup_id, hostname, port, status, weight, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) SELECT reader_hostgroup, hostname, port, status, weight, max_connections, max_replication_lag, use_ssl, max_latency_ms, pgsql_servers.comment FROM pgsql_servers JOIN pgsql_replication_hostgroups ON pgsql_servers.hostgroup_id=pgsql_replication_hostgroups.writer_hostgroup WHERE hostname='%s' AND port=%d";
-	const char *Q3B=(char *)"DELETE FROM pgsql_servers WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT reader_hostgroup FROM pgsql_replication_hostgroups WHERE reader_hostgroup=pgsql_servers.hostgroup_id)";
-	const char *Q4=(char *)"UPDATE OR IGNORE pgsql_servers SET hostgroup_id=(SELECT reader_hostgroup FROM pgsql_replication_hostgroups WHERE writer_hostgroup=pgsql_servers.hostgroup_id) WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT writer_hostgroup FROM pgsql_replication_hostgroups WHERE writer_hostgroup=pgsql_servers.hostgroup_id)";
-	const char *Q5=(char *)"DELETE FROM pgsql_servers WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT writer_hostgroup FROM pgsql_replication_hostgroups WHERE writer_hostgroup=pgsql_servers.hostgroup_id)";
-	if (GloAdmin==NULL) {
-		return;
-	}
-
-	// this prevents that multiple read_only_action() are executed at the same time
-	pthread_mutex_lock(&readonly_mutex);
-
-	// define a buffer that will be used for all queries
-	char *query=(char *)malloc(strlen(hostname)*2+strlen(Q3A)+256);
-
-	int cols=0;
-	char *error=NULL;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	int num_rows=0; // note: with the new implementation (2.1.1) , this becomes a sort of boolean, not an actual count
-	wrlock();
-	// we minimum the time we hold the mutex, as connection pool is being locked
-	if (read_only_set1.empty()) {
-		SQLite3_result *res_set1=NULL;
-		const char *q1 = (const char *)"SELECT DISTINCT hostname,port FROM pgsql_replication_hostgroups JOIN pgsql_servers ON hostgroup_id=writer_hostgroup AND status<>3";
-		mydb->execute_statement((char *)q1, &error , &cols , &affected_rows , &res_set1);
-		for (std::vector<SQLite3_row *>::iterator it = res_set1->rows.begin() ; it != res_set1->rows.end(); ++it) {
-			SQLite3_row *r=*it;
-			std::string s = r->fields[0];
-			s += ":::";
-			s += r->fields[1];
-			read_only_set1.insert(s);
-		}
-		proxy_info("Regenerating read_only_set1 with %lu servers\n", read_only_set1.size());
-		if (read_only_set1.empty()) {
-			// to avoid regenerating this set always with 0 entries, we generate a fake entry
-			read_only_set1.insert("----:::----");
-		}
-		delete res_set1;
-	}
-	wrunlock();
-	std::string ser = hostname;
-	ser += ":::";
-	ser += std::to_string(port);
-	std::set<std::string>::iterator it;
-	it = read_only_set1.find(ser);
-	if (it != read_only_set1.end()) {
-		num_rows=1;
-	}
-
-	if (admindb==NULL) { // we initialize admindb only if needed
-		admindb=new SQLite3DB();
-		admindb->open((char *)"file:mem_admindb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);	
-	}
-
-	switch (read_only) {
-		case 0:
-			if (num_rows==0) {
-				// the server has read_only=0 , but we can't find any writer, so we perform a swap
-				GloAdmin->mysql_servers_wrlock();
-				if (GloPTH->variables.hostgroup_manager_verbose) {
-					char *error2=NULL;
-					int cols2=0;
-					int affected_rows2=0;
-					SQLite3_result *resultset2=NULL;
-					char * query2 = NULL;
-					char *q = (char *)"SELECT * FROM pgsql_servers WHERE hostname=\"%s\" AND port=%d";
-					query2 = (char *)malloc(strlen(q)+strlen(hostname)+32);
-					sprintf(query2,q,hostname,port);
-					admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
-					if (error2) {
-						proxy_error("Error on read from pgsql_servers : %s\n", error2);
-					} else {
-						if (resultset2) {
-							proxy_info("read_only_action RO=0 phase 1 : Dumping pgsql_servers for %s:%d\n", hostname, port);
-							resultset2->dump_to_stderr();
-						}
-					}
-					if (resultset2) { delete resultset2; resultset2=NULL; }
-					free(query2);
-				}
-				GloAdmin->save_proxysql_servers_runtime_to_database(false); // SAVE PgSQL SERVERS FROM RUNTIME
-				if (GloPTH->variables.hostgroup_manager_verbose) {
-					char *error2=NULL;
-					int cols2=0;
-					int affected_rows2=0;
-					SQLite3_result *resultset2=NULL;
-					char * query2 = NULL;
-					char *q = (char *)"SELECT * FROM pgsql_servers WHERE hostname=\"%s\" AND port=%d";
-					query2 = (char *)malloc(strlen(q)+strlen(hostname)+32);
-					sprintf(query2,q,hostname,port);
-					admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
-					if (error2) {
-						proxy_error("Error on read from pgsql_servers : %s\n", error2);
-					} else {
-						if (resultset2) {
-							proxy_info("read_only_action RO=0 phase 2 : Dumping pgsql_servers for %s:%d\n", hostname, port);
-							resultset2->dump_to_stderr();
-						}
-					}
-					if (resultset2) { delete resultset2; resultset2=NULL; }
-					free(query2);
-				}
-				sprintf(query,Q2A,hostname,port);
-				admindb->execute(query);
-				sprintf(query,Q2B,hostname,port);
-				admindb->execute(query);
-				if (mysql_thread___monitor_writer_is_also_reader) {
-					sprintf(query,Q3A,hostname,port);
-				} else {
-					sprintf(query,Q3B,hostname,port);
-				}
-				admindb->execute(query);
-				if (GloPTH->variables.hostgroup_manager_verbose) {
-					char *error2=NULL;
-					int cols2=0;
-					int affected_rows2=0;
-					SQLite3_result *resultset2=NULL;
-					char * query2 = NULL;
-					char *q = (char *)"SELECT * FROM pgsql_servers WHERE hostname=\"%s\" AND port=%d";
-					query2 = (char *)malloc(strlen(q)+strlen(hostname)+32);
-					sprintf(query2,q,hostname,port);
-					admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
-					if (error2) {
-						proxy_error("Error on read from pgsql_servers : %s\n", error2);
-					} else {
-						if (resultset2) {
-							proxy_info("read_only_action RO=0 phase 3 : Dumping pgsql_servers for %s:%d\n", hostname, port);
-							resultset2->dump_to_stderr();
-						}
-					}
-					if (resultset2) { delete resultset2; resultset2=NULL; }
-					free(query2);
-				}
-				GloAdmin->load_proxysql_servers_to_runtime(); // LOAD PgSQL SERVERS TO RUNTIME
-				GloAdmin->mysql_servers_wrunlock();
-			} else {
-				// there is a server in writer hostgroup, let check the status of present and not present hosts
-				bool act=false;
-				wrlock();
-				std::set<std::string>::iterator it;
-				// read_only_set2 acts as a cache
-				// if the server was RO=0 on the previous check and no action was needed,
-				// it will be here
-				it = read_only_set2.find(ser);
-				if (it != read_only_set2.end()) {
-					// the server was already detected as RO=0
-					// no action required
-				} else {
-					// it is the first time that we detect RO on this server
-					sprintf(query,Q1B,hostname,port,hostname,port,hostname,port);
-					mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-					for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-						SQLite3_row *r=*it;
-						int status=MYSQL_SERVER_STATUS_OFFLINE_HARD; // default status, even for missing
-						if (r->fields[1]) { // has status
-							status=atoi(r->fields[1]);
-						}
-						if (status==MYSQL_SERVER_STATUS_OFFLINE_HARD) {
-							act=true;
-						}
-					}
-					if (act == false) {
-						// no action required, therefore we write in read_only_set2
-						proxy_info("read_only_action() detected RO=0 on server %s:%d for the first time after commit(), but no need to reconfigure\n", hostname, port);
-						read_only_set2.insert(ser);
-					}
-				}
-				wrunlock();
-				if (act==true) {	// there are servers either missing, or with stats=OFFLINE_HARD
-					GloAdmin->mysql_servers_wrlock();
-					if (GloPTH->variables.hostgroup_manager_verbose) {
-						char *error2=NULL;
-						int cols2=0;
-						int affected_rows2=0;
-						SQLite3_result *resultset2=NULL;
-						char * query2 = NULL;
-						char *q = (char *)"SELECT * FROM pgsql_servers WHERE hostname=\"%s\" AND port=%d";
-						query2 = (char *)malloc(strlen(q)+strlen(hostname)+32);
-						sprintf(query2,q,hostname,port);
-						admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
-						if (error2) {
-							proxy_error("Error on read from pgsql_servers : %s\n", error2);
-						} else {
-							if (resultset2) {
-								proxy_info("read_only_action RO=0 , rows=%d , phase 1 : Dumping pgsql_servers for %s:%d\n", num_rows, hostname, port);
-								resultset2->dump_to_stderr();
-							}
-						}
-						if (resultset2) { delete resultset2; resultset2=NULL; }
-						free(query2);
-					}
-					GloAdmin->save_proxysql_servers_runtime_to_database(false); // SAVE PgSQL SERVERS FROM RUNTIME
-					sprintf(query,Q2A,hostname,port);
-					admindb->execute(query);
-					sprintf(query,Q2B,hostname,port);
-					admindb->execute(query);
-					if (GloPTH->variables.hostgroup_manager_verbose) {
-						char *error2=NULL;
-						int cols2=0;
-						int affected_rows2=0;
-						SQLite3_result *resultset2=NULL;
-						char * query2 = NULL;
-						char *q = (char *)"SELECT * FROM pgsql_servers WHERE hostname=\"%s\" AND port=%d";
-						query2 = (char *)malloc(strlen(q)+strlen(hostname)+32);
-						sprintf(query2,q,hostname,port);
-						admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
-						if (error2) {
-							proxy_error("Error on read from pgsql_servers : %s\n", error2);
-						} else {
-							if (resultset2) {
-								proxy_info("read_only_action RO=0 , rows=%d , phase 2 : Dumping pgsql_servers for %s:%d\n", num_rows, hostname, port);
-								resultset2->dump_to_stderr();
-							}
-						}
-						if (resultset2) { delete resultset2; resultset2=NULL; }
-						free(query2);
-					}
-					if (mysql_thread___monitor_writer_is_also_reader) {
-						sprintf(query,Q3A,hostname,port);
-					} else {
-						sprintf(query,Q3B,hostname,port);
-					}
-					admindb->execute(query);
-					if (GloPTH->variables.hostgroup_manager_verbose) {
-						char *error2=NULL;
-						int cols2=0;
-						int affected_rows2=0;
-						SQLite3_result *resultset2=NULL;
-						char * query2 = NULL;
-						char *q = (char *)"SELECT * FROM pgsql_servers WHERE hostname=\"%s\" AND port=%d";
-						query2 = (char *)malloc(strlen(q)+strlen(hostname)+32);
-						sprintf(query2,q,hostname,port);
-						admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
-						if (error2) {
-							proxy_error("Error on read from pgsql_servers : %s\n", error2);
-						} else {
-							if (resultset2) {
-								proxy_info("read_only_action RO=0 , rows=%d , phase 3 : Dumping pgsql_servers for %s:%d\n", num_rows, hostname, port);
-								resultset2->dump_to_stderr();
-							}
-						}
-						if (resultset2) { delete resultset2; resultset2=NULL; }
-						free(query2);
-					}
-					GloAdmin->load_proxysql_servers_to_runtime(); // LOAD PgSQL SERVERS TO RUNTIME
-					GloAdmin->mysql_servers_wrunlock();
-				}
-			}
-			break;
-		case 1:
-			if (num_rows) {
-				// the server has read_only=1 , but we find it as writer, so we perform a swap
-				GloAdmin->mysql_servers_wrlock();
-				if (GloPTH->variables.hostgroup_manager_verbose) {
-					char *error2=NULL;
-					int cols2=0;
-					int affected_rows2=0;
-					SQLite3_result *resultset2=NULL;
-					char * query2 = NULL;
-					char *q = (char *)"SELECT * FROM pgsql_servers WHERE hostname=\"%s\" AND port=%d";
-					query2 = (char *)malloc(strlen(q)+strlen(hostname)+32);
-					sprintf(query2,q,hostname,port);
-					admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
-					if (error2) {
-						proxy_error("Error on read from pgsql_servers : %s\n", error2);
-					} else {
-						if (resultset2) {
-							proxy_info("read_only_action RO=1 phase 1 : Dumping pgsql_servers for %s:%d\n", hostname, port);
-							resultset2->dump_to_stderr();
-						}
-					}
-					if (resultset2) { delete resultset2; resultset2=NULL; }
-					free(query2);
-				}
-				GloAdmin->save_proxysql_servers_runtime_to_database(false); // SAVE PgSQL SERVERS FROM RUNTIME
-				sprintf(query,Q4,hostname,port);
-				admindb->execute(query);
-				if (GloPTH->variables.hostgroup_manager_verbose) {
-					char *error2=NULL;
-					int cols2=0;
-					int affected_rows2=0;
-					SQLite3_result *resultset2=NULL;
-					char * query2 = NULL;
-					char *q = (char *)"SELECT * FROM pgsql_servers WHERE hostname=\"%s\" AND port=%d";
-					query2 = (char *)malloc(strlen(q)+strlen(hostname)+32);
-					sprintf(query2,q,hostname,port);
-					admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
-					if (error2) {
-						proxy_error("Error on read from pgsql_servers : %s\n", error2);
-					} else {
-						if (resultset2) {
-							proxy_info("read_only_action RO=1 phase 2 : Dumping pgsql_servers for %s:%d\n", hostname, port);
-							resultset2->dump_to_stderr();
-						}
-					}
-					if (resultset2) { delete resultset2; resultset2=NULL; }
-					free(query2);
-				}
-				sprintf(query,Q5,hostname,port);
-				admindb->execute(query);
-				if (GloPTH->variables.hostgroup_manager_verbose) {
-					char *error2=NULL;
-					int cols2=0;
-					int affected_rows2=0;
-					SQLite3_result *resultset2=NULL;
-					char * query2 = NULL;
-					char *q = (char *)"SELECT * FROM pgsql_servers WHERE hostname=\"%s\" AND port=%d";
-					query2 = (char *)malloc(strlen(q)+strlen(hostname)+32);
-					sprintf(query2,q,hostname,port);
-					admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
-					if (error2) {
-						proxy_error("Error on read from pgsql_servers : %s\n", error2);
-					} else {
-						if (resultset2) {
-							proxy_info("read_only_action RO=1 phase 3 : Dumping pgsql_servers for %s:%d\n", hostname, port);
-							resultset2->dump_to_stderr();
-						}
-					}
-					if (resultset2) { delete resultset2; resultset2=NULL; }
-					free(query2);
-				}
-				GloAdmin->load_proxysql_servers_to_runtime(); // LOAD PgSQL SERVERS TO RUNTIME
-				GloAdmin->mysql_servers_wrunlock();
-			}
-			break;
-		default:
-			// LCOV_EXCL_START
-			assert(0);
-			break;
-			// LCOV_EXCL_STOP
-	}
-
-	pthread_mutex_unlock(&readonly_mutex);
-	if (resultset) {
-		delete resultset;
-	}
-	free(query);
-}
-#endif // 0
-
 /**
  * @brief New implementation of the read_only_action method that does not depend on the admin table.
  *   The method checks each server in the provided list and adjusts the servers according to their corresponding read_only value.
@@ -4185,17 +3840,15 @@ void PgSQL_HostGroups_Manager::generate_pgsql_hostgroup_attributes_table() {
 		return;
 	}
 	int rc;
-	sqlite3_stmt *statement=NULL;
-
 	const char * query=(const char *)"INSERT INTO pgsql_hostgroup_attributes ( "
 		"hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, "
 		"init_connect, multiplex, connection_warming, throttle_connections_per_sec, "
 		"ignore_session_variables, hostgroup_settings, servers_defaults, comment) VALUES "
 		"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
 
-	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query, -1, &statement, 0);
-	rc = mydb->prepare_v2(query, &statement);
-	ASSERT_SQLITE_OK(rc, mydb);
+	auto [rc1, statement_unique] = mydb->prepare_v2(query);
+	ASSERT_SQLITE_OK(rc1, mydb);
+	sqlite3_stmt *statement = statement_unique.get();
 	proxy_info("New pgsql_hostgroup_attributes table\n");
 	bool current_configured[MyHostGroups->len];
 	// set configured = false to all

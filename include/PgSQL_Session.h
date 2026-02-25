@@ -20,6 +20,7 @@ class PgSQL_Describe_Message;
 class PgSQL_Close_Message;
 class PgSQL_Bind_Message;
 class PgSQL_Execute_Message;
+struct PgSQL_Param_Value;
 
 #ifndef PROXYJSON
 #define PROXYJSON
@@ -528,16 +529,6 @@ public:
 	//bool started_sending_data_to_client; // this status variable tracks if some result set was sent to the client, or if proxysql is still buffering everything
 	bool use_ssl;
 #endif // 0
-	/**
-	 * @brief This status variable tracks whether the session is performing an
-	 *   'Auth Switch' due to a 'COM_CHANGE_USER' packet.
-	 * @details It becomes 'true' when the packet is detected and processed by:
-	 *    - 'MySQL_Protocol::process_pkt_COM_CHANGE_USER'
-	 *   It's reset before sending the final response for 'Auth Switch' to the client by:
-	 *   -  'PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE'
-	 *   This flag was introduced for issue #3504.
-	 */
-	bool change_user_auth_switch;
 
 //	MySQL_STMTs_meta* sess_STMTs_meta;
 //	StmtLongDataHandler* SLDH;
@@ -590,6 +581,7 @@ public:
 	void Memory_Stats();
 	void create_new_session_and_reset_connection(PgSQL_Data_Stream* _myds) override;
 	bool handle_command_query_kill(PtrSize_t*);
+
 	//void update_expired_conns(const std::vector<std::function<bool(PgSQL_Connection*)>>&);
 	/**
 	 * @brief Performs the final operations after current query has finished to be executed. It updates the session
@@ -612,6 +604,12 @@ public:
 	void generate_status_one_hostgroup(int hid, std::string& s);
 	void set_previous_status_mode3(bool allow_execute = true);
 	char* get_current_query(int max_length = -1);
+
+private:
+	int32_t extract_pid_from_param(const PgSQL_Param_Value& param, uint16_t format) const;
+	void send_parameter_error_response(const char* error_message, PGSQL_ERROR_CODES code = PGSQL_ERROR_CODES::ERRCODE_INVALID_TEXT_REPRESENTATION);
+	bool handle_kill_success(int32_t pid, int tki, const char* digest_text, PgSQL_Connection* mc, PtrSize_t* pkt);
+	bool handle_literal_kill_query(PtrSize_t* pkt, PgSQL_Connection* mc);
 
 #if defined(__clang__)
 	template<typename SESS, typename DS, typename BE, typename THD>

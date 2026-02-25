@@ -1559,6 +1559,10 @@ __internal_loop:
 		}
 		if (qr->cache_empty_result >= 0) {
 			// Note: negative value means this rule doesn't change
+			// cache_empty_result values:
+			// -1: Use global setting (query_cache_stores_empty_result)
+			//  0: Do NOT cache empty resultsets, but cache non-empty resultsets
+			//  1: Always cache resultsets (both empty and non-empty)
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set cache_empty_result: %d. Query with empty result will%s hit the cache\n", qr->rule_id, qr->cache_empty_result, (qr->cache_empty_result == 0 ? " NOT" : "" ));
 			ret->cache_empty_result=qr->cache_empty_result;
 		}
@@ -1627,25 +1631,28 @@ __internal_loop:
 
 __exit_process_mysql_query:
 	if (qr == NULL || qr->apply == false) {
-		// now it is time to check mysql_query_rules_fast_routing
-		// it is only check if "apply" is not true
-		const char * u = sess->client_myds->myconn->userinfo->username;
-		const char * s = sess->client_myds->myconn->userinfo->schemaname;
+		// Skip fast routing for mirror sessions - they already have their destination
+		if (sess->mirror == false) {
+			// now it is time to check mysql_query_rules_fast_routing
+			// it is only check if "apply" is not true
+			const char * u = sess->client_myds->myconn->userinfo->username;
+			const char * s = sess->client_myds->myconn->userinfo->schemaname;
 
-		int dst_hg = -1;
+			int dst_hg = -1;
 
-		if (_thr_SQP_rules_fast_routing != nullptr) {
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 7, "Searching thread-local 'rules_fast_routing' hashmap with: user='%s', schema='%s', and flagIN='%d'\n", u, s, flagIN);
-			dst_hg = search_rules_fast_routing_dest_hg(&_thr_SQP_rules_fast_routing, u, s, flagIN, false);
-		} else if (rules_fast_routing != nullptr) {
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 7, "Searching global 'rules_fast_routing' hashmap with: user='%s', schema='%s', and flagIN='%d'\n", u, s, flagIN);
-			// NOTE: A pointer to the member 'this->rules_fast_routing' is required, since the value of the
-			// member could have changed before the function acquires the internal lock. See function doc.
-			dst_hg = search_rules_fast_routing_dest_hg(&this->rules_fast_routing, u, s, flagIN, true);
-		}
+			if (_thr_SQP_rules_fast_routing != nullptr) {
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 7, "Searching thread-local 'rules_fast_routing' hashmap with: user='%s', schema='%s', and flagIN='%d'\n", u, s, flagIN);
+				dst_hg = search_rules_fast_routing_dest_hg(&_thr_SQP_rules_fast_routing, u, s, flagIN, false);
+			} else if (rules_fast_routing != nullptr) {
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 7, "Searching global 'rules_fast_routing' hashmap with: user='%s', schema='%s', and flagIN='%d'\n", u, s, flagIN);
+				// NOTE: A pointer to the member 'this->rules_fast_routing' is required, since the value of the
+				// member could have changed before the function acquires the internal lock. See function doc.
+				dst_hg = search_rules_fast_routing_dest_hg(&this->rules_fast_routing, u, s, flagIN, true);
+			}
 
-		if (dst_hg != -1) {
-			ret->destination_hostgroup = dst_hg;
+			if (dst_hg != -1) {
+				ret->destination_hostgroup = dst_hg;
+			}
 		}
 	}
 	
@@ -1816,8 +1823,13 @@ void Query_Processor<QP_DERIVED>::query_parser_init(SQP_par_t *qp, const char *q
 		opts.keep_comment = GET_THREAD_VARIABLE(query_digests_keep_comment);
 		opts.max_query_length = GET_THREAD_VARIABLE(query_digests_max_query_length);
 
-		qp->digest_text=query_digest_and_first_comment_2(query, query_length, &qp->first_comment, 
-			((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL), &opts);
+		if constexpr (std::is_same_v<QP_DERIVED, MySQL_Query_Processor>) {
+			qp->digest_text = mysql_query_digest_and_first_comment(query, query_length, &qp->first_comment,
+				((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL), &opts);
+		} else if constexpr (std::is_same_v<QP_DERIVED, PgSQL_Query_Processor>) {
+			qp->digest_text = pgsql_query_digest_and_first_comment(query, query_length, &qp->first_comment,
+				((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL), &opts);
+		}
 		// the hash is computed only up to query_digests_max_digest_length bytes
 		const int digest_text_length=strnlen(qp->digest_text, GET_THREAD_VARIABLE(query_digests_max_digest_length));
 		qp->digest=SpookyHash::Hash64(qp->digest_text, digest_text_length, 0);

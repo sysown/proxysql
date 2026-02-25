@@ -12,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <queue>
+#include <climits>
 #include <stdint.h>
 #include <utility>
 #include <vector>
@@ -143,24 +144,24 @@ unique_ptr<PgSQL_Thread> init_pgsql_thread_struct() {
 // Helper function for binding text
 void sqlite_bind_text(sqlite3_stmt* stmt, int index, const char* text) {
 	int rc = (*proxy_sqlite3_bind_text)(stmt, index, text, -1, SQLITE_TRANSIENT);
-	ASSERT_SQLITE3_OK(rc, sqlite3_db_handle(stmt));
+	ASSERT_SQLITE3_OK(rc, (*proxy_sqlite3_db_handle)(stmt));
 }
 
 // Helper function for binding integers
 void sqlite_bind_int(sqlite3_stmt* stmt, int index, int value) {
 	int rc = (*proxy_sqlite3_bind_int)(stmt, index, value);
-	ASSERT_SQLITE3_OK(rc, sqlite3_db_handle(stmt));
+	ASSERT_SQLITE3_OK(rc, (*proxy_sqlite3_db_handle)(stmt));
 }
 
 // Helper function for binding 64-bit integers
 void sqlite_bind_int64(sqlite3_stmt* stmt, int index, long long value) {
 	int rc = (*proxy_sqlite3_bind_int64)(stmt, index, value);
-	ASSERT_SQLITE3_OK(rc, sqlite3_db_handle(stmt));
+	ASSERT_SQLITE3_OK(rc, (*proxy_sqlite3_db_handle)(stmt));
 }
 
 void sqlite_bind_null(sqlite3_stmt* stmt, int index) {
 	int rc = (*proxy_sqlite3_bind_null)(stmt, index);
-	ASSERT_SQLITE3_OK(rc, sqlite3_db_handle(stmt));
+	ASSERT_SQLITE3_OK(rc, (*proxy_sqlite3_db_handle)(stmt));
 }
 
 // Helper function for executing a statement
@@ -180,13 +181,13 @@ int sqlite_execute_statement(sqlite3_stmt* stmt) {
 // Helper function for clearing bindings
 void sqlite_clear_bindings(sqlite3_stmt* stmt) {
 	int rc = (*proxy_sqlite3_clear_bindings)(stmt);
-	ASSERT_SQLITE3_OK(rc, sqlite3_db_handle(stmt));
+	ASSERT_SQLITE3_OK(rc, (*proxy_sqlite3_db_handle)(stmt));
 }
 
 // Helper function for resetting a statement
 void sqlite_reset_statement(sqlite3_stmt* stmt) {
 	int rc = (*proxy_sqlite3_reset)(stmt);
-	ASSERT_SQLITE3_OK(rc, sqlite3_db_handle(stmt));
+	ASSERT_SQLITE3_OK(rc, (*proxy_sqlite3_db_handle)(stmt));
 }
 
 // Helper function for finalizing a statement
@@ -209,19 +210,18 @@ void update_monitor_pgsql_servers(SQLite3_result* rs, SQLite3DB* db) {
 	if (rs != nullptr) {
 		db->execute("DELETE FROM monitor_internal.pgsql_servers");
 
-		sqlite3_stmt* stmt1 = nullptr;
-		int rc = db->prepare_v2(
-			"INSERT INTO monitor_internal.pgsql_servers VALUES (?, ?, ?, ?)", &stmt1
+		auto [rc1, stmt1_unique] = db->prepare_v2(
+			"INSERT INTO monitor_internal.pgsql_servers VALUES (?, ?, ?, ?)"
 		);
-		ASSERT_SQLITE_OK(rc, db);
+		ASSERT_SQLITE_OK(rc1, db);
 
-		sqlite3_stmt* stmt32 = nullptr;
-		rc = db->prepare_v2(
+		auto [rc2, stmt32_unique] = db->prepare_v2(
 			("INSERT INTO monitor_internal.pgsql_servers VALUES " +
-				generate_multi_rows_query(32, 4)).c_str(),
-			&stmt32
+				generate_multi_rows_query(32, 4)).c_str()
 		);
-		ASSERT_SQLITE_OK(rc, db);
+		ASSERT_SQLITE_OK(rc2, db);
+		sqlite3_stmt* stmt1 = stmt1_unique.get();
+		sqlite3_stmt* stmt32 = stmt32_unique.get();
 
 		// Iterate through rows
 		int row_idx = 0;
@@ -254,9 +254,7 @@ void update_monitor_pgsql_servers(SQLite3_result* rs, SQLite3DB* db) {
 			row_idx++;
 		}
 
-		// Finalize statements
-		sqlite_finalize_statement(stmt1);
-		sqlite_finalize_statement(stmt32);
+		// RAII auto-finalizes stmt1 and stmt32
 	}
 }
 
@@ -266,6 +264,13 @@ struct mon_srv_t {
 	string addr;
 	uint16_t port;
 	bool ssl;
+	struct ssl_opts_t {
+		string ssl_p2s_key;
+		string ssl_p2s_cert;
+		string ssl_p2s_ca;
+		string ssl_p2s_crl;
+		string ssl_p2s_crlpath;
+	} ssl_opt;
 };
 
 struct mon_user_t {
@@ -353,15 +358,21 @@ unique_ptr<SQLite3_result> fetch_hgm_srvs_conf(PgSQL_HostGroups_Manager* hgm, co
 
 vector<mon_srv_t> ext_srvs(const unique_ptr<SQLite3_result>& srvs_info) {
 	vector<mon_srv_t> srvs {};
-
+	srvs.reserve(srvs_info->rows.size());
 	for (const auto& row : srvs_info->rows) {
 		srvs.push_back({
 			string { row->fields[0] },
 			static_cast<uint16_t>(std::atoi(row->fields[1])),
-			static_cast<bool>(std::atoi(row->fields[2]))
+			static_cast<bool>(std::atoi(row->fields[2])),
+			mon_srv_t::ssl_opts_t {
+				string { pgsql_thread___ssl_p2s_key ? pgsql_thread___ssl_p2s_key : ""},
+				string { pgsql_thread___ssl_p2s_cert ? pgsql_thread___ssl_p2s_cert : "" },
+				string { pgsql_thread___ssl_p2s_ca ? pgsql_thread___ssl_p2s_ca : "" },
+				string { pgsql_thread___ssl_p2s_crl ? pgsql_thread___ssl_p2s_crl : "" },
+				string { pgsql_thread___ssl_p2s_crlpath ? pgsql_thread___ssl_p2s_crlpath : ""}
+			}
 		});
 	}
-
 	return srvs;
 }
 
@@ -624,6 +635,13 @@ pair<short,bool> handle_async_connect_cont(state_t& st, short revent) {
 		case PGRES_POLLING_OK:
 			pgconn.state = ASYNC_ST::ASYNC_CONNECT_END;
 
+			// connection successful, update SSL stats
+			if (PQsslInUse(pgconn.conn)) {
+				__sync_fetch_and_add(&GloPgMon->ssl_connections_OK, 1);
+			} else {
+				__sync_fetch_and_add(&GloPgMon->non_ssl_connections_OK, 1);
+			}
+
 			if (st.task.type == task_type_t::connect) {
 				st.task.end = monotonic_time();
 			} else if (st.task.type == task_type_t::ping) {
@@ -870,18 +888,44 @@ pair<bool,pgsql_conn_t> get_task_conn(conn_pool_t& conn_pool, task_st_t& task_st
 	}
 }
 
+static void append_conninfo_param(std::ostringstream& conninfo, const std::string& key, const std::string& val) {
+	if (val.empty()) return;
+
+	std::string escaped_val;
+	escaped_val.reserve(val.length() * 2);  // Reserve maximum possible size
+
+	for (char c : val) {
+		if (c == '\'' || c == '\\') {
+			escaped_val.push_back('\\');
+		}
+		escaped_val.push_back(c);
+	}
+
+	conninfo << key << "='" << escaped_val << "' ";
+}
+
 string build_conn_str(const task_st_t& task_st) {
 	const mon_srv_t& srv_info { task_st.op_st.srv_info };
 	const mon_user_t& user_info { task_st.op_st.user_info };
 
-	return string {
-		"host='" + srv_info.addr + "' "
-			+ "port='" + std::to_string(srv_info.port) + "' "
-			+ "user='" + user_info.user + "' "
-			+ "password='" + user_info.pass + "' "
-			+ "dbname='" + user_info.dbname + "' "
-			+ "application_name=ProxySQL-Monitor"
-	};
+	std::ostringstream conninfo;
+	append_conninfo_param(conninfo, "user", user_info.user); // username
+	append_conninfo_param(conninfo, "password", user_info.pass); // password
+	append_conninfo_param(conninfo, "dbname", user_info.dbname); // dbname
+	append_conninfo_param(conninfo, "host", srv_info.addr); // backend address
+	conninfo << "port=" << srv_info.port << " "; // backend port
+	conninfo << "application_name=ProxySQL-Monitor "; // application name
+	if (srv_info.ssl) {
+		conninfo << "sslmode='require' "; // SSL required
+		append_conninfo_param(conninfo, "sslkey", srv_info.ssl_opt.ssl_p2s_key);
+		append_conninfo_param(conninfo, "sslcert", srv_info.ssl_opt.ssl_p2s_cert);
+		append_conninfo_param(conninfo, "sslrootcert", srv_info.ssl_opt.ssl_p2s_ca);
+		append_conninfo_param(conninfo, "sslcrl", srv_info.ssl_opt.ssl_p2s_crl);
+		append_conninfo_param(conninfo, "sslcrldir", srv_info.ssl_opt.ssl_p2s_crlpath);
+	} else {
+		conninfo << "sslmode='disable' "; // not supporting SSL
+	}
+	return conninfo.str();
 }
 
 pgsql_conn_t create_new_conn(task_st_t& task_st) {
@@ -1255,11 +1299,11 @@ bool is_task_finish(pgsql_conn_t& c, task_st_t& st) {
 }
 
 void update_connect_table(SQLite3DB* db, state_t& state) {
-	sqlite3_stmt* stmt = nullptr;
-	int rc = db->prepare_v2(
-		"INSERT OR REPLACE INTO pgsql_server_connect_log VALUES (?1 , ?2 , ?3 , ?4 , ?5)", &stmt
+	auto [rc, stmt_unique] = db->prepare_v2(
+		"INSERT OR REPLACE INTO pgsql_server_connect_log VALUES (?1 , ?2 , ?3 , ?4 , ?5)"
 	);
 	ASSERT_SQLITE_OK(rc, db);
+	sqlite3_stmt* stmt = stmt_unique.get();
 
 	uint64_t op_dur_us { state.task.end - state.task.start };
 
@@ -1277,7 +1321,7 @@ void update_connect_table(SQLite3DB* db, state_t& state) {
 
 	sqlite_clear_bindings(stmt);
 	sqlite_reset_statement(stmt);
-	sqlite_finalize_statement(stmt);
+	// RAII auto-finalizes stmt
 
 	if (state.conn.err) {
 		const mon_srv_t& srv { state.task.op_st.srv_info };
@@ -1300,11 +1344,11 @@ void update_connect_table(SQLite3DB* db, state_t& state) {
 }
 
 void update_ping_table(SQLite3DB* db, state_t& state) {
-	sqlite3_stmt* stmt = nullptr;
-	int rc = db->prepare_v2(
-		"INSERT OR REPLACE INTO pgsql_server_ping_log VALUES (?1, ?2, ?3, ?4, ?5)", &stmt
+	auto [rc, stmt_unique] = db->prepare_v2(
+		"INSERT OR REPLACE INTO pgsql_server_ping_log VALUES (?1, ?2, ?3, ?4, ?5)"
 	);
 	ASSERT_SQLITE_OK(rc, db);
+	sqlite3_stmt* stmt = stmt_unique.get();
 
 	uint64_t op_dur_us { state.task.end - state.task.start };
 
@@ -1322,7 +1366,7 @@ void update_ping_table(SQLite3DB* db, state_t& state) {
 
 	sqlite_clear_bindings(stmt);
 	sqlite_reset_statement(stmt);
-	sqlite_finalize_statement(stmt);
+	// RAII auto-finalizes stmt
 
 	if (state.conn.err) {
 		const mon_srv_t& srv { state.task.op_st.srv_info };
@@ -1349,11 +1393,11 @@ void update_readonly_table(SQLite3DB* db, state_t& state) {
 		static_cast<readonly_res_t*>(state.task.op_st.op_result.get())
 	};
 
-	sqlite3_stmt* stmt = nullptr;
-	int rc = db->prepare_v2(
-		"INSERT OR REPLACE INTO pgsql_server_read_only_log VALUES (?1, ?2, ?3, ?4, ?5, ?6)", &stmt
+	auto [rc, stmt_unique] = db->prepare_v2(
+		"INSERT OR REPLACE INTO pgsql_server_read_only_log VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
 	);
 	ASSERT_SQLITE_OK(rc, db);
+	sqlite3_stmt* stmt = stmt_unique.get();
 
 	uint64_t op_dur_us { state.task.end - state.task.start };
 
@@ -1378,7 +1422,7 @@ void update_readonly_table(SQLite3DB* db, state_t& state) {
 
 	sqlite_clear_bindings(stmt);
 	sqlite_reset_statement(stmt);
-	sqlite_finalize_statement(stmt);
+	// RAII auto-finalizes stmt
 
 	if (state.conn.err) {
 		const mon_srv_t& srv { state.task.op_st.srv_info };
@@ -1419,7 +1463,7 @@ const char CHECK_HOST_ERR_LIMIT_QUERY[] {
 		" COUNT(*) = ?"
 };
 
-thread_local sqlite3_stmt* CHECK_HOST_ERR_LIMIT_STMT { nullptr };
+thread_local stmt_unique_ptr CHECK_HOST_ERR_LIMIT_STMT {};
 
 void shunn_non_resp_srv(SQLite3DB* db, state_t& state) {
 	ping_params_t* params { static_cast<ping_params_t*>(state.task.op_st.op_params.get()) };
@@ -1429,17 +1473,20 @@ void shunn_non_resp_srv(SQLite3DB* db, state_t& state) {
 	int port { srv.port };
 	int32_t max_fails { params->max_failures };
 
-	if (CHECK_HOST_ERR_LIMIT_STMT == nullptr) {
-		int rc = db->prepare_v2(CHECK_HOST_ERR_LIMIT_QUERY, &CHECK_HOST_ERR_LIMIT_STMT);
+	if (!CHECK_HOST_ERR_LIMIT_STMT) {
+		auto [rc, stmt_unique] = db->prepare_v2(CHECK_HOST_ERR_LIMIT_QUERY);
 		ASSERT_SQLITE_OK(rc, db);
+		CHECK_HOST_ERR_LIMIT_STMT = std::move(stmt_unique);
 	}
 
-	sqlite_bind_text(CHECK_HOST_ERR_LIMIT_STMT, 1, addr);
-	sqlite_bind_int(CHECK_HOST_ERR_LIMIT_STMT, 2, port);
-	sqlite_bind_int(CHECK_HOST_ERR_LIMIT_STMT, 3, max_fails);
-	sqlite_bind_int(CHECK_HOST_ERR_LIMIT_STMT, 4, max_fails);
+	sqlite3_stmt* check_host_err_limit_stmt = CHECK_HOST_ERR_LIMIT_STMT.get();
 
-	unique_ptr<SQLite3_result> limit_set { sqlite_fetch_and_clear(CHECK_HOST_ERR_LIMIT_STMT) };
+	sqlite_bind_text(check_host_err_limit_stmt, 1, addr);
+	sqlite_bind_int(check_host_err_limit_stmt, 2, port);
+	sqlite_bind_int(check_host_err_limit_stmt, 3, max_fails);
+	sqlite_bind_int(check_host_err_limit_stmt, 4, max_fails);
+
+	unique_ptr<SQLite3_result> limit_set { sqlite_fetch_and_clear(check_host_err_limit_stmt) };
 
 	if (limit_set && limit_set->rows_count) {
 		bool shunned { PgHGM->shun_and_killall(addr, port) };
@@ -1468,22 +1515,25 @@ const char HOST_FETCH_UPD_LATENCY_QUERY[] {
 	" GROUP BY hostname, port"
 };
 
-thread_local sqlite3_stmt* FETCH_HOST_LATENCY_STMT { nullptr };
+thread_local stmt_unique_ptr FETCH_HOST_LATENCY_STMT {};
 
 void update_srv_latency(SQLite3DB* db, state_t& state) {
 	const mon_srv_t& srv { state.task.op_st.srv_info };
 	char* addr { const_cast<char*>(srv.addr.c_str()) };
 	int port { srv.port };
 
-	if (FETCH_HOST_LATENCY_STMT == nullptr) {
-		int rc = db->prepare_v2(HOST_FETCH_UPD_LATENCY_QUERY, &FETCH_HOST_LATENCY_STMT);
+	if (!FETCH_HOST_LATENCY_STMT) {
+		auto [rc, stmt_unique] = db->prepare_v2(HOST_FETCH_UPD_LATENCY_QUERY);
 		ASSERT_SQLITE_OK(rc, db);
+		FETCH_HOST_LATENCY_STMT = std::move(stmt_unique);
 	}
 
-	sqlite_bind_text(FETCH_HOST_LATENCY_STMT, 1, addr);
-	sqlite_bind_int(FETCH_HOST_LATENCY_STMT, 2, port);
+	sqlite3_stmt* fetch_host_latency_stmt = FETCH_HOST_LATENCY_STMT.get();
 
-	unique_ptr<SQLite3_result> resultset { sqlite_fetch_and_clear(FETCH_HOST_LATENCY_STMT) };
+	sqlite_bind_text(fetch_host_latency_stmt, 1, addr);
+	sqlite_bind_int(fetch_host_latency_stmt, 2, port);
+
+	unique_ptr<SQLite3_result> resultset { sqlite_fetch_and_clear(fetch_host_latency_stmt) };
 
 	if (resultset && resultset->rows_count) {
 		for (const SQLite3_row* srv : resultset->rows) {
@@ -1774,7 +1824,7 @@ void* worker_thread(void* args) {
 			add_task(task_poll, POLLOUT, std::move(init_st));
 		}
 
-		uint64_t next_timeout_at = ULONG_LONG_MAX;
+		uint64_t next_timeout_at = ULLONG_MAX;
 		uint64_t tasks_start = monotonic_time();
 
 		// Continue processing tasks; Next async operation
@@ -1884,16 +1934,16 @@ void* worker_thread(void* args) {
 		}
 	}
 
-	sqlite_finalize_statement(CHECK_HOST_ERR_LIMIT_STMT);
-	sqlite_finalize_statement(FETCH_HOST_LATENCY_STMT);
+	CHECK_HOST_ERR_LIMIT_STMT.reset();
+	FETCH_HOST_LATENCY_STMT.reset();
 
 	return NULL;
 }
 
 void maint_monitor_table(SQLite3DB* db, const char query[], const ping_params_t& params) {
-	sqlite3_stmt* stmt { nullptr };
-	int rc = db->prepare_v2(query, &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(query);
 	ASSERT_SQLITE_OK(rc, db);
+	sqlite3_stmt* stmt = stmt_unique.get();
 
 	if (pgsql_thread___monitor_history < (params.interval * (params.max_failures + 1)) / 1000) {
 		if (static_cast<uint64_t>(params.interval) < uint64_t(3600000) * 1000) {
@@ -1907,7 +1957,7 @@ void maint_monitor_table(SQLite3DB* db, const char query[], const ping_params_t&
 
 	sqlite_clear_bindings(stmt);
 	sqlite_reset_statement(stmt);
-	sqlite_finalize_statement(stmt);
+	// RAII auto-finalizes stmt
 }
 
 const char MAINT_PING_LOG_QUERY[] {
