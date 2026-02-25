@@ -1597,7 +1597,8 @@ char* PgSQL_Threads_Handler::get_variable(char* name) {	// this is the public fu
 		if (!strcasecmp(name, "monitor_username")) return strdup(variables.monitor_username);
 		if (!strcasecmp(name, "monitor_password")) return strdup(variables.monitor_password);
 		if (!strcasecmp(name, "monitor_dbname")) return strdup(variables.monitor_dbname);
-		if (!strcasecmp(name, "monitor_replication_lag_use_percona_heartbeat")) return strdup(variables.monitor_replication_lag_use_percona_heartbeat);
+		// NOTE: Disabled until 'pt-heartbeat' supports PostgreSQL is fixed: https://perconadev.atlassian.net/browse/PT-2030
+		// if (!strcasecmp(name, "monitor_replication_lag_use_percona_heartbeat")) return strdup(variables.monitor_replication_lag_use_percona_heartbeat);
 	}
 	if (!strcasecmp(name, "threads")) {
 		sprintf(intbuf, "%d", (num_threads ? num_threads : DEFAULT_NUM_THREADS));
