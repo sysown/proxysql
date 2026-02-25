@@ -81,6 +81,7 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	proxysql_find_charset.oo ProxySQL_Poll.oo \
 	PgSQL_Protocol.oo PgSQL_Thread.oo PgSQL_Data_Stream.oo PgSQL_Session.oo PgSQL_Variables.oo PgSQL_HostGroups_Manager.oo PgSQL_Connection.oo PgSQL_Backend.oo PgSQL_Logger.oo PgSQL_Authentication.oo PgSQL_Error_Helper.oo \
 	MySQL_Query_Cache.oo PgSQL_Query_Cache.oo PgSQL_Monitor.oo \
+	MySQLFFTO.oo PgSQLFFTO.oo \
 	MySQL_Set_Stmt_Parser.oo PgSQL_Set_Stmt_Parser.oo \
 	PgSQL_Variables_Validator.oo PgSQL_ExplicitTxnStateMgr.oo \
 	PgSQL_PreparedStatement.oo PgSQL_Extended_Query_Message.oo \
@@ -90,10 +91,10 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 # GenAI object files (conditionally included)
 ifeq ($(PROXYSQLGENAI),1)
 _OBJ_CXX += GenAI_Thread.oo \
-	MCP_Thread.oo ProxySQL_MCP_Server.oo MCP_Endpoint.oo \
+	MCP_Thread.oo ProxySQL_MCP_Server.oo MCP_Endpoint.oo MCP_Tool_Handler.oo \
 	MySQL_Catalog.oo MySQL_Tool_Handler.oo MySQL_FTS.oo \
 	Config_Tool_Handler.oo Query_Tool_Handler.oo \
-	Admin_Tool_Handler.oo Cache_Tool_Handler.oo Observe_Tool_Handler.oo \
+	Admin_Tool_Handler.oo Cache_Tool_Handler.oo Stats_Tool_Handler.oo \
 	AI_Features_Manager.oo LLM_Bridge.oo LLM_Clients.oo Anomaly_Detector.oo AI_Vector_Storage.oo AI_Tool_Handler.oo \
 	RAG_Tool_Handler.oo \
 	Discovery_Schema.oo Static_Harvester.oo PgSQL_Static_Harvester.oo

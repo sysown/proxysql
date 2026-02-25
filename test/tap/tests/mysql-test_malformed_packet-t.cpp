@@ -9,6 +9,7 @@
 #include "mysql.h"
 #include "tap.h"
 #include "command_line.h"
+#include "noise_utils.h"
 #include "utils.h"
 
 constexpr size_t BUFFER_SIZE = 1024;
@@ -126,6 +127,10 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
+	spawn_internal_noise(cl, internal_noise_random_stats_poller);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
+	spawn_internal_noise(cl, internal_noise_pgsql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}, {"avg_delay_ms", "300"}});
+
     std::vector<std::vector<uint8_t>> malformed_pkts = {
         {0x01, 0x00},
         {0xFF, 0xFF, 0xFF, 0x00, 0x00, 0xFE, 0x00, 0x00},
@@ -138,7 +143,11 @@ int main(int argc, char** argv) {
         {0x03, 0x00, 0x00, 0x2F, 0x2A, 0xE0, 0x00},
     };
 
-    plan(malformed_pkts.size() * 4);
+    if (cl.use_noise) {
+        plan(malformed_pkts.size() * 4 + 3);
+    } else {
+        plan(malformed_pkts.size() * 4);
+    }
 
     {
         diag(">>> Sending malformed packets to BACKEND connection <<<");

@@ -24,6 +24,7 @@ using json = nlohmann::json;
 #include "PgSQL_Variables.h"
 #include "ProxySQL_Cluster.hpp"
 #include "PgSQL_Query_Cache.h"
+#include "PgSQLFFTO.hpp"
 #include "PgSQL_Variables_Validator.h"
 #include "PgSQL_ExplicitTxnStateMgr.h"
 #include "PgSQL_Extended_Query_Message.h"
@@ -244,6 +245,7 @@ PgSQL_Session::PgSQL_Session() {
 	user_attributes = NULL;
 	schema_locked = false;
 	session_fast_forward = SESSION_FORWARD_TYPE_NONE;
+	ffto_bypassed = false;
 	//started_sending_data_to_client = false;
 	handler_function = NULL;
 	client_myds = NULL;
@@ -308,10 +310,14 @@ void PgSQL_Session::reset() {
 		client_myds->myconn->reset();
 	}
 	extended_query_phase = EXTQ_PHASE_IDLE;
+	ffto_bypassed = false;
+	if (m_ffto) {
+		m_ffto->on_close();
+	}
+	m_ffto.reset();
 }
 
 PgSQL_Session::~PgSQL_Session() {
-
 	if (locked_on_hostgroup >= 0) {
 		thread->status_variables.stvar[st_var_hostgroup_locked]--;
 	}
@@ -2279,9 +2285,25 @@ __implicit_sync:
 				break;
 			}
 			break;
-		case FAST_FORWARD:
-			mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
-			break;
+			case FAST_FORWARD:
+				if (pgsql_thread___ffto_enabled && !ffto_bypassed) {
+					if (pkt.size > (size_t)pgsql_thread___ffto_max_buffer_size) {
+						ffto_bypassed = true;
+						if (m_ffto) {
+							m_ffto->on_close();
+						}
+						m_ffto.reset();
+					} else {
+						if (!m_ffto) {
+							m_ffto = std::make_unique<PgSQLFFTO>(this);
+						}
+						if (m_ffto) {
+							m_ffto->on_client_data((const char*)pkt.ptr, pkt.size);
+						}
+					}
+				}
+				mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
+				break;
 			// This state is required because it covers the following situation:
 			//  1. A new connection is created by a client and the 'FAST_FORWARD' mode is enabled.
 			//  2. The first packet received for this connection isn't a whole packet, i.e, it's either
@@ -2707,11 +2729,27 @@ handler_again:
 		break;
 	case FAST_FORWARD:
 	{
-		if (mybe->server_myds->mypolls == NULL) {
-			// register the PgSQL_Data_Stream
-			thread->mypolls.add(POLLIN | POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
-		}
-		client_myds->PSarrayOUT->copy_add(mybe->server_myds->PSarrayIN, 0, mybe->server_myds->PSarrayIN->len);
+			if (mybe->server_myds->mypolls == NULL) {
+				// register the PgSQL_Data_Stream
+				thread->mypolls.add(POLLIN | POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
+			}
+			if (pgsql_thread___ffto_enabled && !ffto_bypassed && m_ffto) {
+				for (unsigned int i = 0; i < mybe->server_myds->PSarrayIN->len; i++) {
+					if (mybe->server_myds->PSarrayIN->pdata[i].size > (size_t)pgsql_thread___ffto_max_buffer_size) {
+						ffto_bypassed = true;
+						if (m_ffto) {
+							m_ffto->on_close();
+						}
+						m_ffto.reset();
+						break;
+					}
+					m_ffto->on_server_data(
+						(const char*)mybe->server_myds->PSarrayIN->pdata[i].ptr,
+						mybe->server_myds->PSarrayIN->pdata[i].size
+					);
+				}
+			}
+			client_myds->PSarrayOUT->copy_add(mybe->server_myds->PSarrayIN, 0, mybe->server_myds->PSarrayIN->len);
 
 		constexpr unsigned char ready_packet[] = { 0x5A, 0x00, 0x00, 0x00, 0x05 };
 		bool is_copy_ready_packet = false;
@@ -6881,4 +6919,3 @@ std::string PgSQL_DateStyle_Util::datestyle_to_string(PgSQL_DateStyle_t datestyl
 std::string PgSQL_DateStyle_Util::datestyle_to_string(std::string_view input, const PgSQL_DateStyle_t& default_datestyle) {
 	return datestyle_to_string(parse_datestyle(input), default_datestyle);
 }
-

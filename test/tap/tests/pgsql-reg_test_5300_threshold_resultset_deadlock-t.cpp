@@ -45,6 +45,7 @@
 #include <thread>
 #include "libpq-fe.h"
 #include "pg_lite_client.h"
+#include "noise_utils.h"
 #include "tap.h"
 #include "utils.h"
 
@@ -296,12 +297,20 @@ void test_close_flood_then_execute_deadlock() {
 }
 
 int main(int argc, char** argv) {
-    plan(2);
-
     if (cl.getEnv()) {
         diag("Failed to get the required environmental variables.");
         return EXIT_FAILURE;
     }
+
+	spawn_internal_noise(cl, internal_noise_mysql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}, {"avg_delay_ms", "300"}});
+	spawn_internal_noise(cl, internal_noise_prometheus_poller);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
+
+	if (cl.use_noise) {
+		plan(2 + 3);
+	} else {
+		plan(2);
+	}
 
     auto admin_conn = createNewConnection(ConnType::ADMIN, "", false);
 

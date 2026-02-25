@@ -36,14 +36,16 @@ bool MCP_JSONRPC_Resource::authenticate_request(const httpserver::http_request& 
 
 	if (endpoint_name == "config") {
 		expected_token = handler->variables.mcp_config_endpoint_auth;
-	} else if (endpoint_name == "observe") {
-		expected_token = handler->variables.mcp_observe_endpoint_auth;
+	} else if (endpoint_name == "stats") {
+		expected_token = handler->variables.mcp_stats_endpoint_auth;
 	} else if (endpoint_name == "query") {
 		expected_token = handler->variables.mcp_query_endpoint_auth;
 	} else if (endpoint_name == "admin") {
 		expected_token = handler->variables.mcp_admin_endpoint_auth;
 	} else if (endpoint_name == "cache") {
 		expected_token = handler->variables.mcp_cache_endpoint_auth;
+	} else if (endpoint_name == "ai") {
+		expected_token = handler->variables.mcp_ai_endpoint_auth;
 	} else if (endpoint_name == "rag") {
 		expected_token = handler->variables.mcp_rag_endpoint_auth;
 	} else {
@@ -319,7 +321,7 @@ std::shared_ptr<http_response> MCP_JSONRPC_Resource::handle_jsonrpc_request(
 		result["protocolVersion"] = "2025-06-18";
 		result["capabilities"]["tools"] = json::object();  // Explicitly declare tools support
 		result["serverInfo"] = {
-			{"name", "proxysql-mcp-mcp-mysql-tools"},
+			{"name", "proxysql-mcp-server"},
 			{"version", MCP_THREAD_VERSION}
 		};
 	} else if (method == "ping") {

@@ -84,6 +84,7 @@
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
+#include "noise_utils.h"
 
 #define MYSQL_QUERY__(mysql, query) \
 	do { \
@@ -1118,6 +1119,10 @@ int main(int, char**) {
 		return EXIT_FAILURE;
 	}
 
+	spawn_internal_noise(cl, internal_noise_admin_pinger);
+	spawn_internal_noise(cl, internal_noise_prometheus_poller);
+	spawn_internal_noise(cl, internal_noise_random_stats_poller);
+
 	const size_t dis_mod_checks = 7;
 	const size_t ena_mod_checks = 5;
 	const size_t sync_pls = module_sync_payloads.size();
@@ -1142,7 +1147,8 @@ int main(int, char**) {
 		// Sync tests by values
 		16 +
 		// Module checkums tests; enabled and disabled checksums
-		check_modules_checksums_sync__tests
+		check_modules_checksums_sync__tests +
+		(cl.use_noise ? 3 : 0)
 	);
 
 	const std::string fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync.cnf";

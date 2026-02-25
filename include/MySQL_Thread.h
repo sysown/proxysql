@@ -520,6 +520,14 @@ class MySQL_Threads_Handler
 		int default_query_delay;
 		int default_query_timeout;
 		int query_processor_iterations;
+		/**
+		 * @brief Defines when the first comment of a query needs to be processed.
+		 * 0 : comment ignored
+		 * 1 : comment processed before the query rules
+		 * 2 : comment processed after the query rules (default behavior)
+		 * 3 : comment processed before and after the query rules
+		 */
+		int query_processor_first_comment_parsing;
 		int query_processor_regex;
 		int set_query_lock_on_hostgroup;
 		int set_parser_algorithm;
@@ -600,6 +608,8 @@ class MySQL_Threads_Handler
 		int processlist_max_query_length;
 
 		bool ignore_min_gtid_annotations;
+		bool ffto_enabled;
+		int ffto_max_buffer_size;
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;
@@ -717,6 +727,17 @@ class MySQL_Threads_Handler
 	void start_listeners();
 	void stop_listeners();
 	void signal_all_threads(unsigned char _c=0);
+	/**
+	 * @brief Build an in-memory processlist snapshot for MySQL sessions.
+	 *
+	 * The returned resultset always uses the canonical `stats_mysql_processlist`
+	 * column layout. When `args.query_options.enabled=true`, the snapshot is
+	 * post-processed in memory using typed filters, deterministic sorting, and
+	 * pagination controls from `processlist_query_options_t`.
+	 *
+	 * @param args Processlist rendering options and optional query options.
+	 * @return Newly allocated resultset owned by the caller.
+	 */
 	SQLite3_result * SQL3_Processlist(processlist_config_t args);
 	SQLite3_result * SQL3_GlobalStatus(bool _memory);
 	bool kill_session(uint32_t _thread_session_id);
