@@ -270,6 +270,19 @@ sq3_res_t sqlite3_execute_stmt(sqlite3* db, const std::string& query);
 	} while(0)
 
 /**
+ * @brief Utility one-liner macro to check for query failure on a 'ext_val_t<T>'.
+ * @param val The 'ext_val_t<T>' to be checked.
+ * @return In case of failure, 'EXIT_FAILURE' after logging the error, continues otherwise.
+ */
+#define SQ3_CHECK_EXT_VAL(val)\
+	do {\
+		if (val.err) {\
+			diag("%s:%d: Query failed   err=\"%s\"", __func__, __LINE__, sq3_get_ext_val_err(val).c_str());\
+			return EXIT_FAILURE;\
+		}\
+	} while(0)
+
+/**
  * @brief Holds the result of an `mysql_query_ext_val` operation.
  */
 template <typename T>

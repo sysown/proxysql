@@ -200,7 +200,7 @@ int check_fast_routing_rules(
 
 	diag("Getting last 'debug_log' entry id");
 	ext_val_t<uint32_t> last_id { sq3_query_ext_val(sq3_db, SELECT_LAST_DEBUG_ID, uint32_t(0)) };
-	CHECK_EXT_VAL(admin, last_id);
+	SQ3_CHECK_EXT_VAL(last_id);
 	diag("Fetched last 'debug_log' entry id   id=%d", last_id.val);
 
 	// Check that fast_routing rules are properly working for the defined range
@@ -231,7 +231,7 @@ int check_fast_routing_rules(
 			};
 			ext_val_t<int64_t> entries { sq3_query_ext_val(sq3_db, select_count, int64_t(-1))};
 			if (entries.err) {
-				const string err { get_ext_val_err(admin, entries) };
+				const string err { sq3_get_ext_val_err(entries) };
 				diag("%s:%d: Query failed   err=\"%s\"", __func__, __LINE__, err.c_str());
 				return { -1, 0 };
 			}
@@ -285,7 +285,7 @@ int threads_warmup(const CommandLine& cl, MYSQL* admin, sqlite3* sq3_db) {
 
 	diag("Getting last 'debug_log' entry id");
 	ext_val_t<uint32_t> last_id { sq3_query_ext_val(sq3_db, SELECT_LAST_DEBUG_ID, uint32_t(0)) };
-	CHECK_EXT_VAL(admin, last_id);
+	SQ3_CHECK_EXT_VAL(last_id);
 	diag("Fetched last 'debug_log' entry id   id=%d", last_id.val);
 
 	int conns { find_min_elems(1.0 - pow(10, -6), mysql_threads.val) /* * 2 */ };
