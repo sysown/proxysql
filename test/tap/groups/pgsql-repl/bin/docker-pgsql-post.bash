@@ -13,7 +13,7 @@ set +e
 printf "[$(date)] Waiting for PostgreSQL service to initialize"
 while [ $RC -ne 0 ]; do
 	if [ $WAITED -gt $TIMEOUT ]; then
-		echo "[ERROR] Timeout of $TIMEOUT seconds reached while connecting to MySQL"
+		echo "[ERROR] Timeout of $TIMEOUT seconds reached while connecting to PostgreSQL"
 		exit 1
 	else
 		printf "."
