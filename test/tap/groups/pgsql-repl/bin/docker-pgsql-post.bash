@@ -2,9 +2,7 @@
 
 set -e
 
-. constants
-
-POSTGRE_SETUP_DIR=$(dirname $(realpath $0))/../scripts/
+POSTGRE_SETUP_DIR=$(dirname "$(realpath "$0")")/../scripts/
 
 WAITED=0
 TIMEOUT=300
@@ -31,5 +29,5 @@ set -e
 
 echo "[$(date)] Creating table structures for testing ..."
 set -x
-PGPASSWORD=$PGSQL_PWD ON_ERROR_STOP=1 psql -h$PGSQL_HOST -p$PGSQL_PORT -U$PGSQL_DB < $POSTGRE_SETUP_DIR/create_test_tables.sql
+PGPASSWORD=$PGSQL_PWD ON_ERROR_STOP=1 psql -h$PGSQL_HOST -p$PGSQL_PORT -U$PGSQL_DB < "$POSTGRE_SETUP_DIR"/create_test_tables.sql
 set +x

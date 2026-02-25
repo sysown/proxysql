@@ -2,9 +2,7 @@
 
 set -e
 
-. constants
-
-PROXY_CONF_DIR=$(dirname $(realpath $0))/../conf/proxysql
+PROXY_CONF_DIR=$(dirname "$(realpath "$0")")/../conf/proxysql
 
 WAITED=0
 TIMEOUT=300
@@ -31,5 +29,5 @@ set -e
 
 echo "[$(date)] Applying initial config for ProxySQL ..."
 set -x
-mysql --prompt="admin> " -u$ADMIN_USER -p$ADMIN_PWD --table -h$ADMIN_HOST -P$ADMIN_PORT < $PROXY_CONF_DIR/config.sql
+mysql --prompt="admin> " -u$ADMIN_USER -p$ADMIN_PWD --table -h$ADMIN_HOST -P$ADMIN_PORT < "$PROXY_CONF_DIR"/config.sql
 set +x
