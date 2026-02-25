@@ -269,7 +269,7 @@ bool GTID_Server_Data::gtid_exists(char *gtid_uuid, uint64_t gtid_trxid) {
 		return false;
 	}
 	for (auto itr = it->second.begin(); itr != it->second.end(); ++itr) {
-		if ((int64_t)gtid_trxid >= itr->first && (int64_t)gtid_trxid <= itr->second) {
+		if (itr->contains((int64_t)gtid_trxid)) {
 //			fprintf(stderr,"YES\n");
 			return true;
 		}
@@ -358,10 +358,9 @@ bool GTID_Server_Data::read_next_gtid() {
 						}
 					}
 				} else { // we are reading the trxids
-					uint64_t trx_from;
-					uint64_t trx_to;
-					sscanf(subtoken,"%lu-%lu",&trx_from,&trx_to);
-					updated = addGtidInterval(gtid_executed, uuid_server, trx_from, trx_to) || updated;
+					std::string s = uuid_server;
+					gtid_interval_t iv = Gtid_Interval(subtoken);
+					updated = addGtidInterval(s, iv, gtid_executed) || updated;
 			   }
 			}
 		}
@@ -394,8 +393,8 @@ bool GTID_Server_Data::read_next_gtid() {
 					break;
 			}
 			std::string s = uuid_server;
-			gtid_t new_gtid = std::make_pair(s,rec_trxid);
-			addGtid(new_gtid,gtid_executed);
+			gtid_interval_t iv = Gtid_Interval(rec_trxid);
+			addGtidInterval(s, iv, gtid_executed);
 			events_read++;
 		}
 	}
@@ -412,12 +411,7 @@ std::string gtid_executed_to_string(gtid_set_t& gtid_executed) {
 		s.insert(23,"-");
 		s = s + ":";
 		for (auto itr = it->second.begin(); itr != it->second.end(); ++itr) {
-			std::string s2 = s;
-			s2 = s2 + std::to_string(itr->first);
-			s2 = s2 + "-";
-			s2 = s2 + std::to_string(itr->second);
-			s2 = s2 + ",";
-			gtid_set = gtid_set + s2;
+			gtid_set += s + itr->to_string() + ",";
 		}
 	}
 	// Extract latest comma only in case 'gtid_executed' isn't empty
@@ -428,112 +422,52 @@ std::string gtid_executed_to_string(gtid_set_t& gtid_executed) {
 }
 
 
-
-void addGtid(const gtid_t& gtid, gtid_set_t& gtid_executed) {
-	auto it = gtid_executed.find(gtid.first);
-	if (it == gtid_executed.end())
-	{
-		gtid_executed[gtid.first].emplace_back(gtid.second, gtid.second);
-		return;
-	}
-
-	bool flag = true;
-	for (auto itr = it->second.begin(); itr != it->second.end(); ++itr)
-	{
-		if (gtid.second >= itr->first && gtid.second <= itr->second)
-			return;
-		if (gtid.second + 1 == itr->first)
-		{
-			--itr->first;
-			flag = false;
-			break;
-		}
-		else if (gtid.second == itr->second + 1)
-		{
-			++itr->second;
-			flag = false;
-			break;
-		}
-		else if (gtid.second < itr->first)
-		{
-			it->second.emplace(itr, gtid.second, gtid.second);
-			return;
-		}
-	}
-
-	if (flag)
-		it->second.emplace_back(gtid.second, gtid.second);
-
-	for (auto itr = it->second.begin(); itr != it->second.end(); ++itr)
-	{
-		auto next_itr = std::next(itr);
-		if (next_itr != it->second.end() && itr->second + 1 == next_itr->first)
-		{
-			itr->second = next_itr->second;
-			it->second.erase(next_itr);
-			break;
-		}
-	}
-}
-
-/**
- * @brief Adds or updates a GTID interval in the executed set
- *
- * This function intelligently merges GTID intervals to prevent events_count reset
- * when a binlog reader reconnects and provides updated GTID sets. It handles
- * reconnection scenarios where the server provides updated transaction ID ranges.
- *
- * For example, during reconnection:
- * - Before disconnection: server_UUID:1-10
- * - After reconnection: server_UUID:1-19
- *
- * This function will update the existing interval rather than replacing it,
- * preserving the events_count metric accuracy.
- *
- * @param gtid_executed Reference to the GTID set to update
- * @param server_uuid The server UUID string
- * @param txid_start Starting transaction ID of the interval
- * @param txid_end Ending transaction ID of the interval
- * @return bool True if the GTID set was updated, false if interval already existed
- *
- * @note This function is critical for maintaining accurate GTID metrics across
- *       binlog reader reconnections and preventing events_count resets.
- */
-bool addGtidInterval(gtid_set_t& gtid_executed, std::string server_uuid, int64_t txid_start, int64_t txid_end) {
-	bool updated = true;
-
-	auto it = gtid_executed.find(server_uuid);
+// Merges a GTID interval into a gitd_executed instance. Returns true if gtid_executed was updated, false otherwise.
+bool addGtidInterval(const std::string& uuid, const gtid_interval_t &iv, gtid_set_t& gtid_executed) {
+	auto it = gtid_executed.find(uuid);
 	if (it == gtid_executed.end()) {
-		gtid_executed[server_uuid].emplace_back(txid_start, txid_end);
-		return updated;
+		// new UUID entry
+		gtid_executed[uuid].emplace_back(iv);
+		return true;
 	}
 
-	bool insert = true;
-
-	// When ProxySQL reconnects with binlog reader, it might
-	// receive updated txid intervals in the bootstrap message.
-	// For example,
-	// before disconnection -> server_UUID:1-10
-	// after reconnection   -> server_UUID:1-19
-	auto &txid_intervals = it->second;
-	for (auto &interval : txid_intervals) {
-		if (interval.first == txid_start) {
-			if(interval.second == txid_end) {
-				updated = false;
-			} else {
-				interval.second = txid_end;
-			}
-			insert = false;
-			break;
+	if (!it->second.empty()) {
+		if (it->second.back().append(iv)) {
+			// if appending to the last GTID range succeded, gtid_executed was modified, but remains optimized - nothing else to do
+			return true;
 		}
 	}
 
-	if (insert) {
-		txid_intervals.emplace_back(txid_start, txid_end);
-
+	// insert/merge GTID interval...
+	auto pos = it->second.begin();
+	for (; pos != it->second.end(); ++pos) {
+		if (pos->contains(iv)) {
+			// GTID interval is already present, nothing to do
+			return false;
+		}
+		if (pos->merge(iv))
+			break;
+	}
+	if (pos == it->second.end()) {
+		it->second.emplace_back(iv);
 	}
 
-	return updated;
+	// ...and merge overlapping GTID ranges, if any
+	it->second.sort();
+	auto a = it->second.begin();
+	while (a != it->second.end()) {
+		auto b = std::next(a);
+		if (b == it->second.end()) {
+			break;
+		}
+		if (a->merge(*b)) {
+				it->second.erase(b);
+				continue;
+		}
+		a++;
+	}
+
+	return true;
 }
 
 void * GTID_syncer_run() {

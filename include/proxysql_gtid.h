@@ -2,13 +2,38 @@
 #define PROXYSQL_GTID
 // highly inspired by libslave
 // https://github.com/vozbu/libslave/
+#include <list>
 #include <string>
 #include <unordered_map>
-#include <list>
 #include <utility>
 
 typedef std::pair<std::string, int64_t> gtid_t;
-typedef std::pair<int64_t, int64_t> gtid_interval_t;
+
+class Gtid_Interval {
+	public:
+		int64_t start;
+		int64_t end;
+
+	public:
+		explicit Gtid_Interval(const int64_t gtid);
+		explicit Gtid_Interval(const int64_t _start, const int64_t _end);
+		explicit Gtid_Interval(const char* s);
+		explicit Gtid_Interval(const std::string& s);
+
+		const std::string to_string(void);
+		const bool contains(const Gtid_Interval& other);
+		const bool contains(int64_t gtid);
+		const bool append(const Gtid_Interval& other);
+		const bool merge(const Gtid_Interval& other);
+
+		const int cmp(const Gtid_Interval& other);
+		const bool operator<(const Gtid_Interval& other);
+		const bool operator==(const Gtid_Interval& other);
+		const bool operator!=(const Gtid_Interval& other);
+};
+typedef Gtid_Interval gtid_interval_t;
+
+// TODO: make me a proper class.
 typedef std::unordered_map<std::string, std::list<gtid_interval_t>> gtid_set_t;
 
 /*

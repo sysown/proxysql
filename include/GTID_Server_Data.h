@@ -31,6 +31,7 @@ class GTID_Server_Data {
 	void dump();
 };
 
-bool addGtidInterval(gtid_set_t& gtid_executed, std::string server_uuid, int64_t txid_start, int64_t txid_end);
+// TODO: replace me by a method once GTID sets are rewritten into a class.
+bool addGtidInterval(const std::string& uuid, const gtid_interval_t &iv, gtid_set_t& gtid_executed);
 
 #endif // CLASS_GTID_Server_Data_H
