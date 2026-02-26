@@ -301,6 +301,14 @@ struct processlist_config_t {
 	processlist_query_options_t query_options {};
 };
 
+/**
+ * @brief Refresh all module metrics in the global Prometheus registry.
+ *
+ * Calls p_update_metrics() on every ProxySQL module so that gauges and
+ * counters reflect the current state before the registry is collected.
+ */
+void update_modules_metrics();
+
 class ProxySQL_Admin {
 	private:
 	volatile int main_shutdown;

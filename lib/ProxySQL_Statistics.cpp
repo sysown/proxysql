@@ -1803,6 +1803,10 @@ void ProxySQL_Statistics::tsdb_sampler_loop() {
 
     // Sample Prometheus metrics if registry exists
     if (GloVars.prometheus_registry) {
+        // Refresh all module metrics before collecting, ensuring gauges
+        // and counters reflect the current state (mirrors what the
+        // Prometheus /metrics endpoint does via serial_exposer).
+        update_modules_metrics();
         auto metrics = GloVars.prometheus_registry->Collect();
         time_t now = time(NULL);
         statsdb_disk->execute("BEGIN");
