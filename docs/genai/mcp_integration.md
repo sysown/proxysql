@@ -69,10 +69,10 @@ ProxySQL's MCP server is built on **libhttpserver** and supports both HTTP and H
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| [`mcp-enabled`](../global_variables/mcp_variables#mcp-enabled) | `false` | Enable/disable the MCP server |
-| [`mcp-port`](../global_variables/mcp_variables#mcp-port) | `6071` | TCP port for MCP connections |
-| [`mcp-use_ssl`](../global_variables/mcp_variables#mcp-use_ssl) | `true` | Enable HTTPS (requires SSL certificates) |
-| [`mcp-timeout_ms`](../global_variables/mcp_variables#mcp-timeout_ms) | `30000` | Request timeout in milliseconds |
+| [`mcp-enabled`](../references/mcp_variables#mcp-enabled) | `false` | Enable/disable the MCP server |
+| [`mcp-port`](../references/mcp_variables#mcp-port) | `6071` | TCP port for MCP connections |
+| [`mcp-use_ssl`](../references/mcp_variables#mcp-use_ssl) | `true` | Enable HTTPS (requires SSL certificates) |
+| [`mcp-timeout_ms`](../references/mcp_variables#mcp-timeout_ms) | `30000` | Request timeout in milliseconds |
 
 :::info
 **Note**: Changes made to the configuration on this page must be explicitly loaded to the runtime. Please refer to the **[Admin Commands](../the_admin_schemas/admin_commands)** documentation for details on the `LOAD` and `SAVE` commands.
@@ -637,6 +637,6 @@ claude mcp add --transport http proxysql https://your-server.com:6071/mcp/query 
 - [MCP Endpoints](mcp_endpoints) - Complete endpoint reference
 - [MCP Tools (Query)](mcp_tools_query) - Database exploration tools
 - [MCP Tools (RAG)](mcp_tools_rag) - Retrieval-Augmented Generation tools
-- [MCP Variables](../global_variables/mcp_variables) - Configuration variables
+- [MCP Variables](../references/mcp_variables) - Configuration variables
 - [MCP Autodiscovery](mcp_autodiscovery) - Two-phase discovery mechanism
 - [NL2SQL](nl2sql) - Natural language to SQL conversion

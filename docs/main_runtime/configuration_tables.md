@@ -159,6 +159,6 @@ in-memory. Whenever ProxySQL is restarted, the in-memory "main" database will be
 database. Note that all the content of the in-memory tables (main database) are _lost_ when ProxySQL is
 restarted if their content wasn't saved on disk database.
 
-[1]: /global_variables/admin_variables/#admin-admin_credentials
-[19]: /global_variables/global_variables
+[1]: /references/admin_variables/#admin-admin_credentials
+[19]: /references/global_variables
 [20]: /Features/scheduler

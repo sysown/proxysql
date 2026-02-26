@@ -393,4 +393,4 @@ Index code documentation and examples for semantic search:
 - [Full-Text Search](./mcp_fts.md) - FTS5 search capabilities
 - [SQLite3 Server](../features/sqlite3_server.md) - Server configuration
 - [MCP Server](./mcp_server.md) - Protocol and endpoint configuration
-- [MCP Variables](../global_variables/mcp_variables.md) - Configuration reference
+- [MCP Variables](../references/mcp_variables) - Configuration reference
