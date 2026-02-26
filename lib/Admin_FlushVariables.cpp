@@ -199,6 +199,8 @@ void ProxySQL_Admin::flush_GENERIC_variables__process__database_to_runtime(
 #endif // PROXYSQLCLICKHOUSE
 		} else if (modname == "ldap") {
 			rc = GloMyLdapAuth->set_variable(r->fields[0],r->fields[1]);
+		} else if (modname == "tsdb") {
+			rc = GloProxyStats->set_variable(r->fields[0],r->fields[1]);
 		}
 		const string v = string(r->fields[0]);
 		if (rc==false) {
@@ -217,6 +219,8 @@ void ProxySQL_Admin::flush_GENERIC_variables__process__database_to_runtime(
 #endif // PROXYSQLCLICKHOUSE
 				} else if (modname == "ldap") {
 					val = GloMyLdapAuth->get_variable(r->fields[0]);
+				} else if (modname == "tsdb") {
+					val = GloProxyStats->get_variable(r->fields[0]);
 				}
 				char q[1000];
 					if (val) {
@@ -612,6 +616,25 @@ void ProxySQL_Admin::flush_sqliteserver_variables___database_to_runtime(SQLite3D
 		//GloClickHouse->commit();
 		GloSQLite3Server->wrunlock();
 	}
+	if (resultset) delete resultset;
+}
+
+void ProxySQL_Admin::flush_tsdb_variables___database_to_runtime(SQLite3DB *db, bool replace) {
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing TSDB variables. Replace:%d\n", replace);
+	if (GloProxyStats == NULL) {
+		return;
+	}
+
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+
+	if (flush_GENERIC_variables__retrieve__database_to_runtime("tsdb", error, cols, affected_rows, resultset) == true) {
+		flush_GENERIC_variables__process__database_to_runtime("tsdb", db, resultset, false, replace, {}, {}, {}, {});
+		flush_tsdb_variables___runtime_to_database(admindb, false, false, false, true);
+	}
+
 	if (resultset) delete resultset;
 }
 

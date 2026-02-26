@@ -1269,6 +1269,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	flush_mcp_variables___database_to_runtime(admindb, true);
 	flush_genai_variables___database_to_runtime(admindb, true);
 #endif /* PROXYSQLGENAI */
+	flush_tsdb_variables___database_to_runtime(admindb, true);
 
 	if (GloVars.__cmd_proxysql_admin_socket) {
 		set_variable((char *)"mysql_ifaces",GloVars.__cmd_proxysql_admin_socket);
