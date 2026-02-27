@@ -9085,60 +9085,6 @@ void ProxySQL_Admin::enable_aurora_testing() {
 }
 #endif // TEST_AURORA
 
-void ProxySQL_Admin::load_tsdb_variables_to_runtime() {
-	if (GloProxyStats == NULL) {
-		return;
-	}
-	char *error=NULL;
-	int cols=0;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	// TSDB variables are in global_variables named 'tsdb-%'
-	if (flush_GENERIC_variables__retrieve__database_to_runtime("tsdb", error, cols, affected_rows, resultset) == true) {
-		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-			SQLite3_row *r=*it;
-			const char *name = r->fields[0];
-			const char *value = r->fields[1];
-			GloProxyStats->set_variable(name, value);
-		}
-		flush_tsdb_variables___runtime_to_database(admindb, false, false, false, true);
-	}
-	if (resultset) delete resultset;
-}
-
-void ProxySQL_Admin::save_tsdb_variables_from_runtime() {
-	if (GloProxyStats == NULL) {
-		return;
-	}
-	char **tsdb_vars = GloProxyStats->get_variables_list();
-	const char *query = "REPLACE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)";
-
-	stmt_unique_ptr u_stmt { nullptr };
-	int rc;
-
-	std::tie(rc, u_stmt) = admindb->prepare_v2(query);
-	ASSERT_SQLITE_OK(rc, admindb);
-
-	for (int i=0; tsdb_vars[i]; i++) {
-		char *val = GloProxyStats->get_variable(tsdb_vars[i]);
-		if (val) {
-			char qualified_name[128];
-			snprintf(qualified_name, sizeof(qualified_name), "tsdb-%s", tsdb_vars[i]);
-
-			rc = (*proxy_sqlite3_bind_text)(u_stmt.get(), 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_text)(u_stmt.get(), 2, val, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_step)(u_stmt.get());
-			if (rc != SQLITE_DONE) { ASSERT_SQLITE_OK(rc, admindb); }
-			rc = (*proxy_sqlite3_reset)(u_stmt.get()); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_clear_bindings)(u_stmt.get()); ASSERT_SQLITE_OK(rc, admindb);
-
-			free(val);
-		}
-		free(tsdb_vars[i]);
-	}
-	free(tsdb_vars);
-}
-
 #ifdef TEST_GROUPREP
 void ProxySQL_Admin::enable_grouprep_testing() {
 	proxy_info("Admin is enabling Group Replication Testing using SQLite3 Server and HGs from 3271 to 3274\n");
