@@ -579,7 +579,7 @@ unsigned int get_string(const char* data, unsigned int len, const char** dst_p)
 
 bool PgSQL_Protocol::load_conn_parameters(pgsql_hdr* pkt)
 {
-	uint32_t offset = 0; 
+	uint32_t offset = 0;
 
 	while (offset < pkt->data.size) {
 		char* nameptr = (char*)pkt->data.ptr + offset;
@@ -587,15 +587,28 @@ bool PgSQL_Protocol::load_conn_parameters(pgsql_hdr* pkt)
 		char* valptr;
 
 		if (*nameptr == '\0')
-			break;			/* found packet terminator */
-		valoffset = offset + strlen(nameptr) + 1;
+			break;			// found terminator
+
+		// Find null terminator for name within bounds
+		const char* name_nul = (const char*)memchr(nameptr, 0, pkt->data.size - offset);
+		if (!name_nul)
+			break; // malformed: name not null-terminated
+
+		valoffset = offset + (name_nul - nameptr) + 1;
+		
 		if (valoffset >= pkt->data.size)
-			break;			/* missing value, will complain below */
+			break;			// missing value, will complain below
+
 		valptr = (char*)pkt->data.ptr + valoffset;
+
+		// Find null terminator for value within bounds
+		const char* val_nul = (const char*)memchr(valptr, 0, pkt->data.size - valoffset);
+		if (!val_nul)
+			break; // malformed: name not null-terminated
 
 		(*myds)->myconn->conn_params.set_value(nameptr, valptr);
 
-		offset = valoffset + strlen(valptr) + 1;
+		offset = valoffset + (val_nul - valptr) + 1;
 	}
 
 	if (offset != pkt->data.size - 1) {
