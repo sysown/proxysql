@@ -175,7 +175,7 @@ bool PgSQL_Describe_Message::parse(PtrSize_t& pkt) {
 		return false;
 	}
 
-	// Validate remaining length for statement type (at least 1 byte for null-terminated string)
+	// Validate remaining length for statement type (exactly 1 byte)
 	if (offset >= pkt_len) {
 		return false;  // Not enough data for statement type
 	}
