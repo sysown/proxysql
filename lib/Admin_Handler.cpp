@@ -2877,8 +2877,9 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		query_length = hdr.data.size;
 
 		// Validate minimum query size (need at least 1 byte + null terminator)
-		if (query_length < 2 || hdr.data.ptr == NULL) {
-			proxy_warning("Query too short: %u bytes\n", query_length);
+		if (query_length < 2 || hdr.data.ptr == NULL ||
+			((const char*)hdr.data.ptr)[query_length - 1] != '\0') {
+			proxy_warning("Malformed query packet: %u bytes\n", query_length);
 			SPA->send_error_msg_to_client(sess, "Malformed query packet");
 			run_query = false;
 			goto __run_query;

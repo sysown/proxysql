@@ -139,10 +139,11 @@ void test_malformed_packet(const std::string& test_name,
     std::vector<char> buffer(BUFFER_SIZE);
     ssize_t bytes_received = recv(sock, buffer.data(), buffer.size(), 0);
 
-    // Either connection close OR error response are valid outcomes
-    // The key is that ProxySQL handles the malformed packet gracefully
-    bool handled_gracefully = (bytes_received <= 0) ||  // Connection closed
-                               (bytes_received > 0);     // Got error response
+    // Valid outcomes: connection closed OR any response
+    // The key is that ProxySQL handles the packet without crashing
+    bool connection_closed = (bytes_received <= 0);
+    bool got_response = (bytes_received > 0);
+    bool handled_gracefully = connection_closed || got_response;
 
     ok(handled_gracefully, "%s: Malformed packet handled (received: %ld bytes)",
        test_name.c_str(), (long)bytes_received);
@@ -473,19 +474,32 @@ std::vector<uint8_t> build_message_packet(char type, const std::vector<uint8_t>&
 }
 
 /**
+ * @brief Read an exact number of bytes from socket
+ * @return true if all bytes received, false on error/short read
+ */
+bool recv_exact(int sock, void* buf, size_t len) {
+    char* ptr = (char*)buf;
+    size_t received = 0;
+    while (received < len) {
+        ssize_t n = recv(sock, ptr + received, len - received, 0);
+        if (n <= 0) return false;
+        received += n;
+    }
+    return true;
+}
+
+/**
  * @brief Read a PostgreSQL message from socket
  */
 bool read_message(int sock, char& type, std::vector<uint8_t>& buffer) {
     // Read message type (1 byte)
     char type_buf[1];
-    ssize_t n = recv(sock, type_buf, 1, 0);
-    if (n <= 0) return false;
+    if (!recv_exact(sock, type_buf, 1)) return false;
     type = type_buf[0];
 
     // Read length (4 bytes, big-endian, includes self)
     char len_buf[4];
-    n = recv(sock, len_buf, 4, 0);
-    if (n != 4) return false;
+    if (!recv_exact(sock, len_buf, 4)) return false;
 
     int32_t len = ((unsigned char)len_buf[0] << 24) |
                   ((unsigned char)len_buf[1] << 16) |
@@ -497,12 +511,7 @@ bool read_message(int sock, char& type, std::vector<uint8_t>& buffer) {
     // Read message body
     int32_t body_len = len - 4;
     buffer.resize(body_len);
-    int32_t received = 0;
-    while (received < body_len) {
-        n = recv(sock, buffer.data() + received, body_len - received, 0);
-        if (n <= 0) return false;
-        received += n;
-    }
+    if (!recv_exact(sock, buffer.data(), body_len)) return false;
 
     return true;
 }
@@ -560,22 +569,19 @@ void test_malformed_packet_phase2(const std::string& test_name,
 
     // Check if authentication succeeded
     if (auth_type == 'E') {
-        // Authentication failed - this is OK for our purposes,
-        // we still want to test if malformed packets crash ProxySQL
-        // but we can't send them on an authenticated connection
-        // Send the malformed data anyway to see if it crashes
-        ssize_t sent = send(sock, malformed_data.data(), malformed_data.size(), 0);
+        // Authentication failed - fail the test
+        // Post-authentication tests require successful auth
         close(sock);
-        ok(sent > 0, "%s: Sent malformed data after auth failure (sent: %ld)",
-           test_name.c_str(), (long)sent);
+        ok(0, "%s: Authentication failed, cannot run post-auth test",
+           test_name.c_str());
         return;
     }
 
     if (auth_type != 'R' || auth_data.size() < 4) {
-        // Unexpected response
-        send(sock, malformed_data.data(), malformed_data.size(), 0);
+        // Unexpected response - fail the test
         close(sock);
-        ok(1, "%s: Malformed packet sent after auth", test_name.c_str());
+        ok(0, "%s: Unexpected auth response, cannot run post-auth test",
+           test_name.c_str());
         return;
     }
 
@@ -584,16 +590,16 @@ void test_malformed_packet_phase2(const std::string& test_name,
                         (auth_data[2] << 8) | auth_data[3];
 
     if (auth_code != 0) {
-        // Authentication didn't complete successfully
-        send(sock, malformed_data.data(), malformed_data.size(), 0);
+        // Authentication didn't complete successfully - fail the test
         close(sock);
-        ok(1, "%s: Malformed packet sent after incomplete auth", test_name.c_str());
+        ok(0, "%s: Authentication incomplete (code: %d), cannot run post-auth test",
+           test_name.c_str(), auth_code);
         return;
     }
 
     // Authentication successful - now we have an authenticated connection
 
-    // Step 5: Send the malformed packet
+    // Step 5: Send the malformed packet on the authenticated connection
     ssize_t sent = send(sock, malformed_data.data(), malformed_data.size(), 0);
     if (sent < 0) {
         close(sock);
@@ -601,14 +607,28 @@ void test_malformed_packet_phase2(const std::string& test_name,
         return;
     }
 
-    // Step 6: Try to receive response (may get error or connection close)
+    // Step 6: Try to receive response
+    // ProxySQL may send multiple responses (auth completion, parameter status, etc.)
+    // followed by an error response 'E' for the malformed packet, or close connection
     std::vector<char> buffer(BUFFER_SIZE);
     ssize_t bytes_received = recv(sock, buffer.data(), buffer.size(), 0);
 
-    bool handled_gracefully = (bytes_received <= 0) || (bytes_received > 0);
+    // Check if we got an error response 'E' or connection closed
+    // Note: There may be pending post-auth messages, so any of these outcomes is valid:
+    // 1. Connection closed (ProxySQL rejected the malformed packet)
+    // 2. 'E' error response (ProxySQL sent an error for the malformed packet)
+    // 3. Other messages (post-auth protocol messages)
+    bool connection_closed = (bytes_received <= 0);
+    bool got_error_response = (bytes_received > 0 && buffer[0] == 'E');
+    bool got_other_response = (bytes_received > 0 && buffer[0] != 'E');
 
-    ok(handled_gracefully, "%s: Phase 2 malformed packet handled (received: %ld bytes)",
-       test_name.c_str(), (long)bytes_received);
+    // Any outcome is acceptable as long as ProxySQL doesn't crash
+    // The key test is the final operational check
+    bool handled_gracefully = connection_closed || got_error_response || got_other_response;
+
+    ok(handled_gracefully, "%s: Phase 2 malformed packet sent (received: %ld bytes, first=0x%02X)",
+       test_name.c_str(), (long)bytes_received,
+       bytes_received > 0 ? (unsigned char)buffer[0] : 0);
 
     close(sock);
 }
@@ -989,7 +1009,7 @@ int main(int argc, char** argv) {
     ok(backend_alive, "ProxySQL BACKEND operational after Phase 1");
 
     // Test ADMIN connection
-    run_malformed_packet_tests(cl.pgsql_host, cl.pgsql_admin_port, "ADMIN");
+    run_malformed_packet_tests(cl.admin_host, cl.pgsql_admin_port, "ADMIN");
 
     // Verify ProxySQL is still alive after ADMIN Phase 1 tests
     bool admin_alive = verify_proxysql_alive(cl, ADMIN);
@@ -1009,7 +1029,7 @@ int main(int argc, char** argv) {
     ok(backend_alive, "ProxySQL BACKEND operational after Phase 2");
 
     // Phase 2: Test malformed packets AFTER authentication on ADMIN
-    run_phase2_malformed_packet_tests(cl.pgsql_host, cl.pgsql_admin_port,
+    run_phase2_malformed_packet_tests(cl.admin_host, cl.pgsql_admin_port,
                                        cl.admin_username, cl.admin_password,
                                        "ADMIN");
 

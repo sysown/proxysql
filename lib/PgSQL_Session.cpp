@@ -2048,6 +2048,24 @@ __implicit_sync:
 							if (session_type == PROXYSQL_SESSION_PGSQL) {
 								bool rc_break = false;
 								bool lock_hostgroup = false;
+
+								if (pkt.size < 6) {
+									proxy_error("Malformed query packet received: size %u < 6\n", pkt.size);
+									l_free(pkt.size, pkt.ptr);
+									handler_ret = -1;
+									return handler_ret;
+								}
+
+								unsigned int query_len = pkt.size - 5; // excluding header
+								char* query_ptr = (char*)pkt.ptr + 5;
+
+								if (query_ptr[query_len - 1] != '\0') {
+									proxy_error("Malformed query packet received: missing null terminator\n");
+									l_free(pkt.size, pkt.ptr);
+									handler_ret = -1;
+									return handler_ret;
+								}
+
 								if (session_fast_forward == SESSION_FORWARD_TYPE_NONE) {
 									// Note: CurrentQuery sees the query as sent by the client.
 									// shortly after, the packets it used to contain the query will be deallocated
@@ -2071,23 +2089,6 @@ __implicit_sync:
 								timespec endt;
 								if (thread->variables.stats_time_query_processor) {
 									clock_gettime(CLOCK_THREAD_CPUTIME_ID, &begint);
-								}
-
-								if (pkt.size < 6) {
-									proxy_error("Malformed query packet received: size %u < 6\n", pkt.size);
-									l_free(pkt.size, pkt.ptr);
-									handler_ret = -1;
-									return handler_ret;
-								}
-
-								unsigned int query_len = pkt.size - 5; // excluding header
-								char* query_ptr = (char*)pkt.ptr + 5;
-
-								if (query_ptr[query_len - 1] != '\0') {
-									proxy_error("Malformed query packet received: missing null terminator\n");
-									l_free(pkt.size, pkt.ptr);
-									handler_ret = -1;
-									return handler_ret;
 								}
 
 								qpo = GloPgQPro->process_query(this, query_ptr, query_len, &CurrentQuery);
