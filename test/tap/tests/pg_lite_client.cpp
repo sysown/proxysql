@@ -4,6 +4,7 @@
  * This library provides basic functionality to connect to a PostgreSQL database and execute simple queries.
 */
 #include "pg_lite_client.h"
+#include <netdb.h>
 #include <fcntl.h>
 #include <sstream>
 #include <iomanip>
@@ -190,21 +191,23 @@ void PgConnection::connect(const std::string& host, int port,
         throw PgException("Socket creation failed");
     }
     
-    // Connect to server
-    sockaddr_in server_addr{};
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(port);
-    
-    if (inet_pton(AF_INET, host.c_str(), &server_addr.sin_addr) <= 0) {
+    // Resolve hostname and connect
+    struct addrinfo hints{}, *res;
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    std::string port_str = std::to_string(port);
+    int status = getaddrinfo(host.c_str(), port_str.c_str(), &hints, &res);
+    if (status != 0) {
         close(sock_);
-        throw PgException("Invalid address: " + host);
+        throw PgException("Failed to resolve host: " + host + " (" + std::string(gai_strerror(status)) + ")");
     }
-    
-    if (::connect(sock_, (sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+    if (::connect(sock_, res->ai_addr, res->ai_addrlen) < 0) {
+        freeaddrinfo(res);
         close(sock_);
         sock_ = -1;
         throw PgException("Connection failed to " + host + ":" + std::to_string(port));
     }
+    freeaddrinfo(res);
     
     // Save credentials
     user_ = user;
