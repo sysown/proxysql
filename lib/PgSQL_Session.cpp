@@ -2277,6 +2277,7 @@ __implicit_sync:
 							pkt = { 0, nullptr };
 							break;
 						default:
+							reset_extended_query_frame();
 							proxy_error("Not implemented yet. Message type:'%c'\n", c);
 							client_myds->setDSS_STATE_QUERY_SENT_NET();
 							client_myds->myprot.generate_error_packet(true, true, "Feature not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
@@ -5972,6 +5973,16 @@ int PgSQL_Session::handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg
 
 	// Fallback: forward to backend
 	mybe = find_or_create_backend(current_hostgroup);
+
+	// set query retries
+	mybe->server_myds->query_retries_on_failure = pgsql_thread___query_retries_on_failure;
+	// if a number of retries is set in mysql_query_rules, that takes priority
+	if (qpo) {
+		if (qpo->retries >= 0) {
+			mybe->server_myds->query_retries_on_failure = qpo->retries;
+		}
+	}
+
 	status = PROCESSING_STMT_PREPARE;
 	mybe->server_myds->connect_retries_on_failure = pgsql_thread___connect_retries_on_failure;
 	pause_until = 0;
@@ -6116,6 +6127,16 @@ int PgSQL_Session::handle_post_sync_describe_message(PgSQL_Describe_Message* des
 	}
 
 	mybe = find_or_create_backend(current_hostgroup);
+
+	// set query retries
+	mybe->server_myds->query_retries_on_failure = pgsql_thread___query_retries_on_failure;
+	// if a number of retries is set in mysql_query_rules, that takes priority
+	if (qpo) {
+		if (qpo->retries >= 0) {
+			mybe->server_myds->query_retries_on_failure = qpo->retries;
+		}
+	}
+
 	status = PROCESSING_STMT_DESCRIBE;
 	mybe->server_myds->connect_retries_on_failure = pgsql_thread___connect_retries_on_failure;
 	pause_until = 0;
@@ -6393,6 +6414,16 @@ int PgSQL_Session::handle_post_sync_execute_message(PgSQL_Execute_Message* execu
 	}
 
 	mybe = find_or_create_backend(current_hostgroup);
+
+	// set query retries
+	mybe->server_myds->query_retries_on_failure = pgsql_thread___query_retries_on_failure;
+	// if a number of retries is set in mysql_query_rules, that takes priority
+	if (qpo) {
+		if (qpo->retries >= 0) {
+			mybe->server_myds->query_retries_on_failure = qpo->retries;
+		}
+	}
+
 	status = PROCESSING_STMT_EXECUTE;
 	mybe->server_myds->connect_retries_on_failure = pgsql_thread___connect_retries_on_failure;
 	pause_until = 0;

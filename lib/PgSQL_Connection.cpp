@@ -919,6 +919,7 @@ handler_again:
 	}
 	break;
 	case ASYNC_RESET_SESSION_END:
+		PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::unhandled_notice_cb, this);
 		if (is_error_present()) {
 			NEXT_IMMEDIATE(ASYNC_RESET_SESSION_FAILED);
 		}
@@ -1212,7 +1213,7 @@ void PgSQL_Connection::fetch_result_cont(short event) {
 	}
 }
 
-void PgSQL_Connection::flush() {
+void PgSQL_Connection::flush(bool is_resync) {
 	int res = PQflush(pgsql_conn);
 
 	if (res > 0) {
@@ -1222,7 +1223,11 @@ void PgSQL_Connection::flush() {
 		async_exit_status = PG_EVENT_READ;
 	}
 	else {
-		set_error_from_PQerrorMessage();
+		if (!is_resync) {
+			set_error_from_PQerrorMessage();
+		} else {
+			resync_failed = true;
+		}
 		proxy_error("Failed to flush data to backend. %s\n", get_error_code_with_message().c_str());
 		async_exit_status = PG_EVENT_NONE;
 	}
@@ -1773,7 +1778,7 @@ void PgSQL_Connection::resync_start() {
 		resync_failed = true;
 		return;
 	}
-	async_exit_status = PG_EVENT_WRITE;
+	flush(true);
 }
 
 void PgSQL_Connection::resync_cont(short event) {
@@ -1781,17 +1786,7 @@ void PgSQL_Connection::resync_cont(short event) {
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6, "event=%d\n", event);
 	async_exit_status = PG_EVENT_NONE;
 	if (event & POLLOUT) {
-		int res = PQflush(pgsql_conn);
-
-		if (res > 0) {
-			async_exit_status = PG_EVENT_WRITE;
-		} else if (res == 0) {
-			async_exit_status = PG_EVENT_READ;
-		} else {
-			proxy_error("Failed to flush data to backend.\n");
-			async_exit_status = PG_EVENT_NONE;
-			resync_failed = true;
-		}
+		flush(true);
 	}
 }
 
@@ -1940,6 +1935,7 @@ void PgSQL_Connection::reset_session_start() {
 	assert(pgsql_conn);
 	reset_error();
 	async_exit_status = PG_EVENT_NONE;
+	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::notice_handler_cb, this);
 
 	reset_session_in_pipeline = is_pipeline_active();
 	if (reset_session_in_pipeline) {
