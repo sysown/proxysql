@@ -70,6 +70,7 @@ CommandLine::~CommandLine() {
 	if (pgsql_root_password)
 		free(pgsql_root_password);
 
+        if (cluster_nodes) free(cluster_nodes);
 	if (workdir)
 		free(workdir);
 }
@@ -351,6 +352,9 @@ int CommandLine::getEnv() {
 			replace_str_field(&this->pgsql_server_password, value);
 	}
 
+        value = getenv("TAP_CLUSTER_NODES");
+        if (value)
+                replace_str_field(&this->cluster_nodes, value);
 	value = getenv("TAP_WORKDIR");
 	if (value)
 		replace_str_field(&this->workdir, value);

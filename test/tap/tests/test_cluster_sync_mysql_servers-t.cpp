@@ -230,18 +230,18 @@ int check_mysql_servers_sync(
 	string_format(t_debug_query, print_master_runtime_mysql_servers_hostgroups, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_mysql_servers");
 
 	std::string print_nomonitor_replica_mysql_servers_hostgroups;
-	string_format(t_debug_query, print_nomonitor_replica_mysql_servers_hostgroups, "radmin", "radmin", cl.host, R_NOMONITOR_PORT, "SELECT * FROM mysql_servers");
+	string_format(t_debug_query, print_nomonitor_replica_mysql_servers_hostgroups, cl.admin_username, cl.admin_password, cl.host, R_NOMONITOR_PORT, "SELECT * FROM mysql_servers");
 	std::string print_nomonitor_replica_runtime_mysql_servers_hostgroups;
-	string_format(t_debug_query, print_nomonitor_replica_runtime_mysql_servers_hostgroups, "radmin", "radmin", cl.host, R_NOMONITOR_PORT, "SELECT * FROM runtime_mysql_servers");
+	string_format(t_debug_query, print_nomonitor_replica_runtime_mysql_servers_hostgroups, cl.admin_username, cl.admin_password, cl.host, R_NOMONITOR_PORT, "SELECT * FROM runtime_mysql_servers");
 	std::string print_nomonitor_replica_disk_mysql_servers_hostgroups;
-	string_format(t_debug_query, print_nomonitor_replica_disk_mysql_servers_hostgroups, "radmin", "radmin", cl.host, R_NOMONITOR_PORT, "SELECT * FROM disk.mysql_servers");
+	string_format(t_debug_query, print_nomonitor_replica_disk_mysql_servers_hostgroups, cl.admin_username, cl.admin_password, cl.host, R_NOMONITOR_PORT, "SELECT * FROM disk.mysql_servers");
 
 	std::string print_withmonitor_replica_mysql_servers_hostgroups;
-	string_format(t_debug_query, print_withmonitor_replica_mysql_servers_hostgroups, "radmin", "radmin", cl.host, R_WITHMONITOR_PORT, "SELECT * FROM mysql_servers");
+	string_format(t_debug_query, print_withmonitor_replica_mysql_servers_hostgroups, cl.admin_username, cl.admin_password, cl.host, R_WITHMONITOR_PORT, "SELECT * FROM mysql_servers");
 	std::string print_withmonitor_replica_runtime_mysql_servers_hostgroups;
-	string_format(t_debug_query, print_withmonitor_replica_runtime_mysql_servers_hostgroups, "radmin", "radmin", cl.host, R_WITHMONITOR_PORT, "SELECT * FROM runtime_mysql_servers");
+	string_format(t_debug_query, print_withmonitor_replica_runtime_mysql_servers_hostgroups, cl.admin_username, cl.admin_password, cl.host, R_WITHMONITOR_PORT, "SELECT * FROM runtime_mysql_servers");
 	std::string print_withmonitor_replica_disk_mysql_servers_hostgroups;
-	string_format(t_debug_query, print_withmonitor_replica_disk_mysql_servers_hostgroups, "radmin", "radmin", cl.host, R_WITHMONITOR_PORT, "SELECT * FROM disk.mysql_servers");
+	string_format(t_debug_query, print_withmonitor_replica_disk_mysql_servers_hostgroups, cl.admin_username, cl.admin_password, cl.host, R_WITHMONITOR_PORT, "SELECT * FROM disk.mysql_servers");
 
 
 	std::string variable_val;
@@ -844,8 +844,8 @@ int main(int, char**) {
 		// Waiting for proxysql to be ready
 		conn_opts_t conn_opts_nomonitor {};
 		conn_opts_nomonitor.host = cl.host;
-		conn_opts_nomonitor.user = "radmin";
-		conn_opts_nomonitor.pass = "radmin";
+		conn_opts_nomonitor.user = cl.admin_username;
+		conn_opts_nomonitor.pass = cl.admin_password;
 		conn_opts_nomonitor.port = R_NOMONITOR_PORT;
 
 		// connect to proxsqyl replica [nomonitor]
@@ -861,8 +861,8 @@ int main(int, char**) {
 
 		conn_opts_t conn_opts_withmonitor {};
 		conn_opts_withmonitor.host = cl.host;
-		conn_opts_withmonitor.user = "radmin";
-		conn_opts_withmonitor.pass = "radmin";
+		conn_opts_withmonitor.user = cl.admin_username;
+		conn_opts_withmonitor.pass = cl.admin_password;
 		conn_opts_withmonitor.port = R_WITHMONITOR_PORT;
 
 		// connect to proxsqyl replica [nomonitor]

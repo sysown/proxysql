@@ -13,13 +13,13 @@
  */
 
 #include <string>
-
-
+#include <cstdlib>
 #include "tap.h"
 
 int main(int argc, char** argv) {
 	plan(1);
-	const std::string test_deps_path = getenv("TEST_DEPS");
+	const char * tdp = getenv("TEST_DEPS");
+	const std::string test_deps_path = ( tdp == nullptr ? "" : std::string(tdp) );
 
 	const int test_binlog_reader_res = system((test_deps_path + "/test_binlog_reader-t").c_str());
 	ok(

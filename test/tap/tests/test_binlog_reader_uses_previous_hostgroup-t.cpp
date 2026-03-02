@@ -80,7 +80,6 @@ int main(int argc, char** argv) {
 	diag("Running: %s", query.c_str());
 	MYSQL_QUERY(proxy_admin, query.c_str());
 	query = "INSERT INTO mysql_servers (hostgroup_id, hostname, port, use_ssl) "
-//			"VALUES (" + std::to_string(destination_hostgroup) + ", '127.0.0.1', 13306, 0)";
 			"VALUES (" + std::to_string(destination_hostgroup) + ", '" + std::string(cl.mysql_host) + "', " + std::to_string(cl.mysql_port) + ", 0)";
 	diag("Running: %s", query.c_str());
 	MYSQL_QUERY(proxy_admin, query.c_str());
@@ -106,7 +105,8 @@ int main(int argc, char** argv) {
 	}
 	const long conn_closed_before = std::stol(hg_stats_row[0]);
 
-	const std::string test_deps_path = getenv("TEST_DEPS");
+	const char * tdp = getenv("TEST_DEPS");
+	const std::string test_deps_path = ( tdp == nullptr ? "" : std::string(tdp) );
 	const int test_binlog_reader_res = system((test_deps_path + "/test_binlog_reader-t").c_str());
 	if (test_binlog_reader_res) {
 		mysql_close(proxy_admin);

@@ -6,6 +6,8 @@
  * COM_BINLOG_DUMP, then ProxySQL enables fast forward.
  */
 
+#include <string>
+#include <cstdlib>
 #include "tap.h"
 #include "command_line.h"
 
@@ -19,13 +21,16 @@ int main(int argc, char** argv) {
 		return -1;
 	}
 
-	const std::string user = "root";
 	const char * tdp = getenv("TEST_DEPS");
 	const std::string test_deps_path = ( tdp == nullptr ? "" : std::string(tdp) );
 
-	const int mysqlbinlog_res = system((test_deps_path + "/mysqlbinlog mysql1-bin.000001 "
-										"--read-from-remote-server --user " + user + " --password=" + user +
-										" --host 127.0.0.1 --port 6033").c_str());
+	std::string cmd = test_deps_path + "/mysqlbinlog mysql1-bin.000001 "
+						"--read-from-remote-server --user " + std::string(cl.root_username) + 
+						" --password=" + std::string(cl.root_password) +
+						" --host " + std::string(cl.host) + " --port 6033";
+	
+	diag("Executing: %s", cmd.c_str());
+	const int mysqlbinlog_res = system(cmd.c_str());
 	ok(mysqlbinlog_res == 0, "'mysqlbinlog' should be correctly executed. Err code was: %d", mysqlbinlog_res);
 
 	return exit_status();
