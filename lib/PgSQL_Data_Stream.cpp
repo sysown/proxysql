@@ -1311,8 +1311,11 @@ int PgSQL_Data_Stream::buffer2array() {
 		d = header[read_pos++];
 		pkgsize += (a << 24) | (b << 16) | (c << 8) | d;
 
-		queueIN.pkt.size = pkgsize;
-		queueIN.pkt.ptr = l_alloc(queueIN.pkt.size);
+		// PostgreSQL packets should always be >= 5 bytes.
+		const size_t alloc_size = (pkgsize < sizeof(header)) ? sizeof(header) : pkgsize;
+		queueIN.pkt.size = alloc_size;
+		queueIN.pkt.ptr = l_alloc(alloc_size);
+
 		memcpy(queueIN.pkt.ptr, header, sizeof(header)); // immediately copy the header into the packet
 		queueIN.partial = sizeof(header);
 		ret += sizeof(header);

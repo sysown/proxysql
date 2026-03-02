@@ -2191,6 +2191,15 @@ bool PgSQL_Connection::handle_copy_out(const PGresult* result, uint64_t* process
 void PgSQL_Connection::notice_handler_cb(void* arg, const PGresult* result) {
 	assert(arg);
 	PgSQL_Connection* conn = (PgSQL_Connection*)arg;
+	if (conn->query_result == nullptr) {
+		// Notice received without active query_result. This can happen when:
+		// - RESET SESSION is in progress (DISCARD ALL or ROLLBACK)
+		proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Notice received without active query_result [State: %d, FD: %d]: %s\n",
+			(int)conn->async_state_machine,
+			conn->get_pg_socket_fd(),
+			(result ? PQresultErrorMessage(result) : "unknown notice"));
+		return;
+	}
 	const unsigned int bytes_recv = conn->query_result->add_notice(result);
 	conn->update_bytes_recv(bytes_recv);
 }
