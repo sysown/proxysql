@@ -798,6 +798,14 @@ handler_again:
 	case ASYNC_STMT_DESCRIBE_END:
 	case ASYNC_STMT_EXECUTE_END:
 		PROXY_TRACE2();
+
+		if (is_error_present() == false && 
+			(async_state_machine == ASYNC_QUERY_END || async_state_machine == ASYNC_STMT_EXECUTE_END)) {
+			if (myds->sess->locked_on_hostgroup == -1 && myds->sess->transaction_state_manager) {
+				myds->sess->handle_transaction_state();
+			}
+		}
+
 		if (is_error_present()) {
 			compute_unknown_transaction_status();
 		} else {
@@ -1560,41 +1568,34 @@ int PgSQL_Connection::async_ping(short event) {
 }
 
 bool PgSQL_Connection::IsKnownActiveTransaction() {
-	bool in_txn = false;
-	if (pgsql_conn) {
-		// Get the transaction status
-		PGTransactionStatusType status = PQtransactionStatus(pgsql_conn);
-		if (status == PQTRANS_INTRANS || status == PQTRANS_INERROR) {
-			in_txn = true;
-		}
+	if (!pgsql_conn) return false;
+
+	PGTransactionStatusType status = PQtransactionStatus(pgsql_conn);
+	if (status == PQTRANS_INTRANS || status == PQTRANS_INERROR) {
+		return true;
 	}
-	return in_txn;
+
+	// In pipeline mode, libpq status may be stale because ReadyForQuery hasn't been processed yet
+	// Use the session's transaction state manager which tracks BEGIN/COMMIT/ROLLBACK via SQL parsing
+	if (PQpipelineStatus(pgsql_conn) == PQ_PIPELINE_ON && myds && myds->sess) {
+		return myds->sess->is_in_transaction();
+	}
+
+	return false;
 }
 
 bool PgSQL_Connection::IsActiveTransaction() {
-	bool in_txn = false;
-	if (pgsql_conn) {
-
-		// Get the transaction status
-		PGTransactionStatusType status = PQtransactionStatus(pgsql_conn);
-
-		switch (status) {
-		case PQTRANS_INTRANS:
-		case PQTRANS_INERROR:
-			in_txn = true;
-			break;
-		case PQTRANS_UNKNOWN:
-		case PQTRANS_IDLE:
-		case PQTRANS_ACTIVE:
-		default:
-			in_txn = false;
-		}
-
-		if (in_txn == false && is_error_present() && unknown_transaction_status == true) {
-			in_txn = true;
-		} 
+	// First check known state
+	if (IsKnownActiveTransaction()) {
+		return true;
 	}
-	return in_txn;
+
+	// Check unknown transaction status flag
+	if (is_error_present() && unknown_transaction_status) {
+		return true;
+	}
+
+	return false;
 }
 
 bool PgSQL_Connection::IsServerOffline() {

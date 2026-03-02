@@ -1360,9 +1360,10 @@ void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* ms
 	assert(send == true || _ptr);
 
 	if (send) {
-		// in case of fatal error we dont generate ready packets
-		ready = !fatal;
+		if (ready == fatal)
+			ready = !ready;
 	}
+
 
 	PG_pkt pgpkt{};
 

@@ -307,6 +307,10 @@ void PgSQL_Session::reset() {
 	if (client_myds && client_myds->myconn) {
 		client_myds->myconn->reset();
 	}
+
+	if (transaction_state_manager) {
+		transaction_state_manager->reset_state();
+	}
 	extended_query_phase = EXTQ_PHASE_IDLE;
 }
 
@@ -2296,7 +2300,11 @@ __implicit_sync:
 							reset_extended_query_frame();
 							proxy_error("Not implemented yet. Message type:'%c'\n", c);
 							client_myds->setDSS_STATE_QUERY_SENT_NET();
-							client_myds->myprot.generate_error_packet(true, true, "Feature not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
+
+							bool send_ready_packet = is_extended_query_ready_for_query() && c != 'H';
+							//unsigned int nTrx = NumActiveTransactions();
+							//const char txn_state = (nTrx ? 'T' : 'I');
+							client_myds->myprot.generate_error_packet(true, send_ready_packet, "Feature not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
 								false, true);
 							l_free(pkt.size, pkt.ptr);
 							client_myds->DSS = STATE_SLEEP;
@@ -2382,6 +2390,9 @@ int PgSQL_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(PgS
 				}
 			}
 		}
+		if (transaction_state_manager) {
+			transaction_state_manager->reset_state();
+		}
 		myds->destroy_MySQL_Connection_From_Pool(false);
 		myds->fd = 0;
 		if (retry_conn) {
@@ -2440,6 +2451,9 @@ bool PgSQL_Session::handler_minus1_ClientLibraryError(PgSQL_Data_Stream* myds) {
 			}
 		}
 	}
+	if (transaction_state_manager) {
+		transaction_state_manager->reset_state();
+	}
 	myds->destroy_MySQL_Connection_From_Pool(false);
 	myds->fd = 0;
 	if (retry_conn) {
@@ -2497,6 +2511,9 @@ bool PgSQL_Session::handler_minus1_HandleErrorCodes(PgSQL_Data_Stream* myds, int
 				retry_conn = true;
 				proxy_warning("Retrying query.\n");
 			}
+		}
+		if (transaction_state_manager) {
+			transaction_state_manager->reset_state();
 		}
 		myds->destroy_MySQL_Connection_From_Pool(false);
 		myconn = myds->myconn;
@@ -2560,6 +2577,10 @@ void PgSQL_Session::handler_minus1_HandleBackendConnection(PgSQL_Data_Stream* my
 		if (pgsql_thread___multiplexing && (myconn->reusable == true) && myconn->IsActiveTransaction() == false && 
 			myconn->MultiplexDisabled() == false) {
 			myds->DSS = STATE_NOT_INITIALIZED;
+			// Reset transaction state before returning connection to pool
+			if (transaction_state_manager) {
+				transaction_state_manager->reset_state();
+			}
 			if (myconn->is_pipeline_active() == true) {
 				create_new_session_and_reset_connection(myds);
 			} else {
@@ -5048,6 +5069,12 @@ void PgSQL_Session::LogQuery(PgSQL_Data_Stream* myds) {
 	}
 }
 
+void PgSQL_Session::handle_transaction_state() {
+	if (locked_on_hostgroup == -1) {
+		transaction_state_manager->handle_transaction(CurrentQuery.get_digest_text());
+	}
+}
+
 void PgSQL_Session::RequestEnd(PgSQL_Data_Stream* myds, bool called_on_failure) {
 
 	// check if multiplexing needs to be disabled
@@ -5078,7 +5105,6 @@ void PgSQL_Session::RequestEnd(PgSQL_Data_Stream* myds, bool called_on_failure) 
 			// we do not maintain the transaction variable state if the session is locked on a hostgroup 
 			// or is a Fast Forward session.
 			if (locked_on_hostgroup == -1) {
-				transaction_state_manager->handle_transaction(query_digest_text);
 				savepoint_count = transaction_state_manager->get_savepoint_count();
 			}
 
@@ -5507,6 +5533,12 @@ void PgSQL_Session::finishQuery(PgSQL_Data_Stream* myds, PgSQL_Connection* mycon
 			myds->wait_until = 0;
 			myconn->multiplex_delayed = false;
 		} else {
+			// CONNECTION BEING DETACHED - Reset transaction state
+			// This handles: (1) normal pool return, (2) pipeline reset, (3) connection destroyed
+			// When connection detaches, any in-flight transaction state becomes invalid
+			if (transaction_state_manager) {
+				transaction_state_manager->reset_state();
+			}
 			myconn->multiplex_delayed = false;
 			myds->wait_until = 0;
 			myds->DSS = STATE_NOT_INITIALIZED;
@@ -5626,6 +5658,10 @@ void PgSQL_Session::generate_status_one_hostgroup(int hid, std::string& s) {
 	}
 	s = j_res.dump();
 	delete resultset;
+}
+
+bool PgSQL_Session::is_in_transaction() const {
+	return transaction_state_manager && transaction_state_manager->is_in_transaction();
 }
 
 /**
@@ -6484,6 +6520,7 @@ int  PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_S
 		unsigned int nTxn = NumActiveTransactions();
 		const char txn_state = (nTxn ? 'T' : 'I');
 		client_myds->myprot.generate_ready_for_query_packet(true, txn_state);
+		writeout();
 		client_myds->DSS = STATE_SLEEP;
 		status = WAITING_CLIENT_DATA;
 		extended_query_phase = EXTQ_PHASE_IDLE;
