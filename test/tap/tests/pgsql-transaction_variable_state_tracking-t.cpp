@@ -9,6 +9,7 @@
 #include <sstream>
 #include <chrono>
 #include <thread>
+#include <sys/select.h>
 #include "libpq-fe.h"
 #include "command_line.h"
 #include "tap.h"
@@ -565,12 +566,501 @@ int main(int argc, char** argv) {
         return true;
         });
 
+    // ============================================================================
+    // Pipeline Mode Tests for SET Variable Tracking
+    // ============================================================================
+
+    // Test: BEGIN + SET + COMMIT in pipeline mode
+    add_test("BEGIN + SET + COMMIT in pipeline mode", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        if (!conn) return false;
+
+        // Get original value and choose DIFFERENT value
+        const auto original = getVariable(conn.get(), "datestyle");
+        const std::string new_value = (original.find("ISO") != std::string::npos) ?
+                                      "SQL, DMY" : "Postgres, MDY";
+        diag("BEGIN+SET+COMMIT: original='%s', will SET to='%s'",
+             original.c_str(), new_value.c_str());
+
+        // Enter pipeline mode
+        if (PQenterPipelineMode(conn.get()) != 1) {
+            diag("Failed to enter pipeline mode");
+            return false;
+        }
+
+        // Send BEGIN, SET with DIFFERENT value, COMMIT in pipeline
+        PQsendQueryParams(conn.get(), "BEGIN", 0, NULL, NULL, NULL, NULL, 0);
+        std::string set_query = "SET datestyle = '" + new_value + "'";
+        PQsendQueryParams(conn.get(), set_query.c_str(), 0, NULL, NULL, NULL, NULL, 0);
+        PQsendQueryParams(conn.get(), "COMMIT", 0, NULL, NULL, NULL, NULL, 0);
+        PQpipelineSync(conn.get());
+        PQflush(conn.get());
+
+        // Consume results
+        int count = 0;
+        int cmdCount = 0;
+        int sock = PQsocket(conn.get());
+        PGresult* res;
+
+        while (count < 4) {  // 3 commands + 1 sync
+            if (PQconsumeInput(conn.get()) == 0) break;
+
+            while ((res = PQgetResult(conn.get())) != NULL) {
+                ExecStatusType status = PQresultStatus(res);
+                if (status == PGRES_COMMAND_OK) cmdCount++;
+                if (status == PGRES_PIPELINE_SYNC) {
+                    PQclear(res);
+                    count++;
+                    break;
+                }
+                PQclear(res);
+                count++;
+            }
+
+            if (count >= 4) break;
+
+            // Only wait if libpq reports it's busy waiting for more data
+            if (!PQisBusy(conn.get())) continue;
+
+            fd_set input_mask;
+            FD_ZERO(&input_mask);
+            FD_SET(sock, &input_mask);
+            struct timeval timeout = {5, 0};
+            select(sock + 1, &input_mask, NULL, NULL, &timeout);
+        }
+
+        PQexitPipelineMode(conn.get());
+
+        // Verify SET persisted after COMMIT (value should be different from original)
+        const auto newVal = getVariable(conn.get(), "datestyle");
+        bool value_changed = (newVal.find(new_value) != std::string::npos) &&
+                             (newVal != original);
+
+        // Cleanup - restore original
+        executeQuery(conn.get(), "SET datestyle = '" + original + "'");
+
+        return value_changed && cmdCount >= 3;
+    });
+
+    // Test: BEGIN + SET + ROLLBACK in pipeline mode
+    add_test("BEGIN + SET + ROLLBACK in pipeline mode", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        if (!conn) return false;
+
+        // Get original value and choose DIFFERENT value
+        const auto original = getVariable(conn.get(), "timezone");
+        const std::string new_value = (original.find("UTC") != std::string::npos) ?
+                                      "PST8PDT" : "UTC";
+        diag("BEGIN+SET+ROLLBACK: original='%s', will SET to='%s'",
+             original.c_str(), new_value.c_str());
+
+        // Enter pipeline mode
+        if (PQenterPipelineMode(conn.get()) != 1) {
+            diag("Failed to enter pipeline mode");
+            return false;
+        }
+
+        // Send BEGIN, SET with DIFFERENT value, ROLLBACK in pipeline
+        PQsendQueryParams(conn.get(), "BEGIN", 0, NULL, NULL, NULL, NULL, 0);
+        std::string set_query = "SET timezone = '" + new_value + "'";
+        PQsendQueryParams(conn.get(), set_query.c_str(), 0, NULL, NULL, NULL, NULL, 0);
+        PQsendQueryParams(conn.get(), "ROLLBACK", 0, NULL, NULL, NULL, NULL, 0);
+        PQpipelineSync(conn.get());
+        PQflush(conn.get());
+
+        // Consume results
+        int count = 0;
+        int cmdCount = 0;
+        int sock = PQsocket(conn.get());
+        PGresult* res;
+
+        while (count < 4) {
+            if (PQconsumeInput(conn.get()) == 0) break;
+
+            while ((res = PQgetResult(conn.get())) != NULL) {
+                ExecStatusType status = PQresultStatus(res);
+                if (status == PGRES_COMMAND_OK) cmdCount++;
+                if (status == PGRES_PIPELINE_SYNC) {
+                    PQclear(res);
+                    count++;
+                    break;
+                }
+                PQclear(res);
+                count++;
+            }
+
+            if (count >= 4) break;
+
+            // Only wait if libpq reports it's busy waiting for more data
+            if (!PQisBusy(conn.get())) continue;
+
+            fd_set input_mask;
+            FD_ZERO(&input_mask);
+            FD_SET(sock, &input_mask);
+            struct timeval timeout = {5, 0};
+            select(sock + 1, &input_mask, NULL, NULL, &timeout);
+        }
+
+        PQexitPipelineMode(conn.get());
+
+        // Verify ROLLBACK reverted the SET (value should be back to original, not the new value)
+        const auto newVal = getVariable(conn.get(), "timezone");
+        bool reverted = (newVal == original) && (newVal != new_value);
+
+        return reverted && cmdCount >= 3;
+    });
+
+    // Test: Multiple variables in transaction in pipeline mode
+    add_test("Multiple variables in transaction in pipeline", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        if (!conn) return false;
+
+        // Get original values and choose DIFFERENT values
+        const auto orig_datestyle = getVariable(conn.get(), "datestyle");
+        const auto orig_timezone = getVariable(conn.get(), "timezone");
+        const auto orig_bytea = getVariable(conn.get(), "bytea_output");
+
+        // Choose DIFFERENT values from original
+        const std::string new_datestyle = (orig_datestyle.find("ISO") != std::string::npos) ?
+                                          "Postgres, MDY" : "ISO, DMY";
+        const std::string new_timezone = (orig_timezone.find("UTC") != std::string::npos) ?
+                                         "EST5EDT" : "UTC";
+        const std::string new_bytea = (orig_bytea == "hex") ? "escape" : "hex";
+
+        diag("Multi-var: datestyle orig='%s'->'%s', timezone orig='%s'->'%s', bytea orig='%s'->'%s'",
+             orig_datestyle.c_str(), new_datestyle.c_str(),
+             orig_timezone.c_str(), new_timezone.c_str(),
+             orig_bytea.c_str(), new_bytea.c_str());
+
+        // Enter pipeline mode
+        if (PQenterPipelineMode(conn.get()) != 1) {
+            diag("Failed to enter pipeline mode");
+            return false;
+        }
+
+        // Send BEGIN + multiple SETs (with DIFFERENT values) + COMMIT
+        PQsendQueryParams(conn.get(), "BEGIN", 0, NULL, NULL, NULL, NULL, 0);
+        std::string set_datestyle = "SET datestyle = '" + new_datestyle + "'";
+        std::string set_timezone = "SET timezone = '" + new_timezone + "'";
+        std::string set_bytea = "SET bytea_output = '" + new_bytea + "'";
+        PQsendQueryParams(conn.get(), set_datestyle.c_str(), 0, NULL, NULL, NULL, NULL, 0);
+        PQsendQueryParams(conn.get(), set_timezone.c_str(), 0, NULL, NULL, NULL, NULL, 0);
+        PQsendQueryParams(conn.get(), set_bytea.c_str(), 0, NULL, NULL, NULL, NULL, 0);
+        PQsendQueryParams(conn.get(), "COMMIT", 0, NULL, NULL, NULL, NULL, 0);
+        PQpipelineSync(conn.get());
+        PQflush(conn.get());
+
+        // Consume results
+        int count = 0;
+        int cmdCount = 0;
+        int sock = PQsocket(conn.get());
+        PGresult* res;
+
+        while (count < 6) {  // 5 commands + 1 sync
+            if (PQconsumeInput(conn.get()) == 0) break;
+
+            while ((res = PQgetResult(conn.get())) != NULL) {
+                ExecStatusType status = PQresultStatus(res);
+                if (status == PGRES_COMMAND_OK) cmdCount++;
+                if (status == PGRES_PIPELINE_SYNC) {
+                    PQclear(res);
+                    count++;
+                    break;
+                }
+                PQclear(res);
+                count++;
+            }
+
+            if (count >= 6) break;
+
+            // Only wait if libpq reports it's busy waiting for more data
+            if (!PQisBusy(conn.get())) continue;
+
+            fd_set input_mask;
+            FD_ZERO(&input_mask);
+            FD_SET(sock, &input_mask);
+            struct timeval timeout = {5, 0};
+            select(sock + 1, &input_mask, NULL, NULL, &timeout);
+        }
+
+        PQexitPipelineMode(conn.get());
+
+        // Verify all SETs persisted (values should be the new ones, different from original)
+        bool success = true;
+        const auto final_datestyle = getVariable(conn.get(), "datestyle");
+        const auto final_timezone = getVariable(conn.get(), "timezone");
+        const auto final_bytea = getVariable(conn.get(), "bytea_output");
+
+        success &= (final_datestyle.find(new_datestyle) != std::string::npos) && (final_datestyle != orig_datestyle);
+        success &= (final_timezone == new_timezone) && (final_timezone != orig_timezone);
+        success &= (final_bytea == new_bytea) && (final_bytea != orig_bytea);
+
+        diag("Final values: datestyle='%s' (changed:%s), timezone='%s' (changed:%s), bytea='%s' (changed:%s)",
+             final_datestyle.c_str(), (final_datestyle != orig_datestyle) ? "yes" : "no",
+             final_timezone.c_str(), (final_timezone != orig_timezone) ? "yes" : "no",
+             final_bytea.c_str(), (final_bytea != orig_bytea) ? "yes" : "no");
+
+        // Cleanup
+        executeQuery(conn.get(), "SET datestyle = '" + orig_datestyle + "'");
+        executeQuery(conn.get(), "SET timezone = '" + orig_timezone + "'");
+        executeQuery(conn.get(), "SET bytea_output = '" + orig_bytea + "'");
+
+        return success && cmdCount >= 5;
+    });
+
+    // Test: SAVEPOINT with SET in pipeline mode
+    add_test("SAVEPOINT with SET in pipeline mode", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        if (!conn) return false;
+
+        // Get original and choose DIFFERENT values for testing
+        const auto original = getVariable(conn.get(), "extra_float_digits");
+        // Choose values that are different from original AND different from each other
+        const std::string value1 = (original == "0") ? "2" : "0";  // First SET value
+        const std::string value2 = (value1 == "2") ? "3" : "2";     // Second SET value (different from value1)
+
+        diag("SAVEPOINT test: original='%s', value1='%s', value2='%s'",
+             original.c_str(), value1.c_str(), value2.c_str());
+
+        // Enter pipeline mode
+        if (PQenterPipelineMode(conn.get()) != 1) {
+            diag("Failed to enter pipeline mode");
+            return false;
+        }
+
+        // Send: BEGIN, SET (value1), SAVEPOINT, SET (value2), ROLLBACK TO SAVEPOINT, COMMIT
+        // After ROLLBACK TO SAVEPOINT, value should be value1
+        // After COMMIT, value should remain value1
+        PQsendQueryParams(conn.get(), "BEGIN", 0, NULL, NULL, NULL, NULL, 0);
+        std::string set1 = "SET extra_float_digits = " + value1;
+        std::string set2 = "SET extra_float_digits = " + value2;
+        PQsendQueryParams(conn.get(), set1.c_str(), 0, NULL, NULL, NULL, NULL, 0);
+        PQsendQueryParams(conn.get(), "SAVEPOINT sp1", 0, NULL, NULL, NULL, NULL, 0);
+        PQsendQueryParams(conn.get(), set2.c_str(), 0, NULL, NULL, NULL, NULL, 0);
+        PQsendQueryParams(conn.get(), "ROLLBACK TO SAVEPOINT sp1", 0, NULL, NULL, NULL, NULL, 0);
+        PQsendQueryParams(conn.get(), "COMMIT", 0, NULL, NULL, NULL, NULL, 0);
+        PQpipelineSync(conn.get());
+        PQflush(conn.get());
+
+        // Consume results
+        int count = 0;
+        int cmdCount = 0;
+        int sock = PQsocket(conn.get());
+        PGresult* res;
+
+        while (count < 7) {  // 6 commands + 1 sync
+            if (PQconsumeInput(conn.get()) == 0) break;
+
+            while ((res = PQgetResult(conn.get())) != NULL) {
+                ExecStatusType status = PQresultStatus(res);
+                if (status == PGRES_COMMAND_OK) cmdCount++;
+                if (status == PGRES_PIPELINE_SYNC) {
+                    PQclear(res);
+                    count++;
+                    break;
+                }
+                PQclear(res);
+                count++;
+            }
+
+            if (count >= 7) break;
+
+            // Only wait if libpq reports it's busy waiting for more data
+            if (!PQisBusy(conn.get())) continue;
+
+            fd_set input_mask;
+            FD_ZERO(&input_mask);
+            FD_SET(sock, &input_mask);
+            struct timeval timeout = {5, 0};
+            select(sock + 1, &input_mask, NULL, NULL, &timeout);
+        }
+
+        PQexitPipelineMode(conn.get());
+
+        // After ROLLBACK TO SAVEPOINT, value should be value1 (first SET), not value2 (second SET)
+        // After COMMIT, the first SET persists
+        const auto newVal = getVariable(conn.get(), "extra_float_digits");
+        bool success = (newVal == value1) && (newVal != original) && (newVal != value2);
+
+        diag("After savepoint rollback: value='%s' (expected='%s', original='%s', value2='%s')",
+             newVal.c_str(), value1.c_str(), original.c_str(), value2.c_str());
+
+        // Cleanup
+        executeQuery(conn.get(), "SET extra_float_digits = " + original);
+
+        return success && cmdCount >= 6;
+    });
+
+    // ============================================================================
+    // SET Failure Tests in Pipeline Mode
+    // ============================================================================
+
+    // Test: SET failure with invalid value in pipeline - verify error handling
+    add_test("SET failure - invalid value in pipeline", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        if (!conn) return false;
+
+        // Get original value
+        const auto original = getVariable(conn.get(), "datestyle");
+
+        // Enter pipeline mode
+        if (PQenterPipelineMode(conn.get()) != 1) {
+            diag("Failed to enter pipeline mode");
+            return false;
+        }
+
+        // Send SET with invalid value
+        PQsendQueryParams(conn.get(), "SET datestyle = 'INVALID_STYLE_VALUE'", 0, NULL, NULL, NULL, NULL, 0);
+        PQpipelineSync(conn.get());
+        PQflush(conn.get());
+
+        // Consume results
+        int count = 0;
+        bool got_error = false;
+        int sock = PQsocket(conn.get());
+        PGresult* res;
+
+        while (count < 2) {
+            if (PQconsumeInput(conn.get()) == 0) break;
+
+            while ((res = PQgetResult(conn.get())) != NULL) {
+                ExecStatusType status = PQresultStatus(res);
+                if (status == PGRES_FATAL_ERROR) {
+                    got_error = true;
+                    diag("Got expected error for invalid datestyle");
+                }
+                if (status == PGRES_PIPELINE_SYNC) {
+                    PQclear(res);
+                    count++;
+                    break;
+                }
+                PQclear(res);
+                count++;
+            }
+
+            if (count >= 2) break;
+
+            // Only wait if libpq reports it's busy waiting for more data
+            if (!PQisBusy(conn.get())) continue;
+
+            fd_set input_mask;
+            FD_ZERO(&input_mask);
+            FD_SET(sock, &input_mask);
+            struct timeval timeout = {5, 0};
+            select(sock + 1, &input_mask, NULL, NULL, &timeout);
+        }
+
+        PQexitPipelineMode(conn.get());
+
+        // Verify value unchanged (still original)
+        const auto afterVal = getVariable(conn.get(), "datestyle");
+        bool unchanged = (afterVal == original);
+
+        diag("After invalid SET: value='%s', original='%s', unchanged=%s",
+             afterVal.c_str(), original.c_str(), unchanged ? "yes" : "no");
+
+        return got_error && unchanged;
+    });
+
+    // Test: SET failure - multiple SETs with one invalid, verify state consistency
+    add_test("SET failure - state consistency after partial failure", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        if (!conn) return false;
+
+        // Get original values and choose DIFFERENT valid values
+        const auto orig_datestyle = getVariable(conn.get(), "datestyle");
+        const auto orig_timezone = getVariable(conn.get(), "timezone");
+
+        const std::string new_datestyle = (orig_datestyle.find("ISO") != std::string::npos) ?
+                                          "Postgres, MDY" : "ISO, DMY";
+        const std::string new_timezone = (orig_timezone.find("UTC") != std::string::npos) ?
+                                         "PST8PDT" : "UTC";
+
+        diag("Partial failure test: datestyle orig='%s'->'%s', timezone orig='%s'->'%s'",
+             orig_datestyle.c_str(), new_datestyle.c_str(),
+             orig_timezone.c_str(), new_timezone.c_str());
+
+        // Enter pipeline mode
+        if (PQenterPipelineMode(conn.get()) != 1) {
+            diag("Failed to enter pipeline mode");
+            return false;
+        }
+
+        // Send: valid SET, invalid SET, valid SET
+        std::string set1 = "SET datestyle = '" + new_datestyle + "'";
+        std::string set3 = "SET timezone = '" + new_timezone + "'";
+        PQsendQueryParams(conn.get(), set1.c_str(), 0, NULL, NULL, NULL, NULL, 0);
+        PQsendQueryParams(conn.get(), "SET invalid_variable = 'value'", 0, NULL, NULL, NULL, NULL, 0);
+        PQsendQueryParams(conn.get(), set3.c_str(), 0, NULL, NULL, NULL, NULL, 0);
+        PQpipelineSync(conn.get());
+        PQflush(conn.get());
+
+        // Consume results
+        int count = 0;
+        int error_count = 0;
+        int success_count = 0;
+        int sock = PQsocket(conn.get());
+        PGresult* res;
+
+        while (count < 4) {  // 3 commands + 1 sync
+            if (PQconsumeInput(conn.get()) == 0) break;
+
+            while ((res = PQgetResult(conn.get())) != NULL) {
+                ExecStatusType status = PQresultStatus(res);
+                if (status == PGRES_COMMAND_OK) {
+                    success_count++;
+                } else if (status == PGRES_FATAL_ERROR) {
+                    error_count++;
+                } else if (status == PGRES_PIPELINE_SYNC) {
+                    PQclear(res);
+                    count++;
+                    break;
+                }
+                PQclear(res);
+                count++;
+            }
+
+            if (count >= 4) break;
+
+            // Only wait if libpq reports it's busy waiting for more data
+            if (!PQisBusy(conn.get())) continue;
+
+            fd_set input_mask;
+            FD_ZERO(&input_mask);
+            FD_SET(sock, &input_mask);
+            struct timeval timeout = {5, 0};
+            select(sock + 1, &input_mask, NULL, NULL, &timeout);
+        }
+
+        PQexitPipelineMode(conn.get());
+
+        // After error, connection should still be usable
+        const auto final_datestyle = getVariable(conn.get(), "datestyle");
+        const auto final_timezone = getVariable(conn.get(), "timezone");
+
+        // At least first SET should have succeeded, middle should fail
+        diag("Results: successes=%d, errors=%d, final datestyle='%s', final timezone='%s'",
+             success_count, error_count, final_datestyle.c_str(), final_timezone.c_str());
+
+        // Verify connection still works
+        PGresult* test_res = PQexec(conn.get(), "SELECT 1");
+        bool connection_ok = (PQresultStatus(test_res) == PGRES_TUPLES_OK);
+        PQclear(test_res);
+
+        // Cleanup
+        executeQuery(conn.get(), "SET datestyle = '" + orig_datestyle + "'");
+        executeQuery(conn.get(), "SET timezone = '" + orig_timezone + "'");
+
+        // Expect at least 1 error (the invalid variable), and connection should still work
+        return (error_count >= 1) && connection_ok;
+    });
+
     int total_tests = 0;
 
     total_tests = tests.size();
     plan(total_tests);
 
     run_tests();
-   
+
     return exit_status();
 }
