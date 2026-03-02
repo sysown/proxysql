@@ -173,7 +173,7 @@ void testStopStartSequence() {
 }
 
 int main(int argc, char** argv) {
-    plan(7);
+    plan(6);
 
     if (cl.getEnv())
         return exit_status();
