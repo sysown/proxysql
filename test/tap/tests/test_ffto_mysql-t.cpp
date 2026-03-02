@@ -111,7 +111,9 @@ int main(int argc, char** argv) {
     MYSQL_QUERY(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
     // Ensure root user has fast_forward enabled
-    MYSQL_QUERY(admin, "INSERT OR REPLACE INTO mysql_users (username, password, default_hostgroup, fast_forward) VALUES ('root', 'root', 0, 1)");
+        char user_query[1024];
+    snprintf(user_query, sizeof(user_query), "INSERT OR REPLACE INTO mysql_users (username, password, default_hostgroup, fast_forward) VALUES ('%s', '%s', 0, 1)", cl.root_username, cl.root_password);
+    MYSQL_QUERY(admin, user_query);
     MYSQL_QUERY(admin, "LOAD MYSQL USERS TO RUNTIME");
 
     // Ensure backend server exists
@@ -123,7 +125,7 @@ int main(int argc, char** argv) {
 
     // USE ROOT FOR CLIENT CONNECTION
     conn = mysql_init(NULL);
-    if (!mysql_real_connect(conn, cl.host, "root", "root", NULL, cl.port, NULL, 0)) {
+    if (!mysql_real_connect(conn, cl.host, cl.root_username, cl.root_password, NULL, cl.port, NULL, 0)) {
         diag("Client connection failed: %s", mysql_error(conn));
         return -1;
     }
