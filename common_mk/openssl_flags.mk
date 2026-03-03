@@ -87,5 +87,5 @@ else
     $(error Warning: OpenSSL libraries directory (SSL_LDIR) not found. Exiting. Please ensure the correct path is set or install OpenSSL version 3.)
 endif
 else
-    $(error Warning: OpenSSL headers (SSL_IDIR) not found. Exiting. Please install OpenSSL version 3.)
+    $(error Warning: OpenSSL headers (SSL_IDIR) not found. Exiting. Please install OpenSSL version 3 and make sure pkg-config is present.)
 endif
