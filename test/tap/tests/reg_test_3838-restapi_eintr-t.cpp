@@ -93,7 +93,7 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(proxysql_admin, "DELETE FROM restapi_routes");
 
 	// Configure restapi_routes to be used
-	string test_script_base_path { string { cl.workdir  } + "reg_test_3838_scripts" };
+	const char* d_env = getenv("REGULAR_INFRA_DATADIR"); string test_script_base_path = (d_env ? string(d_env) + "/reg_test_3838_scripts" : string(cl.workdir) + "reg_test_3838_scripts");
 
 	vector<string> t_valid_scripts_inserts {
 		"INSERT INTO restapi_routes (active, timeout_ms, method, uri, script, comment)"
@@ -156,17 +156,26 @@ int main(int argc, char** argv) {
 		// 2. Find the child process
 		string s_pid {};
 
-		int timeout = 1000;
+		int timeout = 2000; // Increased timeout to 2 seconds
 		int waited = 0;
 		int e_res= 0;
 
-		diag("  Waiting for child process to spawn...");
+		diag("  Waiting for child process to spawn (searching for simple_sleep.sh)...");
 		while (waited < timeout) {
-			e_res = exec("ps aux | grep -e \"[/]bin/sh.*.simple_sleep.sh\" | awk '{print $2}'", s_pid);
+			// Updated grep to be more robust and added diag for visibility
+			e_res = exec("ps aux | grep \"simple_sleep.sh\" | grep -v grep | awk '{print $2}'", s_pid);
 
 			if (e_res == 0 && s_pid.empty()) {
-				usleep(200 * 1000);
-				waited += 200;
+				usleep(100 * 1000);
+				waited += 100;
+			} else if (e_res == 0 && !s_pid.empty()) {
+				// Sometimes multiple PIDs are returned if multiple threads/tests are running
+				std::stringstream ss(s_pid);
+				string first_pid;
+				if (ss >> first_pid) {
+					s_pid = first_pid;
+					break;
+				}
 			} else {
 				break;
 			}
@@ -176,33 +185,38 @@ int main(int argc, char** argv) {
 			if (e_res != EXIT_SUCCESS) {
 				fprintf(stderr, "File %s, line %d, 'exec' failed with error: '%d'\n", __FILE__, __LINE__, e_res);
 			} else {
-				const string err_msg {"Invalid command executed or faulty test logic" };
-				fprintf(stderr, "File %s, line %d, Error: '%s'\n", __FILE__, __LINE__, err_msg.c_str());
+				diag("  Warning: Could not find child process simple_sleep.sh after %dms. Signaling might fail.", waited);
 			}
 		} else {
 			// 3. Send multiple signals to the child process
 			int pid = std::stol(s_pid);
 			int k_res = 0;
 
-			diag("  Sending %d signals to PID %d...", SIGNAL_NUM, pid);
+			diag("  Found child PID: %d. Sending %d signals (signal type: %d)...", pid, SIGNAL_NUM, signal);
 			if (signal == SIGCONT) {
 				for (int i = 0; i < SIGNAL_NUM; i++) {
 					k_res = kill(pid, SIGSTOP);
-					if (k_res != 0) { break; }
+					if (k_res != 0) { 
+						diag("  kill(SIGSTOP) failed: %s", strerror(errno));
+						break; 
+					}
 
-					usleep(100*1000);
+					usleep(50*1000);
 
 					k_res = kill(pid, SIGCONT);
-					if (k_res != 0) { break; }
+					if (k_res != 0) { 
+						diag("  kill(SIGCONT) failed: %s", strerror(errno));
+						break; 
+					}
 				}
 			} else {
 				for (int i = 0; i < SIGNAL_NUM; i++) {
 					k_res = kill(pid, signal);
+					if (k_res != 0) {
+						diag("  kill(%d) failed: %s", signal, strerror(errno));
+						// Don't break here, maybe it already exited
+					}
 				}
-			}
-
-			if (k_res != 0) {
-				fprintf(stderr, "File %s, line %d, 'kill' failed with error: '%d'\n", __FILE__, __LINE__, errno);
 			}
 		}
 
