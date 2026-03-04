@@ -66,6 +66,17 @@ int main(int argc, char** argv) {
 	diag("4. Verify that ProxySQL correctly reports exit statuses and handles timeouts.");
 	diag("==================================================================");
 
+	const char* tap_host_env = getenv("TAP_HOST");
+	string target_host = (tap_host_env ? tap_host_env : "127.0.0.1");
+	bool is_remote = (target_host != "127.0.0.1" && target_host != "localhost" && target_host != "0.0.0.0");
+
+	if (is_remote) {
+		plan(0);
+		diag("Skipping test: ProxySQL is running on a remote host or different container (%s).", target_host.c_str());
+		diag("This test requires a shared PID namespace to signal child processes.");
+		return exit_status();
+	}
+
 	plan(endpoint_requests.size());
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
@@ -156,13 +167,12 @@ int main(int argc, char** argv) {
 		// 2. Find the child process
 		string s_pid {};
 
-		int timeout = 2000; // Increased timeout to 2 seconds
+		int timeout = 2000;
 		int waited = 0;
 		int e_res= 0;
 
 		diag("  Waiting for child process to spawn (searching for simple_sleep.sh)...");
 		while (waited < timeout) {
-			// Updated grep to be more robust and added diag for visibility
 			e_res = exec("ps aux | grep \"simple_sleep.sh\" | grep -v grep | awk '{print $2}'", s_pid);
 
 			if (e_res == 0 && s_pid.empty()) {
@@ -214,7 +224,6 @@ int main(int argc, char** argv) {
 					k_res = kill(pid, signal);
 					if (k_res != 0) {
 						diag("  kill(%d) failed: %s", signal, strerror(errno));
-						// Don't break here, maybe it already exited
 					}
 				}
 			}
