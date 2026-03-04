@@ -2413,7 +2413,7 @@ MYSQL* init_mysql_conn(char* host, int port, char* user, char* pass, bool ssl, b
 		cflags |= CLIENT_SSL;
 	}
 
-	if (!mysql_real_connect(mysql, host, user, pass, NULL, port, NULL, cflags)) {
+	if (!mysql_real_connect(mysql, host, user, pass, NULL, port, NULL, cflags)) { diag("init_mysql_conn failed: %s (Host: %s, Port: %d, User: %s)", mysql_error(mysql), host, port, user); mysql_close(mysql);
 		return nullptr;
 	}
 
