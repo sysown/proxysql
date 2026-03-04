@@ -1565,52 +1565,83 @@ char* extract_tag_from_query(const char* query) {
 }
 
 
-bool PgSQL_Protocol::generate_ok_packet(bool send, bool ready, const char* msg, int rows, const char* query, char trx_state, PtrSize_t* _ptr,
+bool PgSQL_Protocol::generate_ok_packet(bool send, bool ready, const char* msg, int rows, const char* query, char txn_state, PtrSize_t* _ptr,
 	const std::vector<std::pair<std::string, std::string>>& param_status) {
 	// to avoid memory leak
 	assert(send == true || _ptr);
 
-	PG_pkt pgpkt{};
-
-	if (ready == true) {
-		pgpkt.set_multi_pkt_mode(true);
-	}
+	// Calculate required buffer size and get tag first
+	unsigned int buf_size = 0;
+	const char* tag = nullptr;
+	char* allocated_tag = nullptr;
+	char tmpbuf[128];
 
 	if (query) {
-		char* tag = extract_tag_from_query(query);
-		assert(tag);
-
-		char tmpbuf[128];
-		if (strcmp(tag, "INSERT") == 0) {
-			sprintf(tmpbuf, "%s 0 %d", tag, rows);
-			pgpkt.write_CommandComplete(tmpbuf);
+		allocated_tag = extract_tag_from_query(query);
+		assert(allocated_tag);
+		if (strcmp(allocated_tag, "INSERT") == 0) {
+			sprintf(tmpbuf, "%s 0 %d", allocated_tag, rows);
+			tag = tmpbuf;
+		} else if (strcmp(allocated_tag, "UPDATE") == 0 ||
+			strcmp(allocated_tag, "DELETE") == 0 ||
+			strcmp(allocated_tag, "MERGE") == 0 ||
+			strcmp(allocated_tag, "MOVE") == 0 ||
+			strcmp(allocated_tag, "FETCH") == 0 ||
+			strcmp(allocated_tag, "COPY") == 0 ||
+			strcmp(allocated_tag, "SELECT") == 0) {
+			sprintf(tmpbuf, "%s %d", allocated_tag, rows);
+			tag = tmpbuf;
+		} else {
+			tag = allocated_tag;
 		}
-		else if (strcmp(tag, "UPDATE") == 0 ||
-			strcmp(tag, "DELETE") == 0 ||
-			strcmp(tag, "MERGE") == 0 ||
-			strcmp(tag, "MOVE") == 0 ||
-			strcmp(tag, "FETCH") == 0 ||
-			strcmp(tag, "COPY") == 0 ||
-			strcmp(tag, "SELECT") == 0) {
-			sprintf(tmpbuf, "%s %d", tag, rows);
-			pgpkt.write_CommandComplete(tmpbuf);
-		}
-		else {
-			pgpkt.write_CommandComplete(tag);
-		}
-		free(tag);
 	} else if (msg) {
 		// if no query, but message is provided, use it as tag
-		pgpkt.write_CommandComplete(msg);
+		tag = msg;
 	}
 
+	if (tag) {
+		// CommandComplete: 1 (type) + 4 (length) + strlen(tag) + 1 (null)
+		buf_size += 1 + 4 + strlen(tag) + 1;
+	}
+
+	// ParameterStatus size
 	for (auto& [param_name, param_value] : param_status) {
-		pgpkt.write_ParameterStatus(param_name.c_str(), param_value.c_str());
+		// ParameterStatus: 1 (type) + 4 (length) + strlen(name) + 1 + strlen(value) + 1
+		buf_size += 1 + 4 + param_name.length() + 1 + param_value.length() + 1;
 	}
 
-	if (ready == true) {
-		pgpkt.write_ReadyForQuery(trx_state);
-		pgpkt.set_multi_pkt_mode(false);
+	// ReadyForQuery size
+	if (ready) {
+		// ReadyForQuery: 1 (type) + 4 (length) + 1 (status)
+		buf_size += 1 + 4 + 1;
+	}
+
+	PG_pkt pgpkt(buf_size);
+
+	// Write CommandComplete
+	if (tag) {
+		pgpkt.put_char('C');
+		pgpkt.put_uint32(4 + strlen(tag) + 1);
+		pgpkt.put_string(tag);
+	}
+
+	if (allocated_tag) {
+		free(allocated_tag);
+	}
+
+	// Write ParameterStatus messages
+	for (auto& [param_name, param_value] : param_status) {
+		pgpkt.put_char('S');
+		pgpkt.put_uint32(4 + param_name.length() + 1 + param_value.length() + 1);
+		pgpkt.put_string(param_name.c_str());
+		pgpkt.put_string(param_value.c_str());
+	}
+
+	// Write ReadyForQuery
+	if (ready) {
+		pgpkt.put_char('Z');
+		pgpkt.put_uint32(5);
+		pgpkt.put_char(txn_state);
 	}
 
 	auto buff = pgpkt.detach();

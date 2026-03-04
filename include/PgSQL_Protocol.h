@@ -806,7 +806,7 @@ public:
 	 *       updates the output buffer with the generated packet. If `ready` is 
 	 *       true, it also generates and sends a ready-for-query packet.
 	 */
-	bool generate_ok_packet(bool send, bool ready, const char* msg, int rows, const char* query, char trx_state = 'I', PtrSize_t* _ptr = NULL, 
+	bool generate_ok_packet(bool send, bool ready, const char* msg, int rows, const char* query, char txn_state = 'I', PtrSize_t* _ptr = NULL,
 		const std::vector<std::pair<std::string,std::string>>& param_status = std::vector<std::pair<std::string, std::string>>());
 
 	bool generate_parse_completion_packet(bool send, bool ready, char trx_state, PtrSize_t* _ptr = NULL);
