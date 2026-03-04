@@ -1,0 +1,210 @@
+2026-03-02 11:45:05 main.cpp:359:check_openssl_version(): [INFO] Using OpenSSL version: OpenSSL 3.0.13 30 Jan 2024
+2026-03-02 11:45:05 main.cpp:361:check_openssl_version(): [WARNING] Detected OpenSSL version has known performance regressions, please upgrade to '3.2.0' or later. For further details, please refer to: https://github.com/openssl/openssl/issues/18814
+2026-03-02 11:45:05 main.cpp:710:ProxySQL_Main_process_global_variables(): [INFO] Using config file /home/rene/proxysql/test/tap/tests/test_cluster_sync_config/test_cluster_sync_nomonitor/test_cluster_sync.cnf
+Main init global variables completed in 0.000118 secs.
+2026-03-02 11:45:05 main.cpp:2414:print_jemalloc_conf(): [INFO] Using jemalloc with MALLOC_CONF: config.xmalloc:1, lg_tcache_max:16, opt.prof_accum:1, opt.prof_leak:1, opt.lg_prof_sample:20, opt.lg_prof_interval:30, rc:0
+2026-03-02 11:45:05 main.cpp:2685:main(): [INFO] Current RLIMIT_NOFILE: 1048576
+2026-03-02 11:45:05 proxy_tls.cpp:286:ssl_mkit(): [INFO] No SSL keys/certificates found in datadir (/home/rene/proxysql/test/tap/tests/test_cluster_sync_config/test_cluster_sync_nomonitor). Generating new keys/certificates.
+Main SSL init variables completed in 0.073564 secs.
+SHA1 generated in 0.071143 secs.
+2026-03-02 11:45:05 ProxySQL_Admin.cpp:8774:flush_error_log(): [INFO] ProxySQL version 4.0.6-749-g5b721a6_DEBUG
+2026-03-02 11:45:05 ProxySQL_Admin.cpp:8777:flush_error_log(): [INFO] Detected OS: Linux 0ea97f27b725 6.17.0-14-generic #14~24.04.1-Ubuntu SMP PREEMPT_DYNAMIC Thu Jan 15 15:52:10 UTC 2 x86_64
+2026-03-02 11:45:05 ProxySQL_Admin.cpp:8780:flush_error_log(): [INFO] ProxySQL SHA1 checksum: 7e57b912957b8ce3689b4fcb378ce06a77113392
+2026-03-02 11:45:05 proxy_tls.cpp:321:ssl_mkit(): [INFO] SSL keys/certificates found in datadir (/home/rene/proxysql/test/tap/tests/test_cluster_sync_config/test_cluster_sync_nomonitor): loading them.
+Standard ProxySQL MySQL Logger rev. 2.5.0421_DEBUG -- MySQL_Logger.cpp -- Fri Feb 27 13:36:33 2026
+Standard ProxySQL PgSQL Logger rev. 2.5.0421_DEBUG -- PgSQL_Logger.cpp -- Fri Feb 27 13:36:33 2026
+2026-03-02 11:45:05 GenAI_Thread.cpp:245:init(): [INFO] Initializing GenAI Threads Handler
+2026-03-02 11:45:05 GenAI_Thread.cpp:319:init(): [INFO] GenAI module started with 4 workers
+2026-03-02 11:45:05 GenAI_Thread.cpp:320:init(): [INFO] Embedding endpoint: http://127.0.0.1:8013/embedding
+2026-03-02 11:45:05 GenAI_Thread.cpp:321:init(): [INFO] Rerank endpoint: http://127.0.0.1:8012/rerank
+GenAI Threads Handler rev. 0.1.0 -- GenAI_Thread.cpp -- Fri Feb 27 13:36:33 2026
+2026-03-02 11:45:05 main.cpp:961:ProxySQL_Main_init_GenAI_module(): [INFO] GenAI Threads Handler initialized
+2026-03-02 11:45:05 AI_Features_Manager.cpp:450:init(): [INFO] AI: Initializing AI Features Manager v1.0.0
+2026-03-02 11:45:05 AI_Features_Manager.cpp:453:init(): [INFO] AI: AI features disabled by configuration
+2026-03-02 11:45:05 main.cpp:964:ProxySQL_Main_init_GenAI_module(): [INFO] AI Features module initialized
+2026-03-02 11:45:05 MCP_Thread.cpp:142:init(): [INFO] Initializing MCP Threads Handler
+MCP Threads Handler rev. 0.1.0 -- MCP_Thread.cpp -- Fri Feb 27 13:36:33 2026
+2026-03-02 11:45:05 main.cpp:969:ProxySQL_Main_init_MCP_module(): [INFO] MCP module initialized
+Standard ProxySQL Cluster rev. 0.4.0906_DEBUG -- ProxySQL_Cluster.cpp -- Fri Feb 27 13:36:33 2026
+Standard ProxySQL Statistics rev. 1.4.1027_DEBUG -- ProxySQL_Statistics.cpp -- Fri Feb 27 13:36:33 2026
+2026-03-02 11:45:05 ProxySQL_Admin.cpp:3471:load_or_update_global_settings(): [INFO] Using UUID: 341f97d8-ed0e-44c4-b604-6ebabdd935ef , randomly generated. Writing it to database
+2026-03-02 11:45:05 ProxySQL_Config.cpp:1548:Read_ProxySQL_Servers_from_configfile(): [INFO] Cluster: Adding ProxySQL Servers proxysql:6032 from config file
+2026-03-02 11:45:05 Admin_FlushVariables.cpp:244:flush_GENERIC_variables__process__database_to_runtime(): [WARNING] Impossible to set not existing variable cluster_sync_interfaces with value "false". Deleting. If the variable name is correct, this version doesn't support it
+2026-03-02 11:45:05 Admin_FlushVariables.cpp:431:flush_GENERIC_variables__checksum__database_to_runtime(): [INFO] Computed checksum for 'LOAD ADMIN VARIABLES TO RUNTIME' was '0x3026D0A7249E8EDC', with epoch '1772451905'
+2026-03-02 11:45:05 Admin_FlushVariables.cpp:431:flush_GENERIC_variables__checksum__database_to_runtime(): [INFO] Computed checksum for 'LOAD MYSQL VARIABLES TO RUNTIME' was '0x9B3883F78C421171', with epoch '1772451905'
+Admin initialized in 0.048351 secs.
+Standard ProxySQL Admin rev. 2.0.6.0805_DEBUG -- ProxySQL_Admin.cpp -- Fri Feb 27 13:36:33 2026
+2026-03-02 11:45:05 main.cpp:985:ProxySQL_Main_init_Admin_module(): [INFO] ProxySQL SHA1 checksum: 7e57b912957b8ce3689b4fcb378ce06a77113392
+Standard MySQL Threads Handler rev. 0.2.0902_DEBUG -- MySQL_Thread.cpp -- Fri Feb 27 13:36:33 2026
+Main phase3 : GloMyLogger initialized in 1e-06 secs.
+Main phase3 : GloPgSQL_Logger initialized in 2e-06 secs.
+Standard MySQL Authentication rev. 0.2.0902_DEBUG -- MySQL_Authentication.cpp -- Fri Feb 27 13:36:33 2026
+Standard PgSQL Authentication rev. 0.1.0001_DEBUG -- PgSQL_Authentication.cpp -- Fri Feb 27 13:36:33 2026
+2026-03-02 11:45:05 ProxySQL_Admin.cpp:6028:__refresh_users(): [INFO] Computed checksum for 'LOAD MYSQL USERS TO RUNTIME' was '0x0000000000000000', with epoch '1772451905'
+2026-03-02 11:45:05 ProxySQL_Admin.cpp:6117:__refresh_pgsql_users(): [INFO] Computed checksum for 'LOAD PGSQL USERS TO RUNTIME' was '0x0000000000000000', with epoch '1772451905'
+Main init phase2 completed in 0.05285 secs.
+Main phase3 : GloMyLogger initialized in 1e-06 secs.
+Main phase3 : GloPgSQL_Logger initialized in 1e-06 secs.
+2026-03-02 11:45:05 MySQL_HostGroups_Manager.cpp:1285:commit(): [INFO] Generating runtime mysql servers and mysql servers v2 records.
+2026-03-02 11:45:05 MySQL_HostGroups_Manager.cpp:1309:commit(): [INFO] Dumping mysql_servers_incoming
++--------------+----------+------+-----------+--------+--------+-------------+-----------------+---------------------+---------+----------------+---------+
+| hostgroup_id | hostname | port | gtid_port | weight | status | compression | max_connections | max_replication_lag | use_ssl | max_latency_ms | comment |
++--------------+----------+------+-----------+--------+--------+-------------+-----------------+---------------------+---------+----------------+---------+
++--------------+----------+------+-----------+--------+--------+-------------+-----------------+---------------------+---------+----------------+---------+
+2026-03-02 11:45:05 MySQL_HostGroups_Manager.cpp:1322:commit(): [INFO] Dumping mysql_servers LEFT JOIN mysql_servers_incoming
++-------------+--------------+----------+------+
+| mem_pointer | hostgroup_id | hostname | port |
++-------------+--------------+----------+------+
++-------------+--------------+----------+------+
+2026-03-02 11:45:05 MySQL_HostGroups_Manager.cpp:1356:commit(): [INFO] Dumping mysql_servers JOIN mysql_servers_incoming
++--------------+----------+------+-----------+--------+--------+-------------+-----------------+---------------------+---------+----------------+---------+-------------+-----------+--------+--------+-------------+-----------------+---------------------+---------+----------------+---------+
+| hostgroup_id | hostname | port | gtid_port | weight | status | compression | max_connections | max_replication_lag | use_ssl | max_latency_ms | comment | mem_pointer | gtid_port | weight | status | compression | max_connections | max_replication_lag | use_ssl | max_latency_ms | comment |
++--------------+----------+------+-----------+--------+--------+-------------+-----------------+---------------------+---------+----------------+---------+-------------+-----------+--------+--------+-------------+-----------------+---------------------+---------+----------------+---------+
++--------------+----------+------+-----------+--------+--------+-------------+-----------------+---------------------+---------+----------------+---------+-------------+-----------+--------+--------+-------------+-----------------+---------------------+---------+----------------+---------+
+2026-03-02 11:45:05 MySQL_HostGroups_Manager.cpp:2004:generate_mysql_group_replication_hostgroups_table(): [INFO] New mysql_group_replication_hostgroups table
+2026-03-02 11:45:05 MySQL_HostGroups_Manager.cpp:2103:generate_mysql_galera_hostgroups_table(): [INFO] New mysql_galera_hostgroups table
+2026-03-02 11:45:05 MySQL_HostGroups_Manager.cpp:6159:generate_mysql_aws_aurora_hostgroups_table(): [INFO] New mysql_aws_aurora_hostgroups table
+2026-03-02 11:45:05 MySQL_HostGroups_Manager.cpp:5987:generate_mysql_hostgroup_attributes_table(): [INFO] New mysql_hostgroup_attributes table
+2026-03-02 11:45:05 MySQL_HostGroups_Manager.cpp:6107:generate_mysql_servers_ssl_params_table(): [INFO] New mysql_servers_ssl_params table
+2026-03-02 11:45:05 MySQL_HostGroups_Manager.cpp:1556:commit(): [INFO] Checksum for table mysql_servers_v2 is 0x0000000000000000
+2026-03-02 11:45:05 MySQL_HostGroups_Manager.cpp:1560:commit(): [INFO] New computed global checksum for 'mysql_servers_v2' is '0x0000000000000000'
+2026-03-02 11:45:05 MySQL_HostGroups_Manager.cpp:1567:commit(): [INFO] Checksum for table mysql_servers is 0x0000000000000000
+2026-03-02 11:45:05 MySQL_HostGroups_Manager.cpp:1604:commit(): [INFO] MySQL_HostGroups_Manager::commit() locked for 0ms
+2026-03-02 11:45:05 PgSQL_HostGroups_Manager.cpp:1307:commit(): [INFO] Generating runtime pgsql servers and pgsql servers v2 records.
+2026-03-02 11:45:05 PgSQL_HostGroups_Manager.cpp:1329:commit(): [INFO] Dumping pgsql_servers_incoming
++--------------+----------+------+--------+--------+-------------+-----------------+---------------------+---------+----------------+---------+
+| hostgroup_id | hostname | port | weight | status | compression | max_connections | max_replication_lag | use_ssl | max_latency_ms | comment |
++--------------+----------+------+--------+--------+-------------+-----------------+---------------------+---------+----------------+---------+
++--------------+----------+------+--------+--------+-------------+-----------------+---------------------+---------+----------------+---------+
+2026-03-02 11:45:05 PgSQL_HostGroups_Manager.cpp:1342:commit(): [INFO] Dumping pgsql_servers LEFT JOIN pgsql_servers_incoming
++-------------+--------------+----------+------+
+| mem_pointer | hostgroup_id | hostname | port |
++-------------+--------------+----------+------+
++-------------+--------------+----------+------+
+2026-03-02 11:45:05 PgSQL_HostGroups_Manager.cpp:1376:commit(): [INFO] Dumping pgsql_servers JOIN pgsql_servers_incoming
++--------------+----------+------+--------+--------+-------------+-----------------+---------------------+---------+----------------+---------+-------------+--------+--------+-------------+-----------------+---------------------+---------+----------------+---------+
+| hostgroup_id | hostname | port | weight | status | compression | max_connections | max_replication_lag | use_ssl | max_latency_ms | comment | mem_pointer | weight | status | compression | max_connections | max_replication_lag | use_ssl | max_latency_ms | comment |
++--------------+----------+------+--------+--------+-------------+-----------------+---------------------+---------+----------------+---------+-------------+--------+--------+-------------+-----------------+---------------------+---------+----------------+---------+
++--------------+----------+------+--------+--------+-------------+-----------------+---------------------+---------+----------------+---------+-------------+--------+--------+-------------+-----------------+---------------------+---------+----------------+---------+
+2026-03-02 11:45:05 PgSQL_HostGroups_Manager.cpp:3852:generate_pgsql_hostgroup_attributes_table(): [INFO] New pgsql_hostgroup_attributes table
+2026-03-02 11:45:05 PgSQL_HostGroups_Manager.cpp:1511:commit(): [INFO] Checksum for table pgsql_servers_v2 is 0x0000000000000000
+2026-03-02 11:45:05 PgSQL_HostGroups_Manager.cpp:1515:commit(): [INFO] New computed global checksum for 'pgsql_servers_v2' is '0x0000000000000000'
+2026-03-02 11:45:05 PgSQL_HostGroups_Manager.cpp:1522:commit(): [INFO] Checksum for table pgsql_servers is 0x0000000000000000
+2026-03-02 11:45:05 PgSQL_HostGroups_Manager.cpp:1556:commit(): [INFO] PgSQL_HostGroups_Manager::commit() locked for 0ms
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:321:ProxySQL_Node_Entry(): [INFO] Created new Cluster Node Entry for host proxysql:6032
+2026-03-02 11:45:05 ProxySQL_Admin.cpp:8817:load_proxysql_servers_to_runtime(): [INFO] Computed checksum for 'LOAD PROXYSQL SERVERS TO RUNTIME' was '0x96280785BAA6FA43', with epoch '1772451905'
+Main phase3 : GloAdmin initialized in 0.001797 secs.
+Standard Query Processor rev. 3.0.0.0004_DEBUG -- Query_Processor.cpp -- Fri Feb 27 13:36:33 2026
+Standard Query Processor rev. 3.0.0.0004_DEBUG -- Query_Processor.cpp -- Fri Feb 27 13:36:33 2026
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:63:ProxySQL_Cluster_Monitor_thread(): [INFO] Cluster: starting thread for peer proxysql:6032
+2026-03-02 11:45:05 ProxySQL_Admin.cpp:8435:load_mysql_query_rules_to_runtime(): [INFO] Computed checksum for 'LOAD MYSQL QUERY RULES TO RUNTIME' was '0x0000000000000000', with epoch '1772451905'
+2026-03-02 11:45:05 ProxySQL_Admin.cpp:8639:load_pgsql_query_rules_to_runtime(): [INFO] Computed checksum for 'LOAD PGSQL QUERY RULES TO RUNTIME' was '0x0000000000000000', with epoch '1772451905'
+Main phase3 : Query Processor initialized in 0.000157 secs.
+2026-03-02 11:45:05 main.cpp:1025:ProxySQL_Main_init_MySQL_Threads_Handler_module(): [WARNING] proxysql instance running without --idle-threads : most workloads benefit from this option
+2026-03-02 11:45:05 main.cpp:1026:ProxySQL_Main_init_MySQL_Threads_Handler_module(): [WARNING] proxysql instance running without --idle-threads : enabling it can potentially improve performance
+Main phase3 : MySQL Threads Handler initialized in 0.000783 secs.
+2026-03-02 11:45:05 main.cpp:1049:ProxySQL_Main_init_PgSQL_Threads_Handler_module(): [WARNING] proxysql instance running without --idle-threads : most workloads benefit from this option
+2026-03-02 11:45:05 main.cpp:1050:ProxySQL_Main_init_PgSQL_Threads_Handler_module(): [WARNING] proxysql instance running without --idle-threads : enabling it can potentially improve performance
+Main phase3 : PgSQL Threads Handler initialized in 0.000551 secs.
+In memory Standard Query Cache (SQC) rev. 2.0.0385_DEBUG -- Query_Cache.cpp -- Fri Feb 27 13:36:33 2026
+In memory Standard Query Cache (SQC) rev. 2.0.0385_DEBUG -- Query_Cache.cpp -- Fri Feb 27 13:36:33 2026
+Main phase3 : Query Cache initialized in 0.000433 secs.
+Main phase3 : MySQL Threads Handler listeners started in 8.1e-05 secs.
+Main phase3 : PgSQL Threads Handler listeners started in 3.6e-05 secs.
+2026-03-02 11:45:05 MCP_Thread.cpp:427:load_target_auth_map(): [INFO] MCP_Threads_Handler: loaded 0 target auth profile mapping(s)
+Standard ProxySQL HTTP Server Handler rev. 1.4.1031_DEBUG -- ProxySQL_HTTP_Server.cpp -- Fri Feb 27 13:36:33 2026
+Main init phase3 completed in 0.012215 secs.
+WARNING: this is a DEBUG release and can be slow or perform poorly. Do not use it in production
+2026-03-02 11:45:05 main.cpp:3113:main(): [INFO] For information about products and services visit: https://proxysql.com/
+2026-03-02 11:45:05 main.cpp:3114:main(): [INFO] For online documentation visit: https://proxysql.com/documentation/
+2026-03-02 11:45:05 main.cpp:3115:main(): [INFO] For support visit: https://proxysql.com/services/support/
+2026-03-02 11:45:05 main.cpp:3116:main(): [INFO] For consultancy visit: https://proxysql.com/services/consulting/
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:115:ProxySQL_Cluster_Monitor_thread(): [INFO] Cluster: clustering with peer proxysql:6032 . Remote version: 4.0.6-749-g5b721a6_DEBUG . Self version: 4.0.6-749-g5b721a6_DEBUG
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:124:ProxySQL_Cluster_Monitor_thread(): [INFO] Cluster: sending CLUSTER_NODE_UUID 341f97d8-ed0e-44c4-b604-6ebabdd935ef to peer proxysql:6032
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:437:set_checksums(): [INFO] Cluster: detected a new checksum for admin_variables from peer proxysql:6032, version 23, epoch 1772451905, checksum 0xE467FB118F634E20 . Not syncing yet ...
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:477:set_checksums(): [INFO] Cluster: detected a new checksum for mysql_query_rules from peer proxysql:6032, version 19, epoch 1772451900, checksum 0xE7C228029478E91A . Not syncing yet ...
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:517:set_checksums(): [INFO] Cluster: detected a new checksum for mysql_servers from peer proxysql:6032, version 23, epoch 1772451905, checksum 0x0000000000000000 . Not syncing yet ...
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:523:set_checksums(): [INFO] Cluster: checksum for mysql_servers from peer proxysql:6032 matches with local checksum 0x0000000000000000 , we won't sync.
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:557:set_checksums(): [INFO] Cluster: detected a new checksum for mysql_servers_v2 from peer proxysql:6032, version 23, epoch 1772451905, checksum 0x0000000000000000 . Not syncing yet ...
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:563:set_checksums(): [INFO] Cluster: checksum for mysql_servers_v2 from peer proxysql:6032 matches with local checksum 0x0000000000000000 , we won't sync.
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:597:set_checksums(): [INFO] Cluster: detected a new checksum for mysql_users from peer proxysql:6032, version 18, epoch 1772451900, checksum 0xFCA3E74622DE6FFE . Not syncing yet ...
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:637:set_checksums(): [INFO] Cluster: detected a new checksum for mysql_variables from peer proxysql:6032, version 83, epoch 1772451900, checksum 0x765435647A52F5FE . Not syncing yet ...
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:677:set_checksums(): [INFO] Cluster: detected a new checksum for proxysql_servers from peer proxysql:6032, version 21, epoch 1772451905, checksum 0xD979803ACB9E0730 . Not syncing yet ...
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:819:set_checksums(): [INFO] Cluster: detected a peer proxysql:6032 with admin_variables version 23, epoch 1772451905, diff_check 3. Own version: 1, epoch: 1772451905. Proceeding with remote sync
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:3389:get_peer_to_sync_admin_variables(): [INFO] Cluster: detected peer proxysql:6032 with admin_variables version 23, epoch 1772451905
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:2414:pull_global_variables_from_peer(): [INFO] Cluster: Fetching Admin variables from peer proxysql:6032 started
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:2440:pull_global_variables_from_peer(): [INFO] Cluster: Fetching Admin Variables from peer proxysql:6032 completed
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:2445:pull_global_variables_from_peer(): [INFO] Cluster: Computed checksum for Admin Variables from peer proxysql:6032 : 0xE467FB118F634E20
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:2481:pull_global_variables_from_peer(): [INFO] Cluster: Loading to runtime Admin Variables from peer proxysql:6032
+2026-03-02 11:45:05 Admin_FlushVariables.cpp:431:flush_GENERIC_variables__checksum__database_to_runtime(): [INFO] Computed checksum for 'LOAD ADMIN VARIABLES TO RUNTIME' was '0xE467FB118F634E20', with epoch '1772451905'
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:2496:pull_global_variables_from_peer(): [INFO] Cluster: Saving to disk Admin Variables from peer proxysql:6032
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:851:set_checksums(): [INFO] Cluster: detected a peer proxysql:6032 with mysql_query_rules version 19, epoch 1772451900, diff_check 3. Own version: 1, epoch: 1772451905. Proceeding with remote sync
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:3073:get_peer_to_sync_mysql_query_rules(): [INFO] Cluster: detected peer proxysql:6032 with mysql_query_rules version 19, epoch 1772451900
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:1153:pull_mysql_query_rules_from_peer(): [INFO] Cluster: Fetching MySQL Query Rules from peer proxysql:6032 started. Expected checksum: 0xE7C228029478E91A
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:1170:pull_mysql_query_rules_from_peer(): [INFO] Cluster: Fetching MySQL Query Rules from peer proxysql:6032 completed
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:1179:pull_mysql_query_rules_from_peer(): [INFO] Cluster: Computed checksum for MySQL Query Rules from peer proxysql:6032 : 0xE7C228029478E91A
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:1183:pull_mysql_query_rules_from_peer(): [INFO] Cluster: Loading to runtime MySQL Query Rules from peer proxysql:6032
+2026-03-02 11:45:05 ProxySQL_Admin.cpp:8435:load_mysql_query_rules_to_runtime(): [INFO] Computed checksum for 'LOAD MYSQL QUERY RULES TO RUNTIME' was '0xE7C228029478E91A', with epoch '1772451900'
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:1289:pull_mysql_query_rules_from_peer(): [INFO] Cluster: Saving to disk MySQL Query Rules from peer proxysql:6032
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:968:set_checksums(): [INFO] Cluster: detected a peer proxysql:6032 with mysql_users version 18, epoch 1772451900, diff_check 3. Own version: 1, epoch: 1772451905. Proceeding with remote sync
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:3278:get_peer_to_sync_mysql_users(): [INFO] Cluster: detected peer proxysql:6032 with mysql_users version 18, epoch 1772451900
+2026-03-02 11:45:05 ProxySQL_Cluster.cpp:1448:pull_mysql_users_from_peer(): [INFO] Cluster: Fetching MySQL Users from peer proxysql:6032 started. Expected checksum: 0xFCA3E74622DE6FFE
+2026-03-02 11:45:06 ProxySQL_Cluster.cpp:1475:pull_mysql_users_from_peer(): [INFO] Cluster: Fetching MySQL Users from peer proxysql:6032 completed
+2026-03-02 11:45:06 ProxySQL_Cluster.cpp:1502:pull_mysql_users_from_peer(): [INFO] Cluster: Computed checksum for MySQL Users from peer proxysql:6032 : 0xFCA3E74622DE6FFE
+2026-03-02 11:45:06 ProxySQL_Cluster.cpp:1514:pull_mysql_users_from_peer(): [INFO] Cluster: Loading to runtime MySQL Users from peer proxysql:6032
+2026-03-02 11:45:06 ProxySQL_Admin.cpp:6028:__refresh_users(): [INFO] Computed checksum for 'LOAD MYSQL USERS TO RUNTIME' was '0xFCA3E74622DE6FFE', with epoch '1772451900'
+2026-03-02 11:45:06 ProxySQL_Cluster.cpp:1523:pull_mysql_users_from_peer(): [INFO] Cluster: Saving to disk MySQL Users from peer proxysql:6032
+2026-03-02 11:45:06 ProxySQL_Cluster.cpp:1000:set_checksums(): [INFO] Cluster: detected a peer proxysql:6032 with mysql_variables version 83, epoch 1772451900, diff_check 3. Own version: 1, epoch: 1772451905. Proceeding with remote sync
+2026-03-02 11:45:06 ProxySQL_Cluster.cpp:3333:get_peer_to_sync_mysql_variables(): [INFO] Cluster: detected peer proxysql:6032 with mysql_variables version 83, epoch 1772451900
+2026-03-02 11:45:06 ProxySQL_Cluster.cpp:2414:pull_global_variables_from_peer(): [INFO] Cluster: Fetching MySQL variables from peer proxysql:6032 started
+2026-03-02 11:45:06 ProxySQL_Cluster.cpp:2440:pull_global_variables_from_peer(): [INFO] Cluster: Fetching MySQL Variables from peer proxysql:6032 completed
+2026-03-02 11:45:06 ProxySQL_Cluster.cpp:2445:pull_global_variables_from_peer(): [INFO] Cluster: Computed checksum for MySQL Variables from peer proxysql:6032 : 0x765435647A52F5FE
+2026-03-02 11:45:06 ProxySQL_Cluster.cpp:2481:pull_global_variables_from_peer(): [INFO] Cluster: Loading to runtime MySQL Variables from peer proxysql:6032
+2026-03-02 11:45:06 MySQL_Thread.cpp:2053:set_variable(): [INFO] Switching query logging format from 1 to 2
+2026-03-02 11:45:06 Admin_FlushVariables.cpp:431:flush_GENERIC_variables__checksum__database_to_runtime(): [INFO] Computed checksum for 'LOAD MYSQL VARIABLES TO RUNTIME' was '0x765435647A52F5FE', with epoch '1772451900'
+2026-03-02 11:45:06 ProxySQL_Cluster.cpp:2488:pull_global_variables_from_peer(): [INFO] Cluster: Saving to disk MySQL Variables from peer proxysql:6032
+2026-03-02 11:45:06 ProxySQL_Cluster.cpp:1070:set_checksums(): [INFO] Cluster: detected a peer proxysql:6032 with proxysql_servers version 21, epoch 1772451905, diff_check 3. Own version: 1, epoch: 1772451905. Proceeding with remote sync
+2026-03-02 11:45:06 ProxySQL_Cluster.cpp:3502:get_peer_to_sync_proxysql_servers(): [INFO] Cluster: detected peer proxysql:6032 with proxysql_servers version 21, epoch 1772451905
+2026-03-02 11:45:06 ProxySQL_Cluster.cpp:2579:pull_proxysql_servers_from_peer(): [INFO] Cluster: Fetching ProxySQL Servers from peer proxysql:6032 started. Expected checksum: 0xD979803ACB9E0730
+2026-03-02 11:45:06 ProxySQL_Cluster.cpp:2595:pull_proxysql_servers_from_peer(): [INFO] Cluster: Fetching ProxySQL Servers from peer proxysql:6032 completed. Computed checksum: 0xD979803ACB9E0730
+2026-03-02 11:45:06 ProxySQL_Cluster.cpp:2617:pull_proxysql_servers_from_peer(): [INFO] Dumping fetched 'proxysql_servers'
++----------+------+--------+----------+
+| hostname | port | weight | comment  |
++----------+------+--------+----------+
+| proxysql | 6032 | 0      | proxysql |
++----------+------+--------+----------+
+2026-03-02 11:45:06 ProxySQL_Cluster.cpp:2627:pull_proxysql_servers_from_peer(): [INFO] Cluster: Loading to runtime ProxySQL Servers from peer proxysql:6032
+2026-03-02 11:45:06 ProxySQL_Admin.cpp:8817:load_proxysql_servers_to_runtime(): [INFO] Computed checksum for 'LOAD PROXYSQL SERVERS TO RUNTIME' was '0xD979803ACB9E0730', with epoch '1772451905'
+2026-03-02 11:45:06 ProxySQL_Cluster.cpp:2631:pull_proxysql_servers_from_peer(): [INFO] Cluster: Saving to disk ProxySQL Servers from peer proxysql:6032
+2026-03-02 11:45:06 MySQL_Logger.cpp:1381:events_open_log_unlocked(): [INFO] Starting new mysql event log file /home/rene/proxysql/test/tap/tests/test_cluster_sync_config/test_cluster_sync_nomonitor/query.log.00000001
+2026-03-02 11:45:06 MySQL_Logger.cpp:1437:audit_open_log_unlocked(): [INFO] Starting new audit log file /home/rene/proxysql/test/tap/tests/test_cluster_sync_config/test_cluster_sync_nomonitor/audit.log.00000001
+2026-03-02 11:51:45 ProxySQL_GloVars.cpp:32:term_handler(): [WARNING] Received TERM signal: shutdown in progress...
+2026-03-02 11:51:45 main.cpp:3122:main(): [INFO] Starting shutdown...
+GloMTH joined in 0.003254 secs.
+GloPTH joined in 0.001466 secs.
+GloMyQC and GloPgQC joined in 0.120516 secs.
+All threads joined in 0.125267 secs.
+GloMyMon shutdown in 4.5e-05 secs.
+GloPgMon shutdown in 1.6e-05 secs.
+GloMyQC shutdown in 2e-05 secs.
+GloPgQC shutdown in 1.7e-05 secs.
+GloMyQPro shutdown in 1.7e-05 secs.
+GloPgQPro shutdown in 1.2e-05 secs.
+GloMyAuth shutdown in 2e-05 secs.
+GloPgAuth shutdown in 6e-06 secs.
+GloMTH shutdown in 7.8e-05 secs.
+GloPTH shutdown in 4e-05 secs.
+GloMCPH shutdown in 4e-06 secs.
+2026-03-02 11:51:45 GenAI_Thread.cpp:330:shutdown(): [INFO] Shutting down GenAI module
+GloGATH shutdown in 0.000198 secs.
+2026-03-02 11:51:45 AI_Features_Manager.cpp:483:shutdown(): [INFO] AI: Shutting down AI Features Manager
+2026-03-02 11:51:45 AI_Features_Manager.cpp:489:shutdown(): [INFO] AI: AI Features Manager shutdown complete
+GloAI shutdown in 2.4e-05 secs.
+GloMyLogger shutdown in 1e-05 secs.
+GloPgSQL_Logger shutdown in 6e-06 secs.
+GloAdmin shutdown in 0.000924 secs.
+GloMyHGM shutdown in 0.00014 secs.
+GloPgHGM shutdown in 7.3e-05 secs.
+Main init phase4 shutdown completed in 0.127024 secs.
+2026-03-02 11:51:45 main.cpp:3129:main(): [INFO] Shutdown completed!
+2026-03-02 11:51:45 main.cpp:3142:main(): [INFO] Exiting...
