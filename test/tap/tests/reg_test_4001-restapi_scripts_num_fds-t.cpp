@@ -57,14 +57,20 @@ int main(int argc, char** argv) {
 	}
 
 	diag("=== Regression Test #4001: RESTAPI with High FD Usage ===");
-	diag("This test verifies that the RESTAPI remains operational when ProxySQL");
-	diag("is handling a large number of concurrent file descriptors (> FD_SETSIZE).");
-	diag("The test strategy is:");
-	diag("1. Elevate process FD limits.");
-	diag("2. Establish 1300 concurrent MySQL connections to ProxySQL.");
-	diag("3. While these connections are held, perform continuous RESTAPI requests.");
-	diag("4. Simultaneously create and destroy additional MySQL connections.");
-	diag("5. Verify that RESTAPI requests and connection operations remain stable.");
+	diag("");
+	diag("PURPOSE:");
+	diag("  This test verifies that the RESTAPI remains operational when ProxySQL");
+	diag("  is handling a large number of concurrent file descriptors (> FD_SETSIZE).");
+	diag("");
+	diag("TEST SCENARIOS:");
+	diag("  - Elevate process FD limits beyond FD_SETSIZE (1024).");
+	diag("  - Establish 1300 concurrent MySQL connections to ProxySQL.");
+	diag("  - Perform continuous RESTAPI requests while connections are held.");
+	diag("  - Simultaneously create and destroy additional MySQL connections.");
+	diag("  - Verify RESTAPI requests and connection operations remain stable.");
+	diag("");
+	diag("SCRIPT PATH: Using '%s' for script resolution",
+		getenv("REGULAR_INFRA_DATADIR") ? getenv("REGULAR_INFRA_DATADIR") : cl.workdir);
 	diag("==========================================================");
 
 	diag("Setting new process limits beyond 'FD_SETSIZE'");
@@ -89,7 +95,9 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	const char* d_env = getenv("REGULAR_INFRA_DATADIR"); string script_base_path = (d_env ? string(d_env) + "/reg_test_3223_scripts" : string(cl.workdir) + "reg_test_3223_scripts");
+	const char* d_env = getenv("REGULAR_INFRA_DATADIR");
+	string script_base_path = (d_env ? string(d_env) + "/reg_test_3223_scripts" : string(cl.workdir) + "reg_test_3223_scripts");
+	diag("Script base path: %s", script_base_path.c_str());
 	const ept_info_t dummy_ept { "dummy_ept_script", "%s.py", "POST", 1000 };
 
 	vector<ept_info_t> v_epts_info {};

@@ -127,14 +127,19 @@ int main(int argc, char** argv) {
 	}
 
 	diag("=== Regression Test #3223: RESTAPI Script Execution & Return Codes ===");
-	diag("This test ensures that ProxySQL RESTAPI correctly handles script execution");
-	diag("and returns the expected HTTP status codes and script exit codes.");
-	diag("The test strategy is:");
-	diag("1. Register multiple valid and faulty scripts in RESTAPI routes.");
-	diag("2. Issue POST/GET requests to these endpoints.");
-	diag("3. Verify HTTP return codes (200 for success, 400/424 for failures).");
-	diag("4. Verify internal script error codes (exit codes, timeouts, signals).");
-	diag("5. Check behavior with large outputs and partial flushes.");
+	diag("");
+	diag("PURPOSE:");
+	diag("  This test validates that ProxySQL's RESTAPI correctly handles script");
+	diag("  execution and returns appropriate HTTP status codes and error codes.");
+	diag("");
+	diag("TEST SCENARIOS:");
+	diag("  - Valid requests: Scripts returning proper JSON output (200 OK)");
+	diag("  - Invalid input: Malformed JSON or missing parameters (400 Bad Request)");
+	diag("  - Script failures: Timeouts, permission errors, signals (424 Failed)");
+	diag("  - Edge cases: Large outputs, partial flushes, closed pipes");
+	diag("");
+	diag("SCRIPT PATH: Using '%s' for script resolution",
+		getenv("REGULAR_INFRA_DATADIR") ? getenv("REGULAR_INFRA_DATADIR") : cl.workdir);
 	diag("=========================================================================");
 
 	plan(count_exp_tests(honest_requests, invalid_requests));
@@ -165,7 +170,9 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(admin, "DELETE FROM restapi_routes");
 
 	// Configure restapi_routes to be used
-	string script_base_path { string { cl.workdir  } + "reg_test_3223_scripts" };
+	const char* d_env = getenv("REGULAR_INFRA_DATADIR");
+	string script_base_path = (d_env ? string(d_env) + "/reg_test_3223_scripts" : string(cl.workdir) + "reg_test_3223_scripts");
+	diag("Script base path: %s", script_base_path.c_str());
 	const ept_info_t dummy_ept { "dummy_ept_script", "%s.py", "POST", 1000 };
 
 	// Configure the valid requests
