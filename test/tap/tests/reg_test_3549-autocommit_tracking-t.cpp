@@ -22,6 +22,11 @@
 
 using nlohmann::json;
 
+#define TAP_NAME "TAP_REG_TEST_3549_AUTOCOMMIT_TRACKING___"
+
+// Get the default MySQL server hostgroup from environment, default to 0
+const int MYSQL_SERVER_HOSTGROUP = get_env_int(TAP_NAME "MYSQL_SERVER_HOSTGROUP", 0);
+
 using query_spec = std::tuple<std::string, int>;
 
 void fetch_and_discard_results(MYSQL_RES* result, bool verbose=false) {
@@ -90,6 +95,15 @@ bool check_client_autocommit(MYSQL* proxysql) {
 using test_spec = std::vector<std::pair<std::string, int>>;
 
 /**
+ * @brief Helper function to build a SELECT query with the correct hostgroup hint.
+ * @return A query string like "SELECT with hostgroup hint" targeting the
+ *   configured MySQL server hostgroup.
+ */
+std::string build_select_query() {
+	return "SELECT /* ;hostgroup=" + std::to_string(MYSQL_SERVER_HOSTGROUP) + " */ 1";
+}
+
+/**
  * @brief Executes the provided queries specs, and logs if an error is found with
  *   the query execution, or the value expected after the query doesn't match.
  *
@@ -129,129 +143,132 @@ int execute_queries_specs(MYSQL* proxysql, const test_spec& queries_specs) {
 }
 
 /**
- * @brief The tests definition.
+ * @brief The tests definition - built dynamically to use the correct hostgroup.
  */
-std::vector<std::pair<std::string, test_spec>> test_definitions {
-	{
-		// Check if autocommit is properly set by using simple queries,
-		// target to be handled by 'handler_special_queries' in ProxySQL side.
-		"simple_set_autocommit_no_lock",
+std::vector<std::pair<std::string, test_spec>> build_test_definitions() {
+	std::string sel = build_select_query();
+	return {
 		{
-			{ "SET autocommit=1",             1 },
-			{ "SELECT /* ;hostgroup=0 */ 1",  1 },
-			{ "SET autocommit=0",             0 },
-			{ "SELECT /* ;hostgroup=0 */ 1",  0 }
-		}
-	},
-	{
-		"simple_set_autocommit_no_lock_2",
+			// Check if autocommit is properly set by using simple queries,
+			// target to be handled by 'handler_special_queries' in ProxySQL side.
+			"simple_set_autocommit_no_lock",
+			{
+				{ "SET autocommit=1",  1 },
+				{ sel,                 1 },
+				{ "SET autocommit=0",  0 },
+				{ sel,                 0 }
+			}
+		},
 		{
-			{ "SET autocommit=0",             0 },
-			{ "SELECT /* ;hostgroup=0 */ 1",  0 },
-			{ "COMMIT",                       0 },
-			{ "SET autocommit=1",             1 },
-			{ "SELECT /* ;hostgroup=0 */ 1", 1 }
-		}
-	},
-	{
-		"simple_set_autocommit_lock_1",
+			"simple_set_autocommit_no_lock_2",
+			{
+				{ "SET autocommit=0",  0 },
+				{ sel,                 0 },
+				{ "COMMIT",            0 },
+				{ "SET autocommit=1",  1 },
+				{ sel,                 1 }
+			}
+		},
 		{
-			{ "SET @session_var=1",           1 },
-			{ "SET autocommit=1",             1 },
-			{ "SELECT /* ;hostgroup=0 */ 1",  1 },
-			{ "SET autocommit=0",             0 },
-			{ "SELECT /* ;hostgroup=0 */ 1",  0 }
-		}
-	},
-	{
-		"simple_set_autocommit_lock_2",
+			"simple_set_autocommit_lock_1",
+			{
+				{ "SET @session_var=1",  1 },
+				{ "SET autocommit=1",    1 },
+				{ sel,                   1 },
+				{ "SET autocommit=0",    0 },
+				{ sel,                   0 }
+			}
+		},
 		{
-			{ "SET @session_var=1",           1 },
-			{ "SET autocommit=0",             0 },
-			{ "SELECT /* ;hostgroup=0 */ 1",  0 },
-			{ "COMMIT",                       0 },
-			{ "SET autocommit=1",             1 },
-			{ "SELECT /* ;hostgroup=0 */ 1",  1 }
-		}
-	},
-	{
-		// Check if autocommit is properly set by using complex queries,
-		// target to be handled by 'handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo'
-		// in ProxySQL side.
-		"complex_set_autocommit_no_lock_1",
+			"simple_set_autocommit_lock_2",
+			{
+				{ "SET @session_var=1",  1 },
+				{ "SET autocommit=0",    0 },
+				{ sel,                   0 },
+				{ "COMMIT",              0 },
+				{ "SET autocommit=1",    1 },
+				{ sel,                   1 }
+			}
+		},
 		{
-			{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=1", 1 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              1 },
-			{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=0", 0 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              0 }
-		}
-	},
-	{
-		"complex_set_autocommit_no_lock_2",
+			// Check if autocommit is properly set by using complex queries,
+			// target to be handled by 'handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo'
+			// in ProxySQL side.
+			"complex_set_autocommit_no_lock_1",
+			{
+				{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=1", 1 },
+				{ sel,                                                              1 },
+				{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=0", 0 },
+				{ sel,                                                              0 }
+			}
+		},
 		{
-			{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=0", 0 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              0 },
-			{ "COMMIT",                                                                                   0 },
-			{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=1", 1 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              1 }
-		}
-	},
-	{
-		"complex_set_autocommit_lock_1",
+			"complex_set_autocommit_no_lock_2",
+			{
+				{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=0", 0 },
+				{ sel,                                                              0 },
+				{ "COMMIT",                                                                                   0 },
+				{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=1", 1 },
+				{ sel,                                                              1 }
+			}
+		},
 		{
-			{ "SET @session_var=1",                                                                       1 },
-			{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=1", 1 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              1 },
-			{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=0", 0 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              0 }
-		}
-	},
-	{
-		"complex_set_autocommit_lock_2",
+			"complex_set_autocommit_lock_1",
+			{
+				{ "SET @session_var=1",                                                                       1 },
+				{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=1", 1 },
+				{ sel,                                                              1 },
+				{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=0", 0 },
+				{ sel,                                                              0 }
+			}
+		},
 		{
-			{ "SET @session_var=1",                                                                       1 },
-			{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=0", 0 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              0 },
-			{ "COMMIT",                                                                                   0 },
-			{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=1", 1 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              1 }
-		}
-	},
-	{
-		"mix_set_autocommit_1",
+			"complex_set_autocommit_lock_2",
+			{
+				{ "SET @session_var=1",                                                                       1 },
+				{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=0", 0 },
+				{ sel,                                                              0 },
+				{ "COMMIT",                                                                                   0 },
+				{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=1", 1 },
+				{ sel,                                                              1 }
+			}
+		},
 		{
-			{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=0", 0 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              0 },
-			{ "COMMIT",                                                                                   0 },
-			{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=1", 1 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              1 },
-			{ "SET autocommit=0",                                                                         0 },
-			{ "COMMIT",                                                                                   0 },
-			{ "SET autocommit=1",                                                                         1 },
-			{ "BEGIN",                                                                                    1 },
-			{ "SET @session_var=1",                                                                       1 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              1 },
-			{ "COMMIT",                                                                                   1 },
-		}
-	},
-	{
-		"mix_set_autocommit_2",
+			"mix_set_autocommit_1",
+			{
+				{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=0", 0 },
+				{ sel,                                                              0 },
+				{ "COMMIT",                                                                                   0 },
+				{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=1", 1 },
+				{ sel,                                                              1 },
+				{ "SET autocommit=0",                                                                         0 },
+				{ "COMMIT",                                                                                   0 },
+				{ "SET autocommit=1",                                                                         1 },
+				{ "BEGIN",                                                                                    1 },
+				{ "SET @session_var=1",                                                                       1 },
+				{ sel,                                                              1 },
+				{ "COMMIT",                                                                                   1 },
+			}
+		},
 		{
-			{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=0", 0 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              0 },
-			{ "COMMIT",                                                                                   0 },
-			{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=1", 1 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              1 },
-			{ "SET autocommit=0",                                                                         0 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              0 },
-			{ "COMMIT",                                                                                   0 },
-			{ "BEGIN",                                                                                    0 },
-			{ "SET @session_var=1",                                                                       0 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              0 },
-			{ "COMMIT",                                                                                   0 },
-		}
-	},
-};
+			"mix_set_autocommit_2",
+			{
+				{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=0", 0 },
+				{ sel,                                                              0 },
+				{ "COMMIT",                                                                                   0 },
+				{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=1", 1 },
+				{ sel,                                                              1 },
+				{ "SET autocommit=0",                                                                         0 },
+				{ sel,                                                              0 },
+				{ "COMMIT",                                                                                   0 },
+				{ "BEGIN",                                                                                    0 },
+				{ "SET @session_var=1",                                                                       0 },
+				{ sel,                                                              0 },
+				{ "COMMIT",                                                                                   0 },
+			}
+		},
+	};
+}
 
 /**
  * @brief Execute the supplied test definition on the provided, already oppened
@@ -281,6 +298,28 @@ int main(int argc, char** argv) {
 		diag("Failed to get the required environmental variables.");
 		return -1;
 	}
+
+	// Build test definitions with the correct hostgroup
+	auto test_definitions = build_test_definitions();
+
+	// Verbose test header
+	diag("================================================================================");
+	diag("Test: reg_test_3549-autocommit_tracking");
+	diag("================================================================================");
+	diag("This test verifies that ProxySQL properly tracks autocommit state changes");
+	diag("and correctly forwards the autocommit status to the client after it changes.");
+	diag("Test scenarios:");
+	diag("  - Simple SET autocommit=0/1 queries (handled by special query handler)");
+	diag("  - Complex SET queries with multiple variables including autocommit");
+	diag("  - Combinations with session variables (SET @session_var) that lock hostgroup");
+	diag("  - Transaction control statements (BEGIN, COMMIT)");
+	diag("Configuration:");
+	diag("  - MySQL server hostgroup: %d", MYSQL_SERVER_HOSTGROUP);
+	diag("  - ProxySQL host: %s", cl.host);
+	diag("  - ProxySQL port: %d", cl.port);
+	diag("  - Username: %s", cl.username);
+	diag("Total test cases: %zu", test_definitions.size());
+	diag("================================================================================");
 
 	plan(test_definitions.size());
 
