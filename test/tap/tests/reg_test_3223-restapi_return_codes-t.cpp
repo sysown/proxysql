@@ -31,7 +31,7 @@ using std::vector;
 using hrc = std::chrono::high_resolution_clock;
 using nlohmann::json;
 
-const string base_address { "http://localhost:6070/sync/" };
+const string base_address { "http://proxysql:6070/sync/" };
 
 const vector<honest_req_t> honest_requests {
 	{ { "valid_output_script", "%s.py", "POST", 1000 }, { "{}" } },
@@ -126,11 +126,23 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
+	diag("=== Regression Test #3223: RESTAPI Script Execution & Return Codes ===");
+	diag("This test ensures that ProxySQL RESTAPI correctly handles script execution");
+	diag("and returns the expected HTTP status codes and script exit codes.");
+	diag("The test strategy is:");
+	diag("1. Register multiple valid and faulty scripts in RESTAPI routes.");
+	diag("2. Issue POST/GET requests to these endpoints.");
+	diag("3. Verify HTTP return codes (200 for success, 400/424 for failures).");
+	diag("4. Verify internal script error codes (exit codes, timeouts, signals).");
+	diag("5. Check behavior with large outputs and partial flushes.");
+	diag("=========================================================================");
+
 	plan(count_exp_tests(honest_requests, invalid_requests));
 
 	MYSQL* admin = mysql_init(NULL);
 
 	// Initialize connections
+	diag("Connecting to ProxySQL Admin at %s:%d as %s", cl.host, cl.admin_port, cl.admin_username);
 	if (!admin) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
@@ -142,12 +154,14 @@ int main(int argc, char** argv) {
 	}
 
 	// Enable 'RESTAPI'
+	diag("Enabling RESTAPI on port 6070");
 	MYSQL_QUERY(admin, "SET admin-restapi_enabled='true'");
 	MYSQL_QUERY(admin, "SET admin-restapi_port=6070");
 
 	MYSQL_QUERY(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
 
 	// Clean current 'restapi_routes' if any
+	diag("Configuring RESTAPI routes...");
 	MYSQL_QUERY(admin, "DELETE FROM restapi_routes");
 
 	// Configure restapi_routes to be used
@@ -161,18 +175,20 @@ int main(int argc, char** argv) {
 		honest_requests.begin(), honest_requests.end(), std::back_inserter(v_epts_info), ext_v_epts_info
 	);
 
+	diag("Initializing endpoints for valid requests...");
 	int ept_conf_res = configure_endpoints(admin, script_base_path, v_epts_info, dummy_ept, true);
 	if (ept_conf_res) {
 		diag("Endpoint configuration failed. Skipping endpoint testing...");
 		return EXIT_FAILURE;
 	}
 
+	diag("Testing valid RESTAPI requests...");
 	{
 		for (const auto& req : honest_requests) {
 			for (const string& params : req.params) {
 				const string ept { join_path(base_address, req.ept_info.name) };
 				diag(
-					"Checking valid '%s' request - ept: '%s', params: '%s'",
+					"  Checking valid '%s' request - ept: '%s', params: '%s'",
 					req.ept_info.method.c_str(), ept.c_str(), params.c_str()
 				);
 				std::chrono::nanoseconds duration;
@@ -294,12 +310,14 @@ int main(int argc, char** argv) {
 		invalid_requests.begin(), invalid_requests.end(), std::back_inserter(i_epts_info), ext_i_epts_info
 	);
 
+	diag("Initializing endpoints for invalid requests...");
 	ept_conf_res = configure_endpoints(admin, script_base_path, i_epts_info, dummy_ept, true);
 	if (ept_conf_res) {
 		diag("Endpoint configuration failed. Skipping endpoint testing...");
 		return EXIT_FAILURE;
 	}
 
+	diag("Testing invalid RESTAPI requests...");
 	for (const auto& req : invalid_requests) {
 		for (const ept_pl_t& ept_pl : req.ept_pls) {
 			std::chrono::nanoseconds duration;
@@ -308,7 +326,7 @@ int main(int argc, char** argv) {
 
 			const string ept { join_path(base_address, req.ept_info.name) };
 			diag(
-				"Checking valid '%s' request - ept: '%s', params: '%s'",
+				"  Checking invalid '%s' request - ept: '%s', params: '%s'",
 				req.ept_info.method.c_str(), ept.c_str(), ept_pl.params.c_str()
 			);
 

@@ -35,7 +35,7 @@ using std::string;
 using std::vector;
 
 const int NUM_CONNECTIONS = 1300;
-const string base_address { "http://localhost:6070/sync/" };
+const string base_address { "http://proxysql:6070/sync/" };
 
 const vector<honest_req_t> honest_requests {
 	{ { "valid_output_script", "%s.py", "POST", 1000 }, { "{}" } },
@@ -56,6 +56,17 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
+	diag("=== Regression Test #4001: RESTAPI with High FD Usage ===");
+	diag("This test verifies that the RESTAPI remains operational when ProxySQL");
+	diag("is handling a large number of concurrent file descriptors (> FD_SETSIZE).");
+	diag("The test strategy is:");
+	diag("1. Elevate process FD limits.");
+	diag("2. Establish 1300 concurrent MySQL connections to ProxySQL.");
+	diag("3. While these connections are held, perform continuous RESTAPI requests.");
+	diag("4. Simultaneously create and destroy additional MySQL connections.");
+	diag("5. Verify that RESTAPI requests and connection operations remain stable.");
+	diag("==========================================================");
+
 	diag("Setting new process limits beyond 'FD_SETSIZE'");
 	struct rlimit limits { 0, 0 };
 	getrlimit(RLIMIT_NOFILE, &limits);
@@ -67,6 +78,7 @@ int main(int argc, char** argv) {
 	MYSQL* admin = mysql_init(NULL);
 
 	// Initialize connections
+	diag("Connecting to ProxySQL Admin at %s:%d as %s", cl.host, cl.admin_port, cl.admin_username);
 	if (!admin) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
@@ -77,7 +89,7 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	string script_base_path { string { cl.workdir  } + "reg_test_3223_scripts" };
+	const char* d_env = getenv("REGULAR_INFRA_DATADIR"); string script_base_path = (d_env ? string(d_env) + "/reg_test_3223_scripts" : string(cl.workdir) + "reg_test_3223_scripts");
 	const ept_info_t dummy_ept { "dummy_ept_script", "%s.py", "POST", 1000 };
 
 	vector<ept_info_t> v_epts_info {};
@@ -86,6 +98,7 @@ int main(int argc, char** argv) {
 		honest_requests.begin(), honest_requests.end(), std::back_inserter(v_epts_info), ext_v_epts_info
 	);
 
+	diag("Configuring RESTAPI endpoints...");
 	int ept_conf_res = configure_endpoints(admin, script_base_path, v_epts_info, dummy_ept, true);
 	if (ept_conf_res) {
 		diag("Endpoint configuration failed. Skipping endpoint testing...");
@@ -94,6 +107,7 @@ int main(int argc, char** argv) {
 
 	std::vector<MYSQL*> mysql_connections {};
 
+	diag("Establishing %d baseline connections to ProxySQL...", NUM_CONNECTIONS);
 	for (int i = 0; i < NUM_CONNECTIONS; i++) {
 		MYSQL* proxy = mysql_init(NULL);
 		if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
@@ -101,7 +115,9 @@ int main(int argc, char** argv) {
 			return EXIT_FAILURE;
 		}
 		mysql_connections.push_back(proxy);
+		if ((i + 1) % 200 == 0) diag("  Established %d/%d connections...", i + 1, NUM_CONNECTIONS);
 	}
+	diag("Baseline connections established.");
 
 	typedef std::chrono::high_resolution_clock hrc;
 	const uint64_t test_duration = 10000;
@@ -111,6 +127,7 @@ int main(int argc, char** argv) {
 	uint64_t conn_count = 0;
 	uint64_t mysql_fails = 0;
 
+	diag("Starting simultaneous RESTAPI requests and connection churn (Duration: %ldms)...", test_duration);
 	{
 		std::thread create_conns([&]() -> int {
 			std::chrono::nanoseconds duration;
@@ -120,7 +137,7 @@ int main(int argc, char** argv) {
 			start = hrc::now();
 
 			while (true) {
-				if (mysql_fails > (conn_count * FAILURE_RATE) / 100) {
+				if (conn_count > 0 && mysql_fails > (conn_count * FAILURE_RATE) / 100) {
 					diag("Too many mysql failures in connection creation, considering test as failed...");
 					conn_creation_res = EXIT_FAILURE;
 					return EXIT_FAILURE;
@@ -129,17 +146,17 @@ int main(int argc, char** argv) {
 				MYSQL* proxy = mysql_init(NULL);
 
 				if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
-					fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
+					diag("Churn connection failed: %s", mysql_error(proxy));
 					mysql_fails += 1;
+				} else {
+					int rc = mysql_query(proxy, "DO 1");
+					if (rc) {
+						diag("Churn query failed: mysql_errno: '%d', mysql_error: '%s'", mysql_errno(proxy), mysql_error(proxy));
+						mysql_fails += 1;
+					}
+					mysql_close(proxy);
 				}
 
-				int rc = mysql_query(proxy, "DO 1");
-				if (rc) {
-					diag("mysql_errno: '%d', mysql_error: '%s'", mysql_errno(proxy), mysql_error(proxy));
-					mysql_fails += 1;
-				}
-
-				mysql_close(proxy);
 				end = hrc::now();
 				duration = end - start;
 
@@ -160,6 +177,7 @@ int main(int argc, char** argv) {
 
 		start = hrc::now();
 
+		int api_request_count = 0;
 		while (true) {
 			int rc = 0;
 
@@ -191,10 +209,13 @@ int main(int argc, char** argv) {
 					}
 
 					if (curl_err == 7) {
-						diag("Operation over endpoint failed with 'CURLE_COULDNT_CONNECT'. Aborting...");
+						diag("Operation over endpoint %s failed with 'CURLE_COULDNT_CONNECT'. Aborting...", ept.c_str());
+						rc = 1;
 						break;
 					}
+					api_request_count++;
 				}
+				if (rc) break;
 			}
 
 			end = hrc::now();
@@ -205,7 +226,9 @@ int main(int argc, char** argv) {
 			}
 		}
 
+		diag("Joining churn thread and cleaning up...");
 		create_conns.join();
+		diag("Churn thread finished. Total API requests: %d, Total churn conns: %ld, Failures: %ld", api_request_count, conn_count, mysql_fails);
 
 		ok(
 			conn_creation_res == EXIT_SUCCESS,
