@@ -19,6 +19,7 @@
 
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 #include <string>
 #include <sstream>
 #include <chrono>
@@ -221,25 +222,42 @@ std::vector<char> build_password_message(std::string_view password) {
  */
 int connect_server(const std::string& host, int port) {
     int sock;
-    struct sockaddr_in server;
+    struct addrinfo hints, *res = nullptr, *rp;
 
-    // Create socket
-    sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock == -1) {
-        perror("Socket creation failed");
-        return 1;
-    }
+    diag("connect_server: Attempting to connect to %s:%d", host.c_str(), port);
 
-    // Configure server address
-    server.sin_family = AF_INET;
-    server.sin_port = htons(port);
-    server.sin_addr.s_addr = inet_addr(host.c_str());
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
 
-    // Connect to PostgreSQL server
-    if (connect(sock, (struct sockaddr*)&server, sizeof(server)) < 0) {
-        fprintf(stderr, "Connection failed\n");
+    int status = getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &res);
+    if (status != 0) {
+        diag("connect_server: getaddrinfo failed for '%s': %s", host.c_str(), gai_strerror(status));
         return -1;
     }
+
+    for (rp = res; rp != nullptr; rp = rp->ai_next) {
+        sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+        if (sock == -1) {
+            continue;
+        }
+
+        if (connect(sock, rp->ai_addr, rp->ai_addrlen) == 0) {
+            break;  /* Success */
+        }
+
+        close(sock);
+        sock = -1;
+    }
+
+    freeaddrinfo(res);
+
+    if (rp == nullptr) {
+        diag("connect_server: Failed to connect to %s:%d", host.c_str(), port);
+        return -1;
+    }
+
+    diag("connect_server: Successfully connected to %s:%d (sock=%d)", host.c_str(), port, sock);
     return sock;
 }
 
@@ -923,6 +941,20 @@ int main(int argc, char** argv) {
     test_count += test_count_regression;
 
     plan(test_count);
+
+    diag("=== PostgreSQL Connection Parameters Test ===");
+    diag("PURPOSE:");
+    diag("  This test validates ProxySQL's handling of PostgreSQL connection");
+    diag("  parameters, including both standard and undocumented parameters.");
+    diag("TEST SCENARIOS:");
+    diag("  - Test connection with various valid and invalid parameters");
+    diag("  - Verify ProxySQL correctly forwards parameters to backend");
+    diag("  - Regression test for issue #4919 (invalid parameter handling)");
+    diag("CONNECTION INFO:");
+    diag("  PGSQL_HOST: %s, PGSQL_PORT: %d", cl.pgsql_host, cl.pgsql_port);
+    diag("  PGSQL_ADMIN_HOST: %s, PGSQL_ADMIN_PORT: %d", cl.pgsql_admin_host, cl.pgsql_admin_port);
+    diag("===========================================================");
+
 
     if (cl.getEnv())
         return exit_status();
