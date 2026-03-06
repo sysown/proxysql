@@ -799,13 +799,6 @@ handler_again:
 	case ASYNC_STMT_EXECUTE_END:
 		PROXY_TRACE2();
 
-		if (is_error_present() == false && 
-			(async_state_machine == ASYNC_QUERY_END || async_state_machine == ASYNC_STMT_EXECUTE_END)) {
-			if (myds->sess->locked_on_hostgroup == -1 && myds->sess->transaction_state_manager) {
-				myds->sess->handle_transaction_state();
-			}
-		}
-
 		if (is_error_present()) {
 			compute_unknown_transaction_status();
 		} else {

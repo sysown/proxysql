@@ -2900,6 +2900,8 @@ handler_again:
 							goto handler_again;
 						}
 						if (locked_on_hostgroup == -1 || locked_on_hostgroup_and_all_variables_set == false) {
+							// In pipeline mode, track if we already have a variable pending sync
+							bool pipeline_var_sync_pending = false;
 
 							for (auto i = 0; i < PGSQL_NAME_LAST_LOW_WM; i++) {
 								auto client_hash = client_myds->myconn->var_hash[i];
@@ -2912,7 +2914,26 @@ handler_again:
 									auto server_hash = myconn->var_hash[i];
 									if (client_hash != server_hash) {
 										if (!myconn->var_absent[i] && pgsql_variables.verify_variable(this, i)) {
-											goto handler_again;
+											if (myconn->is_pipeline_active() && processing_extended_query) {
+												// Check if another variable already needs sync
+												if (pipeline_var_sync_pending) {
+													proxy_error("Session variables out of sync in pipeline mode: multiple parameters need syncing. Session will be destroyed. Please report a bug for " 
+														"future enhancements.\n");
+													handler_ret = -1;
+													return handler_ret;
+												}
+												pipeline_var_sync_pending = true;
+												status = previous_status.top();
+												previous_status.pop();
+												if (status != PROCESSING_STMT_EXECUTE) {
+													proxy_error("Session variables out of sync in pipeline mode: invalid status during sync (variable: %s, status: %d). Session will be destroyed. " 
+														"Please report a bug for future enhancements.\n", pgsql_tracked_variables[i].set_variable_name, status);
+													handler_ret = -1;
+													return handler_ret;
+												}
+											} else {
+												goto handler_again;
+											}
 										}
 									}
 								}
@@ -2925,7 +2946,26 @@ handler_again:
 								auto server_hash = myconn->var_hash[i];
 								if (client_hash != server_hash) {
 									if (!myconn->var_absent[i] && pgsql_variables.verify_variable(this, i)) {
-										goto handler_again;
+										if (myconn->is_pipeline_active() && processing_extended_query) {
+											// Check if another variable already needs sync
+											if (pipeline_var_sync_pending) {
+											proxy_error("Session variables out of sync in pipeline mode: multiple parameters need syncing. Session will be destroyed. "
+												"Please report a bug for future enhancements.\n");
+												handler_ret = -1;
+												return handler_ret;
+											}
+											pipeline_var_sync_pending = true;
+											status = previous_status.top();
+											previous_status.pop();
+											if (status != PROCESSING_STMT_EXECUTE) {
+												proxy_error("Session variables out of sync in pipeline mode: invalid status during sync (variable: %s, status: %d). Session will be destroyed. "
+													"Please report a bug for future enhancements.\n", pgsql_tracked_variables[i].set_variable_name, status);
+												handler_ret = -1;
+												return handler_ret;
+											}
+										} else {
+											goto handler_again;
+										}
 									}
 								}
 							}
@@ -3058,6 +3098,8 @@ handler_again:
 				case PROCESSING_STMT_EXECUTE:
 				case PROCESSING_QUERY:
 					PgSQL_Result_to_PgSQL_wire(myconn, myconn->myds);
+
+					handle_transaction_state();
 					break;
 				// Handled above
 				//case PROCESSING_STMT_DESCRIBE:
@@ -4054,7 +4096,10 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 						sprintf(errmsg, m, pgsql_tracked_variables[idx].set_variable_name, value1.c_str());
 
 						client_myds->DSS = STATE_QUERY_SENT_NET;
-						client_myds->myprot.generate_error_packet(true, true, errmsg,
+
+						reset_extended_query_frame();
+						bool send_ready_packet = is_extended_query_ready_for_query();
+						client_myds->myprot.generate_error_packet(true, send_ready_packet, errmsg,
 							PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE, false, true);
 						free(errmsg);
 						RequestEnd(NULL, true);
@@ -4121,10 +4166,13 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 
 		client_myds->DSS = STATE_QUERY_SENT_NET;
 		
-		if (extended_query_phase != EXTQ_PHASE_IDLE &&
-			(CurrentQuery.extended_query_info.flags & PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL) != 0) {
-			client_myds->myprot.generate_no_data_packet(true);
+		if (extended_query_phase != EXTQ_PHASE_IDLE) {
+			// no need to send parameter status in pipeline mode
+			param_status.clear(); 
+
+			return false;
 		}
+		
 		bool send_ready_packet = is_extended_query_ready_for_query();
 		unsigned int nTrx = NumActiveTransactions();
 		const char txn_state = (nTrx ? 'T' : 'I');
@@ -4152,6 +4200,20 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 
 	if (strncasecmp(nq.c_str(), "ALL", 3) == 0) {
 
+		// Check if in pipeline/extended query mode
+		if (extended_query_phase != EXTQ_PHASE_IDLE) {
+			reset_extended_query_frame();
+			proxy_error("RESET ALL is not supported in Extended Query protocol mode. Use Simple Query mode to run this command\n");
+			client_myds->DSS = STATE_QUERY_SENT_NET;
+			bool send_ready_packet = is_extended_query_ready_for_query();
+			client_myds->myprot.generate_error_packet(true, send_ready_packet,
+				"RESET ALL is not supported in pipeline mode",
+				PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true);
+			RequestEnd(NULL, true);
+			return true; // Handled (with error)
+		}
+
+		// When hostgroup is locked, check if any startup parameter values differ between client and backend
 		for (int idx = 0; idx < PGSQL_NAME_LAST_LOW_WM; idx++) {
 
 			const char* name = pgsql_tracked_variables[idx].set_variable_name;
@@ -4203,19 +4265,20 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 		}
 		if (idx != PGSQL_NAME_LAST_HIGH_WM) {
 			const char* name = pgsql_tracked_variables[idx].set_variable_name;
-			auto [value, hash] = client_myds->myconn->get_startup_parameter_and_hash((enum pgsql_variable_name)idx);
+			auto [client_value, client_hash] = client_myds->myconn->get_startup_parameter_and_hash((enum pgsql_variable_name)idx);
 			uint32_t current_hash = pgsql_variables.client_get_hash(this, idx);
-			// Reset to default if hash is zero, means startup parameter is not set
-			if (hash == 0 && current_hash != 0) {
+
+			// Reset to default if client_hash is zero, means startup parameter is not set
+			if (client_hash == 0 && current_hash != 0) {
 				proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Resetting connection variable %s to DEFAULT\n", name);
 				pgsql_variables.client_reset_value(this, idx, true);
-			} else if (hash != 0 && current_hash != hash) {
-				proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection %s to %s\n", name, value);
-				if (!pgsql_variables.client_set_value(this, idx, value, true)) {
+			} else if (client_hash != 0 && current_hash != client_hash) {
+				proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection %s to %s\n", name, client_value);
+				if (!pgsql_variables.client_set_value(this, idx, client_value, true)) {
 					return false;
 				}
 				if (IS_PGTRACKED_VAR_OPTION_SET_PARAM_STATUS(pgsql_tracked_variables[idx])) {
-					param_status.emplace_back(name, value);
+					param_status.emplace_back(name, client_value);
 				}
 			}
 		} else {
@@ -4225,9 +4288,9 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 	}
 	client_myds->DSS = STATE_QUERY_SENT_NET;
 
-	if (extended_query_phase != EXTQ_PHASE_IDLE &&
-		(CurrentQuery.extended_query_info.flags & PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL) != 0) {
-		client_myds->myprot.generate_no_data_packet(true);
+	if (extended_query_phase != EXTQ_PHASE_IDLE) {
+		param_status.clear();
+		return false;
 	}
 	bool send_ready_packet = is_extended_query_ready_for_query();
 	unsigned int nTrx = NumActiveTransactions();
@@ -4257,6 +4320,18 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 	bool handled = false;
 	const char* discard_value = nq.c_str();
 	if (strncasecmp(discard_value, "ALL", 3) == 0) {
+		if (extended_query_phase != EXTQ_PHASE_IDLE) {
+			reset_extended_query_frame();
+			proxy_error("DISCARD ALL is not supported in Extended Query protocol mode. Use Simple Query mode to run this command\n");
+			client_myds->DSS = STATE_QUERY_SENT_NET;
+			bool send_ready_packet = is_extended_query_ready_for_query();
+			client_myds->myprot.generate_error_packet(true, send_ready_packet,
+				"DISCARD ALL is not supported in pipeline mode",
+				PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true);
+			RequestEnd(NULL, true);
+			return true; // Handled (with error)
+		}
+
 		// Backup the current relevant session values
 		int default_hostgroup = this->default_hostgroup;
 		bool transaction_persistent = this->transaction_persistent;
@@ -4347,6 +4422,77 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 
 bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_special_commands(const char* dig, bool* lock_hostgroup) {
 	if (!dig) return false;
+
+	// When hostgroup is locked, check for RESET commands that could set wrong values
+	// due to pooled connection having different startup parameters than current client
+	if (locked_on_hostgroup >= 0 && strncasecmp(dig, "RESET ", 6) == 0) {
+		// Check if startup parameter values differ between client and backend
+		if (mybe && mybe->server_myds && mybe->server_myds->myconn) {
+			// Quick check: see if ANY critical variable has different startup hash
+			bool startup_mismatch = false;
+			for (int idx = 0; idx < PGSQL_NAME_LAST_LOW_WM; idx++) {
+				auto [client_value, client_hash] = client_myds->myconn->get_startup_parameter_and_hash((enum pgsql_variable_name)idx);
+				auto [backend_value, backend_hash] = mybe->server_myds->myconn->get_startup_parameter_and_hash((enum pgsql_variable_name)idx);
+				if (client_hash != backend_hash) {
+					startup_mismatch = true;
+					break;  // Found a mismatch, no need to check further
+				}
+			}
+
+			if (startup_mismatch) {
+				// Only do expensive parsing if we're going to block the command
+				std::string nq = std::string(dig);
+				RE2::GlobalReplace(&nq, "(?U)/\\*.*\\*/", "");
+				RE2::GlobalReplace(&nq, "(?i)\\bRESET\\b", "");
+				RE2::GlobalReplace(&nq, "[^\\w]*", "");
+
+				bool is_reset_all = (strncasecmp(nq.c_str(), "ALL", 3) == 0);
+				client_myds->DSS = STATE_QUERY_SENT_NET;
+				bool send_ready_packet = is_extended_query_ready_for_query();
+
+				if (is_reset_all) {
+					// Collect all mismatched variable names for error message
+					std::string mismatch_details;
+					for (int idx = 0; idx < PGSQL_NAME_LAST_LOW_WM; idx++) {
+						auto [client_value, client_hash] = client_myds->myconn->get_startup_parameter_and_hash((enum pgsql_variable_name)idx);
+						auto [backend_value, backend_hash] = mybe->server_myds->myconn->get_startup_parameter_and_hash((enum pgsql_variable_name)idx);
+						if (client_hash != backend_hash) {
+							mismatch_details += std::string(pgsql_tracked_variables[idx].set_variable_name) + " ";
+						}
+					}
+					proxy_error("RESET ALL is not allowed when hostgroup is locked and startup parameter values differ between client and backend. "
+						"Mismatched variables: %s. Use SET to explicitly set the desired values.\n", mismatch_details.c_str());
+					client_myds->myprot.generate_error_packet(true, send_ready_packet,
+						"RESET ALL is not supported when hostgroup is locked and connection startup values differ. Use SET to explicitly set the desired values.",
+						PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true);
+				} else {
+					// For single variable RESET, find which variable was requested
+					std::string reset_var_name;
+					for (int i = 0; i < PGSQL_NAME_LAST_HIGH_WM; i++) {
+						if (i == PGSQL_NAME_LAST_LOW_WM)
+							continue;
+						if (variable_name_exists(pgsql_tracked_variables[i], nq.c_str()) == true) {
+							reset_var_name = pgsql_tracked_variables[i].set_variable_name;
+							break;
+						}
+					}
+					if (!reset_var_name.empty()) {
+						proxy_error("RESET %s is not allowed when hostgroup is locked and startup parameter values differ between client and backend. "
+							"Use SET to explicitly set the desired value.\n", reset_var_name.c_str());
+					} else {
+						proxy_error("RESET is not allowed when hostgroup is locked and startup parameter values differ between client and backend. "
+							"Use SET to explicitly set the desired value.\n");
+					}
+					client_myds->myprot.generate_error_packet(true, send_ready_packet,
+						"RESET is not supported when hostgroup is locked and connection startup values differ. Use SET to explicitly set the desired value.",
+						PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true);
+				}
+				RequestEnd(NULL, true);
+				return true;
+			}
+			// If no mismatch, fall through
+		}
+	}
 
 	if (locked_on_hostgroup == -1) {
 		if (strncasecmp(dig, "SET ", 4) == 0) {
@@ -5070,8 +5216,21 @@ void PgSQL_Session::LogQuery(PgSQL_Data_Stream* myds) {
 }
 
 void PgSQL_Session::handle_transaction_state() {
+	if (!transaction_state_manager) return;
+
 	if (locked_on_hostgroup == -1) {
-		transaction_state_manager->handle_transaction(CurrentQuery.get_digest_text());
+		switch (status) {
+		case PROCESSING_STMT_EXECUTE:
+		case PROCESSING_QUERY: {
+			const char* digest_text = CurrentQuery.get_digest_text();
+			if (!digest_text) return;
+			transaction_state_manager->handle_transaction(digest_text);
+		}
+		break;
+		default:
+			// Skip - internal variable sync commands
+			break;
+		}
 	}
 }
 
