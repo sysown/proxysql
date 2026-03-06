@@ -291,6 +291,7 @@ const char* get_task_type_str(task_type_t task_type) {
 }
 
 struct mon_srv_t {
+	int32_t hostgroup_id;
 	string addr;
 	uint16_t port;
 	bool ssl;
@@ -435,9 +436,10 @@ vector<mon_srv_t> ext_srvs(const unique_ptr<SQLite3_result>& srvs_info) {
 	srvs.reserve(srvs_info->rows.size());
 	for (const auto& row : srvs_info->rows) {
 		srvs.push_back({
-			string { row->fields[0] },
-			static_cast<uint16_t>(std::atoi(row->fields[1])),
-			static_cast<bool>(std::atoi(row->fields[2])),
+			static_cast<int32_t>(std::atoi(row->fields[0])),
+			string { row->fields[1] },
+			static_cast<uint16_t>(std::atoi(row->fields[2])),
+			static_cast<bool>(std::atoi(row->fields[3])),
 			mon_srv_t::ssl_opts_t {
 				string { pgsql_thread___ssl_p2s_key ? pgsql_thread___ssl_p2s_key : ""},
 				string { pgsql_thread___ssl_p2s_cert ? pgsql_thread___ssl_p2s_cert : "" },
@@ -468,26 +470,27 @@ tasks_conf_t fetch_updated_conf(PgSQL_Monitor* mon, PgSQL_HostGroups_Manager* hg
 	}
 
 	unique_ptr<SQLite3_result> ping_srvrs { fetch_mon_srvs_conf(mon,
-		"SELECT hostname, port, MAX(use_ssl) use_ssl FROM monitor_internal.pgsql_servers"
+		"SELECT 0 hostgroup_id, hostname, port, MAX(use_ssl) use_ssl FROM monitor_internal.pgsql_servers"
 			" GROUP BY hostname, port ORDER BY RANDOM()"
 	)};
 
 	unique_ptr<SQLite3_result> connect_srvrs { fetch_mon_srvs_conf(mon,
-		"SELECT hostname, port, MAX(use_ssl) use_ssl FROM monitor_internal.pgsql_servers"
+		"SELECT 0 hostgroup_id, hostname, port, MAX(use_ssl) use_ssl FROM monitor_internal.pgsql_servers"
 			" GROUP BY hostname, port ORDER BY RANDOM()"
 	)};
 
 	unique_ptr<SQLite3_result> readonly_srvs { fetch_hgm_srvs_conf(hgm,
-		"SELECT hostname, port, MAX(use_ssl) use_ssl, check_type, reader_hostgroup"
+		"SELECT hostgroup_id, hostname, port, MAX(use_ssl) use_ssl, check_type, reader_hostgroup"
 			" FROM pgsql_servers JOIN pgsql_replication_hostgroups"
 				" ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup"
 			" WHERE status NOT IN (2,3) GROUP BY hostname, port ORDER BY RANDOM()"
 	)};
 
 	unique_ptr<SQLite3_result> repl_srvs { fetch_hgm_srvs_conf(hgm,
-		"SELECT hostname, port, MAX(use_ssl) use_ssl FROM pgsql_servers"
+		"SELECT hostgroup_id, hostname, port, MAX(use_ssl) use_ssl FROM pgsql_servers"
+			" JOIN pgsql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup"
 			" WHERE max_replication_lag > 0 AND status NOT IN (2,3)"
-			" GROUP BY hostname, port ORDER BY RANDOM()"
+			" GROUP BY hostgroup_id, hostname, port ORDER BY RANDOM()"
 	)};
 
 	return tasks_conf_t {
@@ -1850,7 +1853,7 @@ void perf_repl_lag_actions(SQLite3DB* db, state_t& state) {
 			repl_lag_res_t* op_result { static_cast<repl_lag_res_t*>(op_st.op_result.get()) };
 
 			// TODO: Override replication is hardcoded to 'false', this should be revisited.
-			PgHGM->replication_lag_action({{ 0, srv.addr, srv.port, op_result->val, false }});
+			PgHGM->replication_lag_action({{ srv.hostgroup_id, srv.addr, srv.port, op_result->val, false }});
 		} else {
 			proxy_error(
 				"Replication lag checked failed   error='%s'\n", state.conn.err.get()
