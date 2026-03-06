@@ -73,7 +73,7 @@ int main(int argc, char** argv) {
 
 		int w_res = wexecvp(proxysql_path, proxy_args, wexecvp_opts, s_stdout, s_stderr);
 		if (w_res != EXIT_SUCCESS) {
-			diag("'wexecvp' failed with error: %d", w_res);
+			diag("'wexecvp' failed with error: %d (ETIME=62 is expected if timeout reached while ProxySQL is still running in foreground)", w_res);
 		}
 
 		err_code = w_res;
@@ -88,12 +88,13 @@ int main(int argc, char** argv) {
 	}, std::ref(launch_res));
 
 	// Check that the second ProxySQL is up and responsive
-	conn_opts_t conn_opts { "127.0.0.1", "radmin", "radmin", 26081 };
+	diag("Waiting for ProxySQL replica to be ready on 127.0.0.1:26081 as %s:%s", cl.admin_username, cl.admin_password);
+	conn_opts_t conn_opts { "127.0.0.1", cl.admin_username, cl.admin_password, 26081 };
 	// Wait at max the child process timeout plus 5 seconds
 	MYSQL* s_proxy_admin = wait_for_proxysql(conn_opts, 25);
 
 	if (s_proxy_admin == nullptr) {
-		fprintf(stderr, "Error: %s\n", "Waiting for ProxySQL replica timedout");
+		fprintf(stderr, "Error: %s (attempted with user %s:%s)\n", "Waiting for ProxySQL replica timedout", cl.admin_username, cl.admin_password);
 		launch_sec_proxy.detach();
 		return EXIT_FAILURE;
 	}

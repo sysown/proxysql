@@ -2667,7 +2667,7 @@ void PgSQL_HostGroups_Manager::replication_lag_action_inner(PgSQL_HGC *myhgc, co
 				) {
 					// always increase the counter
 					mysrvc->cur_replication_lag_count += 1;
-					if (mysrvc->cur_replication_lag_count >= (unsigned int)mysql_thread___monitor_replication_lag_count) {
+					if (mysrvc->cur_replication_lag_count >= (unsigned int)pgsql_thread___monitor_replication_lag_count) {
 						proxy_warning("Shunning server %s:%d from HG %u with replication lag of %d second, count number: '%d'\n", address, port, myhgc->hid, current_replication_lag, mysrvc->cur_replication_lag_count);
 						mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
 					} else {
@@ -2678,7 +2678,7 @@ void PgSQL_HostGroups_Manager::replication_lag_action_inner(PgSQL_HGC *myhgc, co
 							myhgc->hid,
 							current_replication_lag,
 							mysrvc->cur_replication_lag_count,
-							mysql_thread___monitor_replication_lag_count
+							pgsql_thread___monitor_replication_lag_count
 						);
 					}
 				} else {
@@ -2716,7 +2716,7 @@ void PgSQL_HostGroups_Manager::replication_lag_action(const std::list<replicatio
 		const unsigned int port = std::get<PgSQL_REPLICATION_LAG_SERVER_T::PG_RLS_PORT>(server);
 		const int current_replication_lag = std::get<PgSQL_REPLICATION_LAG_SERVER_T::PG_RLS_CURRENT_REPLICATION_LAG>(server);
 
-		if (mysql_thread___monitor_replication_lag_group_by_host == false) {
+		if (/* pgsql_thread___monitor_replication_lag_group_by_host == */ false) { // feature currently not enabled
 			// legacy check. 1 check per server per hostgroup
 			PgSQL_HGC *myhgc = MyHGC_find(hid);
 			replication_lag_action_inner(myhgc,address.c_str(),port,current_replication_lag);

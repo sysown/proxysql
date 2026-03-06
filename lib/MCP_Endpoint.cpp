@@ -36,14 +36,16 @@ bool MCP_JSONRPC_Resource::authenticate_request(const httpserver::http_request& 
 
 	if (endpoint_name == "config") {
 		expected_token = handler->variables.mcp_config_endpoint_auth;
-	} else if (endpoint_name == "observe") {
-		expected_token = handler->variables.mcp_observe_endpoint_auth;
+	} else if (endpoint_name == "stats") {
+		expected_token = handler->variables.mcp_stats_endpoint_auth;
 	} else if (endpoint_name == "query") {
 		expected_token = handler->variables.mcp_query_endpoint_auth;
 	} else if (endpoint_name == "admin") {
 		expected_token = handler->variables.mcp_admin_endpoint_auth;
 	} else if (endpoint_name == "cache") {
 		expected_token = handler->variables.mcp_cache_endpoint_auth;
+	} else if (endpoint_name == "ai") {
+		expected_token = handler->variables.mcp_ai_endpoint_auth;
 	} else if (endpoint_name == "rag") {
 		expected_token = handler->variables.mcp_rag_endpoint_auth;
 	} else {
@@ -319,7 +321,7 @@ std::shared_ptr<http_response> MCP_JSONRPC_Resource::handle_jsonrpc_request(
 		result["protocolVersion"] = "2025-06-18";
 		result["capabilities"]["tools"] = json::object();  // Explicitly declare tools support
 		result["serverInfo"] = {
-			{"name", "proxysql-mcp-mcp-mysql-tools"},
+			{"name", "proxysql-mcp-server"},
 			{"version", MCP_THREAD_VERSION}
 		};
 	} else if (method == "ping") {
@@ -469,6 +471,12 @@ json MCP_JSONRPC_Resource::handle_tools_call(const json& req_json) {
 
 	std::string tool_name = req_json["params"]["name"].get<std::string>();
 	json arguments = req_json["params"].contains("arguments") ? req_json["params"]["arguments"] : json::object();
+	auto trim_for_log = [](const std::string& input, size_t max_len) -> std::string {
+		if (input.size() <= max_len) {
+			return input;
+		}
+		return input.substr(0, max_len) + "...";
+	};
 
 	proxy_info("MCP TOOL CALL: endpoint='%s' tool='%s'\n", endpoint_name.c_str(), tool_name.c_str());
 	proxy_debug(PROXY_DEBUG_GENERIC, 2, "MCP tool call: %s with args: %s\n", tool_name.c_str(), arguments.dump().c_str());
@@ -482,9 +490,20 @@ json MCP_JSONRPC_Resource::handle_tools_call(const json& req_json) {
 			// Tool execution failed - log the error with full context and return in MCP format
 			std::string error_msg = response.contains("error") ? response["error"].get<std::string>() : "Tool execution failed";
 			std::string args_str = arguments.dump();
+			std::string target_id = (arguments.contains("target_id") && arguments["target_id"].is_string()) ? arguments["target_id"].get<std::string>() : "";
+			std::string schema = (arguments.contains("schema") && arguments["schema"].is_string()) ? arguments["schema"].get<std::string>() : "";
+			std::string sql = (arguments.contains("sql") && arguments["sql"].is_string()) ? arguments["sql"].get<std::string>() : "";
 			proxy_error("MCP TOOL CALL FAILED: endpoint='%s' tool='%s' error='%s'\n",
 				endpoint_name.c_str(), tool_name.c_str(), error_msg.c_str());
 			proxy_error("MCP TOOL CALL FAILED: arguments='%s'\n", args_str.c_str());
+			if (!target_id.empty() || !schema.empty() || !sql.empty()) {
+				proxy_error(
+					"MCP TOOL CALL FAILED DETAILS: target_id='%s' schema='%s' sql='%s'\n",
+					target_id.c_str(),
+					schema.c_str(),
+					trim_for_log(sql, 512).c_str()
+				);
+			}
 			json mcp_result;
 			mcp_result["content"] = json::array();
 			json error_content;

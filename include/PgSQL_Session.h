@@ -216,6 +216,8 @@ inline void PgSQL_Query_Info::set_end_time(unsigned long long time) {
 #endif // CLOCK_MONOTONIC_RAW
 }
 
+class TrafficObserver;
+
 class PgSQL_Session : public Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread> {
 private:
 	using PktType = std::variant<std::unique_ptr<PgSQL_Parse_Message>,std::unique_ptr<PgSQL_Describe_Message>,
@@ -536,6 +538,8 @@ public:
 //	StmtLongDataHandler* SLDH;
 
 	Session_Regex** match_regexes;
+	std::unique_ptr<TrafficObserver> m_ffto;
+	bool ffto_bypassed;
 	CopyCmdMatcher* copy_cmd_matcher;
 
 	ProxySQL_Node_Address* proxysql_node_address; // this is used ONLY for Admin, and only if the other party is another proxysql instance part of a cluster

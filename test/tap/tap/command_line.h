@@ -12,6 +12,7 @@ class CommandLine {
 
 	bool checksum = true;
 	bool no_write = false;
+	bool use_noise = false;
 	int silent = false;
 
 	// unpriviliged test connection
@@ -31,6 +32,10 @@ class CommandLine {
 	int admin_port = 6032;
 	char* admin_username = strdup("admin");
 	char* admin_password = strdup("admin");
+
+	// proxysql mcp connection
+	int mcp_port = 6071;
+	char* mcp_auth_token = strdup("");
 
 	// mysql admin connection
 	char* mysql_host = strdup("127.0.0.1");
@@ -69,4 +74,3 @@ class CommandLine {
 };
 
 #endif // #ifndef COMMAND_LINE_H
-

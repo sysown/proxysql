@@ -9,6 +9,7 @@ using json = nlohmann::json;
 #include <functional>
 
 #include "ProxySQL_RESTAPI_Server.hpp"
+#include "ProxySQL_Statistics.hpp"
 #include "proxysql_utils.h"
 
 #ifdef DEBUG
@@ -341,6 +342,120 @@ public:
 
 };
 
+extern ProxySQL_Statistics *GloProxyStats;
+
+class tsdb_resource : public http_resource {
+private:
+    void add_headers(std::shared_ptr<http_response> &response) {
+        response->with_header("Content-Type", "application/json");
+        response->with_header("Access-Control-Allow-Origin", "*");
+    }
+
+public:
+    const std::shared_ptr<http_response> render_GET(const http_request& req) override {
+        const string req_path { req.get_path() };
+        json j_resp;
+
+        if (req_path == "/api/tsdb/metrics") {
+            if (!GloProxyStats || !GloProxyStats->statsdb_disk) {
+                j_resp = json {{"error", "TSDB not initialized"}};
+                auto response = std::shared_ptr<http_response>(new string_response(j_resp.dump(), http::http_utils::http_internal_server_error));
+                add_headers(response);
+                return response;
+            }
+            
+            char *error = NULL;
+            int cols, rows;
+            SQLite3_result *res = NULL;
+            GloProxyStats->statsdb_disk->execute_statement("SELECT DISTINCT metric_name FROM tsdb_metrics", &error, &cols, &rows, &res);
+            
+            if (error) {
+                j_resp = json {{"error", error}};
+                free(error);
+            } else {
+                std::vector<string> metrics;
+                if (res) {
+                    for (size_t i = 0; i < res->rows_count; i++) {
+                        metrics.push_back(res->rows[i]->fields[0]);
+                    }
+                    delete res;
+                }
+                j_resp = metrics;
+            }
+        } else if (req_path == "/api/tsdb/query") {
+            if (!GloProxyStats || !GloProxyStats->statsdb_disk) {
+                j_resp = json {{"error", "TSDB not initialized"}};
+                auto response = std::shared_ptr<http_response>(new string_response(j_resp.dump(), http::http_utils::http_internal_server_error));
+                add_headers(response);
+                return response;
+            }
+            string metric = req.get_arg("metric");
+            if (metric.empty()) {
+                j_resp = json {{"error", "Missing 'metric' parameter"}};
+                auto response = std::shared_ptr<http_response>(new string_response(j_resp.dump(), http::http_utils::http_bad_request));
+                add_headers(response);
+                return response;
+            }
+
+            time_t now = time(NULL);
+            time_t from = now - 3600;
+            time_t to = now;
+
+            string s_from = req.get_arg("from");
+            if (!s_from.empty()) from = atol(s_from.c_str());
+            string s_to = req.get_arg("to");
+            if (!s_to.empty()) to = atol(s_to.c_str());
+            string agg = req.get_arg("agg");
+
+            std::map<string, string> labels;
+            auto all_args = req.get_args();
+            for (auto const& [key, val] : all_args) {
+                if (key != "metric" && key != "from" && key != "to" && key != "agg") {
+                    labels[key] = val;
+                }
+            }
+
+            SQLite3_result *res = GloProxyStats->query_tsdb_metrics(metric, labels, from, to, agg);
+            if (!res) {
+                j_resp = json::array();
+            } else {
+                for (size_t i = 0; i < res->rows_count; i++) {
+                    json row;
+                    row["ts"] = atol(res->rows[i]->fields[0]);
+                    row["metric"] = res->rows[i]->fields[1];
+                    try {
+                        row["labels"] = json::parse(res->rows[i]->fields[2]);
+                    } catch (const json::parse_error& e) {
+                        row["labels"] = res->rows[i]->fields[2];
+                    }
+                    row["value"] = atof(res->rows[i]->fields[3]);
+                    j_resp.push_back(row);
+                }
+                delete res;
+            }
+        } else if (req_path == "/api/tsdb/status") {
+            if (!GloProxyStats) {
+                j_resp = json {{"error", "TSDB not initialized"}};
+                auto response = std::shared_ptr<http_response>(new string_response(j_resp.dump(), http::http_utils::http_internal_server_error));
+                add_headers(response);
+                return response;
+            }
+            ProxySQL_Statistics::tsdb_status_t status = GloProxyStats->get_tsdb_status();
+            j_resp["total_series"] = status.total_series;
+            j_resp["total_datapoints"] = status.total_datapoints;
+            j_resp["disk_size_bytes"] = status.disk_size_bytes;
+            j_resp["oldest_datapoint"] = status.oldest_datapoint;
+            j_resp["newest_datapoint"] = status.newest_datapoint;
+        } else {
+            return std::shared_ptr<http_response>(new string_response("Not Found", http::http_utils::http_not_found));
+        }
+
+        auto response = std::shared_ptr<http_response>(new string_response(j_resp.dump(), http::http_utils::http_ok));
+        add_headers(response);
+        return response;
+    }
+};
+
 class gen_get_endpoint : public http_resource {
 private:
 	std::function<std::shared_ptr<http_response>(const http_request&)> _get_fn {};
@@ -391,6 +506,13 @@ ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(
 	endpoint = std::unique_ptr<httpserver::http_resource>(sr);
 
     ws->register_resource("/sync", endpoint.get(), true);
+
+	auto tsdb_res = new tsdb_resource();
+	tsdb_endpoint = std::unique_ptr<httpserver::http_resource>(tsdb_res);
+	ws->register_resource("/api/tsdb/metrics", tsdb_endpoint.get(), true);
+	ws->register_resource("/api/tsdb/query", tsdb_endpoint.get(), true);
+	ws->register_resource("/api/tsdb/status", tsdb_endpoint.get(), true);
+
 	if (pthread_create(&thread_id, NULL, restapi_server_thread, ws.get()) !=0 ) {
 		perror("Thread creation");
 		exit(EXIT_FAILURE);

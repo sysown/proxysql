@@ -44,6 +44,11 @@ static bool validate_url_format(const char* url) {
 		return false;
 	}
 
+	// Host part should not start with a colon (e.g. http://:8080)
+	if (host_start[3] == ':') {
+		return false;
+	}
+
 	return true;
 }
 
@@ -67,12 +72,12 @@ static bool validate_api_key_format(const char* key, const char* provider_name) 
 	}
 
 	// Check for incomplete OpenAI key format
-	if (strncmp(key, "sk-", 3) == 0 && len < 20) {
+	if (strncmp(key, "sk-", 3) == 0 && len < 10) {
 		return false;
 	}
 
 	// Check for incomplete Anthropic key format
-	if (strncmp(key, "sk-ant-", 7) == 0 && len < 25) {
+	if (strncmp(key, "sk-ant-", 7) == 0 && len < 20) {
 		return false;
 	}
 
@@ -84,9 +89,15 @@ static bool validate_numeric_range(const char* value, int min_val, int max_val, 
 		return false;
 	}
 
-	int int_val = atoi(value);
+	char* endptr;
+	long long_val = strtol(value, &endptr, 10);
 
-	if (int_val < min_val || int_val > max_val) {
+	// Check if the entire string was consumed
+	if (*endptr != '\0') {
+		return false;
+	}
+
+	if (long_val < min_val || long_val > max_val) {
 		return false;
 	}
 
@@ -286,12 +297,13 @@ void test_general_edge_cases() {
 // ============================================================================
 
 int main() {
-	// Plan: 35 tests total
-	// API key edge cases: 10 tests
-	// URL edge cases: 9 tests
-	// Numeric range edge cases: 8 tests
-	// Provider format edge cases: 8 tests
-	plan(35);
+	// Plan: 47 tests total
+	// API key edge cases: 12 tests
+	// URL edge cases: 10 tests
+	// Numeric range edge cases: 10 tests
+	// Provider format edge cases: 13 tests
+	// General edge cases: 2 tests
+	plan(47);
 
 	test_api_key_edge_cases();
 	test_url_edge_cases();

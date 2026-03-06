@@ -5,6 +5,9 @@ using json = nlohmann::json;
 //#define __CLASS_STANDARD_MYSQL_THREAD_H
 
 #include <functional>
+#include <algorithm>
+#include <cerrno>
+#include <cctype>
 #include <vector>
 
 #include "proxysql_utils.h"
@@ -291,10 +294,18 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"connect_timeout_server_max",
 	(char*)"eventslog_filename",
 	(char*)"eventslog_filesize",
+	(char*)"eventslog_buffer_history_size",
+	(char*)"eventslog_table_memory_size",
+	(char*)"eventslog_buffer_max_query_length",
 	(char*)"eventslog_default_log",
 	(char*)"eventslog_format",
+	(char*)"eventslog_flush_timeout",
+ 	(char*)"eventslog_flush_size",
+ 	(char*)"eventslog_rate_limit",
 	(char*)"auditlog_filename",
 	(char*)"auditlog_filesize",
+	(char*)"auditlog_flush_timeout",
+ 	(char*)"auditlog_flush_size",
 	//(char *)"default_charset", // removed in 2.0.13 . Obsoleted previously using MySQL_Variables instead
 	(char*)"handle_unknown_charset",
 	(char*)"free_connections_pct",
@@ -318,12 +329,15 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"monitor_read_only_interval_window",
 	(char*)"monitor_read_only_timeout",
 	(char*)"monitor_read_only_max_timeout_count",
+	(char*)"monitor_replication_lag_interval",
+	(char*)"monitor_replication_lag_interval_window",
+	(char*)"monitor_replication_lag_timeout",
+	(char*)"monitor_replication_lag_count",
+	// NOTE: Disabled until 'pt-heartbeat' supports PostgreSQL is fixed: https://perconadev.atlassian.net/browse/PT-2030
+	// (char*)"monitor_replication_lag_use_percona_heartbeat",
 /*
 	(char*)"monitor_aws_rds_topology_discovery_interval",
 	(char*)"monitor_replication_lag_group_by_host",
-	(char*)"monitor_replication_lag_interval",
-	(char*)"monitor_replication_lag_timeout",
-	(char*)"monitor_replication_lag_count",
 	(char*)"monitor_groupreplication_healthcheck_interval",
 	(char*)"monitor_groupreplication_healthcheck_timeout",
 	(char*)"monitor_groupreplication_healthcheck_max_timeout_count",
@@ -337,7 +351,6 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"monitor_password",
 	(char*)"monitor_dbname",
 /*
-	(char*)"monitor_replication_lag_use_percona_heartbeat",
 	(char*)"monitor_query_interval",
 	(char*)"monitor_query_timeout",
 	(char*)"monitor_slave_lag_when_null",
@@ -389,6 +402,7 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"default_query_delay",
 	(char*)"default_query_timeout",
 	(char*)"query_processor_iterations",
+	(char*)"query_processor_first_comment_parsing",
 	(char*)"query_processor_regex",
 	(char*)"set_query_lock_on_hostgroup",
 	(char*)"set_parser_algorithm",
@@ -445,6 +459,8 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"stats_time_query_processor",
 	(char*)"query_cache_stores_empty_result",
 	(char*)"data_packets_history_size",
+	(char*)"ffto_enabled",
+	(char*)"ffto_max_buffer_size",
 	NULL
 };
 
@@ -1020,6 +1036,8 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.server_encoding = strdup((char*)"UTF8");
 	variables.shun_on_failures = 5;
 	variables.shun_recovery_time_sec = 10;
+	variables.ffto_enabled = true;
+	variables.ffto_max_buffer_size = 1048576;
 	variables.unshun_algorithm = 0;
 	variables.query_retries_on_failure = 1;
 	variables.client_host_cache_size = 0;
@@ -1048,6 +1066,7 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.monitor_read_only_max_timeout_count = 3;
 	variables.monitor_replication_lag_group_by_host = false;
 	variables.monitor_replication_lag_interval = 10000;
+	variables.monitor_replication_lag_interval_window = 10;
 	variables.monitor_replication_lag_timeout = 1000;
 	variables.monitor_replication_lag_count = 1;
 /* TODO: Remove
@@ -1073,9 +1092,7 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.monitor_username = strdup((char*)"monitor");
 	variables.monitor_password = strdup((char*)"monitor");
 	variables.monitor_dbname = strdup((char*)"postgres");
-/* TODO: Remove
 	variables.monitor_replication_lag_use_percona_heartbeat = strdup((char*)"");
-*/
 	variables.monitor_wait_timeout = true;
 	variables.monitor_writer_is_also_reader = true;
 	variables.max_allowed_packet = 64 * 1024 * 1024;
@@ -1107,6 +1124,7 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.default_query_delay = 0;
 	variables.default_query_timeout = 24 * 3600 * 1000;
 	variables.query_processor_iterations = 0;
+	variables.query_processor_first_comment_parsing = 2;
 	variables.query_processor_regex = 1;
 	variables.set_query_lock_on_hostgroup = 1;
 	variables.set_parser_algorithm = 2; // before 2.6.0 this was 1
@@ -1129,10 +1147,18 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.interfaces = strdup((char*)"");
 	variables.eventslog_filename = strdup((char*)""); // proxysql-mysql-eventslog is recommended
 	variables.eventslog_filesize = 100 * 1024 * 1024;
+	variables.eventslog_buffer_history_size = 0;
+	variables.eventslog_table_memory_size = 10000;
+	variables.eventslog_buffer_max_query_length = 32 * 1024;
 	variables.eventslog_default_log = 0;
 	variables.eventslog_format = 1;
+	variables.eventslog_flush_timeout = 1000;
+ 	variables.eventslog_flush_size = 4096;
+ 	variables.eventslog_rate_limit = 1;
 	variables.auditlog_filename = strdup((char*)"");
 	variables.auditlog_filesize = 100 * 1024 * 1024;
+	variables.auditlog_flush_timeout = 1000;
+ 	variables.auditlog_flush_size = 4096;
 	variables.poll_timeout = 2000;
 	variables.poll_timeout_on_failure = 100;
 	variables.have_compress = true;
@@ -1285,9 +1311,8 @@ char* PgSQL_Threads_Handler::get_variable_string(char* name) {
 		if (!strcmp(name, "monitor_username")) return strdup(variables.monitor_username);
 		if (!strcmp(name, "monitor_password")) return strdup(variables.monitor_password);
 		if (!strcmp(name, "monitor_dbname")) return strdup(variables.monitor_dbname);
-/*
-		if (!strcmp(name, "monitor_replication_lag_use_percona_heartbeat")) return strdup(variables.monitor_replication_lag_use_percona_heartbeat);
-*/
+		// NOTE: Disabled until 'pt-heartbeat' supports PostgreSQL is fixed: https://perconadev.atlassian.net/browse/PT-2030
+		// if (!strcmp(name, "monitor_replication_lag_use_percona_heartbeat")) return strdup(variables.monitor_replication_lag_use_percona_heartbeat);
 	}
 	if (!strncmp(name, "ssl_", 4)) {
 		if (!strcmp(name, "ssl_p2s_ca")) {
@@ -1581,9 +1606,8 @@ char* PgSQL_Threads_Handler::get_variable(char* name) {	// this is the public fu
 		if (!strcasecmp(name, "monitor_username")) return strdup(variables.monitor_username);
 		if (!strcasecmp(name, "monitor_password")) return strdup(variables.monitor_password);
 		if (!strcasecmp(name, "monitor_dbname")) return strdup(variables.monitor_dbname);
-/*
-		if (!strcasecmp(name, "monitor_replication_lag_use_percona_heartbeat")) return strdup(variables.monitor_replication_lag_use_percona_heartbeat);
-*/
+		// NOTE: Disabled until 'pt-heartbeat' supports PostgreSQL is fixed: https://perconadev.atlassian.net/browse/PT-2030
+		// if (!strcasecmp(name, "monitor_replication_lag_use_percona_heartbeat")) return strdup(variables.monitor_replication_lag_use_percona_heartbeat);
 	}
 	if (!strcasecmp(name, "threads")) {
 		sprintf(intbuf, "%d", (num_threads ? num_threads : DEFAULT_NUM_THREADS));
@@ -1764,6 +1788,63 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 			return false;
 		}
 	}
+	if (!strcasecmp(name,"eventslog_flush_timeout")) {
+ 		int intv=atoi(value);
+ 		if (intv >= 0) {
+ 			variables.eventslog_flush_timeout=intv;
+			if (intv > 5 * 60 * 1000) {
+ 				proxy_warning("pgsql-eventslog_flush_timeout is set to a high value: %dms\n", intv);
+ 			}
+ 			return true;
+ 		} else {
+ 			return false;
+ 		}
+ 	}
+ 	if (!strcasecmp(name,"eventslog_flush_size")) {
+ 		int intv=atoi(value);
+ 		if (intv >= 0) {
+ 			variables.eventslog_flush_size=intv;
+ 			if (intv > 10 * 1024 * 1024) {
+ 				proxy_warning("pgsql-eventslog_flush_size is set to a high value: %d\n", intv);
+ 			}
+ 			return true;
+ 		} else {
+ 			return false;
+ 		}
+ 	}
+ 	if (!strcasecmp(name,"eventslog_rate_limit")) {
+ 		int intv=atoi(value);
+ 		if (intv >= 1) {
+ 			variables.eventslog_rate_limit=intv;
+ 			return true;
+ 		} else {
+ 			return false;
+ 		}
+ 	}
+ 	if (!strcasecmp(name,"auditlog_flush_timeout")) {
+ 		int intv=atoi(value);
+ 		if (intv >= 0) {
+ 			variables.auditlog_flush_timeout=intv;
+			if (intv > 5 * 60 * 1000) {
+ 				proxy_warning("pgsql-auditlog_flush_timeout is set to a high value: %dms\n", intv);
+ 			}
+ 			return true;
+ 		} else {
+ 			return false;
+ 		}
+ 	}
+ 	if (!strcasecmp(name,"auditlog_flush_size")) {
+ 		int intv=atoi(value);
+ 		if (intv >= 0) {
+ 			variables.auditlog_flush_size=intv;
+ 			if (intv > 10 * 1024 * 1024) {
+ 				proxy_warning("pgsql-auditlog_flush_size is set to a high value: %d\n", intv);
+ 			}
+ 			return true;
+ 		} else {
+ 			return false;
+ 		}
+ 	}
 	if (!strcasecmp(name, "default_schema")) {
 		if (vallen) {
 			free(variables.default_schema);
@@ -2101,6 +2182,7 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["firewall_whitelist_enabled"] = make_tuple(&variables.firewall_whitelist_enabled, false);
 		VariablesPointers_bool["kill_backend_connection_when_disconnect"] = make_tuple(&variables.kill_backend_connection_when_disconnect, false);
 		VariablesPointers_bool["log_unhealthy_connections"] = make_tuple(&variables.log_unhealthy_connections, false);
+		VariablesPointers_bool["ffto_enabled"] = make_tuple(&variables.ffto_enabled, false);
 		VariablesPointers_bool["monitor_enabled"] = make_tuple(&variables.monitor_enabled, false);
 		VariablesPointers_bool["monitor_replication_lag_group_by_host"] = make_tuple(&variables.monitor_replication_lag_group_by_host, false);
 		VariablesPointers_bool["monitor_wait_timeout"] = make_tuple(&variables.monitor_wait_timeout, false);
@@ -2157,10 +2239,12 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["monitor_read_only_interval_window"] = make_tuple(&variables.monitor_read_only_interval_window, 0, 100, false);
 		VariablesPointers_int["monitor_read_only_timeout"] = make_tuple(&variables.monitor_read_only_timeout, 100, 600 * 1000, false);
 		VariablesPointers_int["monitor_read_only_max_timeout_count"] = make_tuple(&variables.monitor_read_only_max_timeout_count, 1, 1000 * 1000, false);
-/*
 		VariablesPointers_int["monitor_replication_lag_interval"] = make_tuple(&variables.monitor_replication_lag_interval, 100, 7 * 24 * 3600 * 1000, false);
+		VariablesPointers_int["monitor_replication_lag_interval_window"] = make_tuple(&variables.monitor_replication_lag_interval_window, 0, 100, false);
 		VariablesPointers_int["monitor_replication_lag_timeout"] = make_tuple(&variables.monitor_replication_lag_timeout, 100, 600 * 1000, false);
 		VariablesPointers_int["monitor_replication_lag_count"] = make_tuple(&variables.monitor_replication_lag_count, 1, 10, false);
+
+/*
 
 		VariablesPointers_int["monitor_groupreplication_healthcheck_interval"] = make_tuple(&variables.monitor_groupreplication_healthcheck_interval, 100, 7 * 24 * 3600 * 1000, false);
 		VariablesPointers_int["monitor_groupreplication_healthcheck_timeout"] = make_tuple(&variables.monitor_groupreplication_healthcheck_timeout, 100, 600 * 1000, false);
@@ -2202,6 +2286,7 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["query_digests_max_query_length"] = make_tuple(&variables.query_digests_max_query_length, 16, 1 * 1024 * 1024, false);
 		VariablesPointers_int["query_rules_fast_routing_algorithm"] = make_tuple(&variables.query_rules_fast_routing_algorithm, 1, 2, false);
 		VariablesPointers_int["query_processor_iterations"] = make_tuple(&variables.query_processor_iterations, 0, 1000 * 1000, false);
+		VariablesPointers_int["query_processor_first_comment_parsing"] = make_tuple(&variables.query_processor_first_comment_parsing, 0, 3, false);
 		VariablesPointers_int["query_processor_regex"] = make_tuple(&variables.query_processor_regex, 1, 2, false);
 		VariablesPointers_int["query_retries_on_failure"] = make_tuple(&variables.query_retries_on_failure, 0, 1000, false);
 		VariablesPointers_int["set_query_lock_on_hostgroup"] = make_tuple(&variables.set_query_lock_on_hostgroup, 0, 1, false);
@@ -2218,6 +2303,7 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["poll_timeout_on_failure"] = make_tuple(&variables.poll_timeout_on_failure, 10, 20000, false);
 		VariablesPointers_int["shun_on_failures"] = make_tuple(&variables.shun_on_failures, 0, 10000000, false);
 		VariablesPointers_int["shun_recovery_time_sec"] = make_tuple(&variables.shun_recovery_time_sec, 0, 3600 * 24 * 365, false);
+		VariablesPointers_int["ffto_max_buffer_size"] = make_tuple(&variables.ffto_max_buffer_size, 1, 1024 * 1024 * 1024, false);
 		VariablesPointers_int["unshun_algorithm"] = make_tuple(&variables.unshun_algorithm, 0, 1, false);
 		VariablesPointers_int["hostgroup_manager_verbose"] = make_tuple(&variables.hostgroup_manager_verbose, 0, 3, false);
 		VariablesPointers_int["tcp_keepalive_time"] = make_tuple(&variables.tcp_keepalive_time, 0, 7200, false);
@@ -2240,6 +2326,9 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		// logs
 		VariablesPointers_int["auditlog_filesize"] = make_tuple(&variables.auditlog_filesize, 1024 * 1024, 1 * 1024 * 1024 * 1024, false);
 		VariablesPointers_int["eventslog_filesize"] = make_tuple(&variables.eventslog_filesize, 1024 * 1024, 1 * 1024 * 1024 * 1024, false);
+		VariablesPointers_int["eventslog_buffer_history_size"] = make_tuple(&variables.eventslog_buffer_history_size, 0, 8 * 1024 * 1024, false);
+		VariablesPointers_int["eventslog_table_memory_size"] = make_tuple(&variables.eventslog_table_memory_size, 0, 8 * 1024 * 1024, false);
+		VariablesPointers_int["eventslog_buffer_max_query_length"] = make_tuple(&variables.eventslog_buffer_max_query_length, 128, 32 * 1024 * 1024, false);
 		VariablesPointers_int["eventslog_default_log"] = make_tuple(&variables.eventslog_default_log, 0, 1, false);
 		// various
 		VariablesPointers_int["long_query_time"] = make_tuple(&variables.long_query_time, 0, 20 * 24 * 3600 * 1000, false);
@@ -2272,6 +2361,11 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		// the input validation for these variables MUST be EXPLICIT
 		VariablesPointers_int["binlog_reader_connect_retry_msec"] = make_tuple(&variables.binlog_reader_connect_retry_msec, 0, 0, true);
 		VariablesPointers_int["eventslog_format"] = make_tuple(&variables.eventslog_format, 0, 0, true);
+		VariablesPointers_int["eventslog_flush_timeout"] = make_tuple(&variables.eventslog_flush_timeout, 0, 0, true);
+ 		VariablesPointers_int["eventslog_flush_size"] = make_tuple(&variables.eventslog_flush_size, 0, 0, true);
+ 		VariablesPointers_int["eventslog_rate_limit"] = make_tuple(&variables.eventslog_rate_limit, 0, 0, true);
+ 		VariablesPointers_int["auditlog_flush_timeout"] = make_tuple(&variables.auditlog_flush_timeout, 0, 0, true);
+ 		VariablesPointers_int["auditlog_flush_size"] = make_tuple(&variables.auditlog_flush_size, 0, 0, true);
 		VariablesPointers_int["wait_timeout"] = make_tuple(&variables.wait_timeout, 0, 0, true);
 		VariablesPointers_int["data_packets_history_size"] = make_tuple(&variables.data_packets_history_size, 0, 0, true);
 
@@ -2765,13 +2859,17 @@ PgSQL_Thread::~PgSQL_Thread() {
 	if (pgsql_thread___monitor_username) { free(pgsql_thread___monitor_username); pgsql_thread___monitor_username = NULL; }
 	if (pgsql_thread___monitor_password) { free(pgsql_thread___monitor_password); pgsql_thread___monitor_password = NULL; }
 	if (pgsql_thread___monitor_dbname) { free(pgsql_thread___monitor_dbname); pgsql_thread___monitor_dbname = NULL; }
+	if (pgsql_thread___monitor_replication_lag_use_percona_heartbeat) {
+		free(pgsql_thread___monitor_replication_lag_use_percona_heartbeat);
+		pgsql_thread___monitor_replication_lag_use_percona_heartbeat = NULL;
+	}
 
 	/*
 	if (mysql_thread___monitor_username) { free(mysql_thread___monitor_username); mysql_thread___monitor_username = NULL; }
 	if (mysql_thread___monitor_password) { free(mysql_thread___monitor_password); mysql_thread___monitor_password = NULL; }
-	if (mysql_thread___monitor_replication_lag_use_percona_heartbeat) {
-		free(mysql_thread___monitor_replication_lag_use_percona_heartbeat);
-		mysql_thread___monitor_replication_lag_use_percona_heartbeat = NULL;
+	if (pgsql_thread___monitor_replication_lag_use_percona_heartbeat) {
+		free(pgsql_thread___monitor_replication_lag_use_percona_heartbeat);
+		pgsql_thread___monitor_replication_lag_use_percona_heartbeat = NULL;
 	}
 	*/
 	//if (pgsql_thread___default_schema) { free(pgsql_thread___default_schema); pgsql_thread___default_schema = NULL; }
@@ -3866,6 +3964,8 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___throttle_ratio_server_to_client = GloPTH->get_variable_int((char*)"throttle_ratio_server_to_client");
 	pgsql_thread___shun_on_failures = GloPTH->get_variable_int((char*)"shun_on_failures");
 	pgsql_thread___shun_recovery_time_sec = GloPTH->get_variable_int((char*)"shun_recovery_time_sec");
+	pgsql_thread___ffto_enabled = (bool)GloPTH->get_variable_int((char*)"ffto_enabled");
+	pgsql_thread___ffto_max_buffer_size = GloPTH->get_variable_int((char*)"ffto_max_buffer_size");
 	pgsql_thread___hostgroup_manager_verbose = GloPTH->get_variable_int((char*)"hostgroup_manager_verbose");
 	pgsql_thread___default_max_latency_ms = GloPTH->get_variable_int((char*)"default_max_latency_ms");
 	pgsql_thread___unshun_algorithm = GloPTH->get_variable_int((char*)"unshun_algorithm");
@@ -3899,6 +3999,7 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___query_digests_max_digest_length = GloPTH->get_variable_int((char*)"query_digests_max_digest_length");
 	pgsql_thread___query_digests_max_query_length = GloPTH->get_variable_int((char*)"query_digests_max_query_length");
 	pgsql_thread___query_processor_iterations = GloPTH->get_variable_int((char*)"query_processor_iterations");
+	pgsql_thread___query_processor_first_comment_parsing = GloPTH->get_variable_int((char*)"query_processor_first_comment_parsing");
 	pgsql_thread___query_processor_regex = GloPTH->get_variable_int((char*)"query_processor_regex");
 
 	pgsql_thread___query_cache_size_MB = GloPTH->get_variable_int((char*)"query_cache_size_MB");
@@ -3913,9 +4014,6 @@ void PgSQL_Thread::refresh_variables() {
 	mysql_thread___monitor_username = GloPTH->get_variable_string((char*)"monitor_username");
 	if (mysql_thread___monitor_password) free(mysql_thread___monitor_password);
 	mysql_thread___monitor_password = GloPTH->get_variable_string((char*)"monitor_password");
-	if (mysql_thread___monitor_replication_lag_use_percona_heartbeat) free(mysql_thread___monitor_replication_lag_use_percona_heartbeat);
-	mysql_thread___monitor_replication_lag_use_percona_heartbeat = GloPTH->get_variable_string((char*)"monitor_replication_lag_use_percona_heartbeat");
-
 	mysql_thread___monitor_wait_timeout = (bool)GloPTH->get_variable_int((char*)"monitor_wait_timeout");
 	*/
 	pgsql_thread___monitor_writer_is_also_reader = (bool)GloPTH->get_variable_int((char*)"monitor_writer_is_also_reader");
@@ -3930,9 +4028,17 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___monitor_ping_timeout = GloPTH->get_variable_int((char*)"monitor_ping_timeout");
 	pgsql_thread___monitor_read_only_interval = GloPTH->get_variable_int((char*)"monitor_read_only_interval");
 	pgsql_thread___monitor_read_only_interval_window = GloPTH->get_variable_int((char*)"monitor_read_only_interval_window");
+	pgsql_thread___monitor_replication_lag_interval = GloPTH->get_variable_int((char*)"monitor_replication_lag_interval");
+	pgsql_thread___monitor_replication_lag_interval_window = GloPTH->get_variable_int((char*)"monitor_replication_lag_interval_window");
+	pgsql_thread___monitor_replication_lag_timeout = GloPTH->get_variable_int((char*)"monitor_replication_lag_timeout");
+	pgsql_thread___monitor_replication_lag_count = GloPTH->get_variable_int((char*)"monitor_replication_lag_count");
 	pgsql_thread___monitor_read_only_timeout = GloPTH->get_variable_int((char*)"monitor_read_only_timeout");
 	pgsql_thread___monitor_read_only_max_timeout_count = GloPTH->get_variable_int((char*)"monitor_read_only_max_timeout_count");
 	pgsql_thread___monitor_threads = GloPTH->get_variable_int((char*)"monitor_threads");
+	/* NOTE: Disabled until 'pt-heartbeat' supports PostgreSQL is fixed: https://perconadev.atlassian.net/browse/PT-2030
+	if (pgsql_thread___monitor_replication_lag_use_percona_heartbeat) free(pgsql_thread___monitor_replication_lag_use_percona_heartbeat);
+	pgsql_thread___monitor_replication_lag_use_percona_heartbeat = GloPTH->get_variable_string((char*)"monitor_replication_lag_use_percona_heartbeat");
+	*/
 	if (pgsql_thread___monitor_username) free(pgsql_thread___monitor_username);
 	pgsql_thread___monitor_username = GloPTH->get_variable_string((char*)"monitor_username");
 	if (pgsql_thread___monitor_password) free(pgsql_thread___monitor_password);
@@ -3945,7 +4051,6 @@ void PgSQL_Thread::refresh_variables() {
 	mysql_thread___monitor_replication_lag_group_by_host = (bool)GloPTH->get_variable_int((char*)"monitor_replication_lag_group_by_host");
 	mysql_thread___monitor_replication_lag_interval = GloPTH->get_variable_int((char*)"monitor_replication_lag_interval");
 	mysql_thread___monitor_replication_lag_timeout = GloPTH->get_variable_int((char*)"monitor_replication_lag_timeout");
-	mysql_thread___monitor_replication_lag_count = GloPTH->get_variable_int((char*)"monitor_replication_lag_count");
 	mysql_thread___monitor_groupreplication_healthcheck_interval = GloPTH->get_variable_int((char*)"monitor_groupreplication_healthcheck_interval");
 	mysql_thread___monitor_groupreplication_healthcheck_timeout = GloPTH->get_variable_int((char*)"monitor_groupreplication_healthcheck_timeout");
 	mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count = GloPTH->get_variable_int((char*)"monitor_groupreplication_healthcheck_max_timeout_count");
@@ -4011,12 +4116,23 @@ void PgSQL_Thread::refresh_variables() {
 
 	if (pgsql_thread___eventslog_filename) free(pgsql_thread___eventslog_filename);
 	pgsql_thread___eventslog_filesize = GloPTH->get_variable_int((char*)"eventslog_filesize");
+	pgsql_thread___eventslog_buffer_history_size = GloPTH->get_variable_int((char*)"eventslog_buffer_history_size");
+	if (GloPgSQL_Logger && GloPgSQL_Logger->PgLogCB->getBufferSize() != static_cast<size_t>(pgsql_thread___eventslog_buffer_history_size)) {
+		GloPgSQL_Logger->PgLogCB->setBufferSize(pgsql_thread___eventslog_buffer_history_size);
+	}
+	pgsql_thread___eventslog_table_memory_size = GloPTH->get_variable_int((char*)"eventslog_table_memory_size");
+	pgsql_thread___eventslog_buffer_max_query_length = GloPTH->get_variable_int((char*)"eventslog_buffer_max_query_length");
 	pgsql_thread___eventslog_default_log = GloPTH->get_variable_int((char*)"eventslog_default_log");
 	pgsql_thread___eventslog_format = GloPTH->get_variable_int((char*)"eventslog_format");
+	pgsql_thread___eventslog_flush_timeout = GloPTH->get_variable_int((char*)"eventslog_flush_timeout");
+ 	pgsql_thread___eventslog_flush_size = GloPTH->get_variable_int((char*)"eventslog_flush_size");
+ 	pgsql_thread___eventslog_rate_limit = GloPTH->get_variable_int((char*)"eventslog_rate_limit");
 	pgsql_thread___eventslog_filename = GloPTH->get_variable_string((char*)"eventslog_filename");
 	if (pgsql_thread___auditlog_filename) free(pgsql_thread___auditlog_filename);
 	pgsql_thread___auditlog_filesize = GloPTH->get_variable_int((char*)"auditlog_filesize");
 	pgsql_thread___auditlog_filename = GloPTH->get_variable_string((char*)"auditlog_filename");
+	pgsql_thread___auditlog_flush_timeout = GloPTH->get_variable_int((char*)"auditlog_flush_timeout");
+ 	pgsql_thread___auditlog_flush_size = GloPTH->get_variable_int((char*)"auditlog_flush_size");
 
 	GloPgSQL_Logger->events_set_base_filename(); // both filename and filesize are set here
 	GloPgSQL_Logger->audit_set_base_filename(); // both filename and filesize are set here
@@ -4571,6 +4687,18 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 			result->add_row(pta);
 		}
 		{
+			pta[0] = (char*)"PgSQL_Monitor_replication_lag_check_OK";
+			sprintf(buf, "%lu", GloPgMon->repl_lag_check_OK);
+			pta[1] = buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0] = (char*)"PgSQL_Monitor_replication_lag_check_ERR";
+			sprintf(buf, "%lu", GloPgMon->repl_lag_check_ERR);
+			pta[1] = buf;
+			result->add_row(pta);
+		}
+		{
 			pta[0] = (char*)"PgSQL_Monitor_ssl_connections_OK";
 			sprintf(buf, "%lu", GloPgMon->ssl_connections_OK);
 			pta[1] = buf;
@@ -4646,6 +4774,268 @@ void PgSQL_Threads_Handler::Get_Memory_Stats() {
 		pthread_mutex_unlock(&thr->thread_mutex);
 	}
 }
+
+namespace {
+
+/**
+ * @brief Column indexes used by PgSQL processlist filtering and sorting helpers.
+ */
+struct pgsql_processlist_columns_t {
+	static constexpr int session_id = 1;
+	static constexpr int username = 2;
+	static constexpr int database = 3;
+	static constexpr int hostgroup = 6;
+	static constexpr int command = 13;
+	static constexpr int time_ms = 14;
+	static constexpr int info = 15;
+};
+
+/**
+ * @brief Safely return a row field or an empty string when missing.
+ *
+ * @param row Source processlist row.
+ * @param idx Field index in the processlist result.
+ * @return Pointer to the requested field or an empty-string literal.
+ */
+static const char* pgsql_pl_field(const SQLite3_row* row, int idx) {
+	if (!row || idx < 0 || idx >= row->cnt || !row->fields[idx]) {
+		return "";
+	}
+	return row->fields[idx];
+}
+
+/**
+ * @brief Parse a processlist numeric field as unsigned integer.
+ *
+ * Invalid or empty values are normalized to zero so sorting and filtering remain
+ * deterministic for partial rows.
+ *
+ * @param value Text field containing an integer representation.
+ * @return Parsed unsigned value, or `0` on parse failure.
+ */
+static uint64_t pgsql_pl_to_u64(const char* value) {
+	if (!value || !value[0]) {
+		return 0;
+	}
+
+	char* end = nullptr;
+	errno = 0;
+	unsigned long long parsed = strtoull(value, &end, 10);
+	if (end == value || *end != '\0' || errno != 0) {
+		return 0;
+	}
+
+	return static_cast<uint64_t>(parsed);
+}
+
+/**
+ * @brief Case-(in)sensitive substring matcher used by `match_info`.
+ *
+ * @param haystack Candidate text.
+ * @param needle Substring to search for.
+ * @param case_sensitive Whether matching should be case-sensitive.
+ * @return true when @p needle is found in @p haystack.
+ */
+static bool pgsql_pl_contains(const std::string& haystack, const std::string& needle, bool case_sensitive) {
+	if (needle.empty()) {
+		return true;
+	}
+
+	if (case_sensitive) {
+		return haystack.find(needle) != std::string::npos;
+	}
+
+	auto it = std::search(
+		haystack.begin(),
+		haystack.end(),
+		needle.begin(),
+		needle.end(),
+		[](char lhs, char rhs) {
+			return std::tolower(static_cast<unsigned char>(lhs)) ==
+			       std::tolower(static_cast<unsigned char>(rhs));
+		}
+	);
+	return it != haystack.end();
+}
+
+/**
+ * @brief Evaluate whether a PgSQL processlist row matches caller filters.
+ *
+ * @param row Processlist row from `SQL3_Processlist`.
+ * @param opts Typed query options supplied by the caller.
+ * @return true when the row satisfies all active filters.
+ */
+static bool pgsql_pl_row_matches(const SQLite3_row* row, const processlist_query_options_t& opts) {
+	if (!opts.username.empty() && opts.username != pgsql_pl_field(row, pgsql_processlist_columns_t::username)) {
+		return false;
+	}
+	if (!opts.database.empty() && opts.database != pgsql_pl_field(row, pgsql_processlist_columns_t::database)) {
+		return false;
+	}
+	if (opts.hostgroup >= 0) {
+		const int row_hostgroup = static_cast<int>(pgsql_pl_to_u64(pgsql_pl_field(row, pgsql_processlist_columns_t::hostgroup)));
+		if (row_hostgroup != opts.hostgroup) {
+			return false;
+		}
+	}
+	if (!opts.command.empty() && opts.command != pgsql_pl_field(row, pgsql_processlist_columns_t::command)) {
+		return false;
+	}
+	if (opts.min_time_ms >= 0) {
+		const uint64_t row_time_ms = pgsql_pl_to_u64(pgsql_pl_field(row, pgsql_processlist_columns_t::time_ms));
+		if (row_time_ms < static_cast<uint64_t>(opts.min_time_ms)) {
+			return false;
+		}
+	}
+	if (opts.has_session_id) {
+		const uint64_t row_session_id = pgsql_pl_to_u64(pgsql_pl_field(row, pgsql_processlist_columns_t::session_id));
+		if (row_session_id != opts.session_id) {
+			return false;
+		}
+	}
+	if (!opts.match_info.empty()) {
+		const std::string info = pgsql_pl_field(row, pgsql_processlist_columns_t::info);
+		if (!pgsql_pl_contains(info, opts.match_info, opts.info_case_sensitive)) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+/**
+ * @brief Compare two PgSQL processlist rows according to typed sort options.
+ *
+ * The comparison applies a deterministic tie-breaker on `SessionID` so paging
+ * remains stable across repeated calls with identical data.
+ *
+ * @param lhs Left-hand row.
+ * @param rhs Right-hand row.
+ * @param opts Query options carrying sort key and direction.
+ * @return true when @p lhs should be ordered before @p rhs.
+ */
+static bool pgsql_pl_row_less(const SQLite3_row* lhs, const SQLite3_row* rhs, const processlist_query_options_t& opts) {
+	const uint64_t lhs_session_id = pgsql_pl_to_u64(pgsql_pl_field(lhs, pgsql_processlist_columns_t::session_id));
+	const uint64_t rhs_session_id = pgsql_pl_to_u64(pgsql_pl_field(rhs, pgsql_processlist_columns_t::session_id));
+
+	auto string_compare = [&](int idx) -> int {
+		const std::string lhs_value = pgsql_pl_field(lhs, idx);
+		const std::string rhs_value = pgsql_pl_field(rhs, idx);
+		if (lhs_value < rhs_value) {
+			return -1;
+		}
+		if (lhs_value > rhs_value) {
+			return 1;
+		}
+		return 0;
+	};
+
+	auto numeric_compare = [&](int idx) -> int {
+		const uint64_t lhs_value = pgsql_pl_to_u64(pgsql_pl_field(lhs, idx));
+		const uint64_t rhs_value = pgsql_pl_to_u64(pgsql_pl_field(rhs, idx));
+		if (lhs_value < rhs_value) {
+			return -1;
+		}
+		if (lhs_value > rhs_value) {
+			return 1;
+		}
+		return 0;
+	};
+
+	int cmp = 0;
+	switch (opts.sort_by) {
+		case processlist_sort_by_t::time_ms:
+			cmp = numeric_compare(pgsql_processlist_columns_t::time_ms);
+			break;
+		case processlist_sort_by_t::session_id:
+			cmp = numeric_compare(pgsql_processlist_columns_t::session_id);
+			break;
+		case processlist_sort_by_t::username:
+			cmp = string_compare(pgsql_processlist_columns_t::username);
+			break;
+		case processlist_sort_by_t::hostgroup:
+			cmp = numeric_compare(pgsql_processlist_columns_t::hostgroup);
+			break;
+		case processlist_sort_by_t::command:
+			cmp = string_compare(pgsql_processlist_columns_t::command);
+			break;
+		case processlist_sort_by_t::none:
+		default:
+			cmp = 0;
+			break;
+	}
+
+	if (cmp != 0) {
+		return opts.sort_desc ? (cmp > 0) : (cmp < 0);
+	}
+
+	return lhs_session_id < rhs_session_id;
+}
+
+/**
+ * @brief Apply typed filtering, sorting, and pagination to PgSQL processlist rows.
+ *
+ * This post-processing stage is intentionally local to `SQL3_Processlist()` so
+ * the same API can serve:
+ * - legacy Admin stats refreshes (options disabled, full result)
+ * - MCP live queries (options enabled with filters and page controls)
+ *
+ * @param result Mutable resultset generated by `SQL3_Processlist()`.
+ * @param opts Query options controlling filtering/sorting/pagination.
+ */
+static void apply_pgsql_processlist_query_options(SQLite3_result* result, const processlist_query_options_t& opts) {
+	if (!result || !opts.enabled) {
+		return;
+	}
+
+	std::vector<SQLite3_row*> filtered_rows;
+	filtered_rows.reserve(result->rows.size());
+
+	for (SQLite3_row* row : result->rows) {
+		if (pgsql_pl_row_matches(row, opts)) {
+			filtered_rows.push_back(row);
+		} else {
+			delete row;
+		}
+	}
+
+	if (opts.sort_by != processlist_sort_by_t::none && filtered_rows.size() > 1) {
+		std::stable_sort(
+			filtered_rows.begin(),
+			filtered_rows.end(),
+			[&opts](const SQLite3_row* lhs, const SQLite3_row* rhs) {
+				return pgsql_pl_row_less(lhs, rhs, opts);
+			}
+		);
+	}
+
+	size_t begin = std::min<size_t>(opts.offset, filtered_rows.size());
+	size_t end = begin;
+	if (opts.disable_pagination) {
+		begin = 0;
+		end = filtered_rows.size();
+	} else {
+		const uint64_t requested_end = static_cast<uint64_t>(begin) + static_cast<uint64_t>(opts.limit);
+		end = std::min<size_t>(filtered_rows.size(), static_cast<size_t>(requested_end));
+	}
+
+	std::vector<SQLite3_row*> paged_rows;
+	paged_rows.reserve(end > begin ? (end - begin) : 0);
+
+	for (size_t idx = 0; idx < filtered_rows.size(); ++idx) {
+		SQLite3_row* row = filtered_rows[idx];
+		if (idx >= begin && idx < end) {
+			paged_rows.push_back(row);
+		} else {
+			delete row;
+		}
+	}
+
+	result->rows.swap(paged_rows);
+	result->rows_count = static_cast<int>(result->rows.size());
+}
+
+} // namespace
 
 SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist(processlist_config_t args) {
 	const int colnum = 18;
@@ -4912,6 +5302,14 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist(processlist_config_t arg
 		}
 		pthread_mutex_unlock(&thr->thread_mutex);
 	}
+
+	/**
+	 * Apply optional in-memory query options used by MCP and other internal
+	 * consumers. Legacy callers keep `query_options.enabled=false`, so their
+	 * behavior remains unchanged and they still receive the full processlist.
+	 */
+	apply_pgsql_processlist_query_options(result, args.query_options);
+
 	return result;
 }
 

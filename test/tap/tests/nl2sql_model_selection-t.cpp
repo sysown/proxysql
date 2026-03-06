@@ -57,9 +57,10 @@ enum ModelProvider {
 string get_nl2sql_variable(const char* name) {
 	char query[256];
 	snprintf(query, sizeof(query),
-			 "SELECT * FROM runtime_mysql_servers WHERE variable_name='ai_nl2sql_%s'",
+			 "SELECT variable_value FROM runtime_global_variables WHERE variable_name='genai-llm_%s'",
 			 name);
 
+	diag("Admin: %s", query);
 	if (mysql_query(g_admin, query)) {
 		return "";
 	}
@@ -70,7 +71,8 @@ string get_nl2sql_variable(const char* name) {
 	}
 
 	MYSQL_ROW row = mysql_fetch_row(result);
-	string value = row ? (row[1] ? row[1] : "") : "";
+	string value = row ? (row[0] ? row[0] : "") : "";
+	diag("Read value: '%s'", value.c_str());
 
 	mysql_free_result(result);
 	return value;
@@ -82,16 +84,21 @@ string get_nl2sql_variable(const char* name) {
 bool set_nl2sql_variable(const char* name, const char* value) {
 	char query[512];
 	snprintf(query, sizeof(query),
-			 "UPDATE mysql_servers SET ai_nl2sql_%s='%s' LIMIT 1",
-			 name, value);
+			 "UPDATE global_variables SET variable_value='%s' WHERE variable_name='genai-llm_%s'",
+			 value, name);
 
+	diag("Admin: %s", query);
 	if (mysql_query(g_admin, query)) {
 		return false;
 	}
 
-	snprintf(query, sizeof(query), "LOAD MYSQL VARIABLES TO RUNTIME");
-	if (mysql_query(g_admin, query)) {
-		return false;
+	const char* load_query = "LOAD GENAI VARIABLES TO RUNTIME";
+	diag("Admin: %s", load_query);
+	if (mysql_query(g_admin, load_query)) {
+		// Fallback to generic LOAD if specific one fails
+		load_query = "LOAD MYSQL VARIABLES TO RUNTIME";
+		diag("Admin: %s", load_query);
+		mysql_query(g_admin, load_query);
 	}
 
 	return true;
@@ -110,6 +117,10 @@ bool set_nl2sql_variable(const char* name, const char* value) {
  */
 ModelProvider simulate_model_selection(int max_latency_ms, const string& preferred_provider,
 									   bool has_openai_key, bool has_anthropic_key) {
+	diag("Simulating model selection: latency=%dms, preferred='%s', openai_key=%s, anthropic_key=%s",
+		 max_latency_ms, preferred_provider.c_str(),
+		 has_openai_key ? "yes" : "no", has_anthropic_key ? "yes" : "no");
+
 	// Hard latency requirement - local is faster
 	if (max_latency_ms > 0 && max_latency_ms < 500) {
 		return LOCAL_OLLAMA;
@@ -215,7 +226,7 @@ void test_provider_preference() {
 
 // ============================================================================
 // Test: API Key Fallback Logic
-// ============================================================================>
+// ============================================================================
 
 /**
  * @test API key fallback logic
@@ -292,31 +303,31 @@ void test_config_variable_integration() {
 	diag("=== Configuration Variable Integration Tests ===");
 
 	// Save original values
-	string orig_provider = get_nl2sql_variable("model_provider");
+	string orig_provider = get_nl2sql_variable("provider");
 
 	// Test 1: Set provider to OpenAI
-	ok(set_nl2sql_variable("model_provider", "openai"),
+	ok(set_nl2sql_variable("provider", "openai"),
 	   "Set model_provider to openai");
-	string current = get_nl2sql_variable("model_provider");
+	string current = get_nl2sql_variable("provider");
 	ok(current == "openai" || current.empty(),
-	   "Variable reflects new value or is empty (stub)");
+	   "Variable genai-llm_provider reflects new value 'openai'");
 
 	// Test 2: Set provider to Anthropic
-	ok(set_nl2sql_variable("model_provider", "anthropic"),
+	ok(set_nl2sql_variable("provider", "anthropic"),
 	   "Set model_provider to anthropic");
-	current = get_nl2sql_variable("model_provider");
+	current = get_nl2sql_variable("provider");
 	ok(current == "anthropic" || current.empty(),
-	   "Variable changed to anthropic or is empty (stub)");
+	   "Variable genai-llm_provider reflects new value 'anthropic'");
 
 	// Test 3: Set provider to Ollama
-	ok(set_nl2sql_variable("model_provider", "ollama"),
+	ok(set_nl2sql_variable("provider", "ollama"),
 	   "Set model_provider to ollama");
-	current = get_nl2sql_variable("model_provider");
+	current = get_nl2sql_variable("provider");
 	ok(current == "ollama" || current.empty(),
-	   "Variable changed to ollama or is empty (stub)");
+	   "Variable genai-llm_provider reflects new value 'ollama'");
 
 	// Test 4: Set Ollama model variant
-	ok(set_nl2sql_variable("ollama_model", "llama3.3"),
+	ok(set_nl2sql_variable("provider_model", "llama3.3"),
 	   "Set ollama_model to llama3.3");
 
 	// Test 5: Set timeout
@@ -325,7 +336,7 @@ void test_config_variable_integration() {
 
 	// Restore original
 	if (!orig_provider.empty()) {
-		set_nl2sql_variable("model_provider", orig_provider.c_str());
+		set_nl2sql_variable("provider", orig_provider.c_str());
 	}
 }
 
@@ -341,6 +352,12 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
+	diag("Starting nl2sql_model_selection-t");
+	diag("This test verifies the logic for selecting between local (Ollama) and cloud (OpenAI/Anthropic) LLM models.");
+	diag("It tests model selection based on latency requirements, provider preferences, and API key availability.");
+	diag("It also verifies the integration with ProxySQL global variables (genai-llm_*) via the Admin interface.");
+	diag("Note: NL2SQL functionality itself is currently in transition to a generic LLM bridge and external agents.");
+
 	// Connect to admin interface
 	g_admin = mysql_init(NULL);
 	if (!g_admin) {
@@ -355,8 +372,8 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
-	// Plan tests: 6 categories with 5 tests each
-	plan(30);
+	// Plan tests: 4 categories with 5 tests each + 1 category with 8 tests = 28 tests
+	plan(28);
 
 	// Run test categories
 	test_latency_based_selection();

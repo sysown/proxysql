@@ -5,6 +5,9 @@ using json = nlohmann::json;
 //#define __CLASS_STANDARD_MYSQL_THREAD_H
 
 #include <functional>
+#include <algorithm>
+#include <cerrno>
+#include <cctype>
 #include <vector>
 
 #include "proxysql_utils.h"
@@ -365,8 +368,13 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"eventslog_default_log",
 	(char *)"eventslog_format",
 	(char *)"eventslog_stmt_parameters",
+	(char *)"eventslog_flush_timeout",
+ 	(char *)"eventslog_flush_size",
+ 	(char *)"eventslog_rate_limit",
 	(char *)"auditlog_filename",
 	(char *)"auditlog_filesize",
+	(char *)"auditlog_flush_timeout",
+ 	(char *)"auditlog_flush_size",
 	//(char *)"default_charset", // removed in 2.0.13 . Obsoleted previously using MySQL_Variables instead
 	(char *)"handle_unknown_charset",
 	(char *)"free_connections_pct",
@@ -451,6 +459,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"default_query_delay",
 	(char *)"default_query_timeout",
 	(char *)"query_processor_iterations",
+	(char *)"query_processor_first_comment_parsing",
 	(char *)"query_processor_regex",
 	(char *)"set_query_lock_on_hostgroup",
 	(char *)"set_parser_algorithm",
@@ -519,6 +528,8 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"protocol_compression_level",
 	(char *)"ignore_min_gtid_annotations",
 	(char *)"fast_forward_grace_close_ms",
+	(char *)"ffto_enabled",
+	(char *)"ffto_max_buffer_size",
 	NULL
 };
 
@@ -1324,6 +1335,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.default_query_delay=0;
 	variables.default_query_timeout=24*3600*1000;
 	variables.query_processor_iterations=0;
+	variables.query_processor_first_comment_parsing=2;
 	variables.query_processor_regex=1;
 	variables.set_query_lock_on_hostgroup=1;
 	variables.set_parser_algorithm=2; // before 2.6.0 this was 1
@@ -1347,6 +1359,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.ping_interval_server_msec=10000;
 	variables.ping_timeout_server=200;
 	variables.fast_forward_grace_close_ms=5000;
+	variables.ffto_enabled=true;
+	variables.ffto_max_buffer_size=1048576;
 	variables.default_schema=strdup((char *)"information_schema");
 	variables.handle_unknown_charset=1;
 	variables.interfaces=strdup((char *)"");
@@ -1360,8 +1374,13 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.eventslog_default_log=0;
 	variables.eventslog_format=1;
 	variables.eventslog_stmt_parameters=0;
+	variables.eventslog_flush_timeout=1000;
+ 	variables.eventslog_flush_size=4096;
+ 	variables.eventslog_rate_limit=1;
 	variables.auditlog_filename=strdup((char *)"");
 	variables.auditlog_filesize=100*1024*1024;
+	variables.auditlog_flush_timeout=1000;
+ 	variables.auditlog_flush_size=4096;
 	//variables.server_capabilities=CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB;
 	// major upgrade in 2.0.0
 	variables.server_capabilities = CLIENT_MYSQL | CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB | CLIENT_PLUGIN_AUTH;;
@@ -2041,6 +2060,63 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 			return false;
 		}
 	}
+	if (!strcasecmp(name,"eventslog_flush_timeout")) {
+ 		int intv=atoi(value);
+ 		if (intv >= 0) {
+ 			variables.eventslog_flush_timeout=intv;
+			if (intv > 5 * 60 * 1000) {
+ 				proxy_warning("mysql-eventslog_flush_timeout is set to a high value: %dms\n", intv);
+ 			}
+ 			return true;
+ 		} else {
+ 			return false;
+ 		}
+ 	}
+ 	if (!strcasecmp(name,"eventslog_flush_size")) {
+ 		int intv=atoi(value);
+ 		if (intv >= 0) {
+ 			variables.eventslog_flush_size=intv;
+ 			if (intv > 10 * 1024 * 1024) {
+ 				proxy_warning("mysql-eventslog_flush_size is set to a high value: %d\n", intv);
+ 			}
+ 			return true;
+ 		} else {
+ 			return false;
+ 		}
+ 	}
+ 	if (!strcasecmp(name,"eventslog_rate_limit")) {
+ 		int intv=atoi(value);
+ 		if (intv >= 1) {
+ 			variables.eventslog_rate_limit=intv;
+ 			return true;
+ 		} else {
+ 			return false;
+ 		}
+ 	}
+ 	if (!strcasecmp(name,"auditlog_flush_timeout")) {
+ 		int intv=atoi(value);
+ 		if (intv >= 0) {
+ 			variables.auditlog_flush_timeout=intv;
+			if (intv > 5 * 60 * 1000) {
+ 				proxy_warning("mysql-auditlog_flush_timeout is set to a high value: %dms\n", intv);
+ 			}
+ 			return true;
+ 		} else {
+ 			return false;
+ 		}
+ 	}
+	if (!strcasecmp(name,"auditlog_flush_size")) {
+ 		int intv=atoi(value);
+ 		if (intv >= 0) {
+ 			variables.auditlog_flush_size=intv;
+ 			if (intv > 10 * 1024 * 1024) {
+ 				proxy_warning("mysql-auditlog_flush_size is set to a high value: %d\n", intv);
+ 			}
+ 			return true;
+ 		} else {
+ 			return false;
+ 		}
+ 	}
 	if (!strcasecmp(name,"default_schema")) {
 		if (vallen) {
 			free(variables.default_schema);
@@ -2424,6 +2500,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["default_reconnect"]               = make_tuple(&variables.default_reconnect,               false);
 		VariablesPointers_bool["enable_client_deprecate_eof"]     = make_tuple(&variables.enable_client_deprecate_eof,     false);
 		VariablesPointers_bool["enable_server_deprecate_eof"]     = make_tuple(&variables.enable_server_deprecate_eof,     false);
+		VariablesPointers_bool["ffto_enabled"]                    = make_tuple(&variables.ffto_enabled,                    false);
 		VariablesPointers_bool["enable_load_data_local_infile"]   = make_tuple(&variables.enable_load_data_local_infile,   false);
 		VariablesPointers_bool["enforce_autocommit_on_reads"]     = make_tuple(&variables.enforce_autocommit_on_reads,     false);
 		VariablesPointers_bool["firewall_whitelist_enabled"]      = make_tuple(&variables.firewall_whitelist_enabled,      false);
@@ -2522,6 +2599,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["query_digests_max_query_length"]  = make_tuple(&variables.query_digests_max_query_length,  16, 1*1024*1024, false);
 		VariablesPointers_int["query_rules_fast_routing_algorithm"]  = make_tuple(&variables.query_rules_fast_routing_algorithm,  1, 2, false);
 		VariablesPointers_int["query_processor_iterations"]      = make_tuple(&variables.query_processor_iterations,       0,   1000*1000, false);
+		VariablesPointers_int["query_processor_first_comment_parsing"] = make_tuple(&variables.query_processor_first_comment_parsing, 0, 3, false);
 		VariablesPointers_int["query_processor_regex"]           = make_tuple(&variables.query_processor_regex,            1,           2, false);
 		VariablesPointers_int["query_retries_on_failure"]        = make_tuple(&variables.query_retries_on_failure,         0,        1000, false);
 		VariablesPointers_int["set_query_lock_on_hostgroup"]     = make_tuple(&variables.set_query_lock_on_hostgroup,      0,           1, false);
@@ -2557,6 +2635,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["ping_interval_server_msec"]     = make_tuple(&variables.ping_interval_server_msec,  1000, 7*24*3600*1000, false);
 		VariablesPointers_int["ping_timeout_server"]           = make_tuple(&variables.ping_timeout_server,          10,       600*1000, false);
 		VariablesPointers_int["fast_forward_grace_close_ms"]   = make_tuple(&variables.fast_forward_grace_close_ms,   0,      3600*1000, false);
+		VariablesPointers_int["ffto_max_buffer_size"]          = make_tuple(&variables.ffto_max_buffer_size,          1, 1024*1024*1024, false);
 		VariablesPointers_int["client_host_cache_size"]        = make_tuple(&variables.client_host_cache_size,        0,      1024*1024, false);
 		VariablesPointers_int["client_host_error_counts"]      = make_tuple(&variables.client_host_error_counts,      0,      1024*1024, false);
 		VariablesPointers_int["handle_warnings"]			   = make_tuple(&variables.handle_warnings,				  0,			  1, false);
@@ -2602,6 +2681,11 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		// the input validation for these variables MUST be EXPLICIT
 		VariablesPointers_int["binlog_reader_connect_retry_msec"] = make_tuple(&variables.binlog_reader_connect_retry_msec, 0, 0, true);
 		VariablesPointers_int["eventslog_format"] = make_tuple(&variables.eventslog_format, 0, 0, true);
+		VariablesPointers_int["eventslog_flush_timeout"] = make_tuple(&variables.eventslog_flush_timeout, 0, 0, true);
+ 		VariablesPointers_int["eventslog_flush_size"] = make_tuple(&variables.eventslog_flush_size, 0, 0, true);
+ 		VariablesPointers_int["eventslog_rate_limit"] = make_tuple(&variables.eventslog_rate_limit, 0, 0, true);
+ 		VariablesPointers_int["auditlog_flush_timeout"] = make_tuple(&variables.auditlog_flush_timeout, 0, 0, true);
+ 		VariablesPointers_int["auditlog_flush_size"] = make_tuple(&variables.auditlog_flush_size, 0, 0, true);
 		VariablesPointers_int["wait_timeout"]     = make_tuple(&variables.wait_timeout,     0, 0, true);
 		VariablesPointers_int["select_version_forwarding"] = make_tuple(&variables.select_version_forwarding, 0, 3, false);
 		VariablesPointers_int["data_packets_history_size"] = make_tuple(&variables.data_packets_history_size, 0, 0, true);
@@ -4481,6 +4565,7 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(default_query_delay);
 	REFRESH_VARIABLE_INT(default_query_timeout);
 	REFRESH_VARIABLE_INT(query_processor_iterations);
+	REFRESH_VARIABLE_INT(query_processor_first_comment_parsing);
 	REFRESH_VARIABLE_INT(query_processor_regex);
 	REFRESH_VARIABLE_INT(set_query_lock_on_hostgroup);
 	REFRESH_VARIABLE_INT(set_parser_algorithm);
@@ -4506,6 +4591,8 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(connect_timeout_server_max);
 	REFRESH_VARIABLE_INT(free_connections_pct);
 	REFRESH_VARIABLE_INT(fast_forward_grace_close_ms);
+	REFRESH_VARIABLE_BOOL(ffto_enabled);
+	REFRESH_VARIABLE_INT(ffto_max_buffer_size);
 	REFRESH_VARIABLE_INT(select_version_forwarding);
 #ifdef IDLE_THREADS
 	REFRESH_VARIABLE_INT(session_idle_ms);
@@ -4592,9 +4679,14 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(eventslog_default_log);
 	REFRESH_VARIABLE_INT(eventslog_format);
 	REFRESH_VARIABLE_INT(eventslog_stmt_parameters);
+	REFRESH_VARIABLE_INT(eventslog_flush_timeout);
+ 	REFRESH_VARIABLE_INT(eventslog_flush_size);
+ 	REFRESH_VARIABLE_INT(eventslog_rate_limit);
 	REFRESH_VARIABLE_CHAR(eventslog_filename);
 	REFRESH_VARIABLE_INT(auditlog_filesize);
 	REFRESH_VARIABLE_CHAR(auditlog_filename);
+	REFRESH_VARIABLE_INT(auditlog_flush_timeout);
+ 	REFRESH_VARIABLE_INT(auditlog_flush_size);
 	GloMyLogger->events_set_base_filename(); // both filename and filesize are set here
 	GloMyLogger->audit_set_base_filename(); // both filename and filesize are set here
 	REFRESH_VARIABLE_CHAR(default_schema);
@@ -5277,6 +5369,268 @@ void MySQL_Threads_Handler::Get_Memory_Stats() {
 	}
 }
 
+namespace {
+
+/**
+ * @brief Column indexes used by MySQL processlist filtering and sorting helpers.
+ */
+struct mysql_processlist_columns_t {
+	static constexpr int session_id = 1;
+	static constexpr int username = 2;
+	static constexpr int database = 3;
+	static constexpr int hostgroup = 6;
+	static constexpr int command = 11;
+	static constexpr int time_ms = 12;
+	static constexpr int info = 13;
+};
+
+/**
+ * @brief Safely return a row field or an empty string when missing.
+ *
+ * @param row Source processlist row.
+ * @param idx Field index in the processlist result.
+ * @return Pointer to the requested field or an empty-string literal.
+ */
+static const char* mysql_pl_field(const SQLite3_row* row, int idx) {
+	if (!row || idx < 0 || idx >= row->cnt || !row->fields[idx]) {
+		return "";
+	}
+	return row->fields[idx];
+}
+
+/**
+ * @brief Parse a processlist numeric field as unsigned integer.
+ *
+ * Invalid or empty values are normalized to zero so sorting and filtering remain
+ * deterministic for partial rows.
+ *
+ * @param value Text field containing an integer representation.
+ * @return Parsed unsigned value, or `0` on parse failure.
+ */
+static uint64_t mysql_pl_to_u64(const char* value) {
+	if (!value || !value[0]) {
+		return 0;
+	}
+
+	char* end = nullptr;
+	errno = 0;
+	unsigned long long parsed = strtoull(value, &end, 10);
+	if (end == value || *end != '\0' || errno != 0) {
+		return 0;
+	}
+
+	return static_cast<uint64_t>(parsed);
+}
+
+/**
+ * @brief Case-(in)sensitive substring matcher used by `match_info`.
+ *
+ * @param haystack Candidate text.
+ * @param needle Substring to search for.
+ * @param case_sensitive Whether matching should be case-sensitive.
+ * @return true when @p needle is found in @p haystack.
+ */
+static bool mysql_pl_contains(const std::string& haystack, const std::string& needle, bool case_sensitive) {
+	if (needle.empty()) {
+		return true;
+	}
+
+	if (case_sensitive) {
+		return haystack.find(needle) != std::string::npos;
+	}
+
+	auto it = std::search(
+		haystack.begin(),
+		haystack.end(),
+		needle.begin(),
+		needle.end(),
+		[](char lhs, char rhs) {
+			return std::tolower(static_cast<unsigned char>(lhs)) ==
+			       std::tolower(static_cast<unsigned char>(rhs));
+		}
+	);
+	return it != haystack.end();
+}
+
+/**
+ * @brief Evaluate whether a MySQL processlist row matches caller filters.
+ *
+ * @param row Processlist row from `SQL3_Processlist`.
+ * @param opts Typed query options supplied by the caller.
+ * @return true when the row satisfies all active filters.
+ */
+static bool mysql_pl_row_matches(const SQLite3_row* row, const processlist_query_options_t& opts) {
+	if (!opts.username.empty() && opts.username != mysql_pl_field(row, mysql_processlist_columns_t::username)) {
+		return false;
+	}
+	if (!opts.database.empty() && opts.database != mysql_pl_field(row, mysql_processlist_columns_t::database)) {
+		return false;
+	}
+	if (opts.hostgroup >= 0) {
+		const int row_hostgroup = static_cast<int>(mysql_pl_to_u64(mysql_pl_field(row, mysql_processlist_columns_t::hostgroup)));
+		if (row_hostgroup != opts.hostgroup) {
+			return false;
+		}
+	}
+	if (!opts.command.empty() && opts.command != mysql_pl_field(row, mysql_processlist_columns_t::command)) {
+		return false;
+	}
+	if (opts.min_time_ms >= 0) {
+		const uint64_t row_time_ms = mysql_pl_to_u64(mysql_pl_field(row, mysql_processlist_columns_t::time_ms));
+		if (row_time_ms < static_cast<uint64_t>(opts.min_time_ms)) {
+			return false;
+		}
+	}
+	if (opts.has_session_id) {
+		const uint64_t row_session_id = mysql_pl_to_u64(mysql_pl_field(row, mysql_processlist_columns_t::session_id));
+		if (row_session_id != opts.session_id) {
+			return false;
+		}
+	}
+	if (!opts.match_info.empty()) {
+		const std::string info = mysql_pl_field(row, mysql_processlist_columns_t::info);
+		if (!mysql_pl_contains(info, opts.match_info, opts.info_case_sensitive)) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+/**
+ * @brief Compare two MySQL processlist rows according to typed sort options.
+ *
+ * The comparison applies a deterministic tie-breaker on `SessionID` so paging
+ * remains stable across repeated calls with identical data.
+ *
+ * @param lhs Left-hand row.
+ * @param rhs Right-hand row.
+ * @param opts Query options carrying sort key and direction.
+ * @return true when @p lhs should be ordered before @p rhs.
+ */
+static bool mysql_pl_row_less(const SQLite3_row* lhs, const SQLite3_row* rhs, const processlist_query_options_t& opts) {
+	const uint64_t lhs_session_id = mysql_pl_to_u64(mysql_pl_field(lhs, mysql_processlist_columns_t::session_id));
+	const uint64_t rhs_session_id = mysql_pl_to_u64(mysql_pl_field(rhs, mysql_processlist_columns_t::session_id));
+
+	auto string_compare = [&](int idx) -> int {
+		const std::string lhs_value = mysql_pl_field(lhs, idx);
+		const std::string rhs_value = mysql_pl_field(rhs, idx);
+		if (lhs_value < rhs_value) {
+			return -1;
+		}
+		if (lhs_value > rhs_value) {
+			return 1;
+		}
+		return 0;
+	};
+
+	auto numeric_compare = [&](int idx) -> int {
+		const uint64_t lhs_value = mysql_pl_to_u64(mysql_pl_field(lhs, idx));
+		const uint64_t rhs_value = mysql_pl_to_u64(mysql_pl_field(rhs, idx));
+		if (lhs_value < rhs_value) {
+			return -1;
+		}
+		if (lhs_value > rhs_value) {
+			return 1;
+		}
+		return 0;
+	};
+
+	int cmp = 0;
+	switch (opts.sort_by) {
+		case processlist_sort_by_t::time_ms:
+			cmp = numeric_compare(mysql_processlist_columns_t::time_ms);
+			break;
+		case processlist_sort_by_t::session_id:
+			cmp = numeric_compare(mysql_processlist_columns_t::session_id);
+			break;
+		case processlist_sort_by_t::username:
+			cmp = string_compare(mysql_processlist_columns_t::username);
+			break;
+		case processlist_sort_by_t::hostgroup:
+			cmp = numeric_compare(mysql_processlist_columns_t::hostgroup);
+			break;
+		case processlist_sort_by_t::command:
+			cmp = string_compare(mysql_processlist_columns_t::command);
+			break;
+		case processlist_sort_by_t::none:
+		default:
+			cmp = 0;
+			break;
+	}
+
+	if (cmp != 0) {
+		return opts.sort_desc ? (cmp > 0) : (cmp < 0);
+	}
+
+	return lhs_session_id < rhs_session_id;
+}
+
+/**
+ * @brief Apply typed filtering, sorting, and pagination to MySQL processlist rows.
+ *
+ * This post-processing stage is intentionally local to `SQL3_Processlist()` so
+ * the same API can serve:
+ * - legacy Admin stats refreshes (options disabled, full result)
+ * - MCP live queries (options enabled with filters and page controls)
+ *
+ * @param result Mutable resultset generated by `SQL3_Processlist()`.
+ * @param opts Query options controlling filtering/sorting/pagination.
+ */
+static void apply_mysql_processlist_query_options(SQLite3_result* result, const processlist_query_options_t& opts) {
+	if (!result || !opts.enabled) {
+		return;
+	}
+
+	std::vector<SQLite3_row*> filtered_rows;
+	filtered_rows.reserve(result->rows.size());
+
+	for (SQLite3_row* row : result->rows) {
+		if (mysql_pl_row_matches(row, opts)) {
+			filtered_rows.push_back(row);
+		} else {
+			delete row;
+		}
+	}
+
+	if (opts.sort_by != processlist_sort_by_t::none && filtered_rows.size() > 1) {
+		std::stable_sort(
+			filtered_rows.begin(),
+			filtered_rows.end(),
+			[&opts](const SQLite3_row* lhs, const SQLite3_row* rhs) {
+				return mysql_pl_row_less(lhs, rhs, opts);
+			}
+		);
+	}
+
+	size_t begin = std::min<size_t>(opts.offset, filtered_rows.size());
+	size_t end = begin;
+	if (opts.disable_pagination) {
+		begin = 0;
+		end = filtered_rows.size();
+	} else {
+		const uint64_t requested_end = static_cast<uint64_t>(begin) + static_cast<uint64_t>(opts.limit);
+		end = std::min<size_t>(filtered_rows.size(), static_cast<size_t>(requested_end));
+	}
+
+	std::vector<SQLite3_row*> paged_rows;
+	paged_rows.reserve(end > begin ? (end - begin) : 0);
+
+	for (size_t idx = 0; idx < filtered_rows.size(); ++idx) {
+		SQLite3_row* row = filtered_rows[idx];
+		if (idx >= begin && idx < end) {
+			paged_rows.push_back(row);
+		} else {
+			delete row;
+		}
+	}
+
+	result->rows.swap(paged_rows);
+	result->rows_count = static_cast<int>(result->rows.size());
+}
+
+} // namespace
+
 SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist(processlist_config_t args) {
 	const int colnum=16;
         char port[NI_MAXSERV];
@@ -5558,6 +5912,14 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist(processlist_config_t ar
 		}
 		pthread_mutex_unlock(&thr->thread_mutex);
 	}
+
+	/**
+	 * Apply optional in-memory query options used by MCP and other internal
+	 * consumers. Legacy callers keep `query_options.enabled=false`, so their
+	 * behavior remains unchanged and they still receive the full processlist.
+	 */
+	apply_mysql_processlist_query_options(result, args.query_options);
+
 	return result;
 }
 

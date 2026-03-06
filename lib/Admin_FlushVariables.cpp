@@ -26,12 +26,6 @@ using json = nlohmann::json;
 #include "proxysql_config.h"
 #include "proxysql_restapi.h"
 #include "MCP_Thread.h"
-#include "MySQL_Tool_Handler.h"
-#include "Query_Tool_Handler.h"
-#include "Config_Tool_Handler.h"
-#include "Admin_Tool_Handler.h"
-#include "Cache_Tool_Handler.h"
-#include "Observe_Tool_Handler.h"
 #include "ProxySQL_MCP_Server.hpp"
 #include "proxysql_utils.h"
 #include "prometheus_helpers.h"
@@ -205,6 +199,8 @@ void ProxySQL_Admin::flush_GENERIC_variables__process__database_to_runtime(
 #endif // PROXYSQLCLICKHOUSE
 		} else if (modname == "ldap") {
 			rc = GloMyLdapAuth->set_variable(r->fields[0],r->fields[1]);
+		} else if (modname == "tsdb") {
+			rc = GloProxyStats->set_variable(r->fields[0],r->fields[1]);
 		}
 		const string v = string(r->fields[0]);
 		if (rc==false) {
@@ -223,6 +219,8 @@ void ProxySQL_Admin::flush_GENERIC_variables__process__database_to_runtime(
 #endif // PROXYSQLCLICKHOUSE
 				} else if (modname == "ldap") {
 					val = GloMyLdapAuth->get_variable(r->fields[0]);
+				} else if (modname == "tsdb") {
+					val = GloProxyStats->get_variable(r->fields[0]);
 				}
 				char q[1000];
 					if (val) {
@@ -618,6 +616,25 @@ void ProxySQL_Admin::flush_sqliteserver_variables___database_to_runtime(SQLite3D
 		//GloClickHouse->commit();
 		GloSQLite3Server->wrunlock();
 	}
+	if (resultset) delete resultset;
+}
+
+void ProxySQL_Admin::flush_tsdb_variables___database_to_runtime(SQLite3DB *db, bool replace) {
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing TSDB variables. Replace:%d\n", replace);
+	if (GloProxyStats == NULL) {
+		return;
+	}
+
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+
+	if (flush_GENERIC_variables__retrieve__database_to_runtime("tsdb", error, cols, affected_rows, resultset) == true) {
+		flush_GENERIC_variables__process__database_to_runtime("tsdb", db, resultset, false, replace, {}, {}, {}, {});
+		flush_tsdb_variables___runtime_to_database(admindb, false, false, false, true);
+	}
+
 	if (resultset) delete resultset;
 }
 
@@ -1389,15 +1406,8 @@ void ProxySQL_Admin::flush_mcp_variables___database_to_runtime(SQLite3DB* db, bo
 			GloMCPH->set_variable(var_name, val);
 		}
 
-		// Populate runtime_global_variables
-		// Note: Checksum generation is skipped for MCP until the feature is complete
-		{
-			pthread_mutex_lock(&GloVars.checksum_mutex);
-			wrunlock();  // Release outer lock before calling runtime_to_database
-			flush_mcp_variables___runtime_to_database(admindb, false, false, false, true, true);
-			wrlock();  // Re-acquire outer lock
-			pthread_mutex_unlock(&GloVars.checksum_mutex);
-		}
+		// Update runtime_global_variables table to reflect current runtime state
+		flush_mcp_variables___runtime_to_database(admindb, false, false, false, true, false);
 
 		// Manage MCP server state
 		load_mcp_server();
@@ -1408,8 +1418,7 @@ void ProxySQL_Admin::flush_mcp_variables___database_to_runtime(SQLite3DB* db, bo
 }
 
 void ProxySQL_Admin::flush_mcp_variables___runtime_to_database(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime, bool use_lock) {
-	proxy_info("MCP: flush_mcp_variables___runtime_to_database called. runtime=%d, use_lock=%d\n", runtime, use_lock);
-	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MCP variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MCP variables. Replace:%d, Delete:%d, Only_If_Empty:%d, Runtime:%d\n", replace, del, onlyifempty, runtime);
 	if (GloMCPH == NULL) {
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "MCP handler not initialized, skipping MCP variables\n");
 		return;
@@ -1442,64 +1451,62 @@ void ProxySQL_Admin::flush_mcp_variables___runtime_to_database(SQLite3DB* db, bo
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Deleting MCP variables from global_variables\n");
 		db->execute("DELETE FROM global_variables WHERE variable_name LIKE 'mcp-%'");
 	}
-	static char* a;
-	static char* b;
-	if (replace) {
-		a = (char*)"REPLACE INTO global_variables(variable_name, variable_value) VALUES(\"mcp-%s\",\"%s\")";
+	if (runtime) {
+		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'mcp-%'");
 	}
-	else {
-		a = (char*)"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(\"mcp-%s\",\"%s\")";
-	}
-	b = (char*)"INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(\"%s\",\"%s\")";
 	int rc;
-	auto [rc1, statement1_unique] = db->prepare_v2("REPLACE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)");
+	const char* a;
+	if (replace) {
+		a = "REPLACE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)";
+	} else {
+		a = "INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)";
+	}
+	auto [rc1, stmt1] = db->prepare_v2(a);
 	ASSERT_SQLITE_OK(rc1, db);
-	sqlite3_stmt* statement1 = statement1_unique.get();
+	sqlite3_stmt* statement1 = stmt1.get();
+
+	// Only prepare runtime_global_variables statement if runtime flag is set
+	// (table may not exist during early initialization)
+	sqlite3_stmt* statement2 = nullptr;
+	stmt_unique_ptr stmt2 {};
+	if (runtime) {
+		auto [rc2, st2] = db->prepare_v2("INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(?1, ?2)");
+		ASSERT_SQLITE_OK(rc2, db);
+		stmt2 = std::move(st2);
+		statement2 = stmt2.get();
+	}
 
 	if (use_lock) {
 		GloMCPH->wrlock();
 	}
-	if (runtime) {
-		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'mcp-%'");
-	}
 	char** varnames = GloMCPH->get_variables_list();
-	int var_count = 0;
-	for (int i = 0; varnames[i]; i++) {
-		var_count++;
-	}
-	proxy_info("MCP: Processing %d variables\n", var_count);
 	for (int i = 0; varnames[i]; i++) {
 		char val[256];
 		GloMCPH->get_variable(varnames[i], val);
 		size_t qualified_name_len = strlen(varnames[i]) + sizeof("mcp-");
 		char* qualified_name = (char*)malloc(qualified_name_len);
 		snprintf(qualified_name, qualified_name_len, "mcp-%s", varnames[i]);
+
+		// Insert into global_variables
 		rc = (*proxy_sqlite3_bind_text)(statement1, 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-		rc = (*proxy_sqlite3_bind_text)(statement1, 2, (val ? val : (char*)""), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 2, (val[0] ? val : (char*)""), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 		SAFE_SQLITE3_STEP2(statement1);
 		rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, db);
 		rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, db);
-		if (runtime) {
-			if (i < 3) {
-				proxy_info("MCP: Inserting variable %d: %s = %s\n", i, qualified_name, val);
-			}
-			// Use db->execute() for runtime_global_variables like admin version does
-			// qualified_name already contains the mcp- prefix, so we use %s without prefix
-			int l = strlen(qualified_name) + strlen(val) + 100;
-			char* query = (char*)malloc(l);
-			snprintf(query, l, b, qualified_name, val);
-			if (i < 3) {
-				proxy_info("MCP: Executing SQL: %s\n", query);
-			}
-			db->execute(query);
-			free(query);
+
+		// Insert into runtime_global_variables if runtime flag is set
+		if (runtime && statement2) {
+			rc = (*proxy_sqlite3_bind_text)(statement2, 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_text)(statement2, 2, (val[0] ? val : (char*)""), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			SAFE_SQLITE3_STEP2(statement2);
+			rc = (*proxy_sqlite3_clear_bindings)(statement2); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_reset)(statement2); ASSERT_SQLITE_OK(rc, db);
 		}
+
 		free(qualified_name);
 	}
-	proxy_info("MCP: Finished processing %d variables\n", var_count);
 
 	if (use_lock) {
-		proxy_info("MCP: Releasing lock\n");
 		GloMCPH->wrunlock();
 	}
 	for (int i = 0; varnames[i]; i++) {

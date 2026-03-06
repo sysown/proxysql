@@ -259,7 +259,15 @@ fn_make_executable () {
 fn_getenv
 fn_plan
 
-echo "msg: # MCP RAG Metrics Test Suite"
+echo "msg: #"
+echo "msg: # === MCP RAG Metrics Test Suite ==="
+echo "msg: # This test validates the MCP RAG (Retrieval-Augmented Generation) endpoint:"
+echo "msg: # - Pre-flight checks: ProxySQL admin, MCP server, RAG endpoint"
+echo "msg: # - RAG Tool Counters: validates tool invocation counters increment"
+echo "msg: # - RAG Search Logging: validates search queries are logged correctly"
+echo "msg: # The RAG endpoint provides FTS (full-text search) and vector search"
+echo "msg: # capabilities for semantic discovery of database schemas."
+echo "msg: # ==================================="
 echo "msg: #"
 
 # Ensure test scripts are executable
