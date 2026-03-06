@@ -794,7 +794,10 @@ string get_task_query(const state_t& st) {
 		};
 
 		if (params->pt_heartbeat && strlen(params->pt_heartbeat.get())) {
-			return string { REPLICATION_LAG_QUERY_PT_HEARTBEAT } + params->pt_heartbeat.get();
+			// FIXME: This is a SQL injection vulnerability. 
+			// pt-heartbeat support for PostgreSQL is currently disabled.
+			// return string { REPLICATION_LAG_QUERY_PT_HEARTBEAT } + params->pt_heartbeat.get();
+			return REPLICATION_LAG_QUERY;
 		} else {
 			return REPLICATION_LAG_QUERY;
 		}

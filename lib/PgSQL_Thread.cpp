@@ -2855,9 +2855,9 @@ PgSQL_Thread::~PgSQL_Thread() {
 	/*
 	if (mysql_thread___monitor_username) { free(mysql_thread___monitor_username); mysql_thread___monitor_username = NULL; }
 	if (mysql_thread___monitor_password) { free(mysql_thread___monitor_password); mysql_thread___monitor_password = NULL; }
-	if (mysql_thread___monitor_replication_lag_use_percona_heartbeat) {
-		free(mysql_thread___monitor_replication_lag_use_percona_heartbeat);
-		mysql_thread___monitor_replication_lag_use_percona_heartbeat = NULL;
+	if (pgsql_thread___monitor_replication_lag_use_percona_heartbeat) {
+		free(pgsql_thread___monitor_replication_lag_use_percona_heartbeat);
+		pgsql_thread___monitor_replication_lag_use_percona_heartbeat = NULL;
 	}
 	*/
 	//if (pgsql_thread___default_schema) { free(pgsql_thread___default_schema); pgsql_thread___default_schema = NULL; }
