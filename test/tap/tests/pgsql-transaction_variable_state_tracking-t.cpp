@@ -1055,6 +1055,1598 @@ int main(int argc, char** argv) {
         return (error_count >= 1) && connection_ok;
     });
 
+    // ============================================================================
+    // Mixed Mode Transition Tests (Simple Query <-> Pipeline)
+    // ============================================================================
+
+    // Test: Simple query BEGIN -> Pipeline SET -> Simple query ROLLBACK
+    add_test("Mixed mode: Simple BEGIN -> Pipeline SET -> Simple ROLLBACK", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        if (!conn) return false;
+
+        const auto original = getVariable(conn.get(), "timezone");
+        const std::string new_value = (original.find("UTC") != std::string::npos) ?
+                                      "PST8PDT" : "UTC";
+
+        diag("Original timezone: '%s', will SET to: '%s'", original.c_str(), new_value.c_str());
+
+        // Step 1: Simple query BEGIN - verify it succeeded
+        PGresult* begin_res = PQexec(conn.get(), "BEGIN");
+        if (PQresultStatus(begin_res) != PGRES_COMMAND_OK) {
+            diag("BEGIN failed: %s", PQerrorMessage(conn.get()));
+            PQclear(begin_res);
+            return false;
+        }
+        PQclear(begin_res);
+        diag("Step 1: BEGIN succeeded");
+
+        // Step 2: Enter pipeline mode and SET
+        if (PQenterPipelineMode(conn.get()) != 1) {
+            diag("Failed to enter pipeline mode");
+            PQexec(conn.get(), "ROLLBACK");  // Cleanup
+            return false;
+        }
+
+        std::string set_query = "SET timezone = '" + new_value + "'";
+        if (PQsendQueryParams(conn.get(), set_query.c_str(), 0, NULL, NULL, NULL, NULL, 0) == 0) {
+            diag("Failed to send SET query");
+            PQexitPipelineMode(conn.get());
+            PQexec(conn.get(), "ROLLBACK");  // Cleanup
+            return false;
+        }
+        PQpipelineSync(conn.get());
+        PQflush(conn.get());
+
+        // Consume results - track errors
+        int count = 0;
+        int cmd_success = 0;
+        int errors = 0;
+        int sock = PQsocket(conn.get());
+        PGresult* res;
+
+        while (count < 2) {
+            if (PQconsumeInput(conn.get()) == 0) {
+                diag("PQconsumeInput failed: %s", PQerrorMessage(conn.get()));
+                PQexitPipelineMode(conn.get());
+                PQexec(conn.get(), "ROLLBACK");
+                return false;
+            }
+            while ((res = PQgetResult(conn.get())) != NULL) {
+                ExecStatusType status = PQresultStatus(res);
+                if (status == PGRES_COMMAND_OK) {
+                    cmd_success++;
+                } else if (status == PGRES_FATAL_ERROR) {
+                    errors++;
+                    diag("Command failed in pipeline: %s", PQresultErrorMessage(res));
+                } else if (status == PGRES_PIPELINE_SYNC) {
+                    PQclear(res);
+                    count++;
+                    break;
+                }
+                PQclear(res);
+                count++;
+            }
+            if (count >= 2) break;
+            if (!PQisBusy(conn.get())) continue;
+            fd_set input_mask;
+            FD_ZERO(&input_mask);
+            FD_SET(sock, &input_mask);
+            struct timeval timeout = {5, 0};
+            select(sock + 1, &input_mask, NULL, NULL, &timeout);
+        }
+
+        PQexitPipelineMode(conn.get());
+
+        // Verify SET succeeded
+        if (errors > 0 || cmd_success < 1) {
+            diag("SET command failed or not completed. successes=%d, errors=%d", cmd_success, errors);
+            PQexec(conn.get(), "ROLLBACK");  // Cleanup
+            return false;
+        }
+        diag("Step 2: Pipeline SET succeeded");
+
+        // Step 3: Simple query ROLLBACK
+        PGresult* rollback_res = PQexec(conn.get(), "ROLLBACK");
+        if (PQresultStatus(rollback_res) != PGRES_COMMAND_OK) {
+            diag("ROLLBACK failed: %s", PQerrorMessage(conn.get()));
+            PQclear(rollback_res);
+            return false;
+        }
+        PQclear(rollback_res);
+        diag("Step 3: ROLLBACK succeeded");
+
+        // Verify ROLLBACK reverted the SET
+        const auto final_val = getVariable(conn.get(), "timezone");
+        diag("Final timezone after ROLLBACK: '%s', expected: '%s'", final_val.c_str(), original.c_str());
+        bool reverted = (final_val == original);
+
+        return reverted;
+    });
+
+    // Test: Pipeline BEGIN -> Simple query SET -> Pipeline COMMIT
+    add_test("Mixed mode: Pipeline BEGIN -> Simple SET -> Pipeline COMMIT", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        if (!conn) return false;
+
+        const auto original = getVariable(conn.get(), "datestyle");
+        const std::string new_value = (original.find("ISO") != std::string::npos) ?
+                                      "SQL, DMY" : "ISO, MDY";
+
+        // Step 1: Enter pipeline mode and BEGIN
+        if (PQenterPipelineMode(conn.get()) != 1) {
+            diag("Failed to enter pipeline mode");
+            return false;
+        }
+
+        PQsendQueryParams(conn.get(), "BEGIN", 0, NULL, NULL, NULL, NULL, 0);
+        PQpipelineSync(conn.get());
+        PQflush(conn.get());
+
+        // Consume BEGIN result
+        int count = 0;
+        int sock = PQsocket(conn.get());
+        PGresult* res;
+
+        while (count < 2) {
+            if (PQconsumeInput(conn.get()) == 0) break;
+            while ((res = PQgetResult(conn.get())) != NULL) {
+                if (PQresultStatus(res) == PGRES_PIPELINE_SYNC) {
+                    PQclear(res);
+                    count++;
+                    break;
+                }
+                PQclear(res);
+                count++;
+            }
+            if (count >= 2) break;
+            if (!PQisBusy(conn.get())) continue;
+            fd_set input_mask;
+            FD_ZERO(&input_mask);
+            FD_SET(sock, &input_mask);
+            struct timeval timeout = {5, 0};
+            select(sock + 1, &input_mask, NULL, NULL, &timeout);
+        }
+
+        PQexitPipelineMode(conn.get());
+
+        // Step 2: Simple query SET
+        executeQuery(conn.get(), "SET datestyle = '" + new_value + "'");
+
+        // Step 3: Re-enter pipeline mode and COMMIT
+        if (PQenterPipelineMode(conn.get()) != 1) {
+            diag("Failed to enter pipeline mode");
+            return false;
+        }
+
+        PQsendQueryParams(conn.get(), "COMMIT", 0, NULL, NULL, NULL, NULL, 0);
+        PQpipelineSync(conn.get());
+        PQflush(conn.get());
+
+        // Consume COMMIT result
+        count = 0;
+        while (count < 2) {
+            if (PQconsumeInput(conn.get()) == 0) break;
+            while ((res = PQgetResult(conn.get())) != NULL) {
+                if (PQresultStatus(res) == PGRES_PIPELINE_SYNC) {
+                    PQclear(res);
+                    count++;
+                    break;
+                }
+                PQclear(res);
+                count++;
+            }
+            if (count >= 2) break;
+            if (!PQisBusy(conn.get())) continue;
+            fd_set input_mask;
+            FD_ZERO(&input_mask);
+            FD_SET(sock, &input_mask);
+            struct timeval timeout = {5, 0};
+            select(sock + 1, &input_mask, NULL, NULL, &timeout);
+        }
+
+        PQexitPipelineMode(conn.get());
+
+        // Verify COMMIT persisted the SET
+        const auto final_val = getVariable(conn.get(), "datestyle");
+        bool persisted = (final_val.find(new_value) != std::string::npos) && (final_val != original);
+
+        // Cleanup
+        if (!persisted) {
+            executeQuery(conn.get(), "SET datestyle = '" + original + "'");
+        }
+
+        return persisted;
+    });
+
+    // Test: Simple query transaction -> enter pipeline -> continue transaction
+    add_test("Mixed mode: Simple transaction -> Pipeline continuation", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        if (!conn) return false;
+
+        const auto original = getVariable(conn.get(), "timezone");
+        const std::string value1 = (original.find("UTC") != std::string::npos) ?
+                                   "PST8PDT" : "UTC";
+        const std::string value2 = (value1 == "UTC") ? "EST5EDT" : "UTC";
+
+        diag("Original: '%s', value1: '%s', value2: '%s'", original.c_str(), value1.c_str(), value2.c_str());
+
+        // Step 1: Simple query BEGIN and first SET
+        PGresult* begin_res = PQexec(conn.get(), "BEGIN");
+        if (PQresultStatus(begin_res) != PGRES_COMMAND_OK) {
+            diag("BEGIN failed");
+            PQclear(begin_res);
+            return false;
+        }
+        PQclear(begin_res);
+
+        PGresult* set1_res = PQexec(conn.get(), ("SET timezone = '" + value1 + "'").c_str());
+        if (PQresultStatus(set1_res) != PGRES_COMMAND_OK) {
+            diag("First SET failed");
+            PQclear(set1_res);
+            PQexec(conn.get(), "ROLLBACK");
+            return false;
+        }
+        PQclear(set1_res);
+        diag("Step 1: BEGIN and first SET succeeded");
+
+        // Step 2: Enter pipeline mode for second SET and COMMIT
+        if (PQenterPipelineMode(conn.get()) != 1) {
+            diag("Failed to enter pipeline mode");
+            PQexec(conn.get(), "ROLLBACK");
+            return false;
+        }
+
+        std::string set_query = "SET timezone = '" + value2 + "'";
+        if (PQsendQueryParams(conn.get(), set_query.c_str(), 0, NULL, NULL, NULL, NULL, 0) == 0 ||
+            PQsendQueryParams(conn.get(), "COMMIT", 0, NULL, NULL, NULL, NULL, 0) == 0) {
+            diag("Failed to send queries");
+            PQexitPipelineMode(conn.get());
+            PQexec(conn.get(), "ROLLBACK");
+            return false;
+        }
+        PQpipelineSync(conn.get());
+        PQflush(conn.get());
+
+        // Consume results
+        int count = 0;
+        int set2_success = 0;
+        int commit_success = 0;
+        int errors = 0;
+        int sock = PQsocket(conn.get());
+        PGresult* res;
+
+        while (count < 3) {
+            if (PQconsumeInput(conn.get()) == 0) {
+                diag("PQconsumeInput failed");
+                PQexitPipelineMode(conn.get());
+                return false;
+            }
+            while ((res = PQgetResult(conn.get())) != NULL) {
+                ExecStatusType status = PQresultStatus(res);
+                if (status == PGRES_COMMAND_OK) {
+                    if (set2_success == 0 && commit_success == 0) {
+                        set2_success++;
+                        diag("Second SET succeeded");
+                    } else {
+                        commit_success++;
+                        diag("COMMIT succeeded");
+                    }
+                } else if (status == PGRES_FATAL_ERROR) {
+                    errors++;
+                    diag("Command failed: %s", PQresultErrorMessage(res));
+                } else if (status == PGRES_PIPELINE_SYNC) {
+                    PQclear(res);
+                    count++;
+                    break;
+                }
+                PQclear(res);
+                count++;
+            }
+            if (count >= 3) break;
+            if (!PQisBusy(conn.get())) continue;
+            fd_set input_mask;
+            FD_ZERO(&input_mask);
+            FD_SET(sock, &input_mask);
+            struct timeval timeout = {5, 0};
+            select(sock + 1, &input_mask, NULL, NULL, &timeout);
+        }
+
+        PQexitPipelineMode(conn.get());
+
+        if (errors > 0) {
+            diag("Errors in pipeline: %d", errors);
+            return false;
+        }
+        if (set2_success < 1 || commit_success < 1) {
+            diag("Missing results: SET2=%d, COMMIT=%d", set2_success, commit_success);
+            return false;
+        }
+
+        // Verify final value is value2 (second SET persisted)
+        const auto final_val = getVariable(conn.get(), "timezone");
+        diag("Final value: '%s', expected: '%s'", final_val.c_str(), value2.c_str());
+        bool success = (final_val == value2);
+
+        // Cleanup
+        if (!success) {
+            executeQuery(conn.get(), "SET timezone = '" + original + "'");
+        }
+
+        return success;
+    });
+
+    // Test: Pipeline transaction -> exit pipeline -> simple query ROLLBACK
+    add_test("Mixed mode: Pipeline start -> Simple ROLLBACK", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        if (!conn) return false;
+
+        const auto original = getVariable(conn.get(), "datestyle");
+        const std::string new_value = (original.find("ISO") != std::string::npos) ?
+                                      "SQL, DMY" : "ISO, MDY";
+
+        diag("Original: '%s', will SET to: '%s'", original.c_str(), new_value.c_str());
+
+        // Step 1: Enter pipeline mode, BEGIN, SET, then exit
+        if (PQenterPipelineMode(conn.get()) != 1) {
+            diag("Failed to enter pipeline mode");
+            return false;
+        }
+
+        std::string set_query = "SET datestyle = '" + new_value + "'";
+        if (PQsendQueryParams(conn.get(), "BEGIN", 0, NULL, NULL, NULL, NULL, 0) == 0 ||
+            PQsendQueryParams(conn.get(), set_query.c_str(), 0, NULL, NULL, NULL, NULL, 0) == 0) {
+            diag("Failed to send queries");
+            PQexitPipelineMode(conn.get());
+            return false;
+        }
+        PQpipelineSync(conn.get());
+        PQflush(conn.get());
+
+        // Consume results
+        int count = 0;
+        int begin_success = 0;
+        int set_success = 0;
+        int errors = 0;
+        int sock = PQsocket(conn.get());
+        PGresult* res;
+
+        while (count < 3) {
+            if (PQconsumeInput(conn.get()) == 0) {
+                diag("PQconsumeInput failed");
+                PQexitPipelineMode(conn.get());
+                return false;
+            }
+            while ((res = PQgetResult(conn.get())) != NULL) {
+                ExecStatusType status = PQresultStatus(res);
+                if (status == PGRES_COMMAND_OK) {
+                    if (begin_success == 0) {
+                        begin_success++;
+                        diag("BEGIN succeeded");
+                    } else {
+                        set_success++;
+                        diag("SET succeeded");
+                    }
+                } else if (status == PGRES_FATAL_ERROR) {
+                    errors++;
+                    diag("Command failed: %s", PQresultErrorMessage(res));
+                } else if (status == PGRES_PIPELINE_SYNC) {
+                    PQclear(res);
+                    count++;
+                    break;
+                }
+                PQclear(res);
+                count++;
+            }
+            if (count >= 3) break;
+            if (!PQisBusy(conn.get())) continue;
+            fd_set input_mask;
+            FD_ZERO(&input_mask);
+            FD_SET(sock, &input_mask);
+            struct timeval timeout = {5, 0};
+            select(sock + 1, &input_mask, NULL, NULL, &timeout);
+        }
+
+        PQexitPipelineMode(conn.get());
+
+        if (errors > 0) {
+            diag("Errors in pipeline: %d", errors);
+            return false;
+        }
+        if (begin_success < 1 || set_success < 1) {
+            diag("Missing results: BEGIN=%d, SET=%d", begin_success, set_success);
+            return false;
+        }
+
+        // Step 2: Simple query ROLLBACK
+        PGresult* rollback_res = PQexec(conn.get(), "ROLLBACK");
+        if (PQresultStatus(rollback_res) != PGRES_COMMAND_OK) {
+            diag("ROLLBACK failed: %s", PQerrorMessage(conn.get()));
+            PQclear(rollback_res);
+            return false;
+        }
+        PQclear(rollback_res);
+        diag("Step 2: ROLLBACK succeeded");
+
+        // Verify ROLLBACK reverted the SET
+        const auto final_val = getVariable(conn.get(), "datestyle");
+        bool reverted = (final_val == original);
+
+        return reverted;
+    });
+
+    // ============================================================================
+    // Complex Pipeline Scenarios
+    // ============================================================================
+
+    // Test: Multiple pipeline sync points within transaction
+    add_test("Pipeline: Multiple sync points in transaction", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        if (!conn) return false;
+
+        const auto original = getVariable(conn.get(), "timezone");
+        const std::string value1 = (original.find("UTC") != std::string::npos) ?
+                                   "PST8PDT" : "UTC";
+        const std::string value2 = (value1 == "UTC") ? "EST5EDT" : "UTC";
+
+        diag("Original: '%s', value1: '%s', value2: '%s'", original.c_str(), value1.c_str(), value2.c_str());
+
+        if (PQenterPipelineMode(conn.get()) != 1) {
+            diag("Failed to enter pipeline mode");
+            return false;
+        }
+
+        // First batch: BEGIN + SET
+        std::string set1 = "SET timezone = '" + value1 + "'";
+        if (PQsendQueryParams(conn.get(), "BEGIN", 0, NULL, NULL, NULL, NULL, 0) == 0 ||
+            PQsendQueryParams(conn.get(), set1.c_str(), 0, NULL, NULL, NULL, NULL, 0) == 0) {
+            diag("Failed to send first batch");
+            PQexitPipelineMode(conn.get());
+            return false;
+        }
+        PQpipelineSync(conn.get());
+        PQflush(conn.get());
+
+        // Consume first sync point
+        int count = 0;
+        int batch1_ok = 0;
+        int errors = 0;
+        int sock = PQsocket(conn.get());
+        PGresult* res;
+
+        while (count < 3) {
+            if (PQconsumeInput(conn.get()) == 0) {
+                diag("PQconsumeInput failed in batch 1");
+                PQexitPipelineMode(conn.get());
+                return false;
+            }
+            while ((res = PQgetResult(conn.get())) != NULL) {
+                ExecStatusType status = PQresultStatus(res);
+                if (status == PGRES_COMMAND_OK) {
+                    batch1_ok++;
+                } else if (status == PGRES_FATAL_ERROR) {
+                    errors++;
+                    diag("Batch 1 error: %s", PQresultErrorMessage(res));
+                } else if (status == PGRES_PIPELINE_SYNC) {
+                    PQclear(res);
+                    count++;
+                    break;
+                }
+                PQclear(res);
+                count++;
+            }
+            if (count >= 3) break;
+            if (!PQisBusy(conn.get())) continue;
+            fd_set input_mask;
+            FD_ZERO(&input_mask);
+            FD_SET(sock, &input_mask);
+            struct timeval timeout = {5, 0};
+            select(sock + 1, &input_mask, NULL, NULL, &timeout);
+        }
+
+        // Check first batch succeeded
+        if (errors > 0 || batch1_ok < 2) {
+            diag("Batch 1 failed: ok=%d, errors=%d", batch1_ok, errors);
+            PQexitPipelineMode(conn.get());
+            return false;
+        }
+        diag("Batch 1 succeeded (BEGIN + SET)");
+
+        // Second batch: SET + COMMIT
+        std::string set2 = "SET timezone = '" + value2 + "'";
+        if (PQsendQueryParams(conn.get(), set2.c_str(), 0, NULL, NULL, NULL, NULL, 0) == 0 ||
+            PQsendQueryParams(conn.get(), "COMMIT", 0, NULL, NULL, NULL, NULL, 0) == 0) {
+            diag("Failed to send second batch");
+            PQexitPipelineMode(conn.get());
+            return false;
+        }
+        PQpipelineSync(conn.get());
+        PQflush(conn.get());
+
+        // Consume second sync point
+        count = 0;
+        int batch2_ok = 0;
+        errors = 0;
+        while (count < 3) {
+            if (PQconsumeInput(conn.get()) == 0) {
+                diag("PQconsumeInput failed in batch 2");
+                PQexitPipelineMode(conn.get());
+                return false;
+            }
+            while ((res = PQgetResult(conn.get())) != NULL) {
+                ExecStatusType status = PQresultStatus(res);
+                if (status == PGRES_COMMAND_OK) {
+                    batch2_ok++;
+                } else if (status == PGRES_FATAL_ERROR) {
+                    errors++;
+                    diag("Batch 2 error: %s", PQresultErrorMessage(res));
+                } else if (status == PGRES_PIPELINE_SYNC) {
+                    PQclear(res);
+                    count++;
+                    break;
+                }
+                PQclear(res);
+                count++;
+            }
+            if (count >= 3) break;
+            if (!PQisBusy(conn.get())) continue;
+            fd_set input_mask;
+            FD_ZERO(&input_mask);
+            FD_SET(sock, &input_mask);
+            struct timeval timeout = {5, 0};
+            select(sock + 1, &input_mask, NULL, NULL, &timeout);
+        }
+
+        PQexitPipelineMode(conn.get());
+
+        if (errors > 0 || batch2_ok < 2) {
+            diag("Batch 2 failed: ok=%d, errors=%d", batch2_ok, errors);
+            return false;
+        }
+        diag("Batch 2 succeeded (SET + COMMIT)");
+
+        // Verify final value is value2
+        const auto final_val = getVariable(conn.get(), "timezone");
+        diag("Final value: '%s', expected: '%s'", final_val.c_str(), value2.c_str());
+        bool success = (final_val == value2);
+
+        if (!success) {
+            diag("Wrong final value");
+            executeQuery(conn.get(), "SET timezone = '" + original + "'");
+        }
+
+        return success;
+    });
+
+    // Test: Pipeline error recovery with transaction
+    add_test("Pipeline: Error recovery with ROLLBACK", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        if (!conn) return false;
+
+        const auto original = getVariable(conn.get(), "datestyle");
+        diag("Original datestyle: '%s'", original.c_str());
+
+        if (PQenterPipelineMode(conn.get()) != 1) {
+            diag("Failed to enter pipeline mode");
+            return false;
+        }
+
+        // Send BEGIN, invalid SET, ROLLBACK
+        if (PQsendQueryParams(conn.get(), "BEGIN", 0, NULL, NULL, NULL, NULL, 0) == 0 ||
+            PQsendQueryParams(conn.get(), "SET datestyle = 'INVALID_VALUE'", 0, NULL, NULL, NULL, NULL, 0) == 0 ||
+            PQsendQueryParams(conn.get(), "ROLLBACK", 0, NULL, NULL, NULL, NULL, 0) == 0) {
+            diag("Failed to send queries");
+            PQexitPipelineMode(conn.get());
+            return false;
+        }
+        PQpipelineSync(conn.get());
+        PQflush(conn.get());
+
+        // Consume results
+        int count = 0;
+        int error_count = 0;
+        int success_count = 0;
+        int sock = PQsocket(conn.get());
+        PGresult* res;
+
+        while (count < 4) {
+            if (PQconsumeInput(conn.get()) == 0) {
+                diag("PQconsumeInput failed");
+                PQexitPipelineMode(conn.get());
+                return false;
+            }
+            while ((res = PQgetResult(conn.get())) != NULL) {
+                ExecStatusType status = PQresultStatus(res);
+                if (status == PGRES_COMMAND_OK) {
+                    success_count++;
+                } else if (status == PGRES_FATAL_ERROR) {
+                    error_count++;
+                    diag("Expected error: %s", PQresultErrorMessage(res));
+                } else if (status == PGRES_PIPELINE_SYNC) {
+                    PQclear(res);
+                    count++;
+                    break;
+                }
+                PQclear(res);
+                count++;
+            }
+            if (count >= 4) break;
+            if (!PQisBusy(conn.get())) continue;
+            fd_set input_mask;
+            FD_ZERO(&input_mask);
+            FD_SET(sock, &input_mask);
+            struct timeval timeout = {5, 0};
+            select(sock + 1, &input_mask, NULL, NULL, &timeout);
+        }
+
+        PQexitPipelineMode(conn.get());
+
+        diag("Pipeline completed: successes=%d, errors=%d", success_count, error_count);
+
+        if (error_count < 1) {
+            diag("Expected at least 1 error, got %d", error_count);
+            return false;
+        }
+
+        // Verify value unchanged
+        const auto final_val = getVariable(conn.get(), "datestyle");
+        diag("Final value: '%s', expected original: '%s'", final_val.c_str(), original.c_str());
+        bool unchanged = (final_val == original);
+
+        return unchanged;
+    });
+
+    // ============================================================================
+    // Connection Lifecycle Tests
+    // ============================================================================
+
+    // Test: Startup parameter sync with connection reuse
+    // Verifies that when a pooled connection is reused, ProxySQL syncs parameters
+    // from the new client's startup options to match the backend
+    add_test("Connection lifecycle: Startup parameter sync check", [&]() {
+        const int SEED_COUNT = 5;   // Connections to seed pool with markers
+        const int CHECK_COUNT = 10; // Connections to verify sync
+        int synced_count = 0;
+        int reused_count = 0;
+        std::string original_val;
+
+        // Step 1: Get original value and seed pool with marked connections
+        {
+            auto conn = createNewConnection(ConnType::BACKEND, "", false);
+            if (!conn) {
+                diag("Failed to create initial connection");
+                return false;
+            }
+            original_val = getVariable(conn.get(), "extra_float_digits");
+            diag("Original extra_float_digits value: %s", original_val.c_str());
+        }
+
+        diag("Seeding pool with %d connections having marker value '3'", SEED_COUNT);
+        for (int i = 0; i < SEED_COUNT; i++) {
+            auto conn = createNewConnection(ConnType::BACKEND, "", false);
+            if (!conn) continue;
+
+            // Set marker value 3 (high value, different from default -15 to 3 range)
+            PGresult* set_res = PQexec(conn.get(), "SET extra_float_digits = 3");
+            if (PQresultStatus(set_res) == PGRES_COMMAND_OK) {
+                // Verify it was set
+                const auto val = getVariable(conn.get(), "extra_float_digits");
+                if (val == "3") {
+                    diag("Seeded connection %d with marker '3'", i);
+                }
+            }
+            PQclear(set_res);
+            // Connection closes, returns to pool with marker value '3'
+        }
+
+        // Small delay for pool processing
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+        // Step 2: Create connections with startup parameter -15 (different from marker '3')
+        // If sync works, the connection should have '-15' not '3'
+        diag("Creating %d connections with startup option extra_float_digits=-15", CHECK_COUNT);
+
+        for (int i = 0; i < CHECK_COUNT; i++) {
+            // Create connection with startup parameter -15
+            // Using options='-c extra_float_digits=-15' to set at connection startup
+            auto conn = createNewConnection(ConnType::BACKEND, "-c extra_float_digits=-15", false);
+            if (!conn) {
+                diag("Connection %d: Failed to create", i);
+                continue;
+            }
+
+            // Get the value - this should trigger sync if connection was reused
+            const auto val = getVariable(conn.get(), "extra_float_digits");
+            diag("Connection %d: extra_float_digits='%s'", i, val.c_str());
+
+            // Check if we got a reused connection (has marker '3' before sync)
+            // After SHOW triggers sync, it should be '-15'
+            if (val == "-15") {
+                synced_count++;
+                diag("Connection %d: Sync working correctly (got expected -15)", i);
+            } else if (val == "3") {
+                // This shouldn't happen if sync is working - SHOW should have triggered sync
+                reused_count++;
+                diag("Connection %d: WARNING - Got marker '3' instead of '-15', sync may not be working", i);
+            } else {
+                diag("Connection %d: Got value '%s' (expected '-15')", i, val.c_str());
+            }
+
+            // Run a query to verify connection works
+            PGresult* res = PQexec(conn.get(), "SELECT 1");
+            if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+                diag("Connection %d: Query failed", i);
+            }
+            PQclear(res);
+        }
+
+        diag("Results: %d connections with correct sync, %d with marker still present",
+             synced_count, reused_count);
+
+        // Test passes if all checked connections have the synced value
+        // It's OK if we didn't get any reused connections (pool may not have returned them)
+        // But if we created connections, they should all be synced correctly
+        bool passed = (synced_count == CHECK_COUNT);
+
+        if (!passed) {
+            diag("FAIL: Expected %d synced connections, got %d", CHECK_COUNT, synced_count);
+        }
+
+        // Cleanup: restore original value
+        {
+            auto conn = createNewConnection(ConnType::BACKEND, "", false);
+            if (conn) {
+                PGresult* cleanup_res = PQexec(conn.get(),
+                    ("SET extra_float_digits = " + original_val).c_str());
+                PQclear(cleanup_res);
+            }
+        }
+
+        return passed;
+    });
+
+    // Test: No inherited transactions
+    add_test("Connection lifecycle: No inherited transactions", [&]() {
+        const int CYCLES = 10;
+
+        for (int i = 0; i < CYCLES; i++) {
+            // Create connection, start transaction, close without commit
+            {
+                auto conn = createNewConnection(ConnType::BACKEND, "", false);
+                if (!conn) return false;
+
+                PGresult* begin_res = PQexec(conn.get(), "BEGIN");
+                if (PQresultStatus(begin_res) != PGRES_COMMAND_OK) {
+                    PQclear(begin_res);
+                    return false;
+                }
+                PQclear(begin_res);
+            }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+            // New connection should NOT be in transaction
+            {
+                auto conn = createNewConnection(ConnType::BACKEND, "", false);
+                if (!conn) return false;
+
+                PGresult* res = PQexec(conn.get(), "SELECT pg_current_xact_id_if_assigned()");
+                bool in_transaction = (PQntuples(res) > 0 && PQgetvalue(res, 0, 0)[0] != '\0');
+                PQclear(res);
+
+                if (in_transaction) {
+                    diag("Cycle %d: Inherited transaction!", i);
+                    PQexec(conn.get(), "ROLLBACK");
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    });
+
+    // ============================================================================
+    // Detailed Parameter Value Verification Tests
+    // ============================================================================
+
+    // Test: Verify SET value visible immediately, persists after COMMIT
+    add_test("Value verification: SET visible immediately and persists after COMMIT", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        if (!conn) return false;
+
+        const auto original = getVariable(conn.get(), "datestyle");
+        const std::string new_value = (original.find("ISO") != std::string::npos) ?
+                                      "SQL, DMY" : "ISO, MDY";
+
+        // Before transaction
+        diag("Step 1 - Before BEGIN: datestyle = '%s'", original.c_str());
+
+        // Start transaction
+        executeQuery(conn.get(), "BEGIN");
+        const auto after_begin = getVariable(conn.get(), "datestyle");
+        diag("Step 2 - After BEGIN: datestyle = '%s'", after_begin.c_str());
+
+        // SET new value
+        executeQuery(conn.get(), "SET datestyle = '" + new_value + "'");
+        const auto after_set = getVariable(conn.get(), "datestyle");
+        diag("Step 3 - After SET datestyle = '%s': datestyle = '%s'", new_value.c_str(), after_set.c_str());
+
+        // COMMIT
+        executeQuery(conn.get(), "COMMIT");
+        const auto after_commit = getVariable(conn.get(), "datestyle");
+        diag("Step 4 - After COMMIT: datestyle = '%s'", after_commit.c_str());
+
+        // Cleanup
+        if (after_commit != original) {
+            executeQuery(conn.get(), "SET datestyle = '" + original + "'");
+        }
+
+        // Verify: after_set should be new_value, after_commit should also be new_value
+        bool set_visible = (after_set.find(new_value) != std::string::npos) && (after_set != original);
+        bool commit_persisted = (after_commit.find(new_value) != std::string::npos) && (after_commit != original);
+
+        return set_visible && commit_persisted;
+    });
+
+    // Test: Verify ROLLBACK reverts to original value
+    add_test("Value verification: ROLLBACK reverts to original", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        if (!conn) return false;
+
+        const auto original = getVariable(conn.get(), "timezone");
+        const std::string new_value = (original.find("UTC") != std::string::npos) ?
+                                      "PST8PDT" : "UTC";
+
+        // Before transaction
+        diag("Step 1 - Before BEGIN: timezone = '%s'", original.c_str());
+
+        // Start transaction
+        executeQuery(conn.get(), "BEGIN");
+
+        // SET new value
+        executeQuery(conn.get(), "SET timezone = '" + new_value + "'");
+        const auto after_set = getVariable(conn.get(), "timezone");
+        diag("Step 2 - After SET timezone = '%s': timezone = '%s'", new_value.c_str(), after_set.c_str());
+
+        // ROLLBACK
+        executeQuery(conn.get(), "ROLLBACK");
+        const auto after_rollback = getVariable(conn.get(), "timezone");
+        diag("Step 3 - After ROLLBACK: timezone = '%s'", after_rollback.c_str());
+
+        // Verify: after_set should be new_value, after_rollback should be original
+        bool set_changed = (after_set == new_value);
+        bool rollback_reverted = (after_rollback == original);
+
+        return set_changed && rollback_reverted;
+    });
+
+    // Test: Verify multiple SETs then ROLLBACK reverts to original (not intermediate)
+    add_test("Value verification: Multiple SETs then ROLLBACK reverts to original", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        if (!conn) return false;
+
+        const auto original = getVariable(conn.get(), "extra_float_digits");
+
+        // Choose two different values
+        const std::string value1 = (original == "0") ? "1" : "0";
+        const std::string value2 = (value1 == "0") ? "2" : "0";
+
+        diag("Step 1 - Original: extra_float_digits = '%s'", original.c_str());
+        diag("Will SET to '%s', then to '%s', then ROLLBACK", value1.c_str(), value2.c_str());
+
+        // Start transaction
+        executeQuery(conn.get(), "BEGIN");
+
+        // First SET
+        executeQuery(conn.get(), "SET extra_float_digits = " + value1);
+        const auto after_set1 = getVariable(conn.get(), "extra_float_digits");
+        diag("Step 2 - After SET extra_float_digits = %s: value = '%s'", value1.c_str(), after_set1.c_str());
+
+        // Second SET
+        executeQuery(conn.get(), "SET extra_float_digits = " + value2);
+        const auto after_set2 = getVariable(conn.get(), "extra_float_digits");
+        diag("Step 3 - After SET extra_float_digits = %s: value = '%s'", value2.c_str(), after_set2.c_str());
+
+        // ROLLBACK
+        executeQuery(conn.get(), "ROLLBACK");
+        const auto after_rollback = getVariable(conn.get(), "extra_float_digits");
+        diag("Step 4 - After ROLLBACK: value = '%s' (expected original: '%s')", after_rollback.c_str(), original.c_str());
+
+        // Verify: after_rollback should be original, not value1 or value2
+        return (after_rollback == original);
+    });
+
+    // Test: Error in middle of transaction then ROLLBACK
+    add_test("Value verification: Error in transaction then ROLLBACK", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        if (!conn) return false;
+
+        const auto original = getVariable(conn.get(), "datestyle");
+        const std::string new_value = (original.find("ISO") != std::string::npos) ?
+                                      "SQL, DMY" : "ISO, MDY";
+
+        diag("Step 1 - Original: datestyle = '%s'", original.c_str());
+
+        // Start transaction
+        executeQuery(conn.get(), "BEGIN");
+
+        // SET valid value
+        executeQuery(conn.get(), "SET datestyle = '" + new_value + "'");
+        const auto after_set = getVariable(conn.get(), "datestyle");
+        diag("Step 2 - After valid SET: datestyle = '%s'", after_set.c_str());
+
+        // Try invalid SET (this will fail)
+        PGresult* invalid_res = PQexec(conn.get(), "SET datestyle = 'INVALID_VALUE'");
+        bool invalid_failed = (PQresultStatus(invalid_res) != PGRES_COMMAND_OK);
+        PQclear(invalid_res);
+        diag("Step 3 - Invalid SET failed as expected: %s", invalid_failed ? "yes" : "no");
+
+        // Check value after error (should still be new_value)
+        const auto after_error = getVariable(conn.get(), "datestyle");
+        diag("Step 4 - After error: datestyle = '%s'", after_error.c_str());
+
+        // ROLLBACK
+        executeQuery(conn.get(), "ROLLBACK");
+        const auto after_rollback = getVariable(conn.get(), "datestyle");
+        diag("Step 5 - After ROLLBACK: datestyle = '%s'", after_rollback.c_str());
+
+        // Cleanup if needed
+        if (after_rollback != original) {
+            executeQuery(conn.get(), "SET datestyle = '" + original + "'");
+        }
+
+        // Verify: invalid should have failed, value after error should be new_value, after rollback should be original
+        return invalid_failed && (after_error.find(new_value) != std::string::npos) && (after_rollback == original);
+    });
+
+    // Test: Pipeline mode detailed value verification
+    add_test("Value verification: Pipeline mode SET then ROLLBACK", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        if (!conn) return false;
+
+        const auto original = getVariable(conn.get(), "timezone");
+        const std::string new_value = (original.find("UTC") != std::string::npos) ?
+                                      "PST8PDT" : "UTC";
+
+        diag("Step 1 - Original: timezone = '%s'", original.c_str());
+
+        // Enter pipeline mode
+        if (PQenterPipelineMode(conn.get()) != 1) {
+            diag("Failed to enter pipeline mode");
+            return false;
+        }
+
+        // Send BEGIN, SET, ROLLBACK in pipeline
+        PQsendQueryParams(conn.get(), "BEGIN", 0, NULL, NULL, NULL, NULL, 0);
+        std::string set_query = "SET timezone = '" + new_value + "'";
+        PQsendQueryParams(conn.get(), set_query.c_str(), 0, NULL, NULL, NULL, NULL, 0);
+        PQsendQueryParams(conn.get(), "ROLLBACK", 0, NULL, NULL, NULL, NULL, 0);
+        PQpipelineSync(conn.get());
+        PQflush(conn.get());
+
+        // Consume results
+        int count = 0;
+        int cmdCount = 0;
+        int sock = PQsocket(conn.get());
+        PGresult* res;
+
+        while (count < 4) {
+            if (PQconsumeInput(conn.get()) == 0) break;
+            while ((res = PQgetResult(conn.get())) != NULL) {
+                if (PQresultStatus(res) == PGRES_COMMAND_OK) cmdCount++;
+                if (PQresultStatus(res) == PGRES_PIPELINE_SYNC) {
+                    PQclear(res);
+                    count++;
+                    break;
+                }
+                PQclear(res);
+                count++;
+            }
+            if (count >= 4) break;
+            if (!PQisBusy(conn.get())) continue;
+            fd_set input_mask;
+            FD_ZERO(&input_mask);
+            FD_SET(sock, &input_mask);
+            struct timeval timeout = {5, 0};
+            select(sock + 1, &input_mask, NULL, NULL, &timeout);
+        }
+
+        PQexitPipelineMode(conn.get());
+
+        // Verify ROLLBACK reverted the SET
+        const auto final_val = getVariable(conn.get(), "timezone");
+        diag("Step 2 - After pipeline BEGIN/SET/ROLLBACK: timezone = '%s'", final_val.c_str());
+
+        return (final_val == original) && (cmdCount >= 3);
+    });
+
+    // ============================================================================
+    // Pipeline Mode SHOW Value Verification Tests (values read within pipeline)
+    // ============================================================================
+
+    // Test: Pipeline SHOW value after SET (without exiting pipeline)
+    add_test("Pipeline: SHOW value after SET within pipeline", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        if (!conn) return false;
+
+        const auto original = getVariable(conn.get(), "timezone");
+        const std::string new_value = (original.find("UTC") != std::string::npos) ?
+                                      "PST8PDT" : "UTC";
+
+        diag("Step 1 - Original timezone (before pipeline): '%s'", original.c_str());
+        diag("Will SET to '%s' and verify via SHOW within pipeline", new_value.c_str());
+
+        // Enter pipeline mode
+        if (PQenterPipelineMode(conn.get()) != 1) {
+            diag("Failed to enter pipeline mode");
+            return false;
+        }
+
+        // Send: SET, SHOW timezone (all in pipeline)
+        std::string set_query = "SET timezone = '" + new_value + "'";
+        if (PQsendQueryParams(conn.get(), set_query.c_str(), 0, NULL, NULL, NULL, NULL, 0) == 0 ||
+            PQsendQueryParams(conn.get(), "SHOW timezone", 0, NULL, NULL, NULL, NULL, 0) == 0) {
+            diag("Failed to send queries");
+            PQexitPipelineMode(conn.get());
+            return false;
+        }
+        PQpipelineSync(conn.get());
+        PQflush(conn.get());
+
+        // Consume results and capture SHOW result
+        int count = 0;
+        int set_success = 0;
+        int show_received = 0;
+        int errors = 0;
+        std::string show_value;
+        int sock = PQsocket(conn.get());
+        PGresult* res;
+
+        while (count < 3) {  // SET + SHOW + SYNC
+            if (PQconsumeInput(conn.get()) == 0) {
+                diag("PQconsumeInput failed: %s", PQerrorMessage(conn.get()));
+                PQexitPipelineMode(conn.get());
+                return false;
+            }
+            while ((res = PQgetResult(conn.get())) != NULL) {
+                ExecStatusType status = PQresultStatus(res);
+                if (status == PGRES_COMMAND_OK) {
+                    // SET succeeded
+                    set_success++;
+                    diag("SET command succeeded");
+                } else if (status == PGRES_TUPLES_OK) {
+                    // This is the SHOW result
+                    if (PQntuples(res) > 0) {
+                        show_value = PQgetvalue(res, 0, 0);
+                        show_received++;
+                        diag("SHOW result within pipeline: '%s'", show_value.c_str());
+                    }
+                } else if (status == PGRES_FATAL_ERROR) {
+                    errors++;
+                    diag("Command failed: %s", PQresultErrorMessage(res));
+                } else if (status == PGRES_PIPELINE_SYNC) {
+                    PQclear(res);
+                    count++;
+                    break;
+                }
+                PQclear(res);
+                count++;
+            }
+            if (count >= 3) break;
+            if (!PQisBusy(conn.get())) continue;
+            fd_set input_mask;
+            FD_ZERO(&input_mask);
+            FD_SET(sock, &input_mask);
+            struct timeval timeout = {5, 0};
+            select(sock + 1, &input_mask, NULL, NULL, &timeout);
+        }
+
+        PQexitPipelineMode(conn.get());
+
+        // Verify all steps succeeded
+        if (errors > 0) {
+            diag("Errors occurred in pipeline: %d", errors);
+            executeQuery(conn.get(), "SET timezone = '" + original + "'");
+            return false;
+        }
+        if (set_success < 1) {
+            diag("SET command did not succeed");
+            executeQuery(conn.get(), "SET timezone = '" + original + "'");
+            return false;
+        }
+        if (show_received < 1) {
+            diag("SHOW result not received");
+            executeQuery(conn.get(), "SET timezone = '" + original + "'");
+            return false;
+        }
+
+        // Cleanup
+        executeQuery(conn.get(), "SET timezone = '" + original + "'");
+
+        // Verify: SHOW within pipeline should return new_value
+        diag("Step 2 - SHOW within pipeline returned: '%s', expected: '%s'", show_value.c_str(), new_value.c_str());
+        bool show_correct = (show_value == new_value);
+
+        return show_correct;
+    });
+
+    // Test: Pipeline transaction SHOW value after SET, before COMMIT
+    add_test("Pipeline: SHOW value before COMMIT within pipeline", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        if (!conn) return false;
+
+        const auto original = getVariable(conn.get(), "datestyle");
+        const std::string new_value = (original.find("ISO") != std::string::npos) ?
+                                      "SQL, DMY" : "ISO, MDY";
+
+        diag("Step 1 - Original datestyle (before pipeline): '%s'", original.c_str());
+        diag("Will BEGIN, SET, SHOW, COMMIT all within pipeline");
+
+        // Enter pipeline mode
+        if (PQenterPipelineMode(conn.get()) != 1) {
+            diag("Failed to enter pipeline mode");
+            return false;
+        }
+
+        // Send: BEGIN, SET, SHOW, COMMIT (all in pipeline)
+        std::string set_query = "SET datestyle = '" + new_value + "'";
+        if (PQsendQueryParams(conn.get(), "BEGIN", 0, NULL, NULL, NULL, NULL, 0) == 0 ||
+            PQsendQueryParams(conn.get(), set_query.c_str(), 0, NULL, NULL, NULL, NULL, 0) == 0 ||
+            PQsendQueryParams(conn.get(), "SHOW datestyle", 0, NULL, NULL, NULL, NULL, 0) == 0 ||
+            PQsendQueryParams(conn.get(), "COMMIT", 0, NULL, NULL, NULL, NULL, 0) == 0) {
+            diag("Failed to send queries");
+            PQexitPipelineMode(conn.get());
+            return false;
+        }
+        PQpipelineSync(conn.get());
+        PQflush(conn.get());
+
+        // Consume results and capture SHOW result
+        int count = 0;
+        int begin_success = 0;
+        int set_success = 0;
+        int show_received = 0;
+        int commit_success = 0;
+        int errors = 0;
+        std::string show_value_before_commit;
+        int sock = PQsocket(conn.get());
+        PGresult* res;
+
+        while (count < 5) {  // BEGIN + SET + SHOW + COMMIT + SYNC
+            if (PQconsumeInput(conn.get()) == 0) {
+                diag("PQconsumeInput failed: %s", PQerrorMessage(conn.get()));
+                PQexitPipelineMode(conn.get());
+                return false;
+            }
+            while ((res = PQgetResult(conn.get())) != NULL) {
+                ExecStatusType status = PQresultStatus(res);
+                if (status == PGRES_COMMAND_OK) {
+                    // Track which command succeeded based on order
+                    // Commands sent: BEGIN, SET, COMMIT (SHOW is TUPLES_OK)
+                    if (begin_success == 0) {
+                        begin_success++;
+                        diag("BEGIN succeeded");
+                    } else if (set_success == 0) {
+                        set_success++;
+                        diag("SET succeeded");
+                    } else {
+                        commit_success++;
+                        diag("COMMIT succeeded");
+                    }
+                } else if (status == PGRES_TUPLES_OK) {
+                    // This is the SHOW result (before COMMIT)
+                    if (PQntuples(res) > 0) {
+                        show_value_before_commit = PQgetvalue(res, 0, 0);
+                        show_received++;
+                        diag("SHOW datestyle before COMMIT: '%s'", show_value_before_commit.c_str());
+                    }
+                } else if (status == PGRES_FATAL_ERROR) {
+                    errors++;
+                    diag("Command failed: %s", PQresultErrorMessage(res));
+                } else if (status == PGRES_PIPELINE_SYNC) {
+                    PQclear(res);
+                    count++;
+                    break;
+                }
+                PQclear(res);
+                count++;
+            }
+            if (count >= 5) break;
+            if (!PQisBusy(conn.get())) continue;
+            fd_set input_mask;
+            FD_ZERO(&input_mask);
+            FD_SET(sock, &input_mask);
+            struct timeval timeout = {5, 0};
+            select(sock + 1, &input_mask, NULL, NULL, &timeout);
+        }
+
+        PQexitPipelineMode(conn.get());
+
+        // Check for errors
+        if (errors > 0) {
+            diag("Errors occurred in pipeline: %d", errors);
+            executeQuery(conn.get(), "SET datestyle = '" + original + "'");
+            return false;
+        }
+        if (begin_success < 1 || set_success < 1 || show_received < 1 || commit_success < 1) {
+            diag("Missing results: BEGIN=%d, SET=%d, SHOW=%d, COMMIT=%d",
+                 begin_success, set_success, show_received, commit_success);
+            executeQuery(conn.get(), "SET datestyle = '" + original + "'");
+            return false;
+        }
+
+        // Verify via simple query that value persisted
+        const auto final_val = getVariable(conn.get(), "datestyle");
+        diag("Step 2 - Value after COMMIT (simple query): '%s'", final_val.c_str());
+
+        // Cleanup
+        if (final_val != original) {
+            executeQuery(conn.get(), "SET datestyle = '" + original + "'");
+        }
+
+        // Verify: SHOW before commit should be new_value, final should be new_value
+        bool show_correct = (show_value_before_commit.find(new_value) != std::string::npos);
+        bool final_correct = (final_val.find(new_value) != std::string::npos);
+
+        return show_correct && final_correct;
+    });
+
+    // Test: Pipeline SHOW value after ROLLBACK within pipeline
+    add_test("Pipeline: SHOW value after ROLLBACK within pipeline", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        if (!conn) return false;
+
+        const auto original = getVariable(conn.get(), "timezone");
+        const std::string new_value = (original.find("UTC") != std::string::npos) ?
+                                      "PST8PDT" : "UTC";
+
+        diag("Step 1 - Original timezone (before pipeline): '%s'", original.c_str());
+        diag("Will BEGIN, SET, ROLLBACK, SHOW all within pipeline");
+
+        // Enter pipeline mode
+        if (PQenterPipelineMode(conn.get()) != 1) {
+            diag("Failed to enter pipeline mode");
+            return false;
+        }
+
+        // Send: BEGIN, SET, ROLLBACK, SHOW (all in pipeline)
+        std::string set_query = "SET timezone = '" + new_value + "'";
+        if (PQsendQueryParams(conn.get(), "BEGIN", 0, NULL, NULL, NULL, NULL, 0) == 0 ||
+            PQsendQueryParams(conn.get(), set_query.c_str(), 0, NULL, NULL, NULL, NULL, 0) == 0 ||
+            PQsendQueryParams(conn.get(), "ROLLBACK", 0, NULL, NULL, NULL, NULL, 0) == 0 ||
+            PQsendQueryParams(conn.get(), "SHOW timezone", 0, NULL, NULL, NULL, NULL, 0) == 0) {
+            diag("Failed to send queries");
+            PQexitPipelineMode(conn.get());
+            return false;
+        }
+        PQpipelineSync(conn.get());
+        PQflush(conn.get());
+
+        // Consume results and capture SHOW result
+        int count = 0;
+        int cmd_ok_count = 0;
+        int show_received = 0;
+        int errors = 0;
+        std::string show_value_after_rollback;
+        int sock = PQsocket(conn.get());
+        PGresult* res;
+
+        while (count < 5) {  // BEGIN + SET + ROLLBACK + SHOW + SYNC
+            if (PQconsumeInput(conn.get()) == 0) {
+                diag("PQconsumeInput failed: %s", PQerrorMessage(conn.get()));
+                PQexitPipelineMode(conn.get());
+                return false;
+            }
+            while ((res = PQgetResult(conn.get())) != NULL) {
+                ExecStatusType status = PQresultStatus(res);
+                if (status == PGRES_COMMAND_OK) {
+                    cmd_ok_count++;
+                } else if (status == PGRES_TUPLES_OK) {
+                    // This is the SHOW result (after ROLLBACK)
+                    if (PQntuples(res) > 0) {
+                        show_value_after_rollback = PQgetvalue(res, 0, 0);
+                        show_received++;
+                        diag("SHOW timezone after ROLLBACK: '%s'", show_value_after_rollback.c_str());
+                    }
+                } else if (status == PGRES_FATAL_ERROR) {
+                    errors++;
+                    diag("Command failed: %s", PQresultErrorMessage(res));
+                } else if (status == PGRES_PIPELINE_SYNC) {
+                    PQclear(res);
+                    count++;
+                    break;
+                }
+                PQclear(res);
+                count++;
+            }
+            if (count >= 5) break;
+            if (!PQisBusy(conn.get())) continue;
+            fd_set input_mask;
+            FD_ZERO(&input_mask);
+            FD_SET(sock, &input_mask);
+            struct timeval timeout = {5, 0};
+            select(sock + 1, &input_mask, NULL, NULL, &timeout);
+        }
+
+        PQexitPipelineMode(conn.get());
+
+        if (errors > 0) {
+            diag("Errors occurred in pipeline: %d", errors);
+            return false;
+        }
+        if (cmd_ok_count < 3) {  // BEGIN, SET, ROLLBACK should all succeed
+            diag("Not all commands succeeded. cmd_ok=%d, expected=3", cmd_ok_count);
+            return false;
+        }
+        if (show_received < 1) {
+            diag("SHOW result not received");
+            return false;
+        }
+
+        // Verify via simple query that value reverted
+        const auto final_val = getVariable(conn.get(), "timezone");
+        diag("Step 2 - Value after ROLLBACK (simple query): '%s'", final_val.c_str());
+
+        // Verify: SHOW after rollback should be original, final should be original
+        bool show_correct = (show_value_after_rollback == original);
+        bool final_correct = (final_val == original);
+
+        return show_correct && final_correct;
+    });
+
+    // Test: Pipeline SAVEPOINT SHOW values within pipeline
+    add_test("Pipeline: SHOW values at SAVEPOINT within pipeline", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        if (!conn) return false;
+
+        const auto original = getVariable(conn.get(), "extra_float_digits");
+        // Ensure value1 != value2 != original
+        const std::string value1 = (original == "0") ? "1" : "0";
+        const std::string value2 = "2";  // Always different from value1 and original
+
+        diag("Step 1 - Original extra_float_digits: '%s'", original.c_str());
+        diag("Will SET to '%s', SAVEPOINT, SET to '%s', SHOW all within pipeline", value1.c_str(), value2.c_str());
+
+        // Verify values are distinct
+        if (value1 == value2 || value1 == original || value2 == original) {
+            diag("Test logic error: values not distinct. orig=%s, v1=%s, v2=%s",
+                 original.c_str(), value1.c_str(), value2.c_str());
+            return false;
+        }
+
+        // Enter pipeline mode
+        if (PQenterPipelineMode(conn.get()) != 1) {
+            diag("Failed to enter pipeline mode");
+            return false;
+        }
+
+        // Send: BEGIN, SET value1, SAVEPOINT, SET value2, SHOW
+        std::string set1 = "SET extra_float_digits = " + value1;
+        std::string set2 = "SET extra_float_digits = " + value2;
+        if (PQsendQueryParams(conn.get(), "BEGIN", 0, NULL, NULL, NULL, NULL, 0) == 0 ||
+            PQsendQueryParams(conn.get(), set1.c_str(), 0, NULL, NULL, NULL, NULL, 0) == 0 ||
+            PQsendQueryParams(conn.get(), "SAVEPOINT sp1", 0, NULL, NULL, NULL, NULL, 0) == 0 ||
+            PQsendQueryParams(conn.get(), set2.c_str(), 0, NULL, NULL, NULL, NULL, 0) == 0 ||
+            PQsendQueryParams(conn.get(), "SHOW extra_float_digits", 0, NULL, NULL, NULL, NULL, 0) == 0 ||
+            PQsendQueryParams(conn.get(), "COMMIT", 0, NULL, NULL, NULL, NULL, 0) == 0) {
+            diag("Failed to send queries");
+            PQexitPipelineMode(conn.get());
+            return false;
+        }
+        PQpipelineSync(conn.get());
+        PQflush(conn.get());
+
+        // Consume results and capture SHOW result
+        int count = 0;
+        int cmd_ok_count = 0;
+        int show_received = 0;
+        int errors = 0;
+        std::string show_value_after_savepoint;
+        int sock = PQsocket(conn.get());
+        PGresult* res;
+
+        while (count < 7) {  // BEGIN + SET + SAVEPOINT + SET + SHOW + COMMIT + SYNC
+            if (PQconsumeInput(conn.get()) == 0) {
+                diag("PQconsumeInput failed: %s", PQerrorMessage(conn.get()));
+                PQexitPipelineMode(conn.get());
+                return false;
+            }
+            while ((res = PQgetResult(conn.get())) != NULL) {
+                ExecStatusType status = PQresultStatus(res);
+                if (status == PGRES_COMMAND_OK) {
+                    cmd_ok_count++;
+                } else if (status == PGRES_TUPLES_OK) {
+                    // This is the SHOW result (after savepoint SET)
+                    if (PQntuples(res) > 0) {
+                        show_value_after_savepoint = PQgetvalue(res, 0, 0);
+                        show_received++;
+                        diag("SHOW extra_float_digits after savepoint SET: '%s'", show_value_after_savepoint.c_str());
+                    }
+                } else if (status == PGRES_FATAL_ERROR) {
+                    errors++;
+                    diag("Command failed: %s", PQresultErrorMessage(res));
+                } else if (status == PGRES_PIPELINE_SYNC) {
+                    PQclear(res);
+                    count++;
+                    break;
+                }
+                PQclear(res);
+                count++;
+            }
+            if (count >= 7) break;
+            if (!PQisBusy(conn.get())) continue;
+            fd_set input_mask;
+            FD_ZERO(&input_mask);
+            FD_SET(sock, &input_mask);
+            struct timeval timeout = {5, 0};
+            select(sock + 1, &input_mask, NULL, NULL, &timeout);
+        }
+
+        PQexitPipelineMode(conn.get());
+
+        if (errors > 0) {
+            diag("Errors occurred in pipeline: %d", errors);
+            executeQuery(conn.get(), "SET extra_float_digits = " + original);
+            return false;
+        }
+        if (cmd_ok_count < 5) {  // BEGIN, SET, SAVEPOINT, SET, COMMIT
+            diag("Not all commands succeeded. cmd_ok=%d, expected=5", cmd_ok_count);
+            executeQuery(conn.get(), "SET extra_float_digits = " + original);
+            return false;
+        }
+        if (show_received < 1) {
+            diag("SHOW result not received");
+            executeQuery(conn.get(), "SET extra_float_digits = " + original);
+            return false;
+        }
+
+        // Cleanup
+        if (show_value_after_savepoint != original) {
+            executeQuery(conn.get(), "SET extra_float_digits = " + original);
+        }
+
+        // Verify: SHOW after savepoint SET should be value2 (second SET)
+        bool show_correct = (show_value_after_savepoint == value2);
+        if (!show_correct) {
+            diag("SHOW returned wrong value. Got '%s', expected '%s'",
+                 show_value_after_savepoint.c_str(), value2.c_str());
+        }
+
+        return show_correct;
+    });
+
+    // Test: Compare simple query vs pipeline SHOW values
+    add_test("Pipeline: Compare simple vs pipeline SHOW values", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        if (!conn) return false;
+
+        const auto original = getVariable(conn.get(), "bytea_output");
+        const std::string new_value = (original == "hex") ? "escape" : "hex";
+
+        diag("Step 1 - Original bytea_output (simple query): '%s'", original.c_str());
+
+        // First, SET via simple query
+        PGresult* set_res = PQexec(conn.get(), ("SET bytea_output = '" + new_value + "'").c_str());
+        if (PQresultStatus(set_res) != PGRES_COMMAND_OK) {
+            diag("Simple query SET failed: %s", PQerrorMessage(conn.get()));
+            PQclear(set_res);
+            return false;
+        }
+        PQclear(set_res);
+
+        const auto simple_show = getVariable(conn.get(), "bytea_output");
+        diag("Step 2 - After SET, simple query SHOW: '%s'", simple_show.c_str());
+
+        if (simple_show != new_value) {
+            diag("Simple query SHOW returned wrong value. Got '%s', expected '%s'",
+                 simple_show.c_str(), new_value.c_str());
+            executeQuery(conn.get(), "SET bytea_output = '" + original + "'");
+            return false;
+        }
+
+        // Reset to original
+        executeQuery(conn.get(), "SET bytea_output = '" + original + "'");
+
+        // Now do same thing in pipeline
+        if (PQenterPipelineMode(conn.get()) != 1) {
+            diag("Failed to enter pipeline mode");
+            return false;
+        }
+
+        std::string set_query = "SET bytea_output = '" + new_value + "'";
+        if (PQsendQueryParams(conn.get(), set_query.c_str(), 0, NULL, NULL, NULL, NULL, 0) == 0 ||
+            PQsendQueryParams(conn.get(), "SHOW bytea_output", 0, NULL, NULL, NULL, NULL, 0) == 0) {
+            diag("Failed to send queries");
+            PQexitPipelineMode(conn.get());
+            return false;
+        }
+        PQpipelineSync(conn.get());
+        PQflush(conn.get());
+
+        // Consume results
+        int count = 0;
+        int set_success = 0;
+        int show_received = 0;
+        int errors = 0;
+        std::string pipeline_show;
+        int sock = PQsocket(conn.get());
+        PGresult* res;
+
+        while (count < 3) {
+            if (PQconsumeInput(conn.get()) == 0) {
+                diag("PQconsumeInput failed: %s", PQerrorMessage(conn.get()));
+                PQexitPipelineMode(conn.get());
+                return false;
+            }
+            while ((res = PQgetResult(conn.get())) != NULL) {
+                ExecStatusType status = PQresultStatus(res);
+                if (status == PGRES_COMMAND_OK) {
+                    set_success++;
+                } else if (status == PGRES_TUPLES_OK) {
+                    if (PQntuples(res) > 0) {
+                        pipeline_show = PQgetvalue(res, 0, 0);
+                        show_received++;
+                    }
+                } else if (status == PGRES_FATAL_ERROR) {
+                    errors++;
+                    diag("Command failed: %s", PQresultErrorMessage(res));
+                } else if (status == PGRES_PIPELINE_SYNC) {
+                    PQclear(res);
+                    count++;
+                    break;
+                }
+                PQclear(res);
+                count++;
+            }
+            if (count >= 3) break;
+            if (!PQisBusy(conn.get())) continue;
+            fd_set input_mask;
+            FD_ZERO(&input_mask);
+            FD_SET(sock, &input_mask);
+            struct timeval timeout = {5, 0};
+            select(sock + 1, &input_mask, NULL, NULL, &timeout);
+        }
+
+        PQexitPipelineMode(conn.get());
+
+        if (errors > 0) {
+            diag("Errors in pipeline: %d", errors);
+            executeQuery(conn.get(), "SET bytea_output = '" + original + "'");
+            return false;
+        }
+        if (set_success < 1) {
+            diag("SET did not succeed in pipeline");
+            executeQuery(conn.get(), "SET bytea_output = '" + original + "'");
+            return false;
+        }
+        if (show_received < 1) {
+            diag("SHOW result not received in pipeline");
+            executeQuery(conn.get(), "SET bytea_output = '" + original + "'");
+            return false;
+        }
+
+        diag("Step 3 - Pipeline SHOW value: '%s'", pipeline_show.c_str());
+
+        // Cleanup
+        executeQuery(conn.get(), "SET bytea_output = '" + original + "'");
+
+        // Verify pipeline returned correct value
+        if (pipeline_show != new_value) {
+            diag("Pipeline SHOW returned wrong value. Got '%s', expected '%s'",
+                 pipeline_show.c_str(), new_value.c_str());
+            return false;
+        }
+
+        // Verify: Both simple and pipeline should show the same new_value
+        bool simple_correct = (simple_show == new_value);
+        bool pipeline_correct = (pipeline_show == new_value);
+        bool values_match = (simple_show == pipeline_show);
+
+        diag("Comparison - Simple: '%s', Pipeline: '%s', Match: %s",
+             simple_show.c_str(), pipeline_show.c_str(), values_match ? "yes" : "no");
+
+        return simple_correct && pipeline_correct && values_match;
+    });
+
     int total_tests = 0;
 
     total_tests = tests.size();
