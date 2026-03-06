@@ -6,7 +6,7 @@ DEPS_PATH := $(PROXYSQL_PATH)/deps
 include $(PROXYSQL_PATH)/include/makefiles_vars.mk
 include $(PROXYSQL_PATH)/include/makefiles_paths.mk
 
-CMAKE3 ?= cmake3
+CMAKE3 := $(shell command -v cmake3 2>/dev/null || command -v cmake 2>/dev/null)
 
 .DEFAULT: default
 .PHONY: default

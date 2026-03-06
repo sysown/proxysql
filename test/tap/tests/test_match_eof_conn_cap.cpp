@@ -57,14 +57,6 @@ using std::vector;
 #define _S(s) ( std::string {s} )
 #define _TO_S(s) ( std::to_string(s) )
 
-#define CHECK_EXT_VAL(val)\
-	do {\
-		if (val.err) {\
-			diag("%s:%d: Query failed   err=\"%s\"", __func__, __LINE__, val.str.c_str());\
-			return EXIT_FAILURE;\
-		}\
-	} while(0)
-
 MYSQL* create_mysql_conn(const conn_opts_t& opts) {
 	const char* host { opts.host.c_str() };
 	const char* user { opts.user.c_str() };
@@ -399,11 +391,11 @@ int test_conn_acquisition(MYSQL* admin, const test_cnf_t& test_conf) {
 	const ext_val_t<int32_t> retries_delay {
 		mysql_query_ext_val(admin, SELECT_RUNTIME_VAR"'mysql-connect_retries_delay'", -1)
 	};
-	CHECK_EXT_VAL(retries_delay);
+	CHECK_EXT_VAL(admin, retries_delay);
 	const ext_val_t<int32_t> to_server_max {
 		mysql_query_ext_val(admin, SELECT_RUNTIME_VAR"'mysql-connect_timeout_server_max'", -1)
 	};
-	CHECK_EXT_VAL(to_server_max);
+	CHECK_EXT_VAL(admin, to_server_max);
 	///////////////////////////////////////////////////////////////////////////
 
 	diag(
@@ -433,12 +425,12 @@ int test_conn_acquisition(MYSQL* admin, const test_cnf_t& test_conf) {
 
 	diag("Get pre-conn attempt stats from target hostgroup   tg=%d", SQLITE3_HG);
 	const ext_val_t<hg_pool_st_t> pre_hg_st { get_conn_pool_hg_stats(admin, SQLITE3_HG) };
-	CHECK_EXT_VAL(pre_hg_st);
+	CHECK_EXT_VAL(admin, pre_hg_st);
 	const ext_val_t<int64_t> pre_srv_conns { mysql_query_ext_val(admin,
 		"SELECT variable_value FROM stats.stats_mysql_global WHERE variable_name='Server_Connections_created'",
 		int64_t(-1)
 	)};
-	CHECK_EXT_VAL(pre_srv_conns);
+	CHECK_EXT_VAL(admin, pre_srv_conns);
 
 	const string audit_regex { "SQLite3_Connect_OK.*" + _S(FF_USER) };
 	// Audit logs are per-thread buffered. PROXYSQL FLUSH LOGS ensures buffers are written
@@ -586,7 +578,7 @@ int test_conn_acquisition(MYSQL* admin, const test_cnf_t& test_conf) {
 
 	diag("Get post-conn attempt stats from target hostgroup   tg=%d", SQLITE3_HG);
 	const ext_val_t<hg_pool_st_t> post_hg_st { get_conn_pool_hg_stats(admin, SQLITE3_HG) };
-	CHECK_EXT_VAL(post_hg_st);
+	CHECK_EXT_VAL(admin, post_hg_st);
 
 	ok(
 		pre_hg_st.val.conn_ok + exp_conns == post_hg_st.val.conn_ok,
@@ -602,7 +594,7 @@ int test_conn_acquisition(MYSQL* admin, const test_cnf_t& test_conf) {
 			int64_t(-1)
 		)
 	};
-	CHECK_EXT_VAL(post_srv_conns);
+	CHECK_EXT_VAL(admin, post_srv_conns);
 
 	ok(
 		pre_srv_conns.val + exp_conns == post_srv_conns.val,
@@ -631,11 +623,11 @@ int test_conn_acquisition(
 	const ext_val_t<int32_t> retries_delay {
 		mysql_query_ext_val(admin, SELECT_RUNTIME_VAR"'mysql-connect_retries_delay'", -1)
 	};
-	CHECK_EXT_VAL(retries_delay);
+	CHECK_EXT_VAL(admin, retries_delay);
 	const ext_val_t<int32_t> to_server_max {
 		mysql_query_ext_val(admin, SELECT_RUNTIME_VAR"'mysql-connect_timeout_server_max'", -1)
 	};
-	CHECK_EXT_VAL(to_server_max);
+	CHECK_EXT_VAL(admin, to_server_max);
 	//////
 
 	diag("Update 'fast-forward' for testing user   user=\"%s\" fast_forward=%d", FF_USER, ff);
@@ -659,12 +651,12 @@ int test_conn_acquisition(
 
 	diag("Get pre-conn attempt stats from target hostgroup   tg=%d", SQLITE3_HG);
 	const ext_val_t<hg_pool_st_t> pre_hg_st { get_conn_pool_hg_stats(admin, SQLITE3_HG) };
-	CHECK_EXT_VAL(pre_hg_st);
+	CHECK_EXT_VAL(admin, pre_hg_st);
 	const ext_val_t<int64_t> pre_srv_conns { mysql_query_ext_val(admin,
 		"SELECT variable_value FROM stats.stats_mysql_global WHERE variable_name='Server_Connections_created'",
 		int64_t(-1)
 	)};
-	CHECK_EXT_VAL(pre_srv_conns);
+	CHECK_EXT_VAL(admin, pre_srv_conns);
 
 	const string audit_regex { "SQLite3_Connect_OK.*" + _S(FF_USER) };
 	// ProxySQL audit logs are per-thread buffered. PROXYSQL FLUSH LOGS ensures buffers
@@ -736,7 +728,7 @@ int test_conn_acquisition(
 
 	diag("Get post-conn attempt stats from target hostgroup   tg=%d", SQLITE3_HG);
 	const ext_val_t<hg_pool_st_t> post_hg_st { get_conn_pool_hg_stats(admin, SQLITE3_HG) };
-	CHECK_EXT_VAL(post_hg_st);
+	CHECK_EXT_VAL(admin, post_hg_st);
 
 	ok(
 		pre_hg_st.val.conn_ok + exp_conns == post_hg_st.val.conn_ok,
@@ -752,7 +744,7 @@ int test_conn_acquisition(
 			int64_t(-1)
 		)
 	};
-	CHECK_EXT_VAL(post_srv_conns);
+	CHECK_EXT_VAL(admin, post_srv_conns);
 
 	ok(
 		pre_srv_conns.val + exp_conns == post_srv_conns.val,
@@ -885,12 +877,12 @@ int test_conn_ff_conv(MYSQL* admin, const CommandLine& cl, bool client_eof) {
 
 	diag("Get pre-conn attempt stats from target hostgroup   tg=%d", SQLITE3_HG);
 	const ext_val_t<hg_pool_st_t> pre_hg_st { get_conn_pool_hg_stats(admin, SQLITE3_HG) };
-	CHECK_EXT_VAL(pre_hg_st);
+	CHECK_EXT_VAL(admin, pre_hg_st);
 	const ext_val_t<int64_t> pre_srv_conns { mysql_query_ext_val(admin,
 		"SELECT variable_value FROM stats.stats_mysql_global WHERE variable_name='Server_Connections_created'",
 		int64_t(-1)
 	)};
-	CHECK_EXT_VAL(pre_srv_conns);
+	CHECK_EXT_VAL(admin, pre_srv_conns);
 
 	diag("Issue query (start trx) to create new backend conn   query=\"%s\"", "BEGIN");
 	rc = mysql_query_t(proxy, "/* hostgroup=" + std::to_string(SQLITE3_HG) +  " */ BEGIN");
@@ -901,7 +893,7 @@ int test_conn_ff_conv(MYSQL* admin, const CommandLine& cl, bool client_eof) {
 
 	diag("Get post-conn attempt stats from target hostgroup   tg=%d", SQLITE3_HG);
 	const ext_val_t<hg_pool_st_t> post_hg_st { get_conn_pool_hg_stats(admin, SQLITE3_HG) };
-	CHECK_EXT_VAL(post_hg_st);
+	CHECK_EXT_VAL(admin, post_hg_st);
 
 	ok(
 		pre_hg_st.val.conn_used + 1 == post_hg_st.val.conn_used,

@@ -749,6 +749,7 @@ enum PROXYSQL_MYSQL_ERR {
 	ER_PROXYSQL_CONNECT_TIMEOUT                       = 9020,
 	ER_PROXYSQL_READONLY_TIMEOUT                      = 9021,
 	ER_PROXYSQL_FAST_FORWARD_CONN_CREATE              = 9022,
+	ER_PROXYSQL_REPL_LAG_TIMEOUT                      = 9023,
 };
 
 enum proxysql_session_type {
@@ -1205,6 +1206,11 @@ __thread int pgsql_thread___monitor_read_only_interval;
 __thread int pgsql_thread___monitor_read_only_interval_window;
 __thread int pgsql_thread___monitor_read_only_timeout;
 __thread int pgsql_thread___monitor_read_only_max_timeout_count;
+__thread int pgsql_thread___monitor_replication_lag_interval;
+__thread int pgsql_thread___monitor_replication_lag_interval_window;
+__thread int pgsql_thread___monitor_replication_lag_timeout;
+__thread int pgsql_thread___monitor_replication_lag_count;
+__thread char* pgsql_thread___monitor_replication_lag_use_percona_heartbeat;
 __thread bool pgsql_thread___monitor_writer_is_also_reader;
 __thread int pgsql_thread___monitor_threads;
 __thread char* pgsql_thread___monitor_username;
@@ -1527,6 +1533,11 @@ extern __thread int pgsql_thread___monitor_ping_timeout;
 extern __thread int pgsql_thread___monitor_read_only_interval;
 extern __thread int pgsql_thread___monitor_read_only_interval_window;
 extern __thread int pgsql_thread___monitor_read_only_timeout;
+extern __thread int pgsql_thread___monitor_replication_lag_interval;
+extern __thread int pgsql_thread___monitor_replication_lag_interval_window;
+extern __thread int pgsql_thread___monitor_replication_lag_timeout;
+extern __thread int pgsql_thread___monitor_replication_lag_count;
+extern __thread char* pgsql_thread___monitor_replication_lag_use_percona_heartbeat;
 extern __thread int pgsql_thread___monitor_read_only_max_timeout_count;
 extern __thread bool pgsql_thread___monitor_writer_is_also_reader;
 extern __thread int pgsql_thread___monitor_threads;
