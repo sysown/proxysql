@@ -39,6 +39,7 @@
 #include "command_line.h"
 #include "utils.h"
 #include "utils_auth.h"
+#include "noise_utils.h"
 
 // Additional env variables
 uint32_t MYSQL8_HG = get_env_int("TAP_MYSQL8_BACKEND_HG", 30);
@@ -1085,6 +1086,11 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
+	spawn_internal_noise(cl, internal_noise_admin_pinger);
+	spawn_internal_noise(cl, internal_noise_mysql_traffic);
+	spawn_internal_noise(cl, internal_noise_random_stats_poller);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
+
 	MYSQL* mysql = mysql_init(NULL);
 
 	if (!mysql_real_connect(mysql, cl.host, cl.mysql_username, cl.mysql_password, NULL, cl.mysql_port, NULL, 0)) {
@@ -1214,6 +1220,7 @@ int main(int argc, char** argv) {
 		+ non_warmup_tests_fail_count * NUM_CLIENT_THREADS
 		+ non_warmup_tests_scs_count * NUM_CLIENT_THREADS * 2
 		+ non_warmup_tests_scs_ratio
+		+ (cl.use_noise ? 4 : 0)
 	);
 
 	// sequential; verify correctness in the procedure; KNOWN passwords

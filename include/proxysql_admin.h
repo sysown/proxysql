@@ -12,10 +12,12 @@
 #include <tuple>
 #include <vector>
 #include <array>
+#include <limits>
 
 #include "ProxySQL_RESTAPI_Server.hpp"
 
 #include "proxysql_typedefs.h"
+#include "query_digest_topk.h"
 
 #define PROCESSLIST_MAX_QUERY_LEN_DEFAULT    2 * 1024 * 1024  //  2 MiB
 #define PROCESSLIST_MAX_QUERY_LEN_MIN        1 * 1024         //  1 KiB
@@ -241,13 +243,71 @@ struct peer_pgsql_servers_v2_t {
 	peer_pgsql_servers_v2_t(SQLite3_result*, const pgsql_servers_v2_checksum_t&);
 };
 
+/**
+ * @brief Sort keys supported by in-memory processlist queries.
+ *
+ * These keys are intentionally limited to fields that are available for both
+ * MySQL and PgSQL processlist rows so callers can use a single contract.
+ */
+enum class processlist_sort_by_t {
+	none,       ///< Keep producer order (no explicit sorting).
+	time_ms,    ///< Sort by session runtime in milliseconds.
+	session_id, ///< Sort by ProxySQL session id.
+	username,   ///< Sort by authenticated username.
+	hostgroup,  ///< Sort by current hostgroup id.
+	command     ///< Sort by command/status text.
+};
+
+/**
+ * @brief Typed filtering, ordering, and pagination options for processlist.
+ *
+ * The options are consumed by `MySQL_Threads_Handler::SQL3_Processlist()` and
+ * `PgSQL_Threads_Handler::SQL3_Processlist()` to query live in-memory session
+ * state without going through runtime-populated `stats_*_processlist` tables.
+ *
+ * All string filters are exact matches unless noted otherwise.
+ */
+struct processlist_query_options_t {
+	bool enabled {false};                   ///< Enables query-options processing.
+	std::string username {};                ///< Optional exact username filter.
+	std::string database {};                ///< Optional exact schema/database filter.
+	int hostgroup {-1};                     ///< Optional hostgroup filter (`-1` disables).
+	std::string command {};                 ///< Optional exact command/status filter.
+	int min_time_ms {-1};                   ///< Optional minimum runtime (`-1` disables).
+	bool has_session_id {false};            ///< Whether @ref session_id is active.
+	uint32_t session_id {0};                ///< Optional exact session identifier.
+	std::string match_info {};              ///< Optional substring filter on `info`.
+	bool info_case_sensitive {false};       ///< Case sensitivity mode for @ref match_info.
+	processlist_sort_by_t sort_by {processlist_sort_by_t::none}; ///< Optional primary sort key.
+	bool sort_desc {true};                  ///< Sort direction for @ref sort_by.
+	bool disable_pagination {false};        ///< If true, ignore @ref limit and @ref offset.
+	uint32_t limit {std::numeric_limits<uint32_t>::max()}; ///< Page size (defaults to no limit).
+	uint32_t offset {0};                    ///< Number of rows to skip before page.
+};
+
+/**
+ * @brief Processlist extraction configuration.
+ *
+ * This structure combines legacy processlist rendering controls
+ * (`show_extended`, `max_query_length`) with optional query-time filters,
+ * ordering, and pagination in @ref query_options.
+ */
 struct processlist_config_t {
 #ifdef IDLE_THREADS
 	bool show_idle_session;
 #endif
 	int show_extended;
 	int max_query_length;
+	processlist_query_options_t query_options {};
 };
+
+/**
+ * @brief Refresh all module metrics in the global Prometheus registry.
+ *
+ * Calls p_update_metrics() on every ProxySQL module so that gauges and
+ * counters reflect the current state before the registry is collected.
+ */
+void update_modules_metrics();
 
 class ProxySQL_Admin {
 	private:
@@ -692,8 +752,9 @@ class ProxySQL_Admin {
 	// TSDB
 	void init_tsdb_variables();
 	void flush_tsdb_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
-	void load_tsdb_variables_to_runtime();
-	void save_tsdb_variables_from_runtime();
+	void flush_tsdb_variables___database_to_runtime(SQLite3DB *db, bool replace);
+	void load_tsdb_variables_to_runtime() { flush_tsdb_variables___database_to_runtime(admindb, true); }
+	void save_tsdb_variables_from_runtime() { flush_tsdb_variables___runtime_to_database(admindb, true, true, false); }
 
 	void load_or_update_global_settings(SQLite3DB *);
 
@@ -856,6 +917,28 @@ class ProxySQL_Admin {
 
 	template <enum SERVER_TYPE pt>
 	int FlushDigestTableToDisk(SQLite3DB *);
+	/**
+	 * @brief Return Top-K query digests directly from Query Processor memory.
+	 *
+	 * This API bypasses runtime-populated `stats.*` tables and is intended for
+	 * callers that need fresh in-memory digest statistics (for example MCP tools).
+	 *
+	 * @tparam pt Protocol selector (`SERVER_TYPE_MYSQL` or `SERVER_TYPE_PGSQL`).
+	 * @param filters Row-level filter predicates.
+	 * @param sort_by Primary metric used for ordering.
+	 * @param limit Requested page size.
+	 * @param offset Requested page offset.
+	 * @param max_window Optional retained window cap; `0` disables this cap.
+	 * @return Aggregated match counters plus paged Top-K rows.
+	 */
+	template <enum SERVER_TYPE pt>
+	query_digest_topk_result_t QueryDigestTopK(
+		const query_digest_filter_opts_t& filters,
+		query_digest_sort_by_t sort_by,
+		uint32_t limit,
+		uint32_t offset,
+		uint32_t max_window
+	);
 
 	bool ProxySQL_Test___Load_MySQL_Whitelist(int *, int *, int, int);
 	void map_test_mysql_firewall_whitelist_rules_cleanup();
@@ -895,6 +978,7 @@ class ProxySQL_Admin {
 	unsigned long long ProxySQL_Test___MySQL_HostGroups_Manager_Balancing_HG5211();
 	bool ProxySQL_Test___CA_Certificate_Load_And_Verify(uint64_t* duration, int cnt, const char* cacert, const char* capath);
 	bool ProxySQL_Test___WatchDog(int type);
+	bool ProxySQL_Test___Verify_QueryDigestTopK(int rounds, int limit_max, int offset_max, int* passed, int* failed);
 #endif
 	template<typename S>
 	friend void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt);

@@ -3,12 +3,13 @@
 
 #include "proxysql.h"
 #include "MCP_Thread.h"
+#include "MCP_Tool_Handler.h"
 #include "MySQL_Tool_Handler.h"
 #include "Config_Tool_Handler.h"
 #include "Query_Tool_Handler.h"
 #include "Admin_Tool_Handler.h"
 #include "Cache_Tool_Handler.h"
-#include "Observe_Tool_Handler.h"
+#include "Stats_Tool_Handler.h"
 #include "proxysql_debug.h"
 #include "ProxySQL_MCP_Server.hpp"
 
@@ -25,18 +26,16 @@ static const char* mcp_thread_variables_names[] = {
 	"port",
 	"use_ssl",
 	"config_endpoint_auth",
-	"observe_endpoint_auth",
+	"stats_endpoint_auth",
 	"query_endpoint_auth",
 	"admin_endpoint_auth",
 	"cache_endpoint_auth",
+	"ai_endpoint_auth",
 	"rag_endpoint_auth",
 	"timeout_ms",
-	// MySQL Tool Handler configuration
-	"mysql_hosts",
-	"mysql_ports",
-	"mysql_user",
-	"mysql_password",
-	"mysql_schema",
+	"stats_show_queries_max_rows",
+	"stats_show_processlist_max_rows",
+	"stats_enable_debug_tools",
 	NULL
 };
 
@@ -51,18 +50,16 @@ MCP_Threads_Handler::MCP_Threads_Handler() {
 	variables.mcp_port = 6071;
 	variables.mcp_use_ssl = true;                      // Default to true for security
 	variables.mcp_config_endpoint_auth = strdup("");
-	variables.mcp_observe_endpoint_auth = strdup("");
+	variables.mcp_stats_endpoint_auth = strdup("");
 	variables.mcp_query_endpoint_auth = strdup("");
 	variables.mcp_admin_endpoint_auth = strdup("");
 	variables.mcp_cache_endpoint_auth = strdup("");
+	variables.mcp_ai_endpoint_auth = strdup("");
 	variables.mcp_rag_endpoint_auth = strdup("");
 	variables.mcp_timeout_ms = 30000;
-	// MySQL Tool Handler default values
-	variables.mcp_mysql_hosts = strdup("127.0.0.1");
-	variables.mcp_mysql_ports = strdup("3306");
-	variables.mcp_mysql_user = strdup("");
-	variables.mcp_mysql_password = strdup("");
-	variables.mcp_mysql_schema = strdup("");
+	variables.mcp_stats_show_queries_max_rows = 200;
+	variables.mcp_stats_show_processlist_max_rows = 200;
+	variables.mcp_stats_enable_debug_tools = false;
 
 	status_variables.total_requests = 0;
 	status_variables.failed_requests = 0;
@@ -76,34 +73,26 @@ MCP_Threads_Handler::MCP_Threads_Handler() {
 	query_tool_handler = NULL;
 	admin_tool_handler = NULL;
 	cache_tool_handler = NULL;
-	observe_tool_handler = NULL;
+	stats_tool_handler = NULL;
+	ai_tool_handler = NULL;
 	rag_tool_handler = NULL;
 }
 
 MCP_Threads_Handler::~MCP_Threads_Handler() {
 	if (variables.mcp_config_endpoint_auth)
 		free(variables.mcp_config_endpoint_auth);
-	if (variables.mcp_observe_endpoint_auth)
-		free(variables.mcp_observe_endpoint_auth);
+	if (variables.mcp_stats_endpoint_auth)
+		free(variables.mcp_stats_endpoint_auth);
 	if (variables.mcp_query_endpoint_auth)
 		free(variables.mcp_query_endpoint_auth);
 	if (variables.mcp_admin_endpoint_auth)
 		free(variables.mcp_admin_endpoint_auth);
 	if (variables.mcp_cache_endpoint_auth)
 		free(variables.mcp_cache_endpoint_auth);
+	if (variables.mcp_ai_endpoint_auth)
+		free(variables.mcp_ai_endpoint_auth);
 	if (variables.mcp_rag_endpoint_auth)
 		free(variables.mcp_rag_endpoint_auth);
-	// Free MySQL Tool Handler variables
-	if (variables.mcp_mysql_hosts)
-		free(variables.mcp_mysql_hosts);
-	if (variables.mcp_mysql_ports)
-		free(variables.mcp_mysql_ports);
-	if (variables.mcp_mysql_user)
-		free(variables.mcp_mysql_user);
-	if (variables.mcp_mysql_password)
-		free(variables.mcp_mysql_password);
-	if (variables.mcp_mysql_schema)
-		free(variables.mcp_mysql_schema);
 
 	if (mcp_server) {
 		delete mcp_server;
@@ -132,9 +121,13 @@ MCP_Threads_Handler::~MCP_Threads_Handler() {
 		delete cache_tool_handler;
 		cache_tool_handler = NULL;
 	}
-	if (observe_tool_handler) {
-		delete observe_tool_handler;
-		observe_tool_handler = NULL;
+	if (stats_tool_handler) {
+		delete stats_tool_handler;
+		stats_tool_handler = NULL;
+	}
+	if (ai_tool_handler) {
+		delete ai_tool_handler;
+		ai_tool_handler = NULL;
 	}
 	if (rag_tool_handler) {
 		delete rag_tool_handler;
@@ -192,8 +185,8 @@ int MCP_Threads_Handler::get_variable(const char* name, char* val) {
 		sprintf(val, "%s", variables.mcp_config_endpoint_auth ? variables.mcp_config_endpoint_auth : "");
 		return 0;
 	}
-	if (!strcmp(name, "observe_endpoint_auth")) {
-		sprintf(val, "%s", variables.mcp_observe_endpoint_auth ? variables.mcp_observe_endpoint_auth : "");
+	if (!strcmp(name, "stats_endpoint_auth")) {
+		sprintf(val, "%s", variables.mcp_stats_endpoint_auth ? variables.mcp_stats_endpoint_auth : "");
 		return 0;
 	}
 	if (!strcmp(name, "query_endpoint_auth")) {
@@ -208,6 +201,10 @@ int MCP_Threads_Handler::get_variable(const char* name, char* val) {
 		sprintf(val, "%s", variables.mcp_cache_endpoint_auth ? variables.mcp_cache_endpoint_auth : "");
 		return 0;
 	}
+	if (!strcmp(name, "ai_endpoint_auth")) {
+		sprintf(val, "%s", variables.mcp_ai_endpoint_auth ? variables.mcp_ai_endpoint_auth : "");
+		return 0;
+	}
 	if (!strcmp(name, "rag_endpoint_auth")) {
 		sprintf(val, "%s", variables.mcp_rag_endpoint_auth ? variables.mcp_rag_endpoint_auth : "");
 		return 0;
@@ -216,25 +213,16 @@ int MCP_Threads_Handler::get_variable(const char* name, char* val) {
 		sprintf(val, "%d", variables.mcp_timeout_ms);
 		return 0;
 	}
-	// MySQL Tool Handler configuration
-	if (!strcmp(name, "mysql_hosts")) {
-		sprintf(val, "%s", variables.mcp_mysql_hosts ? variables.mcp_mysql_hosts : "");
+	if (!strcmp(name, "stats_show_queries_max_rows")) {
+		sprintf(val, "%d", variables.mcp_stats_show_queries_max_rows);
 		return 0;
 	}
-	if (!strcmp(name, "mysql_ports")) {
-		sprintf(val, "%s", variables.mcp_mysql_ports ? variables.mcp_mysql_ports : "");
+	if (!strcmp(name, "stats_show_processlist_max_rows")) {
+		sprintf(val, "%d", variables.mcp_stats_show_processlist_max_rows);
 		return 0;
 	}
-	if (!strcmp(name, "mysql_user")) {
-		sprintf(val, "%s", variables.mcp_mysql_user ? variables.mcp_mysql_user : "");
-		return 0;
-	}
-	if (!strcmp(name, "mysql_password")) {
-		sprintf(val, "%s", variables.mcp_mysql_password ? variables.mcp_mysql_password : "");
-		return 0;
-	}
-	if (!strcmp(name, "mysql_schema")) {
-		sprintf(val, "%s", variables.mcp_mysql_schema ? variables.mcp_mysql_schema : "");
+	if (!strcmp(name, "stats_enable_debug_tools")) {
+		sprintf(val, "%s", variables.mcp_stats_enable_debug_tools ? "true" : "false");
 		return 0;
 	}
 
@@ -281,10 +269,10 @@ int MCP_Threads_Handler::set_variable(const char* name, const char* value) {
 		variables.mcp_config_endpoint_auth = strdup(value);
 		return 0;
 	}
-	if (!strcmp(name, "observe_endpoint_auth")) {
-		if (variables.mcp_observe_endpoint_auth)
-			free(variables.mcp_observe_endpoint_auth);
-		variables.mcp_observe_endpoint_auth = strdup(value);
+	if (!strcmp(name, "stats_endpoint_auth")) {
+		if (variables.mcp_stats_endpoint_auth)
+			free(variables.mcp_stats_endpoint_auth);
+		variables.mcp_stats_endpoint_auth = strdup(value);
 		return 0;
 	}
 	if (!strcmp(name, "query_endpoint_auth")) {
@@ -305,6 +293,12 @@ int MCP_Threads_Handler::set_variable(const char* name, const char* value) {
 		variables.mcp_cache_endpoint_auth = strdup(value);
 		return 0;
 	}
+	if (!strcmp(name, "ai_endpoint_auth")) {
+		if (variables.mcp_ai_endpoint_auth)
+			free(variables.mcp_ai_endpoint_auth);
+		variables.mcp_ai_endpoint_auth = strdup(value);
+		return 0;
+	}
 	if (!strcmp(name, "rag_endpoint_auth")) {
 		if (variables.mcp_rag_endpoint_auth)
 			free(variables.mcp_rag_endpoint_auth);
@@ -319,36 +313,41 @@ int MCP_Threads_Handler::set_variable(const char* name, const char* value) {
 		}
 		return -1;
 	}
-	// MySQL Tool Handler configuration
-	if (!strcmp(name, "mysql_hosts")) {
-		if (variables.mcp_mysql_hosts)
-			free(variables.mcp_mysql_hosts);
-		variables.mcp_mysql_hosts = strdup(value);
-		return 0;
+	if (!strcmp(name, "stats_show_queries_max_rows")) {
+		/**
+		 * Hard safety cap: do not allow configuring values above 1000.
+		 * This keeps MCP show_queries bounded even if callers request large pages.
+		 */
+		int max_rows = atoi(value);
+		if (max_rows >= 1 && max_rows <= 1000) {
+			variables.mcp_stats_show_queries_max_rows = max_rows;
+			return 0;
+		}
+		return -1;
 	}
-	if (!strcmp(name, "mysql_ports")) {
-		if (variables.mcp_mysql_ports)
-			free(variables.mcp_mysql_ports);
-		variables.mcp_mysql_ports = strdup(value);
-		return 0;
+	if (!strcmp(name, "stats_show_processlist_max_rows")) {
+		/**
+		 * Hard safety cap: do not allow configuring values above 1000.
+		 * This keeps MCP show_processlist bounded even if callers request
+		 * large pages.
+		 */
+		int max_rows = atoi(value);
+		if (max_rows >= 1 && max_rows <= 1000) {
+			variables.mcp_stats_show_processlist_max_rows = max_rows;
+			return 0;
+		}
+		return -1;
 	}
-	if (!strcmp(name, "mysql_user")) {
-		if (variables.mcp_mysql_user)
-			free(variables.mcp_mysql_user);
-		variables.mcp_mysql_user = strdup(value);
-		return 0;
-	}
-	if (!strcmp(name, "mysql_password")) {
-		if (variables.mcp_mysql_password)
-			free(variables.mcp_mysql_password);
-		variables.mcp_mysql_password = strdup(value);
-		return 0;
-	}
-	if (!strcmp(name, "mysql_schema")) {
-		if (variables.mcp_mysql_schema)
-			free(variables.mcp_mysql_schema);
-		variables.mcp_mysql_schema = strdup(value);
-		return 0;
+	if (!strcmp(name, "stats_enable_debug_tools")) {
+		if (strcasecmp(value, "true") == 0 || strcasecmp(value, "1") == 0) {
+			variables.mcp_stats_enable_debug_tools = true;
+			return 0;
+		}
+		if (strcasecmp(value, "false") == 0 || strcasecmp(value, "0") == 0) {
+			variables.mcp_stats_enable_debug_tools = false;
+			return 0;
+		}
+		return -1;
 	}
 
 	return -1;

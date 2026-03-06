@@ -61,11 +61,13 @@
 #include "proxysql_sslkeylog.h"
 #include "jemalloc.h"
 
+#ifdef PROXYSQLGENAI
 // AI Features includes
 #include "AI_Features_Manager.h"
 #include "LLM_Bridge.h"
 #include "Anomaly_Detector.h"
 #include "AI_Vector_Storage.h"
+#endif /* PROXYSQLGENAI */
 
 #ifndef NOJEM
 #if defined(__APPLE__) && defined(__MACH__)

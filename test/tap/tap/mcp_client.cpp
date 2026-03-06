@@ -16,6 +16,7 @@ MCPClient::MCPClient(
     , host_(host)
     , port_(port)
     , timeout_ms_(timeout_ms)
+    , use_ssl_(false)
     , request_id_(1)
 {
     // Apply defaults if not provided
@@ -47,12 +48,14 @@ MCPClient::~MCPClient() {
 
 void MCPClient::set_host(const std::string& host) {
     host_ = host;
-    base_url_ = "http://" + host_ + ":" + std::to_string(port_);
+    std::string protocol = use_ssl_ ? "https://" : "http://";
+    base_url_ = protocol + host_ + ":" + std::to_string(port_);
 }
 
 void MCPClient::set_port(int port) {
     port_ = port;
-    base_url_ = "http://" + host_ + ":" + std::to_string(port_);
+    std::string protocol = use_ssl_ ? "https://" : "http://";
+    base_url_ = protocol + host_ + ":" + std::to_string(port_);
 }
 
 void MCPClient::set_timeout(long timeout_ms) {
@@ -64,6 +67,24 @@ void MCPClient::set_timeout(long timeout_ms) {
 
 void MCPClient::set_auth_token(const std::string& token) {
     auth_token_ = token;
+}
+
+void MCPClient::set_use_ssl(bool use_ssl) {
+    use_ssl_ = use_ssl;
+    std::string protocol = use_ssl_ ? "https://" : "http://";
+    base_url_ = protocol + host_ + ":" + std::to_string(port_);
+
+    // Configure curl for SSL
+    if (curl_) {
+        if (use_ssl_) {
+            // Skip certificate verification for testing
+            curl_easy_setopt(curl_, CURLOPT_SSL_VERIFYPEER, 0L);
+            curl_easy_setopt(curl_, CURLOPT_SSL_VERIFYHOST, 0L);
+        } else {
+            curl_easy_setopt(curl_, CURLOPT_SSL_VERIFYPEER, 1L);
+            curl_easy_setopt(curl_, CURLOPT_SSL_VERIFYHOST, 2L);
+        }
+    }
 }
 
 std::string MCPClient::get_connection_info() const {

@@ -5,6 +5,9 @@ using json = nlohmann::json;
 //#define __CLASS_STANDARD_MYSQL_THREAD_H
 
 #include <functional>
+#include <algorithm>
+#include <cerrno>
+#include <cctype>
 #include <vector>
 
 #include "proxysql_utils.h"
@@ -399,6 +402,7 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"default_query_delay",
 	(char*)"default_query_timeout",
 	(char*)"query_processor_iterations",
+	(char*)"query_processor_first_comment_parsing",
 	(char*)"query_processor_regex",
 	(char*)"set_query_lock_on_hostgroup",
 	(char*)"set_parser_algorithm",
@@ -455,6 +459,8 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"stats_time_query_processor",
 	(char*)"query_cache_stores_empty_result",
 	(char*)"data_packets_history_size",
+	(char*)"ffto_enabled",
+	(char*)"ffto_max_buffer_size",
 	NULL
 };
 
@@ -1030,6 +1036,8 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.server_encoding = strdup((char*)"UTF8");
 	variables.shun_on_failures = 5;
 	variables.shun_recovery_time_sec = 10;
+	variables.ffto_enabled = true;
+	variables.ffto_max_buffer_size = 1048576;
 	variables.unshun_algorithm = 0;
 	variables.query_retries_on_failure = 1;
 	variables.client_host_cache_size = 0;
@@ -1116,6 +1124,7 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.default_query_delay = 0;
 	variables.default_query_timeout = 24 * 3600 * 1000;
 	variables.query_processor_iterations = 0;
+	variables.query_processor_first_comment_parsing = 2;
 	variables.query_processor_regex = 1;
 	variables.set_query_lock_on_hostgroup = 1;
 	variables.set_parser_algorithm = 2; // before 2.6.0 this was 1
@@ -2173,6 +2182,7 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["firewall_whitelist_enabled"] = make_tuple(&variables.firewall_whitelist_enabled, false);
 		VariablesPointers_bool["kill_backend_connection_when_disconnect"] = make_tuple(&variables.kill_backend_connection_when_disconnect, false);
 		VariablesPointers_bool["log_unhealthy_connections"] = make_tuple(&variables.log_unhealthy_connections, false);
+		VariablesPointers_bool["ffto_enabled"] = make_tuple(&variables.ffto_enabled, false);
 		VariablesPointers_bool["monitor_enabled"] = make_tuple(&variables.monitor_enabled, false);
 		VariablesPointers_bool["monitor_replication_lag_group_by_host"] = make_tuple(&variables.monitor_replication_lag_group_by_host, false);
 		VariablesPointers_bool["monitor_wait_timeout"] = make_tuple(&variables.monitor_wait_timeout, false);
@@ -2276,6 +2286,7 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["query_digests_max_query_length"] = make_tuple(&variables.query_digests_max_query_length, 16, 1 * 1024 * 1024, false);
 		VariablesPointers_int["query_rules_fast_routing_algorithm"] = make_tuple(&variables.query_rules_fast_routing_algorithm, 1, 2, false);
 		VariablesPointers_int["query_processor_iterations"] = make_tuple(&variables.query_processor_iterations, 0, 1000 * 1000, false);
+		VariablesPointers_int["query_processor_first_comment_parsing"] = make_tuple(&variables.query_processor_first_comment_parsing, 0, 3, false);
 		VariablesPointers_int["query_processor_regex"] = make_tuple(&variables.query_processor_regex, 1, 2, false);
 		VariablesPointers_int["query_retries_on_failure"] = make_tuple(&variables.query_retries_on_failure, 0, 1000, false);
 		VariablesPointers_int["set_query_lock_on_hostgroup"] = make_tuple(&variables.set_query_lock_on_hostgroup, 0, 1, false);
@@ -2292,6 +2303,7 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["poll_timeout_on_failure"] = make_tuple(&variables.poll_timeout_on_failure, 10, 20000, false);
 		VariablesPointers_int["shun_on_failures"] = make_tuple(&variables.shun_on_failures, 0, 10000000, false);
 		VariablesPointers_int["shun_recovery_time_sec"] = make_tuple(&variables.shun_recovery_time_sec, 0, 3600 * 24 * 365, false);
+		VariablesPointers_int["ffto_max_buffer_size"] = make_tuple(&variables.ffto_max_buffer_size, 1, 1024 * 1024 * 1024, false);
 		VariablesPointers_int["unshun_algorithm"] = make_tuple(&variables.unshun_algorithm, 0, 1, false);
 		VariablesPointers_int["hostgroup_manager_verbose"] = make_tuple(&variables.hostgroup_manager_verbose, 0, 3, false);
 		VariablesPointers_int["tcp_keepalive_time"] = make_tuple(&variables.tcp_keepalive_time, 0, 7200, false);
@@ -3952,6 +3964,8 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___throttle_ratio_server_to_client = GloPTH->get_variable_int((char*)"throttle_ratio_server_to_client");
 	pgsql_thread___shun_on_failures = GloPTH->get_variable_int((char*)"shun_on_failures");
 	pgsql_thread___shun_recovery_time_sec = GloPTH->get_variable_int((char*)"shun_recovery_time_sec");
+	pgsql_thread___ffto_enabled = (bool)GloPTH->get_variable_int((char*)"ffto_enabled");
+	pgsql_thread___ffto_max_buffer_size = GloPTH->get_variable_int((char*)"ffto_max_buffer_size");
 	pgsql_thread___hostgroup_manager_verbose = GloPTH->get_variable_int((char*)"hostgroup_manager_verbose");
 	pgsql_thread___default_max_latency_ms = GloPTH->get_variable_int((char*)"default_max_latency_ms");
 	pgsql_thread___unshun_algorithm = GloPTH->get_variable_int((char*)"unshun_algorithm");
@@ -3985,6 +3999,7 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___query_digests_max_digest_length = GloPTH->get_variable_int((char*)"query_digests_max_digest_length");
 	pgsql_thread___query_digests_max_query_length = GloPTH->get_variable_int((char*)"query_digests_max_query_length");
 	pgsql_thread___query_processor_iterations = GloPTH->get_variable_int((char*)"query_processor_iterations");
+	pgsql_thread___query_processor_first_comment_parsing = GloPTH->get_variable_int((char*)"query_processor_first_comment_parsing");
 	pgsql_thread___query_processor_regex = GloPTH->get_variable_int((char*)"query_processor_regex");
 
 	pgsql_thread___query_cache_size_MB = GloPTH->get_variable_int((char*)"query_cache_size_MB");
@@ -4760,6 +4775,268 @@ void PgSQL_Threads_Handler::Get_Memory_Stats() {
 	}
 }
 
+namespace {
+
+/**
+ * @brief Column indexes used by PgSQL processlist filtering and sorting helpers.
+ */
+struct pgsql_processlist_columns_t {
+	static constexpr int session_id = 1;
+	static constexpr int username = 2;
+	static constexpr int database = 3;
+	static constexpr int hostgroup = 6;
+	static constexpr int command = 13;
+	static constexpr int time_ms = 14;
+	static constexpr int info = 15;
+};
+
+/**
+ * @brief Safely return a row field or an empty string when missing.
+ *
+ * @param row Source processlist row.
+ * @param idx Field index in the processlist result.
+ * @return Pointer to the requested field or an empty-string literal.
+ */
+static const char* pgsql_pl_field(const SQLite3_row* row, int idx) {
+	if (!row || idx < 0 || idx >= row->cnt || !row->fields[idx]) {
+		return "";
+	}
+	return row->fields[idx];
+}
+
+/**
+ * @brief Parse a processlist numeric field as unsigned integer.
+ *
+ * Invalid or empty values are normalized to zero so sorting and filtering remain
+ * deterministic for partial rows.
+ *
+ * @param value Text field containing an integer representation.
+ * @return Parsed unsigned value, or `0` on parse failure.
+ */
+static uint64_t pgsql_pl_to_u64(const char* value) {
+	if (!value || !value[0]) {
+		return 0;
+	}
+
+	char* end = nullptr;
+	errno = 0;
+	unsigned long long parsed = strtoull(value, &end, 10);
+	if (end == value || *end != '\0' || errno != 0) {
+		return 0;
+	}
+
+	return static_cast<uint64_t>(parsed);
+}
+
+/**
+ * @brief Case-(in)sensitive substring matcher used by `match_info`.
+ *
+ * @param haystack Candidate text.
+ * @param needle Substring to search for.
+ * @param case_sensitive Whether matching should be case-sensitive.
+ * @return true when @p needle is found in @p haystack.
+ */
+static bool pgsql_pl_contains(const std::string& haystack, const std::string& needle, bool case_sensitive) {
+	if (needle.empty()) {
+		return true;
+	}
+
+	if (case_sensitive) {
+		return haystack.find(needle) != std::string::npos;
+	}
+
+	auto it = std::search(
+		haystack.begin(),
+		haystack.end(),
+		needle.begin(),
+		needle.end(),
+		[](char lhs, char rhs) {
+			return std::tolower(static_cast<unsigned char>(lhs)) ==
+			       std::tolower(static_cast<unsigned char>(rhs));
+		}
+	);
+	return it != haystack.end();
+}
+
+/**
+ * @brief Evaluate whether a PgSQL processlist row matches caller filters.
+ *
+ * @param row Processlist row from `SQL3_Processlist`.
+ * @param opts Typed query options supplied by the caller.
+ * @return true when the row satisfies all active filters.
+ */
+static bool pgsql_pl_row_matches(const SQLite3_row* row, const processlist_query_options_t& opts) {
+	if (!opts.username.empty() && opts.username != pgsql_pl_field(row, pgsql_processlist_columns_t::username)) {
+		return false;
+	}
+	if (!opts.database.empty() && opts.database != pgsql_pl_field(row, pgsql_processlist_columns_t::database)) {
+		return false;
+	}
+	if (opts.hostgroup >= 0) {
+		const int row_hostgroup = static_cast<int>(pgsql_pl_to_u64(pgsql_pl_field(row, pgsql_processlist_columns_t::hostgroup)));
+		if (row_hostgroup != opts.hostgroup) {
+			return false;
+		}
+	}
+	if (!opts.command.empty() && opts.command != pgsql_pl_field(row, pgsql_processlist_columns_t::command)) {
+		return false;
+	}
+	if (opts.min_time_ms >= 0) {
+		const uint64_t row_time_ms = pgsql_pl_to_u64(pgsql_pl_field(row, pgsql_processlist_columns_t::time_ms));
+		if (row_time_ms < static_cast<uint64_t>(opts.min_time_ms)) {
+			return false;
+		}
+	}
+	if (opts.has_session_id) {
+		const uint64_t row_session_id = pgsql_pl_to_u64(pgsql_pl_field(row, pgsql_processlist_columns_t::session_id));
+		if (row_session_id != opts.session_id) {
+			return false;
+		}
+	}
+	if (!opts.match_info.empty()) {
+		const std::string info = pgsql_pl_field(row, pgsql_processlist_columns_t::info);
+		if (!pgsql_pl_contains(info, opts.match_info, opts.info_case_sensitive)) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+/**
+ * @brief Compare two PgSQL processlist rows according to typed sort options.
+ *
+ * The comparison applies a deterministic tie-breaker on `SessionID` so paging
+ * remains stable across repeated calls with identical data.
+ *
+ * @param lhs Left-hand row.
+ * @param rhs Right-hand row.
+ * @param opts Query options carrying sort key and direction.
+ * @return true when @p lhs should be ordered before @p rhs.
+ */
+static bool pgsql_pl_row_less(const SQLite3_row* lhs, const SQLite3_row* rhs, const processlist_query_options_t& opts) {
+	const uint64_t lhs_session_id = pgsql_pl_to_u64(pgsql_pl_field(lhs, pgsql_processlist_columns_t::session_id));
+	const uint64_t rhs_session_id = pgsql_pl_to_u64(pgsql_pl_field(rhs, pgsql_processlist_columns_t::session_id));
+
+	auto string_compare = [&](int idx) -> int {
+		const std::string lhs_value = pgsql_pl_field(lhs, idx);
+		const std::string rhs_value = pgsql_pl_field(rhs, idx);
+		if (lhs_value < rhs_value) {
+			return -1;
+		}
+		if (lhs_value > rhs_value) {
+			return 1;
+		}
+		return 0;
+	};
+
+	auto numeric_compare = [&](int idx) -> int {
+		const uint64_t lhs_value = pgsql_pl_to_u64(pgsql_pl_field(lhs, idx));
+		const uint64_t rhs_value = pgsql_pl_to_u64(pgsql_pl_field(rhs, idx));
+		if (lhs_value < rhs_value) {
+			return -1;
+		}
+		if (lhs_value > rhs_value) {
+			return 1;
+		}
+		return 0;
+	};
+
+	int cmp = 0;
+	switch (opts.sort_by) {
+		case processlist_sort_by_t::time_ms:
+			cmp = numeric_compare(pgsql_processlist_columns_t::time_ms);
+			break;
+		case processlist_sort_by_t::session_id:
+			cmp = numeric_compare(pgsql_processlist_columns_t::session_id);
+			break;
+		case processlist_sort_by_t::username:
+			cmp = string_compare(pgsql_processlist_columns_t::username);
+			break;
+		case processlist_sort_by_t::hostgroup:
+			cmp = numeric_compare(pgsql_processlist_columns_t::hostgroup);
+			break;
+		case processlist_sort_by_t::command:
+			cmp = string_compare(pgsql_processlist_columns_t::command);
+			break;
+		case processlist_sort_by_t::none:
+		default:
+			cmp = 0;
+			break;
+	}
+
+	if (cmp != 0) {
+		return opts.sort_desc ? (cmp > 0) : (cmp < 0);
+	}
+
+	return lhs_session_id < rhs_session_id;
+}
+
+/**
+ * @brief Apply typed filtering, sorting, and pagination to PgSQL processlist rows.
+ *
+ * This post-processing stage is intentionally local to `SQL3_Processlist()` so
+ * the same API can serve:
+ * - legacy Admin stats refreshes (options disabled, full result)
+ * - MCP live queries (options enabled with filters and page controls)
+ *
+ * @param result Mutable resultset generated by `SQL3_Processlist()`.
+ * @param opts Query options controlling filtering/sorting/pagination.
+ */
+static void apply_pgsql_processlist_query_options(SQLite3_result* result, const processlist_query_options_t& opts) {
+	if (!result || !opts.enabled) {
+		return;
+	}
+
+	std::vector<SQLite3_row*> filtered_rows;
+	filtered_rows.reserve(result->rows.size());
+
+	for (SQLite3_row* row : result->rows) {
+		if (pgsql_pl_row_matches(row, opts)) {
+			filtered_rows.push_back(row);
+		} else {
+			delete row;
+		}
+	}
+
+	if (opts.sort_by != processlist_sort_by_t::none && filtered_rows.size() > 1) {
+		std::stable_sort(
+			filtered_rows.begin(),
+			filtered_rows.end(),
+			[&opts](const SQLite3_row* lhs, const SQLite3_row* rhs) {
+				return pgsql_pl_row_less(lhs, rhs, opts);
+			}
+		);
+	}
+
+	size_t begin = std::min<size_t>(opts.offset, filtered_rows.size());
+	size_t end = begin;
+	if (opts.disable_pagination) {
+		begin = 0;
+		end = filtered_rows.size();
+	} else {
+		const uint64_t requested_end = static_cast<uint64_t>(begin) + static_cast<uint64_t>(opts.limit);
+		end = std::min<size_t>(filtered_rows.size(), static_cast<size_t>(requested_end));
+	}
+
+	std::vector<SQLite3_row*> paged_rows;
+	paged_rows.reserve(end > begin ? (end - begin) : 0);
+
+	for (size_t idx = 0; idx < filtered_rows.size(); ++idx) {
+		SQLite3_row* row = filtered_rows[idx];
+		if (idx >= begin && idx < end) {
+			paged_rows.push_back(row);
+		} else {
+			delete row;
+		}
+	}
+
+	result->rows.swap(paged_rows);
+	result->rows_count = static_cast<int>(result->rows.size());
+}
+
+} // namespace
+
 SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist(processlist_config_t args) {
 	const int colnum = 18;
 	char port[NI_MAXSERV];
@@ -5025,6 +5302,14 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist(processlist_config_t arg
 		}
 		pthread_mutex_unlock(&thr->thread_mutex);
 	}
+
+	/**
+	 * Apply optional in-memory query options used by MCP and other internal
+	 * consumers. Legacy callers keep `query_options.enabled=false`, so their
+	 * behavior remains unchanged and they still receive the full processlist.
+	 */
+	apply_pgsql_processlist_query_options(result, args.query_options);
+
 	return result;
 }
 

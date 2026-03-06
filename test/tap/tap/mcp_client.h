@@ -294,6 +294,16 @@ public:
      */
     void set_auth_token(const std::string& token);
 
+    /**
+     * @brief Enable or disable SSL/HTTPS
+     *
+     * When enabled, the client uses https:// instead of http://
+     * Also configures curl to skip certificate verification for testing.
+     *
+     * @param use_ssl true to use HTTPS, false for HTTP (default: false)
+     */
+    void set_use_ssl(bool use_ssl);
+
     // ========================================================================
     // Server Connectivity
     // ========================================================================
@@ -403,6 +413,7 @@ private:
     std::string host_;                 ///< Server hostname
     int port_;                         ///< Server port
     long timeout_ms_;                  ///< Request timeout
+    bool use_ssl_;                     ///< Use HTTPS instead of HTTP
     std::string last_error_;           ///< Last error message
     std::string base_url_;             ///< Full base URL
     unsigned int request_id_;          ///< JSON-RPC request ID counter

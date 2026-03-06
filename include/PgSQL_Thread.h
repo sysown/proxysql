@@ -1007,6 +1007,14 @@ public:
 		int default_query_delay;
 		int default_query_timeout;
 		int query_processor_iterations;
+		/**
+		 * @brief Defines when the first comment of a query needs to be processed.
+		 * 0 : comment ignored
+		 * 1 : comment processed before the query rules
+		 * 2 : comment processed after the query rules (default behavior)
+		 * 3 : comment processed before and after the query rules
+		 */
+		int query_processor_first_comment_parsing;
 		int query_processor_regex;
 		int set_query_lock_on_hostgroup;
 		int set_parser_algorithm;
@@ -1078,6 +1086,8 @@ public:
 #endif
 		int show_processlist_extended;
 		int processlist_max_query_length;
+		bool ffto_enabled;
+		int ffto_max_buffer_size;
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;
@@ -1527,7 +1537,10 @@ public:
 	/**
 	 * @brief Retrieves a process list for all threads in the thread pool.
 	 *
-	 * @param args Processlist configuration of PgSQL.
+	 * @param args
+	 *   Processlist rendering options and optional typed query controls.
+	 *   When `args.query_options.enabled=true`, filtering/sorting/pagination is
+	 *   applied in memory after the live snapshot is collected.
 	 *
 	 * @return A `SQLite3_result` object containing the process list, or `NULL` if an error
 	 * occurred.

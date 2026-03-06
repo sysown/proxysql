@@ -13,6 +13,7 @@
 #include <thread>
 #include "libpq-fe.h"
 #include "command_line.h"
+#include "noise_utils.h"
 #include "tap.h"
 #include "utils.h"
 
@@ -79,6 +80,12 @@ bool run_set_statement(const std::string& stmt, ConnType type = BACKEND) {
 }
 
 int main(int argc, char** argv) {
+    if (cl.getEnv())
+        return exit_status();
+
+	spawn_internal_noise(cl, internal_noise_mysql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}, {"avg_delay_ms", "300"}});
+	spawn_internal_noise(cl, internal_noise_prometheus_poller);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
 
     std::vector<TestCase> tests = {
         // Standard param/value
@@ -155,7 +162,11 @@ int main(int argc, char** argv) {
         {"SET datestyle = ;", false, "missing value"}
     };
    
-    plan(tests.size());
+    if (cl.use_noise) {
+        plan(tests.size() + 3);
+    } else {
+        plan(tests.size());
+    }
 
     if (cl.getEnv())
         return exit_status();
