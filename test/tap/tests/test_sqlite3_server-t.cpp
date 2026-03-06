@@ -265,7 +265,7 @@ string connect_with_retries(MYSQL* sqlite3, const CommandLine& cl, const pair<st
 	uint32_t retries = 10;
 	bool conn_success = false;
 
-	const char* host { host_port.first.c_str() };
+	const char* host { cl.host };
 	const int port { host_port.second };
 	string conn_err {};
 
@@ -344,6 +344,27 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
+	// Verbose test header
+	diag("================================================================================");
+	diag("Test: test_sqlite3_server-t");
+	diag("================================================================================");
+	diag("This test verifies ProxySQL SQLite3 server functionality.");
+	diag("");
+	diag("Test scenarios:");
+	diag("  - Invalid user authentication should fail");
+	diag("  - Invalid password authentication should fail");
+	diag("  - Successful connection with valid credentials");
+	diag("  - Successful queries execution");
+	diag("  - Failing queries execution (syntax errors)");
+	diag("  - SQLite interface changes and reconnection");
+	diag("");
+	diag("Connection parameters:");
+	diag("  - Admin Host: %s", cl.host);
+	diag("  - Admin Port: %d", cl.admin_port);
+	diag("  - SQLite3 Host: %s", cl.host);
+	diag("================================================================================");
+	diag("");
+
 	MYSQL* proxysql_admin = mysql_init(NULL);
 
 	// Connect to ProxySQL Admin and check current SQLite3 configuration
@@ -375,7 +396,7 @@ int main(int argc, char** argv) {
 		bool failed_to_connect = false;
 		if (
 			!mysql_real_connect(
-				proxysql_sqlite3, host_port.first.c_str(), "foobar_user", cl.password,
+				proxysql_sqlite3, cl.host, "foobar_user", cl.password,
 				NULL, host_port.second, NULL, 0
 			)
 		) {
@@ -398,7 +419,7 @@ int main(int argc, char** argv) {
 		failed_to_connect = false;
 		if (
 			!mysql_real_connect(
-				proxysql_sqlite3, host_port.first.c_str(), cl.username, "foobar_pass",
+				proxysql_sqlite3, cl.host, cl.username, "foobar_pass",
 				NULL, host_port.second, NULL, 0
 			)
 		) {
@@ -419,7 +440,7 @@ int main(int argc, char** argv) {
 		// Correctly connect to SQLite3 server
 		if (
 			!mysql_real_connect(
-				proxysql_sqlite3, host_port.first.c_str(), cl.username, cl.password,
+				proxysql_sqlite3, cl.host, cl.username, cl.password,
 				NULL, host_port.second, NULL, 0
 			)
 		) {
