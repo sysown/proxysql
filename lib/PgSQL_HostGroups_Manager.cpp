@@ -2716,7 +2716,7 @@ void PgSQL_HostGroups_Manager::replication_lag_action(const std::list<replicatio
 		const unsigned int port = std::get<PgSQL_REPLICATION_LAG_SERVER_T::PG_RLS_PORT>(server);
 		const int current_replication_lag = std::get<PgSQL_REPLICATION_LAG_SERVER_T::PG_RLS_CURRENT_REPLICATION_LAG>(server);
 
-		if (pgsql_thread___monitor_replication_lag_group_by_host == false) {
+		if (/* pgsql_thread___monitor_replication_lag_group_by_host == */ false) { // feature currently not enabled
 			// legacy check. 1 check per server per hostgroup
 			PgSQL_HGC *myhgc = MyHGC_find(hid);
 			replication_lag_action_inner(myhgc,address.c_str(),port,current_replication_lag);
