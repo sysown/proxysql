@@ -355,12 +355,38 @@ int main(int argc, char** argv) {
 
 	TAP_MYSQL8_BACKEND_HG = get_env_int("TAP_MYSQL8_BACKEND_HG", 30);
 
+	// Verbose test header
+	diag("================================================================================");
+	diag("Test: test_sqlite3_pass_exts-t");
+	diag("================================================================================");
+	diag("This test verifies SQLite3 password extension functions in the ProxySQL Admin");
+	diag("interface, testing compatibility with MySQL authentication methods.");
+	diag("");
+	diag("Test scenarios:");
+	diag("  - MYSQL_NATIVE_PASSWORD: MySQL 4.1+ native password hashing");
+	diag("  - CACHING_SHA2_PASSWORD: MySQL 8.0+ caching SHA2 password hashing");
+	diag("  - Random password generation and hash verification");
+	diag("  - End-to-end connection testing with generated passwords");
+	diag("");
+	diag("Connection parameters:");
+	diag("  - MySQL Host: %s", cl.mysql_host);
+	diag("  - MySQL Port: %d", cl.mysql_port);
+	diag("  - MySQL User: %s", cl.mysql_username);
+	diag("  - Admin Host: %s", cl.admin_host);
+	diag("  - Admin Port: %d", cl.admin_port);
+	diag("================================================================================");
+	diag("");
+
 	MYSQL* mysql = mysql_init(NULL);
 
-	if (!mysql_real_connect(mysql, cl.host, cl.mysql_username, cl.mysql_password, NULL, cl.mysql_port, NULL, 0)) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
+	diag("Attempting to connect to MySQL backend at %s:%d", cl.mysql_host, cl.mysql_port);
+	if (!mysql_real_connect(mysql, cl.mysql_host, cl.mysql_username, cl.mysql_password, NULL, cl.mysql_port, NULL, 0)) {
+		diag("Failed to connect to MySQL backend: Error: %s", mysql_error(mysql));
+		diag("Connection details: host=%s, port=%d, username=%s", cl.mysql_host, cl.mysql_port, cl.mysql_username);
 		return EXIT_FAILURE;
 	}
+	diag("Successfully connected to MySQL backend");
+	diag("");
 
 
 	MYSQL* admin = mysql_init(NULL);
