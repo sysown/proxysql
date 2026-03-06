@@ -30,6 +30,61 @@ using std::string;
 using std::vector;
 using std::pair;
 
+// Global flag for MySQL version check
+static bool g_mysql_supports_random_password = false;
+static bool g_mysql_version_checked = false;
+
+/**
+ * @brief Check if MySQL server supports 'BY RANDOM PASSWORD' syntax (MySQL 8.0+)
+ * @param mysql MySQL connection handle
+ * @return true if MySQL 8.0+, false otherwise
+ */
+bool check_mysql_random_password_support(MYSQL* mysql) {
+	if (g_mysql_version_checked) {
+		return g_mysql_supports_random_password;
+	}
+
+	g_mysql_version_checked = true;
+
+	// Query MySQL version
+	if (mysql_query(mysql, "SELECT @@version") != 0) {
+		diag("Failed to query MySQL version: %s", mysql_error(mysql));
+		return false;
+	}
+
+	MYSQL_RES* res = mysql_store_result(mysql);
+	if (!res) {
+		diag("Failed to store MySQL version result");
+		return false;
+	}
+
+	MYSQL_ROW row = mysql_fetch_row(res);
+	if (!row || !row[0]) {
+		mysql_free_result(res);
+		diag("Failed to fetch MySQL version row");
+		return false;
+	}
+
+	string version(row[0]);
+	mysql_free_result(res);
+
+	// Check if version starts with 8.or higher
+	diag("MySQL server version: %s", version.c_str());
+
+	// Parse major version
+	int major_version = 0;
+	size_t dot_pos = version.find('.');
+	if (dot_pos != string::npos) {
+		string major_str = version.substr(0, dot_pos);
+		major_version = atoi(major_str.c_str());
+	}
+
+	g_mysql_supports_random_password = (major_version >= 8);
+	diag("MySQL server supports 'BY RANDOM PASSWORD': %s", g_mysql_supports_random_password ? "yes" : "no");
+
+	return g_mysql_supports_random_password;
+}
+
 struct user_def_t {
 	string name;
 	string auth;
@@ -89,6 +144,13 @@ int config_proxysql_user(MYSQL* admin, const user_creds_t& creds) {
 
 pair<int,user_def_t> create_mysql_user_rnd_creds(MYSQL* mysql, const string& name, const string& auth) {
 	diag("Creating user with random pass   user:'%s'", name.c_str());
+
+	// Check MySQL version for 'BY RANDOM PASSWORD' support
+	if (!check_mysql_random_password_support(mysql)) {
+		diag("Skipping user creation: 'BY RANDOM PASSWORD' requires MySQL 8.0+");
+		diag("Current MySQL server does not support this feature");
+		return { EXIT_FAILURE, user_def_t {} };
+	}
 
 	const string CREATE_USER {
 		"CREATE USER '" + name + "'@'%' IDENTIFIED WITH '" + auth + "' BY RANDOM PASSWORD"
@@ -414,8 +476,8 @@ int main(int argc, char** argv) {
 		}
 	}
 
-	// Tests MySQL/Admin hashes compatibility
-	{
+	// Tests MySQL/Admin hashes compatibility (requires MySQL 8.0+)
+	if (g_mysql_supports_random_password) {
 		vector<user_def_t> users {};
 
 		for (size_t i = 0; i < USER_GEN_COUNT/2; i++) {
@@ -449,6 +511,10 @@ int main(int argc, char** argv) {
 		for (const user_def_t& def : users) {
 			test_pass_match(admin, def);
 		}
+	} else {
+		diag("Skipping MySQL/Admin hashes compatibility tests: requires MySQL 8.0+");
+		diag("Current MySQL server does not support 'BY RANDOM PASSWORD' syntax");
+		skip(USER_GEN_COUNT + 1, "MySQL 8.0+ required for 'BY RANDOM PASSWORD' syntax");
 	}
 
 	// Tests correctness of randomly generated hashes
@@ -476,8 +542,8 @@ int main(int argc, char** argv) {
 		}
 	}
 
-	// Tests end-to-end connection with MySQL using same gen passwords
-	{
+	// Tests end-to-end connection with MySQL using same gen passwords (requires MySQL 8.0+ for caching_sha2_password)
+	if (g_mysql_supports_random_password) {
 		const string TAP_MYSQL8_BACKEND_HG_S { std::to_string(TAP_MYSQL8_BACKEND_HG) };
 		const string RAND_USERS_GEN_S { std::to_string(RAND_USERS_GEN) };
 
