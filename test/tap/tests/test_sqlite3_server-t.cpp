@@ -231,7 +231,7 @@ std::vector<std::string> admin_queries {
  * @brief Perform several admin queries to exercise more paths.
  */
 std::vector<std::string> sqlite_intf_queries {
-	"SET sqliteserver-mysql_ifaces='127.0.0.1:6036'",
+	"SET sqliteserver-mysql_ifaces='0.0.0.0:6036'",
 	"LOAD SQLITESERVER VARIABLES TO RUNTIME"
 };
 
@@ -308,12 +308,12 @@ int enforce_sqlite_iface_change(MYSQL*admin, fstream& logfile, const uint32_t re
 		const string old_sqlite3_port { std::to_string(host_port.second) };
 		const string new_sqlite3_port { std::to_string(host_port.second + 5) };
 
-		MYSQL_QUERY_T(admin, ("SET sqliteserver-mysql_ifaces='127.0.0.1:" + new_sqlite3_port + "'").c_str());
+		MYSQL_QUERY_T(admin, ("SET sqliteserver-mysql_ifaces='0.0.0.0:" + new_sqlite3_port + "'").c_str());
 		MYSQL_QUERY_T(admin, "LOAD SQLITESERVER VARIABLES TO RUNTIME");
 
 		usleep(100 * 1000);
 
-		MYSQL_QUERY_T(admin, ("SET sqliteserver-mysql_ifaces='127.0.0.1:" + old_sqlite3_port + "'").c_str());
+		MYSQL_QUERY_T(admin, ("SET sqliteserver-mysql_ifaces='0.0.0.0:" + old_sqlite3_port + "'").c_str());
 		MYSQL_QUERY_T(admin, "LOAD SQLITESERVER VARIABLES TO RUNTIME");
 
 		logcheck_err = check_errorlog_for_addrinuse(admin, logfile);
