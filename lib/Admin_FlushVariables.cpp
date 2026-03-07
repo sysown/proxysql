@@ -200,7 +200,11 @@ void ProxySQL_Admin::flush_GENERIC_variables__process__database_to_runtime(
 		} else if (modname == "ldap") {
 			rc = GloMyLdapAuth->set_variable(r->fields[0],r->fields[1]);
 		} else if (modname == "tsdb") {
+#ifdef PROXYSQLTSDB
 			rc = GloProxyStats->set_variable(r->fields[0],r->fields[1]);
+#else
+			rc = false;
+#endif
 		}
 		const string v = string(r->fields[0]);
 		if (rc==false) {
@@ -220,7 +224,11 @@ void ProxySQL_Admin::flush_GENERIC_variables__process__database_to_runtime(
 				} else if (modname == "ldap") {
 					val = GloMyLdapAuth->get_variable(r->fields[0]);
 				} else if (modname == "tsdb") {
+#ifdef PROXYSQLTSDB
 					val = GloProxyStats->get_variable(r->fields[0]);
+#else
+					val = NULL;
+#endif
 				}
 				char q[1000];
 					if (val) {
@@ -619,6 +627,7 @@ void ProxySQL_Admin::flush_sqliteserver_variables___database_to_runtime(SQLite3D
 	if (resultset) delete resultset;
 }
 
+#ifdef PROXYSQLTSDB
 void ProxySQL_Admin::flush_tsdb_variables___database_to_runtime(SQLite3DB *db, bool replace) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing TSDB variables. Replace:%d\n", replace);
 	if (GloProxyStats == NULL) {
@@ -637,6 +646,7 @@ void ProxySQL_Admin::flush_tsdb_variables___database_to_runtime(SQLite3DB *db, b
 
 	if (resultset) delete resultset;
 }
+#endif
 
 void ProxySQL_Admin::flush_sqliteserver_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing ClickHouse variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);

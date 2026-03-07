@@ -978,7 +978,9 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	if (query_no_space_length == strlen("PROXYSQL TSDB DOWNSAMPLE") && !strncasecmp("PROXYSQL TSDB DOWNSAMPLE", query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL TSDB DOWNSAMPLE command\n");
 		if (GloProxyStats) {
+#ifdef PROXYSQLTSDB
 			GloProxyStats->tsdb_downsample_metrics();
+#endif
 		}
 		ProxySQL_Admin *SPA = (ProxySQL_Admin *)pa;
 		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
@@ -1119,8 +1121,10 @@ bool is_valid_global_variable(const char *var_name) {
 		return true;
 	} else if (strlen(var_name) > 6 && !strncmp(var_name, "admin-", 6) && SPA->has_variable(var_name + 6)) {
 		return true;
+#ifdef PROXYSQLTSDB
 	} else if (strlen(var_name) > 5 && !strncmp(var_name, "tsdb-", 5) && GloProxyStats && GloProxyStats->has_variable(var_name + 5)) {
 		return true;
+#endif
 	} else if (strlen(var_name) > 5 && !strncmp(var_name, "ldap-", 5) && GloMyLdapAuth && GloMyLdapAuth->has_variable(var_name + 5)) {
 		return true;
 	} else if (strlen(var_name) > 13 && !strncmp(var_name, "sqliteserver-", 13) && GloSQLite3Server && GloSQLite3Server->has_variable(var_name + 13)) {
@@ -1922,14 +1926,18 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			if (is_tsdb) {
 				if (is_admin_command_or_alias(LOAD_TSDB_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length)) {
 					ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+#ifdef PROXYSQLTSDB
 					SPA->load_tsdb_variables_to_runtime();
+#endif
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded tsdb variables to RUNTIME\n");
 					SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 					return false;
 				}
 				if (is_admin_command_or_alias(SAVE_TSDB_VARIABLES_TO_MEMORY, query_no_space, query_no_space_length)) {
 					ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+#ifdef PROXYSQLTSDB
 					SPA->save_tsdb_variables_from_runtime();
+#endif
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved tsdb variables from RUNTIME\n");
 					SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 					return false;
@@ -4732,13 +4740,16 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
+#ifdef PROXYSQLTSDB
 	if (query_no_space_length == strlen("SHOW TSDB VARIABLES") && !strncasecmp("SHOW TSDB VARIABLES", query_no_space, query_no_space_length)) {
 		l_free(query_length, query);
 		query = l_strdup("SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables WHERE variable_name LIKE 'tsdb-%' ORDER BY variable_name");
 		query_length = strlen(query) + 1;
 		goto __run_query;
 	}
+#endif
 
+#ifdef PROXYSQLTSDB
 	if (query_no_space_length == strlen("SHOW TSDB STATUS") && !strncasecmp("SHOW TSDB STATUS", query_no_space, query_no_space_length)) {
 		l_free(query_length, query);
 		query = l_strdup("SELECT Variable_Name AS Variable_name, Variable_Value AS Value FROM stats_tsdb ORDER BY Variable_name");
@@ -4746,6 +4757,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		SPA->stats___tsdb();
 		goto __run_query;
 	}
+#endif
 
 	if (query_no_space_length == strlen("SHOW PGSQL STATUS") && !strncasecmp("SHOW PGSQL STATUS", query_no_space, query_no_space_length)) {
 		l_free(query_length, query);

@@ -274,7 +274,9 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	// GPFC_ functions are subfunctions of get_pkts_from_client()
 	int GPFC_Statuses2(bool&, PtrSize_t&);
 	void GPFC_DetectedMultiPacket_SetDDS();
+#ifdef PROXYSQLFFTO
 	void observe_ffto_client_packet(const PtrSize_t& pkt);
+#endif
 	int GPFC_WaitingClientData_FastForwardSession(PtrSize_t&);
 	void GPFC_PreparedStatements(PtrSize_t&, unsigned char);
 	int GPFC_Replication_SwitchToFastForward(PtrSize_t&, unsigned char);
@@ -488,8 +490,10 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	StmtLongDataHandler *SLDH;
 
 	Session_Regex **match_regexes;
+#ifdef PROXYSQLFFTO
 	std::unique_ptr<TrafficObserver> m_ffto;
 	bool ffto_bypassed;
+#endif
 
 	ProxySQL_Node_Address * proxysql_node_address;
 

@@ -27,7 +27,9 @@ using json = nlohmann::json;
 #include "MySQL_Variables.h"
 #include "ProxySQL_Cluster.hpp"
 #include "MySQL_Query_Cache.h"
+#ifdef PROXYSQLFFTO
 #include "MySQLFFTO.hpp"
+#endif
 
 #include "libinjection.h"
 #include "libinjection_sqli.h"
@@ -649,7 +651,9 @@ MySQL_Session::MySQL_Session() {
 	user_attributes=NULL;
 	schema_locked=false;
 	session_fast_forward=SESSION_FORWARD_TYPE_NONE;
+#ifdef PROXYSQLFFTO
 	ffto_bypassed=false;
+#endif
 	//started_sending_data_to_client=false;
 	handler_function=NULL;
 	client_myds=NULL;
@@ -734,11 +738,13 @@ void MySQL_Session::reset() {
 	with_gtid = false;
 	backend_closed_in_fast_forward = false;
 	fast_forward_grace_start_time = 0;
+#ifdef PROXYSQLFFTO
 	ffto_bypassed = false;
 	if (m_ffto) {
 		m_ffto->on_close();
 	}
 	m_ffto.reset();
+#endif
 
 	//gtid_trxid = 0;
 	gtid_hid = -1;
@@ -4776,7 +4782,9 @@ int MySQL_Session::GPFC_Statuses2(bool& wrong_pass, PtrSize_t& pkt) {
 			}
 			break;
 		case FAST_FORWARD:
+#ifdef PROXYSQLFFTO
 			observe_ffto_client_packet(pkt);
+#endif
 			mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
 			/*
 			 * Fast Forward Grace Close Logic:
@@ -4823,7 +4831,9 @@ int MySQL_Session::GPFC_Statuses2(bool& wrong_pass, PtrSize_t& pkt) {
 		//  'FAST_FORWARD' should be pushed to 'PSarrayOUT'.
 		case CONNECTING_SERVER:
 			if (previous_status.empty() == false && previous_status.top() == FAST_FORWARD) {
+#ifdef PROXYSQLFFTO
 				observe_ffto_client_packet(pkt);
+#endif
 				mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
 				break;
 			}
@@ -4837,6 +4847,7 @@ int MySQL_Session::GPFC_Statuses2(bool& wrong_pass, PtrSize_t& pkt) {
 	return handler_ret;
 }
 
+#ifdef PROXYSQLFFTO
 void MySQL_Session::observe_ffto_client_packet(const PtrSize_t& pkt) {
 	if (!pkt.ptr || pkt.size == 0) return;
 	if (!mysql_thread___ffto_enabled || ffto_bypassed) return;
@@ -4857,6 +4868,7 @@ void MySQL_Session::observe_ffto_client_packet(const PtrSize_t& pkt) {
 		m_ffto->on_client_data((const char*)pkt.ptr, pkt.size);
 	}
 }
+#endif
 
 void MySQL_Session::GPFC_DetectedMultiPacket_SetDDS() {
 	// this is handled only for real traffic, not mirror
@@ -4890,7 +4902,9 @@ int MySQL_Session::GPFC_WaitingClientData_FastForwardSession(PtrSize_t& pkt) {
 
 	mybe=find_or_create_backend(current_hostgroup); // set a backend
 	mybe->server_myds->reinit_queues();             // reinitialize the queues in the myds . By default, they are not active
+#ifdef PROXYSQLFFTO
 	observe_ffto_client_packet(pkt);
+#endif
 	mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size); // move the first packet
 	previous_status.push(FAST_FORWARD); // next status will be FAST_FORWARD . Now we need a connection
 
@@ -6038,6 +6052,7 @@ handler_again:
 				// register the mysql_data_stream
 				thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
 			}
+#ifdef PROXYSQLFFTO
 			if (mysql_thread___ffto_enabled && !ffto_bypassed && m_ffto) {
 				for (unsigned int i = 0; i < mybe->server_myds->PSarrayIN->len; i++) {
 					if (mybe->server_myds->PSarrayIN->pdata[i].size > (size_t)mysql_thread___ffto_max_buffer_size) {
@@ -6054,6 +6069,7 @@ handler_again:
 					);
 				}
 			}
+#endif
 			client_myds->PSarrayOUT->copy_add(mybe->server_myds->PSarrayIN, 0, mybe->server_myds->PSarrayIN->len);
 			while (mybe->server_myds->PSarrayIN->len) mybe->server_myds->PSarrayIN->remove_index(mybe->server_myds->PSarrayIN->len-1,NULL);
 			break;

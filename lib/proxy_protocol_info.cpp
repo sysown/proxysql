@@ -241,7 +241,9 @@ sockaddr_in6 ProxyProtocolInfo::create_ipv6_addr(const std::string& ip) {
 }
 
 // Test cases for the is_in_network function
+#ifdef DEBUG
 void ProxyProtocolInfo::run_tests() {
+#endif
 	// IPv4 Tests
 	{
 		sockaddr_in client_addr = create_ipv4_addr("192.168.1.10");
@@ -380,3 +382,4 @@ bool ProxyProtocolInfo::is_valid_subnet(const char* subnet) {
 
 	return true; // Valid subnet
 }
+
