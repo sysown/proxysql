@@ -198,6 +198,10 @@ bool test_set_simple_verify_pipeline() {
     int count = 0;
     int result_idx = 0;
     int sock = PQsocket(conn.get());
+    if (sock < 0) {
+        diag("Invalid socket descriptor from PQsocket");
+        return false;
+    }
     PGresult* res;
     time_t start_time = time(NULL);
     const int max_wait_seconds = 30;  // Increased timeout
@@ -1466,13 +1470,11 @@ bool test_set_different_values_from_original() {
             continue;
         }
         std::string final_val = it->second;
-        bool changed = (final_val.find(var.test_value) != std::string::npos) ||
-                       (var.test_value.find(final_val) != std::string::npos);
+        // Use exact equality to avoid false positives from substring matching
+        bool changed = (final_val == var.test_value);
 
         // Also verify it's NOT the original
-        bool is_original = (final_val == var.initial_value) ||
-                          (var.initial_value.find(final_val) != std::string::npos) ||
-                          (final_val.find(var.initial_value) != std::string::npos);
+        bool is_original = (final_val == var.initial_value);
 
         diag("%s: original='%s', test='%s', final='%s', changed=%s, is_original=%s",
              var.name.c_str(), var.initial_value.c_str(), var.test_value.c_str(),
@@ -1618,10 +1620,23 @@ bool test_multiple_vars_out_of_sync_pipeline() {
     std::string bo1 = get_variable_simple(conn1.get(), "bytea_output");
     // Close connection (returns to pool with these values)
     conn1.reset();
-    diag("Connection 1 closed - returned to pool with DateStyle='Postgres, DMY', TimeZone='PST8PDT', bytea_output='escape'");
+    diag("Connection 1 closed - returned to pool with DateStyle='Postgres, MDY', TimeZone='PST8PDT', bytea_output='escape'");
 
-    // Small delay to ensure connection is returned to pool
-    usleep(100000);
+    // Wait for connection to be returned to pool with polling (max 5 seconds)
+    // Fixed delay replaced with polling to handle slow CI systems
+    bool conn_in_pool = false;
+    for (int retry = 0; retry < 50; retry++) {
+        usleep(100000);  // 100ms * 50 = 5 seconds max
+        // Check if we can create a new connection (indicates pool has capacity)
+        PGConnPtr test_conn = createNewConnection(BACKEND);
+        if (test_conn) {
+            conn_in_pool = true;
+            break;
+        }
+    }
+    if (!conn_in_pool) {
+        diag("Warning: Connection may not have returned to pool yet, continuing anyway");
+    }
 
     // Step 2: Create new connection with DIFFERENT variable values (simple query mode)
     PGConnPtr conn2 = createNewConnection(BACKEND);

@@ -394,6 +394,49 @@ int main(int argc, char** argv) {
         return success;
         });
 
+    // Test: ROLLBACK AND CHAIN with savepoints - verifies savepoint snapshots are cleaned
+    add_test("ROLLBACK AND CHAIN with savepoints", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+
+        const auto original = getVariable(conn.get(), "DateStyle");
+
+        // Start transaction and set initial value
+        executeQuery(conn.get(), "BEGIN");
+        executeQuery(conn.get(), "SET DateStyle = 'Postgres, DMY'");
+
+        // Create savepoints (these create snapshots in transaction_state)
+        executeQuery(conn.get(), "SAVEPOINT sp1");
+        executeQuery(conn.get(), "SET DateStyle = 'SQL, DMY'");
+        executeQuery(conn.get(), "SAVEPOINT sp2");
+        executeQuery(conn.get(), "SET DateStyle = 'ISO, MDY'");
+
+        // ROLLBACK AND CHAIN should clear all savepoint snapshots
+        executeQuery(conn.get(), "ROLLBACK AND CHAIN");
+
+        // Verify we're still in a transaction
+        char tran_stat = PQtransactionStatus(conn.get());
+        if (tran_stat != PQTRANS_INTRANS) {
+            diag("Expected INTRANS after ROLLBACK AND CHAIN, got %d", tran_stat);
+            executeQuery(conn.get(), "ROLLBACK");
+            return false;
+        }
+
+        // Verify DateStyle was reset to original (before BEGIN)
+        bool datestyle_ok = (getVariable(conn.get(), "DateStyle") == original);
+
+        // Now test that we can create new savepoints (this would fail if stale snapshots remained)
+        executeQuery(conn.get(), "SAVEPOINT sp_after_chain");
+        executeQuery(conn.get(), "SET DateStyle = 'Postgres, DMY'");
+
+        // Rollback to savepoint
+        executeQuery(conn.get(), "ROLLBACK TO SAVEPOINT sp_after_chain");
+
+        // Final cleanup
+        executeQuery(conn.get(), "ROLLBACK");
+
+        return datestyle_ok;
+    });
+
     add_test("Prepared ROLLBACK statement", [&]() {
         auto conn = createNewConnection(ConnType::BACKEND, "", false);
 
@@ -2645,6 +2688,195 @@ int main(int argc, char** argv) {
              simple_show.c_str(), pipeline_show.c_str(), values_match ? "yes" : "no");
 
         return simple_correct && pipeline_correct && values_match;
+    });
+
+    // ============================================================================
+    // RESET Pipeline Mode Tests - Verify pipeline invariant fix
+    // ============================================================================
+
+    // Test: RESET ALL in pipeline mode should be rejected and pipeline reset
+    // This tests the fix for: When RESET is rejected, reset_extended_query_frame()
+    // must be called to prevent subsequent messages from being processed incorrectly
+    add_test("Pipeline: RESET ALL rejected with proper pipeline reset", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        if (!conn) return false;
+
+        // Step 1: Set a variable to create marker state
+        executeQuery(conn.get(), "SET DateStyle = 'Postgres, DMY'");
+        std::string marker_val = getVariable(conn.get(), "DateStyle");
+        diag("Marker value set: '%s'", marker_val.c_str());
+
+        // Step 2: Enter pipeline mode
+        if (PQenterPipelineMode(conn.get()) != 1) {
+            diag("Failed to enter pipeline mode");
+            return false;
+        }
+
+        // Step 3: Send RESET ALL (may be rejected due to startup mismatch)
+        if (PQsendQueryParams(conn.get(), "RESET ALL", 0, NULL, NULL, NULL, NULL, 0) == 0) {
+            diag("Failed to send RESET ALL");
+            PQexitPipelineMode(conn.get());
+            return false;
+        }
+
+        // Step 4: Send a subsequent query - this tests the pipeline reset fix
+        if (PQsendQueryParams(conn.get(), "SELECT 1 as test_col", 0, NULL, NULL, NULL, NULL, 0) == 0) {
+            diag("Failed to send SELECT 1");
+            PQexitPipelineMode(conn.get());
+            return false;
+        }
+
+        // Step 5: Sync
+        if (PQpipelineSync(conn.get()) != 1) {
+            diag("PQpipelineSync failed");
+            PQexitPipelineMode(conn.get());
+            return false;
+        }
+
+        // Step 6: Consume results with proper loop (like working tests)
+        int count = 0;
+        int errors = 0;
+        int select_ok = 0;
+        int sock = PQsocket(conn.get());
+        PGresult* res;
+
+        while (count < 3) {
+            if (PQconsumeInput(conn.get()) == 0) {
+                diag("PQconsumeInput failed: %s", PQerrorMessage(conn.get()));
+                PQexitPipelineMode(conn.get());
+                return false;
+            }
+            while ((res = PQgetResult(conn.get())) != NULL) {
+                ExecStatusType status = PQresultStatus(res);
+                if (status == PGRES_TUPLES_OK) {
+                    select_ok++;
+                    diag("SELECT 1 returned: %s", PQgetvalue(res, 0, 0));
+                } else if (status == PGRES_FATAL_ERROR) {
+                    errors++;
+                    diag("Command failed (expected for RESET ALL): %s", PQresultErrorMessage(res));
+                } else if (status == PGRES_PIPELINE_SYNC) {
+                    PQclear(res);
+                    count++;
+                    break;
+                }
+                PQclear(res);
+                count++;
+            }
+            if (count >= 3) break;
+            if (!PQisBusy(conn.get())) continue;
+            fd_set input_mask;
+            FD_ZERO(&input_mask);
+            FD_SET(sock, &input_mask);
+            struct timeval timeout = {5, 0};
+            select(sock + 1, &input_mask, NULL, NULL, &timeout);
+        }
+
+        PQexitPipelineMode(conn.get());
+
+        // Cleanup
+        executeQuery(conn.get(), "SET DateStyle = 'ISO, MDY'");
+
+        // Test passes if:
+        // 1. RESET failed (errors > 0) - the error was returned
+        // 2. SELECT was NOT executed (select_ok == 0) - frame was reset/discarded
+        diag("Results: errors=%d, select_ok=%d", errors, select_ok);
+        return (errors > 0 && select_ok == 0);
+    });
+
+    // Test: RESET single variable in pipeline mode
+    add_test("Pipeline: RESET single variable with pipeline reset", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        if (!conn) return false;
+
+        // Step 1: Set a marker value
+        executeQuery(conn.get(), "SET DateStyle = 'SQL, DMY'");
+
+        // Step 2: Enter pipeline mode
+        if (PQenterPipelineMode(conn.get()) != 1) {
+            diag("Failed to enter pipeline mode");
+            return false;
+        }
+
+        // Step 3: Send RESET DateStyle
+        if (PQsendQueryParams(conn.get(), "RESET DateStyle", 0, NULL, NULL, NULL, NULL, 0) == 0) {
+            diag("Failed to send RESET DateStyle");
+            PQexitPipelineMode(conn.get());
+            return false;
+        }
+
+        // Step 4: Send subsequent query
+        if (PQsendQueryParams(conn.get(), "SELECT 2 as test_col", 0, NULL, NULL, NULL, NULL, 0) == 0) {
+            diag("Failed to send SELECT 2");
+            PQexitPipelineMode(conn.get());
+            return false;
+        }
+
+        // Step 5: Sync
+        if (PQpipelineSync(conn.get()) != 1) {
+            diag("PQpipelineSync failed");
+            PQexitPipelineMode(conn.get());
+            return false;
+        }
+
+        // Step 6: Consume results with proper loop
+        int count = 0;
+        int errors = 0;
+        int select_ok = 0;
+        int reset_ok = 0;
+        int sock = PQsocket(conn.get());
+        PGresult* res;
+
+        while (count < 3) {
+            if (PQconsumeInput(conn.get()) == 0) {
+                diag("PQconsumeInput failed: %s", PQerrorMessage(conn.get()));
+                PQexitPipelineMode(conn.get());
+                return false;
+            }
+            while ((res = PQgetResult(conn.get())) != NULL) {
+                ExecStatusType status = PQresultStatus(res);
+                if (status == PGRES_COMMAND_OK) {
+                    reset_ok++;
+                    diag("RESET DateStyle succeeded");
+                } else if (status == PGRES_TUPLES_OK) {
+                    select_ok++;
+                    diag("SELECT 2 returned: %s", PQgetvalue(res, 0, 0));
+                } else if (status == PGRES_FATAL_ERROR) {
+                    errors++;
+                    diag("Command failed: %s", PQresultErrorMessage(res));
+                } else if (status == PGRES_PIPELINE_SYNC) {
+                    PQclear(res);
+                    count++;
+                    break;
+                }
+                PQclear(res);
+                count++;
+            }
+            if (count >= 3) break;
+            if (!PQisBusy(conn.get())) continue;
+            fd_set input_mask;
+            FD_ZERO(&input_mask);
+            FD_SET(sock, &input_mask);
+            struct timeval timeout = {5, 0};
+            select(sock + 1, &input_mask, NULL, NULL, &timeout);
+        }
+
+        PQexitPipelineMode(conn.get());
+
+        // Cleanup
+        executeQuery(conn.get(), "SET DateStyle = 'ISO, MDY'");
+
+        // Test logic:
+        // If RESET failed (errors > 0), SELECT should be discarded (select_ok == 0) - frame was reset
+        // If RESET succeeded (reset_ok > 0), SELECT should also succeed (select_ok > 0) - normal operation
+        diag("Results: reset_ok=%d, errors=%d, select_ok=%d", reset_ok, errors, select_ok);
+        if (errors > 0) {
+            // RESET was rejected - frame should be reset, SELECT discarded
+            return (select_ok == 0);
+        } else if (reset_ok > 0) {
+            // RESET succeeded - pipeline should continue normally
+            return (select_ok > 0);
+        }
+        return false;  // Neither success nor error - unexpected
     });
 
     int total_tests = 0;

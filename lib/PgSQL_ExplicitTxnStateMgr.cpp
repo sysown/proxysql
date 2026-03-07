@@ -129,9 +129,16 @@ void PgSQL_ExplicitTxnStateMgr::rollback(bool rollback_and_chain) {
         verify_server_variables(session);
 	}
 
-    // Keep the transaction state intact when executing ROLLBACK AND CHAIN
-    if (rollback_and_chain == false) {
-        // Clear savepoints and reset the initial snapshot
+    // Handle transaction state cleanup based on rollback type
+    if (rollback_and_chain) {
+        // For ROLLBACK AND CHAIN: keep only initial snapshot, remove savepoint snapshots
+        while (transaction_state.size() > 1) {
+            reset_variable_snapshot(transaction_state.back());
+            transaction_state.pop_back();
+        }
+    }
+    else {
+        // For regular ROLLBACK: clear all snapshots
         for (auto& tran_state : transaction_state) {
             reset_variable_snapshot(tran_state);
         }

@@ -2039,7 +2039,7 @@ __implicit_sync:
 							l_free(pkt.size, pkt.ptr);
 							continue;
 						} else {
-							proxy_error("Not implemented yet. Message type:'%c'\n", c);
+							proxy_error("Not implemented yet. Message type:'0x%02X'\n", c);
 							client_myds->setDSS_STATE_QUERY_SENT_NET();
 							client_myds->myprot.generate_error_packet(true, true, "Feature not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
 								false, true);
@@ -2304,7 +2304,7 @@ __implicit_sync:
 							break;
 						default:
 							reset_extended_query_frame();
-							proxy_error("Not implemented yet. Message type:'%c'\n", c);
+							proxy_error("Not implemented yet. Message type:'0x%02X'\n", c);
 							client_myds->setDSS_STATE_QUERY_SENT_NET();
 
 							bool send_ready_packet = is_extended_query_ready_for_query() && c != 'H';
@@ -4461,9 +4461,9 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_special_commands(const char* dig, bool* lock_hostgroup) {
 	if (!dig) return false;
 
-	// When hostgroup is locked, check for RESET commands that could set wrong values
+	// In pipline mode, when hostgroup is locked, check for RESET commands that could set wrong values
 	// due to pooled connection having different startup parameters than current client
-	if (locked_on_hostgroup >= 0 && strncasecmp(dig, "RESET ", 6) == 0) {
+	if (extended_query_phase != EXTQ_PHASE_IDLE && locked_on_hostgroup >= 0 && strncasecmp(dig, "RESET ", 6) == 0) {
 		// Check if startup parameter values differ between client and backend
 		if (mybe && mybe->server_myds && mybe->server_myds->myconn) {
 			// Quick check: see if ANY critical variable has different startup hash
@@ -4478,6 +4478,9 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 			}
 
 			if (startup_mismatch) {
+				// Discard pending pipeline messages 
+				reset_extended_query_frame();
+
 				// Only do expensive parsing if we're going to block the command
 				std::string nq = std::string(dig);
 				RE2::GlobalReplace(&nq, "(?U)/\\*.*\\*/", "");

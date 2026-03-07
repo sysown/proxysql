@@ -1311,10 +1311,15 @@ int PgSQL_Data_Stream::buffer2array() {
 		d = header[read_pos++];
 		pkgsize += (a << 24) | (b << 16) | (c << 8) | d;
 
+		if (pkgsize < sizeof(header)) {
+			proxy_error("Malformed packet (size=%u) received from received from client %s:%d\n", pkgsize, addr.addr ? addr.addr : "", addr.port);
+			shut_soft();
+			return 0;
+		}
+
 		// PostgreSQL packets should always be >= 5 bytes.
-		const size_t alloc_size = (pkgsize < sizeof(header)) ? sizeof(header) : pkgsize;
-		queueIN.pkt.size = alloc_size;
-		queueIN.pkt.ptr = l_alloc(alloc_size);
+		queueIN.pkt.size = pkgsize;
+		queueIN.pkt.ptr = l_alloc(pkgsize);
 
 		memcpy(queueIN.pkt.ptr, header, sizeof(header)); // immediately copy the header into the packet
 		queueIN.partial = sizeof(header);
