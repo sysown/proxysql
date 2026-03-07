@@ -53,8 +53,8 @@ ifeq ($(PROXYSQL31),1)
     PROXYSQLTSDB := 1
 endif
 
-# Only increment if GIT_VERSION was not passed from environment (to avoid double-incrementing in Docker)
-ifneq ($(origin GIT_VERSION),environment)
+# Only increment version at the top-level make to avoid double-incrementing in recursive makes
+ifeq ($(MAKELEVEL),0)
 # Normalize GIT_VERSION by stripping leading 'v' for arithmetic
 GIT_VERSION_NORM := $(shell echo "$(GIT_VERSION)" | sed 's/^v//')
 # If PROXYSQLGENAI is enabled, increment the major version number by 1
