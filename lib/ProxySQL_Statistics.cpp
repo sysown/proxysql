@@ -400,7 +400,9 @@ void ProxySQL_Statistics::disk_upgrade_mysql_connections() {
 					proxy_error("ONLINE UPGRADE of table tsdb_metrics_hour failed\n");
 				}
 		}
-	#endif	}
+#endif
+}
+
 void ProxySQL_Statistics::print_version() {
   fprintf(stderr,"Standard ProxySQL Statistics rev. %s -- %s -- %s\n", PROXYSQL_STATISTICS_VERSION, __FILE__, __TIMESTAMP__);
 }
