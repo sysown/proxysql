@@ -199,11 +199,9 @@ void ProxySQL_Admin::flush_GENERIC_variables__process__database_to_runtime(
 #endif // PROXYSQLCLICKHOUSE
 		} else if (modname == "ldap") {
 			rc = GloMyLdapAuth->set_variable(r->fields[0],r->fields[1]);
-		} else if (modname == "tsdb") {
 #ifdef PROXYSQLTSDB
+		} else if (modname == "tsdb") {
 			rc = GloProxyStats->set_variable(r->fields[0],r->fields[1]);
-#else
-			rc = false;
 #endif
 		}
 		const string v = string(r->fields[0]);
@@ -223,11 +221,9 @@ void ProxySQL_Admin::flush_GENERIC_variables__process__database_to_runtime(
 #endif // PROXYSQLCLICKHOUSE
 				} else if (modname == "ldap") {
 					val = GloMyLdapAuth->get_variable(r->fields[0]);
-				} else if (modname == "tsdb") {
 #ifdef PROXYSQLTSDB
+				} else if (modname == "tsdb") {
 					val = GloProxyStats->get_variable(r->fields[0]);
-#else
-					val = NULL;
 #endif
 				}
 				char q[1000];

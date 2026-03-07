@@ -750,12 +750,12 @@ class ProxySQL_Admin {
 	void save_admin_variables_from_runtime() { flush_admin_variables___runtime_to_database(admindb, true, true, false); }
 
 #ifdef PROXYSQLTSDB
-// TSDB
-void init_tsdb_variables();
-void flush_tsdb_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
-void flush_tsdb_variables___database_to_runtime(SQLite3DB *db, bool replace);
-void load_tsdb_variables_to_runtime() { flush_tsdb_variables___database_to_runtime(admindb, true); }
-void save_tsdb_variables_from_runtime() { flush_tsdb_variables___runtime_to_database(admindb, true, true, false); }
+	// TSDB
+	void init_tsdb_variables();
+	void flush_tsdb_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
+	void flush_tsdb_variables___database_to_runtime(SQLite3DB *db, bool replace);
+	void load_tsdb_variables_to_runtime() { flush_tsdb_variables___database_to_runtime(admindb, true); }
+	void save_tsdb_variables_from_runtime() { flush_tsdb_variables___runtime_to_database(admindb, true, true, false); }
 #endif
 	void load_or_update_global_settings(SQLite3DB *);
 
