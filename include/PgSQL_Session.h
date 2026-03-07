@@ -536,8 +536,12 @@ public:
 //	StmtLongDataHandler* SLDH;
 
 	Session_Regex** match_regexes;
+#ifdef PROXYSQLFFTO
 	std::unique_ptr<TrafficObserver> m_ffto;
-	bool ffto_bypassed;
+	bool ffto_bypassed { false };
+	void observe_ffto_client_packet(const PtrSize_t& pkt);
+	void observe_ffto_server_packet(const PtrSize_t& pkt);
+#endif
 	CopyCmdMatcher* copy_cmd_matcher;
 
 	ProxySQL_Node_Address* proxysql_node_address; // this is used ONLY for Admin, and only if the other party is another proxysql instance part of a cluster

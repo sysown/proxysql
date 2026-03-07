@@ -14,11 +14,57 @@ ifndef GIT_VERSION
     $(error GIT_VERSION is not set)
 endif
 
-# If PROXYSQLGENAI is enabled, increment the major version number by 1
-# Only increment if GIT_VERSION was not passed from environment (to avoid double-incrementing in Docker)
+### RELEASE TIERS & FEATURE FLAGS:
+### ProxySQL supports three distinct release tiers built from the same codebase.
+### The tier is controlled by environment variables which enable feature guards
+### and dynamically adjust the version number to maintain a clear upgrade path.
+###
+### 1. ProxySQL v3.0.x (Stable Tier)
+###    - The default build.
+###    - Includes bug fixes and core enhancements.
+###    - No extra flags required.
+###
+### 2. ProxySQL v3.1.x (Innovative Tier)
+###    - Enabled by setting `PROXYSQL31=1`.
+###    - Includes v3.0 features plus:
+###      * FFTO (Fast Forward Traffic Observer)
+###      * TSDB (Time Series Database subsystem)
+###    - Automatically increments the minor version (e.g., 3.0.6 -> 3.1.6).
+###
+### 3. ProxySQL v4.0.x (AI/MCP Tier)
+###    - Enabled by setting `PROXYSQLGENAI=1`.
+###    - Includes v3.1 features plus:
+###      * Generative AI module
+###      * MCP (Model Context Protocol) stack
+###      * Advanced Anomaly Detection
+###    - Automatically increments the major version (e.g., 3.0.6 -> 4.0.6).
+###    - Note: This tier requires the Rust toolchain for certain dependencies.
+###
+### HIERARCHY: `PROXYSQLGENAI=1` implies `PROXYSQL31=1`.
+
+# If PROXYSQLGENAI is enabled, it automatically enables PROXYSQL31
 ifeq ($(PROXYSQLGENAI),1)
-ifneq ($(origin GIT_VERSION),environment)
-    GIT_VERSION := $(shell echo "$(GIT_VERSION)" | awk -F. '{printf "%d.%s", $$1+1, substr($$0, length($$1)+2)}')
+    PROXYSQL31 := 1
+endif
+
+# If PROXYSQL31 is enabled, it automatically enables FFTO and TSDB
+ifeq ($(PROXYSQL31),1)
+    PROXYSQLFFTO := 1
+    PROXYSQLTSDB := 1
+endif
+
+# Only increment version at the top-level make to avoid double-incrementing in recursive makes
+ifeq ($(MAKELEVEL),0)
+# Normalize GIT_VERSION by stripping leading 'v' for arithmetic
+GIT_VERSION_NORM := $(shell echo "$(GIT_VERSION)" | sed 's/^v//')
+# If PROXYSQLGENAI is enabled, increment the major version number by 1
+ifeq ($(PROXYSQLGENAI),1)
+	GIT_VERSION := $(shell echo "$(GIT_VERSION_NORM)" | awk -F. '{printf "%d.%s", $$1+1, substr($$0, length($$1)+2)}')
+else
+# If PROXYSQL31 is enabled, increment the minor version number by 1
+ifeq ($(PROXYSQL31),1)
+	GIT_VERSION := $(shell echo "$(GIT_VERSION_NORM)" | awk -F. '{printf "%s.%d.%s", $$1, $$2+1, substr($$0, length($$1)+length($$2)+3)}')
+endif
 endif
 endif
 
@@ -36,6 +82,9 @@ endif
 
 export CURVER
 export PROXYSQLGENAI
+export PROXYSQL31
+export PROXYSQLFFTO
+export PROXYSQLTSDB
 
 ### NOTES:
 ### SOURCE_DATE_EPOCH is used for reproducible builds
@@ -304,27 +353,27 @@ build_src_debug_clickhouse: build_src_debug_default
 
 .PHONY: build_deps_default
 build_deps_default:
-	cd deps && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) CC=${CC} CXX=${CXX} ${MAKE}
+	cd deps && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
 
-PHONY: build_deps_debug_default
+.PHONY: build_deps_debug_default
 build_deps_debug_default:
-	cd deps && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
+	cd deps && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_default
 build_lib_default: build_deps_default
-	cd lib && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) CC=${CC} CXX=${CXX} ${MAKE}
+	cd lib && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_debug_default
 build_lib_debug_default: build_deps_debug_default
-	cd lib && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) CC=${CC} CXX=${CXX} ${MAKE}
+	cd lib && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_default
 build_src_default: build_lib_default
-	cd src && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) CC=${CC} CXX=${CXX} ${MAKE}
+	cd src && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_debug_default
 build_src_debug_default: build_lib_debug_default
-	cd src && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) CC=${CC} CXX=${CXX} ${MAKE}
+	cd src && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
 
 
 ### packaging targets

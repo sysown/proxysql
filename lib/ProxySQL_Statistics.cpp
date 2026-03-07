@@ -23,6 +23,7 @@ using json = nlohmann::json;
 #include <netdb.h>
 #include <future>
 
+#ifdef PROXYSQLTSDB
 namespace {
 std::string escape_sql_string_literal(const std::string& value) {
 	std::string escaped;
@@ -90,7 +91,7 @@ void append_probe_targets(SQLite3_result* resultset, std::vector<probe_target_t>
 	}
 }
 } // namespace
-
+#endif
 #ifdef DEBUG
 #define DEB "_DEBUG"
 #else
@@ -133,21 +134,26 @@ ProxySQL_Statistics::ProxySQL_Statistics() {
 	next_timer_system_memory = 0;
 #endif
 	next_timer_MySQL_Query_Cache = 0;
+#ifdef PROXYSQLTSDB
 	next_timer_tsdb_sampler = 0;
 	next_timer_tsdb_downsample = 0;
 	next_timer_tsdb_monitor = 0;
 	next_timer_tsdb_retention = 0;
 
 	stmt_insert_tsdb_metric = NULL;
+#endif
 	stmt_insert_backend_health = NULL;
 
+#ifdef PROXYSQLTSDB
 	variables.tsdb_enabled = 0;
 	variables.tsdb_sample_interval = 5;
 	variables.tsdb_retention_days = 7;
 	variables.tsdb_monitor_enabled = 0;
 	variables.tsdb_monitor_interval = 10;
+#endif
 }
 
+#ifdef PROXYSQLTSDB
 static const struct {
     const char *name;
     int min_val;
@@ -162,75 +168,79 @@ static const struct {
 };
 
 bool ProxySQL_Statistics::set_variable(const char *name, const char *value) {
-    if (name == NULL || value == NULL) return false;
-    char *endptr;
-    long intv = strtol(value, &endptr, 10);
-    if (*endptr != '\0') return false; // Not a valid integer
+	if (name == NULL || value == NULL || value[0] == '\0') return false;
+	char *endptr;
+	errno = 0;
+	long intv = strtol(value, &endptr, 10);
+	if (endptr == value || *endptr != '\0' || errno == ERANGE) return false; // Not a valid integer or out of range
 
-    for (int i=0; tsdb_variable_meta[i].name; i++) {
-        if (!strcasecmp(name, tsdb_variable_meta[i].name)) {
-            if (intv >= tsdb_variable_meta[i].min_val && intv <= tsdb_variable_meta[i].max_val) {
-                if (i == 0) variables.tsdb_enabled = (int)intv;
-                else if (i == 1) variables.tsdb_sample_interval = (int)intv;
-                else if (i == 2) variables.tsdb_retention_days = (int)intv;
-                else if (i == 3) variables.tsdb_monitor_enabled = (int)intv;
-                else if (i == 4) variables.tsdb_monitor_interval = (int)intv;
-                return true;
-            }
-            return false;
-        }
-    }
-    return false;
+	for (int i=0; tsdb_variable_meta[i].name; i++) {
+		if (!strcasecmp(name, tsdb_variable_meta[i].name)) {
+			if (intv >= tsdb_variable_meta[i].min_val && intv <= tsdb_variable_meta[i].max_val) {
+				if (i == 0) variables.tsdb_enabled = (int)intv;
+				else if (i == 1) variables.tsdb_sample_interval = (int)intv;
+				else if (i == 2) variables.tsdb_retention_days = (int)intv;
+				else if (i == 3) variables.tsdb_monitor_enabled = (int)intv;
+				else if (i == 4) variables.tsdb_monitor_interval = (int)intv;
+				return true;
+			}
+			return false;
+		}
+	}
+	return false;
 }
 
 char *ProxySQL_Statistics::get_variable(const char *name) {
-    if (name == NULL) return NULL;
-    char buf[32];
-    if (!strcasecmp(name, "enabled")) {
-        snprintf(buf, sizeof(buf), "%d", variables.tsdb_enabled);
-        return strdup(buf);
-    } else if (!strcasecmp(name, "sample_interval")) {
-        snprintf(buf, sizeof(buf), "%d", variables.tsdb_sample_interval);
-        return strdup(buf);
-    } else if (!strcasecmp(name, "retention_days")) {
-        snprintf(buf, sizeof(buf), "%d", variables.tsdb_retention_days);
-        return strdup(buf);
-    } else if (!strcasecmp(name, "monitor_enabled")) {
-        snprintf(buf, sizeof(buf), "%d", variables.tsdb_monitor_enabled);
-        return strdup(buf);
-    } else if (!strcasecmp(name, "monitor_interval")) {
-        snprintf(buf, sizeof(buf), "%d", variables.tsdb_monitor_interval);
-        return strdup(buf);
-    }
-    return NULL;
+	if (name == NULL) return NULL;
+	char buf[32];
+	if (!strcasecmp(name, "enabled")) {
+		snprintf(buf, sizeof(buf), "%d", variables.tsdb_enabled);
+		return strdup(buf);
+	} else if (!strcasecmp(name, "sample_interval")) {
+		snprintf(buf, sizeof(buf), "%d", variables.tsdb_sample_interval);
+		return strdup(buf);
+	} else if (!strcasecmp(name, "retention_days")) {
+		snprintf(buf, sizeof(buf), "%d", variables.tsdb_retention_days);
+		return strdup(buf);
+	} else if (!strcasecmp(name, "monitor_enabled")) {
+		snprintf(buf, sizeof(buf), "%d", variables.tsdb_monitor_enabled);
+		return strdup(buf);
+	} else if (!strcasecmp(name, "monitor_interval")) {
+		snprintf(buf, sizeof(buf), "%d", variables.tsdb_monitor_interval);
+		return strdup(buf);
+	}
+	return NULL;
 }
 
 char **ProxySQL_Statistics::get_variables_list() {
-    int count = 0;
-    while (tsdb_variable_meta[count].name) count++;
-    char **list = (char **)malloc(sizeof(char *) * (count + 1));
-    for (int i = 0; i < count; i++) {
-        list[i] = strdup(tsdb_variable_meta[i].name);
-    }
-    list[count] = NULL;
-    return list;
+	int count = 0;
+	while (tsdb_variable_meta[count].name) count++;
+	char **list = (char **)malloc(sizeof(char *) * (count + 1));
+	for (int i = 0; i < count; i++) {
+		list[i] = strdup(tsdb_variable_meta[i].name);
+	}
+	list[count] = NULL;
+	return list;
 }
 
 bool ProxySQL_Statistics::has_variable(const char *name) {
-    if (name == NULL) return false;
-    for (int i = 0; tsdb_variable_meta[i].name; i++) {
-        if (!strcasecmp(name, tsdb_variable_meta[i].name)) return true;
-    }
-    return false;
+	if (name == NULL) return false;
+	for (int i = 0; tsdb_variable_meta[i].name; i++) {
+		if (!strcasecmp(name, tsdb_variable_meta[i].name)) return true;
+	}
+	return false;
 }
+#endif
 
 ProxySQL_Statistics::~ProxySQL_Statistics() {
+#ifdef PROXYSQLTSDB
 	if (stmt_insert_tsdb_metric) {
 		(*proxy_sqlite3_finalize)(stmt_insert_tsdb_metric);
 	}
 	if (stmt_insert_backend_health) {
 		(*proxy_sqlite3_finalize)(stmt_insert_backend_health);
 	}
+#endif
 	drop_tables_defs(tables_defs_statsdb_mem);
 	delete tables_defs_statsdb_mem;
 	drop_tables_defs(tables_defs_statsdb_disk);
@@ -280,10 +290,12 @@ void ProxySQL_Statistics::init() {
 	insert_into_tables_defs(tables_defs_statsdb_disk,"history_mysql_query_events", STATSDB_SQLITE_TABLE_HISTORY_MYSQL_QUERY_EVENTS);
 	insert_into_tables_defs(tables_defs_statsdb_disk,"history_pgsql_query_events", STATSDB_SQLITE_TABLE_HISTORY_PGSQL_QUERY_EVENTS);
 
+#ifdef PROXYSQLTSDB
 	// TSDB tables
 	insert_into_tables_defs(tables_defs_statsdb_disk,"tsdb_metrics", STATSDB_SQLITE_TABLE_TSDB_METRICS);
 	insert_into_tables_defs(tables_defs_statsdb_disk,"tsdb_metrics_hour", STATSDB_SQLITE_TABLE_TSDB_METRICS_HOUR);
 	insert_into_tables_defs(tables_defs_statsdb_disk,"tsdb_backend_health", STATSDB_SQLITE_TABLE_TSDB_BACKEND_HEALTH);
+#endif
 
 	disk_upgrade_mysql_connections();
 
@@ -308,10 +320,12 @@ void ProxySQL_Statistics::init() {
 	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_pgsql_query_events_start_time ON history_pgsql_query_events(start_time)");
 	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_pgsql_query_events_query_digest ON history_pgsql_query_events(query_digest)");
 
+#ifdef PROXYSQLTSDB
 	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_tsdb_metrics_metric_time ON tsdb_metrics(metric_name, timestamp)");
 	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_tsdb_metrics_hour_metric_bucket ON tsdb_metrics_hour(metric_name, bucket)");
 	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_tsdb_backend_health_time ON tsdb_backend_health(timestamp)");
 	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_tsdb_backend_health_host_time ON tsdb_backend_health(hostgroup, hostname, port, timestamp)");
+#endif
 }
 
 void ProxySQL_Statistics::disk_upgrade_mysql_connections() {
@@ -338,39 +352,55 @@ void ProxySQL_Statistics::disk_upgrade_mysql_connections() {
 		proxy_warning("ONLINE UPGRADE of table mysql_connections_day completed\n");
 	}
 
-	const char* tsdb_metrics_old =
-		"CREATE TABLE tsdb_metrics (timestamp INT NOT NULL, metric_name TEXT NOT NULL, labels TEXT, value REAL, PRIMARY KEY (timestamp, metric_name)) WITHOUT ROWID";
-	rci = statsdb_disk->check_table_structure((char*)"tsdb_metrics", (char*)tsdb_metrics_old);
-	if (rci) {
-		proxy_warning("Detected legacy schema for tsdb_metrics\n");
-		statsdb_disk->execute("BEGIN IMMEDIATE");
-		statsdb_disk->execute("ALTER TABLE tsdb_metrics RENAME TO tsdb_metrics_old");
-		statsdb_disk->execute(STATSDB_SQLITE_TABLE_TSDB_METRICS);
-		statsdb_disk->execute(
-			"INSERT OR IGNORE INTO tsdb_metrics(timestamp, metric_name, labels, value) "
-			"SELECT timestamp, metric_name, COALESCE(labels,'{}'), value FROM tsdb_metrics_old"
-		);
-		statsdb_disk->execute("DROP TABLE tsdb_metrics_old");
-		statsdb_disk->execute("COMMIT");
-		proxy_warning("ONLINE UPGRADE of table tsdb_metrics completed\n");
-	}
+	#ifdef PROXYSQLTSDB
+		const char* tsdb_metrics_old =
+				"CREATE TABLE tsdb_metrics (timestamp INT NOT NULL, metric_name TEXT NOT NULL, labels TEXT, value REAL, PRIMARY KEY (timestamp, metric_name)) WITHOUT ROWID";
+		rci = statsdb_disk->check_table_structure((char*)"tsdb_metrics", (char*)tsdb_metrics_old);
+		if (rci) {
+				proxy_warning("Detected legacy schema for tsdb_metrics\n");
+				if (!statsdb_disk->execute("BEGIN IMMEDIATE")) return;
+				bool success = true;
+				if (!statsdb_disk->execute("ALTER TABLE tsdb_metrics RENAME TO tsdb_metrics_old")) success = false;
+				if (success && !statsdb_disk->execute(STATSDB_SQLITE_TABLE_TSDB_METRICS)) success = false;
+				if (success && !statsdb_disk->execute(
+						"INSERT OR IGNORE INTO tsdb_metrics(timestamp, metric_name, labels, value) "
+						"SELECT timestamp, metric_name, COALESCE(labels,'{}'), value FROM tsdb_metrics_old"
+				)) success = false;
+				if (success && !statsdb_disk->execute("DROP TABLE tsdb_metrics_old")) success = false;
 
-	const char* tsdb_metrics_hour_old =
-		"CREATE TABLE tsdb_metrics_hour (bucket INT NOT NULL, metric_name TEXT NOT NULL, labels TEXT, avg_value REAL, max_value REAL, min_value REAL, count INT, PRIMARY KEY (bucket, metric_name)) WITHOUT ROWID";
-	rci = statsdb_disk->check_table_structure((char*)"tsdb_metrics_hour", (char*)tsdb_metrics_hour_old);
-	if (rci) {
-		proxy_warning("Detected legacy schema for tsdb_metrics_hour\n");
-		statsdb_disk->execute("BEGIN IMMEDIATE");
-		statsdb_disk->execute("ALTER TABLE tsdb_metrics_hour RENAME TO tsdb_metrics_hour_old");
-		statsdb_disk->execute(STATSDB_SQLITE_TABLE_TSDB_METRICS_HOUR);
-		statsdb_disk->execute(
-			"INSERT OR IGNORE INTO tsdb_metrics_hour(bucket, metric_name, labels, avg_value, max_value, min_value, count) "
-			"SELECT bucket, metric_name, COALESCE(labels,'{}'), avg_value, max_value, min_value, count FROM tsdb_metrics_hour_old"
-		);
-		statsdb_disk->execute("DROP TABLE tsdb_metrics_hour_old");
-		statsdb_disk->execute("COMMIT");
-		proxy_warning("ONLINE UPGRADE of table tsdb_metrics_hour completed\n");
-	}
+				if (success) {
+					statsdb_disk->execute("COMMIT");
+					proxy_warning("ONLINE UPGRADE of table tsdb_metrics completed\n");
+				} else {
+					statsdb_disk->execute("ROLLBACK");
+					proxy_error("ONLINE UPGRADE of table tsdb_metrics failed\n");
+				}
+		}
+
+		const char* tsdb_metrics_hour_old =
+				"CREATE TABLE tsdb_metrics_hour (bucket INT NOT NULL, metric_name TEXT NOT NULL, labels TEXT, avg_value REAL, max_value REAL, min_value REAL, count INT, PRIMARY KEY (bucket, metric_name)) WITHOUT ROWID";
+		rci = statsdb_disk->check_table_structure((char*)"tsdb_metrics_hour", (char*)tsdb_metrics_hour_old);
+		if (rci) {
+				proxy_warning("Detected legacy schema for tsdb_metrics_hour\n");
+				if (!statsdb_disk->execute("BEGIN IMMEDIATE")) return;
+				bool success = true;
+				if (!statsdb_disk->execute("ALTER TABLE tsdb_metrics_hour RENAME TO tsdb_metrics_hour_old")) success = false;
+				if (success && !statsdb_disk->execute(STATSDB_SQLITE_TABLE_TSDB_METRICS_HOUR)) success = false;
+				if (success && !statsdb_disk->execute(
+						"INSERT OR IGNORE INTO tsdb_metrics_hour(bucket, metric_name, labels, avg_value, max_value, min_value, count) "
+						"SELECT bucket, metric_name, COALESCE(labels,'{}'), avg_value, max_value, min_value, count FROM tsdb_metrics_hour_old"
+				)) success = false;
+				if (success && !statsdb_disk->execute("DROP TABLE tsdb_metrics_hour_old")) success = false;
+
+				if (success) {
+					statsdb_disk->execute("COMMIT");
+					proxy_warning("ONLINE UPGRADE of table tsdb_metrics_hour completed\n");
+				} else {
+					statsdb_disk->execute("ROLLBACK");
+					proxy_error("ONLINE UPGRADE of table tsdb_metrics_hour failed\n");
+				}
+		}
+#endif
 }
 
 void ProxySQL_Statistics::print_version() {
@@ -1435,6 +1465,7 @@ void ProxySQL_Statistics::load_variable_name_id_map_if_empty() {
 	}
 }
 
+#ifdef PROXYSQLTSDB
 // TSDB Metric Insertion
 void ProxySQL_Statistics::insert_tsdb_metric(const std::string& metric_name,
                                              const std::map<std::string, std::string>& labels,
@@ -1957,17 +1988,24 @@ void ProxySQL_Statistics::tsdb_monitor_loop() {
 	}
 
 	time_t now = time(NULL);
-	std::vector<std::future<probe_result_t>> futures;
-	futures.reserve(targets.size());
-
-	for (const auto& target : targets) {
-		futures.push_back(std::async(std::launch::async, probe_backend, target.hg, target.host, target.port, now));
+	size_t max_concurrent = 16;
+	for (size_t i = 0; i < targets.size(); i += max_concurrent) {
+		size_t batch_end = std::min(i + max_concurrent, targets.size());
+		std::vector<std::future<probe_result_t>> batch_futures;
+		for (size_t j = i; j < batch_end; ++j) {
+			batch_futures.push_back(std::async(std::launch::async, probe_backend, targets[j].hg, targets[j].host, targets[j].port, now));
+		}
+		statsdb_disk->execute("BEGIN");
+		for (auto& f : batch_futures) {
+			try {
+				probe_result_t res = f.get();
+				insert_backend_health(res.hg, res.host, res.port, res.probe_up, res.connect_ms, res.timestamp);
+			} catch (const std::exception& e) {
+				proxy_error("TSDB monitor probe failed: %s\n", e.what());
+			}
+		}
+		statsdb_disk->execute("COMMIT");
 	}
-
-	statsdb_disk->execute("BEGIN");
-	for (auto& f : futures) {
-		probe_result_t res = f.get();
-		insert_backend_health(res.hg, res.host, res.port, res.probe_up, res.connect_ms, res.timestamp);
-	}
-	statsdb_disk->execute("COMMIT");
 }
+
+#endif

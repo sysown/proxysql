@@ -608,8 +608,10 @@ class MySQL_Threads_Handler
 		int processlist_max_query_length;
 
 		bool ignore_min_gtid_annotations;
+#ifdef PROXYSQLFFTO
 		bool ffto_enabled;
 		int ffto_max_buffer_size;
+#endif
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;

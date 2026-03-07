@@ -99,6 +99,7 @@
 #define STATSDB_SQLITE_TABLE_HISTORY_PGSQL_QUERY_EVENTS "CREATE TABLE history_pgsql_query_events (id INTEGER PRIMARY KEY AUTOINCREMENT , thread_id INTEGER , username TEXT , database TEXT , start_time INTEGER , end_time INTEGER , query_digest TEXT , query TEXT , server TEXT , client TEXT , event_type INTEGER , hid INTEGER , extra_info TEXT , affected_rows INTEGER , rows_sent INTEGER , client_stmt_name TEXT , sqlstate TEXT , error TEXT)"
 
 // Generic time-series metrics table
+#ifdef PROXYSQLTSDB
 #define STATSDB_SQLITE_TABLE_TSDB_METRICS \
 "CREATE TABLE tsdb_metrics (timestamp INT NOT NULL, metric_name TEXT NOT NULL, labels TEXT NOT NULL DEFAULT '{}', value REAL, PRIMARY KEY (timestamp, metric_name, labels)) WITHOUT ROWID"
 
@@ -109,6 +110,7 @@
 // Backend health monitoring table
 #define STATSDB_SQLITE_TABLE_TSDB_BACKEND_HEALTH \
 "CREATE TABLE tsdb_backend_health (timestamp INT NOT NULL, hostgroup INT NOT NULL, hostname TEXT NOT NULL, port INT NOT NULL, probe_up INT NOT NULL, connect_ms INT, PRIMARY KEY (timestamp, hostgroup, hostname, port)) WITHOUT ROWID"
+#endif
 
 class ProxySQL_Statistics {
 	SQLite3DB *statsdb_mem; // internal statistics DB
@@ -127,12 +129,14 @@ class ProxySQL_Statistics {
 	unsigned long long next_timer_system_memory;
 #endif
 	unsigned long long next_timer_MySQL_Query_Cache;
+#ifdef PROXYSQLTSDB
 	// TSDB timers
 	unsigned long long next_timer_tsdb_sampler;
 	unsigned long long next_timer_tsdb_downsample;
 	unsigned long long next_timer_tsdb_monitor;
 	unsigned long long next_timer_tsdb_retention;
 	sqlite3_stmt *stmt_insert_tsdb_metric;
+#endif
 	sqlite3_stmt *stmt_insert_backend_health;
 	void MySQL_Threads_Handler_sets_v1(SQLite3_result *);
 	void MySQL_Threads_Handler_sets_v2(SQLite3_result *);
@@ -151,12 +155,14 @@ class ProxySQL_Statistics {
 #ifndef NOJEM
 		int stats_system_memory;
 #endif
+#ifdef PROXYSQLTSDB
 		// TSDB variables
 		int tsdb_enabled;
 		int tsdb_sample_interval;
 		int tsdb_retention_days;
 		int tsdb_monitor_enabled;
 		int tsdb_monitor_interval;
+#endif
 	} variables;
 	ProxySQL_Statistics();
 	~ProxySQL_Statistics();
@@ -165,10 +171,12 @@ class ProxySQL_Statistics {
 	void print_version();
 
 	// Variable management
+#ifdef PROXYSQLTSDB
 	bool set_variable(const char *name, const char *value);
 	char *get_variable(const char *name);
 	bool has_variable(const char *name);
 	char **get_variables_list();
+#endif
 
 	bool MySQL_Threads_Handler_timetoget(unsigned long long);
 	bool mysql_query_digest_to_disk_timetoget(unsigned long long);
@@ -210,6 +218,7 @@ class ProxySQL_Statistics {
 	SQLite3_result * get_MySQL_Query_Cache_metrics(int interval);
 	void disk_upgrade_mysql_connections();
 
+#ifdef PROXYSQLTSDB
 	// TSDB methods
 	// Metric insertion
 	void insert_tsdb_metric(const std::string& metric_name,
@@ -250,6 +259,7 @@ class ProxySQL_Statistics {
 	// Main loops
 	void tsdb_sampler_loop();
 	void tsdb_monitor_loop();
+#endif
 
 	/** 
 	 * @brief Retreives the variable id mapped to the provided variable name associated in the history_mysql_variables_lookup table.

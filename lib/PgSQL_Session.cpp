@@ -24,7 +24,9 @@ using json = nlohmann::json;
 #include "PgSQL_Variables.h"
 #include "ProxySQL_Cluster.hpp"
 #include "PgSQL_Query_Cache.h"
+#ifdef PROXYSQLFFTO
 #include "PgSQLFFTO.hpp"
+#endif
 #include "PgSQL_Variables_Validator.h"
 #include "PgSQL_ExplicitTxnStateMgr.h"
 #include "PgSQL_Extended_Query_Message.h"
@@ -245,7 +247,9 @@ PgSQL_Session::PgSQL_Session() {
 	user_attributes = NULL;
 	schema_locked = false;
 	session_fast_forward = SESSION_FORWARD_TYPE_NONE;
+#ifdef PROXYSQLFFTO
 	ffto_bypassed = false;
+#endif
 	//started_sending_data_to_client = false;
 	handler_function = NULL;
 	client_myds = NULL;
@@ -310,11 +314,13 @@ void PgSQL_Session::reset() {
 		client_myds->myconn->reset();
 	}
 	extended_query_phase = EXTQ_PHASE_IDLE;
+#ifdef PROXYSQLFFTO
 	ffto_bypassed = false;
 	if (m_ffto) {
 		m_ffto->on_close();
 	}
 	m_ffto.reset();
+#endif
 }
 
 PgSQL_Session::~PgSQL_Session() {
@@ -1990,6 +1996,9 @@ __implicit_sync:
 
 					mybe = find_or_create_backend(current_hostgroup); // set a backend
 					mybe->server_myds->reinit_queues();             // reinitialize the queues in the myds . By default, they are not active
+#ifdef PROXYSQLFFTO
+					observe_ffto_client_packet(pkt);
+#endif
 					mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size); // move the first packet
 					previous_status.push(FAST_FORWARD); // next status will be FAST_FORWARD . Now we need a connection
 
@@ -2286,22 +2295,9 @@ __implicit_sync:
 			}
 			break;
 			case FAST_FORWARD:
-				if (pgsql_thread___ffto_enabled && !ffto_bypassed) {
-					if (pkt.size > (size_t)pgsql_thread___ffto_max_buffer_size) {
-						ffto_bypassed = true;
-						if (m_ffto) {
-							m_ffto->on_close();
-						}
-						m_ffto.reset();
-					} else {
-						if (!m_ffto) {
-							m_ffto = std::make_unique<PgSQLFFTO>(this);
-						}
-						if (m_ffto) {
-							m_ffto->on_client_data((const char*)pkt.ptr, pkt.size);
-						}
-					}
-				}
+#ifdef PROXYSQLFFTO
+				observe_ffto_client_packet(pkt);
+#endif
 				mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
 				break;
 			// This state is required because it covers the following situation:
@@ -2733,22 +2729,17 @@ handler_again:
 				// register the PgSQL_Data_Stream
 				thread->mypolls.add(POLLIN | POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
 			}
+#ifdef PROXYSQLFFTO
 			if (pgsql_thread___ffto_enabled && !ffto_bypassed && m_ffto) {
 				for (unsigned int i = 0; i < mybe->server_myds->PSarrayIN->len; i++) {
-					if (mybe->server_myds->PSarrayIN->pdata[i].size > (size_t)pgsql_thread___ffto_max_buffer_size) {
-						ffto_bypassed = true;
-						if (m_ffto) {
-							m_ffto->on_close();
-						}
-						m_ffto.reset();
-						break;
-					}
-					m_ffto->on_server_data(
-						(const char*)mybe->server_myds->PSarrayIN->pdata[i].ptr,
-						mybe->server_myds->PSarrayIN->pdata[i].size
-					);
+					PtrSize_t pkt_s;
+					pkt_s.ptr = mybe->server_myds->PSarrayIN->pdata[i].ptr;
+					pkt_s.size = mybe->server_myds->PSarrayIN->pdata[i].size;
+					observe_ffto_server_packet(pkt_s);
+					if (ffto_bypassed) break;
 				}
 			}
+#endif
 			client_myds->PSarrayOUT->copy_add(mybe->server_myds->PSarrayIN, 0, mybe->server_myds->PSarrayIN->len);
 
 		constexpr unsigned char ready_packet[] = { 0x5A, 0x00, 0x00, 0x00, 0x05 };
@@ -6919,3 +6910,42 @@ std::string PgSQL_DateStyle_Util::datestyle_to_string(PgSQL_DateStyle_t datestyl
 std::string PgSQL_DateStyle_Util::datestyle_to_string(std::string_view input, const PgSQL_DateStyle_t& default_datestyle) {
 	return datestyle_to_string(parse_datestyle(input), default_datestyle);
 }
+
+#ifdef PROXYSQLFFTO
+void PgSQL_Session::observe_ffto_client_packet(const PtrSize_t& pkt) {
+	if (!pkt.ptr || pkt.size == 0) return;
+	if (!pgsql_thread___ffto_enabled || ffto_bypassed) return;
+
+	std::size_t current_buffered = m_ffto ? m_ffto->get_buffered_size() : 0;
+	if (current_buffered + pkt.size > (size_t)pgsql_thread___ffto_max_buffer_size) {
+		ffto_bypassed = true;
+		if (m_ffto) {
+			m_ffto->on_close();
+		}
+		m_ffto.reset();
+		return;
+	}
+
+	if (!m_ffto) {
+		m_ffto = std::make_unique<PgSQLFFTO>(this);
+	}
+	if (m_ffto) {
+		m_ffto->on_client_data((const char*)pkt.ptr, pkt.size);
+	}
+}
+
+void PgSQL_Session::observe_ffto_server_packet(const PtrSize_t& pkt) {
+	if (!pkt.ptr || pkt.size == 0) return;
+	if (!pgsql_thread___ffto_enabled || ffto_bypassed || !m_ffto) return;
+
+	std::size_t current_buffered = m_ffto->get_buffered_size();
+	if (current_buffered + pkt.size > (size_t)pgsql_thread___ffto_max_buffer_size) {
+		ffto_bypassed = true;
+		m_ffto->on_close();
+		m_ffto.reset();
+		return;
+	}
+
+	m_ffto->on_server_data((const char*)pkt.ptr, pkt.size);
+}
+#endif

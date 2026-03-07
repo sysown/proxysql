@@ -1288,7 +1288,9 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_pgsql_connection_pool = false;
 	bool stats_pgsql_connection_pool_reset = false;
 
+#ifdef PROXYSQLTSDB
 	bool stats_tsdb = false;
+#endif
 
 	bool runtime_proxysql_servers=false;
 	bool runtime_checksums_values=false;
@@ -1428,8 +1430,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_pgsql_query_rules = true; refresh = true; }
 	if (strstr(query_no_space,"stats_mysql_users"))
 		{ stats_mysql_users=true; refresh=true; }
+#ifdef PROXYSQLTSDB
 	if (strstr(query_no_space,"stats_tsdb") || strcasestr(query_no_space,"showtsdbstatus"))
 		{ stats_tsdb=true; refresh=true; }
+#endif
 	if (strstr(query_no_space,"stats_pgsql_users"))
 		{ stats_pgsql_users = true; refresh = true; }
 	if (strstr(query_no_space,"stats_mysql_gtid_executed"))
@@ -1653,8 +1657,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			stats___pgsql_commands_counters();
 		if (stats_mysql_users)
 			stats___mysql_users();
+#ifdef PROXYSQLTSDB
 		if (stats_tsdb)
 			stats___tsdb();
+#endif
 		if (stats_pgsql_users)
 			stats___pgsql_users();
 		if (stats_mysql_gtid_executed)
@@ -1724,7 +1730,9 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				admindb->execute("DELETE FROM runtime_global_variables");	// extra
 				flush_admin_variables___runtime_to_database(admindb, false, false, false, true);
 				flush_mysql_variables___runtime_to_database(admindb, false, false, false, true);
+#ifdef PROXYSQLTSDB
 				flush_tsdb_variables___runtime_to_database(admindb, false, false, false, true);
+#endif
 #ifdef PROXYSQLCLICKHOUSE
 				flush_clickhouse_variables___runtime_to_database(admindb, false, false, false, true);
 #endif /* PROXYSQLCLICKHOUSE */
@@ -2588,6 +2596,7 @@ __end_while_pool:
 					GloProxyStats->system_memory_sets();
 				}
 #endif
+#ifdef PROXYSQLTSDB
 			if (GloProxyStats->tsdb_sampler_timetoget(curtime)) {
 				GloProxyStats->tsdb_sampler_loop();
 			}
@@ -2600,6 +2609,7 @@ __end_while_pool:
 			if (GloProxyStats->tsdb_retention_timetoget(curtime)) {
 				GloProxyStats->tsdb_retention_cleanup();
 			}
+#endif
 		}
 		if (S_amll.get_version()!=version) {
 			S_amll.wrlock();
@@ -2830,7 +2840,9 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	generate_load_save_disk_commands("mcp_query_rules",   "MCP QUERY RULES");
 	generate_load_save_disk_commands("mcp_variables",     "MCP VARIABLES");
 	generate_load_save_disk_commands("genai_variables",   "GENAI VARIABLES");
+#ifdef PROXYSQLTSDB
 	generate_load_save_disk_commands("tsdb_variables",    "TSDB VARIABLES");
+#endif
 	generate_load_save_disk_commands("scheduler",         "SCHEDULER");
 	generate_load_save_disk_commands("restapi",           "RESTAPI");
 	generate_load_save_disk_commands("proxysql_servers",  "PROXYSQL SERVERS");
@@ -3108,6 +3120,7 @@ void ProxySQL_Admin::init_genai_variables() {
 }
 #endif /* PROXYSQLGENAI */
 
+#ifdef PROXYSQLTSDB
 void ProxySQL_Admin::init_tsdb_variables() {
 	flush_tsdb_variables___runtime_to_database(configdb, false, false, false, false);
 	flush_tsdb_variables___runtime_to_database(admindb, false, true, false, false);
@@ -3197,6 +3210,7 @@ void ProxySQL_Admin::flush_tsdb_variables___runtime_to_database(SQLite3DB *db, b
 	}
 	free(varnames);
 }
+#endif
 
 void ProxySQL_Admin::admin_shutdown() {
 	int i;

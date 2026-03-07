@@ -34,6 +34,12 @@ public:
      * Ensures all pending metrics are finalized and resources are cleaned up.
      */
     virtual void on_close() = 0;
+
+    /**
+     * @brief Returns the total amount of data currently buffered by the observer.
+     * @return Number of bytes currently in reassembly buffers.
+     */
+    virtual std::size_t get_buffered_size() const = 0;
 };
 
 #endif // TRAFFIC_OBSERVER_HPP

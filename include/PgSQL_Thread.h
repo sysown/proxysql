@@ -1086,8 +1086,10 @@ public:
 #endif
 		int show_processlist_extended;
 		int processlist_max_query_length;
+#ifdef PROXYSQLFFTO
 		bool ffto_enabled;
 		int ffto_max_buffer_size;
+#endif
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;
