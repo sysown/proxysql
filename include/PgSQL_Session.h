@@ -538,7 +538,9 @@ public:
 	Session_Regex** match_regexes;
 #ifdef PROXYSQLFFTO
 	std::unique_ptr<TrafficObserver> m_ffto;
-	bool ffto_bypassed;
+	bool ffto_bypassed { false };
+	void observe_ffto_client_packet(const PtrSize_t& pkt);
+	void observe_ffto_server_packet(const PtrSize_t& pkt);
 #endif
 	CopyCmdMatcher* copy_cmd_matcher;
 

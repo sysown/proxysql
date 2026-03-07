@@ -492,7 +492,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	Session_Regex **match_regexes;
 #ifdef PROXYSQLFFTO
 	std::unique_ptr<TrafficObserver> m_ffto;
-	bool ffto_bypassed;
+	bool ffto_bypassed { false };
 #endif
 
 	ProxySQL_Node_Address * proxysql_node_address;

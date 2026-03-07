@@ -4601,8 +4601,6 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(fast_forward_grace_close_ms);
 #ifdef PROXYSQLFFTO
 	REFRESH_VARIABLE_BOOL(ffto_enabled);
-#endif
-#ifdef PROXYSQLFFTO
 	REFRESH_VARIABLE_INT(ffto_max_buffer_size);
 #endif
 	REFRESH_VARIABLE_INT(select_version_forwarding);

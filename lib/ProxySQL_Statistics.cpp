@@ -168,10 +168,11 @@ static const struct {
 };
 
 bool ProxySQL_Statistics::set_variable(const char *name, const char *value) {
-	if (name == NULL || value == NULL) return false;
+	if (name == NULL || value == NULL || value[0] == '\0') return false;
 	char *endptr;
+	errno = 0;
 	long intv = strtol(value, &endptr, 10);
-	if (*endptr != '\0') return false; // Not a valid integer
+	if (endptr == value || *endptr != '\0' || errno == ERANGE) return false; // Not a valid integer or out of range
 
 	for (int i=0; tsdb_variable_meta[i].name; i++) {
 		if (!strcasecmp(name, tsdb_variable_meta[i].name)) {
@@ -357,16 +358,23 @@ void ProxySQL_Statistics::disk_upgrade_mysql_connections() {
 		rci = statsdb_disk->check_table_structure((char*)"tsdb_metrics", (char*)tsdb_metrics_old);
 		if (rci) {
 				proxy_warning("Detected legacy schema for tsdb_metrics\n");
-				statsdb_disk->execute("BEGIN IMMEDIATE");
-				statsdb_disk->execute("ALTER TABLE tsdb_metrics RENAME TO tsdb_metrics_old");
-				statsdb_disk->execute(STATSDB_SQLITE_TABLE_TSDB_METRICS);
-				statsdb_disk->execute(
+				if (!statsdb_disk->execute("BEGIN IMMEDIATE")) return;
+				bool success = true;
+				if (!statsdb_disk->execute("ALTER TABLE tsdb_metrics RENAME TO tsdb_metrics_old")) success = false;
+				if (success && !statsdb_disk->execute(STATSDB_SQLITE_TABLE_TSDB_METRICS)) success = false;
+				if (success && !statsdb_disk->execute(
 						"INSERT OR IGNORE INTO tsdb_metrics(timestamp, metric_name, labels, value) "
 						"SELECT timestamp, metric_name, COALESCE(labels,'{}'), value FROM tsdb_metrics_old"
-				);
-				statsdb_disk->execute("DROP TABLE tsdb_metrics_old");
-				statsdb_disk->execute("COMMIT");
-				proxy_warning("ONLINE UPGRADE of table tsdb_metrics completed\n");
+				)) success = false;
+				if (success && !statsdb_disk->execute("DROP TABLE tsdb_metrics_old")) success = false;
+
+				if (success) {
+					statsdb_disk->execute("COMMIT");
+					proxy_warning("ONLINE UPGRADE of table tsdb_metrics completed\n");
+				} else {
+					statsdb_disk->execute("ROLLBACK");
+					proxy_error("ONLINE UPGRADE of table tsdb_metrics failed\n");
+				}
 		}
 
 		const char* tsdb_metrics_hour_old =
@@ -374,19 +382,25 @@ void ProxySQL_Statistics::disk_upgrade_mysql_connections() {
 		rci = statsdb_disk->check_table_structure((char*)"tsdb_metrics_hour", (char*)tsdb_metrics_hour_old);
 		if (rci) {
 				proxy_warning("Detected legacy schema for tsdb_metrics_hour\n");
-				statsdb_disk->execute("BEGIN IMMEDIATE");
-				statsdb_disk->execute("ALTER TABLE tsdb_metrics_hour RENAME TO tsdb_metrics_hour_old");
-				statsdb_disk->execute(STATSDB_SQLITE_TABLE_TSDB_METRICS_HOUR);
-				statsdb_disk->execute(
+				if (!statsdb_disk->execute("BEGIN IMMEDIATE")) return;
+				bool success = true;
+				if (!statsdb_disk->execute("ALTER TABLE tsdb_metrics_hour RENAME TO tsdb_metrics_hour_old")) success = false;
+				if (success && !statsdb_disk->execute(STATSDB_SQLITE_TABLE_TSDB_METRICS_HOUR)) success = false;
+				if (success && !statsdb_disk->execute(
 						"INSERT OR IGNORE INTO tsdb_metrics_hour(bucket, metric_name, labels, avg_value, max_value, min_value, count) "
 						"SELECT bucket, metric_name, COALESCE(labels,'{}'), avg_value, max_value, min_value, count FROM tsdb_metrics_hour_old"
-				);
-				statsdb_disk->execute("DROP TABLE tsdb_metrics_hour_old");
-				statsdb_disk->execute("COMMIT");
-				proxy_warning("ONLINE UPGRADE of table tsdb_metrics_hour completed\n");
+				)) success = false;
+				if (success && !statsdb_disk->execute("DROP TABLE tsdb_metrics_hour_old")) success = false;
+
+				if (success) {
+					statsdb_disk->execute("COMMIT");
+					proxy_warning("ONLINE UPGRADE of table tsdb_metrics_hour completed\n");
+				} else {
+					statsdb_disk->execute("ROLLBACK");
+					proxy_error("ONLINE UPGRADE of table tsdb_metrics_hour failed\n");
+				}
 		}
-	#endif
-	}
+	#endif	}
 void ProxySQL_Statistics::print_version() {
   fprintf(stderr,"Standard ProxySQL Statistics rev. %s -- %s -- %s\n", PROXYSQL_STATISTICS_VERSION, __FILE__, __TIMESTAMP__);
 }
@@ -1972,19 +1986,24 @@ void ProxySQL_Statistics::tsdb_monitor_loop() {
 	}
 
 	time_t now = time(NULL);
-	std::vector<std::future<probe_result_t>> futures;
-	futures.reserve(targets.size());
-
-	for (const auto& target : targets) {
-		futures.push_back(std::async(std::launch::async, probe_backend, target.hg, target.host, target.port, now));
+	size_t max_concurrent = 16;
+	for (size_t i = 0; i < targets.size(); i += max_concurrent) {
+		size_t batch_end = std::min(i + max_concurrent, targets.size());
+		std::vector<std::future<probe_result_t>> batch_futures;
+		for (size_t j = i; j < batch_end; ++j) {
+			batch_futures.push_back(std::async(std::launch::async, probe_backend, targets[j].hg, targets[j].host, targets[j].port, now));
+		}
+		statsdb_disk->execute("BEGIN");
+		for (auto& f : batch_futures) {
+			try {
+				probe_result_t res = f.get();
+				insert_backend_health(res.hg, res.host, res.port, res.probe_up, res.connect_ms, res.timestamp);
+			} catch (const std::exception& e) {
+				proxy_error("TSDB monitor probe failed: %s\n", e.what());
+			}
+		}
+		statsdb_disk->execute("COMMIT");
 	}
-
-	statsdb_disk->execute("BEGIN");
-	for (auto& f : futures) {
-		probe_result_t res = f.get();
-		insert_backend_health(res.hg, res.host, res.port, res.probe_up, res.connect_ms, res.timestamp);
-	}
-	statsdb_disk->execute("COMMIT");
 }
 
 #endif

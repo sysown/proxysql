@@ -4852,7 +4852,8 @@ void MySQL_Session::observe_ffto_client_packet(const PtrSize_t& pkt) {
 	if (!pkt.ptr || pkt.size == 0) return;
 	if (!mysql_thread___ffto_enabled || ffto_bypassed) return;
 
-	if (pkt.size > (size_t)mysql_thread___ffto_max_buffer_size) {
+	std::size_t current_buffered = m_ffto ? m_ffto->get_buffered_size() : 0;
+	if (current_buffered + pkt.size > (size_t)mysql_thread___ffto_max_buffer_size) {
 		ffto_bypassed = true;
 		if (m_ffto) {
 			m_ffto->on_close();
@@ -6055,7 +6056,8 @@ handler_again:
 #ifdef PROXYSQLFFTO
 			if (mysql_thread___ffto_enabled && !ffto_bypassed && m_ffto) {
 				for (unsigned int i = 0; i < mybe->server_myds->PSarrayIN->len; i++) {
-					if (mybe->server_myds->PSarrayIN->pdata[i].size > (size_t)mysql_thread___ffto_max_buffer_size) {
+					std::size_t current_buffered = m_ffto->get_buffered_size();
+					if (current_buffered + mybe->server_myds->PSarrayIN->pdata[i].size > (size_t)mysql_thread___ffto_max_buffer_size) {
 						ffto_bypassed = true;
 						if (m_ffto) {
 							m_ffto->on_close();

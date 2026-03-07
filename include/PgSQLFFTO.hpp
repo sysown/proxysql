@@ -49,6 +49,12 @@ public:
      */
     void on_close() override;
 
+    /**
+     * @brief Returns the total amount of data currently buffered by the observer.
+     * @return Number of bytes currently in reassembly buffers.
+     */
+    std::size_t get_buffered_size() const override;
+
 private:
     /**
      * @enum State

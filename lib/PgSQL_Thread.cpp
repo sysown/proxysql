@@ -459,9 +459,9 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"stats_time_query_processor",
 	(char*)"query_cache_stores_empty_result",
 	(char*)"data_packets_history_size",
-#ifdef PROXYSQLFFTO
 	(char*)"ffto_enabled",
 	(char*)"ffto_max_buffer_size",
+#ifdef PROXYSQLFFTO
 #endif
 	NULL
 };

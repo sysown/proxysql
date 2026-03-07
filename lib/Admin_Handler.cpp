@@ -975,17 +975,17 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	}
 #endif // DEBUG
 
+#ifdef PROXYSQLTSDB
 	if (query_no_space_length == strlen("PROXYSQL TSDB DOWNSAMPLE") && !strncasecmp("PROXYSQL TSDB DOWNSAMPLE", query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL TSDB DOWNSAMPLE command\n");
 		if (GloProxyStats) {
-#ifdef PROXYSQLTSDB
 			GloProxyStats->tsdb_downsample_metrics();
-#endif
 		}
 		ProxySQL_Admin *SPA = (ProxySQL_Admin *)pa;
 		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 		return false;
 	}
+#endif
 
 	if (strcasecmp("PROXYSQL RELOAD TLS",query_no_space) == 0) {
 		proxy_info("Received %s command\n", query_no_space);
@@ -1924,22 +1924,25 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			const std::string modname = is_pgsql ? "pgsql_variables" : (is_genai ? "genai_variables" : (is_tsdb ? "tsdb_variables" : "mysql_variables"));
 
 			if (is_tsdb) {
+				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 				if (is_admin_command_or_alias(LOAD_TSDB_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length)) {
-					ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 #ifdef PROXYSQLTSDB
 					SPA->load_tsdb_variables_to_runtime();
-#endif
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded tsdb variables to RUNTIME\n");
 					SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+#else
+					SPA->send_error_msg_to_client(sess, "TSDB support not compiled/enabled");
+#endif
 					return false;
 				}
 				if (is_admin_command_or_alias(SAVE_TSDB_VARIABLES_TO_MEMORY, query_no_space, query_no_space_length)) {
-					ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 #ifdef PROXYSQLTSDB
 					SPA->save_tsdb_variables_from_runtime();
-#endif
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved tsdb variables from RUNTIME\n");
 					SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+#else
+					SPA->send_error_msg_to_client(sess, "TSDB support not compiled/enabled");
+#endif
 					return false;
 				}
 			}

@@ -55,13 +55,15 @@ endif
 
 # Only increment if GIT_VERSION was not passed from environment (to avoid double-incrementing in Docker)
 ifneq ($(origin GIT_VERSION),environment)
+# Normalize GIT_VERSION by stripping leading 'v' for arithmetic
+GIT_VERSION_NORM := $(shell echo "$(GIT_VERSION)" | sed 's/^v//')
 # If PROXYSQLGENAI is enabled, increment the major version number by 1
 ifeq ($(PROXYSQLGENAI),1)
-    GIT_VERSION := $(shell echo "$(GIT_VERSION)" | awk -F. '{printf "%d.%s", $$1+1, substr($$0, length($$1)+2)}')
+	GIT_VERSION := $(shell echo "$(GIT_VERSION_NORM)" | awk -F. '{printf "%d.%s", $$1+1, substr($$0, length($$1)+2)}')
 else
 # If PROXYSQL31 is enabled, increment the minor version number by 1
 ifeq ($(PROXYSQL31),1)
-    GIT_VERSION := $(shell echo "$(GIT_VERSION)" | awk -F. '{printf "%s.%d.%s", $$1, $$2+1, substr($$0, length($$1)+length($$2)+3)}')
+	GIT_VERSION := $(shell echo "$(GIT_VERSION_NORM)" | awk -F. '{printf "%s.%d.%s", $$1, $$2+1, substr($$0, length($$1)+length($$2)+3)}')
 endif
 endif
 endif
@@ -353,7 +355,7 @@ build_src_debug_clickhouse: build_src_debug_default
 build_deps_default:
 	cd deps && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
 
-PHONY: build_deps_debug_default
+.PHONY: build_deps_debug_default
 build_deps_debug_default:
 	cd deps && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
 
