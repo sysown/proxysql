@@ -324,8 +324,8 @@ int check_mysql_servers_sync(
 	}
 	MYSQL_QUERY(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
-	std::cout << "MASTER TABLE BEFORE SYNC:" << std::endl;
-	system(print_master_mysql_servers_hostgroups.c_str());
+	diag("MASTER TABLE BEFORE SYNC:");
+	dump_mysql_servers(proxy_admin, "Master");
 
 	// SYNCH CHECK
 
@@ -357,8 +357,8 @@ int check_mysql_servers_sync(
 		}
 	}
 
-	std::cout << "REPLICA TABLE AFTER SYNC:" << std::endl;
-	system(print_replica_mysql_servers_hostgroups.c_str());
+	diag("REPLICA TABLE AFTER SYNC:");
+	dump_mysql_servers(r_proxy_admin, "Replica");
 	ok(not_synced_query == false, "'mysql_servers' with NULL comments should be synced.");
 
 	// TEARDOWN CONFIG

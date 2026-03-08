@@ -1135,6 +1135,7 @@ int main(int argc, char** argv) {
 
 	bool is_mariadb = (version_str.find("MariaDB") != string::npos);
 	unsigned long server_version = mysql_get_server_version(mysql);
+	bool has_sha2 = true;
 
 	if (server_version < 80000 && !is_mariadb) {
 		diag("This test requires MySQL 8.0+ but backend is version %lu. Skipping.", server_version);
@@ -1216,15 +1217,20 @@ int main(int argc, char** argv) {
 
 	uint32_t NUM_CLIENT_THREADS = 4;
 
-	const vector<string> def_auths {
-		"mysql_native_password",
-		"caching_sha2_password"
+	vector<string> def_auths {
+		"mysql_native_password"
 	};
-	const vector<string> req_auths {
+	if (has_sha2) {
+		def_auths.push_back("caching_sha2_password");
+	}
+
+	vector<string> req_auths {
 		"mysql_clear_password",
-		"mysql_native_password",
-		"caching_sha2_password"
+		"mysql_native_password"
 	};
+	if (has_sha2) {
+		req_auths.push_back("caching_sha2_password");
+	}
 	const vector<bool> hash_pass { false, true };
 	const vector<bool> use_ssl { false, true };
 	const vector<bool> use_comp { false, true };
