@@ -41,7 +41,7 @@ SAVE PGSQL SERVERS TO DISK; \
 source /home/rene/proxysql/test/infra/control/${INFRA}/.env
 
 # Start infra
-/home/rene/proxysql/test/infra/control/infra-docker-hoster/docker-compose-init.bash
+# /home/rene/proxysql/test/infra/control/infra-docker-hoster/docker-compose-init.bash
 /home/rene/proxysql/test/infra/control/${INFRA}/docker-compose-init.bash
 
 # create default users
