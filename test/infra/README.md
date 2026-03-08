@@ -15,87 +15,76 @@ The Unified CI system is designed around three pillars:
 
 ## 2. Manual Execution Guide
 
-For developers and AI agents, the typical workflow follows these steps:
+The infrastructure management and test execution are strictly separated. You must manually start the required components before launching the tests.
 
 ### Step 1: Global Setup
-Define your unique environment ID and set up the base environment.
 ```bash
-# Set your workspace to the repo root
 export WORKSPACE=$(pwd)
-export INFRA_ID="dev-$USER-$(date +%s)"
-
-# (Optional) Source common environment variables
+export INFRA_ID="dev-$USER"
 source test/infra/common/env.sh
 ```
 
 ### Step 2: Start ProxySQL
-This starts the primary ProxySQL container.
 ```bash
 ./test/infra/control/start-proxysql-isolated.bash
 ```
 
 ### Step 3: (Optional) Start ProxySQL Cluster
-To test ProxySQL Cluster synchronization and features, you can spin up multiple ProxySQL nodes.
-
 ```bash
-# To start a standard 9-node cluster
-./test/infra/control/cluster_start.bash
-./test/infra/control/cluster_init.bash
-
-# To start a cluster with a specific number of nodes
-export PROXYSQL_CLUSTER_NODES=3
 ./test/infra/control/cluster_start.bash
 ./test/infra/control/cluster_init.bash
 ```
 
-If `SKIP_CLUSTER_START=1` is set, these scripts will exit immediately without performing any action.
-
-### Step 4: Initialize Backends
-You can start one or more backend clusters. Each will automatically register itself with the running ProxySQL instance.
+### Step 4: Initialize Required Backends
+Launch the backends needed for your tests.
 ```bash
-# Start MySQL 5.7 Cluster
+# For MySQL 5.7 tests
 cd test/infra/infra-mysql57 && ./docker-compose-init.bash && cd ../../../
 
-# Start MariaDB 10 Cluster
-cd test/infra/infra-mariadb10 && ./docker-compose-init.bash && cd ../../../
-
-# Start PostgreSQL 16 Single Instance
-cd test/infra/docker-pgsql16-single && ./docker-compose-init.bash && cd ../../../
-
-# Start PostgreSQL 17 Replication Cluster
+# For PGSQL Replication tests
 cd test/infra/infra-pgsql17-repl && ./docker-compose-init.bash && cd ../../../
-
-# Start Clickhouse 23
-cd test/infra/infra-clickhouse23 && ./docker-compose-init.bash && cd ../../../
 ```
 
 ### Step 5: Run TAP Tests
-Execute tests using the isolated test runner script. This starts a temporary container that joins the isolated network and runs the ProxySQL tester.
+The test runner script will **verify** that all required containers are running before starting. If anything is missing, it will exit with an error.
 
 ```bash
-# Example: Run a specific test
-export TEST_PY_TAP_INCL="mysql-protocol_compression_level-t"
+# Run a specific test group
+export TAP_GROUP="pgsql17-repl"
 ./test/infra/control/run-tests-isolated.bash
-
-# Example: Run a specific test group defined in test/tap/groups/groups.json
-export TAP_GROUP="default-g1"
-./test/infra/control/run-tests-isolated.bash
-```
-
-**Tip:** In a separate terminal, watch the test assertions in real-time:
-```bash
-tail -f ci_infra_logs/${INFRA_ID}/tests/proxysql-tester.py/tests/*.log
 ```
 
 ### Step 6: Teardown
-Always clean up your isolated containers and networks.
+Manual cleanup of all components.
 ```bash
+# Destroy backends
+cd test/infra/infra-mysql57 && ./docker-compose-destroy.bash && cd ../../../
+
+# Stop ProxySQL and all its nodes
 ./test/infra/control/stop-proxysql-isolated.bash
 ```
 
 ---
 
-## 3. Environment Variables Reference
+## 3. Test Runner & Infrastructure Verification
+
+The `run-tests-isolated.bash` script acts as a validator and execution orchestrator.
+
+### The `infras.lst` Mechanism
+Every TAP test group (in `test/tap/groups/<group_name>`) can define its required backend environments using an `infras.lst` file.
+
+*   **Who reads it?**: `test/infra/control/run-tests-isolated.bash` on the host.
+*   **Verification**: The script checks if ProxySQL (`proxysql.${INFRA_ID}`) and all project-prefixed backend containers (e.g. `infra-mysql57-${INFRA_ID}-mysql1-1`) are active.
+*   **Safety**: If a required infrastructure is missing, the test runner **fails immediately** to prevent unverified test results.
+
+### Orchestration Roles
+1.  **Infrastructure Initialization**: Handled by the user or a wrapper. Responsible for container health and ProxySQL registration.
+2.  **Host Orchestrator (`run-tests-isolated.bash`)**: Responsible for verifying environment state and launching the `test-runner` container.
+3.  **Test Runner (`proxysql-tester.py` in container)**: Client-side execution of TAP tests. It does not manage Docker containers.
+
+---
+
+## 4. Environment Variables Reference
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
@@ -107,20 +96,6 @@ Always clean up your isolated containers and networks.
 | `SKIP_CLUSTER_START`| `0` | Set to `1` to bypass cluster startup for single-node runs. |
 | `TAP_GROUP` | (none) | Run a specific group defined in `test/tap/groups/groups.json` (e.g., `default-g1`). |
 | `TAP_ADMINUSERNAME` | `radmin` | Credentials used for ProxySQL Admin remote connections. |
-
----
-
-## 4. Directory Structure
-
-*   `common/`: Shared shell utilities and the base `env.sh` generator.
-*   `control/`: Scripts to manage the lifecycle of the ProxySQL container.
-*   `infra-mysql57/`, `infra-mysql84/`, `infra-mariadb10/`: MySQL and MariaDB backend definitions.
-*   `docker-clickhouse/`, `infra-clickhouse23/`: Clickhouse backend definitions.
-*   `docker-pgsql16-single/`, `infra-pgsql17-repl/`: PostgreSQL backend definitions.
-    *   `docker-compose.yml`: Service definitions using environment variable interpolation.
-    *   `docker-compose-init.bash`: Orchestrates the container startup and post-provisioning.
-    *   `bin/docker-proxy-post.bash`: Configures the ProxySQL container to recognize these backends.
-    *   `conf/proxysql/infra-config.sql`: Dynamic SQL template for backend registration.
 
 ---
 
@@ -139,7 +114,7 @@ When performing investigations or fixes within this infrastructure:
 
 To add a new database type or version (e.g., `infra-mysql90`):
 
-1.  **Template Pattern**: Copy an existing folder like `mysql57`.
+1.  **Template Pattern**: Copy an existing folder like `infra-mysql57`.
 2.  **Network Configuration**: Ensure the `docker-compose.yml` uses:
     ```yaml
     networks:
@@ -147,7 +122,7 @@ To add a new database type or version (e.g., `infra-mysql90`):
         name: ${INFRA_ID}_backend
         external: true
     ```
-3.  **Naming Convention**: Use `${COMPOSE_PROJECT}` as a prefix for all container names to ensure `stop-proxysql-isolated.bash` can find them.
+3.  **Naming Convention**: Use `${COMPOSE_PROJECT}` as a prefix for all container names to ensure the teardown script can find them.
 4.  **Post-Config Hook**:
     *   Create a `conf/proxysql/infra-config.sql` template.
     *   Use variables like `${WHG}` (Writer Hostgroup) and `${RHG}` (Reader Hostgroup) instead of hardcoding IDs.
