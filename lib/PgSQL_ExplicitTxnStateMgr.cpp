@@ -391,13 +391,11 @@ TxnCmd PgSQL_TxnCmdParser::parse(std::string_view input) noexcept {
         cmd_type = TxnCmd::SAVEPOINT;
     } else if (iequals(first_word, "release")) {
         cmd_type = TxnCmd::RELEASE;
-    } else if (iequals(first_word, "rollback")) {
+    } else if (iequals(first_word, "rollback") || iequals(first_word, "abort")) {
+        // ABORT is a synonym for ROLLBACK (including ABORT AND CHAIN = ROLLBACK AND CHAIN)
         cmd_type = TxnCmd::ROLLBACK;
     } else if (iequals(first_word, "commit") || iequals(first_word, "end")) {
         cmd.type = TxnCmd::COMMIT;
-        return cmd;
-    } else if (iequals(first_word, "abort")) {
-        cmd.type = TxnCmd::ROLLBACK;
         return cmd;
     }
 
