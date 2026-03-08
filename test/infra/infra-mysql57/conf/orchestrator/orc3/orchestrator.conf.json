@@ -3,7 +3,7 @@
   "ListenAddress": ":3000",
   "MySQLTopologySSLSkipVerify": true,
   "MySQLTopologyUser": "root",
-  "MySQLTopologyPassword": "01218ba576",
+  "MySQLTopologyPassword": "3cac27c814",
   "BackendDB": "sqlite",
   "SQLite3DataFile": "/var/lib/orchestrator/orchestrator.db",
   "RaftEnabled": true,

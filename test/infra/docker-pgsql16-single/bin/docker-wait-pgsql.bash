@@ -1,35 +1,34 @@
 #!/bin/bash
-set -e
 set -o pipefail
-. constants
+[ -f .env ] && . .env
 
-CONTAINER="${COMPOSE_PROJECT}-pgdb1-1"
+PRIMARY_CONTAINER="${COMPOSE_PROJECT}-pgdb1-1"
 
-printf "[$(date)] Waiting for PgSQL service (Container: ${CONTAINER}) "
-MAX_WAIT=120
+echo -n "[$(date)] Waiting for PgSQL Primary (${PRIMARY_CONTAINER}) service "
+MAX_WAIT=60
 COUNT=0
 while true; do
-  # Use Unix socket (trust) for wait check
-  if docker exec "${CONTAINER}" pg_isready -Upostgres > /dev/null 2>&1; then
-    echo " OK."
-    break
-  fi
-  printf "."
-  sleep 1
-  COUNT=$((COUNT+1))
-  if [ $COUNT -gt $MAX_WAIT ]; then echo " TIMEOUT"; exit 1; fi
+    if [ $COUNT -ge $MAX_WAIT ]; then
+        echo -e "\nERROR: TIMEOUT after ${MAX_WAIT} seconds waiting for ${PRIMARY_CONTAINER}"
+        exit 1
+    fi
+
+    # 1. Check if container is actually running
+    STATE=$(docker inspect -f '{{.State.Running}}' "${PRIMARY_CONTAINER}" 2>/dev/null || echo "false")
+    if [ "${STATE}" != "true" ]; then
+        echo -e "\nERROR: Container ${PRIMARY_CONTAINER} is NOT running!"
+        echo ">>> Container Logs:"
+        docker logs "${PRIMARY_CONTAINER}" | tail -n 20
+        exit 1
+    fi
+
+    # 2. Check if service is ready
+    if docker exec "${PRIMARY_CONTAINER}" env PGPASSWORD="${ROOT_PASSWORD}" psql -h127.0.0.1 -p5432 -Upostgres -c "select 1;" > /dev/null 2>&1; then
+        echo -e "\n[$(date)] PgSQL Primary service is now ACTIVE"
+        break
+    fi
+
+    echo -n "."
+    sleep 2
+    COUNT=$((COUNT+2))
 done
-
-printf "\n[$(date)] PgSQL service is now ACTIVE\n"
-
-# SSL Connectivity tests - using docker exec via localhost to trigger network path (scram-sha-256)
-# We use PGPASSWORD because host connections require it
-export PGPASSWORD="${ROOT_PASSWORD}"
-
-echo -n "[$(date)] Connecting sslmode=disable .. "
-docker exec -e PGSSLMODE=disable -e PGPASSWORD="${ROOT_PASSWORD}" "${CONTAINER}" psql -h localhost -Upostgres -c "\conninfo" 2>&1 | grep '^SSL' >/dev/null && echo FAIL || echo OK
-
-echo -n "[$(date)] Connecting sslmode=prefer ... "
-docker exec -e PGSSLMODE=prefer -e PGPASSWORD="${ROOT_PASSWORD}" "${CONTAINER}" psql -h localhost -Upostgres -c "\conninfo" 2>&1 | grep '^SSL' >/dev/null && echo OK || echo FAIL
-
-unset PGPASSWORD

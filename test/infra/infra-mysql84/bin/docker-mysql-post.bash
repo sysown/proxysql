@@ -19,27 +19,15 @@ for i in 1 2 3; do
     MAX_WAIT=120
     COUNT=0
     PASS_OPT=""
+    MAX_WAIT=120
+    COUNT=0
     while true; do
-        # Try with the dynamic password first, then with no password (fallback)
-        if docker exec "${CONTAINER}" mysql -h127.0.0.1 -uroot -p"${ROOT_PASSWORD}" -e 'SELECT 1' >/dev/null 2>&1; then
-            PASS_OPT="-p${ROOT_PASSWORD}"
-            echo " OK (Auth: Dynamic)."
-            break
-        fi
-        if docker exec "${CONTAINER}" mysql -h127.0.0.1 -uroot -e 'SELECT 1' >/dev/null 2>&1; then
-            PASS_OPT=""
-            echo " OK (Auth: Empty)."
-            break
-        fi
-        
-        echo -n '.'
-        sleep 3
-        COUNT=$((COUNT+3))
-        if [ $COUNT -gt $MAX_WAIT ]; then 
-            echo " TIMEOUT"
-            docker logs "${CONTAINER}" | tail -n 20
-            exit 1 
-        fi
+        if [ $COUNT -ge $MAX_WAIT ]; then echo " TIMEOUT"; docker logs "${CONTAINER}" | tail -n 20; exit 1; fi
+        STATE=$(docker inspect -f '{{.State.Running}}' "${CONTAINER}" 2>/dev/null || echo "false")
+        if [ "${STATE}" != "true" ]; then echo -e "\nERROR: Container ${CONTAINER} is NOT running!"; docker logs "${CONTAINER}" | tail -n 20; exit 1; fi
+        if docker exec "${CONTAINER}" mysql -h127.0.0.1 -uroot -p"${ROOT_PASSWORD}" -e "SELECT 1" >/dev/null 2>&1; then PASS_OPT="-p${ROOT_PASSWORD}"; echo " OK (Auth: Dynamic)."; break; fi
+        if docker exec "${CONTAINER}" mysql -h127.0.0.1 -uroot -e "SELECT 1" >/dev/null 2>&1; then PASS_OPT=""; echo " OK (Auth: Empty)."; break; fi
+        echo -n "."; sleep 2; COUNT=$((COUNT+2))
     done
 
     echo "Configuring users on ${CONTAINER}..."

@@ -54,26 +54,42 @@ echo "==========================================================================
 echo "Initializing CI Infra '${INFRA}' (Project: ${COMPOSE_PROJECT}) ..."
 echo "================================================================================"
 
-# 1. STOP ANY EXISTING CONTAINERS FOR THIS PROJECT
-# This ensures that we can safely wipe the data directories on the host
-echo "Stopping existing containers for project ${COMPOSE_PROJECT}..."
-if [ -f "./docker-compose-destroy.bash" ]; then
-    ./docker-compose-destroy.bash >/dev/null 2>&1 || true
-else
-    $COMPOSE_CMD -p "${COMPOSE_PROJECT}" down -v --remove-orphans >/dev/null 2>&1 || true
+# 1. VERIFY NO EXISTING CONTAINERS ARE RUNNING FOR THIS PROJECT
+if [ -n "$($COMPOSE_CMD -p "${COMPOSE_PROJECT}" ps -q 2>/dev/null)" ]; then
+    echo "ERROR: Containers for project ${COMPOSE_PROJECT} are already running."
+    echo "Please run teardown first."
+    exit 1
 fi
 
 # 2. Infrastructure-specific preparation (logs/data)
-# We wipe the directory to ensure a clean slate for database engines
-for CONTAINER in $(grep 'hostname:' docker-compose.yml | grep -v '#' | tr '.' ' ' | awk '{ print $2 }' | cut -d'.' -f1); do
-    LOG_DIR="${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/${CONTAINER}"
-    echo "Preparing clean log/data directory: ${LOG_DIR}"
-    $SUDO rm -rf "${LOG_DIR}"
-    $SUDO mkdir -p "${LOG_DIR}"
-    $SUDO chmod -R 777 "${LOG_DIR}"
-    # Specific fix for engines like postgres that need ownership
-    if [[ "${INFRA}" == *pgsql* ]]; then
-        $SUDO chown -R 999:999 "${LOG_DIR}"
+# We extract host paths that appear to be for logs or data.
+echo "Scanning for volumes in docker-compose.yml..."
+# CRITICAL: Use single quotes for grep to match LITERAL ${INFRA_LOGS_PATH}
+MOUNTED_PATHS=$(grep -E '\$\{INFRA_LOGS_PATH\}|\./log/' docker-compose.yml | awk -F: '{print $1}' | sed 's/^[[:space:]-]*//' | sort -u || true)
+echo "Found paths: ${MOUNTED_PATHS}"
+
+for RAW_PATH in ${MOUNTED_PATHS}; do
+    # Skip relative paths that point to config files (e.g. ./conf/...)
+    if [[ "${RAW_PATH}" == "./conf/"* ]]; then continue; fi
+    
+    # Expand variables like ${INFRA_LOGS_PATH} and ${COMPOSE_PROJECT}
+    eval "ACTUAL_PATH=${RAW_PATH}"
+    
+    # Safety: Refuse to proceed if ACTUAL_PATH is a directory and is not empty
+    if [ -d "${ACTUAL_PATH}" ] && [ "$(ls -A "${ACTUAL_PATH}" 2>/dev/null)" ]; then
+        echo "ERROR: Directory '${ACTUAL_PATH}' is not empty."
+        echo "Please run teardown/cleanup first."
+        exit 1
+    fi
+    
+    echo "Preparing directory: ${ACTUAL_PATH}"
+    $SUDO mkdir -p "${ACTUAL_PATH}"
+    $SUDO chmod -R 777 "${ACTUAL_PATH}"
+    
+    # Aggressive postgres fix: UID 999
+    if [[ "${ACTUAL_PATH}" == *pgsql* ]] || [[ "${ACTUAL_PATH}" == *pgdb* ]]; then
+        echo "Applying postgres ownership (999:999) to ${ACTUAL_PATH}"
+        $SUDO chown -R 999:999 "${ACTUAL_PATH}"
     fi
 done
 
@@ -89,17 +105,7 @@ if [ -f ./conf/pgsql/ssl/server.key ]; then
     $SUDO chown 0:999 ./conf/pgsql/ssl/* 2>/dev/null || true
 fi
 
-# 5. Local log directory fix for some compose files
-if grep -q "./log/" docker-compose.yml; then
-    mkdir -p ./log
-    chmod 777 ./log
-    for DIR in $(grep "./log/" docker-compose.yml | awk -F'[:/]' '{print $3}' | sort -u); do
-        mkdir -p "./log/${DIR}"
-        chmod 777 "./log/${DIR}"
-    done
-fi
-
-# 6. Create a temporary env file for docker-compose to ensure it sees our variables
+# 5. Create a temporary env file for docker-compose to ensure it sees our variables
 ENV_FILE=".env.isolated.${INFRA_ID}"
 cat <<ENVEOF > "${ENV_FILE}"
 INFRA_ID=${INFRA_ID}
@@ -109,7 +115,7 @@ COMPOSE_PROJECT=${COMPOSE_PROJECT}
 INFRA_LOGS_PATH=${INFRA_LOGS_PATH}
 ENVEOF
 
-# 7. START CONTAINERS
+# 6. START CONTAINERS
 if ! $COMPOSE_CMD --env-file .env --env-file "${ENV_FILE}" -p "${COMPOSE_PROJECT}" up -d; then
     echo "ERROR: Docker Compose failed"; rm -f "${ENV_FILE}"; exit 1
 fi
@@ -120,7 +126,7 @@ if [ -f /.dockerenv ]; then
         docker network connect "${INFRA_ID}_backend" "${RUNNER_ID}" || true
 fi
 
-# 8. Run post-scripts if they exist
+# 7. Run post-scripts if they exist
 sleep 5 # wait a bit for engines to start
 [ -f ./bin/docker-wait-pgsql.bash ] && ./bin/docker-wait-pgsql.bash
 [ -f ./bin/docker-mysql-post.bash ] && ./bin/docker-mysql-post.bash
