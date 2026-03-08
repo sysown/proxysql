@@ -15,46 +15,38 @@ The Unified CI system is designed around three pillars:
 
 ## 2. Manual Execution Guide
 
-The infrastructure management and test execution are strictly separated. You must manually start the required components before launching the tests.
+The infrastructure management and test execution are strictly separated.
 
 ### Step 1: Global Setup
 ```bash
 export WORKSPACE=$(pwd)
 export INFRA_ID="dev-$USER"
+export TAP_GROUP="legacy-g1"  # Optional but recommended
 source test/infra/common/env.sh
 ```
 
-### Step 2: Start ProxySQL
+### Step 2: Start ProxySQL & Backends
+You can use the helper script to automatically start all required components for a group:
+```bash
+./test/infra/control/ensure-infras.bash
+```
+*This script will start ProxySQL and then iterate through the `infras.lst` of the specified group.*
+
+Alternatively, start them manually:
 ```bash
 ./test/infra/control/start-proxysql-isolated.bash
-```
-
-### Step 3: (Optional) Start ProxySQL Cluster
-```bash
-./test/infra/control/cluster_start.bash
-./test/infra/control/cluster_init.bash
-```
-
-### Step 4: Initialize Required Backends
-Launch the backends needed for your tests.
-```bash
-# For MySQL 5.7 tests
+# Then start specific backends
 cd test/infra/infra-mysql57 && ./docker-compose-init.bash && cd ../../../
-
-# For PGSQL Replication tests
-cd test/infra/infra-pgsql17-repl && ./docker-compose-init.bash && cd ../../../
 ```
 
-### Step 5: Run TAP Tests
+### Step 3: Run TAP Tests
 The test runner script will **verify** that all required containers are running before starting. If anything is missing, it will exit with an error.
 
 ```bash
-# Run a specific test group
-export TAP_GROUP="pgsql17-repl"
 ./test/infra/control/run-tests-isolated.bash
 ```
 
-### Step 6: Teardown
+### Step 4: Teardown
 Manual cleanup of all components.
 ```bash
 # Destroy backends
@@ -71,16 +63,17 @@ cd test/infra/infra-mysql57 && ./docker-compose-destroy.bash && cd ../../../
 The `run-tests-isolated.bash` script acts as a validator and execution orchestrator.
 
 ### The `infras.lst` Mechanism
-Every TAP test group (in `test/tap/groups/<group_name>`) can define its required backend environments using an `infras.lst` file.
+Every TAP test group (in `test/tap/groups/<group_name>`) defines its required backend environments using an `infras.lst` file.
 
-*   **Who reads it?**: `test/infra/control/run-tests-isolated.bash` on the host.
-*   **Verification**: The script checks if ProxySQL (`proxysql.${INFRA_ID}`) and all project-prefixed backend containers (e.g. `infra-mysql57-${INFRA_ID}-mysql1-1`) are active.
-*   **Safety**: If a required infrastructure is missing, the test runner **fails immediately**. It outputs an explicit error message identifying the missing infrastructure and referencing the `infras.lst` file that defined the requirement.
+*   **Who reads it?**: Both `ensure-infras.bash` (to start them) and `run-tests-isolated.bash` (to verify them).
+*   **Subgroups**: If a group has a suffix (e.g., `legacy-g1`), the system automatically strips it to find the base group definition (`legacy`).
+*   **Safety**: If a required infrastructure is missing, the test runner **fails immediately**. It outputs an explicit error message identifying the missing infrastructure and referencing the `infras.lst` file.
 
-### Orchestration Roles
-1.  **Infrastructure Initialization**: Handled by the user or a wrapper. Responsible for container health and ProxySQL registration.
-2.  **Host Orchestrator (`run-tests-isolated.bash`)**: Responsible for verifying environment state and launching the `test-runner` container.
-3.  **Test Runner (`proxysql-tester.py` in container)**: Client-side execution of TAP tests. It does not manage Docker containers.
+### Safety-First Initialization
+The `docker-compose-init.bash` scripts implement a strict **non-destructive policy**:
+*   They will **refuse to start** if the target data or log directories on the host are not empty.
+*   This prevents accidental data loss or inconsistent test states.
+*   You must run `docker-compose-destroy.bash` or manually clean the `ci_infra_logs/${INFRA_ID}/` directory before re-initializing.
 
 ---
 
@@ -92,47 +85,37 @@ Every TAP test group (in `test/tap/groups/<group_name>`) can define its required
 | `WORKSPACE` | Repo Root | Root path of the ProxySQL repository. |
 | `INFRA_LOGS_PATH` | `$WORKSPACE/ci_infra_logs` | Destination for container logs and test outputs. |
 | `ROOT_PASSWORD` | (dynamic) | Derived from `sha256(INFRA_ID)`. Used for all root-level access. |
-| `PROXYSQL_CLUSTER_NODES`| `9` | Number of additional ProxySQL nodes to start. |
-| `SKIP_CLUSTER_START`| `0` | Set to `1` to bypass cluster startup for single-node runs. |
 | `TAP_GROUP` | (none) | Run a specific group defined in `test/tap/groups/groups.json` (e.g., `legacy-g1`). |
-| `TAP_ADMINUSERNAME` | `radmin` | Credentials used for ProxySQL Admin remote connections. |
+| `DEFAULT_MYSQL_INFRA` | (auto) | The primary MySQL-compatible target for the current group. |
+| `DEFAULT_PGSQL_INFRA` | (auto) | The primary PostgreSQL-compatible target for the current group. |
 
 ---
 
 ## 5. Guidelines for AI Agents
 
 When performing investigations or fixes within this infrastructure:
-1.  **Always use `INFRA_ID`**: Never start containers without a unique ID. Check `docker ps` to ensure you aren't interfering with other runs.
+1.  **Always use `INFRA_ID`**: Never start containers without a unique ID. 
 2.  **Verify via `docker exec`**: To check ProxySQL state, use:
     `docker exec proxysql.${INFRA_ID} mysql -uadmin -padmin -h127.0.0.1 -P6032 -e "SELECT * FROM runtime_mysql_servers"`
-3.  **Logs are Persistent**: Look into `ci_infra_logs/${INFRA_ID}/${CONTAINER_NAME}/` for backend engine logs.
-4.  **Hostname Resolution**: Inside the isolated network, containers use aliases. `proxysql` is the alias for the ProxySQL container, and `mysql1.${INFRA}` is the alias for the first MySQL node.
+3.  **Logs are Persistent**: Look into `ci_infra_logs/${INFRA_ID}/${COMPOSE_PROJECT}/${CONTAINER_NAME}/` for backend engine logs.
+4.  **Hostname Resolution**: Inside the isolated network, containers use aliases. `proxysql` is the alias for the ProxySQL container, and `mysql1.infra-mysql57` is an alias for a specific backend node.
 
 ---
 
 ## 6. Best Practices for Creating New Infras
 
-To add a new database type or version (e.g., `infra-mysql90`):
-
 1.  **Template Pattern**: Copy an existing folder like `infra-mysql57`.
-2.  **Network Configuration**: Ensure the `docker-compose.yml` uses:
-    ```yaml
-    networks:
-      backend:
-        name: ${INFRA_ID}_backend
-        external: true
-    ```
-3.  **Naming Convention**: Use `${COMPOSE_PROJECT}` as a prefix for all container names to ensure the teardown script can find them.
+2.  **Network Configuration**: Use the standard external network `${INFRA_ID}_backend`.
+3.  **Naming Convention**: Use `${COMPOSE_PROJECT}` as a prefix for all container names.
 4.  **Post-Config Hook**:
     *   Create a `conf/proxysql/infra-config.sql` template.
-    *   Use variables like `${WHG}` (Writer Hostgroup) and `${RHG}` (Reader Hostgroup) instead of hardcoding IDs.
-    *   Update `bin/docker-proxy-post.bash` to `eval` this template and pipe it into the `proxysql.${INFRA_ID}` container.
-5.  **Deterministic Passwords**: Use `${ROOT_PASSWORD}` for all administrative credentials to ensure the test runner can connect automatically.
+    *   Update `bin/docker-proxy-post.bash` to apply this template to the ProxySQL container.
+5.  **Deterministic Passwords**: Use `${ROOT_PASSWORD}` for all root/admin credentials.
 
 ---
 
 ## 7. Troubleshooting
 
-*   **Network Collisions**: If `docker network create` fails, an old `INFRA_ID` might still be hanging. Use `stop-proxysql-isolated.bash` with that ID.
-*   **Permission Denied**: Logs and data directories are often managed with `sudo` in CI. Scripts automatically use `sudo` where necessary for `mkdir` and `chmod`.
-*   **ProxySQL Not Ready**: If `start-proxysql-isolated.bash` timeouts, check `ci_infra_logs/${INFRA_ID}/proxysql/proxysql.log` for initialization errors.
+*   **Directory Not Empty**: If initialization fails with an "is not empty" error, run `docker-compose-destroy.bash` for that specific infra or manually clean the log directory.
+*   **Permission Denied**: Logs and data directories are often managed with `sudo`. The scripts automatically use `sudo` where necessary.
+*   **ProxySQL Not Ready**: Check `ci_infra_logs/${INFRA_ID}/proxysql/proxysql.log` for initialization errors.
