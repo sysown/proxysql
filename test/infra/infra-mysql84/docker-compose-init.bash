@@ -63,10 +63,8 @@ fi
 
 # 2. Infrastructure-specific preparation (logs/data)
 # We extract host paths that appear to be for logs or data.
-echo "Scanning for volumes in docker-compose.yml..."
 # CRITICAL: Use single quotes for grep to match LITERAL ${INFRA_LOGS_PATH}
 MOUNTED_PATHS=$(grep -E '\$\{INFRA_LOGS_PATH\}|\./log/' docker-compose.yml | awk -F: '{print $1}' | sed 's/^[[:space:]-]*//' | sort -u || true)
-echo "Found paths: ${MOUNTED_PATHS}"
 
 for RAW_PATH in ${MOUNTED_PATHS}; do
     # Skip relative paths that point to config files (e.g. ./conf/...)

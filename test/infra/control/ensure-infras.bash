@@ -16,7 +16,7 @@ if [ -z "${TAP_GROUP}" ]; then
 fi
 
 # 1. Determine Base Group (strip subgroup suffix)
-BASE_GROUP="${TAP_GROUP%%-g[0-9]*}"
+BASE_GROUP=$(echo "${TAP_GROUP}" | sed -E "s/[-_]g[0-9]+.*//")
 LST_PATH=""
 
 if [ -f "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst" ]; then
@@ -30,8 +30,14 @@ if [ -n "${LST_PATH}" ]; then
     INFRAS=$(cat "${LST_PATH}")
     echo ">>> Found infrastructure requirements for group '${TAP_GROUP}' in '${LST_PATH}'"
 else
-    echo ">>> No infras.lst found for group '${TAP_GROUP}' or '${BASE_GROUP}'."
-    [ -n "${INFRA_TYPE}" ] && INFRAS="${INFRA_TYPE}"
+    if [ -n "${INFRA_TYPE}" ]; then
+        echo ">>> No infras.lst found. Using fallback INFRA_TYPE: ${INFRA_TYPE}"
+        INFRAS="${INFRA_TYPE}"
+    else
+        echo "ERROR: Could not find infrastructure requirements (infras.lst) for group '${TAP_GROUP}' or '${BASE_GROUP}'."
+        echo "Please ensure test/tap/groups/${BASE_GROUP}/infras.lst exists."
+        exit 1
+    fi
 fi
 
 # 2. Ensure ProxySQL Control Plane is running first
