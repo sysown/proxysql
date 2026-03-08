@@ -51,8 +51,12 @@ for INFRA_NAME in ${INFRAS_TO_CHECK}; do
         # Get all services for this project
         RUNNING_CONTAINERS=$(docker ps --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" --format '{{.Names}}')
         if [ -z "${RUNNING_CONTAINERS}" ]; then
-            echo "ERROR: No containers found for infrastructure project: ${COMPOSE_PROJECT}"
-            echo "Please run initialization for ${INFRA_NAME} first."
+            LST_PATH="${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst"
+            echo "ERROR: Required infrastructure '${INFRA_NAME}' is NOT running."
+            if [ -f "${LST_PATH}" ]; then
+                echo "According to '${LST_PATH}', this infrastructure is mandatory for the '${TAP_GROUP}' group."
+            fi
+            echo "Please run initialization for '${INFRA_NAME}' first (e.g. cd test/infra/${INFRA_NAME} && ./docker-compose-init.bash)."
             exit 1
         fi
         echo "Found running containers: ${RUNNING_CONTAINERS//$'\n'/ }"
@@ -98,6 +102,9 @@ docker run \
         set -e
         git config --global --add safe.directory \"${WORKSPACE}\"
         
+        # Redirection: Replace reference to legacy scripts with local infra control scripts
+        find \"${WORKSPACE}/test/tap/groups\" -name \"*.bash\" | xargs -r sed -i \"s|\\\$JENKINS_SCRIPTS_PATH|${WORKSPACE}/test/infra/control|g\"
+
         # Cleanup legacy .env files inside container view
         find \"${WORKSPACE}/test/tap/tests\" -name \".env\" -o -name \"tests.env\" | while read f; do
             sed -i '/TAP_ROOT/d' \"\$f\"

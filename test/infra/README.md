@@ -75,7 +75,7 @@ Every TAP test group (in `test/tap/groups/<group_name>`) can define its required
 
 *   **Who reads it?**: `test/infra/control/run-tests-isolated.bash` on the host.
 *   **Verification**: The script checks if ProxySQL (`proxysql.${INFRA_ID}`) and all project-prefixed backend containers (e.g. `infra-mysql57-${INFRA_ID}-mysql1-1`) are active.
-*   **Safety**: If a required infrastructure is missing, the test runner **fails immediately** to prevent unverified test results.
+*   **Safety**: If a required infrastructure is missing, the test runner **fails immediately**. It outputs an explicit error message identifying the missing infrastructure and referencing the `infras.lst` file that defined the requirement.
 
 ### Orchestration Roles
 1.  **Infrastructure Initialization**: Handled by the user or a wrapper. Responsible for container health and ProxySQL registration.
