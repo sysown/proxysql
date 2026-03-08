@@ -28,13 +28,29 @@ export INFRA_ID="dev-$USER-$(date +%s)"
 source test/infra/common/env.sh
 ```
 
-### Step 2: Start ProxySQL Control Plane
-This starts the ProxySQL container that will act as the orchestrator.
+### Step 2: Start ProxySQL
+This starts the primary ProxySQL container.
 ```bash
 ./test/infra/control/start-proxysql.bash
 ```
 
-### Step 3: Initialize Backends
+### Step 3: (Optional) Start ProxySQL Cluster
+To test ProxySQL Cluster synchronization and features, you can spin up multiple ProxySQL nodes.
+
+```bash
+# To start a standard 9-node cluster
+./test/infra/control/cluster_start.bash
+./test/infra/control/cluster_init.bash
+
+# To start a cluster with a specific number of nodes
+export PROXYSQL_CLUSTER_NODES=3
+./test/infra/control/cluster_start.bash
+./test/infra/control/cluster_init.bash
+```
+
+If `SKIP_CLUSTER_START=1` is set, these scripts will exit immediately without performing any action.
+
+### Step 4: Initialize Backends
 You can start one or more backend clusters. Each will automatically register itself with the running ProxySQL instance.
 ```bash
 # Start MySQL 5.7 Cluster
@@ -52,7 +68,7 @@ export TEST_PY_TAP_INCL="mysql-protocol_compression_level-t"
 python3 ci_infra_logs/${INFRA_ID}/tests/proxysql-tester.py
 ```
 
-### Step 5: Teardown
+### Step 6: Teardown
 Always clean up your isolated containers and networks.
 ```bash
 ./test/infra/control/stop-proxysql.bash
@@ -68,6 +84,8 @@ Always clean up your isolated containers and networks.
 | `WORKSPACE` | Repo Root | Root path of the ProxySQL repository. |
 | `INFRA_LOGS_PATH` | `$WORKSPACE/ci_infra_logs` | Destination for container logs and test outputs. |
 | `ROOT_PASSWORD` | (dynamic) | Derived from `sha256(INFRA_ID)`. Used for all root-level access. |
+| `PROXYSQL_CLUSTER_NODES`| `9` | Number of additional ProxySQL nodes to start. |
+| `SKIP_CLUSTER_START`| `0` | Set to `1` to bypass cluster startup for single-node runs. |
 | `TAP_ADMINUSERNAME` | `radmin` | Credentials used for ProxySQL Admin remote connections. |
 
 ---
