@@ -1,4 +1,6 @@
 #!/bin/bash
+set -e
+set -o pipefail
 
 # Isolated Network Overrides for Test Runner
 export TAP_HOST="proxysql"

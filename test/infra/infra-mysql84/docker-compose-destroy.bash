@@ -1,4 +1,6 @@
 #!/bin/bash
+set -e
+set -o pipefail
 pushd $(dirname $0) &>/dev/null
 trap 'popd &>/dev/null' EXIT
 set -a; . .env; set +a

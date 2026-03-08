@@ -1,5 +1,6 @@
 #!/bin/bash
 set -e
+set -o pipefail
 
 # SUDO helper: empty if root
 SUDO=""

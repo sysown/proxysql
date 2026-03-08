@@ -2,14 +2,17 @@ services:
 
   mariadb1:
     hostname: mariadb1.${INFRA}
-    image: mariadb:${MARIADB_VERSION}
+    image: mariadb:10
+    container_name: ${COMPOSE_PROJECT}-mariadb1-1
     volumes:
-      - ./conf/mysql/mysql1/my.cnf:/etc/mysql/mariadb.conf.d/60-replication.cnf
-      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/mariadb1:/var/log/mysql
+      - ./conf/mysql/mysql1/my.cnf:/etc/mysql/my.cnf
+      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/mariadb1:/var/lib/mysql
     networks:
       backend:
         aliases:
           - mariadb1.${INFRA}
+          - mariadb1.infra-mariadb10
+          - mysql1.infra-mariadb10
     environment:
       - MYSQL_ROOT_PASSWORD=${ROOT_PASSWORD}
     cap_add:
@@ -17,16 +20,17 @@ services:
 
   mariadb2:
     hostname: mariadb2.${INFRA}
-    image: mariadb:${MARIADB_VERSION}
+    image: mariadb:10
+    container_name: ${COMPOSE_PROJECT}-mariadb2-1
     volumes:
-      - ./conf/mysql/mysql2/my.cnf:/etc/mysql/mariadb.conf.d/60-replication.cnf
-      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/mariadb2:/var/log/mysql
+      - ./conf/mysql/mysql2/my.cnf:/etc/mysql/my.cnf
+      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/mariadb2:/var/lib/mysql
     networks:
       backend:
         aliases:
           - mariadb2.${INFRA}
-    depends_on:
-      - mariadb1
+          - mariadb2.infra-mariadb10
+          - mysql2.infra-mariadb10
     environment:
       - MYSQL_ROOT_PASSWORD=${ROOT_PASSWORD}
     cap_add:
@@ -34,16 +38,17 @@ services:
 
   mariadb3:
     hostname: mariadb3.${INFRA}
-    image: mariadb:${MARIADB_VERSION}
+    image: mariadb:10
+    container_name: ${COMPOSE_PROJECT}-mariadb3-1
     volumes:
-      - ./conf/mysql/mysql3/my.cnf:/etc/mysql/mariadb.conf.d/60-replication.cnf
-      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/mariadb3:/var/log/mysql
+      - ./conf/mysql/mysql3/my.cnf:/etc/mysql/my.cnf
+      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/mariadb3:/var/lib/mysql
     networks:
       backend:
         aliases:
           - mariadb3.${INFRA}
-    depends_on:
-      - mariadb1
+          - mariadb3.infra-mariadb10
+          - mysql3.infra-mariadb10
     environment:
       - MYSQL_ROOT_PASSWORD=${ROOT_PASSWORD}
     cap_add:
@@ -51,5 +56,5 @@ services:
 
 networks:
   backend:
-    name: ${INFRA_ID}_backend
+    name: "${INFRA_ID}_backend"
     external: true

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+set -e
+set -o pipefail
 #
 # change infra config
 # inherits env from tester script

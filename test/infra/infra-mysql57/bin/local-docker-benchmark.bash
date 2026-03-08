@@ -1,5 +1,6 @@
 #!/bin/bash
 #set -e
+set -o pipefail
 
 PREP_THREADS=1
 RUN_THREADS=4

@@ -1,4 +1,6 @@
 #!/bin/bash
+set -e
+set -o pipefail
 
 # make sure we have correct cwd
 pushd $(dirname $0)

@@ -1,5 +1,6 @@
 #!/bin/bash
 set -e
+set -o pipefail
 [ -f .env ] && . .env
 
 BUNDLE_DIR="${INFRA_LOGS_PATH}/${INFRA_ID}/proxysql"

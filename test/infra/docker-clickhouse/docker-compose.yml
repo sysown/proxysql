@@ -2,15 +2,15 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server:22.5.1.2079
     hostname: clickhouse
-    container_name: -clickhouse-1
+    container_name: ${COMPOSE_PROJECT}-clickhouse-1
     networks:
       backend:
         aliases:
-          - clickhouse.
+          - clickhouse.${INFRA}
     environment:
-      - MYSQL_ROOT_PASSWORD=
+      - MYSQL_ROOT_PASSWORD=${ROOT_PASSWORD}
     volumes:
-      - //clickhouse:/var/log/clickhouse-server
+      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/clickhouse:/var/log/clickhouse-server
     cap_add:
       - SYS_NICE
       - NET_ADMIN
@@ -18,5 +18,5 @@ services:
 
 networks:
   backend:
-    name: _backend
+    name: "${INFRA_ID}_backend"
     external: true

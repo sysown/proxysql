@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -o pipefail
 #
 # AI TAP group post-hook:
 # - cleans MCP targets/profiles created by pre-hook

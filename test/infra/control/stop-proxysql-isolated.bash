@@ -1,4 +1,6 @@
 #!/bin/bash
+set -e
+set -o pipefail
 
 # Derive Workspace relative to script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,7 +14,7 @@ PROXY_CONTAINER="proxysql.${INFRA_ID}"
 NETWORK_NAME="${INFRA_ID}_backend"
 
 echo ">>> Stopping ProxySQL Infrastructure for ${INFRA_ID}"
-docker ps -a --format '{{.Names}}' | grep "${INFRA_ID}" | xargs -r docker rm -f >/dev/null 2>&1 || true
+docker ps -a --format '{{.Names}}' | grep "${INFRA_ID}" | grep -v "test-runner" | xargs -r docker rm -f >/dev/null 2>&1 || true
 
 if [ -f /.dockerenv ]; then
     RUNNER_ID=$(hostname)

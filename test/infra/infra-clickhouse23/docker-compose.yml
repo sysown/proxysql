@@ -1,13 +1,14 @@
 services:
   clickhouse:
-    image: clickhouse/clickhouse-server:23
-    hostname: clickhouse.${INFRA}
+    image: clickhouse/clickhouse-server:23.3
+    hostname: clickhouse
+    container_name: ${COMPOSE_PROJECT}-clickhouse-1
     networks:
-      - backend
+      backend:
+        aliases:
+          - clickhouse.${INFRA}
     environment:
-      - CLICKHOUSE_DB=test
-      - CLICKHOUSE_USER=cliuser
-      - CLICKHOUSE_PASSWORD=clipass
+      - MYSQL_ROOT_PASSWORD=${ROOT_PASSWORD}
     volumes:
       - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/clickhouse:/var/log/clickhouse-server
     cap_add:
@@ -17,5 +18,5 @@ services:
 
 networks:
   backend:
-    name: ${INFRA_ID}_backend
+    name: "${INFRA_ID}_backend"
     external: true

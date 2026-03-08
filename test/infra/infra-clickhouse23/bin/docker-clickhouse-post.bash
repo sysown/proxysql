@@ -1,4 +1,6 @@
 #!/bin/bash
+set -e
+set -o pipefail
 [ -f .env ] && . .env
 # COMPOSE_PROJECT is exported by docker-compose-init.bash
 CONTAINER="${COMPOSE_PROJECT}-clickhouse-1"

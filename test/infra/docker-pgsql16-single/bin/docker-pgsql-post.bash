@@ -1,5 +1,6 @@
 #!/bin/bash
 set -e
+set -o pipefail
 . constants
 
 CONTAINER="${COMPOSE_PROJECT}-pgdb1-1"

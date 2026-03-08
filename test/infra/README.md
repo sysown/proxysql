@@ -58,6 +58,15 @@ cd test/infra/infra-mysql57 && ./docker-compose-init.bash && cd ../../../
 
 # Start MariaDB 10 Cluster
 cd test/infra/infra-mariadb10 && ./docker-compose-init.bash && cd ../../../
+
+# Start PostgreSQL 16 Single Instance
+cd test/infra/docker-pgsql16-single && ./docker-compose-init.bash && cd ../../../
+
+# Start PostgreSQL 17 Replication Cluster
+cd test/infra/infra-pgsql17-repl && ./docker-compose-init.bash && cd ../../../
+
+# Start Clickhouse 23
+cd test/infra/infra-clickhouse23 && ./docker-compose-init.bash && cd ../../../
 ```
 
 ### Step 5: Run TAP Tests
@@ -105,7 +114,9 @@ Always clean up your isolated containers and networks.
 
 *   `common/`: Shared shell utilities and the base `env.sh` generator.
 *   `control/`: Scripts to manage the lifecycle of the ProxySQL container.
-*   `mysql57/`, `mysql84/`, `mariadb10/`, etc.: Backend definitions.
+*   `infra-mysql57/`, `infra-mysql84/`, `infra-mariadb10/`: MySQL and MariaDB backend definitions.
+*   `docker-clickhouse/`, `infra-clickhouse23/`: Clickhouse backend definitions.
+*   `docker-pgsql16-single/`, `infra-pgsql17-repl/`: PostgreSQL backend definitions.
     *   `docker-compose.yml`: Service definitions using environment variable interpolation.
     *   `docker-compose-init.bash`: Orchestrates the container startup and post-provisioning.
     *   `bin/docker-proxy-post.bash`: Configures the ProxySQL container to recognize these backends.

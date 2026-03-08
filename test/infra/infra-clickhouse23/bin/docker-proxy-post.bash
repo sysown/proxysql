@@ -1,4 +1,6 @@
 #!/bin/bash
+set -e
+set -o pipefail
 [ -f .env ] && . .env
 # INFRA_ID is global
 PROXY_CONTAINER="proxysql.${INFRA_ID}"
