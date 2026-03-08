@@ -1086,6 +1086,27 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
+	// Verbose test header
+	diag("================================================================================");
+	diag("Test: test_auth_methods-t");
+	diag("================================================================================");
+	diag("This test verifies the different authentication methods supported by ProxySQL:");
+	diag("  - clear_text_pass");
+	diag("  - mysql_native_password");
+	diag("  - caching_sha2_password");
+	diag("It tests combinations of default_auth, requested_auth, and stored_pass,");
+	diag("as well as auth switches and SHA2 full authentications.");
+	diag(" ");
+	diag("Connection parameters:");
+	diag("  - ProxySQL Host: %s", cl.host);
+	diag("  - ProxySQL Port: %d", cl.port);
+	diag("  - ProxySQL Admin Port: %d", cl.admin_port);
+	diag("  - Backend MySQL Host: %s", cl.mysql_host);
+	diag("  - Backend MySQL Port: %d", cl.mysql_port);
+	diag("  - Workdir: %s", cl.workdir);
+	diag("================================================================================");
+	diag(" ");
+
 	spawn_internal_noise(cl, internal_noise_admin_pinger);
 	spawn_internal_noise(cl, internal_noise_mysql_traffic);
 	spawn_internal_noise(cl, internal_noise_random_stats_poller);
@@ -1093,17 +1114,32 @@ int main(int argc, char** argv) {
 
 	MYSQL* mysql = mysql_init(NULL);
 
-	if (!mysql_real_connect(mysql, cl.host, cl.mysql_username, cl.mysql_password, NULL, cl.mysql_port, NULL, 0)) {
+	diag("Attempting backend MySQL connection to %s:%d...", cl.mysql_host, cl.mysql_port);
+	if (!mysql_real_connect(mysql, cl.mysql_host, cl.mysql_username, cl.mysql_password, NULL, cl.mysql_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 		return EXIT_FAILURE;
 	}
+	diag("Backend MySQL connection successful.");
 
-	MYSQL* admin = mysql_init(NULL);
+	if (mysql_get_server_version(mysql) < 80000) {
+		diag("ERROR: This test requires MySQL 8.0+ but backend is version %lu.", mysql_get_server_version(mysql));
+		mysql_close(mysql);
+		return EXIT_FAILURE;
+	}
 
+if (mysql_get_server_version(mysql) < 80018) {
+	diag("Backend MySQL version %lu < 8.0.18, disabling RANDOM password checks.", mysql_get_server_version(mysql));
+	setenv("TAP_DISABLE_SEQ_CHECKS_RAND_PASS", "1", 1);
+}
+
+MYSQL* admin = mysql_init(NULL);
+
+	diag("Attempting ProxySQL Admin connection to %s:%d...", cl.host, cl.admin_port);
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
 	}
+	diag("ProxySQL Admin connection successful.");
 
 	// Setup SSLKEYLOGFILE for debugging purposes
 	if (getenv("SSLKEYLOGFILE") != nullptr) {
@@ -1163,7 +1199,7 @@ int main(int argc, char** argv) {
 		"mysql_native_password",
 		"caching_sha2_password"
 	};
-	const vector<string> req_auhts {
+	const vector<string> req_auths {
 		"mysql_clear_password",
 		"mysql_native_password",
 		"caching_sha2_password"
@@ -1174,8 +1210,9 @@ int main(int argc, char** argv) {
 
 	// Sequential access tests; exercising full logic
 	const vector<test_conf_t> all_conf_combs {
-		get_auth_conf_combs(def_auths, req_auhts, hash_pass, use_ssl, use_comp)
+		get_auth_conf_combs(def_auths, req_auths, hash_pass, use_ssl, use_comp)
 	};
+
 	const auto scs_stats { count_exp_scs(all_conf_combs, cbres.second, tests_creds) };
 
 	pair<uint64_t,uint64_t> rnd_scs_stats {};
@@ -1225,6 +1262,7 @@ int main(int argc, char** argv) {
 
 	// sequential; verify correctness in the procedure; KNOWN passwords
 	for (const auto& conf : all_conf_combs) {
+		diag("--- Testing Config (KNOWN passwords): %s ---", to_string(conf).c_str());
 		int rc = backend_conns_cleanup(admin);
 		if (rc) { goto cleanup; }
 
@@ -1241,6 +1279,7 @@ int main(int argc, char** argv) {
 
 		for (const auto& creds : tests_creds) {
 			test_creds_t f_creds { map_user_creds(cbres.second, creds) };
+			diag("  * Testing Creds: %s", to_string(f_creds).c_str());
 			test_creds_frontend_backend(cl, conf, f_creds, auth_reg);
 		}
 	}
@@ -1248,6 +1287,7 @@ int main(int argc, char** argv) {
 	// sequential; verify correctness in the procedure; RANDOM passwords
 	if (getenv("TAP_DISABLE_SEQ_CHECKS_RAND_PASS") == nullptr) {
 		for (const auto& conf : all_conf_combs) {
+			diag("--- Testing Config (RANDOM passwords): %s ---", to_string(conf).c_str());
 			int rc = backend_conns_cleanup(admin);
 			if (rc) { goto cleanup; }
 
@@ -1264,6 +1304,7 @@ int main(int argc, char** argv) {
 
 			for (const auto& creds : rnd_tests_creds) {
 				test_creds_t f_creds { map_user_creds(rnd_cbres.second, creds) };
+				diag("  * Testing Creds (RANDOM): %s", to_string(f_creds).c_str());
 				test_creds_frontend_backend(cl, conf, f_creds, auth_reg);
 			}
 		}
