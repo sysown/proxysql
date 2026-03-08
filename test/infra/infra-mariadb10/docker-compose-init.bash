@@ -1,5 +1,14 @@
 #!/bin/bash
+# Derive Workspace relative to script
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+export WORKSPACE="${REPO_ROOT}"
+
 set -e
+# SUDO helper: empty if root
+SUDO=""
+if [ "$(id -u)" != "0" ]; then SUDO="sudo"; fi
+
 set -o pipefail
 
 # relaunch self with timeout
@@ -41,9 +50,9 @@ echo "==========================================================================
 for CONTAINER in $(grep 'hostname:' docker-compose.yml | grep -v '#' | tr '.' ' ' | awk '{ print $2 }' | cut -d'.' -f1); do
     LOG_DIR="${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/${CONTAINER}"
     echo "Preparing log directory: ${LOG_DIR}"
-    sudo rm -rf "${LOG_DIR}"
-    sudo mkdir -p "${LOG_DIR}"
-    sudo chmod -R 777 "${LOG_DIR}"
+    $SUDO rm -rf "${LOG_DIR}"
+    $SUDO mkdir -p "${LOG_DIR}"
+    $SUDO chmod -R 777 "${LOG_DIR}"
 done
 
 if [[ ${DOCKER_MODE} = swarm ]]; then

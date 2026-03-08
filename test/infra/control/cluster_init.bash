@@ -1,8 +1,14 @@
 #!/bin/bash
 set -e
 
+# SUDO helper: empty if root
+SUDO=""
+if [ "$(id -u)" != "0" ]; then SUDO="sudo"; fi
+
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+export WORKSPACE="${REPO_ROOT}"
 
 # Default INFRA_ID if not provided
 export INFRA_ID="${INFRA_ID:-dev-$USER}"
@@ -24,9 +30,11 @@ run_sql() {
     shift
     if [ "$IS_HOST" = true ]; then
         local container="${node_name}.${INFRA_ID}"
+        # We use mysql -h127.0.0.1 inside the container to avoid socket issues
         docker exec -i "${container}" mysql -uadmin -padmin -h127.0.0.1 -P6032 "$@"
     else
-        mysql -uadmin -padmin -h "${node_name}" -P 6032 "$@"
+        # From host to containers, we should use radmin
+        mysql -uradmin -pradmin -h "${node_name}" -P 6032 "$@"
     fi
 }
 
@@ -62,12 +70,14 @@ SAVE PROXYSQL SERVERS TO DISK;
 SQL
 
 # 2. Configure the nodes
-NUM_NODES=${PROXYSQL_CLUSTER_NODES:-9}
 for i in $(seq 1 "${NUM_NODES}"); do
     NODE="proxy-node${i}"
     echo ">>> Configuring Node: ${NODE}"
     
     run_sql "${NODE}" <<SQL
+SET admin-admin_credentials="admin:admin;radmin:radmin;cluster1:secret1pass";
+SET admin-cluster_username="cluster1";
+SET admin-cluster_password="secret1pass";
 UPDATE global_variables SET variable_value='false' WHERE variable_name='admin-hash_passwords';
 SET admin-restapi_port=$((6070 + i));
 SET admin-restapi_enabled='true';

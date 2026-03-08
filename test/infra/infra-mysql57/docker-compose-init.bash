@@ -1,8 +1,17 @@
 #!/bin/bash
+# Derive Workspace relative to script
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+export WORKSPACE="${REPO_ROOT}"
+
 set -e
+# SUDO helper: empty if root
+SUDO=""
+if [ "$(id -u)" != "0" ]; then SUDO="sudo"; fi
+
 set -o pipefail
 
-[[ $(ps -o command= $(ps -o ppid= $$)) =~ timeout ]] || exec timeout -v -s 9 ${TIMEOUT:-300} "${BASH_SOURCE}" "$@"
+[[ $(ps -o command= $(ps -o ppid= $$)) =~ timeout ]] || exec timeout -v -s 9 ${TIMEOUT:-600} "${BASH_SOURCE}" "$@"
 
 pushd $(dirname $0) &>/dev/null
 trap 'popd &>/dev/null' EXIT
@@ -36,9 +45,9 @@ done
 
 for SERVICE in mysql1 mysql2 mysql3 orc1 orc2 orc3; do
     LOG_DIR="${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/${SERVICE}"
-	sudo rm -rf "${LOG_DIR}"
-	sudo mkdir -p "${LOG_DIR}"
-	sudo chmod -R 777 "${LOG_DIR}"
+	$SUDO rm -rf "${LOG_DIR}"
+	$SUDO mkdir -p "${LOG_DIR}"
+	$SUDO chmod -R 777 "${LOG_DIR}"
 done
 
 if ! docker compose -p "${COMPOSE_PROJECT}" up -d; then

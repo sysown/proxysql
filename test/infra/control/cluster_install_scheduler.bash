@@ -1,8 +1,14 @@
 #!/bin/bash
 set -e
 
+# SUDO helper: empty if root
+SUDO=""
+if [ "$(id -u)" != "0" ]; then SUDO="sudo"; fi
+
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+export WORKSPACE="${REPO_ROOT}"
 
 # Default INFRA_ID if not provided
 export INFRA_ID="${INFRA_ID:-dev-$USER}"

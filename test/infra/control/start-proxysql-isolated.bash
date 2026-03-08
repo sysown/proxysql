@@ -1,15 +1,16 @@
 #!/bin/bash
 set -e
 
-# Get the directory where this script is located
+# SUDO helper: empty if root
+SUDO=""
+if [ "$(id -u)" != "0" ]; then SUDO="sudo"; fi
+
+# Derive Workspace relative to script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
-
-# Default INFRA_ID if not provided
-export INFRA_ID="${INFRA_ID:-dev-$USER}"
 export WORKSPACE="${REPO_ROOT}"
 
-echo ">>> Starting ProxySQL Control Plane (INFRA_ID: ${INFRA_ID})"
+if [ -z "${INFRA_ID}" ]; then echo "Error: INFRA_ID is not set."; exit 1; fi
 
 export ROOT_PASSWORD=$(echo -n "${INFRA_ID}" | sha256sum | head -c 10)
 
@@ -23,23 +24,14 @@ echo ">>> Setting up isolated network: ${NETWORK_NAME}"
 docker network inspect ${NETWORK_NAME} >/dev/null 2>&1 || docker network create ${NETWORK_NAME}
 
 echo ">>> Preparing ProxySQL data directory: ${PROXY_DATA_DIR}"
-sudo mkdir -p "${PROXY_DATA_DIR}"
-sudo chmod -R 777 "${INFRA_LOGS_PATH}/${INFRA_ID}"
-sudo rm -f "${PROXY_DATA_DIR}/proxysql.db" "${PROXY_DATA_DIR}"/*.pem
+$SUDO mkdir -p "${PROXY_DATA_DIR}"
+$SUDO chmod -R 777 "${INFRA_LOGS_PATH}/${INFRA_ID}"
+$SUDO rm -f "${PROXY_DATA_DIR}/proxysql.db" "${PROXY_DATA_DIR}"/*.pem
 
 docker rm -f "${PROXY_CONTAINER}" >/dev/null 2>&1 || true
 
 echo ">>> Starting ProxySQL container: ${PROXY_CONTAINER}"
-docker run -d \
-    --name "${PROXY_CONTAINER}" \
-    --hostname "proxysql" \
-    --network "${NETWORK_NAME}" \
-    --network-alias "proxysql" \
-    -v "${WORKSPACE}/src/proxysql:/usr/bin/proxysql" \
-    -v "${GENERIC_CONFIG}:/etc/proxysql.cnf" \
-    -v "${PROXY_DATA_DIR}:/var/lib/proxysql" \
-    proxysql-ci-base:latest \
-    /bin/bash -c "/usr/bin/proxysql --idle-threads --clickhouse-server --sqlite3-server -f -c /etc/proxysql.cnf -D /var/lib/proxysql 2>&1 | tee /var/lib/proxysql/proxysql.log"
+docker run -d     --name "${PROXY_CONTAINER}"     --hostname "proxysql"     --network "${NETWORK_NAME}"     --network-alias "proxysql"     -v "${WORKSPACE}/src/proxysql:/usr/bin/proxysql"     -v "${GENERIC_CONFIG}:/etc/proxysql.cnf"     -v "${PROXY_DATA_DIR}:/var/lib/proxysql"     proxysql-ci-base:latest     /bin/bash -c "/usr/bin/proxysql --idle-threads --clickhouse-server --sqlite3-server -f -c /etc/proxysql.cnf -D /var/lib/proxysql 2>&1 | tee /var/lib/proxysql/proxysql.log"
 
 if [ -f /.dockerenv ]; then
     RUNNER_ID=$(hostname)

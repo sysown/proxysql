@@ -6,8 +6,8 @@
 
 
 # Start ProxySQL Cluster if available
-$JENKINS_SCRIPTS_PATH/cluster_start.bash
-$JENKINS_SCRIPTS_PATH/cluster_init.bash
+/home/rene/proxysql/test/infra/control/cluster_start.bash
+/home/rene/proxysql/test/infra/control/cluster_init.bash
 
 # wait for cluster to stabilize
 sleep 10

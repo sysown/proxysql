@@ -1,5 +1,14 @@
 #!/bin/bash
+# Derive Workspace relative to script
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+export WORKSPACE="${REPO_ROOT}"
+
 set -e
+# SUDO helper: empty if root
+SUDO=""
+if [ "$(id -u)" != "0" ]; then SUDO="sudo"; fi
+
 set -o pipefail
 
 [[ $(ps -o command= $(ps -o ppid= $$)) =~ timeout ]] || exec timeout -v -s 9 ${TIMEOUT:-300} "${BASH_SOURCE}" "$@"
@@ -25,14 +34,14 @@ echo "Initializing CI Infra Cluster '${INFRA}' (Project: ${COMPOSE_PROJECT})"
 # Prepare logs
 for SERVICE in pgdb1; do
     LOG_DIR="${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/${SERVICE}"
-    sudo rm -rf "${LOG_DIR}"
-    sudo mkdir -p "${LOG_DIR}"
-    sudo chmod -R 777 "${LOG_DIR}"
+    $SUDO rm -rf "${LOG_DIR}"
+    $SUDO mkdir -p "${LOG_DIR}"
+    $SUDO chmod -R 777 "${LOG_DIR}"
 done
 
 # Prepare SSL keys
-sudo chmod 0640 ./conf/pgsql/ssl/server.key
-sudo chown 0:999 conf/pgsql/ssl/*
+$SUDO chmod 0640 ./conf/pgsql/ssl/server.key
+$SUDO chown 0:999 conf/pgsql/ssl/*
 
 if ! docker compose -p "${COMPOSE_PROJECT}" up -d; then
     echo "ERROR: Docker Compose failed"; exit 1

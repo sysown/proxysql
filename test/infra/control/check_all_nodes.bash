@@ -4,17 +4,17 @@ TABLES=(mysql_servers mysql_users mysql_query_rules mysql_query_rules_fast_routi
 
 ALL_TABLES=()
 
-for i in ${!TABLES[@]} ; do
-        ALL_TABLES+=(${TABLES[$i]})
-        ALL_TABLES+=("runtime_"${TABLES[$i]})
+for i in  ; do
+        ALL_TABLES+=()
+        ALL_TABLES+=("runtime_")
 done
 
 # The nodes in our containerized cluster
 NODES="proxysql proxy-node1 proxy-node2 proxy-node3 proxy-node4 proxy-node5 proxy-node6 proxy-node7 proxy-node8 proxy-node9"
 
-for host in ${NODES} ; do
+for host in  ; do
         # Use radmin/radmin for remote access between containers
-        for i in ${!ALL_TABLES[@]} ; do
-                echo "SELECT COUNT(*) FROM ${ALL_TABLES[$i]};"
-        done | mysql -u radmin -pradmin -h ${host} -P 6032 > /dev/null &
+        for i in  ; do
+                echo "SELECT COUNT(*) FROM ;"
+        done | mysql -u radmin -pradmin -h  -P 6032 > /dev/null &
 done

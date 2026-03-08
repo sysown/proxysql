@@ -31,7 +31,7 @@ source test/infra/common/env.sh
 ### Step 2: Start ProxySQL
 This starts the primary ProxySQL container.
 ```bash
-./test/infra/control/start-proxysql.bash
+./test/infra/control/start-proxysql-isolated.bash
 ```
 
 ### Step 3: (Optional) Start ProxySQL Cluster
@@ -54,24 +54,34 @@ If `SKIP_CLUSTER_START=1` is set, these scripts will exit immediately without pe
 You can start one or more backend clusters. Each will automatically register itself with the running ProxySQL instance.
 ```bash
 # Start MySQL 5.7 Cluster
-cd test/infra/mysql57 && ./docker-compose-init.bash && cd ../../../
+cd test/infra/infra-mysql57 && ./docker-compose-init.bash && cd ../../../
 
 # Start MariaDB 10 Cluster
-cd test/infra/mariadb10 && ./docker-compose-init.bash && cd ../../../
+cd test/infra/infra-mariadb10 && ./docker-compose-init.bash && cd ../../../
 ```
 
-### Step 4: Run TAP Tests
-Once the infra is up, execute tests using the ProxySQL tester.
+### Step 5: Run TAP Tests
+Execute tests using the isolated test runner script. This starts a temporary container that joins the isolated network and runs the ProxySQL tester.
+
 ```bash
 # Example: Run a specific test
 export TEST_PY_TAP_INCL="mysql-protocol_compression_level-t"
-python3 ci_infra_logs/${INFRA_ID}/tests/proxysql-tester.py
+./test/infra/control/run-tests-isolated.bash
+
+# Example: Run a specific test group defined in test/tap/groups/groups.json
+export TAP_GROUP="default-g1"
+./test/infra/control/run-tests-isolated.bash
+```
+
+**Tip:** In a separate terminal, watch the test assertions in real-time:
+```bash
+tail -f ci_infra_logs/${INFRA_ID}/tests/proxysql-tester.py/tests/*.log
 ```
 
 ### Step 6: Teardown
 Always clean up your isolated containers and networks.
 ```bash
-./test/infra/control/stop-proxysql.bash
+./test/infra/control/stop-proxysql-isolated.bash
 ```
 
 ---
@@ -86,6 +96,7 @@ Always clean up your isolated containers and networks.
 | `ROOT_PASSWORD` | (dynamic) | Derived from `sha256(INFRA_ID)`. Used for all root-level access. |
 | `PROXYSQL_CLUSTER_NODES`| `9` | Number of additional ProxySQL nodes to start. |
 | `SKIP_CLUSTER_START`| `0` | Set to `1` to bypass cluster startup for single-node runs. |
+| `TAP_GROUP` | (none) | Run a specific group defined in `test/tap/groups/groups.json` (e.g., `default-g1`). |
 | `TAP_ADMINUSERNAME` | `radmin` | Credentials used for ProxySQL Admin remote connections. |
 
 ---
@@ -125,7 +136,7 @@ To add a new database type or version (e.g., `infra-mysql90`):
         name: ${INFRA_ID}_backend
         external: true
     ```
-3.  **Naming Convention**: Use `${COMPOSE_PROJECT}` as a prefix for all container names to ensure `stop-proxysql.bash` can find them.
+3.  **Naming Convention**: Use `${COMPOSE_PROJECT}` as a prefix for all container names to ensure `stop-proxysql-isolated.bash` can find them.
 4.  **Post-Config Hook**:
     *   Create a `conf/proxysql/infra-config.sql` template.
     *   Use variables like `${WHG}` (Writer Hostgroup) and `${RHG}` (Reader Hostgroup) instead of hardcoding IDs.
@@ -136,6 +147,6 @@ To add a new database type or version (e.g., `infra-mysql90`):
 
 ## 7. Troubleshooting
 
-*   **Network Collisions**: If `docker network create` fails, an old `INFRA_ID` might still be hanging. Use `stop-proxysql.bash` with that ID.
+*   **Network Collisions**: If `docker network create` fails, an old `INFRA_ID` might still be hanging. Use `stop-proxysql-isolated.bash` with that ID.
 *   **Permission Denied**: Logs and data directories are often managed with `sudo` in CI. Scripts automatically use `sudo` where necessary for `mkdir` and `chmod`.
-*   **ProxySQL Not Ready**: If `start-proxysql.bash` timeouts, check `ci_infra_logs/${INFRA_ID}/proxysql/proxysql.log` for initialization errors.
+*   **ProxySQL Not Ready**: If `start-proxysql-isolated.bash` timeouts, check `ci_infra_logs/${INFRA_ID}/proxysql/proxysql.log` for initialization errors.

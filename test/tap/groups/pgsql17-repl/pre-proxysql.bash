@@ -7,7 +7,7 @@
 INFRA=infra-$(basename $(dirname "$0") | sed 's/-g[0-9]//' | sed 's/_.*//')
 
 # destroy running infras
-$JENKINS_SCRIPTS_PATH/infra-default/docker-compose-destroy.bash
+/home/rene/proxysql/test/infra/control/infra-default/docker-compose-destroy.bash
 
 # cleanup ProxySQL before starting new infra
 psql -h127.0.0.1 -p6132 -Uadmin -dadmin -c " \
@@ -37,11 +37,11 @@ SAVE MYSQL QUERY RULES TO DISK; \
 " 2>&1
 
 # load environment for infra
-source $JENKINS_SCRIPTS_PATH/${INFRA}/.env
+source /home/rene/proxysql/test/infra/control/${INFRA}/.env
 
 # Start infra (this will configure ProxySQL via docker-proxy-post.bash)
-$JENKINS_SCRIPTS_PATH/infra-docker-hoster/docker-compose-init.bash
-$JENKINS_SCRIPTS_PATH/${INFRA}/docker-compose-init.bash
+/home/rene/proxysql/test/infra/control/infra-docker-hoster/docker-compose-init.bash
+/home/rene/proxysql/test/infra/control/${INFRA}/docker-compose-init.bash
 
 # wait for infra to stabilize
 sleep 10
