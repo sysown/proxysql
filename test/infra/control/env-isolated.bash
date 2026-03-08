@@ -18,13 +18,14 @@ export TAP_ADMINPORT=6032
 export TAP_ADMINUSERNAME="radmin"
 export TAP_ADMINPASSWORD="radmin"
 
-export DEFAULT_MYSQL_INFRA="${INFRA_TYPE:-${DEFAULT_MYSQL_INFRA:-infra-mysql84}}"
-export DEFAULT_PGSQL_INFRA="${INFRA_TYPE:-${DEFAULT_PGSQL_INFRA:-docker-pgsql16-single}}"
-
-export TAP_MYSQLHOST="mysql1.${DEFAULT_MYSQL_INFRA}"
-export TAP_MYSQLPORT=3306
-export TAP_MYSQLUSERNAME="root"
-export TAP_MYSQLPASSWORD="${ROOT_PASSWORD}"
+# NO HARDCODED DEFAULTS HERE
+# These must be provided by run-tests-isolated.bash or group env.sh
+if [ -n "${DEFAULT_MYSQL_INFRA}" ]; then
+    export TAP_MYSQLHOST="mysql1.${DEFAULT_MYSQL_INFRA}"
+    export TAP_MYSQLPORT=3306
+    export TAP_MYSQLUSERNAME="root"
+    export TAP_MYSQLPASSWORD="${ROOT_PASSWORD}"
+fi
 
 export TAP_PGSQL_HOST="proxysql"
 export TAP_PGSQL_PORT=6133
@@ -39,10 +40,12 @@ export TAP_PGSQLROOT_PASSWORD="${ROOT_PASSWORD}"
 export TAP_PGSQLADMIN_HOST="proxysql"
 export TAP_PGSQLADMIN_PORT=6132
 
-export TAP_PGSQLSERVER_HOST="pgsql1.${DEFAULT_PGSQL_INFRA}"
-export TAP_PGSQLSERVER_PORT=5432
-export TAP_PGSQLSERVER_USERNAME="postgres"
-export TAP_PGSQLSERVER_PASSWORD="${ROOT_PASSWORD}"
+if [ -n "${DEFAULT_PGSQL_INFRA}" ]; then
+    export TAP_PGSQLSERVER_HOST="pgsql1.${DEFAULT_PGSQL_INFRA}"
+    export TAP_PGSQLSERVER_PORT=5432
+    export TAP_PGSQLSERVER_USERNAME="postgres"
+    export TAP_PGSQLSERVER_PASSWORD="${ROOT_PASSWORD}"
+fi
 
 export DOCKER_MODE="compose-dns"
 export REGULAR_INFRA_DATADIR="/var/lib/proxysql"

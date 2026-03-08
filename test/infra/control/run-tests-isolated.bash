@@ -22,15 +22,22 @@ if [ -n "${TAP_GROUP}" ]; then
     fi
 fi
 
+# If no list found, use INFRA_TYPE as single requirement
 if [ -z "${INFRAS_TO_CHECK}" ]; then
-    # Fallback mapping if no infras.lst exists
-    if [[ "${TAP_GROUP}" == mysql84* ]]; then INFRA_TYPE="infra-mysql84"; fi
-    if [[ "${TAP_GROUP}" == mysql57* ]]; then INFRA_TYPE="infra-mysql57"; fi
-    if [[ "${TAP_GROUP}" == mariadb10* ]]; then INFRA_TYPE="infra-mariadb10"; fi
-    if [[ "${TAP_GROUP}" == pgsql* ]]; then INFRA_TYPE="docker-pgsql16-single"; fi
-    
-    INFRA_TYPE="${INFRA_TYPE:-${DEFAULT_MYSQL_INFRA:-infra-mysql84}}"
     INFRAS_TO_CHECK="${INFRA_TYPE}"
+fi
+
+# 2. Automatically derive DEFAULT_MYSQL_INFRA and DEFAULT_PGSQL_INFRA
+# We take the first compatible infrastructure found in the list.
+if [ -n "${INFRAS_TO_CHECK}" ]; then
+    for INFRA in ${INFRAS_TO_CHECK}; do
+        if [[ "${INFRA}" == *mysql* ]] || [[ "${INFRA}" == *mariadb* ]]; then
+            export DEFAULT_MYSQL_INFRA="${DEFAULT_MYSQL_INFRA:-${INFRA}}"
+        fi
+        if [[ "${INFRA}" == *pgsql* ]] || [[ "${INFRA}" == *pgdb* ]]; then
+            export DEFAULT_PGSQL_INFRA="${DEFAULT_PGSQL_INFRA:-${INFRA}}"
+        fi
+    done
 fi
 
 export ROOT_PASSWORD=$(echo -n "${INFRA_ID}" | sha256sum | head -c 10)
@@ -100,6 +107,8 @@ docker run \
     -e WORKSPACE="${WORKSPACE}" \
     -e INFRA_ID="${INFRA_ID}" \
     -e INFRA_TYPE="${INFRA_TYPE}" \
+    -e DEFAULT_MYSQL_INFRA="${DEFAULT_MYSQL_INFRA}" \
+    -e DEFAULT_PGSQL_INFRA="${DEFAULT_PGSQL_INFRA}" \
     -e ROOT_PASSWORD="${ROOT_PASSWORD}" \
     -e TEST_PY_TAP_INCL="${TEST_PY_TAP_INCL}" \
     -e TAP_GROUP="${TAP_GROUP}" \
