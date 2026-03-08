@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include <utility>
 #include <vector>
+#include <numeric>
 
 #include "mysql.h"
 #include "mysqld_error.h"
@@ -179,7 +180,7 @@ int check_gitd_tracking(const CommandLine& cl, MYSQL* proxysql_mysql, MYSQL* pro
 		NUM_CHECKS;    // Updates (matching number of checks)
 	uint32_t hg_1200_exp_sync_queries = NUM_CHECKS - 1;
 
-	bool hg_1200_checks = hg_1200_exp_queries == hg_1200_queries && hg_1200_sync_queries == hg_1200_exp_sync_queries;
+	bool hg_1200_checks = hg_1200_queries == hg_1200_exp_queries && hg_1200_sync_queries == hg_1200_exp_sync_queries;
 	bool hg_1201_checks = hg_1201_queries == NUM_CHECKS && hg_1201_sync_queries == NUM_CHECKS;
 
 	ok(

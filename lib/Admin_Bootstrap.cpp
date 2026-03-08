@@ -1049,6 +1049,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 			proxysql_config().Read_MySQL_Query_Rules_from_configfile();
 			proxysql_config().Read_Global_Variables_from_configfile("admin");
 			proxysql_config().Read_Global_Variables_from_configfile("mysql");
+			proxysql_config().Read_Global_Variables_from_configfile("sqliteserver");
 
 			proxysql_config().Read_PgSQL_Servers_from_configfile(e);
 			proxysql_config().Read_PgSQL_Users_from_configfile(e);

@@ -112,7 +112,15 @@ int main(int argc, char** argv) {
     MYSQL_QUERY(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
 
     // Ensure root user exists
-    MYSQL_QUERY(admin, "INSERT OR REPLACE INTO pgsql_users (username, password, fast_forward) VALUES ('postgres', 'postgres', 1)");
+    char escaped_user[2 * strlen(cl.pgsql_root_username) + 1];
+    char escaped_pass[2 * strlen(cl.pgsql_root_password) + 1];
+    mysql_real_escape_string(admin, escaped_user, cl.pgsql_root_username, strlen(cl.pgsql_root_username));
+    mysql_real_escape_string(admin, escaped_pass, cl.pgsql_root_password, strlen(cl.pgsql_root_password));
+
+    char user_prov_query[1024];
+    snprintf(user_prov_query, sizeof(user_prov_query), "INSERT OR REPLACE INTO pgsql_users (username, password, fast_forward) VALUES ('%s', '%s', 1)", escaped_user, escaped_pass);
+    MYSQL_QUERY(admin, user_prov_query);
+
     MYSQL_QUERY(admin, "LOAD PGSQL USERS TO RUNTIME");
 
     // Ensure backend server exists

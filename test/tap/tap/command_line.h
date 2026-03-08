@@ -30,8 +30,8 @@ class CommandLine {
 	// proxysql admin connection
 	char* admin_host = strdup("127.0.0.1");
 	int admin_port = 6032;
-	char* admin_username = strdup("admin");
-	char* admin_password = strdup("admin");
+	char* admin_username = strdup("radmin");
+	char* admin_password = strdup("radmin");
 
 	// proxysql mcp connection
 	int mcp_port = 6071;
@@ -66,6 +66,7 @@ class CommandLine {
 	char* pgsql_root_password = strdup("postgres");
 
 	char* workdir = strdup("./");
+        char* cluster_nodes = strdup("");
 
 	uint64_t client_flags = 0;
 
