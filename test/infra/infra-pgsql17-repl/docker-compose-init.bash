@@ -68,7 +68,9 @@ MOUNTED_PATHS=$(grep -E '\$\{INFRA_LOGS_PATH\}|\./log/' docker-compose.yml | awk
 
 for RAW_PATH in ${MOUNTED_PATHS}; do
     # Skip relative paths that point to config files (e.g. ./conf/...)
+    # Skip paths that contain /ssl/ as they are handled separately
     if [[ "${RAW_PATH}" == "./conf/"* ]]; then continue; fi
+    if [[ "${RAW_PATH}" == *"/ssl/"* ]]; then continue; fi
     
     # Expand variables like ${INFRA_LOGS_PATH} and ${COMPOSE_PROJECT}
     eval "ACTUAL_PATH=${RAW_PATH}"
@@ -97,10 +99,17 @@ if [ -d "./conf/orchestrator" ]; then
     find ./conf/orchestrator -name "orchestrator.conf.json" -exec sed -i "s/\"MySQLTopologyPassword\": \".*\"/\"MySQLTopologyPassword\": \"${ROOT_PASSWORD}\"/g" {} +
 fi
 
-# 4. PostgreSQL SSL setup
-if [ -f ./conf/pgsql/ssl/server.key ]; then
-    $SUDO chmod 0640 ./conf/pgsql/ssl/server.key 2>/dev/null || true
-    $SUDO chown 0:999 ./conf/pgsql/ssl/* 2>/dev/null || true
+# 4. TRANSIENT SSL SETUP (Avoiding repo permission changes)
+# We copy SSL files to a transient location and apply strict permissions there.
+SSL_SRC="./conf/pgsql/ssl"
+if [ -d "${SSL_SRC}" ]; then
+    SSL_DST="${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/ssl"
+    echo "Preparing transient SSL directory: ${SSL_DST}"
+    $SUDO mkdir -p "${SSL_DST}"
+    $SUDO cp -rp "${SSL_SRC}/." "${SSL_DST}/"
+    # Strict permissions for postgres on the copies only
+    $SUDO chmod 0640 "${SSL_DST}/server.key" 2>/dev/null || true
+    $SUDO chown -R 0:999 "${SSL_DST}" 2>/dev/null || true
 fi
 
 # 5. Create a temporary env file for docker-compose to ensure it sees our variables

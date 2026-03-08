@@ -7,8 +7,8 @@ services:
     volumes:
       - ./conf/pgsql/pgsql1/pg_hba.conf:/etc/postgresql/pg_hba.conf
       - ./conf/pgsql/pgsql1/postgresql.conf:/etc/postgresql/postgresql.conf
-      - ./conf/pgsql/ssl/server.crt:/var/lib/postgresql/server.crt:ro
-      - ./conf/pgsql/ssl/server.key:/var/lib/postgresql/server.key:ro
+      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/ssl/server.crt:/var/lib/postgresql/server.crt:ro
+      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/ssl/server.key:/var/lib/postgresql/server.key:ro
       - ./log/pgsql1:/var/log/postgresql
     networks:
       backend:
@@ -28,8 +28,8 @@ services:
     volumes:
       - ./conf/pgsql/pgsql2/pg_hba.conf:/etc/postgresql/pg_hba.conf
       - ./conf/pgsql/pgsql2/postgresql.conf:/etc/postgresql/postgresql.conf
-      - ./conf/pgsql/ssl/server.crt:/var/lib/postgresql/server.crt:ro
-      - ./conf/pgsql/ssl/server.key:/var/lib/postgresql/server.key:ro
+      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/ssl/server.crt:/var/lib/postgresql/server.crt:ro
+      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/ssl/server.key:/var/lib/postgresql/server.key:ro
       - ./log/pgsql2:/var/log/postgresql
     networks:
       backend:

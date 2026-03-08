@@ -1,4 +1,4 @@
-datadir = "./";
+datadir = "/home/rene/proxysql/test/tap/tests/test_cluster_sync_config/test_cluster_sync_withmonitor";
 admin_variables : 
 {
   admin_credentials = "admin:admin;radmin:radmin";
