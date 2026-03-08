@@ -4110,12 +4110,15 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 								proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Resetting connection variable %s to DEFAULT\n", var.c_str());
 								pgsql_variables.client_reset_value(this, idx, true);
 							}
-							client_myds->DSS = STATE_QUERY_SENT_NET;
-							unsigned int nTrx = NumActiveTransactions();
-							const char trx_state = (nTrx ? 'T' : 'I');
-							client_myds->myprot.generate_ok_packet(true, true, NULL, 0, dig, trx_state, NULL, param_status);
-							RequestEnd(NULL, false);
-							return true;
+							// In pipeline mode, don't short-circuit - fall through to backend execution
+							if (extended_query_phase == EXTQ_PHASE_IDLE) {
+								client_myds->DSS = STATE_QUERY_SENT_NET;
+								unsigned int nTrx = NumActiveTransactions();
+								const char trx_state = (nTrx ? 'T' : 'I');
+								client_myds->myprot.generate_ok_packet(true, true, NULL, 0, dig, trx_state, NULL, param_status);
+								RequestEnd(NULL, false);
+								return true;
+							}
 						}
 						value1 = value;
 					}
@@ -4151,12 +4154,15 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 
 					if (idx == PGSQL_DATESTYLE) {
 						if (value1.empty()) {
-							client_myds->DSS = STATE_QUERY_SENT_NET;
-							unsigned int nTrx = NumActiveTransactions();
-							const char txn_state = (nTrx ? 'T' : 'I');
-							client_myds->myprot.generate_ok_packet(true, true, NULL, 0, dig, txn_state, NULL, param_status);
-							RequestEnd(NULL, false);
-							return true;
+							// In pipeline mode, don't short-circuit - fall through to backend execution
+							if (extended_query_phase == EXTQ_PHASE_IDLE) {
+								client_myds->DSS = STATE_QUERY_SENT_NET;
+								unsigned int nTrx = NumActiveTransactions();
+								const char txn_state = (nTrx ? 'T' : 'I');
+								client_myds->myprot.generate_ok_packet(true, true, NULL, 0, dig, txn_state, NULL, param_status);
+								RequestEnd(NULL, false);
+								return true;
+							}
 						}
 					}
 
