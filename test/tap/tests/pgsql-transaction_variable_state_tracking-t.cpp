@@ -639,7 +639,7 @@ int main(int argc, char** argv) {
         PQpipelineSync(conn.get());
         PQflush(conn.get());
 
-        // Consume results
+        // Consume results - using proper pattern to avoid blocking
         int count = 0;
         int cmdCount = 0;
         int sock = PQsocket(conn.get());
@@ -647,6 +647,16 @@ int main(int argc, char** argv) {
 
         while (count < 4) {  // 3 commands + 1 sync
             if (PQconsumeInput(conn.get()) == 0) break;
+
+            // Gate PQgetResult() on PQisBusy() to avoid blocking
+            if (PQisBusy(conn.get())) {
+                fd_set input_mask;
+                FD_ZERO(&input_mask);
+                FD_SET(sock, &input_mask);
+                struct timeval timeout = {5, 0};
+                select(sock + 1, &input_mask, NULL, NULL, &timeout);
+                continue;
+            }
 
             while ((res = PQgetResult(conn.get())) != NULL) {
                 ExecStatusType status = PQresultStatus(res);
@@ -661,15 +671,6 @@ int main(int argc, char** argv) {
             }
 
             if (count >= 4) break;
-
-            // Only wait if libpq reports it's busy waiting for more data
-            if (!PQisBusy(conn.get())) continue;
-
-            fd_set input_mask;
-            FD_ZERO(&input_mask);
-            FD_SET(sock, &input_mask);
-            struct timeval timeout = {5, 0};
-            select(sock + 1, &input_mask, NULL, NULL, &timeout);
         }
 
         PQexitPipelineMode(conn.get());
@@ -1293,10 +1294,8 @@ int main(int argc, char** argv) {
         const auto final_val = getVariable(conn.get(), "datestyle");
         bool persisted = (final_val.find(new_value) != std::string::npos) && (final_val != original);
 
-        // Cleanup
-        if (!persisted) {
-            executeQuery(conn.get(), "SET datestyle = '" + original + "'");
-        }
+        // Cleanup: always restore original setting before returning connection to pool
+        executeQuery(conn.get(), "SET datestyle = '" + original + "'");
 
         return persisted;
     });
@@ -1410,10 +1409,8 @@ int main(int argc, char** argv) {
         diag("Final value: '%s', expected: '%s'", final_val.c_str(), value2.c_str());
         bool success = (final_val == value2);
 
-        // Cleanup
-        if (!success) {
-            executeQuery(conn.get(), "SET timezone = '" + original + "'");
-        }
+        // Cleanup: always restore original setting before returning connection to pool
+        executeQuery(conn.get(), "SET timezone = '" + original + "'");
 
         return success;
     });
@@ -1652,10 +1649,11 @@ int main(int argc, char** argv) {
         diag("Final value: '%s', expected: '%s'", final_val.c_str(), value2.c_str());
         bool success = (final_val == value2);
 
+        // Cleanup: always restore original setting before returning connection to pool
         if (!success) {
             diag("Wrong final value");
-            executeQuery(conn.get(), "SET timezone = '" + original + "'");
         }
+        executeQuery(conn.get(), "SET timezone = '" + original + "'");
 
         return success;
     });
@@ -1872,9 +1870,9 @@ int main(int argc, char** argv) {
                 auto conn = createNewConnection(ConnType::BACKEND, "", false);
                 if (!conn) return false;
 
-                PGresult* res = PQexec(conn.get(), "SELECT pg_current_xact_id_if_assigned()");
-                bool in_transaction = (PQntuples(res) > 0 && PQgetvalue(res, 0, 0)[0] != '\0');
-                PQclear(res);
+                // Use PQtransactionStatus() instead of pg_current_xact_id_if_assigned()
+                // because BEGIN alone doesn't force an XID assignment
+                bool in_transaction = (PQtransactionStatus(conn.get()) != PQTRANS_IDLE);
 
                 if (in_transaction) {
                     diag("Cycle %d: Inherited transaction!", i);
