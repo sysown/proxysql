@@ -94,7 +94,7 @@ Every TAP test group (in `test/tap/groups/<group_name>`) can define its required
 | `ROOT_PASSWORD` | (dynamic) | Derived from `sha256(INFRA_ID)`. Used for all root-level access. |
 | `PROXYSQL_CLUSTER_NODES`| `9` | Number of additional ProxySQL nodes to start. |
 | `SKIP_CLUSTER_START`| `0` | Set to `1` to bypass cluster startup for single-node runs. |
-| `TAP_GROUP` | (none) | Run a specific group defined in `test/tap/groups/groups.json` (e.g., `default-g1`). |
+| `TAP_GROUP` | (none) | Run a specific group defined in `test/tap/groups/groups.json` (e.g., `legacy-g1`). |
 | `TAP_ADMINUSERNAME` | `radmin` | Credentials used for ProxySQL Admin remote connections. |
 
 ---

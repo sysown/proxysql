@@ -12,9 +12,17 @@ export INFRA_ID="${INFRA_ID:-dev-$USER}"
 
 # 1. Determine Required Infras
 INFRAS_TO_CHECK=""
-if [ -n "${TAP_GROUP}" ] && [ -f "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst" ]; then
-    INFRAS_TO_CHECK=$(cat "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst")
-else
+BASE_GROUP="${TAP_GROUP%%-g[0-9]*}" # Strip -g1, -g2 etc.
+
+if [ -n "${TAP_GROUP}" ]; then
+    if [ -f "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst" ]; then
+        INFRAS_TO_CHECK=$(cat "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst")
+    elif [ -f "${WORKSPACE}/test/tap/groups/${BASE_GROUP}/infras.lst" ]; then
+        INFRAS_TO_CHECK=$(cat "${WORKSPACE}/test/tap/groups/${BASE_GROUP}/infras.lst")
+    fi
+fi
+
+if [ -z "${INFRAS_TO_CHECK}" ]; then
     # Fallback mapping if no infras.lst exists
     if [[ "${TAP_GROUP}" == mysql84* ]]; then INFRA_TYPE="infra-mysql84"; fi
     if [[ "${TAP_GROUP}" == mysql57* ]]; then INFRA_TYPE="infra-mysql57"; fi
@@ -51,7 +59,7 @@ for INFRA_NAME in ${INFRAS_TO_CHECK}; do
         # Get all services for this project
         RUNNING_CONTAINERS=$(docker ps --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" --format '{{.Names}}')
         if [ -z "${RUNNING_CONTAINERS}" ]; then
-            LST_PATH="${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst"
+            if [ -f "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst" ]; then LST_PATH="${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst"; else LST_PATH="${WORKSPACE}/test/tap/groups/${BASE_GROUP}/infras.lst"; fi
             echo "ERROR: Required infrastructure '${INFRA_NAME}' is NOT running."
             if [ -f "${LST_PATH}" ]; then
                 echo "According to '${LST_PATH}', this infrastructure is mandatory for the '${TAP_GROUP}' group."
