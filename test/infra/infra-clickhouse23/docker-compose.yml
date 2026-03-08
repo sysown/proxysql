@@ -1,0 +1,21 @@
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:23
+    hostname: clickhouse.${INFRA}
+    networks:
+      - backend
+    environment:
+      - CLICKHOUSE_DB=test
+      - CLICKHOUSE_USER=cliuser
+      - CLICKHOUSE_PASSWORD=clipass
+    volumes:
+      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/clickhouse:/var/log/clickhouse-server
+    cap_add:
+      - SYS_NICE
+      - NET_ADMIN
+      - IPC_LOCK
+
+networks:
+  backend:
+    name: ${INFRA_ID}_backend
+    external: true
