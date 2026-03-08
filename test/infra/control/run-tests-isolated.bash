@@ -85,8 +85,8 @@ mkdir -p "${TESTS_LOGS_PATH_HOST}"
 chmod 777 "${TESTS_LOGS_PATH_HOST}"
 
 # Find binaries
-MYSQL_BINLOG_BIN=$(find "${WORKSPACE}" -name "mysqlbinlog" -type f -executable | head -n 1)
-BINLOG_READER_BIN=$(find "${WORKSPACE}" -name "test_binlog_reader-t" -type f -executable | head -n 1)
+MYSQL_BINLOG_BIN=$(find "${WORKSPACE}" -path "${WORKSPACE}/ci_infra_logs" -prune -o -path "${WORKSPACE}/.git" -prune -o -name "mysqlbinlog" -type f -executable -print | head -n 1)
+BINLOG_READER_BIN=$(find "${WORKSPACE}" -path "${WORKSPACE}/ci_infra_logs" -prune -o -path "${WORKSPACE}/.git" -prune -o -name "test_binlog_reader-t" -type f -executable -print | head -n 1)
 
 # Execution: run the container
 docker run \
