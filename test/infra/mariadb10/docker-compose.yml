@@ -1,0 +1,55 @@
+services:
+
+  mariadb1:
+    hostname: mariadb1.${INFRA}
+    image: mariadb:${MARIADB_VERSION}
+    volumes:
+      - ./conf/mysql/mysql1/my.cnf:/etc/mysql/mariadb.conf.d/60-replication.cnf
+      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/mariadb1:/var/log/mysql
+    networks:
+      backend:
+        aliases:
+          - mariadb1.${INFRA}
+    environment:
+      - MYSQL_ROOT_PASSWORD=${ROOT_PASSWORD}
+    cap_add:
+      - SYS_NICE
+
+  mariadb2:
+    hostname: mariadb2.${INFRA}
+    image: mariadb:${MARIADB_VERSION}
+    volumes:
+      - ./conf/mysql/mysql2/my.cnf:/etc/mysql/mariadb.conf.d/60-replication.cnf
+      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/mariadb2:/var/log/mysql
+    networks:
+      backend:
+        aliases:
+          - mariadb2.${INFRA}
+    depends_on:
+      - mariadb1
+    environment:
+      - MYSQL_ROOT_PASSWORD=${ROOT_PASSWORD}
+    cap_add:
+      - SYS_NICE
+
+  mariadb3:
+    hostname: mariadb3.${INFRA}
+    image: mariadb:${MARIADB_VERSION}
+    volumes:
+      - ./conf/mysql/mysql3/my.cnf:/etc/mysql/mariadb.conf.d/60-replication.cnf
+      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/mariadb3:/var/log/mysql
+    networks:
+      backend:
+        aliases:
+          - mariadb3.${INFRA}
+    depends_on:
+      - mariadb1
+    environment:
+      - MYSQL_ROOT_PASSWORD=${ROOT_PASSWORD}
+    cap_add:
+      - SYS_NICE
+
+networks:
+  backend:
+    name: ${INFRA_ID}_backend
+    external: true

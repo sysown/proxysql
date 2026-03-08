@@ -1,0 +1,22 @@
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:22.5.1.2079
+    hostname: clickhouse
+    container_name: -clickhouse-1
+    networks:
+      backend:
+        aliases:
+          - clickhouse.
+    environment:
+      - MYSQL_ROOT_PASSWORD=
+    volumes:
+      - //clickhouse:/var/log/clickhouse-server
+    cap_add:
+      - SYS_NICE
+      - NET_ADMIN
+      - IPC_LOCK
+
+networks:
+  backend:
+    name: _backend
+    external: true

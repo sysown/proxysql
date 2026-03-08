@@ -1,0 +1,23 @@
+services:
+
+  pgdb1:
+    hostname: pgsql1.${INFRA}
+    image: postgres:16
+    volumes:
+      - ./conf/pgsql/pgsql1/pg_hba.conf:/etc/postgresql/pg_hba.conf
+      - ./conf/pgsql/pgsql1/postgresql.conf:/etc/postgresql/postgresql.conf
+      - ./conf/pgsql/ssl/server.crt:/var/lib/postgresql/server.crt:ro
+      - ./conf/pgsql/ssl/server.key:/var/lib/postgresql/server.key:ro
+      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/pgdb1:/var/log/postgresql
+    networks:
+      - backend
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${ROOT_PASSWORD}
+      POSTGRES_DB: postgres
+    command: [ "postgres", "-c", "config_file=/etc/postgresql/postgresql.conf" ]
+
+networks:
+  backend:
+    name: ${INFRA_ID}_backend
+    external: true
