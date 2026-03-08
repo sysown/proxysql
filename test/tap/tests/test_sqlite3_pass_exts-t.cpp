@@ -71,15 +71,24 @@ bool check_mysql_random_password_support(MYSQL* mysql) {
 	// Check if version starts with 8.or higher
 	diag("MySQL server version: %s", version.c_str());
 
-	// Parse major version
-	int major_version = 0;
-	size_t dot_pos = version.find('.');
-	if (dot_pos != string::npos) {
-		string major_str = version.substr(0, dot_pos);
-		major_version = atoi(major_str.c_str());
+	// MariaDB check
+	if (version.find("MariaDB") != string::npos) {
+		g_mysql_supports_random_password = false;
+		diag("MySQL server supports 'BY RANDOM PASSWORD': no (MariaDB detected)");
+		return false;
 	}
 
-	g_mysql_supports_random_password = (major_version >= 8);
+	// Parse semantic version
+	int major = 0, minor = 0, patch = 0;
+	sscanf(version.c_str(), "%d.%d.%d", &major, &minor, &patch);
+
+	// MySQL 8.0.18+ required
+	if (major > 8 || (major == 8 && minor > 0) || (major == 8 && minor == 0 && patch >= 18)) {
+		g_mysql_supports_random_password = true;
+	} else {
+		g_mysql_supports_random_password = false;
+	}
+
 	diag("MySQL server supports 'BY RANDOM PASSWORD': %s", g_mysql_supports_random_password ? "yes" : "no");
 
 	return g_mysql_supports_random_password;
@@ -453,7 +462,7 @@ int main(int argc, char** argv) {
 
 	MYSQL* admin = mysql_init(NULL);
 
-	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+	if (!mysql_real_connect(admin, cl.admin_host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
 	}

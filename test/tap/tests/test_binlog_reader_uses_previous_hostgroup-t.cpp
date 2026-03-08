@@ -106,8 +106,8 @@ int main(int argc, char** argv) {
 	const long conn_closed_before = std::stol(hg_stats_row[0]);
 
 	const char * tdp = getenv("TEST_DEPS");
-	const std::string test_deps_path = ( tdp == nullptr ? "" : std::string(tdp) );
-	const int test_binlog_reader_res = system((test_deps_path + "/test_binlog_reader-t").c_str());
+	const std::string test_binlog_reader = ( tdp == nullptr || *tdp == '\0' ) ? "./test_binlog_reader-t" : std::string(tdp) + "/test_binlog_reader-t";
+	const int test_binlog_reader_res = system(test_binlog_reader.c_str());
 	if (test_binlog_reader_res) {
 		mysql_close(proxy_admin);
 		return EXIT_FAILURE;

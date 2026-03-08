@@ -217,10 +217,29 @@ int check_mysql_servers_sync(
 	uint64_t wait = std::stol(monitor_read_only_interval) / 1000 + std::stol(monitor_read_only_timeout) / 1000;
 	sleep(wait*2);
 
-	std::string print_master_mysql_servers_hostgroups = "";
-	string_format(t_debug_query, print_master_mysql_servers_hostgroups, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_mysql_servers");
-	std::string print_replica_mysql_servers_hostgroups = "";
-	string_format(t_debug_query, print_replica_mysql_servers_hostgroups, cl.admin_username, cl.admin_password, cl.host, R_PORT, "SELECT * FROM mysql_servers");
+	auto dump_mysql_servers = [](MYSQL* conn, const char* label) {
+		if (mysql_query(conn, "SELECT hostgroup_id, hostname, port, status, comment FROM runtime_mysql_servers")) return;
+		MYSQL_RES* res = mysql_store_result(conn);
+		if (!res) return;
+		diag("--- %s: runtime_mysql_servers ---", label);
+		MYSQL_ROW row;
+		while ((row = mysql_fetch_row(res))) {
+			diag("HG: %s, Host: %s:%s, Status: %s, Comment: %s", 
+				 row[0] ? row[0] : "NULL", row[1] ? row[1] : "NULL", 
+				 row[2] ? row[2] : "NULL", row[3] ? row[3] : "NULL", 
+				 row[4] ? row[4] : "NULL");
+		}
+		mysql_free_result(res);
+	};
+
+	dump_mysql_servers(proxy_admin, "Master");
+	
+	// Create temporary connection to replica for debugging
+	MYSQL* replica_admin = mysql_init(NULL);
+	if (mysql_real_connect(replica_admin, cl.host, cl.admin_username, cl.admin_password, NULL, R_PORT, NULL, 0)) {
+		dump_mysql_servers(replica_admin, "Replica");
+		mysql_close(replica_admin);
+	}
 
 	// Configure 'mysql_servers' and check sync with NULL comments
 	const char* t_insert_mysql_servers =

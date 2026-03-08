@@ -19,9 +19,9 @@
 int main(int argc, char** argv) {
 	plan(1);
 	const char * tdp = getenv("TEST_DEPS");
-	const std::string test_deps_path = ( tdp == nullptr ? "" : std::string(tdp) );
+	const std::string test_binlog_reader = ( tdp == nullptr || *tdp == '\0' ) ? "./test_binlog_reader-t" : std::string(tdp) + "/test_binlog_reader-t";
 
-	const int test_binlog_reader_res = system((test_deps_path + "/test_binlog_reader-t").c_str());
+	const int test_binlog_reader_res = system(test_binlog_reader.c_str());
 	ok(
 		test_binlog_reader_res == 0,
 		"'test_binlog_reader-t' should be correctly executed. Err code was: %d",

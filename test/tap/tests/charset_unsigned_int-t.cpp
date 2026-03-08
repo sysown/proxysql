@@ -91,15 +91,6 @@ int main(int argc, char** argv) {
     show_admin_global_variable(mysql_a, var_name, var_value);
     ok(var_value.compare("latin1") == 0, "Default charset latin1 is set in admin");
 
-    if (mysql_query(mysql_a, "update global_variables set variable_value='utf8mb4' where variable_name='mysql-default_charset'")) { diag("Update to utf8mb4 failed: %s", mysql_error(mysql_a)); return exit_status(); }
-    if (mysql_query(mysql_a, "load mysql variables to runtime")) { diag("LOAD failed: %s", mysql_error(mysql_a)); return exit_status(); }
-    if (mysql_query(mysql_a, "save mysql variables to disk")) { diag("SAVE failed: %s", mysql_error(mysql_a)); return exit_status(); }
-
-    show_admin_global_variable(mysql_a, var_name, var_value);
-    ok(var_value.compare("utf8mb4") == 0, "Default charset utf8mb4 is set in admin. Actual %s", var_value.c_str());
-
-    mysql_close(mysql_a);
-
     MYSQL* mysql_b = mysql_init(NULL);
     if (!mysql_b) return exit_status();
     
@@ -119,7 +110,17 @@ int main(int argc, char** argv) {
     }
     mysql_close(mysql_b);
 
-    MYSQL * mysql_c = mysql_init(NULL);
+    if (mysql_query(mysql_a, "update global_variables set variable_value='utf8mb4' where variable_name='mysql-default_charset'")) { diag("Update to utf8mb4 failed: %s", mysql_error(mysql_a)); return exit_status(); }
+    if (mysql_query(mysql_a, "load mysql variables to runtime")) { diag("LOAD failed: %s", mysql_error(mysql_a)); return exit_status(); }
+    if (mysql_query(mysql_a, "save mysql variables to disk")) { diag("SAVE failed: %s", mysql_error(mysql_a)); return exit_status(); }
+show_admin_global_variable(mysql_a, var_name, var_value);
+ok(var_value.compare("utf8mb4") == 0, "Default charset utf8mb4 is set in admin. Actual %s", var_value.c_str());
+
+mysql_close(mysql_a);
+
+return exit_status();
+}
+
     if (!mysql_c) return exit_status();
     if (mysql_options(mysql_c, MYSQL_SET_CHARSET_NAME, "utf8mb4")) return exit_status();
     if (!mysql_real_connect(mysql_c, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {

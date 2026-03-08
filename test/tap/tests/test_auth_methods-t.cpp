@@ -1121,18 +1121,39 @@ int main(int argc, char** argv) {
 	}
 	diag("Backend MySQL connection successful.");
 
-	if (mysql_get_server_version(mysql) < 80000) {
-		diag("ERROR: This test requires MySQL 8.0+ but backend is version %lu.", mysql_get_server_version(mysql));
-		mysql_close(mysql);
+	// Fetch server version string to detect MariaDB
+	if (mysql_query(mysql, "SELECT VERSION()") != 0) {
+		diag("Failed to query backend version: %s", mysql_error(mysql));
 		return EXIT_FAILURE;
 	}
+	MYSQL_RES* res = mysql_store_result(mysql);
+	MYSQL_ROW row = mysql_fetch_row(res);
+	string version_str = row ? row[0] : "";
+	mysql_free_result(res);
 
-if (mysql_get_server_version(mysql) < 80018) {
-	diag("Backend MySQL version %lu < 8.0.18, disabling RANDOM password checks.", mysql_get_server_version(mysql));
-	setenv("TAP_DISABLE_SEQ_CHECKS_RAND_PASS", "1", 1);
-}
+	diag("Backend version string: %s", version_str.c_str());
 
-MYSQL* admin = mysql_init(NULL);
+	bool is_mariadb = (version_str.find("MariaDB") != string::npos);
+	unsigned long server_version = mysql_get_server_version(mysql);
+
+	if (server_version < 80000 && !is_mariadb) {
+		diag("This test requires MySQL 8.0+ but backend is version %lu. Skipping.", server_version);
+		plan(0); // Skip all tests
+		mysql_close(mysql);
+		return EXIT_SUCCESS;
+	}
+
+	if (is_mariadb) {
+		diag("Backend is MariaDB. Disabling MySQL 8.0+ specific features.");
+		setenv("TAP_DISABLE_SEQ_CHECKS_RAND_PASS", "1", 1);
+		// MariaDB doesn't support caching_sha2_password in the way MySQL does for this test
+		has_sha2 = false;
+	} else if (server_version < 80018) {
+		diag("Backend MySQL version %lu < 8.0.18, disabling RANDOM password checks.", server_version);
+		setenv("TAP_DISABLE_SEQ_CHECKS_RAND_PASS", "1", 1);
+	}
+
+	MYSQL* admin = mysql_init(NULL);
 
 	diag("Attempting ProxySQL Admin connection to %s:%d...", cl.host, cl.admin_port);
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
