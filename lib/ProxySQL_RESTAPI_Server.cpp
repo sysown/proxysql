@@ -344,6 +344,7 @@ public:
 
 extern ProxySQL_Statistics *GloProxyStats;
 
+#ifdef PROXYSQLTSDB
 class tsdb_resource : public http_resource {
 private:
     void add_headers(std::shared_ptr<http_response> &response) {
@@ -415,7 +416,7 @@ public:
                 }
             }
 
-            SQLite3_result *res = GloProxyStats->query_tsdb_metrics(metric, labels, from, to, agg);
+		SQLite3_result *res = GloProxyStats->query_tsdb_metrics(metric, labels, from, to, agg);
             if (!res) {
                 j_resp = json::array();
             } else {
@@ -433,19 +434,19 @@ public:
                 }
                 delete res;
             }
-        } else if (req_path == "/api/tsdb/status") {
-            if (!GloProxyStats) {
-                j_resp = json {{"error", "TSDB not initialized"}};
-                auto response = std::shared_ptr<http_response>(new string_response(j_resp.dump(), http::http_utils::http_internal_server_error));
-                add_headers(response);
-                return response;
-            }
-            ProxySQL_Statistics::tsdb_status_t status = GloProxyStats->get_tsdb_status();
-            j_resp["total_series"] = status.total_series;
-            j_resp["total_datapoints"] = status.total_datapoints;
-            j_resp["disk_size_bytes"] = status.disk_size_bytes;
-            j_resp["oldest_datapoint"] = status.oldest_datapoint;
-            j_resp["newest_datapoint"] = status.newest_datapoint;
+	} else if (req_path == "/api/tsdb/status") {
+		if (!GloProxyStats) {
+			j_resp = json {{"error", "TSDB not initialized"}};
+			auto response = std::shared_ptr<http_response>(new string_response(j_resp.dump(), http::http_utils::http_internal_server_error));
+			add_headers(response);
+			return response;
+		}
+		ProxySQL_Statistics::tsdb_status_t status = GloProxyStats->get_tsdb_status();
+		j_resp["total_series"] = status.total_series;
+		j_resp["total_datapoints"] = status.total_datapoints;
+		j_resp["disk_size_bytes"] = status.disk_size_bytes;
+		j_resp["oldest_datapoint"] = status.oldest_datapoint;
+		j_resp["newest_datapoint"] = status.newest_datapoint;
         } else {
             return std::shared_ptr<http_response>(new string_response("Not Found", http::http_utils::http_not_found));
         }
@@ -455,6 +456,7 @@ public:
         return response;
     }
 };
+#endif
 
 class gen_get_endpoint : public http_resource {
 private:
@@ -507,12 +509,13 @@ ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(
 
     ws->register_resource("/sync", endpoint.get(), true);
 
+#ifdef PROXYSQLTSDB
 	auto tsdb_res = new tsdb_resource();
 	tsdb_endpoint = std::unique_ptr<httpserver::http_resource>(tsdb_res);
 	ws->register_resource("/api/tsdb/metrics", tsdb_endpoint.get(), true);
 	ws->register_resource("/api/tsdb/query", tsdb_endpoint.get(), true);
 	ws->register_resource("/api/tsdb/status", tsdb_endpoint.get(), true);
-
+#endif
 	if (pthread_create(&thread_id, NULL, restapi_server_thread, ws.get()) !=0 ) {
 		perror("Thread creation");
 		exit(EXIT_FAILURE);

@@ -804,6 +804,7 @@ void ProxySQL_Admin::stats___pgsql_global() {
 	statsdb->execute("COMMIT");
 }
 
+#ifdef PROXYSQLTSDB
 void ProxySQL_Admin::stats___tsdb() {
 	if (!GloProxyStats) return;
 	ProxySQL_Statistics::tsdb_status_t status = GloProxyStats->get_tsdb_status();
@@ -824,6 +825,7 @@ INSERT INTO stats_tsdb (Variable_Name, Variable_Value) VALUES ('%s', '%llu')", n
 	insert_stat("Newest_Datapoint_TS", status.newest_datapoint);
 	admindb->execute("COMMIT");
 }
+#endif
 
 
 void ProxySQL_Admin::stats___mysql_processlist() {

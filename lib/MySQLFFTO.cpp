@@ -84,7 +84,7 @@ void MySQLFFTO::on_client_data(const char* buf, std::size_t len) {
         if (m_client_offset >= m_client_buffer.size()) {
             m_client_buffer.clear();
             m_client_offset = 0;
-        } else if (m_client_offset > 4096) { // Compact if offset is large
+        } else if (m_client_offset > 1024) { // Compact if offset is significant
             m_client_buffer.erase(m_client_buffer.begin(), m_client_buffer.begin() + m_client_offset);
             m_client_offset = 0;
         }
@@ -111,7 +111,7 @@ void MySQLFFTO::on_server_data(const char* buf, std::size_t len) {
         if (m_server_offset >= m_server_buffer.size()) {
             m_server_buffer.clear();
             m_server_offset = 0;
-        } else if (m_server_offset > 4096) { // Compact if offset is large
+        } else if (m_server_offset > 1024) { // Compact if offset is significant
             m_server_buffer.erase(m_server_buffer.begin(), m_server_buffer.begin() + m_server_offset);
             m_server_offset = 0;
         }
@@ -278,4 +278,8 @@ void MySQLFFTO::report_query_stats(const std::string& query, unsigned long long 
         if (digest_text != qp.buf) free(digest_text);
     }
     if (fst_cmnt) free(fst_cmnt);
+}
+
+std::size_t MySQLFFTO::get_buffered_size() const {
+	return m_client_buffer.size() + m_server_buffer.size();
 }

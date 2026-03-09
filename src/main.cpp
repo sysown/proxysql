@@ -1661,7 +1661,9 @@ void ProxySQL_Main_init_phase3___start_all() {
 		GloAdmin->init_ldap_variables();
 	}
 
+#ifdef PROXYSQLTSDB
 	GloAdmin->init_tsdb_variables();
+#endif
 
 #ifdef PROXYSQLGENAI
 	// GenAI

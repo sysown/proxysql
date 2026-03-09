@@ -916,7 +916,9 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_admin,"proxysql_servers", ADMIN_SQLITE_TABLE_PROXYSQL_SERVERS);
 	insert_into_tables_defs(tables_defs_config,"proxysql_servers", ADMIN_SQLITE_TABLE_PROXYSQL_SERVERS);
 	insert_into_tables_defs(tables_defs_admin,"runtime_proxysql_servers", ADMIN_SQLITE_TABLE_RUNTIME_PROXYSQL_SERVERS);
+#ifdef PROXYSQLTSDB
 	insert_into_tables_defs(tables_defs_admin,"stats_tsdb", STATS_SQLITE_TABLE_TSDB);
+#endif
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_servers_checksums", STATS_SQLITE_TABLE_PROXYSQL_SERVERS_CHECKSUMS);
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_servers_metrics", STATS_SQLITE_TABLE_PROXYSQL_SERVERS_METRICS);
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_servers_status", STATS_SQLITE_TABLE_PROXYSQL_SERVERS_STATUS);
@@ -1047,6 +1049,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 			proxysql_config().Read_MySQL_Query_Rules_from_configfile();
 			proxysql_config().Read_Global_Variables_from_configfile("admin");
 			proxysql_config().Read_Global_Variables_from_configfile("mysql");
+			proxysql_config().Read_Global_Variables_from_configfile("sqliteserver");
 
 			proxysql_config().Read_PgSQL_Servers_from_configfile(e);
 			proxysql_config().Read_PgSQL_Users_from_configfile(e);
@@ -1269,7 +1272,9 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	flush_mcp_variables___database_to_runtime(admindb, true);
 	flush_genai_variables___database_to_runtime(admindb, true);
 #endif /* PROXYSQLGENAI */
+#ifdef PROXYSQLTSDB
 	flush_tsdb_variables___database_to_runtime(admindb, true);
+#endif
 
 	if (GloVars.__cmd_proxysql_admin_socket) {
 		set_variable((char *)"mysql_ifaces",GloVars.__cmd_proxysql_admin_socket);

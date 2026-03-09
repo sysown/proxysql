@@ -167,8 +167,10 @@ void proxy_debug_load_filters(std::set<std::string>& f) {
 	pthread_rwlock_unlock(&filters_rwlock);
 }
 
+#endif
+
 // REMINDER: This function should always save/restore 'errno', otherwise it could influence error handling.
-void proxy_debug_func(
+extern "C" void proxy_debug_func(
 	enum debug_module module,
 	int verbosity,
 	int thr,
@@ -178,6 +180,7 @@ void proxy_debug_func(
 	const char *fmt,
 	...
 ) {
+#ifdef DEBUG
 	assert(module<PROXY_DEBUG_UNKNOWN);
 	// Safety check: ensure debug struct is initialized
 	if (GloVars.global.gdbg_lvl == NULL) {
@@ -313,7 +316,10 @@ void proxy_debug_func(
 		pretime=curtime;
 
 	errno = saved_errno;
+#endif
 };
+
+#ifdef DEBUG
 #endif
 
 using metric_name = std::string;
@@ -414,7 +420,7 @@ unordered_map<string, ProxySQL_messages_stats> umap_msg_stats {};
  * @param fmt The formatted string to be pass to 'vfprintf'.
  * @param ... The variadic list of arguments to be passed to 'vfprintf'.
  */
-void proxy_error_func(int msgid, const char *fmt, ...) {
+extern "C" void proxy_error_func(int msgid, const char *fmt, ...) {
 	va_list ap;
 	va_start(ap, fmt);
 

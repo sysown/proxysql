@@ -104,6 +104,16 @@ bool exp_first_login_failure(const test_creds_t& creds, const test_conf_t& conf)
 int main(int argc, char** argv) {
 	plan(864);
 
+	diag("Regression test for issue #4935: caching_sha2_password authentication");
+	diag("This test verifies that connection attributes sent during the initial handshake");
+	diag("are correctly preserved after a successful authentication, specifically:");
+	diag("  - character_set_client");
+	diag("  - default_schema");
+	diag("The test covers various combinations of:");
+	diag("  - Authentication plugins (mysql_native_password, caching_sha2_password)");
+	diag("  - Password hashing, SSL, and compression");
+	diag("  - Different character sets and default schemas");
+
 	CommandLine cl;
 
 	if (cl.getEnv()) {
@@ -120,7 +130,7 @@ int main(int argc, char** argv) {
 
 	MYSQL* mysql = mysql_init(NULL);
 
-	if (!mysql_real_connect(mysql, cl.host, cl.mysql_username, cl.mysql_password, NULL, cl.mysql_port, NULL, 0)) {
+	if (!mysql_real_connect(mysql, cl.mysql_host, cl.mysql_username, cl.mysql_password, NULL, cl.mysql_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 		return EXIT_FAILURE;
 	}

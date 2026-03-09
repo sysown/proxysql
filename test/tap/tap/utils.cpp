@@ -1418,7 +1418,7 @@ const char t_restapi_insert[] {
 		"VALUES (1,%ld,'%s','%s','%s','comm')",
 };
 
-const string base_address { "http://localhost:6070/sync/" };
+const string base_address { "http://proxysql:6070/sync/" };
 
 int configure_endpoints(
 	MYSQL* admin,
@@ -1464,7 +1464,8 @@ int configure_endpoints(
 	int endpoint_timeout = wait_post_enpoint_ready(full_endpoint, "{}", 1000, 100);
 
 	if (endpoint_timeout) {
-		diag("Timeout while trying to reach first valid enpoint");
+		diag("Timeout while trying to reach first valid endpoint: %s", full_endpoint.c_str());
+		diag("This usually means RESTAPI enabled but script failed to execute. Check TAP_WORKDIR.");
 		return EXIT_FAILURE;
 	}
 
@@ -2413,7 +2414,7 @@ MYSQL* init_mysql_conn(char* host, int port, char* user, char* pass, bool ssl, b
 		cflags |= CLIENT_SSL;
 	}
 
-	if (!mysql_real_connect(mysql, host, user, pass, NULL, port, NULL, cflags)) {
+	if (!mysql_real_connect(mysql, host, user, pass, NULL, port, NULL, cflags)) { diag("init_mysql_conn failed: %s (Host: %s, Port: %d, User: %s)", mysql_error(mysql), host, port, user); mysql_close(mysql);
 		return nullptr;
 	}
 
