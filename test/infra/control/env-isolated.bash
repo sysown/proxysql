@@ -55,6 +55,8 @@ export TESTS_LOGS_PATH="${WORKSPACE}/ci_infra_logs/${INFRA_ID}/tests"
 export TAP_WORKDIR="${WORKSPACE}/test/tap/tests/"
 export TAP_WORKDIRS="${WORKSPACE}/test/tap/tests/ ${WORKSPACE}/test/tap/tests_with_deps/deprecate_eof_support/"
 export TAP_DEPS="${WORKSPACE}/test/tap/tap"
+export TEST_DEPS_PATH="${WORKSPACE}/test-scripts/deps"
+export TEST_DEPS="${TEST_DEPS_PATH}"
 
 # Cluster Nodes
 CLUSTER_NODES=""

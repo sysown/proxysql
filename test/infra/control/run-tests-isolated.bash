@@ -128,9 +128,9 @@ docker run \
             sed -i '/TAP_MYSQL/d' \"\$f\"
         done
 
-        mkdir -p ./test-scripts/deps
-        [ -n \"${MYSQL_BINLOG_BIN}\" ] && ln -sf \"${MYSQL_BINLOG_BIN}\" /var/lib/jenkins/scripts/test-scripts/deps/mysqlbinlog
-        [ -n \"${BINLOG_READER_BIN}\" ] && ln -sf \"${BINLOG_READER_BIN}\" /var/lib/jenkins/scripts/test-scripts/deps/test_binlog_reader-t
+        mkdir -p \"${WORKSPACE}/test-scripts/deps\"
+        [ -n \"${MYSQL_BINLOG_BIN}\" ] && ln -sf \"${MYSQL_BINLOG_BIN}\" \"${WORKSPACE}/test-scripts/deps/mysqlbinlog\"
+        [ -n \"${BINLOG_READER_BIN}\" ] && ln -sf \"${BINLOG_READER_BIN}\" \"${WORKSPACE}/test-scripts/deps/test_binlog_reader-t\"
         
         # Source the local isolated environment
         source ${SCRIPT_DIR}/env-isolated.bash
