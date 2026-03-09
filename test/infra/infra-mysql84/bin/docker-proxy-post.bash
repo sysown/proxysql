@@ -14,16 +14,16 @@ DELETE FROM mysql_users WHERE username='root';
 DELETE FROM mysql_users WHERE username='testuser';
 
 -- Register root user (fast_forward=0 by default)
-REPLACE INTO mysql_users (username, password, active, default_hostgroup, fast_forward, backend, frontend, comment) 
+INSERT OR IGNORE INTO mysql_users (username, password, active, default_hostgroup, fast_forward, backend, frontend, comment) 
 VALUES ('root', '${ROOT_PASSWORD}', 1, ${WHG}, 0, 1, 1, 'dynamic-root-user');
 
 -- Register testuser (fast_forward=0 by default)
-REPLACE INTO mysql_users (username, password, active, default_hostgroup, fast_forward, backend, frontend, comment) 
+INSERT OR IGNORE INTO mysql_users (username, password, active, default_hostgroup, fast_forward, backend, frontend, comment) 
 VALUES ('testuser', 'testuser', 1, ${WHG}, 0, 1, 1, 'universal-testuser');
 
 -- Ensure cluster specific user is also correctly set
 DELETE FROM mysql_users WHERE username='${INFRA}';
-REPLACE INTO mysql_users (username, password, active, default_hostgroup, fast_forward, backend, frontend, comment) 
+INSERT OR IGNORE INTO mysql_users (username, password, active, default_hostgroup, fast_forward, backend, frontend, comment) 
 VALUES ('${INFRA}', '${INFRA}', 1, ${WHG}, 0, 1, 1, '${INFRA}');
 
 -- Synchronize monitor credentials

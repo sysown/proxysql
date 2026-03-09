@@ -18,19 +18,19 @@ LOAD MYSQL SERVERS TO RUNTIME;
 SAVE MYSQL SERVERS TO DISK;
 
 DELETE FROM mysql_users WHERE comment LIKE '%${INFRA}';
-REPLACE INTO mysql_users (username,password,active,default_hostgroup,comment) values ('root','${ROOT_PASSWORD}',1,${WHG},'${INFRA}');
-REPLACE INTO mysql_users (username,password,active,default_hostgroup,comment) values ('user','user',1,${WHG},'${INFRA}');
-REPLACE INTO mysql_users (username,password,active,default_hostgroup,comment) values ('testuser','testuser',1,${WHG},'${INFRA}');
-REPLACE INTO mysql_users (username,password,active,default_hostgroup,comment) values ('sbtest1','sbtest1',1,${WHG},'${INFRA}');
-REPLACE INTO mysql_users (username,password,active,default_hostgroup,comment) values ('sbtest2','sbtest2',1,${WHG},'${INFRA}');
-REPLACE INTO mysql_users (username,password,active,default_hostgroup,comment) values ('sbtest3','sbtest3',1,${WHG},'${INFRA}');
-REPLACE INTO mysql_users (username,password,active,default_hostgroup,comment) values ('sbtest4','sbtest4',1,${WHG},'${INFRA}');
-REPLACE INTO mysql_users (username,password,active,default_hostgroup,comment) values ('ssluser','ssluser',1,${WHG},'${INFRA}');
-REPLACE INTO mysql_users (username,password,active,default_hostgroup,comment) values ('${INFRA}','${INFRA}',1,${WHG},'${INFRA}');
+INSERT OR IGNORE INTO mysql_users (username,password,active,default_hostgroup,comment) values ('root','${ROOT_PASSWORD}',1,${WHG},'${INFRA}');
+INSERT OR IGNORE INTO mysql_users (username,password,active,default_hostgroup,comment) values ('user','user',1,${WHG},'${INFRA}');
+INSERT OR IGNORE INTO mysql_users (username,password,active,default_hostgroup,comment) values ('testuser','testuser',1,${WHG},'${INFRA}');
+INSERT OR IGNORE INTO mysql_users (username,password,active,default_hostgroup,comment) values ('sbtest1','sbtest1',1,${WHG},'${INFRA}');
+INSERT OR IGNORE INTO mysql_users (username,password,active,default_hostgroup,comment) values ('sbtest2','sbtest2',1,${WHG},'${INFRA}');
+INSERT OR IGNORE INTO mysql_users (username,password,active,default_hostgroup,comment) values ('sbtest3','sbtest3',1,${WHG},'${INFRA}');
+INSERT OR IGNORE INTO mysql_users (username,password,active,default_hostgroup,comment) values ('sbtest4','sbtest4',1,${WHG},'${INFRA}');
+INSERT OR IGNORE INTO mysql_users (username,password,active,default_hostgroup,comment) values ('ssluser','ssluser',1,${WHG},'${INFRA}');
+INSERT OR IGNORE INTO mysql_users (username,password,active,default_hostgroup,comment) values ('${INFRA}','${INFRA}',1,${WHG},'${INFRA}');
 
 -- MariaDB specific users for the Fast Forward test
-REPLACE INTO mysql_users (username,password,active,default_hostgroup,fast_forward,comment) values ('mariadbuser','mariadbuser',1,${WHG},0,'${INFRA}');
-REPLACE INTO mysql_users (username,password,active,default_hostgroup,fast_forward,comment) values ('mariadbuserff','mariadbuserff',1,${WHG},1,'${INFRA}');
+INSERT OR IGNORE INTO mysql_users (username,password,active,default_hostgroup,fast_forward,comment) values ('mariadbuser','mariadbuser',1,${WHG},0,'${INFRA}');
+INSERT OR IGNORE INTO mysql_users (username,password,active,default_hostgroup,fast_forward,comment) values ('mariadbuserff','mariadbuserff',1,${WHG},1,'${INFRA}');
 
 LOAD MYSQL USERS TO RUNTIME;
 SAVE MYSQL USERS TO DISK;

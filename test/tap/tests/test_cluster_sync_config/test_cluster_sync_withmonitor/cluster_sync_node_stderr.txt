@@ -211,3 +211,45 @@ WARNING: this is a DEBUG release and can be slow or perform poorly. Do not use i
 2026-03-08 23:56:51 ProxySQL_Cluster.cpp:244:ProxySQL_Cluster_Monitor_thread(): [WARNING] Cluster: unable to connect to peer proxysql:6032 . Error: ProxySQL Error: Access denied for user 'cluster1'@'172.21.0.14' (using password: YES)
 2026-03-08 23:56:53 ProxySQL_Cluster.cpp:244:ProxySQL_Cluster_Monitor_thread(): [WARNING] Cluster: unable to connect to peer proxysql:6032 . Error: ProxySQL Error: Access denied for user 'cluster1'@'172.21.0.14' (using password: YES)
 2026-03-08 23:56:55 ProxySQL_Cluster.cpp:244:ProxySQL_Cluster_Monitor_thread(): [WARNING] Cluster: unable to connect to peer proxysql:6032 . Error: ProxySQL Error: Access denied for user 'cluster1'@'172.21.0.14' (using password: YES)
+2026-03-08 23:56:57 ProxySQL_Cluster.cpp:244:ProxySQL_Cluster_Monitor_thread(): [WARNING] Cluster: unable to connect to peer proxysql:6032 . Error: ProxySQL Error: Access denied for user 'cluster1'@'172.21.0.14' (using password: YES)
+2026-03-08 23:56:59 ProxySQL_Cluster.cpp:244:ProxySQL_Cluster_Monitor_thread(): [WARNING] Cluster: unable to connect to peer proxysql:6032 . Error: ProxySQL Error: Access denied for user 'cluster1'@'172.21.0.14' (using password: YES)
+2026-03-08 23:57:01 ProxySQL_Cluster.cpp:244:ProxySQL_Cluster_Monitor_thread(): [WARNING] Cluster: unable to connect to peer proxysql:6032 . Error: ProxySQL Error: Access denied for user 'cluster1'@'172.21.0.14' (using password: YES)
+2026-03-08 23:57:03 ProxySQL_Cluster.cpp:244:ProxySQL_Cluster_Monitor_thread(): [WARNING] Cluster: unable to connect to peer proxysql:6032 . Error: ProxySQL Error: Access denied for user 'cluster1'@'172.21.0.14' (using password: YES)
+2026-03-08 23:57:06 ProxySQL_Cluster.cpp:244:ProxySQL_Cluster_Monitor_thread(): [WARNING] Cluster: unable to connect to peer proxysql:6032 . Error: ProxySQL Error: Access denied for user 'cluster1'@'172.21.0.14' (using password: YES)
+2026-03-08 23:57:08 ProxySQL_Cluster.cpp:244:ProxySQL_Cluster_Monitor_thread(): [WARNING] Cluster: unable to connect to peer proxysql:6032 . Error: ProxySQL Error: Access denied for user 'cluster1'@'172.21.0.14' (using password: YES)
+2026-03-08 23:57:10 ProxySQL_Cluster.cpp:244:ProxySQL_Cluster_Monitor_thread(): [WARNING] Cluster: unable to connect to peer proxysql:6032 . Error: ProxySQL Error: Access denied for user 'cluster1'@'172.21.0.14' (using password: YES)
+2026-03-08 23:57:10 ProxySQL_GloVars.cpp:32:term_handler(): [WARNING] Received TERM signal: shutdown in progress...
+2026-03-08 23:57:10 main.cpp:3122:main(): [INFO] Starting shutdown...
+GloMTH joined in 0.003465 secs.
+GloPTH joined in 0.001297 secs.
+2026-03-08 23:57:10 PgSQL_Monitor.cpp:2254:PgSQL_monitor_scheduler_thread(): [INFO] Exiting PgSQL_Monitor scheduling thread
+2026-03-08 23:57:10 PgSQL_Monitor.cpp:1763:worker_thread(): [INFO] Received exit signal. Stopping worker   thread=137464819742400
+2026-03-08 23:57:10 PgSQL_Monitor.cpp:1763:worker_thread(): [INFO] Received exit signal. Stopping worker   thread=137464817641152
+GloMyMon joined in 0.176468 secs.
+GloPgMon joined in 0.370958 secs.
+GloMyQC and GloPgQC joined in 6.5e-05 secs.
+All threads joined in 0.552288 secs.
+GloMyMon shutdown in 5.3e-05 secs.
+GloPgMon shutdown in 2e-05 secs.
+GloMyQC shutdown in 1.8e-05 secs.
+GloPgQC shutdown in 1.2e-05 secs.
+GloMyQPro shutdown in 1.6e-05 secs.
+GloPgQPro shutdown in 1e-05 secs.
+GloMyAuth shutdown in 1.6e-05 secs.
+GloPgAuth shutdown in 5e-06 secs.
+GloMTH shutdown in 8.5e-05 secs.
+GloPTH shutdown in 3.6e-05 secs.
+GloMCPH shutdown in 2e-06 secs.
+2026-03-08 23:57:11 GenAI_Thread.cpp:330:shutdown(): [INFO] Shutting down GenAI module
+GloGATH shutdown in 0.000287 secs.
+2026-03-08 23:57:11 AI_Features_Manager.cpp:483:shutdown(): [INFO] AI: Shutting down AI Features Manager
+2026-03-08 23:57:11 AI_Features_Manager.cpp:489:shutdown(): [INFO] AI: AI Features Manager shutdown complete
+GloAI shutdown in 1.9e-05 secs.
+GloMyLogger shutdown in 1.5e-05 secs.
+GloPgSQL_Logger shutdown in 6e-06 secs.
+GloAdmin shutdown in 0.001051 secs.
+GloMyHGM shutdown in 0.000145 secs.
+GloPgHGM shutdown in 6.6e-05 secs.
+Main init phase4 shutdown completed in 0.554228 secs.
+2026-03-08 23:57:11 main.cpp:3129:main(): [INFO] Shutdown completed!
+2026-03-08 23:57:11 main.cpp:3142:main(): [INFO] Exiting...
