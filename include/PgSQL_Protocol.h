@@ -1177,7 +1177,7 @@ private:
 	bool scram_handle_client_final(ScramState* scram_state, PgCredentials* user, const unsigned char* data, uint32_t datalen);
 
 	// parse options parameter
-	static std::vector<std::pair<std::string, std::string>> parse_options(const char* options);
+	static bool parse_options(const char* options, std::vector<std::pair<std::string, std::string>>& options_list);
 
 	PgSQL_Data_Stream** myds;
 	PgSQL_Connection_userinfo* userinfo;

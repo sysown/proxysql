@@ -744,68 +744,119 @@ char* extract_password(const pgsql_hdr* hdr, uint32_t* len) {
 	return pass;
 }
 
-std::vector<std::pair<std::string, std::string>> PgSQL_Protocol::parse_options(const char* options) {
-	std::vector<std::pair<std::string, std::string>> options_list;
+bool PgSQL_Protocol::parse_options(const char* options, std::vector<std::pair<std::string, std::string>>& options_list) {
+	options_list.clear();
 
-	if (!options) return options_list;
+	if (!options) {
+		return true;
+	}
 
-	std::string input(options);
+	const std::string input(options);
 	size_t pos = 0;
+	const size_t len = input.size();
 
-	while (pos < input.size()) {
-		// Skip leading spaces
-		while (pos < input.size() && fast_isspace(input[pos])) {
+	while (pos < len) {
+		// Skip leading whitespace
+		while (pos < len && fast_isspace(input[pos])) {
 			++pos;
 		}
 
-		// Check for -c or --
-		if (input.compare(pos, 2, "-c") == 0 || 
-			input.compare(pos, 2, "--") == 0) {
-			pos += 2; // Skip "-c", "--"
+		if (pos >= len) {
+			break;
 		}
 
-		while (pos < input.size() && fast_isspace(input[pos])) {
+		// Must start with -c or --
+		const bool has_prefix = (input.compare(pos, 2, "-c") == 0 ||
+		                         input.compare(pos, 2, "--") == 0);
+		if (!has_prefix) {
+			// Skip invalid token
+			while (pos < len && !fast_isspace(input[pos])) {
+				++pos;
+			}
+			continue;
+		}
+		pos += 2; // Skip prefix
+
+		// Skip whitespace after prefix
+		while (pos < len && fast_isspace(input[pos])) {
 			++pos;
 		}
 
-		// Parse key
-		size_t key_start = pos;
-		while (pos < input.size() && input[pos] != '=') {
+		if (pos >= len) {
+			break; // Nothing after -c
+		}
+
+		// Parse key (until =)
+		const size_t key_start = pos;
+		while (pos < len && input[pos] != '=') {
 			++pos;
 		}
+
+		if (pos >= len || input[pos] != '=') {
+			// No equals found - malformed, skip
+			continue;
+		}
+
 		std::string key = input.substr(key_start, pos - key_start);
-
-		// Skip '='
-		if (pos < input.size() && input[pos] == '=') {
-			++pos;
+		if (key.empty()) {
+			++pos; // Skip =
+			continue;
 		}
+
+		++pos; // Skip =
 
 		// Parse value
 		std::string value;
 		bool last_was_escape = false;
-		while (pos < input.size()) {
-			char c = input[pos];
+		bool unescaped_space = false;
+
+		while (pos < len) {
+			const char c = input[pos];
+
 			if (fast_isspace(c) && !last_was_escape) {
+				// Check if this space separates options (followed by -c or --)
+				size_t next = pos + 1;
+				while (next < len && fast_isspace(input[next])) {
+					++next;
+				}
+
+				const bool is_separator = (next < len &&
+				    (input.compare(next, 2, "-c") == 0 ||
+				     input.compare(next, 2, "--") == 0));
+
+				if (is_separator) {
+					break; // Valid separator
+				}
+
+				// Unescaped space within value
+				unescaped_space = true;
 				break;
 			}
+
 			if (c == '\\' && !last_was_escape) {
 				last_was_escape = true;
-			}
-			else {
+			} else {
 				value += c;
 				last_was_escape = false;
 			}
 			++pos;
 		}
 
-		// Add key-value pair to the list
-		if (!key.empty()) {
-			std::transform(key.begin(), key.end(), key.begin(), ::tolower);
-			options_list.emplace_back(std::move(key), std::move(value));
+		if (unescaped_space) {
+			proxy_error("Invalid options parameter: unescaped space in value for '%s'. "
+			           "Use backslash before space or quote the value.\n", key.c_str());
+			options_list.clear();
+			return false;
 		}
+
+		// Normalize key to lowercase
+		std::transform(key.begin(), key.end(), key.begin(),
+		              [](unsigned char c) { return std::tolower(c); });
+
+		options_list.emplace_back(std::move(key), std::move(value));
 	}
 
-	return options_list;
+	return true;
 }
 
 EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char* pkt, unsigned int len) {
@@ -1135,7 +1186,17 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 				if (param_name_lowercase.compare("database") == 0) {
 					userinfo->set_dbname(param_val.empty() ? user : param_val.c_str());
 				} else if (param_name_lowercase.compare("options") == 0) {
-					options_list = parse_options(param_val.c_str());
+					if (!parse_options(param_val.c_str(), options_list)) {
+						generate_error_packet(true, false,
+							"invalid value for parameter \"options\": unescaped space in value",
+							PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE, true);
+						ret = EXECUTION_STATE::FAILED;
+						free(userinfo->username);
+						free(userinfo->password);
+						userinfo->username = strdup("");
+						userinfo->password = strdup("");
+						goto __exit_process_pkt_handshake_response;
+					}
 				}
 			} else {
 				// session parameters/variables?
