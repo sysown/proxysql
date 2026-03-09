@@ -18,15 +18,25 @@
 
 int main(int argc, char** argv) {
 	plan(1);
+	diag("Testing COM_REGISTER_SLAVE enables fast forward");
+	diag("This test verifies that ProxySQL correctly enables fast forward for a user when it receives COM_REGISTER_SLAVE, even if it was initially disabled.");
+
 	const char * tdp = getenv("TEST_DEPS");
 	const std::string test_binlog_reader = ( tdp == nullptr || *tdp == '\0' ) ? "./test_binlog_reader-t" : std::string(tdp) + "/test_binlog_reader-t";
 
+	diag("Executing test_binlog_reader-t from: %s", test_binlog_reader.c_str());
 	const int test_binlog_reader_res = system(test_binlog_reader.c_str());
+	
+	if (test_binlog_reader_res != 0) {
+		diag("test_binlog_reader-t failed with exit code: %d", test_binlog_reader_res);
+	}
+
 	ok(
 		test_binlog_reader_res == 0,
 		"'test_binlog_reader-t' should be correctly executed. Err code was: %d",
 		test_binlog_reader_res
 	);
 
+	diag("Test completed");
 	return exit_status();
 }

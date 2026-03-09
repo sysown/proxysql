@@ -1,0 +1,27 @@
+services:
+
+  pgdb1:
+    hostname: pgsql1.${INFRA}
+    image: postgres:16
+    container_name: ${COMPOSE_PROJECT}-pgdb1-1
+    volumes:
+      - ./conf/pgsql/pgsql1/pg_hba.conf:/etc/postgresql/pg_hba.conf
+      - ./conf/pgsql/pgsql1/postgresql.conf:/etc/postgresql/postgresql.conf
+      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/ssl/server.crt:/var/lib/postgresql/server.crt:ro
+      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/ssl/server.key:/var/lib/postgresql/server.key:ro
+      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/pgdb1:/var/log/postgresql
+    networks:
+      backend:
+        aliases:
+          - pgsql1.${INFRA}
+          - pgsql1.docker-pgsql16-single
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${ROOT_PASSWORD}
+      POSTGRES_DB: postgres
+    command: [ "postgres", "-c", "config_file=/etc/postgresql/postgresql.conf" ]
+
+networks:
+  backend:
+    name: "${INFRA_ID}_backend"
+    external: true

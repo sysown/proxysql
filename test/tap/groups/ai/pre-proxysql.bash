@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -o pipefail
 #
 # AI TAP group pre-hook:
 # - starts isolated mysql90 + pgsql containers (group-local compose)

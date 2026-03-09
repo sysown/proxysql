@@ -11,6 +11,7 @@
 #include <tuple>
 #include <string>
 #include <stdio.h>
+#include <unistd.h>
 
 #include "mysql.h"
 #include "mysqld_error.h"
@@ -170,7 +171,14 @@ using mysql_res_row = std::vector<std::string>;
 void helper_test_load_data_local_infile(
 	const CommandLine& cl, MYSQL* proxysql, int exp_err=0, bool test_for_success=true
 ) {
+	// Provision test data to shared volume
+	std::string script_dst = "/var/lib/proxysql/load_data_local_datadir";
+	std::string datafile_ci = script_dst + "/insert_data.txt";
+	std::string cmd = "mkdir -p " + script_dst + " && printf '1,\"a string\",100.20\n2,\"a string containing a , comma\",102.20\n3,\"a string containing a \\\" quote\",102.20\n4,\"a string containing a \\\", quote and comma\",102.20\n' > " + datafile_ci + " && chmod -R 777 " + script_dst;
+	system(cmd.c_str());
+
 	const char* d_env = getenv("REGULAR_INFRA_DATADIR");
+
 	std::string datafile = (d_env ? std::string(d_env) + "/load_data_local_datadir/insert_data.txt"
 	                              : std::string(cl.workdir) + "load_data_local_datadir/insert_data.txt");
 	diag("Data file path: %s", datafile.c_str());
@@ -493,6 +501,14 @@ std::vector<query_test_info> queries_tests_info {
 
 int main(int argc, char** argv) {
 	CommandLine cl;
+
+	diag("================================================================================");
+	diag("TEST DESCRIPTION: ProxySQL Unsupported and Conditional Query Validation");
+	diag("This test verifies that ProxySQL handles unsupported commands (like LOAD DATA LOCAL)");
+	diag("correctly by returning error 1047, and that these commands can be enabled");
+	diag("conditionally via global variables.");
+	diag("================================================================================");
+
 
 	// plan as many tests as queries
 	plan(unsupported_queries.size() + 4 * queries_tests_info.size());
