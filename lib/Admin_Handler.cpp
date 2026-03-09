@@ -4884,6 +4884,40 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 				goto __run_query;
 			}
 
+			// \d tablename : Ninth query - get foreign key constraints (variant 1)
+			// psql: SELECT true as sametable, conname, pg_catalog.pg_get_constraintdef(r.oid, true) as condef,
+			//       conrelid::pg_catalog.regclass AS ontable FROM pg_catalog.pg_constraint r
+			//       WHERE r.conrelid = 'tablename' AND r.contype = 'f' AND conparentid = 0 ORDER BY conname
+			// SQLite doesn't have pg_constraint catalog, so return empty result
+			if (strcasestr(query_no_space, "FROM pg_catalog.pg_constraint r") != nullptr &&
+			    strcasestr(query_no_space, "r.contype = 'f'") != nullptr) {
+				matched_describe_pattern = true;
+
+				// Return empty result with correct column names
+				l_free(query_length, query);
+				query = l_strdup("SELECT 1 AS sametable, '' AS conname, '' AS condef, '' AS ontable WHERE 0=1");
+				query_length = strlen(query) + 1;
+				goto __run_query;
+			}
+
+			// \d tablename : Tenth query - get foreign key constraints referencing table (variant 2 with partition ancestors)
+			// psql: SELECT conname, conrelid::pg_catalog.regclass AS ontable,
+			//       pg_catalog.pg_get_constraintdef(oid, true) AS condef FROM pg_catalog.pg_constraint c
+			//       WHERE confrelid IN (SELECT pg_catalog.pg_partition_ancestors('tablename')
+			//       UNION ALL VALUES ('tablename'::pg_catalog.regclass)) AND contype = 'f' AND conparentid = 0
+			// SQLite doesn't have pg_constraint or partitioning, so return empty result
+			if (strcasestr(query_no_space, "FROM pg_catalog.pg_constraint c") != nullptr &&
+			    strcasestr(query_no_space, "contype = 'f'") != nullptr &&
+			    strcasestr(query_no_space, "pg_partition_ancestors") != nullptr) {
+				matched_describe_pattern = true;
+
+				// Return empty result with correct column names
+				l_free(query_length, query);
+				query = l_strdup("SELECT '' AS conname, '' AS ontable, '' AS condef WHERE 0=1");
+				query_length = strlen(query) + 1;
+				goto __run_query;
+			}
+
 			// If this query didn't match any describe pattern, reset describe mode and clear table name
 			// This ensures the state is cleaned up after the \d sequence completes
 			if (!matched_describe_pattern) {
