@@ -769,11 +769,10 @@ bool PgSQL_Protocol::parse_options(const char* options, std::vector<std::pair<st
 		const bool has_prefix = (input.compare(pos, 2, "-c") == 0 ||
 		                         input.compare(pos, 2, "--") == 0);
 		if (!has_prefix) {
-			// Skip invalid token
-			while (pos < len && !fast_isspace(input[pos])) {
-				++pos;
-			}
-			continue;
+			// Reject malformed options - token doesn't start with -c or --
+			proxy_error("Invalid options parameter: token must start with '-c' or '--'\n");
+			options_list.clear();
+			return false;
 		}
 		pos += 2; // Skip prefix
 
@@ -786,21 +785,24 @@ bool PgSQL_Protocol::parse_options(const char* options, std::vector<std::pair<st
 			break; // Nothing after -c
 		}
 
-		// Parse key (until =)
+		// Parse key (until = or whitespace)
 		const size_t key_start = pos;
-		while (pos < len && input[pos] != '=') {
+		while (pos < len && !fast_isspace(input[pos]) && input[pos] != '=') {
 			++pos;
 		}
 
 		if (pos >= len || input[pos] != '=') {
-			// No equals found - malformed, skip
-			continue;
+			// No equals found - malformed
+			proxy_error("Invalid options parameter: missing '=' after parameter name\n");
+			options_list.clear();
+			return false;
 		}
 
 		std::string key = input.substr(key_start, pos - key_start);
 		if (key.empty()) {
-			++pos; // Skip =
-			continue;
+			proxy_error("Invalid options parameter: empty key before '='\n");
+			options_list.clear();
+			return false;
 		}
 
 		++pos; // Skip =
