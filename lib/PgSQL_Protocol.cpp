@@ -1190,7 +1190,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 				} else if (param_name_lowercase.compare("options") == 0) {
 					if (!parse_options(param_val.c_str(), options_list)) {
 						generate_error_packet(true, false,
-							"invalid value for parameter \"options\": unescaped space in value",
+							"invalid value for parameter \"options\"",
 							PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE, true);
 						ret = EXECUTION_STATE::FAILED;
 						free(userinfo->username);
