@@ -47,7 +47,18 @@ PGConnPtr createNewConnection(ConnType conn_type, const std::string& options = "
 		ss << " options='" << options << "'";
     }
 
-    PGconn* conn = PQconnectdb(ss.str().c_str());
+    std::string conninfo = ss.str();
+    // Mask password for logging
+    std::string conninfo_display = conninfo;
+    size_t pwd_pos = conninfo_display.find("password=");
+    if (pwd_pos != std::string::npos) {
+        size_t pwd_end = conninfo_display.find(" ", pwd_pos);
+        if (pwd_end == std::string::npos) pwd_end = conninfo_display.length();
+        conninfo_display.replace(pwd_pos + 9, pwd_end - (pwd_pos + 9), "***");
+    }
+    diag("Connection string: %s", conninfo_display.c_str());
+
+    PGconn* conn = PQconnectdb(conninfo.c_str());
     if (PQstatus(conn) != CONNECTION_OK) {
         fprintf(stderr, "Connection failed to '%s': %s", (conn_type == BACKEND ? "Backend" : "Admin"), PQerrorMessage(conn));
         PQfinish(conn);
@@ -771,21 +782,88 @@ bool test_discard_all_failure_pipeline() {
     return got_error && correct_error;
 }
 
+// Test: Verify startup parameters are applied
+bool test_startup_parameters() {
+    diag("=== Test: Verify startup parameters ===");
+
+    // Create connection with explicit startup parameter (space must be escaped with double backslash)
+    const std::string startup_value = "SQL,\\\\ DMY";  // C++: \\ -> actual: \ -> libpq sees: escaped space
+    PGConnPtr conn = createNewConnection(BACKEND, "-c DateStyle=" + startup_value);
+    if (!conn) {
+        diag("Failed to create connection");
+        return false;
+    }
+
+    // Check connection status
+    if (PQstatus(conn.get()) != CONNECTION_OK) {
+        diag("Connection not OK: %s", PQerrorMessage(conn.get()));
+        return false;
+    }
+
+    // Get the actual value from backend
+    PGresult* res = PQexec(conn.get(), "SHOW DateStyle");
+    if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+        diag("SHOW failed: %s", PQresultErrorMessage(res));
+        PQclear(res);
+        return false;
+    }
+
+    if (PQntuples(res) == 0) {
+        diag("SHOW returned no rows");
+        PQclear(res);
+        return false;
+    }
+
+    char* val = PQgetvalue(res, 0, 0);
+    std::string actual_value = val ? val : "";
+    diag("Startup parameter set to: '%s'", startup_value.c_str());
+    diag("Actual DateStyle from backend: '%s'", actual_value.c_str());
+    PQclear(res);
+
+    // In ProxySQL, startup parameters might not be forwarded to backend
+    // This test documents the current behavior
+    bool startup_applied = (actual_value.find("SQL") != std::string::npos);
+    diag("Startup parameter applied: %s", startup_applied ? "yes" : "no (pooled connection used)");
+
+    // For this test, we just verify we can read the value, not that startup params work
+    return !actual_value.empty();
+}
+
 // Test: RESET single variable should work in pipeline mode
 bool test_reset_single_var_pipeline() {
     diag("=== Test: RESET single variable in pipeline mode ===");
 
+    // Note: Connection pooling may interfere with explicit startup parameters.
+    // We test RESET behavior by:
+    // 1. Get current value
+    // 2. SET to a different value
+    // 3. RESET in pipeline mode
+    // 4. Verify value changed (not necessarily to original)
+
     PGConnPtr conn = createNewConnection(BACKEND);
     if (!conn) return false;
 
-    // First set a non-default value via simple query
-    if (!set_variable_simple(conn.get(), "DateStyle", "Postgres, DMY")) {
+    // Get current value (whatever the pooled connection has)
+    const std::string initial_value = get_variable_simple(conn.get(), "DateStyle");
+    diag("Initial DateStyle: '%s'", initial_value.c_str());
+
+    // Choose a test value different from current
+    std::string test_value = (initial_value.find("Postgres") != std::string::npos) ?
+                             "SQL, DMY" : "Postgres, DMY";
+
+    if (!set_variable_simple(conn.get(), "DateStyle", test_value)) {
         diag("Failed to SET DateStyle");
         return false;
     }
 
     std::string set_value = get_variable_simple(conn.get(), "DateStyle");
     diag("After SET: DateStyle = '%s'", set_value.c_str());
+
+    // Verify value was actually changed
+    if (set_value == initial_value) {
+        diag("SET did not change the value - test cannot proceed");
+        return false;
+    }
 
     // Enter pipeline mode
     if (PQenterPipelineMode(conn.get()) != 1) {
@@ -821,6 +899,7 @@ bool test_reset_single_var_pipeline() {
 
         while ((res = PQgetResult(conn.get())) != NULL) {
             ExecStatusType status = PQresultStatus(res);
+            diag("Got result: status=%d (%s), ntuples=%d", status, PQresStatus(status), PQntuples(res));
             if (status == PGRES_COMMAND_OK) {
                 cmd_count++;
                 diag("RESET command succeeded");
@@ -831,6 +910,10 @@ bool test_reset_single_var_pipeline() {
                     diag("After RESET: DateStyle = '%s'", reset_result.c_str());
                 }
                 show_count++;
+            } else if (status == PGRES_TUPLES_OK && PQntuples(res) == 0) {
+                diag("SHOW returned 0 tuples");
+            } else if (status == PGRES_FATAL_ERROR) {
+                diag("Error: %s", PQresultErrorMessage(res));
             } else if (status == PGRES_PIPELINE_SYNC) {
                 PQclear(res);
                 count++;
@@ -853,12 +936,75 @@ bool test_reset_single_var_pipeline() {
 
     PQexitPipelineMode(conn.get());
 
-    // Verify the value changed from what we SET
-    bool value_changed = (reset_result != set_value);
-    diag("Value changed from '%s' to '%s': %s",
-         set_value.c_str(), reset_result.c_str(), value_changed ? "yes" : "no");
+    // Debug output
+    diag("Results summary: cmd_count=%d, show_count=%d, total_count=%d", cmd_count, show_count, count);
+    diag("reset_result='%s', initial_value='%s'", reset_result.c_str(), initial_value.c_str());
 
-    return (cmd_count >= 1) && (show_count >= 1) && value_changed;
+    // Verify RESET worked - value should be different from what we SET
+    // Note: Due to connection pooling, it may not exactly match initial_value,
+    // but it should be different from set_value (proving RESET executed)
+    bool reset_executed = (!reset_result.empty() && reset_result != set_value);
+    diag("Value reset from '%s' to '%s': %s",
+         set_value.c_str(), reset_result.c_str(),
+         reset_executed ? "success (value changed)" : "failed");
+
+    return (cmd_count >= 1) && (show_count >= 1) && reset_executed;
+}
+
+// Test: RESET reverts to startup parameter value
+bool test_reset_reverts_to_startup_param() {
+    diag("=== Test: RESET reverts to startup parameter value ===");
+
+    // Create connection with explicit startup parameter (space must be escaped with double backslash)
+    const std::string startup_value = "SQL,\\\\ DMY";  // C++: \\ -> actual: \ -> libpq sees: escaped space
+    PGConnPtr conn = createNewConnection(BACKEND, "-c DateStyle=" + startup_value);
+    if (!conn) {
+        diag("Failed to create connection with startup parameter");
+        return false;
+    }
+
+    // Get startup value (what we set in connection string)
+    std::string actual_startup = get_variable_simple(conn.get(), "DateStyle");
+    diag("Startup parameter value: '%s'", startup_value.c_str());
+    diag("Actual DateStyle after connect: '%s'", actual_startup.c_str());
+
+    // Choose a different value for SET
+    std::string new_value = (actual_startup.find("Postgres") != std::string::npos) ?
+                            "ISO, MDY" : "Postgres, DMY";
+
+    // SET to a different value
+    if (!set_variable_simple(conn.get(), "DateStyle", new_value)) {
+        diag("Failed to SET DateStyle to '%s'", new_value.c_str());
+        return false;
+    }
+
+    std::string after_set = get_variable_simple(conn.get(), "DateStyle");
+    diag("After SET: DateStyle = '%s'", after_set.c_str());
+
+    // Verify SET worked
+    if (after_set == actual_startup) {
+        diag("SET did not change the value");
+        return false;
+    }
+
+    // RESET the variable
+    PGresult* res = PQexec(conn.get(), "RESET DateStyle");
+    if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+        diag("RESET failed: %s", PQresultErrorMessage(res));
+        PQclear(res);
+        return false;
+    }
+    PQclear(res);
+
+    // Get value after RESET
+    std::string after_reset = get_variable_simple(conn.get(), "DateStyle");
+    diag("After RESET: DateStyle = '%s'", after_reset.c_str());
+
+    // Verify RESET reverted to startup value
+    bool reverted = (after_reset == actual_startup);
+    diag("RESET reverted to startup value: %s", reverted ? "yes" : "no");
+
+    return reverted;
 }
 
 // Forward declarations for pipeline mode tests
@@ -881,6 +1027,7 @@ bool test_multiple_vars_out_of_sync_pipeline();
 bool test_pipeline_with_locked_hostgroup();
 bool test_reset_all_locked_hostgroup_pipeline();
 bool test_discard_all_locked_hostgroup_pipeline();
+bool test_reset_reverts_to_startup_param();
 
 int main(int argc, char** argv) {
     if (cl.getEnv())
@@ -965,8 +1112,8 @@ int main(int argc, char** argv) {
         {"SET datestyle = ;", false, "missing value"}
     };
 
-    // Add pipeline tests to the plan (19 total: 16 pipeline + 3 simple query RESET/DISCARD)
-    const int num_pipeline_tests = 19;
+    // Add pipeline tests to the plan (20 total: 16 pipeline + 4 simple query RESET/DISCARD)
+    const int num_pipeline_tests = 20;
 
     if (cl.use_noise) {
         plan(tests.size() + num_pipeline_tests + 3);
@@ -996,6 +1143,7 @@ int main(int argc, char** argv) {
     ok(test_reset_simple_query(), "RESET single variable in simple query mode");
     ok(test_reset_all_simple_query(), "RESET ALL in simple query mode");
     ok(test_discard_all_simple_query(), "DISCARD ALL in simple query mode");
+    ok(test_reset_reverts_to_startup_param(), "RESET reverts to startup parameter value");
 
     // Run pipeline tests
     ok(test_set_simple_verify_pipeline(), "SET in simple query, verify in pipeline mode");

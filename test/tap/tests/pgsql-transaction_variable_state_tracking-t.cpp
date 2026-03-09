@@ -29,8 +29,8 @@ PGConnPtr createNewConnection(ConnType conn_type, const std::string& options = "
     
     const char* host = (conn_type == BACKEND) ? cl.pgsql_host : cl.pgsql_admin_host;
     int port = (conn_type == BACKEND) ? cl.pgsql_port : cl.pgsql_admin_port;
-    const char* username = (conn_type == BACKEND) ? cl.pgsql_root_username : cl.admin_username;
-    const char* password = (conn_type == BACKEND) ? cl.pgsql_root_password : cl.admin_password;
+    const char* username = (conn_type == BACKEND) ? cl.pgsql_username : cl.admin_username;
+    const char* password = (conn_type == BACKEND) ? cl.pgsql_password : cl.admin_password;
 
     std::stringstream ss;
 
@@ -608,6 +608,179 @@ int main(int argc, char** argv) {
    
         return true;
         });
+
+    // ============================================================================
+    // Variable Sync Verification Tests for Simple and Pipeline Mode
+    // ============================================================================
+
+    // Test: Verify SET variable sync in SIMPLE query mode
+    // This test confirms that when SET is executed in simple query mode,
+    // the variable is properly synced to the backend
+    add_test("Variable sync: SET in simple query mode", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        if (!conn) return false;
+
+        // Get original value
+        const auto original = getVariable(conn.get(), "DateStyle");
+        diag("Original DateStyle: %s", original.c_str());
+
+        // Set a specific value in simple query mode
+        const std::string test_value = "Postgres, DMY";
+        PGresult* set_res = PQexec(conn.get(), ("SET DateStyle = '" + test_value + "'").c_str());
+        bool set_ok = (PQresultStatus(set_res) == PGRES_COMMAND_OK);
+        PQclear(set_res);
+
+        if (!set_ok) {
+            diag("SET failed: %s", PQerrorMessage(conn.get()));
+            return false;
+        }
+
+        // Verify client-side value is set
+        const auto client_val = getVariable(conn.get(), "DateStyle");
+        diag("Client DateStyle after SET: %s", client_val.c_str());
+
+        // Verify value was actually set (not still original)
+        bool client_set = (client_val.find(test_value.substr(0, 7)) != std::string::npos);
+        if (!client_set) {
+            diag("Client value was not set correctly. Got '%s', expected '%s'",
+                 client_val.c_str(), test_value.c_str());
+            return false;
+        }
+
+        // Execute a query to trigger backend sync and verify backend has the value
+        // The backend should have the same value if sync worked
+        PGresult* sel_res = PQexec(conn.get(), "SELECT 1");
+        PQclear(sel_res);
+
+        const auto after_query = getVariable(conn.get(), "DateStyle");
+        diag("DateStyle after query: %s", after_query.c_str());
+
+        // Cleanup
+        PGresult* cleanup_res2 = PQexec(conn.get(), ("SET DateStyle = '" + original + "'").c_str());
+        PQclear(cleanup_res2);
+
+        // In simple mode, SET should be immediately effective
+        bool synced = (after_query.find(test_value.substr(0, 7)) != std::string::npos);
+        if (!synced) {
+            diag("Variable not synced to backend! Got '%s'", after_query.c_str());
+        }
+
+        return synced;
+    });
+
+    // Test: Verify SET variable sync in PIPELINE mode
+    // This test confirms that when SET is executed in pipeline mode,
+    // the variable is properly synced to the backend via extended query protocol
+    add_test("Variable sync: SET in pipeline mode", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        if (!conn) return false;
+
+        // Get original value
+        const auto original = getVariable(conn.get(), "DateStyle");
+        diag("Original DateStyle: %s", original.c_str());
+
+        // Enter pipeline mode
+        if (PQenterPipelineMode(conn.get()) != 1) {
+            diag("Failed to enter pipeline mode");
+            return false;
+        }
+
+        // Set a specific value using extended query protocol
+        const std::string test_value = "SQL, DMY";
+        std::string set_query = "SET DateStyle = '" + test_value + "'";
+
+        // Send SET via pipeline (extended query protocol)
+        if (PQsendQueryParams(conn.get(), set_query.c_str(), 0, NULL, NULL, NULL, NULL, 0) != 1) {
+            diag("Failed to send SET in pipeline");
+            PQexitPipelineMode(conn.get());
+            return false;
+        }
+
+        // Send a SELECT to verify the value
+        if (PQsendQueryParams(conn.get(), "SHOW DateStyle", 0, NULL, NULL, NULL, NULL, 0) != 1) {
+            diag("Failed to send SHOW in pipeline");
+            PQexitPipelineMode(conn.get());
+            return false;
+        }
+
+        // Sync
+        if (PQpipelineSync(conn.get()) != 1) {
+            diag("PQpipelineSync failed");
+            PQexitPipelineMode(conn.get());
+            return false;
+        }
+
+        // Consume results
+        int count = 0;
+        int set_success = 0;
+        int show_received = 0;
+        std::string show_value;
+        int sock = PQsocket(conn.get());
+        PGresult* res;
+
+        while (count < 3) {  // SET result + SHOW result + sync
+            if (PQconsumeInput(conn.get()) == 0) {
+                diag("PQconsumeInput failed");
+                PQexitPipelineMode(conn.get());
+                return false;
+            }
+
+            while ((res = PQgetResult(conn.get())) != NULL) {
+                ExecStatusType status = PQresultStatus(res);
+                if (status == PGRES_COMMAND_OK) {
+                    set_success++;
+                    diag("SET succeeded in pipeline");
+                } else if (status == PGRES_TUPLES_OK) {
+                    show_received++;
+                    if (PQntuples(res) > 0) {
+                        show_value = PQgetvalue(res, 0, 0);
+                        diag("SHOW returned: %s", show_value.c_str());
+                    }
+                } else if (status == PGRES_PIPELINE_SYNC) {
+                    PQclear(res);
+                    count++;
+                    break;
+                }
+                PQclear(res);
+                count++;
+            }
+
+            if (count >= 3) break;
+
+            if (!PQisBusy(conn.get())) continue;
+
+            fd_set input_mask;
+            FD_ZERO(&input_mask);
+            FD_SET(sock, &input_mask);
+            struct timeval timeout = {5, 0};
+            select(sock + 1, &input_mask, NULL, NULL, &timeout);
+        }
+
+        PQexitPipelineMode(conn.get());
+
+        // Cleanup
+        PGresult* cleanup_res = PQexec(conn.get(), ("SET DateStyle = '" + original + "'").c_str());
+        PQclear(cleanup_res);
+
+        // Verify results
+        if (set_success == 0) {
+            diag("SET did not succeed in pipeline");
+            return false;
+        }
+        if (show_received == 0) {
+            diag("SHOW did not return value in pipeline");
+            return false;
+        }
+
+        // Check if the value was properly synced
+        bool value_synced = (show_value.find(test_value.substr(0, 3)) != std::string::npos);
+        if (!value_synced) {
+            diag("Value not synced in pipeline! Got '%s', expected '%s'",
+                 show_value.c_str(), test_value.c_str());
+        }
+
+        return value_synced;
+    });
 
     // ============================================================================
     // Pipeline Mode Tests for SET Variable Tracking
