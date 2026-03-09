@@ -66,6 +66,7 @@ The `run-tests-isolated.bash` script acts as a validator and execution orchestra
 Every TAP test group (in `test/tap/groups/<group_name>`) defines its required backend environments using an `infras.lst` file.
 
 *   **Who reads it?**: Both `ensure-infras.bash` (to start them) and `run-tests-isolated.bash` (to verify them).
+*   **Order Importance**: In multi-infrastructure groups, the **order of entries is critical**. Shared ProxySQL users (e.g., `testuser`, `root`) are registered using `INSERT OR IGNORE`. The **first** infrastructure in the list that defines a shared user will set its `default_hostgroup`. Subsequent infrastructures will not overwrite this setting.
 *   **Subgroups**: If a group has a suffix (e.g., `legacy-g1`), the system automatically strips it to find the base group definition (`legacy`).
 *   **Safety**: If a required infrastructure is missing, the test runner **fails immediately**. It outputs an explicit error message identifying the missing infrastructure and referencing the `infras.lst` file.
 
