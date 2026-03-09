@@ -419,9 +419,9 @@ private:
 	 * @param command Command that causes the session to switch to fast forward mode.
 	 * @param session_type SESSION_FORWARD_TYPE indicating the type of session.
 	 *
-	 * @return void.
+	 * @return bool.
 	 */
-	void switch_normal_to_fast_forward_mode(PtrSize_t& pkt, std::string_view command, SESSION_FORWARD_TYPE session_type);
+	bool switch_normal_to_fast_forward_mode(PtrSize_t& pkt, std::string_view command, SESSION_FORWARD_TYPE session_type);
 
 	/**
 	 * @brief Switches session from fast forward mode to normal mode.
@@ -432,6 +432,8 @@ private:
 	void switch_fast_forward_to_normal_mode();
 
 public:
+	void handle_transaction_state();
+
 	inline bool is_extended_query_frame_empty() const {
 		return extended_query_frame.empty();
 	}
@@ -612,6 +614,7 @@ public:
 	void generate_status_one_hostgroup(int hid, std::string& s);
 	void set_previous_status_mode3(bool allow_execute = true);
 	char* get_current_query(int max_length = -1);
+	bool is_in_transaction() const;
 
 private:
 	int32_t extract_pid_from_param(const PgSQL_Param_Value& param, uint16_t format) const;

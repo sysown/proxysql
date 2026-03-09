@@ -175,9 +175,9 @@ bool PgSQL_Describe_Message::parse(PtrSize_t& pkt) {
 		return false;
 	}
 
-	// Validate remaining length for statement name (at least 1 byte for null-terminated string)
+	// Validate remaining length for statement type (exactly 1 byte)
 	if (offset >= pkt_len) {
-		return false;  // Not enough data for statement name
+		return false;  // Not enough data for statement type
 	}
 
 	// Read the statement type (1 byte)
@@ -250,6 +250,12 @@ bool PgSQL_Close_Message::parse(PtrSize_t& pkt) {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 1, "Packet size too small: %u bytes\n", pkt.size);
 		return false;
 	}
+
+	// Validate remaining length for statement type (1 byte)
+	if (offset >= pkt_len) {
+		return false;  // Not enough data for statement type
+	}
+
 	// Read the statement type (1 byte)
 	data.stmt_type = *(packet + offset);
 	offset += sizeof(uint8_t);

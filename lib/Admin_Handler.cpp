@@ -3074,6 +3074,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	unsigned int query_length = 0;
 	char* query_no_space = NULL;
 	unsigned int query_no_space_length = 0;
+	unsigned int query_no_space_alloc_size = 0;
 
 	if constexpr (std::is_same_v<S,MySQL_Session>) {
 		query_length = pkt->size - sizeof(mysql_hdr);
@@ -3105,6 +3106,16 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		}
 
 		query_length = hdr.data.size;
+
+		// Validate minimum query size (need at least 1 byte + null terminator)
+		if (query_length < 2 || hdr.data.ptr == NULL ||
+			((const char*)hdr.data.ptr)[query_length - 1] != '\0') {
+			proxy_warning("Malformed query packet: %u bytes\n", query_length);
+			SPA->send_error_msg_to_client(sess, "Malformed query packet");
+			run_query = false;
+			goto __run_query;
+		}
+
 		query = (char*)l_alloc(query_length);
 		memcpy(query, (char*)hdr.data.ptr, query_length - 1);
 	} else {
@@ -3112,7 +3123,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	}
 
 	query[query_length-1]=0;
-
+	query_no_space_alloc_size = query_length;
 	query_no_space=(char *)l_alloc(query_length);
 	memcpy(query_no_space,query,query_length);
 
@@ -4992,7 +5003,7 @@ __run_query:
 		pthread_mutex_unlock(&pa->sql_query_global_mutex);
 	} else {
 		// The admin module may have already been freed in case of "PROXYSQL STOP"
-		if (strcasecmp(query_no_space, "PROXYSQL STOP") == 0) {
+		if (query_no_space && strcasecmp(query_no_space, "PROXYSQL STOP") == 0) {
 			// Command is "PROXYSQL STOP"
 			if (admin_nostart_ && __sync_fetch_and_add((uint8_t*)&GloVars.global.nostart, 0)) {
 				pthread_mutex_unlock(&pa->sql_query_global_mutex);
@@ -5001,8 +5012,13 @@ __run_query:
 			pthread_mutex_unlock(&pa->sql_query_global_mutex);
 		}
 	}
-	l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
-	l_free(query_length,query);
+
+	if (query_no_space) {
+		l_free(query_no_space_alloc_size, query_no_space);
+	}
+	if (query) {
+		l_free(query_length, query);
+	}
 }
 
 // Explicitly instantiate the required template class and member functions
