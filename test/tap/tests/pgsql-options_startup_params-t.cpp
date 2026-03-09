@@ -282,15 +282,39 @@ int main(int argc, char** argv) {
         "   ",
         true, "", "Options with only spaces"});
 
-    // No equals sign (malformed - should be skipped)
+    // No equals sign (malformed - should FAIL now)
     tests.push_back({"no_equals",
         "-c DateStyle",
-        true, "", "Malformed option without ="});
+        false, "missing '='", "Malformed option without ="});
 
-    // Empty value after equals
+    // Empty value after equals (valid - empty value)
     tests.push_back({"empty_value",
         "-c DateStyle=",
         true, "", "Empty value after equals"});
+
+    // ============================================================
+    // MALFORMED OPTIONS: Should be REJECTED (not skipped)
+    // ============================================================
+
+    // Token doesn't start with -c or --
+    tests.push_back({"malformed_no_prefix",
+        "foo=value",
+        false, "token must start with", "Malformed: no -c or -- prefix"});
+
+    // Space between key and =
+    tests.push_back({"malformed_space_before_equals",
+        "-c DateStyle =value",
+        false, "missing '='", "Malformed: space before ="});
+
+    // Empty key
+    tests.push_back({"malformed_empty_key",
+        "-c =value",
+        false, "empty key", "Malformed: empty key before ="});
+
+    // Multiple tokens without proper -c
+    tests.push_back({"malformed_multiple_tokens",
+        "-c foo -c bar=value",
+        false, "missing '='", "Malformed: space in key"});
 
     // ============================================================
     // PROXY VALIDATION: Verify values are actually applied
@@ -388,17 +412,32 @@ int main(int argc, char** argv) {
 
             // SET to different value
             PGresult* set_res = PQexec(conn.get(), "SET DateStyle = 'Postgres, MDY'");
+            const bool set_ok = set_res && PQresultStatus(set_res) == PGRES_COMMAND_OK;
+            if (!set_ok) {
+                diag("SET failed: %s", set_res ? PQresultErrorMessage(set_res) : "null result");
+            }
             PQclear(set_res);
             std::string set_val = getVar(conn.get(), "DateStyle");
             diag("After SET: %s", set_val.c_str());
 
+            // Verify SET actually changed the value
+            const bool set_changed = (set_val != startup_val);
+            if (!set_changed) {
+                diag("SET did not change value: startup='%s', after SET='%s'", startup_val.c_str(), set_val.c_str());
+            }
+
             // RESET
             PGresult* reset_res = PQexec(conn.get(), "RESET DateStyle");
+            const bool reset_ok = reset_res && PQresultStatus(reset_res) == PGRES_COMMAND_OK;
+            if (!reset_ok) {
+                diag("RESET failed: %s", reset_res ? PQresultErrorMessage(reset_res) : "null result");
+            }
             PQclear(reset_res);
             std::string reset_val = getVar(conn.get(), "DateStyle");
             diag("After RESET: %s", reset_val.c_str());
 
-            bool reverted = (reset_val == startup_val);
+            // Verify all conditions: SET worked, RESET worked, and value reverted
+            bool reverted = set_ok && set_changed && reset_ok && (reset_val == startup_val);
             ok(reverted, "RESET reverts to startup value");
         } else {
             diag("Connection failed: %s", error.c_str());
