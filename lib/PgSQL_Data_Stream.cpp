@@ -65,7 +65,7 @@ static void __dump_pkt(const char* func, unsigned char* _ptr, unsigned int len) 
 
 #define queue_zero(_q) { \
   if (_q.tail != 0) { \
-    memcpy(_q.buffer, (unsigned char *)_q.buffer + _q.tail, _q.head - _q.tail); \
+	memmove(_q.buffer, (unsigned char *)_q.buffer + _q.tail, _q.head - _q.tail); \
   } \
   _q.head-=_q.tail; \
   _q.tail=0; \
@@ -1281,14 +1281,15 @@ void PgSQL_Data_Stream::reset_connection() {
 
 int PgSQL_Data_Stream::buffer2array() {
 	int ret = 0;
+	unsigned char header[5];
+
 	{
 		unsigned long s = queue_data(queueIN);
 		if (s == 0) return ret;
-		if ((queueIN.pkt.size == 0) && s < 5) {
+		if ((queueIN.pkt.size == 0) && s < sizeof(header)) {
 			queue_zero(queueIN);
 		}
 	}
-	unsigned char header[5];
 	if ((queueIN.pkt.size == 0) && queue_data(queueIN) >= sizeof(header)) {
 		proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Session=%p . Reading the header of a new packet\n", sess);
 		memcpy(header, queue_r_ptr(queueIN), sizeof(header));
