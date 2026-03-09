@@ -372,6 +372,15 @@ static bool check_openssl_version() {
 
 
 void ProxySQL_Main_init_SSL_module() {
+	// Check if SSL context is already initialized (issue 5186)
+	// This prevents SSL context corruption during PROXYSQL STOP/START restart cycles
+	if (GloVars.global.ssl_ctx != NULL) {
+		proxy_info("SSL context already initialized at %p, skipping reinitialization\n", GloVars.global.ssl_ctx);
+		return;
+	}
+
+	proxy_info("Initializing new SSL context\n");
+
 	int rc = SSL_library_init();
 	if (rc==0) {
 		proxy_error("%s\n", SSL_alert_desc_string_long(rc));
@@ -389,6 +398,7 @@ void ProxySQL_Main_init_SSL_module() {
 		proxy_error("Unable to initialize SSL. Shutting down...\n");
 		exit(EXIT_SUCCESS); // we exit gracefully to not be restarted
 	}
+	proxy_info("SSL context created successfully at %p\n", GloVars.global.ssl_ctx);
 	if (!SSL_CTX_set_min_proto_version(GloVars.global.ssl_ctx,TLS1_VERSION)) {
 		proxy_error("Unable to initialize SSL. SSL_set_min_proto_version failed. Shutting down...\n");
 		exit(EXIT_SUCCESS); // we exit gracefully to not be restarted
@@ -1386,6 +1396,11 @@ void ProxySQL_Main_init() {
 #else
 	glovars.has_debug=false;
 #endif /* DEBUG */
+
+	// Initialize stop state management for issue 5186
+	glovars.stop_state = STOP_STATE_RUNNING;
+	glovars.active_admin_queries = 0;
+
 //	__thr_sfp=l_mem_init();
 	proxysql_init_debug_prometheus_metrics();
 }

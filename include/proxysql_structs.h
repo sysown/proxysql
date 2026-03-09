@@ -763,6 +763,14 @@ enum proxysql_session_type {
 	PROXYSQL_SESSION_NONE
 };
 
+// Stop state enumeration for PROXYSQL STOP command (issue 5186)
+// Used to manage admin query access during module stop/start cycle
+enum proxy_stop_state {
+	STOP_STATE_RUNNING = 0,	// Normal operation, all modules running
+	STOP_STATE_DRAINING = 1,	// Admin queries being drained, modules stopping
+	STOP_STATE_STOPPED = 2	// Modules stopped, only safe queries allowed
+};
+
 #endif /* PROXYSQL_ENUMS */
 
 
@@ -963,6 +971,11 @@ struct _global_variables_t {
 	volatile int shutdown;
 	bool nostart;
 	int reload;
+
+	// Stop state management for PROXYSQL STOP command
+	// See issue 5186: Fix query handling after PROXYSQL STOP
+	volatile int stop_state;
+	uint64_t active_admin_queries;
 
 	unsigned char protocol_version;
 	char *mysql_server_version;
