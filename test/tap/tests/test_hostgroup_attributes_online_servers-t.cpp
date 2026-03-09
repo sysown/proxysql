@@ -98,16 +98,26 @@ int main(int argc, char** argv) {
 
 	// SELF-CONFIGURATION: Ensure Hostgroup 1 and 0 are usable and isolated
 	diag("Configuring ProxySQL environment for the test...");
+	diag("  - Clearing existing query rules...");
 	MYSQL_QUERY__(proxysql_admin, "DELETE FROM mysql_query_rules");
-	// Ensure at least one server is in HG 1 and HG 0
+	
+	diag("  - Resetting Hostgroups 0 and 1...");
+	MYSQL_QUERY__(proxysql_admin, "DELETE FROM mysql_servers WHERE hostgroup_id IN (0,1)");
+	
+	diag("  - Populating Hostgroup 1 with up to 3 online servers...");
 	MYSQL_QUERY__(proxysql_admin, "INSERT INTO mysql_servers (hostgroup_id, hostname, port) SELECT 1, hostname, port FROM mysql_servers WHERE status='ONLINE' LIMIT 3");
+	
+	diag("  - Populating Hostgroup 0 with 1 server from HG 1...");
 	MYSQL_QUERY__(proxysql_admin, "INSERT INTO mysql_servers (hostgroup_id, hostname, port) SELECT 0, hostname, port FROM mysql_servers WHERE hostgroup_id=1 LIMIT 1");
-	// Route SELECT to HG 1, others to HG 0
+	
+	diag("  - Setting up test routing rules (SELECT -> HG 1, others -> HG 0)...");
 	MYSQL_QUERY__(proxysql_admin, "INSERT INTO mysql_query_rules(rule_id, active, username, match_digest, destination_hostgroup, apply) VALUES (1, 1, 'testuser', '^SELECT', 1, 1)");
 	MYSQL_QUERY__(proxysql_admin, "INSERT INTO mysql_query_rules(rule_id, active, username, match_digest, destination_hostgroup, apply) VALUES (2, 1, 'testuser', '.*', 0, 1)");
+	
+	diag("  - Loading configuration to runtime...");
 	MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 	MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
-	diag("ProxySQL configuration applied.");
+	diag("ProxySQL configuration applied successfully.");
 
 	// Initialize ProxySQL connection
 	proxysql = mysql_init(NULL);
