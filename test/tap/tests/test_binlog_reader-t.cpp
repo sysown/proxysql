@@ -46,6 +46,7 @@ using std::map;
 using nlohmann::json;
 
 int create_testing_tables(MYSQL* mysql_server) {
+	diag("Creating testing tables...");
 	// Create the testing database
 	MYSQL_QUERY(mysql_server, "CREATE DATABASE IF NOT EXISTS test");
 	MYSQL_QUERY(mysql_server, "DROP TABLE IF EXISTS test.gtid_test");
@@ -65,6 +66,7 @@ int create_testing_tables(MYSQL* mysql_server) {
 }
 
 int insert_random_data(MYSQL* proxysql_mysql, uint32_t rows) {
+	diag("Inserting %u rows of random data...", rows);
 	int rnd_a = rand() % 1000;
 	string rnd_c = random_string(rand() % 100 + 5);
 	string rnd_pad = random_string(rand() % 50 + 5);
@@ -126,6 +128,7 @@ map<uint32_t, pair<uint32_t,uint32_t>> extract_hosgtroups_stats(const vector<mys
 }
 
 int perform_rnd_selects(const CommandLine& cl, uint32_t NUM) {
+	diag("Performing %u random selects...", NUM);
 	// Check connections only performing select doesn't contribute to GITD count
 	MYSQL* select_conn = mysql_init(NULL);
 
@@ -156,6 +159,7 @@ int perform_rnd_selects(const CommandLine& cl, uint32_t NUM) {
 }
 
 int check_gitd_tracking(const CommandLine& cl, MYSQL* proxysql_mysql, MYSQL* proxysql_admin) {
+	diag("Checking GTID tracking stats...");
 	// Check that all queries were routed to the correct hostgroup
 	MYSQL_QUERY(proxysql_admin, "SELECT hostgroup, queries, Queries_GTID_sync FROM stats.stats_mysql_connection_pool");
 	MYSQL_RES* conn_pool_stats_myres = mysql_store_result(proxysql_admin);
@@ -248,15 +252,31 @@ int main(int argc, char** argv) {
 		plan(3);
 	}
 
-	MYSQL* proxysql_mysql = mysql_init(NULL);
+	diag("Initializing test_binlog_reader-t...");
+	diag("Connecting to ProxySQL Admin on %s:%d as %s", cl.host, cl.admin_port, cl.admin_username);
 	MYSQL* proxysql_admin = mysql_init(NULL);
-
-	if (!mysql_real_connect(proxysql_mysql, cl.host, "sbtest8", "sbtest8", NULL, cl.port, NULL, 0)) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
-		return EXIT_FAILURE;
-	}
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
+		return EXIT_FAILURE;
+	}
+
+	diag("Ensuring user 'sbtest8' exists in ProxySQL with fast_forward=0");
+	MYSQL_QUERY(proxysql_admin, "INSERT OR REPLACE INTO mysql_users (username, password, active, default_hostgroup, fast_forward) VALUES ('sbtest8', 'sbtest8', 1, 0, 0)");
+	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL USERS TO RUNTIME");
+
+	diag("Connecting to ProxySQL on %s:%d as sbtest8", cl.host, cl.port);
+	MYSQL* proxysql_mysql = mysql_init(NULL);
+	if (!mysql_real_connect(proxysql_mysql, cl.host, "sbtest8", "sbtest8", NULL, cl.port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
+		diag("Access denied for user 'sbtest8'. Checking if it exists in runtime_mysql_users...");
+		MYSQL_QUERY(proxysql_admin, "SELECT * FROM runtime_mysql_users WHERE username='sbtest8'");
+		MYSQL_RES* res = mysql_store_result(proxysql_admin);
+		if (res) {
+			diag("User 'sbtest8' found in runtime_mysql_users with %llu rows", mysql_num_rows(res));
+			mysql_free_result(res);
+		} else {
+			diag("User 'sbtest8' NOT found in runtime_mysql_users!");
+		}
 		return EXIT_FAILURE;
 	}
 
@@ -265,6 +285,7 @@ int main(int argc, char** argv) {
 	vector<mysql_res_row> reader_2_read {};
 
 	// Reset connection pool stats
+	diag("Resetting connection pool stats...");
 	int rc = mysql_query(proxysql_admin, "SELECT * FROM stats.stats_mysql_connection_pool_reset");
 	if (rc != EXIT_SUCCESS) { goto cleanup; }
 	mysql_free_result(mysql_store_result(proxysql_admin));
@@ -276,6 +297,7 @@ int main(int argc, char** argv) {
 	rc = insert_random_data(proxysql_mysql, NUM_ROWS);
 	if (rc != EXIT_SUCCESS) { goto cleanup; }
 
+	diag("Performing %u update/select pairs...", NUM_CHECKS);
 	for (uint32_t i = 0; i < NUM_CHECKS; i++) {
 		rc = perform_update(proxysql_mysql, NUM_ROWS);
 		if (rc != EXIT_SUCCESS) { goto cleanup; }
@@ -339,5 +361,6 @@ cleanup:
 	mysql_close(proxysql_mysql);
 	mysql_close(proxysql_admin);
 
+	diag("Test completed");
 	return exit_status();
 }
