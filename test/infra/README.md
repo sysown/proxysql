@@ -120,3 +120,30 @@ When performing investigations or fixes within this infrastructure:
 *   **Directory Not Empty**: If initialization fails with an "is not empty" error, run `docker-compose-destroy.bash` for that specific infra or manually clean the log directory.
 *   **Permission Denied**: Logs and data directories are often managed with `sudo`. The scripts automatically use `sudo` where necessary.
 *   **ProxySQL Not Ready**: Check `ci_infra_logs/${INFRA_ID}/proxysql/proxysql.log` for initialization errors.
+
+---
+
+## 8. ProxySQL Cluster Management
+
+By default, the infrastructure starts a single ProxySQL node. For cluster-specific testing, you can enable additional nodes.
+
+### Starting a Cluster
+```bash
+# 1. Start the main ProxySQL node
+./test/infra/control/start-proxysql-isolated.bash
+
+# 2. Start additional nodes (default: 9 nodes)
+# Use PROXYSQL_CLUSTER_NODES to change the count
+export PROXYSQL_CLUSTER_NODES=3
+./test/infra/control/cluster_start.bash
+
+# 3. Initialize the cluster (configure discovery and synchronization)
+./test/infra/control/cluster_init.bash
+```
+
+### Skipping Cluster Startup
+If you are running tests that do not require a cluster, you should disable it to save resources and speed up initialization:
+```bash
+export SKIP_CLUSTER_START=1
+./test/infra/control/run-tests-isolated.bash
+```
