@@ -105,7 +105,7 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY__(proxysql_admin, "DELETE FROM mysql_servers WHERE hostgroup_id IN (0,1)");
 	
 	diag("  - Populating Hostgroup 1 with up to 3 online servers...");
-	MYSQL_QUERY__(proxysql_admin, "INSERT INTO mysql_servers (hostgroup_id, hostname, port) SELECT 1, hostname, port FROM mysql_servers WHERE status='ONLINE' LIMIT 3");
+	MYSQL_QUERY__(proxysql_admin, "INSERT INTO mysql_servers (hostgroup_id, hostname, port) SELECT DISTINCT 1, hostname, port FROM mysql_servers WHERE status='ONLINE' LIMIT 3");
 	
 	diag("  - Populating Hostgroup 0 with 1 server from HG 1...");
 	MYSQL_QUERY__(proxysql_admin, "INSERT INTO mysql_servers (hostgroup_id, hostname, port) SELECT 0, hostname, port FROM mysql_servers WHERE hostgroup_id=1 LIMIT 1");
