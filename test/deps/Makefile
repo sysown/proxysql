@@ -6,6 +6,7 @@ DEPS_PATH := $(PROXYSQL_PATH)/deps
 include $(PROXYSQL_PATH)/include/makefiles_vars.mk
 include $(PROXYSQL_PATH)/include/makefiles_paths.mk
 
+CMAKE3 := $(shell command -v cmake3 2>/dev/null || command -v cmake 2>/dev/null)
 
 .DEFAULT: default
 .PHONY: default
@@ -50,10 +51,16 @@ ifeq ($(UNAME_S),Darwin)
 		sed -i '' 's/CMAKE_POLICY(SET CMP0075 OLD)/CMAKE_POLICY(SET CMP0075 NEW)/' $${mysql_dir}CMakeLists.txt && \
 		sed -i '' 's/#      ifndef fdopen/#      if !defined(fdopen) \&\& !defined(__APPLE__)/' $${mysql_dir}extra/zlib/zlib-1.2.13/zutil.h
 	cd mysql-connector-c && ln -fsh $$(ls -1d mysql-5.7.*/) mysql-connector-c
-	cd mysql-connector-c/mysql-connector-c && cmake . -DWITH_BOOST=./boost -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O0 -ggdb -DNDEBUG -fPIC" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DWITH_SSL=$$(brew --prefix openssl@3) -DOPENSSL_ROOT_DIR=$$(brew --prefix openssl@3)
+	cd mysql-connector-c/mysql-connector-c && cmake . -DWITH_BOOST=./boost -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+		-DCMAKE_C_FLAGS="-Wno-incompatible-pointer-types" \
+		-DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O0 -ggdb -DNDEBUG -fPIC -Wno-incompatible-pointer-types" \
+		-DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DWITH_SSL=$$(brew --prefix openssl@3) -DOPENSSL_ROOT_DIR=$$(brew --prefix openssl@3)
 else
 	cd mysql-connector-c && ln -fsT $$(ls -1d mysql-5.7.*/) mysql-connector-c
-	cd mysql-connector-c/mysql-connector-c && cmake . -DWITH_BOOST=./boost -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O0 -ggdb -DNDEBUG -fPIC" -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+	cd mysql-connector-c/mysql-connector-c && $(CMAKE3) . -DWITH_BOOST=./boost \
+		-DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_FLAGS="-Wno-incompatible-pointer-types" \
+		-DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O0 -ggdb -DNDEBUG -fPIC -Wno-incompatible-pointer-types" \
+		-DCMAKE_POLICY_VERSION_MINIMUM=3.5
 endif
 ifeq ($(UNAME_S),Darwin)
 	cd mysql-connector-c/mysql-connector-c && CC=${CC} CXX=${CXX} ${MAKE} -j1 mysqlclient mysql

@@ -128,7 +128,7 @@ ev: libev/libev/.libs/libev.a
 coredumper/coredumper/src/libcoredumper.a:
 	cd coredumper && rm -rf coredumper-*/ || true
 	cd coredumper && tar -zxf coredumper-*.tar.gz
-	cd coredumper/coredumper && cmake . -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Debug
+	cd coredumper/coredumper && cmake . -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 	cd coredumper/coredumper && CC=${CC} CXX=${CXX} ${MAKE}
 
 coredumper: coredumper/coredumper/src/libcoredumper.a
@@ -267,6 +267,8 @@ endif
 mariadb_client: mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a
 
 
+# NOTE: When running Valgrind on ProxySQL, remove -DSQLITE_ENABLE_MEMORY_MANAGEMENT
+# to avoid false positives in SQLite's internal memory allocator (pcache*, memjrnl*, etc.)
 sqlite3/sqlite3/sqlite3.o:
 	cd sqlite3 && rm -rf sqlite-amalgamation-*/ || true
 	cd sqlite3 && tar -zxf sqlite-amalgamation-*.tar.gz

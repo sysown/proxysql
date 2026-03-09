@@ -39,8 +39,38 @@ using hrc = std::chrono::high_resolution_clock;
 
 using nlohmann::json;
 
+/**
+ * @brief Get the default hostgroup for a user from mysql_users
+ */
+int get_user_default_hostgroup(MYSQL* admin, const string& username) {
+	string query = "SELECT default_hostgroup FROM mysql_users WHERE username='" + username + "'";
+	diag("Executing query `%s`...", query.c_str());
+
+	if (mysql_query(admin, query.c_str()) != 0) {
+		diag("Failed to query user default_hostgroup: %s", mysql_error(admin));
+		return -1;
+	}
+
+	MYSQL_RES* res = mysql_store_result(admin);
+	if (res == NULL) {
+		diag("Failed to store result: %s", mysql_error(admin));
+		return -1;
+	}
+
+	MYSQL_ROW row = mysql_fetch_row(res);
+	int hg = -1;
+	if (row && row[0]) {
+		hg = atoi(row[0]);
+	}
+	mysql_free_result(res);
+
+	return hg;
+}
+
 int create_n_trxs(const CommandLine& cl, size_t n, vector<MYSQL*>& out_conns, int client_flags = 0) {
 	diag("Creating '%ld' transactions to test 'max_connections'", n);
+	diag("  - Connecting to: %s:%d", cl.host, cl.port);
+	diag("  - Username: %s", cl.username);
 
 	vector<MYSQL*> res_conns {};
 
@@ -50,12 +80,14 @@ int create_n_trxs(const CommandLine& cl, size_t n, vector<MYSQL*>& out_conns, in
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 			return EXIT_FAILURE;
 		}
-	
+
+		diag("  - Created connection %zu/%zu", i + 1, n);
 		mysql_query(proxy_mysql, "BEGIN");
 
 		res_conns.push_back(proxy_mysql);
 	}
 
+	diag("Successfully created %zu transaction connections", n);
 	out_conns = res_conns;
 	return EXIT_SUCCESS;
 }
@@ -138,10 +170,20 @@ cleanup:
 	return err;
 }
 
-int test_ff_sess_exceeds_max_conns(const CommandLine& cl, MYSQL* proxy_admin, long srv_conn_to, int max_conns) {
-	// We assume 'regular infra' and use hardcoded hg '0' and username 'sbtest1' for this test
-	const int tg_hg = 0;
-	const string username = "sbtest1";
+int test_ff_sess_exceeds_max_conns(const CommandLine& cl, MYSQL* proxy_admin, int tg_hg, const string& username, long srv_conn_to, int max_conns) {
+	diag("================================================================================");
+	diag("TEST: test_ff_sess_exceeds_max_conns");
+	diag("================================================================================");
+	diag("This test verifies that 'max_connections' is honored by 'fast_forward' sessions.");
+	diag("When 'max_connections' is reached, new 'fast_forward' sessions should timeout.");
+	diag("");
+	diag("Test parameters:");
+	diag("  - Target hostgroup: %d", tg_hg);
+	diag("  - Test username: %s", username.c_str());
+	diag("  - Server connect timeout (ms): %ld", srv_conn_to);
+	diag("  - Max connections: %d", max_conns);
+	diag("================================================================================");
+	diag("");
 
 	string str_poll_timeout {};
 	string str_connect_timeout_server {};
@@ -270,14 +312,25 @@ cleanup:
 	return EXIT_SUCCESS;
 }
 
-int test_ff_only_one_free_conn(const CommandLine& cl, MYSQL* proxy_admin, int max_conns) {
+int test_ff_only_one_free_conn(const CommandLine& cl, MYSQL* proxy_admin, int tg_hg, const string& username, int max_conns) {
+	diag("================================================================================");
+	diag("TEST: test_ff_only_one_free_conn");
+	diag("================================================================================");
+	diag("This test verifies that 'fast_forward' sessions properly reuse 'FreeConn'");
+	diag("connections from the connection pool instead of creating new connections.");
+	diag("");
+	diag("Test parameters:");
+	diag("  - Target hostgroup: %d", tg_hg);
+	diag("  - Test username: %s", username.c_str());
+	diag("  - Max connections: %d", max_conns);
+	diag("================================================================================");
+	diag("");
+
 	if (proxy_admin == NULL || max_conns == 0) {
 		diag("'test_ff_only_one_free_conn' received invalid params.");
 		return EINVAL;
 	}
 
-	const int tg_hg = 0;
-	const string username = "sbtest1";
 	const char* reset_connpool_stats { "SELECT * FROM stats.stats_mysql_connection_pool_reset" };
 
 	string str_poll_timeout {};
@@ -433,9 +486,6 @@ cleanup:
 int main(int argc, char** argv) {
 	CommandLine cl;
 
-	// 'test_ff_sess_exceeds_max_conns' performs '1' check, 'test_ff_only_one_free_conn' performs '2' checks
-	plan(1 * 2 + 2 * 2);
-
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
@@ -446,20 +496,66 @@ int main(int argc, char** argv) {
 		2*2   // 'test_ff_only_one_free_conn'
 	);
 
+	// Verbose test header
+	diag("================================================================================");
+	diag("Test: max_connections_ff-t");
+	diag("================================================================================");
+	diag("This test verifies that 'max_connections' is properly honored by 'fast_forward'");
+	diag("connections in ProxySQL.");
+	diag("");
+	diag("Test scenarios:");
+	diag("  1. Test that exceeding max_connections causes timeout for new ff sessions");
+	diag("  2. Test that ff sessions properly reuse free connections from pool");
+	diag("");
+	diag("Configuration:");
+	diag("  - ProxySQL admin host: %s", cl.admin_host);
+	diag("  - ProxySQL admin port: %d", cl.admin_port);
+	diag("  - ProxySQL data host: %s", cl.host);
+	diag("  - ProxySQL data port: %d", cl.port);
+	diag("  - Test username: %s", cl.username);
+	diag("================================================================================");
+	diag("");
+
 	MYSQL* proxy_admin = mysql_init(NULL);
-	if (!mysql_real_connect(proxy_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+	if (!mysql_real_connect(proxy_admin, cl.admin_host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_admin));
 		return EXIT_FAILURE;
 	}
 
-	// 1. Test for: '4000' timeout, '1' max_connections
-	test_ff_sess_exceeds_max_conns(cl, proxy_admin, 8000, 1);
+	// Get the default hostgroup for the test user
+	int tg_hg = get_user_default_hostgroup(proxy_admin, cl.username);
+	if (tg_hg < 0) {
+		diag("ERROR: Failed to get default_hostgroup for user '%s'", cl.username);
+		return EXIT_FAILURE;
+	}
+	diag("User '%s' default_hostgroup: %d", cl.username, tg_hg);
+
+	// Check if the target hostgroup has servers configured
+	{
+		diag("Checking if hostgroup %d has servers configured...", tg_hg);
+		string query = "SELECT hostgroup_id, hostname, port, status FROM mysql_servers WHERE hostgroup_id=" + std::to_string(tg_hg);
+		MYSQL_QUERY(proxy_admin, query.c_str());
+		MYSQL_RES* res = mysql_store_result(proxy_admin);
+		int rows = mysql_num_rows(res);
+		if (rows == 0) {
+			diag("ERROR: No servers found in hostgroup %d", tg_hg);
+			mysql_free_result(res);
+			return EXIT_FAILURE;
+		}
+		diag("Found %d server(s) in hostgroup %d", rows, tg_hg);
+		mysql_free_result(res);
+	}
+
+	diag("");
+
+	// 1. Test for: '8000' timeout, '1' max_connections
+	test_ff_sess_exceeds_max_conns(cl, proxy_admin, tg_hg, cl.username, 8000, 1);
 	// 2. Test for: '2000' timeout, '3' max_connections
-	test_ff_sess_exceeds_max_conns(cl, proxy_admin, 2000, 3);
+	test_ff_sess_exceeds_max_conns(cl, proxy_admin, tg_hg, cl.username, 2000, 3);
 	// 3. Test for only one 'FreeConn' that should be destroyed due to incoming 'fast_forward' conn - MaxConn: 1
-	test_ff_only_one_free_conn(cl, proxy_admin, 1);
-	// 3. Test for only one 'FreeConn' that should be destroyed due to incoming 'fast_forward' conn - MaxConn: 3
-	test_ff_only_one_free_conn(cl, proxy_admin, 3);
+	test_ff_only_one_free_conn(cl, proxy_admin, tg_hg, cl.username, 1);
+	// 4. Test for only one 'FreeConn' that should be destroyed due to incoming 'fast_forward' conn - MaxConn: 3
+	test_ff_only_one_free_conn(cl, proxy_admin, tg_hg, cl.username, 3);
 
 	mysql_close(proxy_admin);
 

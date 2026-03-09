@@ -120,11 +120,6 @@ class ProxySQL_GlobalVariables {
 		bool clickhouse_server;
 #endif /* PROXYSQLCLICKHOUSE */
 
-#ifdef PROXYSQLGENAI
-		bool genai_enabled;
-		bool mcp_enabled;
-#endif /* PROXYSQLGENAI */
-
 		int gr_bootstrap_mode;
 		char* gr_bootstrap_uri;
 		char* gr_bootstrap_account;

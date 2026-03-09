@@ -350,6 +350,7 @@ void* force_ssl_pre_handshake_failure(void* arg) {
 MYSQL* create_server_conn(CommandLine& cl) {
 	MYSQL* server = mysql_init(NULL);
 
+	diag("Connecting to backend MySQL at %s:%d as %s", cl.mysql_host, cl.mysql_port, cl.mysql_username);
 	if (
 		!mysql_real_connect(
 			server,
@@ -363,8 +364,8 @@ MYSQL* create_server_conn(CommandLine& cl) {
 		)
 	) {
 		diag(
-			"Failed to create conn to MySQL   error=%s port=%d",
-			mysql_error(server), cl.mysql_port
+			"Failed to create direct backend conn to MySQL   host=%s port=%d error=%s",
+			cl.mysql_host, cl.mysql_port, mysql_error(server)
 		);
 		return NULL;
 	}
@@ -412,9 +413,12 @@ pair<uint32_t,vector<MYSQL*>> warmup_conn_pool(CommandLine& cl, uint32_t CONNS_T
 	for (int i = 0; i < CONNS_TOTAL; i++) {
 		MYSQL* myconn = mysql_init(NULL);
 
+		if (i % 20 == 0) {
+			diag("Connecting to ProxySQL frontend for warmup at %s:%d as %s (Conn %d/%d)", cl.host, cl.port, cl.username, i+1, CONNS_TOTAL);
+		}
 		if (!mysql_real_connect(myconn, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 			diag(
-				"Failed to connect   addr=%s port=%d user=%s pass=%s err=%s",
+				"Failed to connect to ProxySQL frontend   addr=%s port=%d user=%s pass=%s err=%s",
 				cl.host, cl.port, cl.username, cl.password, mysql_error(myconn)
 			);
 			return { EXIT_FAILURE, {} };
@@ -575,7 +579,7 @@ const uint32_t PING_INTV_MS { 1000 };
 pair<int,double> fetch_metric_val(CommandLine& cl, const string& metric_id) {
 	uint64_t curl_res_code = 0;
 	string curl_res_data {};
-	const char URL[] { "http://localhost:6070/metrics/" };
+	const char URL[] { "http://proxysql:6070/metrics/" };
 
 	diag("Fetching metric values via RESTAPI   URL=%s", URL);
 	CURLcode code = perform_simple_get(URL, curl_res_code, curl_res_data);
@@ -738,17 +742,29 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
+	diag("=== Regression Test #4556: SSL Error Queue Cleanup ===");
+	diag("This test verifies that SSL errors do not pollute the OpenSSL error queue");
+	diag("for either frontend or backend connections, which could lead to");
+	diag("spurious failures on subsequent, unrelated connections.");
+	diag("The test covers:");
+	diag("1. Frontend SSL failures (handshake, cert errors, socket closure).");
+	diag("2. Backend SSL failures (killed connections during PING/traffic).");
+	diag("3. Verification that other connections handled by the same thread remain healthy.");
+	diag("=======================================================");
+
 	diag("Init rand seed with current time");
 	srand(time(NULL));
 
 	MYSQL* admin = mysql_init(NULL);
 
+	diag("Connecting to ProxySQL Admin at %s:%d as %s", cl.host, cl.admin_port, cl.admin_username);
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
 	}
 
 	// Disable query retry; required for further tests
+	diag("Disabling mysql-query_retries_on_failure and enabling REST API");
 	MYSQL_QUERY_T(admin, "SET mysql-query_retries_on_failure=0");
 	MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
@@ -757,6 +773,7 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY_T(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
 
 	// Update default hostgroup for user with target hostgroup
+	diag("Configuring user %s with default_hostgroup=%d", cl.username, HG_ID);
 	MYSQL_QUERY_T(admin,
 		("UPDATE mysql_users SET default_hostgroup=" + std::to_string(HG_ID) +
 			" WHERE username='" + cl.username + "'").c_str()
@@ -764,10 +781,12 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY_T(admin, "LOAD MYSQL USERS TO RUNTIME");
 
 	// Disable all queries rules if present; not required
+	diag("Disabling all query rules");
 	MYSQL_QUERY_T(admin, "UPDATE mysql_query_rules SET active=0");
 	MYSQL_QUERY_T(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
 	// Update MySQL servers config
+	diag("Enabling SSL for HG_ID=%d in mysql_servers", HG_ID);
 	MYSQL_QUERY_T(admin,
 		("UPDATE mysql_servers SET use_ssl=1 WHERE hostgroup_id=" + std::to_string(HG_ID)).c_str()
 	);

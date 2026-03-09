@@ -41,7 +41,7 @@ This changelog includes all individual commits since ProxySQL 3.0.3.
 - 0e7b5e2b Added TAP test
 - fae283cf Add SSL and non-SSL connection OK metrics for PostgreSQL monitor connections Adds two new metrics, ssl_connections_OK and non_ssl_connections_OK, to improve visibility into PostgreSQL monitor connection status.
 - a2068286 Add test_load_from_config_prefix_stripping-t to test groups
-  Adds the new prefix stripping validation test to the default-g4 test group
+  Adds the new prefix stripping validation test to the legacy-g4 test group
 - 6c97d3d2 Add extensive Doxygen documentation for ProxySQL_Config and Read_Global_Variables_from_configfile
   This commit adds detailed Doxygen documentation for:
 - 7ebdf561 Fix automatic prefix stripping to work with libconfig lookup

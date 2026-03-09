@@ -101,28 +101,38 @@ void test_basic_prompt_construction() {
 	diag("=== Basic Prompt Construction Tests ===");
 
 	// Test 1: Simple query
-	string prompt = build_test_prompt("Show all users");
-	vector<string> required = {"You are a SQL expert", "Show all users", "Return ONLY the SQL query"};
+	const char* nl1 = "Show all users";
+	diag("Building prompt for: '%s'", nl1);
+	string prompt = build_test_prompt(nl1);
+	vector<string> required = {"You are a SQL expert", nl1, "Return ONLY the SQL query"};
 	ok(prompt_contains_elements(prompt, required), "Simple query prompt contains all required elements");
 
 	// Test 2: Query with conditions
-	prompt = build_test_prompt("Find customers where age > 25");
-	required = {"You are a SQL expert", "Find customers where age > 25", "SQL query"};
+	const char* nl2 = "Find customers where age > 25";
+	diag("Building prompt for: '%s'", nl2);
+	prompt = build_test_prompt(nl2);
+	required = {"You are a SQL expert", nl2, "SQL query"};
 	ok(prompt_contains_elements(prompt, required), "Query with conditions prompt is correct");
 
 	// Test 3: Aggregation query
-	prompt = build_test_prompt("Count users by country");
-	required = {"You are a SQL expert", "Count users by country"};
+	const char* nl3 = "Count users by country";
+	diag("Building prompt for: '%s'", nl3);
+	prompt = build_test_prompt(nl3);
+	required = {"You are a SQL expert", nl3};
 	ok(prompt_contains_elements(prompt, required), "Aggregation query prompt is correct");
 
 	// Test 4: Query with JOIN
-	prompt = build_test_prompt("Show orders with customer names");
-	required = {"You are a SQL expert", "Show orders with customer names"};
+	const char* nl4 = "Show orders with customer names";
+	diag("Building prompt for: '%s'", nl4);
+	prompt = build_test_prompt(nl4);
+	required = {"You are a SQL expert", nl4};
 	ok(prompt_contains_elements(prompt, required), "JOIN query prompt is correct");
 
 	// Test 5: Complex query
-	prompt = build_test_prompt("Find the top 10 customers by total order amount in the last 30 days");
-	required = {"You are a SQL expert", "Find the top 10 customers", "last 30 days"};
+	const char* nl5 = "Find the top 10 customers by total order amount in the last 30 days";
+	diag("Building prompt for: '%s'", nl5);
+	prompt = build_test_prompt(nl5);
+	required = {"You are a SQL expert", nl5, "last 30 days"};
 	ok(prompt_contains_elements(prompt, required), "Complex query prompt is correct");
 }
 
@@ -139,23 +149,27 @@ void test_schema_context_inclusion() {
 	diag("=== Schema Context Inclusion Tests ===");
 
 	// Test 1: Empty schema context
+	diag("Testing with empty schema context");
 	string prompt = build_test_prompt("Show all users", "");
 	ok(prompt.find("Database Schema:") == string::npos, "Empty schema context doesn't add schema section");
 
 	// Test 2: Simple schema context
 	string schema = "Table: users (id INT, name VARCHAR(100))";
+	diag("Testing with simple schema: '%s'", schema.c_str());
 	prompt = build_test_prompt("Show all users", schema);
 	ok(prompt.find("Database Schema:") != string::npos && prompt.find("users") != string::npos,
 	   "Simple schema context is included");
 
 	// Test 3: Multi-table schema context
 	schema = "Table: users (id INT, name VARCHAR(100))\nTable: orders (id INT, user_id INT, amount DECIMAL)";
+	diag("Testing with multi-table schema");
 	prompt = build_test_prompt("Show orders with user names", schema);
 	ok(prompt.find("users") != string::npos && prompt.find("orders") != string::npos,
 	   "Multi-table schema context is included");
 
 	// Test 4: Schema with foreign keys
 	schema = "users.id <- orders.user_id (FOREIGN KEY)";
+	diag("Testing with foreign keys schema: '%s'", schema.c_str());
 	prompt = build_test_prompt("Show all orders with user info", schema);
 	ok(prompt.find("FOREIGN KEY") != string::npos, "Schema with foreign keys is included");
 
@@ -167,6 +181,7 @@ void test_schema_context_inclusion() {
 		schema += table_name;
 		schema += "\n";
 	}
+	diag("Testing with large schema context (20 tables)");
 	prompt = build_test_prompt("Show data from table5", schema);
 	ok(prompt.find("table5") != string::npos, "Large schema context includes relevant table");
 }
@@ -185,6 +200,7 @@ void test_system_instruction_formatting() {
 
 	// Test 1: System instruction presence
 	string prompt = build_test_prompt("Any query");
+	diag("Checking system instructions in prompt");
 	ok(prompt.find("You are a SQL expert") != string::npos, "System instruction contains role definition");
 
 	// Test 2: Task description
@@ -217,25 +233,30 @@ void test_edge_cases() {
 	diag("=== Edge Case Tests ===");
 
 	// Test 1: Empty query
+	diag("Testing with empty natural language query");
 	string prompt = build_test_prompt("");
 	ok(prompt.find("Question: ") != string::npos, "Empty query is handled");
 
 	// Test 2: Very long query
+	diag("Testing with very long natural language query (10000 chars)");
 	string long_query(10000, 'a');
 	prompt = build_test_prompt(long_query);
 	ok(prompt.length() > 10000, "Very long query is included");
 
 	// Test 3: Query with special characters
+	diag("Testing with special characters and emojis");
 	string special_query = "Find users with émojis 🎉 and quotes \"'";
 	prompt = build_test_prompt(special_query);
 	ok(prompt.find("émojis") != string::npos, "Special characters are preserved");
 
 	// Test 4: Query with newlines
+	diag("Testing with query containing newlines");
 	string newline_query = "Show users\nwhere\nage > 25";
 	prompt = build_test_prompt(newline_query);
 	ok(prompt.find("age > 25") != string::npos, "Query with newlines is handled");
 
 	// Test 5: Query with SQL injection attempt (should be safe)
+	diag("Testing with SQL injection payload: '; DROP TABLE users; --");
 	string injection_query = "'; DROP TABLE users; --";
 	prompt = build_test_prompt(injection_query);
 	ok(prompt.find("DROP TABLE") != string::npos,
@@ -254,6 +275,7 @@ void test_edge_cases() {
 void test_prompt_structure_validation() {
 	diag("=== Prompt Structure Validation Tests ===");
 
+	diag("Validating structure for a standard prompt");
 	string prompt = build_test_prompt("Show users", "Table: users (id INT, name VARCHAR)");
 
 	// Test 1: System instructions come first
@@ -297,6 +319,15 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
+	diag("Starting nl2sql_prompt_builder-t");
+	diag("This test verifies the construction of LLM prompts for NL2SQL conversion.");
+	diag("It checks that prompts correctly include:");
+	diag("  - System instructions (role and task definition)");
+	diag("  - Database schema context (tables, columns, foreign keys)");
+	diag("  - User's natural language question");
+	diag("  - Output formatting requirements (SQL only, no markdown)");
+	diag("It also validates the overall prompt structure and handles edge cases like long queries or special characters.");
+
 	// Connect to admin interface (for config checks)
 	g_admin = mysql_init(NULL);
 	if (!g_admin) {
@@ -311,8 +342,8 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
-	// Plan tests: 6 categories with 5 tests each
-	plan(30);
+	// Plan tests: 5 categories with 5 tests each = 25 tests
+	plan(25);
 
 	// Run test categories
 	test_basic_prompt_construction();

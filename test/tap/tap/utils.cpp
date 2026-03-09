@@ -8,6 +8,7 @@
 #include <string>
 #include <sstream>
 #include <random>
+#include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <utility>
@@ -21,6 +22,7 @@
 #include "mysql.h"
 #include "utils.h"
 #include "tap.h"
+#include "noise_utils.h"
 
 using std::pair;
 using std::map;
@@ -243,22 +245,6 @@ string to_string(std::thread::id id) {
 	helper << id;
 
 	return helper.str();
-}
-
-string replace_str(const string& str, const string& match, const string& repl) {
-	if(match.empty()) {
-		return str;
-	}
-
-	string result { str };
-	size_t start_pos = 0;
-
-	while((start_pos = result.find(match, start_pos)) != std::string::npos) {
-		result.replace(start_pos, match.length(), repl);
-		start_pos += repl.length();
-	}
-
-	return result;
 }
 
 pair<int,vector<MYSQL*>> disable_core_nodes_scheduler(CommandLine& cl, MYSQL* admin) {
@@ -780,7 +766,7 @@ CURLcode perform_simple_post(
 }
 
 CURLcode perform_simple_get(
-	const string& endpoint, uint64_t& curl_res_code, string& curl_res_data
+	const string& endpoint, uint64_t& curl_res_code, string& curl_res_data, const string& userpwd
 ) {
 	CURL *curl;
 	CURLcode res;
@@ -790,6 +776,9 @@ CURLcode perform_simple_get(
 	curl = curl_easy_init();
 	if(curl) {
 		curl_easy_setopt(curl, CURLOPT_URL, endpoint.c_str());
+		if (!userpwd.empty()) {
+			curl_easy_setopt(curl, CURLOPT_USERPWD, userpwd.c_str());
+		}
 		struct memory response = { 0 };
 		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
 		curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&response);
@@ -832,14 +821,14 @@ int wait_post_enpoint_ready(string endpoint, string post_params, uint32_t timeou
 	return res;
 }
 
-int wait_get_enpoint_ready(string endpoint, uint32_t timeout, uint32_t delay) {
+int wait_get_enpoint_ready(string endpoint, uint32_t timeout, uint32_t delay, const string& userpwd) {
 	double waited = 0;
 	int res = -1;
 
 	while (waited < timeout) {
 		string curl_resp_err {};
 		uint64_t curl_res_code = 0;
-		int curl_res = perform_simple_get(endpoint, curl_res_code, curl_resp_err);
+		int curl_res = perform_simple_get(endpoint, curl_res_code, curl_resp_err, userpwd);
 
 		if (curl_res != CURLE_OK || curl_res_code != 200) {
 			diag("'curl_res': %d, 'curl_err': '%s', waiting for '%d'ms...", curl_res, curl_resp_err.c_str(), delay);
@@ -1429,7 +1418,7 @@ const char t_restapi_insert[] {
 		"VALUES (1,%ld,'%s','%s','%s','comm')",
 };
 
-const string base_address { "http://localhost:6070/sync/" };
+const string base_address { "http://proxysql:6070/sync/" };
 
 int configure_endpoints(
 	MYSQL* admin,
@@ -1475,7 +1464,8 @@ int configure_endpoints(
 	int endpoint_timeout = wait_post_enpoint_ready(full_endpoint, "{}", 1000, 100);
 
 	if (endpoint_timeout) {
-		diag("Timeout while trying to reach first valid enpoint");
+		diag("Timeout while trying to reach first valid endpoint: %s", full_endpoint.c_str());
+		diag("This usually means RESTAPI enabled but script failed to execute. Check TAP_WORKDIR.");
 		return EXIT_FAILURE;
 	}
 
@@ -2424,7 +2414,7 @@ MYSQL* init_mysql_conn(char* host, int port, char* user, char* pass, bool ssl, b
 		cflags |= CLIENT_SSL;
 	}
 
-	if (!mysql_real_connect(mysql, host, user, pass, NULL, port, NULL, cflags)) {
+	if (!mysql_real_connect(mysql, host, user, pass, NULL, port, NULL, cflags)) { diag("init_mysql_conn failed: %s (Host: %s, Port: %d, User: %s)", mysql_error(mysql), host, port, user); mysql_close(mysql);
 		return nullptr;
 	}
 
@@ -2434,4 +2424,75 @@ MYSQL* init_mysql_conn(char* host, int port, char* user, char* pass, bool ssl, b
 int run_q(MYSQL *mysql, const char *q) {
 	MYSQL_QUERY_T(mysql,q);
 	return 0;
+}
+
+static std::vector<pid_t> background_noise_pids;
+extern "C" void stop_noise_tools() {
+
+	static std::atomic<bool> already_stopped{false};
+	if (already_stopped.exchange(true)) {
+		return;
+	}
+	stop_internal_noise_threads();
+	for (pid_t pid : background_noise_pids) {
+		kill(pid, SIGTERM);
+		// Small wait and reap
+		usleep(100000);
+		int status;
+		if (waitpid(pid, &status, WNOHANG) == 0) {
+			kill(pid, SIGKILL);
+			waitpid(pid, &status, 0);
+		}
+	}
+	background_noise_pids.clear();
+}
+
+extern "C" int get_noise_tools_count() {
+	return (int)background_noise_pids.size() + get_internal_noise_threads_count();
+}
+
+void spawn_noise(const CommandLine& cl, const std::string& tool_path, const std::vector<std::string>& args) {
+	if (!cl.use_noise) {
+		return;
+	}
+
+	static std::once_flag atexit_flag;
+	std::call_once(atexit_flag, [](){
+		atexit(stop_noise_tools);
+	});
+
+	pid_t pid = fork();
+	if (pid == 0) {
+		// Child
+		setpgid(0, 0);
+		int fd_null = open("/dev/null", O_RDWR);
+		if (fd_null != -1) {
+			dup2(fd_null, STDIN_FILENO);
+			dup2(fd_null, STDOUT_FILENO);
+			dup2(fd_null, STDERR_FILENO);
+			if (fd_null > 2) {
+				close(fd_null);
+			}
+		} else {
+			// Cannot redirect I/O; abort rather than pollute test output
+			_exit(1);
+		}
+
+		std::vector<char*> c_args;
+		c_args.push_back(const_cast<char*>(tool_path.c_str()));
+		for (const auto& arg : args) {
+			c_args.push_back(const_cast<char*>(arg.c_str()));
+		}
+		c_args.push_back(nullptr);
+
+		::execvp(tool_path.c_str(), c_args.data());
+		// If we are here, exec failed
+		fprintf(stderr, "Failed to exec noise tool: %s\n", tool_path.c_str());
+		_exit(1);
+	} else if (pid > 0) {
+		background_noise_pids.push_back(pid);
+		diag("Spawned background noise tool '%s' with PID %d", tool_path.c_str(), pid);
+	} else {
+		fprintf(stderr, "Failed to fork for noise tool: %s\n", tool_path.c_str());
+	}
 }

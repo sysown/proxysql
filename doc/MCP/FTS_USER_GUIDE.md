@@ -113,15 +113,16 @@ SET mcp-enabled = true;
 -- Configure FTS database path
 SET mcp-fts_path = '/var/lib/proxysql/mcp_fts.db';
 
--- Configure MySQL backend for FTS indexing
-SET mcp-mysql_hosts = '127.0.0.1';
-SET mcp-mysql_ports = '3306';
-SET mcp-mysql_user = 'root';
-SET mcp-mysql_password = 'password';
-SET mcp-mysql_schema = 'mydb';
+-- Configure server-side auth and logical target routing
+INSERT INTO mcp_auth_profiles (auth_profile_id, db_username, db_password, default_schema, use_ssl, ssl_mode, comment)
+VALUES ('fts_mysql_auth', 'root', 'password', 'mydb', 0, '', 'FTS MySQL auth profile');
+
+INSERT INTO mcp_target_profiles (target_id, protocol, hostgroup_id, auth_profile_id, description, max_rows, timeout_ms, allow_explain, allow_discovery, active, comment)
+VALUES ('fts_mysql_target', 'mysql', 9100, 'fts_mysql_auth', 'FTS MySQL backend', 200, 5000, 1, 1, 1, 'FTS target');
 
 -- Apply changes
 LOAD MCP VARIABLES TO RUNTIME;
+LOAD MCP PROFILES TO RUNTIME;
 ```
 
 ### Configuration Variables
@@ -129,11 +130,8 @@ LOAD MCP VARIABLES TO RUNTIME;
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `mcp-fts_path` | `mcp_fts.db` | Path to SQLite FTS database |
-| `mcp-mysql_hosts` | `127.0.0.1` | Comma-separated MySQL hosts |
-| `mcp-mysql_ports` | `3306` | Comma-separated MySQL ports |
-| `mcp-mysql_user` | (empty) | MySQL username |
-| `mcp-mysql_password` | (empty) | MySQL password |
-| `mcp-mysql_schema` | (empty) | Default MySQL schema |
+| `mcp_auth_profiles` | N/A | Server-side DB credentials keyed by `auth_profile_id` |
+| `mcp_target_profiles` | N/A | Logical `target_id` to protocol/hostgroup/auth mapping |
 
 ### File System Requirements
 

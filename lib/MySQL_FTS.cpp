@@ -174,7 +174,8 @@ bool MySQL_FTS::index_exists(const std::string& schema, const std::string& table
 		"SELECT COUNT(*) FROM fts_indexes "
 		"WHERE schema_name = ?1 AND table_name = ?2";
 
-	int rc = db->prepare_v2(check_sql, &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(check_sql);
+	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK) {
 		proxy_error("Failed to prepare index check: %d\n", rc);
 		return false;
@@ -190,7 +191,6 @@ bool MySQL_FTS::index_exists(const std::string& schema, const std::string& table
 		exists = (count > 0);
 	}
 
-	(*proxy_sqlite3_finalize)(stmt);
 	return exists;
 }
 

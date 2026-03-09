@@ -93,7 +93,10 @@ void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 		int rc;
 		char *query=(char *)"INSERT INTO HOST_STATUS_GALERA VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
 		//rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
-		rc = sessdb->prepare_v2(query, &statement);
+		auto prepared_statement = sessdb->prepare_v2(query);
+		rc = prepared_statement.first;
+		stmt_unique_ptr statement_unique = std::move(prepared_statement.second);
+		statement = statement_unique.get();
 		ASSERT_SQLITE_OK(rc, sessdb);
 		for (unsigned int i=0; i<num_galera_servers[cluster_id]; i++) {
 			string serverid = "";
@@ -114,7 +117,6 @@ void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 			rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, sessdb);
 			rc=sqlite3_reset(statement); ASSERT_SQLITE_OK(rc, sessdb);
 		}
-		sqlite3_finalize(statement);
 	}
 	sessdb->execute("COMMIT");
 }
@@ -272,4 +274,3 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 	l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
 	l_free(query_length,query);
 }
-
