@@ -46,6 +46,15 @@ int main(int argc, char** argv) {
     if (!mysql_real_connect(mysqladmin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
         fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysqladmin));
         return exit_status();
+    } else {
+    diag("Configuring ProxySQL for the test requirements...");
+    // Clear existing rules to avoid interference
+    MYSQL_QUERY(mysqladmin, "DELETE FROM mysql_query_rules");
+    
+    // Create a rule to send all SELECTs from testuser to hostgroup 1
+    MYSQL_QUERY(mysqladmin, "INSERT INTO mysql_query_rules(rule_id, active, username, match_digest, destination_hostgroup, apply) VALUES (1, 1, 'testuser', '^SELECT', 1, 1)");
+    
+    MYSQL_QUERY(mysqladmin, "LOAD MYSQL QUERY RULES TO RUNTIME");
     }
 
     MYSQL* mysql = mysql_init(NULL);
