@@ -4,7 +4,7 @@ services:
 ####################################################################################################
   _build:
     image: none
-    network_mode: bridge
+    network_mode: host
     privileged: true
     environment:
       - MAKE
@@ -17,6 +17,9 @@ services:
       - WITHASAN
       - BLD_NAME
       - PROXYSQLGENAI
+      - PROXYSQL31
+      - PROXYSQLFFTO
+      - PROXYSQLTSDB
       - GIT_VERSION
     command: bash -l -c /opt/entrypoint/entrypoint.bash
 

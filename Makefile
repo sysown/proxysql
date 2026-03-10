@@ -9,9 +9,9 @@
 ### export GIT_VERSION=3.x.y-dev
 ### ```
 
-GIT_VERSION ?= $(shell git describe --long --abbrev=7 2>/dev/null || git describe --long --abbrev=7 --always)
-ifndef GIT_VERSION
-    $(error GIT_VERSION is not set)
+GIT_VERSION_BASE := $(shell git describe --long --abbrev=7 2>/dev/null || git describe --long --abbrev=7 --always)
+ifndef GIT_VERSION_BASE
+    $(error GIT_VERSION_BASE is not set)
 endif
 
 ### RELEASE TIERS & FEATURE FLAGS:
@@ -54,9 +54,10 @@ ifeq ($(PROXYSQL31),1)
 endif
 
 # Only increment version at the top-level make to avoid double-incrementing in recursive makes
+GIT_VERSION ?= $(GIT_VERSION_BASE)
 ifeq ($(MAKELEVEL),0)
 # Normalize GIT_VERSION by stripping leading 'v' for arithmetic
-GIT_VERSION_NORM := $(shell echo "$(GIT_VERSION)" | sed 's/^v//')
+GIT_VERSION_NORM := $(shell echo "$(GIT_VERSION_BASE)" | sed 's/^v//')
 # If PROXYSQLGENAI is enabled, increment the major version number by 1
 ifeq ($(PROXYSQLGENAI),1)
 	GIT_VERSION := $(shell echo "$(GIT_VERSION_NORM)" | awk -F. '{printf "%d.%s", $$1+1, substr($$0, length($$1)+2)}')
