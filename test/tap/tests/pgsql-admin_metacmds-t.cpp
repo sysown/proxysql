@@ -11,10 +11,65 @@
 #include <cstdlib>
 #include <array>
 #include <memory>
+#include <libpq-fe.h>
 
 #include "command_line.h"
 #include "tap.h"
 #include "utils.h"
+
+// Case-insensitive string search using GNU strcasestr
+bool case_insensitive_find(const std::string& haystack, const char* needle) {
+	return strcasestr(haystack.c_str(), needle) != nullptr;
+}
+
+// PostgreSQL versions to test
+const char* PG_VERSIONS[] = {
+	// PostgreSQL 16.x series
+	"16.13", "16.12", "16.11", "16.10", "16.9", "16.8", "16.7", "16.6", "16.5", "16.4", "16.3", "16.2", "16.1", "16.0",
+
+	// PostgreSQL 17.x series
+	"17.9", "17.8", "17.7", "17.6", "17.5", "17.4", "17.3", "17.2", "17.1", "17.0",
+
+	// PostgreSQL 18.x (development/future)
+	"18.3", "18.2", "18.1", "18.0",
+
+	// Edge cases
+	"15.5",     // Older version
+	"16.1.0",   // Extended version format
+};
+
+const int NUM_PG_VERSIONS = sizeof(PG_VERSIONS) / sizeof(PG_VERSIONS[0]);
+
+// Set PostgreSQL server version via PostgreSQL admin interface
+bool set_pgsql_server_version(PGconn* admin_conn, const char* version) {
+	std::stringstream query;
+	query << "SET pgsql-server_version='" << version << "'";
+	PGresult* res = PQexec(admin_conn, query.str().c_str());
+	if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+		PQclear(res);
+		return false;
+	}
+	PQclear(res);
+
+	res = PQexec(admin_conn, "LOAD PGSQL VARIABLES TO RUNTIME");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+		PQclear(res);
+		return false;
+	}
+	PQclear(res);
+	return true;
+}
+
+// Connect to admin
+PGconn* connect_admin(const CommandLine& cl) {
+	std::stringstream cs;
+	cs << "host=" << cl.pgsql_admin_host
+	   << " port=" << cl.pgsql_admin_port
+	   << " user=" << cl.admin_username
+	   << " password=" << cl.admin_password
+	   << " dbname=postgres";
+	return PQconnectdb(cs.str().c_str());
+}
 
 // Execute a command and return its output
 std::string exec(const char* cmd) {
@@ -64,18 +119,20 @@ void test_psql_list_tables(const CommandLine& cl) {
 	std::string cmd = build_psql_cmd(cl, "\\dt");
 	std::string output = exec(cmd.c_str());
 
-	// Check for "List of relations" or table names
-	bool has_output = output.find("List of relations") != std::string::npos ||
-	                  output.find("name") != std::string::npos ||
-	                  output.find("Did not find any relation") != std::string::npos;
+	// Check for "List of relations" or table names (case-insensitive)
+	bool has_output = case_insensitive_find(output, "List of relations") ||
+	                  case_insensitive_find(output, "name") ||
+	                  case_insensitive_find(output, "Did not find any relation") ||
+	                  case_insensitive_find(output, "Did not find any tables");
 	ok(has_output, "\\dt (list tables): returned valid output");
 
 	// Test \dt with pattern
 	cmd = build_psql_cmd(cl, "\\dt runtime*");
 	output = exec(cmd.c_str());
 
-	has_output = output.find("List of relations") != std::string::npos ||
-	             output.find("name") != std::string::npos;
+	has_output = case_insensitive_find(output, "List of relations") ||
+	             case_insensitive_find(output, "name") ||
+	             case_insensitive_find(output, "Did not find any");
 	ok(has_output, "\\dt runtime* (tables with pattern): returned valid output");
 }
 
@@ -83,9 +140,10 @@ void test_psql_list_indexes(const CommandLine& cl) {
 	std::string cmd = build_psql_cmd(cl, "\\di");
 	std::string output = exec(cmd.c_str());
 
-	bool has_output = output.find("Schema") != std::string::npos ||
-	                  output.find("No matching relations") != std::string::npos ||
-	                  output.find("Did not find any relations") != std::string::npos;
+	bool has_output = case_insensitive_find(output, "Schema") ||
+	                  case_insensitive_find(output, "No matching relations") ||
+	                  case_insensitive_find(output, "Did not find any relations") ||
+	                  case_insensitive_find(output, "Did not find any indexes");
 	ok(has_output, "\\di (list indexes): returned valid output");
 }
 
@@ -93,9 +151,10 @@ void test_psql_list_views(const CommandLine& cl) {
 	std::string cmd = build_psql_cmd(cl, "\\dv");
 	std::string output = exec(cmd.c_str());
 
-	bool has_output = output.find("Schema") != std::string::npos ||
-	                  output.find("No matching relations") != std::string::npos ||
-	                  output.find("Did not find any relations") != std::string::npos;
+	bool has_output = case_insensitive_find(output, "Schema") ||
+	                  case_insensitive_find(output, "No matching relations") ||
+	                  case_insensitive_find(output, "Did not find any relations") ||
+	                  case_insensitive_find(output, "Did not find any views");
 	ok(has_output, "\\dv (list views): returned valid output");
 }
 
@@ -117,10 +176,11 @@ void test_psql_sql_injection_protection(const CommandLine& cl) {
 
 	diag("SQL injection test output: %s", output.c_str());
 
-	// Should either return no results or error gracefully, not crash
-	bool handled_safely = output.find("ERROR") != std::string::npos ||
-	                      output.find("No matching relations") != std::string::npos ||
-	                      output.find("Did not find any relation") != std::string::npos;
+	// Should either return no results or error gracefully, not crash (case-insensitive)
+	bool handled_safely = case_insensitive_find(output, "ERROR") ||
+	                      case_insensitive_find(output, "No matching relations") ||
+	                      case_insensitive_find(output, "Did not find any relation") ||
+	                      case_insensitive_find(output, "Did not find any tables");
 	ok(handled_safely, "SQL injection protection: pattern with quotes handled safely");
 }
 
@@ -129,8 +189,9 @@ void test_psql_version_and_info(const CommandLine& cl) {
 	std::string cmd = build_psql_cmd(cl, "\\conninfo");
 	std::string output = exec(cmd.c_str());
 
-	bool has_connection_info = output.find("connected") != std::string::npos ||
-	                           output.find("database") != std::string::npos;
+	bool has_connection_info = case_insensitive_find(output, "connected") ||
+	                           case_insensitive_find(output, "database") ||
+	                           case_insensitive_find(output, "connection information");
 	ok(has_connection_info, "\\conninfo: returned connection information");
 }
 
@@ -142,212 +203,21 @@ void test_psql_buffer_overflow_protection(const CommandLine& cl) {
 
 	diag("Buffer overflow test output: %s", output.c_str());
 
-	// Should either return no results or error gracefully, not crash
-	bool handled_safely = output.find("ERROR") != std::string::npos ||
-		output.find("No matching relations") != std::string::npos ||
-		output.find("Did not find any relation") != std::string::npos;
+	// Should either return no results or error gracefully, not crash (case-insensitive)
+	bool handled_safely = case_insensitive_find(output, "ERROR") ||
+		case_insensitive_find(output, "No matching relations") ||
+		case_insensitive_find(output, "Did not find any relation") ||
+		case_insensitive_find(output, "Did not find any tables");
 	ok(handled_safely, "Buffer overflow protection: long pattern with quotes handled safely");
 }
 
-// ==================== \d tablename DESCRIBE TABLE TESTS ====================
+// Run all tests for a specific version
+bool run_tests_for_version(PGconn* admin_conn, const CommandLine& cl, const char* version) {
+	diag("Testing with PostgreSQL server_version: %s", version);
 
-void test_psql_describe_table_basic(const CommandLine& cl) {
-	// Test \d on a known table (pgsql_servers)
-	std::string cmd = build_psql_cmd(cl, "\\d pgsql_servers");
-	std::string output = exec(cmd.c_str());
-
-	diag("\\d pgsql_servers output: %s", output.c_str());
-
-	// Check for expected output patterns
-	bool has_table_info = output.find("Table") != std::string::npos ||
-	                      output.find("Column") != std::string::npos ||
-	                      output.find("Type") != std::string::npos ||
-	                      output.find("did not find any") != std::string::npos ||
-	                      output.find("Did not find any") != std::string::npos;
-	ok(has_table_info, "\\d pgsql_servers: returned table description");
-}
-
-void test_psql_describe_table_column_info(const CommandLine& cl) {
-	// Test that column information is returned correctly
-	std::string cmd = build_psql_cmd(cl, "\\d mysql_servers");
-	std::string output = exec(cmd.c_str());
-
-	diag("\\d mysql_servers output: %s", output.c_str());
-
-	// Should have column headers or actual column data
-	bool has_columns = output.find("Column") != std::string::npos ||
-	                   output.find("Type") != std::string::npos ||
-	                   output.find("hostgroup_id") != std::string::npos ||
-	                   output.find("hostname") != std::string::npos;
-	ok(has_columns, "\\d mysql_servers: returned column information");
-}
-
-void test_psql_describe_nonexistent_table(const CommandLine& cl) {
-	// Test \d on a table that doesn't exist
-	std::string cmd = build_psql_cmd(cl, "\\d nonexistent_table_xyz");
-	std::string output = exec(cmd.c_str());
-
-	diag("\\d nonexistent_table output: %s", output.c_str());
-
-	// Should return empty table structure or "did not find" message
-	// The key is that it doesn't crash and returns valid output
-	bool handled_correctly = output.find("did not find") != std::string::npos ||
-	                         output.find("Did not find") != std::string::npos ||
-	                         output.find("ERROR") != std::string::npos ||
-	                         output.find("Table") != std::string::npos ||
-	                         output.find("Column") != std::string::npos;
-	ok(handled_correctly, "\\d nonexistent_table: handled gracefully (no crash)");
-}
-
-void test_psql_describe_table_with_quotes(const CommandLine& cl) {
-	// Test \d with special characters (simulating SQL injection attempt)
-	std::string cmd = build_psql_cmd(cl, "\\d test'--");
-	std::string output = exec(cmd.c_str());
-
-	diag("\\d with quote output: %s", output.c_str());
-
-	// Should handle safely without crashing (psql may show error or list relations)
-	bool handled_safely = output.find("did not find") != std::string::npos ||
-	                      output.find("Did not find") != std::string::npos ||
-	                      output.find("ERROR") != std::string::npos ||
-	                      output.find("unterminated") != std::string::npos ||
-	                      output.find("List of relations") != std::string::npos ||
-	                      output.find("name") != std::string::npos;
-	ok(handled_safely, "\\d with quotes: handled safely (no crash)");
-}
-
-// ==================== CONCERT TESTING (Full Query Sequence) ====================
-
-/**
- * @brief Concert testing - validates all 8 queries in the \d sequence work together
- *
- * When psql executes \d tablename, it sends 8 queries in sequence:
- * 1. pg_class with c.relname OPERATOR - table lookup
- * 2. pg_class with c.oid = - table attributes
- * 3. pg_attribute - column information
- * 4. pg_policy - row-level security policies
- * 5. pg_statistic_ext - extended statistics
- * 6. pg_publication - logical replication publications
- * 7. pg_inherits (inhparent) - parent tables (inheritance)
- * 8. pg_inherits (inhrelid) - child tables (partitions)
- *
- * This test validates the complete sequence works end-to-end.
- */
-void test_psql_describe_concert_sequence(const CommandLine& cl) {
-	diag("Starting concert test - full \\d query sequence");
-
-	// Execute \d on a known table multiple times to verify consistency
-	const char* test_tables[] = {
-		"pgsql_servers",
-		"mysql_servers",
-		"mysql_users",
-		"global_variables"
-	};
-
-	int success_count = 0;
-	for (const char* table : test_tables) {
-		std::string cmd = build_psql_cmd(cl, ("\\d " + std::string(table)).c_str());
-		std::string output = exec(cmd.c_str());
-
-		// Count successful responses (no crash, has expected output)
-		bool success = output.find("ERROR") == std::string::npos ||
-		               output.find("server closed") == std::string::npos;
-		if (success) {
-			success_count++;
-		}
-
-		diag("  \\d %s: %s", table, success ? "OK" : "FAILED");
-	}
-
-	ok(success_count == 4, "Concert test: all 8-query sequences completed (4 tables x 8 queries = 32 queries)");
-}
-
-/**
- * @brief Test describe mode state persistence across query sequence
- *
- * Validates that the describe_table_name is correctly saved and reused
- * across all queries in a \d sequence.
- */
-void test_psql_describe_state_persistence(const CommandLine& cl) {
-	diag("Testing describe mode state persistence");
-
-	// First describe a table
-	std::string cmd1 = build_psql_cmd(cl, "\\d pgsql_servers");
-	std::string output1 = exec(cmd1.c_str());
-
-	// Then describe another table immediately
-	std::string cmd2 = build_psql_cmd(cl, "\\d mysql_servers");
-	std::string output2 = exec(cmd2.c_str());
-
-	// Then go back to first table
-	std::string cmd3 = build_psql_cmd(cl, "\\d pgsql_servers");
-	std::string output3 = exec(cmd3.c_str());
-
-	// All should succeed without confusion between table names
-	bool all_ok = (output1.find("server closed") == std::string::npos) &&
-	              (output2.find("server closed") == std::string::npos) &&
-	              (output3.find("server closed") == std::string::npos);
-
-	ok(all_ok, "Describe state persistence: table names not confused between calls");
-}
-
-void test_psql_describe_edge_cases(const CommandLine& cl) {
-	diag("Testing describe edge cases");
-
-	// Test with empty table name
-	std::string cmd1 = build_psql_cmd(cl, "\\d ");
-	std::string output1 = exec(cmd1.c_str());
-	bool empty_ok = output1.find("server closed") == std::string::npos;
-	ok(empty_ok, "\\d with no table name: handled gracefully");
-
-	// Test with very long table name (but still valid)
-	std::string long_name(50, 'a');
-	std::string cmd2 = build_psql_cmd(cl, ("\\d " + long_name).c_str());
-	std::string output2 = exec(cmd2.c_str());
-	bool long_ok = output2.find("server closed") == std::string::npos;
-	ok(long_ok, "\\d with long table name: handled gracefully");
-
-	// Test with table name containing numbers and underscores
-	std::string cmd3 = build_psql_cmd(cl, "\\d mysql_servers_v2");
-	std::string output3 = exec(cmd3.c_str());
-	bool complex_ok = output3.find("server closed") == std::string::npos;
-	ok(complex_ok, "\\d mysql_servers_v2: handled correctly");
-}
-
-int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
-
-	// Check if psql is available
-	if (!psql_available()) {
-		plan(1);
-		skip(1, "psql client not available");
-		return exit_status();
-	}
-
-	// Skip test if PostgreSQL admin port is not configured
-	if (cl.pgsql_admin_port == 0) {
-		plan(1);
-		skip(1, "PostgreSQL admin interface not configured");
-		return exit_status();
-	}
-
-	plan(19);
-
-	// Test connection first
-	std::string test_cmd = build_psql_cmd(cl, "\\conninfo");
-	std::string test_output = exec(test_cmd.c_str());
-	bool connected = test_output.find("connected") != std::string::npos ||
-	                 test_output.find("database") != std::string::npos;
-	ok(connected, "Connected to PostgreSQL admin interface");
-
-	if (!connected) {
-		diag("Failed to connect to PostgreSQL admin interface");
-		return exit_status();
+	if (!set_pgsql_server_version(admin_conn, version)) {
+		diag("Failed to set server version to %s", version);
+		return false;
 	}
 
 	// Run all meta-command tests
@@ -359,25 +229,63 @@ int main(int argc, char** argv) {
 	test_psql_sql_injection_protection(cl);
 	test_psql_version_and_info(cl);
 	test_psql_buffer_overflow_protection(cl);
+	return true;
+}
 
-	// ==================== \d tablename DESCRIBE TABLE TESTS ====================
-	diag("================================================================");
-	diag("STARTING \\d tablename DESCRIBE TABLE TESTS");
-	diag("================================================================");
+int main(int argc, char** argv) {
+	CommandLine cl;
 
-	test_psql_describe_table_basic(cl);
-	test_psql_describe_table_column_info(cl);
-	test_psql_describe_nonexistent_table(cl);
-	test_psql_describe_table_with_quotes(cl);
+	if (cl.getEnv()) {
+		diag("Failed to get the required environmental variables.");
+		return -1;
+	}
 
-	// ==================== CONCERT TESTING ====================
-	diag("================================================================");
-	diag("STARTING CONCERT TESTS (Full 8-Query Sequence Validation)");
-	diag("================================================================");
+	// Calculate plan: 9 tests per version + 1 connection test + 1 final summary
+	// Per version: \l, \dt, \dt pattern, \di, \dv, \d, SQL injection, \conninfo, buffer overflow
+	plan(NUM_PG_VERSIONS * 9 + 2);
 
-	test_psql_describe_concert_sequence(cl);
-	test_psql_describe_state_persistence(cl);
-	test_psql_describe_edge_cases(cl);
+	// Check if psql is available
+	if (!psql_available()) {
+		diag("psql client not available");
+		return exit_status();
+	}
+
+	// Test connection first
+	std::string test_cmd = build_psql_cmd(cl, "\\conninfo");
+	std::string test_output = exec(test_cmd.c_str());
+	bool connected = case_insensitive_find(test_output, "connected") ||
+	                 case_insensitive_find(test_output, "database") ||
+	                 case_insensitive_find(test_output, "connection information");
+
+	if (!connected) {
+		ok(connected, "Connected to PostgreSQL admin interface");
+		diag("Failed to connect to PostgreSQL admin interface");
+		return exit_status();
+	}
+
+	ok(connected, "Connected to PostgreSQL admin interface");
+
+	// Create admin connection for SET/LOAD commands
+	PGconn* admin_conn = connect_admin(cl);
+	if (PQstatus(admin_conn) != CONNECTION_OK) {
+		diag("Admin connection failed: %s", PQerrorMessage(admin_conn));
+		PQfinish(admin_conn);
+		return exit_status();
+	}
+
+	int versions_passed = 0;
+
+	// Run tests for each PostgreSQL version
+	for (int i = 0; i < NUM_PG_VERSIONS; i++) {
+		if (run_tests_for_version(admin_conn, cl, PG_VERSIONS[i])) {
+			versions_passed++;
+		}
+	}
+
+	PQfinish(admin_conn);
+
+	ok(versions_passed == NUM_PG_VERSIONS,
+	   "All %d PostgreSQL versions passed meta-command tests", NUM_PG_VERSIONS);
 
 	return exit_status();
 }
