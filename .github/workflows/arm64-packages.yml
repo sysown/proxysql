@@ -1,0 +1,157 @@
+name: ARM64-package-build
+run-name: '${{ github.ref_name }} ${{ github.workflow }} ${{ github.sha }}'
+
+on:
+  push:
+    branches: [ 'v[0-9]+.x','v[0-9]+.[0-9]+','v[0-9]+.[0-9]+.[0-9]+' ]
+    paths-ignore:
+    - '.github/**'
+    - '**.md'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  SHA: ${{ github.sha }}
+  BRANCH: ${{ github.ref_name }}
+
+jobs:
+  clean:
+    runs-on: ubuntu-24.04
+    outputs:
+      gitdescribe: ${{ steps.gitdescribe.outputs.gitdescribe }}
+    steps:
+    
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        ref: v3.0
+        fetch-depth: 0
+
+    - name: Git describe
+      id: gitdescribe
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        GIT_VERSION=$(git describe --long --abbrev=7)
+        echo "GIT_VERSION=${GIT_VERSION}" >> $GITHUB_ENV
+        echo "gitdescribe=${GIT_VERSION}" >> $GITHUB_OUTPUT
+    
+    - name: Clean packages
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        gh release delete ${{ env.BRANCH }}-arm-head --repo ${{ github.repository }} --cleanup-tag || true
+        gh release create ${{ env.BRANCH }}-arm-head --repo ${{ github.repository }} --title "${{ env.BRANCH }}-arm-head - ${{ env.GIT_VERSION }}" --target ${{ env.SHA }} --draft --prerelease --notes-file - << EOF
+        ## ARM64 Development Snapshot
+        
+        GH-Action ARM64 Package-Build on ${{ env.BRANCH }}
+        
+        Version : **${{ env.GIT_VERSION }}**
+        
+        Started : **$(date '+%Y-%m-%d %H:%M:%S %Z')**
+        
+        Status : **Build in progress**
+        
+        EOF
+   
+  select:
+    runs-on: ubuntu-24.04
+    outputs:
+      dists: ${{ steps.select.outputs.dists }}
+    steps:
+    
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Select distros
+      id: select
+      run: |
+        set -x
+        fn_get_targets () {
+          local MKFL=$(cat Makefile)
+          for TRG in ${@}; do
+            local SUBTRG=$(echo "${MKFL}" | grep "^${TRG}:")
+            if [[ "${SUBTRG#*:}" =~ (arm64|amd64) ]]; then
+              fn_get_targets ${SUBTRG#*:}
+            else
+              echo "${SUBTRG#*: }" | sed 's/ /\n/g'
+            fi
+          done
+        }
+        echo "dists=$(fn_get_targets arm64-packages | sed 's/-clang//g; s/-dbg//g' | sort | uniq | jq -Rcs 'split("\n") | .[:-1]')" >> $GITHUB_OUTPUT
+
+  build:
+    needs: [ clean, select ]
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [ 'arm64' ]
+        dist: ${{ fromJson(needs.select.outputs.dists) }}
+        type: [ '','-dbg','-clang' ]
+        exclude:
+          # Exclude combinations that might not be ready or needed
+          - dist: 'centos7'
+            type: '-clang'
+          - dist: 'debian10'
+            type: '-clang'
+          - dist: 'ubuntu16'
+            type: '-clang'
+          - dist: 'ubuntu18'
+            type: '-clang'
+
+    runs-on: ubuntu-24.04-arm64
+    env:
+      ARCH: ${{ matrix.arch }}
+      DIST: ${{ matrix.dist }}
+      TYPE: ${{ matrix.type }}
+      MATRIX: '(${{ matrix.arch }},${{ matrix.dist }},${{ matrix.type }})'
+
+    steps:
+    
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ env.SHA }}
+        fetch-depth: 0
+       
+    - name: Build package
+      run: |
+        # Ensure binaries directory exists
+        mkdir -p binaries
+        # Run make for the specific distro
+        make ${{ matrix.dist }}${{ matrix.type }}
+        echo "BIN_PKG=$(ls -1 binaries/*[mb] | head -n 1)" >> $GITHUB_ENV
+
+    - name: Push packages
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        if [[ -n "${BIN_PKG:-}" ]]; then
+          gh release upload ${{ env.BRANCH }}-arm-head --repo ${{ github.repository }} --clobber ${{ env.BIN_PKG }}
+        else
+          echo "No package found to upload"
+        fi
+ 
+  finalize:
+    runs-on: ubuntu-24.04
+    needs: [ clean, select, build ]
+    steps:
+    - name: Update release
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        gh release edit ${{ env.BRANCH }}-arm-head --draft --prerelease --repo ${{ github.repository }} --tag ${{ env.BRANCH }}-arm-head --notes-file - << EOF
+        ## ARM64 Development Snapshot
+        
+        GH-Action ARM64 Package-Build on ${{ env.BRANCH }}
+        
+        Version : **${{ needs.clean.outputs.gitdescribe }}**
+        
+        Finished : **$(date '+%Y-%m-%d %H:%M:%S %Z')**
+        
+        Status : **Build is finished**
+        
+        EOF
