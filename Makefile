@@ -54,7 +54,7 @@ ifeq ($(PROXYSQL31),1)
 endif
 
 # Only increment version at the top-level make to avoid double-incrementing in recursive makes
-GIT_VERSION := $(GIT_VERSION_BASE)
+GIT_VERSION ?= $(GIT_VERSION_BASE)
 ifeq ($(MAKELEVEL),0)
 # Normalize GIT_VERSION by stripping leading 'v' for arithmetic
 GIT_VERSION_NORM := $(shell echo "$(GIT_VERSION_BASE)" | sed 's/^v//')
