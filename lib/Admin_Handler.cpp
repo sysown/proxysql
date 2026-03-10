@@ -3059,8 +3059,8 @@ std::string timediff_timezone_offset() {
 
 // Helper function to transform PRAGMA table_info result to PostgreSQL pg_attribute format
 static SQLite3_result* transform_pragma_table_info_to_pg_attribute(SQLite3_result* pragma_result) {
-	if (!pragma_result || pragma_result->rows_count == 0) {
-		return pragma_result; // Return as-is if empty or NULL
+	if (!pragma_result) {
+		return nullptr; // Return NULL if input is NULL
 	}
 
 	// Create new resultset with 7 columns as PostgreSQL expects
@@ -3072,6 +3072,11 @@ static SQLite3_result* transform_pragma_table_info_to_pg_attribute(SQLite3_resul
 	new_result->add_column_definition(SQLITE_TEXT, "attcollation");
 	new_result->add_column_definition(SQLITE_TEXT, "attidentity");
 	new_result->add_column_definition(SQLITE_TEXT, "attgenerated");
+
+	// If empty result, return the empty pg_attribute-shaped result
+	if (pragma_result->rows_count == 0) {
+		return new_result;
+	}
 
 	// Transform each row from PRAGMA format to PostgreSQL format
 	// PRAGMA returns: cid, name, type, notnull, dflt_value, pk
@@ -4685,18 +4690,20 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 									free(escaped);
 								}
 
-								sess->describe_mode = true;
-
-								// Build SELECT returning the three columns psql expects:
-								// c.oid, n.nspname, c.relname
-								// We return table name as oid, 'public' as schema, table name as relname
-								// Buffer: 52 fixed + 2*255 table names + null = 562, round to 640
-								char buf[640] = { 0 };
-								snprintf(buf, sizeof(buf), "SELECT '%s' AS oid, 'public' AS nspname, '%s' AS relname",
-										 sess->describe_table_name, sess->describe_table_name);
+								// Only report a hit if the relation exists in sqlite_master.
+								// Query sqlite_master to verify the table exists before arming describe mode.
+								char buf[768] = { 0 };
+								snprintf(buf, sizeof(buf),
+									 "SELECT name AS oid, 'public' AS nspname, name AS relname "
+									 "FROM sqlite_master "
+									 "WHERE name='%s' AND type IN ('table','view','index') "
+									 "AND name NOT LIKE 'sqlite_%%' "
+									 "LIMIT 1",
+									 sess->describe_table_name);
 								l_free(query_length, query);
 								query = l_strdup(buf);
 								query_length = strlen(query) + 1;
+								sess->describe_mode = true;
 								goto __run_query;
 							}
 						}
@@ -4704,10 +4711,12 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 				}
 
 				// If we couldn't extract the table name, return error
-				error = l_strdup("could not extract table name from pattern");
+				error = strdup("could not extract table name from pattern");
 				proxy_error("Error: %s\n", error);
 				SPA->send_error_msg_to_client(sess, error);
 				run_query = false;
+				free(error);
+				error = nullptr;
 				goto __run_query;
 			}
 
@@ -4755,10 +4764,12 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 				}
 
 				// Not in describe mode or no table name - return error
-				error = l_strdup("describe mode not initialized - first describe query not executed");
+				error = strdup("describe mode not initialized - first describe query not executed");
 				proxy_error("Error: %s\n", error);
 				SPA->send_error_msg_to_client(sess, error);
 				run_query = false;
+				free(error);
+				error = nullptr;
 				goto __run_query;
 			}
 
@@ -4789,10 +4800,12 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 				}
 
 				// If we couldn't match table name, return error
-				error = l_strdup("describe mode not initialized - first describe query not executed");
+				error = strdup("describe mode not initialized - first describe query not executed");
 				proxy_error("Error: %s\n", error);
 				SPA->send_error_msg_to_client(sess, error);
 				run_query = false;
+				free(error);
+				error = nullptr;
 				goto __run_query;
 			}
 			// \\d tablename : Fourth query - get row-level security policies

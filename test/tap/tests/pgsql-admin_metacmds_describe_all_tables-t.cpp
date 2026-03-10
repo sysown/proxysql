@@ -366,7 +366,7 @@ int main(int argc, char** argv) {
 		   "[%s] All %d tables returned valid structure (%d passed)",
 		   version, result.total_tables, result.passed_structure);
 
-		bool columns_summary_ok = (result.passed_columns >= result.total_tables * 0.8);
+		bool columns_summary_ok = (result.passed_columns == result.total_tables);
 		ok(columns_summary_ok,
 		   "[%s] Column validation: %d/%d tables match PRAGMA (%d columns verified)",
 		   version, result.passed_columns, result.total_tables, result.total_columns_verified);

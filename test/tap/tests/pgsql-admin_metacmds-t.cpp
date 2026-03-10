@@ -103,7 +103,7 @@ std::string build_psql_cmd(const CommandLine& cl, const char* meta_cmd) {
 	return ss.str();
 }
 
-void test_psql_list_databases(const CommandLine& cl) {
+bool test_psql_list_databases(const CommandLine& cl) {
 	std::string cmd = build_psql_cmd(cl, "\\l");
 	std::string output = exec(cmd.c_str());
 
@@ -111,10 +111,14 @@ void test_psql_list_databases(const CommandLine& cl) {
 	bool has_list = output.find("List of databases") != std::string::npos;
 	bool has_name = output.find("name") != std::string::npos;
 
-	ok(has_list && has_name, "\\l (list databases): returned valid output");
+	bool passed = has_list && has_name;
+	ok(passed, "\\l (list databases): returned valid output");
+	return passed;
 }
 
-void test_psql_list_tables(const CommandLine& cl) {
+bool test_psql_list_tables(const CommandLine& cl) {
+	bool all_passed = true;
+
 	// Test \dt
 	std::string cmd = build_psql_cmd(cl, "\\dt");
 	std::string output = exec(cmd.c_str());
@@ -124,7 +128,9 @@ void test_psql_list_tables(const CommandLine& cl) {
 	                  case_insensitive_find(output, "name") ||
 	                  case_insensitive_find(output, "Did not find any relation") ||
 	                  case_insensitive_find(output, "Did not find any tables");
-	ok(has_output, "\\dt (list tables): returned valid output");
+	bool passed1 = has_output;
+	ok(passed1, "\\dt (list tables): returned valid output");
+	all_passed &= passed1;
 
 	// Test \dt with pattern
 	cmd = build_psql_cmd(cl, "\\dt runtime*");
@@ -133,10 +139,14 @@ void test_psql_list_tables(const CommandLine& cl) {
 	has_output = case_insensitive_find(output, "List of relations") ||
 	             case_insensitive_find(output, "name") ||
 	             case_insensitive_find(output, "Did not find any");
-	ok(has_output, "\\dt runtime* (tables with pattern): returned valid output");
+	bool passed2 = has_output;
+	ok(passed2, "\\dt runtime* (tables with pattern): returned valid output");
+	all_passed &= passed2;
+
+	return all_passed;
 }
 
-void test_psql_list_indexes(const CommandLine& cl) {
+bool test_psql_list_indexes(const CommandLine& cl) {
 	std::string cmd = build_psql_cmd(cl, "\\di");
 	std::string output = exec(cmd.c_str());
 
@@ -144,10 +154,12 @@ void test_psql_list_indexes(const CommandLine& cl) {
 	                  case_insensitive_find(output, "No matching relations") ||
 	                  case_insensitive_find(output, "Did not find any relations") ||
 	                  case_insensitive_find(output, "Did not find any indexes");
-	ok(has_output, "\\di (list indexes): returned valid output");
+	bool passed = has_output;
+	ok(passed, "\\di (list indexes): returned valid output");
+	return passed;
 }
 
-void test_psql_list_views(const CommandLine& cl) {
+bool test_psql_list_views(const CommandLine& cl) {
 	std::string cmd = build_psql_cmd(cl, "\\dv");
 	std::string output = exec(cmd.c_str());
 
@@ -155,10 +167,12 @@ void test_psql_list_views(const CommandLine& cl) {
 	                  case_insensitive_find(output, "No matching relations") ||
 	                  case_insensitive_find(output, "Did not find any relations") ||
 	                  case_insensitive_find(output, "Did not find any views");
-	ok(has_output, "\\dv (list views): returned valid output");
+	bool passed = has_output;
+	ok(passed, "\\dv (list views): returned valid output");
+	return passed;
 }
 
-void test_psql_list_all_relations(const CommandLine& cl) {
+bool test_psql_list_all_relations(const CommandLine& cl) {
 	std::string cmd = build_psql_cmd(cl, "\\d");
 	std::string output = exec(cmd.c_str());
 
@@ -166,10 +180,12 @@ void test_psql_list_all_relations(const CommandLine& cl) {
 	bool has_output = output.find("List of relations") != std::string::npos ||
 	                  output.find("name") != std::string::npos ||
 	                  output.find("type") != std::string::npos;
-	ok(has_output, "\\d (list all relations): returned valid output");
+	bool passed = has_output;
+	ok(passed, "\\d (list all relations): returned valid output");
+	return passed;
 }
 
-void test_psql_sql_injection_protection(const CommandLine& cl) {
+bool test_psql_sql_injection_protection(const CommandLine& cl) {
 	// Test that single quotes in patterns don't cause issues
 	std::string cmd = build_psql_cmd(cl, "\\dt test' OR '1'='1");
 	std::string output = exec(cmd.c_str());
@@ -181,10 +197,12 @@ void test_psql_sql_injection_protection(const CommandLine& cl) {
 	                      case_insensitive_find(output, "No matching relations") ||
 	                      case_insensitive_find(output, "Did not find any relation") ||
 	                      case_insensitive_find(output, "Did not find any tables");
-	ok(handled_safely, "SQL injection protection: pattern with quotes handled safely");
+	bool passed = handled_safely;
+	ok(passed, "SQL injection protection: pattern with quotes handled safely");
+	return passed;
 }
 
-void test_psql_version_and_info(const CommandLine& cl) {
+bool test_psql_version_and_info(const CommandLine& cl) {
 	// Test \conninfo
 	std::string cmd = build_psql_cmd(cl, "\\conninfo");
 	std::string output = exec(cmd.c_str());
@@ -192,10 +210,12 @@ void test_psql_version_and_info(const CommandLine& cl) {
 	bool has_connection_info = case_insensitive_find(output, "connected") ||
 	                           case_insensitive_find(output, "database") ||
 	                           case_insensitive_find(output, "connection information");
-	ok(has_connection_info, "\\conninfo: returned connection information");
+	bool passed = has_connection_info;
+	ok(passed, "\\conninfo: returned connection information");
+	return passed;
 }
 
-void test_psql_buffer_overflow_protection(const CommandLine& cl) {
+bool test_psql_buffer_overflow_protection(const CommandLine& cl) {
 	// Test for potential buffer overflow with many quotes
 	std::string long_pattern = std::string(100, '\'');
 	std::string cmd = build_psql_cmd(cl, ("\\dt " + long_pattern).c_str());
@@ -208,7 +228,9 @@ void test_psql_buffer_overflow_protection(const CommandLine& cl) {
 		case_insensitive_find(output, "No matching relations") ||
 		case_insensitive_find(output, "Did not find any relation") ||
 		case_insensitive_find(output, "Did not find any tables");
-	ok(handled_safely, "Buffer overflow protection: long pattern with quotes handled safely");
+	bool passed = handled_safely;
+	ok(passed, "Buffer overflow protection: long pattern with quotes handled safely");
+	return passed;
 }
 
 // Run all tests for a specific version
@@ -220,16 +242,17 @@ bool run_tests_for_version(PGconn* admin_conn, const CommandLine& cl, const char
 		return false;
 	}
 
-	// Run all meta-command tests
-	test_psql_list_databases(cl);
-	test_psql_list_tables(cl);
-	test_psql_list_indexes(cl);
-	test_psql_list_views(cl);
-	test_psql_list_all_relations(cl);
-	test_psql_sql_injection_protection(cl);
-	test_psql_version_and_info(cl);
-	test_psql_buffer_overflow_protection(cl);
-	return true;
+	// Run all meta-command tests and accumulate results
+	bool all_passed = true;
+	all_passed &= test_psql_list_databases(cl);
+	all_passed &= test_psql_list_tables(cl);
+	all_passed &= test_psql_list_indexes(cl);
+	all_passed &= test_psql_list_views(cl);
+	all_passed &= test_psql_list_all_relations(cl);
+	all_passed &= test_psql_sql_injection_protection(cl);
+	all_passed &= test_psql_version_and_info(cl);
+	all_passed &= test_psql_buffer_overflow_protection(cl);
+	return all_passed;
 }
 
 int main(int argc, char** argv) {
