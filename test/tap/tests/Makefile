@@ -123,6 +123,8 @@ tests: tests-cpp \
 	setparser_test3 setparser_test3-t \
 	test_set_parser_parity-t \
 	test_set_parser_sql_mode-t \
+	test_set_parser_multistmt-t \
+	test_set_parser_matchers-t \
 	set_testing-240.csv \
 	test_clickhouse_server_libmysql-t \
 	reg_test_stmt_resultset_err_no_rows_libmysql-t \
@@ -250,6 +252,14 @@ test_set_parser_sql_mode-t: test_set_parser_sql_mode.cpp $(TAP_LDIR)/libtap.so $
 		$(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
 
 test_set_parser_extended_syntax-t: test_set_parser_extended_syntax.cpp $(TAP_LDIR)/libtap.so $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR)
+	$(CXX) $<  -DEXCLUDE_TRACKING_VARIABLES $(PROXYSQL_PATH)/src/proxysql_global.cpp $(IDIRS) $(LDIRS) \
+		$(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
+
+test_set_parser_multistmt-t: test_set_parser_multistmt.cpp $(TAP_LDIR)/libtap.so $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR)
+	$(CXX) $<  -DEXCLUDE_TRACKING_VARIABLES $(PROXYSQL_PATH)/src/proxysql_global.cpp $(IDIRS) $(LDIRS) \
+		$(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
+
+test_set_parser_matchers-t: test_set_parser_matchers.cpp $(TAP_LDIR)/libtap.so $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR)
 	$(CXX) $<  -DEXCLUDE_TRACKING_VARIABLES $(PROXYSQL_PATH)/src/proxysql_global.cpp $(IDIRS) $(LDIRS) \
 		$(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
 
