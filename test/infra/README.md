@@ -21,7 +21,7 @@ The infrastructure management and test execution are strictly separated.
 ```bash
 export WORKSPACE=$(pwd)
 export INFRA_ID="dev-$USER"
-export TAP_GROUP="legacy-g1"  # Optional but recommended
+export TAP_GROUP="mysql84-g1"
 source test/infra/common/env.sh
 ```
 
@@ -32,15 +32,8 @@ You can use the helper script to automatically start all required components for
 ```
 *This script will start ProxySQL and then iterate through the `infras.lst` of the specified group.*
 
-Alternatively, start them manually:
-```bash
-./test/infra/control/start-proxysql-isolated.bash
-# Then start specific backends
-cd test/infra/infra-mysql57 && ./docker-compose-init.bash && cd ../../../
-```
-
 ### Step 3: Run TAP Tests
-The test runner script will **verify** that all required containers are running before starting. If anything is missing, it will exit with an error.
+The test runner script will **verify** that all required containers are running before starting. 
 
 ```bash
 ./test/infra/control/run-tests-isolated.bash
@@ -49,10 +42,7 @@ The test runner script will **verify** that all required containers are running 
 ### Step 4: Teardown
 Manual cleanup of all components.
 ```bash
-# Destroy backends
-cd test/infra/infra-mysql57 && ./docker-compose-destroy.bash && cd ../../../
-
-# Stop ProxySQL and all its nodes
+# Destroy backends for the current group
 ./test/infra/control/stop-proxysql-isolated.bash
 ```
 
@@ -66,15 +56,14 @@ The `run-tests-isolated.bash` script acts as a validator and execution orchestra
 Every TAP test group (in `test/tap/groups/<group_name>`) defines its required backend environments using an `infras.lst` file.
 
 *   **Who reads it?**: Both `ensure-infras.bash` (to start them) and `run-tests-isolated.bash` (to verify them).
-*   **Order Importance**: In multi-infrastructure groups, the **order of entries is critical**. Shared ProxySQL users (e.g., `testuser`, `root`) are registered using `INSERT OR IGNORE`. The **first** infrastructure in the list that defines a shared user will set its `default_hostgroup`. Subsequent infrastructures will not overwrite this setting.
+*   **Order Importance**: In multi-infrastructure groups, the **order of entries is critical**. Shared ProxySQL users (e.g., `testuser`, `root`) are registered using `INSERT OR IGNORE`. The **first** infrastructure in the list that defines a shared user will set its `default_hostgroup`.
 *   **Subgroups**: If a group has a suffix (e.g., `legacy-g1`), the system automatically strips it to find the base group definition (`legacy`).
-*   **Safety**: If a required infrastructure is missing, the test runner **fails immediately**. It outputs an explicit error message identifying the missing infrastructure and referencing the `infras.lst` file.
 
 ### Safety-First Initialization
 The `docker-compose-init.bash` scripts implement a strict **non-destructive policy**:
 *   They will **refuse to start** if the target data or log directories on the host are not empty.
 *   This prevents accidental data loss or inconsistent test states.
-*   You must run `docker-compose-destroy.bash` or manually clean the `ci_infra_logs/${INFRA_ID}/` directory before re-initializing.
+*   You must run `docker-compose-destroy.bash` within the infra folder or manually clean `ci_infra_logs/${INFRA_ID}/` before re-initializing.
 
 ---
 
@@ -84,46 +73,66 @@ The `docker-compose-init.bash` scripts implement a strict **non-destructive poli
 | :--- | :--- | :--- |
 | `INFRA_ID` | `dev-$USER` | **Required**. Unique namespace for Docker containers/networks. |
 | `WORKSPACE` | Repo Root | Root path of the ProxySQL repository. |
-| `INFRA_LOGS_PATH` | `$WORKSPACE/ci_infra_logs` | Destination for container logs and test outputs. |
-| `ROOT_PASSWORD` | (dynamic) | Derived from `sha256(INFRA_ID)`. Used for all root-level access. |
-| `TAP_GROUP` | (none) | Run a specific group defined in `test/tap/groups/groups.json` (e.g., `legacy-g1`). |
-| `DEFAULT_MYSQL_INFRA` | (auto) | The primary MySQL-compatible target for the current group. |
-| `DEFAULT_PGSQL_INFRA` | (auto) | The primary PostgreSQL-compatible target for the current group. |
+| `TAP_GROUP` | (none) | Run a specific group defined in `test/tap/groups/groups.json`. |
+| `TEST_PY_TAP_INCL` | (none) | Filter tests within the group (regex matching test names). |
+| `SKIP_CLUSTER_START`| `0` | Set to `1` to bypass starting additional ProxySQL nodes. |
+| `PROXY_DATA_DIR_HOST`| (dynamic) | Host path for ProxySQL persistent data. |
 
 ---
 
-## 5. Guidelines for AI Agents
+## 5. Examples & Use Cases
 
-When performing investigations or fixes within this infrastructure:
-1.  **Always use `INFRA_ID`**: Never start containers without a unique ID. 
-2.  **Verify via `docker exec`**: To check ProxySQL state, use:
-    `docker exec proxysql.${INFRA_ID} mysql -uadmin -padmin -h127.0.0.1 -P6032 -e "SELECT * FROM runtime_mysql_servers"`
-3.  **Logs are Persistent**: Look into `ci_infra_logs/${INFRA_ID}/${COMPOSE_PROJECT}/${CONTAINER_NAME}/` for backend engine logs.
-4.  **Hostname Resolution**: Inside the isolated network, containers use aliases. `proxysql` is the alias for the ProxySQL container, and `mysql1.infra-mysql57` is an alias for a specific backend node.
+### Example 1: Run a single test in a MySQL 8.4 environment
+If you are developing a fix and only want to run one specific test:
+```bash
+export INFRA_ID="fix-123"
+export TAP_GROUP="mysql84-g1"
+export TEST_PY_TAP_INCL="admin_various_commands-t"
+export SKIP_CLUSTER_START=1
+
+./test/infra/control/ensure-infras.bash
+./test/infra/control/run-tests-isolated.bash
+```
+
+### Example 2: Run all MariaDB 10 tests in parallel with another run
+```bash
+export INFRA_ID="mariadb-test"
+export TAP_GROUP="mariadb10-g1"
+./test/infra/control/ensure-infras.bash
+./test/infra/control/run-tests-isolated.bash
+```
+
+### Example 3: Debugging a failing PostgreSQL test in the Legacy group
+```bash
+export INFRA_ID="debug-legacy"
+export TAP_GROUP="legacy-g1"
+export TEST_PY_TAP_INCL="pgsql-.*" # Run only PGSQL tests in legacy
+./test/infra/control/ensure-infras.bash
+./test/infra/control/run-tests-isolated.bash
+```
 
 ---
 
-## 6. Best Practices for Creating New Infras
+## 6. Advanced: Custom Test Groups
 
-1.  **Template Pattern**: Copy an existing folder like `infra-mysql57`.
-2.  **Network Configuration**: Use the standard external network `${INFRA_ID}_backend`.
-3.  **Naming Convention**: Use `${COMPOSE_PROJECT}` as a prefix for all container names.
-4.  **Post-Config Hook**:
-    *   Create a `conf/proxysql/infra-config.sql` template.
-    *   Update `bin/docker-proxy-post.bash` to apply this template to the ProxySQL container.
-5.  **Deterministic Passwords**: Use `${ROOT_PASSWORD}` for all root/admin credentials.
+For rapid iteration, you can create a temporary subgroup to target exactly the infrastructure and tests you need.
+
+### How to create a custom subgroup (e.g., `mysql84-g5`)
+1.  **Define Infrastructure**: The system will look for `test/tap/groups/mysql84/infras.lst` (because it strips the `-g5` suffix).
+2.  **Add Tests to groups.json**: Add your specific tests to the new group in `test/tap/groups/groups.json`:
+    ```json
+    "my_new_test-t": [ "mysql84-g5" ]
+    ```
+3.  **Run**:
+    ```bash
+    export TAP_GROUP="mysql84-g5"
+    ./test/infra/control/ensure-infras.bash
+    ./test/infra/control/run-tests-isolated.bash
+    ```
 
 ---
 
-## 7. Troubleshooting
-
-*   **Directory Not Empty**: If initialization fails with an "is not empty" error, run `docker-compose-destroy.bash` for that specific infra or manually clean the log directory.
-*   **Permission Denied**: Logs and data directories are often managed with `sudo`. The scripts automatically use `sudo` where necessary.
-*   **ProxySQL Not Ready**: Check `ci_infra_logs/${INFRA_ID}/proxysql/proxysql.log` for initialization errors.
-
----
-
-## 8. ProxySQL Cluster Management
+## 7. ProxySQL Cluster Management
 
 By default, the infrastructure starts a single ProxySQL node. For cluster-specific testing, you can enable additional nodes.
 
@@ -133,17 +142,17 @@ By default, the infrastructure starts a single ProxySQL node. For cluster-specif
 ./test/infra/control/start-proxysql-isolated.bash
 
 # 2. Start additional nodes (default: 9 nodes)
-# Use PROXYSQL_CLUSTER_NODES to change the count
 export PROXYSQL_CLUSTER_NODES=3
 ./test/infra/control/cluster_start.bash
 
-# 3. Initialize the cluster (configure discovery and synchronization)
+# 3. Initialize the cluster
 ./test/infra/control/cluster_init.bash
 ```
 
-### Skipping Cluster Startup
-If you are running tests that do not require a cluster, you should disable it to save resources and speed up initialization:
-```bash
-export SKIP_CLUSTER_START=1
-./test/infra/control/run-tests-isolated.bash
-```
+---
+
+## 8. Troubleshooting
+
+*   **"Directory Not Empty"**: Run `./test/infra/control/stop-proxysql-isolated.bash` with the same `INFRA_ID` to cleanup, or manually delete the folder in `ci_infra_logs/`.
+*   **Permission Denied**: The system uses `sudo` for log directory management. Ensure your user has sudo privileges.
+*   **Container Crash**: Check logs in `ci_infra_logs/${INFRA_ID}/${COMPOSE_PROJECT}/${CONTAINER_NAME}/`.
