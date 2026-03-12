@@ -75,13 +75,28 @@ ifeq ($(PROXYSQLGENAI),1)
 	PSQLGA := -DPROXYSQLGENAI
 endif
 
+PSQL31 :=
+ifeq ($(PROXYSQL31),1)
+	PSQL31 := -DPROXYSQL31
+endif
+
+PSQLFFTO :=
+ifeq ($(PROXYSQLFFTO),1)
+	PSQLFFTO := -DPROXYSQLFFTO
+endif
+
+PSQLTSDB :=
+ifeq ($(PROXYSQLTSDB),1)
+	PSQLTSDB := -DPROXYSQLTSDB
+endif
+
 
 
 MYCXXFLAGS := $(STDCPP)
 ifeq ($(CXX),clang++)
 	MYCXXFLAGS += -fuse-ld=lld
 endif
-MYCXXFLAGS += $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) $(PSQLGA) -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
+MYCXXFLAGS += $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) $(PSQLGA) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
 
 
 STATICMYLIBS := -Wl,-Bstatic \
@@ -119,7 +134,7 @@ endif
 endif
 
 ifeq ($(UNAME_S),Darwin)
-	MYLIBS :=-lre2 -lmariadbclient -lpq -lpthread -lm -lz -liconv -lgnutls -lprometheus-cpp-pull -lprometheus-cpp-core -luuid
+	MYLIBS :=-lre2 -lmariadbclient -lssl -lcrypto -lpthread -lm -lz -liconv -lgnutls -lprometheus-cpp-pull -lprometheus-cpp-core -luuid
 else
 	CURL_DIR := $(DEPS_PATH)/curl/curl
 	IDIRS += -L$(CURL_DIR)/include
@@ -151,6 +166,11 @@ ifeq ($(UNAME_S),Darwin)
 	LIBPROXYSQLAR += $(SQLITE3_LDIR)/sqlite3.o
 	LIBPROXYSQLAR += $(LIBINJECTION_LDIR)/libinjection.a
 	LIBPROXYSQLAR += $(EV_LDIR)/libev.a
+	LIBPROXYSQLAR += $(LIBSCRAM_LDIR)/libscram.a
+	LIBPROXYSQLAR += $(LIBUSUAL_LDIR)/libusual.a
+	LIBPROXYSQLAR += $(POSTGRESQL_PATH)/interfaces/libpq/libpq.a
+	LIBPROXYSQLAR += $(POSTGRESQL_PATH)/common/libpgcommon.a
+	LIBPROXYSQLAR += $(POSTGRESQL_PATH)/port/libpgport.a
 endif
 LIBPROXYSQLAR += $(CITYHASH_LDIR)/libcityhash.a
 ifeq ($(PROXYSQLGENAI),1)
@@ -169,17 +189,9 @@ $(ODIR)/%.o: %.cpp
 
 $(EXECUTABLE): $(ODIR) $(OBJ) $(LIBPROXYSQLAR)
 ifeq ($(PROXYSQLCLICKHOUSE),1)
-ifeq ($(PROXYSQLGENAI),1)
 	$(CXX) -o $@ $(OBJ) $(CLANGFIX) $(LIBPROXYSQLAR) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(CLICKHOUSE_CPP_PATH)/contrib/zstd/zstd/libzstdstatic.a $(LZ4_LDIR)/liblz4.a $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)
 else
-	$(CXX) -o $@ $(OBJ) $(CLANGFIX) $(LIBPROXYSQLAR) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(CLICKHOUSE_CPP_PATH)/contrib/zstd/zstd/libzstdstatic.a $(LZ4_LDIR)/liblz4.a $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)
-endif
-else
-ifeq ($(PROXYSQLGENAI),1)
 	$(CXX) -o $@ $(OBJ) $(CLANGFIX) $(LIBPROXYSQLAR) $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)
-else
-	$(CXX) -o $@ $(OBJ) $(CLANGFIX) $(LIBPROXYSQLAR) $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)
-endif
 endif
 ifeq ($(UNAME_S),Darwin)
 	shasum $(EXECUTABLE) > $(EXECUTABLE).sha1

@@ -108,9 +108,9 @@ class Query_Info {
 	Query_Info();
 	~Query_Info();
 	void init(unsigned char *_p, int len, bool mysql_header=false);
-	void query_parser_init(); 
-	enum MYSQL_COM_QUERY_command query_parser_command_type(); 
-	void query_parser_free(); 
+	void query_parser_init();
+	enum MYSQL_COM_QUERY_command query_parser_command_type();
+	void query_parser_free();
 	unsigned long long query_parser_update_counters();
 	void begin(unsigned char *_p, int len, bool mysql_header=false);
 	void end();
@@ -142,6 +142,9 @@ inline void Query_Info::set_end_time(unsigned long long time) {
 	end_time = start_time;
 #endif // CLOCK_MONOTONIC_RAW
 }
+
+class TrafficObserver;
+class Session_Regex;
 
 /**
  * @class MySQL_Session
@@ -214,7 +217,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 		bool* lock_hostgroup, const assign_info_t& inf, const std::string_view& q
 	);
 
-	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();	
+	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();
 
 	//void return_proxysql_internal(PtrSize_t *);
 	bool handler_special_queries(PtrSize_t *);
@@ -293,6 +296,9 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	// GPFC_ functions are subfunctions of get_pkts_from_client()
 	int GPFC_Statuses2(bool&, PtrSize_t&);
 	void GPFC_DetectedMultiPacket_SetDDS();
+#ifdef PROXYSQLFFTO
+	void observe_ffto_client_packet(const PtrSize_t& pkt);
+#endif
 	int GPFC_WaitingClientData_FastForwardSession(PtrSize_t&);
 	void GPFC_PreparedStatements(PtrSize_t&, unsigned char);
 	int GPFC_Replication_SwitchToFastForward(PtrSize_t&, unsigned char);
@@ -505,7 +511,15 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	MySQL_STMTs_meta *sess_STMTs_meta;
 	StmtLongDataHandler *SLDH;
 
-	ProxySQL_Node_Address * proxysql_node_address; // this is used ONLY for Admin, and only if the other party is another proxysql instance part of a cluster
+	Session_Regex **match_regexes;
+#ifdef PROXYSQLFFTO
+	std::unique_ptr<TrafficObserver> m_ffto;
+	bool ffto_bypassed { false };
+#endif
+
+	ProxySQL_Node_Address * proxysql_node_address;
+
+	 // this is used ONLY for Admin, and only if the other party is another proxysql instance part of a cluster
 	bool use_ldap_auth;
 	// Fast forward grace close flags: track backend closure during fast forward mode
 	// to allow pending client data to drain before closing the session.
@@ -519,7 +533,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	~MySQL_Session();
 
 	//void set_unhealthy();
-	
+
 	void set_status(enum session_status e);
 	int handler();
 
@@ -527,7 +541,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	//MySQL_Backend * find_backend(int);
 	//MySQL_Backend * create_backend(int, MySQL_Data_Stream *_myds=NULL);
 	//MySQL_Backend * find_or_create_backend(int, MySQL_Data_Stream *_myds=NULL);
-	
+
 	void SQLite3_to_MySQL(SQLite3_result *, char *, int , MySQL_Protocol *, bool in_transaction=false, bool deprecate_eof_active=false) override;
 	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, unsigned int warning_count, MySQL_Data_Stream *_myds=NULL);
 	void MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Connection *myconn);

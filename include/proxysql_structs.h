@@ -755,6 +755,7 @@ enum PROXYSQL_MYSQL_ERR {
 	ER_PROXYSQL_CONNECT_TIMEOUT                       = 9020,
 	ER_PROXYSQL_READONLY_TIMEOUT                      = 9021,
 	ER_PROXYSQL_FAST_FORWARD_CONN_CREATE              = 9022,
+	ER_PROXYSQL_REPL_LAG_TIMEOUT                      = 9023,
 };
 
 enum proxysql_session_type {
@@ -1123,6 +1124,10 @@ __thread int pgsql_thread___throttle_max_bytes_per_second_to_client;
 __thread int pgsql_thread___throttle_ratio_server_to_client;
 __thread int pgsql_thread___shun_on_failures;
 __thread int pgsql_thread___shun_recovery_time_sec;
+#ifdef PROXYSQLFFTO
+__thread bool pgsql_thread___ffto_enabled;
+__thread int pgsql_thread___ffto_max_buffer_size;
+#endif
 __thread int pgsql_thread___hostgroup_manager_verbose;
 __thread int pgsql_thread___default_max_latency_ms;
 __thread int pgsql_thread___unshun_algorithm;
@@ -1178,13 +1183,22 @@ __thread int  pgsql_thread___query_digests_groups_grouping_limit;
 
 __thread char* pgsql_thread___auditlog_filename;
 __thread int pgsql_thread___auditlog_filesize;
+__thread int pgsql_thread___auditlog_flush_timeout;
+__thread int pgsql_thread___auditlog_flush_size;
 __thread char* pgsql_thread___eventslog_filename;
 __thread int pgsql_thread___eventslog_filesize;
+__thread int pgsql_thread___eventslog_buffer_history_size;
+__thread int pgsql_thread___eventslog_table_memory_size;
+__thread int pgsql_thread___eventslog_buffer_max_query_length;
 __thread int pgsql_thread___eventslog_default_log;
 __thread int pgsql_thread___eventslog_format;
+__thread int pgsql_thread___eventslog_flush_timeout;
+__thread int pgsql_thread___eventslog_flush_size;
+__thread int pgsql_thread___eventslog_rate_limit;
 __thread char* pgsql_thread___firewall_whitelist_errormsg;
 __thread bool pgsql_thread___firewall_whitelist_enabled;
 __thread int pgsql_thread___query_processor_iterations;
+__thread int pgsql_thread___query_processor_first_comment_parsing;
 __thread int pgsql_thread___query_processor_regex;
 
 __thread bool pgsql_thread___monitor_enabled;
@@ -1200,6 +1214,11 @@ __thread int pgsql_thread___monitor_read_only_interval;
 __thread int pgsql_thread___monitor_read_only_interval_window;
 __thread int pgsql_thread___monitor_read_only_timeout;
 __thread int pgsql_thread___monitor_read_only_max_timeout_count;
+__thread int pgsql_thread___monitor_replication_lag_interval;
+__thread int pgsql_thread___monitor_replication_lag_interval_window;
+__thread int pgsql_thread___monitor_replication_lag_timeout;
+__thread int pgsql_thread___monitor_replication_lag_count;
+__thread char* pgsql_thread___monitor_replication_lag_use_percona_heartbeat;
 __thread bool pgsql_thread___monitor_writer_is_also_reader;
 __thread int pgsql_thread___monitor_threads;
 __thread char* pgsql_thread___monitor_username;
@@ -1237,6 +1256,10 @@ __thread int mysql_thread___max_transaction_idle_time;
 __thread int mysql_thread___max_transaction_time;
 __thread int mysql_thread___threshold_query_length;
 __thread int mysql_thread___fast_forward_grace_close_ms;
+#ifdef PROXYSQLFFTO
+__thread bool mysql_thread___ffto_enabled;
+__thread int mysql_thread___ffto_max_buffer_size;
+#endif
 __thread int mysql_thread___threshold_resultset_size;
 __thread int mysql_thread___wait_timeout;
 __thread int mysql_thread___throttle_max_bytes_per_second_to_client;
@@ -1265,6 +1288,7 @@ __thread int mysql_thread___connect_timeout_client;
 __thread int mysql_thread___connect_timeout_server;
 __thread int mysql_thread___connect_timeout_server_max;
 __thread int mysql_thread___query_processor_iterations;
+__thread int mysql_thread___query_processor_first_comment_parsing;
 __thread int mysql_thread___query_processor_regex;
 __thread int mysql_thread___set_query_lock_on_hostgroup;
 __thread int mysql_thread___set_parser_algorithm;
@@ -1339,10 +1363,15 @@ __thread int mysql_thread___eventslog_buffer_max_query_length;
 __thread int mysql_thread___eventslog_default_log;
 __thread int mysql_thread___eventslog_format;
 __thread int mysql_thread___eventslog_stmt_parameters;
+__thread int mysql_thread___eventslog_flush_timeout;
+__thread int mysql_thread___eventslog_flush_size;
+__thread int mysql_thread___eventslog_rate_limit;
 
 /* variables used by audit log */
 __thread char * mysql_thread___auditlog_filename;
 __thread int mysql_thread___auditlog_filesize;
+__thread int mysql_thread___auditlog_flush_timeout;
+__thread int mysql_thread___auditlog_flush_size;
 
 /* variables used by the monitoring module */
 __thread int mysql_thread___monitor_enabled;
@@ -1429,6 +1458,10 @@ extern __thread int pgsql_thread___throttle_max_bytes_per_second_to_client;
 extern __thread int pgsql_thread___throttle_ratio_server_to_client;
 extern __thread int pgsql_thread___shun_on_failures;
 extern __thread int pgsql_thread___shun_recovery_time_sec;
+#ifdef PROXYSQLFFTO
+extern __thread bool pgsql_thread___ffto_enabled;
+extern __thread int pgsql_thread___ffto_max_buffer_size;
+#endif
 extern __thread int pgsql_thread___hostgroup_manager_verbose;
 extern __thread int pgsql_thread___default_max_latency_ms;
 extern __thread int pgsql_thread___unshun_algorithm;
@@ -1482,13 +1515,22 @@ extern __thread int  pgsql_thread___query_digests_groups_grouping_limit;
 
 extern __thread char* pgsql_thread___auditlog_filename;
 extern __thread int pgsql_thread___auditlog_filesize;
+extern __thread int pgsql_thread___auditlog_flush_timeout;
+extern __thread int pgsql_thread___auditlog_flush_size;
 extern __thread char* pgsql_thread___eventslog_filename;
 extern __thread int pgsql_thread___eventslog_filesize;
+extern __thread int pgsql_thread___eventslog_buffer_history_size;
+extern __thread int pgsql_thread___eventslog_table_memory_size;
+extern __thread int pgsql_thread___eventslog_buffer_max_query_length;
 extern __thread int pgsql_thread___eventslog_default_log;
 extern __thread int pgsql_thread___eventslog_format;
+extern __thread int pgsql_thread___eventslog_flush_timeout;
+extern __thread int pgsql_thread___eventslog_flush_size;
+extern __thread int pgsql_thread___eventslog_rate_limit;
 extern __thread char* pgsql_thread___firewall_whitelist_errormsg;
 extern __thread bool pgsql_thread___firewall_whitelist_enabled;
 extern __thread int pgsql_thread___query_processor_iterations;
+extern __thread int pgsql_thread___query_processor_first_comment_parsing;
 extern __thread int pgsql_thread___query_processor_regex;
 
 extern __thread bool pgsql_thread___monitor_enabled;
@@ -1503,6 +1545,11 @@ extern __thread int pgsql_thread___monitor_ping_timeout;
 extern __thread int pgsql_thread___monitor_read_only_interval;
 extern __thread int pgsql_thread___monitor_read_only_interval_window;
 extern __thread int pgsql_thread___monitor_read_only_timeout;
+extern __thread int pgsql_thread___monitor_replication_lag_interval;
+extern __thread int pgsql_thread___monitor_replication_lag_interval_window;
+extern __thread int pgsql_thread___monitor_replication_lag_timeout;
+extern __thread int pgsql_thread___monitor_replication_lag_count;
+extern __thread char* pgsql_thread___monitor_replication_lag_use_percona_heartbeat;
 extern __thread int pgsql_thread___monitor_read_only_max_timeout_count;
 extern __thread bool pgsql_thread___monitor_writer_is_also_reader;
 extern __thread int pgsql_thread___monitor_threads;
@@ -1541,6 +1588,10 @@ extern __thread int mysql_thread___max_transaction_idle_time;
 extern __thread int mysql_thread___max_transaction_time;
 extern __thread int mysql_thread___threshold_query_length;
 extern __thread int mysql_thread___fast_forward_grace_close_ms;
+#ifdef PROXYSQLFFTO
+extern __thread bool mysql_thread___ffto_enabled;
+extern __thread int mysql_thread___ffto_max_buffer_size;
+#endif
 extern __thread int mysql_thread___threshold_resultset_size;
 extern __thread int mysql_thread___wait_timeout;
 extern __thread int mysql_thread___throttle_max_bytes_per_second_to_client;
@@ -1569,6 +1620,7 @@ extern __thread int mysql_thread___connect_timeout_client;
 extern __thread int mysql_thread___connect_timeout_server;
 extern __thread int mysql_thread___connect_timeout_server_max;
 extern __thread int mysql_thread___query_processor_iterations;
+extern __thread int mysql_thread___query_processor_first_comment_parsing;
 extern __thread int mysql_thread___query_processor_regex;
 extern __thread int mysql_thread___set_query_lock_on_hostgroup;
 extern __thread int mysql_thread___set_parser_algorithm;
@@ -1643,10 +1695,15 @@ extern __thread int mysql_thread___eventslog_buffer_max_query_length;
 extern __thread int mysql_thread___eventslog_default_log;
 extern __thread int mysql_thread___eventslog_format;
 extern __thread int mysql_thread___eventslog_stmt_parameters;
+extern __thread int mysql_thread___eventslog_flush_timeout;
+extern __thread int mysql_thread___eventslog_flush_size;
+extern __thread int mysql_thread___eventslog_rate_limit;
 
 /* variables used by audit log */
 extern __thread char * mysql_thread___auditlog_filename;
 extern __thread int mysql_thread___auditlog_filesize;
+extern __thread int mysql_thread___auditlog_flush_timeout;
+extern __thread int mysql_thread___auditlog_flush_size;
 
 /* variables used by the monitoring module */
 extern __thread int mysql_thread___monitor_enabled;

@@ -41,7 +41,7 @@ LDIRS :=	-L$(TAP_LDIR) \
 			-L$(DOTENV_DYN_LDIR) \
 			-L$(PCRE_LDIR) \
 			-L$(LIBINJECTION_LDIR) \
-			-L$(POSTGRESQL_LDIR)\
+			-L$(POSTGRESQL_LDIR) \
 			-L$(LIBSCRAM_LDIR) \
 			-L$(LIBUSUAL_LDIR) \
 			-L$(SSL_LDIR)
@@ -61,11 +61,11 @@ OBJ := $(PROXYSQL_PATH)/src/obj/proxysql_global.o $(PROXYSQL_PATH)/src/obj/main.
 
 #SOURCES := ../tap/utils.cpp
 
-MYLIBS_DYNAMIC_PART := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -ltap -lcpp_dotenv -lcurl -lssl -lcrypto -luuid
+MYLIBS_DYNAMIC_PART := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -lcpp_dotenv -lcurl -lssl -lcrypto -luuid
 MYLIBS_STATIC_PART := -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core
 MYLIBS_PG_PART := -Wl,-Bstatic -lpq -lpgcommon -lpgport
 MYLIBS_LAST_PART := -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl $(EXTRALINK)
-MYLIBS := $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) $(MYLIBS_PG_PART) $(MYLIBS_LAST_PART)
+MYLIBS := -Wl,-Bdynamic -ltap $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) $(MYLIBS_PG_PART) $(MYLIBS_LAST_PART)
 #MYLIBS_PG := $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) $(MYLIBS_PG_PART) $(MYLIBS_LAST_PART)
 #MYLIBS := -Wl,--export-dynamic -Wl,-Bdynamic -lssl -lcrypto -lgnutls -ltap -lcpp_dotenv -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core -luuid -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl $(EXTRALINK)
 
@@ -83,22 +83,22 @@ ifeq ($(PROXYSQLGENAI),1)
 	STATIC_LIBS += $(SQLITE3_LDIR)/../libsqlite_rembed.a $(SQLITE3_LDIR)/vec.o
 endif
 
-OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
+OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/libpq -Wl,-rpath,$(RE2_LDIR) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
 
 ### main targets
 
 .DEFAULT: default
-.PHONY: default
+.PHONY: default debug
 default: all
 
 CUSTOMARGS := -I$(TAP_IDIR) -I$(CURL_IDIR) -I$(SQLITE3_IDIR) -I$(PROXYSQL_IDIR) -I$(JSON_IDIR) -I$(RE2_IDIR) -I$(SSL_IDIR)
-CUSTOMARGS += -L$(TAP_LDIR) -L$(CURL_LDIR) -L$(RE2_LDIR) -L$(SSL_LDIR)
-CUSTOMARGS += -Wl,-Bdynamic -lcpp_dotenv -lcurl -lssl -lcrypto -lre2 -lpthread -lz -ldl
+CUSTOMARGS += -L$(TAP_LDIR) -L$(CURL_LDIR) -L$(RE2_LDIR) -L$(SSL_LDIR) -L$(POSTGRESQL_LDIR)
+CUSTOMARGS += -Wl,-Bdynamic -ltap -lcpp_dotenv -lcurl -lssl -lcrypto -lre2 -lpthread -lz -ldl -lpq $(LWGCOV)
 
 .PHONY: all
 all: tests
 
-debug: OPT := $(STDCPP) -O0 -DDEBUG -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
+debug: OPT := $(STDCPP) -O0 -DDEBUG -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/libpq -Wl,-rpath,$(RE2_LDIR) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
 debug: tests
 
 tests: CUSTOMARGS += $(OPT)
@@ -176,7 +176,11 @@ sh-%:
 	chmod +x $(patsubst sh-%.sh,%,$@)
 
 anomaly_detection-t: anomaly_detection-t.cpp $(TAP_LDIR)/libtap.so
+ifeq ($(PROXYSQLGENAI),1)
 	$(CXX) -DEXCLUDE_TRACKING_VARIABLES $< ../tap/SQLite3_Server.cpp -I$(CLICKHOUSE_CPP_IDIR) $(IDIRS) $(LDIRS) -L$(CLICKHOUSE_CPP_LDIR) -L$(LZ4_LDIR) $(OPT) $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(CLICKHOUSE_CPP_PATH)/contrib/zstd/zstd/libzstdstatic.a $(LZ4_LDIR)/liblz4.a $(SQLITE3_LDIR)/../libsqlite_rembed.a -lscram -lusual -Wl,--allow-multiple-definition -o $@
+else
+	$(CXX) -DEXCLUDE_TRACKING_VARIABLES $< ../tap/SQLite3_Server.cpp -I$(CLICKHOUSE_CPP_IDIR) $(IDIRS) $(LDIRS) -L$(CLICKHOUSE_CPP_LDIR) -L$(LZ4_LDIR) $(OPT) $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(CLICKHOUSE_CPP_PATH)/contrib/zstd/zstd/libzstdstatic.a $(LZ4_LDIR)/liblz4.a -lscram -lusual -Wl,--allow-multiple-definition -o $@
+endif
 
 %-t: %-t.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@

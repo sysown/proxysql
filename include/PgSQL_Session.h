@@ -216,6 +216,9 @@ inline void PgSQL_Query_Info::set_end_time(unsigned long long time) {
 #endif // CLOCK_MONOTONIC_RAW
 }
 
+class TrafficObserver;
+class Session_Regex;
+
 class PgSQL_Session : public Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread> {
 private:
 	using PktType = std::variant<std::unique_ptr<PgSQL_Parse_Message>,std::unique_ptr<PgSQL_Describe_Message>,
@@ -417,9 +420,9 @@ private:
 	 * @param command Command that causes the session to switch to fast forward mode.
 	 * @param session_type SESSION_FORWARD_TYPE indicating the type of session.
 	 *
-	 * @return void.
+	 * @return bool.
 	 */
-	void switch_normal_to_fast_forward_mode(PtrSize_t& pkt, std::string_view command, SESSION_FORWARD_TYPE session_type);
+	bool switch_normal_to_fast_forward_mode(PtrSize_t& pkt, std::string_view command, SESSION_FORWARD_TYPE session_type);
 
 	/**
 	 * @brief Switches session from fast forward mode to normal mode.
@@ -430,6 +433,8 @@ private:
 	void switch_fast_forward_to_normal_mode();
 
 public:
+	void handle_transaction_state();
+
 	inline bool is_extended_query_frame_empty() const {
 		return extended_query_frame.empty();
 	}
@@ -454,6 +459,10 @@ public:
 	std::string untracked_option_parameters;
 	PgSQL_DateStyle_t current_datestyle = {};
 	uint32_t cancel_secret_key;
+
+	// Describe mode state for \d tablename meta command
+	bool describe_mode{ false };
+	char describe_table_name[256]{ 0 };
 
 #ifdef DEBUG
 	PgSQL_Connection* dbg_extended_query_backend_conn = nullptr;
@@ -533,6 +542,13 @@ public:
 //	MySQL_STMTs_meta* sess_STMTs_meta;
 //	StmtLongDataHandler* SLDH;
 
+	Session_Regex** match_regexes;
+#ifdef PROXYSQLFFTO
+	std::unique_ptr<TrafficObserver> m_ffto;
+	bool ffto_bypassed { false };
+	void observe_ffto_client_packet(const PtrSize_t& pkt);
+	void observe_ffto_server_packet(const PtrSize_t& pkt);
+#endif
 	CopyCmdMatcher* copy_cmd_matcher;
 
 	ProxySQL_Node_Address* proxysql_node_address; // this is used ONLY for Admin, and only if the other party is another proxysql instance part of a cluster
@@ -603,6 +619,7 @@ public:
 	void generate_status_one_hostgroup(int hid, std::string& s);
 	void set_previous_status_mode3(bool allow_execute = true);
 	char* get_current_query(int max_length = -1);
+	bool is_in_transaction() const;
 
 private:
 	int32_t extract_pid_from_param(const PgSQL_Param_Value& param, uint16_t format) const;

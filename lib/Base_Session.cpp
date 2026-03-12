@@ -7,6 +7,7 @@ using json = nlohmann::json;
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
 #include "PgSQL_Data_Stream.h"
+#include "PgSQL_ExplicitTxnStateMgr.h"
 
 #define SELECT_DB_USER "select DATABASE(), USER() limit 1"
 #define SELECT_DB_USER_LEN 33
@@ -526,6 +527,11 @@ void Base_Session<S,DS,B,T>::housekeeping_before_pkts() {
 						myds->return_MySQL_Connection_To_Pool();
 					}
 				} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
+					// Reset transaction state before returning connection to pool
+					if (static_cast<PgSQL_Session*>(this)->transaction_state_manager) {
+						static_cast<PgSQL_Session*>(this)->transaction_state_manager->reset_state();
+					}
+
 					if (myds->myconn->is_pipeline_active() == true) {
 						create_new_session_and_reset_connection(myds);
 					} else {

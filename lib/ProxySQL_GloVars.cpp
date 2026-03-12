@@ -340,7 +340,9 @@ void update_string_var_if_set(char** cur_val, ez::ezOptionParser* opt, const cha
 
 void update_ulong_var_if_set(uint64_t& cur_val, ez::ezOptionParser* opt, const char* cmd_opt) {
 	if (opt->isSet(cmd_opt)) {
-		opt->get(cmd_opt)->getULong(cur_val);
+		unsigned long val;
+		opt->get(cmd_opt)->getULong(val);
+		cur_val = val;
 	}
 }
 
@@ -424,6 +426,7 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 		global.clickhouse_server=true;
 	}
 #endif /* PROXYSQLCLICKHOUSE */
+
 	update_string_var_if_set(&global.gr_bootstrap_uri, opt, "--bootstrap");
 	global.gr_bootstrap_mode = opt->isSet("--bootstrap");
 	update_ulong_var_if_set(global.gr_bootstrap_conf_base_port, opt, "--conf-base-port");

@@ -261,10 +261,23 @@ sq3_res_t sqlite3_execute_stmt(sqlite3* db, const std::string& query);
  * @param val The 'ext_val_t<T>' to be checked.
  * @return In case of failure, 'EXIT_FAILURE' after logging the error, continues otherwise.
  */
-#define CHECK_EXT_VAL(val)\
+#define CHECK_EXT_VAL(conn, val)\
 	do {\
 		if (val.err) {\
-			diag("%s:%d: Query failed   err=\"%s\"", __func__, __LINE__, val.str.c_str());\
+			diag("%s:%d: Query failed   err=\"%s\"", __func__, __LINE__, get_ext_val_err(conn, val).c_str());\
+			return EXIT_FAILURE;\
+		}\
+	} while(0)
+
+/**
+ * @brief Utility one-liner macro to check for query failure on a 'ext_val_t<T>'.
+ * @param val The 'ext_val_t<T>' to be checked.
+ * @return In case of failure, 'EXIT_FAILURE' after logging the error, continues otherwise.
+ */
+#define SQ3_CHECK_EXT_VAL(val)\
+	do {\
+		if (val.err) {\
+			diag("%s:%d: Query failed   err=\"%s\"", __func__, __LINE__, sq3_get_ext_val_err(val).c_str());\
 			return EXIT_FAILURE;\
 		}\
 	} while(0)
@@ -397,7 +410,9 @@ int wait_post_enpoint_ready(
 	std::string endpoint, std::string post_params, uint32_t timeout, uint32_t delay=100
 );
 
-int wait_get_enpoint_ready(std::string endpoint, uint32_t timeout, uint32_t delay=100);
+int wait_get_enpoint_ready(
+	std::string endpoint, uint32_t timeout, uint32_t delay=100, const std::string& userpwd=""
+);
 
 /**
  * @brief Perform a simple POST query to the specified endpoint using the supplied
@@ -417,7 +432,7 @@ CURLcode perform_simple_post(
 	const std::string& endpoint, const std::string& params, uint64_t& curl_res_code, std::string& curl_res_data
 );
 
-CURLcode perform_simple_get(const std::string& endpoint, uint64_t& curl_res_code, std::string& curl_res_data);
+CURLcode perform_simple_get(const std::string& endpoint, uint64_t& curl_res_code, std::string& curl_res_data, const std::string& userpwd = "");
 
 /**
  * @brief Generates a random string of the length of the provider 'strSize'
@@ -1062,5 +1077,24 @@ bool get_env_bool(const char* envname, bool envdefault);
 
 MYSQL* init_mysql_conn(char* host, int port, char* user, char* pass, bool ssl=false, bool cmp=false);
 int run_q(MYSQL *mysql, const char *q);
+
+/**
+ * @brief Spawns a background noise tool if noise is enabled in CommandLine.
+ * @param cl The CommandLine object containing configuration.
+ * @param tool_path Path to the executable tool.
+ * @param args Vector of arguments to pass to the tool.
+ */
+void spawn_noise(const CommandLine& cl, const std::string& tool_path, const std::vector<std::string>& args);
+
+/**
+ * @brief Stops all background noise tools spawned by spawn_noise.
+ * @details This is intended to be called at the end of a TAP test.
+ */
+extern "C" void stop_noise_tools();
+
+/**
+ * @brief Returns the number of background noise tools currently running.
+ */
+extern "C" int get_noise_tools_count();
 
 #endif // #define UTILS_H

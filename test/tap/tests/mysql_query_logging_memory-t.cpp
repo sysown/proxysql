@@ -19,6 +19,7 @@
 
 #include "tap.h"
 #include "command_line.h"
+#include "noise_utils.h"
 #include "utils.h"
 
 using std::string;
@@ -185,6 +186,10 @@ int main() {
         return -1;
     }
 
+	spawn_internal_noise(cl, internal_noise_random_stats_poller);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
+	spawn_internal_noise(cl, internal_noise_pgsql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}, {"avg_delay_ms", "300"}});
+
     const unsigned int num_selects = 200; // Number of "SELECT 1" queries to run
     unsigned int p = 2; // Number of tests for table structure checks
     p += num_selects/10; // Number of tests for SELECT 1 queries (one every 10 iterations)
@@ -192,7 +197,11 @@ int main() {
     p += 1; // Number of tests for empty hostgroup error
     p += 1; // Number of tests for non-existing schema error
     p += 2; // Number of tests for checking query results in stats and history tables
-	plan(p);
+	if (cl.use_noise) {
+		plan(p + 3);
+	} else {
+		plan(p);
+	}
 
     MYSQL* admin_conn = mysql_init(nullptr);
     if (!admin_conn) {

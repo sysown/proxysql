@@ -45,6 +45,11 @@ static bool validate_url_format(const char* url) {
 		return false;
 	}
 
+	// Host part should not start with a colon (e.g. http://:8080)
+	if (host_start[3] == ':') {
+		return false;
+	}
+
 	return true;
 }
 
@@ -70,12 +75,12 @@ static bool validate_api_key_format(const char* key, const char* provider_name) 
 	}
 
 	// Check for incomplete OpenAI key format
-	if (strncmp(key, "sk-", 3) == 0 && len < 20) {
+	if (strncmp(key, "sk-", 3) == 0 && len < 10) {
 		return false;
 	}
 
 	// Check for incomplete Anthropic key format
-	if (strncmp(key, "sk-ant-", 7) == 0 && len < 25) {
+	if (strncmp(key, "sk-ant-", 7) == 0 && len < 20) {
 		return false;
 	}
 
@@ -89,9 +94,15 @@ static bool validate_numeric_range(const char* value, int min_val, int max_val, 
 		return false;
 	}
 
-	int int_val = atoi(value);
+	char* endptr;
+	long long_val = strtol(value, &endptr, 10);
 
-	if (int_val < min_val || int_val > max_val) {
+	// Check if the entire string was consumed
+	if (*endptr != '\0') {
+		return false;
+	}
+
+	if (long_val < min_val || long_val > max_val) {
 		return false;
 	}
 
@@ -167,6 +178,8 @@ void test_api_key_validation() {
 	   "10-character key accepted (minimum)");
 	ok(validate_api_key_format("sk-proj-shortbutlongenough", "openai"),
 	   "sk-proj- prefix key accepted if length is ok");
+	ok(validate_api_key_format("sk-abc-def-ghi-jkl-mno-pqr", "openai"),
+	   "Long OpenAI-like key accepted");
 
 	// Invalid keys - whitespace
 	ok(!validate_api_key_format("sk-1234567890 with space", "openai"),
@@ -217,10 +230,13 @@ void test_numeric_range_validation() {
 	   "Value above maximum rejected");
 	ok(!validate_numeric_range("", 0, 100, "test_var"),
 	   "Empty value rejected");
-	// Note: atoi("abc") returns 0, which is in range [0,100]
-	// This is a known limitation of the validation function
-	ok(validate_numeric_range("abc", 0, 100, "test_var"),
-	   "Non-numeric value accepted (atoi limitation: 'abc' -> 0)");
+	
+	ok(!validate_numeric_range("abc", 0, 100, "test_var"),
+	   "Non-numeric value rejected");
+	
+	ok(!validate_numeric_range("100abc", 0, 100, "test_var"),
+	   "Number followed by characters rejected");
+
 	// But if the range doesn't include 0, it fails correctly
 	ok(!validate_numeric_range("abc", 1, 100, "test_var"),
 	   "Non-numeric value rejected when range starts above 0");
@@ -321,13 +337,13 @@ void test_edge_cases() {
 // ============================================================================
 
 int main() {
-	// Plan: 61 tests total
+	// Plan: 62 tests total
 	// URL validation: 15 tests (9 valid + 6 invalid)
 	// API key validation: 14 tests
 	// Numeric range: 13 tests
 	// Provider name: 8 tests
-	// Edge cases: 11 tests
-	plan(61);
+	// Edge cases: 12 tests
+	plan(62);
 
 	test_url_validation();
 	test_api_key_validation();

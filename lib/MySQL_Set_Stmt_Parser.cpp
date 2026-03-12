@@ -607,7 +607,6 @@ std::string MySQL_Set_Stmt_Parser::remove_comments(const std::string& q) {
 
 
 #ifdef DEBUG
-
 void MySQL_Set_Stmt_Parser::test_parse_USE_query() {
 
 	// Define vector of pairs (query, expected dbname)

@@ -226,9 +226,9 @@ public:
 #ifdef IDLE_THREADS
 	PtrArray* idle_mysql_sessions;
 	PtrArray* resume_mysql_sessions;
-	CopyCmdMatcher *copy_cmd_matcher;
 	pgsql_conn_exchange_t myexchange;
 #endif // IDLE_THREADS
+	CopyCmdMatcher *copy_cmd_matcher;
 
 	int pipefd[2];
 	PgSQL_Session_Interrupt_Queue_t sess_intrpt_queue;
@@ -902,6 +902,7 @@ public:
 		bool monitor_replication_lag_group_by_host;
 		//! How frequently a replication lag check is performed. Unit: 'ms'.
 		int monitor_replication_lag_interval;
+		int monitor_replication_lag_interval_window;
 		//! Read only check timeout. Unit: 'ms'.
 		int monitor_replication_lag_timeout;
 		int monitor_replication_lag_count;
@@ -1004,6 +1005,14 @@ public:
 		int default_query_delay;
 		int default_query_timeout;
 		int query_processor_iterations;
+		/**
+		 * @brief Defines when the first comment of a query needs to be processed.
+		 * 0 : comment ignored
+		 * 1 : comment processed before the query rules
+		 * 2 : comment processed after the query rules (default behavior)
+		 * 3 : comment processed before and after the query rules
+		 */
+		int query_processor_first_comment_parsing;
 		int query_processor_regex;
 		int set_query_lock_on_hostgroup;
 		int set_parser_algorithm;
@@ -1024,10 +1033,21 @@ public:
 		int poll_timeout_on_failure;
 		char* eventslog_filename;
 		int eventslog_filesize;
+		/** @brief Circular buffer size for PostgreSQL advanced events logging. */
+		int eventslog_buffer_history_size;
+		/** @brief Maximum rows retained in stats_pgsql_query_events in-memory table. */
+		int eventslog_table_memory_size;
+		/** @brief Maximum query length copied into PostgreSQL eventslog circular buffer. */
+		int eventslog_buffer_max_query_length;
 		int eventslog_default_log;
 		int eventslog_format;
+		int eventslog_flush_timeout;
+ 		int eventslog_flush_size;
+ 		int eventslog_rate_limit;
 		char* auditlog_filename;
 		int auditlog_filesize;
+		int auditlog_flush_timeout;
+ 		int auditlog_flush_size;
 		// SSL related, proxy to server
 		char* ssl_p2s_ca;
 		char* ssl_p2s_capath;
@@ -1064,6 +1084,10 @@ public:
 #endif
 		int show_processlist_extended;
 		int processlist_max_query_length;
+#ifdef PROXYSQLFFTO
+		bool ffto_enabled;
+		int ffto_max_buffer_size;
+#endif
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;
@@ -1513,7 +1537,10 @@ public:
 	/**
 	 * @brief Retrieves a process list for all threads in the thread pool.
 	 *
-	 * @param args Processlist configuration of PgSQL.
+	 * @param args
+	 *   Processlist rendering options and optional typed query controls.
+	 *   When `args.query_options.enabled=true`, filtering/sorting/pagination is
+	 *   applied in memory after the live snapshot is collected.
 	 *
 	 * @return A `SQLite3_result` object containing the process list, or `NULL` if an error
 	 * occurred.

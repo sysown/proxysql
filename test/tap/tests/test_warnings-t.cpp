@@ -10,6 +10,9 @@
 #include <tuple>
 #include <map>
 #include <thread>
+#include <vector>
+#include <array>
+#include <cassert>
 
 #include "json.hpp"
 #include "mysql.h"
@@ -435,7 +438,7 @@ constexpr size_t test_size(Args&&... args) {
 #define TESTS_COMBINED mysql_variable_test, hostgroup_attributes_test, random_test, insert_test, query_digest_test, \
  query_cache_test, warning_log_test, multiplexing_test
 
-void execute_tests(const std::vector<std::pair<const char*, std::vector<TestInfo>>>& all_tests, bool enable_client_deprecate_eof) {
+void execute_tests(std::vector<std::pair<const char*, std::vector<TestInfo>>>& all_tests, bool enable_client_deprecate_eof) {
 	for (const auto& test : all_tests) {
 		diag("Executing [%s] test... [CLIENT_DEPRECATE_EOF=%s]", test.first, (enable_client_deprecate_eof ? "TRUE" : "FALSE"));
 		for (const auto& test_info : test.second) {
@@ -511,23 +514,42 @@ __exit:
 }
 
 int main(int argc, char** argv) {
+	diag("================================================================================");
+	diag("TEST DESCRIPTION: ProxySQL MySQL Warnings and Multiplexing Validation");
+	diag("This test verifies that ProxySQL correctly tracks MySQL warnings and manages");
+	diag("multiplexing state based on warning generation. It ensures that:");
+	diag("  1. Warnings are correctly reported through the MYSQL connection.");
+	diag("  2. Multiplexing is disabled (status 6) when session state (warnings) exists.");
+	diag("  3. Hostgroup attributes correctly override global mysql-handle_warnings settings.");
+	diag("================================================================================");
 
 	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
+		diag("ERROR: Failed to get the required environmental variables.");
 		return -1;
 	}
 
-	plan(check_count(TESTS_COMBINED)*2); // also check with client_deprecate_eof flag
+	diag("Connection Context:");
+	diag("  - ProxySQL Host: %s", cl.host);
+	diag("  - Target User:   %s", cl.username);
 
-	/*plan((20 + 6) +  // mysql variable test: 20 warning checks, 6 multiplex status checks
-		 (20 + 6) +  // hostgroup attributes test: 20 warning checks, 6 multiplex status checks
-		 (14 + 4) +  // random test: 14 warning checks, 4 multiplex status checks
-		 (9 + 4) +   // insert test: 9 warning checks, 4 multiplex status checks
-		 (3 + 1) +   // query digest test: 3 warning checks, 1 multiplex status checks
-		 (18 + 5) +  // query cache test: 18 warning checks, 5 multiplex status checks
-		 (7 + 2) +   // warning log test: 7 warning checks, 2 multiplex status checks
-		 (7 + 3));   // multiplexing test: 7 warning checks, 3 multiplex status checks
-	*/
+	plan(check_count(TESTS_COMBINED)*2);
+
+	diag("Discovering target hostgroup for user %s...", cl.username);
+	int target_hg = 0;
+	MYSQL* admin_tmp = mysql_init(NULL);
+	if (mysql_real_connect(admin_tmp, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+		std::string hg_query = "SELECT default_hostgroup FROM mysql_users WHERE username='" + std::string(cl.username) + "' LIMIT 1";
+		if (mysql_query(admin_tmp, hg_query.c_str()) == 0) {
+			MYSQL_RES *res = mysql_store_result(admin_tmp);
+			if (res) {
+				MYSQL_ROW row = mysql_fetch_row(res);
+				if (row) target_hg = atoi(row[0]);
+				mysql_free_result(res);
+			}
+		}
+		mysql_close(admin_tmp);
+	}
+	diag("Primary test hostgroup: %d", target_hg);
 
 	std::vector<std::pair<const char*, std::vector<TestInfo>>> all_tests(test_size(TESTS_COMBINED));
 
@@ -554,6 +576,25 @@ int main(int argc, char** argv) {
 
 	all_tests[7].first = "MULTIPLEXING";
 	all_tests[7].second.insert(all_tests[7].second.end(), multiplexing_test.begin(), multiplexing_test.end());
+
+	// PRE-TEST FIXUP: Replace hardcoded Hostgroup 0 with the discovered target_hg
+	for (auto& test_set : all_tests) {
+		for (auto& info : test_set.second) {
+			if (info.conn.conn_type == kAdmin) {
+				std::string q = info.query_info.query;
+				size_t pos = q.find("VALUES (0,");
+				if (pos != std::string::npos) {
+					q.replace(pos, 10, "VALUES (" + std::to_string(target_hg) + ",");
+					info.query_info.query = strdup(q.c_str());
+				}
+				pos = q.find("WHERE hostgroup_id=0");
+				if (pos != std::string::npos) {
+					q.replace(pos, 20, "WHERE hostgroup_id=" + std::to_string(target_hg));
+					info.query_info.query = strdup(q.c_str());
+				}
+			}
+		}
+	}
 
 	execute_tests(all_tests, false);
 	execute_tests(all_tests, true);

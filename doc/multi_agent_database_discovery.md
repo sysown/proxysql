@@ -207,6 +207,17 @@ The agents use these MCP tools for database analysis:
 - `catalog_upsert` - Store findings in catalog
 - `catalog_list` / `catalog_get` - Retrieve findings from catalog
 
+### Target Scoping Requirement
+
+Discovery and catalog/LLM tools are target-scoped. Always pass `target_id`:
+
+- `discovery.run_static(target_id=..., schema_filter=...)`
+- `catalog.*(target_id=..., run_id=...)`
+- `agent.run_start(target_id=..., run_id=...)`
+- `llm.*(target_id=..., run_id=...)`
+
+`run_id` resolution is no longer global. The same schema name can exist on multiple targets, so `target_id` is required to resolve the correct discovery run.
+
 ## Benefits of Multi-Agent Approach
 
 1. **Parallel Execution**: All 4 agents run simultaneously

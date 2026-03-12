@@ -38,6 +38,7 @@
 #include "proxysql_utils.h"
 #include "re2/re2.h"
 #include "command_line.h"
+#include "noise_utils.h"
 #include "tap.h"
 
 __thread int mysql_thread___query_digests_max_query_length = 65000;
@@ -788,6 +789,10 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
+	spawn_internal_noise(cl, internal_noise_random_stats_poller);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
+	spawn_internal_noise(cl, internal_noise_pgsql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}, {"avg_delay_ms", "300"}});
+
 	bool exec_crashing_tests = true;
 	bool exec_grouping_tests = true;
 	bool exec_regular_tests = true;
@@ -854,7 +859,11 @@ int main(int argc, char** argv) {
 	if (exec_grouping_tests) { tests_planned += grouping_tests_num; };
 	if (exec_crashing_tests) { tests_planned += crashing_tests_num; };
 
-	plan(tests_planned);
+	if (cl.use_noise) {
+		plan(tests_planned + 3);
+	} else {
+		plan(tests_planned);
+	}
 
 	if (exec_regular_tests) {
 		process_digest_tests(regular_tests_defs);

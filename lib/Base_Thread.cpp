@@ -22,7 +22,13 @@ template void Base_Thread::register_session(PgSQL_Thread*, PgSQL_Session*, bool)
 template void Base_Thread::run_SetAllSession_ToProcess0<MySQL_Thread, MySQL_Session>();
 template void Base_Thread::run_SetAllSession_ToProcess0<PgSQL_Thread, PgSQL_Session>();
 
-Base_Thread::Base_Thread() {
+Base_Thread::Base_Thread() :
+	curtime(0),
+	last_move_to_idle_thread_time(0),
+	epoll_thread(false),
+	shutdown(0),
+	mysql_sessions(nullptr)
+{
 };
 
 Base_Thread::~Base_Thread() {

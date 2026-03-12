@@ -193,6 +193,14 @@ int MySQL_Tool_Handler::init_connection_pool() {
 		if (!conn.mysql) {
 			proxy_error("MySQL_Tool_Handler: mysql_init failed for %s:%d\n",
 				conn.host.c_str(), conn.port);
+			// Clean up previously created connections
+			for (auto& existing_conn : connection_pool) {
+				if (existing_conn.mysql) {
+					mysql_close(existing_conn.mysql);
+				}
+			}
+			connection_pool.clear();
+			pool_size = 0;
 			pthread_mutex_unlock(&pool_lock);
 			return -1;
 		}
@@ -217,6 +225,14 @@ int MySQL_Tool_Handler::init_connection_pool() {
 			proxy_error("MySQL_Tool_Handler: mysql_real_connect failed for %s:%d: %s\n",
 				conn.host.c_str(), conn.port, mysql_error(conn.mysql));
 			mysql_close(conn.mysql);
+			// Clean up previously created connections
+			for (auto& existing_conn : connection_pool) {
+				if (existing_conn.mysql) {
+					mysql_close(existing_conn.mysql);
+				}
+			}
+			connection_pool.clear();
+			pool_size = 0;
 			pthread_mutex_unlock(&pool_lock);
 			return -1;
 		}
