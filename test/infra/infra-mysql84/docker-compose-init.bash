@@ -62,21 +62,32 @@ if [ -n "$($COMPOSE_CMD -p "${COMPOSE_PROJECT}" ps -q 2>/dev/null)" ]; then
 fi
 
 # 2. Infrastructure-specific preparation (logs/data)
+# We extract host paths that appear to be for logs or data.
 echo "Scanning for volumes in docker-compose.yml..."
-MOUNTED_PATHS=$(grep -E '\$\{INFRA_LOGS_PATH\}|\./log/' docker-compose.yml | awk -F: '{print $1}' | sed 's/^[[:space:]-]*//' | sort -u || true)
+# CRITICAL: Exclude .crt and .key files from auto-mkdir logic to prevent "directory vs file" conflicts
+MOUNTED_PATHS=$(grep -E '\$\{INFRA_LOGS_PATH\}|\./log/' docker-compose.yml | grep -vE "\.crt|\.key" | awk -F: '{print $1}' | sed 's/^[[:space:]-]*//' | sort -u || true)
 
 for RAW_PATH in ${MOUNTED_PATHS}; do
+    # Skip relative paths that point to config files (e.g. ./conf/...)
     if [[ "${RAW_PATH}" == "./conf/"* ]]; then continue; fi
+    
+    # Expand variables like ${INFRA_LOGS_PATH} and ${COMPOSE_PROJECT}
     eval "ACTUAL_PATH=${RAW_PATH}"
+    
+    # Safety: Refuse to proceed if ACTUAL_PATH is a directory and is not empty
     if [ -d "${ACTUAL_PATH}" ] && [ "$(ls -A "${ACTUAL_PATH}" 2>/dev/null)" ]; then
         echo "ERROR: Directory '${ACTUAL_PATH}' is not empty."
         echo "Please run teardown/cleanup first."
         exit 1
     fi
+    
     echo "Preparing directory: ${ACTUAL_PATH}"
     $SUDO mkdir -p "${ACTUAL_PATH}"
     $SUDO chmod -R 777 "${ACTUAL_PATH}"
+    
+    # Aggressive postgres fix: UID 999
     if [[ "${ACTUAL_PATH}" == *pgsql* ]] || [[ "${ACTUAL_PATH}" == *pgdb* ]]; then
+        echo "Applying postgres ownership (999:999) to ${ACTUAL_PATH}"
         $SUDO chown -R 999:999 "${ACTUAL_PATH}"
     fi
 done
@@ -88,16 +99,23 @@ if [ -d "./conf/orchestrator" ]; then
     find ./conf/orchestrator -name "orchestrator.conf.json" -exec sed -i "s/\${INFRA}/${INFRA}/g" {} +
 fi
 
-# 4. PostgreSQL SSL setup
-if [ -f ./conf/pgsql/ssl/server.key ]; then
+# 4. TRANSIENT SSL SETUP (Avoiding repo permission changes)
+# We copy SSL files to a transient location and apply strict permissions there.
+SSL_SRC="./conf/pgsql/ssl"
+if [ -d "${SSL_SRC}" ]; then
     SSL_DST="${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/ssl"
+    echo "Preparing transient SSL directory: ${SSL_DST}"
     $SUDO mkdir -p "${SSL_DST}"
-    $SUDO cp -rp "./conf/pgsql/ssl/." "${SSL_DST}/"
+    # SAFETY: Remove any directories that were mistakenly created with file names
+    [ -d "${SSL_DST}/server.crt" ] && $SUDO rm -rf "${SSL_DST}/server.crt" || true
+    [ -d "${SSL_DST}/server.key" ] && $SUDO rm -rf "${SSL_DST}/server.key" || true
+    $SUDO cp -rp "${SSL_SRC}/." "${SSL_DST}/"
+    # Strict permissions for postgres on the copies only
     $SUDO chmod 0640 "${SSL_DST}/server.key" 2>/dev/null || true
     $SUDO chown -R 0:999 "${SSL_DST}" 2>/dev/null || true
 fi
 
-# 5. Create a temporary env file for docker-compose
+# 5. Create a temporary env file for docker-compose to ensure it sees our variables
 ENV_FILE=".env.isolated.${INFRA_ID}"
 cat <<ENVEOF > "${ENV_FILE}"
 INFRA_ID=${INFRA_ID}
@@ -127,12 +145,12 @@ for C in ${PROJECT_CONTAINERS}; do
 done
 
 if [ -f /.dockerenv ]; then
-    RUNNER_ID=$(hostname)
-    docker network connect "${INFRA_ID}_backend" "${RUNNER_ID}" || true
+        RUNNER_ID=$(hostname)
+        docker network connect "${INFRA_ID}_backend" "${RUNNER_ID}" || true
 fi
 
-# 8. Run post-scripts
-sleep 2
+# 8. Run post-scripts if they exist
+sleep 2 # wait a bit for engines to start
 [ -f ./bin/docker-wait-pgsql.bash ] && ./bin/docker-wait-pgsql.bash
 [ -f ./bin/docker-mysql-post.bash ] && ./bin/docker-mysql-post.bash
 [ -f ./bin/docker-pgsql-post.bash ] && ./bin/docker-pgsql-post.bash
