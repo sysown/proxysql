@@ -138,12 +138,40 @@ MYSQL_BISON_H = MySQL_Parser.tab.h
 MYSQL_FLEX_C = MySQL_Lexer.yy.c
 MYSQL_LEXER_FILE = MySQL_Lexer.l
 MYSQL_PARSER = MySQL_Parser
+BISON ?= bison
+
+ifeq ($(UNAME_S),Darwin)
+ifneq ($(wildcard /opt/homebrew/opt/bison/bin/bison),)
+	BISON := /opt/homebrew/opt/bison/bin/bison
+else ifneq ($(wildcard /usr/local/opt/bison/bin/bison),)
+	BISON := /usr/local/opt/bison/bin/bison
+endif
+endif
+
+BISON_SUPPORTS_PERCENT_CODE := $(shell \
+	tmp=$$(mktemp /tmp/proxysql-bison.XXXXXX 2>/dev/null || mktemp -t proxysql-bison) && \
+	printf '%%code requires { }\n%%%%\nstmt:\n;\n' > $$tmp && \
+	$(BISON) -o /dev/null $$tmp >/dev/null 2>&1; \
+	status=$$?; rm -f $$tmp; echo $$status \
+)
+
+ifneq ($(BISON_SUPPORTS_PERCENT_CODE),0)
+$(error Bison at '$(BISON)' is too old for MySQL_Parser.y; install a modern GNU bison or override BISON=/path/to/bison)
+endif
+
+BISON_WARN_FLAGS :=
+
+ifneq ($(shell $(BISON) --help 2>/dev/null | grep -F "counterexamples"),)
+	BISON_WARN_FLAGS += -Wcounterexamples
+endif
 
 $(MYSQL_FLEX_C): $(MYSQL_LEXER_FILE) $(MYSQL_BISON_H)
 	flex -o $(MYSQL_FLEX_C) $(MYSQL_LEXER_FILE)
 
-$(MYSQL_BISON_C) $(MYSQL_BISON_H): $(MYSQL_PARSER).y $(IDIR)/MySQL_AST.h $(IDIR)/$(MYSQL_PARSER).h
-	bison -Wcounterexamples -d -v --report=all -o $(MYSQL_BISON_C) --defines=$(MYSQL_BISON_H) $(MYSQL_PARSER).y
+$(MYSQL_BISON_C): $(MYSQL_PARSER).y $(IDIR)/MySQL_AST.h $(IDIR)/$(MYSQL_PARSER).h
+	$(BISON) $(BISON_WARN_FLAGS) -d -v --report=all -o $(MYSQL_BISON_C) --defines=$(MYSQL_BISON_H) $(MYSQL_PARSER).y
+
+$(MYSQL_BISON_H): $(MYSQL_BISON_C)
 
 $(ODIR)/MySQL_Parser.tab.oo: $(MYSQL_BISON_C) $(MYSQL_BISON_H) $(IDIR)/$(MYSQL_PARSER).h
 	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS)

@@ -1,6 +1,7 @@
 #include "MySQL_Parser.h"
 
 #include <cassert>
+#include <cstddef>
 #include <stdexcept>
 
 using std::string;
@@ -14,15 +15,15 @@ using std::vector;
 // Forward declaration for the opaque Flex buffer type
 struct yy_buffer_state;
 typedef struct yy_buffer_state *YY_BUFFER_STATE;
-typedef MySQLParser::ParserOpts* YY_EXTRA_TYPE;
+typedef std::size_t yy_size_t;
 
 // No extern "C" required, as their definitions will also have C++ linkage.
 extern int mysql_yylex_init_extra(MySQLParser::Parser* user_defined, yyscan_t* yyscanner_r);
 extern int mysql_yylex_destroy(yyscan_t yyscanner);
 extern YY_BUFFER_STATE mysql_yy_scan_string(const char *yy_str, yyscan_t yyscanner);
-extern YY_BUFFER_STATE mysql_yy_scan_bytes(const char *yy_bytes, int len, yyscan_t yyscanner);
+extern YY_BUFFER_STATE mysql_yy_scan_bytes(const char *yy_bytes, yy_size_t len, yyscan_t yyscanner);
 extern void mysql_yy_delete_buffer(YY_BUFFER_STATE b, yyscan_t yyscanner);
-extern void mysql_yy_set_extra(YY_EXTRA_TYPE* b, yyscan_t yyscanner);
+extern void mysql_yy_set_extra(MySQLParser::Parser* parser, yyscan_t yyscanner);
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -125,4 +126,3 @@ void Parser::internal_add_error_at(const std::string& msg, int line, int column)
 }
 
 } // namespace MySQLParser
-
