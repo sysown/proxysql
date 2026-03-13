@@ -80,6 +80,7 @@ class ProxySQL_GlobalVariables {
 	char * sqlite3_plugin;
 	char * web_interface_plugin;
 	char * ldap_auth_plugin;
+	char * auth_plugins;
 	SSL_CTX *get_SSL_ctx();
 	SSL *get_SSL_new();
 	void get_SSL_pem_mem(char **key, char **cert);

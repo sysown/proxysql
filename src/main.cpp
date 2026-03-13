@@ -7,6 +7,8 @@ using json = nlohmann::json;
 
 #include <iostream>
 #include <thread>
+#include <map>
+#include <sstream>
 #include "btree_map.h"
 #include "proxysql.h"
 
@@ -40,6 +42,7 @@ using json = nlohmann::json;
 #include "MySQL_Authentication.hpp"
 #include "PgSQL_Authentication.h"
 #include "MySQL_LDAP_Authentication.hpp"
+#include "MySQL_AuthPlugin.h"
 #include "MySQL_Query_Cache.h"
 #include "PgSQL_Query_Cache.h"
 #include "proxysql_restapi.h"
@@ -481,6 +484,7 @@ PgSQL_Query_Cache* GloPgQC;
 MySQL_Authentication *GloMyAuth;
 PgSQL_Authentication* GloPgAuth;
 MySQL_LDAP_Authentication *GloMyLdapAuth;
+std::map<std::string, ProxySQL_Auth_Plugin*> GloAuthPlugins;
 #ifdef PROXYSQLCLICKHOUSE
 ClickHouse_Authentication *GloClickHouseAuth;
 #endif /* PROXYSQLCLICKHOUSE */
@@ -803,6 +807,14 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 			rc=root.lookupValue("ldap_auth_plugin", ldap_auth_plugin);
 			if (rc==true) {
 				GloVars.ldap_auth_plugin=strdup(ldap_auth_plugin.c_str());
+			}
+		}
+		if (root.exists("auth_plugins")==true) {
+			string auth_plugins;
+			bool rc;
+			rc=root.lookupValue("auth_plugins", auth_plugins);
+			if (rc==true) {
+				GloVars.auth_plugins=strdup(auth_plugins.c_str());
 			}
 		}
 		const map<string, char**> varnames_globals_map {
@@ -1476,6 +1488,80 @@ static void LoadPlugins() {
 			//	GloAdmin->init_ldap();
 			//	GloAdmin->load_ldap_variables_to_runtime();
 			//}
+		}
+	}
+	// Load additional auth plugins
+	if (GloVars.auth_plugins) {
+		std::string plugins_str(GloVars.auth_plugins);
+		std::stringstream ss(plugins_str);
+		std::string plugin_path;
+
+		while (std::getline(ss, plugin_path, ',')) {
+			// Trim whitespace
+			size_t start = plugin_path.find_first_not_of(" \t");
+			size_t end = plugin_path.find_last_not_of(" \t");
+			if (start == std::string::npos) continue;
+			plugin_path = plugin_path.substr(start, end - start + 1);
+
+			if (plugin_path.empty()) continue;
+
+			dlerror(); // Clear errors
+			void* handle = dlopen(plugin_path.c_str(), RTLD_NOW);
+			if (!handle) {
+				proxy_error("Cannot load auth plugin '%s': %s\n",
+					plugin_path.c_str(), dlerror());
+				continue;
+			}
+
+			// Get factory function
+			dlerror();
+			proxysql_mysql_auth_plugin_create_t create_func =
+				(proxysql_mysql_auth_plugin_create_t) dlsym(handle, "proxysql_mysql_auth_plugin_create");
+			char* dlsym_error = dlerror();
+			if (dlsym_error || !create_func) {
+				proxy_error("Auth plugin '%s' missing proxysql_mysql_auth_plugin_create\n",
+					plugin_path.c_str());
+				dlclose(handle);
+				continue;
+			}
+
+			// Create plugin instance
+			ProxySQL_Auth_Plugin* plugin = create_func();
+			if (!plugin) {
+				proxy_error("Failed to create auth plugin from '%s'\n", plugin_path.c_str());
+				dlclose(handle);
+				continue;
+			}
+
+			// Get plugin name
+			const char* name = plugin->name();
+			if (!name || strlen(name) == 0) {
+				proxy_error("Auth plugin '%s' returned empty name\n", plugin_path.c_str());
+				delete plugin;
+				dlclose(handle);
+				continue;
+			}
+
+			// Check for duplicate
+			if (GloAuthPlugins.find(name) != GloAuthPlugins.end()) {
+				proxy_error("Auth plugin '%s' already loaded, skipping '%s'\n",
+					name, plugin_path.c_str());
+				delete plugin;
+				dlclose(handle);
+				continue;
+			}
+
+			// Initialize the plugin
+			if (!plugin->init()) {
+				proxy_error("Failed to initialize auth plugin '%s'\n", name);
+				delete plugin;
+				dlclose(handle);
+				continue;
+			}
+
+			GloAuthPlugins[name] = plugin;
+			proxy_info("Loaded auth plugin: %s from %s\n", name, plugin_path.c_str());
+			plugin->print_version();
 		}
 	}
 }

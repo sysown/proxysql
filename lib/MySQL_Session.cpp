@@ -702,6 +702,7 @@ MySQL_Session::MySQL_Session() {
 	last_HG_affected_rows = -1; // #1421 : advanced support for LAST_INSERT_ID()
 	proxysql_node_address = NULL;
 	use_ldap_auth = false;
+	use_auth_plugin = false;
 	this->wait_timeout = mysql_thread___wait_timeout;
 	backend_closed_in_fast_forward = false;
 	fast_forward_grace_start_time = 0;
@@ -785,12 +786,18 @@ MySQL_Session::~MySQL_Session() {
 					break;
 #endif /* PROXYSQLCLICKHOUSE */
 				default:
-					if (use_ldap_auth == false) {
+					if (use_auth_plugin) {
+						// Per-user auth plugin path: use GloMyAuth with fe_username
+						GloMyAuth->decrease_frontend_user_connections(
+							client_myds->myconn->userinfo->fe_username,
+							PASSWORD_TYPE::PRIMARY
+						);
+					} else if (use_ldap_auth == false) {
 						GloMyAuth->decrease_frontend_user_connections(
 							client_myds->myconn->userinfo->username,
 							client_myds->myconn->userinfo->passtype
 						);
-					} else {
+					} else if (GloMyLdapAuth) {
 						GloMyLdapAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->fe_username);
 					}
 					break;
@@ -6707,13 +6714,21 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 //#endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP
 					case PROXYSQL_SESSION_MYSQL:
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p , session_type=PROXYSQL_SESSION_MYSQL\n", this, client_myds);
-						if (use_ldap_auth == false) {
+						if (use_auth_plugin) {
+							// Per-user auth plugin path: use GloMyAuth with fe_username
+							// fe_username contains the frontend user that was authenticated via plugin
+							free_users = GloMyAuth->increase_frontend_user_connections(
+								client_myds->myconn->userinfo->fe_username,
+								PASSWORD_TYPE::PRIMARY,
+								&used_users
+							);
+						} else if (use_ldap_auth == false) {
 							free_users = GloMyAuth->increase_frontend_user_connections(
 								client_myds->myconn->userinfo->username,
 								client_myds->myconn->userinfo->passtype,
 								&used_users
 							);
-						} else {
+						} else if (GloMyLdapAuth) {
 							free_users = GloMyLdapAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->fe_username, &used_users);
 						}
 						break;
@@ -8357,12 +8372,18 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		reset();
 		init();
 		if (client_authenticated) {
-			if (use_ldap_auth == false) {
+			if (use_auth_plugin) {
+				// Per-user auth plugin path: use GloMyAuth with fe_username
+				GloMyAuth->decrease_frontend_user_connections(
+					client_myds->myconn->userinfo->fe_username,
+					PASSWORD_TYPE::PRIMARY
+				);
+			} else if (use_ldap_auth == false) {
 				GloMyAuth->decrease_frontend_user_connections(
 					client_myds->myconn->userinfo->username,
 					client_myds->myconn->userinfo->passtype
 				);
-			} else {
+			} else if (GloMyLdapAuth) {
 				GloMyLdapAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->fe_username);
 			}
 		}

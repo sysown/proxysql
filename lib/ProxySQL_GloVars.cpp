@@ -97,6 +97,10 @@ ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
 		free(ldap_auth_plugin);
 		ldap_auth_plugin = NULL;
 	}
+	if (auth_plugins) {
+		free(auth_plugins);
+		auth_plugins = NULL;
+	}
 	/**
 	 * @brief set in_shutdown flag just the member 'checksums_values'.
 	 * @details This is performed to prevent the free() inside the 'ProxySQL_Checksum_Value' destructor for
@@ -216,6 +220,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	checksums_values.global_checksum = 0;
 	execute_on_exit_failure = NULL;
 	ldap_auth_plugin = NULL;
+	auth_plugins = NULL;
 	web_interface_plugin = NULL;
 	sqlite3_plugin = NULL;
 #ifdef DEBUG
