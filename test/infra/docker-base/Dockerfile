@@ -1,0 +1,30 @@
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update -qq && \
+    apt-get install -y -qq --no-install-recommends \
+    mysql-client \
+    postgresql-client \
+    iputils-ping \
+    curl \
+    wget \
+    ca-certificates \
+    net-tools \
+    vim \
+    git \
+    sudo \
+    python3 \
+    python3-pip \
+    python3-pymysql \
+    python3-requests \
+    python3-yaml \
+    python3-packaging \
+    python3-structlog \
+    php-cli \
+    php-mysql \
+    && wget https://github.com/openark/orchestrator/releases/download/v3.2.6/orchestrator-client_3.2.6_amd64.deb -O /tmp/orc.deb \
+    && apt-get install -y /tmp/orc.deb \
+    && rm -rf /var/lib/apt/lists/* /tmp/orc.deb
+
+WORKDIR /var/lib/proxysql
