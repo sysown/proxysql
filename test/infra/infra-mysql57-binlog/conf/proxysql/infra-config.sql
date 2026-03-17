@@ -8,7 +8,9 @@ INSERT INTO mysql_servers (hostgroup_id,hostname,gtid_port,port,max_replication_
 INSERT INTO mysql_servers (hostgroup_id,hostname,gtid_port,port,max_replication_lag,comment) VALUES (${RHG},'mysql3.${INFRA}',6020,3306,10,'mysql3.${INFRA}');
 
 DELETE FROM mysql_replication_hostgroups WHERE comment LIKE '%${INFRA}';
-INSERT INTO mysql_replication_hostgroups (writer_hostgroup,reader_hostgroup,comment) VALUES (${WHG},${RHG},'${INFRA}');
+DELETE FROM mysql_replication_hostgroups WHERE writer_hostgroup=${WHG} AND reader_hostgroup=${RHG};
+DELETE FROM mysql_replication_hostgroups WHERE comment='.' OR comment='' OR comment IS NULL;
+REPLACE INTO mysql_replication_hostgroups (writer_hostgroup,reader_hostgroup,comment) VALUES (${WHG},${RHG},'${INFRA}');
 LOAD MYSQL SERVERS TO RUNTIME;
 SAVE MYSQL SERVERS TO DISK;
 

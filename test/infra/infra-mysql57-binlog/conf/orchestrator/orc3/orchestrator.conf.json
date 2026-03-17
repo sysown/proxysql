@@ -7,16 +7,16 @@
   "SQLite3DataFile": "/var/lib/orchestrator/orchestrator.db",
   "RaftEnabled": true,
   "RaftDataDir": "/var/lib/orchestrator/",
-  "RaftBind": "orc1.infra-mysql57-binlog",
+  "RaftBind": "orc3.infra-mysql57-binlog",
   "DefaultRaftPort": 10008,
   "RaftNodes": [
     "orc1.infra-mysql57-binlog",
     "orc2.infra-mysql57-binlog",
     "orc3.infra-mysql57-binlog"
   ],
+  "ApplyMySQLPromotionAfterMasterFailover": true,
   "HostnameResolveMethod": "default",
   "MySQLHostnameResolveMethod": "default",
-  "ApplyMySQLPromotionAfterMasterFailover": true,
   "RecoverMasterClusterFilters": [
     "*"
   ],

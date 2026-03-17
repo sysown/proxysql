@@ -1,100 +1,99 @@
 #!/bin/bash
+set -e
+set -o pipefail
+[ -f .env ] && . .env
 
+for i in 1 2 3; do
+    SERVICE="mysql$i"
+    CONTAINER="${COMPOSE_PROJECT}-${SERVICE}-1"
+    echo -n "Waiting for container '${CONTAINER}' ..."
 
-[[ $(mysql --skip-ssl-verify-server-cert -h 2>&1) =~ skip-ssl-verify-server-cert ]] || export SSLOPT=--skip-ssl-verify-server-cert
+    MAX_WAIT=120
+    COUNT=0
+    PASS_OPT=""
+    while true; do
+        if [ $COUNT -ge $MAX_WAIT ]; then echo " TIMEOUT"; docker logs "${CONTAINER}" | tail -n 20; exit 1; fi
+        STATE=$(docker inspect -f '{{.State.Running}}' "${CONTAINER}" 2>/dev/null || echo "false")
+        if [ "${STATE}" != "true" ]; then echo -e "\nERROR: Container ${CONTAINER} is NOT running!"; docker logs "${CONTAINER}" | tail -n 20; exit 1; fi
+        # Try dynamic password first
+        if docker exec "${CONTAINER}" mysql -h127.0.0.1 -uroot -p"${ROOT_PASSWORD}" -e "SELECT 1" >/dev/null 2>&1; then
+            PASS_OPT="-p${ROOT_PASSWORD}"
+            echo " OK (Auth: Dynamic)."
+            break
+        fi
+        # Try default root password from image
+        if docker exec "${CONTAINER}" mysql -h127.0.0.1 -uroot -proot -e "SELECT 1" >/dev/null 2>&1; then
+            PASS_OPT="-proot"
+            echo " OK (Auth: Default root)."
+            break
+        fi
+        # Try empty password
+        if docker exec "${CONTAINER}" mysql -h127.0.0.1 -uroot -e "SELECT 1" >/dev/null 2>&1; then
+            PASS_OPT=""
+            echo " OK (Auth: Empty)."
+            break
+        fi
+        echo -n "."; sleep 2; COUNT=$((COUNT+2))
+    done
 
-echo -n "Waiting for 'mysql1.${INFRA}' ..."
-while [[ ! $(mysql ${SSLOPT} -h mysql1.${INFRA} -P 3306 -uroot -proot -e 'SELECT version()\G' 2>/dev/null) =~ version ]]; do echo -n '.'; sleep 1; done;
-echo " got $(mysql ${SSLOPT} -h mysql1.${INFRA} -P 3306 -uroot -proot -e 'SELECT version()\G' 2>/dev/null | grep version)"
-echo -n "Configuring 'mysql1.${INFRA}' ..."
-mysql ${SSLOPT} -h mysql1.${INFRA} -P 3306 -uroot -proot -e " \
-SET GLOBAL READ_ONLY=0; \
-" 2>&1 | grep -vP 'mysql: .?Warning'
-echo ' done.'
+    if [ "$i" -eq 1 ]; then
+        echo "Configuring master (mysql1)..."
+        docker exec -i "${CONTAINER}" mysql -h127.0.0.1 -uroot ${PASS_OPT} <<SQL || { echo "ERROR: Failed master configuration on ${CONTAINER}"; exit 1; }
+SET GLOBAL READ_ONLY=0;
 
-echo -n "Waiting for 'mysql2.${INFRA}' ..."
-while [[ ! $(mysql ${SSLOPT} -h mysql2.${INFRA} -P 3306 -uroot -proot -e 'SELECT version()\G' 2>/dev/null) =~ version ]]; do echo -n '.'; sleep 1; done;
-echo " got $(mysql ${SSLOPT} -h mysql2.${INFRA} -P 3306 -uroot -proot -e 'SELECT version()\G' 2>/dev/null | grep version)"
-echo -n "Configuring 'mysql2.${INFRA}' ..."
-mysql ${SSLOPT} -h mysql2.${INFRA} -P 3306 -uroot -proot -e " \
-SET GLOBAL READ_ONLY=1; \
-RESET MASTER; \
-CHANGE MASTER TO MASTER_HOST='mysql1.${INFRA}',MASTER_USER='root',MASTER_PASSWORD='root',MASTER_AUTO_POSITION = 1; \
-START SLAVE; \
-" 2>&1 | grep -vP 'mysql: .?Warning'
-echo ' done.'
+-- Ensure root user has the correct dynamic password (replicated to slaves)
+CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED WITH 'mysql_native_password' BY '${ROOT_PASSWORD}';
+ALTER USER 'root'@'%' IDENTIFIED WITH 'mysql_native_password' BY '${ROOT_PASSWORD}';
+ALTER USER 'root'@'localhost' IDENTIFIED WITH 'mysql_native_password' BY '${ROOT_PASSWORD}';
+GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
 
-echo -n "Waiting for 'mysql3.${INFRA}' ..."
-while [[ ! $(mysql ${SSLOPT} -h mysql3.${INFRA} -P 3306 -uroot -proot -e 'SELECT version()\G' 2>/dev/null) =~ version ]]; do echo -n '.'; sleep 1; done;
-echo " got $(mysql ${SSLOPT} -h mysql3.${INFRA} -P 3306 -uroot -proot -e 'SELECT version()\G' 2>/dev/null | grep version)"
-echo -n "Configuring 'mysql3.${INFRA}' ..."
-mysql ${SSLOPT} -h mysql3.${INFRA} -P 3306 -uroot -proot -e " \
-SET GLOBAL READ_ONLY=1; \
-RESET MASTER; \
-CHANGE MASTER TO MASTER_HOST='mysql1.${INFRA}',MASTER_USER='root',MASTER_PASSWORD='root',MASTER_AUTO_POSITION = 1; \
-START SLAVE; \
-" 2>&1 | grep -vP 'mysql: .?Warning'
-echo ' done.'
+-- Monitor user (replicated to slaves)
+CREATE USER IF NOT EXISTS 'monitor'@'%' IDENTIFIED WITH 'mysql_native_password' BY 'monitor';
+GRANT USAGE, REPLICATION CLIENT ON *.* TO 'monitor'@'%';
 
+-- testuser (replicated to slaves)
+CREATE USER IF NOT EXISTS 'testuser'@'%' IDENTIFIED WITH 'mysql_native_password' BY 'testuser';
+GRANT ALL PRIVILEGES ON *.* TO 'testuser'@'%';
 
-echo -n "Waiting for '${INFRA}' cluster ..."
-while [[ ! $(mysql ${SSLOPT} -h mysql1.${INFRA} -P 3306 -uroot -proot -e 'SHOW MASTER STATUS;' 2>&1 | grep -vP 'mysql: .?Warning' | wc -l) -eq 2 ]]; do echo -n '.'; sleep 1; done;
-while [[ ! $(mysql ${SSLOPT} -h mysql1.${INFRA} -P 3306 -uroot -proot -e 'SHOW SLAVE HOSTS;' 2>&1 | grep -vP 'mysql: .?Warning' | wc -l) -eq 3 ]]; do echo -n '.'; sleep 1; done;
-echo " got $(mysql ${SSLOPT} -h mysql2.${INFRA} -P 3306 -uroot -proot -e 'SHOW SLAVE STATUS\G' 2>&1 | grep -vP 'mysql: .?Warning' | grep 'Slave_IO_State' | awk '{ $1=$1; print }')"
+-- Binlog user (required for binlog reader, replicated to slaves)
+CREATE USER IF NOT EXISTS 'binlog'@'%' IDENTIFIED WITH 'mysql_native_password' BY 'binlog';
+GRANT USAGE, REPLICATION CLIENT, REPLICATION SLAVE ON *.* TO 'binlog'@'%';
 
-echo -n "Configuring '${INFRA}' cluster ..."
-mysql ${SSLOPT} -h mysql1.${INFRA} -P 3306 -uroot -proot -e " \
-DROP USER IF EXISTS monitor@'%'; \
-CREATE USER monitor@'%' IDENTIFIED WITH 'mysql_native_password' BY 'monitor';
-GRANT usage,replication client on *.* to monitor@'%'; \
+-- sbtest7 and sbtest8 users (specifically for binlog tests, replicated to slaves)
+CREATE USER IF NOT EXISTS 'sbtest7'@'%' IDENTIFIED WITH 'mysql_native_password' BY 'sbtest7';
+GRANT ALL PRIVILEGES ON *.* TO 'sbtest7'@'%';
+CREATE USER IF NOT EXISTS 'sbtest8'@'%' IDENTIFIED WITH 'mysql_native_password' BY 'sbtest8';
+GRANT ALL PRIVILEGES ON *.* TO 'sbtest8'@'%';
 
-DROP USER IF EXISTS user@'%'; \
-CREATE USER user@'%' IDENTIFIED WITH 'mysql_native_password' BY 'user'; \
-GRANT all on *.* to user@'%'; \
+-- Create test databases
+CREATE DATABASE IF NOT EXISTS sysbench;
+CREATE DATABASE IF NOT EXISTS test;
+CREATE DATABASE IF NOT EXISTS t1;
+CREATE DATABASE IF NOT EXISTS jdbc_test;
+GRANT ALL PRIVILEGES ON sysbench.* TO 'sbtest7'@'%';
+GRANT ALL PRIVILEGES ON sysbench.* TO 'sbtest8'@'%';
+GRANT ALL PRIVILEGES ON test.* TO 'sbtest7'@'%';
+GRANT ALL PRIVILEGES ON test.* TO 'sbtest8'@'%';
 
-DROP USER IF EXISTS testuser@'%'; \
-CREATE USER testuser@'%' IDENTIFIED WITH 'mysql_native_password' BY 'testuser'; \
-GRANT all on \`%test%\`.* to testuser@'%'; \
+FLUSH PRIVILEGES;
+SQL
+    else
+        echo "Configuring slave (mysql${i})..."
+        docker exec -i "${CONTAINER}" mysql -h127.0.0.1 -uroot ${PASS_OPT} <<SQL || { echo "ERROR: Failed slave configuration on ${CONTAINER}"; exit 1; }
+SET GLOBAL READ_ONLY=1;
+RESET MASTER;
 
-DROP USER IF EXISTS ssluser@'%'; \
-CREATE USER ssluser@'%' IDENTIFIED WITH 'mysql_native_password' BY 'ssluser' REQUIRE SSL; \
-GRANT all on *.* to ssluser@'%'; \
+-- Replication will handle user creation from master
 
-DROP USER IF EXISTS '${INFRA}'@'%'; \
-CREATE USER '${INFRA}'@'%' IDENTIFIED WITH 'mysql_native_password' BY '${INFRA}'; \
-GRANT all on \`%test%\`.* to '${INFRA}'@'%'; \
-" 2>&1 | grep -vP 'mysql: .?Warning'
+-- Configure replication
+CHANGE MASTER TO MASTER_HOST='mysql1.${INFRA}', MASTER_USER='root', MASTER_PASSWORD='${ROOT_PASSWORD}', MASTER_AUTO_POSITION=1;
+START SLAVE;
 
-mysql ${SSLOPT} -h mysql1.${INFRA} -P 3306 -uroot -proot -e " \
-DROP DATABASE IF EXISTS sysbench; \
-CREATE DATABASE sysbench; \
-DROP DATABASE IF EXISTS jdbc_test; \
-CREATE DATABASE jdbc_test; \
-CREATE TABLE jdbc_test.ts_test ( ts datetime DEFAULT NULL ); \
-" 2>&1 | grep -vP 'mysql: .?Warning'
-
-for MYUSER in sbtest7 sbtest8 ; do
-	mysql ${SSLOPT} -h mysql1.${INFRA} -P 3306 -uroot -proot -e " \
-	DROP USER IF EXISTS ${MYUSER}@'%'; \
-	CREATE USER ${MYUSER}@'%' IDENTIFIED WITH 'mysql_native_password' BY '${MYUSER}'; \
-	GRANT ALL ON *.* TO ${MYUSER}@'%'; \
-	" 2>&1 | grep -vP 'mysql: .?Warning'
-
-	for MYDB in sysbench test t1 jdbc_test ; do
-		mysql ${SSLOPT} -h mysql1.${INFRA} -P 3306 -uroot -proot -e " \
-		GRANT ALL ON ${MYDB}.* TO ${MYUSER}@'%'; \
-		" 2>&1 | grep -vP 'mysql: .?Warning'
-	done
+FLUSH PRIVILEGES;
+SQL
+    fi
 done
 
-mysql ${SSLOPT} -h mysql1.${INFRA} -P 3306 -uroot -proot -e " \
-DROP USER IF EXISTS binlog@'%'; \
-CREATE USER binlog@'%' IDENTIFIED WITH 'mysql_native_password' BY 'binlog'; \
-GRANT usage, replication client, replication slave on *.* to binlog@'%'; \
-" 2>&1 | grep -vP 'mysql: .?Warning'
-
-mysql ${SSLOPT} -h mysql1.${INFRA} -P 3306 -uroot -proot -e " \
-FLUSH PRIVILEGES; \
-" 2>&1 | grep -vP 'mysql: .?Warning'
-
-echo ' done.'
+echo "================================================================================"
+echo "MySQL cluster configuration complete."
+echo "================================================================================"
