@@ -176,6 +176,8 @@
 
 #define STATS_SQLITE_TABLE_MYSQL_GLOBAL "CREATE TABLE stats_mysql_global (Variable_Name VARCHAR NOT NULL PRIMARY KEY , Variable_Value VARCHAR NOT NULL)"
 
+#define STATS_SQLITE_TABLE_TSDB "CREATE TABLE stats_tsdb (Variable_Name VARCHAR NOT NULL PRIMARY KEY , Variable_Value VARCHAR NOT NULL)"
+
 #define STATS_SQLITE_TABLE_MEMORY_METRICS "CREATE TABLE stats_memory_metrics (Variable_Name VARCHAR NOT NULL PRIMARY KEY , Variable_Value VARCHAR NOT NULL)"
 
 #define STATS_SQLITE_TABLE_MYSQL_GTID_EXECUTED "CREATE TABLE stats_mysql_gtid_executed (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , gtid_executed VARCHAR , events INT NOT NULL)"
@@ -261,6 +263,27 @@
 #define ADMIN_SQLITE_TABLE_RUNTIME_CLICKHOUSE_USERS "CREATE TABLE runtime_clickhouse_users (username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000 , PRIMARY KEY (username))"
 #endif /* PROXYSQLCLICKHOUSE */
 
+#ifdef PROXYSQLGENAI
+// GenAI Tables
+
+#define ADMIN_SQLITE_TABLE_GENAI_CONFIG "CREATE TABLE genai_config (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
+
+#define ADMIN_SQLITE_TABLE_RUNTIME_GENAI_CONFIG "CREATE TABLE runtime_genai_config (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
+
+// MCP Tables
+
+#define ADMIN_SQLITE_TABLE_MCP_CONFIG "CREATE TABLE mcp_config (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
+
+#define ADMIN_SQLITE_TABLE_RUNTIME_MCP_CONFIG "CREATE TABLE runtime_mcp_config (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
+
+// MCP Query Rules
+
+#define ADMIN_SQLITE_TABLE_MCP_QUERY_RULES "CREATE TABLE mcp_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , username VARCHAR , schemaname VARCHAR , client_addr VARCHAR , digest VARCHAR , match_digest VARCHAR , match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , re_modifiers VARCHAR DEFAULT 'CASELESS' , tool_name VARCHAR , action VARCHAR CHECK (action IN ('allow','block','rewrite')) NOT NULL DEFAULT 'allow' , comment VARCHAR)"
+
+#define ADMIN_SQLITE_TABLE_RUNTIME_MCP_QUERY_RULES "CREATE TABLE runtime_mcp_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , username VARCHAR , schemaname VARCHAR , client_addr VARCHAR , digest VARCHAR , match_digest VARCHAR , match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , re_modifiers VARCHAR DEFAULT 'CASELESS' , tool_name VARCHAR , action VARCHAR CHECK (action IN ('allow','block','rewrite')) NOT NULL DEFAULT 'allow' , comment VARCHAR)"
+
+#endif /* PROXYSQLGENAI */
+
 
 #define ADMIN_SQLITE_TABLE_STATS_MYSQL_PREPARED_STATEMENTS_INFO "CREATE TABLE stats_mysql_prepared_statements_info (global_stmt_id INT NOT NULL , schemaname VARCHAR NOT NULL , username VARCHAR NOT NULL , digest VARCHAR NOT NULL , ref_count_client INT NOT NULL , ref_count_server INT NOT NULL , num_columns INT NOT NULL, num_params INT NOT NULL, query VARCHAR NOT NULL)"
 
@@ -317,10 +340,160 @@
 #define STATS_SQLITE_TABLE_PGSQL_CLIENT_HOST_CACHE "CREATE TABLE stats_pgsql_client_host_cache (client_address VARCHAR NOT NULL , error_count INT NOT NULL , last_updated BIGINT NOT NULL)"
 #define STATS_SQLITE_TABLE_PGSQL_CLIENT_HOST_CACHE_RESET "CREATE TABLE stats_pgsql_client_host_cache_reset (client_address VARCHAR NOT NULL , error_count INT NOT NULL , last_updated BIGINT NOT NULL)"
 #define STATS_SQLITE_TABLE_PGSQL_QUERY_RULES "CREATE TABLE stats_pgsql_query_rules (rule_id INTEGER PRIMARY KEY , hits INT NOT NULL)"
+/**
+ * @brief In-memory PostgreSQL query events table used by advanced events logging.
+ */
+#define STATS_SQLITE_TABLE_PGSQL_QUERY_EVENTS "CREATE TABLE stats_pgsql_query_events (id INTEGER PRIMARY KEY AUTOINCREMENT , thread_id INTEGER , username TEXT , database TEXT , start_time INTEGER , end_time INTEGER , query_digest TEXT , query TEXT , server TEXT , client TEXT , event_type INTEGER , hid INTEGER , extra_info TEXT , affected_rows INTEGER , rows_sent INTEGER , client_stmt_name TEXT , sqlstate TEXT , error TEXT)"
 #define STATS_SQLITE_TABLE_PGSQL_COMMANDS_COUNTERS "CREATE TABLE stats_pgsql_commands_counters (Command VARCHAR NOT NULL PRIMARY KEY , Total_Time_us INT NOT NULL , Total_cnt INT NOT NULL , cnt_100us INT NOT NULL , cnt_500us INT NOT NULL , cnt_1ms INT NOT NULL , cnt_5ms INT NOT NULL , cnt_10ms INT NOT NULL , cnt_50ms INT NOT NULL , cnt_100ms INT NOT NULL , cnt_500ms INT NOT NULL , cnt_1s INT NOT NULL , cnt_5s INT NOT NULL , cnt_10s INT NOT NULL , cnt_INFs)"
 #define STATS_SQLITE_TABLE_PGSQL_QUERY_DIGEST "CREATE TABLE stats_pgsql_query_digest (hostgroup INT , database VARCHAR NOT NULL , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , digest VARCHAR NOT NULL , digest_text VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , sum_time INTEGER NOT NULL , min_time INTEGER NOT NULL , max_time INTEGER NOT NULL , sum_rows_affected INTEGER NOT NULL , sum_rows_sent INTEGER NOT NULL , PRIMARY KEY(hostgroup, database, username, client_address, digest))"
 #define STATS_SQLITE_TABLE_PGSQL_QUERY_DIGEST_RESET "CREATE TABLE stats_pgsql_query_digest_reset (hostgroup INT , database VARCHAR NOT NULL , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , digest VARCHAR NOT NULL , digest_text VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , sum_time INTEGER NOT NULL , min_time INTEGER NOT NULL , max_time INTEGER NOT NULL , sum_rows_affected INTEGER NOT NULL , sum_rows_sent INTEGER NOT NULL , PRIMARY KEY(hostgroup, database, username, client_address, digest))"
 #define STATS_SQLITE_TABLE_PGSQL_PREPARED_STATEMENTS_INFO "CREATE TABLE stats_pgsql_prepared_statements_info (global_stmt_id INT NOT NULL , database VARCHAR NOT NULL , username VARCHAR NOT NULL , digest VARCHAR NOT NULL , ref_count_client INT NOT NULL , ref_count_server INT NOT NULL , num_param_types INT NOT NULL , query VARCHAR NOT NULL)"
+
+#define STATS_SQLITE_TABLE_MCP_QUERY_TOOLS_COUNTERS "CREATE TABLE stats_mcp_query_tools_counters (endpoint VARCHAR NOT NULL , tool VARCHAR NOT NULL , schema VARCHAR NOT NULL , count INT NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , sum_time INTEGER NOT NULL , min_time INTEGER NOT NULL , max_time INTEGER NOT NULL , PRIMARY KEY (endpoint, tool, schema))"
+#define STATS_SQLITE_TABLE_MCP_QUERY_TOOLS_COUNTERS_RESET "CREATE TABLE stats_mcp_query_tools_counters_reset (endpoint VARCHAR NOT NULL , tool VARCHAR NOT NULL , schema VARCHAR NOT NULL , count INT NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , sum_time INTEGER NOT NULL , min_time INTEGER NOT NULL , max_time INTEGER NOT NULL , PRIMARY KEY (endpoint, tool, schema))"
+
+// MCP query rules table - for firewall and query rewriting
+// Action is inferred from rule properties:
+//   - if error_msg is not NULL     → block
+//   - if replace_pattern is not NULL → rewrite
+//   - if timeout_ms > 0            → timeout
+//   - otherwise                    → allow
+#define ADMIN_SQLITE_TABLE_MCP_QUERY_RULES "CREATE TABLE mcp_query_rules (" \
+  "  rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL ," \
+  "  active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 ," \
+  "  username VARCHAR ," \
+  "  target_id VARCHAR ," \
+  "  schemaname VARCHAR ," \
+  "  tool_name VARCHAR ," \
+  "  match_pattern VARCHAR ," \
+  "  negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 ," \
+  "  re_modifiers VARCHAR DEFAULT 'CASELESS' ," \
+  "  flagIN INT NOT NULL DEFAULT 0 ," \
+  "  flagOUT INT CHECK (flagOUT >= 0) ," \
+  "  replace_pattern VARCHAR ," \
+  "  timeout_ms INT CHECK (timeout_ms >= 0) ," \
+  "  error_msg VARCHAR ," \
+  "  OK_msg VARCHAR ," \
+  "  log INT CHECK (log IN (0,1)) ," \
+  "  apply INT CHECK (apply IN (0,1)) NOT NULL DEFAULT 1 ," \
+  "  comment VARCHAR" \
+  ")"
+
+// MCP query rules runtime table - shows in-memory state of active rules
+// This table has the same schema as mcp_query_rules (no hits column).
+// The hits counter is only available in stats_mcp_query_rules table.
+// When this table is queried, it is automatically refreshed from the in-memory rules.
+#define ADMIN_SQLITE_TABLE_RUNTIME_MCP_QUERY_RULES "CREATE TABLE runtime_mcp_query_rules (" \
+  "  rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL ," \
+  "  active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 ," \
+  "  username VARCHAR ," \
+  "  target_id VARCHAR ," \
+  "  schemaname VARCHAR ," \
+  "  tool_name VARCHAR ," \
+  "  match_pattern VARCHAR ," \
+  "  negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 ," \
+  "  re_modifiers VARCHAR DEFAULT 'CASELESS' ," \
+  "  flagIN INT NOT NULL DEFAULT 0 ," \
+  "  flagOUT INT CHECK (flagOUT >= 0) ," \
+  "  replace_pattern VARCHAR ," \
+  "  timeout_ms INT CHECK (timeout_ms >= 0) ," \
+  "  error_msg VARCHAR ," \
+  "  OK_msg VARCHAR ," \
+  "  log INT CHECK (log IN (0,1)) ," \
+  "  apply INT CHECK (apply IN (0,1)) NOT NULL DEFAULT 1 ," \
+  "  comment VARCHAR" \
+  ")"
+
+// MCP backend authentication profiles (server-side credentials)
+#define ADMIN_SQLITE_TABLE_MCP_AUTH_PROFILES "CREATE TABLE mcp_auth_profiles (" \
+  "  auth_profile_id VARCHAR PRIMARY KEY NOT NULL ," \
+  "  db_username VARCHAR NOT NULL ," \
+  "  db_password VARCHAR NOT NULL ," \
+  "  default_schema VARCHAR DEFAULT '' ," \
+  "  use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0 ," \
+  "  ssl_mode VARCHAR DEFAULT '' ," \
+  "  comment VARCHAR DEFAULT ''" \
+  ")"
+
+#define ADMIN_SQLITE_TABLE_RUNTIME_MCP_AUTH_PROFILES "CREATE TABLE runtime_mcp_auth_profiles (" \
+  "  auth_profile_id VARCHAR PRIMARY KEY NOT NULL ," \
+  "  db_username VARCHAR NOT NULL ," \
+  "  db_password VARCHAR NOT NULL ," \
+  "  default_schema VARCHAR DEFAULT '' ," \
+  "  use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0 ," \
+  "  ssl_mode VARCHAR DEFAULT '' ," \
+  "  comment VARCHAR DEFAULT ''" \
+  ")"
+
+// MCP target routing profiles: target_id -> (protocol, hostgroup, auth_profile, policy)
+#define ADMIN_SQLITE_TABLE_MCP_TARGET_PROFILES "CREATE TABLE mcp_target_profiles (" \
+  "  target_id VARCHAR PRIMARY KEY NOT NULL ," \
+  "  protocol VARCHAR NOT NULL CHECK (protocol IN ('mysql','pgsql')) ," \
+  "  hostgroup_id INT CHECK (hostgroup_id >= 0) NOT NULL ," \
+  "  auth_profile_id VARCHAR NOT NULL ," \
+  "  description VARCHAR DEFAULT '' ," \
+  "  max_rows INT CHECK (max_rows > 0) NOT NULL DEFAULT 200 ," \
+  "  timeout_ms INT CHECK (timeout_ms >= 0) NOT NULL DEFAULT 2000 ," \
+  "  allow_explain INT CHECK (allow_explain IN (0,1)) NOT NULL DEFAULT 1 ," \
+  "  allow_discovery INT CHECK (allow_discovery IN (0,1)) NOT NULL DEFAULT 1 ," \
+  "  active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 ," \
+  "  comment VARCHAR DEFAULT ''" \
+  ")"
+
+#define ADMIN_SQLITE_TABLE_RUNTIME_MCP_TARGET_PROFILES "CREATE TABLE runtime_mcp_target_profiles (" \
+  "  target_id VARCHAR PRIMARY KEY NOT NULL ," \
+  "  protocol VARCHAR NOT NULL CHECK (protocol IN ('mysql','pgsql')) ," \
+  "  hostgroup_id INT CHECK (hostgroup_id >= 0) NOT NULL ," \
+  "  auth_profile_id VARCHAR NOT NULL ," \
+  "  description VARCHAR DEFAULT '' ," \
+  "  max_rows INT CHECK (max_rows > 0) NOT NULL DEFAULT 200 ," \
+  "  timeout_ms INT CHECK (timeout_ms >= 0) NOT NULL DEFAULT 2000 ," \
+  "  allow_explain INT CHECK (allow_explain IN (0,1)) NOT NULL DEFAULT 1 ," \
+  "  allow_discovery INT CHECK (allow_discovery IN (0,1)) NOT NULL DEFAULT 1 ," \
+  "  active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 ," \
+  "  comment VARCHAR DEFAULT ''" \
+  ")"
+
+// MCP query digest statistics table
+#define STATS_SQLITE_TABLE_MCP_QUERY_DIGEST "CREATE TABLE stats_mcp_query_digest (" \
+  "  tool_name VARCHAR NOT NULL ," \
+  "  run_id INT ," \
+  "  digest VARCHAR NOT NULL ," \
+  "  digest_text VARCHAR NOT NULL ," \
+  "  count_star INTEGER NOT NULL ," \
+  "  first_seen INTEGER NOT NULL ," \
+  "  last_seen INTEGER NOT NULL ," \
+  "  sum_time INTEGER NOT NULL ," \
+  "  min_time INTEGER NOT NULL ," \
+  "  max_time INTEGER NOT NULL ," \
+  "  PRIMARY KEY(tool_name, run_id, digest)" \
+  ")"
+
+// MCP query digest reset table
+#define STATS_SQLITE_TABLE_MCP_QUERY_DIGEST_RESET "CREATE TABLE stats_mcp_query_digest_reset (" \
+  "  tool_name VARCHAR NOT NULL ," \
+  "  run_id INT ," \
+  "  digest VARCHAR NOT NULL ," \
+  "  digest_text VARCHAR NOT NULL ," \
+  "  count_star INTEGER NOT NULL ," \
+  "  first_seen INTEGER NOT NULL ," \
+  "  last_seen INTEGER NOT NULL ," \
+  "  sum_time INTEGER NOT NULL ," \
+  "  min_time INTEGER NOT NULL ," \
+  "  max_time INTEGER NOT NULL ," \
+  "  PRIMARY KEY(tool_name, run_id, digest)" \
+  ")"
+
+// MCP query rules statistics table - shows hit counters and rule filters.
+// target_id/username are copied from the in-memory rule definition.
+// It is automatically populated when stats_mcp_query_rules is queried.
+// The hits counter increments each time a rule matches during query processing.
+#define STATS_SQLITE_TABLE_MCP_QUERY_RULES "CREATE TABLE stats_mcp_query_rules (" \
+  "  rule_id INTEGER PRIMARY KEY NOT NULL ," \
+  "  username VARCHAR ," \
+  "  target_id VARCHAR ," \
+  "  hits INTEGER NOT NULL" \
+  ")"
 
 //#define STATS_SQLITE_TABLE_MEMORY_METRICS "CREATE TABLE stats_memory_metrics (Variable_Name VARCHAR NOT NULL PRIMARY KEY , Variable_Value VARCHAR NOT NULL)"
 

@@ -1,6 +1,7 @@
-#define MAIN_PROXY_SQLITE3
 
 #include "../deps/json/json.hpp"
+
+
 using json = nlohmann::json;
 #define PROXYJSON
 
@@ -26,6 +27,13 @@ using json = nlohmann::json;
 #include "ProxySQL_Cluster.hpp"
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
+
+#ifdef PROXYSQLGENAI
+#include "MCP_Thread.h"
+#include "GenAI_Thread.h"
+#include "AI_Features_Manager.h"
+#endif /* PROXYSQLGENAI */
+
 #include "SQLite3_Server.h"
 #include "MySQL_Query_Processor.h"
 #include "PgSQL_Query_Processor.h"
@@ -51,6 +59,10 @@ using json = nlohmann::json;
 #include "openssl/x509v3.h"
 
 #include <sys/mman.h>
+
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
 
 #include <uuid/uuid.h>
 #include <atomic>
@@ -477,6 +489,13 @@ PgSQL_Query_Processor* GloPgQPro;
 ProxySQL_Admin *GloAdmin;
 MySQL_Threads_Handler *GloMTH = NULL;
 PgSQL_Threads_Handler* GloPTH = NULL;
+
+#ifdef PROXYSQLGENAI
+MCP_Threads_Handler* GloMCPH = NULL;
+GenAI_Threads_Handler* GloGATH = NULL;
+AI_Features_Manager *GloAI = NULL;
+#endif /* PROXYSQLGENAI */
+
 Web_Interface *GloWebInterface;
 MySQL_STMT_Manager_v14 *GloMyStmt;
 PgSQL_STMT_Manager *GloPgStmt;
@@ -898,6 +917,11 @@ void ProxySQL_Main_init_main_modules() {
 	GloMyAuth=NULL;
 	GloPgAuth=NULL;
 	GloPTH=NULL;
+#ifdef PROXYSQLGENAI
+	GloMCPH=new MCP_Threads_Handler();
+	GloGATH=new GenAI_Threads_Handler();
+	GloAI=NULL;
+#endif /* PROXYSQLGENAI */
 #ifdef PROXYSQLCLICKHOUSE
 	GloClickHouseAuth=NULL;
 #endif /* PROXYSQLCLICKHOUSE */
@@ -931,6 +955,20 @@ void ProxySQL_Main_init_main_modules() {
 	GloPTH = _tmp_GloPTH;
 }
 
+#ifdef PROXYSQLGENAI
+void ProxySQL_Main_init_GenAI_module() {
+	GloGATH->init();
+	proxy_info("GenAI Threads Handler initialized\n");
+	GloAI = new AI_Features_Manager();
+	GloAI->init();
+	proxy_info("AI Features module initialized\n");
+}
+
+void ProxySQL_Main_init_MCP_module() {
+	GloMCPH->init();
+	proxy_info("MCP module initialized\n");
+}
+#endif /* PROXYSQLGENAI */
 
 void ProxySQL_Main_init_Admin_module(const bootstrap_info_t& bootstrap_info) {
 	// cluster module needs to be initialized before
@@ -1260,6 +1298,32 @@ void ProxySQL_Main_shutdown_all_modules() {
 		std::cerr << "GloPTH shutdown in ";
 #endif
 	}
+#ifdef PROXYSQLGENAI
+	if (GloMCPH) {
+		cpu_timer t;
+		delete GloMCPH;
+		GloMCPH = NULL;
+#ifdef DEBUG
+		std::cerr << "GloMCPH shutdown in ";
+#endif
+	}
+	if (GloGATH) {
+		cpu_timer t;
+		delete GloGATH;
+		GloGATH = NULL;
+#ifdef DEBUG
+		std::cerr << "GloGATH shutdown in ";
+#endif
+	}
+	if (GloAI) {
+		cpu_timer t;
+		delete GloAI;
+		GloAI = NULL;
+#ifdef DEBUG
+		std::cerr << "GloAI shutdown in ";
+#endif
+	}
+#endif /* PROXYSQLGENAI */
 	if (GloMyLogger) {
 		cpu_timer t;
 		delete GloMyLogger;
@@ -1334,7 +1398,16 @@ static void LoadPlugins() {
 	GloMyLdapAuth = NULL;
 	if (proxy_sqlite3_open_v2 == nullptr) {
 		SQLite3DB::LoadPlugin(GloVars.sqlite3_plugin);
+	} else {
+		int i= (*proxy_sqlite3_config)(SQLITE_CONFIG_URI, 1);
+
+		if (i != SQLITE_OK) {
+			fprintf(stderr,"SQLITE: Error on (*proxy_sqlite3_config)(SQLITE_CONFIG_URI,1)\n");
+			assert(i==SQLITE_OK);
+			exit(EXIT_FAILURE);
+		}
 	}
+
 	if (GloVars.web_interface_plugin) {
 		dlerror();
 		char * dlsym_error = NULL;
@@ -1424,6 +1497,12 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 	LoadPlugins();
 
 	ProxySQL_Main_init_main_modules();
+
+#ifdef PROXYSQLGENAI
+	ProxySQL_Main_init_GenAI_module();
+	ProxySQL_Main_init_MCP_module();
+#endif /* PROXYSQLGENAI */
+
 	ProxySQL_Main_init_Admin_module(boostrap_info);
 	GloMTH->print_version();
 
@@ -1581,6 +1660,19 @@ void ProxySQL_Main_init_phase3___start_all() {
 	if (GloMyLdapAuth) {
 		GloAdmin->init_ldap_variables();
 	}
+
+#ifdef PROXYSQLTSDB
+	GloAdmin->init_tsdb_variables();
+#endif
+
+#ifdef PROXYSQLGENAI
+	// GenAI
+	if (GloGATH)
+		GloAdmin->init_genai_variables();
+	if (GloMCPH) {
+		GloAdmin->init_mcp_variables();
+	}
+#endif /* PROXYSQLGENAI */
 
 	// HTTP Server should be initialized after other modules. See #4510
 	GloAdmin->init_http_server();
@@ -2909,7 +3001,18 @@ int main(int argc, const char * argv[]) {
 		int fd = -1;
 		char buff[PATH_MAX+1];
 		ssize_t len = -1;
-#if defined(__FreeBSD__)
+#if defined(__APPLE__)
+		uint32_t bufsize = sizeof(buff);
+		if (_NSGetExecutablePath(buff, &bufsize) == 0) {
+			// Resolve symlinks to get the real path
+			char resolved[PATH_MAX];
+			if (realpath(buff, resolved) != NULL) {
+				strncpy(buff, resolved, sizeof(buff) - 1);
+				buff[sizeof(buff) - 1] = '\0';
+			}
+			len = strlen(buff);
+		}
+#elif defined(__FreeBSD__)
 		len = readlink("/proc/curproc/file", buff, sizeof(buff)-1);
 #else
 		len = readlink("/proc/self/exe", buff, sizeof(buff)-1);

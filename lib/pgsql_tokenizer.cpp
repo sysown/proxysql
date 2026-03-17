@@ -9,8 +9,8 @@ extern __thread int  pgsql_thread___query_digests_max_query_length;
 extern __thread bool pgsql_thread___query_digests_lowercase;
 extern __thread bool pgsql_thread___query_digests_replace_null;
 extern __thread bool pgsql_thread___query_digests_no_digits;
-extern __thread bool pgsql_thread___query_digests_grouping_limit;
-extern __thread bool pgsql_thread___query_digests_groups_grouping_limit;
+extern __thread int  pgsql_thread___query_digests_grouping_limit;
+extern __thread int  pgsql_thread___query_digests_groups_grouping_limit;
 extern __thread bool pgsql_thread___query_digests_keep_comment;
 
 #define SIZECHAR	sizeof(char)
@@ -391,7 +391,7 @@ static inline char* get_result_buffer(int len, char* buf) {
 	char* r = NULL;
 
 	if (buf == NULL) {
-		r = (char *) malloc(len + SIZECHAR);
+		r = (char *) calloc(len + SIZECHAR, sizeof(char));
 	} else {
 		r = buf;
 	}

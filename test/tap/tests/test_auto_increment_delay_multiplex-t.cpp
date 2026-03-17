@@ -48,6 +48,37 @@ const char* CREATE_TABLE_QUERY {
 		"(c1 INT NOT NULL AUTO_INCREMENT PRIMARY KEY, c2 VARCHAR(100), c3 VARCHAR(100))"
 };
 
+void dump_relevant_users(MYSQL* admin) {
+	if (!admin) return;
+	diag("Relevant users in runtime_mysql_users:");
+	std::string user_query = "SELECT username, default_hostgroup, transaction_persistent FROM runtime_mysql_users WHERE username='testuser' OR username='root'";
+	if (mysql_query(admin, user_query.c_str()) == 0) {
+		MYSQL_RES* res = mysql_store_result(admin);
+		if (res) {
+			MYSQL_ROW row;
+			while ((row = mysql_fetch_row(res))) {
+				diag("  - username=%s, default_hostgroup=%s, transaction_persistent=%s", row[0], row[1], row[2]);
+			}
+			mysql_free_result(res);
+		}
+	}
+}
+
+void dump_query_rules(MYSQL* admin) {
+	if (!admin) return;
+	diag("Query rules in runtime_mysql_query_rules:");
+	if (mysql_query(admin, "SELECT rule_id, destination_hostgroup, match_pattern FROM runtime_mysql_query_rules") == 0) {
+		MYSQL_RES* res = mysql_store_result(admin);
+		if (res) {
+			MYSQL_ROW row;
+			while ((row = mysql_fetch_row(res))) {
+				diag("  - rule_id=%s, dest_hg=%s, pattern=%s", row[0], row[1], row[2]);
+			}
+			mysql_free_result(res);
+		}
+	}
+}
+
 uint32_t VAL_RANGE = 10;
 uint32_t STEP = 5;
 
@@ -194,8 +225,8 @@ int check_auto_increment_timeout(
 		);
 	}
 
-	MYSQL_QUERY(proxy_mysql, "DO 1");
-	diag("Executing query `%s`...", "DO 1");
+	MYSQL_QUERY(proxy_mysql, "/* hostgroup=0 */ DO 1");
+	diag("Executing query `/* hostgroup=0 */ DO 1`...");
 
 	uint32_t old_auto_inc_delay_mult = cur_auto_inc_delay_mult;
 	g_res = get_conn_auto_inc_delay_token(proxy_mysql, cur_auto_inc_delay_mult);
@@ -221,6 +252,7 @@ int check_auto_increment_timeout(
 };
 
 int check_variables_config(MYSQL* proxy_mysql, MYSQL* proxy_admin) {
+	diag("--- Test: check_variables_config ---");
 	uint64_t auto_increment_delay_multiplex = 0;
 	MYSQL_QUERY(proxy_admin, "SELECT variable_value FROM global_variables WHERE variable_name='mysql-auto_increment_delay_multiplex'");
 	MYSQL_RES* my_res_auto_inc_multiplex = mysql_store_result(proxy_admin);
@@ -241,6 +273,7 @@ int check_variables_config(MYSQL* proxy_mysql, MYSQL* proxy_admin) {
 }
 
 int check_auto_increment_delay_multiplex(MYSQL* proxy_mysql, MYSQL* proxy_admin) {
+	diag("--- Test: check_auto_increment_delay_multiplex ---");
 	// Disable the 'timeout' for the this check since it can be fixated now
 	diag("Executing query `%s`...", "SET mysql-auto_increment_delay_multiplex_timeout_ms=0");
 	MYSQL_QUERY(proxy_admin, "SET mysql-auto_increment_delay_multiplex_timeout_ms=0");
@@ -258,7 +291,8 @@ int check_auto_increment_delay_multiplex(MYSQL* proxy_mysql, MYSQL* proxy_admin)
 
 		for (uint32_t i = 1; i < val; i++) {
 			// We target the same hostgroup as before
-			MYSQL_QUERY(proxy_mysql, "DO 1");
+			diag("Executing query `/* hostgroup=0 */ DO 1`...");
+			MYSQL_QUERY(proxy_mysql, "/* hostgroup=0 */ DO 1");
 			int g_res = get_conn_auto_inc_delay_token(proxy_mysql, cur_auto_inc_delay_mult);
 			if (g_res != EXIT_SUCCESS) {
 				return EXIT_FAILURE;
@@ -302,6 +336,7 @@ int check_auto_increment_delay_multiplex(MYSQL* proxy_mysql, MYSQL* proxy_admin)
 }
 
 int check_auto_increment_delay_multiplex_timeout(MYSQL* proxy_mysql, MYSQL* proxy_admin) {
+	diag("--- Test: check_auto_increment_delay_multiplex_timeout ---");
 	// Set the default 'mysql-auto_increment_delay_multiplex' since it's no longer relevant
 	const int f_auto_incr_val = 5;
 	const string set_auto_inc_query { "SET mysql-auto_increment_delay_multiplex=" + std::to_string(f_auto_incr_val) };
@@ -576,6 +611,7 @@ int check_transactions_and_multiplex_disable(
 
 
 int check_connection_delay_multiplex_ms(MYSQL* proxy_mysql, MYSQL* proxy_admin) {
+	diag("--- Test: check_connection_delay_multiplex_ms ---");
 	std::chrono::nanoseconds duration;
 	hrc::time_point start;
 	hrc::time_point end;
@@ -625,6 +661,7 @@ int check_connection_delay_multiplex_ms(MYSQL* proxy_mysql, MYSQL* proxy_admin) 
 }
 
 int check_multiplex_disabled_connection_delay_multiplex_ms(MYSQL* proxy_mysql, MYSQL* proxy_admin) {
+	diag("--- Test: check_multiplex_disabled_connection_delay_multiplex_ms ---");
 	const uint32_t timeout = 2;
 	string set_delay_multiplex {};
 	string_format("SET mysql-connection_delay_multiplex_ms=%d", set_delay_multiplex, timeout * 1000);
@@ -640,12 +677,13 @@ int check_multiplex_disabled_connection_delay_multiplex_ms(MYSQL* proxy_mysql, M
 	MYSQL_QUERY(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 	// Check transactions behavior and multiplex disabling actions
-	check_transactions_and_multiplex_disable(proxy_mysql, "DO 1", timeout);
+	check_transactions_and_multiplex_disable(proxy_mysql, "/* hostgroup=0 */ DO 1", timeout);
 
 	return EXIT_SUCCESS;
 }
 
 int check_traffic_connection_delay_multiplex_ms(MYSQL* proxy_mysql, MYSQL* proxy_admin) {
+	diag("--- Test: check_traffic_connection_delay_multiplex_ms ---");
 	const uint32_t timeout = 2;
 	const char* set_delay_multiplex_query { "SET mysql-connection_delay_multiplex_ms=2000" };
 	const char* set_auto_inc_timeout_query { "SET mysql-auto_increment_delay_multiplex_timeout_ms=0" };
@@ -662,8 +700,8 @@ int check_traffic_connection_delay_multiplex_ms(MYSQL* proxy_mysql, MYSQL* proxy
 
 	uint32_t waited = 0;
 	while (waited < 2*timeout) {
-		diag("Executing query `%s`...", "DO 1");
-		MYSQL_QUERY(proxy_mysql, "DO 1");
+		diag("Executing query `/* hostgroup=0 */ DO 1`...");
+		MYSQL_QUERY(proxy_mysql, "/* hostgroup=0 */ DO 1");
 
 		sleep(1);
 		waited += 1;
@@ -677,9 +715,9 @@ int check_traffic_connection_delay_multiplex_ms(MYSQL* proxy_mysql, MYSQL* proxy
 
 	diag("Check connection expiring when traffic issued to different hostgroup...");
 
-	diag("Executing query `%s`...", "DO 1");
-	MYSQL_QUERY(proxy_mysql, "DO 1");
-	diag("Executing query `%s`...", "SELECT 1");
+	diag("Executing query `/* hostgroup=0 */ DO 1`...");
+	MYSQL_QUERY(proxy_mysql, "/* hostgroup=0 */ DO 1");
+	diag("Executing query `SELECT 1`...");
 	MYSQL_QUERY(proxy_mysql, "SELECT 1");
 	mysql_free_result(mysql_store_result(proxy_mysql));
 
@@ -755,9 +793,13 @@ int check_traffic_connection_delay_multiplex_ms(MYSQL* proxy_mysql, MYSQL* proxy
 }
 
 int check_auto_inc_delay_and_conn_delay_multiplex(MYSQL* proxy_mysql, MYSQL* proxy_admin) {
+	diag("--- Test: check_auto_inc_delay_and_conn_delay_multiplex ---");
 	uint64_t poll_timeout = 0;
 	const string poll_timeout_query { "SELECT variable_value FROM global_variables WHERE variable_name='mysql-poll_timeout'" };
 	string auto_inc_timeout_query {};
+
+	diag("Initial connection pool state for check_auto_inc_delay_and_conn_delay_multiplex:");
+	dump_conn_stats(proxy_admin, {});
 
 	int g_res = get_query_result(proxy_admin, poll_timeout_query.c_str(), poll_timeout);
 	if (g_res != EXIT_SUCCESS) { return EXIT_FAILURE; }
@@ -903,6 +945,28 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
+	// Verbose test header
+	diag("================================================================================");
+	diag("Test: test_auto_increment_delay_multiplex-t");
+	diag("================================================================================");
+	diag("This test verifies the features 'mysql-auto_increment_delay_multiplex' and");
+	diag(" 'mysql-auto_increment_delay_multiplex_timeout_ms' are working properly.");
+	diag("It checks:");
+	diag("  - Proper retention of backend connections after AUTO_INCREMENT operations.");
+	diag("  - Timeout-based release of these connections.");
+	diag("  - Resetting of the timeout timer when traffic hits the same hostgroup.");
+	diag("  - Interaction with transactions and multiplexing-disabling operations.");
+	diag("  - Integration with 'mysql-connection_delay_multiplex_ms'.");
+	diag(" ");
+	diag("Connection parameters:");
+	diag("  - Host: %s", cl.host);
+	diag("  - Port: %d", cl.port);
+	diag("  - Admin Port: %d", cl.admin_port);
+	diag("  - Username: %s", cl.username);
+	diag("  - Workdir: %s", cl.workdir);
+	diag("================================================================================");
+	diag(" ");
+
 	plan(
 		1 + // Check variables are present
 		((VAL_RANGE / STEP) + 1) * 2 + // Tests for different 'auto_increment_delay_multiplex' values
@@ -918,15 +982,51 @@ int main(int argc, char** argv) {
 	MYSQL* proxy_mysql = mysql_init(NULL);
 	MYSQL* proxy_admin = mysql_init(NULL);
 
-//	if (!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
-	if (!mysql_real_connect(proxy_mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
-		fprintf(stderr, "File %s, line %d, Error: \"%s\"\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
-		return EXIT_FAILURE;
-	}
+	// Connect to admin first to configure user settings
 	if (!mysql_real_connect(proxy_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: \"%s\"\n", __FILE__, __LINE__, mysql_error(proxy_admin));
 		return EXIT_FAILURE;
 	}
+
+	// Configure the test user: set default_hostgroup=0 and transaction_persistent=1
+	// transaction_persistent=1 ensures queries during a transaction stay in the same hostgroup
+	diag("Configuring user '%s' in ProxySQL...", cl.username);
+	MYSQL_QUERY(proxy_admin, ("UPDATE mysql_users SET default_hostgroup=0, transaction_persistent=1 WHERE username='" + string(cl.username) + "'").c_str());
+	MYSQL_QUERY(proxy_admin, "LOAD MYSQL USERS TO RUNTIME");
+
+	// Debug: Show user configuration AFTER changes
+	{
+		MYSQL_RES* res = NULL;
+		MYSQL_ROW row = NULL;
+		diag("User configuration for '%s' (after config changes):", cl.username);
+		std::string user_query = "SELECT username, default_hostgroup, transaction_persistent FROM runtime_mysql_users WHERE username='" + std::string(cl.username) + "'";
+		if (mysql_query(proxy_admin, user_query.c_str()) == 0) {
+			res = mysql_store_result(proxy_admin);
+			if (res) {
+				while ((row = mysql_fetch_row(res))) {
+					diag("  - username=%s, default_hostgroup=%s, transaction_persistent=%s", row[0], row[1], row[2]);
+				}
+				mysql_free_result(res);
+			}
+		}
+	}
+
+	// NOW create the proxy connection - it will inherit default_hostgroup=0
+	if (!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: \"%s\"\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
+		return EXIT_FAILURE;
+	}
+
+	// Configure query rules for the test
+	diag("Configuring query rules for the test...");
+	MYSQL_QUERY(proxy_admin, "DELETE FROM mysql_query_rules");
+	MYSQL_QUERY(proxy_admin, "INSERT INTO mysql_query_rules (rule_id, active, match_pattern, destination_hostgroup, apply) VALUES (1000, 1, '^SELECT 1', 1, 1)");
+	MYSQL_QUERY(proxy_admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
+	dump_query_rules(proxy_admin);
+
+	// Initial pool state dump
+	diag("Initial connection pool state:");
+	dump_conn_stats(proxy_admin, {});
 
 	MYSQL_QUERY(proxy_mysql, "CREATE DATABASE IF NOT EXISTS test");
 	MYSQL_QUERY(proxy_mysql, "DROP TABLE IF EXISTS test.auto_inc_multiplex");
@@ -944,13 +1044,17 @@ int main(int argc, char** argv) {
 		proxy_mysql = mysql_init(NULL);
 		proxy_admin = mysql_init(NULL);
 
-//		if (!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
-		if (!mysql_real_connect(proxy_mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
-			fprintf(stderr, "File %s, line %d, Error: \"%s\"\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
-			return EXIT_FAILURE;
-		}
 		if (!mysql_real_connect(proxy_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: \"%s\"\n", __FILE__, __LINE__, mysql_error(proxy_admin));
+			return EXIT_FAILURE;
+		}
+
+		// Re-ensure user configuration for each test iteration if needed
+		MYSQL_QUERY(proxy_admin, ("UPDATE mysql_users SET default_hostgroup=0, transaction_persistent=1 WHERE username='" + string(cl.username) + "'").c_str());
+		MYSQL_QUERY(proxy_admin, "LOAD MYSQL USERS TO RUNTIME");
+
+		if (!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+			fprintf(stderr, "File %s, line %d, Error: \"%s\"\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 			return EXIT_FAILURE;
 		}
 

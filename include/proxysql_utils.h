@@ -11,6 +11,7 @@
 #include <sys/types.h>
 #include <dirent.h>
 #include <sys/resource.h>
+#include <unistd.h>
 #include <assert.h>
 
 #include "../deps/json/json.hpp"
@@ -26,17 +27,19 @@
 #define	ETIME	ETIMEDOUT
 #endif
 
-#ifdef CXX17
+#if defined(__APPLE__)
+using std::conjunction;
+#elif defined(CXX17)
 template<class...> struct conjunction : std::true_type { };
 template<class B1> struct std::conjunction<B1> : B1 { };
 template<class B1, class... Bn>
-struct std::conjunction<B1, Bn...> 
+struct std::conjunction<B1, Bn...>
     : std::conditional<bool(B1::value), std::conjunction<Bn...>, B1>::type {};
 #else
 template<class...> struct conjunction : std::true_type { };
 template<class B1> struct conjunction<B1> : B1 { };
 template<class B1, class... Bn>
-struct conjunction<B1, Bn...> 
+struct conjunction<B1, Bn...>
     : std::conditional<bool(B1::value), conjunction<Bn...>, B1>::type {};
 #endif // CXX17
 /**
@@ -355,5 +358,70 @@ static inline void set_thread_name(const char(&name)[LEN], const bool en = true)
  *   member 'client_addr', or empty string if this member is NULL.
  */
 std::string get_client_addr(struct sockaddr* client_addr);
+
+/**
+ * @brief Escape a value for safe use inside a single-quoted SQL literal.
+ *
+ * This helper follows SQLite/SQL literal escaping rules and doubles only
+ * single quote characters (`'` -> `''`). It intentionally does not apply
+ * backslash escaping.
+ * NOT safe for MySQL backslash-escape mode.
+ *
+ * @param input Raw untrusted value to place in a quoted SQL string literal.
+ * @return Escaped value safe to embed between single quotes.
+ */
+std::string sql_escape(const std::string& input);
+
+/**
+ * @brief Estimate a percentile from histogram bucket counts.
+ *
+ * The function validates input shape (`buckets.size() == thresholds.size()`),
+ * clamps `percentile` to `[0.0, 1.0]`, and uses 64-bit accumulation to avoid
+ * overflow on high-volume counters. For `percentile == 0.0`, it returns the
+ * first non-empty bucket threshold.
+ *
+ * @param buckets Histogram counts per bucket (non-negative values expected).
+ * @param thresholds Upper-bound value for each bucket, same index/length as buckets.
+ * @param percentile Requested percentile in `[0.0, 1.0]` (values outside are clamped).
+ * @return Matching threshold, or `0` when no valid/non-empty histogram exists.
+ */
+int calculate_percentile_from_histogram(
+	const std::vector<int>& buckets,
+	const std::vector<int>& thresholds,
+	double percentile
+);
+
+/**
+ * @brief Check if a port is available for binding
+ *
+ * Creates a temporary socket and attempts to bind to the specified port
+ * to verify availability. The socket is closed immediately after the test.
+ * Sets SO_REUSEADDR to allow rebinding to recently used ports.
+ *
+ * @param port_num Port number to check
+ * @param port_free Output parameter - set to true if port is available, false if in use
+ * @return int Error code (0 = success, -1 = setsockopt failed, -2 = invalid parameters)
+ */
+int check_port_availability(int port_num, bool* port_free);
+
+// Forward declaration for GloMTH wait helper
+class MySQL_Threads_Handler;
+extern MySQL_Threads_Handler *GloMTH;
+
+/**
+ * @brief Wait for GloMTH to be initialized with a bounded timeout
+ *
+ * Waits up to 10 seconds for GloMTH initialization.
+ * Returns true if GloMTH is initialized, false if timeout.
+ *
+ * @return bool true if GloMTH is ready, false otherwise
+ */
+static inline bool wait_for_glo_mth() {
+	for (int i = 0; i < 200; ++i) { // ~10s total
+		if (GloMTH) return true;
+		usleep(50000);
+	}
+	return false;
+}
 
 #endif

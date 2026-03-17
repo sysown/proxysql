@@ -13,6 +13,7 @@
 #include "command_line.h"
 #include "tap.h"
 #include "utils.h"
+#include "noise_utils.h"
 
 
 #define PQEXEC(conn, query) ({PGresult* res = PQexec(conn, query); \
@@ -644,10 +645,19 @@ void execute_tests(bool with_ssl) {
 
 int main(int argc, char** argv) {
 
-    plan(176); // Total number of tests planned
-
     if (cl.getEnv())
         return exit_status();
+
+    spawn_internal_noise(cl, internal_noise_mysql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}, {"avg_delay_ms", "300"}});
+    spawn_internal_noise(cl, internal_noise_prometheus_poller);
+    spawn_internal_noise(cl, internal_noise_pgsql_traffic);
+    spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
+
+    if (cl.use_noise) {
+        plan(176 + 4);
+    } else {
+        plan(176);
+    }
 
     execute_tests(false); // without SSL
     execute_tests(true); // with SSL

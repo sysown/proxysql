@@ -49,7 +49,8 @@ string get_digest_text_from_stats(MYSQL* admin, const string& partial_digest) {
 
     string found_digest = "";
     MYSQL_ROW row;
-    if ((row = mysql_fetch_row(res))) {
+    // consume all rows until NULL is returned
+    while ((row = mysql_fetch_row(res))) {
         found_digest = row[0] ? row[0] : "";
     }
 
@@ -108,7 +109,11 @@ int main(int argc, char** argv) {
     MYSQL_QUERY(proxy, "INSERT IGNORE INTO setting (setting_id, value) VALUES ('foo', '1.0')");
 
     // Clear stats to start fresh
-    MYSQL_QUERY(admin, "PROXYSQL FLUSH STATS");
+    MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
+    MYSQL_RES* result = mysql_store_result(admin);
+    if (result) {
+        mysql_free_result(result);
+    }
 
     // Test 1: Execute the problematic UPDATE statement with multi-statement
     diag("Test 1: Executing problematic UPDATE statement with multi-statement");
@@ -140,7 +145,7 @@ int main(int argc, char** argv) {
     // This is the bug: warning should NOT appear for UPDATE statements
     // But currently it does, so we expect match_count > 0
     bool warning_found = (match_count > 0);
-    ok(warning_found, "UPDATE statement triggers SET warning (bug confirmed) - match_count: %zu", match_count);
+    ok(!warning_found, "UPDATE statement does NOT trigger SET warning - match_count: %zu", match_count);
 
     if (warning_found && match_count > 0) {
         for (const auto& match : warning_lines) {
@@ -158,33 +163,35 @@ int main(int argc, char** argv) {
     // Get digest text for the UPDATE query
     string digest_text = get_digest_text_from_stats(admin, "setting");
 
-    if (!digest_text.empty()) {
-        diag("Found digest text: %s", digest_text.c_str());
+    if (warning_found) {
+        if (!digest_text.empty()) {
+            diag("Found digest text: %s", digest_text.c_str());
 
-        // Check if digest text starts with "SET "
-        bool starts_with_set = (digest_text.size() >= 4 &&
-                               (digest_text[0] == 'S' || digest_text[0] == 's') &&
-                               (digest_text[1] == 'E' || digest_text[1] == 'e') &&
-                               (digest_text[2] == 'T' || digest_text[2] == 't') &&
-                               digest_text[3] == ' ');
+            // Check if digest text starts with "SET "
+            bool starts_with_set = (digest_text.size() >= 4 &&
+                                   (digest_text[0] == 'S' || digest_text[0] == 's') &&
+                                   (digest_text[1] == 'E' || digest_text[1] == 'e') &&
+                                   (digest_text[2] == 'T' || digest_text[2] == 't') &&
+                                   digest_text[3] == ' ');
 
-        ok(starts_with_set, "Digest text starts with 'SET ' (explains the bug)");
+            ok(!starts_with_set, "Digest text does NOT starts with 'SET '");
 
-        if (starts_with_set) {
-            diag("BUG CONFIRMED: UPDATE statement digest text starts with 'SET ': '%s'", digest_text.c_str());
+            if (starts_with_set) {
+                diag("BUG CONFIRMED: UPDATE statement digest text starts with 'SET ': '%s'", digest_text.c_str());
+            } else {
+                diag("Digest text doesn't start with 'SET ', something else is causing the warning");
+            }
         } else {
-            diag("Digest text doesn't start with 'SET ', something else is causing the warning");
+            diag("Could not find digest text in stats table");
+            ok(0, "Could not find digest text in stats table");
         }
     } else {
-        diag("Could not find digest text in stats table");
-        ok(0, "Could not find digest text in stats table");
+        diag("UPDATE statement did NOT trigger SET warning, not checking digest");
+        ok(1, "UPDATE statement did NOT trigger SET warning, not checking digest");
     }
 
     // Test 3: Execute actual SET statement for comparison
     diag("Test 3: Executing actual SET statement for comparison");
-
-    // Clear stats again
-    MYSQL_QUERY(admin, "PROXYSQL FLUSH STATS");
 
     // Execute a real multi-statement SET command
     const string set_query = "SET @test_var = 1; SELECT 1";

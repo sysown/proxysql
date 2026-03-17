@@ -90,6 +90,8 @@ enum MySQL_Thread_status_variable {
 	st_var_aws_aurora_replicas_skipped_during_query,
 	st_var_automatic_detected_sqli,
 	st_var_mysql_whitelisted_sqli_fingerprint,
+	st_var_ai_detected_anomalies,
+	st_var_ai_blocked_queries,
 	st_var_client_host_error_killed_connections,
 	st_var_set_wait_timeout_commands,
 	st_var_timeout_terminated_connections,
@@ -290,6 +292,8 @@ struct p_th_counter {
 		aws_aurora_replicas_skipped_during_query,
 		automatic_detected_sql_injection,
 		mysql_whitelisted_sqli_fingerprint,
+		ai_detected_anomalies,
+		ai_blocked_queries,
 		mysql_killed_backend_connections,
 		mysql_killed_backend_queries,
 		client_host_error_killed_connections,
@@ -516,6 +520,14 @@ class MySQL_Threads_Handler
 		int default_query_delay;
 		int default_query_timeout;
 		int query_processor_iterations;
+		/**
+		 * @brief Defines when the first comment of a query needs to be processed.
+		 * 0 : comment ignored
+		 * 1 : comment processed before the query rules
+		 * 2 : comment processed after the query rules (default behavior)
+		 * 3 : comment processed before and after the query rules
+		 */
+		int query_processor_first_comment_parsing;
 		int query_processor_regex;
 		int set_query_lock_on_hostgroup;
 		int set_parser_algorithm;
@@ -546,8 +558,13 @@ class MySQL_Threads_Handler
 		int eventslog_default_log;
 		int eventslog_format;
 		int eventslog_stmt_parameters;
+		int eventslog_flush_timeout;
+ 		int eventslog_flush_size;
+ 		int eventslog_rate_limit;
 		char *auditlog_filename;
 		int auditlog_filesize;
+		int auditlog_flush_timeout;
+ 		int auditlog_flush_size;
 		// SSL related, proxy to server
 		char * ssl_p2s_ca;
 		char * ssl_p2s_capath;
@@ -591,6 +608,10 @@ class MySQL_Threads_Handler
 		int processlist_max_query_length;
 
 		bool ignore_min_gtid_annotations;
+#ifdef PROXYSQLFFTO
+		bool ffto_enabled;
+		int ffto_max_buffer_size;
+#endif
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;
@@ -708,6 +729,17 @@ class MySQL_Threads_Handler
 	void start_listeners();
 	void stop_listeners();
 	void signal_all_threads(unsigned char _c=0);
+	/**
+	 * @brief Build an in-memory processlist snapshot for MySQL sessions.
+	 *
+	 * The returned resultset always uses the canonical `stats_mysql_processlist`
+	 * column layout. When `args.query_options.enabled=true`, the snapshot is
+	 * post-processed in memory using typed filters, deterministic sorting, and
+	 * pagination controls from `processlist_query_options_t`.
+	 *
+	 * @param args Processlist rendering options and optional query options.
+	 * @return Newly allocated resultset owned by the caller.
+	 */
 	SQLite3_result * SQL3_Processlist(processlist_config_t args);
 	SQLite3_result * SQL3_GlobalStatus(bool _memory);
 	bool kill_session(uint32_t _thread_session_id);

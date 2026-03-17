@@ -22,6 +22,7 @@
 
 #include "tap.h"
 #include "utils.h"
+#include "noise_utils.h"
 #include "command_line.h"
 
 using nlohmann::json;
@@ -106,13 +107,21 @@ void check_matching_logline(fstream& f_log, string regex) {
 }
 
 int main(int, char**) {
-	plan(12);
-
 	CommandLine cl;
 
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
+	}
+
+	spawn_internal_noise(cl, internal_noise_random_stats_poller);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
+	spawn_internal_noise(cl, internal_noise_pgsql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}, {"avg_delay_ms", "300"}});
+
+	if (cl.use_noise) {
+		plan(12 + 3);
+	} else {
+		plan(12);
 	}
 
 	// Open the error log and fetch the final position

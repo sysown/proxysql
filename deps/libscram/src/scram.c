@@ -271,15 +271,16 @@ static bool parse_scram_secret(const char *secret, int *iterations, char **salt,
 	s = strdup(secret);
 	if (!s)
 		goto invalid_secret;
-	if ((scheme_str = strtok(s, "$")) == NULL)
+	char *saveptr;
+	if ((scheme_str = strtok_r(s, "$", &saveptr)) == NULL)
 		goto invalid_secret;
-	if ((iterations_str = strtok(NULL, ":")) == NULL)
+	if ((iterations_str = strtok_r(NULL, ":", &saveptr)) == NULL)
 		goto invalid_secret;
-	if ((salt_str = strtok(NULL, "$")) == NULL)
+	if ((salt_str = strtok_r(NULL, "$", &saveptr)) == NULL)
 		goto invalid_secret;
-	if ((storedkey_str = strtok(NULL, ":")) == NULL)
+	if ((storedkey_str = strtok_r(NULL, ":", &saveptr)) == NULL)
 		goto invalid_secret;
-	if ((serverkey_str = strtok(NULL, "")) == NULL)
+	if ((serverkey_str = strtok_r(NULL, "", &saveptr)) == NULL)
 		goto invalid_secret;
 
 	/* Parse the fields */

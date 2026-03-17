@@ -3,7 +3,10 @@
 
 PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; done; pwd)
 DEPS_PATH := $(PROXYSQL_PATH)/deps
+include $(PROXYSQL_PATH)/include/makefiles_vars.mk
+include $(PROXYSQL_PATH)/include/makefiles_paths.mk
 
+CMAKE3 := $(shell command -v cmake3 2>/dev/null || command -v cmake 2>/dev/null)
 
 .DEFAULT: default
 .PHONY: default
@@ -20,8 +23,16 @@ mariadb-connector-c/mariadb-connector-c/libmariadb/libmariadbclient.a:
 	cd mariadb-connector-c && tar -zxf mariadb-connector-c-*.tar.gz
 	cd mariadb-connector-c/mariadb-connector-c && patch -p0 < ../CMakeLists.txt.patch
 	cd mariadb-connector-c/mariadb-connector-c && patch -p0 < ../ConnectorName.cmake.patch
-	cd mariadb-connector-c/mariadb-connector-c && cmake . -DCMAKE_BUILD_TYPE=RelWithDebInfo
+ifeq ($(UNAME_S),Darwin)
+	cd mariadb-connector-c/mariadb-connector-c && cmake . -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DOPENSSL_ROOT_DIR=$(SSL_IDIR) -DOPENSSL_LIBRARIES=$(SSL_LDIR) -DICONV_LIBRARIES=$$(brew --prefix libiconv)/lib -DICONV_INCLUDE=$$(brew --prefix libiconv)/include
+else
+	cd mariadb-connector-c/mariadb-connector-c && cmake . -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+endif
+ifeq ($(UNAME_S),Darwin)
+	cd mariadb-connector-c/mariadb-connector-c && CC=${CC} CXX=${CXX} ${MAKE} -j1 mariadbclient
+else
 	cd mariadb-connector-c/mariadb-connector-c && CC=${CC} CXX=${CXX} ${MAKE} mariadbclient
+endif
 
 mariadb_client: mariadb-connector-c/mariadb-connector-c/libmariadb/libmariadbclient.a
 
@@ -31,9 +42,31 @@ mysql-connector-c/mysql-boost-5.7.44.tar.gz:
 mysql-connector-c/mysql-connector-c/libmysql/libmysqlclient.a: mysql-connector-c/mysql-boost-5.7.44.tar.gz
 	cd mysql-connector-c && rm -rf mysql-*/ || true
 	cd mysql-connector-c && tar -zxf mysql-boost-5.7.*.tar.gz
+ifeq ($(UNAME_S),Darwin)
+	cd mysql-connector-c && mysql_dir=$$(ls -1d mysql-5.7.*/) && \
+		sed -i '' 's/CMAKE_POLICY(SET CMP0018 OLD)/CMAKE_POLICY(SET CMP0018 NEW)/' $${mysql_dir}CMakeLists.txt && \
+		sed -i '' 's/CMAKE_POLICY(SET CMP0022 OLD)/CMAKE_POLICY(SET CMP0022 NEW)/' $${mysql_dir}CMakeLists.txt && \
+		sed -i '' 's/CMAKE_POLICY(SET CMP0045 OLD)/CMAKE_POLICY(SET CMP0045 NEW)/' $${mysql_dir}CMakeLists.txt && \
+		sed -i '' 's/CMAKE_POLICY(SET CMP0042 OLD)/CMAKE_POLICY(SET CMP0042 NEW)/' $${mysql_dir}CMakeLists.txt && \
+		sed -i '' 's/CMAKE_POLICY(SET CMP0075 OLD)/CMAKE_POLICY(SET CMP0075 NEW)/' $${mysql_dir}CMakeLists.txt && \
+		sed -i '' 's/#      ifndef fdopen/#      if !defined(fdopen) \&\& !defined(__APPLE__)/' $${mysql_dir}extra/zlib/zlib-1.2.13/zutil.h
+	cd mysql-connector-c && ln -fsh $$(ls -1d mysql-5.7.*/) mysql-connector-c
+	cd mysql-connector-c/mysql-connector-c && cmake . -DWITH_BOOST=./boost -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+		-DCMAKE_C_FLAGS="-Wno-incompatible-pointer-types" \
+		-DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O0 -ggdb -DNDEBUG -fPIC -Wno-incompatible-pointer-types" \
+		-DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DWITH_SSL=$$(brew --prefix openssl@3) -DOPENSSL_ROOT_DIR=$$(brew --prefix openssl@3)
+else
 	cd mysql-connector-c && ln -fsT $$(ls -1d mysql-5.7.*/) mysql-connector-c
-	cd mysql-connector-c/mysql-connector-c && cmake . -DWITH_BOOST=./boost -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O0 -ggdb -DNDEBUG -fPIC"
+	cd mysql-connector-c/mysql-connector-c && $(CMAKE3) . -DWITH_BOOST=./boost \
+		-DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_FLAGS="-Wno-incompatible-pointer-types" \
+		-DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O0 -ggdb -DNDEBUG -fPIC -Wno-incompatible-pointer-types" \
+		-DCMAKE_POLICY_VERSION_MINIMUM=3.5
+endif
+ifeq ($(UNAME_S),Darwin)
+	cd mysql-connector-c/mysql-connector-c && CC=${CC} CXX=${CXX} ${MAKE} -j1 mysqlclient mysql
+else
 	cd mysql-connector-c/mysql-connector-c && CC=${CC} CXX=${CXX} ${MAKE} mysqlclient mysql
+endif
 	cd mysql-connector-c/mysql-connector-c && cp archive_output_directory/libmysqlclient.a libmysql/
 
 mysql_client: mysql-connector-c/mysql-connector-c/libmysql/libmysqlclient.a
@@ -44,11 +77,25 @@ mysql-connector-c-8.4.0/mysql-8.4.0.tar.gz:
 mysql-connector-c-8.4.0/mysql-connector-c/libmysql/libmysqlclient.a: mysql-connector-c-8.4.0/mysql-8.4.0.tar.gz
 	cd mysql-connector-c-8.4.0 && rm -rf mysql-*/ || true
 	cd mysql-connector-c-8.4.0 && tar -zxf mysql-*.tar.gz
+ifeq ($(UNAME_S),Darwin)
+	cd mysql-connector-c-8.4.0 && mysql_dir=$$(ls -1d mysql-8.4.*/) && \
+		sed -i '' 's/#      ifndef fdopen/#      if !defined(fdopen) \&\& !defined(__APPLE__)/' $${mysql_dir}extra/zlib/zlib-1.2.13/zutil.h
+	cd mysql-connector-c-8.4.0 && ln -fsh $$(ls -1d mysql-8.4.*/) mysql-connector-c
+	cd mysql-connector-c-8.4.0/mysql-connector-c && patch -p0 --batch < ../../mysql-8.4.0-clang17.patch
+	cd mysql-connector-c-8.4.0/mysql-connector-c && cmake . -DFORCE_INSOURCE_BUILD=1 -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+		-DWITHOUT_SERVER=ON -DDOWNLOAD_BOOST=1 -DWITH_BOOST=./mysql-server/downloads/ -DWITH_UNIT_TESTS=OFF \
+		-DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O0 -ggdb -DNDEBUG -fPIC" -DWITH_SSL=$$(brew --prefix openssl@3) -DOPENSSL_ROOT_DIR=$$(brew --prefix openssl@3)
+else
 	cd mysql-connector-c-8.4.0 && ln -fsT $$(ls -1d mysql-8.4.*/) mysql-connector-c
-	cd mysql-connector-c-8.4.0/mysql-connector-c && cmake . -DFORCE_INSOURCE_BUILD=1 -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+	cd mysql-connector-c-8.4.0/mysql-connector-c && cmake . -DFORCE_INSOURCE_BUILD=1 -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
 		-DWITHOUT_SERVER=ON -DDOWNLOAD_BOOST=1 -DWITH_BOOST=./mysql-server/downloads/ -DWITH_UNIT_TESTS=OFF \
 		-DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O0 -ggdb -DNDEBUG -fPIC"
+endif
+ifeq ($(UNAME_S),Darwin)
+	cd mysql-connector-c-8.4.0/mysql-connector-c && CC=${CC} CXX=${CXX} ${MAKE} -j1
+else
 	cd mysql-connector-c-8.4.0/mysql-connector-c && CC=${CC} CXX=${CXX} ${MAKE}
+endif
 	cd mysql-connector-c-8.4.0/mysql-connector-c && cp archive_output_directory/libmysqlclient.a libmysql/
 
 mysql8_client: mysql-connector-c-8.4.0/mysql-connector-c/libmysql/libmysqlclient.a
