@@ -5,12 +5,15 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update -qq && \
     apt-get install -y -qq --no-install-recommends \
     mysql-client \
+    mysql-shell \
+    mycli \
     postgresql-client \
     iputils-ping \
     curl \
     wget \
     ca-certificates \
     net-tools \
+    iproute2 \
     vim \
     git \
     sudo \
