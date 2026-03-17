@@ -1,4 +1,5 @@
 infra-mysql57
+infra-mysql57-binlog
 infra-mariadb10
 docker-pgsql16-single
 infra-clickhouse23
