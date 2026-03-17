@@ -1,0 +1,156 @@
+services:
+
+  mysql1:
+#    image: mysql:5.7
+    image: proxysql/ci-infra:mysql57-binlogreader
+    hostname: mysql1.${INFRA}
+    networks:
+      - backend
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+    volumes:
+      - ./conf/mysql/mysql1:/etc/mysql/conf.d
+      - ./conf/mysql/ssl:/docker-entrypoint-initdb.d
+      - ${INFRA_LOGS_PATH}/${INFRA}/mysql1:/var/log/mysql
+      - ${INFRA_LOGS_PATH}/${INFRA}/reader1:/var/log/mysqlbinlog
+    cap_add:
+      - SYS_NICE  # CAP_SYS_NICE
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+
+  mysql2:
+#    image: mysql:5.7
+    image: proxysql/ci-infra:mysql57-binlogreader
+    hostname: mysql2.${INFRA}
+    networks:
+      - backend
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+    volumes:
+      - ./conf/mysql/mysql2:/etc/mysql/conf.d
+      - ./conf/mysql/ssl:/docker-entrypoint-initdb.d
+      - ${INFRA_LOGS_PATH}/${INFRA}/mysql2:/var/log/mysql
+      - ${INFRA_LOGS_PATH}/${INFRA}/reader2:/var/log/mysqlbinlog
+    depends_on:
+      - mysql1
+    cap_add:
+      - SYS_NICE  # CAP_SYS_NICE
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+
+  mysql3:
+#    image: mysql:5.7
+    image: proxysql/ci-infra:mysql57-binlogreader
+    hostname: mysql3.${INFRA}
+    networks:
+      - backend
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+    volumes:
+      - ./conf/mysql/mysql3:/etc/mysql/conf.d
+      - ./conf/mysql/ssl:/docker-entrypoint-initdb.d
+      - ${INFRA_LOGS_PATH}/${INFRA}/mysql3:/var/log/mysql
+      - ${INFRA_LOGS_PATH}/${INFRA}/reader3:/var/log/mysqlbinlog
+    depends_on:
+      - mysql1
+    cap_add:
+      - SYS_NICE  # CAP_SYS_NICE
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+
+
+#  reader1:
+#    image: proxysql/ci-infra:proxysql-mysqlbinlog
+#    hostname: reader1.${INFRA}
+#    environment:
+#      - MYSQL_HOST=mysql1
+#      - MYSQL_USER=binlog
+#      - MYSQL_PASSWORD=binlog
+#    volumes:
+#      - ${INFRA_LOGS_PATH}/${INFRA}/reader1:/var/log/mysqlbinlog
+#    networks:
+#      - backend
+#    depends_on:
+#      - mysql1
+
+#  reader2:
+#    image: proxysql/ci-infra:proxysql-mysqlbinlog
+#    hostname: reader2.${INFRA}
+#    environment:
+#      - MYSQL_HOST=mysql2
+#      - MYSQL_USER=binlog
+#      - MYSQL_PASSWORD=binlog
+#    volumes:
+#      - ${INFRA_LOGS_PATH}/${INFRA}/reader2:/var/log/mysqlbinlog
+#    networks:
+#      - backend
+#    depends_on:
+#      - mysql2
+
+#  reader3:
+#    image: proxysql/ci-infra:proxysql-mysqlbinlog
+#    hostname: reader3.${INFRA}
+#    environment:
+#      - MYSQL_HOST=mysql3
+#      - MYSQL_USER=binlog
+#      - MYSQL_PASSWORD=binlog
+#    volumes:
+#      - ${INFRA_LOGS_PATH}/${INFRA}/reader3:/var/log/mysqlbinlog
+#    networks:
+#      - backend
+#    depends_on:
+#      - mysql3
+
+  orc1:
+    hostname: orc1.${INFRA}
+    image: proxysql/ci-infra:openark-orchestrator
+#    build: ./conf/orchestrator/
+    volumes:
+      - ./conf/orchestrator/orc1/orchestrator.conf.json:/etc/orchestrator.conf.json
+      - ./conf/orchestrator/remove-proxysql-host.bash:/root/remove-proxysql-host.bash
+      - ${INFRA_LOGS_PATH}/${INFRA}/orc1:/var/logs/orchestrator/
+    depends_on:
+      - mysql1
+      - mysql2
+      - mysql3
+    networks:
+      - backend
+
+  orc2:
+    hostname: orc2.${INFRA}
+    image: proxysql/ci-infra:openark-orchestrator
+#    build: ./conf/orchestrator/
+    volumes:
+      - ./conf/orchestrator/orc2/orchestrator.conf.json:/etc/orchestrator.conf.json
+      - ./conf/orchestrator/remove-proxysql-host.bash:/root/remove-proxysql-host.bash
+      - ${INFRA_LOGS_PATH}/${INFRA}/orc2:/var/logs/orchestrator/
+    depends_on:
+      - mysql1
+      - mysql2
+      - mysql3
+    networks:
+      - backend
+
+  orc3:
+    hostname: orc3.${INFRA}
+    image: proxysql/ci-infra:openark-orchestrator
+#    build: ./conf/orchestrator/
+    volumes:
+      - ./conf/orchestrator/orc3/orchestrator.conf.json:/etc/orchestrator.conf.json
+      - ./conf/orchestrator/remove-proxysql-host.bash:/root/remove-proxysql-host.bash
+      - ${INFRA_LOGS_PATH}/${INFRA}/orc3:/var/logs/orchestrator/
+    depends_on:
+      - mysql1
+      - mysql2
+      - mysql3
+    networks:
+      - backend
+
+networks:
+  backend:
