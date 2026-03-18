@@ -246,6 +246,12 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	global.gr_bootstrap_ssl_key = nullptr;
 	global.gr_bootstrap_ssl_mode = nullptr;
 	global.ssl_keylog_enabled = false;
+	global.tls_load_count = 0;
+	global.tls_last_load_timestamp = 0;
+	global.tls_last_load_ok = false;
+	global.tls_cert_file = NULL;
+	global.tls_ca_file = NULL;
+	global.tls_key_file = NULL;
 	opt = new ez::ezOptionParser();
 	opt->overview = "High Performance Advanced Proxy for MySQL";
 	opt->syntax = "proxysql [OPTIONS]";
