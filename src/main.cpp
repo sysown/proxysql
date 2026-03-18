@@ -18,6 +18,7 @@ using json = nlohmann::json;
 
 //#define PROXYSQL_EXTERN
 #include "cpp.h"
+#include "proxysql_listen_validator.h"
 
 #include "mysqld_error.h"
 
@@ -1606,6 +1607,39 @@ void ProxySQL_Main_init_phase3___start_all() {
 	load_ = 0;
 	__sync_fetch_and_add(&GloMTH->status_variables.threads_initialized, 1);
 	__sync_fetch_and_add(&GloPTH->status_variables.threads_initialized, 1);
+	{
+		char* admin_mysql_ifaces = GloAdmin->get_variable((char*)"mysql_ifaces");
+		char* admin_pgsql_ifaces = GloAdmin->get_variable((char*)"pgsql_ifaces");
+		char* admin_telnet_ifaces = GloAdmin->get_variable((char*)"telnet_admin_ifaces");
+		char* admin_stats_ifaces = GloAdmin->get_variable((char*)"telnet_stats_ifaces");
+		char* mysql_ifaces = GloMTH->get_variable((char*)"interfaces");
+		char* pgsql_ifaces = GloPTH->get_variable((char*)"interfaces");
+
+		std::vector<proxysql_listen_validator::module_listener_config> modules {
+			{ "Admin", admin_mysql_ifaces },
+			{ "Admin PostgreSQL", admin_pgsql_ifaces },
+			{ "Admin Telnet", admin_telnet_ifaces },
+			{ "Admin Stats Telnet", admin_stats_ifaces },
+			{ "MySQL", mysql_ifaces },
+			{ "PostgreSQL", pgsql_ifaces },
+		};
+		std::string error {};
+		bool valid = proxysql_listen_validator::validate_module_listener_conflicts(modules, error);
+
+		free(admin_mysql_ifaces);
+		free(admin_pgsql_ifaces);
+		free(admin_telnet_ifaces);
+		free(admin_stats_ifaces);
+		free(mysql_ifaces);
+		free(pgsql_ifaces);
+
+		if (valid == false) {
+			proxy_error("%s\n", error.c_str());
+			proxy_error("Use different listen interfaces/ports or disable one of the conflicting listeners.\n");
+			proxy_error("ProxySQL startup aborted due to configuration error\n");
+			exit(EXIT_FAILURE);
+		}
+	}
 	{
 		cpu_timer t;
 		GloMTH->start_listeners();
