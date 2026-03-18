@@ -21,11 +21,33 @@ As of 2026-03-18:
 - GitHub reports `reviewDecision: REVIEW_REQUIRED`.
 - The latest pushed branch head on GitHub is commit `5c7e616f9`
   (`PR5297: resolve remaining actionable review findings for PGSQL checksum sync and TAP assertions`).
-- The local branch contains one additional unpushed follow-up commit,
-  `bf9fc81f4` (`test: strengthen pgsql cluster sync TAP follow-up`).
+- The local branch also contains additional unpushed follow-up commits beyond
+  `5c7e616f9`, including:
+  - `bf9fc81f4` (`test: strengthen pgsql cluster sync TAP follow-up`)
+  - `d702e7d3e` (`doc: summarize pgsql cluster sync branch status`)
 
 This means the branch is functionally substantial, but it is not yet in a clean
 and finished state for merge.
+
+## Non-CI TODO
+
+This TODO intentionally excludes the failing CI jobs, which are being worked on
+separately.
+
+- [x] resolve the immediate merge conflict against `v3.0` locally and verify
+  mergeability by simulation
+- [x] harden the PostgreSQL TAP follow-up so optional replica validation covers
+  `pgsql_servers_v2`, `pgsql_users`, and `pgsql_query_rules`
+- [x] write a maintainer-facing status document for PR `#5297`
+- [x] add a module-by-module implementation summary for the PostgreSQL sync
+  paths
+- [x] add a non-CI merge checklist to make branch handoff easier
+- [ ] push the local follow-up commits so GitHub reflects the current branch
+  state
+- [ ] run end-to-end PostgreSQL multi-node validation with a real replica
+  topology and both `save_to_disk=true` and `save_to_disk=false`
+- [ ] get final maintainer review on whether this should merge as one branch or
+  be split into smaller follow-ups
 
 ## What The Branch Adds
 
@@ -140,6 +162,133 @@ The branch also makes PostgreSQL checksums visible through
 Without this, cluster nodes can not reason correctly about PostgreSQL module
 drift using the existing cluster monitoring loop.
 
+## Module-By-Module Implementation Summary
+
+This section describes the actual PostgreSQL synchronization behavior now
+present in the code.
+
+### `pgsql_users`
+
+Synchronization source:
+
+- `CLUSTER_QUERY_PGSQL_USERS`
+- runtime table: `runtime_pgsql_users`
+
+Checksum behavior:
+
+- the fetched resultset is checksummed with `get_mysql_users_checksum()`
+- the resulting hash is compared to the peer checksum before any apply step
+
+Apply behavior:
+
+- the code reuses `update_mysql_users_mutex`
+- the accepted resultset is converted to `SQLite3_result`
+- `GloAdmin->init_pgsql_users(..., expected_checksum, epoch)` loads the runtime
+  PostgreSQL users state
+- when `cluster_pgsql_users_save_to_disk` is enabled, the branch calls
+  `flush_pgsql_users__from_memory_to_disk()`
+
+### `pgsql_variables`
+
+Synchronization source:
+
+- `CLUSTER_QUERY_PGSQL_VARIABLES`
+- runtime table: `runtime_pgsql_variables`
+
+Checksum behavior:
+
+- the fetched resultset is checksummed with `mysql_raw_checksum()`
+- the computed checksum must match the peer checksum before variables are loaded
+
+Apply behavior:
+
+- the code reuses `update_mysql_variables_mutex`
+- current `pgsql-%` rows are deleted from `global_variables`
+- when `cluster_sync_interfaces` is disabled, interface-related PostgreSQL
+  variables listed in `CLUSTER_SYNC_INTERFACES_PGSQL` are preserved
+- accepted rows are inserted into `global_variables`
+- `GloAdmin->load_pgsql_variables_to_runtime(expected_checksum, epoch)` applies
+  them to runtime
+- when `cluster_pgsql_variables_save_to_disk` is enabled, the branch calls
+  `flush_pgsql_variables__from_memory_to_disk()`
+
+### `pgsql_query_rules`
+
+Synchronization source:
+
+- `CLUSTER_QUERY_PGSQL_QUERY_RULES`
+- `CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING`
+- runtime tables:
+  - `runtime_pgsql_query_rules`
+  - `runtime_pgsql_query_rules_fast_routing`
+
+Checksum behavior:
+
+- both resultsets are fetched
+- each resultset gets a raw checksum
+- those raw checksums are combined with `SpookyHash`
+- the final combined checksum must match the peer checksum before apply
+
+Apply behavior:
+
+- the code reuses `update_mysql_query_rules_mutex`
+- the loader path is `GloAdmin->load_pgsql_query_rules_to_runtime(nullptr, nullptr, expected_checksum, epoch)`
+- when `cluster_pgsql_query_rules_save_to_disk` is enabled, the branch calls
+  `flush_GENERIC__from_to("pgsql_query_rules", "memory_to_disk")`
+
+### `runtime_pgsql_servers`
+
+Synchronization source:
+
+- `CLUSTER_QUERY_RUNTIME_PGSQL_SERVERS`
+- runtime table: `runtime_pgsql_servers`
+
+Checksum behavior:
+
+- the fetched runtime rows are checked with `mysql_raw_checksum()`
+- the computed runtime checksum is compared with the peer runtime checksum
+
+Apply behavior:
+
+- the code reuses `update_runtime_mysql_servers_mutex`
+- accepted rows are converted to `SQLite3_result`
+- `PgHGM->servers_add(...)` loads them into the incoming manager state
+- `PgHGM->commit(..., only_commit_runtime_pgsql_servers=true)` applies runtime
+  PostgreSQL server state
+- when `cluster_pgsql_servers_save_to_disk` is enabled, runtime state is first
+  persisted through `save_pgsql_servers_runtime_to_database(false)` and then
+  written to disk through `flush_GENERIC__from_to(ClusterModules::PGSQL_SERVERS, "memory_to_disk")`
+
+### `pgsql_servers_v2` plus dependent PostgreSQL server tables
+
+Synchronization source:
+
+- `CLUSTER_QUERY_PGSQL_SERVERS_V2`
+- `CLUSTER_QUERY_PGSQL_REPLICATION_HOSTGROUPS`
+- `CLUSTER_QUERY_PGSQL_HOSTGROUP_ATTRIBUTES`
+- optionally `CLUSTER_QUERY_RUNTIME_PGSQL_SERVERS`
+
+Checksum behavior:
+
+- the branch fetches the static PostgreSQL server resultset plus the dependent
+  topology tables
+- those resultsets are checked together using
+  `compute_servers_tables_raw_checksum(...)`
+- when runtime PostgreSQL server rows are fetched in the same operation, the
+  runtime checksum is also checked before apply
+
+Apply behavior:
+
+- the code reuses `update_mysql_servers_v2_mutex`
+- resultsets are converted with `convert_pgsql_servers_resultsets(...)`
+- `GloAdmin->load_pgsql_servers_to_runtime(...)` applies:
+  - `pgsql_servers_v2`
+  - `pgsql_replication_hostgroups`
+  - `pgsql_hostgroup_attributes`
+  - optional runtime PostgreSQL server state
+- when `cluster_pgsql_servers_save_to_disk` is enabled, the accepted state is
+  persisted through `flush_GENERIC__from_to(ClusterModules::PGSQL_SERVERS, "memory_to_disk")`
+
 ## Refactoring Done In The Branch
 
 This branch is not just a feature patch. It also performs a large refactor of
@@ -218,10 +367,6 @@ Reasons:
 - the PR is still open
 - GitHub still marks it `DIRTY`
 - GitHub still requires review
-- the last visible CI run on 2026-02-23 still had failures:
-  - `CI-repltests / tests (mysql57)`
-  - `CI-shuntest / tests (mysql57)`
-  - `SonarCloud Code Analysis`
 - the local follow-up commits that improve mergeability and TAP validation have
   not yet been pushed
 
@@ -235,12 +380,29 @@ Before this branch should be considered complete, the following should happen:
 1. Push the local follow-up commits so the branch on GitHub matches the working
    tree used for current analysis.
 2. Re-check mergeability into `v3.0` after the latest follow-up is pushed.
-3. Investigate the failing CI jobs and determine whether they are unrelated
-   legacy failures or branch regressions.
-4. Run end-to-end PostgreSQL cluster-sync validation in an environment with the
+3. Run end-to-end PostgreSQL cluster-sync validation in an environment with the
    required dependencies and replica topology available.
-5. Get another maintainer review now that the branch has both feature work and
+4. Get another maintainer review now that the branch has both feature work and
    refactoring work.
+
+## Non-CI Merge Checklist
+
+Use this list when finishing the branch, ignoring the unrelated CI breakage that
+is being handled in parallel:
+
+1. Push the local follow-up commits.
+2. Confirm the branch merges cleanly into `v3.0`.
+3. Verify PostgreSQL sync for:
+   - `pgsql_users`
+   - `pgsql_query_rules`
+   - `pgsql_servers_v2`
+   - `runtime_pgsql_servers`
+   - `pgsql_variables`
+4. Verify both `save_to_disk=true` and `save_to_disk=false` behaviors.
+5. Verify `checksum_pgsql_variables=false` disables all PostgreSQL
+   `*_diffs_before_sync` triggers.
+6. Re-read the TAP test and Makefile diffs and confirm the branch still carries
+   the intended local fixes after the final rebase or merge refresh.
 
 ## Bottom Line
 
