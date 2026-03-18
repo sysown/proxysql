@@ -102,6 +102,7 @@ void * my_conn_thread(void *arg) {
 	while(__sync_fetch_and_add(&connect_phase_completed,0) != num_threads) {
 	}
 	MYSQL *mysql=NULL;
+	int conn_idx = 0;
 	json vars;
 	std::string paddress = "";
 	for (j=0; j<queries; j++) {
@@ -110,8 +111,9 @@ void * my_conn_thread(void *arg) {
 		int r2=rand()%testCases.size();
 
 		if (j%queries_per_connections==0) {
-			mysql=mysqlconns[r1];
-			vars = varsperconn[r1];
+			conn_idx = r1;
+			mysql=mysqlconns[conn_idx];
+			vars = varsperconn[conn_idx];
 		}
 		if (multi_users || strcmp(username,(char *)"root")) {
 			if (strstr(testCases[r2].command.c_str(),"database")) {
@@ -205,7 +207,7 @@ void * my_conn_thread(void *arg) {
 		// Log connection info with client ID for tracking
 		pthread_t self = pthread_self();
 		fprintf(stderr, "[tid=%lu] conn_idx=%d, mysql=%p, thread_id=%lu, query=%d, cmd='%s'\n",
-			self, r1, mysql, mysql->thread_id, j, testCases[r2].command.c_str());
+			self, conn_idx, mysql, mysql->thread_id, j, testCases[r2].command.c_str());
 		fprintf(stderr, "[tid=%lu] expected_vars: %s\n", self, vars.dump().c_str());
 		fprintf(stderr, "[tid=%lu] mysql_vars: %s\n", self, mysql_vars.dump().c_str());
 		fprintf(stderr, "[tid=%lu] proxysql_vars[conn]: %s\n", self, proxysql_vars["conn"].dump().c_str());
@@ -291,7 +293,7 @@ void * my_conn_thread(void *arg) {
 			}
 		}
 		// Save vars back to varsperconn for connection state tracking
-		varsperconn[r1] = vars;
+		varsperconn[conn_idx] = vars;
 		{
 			std::lock_guard<std::mutex> lock(mtx_);
 			ok(testPassed, "mysql connection [%p], thread_id [%lu], variables_tested [%d], command [%s]", mysql, mysql->thread_id, variables_tested, testCases[r2].command.c_str());
