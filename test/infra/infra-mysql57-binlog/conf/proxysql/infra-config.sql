@@ -3,6 +3,8 @@ LOAD ADMIN VARIABLES TO RUNTIME;
 SAVE ADMIN VARIABLES TO DISK;
 
 DELETE FROM mysql_servers WHERE comment LIKE '%${INFRA}';
+-- MySQL servers with gtid_port pointing to proxysql_mysqlbinlog readers
+-- Note: reader1/2/3 hostnames resolve to the reader containers via Docker network aliases
 INSERT INTO mysql_servers (hostgroup_id,hostname,gtid_port,port,max_replication_lag,comment) VALUES (${WHG},'mysql1.${INFRA}',6020,3306,10,'mysql1.${INFRA}');
 INSERT INTO mysql_servers (hostgroup_id,hostname,gtid_port,port,max_replication_lag,comment) VALUES (${RHG},'mysql2.${INFRA}',6020,3306,10,'mysql2.${INFRA}');
 INSERT INTO mysql_servers (hostgroup_id,hostname,gtid_port,port,max_replication_lag,comment) VALUES (${RHG},'mysql3.${INFRA}',6020,3306,10,'mysql3.${INFRA}');
@@ -18,6 +20,7 @@ DELETE FROM mysql_users WHERE comment LIKE '%${INFRA}';
 REPLACE INTO mysql_users (username,password,active,default_hostgroup,comment) values ('sbtest7','sbtest7',1,${WHG},'${INFRA}');
 REPLACE INTO mysql_users (username,password,active,default_hostgroup,comment) values ('sbtest8','sbtest8',1,${WHG},'${INFRA}');
 REPLACE INTO mysql_users (username,password,active,default_hostgroup,comment) values ('${INFRA}','${INFRA}',1,${WHG},'${INFRA}');
+REPLACE INTO mysql_users (username,password,active,default_hostgroup,comment) values ('root','${ROOT_PASSWORD}',1,${WHG},'${INFRA}');
 LOAD MYSQL USERS TO RUNTIME;
 SAVE MYSQL USERS TO DISK;
 

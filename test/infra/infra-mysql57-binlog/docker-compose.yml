@@ -88,6 +88,7 @@ services:
       backend:
         aliases:
           - reader1.${INFRA}
+          - mysql1.${INFRA}
     depends_on:
       - mysql1
 
@@ -106,6 +107,7 @@ services:
       backend:
         aliases:
           - reader2.${INFRA}
+          - mysql2.${INFRA}
     depends_on:
       - mysql2
 
@@ -124,6 +126,7 @@ services:
       backend:
         aliases:
           - reader3.${INFRA}
+          - mysql3.${INFRA}
     depends_on:
       - mysql3
 
