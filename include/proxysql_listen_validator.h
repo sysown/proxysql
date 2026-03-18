@@ -26,6 +26,7 @@ struct parsed_listener {
 	std::string module_name;
 	std::string listener;
 	listener_kind kind { listener_kind::tcp };
+	bool valid { true };
 	int port { 0 };
 	bool wildcard_v4 { false };
 	bool wildcard_v6 { false };
@@ -163,6 +164,9 @@ static inline parsed_listener parse_listener(const std::string& module_name, con
 			if (closing + 1 < listener.size() && listener[closing + 1] == ':') {
 				port_text = listener.substr(closing + 2);
 			}
+		} else {
+			parsed.valid = false;
+			return parsed;
 		}
 	} else {
 		std::string::size_type colon = listener.find(':');
@@ -183,6 +187,7 @@ static inline parsed_listener parse_listener(const std::string& module_name, con
 	char* endptr = nullptr;
 	long parsed_port = strtol(port_text.c_str(), &endptr, 10);
 	if (endptr == port_text.c_str() || *endptr != '\0' || parsed_port <= 0 || parsed_port > 65535) {
+		parsed.valid = false;
 		return parsed;
 	}
 
@@ -239,7 +244,10 @@ static inline bool validate_module_listener_conflicts(
 	for (const module_listener_config& module : modules) {
 		std::vector<std::string> listeners = split_listener_list(module.listeners);
 		for (const std::string& listener : listeners) {
-			parsed_listeners.push_back(parse_listener(module.module_name, listener));
+			parsed_listener parsed = parse_listener(module.module_name, listener);
+			if (parsed.valid) {
+				parsed_listeners.push_back(parsed);
+			}
 		}
 	}
 

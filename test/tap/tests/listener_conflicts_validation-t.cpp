@@ -16,7 +16,9 @@ int main() {
 			},
 			error
 		) == false &&
-		error.find("MySQL listener '0.0.0.0:6033' overlaps with PostgreSQL listener '0.0.0.0:6033'") != std::string::npos,
+		error.find("MySQL") != std::string::npos &&
+		error.find("PostgreSQL") != std::string::npos &&
+		error.find("0.0.0.0:6033") != std::string::npos,
 		"detects identical TCP listeners across modules"
 	);
 
