@@ -2,7 +2,7 @@
  * @file test_cluster_sync_pgsql-t.cpp
  * @brief Checks that ProxySQL PostgreSQL tables are properly syncing between cluster instances.
  * @details This test checks PostgreSQL cluster sync for:
- *   - 'pgsql_servers_v2' sync between cluster nodes
+ *   - 'pgsql_servers' changes propagating through the 'pgsql_servers_v2' cluster sync path
  *   - 'pgsql_users' sync between cluster nodes
  *   - 'pgsql_query_rules' sync between cluster nodes
  *   - PostgreSQL modules checksums appear in runtime_checksums_values
@@ -11,9 +11,10 @@
  * Optional replica validation:
  * ----------------------------
  * When 'TAP_PGSQL_SYNC_REPLICA_PORT' is set, the test temporarily backs up and restores
- * modified PostgreSQL admin tables on the primary, then verifies that runtime state is
- * replicated to the target replica. If the corresponding '*_save_to_disk' variable is enabled,
- * the test also verifies persistence into the replica disk tables.
+ * modified PostgreSQL admin tables on the primary, then verifies that runtime state and
+ * replica main-table state are updated on the target replica. If the corresponding
+ * '*_save_to_disk' variable is enabled, the test also verifies persistence into the replica
+ * disk tables.
  */
 
 #include <unistd.h>
@@ -127,14 +128,48 @@ cleanup:
 	return rc;
 }
 
-int fetch_single_count(MYSQL* admin, const string& query, int& count) {
-	if (mysql_query_t(admin, query)) {
+int fetch_single_count(MYSQL* admin, const string& query, int& count, bool fresh_connection = false) {
+	MYSQL* query_admin = admin;
+	MYSQL* fresh_admin = nullptr;
+
+	if (fresh_connection) {
+		fresh_admin = mysql_init(NULL);
+		if (!fresh_admin) {
+			diag("Failed to initialize fresh admin connection for query: %s", query.c_str());
+			return EXIT_FAILURE;
+		}
+
+		if (!mysql_real_connect(
+			fresh_admin,
+			admin->host,
+			admin->user,
+			admin->passwd,
+			admin->db,
+			admin->port,
+			admin->unix_socket,
+			admin->client_flag
+		)) {
+			diag("Failed to connect fresh admin session for query '%s': %s", query.c_str(), mysql_error(fresh_admin));
+			mysql_close(fresh_admin);
+			return EXIT_FAILURE;
+		}
+
+		query_admin = fresh_admin;
+	}
+
+	if (mysql_query_t(query_admin, query)) {
+		if (fresh_admin) {
+			mysql_close(fresh_admin);
+		}
 		return EXIT_FAILURE;
 	}
 
-	MYSQL_RES* result = mysql_store_result(admin);
+	MYSQL_RES* result = mysql_store_result(query_admin);
 	if (!result) {
 		diag("Failed to store result from query: %s", query.c_str());
+		if (fresh_admin) {
+			mysql_close(fresh_admin);
+		}
 		return EXIT_FAILURE;
 	}
 
@@ -142,19 +177,27 @@ int fetch_single_count(MYSQL* admin, const string& query, int& count) {
 	if (!row || !row[0]) {
 		diag("Failed to fetch count row from query: %s", query.c_str());
 		mysql_free_result(result);
+		if (fresh_admin) {
+			mysql_close(fresh_admin);
+		}
 		return EXIT_FAILURE;
 	}
 
 	count = atoi(row[0]);
 	mysql_free_result(result);
+	if (fresh_admin) {
+		mysql_close(fresh_admin);
+	}
 
 	return EXIT_SUCCESS;
 }
 
-int wait_for_expected_count(MYSQL* admin, const string& query, int expected_count, const string& label) {
+int wait_for_expected_count(
+	MYSQL* admin, const string& query, int expected_count, const string& label, bool fresh_connection = false
+) {
 	for (uint32_t waited = 0; waited < SYNC_TIMEOUT; ++waited) {
 		int count = 0;
-		if (fetch_single_count(admin, query, count) != EXIT_SUCCESS) {
+		if (fetch_single_count(admin, query, count, fresh_connection) != EXIT_SUCCESS) {
 			return EXIT_FAILURE;
 		}
 		if (count == expected_count) {
@@ -171,9 +214,9 @@ int check_pgsql_servers_v2_sync(
 	MYSQL* proxy_admin, MYSQL* replica_admin, bool save_to_disk,
 	const vector<pgsql_server_tuple>& insert_pgsql_servers_values
 ) {
-	const string backup_table_name { "pgsql_servers_v2_sync_test_backup_5297" };
+	const string backup_table_name { "pgsql_servers_sync_test_backup_5297" };
 	const char* t_insert_pgsql_servers =
-		"INSERT INTO pgsql_servers_v2 ("
+		"INSERT INTO pgsql_servers ("
 			" hostgroup_id, hostname, port, status, weight, compression, max_connections,"
 			" max_replication_lag, use_ssl, max_latency_ms, comment"
 		") VALUES (%d, '%s', %d, '%s', %d, %d, %d, %d, %d, %d, '%s')";
@@ -200,10 +243,10 @@ int check_pgsql_servers_v2_sync(
 		insert_pgsql_servers_queries.push_back(insert_pgsql_servers_query);
 	}
 
-	if (backup_admin_table(proxy_admin, "pgsql_servers_v2", backup_table_name) != EXIT_SUCCESS) {
+	if (backup_admin_table(proxy_admin, "pgsql_servers", backup_table_name) != EXIT_SUCCESS) {
 		return EXIT_FAILURE;
 	}
-	if (mysql_query_t(proxy_admin, "DELETE FROM pgsql_servers_v2")) {
+	if (mysql_query_t(proxy_admin, "DELETE FROM pgsql_servers")) {
 		goto cleanup;
 	}
 
@@ -222,7 +265,13 @@ int check_pgsql_servers_v2_sync(
 				" AND port=%d AND status='%s' AND weight=%d AND"
 				" compression=%d AND max_connections=%d AND max_replication_lag=%d"
 				" AND use_ssl=%d AND max_latency_ms=%d AND comment='%s'";
+		const char* t_main_pgsql_servers_query =
+			"SELECT COUNT(*) FROM pgsql_servers WHERE hostgroup_id=%d AND hostname='%s'"
+				" AND port=%d AND status='%s' AND weight=%d AND"
+				" compression=%d AND max_connections=%d AND max_replication_lag=%d"
+				" AND use_ssl=%d AND max_latency_ms=%d AND comment='%s'";
 		string runtime_pgsql_servers_query {};
+		string main_pgsql_servers_query {};
 		string_format(
 			t_runtime_pgsql_servers_query,
 			runtime_pgsql_servers_query,
@@ -238,33 +287,40 @@ int check_pgsql_servers_v2_sync(
 			std::get<9>(values),
 			std::get<10>(values).c_str()
 		);
-		if (wait_for_expected_count(replica_admin, runtime_pgsql_servers_query, 1, "runtime_pgsql_servers sync") != EXIT_SUCCESS) {
+		if (wait_for_expected_count(replica_admin, runtime_pgsql_servers_query, 1, "runtime_pgsql_servers sync", true) != EXIT_SUCCESS) {
+			goto cleanup;
+		}
+
+		string_format(
+			t_main_pgsql_servers_query,
+			main_pgsql_servers_query,
+			std::get<0>(values),
+			std::get<1>(values).c_str(),
+			std::get<2>(values),
+			std::get<3>(values).c_str(),
+			std::get<4>(values),
+			std::get<5>(values),
+			std::get<6>(values),
+			std::get<7>(values),
+			std::get<8>(values),
+			std::get<9>(values),
+			std::get<10>(values).c_str()
+		);
+		if (wait_for_expected_count(replica_admin, main_pgsql_servers_query, 1, "pgsql_servers main sync", true) != EXIT_SUCCESS) {
 			goto cleanup;
 		}
 
 		if (save_to_disk) {
-			const char* t_disk_pgsql_servers_query =
-				"SELECT COUNT(*) FROM pgsql_servers_v2 WHERE hostgroup_id=%d AND hostname='%s'"
-					" AND port=%d AND status='%s' AND weight=%d AND"
-					" compression=%d AND max_connections=%d AND max_replication_lag=%d"
-					" AND use_ssl=%d AND max_latency_ms=%d AND comment='%s'";
-			string disk_pgsql_servers_query {};
-			string_format(
-				t_disk_pgsql_servers_query,
-				disk_pgsql_servers_query,
-				std::get<0>(values),
-				std::get<1>(values).c_str(),
-				std::get<2>(values),
-				std::get<3>(values).c_str(),
-				std::get<4>(values),
-				std::get<5>(values),
-				std::get<6>(values),
-				std::get<7>(values),
-				std::get<8>(values),
-				std::get<9>(values),
-				std::get<10>(values).c_str()
-			);
-			if (wait_for_expected_count(replica_admin, disk_pgsql_servers_query, 1, "pgsql_servers_v2 disk sync") != EXIT_SUCCESS) {
+			string disk_pgsql_servers_query = main_pgsql_servers_query;
+			const string from_table { "FROM pgsql_servers" };
+			const string to_table { "FROM disk.pgsql_servers" };
+			const size_t from_pos = disk_pgsql_servers_query.find(from_table);
+			if (from_pos == string::npos) {
+				diag("Failed to rewrite pgsql_servers query for disk validation");
+				goto cleanup;
+			}
+			disk_pgsql_servers_query.replace(from_pos, from_table.length(), to_table);
+			if (wait_for_expected_count(replica_admin, disk_pgsql_servers_query, 1, "pgsql_servers disk sync", true) != EXIT_SUCCESS) {
 				goto cleanup;
 			}
 		}
@@ -273,7 +329,7 @@ int check_pgsql_servers_v2_sync(
 	rc = EXIT_SUCCESS;
 
 cleanup:
-	if (restore_admin_table(proxy_admin, "pgsql_servers_v2", backup_table_name, "LOAD PGSQL SERVERS TO RUNTIME") != EXIT_SUCCESS) {
+	if (restore_admin_table(proxy_admin, "pgsql_servers", backup_table_name, "LOAD PGSQL SERVERS TO RUNTIME") != EXIT_SUCCESS) {
 		return EXIT_FAILURE;
 	}
 	return rc;
@@ -288,6 +344,9 @@ int check_pgsql_users_sync(MYSQL* proxy_admin, MYSQL* replica_admin, bool save_t
 	const int default_hostgroup = 801;
 	const int max_connections = 33;
 	int rc = EXIT_FAILURE;
+	string insert_user_query {};
+	string runtime_user_query {};
+	string main_user_query {};
 
 	if (backup_admin_table(proxy_admin, "pgsql_users", backup_table_name) != EXIT_SUCCESS) {
 		return EXIT_FAILURE;
@@ -296,7 +355,6 @@ int check_pgsql_users_sync(MYSQL* proxy_admin, MYSQL* replica_admin, bool save_t
 		goto cleanup;
 	}
 
-	string insert_user_query {};
 	string_format(
 		"INSERT INTO pgsql_users (username, password, active, use_ssl, default_hostgroup, transaction_persistent, fast_forward, backend, frontend, max_connections, attributes, comment) "
 		"VALUES ('%s', '%s', 1, 0, %d, 1, 0, 0, 1, %d, '%s', '%s')",
@@ -315,7 +373,6 @@ int check_pgsql_users_sync(MYSQL* proxy_admin, MYSQL* replica_admin, bool save_t
 		goto cleanup;
 	}
 
-	string runtime_user_query {};
 	string_format(
 		"SELECT COUNT(*) FROM runtime_pgsql_users WHERE username='%s' AND password='%s' AND active=1 AND use_ssl=0 AND default_hostgroup=%d "
 		"AND transaction_persistent=1 AND fast_forward=0 AND backend=0 AND frontend=1 AND max_connections=%d "
@@ -328,25 +385,37 @@ int check_pgsql_users_sync(MYSQL* proxy_admin, MYSQL* replica_admin, bool save_t
 		attributes.c_str(),
 		comment.c_str()
 	);
-	if (wait_for_expected_count(replica_admin, runtime_user_query, 1, "runtime_pgsql_users sync") != EXIT_SUCCESS) {
+	if (wait_for_expected_count(replica_admin, runtime_user_query, 1, "runtime_pgsql_users sync", true) != EXIT_SUCCESS) {
+		goto cleanup;
+	}
+
+	string_format(
+		"SELECT COUNT(*) FROM pgsql_users WHERE username='%s' AND password='%s' AND active=1 AND use_ssl=0 AND default_hostgroup=%d "
+		"AND transaction_persistent=1 AND fast_forward=0 AND backend=0 AND frontend=1 AND max_connections=%d "
+		"AND attributes='%s' AND comment='%s'",
+		main_user_query,
+		username.c_str(),
+		password.c_str(),
+		default_hostgroup,
+		max_connections,
+		attributes.c_str(),
+		comment.c_str()
+	);
+	if (wait_for_expected_count(replica_admin, main_user_query, 1, "pgsql_users main sync", true) != EXIT_SUCCESS) {
 		goto cleanup;
 	}
 
 	if (save_to_disk) {
-		string disk_user_query {};
-		string_format(
-			"SELECT COUNT(*) FROM pgsql_users WHERE username='%s' AND password='%s' AND active=1 AND use_ssl=0 AND default_hostgroup=%d "
-			"AND transaction_persistent=1 AND fast_forward=0 AND backend=0 AND frontend=1 AND max_connections=%d "
-			"AND attributes='%s' AND comment='%s'",
-			disk_user_query,
-			username.c_str(),
-			password.c_str(),
-			default_hostgroup,
-			max_connections,
-			attributes.c_str(),
-			comment.c_str()
-		);
-		if (wait_for_expected_count(replica_admin, disk_user_query, 1, "pgsql_users disk sync") != EXIT_SUCCESS) {
+		string disk_user_query = main_user_query;
+		const string from_table { "FROM pgsql_users" };
+		const string to_table { "FROM disk.pgsql_users" };
+		const size_t from_pos = disk_user_query.find(from_table);
+		if (from_pos == string::npos) {
+			diag("Failed to rewrite pgsql_users query for disk validation");
+			goto cleanup;
+		}
+		disk_user_query.replace(from_pos, from_table.length(), to_table);
+		if (wait_for_expected_count(replica_admin, disk_user_query, 1, "pgsql_users disk sync", true) != EXIT_SUCCESS) {
 			goto cleanup;
 		}
 	}
@@ -361,26 +430,42 @@ cleanup:
 }
 
 int check_pgsql_query_rules_sync(MYSQL* proxy_admin, MYSQL* replica_admin, bool save_to_disk) {
-	const string backup_table_name { "pgsql_query_rules_sync_test_backup_5297" };
+	const string rules_backup_table_name { "pgsql_query_rules_sync_test_backup_5297" };
+	const string fast_routing_backup_table_name { "pgsql_query_rules_fast_routing_sync_test_backup_5297" };
 	const int rule_id = 98001;
 	const int destination_hostgroup = 801;
+	const int fast_routing_flag_in = 902;
 	const string match_pattern { "^SELECT 42$" };
+	const string database_name { "cluster_sync_pgsql_db_5297" };
+	const string fast_routing_comment { "cluster_sync_pgsql_fast_routing_5297" };
 	const string comment { "cluster_sync_pgsql_rule_5297" };
 	int rc = EXIT_FAILURE;
+	string insert_rule_query {};
+	string insert_fast_routing_query {};
+	string runtime_query_rules_query {};
+	string runtime_fast_routing_query {};
+	string main_query_rules_query {};
+	string main_fast_routing_query {};
 
-	if (backup_admin_table(proxy_admin, "pgsql_query_rules", backup_table_name) != EXIT_SUCCESS) {
+	if (backup_admin_table(proxy_admin, "pgsql_query_rules", rules_backup_table_name) != EXIT_SUCCESS) {
+		return EXIT_FAILURE;
+	}
+	if (backup_admin_table(proxy_admin, "pgsql_query_rules_fast_routing", fast_routing_backup_table_name) != EXIT_SUCCESS) {
 		return EXIT_FAILURE;
 	}
 	if (mysql_query_t(proxy_admin, "DELETE FROM pgsql_query_rules")) {
 		goto cleanup;
 	}
+	if (mysql_query_t(proxy_admin, "DELETE FROM pgsql_query_rules_fast_routing")) {
+		goto cleanup;
+	}
 
-	string insert_rule_query {};
 	string_format(
-		"INSERT INTO pgsql_query_rules (rule_id, active, match_pattern, destination_hostgroup, apply, comment) "
-		"VALUES (%d, 1, '%s', %d, 1, '%s')",
+		"INSERT INTO pgsql_query_rules (rule_id, active, database, match_pattern, destination_hostgroup, apply, comment) "
+		"VALUES (%d, 1, '%s', '%s', %d, 1, '%s')",
 		insert_rule_query,
 		rule_id,
+		database_name.c_str(),
 		match_pattern.c_str(),
 		destination_hostgroup,
 		comment.c_str()
@@ -388,36 +473,99 @@ int check_pgsql_query_rules_sync(MYSQL* proxy_admin, MYSQL* replica_admin, bool 
 	if (mysql_query_t(proxy_admin, insert_rule_query)) {
 		goto cleanup;
 	}
+
+	string_format(
+		"INSERT INTO pgsql_query_rules_fast_routing (username, database, flagIN, destination_hostgroup, comment) "
+		"VALUES ('%s', '%s', %d, %d, '%s')",
+		insert_fast_routing_query,
+		"",
+		database_name.c_str(),
+		fast_routing_flag_in,
+		destination_hostgroup,
+		fast_routing_comment.c_str()
+	);
+	if (mysql_query_t(proxy_admin, insert_fast_routing_query)) {
+		goto cleanup;
+	}
 	if (mysql_query_t(proxy_admin, "LOAD PGSQL QUERY RULES TO RUNTIME")) {
 		goto cleanup;
 	}
 
-	string runtime_query_rules_query {};
 	string_format(
-		"SELECT COUNT(*) FROM runtime_pgsql_query_rules WHERE rule_id=%d AND active=1 AND match_pattern='%s' "
-		"AND destination_hostgroup=%d AND apply=1 AND comment='%s'",
+		"SELECT COUNT(*) FROM runtime_pgsql_query_rules WHERE rule_id=%d AND match_pattern='%s' "
+		"AND destination_hostgroup=%d AND apply=1 AND comment='%s' AND database='%s'",
 		runtime_query_rules_query,
 		rule_id,
 		match_pattern.c_str(),
 		destination_hostgroup,
-		comment.c_str()
+		comment.c_str(),
+		database_name.c_str()
 	);
-	if (wait_for_expected_count(replica_admin, runtime_query_rules_query, 1, "runtime_pgsql_query_rules sync") != EXIT_SUCCESS) {
+	if (wait_for_expected_count(replica_admin, runtime_query_rules_query, 1, "runtime_pgsql_query_rules sync", true) != EXIT_SUCCESS) {
+		goto cleanup;
+	}
+
+	string_format(
+		"SELECT COUNT(*) FROM runtime_pgsql_query_rules_fast_routing WHERE username='%s' AND database='%s' "
+		"AND flagIN=%d AND destination_hostgroup=%d AND comment='%s'",
+		runtime_fast_routing_query,
+		"",
+		database_name.c_str(),
+		fast_routing_flag_in,
+		destination_hostgroup,
+		fast_routing_comment.c_str()
+	);
+	if (wait_for_expected_count(replica_admin, runtime_fast_routing_query, 1, "runtime_pgsql_query_rules_fast_routing sync", true) != EXIT_SUCCESS) {
+		goto cleanup;
+	}
+
+	string_format(
+		"SELECT COUNT(*) FROM pgsql_query_rules WHERE rule_id=%d AND active=1 AND match_pattern='%s' "
+		"AND destination_hostgroup=%d AND apply=1 AND comment='%s' AND database='%s'",
+		main_query_rules_query,
+		rule_id,
+		match_pattern.c_str(),
+		destination_hostgroup,
+		comment.c_str(),
+		database_name.c_str()
+	);
+	if (wait_for_expected_count(replica_admin, main_query_rules_query, 1, "pgsql_query_rules main sync", true) != EXIT_SUCCESS) {
+		goto cleanup;
+	}
+
+	string_format(
+		"SELECT COUNT(*) FROM pgsql_query_rules_fast_routing WHERE username='%s' AND database='%s' "
+		"AND flagIN=%d AND destination_hostgroup=%d AND comment='%s'",
+		main_fast_routing_query,
+		"",
+		database_name.c_str(),
+		fast_routing_flag_in,
+		destination_hostgroup,
+		fast_routing_comment.c_str()
+	);
+	if (wait_for_expected_count(replica_admin, main_fast_routing_query, 1, "pgsql_query_rules_fast_routing main sync", true) != EXIT_SUCCESS) {
 		goto cleanup;
 	}
 
 	if (save_to_disk) {
-		string disk_query_rules_query {};
-		string_format(
-			"SELECT COUNT(*) FROM pgsql_query_rules WHERE rule_id=%d AND active=1 AND match_pattern='%s' "
-			"AND destination_hostgroup=%d AND apply=1 AND comment='%s'",
-			disk_query_rules_query,
-			rule_id,
-			match_pattern.c_str(),
-			destination_hostgroup,
-			comment.c_str()
-		);
-		if (wait_for_expected_count(replica_admin, disk_query_rules_query, 1, "pgsql_query_rules disk sync") != EXIT_SUCCESS) {
+		string disk_query_rules_query = main_query_rules_query;
+		string disk_fast_routing_query = main_fast_routing_query;
+		const string rules_from_table { "FROM pgsql_query_rules" };
+		const string rules_to_table { "FROM disk.pgsql_query_rules" };
+		const string fast_from_table { "FROM pgsql_query_rules_fast_routing" };
+		const string fast_to_table { "FROM disk.pgsql_query_rules_fast_routing" };
+		const size_t rules_from_pos = disk_query_rules_query.find(rules_from_table);
+		const size_t fast_from_pos = disk_fast_routing_query.find(fast_from_table);
+		if (rules_from_pos == string::npos || fast_from_pos == string::npos) {
+			diag("Failed to rewrite pgsql query rules queries for disk validation");
+			goto cleanup;
+		}
+		disk_query_rules_query.replace(rules_from_pos, rules_from_table.length(), rules_to_table);
+		disk_fast_routing_query.replace(fast_from_pos, fast_from_table.length(), fast_to_table);
+		if (wait_for_expected_count(replica_admin, disk_query_rules_query, 1, "pgsql_query_rules disk sync", true) != EXIT_SUCCESS) {
+			goto cleanup;
+		}
+		if (wait_for_expected_count(replica_admin, disk_fast_routing_query, 1, "pgsql_query_rules_fast_routing disk sync", true) != EXIT_SUCCESS) {
 			goto cleanup;
 		}
 	}
@@ -425,7 +573,10 @@ int check_pgsql_query_rules_sync(MYSQL* proxy_admin, MYSQL* replica_admin, bool 
 	rc = EXIT_SUCCESS;
 
 cleanup:
-	if (restore_admin_table(proxy_admin, "pgsql_query_rules", backup_table_name, "LOAD PGSQL QUERY RULES TO RUNTIME") != EXIT_SUCCESS) {
+	if (restore_admin_table(proxy_admin, "pgsql_query_rules_fast_routing", fast_routing_backup_table_name) != EXIT_SUCCESS) {
+		return EXIT_FAILURE;
+	}
+	if (restore_admin_table(proxy_admin, "pgsql_query_rules", rules_backup_table_name, "LOAD PGSQL QUERY RULES TO RUNTIME") != EXIT_SUCCESS) {
 		return EXIT_FAILURE;
 	}
 	return rc;

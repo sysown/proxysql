@@ -91,6 +91,9 @@ namespace SQLQueries {
 	const char* const DELETE_MYSQL_AWS_AURORA_HOSTGROUPS = "DELETE FROM mysql_aws_aurora_hostgroups";
 	const char* const DELETE_MYSQL_HOSTGROUP_ATTRIBUTES = "DELETE FROM mysql_hostgroup_attributes";
 	const char* const DELETE_MYSQL_SERVERS_SSL_PARAMS = "DELETE FROM mysql_servers_ssl_params";
+	const char* const DELETE_PGSQL_SERVERS = "DELETE FROM pgsql_servers";
+	const char* const DELETE_PGSQL_REPLICATION_HOSTGROUPS = "DELETE FROM pgsql_replication_hostgroups";
+	const char* const DELETE_PGSQL_HOSTGROUP_ATTRIBUTES = "DELETE FROM pgsql_hostgroup_attributes";
 }
 
 #define SAFE_SQLITE3_STEP(_stmt) do {\
@@ -669,7 +672,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 		{ClusterModules::PROXYSQL_SERVERS, &checksums_values.proxysql_servers, &GloVars.checksums_values.proxysql_servers, &ProxySQL_Cluster::cluster_proxysql_servers_diffs_before_sync,
 		 nullptr, nullptr, 0, 0, nullptr},
 		{ClusterModules::LDAP_VARIABLES, &checksums_values.ldap_variables, &GloVars.checksums_values.ldap_variables, &ProxySQL_Cluster::cluster_ldap_variables_diffs_before_sync,
-		 ClusterModules::LDAP_VARIABLES, RuntimeCommands::LOAD_LDAP_VARIABLES,
+		 "ldap", RuntimeCommands::LOAD_LDAP_VARIABLES,
 		 static_cast<int>(p_cluster_counter::sync_conflict_ldap_variables_share_epoch),
 		 static_cast<int>(p_cluster_counter::sync_delayed_ldap_variables_version_one),
 		 []() { return GloMyLdapAuth != nullptr; }},
@@ -682,7 +685,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 		{ClusterModules::PGSQL_USERS, &checksums_values.pgsql_users, &GloVars.checksums_values.pgsql_users, &ProxySQL_Cluster::cluster_pgsql_users_diffs_before_sync,
 		 nullptr, nullptr, 0, 0, nullptr},
 		{ClusterModules::PGSQL_VARIABLES, &checksums_values.pgsql_variables, &GloVars.checksums_values.pgsql_variables, &ProxySQL_Cluster::cluster_pgsql_variables_diffs_before_sync,
-		 ClusterModules::PGSQL_VARIABLES, RuntimeCommands::LOAD_PGSQL_VARIABLES,
+		 "pgsql", RuntimeCommands::LOAD_PGSQL_VARIABLES,
 		 static_cast<int>(p_cluster_counter::sync_conflict_pgsql_variables_share_epoch),
 		 static_cast<int>(p_cluster_counter::sync_delayed_pgsql_variables_version_one), nullptr}
 	};
@@ -1385,6 +1388,10 @@ uint64_t get_mysql_users_checksum(
 	return raw_users_checksum;
 }
 
+uint64_t get_pgsql_users_checksum(MYSQL_RES* resultset, unique_ptr<SQLite3_result>& all_users) {
+	return GloPgAuth->get_runtime_checksum(resultset, all_users);
+}
+
 void update_mysql_users(MYSQL_RES* result) {
 	GloAdmin->admindb->execute(SQLQueries::DELETE_MYSQL_USERS);
 	char* q = (char *)"INSERT INTO mysql_users (username, password, active, use_ssl, default_hostgroup, default_schema,"
@@ -1417,6 +1424,137 @@ void update_mysql_users(MYSQL_RES* result) {
 		rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 	}
 	// RAII auto-finalizes statement1 (fixes memory leak)
+}
+
+void update_pgsql_users(MYSQL_RES* result) {
+	GloAdmin->admindb->execute("DELETE FROM pgsql_users");
+	char* q = (char*)"INSERT INTO pgsql_users (username, password, active, use_ssl, default_hostgroup,"
+		" transaction_persistent, fast_forward, backend, frontend, max_connections, attributes, comment)"
+		" VALUES (?1 , ?2 , ?3 , ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+
+	auto [rc1, statement1_unique] = GloAdmin->admindb->prepare_v2(q);
+	ASSERT_SQLITE_OK(rc1, GloAdmin->admindb);
+	sqlite3_stmt* statement1 = statement1_unique.get();
+	int rc;
+
+	while (MYSQL_ROW row = mysql_fetch_row(result)) {
+		rc = (*proxy_sqlite3_bind_text)(statement1, 1, row[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // username
+		rc = (*proxy_sqlite3_bind_text)(statement1, 2, row[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // password
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 3, 1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // active
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 4, atoll(row[2])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // use_ssl
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 5, atoll(row[3])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // default_hostgroup
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 6, atoll(row[4])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // transaction_persistent
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 7, atoll(row[5])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // fast_forward
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 8, atoll(row[6])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // backend
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 9, atoll(row[7])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // frontend
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 10, atoll(row[8])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // max_connections
+		rc = (*proxy_sqlite3_bind_text)(statement1, 11, row[9], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // attributes
+		rc = (*proxy_sqlite3_bind_text)(statement1, 12, row[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // comment
+
+		SAFE_SQLITE3_STEP2(statement1);
+		rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+	}
+}
+
+void update_pgsql_servers(SQLite3_result* resultset) {
+	GloAdmin->admindb->execute(SQLQueries::DELETE_PGSQL_SERVERS);
+	if (resultset == nullptr) {
+		return;
+	}
+
+	const char* q =
+		"INSERT INTO pgsql_servers (hostgroup_id, hostname, port, status, weight, compression, max_connections,"
+		" max_replication_lag, use_ssl, max_latency_ms, comment)"
+		" VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+
+	auto [rc1, statement1_unique] = GloAdmin->admindb->prepare_v2(q);
+	ASSERT_SQLITE_OK(rc1, GloAdmin->admindb);
+	sqlite3_stmt* statement1 = statement1_unique.get();
+	int rc;
+
+	for (auto* row : resultset->rows) {
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 1, atoll(row->fields[0])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 2, row->fields[1] ? row->fields[1] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 3, atoll(row->fields[2])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 4, row->fields[3] ? row->fields[3] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 5, atoll(row->fields[4])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 6, atoll(row->fields[5])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 7, atoll(row->fields[6])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 8, atoll(row->fields[7])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 9, atoll(row->fields[8])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 10, atoll(row->fields[9])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 11, row->fields[10] ? row->fields[10] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+
+		SAFE_SQLITE3_STEP2(statement1);
+		rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+	}
+}
+
+void update_pgsql_replication_hostgroups(SQLite3_result* resultset) {
+	GloAdmin->admindb->execute(SQLQueries::DELETE_PGSQL_REPLICATION_HOSTGROUPS);
+	if (resultset == nullptr) {
+		return;
+	}
+
+	const char* q =
+		"INSERT INTO pgsql_replication_hostgroups (writer_hostgroup, reader_hostgroup, check_type, comment)"
+		" VALUES (?1, ?2, ?3, ?4)";
+
+	auto [rc1, statement1_unique] = GloAdmin->admindb->prepare_v2(q);
+	ASSERT_SQLITE_OK(rc1, GloAdmin->admindb);
+	sqlite3_stmt* statement1 = statement1_unique.get();
+	int rc;
+
+	for (auto* row : resultset->rows) {
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 1, atoll(row->fields[0])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 2, atoll(row->fields[1])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 3, row->fields[2] ? row->fields[2] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 4, row->fields[3] ? row->fields[3] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+
+		SAFE_SQLITE3_STEP2(statement1);
+		rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+	}
+}
+
+void update_pgsql_hostgroup_attributes(SQLite3_result* resultset) {
+	GloAdmin->admindb->execute(SQLQueries::DELETE_PGSQL_HOSTGROUP_ATTRIBUTES);
+	if (resultset == nullptr) {
+		return;
+	}
+
+	const char* q =
+		"INSERT INTO pgsql_hostgroup_attributes ("
+			"hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex,"
+			" connection_warming, throttle_connections_per_sec, ignore_session_variables, hostgroup_settings,"
+			" servers_defaults, comment"
+		") VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+
+	auto [rc1, statement1_unique] = GloAdmin->admindb->prepare_v2(q);
+	ASSERT_SQLITE_OK(rc1, GloAdmin->admindb);
+	sqlite3_stmt* statement1 = statement1_unique.get();
+	int rc;
+
+	for (auto* row : resultset->rows) {
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 1, atoll(row->fields[0])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 2, atoll(row->fields[1])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 3, atoll(row->fields[2])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 4, atoll(row->fields[3])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 5, row->fields[4] ? row->fields[4] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 6, atoll(row->fields[5])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 7, atoll(row->fields[6])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 8, atoll(row->fields[7])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 9, row->fields[8] ? row->fields[8] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 10, row->fields[9] ? row->fields[9] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 11, row->fields[10] ? row->fields[10] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 12, row->fields[11] ? row->fields[11] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+
+		SAFE_SQLITE3_STEP2(statement1);
+		rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+	}
 }
 
 void update_ldap_mappings(MYSQL_RES* result) {
@@ -2743,7 +2881,7 @@ __exit_pull_proxysql_servers_from_peer:
  * 1. Identifies the optimal peer to sync from using get_peer_to_sync_pgsql_users()
  * 2. Establishes a MySQL connection to the peer's admin interface
  * 3. Executes CLUSTER_QUERY_PGSQL_USERS to fetch user configuration
- * 4. Computes checksums for the fetched data using get_mysql_users_checksum()
+ * 4. Computes checksums for the fetched data using PostgreSQL authentication logic
  * 5. Validates checksums match the expected values
  * 6. Loads the users to runtime via init_pgsql_users()
  * 7. Optionally saves configuration to disk if cluster_pgsql_users_save_to_disk is enabled
@@ -2756,11 +2894,10 @@ __exit_pull_proxysql_servers_from_peer:
  *
  * @note This function is thread-safe and reuses the update_mysql_users_mutex
  * @note The function will sleep(1) if the fetch operation fails to prevent busy loops
- * @note Reuses get_mysql_users_checksum() from MySQL users for consistency
  * @see get_peer_to_sync_pgsql_users()
  * @see CLUSTER_QUERY_PGSQL_USERS
  * @see init_pgsql_users()
- * @see get_mysql_users_checksum()
+ * @see get_pgsql_users_checksum()
  */
 void ProxySQL_Cluster::pull_pgsql_users_from_peer(const std::string& expected_checksum, const time_t epoch) {
 	char * hostname = NULL;
@@ -2810,13 +2947,13 @@ void ProxySQL_Cluster::pull_pgsql_users_from_peer(const std::string& expected_ch
 				proxy_info("Cluster: Fetching PostgreSQL Users from peer %s:%d completed\n", hostname, port);
 
 				unique_ptr<SQLite3_result> pgsql_users_resultset { nullptr };
-				const uint64_t users_raw_checksum = get_mysql_users_checksum(pgsql_users_result, nullptr, pgsql_users_resultset);
+				const uint64_t users_raw_checksum = get_pgsql_users_checksum(pgsql_users_result, pgsql_users_resultset);
 				const string computed_checksum { get_checksum_from_hash(users_raw_checksum) };
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Computed checksum for PostgreSQL Users from peer %s:%d : %s\n", hostname, port, computed_checksum.c_str());
 				proxy_info("Cluster: Computed checksum for PostgreSQL Users from peer %s:%d : %s\n", hostname, port, computed_checksum.c_str());
 
 				if (expected_checksum == computed_checksum) {
-					update_mysql_users(pgsql_users_result); // Reuse update_mysql_users for pgsql_users
+					update_pgsql_users(pgsql_users_result);
 					mysql_free_result(pgsql_users_result);
 
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Loading to runtime PostgreSQL Users from peer %s:%d\n", hostname, port);
@@ -3011,7 +3148,7 @@ __exit_pull_pgsql_variables_from_peer:
  * 1. Identifies the optimal peer to sync from using get_peer_to_sync_pgsql_query_rules()
  * 2. Establishes a MySQL connection to the peer's admin interface
  * 3. Executes CLUSTER_QUERY_PGSQL_QUERY_RULES and CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING
- * 4. Computes checksums for the fetched data using mysql_raw_checksum() and SpookyHash
+ * 4. Computes checksums for the fetched data using the same combined resultset hash as runtime loading
  * 5. Validates checksums match the expected values
  * 6. Loads the query rules to runtime via load_pgsql_query_rules_to_runtime()
  * 7. Optionally saves configuration to disk if cluster_pgsql_query_rules_save_to_disk is enabled
@@ -3024,13 +3161,10 @@ __exit_pull_pgsql_variables_from_peer:
  *
  * @note This function is thread-safe and reuses the update_mysql_query_rules_mutex
  * @note The function will sleep(1) if the fetch operation fails to prevent busy loops
- * @note Uses the same checksum computation algorithm as MySQL query rules for consistency
  * @see get_peer_to_sync_pgsql_query_rules()
  * @see CLUSTER_QUERY_PGSQL_QUERY_RULES
  * @see CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING
  * @see load_pgsql_query_rules_to_runtime()
- * @see SpookyHash
- * @see mysql_raw_checksum()
  */
 void ProxySQL_Cluster::pull_pgsql_query_rules_from_peer(const std::string& expected_checksum, const time_t epoch) {
 	char * hostname = NULL;
@@ -3081,23 +3215,25 @@ void ProxySQL_Cluster::pull_pgsql_query_rules_from_peer(const std::string& expec
 				int rc_query_fast = mysql_query(conn, CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING);
 				if (rc_query_fast == 0) {
 					fast_routing_result = mysql_store_result(conn);
+				} else {
+					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching PostgreSQL Query Rules fast routing from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
+					proxy_info("Cluster: Fetching PostgreSQL Query Rules fast routing from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
+					if (query_rules_result) {
+						mysql_free_result(query_rules_result);
+					}
+					metrics.p_counter_array[p_cluster_counter::pulled_pgsql_query_rules_failure]->Increment();
+					fetch_failed = true;
+					goto __exit_pull_pgsql_query_rules_from_peer;
 				}
 
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching PostgreSQL Query Rules from peer %s:%d completed\n", hostname, port);
 				proxy_info("Cluster: Fetching PostgreSQL Query Rules from peer %s:%d completed\n", hostname, port);
 
-				// Compute checksum from the MySQL resultset
-				const uint64_t query_rules_raw_checksum = mysql_raw_checksum(query_rules_result);
-				const uint64_t fast_routing_raw_checksum = fast_routing_result ? mysql_raw_checksum(fast_routing_result) : 0;
+				std::unique_ptr<SQLite3_result> query_rules_resultset { get_SQLite3_resulset(query_rules_result) };
+				std::unique_ptr<SQLite3_result> fast_routing_resultset { get_SQLite3_resulset(fast_routing_result) };
 
-				// Combine both checksums using the same pattern as MySQL query rules
-				SpookyHash myhash {};
-				myhash.Init(19, 3);
-				myhash.Update(&query_rules_raw_checksum, sizeof(query_rules_raw_checksum));
-				myhash.Update(&fast_routing_raw_checksum, sizeof(fast_routing_raw_checksum));
-
-				uint64_t rules_raw_checksum = 0, hash2 = 0;
-				myhash.Final(&rules_raw_checksum, &hash2);
+				const uint64_t rules_raw_checksum =
+					query_rules_resultset->raw_checksum() + fast_routing_resultset->raw_checksum();
 
 				const string computed_checksum { get_checksum_from_hash(rules_raw_checksum) };
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Computed checksum for PostgreSQL Query Rules from peer %s:%d : %s\n", hostname, port, computed_checksum.c_str());
@@ -3105,16 +3241,20 @@ void ProxySQL_Cluster::pull_pgsql_query_rules_from_peer(const std::string& expec
 
 				if (expected_checksum == computed_checksum) {
 					mysql_free_result(query_rules_result);
-					if (fast_routing_result) {
-						mysql_free_result(fast_routing_result);
-					}
+					mysql_free_result(fast_routing_result);
 
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Loading to runtime PostgreSQL Query Rules from peer %s:%d\n", hostname, port);
 					proxy_info("Cluster: Loading to runtime PostgreSQL Query Rules from peer %s:%d\n", hostname, port);
 
-					// For cluster sync, we pass nullptr to let load_pgsql_query_rules_to_runtime fetch from database
-					// This is the same pattern used for other cluster sync operations
-					GloAdmin->load_pgsql_query_rules_to_runtime(nullptr, nullptr, expected_checksum, epoch);
+					pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
+					GloAdmin->load_pgsql_query_rules_to_runtime(
+						query_rules_resultset.release(),
+						fast_routing_resultset.release(),
+						expected_checksum,
+						epoch
+					);
+					GloAdmin->save_pgsql_query_rules_from_runtime(false);
+					GloAdmin->save_pgsql_query_rules_fast_routing_from_runtime(false);
 					if (GloProxyCluster->cluster_pgsql_query_rules_save_to_disk == true) {
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving to disk PostgreSQL Query Rules from peer %s:%d\n", hostname, port);
 						proxy_info("Cluster: Saving to disk PostgreSQL Query Rules from peer %s:%d\n", hostname, port);
@@ -3123,6 +3263,7 @@ void ProxySQL_Cluster::pull_pgsql_query_rules_from_peer(const std::string& expec
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "NOT saving to disk PostgreSQL Query Rules from peer %s:%d\n", hostname, port);
 						proxy_info("Cluster: NOT saving to disk PostgreSQL Query Rules from peer %s:%d\n", hostname, port);
 					}
+					pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
 
 					metrics.p_counter_array[p_cluster_counter::pulled_pgsql_query_rules_success]->Increment();
 				} else {
@@ -3497,6 +3638,9 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 
 					proxy_info("Cluster: Loading to runtime PostgreSQL Servers from peer %s:%d.\n", hostname, port);
 					GloAdmin->pgsql_servers_wrlock();
+					update_pgsql_servers(incoming_pgsql_servers.incoming_pgsql_servers_v2);
+					update_pgsql_replication_hostgroups(incoming_pgsql_servers.incoming_replication_hostgroups);
+					update_pgsql_hostgroup_attributes(incoming_pgsql_servers.incoming_hostgroup_attributes);
 					GloAdmin->load_pgsql_servers_to_runtime(
 						incoming_pgsql_servers,
 						fetch_runtime_pgsql_servers ? expected_runtime_pgsql_server : runtime_pgsql_servers_checksum_t {},

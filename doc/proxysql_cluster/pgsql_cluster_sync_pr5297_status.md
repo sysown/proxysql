@@ -38,14 +38,16 @@ separately.
   mergeability by simulation
 - [x] harden the PostgreSQL TAP follow-up so optional replica validation covers
   `pgsql_servers_v2`, `pgsql_users`, and `pgsql_query_rules`
+- [x] review the branch changes against real two-node behavior instead of only
+  checksum presence and table accessibility
 - [x] write a maintainer-facing status document for PR `#5297`
 - [x] add a module-by-module implementation summary for the PostgreSQL sync
   paths
 - [x] add a non-CI merge checklist to make branch handoff easier
-- [ ] push the local follow-up commits so GitHub reflects the current branch
-  state
-- [ ] run end-to-end PostgreSQL multi-node validation with a real replica
+- [x] run end-to-end PostgreSQL multi-node validation with a real replica
   topology and both `save_to_disk=true` and `save_to_disk=false`
+- [ ] decide whether the long-lived admin-session visibility quirk seen during
+  replica polling needs a dedicated follow-up before merge
 - [ ] get final maintainer review on whether this should merge as one branch or
   be split into smaller follow-ups
 
@@ -176,12 +178,15 @@ Synchronization source:
 
 Checksum behavior:
 
-- the fetched resultset is checksummed with `get_mysql_users_checksum()`
+- the fetched resultset is checksummed with `get_pgsql_users_checksum()`
+- that helper delegates to PostgreSQL authentication runtime checksum logic
 - the resulting hash is compared to the peer checksum before any apply step
 
 Apply behavior:
 
 - the code reuses `update_mysql_users_mutex`
+- accepted rows are written back into the replica `pgsql_users` admin-memory
+  table
 - the accepted resultset is converted to `SQLite3_result`
 - `GloAdmin->init_pgsql_users(..., expected_checksum, epoch)` loads the runtime
   PostgreSQL users state
@@ -225,14 +230,18 @@ Synchronization source:
 Checksum behavior:
 
 - both resultsets are fetched
-- each resultset gets a raw checksum
-- those raw checksums are combined with `SpookyHash`
+- both resultsets are converted to `SQLite3_result`
+- the raw checksums of those converted resultsets are summed using the same
+  runtime-facing representation that the loader consumes
 - the final combined checksum must match the peer checksum before apply
 
 Apply behavior:
 
 - the code reuses `update_mysql_query_rules_mutex`
-- the loader path is `GloAdmin->load_pgsql_query_rules_to_runtime(nullptr, nullptr, expected_checksum, epoch)`
+- the fetched query-rules and fast-routing resultsets are passed directly into
+  `GloAdmin->load_pgsql_query_rules_to_runtime(...)`
+- after runtime loading, the branch writes runtime state back into the replica
+  `pgsql_query_rules` and `pgsql_query_rules_fast_routing` admin-memory tables
 - when `cluster_pgsql_query_rules_save_to_disk` is enabled, the branch calls
   `flush_GENERIC__from_to("pgsql_query_rules", "memory_to_disk")`
 
@@ -281,6 +290,10 @@ Apply behavior:
 
 - the code reuses `update_mysql_servers_v2_mutex`
 - resultsets are converted with `convert_pgsql_servers_resultsets(...)`
+- before runtime load, the replica admin-memory tables are updated for:
+  - `pgsql_servers`
+  - `pgsql_replication_hostgroups`
+  - `pgsql_hostgroup_attributes`
 - `GloAdmin->load_pgsql_servers_to_runtime(...)` applies:
   - `pgsql_servers_v2`
   - `pgsql_replication_hostgroups`
@@ -324,6 +337,18 @@ feedback and reproducible defects. Examples include:
 By February 23, 2026, the branch had already gone through several rounds of
 review cleanup rather than remaining in its original implementation shape.
 
+The additional March 18, 2026 local validation also exposed and fixed a real
+branch bug that was not just a test issue:
+
+- the data-driven variable-sync dispatcher passed `"pgsql_variables"` into
+  `pull_global_variables_from_peer()`, but that shared function only accepted
+  `"pgsql"`
+- the same refactor also used `"ldap_variables"` instead of `"ldap"`
+- in a real two-node run, changing a PostgreSQL variable caused the replica to
+  abort on an assertion
+- the local fix was to restore the short dispatcher keys expected by the shared
+  variable pull path
+
 ## TAP And Build Work
 
 The branch includes two separate testing/build-related efforts.
@@ -357,6 +382,78 @@ builds. A local follow-up also resolves the `v3.0` merge conflict in this file
 while keeping the stale-archive workaround in a separate helper rule so the
 branch remains mergeable into `v3.0`.
 
+## Multi-Node Validation Plan And Results
+
+On 2026-03-18 the branch was validated locally with a real two-node ProxySQL
+topology, not just unit-style compilation checks.
+
+Validation plan:
+
+1. Build the current source tree with `make build_src -j2`.
+2. Build the PostgreSQL cluster-sync TAP binary.
+3. Run the TAP two-node case with `cluster_pgsql_*_save_to_disk=false`.
+4. Run the TAP two-node case with `cluster_pgsql_*_save_to_disk=true`.
+5. Run manual two-node mutation checks for:
+   - `pgsql_servers`
+   - `pgsql_replication_hostgroups`
+   - `pgsql_hostgroup_attributes`
+   - one real PostgreSQL variable
+6. Confirm replica runtime, replica admin-memory, and when enabled replica
+   disk-table state.
+
+Observed results after the latest local fixes:
+
+- source build succeeded
+- PostgreSQL cluster-sync TAP passed with `save_to_disk=false`
+- PostgreSQL cluster-sync TAP passed with `save_to_disk=true`
+- manual two-node validation passed with `save_to_disk=false`
+- manual two-node validation passed with `save_to_disk=true`
+
+What the manual run added beyond the TAP file:
+
+- it verified that `pgsql_replication_hostgroups` moved with the server sync
+  path
+- it verified that `pgsql_hostgroup_attributes` moved with the server sync path
+- it verified that changing a PostgreSQL variable on the primary caused a real
+  cluster pull on the replica
+- it exposed the variable-sync dispatcher crash described above
+
+## MySQL Parity Assessment
+
+Parity with MySQL should be judged by behavioral guarantees, not by identical
+table count. MySQL has several server-related modules that do not have a
+PostgreSQL counterpart.
+
+Behavior that is now acceptably aligned for the PostgreSQL modules that do
+exist:
+
+- `pgsql_users`: runtime checksum source, admin-memory update, runtime load,
+  optional disk persistence
+- `pgsql_query_rules`: combined rules plus fast-routing checksum, runtime load,
+  admin-memory update, optional disk persistence
+- `pgsql_servers_v2`: combined checksum across server rows and dependent
+  topology tables, admin-memory update, runtime load, optional disk persistence
+- `pgsql_variables`: shared cluster variable pull model with PostgreSQL-specific
+  checksum and interface filtering
+
+Intentional non-parity with MySQL:
+
+- no PostgreSQL equivalent for MySQL-only modules such as
+  `mysql_group_replication_hostgroups`, `mysql_galera_hostgroups`,
+  `mysql_aws_aurora_hostgroups`, or `mysql_servers_ssl_params`
+- no PostgreSQL equivalent for MySQL-only user fields such as
+  `default_schema` and `schema_locked`
+
+Residual caveat:
+
+- during replica polling, a long-lived admin session did not reliably observe
+  synced PostgreSQL rows, while fresh admin sessions and the manual harness did
+  observe them
+- the current TAP follow-up uses fresh replica admin sessions for polling, so
+  the test asserts the externally observable state that new admin clients see
+- this looks like a real visibility quirk worth understanding better, but it is
+  separate from the correctness of the underlying cluster-sync apply path
+
 ## Why The Branch Is Not Finished Yet
 
 Even though the implementation is broad and many review items were already
@@ -367,8 +464,9 @@ Reasons:
 - the PR is still open
 - GitHub still marks it `DIRTY`
 - GitHub still requires review
-- the local follow-up commits that improve mergeability and TAP validation have
-  not yet been pushed
+- the latest local fixes and validation results are not yet reflected on GitHub
+- there is still one observed admin-session visibility quirk that has not been
+  root-caused
 
 Separately, local validation in this workspace is limited by missing vendored
 dependencies, so not every verification step can be reproduced here.
@@ -377,11 +475,11 @@ dependencies, so not every verification step can be reproduced here.
 
 Before this branch should be considered complete, the following should happen:
 
-1. Push the local follow-up commits so the branch on GitHub matches the working
-   tree used for current analysis.
-2. Re-check mergeability into `v3.0` after the latest follow-up is pushed.
-3. Run end-to-end PostgreSQL cluster-sync validation in an environment with the
-   required dependencies and replica topology available.
+1. Decide whether the long-lived admin-session visibility quirk needs a code
+   fix or only a documented test expectation.
+2. Push the local follow-up commits when explicitly requested so the branch on
+   GitHub matches the working tree used for current analysis.
+3. Re-check mergeability into `v3.0` after the latest follow-up is pushed.
 4. Get another maintainer review now that the branch has both feature work and
    refactoring work.
 
@@ -390,18 +488,19 @@ Before this branch should be considered complete, the following should happen:
 Use this list when finishing the branch, ignoring the unrelated CI breakage that
 is being handled in parallel:
 
-1. Push the local follow-up commits.
-2. Confirm the branch merges cleanly into `v3.0`.
-3. Verify PostgreSQL sync for:
+1. Confirm whether the admin-session visibility quirk needs a follow-up patch.
+2. Push the local follow-up commits when explicitly requested.
+3. Confirm the branch merges cleanly into `v3.0`.
+4. Verify PostgreSQL sync for:
    - `pgsql_users`
    - `pgsql_query_rules`
    - `pgsql_servers_v2`
    - `runtime_pgsql_servers`
    - `pgsql_variables`
-4. Verify both `save_to_disk=true` and `save_to_disk=false` behaviors.
-5. Verify `checksum_pgsql_variables=false` disables all PostgreSQL
+5. Verify both `save_to_disk=true` and `save_to_disk=false` behaviors.
+6. Verify `checksum_pgsql_variables=false` disables all PostgreSQL
    `*_diffs_before_sync` triggers.
-6. Re-read the TAP test and Makefile diffs and confirm the branch still carries
+7. Re-read the TAP test and Makefile diffs and confirm the branch still carries
    the intended local fixes after the final rebase or merge refresh.
 
 ## Bottom Line

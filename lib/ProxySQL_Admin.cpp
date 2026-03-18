@@ -1500,7 +1500,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 					runtime_mysql_ldap_mapping=true; refresh=true;
 				}
 				if (strstr(query_no_space, "runtime_pgsql_ldap_mapping")) {
-					runtime_mysql_ldap_mapping = true; refresh = true;
+					runtime_pgsql_ldap_mapping = true; refresh = true;
 				}
 			}
 			if (strstr(query_no_space,"runtime_mysql_query_rules")) {

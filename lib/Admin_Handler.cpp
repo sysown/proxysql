@@ -3340,6 +3340,53 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		}
 	}
 
+	if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
+		string tn = "";
+		if (!strncasecmp(CLUSTER_QUERY_RUNTIME_PGSQL_SERVERS, query_no_space, strlen(CLUSTER_QUERY_RUNTIME_PGSQL_SERVERS))) {
+			tn = "cluster_pgsql_servers";
+		} else if (!strncasecmp(CLUSTER_QUERY_PGSQL_REPLICATION_HOSTGROUPS, query_no_space, strlen(CLUSTER_QUERY_PGSQL_REPLICATION_HOSTGROUPS))) {
+			tn = "pgsql_replication_hostgroups";
+		} else if (!strncasecmp(CLUSTER_QUERY_PGSQL_HOSTGROUP_ATTRIBUTES, query_no_space, strlen(CLUSTER_QUERY_PGSQL_HOSTGROUP_ATTRIBUTES))) {
+			tn = "pgsql_hostgroup_attributes";
+		} else if (!strncasecmp(CLUSTER_QUERY_PGSQL_SERVERS_V2, query_no_space, strlen(CLUSTER_QUERY_PGSQL_SERVERS_V2))) {
+			tn = "pgsql_servers_v2";
+		}
+		if (tn != "") {
+			GloAdmin->pgsql_servers_wrlock();
+			resultset = PgHGM->get_current_pgsql_table(tn);
+			GloAdmin->pgsql_servers_wrunlock();
+
+			if (resultset == nullptr) {
+				if (tn == "pgsql_servers_v2") {
+					const string query_empty_resultset {
+						string { PGHGM_GEN_CLUSTER_ADMIN_PGSQL_SERVERS } + " LIMIT 0"
+					};
+
+					char* error = NULL;
+					int cols = 0;
+					int affected_rows = 0;
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
+					GloAdmin->pgsql_servers_wrlock();
+					GloAdmin->admindb->execute_statement(query_empty_resultset.c_str(), &error, &cols, &affected_rows, &resultset);
+					GloAdmin->pgsql_servers_wrunlock();
+				} else {
+					resultset = PgHGM->dump_table_pgsql(tn);
+				}
+
+				if (resultset) {
+					sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+					delete resultset;
+					run_query = false;
+					goto __run_query;
+				}
+			} else {
+				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+				run_query = false;
+				goto __run_query;
+			}
+		}
+	}
+
 	if (!strncasecmp(CLUSTER_QUERY_MYSQL_USERS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_USERS))) {
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) {
 			pthread_mutex_lock(&users_mutex);
@@ -3348,6 +3395,19 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			if (resultset != nullptr) {
 				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
 				run_query=false;
+				goto __run_query;
+			}
+		}
+	}
+
+	if (!strncasecmp(CLUSTER_QUERY_PGSQL_USERS, query_no_space, strlen(CLUSTER_QUERY_PGSQL_USERS))) {
+		if (sess->session_type == PROXYSQL_SESSION_ADMIN) {
+			pthread_mutex_lock(&users_mutex);
+			resultset = GloPgAuth->get_current_pgsql_users();
+			pthread_mutex_unlock(&users_mutex);
+			if (resultset != nullptr) {
+				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+				run_query = false;
 				goto __run_query;
 			}
 		}
@@ -3393,6 +3453,69 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 				run_query=false;
 				goto __run_query;
 			}
+		}
+	}
+
+	if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
+		if (!strncasecmp(CLUSTER_QUERY_PGSQL_QUERY_RULES, query_no_space, strlen(CLUSTER_QUERY_PGSQL_QUERY_RULES))) {
+			GloPgQPro->wrlock();
+			resultset = GloPgQPro->get_current_query_rules_inner();
+			if (resultset == NULL) {
+				GloPgQPro->wrunlock(); // unlock first
+				resultset = GloPgQPro->get_current_query_rules();
+				if (resultset) {
+					sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+					delete resultset;
+					run_query = false;
+					goto __run_query;
+				}
+			} else {
+				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+				// DO NOT DELETE: this is the inner resultset of Query_Processor
+				GloPgQPro->wrunlock();
+				run_query = false;
+				goto __run_query;
+			}
+		}
+		if (!strncasecmp(CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING, query_no_space, strlen(CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING))) {
+			GloPgQPro->wrlock();
+			resultset = GloPgQPro->get_current_query_rules_fast_routing_inner();
+			if (resultset == NULL) {
+				GloPgQPro->wrunlock(); // unlock first
+				resultset = GloPgQPro->get_current_query_rules_fast_routing();
+				if (resultset) {
+					sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+					delete resultset;
+					run_query = false;
+					goto __run_query;
+				}
+			} else {
+				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+				// DO NOT DELETE: this is the inner resultset of Query_Processor
+				GloPgQPro->wrunlock();
+				run_query = false;
+				goto __run_query;
+			}
+		}
+	}
+
+	if (!strncasecmp(CLUSTER_QUERY_PGSQL_VARIABLES, query_no_space, strlen(CLUSTER_QUERY_PGSQL_VARIABLES))) {
+		if (sess->session_type == PROXYSQL_SESSION_ADMIN) {
+			pthread_mutex_lock(&GloVars.checksum_mutex);
+			GloAdmin->flush_pgsql_variables___runtime_to_database(GloAdmin->admindb, false, false, false, true, true);
+			pthread_mutex_unlock(&GloVars.checksum_mutex);
+
+			l_free(query_length, query);
+			string q {
+				"SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'pgsql-%'"
+			};
+			if (GloVars.cluster_sync_interfaces == false) {
+				q += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_PGSQL);
+			}
+			q += " ORDER BY variable_name";
+			query = l_strdup(q.c_str());
+			query_length = strlen(query) + 1;
+			goto __run_query;
 		}
 	}
 
