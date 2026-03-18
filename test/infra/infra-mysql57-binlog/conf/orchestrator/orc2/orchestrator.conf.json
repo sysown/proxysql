@@ -1,19 +1,18 @@
 {
   "Debug": true,
   "ListenAddress": ":3000",
-  "MySQLTopologySSLSkipVerify": true,
   "MySQLTopologyUser": "root",
-  "MySQLTopologyPassword": "c210a90608",
+  "MySQLTopologyPassword": "4db50d05d6",
   "BackendDB": "sqlite",
   "SQLite3DataFile": "/var/lib/orchestrator/orchestrator.db",
   "RaftEnabled": true,
   "RaftDataDir": "/var/lib/orchestrator/",
-  "RaftBind": "orc2.infra-mysql57",
+  "RaftBind": "orc2.infra-mysql57-binlog",
   "DefaultRaftPort": 10008,
   "RaftNodes": [
-    "orc1.infra-mysql57",
-    "orc2.infra-mysql57",
-    "orc3.infra-mysql57"
+    "orc1.infra-mysql57-binlog",
+    "orc2.infra-mysql57-binlog",
+    "orc3.infra-mysql57-binlog"
   ],
   "ApplyMySQLPromotionAfterMasterFailover": true,
   "HostnameResolveMethod": "default",

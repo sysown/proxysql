@@ -202,6 +202,14 @@ void * my_conn_thread(void *arg) {
 		json proxysql_vars;
 		queryInternalStatus(mysql, proxysql_vars, paddress);
 
+		// Log connection info with client ID for tracking
+		pthread_t self = pthread_self();
+		fprintf(stderr, "[tid=%lu] conn_idx=%d, mysql=%p, thread_id=%lu, query=%d, cmd='%s'\n",
+			self, r1, mysql, mysql->thread_id, j, testCases[r2].command.c_str());
+		fprintf(stderr, "[tid=%lu] expected_vars: %s\n", self, vars.dump().c_str());
+		fprintf(stderr, "[tid=%lu] mysql_vars: %s\n", self, mysql_vars.dump().c_str());
+		fprintf(stderr, "[tid=%lu] proxysql_vars[conn]: %s\n", self, proxysql_vars["conn"].dump().c_str());
+
 		if (!testCases[r2].reset_vars.empty()) {
 			for (const auto& var : testCases[r2].reset_vars) {
 				if (std::find(forgotten_vars.begin(), forgotten_vars.end(), var) == forgotten_vars.end()) {
@@ -282,6 +290,8 @@ void * my_conn_thread(void *arg) {
 				variables_tested++;
 			}
 		}
+		// Save vars back to varsperconn for connection state tracking
+		varsperconn[r1] = vars;
 		{
 			std::lock_guard<std::mutex> lock(mtx_);
 			ok(testPassed, "mysql connection [%p], thread_id [%lu], variables_tested [%d], command [%s]", mysql, mysql->thread_id, variables_tested, testCases[r2].command.c_str());

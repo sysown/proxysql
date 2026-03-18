@@ -48,6 +48,7 @@ if [ -n "${DEFAULT_PGSQL_INFRA}" ]; then
 fi
 
 export DOCKER_MODE="compose-dns"
+export PROXY_CONTAINER="proxysql.${INFRA_ID}"
 export REGULAR_INFRA_DATADIR="/var/lib/proxysql"
 export TESTS_LOGS_PATH="${WORKSPACE}/ci_infra_logs/${INFRA_ID}/tests"
 
