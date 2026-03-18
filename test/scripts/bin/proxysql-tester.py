@@ -700,7 +700,7 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
             for fo_num, fo_cmd in enumerate(tap_tests):
 
                 # omitted from groups.json (only check if groups.json has content and TAP_GROUP is not set or group has tests)
-                                if groups and (not TAP_GROUP or group_has_tests) and os.path.basename(fo_cmd) not in groups:
+                if groups and (not TAP_GROUP or group_has_tests) and os.path.basename(fo_cmd) not in groups:
                     log.debug(f"{TAP} test {fo_num+1}/{len(tap_tests)} '{os.path.basename(fo_cmd)}' omitted.")
                     log.debug(f"omitted: not present in groups.json: '{os.path.realpath(fo_cmd)}'")
                     summary.append((fo_cmd, None))
