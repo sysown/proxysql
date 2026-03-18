@@ -241,6 +241,18 @@ void queryInternalStatus(MYSQL *mysql, json& j, std::string& paddress) {
 		__sync_fetch_and_add(&g_select_OK,1);
 	}
 
+	// DEBUG: Log session_track_gtids from internal session
+	if (j.find("conn") != j.end()) {
+		if (j["conn"].find("session_track_gtids") != j["conn"].end()) {
+			fprintf(stderr, "[DEBUG] queryInternalStatus: conn.session_track_gtids = %s\n",
+				j["conn"]["session_track_gtids"].dump().c_str());
+		} else {
+			fprintf(stderr, "[DEBUG] queryInternalStatus: conn.session_track_gtids NOT FOUND in 'conn' object\n");
+		}
+	} else {
+		fprintf(stderr, "[DEBUG] queryInternalStatus: 'conn' object NOT FOUND in JSON\n");
+	}
+
 	std::vector<std::string> bools_variables = {
 		"sql_auto_is_null",
 		"sql_safe_updates",
@@ -452,12 +464,22 @@ void queryInternalStatus(MYSQL *mysql, json& j, std::string& paddress) {
 bool check_session_track_gtids(const std::string& expVal, const std::string& sVal, const std::string& mVal) {
 	bool res = false;
 
+	fprintf(stderr, "[DEBUG] check_session_track_gtids: expVal='%s', sVal='%s', mVal='%s'\n",
+		expVal.c_str(), sVal.c_str(), mVal.c_str());
+
 	if (expVal == "OFF") {
 		res = expVal == sVal;
+		fprintf(stderr, "[DEBUG] check_session_track_gtids: expVal=OFF, sVal='%s', res=%s\n",
+			sVal.c_str(), res ? "true" : "false");
 	} else if (expVal == "OWN_GTID" && (sVal == mVal && sVal == "OWN_GTID")) {
 		res = true;
+		fprintf(stderr, "[DEBUG] check_session_track_gtids: expVal=OWN_GTID matched, res=true\n");
 	} else if (expVal == "ALL_GTIDS" && (sVal == mVal && sVal == "OWN_GTID")) {
 		res = true;
+		fprintf(stderr, "[DEBUG] check_session_track_gtids: expVal=ALL_GTIDS matched, res=true\n");
+	} else {
+		fprintf(stderr, "[DEBUG] check_session_track_gtids: NO MATCH - expVal='%s', sVal='%s', mVal='%s', res=false\n",
+			expVal.c_str(), sVal.c_str(), mVal.c_str());
 	}
 
 	return res;

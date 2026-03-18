@@ -111,7 +111,14 @@ void * my_conn_thread(void *arg) {
 
 		if (j%queries_per_connections==0) {
 			mysql=mysqlconns[r1];
+			fprintf(stderr, "[DEBUG] Connection SWITCH at j=%d: r1=%d, mysql=%p, varsperconn[%d] size=%zu\n",
+				j, r1, mysql, r1, varsperconn[r1].size());
 			vars = varsperconn[r1];
+			fprintf(stderr, "[DEBUG] vars after assignment from varsperconn[%d]: %s\n",
+				r1, vars.dump().c_str());
+		} else {
+			fprintf(stderr, "[DEBUG] Connection REUSE at j=%d: r1=%d (no switch, queries_per_connections=%d, j%%qpc=%d)\n",
+				j, r1, queries_per_connections, j%queries_per_connections);
 		}
 		if (multi_users || strcmp(username,(char *)"root")) {
 			if (strstr(testCases[r2].command.c_str(),"database")) {
@@ -144,7 +151,10 @@ void * my_conn_thread(void *arg) {
 			}
 		}
 
+		fprintf(stderr, "[DEBUG] Updating expected vars from test case %d: r2=%d, command='%s'\n",
+			j, r2, testCases[r2].command.c_str());
 		for (auto& el : testCases[r2].expected_vars.items()) {
+			fprintf(stderr, "[DEBUG]   Updating var: %s = %s\n", el.key().c_str(), el.value().dump().c_str());
 			if (el.key() == "transaction_isolation") {
 				if (is_mariadb) {
 					vars["tx_isolation"] = el.value();
@@ -156,6 +166,7 @@ void * my_conn_thread(void *arg) {
 			else if (el.key() == "session_track_gtids") {
 				if (!is_mariadb) {
 					vars[el.key()] = el.value();
+					fprintf(stderr, "[DEBUG]   SET session_track_gtids in vars: %s\n", el.value().dump().c_str());
 				}
 			}
 			else if (el.key() == "wsrep_sync_wait") {
@@ -202,6 +213,24 @@ void * my_conn_thread(void *arg) {
 		json proxysql_vars;
 		queryInternalStatus(mysql, proxysql_vars, paddress);
 
+		// DEBUG: Log connection info and session_track_gtids status
+		fprintf(stderr, "[DEBUG] Test loop: j=%d, mysql=%p, thread_id=%lu, command='%s'\n",
+			j, mysql, mysql->thread_id, testCases[r2].command.c_str());
+		fprintf(stderr, "[DEBUG] Expected vars: %s\n", vars.dump().c_str());
+		if (mysql_vars.find("session_track_gtids") != mysql_vars.end()) {
+			fprintf(stderr, "[DEBUG] MySQL session_track_gtids: %s\n",
+				mysql_vars["session_track_gtids"].dump().c_str());
+		} else {
+			fprintf(stderr, "[DEBUG] MySQL session_track_gtids: NOT FOUND\n");
+		}
+		if (proxysql_vars.find("conn") != proxysql_vars.end() &&
+		    proxysql_vars["conn"].find("session_track_gtids") != proxysql_vars["conn"].end()) {
+			fprintf(stderr, "[DEBUG] ProxySQL session_track_gtids: %s\n",
+				proxysql_vars["conn"]["session_track_gtids"].dump().c_str());
+		} else {
+			fprintf(stderr, "[DEBUG] ProxySQL session_track_gtids: NOT FOUND\n");
+		}
+
 		if (!testCases[r2].reset_vars.empty()) {
 			for (const auto& var : testCases[r2].reset_vars) {
 				if (std::find(forgotten_vars.begin(), forgotten_vars.end(), var) == forgotten_vars.end()) {
@@ -212,9 +241,18 @@ void * my_conn_thread(void *arg) {
 
 		bool testPassed = true;
 		int variables_tested = 0;
+		fprintf(stderr, "[DEBUG] Starting variable comparison loop, vars.size()=%zu\n", vars.size());
 		for (auto& el : vars.items()) {
 			auto k = mysql_vars.find(el.key());
 			auto s = proxysql_vars["conn"].find(el.key());
+
+			// DEBUG: Log session_track_gtids specifically
+			if (el.key() == "session_track_gtids") {
+				fprintf(stderr, "[DEBUG] session_track_gtids comparison: expected='%s', mysql='%s', proxysql='%s'\n",
+					el.value().dump().c_str(),
+					k != mysql_vars.end() ? k.value().dump().c_str() : "NOT_FOUND",
+					s != proxysql_vars["conn"].end() ? s.value().dump().c_str() : "NOT_FOUND");
+			}
 
 			if (std::find(forgotten_vars.begin(), forgotten_vars.end(), el.key()) != forgotten_vars.end()) {
 				continue;
@@ -282,10 +320,25 @@ void * my_conn_thread(void *arg) {
 				variables_tested++;
 			}
 		}
+		// DEBUG: Log vars state after comparison
+		fprintf(stderr, "[DEBUG] After comparison: vars now contains: %s\n", vars.dump().c_str());
+		// CRITICAL DEBUG: Save vars back to varsperconn BEFORE next iteration
+		// This is the bug! The original code never saved vars back to varsperconn
+		fprintf(stderr, "[DEBUG] SAVING vars back to varsperconn[%d]: %s\n", r1, vars.dump().c_str());
+		varsperconn[r1] = vars;
+		// DEBUG: Check if vars would be lost on next connection switch
+		if ((j+1)%queries_per_connections==0) {
+			fprintf(stderr, "[DEBUG] Next iteration will SWITCH connection - vars was saved to varsperconn[%d]\n", r1);
+		}
 		{
 			std::lock_guard<std::mutex> lock(mtx_);
 			ok(testPassed, "mysql connection [%p], thread_id [%lu], variables_tested [%d], command [%s]", mysql, mysql->thread_id, variables_tested, testCases[r2].command.c_str());
 		}
+	}
+	// DEBUG: At end of thread, show varsperconn state
+	fprintf(stderr, "[DEBUG] Thread ending, dumping varsperconn state:\n");
+	for (int i = 0; i < count; i++) {
+		fprintf(stderr, "[DEBUG] varsperconn[%d]: %s\n", i, varsperconn[i].dump().c_str());
 	}
 	__sync_fetch_and_add(&query_phase_completed,1);
 
