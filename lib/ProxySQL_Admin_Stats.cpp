@@ -2879,7 +2879,7 @@ static std::string asn1_time_to_iso8601(const ASN1_TIME *asn1t) {
 // Helper: get CN from X509_NAME
 static std::string x509_name_cn(X509_NAME *name) {
 	if (!name) return "";
-	char buf[256] = {};
+	char buf[1024] = {};
 	if (X509_NAME_get_text_by_NID(name, NID_commonName, buf, sizeof(buf)) < 0)
 		return "";
 	return std::string(buf);
@@ -2931,7 +2931,9 @@ static void insert_tls_cert_row(
 	int pday = 0;
 	{
 		int psec = 0;
-		ASN1_TIME_diff(&pday, &psec, NULL, X509_get0_notAfter(cert));
+		if (!ASN1_TIME_diff(&pday, &psec, NULL, X509_get0_notAfter(cert))) {
+			pday = 0; // on error, default to 0 (treat as expiring today)
+		}
 	}
 	int days_until_expiry = pday;
 
@@ -2987,33 +2989,23 @@ void ProxySQL_Admin::stats___tls_certificates() {
 	ASSERT_SQLITE_OK(rc, statsdb);
 	sqlite3_stmt *stmt = u_stmt.get();
 
-	// Process server certificate
-	if (cert_file) {
-		BIO *bio = BIO_new_file(cert_file, "r");
+	// Helper lambda: read a PEM cert from file and insert a row into stats_tls_certificates
+	auto process_cert = [&](const char *cert_type, char *file_path) {
+		if (!file_path) return;
+		BIO *bio = BIO_new_file(file_path, "r");
 		if (bio) {
 			X509 *cert = PEM_read_bio_X509(bio, NULL, NULL, NULL);
 			BIO_free_all(bio);
 			if (cert) {
-				insert_tls_cert_row(statsdb, stmt, "server", cert_file, cert, loaded_at);
+				insert_tls_cert_row(statsdb, stmt, cert_type, file_path, cert, loaded_at);
 				X509_free(cert);
 			}
 		}
-		free(cert_file);
-	}
+		free(file_path);
+	};
 
-	// Process CA certificate
-	if (ca_file) {
-		BIO *bio = BIO_new_file(ca_file, "r");
-		if (bio) {
-			X509 *cert = PEM_read_bio_X509(bio, NULL, NULL, NULL);
-			BIO_free_all(bio);
-			if (cert) {
-				insert_tls_cert_row(statsdb, stmt, "ca", ca_file, cert, loaded_at);
-				X509_free(cert);
-			}
-		}
-		free(ca_file);
-	}
+	process_cert("server", cert_file);
+	process_cert("ca", ca_file);
 
 	statsdb->execute("COMMIT");
 }

@@ -408,9 +408,12 @@ int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg) {
 		SSL_CTX_set_session_cache_mode(GloVars.global.ssl_ctx, SSL_SESS_CACHE_OFF);
 
 		// Store TLS file paths and tracking info for stats table (no lock needed during bootstrap)
-		GloVars.global.tls_key_file = ssl_key_fp;
-		GloVars.global.tls_cert_file = ssl_cert_fp;
-		GloVars.global.tls_ca_file = ssl_ca_fp;
+		free(GloVars.global.tls_key_file);
+		GloVars.global.tls_key_file = ssl_key_fp ? strdup(ssl_key_fp) : NULL;
+		free(GloVars.global.tls_cert_file);
+		GloVars.global.tls_cert_file = ssl_cert_fp ? strdup(ssl_cert_fp) : NULL;
+		free(GloVars.global.tls_ca_file);
+		GloVars.global.tls_ca_file = ssl_ca_fp ? strdup(ssl_ca_fp) : NULL;
 		GloVars.global.tls_load_count++;
 		GloVars.global.tls_last_load_timestamp = time(NULL);
 		GloVars.global.tls_last_load_ok = true;
