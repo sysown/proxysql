@@ -12,11 +12,13 @@ IDIRS :=	-I$(PROXYSQL_IDIR) \
 			-I${CURL_IDIR} \
 			-I${SQLITE3_IDIR} \
 			-I$(DOTENV_IDIR) \
+			-I$(POSTGRESQL_IDIR) \
 			-I$(RE2_IDIR)
 
 
 LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
 
+AR ?= ar
 
 OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed $(WASAN)
 
@@ -26,21 +28,21 @@ OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed $(WASAN)
 # being used inside ProxySQL linked 'SQLite3', which is also used by `libtap.so`.
 LWGCOV :=
 ifeq ($(WITHGCOV),1)
-	LWGCOV := -lgcov
+	LWGCOV := -lgcov --coverage
 endif
 
 
 ### main targets
 
-.PHONY: default
+.PHONY: default debug
 default: all
 
-.PHONY: all
+.PHONY: all debug
 all: libtap_mariadb.a libtap_mysql57.a libtap_mysql8.a \
-	libtap.so libcpp_dotenv.so libre2.so
+	libtap.a libtap.so libcpp_dotenv.so libre2.so
 
 debug: OPT := $(STDCPP) -O0 -DDEBUG -ggdb -Wl,--no-as-needed $(WASAN)
-debug: libtap_mariadb.a libtap_mysql57.a libtap_mysql8.a libtap.so
+debug: libtap_mariadb.a libtap_mysql57.a libtap_mysql8.a libtap.a libtap.so
 
 ### helper targets
 
@@ -62,20 +64,20 @@ tap.o: tap.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so -lssl -lc
 mcp_client.o: mcp_client.cpp mcp_client.h libcurl.so
 	$(CXX) -fPIC -c mcp_client.cpp $(IDIRS) $(OPT)
 
-libtap_mariadb.a: Makefile tap.o command_line.o utils_mariadb.o mcp_client.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
-	rm -f $@
-	ar rcs libtap_mariadb.a tap.o command_line.o utils_mariadb.o mcp_client.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
+libtap_mariadb.a: tap.o command_line.o utils_mariadb.o noise_utils_mariadb.o mcp_client.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
+	$(AR) rcs libtap_mariadb.a tap.o command_line.o utils_mariadb.o noise_utils_mariadb.o mcp_client.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
 
-libtap_mysql57.a: Makefile tap.o command_line.o utils_mysql57.o mcp_client.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
-	rm -f $@
-	ar rcs libtap_mysql57.a tap.o command_line.o utils_mysql57.o mcp_client.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
+libtap_mysql57.a: tap.o command_line.o utils_mysql57.o noise_utils_mysql57.o mcp_client.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
+	$(AR) rcs libtap_mysql57.a tap.o command_line.o utils_mysql57.o noise_utils_mysql57.o mcp_client.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
 
-libtap_mysql8.a: Makefile tap.o command_line.o utils_mysql8.o mcp_client.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
-	rm -f $@
-	ar rcs libtap_mysql8.a tap.o command_line.o utils_mysql8.o mcp_client.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
+libtap_mysql8.a: tap.o command_line.o utils_mysql8.o noise_utils_mysql8.o mcp_client.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
+	$(AR) rcs libtap_mysql8.a tap.o command_line.o utils_mysql8.o noise_utils_mysql8.o mcp_client.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
+
+libtap.a: libtap_mariadb.a
+	cp libtap_mariadb.a libtap.a
 
 libtap.so: libtap_mariadb.a cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so libre2.so
-	$(CXX) -shared -o libtap.so -Wl,--whole-archive libtap_mariadb.a -Wl,--no-whole-archive $(LWGCOV)
+	$(CXX) -shared -o libtap.so -Wl,--whole-archive libtap_mariadb.a -Wl,--no-whole-archive -L$(POSTGRESQL_PATH)/interfaces/libpq -lpq -L$(RE2_LDIR)/so -lre2 -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/libpq -Wl,-rpath,$(RE2_LDIR)/so $(LWGCOV)
 
 
 ### tap deps targets
@@ -95,7 +97,7 @@ cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a:
 	cd cpp-dotenv/static/cpp-dotenv && patch src/dotenv.cpp < ../../dotenv.cpp.patch
 	cd cpp-dotenv/static/cpp-dotenv && patch include/dotenv.h < ../../dotenv.h.patch
 	cd cpp-dotenv/static/cpp-dotenv && patch -p0 < ../../nm_clang_fix.patch
-	cd cpp-dotenv/static/cpp-dotenv && cmake . -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_BUILD_TYPE=Debug
+	cd cpp-dotenv/static/cpp-dotenv && cmake . -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 	cd cpp-dotenv/static/cpp-dotenv && CC=${CC} CXX=${CXX} ${MAKE}
 
 cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so:
@@ -104,7 +106,7 @@ cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so:
 	cd cpp-dotenv/dynamic/cpp-dotenv && patch src/dotenv.cpp < ../../dotenv.cpp.patch
 	cd cpp-dotenv/dynamic/cpp-dotenv && patch include/dotenv.h < ../../dotenv.h.patch
 	cd cpp-dotenv/dynamic/cpp-dotenv && patch -p0 < ../../nm_clang_fix.patch
-	cd cpp-dotenv/dynamic/cpp-dotenv && cmake . -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_RPATH="../tap:../../tap" -DCMAKE_BUILD_TYPE=Debug
+	cd cpp-dotenv/dynamic/cpp-dotenv && cmake . -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_RPATH="../tap:../../tap" -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 	cd cpp-dotenv/dynamic/cpp-dotenv && CC=${CC} CXX=${CXX} ${MAKE}
 
 
@@ -113,8 +115,9 @@ cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so:
 .SILENT: clean_utils
 .PHONY: clean_utils
 clean_utils:
-	find . -name 'utils_*.*' -delete || true
-	find . -name 'libtap_*.*' -delete || true
+	find . -name 'utils_*.o' -delete || true
+	find . -name 'noise_utils_*.o' -delete || true
+	find . -name 'libtap_*.a' -delete || true
 	find . -name 'libtap.so' -delete || true
 
 .SILENT: clean
@@ -129,3 +132,20 @@ cleanall: clean
 	# Remove cpp-dotenv source directories (213MB)
 	cd cpp-dotenv/static && rm -rf cpp-dotenv-*/ || true
 	cd cpp-dotenv/dynamic && rm -rf cpp-dotenv-*/ || true
+
+# Keep the v3.0 archive recipes intact so future merges stay clean, but
+# preserve this branch's stale-archive workaround in separate helper rules.
+LIBTAP_ARCHIVES := libtap_mariadb.a libtap_mysql57.a libtap_mysql8.a
+
+$(LIBTAP_ARCHIVES): preclean-libtap-archives | Makefile
+
+.PHONY: preclean-libtap-archives
+preclean-libtap-archives:
+	rm -f $(LIBTAP_ARCHIVES)
+
+ifeq ($(wildcard noise_utils.cpp noise_utils.h),)
+NOISE_UTILS_STUBS := noise_utils_mariadb.o noise_utils_mysql57.o noise_utils_mysql8.o
+
+$(NOISE_UTILS_STUBS):
+	$(CXX) -x c++ -fPIC -c /dev/null $(IDIRS) $(OPT) -o $@
+endif
