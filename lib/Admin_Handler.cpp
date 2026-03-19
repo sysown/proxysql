@@ -1113,7 +1113,25 @@ static char* mask_sensitive_values_in_query(const char* query) {
 	return masked;
 }
 
-// Returns true if the given name is either a know mysql or admin global variable.
+/**
+ * @brief Checks if a given variable name is considered sensitive (e.g., passwords, credentials).
+ * 
+ * This function identifies variable names that, if logged in plaintext, could
+ * expose sensitive information.
+ * 
+ * @param var_name The name of the variable to check.
+ * @return True if the variable name is sensitive, false otherwise.
+ */
+static bool is_sensitive_set_variable_name(const char* var_name) {
+	if (var_name == NULL) {
+		return false;
+	}
+	return strstr(var_name, "password") ||
+		strcmp(var_name, "mysql-default_authentication_plugin") == 0 ||
+		strcmp(var_name, "admin-admin_credentials") == 0;
+}
+
+// Returns true if the given name is either a known mysql or admin global variable.
 bool is_valid_global_variable(const char *var_name) {
 	if (strlen(var_name) > 6 && !strncmp(var_name, "mysql-", 6) && GloMTH->has_variable(var_name + 6)) {
 		return true;
@@ -1151,7 +1169,10 @@ bool is_valid_global_variable(const char *var_name) {
 // It modifies the original query.
 template <typename S>
 bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space_length, S* sess, ProxySQL_Admin *pa, char **q, unsigned int *ql) {
-	if (!strstr(query_no_space,(char *)"password")) { // issue #599
+	bool skip_raw_query_log = strstr(query_no_space, (char *)"password") ||
+		strstr(query_no_space, (char *)"admin-admin_credentials") ||
+		strstr(query_no_space, (char *)"mysql-default_authentication_plugin");
+	if (!skip_raw_query_log) { // issue #599
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received command %s\n", query_no_space);
 		if (strncasecmp(query_no_space,(char *)"set autocommit",strlen((char *)"set autocommit"))) {
 			if (strncasecmp(query_no_space,(char *)"SET @@session.autocommit",strlen((char *)"SET @@session.autocommit"))) {
@@ -1161,7 +1182,8 @@ bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space
 			}
 		}
 	}
-	// Get a pointer to the beginnig of var=value entry and split to get var name and value
+
+	// Get a pointer to the beginning of var=value entry and split to get var name and value
 	char *set_entry = query_no_space + strlen("SET ");
 	char *untrimmed_var_name=NULL;
 	char *var_value=NULL;
@@ -1170,7 +1192,7 @@ bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space
 	// Trim spaces from var name to allow writing like 'var = value'
 	char *var_name = trim_spaces_in_place(untrimmed_var_name);
 
-	if (strstr(var_name,(char *)"password") || strcmp(var_name,(char *)"mysql-default_authentication_plugin")==0) {
+	if (is_sensitive_set_variable_name(var_name)) {
 		proxy_info("Received SET command for %s\n", var_name);
 	}
 

@@ -4,7 +4,7 @@
 #include "proxysql_listen_validator.h"
 
 int main() {
-	plan(6);
+	plan(7);
 
 	std::string error {};
 
@@ -82,6 +82,18 @@ int main() {
 			error
 		),
 		"ignores malformed TCP listeners instead of misclassifying them as conflicting UNIX sockets"
+	);
+
+	error.clear();
+	ok(
+		proxysql_listen_validator::validate_module_listener_conflicts(
+			{
+				{ "Admin Telnet", "(null)" },
+				{ "Admin Stats Telnet", "(null)" },
+			},
+			error
+		),
+		"ignores '(null)' listeners"
 	);
 
 	return exit_status();

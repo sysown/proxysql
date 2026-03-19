@@ -5,6 +5,7 @@
 #include <arpa/inet.h>
 #include <cctype>
 #include <cstdlib>
+#include <cstring>
 #include <netdb.h>
 #include <set>
 #include <string>
@@ -334,6 +335,9 @@ static inline bool validate_module_listener_conflicts(
 	std::vector<parsed_listener> parsed_listeners {};
 
 	for (const module_listener_config& module : modules) {
+		if (module.listeners == nullptr || *module.listeners == '\0' || strcmp(module.listeners, "(null)") == 0) {
+			continue;
+		}
 		std::vector<std::string> listeners = split_listener_list(module.listeners);
 		for (const std::string& listener : listeners) {
 			parsed_listener parsed = parse_listener(module.module_name, listener);
