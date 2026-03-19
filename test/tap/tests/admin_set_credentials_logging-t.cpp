@@ -1,3 +1,12 @@
+/**
+ * @file admin_set_credentials_logging-t.cpp
+ * @brief Tests that sensitive admin variables are not logged in plaintext.
+ * 
+ * This test suite verifies that updates to sensitive admin variables, such as
+ * credentials, are properly sanitized in the ProxySQL logs. It ensures that
+ * only an audit message indicating the update occurs, rather than the plaintext
+ * credentials themselves.
+ */
 #include <fstream>
 #include <string>
 

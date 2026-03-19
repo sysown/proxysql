@@ -1113,6 +1113,15 @@ static char* mask_sensitive_values_in_query(const char* query) {
 	return masked;
 }
 
+/**
+ * @brief Checks if a given variable name is considered sensitive (e.g., passwords, credentials).
+ * 
+ * This function identifies variable names that, if logged in plaintext, could
+ * expose sensitive information.
+ * 
+ * @param var_name The name of the variable to check.
+ * @return True if the variable name is sensitive, false otherwise.
+ */
 static bool is_sensitive_set_variable_name(const char* var_name) {
 	if (var_name == NULL) {
 		return false;
