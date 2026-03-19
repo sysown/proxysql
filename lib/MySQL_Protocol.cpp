@@ -15,6 +15,7 @@ using json = nlohmann::json;
 #include "MySQL_Variables.h"
 
 #include <sstream>
+#include <zstd.h>
 
 //#include <ma_global.h>
 
@@ -1687,7 +1688,13 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 	unsigned char *extra_pkt = pkt;
 	if (vars1._ptr+len > extra_pkt) {
 		if (vars1.capabilities & CLIENT_PLUGIN_AUTH) {
-			const size_t extra_len = vars1._ptr + len - extra_pkt;
+			unsigned char *packet_end = vars1._ptr + len;
+			if (extra_pkt >= packet_end) {
+				ret = false;
+				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . malformed auth plugin offset in handshake response\n", (*myds), (*myds)->sess, vars1.user);
+				return false;
+			}
+			const size_t extra_len = packet_end - extra_pkt;
 			const size_t auth_plugin_len = strnlen(reinterpret_cast<const char*>(extra_pkt), extra_len);
 			if (auth_plugin_len == extra_len) {
 				ret = false;
@@ -2200,12 +2207,17 @@ void MySQL_Protocol::PPHR_SetConnAttrs(MyProt_tmp_auth_vars& vars1, account_deta
 		(vars1.capabilities & CLIENT_COMPRESS)
 		&&
 		(myconn->options.server_capabilities & CLIENT_COMPRESS);
+	// Match MySQL server behavior and prefer zlib whenever both peers advertise both compression capabilities.
 	const bool use_zstd_compression =
 		!use_zlib_compression
 		&&
 		(vars1.capabilities & CLIENT_ZSTD_COMPRESSION_ALGORITHM)
 		&&
 		(myconn->options.server_capabilities & CLIENT_ZSTD_COMPRESSION_ALGORITHM);
+	const uint8_t zstd_compression_level =
+		(vars1.zstd_compression_level > 0 && vars1.zstd_compression_level <= ZSTD_maxCLevel())
+			? vars1.zstd_compression_level
+			: static_cast<uint8_t>(std::min<int>(ZSTD_maxCLevel(), std::max<int>(1, mysql_thread___protocol_compression_level)));
 
 	myconn->options.compression_zstd = false;
 	myconn->options.zstd_compression_level = 0;
@@ -2213,7 +2225,7 @@ void MySQL_Protocol::PPHR_SetConnAttrs(MyProt_tmp_auth_vars& vars1, account_deta
 	if (use_zlib_compression || use_zstd_compression) {
 		myconn->options.compression_min_length=50;
 		myconn->options.compression_zstd = use_zstd_compression;
-		myconn->options.zstd_compression_level = vars1.zstd_compression_level;
+		myconn->options.zstd_compression_level = use_zstd_compression ? zstd_compression_level : 0;
 		//myconn->set_status_compression(true);  // don't enable this here. It needs to be enabled after the OK is sent
 	}
 	if (attr1.use_ssl==true) {

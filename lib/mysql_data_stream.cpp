@@ -1350,7 +1350,7 @@ int MySQL_Data_Stream::buffer2array() {
 				//dest=(Bytef *)l_alloc(destLen);
 				dest=(Bytef *)malloc(destLen);
 				const bool decompressed = decompress_mysql_payload(myconn, dest, destLen, _ptr, queueIN.pkt.size-7);
-				if (decompressed == false) {
+				if (!decompressed) {
 					// for some reason, uncompress failed
 					// accoding to debugging on #1410 , it seems some library may send uncompress data claiming it is compressed
 					// we try to assume it is not compressed, and we do some sanity check
@@ -1478,7 +1478,7 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 			l_free(p2.size,p2.ptr);
 		}
 		const bool compressed = compress_mysql_payload(myconn, dest, destLen, source, sourceLen);
-		assert(compressed == true);
+		assert(compressed);
 		l_free(total_size, source);
 		queueOUT.pkt.size=destLen+7;
 		queueOUT.pkt.ptr=l_alloc(queueOUT.pkt.size);
@@ -1509,9 +1509,9 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 		destLen2=use_zstd_compression(myconn) ? ZSTD_compressBound(len2) : len2*120/100+12;
 		dest2=(Bytef *)malloc(destLen2+7);
 		const bool compressed1 = compress_mysql_payload(myconn, dest1+7, destLen1, (const unsigned char *)p2.ptr, len1);
-		assert(compressed1 == true);
+		assert(compressed1);
 		const bool compressed2 = compress_mysql_payload(myconn, dest2+7, destLen2, (const unsigned char *)p2.ptr+len1, len2);
-		assert(compressed2 == true);
+		assert(compressed2);
 
 		hdr.pkt_length=destLen1;
 		hdr.pkt_id=++myconn->compression_pkt_id;
