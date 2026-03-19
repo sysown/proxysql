@@ -1538,6 +1538,17 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 	}
 }
 
+/**
+ * @brief Phase 3 of ProxySQL initialization.
+ * 
+ * This phase starts all the core modules, including MySQL and PostgreSQL
+ * threads handlers, monitor modules, and listeners. It also performs
+ * validation of listener configurations to detect cross-module conflicts
+ * before starting listeners.
+ * 
+ * @return True if all modules and listeners started successfully, false if a
+ * configuration conflict or other fatal error occurred.
+ */
 bool ProxySQL_Main_init_phase3___start_all() {
 
 	srandom((unsigned int)(time(NULL) ^ getpid()));

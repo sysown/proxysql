@@ -10,31 +10,52 @@
 #include <string>
 #include <vector>
 
+/**
+ * @namespace proxysql_listen_validator
+ * @brief Utility for validating listener configurations across different modules.
+ */
 namespace proxysql_listen_validator {
 
+/**
+ * @struct module_listener_config
+ * @brief Represents the listener configuration for a specific module.
+ */
 struct module_listener_config {
-	const char* module_name;
-	const char* listeners;
+	const char* module_name; ///< The name of the module (e.g., "MySQL", "PostgreSQL").
+	const char* listeners;   ///< Semicolon-separated list of listener interfaces.
 };
 
+/**
+ * @enum listener_kind
+ * @brief Type of listener.
+ */
 enum class listener_kind {
-	tcp,
-	unix_socket
+	tcp,        ///< TCP network interface.
+	unix_socket ///< UNIX domain socket.
 };
 
+/**
+ * @struct parsed_listener
+ * @brief Contains detailed information about a parsed listener.
+ */
 struct parsed_listener {
-	std::string module_name;
-	std::string listener;
-	listener_kind kind { listener_kind::tcp };
-	bool valid { true };
-	int port { 0 };
-	bool wildcard_v4 { false };
-	bool wildcard_v6 { false };
-	std::set<std::string> ipv4_addrs {};
-	std::set<std::string> ipv6_addrs {};
-	std::set<std::string> unresolved_hosts {};
+	std::string module_name; ///< The module associated with this listener.
+	std::string listener;    ///< Original listener string.
+	listener_kind kind { listener_kind::tcp }; ///< Kind of listener.
+	bool valid { true };     ///< Whether the listener string was valid.
+	int port { 0 };          ///< Port number (for TCP).
+	bool wildcard_v4 { false }; ///< True if listening on IPv4 wildcard (0.0.0.0).
+	bool wildcard_v6 { false }; ///< True if listening on IPv6 wildcard (::).
+	std::set<std::string> ipv4_addrs {}; ///< Resolved IPv4 addresses.
+	std::set<std::string> ipv6_addrs {}; ///< Resolved IPv6 addresses.
+	std::set<std::string> unresolved_hosts {}; ///< Hosts that failed to resolve.
 };
 
+/**
+ * @brief Trims whitespace from both ends of a string.
+ * @param value The string to trim.
+ * @return A new trimmed string.
+ */
 static inline std::string trim_copy(const std::string& value) {
 	std::string::size_type start = 0;
 	while (start < value.size() && std::isspace(static_cast<unsigned char>(value[start]))) {
@@ -49,6 +70,11 @@ static inline std::string trim_copy(const std::string& value) {
 	return value.substr(start, end - start);
 }
 
+/**
+ * @brief Splits a semicolon-separated list of listeners into individual strings.
+ * @param listeners The raw listener string from configuration.
+ * @return A vector of trimmed listener strings.
+ */
 static inline std::vector<std::string> split_listener_list(const char* listeners) {
 	std::vector<std::string> result {};
 
@@ -78,14 +104,30 @@ static inline std::vector<std::string> split_listener_list(const char* listeners
 	return result;
 }
 
+/**
+ * @brief Checks if a host string represents an IPv4 wildcard.
+ * @param host The hostname or IP string.
+ * @return True if it's a wildcard.
+ */
 static inline bool is_ipv4_wildcard(const std::string& host) {
 	return host.empty() || host == "0.0.0.0" || host == "*";
 }
 
+/**
+ * @brief Checks if a host string represents an IPv6 wildcard.
+ * @param host The hostname or IP string.
+ * @return True if it's a wildcard.
+ */
 static inline bool is_ipv6_wildcard(const std::string& host) {
 	return host == "::";
 }
 
+/**
+ * @brief Adds a resolved address from a sockaddr structure to the appropriate set.
+ * @param addr Pointer to the sockaddr structure.
+ * @param ipv4_addrs Set to store IPv4 addresses.
+ * @param ipv6_addrs Set to store IPv6 addresses.
+ */
 static inline void add_resolved_address(
 	const sockaddr* addr, std::set<std::string>& ipv4_addrs, std::set<std::string>& ipv6_addrs
 ) {
@@ -104,6 +146,19 @@ static inline void add_resolved_address(
 	}
 }
 
+/**
+ * @brief Resolves a hostname or IP string into its constituent addresses.
+ * 
+ * Handles special cases like wildcards and 'localhost', and uses getaddrinfo
+ * for general DNS resolution.
+ * 
+ * @param host The host string to resolve.
+ * @param wildcard_v4 Output flag for IPv4 wildcard detection.
+ * @param wildcard_v6 Output flag for IPv6 wildcard detection.
+ * @param ipv4_addrs Set to store resolved IPv4 addresses.
+ * @param ipv6_addrs Set to store resolved IPv6 addresses.
+ * @param unresolved_hosts Set to store hosts that could not be resolved.
+ */
 static inline void resolve_host(
 	const std::string& host,
 	bool& wildcard_v4,
@@ -149,6 +204,16 @@ static inline void resolve_host(
 	freeaddrinfo(results);
 }
 
+/**
+ * @brief Parses a listener string and populates a parsed_listener structure.
+ * 
+ * Supports both TCP (host:port) and UNIX sockets (path). Handles IPv6 
+ * bracketed syntax [::1]:6033.
+ * 
+ * @param module_name Name of the module configuring this listener.
+ * @param listener The listener string to parse.
+ * @return A populated parsed_listener structure.
+ */
 static inline parsed_listener parse_listener(const std::string& module_name, const std::string& listener) {
 	parsed_listener parsed {};
 	parsed.module_name = module_name;
@@ -198,6 +263,12 @@ static inline parsed_listener parse_listener(const std::string& module_name, con
 	return parsed;
 }
 
+/**
+ * @brief Checks if two sets of strings have any common elements.
+ * @param lhs First set.
+ * @param rhs Second set.
+ * @return True if sets intersect.
+ */
 static inline bool sets_intersect(const std::set<std::string>& lhs, const std::set<std::string>& rhs) {
 	for (const std::string& value : lhs) {
 		if (rhs.find(value) != rhs.end()) {
@@ -208,6 +279,17 @@ static inline bool sets_intersect(const std::set<std::string>& lhs, const std::s
 	return false;
 }
 
+/**
+ * @brief Determines if two listeners conflict with each other.
+ * 
+ * Conflicts occur if:
+ * - Both are identical UNIX socket paths.
+ * - Both are TCP listeners on the same port and share an IP/wildcard overlap.
+ * 
+ * @param lhs First listener.
+ * @param rhs Second listener.
+ * @return True if a conflict is detected.
+ */
 static inline bool listeners_conflict(const parsed_listener& lhs, const parsed_listener& rhs) {
 	if (lhs.kind == listener_kind::unix_socket || rhs.kind == listener_kind::unix_socket) {
 		return lhs.kind == listener_kind::unix_socket &&
@@ -236,6 +318,16 @@ static inline bool listeners_conflict(const parsed_listener& lhs, const parsed_l
 	return sets_intersect(lhs.unresolved_hosts, rhs.unresolved_hosts);
 }
 
+/**
+ * @brief Validates all listeners across provided modules for cross-module conflicts.
+ * 
+ * This is the main entry point for the validator. It parses all listeners and 
+ * performs pairwise conflict detection across different modules.
+ * 
+ * @param modules Vector of module listener configurations.
+ * @param error String to store a descriptive error message on conflict.
+ * @return True if no cross-module conflicts are found, false otherwise.
+ */
 static inline bool validate_module_listener_conflicts(
 	const std::vector<module_listener_config>& modules, std::string& error
 ) {
