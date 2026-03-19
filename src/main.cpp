@@ -1538,7 +1538,7 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 	}
 }
 
-void ProxySQL_Main_init_phase3___start_all() {
+bool ProxySQL_Main_init_phase3___start_all() {
 
 	srandom((unsigned int)(time(NULL) ^ getpid()));
 	{
@@ -1637,7 +1637,7 @@ void ProxySQL_Main_init_phase3___start_all() {
 			proxy_error("%s\n", error.c_str());
 			proxy_error("Use different listen interfaces/ports or disable one of the conflicting listeners.\n");
 			proxy_error("ProxySQL startup aborted due to configuration error\n");
-			exit(EXIT_FAILURE);
+			return false;
 		}
 	}
 	{
@@ -1718,6 +1718,8 @@ void ProxySQL_Main_init_phase3___start_all() {
 	// Load the config not previously loaded for these modules
 	GloAdmin->load_http_server();
 	GloAdmin->load_restapi_server();
+
+	return true;
 }
 
 
@@ -3138,7 +3140,9 @@ __start_label:
 
 	{
 		cpu_timer t;
-		ProxySQL_Main_init_phase3___start_all();
+		if (ProxySQL_Main_init_phase3___start_all() == false) {
+			goto finish;
+		}
 #ifdef DEBUG
 		std::cerr << "Main init phase3 completed in ";
 #endif

@@ -4,7 +4,7 @@
 #include "proxysql_listen_validator.h"
 
 int main() {
-	plan(5);
+	plan(6);
 
 	std::string error {};
 
@@ -70,6 +70,18 @@ int main() {
 			error
 		),
 		"allows separate IPv4 and IPv6 listeners on the same port"
+	);
+
+	error.clear();
+	ok(
+		proxysql_listen_validator::validate_module_listener_conflicts(
+			{
+				{ "MySQL", "127.0.0.1:" },
+				{ "PostgreSQL", "127.0.0.1:" },
+			},
+			error
+		),
+		"ignores malformed TCP listeners instead of misclassifying them as conflicting UNIX sockets"
 	);
 
 	return exit_status();

@@ -180,7 +180,7 @@ static inline parsed_listener parse_listener(const std::string& module_name, con
 	}
 
 	if (port_text.empty()) {
-		parsed.kind = listener_kind::unix_socket;
+		parsed.valid = false;
 		return parsed;
 	}
 
