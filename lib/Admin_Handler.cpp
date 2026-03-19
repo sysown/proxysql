@@ -1122,7 +1122,7 @@ static bool is_sensitive_set_variable_name(const char* var_name) {
 		strcmp(var_name, "admin-admin_credentials") == 0;
 }
 
-// Returns true if the given name is either a know mysql or admin global variable.
+// Returns true if the given name is either a known mysql or admin global variable.
 bool is_valid_global_variable(const char *var_name) {
 	if (strlen(var_name) > 6 && !strncmp(var_name, "mysql-", 6) && GloMTH->has_variable(var_name + 6)) {
 		return true;

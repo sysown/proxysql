@@ -305,6 +305,8 @@
   "test_mcp_llm_discovery_phaseb-t": [ "ai-g1" ],
   "test_mcp_static_harvest-t": [ "ai-g1" ],
   "unit-strip_schema_from_query-t": [ "unit-tests-g1" ],
+  "admin_set_credentials_logging-t": [ "no-infra-g1" ],
+  "listener_conflicts_validation-t": [ "no-infra-g1" ],
   "test_pgsql_replication_lag-t": [ "pgsql-repl" ],
   "mcp_query_rules-t": [ "ai-g1" ]
 

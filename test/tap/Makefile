@@ -20,6 +20,10 @@ tap: test_deps
 tests: tap test_deps
 	cd tests && CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
 
+.PHONY: tests_no_infra
+tests_no_infra: tap test_deps
+	cd tests && CC=${CC} CXX=${CXX} ${MAKE} tests_no_infra
+
 .PHONY: tests_with_deps
 tests_with_deps: tap test_deps
 	cd tests_with_deps && CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)

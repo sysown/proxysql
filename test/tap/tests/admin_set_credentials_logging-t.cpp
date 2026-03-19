@@ -81,7 +81,7 @@ int main() {
 
 		string log_line {};
 		for (int attempt = 0; attempt < MAX_LOG_CHECK_ATTEMPTS; ++attempt) {
-			proxysql_log.clear(proxysql_log.rdstate() & ~std::ios_base::failbit);
+			proxysql_log.clear(proxysql_log.rdstate() & ~std::ios_base::eofbit & ~std::ios_base::failbit);
 			while (getline(proxysql_log, log_line)) {
 				if (log_line.find(unique_secret) != string::npos) {
 					leaked_secret = true;
