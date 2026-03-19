@@ -2434,11 +2434,13 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.have_compress=true;
 			variables.server_capabilities |= CLIENT_COMPRESS;
+			variables.server_capabilities |= CLIENT_ZSTD_COMPRESSION_ALGORITHM;
 			return true;
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.have_compress=false;
 			variables.server_capabilities &= ~CLIENT_COMPRESS;
+			variables.server_capabilities &= ~CLIENT_ZSTD_COMPRESSION_ALGORITHM;
 			return true;
 		}
 		return false;

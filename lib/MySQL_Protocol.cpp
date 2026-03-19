@@ -1072,8 +1072,10 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	_ptr[l]=0x00; l+=1; //0x00
 	if (mysql_thread___have_compress) {
 		mysql_thread___server_capabilities |= CLIENT_COMPRESS;
+		mysql_thread___server_capabilities |= CLIENT_ZSTD_COMPRESSION_ALGORITHM;
 	} else {
 		mysql_thread___server_capabilities &= ~CLIENT_COMPRESS;
+		mysql_thread___server_capabilities &= ~CLIENT_ZSTD_COMPRESSION_ALGORITHM;
 	}
 	if (mysql_thread___have_ssl==true || mysql_thread___default_authentication_plugin_int==2) {
 		// we enable SSL for client connections for either of these 2 conditions:
@@ -1682,9 +1684,41 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 			vars1.pass_len--; // remove the extra 0 if present
 		}
 	}
-	if (vars1._ptr+len > pkt) {
+	unsigned char *extra_pkt = pkt;
+	if (vars1._ptr+len > extra_pkt) {
 		if (vars1.capabilities & CLIENT_PLUGIN_AUTH) {
-			vars1.auth_plugin = pkt;
+			const size_t extra_len = vars1._ptr + len - extra_pkt;
+			const size_t auth_plugin_len = strnlen(reinterpret_cast<const char*>(extra_pkt), extra_len);
+			if (auth_plugin_len == extra_len) {
+				ret = false;
+				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . malformed auth plugin in handshake response\n", (*myds), (*myds)->sess, vars1.user);
+				return false;
+			}
+			vars1.auth_plugin = extra_pkt;
+			extra_pkt += auth_plugin_len + 1;
+		}
+		if ((vars1.capabilities & CLIENT_CONNECT_ATTRS) && vars1._ptr + len > extra_pkt) {
+			uint64_t attrs_len = 0;
+			const int attrs_len_enc = mysql_decode_length_ll(extra_pkt, &attrs_len);
+			if (
+				attrs_len_enc <= 0
+				||
+				static_cast<uint64_t>((vars1._ptr + len) - extra_pkt) < static_cast<uint64_t>(attrs_len_enc) + attrs_len
+			) {
+				ret = false;
+				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . malformed connect attrs in handshake response\n", (*myds), (*myds)->sess, vars1.user);
+				return false;
+			}
+			extra_pkt += attrs_len_enc + attrs_len;
+		}
+		if (vars1.capabilities & CLIENT_ZSTD_COMPRESSION_ALGORITHM) {
+			if (vars1._ptr + len <= extra_pkt) {
+				ret = false;
+				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . missing zstd compression level in handshake response\n", (*myds), (*myds)->sess, vars1.user);
+				return false;
+			}
+			vars1.use_zstd_compression = true;
+			vars1.zstd_compression_level = *extra_pkt;
 		}
 	}
 	return true;
@@ -2162,11 +2196,25 @@ void MySQL_Protocol::PPHR_SetConnAttrs(MyProt_tmp_auth_vars& vars1, account_deta
 	mysql_variables.client_set_value(sess, SQL_COLLATION_CONNECTION, ss.str().c_str());
 
 	// enable compression
-	if (vars1.capabilities & CLIENT_COMPRESS) {
-		if (myconn->options.server_capabilities & CLIENT_COMPRESS) {
-			myconn->options.compression_min_length=50;
-			//myconn->set_status_compression(true);  // don't enable this here. It needs to be enabled after the OK is sent
-		}
+	const bool use_zlib_compression =
+		(vars1.capabilities & CLIENT_COMPRESS)
+		&&
+		(myconn->options.server_capabilities & CLIENT_COMPRESS);
+	const bool use_zstd_compression =
+		!use_zlib_compression
+		&&
+		(vars1.capabilities & CLIENT_ZSTD_COMPRESSION_ALGORITHM)
+		&&
+		(myconn->options.server_capabilities & CLIENT_ZSTD_COMPRESSION_ALGORITHM);
+
+	myconn->options.compression_zstd = false;
+	myconn->options.zstd_compression_level = 0;
+
+	if (use_zlib_compression || use_zstd_compression) {
+		myconn->options.compression_min_length=50;
+		myconn->options.compression_zstd = use_zstd_compression;
+		myconn->options.zstd_compression_level = vars1.zstd_compression_level;
+		//myconn->set_status_compression(true);  // don't enable this here. It needs to be enabled after the OK is sent
 	}
 	if (attr1.use_ssl==true) {
 		(*myds)->sess->use_ssl = true;

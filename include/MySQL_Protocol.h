@@ -109,7 +109,9 @@ class MyProt_tmp_auth_vars {
 	uint32_t  capabilities = 0;
 	uint32_t  max_pkt;
 	uint32_t  pass_len;
+	uint8_t zstd_compression_level = 0;
 	bool use_ssl = false;
+	bool use_zstd_compression = false;
 	enum proxysql_session_type session_type;
 };
 
