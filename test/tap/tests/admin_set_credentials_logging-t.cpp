@@ -10,7 +10,13 @@
 using std::fstream;
 using std::string;
 
+static constexpr int MAX_LOG_CHECK_ATTEMPTS = 20;
+static constexpr useconds_t LOG_CHECK_RETRY_DELAY_US = 100000;
+
 static string escape_sql_string(MYSQL* mysql, const string& value) {
+	if (value.empty()) {
+		return "";
+	}
 	string escaped(value.size() * 2 + 1, '\0');
 	unsigned long escaped_len = mysql_real_escape_string(mysql, &escaped[0], value.c_str(), value.size());
 	escaped.resize(escaped_len);
@@ -20,7 +26,7 @@ static string escape_sql_string(MYSQL* mysql, const string& value) {
 int main() {
 	CommandLine cl;
 
-	plan(6);
+	plan(7);
 
 	if (cl.getEnv()) {
 		return exit_status();
@@ -42,19 +48,26 @@ int main() {
 	int show_res = show_admin_global_variable(admin, "admin-admin_credentials", original_admin_credentials);
 	ok(show_res == 0, "Fetched original admin-admin_credentials");
 
-	const string log_path { get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log" };
+	const string log_dir { get_env("REGULAR_INFRA_DATADIR") };
+	ok(!log_dir.empty(), "REGULAR_INFRA_DATADIR is set");
+	const string log_path { log_dir + "/proxysql.log" };
 	fstream proxysql_log {};
-	int log_res = open_file_and_seek_end(log_path, proxysql_log);
+	int log_res = log_dir.empty() ? EXIT_FAILURE : open_file_and_seek_end(log_path, proxysql_log);
 	ok(log_res == EXIT_SUCCESS, "Opened ProxySQL log");
 
 	bool leaked_secret = false;
 	bool logged_sensitive_set = false;
 	if (show_res == 0 && log_res == EXIT_SUCCESS) {
+		struct timespec ts {};
+		clock_gettime(CLOCK_REALTIME, &ts);
 		const string unique_secret {
-			"copilot-secret-" + std::to_string(getpid()) + "-" + std::to_string(static_cast<long long>(time(NULL)))
+			"admin-test-secret-" + std::to_string(getpid()) + "-" + std::to_string(ts.tv_sec) +
+			"-" + std::to_string(ts.tv_nsec)
 		};
 		const string updated_admin_credentials { original_admin_credentials + ";copilot:" + unique_secret };
-		const string set_query { "SET admin-admin_credentials='" + updated_admin_credentials + "'" };
+		const string set_query {
+			"SET admin-admin_credentials='" + escape_sql_string(admin, updated_admin_credentials) + "'"
+		};
 
 		int set_res = mysql_query(admin, set_query.c_str());
 		ok(set_res == 0, "Updated admin-admin_credentials");
@@ -67,7 +80,7 @@ int main() {
 			"Stored admin-admin_credentials contains the new secret");
 
 		string log_line {};
-		for (int attempt = 0; attempt < 20; ++attempt) {
+		for (int attempt = 0; attempt < MAX_LOG_CHECK_ATTEMPTS; ++attempt) {
 			proxysql_log.clear(proxysql_log.rdstate() & ~std::ios_base::failbit);
 			while (getline(proxysql_log, log_line)) {
 				if (log_line.find(unique_secret) != string::npos) {
@@ -80,7 +93,7 @@ int main() {
 			if (leaked_secret || logged_sensitive_set) {
 				break;
 			}
-			usleep(100000);
+			usleep(LOG_CHECK_RETRY_DELAY_US);
 		}
 	} else {
 		ok(false, "Updated admin-admin_credentials");

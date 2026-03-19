@@ -1114,9 +1114,12 @@ static char* mask_sensitive_values_in_query(const char* query) {
 }
 
 static bool is_sensitive_set_variable_name(const char* var_name) {
-	return strstr(var_name, (char*)"password") ||
-		strcmp(var_name, (char*)"mysql-default_authentication_plugin") == 0 ||
-		strcmp(var_name, (char*)"admin-admin_credentials") == 0;
+	if (var_name == NULL) {
+		return false;
+	}
+	return strstr(var_name, "password") ||
+		strcmp(var_name, "mysql-default_authentication_plugin") == 0 ||
+		strcmp(var_name, "admin-admin_credentials") == 0;
 }
 
 // Returns true if the given name is either a know mysql or admin global variable.
@@ -1157,16 +1160,10 @@ bool is_valid_global_variable(const char *var_name) {
 // It modifies the original query.
 template <typename S>
 bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space_length, S* sess, ProxySQL_Admin *pa, char **q, unsigned int *ql) {
-	// Get a pointer to the beginnig of var=value entry and split to get var name and value
-	char *set_entry = query_no_space + strlen("SET ");
-	char *untrimmed_var_name=NULL;
-	char *var_value=NULL;
-	c_split_2(set_entry, "=", &untrimmed_var_name, &var_value);
-
-	// Trim spaces from var name to allow writing like 'var = value'
-	char *var_name = trim_spaces_in_place(untrimmed_var_name);
-
-	if (!strstr(query_no_space, (char *)"password") && !is_sensitive_set_variable_name(var_name)) { // issue #599
+	bool skip_raw_query_log = strstr(query_no_space, (char *)"password") ||
+		strstr(query_no_space, (char *)"admin-admin_credentials") ||
+		strstr(query_no_space, (char *)"mysql-default_authentication_plugin");
+	if (!skip_raw_query_log) { // issue #599
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received command %s\n", query_no_space);
 		if (strncasecmp(query_no_space,(char *)"set autocommit",strlen((char *)"set autocommit"))) {
 			if (strncasecmp(query_no_space,(char *)"SET @@session.autocommit",strlen((char *)"SET @@session.autocommit"))) {
@@ -1176,6 +1173,15 @@ bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space
 			}
 		}
 	}
+
+	// Get a pointer to the beginning of var=value entry and split to get var name and value
+	char *set_entry = query_no_space + strlen("SET ");
+	char *untrimmed_var_name=NULL;
+	char *var_value=NULL;
+	c_split_2(set_entry, "=", &untrimmed_var_name, &var_value);
+
+	// Trim spaces from var name to allow writing like 'var = value'
+	char *var_name = trim_spaces_in_place(untrimmed_var_name);
 
 	if (is_sensitive_set_variable_name(var_name)) {
 		proxy_info("Received SET command for %s\n", var_name);
