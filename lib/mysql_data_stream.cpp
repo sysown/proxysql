@@ -47,6 +47,20 @@ static bool decompress_mysql_payload(
 	return rc == Z_OK;
 }
 
+static bool fallback_to_uncompressed_mysql_payload(
+	Bytef* dest, uLongf destLen, unsigned int& datalength, const unsigned char* source, size_t sourceLen,
+	const unsigned char* packet
+) {
+	if (sourceLen > destLen || sourceLen < 3) {
+		return false;
+	}
+
+	memcpy(dest, source, sourceLen);
+	datalength = sourceLen;
+
+	return packet[9] == 0 && packet[8] == 0 && packet[7] == sourceLen;
+}
+
 static bool compress_mysql_payload(
 	const MySQL_Connection* myconn, Bytef* dest, size_t& destLen, const unsigned char* source, size_t sourceLen
 ) {
@@ -1354,31 +1368,14 @@ int MySQL_Data_Stream::buffer2array() {
 					// for some reason, uncompress failed
 					// accoding to debugging on #1410 , it seems some library may send uncompress data claiming it is compressed
 					// we try to assume it is not compressed, and we do some sanity check
-					memcpy(dest, _ptr, queueIN.pkt.size-7);
-					datalength=queueIN.pkt.size-7;
-					// some sanity check now
-					unsigned char _u;
-					bool sanity_check = false;
-					_u = *(u+9);
-					// 2nd and 3rd bytes are 0
-					if (_u == 0) {
-						_u = *(u+8);
-						if (_u == 0) {
-							_u = *(u+7);
-							// 1st byte = size - 7
-							unsigned int _size = _u ;
-							if (queueIN.pkt.size-7 == _size) {
-								sanity_check = true;
-							}
-						}
-					}
-					if (sanity_check == false) {
+					if (!fallback_to_uncompressed_mysql_payload(dest, destLen, datalength, _ptr, queueIN.pkt.size-7, u)) {
 						proxy_error("Unable to uncompress a compressed packet\n");
 						shut_soft();
 						return ret;
 					}
+				} else {
+					datalength=payload_length;
 				}
-				datalength=payload_length;
 				// change _ptr to the new buffer
 				_ptr=dest;
 			} else {

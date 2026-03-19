@@ -916,13 +916,13 @@ void MySQL_Connection::connect_start_SetClientFlag(unsigned long& client_flags) 
 				// we honor the behavior of a regular connection of when a connection doesn't agree on using compression
 				// during handshake, and we fallback to an uncompressed connection.
 				client_flags &= ~(CLIENT_COMPRESS | CLIENT_ZSTD_COMPRESSION_ALGORITHM); // we disable it by default
-				if (c->options.client_flag & CLIENT_COMPRESS) {
-					if (c->options.server_capabilities & CLIENT_COMPRESS) {
+				if (c->options.compression_min_length > 0) {
+					if (c->options.compression_zstd) {
+						if (c->options.server_capabilities & CLIENT_ZSTD_COMPRESSION_ALGORITHM) {
+							client_flags |= CLIENT_ZSTD_COMPRESSION_ALGORITHM;
+						}
+					} else if (c->options.server_capabilities & CLIENT_COMPRESS) {
 						client_flags |= CLIENT_COMPRESS;
-					}
-				} else if (c->options.client_flag & CLIENT_ZSTD_COMPRESSION_ALGORITHM) {
-					if (c->options.server_capabilities & CLIENT_ZSTD_COMPRESSION_ALGORITHM) {
-						client_flags |= CLIENT_ZSTD_COMPRESSION_ALGORITHM;
 					}
 				}
 			}
