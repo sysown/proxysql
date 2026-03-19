@@ -45,8 +45,8 @@ NETWORK_NAME="${INFRA_ID}_backend"
 TEST_CONTAINER="test-runner.${INFRA_ID}"
 INFRA_LOGS_PATH="${WORKSPACE}/ci_infra_logs"
 PROXY_DATA_DIR_HOST="${INFRA_LOGS_PATH}/${INFRA_ID}/proxysql"
-JENKINS_SCRIPTS_DIR="${HOME}/jenkins-build-scripts"
-LEGACY_SCRIPTS_PATH="/var/lib/jenkins/scripts"
+
+
 
 # VERIFICATION: Verify ProxySQL is running
 PROXY_CONTAINER="proxysql.${INFRA_ID}"
@@ -102,8 +102,7 @@ docker run \
     --cap-add=NET_ADMIN \
     --cap-add=SYS_ADMIN \
     -v "${WORKSPACE}:${WORKSPACE}" \
-    -v "${JENKINS_SCRIPTS_DIR}:${LEGACY_SCRIPTS_PATH}" \
-    -v "${PROXY_DATA_DIR_HOST}:/var/lib/proxysql" \
+        -v "${PROXY_DATA_DIR_HOST}:/var/lib/proxysql" \
     -e WORKSPACE="${WORKSPACE}" \
     -e INFRA_ID="${INFRA_ID}" \
     -e INFRA_TYPE="${INFRA_TYPE}" \
@@ -136,7 +135,7 @@ docker run \
         source ${SCRIPT_DIR}/env-isolated.bash
         
         # Execute the Python tester
-        python3 /var/lib/jenkins/scripts/test-scripts/bin/proxysql-tester.py
+        python3 "${WORKSPACE}/test/scripts/bin/proxysql-tester.py"
     "
 
 # Clean up only the runner container

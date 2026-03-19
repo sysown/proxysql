@@ -58,14 +58,23 @@ int main(int argc, char** argv) {
         return exit_status();
     }
 
+    // Get version early for version-specific charset checks
+    std::string version;
+    get_server_version(mysql, version);
+    int major = 0, minor = 0;
+    sscanf(version.c_str(), "%d.%d", &major, &minor);
+    bool is_mysql_84_plus = (major > 8) || (major == 8 && minor >= 4);
+
     if (mysql_query(mysql, "set names 'utf8'")) return exit_status();
     show_variable(mysql, var_collation_connection, var_value);
-    ok(var_value.compare("utf8_general_ci") == 0, "Initial client character set. Actual %s", var_value.c_str());
+    if (is_mysql_84_plus) {
+        ok(var_value.compare("utf8mb3_general_ci") == 0, "MySQL 8.4+ Initial client character set. Actual %s", var_value.c_str());
+    } else {
+        ok(var_value.compare("utf8_general_ci") == 0, "Initial client character set. Actual %s", var_value.c_str());
+    }
 
     if (mysql_query(mysql, "set names utf8mb4 collate utf8mb4_croatian_ci")) return exit_status();
     show_variable(mysql, var_collation_connection, var_value);
-    std::string version;
-    get_server_version(mysql, version);
     if (version.data()[0] == '5') {
         ok(var_value.compare("utf8mb4_general_ci") == 0, "Backend is mysql version < 8.0. Actual collation %s", var_value.c_str());
     } else {
