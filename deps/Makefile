@@ -46,6 +46,7 @@ targets :=	check_openssl_version \
 			sqlite3 \
 			pcre \
 			lz4 \
+			zstd \
 			cityhash \
 			microhttpd \
 			curl \
@@ -172,6 +173,14 @@ lz4/lz4/lib/liblz4.a:
 	cd lz4/lz4 && CC=${CC} CXX=${CXX} ${MAKE}
 
 lz4: lz4/lz4/lib/liblz4.a
+
+
+zstd/zstd/lib/libzstd.a:
+	cd zstd && rm -rf zstd-*/ || true
+	cd zstd && tar -zxf zstd-*.tar.gz
+	cd zstd/zstd/lib && CC=${CC} CXX=${CXX} ${MAKE} libzstd.a
+
+zstd: zstd/zstd/lib/libzstd.a
 
 
 clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:

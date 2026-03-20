@@ -28,6 +28,7 @@ IDIRS :=	-I$(PROXYSQL_IDIR) \
 			-I$(POSTGRESQL_IDIR) \
 			-I$(JSON_IDIR) \
 			-I$(SSL_IDIR) \
+			-I$(ZSTD_IDIR) \
 
 ifeq ($(UNAME_S),Linux)
 	IDIRS += -I$(COREDUMPER_IDIR)
