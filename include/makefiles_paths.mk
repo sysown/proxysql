@@ -54,6 +54,7 @@ CITYHASH_LDIR := $(CITYHASH_PATH)/src/.libs
 LZ4_PATH := $(DEPS_PATH)/lz4/lz4
 LZ4_LDIR := $(LZ4_PATH)/lib
 
+# Zstandard compression library for protocol compression support
 ZSTD_PATH := $(DEPS_PATH)/zstd/zstd
 ZSTD_IDIR := $(ZSTD_PATH)/lib
 ZSTD_LDIR := $(ZSTD_PATH)/lib

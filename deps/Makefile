@@ -175,6 +175,9 @@ lz4/lz4/lib/liblz4.a:
 lz4: lz4/lz4/lib/liblz4.a
 
 
+# zstd - Zstandard compression library
+# Used for compressed protocol support in MySQL/PostgreSQL connections
+# Source: https://github.com/facebook/zstd
 zstd/zstd/lib/libzstd.a:
 	cd zstd && rm -rf zstd-*/ || true
 	cd zstd && tar -zxf zstd-*.tar.gz
