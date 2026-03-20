@@ -128,7 +128,7 @@ run_single_group() {
     export COVERAGE="${COVERAGE}"
 
     timeout "${TIMEOUT_MINUTES}m" bash <<INNERSHELL || cmd_exit_code=$?
-        set -euo pipefail
+        set -uo pipefail
 
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Setting up infrastructure..." | tee -a "${log_file}"
         if ! "${SCRIPT_DIR}/ensure-infras.bash" >> "${log_file}" 2>&1; then
@@ -138,14 +138,12 @@ run_single_group() {
 
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Running tests..." | tee -a "${log_file}"
         # Note: run-tests-isolated.bash handles coverage collection regardless of exit code
-        set +e
         "${SCRIPT_DIR}/run-tests-isolated.bash" >> "${log_file}" 2>&1
         inner_exit_code=$?
-        set -e
-        if [ ${inner_exit_code} -ne 0 ]; then
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: Tests failed with exit code ${inner_exit_code}" | tee -a "${log_file}"
+        if [ \${inner_exit_code} -ne 0 ]; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: Tests failed with exit code \${inner_exit_code}" | tee -a "${log_file}"
             # Coverage is still collected in run-tests-isolated.bash even on failure
-            exit ${inner_exit_code}
+            exit \${inner_exit_code}
         fi
 
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Tests completed successfully" | tee -a "${log_file}"
