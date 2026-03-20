@@ -17,6 +17,25 @@ cd ../../../
 **Note:** Using `--network host` is recommended if you encounter DNS resolution hangs during the build process.
 
 ---
+
+## 0.1. Building ProxySQL (Debug Mode)
+
+Some tests require ProxySQL to be compiled in debug mode (e.g., for `LOAD DEBUG FROM DISK` support). If you encounter errors like `near "LOAD": syntax error` when the test runner tries to execute `LOAD DEBUG FROM DISK`, you need to rebuild ProxySQL in debug mode:
+
+```bash
+export PROXYSQLGENAI=1
+make -j$(nproc) build_deps && make -j$(nproc) debug && make -j$(nproc) build_deps && make -j$(nproc) build_tap_test_debug
+```
+
+This will:
+1. Build all dependencies
+2. Compile ProxySQL with debug symbols and the DEBUG module enabled
+3. Rebuild dependencies (if needed for debug mode)
+4. Build TAP test executables in debug mode
+
+**Note:** After rebuilding, restart your infrastructure with a fresh `INFRA_ID` to use the new binary.
+
+---
 ## 1. Core Concepts
 
 The Unified CI system is designed around three pillars:
@@ -31,12 +50,20 @@ The Unified CI system is designed around three pillars:
 The infrastructure management and test execution are strictly separated.
 
 ### Step 1: Global Setup
+
+**IMPORTANT:** `INFRA_ID` must be unique for each test run to avoid conflicts. Use a timestamp to ensure uniqueness:
+
 ```bash
 export WORKSPACE=$(pwd)
-export INFRA_ID="dev-$USER"
+export INFRA_ID="test-$(date +%s)"   # Unique ID using timestamp
 export TAP_GROUP="mysql84-g1"
 source test/infra/common/env.sh
 ```
+
+**Why unique INFRA_ID?**
+- Prevents port collisions when multiple tests run on the same host
+- Ensures clean isolation between test environments
+- Avoids conflicts with existing Docker containers and networks
 
 ### Step 2: Start ProxySQL & Backends
 You can use the helper script to automatically start all required components for a group:
@@ -84,7 +111,7 @@ The `docker-compose-init.bash` scripts implement a strict **non-destructive poli
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `INFRA_ID` | `dev-$USER` | **Required**. Unique namespace for Docker containers/networks. |
+| `INFRA_ID` | `dev-$USER` | **Required**. Unique namespace for Docker containers/networks. **Must be unique** - use a timestamp for isolation: `export INFRA_ID="test-$(date +%s)"` |
 | `WORKSPACE` | Repo Root | Root path of the ProxySQL repository. |
 | `TAP_GROUP` | (none) | Run a specific group defined in `test/tap/groups/groups.json`. |
 | `TEST_PY_TAP_INCL` | (none) | Filter tests within the group (regex matching test names). |
@@ -98,7 +125,7 @@ The `docker-compose-init.bash` scripts implement a strict **non-destructive poli
 ### Example 1: Run a single test in a MySQL 8.4 environment
 If you are developing a fix and only want to run one specific test:
 ```bash
-export INFRA_ID="fix-123"
+export INFRA_ID="fix-123-$(date +%s)"  # Unique ID with timestamp
 export TAP_GROUP="mysql84-g1"
 export TEST_PY_TAP_INCL="admin_various_commands-t"
 export SKIP_CLUSTER_START=1
@@ -109,7 +136,7 @@ export SKIP_CLUSTER_START=1
 
 ### Example 2: Run all MariaDB 10 tests in parallel with another run
 ```bash
-export INFRA_ID="mariadb-test"
+export INFRA_ID="mariadb-test-$(date +%s)"  # Unique ID with timestamp
 export TAP_GROUP="mariadb10-g1"
 ./test/infra/control/ensure-infras.bash
 ./test/infra/control/run-tests-isolated.bash
@@ -117,7 +144,7 @@ export TAP_GROUP="mariadb10-g1"
 
 ### Example 3: Debugging a failing PostgreSQL test in the Legacy group
 ```bash
-export INFRA_ID="debug-legacy"
+export INFRA_ID="debug-legacy-$(date +%s)"  # Unique ID with timestamp
 export TAP_GROUP="legacy-g1"
 export TEST_PY_TAP_INCL="pgsql-.*" # Run only PGSQL tests in legacy
 ./test/infra/control/ensure-infras.bash

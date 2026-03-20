@@ -579,9 +579,11 @@ const uint32_t PING_INTV_MS { 1000 };
 pair<int,double> fetch_metric_val(CommandLine& cl, const string& metric_id) {
 	uint64_t curl_res_code = 0;
 	string curl_res_data {};
-	const char URL[] { "http://proxysql:6070/metrics/" };
+	// Use cl.host so the URL works in containerized CI environments.
+	const string URL { string("http://") + string(cl.host) + ":6070/metrics/" };
+	const char* pURL = URL.c_str();
 
-	diag("Fetching metric values via RESTAPI   URL=%s", URL);
+	diag("Fetching metric values via RESTAPI   URL=%s", pURL);
 	CURLcode code = perform_simple_get(URL, curl_res_code, curl_res_data);
 
 	if (code != CURLE_OK || curl_res_code != 200) {

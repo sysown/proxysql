@@ -116,8 +116,9 @@ int main(int argc, char** argv) {
 	uint64_t curl_res_code = 0;
 	string curl_res_data {};
 
-	diag("Verifying RESTAPI /metrics endpoint responsiveness via proxysql:6070...");
-	CURLcode code = perform_simple_get("http://proxysql:6070/metrics/", curl_res_code, curl_res_data);
+	diag("Verifying RESTAPI /metrics endpoint responsiveness via %s:6070...", cl.host);
+	const string metrics_url { string("http://") + string(cl.host) + ":6070/metrics/" };
+	CURLcode code = perform_simple_get(metrics_url, curl_res_code, curl_res_data);
 
 	ok(
 		code == CURLE_OK && curl_res_code == 200,

@@ -3,8 +3,9 @@
  * @brief This test verifies that after locking on a hostgroup, ProxySQL forwards
  *  several simple special queries in a proper way, forwarding them to the backend
  *  connection.
- * Note: queries have hostgroup=0 to avoid getting lock on hostgroup 0 and
- *       attempting to run queries on hostgroup 1
+ * Note: After locking on a hostgroup via a failing SET, all subsequent queries are
+ *       forwarded to the locked hostgroup. No hostgroup hint is needed because
+ *       lock_hostgroup prevents re-routing to reader hostgroups.
  */
 
 #include <cstring>
@@ -33,7 +34,7 @@ void check_set_names(MYSQL* proxysql_mysql) {
 		return;
 	}
 
-	query_res = mysql_query(proxysql_mysql, "SELECT /* ;hostgroup=0 */ @@character_set_client, @@character_set_results, @@character_set_connection");
+	query_res = mysql_query(proxysql_mysql, "SELECT @@character_set_client, @@character_set_results, @@character_set_connection");
 	if (query_res) {
 		diag("Query failed with error: %s", mysql_error(proxysql_mysql));
 		return;
@@ -77,7 +78,7 @@ void check_set_names(MYSQL* proxysql_mysql) {
  * @param proxysql_mysql A MYSQL handle to an already stablished MySQL connection.
  */
 void check_autocommit(MYSQL* proxysql_mysql) {
-	int query_res = mysql_query(proxysql_mysql, "SELECT /* ;hostgroup=0 */ @@autocommit");
+	int query_res = mysql_query(proxysql_mysql, "SELECT @@autocommit");
 	if (query_res) {
 		diag("Query failed with error: %s", mysql_error(proxysql_mysql));
 		return;
@@ -104,7 +105,7 @@ void check_autocommit(MYSQL* proxysql_mysql) {
 	}
 
 	// Check new status on @@autocommit
-	query_res = mysql_query(proxysql_mysql, "SELECT /* ;hostgroup=0 */ @@autocommit");
+	query_res = mysql_query(proxysql_mysql, "SELECT @@autocommit");
 	if (query_res) {
 		diag("Query failed with error: %s", mysql_error(proxysql_mysql));
 		return;
@@ -139,7 +140,7 @@ void check_session_character_set_server(MYSQL* proxysql_mysql) {
 		return;
 	}
 
-	query_res = mysql_query(proxysql_mysql, "SELECT /* ;hostgroup=0 */ @@character_set_server");
+	query_res = mysql_query(proxysql_mysql, "SELECT @@character_set_server");
 	if (query_res) {
 		diag("Query failed with error: %s", mysql_error(proxysql_mysql));
 		return;
@@ -178,7 +179,7 @@ void check_session_character_set_results(MYSQL* proxysql_mysql) {
 		return;
 	}
 
-	query_res = mysql_query(proxysql_mysql, "SELECT /* ;hostgroup=0 */ @@character_set_results");
+	query_res = mysql_query(proxysql_mysql, "SELECT @@character_set_results");
 	if (query_res) {
 		diag("Query failed with error: %s", mysql_error(proxysql_mysql));
 		return;
