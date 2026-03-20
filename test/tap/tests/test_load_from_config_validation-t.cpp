@@ -246,6 +246,26 @@ void create_valid_config(const string& config_file_path) {
                 port=6033
             }
         )
+
+        restapi_routes=
+        (
+            {
+                active=1
+                timeout_ms=5000
+                method="GET"
+                uri="healthz"
+                script="/tmp/proxysql-healthcheck.bash"
+                comment="health check"
+            },
+            {
+                active=1
+                timeout_ms=6000
+                method="POST"
+                uri="sync"
+                script="/tmp/proxysql-sync.bash"
+                comment="sync route"
+            }
+        )
     )";
 
     fstream config_file;
@@ -283,7 +303,8 @@ int main(int argc, char** argv) {
         {"LOAD PGSQL USERS FROM CONFIG", "SELECT * FROM pgsql_users", 2},
         {"LOAD MYSQL SERVERS FROM CONFIG", "SELECT * FROM mysql_servers", 2},
         {"LOAD PGSQL SERVERS FROM CONFIG", "SELECT * FROM pgsql_servers", 2},
-        {"LOAD PROXYSQL SERVERS FROM CONFIG", "SELECT * FROM proxysql_servers", 2}
+        {"LOAD PROXYSQL SERVERS FROM CONFIG", "SELECT * FROM proxysql_servers", 2},
+        {"LOAD RESTAPI FROM CONFIG", "SELECT * FROM restapi_routes", 2}
     };
 
     int n = tc_valid.size()
@@ -361,6 +382,7 @@ int main(int argc, char** argv) {
     MYSQL_QUERY_T(admin, "DELETE FROM mysql_servers");
     MYSQL_QUERY_T(admin, "DELETE FROM pgsql_servers");
     MYSQL_QUERY_T(admin, "DELETE FROM proxysql_servers");
+    MYSQL_QUERY_T(admin, "DELETE FROM restapi_routes");
 
     create_valid_config(config_file);
     for (auto it = tc_valid.begin(); it != tc_valid.end(); it++) {

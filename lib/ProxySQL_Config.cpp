@@ -443,17 +443,26 @@ int ProxySQL_Config::Write_Restapi_to_configfile(std::string& data) {
 
 int ProxySQL_Config::Read_Restapi_from_configfile() {
 	const Setting& root = GloVars.confFile->cfg.getRoot();
-	if (root.exists("restapi")==false) return 0;
-	const Setting &routes = root["restapi"];
+	const char* routes_section = nullptr;
+	if (root.exists("restapi_routes")) {
+		routes_section = "restapi_routes";
+	} else if (root.exists("restapi")) {
+		routes_section = "restapi";
+	} else {
+		return 0;
+	}
+	const Setting &routes = root[routes_section];
 	int count = routes.getLength();
 	//fprintf(stderr, "Found %d users\n",count);
 	int i;
 	int rows=0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	char *q=(char *)"INSERT OR REPLACE INTO restapi_routes VALUES (%d, %d, %d, '%s', '%s', '%s', '%s')";
+	const char *q_with_id = "INSERT OR REPLACE INTO restapi_routes VALUES (%d, %d, %d, '%s', '%s', '%s', '%s')";
+	const char *q_without_id = "INSERT OR REPLACE INTO restapi_routes (active, timeout_ms, method, uri, script, comment) VALUES (%d, %d, '%s', '%s', '%s', '%s')";
 	for (i=0; i< count; i++) {
 		const Setting &route = routes[i];
-		int id;
+		int id=0;
+		bool id_exists=false;
 		int active=1;
 		// variable for parsing timeout_ms
 		int timeout_ms=0;
@@ -464,10 +473,7 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 		std::string comment="";
 
 		// validate arguments
-		if (route.lookupValue("id", id)==false) {
-			proxy_error("Admin: detected a restapi route in config file without a mandatory id\n");
-			continue;
-		}
+		id_exists = route.lookupValue("id", id);
 		route.lookupValue("active", active);
 		if (route.lookupValue("interval_ms", timeout_ms) == false) {
 			route.lookupValue("timeout_ms", timeout_ms);
@@ -486,9 +492,9 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 		}
 		route.lookupValue("comment", comment);
 
+		const char *q = id_exists ? q_with_id : q_without_id;
 		int query_len=0;
 		query_len+=strlen(q) +
-			strlen(std::to_string(id).c_str()) +
 			strlen(std::to_string(active).c_str()) +
 			strlen(std::to_string(timeout_ms).c_str()) +
 			strlen(method.c_str()) +
@@ -496,15 +502,29 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 			strlen(script.c_str()) +
 			strlen(comment.c_str()) +
 			40;
+		if (id_exists) {
+			query_len += strlen(std::to_string(id).c_str());
+		}
 		char *query=(char *)malloc(query_len);
-		sprintf(query, q,
-			id, active,
-			timeout_ms,
-			method.c_str(),
-			uri.c_str(),
-			script.c_str(),
-			comment.c_str()
-		);
+		if (id_exists) {
+			sprintf(query, q,
+				id, active,
+				timeout_ms,
+				method.c_str(),
+				uri.c_str(),
+				script.c_str(),
+				comment.c_str()
+			);
+		} else {
+			sprintf(query, q,
+				active,
+				timeout_ms,
+				method.c_str(),
+				uri.c_str(),
+				script.c_str(),
+				comment.c_str()
+			);
+		}
 		admindb->execute(query);
 		free(query);
 		rows++;
