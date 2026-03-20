@@ -492,10 +492,14 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 		}
 		route.lookupValue("comment", comment);
 
-		char *method_escaped_raw = strdup(method.c_str());
-		char *uri_escaped_raw = strdup(uri.c_str());
-		char *script_escaped_raw = strdup(script.c_str());
-		char *comment_escaped_raw = strdup(comment.c_str());
+		char *method_escaped_raw = NULL;
+		char *uri_escaped_raw = NULL;
+		char *script_escaped_raw = NULL;
+		char *comment_escaped_raw = NULL;
+		method_escaped_raw = strdup(method.c_str());
+		uri_escaped_raw = strdup(uri.c_str());
+		script_escaped_raw = strdup(script.c_str());
+		comment_escaped_raw = strdup(comment.c_str());
 		if (method_escaped_raw == NULL || uri_escaped_raw == NULL || script_escaped_raw == NULL || comment_escaped_raw == NULL) {
 			proxy_error("Admin: unable to allocate memory while loading restapi routes from config file\n");
 			free(method_escaped_raw);
@@ -510,17 +514,20 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 		char *comment_escaped = escape_string_single_quotes(comment_escaped_raw, false);
 
 		const char *q = id_exists ? q_with_id : q_without_id;
+		const std::string active_str = std::to_string(active);
+		const std::string timeout_ms_str = std::to_string(timeout_ms);
+		const std::string id_str = id_exists ? std::to_string(id) : std::string();
 		int query_len=0;
 		query_len+=strlen(q) +
-			strlen(std::to_string(active).c_str()) +
-			strlen(std::to_string(timeout_ms).c_str()) +
+			strlen(active_str.c_str()) +
+			strlen(timeout_ms_str.c_str()) +
 			strlen(method_escaped) +
 			strlen(uri_escaped) +
 			strlen(script_escaped) +
 			strlen(comment_escaped) +
 			40;
 		if (id_exists) {
-			query_len += strlen(std::to_string(id).c_str());
+			query_len += strlen(id_str.c_str());
 		}
 		char *query=(char *)malloc(query_len);
 		if (query == NULL) {
