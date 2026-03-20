@@ -716,7 +716,7 @@ class MySQL_Threads_Handler
 	~MySQL_Threads_Handler();
 	
 	char *get_variable_string(char *name);
-	uint16_t get_variable_uint16(char *name);
+	uint32_t get_variable_uint32(char *name);
 	int get_variable_int(const char *name);
 	void print_version();
 	void init(unsigned int num=0, size_t stack=0);

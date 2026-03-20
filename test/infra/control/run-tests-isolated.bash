@@ -9,6 +9,15 @@ export WORKSPACE="${REPO_ROOT}"
 
 # Default INFRA_ID if not provided
 export INFRA_ID="${INFRA_ID:-dev-$USER}"
+export INFRA="${INFRA:-${INFRA_TYPE}}"
+
+expand_infra_list() {
+    local list_path="$1"
+    while IFS= read -r infra_name; do
+        [ -n "${infra_name}" ] || continue
+        eval "printf '%s\n' \"${infra_name}\""
+    done < "${list_path}"
+}
 
 # 1. Determine Required Infras
 INFRAS_TO_CHECK=""
@@ -16,9 +25,9 @@ BASE_GROUP="${TAP_GROUP%%-g[0-9]*}" # Strip -g1, -g2 etc.
 
 if [ -n "${TAP_GROUP}" ]; then
     if [ -f "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst" ]; then
-        INFRAS_TO_CHECK=$(cat "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst")
+        INFRAS_TO_CHECK=$(expand_infra_list "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst")
     elif [ -f "${WORKSPACE}/test/tap/groups/${BASE_GROUP}/infras.lst" ]; then
-        INFRAS_TO_CHECK=$(cat "${WORKSPACE}/test/tap/groups/${BASE_GROUP}/infras.lst")
+        INFRAS_TO_CHECK=$(expand_infra_list "${WORKSPACE}/test/tap/groups/${BASE_GROUP}/infras.lst")
     fi
 fi
 

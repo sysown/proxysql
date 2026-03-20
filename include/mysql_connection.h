@@ -83,6 +83,7 @@ class MySQL_Connection {
 		uint32_t server_capabilities;
 		uint32_t client_flag;
 		unsigned int compression_min_length;
+		uint8_t zstd_compression_level;
 		char *init_connect;
 		bool init_connect_sent;
 		char * session_track_gtids;
@@ -93,6 +94,7 @@ class MySQL_Connection {
 		uint8_t protocol_version;
 		int8_t last_set_autocommit;
 		bool autocommit;
+		bool compression_zstd;
 		bool no_backslash_escapes;
 	} options;
 
