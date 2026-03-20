@@ -1,5 +1,9 @@
-CREATE DATABASE IF NOT EXISTS testdb;
-USE testdb;
+-- AI Group MySQL Test Data Seeding
+-- Creates tables needed by AI/MCP tests
+-- This is executed by docker-mysql-post.bash when TAP_GROUP starts with 'ai'
+
+CREATE DATABASE IF NOT EXISTS test;
+USE test;
 
 CREATE TABLE IF NOT EXISTS tap_mysql_static_customers (
   customer_id INT PRIMARY KEY,
@@ -25,3 +29,5 @@ INSERT INTO tap_mysql_static_orders(order_id, customer_id, total_amount) VALUES
   (101, 1, 42.50),
   (102, 2, 18.99)
 ON DUPLICATE KEY UPDATE total_amount=VALUES(total_amount);
+
+FLUSH TABLES;

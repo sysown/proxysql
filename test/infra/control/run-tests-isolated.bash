@@ -138,6 +138,22 @@ docker run \
         python3 "${WORKSPACE}/test/scripts/bin/proxysql-tester.py"
     "
 
+# Execute group-specific pre-cleanup hook if it exists
+# This runs before the test runner container is removed, allowing cleanup
+# of ProxySQL-specific configuration while admin is still accessible
+if [ -n "${TAP_GROUP}" ]; then
+    BASE_GROUP="${TAP_GROUP%%-g[0-9]*}"
+    PRE_CLEANUP_HOOK="${WORKSPACE}/test/tap/groups/${TAP_GROUP}/pre-cleanup.bash"
+    if [ ! -f "${PRE_CLEANUP_HOOK}" ]; then
+        PRE_CLEANUP_HOOK="${WORKSPACE}/test/tap/groups/${BASE_GROUP}/pre-cleanup.bash"
+    fi
+
+    if [ -f "${PRE_CLEANUP_HOOK}" ]; then
+        echo ">>> Executing group pre-cleanup hook: ${PRE_CLEANUP_HOOK}"
+        "${PRE_CLEANUP_HOOK}" || true  # Allow cleanup to fail
+    fi
+fi
+
 # Clean up only the runner container
 echo ">>> Cleaning up Test Runner container"
 docker rm -f "${TEST_CONTAINER}" >/dev/null 2>&1 || true
