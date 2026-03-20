@@ -102,10 +102,14 @@ run_single_group() {
     local log_file="${RESULTS_DIR}/${group}.log"
     local start_time end_time duration
 
-    # Add random delay (1-20 seconds) to stagger infrastructure startup
+    # Add random delay to stagger infrastructure startup
     # This prevents resource contention when running multiple groups in parallel
-    local delay=$((RANDOM % 20 + 1))
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ${group}: Waiting ${delay}s to stagger startup..." | tee -a "${log_file}"
+    # Use group name hash + random to ensure both unique and unpredictable delays
+    local group_hash=$(echo -n "${group}" | cksum | cut -d' ' -f1)
+    local base_delay=$((group_hash % 15))  # 0-14 seconds based on group name
+    local random_delay=$((RANDOM % 10 + 1))  # 1-10 seconds random
+    local delay=$((base_delay + random_delay))  # Total: 1-24 seconds
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ${group}: Waiting ${delay}s to stagger startup (base=${base_delay}s + random=${random_delay}s)..." | tee -a "${log_file}"
     sleep "${delay}"
 
     start_time=$(date +%s)
