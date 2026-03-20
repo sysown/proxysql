@@ -121,13 +121,14 @@ run_single_group() {
 
     # Run tests with timeout - capture exit code properly
     local cmd_exit_code=0
-    timeout "${TIMEOUT_MINUTES}m" bash <<'INNERSHELL' || cmd_exit_code=$?
+    # Export variables for the subshell
+    export INFRA_ID="${infra_id}"
+    export TAP_GROUP="${group}"
+    export SKIP_CLUSTER_START="${SKIP_CLUSTER_START}"
+    export COVERAGE="${COVERAGE}"
+
+    timeout "${TIMEOUT_MINUTES}m" bash <<INNERSHELL || cmd_exit_code=$?
         set -euo pipefail
-        export INFRA_ID="${infra_id}"
-        export TAP_GROUP="${group}"
-        export WORKSPACE="${WORKSPACE}"
-        export SKIP_CLUSTER_START="${SKIP_CLUSTER_START}"
-        export COVERAGE="${COVERAGE}"
 
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Setting up infrastructure..." | tee -a "${log_file}"
         if ! "${SCRIPT_DIR}/ensure-infras.bash" >> "${log_file}" 2>&1; then
