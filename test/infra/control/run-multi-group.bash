@@ -22,7 +22,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 export WORKSPACE="${WORKSPACE:-${REPO_ROOT}}"
 RUN_ID="${RUN_ID:-$(date +%s)}"
 TAP_GROUPS="${TAP_GROUPS:-}"
-PARALLEL_JOBS="${PARALLEL_JOBS:-0}"  # 0 = unlimited
+PARALLEL_JOBS="${PARALLEL_JOBS:-2}"  # Default: 2 parallel groups
 TIMEOUT_MINUTES="${TIMEOUT_MINUTES:-60}"
 EXIT_ON_FIRST_FAIL="${EXIT_ON_FIRST_FAIL:-0}"
 AUTO_CLEANUP="${AUTO_CLEANUP:-0}"
@@ -35,9 +35,11 @@ if [ -z "${TAP_GROUPS}" ]; then
     exit 1
 fi
 
-# Convert TAP_GROUPS to array
-read -ra GROUPS <<< "${TAP_GROUPS}"
-TOTAL_GROUPS=${#GROUPS[@]}
+# Count groups
+TOTAL_GROUPS=0
+for _ in ${TAP_GROUPS}; do
+    TOTAL_GROUPS=$((TOTAL_GROUPS + 1))
+done
 
 if [ "${TOTAL_GROUPS}" -eq 0 ]; then
     echo "ERROR: No TAP groups specified."
@@ -90,6 +92,14 @@ run_single_group() {
     local log_file="${RESULTS_DIR}/${group}.log"
     local start_time end_time duration
 
+    # Add random delay (0-15 seconds) to stagger infrastructure startup
+    # This prevents resource contention when running multiple groups in parallel
+    local delay=$((RANDOM % 15))
+    if [ "${delay}" -gt 0 ]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] ${group}: Waiting ${delay}s to stagger startup..." | tee -a "${log_file}"
+        sleep "${delay}"
+    fi
+
     start_time=$(date +%s)
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] STARTING: ${group} (INFRA_ID: ${infra_id})" | tee -a "${log_file}"
 
@@ -101,7 +111,9 @@ run_single_group() {
     # Note: We don't run cleanup here - let the user decide when to destroy
     local exit_code=0
 
-    if ! timeout "${TIMEOUT_MINUTES}m" bash -c "
+    # Run tests with timeout - capture exit code properly
+    local cmd_exit_code=0
+    timeout "${TIMEOUT_MINUTES}m" bash -c "
         set -euo pipefail
         export INFRA_ID='${infra_id}'
         export TAP_GROUP='${group}'
@@ -121,16 +133,18 @@ run_single_group() {
         fi
 
         echo '[$(date '+%Y-%m-%d %H:%M:%S')] Tests completed successfully' | tee -a '${log_file}'
-    "; then
-        exit_code=$?
-        if [ "${exit_code}" -eq 124 ]; then
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] TIMEOUT: ${group} after ${TIMEOUT_MINUTES} minutes" | tee -a "${log_file}"
-            exit_code=124
-        else
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] FAILED: ${group} (exit code: ${exit_code})" | tee -a "${log_file}"
-        fi
-    else
+    " || cmd_exit_code=$?
+
+    # Process exit code
+    if [ "${cmd_exit_code}" -eq 0 ]; then
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] SUCCESS: ${group}" | tee -a "${log_file}"
+        exit_code=0
+    elif [ "${cmd_exit_code}" -eq 124 ]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] TIMEOUT: ${group} after ${TIMEOUT_MINUTES} minutes" | tee -a "${log_file}"
+        exit_code=124
+    else
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] FAILED: ${group} (exit code: ${cmd_exit_code})" | tee -a "${log_file}"
+        exit_code="${cmd_exit_code}"
     fi
 
     end_time=$(date +%s)
@@ -166,7 +180,7 @@ OVERALL_FAILED=0
 JOBS_RUNNING=0
 
 # Launch jobs
-for group in "${GROUPS[@]}"; do
+for group in ${TAP_GROUPS}; do
     # Check if we should stop due to previous failure
     if [ "${EXIT_ON_FIRST_FAIL}" -eq 1 ] && [ "${OVERALL_FAILED}" -ne 0 ]; then
         echo ">>> Skipping ${group} due to previous failure"
@@ -213,7 +227,7 @@ echo "=========================================="
 printf "%-25s %10s %12s\n" "Group" "Duration" "Status"
 echo "------------------------------------------"
 
-for group in "${GROUPS[@]}"; do
+for group in ${TAP_GROUPS}; do
     exit_code="${EXIT_CODES[${group}]:-1}"
     result_file="${RESULTS_DIR}/${group}.result"
 
@@ -246,7 +260,7 @@ PASS_COUNT=0
 FAIL_COUNT=0
 TIMEOUT_COUNT=0
 
-for group in "${GROUPS[@]}"; do
+for group in ${TAP_GROUPS}; do
     exit_code="${EXIT_CODES[${group}]:-1}"
     if [ "${exit_code}" -eq 0 ]; then
         PASS_COUNT=$((PASS_COUNT + 1))
@@ -268,7 +282,7 @@ echo ""
 # Print log locations for failed groups
 if [ "${FAIL_COUNT}" -gt 0 ] || [ "${TIMEOUT_COUNT}" -gt 0 ]; then
     echo "Failed/Timed out group logs:"
-    for group in "${GROUPS[@]}"; do
+    for group in ${TAP_GROUPS}; do
         exit_code="${EXIT_CODES[${group}]:-1}"
         if [ "${exit_code}" -ne 0 ]; then
             echo "  ${group}: ${RESULTS_DIR}/${group}.log"
