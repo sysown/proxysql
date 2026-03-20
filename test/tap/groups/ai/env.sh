@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # AI TAP Group Environment Configuration
 # Defines the primary targets for AI/MCP tests using standard test/infra/ pattern
 

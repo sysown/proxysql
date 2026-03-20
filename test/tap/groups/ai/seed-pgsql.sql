@@ -1,6 +1,6 @@
 -- AI Group PostgreSQL Test Data Seeding
 -- Creates tables needed by AI/MCP tests
--- This is executed by docker-pgsql-post.bash when TAP_GROUP starts with 'ai'
+-- This is executed by setup-infras.bash as part of AI group infrastructure setup
 
 CREATE TABLE IF NOT EXISTS public.tap_pgsql_static_accounts (
   account_id INT PRIMARY KEY,

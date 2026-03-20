@@ -34,6 +34,17 @@ if [ -z "${DEFAULT_MYSQL_INFRA:-}" ] || [ -z "${DEFAULT_PGSQL_INFRA:-}" ]; then
     fi
 fi
 
+# Validate that required infrastructure names were resolved
+if [ -z "${DEFAULT_MYSQL_INFRA:-}" ]; then
+    echo "ERROR: Could not resolve DEFAULT_MYSQL_INFRA (check ${SCRIPT_DIR}/infras.lst)"
+    exit 1
+fi
+
+if [ -z "${DEFAULT_PGSQL_INFRA:-}" ]; then
+    echo "ERROR: Could not resolve DEFAULT_PGSQL_INFRA (check ${SCRIPT_DIR}/infras.lst)"
+    exit 1
+fi
+
 export ROOT_PASSWORD=$(echo -n "${INFRA_ID}" | sha256sum | head -c 10)
 PROXY_CONTAINER="proxysql.${INFRA_ID}"
 

@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # AI-g1 Subgroup Environment Configuration
 # Sources the parent ai group configuration
 

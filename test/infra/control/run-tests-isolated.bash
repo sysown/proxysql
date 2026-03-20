@@ -12,7 +12,7 @@ export INFRA_ID="${INFRA_ID:-dev-$USER}"
 
 # 1. Determine Required Infras
 INFRAS_TO_CHECK=""
-BASE_GROUP="${TAP_GROUP%%-g[0-9]*}" # Strip -g1, -g2 etc.
+BASE_GROUP=$(echo "${TAP_GROUP}" | sed -E "s/[-_]g[0-9]+.*//") # Strip -g1, -g2, _g1, _g2 etc.
 
 if [ -n "${TAP_GROUP}" ]; then
     if [ -f "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst" ]; then
@@ -142,7 +142,6 @@ docker run \
 # This runs before the test runner container is removed, allowing cleanup
 # of ProxySQL-specific configuration while admin is still accessible
 if [ -n "${TAP_GROUP}" ]; then
-    BASE_GROUP="${TAP_GROUP%%-g[0-9]*}"
     PRE_CLEANUP_HOOK="${WORKSPACE}/test/tap/groups/${TAP_GROUP}/pre-cleanup.bash"
     if [ ! -f "${PRE_CLEANUP_HOOK}" ]; then
         PRE_CLEANUP_HOOK="${WORKSPACE}/test/tap/groups/${BASE_GROUP}/pre-cleanup.bash"

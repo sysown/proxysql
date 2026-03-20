@@ -26,9 +26,9 @@ LOAD PGSQL SERVERS TO RUNTIME;
 SAVE PGSQL SERVERS TO DISK;
 
 -- Configure frontend users for TAP tests
-INSERT OR IGNORE INTO mysql_users (username, password, active, default_hostgroup, comment)
+INSERT OR REPLACE INTO mysql_users (username, password, active, default_hostgroup, comment)
     VALUES ('${TAP_MYSQLUSERNAME}', '${TAP_MYSQLPASSWORD}', 1, 0, 'ai local');
-INSERT OR IGNORE INTO mysql_users (username, password, active, default_hostgroup, comment)
+INSERT OR REPLACE INTO mysql_users (username, password, active, default_hostgroup, comment)
     VALUES ('testuser', 'testuser', 1, 0, 'ai local');
 LOAD MYSQL USERS TO RUNTIME;
 SAVE MYSQL USERS TO DISK;

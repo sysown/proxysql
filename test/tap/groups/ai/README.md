@@ -93,6 +93,7 @@ source test/infra/common/env.sh
 export INFRA_ID="ai-harvest-$(date +%s)"
 export TAP_GROUP="ai-g1"
 export TEST_PY_TAP_INCL="test_mcp_static_harvest-t"
+export WORKSPACE=$(pwd)
 
 source test/infra/common/env.sh
 ./test/infra/control/ensure-infras.bash
@@ -106,6 +107,7 @@ source test/infra/common/env.sh
 export INFRA_ID="ai-discovery-$(date +%s)"
 export TAP_GROUP="ai-g1"
 export TEST_PY_TAP_INCL="test_mcp_llm_discovery_phaseb-t"
+export WORKSPACE=$(pwd)
 
 source test/infra/common/env.sh
 ./test/infra/control/ensure-infras.bash
@@ -119,6 +121,7 @@ source test/infra/common/env.sh
 export INFRA_ID="ai-claude-$(date +%s)"
 export TAP_GROUP="ai-g1"
 export TEST_PY_TAP_INCL="test_mcp_claude_headless_flow-t"
+export WORKSPACE=$(pwd)
 
 source test/infra/common/env.sh
 ./test/infra/control/ensure-infras.bash

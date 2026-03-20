@@ -1,6 +1,6 @@
 -- AI Group MySQL Test Data Seeding
 -- Creates tables needed by AI/MCP tests
--- This is executed by docker-mysql-post.bash when TAP_GROUP starts with 'ai'
+-- This is executed by setup-infras.bash as part of AI group infrastructure setup
 
 CREATE DATABASE IF NOT EXISTS test;
 USE test;
