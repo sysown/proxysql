@@ -178,6 +178,13 @@
 
 #define STATS_SQLITE_TABLE_TSDB "CREATE TABLE stats_tsdb (Variable_Name VARCHAR NOT NULL PRIMARY KEY , Variable_Value VARCHAR NOT NULL)"
 
+/**
+ * @brief Table for global ProxySQL statistics that are not specific to MySQL or PgSQL.
+ * @details Populated at query time by stats___global(). Contains metrics such as TLS load
+ *   status, certificate file paths, and future cross-protocol statistics.
+ */
+#define STATS_SQLITE_TABLE_GLOBAL "CREATE TABLE stats_global (Variable_Name VARCHAR NOT NULL PRIMARY KEY , Variable_Value VARCHAR NOT NULL)"
+
 #define STATS_SQLITE_TABLE_MEMORY_METRICS "CREATE TABLE stats_memory_metrics (Variable_Name VARCHAR NOT NULL PRIMARY KEY , Variable_Value VARCHAR NOT NULL)"
 
 #define STATS_SQLITE_TABLE_MYSQL_GTID_EXECUTED "CREATE TABLE stats_mysql_gtid_executed (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , gtid_executed VARCHAR , events INT NOT NULL)"

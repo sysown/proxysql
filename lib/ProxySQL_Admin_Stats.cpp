@@ -628,18 +628,6 @@ void ProxySQL_Admin::stats___mysql_global() {
 	sqlite3_global_stats_row_step(statsdb, row_stmt, "mysql_listener_paused", admin_proxysql_mysql_paused);
 	sqlite3_global_stats_row_step(statsdb, row_stmt, "OpenSSL_Version_Num", OpenSSL_version_num());
 
-	{
-		std::lock_guard<std::mutex> lock(GloVars.global.ssl_mutex);
-		sqlite3_global_stats_row_step(statsdb, row_stmt, "TLS_Load_Count", GloVars.global.tls_load_count);
-		sqlite3_global_stats_row_step(statsdb, row_stmt, "TLS_Last_Load_Timestamp", (unsigned long long)GloVars.global.tls_last_load_timestamp);
-		const char *tls_result = GloVars.global.tls_load_count == 0 ? "NONE" : (GloVars.global.tls_last_load_ok ? "SUCCESS" : "FAILED");
-		sqlite3_global_stats_row_step_str(statsdb, row_stmt, "TLS_Last_Load_Result", tls_result);
-		sqlite3_global_stats_row_step_str(statsdb, row_stmt, "TLS_Server_Cert_File", GloVars.global.tls_cert_file ? GloVars.global.tls_cert_file : "");
-		sqlite3_global_stats_row_step_str(statsdb, row_stmt, "TLS_CA_Cert_File", GloVars.global.tls_ca_file ? GloVars.global.tls_ca_file : "");
-		sqlite3_global_stats_row_step_str(statsdb, row_stmt, "TLS_Key_File", GloVars.global.tls_key_file ? GloVars.global.tls_key_file : "");
-	}
-
-
 	if (GloMyLogger != nullptr) {
 		const string prefix = "MySQL_Logger_";
 		std::unordered_map<std::string, unsigned long long> metrics = GloMyLogger->getAllMetrics();
@@ -823,6 +811,48 @@ void ProxySQL_Admin::stats___pgsql_global() {
 			string var_name = prefix + it->first;
 			sqlite3_global_stats_row_step(statsdb, row_stmt, var_name.c_str(), it->second);
 		}
+	}
+
+	statsdb->execute("COMMIT");
+}
+
+/**
+ * @brief Populates the `stats_global` table with ProxySQL-wide metrics
+ *   that are not specific to the MySQL or PgSQL protocol.
+ *
+ * @details This function is called at query time whenever the stats_global table
+ *   is accessed (e.g. "SELECT * FROM stats.stats_global"). It deletes all existing
+ *   rows and reinserts fresh values, ensuring `TLS_Last_Load_Timestamp` and other
+ *   time-sensitive data are always current.
+ *
+ *   Currently tracked variables:
+ *   - TLS_Load_Count          : Number of times TLS has been loaded or reloaded.
+ *   - TLS_Last_Load_Timestamp : Unix timestamp of the most recent successful TLS load.
+ *   - TLS_Last_Load_Result    : "NONE", "SUCCESS", or "FAILED" depending on last load outcome.
+ *   - TLS_Server_Cert_File    : Path to the server TLS certificate file.
+ *   - TLS_CA_Cert_File        : Path to the CA certificate file.
+ *   - TLS_Key_File            : Path to the private key file.
+ */
+void ProxySQL_Admin::stats___global() {
+	statsdb->execute("BEGIN");
+	statsdb->execute("DELETE FROM stats_global");
+
+	const string q_row_insert { "INSERT INTO stats_global VALUES (?1, ?2)" };
+	int rc = 0;
+	stmt_unique_ptr u_row_stmt { nullptr };
+	std::tie(rc, u_row_stmt) = statsdb->prepare_v2(q_row_insert.c_str());
+	ASSERT_SQLITE_OK(rc, statsdb);
+	sqlite3_stmt *row_stmt = u_row_stmt.get();
+
+	{
+		std::lock_guard<std::mutex> lock(GloVars.global.ssl_mutex);
+		sqlite3_global_stats_row_step(statsdb, row_stmt, "TLS_Load_Count", GloVars.global.tls_load_count);
+		sqlite3_global_stats_row_step(statsdb, row_stmt, "TLS_Last_Load_Timestamp", (unsigned long long)GloVars.global.tls_last_load_timestamp);
+		const char *tls_result = GloVars.global.tls_load_count == 0 ? "NONE" : (GloVars.global.tls_last_load_ok ? "SUCCESS" : "FAILED");
+		sqlite3_global_stats_row_step_str(statsdb, row_stmt, "TLS_Last_Load_Result", tls_result);
+		sqlite3_global_stats_row_step_str(statsdb, row_stmt, "TLS_Server_Cert_File", GloVars.global.tls_cert_file ? GloVars.global.tls_cert_file : "");
+		sqlite3_global_stats_row_step_str(statsdb, row_stmt, "TLS_CA_Cert_File", GloVars.global.tls_ca_file ? GloVars.global.tls_ca_file : "");
+		sqlite3_global_stats_row_step_str(statsdb, row_stmt, "TLS_Key_File", GloVars.global.tls_key_file ? GloVars.global.tls_key_file : "");
 	}
 
 	statsdb->execute("COMMIT");
