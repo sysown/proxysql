@@ -32,6 +32,10 @@ IDIRS :=	-I$(PROXYSQL_IDIR) \
 ifeq ($(UNAME_S),Linux)
 	IDIRS += -I$(COREDUMPER_IDIR)
 endif
+ifeq ($(UNAME_S),Darwin)
+	IDIRS += -I/usr/local/include -I/opt/homebrew/include
+	LDIRS += -L/usr/local/lib -L/opt/homebrew/lib
+endif
 
 LDIRS :=	-L$(JEMALLOC_LDIR) \
 			-L$(RE2_LDIR) \

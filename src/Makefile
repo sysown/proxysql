@@ -50,7 +50,7 @@ ifeq ($(UNAME_S),Linux)
 	LDIRS += -L$(COREDUMPER_LDIR)
 endif
 ifeq ($(UNAME_S),Darwin)
-	IDIRS += -I/usr/local/include
+	IDIRS += -I/usr/local/include -I/opt/homebrew/include
 	LDIRS += -L/usr/local/lib -L/opt/homebrew/lib
 endif
 
