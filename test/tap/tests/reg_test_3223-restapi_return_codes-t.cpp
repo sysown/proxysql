@@ -31,7 +31,9 @@ using std::vector;
 using hrc = std::chrono::high_resolution_clock;
 using nlohmann::json;
 
-const string base_address { "http://proxysql:6070/sync/" };
+// base_address is constructed at runtime using the ProxySQL host from the environment.
+// It is defined as a mutable global so check functions at file scope can access it.
+static string base_address { "http://proxysql:6070/sync/" };
 
 const vector<honest_req_t> honest_requests {
 	{ { "valid_output_script", "%s.py", "POST", 1000 }, { "{}" } },
@@ -125,6 +127,11 @@ int main(int argc, char** argv) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
+
+	// Build the RESTAPI base address using the actual ProxySQL host from the environment.
+	// This ensures the test works in both local and containerized CI environments.
+	base_address = string("http://") + string(cl.host) + ":6070/sync/";
+	diag("Using RESTAPI base address: %s", base_address.c_str());
 
 	diag("=== Regression Test #3223: RESTAPI Script Execution & Return Codes ===");
 	diag("");

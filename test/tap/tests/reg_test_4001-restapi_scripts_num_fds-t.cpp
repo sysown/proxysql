@@ -28,7 +28,9 @@ using std::string;
 using std::vector;
 
 const int NUM_CONNECTIONS = 1300;
-const string base_address { "http://proxysql:6070/sync/" };
+// base_address is constructed at runtime using the ProxySQL host from the environment.
+// It is defined as a mutable global so check functions at file scope can access it.
+static string base_address { "http://proxysql:6070/sync/" };
 
 const vector<honest_req_t> honest_requests {
 	{ { "valid_output_script", "%s.py", "POST", 5000 }, { "{}" } },
@@ -50,9 +52,13 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
+	// Build the RESTAPI base address using the actual ProxySQL host from the environment.
+	base_address = string("http://") + string(cl.host) + ":6070/sync/";
+
 	diag("Connection Context:");
 	diag("  - Target Host: %s", cl.host);
 	diag("  - Admin Port:  %d", cl.admin_port);
+	diag("  - RESTAPI Base: %s", base_address.c_str());
 
 	const char* ws_env = getenv("WORKSPACE");
 	if (!ws_env) {
