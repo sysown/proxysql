@@ -147,8 +147,10 @@ endif
 ifneq (,$(findstring $(OS),Darwin FreeBSD))
 	NPROCS := $(shell sysctl -n hw.ncpu)
 	LEGACY_BUILD := 1
-    export CC=gcc
-    export CXX=g++
+    CC ?= cc
+    CXX ?= c++
+    export CC
+    export CXX
 endif
 export MAKEOPT := -j${NPROCS}
 
@@ -385,11 +387,7 @@ SYS_ARCH := $(shell uname -m)
 REL_ARCH = $(subst x86_64,amd64,$(subst aarch64,arm64,$(SYS_ARCH)))
 RPM_ARCH = .$(SYS_ARCH)
 DEB_ARCH = _$(REL_ARCH)
-ifeq ($(UNAME_S),Darwin)
 REL_VERS := $(shell echo ${GIT_VERSION} | sed -E 's/^v//' | grep -Eo '^[0-9\.]+')
-else
-REL_VERS := $(shell echo ${GIT_VERSION} | grep -Po '(?<=^v|^)[\d\.]+')
-endif
 RPM_VERS := -$(REL_VERS)-1
 DEB_VERS := _$(REL_VERS)
 
@@ -411,7 +409,7 @@ amd64-fedora: fedora42 fedora42-clang fedora42-dbg fedora43 fedora43-clang fedor
 amd64-opensuse: opensuse15 opensuse15-clang opensuse15-dbg opensuse16 opensuse16-clang opensuse16-dbg
 amd64-ubuntu: ubuntu22 ubuntu22-clang ubuntu22-dbg ubuntu24 ubuntu24-clang ubuntu24-dbg
 amd64-pkglist:
-	@${MAKE} -nk amd64-packages 2>/dev/null | grep -Po '(?<=binaries/)proxysql\S+$$'
+	@${MAKE} -nk amd64-packages 2>/dev/null | grep -Eo 'binaries/proxysql[^ ]*' | sed 's,^binaries/,,'
 
 arm64-%: SYS_ARCH := aarch64
 arm64-packages: arm64-centos arm64-debian arm64-ubuntu arm64-fedora arm64-opensuse arm64-almalinux
@@ -422,7 +420,7 @@ arm64-fedora: fedora42 fedora43
 arm64-opensuse: opensuse15 opensuse16
 arm64-ubuntu: ubuntu22 ubuntu24
 arm64-pkglist:
-	@${MAKE} -nk arm64-packages 2>/dev/null | grep -Po '(?<=binaries/)proxysql\S+$$'
+	@${MAKE} -nk arm64-packages 2>/dev/null | grep -Eo 'binaries/proxysql[^ ]*' | sed 's,^binaries/,,'
 
 almalinux%: build-almalinux% ;
 centos%: build-centos% ;
@@ -435,12 +433,12 @@ ubuntu%: build-ubuntu% ;
 .PHONY: build-%
 .NOTPARALLEL: build-%
 build-%: BLD_NAME=$(patsubst build-%,%,$@)
-build-%: PKG_VERS=$(if $(filter $(shell echo ${BLD_NAME} | grep -Po '[a-z]+'),debian ubuntu),$(DEB_VERS),$(RPM_VERS))
-build-%: PKG_TYPE=$(if $(filter $(shell echo $(BLD_NAME) | grep -Po '\-de?bu?g|\-test|\-tap'),-dbg -debug -test -tap),-dbg,)
+build-%: PKG_VERS=$(if $(filter $(shell echo ${BLD_NAME} | grep -Eo '[a-z]+'),debian ubuntu),$(DEB_VERS),$(RPM_VERS))
+build-%: PKG_TYPE=$(if $(filter $(shell echo $(BLD_NAME) | grep -Eo '\-de?bu?g|\-test|\-tap'),-dbg -debug -test -tap),-dbg,)
 build-%: PKG_NAME=$(firstword $(subst -, ,$(BLD_NAME)))
-build-%: PKG_COMP=$(if $(filter $(shell echo $(BLD_NAME) | grep -Po '\-clang'),-clang),-clang,)
-build-%: PKG_ARCH=$(if $(filter $(shell echo ${BLD_NAME} | grep -Po '[a-z]+'),debian ubuntu),$(DEB_ARCH),$(RPM_ARCH))
-build-%: PKG_KIND=$(if $(filter $(shell echo ${BLD_NAME} | grep -Po '[a-z]+'),debian ubuntu),deb,rpm)
+build-%: PKG_COMP=$(if $(filter $(shell echo $(BLD_NAME) | grep -Eo '\-clang'),-clang),-clang,)
+build-%: PKG_ARCH=$(if $(filter $(shell echo ${BLD_NAME} | grep -Eo '[a-z]+'),debian ubuntu),$(DEB_ARCH),$(RPM_ARCH))
+build-%: PKG_KIND=$(if $(filter $(shell echo ${BLD_NAME} | grep -Eo '[a-z]+'),debian ubuntu),deb,rpm)
 build-%: PKG_FILE=binaries/proxysql$(PKG_VERS)$(PKG_TYPE)-$(PKG_NAME)$(PKG_COMP)$(PKG_ARCH).$(PKG_KIND)
 build-%:
 	@echo 'building $@'
