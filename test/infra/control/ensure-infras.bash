@@ -74,6 +74,13 @@ for INFRA_NAME in ${INFRAS}; do
         echo ">>> '${INFRA_NAME}' started successfully."
     else
         echo ">>> '${INFRA_NAME}' is already running."
+        # Run proxy post-configuration to ensure query rules are loaded
+        if [ -f "${INFRA_DIR}/bin/docker-proxy-post.bash" ]; then
+            echo ">>> Ensuring ProxySQL configuration for '${INFRA_NAME}'..."
+            cd "${INFRA_DIR}"
+            ./bin/docker-proxy-post.bash || true
+            cd - >/dev/null
+        fi
     fi
 done
 

@@ -1,7 +1,8 @@
 #!/bin/bash
 set -e
 set -o pipefail
-[ -f .env ] && . .env
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[ -f "${SCRIPT_DIR}/../.env" ] && . "${SCRIPT_DIR}/../.env"
 PROXY_CONTAINER="proxysql.${INFRA_ID}"
 
 echo ">>> Configuring ProxySQL (${PROXY_CONTAINER}) for MariaDB Cluster: ${INFRA}"
