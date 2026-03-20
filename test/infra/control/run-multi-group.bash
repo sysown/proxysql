@@ -92,13 +92,11 @@ run_single_group() {
     local log_file="${RESULTS_DIR}/${group}.log"
     local start_time end_time duration
 
-    # Add random delay (0-15 seconds) to stagger infrastructure startup
+    # Add random delay (1-20 seconds) to stagger infrastructure startup
     # This prevents resource contention when running multiple groups in parallel
-    local delay=$((RANDOM % 15))
-    if [ "${delay}" -gt 0 ]; then
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] ${group}: Waiting ${delay}s to stagger startup..." | tee -a "${log_file}"
-        sleep "${delay}"
-    fi
+    local delay=$((RANDOM % 20 + 1))
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ${group}: Waiting ${delay}s to stagger startup..." | tee -a "${log_file}"
+    sleep "${delay}"
 
     start_time=$(date +%s)
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] STARTING: ${group} (INFRA_ID: ${infra_id})" | tee -a "${log_file}"
