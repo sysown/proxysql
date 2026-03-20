@@ -3,17 +3,17 @@
   "ListenAddress": ":3000",
   "MySQLTopologySSLSkipVerify": true,
   "MySQLTopologyUser": "root",
-  "MySQLTopologyPassword": "9dfaa15039",
+  "MySQLTopologyPassword": "f6faed1dcc",
   "BackendDB": "sqlite",
   "SQLite3DataFile": "/var/lib/orchestrator/orchestrator.db",
   "RaftEnabled": true,
   "RaftDataDir": "/var/lib/orchestrator/",
-  "RaftBind": "orc2.${INFRA}",
+  "RaftBind": "orc2.infra-mysql84",
   "DefaultRaftPort": 10008,
   "RaftNodes": [
-    "orc1.${INFRA}",
-    "orc2.${INFRA}",
-    "orc3.${INFRA}"
+    "orc1.infra-mysql84",
+    "orc2.infra-mysql84",
+    "orc3.infra-mysql84"
   ],
   "ApplyMySQLPromotionAfterMasterFailover": true,
   "HostnameResolveMethod": "default",

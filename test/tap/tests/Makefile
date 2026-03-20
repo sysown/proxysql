@@ -98,6 +98,11 @@ CUSTOMARGS += -Wl,-Bdynamic -ltap -lcpp_dotenv -lcurl -lssl -lcrypto -lre2 -lpth
 .PHONY: all
 all: tests
 
+.PHONY: tests_no_infra
+tests_no_infra: admin_set_credentials_logging-t listener_conflicts_validation-t
+	./admin_set_credentials_logging-t
+	./listener_conflicts_validation-t
+
 debug: OPT := $(STDCPP) -O0 -DDEBUG -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/libpq -Wl,-rpath,$(RE2_LDIR) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
 debug: tests
 
