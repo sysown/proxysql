@@ -3,6 +3,9 @@
 #include <stdio.h>
 #include <assert.h>
 #include <iostream>
+#ifdef __FreeBSD__
+#include <sys/socket.h>
+#endif
 
 static bool DEBUG_ProxyProtocolInfo = false;
 
