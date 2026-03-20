@@ -138,8 +138,6 @@ docker run \
     -e TAP_GROUP="${TAP_GROUP}" \
     -e SKIP_CLUSTER_START="${SKIP_CLUSTER_START}" \
     -e PROXYSQL_CLUSTER_NODES="${PROXYSQL_CLUSTER_NODES}" \
-    -e COVERAGE_MODE="${COVERAGE_MODE}" \
-    -e COVERAGE_REPORT_DIR="${COVERAGE_REPORT_DIR}" \
     proxysql-ci-base:latest \
     /bin/bash -c "
         set -e
@@ -198,32 +196,7 @@ docker run \
         echo '================================================================================'
 
         # Execute the Python tester
-        TEST_EXIT_CODE=0
-        python3 "${WORKSPACE}/test/scripts/bin/proxysql-tester.py" || TEST_EXIT_CODE=$?
-
-        # Collect coverage data if enabled (runs even if tests failed)
-        if [ "${COVERAGE_MODE}" = "1" ]; then
-            echo ">>> Collecting code coverage data from within container..."
-            if command -v fastcov >/dev/null 2>&1; then
-                mkdir -p "${COVERAGE_REPORT_DIR}"
-                COVERAGE_INFO_FILE="${COVERAGE_REPORT_DIR}/${TAP_GROUP:-test}-${INFRA_ID}.info"
-                echo ">>> Generating coverage report: ${COVERAGE_INFO_FILE}"
-                cd "${WORKSPACE}" && \
-                fastcov -b -j$(nproc) --process-gcno -l \
-                    -e /usr/include/ -e test/tap/tests \
-                    -d . -i include -i lib -i src \
-                    -o "${COVERAGE_INFO_FILE}" 2>&1 || echo ">>> WARNING: Coverage generation failed"
-                if [ -f "${COVERAGE_INFO_FILE}" ]; then
-                    echo ">>> Coverage report generated: ${COVERAGE_INFO_FILE}"
-                else
-                    echo ">>> WARNING: Coverage info file not generated"
-                fi
-            else
-                echo ">>> WARNING: fastcov not found in container, skipping coverage collection"
-            fi
-        fi
-
-        exit ${TEST_EXIT_CODE}
+        python3 "${WORKSPACE}/test/scripts/bin/proxysql-tester.py"
     "
 
 # Execute group-specific pre-cleanup hook if it exists
@@ -238,6 +211,44 @@ if [ -n "${TAP_GROUP}" ]; then
     if [ -f "${PRE_CLEANUP_HOOK}" ]; then
         echo ">>> Executing group pre-cleanup hook: ${PRE_CLEANUP_HOOK}"
         "${PRE_CLEANUP_HOOK}" || true  # Allow cleanup to fail
+    fi
+fi
+
+# Capture code coverage data if enabled
+# This runs regardless of test success/failure
+if [ "${COVERAGE_MODE}" = "1" ]; then
+    echo ">>> Collecting code coverage data..."
+
+    # Check if fastcov is available in the container
+    if docker exec "${TEST_CONTAINER}" which fastcov >/dev/null 2>&1; then
+        COVERAGE_INFO_FILE="${COVERAGE_REPORT_DIR}/${TAP_GROUP:-test}-${INFRA_ID}.info"
+
+        echo ">>> Generating coverage report: ${COVERAGE_INFO_FILE}"
+        # Extract coverage data from container
+        docker exec "${TEST_CONTAINER}" bash -c "
+            cd '${WORKSPACE}' && \
+            fastcov -b -j\$(nproc) --process-gcno -l \
+                -e /usr/include/ -e test/tap/tests \
+                -d . -i include -i lib -i src \
+                -o '${COVERAGE_INFO_FILE}' 2>&1
+        " || echo ">>> WARNING: Coverage generation failed"
+
+        # Check if report was generated
+        if [ -f "${COVERAGE_INFO_FILE}" ]; then
+            echo ">>> Coverage report generated: ${COVERAGE_INFO_FILE}"
+            # Generate HTML report
+            if command -v genhtml >/dev/null 2>&1; then
+                HTML_REPORT_DIR="${COVERAGE_REPORT_DIR}/html/${TAP_GROUP:-test}-${INFRA_ID}"
+                mkdir -p "${HTML_REPORT_DIR}"
+                genhtml --branch-coverage "${COVERAGE_INFO_FILE}" --output-directory "${HTML_REPORT_DIR}" 2>/dev/null || \
+                    echo ">>> WARNING: HTML report generation failed"
+                [ -d "${HTML_REPORT_DIR}" ] && echo ">>> HTML report: ${HTML_REPORT_DIR}/index.html"
+            fi
+        else
+            echo ">>> WARNING: Coverage info file not generated"
+        fi
+    else
+        echo ">>> WARNING: fastcov not found in container, skipping coverage collection"
     fi
 fi
 
