@@ -170,6 +170,18 @@ ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
 		free(global.gr_bootstrap_ssl_mode);
 		global.gr_bootstrap_ssl_mode = nullptr;
 	}
+	if (global.tls_cert_file) {
+		free(global.tls_cert_file);
+		global.tls_cert_file = nullptr;
+	}
+	if (global.tls_ca_file) {
+		free(global.tls_ca_file);
+		global.tls_ca_file = nullptr;
+	}
+	if (global.tls_key_file) {
+		free(global.tls_key_file);
+		global.tls_key_file = nullptr;
+	}
 };
 
 ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
