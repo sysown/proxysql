@@ -93,10 +93,12 @@ for RAW_PATH in ${MOUNTED_PATHS}; do
     fi
 done
 
-# 3. Inject dynamic ROOT_PASSWORD into Orchestrator configs
+# 3. Inject dynamic values into Orchestrator configs
 if [ -d "./conf/orchestrator" ]; then
-    echo "Injecting ROOT_PASSWORD into Orchestrator configurations..."
-    find ./conf/orchestrator -name "orchestrator.conf.json" -exec sed -i "s/\"MySQLTopologyPassword\": \".*\"/\"MySQLTopologyPassword\": \"${ROOT_PASSWORD}\"/g" {} +
+    echo "Injecting ROOT_PASSWORD and INFRA into Orchestrator configurations..."
+    find ./conf/orchestrator -name "orchestrator.conf.json" -exec sed -i \
+        -e "s/\"MySQLTopologyPassword\": \".*\"/\"MySQLTopologyPassword\": \"${ROOT_PASSWORD}\"/g" \
+        -e "s/\${INFRA}/${INFRA}/g" {} +
 fi
 
 # 4. TRANSIENT SSL SETUP (Avoiding repo permission changes)

@@ -9,6 +9,15 @@ export WORKSPACE="${REPO_ROOT}"
 
 # Default INFRA_ID if not provided
 export INFRA_ID="${INFRA_ID:-dev-$USER}"
+export INFRA="${INFRA:-${INFRA_TYPE}}"
+
+expand_infra_list() {
+    local list_path="$1"
+    while IFS= read -r infra_name; do
+        [ -n "${infra_name}" ] || continue
+        eval "printf '%s\n' \"${infra_name}\""
+    done < "${list_path}"
+}
 
 if [ -z "${TAP_GROUP}" ]; then
     echo "ERROR: TAP_GROUP is not set."
@@ -27,7 +36,7 @@ fi
 
 INFRAS=""
 if [ -n "${LST_PATH}" ]; then
-    INFRAS=$(cat "${LST_PATH}")
+    INFRAS=$(expand_infra_list "${LST_PATH}")
     echo ">>> Found infrastructure requirements for group '${TAP_GROUP}' in '${LST_PATH}'"
 else
     if [ -n "${INFRA_TYPE}" ]; then
