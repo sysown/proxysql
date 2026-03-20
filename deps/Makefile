@@ -437,5 +437,6 @@ cleanall:
 	cd libusual && rm -rf libusual-*/ || true
 	cd libscram && rm -rf lib/* obj/* || true
 	cd json && rm -rf json-*/ || true
+	cd zstd && rm -rf zstd-*/ || true
 .PHONY: cleanall
 
