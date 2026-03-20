@@ -13,6 +13,14 @@ set -euo pipefail
 #   EXIT_ON_FIRST_FAIL=0   # Stop on first failure (default: 0)
 #   AUTO_CLEANUP=0         # Auto cleanup successful groups (default: 0)
 #   SKIP_CLUSTER_START=1   # Skip ProxySQL cluster initialization (default: 0)
+#   COVERAGE=1             # Enable code coverage collection (default: 0)
+#
+# Coverage notes:
+#   - Requires ProxySQL to be compiled with COVERAGE=1 (adds --coverage flags)
+#   - Requires fastcov and genhtml to be available in containers
+#   - Coverage is collected regardless of test success/failure/timeout
+#   - Individual reports: ci_infra_logs/{INFRA_ID}/coverage-report/
+#   - Combined report: ci_infra_logs/multi-group-{RUN_ID}/coverage-report/
 #
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,6 +35,7 @@ TIMEOUT_MINUTES="${TIMEOUT_MINUTES:-60}"
 EXIT_ON_FIRST_FAIL="${EXIT_ON_FIRST_FAIL:-0}"
 AUTO_CLEANUP="${AUTO_CLEANUP:-0}"
 SKIP_CLUSTER_START="${SKIP_CLUSTER_START:-0}"
+COVERAGE="${COVERAGE:-0}"
 
 # Validate required variables
 if [ -z "${TAP_GROUPS}" ]; then
@@ -117,6 +126,7 @@ run_single_group() {
         export TAP_GROUP='${group}'
         export WORKSPACE='${WORKSPACE}'
         export SKIP_CLUSTER_START='${SKIP_CLUSTER_START}'
+        export COVERAGE='${COVERAGE}'
 
         echo '[$(date '+%Y-%m-%d %H:%M:%S')] Setting up infrastructure...' | tee -a '${log_file}'
         if ! '${SCRIPT_DIR}/ensure-infras.bash' >> '${log_file}' 2>&1; then
@@ -125,9 +135,12 @@ run_single_group() {
         fi
 
         echo '[$(date '+%Y-%m-%d %H:%M:%S')] Running tests...' | tee -a '${log_file}'
+        # Note: run-tests-isolated.bash handles coverage collection regardless of exit code
         if ! '${SCRIPT_DIR}/run-tests-isolated.bash' >> '${log_file}' 2>&1; then
-            echo '[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Tests failed' | tee -a '${log_file}'
-            exit 1
+            cmd_exit_code=\$?
+            echo '[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: Tests failed with exit code \${cmd_exit_code}' | tee -a '${log_file}'
+            # Coverage is still collected in run-tests-isolated.bash even on failure
+            exit \${cmd_exit_code}
         fi
 
         echo '[$(date '+%Y-%m-%d %H:%M:%S')] Tests completed successfully' | tee -a '${log_file}'
@@ -286,6 +299,82 @@ if [ "${FAIL_COUNT}" -gt 0 ] || [ "${TIMEOUT_COUNT}" -gt 0 ]; then
             echo "  ${group}: ${RESULTS_DIR}/${group}.log"
         fi
     done
+    echo ""
+fi
+
+# Combine coverage reports if coverage mode is enabled
+if [ "${COVERAGE}" -eq 1 ]; then
+    echo ""
+    echo "=========================================="
+    echo "       COMBINING COVERAGE REPORTS         "
+    echo "=========================================="
+
+    COMBINED_COVERAGE_DIR="${RESULTS_DIR}/coverage-report"
+    mkdir -p "${COMBINED_COVERAGE_DIR}"
+
+    # Find all individual coverage info files from each group
+    COVERAGE_FILES=""
+    for group in ${TAP_GROUPS}; do
+        infra_id="${group}-${RUN_ID}"
+        group_coverage_dir="${WORKSPACE}/ci_infra_logs/${infra_id}/coverage-report"
+        if [ -d "${group_coverage_dir}" ]; then
+            for info_file in "${group_coverage_dir}"/*.info; do
+                if [ -f "${info_file}" ]; then
+                    COVERAGE_FILES="${COVERAGE_FILES} ${info_file}"
+                    echo ">>> Found coverage: ${info_file}"
+                fi
+            done
+        fi
+    done
+
+    if [ -n "${COVERAGE_FILES}" ]; then
+        # Check if fastcov is available
+        if command -v fastcov >/dev/null 2>&1; then
+            COMBINED_INFO="${COMBINED_COVERAGE_DIR}/combined-coverage.info"
+            echo ">>> Combining coverage reports into: ${COMBINED_INFO}"
+            # shellcheck disable=SC2086
+            fastcov -b -l -C ${COVERAGE_FILES} -o "${COMBINED_INFO}" 2>/dev/null || {
+                echo ">>> WARNING: fastcov combine failed, trying lcov..."
+                # Fallback to lcov if fastcov fails
+                if command -v lcov >/dev/null 2>&1; then
+                    FIRST_FILE=true
+                    for info_file in ${COVERAGE_FILES}; do
+                        if [ "${FIRST_FILE}" = true ]; then
+                            cp "${info_file}" "${COMBINED_INFO}"
+                            FIRST_FILE=false
+                        else
+                            lcov -a "${COMBINED_INFO}" -a "${info_file}" -o "${COMBINED_INFO}".tmp 2>/dev/null && \
+                                mv "${COMBINED_INFO}".tmp "${COMBINED_INFO}"
+                        fi
+                    done
+                fi
+            }
+
+            if [ -f "${COMBINED_INFO}" ]; then
+                echo ">>> Combined coverage report: ${COMBINED_INFO}"
+
+                # Generate HTML report
+                if command -v genhtml >/dev/null 2>&1; then
+                    COMBINED_HTML="${COMBINED_COVERAGE_DIR}/html"
+                    mkdir -p "${COMBINED_HTML}"
+                    genhtml --branch-coverage "${COMBINED_INFO}" --output-directory "${COMBINED_HTML}" 2>/dev/null || \
+                        echo ">>> WARNING: HTML generation failed"
+                    [ -f "${COMBINED_HTML}/index.html" ] && echo ">>> Combined HTML report: ${COMBINED_HTML}/index.html"
+                fi
+            else
+                echo ">>> WARNING: Failed to generate combined coverage report"
+            fi
+        else
+            echo ">>> WARNING: fastcov/lcov not found, skipping coverage combination"
+            echo ">>> Individual coverage files are available at:"
+            for group in ${TAP_GROUPS}; do
+                infra_id="${group}-${RUN_ID}"
+                echo "  ${group}: ${WORKSPACE}/ci_infra_logs/${infra_id}/coverage-report/"
+            done
+        fi
+    else
+        echo ">>> No coverage files found to combine"
+    fi
     echo ""
 fi
 

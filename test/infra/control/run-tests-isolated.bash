@@ -1,6 +1,23 @@
 #!/bin/bash
 set -e
 set -o pipefail
+#
+# Run Tests in Isolated Environment
+#
+# Usage:
+#   INFRA_ID="my-test" \
+#   TAP_GROUP="legacy-g1" \
+#   ./run-tests-isolated.bash
+#
+# Optional environment variables:
+#   COVERAGE=1             # Enable code coverage collection (default: 0)
+#
+# Coverage notes:
+#   - Requires ProxySQL to be compiled with COVERAGE=1 (adds --coverage flags)
+#   - Requires fastcov and genhtml to be available in the test-runner container
+#   - Coverage is collected regardless of test success/failure
+#   - Reports saved to: ci_infra_logs/{INFRA_ID}/coverage-report/
+#
 
 # Derive Workspace relative to script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,6 +26,14 @@ export WORKSPACE="${REPO_ROOT}"
 
 # Default INFRA_ID if not provided
 export INFRA_ID="${INFRA_ID:-dev-$USER}"
+
+# Coverage mode detection
+COVERAGE_MODE="${COVERAGE:-0}"
+COVERAGE_REPORT_DIR="${WORKSPACE}/ci_infra_logs/${INFRA_ID}/coverage-report"
+if [ "${COVERAGE_MODE}" = "1" ]; then
+    echo ">>> Code coverage enabled - reports will be saved to ${COVERAGE_REPORT_DIR}"
+    mkdir -p "${COVERAGE_REPORT_DIR}"
+fi
 
 # 1. Determine Required Infras
 INFRAS_TO_CHECK=""
@@ -186,6 +211,44 @@ if [ -n "${TAP_GROUP}" ]; then
     if [ -f "${PRE_CLEANUP_HOOK}" ]; then
         echo ">>> Executing group pre-cleanup hook: ${PRE_CLEANUP_HOOK}"
         "${PRE_CLEANUP_HOOK}" || true  # Allow cleanup to fail
+    fi
+fi
+
+# Capture code coverage data if enabled
+# This runs regardless of test success/failure
+if [ "${COVERAGE_MODE}" = "1" ]; then
+    echo ">>> Collecting code coverage data..."
+
+    # Check if fastcov is available in the container
+    if docker exec "${TEST_CONTAINER}" which fastcov >/dev/null 2>&1; then
+        COVERAGE_INFO_FILE="${COVERAGE_REPORT_DIR}/${TAP_GROUP:-test}-${INFRA_ID}.info"
+
+        echo ">>> Generating coverage report: ${COVERAGE_INFO_FILE}"
+        # Extract coverage data from container
+        docker exec "${TEST_CONTAINER}" bash -c "
+            cd '${WORKSPACE}' && \
+            fastcov -b -j\$(nproc) --process-gcno -l \
+                -e /usr/include/ -e test/tap/tests \
+                -d . -i include -i lib -i src \
+                -o '${COVERAGE_INFO_FILE}' 2>&1
+        " || echo ">>> WARNING: Coverage generation failed"
+
+        # Check if report was generated
+        if [ -f "${COVERAGE_INFO_FILE}" ]; then
+            echo ">>> Coverage report generated: ${COVERAGE_INFO_FILE}"
+            # Generate HTML report
+            if command -v genhtml >/dev/null 2>&1; then
+                HTML_REPORT_DIR="${COVERAGE_REPORT_DIR}/html/${TAP_GROUP:-test}-${INFRA_ID}"
+                mkdir -p "${HTML_REPORT_DIR}"
+                genhtml --branch-coverage "${COVERAGE_INFO_FILE}" --output-directory "${HTML_REPORT_DIR}" 2>/dev/null || \
+                    echo ">>> WARNING: HTML report generation failed"
+                [ -d "${HTML_REPORT_DIR}" ] && echo ">>> HTML report: ${HTML_REPORT_DIR}/index.html"
+            fi
+        else
+            echo ">>> WARNING: Coverage info file not generated"
+        fi
+    else
+        echo ">>> WARNING: fastcov not found in container, skipping coverage collection"
     fi
 fi
 
