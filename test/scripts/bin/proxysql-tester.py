@@ -653,6 +653,10 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
             # Load group-specific environment variables if TAP_GROUP is set
             if TAP_GROUP:
                 group_env_file = f"{WORKSPACE}/test/tap/groups/{TAP_GROUP}/env.sh"
+                # Fallback to base group if subgroup env.sh doesn't exist (e.g., legacy-g1 -> legacy)
+                base_group = re.sub(r'[-_]g[0-9]+.*$', '', TAP_GROUP)
+                if not os.path.isfile(group_env_file) and base_group != TAP_GROUP:
+                    group_env_file = f"{WORKSPACE}/test/tap/groups/{base_group}/env.sh"
                 if os.path.isfile(group_env_file):
                     log.info(f"Loading group-specific environment from {group_env_file}")
                     try:

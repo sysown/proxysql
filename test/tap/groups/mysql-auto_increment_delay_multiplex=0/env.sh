@@ -1,5 +1,5 @@
-# Legacy Test Group Environment
-# Defines the primary targets for tests that expect a generic MySQL or PGSQL backend.
+# MySQL auto_increment_delay_multiplex=0 Test Group Environment
+# Defines environment for tests with auto_increment_delay_multiplex disabled.
 
 export DEFAULT_MYSQL_INFRA="infra-mysql57"
 export DEFAULT_PGSQL_INFRA="docker-pgsql16-single"
