@@ -1,6 +1,16 @@
-# shellcheck shell=bash
 # AI-g1 Subgroup Environment Configuration
-# Sources the parent ai group configuration
+# Inherits from parent ai group - duplicated here for POSIX sh compatibility
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/../ai/env.sh"
+export DEFAULT_MYSQL_INFRA="infra-mysql84"
+export DEFAULT_PGSQL_INFRA="docker-pgsql16-single"
+
+export TAP_MCPPORT="${TAP_MCPPORT:-6071}"
+export MCP_TARGET_ID="${MCP_TARGET_ID:-tap_mysql_default}"
+export MCP_AUTH_PROFILE_ID="${MCP_AUTH_PROFILE_ID:-tap_mysql_auth}"
+export MCP_PGSQL_TARGET_ID="${MCP_PGSQL_TARGET_ID:-tap_pgsql_default}"
+export MCP_PGSQL_AUTH_PROFILE_ID="${MCP_PGSQL_AUTH_PROFILE_ID:-tap_pgsql_auth}"
+export MCP_MYSQL_HOSTGROUP_ID="${MCP_MYSQL_HOSTGROUP_ID:-9100}"
+export MCP_PGSQL_HOSTGROUP_ID="${MCP_PGSQL_HOSTGROUP_ID:-9200}"
+
+export MYSQL_DATABASE="${MYSQL_DATABASE:-test}"
+export PGSQL_DATABASE="${PGSQL_DATABASE:-postgres}"
