@@ -103,7 +103,7 @@ int main(int argc, char** argv) {
 
 	const fs::path runtime_dir { fs::path { cl.workdir } / "test_load_restapi_from_config_startup" };
 	const fs::path cfg_file { runtime_dir / "proxysql.cfg" };
-	const fs::path script_file { runtime_dir / "probe.bash" };
+	const fs::path script_file { runtime_dir / "healthcheck.sh" };
 
 	if (prepare_secondary_proxy_runtime(cl, runtime_dir, cfg_file, script_file) != EXIT_SUCCESS) {
 		return EXIT_FAILURE;
