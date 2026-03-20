@@ -121,31 +121,34 @@ run_single_group() {
 
     # Run tests with timeout - capture exit code properly
     local cmd_exit_code=0
-    timeout "${TIMEOUT_MINUTES}m" bash -c "
+    timeout "${TIMEOUT_MINUTES}m" bash <<'INNERSHELL' || cmd_exit_code=$?
         set -euo pipefail
-        export INFRA_ID='${infra_id}'
-        export TAP_GROUP='${group}'
-        export WORKSPACE='${WORKSPACE}'
-        export SKIP_CLUSTER_START='${SKIP_CLUSTER_START}'
-        export COVERAGE='${COVERAGE}'
+        export INFRA_ID="${infra_id}"
+        export TAP_GROUP="${group}"
+        export WORKSPACE="${WORKSPACE}"
+        export SKIP_CLUSTER_START="${SKIP_CLUSTER_START}"
+        export COVERAGE="${COVERAGE}"
 
-        echo '[$(date '+%Y-%m-%d %H:%M:%S')] Setting up infrastructure...' | tee -a '${log_file}'
-        if ! '${SCRIPT_DIR}/ensure-infras.bash' >> '${log_file}' 2>&1; then
-            echo '[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Failed to set up infrastructure' | tee -a '${log_file}'
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Setting up infrastructure..." | tee -a "${log_file}"
+        if ! "${SCRIPT_DIR}/ensure-infras.bash" >> "${log_file}" 2>&1; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Failed to set up infrastructure" | tee -a "${log_file}"
             exit 1
         fi
 
-        echo '[$(date '+%Y-%m-%d %H:%M:%S')] Running tests...' | tee -a '${log_file}'
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Running tests..." | tee -a "${log_file}"
         # Note: run-tests-isolated.bash handles coverage collection regardless of exit code
-        if ! '${SCRIPT_DIR}/run-tests-isolated.bash' >> '${log_file}' 2>&1; then
-            cmd_exit_code=\$?
-            echo '[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: Tests failed with exit code \${cmd_exit_code}' | tee -a '${log_file}'
+        set +e
+        "${SCRIPT_DIR}/run-tests-isolated.bash" >> "${log_file}" 2>&1
+        inner_exit_code=$?
+        set -e
+        if [ ${inner_exit_code} -ne 0 ]; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: Tests failed with exit code ${inner_exit_code}" | tee -a "${log_file}"
             # Coverage is still collected in run-tests-isolated.bash even on failure
-            exit \${cmd_exit_code}
+            exit ${inner_exit_code}
         fi
 
-        echo '[$(date '+%Y-%m-%d %H:%M:%S')] Tests completed successfully' | tee -a '${log_file}'
-    " || cmd_exit_code=$?
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Tests completed successfully" | tee -a "${log_file}"
+INNERSHELL
 
     # Process exit code
     if [ "${cmd_exit_code}" -eq 0 ]; then
