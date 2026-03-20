@@ -1424,8 +1424,18 @@ static string build_restapi_base_address() {
 	const char* tap_host = getenv("TAP_HOST");
 	return string("http://") + (tap_host ? tap_host : "proxysql") + ":6070/sync/";
 }
-const string base_address { build_restapi_base_address() };
 
+struct RestapiBaseAddress {
+	std::string value() const {
+		return build_restapi_base_address();
+	}
+
+	operator std::string() const {
+		return value();
+	}
+};
+
+static RestapiBaseAddress base_address{};
 int configure_endpoints(
 	MYSQL* admin,
 	const string& script_base_path,
