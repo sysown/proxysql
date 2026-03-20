@@ -807,7 +807,7 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
                 try:
                     fop = subprocess.Popen(fo_cmd, shell=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0, env=tap_env)
                 except Exception as e:
-                    log.critical(f"TAP test {fo_num+1}/{len(tap_tests)} '{os.path.basename(fo_cmd)}' - test threw an exception !!!", exception=e)
+                    log.critical(f"TAP test {fo_num+1}/{len(tap_tests)} '{os.path.basename(fo_cmd)}' - test threw an exception !!!: {e}")
                     self.padmin_command(f"LOGENTRY '{TAP} test {fo_num+1}/{len(tap_tests)} \'{os.path.basename(fo_cmd)}\' - test threw an exception !!!'")
                     log.exception(e, exc_info=True)
                     rc = rc + 1
@@ -839,7 +839,7 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
                     for line in fop.stdout:
                         log.debug(f"msg: {line.decode('utf-8').strip()}")
                 except Exception as e:
-                    log.critical(f"TAP test {fo_num+1}/{len(tap_tests)} '{os.path.basename(fo_cmd)}' - test threw an exception !!!", exception=e)
+                    log.critical(f"TAP test {fo_num+1}/{len(tap_tests)} '{os.path.basename(fo_cmd)}' - test threw an exception !!!: {e}")
                     self.padmin_command(f"LOGENTRY '{TAP} test {fo_num+1}/{len(tap_tests)} \'{os.path.basename(fo_cmd)}\' - test threw an exception !!!'")
                     log.exception(e, exc_info=True)
                     rc = rc + 1
@@ -921,6 +921,24 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
 
             if rc and int(os.environ['TEST_PY_EXIT_ON_FAIL_TEST']):
                 sys.exit(1)
+
+        # Validate that all expected tests for this group passed
+        # If TAP_GROUP is set and group_has_tests, we expect ALL tests in groups.json to pass
+        if TAP_GROUP and group_has_tests and groups:
+            expected_tests = set(test_name for test_name, test_groups in groups.items() if TAP_GROUP in test_groups)
+            passed_tests = set(os.path.basename(cmd) for cmd, rc_val in summary if rc_val == 0)
+            failed_tests = set(os.path.basename(cmd) for cmd, rc_val in summary if rc_val is not None and rc_val != 0)
+            missing_tests = expected_tests - passed_tests - failed_tests
+
+            if missing_tests:
+                log.critical(f"TAP_GROUP '{TAP_GROUP}': {len(missing_tests)} expected tests did not run: {sorted(missing_tests)}")
+                rc = rc + len(missing_tests)
+
+            if len(passed_tests) != len(expected_tests):
+                log.critical(f"TAP_GROUP '{TAP_GROUP}': Expected {len(expected_tests)} tests to pass, but only {len(passed_tests)} passed. Failed: {len(failed_tests)}, Missing: {len(missing_tests)}")
+                # Ensure rc is non-zero to indicate failure
+                if rc == 0:
+                    rc = len(expected_tests) - len(passed_tests)
 
         return rc, logs, summary
 
