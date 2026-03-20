@@ -65,6 +65,7 @@ echo "TIMEOUT_MINUTES: ${TIMEOUT_MINUTES}"
 echo "EXIT_ON_FIRST_FAIL: ${EXIT_ON_FIRST_FAIL}"
 echo "AUTO_CLEANUP: ${AUTO_CLEANUP}"
 echo "SKIP_CLUSTER_START: ${SKIP_CLUSTER_START}"
+echo "COVERAGE: ${COVERAGE}"
 echo "=========================================="
 
 # Create results directory
