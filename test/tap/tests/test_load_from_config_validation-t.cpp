@@ -8,6 +8,11 @@
  * - mysql_servers
  * - pgsql_servers
  * - proxysql_servers
+ *
+ * It tests:
+ * 1. Duplicate entry detection in config files
+ * 2. Mandatory field validation
+ * 3. Valid configuration loading
  */
 
 #include <cstddef>
@@ -262,6 +267,14 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
+    diag("Test validation for LOAD FROM CONFIG commands");
+    diag("This test validates loading configuration from config file for:");
+    diag("  - mysql_users (duplicate detection, mandatory fields, valid loading)");
+    diag("  - pgsql_users (duplicate detection, mandatory fields, valid loading)");
+    diag("  - mysql_servers (duplicate detection, mandatory fields, valid loading)");
+    diag("  - pgsql_servers (duplicate detection, mandatory fields, valid loading)");
+    diag("  - proxysql_servers (duplicate detection, mandatory fields, valid loading)");
+
     std::vector<std::tuple<std::string, std::string>> tc_for_duplicates_check = {
         {"LOAD MYSQL USERS FROM CONFIG", "duplicate entries found in mysql_users"},
         {"LOAD PGSQL USERS FROM CONFIG", "duplicate entries found in pgsql_users"},
@@ -303,10 +316,18 @@ int main(int argc, char** argv) {
         return exit_status();
     }
 
-    string config_file = "/tmp/proxysql_test_config.cfg";
+    // Use REGULAR_INFRA_DATADIR if available (Docker mode), fallback to /tmp (local mode)
+    const char* datadir = getenv("REGULAR_INFRA_DATADIR");
+    string config_file = (datadir ? string(datadir) : "/tmp");
+    if (config_file.back() != '/') config_file += '/';
+    config_file += "proxysql_test_config.cfg";
+    diag("Config file path: %s", config_file.c_str());
+
+    diag("Creating config file with duplicate entries");
     create_config_with_duplicates(config_file);
 
     string set_config_cmd = "PROXYSQL SET CONFIG FILE '" + config_file + "'";
+    diag("Setting config file: %s", set_config_cmd.c_str());
     MYSQL_QUERY_T(admin, set_config_cmd.c_str());
 
     diag("Running test cases for duplicate entry check");
@@ -331,6 +352,7 @@ int main(int argc, char** argv) {
         }
     }
 
+    diag("Creating config file with missing mandatory fields");
     create_config_without_mandatory_fields(config_file);
     diag("Running test cases for mandatory field check");
     for (auto it = tc_for_mandatory_fields.begin(); it != tc_for_mandatory_fields.end(); it++) {
@@ -362,6 +384,7 @@ int main(int argc, char** argv) {
     MYSQL_QUERY_T(admin, "DELETE FROM pgsql_servers");
     MYSQL_QUERY_T(admin, "DELETE FROM proxysql_servers");
 
+    diag("Creating valid config file");
     create_valid_config(config_file);
     for (auto it = tc_valid.begin(); it != tc_valid.end(); it++) {
         auto [load_query, select_query, exp_row_count] = *it;
