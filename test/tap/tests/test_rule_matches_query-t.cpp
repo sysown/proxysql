@@ -41,7 +41,7 @@ int main() {
 
 	QP_rule_t client_addr_rule = make_rule();
 	client_addr_rule.client_addr = const_cast<char *>("192.168.%");
-	client_addr_rule.client_addr_wildcard_position = std::strlen(client_addr_rule.client_addr) - 1;
+	client_addr_rule.client_addr_wildcard_position = std::strchr(client_addr_rule.client_addr, '%') - client_addr_rule.client_addr;
 	ok(
 		rule_matches_query(&client_addr_rule, 0, "appuser", "db1", "192.168.55.19", "127.0.0.1", 6033, 0, NULL, "SELECT 1", NULL, 2),
 		"client_addr wildcard matches"
