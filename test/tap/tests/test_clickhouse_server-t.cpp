@@ -357,7 +357,7 @@ std::vector<std::string> admin_queries {
  * @brief Perform several admin queries to exercise more paths.
  */
 std::vector<std::string> ch_intf_queries {
-	"SET clickhouse-mysql_ifaces='127.0.0.1:6091'",
+	"SET clickhouse-mysql_ifaces='0.0.0.0:6091'",
 	"LOAD CLICKHOUSE VARIABLES TO RUNTIME"
 };
 
