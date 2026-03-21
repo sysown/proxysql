@@ -205,8 +205,7 @@ static void test_mysql_rule_creation() {
 	ok(rule->re_modifiers & QP_RE_MOD_CASELESS,
 		"MySQL QP: CASELESS re_modifier is set");
 
-	// Don't free — rule will be inserted into QP
-	// (QP manages rule lifecycle after insert)
+	// This rule is not inserted into the QP, so we free it manually.
 	free(rule->username); free(rule->schemaname);
 	free(rule->match_digest); free(rule->match_pattern);
 	free(rule->client_addr); free(rule->comment);
@@ -429,9 +428,6 @@ static void test_mysql_rule_with_username() {
  */
 static void test_mysql_reset_all() {
 	GloMyQPro->reset_all(true);
-
-	mysql_simple_rule(10, true);
-	mysql_simple_rule(20, true);
 
 	GloMyQPro->insert((QP_rule_t *)mysql_simple_rule(10, true));
 	GloMyQPro->insert((QP_rule_t *)mysql_simple_rule(20, true));

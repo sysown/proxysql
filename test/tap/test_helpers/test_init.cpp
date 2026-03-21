@@ -138,9 +138,15 @@ int test_init_query_processor() {
 	// The QP constructor calls get_variable_int() which requires
 	// these maps to be populated.
 	char **vl = GloMTH->get_variables_list();
-	if (vl) free(vl);
+	if (vl) {
+		for (char **p = vl; *p != nullptr; ++p) free(*p);
+		free(vl);
+	}
 	vl = GloPTH->get_variables_list();
-	if (vl) free(vl);
+	if (vl) {
+		for (char **p = vl; *p != nullptr; ++p) free(*p);
+		free(vl);
+	}
 
 	GloMyQPro = new MySQL_Query_Processor();
 	GloPgQPro = new PgSQL_Query_Processor();
@@ -158,6 +164,6 @@ void test_cleanup_query_processor() {
 		GloPgQPro = nullptr;
 	}
 	// NOTE: We do NOT delete GloMTH/GloPTH here because other
-	// components may still reference them. They are cleaned up
-	// by test_cleanup_minimal() or at process exit.
+	// components may still reference them. Their cleanup relies
+	// on process exit.
 }
