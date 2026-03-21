@@ -445,6 +445,14 @@ int main(int argc, char** argv) {
 			} else if (query_hid.second == 1) {
 				query_hid.second = reader_hg;
 			}
+
+			// Also update query hints that specify hostgroup=0 to use the actual writer hostgroup
+			// ProxySQL query hints like /* ;hostgroup=0;... */ need to be updated
+			size_t hint_pos = query_hid.first.find("hostgroup=0");
+			if (hint_pos != std::string::npos) {
+				query_hid.first.replace(hint_pos, 11, "hostgroup=" + std::to_string(writer_hg));
+				diag("Updated query hint from hostgroup=0 to hostgroup=%d", writer_hg);
+			}
 		}
 	}
 
