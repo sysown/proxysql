@@ -11,6 +11,13 @@ set -o pipefail
 #
 # Optional environment variables:
 #   COVERAGE=1             # Enable code coverage collection (default: 0)
+#   TAP_USE_NOISE=1        # Enable noise injection for race condition testing (default: 0)
+#
+# Noise injection notes:
+#   - When enabled, tests that support noise injection will introduce random delays
+#     and stress to help detect race conditions and deadlocks
+#   - Tests check `cl.use_noise` and adjust their behavior accordingly
+#   - See test/tap/NOISE_TESTING.md for more details
 #
 # Coverage notes:
 #   - Requires ProxySQL to be compiled with COVERAGE=1 (adds --coverage flags)
@@ -143,6 +150,7 @@ docker run \
     -e SCRIPT_DIR="${SCRIPT_DIR}" \
     -e MYSQL_BINLOG_BIN="${MYSQL_BINLOG_BIN}" \
     -e BINLOG_READER_BIN="${BINLOG_READER_BIN}" \
+    -e TAP_USE_NOISE="${TAP_USE_NOISE:-0}" \
     proxysql-ci-base:latest \
     /bin/bash -c "
         set -e
@@ -152,6 +160,22 @@ docker run \
             local exit_code=\$?
             if [ \"\${COVERAGE_MODE}\" = \"1\" ]; then
                 echo \">>> Collecting code coverage data (exit code was: \${exit_code})...\"
+
+                # Copy .gcda files from group-specific gcov directory to workspace
+                # This merges coverage data from this group's ProxySQL instance
+                if [ -d \"/gcov\" ] && [ \"\$(ls -A /gcov 2>/dev/null)\" ]; then
+                    echo \">>> Merging coverage data from /gcov to workspace...\"
+                    # Find and copy all .gcda files, preserving directory structure
+                    cd /gcov && find . -name '*.gcda' -type f | while read gcda; do
+                        # Remove leading ./ and get the target path
+                        target=\"\${WORKSPACE}/\${gcda#./}\"
+                        target_dir=\"\$(dirname \"\$target\")\"
+                        mkdir -p \"\$target_dir\"
+                        cp -f \"\$gcda\" \"\$target\"
+                    done
+                    echo \">>> Coverage data merged successfully\"
+                fi
+
                 if command -v fastcov >/dev/null 2>&1; then
                     mkdir -p \"\${COVERAGE_REPORT_DIR}\"
                     local coverage_file=\"\${COVERAGE_REPORT_DIR}/\${INFRA_ID}.info\"

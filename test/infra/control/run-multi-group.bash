@@ -14,6 +14,8 @@ set -euo pipefail
 #   AUTO_CLEANUP=0         # Auto cleanup successful groups (default: 0)
 #   SKIP_CLUSTER_START=1   # Skip ProxySQL cluster initialization (default: 0)
 #   COVERAGE=1             # Enable code coverage collection (default: 0)
+#   TAP_USE_NOISE=1        # Enable noise injection for race condition testing (default: 0)
+#   STAGGER_DELAY=5        # Seconds between group startups (default: 5)
 #
 # Coverage notes:
 #   - Requires ProxySQL to be compiled with COVERAGE=1 (adds --coverage flags)
@@ -36,6 +38,7 @@ EXIT_ON_FIRST_FAIL="${EXIT_ON_FIRST_FAIL:-0}"
 AUTO_CLEANUP="${AUTO_CLEANUP:-0}"
 SKIP_CLUSTER_START="${SKIP_CLUSTER_START:-0}"
 COVERAGE="${COVERAGE:-0}"
+TAP_USE_NOISE="${TAP_USE_NOISE:-0}"
 
 # Validate required variables
 if [ -z "${TAP_GROUPS}" ]; then
@@ -66,6 +69,7 @@ echo "EXIT_ON_FIRST_FAIL: ${EXIT_ON_FIRST_FAIL}"
 echo "AUTO_CLEANUP: ${AUTO_CLEANUP}"
 echo "SKIP_CLUSTER_START: ${SKIP_CLUSTER_START}"
 echo "COVERAGE: ${COVERAGE}"
+echo "TAP_USE_NOISE: ${TAP_USE_NOISE}"
 echo "=========================================="
 
 # Create results directory
@@ -98,19 +102,20 @@ trap cleanup_on_interrupt INT TERM
 # Function to run a single group
 run_single_group() {
     local group="${1}"
+    local group_index="${2}"
     local infra_id="${group}-${RUN_ID}"
     local log_file="${RESULTS_DIR}/${group}.log"
     local start_time end_time duration
 
-    # Add random delay to stagger infrastructure startup
+    # Sequential delay to stagger infrastructure startup
     # This prevents resource contention when running multiple groups in parallel
-    # Use group name hash + random to ensure both unique and unpredictable delays
-    local group_hash=$(echo -n "${group}" | cksum | cut -d' ' -f1)
-    local base_delay=$((group_hash % 15))  # 0-14 seconds based on group name
-    local random_delay=$((RANDOM % 10 + 1))  # 1-10 seconds random
-    local delay=$((base_delay + random_delay))  # Total: 1-24 seconds
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ${group}: Waiting ${delay}s to stagger startup (base=${base_delay}s + random=${random_delay}s)..." | tee -a "${log_file}"
-    sleep "${delay}"
+    # Each group starts STAGGER_DELAY seconds after the previous one
+    local STAGGER_DELAY="${STAGGER_DELAY:-5}"
+    local delay=$((group_index * STAGGER_DELAY))
+    if [ "${delay}" -gt 0 ]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] ${group}: Waiting ${delay}s to stagger startup (index=${group_index}, delay=${STAGGER_DELAY}s per group)..." | tee -a "${log_file}"
+        sleep "${delay}"
+    fi
 
     start_time=$(date +%s)
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] STARTING: ${group} (INFRA_ID: ${infra_id})" | tee -a "${log_file}"
@@ -130,6 +135,7 @@ run_single_group() {
     export TAP_GROUP="${group}"
     export SKIP_CLUSTER_START="${SKIP_CLUSTER_START}"
     export COVERAGE="${COVERAGE}"
+    export TAP_USE_NOISE="${TAP_USE_NOISE}"
 
     timeout "${TIMEOUT_MINUTES}m" bash <<INNERSHELL || cmd_exit_code=$?
         set -euo pipefail
@@ -196,6 +202,7 @@ START_TIME=$(date +%s)
 # Track overall status
 OVERALL_FAILED=0
 JOBS_RUNNING=0
+GROUP_INDEX=0
 
 # Launch jobs
 for group in ${TAP_GROUPS}; do
@@ -214,12 +221,13 @@ for group in ${TAP_GROUPS}; do
 
     # Start the job
     echo ">>> Launching: ${group}"
-    run_single_group "${group}" &
+    run_single_group "${group}" "${GROUP_INDEX}" &
     local_pid=$!
     JOB_PIDS+=("${local_pid}")
     GROUP_FOR_PID["${local_pid}"]="${group}"
     PID_FOR_GROUP["${group}"]="${local_pid}"
     JOBS_RUNNING=$((JOBS_RUNNING + 1))
+    GROUP_INDEX=$((GROUP_INDEX + 1))
 done
 
 # Wait for all jobs to complete
