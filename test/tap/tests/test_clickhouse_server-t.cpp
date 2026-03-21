@@ -295,7 +295,7 @@ std::vector<query_spec> queries_set2 {
 	std::make_tuple<std::string, int>("INSERT INTO table2 SELECT 1,'2022-06-23', 1, 2, 3, 4, 5, 6, 7, 'hello', 'world'", 1148, -1), // incorrect number of values
 	std::make_tuple<std::string, int>("INSERT INTO table2 SELECT 1,'2022-06-23', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL", 0, -1), // col0 can't be null, but ClickHouse may substitute default
 	std::make_tuple<std::string, int>("INSERT INTO table2 SELECT 1,'2022-06-23', 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL", 0, -1),
-	std::make_tuple<std::string, int>("SELECT * FROM table2 ORDER BY CounterID", 0, 2),
+	std::make_tuple<std::string, int>("SELECT * FROM table2 ORDER BY CounterID", 0, 3),
 	std::make_tuple<std::string, int>("DESC table2", 0, 12),
 	std::make_tuple<std::string, int>("SHOW COLUMNS FROM table2", 0, 12),
 };
