@@ -368,34 +368,51 @@ int main(int argc, char** argv) {
 	int reader_hg = 1;
 
 	// Try to discover writer hostgroup from user's default_hostgroup
-	MYSQL_QUERY(proxysql_admin, "SELECT default_hostgroup FROM mysql_users WHERE username='root' LIMIT 1");
+	// Use runtime_mysql_users since mysql_users may be empty in some configurations
+	MYSQL_QUERY(proxysql_admin, "SELECT default_hostgroup FROM runtime_mysql_users WHERE username='root' LIMIT 1");
 	MYSQL_RES* hg_res = mysql_store_result(proxysql_admin);
 	MYSQL_ROW hg_row = mysql_fetch_row(hg_res);
 	if (hg_row && hg_row[0]) {
 		writer_hg = atoi(hg_row[0]);
-		diag("Discovered writer hostgroup from user 'root': %d", writer_hg);
+		diag("Discovered writer hostgroup from runtime_mysql_users 'root': %d", writer_hg);
 	}
 	mysql_free_result(hg_res);
 
-	// Try to discover reader hostgroup - it's typically the next hostgroup after writer
-	// or we can query mysql_servers to find hostgroups with servers in ONLINE status
-	MYSQL_QUERY(proxysql_admin, "SELECT DISTINCT hostgroup_id FROM mysql_servers WHERE status='ONLINE' AND hostgroup_id != 0 ORDER BY hostgroup_id LIMIT 2");
+	// Try to discover reader hostgroup from mysql_replication_hostgroups
+	// First, check if there's a replication hostgroup entry for the writer hostgroup
+	char rep_hg_query[256];
+	snprintf(rep_hg_query, sizeof(rep_hg_query),
+		"SELECT writer_hostgroup, reader_hostgroup FROM mysql_replication_hostgroups WHERE writer_hostgroup=%d LIMIT 1",
+		writer_hg);
+	MYSQL_QUERY(proxysql_admin, rep_hg_query);
 	hg_res = mysql_store_result(proxysql_admin);
-	std::vector<int> online_hostgroups;
-	while ((hg_row = mysql_fetch_row(hg_res))) {
-		online_hostgroups.push_back(atoi(hg_row[0]));
-	}
-	mysql_free_result(hg_res);
+	hg_row = mysql_fetch_row(hg_res);
+	if (hg_row && hg_row[0] && hg_row[1]) {
+		writer_hg = atoi(hg_row[0]);
+		reader_hg = atoi(hg_row[1]);
+		diag("Discovered hostgroups from mysql_replication_hostgroups: writer=%d, reader=%d", writer_hg, reader_hg);
+		mysql_free_result(hg_res);
+	} else {
+		mysql_free_result(hg_res);
+		// Fallback: query runtime_mysql_servers to find hostgroups with servers in ONLINE status
+		MYSQL_QUERY(proxysql_admin, "SELECT DISTINCT hostgroup_id FROM runtime_mysql_servers WHERE status='ONLINE' ORDER BY hostgroup_id LIMIT 2");
+		hg_res = mysql_store_result(proxysql_admin);
+		std::vector<int> online_hostgroups;
+		while ((hg_row = mysql_fetch_row(hg_res))) {
+			online_hostgroups.push_back(atoi(hg_row[0]));
+		}
+		mysql_free_result(hg_res);
 
-	if (online_hostgroups.size() >= 2) {
-		// We have at least 2 hostgroups - use the first two for writer and reader
-		writer_hg = online_hostgroups[0];
-		reader_hg = online_hostgroups[1];
-		diag("Discovered hostgroups from mysql_servers: writer=%d, reader=%d", writer_hg, reader_hg);
-	} else if (online_hostgroups.size() == 1) {
-		writer_hg = online_hostgroups[0];
-		reader_hg = writer_hg;  // Use same hostgroup if only one exists
-		diag("Only one hostgroup found: writer=%d, reader=%d (same)", writer_hg, reader_hg);
+		if (online_hostgroups.size() >= 2) {
+			// We have at least 2 hostgroups - use the first two for writer and reader
+			writer_hg = online_hostgroups[0];
+			reader_hg = online_hostgroups[1];
+			diag("Discovered hostgroups from runtime_mysql_servers: writer=%d, reader=%d", writer_hg, reader_hg);
+		} else if (online_hostgroups.size() == 1) {
+			writer_hg = online_hostgroups[0];
+			reader_hg = writer_hg;  // Use same hostgroup if only one exists
+			diag("Only one hostgroup found: writer=%d, reader=%d (same)", writer_hg, reader_hg);
+		}
 	}
 
 	// Now update the test data with the discovered hostgroups
