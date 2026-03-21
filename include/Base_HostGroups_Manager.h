@@ -143,6 +143,75 @@ class MetricsCollector;
 
 typedef std::unordered_map<std::uint64_t, void *> umap_mysql_errors;
 
+/**
+ * @brief Encodes the outcome of a connection-pool evaluation.
+ *
+ * Returned by evaluate_pool_state() to tell the caller exactly what actions
+ * the connection pool should take when a backend connection is requested.
+ */
+struct ConnectionPoolDecision {
+	bool create_new_connection; ///< True if a new backend connection must be created.
+	bool evict_connections;     ///< True if free connections should be evicted to stay within limits.
+	unsigned int num_to_evict;  ///< Number of free connections to evict (valid when evict_connections is true).
+	bool needs_warming;         ///< True if the warming threshold was not reached (implies create_new_connection).
+};
+
+/**
+ * @brief Calculate how many free connections to evict to stay within 75% of max_connections.
+ *
+ * Eviction is triggered when the total connection count (free + used) reaches or exceeds
+ * 75% of @p max_connections.  At least one connection is always evicted when the threshold
+ * is crossed and at least one free connection exists.
+ *
+ * @param conns_free   Current number of free (idle) backend connections.
+ * @param conns_used   Current number of in-use backend connections.
+ * @param max_connections Maximum connections allowed for the server.
+ * @return Number of free connections to evict; 0 if eviction is not needed.
+ */
+unsigned int calculate_eviction_count(unsigned int conns_free, unsigned int conns_used, unsigned int max_connections);
+
+/**
+ * @brief Decide whether new-connection creation should be throttled.
+ *
+ * @param new_connections_now       Connections already created in the current second.
+ * @param throttle_connections_per_sec  Per-second creation limit.
+ * @return true if @p new_connections_now exceeds @p throttle_connections_per_sec.
+ */
+bool should_throttle_connection_creation(unsigned int new_connections_now, unsigned int throttle_connections_per_sec);
+
+/**
+ * @brief Pure decision function for connection-pool create-vs-reuse logic.
+ *
+ * Given a snapshot of pool metrics and configuration this function determines
+ * what the pool should do — create a new connection, reuse an existing one,
+ * evict stale connections, or signal that connection warming is required.
+ *
+ * The function is intentionally free of global state and I/O so that it can
+ * be unit-tested in isolation.
+ *
+ * Connection quality levels:
+ *  - 0 : no good match found (tracked options mismatch) — must create new
+ *  - 1 : tracked options OK but CHANGE_USER / session reset required — may create new
+ *  - 2 : no reset required but some SET / INIT_DB needed — reuse
+ *  - 3 : perfect match — reuse
+ *
+ * @param conns_free               Current number of idle backend connections.
+ * @param conns_used               Current number of in-use backend connections.
+ * @param max_connections          Maximum connections allowed for the server.
+ * @param connection_quality_level Quality of the best available pooled connection (0-3).
+ * @param connection_warming       Whether connection warming is enabled for this server.
+ * @param free_connections_pct     Target percentage of max_connections to keep warm (0-100).
+ * @return A ConnectionPoolDecision describing the required action.
+ */
+ConnectionPoolDecision evaluate_pool_state(
+	unsigned int conns_free,
+	unsigned int conns_used,
+	unsigned int max_connections,
+	unsigned int connection_quality_level,
+	bool connection_warming,
+	int free_connections_pct
+);
+
 class MySrvConnList;
 class MySrvC;
 class MySrvList;
