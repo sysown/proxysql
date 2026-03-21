@@ -216,6 +216,9 @@ static void test_pgsql_soft_ttl() {
  * @brief Test that flush() removes all entries and returns correct count.
  */
 static void test_pgsql_flush() {
+	// Ensure clean state before test
+	GloPgQC->flush();
+
 	// Add several entries
 	uint64_t t = now_ms();
 	for (int i = 0; i < 10; i++) {
@@ -229,9 +232,8 @@ static void test_pgsql_flush() {
 	}
 
 	uint64_t flushed = GloPgQC->flush();
-	// flushed should include our entries plus any from prior tests
-	ok(flushed >= 10,
-		"PgSQL QC: flush() returns count >= 10");
+	ok(flushed == 10,
+		"PgSQL QC: flush() returns exactly 10");
 
 	// Verify entries are gone
 	auto entry = GloPgQC->get(40000,
@@ -359,10 +361,12 @@ static void test_mysql_construction_and_flush() {
 	ok(GloMyQC != nullptr,
 		"MySQL QC: GloMyQC is initialized");
 
+	// First flush clears any residual entries
+	GloMyQC->flush();
+	// Second flush on empty cache should return 0
 	uint64_t flushed = GloMyQC->flush();
-	// Flush on empty cache should return 0
-	ok(flushed == 0 || flushed >= 0,
-		"MySQL QC: flush() on empty cache succeeds");
+	ok(flushed == 0,
+		"MySQL QC: flush() on empty cache returns 0");
 
 	SQLite3_result *result = GloMyQC->SQL3_getStats();
 	ok(result != nullptr,
@@ -407,8 +411,10 @@ static void test_pgsql_purge_expired() {
 		(const unsigned char *)"SELECT live", 11,
 		live_val, 64, t, t, t + 60000);
 
-	// purgeHash with large max_memory so it only evicts by TTL
-	GloPgQC->purgeHash(1024ULL * 1024 * 1024);
+	// purgeHash with small max_memory to force eviction logic to run.
+	// The threshold is 3% minimum, so use a size smaller than total
+	// cached data to ensure the purge path executes.
+	GloPgQC->purgeHash(1);
 
 	// Live entry should still be accessible
 	auto entry = GloPgQC->get(70099,
@@ -424,8 +430,10 @@ static void test_pgsql_purge_expired() {
 // ============================================================================
 
 /**
- * @brief Test storing and retrieving many entries to exercise
- *        distribution across the 32 internal hash tables.
+ * @brief Test storing and retrieving many entries.
+ *
+ * Verifies that bulk inserts with unique keys are all retrievable
+ * and that flush correctly reports the total count.
  */
 static void test_pgsql_many_entries() {
 	GloPgQC->flush();
