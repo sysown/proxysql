@@ -247,12 +247,16 @@ int main() {
 
 	// Also check for our specific test metric
 	string test_metric_count;
-	fetch_single_string(admin,
+	bool test_metric_ok = fetch_single_string(admin,
 		"SELECT COUNT(*) FROM stats_history.tsdb_metrics_hour WHERE metric_name='test_downsample_metric'",
 		test_metric_count);
 	diag("Test metric rows in tsdb_metrics_hour: %s", test_metric_count.c_str());
 
-	ok(ds_ok && atoi(ds_count.c_str()) > 0, "Downsample produced rows in tsdb_metrics_hour (count: %s)", ds_count.c_str());
+	ok(
+		ds_ok && test_metric_ok && atoi(test_metric_count.c_str()) > 0,
+		"Downsample produced rows for test_downsample_metric (metric rows: %s, total rows: %s)",
+		test_metric_count.c_str(), ds_count.c_str()
+	);
 
 	// Cleanup: remove test data
 	diag("Cleaning up test data...");

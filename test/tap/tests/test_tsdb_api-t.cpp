@@ -111,27 +111,45 @@ int main() {
 	diag("Enabling TSDB, Web, and REST API...");
 	int rc;
 	rc = mysql_query(admin, "SET tsdb-enabled='1'");
-	if (rc) diag("SET tsdb-enabled failed: %s", mysql_error(admin));
+	if (rc) {
+		diag("SET tsdb-enabled failed: %s", mysql_error(admin));
+		return EXIT_FAILURE;
+	}
 	drain_results(admin);
 
 	rc = mysql_query(admin, "SET tsdb-sample_interval='1'");
-	if (rc) diag("SET tsdb-sample_interval failed: %s", mysql_error(admin));
+	if (rc) {
+		diag("SET tsdb-sample_interval failed: %s", mysql_error(admin));
+		return EXIT_FAILURE;
+	}
 	drain_results(admin);
 
 	rc = mysql_query(admin, "SET admin-restapi_enabled='1'");
-	if (rc) diag("SET admin-restapi_enabled failed: %s", mysql_error(admin));
+	if (rc) {
+		diag("SET admin-restapi_enabled failed: %s", mysql_error(admin));
+		return EXIT_FAILURE;
+	}
 	drain_results(admin);
 
 	rc = mysql_query(admin, "SET admin-web_enabled='1'");
-	if (rc) diag("SET admin-web_enabled failed: %s", mysql_error(admin));
+	if (rc) {
+		diag("SET admin-web_enabled failed: %s", mysql_error(admin));
+		return EXIT_FAILURE;
+	}
 	drain_results(admin);
 
 	rc = mysql_query(admin, "LOAD TSDB VARIABLES TO RUNTIME");
-	if (rc) diag("LOAD TSDB VARIABLES failed: %s", mysql_error(admin));
+	if (rc) {
+		diag("LOAD TSDB VARIABLES failed: %s", mysql_error(admin));
+		return EXIT_FAILURE;
+	}
 	drain_results(admin);
 
 	rc = mysql_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
-	if (rc) diag("LOAD ADMIN VARIABLES failed: %s", mysql_error(admin));
+	if (rc) {
+		diag("LOAD ADMIN VARIABLES failed: %s", mysql_error(admin));
+		return EXIT_FAILURE;
+	}
 	drain_results(admin);
 
 	// Verify the settings were applied
@@ -154,9 +172,9 @@ int main() {
 	diag("Waiting for initialization and data collection (7s)...");
 	sleep(7);
 
-	// Use the same host as admin connection for HTTP endpoints
-	string base_url = string("https://") + cl.host + ":6080";
-	string rest_url = string("http://") + cl.host + ":6070";
+	// Use admin interface host for HTTP endpoints
+	string base_url = string("https://") + cl.admin_host + ":6080";
+	string rest_url = string("http://") + cl.admin_host + ":6070";
 	diag("Web dashboard URL: %s", base_url.c_str());
 	diag("REST API URL: %s", rest_url.c_str());
 
@@ -186,7 +204,7 @@ int main() {
 	diag("Testing GET /api/tsdb/status");
 	response.clear();
 	string auth_creds = string(cl.admin_username) + ":" + string(cl.admin_password);
-	diag("Using authentication: %s", auth_creds.c_str());
+	diag("Using authentication with username: %s", cl.admin_username);
 	http_rc = http_get((rest_url + "/api/tsdb/status").c_str(), response, auth_creds.c_str());
 	ok(http_rc == 200, "API /api/tsdb/status returns 200 (got %ld)", http_rc);
 	if (http_rc != 200) {
