@@ -102,7 +102,9 @@ export TEST_PY_TAP_EXCL="${TEST_PY_TAP_EXCL:-reg_test_3273_ssl_con-t}"
 export TEST_PY_TAPINT_INCL="${TEST_PY_TAPINT_INCL:-}"
 export TEST_PY_TAPINT_EXCL="${TEST_PY_TAPINT_EXCL:-}"
 
-# Hostgroup configuration for isolated environment
-export TAP_REG_TEST_3549_AUTOCOMMIT_TRACKING___MYSQL_SERVER_HOSTGROUP=1300
+# Source infra-specific environment (exports WHG, RHG, and TAP test variables)
+if [ -n "${INFRA_TYPE}" ] && [ -f "${WORKSPACE}/test/infra/${INFRA_TYPE}/.env" ]; then
+    source "${WORKSPACE}/test/infra/${INFRA_TYPE}/.env"
+fi
 
 echo ">>> Isolated Environment Loaded (INFRA_ID: ${INFRA_ID})"

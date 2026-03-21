@@ -36,6 +36,23 @@ if [ -z "${INFRAS_TO_CHECK}" ]; then
     INFRAS_TO_CHECK="${INFRA_TYPE}"
 fi
 
+# Derive INFRA_TYPE from TAP_GROUP if not set
+# This is simple and deterministic - matches group naming convention
+if [ -z "${INFRA_TYPE}" ]; then
+    case "${TAP_GROUP}" in
+        mysql84*)  export INFRA_TYPE=infra-mysql84 ;;
+        mysql90*)  export INFRA_TYPE=infra-mysql90 ;;
+        mysql91*)  export INFRA_TYPE=infra-mysql91 ;;
+        mysql92*)  export INFRA_TYPE=infra-mysql92 ;;
+        mysql93*)  export INFRA_TYPE=infra-mysql93 ;;
+        mariadb*)  export INFRA_TYPE=infra-mariadb10 ;;
+        legacy*)   export INFRA_TYPE=infra-mysql57 ;;
+    esac
+    if [ -n "${INFRA_TYPE}" ]; then
+        echo ">>> Derived INFRA_TYPE from TAP_GROUP: ${INFRA_TYPE}"
+    fi
+fi
+
 # 2. Automatically derive DEFAULT_MYSQL_INFRA and DEFAULT_PGSQL_INFRA
 # We take the first compatible infrastructure found in the list.
 if [ -n "${INFRAS_TO_CHECK}" ]; then
