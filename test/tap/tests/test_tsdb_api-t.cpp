@@ -95,65 +95,140 @@ int main() {
 	curl_global_init(CURL_GLOBAL_ALL);
 	plan(10);
 
+	diag("TSDB API Test Configuration:");
+	diag("  ProxySQL host: %s", cl.host);
+	diag("  Admin port: %d", cl.admin_port);
+	diag("  Admin username: %s", cl.admin_username);
+
 	MYSQL* admin = mysql_init(NULL);
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		diag("Connection failed: %s", mysql_error(admin));
 		return EXIT_FAILURE;
 	}
+	diag("Connected to ProxySQL admin interface");
 
 	// 1. Enable TSDB and REST API
 	diag("Enabling TSDB, Web, and REST API...");
-	mysql_query(admin, "SET tsdb-enabled='1'"); drain_results(admin);
-	mysql_query(admin, "SET tsdb-sample_interval='1'"); drain_results(admin);
-	mysql_query(admin, "SET admin-restapi_enabled='1'"); drain_results(admin);
-	mysql_query(admin, "SET admin-web_enabled='1'"); drain_results(admin);
-	mysql_query(admin, "LOAD TSDB VARIABLES TO RUNTIME"); drain_results(admin);
-	mysql_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME"); drain_results(admin);
+	int rc;
+	rc = mysql_query(admin, "SET tsdb-enabled='1'");
+	if (rc) {
+		diag("SET tsdb-enabled failed: %s", mysql_error(admin));
+		return EXIT_FAILURE;
+	}
+	drain_results(admin);
+
+	rc = mysql_query(admin, "SET tsdb-sample_interval='1'");
+	if (rc) {
+		diag("SET tsdb-sample_interval failed: %s", mysql_error(admin));
+		return EXIT_FAILURE;
+	}
+	drain_results(admin);
+
+	rc = mysql_query(admin, "SET admin-restapi_enabled='1'");
+	if (rc) {
+		diag("SET admin-restapi_enabled failed: %s", mysql_error(admin));
+		return EXIT_FAILURE;
+	}
+	drain_results(admin);
+
+	rc = mysql_query(admin, "SET admin-web_enabled='1'");
+	if (rc) {
+		diag("SET admin-web_enabled failed: %s", mysql_error(admin));
+		return EXIT_FAILURE;
+	}
+	drain_results(admin);
+
+	rc = mysql_query(admin, "LOAD TSDB VARIABLES TO RUNTIME");
+	if (rc) {
+		diag("LOAD TSDB VARIABLES failed: %s", mysql_error(admin));
+		return EXIT_FAILURE;
+	}
+	drain_results(admin);
+
+	rc = mysql_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+	if (rc) {
+		diag("LOAD ADMIN VARIABLES failed: %s", mysql_error(admin));
+		return EXIT_FAILURE;
+	}
+	drain_results(admin);
+
+	// Verify the settings were applied
+	MYSQL_RES* res;
+	rc = mysql_query(admin, "SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name IN ('admin-restapi_enabled', 'admin-web_enabled', 'tsdb-enabled')");
+	if (rc == 0) {
+		res = mysql_store_result(admin);
+		if (res) {
+			diag("Runtime variable status:");
+			MYSQL_ROW row;
+			while ((row = mysql_fetch_row(res))) {
+				diag("  %s = %s", row[0], row[1]);
+			}
+			mysql_free_result(res);
+		}
+	}
 	drain_results(admin);
 
 	// 2. Wait for background loops to collect data and HTTP server to start
 	diag("Waiting for initialization and data collection (7s)...");
 	sleep(7);
 
-	string base_url = "https://127.0.0.1:6080";
-	string rest_url = "http://127.0.0.1:6070";
+	// Use admin interface host for HTTP endpoints
+	string base_url = string("https://") + cl.admin_host + ":6080";
+	string rest_url = string("http://") + cl.admin_host + ":6070";
+	diag("Web dashboard URL: %s", base_url.c_str());
+	diag("REST API URL: %s", rest_url.c_str());
+
 	string response;
-	long rc;
+	long http_rc;
 
 	// 3. Test /tsdb Dashboard (HTML)
 	diag("Testing GET /tsdb");
-	// Retry once if server returned nothing
-	for (int i=0; i<3; i++) {
-		rc = http_get((base_url + "/tsdb").c_str(), response);
-		if (rc != 0) break;
-		diag("Retry %d for /tsdb...", i+1);
+	response.clear();
+	// Retry multiple times if server returned nothing
+	for (int i=0; i<5; i++) {
+		http_rc = http_get((base_url + "/tsdb").c_str(), response);
+		if (http_rc != 0) break;
+		diag("Retry %d for /tsdb (got response code 0, connection likely failed)...", i+1);
 		sleep(2);
 	}
-	
-	ok(rc == 200, "Dashboard /tsdb returns 200 (got %ld)", rc);
+
+	ok(http_rc == 200, "Dashboard /tsdb returns 200 (got %ld)", http_rc);
+	if (http_rc != 200) {
+		diag("Dashboard response code: %ld", http_rc);
+		diag("This may indicate web interface is not enabled or not accessible at %s", base_url.c_str());
+	}
 	ok(response.find("ProxySQL TSDB Dashboard") != string::npos, "Dashboard contains title");
 	ok(response.find("tsdbChart") != string::npos, "Dashboard contains canvas element");
 
 	// 4. Test /api/tsdb/status
 	diag("Testing GET /api/tsdb/status");
-	rc = http_get((rest_url + "/api/tsdb/status").c_str(), response, "admin:admin");
-	ok(rc == 200, "API /api/tsdb/status returns 200");
+	response.clear();
+	string auth_creds = string(cl.admin_username) + ":" + string(cl.admin_password);
+	diag("Using authentication with username: %s", cl.admin_username);
+	http_rc = http_get((rest_url + "/api/tsdb/status").c_str(), response, auth_creds.c_str());
+	ok(http_rc == 200, "API /api/tsdb/status returns 200 (got %ld)", http_rc);
+	if (http_rc != 200) {
+		diag("REST API may not be enabled or not accessible at %s", rest_url.c_str());
+	}
 	ok(response.find("total_datapoints") != string::npos, "Status contains total_datapoints");
-	diag("Status response: %s", response.c_str());
+	diag("Status response (first 200 chars): %s", response.substr(0, 200).c_str());
 
 	// 5. Test /api/tsdb/metrics
 	diag("Testing GET /api/tsdb/metrics");
-	rc = http_get((rest_url + "/api/tsdb/metrics").c_str(), response, "admin:admin");
-	ok(rc == 200, "API /api/tsdb/metrics returns 200");
-	ok(response.length() > 2, "Metrics list is not empty");
+	response.clear();
+	http_rc = http_get((rest_url + "/api/tsdb/metrics").c_str(), response, auth_creds.c_str());
+	ok(http_rc == 200, "API /api/tsdb/metrics returns 200 (got %ld)", http_rc);
+	ok(response.length() > 2, "Metrics list is not empty (length: %zu)", response.length());
+	diag("Metrics response (first 200 chars): %s", response.substr(0, 200).c_str());
 
 	// 6. Test /api/tsdb/query
 	diag("Testing GET /api/tsdb/query for proxysql_uptime_seconds_total");
-	rc = http_get((rest_url + "/api/tsdb/query?metric=proxysql_uptime_seconds_total").c_str(), response, "admin:admin");
-	ok(rc == 200, "API /api/tsdb/query returns 200");
+	response.clear();
+	http_rc = http_get((rest_url + "/api/tsdb/query?metric=proxysql_uptime_seconds_total").c_str(), response, auth_creds.c_str());
+	ok(http_rc == 200, "API /api/tsdb/query returns 200 (got %ld)", http_rc);
 	ok(response.find("\"metric\":\"proxysql_uptime_seconds_total\"") != string::npos, "Query result contains metric name");
 	ok(response.find("\"value\":") != string::npos, "Query result contains data values");
-	diag("Query response (first 100 chars): %s", response.substr(0, 100).c_str());
+	diag("Query response (first 200 chars): %s", response.substr(0, 200).c_str());
 
 	mysql_close(admin);
 	return exit_status();
