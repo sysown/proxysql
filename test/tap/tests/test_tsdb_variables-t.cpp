@@ -1,6 +1,7 @@
 #include <map>
 #include <string>
 #include <cstdlib>
+#include <ctime>
 #include <unistd.h>
 
 #include "mysql.h"
@@ -193,15 +194,72 @@ int main() {
 	ok(dp_ok && atoi(count.c_str()) > 0, "SHOW TSDB STATUS reports datapoints > 0 (found %s)", count.c_str());
 
 	// 12. Test Downsampling command
+	// NOTE: Downsampling only processes COMPLETED hours (data with timestamps before current_hour).
+	// Since we only have a few seconds of data, we need to insert test data with timestamps
+	// from at least 1 hour ago for the downsample to produce results.
 	diag("Testing TSDB downsampling via command...");
+
+	// Get current timestamp and calculate timestamp from 2 hours ago
+	time_t now = time(NULL);
+	time_t two_hours_ago = ((now - 7200) / 3600) * 3600; // Start of the hour, 2 hours ago
+	diag("Current time: %ld, Two hours ago (hour boundary): %ld", now, two_hours_ago);
+
+	// Insert test data with timestamps from 2 hours ago (completed hour)
+	diag("Inserting test metrics data with timestamps from completed hour...");
+	char insert_query[512];
+	snprintf(insert_query, sizeof(insert_query),
+		"INSERT OR REPLACE INTO stats_history.tsdb_metrics (timestamp, metric_name, labels, value) "
+		"VALUES (%ld, 'test_downsample_metric', '{\"test\":\"true\"}', 42.0)",
+		two_hours_ago);
+	rc = mysql_query(admin, insert_query);
+	if (rc != 0) {
+		diag("Failed to insert test data: %s", mysql_error(admin));
+	}
+	drain_results(admin);
+	diag("Inserted test metric at timestamp %ld", two_hours_ago);
+
+	// Also insert a few more data points in the same hour for realistic test
+	for (int i = 1; i <= 3; i++) {
+		snprintf(insert_query, sizeof(insert_query),
+			"INSERT OR REPLACE INTO stats_history.tsdb_metrics (timestamp, metric_name, labels, value) "
+			"VALUES (%ld, 'test_downsample_metric', '{\"test\":\"true\"}', %f)",
+			two_hours_ago + i * 60, 42.0 + i); // Add data points every minute
+		mysql_query(admin, insert_query);
+		drain_results(admin);
+	}
+	diag("Inserted 4 total test data points in the completed hour");
+
+	// Check metrics count before downsampling
+	string before_count;
+	fetch_single_string(admin, "SELECT COUNT(*) FROM stats_history.tsdb_metrics WHERE metric_name='test_downsample_metric'", before_count);
+	diag("Test metrics in tsdb_metrics before downsample: %s", before_count.c_str());
+
+	// Run the downsample command
 	rc = mysql_query(admin, "PROXYSQL TSDB DOWNSAMPLE");
 	ok(rc == 0, "PROXYSQL TSDB DOWNSAMPLE command is supported");
 	drain_results(admin);
-	
+
+	// Check hourly table after downsampling
 	diag("Verifying downsampled data...");
 	string ds_count;
 	bool ds_ok = fetch_single_string(admin, "SELECT COUNT(*) FROM stats_history.tsdb_metrics_hour", ds_count);
+	diag("Rows in tsdb_metrics_hour after downsample: %s", ds_count.c_str());
+
+	// Also check for our specific test metric
+	string test_metric_count;
+	fetch_single_string(admin,
+		"SELECT COUNT(*) FROM stats_history.tsdb_metrics_hour WHERE metric_name='test_downsample_metric'",
+		test_metric_count);
+	diag("Test metric rows in tsdb_metrics_hour: %s", test_metric_count.c_str());
+
 	ok(ds_ok && atoi(ds_count.c_str()) > 0, "Downsample produced rows in tsdb_metrics_hour (count: %s)", ds_count.c_str());
+
+	// Cleanup: remove test data
+	diag("Cleaning up test data...");
+	mysql_query(admin, "DELETE FROM stats_history.tsdb_metrics WHERE metric_name='test_downsample_metric'");
+	drain_results(admin);
+	mysql_query(admin, "DELETE FROM stats_history.tsdb_metrics_hour WHERE metric_name='test_downsample_metric'");
+	drain_results(admin);
 
 	mysql_close(admin);
 	return exit_status();
