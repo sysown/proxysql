@@ -394,7 +394,7 @@ if [ "${COVERAGE}" -eq 1 ]; then
                 proxysql-ci-base:latest \
                 bash -c '
                     if command -v genhtml >/dev/null 2>&1; then
-                        genhtml --branch-coverage "${COMBINED_INFO}" --output-directory "${COMBINED_HTML}" 2>&1 || \
+                        genhtml --branch-coverage --ignore-errors negative,source --synthesize-missing "${COMBINED_INFO}" --output-directory "${COMBINED_HTML}" 2>&1 || \
                             echo ">>> WARNING: HTML generation failed"
                     else
                         echo ">>> WARNING: genhtml not available"
