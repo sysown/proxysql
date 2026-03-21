@@ -81,6 +81,13 @@ int test_init_query_cache() {
 		return 0;
 	}
 
+	// The Query_Cache constructor registers Prometheus metrics via
+	// GloVars.prometheus_registry. Provide a real registry so the
+	// constructor doesn't crash on nullptr dereference.
+	if (GloVars.prometheus_registry == nullptr) {
+		GloVars.prometheus_registry = std::make_shared<prometheus::Registry>();
+	}
+
 	GloMyQC = new MySQL_Query_Cache();
 	GloPgQC = new PgSQL_Query_Cache();
 

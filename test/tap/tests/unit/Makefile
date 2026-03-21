@@ -231,7 +231,7 @@ $(ODIR)/test_init.o: $(TEST_HELPERS_DIR)/test_init.cpp | $(ODIR)
 # Unit test targets
 # ===========================================================================
 
-UNIT_TESTS := smoke_test-t
+UNIT_TESTS := smoke_test-t query_cache_unit-t
 
 .PHONY: all
 all: $(UNIT_TESTS)
@@ -246,6 +246,11 @@ ifneq ($(UNAME_S),Darwin)
 endif
 
 smoke_test-t: smoke_test-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) \
+		$(ALLOW_MULTI_DEF) -o $@
+
+query_cache_unit-t: query_cache_unit-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
 		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) \
 		$(ALLOW_MULTI_DEF) -o $@
