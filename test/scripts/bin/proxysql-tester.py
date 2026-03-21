@@ -653,6 +653,10 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
             # Load group-specific environment variables if TAP_GROUP is set
             if TAP_GROUP:
                 group_env_file = f"{WORKSPACE}/test/tap/groups/{TAP_GROUP}/env.sh"
+                # Fallback to base group if subgroup env.sh doesn't exist (e.g., legacy-g1 -> legacy)
+                base_group = re.sub(r'[-_]g[0-9]+.*$', '', TAP_GROUP)
+                if not os.path.isfile(group_env_file) and base_group != TAP_GROUP:
+                    group_env_file = f"{WORKSPACE}/test/tap/groups/{base_group}/env.sh"
                 if os.path.isfile(group_env_file):
                     log.info(f"Loading group-specific environment from {group_env_file}")
                     try:
@@ -803,7 +807,7 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
                 try:
                     fop = subprocess.Popen(fo_cmd, shell=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0, env=tap_env)
                 except Exception as e:
-                    log.critical(f"TAP test {fo_num+1}/{len(tap_tests)} '{os.path.basename(fo_cmd)}' - test threw an exception !!!", exception=e)
+                    log.critical(f"TAP test {fo_num+1}/{len(tap_tests)} '{os.path.basename(fo_cmd)}' - test threw an exception !!!: {e}")
                     self.padmin_command(f"LOGENTRY '{TAP} test {fo_num+1}/{len(tap_tests)} \'{os.path.basename(fo_cmd)}\' - test threw an exception !!!'")
                     log.exception(e, exc_info=True)
                     rc = rc + 1
@@ -835,7 +839,7 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
                     for line in fop.stdout:
                         log.debug(f"msg: {line.decode('utf-8').strip()}")
                 except Exception as e:
-                    log.critical(f"TAP test {fo_num+1}/{len(tap_tests)} '{os.path.basename(fo_cmd)}' - test threw an exception !!!", exception=e)
+                    log.critical(f"TAP test {fo_num+1}/{len(tap_tests)} '{os.path.basename(fo_cmd)}' - test threw an exception !!!: {e}")
                     self.padmin_command(f"LOGENTRY '{TAP} test {fo_num+1}/{len(tap_tests)} \'{os.path.basename(fo_cmd)}\' - test threw an exception !!!'")
                     log.exception(e, exc_info=True)
                     rc = rc + 1
@@ -917,6 +921,32 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
 
             if rc and int(os.environ['TEST_PY_EXIT_ON_FAIL_TEST']):
                 sys.exit(1)
+
+        # Validate that all expected tests for this group passed
+        # If TAP_GROUP is set and group_has_tests, we expect ALL tests in groups.json to pass
+        # NOTE: Only validate tests that actually exist in the current workdir to avoid
+        # false positives when processing secondary workdirs (e.g., deprecate_eof_support)
+        if TAP_GROUP and group_has_tests and groups:
+            # Get tests that exist in the current workdir and belong to TAP_GROUP
+            available_tests = set(os.path.basename(t) for t in tap_tests)
+            expected_in_workdir = set(test_name for test_name, test_groups in groups.items()
+                                       if TAP_GROUP in test_groups and test_name in available_tests)
+
+            # Only validate if this workdir has tests for our group
+            if expected_in_workdir:
+                passed_tests = set(os.path.basename(cmd) for cmd, rc_val in summary if rc_val == 0)
+                failed_tests = set(os.path.basename(cmd) for cmd, rc_val in summary if rc_val is not None and rc_val != 0)
+                missing_tests = expected_in_workdir - passed_tests - failed_tests
+
+                if missing_tests:
+                    log.critical(f"TAP_GROUP '{TAP_GROUP}': {len(missing_tests)} expected tests did not run: {sorted(missing_tests)}")
+                    rc = rc + len(missing_tests)
+
+                if len(passed_tests) != len(expected_in_workdir):
+                    log.critical(f"TAP_GROUP '{TAP_GROUP}': Expected {len(expected_in_workdir)} tests to pass, but only {len(passed_tests)} passed. Failed: {len(failed_tests)}, Missing: {len(missing_tests)}")
+                    # Ensure rc is non-zero to indicate failure
+                    if rc == 0:
+                        rc = len(expected_in_workdir) - len(passed_tests)
 
         return rc, logs, summary
 
