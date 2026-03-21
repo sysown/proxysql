@@ -33,6 +33,10 @@ extern PgSQL_Query_Cache *GloPgQC;
 extern MySQL_Query_Processor *GloMyQPro;
 extern PgSQL_Query_Processor *GloPgQPro;
 
+// GloMTH is declared extern in proxysql_utils.h.
+// GloPTH has no extern declaration in any header, so we add one here.
+extern PgSQL_Threads_Handler *GloPTH;
+
 // ============================================================================
 // Minimal initialization
 // ============================================================================
@@ -118,6 +122,26 @@ int test_init_query_processor() {
 		return 0;
 	}
 
+	// Query Processor constructors register Prometheus metrics and
+	// read variables from GloMTH/GloPTH. Ensure both are available.
+	if (GloVars.prometheus_registry == nullptr) {
+		GloVars.prometheus_registry = std::make_shared<prometheus::Registry>();
+	}
+	if (GloMTH == nullptr) {
+		GloMTH = new MySQL_Threads_Handler();
+	}
+	if (GloPTH == nullptr) {
+		GloPTH = new PgSQL_Threads_Handler();
+	}
+
+	// Trigger lazy initialization of VariablesPointers maps.
+	// The QP constructor calls get_variable_int() which requires
+	// these maps to be populated.
+	char **vl = GloMTH->get_variables_list();
+	if (vl) free(vl);
+	vl = GloPTH->get_variables_list();
+	if (vl) free(vl);
+
 	GloMyQPro = new MySQL_Query_Processor();
 	GloPgQPro = new PgSQL_Query_Processor();
 
@@ -133,4 +157,7 @@ void test_cleanup_query_processor() {
 		delete GloPgQPro;
 		GloPgQPro = nullptr;
 	}
+	// NOTE: We do NOT delete GloMTH/GloPTH here because other
+	// components may still reference them. They are cleaned up
+	// by test_cleanup_minimal() or at process exit.
 }
