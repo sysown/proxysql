@@ -9401,6 +9401,16 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
  * @param pkt Reference to the packet containing the command and associated data.
  */
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_CLOSE(PtrSize_t& pkt) {
+	if (pkt.size < 9) {
+		proxy_warning(
+			"Received malformed COM_STMT_CLOSE packet of %lu bytes\n",
+			static_cast<unsigned long>(pkt.size)
+		);
+		l_free(pkt.size,pkt.ptr);
+		client_myds->DSS=STATE_SLEEP;
+		status=WAITING_CLIENT_DATA;
+		return;
+	}
 	uint32_t client_global_id=0;
 	memcpy(&client_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
 	// FIXME: no input validation
