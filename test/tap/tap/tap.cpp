@@ -38,6 +38,10 @@ typedef char my_bool;
 
 using std::size_t;
 
+#ifdef __APPLE__
+typedef unsigned long ulong;
+#endif
+
 extern std::vector<std::string> noise_failures;
 extern std::mutex noise_failure_mutex;
 
