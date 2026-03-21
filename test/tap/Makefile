@@ -30,8 +30,8 @@ tests_with_deps: tap test_deps
 
 
 .PHONY: unit_tests
-unit_tests: tap
-	cd tests/unit && CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
+unit_tests:
+	cd tests/unit && CC=${CC} CXX=${CXX} ${MAKE}
 
 
 .PHONY: clean_utils

@@ -220,6 +220,15 @@ void ProxySQL_GlobalVariables::get_SSL_pem_mem(char **key, char **cert) {
  * @return 0 on success, non-zero on failure.
  */
 int test_globals_init() {
+	// Ensure the global debug flag matches the build type so that
+	// components which validate debug compatibility in their
+	// constructors do not abort.
+#ifdef DEBUG
+	glovars.has_debug = true;
+#else
+	glovars.has_debug = false;
+#endif
+
 	// Set safe defaults for the global configuration
 	GloVars.global.nostart = true;
 	GloVars.global.foreground = true;
@@ -247,12 +256,10 @@ int test_globals_init() {
 	const char *tmpdir = getenv("TMPDIR");
 	if (tmpdir == nullptr) tmpdir = "/tmp";
 
-	char datadir_buf[256];
-	snprintf(datadir_buf, sizeof(datadir_buf), "%s/proxysql_unit_test_%d",
-		tmpdir, getpid());
-
 	if (GloVars.datadir == nullptr) {
-		GloVars.datadir = strdup(datadir_buf);
+		std::string datadir_path = std::string(tmpdir)
+			+ "/proxysql_unit_test_" + std::to_string(getpid());
+		GloVars.datadir = strdup(datadir_path.c_str());
 	}
 
 	return 0;

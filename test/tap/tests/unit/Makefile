@@ -233,14 +233,12 @@ $(ODIR)/test_init.o: $(TEST_HELPERS_DIR)/test_init.cpp | $(ODIR)
 
 UNIT_TESTS := smoke_test-t
 
-.DEFAULT: default
-.PHONY: default debug all
-
-default: all
-debug: OPT += -DDEBUG
-debug: all
-
+.PHONY: all
 all: $(UNIT_TESTS)
+
+.PHONY: debug
+debug: OPT += -DDEBUG
+debug: $(UNIT_TESTS)
 
 ALLOW_MULTI_DEF :=
 ifneq ($(UNAME_S),Darwin)
