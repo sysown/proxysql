@@ -138,11 +138,49 @@ docker run \
     -e TAP_GROUP="${TAP_GROUP}" \
     -e SKIP_CLUSTER_START="${SKIP_CLUSTER_START}" \
     -e PROXYSQL_CLUSTER_NODES="${PROXYSQL_CLUSTER_NODES}" \
+    -e COVERAGE_MODE="${COVERAGE_MODE}" \
+    -e COVERAGE_REPORT_DIR="${COVERAGE_REPORT_DIR}" \
+    -e SCRIPT_DIR="${SCRIPT_DIR}" \
+    -e MYSQL_BINLOG_BIN="${MYSQL_BINLOG_BIN}" \
+    -e BINLOG_READER_BIN="${BINLOG_READER_BIN}" \
     proxysql-ci-base:latest \
     /bin/bash -c "
         set -e
+
+        # Coverage collection trap - runs on exit regardless of success/failure/timeout
+        collect_coverage() {
+            local exit_code=\$?
+            if [ \"\${COVERAGE_MODE}\" = \"1\" ]; then
+                echo \">>> Collecting code coverage data (exit code was: \${exit_code})...\"
+                if command -v fastcov >/dev/null 2>&1; then
+                    mkdir -p \"\${COVERAGE_REPORT_DIR}\"
+                    local coverage_file=\"\${COVERAGE_REPORT_DIR}/\${INFRA_ID}.info\"
+                    echo \">>> Generating coverage report: \${coverage_file}\"
+                    local nproc_val=\$(nproc)
+                    cd \"\${WORKSPACE}\"
+                    fastcov -b -j\"\${nproc_val}\" --process-gcno -l -e /usr/include/ -e test/tap/tests -e deps/ -d . -o \"\${coverage_file}\" 2>&1 || echo \">>> WARNING: Coverage generation failed\"
+                    if [ -f \"\${coverage_file}\" ]; then
+                        echo \">>> Coverage report generated: \${coverage_file}\"
+                        # Generate HTML report
+                        if command -v genhtml >/dev/null 2>&1; then
+                            local html_dir=\"\${COVERAGE_REPORT_DIR}/html\"
+                            mkdir -p \"\${html_dir}\"
+                            genhtml --branch-coverage \"\${coverage_file}\" --output-directory \"\${html_dir}\" 2>&1 || echo \">>> WARNING: HTML generation failed\"
+                            [ -f \"\${html_dir}/index.html\" ] && echo \">>> HTML coverage report: \${html_dir}/index.html\"
+                        fi
+                    else
+                        echo \">>> WARNING: Coverage info file not generated\"
+                    fi
+                else
+                    echo \">>> WARNING: fastcov not found in container, skipping coverage collection\"
+                fi
+            fi
+            exit \${exit_code}
+        }
+        trap collect_coverage EXIT
+
         git config --global --add safe.directory \"${WORKSPACE}\"
-        
+
         # Redirection: Replace reference to legacy scripts with local infra control scripts
         find \"${WORKSPACE}/test/tap/groups\" -name \"*.bash\" | xargs -r sed -i \"s|\\\$JENKINS_SCRIPTS_PATH|${WORKSPACE}/test/infra/control|g\"
 

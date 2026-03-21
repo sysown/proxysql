@@ -132,7 +132,7 @@ run_single_group() {
     export COVERAGE="${COVERAGE}"
 
     timeout "${TIMEOUT_MINUTES}m" bash <<INNERSHELL || cmd_exit_code=$?
-        set -uo pipefail
+        set -euo pipefail
 
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Setting up infrastructure..." | tee -a "${log_file}"
         if ! "${SCRIPT_DIR}/ensure-infras.bash" >> "${log_file}" 2>&1; then
@@ -335,15 +335,34 @@ if [ "${COVERAGE}" -eq 1 ]; then
     done
 
     if [ -n "${COVERAGE_FILES}" ]; then
-        # Check if fastcov is available
-        if command -v fastcov >/dev/null 2>&1; then
-            COMBINED_INFO="${COMBINED_COVERAGE_DIR}/combined-coverage.info"
-            echo ">>> Combining coverage reports into: ${COMBINED_INFO}"
-            # shellcheck disable=SC2086
-            fastcov -b -l -C ${COVERAGE_FILES} -o "${COMBINED_INFO}" 2>/dev/null || {
-                echo ">>> WARNING: fastcov combine failed, trying lcov..."
-                # Fallback to lcov if fastcov fails
-                if command -v lcov >/dev/null 2>&1; then
+        COMBINED_INFO="${COMBINED_COVERAGE_DIR}/combined-coverage.info"
+        echo ">>> Combining coverage reports into: ${COMBINED_INFO}"
+
+        # Run coverage combination in container (tools may not be on host)
+        docker run --rm \
+            -v "${WORKSPACE}:${WORKSPACE}" \
+            -e COVERAGE_FILES="${COVERAGE_FILES}" \
+            -e COMBINED_INFO="${COMBINED_INFO}" \
+            proxysql-ci-base:latest \
+            bash -c '
+                set -e
+                if command -v fastcov >/dev/null 2>&1; then
+                    fastcov -b -l -C ${COVERAGE_FILES} -o "${COMBINED_INFO}" 2>&1 || {
+                        echo ">>> WARNING: fastcov combine failed, trying lcov..."
+                        if command -v lcov >/dev/null 2>&1; then
+                            FIRST_FILE=true
+                            for info_file in ${COVERAGE_FILES}; do
+                                if [ "${FIRST_FILE}" = true ]; then
+                                    cp "${info_file}" "${COMBINED_INFO}"
+                                    FIRST_FILE=false
+                                else
+                                    lcov -a "${COMBINED_INFO}" -a "${info_file}" -o "${COMBINED_INFO}".tmp 2>/dev/null && \
+                                        mv "${COMBINED_INFO}".tmp "${COMBINED_INFO}"
+                                fi
+                            done
+                        fi
+                    }
+                elif command -v lcov >/dev/null 2>&1; then
                     FIRST_FILE=true
                     for info_file in ${COVERAGE_FILES}; do
                         if [ "${FIRST_FILE}" = true ]; then
@@ -354,30 +373,39 @@ if [ "${COVERAGE}" -eq 1 ]; then
                                 mv "${COMBINED_INFO}".tmp "${COMBINED_INFO}"
                         fi
                     done
+                else
+                    echo ">>> ERROR: Neither fastcov nor lcov available"
+                    exit 1
                 fi
-            }
+            ' || echo ">>> WARNING: Coverage combination failed"
 
-            if [ -f "${COMBINED_INFO}" ]; then
-                echo ">>> Combined coverage report: ${COMBINED_INFO}"
+        if [ -f "${COMBINED_INFO}" ]; then
+            echo ">>> Combined coverage report: ${COMBINED_INFO}"
 
-                # Generate HTML report
-                if command -v genhtml >/dev/null 2>&1; then
-                    COMBINED_HTML="${COMBINED_COVERAGE_DIR}/html"
-                    mkdir -p "${COMBINED_HTML}"
-                    genhtml --branch-coverage "${COMBINED_INFO}" --output-directory "${COMBINED_HTML}" 2>/dev/null || \
-                        echo ">>> WARNING: HTML generation failed"
-                    [ -f "${COMBINED_HTML}/index.html" ] && echo ">>> Combined HTML report: ${COMBINED_HTML}/index.html"
-                fi
-            else
-                echo ">>> WARNING: Failed to generate combined coverage report"
+            # Generate HTML report
+            echo ">>> Generating HTML coverage report..."
+            COMBINED_HTML="${COMBINED_COVERAGE_DIR}/html"
+            mkdir -p "${COMBINED_HTML}"
+
+            docker run --rm \
+                -v "${WORKSPACE}:${WORKSPACE}" \
+                -e COMBINED_INFO="${COMBINED_INFO}" \
+                -e COMBINED_HTML="${COMBINED_HTML}" \
+                proxysql-ci-base:latest \
+                bash -c '
+                    if command -v genhtml >/dev/null 2>&1; then
+                        genhtml --branch-coverage "${COMBINED_INFO}" --output-directory "${COMBINED_HTML}" 2>&1 || \
+                            echo ">>> WARNING: HTML generation failed"
+                    else
+                        echo ">>> WARNING: genhtml not available"
+                    fi
+                '
+
+            if [ -f "${COMBINED_HTML}/index.html" ]; then
+                echo ">>> Combined HTML report: ${COMBINED_HTML}/index.html"
             fi
         else
-            echo ">>> WARNING: fastcov/lcov not found, skipping coverage combination"
-            echo ">>> Individual coverage files are available at:"
-            for group in ${TAP_GROUPS}; do
-                infra_id="${group}-${RUN_ID}"
-                echo "  ${group}: ${WORKSPACE}/ci_infra_logs/${infra_id}/coverage-report/"
-            done
+            echo ">>> WARNING: Failed to generate combined coverage report"
         fi
     else
         echo ">>> No coverage files found to combine"
