@@ -165,7 +165,7 @@ docker run \
                         if command -v genhtml >/dev/null 2>&1; then
                             local html_dir=\"\${COVERAGE_REPORT_DIR}/html\"
                             mkdir -p \"\${html_dir}\"
-                            genhtml --branch-coverage \"\${coverage_file}\" --output-directory \"\${html_dir}\" 2>&1 || echo \">>> WARNING: HTML generation failed\"
+                            genhtml --branch-coverage --ignore-errors negative,source --synthesize-missing \"\${coverage_file}\" --output-directory \"\${html_dir}\" 2>&1 || echo \">>> WARNING: HTML generation failed\"
                             [ -f \"\${html_dir}/index.html\" ] && echo \">>> HTML coverage report: \${html_dir}/index.html\"
                         fi
                     else
@@ -278,7 +278,7 @@ if [ "${COVERAGE_MODE}" = "1" ]; then
             if command -v genhtml >/dev/null 2>&1; then
                 HTML_REPORT_DIR="${COVERAGE_REPORT_DIR}/html/${TAP_GROUP:-test}-${INFRA_ID}"
                 mkdir -p "${HTML_REPORT_DIR}"
-                genhtml --branch-coverage "${COVERAGE_INFO_FILE}" --output-directory "${HTML_REPORT_DIR}" 2>/dev/null || \
+                genhtml --branch-coverage --ignore-errors negative,source --synthesize-missing "${COVERAGE_INFO_FILE}" --output-directory "${HTML_REPORT_DIR}" 2>/dev/null || \
                     echo ">>> WARNING: HTML report generation failed"
                 [ -d "${HTML_REPORT_DIR}" ] && echo ">>> HTML report: ${HTML_REPORT_DIR}/index.html"
             fi

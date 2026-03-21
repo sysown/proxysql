@@ -924,21 +924,29 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
 
         # Validate that all expected tests for this group passed
         # If TAP_GROUP is set and group_has_tests, we expect ALL tests in groups.json to pass
+        # NOTE: Only validate tests that actually exist in the current workdir to avoid
+        # false positives when processing secondary workdirs (e.g., deprecate_eof_support)
         if TAP_GROUP and group_has_tests and groups:
-            expected_tests = set(test_name for test_name, test_groups in groups.items() if TAP_GROUP in test_groups)
-            passed_tests = set(os.path.basename(cmd) for cmd, rc_val in summary if rc_val == 0)
-            failed_tests = set(os.path.basename(cmd) for cmd, rc_val in summary if rc_val is not None and rc_val != 0)
-            missing_tests = expected_tests - passed_tests - failed_tests
+            # Get tests that exist in the current workdir and belong to TAP_GROUP
+            available_tests = set(os.path.basename(t) for t in tap_tests)
+            expected_in_workdir = set(test_name for test_name, test_groups in groups.items()
+                                       if TAP_GROUP in test_groups and test_name in available_tests)
 
-            if missing_tests:
-                log.critical(f"TAP_GROUP '{TAP_GROUP}': {len(missing_tests)} expected tests did not run: {sorted(missing_tests)}")
-                rc = rc + len(missing_tests)
+            # Only validate if this workdir has tests for our group
+            if expected_in_workdir:
+                passed_tests = set(os.path.basename(cmd) for cmd, rc_val in summary if rc_val == 0)
+                failed_tests = set(os.path.basename(cmd) for cmd, rc_val in summary if rc_val is not None and rc_val != 0)
+                missing_tests = expected_in_workdir - passed_tests - failed_tests
 
-            if len(passed_tests) != len(expected_tests):
-                log.critical(f"TAP_GROUP '{TAP_GROUP}': Expected {len(expected_tests)} tests to pass, but only {len(passed_tests)} passed. Failed: {len(failed_tests)}, Missing: {len(missing_tests)}")
-                # Ensure rc is non-zero to indicate failure
-                if rc == 0:
-                    rc = len(expected_tests) - len(passed_tests)
+                if missing_tests:
+                    log.critical(f"TAP_GROUP '{TAP_GROUP}': {len(missing_tests)} expected tests did not run: {sorted(missing_tests)}")
+                    rc = rc + len(missing_tests)
+
+                if len(passed_tests) != len(expected_in_workdir):
+                    log.critical(f"TAP_GROUP '{TAP_GROUP}': Expected {len(expected_in_workdir)} tests to pass, but only {len(passed_tests)} passed. Failed: {len(failed_tests)}, Missing: {len(missing_tests)}")
+                    # Ensure rc is non-zero to indicate failure
+                    if rc == 0:
+                        rc = len(expected_in_workdir) - len(passed_tests)
 
         return rc, logs, summary
 
