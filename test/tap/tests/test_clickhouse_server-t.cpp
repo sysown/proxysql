@@ -52,8 +52,8 @@ std::vector<std::pair<std::string,std::string>> credentials = {
 };
 
 int set_clickhouse_host(MYSQL *pa, const char *h) {
-	std::string query = "SET clickhouse-host=" + std::string(h);
-	diag("Line: %d . Setting clickhouse-host to '%s'", __LINE__ , h);
+	std::string query = "SET clickhouse-hostname='" + std::string(h) + "'";
+	diag("Line: %d . Setting clickhouse-hostname to '%s'", __LINE__ , h);
 	MYSQL_QUERY(pa, query.c_str()); 
 	MYSQL_QUERY(pa, "LOAD CLICKHOUSE VARIABLES TO RUNTIME");
 	return 0;
