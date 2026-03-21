@@ -105,6 +105,10 @@ static vector<map<string,string>> query_rows(MYSQL* conn, const char* query, con
 int main(int argc, char** argv) {
 	CommandLine cl;
 
+	diag("TAP test for SSL/TLS Certificate Statistics Table");
+	diag("This test verifies that ProxySQL correctly reports TLS certificate information,");
+	diag("tracks TLS load operations in stats_global, and updates these stats after a reload.");
+
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
 		return exit_status();
@@ -120,6 +124,7 @@ int main(int argc, char** argv) {
 	// 29: TLS vars NOT in stats_mysql_global
 	plan(29);
 
+	diag("Connecting to ProxySQL Admin interface on %s:%d", cl.host, cl.admin_port);
 	MYSQL* admin = mysql_init(NULL);
 	if (!admin) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
@@ -134,7 +139,8 @@ int main(int argc, char** argv) {
 	// -----------------------------------------------------------------------
 	// Part 1: stats_global - TLS tracking variables
 	// -----------------------------------------------------------------------
-	diag("--- Testing stats.stats_global TLS tracking variables ---");
+	diag("Step 1: Verifying TLS tracking variables in stats.stats_global");
+	diag("--- Querying stats.stats_global ---");
 
 	auto global_stats = query_key_value(admin,
 		"SELECT Variable_Name, Variable_Value FROM stats.stats_global");
@@ -153,6 +159,7 @@ int main(int argc, char** argv) {
 			"stats_global: Variable '%s' is present", var.c_str());
 	}
 
+	diag("Verifying values of TLS tracking variables...");
 	// TLS_Load_Count >= 1
 	int tls_load_count = 0;
 	if (global_stats.count("TLS_Load_Count"))
@@ -189,7 +196,8 @@ int main(int argc, char** argv) {
 	// -----------------------------------------------------------------------
 	// Part 2: stats_tls_certificates - table structure and row content
 	// -----------------------------------------------------------------------
-	diag("--- Testing stats.stats_tls_certificates ---");
+	diag("Step 2: Verifying content of stats.stats_tls_certificates");
+	diag("--- Querying stats.stats_tls_certificates ---");
 
 	const vector<string> cert_cols = {
 		"cert_type", "file_path", "subject_cn", "issuer_cn",
@@ -214,10 +222,12 @@ int main(int argc, char** argv) {
 		if (r.at("cert_type") == "ca")     ca_row     = r;
 	}
 
+	diag("Validating cert_type 'server' and 'ca' rows exist...");
 	ok(!server_row.empty(), "stats_tls_certificates: row with cert_type='server' exists");
 	ok(!ca_row.empty(),     "stats_tls_certificates: row with cert_type='ca' exists");
 
 	// Check non-empty required fields for server cert
+	diag("Validating server certificate row data...");
 	if (!server_row.empty()) {
 		ok(!server_row["file_path"].empty(),
 			"stats_tls_certificates: server file_path is non-empty ('%s')",
@@ -240,6 +250,7 @@ int main(int argc, char** argv) {
 	}
 
 	// Check non-empty required fields for CA cert
+	diag("Validating CA certificate row data...");
 	if (!ca_row.empty()) {
 		ok(!ca_row["file_path"].empty(),
 			"stats_tls_certificates: ca file_path is non-empty ('%s')",
@@ -264,7 +275,8 @@ int main(int argc, char** argv) {
 	// -----------------------------------------------------------------------
 	// Part 3: PROXYSQL RELOAD TLS increments TLS_Load_Count and updates timestamp
 	// -----------------------------------------------------------------------
-	diag("--- Testing PROXYSQL RELOAD TLS updates stats ---");
+	diag("Step 3: Verifying PROXYSQL RELOAD TLS updates stats");
+	diag("--- Executing PROXYSQL RELOAD TLS ---");
 
 	// Sleep 1 second to guarantee timestamp changes on fast systems
 	sleep(1);
@@ -274,6 +286,7 @@ int main(int argc, char** argv) {
 	}
 	mysql_free_result(mysql_store_result(admin));
 
+	diag("Verifying updated stats in stats.stats_global after reload...");
 	auto global_stats_after = query_key_value(admin,
 		"SELECT Variable_Name, Variable_Value FROM stats.stats_global");
 
@@ -297,6 +310,7 @@ int main(int argc, char** argv) {
 		"stats_global: TLS_Last_Load_Result='SUCCESS' after RELOAD TLS (got '%s')",
 		tls_result_after.c_str());
 
+	diag("Verifying stats.stats_tls_certificates rows after reload...");
 	// stats_tls_certificates rows still present after reload
 	auto cert_rows_after = query_rows(admin,
 		"SELECT cert_type, file_path, sha256_fingerprint FROM stats.stats_tls_certificates",
@@ -308,7 +322,8 @@ int main(int argc, char** argv) {
 	// -----------------------------------------------------------------------
 	// Part 4: TLS variables must NOT appear in stats_mysql_global
 	// -----------------------------------------------------------------------
-	diag("--- Verifying TLS variables are absent from stats_mysql_global ---");
+	diag("Step 4: Verifying TLS variables are absent from stats.stats_mysql_global");
+	diag("--- Querying stats.stats_mysql_global ---");
 
 	auto mysql_global_stats = query_key_value(admin,
 		"SELECT Variable_Name, Variable_Value FROM stats.stats_mysql_global");
@@ -323,6 +338,7 @@ int main(int argc, char** argv) {
 	ok(!tls_vars_in_mysql_global,
 		"TLS variables are NOT present in stats_mysql_global");
 
+	diag("Test completed successfully, closing connection.");
 	mysql_close(admin);
 	return exit_status();
 }
