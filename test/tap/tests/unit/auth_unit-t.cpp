@@ -147,7 +147,7 @@ static void test_mysql_add_overwrites() {
 	account_details_t ad = GloMyAuth->lookup(
 		(char *)"bob", USERNAME_FRONTEND, dup);
 
-	ok(strcmp(ad.password, "new_pass") == 0,
+	ok(ad.password != nullptr && strcmp(ad.password, "new_pass") == 0,
 		"MySQL: add() overwrites password on duplicate");
 	ok(ad.default_hostgroup == 2,
 		"MySQL: add() overwrites default_hostgroup on duplicate");
@@ -218,7 +218,7 @@ static void test_mysql_sha1() {
 		ok(memcmp(ad.sha1_pass, sha1_hash, SHA_DIGEST_LENGTH) == 0,
 			"MySQL: SHA1 hash matches what was set");
 	} else {
-		ok(0, "MySQL: SHA1 hash matches (skipped - null)");
+		ok(0, "MySQL: SHA1 hash was unexpectedly null");
 	}
 
 	// set_SHA1 on nonexistent user
@@ -231,7 +231,8 @@ static void test_mysql_sha1() {
 }
 
 /**
- * @brief Test set_clear_text_password() for PRIMARY and ADDITIONAL.
+ * @brief Test set_clear_text_password() for PRIMARY and ADDITIONAL,
+ *        and verify stored values are retrievable via lookup().
  */
 static void test_mysql_clear_text_password() {
 	mysql_add_frontend(GloMyAuth, "ctpuser", "original");
@@ -247,6 +248,18 @@ static void test_mysql_clear_text_password() {
 		"altpass", PASSWORD_TYPE::ADDITIONAL);
 	ok(set_ok == true,
 		"MySQL: set_clear_text_password(ADDITIONAL) returns true");
+
+	// Verify stored clear-text passwords are retrievable
+	dup_account_details_t dup = {false, false, false};
+	account_details_t ad = GloMyAuth->lookup(
+		(char *)"ctpuser", USERNAME_FRONTEND, dup);
+	ok(ad.clear_text_password[PASSWORD_TYPE::PRIMARY] != nullptr
+		&& strcmp(ad.clear_text_password[PASSWORD_TYPE::PRIMARY], "clearpass") == 0,
+		"MySQL: PRIMARY clear_text_password retrievable via lookup()");
+	ok(ad.clear_text_password[PASSWORD_TYPE::ADDITIONAL] != nullptr
+		&& strcmp(ad.clear_text_password[PASSWORD_TYPE::ADDITIONAL], "altpass") == 0,
+		"MySQL: ADDITIONAL clear_text_password retrievable via lookup()");
+	free_account_details(ad);
 
 	bool set_fail = GloMyAuth->set_clear_text_password(
 		(char *)"nobody", USERNAME_FRONTEND,
@@ -420,14 +433,14 @@ static void test_mysql_frontend_backend_separation() {
 
 	account_details_t fe = GloMyAuth->lookup(
 		(char *)"dualuser", USERNAME_FRONTEND, dup);
-	ok(strcmp(fe.password, "frontend_pass") == 0,
+	ok(fe.password != nullptr && strcmp(fe.password, "frontend_pass") == 0,
 		"MySQL: frontend lookup returns frontend password");
 	ok(fe.default_hostgroup == 1,
 		"MySQL: frontend lookup returns frontend hostgroup");
 
 	account_details_t be = GloMyAuth->lookup(
 		(char *)"dualuser", USERNAME_BACKEND, dup);
-	ok(strcmp(be.password, "backend_pass") == 0,
+	ok(be.password != nullptr && strcmp(be.password, "backend_pass") == 0,
 		"MySQL: backend lookup returns backend password");
 	ok(be.default_hostgroup == 2,
 		"MySQL: backend lookup returns backend hostgroup");
@@ -472,6 +485,7 @@ static void test_pgsql_add_exists_lookup() {
 
 	if (password) free(password);
 	if (attrs) free(attrs);
+	if (sha1) free(sha1);
 }
 
 /**
@@ -544,7 +558,7 @@ static void test_pgsql_inactive_pattern() {
 // ============================================================================
 
 int main() {
-	plan(58);
+	plan(60);
 
 	test_init_minimal();
 	test_init_auth();
