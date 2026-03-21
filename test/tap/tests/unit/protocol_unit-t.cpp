@@ -82,13 +82,15 @@ static void test_decode_length_2byte() {
  * @brief Test mysql_decode_length() for 3-byte values (0xFD prefix).
  */
 static void test_decode_length_3byte() {
-	unsigned char buf[4];
+	// CPY3() reads 4 bytes via uint32_t* cast, so pad buffer to avoid OOB
+	unsigned char buf[5];
 	uint32_t len = 0;
 
 	buf[0] = 0xFD;
 	buf[1] = 0x00;
 	buf[2] = 0x00;
 	buf[3] = 0x01;
+	buf[4] = 0x00;  // padding for CPY3's 4-byte read from buf+1
 	uint8_t bytes = mysql_decode_length(buf, &len);
 	ok(len == 0x010000 && bytes == 4,
 		"decode_length: 0xFD prefix → 65536 (4 bytes total)");
@@ -178,6 +180,7 @@ static void test_encode_decode_roundtrip() {
 	int pass_count = 0;
 	for (int i = 0; i < num_values; i++) {
 		memset(buf, 0, sizeof(buf));
+		prefix[0] = 0;  // Initialize to avoid UB for 1-byte values
 		uint8_t enc_len = mysql_encode_length(test_values[i], prefix);
 		write_encoded_length(buf, test_values[i], enc_len, prefix[0]);
 
@@ -222,12 +225,13 @@ static void test_mysql_hdr() {
  * @brief Test CPY3() — copies 3 bytes as little-endian unsigned int.
  */
 static void test_cpy3() {
-	unsigned char buf[3] = {0x01, 0x02, 0x03};
+	// CPY3() reads 4 bytes via uint32_t* cast, so use 4-byte buffers
+	unsigned char buf[4] = {0x01, 0x02, 0x03, 0x00};
 	unsigned int val = CPY3(buf);
 	ok(val == 0x030201,
 		"CPY3: little-endian 3-byte copy correct");
 
-	unsigned char zero[3] = {0, 0, 0};
+	unsigned char zero[4] = {0, 0, 0, 0};
 	ok(CPY3(zero) == 0, "CPY3: zero bytes → 0");
 }
 
@@ -274,7 +278,7 @@ static void test_mysql_query_digest() {
 	}
 
 	// Query with comment — first_comment should capture it
-	first_comment = nullptr;
+	if (first_comment) { free(first_comment); first_comment = nullptr; }
 	digest = mysql_query_digest_and_first_comment_2(
 		"/* my_comment */ SELECT 1", 25,
 		&first_comment, buf);
@@ -282,11 +286,12 @@ static void test_mysql_query_digest() {
 		"mysql digest: query with comment produces non-null digest");
 
 	// Empty query
-	first_comment = nullptr;
+	if (first_comment) { free(first_comment); first_comment = nullptr; }
 	digest = mysql_query_digest_and_first_comment_2(
 		"", 0, &first_comment, buf);
 	ok(digest != nullptr,
 		"mysql digest: empty query produces non-null digest");
+	if (first_comment) { free(first_comment); first_comment = nullptr; }
 }
 
 /**
@@ -296,8 +301,9 @@ static void test_pgsql_query_digest() {
 	char buf[QUERY_DIGEST_BUF];
 	char *first_comment = nullptr;
 
+	const char *pgsql_q = "SELECT  *  FROM  orders  WHERE  total > 0";
 	char *digest = pgsql_query_digest_and_first_comment_2(
-		"SELECT  *  FROM  orders  WHERE  total > 0", 42,
+		pgsql_q, strlen(pgsql_q),
 		&first_comment, buf);
 	ok(digest != nullptr,
 		"pgsql digest: SELECT produces non-null digest");
@@ -308,6 +314,7 @@ static void test_pgsql_query_digest() {
 	} else {
 		ok(0, "pgsql digest: whitespace normalized (skipped)");
 	}
+	if (first_comment) { free(first_comment); first_comment = nullptr; }
 }
 
 // ============================================================================
@@ -318,7 +325,7 @@ static void test_pgsql_query_digest() {
  * @brief Test escape_string_single_quotes().
  */
 static void test_escape_single_quotes() {
-	// No quotes — should return copy
+	// No quotes — returns the original pointer (not a copy)
 	char *input1 = strdup("hello world");
 	char *escaped1 = escape_string_single_quotes(input1, true);
 	ok(escaped1 != nullptr && strcmp(escaped1, "hello world") == 0,
