@@ -1450,7 +1450,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_pgsql_client_host_cache_reset = true; refresh = true; }
 	if (strstr(query_no_space,"stats_tls_certificates"))
 		{ stats_tls_certificates=true; refresh=true; }
-	if (strstr(query_no_space,"stats_global"))
+	if (strstr(query_no_space,"stats_global") && !strstr(query_no_space,"stats_mysql_global") && !strstr(query_no_space,"stats_pgsql_global"))
 		{ stats_global=true; refresh=true; }
 	if (strstr(query_no_space,"stats_proxysql_servers_checksums"))
 		{ stats_proxysql_servers_checksums = true; refresh = true; }

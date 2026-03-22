@@ -485,6 +485,12 @@ int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg) {
 		// Completely disable session tickets and session-cache. See comment above.
 		SSL_CTX_set_options(GloVars.global.ssl_ctx, SSL_OP_NO_TICKET);
 		SSL_CTX_set_session_cache_mode(GloVars.global.ssl_ctx, SSL_SESS_CACHE_OFF);
+	} else if (!bootstrap) {
+		// Record reload failure in TLS tracking stats
+		std::lock_guard<std::mutex> lock(GloVars.global.ssl_mutex);
+		GloVars.global.tls_load_count++;
+		GloVars.global.tls_last_load_timestamp = time(NULL);
+		GloVars.global.tls_last_load_ok = false;
 	}
 	X509_free(x509);
 	EVP_PKEY_free(pkey);
