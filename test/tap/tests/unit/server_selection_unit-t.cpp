@@ -216,7 +216,7 @@ int main() {
 	test_weighted_distribution();        // 1
 	test_determinism();                  // 1
 	test_mixed_eligibility();            // 1
-	// Total: 1+12+1+1+1+1+1+1+1+1 = 21... fix
+	// Total: 1+12+1+1+1+1+1+1+1+1 = 21
 
 	test_cleanup_minimal();
 	return exit_status();

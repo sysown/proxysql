@@ -55,6 +55,11 @@ struct ServerCandidate {
  *   - current_latency_us <= max_latency_us (or max_latency_us == 0)
  *   - current_repl_lag <= max_repl_lag (or max_repl_lag == 0)
  *
+ * @note In production, max_latency_us == 0 on a per-server basis means
+ *       "use the thread default max latency." This extraction treats 0
+ *       as "no limit" for simplicity. Callers should resolve defaults
+ *       before populating the ServerCandidate.
+ *
  * @return true if the candidate is eligible.
  */
 bool is_candidate_eligible(const ServerCandidate &candidate);

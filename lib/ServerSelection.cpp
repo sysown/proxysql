@@ -7,7 +7,6 @@
  */
 
 #include "ServerSelection.h"
-#include <cstdlib>
 
 bool is_candidate_eligible(const ServerCandidate &c) {
 	if (c.status != SERVER_ONLINE) {
@@ -51,7 +50,8 @@ int select_server_from_candidates(
 	// LCG: next = (a * seed + c) mod m  (Numerical Recipes parameters)
 	unsigned int rng_state = random_seed;
 	rng_state = rng_state * 1664525u + 1013904223u;
-	int64_t target = (int64_t)(rng_state % (unsigned int)total_weight) + 1;
+	// Use 64-bit modulo to avoid truncation when total_weight > UINT_MAX
+	int64_t target = (int64_t)(rng_state % (uint64_t)total_weight) + 1;
 
 	// Second pass: weighted selection
 	int64_t cumulative = 0;
