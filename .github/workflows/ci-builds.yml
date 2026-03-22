@@ -60,6 +60,10 @@ jobs:
           # ubuntu22 is needed for TAP testing
           - dist: 'ubuntu22'
             type: '-tap'
+
+          # ubuntu24 GenAI build with code coverage
+          - dist: 'ubuntu24'
+            type: '-tap-genai-gcov'
           # ubuntu22 is needed for ASAN TAP testing
           # disabled to save cache space
           #- dist: 'ubuntu22'
@@ -131,6 +135,12 @@ jobs:
         if [[ "${{ matrix.type }}" =~ "-asan" ]]; then
           sed -i "/command/i \      - WITHASAN=1" docker-compose.yml
           sed -i "/command/i \      - TEST_WITHASAN=1" docker-compose.yml
+        fi
+        if [[ "${{ matrix.type }}" =~ "-genai" ]]; then
+          sed -i "/command/i \      - PROXYSQLGENAI=1" docker-compose.yml
+        fi
+        if [[ "${{ matrix.type }}" =~ "-gcov" ]]; then
+          sed -i "/command/i \      - WITHGCOV=1" docker-compose.yml
         fi
         if [[ "${{ matrix.type }}" =~ "-tap" ]]; then
           # prebuild dependencies without debug
