@@ -46,7 +46,10 @@ using nlohmann::json;
 
 int create_testing_tables(MYSQL* mysql_server) {
 	// Create the testing database
+	fprintf(stderr, "--- create_testing_tables() called ---\n");
+	fprintf(stderr, "Creating test database...\n");
 	MYSQL_QUERY(mysql_server, "CREATE DATABASE IF NOT EXISTS test");
+	fprintf(stderr, "Dropping existing test.gtid_test table if present...\n");
 	MYSQL_QUERY(mysql_server, "DROP TABLE IF EXISTS test.gtid_test");
 
 	MYSQL_QUERY(
@@ -126,12 +129,33 @@ map<uint32_t, pair<uint32_t,uint32_t>> extract_hosgtroups_stats(const vector<mys
 
 int perform_rnd_selects(const CommandLine& cl, uint32_t NUM) {
 	// Check connections only performing select doesn't contribute to GITD count
+	fprintf(stderr, "\n");
+	fprintf(stderr, "--- perform_rnd_selects() called ---\n");
+	fprintf(stderr, "  Parameters:\n");
+	fprintf(stderr, "    Host: %s\n", cl.host ? cl.host : "(null)");
+	fprintf(stderr, "    Port: %d\n", cl.port);
+	fprintf(stderr, "    User: sbtest8 / sbtest8 (hardcoded)\n");
+	fprintf(stderr, "    Number of SELECTs to perform: %d\n", NUM);
+	fprintf(stderr, "\n");
+
 	MYSQL* select_conn = mysql_init(NULL);
 
-	if (!mysql_real_connect(select_conn, cl.host, "sbtest8", "sbtest8", NULL, cl.port, NULL, 0)) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(select_conn));
+	if (select_conn == NULL) {
+		fprintf(stderr, "FATAL: mysql_init() failed in perform_rnd_selects\n");
 		return EXIT_FAILURE;
 	}
+
+	fprintf(stderr, "Connecting as sbtest8 for SELECT-only operations...\n");
+	if (!mysql_real_connect(select_conn, cl.host, "sbtest8", "sbtest8", NULL, cl.port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(select_conn));
+		fprintf(stderr, "\n");
+		fprintf(stderr, "DIAGNOSTIC: Failed to connect as sbtest8 in perform_rnd_selects\n");
+		fprintf(stderr, "  This connection uses hardcoded credentials: sbtest8 / sbtest8\n");
+		fprintf(stderr, "  Ensure 'sbtest8' user is configured in ProxySQL mysql_users table\n");
+		fprintf(stderr, "\n");
+		return EXIT_FAILURE;
+	}
+	fprintf(stderr, "Connected successfully as sbtest8 for SELECT operations\n");
 
 	for (uint32_t i = 0; i < NUM; i++) {
 		int r_row = rand() % NUM_ROWS;
@@ -228,12 +252,75 @@ int check_gitd_tracking(const CommandLine& cl, MYSQL* proxysql_mysql, MYSQL* pro
 }
 
 int main(int argc, char** argv) {
+	// ================================================================================
+	// TEST: test_binlog_reader-t
+	// PURPOSE: Verifies ProxySQL integration with proxysql_mysqlbinlog utility for
+	//          achieving GTID consistency.
+	//
+	// DESCRIPTION:
+	//   This test performs two types of checks:
+	//   1. Hostgroup and Queries_GTID_sync tracking:
+	//      - Sessions with DML are GTID tracked
+	//      - Sessions without DML are NOT GTID tracked
+	//   2. Dirty reads check:
+	//      - UPDATE and SELECT operations verify expected values
+	//      - Detects if replication hasn't caught up (dirty reads)
+	//
+	// CONNECTION SETTINGS:
+	//   - ProxySQL MySQL Interface: host=%s, port=%d
+	//   - ProxySQL Admin Interface: host=%s, port=%d
+	//   - MySQL User: sbtest8 / sbtest8 (hardcoded test credentials)
+	//   - Admin User: %s / %s (from environment)
+	//
+	// CONSTANTS:
+	//   - MAX_FAILURE_PCT: %.1f%%
+	//   - NUM_ROWS: %d
+	//   - NUM_CHECKS: %d
+	// ================================================================================
 	CommandLine cl;
 
+	// Print test configuration for debugging
+	fprintf(stderr, "\n");
+	fprintf(stderr, "================================================================================\n");
+	fprintf(stderr, "TEST: test_binlog_reader-t - GTID Consistency Test\n");
+	fprintf(stderr, "================================================================================\n");
+	fprintf(stderr, "Test Purpose: Verify ProxySQL integration with proxysql_mysqlbinlog for GTID consistency\n");
+	fprintf(stderr, "\n");
+	fprintf(stderr, "CONNECTION SETTINGS:\n");
+	fprintf(stderr, "  ProxySQL Host (MySQL): %s\n", cl.host ? cl.host : "(null)");
+	fprintf(stderr, "  ProxySQL Port (MySQL): %d\n", cl.port);
+	fprintf(stderr, "  ProxySQL Host (Admin): %s\n", cl.host ? cl.host : "(null)");
+	fprintf(stderr, "  ProxySQL Port (Admin): %d\n", cl.admin_port);
+	fprintf(stderr, "\n");
+	fprintf(stderr, "CREDENTIALS (Test-only, hardcoded):\n");
+	fprintf(stderr, "  MySQL User: sbtest8 / sbtest8\n");
+	fprintf(stderr, "  Admin User: %s / %s\n",
+		cl.admin_username ? cl.admin_username : "(null)",
+		cl.admin_password ? "[REDACTED]" : "(null)");
+	fprintf(stderr, "\n");
+	fprintf(stderr, "TEST CONSTANTS:\n");
+	fprintf(stderr, "  MAX_FAILURE_PCT: %.1f%%\n", MAX_FAILURE_PCT);
+	fprintf(stderr, "  NUM_ROWS: %d\n", NUM_ROWS);
+	fprintf(stderr, "  NUM_CHECKS: %d\n", NUM_CHECKS);
+	fprintf(stderr, "\n");
+	fprintf(stderr, "ENVIRONMENT VARIABLES:\n");
+	fprintf(stderr, "  TAP_HOST: %s\n", getenv("TAP_HOST") ? getenv("TAP_HOST") : "(not set)");
+	fprintf(stderr, "  TAP_PORT: %s\n", getenv("TAP_PORT") ? getenv("TAP_PORT") : "(not set)");
+	fprintf(stderr, "  TAP_ADMINPORT: %s\n", getenv("TAP_ADMINPORT") ? getenv("TAP_ADMINPORT") : "(not set)");
+	fprintf(stderr, "================================================================================\n");
+	fprintf(stderr, "\n");
+
 	if (cl.getEnv()) {
+		fprintf(stderr, "ERROR: Failed to get the required environmental variables.\n");
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
+
+	fprintf(stderr, "Environment variables loaded successfully.\n");
+	fprintf(stderr, "  cl.host: %s\n", cl.host ? cl.host : "(null)");
+	fprintf(stderr, "  cl.port: %d\n", cl.port);
+	fprintf(stderr, "  cl.admin_port: %d\n", cl.admin_port);
+	fprintf(stderr, "\n");
 
 	bool stop_on_failure = false;
 
@@ -242,22 +329,85 @@ int main(int argc, char** argv) {
 	}
 
 	if (stop_on_failure) {
+		fprintf(stderr, "Mode: stop_on_failure enabled\n");
 		plan(0);
 	} else {
+		fprintf(stderr, "Mode: Normal test execution, planned tests: 3\n");
 		plan(3);
 	}
+
+	fprintf(stderr, "\n");
+	fprintf(stderr, "Initializing MySQL connections...\n");
 
 	MYSQL* proxysql_mysql = mysql_init(NULL);
 	MYSQL* proxysql_admin = mysql_init(NULL);
 
+	if (proxysql_mysql == NULL) {
+		fprintf(stderr, "FATAL: mysql_init() failed for proxysql_mysql connection\n");
+		return EXIT_FAILURE;
+	}
+	if (proxysql_admin == NULL) {
+		fprintf(stderr, "FATAL: mysql_init() failed for proxysql_admin connection\n");
+		return EXIT_FAILURE;
+	}
+
+	fprintf(stderr, "MySQL handles initialized successfully.\n");
+	fprintf(stderr, "\n");
+	fprintf(stderr, "Attempting to connect to ProxySQL MySQL interface...\n");
+	fprintf(stderr, "  Connection parameters:\n");
+	fprintf(stderr, "    Host: %s\n", cl.host ? cl.host : "(null)");
+	fprintf(stderr, "    User: sbtest8\n");
+	fprintf(stderr, "    Password: sbtest8\n");
+	fprintf(stderr, "    Port: %d\n", cl.port);
+	fprintf(stderr, "\n");
+
 	if (!mysql_real_connect(proxysql_mysql, cl.host, "sbtest8", "sbtest8", NULL, cl.port, NULL, 0)) {
+		fprintf(stderr, "\n");
+		fprintf(stderr, "================================================================================\n");
+		fprintf(stderr, "CONNECTION FAILED: Unable to connect to ProxySQL MySQL interface\n");
+		fprintf(stderr, "================================================================================\n");
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
+		fprintf(stderr, "\n");
+		fprintf(stderr, "DIAGNOSTIC INFORMATION:\n");
+		fprintf(stderr, "  Error indicates that user 'sbtest8' could not authenticate.\n");
+		fprintf(stderr, "  Possible causes:\n");
+		fprintf(stderr, "    1. User 'sbtest8' is not configured in mysql_users table\n");
+		fprintf(stderr, "    2. Password mismatch (expected: 'sbtest8')\n");
+		fprintf(stderr, "    3. User exists but is not loaded to runtime\n");
+		fprintf(stderr, "    4. ProxySQL cannot reach backend MySQL server\n");
+		fprintf(stderr, "\n");
+		fprintf(stderr, "TROUBLESHOOTING STEPS:\n");
+		fprintf(stderr, "  1. Check mysql_users table: SELECT * FROM mysql_users WHERE username='sbtest8';\n");
+		fprintf(stderr, "  2. Verify user is loaded to runtime: SELECT * FROM runtime_mysql_users WHERE username='sbtest8';\n");
+		fprintf(stderr, "  3. Check if sbtest8 user exists on backend MySQL servers\n");
+		fprintf(stderr, "================================================================================\n");
 		return EXIT_FAILURE;
 	}
+	fprintf(stderr, "SUCCESS: Connected to ProxySQL MySQL interface as sbtest8\n");
+	fprintf(stderr, "\n");
+
+	fprintf(stderr, "Attempting to connect to ProxySQL Admin interface...\n");
+	fprintf(stderr, "  Connection parameters:\n");
+	fprintf(stderr, "    Host: %s\n", cl.host ? cl.host : "(null)");
+	fprintf(stderr, "    User: %s\n", cl.admin_username ? cl.admin_username : "(null)");
+	fprintf(stderr, "    Port: %d\n", cl.admin_port);
+	fprintf(stderr, "\n");
+
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+		fprintf(stderr, "\n");
+		fprintf(stderr, "================================================================================\n");
+		fprintf(stderr, "CONNECTION FAILED: Unable to connect to ProxySQL Admin interface\n");
+		fprintf(stderr, "================================================================================\n");
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
+		fprintf(stderr, "\n");
 		return EXIT_FAILURE;
 	}
+	fprintf(stderr, "SUCCESS: Connected to ProxySQL Admin interface\n");
+	fprintf(stderr, "\n");
+	fprintf(stderr, "================================================================================\n");
+	fprintf(stderr, "All connections established successfully. Starting test execution...\n");
+	fprintf(stderr, "================================================================================\n");
+	fprintf(stderr, "\n");
 
 	vector<pair<uint32_t, mysql_res_row>> failed_rows {};
 	vector<mysql_res_row> reader_1_read {};

@@ -35,7 +35,8 @@ using std::string;
 using std::vector;
 
 const int SIGNAL_NUM = 5;
-const string base_address { "http://proxysql:6070/sync/" };
+// base_address is constructed at runtime using the ProxySQL host from the environment.
+static string base_address { "http://proxysql:6070/sync/" };
 
 using params = std::string;
 using signal_t = int;
@@ -55,6 +56,9 @@ int main(int argc, char** argv) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
+
+	// Build the RESTAPI base address using the actual ProxySQL host from the environment.
+	base_address = string("http://") + string(cl.host) + ":6070/sync/";
 
 	diag("=== Regression Test #3838: RESTAPI Script Execution & Signals ===");
 	diag("This test verifies that scripts executed via ProxySQL RESTAPI");

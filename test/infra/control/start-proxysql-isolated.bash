@@ -21,6 +21,11 @@ INFRA_LOGS_PATH="${WORKSPACE}/ci_infra_logs"
 PROXY_DATA_DIR="${INFRA_LOGS_PATH}/${INFRA_ID}/proxysql"
 GENERIC_CONFIG="${SCRIPT_DIR}/proxysql-ci.cnf"
 
+# Coverage data directory (separate per INFRA_ID to avoid parallel write conflicts)
+# GCOV_PREFIX redirects .gcda files to a separate directory for each ProxySQL instance
+COVERAGE_DATA_DIR="${INFRA_LOGS_PATH}/${INFRA_ID}/gcov"
+mkdir -p "${COVERAGE_DATA_DIR}"
+
 echo ">>> Setting up isolated network: ${NETWORK_NAME}"
 docker network inspect ${NETWORK_NAME} >/dev/null 2>&1 || docker network create ${NETWORK_NAME}
 
@@ -32,7 +37,7 @@ $SUDO rm -f "${PROXY_DATA_DIR}/proxysql.db" "${PROXY_DATA_DIR}"/*.pem
 docker rm -f "${PROXY_CONTAINER}" >/dev/null 2>&1 || true
 
 echo ">>> Starting ProxySQL container: ${PROXY_CONTAINER}"
-docker run -d     --name "${PROXY_CONTAINER}"     --hostname "proxysql"     --network "${NETWORK_NAME}"     --network-alias "proxysql"     -v "${WORKSPACE}/src/proxysql:/usr/bin/proxysql"     -v "${GENERIC_CONFIG}:/etc/proxysql.cnf"     -v "${PROXY_DATA_DIR}:/var/lib/proxysql"     proxysql-ci-base:latest     /bin/bash -c "/usr/bin/proxysql --idle-threads --clickhouse-server --sqlite3-server -f -c /etc/proxysql.cnf -D /var/lib/proxysql 2>&1 | tee /var/lib/proxysql/proxysql.log"
+docker run -d     --name "${PROXY_CONTAINER}"     --hostname "proxysql"     --network "${NETWORK_NAME}"     --network-alias "proxysql"     -v "${WORKSPACE}/src/proxysql:/usr/bin/proxysql"     -v "${GENERIC_CONFIG}:/etc/proxysql.cnf"     -v "${PROXY_DATA_DIR}:/var/lib/proxysql"     -v "${COVERAGE_DATA_DIR}:/gcov"     -e GCOV_PREFIX="/gcov"     -e GCOV_PREFIX_STRIP="3"     proxysql-ci-base:latest     /bin/bash -c "/usr/bin/proxysql --idle-threads --clickhouse-server --sqlite3-server -f -c /etc/proxysql.cnf -D /var/lib/proxysql 2>&1 | tee /var/lib/proxysql/proxysql.log"
 
 if [ -f /.dockerenv ]; then
     RUNNER_ID=$(hostname)

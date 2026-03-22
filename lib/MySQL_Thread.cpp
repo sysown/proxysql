@@ -1678,7 +1678,7 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 	// LCOV_EXCL_STOP
 }
 
-uint16_t MySQL_Threads_Handler::get_variable_uint16(char *name) {
+uint32_t MySQL_Threads_Handler::get_variable_uint32(char *name) {
 	if (!strcasecmp(name,"server_capabilities")) return variables.server_capabilities;
 	// LCOV_EXCL_START
 	proxy_error("Not existing variable: %s\n", name); assert(0);
@@ -2434,11 +2434,13 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.have_compress=true;
 			variables.server_capabilities |= CLIENT_COMPRESS;
+			variables.server_capabilities |= CLIENT_ZSTD_COMPRESSION_ALGORITHM;
 			return true;
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.have_compress=false;
 			variables.server_capabilities &= ~CLIENT_COMPRESS;
+			variables.server_capabilities &= ~CLIENT_ZSTD_COMPRESSION_ALGORITHM;
 			return true;
 		}
 		return false;
@@ -4704,7 +4706,7 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_CHAR(proxy_protocol_networks);
 	REFRESH_VARIABLE_CHAR(default_authentication_plugin);
 	mysql_thread___default_authentication_plugin_int = GloMTH->variables.default_authentication_plugin_int;
-	mysql_thread___server_capabilities=GloMTH->get_variable_uint16((char *)"server_capabilities");
+	mysql_thread___server_capabilities=GloMTH->get_variable_uint32((char *)"server_capabilities");
 	REFRESH_VARIABLE_INT(handle_unknown_charset);
 	REFRESH_VARIABLE_INT(poll_timeout);
 	REFRESH_VARIABLE_INT(poll_timeout_on_failure);

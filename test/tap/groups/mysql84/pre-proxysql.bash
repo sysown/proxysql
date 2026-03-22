@@ -6,6 +6,10 @@ set -o pipefail
 # inherits env from tester script
 #
 
+# Start ProxySQL Cluster if available
+/home/rene/proxysql/test/infra/control/cluster_start.bash
+/home/rene/proxysql/test/infra/control/cluster_init.bash
+
 [[ $(mysql --skip-ssl-verify-server-cert -h 2>&1) =~ skip-ssl-verify-server-cert ]] || export SSLOPT=--skip-ssl-verify-server-cert
 
 INFRA=infra-$(basename $(dirname "$0") | sed 's/-g[0-9]//' | sed 's/_.*//')

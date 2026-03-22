@@ -27,6 +27,7 @@ IDIRS :=	-I$(PROXYSQL_IDIR) \
 			-I$(POSTGRESQL_IDIR) \
 			-I$(JSON_IDIR) \
 			-I$(SSL_IDIR) \
+			-I$(ZSTD_IDIR) \
 
 LDIRS :=	-L$(PROXYSQL_LDIR) \
 			-L$(JEMALLOC_LDIR) \
@@ -50,7 +51,7 @@ ifeq ($(UNAME_S),Linux)
 	LDIRS += -L$(COREDUMPER_LDIR)
 endif
 ifeq ($(UNAME_S),Darwin)
-	IDIRS += -I/usr/local/include
+	IDIRS += -I/usr/local/include -I/opt/homebrew/include
 	LDIRS += -L/usr/local/lib -L/opt/homebrew/lib
 endif
 
@@ -172,6 +173,7 @@ ifeq ($(UNAME_S),Darwin)
 	LIBPROXYSQLAR += $(POSTGRESQL_PATH)/common/libpgcommon.a
 	LIBPROXYSQLAR += $(POSTGRESQL_PATH)/port/libpgport.a
 endif
+LIBPROXYSQLAR += $(ZSTD_LDIR)/libzstd.a
 LIBPROXYSQLAR += $(CITYHASH_LDIR)/libcityhash.a
 ifeq ($(PROXYSQLGENAI),1)
 LIBPROXYSQLAR += $(SQLITE_REMBED_LIB) $(SQLITE_VEC_OBJ)
@@ -189,7 +191,7 @@ $(ODIR)/%.o: %.cpp
 
 $(EXECUTABLE): $(ODIR) $(OBJ) $(LIBPROXYSQLAR)
 ifeq ($(PROXYSQLCLICKHOUSE),1)
-	$(CXX) -o $@ $(OBJ) $(CLANGFIX) $(LIBPROXYSQLAR) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(CLICKHOUSE_CPP_PATH)/contrib/zstd/zstd/libzstdstatic.a $(LZ4_LDIR)/liblz4.a $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)
+	$(CXX) -o $@ $(OBJ) $(CLANGFIX) $(LIBPROXYSQLAR) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(LZ4_LDIR)/liblz4.a $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)
 else
 	$(CXX) -o $@ $(OBJ) $(CLANGFIX) $(LIBPROXYSQLAR) $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)
 endif
@@ -212,4 +214,3 @@ default: $(EXECUTABLE)
 
 clean:
 	rm -rf *.pid $(ODIR)/*.o $(ODIR)/*.gcno $(ODIR)/*.gcda *~ core perf.data* heaptrack.proxysql.* $(EXECUTABLE) $(EXECUTABLE).sha1 $(ODIR)
-

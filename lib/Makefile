@@ -28,9 +28,14 @@ IDIRS :=	-I$(PROXYSQL_IDIR) \
 			-I$(POSTGRESQL_IDIR) \
 			-I$(JSON_IDIR) \
 			-I$(SSL_IDIR) \
+			-I$(ZSTD_IDIR) \
 
 ifeq ($(UNAME_S),Linux)
 	IDIRS += -I$(COREDUMPER_IDIR)
+endif
+ifeq ($(UNAME_S),Darwin)
+	IDIRS += -I/usr/local/include -I/opt/homebrew/include
+	LDIRS += -L/usr/local/lib -L/opt/homebrew/lib
 endif
 
 LDIRS :=	-L$(JEMALLOC_LDIR) \
@@ -100,6 +105,16 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	PgSQL_Variables_Validator.oo PgSQL_ExplicitTxnStateMgr.oo \
 	PgSQL_PreparedStatement.oo PgSQL_Extended_Query_Message.oo \
 	pgsql_tokenizer.oo \
+	MonitorHealthDecision.oo \
+	ServerSelection.oo \
+	TransactionState.oo \
+	HostgroupRouting.oo \
+	PgSQLCommandComplete.oo \
+	MySQLProtocolUtils.oo \
+	PgSQLErrorClassifier.oo \
+	PgSQLMonitorDecision.oo \
+	MySQLErrorClassifier.oo \
+	BackendSyncDecision.oo \
 	proxy_sqlite3_symbols.oo
 
 # TSDB object files

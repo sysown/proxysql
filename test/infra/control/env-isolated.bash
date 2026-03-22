@@ -48,6 +48,7 @@ if [ -n "${DEFAULT_PGSQL_INFRA}" ]; then
 fi
 
 export DOCKER_MODE="compose-dns"
+export PROXY_CONTAINER="proxysql.${INFRA_ID}"
 export REGULAR_INFRA_DATADIR="/var/lib/proxysql"
 export TESTS_LOGS_PATH="${WORKSPACE}/ci_infra_logs/${INFRA_ID}/tests"
 
@@ -95,6 +96,12 @@ export TEST_PY_TAP_DUMP_RUNTIME="${TEST_PY_TAP_DUMP_RUNTIME:-1}"
 export TEST_PY_TAP_DUMP_STATS="${TEST_PY_TAP_DUMP_STATS:-1}"
 export TEST_TAP_TIMEOUT="${TEST_TAP_TIMEOUT:-0}"
 
+# Noise injection for race condition testing
+# When enabled, tests that support noise injection will introduce random delays
+# and stress to help detect race conditions and deadlocks
+# See test/tap/NOISE_TESTING.md for more details
+export TAP_USE_NOISE="${TAP_USE_NOISE:-0}"
+
 # TAP test filtering
 export TEST_PY_TAP_INCL="${TEST_PY_TAP_INCL:-}"
 export TEST_PY_TAP_EXCL="${TEST_PY_TAP_EXCL:-reg_test_3273_ssl_con-t}"
@@ -105,3 +112,6 @@ export TEST_PY_TAPINT_EXCL="${TEST_PY_TAPINT_EXCL:-}"
 export TAP_REG_TEST_3549_AUTOCOMMIT_TRACKING___MYSQL_SERVER_HOSTGROUP=1300
 
 echo ">>> Isolated Environment Loaded (INFRA_ID: ${INFRA_ID})"
+if [ "${TAP_USE_NOISE}" = "1" ] || [ "${TAP_USE_NOISE}" = "true" ]; then
+    echo ">>> Noise Injection ENABLED - tests will introduce random delays for race condition testing"
+fi

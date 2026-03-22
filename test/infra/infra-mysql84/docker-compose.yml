@@ -7,6 +7,7 @@ services:
     volumes:
       - ./conf/mysql/mysql1/my.cnf:/etc/mysql/my.cnf
       - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/mysql1:/var/lib/mysql
+      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/mysql1:/var/log/mysql
     networks:
       backend:
         aliases:
@@ -24,6 +25,7 @@ services:
     volumes:
       - ./conf/mysql/mysql2/my.cnf:/etc/mysql/my.cnf
       - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/mysql2:/var/lib/mysql
+      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/mysql2:/var/log/mysql
     networks:
       backend:
         aliases:
@@ -41,6 +43,7 @@ services:
     volumes:
       - ./conf/mysql/mysql3/my.cnf:/etc/mysql/my.cnf
       - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/mysql3:/var/lib/mysql
+      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/mysql3:/var/log/mysql
     networks:
       backend:
         aliases:

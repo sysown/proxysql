@@ -15,6 +15,7 @@ using json = nlohmann::json;
 #include "MySQL_Variables.h"
 
 #include <sstream>
+#include <zstd.h>
 
 //#include <ma_global.h>
 
@@ -1072,8 +1073,10 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	_ptr[l]=0x00; l+=1; //0x00
 	if (mysql_thread___have_compress) {
 		mysql_thread___server_capabilities |= CLIENT_COMPRESS;
+		mysql_thread___server_capabilities |= CLIENT_ZSTD_COMPRESSION_ALGORITHM;
 	} else {
 		mysql_thread___server_capabilities &= ~CLIENT_COMPRESS;
+		mysql_thread___server_capabilities &= ~CLIENT_ZSTD_COMPRESSION_ALGORITHM;
 	}
 	if (mysql_thread___have_ssl==true || mysql_thread___default_authentication_plugin_int==2) {
 		// we enable SSL for client connections for either of these 2 conditions:
@@ -1090,8 +1093,14 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	} else {
 		mysql_thread___server_capabilities &= ~CLIENT_DEPRECATE_EOF;
 	}
-	(*myds)->myconn->options.server_capabilities=mysql_thread___server_capabilities;
-  memcpy(_ptr+l,&mysql_thread___server_capabilities, sizeof(mysql_thread___server_capabilities)/2); l+=sizeof(mysql_thread___server_capabilities)/2;
+	uint32_t server_capabilities = mysql_thread___server_capabilities;
+	if (deprecate_eof_active && mysql_thread___enable_client_deprecate_eof) {
+		server_capabilities |= CLIENT_DEPRECATE_EOF;
+	} else {
+		server_capabilities &= ~CLIENT_DEPRECATE_EOF;
+	}
+	(*myds)->myconn->options.server_capabilities=server_capabilities;
+  memcpy(_ptr+l,&server_capabilities, sizeof(server_capabilities)/2); l+=sizeof(server_capabilities)/2;
   const MARIADB_CHARSET_INFO *ci = NULL;
   ci = proxysql_find_charset_collate(mysql_thread___default_variables[SQL_COLLATION_CONNECTION]);
   if (!ci) {
@@ -1104,18 +1113,8 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
   uint8_t uint8_charset = ci->nr & 255;
   memcpy(_ptr+l,&uint8_charset, sizeof(uint8_charset)); l+=sizeof(uint8_charset);
   memcpy(_ptr+l,&server_status, sizeof(server_status)); l+=sizeof(server_status);
-	uint32_t extended_capabilities = CLIENT_MULTI_RESULTS | CLIENT_MULTI_STATEMENTS | CLIENT_PS_MULTI_RESULTS |
-		CLIENT_PLUGIN_AUTH | CLIENT_SESSION_TRACKING | CLIENT_REMEMBER_OPTIONS;
-	// we conditionally reply the client specifying in 'server_capabilities' that
-	// 'CLIENT_DEPRECATE_EOF' is available if explicitly enabled by 'mysql-enable_client_deprecate_eof'
-	// variable. This is the first step of ensuring that client connections doesn't
-	// enable 'CLIENT_DEPRECATE_EOF' unless explicitly stated by 'mysql-enable_client_deprecate_eof'.
-	// Second step occurs during client handshake response (process_pkt_handshake_response).
-	if (deprecate_eof_active && mysql_thread___enable_client_deprecate_eof) {
-		extended_capabilities |= CLIENT_DEPRECATE_EOF;
-	}
-	// Copy the 'capability_flags_2'
-	uint16_t upper_word = static_cast<uint16_t>(extended_capabilities >> 16);
+	// Copy the upper 16 capability bits from the effective server capability mask.
+	uint16_t upper_word = static_cast<uint16_t>(server_capabilities >> 16);
 	memcpy(_ptr+l, static_cast<void*>(&upper_word), sizeof(upper_word)); l += sizeof(upper_word);
 	// Copy the 'auth_plugin_data_len'. Hardcoded due to 'CLIENT_PLUGIN_AUTH' always enabled and reported
 	// as 'mysql_native_password'.
@@ -1682,9 +1681,50 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 			vars1.pass_len--; // remove the extra 0 if present
 		}
 	}
-	if (vars1._ptr+len > pkt) {
+	unsigned char *extra_pkt = pkt;
+	if (vars1._ptr+len > extra_pkt) {
 		if (vars1.capabilities & CLIENT_PLUGIN_AUTH) {
-			vars1.auth_plugin = pkt;
+			unsigned char *packet_end = vars1._ptr + len;
+			if (extra_pkt >= packet_end) {
+				ret = false;
+				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . malformed auth plugin offset in handshake response\n", (*myds), (*myds)->sess, vars1.user);
+				return false;
+			}
+			const size_t extra_len = packet_end - extra_pkt;
+			const size_t auth_plugin_len = strnlen(reinterpret_cast<const char*>(extra_pkt), extra_len);
+			if (auth_plugin_len == extra_len) {
+				ret = false;
+				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . malformed auth plugin in handshake response\n", (*myds), (*myds)->sess, vars1.user);
+				return false;
+			}
+			vars1.auth_plugin = extra_pkt;
+			extra_pkt += auth_plugin_len + 1;
+		}
+		const unsigned char* packet_end = vars1._ptr + len;
+		const bool has_zstd_level = vars1.capabilities & CLIENT_ZSTD_COMPRESSION_ALGORITHM;
+		const unsigned char* connect_attrs_end = packet_end - (has_zstd_level ? 1 : 0);
+		if ((vars1.capabilities & CLIENT_CONNECT_ATTRS) && extra_pkt < connect_attrs_end) {
+			uint64_t attrs_len = 0;
+			const int attrs_len_enc = mysql_decode_length_ll(extra_pkt, &attrs_len);
+			if (
+				attrs_len_enc <= 0
+				||
+				static_cast<uint64_t>(connect_attrs_end - extra_pkt) < static_cast<uint64_t>(attrs_len_enc) + attrs_len
+			) {
+				ret = false;
+				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . malformed connect attrs in handshake response\n", (*myds), (*myds)->sess, vars1.user);
+				return false;
+			}
+			extra_pkt += attrs_len_enc + attrs_len;
+		}
+		if (has_zstd_level) {
+			if (packet_end <= extra_pkt) {
+				ret = false;
+				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . missing zstd compression level in handshake response\n", (*myds), (*myds)->sess, vars1.user);
+				return false;
+			}
+			vars1.use_zstd_compression = true;
+			vars1.zstd_compression_level = *extra_pkt;
 		}
 	}
 	return true;
@@ -2161,12 +2201,32 @@ void MySQL_Protocol::PPHR_SetConnAttrs(MyProt_tmp_auth_vars& vars1, account_deta
 	mysql_variables.client_set_value(sess, SQL_CHARACTER_SET_CONNECTION, ss.str().c_str());
 	mysql_variables.client_set_value(sess, SQL_COLLATION_CONNECTION, ss.str().c_str());
 
-	// enable compression
-	if (vars1.capabilities & CLIENT_COMPRESS) {
-		if (myconn->options.server_capabilities & CLIENT_COMPRESS) {
-			myconn->options.compression_min_length=50;
-			//myconn->set_status_compression(true);  // don't enable this here. It needs to be enabled after the OK is sent
-		}
+	// Honor an explicit zstd negotiation from the client before falling back to legacy zlib compression.
+	const bool use_zstd_compression =
+		vars1.use_zstd_compression
+		&&
+		(vars1.capabilities & CLIENT_ZSTD_COMPRESSION_ALGORITHM)
+		&&
+		(myconn->options.server_capabilities & CLIENT_ZSTD_COMPRESSION_ALGORITHM);
+	const bool use_zlib_compression =
+		!use_zstd_compression
+		&&
+		(vars1.capabilities & CLIENT_COMPRESS)
+		&&
+		(myconn->options.server_capabilities & CLIENT_COMPRESS);
+	const uint8_t zstd_compression_level =
+		(vars1.zstd_compression_level > 0 && vars1.zstd_compression_level <= ZSTD_maxCLevel())
+			? vars1.zstd_compression_level
+			: static_cast<uint8_t>(std::min<int>(ZSTD_maxCLevel(), std::max<int>(1, mysql_thread___protocol_compression_level)));
+
+	myconn->options.compression_zstd = false;
+	myconn->options.zstd_compression_level = 0;
+
+	if (use_zlib_compression || use_zstd_compression) {
+		myconn->options.compression_min_length=50;
+		myconn->options.compression_zstd = use_zstd_compression;
+		myconn->options.zstd_compression_level = use_zstd_compression ? zstd_compression_level : 0;
+		//myconn->set_status_compression(true);  // don't enable this here. It needs to be enabled after the OK is sent
 	}
 	if (attr1.use_ssl==true) {
 		(*myds)->sess->use_ssl = true;
