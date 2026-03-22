@@ -108,6 +108,7 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	MonitorHealthDecision.oo \
 	TransactionState.oo \
 	HostgroupRouting.oo \
+	BackendSyncDecision.oo \
 	proxy_sqlite3_symbols.oo
 
 # TSDB object files
