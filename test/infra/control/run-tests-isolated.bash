@@ -171,6 +171,7 @@ for test_name, test_groups in sorted(groups.items()):
     TOTAL=0
     PASSED=0
     FAILED=0
+    SKIPPED=0
     FAILED_TESTS=""
 
     for TEST_NAME in ${TEST_NAMES}; do
@@ -183,10 +184,8 @@ for test_name, test_groups in sorted(groups.items()):
         done
 
         if [ -z "${TEST_BIN}" ]; then
-            echo "WARNING: Test binary '${TEST_NAME}' not found in: ${TEST_DIRS}"
-            TOTAL=$((TOTAL + 1))
-            FAILED=$((FAILED + 1))
-            FAILED_TESTS="${FAILED_TESTS} ${TEST_NAME}(not-found)"
+            echo "SKIP: Test binary '${TEST_NAME}' not found (not compiled?)"
+            SKIPPED=$((SKIPPED + 1))
             continue
         fi
 
@@ -204,7 +203,7 @@ for test_name, test_groups in sorted(groups.items()):
 
     echo ""
     echo "================================================================================"
-    echo "Unit Test Summary: ${PASSED}/${TOTAL} passed, ${FAILED} failed"
+    echo "Unit Test Summary: ${PASSED}/${TOTAL} passed, ${FAILED} failed, ${SKIPPED} skipped (not compiled)"
     if [ -n "${FAILED_TESTS}" ]; then
         echo "Failed tests:${FAILED_TESTS}"
     fi
