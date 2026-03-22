@@ -15,7 +15,6 @@
  * @brief Action to take after a MySQL backend query error.
  */
 enum MySQLErrorAction {
-	MYSQL_ERROR_CONTINUE,            ///< Error handled, continue processing.
 	MYSQL_ERROR_RETRY_ON_NEW_CONN,   ///< Reconnect and retry on a new server.
 	MYSQL_ERROR_REPORT_TO_CLIENT     ///< Send error to client, no retry.
 };
@@ -35,7 +34,7 @@ enum MySQLErrorAction {
  *   - multiplex not disabled
  *
  * @param error_code              MySQL error number.
- * @param retries_remaining       Number of retries left.
+ * @param retries_remaining       Number of retries left (> 0 to allow retry).
  * @param connection_reusable     Whether the connection can be reused.
  * @param in_active_transaction   Whether a transaction is in progress.
  * @param multiplex_disabled      Whether multiplexing is disabled.
@@ -57,7 +56,7 @@ MySQLErrorAction classify_mysql_error(
  * conditions are met.
  *
  * @param server_offline          Whether the backend server is offline.
- * @param retries_remaining       Number of retries left.
+ * @param retries_remaining       Number of retries left (> 0 to allow retry).
  * @param connection_reusable     Whether the connection can be reused.
  * @param in_active_transaction   Whether a transaction is in progress.
  * @param multiplex_disabled      Whether multiplexing is disabled.
