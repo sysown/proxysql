@@ -190,7 +190,7 @@ int main(int argc, char** argv) {
 
     /* ── Clear stats and launch threads ─────────────────────────────── */
     {
-        MYSQL_QUERY(admin, "SELECT * FROM stats_pgsql_query_digest_reset");
+        mysql_query(admin, "SELECT * FROM stats_pgsql_query_digest_reset");
         MYSQL_RES* r = mysql_store_result(admin);
         if (r) mysql_free_result(r);
     }

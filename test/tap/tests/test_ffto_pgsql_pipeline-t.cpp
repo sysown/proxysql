@@ -27,11 +27,12 @@
 #include <unistd.h>
 #include <vector>
 #include <cstdint>
+/* pg_lite_client.h must come before mysql.h to avoid PROTOCOL_VERSION macro conflict */
+#include "pg_lite_client.h"
 #include "mysql.h"
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
-#include "pg_lite_client.h"
 
 /**
  * @brief Total number of planned TAP assertions.
@@ -95,7 +96,7 @@ void verify_pg_digest(MYSQL* admin, const char* template_text, int expected_coun
 }
 
 static void clear_pg_stats(MYSQL* admin) {
-    MYSQL_QUERY(admin, "SELECT * FROM stats_pgsql_query_digest_reset");
+    mysql_query(admin, "SELECT * FROM stats_pgsql_query_digest_reset");
     MYSQL_RES* r = mysql_store_result(admin);
     if (r) mysql_free_result(r);
 }
