@@ -138,7 +138,7 @@ int main(int argc, char** argv) {
     MYSQL_QUERY(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
 
     {
-        char eu[256], ep[256];
+        char eu[2 * strlen(cl.pgsql_root_username) + 1]; char ep[2 * strlen(cl.pgsql_root_password) + 1];
         mysql_real_escape_string(admin, eu, cl.pgsql_root_username,
                                 strlen(cl.pgsql_root_username));
         mysql_real_escape_string(admin, ep, cl.pgsql_root_password,

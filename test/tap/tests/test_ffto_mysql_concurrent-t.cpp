@@ -328,6 +328,7 @@ int main(int argc, char** argv) {
                 "SELECT SUM(count_star) FROM stats_mysql_query_digest "
                 "WHERE digest_text LIKE '%ffto_concurrent%'");
             MYSQL_RES* res = mysql_store_result(admin);
+        if (!res) { usleep(100000); continue; }
             MYSQL_ROW row = mysql_fetch_row(res);
             total_count = row && row[0] ? atoi(row[0]) : 0;
             if (res) mysql_free_result(res);
@@ -352,7 +353,8 @@ int main(int argc, char** argv) {
             "SELECT SUM(sum_rows_affected) FROM stats_mysql_query_digest "
             "WHERE digest_text LIKE '%INSERT INTO ffto_concurrent%'");
         MYSQL_RES* res = mysql_store_result(admin);
-        MYSQL_ROW row = mysql_fetch_row(res);
+        
+        MYSQL_ROW row = res ? mysql_fetch_row(res) : NULL;
         int total_affected = row && row[0] ? atoi(row[0]) : 0;
         if (res) mysql_free_result(res);
 

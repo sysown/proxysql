@@ -68,6 +68,7 @@ void verify_pg_digest(MYSQL* admin, const char* template_text, int expected_coun
         int rc = run_q(admin, query);
         if (rc != 0) { usleep(100000); continue; }
         res = mysql_store_result(admin);
+        if (!res) { usleep(100000); continue; }
         row = mysql_fetch_row(res);
         if (row) break;
         mysql_free_result(res); res = NULL;
@@ -124,7 +125,7 @@ int main(int argc, char** argv) {
     MYSQL_QUERY(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
 
     {
-        char eu[256], ep[256];
+        char eu[2 * strlen(cl.pgsql_root_username) + 1]; char ep[2 * strlen(cl.pgsql_root_password) + 1];
         mysql_real_escape_string(admin, eu, cl.pgsql_root_username, strlen(cl.pgsql_root_username));
         mysql_real_escape_string(admin, ep, cl.pgsql_root_password, strlen(cl.pgsql_root_password));
         char uq[1024];

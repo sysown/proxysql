@@ -95,6 +95,7 @@ void verify_digest(MYSQL* admin, const char* template_text, int expected_count,
         int rc = run_q(admin, query);
         if (rc != 0) { usleep(100000); continue; }
         res = mysql_store_result(admin);
+        if (!res) { usleep(100000); continue; }
         row = mysql_fetch_row(res);
         if (row) break;
         mysql_free_result(res);
