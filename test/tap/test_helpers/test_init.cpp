@@ -167,3 +167,37 @@ void test_cleanup_query_processor() {
 	// components may still reference them. Their cleanup relies
 	// on process exit.
 }
+
+// ============================================================================
+// HostGroups Manager
+// ============================================================================
+
+int test_init_hostgroups() {
+	if (MyHGM != nullptr || PgHGM != nullptr) {
+		return 0;
+	}
+
+	// HostGroups Manager constructors register Prometheus metrics.
+	if (GloVars.prometheus_registry == nullptr) {
+		GloVars.prometheus_registry = std::make_shared<prometheus::Registry>();
+	}
+
+	MyHGM = new MySQL_HostGroups_Manager();
+	MyHGM->init();
+
+	PgHGM = new PgSQL_HostGroups_Manager();
+	PgHGM->init();
+
+	return 0;
+}
+
+void test_cleanup_hostgroups() {
+	if (MyHGM != nullptr) {
+		delete MyHGM;
+		MyHGM = nullptr;
+	}
+	if (PgHGM != nullptr) {
+		delete PgHGM;
+		PgHGM = nullptr;
+	}
+}
