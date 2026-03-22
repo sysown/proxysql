@@ -37,15 +37,6 @@ jobs:
         status: 'in_progress'
         details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
 
-    - name: Cache restore src
-      id: cache-src
-      uses: actions/cache/restore@v4
-      with:
-        key: ${{ env.BLDCACHE }}
-        fail-on-cache-miss: true
-        path: |
-          proxysql/src/
-
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
@@ -56,6 +47,21 @@ jobs:
           test/infra
           test/tap/groups
           test/scripts
+
+    - name: Cache restore src
+      id: cache-src
+      uses: actions/cache/restore@v4
+      with:
+        key: ${{ env.BLDCACHE }}
+        fail-on-cache-miss: true
+        path: |
+          proxysql/src/
+
+    - name: Verify binary
+      run: |
+        ls -la proxysql/src/proxysql
+        chmod +x proxysql/src/proxysql
+        file proxysql/src/proxysql
 
     - name: Build CI base image
       run: |
@@ -83,6 +89,8 @@ jobs:
         cd proxysql
         export INFRA_ID="ci-basictests"
         export TAP_GROUP="basictests"
+        # Dump ProxySQL logs on failure for debugging
+        docker logs proxysql.ci-basictests 2>&1 | tail -50 || true
         test/infra/control/stop-proxysql-isolated.bash
         test/infra/control/destroy-infras.bash
 
