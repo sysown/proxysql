@@ -319,7 +319,17 @@ docker run \
         [ -n \"${MYSQL_BINLOG_BIN}\" ] && ln -sf \"${MYSQL_BINLOG_BIN}\" \"${WORKSPACE}/test-scripts/deps/mysqlbinlog\"
         [ -n \"${BINLOG_READER_BIN}\" ] && ln -sf \"${BINLOG_READER_BIN}\" \"${WORKSPACE}/test-scripts/deps/test_binlog_reader-t\"
 
-        # Source the local isolated environment
+        # Source group environment first (sets TEST_PY_* flags etc.)
+        if [ -n \"${TAP_GROUP}\" ]; then
+            BASE_GROUP=\$(echo \"${TAP_GROUP}\" | sed -E 's/[-_]g[0-9]+.*//')
+            if [ -f \"${WORKSPACE}/test/tap/groups/${TAP_GROUP}/env.sh\" ]; then
+                source \"${WORKSPACE}/test/tap/groups/${TAP_GROUP}/env.sh\"
+            elif [ -f \"${WORKSPACE}/test/tap/groups/\${BASE_GROUP}/env.sh\" ]; then
+                source \"${WORKSPACE}/test/tap/groups/\${BASE_GROUP}/env.sh\"
+            fi
+        fi
+
+        # Source the local isolated environment (defaults for unset vars)
         source ${SCRIPT_DIR}/env-isolated.bash
 
         # Dump ProxySQL configuration before running tests
