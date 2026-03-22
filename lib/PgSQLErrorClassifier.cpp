@@ -26,10 +26,16 @@ PgSQLErrorAction classify_pgsql_error(const char *sqlstate) {
 	// Insufficient resources (too many connections) — retryable
 	if (strcmp(cls, "53") == 0) return PGSQL_ERROR_RETRY;
 
-	// Operator intervention (admin shutdown, crash) — fatal
-	if (strcmp(cls, "57") == 0) return PGSQL_ERROR_FATAL;
+	// Operator intervention — mostly fatal, except query_canceled
+	if (strcmp(cls, "57") == 0) {
+		// 57014 = query_canceled — not fatal, report to client
+		if (strlen(sqlstate) >= 5 && strncmp(sqlstate, "57014", 5) == 0) {
+			return PGSQL_ERROR_REPORT_TO_CLIENT;
+		}
+		return PGSQL_ERROR_FATAL;  // admin_shutdown, crash_shutdown, etc.
+	}
 
-	// System error (I/O error, crash shutdown) — fatal
+	// System error (I/O error) — fatal
 	if (strcmp(cls, "58") == 0) return PGSQL_ERROR_FATAL;
 
 	// Everything else (syntax, constraints, data, etc.) — report to client

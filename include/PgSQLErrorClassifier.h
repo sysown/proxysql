@@ -27,8 +27,9 @@ enum PgSQLErrorAction {
  * - "08" (connection exception): retryable
  * - "40" (transaction rollback, including serialization failure): retryable
  * - "53" (insufficient resources, e.g. too_many_connections): retryable
- * - "57" (operator intervention, e.g. admin_shutdown): fatal
- * - "58" (system error, e.g. crash_shutdown): fatal
+ * - "57" (operator intervention, e.g. admin_shutdown, crash_shutdown): fatal
+ *        Exception: "57014" (query_canceled) is non-fatal
+ * - "58" (system error, e.g. I/O error): fatal
  * - All others (syntax, constraint, etc.): report to client
  *
  * @param sqlstate  5-character SQLSTATE string (e.g., "08006", "42P01").

@@ -43,6 +43,9 @@ static void test_fatal_errors() {
 		"57P02 (crash shutdown): fatal");
 	ok(classify_pgsql_error("58000") == PGSQL_ERROR_FATAL,
 		"58000 (system error): fatal");
+	// 57014 is an exception — query_canceled is NOT fatal
+	ok(classify_pgsql_error("57014") == PGSQL_ERROR_REPORT_TO_CLIENT,
+		"57014 (query canceled): not fatal, report to client");
 }
 
 static void test_non_retryable_errors() {
@@ -81,7 +84,7 @@ static void test_retry_conditions() {
 }
 
 int main() {
-	plan(25);
+	plan(26);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -92,7 +95,7 @@ int main() {
 	test_non_retryable_errors(); // 5
 	test_edge_cases();           // 3
 	test_retry_conditions();     // 5
-	// Total: 1+3+2+2+4+5+3+5 = 25
+	// Total: 1+3+2+2+5+5+3+5 = 26
 
 	test_cleanup_minimal();
 	return exit_status();
