@@ -1,21 +1,22 @@
 #!/usr/bin/env bash
 set -e
 set -o pipefail
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 #
 # change infra config
 # inherits env from tester script
 #
 
 # Start ProxySQL Cluster if available
-/home/rene/proxysql/test/infra/control/cluster_start.bash
-/home/rene/proxysql/test/infra/control/cluster_init.bash
+${REPO_ROOT}/test/infra/control/cluster_start.bash
+${REPO_ROOT}/test/infra/control/cluster_init.bash
 
 [[ $(mysql --skip-ssl-verify-server-cert -h 2>&1) =~ skip-ssl-verify-server-cert ]] || export SSLOPT=--skip-ssl-verify-server-cert
 
 INFRA=infra-$(basename $(dirname "$0") | sed 's/-g[0-9]//' | sed 's/_.*//')
 
 # destroy running infras
-/home/rene/proxysql/test/infra/control/infra-default/docker-compose-destroy.bash
+${REPO_ROOT}/test/infra/control/infra-default/docker-compose-destroy.bash
 # cleanup
 mysql ${SSLOPT} -h127.0.0.1 -P6032 -uadmin -padmin -e " \
 DELETE FROM mysql_users; \
@@ -42,11 +43,11 @@ SAVE PGSQL SERVERS TO DISK; \
 " 2>&1 | grep -vP 'mysql: .?Warning'
 
 # load environment for infra
-source /home/rene/proxysql/test/infra/control/${INFRA}/.env
+source ${REPO_ROOT}/test/infra/control/${INFRA}/.env
 
 # Start infra
-# /home/rene/proxysql/test/infra/control/infra-docker-hoster/docker-compose-init.bash
-/home/rene/proxysql/test/infra/control/${INFRA}/docker-compose-init.bash
+# ${REPO_ROOT}/test/infra/control/infra-docker-hoster/docker-compose-init.bash
+${REPO_ROOT}/test/infra/control/${INFRA}/docker-compose-init.bash
 
 # create default users
 for MYUSER in root user testuser sbtest1 sbtest2 sbtest3 sbtest4 ssluser ; do

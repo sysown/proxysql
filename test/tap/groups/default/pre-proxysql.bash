@@ -8,8 +8,10 @@ set -o pipefail
 
 
 # Start ProxySQL Cluster if available
-/home/rene/proxysql/test/infra/control/cluster_start.bash
-/home/rene/proxysql/test/infra/control/cluster_init.bash
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+"${REPO_ROOT}/test/infra/control/cluster_start.bash"
+"${REPO_ROOT}/test/infra/control/cluster_init.bash"
 
 # wait for cluster to stabilize
 sleep 10
