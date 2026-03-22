@@ -127,6 +127,5 @@ int test_init_hostgroups();
  * Destroys MyHGM and PgHGM, setting them back to nullptr.
  */
 void test_cleanup_hostgroups();
-void test_cleanup_query_processor();
 
 #endif /* TEST_INIT_H */

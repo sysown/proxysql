@@ -173,24 +173,24 @@ void test_cleanup_query_processor() {
 // ============================================================================
 
 int test_init_hostgroups() {
-	if (MyHGM != nullptr || PgHGM != nullptr) {
-		return 0;
-	}
-
 	// HostGroups Manager constructors register Prometheus metrics.
 	if (GloVars.prometheus_registry == nullptr) {
 		GloVars.prometheus_registry = std::make_shared<prometheus::Registry>();
 	}
 
-	MyHGM = new MySQL_HostGroups_Manager();
-	// NOTE: We intentionally do NOT call MyHGM->init() here.
-	// init() starts background threads (HGCU_thread, GTID_syncer)
-	// that run forever and would cause the test process to hang on
-	// exit. The constructor alone sets up the internal SQLite3
-	// database and all data structures needed for unit testing.
+	if (MyHGM == nullptr) {
+		MyHGM = new MySQL_HostGroups_Manager();
+		// NOTE: We intentionally do NOT call MyHGM->init() here.
+		// init() starts background threads (HGCU_thread, GTID_syncer)
+		// that run forever and would cause the test process to hang on
+		// exit. The constructor alone sets up the internal SQLite3
+		// database and all data structures needed for unit testing.
+	}
 
-	PgHGM = new PgSQL_HostGroups_Manager();
-	// PgHGM->init() is a no-op, but we skip it for consistency.
+	if (PgHGM == nullptr) {
+		PgHGM = new PgSQL_HostGroups_Manager();
+		// PgHGM->init() is a no-op, but we skip it for consistency.
+	}
 
 	return 0;
 }
