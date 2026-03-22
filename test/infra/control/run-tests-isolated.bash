@@ -163,28 +163,29 @@ docker run \
             if [ \"\${COVERAGE_MODE}\" = \"1\" ]; then
                 echo \">>> Collecting code coverage data (exit code was: \${exit_code})...\"
 
-                # Copy .gcda files from group-specific gcov directory to workspace
-                # This merges coverage data from this group's ProxySQL instance
-                if [ -d \"/gcov\" ] && [ \"\$(ls -A /gcov 2>/dev/null)\" ]; then
-                    echo \">>> Merging coverage data from /gcov to workspace...\"
-                    # Find and copy all .gcda files, preserving directory structure
-                    cd /gcov && find . -name '*.gcda' -type f | while read gcda; do
-                        # Remove leading ./ and get the target path
-                        target=\"\${WORKSPACE}/\${gcda#./}\"
-                        target_dir=\"\$(dirname \"\$target\")\"
-                        mkdir -p \"\$target_dir\"
-                        cp -f \"\$gcda\" \"\$target\"
-                    done
-                    echo \">>> Coverage data merged successfully\"
-                fi
-
                 if command -v fastcov >/dev/null 2>&1; then
                     mkdir -p \"\${COVERAGE_REPORT_DIR}\"
                     local coverage_file=\"\${COVERAGE_REPORT_DIR}/\${INFRA_ID}.info\"
                     echo \">>> Generating coverage report: \${coverage_file}\"
                     local nproc_val=\$(nproc)
-                    cd \"\${WORKSPACE}\"
-                    fastcov -b -j\"\${nproc_val}\" --process-gcno -l -e /usr/include/ -e test/tap/tests -e deps/ -d . -o \"\${coverage_file}\" 2>&1 || echo \">>> WARNING: Coverage generation failed\"
+
+                    # Copy .gcno files to /gcov so fastcov can find both .gcno and .gcda together
+                    # This avoids race conditions when multiple groups run in parallel
+                    if [ -d \"/gcov\" ] && [ \"\$(ls -A /gcov 2>/dev/null)\" ]; then
+                        echo \">>> Preparing coverage data directory...\"
+                        cd \"\${WORKSPACE}\" && find . -path './ci_infra_logs' -prune -o -name '*.gcno' -type f -print | while read gcno; do
+                            target=\"/gcov/\${gcno#./}\"
+                            target_dir=\"\$(dirname \"\$target\")\"
+                            mkdir -p \"\$target_dir\"
+                            cp -f \"\$gcno\" \"\$target\"
+                        done
+                        echo \">>> Running fastcov on /gcov...\"
+                        cd /gcov
+                        fastcov -b -j\"\${nproc_val}\" --process-gcno -l -e /usr/include/ -e \"\${WORKSPACE}/test/tap/tests\" -e \"\${WORKSPACE}/deps/\" -d . -o \"\${coverage_file}\" 2>&1 || echo \">>> WARNING: Coverage generation failed\"
+                    else
+                        echo \">>> WARNING: /gcov directory is empty or missing, skipping coverage\"
+                    fi
+
                     if [ -f \"\${coverage_file}\" ]; then
                         echo \">>> Coverage report generated: \${coverage_file}\"
                         # Generate HTML report

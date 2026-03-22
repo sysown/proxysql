@@ -137,27 +137,37 @@ run_single_group() {
     export COVERAGE="${COVERAGE}"
     export TAP_USE_NOISE="${TAP_USE_NOISE}"
 
-    timeout "${TIMEOUT_MINUTES}m" bash <<INNERSHELL || cmd_exit_code=$?
-        set -euo pipefail
+    # Run infrastructure setup and tests with timeout
+    # Using temp file instead of heredoc to avoid shell expansion issues
+    inner_script=$(mktemp)
+    cat > "${inner_script}" << INNERSCRIPT
+#!/bin/bash
+set -e
 
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Setting up infrastructure..." | tee -a "${log_file}"
-        if ! "${SCRIPT_DIR}/ensure-infras.bash" >> "${log_file}" 2>&1; then
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Failed to set up infrastructure" | tee -a "${log_file}"
-            exit 1
-        fi
+# Setup infrastructure
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Setting up infrastructure..." >> "${log_file}" 2>&1
+"${SCRIPT_DIR}/ensure-infras.bash" >> "${log_file}" 2>&1
+if [ \$? -ne 0 ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Failed to set up infrastructure" >> "${log_file}" 2>&1
+    exit 1
+fi
 
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Running tests..." | tee -a "${log_file}"
-        # Note: run-tests-isolated.bash handles coverage collection regardless of exit code
-        "${SCRIPT_DIR}/run-tests-isolated.bash" >> "${log_file}" 2>&1
-        inner_exit_code=$?
-        if [ \${inner_exit_code} -ne 0 ]; then
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: Tests failed with exit code \${inner_exit_code}" | tee -a "${log_file}"
-            # Coverage is still collected in run-tests-isolated.bash even on failure
-            exit \${inner_exit_code}
-        fi
+# Run tests
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Running tests..." >> "${log_file}" 2>&1
+"${SCRIPT_DIR}/run-tests-isolated.bash" >> "${log_file}" 2>&1
+test_exit=\$?
+if [ \${test_exit} -ne 0 ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: Tests failed with exit code \${test_exit}" >> "${log_file}" 2>&1
+    exit \${test_exit}
+fi
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Tests completed successfully" >> "${log_file}" 2>&1
+INNERSCRIPT
 
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Tests completed successfully" | tee -a "${log_file}"
-INNERSHELL
+    # Run the script with timeout
+    chmod +x "${inner_script}"
+    timeout "${TIMEOUT_MINUTES}m" bash "${inner_script}"
+    cmd_exit_code=$?
+    rm -f "${inner_script}"
 
     # Process exit code
     if [ "${cmd_exit_code}" -eq 0 ]; then

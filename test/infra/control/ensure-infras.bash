@@ -97,7 +97,24 @@ for INFRA_NAME in ${INFRAS}; do
     fi
 done
 
-# 6. Execute group-specific setup hook if it exists
+# 6. Execute pre-proxysql hook if it exists (for cluster setup)
+# This starts additional ProxySQL cluster nodes if needed
+PRE_PROXYSQL_HOOK="${WORKSPACE}/test/tap/groups/${TAP_GROUP}/pre-proxysql.bash"
+if [ ! -f "${PRE_PROXYSQL_HOOK}" ]; then
+    # Try base group if subgroup doesn't have the hook
+    PRE_PROXYSQL_HOOK="${WORKSPACE}/test/tap/groups/${BASE_GROUP}/pre-proxysql.bash"
+fi
+# Fall back to default group if still not found
+if [ ! -f "${PRE_PROXYSQL_HOOK}" ]; then
+    PRE_PROXYSQL_HOOK="${WORKSPACE}/test/tap/groups/default/pre-proxysql.bash"
+fi
+
+if [ -f "${PRE_PROXYSQL_HOOK}" ]; then
+    echo ">>> Executing pre-proxysql hook: ${PRE_PROXYSQL_HOOK}"
+    "${PRE_PROXYSQL_HOOK}"
+fi
+
+# 7. Execute group-specific setup hook if it exists
 # This allows TAP groups to perform additional setup after all backends are running
 SETUP_HOOK="${WORKSPACE}/test/tap/groups/${TAP_GROUP}/setup-infras.bash"
 if [ ! -f "${SETUP_HOOK}" ]; then
@@ -109,3 +126,5 @@ if [ -f "${SETUP_HOOK}" ]; then
     echo ">>> Executing group setup hook: ${SETUP_HOOK}"
     "${SETUP_HOOK}"
 fi
+
+# ensure-infras.bash completed successfully
