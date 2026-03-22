@@ -73,7 +73,7 @@ export MALLOC_CONF="retain:false"
 export PROXYSQL_LAYOUT="flat"
 
 # Test execution defaults
-export WITHGCOV="${WITHGCOV:-1}"
+export WITHGCOV="${WITHGCOV:-0}"
 export WITHASAN="${WITHASAN:-0}"
 export TEST_EXIT_ON_FAIL="${TEST_EXIT_ON_FAIL:-0}"
 export TEST_JDBC="${TEST_JDBC:-1}"
