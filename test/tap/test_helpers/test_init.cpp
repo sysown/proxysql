@@ -183,10 +183,14 @@ int test_init_hostgroups() {
 	}
 
 	MyHGM = new MySQL_HostGroups_Manager();
-	MyHGM->init();
+	// NOTE: We intentionally do NOT call MyHGM->init() here.
+	// init() starts background threads (HGCU_thread, GTID_syncer)
+	// that run forever and would cause the test process to hang on
+	// exit. The constructor alone sets up the internal SQLite3
+	// database and all data structures needed for unit testing.
 
 	PgHGM = new PgSQL_HostGroups_Manager();
-	PgHGM->init();
+	// PgHGM->init() is a no-op, but we skip it for consistency.
 
 	return 0;
 }
