@@ -183,7 +183,7 @@
  * @details Populated at query time by stats___global(). Contains metrics such as TLS load
  *   status, certificate file paths, and future cross-protocol statistics.
  */
-#define STATS_SQLITE_TABLE_GLOBAL "CREATE TABLE stats_global (Variable_Name VARCHAR NOT NULL PRIMARY KEY , Variable_Value VARCHAR NOT NULL)"
+#define STATS_SQLITE_TABLE_GLOBAL "CREATE TABLE stats_proxysql_global (Variable_Name VARCHAR NOT NULL PRIMARY KEY , Variable_Value VARCHAR NOT NULL)"
 
 #define STATS_SQLITE_TABLE_MEMORY_METRICS "CREATE TABLE stats_memory_metrics (Variable_Name VARCHAR NOT NULL PRIMARY KEY , Variable_Value VARCHAR NOT NULL)"
 

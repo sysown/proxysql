@@ -817,11 +817,11 @@ void ProxySQL_Admin::stats___pgsql_global() {
 }
 
 /**
- * @brief Populates the `stats_global` table with ProxySQL-wide metrics
+ * @brief Populates the `stats_proxysql_global` table with ProxySQL-wide metrics
  *   that are not specific to the MySQL or PgSQL protocol.
  *
- * @details This function is called at query time whenever the stats_global table
- *   is accessed (e.g. "SELECT * FROM stats.stats_global"). It deletes all existing
+ * @details This function is called at query time whenever the stats_proxysql_global table
+ *   is accessed (e.g. "SELECT * FROM stats.stats_proxysql_global"). It deletes all existing
  *   rows and reinserts fresh values, ensuring `TLS_Last_Load_Timestamp` and other
  *   time-sensitive data are always current.
  *
@@ -833,11 +833,11 @@ void ProxySQL_Admin::stats___pgsql_global() {
  *   - TLS_CA_Cert_File        : Path to the CA certificate file.
  *   - TLS_Key_File            : Path to the private key file.
  */
-void ProxySQL_Admin::stats___global() {
+void ProxySQL_Admin::stats___proxysql_global() {
 	statsdb->execute("BEGIN");
-	statsdb->execute("DELETE FROM stats_global");
+	statsdb->execute("DELETE FROM stats_proxysql_global");
 
-	const string q_row_insert { "INSERT INTO stats_global VALUES (?1, ?2)" };
+	const string q_row_insert { "INSERT INTO stats_proxysql_global VALUES (?1, ?2)" };
 	int rc = 0;
 	stmt_unique_ptr u_row_stmt { nullptr };
 	std::tie(rc, u_row_stmt) = statsdb->prepare_v2(q_row_insert.c_str());

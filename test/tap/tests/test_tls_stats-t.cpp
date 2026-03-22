@@ -1,10 +1,10 @@
 /**
  * @file test_tls_stats-t.cpp
- * @brief TAP test for stats_tls_certificates and stats_global TLS metrics.
+ * @brief TAP test for stats_tls_certificates and stats_proxysql_global TLS metrics.
  *
  * @details This test verifies:
- *   1. stats_global table exists and is queryable from the stats schema.
- *   2. stats_global contains the expected TLS tracking variables:
+ *   1. stats_proxysql_global table exists and is queryable from the stats schema.
+ *   2. stats_proxysql_global contains the expected TLS tracking variables:
  *        - TLS_Load_Count
  *        - TLS_Last_Load_Timestamp
  *        - TLS_Last_Load_Result
@@ -22,9 +22,9 @@
  *  10. days_until_expiry is a reasonable value (> -36500 and < 36500).
  *  11. loaded_at is a positive Unix timestamp.
  *  12. After PROXYSQL RELOAD TLS:
- *        - TLS_Load_Count in stats_global increments by 1.
+ *        - TLS_Load_Count in stats_proxysql_global increments by 1.
  *        - stats_tls_certificates rows are still present and non-empty.
- *  13. TLS_Last_Load_Timestamp in stats_global increases after PROXYSQL RELOAD TLS.
+ *  13. TLS_Last_Load_Timestamp in stats_proxysql_global increases after PROXYSQL RELOAD TLS.
  *  14. TLS-related variables are NOT present in stats_mysql_global.
  */
 
@@ -107,7 +107,7 @@ int main(int argc, char** argv) {
 
 	diag("TAP test for SSL/TLS Certificate Statistics Table");
 	diag("This test verifies that ProxySQL correctly reports TLS certificate information,");
-	diag("tracks TLS load operations in stats_global, and updates these stats after a reload.");
+	diag("tracks TLS load operations in stats_proxysql_global, and updates these stats after a reload.");
 
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
@@ -115,8 +115,8 @@ int main(int argc, char** argv) {
 	}
 
 	// Tests:
-	// 1-5: stats_global TLS variables present
-	// 6-9: stats_global TLS variable values
+	// 1-5: stats_proxysql_global TLS variables present
+	// 6-9: stats_proxysql_global TLS variable values
 	// 10-11: TLS_Last_Load_Result valid value
 	// 12-16: stats_tls_certificates structure
 	// 17-24: stats_tls_certificates row data for 'server' and 'ca'
@@ -137,13 +137,13 @@ int main(int argc, char** argv) {
 	}
 
 	// -----------------------------------------------------------------------
-	// Part 1: stats_global - TLS tracking variables
+	// Part 1: stats_proxysql_global - TLS tracking variables
 	// -----------------------------------------------------------------------
-	diag("Step 1: Verifying TLS tracking variables in stats.stats_global");
-	diag("--- Querying stats.stats_global ---");
+	diag("Step 1: Verifying TLS tracking variables in stats.stats_proxysql_global");
+	diag("--- Querying stats.stats_proxysql_global ---");
 
 	auto global_stats = query_key_value(admin,
-		"SELECT Variable_Name, Variable_Value FROM stats.stats_global");
+		"SELECT Variable_Name, Variable_Value FROM stats.stats_proxysql_global");
 
 	const vector<string> expected_tls_vars = {
 		"TLS_Load_Count",
@@ -156,7 +156,7 @@ int main(int argc, char** argv) {
 
 	for (const auto& var : expected_tls_vars) {
 		ok(global_stats.count(var) > 0,
-			"stats_global: Variable '%s' is present", var.c_str());
+			"stats_proxysql_global: Variable '%s' is present", var.c_str());
 	}
 
 	diag("Verifying values of TLS tracking variables...");
@@ -165,33 +165,33 @@ int main(int argc, char** argv) {
 	if (global_stats.count("TLS_Load_Count"))
 		tls_load_count = std::stoi(global_stats["TLS_Load_Count"]);
 	ok(tls_load_count >= 1,
-		"stats_global: TLS_Load_Count is >= 1 (was %d)", tls_load_count);
+		"stats_proxysql_global: TLS_Load_Count is >= 1 (was %d)", tls_load_count);
 
 	// TLS_Last_Load_Timestamp is a positive Unix timestamp (> 0)
 	long long tls_ts = 0;
 	if (global_stats.count("TLS_Last_Load_Timestamp"))
 		tls_ts = std::stoll(global_stats["TLS_Last_Load_Timestamp"]);
 	ok(tls_ts > 0,
-		"stats_global: TLS_Last_Load_Timestamp is positive (was %lld)", tls_ts);
+		"stats_proxysql_global: TLS_Last_Load_Timestamp is positive (was %lld)", tls_ts);
 
 	// TLS_Last_Load_Result must be one of NONE, SUCCESS, FAILED
 	string tls_result = global_stats.count("TLS_Last_Load_Result") ?
 		global_stats["TLS_Last_Load_Result"] : "";
 	ok(tls_result == "SUCCESS" || tls_result == "NONE" || tls_result == "FAILED",
-		"stats_global: TLS_Last_Load_Result='%s' is valid (NONE/SUCCESS/FAILED)",
+		"stats_proxysql_global: TLS_Last_Load_Result='%s' is valid (NONE/SUCCESS/FAILED)",
 		tls_result.c_str());
 
 	// TLS_Server_Cert_File should be a non-empty path
 	string cert_file = global_stats.count("TLS_Server_Cert_File") ?
 		global_stats["TLS_Server_Cert_File"] : "";
 	ok(!cert_file.empty(),
-		"stats_global: TLS_Server_Cert_File is non-empty ('%s')", cert_file.c_str());
+		"stats_proxysql_global: TLS_Server_Cert_File is non-empty ('%s')", cert_file.c_str());
 
 	// TLS_CA_Cert_File should be a non-empty path
 	string ca_file = global_stats.count("TLS_CA_Cert_File") ?
 		global_stats["TLS_CA_Cert_File"] : "";
 	ok(!ca_file.empty(),
-		"stats_global: TLS_CA_Cert_File is non-empty ('%s')", ca_file.c_str());
+		"stats_proxysql_global: TLS_CA_Cert_File is non-empty ('%s')", ca_file.c_str());
 
 	// -----------------------------------------------------------------------
 	// Part 2: stats_tls_certificates - table structure and row content
@@ -286,28 +286,28 @@ int main(int argc, char** argv) {
 	}
 	mysql_free_result(mysql_store_result(admin));
 
-	diag("Verifying updated stats in stats.stats_global after reload...");
+	diag("Verifying updated stats in stats.stats_proxysql_global after reload...");
 	auto global_stats_after = query_key_value(admin,
-		"SELECT Variable_Name, Variable_Value FROM stats.stats_global");
+		"SELECT Variable_Name, Variable_Value FROM stats.stats_proxysql_global");
 
 	int tls_load_count_after = 0;
 	if (global_stats_after.count("TLS_Load_Count"))
 		tls_load_count_after = std::stoi(global_stats_after["TLS_Load_Count"]);
 	ok(tls_load_count_after == tls_load_count + 1,
-		"stats_global: TLS_Load_Count incremented after RELOAD TLS (%d -> %d)",
+		"stats_proxysql_global: TLS_Load_Count incremented after RELOAD TLS (%d -> %d)",
 		tls_load_count, tls_load_count_after);
 
 	long long tls_ts_after = 0;
 	if (global_stats_after.count("TLS_Last_Load_Timestamp"))
 		tls_ts_after = std::stoll(global_stats_after["TLS_Last_Load_Timestamp"]);
 	ok(tls_ts_after > tls_ts,
-		"stats_global: TLS_Last_Load_Timestamp increased after RELOAD TLS (%lld -> %lld)",
+		"stats_proxysql_global: TLS_Last_Load_Timestamp increased after RELOAD TLS (%lld -> %lld)",
 		tls_ts, tls_ts_after);
 
 	string tls_result_after = global_stats_after.count("TLS_Last_Load_Result") ?
 		global_stats_after["TLS_Last_Load_Result"] : "";
 	ok(tls_result_after == "SUCCESS",
-		"stats_global: TLS_Last_Load_Result='SUCCESS' after RELOAD TLS (got '%s')",
+		"stats_proxysql_global: TLS_Last_Load_Result='SUCCESS' after RELOAD TLS (got '%s')",
 		tls_result_after.c_str());
 
 	diag("Verifying stats.stats_tls_certificates rows after reload...");
