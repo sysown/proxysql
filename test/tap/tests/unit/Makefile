@@ -231,7 +231,7 @@ $(ODIR)/test_init.o: $(TEST_HELPERS_DIR)/test_init.cpp | $(ODIR)
 # Unit test targets
 # ===========================================================================
 
-UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t protocol_unit-t
+UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t protocol_unit-t auth_unit-t
 
 .PHONY: all
 all: $(UNIT_TESTS)
@@ -261,6 +261,11 @@ query_processor_unit-t: query_processor_unit-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROX
 		$(ALLOW_MULTI_DEF) -o $@
 
 protocol_unit-t: protocol_unit-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) \
+		$(ALLOW_MULTI_DEF) -o $@
+
+auth_unit-t: auth_unit-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
 		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) \
 		$(ALLOW_MULTI_DEF) -o $@
