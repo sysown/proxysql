@@ -1129,18 +1129,21 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
         summary = []
 
         self.pre_failover_tests()
+        mysql_infra = os.environ.get('DEFAULT_MYSQL_INFRA', 'infra-mysql57')
         if os.environ['DOCKER_MODE'].endswith('dns'):
-            orc_prefix = 'ORCHESTRATOR_API="http://orc1.infra-mysql57:3000/api http://orc2.infra-mysql57:3000/api http://orc3.infra-mysql57:3000/api"'
+            orc_prefix = 'ORCHESTRATOR_API="http://orc1.{infra}:3000/api http://orc2.{infra}:3000/api http://orc3.{infra}:3000/api"'.format(infra=mysql_infra)
+            mysql1_alias = 'mysql1.{}'.format(mysql_infra)
         else:
             orc_prefix = 'ORCHESTRATOR_API="http://localhost:23101/api http://localhost:23102/api http://localhost:23103/api"'
-        fo_cmd = '{} orchestrator-client -c graceful-master-takeover-auto -a mysql1'.format(orc_prefix)
+            mysql1_alias = 'mysql1'
+        fo_cmd = '{} orchestrator-client -c graceful-master-takeover-auto -a {}'.format(orc_prefix, mysql1_alias)
         fop = subprocess.Popen(fo_cmd,
                                shell=True,
                                stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE)
         fo_stdout, fo_stderr = fop.communicate()
         log.debug('Failover output is - {} / {}'.format(fo_stdout, fo_stderr))
-        cf_cmd = '{} orchestrator-client -c topology -i mysql1'.format(orc_prefix)
+        cf_cmd = '{} orchestrator-client -c topology -i {}:3306'.format(orc_prefix, mysql1_alias)
         cfp = subprocess.Popen(cf_cmd,
                                shell=True,
                                stdout=subprocess.PIPE,
@@ -1148,7 +1151,7 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
         cf_stdout, cf_stderr = cfp.communicate()
         log.debug('Topology verification - {} / {}'.format(cf_stdout, cf_stderr))
         self.post_failover_tests()
-        if b"mysql2:3306" in fo_stdout or b"mysql3:3306" in fo_stdout:
+        if b"mysql2" in fo_stdout or b"mysql3" in fo_stdout:
             rc = 0
         return rc, logs, summary
 
