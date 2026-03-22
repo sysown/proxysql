@@ -178,6 +178,14 @@ int main() {
 	diag("Web dashboard URL: %s", base_url.c_str());
 	diag("REST API URL: %s", rest_url.c_str());
 
+	// Prepare auth credentials for HTTP requests
+	// REST API uses admin credentials
+	string auth_creds = string(cl.admin_username) + ":" + string(cl.admin_password);
+	diag("Using REST API authentication with username: %s", cl.admin_username);
+	// Web dashboard uses stats credentials (separate from admin)
+	string stats_creds = "stats:stats";
+	diag("Using Web dashboard authentication with username: stats");
+
 	string response;
 	long http_rc;
 
@@ -186,7 +194,7 @@ int main() {
 	response.clear();
 	// Retry multiple times if server returned nothing
 	for (int i=0; i<5; i++) {
-		http_rc = http_get((base_url + "/tsdb").c_str(), response);
+		http_rc = http_get((base_url + "/tsdb").c_str(), response, stats_creds.c_str());
 		if (http_rc != 0) break;
 		diag("Retry %d for /tsdb (got response code 0, connection likely failed)...", i+1);
 		sleep(2);
@@ -203,8 +211,6 @@ int main() {
 	// 4. Test /api/tsdb/status
 	diag("Testing GET /api/tsdb/status");
 	response.clear();
-	string auth_creds = string(cl.admin_username) + ":" + string(cl.admin_password);
-	diag("Using authentication with username: %s", cl.admin_username);
 	http_rc = http_get((rest_url + "/api/tsdb/status").c_str(), response, auth_creds.c_str());
 	ok(http_rc == 200, "API /api/tsdb/status returns 200 (got %ld)", http_rc);
 	if (http_rc != 200) {
