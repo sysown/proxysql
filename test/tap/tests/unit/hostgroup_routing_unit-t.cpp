@@ -69,11 +69,16 @@ static void test_locking_disabled() {
 }
 
 static void test_transaction_plus_lock() {
-	// Transaction active + locked → transaction HG wins
+	// Transaction active + locked on same HG → no error
 	auto d = resolve_hostgroup_routing(0, 10, 3, 3, false, true);
 	ok(d.target_hostgroup == 3,
 		"txn+lock: transaction HG used");
 	ok(d.error == false, "txn+lock: no error when txn matches lock");
+
+	// Transaction active on HG 3 but locked on HG 5 → error (mismatch)
+	auto d2 = resolve_hostgroup_routing(0, 10, 3, 5, false, true);
+	ok(d2.error == true,
+		"txn+lock: error when txn HG differs from lock HG");
 }
 
 static void test_edge_cases() {
@@ -87,7 +92,7 @@ static void test_edge_cases() {
 }
 
 int main() {
-	plan(20);
+	plan(21);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -96,9 +101,9 @@ int main() {
 	test_locking_acquire();          // 3
 	test_locking_enforce();          // 4
 	test_locking_disabled();         // 3
-	test_transaction_plus_lock();    // 2
+	test_transaction_plus_lock();    // 3
 	test_edge_cases();               // 2
-	// Total: 1+3+2+3+4+3+2+2 = 20... fix
+	// Total: 1+3+2+3+4+3+3+2 = 21
 
 	test_cleanup_minimal();
 	return exit_status();
