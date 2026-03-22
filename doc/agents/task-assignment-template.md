@@ -101,6 +101,32 @@ Before publishing the issue, verify each of these:
 - [ ] Separated production code from test code expectations
 - [ ] Limited the task to one clear deliverable (or ordered multiple steps explicitly)
 
+### 9. Did I write ready-made prompts for the executing agent?
+For each phase or step, include a fenced prompt block written in imperative voice, sequential order, with no ambiguity. The issue description is for human readers (context, rationale). The prompt block is for agent readers (do this, then this, verify that).
+
+### 10. Did I document design decisions with rationale?
+If you made choices during planning, document them:
+- [ ] Options considered
+- [ ] Option chosen and why
+- [ ] Constraints or precedents that drove the decision
+
+This prevents the executing agent from re-litigating settled questions or making a different choice that conflicts with the architecture.
+
+### 11. Did I show the research?
+If you analyzed the codebase to write the issue, include a summary:
+- [ ] File locations and line numbers of the code being modified
+- [ ] Relevant functions and their current behavior
+- [ ] Existing patterns in the codebase
+
+This serves as verification (is the analysis correct?) and context transfer (the executor doesn't need to re-explore).
+
+### 12. For refactoring tasks: did I specify what to replace?
+When extracting logic from existing code (not just adding new code):
+- [ ] Identified exact line ranges or code blocks to replace
+- [ ] Specified what each block should be replaced with (function call, delegation)
+- [ ] Listed every file that needs `#include` of the new header
+- [ ] Verified the include dependency chain won't cause circular issues
+
 ---
 
 ## Common Mistakes Agents Make (and how to prevent them)
@@ -115,6 +141,8 @@ Before publishing the issue, verify each of these:
 | Modifies unrelated files | Scope too broad | "DO NOT modify files outside `<list>`" |
 | Satisfies letter but not spirit | Ambiguous requirements | Make the spirit explicit in DO NOT list |
 | Doesn't verify compilation | No verification step | Explicit build command in acceptance criteria |
+| Recreates existing infrastructure | Research contradicts plan | Verify infrastructure exists before writing plan |
+| Uses wrong infrastructure | Multiple similar patterns exist | Name the exact files/includes to use, not just "follow existing pattern" |
 
 ---
 
@@ -128,14 +156,31 @@ Before publishing the issue, verify each of these:
 >
 > **Deliverables:**
 > - New file: `include/ServerSelection.h` — struct + function declaration
-> - Modified: `lib/Base_HostGroups_Manager.cpp` — call extracted function
+> - New file: `lib/ServerSelection.cpp` — implementation
+> - Modified: `lib/Base_HostGroups_Manager.cpp` — replace lines ~2283-2310 with call to extracted function
+> - Modified: `lib/Makefile` — add `ServerSelection.oo` to `_OBJ_CXX` list
 > - New file: `test/tap/tests/unit/server_selection_unit-t.cpp` — 15+ test cases
 > - Modified: `test/tap/tests/unit/Makefile` — register test
 >
 > **Git:** Branch `v3.0-5492` from `v3.0-5473`. PR targets `v3.0-5473`.
 >
-> **DO NOT:** Reimplement functions in test. Place test in `test/tap/tests/`.
+> **DO NOT:** Reimplement functions in test. Place test in `test/tap/tests/`. Use `unit_test.h` (use `test_globals.h` and `test_init.h` instead).
+>
+> **Design decision:** Use standalone header `ServerSelection.h` (not `Base_HostGroups_Manager.h`) to avoid circular include chain. See `ConnectionPoolDecision.h` for the pattern.
 >
 > **Reference:** `include/ConnectionPoolDecision.h`, `test/tap/tests/unit/connection_pool_unit-t.cpp`
 >
 > **Verify:** `make build_lib -j4` exits 0. `./server_selection_unit-t` shows "Test took" with no failures.
+>
+> <details><summary>Prompt for AI agents</summary>
+>
+> ```
+> Create `include/ServerSelection.h` with include guard. Define ServerCandidate
+> struct with fields: index, weight, status, current_connections, ...
+> Then create `lib/ServerSelection.cpp` implementing select_server_from_candidates().
+> Then create `test/tap/tests/unit/server_selection_unit-t.cpp` including
+> tap.h, test_globals.h, test_init.h, ServerSelection.h. Call test_init_minimal()
+> first. Do NOT reimplement functions. Register in unit Makefile.
+> ```
+>
+> </details>
