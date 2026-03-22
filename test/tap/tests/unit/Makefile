@@ -236,7 +236,8 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	rule_matching_unit-t hostgroups_unit-t monitor_health_unit-t \
 	server_selection_unit-t
   hostgroup_routing_unit-t \
-	transaction_state_unit-t
+	transaction_state_unit-t \
+	backend_sync_unit-t
 
 .PHONY: all
 all: $(UNIT_TESTS)
