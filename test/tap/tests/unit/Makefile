@@ -236,8 +236,13 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	rule_matching_unit-t hostgroups_unit-t monitor_health_unit-t \
 	pgsql_command_complete_unit-t \
 	ffto_protocol_unit-t \
+	server_selection_unit-t \
   hostgroup_routing_unit-t \
-	transaction_state_unit-t
+	transaction_state_unit-t \
+	pgsql_error_classifier_unit-t \
+	pgsql_monitor_unit-t \
+	mysql_error_classifier_unit-t \
+	backend_sync_unit-t
 
 .PHONY: all
 all: $(UNIT_TESTS)
@@ -252,6 +257,8 @@ ifneq ($(UNAME_S),Darwin)
 endif
 
 # Pattern rule: all unit tests use the same compile + link flags.
+# Each test binary is built from its .cpp source, linked against
+# the test harness objects and libproxysql.a with all dependencies.
 %-t: %-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
 		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) \
