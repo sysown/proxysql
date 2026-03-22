@@ -26,6 +26,21 @@ fi
 
 # 1. Determine Base Group (strip subgroup suffix)
 BASE_GROUP=$(echo "${TAP_GROUP}" | sed -E "s/[-_]g[0-9]+.*//")
+
+# Source group env.sh to pick up SKIP_PROXYSQL and other group-level settings
+if [ -f "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/env.sh" ]; then
+    source "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/env.sh"
+elif [ -f "${WORKSPACE}/test/tap/groups/${BASE_GROUP}/env.sh" ]; then
+    source "${WORKSPACE}/test/tap/groups/${BASE_GROUP}/env.sh"
+fi
+
+# If SKIP_PROXYSQL is set, skip all infrastructure setup
+if [ "${SKIP_PROXYSQL}" = "1" ]; then
+    echo ">>> SKIP_PROXYSQL=1: Skipping ProxySQL and backend infrastructure for group '${TAP_GROUP}'."
+    echo ">>> ensure-infras.bash completed (no infrastructure needed)."
+    exit 0
+fi
+
 LST_PATH=""
 
 if [ -f "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst" ]; then
