@@ -808,6 +808,8 @@ class ProxySQL_Admin {
 	void stats___mysql_prepared_statements_info();
 	void stats___mysql_gtid_executed();
 	void stats___mysql_client_host_cache(bool reset);
+	void stats___tls_certificates();
+	void stats___proxysql_global();
 
 #ifdef PROXYSQLGENAI
 	void stats___mcp_query_tools_counters(bool reset);
