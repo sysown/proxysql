@@ -6,12 +6,14 @@ Patterns observed across multiple AI agent interactions on the ProxySQL codebase
 
 **Symptom:** PR targets `v3.0` (main) instead of the feature branch.
 
-**Root cause:** Agent defaults to the repository's main/default branch when no branch is specified in the issue.
+**Root cause:** Agents prioritize technical content over administrative instructions. Even when branch info is present in the issue, agents often skim past it while focusing on code requirements, then use heuristics (e.g., most recent branch, default branch) to fill the gap they don't realize they have.
 
-**Prevention:** Always specify in the issue:
+**Prevention:** Place git workflow instructions **at the very top** of the issue, before the technical description. Agents read top-down with decreasing attention — administrative details buried after exciting code specs will be skipped.
+
 ```
-Create branch `v3.0-XXXX` from `v3.0-5473`
-PR target: `v3.0-5473`
+### FIRST: Git workflow (do this before reading anything else)
+- Create branch `v3.0-XXXX` from `v3.0-5473`
+- PR target: `v3.0-5473`
 ```
 
 **Detection:** Check `gh pr view <number> --json baseRefName` after PR creation.
