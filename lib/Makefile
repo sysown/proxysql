@@ -106,9 +106,13 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	PgSQL_PreparedStatement.oo PgSQL_Extended_Query_Message.oo \
 	pgsql_tokenizer.oo \
 	MonitorHealthDecision.oo \
+	ServerSelection.oo \
 	TransactionState.oo \
 	HostgroupRouting.oo \
 	PgSQLErrorClassifier.oo \
+	PgSQLMonitorDecision.oo \
+	MySQLErrorClassifier.oo \
+	BackendSyncDecision.oo \
 	proxy_sqlite3_symbols.oo
 
 # TSDB object files
