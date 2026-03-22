@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 # This is a regression test for issues #3992 and #4047. Test checks if queries
 # are executed successfully with MariaDB server via PyMySQL client having fast

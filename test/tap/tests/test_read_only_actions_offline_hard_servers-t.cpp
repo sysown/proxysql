@@ -473,7 +473,13 @@ int test_read_only_offline_hard_servers(MYSQL* proxy_admin, const CommandLine& c
 		MYSQL_QUERY__(proxy_admin, "CREATE TABLE proxysql_servers_sync_test_backup_2687 AS SELECT * FROM proxysql_servers");
 
 		// 2. Remove primary from Core nodes
-		MYSQL_QUERY__(proxy_admin, "DELETE FROM proxysql_servers WHERE hostname=='127.0.0.1' AND PORT==6032");
+		// CI-isolated: Use cl.host and cl.admin_port instead of hardcoded values
+		std::string delete_primary_query;
+		string_format(
+			"DELETE FROM proxysql_servers WHERE hostname='%s' AND port=%d",
+			delete_primary_query, cl.host, cl.admin_port
+		);
+		MYSQL_QUERY__(proxy_admin, delete_primary_query.c_str());
 		MYSQL_QUERY__(proxy_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
 
 		core_nodes = fetch_cluster_nodes(proxy_admin);

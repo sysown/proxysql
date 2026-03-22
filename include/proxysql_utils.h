@@ -27,7 +27,7 @@
 #define	ETIME	ETIMEDOUT
 #endif
 
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(__FreeBSD__)
 using std::conjunction;
 #elif defined(CXX17)
 template<class...> struct conjunction : std::true_type { };

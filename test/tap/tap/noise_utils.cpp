@@ -489,7 +489,9 @@ void internal_noise_rest_prometheus_poller(const CommandLine& cl, const NoiseOpt
 
     // Port defaults to 6070
     int port = get_opt_int(opt, "port", 6070);
-    std::string endpoint = "http://localhost:" + std::to_string(port) + "/metrics";
+    // Use cl.host so the endpoint is reachable in containerized CI environments
+    // where ProxySQL may not be on localhost.
+    std::string endpoint = "http://" + std::string(cl.host) + ":" + std::to_string(port) + "/metrics";
     std::string auth = std::string(cl.admin_username) + ":" + std::string(cl.admin_password);
     if (opt.find("endpoint") != opt.end()) {
         endpoint = opt.at("endpoint");

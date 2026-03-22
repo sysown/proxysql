@@ -89,7 +89,7 @@ if ($port !== 6090) {
 	$proxy->query("CREATE DATABASE IF NOT EXISTS test");
 	$proxy->query("USE test");
 	$proxy->query("DROP TABLE IF EXISTS types_table");
-	$proxy->query("CREATE TABLE IF NOT EXISTS types_table (EventDate DATE, DateTime DATETIME, col1 UInt8, col2 Int16, col3 Int32, col4 Int64, col5 Nullable(Float32), col6 Float64, col7 Decimal64(3)) ENGINE=MergeTree(EventDate, (EventDate), 8192)");
+	$proxy->query("CREATE TABLE IF NOT EXISTS types_table (EventDate DATE, DateTime DATETIME, col1 UInt8, col2 Int16, col3 Int32, col4 Int64, col5 Nullable(Float32), col6 Float64, col7 Decimal64(3)) ENGINE=MergeTree() ORDER BY (EventDate)");
 }
 
 $shortName = exec('date +%Z');

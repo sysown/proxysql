@@ -450,17 +450,14 @@ void queryInternalStatus(MYSQL *mysql, json& j, std::string& paddress) {
  * @return True in case the check succeed, false otherwise.
  */
 bool check_session_track_gtids(const std::string& expVal, const std::string& sVal, const std::string& mVal) {
-	bool res = false;
-
 	if (expVal == "OFF") {
-		res = expVal == sVal;
+		return expVal == sVal;
 	} else if (expVal == "OWN_GTID" && (sVal == mVal && sVal == "OWN_GTID")) {
-		res = true;
+		return true;
 	} else if (expVal == "ALL_GTIDS" && (sVal == mVal && sVal == "OWN_GTID")) {
-		res = true;
+		return true;
 	}
-
-	return res;
+	return false;
 }
 
 int detect_version(CommandLine& cl, bool& is_mariadb, bool& is_cluster) {

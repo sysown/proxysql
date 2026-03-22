@@ -130,6 +130,7 @@ deps/coredumper/coredumper-*/
 deps/postgresql/postgresql-*/
 deps/postgresql/postgres-*/
 deps/libusual/libusual-*/
+deps/zstd/zstd-*/
 
 test/.vagrant
 .DS_Store

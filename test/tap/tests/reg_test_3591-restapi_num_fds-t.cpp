@@ -97,8 +97,9 @@ int main(int argc, char** argv) {
 	}
 	diag("Connections established.");
 
-	diag("Verifying RESTAPI /metrics endpoint via proxysql:6070...");
-	int endpoint_timeout = wait_get_enpoint_ready("http://proxysql:6070/metrics/", 1000, 100);
+	const string metrics_url { string("http://") + string(cl.host) + ":6070/metrics/" };
+	diag("Verifying RESTAPI /metrics endpoint via %s...", metrics_url.c_str());
+	int endpoint_timeout = wait_get_enpoint_ready(metrics_url, 1000, 100);
 	ok(endpoint_timeout == 0, "The endpoint should be available instead of timing out.");
 
 	diag("Closing connections and cleaning up...");

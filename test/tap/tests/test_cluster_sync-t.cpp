@@ -1203,8 +1203,20 @@ int main(int, char**) {
 	MYSQL_QUERY(proxy_admin, "CREATE TABLE proxysql_servers_sync_test_backup_2687 AS SELECT * FROM proxysql_servers");
 
 	// 2. Remove primary from Core nodes
-	MYSQL_QUERY(proxy_admin, "DELETE FROM proxysql_servers WHERE hostname=='127.0.0.1' AND PORT==6032");
-	MYSQL_QUERY(proxy_admin, "DELETE FROM proxysql_servers WHERE hostname=='127.0.0.1' AND PORT==16062");
+	// CI-isolated: Use cl.host and cl.admin_port instead of hardcoded values
+	std::string delete_primary_query1;
+	string_format(
+		"DELETE FROM proxysql_servers WHERE hostname='%s' AND port=%d",
+		delete_primary_query1, cl.host, cl.admin_port
+	);
+	MYSQL_QUERY(proxy_admin, delete_primary_query1.c_str());
+	// Also remove the secondary node with the same hostname but different port
+	std::string delete_primary_query2;
+	string_format(
+		"DELETE FROM proxysql_servers WHERE hostname='%s' AND port=%d",
+		delete_primary_query2, cl.host, 16062
+	);
+	MYSQL_QUERY(proxy_admin, delete_primary_query2.c_str());
 	MYSQL_QUERY(proxy_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
 
 	pair<int,vector<srv_addr_t>> nodes_fetch { fetch_cluster_nodes(proxy_admin) };
