@@ -3,6 +3,7 @@ using json = nlohmann::json;
 #define PROXYJSON
 
 #include "PgSQL_HostGroups_Manager.h"
+#include "ConnectionPoolDecision.h"
 #include "proxysql.h"
 #include "cpp.h"
 

@@ -1,4 +1,5 @@
 #include "MySQL_HostGroups_Manager.h"
+#include "ConnectionPoolDecision.h"
 
 #include "MySQL_Data_Stream.h"
 
