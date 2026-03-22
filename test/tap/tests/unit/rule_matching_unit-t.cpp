@@ -62,6 +62,9 @@ static void test_username() {
 	ok(!rule_matches_query(&r, 0, "other", "db", "10.0.0.1",
 		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 2),
 		"username mismatch rejects");
+	ok(!rule_matches_query(&r, 0, nullptr, "db", "10.0.0.1",
+		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"username rule rejects null session username");
 }
 
 static void test_schemaname() {
@@ -204,13 +207,13 @@ static void test_null_rule() {
 // ============================================================================
 
 int main() {
-	plan(22);
+	plan(23);
 
 	test_init_minimal();
 
 	test_match_all();               // 1
 	test_flagIN();                  // 2
-	test_username();                // 2
+	test_username();                // 3
 	test_schemaname();              // 2
 	test_client_addr_wildcard();    // 2
 	test_proxy_addr_port();         // 2
