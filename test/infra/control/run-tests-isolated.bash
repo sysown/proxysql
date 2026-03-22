@@ -137,14 +137,80 @@ else
     echo ">>> INFRASTRUCTURE VERIFIED. LAUNCHING TEST RUNNER..."
 fi
 
-# SKIP_PROXYSQL path: run unit tests directly on the host, no Docker needed
+# SKIP_PROXYSQL path: run test binaries directly on the host, no Docker needed.
+# We bypass proxysql-tester.py because it requires a ProxySQL admin connection
+# and Docker-specific environment variables that don't exist in this mode.
 if [ "${SKIP_PROXYSQL}" = "1" ]; then
-    echo ">>> Running unit tests directly (no Docker container)..."
+    echo ">>> Running tests directly on the host (no Docker container)..."
 
-    # Execute the Python tester directly on the host
-    export WORKSPACE
-    export TAP_GROUP
-    python3 "${WORKSPACE}/test/scripts/bin/proxysql-tester.py"
+    # Discover test binaries from groups.json for this TAP_GROUP
+    GROUPS_JSON="${WORKSPACE}/test/tap/groups/groups.json"
+    if [ ! -f "${GROUPS_JSON}" ]; then
+        echo "ERROR: groups.json not found at ${GROUPS_JSON}"
+        exit 1
+    fi
+
+    # Extract test names belonging to this group
+    TEST_NAMES=$(python3 -c "
+import json, sys
+with open('${GROUPS_JSON}') as f:
+    groups = json.load(f)
+for test_name, test_groups in sorted(groups.items()):
+    if '${TAP_GROUP}' in test_groups:
+        print(test_name)
+")
+
+    if [ -z "${TEST_NAMES}" ]; then
+        echo "ERROR: No tests found for group '${TAP_GROUP}' in groups.json"
+        exit 1
+    fi
+
+    # Search for test binaries in known test directories
+    TEST_DIRS="${WORKSPACE}/test/tap/tests/unit ${WORKSPACE}/test/tap/tests"
+
+    TOTAL=0
+    PASSED=0
+    FAILED=0
+    FAILED_TESTS=""
+
+    for TEST_NAME in ${TEST_NAMES}; do
+        TEST_BIN=""
+        for DIR in ${TEST_DIRS}; do
+            if [ -x "${DIR}/${TEST_NAME}" ]; then
+                TEST_BIN="${DIR}/${TEST_NAME}"
+                break
+            fi
+        done
+
+        if [ -z "${TEST_BIN}" ]; then
+            echo "WARNING: Test binary '${TEST_NAME}' not found in: ${TEST_DIRS}"
+            TOTAL=$((TOTAL + 1))
+            FAILED=$((FAILED + 1))
+            FAILED_TESTS="${FAILED_TESTS} ${TEST_NAME}(not-found)"
+            continue
+        fi
+
+        TOTAL=$((TOTAL + 1))
+        echo ">>> Running: ${TEST_NAME}"
+        if "${TEST_BIN}"; then
+            PASSED=$((PASSED + 1))
+            echo ">>> PASSED: ${TEST_NAME}"
+        else
+            FAILED=$((FAILED + 1))
+            FAILED_TESTS="${FAILED_TESTS} ${TEST_NAME}"
+            echo ">>> FAILED: ${TEST_NAME}"
+        fi
+    done
+
+    echo ""
+    echo "================================================================================"
+    echo "Unit Test Summary: ${PASSED}/${TOTAL} passed, ${FAILED} failed"
+    if [ -n "${FAILED_TESTS}" ]; then
+        echo "Failed tests:${FAILED_TESTS}"
+    fi
+    echo "================================================================================"
+
+    [ "${FAILED}" -eq 0 ]
     exit $?
 fi
 
