@@ -276,44 +276,6 @@ if [ -n "${TAP_GROUP}" ]; then
     fi
 fi
 
-# Capture code coverage data if enabled
-# This runs regardless of test success/failure
-if [ "${COVERAGE_MODE}" = "1" ]; then
-    echo ">>> Collecting code coverage data..."
-
-    # Check if fastcov is available in the container
-    if docker exec "${TEST_CONTAINER}" which fastcov >/dev/null 2>&1; then
-        COVERAGE_INFO_FILE="${COVERAGE_REPORT_DIR}/${TAP_GROUP:-test}-${INFRA_ID}.info"
-
-        echo ">>> Generating coverage report: ${COVERAGE_INFO_FILE}"
-        # Extract coverage data from container
-        docker exec "${TEST_CONTAINER}" bash -c "
-            cd '${WORKSPACE}' && \
-            fastcov -b -j\$(nproc) --process-gcno -l \
-                -e /usr/include/ -e test/tap/tests \
-                -d . -i include -i lib -i src \
-                -o '${COVERAGE_INFO_FILE}' 2>&1
-        " || echo ">>> WARNING: Coverage generation failed"
-
-        # Check if report was generated
-        if [ -f "${COVERAGE_INFO_FILE}" ]; then
-            echo ">>> Coverage report generated: ${COVERAGE_INFO_FILE}"
-            # Generate HTML report
-            if command -v genhtml >/dev/null 2>&1; then
-                HTML_REPORT_DIR="${COVERAGE_REPORT_DIR}/html/${TAP_GROUP:-test}-${INFRA_ID}"
-                mkdir -p "${HTML_REPORT_DIR}"
-                genhtml --branch-coverage --ignore-errors negative,source --synthesize-missing "${COVERAGE_INFO_FILE}" --output-directory "${HTML_REPORT_DIR}" 2>/dev/null || \
-                    echo ">>> WARNING: HTML report generation failed"
-                [ -d "${HTML_REPORT_DIR}" ] && echo ">>> HTML report: ${HTML_REPORT_DIR}/index.html"
-            fi
-        else
-            echo ">>> WARNING: Coverage info file not generated"
-        fi
-    else
-        echo ">>> WARNING: fastcov not found in container, skipping coverage collection"
-    fi
-fi
-
 # Clean up only the runner container
 echo ">>> Cleaning up Test Runner container"
 docker rm -f "${TEST_CONTAINER}" >/dev/null 2>&1 || true
