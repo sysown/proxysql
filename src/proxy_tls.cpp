@@ -406,6 +406,20 @@ int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg) {
 		// clients (MySQL > 8.0.29) attempt session reuses during reconnect operations.
 		SSL_CTX_set_options(GloVars.global.ssl_ctx, SSL_OP_NO_TICKET);
 		SSL_CTX_set_session_cache_mode(GloVars.global.ssl_ctx, SSL_SESS_CACHE_OFF);
+
+		// Store TLS file paths and tracking info for stats table
+		{
+			std::lock_guard<std::mutex> lock(GloVars.global.ssl_mutex);
+			free(GloVars.global.tls_key_file);
+			GloVars.global.tls_key_file = ssl_key_fp ? strdup(ssl_key_fp) : NULL;
+			free(GloVars.global.tls_cert_file);
+			GloVars.global.tls_cert_file = ssl_cert_fp ? strdup(ssl_cert_fp) : NULL;
+			free(GloVars.global.tls_ca_file);
+			GloVars.global.tls_ca_file = ssl_ca_fp ? strdup(ssl_ca_fp) : NULL;
+			GloVars.global.tls_load_count++;
+			GloVars.global.tls_last_load_timestamp = time(NULL);
+			GloVars.global.tls_last_load_ok = true;
+		}
 	} else {
 		// here we use global.tmp_ssl_ctx instead of global.ssl_ctx
 		// because we will try to swap at the end
@@ -425,6 +439,16 @@ int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg) {
 							free(GloVars.global.ssl_cert_pem_mem);
 							GloVars.global.ssl_key_pem_mem = load_file(ssl_key_fp);
         					GloVars.global.ssl_cert_pem_mem = load_file(ssl_cert_fp);
+							// Update TLS tracking fields for stats table (under ssl_mutex)
+							free(GloVars.global.tls_key_file);
+							GloVars.global.tls_key_file = ssl_key_fp ? strdup(ssl_key_fp) : NULL;
+							free(GloVars.global.tls_cert_file);
+							GloVars.global.tls_cert_file = ssl_cert_fp ? strdup(ssl_cert_fp) : NULL;
+							free(GloVars.global.tls_ca_file);
+							GloVars.global.tls_ca_file = ssl_ca_fp ? strdup(ssl_ca_fp) : NULL;
+							GloVars.global.tls_load_count++;
+							GloVars.global.tls_last_load_timestamp = time(NULL);
+							GloVars.global.tls_last_load_ok = true;
 
 							} else {
 								proxy_error("Failed to load location of CA certificates for verification\n");
@@ -461,6 +485,12 @@ int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg) {
 		// Completely disable session tickets and session-cache. See comment above.
 		SSL_CTX_set_options(GloVars.global.ssl_ctx, SSL_OP_NO_TICKET);
 		SSL_CTX_set_session_cache_mode(GloVars.global.ssl_ctx, SSL_SESS_CACHE_OFF);
+	} else if (!bootstrap) {
+		// Record reload failure in TLS tracking stats
+		std::lock_guard<std::mutex> lock(GloVars.global.ssl_mutex);
+		GloVars.global.tls_load_count++;
+		GloVars.global.tls_last_load_timestamp = time(NULL);
+		GloVars.global.tls_last_load_ok = false;
 	}
 	X509_free(x509);
 	EVP_PKEY_free(pkey);

@@ -55,6 +55,13 @@ fi
 INFRAS_TO_CHECK=""
 BASE_GROUP=$(echo "${TAP_GROUP}" | sed -E "s/[-_]g[0-9]+.*//") # Strip -g1, -g2, _g1, _g2 etc.
 
+# Source group env.sh to pick up SKIP_PROXYSQL and other group-level settings
+if [ -f "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/env.sh" ]; then
+    source "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/env.sh"
+elif [ -f "${WORKSPACE}/test/tap/groups/${BASE_GROUP}/env.sh" ]; then
+    source "${WORKSPACE}/test/tap/groups/${BASE_GROUP}/env.sh"
+fi
+
 if [ -n "${TAP_GROUP}" ]; then
     if [ -f "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst" ]; then
         INFRAS_TO_CHECK=$(expand_infra_list "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst")
@@ -90,40 +97,122 @@ COVERAGE_DATA_DIR_HOST="${INFRA_LOGS_PATH}/${INFRA_ID}/gcov"
 
 
 
-# VERIFICATION: Verify ProxySQL is running
-PROXY_CONTAINER="proxysql.${INFRA_ID}"
-echo ">>> Verifying ProxySQL container: ${PROXY_CONTAINER}"
-if ! docker ps --format '{{.Names}}' | grep -q "^${PROXY_CONTAINER}$"; then
-    echo "ERROR: ProxySQL container ${PROXY_CONTAINER} is NOT running!"
-    exit 1
-fi
-
-# VERIFICATION: Verify all required backend containers are running
-for INFRA_NAME in ${INFRAS_TO_CHECK}; do
-    echo ">>> Verifying Backend: ${INFRA_NAME}"
-    # Extract container names from the infra's docker-compose.yml
-    if [ -f "${WORKSPACE}/test/infra/${INFRA_NAME}/docker-compose.yml" ]; then
-        # Project name used by init script
-        COMPOSE_PROJECT="${INFRA_NAME}-${INFRA_ID}"
-        # Get all services for this project
-        RUNNING_CONTAINERS=$(docker ps --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" --format '{{.Names}}')
-        if [ -z "${RUNNING_CONTAINERS}" ]; then
-            if [ -f "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst" ]; then LST_PATH="${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst"; else LST_PATH="${WORKSPACE}/test/tap/groups/${BASE_GROUP}/infras.lst"; fi
-            echo "ERROR: Required infrastructure '${INFRA_NAME}' is NOT running."
-            if [ -f "${LST_PATH}" ]; then
-                echo "According to '${LST_PATH}', this infrastructure is mandatory for the '${TAP_GROUP}' group."
-            fi
-            echo "Please run initialization for '${INFRA_NAME}' first (e.g. cd test/infra/${INFRA_NAME} && ./docker-compose-init.bash)."
-            exit 1
-        fi
-        echo "Found running containers: ${RUNNING_CONTAINERS//$'\n'/ }"
-    else
-        echo "ERROR: Infrastructure directory ${INFRA_NAME} not found!"
+if [ "${SKIP_PROXYSQL}" = "1" ]; then
+    echo ">>> SKIP_PROXYSQL=1: Skipping ProxySQL and backend verification for group '${TAP_GROUP}'."
+    echo ">>> Running unit tests directly (no infrastructure needed)."
+else
+    # VERIFICATION: Verify ProxySQL is running
+    PROXY_CONTAINER="proxysql.${INFRA_ID}"
+    echo ">>> Verifying ProxySQL container: ${PROXY_CONTAINER}"
+    if ! docker ps --format '{{.Names}}' | grep -q "^${PROXY_CONTAINER}$"; then
+        echo "ERROR: ProxySQL container ${PROXY_CONTAINER} is NOT running!"
         exit 1
     fi
-done
 
-echo ">>> INFRASTRUCTURE VERIFIED. LAUNCHING TEST RUNNER..."
+    # VERIFICATION: Verify all required backend containers are running
+    for INFRA_NAME in ${INFRAS_TO_CHECK}; do
+        echo ">>> Verifying Backend: ${INFRA_NAME}"
+        # Extract container names from the infra's docker-compose.yml
+        if [ -f "${WORKSPACE}/test/infra/${INFRA_NAME}/docker-compose.yml" ]; then
+            # Project name used by init script
+            COMPOSE_PROJECT="${INFRA_NAME}-${INFRA_ID}"
+            # Get all services for this project
+            RUNNING_CONTAINERS=$(docker ps --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" --format '{{.Names}}')
+            if [ -z "${RUNNING_CONTAINERS}" ]; then
+                if [ -f "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst" ]; then LST_PATH="${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst"; else LST_PATH="${WORKSPACE}/test/tap/groups/${BASE_GROUP}/infras.lst"; fi
+                echo "ERROR: Required infrastructure '${INFRA_NAME}' is NOT running."
+                if [ -f "${LST_PATH}" ]; then
+                    echo "According to '${LST_PATH}', this infrastructure is mandatory for the '${TAP_GROUP}' group."
+                fi
+                echo "Please run initialization for '${INFRA_NAME}' first (e.g. cd test/infra/${INFRA_NAME} && ./docker-compose-init.bash)."
+                exit 1
+            fi
+            echo "Found running containers: ${RUNNING_CONTAINERS//$'\n'/ }"
+        else
+            echo "ERROR: Infrastructure directory ${INFRA_NAME} not found!"
+            exit 1
+        fi
+    done
+
+    echo ">>> INFRASTRUCTURE VERIFIED. LAUNCHING TEST RUNNER..."
+fi
+
+# SKIP_PROXYSQL path: run test binaries directly on the host, no Docker needed.
+# We bypass proxysql-tester.py because it requires a ProxySQL admin connection
+# and Docker-specific environment variables that don't exist in this mode.
+if [ "${SKIP_PROXYSQL}" = "1" ]; then
+    echo ">>> Running tests directly on the host (no Docker container)..."
+
+    # Discover test binaries from groups.json for this TAP_GROUP
+    GROUPS_JSON="${WORKSPACE}/test/tap/groups/groups.json"
+    if [ ! -f "${GROUPS_JSON}" ]; then
+        echo "ERROR: groups.json not found at ${GROUPS_JSON}"
+        exit 1
+    fi
+
+    # Extract test names belonging to this group
+    TEST_NAMES=$(python3 -c "
+import json, sys
+with open('${GROUPS_JSON}') as f:
+    groups = json.load(f)
+for test_name, test_groups in sorted(groups.items()):
+    if '${TAP_GROUP}' in test_groups:
+        print(test_name)
+")
+
+    if [ -z "${TEST_NAMES}" ]; then
+        echo "ERROR: No tests found for group '${TAP_GROUP}' in groups.json"
+        exit 1
+    fi
+
+    # Search for test binaries in known test directories
+    TEST_DIRS="${WORKSPACE}/test/tap/tests/unit ${WORKSPACE}/test/tap/tests"
+
+    TOTAL=0
+    PASSED=0
+    FAILED=0
+    FAILED_TESTS=""
+
+    for TEST_NAME in ${TEST_NAMES}; do
+        TEST_BIN=""
+        for DIR in ${TEST_DIRS}; do
+            if [ -x "${DIR}/${TEST_NAME}" ]; then
+                TEST_BIN="${DIR}/${TEST_NAME}"
+                break
+            fi
+        done
+
+        if [ -z "${TEST_BIN}" ]; then
+            echo "WARNING: Test binary '${TEST_NAME}' not found in: ${TEST_DIRS}"
+            TOTAL=$((TOTAL + 1))
+            FAILED=$((FAILED + 1))
+            FAILED_TESTS="${FAILED_TESTS} ${TEST_NAME}(not-found)"
+            continue
+        fi
+
+        TOTAL=$((TOTAL + 1))
+        echo ">>> Running: ${TEST_NAME}"
+        if "${TEST_BIN}"; then
+            PASSED=$((PASSED + 1))
+            echo ">>> PASSED: ${TEST_NAME}"
+        else
+            FAILED=$((FAILED + 1))
+            FAILED_TESTS="${FAILED_TESTS} ${TEST_NAME}"
+            echo ">>> FAILED: ${TEST_NAME}"
+        fi
+    done
+
+    echo ""
+    echo "================================================================================"
+    echo "Unit Test Summary: ${PASSED}/${TOTAL} passed, ${FAILED} failed"
+    if [ -n "${FAILED_TESTS}" ]; then
+        echo "Failed tests:${FAILED_TESTS}"
+    fi
+    echo "================================================================================"
+
+    [ "${FAILED}" -eq 0 ]
+    exit $?
+fi
 
 # Cleanup old test runner if exists
 docker rm -f "${TEST_CONTAINER}" >/dev/null 2>&1 || true
@@ -229,7 +318,7 @@ docker run \
         mkdir -p \"${WORKSPACE}/test-scripts/deps\"
         [ -n \"${MYSQL_BINLOG_BIN}\" ] && ln -sf \"${MYSQL_BINLOG_BIN}\" \"${WORKSPACE}/test-scripts/deps/mysqlbinlog\"
         [ -n \"${BINLOG_READER_BIN}\" ] && ln -sf \"${BINLOG_READER_BIN}\" \"${WORKSPACE}/test-scripts/deps/test_binlog_reader-t\"
-        
+
         # Source the local isolated environment
         source ${SCRIPT_DIR}/env-isolated.bash
 

@@ -116,6 +116,7 @@ The `docker-compose-init.bash` scripts implement a strict **non-destructive poli
 | `TAP_GROUP` | (none) | Run a specific group defined in `test/tap/groups/groups.json`. |
 | `TEST_PY_TAP_INCL` | (none) | Filter tests within the group (regex matching test names). |
 | `SKIP_CLUSTER_START`| `0` | Set to `1` to bypass starting additional ProxySQL nodes. |
+| `SKIP_PROXYSQL` | `0` | Set to `1` in a group's `env.sh` to skip ProxySQL and all backend infrastructure. When enabled, `ensure-infras.bash` exits immediately and `run-tests-isolated.bash` runs tests directly on the host without Docker. Used by the `unit-tests` group. |
 | `PROXY_DATA_DIR_HOST`| (dynamic) | Host path for ProxySQL persistent data. |
 | `COVERAGE` | `0` | Enable code coverage collection. |
 | `TAP_USE_NOISE` | `0` | Enable noise injection for race condition testing. |
@@ -171,6 +172,39 @@ For rapid iteration, you can create a temporary subgroup to target exactly the i
     ./test/infra/control/ensure-infras.bash
     ./test/infra/control/run-tests-isolated.bash
     ```
+
+---
+
+## 6.1. Infrastructure-Free Groups (Unit Tests)
+
+Some test groups do not require ProxySQL or any backend infrastructure. These groups set `SKIP_PROXYSQL=1` in their `env.sh`, which causes:
+
+- `ensure-infras.bash` to exit immediately (no Docker containers started)
+- `run-tests-isolated.bash` to run tests directly on the host (no Docker test runner)
+
+The `unit-tests` group is the primary example. Unit tests link against `libproxysql.a` with stub globals and run as standalone binaries.
+
+### Running Unit Tests
+
+```bash
+# Build unit tests
+cd test/tap/tests/unit && make && cd -
+
+# Run via the multi-group runner (recommended)
+TAP_GROUPS="unit-tests-g1" ./test/infra/control/run-multi-group.bash
+
+# Or run directly
+export TAP_GROUP="unit-tests-g1"
+./test/infra/control/ensure-infras.bash   # exits immediately (SKIP_PROXYSQL=1)
+./test/infra/control/run-tests-isolated.bash
+```
+
+### Creating Your Own Infrastructure-Free Group
+
+1. Create a group directory: `test/tap/groups/my-group/`
+2. Add `env.sh` with `export SKIP_PROXYSQL=1`
+3. Add your tests to `groups.json` under `my-group-g1`
+4. No `infras.lst` needed
 
 ---
 

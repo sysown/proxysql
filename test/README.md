@@ -36,6 +36,7 @@ Common test groups (defined in `tap/groups/groups.json`):
 
 | Group | Description |
 |-------|-------------|
+| `unit-tests-g1` | Unit tests (no ProxySQL or backends needed) |
 | `mysql84-g1` | MySQL 8.4 tests |
 | `mysql57-g1` | MySQL 5.7 tests |
 | `mariadb10-g1` | MariaDB 10 tests |
@@ -49,6 +50,7 @@ Common test groups (defined in `tap/groups/groups.json`):
 | `TAP_GROUP` | Test group to run (e.g., `mysql84-g1`) |
 | `TEST_PY_TAP_INCL` | Regex to filter tests within the group |
 | `SKIP_CLUSTER_START` | Set to `1` to skip starting additional ProxySQL nodes |
+| `SKIP_PROXYSQL` | Set to `1` in a group's `env.sh` to skip ProxySQL and all backend infrastructure (used by `unit-tests`) |
 
 ## Prerequisites
 
