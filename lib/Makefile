@@ -109,6 +109,7 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	ServerSelection.oo \
 	TransactionState.oo \
 	HostgroupRouting.oo \
+	MySQLErrorClassifier.oo \
 	BackendSyncDecision.oo \
 	proxy_sqlite3_symbols.oo
 
