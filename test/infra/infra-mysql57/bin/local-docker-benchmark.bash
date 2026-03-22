@@ -9,11 +9,9 @@ SIZE_TABLES=10
 REPORT_INTERVAL=1
 TIME=10
 SCRIPT=oltp_read_write.lua
-MYSQL_HOST=127.0.0.1
-#MYSQL_HOST=mysql1.infra-mysql57
-MYSQL_PORT=6033
-#MYSQL_PORT=3306
-MYSQL_PWD=root
+MYSQL_HOST=${TAP_ROOTHOST:-127.0.0.1}
+MYSQL_PORT=${TAP_ROOTPORT:-6033}
+MYSQL_PWD=${TAP_ROOTPASSWORD:-root}
 
 printf "[$(date)] Dropping 'sysbench' schema if present and preparing test dataset:\n"
 mysql -h$MYSQL_HOST -P$MYSQL_PORT -uroot -p$MYSQL_PWD -e"DROP DATABASE IF EXISTS sysbench; CREATE DATABASE IF NOT EXISTS sysbench;" 2>&1 | grep -vP 'mysql: .?Warning'

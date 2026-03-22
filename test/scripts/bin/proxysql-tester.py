@@ -806,7 +806,7 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
 
                 if test_file in zero_sec_level_tap_tests:
                     tap_env["OPENSSL_CONF"] = (
-                        os.environ["JENKINS_SCRIPTS_PATH"] + "/test-scripts/datadir/openssl_level_zero.cnf"
+                        os.environ.get("WORKSPACE", ".") + "/test-scripts/datadir/openssl_level_zero.cnf"
                     )
 
                 try:
@@ -1551,7 +1551,7 @@ def start_proxysql(conn_args, timeout):
     subprocess.call(
         args="./test-scripts/proxysql_cluster_init.sh",
         shell=True,
-        cwd=os.environ["JENKINS_SCRIPTS_PATH"],
+        cwd=os.environ.get("WORKSPACE", "."),
         env=os.environ.copy()
     )
 
