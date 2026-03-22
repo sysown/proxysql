@@ -3,6 +3,7 @@ using json = nlohmann::json;
 #define PROXYJSON
 
 #include "PgSQL_HostGroups_Manager.h"
+#include "ConnectionPoolDecision.h"
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -2330,7 +2331,7 @@ void PgSQL_SrvConnList::get_random_MyConn_inner_search(unsigned int start, unsig
 PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, bool ff) {
 	PgSQL_Connection * conn=NULL;
 	unsigned int i;
-	unsigned int conn_found_idx;
+	unsigned int conn_found_idx = 0;
 	unsigned int l=conns_length();
 	unsigned int connection_quality_level = 0;
 	bool needs_warming = false;
@@ -2347,19 +2348,16 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 		connection_warming = mysrvc->myhgc->attributes.connection_warming;
 		free_connections_pct = mysrvc->myhgc->attributes.free_connections_pct;
 	}
+	unsigned int conns_free = mysrvc->ConnectionsFree->conns_length();
+	unsigned int conns_used = mysrvc->ConnectionsUsed->conns_length();
 	if (connection_warming == true) {
-		unsigned int total_connections = mysrvc->ConnectionsFree->conns_length()+mysrvc->ConnectionsUsed->conns_length();
-		unsigned int expected_warm_connections = free_connections_pct*mysrvc->max_connections/100;
+		unsigned int total_connections = conns_free + conns_used;
+		unsigned int expected_warm_connections = (unsigned int)free_connections_pct * mysrvc->max_connections / 100;
 		if (total_connections < expected_warm_connections) {
 			needs_warming = true;
 		}
 	}
 	if (l && ff==false && needs_warming==false) {
-		//if (l>32768) {
-		//	i=rand()%l;
-		//} else {
-		//	i=fastrand()%l;
-		//}
 		i = rand_fast() % l;
 		if (sess && sess->client_myds && sess->client_myds->myconn && sess->client_myds->myconn->userinfo) {
 			PgSQL_Connection * client_conn = sess->client_myds->myconn;
@@ -2367,6 +2365,11 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 			if (connection_quality_level !=3 ) { // we didn't find the perfect connection
 				get_random_MyConn_inner_search(0, i, conn_found_idx, connection_quality_level, number_of_matching_session_variables, client_conn);
 			}
+			// Evaluate pool state to determine create-vs-reuse and eviction (warming already handled above)
+			ConnectionPoolDecision decision = evaluate_pool_state(
+				conns_free, conns_used, (unsigned int)mysrvc->max_connections,
+				connection_quality_level, false, 0
+			);
 			// connection_quality_level:
 			// 1 : tracked options are OK , but RESETTING SESSION is required
 			// 2 : tracked options are OK , RESETTING SESSION is not required, but some SET statement or INIT_DB needs to be executed
@@ -2375,25 +2378,14 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 					// we must check if connections need to be freed before
 					// creating a new connection
 					{
-						unsigned int conns_free = mysrvc->ConnectionsFree->conns_length();
-						unsigned int conns_used = mysrvc->ConnectionsUsed->conns_length();
-						unsigned int pct_max_connections = (3 * mysrvc->max_connections) / 4;
-						unsigned int connections_to_free = 0;
+						if (decision.evict_connections) {
+							unsigned int cur_free = conns_free;
+							unsigned int connections_to_free = decision.num_to_evict;
+							while (cur_free && connections_to_free) {
+								PgSQL_Connection* c = mysrvc->ConnectionsFree->remove(0);
+								delete c;
 
-						if (conns_free >= 1) {
-							// connection cleanup is triggered when connections exceed 3/4 of the total
-							// allowed max connections, this cleanup ensures that at least *one connection*
-							// will be freed.
-							if (pct_max_connections <= (conns_free + conns_used)) {
-								connections_to_free = (conns_free + conns_used) - pct_max_connections;
-								if (connections_to_free == 0) connections_to_free = 1;
-							}
-
-							while (conns_free && connections_to_free) {
-								PgSQL_Connection* conn = mysrvc->ConnectionsFree->remove(0);
-								delete conn;
-
-								conns_free = mysrvc->ConnectionsFree->conns_length();
+								cur_free = mysrvc->ConnectionsFree->conns_length();
 								connections_to_free -= 1;
 							}
 						}
@@ -2410,9 +2402,7 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 				case 1: //tracked options are OK , but RESETTING SESSION is required
 					// we may consider creating a new connection
 					{
-					unsigned int conns_free = mysrvc->ConnectionsFree->conns_length();
-					unsigned int conns_used = mysrvc->ConnectionsUsed->conns_length();
-					if ((conns_used > conns_free) && (mysrvc->max_connections > (conns_free/2 + conns_used/2)) ) {
+					if (decision.create_new_connection) {
 						conn = new PgSQL_Connection(false);
 						conn->parent=mysrvc;
 						// if attributes.multiplex == true , STATUS_PGSQL_CONNECTION_NO_MULTIPLEX_HG is set to false. And vice-versa
@@ -2454,7 +2444,7 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 			// pgsql_hostgroup_attributes takes priority
 			throttle_connections_per_sec_to_hostgroup = _myhgc->attributes.throttle_connections_per_sec;
 		}
-		if (_myhgc->new_connections_now > (unsigned int) throttle_connections_per_sec_to_hostgroup) {
+		if (should_throttle_connection_creation(_myhgc->new_connections_now, throttle_connections_per_sec_to_hostgroup)) {
 			__sync_fetch_and_add(&PgHGM->status.server_connections_delayed, 1);
 			return NULL;
 		} else {
