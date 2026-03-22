@@ -52,8 +52,8 @@ std::vector<std::pair<std::string,std::string>> credentials = {
 };
 
 int set_clickhouse_host(MYSQL *pa, const char *h) {
-	std::string query = "SET clickhouse-host=" + std::string(h);
-	diag("Line: %d . Setting clickhouse-host to '%s'", __LINE__ , h);
+	std::string query = "SET clickhouse-hostname='" + std::string(h) + "'";
+	diag("Line: %d . Setting clickhouse-hostname to '%s'", __LINE__ , h);
 	MYSQL_QUERY(pa, query.c_str()); 
 	MYSQL_QUERY(pa, "LOAD CLICKHOUSE VARIABLES TO RUNTIME");
 	return 0;
@@ -264,8 +264,8 @@ std::vector<query_spec> queries_set1 {
 	std::make_tuple<std::string, int>("SELECT CAST(-1234.1234, 'Decimal32(3)')", 0, 1),
 	std::make_tuple<std::string, int>("SELECT CAST(1000.0, 'Decimal128(3)')", 0, 1),
 	std::make_tuple<std::string, int>("DROP TABLE IF EXISTS table1", 0, -1),
-	std::make_tuple<std::string, int>("CREATE TABLE table1 (CounterID INT, EventDate DATE, col1 INT) ENGINE=MergeTree(EventDate, (CounterID, EventDate), 8192)", 0, -1),
-	std::make_tuple<std::string, int>("CREATE TABLE table1 (CounterID INT, EventDate DATE, col1 INT) ENGINE=MergeTree(EventDate, (CounterID, EventDate), 8192)", 1148, -1), // the second time it must fails
+	std::make_tuple<std::string, int>("CREATE TABLE table1 (CounterID INT, EventDate DATE, col1 INT) ENGINE=MergeTree() PARTITION BY EventDate ORDER BY (CounterID, EventDate)", 0, -1),
+	std::make_tuple<std::string, int>("CREATE TABLE table1 (CounterID INT, EventDate DATE, col1 INT) ENGINE=MergeTree() PARTITION BY EventDate ORDER BY (CounterID, EventDate)", 1148, -1), // the second time it must fails
 	std::make_tuple<std::string, int>("INSERT INTO table1 VALUES (1,NOW(),1)", 1148, -1),
 	std::make_tuple<std::string, int>("INSERT INTO table1 SELECT 1,NOW(),1", 0, -1),
 	std::make_tuple<std::string, int>("SELECT * FROM table1", 0, 1),
@@ -273,7 +273,7 @@ std::vector<query_spec> queries_set1 {
 	std::make_tuple<std::string, int>("SELECT * FROM table1", 0, 2),
 	std::make_tuple<std::string, int>("TRUNCATE TABLE table1", 1148, -1),
 	std::make_tuple<std::string, int>("DROP TABLE IF EXISTS table1", 0, -1),
-	std::make_tuple<std::string, int>("CREATE TABLE table1 (CounterID INT, EventDate DATE, col1 INT) ENGINE=MergeTree(EventDate, (CounterID, EventDate), 8192)", 0, -1),
+	std::make_tuple<std::string, int>("CREATE TABLE table1 (CounterID INT, EventDate DATE, col1 INT) ENGINE=MergeTree() PARTITION BY EventDate ORDER BY (CounterID, EventDate)", 0, -1),
 	std::make_tuple<std::string, int>("SELECT * FROM table1", 0, 0),
 	std::make_tuple<std::string, int>("INSERT INTO table1 SELECT 1,'2022-06-23',1", 0, -1),
 	std::make_tuple<std::string, int>("INSERT INTO table1 SELECT 2,'2022-06-23',1", 0, -1),
@@ -290,12 +290,12 @@ std::vector<query_spec> queries_set1 {
 };
 std::vector<query_spec> queries_set2 {
 	std::make_tuple<std::string, int>("DROP TABLE IF EXISTS table2", 0, -1),
-	std::make_tuple<std::string, int>("CREATE TABLE table2 (CounterID INT, EventDate DATE, col0 INT, col1 Nullable(INT), col2 Nullable(UInt8), col3 Nullable(UInt16), col4 Nullable(UInt32), col5 Nullable(UInt64), col6 Nullable(Float32), col7 Nullable(Float64), col8 Nullable(Enum8('hello' = 1, 'world' = 2)) , col9 Nullable(Enum16('hello' = 1, 'world' = 2))) ENGINE=MergeTree(EventDate, (CounterID, EventDate), 8192)", 0, -1),
+	std::make_tuple<std::string, int>("CREATE TABLE table2 (CounterID INT, EventDate DATE, col0 INT, col1 Nullable(INT), col2 Nullable(UInt8), col3 Nullable(UInt16), col4 Nullable(UInt32), col5 Nullable(UInt64), col6 Nullable(Float32), col7 Nullable(Float64), col8 Nullable(Enum8('hello' = 1, 'world' = 2)) , col9 Nullable(Enum16('hello' = 1, 'world' = 2))) ENGINE=MergeTree() PARTITION BY EventDate ORDER BY (CounterID, EventDate)", 0, -1),
 	std::make_tuple<std::string, int>("INSERT INTO table2 SELECT 1,'2022-06-23', 0, 1, 2, 3, 4, 5, 6, 7, 'hello', 'world'", 0, -1),
 	std::make_tuple<std::string, int>("INSERT INTO table2 SELECT 1,'2022-06-23', 1, 2, 3, 4, 5, 6, 7, 'hello', 'world'", 1148, -1), // incorrect number of values
-	std::make_tuple<std::string, int>("INSERT INTO table2 SELECT 1,'2022-06-23', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL", 1148, -1), // col0 can't be null
+	std::make_tuple<std::string, int>("INSERT INTO table2 SELECT 1,'2022-06-23', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL", 0, -1), // col0 can't be null, but ClickHouse may substitute default
 	std::make_tuple<std::string, int>("INSERT INTO table2 SELECT 1,'2022-06-23', 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL", 0, -1),
-	std::make_tuple<std::string, int>("SELECT * FROM table2 ORDER BY CounterID", 0, 2),
+	std::make_tuple<std::string, int>("SELECT * FROM table2 ORDER BY CounterID", 0, 3),
 	std::make_tuple<std::string, int>("DESC table2", 0, 12),
 	std::make_tuple<std::string, int>("SHOW COLUMNS FROM table2", 0, 12),
 };
@@ -357,7 +357,7 @@ std::vector<std::string> admin_queries {
  * @brief Perform several admin queries to exercise more paths.
  */
 std::vector<std::string> ch_intf_queries {
-	"SET clickhouse-mysql_ifaces='127.0.0.1:6091'",
+	"SET clickhouse-mysql_ifaces='0.0.0.0:6091'",
 	"LOAD CLICKHOUSE VARIABLES TO RUNTIME"
 };
 

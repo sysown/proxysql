@@ -410,15 +410,6 @@ const vector<inv_input_t> INV_INPUTS {
 int main(int argc, char** argv) {
 	CommandLine cl;
 
-	plan(
-		INV_INPUTS.size() +
-		USER_GEN_COUNT +
-		PASS_GEN_COUNT * 2 +
-		2 + // EXTRA: Two extra correctness tests; forcing randomness
-		RAND_USERS_GEN +
-		1 // EXTRA: Conn count after 'RAND_USERS_GEN'; consistency check
-	);
-
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
@@ -458,6 +449,28 @@ int main(int argc, char** argv) {
 	}
 	diag("Successfully connected to MySQL backend");
 	diag("");
+
+	// Check MySQL version before calling plan() so we can set the correct test count
+	// MySQL 8.0+ supports 'BY RANDOM PASSWORD' syntax, MySQL 5.7 does not
+	check_mysql_random_password_support(mysql);
+
+	// Calculate the actual number of tests based on MySQL version
+	uint32_t actual_test_count =
+		INV_INPUTS.size() +           // Always run
+		PASS_GEN_COUNT * 2 +           // Always run
+		2;                             // EXTRA: Two extra correctness tests
+
+	if (g_mysql_supports_random_password) {
+		// These tests only run on MySQL 8.0+
+		actual_test_count += USER_GEN_COUNT;      // MySQL/Admin hash compatibility tests
+		actual_test_count += RAND_USERS_GEN;      // End-to-end connection tests
+		actual_test_count += 1;                   // Connection count check
+	}
+
+	diag("MySQL version supports 'BY RANDOM PASSWORD': %s", g_mysql_supports_random_password ? "yes" : "no");
+	diag("Planned test count: %u", actual_test_count);
+
+	plan(actual_test_count);
 
 
 	MYSQL* admin = mysql_init(NULL);
@@ -523,7 +536,7 @@ int main(int argc, char** argv) {
 	} else {
 		diag("Skipping MySQL/Admin hashes compatibility tests: requires MySQL 8.0+");
 		diag("Current MySQL server does not support 'BY RANDOM PASSWORD' syntax");
-		skip(USER_GEN_COUNT + 1, "MySQL 8.0+ required for 'BY RANDOM PASSWORD' syntax");
+		// Note: These tests are not included in the plan for MySQL 5.7, so no skip() needed
 	}
 
 	// Tests correctness of randomly generated hashes

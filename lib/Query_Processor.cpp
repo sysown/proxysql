@@ -19,6 +19,7 @@ using json = nlohmann::json;
 
 #include "PgSQL_Data_Stream.h"
 #include "MySQL_Data_Stream.h"
+#include "gen_utils.h"
 #include "query_processor.h"
 #include "QP_rule_text.h"
 #include "MySQL_Query_Processor.h"
@@ -220,7 +221,7 @@ static bool query_digest_text_matches(
 	return it != digest_end;
 }
 
-static re2_t * compile_query_rule(QP_rule_t *qr, int i, int query_processor_regex) {
+static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processor_regex) {
 	re2_t *r=(re2_t *)malloc(sizeof(re2_t));
 	r->opt1=NULL;
 	r->re1=NULL;
@@ -250,6 +251,121 @@ static re2_t * compile_query_rule(QP_rule_t *qr, int i, int query_processor_rege
 	return r;
 };
 
+static void free_compiled_query_rule(re2_t *r) {
+	if (r == NULL) return;
+	if (r->opt1) { delete r->opt1; r->opt1=NULL; }
+	if (r->re1) { delete r->re1; r->re1=NULL; }
+	if (r->opt2) { delete r->opt2; r->opt2=NULL; }
+	if (r->re2) { delete r->re2; r->re2=NULL; }
+	free(r);
+}
+
+static bool rule_matches_regex(
+	const QP_rule_t* qr,
+	void* regex_engine,
+	int regex_index,
+	const char* subject,
+	int query_processor_regex
+) {
+	if (subject == NULL) return false;
+
+	re2_t *compiled_regex = static_cast<re2_t *>(regex_engine);
+	re2_t *temporary_regex = NULL;
+
+	if (compiled_regex == NULL) {
+		temporary_regex = compile_query_rule(qr, regex_index, query_processor_regex);
+		compiled_regex = temporary_regex;
+	}
+
+	bool rc = false;
+	if (compiled_regex) {
+		if (compiled_regex->re2) {
+			rc = RE2::PartialMatch(subject, *compiled_regex->re2);
+		} else if (compiled_regex->re1) {
+			rc = compiled_regex->re1->PartialMatch(subject);
+		}
+	}
+
+	free_compiled_query_rule(temporary_regex);
+	return (qr->negate_match_pattern ? (rc == false) : (rc == true));
+}
+
+bool rule_matches_query(
+	const QP_rule_t* qr,
+	int current_flagIN,
+	const char* username,
+	const char* schemaname,
+	const char* client_addr,
+	const char* proxy_addr,
+	int proxy_port,
+	uint64_t digest,
+	const char* digest_text,
+	const char* query_text,
+	const char* rewritten_query,
+	int query_processor_regex
+) {
+	if (qr == NULL) return false;
+
+	if (qr->flagIN != current_flagIN) {
+		return false;
+	}
+
+	if (qr->username && strlen(qr->username)) {
+		if (username == NULL || strcmp(qr->username, username) != 0) {
+			return false;
+		}
+	}
+
+	if (qr->schemaname && strlen(qr->schemaname)) {
+		if (schemaname == NULL || strcmp(qr->schemaname, schemaname) != 0) {
+			return false;
+		}
+	}
+
+	if (qr->client_addr && strlen(qr->client_addr)) {
+		if (client_addr) {
+			if (qr->client_addr_wildcard_position == -1) {
+				if (strcmp(qr->client_addr, client_addr) != 0) {
+					return false;
+				}
+			} else if (mywildcmp(qr->client_addr, client_addr) == false) {
+				return false;
+			}
+		}
+	}
+
+	if (qr->proxy_addr && strlen(qr->proxy_addr)) {
+		if (proxy_addr) {
+			if (strcmp(qr->proxy_addr, proxy_addr) != 0) {
+				return false;
+			}
+		}
+	}
+
+	if (qr->proxy_port >= 0 && qr->proxy_port != proxy_port) {
+		return false;
+	}
+
+	if (qr->digest && digest && qr->digest != digest) {
+		return false;
+	}
+
+	if (qr->match_digest && digest_text) {
+		if (rule_matches_regex(qr, qr->regex_engine1, 1, digest_text, query_processor_regex) == false) {
+			return false;
+		}
+	}
+
+	if (qr->match_pattern) {
+		const char* match_query = (rewritten_query ? rewritten_query : query_text);
+		if (rule_matches_regex(qr, qr->regex_engine2, 2, match_query, query_processor_regex) == false) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
 static void __delete_query_rule(QP_rule_t *qr) {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Deleting rule in %p : rule_id:%d, active:%d, username=%s, schemaname=%s, flagIN:%d, %smatch_pattern=\"%s\", flagOUT:%d replace_pattern=\"%s\", destination_hostgroup:%d, apply:%d\n", qr, qr->rule_id, qr->active, qr->username, qr->schemaname, qr->flagIN, (qr->negate_match_pattern ? "(!)" : "") , qr->match_pattern, qr->flagOUT, qr->replace_pattern, qr->destination_hostgroup, qr->apply);
 	if (qr->username)
@@ -275,20 +391,10 @@ static void __delete_query_rule(QP_rule_t *qr) {
 	if (qr->comment)
 		free(qr->comment);
 	if (qr->regex_engine1) {
-		re2_t *r=(re2_t *)qr->regex_engine1;
-		if (r->opt1) { delete r->opt1; r->opt1=NULL; }
-		if (r->re1) { delete r->re1; r->re1=NULL; }
-		if (r->opt2) { delete r->opt2; r->opt2=NULL; }
-		if (r->re2) { delete r->re2; r->re2=NULL; }
-		free(qr->regex_engine1);
+		free_compiled_query_rule((re2_t *)qr->regex_engine1);
 	}
 	if (qr->regex_engine2) {
-		re2_t *r=(re2_t *)qr->regex_engine2;
-		if (r->opt1) { delete r->opt1; r->opt1=NULL; }
-		if (r->re1) { delete r->re1; r->re1=NULL; }
-		if (r->opt2) { delete r->opt2; r->opt2=NULL; }
-		if (r->re2) { delete r->re2; r->re2=NULL; }
-		free(qr->regex_engine2);
+		free_compiled_query_rule((re2_t *)qr->regex_engine2);
 	}
 	if (qr->flagOUT_ids != NULL) {
 		qr->flagOUT_ids->clear();
@@ -1635,7 +1741,6 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 		wrunlock();
 	}
 	QP_rule_t *qr = NULL;
-	re2_t *re2p;
 	int flagIN=0;
 	ret->next_query_flagIN=-1; // reset
 	if (sess->next_query_flagIN >= 0) {
@@ -1669,112 +1774,21 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 __internal_loop:
 	for (std::vector<QP_rule_t *>::iterator it=_thr_SQP_rules->begin(); it!=_thr_SQP_rules->end(); ++it) {
 		qr=*it;
-		if (qr->flagIN != flagIN) {
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 6, "query rule %d has no matching flagIN\n", qr->rule_id);
+		if (rule_matches_query(
+			qr,
+			flagIN,
+			sess->client_myds->myconn->userinfo->username,
+			sess->client_myds->myconn->userinfo->schemaname,
+			sess->client_myds->addr.addr,
+			sess->client_myds->proxy_addr.addr,
+			sess->client_myds->proxy_addr.port,
+			(qp ? qp->digest : 0),
+			(qp ? qp->digest_text : NULL),
+			query,
+			((ret && ret->new_query) ? ret->new_query->c_str() : NULL),
+			GET_THREAD_VARIABLE(query_processor_regex)
+		) == false) {
 			continue;
-		}
-		if (qr->username && strlen(qr->username)) {
-			if (strcmp(qr->username,sess->client_myds->myconn->userinfo->username)!=0) {
-				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching username\n", qr->rule_id);
-				continue;
-			}
-		}
-		if (qr->schemaname && strlen(qr->schemaname)) {
-			if (strcmp(qr->schemaname,sess->client_myds->myconn->userinfo->schemaname)!=0) {
-				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching schemaname\n", qr->rule_id);
-				continue;
-			}
-		}
-
-		// match on client address
-		if (qr->client_addr && strlen(qr->client_addr)) {
-			if (sess->client_myds->addr.addr) {
-				if (qr->client_addr_wildcard_position == -1) { // no wildcard , old algorithm
-					if (strcmp(qr->client_addr,sess->client_myds->addr.addr)!=0) {
-						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching client_addr\n", qr->rule_id);
-						continue;
-					}
-				} else if (qr->client_addr_wildcard_position==0) {
-					// catch all!
-					// therefore we have a match
-				} else { // client_addr_wildcard_position > 0
-					if (strncmp(qr->client_addr,sess->client_myds->addr.addr,qr->client_addr_wildcard_position)!=0) {
-						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching client_addr\n", qr->rule_id);
-						continue;
-					}
-				}
-			}
-		}
-
-		// match on proxy_addr
-		if (qr->proxy_addr && strlen(qr->proxy_addr)) {
-			if (sess->client_myds->proxy_addr.addr) {
-				if (strcmp(qr->proxy_addr,sess->client_myds->proxy_addr.addr)!=0) {
-					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching proxy_addr\n", qr->rule_id);
-					continue;
-				}
-			}
-		}
-
-		// match on proxy_port
-		if (qr->proxy_port>=0) {
-			if (qr->proxy_port!=sess->client_myds->proxy_addr.port) {
-				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching proxy_port\n", qr->rule_id);
-				continue;
-			}
-		}
-
-		// match on digest
-		if (qp && qp->digest) {
-			if (qr->digest) {
-				if (qr->digest != qp->digest) {
-					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching digest\n", qr->rule_id);
-					continue;
-				}
-			}
-		}
-
-		// match on query digest
-		if (qp && qp->digest_text ) { // we call this only if we have a query digest
-			re2p=(re2_t *)qr->regex_engine1;
-			if (qr->match_digest) {
-				bool rc;
-				// we always match on original query
-				if (re2p->re2) {
-					rc=RE2::PartialMatch(qp->digest_text,*re2p->re2);
-				} else {
-					rc=re2p->re1->PartialMatch(qp->digest_text);
-				}
-				if ((rc==true && qr->negate_match_pattern==true) || ( rc==false && qr->negate_match_pattern==false )) {
-					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching pattern\n", qr->rule_id);
-					continue;
-				}
-			}
-		}
-		// match on query
-		re2p=(re2_t *)qr->regex_engine2;
-		if (qr->match_pattern) {
-			bool rc;
-			if (ret && ret->new_query) {
-				// if we already rewrote the query, process the new query
-				//std::string *s=ret->new_query;
-				if (re2p->re2) {
-					rc=RE2::PartialMatch(ret->new_query->c_str(),*re2p->re2);
-				} else {
-					rc=re2p->re1->PartialMatch(ret->new_query->c_str());
-				}
-			} else {
-				// we never rewrote the query
-				if (re2p->re2) {
-					rc=RE2::PartialMatch(query,*re2p->re2);
-				} else {
-					rc=re2p->re1->PartialMatch(query);
-				}
-			}
-			if ((rc==true && qr->negate_match_pattern==true) || ( rc==false && qr->negate_match_pattern==false )) {
-				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching pattern\n", qr->rule_id);
-				continue;
-			}
 		}
 
 		// if we arrived here, we have a match
