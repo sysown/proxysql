@@ -124,8 +124,9 @@ static void test_pool_empty() {
 // ============================================================================
 
 int main() {
-	plan(22);
-	test_init_minimal();
+	plan(23);
+	int rc = test_init_minimal();
+	ok(rc == 0, "test_init_minimal() succeeds");
 
 	test_eviction_below_threshold();   // 1
 	test_eviction_at_threshold();      // 1

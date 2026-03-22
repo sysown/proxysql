@@ -23,6 +23,13 @@ struct ConnectionPoolDecision {
 
 /**
  * @brief Calculate how many free connections to evict to stay within 75% of max.
+ *
+ * Eviction is triggered when (conns_free + conns_used) >= (3 * max_connections / 4).
+ * At least one connection is evicted when the threshold is crossed and conns_free > 0.
+ * When max_connections is 0, any free connections are subject to eviction since the
+ * 75% threshold is 0.
+ *
+ * @return Number of free connections to evict; 0 if eviction is not needed.
  */
 unsigned int calculate_eviction_count(unsigned int conns_free, unsigned int conns_used, unsigned int max_connections);
 
