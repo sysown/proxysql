@@ -13,6 +13,11 @@ Use this template when writing GitHub issues that will be assigned to AI coding 
 ```markdown
 ## Task: <one-line description>
 
+### FIRST: Git workflow (do this before reading anything else)
+- Create branch `<branch-name>` from `<base-branch>`
+- PR target: `<target-branch>`
+- If upstream changes needed: `git rebase`, NOT `git merge`
+
 ### Context
 <Why this task exists. Link to parent issue. What problem it solves.>
 
@@ -20,11 +25,6 @@ Use this template when writing GitHub issues that will be assigned to AI coding 
 - [ ] New file: `<exact/path/to/file>` — <what it does>
 - [ ] New file: `<exact/path/to/file>` — <what it does>
 - [ ] Modified: `<exact/path/to/file>` — <what changes>
-
-### Git workflow
-- Create branch `<branch-name>` from `<base-branch>`
-- PR target: `<target-branch>`
-- If upstream changes needed: `git rebase`, NOT `git merge`
 
 ### Implementation details
 <Describe the approach. Include function signatures, struct definitions,
