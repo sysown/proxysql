@@ -11,8 +11,6 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 
 INFRA=infra-$(basename $(dirname "$0") | sed 's/-g[0-9]//' | sed 's/_.*//')
 
-# destroy running infras
-${REPO_ROOT}/test/infra/control/infra-default/docker-compose-destroy.bash
 # cleanup
 mysql ${SSLOPT} -h127.0.0.1 -P6032 -uadmin -padmin -e " \
 DELETE FROM mysql_users; \
@@ -39,11 +37,11 @@ SAVE PGSQL SERVERS TO DISK; \
 " 2>&1 | grep -vP 'mysql: .?Warning'
 
 # load environment for infra
-source ${REPO_ROOT}/test/infra/control/${INFRA}/.env
+source ${REPO_ROOT}/test/infra/${INFRA}/.env
 
 # Start infra
 # ${REPO_ROOT}/test/infra/control/infra-docker-hoster/docker-compose-init.bash
-${REPO_ROOT}/test/infra/control/${INFRA}/docker-compose-init.bash
+${REPO_ROOT}/test/infra/${INFRA}/docker-compose-init.bash
 
 # create default users
 for MYUSER in root user testuser sbtest1 sbtest2 sbtest3 sbtest4 ssluser ; do
