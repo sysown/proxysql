@@ -180,7 +180,7 @@ int main() {
 	test_unshun_max_wait_minimum();    // 1
 	test_replication_lag_shun();       // 6
 	test_replication_lag_recovery();   // 4
-	// Total: 1+7+3+2+4+1+2+1+6+4 = 31... fix plan
+	// Total: 1+7+3+2+4+1+2+1+6+4 = 31
 
 	test_cleanup_minimal();
 	return exit_status();

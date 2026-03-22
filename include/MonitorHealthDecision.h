@@ -86,6 +86,10 @@ bool should_shun_on_replication_lag(
  * @param current_lag          Measured replication lag in seconds.
  * @param max_replication_lag  Configured max lag threshold.
  * @return true if the server's lag is now within acceptable bounds.
+ *
+ * @note Production code also has a special override path for
+ *       current_lag == -2 with an override flag (see issue #959).
+ *       That case is not covered by this simplified extraction.
  */
 bool can_recover_from_replication_lag(
 	int current_lag,

@@ -42,7 +42,7 @@ bool can_unshun_server(
 
 	// Mirror MyHGC recovery: compute max_wait_sec with timeout cap
 	int max_wait_sec;
-	if (shun_recovery_time_sec * 1000 >= connect_timeout_max_ms) {
+	if ((int64_t)shun_recovery_time_sec * 1000 >= connect_timeout_max_ms) {
 		max_wait_sec = connect_timeout_max_ms / 1000 - 1;
 	} else {
 		max_wait_sec = shun_recovery_time_sec;
