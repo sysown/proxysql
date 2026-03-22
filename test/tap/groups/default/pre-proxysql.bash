@@ -9,7 +9,7 @@ set -o pipefail
 
 # Start ProxySQL Cluster if available
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 "${REPO_ROOT}/test/infra/control/cluster_start.bash"
 "${REPO_ROOT}/test/infra/control/cluster_init.bash"
 
