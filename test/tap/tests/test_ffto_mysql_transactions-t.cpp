@@ -35,31 +35,15 @@
 /**
  * @brief Total number of planned TAP assertions.
  *
- * Breakdown:
- *  - Setup:                    1 (connect)
- *  - Scenario 1 (BEGIN/COMMIT): 4×3 = 12 (BEGIN, INSERT, INSERT digests, COMMIT)
- *                               — INSERT shares one digest with count=2
- *                               → actually 3 digests × 3 assertions = 9
- *  - Scenario 2 (ROLLBACK):    4×3 = 12 → 4 digests × 3 = 12
- *                               — but BEGIN reuses scenario 1 digest
- *                               → 3 new digests × 3 + reuse = still verify 4
- *
- * Simplified: we verify per-scenario after clearing stats each time.
- *  - Scenario 1: 3 verify_digest calls = 9 assertions
- *  - Scenario 2: 4 verify_digest calls = 12 assertions
- *  - Scenario 3: 1 verify_digest call  = 3 assertions
- *  - Scenario 4: 3 verify_digest calls = 9 assertions
+ * Breakdown (stats cleared between scenarios):
+ *  - Setup:      1 (connect ok)
+ *  - Scenario 1: 3 verify_digest calls (BEGIN, INSERT, COMMIT)         = 9
+ *  - Scenario 2: 4 verify_digest calls (BEGIN, INSERT, SELECT, ROLLBACK) = 12
+ *  - Scenario 3: 1 verify_digest call  (prepared INSERT ×20)           = 3
+ *  - Scenario 4: 3 verify_digest calls (SAVEPOINT, INSERT, RELEASE)    = 9
  *  Total = 1 + 9 + 12 + 3 + 9 = 34
- *
- * That's too many — let's trim to essential checks:
- *  - Scenario 1: verify BEGIN(1), INSERT(2 affected), COMMIT(1) = 9
- *  - Scenario 2: verify ROLLBACK(1), SELECT(1 row_sent) = 6
- *  - Scenario 3: verify prepared INSERT (20 executions, 20 affected) = 3
- *  - Scenario 4: verify SAVEPOINT(1), INSERT(1), RELEASE(1) = 9
- *  + 1 connect
- *  Total = 28
  */
-static constexpr int kPlannedTests = 28;
+static constexpr int kPlannedTests = 34;
 
 /** @copydoc FAIL_AND_SKIP_REMAINING */
 #define FAIL_AND_SKIP_REMAINING(cleanup_label, fmt, ...) \

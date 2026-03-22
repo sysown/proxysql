@@ -274,6 +274,7 @@ int main(int argc, char** argv) {
 
     thread_args args[NUM_THREADS];
     pthread_t threads[NUM_THREADS];
+    bool thread_created[NUM_THREADS] = {};
 
     for (int i = 0; i < NUM_THREADS; i++) {
         args[i].thread_id = i;
@@ -286,11 +287,15 @@ int main(int argc, char** argv) {
             diag("Failed to create thread %d", i);
             std::lock_guard<std::mutex> lock(tap_mutex);
             ok(0, "Thread %d creation failed", i);
+        } else {
+            thread_created[i] = true;
         }
     }
 
     for (int i = 0; i < NUM_THREADS; i++) {
-        pthread_join(threads[i], NULL);
+        if (thread_created[i]) {
+            pthread_join(threads[i], NULL);
+        }
     }
 
     /* ── Aggregate stats verification ───────────────────────────────── */
