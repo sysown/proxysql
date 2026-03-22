@@ -20,7 +20,12 @@ int determine_backend_sync_actions(
 	int actions = SYNC_NONE;
 
 	// Username mismatch → CHANGE USER required
-	if (client_user && backend_user) {
+	// Asymmetric NULLs (one set, other not) count as mismatch
+	if (client_user == nullptr && backend_user != nullptr) {
+		actions |= SYNC_USER;
+	} else if (client_user != nullptr && backend_user == nullptr) {
+		actions |= SYNC_USER;
+	} else if (client_user && backend_user) {
 		if (strcmp(client_user, backend_user) != 0) {
 			actions |= SYNC_USER;
 		}
@@ -29,7 +34,11 @@ int determine_backend_sync_actions(
 	// Schema mismatch → USE <db> required
 	// Only check if usernames match (user change handles schema too)
 	if (!(actions & SYNC_USER)) {
-		if (client_schema && backend_schema) {
+		if (client_schema == nullptr && backend_schema != nullptr) {
+			actions |= SYNC_SCHEMA;
+		} else if (client_schema != nullptr && backend_schema == nullptr) {
+			actions |= SYNC_SCHEMA;
+		} else if (client_schema && backend_schema) {
 			if (strcmp(client_schema, backend_schema) != 0) {
 				actions |= SYNC_SCHEMA;
 			}

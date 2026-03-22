@@ -52,15 +52,24 @@ static void test_multiple_mismatches() {
 
 static void test_null_handling() {
 	// null users — no crash
+	// Asymmetric NULL: one side null, other not → mismatch
 	int a = determine_backend_sync_actions(nullptr, "user", "db", "db", true, true);
-	ok(a == SYNC_NONE || a >= 0, "null client_user: no crash");
+	ok((a & SYNC_USER) != 0, "null client_user + non-null backend → SYNC_USER");
 
 	a = determine_backend_sync_actions("user", nullptr, "db", "db", true, true);
-	ok(a == SYNC_NONE || a >= 0, "null backend_user: no crash");
+	ok((a & SYNC_USER) != 0, "non-null client_user + null backend → SYNC_USER");
+
+	// Both null → no mismatch
+	a = determine_backend_sync_actions(nullptr, nullptr, "db", "db", true, true);
+	ok(a == SYNC_NONE, "both users null → no sync");
+
+	// Schema asymmetric null
+	a = determine_backend_sync_actions("user", "user", nullptr, "db", true, true);
+	ok((a & SYNC_SCHEMA) != 0, "null client_schema + non-null backend → SYNC_SCHEMA");
 }
 
 int main() {
-	plan(15);
+	plan(17);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -70,8 +79,8 @@ int main() {
 	test_user_and_schema_mismatch(); // 2
 	test_autocommit_mismatch();      // 2
 	test_multiple_mismatches();      // 2
-	test_null_handling();            // 2
-	// Total: 1+2+2+2+2+2+2+2 = 15
+	test_null_handling();            // 4
+	// Total: 1+2+2+2+2+2+2+4 = 17
 
 	test_cleanup_minimal();
 	return exit_status();
