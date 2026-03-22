@@ -11,6 +11,7 @@
  */
 
 #include "MonitorHealthDecision.h"
+#include <cstdint>
 
 bool should_shun_on_connect_errors(
 	unsigned int errors_this_second,
