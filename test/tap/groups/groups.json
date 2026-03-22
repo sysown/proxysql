@@ -226,6 +226,7 @@
   "test_ffto_pgsql-t": [ "legacy-g4","mysql84-g4" ],
   "test_load_from_config_validation-t" : [ "legacy-g4","mysql84-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4" ],
   "test_load_from_config_prefix_stripping-t" : [ "legacy-g4","mysql84-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4" ],
+  "test_load_restapi_from_config_startup-t" : [ "legacy-g4","mysql84-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4" ],
   "mysql-show_ssl_version-t": [ "legacy-g4","mysql84-g4", "mysql-auto_increment_delay_multiplex=0-g4", "mysql-multiplexing=false-g4", "mysql-query_digests=0-g4", "mysql-query_digests_keep_comment=1-g4" ],
   "mysql-watchdog_test-t": [ "legacy-g4","mysql84-g4", "mysql-auto_increment_delay_multiplex=0-g4", "mysql-multiplexing=false-g4", "mysql-query_digests=0-g4", "mysql-query_digests_keep_comment=1-g4" ],
   "pgsql-extended_query_protocol_query_rules_test-t": [ "legacy-g4", "mysql-auto_increment_delay_multiplex=0-g4", "mysql-multiplexing=false-g4", "mysql-query_digests=0-g4", "mysql-query_digests_keep_comment=1-g4" ],
