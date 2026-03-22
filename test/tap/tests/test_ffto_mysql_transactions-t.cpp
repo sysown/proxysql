@@ -210,7 +210,12 @@ int main(int argc, char** argv) {
      *  - COMMIT: count_star=1, rows_affected=0, rows_sent=0
      * ================================================================ */
     diag("--- Scenario 1: BEGIN / INSERT / INSERT / COMMIT ---");
-    MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest");
+    /* Use _reset table to atomically clear digest stats */
+    {
+        MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
+        MYSQL_RES* r = mysql_store_result(admin);
+        if (r) mysql_free_result(r);
+    }
 
     EXEC_QUERY(conn, "BEGIN");
     EXEC_QUERY(conn, "INSERT INTO ffto_txn (id, val) VALUES (1, 'txn_a')");
@@ -228,7 +233,12 @@ int main(int argc, char** argv) {
      * The SELECT within the transaction should see the uncommitted row.
      * ================================================================ */
     diag("--- Scenario 2: BEGIN / INSERT / SELECT / ROLLBACK ---");
-    MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest");
+    /* Use _reset table to atomically clear digest stats */
+    {
+        MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
+        MYSQL_RES* r = mysql_store_result(admin);
+        if (r) mysql_free_result(r);
+    }
 
     EXEC_QUERY(conn, "BEGIN");
     EXEC_QUERY(conn, "INSERT INTO ffto_txn (id, val) VALUES (100, 'rollback_me')");
@@ -266,7 +276,12 @@ int main(int argc, char** argv) {
 
     /* Clean table state */
     EXEC_QUERY(conn, "DELETE FROM ffto_txn");
-    MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest");
+    /* Use _reset table to atomically clear digest stats */
+    {
+        MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
+        MYSQL_RES* r = mysql_store_result(admin);
+        if (r) mysql_free_result(r);
+    }
 
     {
         const char* ps_query = "INSERT INTO ffto_txn (id, val) VALUES (?, ?)";
@@ -319,7 +334,12 @@ int main(int argc, char** argv) {
      * ================================================================ */
     diag("--- Scenario 4: SAVEPOINT / INSERT / RELEASE ---");
     EXEC_QUERY(conn, "DELETE FROM ffto_txn");
-    MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest");
+    /* Use _reset table to atomically clear digest stats */
+    {
+        MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
+        MYSQL_RES* r = mysql_store_result(admin);
+        if (r) mysql_free_result(r);
+    }
 
     EXEC_QUERY(conn, "BEGIN");
     EXEC_QUERY(conn, "SAVEPOINT sp1");

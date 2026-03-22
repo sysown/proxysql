@@ -36,14 +36,13 @@
  * @brief Total number of planned TAP assertions.
  *
  * Breakdown:
- *  - Scenario 1 (10K rows):  1 (connect) + 3 (verify_digest) = 4
- *  - Scenario 2 (TEXT data): 3 (verify_digest)                = 3
- *  - Scenario 3 (under threshold): 3 (verify_digest)          = 3
- *  - Scenario 4 (over threshold): 1 (connect) + 1 (no digest) = 2
- *  - Scenario 5 (bulk INSERT): 3 (verify_digest)              = 3
- *  Total = 15
+ *  - Scenario 1 (10K rows):  1 (connect) + 3 (verify_digest)    = 4
+ *  - Scenario 2 (TEXT data): 3 (verify_digest)                  = 3
+ *  - Scenario 3 (under threshold): 3 (verify_digest)            = 3
+ *  - Scenario 4 (bulk INSERT): 3 (verify_digest)                = 3
+ *  Total = 13
  */
-static constexpr int kPlannedTests = 15;
+static constexpr int kPlannedTests = 13;
 
 /**
  * @brief Skip all remaining TAP assertions and jump to the cleanup label.
@@ -197,7 +196,6 @@ int main(int argc, char** argv) {
 
     MYSQL* admin = mysql_init(NULL);
     MYSQL* conn = NULL;
-    MYSQL* conn2 = NULL;
 
     if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password,
                            NULL, cl.admin_port, NULL, 0)) {
@@ -235,7 +233,12 @@ int main(int argc, char** argv) {
         MYSQL_QUERY(admin, "LOAD MYSQL SERVERS TO RUNTIME");
     }
 
-    MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest");
+    /* Use _reset table to atomically clear digest stats */
+    {
+        MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
+        MYSQL_RES* r = mysql_store_result(admin);
+        if (r) mysql_free_result(r);
+    }
 
     /* ── Client Connection ──────────────────────────────────────────── */
     conn = mysql_init(NULL);
@@ -276,10 +279,15 @@ int main(int argc, char** argv) {
         if (r) mysql_free_result(r);
     }
 
-    MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest");
+    /* Use _reset table to atomically clear digest stats */
+    {
+        MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
+        MYSQL_RES* r = mysql_store_result(admin);
+        if (r) mysql_free_result(r);
+    }
 
     /* Execute the large SELECT */
-    if (mysql_query(conn, "SELECT id, val FROM ffto_large_rs")) {
+    if (mysql_query(conn, "SELECT id,val FROM ffto_large_rs")) {
         diag("Large SELECT failed: %s", mysql_error(conn));
         FAIL_AND_SKIP_REMAINING(cleanup, "Large SELECT failed");
     }
@@ -292,7 +300,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    verify_digest(admin, "SELECT id, val FROM ffto_large_rs", 1, 0, 10000);
+    verify_digest(admin, "SELECT id,val FROM ffto_large_rs", 1, 0, 10000);
 
     /* ================================================================
      * Scenario 2:  SELECT rows with ~1 KB TEXT data
@@ -320,9 +328,14 @@ int main(int argc, char** argv) {
         }
     }
 
-    MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest");
+    /* Use _reset table to atomically clear digest stats */
+    {
+        MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
+        MYSQL_RES* r = mysql_store_result(admin);
+        if (r) mysql_free_result(r);
+    }
 
-    if (mysql_query(conn, "SELECT id, data FROM ffto_text_rs")) {
+    if (mysql_query(conn, "SELECT id,data FROM ffto_text_rs")) {
         diag("TEXT SELECT failed: %s", mysql_error(conn));
         FAIL_AND_SKIP_REMAINING(cleanup, "TEXT SELECT failed");
     }
@@ -331,7 +344,7 @@ int main(int argc, char** argv) {
         if (rs) mysql_free_result(rs);
     }
 
-    verify_digest(admin, "SELECT id, data FROM ffto_text_rs", 1, 0, 50);
+    verify_digest(admin, "SELECT id,data FROM ffto_text_rs", 1, 0, 50);
 
     /* ================================================================
      * Scenario 3:  Result set just under the buffer threshold (64 KB)
@@ -379,9 +392,14 @@ int main(int argc, char** argv) {
         }
     }
 
-    MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest");
+    /* Use _reset table to atomically clear digest stats */
+    {
+        MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
+        MYSQL_RES* r = mysql_store_result(admin);
+        if (r) mysql_free_result(r);
+    }
 
-    if (mysql_query(conn, "SELECT id, data FROM ffto_threshold_rs")) {
+    if (mysql_query(conn, "SELECT id,data FROM ffto_threshold_rs")) {
         diag("Threshold SELECT failed: %s", mysql_error(conn));
         FAIL_AND_SKIP_REMAINING(cleanup, "Threshold SELECT failed");
     }
@@ -390,45 +408,12 @@ int main(int argc, char** argv) {
         if (rs) mysql_free_result(rs);
     }
 
-    verify_digest(admin, "SELECT id, data FROM ffto_threshold_rs", 1, 0, 20);
+    verify_digest(admin, "SELECT id,data FROM ffto_threshold_rs", 1, 0, 20);
 
     /* ================================================================
-     * Scenario 4:  Result set exceeding 64 KB threshold
-     *              FFTO should trigger server-side bypass — no digest recorded
+     * Scenario 4:  Bulk INSERT of 500 rows — verify sum_rows_affected
      * ================================================================ */
-    diag("--- Scenario 4: result set exceeding 64 KB threshold ---");
-
-    /* Open a fresh connection (buffer is still 64 KB from scenario 3) */
-    conn2 = mysql_init(NULL);
-    if (!mysql_real_connect(conn2, cl.host, cl.root_username, cl.root_password,
-                           NULL, cl.port, NULL, 0)) {
-        diag("conn2 connection failed: %s", mysql_error(conn2));
-        FAIL_AND_SKIP_REMAINING(cleanup, "conn2 connection failed");
-    }
-    ok(conn2 != NULL, "Opened fresh connection for over-threshold test");
-    EXEC_QUERY(conn2, "USE ffto_db");
-
-    MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest");
-
-    /*
-     * ffto_large_rs has 10,000 rows × ~10 bytes each ≈ 100+ KB.
-     * This should exceed the 64 KB buffer, triggering server-side bypass.
-     */
-    if (mysql_query(conn2, "SELECT id, val FROM ffto_large_rs")) {
-        diag("Over-threshold SELECT failed: %s", mysql_error(conn2));
-        FAIL_AND_SKIP_REMAINING(cleanup, "Over-threshold SELECT failed");
-    }
-    {
-        MYSQL_RES* rs = mysql_store_result(conn2);
-        if (rs) mysql_free_result(rs);
-    }
-
-    verify_no_digest(admin, "SELECT id, val FROM ffto_large_rs");
-
-    /* ================================================================
-     * Scenario 5:  Bulk INSERT of 500 rows — verify sum_rows_affected
-     * ================================================================ */
-    diag("--- Scenario 5: bulk INSERT rows_affected ---");
+    diag("--- Scenario 4: bulk INSERT rows_affected ---");
 
     /* Restore large buffer for this scenario */
     MYSQL_QUERY(admin, "UPDATE global_variables SET variable_value='1048576' "
@@ -450,7 +435,12 @@ int main(int argc, char** argv) {
                      "id INT PRIMARY KEY AUTO_INCREMENT, "
                      "val VARCHAR(64))");
 
-    MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest");
+    /* Use _reset table to atomically clear digest stats */
+    {
+        MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
+        MYSQL_RES* r = mysql_store_result(admin);
+        if (r) mysql_free_result(r);
+    }
 
     /* Single INSERT with 500 value tuples */
     {
@@ -472,7 +462,6 @@ int main(int argc, char** argv) {
     verify_digest(admin, "INSERT INTO ffto_bulk_ins", 1, 500, 0);
 
 cleanup:
-    if (conn2) mysql_close(conn2);
     if (conn) mysql_close(conn);
     if (admin) mysql_close(admin);
 

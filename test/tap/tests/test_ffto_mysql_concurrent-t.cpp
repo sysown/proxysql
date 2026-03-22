@@ -270,7 +270,12 @@ int main(int argc, char** argv) {
     ok(1, "Test table ffto_concurrent created with 100 seed rows");
 
     /* ── Clear stats and launch threads ─────────────────────────────── */
-    MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest");
+    /* Use _reset table to atomically clear digest stats */
+    {
+        MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
+        MYSQL_RES* r = mysql_store_result(admin);
+        if (r) mysql_free_result(r);
+    }
 
     thread_args args[NUM_THREADS];
     pthread_t threads[NUM_THREADS];

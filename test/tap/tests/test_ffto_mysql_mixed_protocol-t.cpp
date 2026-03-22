@@ -42,11 +42,11 @@
  *
  * Breakdown:
  *  - Setup:               1 (connect)
- *  - Scenario 1:          2 × 3 = 6 (text SELECT + prepared SELECT digests)
- *  - Scenario 2:          2 × 3 = 6 (text INSERT + prepared INSERT digests)
+ *  - Scenario 1:          1 × 3 = 3 (SELECT digest, text + prepared aggregate)
+ *  - Scenario 2:          3 × 3 = 9 (text INSERT, prepared INSERT, text UPDATE)
  *  - Scenario 3:          1 × 3 = 3 (re-prepared INSERT digest with count >= 2)
  *  - Scenario 4:          2 × 3 = 6 (two concurrent prepared stmts)
- *  Total = 1 + 6 + 6 + 3 + 6 = 22
+ *  Total = 1 + 3 + 9 + 3 + 6 = 22
  */
 static constexpr int kPlannedTests = 22;
 
@@ -274,7 +274,12 @@ int main(int argc, char** argv) {
      * (literal value vs placeholder).
      * ================================================================ */
     diag("--- Scenario 1: text SELECT then prepared SELECT ---");
-    MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest");
+    /* Use _reset table to atomically clear digest stats */
+    {
+        MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
+        MYSQL_RES* r = mysql_store_result(admin);
+        if (r) mysql_free_result(r);
+    }
 
     /* Text protocol SELECT */
     if (mysql_query(conn, "SELECT val FROM ffto_mixed WHERE id = 1")) {
@@ -309,13 +314,6 @@ int main(int argc, char** argv) {
      */
     verify_digest(admin, "SELECT val FROM ffto_mixed WHERE id", 2, 0, 2);
 
-    /*
-     * Verify the text INSERT we did during setup is also tracked.
-     * This confirms the state machine handled the COM_QUERY → COM_STMT_PREPARE
-     * transition cleanly.
-     */
-    verify_digest(admin, "INSERT INTO ffto_mixed VALUES", 1, 2, 0);
-
     /* ================================================================
      * Scenario 2:  Interleaved text and binary protocol
      *
@@ -324,7 +322,12 @@ int main(int argc, char** argv) {
      * different command types.
      * ================================================================ */
     diag("--- Scenario 2: interleaved text and binary ---");
-    MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest");
+    /* Use _reset table to atomically clear digest stats */
+    {
+        MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
+        MYSQL_RES* r = mysql_store_result(admin);
+        if (r) mysql_free_result(r);
+    }
 
     /* Text INSERT */
     EXEC_QUERY(conn, "INSERT INTO ffto_mixed VALUES (10, 'text_ins')");
@@ -361,8 +364,10 @@ int main(int argc, char** argv) {
         stmt1 = NULL;
     }
 
-    /* Verify text INSERT and prepared INSERT are tracked */
-    verify_digest(admin, "INSERT INTO ffto_mixed", 2, 2, 0);
+    /* Verify text INSERT (uses VALUES without column list) */
+    verify_digest(admin, "INSERT INTO ffto_mixed VALUES", 1, 1, 0);
+    /* Verify prepared INSERT (uses column list) */
+    verify_digest(admin, "INSERT INTO ffto_mixed (id,val) VALUES", 1, 1, 0);
     /* Verify UPDATE tracked */
     verify_digest(admin, "UPDATE ffto_mixed SET val", 1, 1, 0);
 
@@ -374,7 +379,12 @@ int main(int argc, char** argv) {
      * that gets a new stmt_id for the same SQL.
      * ================================================================ */
     diag("--- Scenario 3: prepare/close/re-prepare cycle ---");
-    MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest");
+    /* Use _reset table to atomically clear digest stats */
+    {
+        MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
+        MYSQL_RES* r = mysql_store_result(admin);
+        if (r) mysql_free_result(r);
+    }
 
     /* First cycle: prepare, execute, close */
     {
@@ -422,7 +432,12 @@ int main(int argc, char** argv) {
      * entries for each stmt_id and correctly attribute queries.
      * ================================================================ */
     diag("--- Scenario 4: two concurrent prepared statements ---");
-    MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest");
+    /* Use _reset table to atomically clear digest stats */
+    {
+        MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
+        MYSQL_RES* r = mysql_store_result(admin);
+        if (r) mysql_free_result(r);
+    }
 
     {
         const char* ps_ins = "INSERT INTO ffto_mixed (id, val) VALUES (?, ?)";

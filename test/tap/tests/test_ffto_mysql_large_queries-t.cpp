@@ -207,7 +207,12 @@ int main(int argc, char** argv) {
         MYSQL_QUERY(admin, "LOAD MYSQL SERVERS TO RUNTIME");
     }
 
-    MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest");
+    /* Use _reset table to atomically clear digest stats */
+    {
+        MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
+        MYSQL_RES* r = mysql_store_result(admin);
+        if (r) mysql_free_result(r);
+    }
 
     /* ── Client Connection ──────────────────────────────────────────── */
     conn = mysql_init(NULL);
@@ -246,7 +251,12 @@ int main(int argc, char** argv) {
      * Scenario 1:  Long INSERT (~10 KB VALUES clause) within 1 MB buffer
      * ================================================================ */
     diag("--- Scenario 1: long INSERT within buffer ---");
-    MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest");
+    /* Use _reset table to atomically clear digest stats */
+    {
+        MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
+        MYSQL_RES* r = mysql_store_result(admin);
+        if (r) mysql_free_result(r);
+    }
 
     EXEC_QUERY(conn, "DROP TABLE IF EXISTS ffto_long_ins");
     EXEC_QUERY(conn, "CREATE TABLE ffto_long_ins ("
@@ -263,7 +273,12 @@ int main(int argc, char** argv) {
             ins += v;
         }
         diag("Long INSERT query length: %zu bytes", ins.size());
-        MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest");
+        /* Use _reset table to atomically clear digest stats */
+    {
+        MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
+        MYSQL_RES* r = mysql_store_result(admin);
+        if (r) mysql_free_result(r);
+    }
 
         if (mysql_query(conn, ins.c_str())) {
             diag("Long INSERT failed: %s", mysql_error(conn));
@@ -279,7 +294,12 @@ int main(int argc, char** argv) {
      * Scenario 2:  Long WHERE clause with IN list (2000 elements)
      * ================================================================ */
     diag("--- Scenario 2: long WHERE IN clause ---");
-    MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest");
+    /* Use _reset table to atomically clear digest stats */
+    {
+        MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
+        MYSQL_RES* r = mysql_store_result(admin);
+        if (r) mysql_free_result(r);
+    }
 
     {
         std::string sel = "SELECT id, val FROM ffto_lq WHERE id IN (";
@@ -303,7 +323,7 @@ int main(int argc, char** argv) {
         diag("Long WHERE SELECT returned %llu rows", (unsigned long long)num_rows);
     }
 
-    verify_digest(admin, "SELECT id, val FROM ffto_lq WHERE id IN", 1, 0, 2000);
+    verify_digest(admin, "SELECT id,val FROM ffto_lq WHERE id IN", 1, 0, 2000);
 
     /* ================================================================
      * Scenario 3:  Query exceeding 1 KB buffer — client-side bypass
@@ -325,7 +345,12 @@ int main(int argc, char** argv) {
     ok(conn_bypass != NULL, "Fresh connection for client-side bypass test");
     EXEC_QUERY(conn_bypass, "USE ffto_db");
 
-    MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest");
+    /* Use _reset table to atomically clear digest stats */
+    {
+        MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
+        MYSQL_RES* r = mysql_store_result(admin);
+        if (r) mysql_free_result(r);
+    }
 
     /* Build a query > 1024 bytes (MySQL packet payload = 1 byte cmd + SQL text) */
     {
@@ -355,7 +380,12 @@ int main(int argc, char** argv) {
     MYSQL_QUERY(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
     /* Reuse conn (still has the original 1 MB buffer from its session creation) */
-    MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest");
+    /* Use _reset table to atomically clear digest stats */
+    {
+        MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
+        MYSQL_RES* r = mysql_store_result(admin);
+        if (r) mysql_free_result(r);
+    }
 
     for (int i = 0; i < 100; i++) {
         if (mysql_query(conn, "SELECT 1 AS rapid_fire")) {
@@ -372,7 +402,12 @@ int main(int argc, char** argv) {
      * Scenario 5:  10 distinct queries in rapid succession
      * ================================================================ */
     diag("--- Scenario 5: 10 distinct queries ---");
-    MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest");
+    /* Use _reset table to atomically clear digest stats */
+    {
+        MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
+        MYSQL_RES* r = mysql_store_result(admin);
+        if (r) mysql_free_result(r);
+    }
 
     for (int i = 0; i < 10; i++) {
         char q[256];

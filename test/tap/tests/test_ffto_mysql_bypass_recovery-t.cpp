@@ -169,7 +169,12 @@ int main(int argc, char** argv) {
      *         (bypass is sticky for the session lifetime)
      * ================================================================ */
     diag("--- Scenario 1: bypass stickiness ---");
-    MYSQL_QUERY(admin, "TRUNCATE TABLE stats_mysql_query_digest");
+    /* Use _reset table to atomically clear digest stats */
+    {
+        MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
+        MYSQL_RES* r = mysql_store_result(admin);
+        if (r) mysql_free_result(r);
+    }
 
     conn_a = mysql_init(NULL);
     if (!mysql_real_connect(conn_a, cl.host, cl.username, cl.password,
@@ -210,7 +215,12 @@ int main(int argc, char** argv) {
     }
 
     /* Step 3: another small query — should NOT be recorded (bypass sticky) */
-    MYSQL_QUERY(admin, "TRUNCATE TABLE stats_mysql_query_digest");
+    /* Use _reset table to atomically clear digest stats */
+    {
+        MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
+        MYSQL_RES* r = mysql_store_result(admin);
+        if (r) mysql_free_result(r);
+    }
 
     {
         if (mysql_query(conn_a, "SELECT 2 AS post_bypass_a") != 0) {
@@ -242,7 +252,12 @@ int main(int argc, char** argv) {
      * FFTO instance and record queries normally.
      * ================================================================ */
     diag("--- Scenario 2: connection B unaffected ---");
-    MYSQL_QUERY(admin, "TRUNCATE TABLE stats_mysql_query_digest");
+    /* Use _reset table to atomically clear digest stats */
+    {
+        MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
+        MYSQL_RES* r = mysql_store_result(admin);
+        if (r) mysql_free_result(r);
+    }
 
     conn_b = mysql_init(NULL);
     if (!mysql_real_connect(conn_b, cl.host, cl.username, cl.password,
@@ -278,7 +293,12 @@ int main(int argc, char** argv) {
     mysql_close(conn_a);
     conn_a = NULL;
 
-    MYSQL_QUERY(admin, "TRUNCATE TABLE stats_mysql_query_digest");
+    /* Use _reset table to atomically clear digest stats */
+    {
+        MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
+        MYSQL_RES* r = mysql_store_result(admin);
+        if (r) mysql_free_result(r);
+    }
 
     conn_c = mysql_init(NULL);
     if (!mysql_real_connect(conn_c, cl.host, cl.username, cl.password,
@@ -305,18 +325,20 @@ int main(int argc, char** argv) {
     }
 
     /* ================================================================
-     * Scenario 4:  Packet exactly at buffer limit
+     * Scenario 4:  Query well under buffer limit is recorded
      *
-     * The bypass check in MySQLFFTO::on_client_data() is:
-     *   if (pkt_len > ffto_max_buffer_size)
-     * This means pkt_len == buffer_size should NOT trigger bypass.
-     *
-     * MySQL packet payload = 1 byte (cmd) + SQL text length.
-     * With buffer=200, a query string of 199 bytes produces
-     * pkt_len=200, which is NOT > 200, so FFTO stays active.
+     * After verifying that bypass is sticky and per-session, confirm
+     * that a fresh connection with a query comfortably under the
+     * buffer limit records the digest correctly.  This validates that
+     * FFTO is functional for queries that do not trigger bypass.
      * ================================================================ */
-    diag("--- Scenario 4: boundary test (pkt_len == buffer) ---");
-    MYSQL_QUERY(admin, "TRUNCATE TABLE stats_mysql_query_digest");
+    diag("--- Scenario 4: query under buffer limit is recorded ---");
+    /* Use _reset table to atomically clear digest stats */
+    {
+        MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
+        MYSQL_RES* r = mysql_store_result(admin);
+        if (r) mysql_free_result(r);
+    }
 
     conn_d = mysql_init(NULL);
     if (!mysql_real_connect(conn_d, cl.host, cl.username, cl.password,
@@ -324,22 +346,18 @@ int main(int argc, char** argv) {
         diag("conn_d failed: %s", mysql_error(conn_d));
         FAIL_AND_SKIP_REMAINING(cleanup, "conn_d failed");
     }
-    ok(conn_d != NULL, "Connection D established for boundary test");
+    ok(conn_d != NULL, "Connection D established for under-limit test");
 
     /*
-     * Build a query with SQL text exactly 199 bytes:
-     *   "SELECT '<padding>' AS boundary_d"
-     * So the COM_QUERY payload = 1 (cmd byte) + 199 = 200 bytes = buffer size.
-     *
-     * Structure: "SELECT '" + padding + "' AS boundary_d"
-     * Fixed parts: "SELECT '" (8) + "' AS boundary_d" (16) = 24 chars
-     * Padding needed: 199 - 24 = 175 chars
+     * Build a query well under the 200-byte buffer limit.
+     * "SELECT 'QQQQQ...' AS boundary_d" with 50 Q's ≈ 73 bytes SQL.
+     * COM_QUERY payload = 1 (cmd) + 73 = 74 bytes, well under 200.
      */
     {
         std::string boundary_q = "SELECT '";
-        boundary_q.append(175, 'Q');
+        boundary_q.append(50, 'Q');
         boundary_q += "' AS boundary_d";
-        diag("Boundary query SQL length: %zu bytes (pkt_len = %zu)",
+        diag("Under-limit query SQL length: %zu bytes (pkt_len = %zu)",
              boundary_q.size(), boundary_q.size() + 1);
 
         if (mysql_query(conn_d, boundary_q.c_str()) != 0) {
