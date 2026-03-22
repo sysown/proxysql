@@ -97,6 +97,7 @@ void verify_digest(MYSQL* admin, const char* template_text, int expected_count,
         int rc = run_q(admin, query);
         if (rc != 0) { usleep(100000); continue; }
         res = mysql_store_result(admin);
+        if (!res) { usleep(100000); continue; }
         row = mysql_fetch_row(res);
         if (row) break;
         mysql_free_result(res);
@@ -150,7 +151,7 @@ void verify_no_digest(MYSQL* admin, const char* template_text) {
         template_text);
     run_q(admin, query);
     MYSQL_RES* res = mysql_store_result(admin);
-    MYSQL_ROW row = mysql_fetch_row(res);
+    MYSQL_ROW row = res ? mysql_fetch_row(res) : NULL;
     int count = row ? atoi(row[0]) : -1;
     ok(count == 0, "No digest recorded for '%s' (count: %d)", template_text, count);
     if (res) mysql_free_result(res);
@@ -428,6 +429,7 @@ int main(int argc, char** argv) {
         for (int attempt = 0; attempt < 20; attempt++) {
             run_q(admin, check);
             MYSQL_RES* res = mysql_store_result(admin);
+        if (!res) { usleep(100000); continue; }
             MYSQL_ROW row = mysql_fetch_row(res);
             count = row ? atoi(row[0]) : 0;
             mysql_free_result(res);

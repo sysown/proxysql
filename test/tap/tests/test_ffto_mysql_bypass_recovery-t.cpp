@@ -81,6 +81,7 @@ static int poll_digest_count(MYSQL* admin, const char* template_text, int max_at
     for (int attempt = 0; attempt < max_attempts; attempt++) {
         run_q(admin, query);
         MYSQL_RES* res = mysql_store_result(admin);
+        if (!res) { usleep(100000); continue; }
         MYSQL_ROW row = mysql_fetch_row(res);
         count = row ? atoi(row[0]) : 0;
         if (res) mysql_free_result(res);
@@ -237,7 +238,7 @@ int main(int argc, char** argv) {
         run_q(admin, "SELECT count(*) FROM stats_mysql_query_digest "
                      "WHERE digest_text LIKE '%post_bypass_a%'");
         MYSQL_RES* res = mysql_store_result(admin);
-        MYSQL_ROW row = mysql_fetch_row(res);
+        MYSQL_ROW row = res ? mysql_fetch_row(res) : NULL;
         int count = row ? atoi(row[0]) : -1;
         ok(count == 0,
            "Post-bypass query NOT recorded on conn A (bypass sticky, count: %d)", count);
