@@ -5,14 +5,13 @@
  * Validates that the Fast Forward Traffic Observer (FFTO) correctly tracks
  * query digest statistics when queries produce large result sets. Exercises
  * the FFTO row-counting state machine (`READING_ROWS`) under sustained load
- * and verifies buffer-threshold bypass behavior for server-side responses.
+ * and verifies row counting under sustained load.
  *
  * @par Test scenarios
  *  1. SELECT returning 10,000 rows — verify `sum_rows_sent` accuracy
  *  2. SELECT returning rows with large TEXT payload (~1 KB each)
- *  3. Result set just under `ffto_max_buffer_size` — FFTO stays active
- *  4. Result set exceeding buffer threshold — FFTO triggers bypass
- *  5. Bulk INSERT of 500 rows — verify `sum_rows_affected` accuracy
+ *  3. Result set under reconfigured threshold — FFTO stays active
+ *  4. Bulk INSERT of 500 rows — verify `sum_rows_affected` accuracy
  *
  * @pre  ProxySQL running with a MySQL backend, reachable via the standard
  *       TAP environment variables (TAP_HOST, TAP_PORT, etc.).

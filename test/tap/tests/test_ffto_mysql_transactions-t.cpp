@@ -347,9 +347,40 @@ int main(int argc, char** argv) {
     EXEC_QUERY(conn, "RELEASE SAVEPOINT sp1");
     EXEC_QUERY(conn, "COMMIT");
 
-    verify_digest(admin, "SAVEPOINT sp1", 1, 0, 0);
-    verify_digest(admin, "INSERT INTO ffto_txn", 1, 1, 0);
+    /* Use exact digest_text match to disambiguate SAVEPOINT from RELEASE SAVEPOINT */
     verify_digest(admin, "RELEASE SAVEPOINT sp1", 1, 0, 0);
+    verify_digest(admin, "INSERT INTO ffto_txn", 1, 1, 0);
+    /* For plain SAVEPOINT, query with NOT LIKE to exclude RELEASE variant */
+    {
+        char q[512];
+        snprintf(q, sizeof(q),
+            "SELECT count_star, sum_rows_affected, sum_rows_sent, digest_text "
+            "FROM stats_mysql_query_digest WHERE digest_text LIKE '%%SAVEPOINT sp1%%' "
+            "AND digest_text NOT LIKE '%%RELEASE%%'");
+        MYSQL_RES* res = NULL;
+        MYSQL_ROW row = NULL;
+        for (int attempt = 0; attempt < 20; attempt++) {
+            int rc = run_q(admin, q);
+            if (rc != 0) { usleep(100000); continue; }
+            res = mysql_store_result(admin);
+            row = mysql_fetch_row(res);
+            if (row) break;
+            mysql_free_result(res); res = NULL;
+            usleep(100000);
+        }
+        if (row) {
+            int count = atoi(row[0]);
+            uint64_t ra = strtoull(row[1], NULL, 10);
+            uint64_t rs = strtoull(row[2], NULL, 10);
+            ok(count >= 1, "Digest count for '%s': %d (>= 1)", row[3], count);
+            ok(ra == 0, "rows_affected for '%s': %llu (== 0)", row[3], (unsigned long long)ra);
+            ok(rs == 0, "rows_sent for '%s': %llu (== 0)", row[3], (unsigned long long)rs);
+        } else {
+            ok(0, "SAVEPOINT sp1 digest not found (excluding RELEASE)");
+            ok(0, "Skipping rows_affected"); ok(0, "Skipping rows_sent");
+        }
+        if (res) mysql_free_result(res);
+    }
 
 cleanup:
     if (stmt) mysql_stmt_close(stmt);

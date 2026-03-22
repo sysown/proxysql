@@ -142,6 +142,12 @@ static void* worker_thread(void* arg) {
             break;
         }
         MYSQL_RES* rs = mysql_store_result(conn);
+        if (!rs && mysql_field_count(conn) > 0) {
+            std::lock_guard<std::mutex> lock(tap_mutex);
+            diag("Thread %d: SELECT %d store_result failed: %s",
+                 ta->thread_id, i, mysql_error(conn));
+            break;
+        }
         if (rs) mysql_free_result(rs);
         total_ok++;
     }

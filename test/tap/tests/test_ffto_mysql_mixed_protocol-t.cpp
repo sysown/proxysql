@@ -14,7 +14,7 @@
  * tracking).  These tests exercise the transitions.
  *
  * @par Test scenarios
- *  1. Text SELECT followed by prepared SELECT — separate digests
+ *  1. Text SELECT followed by prepared SELECT — normalized to same digest
  *  2. Interleaved text and binary (INSERT, UPDATE, SELECT mix)
  *  3. Prepare → execute → close → re-prepare → execute same SQL
  *  4. Two prepared statements active simultaneously, interleaved
@@ -359,7 +359,10 @@ int main(int argc, char** argv) {
             diag("Prepare SELECT failed: %s", mysql_stmt_error(stmt1));
             FAIL_AND_SKIP_REMAINING(cleanup, "Prepare SELECT failed");
         }
-        exec_prepared_select(stmt1, 11);
+        int rows = exec_prepared_select(stmt1, 11);
+        if (rows < 0) {
+            diag("Prepared SELECT after UPDATE failed: %s", mysql_stmt_error(stmt1));
+        }
         mysql_stmt_close(stmt1);
         stmt1 = NULL;
     }

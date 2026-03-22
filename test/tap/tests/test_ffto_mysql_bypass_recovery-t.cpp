@@ -11,14 +11,13 @@
  * - Bypass is per-session: other concurrent or subsequent connections
  *   are unaffected.
  * - A new connection after a bypassed one gets a fresh FFTO instance.
- * - Boundary test: a packet exactly at the buffer limit should NOT
- *   trigger bypass (the check uses `>`, not `>=`).
+ * - A query well under the buffer limit is recorded on a fresh connection.
  *
  * @par Test scenarios
  *  1. Trigger bypass, verify small queries no longer recorded (sticky)
  *  2. Fresh connection B unaffected by connection A's bypass
  *  3. New connection after closing bypassed one gets fresh FFTO
- *  4. Packet exactly at buffer limit — should NOT trigger bypass
+ *  4. Query under buffer limit recorded on fresh connection
  *
  * @pre  ProxySQL running with a MySQL backend, reachable via the standard
  *       TAP environment variables.

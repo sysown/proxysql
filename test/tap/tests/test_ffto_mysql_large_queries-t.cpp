@@ -251,12 +251,6 @@ int main(int argc, char** argv) {
      * Scenario 1:  Long INSERT (~10 KB VALUES clause) within 1 MB buffer
      * ================================================================ */
     diag("--- Scenario 1: long INSERT within buffer ---");
-    /* Use _reset table to atomically clear digest stats */
-    {
-        MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
-        MYSQL_RES* r = mysql_store_result(admin);
-        if (r) mysql_free_result(r);
-    }
 
     EXEC_QUERY(conn, "DROP TABLE IF EXISTS ffto_long_ins");
     EXEC_QUERY(conn, "CREATE TABLE ffto_long_ins ("
@@ -273,12 +267,13 @@ int main(int argc, char** argv) {
             ins += v;
         }
         diag("Long INSERT query length: %zu bytes", ins.size());
-        /* Use _reset table to atomically clear digest stats */
-    {
-        MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
-        MYSQL_RES* r = mysql_store_result(admin);
-        if (r) mysql_free_result(r);
-    }
+
+        /* Clear stats right before the query we want to measure */
+        {
+            MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_query_digest_reset");
+            MYSQL_RES* r = mysql_store_result(admin);
+            if (r) mysql_free_result(r);
+        }
 
         if (mysql_query(conn, ins.c_str())) {
             diag("Long INSERT failed: %s", mysql_error(conn));
@@ -399,7 +394,7 @@ int main(int argc, char** argv) {
     verify_digest(admin, "SELECT ? AS rapid_fire", 100, 0, 100);
 
     /* ================================================================
-     * Scenario 5:  10 distinct queries in rapid succession
+     * Scenario 5:  10 queries with different literals — normalization
      * ================================================================ */
     diag("--- Scenario 5: 10 distinct queries ---");
     /* Use _reset table to atomically clear digest stats */
