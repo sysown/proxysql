@@ -43,6 +43,10 @@ static void test_no_change() {
 	// Active txn, already locked → stays locked
 	ok(update_transaction_persistent_hostgroup(true, 5, 5, true) == 5,
 		"no change: already locked, stays locked");
+	// Already locked on HG 5, txn still active on different current_hostgroup
+	// → stays locked on original HG (doesn't change to new HG)
+	ok(update_transaction_persistent_hostgroup(true, 5, 10, true) == 5,
+		"no change: locked HG stays even if current_hostgroup differs");
 }
 
 static void test_txn_lifecycle() {
@@ -73,6 +77,12 @@ static void test_timeout_not_exceeded() {
 		"no timeout: 2s elapsed < 5s limit");
 }
 
+static void test_timeout_boundary() {
+	// Exactly at limit: 5000ms elapsed, limit 5000ms → NOT timed out (needs >)
+	ok(is_transaction_timed_out(1000000, 6000000, 5000) == false,
+		"no timeout: elapsed == limit (strict > comparison)");
+}
+
 static void test_timeout_no_transaction() {
 	ok(is_transaction_timed_out(0, 99000000, 5000) == false,
 		"no timeout: no active transaction (started_at=0)");
@@ -86,20 +96,21 @@ static void test_timeout_no_limit() {
 }
 
 int main() {
-	plan(17);
+	plan(19);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
 	test_persistence_disabled();   // 2
 	test_txn_start_locks();        // 2
 	test_txn_end_unlocks();        // 2
-	test_no_change();              // 2
+	test_no_change();              // 3
 	test_txn_lifecycle();          // 3
 	test_timeout_exceeded();       // 1
 	test_timeout_not_exceeded();   // 1
+	test_timeout_boundary();       // 1
 	test_timeout_no_transaction(); // 1
 	test_timeout_no_limit();       // 2
-	// Total: 1+2+2+2+2+3+1+1+1+2 = 17
+	// Total: 1+2+2+2+3+3+1+1+1+1+2 = 19
 
 	test_cleanup_minimal();
 	return exit_status();
