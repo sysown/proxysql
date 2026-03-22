@@ -414,7 +414,7 @@ int ProxySQL_Config::Write_Restapi_to_configfile(std::string& data) {
 		return -1;
 	} else {
 		if (sqlite_resultset) {
-			data += "restapi:\n(\n";
+			data += "restapi_routes:\n(\n";
 			bool isNext = false;
 			for (auto r : sqlite_resultset->rows) {
 				if (isNext)
@@ -477,6 +477,10 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 		route.lookupValue("active", active);
 		if (route.lookupValue("interval_ms", timeout_ms) == false) {
 			route.lookupValue("timeout_ms", timeout_ms);
+		}
+		if (timeout_ms < 100 || timeout_ms > 100000000) {
+			proxy_error("Admin: detected a restapi route in config file with invalid or missing timeout_ms (must be 100..100000000, got %d)\n", timeout_ms);
+			continue;
 		}
 		if (route.lookupValue("method", method)==false) {
 			proxy_error("Admin: detected a restapi route in config file without a mandatory method\n");
