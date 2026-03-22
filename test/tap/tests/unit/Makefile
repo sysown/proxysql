@@ -234,7 +234,9 @@ $(ODIR)/test_init.o: $(TEST_HELPERS_DIR)/test_init.cpp | $(ODIR)
 UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	protocol_unit-t auth_unit-t connection_pool_unit-t \
 	rule_matching_unit-t hostgroups_unit-t monitor_health_unit-t \
-	server_selection_unit-t
+	pgsql_command_complete_unit-t \
+	ffto_protocol_unit-t \
+	server_selection_unit-t \
   hostgroup_routing_unit-t \
 	transaction_state_unit-t \
 	pgsql_error_classifier_unit-t \
