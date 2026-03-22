@@ -77,6 +77,7 @@ NETWORK_NAME="${INFRA_ID}_backend"
 TEST_CONTAINER="test-runner.${INFRA_ID}"
 INFRA_LOGS_PATH="${WORKSPACE}/ci_infra_logs"
 PROXY_DATA_DIR_HOST="${INFRA_LOGS_PATH}/${INFRA_ID}/proxysql"
+COVERAGE_DATA_DIR_HOST="${INFRA_LOGS_PATH}/${INFRA_ID}/gcov"
 
 
 
@@ -134,7 +135,8 @@ docker run \
     --cap-add=NET_ADMIN \
     --cap-add=SYS_ADMIN \
     -v "${WORKSPACE}:${WORKSPACE}" \
-        -v "${PROXY_DATA_DIR_HOST}:/var/lib/proxysql" \
+    -v "${PROXY_DATA_DIR_HOST}:/var/lib/proxysql" \
+    -v "${COVERAGE_DATA_DIR_HOST}:/gcov" \
     -e WORKSPACE="${WORKSPACE}" \
     -e INFRA_ID="${INFRA_ID}" \
     -e INFRA_TYPE="${INFRA_TYPE}" \
