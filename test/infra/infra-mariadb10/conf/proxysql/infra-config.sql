@@ -34,3 +34,11 @@ INSERT OR IGNORE INTO mysql_users (username,password,active,default_hostgroup,fa
 
 LOAD MYSQL USERS TO RUNTIME;
 SAVE MYSQL USERS TO DISK;
+
+DELETE FROM mysql_query_rules WHERE comment LIKE '%${INFRA}';
+INSERT INTO mysql_query_rules (rule_id,active,username,match_digest,destination_hostgroup,apply,comment) VALUES (${PREFIX}00,1,'root','^SELECT.*FOR UPDATE',${WHG},1,'${INFRA}');
+INSERT INTO mysql_query_rules (rule_id,active,username,match_digest,destination_hostgroup,apply,comment) VALUES (${PREFIX}01,1,'root','^SELECT',${RHG},1,'${INFRA}');
+INSERT INTO mysql_query_rules (rule_id,active,username,match_digest,destination_hostgroup,apply,comment) VALUES (${PREFIX}03,1,'testuser','^SELECT.*FOR UPDATE',${WHG},1,'${INFRA}');
+INSERT INTO mysql_query_rules (rule_id,active,username,match_digest,destination_hostgroup,apply,comment) VALUES (${PREFIX}04,1,'testuser','^SELECT',${RHG},1,'${INFRA}');
+LOAD MYSQL QUERY RULES TO RUNTIME;
+SAVE MYSQL QUERY RULES TO DISK;
