@@ -109,4 +109,23 @@ int test_init_query_processor();
  */
 void test_cleanup_query_processor();
 
+/**
+ * @brief Initialize MySQL and PostgreSQL HostGroups Managers.
+ *
+ * Creates real MySQL_HostGroups_Manager and PgSQL_HostGroups_Manager
+ * objects (assigned to MyHGM and PgHGM) with internal SQLite3 databases.
+ * Servers can be added via create_new_server_in_hg() for testing.
+ *
+ * @pre test_init_minimal() must have been called.
+ * @return 0 on success, non-zero on failure.
+ */
+int test_init_hostgroups();
+
+/**
+ * @brief Clean up resources allocated by test_init_hostgroups().
+ *
+ * Destroys MyHGM and PgHGM, setting them back to nullptr.
+ */
+void test_cleanup_hostgroups();
+
 #endif /* TEST_INIT_H */
