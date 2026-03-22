@@ -414,7 +414,7 @@ int ProxySQL_Config::Write_Restapi_to_configfile(std::string& data) {
 		return -1;
 	} else {
 		if (sqlite_resultset) {
-			data += "restapi:\n(\n";
+			data += "restapi_routes:\n(\n";
 			bool isNext = false;
 			for (auto r : sqlite_resultset->rows) {
 				if (isNext)
@@ -443,17 +443,26 @@ int ProxySQL_Config::Write_Restapi_to_configfile(std::string& data) {
 
 int ProxySQL_Config::Read_Restapi_from_configfile() {
 	const Setting& root = GloVars.confFile->cfg.getRoot();
-	if (root.exists("restapi")==false) return 0;
-	const Setting &routes = root["restapi"];
+	const char* routes_section = nullptr;
+	if (root.exists("restapi_routes")) {
+		routes_section = "restapi_routes";
+	} else if (root.exists("restapi")) {
+		routes_section = "restapi";
+	} else {
+		return 0;
+	}
+	const Setting &routes = root[routes_section];
 	int count = routes.getLength();
 	//fprintf(stderr, "Found %d users\n",count);
 	int i;
 	int rows=0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	char *q=(char *)"INSERT OR REPLACE INTO restapi_routes VALUES (%d, %d, %d, '%s', '%s', '%s', '%s')";
+	const char *q_with_id = "INSERT OR REPLACE INTO restapi_routes VALUES (%d, %d, %d, '%s', '%s', '%s', '%s')";
+	const char *q_without_id = "INSERT OR REPLACE INTO restapi_routes (active, timeout_ms, method, uri, script, comment) VALUES (%d, %d, '%s', '%s', '%s', '%s')";
 	for (i=0; i< count; i++) {
 		const Setting &route = routes[i];
 		int id;
+		bool id_exists=false;
 		int active=1;
 		// variable for parsing timeout_ms
 		int timeout_ms=0;
@@ -464,13 +473,14 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 		std::string comment="";
 
 		// validate arguments
-		if (route.lookupValue("id", id)==false) {
-			proxy_error("Admin: detected a restapi route in config file without a mandatory id\n");
-			continue;
-		}
+		id_exists = route.lookupValue("id", id);
 		route.lookupValue("active", active);
 		if (route.lookupValue("interval_ms", timeout_ms) == false) {
 			route.lookupValue("timeout_ms", timeout_ms);
+		}
+		if (timeout_ms < 100 || timeout_ms > 100000000) {
+			proxy_error("Admin: detected a restapi route in config file with invalid or missing timeout_ms (must be 100..100000000, got %d)\n", timeout_ms);
+			continue;
 		}
 		if (route.lookupValue("method", method)==false) {
 			proxy_error("Admin: detected a restapi route in config file without a mandatory method\n");
@@ -486,26 +496,84 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 		}
 		route.lookupValue("comment", comment);
 
+		char *method_escaped_raw = NULL;
+		char *uri_escaped_raw = NULL;
+		char *script_escaped_raw = NULL;
+		char *comment_escaped_raw = NULL;
+		method_escaped_raw = strdup(method.c_str());
+		uri_escaped_raw = strdup(uri.c_str());
+		script_escaped_raw = strdup(script.c_str());
+		comment_escaped_raw = strdup(comment.c_str());
+		if (method_escaped_raw == NULL || uri_escaped_raw == NULL || script_escaped_raw == NULL || comment_escaped_raw == NULL) {
+			proxy_error("Admin: unable to allocate memory while loading restapi routes from config file\n");
+			free(method_escaped_raw);
+			free(uri_escaped_raw);
+			free(script_escaped_raw);
+			free(comment_escaped_raw);
+			continue;
+		}
+		char *method_escaped = escape_string_single_quotes(method_escaped_raw, false);
+		char *uri_escaped = escape_string_single_quotes(uri_escaped_raw, false);
+		char *script_escaped = escape_string_single_quotes(script_escaped_raw, false);
+		char *comment_escaped = escape_string_single_quotes(comment_escaped_raw, false);
+
+		const char *q = id_exists ? q_with_id : q_without_id;
+		const std::string active_str = std::to_string(active);
+		const std::string timeout_ms_str = std::to_string(timeout_ms);
+		const std::string id_str = id_exists ? std::to_string(id) : std::string();
 		int query_len=0;
 		query_len+=strlen(q) +
-			strlen(std::to_string(id).c_str()) +
-			strlen(std::to_string(active).c_str()) +
-			strlen(std::to_string(timeout_ms).c_str()) +
-			strlen(method.c_str()) +
-			strlen(uri.c_str()) +
-			strlen(script.c_str()) +
-			strlen(comment.c_str()) +
+			strlen(active_str.c_str()) +
+			strlen(timeout_ms_str.c_str()) +
+			strlen(method_escaped) +
+			strlen(uri_escaped) +
+			strlen(script_escaped) +
+			strlen(comment_escaped) +
 			40;
+		if (id_exists) {
+			query_len += strlen(id_str.c_str());
+		}
 		char *query=(char *)malloc(query_len);
-		sprintf(query, q,
-			id, active,
-			timeout_ms,
-			method.c_str(),
-			uri.c_str(),
-			script.c_str(),
-			comment.c_str()
-		);
+		if (query == NULL) {
+			proxy_error("Admin: unable to allocate memory while loading restapi routes from config file\n");
+			if (method_escaped != method_escaped_raw) free(method_escaped);
+			if (uri_escaped != uri_escaped_raw) free(uri_escaped);
+			if (script_escaped != script_escaped_raw) free(script_escaped);
+			if (comment_escaped != comment_escaped_raw) free(comment_escaped);
+			free(method_escaped_raw);
+			free(uri_escaped_raw);
+			free(script_escaped_raw);
+			free(comment_escaped_raw);
+			continue;
+		}
+		if (id_exists) {
+			snprintf(query, query_len, q,
+				id, active,
+				timeout_ms,
+				method_escaped,
+				uri_escaped,
+				script_escaped,
+				comment_escaped
+			);
+		} else {
+			snprintf(query, query_len, q,
+				active,
+				timeout_ms,
+				method_escaped,
+				uri_escaped,
+				script_escaped,
+				comment_escaped
+			);
+		}
 		admindb->execute(query);
+		if (method_escaped != method_escaped_raw) free(method_escaped);
+		if (uri_escaped != uri_escaped_raw) free(uri_escaped);
+		if (script_escaped != script_escaped_raw) free(script_escaped);
+		if (comment_escaped != comment_escaped_raw) free(comment_escaped);
+		free(method_escaped_raw);
+		free(uri_escaped_raw);
+		free(script_escaped_raw);
+		free(comment_escaped_raw);
 		free(query);
 		rows++;
 	}
