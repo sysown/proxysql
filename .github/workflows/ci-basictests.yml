@@ -11,14 +11,12 @@ env:
   SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
 
 jobs:
-
   tests:
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
         testdist: [ 'ubuntu22-tap' ]
-#        infradb: [ 'mysql57', 'mysql80', 'mysql81', 'mysql82', 'mariadb10', 'mariadb11' ]
         infradb: [ 'mysql57' ]
     env:
       TESTDIST: ${{ matrix.testdist }}
@@ -27,7 +25,7 @@ jobs:
       MATRIX: '(${{ matrix.infradb }})'
 
     steps:
-    
+
     - uses: LouisBrunner/checks-action@v2.0.0
       id: checks
       if: always()
@@ -37,53 +35,7 @@ jobs:
         repo: ${{ github.repository }}
         sha: ${{ env.SHA }}
         status: 'in_progress'
-#        action_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
         details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
-    
-    - name: Install dependencies
-      run: |
-        sudo apt-get update -y
-        sudo apt-get install -y python3-pymysql python3-structlog sysbench mycli
-        sudo pip3 install fastcov
-        
-        wget https://github.com/openark/orchestrator/releases/download/v3.2.6/orchestrator-client_3.2.6_amd64.deb
-        sudo dpkg -i orchestrator-client_3.2.6_amd64.deb
-        
-        sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 467B942D3A79BD29
-        sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys A8D3785C
-        #sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys B7B3B788A8D3785C
-        curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xB7B3B788A8D3785C" -o /tmp/RPM-GPG-KEY-mysql-2023
-        sudo gpg --dearmor < /tmp/RPM-GPG-KEY-mysql-2023 | sudo tee /usr/share/keyrings/mysql-apt-config.gpg >/dev/null
-        rm /tmp/RPM-GPG-KEY-mysql-2023
-        #wget https://repo.mysql.com/mysql-apt-config_0.8.29-1_all.deb
-        #sudo dpkg -i mysql-apt-config_0.8.29-1_all.deb
-        DEBFILE=$(curl -s https://repo.mysql.com/ | grep -Po '"mysql-apt-config_.*deb"' | tr -d '"' | sort -V |tail -1)
-        wget https://repo.mysql.com/${DEBFILE}
-        sudo dpkg -i ${DEBFILE}
-        sudo apt-get update -y
-        sudo apt-cache policy mysql-shell
-        sudo apt-get install -y mysql-shell
-        
-        sudo sed -i 's/8.0/5.7/' /etc/apt/sources.list.d/mysql.list
-        sudo sed -i 's/jammy/bionic/' /etc/apt/sources.list.d/mysql.list
-        sudo apt-get update -y
-        sudo apt-cache policy libmysqlclient-dev
-        sudo apt-get install -y --allow-downgrades libmysqlclient-dev=5.7*
-
-#    - name: Wait for cache
-#      if: ${{ env.BRANCH != 'none' }}
-#      env:
-#        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-#      run: |
-#        echo "Wating for cache '${BLDCACHE}' ..."
-#        sleep $(( $RANDOM / 1024 ))
-#        PROBE="$(gh cache list --limit 300 --repo ${{ github.repository }} | grep -i ${BLDCACHE} || echo '')"
-#        while [[ -z ${PROBE} ]]; do
-#          echo "Wating for cache '${BLDCACHE}' ..."
-#          sleep 30
-#          PROBE="$(gh cache list --limit 300 --repo ${{ github.repository }} | grep -i ${BLDCACHE} || echo '')"
-#        done
-#        echo "Cache available '${BLDCACHE}'"
 
     - name: Cache restore src
       id: cache-src
@@ -94,111 +46,45 @@ jobs:
         path: |
           proxysql/src/
 
-    - name: Checkout jenkins_build_scripts
+    - name: Checkout repository
       uses: actions/checkout@v4
       with:
-        repository: 'proxysql/jenkins-build-scripts'
-        ref: 'kubernetes'
-#        fetch-depth: 0
-        path: 'jenkins-build-scripts'
-        token: ${{ secrets.GH_TOKEN_PROXYSQL }}
-        submodules: 'false'
-        
-    - name: Configure env.sh
-      run: |
-        cd jenkins-build-scripts
-        
-        # configure paths
-        sed -i "s|JENKINS_SCRIPTS_PATH=.*|JENKINS_SCRIPTS_PATH=${{ github.workspace }}/jenkins-build-scripts|" env.sh
-        sed -i "s|WORKSPACE=.*|WORKSPACE=${{ github.workspace }}/proxysql|" env.sh
+        repository: ${{ github.repository }}
+        ref: ${{ env.SHA }}
+        path: 'proxysql'
+        sparse-checkout: |
+          test/infra
+          test/tap/groups
+          test/scripts
 
-    - name: Configure test/env.sh
+    - name: Build CI base image
+      run: |
+        cd proxysql/test/infra/docker-base
+        docker build -t proxysql-ci-base:latest .
+
+    - name: Start infrastructure
       run: |
         cd proxysql
-        mkdir test
-        
-        # select tests
-        echo "export TEST_PY_INTERNAL=0" >> test/env.sh
-        echo "export TEST_PY_BENCHMARK=1" >> test/env.sh
-        echo "export TEST_PY_CHUSER=1" >> test/env.sh
-        echo "export TEST_PY_STATS=0" >> test/env.sh
-        echo "export TEST_PY_TAP=0" >> test/env.sh
-        echo "export TEST_PY_TAPINT=0" >> test/env.sh
-        echo "export TEST_PY_FAILOVER=1" >> test/env.sh
-        #echo 'export TEST_PY_TAP_INCL=""' >> test/env.sh
-        #echo 'export TEST_PY_TAP_EXCL=""' >> test/env.sh
-        echo 'export MALLOC_CONF="retain:false"' >> test/env.sh
-        echo 'export WITHGCOV=0' >> test/env.sh
-        #echo 'export' >> test/env.sh
-        #cat test/env.sh
+        export INFRA_ID="ci-basictests"
+        export TAP_GROUP="basictests"
+        test/infra/control/ensure-infras.bash
 
-    - name: Run proxysql
+    - name: Run basic tests
       run: |
-        #set -x
-        set +e
-        cd ${{ github.workspace }}/jenkins-build-scripts
-        source ./env.sh
-        
-        ./cluster_start.bash
-        sleep 10
-        
-        cd ${{ github.workspace }}/proxysql
-        mkdir -p ci_infra_logs/regular_infra/proxysql
-        cd src
-        mkdir coverage_reports
-
-        (./proxysql --clickhouse-server --sqlite3-server --idle-threads -f -c "$DOCKER_SCRIPT_PATH/conf/proxysql/proxysql.cnf" -D $REGULAR_INFRA_DATADIR &> $REGULAR_INFRA_DATADIR/proxysql.log) &
-        sleep 10
-        mysql -uadmin -padmin -h127.0.0.1 -P6032 -e "SELECT version();" 2>&1 | grep -v "Using a password"
-        
-        cd ${{ github.workspace }}/jenkins-build-scripts
-        ./cluster_init.bash
-        sleep 10        
-        
-    - name: Run infra
-      run: |
-        cd ${{ github.workspace }}/jenkins-build-scripts
-        source ./env.sh
-        
-        cd ${{ github.workspace }}/jenkins-build-scripts/infra-docker-hoster
-        sed -i 's|image: .*|image: ghcr.io/mrmohebi/docker-hoster|' docker-compose.yml
-        ./docker-compose-init.bash
-        
-        cd ${{ github.workspace }}/jenkins-build-scripts/infra-mysql57
-        sed -i "s/\${INFRA}-\${CONTAINER}-1/\${INFRA}_\${CONTAINER}_1/" docker-compose-init.bash
-        ./docker-compose-init.bash
-        
-    - name: Basic tests
-      run: |
-        set +e
-        cd ${{ github.workspace }}/jenkins-build-scripts
-        source ./env.sh
-        
-        sudo -E ./test-scripts/bin/proxysql-tester.py
-        RC=$?
-        
-        exit $RC
+        cd proxysql
+        export INFRA_ID="ci-basictests"
+        export TAP_GROUP="basictests"
+        test/infra/control/run-tests-isolated.bash
 
     - name: Cleanup
-      if: ${{ failure() && !cancelled() }}
+      if: always()
       run: |
         set +e
-        cd ${{ github.workspace }}/jenkins-build-scripts
-        source ./env.sh
-        
-        mysql -h127.0.0.1 -P6032 -uadmin -padmin -e "PROXYSQL SHUTDOWN SLOW" &> /dev/null
-        sleep 10
-        killall proxysql
-        
-        cd ${{ github.workspace }}/jenkins-build-scripts/infra-docker-hoster
-        sed -i 's|image: .*|image: ghcr.io/mrmohebi/docker-hoster|' docker-compose.yml
-        ./docker-compose-destroy.bash
-        
-        cd ${{ github.workspace }}/jenkins-build-scripts/infra-mysql57
-        sed -i "s/\${INFRA}-\${CONTAINER}-1/\${INFRA}_\${CONTAINER}_1/" docker-compose-init.bash
-        ./docker-compose-destroy.bash
-        
-        sudo chmod -R 777 ${{ github.workspace }}/*
+        cd proxysql
+        export INFRA_ID="ci-basictests"
+        export TAP_GROUP="basictests"
+        test/infra/control/stop-proxysql-isolated.bash
+        test/infra/control/destroy-infras.bash
 
     - name: Archive artifacts logs
       if: ${{ failure() && !cancelled() }}
@@ -207,7 +93,7 @@ jobs:
         name: ${{ github.workflow }}-${{ env.SHA }}-logs-run#${{ github.run_number }}
         path: |
           proxysql/ci_*_logs/
-          
+
     - name: Archive artifacts bin
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
@@ -217,7 +103,6 @@ jobs:
           proxysql/binaries/
           proxysql/src/
           proxysql/libs/
-#          proxysql/deps/
 
     - uses: LouisBrunner/checks-action@v2.0.0
       if: always()
@@ -227,6 +112,4 @@ jobs:
         repo: ${{ github.repository }}
         sha: ${{ env.SHA }}
         conclusion: ${{ job.status }}
-#        action_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
         details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
-
