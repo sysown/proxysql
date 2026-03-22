@@ -237,6 +237,7 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	server_selection_unit-t
   hostgroup_routing_unit-t \
 	transaction_state_unit-t \
+	pgsql_error_classifier_unit-t \
 	pgsql_monitor_unit-t \
 	mysql_error_classifier_unit-t \
 	backend_sync_unit-t
