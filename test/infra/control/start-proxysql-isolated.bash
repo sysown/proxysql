@@ -72,6 +72,7 @@ admin_variables=
 {
     admin_credentials=\"admin:admin;radmin:radmin;cluster1:secret1pass\"
     mysql_ifaces=\"0.0.0.0:\${ADMIN_PORT}\"
+    pgsql_ifaces=\"0.0.0.0:\${PGSQL_ADMIN_PORT}\"
     cluster_username=\"cluster1\"
     cluster_password=\"secret1pass\"
 }
