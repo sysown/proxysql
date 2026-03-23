@@ -120,9 +120,9 @@ int main(int argc, char** argv) {
 	// 10-11: TLS_Last_Load_Result valid value
 	// 12-16: stats_tls_certificates structure
 	// 17-24: stats_tls_certificates row data for 'server' and 'ca'
-	// 25-28: PROXYSQL RELOAD TLS increments counter and updates timestamp
-	// 29: TLS vars NOT in stats_mysql_global
-	plan(29);
+	// 23-26: PROXYSQL RELOAD TLS increments counter and updates timestamp
+	// 27: TLS vars NOT in stats_mysql_global
+	plan(27);
 
 	diag("Connecting to ProxySQL Admin interface on %s:%d", cl.host, cl.admin_port);
 	MYSQL* admin = mysql_init(NULL);
