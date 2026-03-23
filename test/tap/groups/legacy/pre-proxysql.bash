@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 set -e
 set -o pipefail
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 #
-# Start ProxySQL Cluster if available
-# inherits env from tester script
+# Legacy pre-proxysql hook.
+#
+# Cluster startup is now handled by start-proxysql-isolated.bash.
+# This hook only needs to wait for the cluster to stabilize.
 #
 
-${REPO_ROOT}/test/infra/control/cluster_start.bash
-${REPO_ROOT}/test/infra/control/cluster_init.bash
+NUM_NODES=${PROXYSQL_CLUSTER_NODES:-9}
+if [[ "${SKIP_CLUSTER_START}" == "1" ]] || [[ "${SKIP_CLUSTER_START}" == "true" ]] || [[ "${NUM_NODES}" == "0" ]]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] >>> Pre-proxysql: no cluster, nothing to do."
+    exit 0
+fi
 
-# wait for cluster to stabilize
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] >>> Pre-proxysql: waiting for cluster to stabilize..."
 sleep 10
