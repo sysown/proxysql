@@ -281,7 +281,9 @@ docker run \
                         done
                         echo \">>> Running fastcov on /gcov...\"
                         cd /gcov
-                        fastcov -b -j\"\${nproc_val}\" --process-gcno -l -e /usr/include/ -e \"\${WORKSPACE}/test/tap/tests\" -e \"\${WORKSPACE}/deps/\" -d . -o \"\${coverage_file}\" >> \"\${coverage_log}\" 2>&1 || echo \">>> WARNING: Coverage generation failed (see \${coverage_log})\"
+                        fastcov -b -j\"\${nproc_val}\" --process-gcno -l \
+                            -i \"\${WORKSPACE}/include/\" \"\${WORKSPACE}/lib/\" \"\${WORKSPACE}/src/\" \"\${WORKSPACE}/test/\" \
+                            -d . -o \"\${coverage_file}\" >> \"\${coverage_log}\" 2>&1 || echo \">>> WARNING: Coverage generation failed (see \${coverage_log})\"
                     else
                         echo \">>> WARNING: /gcov directory is empty or missing, skipping coverage\"
                     fi
