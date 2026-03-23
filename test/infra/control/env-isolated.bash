@@ -59,10 +59,17 @@ export TAP_DEPS="${WORKSPACE}/test/tap/tap"
 export TEST_DEPS_PATH="${WORKSPACE}/test-scripts/deps"
 export TEST_DEPS="${TEST_DEPS_PATH}"
 
-# Cluster Nodes
+# Cluster Nodes — all run inside the ProxySQL container on different ports
+# Port scheme: proxy-node1=6042, proxy-node2=6052, ..., proxy-node9=6122
+# From the test-runner container, reach them via the proxysql hostname
+NUM_CLUSTER_NODES=${PROXYSQL_CLUSTER_NODES:-9}
+if [[ "${SKIP_CLUSTER_START}" == "1" ]] || [[ "${SKIP_CLUSTER_START}" == "true" ]]; then
+    NUM_CLUSTER_NODES=0
+fi
 CLUSTER_NODES=""
-for i in $(seq 1 9); do
-    CLUSTER_NODES="${CLUSTER_NODES}proxy-node${i}:6032,"
+for i in $(seq 1 ${NUM_CLUSTER_NODES}); do
+    PORT=$((6032 + i * 10))
+    CLUSTER_NODES="${CLUSTER_NODES}proxysql:${PORT},"
 done
 export TAP_CLUSTER_NODES=${CLUSTER_NODES%,}
 
