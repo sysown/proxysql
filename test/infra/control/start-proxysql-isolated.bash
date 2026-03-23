@@ -64,9 +64,9 @@ for i in \$(seq 1 ${NUM_NODES}); do
     NODE_DIR=/var/lib/proxysql-node\${i}
     mkdir -p \${NODE_DIR}
 
-    PGSQL_PORT=\$((6133 + i * 10))
-    PGSQL_ADMIN_PORT=\$((6132 + i * 10))
-    SQLITE_PORT=\$((6030 + i * 10))
+    PGSQL_PORT=\$((7133 + i * 10))
+    PGSQL_ADMIN_PORT=\$((7132 + i * 10))
+    SQLITE_PORT=\$((7030 + i * 10))
     cat > \${NODE_DIR}/proxysql-node.cnf <<NODECNF
 admin_variables=
 {
