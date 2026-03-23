@@ -269,15 +269,16 @@ docker run \
                     echo \">>> Coverage generation log: \${coverage_log}\"
                     local nproc_val=\$(nproc)
 
-                    # Copy .gcno files to /gcov so fastcov can find both .gcno and .gcda together
-                    # This avoids race conditions when multiple groups run in parallel
+                    # Copy .gcno and .gcda files to /gcov so fastcov can find them together
+                    # ProxySQL's .gcda files are already in /gcov (via GCOV_PREFIX)
+                    # TAP test .gcda files are in the source tree and need to be copied too
                     if [ -d \"/gcov\" ] && [ \"\$(ls -A /gcov 2>/dev/null)\" ]; then
                         echo \">>> Preparing coverage data directory...\" >> \"\${coverage_log}\" 2>&1
-                        cd \"\${WORKSPACE}\" && find . -path './ci_infra_logs' -prune -o -name '*.gcno' -type f -print | while read gcno; do
-                            target=\"/gcov/\${gcno#./}\"
+                        cd \"\${WORKSPACE}\" && find . -path './ci_infra_logs' -prune -o \\( -name '*.gcno' -o -name '*.gcda' \\) -type f -print | while read gcfile; do
+                            target=\"/gcov/\${gcfile#./}\"
                             target_dir=\"\$(dirname \"\$target\")\"
                             mkdir -p \"\$target_dir\"
-                            cp -f \"\$gcno\" \"\$target\"
+                            cp -f \"\$gcfile\" \"\$target\"
                         done
                         echo \">>> Running fastcov on /gcov...\"
                         cd /gcov
