@@ -156,7 +156,7 @@ if [ "${NUM_NODES}" -gt 0 ]; then
     PROXYSQL_SERVERS_SQL="DELETE FROM proxysql_servers;"
     for i in $(seq 1 "${CORE_NODES}"); do
         PORT=$((6032 + i * 10))
-        PROXYSQL_SERVERS_SQL="${PROXYSQL_SERVERS_SQL} INSERT INTO proxysql_servers (hostname,port,weight,comment) VALUES ('127.0.0.1',${PORT},0,'core-node${i}');"
+        PROXYSQL_SERVERS_SQL="${PROXYSQL_SERVERS_SQL} INSERT INTO proxysql_servers (hostname,port,weight,comment) VALUES ('proxysql',${PORT},0,'core-node${i}');"
     done
 
     # Configure primary
@@ -185,7 +185,7 @@ SET admin-restapi_enabled='true';
 SET admin-debug='true';
 ${PROXYSQL_SERVERS_SQL}
 -- Also add the primary
-INSERT INTO proxysql_servers (hostname,port,weight,comment) VALUES ('127.0.0.1',6032,0,'primary');
+INSERT INTO proxysql_servers (hostname,port,weight,comment) VALUES ('proxysql',6032,0,'primary');
 LOAD ADMIN VARIABLES TO RUNTIME;
 SAVE ADMIN VARIABLES TO DISK;
 LOAD PROXYSQL SERVERS TO RUNTIME;
