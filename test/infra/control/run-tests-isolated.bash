@@ -264,13 +264,15 @@ docker run \
                 if command -v fastcov >/dev/null 2>&1; then
                     mkdir -p \"\${COVERAGE_REPORT_DIR}\"
                     local coverage_file=\"\${COVERAGE_REPORT_DIR}/\${INFRA_ID}.info\"
+                    local coverage_log=\"\${COVERAGE_REPORT_DIR}/coverage-generation.log\"
                     echo \">>> Generating coverage report: \${coverage_file}\"
+                    echo \">>> Coverage generation log: \${coverage_log}\"
                     local nproc_val=\$(nproc)
 
                     # Copy .gcno files to /gcov so fastcov can find both .gcno and .gcda together
                     # This avoids race conditions when multiple groups run in parallel
                     if [ -d \"/gcov\" ] && [ \"\$(ls -A /gcov 2>/dev/null)\" ]; then
-                        echo \">>> Preparing coverage data directory...\"
+                        echo \">>> Preparing coverage data directory...\" >> \"\${coverage_log}\" 2>&1
                         cd \"\${WORKSPACE}\" && find . -path './ci_infra_logs' -prune -o -name '*.gcno' -type f -print | while read gcno; do
                             target=\"/gcov/\${gcno#./}\"
                             target_dir=\"\$(dirname \"\$target\")\"
@@ -279,7 +281,7 @@ docker run \
                         done
                         echo \">>> Running fastcov on /gcov...\"
                         cd /gcov
-                        fastcov -b -j\"\${nproc_val}\" --process-gcno -l -e /usr/include/ -e \"\${WORKSPACE}/test/tap/tests\" -e \"\${WORKSPACE}/deps/\" -d . -o \"\${coverage_file}\" 2>&1 || echo \">>> WARNING: Coverage generation failed\"
+                        fastcov -b -j\"\${nproc_val}\" --process-gcno -l -e /usr/include/ -e \"\${WORKSPACE}/test/tap/tests\" -e \"\${WORKSPACE}/deps/\" -d . -o \"\${coverage_file}\" >> \"\${coverage_log}\" 2>&1 || echo \">>> WARNING: Coverage generation failed (see \${coverage_log})\"
                     else
                         echo \">>> WARNING: /gcov directory is empty or missing, skipping coverage\"
                     fi
@@ -290,11 +292,12 @@ docker run \
                         if command -v genhtml >/dev/null 2>&1; then
                             local html_dir=\"\${COVERAGE_REPORT_DIR}/html\"
                             mkdir -p \"\${html_dir}\"
-                            genhtml --branch-coverage --ignore-errors negative,source --synthesize-missing \"\${coverage_file}\" --output-directory \"\${html_dir}\" 2>&1 || echo \">>> WARNING: HTML generation failed\"
+                            echo \">>> Generating HTML coverage report...\"
+                            genhtml --branch-coverage --ignore-errors negative,source --synthesize-missing \"\${coverage_file}\" --output-directory \"\${html_dir}\" >> \"\${coverage_log}\" 2>&1 || echo \">>> WARNING: HTML generation failed (see \${coverage_log})\"
                             [ -f \"\${html_dir}/index.html\" ] && echo \">>> HTML coverage report: \${html_dir}/index.html\"
                         fi
                     else
-                        echo \">>> WARNING: Coverage info file not generated\"
+                        echo \">>> WARNING: Coverage info file not generated (see \${coverage_log})\"
                     fi
                 else
                     echo \">>> WARNING: fastcov not found in container, skipping coverage collection\"
