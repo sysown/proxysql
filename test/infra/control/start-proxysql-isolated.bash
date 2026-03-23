@@ -54,6 +54,9 @@ docker rm -f "${PROXY_CONTAINER}" >/dev/null 2>&1 || true
 #   proxy-nodeN: admin=6032+(N*10), mysql=6033+(N*10)
 
 STARTUP_CMD="
+# Disable gcov for background cluster nodes to avoid concurrent .gcda writes
+unset GCOV_PREFIX GCOV_PREFIX_STRIP
+
 # Start cluster nodes as background processes
 for i in \$(seq 1 ${NUM_NODES}); do
     ADMIN_PORT=\$((6032 + i * 10))
@@ -147,9 +150,11 @@ if [ "${NUM_NODES}" -gt 0 ]; then
 
     MYSQL_CMD="docker exec -i ${PROXY_CONTAINER} mysql -uadmin -padmin -h127.0.0.1"
 
-    # Build proxysql_servers entries: primary + first 3 nodes as core
+    # Build proxysql_servers entries: primary + up to first 3 nodes as core
+    CORE_NODES=3
+    if [ "${NUM_NODES}" -lt 3 ]; then CORE_NODES="${NUM_NODES}"; fi
     PROXYSQL_SERVERS_SQL="DELETE FROM proxysql_servers;"
-    for i in $(seq 1 3); do
+    for i in $(seq 1 "${CORE_NODES}"); do
         PORT=$((6032 + i * 10))
         PROXYSQL_SERVERS_SQL="${PROXYSQL_SERVERS_SQL} INSERT INTO proxysql_servers (hostname,port,weight,comment) VALUES ('127.0.0.1',${PORT},0,'core-node${i}');"
     done
@@ -170,7 +175,7 @@ SQL
     # Configure each node
     for i in $(seq 1 "${NUM_NODES}"); do
         ADMIN_PORT=$((6032 + i * 10))
-        RESTAPI_PORT=$((6070 + i))
+        RESTAPI_PORT=$((7070 + i))
         echo ">>> Configuring proxy-node${i} (port ${ADMIN_PORT})"
 
         ${MYSQL_CMD} -P${ADMIN_PORT} <<SQL
@@ -202,8 +207,8 @@ LOAD SCHEDULER TO RUNTIME;
 SAVE SCHEDULER TO DISK;
 SQL
 
-    # Install on core nodes (1-3)
-    for i in $(seq 1 3); do
+    # Install on core nodes
+    for i in $(seq 1 "${CORE_NODES}"); do
         ADMIN_PORT=$((6032 + i * 10))
         ${MYSQL_CMD} -P${ADMIN_PORT} <<SQL
 INSERT OR REPLACE INTO scheduler (interval_ms, filename) VALUES (12000, '/tmp/check_all_nodes.bash');
