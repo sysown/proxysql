@@ -332,6 +332,28 @@ docker run \
         # Source the local isolated environment (defaults for unset vars)
         source ${SCRIPT_DIR}/env-isolated.bash
 
+        # Wait for ProxySQL to be reachable from this container
+        # Docker DNS resolution can take a few seconds on newly created containers
+        echo -n '>>> Waiting for ProxySQL admin (proxysql:6032) ...'
+        WAIT_COUNT=0
+        WAIT_MAX=30
+        while [ \$WAIT_COUNT -lt \$WAIT_MAX ]; do
+            if mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT 1' >/dev/null 2>&1; then
+                echo ' OK.'
+                break
+            fi
+            echo -n '.'
+            sleep 1
+            WAIT_COUNT=\$((WAIT_COUNT + 1))
+        done
+        if [ \$WAIT_COUNT -ge \$WAIT_MAX ]; then
+            echo ' FAILED after \${WAIT_MAX}s'
+            echo 'ERROR: Cannot reach ProxySQL admin from test-runner container.'
+            echo 'DNS resolution test:'
+            getent hosts proxysql || echo 'DNS lookup failed for proxysql'
+            exit 1
+        fi
+
         # Dump ProxySQL configuration before running tests
         echo '================================================================================'
         echo 'ProxySQL Configuration Dump (BEFORE TESTS)'
