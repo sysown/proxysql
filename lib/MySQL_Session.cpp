@@ -23,6 +23,7 @@ using json = nlohmann::json;
 #include "MySQL_Authentication.hpp"
 #include "MySQL_LDAP_Authentication.hpp"
 #include "MySQL_Protocol.h"
+#include "MySQL_HostGroup_Routing.h"
 #include "SQLite3_Server.h"
 #include "MySQL_Variables.h"
 #include "ProxySQL_Cluster.hpp"
@@ -3328,33 +3329,60 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (rc_break==true) {
 			return;
 		}
-		if (mysql_thread___set_query_lock_on_hostgroup == 1) { // algorithm introduced in 2.0.6
-			if (locked_on_hostgroup < 0) {
-				if (lock_hostgroup) {
-					// we are locking on hostgroup now
-					locked_on_hostgroup = current_hostgroup;
+
+		{
+			MySQL_Routing_Session_State sess_state = {0};
+			sess_state.current_hostgroup = current_hostgroup;
+			sess_state.default_hostgroup = default_hostgroup;
+			sess_state.locked_on_hostgroup = locked_on_hostgroup;
+			sess_state.transaction_persistent_hostgroup = transaction_persistent_hostgroup;
+			sess_state.last_HG_affected_rows = last_HG_affected_rows;
+			sess_state.warning_in_hg = warning_in_hg;
+			sess_state.autocommit = autocommit;
+			sess_state.autocommit_on_hostgroup = autocommit_on_hostgroup;
+			sess_state.mirror = mirror;
+
+			MySQL_Routing_QPO_State qpo_state = {0};
+			qpo_state.destination_hostgroup = qpo->destination_hostgroup;
+			qpo_state.is_set_statement = lock_hostgroup;
+			if (CurrentQuery.QueryParserArgs.digest_text) {
+				const char* dig_text = CurrentQuery.QueryParserArgs.digest_text;
+				const size_t dig_len = strlen(dig_text);
+				if ((dig_len == 13) && (strncasecmp(dig_text, "SHOW WARNINGS", 13) == 0)) {
+					qpo_state.is_show_warnings = true;
+				}
+				if (strcasestr(dig_text,"LAST_INSERT_ID") || strcasestr(dig_text,"@@IDENTITY")) {
+					qpo_state.is_last_insert_id = true;
 				}
 			}
-			if (locked_on_hostgroup >= 0) {
-				if (current_hostgroup != locked_on_hostgroup) {
-					client_myds->DSS=STATE_QUERY_SENT_NET;
-					int l = CurrentQuery.QueryLength;
-					char *end = (char *)"";
-					if (l>256) {
-						l=253;
-						end = (char *)"...";
-					}
-					string nqn = string((char *)CurrentQuery.QueryPointer,l);
-					char *err_msg = (char *)"Session trying to reach HG %d while locked on HG %d . Rejecting query: %s";
-					char *buf = (char *)malloc(strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64);
-					sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
-					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9005,(char *)"HY000",buf, true);
-					thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
-					RequestEnd(NULL, 9005, buf);
-					free(buf);
-					l_free(pkt.size,pkt.ptr);
-					return;
+
+			MySQL_Routing_Result res = resolve_hostgroup_routing(sess_state, qpo_state, mysql_thread___set_query_lock_on_hostgroup);
+
+			if (res.error) {
+				client_myds->DSS=STATE_QUERY_SENT_NET;
+				int l = CurrentQuery.QueryLength;
+				char *end = (char *)"";
+				if (l>256) {
+					l=253;
+					end = (char *)"...";
 				}
+				string nqn = string((char *)CurrentQuery.QueryPointer,l);
+				char *err_msg = (char *)"Session trying to reach HG %d while locked on HG %d . Rejecting query: %s%s";
+				char *buf = (char *)malloc(strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64);
+				sprintf(buf, err_msg, res.new_current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
+				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9005,(char *)"HY000",buf, true);
+				thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
+				RequestEnd(NULL, 9005, buf);
+				free(buf);
+				l_free(pkt.size,pkt.ptr);
+				return;
+			}
+
+			current_hostgroup = res.new_current_hostgroup;
+			locked_on_hostgroup = res.new_locked_on_hostgroup;
+			if (res.lock_hostgroup) {
+				thread->status_variables.stvar[st_var_hostgroup_locked]++;
+				thread->status_variables.stvar[st_var_hostgroup_locked_set_cmds]++;
 			}
 		}
 		mybe=find_or_create_backend(current_hostgroup);
@@ -3500,34 +3528,65 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (rc_break==true) {
 			return;
 		}
-		if (mysql_thread___set_query_lock_on_hostgroup == 1) { // algorithm introduced in 2.0.6
-			if (locked_on_hostgroup < 0) {
-				if (lock_hostgroup) {
-					// we are locking on hostgroup now
-					locked_on_hostgroup = current_hostgroup;
+
+		{
+			MySQL_Routing_Session_State sess_state = {0};
+			sess_state.current_hostgroup = current_hostgroup;
+			sess_state.default_hostgroup = default_hostgroup;
+			sess_state.locked_on_hostgroup = locked_on_hostgroup;
+			sess_state.transaction_persistent_hostgroup = transaction_persistent_hostgroup;
+			sess_state.last_HG_affected_rows = last_HG_affected_rows;
+			sess_state.warning_in_hg = warning_in_hg;
+			sess_state.autocommit = autocommit;
+			sess_state.autocommit_on_hostgroup = autocommit_on_hostgroup;
+			sess_state.mirror = mirror;
+
+			MySQL_Routing_QPO_State qpo_state = {0};
+			qpo_state.destination_hostgroup = qpo->destination_hostgroup;
+			qpo_state.is_set_statement = lock_hostgroup;
+			if (CurrentQuery.QueryParserArgs.digest_text) {
+				const char* dig_text = CurrentQuery.QueryParserArgs.digest_text;
+				const size_t dig_len = strlen(dig_text);
+				if ((dig_len == 13) && (strncasecmp(dig_text, "SHOW WARNINGS", 13) == 0)) {
+					qpo_state.is_show_warnings = true;
+				}
+				if (strcasestr(dig_text,"LAST_INSERT_ID") || strcasestr(dig_text,"@@IDENTITY")) {
+					qpo_state.is_last_insert_id = true;
+				}
+			} else if (CurrentQuery.stmt_info && CurrentQuery.stmt_info->query) {
+				const char* query_text = CurrentQuery.stmt_info->query;
+				if (strcasestr(query_text,"LAST_INSERT_ID") || strcasestr(query_text,"@@IDENTITY")) {
+					qpo_state.is_last_insert_id = true;
 				}
 			}
-			if (locked_on_hostgroup >= 0) {
-				if (current_hostgroup != locked_on_hostgroup) {
-					client_myds->DSS=STATE_QUERY_SENT_NET;
-					//int l = CurrentQuery.QueryLength;
-					int l = CurrentQuery.stmt_info->query_length;
-					char *end = (char *)"";
-					if (l>256) {
-						l=253;
-						end = (char *)"...";
-					}
-					string nqn = string((char *)CurrentQuery.stmt_info->query,l);
-					char *err_msg = (char *)"Session trying to reach HG %d while locked on HG %d . Rejecting query: %s";
-					char *buf = (char *)malloc(strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64);
-					sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
-					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9005,(char *)"HY000",buf, true);
-					thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
-					RequestEnd(NULL, 9005, buf);
-					free(buf);
-					l_free(pkt.size,pkt.ptr);
-					return;
+
+			MySQL_Routing_Result res = resolve_hostgroup_routing(sess_state, qpo_state, mysql_thread___set_query_lock_on_hostgroup);
+
+			if (res.error) {
+				client_myds->DSS=STATE_QUERY_SENT_NET;
+				int l = CurrentQuery.stmt_info->query_length;
+				char *end = (char *)"";
+				if (l>256) {
+					l=253;
+					end = (char *)"...";
 				}
+				string nqn = string((char *)CurrentQuery.stmt_info->query,l);
+				char *err_msg = (char *)"Session trying to reach HG %d while locked on HG %d . Rejecting query: %s%s";
+				char *buf = (char *)malloc(strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64);
+				sprintf(buf, err_msg, res.new_current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
+				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9005,(char *)"HY000",buf, true);
+				thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
+				RequestEnd(NULL, 9005, buf);
+				free(buf);
+				l_free(pkt.size,pkt.ptr);
+				return;
+			}
+
+			current_hostgroup = res.new_current_hostgroup;
+			locked_on_hostgroup = res.new_locked_on_hostgroup;
+			if (res.lock_hostgroup) {
+				thread->status_variables.stvar[st_var_hostgroup_locked]++;
+				thread->status_variables.stvar[st_var_hostgroup_locked_set_cmds]++;
 			}
 		}
 		mybe=find_or_create_backend(current_hostgroup);
@@ -5181,15 +5240,18 @@ __get_pkts_from_client:
 					case STATE_SLEEP:	// only this section can be executed ALSO by mirror
 						command_counters->incr(thread->curtime/1000000);
 						if (transaction_persistent_hostgroup==-1) {
-							if (mysql_thread___set_query_lock_on_hostgroup == 0) { // behavior before 2.0.6
-								current_hostgroup=default_hostgroup;
-							} else {
-								if (locked_on_hostgroup==-1) {
-									current_hostgroup = default_hostgroup;
-								} else {
-									current_hostgroup = locked_on_hostgroup;
-								}
-							}
+							MySQL_Routing_Session_State sess_state = {0};
+							sess_state.current_hostgroup = current_hostgroup;
+							sess_state.default_hostgroup = default_hostgroup;
+							sess_state.locked_on_hostgroup = locked_on_hostgroup;
+							sess_state.transaction_persistent_hostgroup = transaction_persistent_hostgroup;
+							sess_state.mirror = mirror;
+
+							MySQL_Routing_QPO_State qpo_state = {0};
+							qpo_state.destination_hostgroup = -1;
+
+							MySQL_Routing_Result res = resolve_hostgroup_routing(sess_state, qpo_state, mysql_thread___set_query_lock_on_hostgroup);
+							current_hostgroup = res.new_current_hostgroup;
 						}
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , client_myds=%p . Statuses: WAITING_CLIENT_DATA - STATE_SLEEP\n", this, client_myds);
 
@@ -5339,40 +5401,60 @@ __get_pkts_from_client:
 
 									if (autocommit_on_hostgroup>=0) {
 									}
-									if (mysql_thread___set_query_lock_on_hostgroup == 1) { // algorithm introduced in 2.0.6
-										if (locked_on_hostgroup < 0) {
-											if (lock_hostgroup) {
-												// we are locking on hostgroup now
-												if ( qpo->destination_hostgroup >= 0 ) {
-													if (transaction_persistent_hostgroup == -1) {
-														current_hostgroup=qpo->destination_hostgroup;
-													}
-												}
-												locked_on_hostgroup = current_hostgroup;
-												thread->status_variables.stvar[st_var_hostgroup_locked]++;
-												thread->status_variables.stvar[st_var_hostgroup_locked_set_cmds]++;
+
+									{
+										MySQL_Routing_Session_State sess_state = {0};
+										sess_state.current_hostgroup = current_hostgroup;
+										sess_state.default_hostgroup = default_hostgroup;
+										sess_state.locked_on_hostgroup = locked_on_hostgroup;
+										sess_state.transaction_persistent_hostgroup = transaction_persistent_hostgroup;
+										sess_state.last_HG_affected_rows = last_HG_affected_rows;
+										sess_state.warning_in_hg = warning_in_hg;
+										sess_state.autocommit = autocommit;
+										sess_state.autocommit_on_hostgroup = autocommit_on_hostgroup;
+										sess_state.mirror = mirror;
+
+										MySQL_Routing_QPO_State qpo_state = {0};
+										qpo_state.destination_hostgroup = qpo->destination_hostgroup;
+										qpo_state.is_set_statement = lock_hostgroup;
+										if (CurrentQuery.QueryParserArgs.digest_text) {
+											const char* dig_text = CurrentQuery.QueryParserArgs.digest_text;
+											const size_t dig_len = strlen(dig_text);
+											if ((dig_len == 13) && (strncasecmp(dig_text, "SHOW WARNINGS", 13) == 0)) {
+												qpo_state.is_show_warnings = true;
+											}
+											if (strcasestr(dig_text,"LAST_INSERT_ID") || strcasestr(dig_text,"@@IDENTITY")) {
+												qpo_state.is_last_insert_id = true;
 											}
 										}
-										if (locked_on_hostgroup >= 0) {
-											if (current_hostgroup != locked_on_hostgroup) {
-												client_myds->DSS=STATE_QUERY_SENT_NET;
-												int l = CurrentQuery.QueryLength;
-												char *end = (char *)"";
-												if (l>256) {
-													l=253;
-													end = (char *)"...";
-												}
-												string nqn = string((char *)CurrentQuery.QueryPointer,l);
-												char *err_msg = (char *)"Session trying to reach HG %d while locked on HG %d . Rejecting query: %s";
-												char *buf = (char *)malloc(strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64);
-												sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
-												client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9005,(char *)"HY000",buf, true);
-												thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
-												RequestEnd(NULL, 9005, buf);
-												free(buf);
-												l_free(pkt.size,pkt.ptr);
-												break;
+
+										MySQL_Routing_Result res = resolve_hostgroup_routing(sess_state, qpo_state, mysql_thread___set_query_lock_on_hostgroup);
+
+										if (res.error) {
+											client_myds->DSS=STATE_QUERY_SENT_NET;
+											int l = CurrentQuery.QueryLength;
+											char *end = (char *)"";
+											if (l>256) {
+												l=253;
+												end = (char *)"...";
 											}
+											string nqn = string((char *)CurrentQuery.QueryPointer,l);
+											char *err_msg = (char *)"Session trying to reach HG %d while locked on HG %d . Rejecting query: %s%s";
+											char *buf = (char *)malloc(strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64);
+											sprintf(buf, err_msg, res.new_current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
+											client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9005,(char *)"HY000",buf, true);
+											thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
+											RequestEnd(NULL, 9005, buf);
+											free(buf);
+											l_free(pkt.size,pkt.ptr);
+											break;
+										}
+
+										current_hostgroup = res.new_current_hostgroup;
+										locked_on_hostgroup = res.new_locked_on_hostgroup;
+										if (res.lock_hostgroup) {
+											thread->status_variables.stvar[st_var_hostgroup_locked]++;
+											thread->status_variables.stvar[st_var_hostgroup_locked_set_cmds]++;
 										}
 									}
 									mybe=find_or_create_backend(current_hostgroup);
@@ -8262,26 +8344,52 @@ __exit_set_destination_hostgroup:
 	if ( qpo->next_query_flagIN >= 0 ) {
 		next_query_flagIN=qpo->next_query_flagIN;
 	}
-	if ( qpo->destination_hostgroup >= 0 ) {
-		if (transaction_persistent_hostgroup == -1) {
-			current_hostgroup=qpo->destination_hostgroup;
+
+	{
+		MySQL_Routing_Session_State sess_state = {0};
+		sess_state.current_hostgroup = current_hostgroup;
+		sess_state.default_hostgroup = default_hostgroup;
+		sess_state.locked_on_hostgroup = locked_on_hostgroup;
+		sess_state.transaction_persistent_hostgroup = transaction_persistent_hostgroup;
+		sess_state.last_HG_affected_rows = last_HG_affected_rows;
+		sess_state.warning_in_hg = warning_in_hg;
+		sess_state.autocommit = autocommit;
+		sess_state.autocommit_on_hostgroup = autocommit_on_hostgroup;
+		sess_state.mirror = mirror;
+
+		MySQL_Routing_QPO_State qpo_state = {0};
+		qpo_state.destination_hostgroup = qpo->destination_hostgroup;
+		qpo_state.is_set_statement = *lock_hostgroup;
+		if (CurrentQuery.QueryParserArgs.digest_text) {
+			const char* dig_text = CurrentQuery.QueryParserArgs.digest_text;
+			const size_t dig_len = strlen(dig_text);
+			if ((dig_len == 13) && (strncasecmp(dig_text, "SHOW WARNINGS", 13) == 0)) {
+				qpo_state.is_show_warnings = true;
+			}
+			if (strcasestr(dig_text,"LAST_INSERT_ID") || strcasestr(dig_text,"@@IDENTITY")) {
+				qpo_state.is_last_insert_id = true;
+			}
+		}
+
+		MySQL_Routing_Result res = resolve_hostgroup_routing(sess_state, qpo_state, mysql_thread___set_query_lock_on_hostgroup);
+		
+		if (res.error) {
+			client_myds->DSS=STATE_QUERY_SENT_NET;
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9006,(char *)"Y0000", (char*)res.error_msg.c_str());
+			thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
+			RequestEnd(NULL, 9006, (char*)res.error_msg.c_str());
+			l_free(pkt->size,pkt->ptr);
+			return true;
+		}
+
+		current_hostgroup = res.new_current_hostgroup;
+		locked_on_hostgroup = res.new_locked_on_hostgroup;
+		if (res.lock_hostgroup) {
+			thread->status_variables.stvar[st_var_hostgroup_locked]++;
+			thread->status_variables.stvar[st_var_hostgroup_locked_set_cmds]++;
 		}
 	}
 
-	if (mysql_thread___set_query_lock_on_hostgroup == 1) { // algorithm introduced in 2.0.6
-		if (locked_on_hostgroup >= 0) {
-			if (current_hostgroup != locked_on_hostgroup) {
-				client_myds->DSS=STATE_QUERY_SENT_NET;
-				char buf[140];
-				sprintf(buf,"ProxySQL Error: connection is locked to hostgroup %d but trying to reach hostgroup %d", locked_on_hostgroup, current_hostgroup);
-				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9006,(char *)"Y0000",buf);
-				thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
-				RequestEnd(NULL, 9006, buf);
-				l_free(pkt->size,pkt->ptr);
-				return true;
-			}
-		}
-	}
 	return false;
 }
 

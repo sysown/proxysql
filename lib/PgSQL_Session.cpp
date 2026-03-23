@@ -15,6 +15,7 @@ using json = nlohmann::json;
 #include "MySQL_Data_Stream.h"
 #include "PgSQL_Query_Processor.h"
 #include "PgSQL_PreparedStatement.h"
+#include "PgSQL_HostGroup_Routing.h"
 #include "PgSQL_Logger.hpp"
 #include "StatCounters.h"
 #include "PgSQL_Authentication.h"
@@ -1974,15 +1975,17 @@ __implicit_sync:
 			case STATE_SLEEP:	// only this section can be executed ALSO by mirror
 				command_counters->incr(thread->curtime / 1000000);
 				if (transaction_persistent_hostgroup == -1) {
-					if (pgsql_thread___set_query_lock_on_hostgroup == 0) { // behavior before 2.0.6
-						current_hostgroup = default_hostgroup;
-					} else {
-						if (locked_on_hostgroup == -1) {
-							current_hostgroup = default_hostgroup;
-						} else {
-							current_hostgroup = locked_on_hostgroup;
-						}
-					}
+					PgSQL_Routing_Session_State sess_state = {0};
+					sess_state.current_hostgroup = current_hostgroup;
+					sess_state.default_hostgroup = default_hostgroup;
+					sess_state.locked_on_hostgroup = locked_on_hostgroup;
+					sess_state.transaction_persistent_hostgroup = transaction_persistent_hostgroup;
+
+					PgSQL_Routing_QPO_State qpo_state = {0};
+					qpo_state.destination_hostgroup = -1;
+
+					PgSQL_Routing_Result res = resolve_pgsql_hostgroup_routing(sess_state, qpo_state, pgsql_thread___set_query_lock_on_hostgroup);
+					current_hostgroup = res.new_current_hostgroup;
 				}
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , client_myds=%p . Statuses: WAITING_CLIENT_DATA - STATE_SLEEP\n", this, client_myds);
 				if (session_fast_forward) { // if it is fast forward
@@ -2151,41 +2154,45 @@ __implicit_sync:
 									//handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___create_mirror_session();
 								}
 
-								if (pgsql_thread___set_query_lock_on_hostgroup == 1) { // algorithm introduced in 2.0.6
-									if (locked_on_hostgroup < 0) {
-										if (lock_hostgroup) {
-											// we are locking on hostgroup now
-											if (qpo->destination_hostgroup >= 0) {
-												if (transaction_persistent_hostgroup == -1) {
-													current_hostgroup = qpo->destination_hostgroup;
-												}
-											}
-											locked_on_hostgroup = current_hostgroup;
-											thread->status_variables.stvar[st_var_hostgroup_locked]++;
-											thread->status_variables.stvar[st_var_hostgroup_locked_set_cmds]++;
+								{
+									PgSQL_Routing_Session_State sess_state = {0};
+									sess_state.current_hostgroup = current_hostgroup;
+									sess_state.default_hostgroup = default_hostgroup;
+									sess_state.locked_on_hostgroup = locked_on_hostgroup;
+									sess_state.transaction_persistent_hostgroup = transaction_persistent_hostgroup;
+
+									PgSQL_Routing_QPO_State qpo_state = {0};
+									qpo_state.destination_hostgroup = qpo->destination_hostgroup;
+									qpo_state.lock_hostgroup = lock_hostgroup;
+
+									PgSQL_Routing_Result res = resolve_pgsql_hostgroup_routing(sess_state, qpo_state, pgsql_thread___set_query_lock_on_hostgroup);
+
+									if (res.error) {
+										client_myds->DSS = STATE_QUERY_SENT_NET;
+										int l = CurrentQuery.QueryLength;
+										char* end = (char*)"";
+										if (l > 256) {
+											l = 253;
+											end = (char*)"...";
 										}
+										string nqn = string((char*)CurrentQuery.QueryPointer, l);
+										const char* err_msg = "Session trying to reach HG %d while locked on HG %d . Rejecting query: %s%s";
+										char* buf = (char*)malloc(strlen(err_msg) + strlen(nqn.c_str()) + strlen(end) + 64);
+										sprintf(buf, err_msg, res.new_current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
+										client_myds->myprot.generate_error_packet(true, true, buf, PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION,
+											false, true);
+										thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
+										RequestEnd(NULL, true);
+										free(buf);
+										l_free(pkt.size, pkt.ptr);
+										break;
 									}
-									if (locked_on_hostgroup >= 0) {
-										if (current_hostgroup != locked_on_hostgroup) {
-											client_myds->DSS = STATE_QUERY_SENT_NET;
-											int l = CurrentQuery.QueryLength;
-											char* end = (char*)"";
-											if (l > 256) {
-												l = 253;
-												end = (char*)"...";
-											}
-											string nqn = string((char*)CurrentQuery.QueryPointer, l);
-											const char* err_msg = "Session trying to reach HG %d while locked on HG %d . Rejecting query: %s%s";
-											char* buf = (char*)malloc(strlen(err_msg) + strlen(nqn.c_str()) + strlen(end) + 64);
-											sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
-											client_myds->myprot.generate_error_packet(true, true, buf, PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION,
-												false, true);
-											thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
-											RequestEnd(NULL, true);
-											free(buf);
-											l_free(pkt.size, pkt.ptr);
-											break;
-										}
+
+									current_hostgroup = res.new_current_hostgroup;
+									locked_on_hostgroup = res.new_locked_on_hostgroup;
+									if (res.lock_hostgroup) {
+										thread->status_variables.stvar[st_var_hostgroup_locked]++;
+										thread->status_variables.stvar[st_var_hostgroup_locked_set_cmds]++;
 									}
 								}
 								mybe = find_or_create_backend(current_hostgroup);
@@ -4717,24 +4724,31 @@ __exit_set_destination_hostgroup:
 		next_query_flagIN = qpo->next_query_flagIN;
 	}
 
-	if (qpo->destination_hostgroup >= 0 && transaction_persistent_hostgroup == -1) {
-		current_hostgroup = qpo->destination_hostgroup;
-	}
+	{
+		PgSQL_Routing_Session_State sess_state = {0};
+		sess_state.current_hostgroup = current_hostgroup;
+		sess_state.default_hostgroup = default_hostgroup;
+		sess_state.locked_on_hostgroup = locked_on_hostgroup;
+		sess_state.transaction_persistent_hostgroup = transaction_persistent_hostgroup;
 
-	// Hostgroup locking check
-	if (pgsql_thread___set_query_lock_on_hostgroup == 1 && locked_on_hostgroup >= 0) {
-		if (current_hostgroup != locked_on_hostgroup) {
+		PgSQL_Routing_QPO_State qpo_state = {0};
+		qpo_state.destination_hostgroup = qpo->destination_hostgroup;
+		qpo_state.lock_hostgroup = false; // Not set in this state
+
+		PgSQL_Routing_Result res = resolve_pgsql_hostgroup_routing(sess_state, qpo_state, pgsql_thread___set_query_lock_on_hostgroup);
+
+		if (res.error) {
 			client_myds->DSS = STATE_QUERY_SENT_NET;
-			char buf[140];
-			sprintf(buf, "ProxySQL Error: connection is locked to hostgroup %d but trying to reach hostgroup %d",
-				locked_on_hostgroup, current_hostgroup);
-			client_myds->myprot.generate_error_packet(true, true, buf,
+			client_myds->myprot.generate_error_packet(true, true, (char*)res.error_msg.c_str(),
 				PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION, false);
 			thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
 			RequestEnd(NULL, true);
 			l_free(pkt->size, pkt->ptr);
 			return true;
 		}
+
+		current_hostgroup = res.new_current_hostgroup;
+		locked_on_hostgroup = res.new_locked_on_hostgroup;
 	}
 
 	return false;
@@ -6109,19 +6123,30 @@ int PgSQL_Session::handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg
 			this, client_myds, previous_hostgroup);
 	}
 
-	if (pgsql_thread___set_query_lock_on_hostgroup == 1) {
-		if (locked_on_hostgroup < 0) {
-			if (lock_hostgroup) {
-				// we are locking on hostgroup now
-				locked_on_hostgroup = current_hostgroup;
-			}
+	{
+		PgSQL_Routing_Session_State sess_state = {0};
+		sess_state.current_hostgroup = current_hostgroup;
+		sess_state.default_hostgroup = default_hostgroup;
+		sess_state.locked_on_hostgroup = locked_on_hostgroup;
+		sess_state.transaction_persistent_hostgroup = transaction_persistent_hostgroup;
+
+		PgSQL_Routing_QPO_State qpo_state = {0};
+		qpo_state.destination_hostgroup = -1; // Not relevant here as current_hostgroup was already reset to previous
+		qpo_state.lock_hostgroup = lock_hostgroup;
+
+		PgSQL_Routing_Result res = resolve_pgsql_hostgroup_routing(sess_state, qpo_state, pgsql_thread___set_query_lock_on_hostgroup);
+
+		if (res.error) {
+			handle_post_sync_locked_on_hostgroup_error((const char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
+			l_free(parse_pkt.size, parse_pkt.ptr);
+			return 2;
 		}
-		if (locked_on_hostgroup >= 0) {
-			if (current_hostgroup != locked_on_hostgroup) {
-				handle_post_sync_locked_on_hostgroup_error((const char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
-				l_free(parse_pkt.size, parse_pkt.ptr);
-				return 2;
-			}
+
+		current_hostgroup = res.new_current_hostgroup;
+		locked_on_hostgroup = res.new_locked_on_hostgroup;
+		if (res.lock_hostgroup) {
+			// PgSQL session doesn't seem to update status variables here like MySQL does,
+			// but we keep the logic consistent.
 		}
 	}
 
@@ -6355,20 +6380,27 @@ int PgSQL_Session::handle_post_sync_describe_message(PgSQL_Describe_Message* des
 		proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Session=%p client_myds=%p. Using previous hostgroup '%d'\n",
 			this, client_myds, previous_hostgroup);
 	}
-	if (pgsql_thread___set_query_lock_on_hostgroup == 1) {
-		if (locked_on_hostgroup < 0) {
-			if (lock_hostgroup) {
-				// we are locking on hostgroup now
-				locked_on_hostgroup = current_hostgroup;
-			}
+	{
+		PgSQL_Routing_Session_State sess_state = {0};
+		sess_state.current_hostgroup = current_hostgroup;
+		sess_state.default_hostgroup = default_hostgroup;
+		sess_state.locked_on_hostgroup = locked_on_hostgroup;
+		sess_state.transaction_persistent_hostgroup = transaction_persistent_hostgroup;
+
+		PgSQL_Routing_QPO_State qpo_state = {0};
+		qpo_state.destination_hostgroup = -1; // Not relevant here as current_hostgroup was already reset to previous
+		qpo_state.lock_hostgroup = lock_hostgroup;
+
+		PgSQL_Routing_Result res = resolve_pgsql_hostgroup_routing(sess_state, qpo_state, pgsql_thread___set_query_lock_on_hostgroup);
+
+		if (res.error) {
+			handle_post_sync_locked_on_hostgroup_error(CurrentQuery.extended_query_info.stmt_info->query, 
+				CurrentQuery.extended_query_info.stmt_info->query_length);
+			return 2;
 		}
-		if (locked_on_hostgroup >= 0) {
-			if (current_hostgroup != locked_on_hostgroup) {
-				handle_post_sync_locked_on_hostgroup_error(CurrentQuery.extended_query_info.stmt_info->query, 
-					CurrentQuery.extended_query_info.stmt_info->query_length);
-				return 2;
-			}
-		}
+
+		current_hostgroup = res.new_current_hostgroup;
+		locked_on_hostgroup = res.new_locked_on_hostgroup;
 	}
 	
 	if (extended_query_frame.empty() == true) {
@@ -6501,20 +6533,27 @@ int PgSQL_Session::handle_post_sync_bind_message(PgSQL_Bind_Message* bind_msg) {
 			this, client_myds, previous_hostgroup);
 	}
 
-	if (pgsql_thread___set_query_lock_on_hostgroup == 1) {
-		if (locked_on_hostgroup < 0) {
-			if (lock_hostgroup) {
-				// we are locking on hostgroup now
-				locked_on_hostgroup = current_hostgroup;
-			}
+	{
+		PgSQL_Routing_Session_State sess_state = {0};
+		sess_state.current_hostgroup = current_hostgroup;
+		sess_state.default_hostgroup = default_hostgroup;
+		sess_state.locked_on_hostgroup = locked_on_hostgroup;
+		sess_state.transaction_persistent_hostgroup = transaction_persistent_hostgroup;
+
+		PgSQL_Routing_QPO_State qpo_state = {0};
+		qpo_state.destination_hostgroup = -1; // Not relevant here as current_hostgroup was already reset to previous
+		qpo_state.lock_hostgroup = lock_hostgroup;
+
+		PgSQL_Routing_Result res = resolve_pgsql_hostgroup_routing(sess_state, qpo_state, pgsql_thread___set_query_lock_on_hostgroup);
+
+		if (res.error) {
+			handle_post_sync_locked_on_hostgroup_error(CurrentQuery.extended_query_info.stmt_info->query,
+				CurrentQuery.extended_query_info.stmt_info->query_length);
+			return 2;
 		}
-		if (locked_on_hostgroup >= 0) {
-			if (current_hostgroup != locked_on_hostgroup) {
-				handle_post_sync_locked_on_hostgroup_error(CurrentQuery.extended_query_info.stmt_info->query,
-					CurrentQuery.extended_query_info.stmt_info->query_length);
-				return 2;
-			}
-		}
+
+		current_hostgroup = res.new_current_hostgroup;
+		locked_on_hostgroup = res.new_locked_on_hostgroup;
 	}
 
 	bind_waiting_for_execute.reset(bind_msg->release()); // release the ownership of the bind message
@@ -6642,20 +6681,27 @@ int PgSQL_Session::handle_post_sync_execute_message(PgSQL_Execute_Message* execu
 			this, client_myds, previous_hostgroup);
 	}
 
-	if (pgsql_thread___set_query_lock_on_hostgroup == 1) {
-		if (locked_on_hostgroup < 0) {
-			if (lock_hostgroup) {
-				// we are locking on hostgroup now
-				locked_on_hostgroup = current_hostgroup;
-			}
+	{
+		PgSQL_Routing_Session_State sess_state = {0};
+		sess_state.current_hostgroup = current_hostgroup;
+		sess_state.default_hostgroup = default_hostgroup;
+		sess_state.locked_on_hostgroup = locked_on_hostgroup;
+		sess_state.transaction_persistent_hostgroup = transaction_persistent_hostgroup;
+
+		PgSQL_Routing_QPO_State qpo_state = {0};
+		qpo_state.destination_hostgroup = -1; // Not relevant here as current_hostgroup was already reset to previous
+		qpo_state.lock_hostgroup = lock_hostgroup;
+
+		PgSQL_Routing_Result res = resolve_pgsql_hostgroup_routing(sess_state, qpo_state, pgsql_thread___set_query_lock_on_hostgroup);
+
+		if (res.error) {
+			handle_post_sync_locked_on_hostgroup_error(CurrentQuery.extended_query_info.stmt_info->query,
+				CurrentQuery.extended_query_info.stmt_info->query_length);
+			return 2;
 		}
-		if (locked_on_hostgroup >= 0) {
-			if (current_hostgroup != locked_on_hostgroup) {
-				handle_post_sync_locked_on_hostgroup_error(CurrentQuery.extended_query_info.stmt_info->query,
-					CurrentQuery.extended_query_info.stmt_info->query_length);
-				return 2;
-			}
-		}
+
+		current_hostgroup = res.new_current_hostgroup;
+		locked_on_hostgroup = res.new_locked_on_hostgroup;
 	}
 
 	if (extended_query_frame.empty() == true) {

@@ -231,7 +231,7 @@ $(ODIR)/test_init.o: $(TEST_HELPERS_DIR)/test_init.cpp | $(ODIR)
 # Unit test targets
 # ===========================================================================
 
-UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t protocol_unit-t auth_unit-t connection_pool_unit-t rule_matching_unit-t hostgroups_unit-t monitor_health_unit-t
+UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t protocol_unit-t auth_unit-t connection_pool_unit-t rule_matching_unit-t hostgroups_unit-t monitor_health_unit-t MySQL_HostGroup_Routing-t PgSQL_HostGroup_Routing-t
 
 .PHONY: all
 all: $(UNIT_TESTS)
@@ -289,6 +289,12 @@ monitor_health_unit-t: monitor_health_unit-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYS
 	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
 		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) \
 		$(ALLOW_MULTI_DEF) -o $@
+
+MySQL_HostGroup_Routing-t: MySQL_HostGroup_Routing-t.cpp $(PROXYSQL_PATH)/lib/MySQL_HostGroup_Routing.cpp $(ODIR)/tap.o
+	$(CXX) $^ $(IDIRS) $(OPT) -o $@
+
+PgSQL_HostGroup_Routing-t: PgSQL_HostGroup_Routing-t.cpp $(PROXYSQL_PATH)/lib/PgSQL_HostGroup_Routing.cpp $(ODIR)/tap.o
+	$(CXX) $^ $(IDIRS) $(OPT) -o $@
 
 
 # ===========================================================================
