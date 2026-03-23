@@ -339,32 +339,32 @@ docker run \
 
         # MySQL configuration
         echo '--- mysql_servers ---'
-        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT hostgroup_id, hostname, port, status, comment FROM mysql_servers ORDER BY hostgroup_id, hostname' 2>/dev/null || echo 'ERROR: Failed to query mysql_servers'
+        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT hostgroup_id, hostname, port, status, comment FROM mysql_servers ORDER BY hostgroup_id, hostname'
 
         echo '--- mysql_users ---'
-        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT username, password, active, default_hostgroup, transaction_persistent FROM mysql_users ORDER BY username' 2>/dev/null || echo 'ERROR: Failed to query mysql_users'
+        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT username, password, active, default_hostgroup, transaction_persistent FROM mysql_users ORDER BY username'
 
         echo '--- mysql_replication_hostgroups ---'
-        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT writer_hostgroup, reader_hostgroup, comment FROM mysql_replication_hostgroups' 2>/dev/null || echo 'ERROR: Failed to query mysql_replication_hostgroups'
+        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT writer_hostgroup, reader_hostgroup, comment FROM mysql_replication_hostgroups'
 
         echo '--- mysql_query_rules ---'
-        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT rule_id, active, username, match_pattern, destination_hostgroup, apply, comment FROM mysql_query_rules ORDER BY rule_id' 2>/dev/null || echo 'ERROR: Failed to query mysql_query_rules (or empty)'
+        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT rule_id, active, username, match_pattern, destination_hostgroup, apply, comment FROM mysql_query_rules ORDER BY rule_id'
 
         echo '--- runtime_mysql_query_rules ---'
-        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT rule_id, active, username, match_pattern, destination_hostgroup, apply, comment FROM runtime_mysql_query_rules ORDER BY rule_id' 2>/dev/null || echo 'ERROR: Failed to query runtime_mysql_query_rules (or empty)'
+        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT rule_id, active, username, match_pattern, destination_hostgroup, apply, comment FROM runtime_mysql_query_rules ORDER BY rule_id'
 
         # PgSQL configuration
         echo '--- pgsql_servers ---'
-        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT hostgroup_id, hostname, port, status, comment FROM pgsql_servers ORDER BY hostgroup_id, hostname' 2>/dev/null || echo 'INFO: pgsql_servers not configured (or error)'
+        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT hostgroup_id, hostname, port, status, comment FROM pgsql_servers ORDER BY hostgroup_id, hostname'
 
         echo '--- pgsql_users ---'
-        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT username, password, active, default_hostgroup FROM pgsql_users ORDER BY username' 2>/dev/null || echo 'INFO: pgsql_users not configured (or error)'
+        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT username, password, active, default_hostgroup FROM pgsql_users ORDER BY username'
 
         echo '--- pgsql_replication_hostgroups ---'
-        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT writer_hostgroup, reader_hostgroup, comment FROM pgsql_replication_hostgroups' 2>/dev/null || echo 'INFO: pgsql_replication_hostgroups not configured (or error)'
+        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT writer_hostgroup, reader_hostgroup, comment FROM pgsql_replication_hostgroups'
 
         echo '--- pgsql_query_rules ---'
-        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT rule_id, active, username, match_pattern, destination_hostgroup, apply, comment FROM pgsql_query_rules ORDER BY rule_id' 2>/dev/null || echo 'INFO: pgsql_query_rules not configured (or empty)'
+        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT rule_id, active, username, match_pattern, destination_hostgroup, apply, comment FROM pgsql_query_rules ORDER BY rule_id'
 
         echo '================================================================================'
 
