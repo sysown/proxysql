@@ -11,7 +11,7 @@ set -euo pipefail
 #   PARALLEL_JOBS=4        # Max parallel groups (default: unlimited)
 #   TIMEOUT_MINUTES=60     # Hard timeout per group (default: 60)
 #   EXIT_ON_FIRST_FAIL=0   # Stop on first failure (default: 0)
-#   AUTO_CLEANUP=0         # Auto cleanup successful groups (default: 0)
+#   AUTO_CLEANUP=1         # Auto cleanup successful groups (default: 1)
 #   SKIP_CLUSTER_START=1   # Skip ProxySQL cluster initialization (default: 0)
 #   COVERAGE=1             # Enable code coverage collection (default: 0)
 #   TAP_USE_NOISE=1        # Enable noise injection for race condition testing (default: 0)
@@ -35,7 +35,7 @@ TAP_GROUPS="${TAP_GROUPS:-}"
 PARALLEL_JOBS="${PARALLEL_JOBS:-2}"  # Default: 2 parallel groups
 TIMEOUT_MINUTES="${TIMEOUT_MINUTES:-60}"
 EXIT_ON_FIRST_FAIL="${EXIT_ON_FIRST_FAIL:-0}"
-AUTO_CLEANUP="${AUTO_CLEANUP:-0}"
+AUTO_CLEANUP="${AUTO_CLEANUP:-1}"
 SKIP_CLUSTER_START="${SKIP_CLUSTER_START:-0}"
 COVERAGE="${COVERAGE:-0}"
 TAP_USE_NOISE="${TAP_USE_NOISE:-0}"
