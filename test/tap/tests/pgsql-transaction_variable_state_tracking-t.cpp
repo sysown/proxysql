@@ -278,7 +278,7 @@ int main(int argc, char** argv) {
         {"standard_conforming_strings", {"standard_conforming_strings", {"on", "off"}}},
         {"timezone", {"timezone", {"UTC", "PST8PDT"}}},
         {"bytea_output", {"bytea_output", {"hex", "escape"}}},
-        {"allow_in_place_tablespaces", {"allow_in_place_tablespaces", {"on", "off"}}},
+        {"enable_mergejoin", {"enable_mergejoin", {"on", "off"}}},
         {"enable_bitmapscan", {"enable_bitmapscan", {"on", "off"}}},
         {"enable_hashjoin", {"enable_hashjoin", {"on", "off"}}},
         {"enable_indexscan", {"enable_indexscan", {"on", "off"}}},

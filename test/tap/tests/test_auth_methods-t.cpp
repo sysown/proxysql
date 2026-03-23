@@ -1141,6 +1141,7 @@ int main(int argc, char** argv) {
 		diag("This test requires MySQL 8.0+ but backend is version %lu. Skipping.", server_version);
 		plan(0); // Skip all tests
 		mysql_close(mysql);
+		stop_internal_noise_threads();
 		return EXIT_SUCCESS;
 	}
 
