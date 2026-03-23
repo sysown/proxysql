@@ -64,6 +64,9 @@ for i in \$(seq 1 ${NUM_NODES}); do
     NODE_DIR=/var/lib/proxysql-node\${i}
     mkdir -p \${NODE_DIR}
 
+    PGSQL_PORT=\$((6133 + i * 10))
+    PGSQL_ADMIN_PORT=\$((6132 + i * 10))
+    SQLITE_PORT=\$((6030 + i * 10))
     cat > \${NODE_DIR}/proxysql-node.cnf <<NODECNF
 admin_variables=
 {
@@ -77,6 +80,14 @@ mysql_variables=
     threads=4
     max_connections=2048
     interfaces=\"0.0.0.0:\${MYSQL_PORT}\"
+}
+pgsql_variables=
+{
+    interfaces=\"0.0.0.0:\${PGSQL_PORT}\"
+}
+sqliteserver_variables=
+{
+    mysql_ifaces=\"0.0.0.0:\${SQLITE_PORT}\"
 }
 NODECNF
 
