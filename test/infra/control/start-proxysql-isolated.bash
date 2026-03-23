@@ -184,6 +184,7 @@ if [ "${NUM_NODES}" -gt 0 ]; then
 SET admin-admin_credentials="admin:admin;radmin:radmin;cluster1:secret1pass";
 SET admin-cluster_username="cluster1";
 SET admin-cluster_password="secret1pass";
+SET admin-cluster_mysql_servers_sync_algorithm=3;
 SET admin-restapi_enabled='true';
 SET admin-debug='true';
 UPDATE global_variables SET variable_value='false' WHERE variable_name='admin-hash_passwords';
@@ -202,6 +203,7 @@ SQL
 
         ${MYSQL_CMD} -P${ADMIN_PORT} <<SQL
 UPDATE global_variables SET variable_value='false' WHERE variable_name='admin-hash_passwords';
+SET admin-cluster_mysql_servers_sync_algorithm=3;
 SET admin-restapi_port=${RESTAPI_PORT};
 SET admin-restapi_enabled='true';
 SET admin-debug='true';
