@@ -54,6 +54,10 @@ docker rm -f "${PROXY_CONTAINER}" >/dev/null 2>&1 || true
 #   proxy-nodeN: admin=6032+(N*10), mysql=6033+(N*10)
 
 STARTUP_CMD="
+# Save GCOV env for the primary process
+SAVED_GCOV_PREFIX=\${GCOV_PREFIX:-}
+SAVED_GCOV_PREFIX_STRIP=\${GCOV_PREFIX_STRIP:-}
+
 # Disable gcov for background cluster nodes to avoid concurrent .gcda writes
 unset GCOV_PREFIX GCOV_PREFIX_STRIP
 
@@ -95,6 +99,10 @@ NODECNF
     /usr/bin/proxysql --idle-threads -f -c \${NODE_DIR}/proxysql-node.cnf -D \${NODE_DIR} >> \${NODE_DIR}/proxysql.log 2>&1 &
     echo \"Started proxy-node\${i} (admin=\${ADMIN_PORT}, mysql=\${MYSQL_PORT})\"
 done
+
+# Restore GCOV env for the primary process
+export GCOV_PREFIX=\${SAVED_GCOV_PREFIX}
+export GCOV_PREFIX_STRIP=\${SAVED_GCOV_PREFIX_STRIP}
 
 # Start primary ProxySQL in foreground
 exec /usr/bin/proxysql --idle-threads --clickhouse-server --sqlite3-server -f -c /etc/proxysql.cnf -D /var/lib/proxysql 2>&1 | tee /var/lib/proxysql/proxysql.log
