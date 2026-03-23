@@ -1636,7 +1636,7 @@ def main(argv):
         log.debug(f"TEST_PY_TAP_SHUFFLE_LIMIT is disabled (current value: {shuffle_limit})")
 
     # Options
-    coverage = int(os.environ['WITHGCOV'])
+    coverage = int(os.environ.get('WITHGCOV', 0)) or int(os.environ.get('COVERAGE_MODE', 0))
 
     for opt, arg in opts:
         if opt in ('-h', "--help"):
