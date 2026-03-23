@@ -101,8 +101,11 @@ STATIC_LIBS := $(CITYHASH_LDIR)/libcityhash.a \
 			   $(LZ4_LDIR)/liblz4.a \
 			   $(ZSTD_LDIR)/libzstd.a
 
-ifeq ($(PROXYSQLCLICKHOUSE),1)
-	STATIC_LIBS += $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a
+# ClickHouse library: auto-detect if built (always built in current builds)
+# Append LZ4/ZSTD again after ClickHouse to resolve its dependencies
+ifneq ($(wildcard $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a),)
+	STATIC_LIBS += $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a \
+				   $(LZ4_LDIR)/liblz4.a $(ZSTD_LDIR)/libzstd.a
 endif
 
 ifeq ($(UNAME_S),Linux)
@@ -170,24 +173,32 @@ endif
 # Compiler flags
 # ===========================================================================
 
+# Auto-detect feature flags from libproxysql.a symbols.
+# This ensures unit tests compile with the same flags the library was built with,
+# regardless of whether the environment variables are set during `make`.
 PSQLCH :=
-ifeq ($(PROXYSQLCLICKHOUSE),1)
+ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c ClickHouse_Server),0)
+	PROXYSQLCLICKHOUSE := 1
 	PSQLCH := -DPROXYSQLCLICKHOUSE
 endif
 PSQLGA :=
-ifeq ($(PROXYSQLGENAI),1)
+ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c GenAI_Thread),0)
+	PROXYSQLGENAI := 1
 	PSQLGA := -DPROXYSQLGENAI
 endif
-PSQL31 :=
-ifeq ($(PROXYSQL31),1)
-	PSQL31 := -DPROXYSQL31
-endif
 PSQLFFTO :=
-ifeq ($(PROXYSQLFFTO),1)
+ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c MySQLFFTO),0)
+	PROXYSQLFFTO := 1
 	PSQLFFTO := -DPROXYSQLFFTO
 endif
+PSQL31 :=
+ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c MySQLFFTO),0)
+	PROXYSQL31 := 1
+	PSQL31 := -DPROXYSQL31
+endif
 PSQLTSDB :=
-ifeq ($(PROXYSQLTSDB),1)
+ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c ProxySQL_TSDB),0)
+	PROXYSQLTSDB := 1
 	PSQLTSDB := -DPROXYSQLTSDB
 endif
 

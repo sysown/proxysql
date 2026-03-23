@@ -24,6 +24,7 @@ RUN apt-get update -qq && \
     python3-yaml \
     python3-packaging \
     python3-structlog \
+    sysbench \
     php-cli \
     php-mysql \
     lcov \

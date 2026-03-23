@@ -264,13 +264,15 @@ docker run \
                 if command -v fastcov >/dev/null 2>&1; then
                     mkdir -p \"\${COVERAGE_REPORT_DIR}\"
                     local coverage_file=\"\${COVERAGE_REPORT_DIR}/\${INFRA_ID}.info\"
+                    local coverage_log=\"\${COVERAGE_REPORT_DIR}/coverage-generation.log\"
                     echo \">>> Generating coverage report: \${coverage_file}\"
+                    echo \">>> Coverage generation log: \${coverage_log}\"
                     local nproc_val=\$(nproc)
 
                     # Copy .gcno files to /gcov so fastcov can find both .gcno and .gcda together
                     # This avoids race conditions when multiple groups run in parallel
                     if [ -d \"/gcov\" ] && [ \"\$(ls -A /gcov 2>/dev/null)\" ]; then
-                        echo \">>> Preparing coverage data directory...\"
+                        echo \">>> Preparing coverage data directory...\" >> \"\${coverage_log}\" 2>&1
                         cd \"\${WORKSPACE}\" && find . -path './ci_infra_logs' -prune -o -name '*.gcno' -type f -print | while read gcno; do
                             target=\"/gcov/\${gcno#./}\"
                             target_dir=\"\$(dirname \"\$target\")\"
@@ -279,7 +281,9 @@ docker run \
                         done
                         echo \">>> Running fastcov on /gcov...\"
                         cd /gcov
-                        fastcov -b -j\"\${nproc_val}\" --process-gcno -l -e /usr/include/ -e \"\${WORKSPACE}/test/tap/tests\" -e \"\${WORKSPACE}/deps/\" -d . -o \"\${coverage_file}\" 2>&1 || echo \">>> WARNING: Coverage generation failed\"
+                        fastcov -b -j\"\${nproc_val}\" --process-gcno -l \
+                            --include \"\${WORKSPACE}/include/\" \"\${WORKSPACE}/lib/\" \"\${WORKSPACE}/src/\" \"\${WORKSPACE}/test/\" \
+                            -d . -o \"\${coverage_file}\" >> \"\${coverage_log}\" 2>&1 || echo \">>> WARNING: Coverage generation failed (see \${coverage_log})\"
                     else
                         echo \">>> WARNING: /gcov directory is empty or missing, skipping coverage\"
                     fi
@@ -290,11 +294,12 @@ docker run \
                         if command -v genhtml >/dev/null 2>&1; then
                             local html_dir=\"\${COVERAGE_REPORT_DIR}/html\"
                             mkdir -p \"\${html_dir}\"
-                            genhtml --branch-coverage --ignore-errors negative,source --synthesize-missing \"\${coverage_file}\" --output-directory \"\${html_dir}\" 2>&1 || echo \">>> WARNING: HTML generation failed\"
+                            echo \">>> Generating HTML coverage report...\"
+                            genhtml --branch-coverage --ignore-errors negative,source --synthesize-missing \"\${coverage_file}\" --output-directory \"\${html_dir}\" >> \"\${coverage_log}\" 2>&1 || echo \">>> WARNING: HTML generation failed (see \${coverage_log})\"
                             [ -f \"\${html_dir}/index.html\" ] && echo \">>> HTML coverage report: \${html_dir}/index.html\"
                         fi
                     else
-                        echo \">>> WARNING: Coverage info file not generated\"
+                        echo \">>> WARNING: Coverage info file not generated (see \${coverage_log})\"
                     fi
                 else
                     echo \">>> WARNING: fastcov not found in container, skipping coverage collection\"
@@ -319,8 +324,40 @@ docker run \
         [ -n \"${MYSQL_BINLOG_BIN}\" ] && ln -sf \"${MYSQL_BINLOG_BIN}\" \"${WORKSPACE}/test-scripts/deps/mysqlbinlog\"
         [ -n \"${BINLOG_READER_BIN}\" ] && ln -sf \"${BINLOG_READER_BIN}\" \"${WORKSPACE}/test-scripts/deps/test_binlog_reader-t\"
 
-        # Source the local isolated environment
+        # Source group environment first (sets TEST_PY_* flags etc.)
+        if [ -n \"${TAP_GROUP}\" ]; then
+            BASE_GROUP=\$(echo \"${TAP_GROUP}\" | sed -E 's/[-_]g[0-9]+.*//')
+            if [ -f \"${WORKSPACE}/test/tap/groups/${TAP_GROUP}/env.sh\" ]; then
+                source \"${WORKSPACE}/test/tap/groups/${TAP_GROUP}/env.sh\"
+            elif [ -f \"${WORKSPACE}/test/tap/groups/\${BASE_GROUP}/env.sh\" ]; then
+                source \"${WORKSPACE}/test/tap/groups/\${BASE_GROUP}/env.sh\"
+            fi
+        fi
+
+        # Source the local isolated environment (defaults for unset vars)
         source ${SCRIPT_DIR}/env-isolated.bash
+
+        # Wait for ProxySQL to be reachable from this container
+        # Docker DNS resolution can take a few seconds on newly created containers
+        echo -n '>>> Waiting for ProxySQL admin (proxysql:6032) ...'
+        WAIT_COUNT=0
+        WAIT_MAX=30
+        while [ \$WAIT_COUNT -lt \$WAIT_MAX ]; do
+            if mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT 1' >/dev/null 2>&1; then
+                echo ' OK.'
+                break
+            fi
+            echo -n '.'
+            sleep 1
+            WAIT_COUNT=\$((WAIT_COUNT + 1))
+        done
+        if [ \$WAIT_COUNT -ge \$WAIT_MAX ]; then
+            echo ' FAILED after \${WAIT_MAX}s'
+            echo 'ERROR: Cannot reach ProxySQL admin from test-runner container.'
+            echo 'DNS resolution test:'
+            getent hosts proxysql || echo 'DNS lookup failed for proxysql'
+            exit 1
+        fi
 
         # Dump ProxySQL configuration before running tests
         echo '================================================================================'
@@ -329,32 +366,32 @@ docker run \
 
         # MySQL configuration
         echo '--- mysql_servers ---'
-        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT hostgroup_id, hostname, port, status, comment FROM mysql_servers ORDER BY hostgroup_id, hostname' 2>/dev/null || echo 'ERROR: Failed to query mysql_servers'
+        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT hostgroup_id, hostname, port, status, comment FROM mysql_servers ORDER BY hostgroup_id, hostname'
 
         echo '--- mysql_users ---'
-        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT username, password, active, default_hostgroup, transaction_persistent FROM mysql_users ORDER BY username' 2>/dev/null || echo 'ERROR: Failed to query mysql_users'
+        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT username, password, active, default_hostgroup, transaction_persistent FROM mysql_users ORDER BY username'
 
         echo '--- mysql_replication_hostgroups ---'
-        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT writer_hostgroup, reader_hostgroup, comment FROM mysql_replication_hostgroups' 2>/dev/null || echo 'ERROR: Failed to query mysql_replication_hostgroups'
+        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT writer_hostgroup, reader_hostgroup, comment FROM mysql_replication_hostgroups'
 
         echo '--- mysql_query_rules ---'
-        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT rule_id, active, username, match_pattern, destination_hostgroup, apply, comment FROM mysql_query_rules ORDER BY rule_id' 2>/dev/null || echo 'ERROR: Failed to query mysql_query_rules (or empty)'
+        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT rule_id, active, username, match_pattern, destination_hostgroup, apply, comment FROM mysql_query_rules ORDER BY rule_id'
 
         echo '--- runtime_mysql_query_rules ---'
-        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT rule_id, active, username, match_pattern, destination_hostgroup, apply, comment FROM runtime_mysql_query_rules ORDER BY rule_id' 2>/dev/null || echo 'ERROR: Failed to query runtime_mysql_query_rules (or empty)'
+        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT rule_id, active, username, match_pattern, destination_hostgroup, apply, comment FROM runtime_mysql_query_rules ORDER BY rule_id'
 
         # PgSQL configuration
         echo '--- pgsql_servers ---'
-        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT hostgroup_id, hostname, port, status, comment FROM pgsql_servers ORDER BY hostgroup_id, hostname' 2>/dev/null || echo 'INFO: pgsql_servers not configured (or error)'
+        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT hostgroup_id, hostname, port, status, comment FROM pgsql_servers ORDER BY hostgroup_id, hostname'
 
         echo '--- pgsql_users ---'
-        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT username, password, active, default_hostgroup FROM pgsql_users ORDER BY username' 2>/dev/null || echo 'INFO: pgsql_users not configured (or error)'
+        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT username, password, active, default_hostgroup FROM pgsql_users ORDER BY username'
 
         echo '--- pgsql_replication_hostgroups ---'
-        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT writer_hostgroup, reader_hostgroup, comment FROM pgsql_replication_hostgroups' 2>/dev/null || echo 'INFO: pgsql_replication_hostgroups not configured (or error)'
+        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT writer_hostgroup, reader_hostgroup, comment FROM pgsql_replication_hostgroups'
 
         echo '--- pgsql_query_rules ---'
-        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT rule_id, active, username, match_pattern, destination_hostgroup, apply, comment FROM pgsql_query_rules ORDER BY rule_id' 2>/dev/null || echo 'INFO: pgsql_query_rules not configured (or empty)'
+        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT rule_id, active, username, match_pattern, destination_hostgroup, apply, comment FROM pgsql_query_rules ORDER BY rule_id'
 
         echo '================================================================================'
 
