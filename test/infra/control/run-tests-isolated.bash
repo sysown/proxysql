@@ -143,6 +143,11 @@ fi
 if [ "${SKIP_PROXYSQL}" = "1" ]; then
     echo ">>> Running tests directly on the host (no Docker container)..."
 
+    # Ensure transitive shared libs (e.g. libparser.so via libcpp_dotenv.so) are found.
+    # RUNPATH in intermediate libraries may contain stale absolute paths from the
+    # original build, so we add the known library directories explicitly.
+    export LD_LIBRARY_PATH="${WORKSPACE}/test/tap/tap${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+
     # Discover test binaries from groups.json for this TAP_GROUP
     GROUPS_JSON="${WORKSPACE}/test/tap/groups/groups.json"
     if [ ! -f "${GROUPS_JSON}" ]; then
