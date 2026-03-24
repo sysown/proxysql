@@ -16,6 +16,7 @@
 #include "proxysql.h"
 #include "MySQLProtocolUtils.h"
 #include "PgSQLCommandComplete.h"
+#include "PgSQLErrorFields.h"
 
 #include <cstring>
 #include <vector>
@@ -310,11 +311,55 @@ static void test_mysql_err_packet_empty_message() {
 }
 
 // ============================================================================
+// 7. PgSQL: ErrorResponse field parsing
+// ============================================================================
+
+static void test_pgsql_error_fields_basic() {
+    unsigned char payload[] = {
+        'S','E','R','R','O','R','\0',
+        'C','4','2','6','0','1','\0',
+        'M','s','y','n','t','a','x',' ','e','r','r','o','r','\0',
+        '\0'
+    };
+    PgSQLErrorResult r = pgsql_parse_error_response(payload, sizeof(payload));
+    ok(r.parsed == true, "PgSQL error parse: basic parsed");
+    ok(strcmp(r.sqlstate, "42601") == 0, "PgSQL error parse: sqlstate = 42601");
+    ok(r.message != nullptr && strncmp(r.message, "syntax error", 12) == 0,
+       "PgSQL error parse: message starts with 'syntax error'");
+}
+
+static void test_pgsql_error_fields_missing_code() {
+    unsigned char payload[] = {
+        'S','E','R','R','O','R','\0',
+        'M','s','o','m','e',' ','e','r','r','\0',
+        '\0'
+    };
+    PgSQLErrorResult r = pgsql_parse_error_response(payload, sizeof(payload));
+    ok(r.parsed == true, "PgSQL error no-code: parsed");
+    ok(strlen(r.sqlstate) == 0, "PgSQL error no-code: empty sqlstate");
+    ok(r.message != nullptr && strncmp(r.message, "some err", 8) == 0,
+       "PgSQL error no-code: message correct");
+}
+
+static void test_pgsql_error_fields_empty() {
+    unsigned char payload[] = {'\0'};
+    PgSQLErrorResult r = pgsql_parse_error_response(payload, 1);
+    ok(r.parsed == true, "PgSQL error empty: parsed (no fields)");
+    ok(strlen(r.sqlstate) == 0, "PgSQL error empty: empty sqlstate");
+    ok(r.message == nullptr, "PgSQL error empty: null message");
+}
+
+static void test_pgsql_error_fields_zero_length() {
+    PgSQLErrorResult r = pgsql_parse_error_response(nullptr, 0);
+    ok(r.parsed == false, "PgSQL error null: returns false");
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
 int main() {
-	plan(46);
+	plan(56);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -354,6 +399,12 @@ int main() {
 	test_mysql_err_packet_no_sqlstate();    // 3
 	test_mysql_err_packet_truncated();      // 1
 	test_mysql_err_packet_empty_message();  // 3
+
+	// PgSQL ErrorResponse parsing
+	test_pgsql_error_fields_basic();        // 3
+	test_pgsql_error_fields_missing_code(); // 3
+	test_pgsql_error_fields_empty();        // 3
+	test_pgsql_error_fields_zero_length();  // 1
 
 	test_cleanup_minimal();
 	return exit_status();
