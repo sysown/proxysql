@@ -231,7 +231,20 @@ $(ODIR)/test_init.o: $(TEST_HELPERS_DIR)/test_init.cpp | $(ODIR)
 # Unit test targets
 # ===========================================================================
 
-UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t protocol_unit-t auth_unit-t connection_pool_unit-t rule_matching_unit-t hostgroups_unit-t monitor_health_unit-t MySQL_HostGroup_Routing-t PgSQL_HostGroup_Routing-t
+UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
+	protocol_unit-t auth_unit-t connection_pool_unit-t \
+	rule_matching_unit-t hostgroups_unit-t monitor_health_unit-t \
+	pgsql_command_complete_unit-t \
+	ffto_protocol_unit-t \
+	server_selection_unit-t \
+	hostgroup_routing_unit-t \
+	transaction_state_unit-t \
+	pgsql_error_classifier_unit-t \
+	pgsql_monitor_unit-t \
+	mysql_error_classifier_unit-t \
+	backend_sync_unit-t \
+	MySQL_HostGroup_Routing-t \
+	PgSQL_HostGroup_Routing-t
 
 .PHONY: all
 all: $(UNIT_TESTS)
@@ -245,56 +258,18 @@ ifneq ($(UNAME_S),Darwin)
 	ALLOW_MULTI_DEF := -Wl,--allow-multiple-definition
 endif
 
-smoke_test-t: smoke_test-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+# Pattern rule: all unit tests use the same compile + link flags.
+# Each test binary is built from its .cpp source, linked against
+# the test harness objects and libproxysql.a with all dependencies.
+MySQL_HostGroup_Routing-t: MySQL_HostGroup_Routing-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
 		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) \
 		$(ALLOW_MULTI_DEF) -o $@
 
-query_cache_unit-t: query_cache_unit-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+PgSQL_HostGroup_Routing-t: PgSQL_HostGroup_Routing-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
 		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) \
 		$(ALLOW_MULTI_DEF) -o $@
-
-query_processor_unit-t: query_processor_unit-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
-	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
-		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) \
-		$(ALLOW_MULTI_DEF) -o $@
-
-protocol_unit-t: protocol_unit-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
-	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
-		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) \
-		$(ALLOW_MULTI_DEF) -o $@
-
-auth_unit-t: auth_unit-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
-	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
-		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) \
-		$(ALLOW_MULTI_DEF) -o $@
-
-connection_pool_unit-t: connection_pool_unit-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
-	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
-		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) \
-		$(ALLOW_MULTI_DEF) -o $@
-
-rule_matching_unit-t: rule_matching_unit-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
-	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
-		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) \
-		$(ALLOW_MULTI_DEF) -o $@
-
-hostgroups_unit-t: hostgroups_unit-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
-	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
-		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) \
-		$(ALLOW_MULTI_DEF) -o $@
-
-monitor_health_unit-t: monitor_health_unit-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
-	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
-		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) \
-		$(ALLOW_MULTI_DEF) -o $@
-
-MySQL_HostGroup_Routing-t: MySQL_HostGroup_Routing-t.cpp $(PROXYSQL_PATH)/lib/MySQL_HostGroup_Routing.cpp $(ODIR)/tap.o
-	$(CXX) $^ $(IDIRS) $(OPT) -o $@
-
-PgSQL_HostGroup_Routing-t: PgSQL_HostGroup_Routing-t.cpp $(PROXYSQL_PATH)/lib/PgSQL_HostGroup_Routing.cpp $(ODIR)/tap.o
-	$(CXX) $^ $(IDIRS) $(OPT) -o $@
 
 
 # ===========================================================================

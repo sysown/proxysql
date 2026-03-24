@@ -3336,7 +3336,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			sess_state.default_hostgroup = default_hostgroup;
 			sess_state.locked_on_hostgroup = locked_on_hostgroup;
 			sess_state.transaction_persistent_hostgroup = transaction_persistent_hostgroup;
-			sess_state.last_HG_affected_rows = last_HG_affected_rows;
+			sess_state.last_hg_affected_rows = last_HG_affected_rows;
 			sess_state.warning_in_hg = warning_in_hg;
 			sess_state.autocommit = autocommit;
 			sess_state.autocommit_on_hostgroup = autocommit_on_hostgroup;
@@ -3344,11 +3344,10 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 			MySQL_Routing_QPO_State qpo_state = {0};
 			qpo_state.destination_hostgroup = qpo->destination_hostgroup;
-			qpo_state.is_set_statement = lock_hostgroup;
+			qpo_state.lock_hostgroup = lock_hostgroup;
 			if (CurrentQuery.QueryParserArgs.digest_text) {
 				const char* dig_text = CurrentQuery.QueryParserArgs.digest_text;
-				const size_t dig_len = strlen(dig_text);
-				if ((dig_len == 13) && (strncasecmp(dig_text, "SHOW WARNINGS", 13) == 0)) {
+				if (strcasestr(dig_text, "SHOW WARNINGS") || strcasestr(dig_text, "SHOW COUNT(*) WARNINGS")) {
 					qpo_state.is_show_warnings = true;
 				}
 				if (strcasestr(dig_text,"LAST_INSERT_ID") || strcasestr(dig_text,"@@IDENTITY")) {
@@ -3367,9 +3366,10 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					end = (char *)"...";
 				}
 				string nqn = string((char *)CurrentQuery.QueryPointer,l);
-				char *err_msg = (char *)"Session trying to reach HG %d while locked on HG %d . Rejecting query: %s%s";
-				char *buf = (char *)malloc(strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64);
-				sprintf(buf, err_msg, res.new_current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
+				const char *err_msg = "Session trying to reach HG %d while locked on HG %d . Rejecting query: %s%s";
+				size_t buf_size = strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64;
+				char *buf = (char *)malloc(buf_size);
+				snprintf(buf, buf_size, err_msg, res.new_current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
 				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9005,(char *)"HY000",buf, true);
 				thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
 				RequestEnd(NULL, 9005, buf);
@@ -3535,7 +3535,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			sess_state.default_hostgroup = default_hostgroup;
 			sess_state.locked_on_hostgroup = locked_on_hostgroup;
 			sess_state.transaction_persistent_hostgroup = transaction_persistent_hostgroup;
-			sess_state.last_HG_affected_rows = last_HG_affected_rows;
+			sess_state.last_hg_affected_rows = last_HG_affected_rows;
 			sess_state.warning_in_hg = warning_in_hg;
 			sess_state.autocommit = autocommit;
 			sess_state.autocommit_on_hostgroup = autocommit_on_hostgroup;
@@ -3543,11 +3543,10 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 			MySQL_Routing_QPO_State qpo_state = {0};
 			qpo_state.destination_hostgroup = qpo->destination_hostgroup;
-			qpo_state.is_set_statement = lock_hostgroup;
+			qpo_state.lock_hostgroup = lock_hostgroup;
 			if (CurrentQuery.QueryParserArgs.digest_text) {
 				const char* dig_text = CurrentQuery.QueryParserArgs.digest_text;
-				const size_t dig_len = strlen(dig_text);
-				if ((dig_len == 13) && (strncasecmp(dig_text, "SHOW WARNINGS", 13) == 0)) {
+				if (strcasestr(dig_text, "SHOW WARNINGS") || strcasestr(dig_text, "SHOW COUNT(*) WARNINGS")) {
 					qpo_state.is_show_warnings = true;
 				}
 				if (strcasestr(dig_text,"LAST_INSERT_ID") || strcasestr(dig_text,"@@IDENTITY")) {
@@ -3571,9 +3570,10 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					end = (char *)"...";
 				}
 				string nqn = string((char *)CurrentQuery.stmt_info->query,l);
-				char *err_msg = (char *)"Session trying to reach HG %d while locked on HG %d . Rejecting query: %s%s";
-				char *buf = (char *)malloc(strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64);
-				sprintf(buf, err_msg, res.new_current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
+				const char *err_msg = "Session trying to reach HG %d while locked on HG %d . Rejecting query: %s%s";
+				size_t buf_size = strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64;
+				char *buf = (char *)malloc(buf_size);
+				snprintf(buf, buf_size, err_msg, res.new_current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
 				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9005,(char *)"HY000",buf, true);
 				thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
 				RequestEnd(NULL, 9005, buf);
@@ -5408,7 +5408,7 @@ __get_pkts_from_client:
 										sess_state.default_hostgroup = default_hostgroup;
 										sess_state.locked_on_hostgroup = locked_on_hostgroup;
 										sess_state.transaction_persistent_hostgroup = transaction_persistent_hostgroup;
-										sess_state.last_HG_affected_rows = last_HG_affected_rows;
+										sess_state.last_hg_affected_rows = last_HG_affected_rows;
 										sess_state.warning_in_hg = warning_in_hg;
 										sess_state.autocommit = autocommit;
 										sess_state.autocommit_on_hostgroup = autocommit_on_hostgroup;
@@ -5416,11 +5416,10 @@ __get_pkts_from_client:
 
 										MySQL_Routing_QPO_State qpo_state = {0};
 										qpo_state.destination_hostgroup = qpo->destination_hostgroup;
-										qpo_state.is_set_statement = lock_hostgroup;
+										qpo_state.lock_hostgroup = lock_hostgroup;
 										if (CurrentQuery.QueryParserArgs.digest_text) {
 											const char* dig_text = CurrentQuery.QueryParserArgs.digest_text;
-											const size_t dig_len = strlen(dig_text);
-											if ((dig_len == 13) && (strncasecmp(dig_text, "SHOW WARNINGS", 13) == 0)) {
+											if (strcasestr(dig_text, "SHOW WARNINGS") || strcasestr(dig_text, "SHOW COUNT(*) WARNINGS")) {
 												qpo_state.is_show_warnings = true;
 											}
 											if (strcasestr(dig_text,"LAST_INSERT_ID") || strcasestr(dig_text,"@@IDENTITY")) {
@@ -5439,9 +5438,10 @@ __get_pkts_from_client:
 												end = (char *)"...";
 											}
 											string nqn = string((char *)CurrentQuery.QueryPointer,l);
-											char *err_msg = (char *)"Session trying to reach HG %d while locked on HG %d . Rejecting query: %s%s";
-											char *buf = (char *)malloc(strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64);
-											sprintf(buf, err_msg, res.new_current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
+											const char *err_msg = "Session trying to reach HG %d while locked on HG %d . Rejecting query: %s%s";
+											size_t buf_size = strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64;
+											char *buf = (char *)malloc(buf_size);
+											snprintf(buf, buf_size, err_msg, res.new_current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
 											client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9005,(char *)"HY000",buf, true);
 											thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
 											RequestEnd(NULL, 9005, buf);
@@ -8351,7 +8351,7 @@ __exit_set_destination_hostgroup:
 		sess_state.default_hostgroup = default_hostgroup;
 		sess_state.locked_on_hostgroup = locked_on_hostgroup;
 		sess_state.transaction_persistent_hostgroup = transaction_persistent_hostgroup;
-		sess_state.last_HG_affected_rows = last_HG_affected_rows;
+		sess_state.last_hg_affected_rows = last_HG_affected_rows;
 		sess_state.warning_in_hg = warning_in_hg;
 		sess_state.autocommit = autocommit;
 		sess_state.autocommit_on_hostgroup = autocommit_on_hostgroup;
@@ -8359,11 +8359,10 @@ __exit_set_destination_hostgroup:
 
 		MySQL_Routing_QPO_State qpo_state = {0};
 		qpo_state.destination_hostgroup = qpo->destination_hostgroup;
-		qpo_state.is_set_statement = *lock_hostgroup;
+		qpo_state.lock_hostgroup = *lock_hostgroup;
 		if (CurrentQuery.QueryParserArgs.digest_text) {
 			const char* dig_text = CurrentQuery.QueryParserArgs.digest_text;
-			const size_t dig_len = strlen(dig_text);
-			if ((dig_len == 13) && (strncasecmp(dig_text, "SHOW WARNINGS", 13) == 0)) {
+			if (strcasestr(dig_text, "SHOW WARNINGS") || strcasestr(dig_text, "SHOW COUNT(*) WARNINGS")) {
 				qpo_state.is_show_warnings = true;
 			}
 			if (strcasestr(dig_text,"LAST_INSERT_ID") || strcasestr(dig_text,"@@IDENTITY")) {
@@ -8375,7 +8374,7 @@ __exit_set_destination_hostgroup:
 		
 		if (res.error) {
 			client_myds->DSS=STATE_QUERY_SENT_NET;
-			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9006,(char *)"Y0000", (char*)res.error_msg.c_str());
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9006,(char *)"HY000", (char*)res.error_msg.c_str());
 			thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
 			RequestEnd(NULL, 9006, (char*)res.error_msg.c_str());
 			l_free(pkt->size,pkt->ptr);

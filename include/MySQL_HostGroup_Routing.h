@@ -1,5 +1,5 @@
-#ifndef __MYSQL_HOSTGROUP_ROUTING_H
-#define __MYSQL_HOSTGROUP_ROUTING_H
+#ifndef MYSQL_HOSTGROUP_ROUTING_H
+#define MYSQL_HOSTGROUP_ROUTING_H
 
 #include <string>
 
@@ -8,15 +8,15 @@
  * @brief Represents the session state relevant for hostgroup routing decisions.
  */
 struct MySQL_Routing_Session_State {
-    int current_hostgroup;
-    int default_hostgroup;
-    int locked_on_hostgroup;
-    int transaction_persistent_hostgroup;
-    int last_HG_affected_rows;
-    int warning_in_hg;
-    bool autocommit;
-    int autocommit_on_hostgroup;
-    bool mirror;
+	int current_hostgroup{-1};
+	int default_hostgroup{-1};
+	int locked_on_hostgroup{-1};
+	int transaction_persistent_hostgroup{-1};
+	int last_hg_affected_rows{-1};
+	int warning_in_hg{-1};
+	bool autocommit{true};
+	int autocommit_on_hostgroup{-1};
+	bool mirror{false};
 };
 
 /**
@@ -24,11 +24,11 @@ struct MySQL_Routing_Session_State {
  * @brief Represents the Query Processor Output relevant for hostgroup routing decisions.
  */
 struct MySQL_Routing_QPO_State {
-    int destination_hostgroup;
-    bool is_set_statement; // Derived from query parsing
-    bool is_show_warnings; // Derived from query parsing
-    bool is_last_insert_id; // Derived from query parsing
-    bool is_version_query; // Derived from query parsing
+	int destination_hostgroup{-1};
+	bool lock_hostgroup{false}; // Derived from query parsing or QPO
+	bool is_show_warnings{false}; // Derived from query parsing
+	bool is_last_insert_id{false}; // Derived from query parsing
+	bool is_version_query{false}; // Derived from query parsing
 };
 
 /**
@@ -36,11 +36,11 @@ struct MySQL_Routing_QPO_State {
  * @brief Represents the output of the hostgroup routing decision.
  */
 struct MySQL_Routing_Result {
-    int new_current_hostgroup;
-    int new_locked_on_hostgroup;
-    bool lock_hostgroup;
-    bool error;
-    std::string error_msg;
+	int new_current_hostgroup{-1};
+	int new_locked_on_hostgroup{-1};
+	bool lock_hostgroup{false};
+	bool error{false};
+	std::string error_msg;
 };
 
 /**
@@ -54,9 +54,9 @@ struct MySQL_Routing_Result {
  * @return MySQL_Routing_Result The routing decision.
  */
 MySQL_Routing_Result resolve_hostgroup_routing(
-    const MySQL_Routing_Session_State& sess_state,
-    const MySQL_Routing_QPO_State& qpo_state,
-    int set_query_lock_on_hostgroup
+	const MySQL_Routing_Session_State& sess_state,
+	const MySQL_Routing_QPO_State& qpo_state,
+	int set_query_lock_on_hostgroup
 );
 
-#endif // __MYSQL_HOSTGROUP_ROUTING_H
+#endif // MYSQL_HOSTGROUP_ROUTING_H

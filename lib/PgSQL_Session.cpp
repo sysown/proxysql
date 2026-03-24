@@ -4749,6 +4749,10 @@ __exit_set_destination_hostgroup:
 
 		current_hostgroup = res.new_current_hostgroup;
 		locked_on_hostgroup = res.new_locked_on_hostgroup;
+		if (res.lock_hostgroup) {
+			thread->status_variables.stvar[st_var_hostgroup_locked]++;
+			thread->status_variables.stvar[st_var_hostgroup_locked_set_cmds]++;
+		}
 	}
 
 	return false;
@@ -6145,8 +6149,8 @@ int PgSQL_Session::handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg
 		current_hostgroup = res.new_current_hostgroup;
 		locked_on_hostgroup = res.new_locked_on_hostgroup;
 		if (res.lock_hostgroup) {
-			// PgSQL session doesn't seem to update status variables here like MySQL does,
-			// but we keep the logic consistent.
+			thread->status_variables.stvar[st_var_hostgroup_locked]++;
+			thread->status_variables.stvar[st_var_hostgroup_locked_set_cmds]++;
 		}
 	}
 
@@ -6401,6 +6405,10 @@ int PgSQL_Session::handle_post_sync_describe_message(PgSQL_Describe_Message* des
 
 		current_hostgroup = res.new_current_hostgroup;
 		locked_on_hostgroup = res.new_locked_on_hostgroup;
+		if (res.lock_hostgroup) {
+			thread->status_variables.stvar[st_var_hostgroup_locked]++;
+			thread->status_variables.stvar[st_var_hostgroup_locked_set_cmds]++;
+		}
 	}
 	
 	if (extended_query_frame.empty() == true) {
@@ -6554,6 +6562,10 @@ int PgSQL_Session::handle_post_sync_bind_message(PgSQL_Bind_Message* bind_msg) {
 
 		current_hostgroup = res.new_current_hostgroup;
 		locked_on_hostgroup = res.new_locked_on_hostgroup;
+		if (res.lock_hostgroup) {
+			thread->status_variables.stvar[st_var_hostgroup_locked]++;
+			thread->status_variables.stvar[st_var_hostgroup_locked_set_cmds]++;
+		}
 	}
 
 	bind_waiting_for_execute.reset(bind_msg->release()); // release the ownership of the bind message
@@ -6702,6 +6714,10 @@ int PgSQL_Session::handle_post_sync_execute_message(PgSQL_Execute_Message* execu
 
 		current_hostgroup = res.new_current_hostgroup;
 		locked_on_hostgroup = res.new_locked_on_hostgroup;
+		if (res.lock_hostgroup) {
+			thread->status_variables.stvar[st_var_hostgroup_locked]++;
+			thread->status_variables.stvar[st_var_hostgroup_locked_set_cmds]++;
+		}
 	}
 
 	if (extended_query_frame.empty() == true) {
