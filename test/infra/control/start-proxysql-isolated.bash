@@ -212,8 +212,6 @@ SET admin-restapi_port=${RESTAPI_PORT};
 SET admin-restapi_enabled='true';
 SET admin-debug='true';
 ${PROXYSQL_SERVERS_SQL}
--- Also add the primary
-INSERT INTO proxysql_servers (hostname,port,weight,comment) VALUES ('proxysql',6032,0,'primary');
 LOAD ADMIN VARIABLES TO RUNTIME;
 SAVE ADMIN VARIABLES TO DISK;
 LOAD PROXYSQL SERVERS TO RUNTIME;
