@@ -118,6 +118,13 @@ private:
      * @param rows_sent Number of rows returned.
      */
     void report_query_stats(const std::string& query, unsigned long long duration_us, uint64_t affected_rows = 0, uint64_t rows_sent = 0);
+
+    /**
+     * @brief Records an error from a PostgreSQL ErrorResponse into stats_pgsql_errors.
+     * @param payload Pointer to the ErrorResponse message payload.
+     * @param len Length of the payload.
+     */
+    void report_error(const unsigned char* payload, size_t len);
 };
 
 #endif // PGSQL_FFTO_HPP

@@ -10,12 +10,14 @@
 #define SPOOKYV2
 #endif
 #include "c_tokenizer.h"
+#include "PgSQLErrorFields.h"
 #include <arpa/inet.h>
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
 
 extern class PgSQL_Query_Processor* GloPgQPro;
+extern PgSQL_HostGroups_Manager* PgHGM;
 
 /**
  * @brief Parses the PostgreSQL CommandComplete ('C') message payload to extract row counts.
@@ -266,6 +268,7 @@ void PgSQLFFTO::process_server_message(char type, const unsigned char* payload, 
             unsigned long long duration = monotonic_time() - m_query_start_time;
             report_query_stats(m_current_query, duration, m_affected_rows, m_rows_sent);
         }
+        report_error(payload, len);
         clear_current_query();
         m_pending_queries.clear();
         m_state = IDLE;
@@ -308,6 +311,46 @@ void PgSQLFFTO::report_query_stats(const std::string& query, unsigned long long 
         if (digest_text != qp.buf) free(digest_text);
     }
     if (fst_cmnt) free(fst_cmnt);
+}
+
+void PgSQLFFTO::report_error(const unsigned char* payload, size_t len) {
+    if (!m_session || !PgHGM) return;
+    if (!m_session->client_myds || !m_session->client_myds->myconn ||
+        !m_session->client_myds->myconn->userinfo) return;
+
+    PgSQLErrorResult err = pgsql_parse_error_response(payload, len);
+    if (!err.parsed) return;
+
+    auto* ui = m_session->client_myds->myconn->userinfo;
+    if (!ui->username || !ui->schemaname) return;
+
+    // Build a null-terminated copy of the error message
+    std::string msg(err.message ? err.message : "", err.message_len);
+
+    // Get backend server info if available
+    const char* hostname = "";
+    int port = 0;
+    int hostgroup = m_session->current_hostgroup;
+    if (m_session->mybe && m_session->mybe->server_myds &&
+        m_session->mybe->server_myds->myconn &&
+        m_session->mybe->server_myds->myconn->parent) {
+        auto* parent = m_session->mybe->server_myds->myconn->parent;
+        hostname = parent->address ? parent->address : "";
+        port = parent->port;
+        hostgroup = parent->myhgc->hid;
+    }
+
+    const char* client_addr = "unknown";
+    if (m_session->client_myds->addr.addr) {
+        client_addr = m_session->client_myds->addr.addr;
+    }
+
+    // ui->schemaname and ui->dbname are the same field (union in PgSQL_Connection_userinfo)
+    PgHGM->add_pgsql_errors(
+        hostgroup, hostname, port,
+        ui->username, client_addr, ui->schemaname,
+        err.sqlstate, msg.c_str()
+    );
 }
 
 std::size_t PgSQLFFTO::get_buffered_size() const {
