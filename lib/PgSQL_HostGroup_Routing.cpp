@@ -12,14 +12,14 @@ PgSQL_Routing_Result resolve_pgsql_hostgroup_routing(
 	result.error = false;
 	result.error_msg = "";
 
-	// 1. Default routing from QPO
-	if (qpo_state.destination_hostgroup >= 0) {
-		if (sess_state.transaction_persistent_hostgroup == -1) {
-			result.new_current_hostgroup = qpo_state.destination_hostgroup;
-		}
+	// 1. Default routing from QPO or Transaction Persistence
+	if (sess_state.transaction_persistent_hostgroup != -1) {
+		result.new_current_hostgroup = sess_state.transaction_persistent_hostgroup;
 	} else {
-		// qpo_state.destination_hostgroup < 0 means no override from QPO
-		if (sess_state.transaction_persistent_hostgroup == -1) {
+		if (qpo_state.destination_hostgroup >= 0) {
+			result.new_current_hostgroup = qpo_state.destination_hostgroup;
+		} else {
+			// qpo_state.destination_hostgroup < 0 means no override from QPO
 			result.new_current_hostgroup = sess_state.default_hostgroup;
 		}
 	}

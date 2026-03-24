@@ -56,7 +56,7 @@ void test_locking_error() {
 
 void test_legacy_behavior() {
 	PgSQL_Routing_Session_State sess;
-	sess.current_hostgroup = 10;
+	sess.current_hostgroup = 99;
 	sess.default_hostgroup = 5;
 	sess.transaction_persistent_hostgroup = -1;
 	
