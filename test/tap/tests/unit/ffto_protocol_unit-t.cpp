@@ -247,11 +247,74 @@ static void test_mysql_multi_packet_build() {
 }
 
 // ============================================================================
+// 6. MySQL: ERR packet parsing
+// ============================================================================
+
+static void test_mysql_err_packet_basic() {
+    unsigned char payload[] = {
+        0xFF,
+        0x15, 0x04,
+        '#',
+        '2','8','0','0','0',
+        'A','c','c','e','s','s',' ','d','e','n','i','e','d'
+    };
+    uint16_t err_no = 0;
+    const char* errmsg = nullptr;
+    size_t errmsg_len = 0;
+    bool ok_parse = mysql_parse_err_packet(payload, sizeof(payload), &err_no, &errmsg, &errmsg_len);
+    ok(ok_parse == true, "ERR parse: basic packet parsed successfully");
+    ok(err_no == 1045, "ERR parse: errno = 1045");
+    ok(errmsg_len == 13 && memcmp(errmsg, "Access denied", 13) == 0,
+       "ERR parse: message = 'Access denied'");
+}
+
+static void test_mysql_err_packet_no_sqlstate() {
+    unsigned char payload[] = {
+        0xFF,
+        0x01, 0x00,
+        'S','o','m','e',' ','e','r','r','o','r'
+    };
+    uint16_t err_no = 0;
+    const char* errmsg = nullptr;
+    size_t errmsg_len = 0;
+    bool ok_parse = mysql_parse_err_packet(payload, sizeof(payload), &err_no, &errmsg, &errmsg_len);
+    ok(ok_parse == true, "ERR parse no-sqlstate: parsed");
+    ok(err_no == 1, "ERR parse no-sqlstate: errno = 1");
+    ok(errmsg_len == 10 && memcmp(errmsg, "Some error", 10) == 0,
+       "ERR parse no-sqlstate: message correct");
+}
+
+static void test_mysql_err_packet_truncated() {
+    unsigned char payload[] = {0xFF};
+    uint16_t err_no = 0;
+    const char* errmsg = nullptr;
+    size_t errmsg_len = 0;
+    bool ok_parse = mysql_parse_err_packet(payload, 1, &err_no, &errmsg, &errmsg_len);
+    ok(ok_parse == false, "ERR parse truncated: returns false");
+}
+
+static void test_mysql_err_packet_empty_message() {
+    unsigned char payload[] = {
+        0xFF,
+        0x00, 0x04,
+        '#',
+        '4','2','0','0','0'
+    };
+    uint16_t err_no = 0;
+    const char* errmsg = nullptr;
+    size_t errmsg_len = 0;
+    bool ok_parse = mysql_parse_err_packet(payload, sizeof(payload), &err_no, &errmsg, &errmsg_len);
+    ok(ok_parse == true, "ERR parse empty msg: parsed");
+    ok(err_no == 1024, "ERR parse empty msg: errno = 1024");
+    ok(errmsg_len == 0, "ERR parse empty msg: empty message");
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
 int main() {
-	plan(36);
+	plan(46);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -285,6 +348,12 @@ int main() {
 	// Total: 1+3+3+1+2+2+4+3+2+1+1+1+1+2+1+1+1+2+4 = 36... recount
 	// 1 (init) + 3+3+1+2+2 (lenenc=11) + 4+3+2 (build=9) + 1+1 (ok=2) +
 	// 1+1+2+1+1+1 (pgsql=7) + 2+4 (frag=6) = 1+11+9+2+7+6 = 36
+
+	// MySQL ERR packet parsing
+	test_mysql_err_packet_basic();          // 3
+	test_mysql_err_packet_no_sqlstate();    // 3
+	test_mysql_err_packet_truncated();      // 1
+	test_mysql_err_packet_empty_message();  // 3
 
 	test_cleanup_minimal();
 	return exit_status();
