@@ -312,6 +312,7 @@ docker run \
                             echo \">>> Running fastcov on /gcov...\"
                             cd /gcov
                             fastcov -b -j\$(nproc) -l \
+                                -e /usr deps \
                                 -d . -o \"\${coverage_file}\" >> \"\${coverage_log}\" 2>&1 || echo \">>> WARNING: Coverage generation failed (see \${coverage_log})\"
 
                             if [ -f \"\${coverage_file}\" ]; then

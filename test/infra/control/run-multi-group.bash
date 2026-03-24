@@ -360,6 +360,7 @@ if [ "${COVERAGE}" -eq 1 ]; then
                     if command -v fastcov >/dev/null 2>&1; then
                         cd "${GCOV_DIR}"
                         fastcov -b -j4 -l \
+                            -e /usr deps \
                             -d . -o "${GROUP_INFO}" >> "${COVERAGE_LOG}" 2>&1 || \
                             echo ">>> WARNING: fastcov failed for ${GCOV_DIR}" >> "${COVERAGE_LOG}"
                     fi
