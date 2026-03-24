@@ -269,16 +269,25 @@ docker run \
                     echo \">>> Coverage generation log: \${coverage_log}\"
                     local nproc_val=\$(nproc)
 
-                    # Copy .gcno and .gcda files to /gcov so fastcov can find them together
-                    # ProxySQL's .gcda files are already in /gcov (via GCOV_PREFIX)
-                    # TAP test .gcda files are in the source tree and need to be copied too
+                    # Copy .gcno files to /gcov so fastcov can find them.
+                    # For .gcda files: ProxySQL's execution data is already in /gcov (via GCOV_PREFIX).
+                    # Only copy .gcda files that DON'T already exist in /gcov (TAP test coverage).
+                    # Using cp -n (no-clobber) prevents overwriting ProxySQL's real execution data
+                    # with stale .gcda files from the source tree.
                     if [ -d \"/gcov\" ] && [ \"\$(ls -A /gcov 2>/dev/null)\" ]; then
                         echo \">>> Preparing coverage data directory...\" >> \"\${coverage_log}\" 2>&1
-                        cd \"\${WORKSPACE}\" && find . -path './ci_infra_logs' -prune -o \\( -name '*.gcno' -o -name '*.gcda' \\) -type f -print | while read gcfile; do
+                        cd \"\${WORKSPACE}\" && find . -path './ci_infra_logs' -prune -o -name '*.gcno' -type f -print | while read gcfile; do
                             target=\"/gcov/\${gcfile#./}\"
                             target_dir=\"\$(dirname \"\$target\")\"
                             mkdir -p \"\$target_dir\"
                             cp -f \"\$gcfile\" \"\$target\"
+                        done
+                        # Copy TAP test .gcda files (don't overwrite ProxySQL's existing .gcda)
+                        cd \"\${WORKSPACE}\" && find . -path './ci_infra_logs' -prune -o -name '*.gcda' -type f -print | while read gcfile; do
+                            target=\"/gcov/\${gcfile#./}\"
+                            target_dir=\"\$(dirname \"\$target\")\"
+                            mkdir -p \"\$target_dir\"
+                            cp -n \"\$gcfile\" \"\$target\"
                         done
                         echo \">>> Running fastcov on /gcov...\"
                         cd /gcov
