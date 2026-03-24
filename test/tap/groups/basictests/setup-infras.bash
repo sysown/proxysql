@@ -27,9 +27,13 @@ READER_HG=$(echo "${PAIR}" | awk '{print $2}')
 
 echo ">>> Remapping hostgroup pair ${WRITER_HG}/${READER_HG} -> 0/1"
 
-# Move servers: update hostgroup IDs in-place
-${MYSQL_CMD} -e "UPDATE mysql_servers SET hostgroup_id = 0 WHERE hostgroup_id = ${WRITER_HG};"
-${MYSQL_CMD} -e "UPDATE mysql_servers SET hostgroup_id = 1 WHERE hostgroup_id = ${READER_HG};"
+# Move servers: copy into target hostgroups with INSERT OR REPLACE, then remove originals.
+# Cannot UPDATE in-place because hostgroup 0/1 may already have entries with the same
+# hostname:port, causing a UNIQUE constraint violation.
+${MYSQL_CMD} -e "INSERT OR REPLACE INTO mysql_servers (hostgroup_id, hostname, port, gtid_port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) SELECT 0, hostname, port, gtid_port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostgroup_id = ${WRITER_HG};"
+${MYSQL_CMD} -e "INSERT OR REPLACE INTO mysql_servers (hostgroup_id, hostname, port, gtid_port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) SELECT 1, hostname, port, gtid_port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostgroup_id = ${READER_HG};"
+${MYSQL_CMD} -e "DELETE FROM mysql_servers WHERE hostgroup_id = ${WRITER_HG};"
+${MYSQL_CMD} -e "DELETE FROM mysql_servers WHERE hostgroup_id = ${READER_HG};"
 
 # Replace replication hostgroup mapping
 ${MYSQL_CMD} -e "DELETE FROM mysql_replication_hostgroups WHERE writer_hostgroup = ${WRITER_HG};"

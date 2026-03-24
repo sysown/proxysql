@@ -1636,7 +1636,10 @@ def main(argv):
         log.debug(f"TEST_PY_TAP_SHUFFLE_LIMIT is disabled (current value: {shuffle_limit})")
 
     # Options
-    coverage = int(os.environ.get('WITHGCOV', 0)) or int(os.environ.get('COVERAGE_MODE', 0))
+    # When MULTI_GROUP=1, coverage collection is handled centrally by
+    # run-multi-group.bash after all groups finish — skip it here.
+    multi_group = int(os.environ.get('MULTI_GROUP', 0))
+    coverage = (int(os.environ.get('WITHGCOV', 0)) or int(os.environ.get('COVERAGE_MODE', 0))) and not multi_group
 
     for opt, arg in opts:
         if opt in ('-h', "--help"):

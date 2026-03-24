@@ -535,6 +535,26 @@ int main(int argc, char** argv) {
 	diag("  - Port: %d", cl.port);
 	diag("  - Admin Port: %d", cl.admin_port);
 	diag("================================================================================");
+
+	// Dump hostgroup state for debugging CI failures
+	{
+		MYSQL* dbg_admin = mysql_init(NULL);
+		if (dbg_admin && mysql_real_connect(dbg_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+			// Get default hostgroup for the test user
+			std::string hg_query = "SELECT default_hostgroup FROM mysql_users WHERE username='" + std::string(cl.username) + "' LIMIT 1";
+			int target_hg = 0;
+			if (mysql_query(dbg_admin, hg_query.c_str()) == 0) {
+				MYSQL_RES *res = mysql_store_result(dbg_admin);
+				if (res) {
+					MYSQL_ROW row = mysql_fetch_row(res);
+					if (row) target_hg = atoi(row[0]);
+					mysql_free_result(res);
+				}
+			}
+			dump_hostgroup_debug(dbg_admin, target_hg);
+			mysql_close(dbg_admin);
+		}
+	}
 	diag("");
 
 	// perform a different connection per query

@@ -54,6 +54,10 @@ docker rm -f "${PROXY_CONTAINER}" >/dev/null 2>&1 || true
 #   proxy-nodeN: admin=6032+(N*10), mysql=6033+(N*10)
 
 STARTUP_CMD="
+# Save GCOV env for the primary process
+SAVED_GCOV_PREFIX=\${GCOV_PREFIX:-}
+SAVED_GCOV_PREFIX_STRIP=\${GCOV_PREFIX_STRIP:-}
+
 # Disable gcov for background cluster nodes to avoid concurrent .gcda writes
 unset GCOV_PREFIX GCOV_PREFIX_STRIP
 
@@ -95,6 +99,10 @@ NODECNF
     /usr/bin/proxysql --idle-threads -f -c \${NODE_DIR}/proxysql-node.cnf -D \${NODE_DIR} >> \${NODE_DIR}/proxysql.log 2>&1 &
     echo \"Started proxy-node\${i} (admin=\${ADMIN_PORT}, mysql=\${MYSQL_PORT})\"
 done
+
+# Restore GCOV env for the primary process
+export GCOV_PREFIX=\${SAVED_GCOV_PREFIX}
+export GCOV_PREFIX_STRIP=\${SAVED_GCOV_PREFIX_STRIP}
 
 # Start primary ProxySQL in foreground
 exec /usr/bin/proxysql --idle-threads --clickhouse-server --sqlite3-server -f -c /etc/proxysql.cnf -D /var/lib/proxysql 2>&1 | tee /var/lib/proxysql/proxysql.log
@@ -166,16 +174,23 @@ if [ "${NUM_NODES}" -gt 0 ]; then
     CORE_NODES=3
     if [ "${NUM_NODES}" -lt 3 ]; then CORE_NODES="${NUM_NODES}"; fi
     PROXYSQL_SERVERS_SQL="DELETE FROM proxysql_servers;"
+    # Include the primary itself — if a node syncs proxysql_servers from the primary,
+    # the primary must be in the list, otherwise the node drops its monitor thread
+    # for the primary and never detects checksum changes again.
+    PROXYSQL_SERVERS_SQL="${PROXYSQL_SERVERS_SQL} INSERT INTO proxysql_servers (hostname,port,weight,comment) VALUES ('proxysql',6032,0,'primary');"
     for i in $(seq 1 "${CORE_NODES}"); do
         PORT=$((6032 + i * 10))
         PROXYSQL_SERVERS_SQL="${PROXYSQL_SERVERS_SQL} INSERT INTO proxysql_servers (hostname,port,weight,comment) VALUES ('proxysql',${PORT},0,'core-node${i}');"
     done
 
-    # Configure primary
+    # Configure primary — set the same admin variables as nodes so checksums match
     ${MYSQL_CMD} -P6032 <<SQL
 SET admin-admin_credentials="admin:admin;radmin:radmin;cluster1:secret1pass";
 SET admin-cluster_username="cluster1";
 SET admin-cluster_password="secret1pass";
+SET admin-cluster_mysql_servers_sync_algorithm=3;
+SET admin-restapi_enabled='true';
+SET admin-debug='true';
 UPDATE global_variables SET variable_value='false' WHERE variable_name='admin-hash_passwords';
 ${PROXYSQL_SERVERS_SQL}
 LOAD ADMIN VARIABLES TO RUNTIME;
@@ -192,12 +207,11 @@ SQL
 
         ${MYSQL_CMD} -P${ADMIN_PORT} <<SQL
 UPDATE global_variables SET variable_value='false' WHERE variable_name='admin-hash_passwords';
+SET admin-cluster_mysql_servers_sync_algorithm=3;
 SET admin-restapi_port=${RESTAPI_PORT};
 SET admin-restapi_enabled='true';
 SET admin-debug='true';
 ${PROXYSQL_SERVERS_SQL}
--- Also add the primary
-INSERT INTO proxysql_servers (hostname,port,weight,comment) VALUES ('proxysql',6032,0,'primary');
 LOAD ADMIN VARIABLES TO RUNTIME;
 SAVE ADMIN VARIABLES TO DISK;
 LOAD PROXYSQL SERVERS TO RUNTIME;

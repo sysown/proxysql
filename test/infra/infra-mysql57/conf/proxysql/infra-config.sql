@@ -93,7 +93,8 @@ REPLACE INTO debug_filters VALUES ('MySQL_Session.cpp',0,'handler_again___verify
 REPLACE INTO debug_filters VALUES ('PgSQL_Session.cpp',0,'handler');
 REPLACE INTO debug_filters VALUES ('PgSQL_Connection.cpp',0,'handler');
 REPLACE INTO debug_filters VALUES ('Base_Thread.cpp',0,'tune_timeout_for_myds_needs_pause');
-REPLACE INTO debug_filters VALUES ('Query_Processor.cpp',0,'process_query');
+-- NOTE: Do NOT filter Query_Processor.cpp/process_query - test_query_rules_fast_routing_algorithm-t
+-- relies on debug messages from this function to verify fast routing behavior.
 REPLACE INTO debug_filters VALUES ('MySQL_Session.cpp',0,'handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection');
 REPLACE INTO debug_filters VALUES ('PgSQL_Session.cpp',0,'handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection');
 REPLACE INTO debug_filters VALUES ('PgSQL_Session.cpp',0,'handler_again___verify_backend_user_db');

@@ -135,6 +135,7 @@ run_single_group() {
     export TAP_GROUP="${group}"
     export SKIP_CLUSTER_START="${SKIP_CLUSTER_START}"
     export COVERAGE="${COVERAGE}"
+    export MULTI_GROUP=1
     export TAP_USE_NOISE="${TAP_USE_NOISE}"
 
     # Run infrastructure setup and tests with timeout
@@ -337,18 +338,46 @@ if [ "${COVERAGE}" -eq 1 ]; then
     COMBINED_COVERAGE_DIR="${RESULTS_DIR}/coverage-report"
     mkdir -p "${COMBINED_COVERAGE_DIR}"
 
-    # Find all individual coverage info files from each group
+    # Generate per-group coverage reports from /gcov directories.
+    # Each group's test-runner already copied .gcno adjacent to .gcda (in its
+    # EXIT trap). We run fastcov sequentially per group — no concurrent gcov.
+    COVERAGE_LOG="${COMBINED_COVERAGE_DIR}/coverage-generation.log"
+    for group in ${TAP_GROUPS}; do
+        infra_id="${group}-${RUN_ID}"
+        gcov_dir="${WORKSPACE}/ci_infra_logs/${infra_id}/gcov"
+        group_info="${COMBINED_COVERAGE_DIR}/${infra_id}.info"
+
+        if [ -d "${gcov_dir}" ] && [ "$(find "${gcov_dir}" -name '*.gcda' 2>/dev/null | head -1)" ]; then
+            echo ">>> Generating coverage for ${group} from ${gcov_dir}..."
+            docker run --rm \
+                -v "${WORKSPACE}:${WORKSPACE}" \
+                -e WORKSPACE="${WORKSPACE}" \
+                -e GCOV_DIR="${gcov_dir}" \
+                -e GROUP_INFO="${group_info}" \
+                -e COVERAGE_LOG="${COVERAGE_LOG}" \
+                proxysql-ci-base:latest \
+                bash -c '
+                    if command -v fastcov >/dev/null 2>&1; then
+                        cd "${GCOV_DIR}"
+                        fastcov -b -j4 -l \
+                            -e /usr deps \
+                            -d . -o "${GROUP_INFO}" >> "${COVERAGE_LOG}" 2>&1 || \
+                            echo ">>> WARNING: fastcov failed for ${GCOV_DIR}" >> "${COVERAGE_LOG}"
+                    fi
+                ' || echo ">>> WARNING: Coverage generation failed for ${group}"
+        else
+            echo ">>> No .gcda files found for ${group}, skipping"
+        fi
+    done
+
+    # Find all generated coverage info files
     COVERAGE_FILES=""
     for group in ${TAP_GROUPS}; do
         infra_id="${group}-${RUN_ID}"
-        group_coverage_dir="${WORKSPACE}/ci_infra_logs/${infra_id}/coverage-report"
-        if [ -d "${group_coverage_dir}" ]; then
-            for info_file in "${group_coverage_dir}"/*.info; do
-                if [ -f "${info_file}" ]; then
-                    COVERAGE_FILES="${COVERAGE_FILES} ${info_file}"
-                    echo ">>> Found coverage: ${info_file}"
-                fi
-            done
+        group_info="${COMBINED_COVERAGE_DIR}/${infra_id}.info"
+        if [ -f "${group_info}" ]; then
+            COVERAGE_FILES="${COVERAGE_FILES} ${group_info}"
+            echo ">>> Found coverage: ${group_info}"
         fi
     done
 

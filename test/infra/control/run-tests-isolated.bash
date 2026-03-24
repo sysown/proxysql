@@ -143,6 +143,11 @@ fi
 if [ "${SKIP_PROXYSQL}" = "1" ]; then
     echo ">>> Running tests directly on the host (no Docker container)..."
 
+    # Ensure transitive shared libs (e.g. libparser.so via libcpp_dotenv.so) are found.
+    # RUNPATH in intermediate libraries may contain stale absolute paths from the
+    # original build, so we add the known library directories explicitly.
+    export LD_LIBRARY_PATH="${WORKSPACE}/test/tap/tap${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+
     # Discover test binaries from groups.json for this TAP_GROUP
     GROUPS_JSON="${WORKSPACE}/test/tap/groups/groups.json"
     if [ ! -f "${GROUPS_JSON}" ]; then
@@ -251,58 +256,83 @@ docker run \
     -e MYSQL_BINLOG_BIN="${MYSQL_BINLOG_BIN}" \
     -e BINLOG_READER_BIN="${BINLOG_READER_BIN}" \
     -e TAP_USE_NOISE="${TAP_USE_NOISE:-0}" \
+    -e MULTI_GROUP="${MULTI_GROUP:-0}" \
+    -e GCOV_PREFIX="/gcov/tap" \
+    -e GCOV_PREFIX_STRIP="3" \
     proxysql-ci-base:latest \
     /bin/bash -c "
         set -e
 
         # Coverage collection trap - runs on exit regardless of success/failure/timeout
+        #
+        # Data layout in /gcov (per-INFRA_ID mount):
+        #   /gcov/proxysql/{lib,src}/obj/*.gcda  — ProxySQL daemon (GCOV_PREFIX=/gcov, STRIP=3)
+        #   /gcov/tap/proxysql/{lib,src}/obj/*.gcda — TAP tests (GCOV_PREFIX=/gcov/tap, STRIP=3)
+        #
+        # This trap always copies .gcno files adjacent to .gcda so the data is
+        # ready for fastcov. When MULTI_GROUP=1, fastcov runs centrally later;
+        # when standalone, it runs here.
         collect_coverage() {
             local exit_code=\$?
             if [ \"\${COVERAGE_MODE}\" = \"1\" ]; then
                 echo \">>> Collecting code coverage data (exit code was: \${exit_code})...\"
 
-                if command -v fastcov >/dev/null 2>&1; then
-                    mkdir -p \"\${COVERAGE_REPORT_DIR}\"
-                    local coverage_file=\"\${COVERAGE_REPORT_DIR}/\${INFRA_ID}.info\"
-                    local coverage_log=\"\${COVERAGE_REPORT_DIR}/coverage-generation.log\"
-                    echo \">>> Generating coverage report: \${coverage_file}\"
-                    echo \">>> Coverage generation log: \${coverage_log}\"
-                    local nproc_val=\$(nproc)
-
-                    # Copy .gcno files to /gcov so fastcov can find both .gcno and .gcda together
-                    # This avoids race conditions when multiple groups run in parallel
-                    if [ -d \"/gcov\" ] && [ \"\$(ls -A /gcov 2>/dev/null)\" ]; then
-                        echo \">>> Preparing coverage data directory...\" >> \"\${coverage_log}\" 2>&1
-                        cd \"\${WORKSPACE}\" && find . -path './ci_infra_logs' -prune -o -name '*.gcno' -type f -print | while read gcno; do
-                            target=\"/gcov/\${gcno#./}\"
-                            target_dir=\"\$(dirname \"\$target\")\"
-                            mkdir -p \"\$target_dir\"
-                            cp -f \"\$gcno\" \"\$target\"
+                if [ -d \"/gcov\" ] && [ \"\$(ls -A /gcov 2>/dev/null)\" ]; then
+                    # Copy .gcno files adjacent to each .gcda file.
+                    # .gcda paths have a GCOV_PREFIX_STRIP offset (e.g. proxysql/lib/obj/X.gcda)
+                    # while .gcno files are at \${WORKSPACE}/lib/obj/X.gcno. We strip leading
+                    # components from the .gcda relative path until we find the matching .gcno.
+                    echo \">>> Copying .gcno files adjacent to .gcda files in /gcov...\"
+                    cd /gcov && find . -name '*.gcda' -type f | while read gcda; do
+                        relpath=\"\${gcda#./}\"
+                        base=\"\${relpath%.gcda}\"
+                        remaining=\"\${base}\"
+                        while [ -n \"\${remaining}\" ]; do
+                            if [ -f \"\${WORKSPACE}/\${remaining}.gcno\" ]; then
+                                target=\"/gcov/\${base}.gcno\"
+                                mkdir -p \"\$(dirname \"\${target}\")\"
+                                cp -f \"\${WORKSPACE}/\${remaining}.gcno\" \"\${target}\"
+                                break
+                            fi
+                            next=\"\${remaining#*/}\"
+                            [ \"\${next}\" = \"\${remaining}\" ] && break
+                            remaining=\"\${next}\"
                         done
-                        echo \">>> Running fastcov on /gcov...\"
-                        cd /gcov
-                        fastcov -b -j\"\${nproc_val}\" --process-gcno -l \
-                            --include \"\${WORKSPACE}/include/\" \"\${WORKSPACE}/lib/\" \"\${WORKSPACE}/src/\" \"\${WORKSPACE}/test/\" \
-                            -d . -o \"\${coverage_file}\" >> \"\${coverage_log}\" 2>&1 || echo \">>> WARNING: Coverage generation failed (see \${coverage_log})\"
-                    else
-                        echo \">>> WARNING: /gcov directory is empty or missing, skipping coverage\"
-                    fi
+                    done
 
-                    if [ -f \"\${coverage_file}\" ]; then
-                        echo \">>> Coverage report generated: \${coverage_file}\"
-                        # Generate HTML report
-                        if command -v genhtml >/dev/null 2>&1; then
-                            local html_dir=\"\${COVERAGE_REPORT_DIR}/html\"
-                            mkdir -p \"\${html_dir}\"
-                            echo \">>> Generating HTML coverage report...\"
-                            genhtml --branch-coverage --ignore-errors negative,source --synthesize-missing \"\${coverage_file}\" --output-directory \"\${html_dir}\" >> \"\${coverage_log}\" 2>&1 || echo \">>> WARNING: HTML generation failed (see \${coverage_log})\"
-                            [ -f \"\${html_dir}/index.html\" ] && echo \">>> HTML coverage report: \${html_dir}/index.html\"
-                        fi
+                    if [ \"\${MULTI_GROUP}\" = \"1\" ]; then
+                        # Multi-group mode: data is ready in /gcov for centralized collection
+                        echo \">>> MULTI_GROUP=1: skipping fastcov (will run centrally after all groups finish)\"
                     else
-                        echo \">>> WARNING: Coverage info file not generated (see \${coverage_log})\"
+                        # Standalone mode: run fastcov + genhtml here
+                        if command -v fastcov >/dev/null 2>&1; then
+                            mkdir -p \"\${COVERAGE_REPORT_DIR}\"
+                            local coverage_file=\"\${COVERAGE_REPORT_DIR}/\${INFRA_ID}.info\"
+                            local coverage_log=\"\${COVERAGE_REPORT_DIR}/coverage-generation.log\"
+                            echo \">>> Running fastcov on /gcov...\"
+                            cd /gcov
+                            fastcov -b -j\$(nproc) -l \
+                                -e /usr deps \
+                                -d . -o \"\${coverage_file}\" >> \"\${coverage_log}\" 2>&1 || echo \">>> WARNING: Coverage generation failed (see \${coverage_log})\"
+
+                            if [ -f \"\${coverage_file}\" ]; then
+                                echo \">>> Coverage report generated: \${coverage_file}\"
+                                if command -v genhtml >/dev/null 2>&1; then
+                                    local html_dir=\"\${COVERAGE_REPORT_DIR}/html\"
+                                    mkdir -p \"\${html_dir}\"
+                                    echo \">>> Generating HTML coverage report...\"
+                                    genhtml --branch-coverage --ignore-errors negative,source --synthesize-missing \"\${coverage_file}\" --output-directory \"\${html_dir}\" >> \"\${coverage_log}\" 2>&1 || echo \">>> WARNING: HTML generation failed (see \${coverage_log})\"
+                                    [ -f \"\${html_dir}/index.html\" ] && echo \">>> HTML coverage report: \${html_dir}/index.html\"
+                                fi
+                            else
+                                echo \">>> WARNING: Coverage info file not generated (see \${coverage_log})\"
+                            fi
+                        else
+                            echo \">>> WARNING: fastcov not found in container, skipping coverage collection\"
+                        fi
                     fi
                 else
-                    echo \">>> WARNING: fastcov not found in container, skipping coverage collection\"
+                    echo \">>> WARNING: /gcov directory is empty or missing, skipping coverage\"
                 fi
             fi
             exit \${exit_code}
