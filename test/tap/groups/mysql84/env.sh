@@ -4,5 +4,6 @@
 export DEFAULT_MYSQL_INFRA="infra-mysql84"
 export DEFAULT_PGSQL_INFRA="docker-pgsql16-single"
 
-# Path to test data directory for RESTAPI scripts (reg_test_3223)
-export REGULAR_INFRA_DATADIR="${WORKSPACE}/test/tap/tests"
+# Path to RESTAPI test scripts inside ProxySQL container
+# The setup-infras.bash hook copies scripts to the ProxySQL data directory
+export REGULAR_INFRA_DATADIR="/var/lib/proxysql"
