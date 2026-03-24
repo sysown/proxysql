@@ -136,19 +136,40 @@ jobs:
         exit $RC
         
     - name: Check baseline
+      if: ${{ !cancelled() }}
       run: |
         set +e
         cd proxysql_3p_testing/test_${{ env.TESTNAME }}
 
         GHUSER="$(id -u):$(id -g)"
         sudo chown -R ${GHUSER} ./logs
-        cat ./logs/*_summary.log || true
+
+        if ! ls ./logs/*_summary.log 1>/dev/null 2>&1; then
+          echo "ERROR: No summary log found — tests likely did not run"
+          exit 1
+        fi
+
+        cat ./logs/*_summary.log
         FAILS=$(cat ./logs/*_summary.log | grep -oP '(?<=^FAIL: )\d+')
-        
-        exit ${FAILS:-0}
+        ERRORS=$(cat ./logs/*_summary.log | grep -oP '(?<=^ERROR: )\d+')
+
+        if [[ -z "${FAILS}" ]]; then
+          echo "ERROR: Could not parse FAIL count from summary log"
+          exit 1
+        fi
+        if [[ ${FAILS} -ne 0 ]]; then
+          echo "FAILED: ${FAILS} test failure(s)"
+          exit 1
+        fi
+        if [[ -n "${ERRORS}" && ${ERRORS} -ne 0 ]]; then
+          echo "FAILED: ${ERRORS} test error(s) (setup/fixture failures)"
+          exit 1
+        fi
+
+        echo "All tests passed"
 
     - name: Archive artifacts logs
-#      if: ${{ failure() && !cancelled() }}
+      if: ${{ !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
         name: ${{ github.workflow }}-${{ env.SHA }}-${{ matrix.infradb }}-${{ matrix.connector }}-logs-run#${{ github.run_number }}

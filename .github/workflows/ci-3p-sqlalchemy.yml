@@ -129,31 +129,56 @@ jobs:
       run: |
         set +e
         cd proxysql_3p_testing/test_${{ env.TESTNAME }}
-        
+
         GHUSER="$(id -u):$(id -g)"
         sudo chown -R ${GHUSER} ./logs
-        cat ./logs/*_summary.log || true
+
+        if ! ls ./logs/*_summary.log 1>/dev/null 2>&1; then
+          echo "ERROR: No summary log found — tests likely did not run"
+          STATUS='ERROR'
+          SUM="{'STATUS':'${STATUS}','INFRADB':'${INFRADB}','CONNECTOR':'${CONNECTOR}','FAILS':x,'ERRORS':x}"
+          echo "SUMMARY=${SUM}"
+          echo "SUMMARY="${SUM//\'/\"} >> $GITHUB_ENV
+          exit 1
+        fi
+
+        cat ./logs/*_summary.log
         FAILS=$(cat ./logs/*_summary.log | grep -oP '(?<=^FAIL: )\d+')
-        
+        ERRORS=$(cat ./logs/*_summary.log | grep -oP '(?<=^ERROR: )\d+')
+
         STATUS='PASS'
         [[ -z ${FAILS} ]] && STATUS='ERROR'
         [[ ${FAILS} -ne 0 ]] && STATUS='FAIL'
-        
-        SUM="{'STATUS':'${STATUS}','INFRADB':'${INFRADB}','CONNECTOR':'${CONNECTOR}','FAILS':${FAILS:-x}}"
+        [[ -n "${ERRORS}" && ${ERRORS} -ne 0 ]] && STATUS='FAIL'
+
+        SUM="{'STATUS':'${STATUS}','INFRADB':'${INFRADB}','CONNECTOR':'${CONNECTOR}','FAILS':${FAILS:-x},'ERRORS':${ERRORS:-0}}"
         echo "SUMMARY=${SUM}"
         echo "SUMMARY="${SUM//\'/\"} >> $GITHUB_ENV
-        
-        exit ${FAILS:-0}
-    
+
+        if [[ -z "${FAILS}" ]]; then
+          echo "ERROR: Could not parse FAIL count from summary log"
+          exit 1
+        fi
+        if [[ ${FAILS} -ne 0 ]]; then
+          echo "FAILED: ${FAILS} test failure(s)"
+          exit 1
+        fi
+        if [[ -n "${ERRORS}" && ${ERRORS} -ne 0 ]]; then
+          echo "FAILED: ${ERRORS} test error(s) (setup/fixture failures)"
+          exit 1
+        fi
+
+        echo "All tests passed"
+
     - name: Summary output
       if: ${{ !cancelled() }}
       uses: hoverkraft-tech/ci-github-common/actions/set-matrix-output@0.14.0
       with:
         value: ${{ env.SUMMARY }}
         artifact-name: ${{ github.run_number }}-${{ matrix.infradb }}-summary
-      
+
     - name: Archive artifacts logs
-      if: ${{ failure() && !cancelled() }}
+      if: ${{ !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
         name: ${{ github.workflow }}-${{ env.SHA }}-${{ matrix.infradb }}-${{ matrix.connector }}-logs-run#${{ github.run_number }}
