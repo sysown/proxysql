@@ -105,6 +105,9 @@ using std::function;
 const uint32_t SYNC_TIMEOUT = 10;
 const uint32_t CONNECT_TIMEOUT = 10;
 const uint32_t R_PORT = 16062;
+// The replica ProxySQL is spawned locally inside the test-runner container.
+// Use 127.0.0.1 to connect to it, not cl.host (which may point to a different container).
+const char* R_HOST = "127.0.0.1";
 
 int setup_config_file(const CommandLine& cl) {
 	const std::string t_fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync-t.cnf";
@@ -236,7 +239,7 @@ int check_mysql_servers_sync(
 	
 	// Create temporary connection to replica for debugging
 	MYSQL* replica_admin = mysql_init(NULL);
-	if (mysql_real_connect(replica_admin, cl.host, cl.admin_username, cl.admin_password, NULL, R_PORT, NULL, 0)) {
+	if (mysql_real_connect(replica_admin, R_HOST, cl.admin_username, cl.admin_password, NULL, R_PORT, NULL, 0)) {
 		dump_mysql_servers(replica_admin, "Replica");
 		mysql_close(replica_admin);
 	}
@@ -1272,7 +1275,7 @@ int main(int, char**) {
 
 	// Waiting for proxysql to be ready
 	conn_opts_t conn_opts {};
-	conn_opts.host = cl.host;
+	conn_opts.host = R_HOST;
 	conn_opts.user = cl.admin_username;
 	conn_opts.pass = cl.admin_password;
 	conn_opts.port = R_PORT;
@@ -1323,7 +1326,7 @@ int main(int, char**) {
 		std::string print_master_hostgroup_attributes = "";
 		string_format(t_debug_query, print_master_hostgroup_attributes, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_mysql_hostgroup_attributes");
 		std::string print_replica_hostgroup_attributes = "";
-		string_format(t_debug_query, print_replica_hostgroup_attributes, cl.admin_username, cl.admin_password, cl.host, R_PORT, "SELECT * FROM runtime_mysql_hostgroup_attributes");
+		string_format(t_debug_query, print_replica_hostgroup_attributes, cl.admin_username, cl.admin_password, R_HOST, R_PORT, "SELECT * FROM runtime_mysql_hostgroup_attributes");
 
 		// Configure 'runtime_mysql_hostgroup_attributes' and check sync
 		const char* t_insert_mysql_hostgroup_attributes =
@@ -1450,7 +1453,7 @@ int main(int, char**) {
 		std::string print_master_galera_hostgroups = "";
 		string_format(t_debug_query, print_master_galera_hostgroups, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_mysql_galera_hostgroups");
 		std::string print_replica_galera_hostgroups = "";
-		string_format(t_debug_query, print_replica_galera_hostgroups, cl.admin_username, cl.admin_password, cl.host, R_PORT, "SELECT * FROM runtime_mysql_galera_hostgroups");
+		string_format(t_debug_query, print_replica_galera_hostgroups, cl.admin_username, cl.admin_password, R_HOST, R_PORT, "SELECT * FROM runtime_mysql_galera_hostgroups");
 
 		// Configure 'mysql_galera_hostgroups' and check sync with NULL comments
 		const char* t_insert_mysql_galera_hostgroups =
@@ -1568,7 +1571,7 @@ int main(int, char**) {
 		std::string print_master_galera_hostgroups = "";
 		string_format(t_debug_query, print_master_galera_hostgroups, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_mysql_galera_hostgroups");
 		std::string print_replica_galera_hostgroups = "";
-		string_format(t_debug_query, print_replica_galera_hostgroups, cl.admin_username, cl.admin_password, cl.host, R_PORT, "SELECT * FROM runtime_mysql_galera_hostgroups");
+		string_format(t_debug_query, print_replica_galera_hostgroups, cl.admin_username, cl.admin_password, R_HOST, R_PORT, "SELECT * FROM runtime_mysql_galera_hostgroups");
 
 		// Configure 'mysql_galera_hostgroups' and check sync
 		const char* t_insert_mysql_galera_hostgroups =
@@ -1684,7 +1687,7 @@ int main(int, char**) {
 		std::string print_master_group_replication_hostgroups = "";
 		string_format(t_debug_query, print_master_group_replication_hostgroups, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_mysql_group_replication_hostgroups");
 		std::string print_replica_group_replication_hostgroups = "";
-		string_format(t_debug_query, print_replica_group_replication_hostgroups, cl.admin_username, cl.admin_password, cl.host, R_PORT, "SELECT * FROM runtime_mysql_group_replication_hostgroups");
+		string_format(t_debug_query, print_replica_group_replication_hostgroups, cl.admin_username, cl.admin_password, R_HOST, R_PORT, "SELECT * FROM runtime_mysql_group_replication_hostgroups");
 
 		// Configure 'mysql_group_replication_hostgroups' and check sync
 		const char* t_insert_mysql_group_replication_hostgroups =
@@ -1801,7 +1804,7 @@ int main(int, char**) {
 		std::string print_master_group_replication_hostgroups = "";
 		string_format(t_debug_query, print_master_group_replication_hostgroups, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_mysql_group_replication_hostgroups");
 		std::string print_replica_group_replication_hostgroups = "";
-		string_format(t_debug_query, print_replica_group_replication_hostgroups, cl.admin_username, cl.admin_password, cl.host, R_PORT, "SELECT * FROM runtime_mysql_group_replication_hostgroups");
+		string_format(t_debug_query, print_replica_group_replication_hostgroups, cl.admin_username, cl.admin_password, R_HOST, R_PORT, "SELECT * FROM runtime_mysql_group_replication_hostgroups");
 
 		// Configure 'mysql_group_replication_hostgroups' and check sync
 		const char* t_insert_mysql_group_replication_hostgroups =
@@ -1922,7 +1925,7 @@ int main(int, char**) {
 		);
 		std::string print_replica_proxysql_servers = "";
 		string_format(
-			t_debug_query, print_replica_proxysql_servers, cl.admin_username, cl.admin_password, cl.host, R_PORT,
+			t_debug_query, print_replica_proxysql_servers, cl.admin_username, cl.admin_password, R_HOST, R_PORT,
 			"SELECT * FROM runtime_proxysql_servers"
 		);
 
@@ -2021,7 +2024,7 @@ int main(int, char**) {
 		);
 		std::string print_replica_proxysql_servers = "";
 		string_format(
-			t_debug_query, print_replica_proxysql_servers, cl.admin_username, cl.admin_password, cl.host, R_PORT,
+			t_debug_query, print_replica_proxysql_servers, cl.admin_username, cl.admin_password, R_HOST, R_PORT,
 			"SELECT * FROM runtime_proxysql_servers"
 		);
 
@@ -2072,7 +2075,7 @@ int main(int, char**) {
 		std::string print_master_aws_aurora_hostgroups = "";
 		string_format(t_debug_query, print_master_aws_aurora_hostgroups, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_mysql_aws_aurora_hostgroups");
 		std::string print_replica_aws_aurora_hostgroups = "";
-		string_format(t_debug_query, print_replica_aws_aurora_hostgroups, cl.admin_username, cl.admin_password, cl.host, R_PORT, "SELECT * FROM runtime_mysql_aws_aurora_hostgroups");
+		string_format(t_debug_query, print_replica_aws_aurora_hostgroups, cl.admin_username, cl.admin_password, R_HOST, R_PORT, "SELECT * FROM runtime_mysql_aws_aurora_hostgroups");
 
 		// Configure 'mysql_aws_aurora_hostgroups' and check sync
 		const char* t_insert_mysql_aws_aurora_hostgroups =
@@ -2199,7 +2202,7 @@ int main(int, char**) {
 		std::string print_master_aws_aurora_hostgroups = "";
 		string_format(t_debug_query, print_master_aws_aurora_hostgroups, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_mysql_aws_aurora_hostgroups");
 		std::string print_replica_aws_aurora_hostgroups = "";
-		string_format(t_debug_query, print_replica_aws_aurora_hostgroups, cl.admin_username, cl.admin_password, cl.host, R_PORT, "SELECT * FROM runtime_mysql_aws_aurora_hostgroups");
+		string_format(t_debug_query, print_replica_aws_aurora_hostgroups, cl.admin_username, cl.admin_password, R_HOST, R_PORT, "SELECT * FROM runtime_mysql_aws_aurora_hostgroups");
 
 		// Configure 'mysql_aws_aurora_hostgroups' and check sync
 		const char* t_insert_mysql_aws_aurora_hostgroups =
@@ -2324,7 +2327,7 @@ int main(int, char**) {
 		std::string print_master_mysql_variables = "";
 		string_format(t_debug_query, print_master_mysql_variables, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_global_variables WHERE variable_name LIKE 'mysql-%'");
 		std::string print_replica_mysql_variables = "";
-		string_format(t_debug_query, print_replica_mysql_variables, cl.admin_username, cl.admin_password, cl.host, R_PORT, "SELECT * FROM runtime_global_variables WHERE variable_name LIKE 'mysql-%'");
+		string_format(t_debug_query, print_replica_mysql_variables, cl.admin_username, cl.admin_password, R_HOST, R_PORT, "SELECT * FROM runtime_global_variables WHERE variable_name LIKE 'mysql-%'");
 
 		// Configure 'mysql_mysql_variables_hostgroups' and check sync
 		const char* t_update_mysql_variables =
@@ -2529,7 +2532,7 @@ int main(int, char**) {
 		std::string print_master_admin_variables = "";
 		string_format(t_debug_query, print_master_admin_variables, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_global_variables WHERE variable_name LIKE 'admin-%'");
 		std::string print_replica_admin_variables = "";
-		string_format(t_debug_query, print_replica_admin_variables, cl.admin_username, cl.admin_password, cl.host, R_PORT, "SELECT * FROM runtime_global_variables WHERE variable_name LIKE 'admin-%'");
+		string_format(t_debug_query, print_replica_admin_variables, cl.admin_username, cl.admin_password, R_HOST, R_PORT, "SELECT * FROM runtime_global_variables WHERE variable_name LIKE 'admin-%'");
 
 		// Configure 'mysql_admin_variables_hostgroups' and check sync
 		const char* t_update_admin_variables =
