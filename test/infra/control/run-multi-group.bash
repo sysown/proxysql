@@ -14,6 +14,8 @@ set -euo pipefail
 #   AUTO_CLEANUP=0         # Auto cleanup successful groups (default: 0)
 #   SKIP_CLUSTER_START=1   # Skip ProxySQL cluster initialization (default: 0)
 #   COVERAGE=1             # Enable code coverage collection (default: 0)
+#   TAP_USE_NOISE=1        # Enable noise injection for race condition testing (default: 0)
+#   STAGGER_DELAY=5        # Seconds between group startups (default: 5)
 #
 # Coverage notes:
 #   - Requires ProxySQL to be compiled with COVERAGE=1 (adds --coverage flags)
@@ -36,6 +38,7 @@ EXIT_ON_FIRST_FAIL="${EXIT_ON_FIRST_FAIL:-0}"
 AUTO_CLEANUP="${AUTO_CLEANUP:-0}"
 SKIP_CLUSTER_START="${SKIP_CLUSTER_START:-0}"
 COVERAGE="${COVERAGE:-0}"
+TAP_USE_NOISE="${TAP_USE_NOISE:-0}"
 
 # Validate required variables
 if [ -z "${TAP_GROUPS}" ]; then
@@ -66,6 +69,7 @@ echo "EXIT_ON_FIRST_FAIL: ${EXIT_ON_FIRST_FAIL}"
 echo "AUTO_CLEANUP: ${AUTO_CLEANUP}"
 echo "SKIP_CLUSTER_START: ${SKIP_CLUSTER_START}"
 echo "COVERAGE: ${COVERAGE}"
+echo "TAP_USE_NOISE: ${TAP_USE_NOISE}"
 echo "=========================================="
 
 # Create results directory
@@ -98,19 +102,20 @@ trap cleanup_on_interrupt INT TERM
 # Function to run a single group
 run_single_group() {
     local group="${1}"
+    local group_index="${2}"
     local infra_id="${group}-${RUN_ID}"
     local log_file="${RESULTS_DIR}/${group}.log"
     local start_time end_time duration
 
-    # Add random delay to stagger infrastructure startup
+    # Sequential delay to stagger infrastructure startup
     # This prevents resource contention when running multiple groups in parallel
-    # Use group name hash + random to ensure both unique and unpredictable delays
-    local group_hash=$(echo -n "${group}" | cksum | cut -d' ' -f1)
-    local base_delay=$((group_hash % 15))  # 0-14 seconds based on group name
-    local random_delay=$((RANDOM % 10 + 1))  # 1-10 seconds random
-    local delay=$((base_delay + random_delay))  # Total: 1-24 seconds
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ${group}: Waiting ${delay}s to stagger startup (base=${base_delay}s + random=${random_delay}s)..." | tee -a "${log_file}"
-    sleep "${delay}"
+    # Each group starts STAGGER_DELAY seconds after the previous one
+    local STAGGER_DELAY="${STAGGER_DELAY:-5}"
+    local delay=$((group_index * STAGGER_DELAY))
+    if [ "${delay}" -gt 0 ]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] ${group}: Waiting ${delay}s to stagger startup (index=${group_index}, delay=${STAGGER_DELAY}s per group)..." | tee -a "${log_file}"
+        sleep "${delay}"
+    fi
 
     start_time=$(date +%s)
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] STARTING: ${group} (INFRA_ID: ${infra_id})" | tee -a "${log_file}"
@@ -130,28 +135,39 @@ run_single_group() {
     export TAP_GROUP="${group}"
     export SKIP_CLUSTER_START="${SKIP_CLUSTER_START}"
     export COVERAGE="${COVERAGE}"
+    export TAP_USE_NOISE="${TAP_USE_NOISE}"
 
-    timeout "${TIMEOUT_MINUTES}m" bash <<INNERSHELL || cmd_exit_code=$?
-        set -euo pipefail
+    # Run infrastructure setup and tests with timeout
+    # Using temp file instead of heredoc to avoid shell expansion issues
+    inner_script=$(mktemp)
+    cat > "${inner_script}" << INNERSCRIPT
+#!/bin/bash
+set -e
 
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Setting up infrastructure..." | tee -a "${log_file}"
-        if ! "${SCRIPT_DIR}/ensure-infras.bash" >> "${log_file}" 2>&1; then
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Failed to set up infrastructure" | tee -a "${log_file}"
-            exit 1
-        fi
+# Setup infrastructure
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Setting up infrastructure..." >> "${log_file}" 2>&1
+"${SCRIPT_DIR}/ensure-infras.bash" >> "${log_file}" 2>&1
+if [ \$? -ne 0 ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Failed to set up infrastructure" >> "${log_file}" 2>&1
+    exit 1
+fi
 
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Running tests..." | tee -a "${log_file}"
-        # Note: run-tests-isolated.bash handles coverage collection regardless of exit code
-        "${SCRIPT_DIR}/run-tests-isolated.bash" >> "${log_file}" 2>&1
-        inner_exit_code=$?
-        if [ \${inner_exit_code} -ne 0 ]; then
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: Tests failed with exit code \${inner_exit_code}" | tee -a "${log_file}"
-            # Coverage is still collected in run-tests-isolated.bash even on failure
-            exit \${inner_exit_code}
-        fi
+# Run tests
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Running tests..." >> "${log_file}" 2>&1
+"${SCRIPT_DIR}/run-tests-isolated.bash" >> "${log_file}" 2>&1
+test_exit=\$?
+if [ \${test_exit} -ne 0 ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: Tests failed with exit code \${test_exit}" >> "${log_file}" 2>&1
+    exit \${test_exit}
+fi
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Tests completed successfully" >> "${log_file}" 2>&1
+INNERSCRIPT
 
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Tests completed successfully" | tee -a "${log_file}"
-INNERSHELL
+    # Run the script with timeout
+    chmod +x "${inner_script}"
+    timeout "${TIMEOUT_MINUTES}m" bash "${inner_script}"
+    cmd_exit_code=$?
+    rm -f "${inner_script}"
 
     # Process exit code
     if [ "${cmd_exit_code}" -eq 0 ]; then
@@ -196,6 +212,7 @@ START_TIME=$(date +%s)
 # Track overall status
 OVERALL_FAILED=0
 JOBS_RUNNING=0
+GROUP_INDEX=0
 
 # Launch jobs
 for group in ${TAP_GROUPS}; do
@@ -214,12 +231,13 @@ for group in ${TAP_GROUPS}; do
 
     # Start the job
     echo ">>> Launching: ${group}"
-    run_single_group "${group}" &
+    run_single_group "${group}" "${GROUP_INDEX}" &
     local_pid=$!
     JOB_PIDS+=("${local_pid}")
     GROUP_FOR_PID["${local_pid}"]="${group}"
     PID_FOR_GROUP["${group}"]="${local_pid}"
     JOBS_RUNNING=$((JOBS_RUNNING + 1))
+    GROUP_INDEX=$((GROUP_INDEX + 1))
 done
 
 # Wait for all jobs to complete

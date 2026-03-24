@@ -594,6 +594,11 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
         fo_cmd = ''
         tap_tests = []
 
+        # Initialize variables before try block to avoid UnboundLocalError in validation
+        TAP_GROUP = os.environ.get('TAP_GROUP', '')
+        group_has_tests = False
+        groups = {}
+
         if (internal):
             TAP = "INTERNAL TAP"
         else:
@@ -851,6 +856,9 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
 
                 self.padmin_command(f"LOGENTRY '{TAP} test {fo_num+1}/{len(tap_tests)} \'{os.path.basename(fo_cmd)}\' RC: {fop.returncode}'")
                 self.padmin_command(f"PROXYSQL FLUSH LOGS")
+                # Dump gcov counters for coverage collection
+                if self.coverage:
+                    self.padmin_command("PROXYSQL GCOV DUMP")
                 log.debug(f"{TAP} test {fo_num+1}/{len(tap_tests)} '{os.path.basename(fo_cmd)}' RC: {fop.returncode}")
 
                 # if returncode print extra info
@@ -936,17 +944,23 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
             if expected_in_workdir:
                 passed_tests = set(os.path.basename(cmd) for cmd, rc_val in summary if rc_val == 0)
                 failed_tests = set(os.path.basename(cmd) for cmd, rc_val in summary if rc_val is not None and rc_val != 0)
-                missing_tests = expected_in_workdir - passed_tests - failed_tests
+                skipped_tests = set(os.path.basename(cmd) for cmd, rc_val in summary if rc_val is None)
+
+                # Differentiate skipped tests from truly missing tests
+                # Skipped tests are intentionally excluded (version filter, group membership, etc.)
+                # Missing tests are expected but never encountered during execution
+                expected_runnable = expected_in_workdir - skipped_tests
+                missing_tests = expected_runnable - passed_tests - failed_tests
 
                 if missing_tests:
                     log.critical(f"TAP_GROUP '{TAP_GROUP}': {len(missing_tests)} expected tests did not run: {sorted(missing_tests)}")
                     rc = rc + len(missing_tests)
 
-                if len(passed_tests) != len(expected_in_workdir):
-                    log.critical(f"TAP_GROUP '{TAP_GROUP}': Expected {len(expected_in_workdir)} tests to pass, but only {len(passed_tests)} passed. Failed: {len(failed_tests)}, Missing: {len(missing_tests)}")
+                if len(passed_tests) != len(expected_runnable):
+                    log.critical(f"TAP_GROUP '{TAP_GROUP}': Expected {len(expected_runnable)} runnable tests to pass, but only {len(passed_tests)} passed. Failed: {len(failed_tests)}, Missing: {len(missing_tests)}, Skipped: {len(skipped_tests)}")
                     # Ensure rc is non-zero to indicate failure
                     if rc == 0:
-                        rc = len(expected_in_workdir) - len(passed_tests)
+                        rc = len(expected_runnable) - len(passed_tests)
 
         return rc, logs, summary
 

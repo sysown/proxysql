@@ -702,12 +702,12 @@ int main(int argc, char** argv) {
 	);
 
 	MYSQL* proxy_admin = mysql_init(NULL);
-	if (!mysql_real_connect(proxy_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+	if (!mysql_real_connect(proxy_admin, cl.admin_host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_admin));
 		return EXIT_FAILURE;
 	}
 
-	diag("Connected to ProxySQL admin interface at %s:%d", cl.host, cl.admin_port);
+	diag("Connected to ProxySQL admin interface at %s:%d", cl.admin_host, cl.admin_port);
 	diag("");
 
 	// 1. Test for: '8000' timeout, '1' max_connections

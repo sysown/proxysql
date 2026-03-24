@@ -11,6 +11,13 @@ set -o pipefail
 #
 # Optional environment variables:
 #   COVERAGE=1             # Enable code coverage collection (default: 0)
+#   TAP_USE_NOISE=1        # Enable noise injection for race condition testing (default: 0)
+#
+# Noise injection notes:
+#   - When enabled, tests that support noise injection will introduce random delays
+#     and stress to help detect race conditions and deadlocks
+#   - Tests check `cl.use_noise` and adjust their behavior accordingly
+#   - See test/tap/NOISE_TESTING.md for more details
 #
 # Coverage notes:
 #   - Requires ProxySQL to be compiled with COVERAGE=1 (adds --coverage flags)
@@ -96,6 +103,7 @@ NETWORK_NAME="${INFRA_ID}_backend"
 TEST_CONTAINER="test-runner.${INFRA_ID}"
 INFRA_LOGS_PATH="${WORKSPACE}/ci_infra_logs"
 PROXY_DATA_DIR_HOST="${INFRA_LOGS_PATH}/${INFRA_ID}/proxysql"
+COVERAGE_DATA_DIR_HOST="${INFRA_LOGS_PATH}/${INFRA_ID}/gcov"
 
 
 
@@ -153,7 +161,8 @@ docker run \
     --cap-add=NET_ADMIN \
     --cap-add=SYS_ADMIN \
     -v "${WORKSPACE}:${WORKSPACE}" \
-        -v "${PROXY_DATA_DIR_HOST}:/var/lib/proxysql" \
+    -v "${PROXY_DATA_DIR_HOST}:/var/lib/proxysql" \
+    -v "${COVERAGE_DATA_DIR_HOST}:/gcov" \
     -e WORKSPACE="${WORKSPACE}" \
     -e INFRA_ID="${INFRA_ID}" \
     -e INFRA_TYPE="${INFRA_TYPE}" \
@@ -169,6 +178,7 @@ docker run \
     -e SCRIPT_DIR="${SCRIPT_DIR}" \
     -e MYSQL_BINLOG_BIN="${MYSQL_BINLOG_BIN}" \
     -e BINLOG_READER_BIN="${BINLOG_READER_BIN}" \
+    -e TAP_USE_NOISE="${TAP_USE_NOISE:-0}" \
     proxysql-ci-base:latest \
     /bin/bash -c "
         set -e
@@ -178,13 +188,30 @@ docker run \
             local exit_code=\$?
             if [ \"\${COVERAGE_MODE}\" = \"1\" ]; then
                 echo \">>> Collecting code coverage data (exit code was: \${exit_code})...\"
+
                 if command -v fastcov >/dev/null 2>&1; then
                     mkdir -p \"\${COVERAGE_REPORT_DIR}\"
                     local coverage_file=\"\${COVERAGE_REPORT_DIR}/\${INFRA_ID}.info\"
                     echo \">>> Generating coverage report: \${coverage_file}\"
                     local nproc_val=\$(nproc)
-                    cd \"\${WORKSPACE}\"
-                    fastcov -b -j\"\${nproc_val}\" --process-gcno -l -e /usr/include/ -e test/tap/tests -e deps/ -d . -o \"\${coverage_file}\" 2>&1 || echo \">>> WARNING: Coverage generation failed\"
+
+                    # Copy .gcno files to /gcov so fastcov can find both .gcno and .gcda together
+                    # This avoids race conditions when multiple groups run in parallel
+                    if [ -d \"/gcov\" ] && [ \"\$(ls -A /gcov 2>/dev/null)\" ]; then
+                        echo \">>> Preparing coverage data directory...\"
+                        cd \"\${WORKSPACE}\" && find . -path './ci_infra_logs' -prune -o -name '*.gcno' -type f -print | while read gcno; do
+                            target=\"/gcov/\${gcno#./}\"
+                            target_dir=\"\$(dirname \"\$target\")\"
+                            mkdir -p \"\$target_dir\"
+                            cp -f \"\$gcno\" \"\$target\"
+                        done
+                        echo \">>> Running fastcov on /gcov...\"
+                        cd /gcov
+                        fastcov -b -j\"\${nproc_val}\" --process-gcno -l -e /usr/include/ -e \"\${WORKSPACE}/test/tap/tests\" -e \"\${WORKSPACE}/deps/\" -d . -o \"\${coverage_file}\" 2>&1 || echo \">>> WARNING: Coverage generation failed\"
+                    else
+                        echo \">>> WARNING: /gcov directory is empty or missing, skipping coverage\"
+                    fi
+
                     if [ -f \"\${coverage_file}\" ]; then
                         echo \">>> Coverage report generated: \${coverage_file}\"
                         # Generate HTML report
@@ -275,44 +302,6 @@ if [ -n "${TAP_GROUP}" ]; then
     if [ -f "${PRE_CLEANUP_HOOK}" ]; then
         echo ">>> Executing group pre-cleanup hook: ${PRE_CLEANUP_HOOK}"
         "${PRE_CLEANUP_HOOK}" || true  # Allow cleanup to fail
-    fi
-fi
-
-# Capture code coverage data if enabled
-# This runs regardless of test success/failure
-if [ "${COVERAGE_MODE}" = "1" ]; then
-    echo ">>> Collecting code coverage data..."
-
-    # Check if fastcov is available in the container
-    if docker exec "${TEST_CONTAINER}" which fastcov >/dev/null 2>&1; then
-        COVERAGE_INFO_FILE="${COVERAGE_REPORT_DIR}/${TAP_GROUP:-test}-${INFRA_ID}.info"
-
-        echo ">>> Generating coverage report: ${COVERAGE_INFO_FILE}"
-        # Extract coverage data from container
-        docker exec "${TEST_CONTAINER}" bash -c "
-            cd '${WORKSPACE}' && \
-            fastcov -b -j\$(nproc) --process-gcno -l \
-                -e /usr/include/ -e test/tap/tests \
-                -d . -i include -i lib -i src \
-                -o '${COVERAGE_INFO_FILE}' 2>&1
-        " || echo ">>> WARNING: Coverage generation failed"
-
-        # Check if report was generated
-        if [ -f "${COVERAGE_INFO_FILE}" ]; then
-            echo ">>> Coverage report generated: ${COVERAGE_INFO_FILE}"
-            # Generate HTML report
-            if command -v genhtml >/dev/null 2>&1; then
-                HTML_REPORT_DIR="${COVERAGE_REPORT_DIR}/html/${TAP_GROUP:-test}-${INFRA_ID}"
-                mkdir -p "${HTML_REPORT_DIR}"
-                genhtml --branch-coverage --ignore-errors negative,source --synthesize-missing "${COVERAGE_INFO_FILE}" --output-directory "${HTML_REPORT_DIR}" 2>/dev/null || \
-                    echo ">>> WARNING: HTML report generation failed"
-                [ -d "${HTML_REPORT_DIR}" ] && echo ">>> HTML report: ${HTML_REPORT_DIR}/index.html"
-            fi
-        else
-            echo ">>> WARNING: Coverage info file not generated"
-        fi
-    else
-        echo ">>> WARNING: fastcov not found in container, skipping coverage collection"
     fi
 fi
 
