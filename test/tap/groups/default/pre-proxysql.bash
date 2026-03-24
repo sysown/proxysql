@@ -2,14 +2,18 @@
 set -e
 set -o pipefail
 #
-# change infra config
-# inherits env from tester script
+# Pre-proxysql hook for unified CI
+# Starts ProxySQL cluster nodes if needed.
+# Infrastructure and user/server provisioning is handled by
+# ensure-infras.bash and docker-proxy-post.bash.
 #
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export WORKSPACE="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 
 # Start ProxySQL Cluster if available
-/home/rene/proxysql/test/infra/control/cluster_start.bash
-/home/rene/proxysql/test/infra/control/cluster_init.bash
+"${WORKSPACE}/test/infra/control/cluster_start.bash"
+"${WORKSPACE}/test/infra/control/cluster_init.bash"
 
-# wait for cluster to stabilize
+# wait for infra to stabilize
 sleep 10
