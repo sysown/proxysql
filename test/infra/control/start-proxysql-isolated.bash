@@ -174,6 +174,10 @@ if [ "${NUM_NODES}" -gt 0 ]; then
     CORE_NODES=3
     if [ "${NUM_NODES}" -lt 3 ]; then CORE_NODES="${NUM_NODES}"; fi
     PROXYSQL_SERVERS_SQL="DELETE FROM proxysql_servers;"
+    # Include the primary itself — if a node syncs proxysql_servers from the primary,
+    # the primary must be in the list, otherwise the node drops its monitor thread
+    # for the primary and never detects checksum changes again.
+    PROXYSQL_SERVERS_SQL="${PROXYSQL_SERVERS_SQL} INSERT INTO proxysql_servers (hostname,port,weight,comment) VALUES ('proxysql',6032,0,'primary');"
     for i in $(seq 1 "${CORE_NODES}"); do
         PORT=$((6032 + i * 10))
         PROXYSQL_SERVERS_SQL="${PROXYSQL_SERVERS_SQL} INSERT INTO proxysql_servers (hostname,port,weight,comment) VALUES ('proxysql',${PORT},0,'core-node${i}');"
