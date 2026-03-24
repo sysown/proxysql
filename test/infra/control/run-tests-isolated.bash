@@ -269,31 +269,46 @@ docker run \
                     echo \">>> Coverage generation log: \${coverage_log}\"
                     local nproc_val=\$(nproc)
 
-                    # Copy .gcno files to /gcov so fastcov can find them.
-                    # For .gcda files: ProxySQL's execution data is already in /gcov (via GCOV_PREFIX).
-                    # Only copy .gcda files that DON'T already exist in /gcov (TAP test coverage).
-                    # Using cp -n (no-clobber) prevents overwriting ProxySQL's real execution data
-                    # with stale .gcda files from the source tree.
+                    # Coverage data comes from two sources:
+                    #   /gcov     — ProxySQL daemon execution (via GCOV_PREFIX)
+                    #   WORKSPACE — TAP test binary execution (.gcda next to source)
+                    # Both may cover the same code (e.g. libproxysql.a exercised by
+                    # both ProxySQL runtime and TAP test harness). We generate separate
+                    # .info files and combine them with fastcov -C.
                     if [ -d \"/gcov\" ] && [ \"\$(ls -A /gcov 2>/dev/null)\" ]; then
                         echo \">>> Preparing coverage data directory...\" >> \"\${coverage_log}\" 2>&1
+
+                        # Copy .gcno files to /gcov (needed by fastcov, compile-time only)
                         cd \"\${WORKSPACE}\" && find . -path './ci_infra_logs' -prune -o -name '*.gcno' -type f -print | while read gcfile; do
                             target=\"/gcov/\${gcfile#./}\"
                             target_dir=\"\$(dirname \"\$target\")\"
                             mkdir -p \"\$target_dir\"
                             cp -f \"\$gcfile\" \"\$target\"
                         done
-                        # Copy TAP test .gcda files (don't overwrite ProxySQL's existing .gcda)
-                        cd \"\${WORKSPACE}\" && find . -path './ci_infra_logs' -prune -o -name '*.gcda' -type f -print | while read gcfile; do
-                            target=\"/gcov/\${gcfile#./}\"
-                            target_dir=\"\$(dirname \"\$target\")\"
-                            mkdir -p \"\$target_dir\"
-                            cp -n \"\$gcfile\" \"\$target\"
-                        done
-                        echo \">>> Running fastcov on /gcov...\"
+                        # Generate coverage from ProxySQL daemon execution (/gcov)
+                        echo \">>> Running fastcov on /gcov (ProxySQL daemon)...\"
+                        local proxysql_info=\"\${COVERAGE_REPORT_DIR}/proxysql.info\"
                         cd /gcov
                         fastcov -b -j\"\${nproc_val}\" --process-gcno -l \
                             --include \"\${WORKSPACE}/include/\" \"\${WORKSPACE}/lib/\" \"\${WORKSPACE}/src/\" \"\${WORKSPACE}/test/\" \
-                            -d . -o \"\${coverage_file}\" >> \"\${coverage_log}\" 2>&1 || echo \">>> WARNING: Coverage generation failed (see \${coverage_log})\"
+                            -d . -o \"\${proxysql_info}\" >> \"\${coverage_log}\" 2>&1 || echo \">>> WARNING: ProxySQL coverage generation failed\" >> \"\${coverage_log}\"
+
+                        # Generate coverage from TAP test execution (workspace)
+                        echo \">>> Running fastcov on workspace (TAP tests)...\"
+                        local tap_info=\"\${COVERAGE_REPORT_DIR}/tap_tests.info\"
+                        cd \"\${WORKSPACE}\"
+                        fastcov -b -j\"\${nproc_val}\" --process-gcno -l \
+                            --include \"\${WORKSPACE}/include/\" \"\${WORKSPACE}/lib/\" \"\${WORKSPACE}/src/\" \"\${WORKSPACE}/test/\" \
+                            -d . -o \"\${tap_info}\" >> \"\${coverage_log}\" 2>&1 || echo \">>> WARNING: TAP test coverage generation failed\" >> \"\${coverage_log}\"
+
+                        # Combine both coverage reports
+                        echo \">>> Combining ProxySQL + TAP test coverage...\"
+                        local info_files=\"\"
+                        [ -f \"\${proxysql_info}\" ] && info_files=\"\${proxysql_info}\"
+                        [ -f \"\${tap_info}\" ] && info_files=\"\${info_files} \${tap_info}\"
+                        if [ -n \"\${info_files}\" ]; then
+                            fastcov -C \${info_files} -o \"\${coverage_file}\" >> \"\${coverage_log}\" 2>&1 || echo \">>> WARNING: Coverage combination failed (see \${coverage_log})\"
+                        fi
                     else
                         echo \">>> WARNING: /gcov directory is empty or missing, skipping coverage\"
                     fi
