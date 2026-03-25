@@ -271,10 +271,15 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	genai_mcp_endpoint_unit-t \
 	genai_mcp_thread_unit-t \
 	config_validation_unit-t \
+	config_write_unit-t \
 	query_processor_firewall_unit-t \
 	statistics_unit-t \
 	log_utils_unit-t \
-	genai_thread_unit-t
+	genai_thread_unit-t \
+	listen_validator_unit-t \
+	c_tokenizer_unit-t \
+	ezoption_parser_unit-t \
+	genai_discovery_schema_unit-t
 
 .PHONY: all
 all: $(UNIT_TESTS)
@@ -287,6 +292,16 @@ ALLOW_MULTI_DEF :=
 ifneq ($(UNAME_S),Darwin)
 	ALLOW_MULTI_DEF := -Wl,--allow-multiple-definition
 endif
+
+# Standalone header-only tests: need tap.o + noise stubs, no libproxysql.a
+$(ODIR)/tap_noise_stubs.o: | $(ODIR)
+	@printf '#include <vector>\n#include <string>\n#include <mutex>\nstd::vector<std::string> noise_failures;\nstd::mutex noise_failure_mutex;\nextern "C" { void stop_noise_tools(){} int get_noise_tools_count(){return 0;} }\n' | \
+		$(CXX) -x c++ -c -o $@ - $(STDCPP)
+
+ezoption_parser_unit-t: ezoption_parser_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include \
+		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) -lpthread -o $@
 
 # Pattern rule: all unit tests use the same compile + link flags.
 # Each test binary is built from its .cpp source, linked against
