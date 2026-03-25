@@ -22,6 +22,8 @@
 
 #include "Stats_Tool_Handler.h"
 
+using namespace stats_utils;
+
 #include <climits>
 #include <cstring>
 #include <string>

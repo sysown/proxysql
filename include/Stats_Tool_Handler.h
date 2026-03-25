@@ -13,6 +13,7 @@
 // =========================================================================
 // Free helper functions (defined in Stats_Tool_Handler.cpp)
 // =========================================================================
+namespace stats_utils {
 
 /**
  * @brief Parse and validate a backend filter in `host:port` format.
@@ -33,6 +34,8 @@ long long parse_ll_or_zero(const char* value);
  * @brief Parse a nullable numeric SQLite field into signed int.
  */
 int parse_int_or_zero(const char* value);
+
+} // namespace stats_utils
 
 /**
  * @brief Stats Tool Handler for /mcp/stats endpoint

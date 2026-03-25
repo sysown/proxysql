@@ -99,6 +99,8 @@ static constexpr uint32_t SHOW_QUERIES_MAX_LIMIT_HARDCODED = 1000;
  */
 static constexpr uint32_t SHOW_PROCESSLIST_MAX_LIMIT_HARDCODED = 1000;
 
+namespace stats_utils {
+
 /**
  * @brief Parse and validate a backend filter in `host:port` format.
  *
@@ -224,6 +226,12 @@ int parse_int_or_zero(const char* value) {
 	}
 	return static_cast<int>(parsed);
 }
+
+} // namespace stats_utils
+
+// Make helpers available unqualified within this translation unit.
+// The namespace prevents symbol collisions in other TUs that include the header.
+using namespace stats_utils;
 
 /**
  * @brief Snapshot row used by in-memory implementation of `show_commands`.
