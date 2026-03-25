@@ -129,14 +129,14 @@ jobs:
         GHUSER="$(id -u):$(id -g)"
         sudo chown -R ${GHUSER} ./logs
 
-        if ! ls ./logs/*_summary.log 1>/dev/null 2>&1; then
+        if ! ls ./logs/*/*_summary.log 1>/dev/null 2>&1; then
           echo "ERROR: No summary log found — tests likely did not run"
           exit 1
         fi
 
-        cat ./logs/*_summary.log
-        FAILS=$(cat ./logs/*_summary.log | grep -oP '(?<=^FAIL: )\d+')
-        ERRORS=$(cat ./logs/*_summary.log | grep -oP '(?<=^ERROR: )\d+')
+        cat ./logs/*/*_summary.log
+        FAILS=$(cat ./logs/*/*_summary.log | grep -oP '(?<=^FAIL: )\d+')
+        ERRORS=$(cat ./logs/*/*_summary.log | grep -oP '(?<=^ERROR: )\d+')
 
         if [[ -z "${FAILS}" ]]; then
           echo "ERROR: Could not parse FAIL count from summary log"
