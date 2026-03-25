@@ -86,6 +86,7 @@ struct QueryFingerprint {
  * - Rule-based pattern matching
  */
 class Anomaly_Detector {
+	friend class Anomaly_Detector_TestHelper;
 private:
 	struct {
 		bool enabled;

@@ -10,6 +10,30 @@
 #include "MCP_Tool_Handler.h"
 #include "MCP_Thread.h"
 
+// =========================================================================
+// Free helper functions (defined in Stats_Tool_Handler.cpp)
+// =========================================================================
+
+/**
+ * @brief Parse and validate a backend filter in `host:port` format.
+ */
+bool parse_server_filter(const std::string& server_filter, std::string& host, int& port, std::string& error);
+
+/**
+ * @brief Parse digest filter string into uint64 digest identifier.
+ */
+bool parse_digest_filter(const std::string& digest_filter, uint64_t& digest_value, std::string& error);
+
+/**
+ * @brief Parse a nullable numeric SQLite field into signed 64-bit.
+ */
+long long parse_ll_or_zero(const char* value);
+
+/**
+ * @brief Parse a nullable numeric SQLite field into signed int.
+ */
+int parse_int_or_zero(const char* value);
+
 /**
  * @brief Stats Tool Handler for /mcp/stats endpoint
  *
@@ -227,6 +251,7 @@ private:
 	 */
 	std::map<std::string, std::string> parse_global_stats(SQLite3_result* resultset);
 
+public:
 	/**
 	 * @brief Get interval configuration for historical queries
 	 * @param interval User-friendly interval string (e.g. "1h", "1d")
@@ -250,7 +275,6 @@ private:
 	 */
 	int calculate_percentile(const std::vector<int>& buckets, const std::vector<int>& thresholds, double percentile);
 
-public:
 	/**
 	 * @brief Constructor
 	 * @param handler Pointer to MCP_Threads_Handler

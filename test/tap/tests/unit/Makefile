@@ -253,7 +253,18 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	pgsql_error_classifier_unit-t \
 	pgsql_monitor_unit-t \
 	mysql_error_classifier_unit-t \
-	backend_sync_unit-t
+	backend_sync_unit-t \
+	mysql_encode_unit-t \
+	pgsql_variables_validator_unit-t \
+	proxysql_utils_unit-t \
+	gen_utils_unit-t \
+	proxy_protocol_unit-t \
+	pgsql_txn_state_unit-t \
+	genai_anomaly_unit-t \
+	genai_fts_string_unit-t \
+	sqlite3db_unit-t \
+	pgsql_error_helper_unit-t \
+	genai_stats_parsing_unit-t
 
 .PHONY: all
 all: $(UNIT_TESTS)

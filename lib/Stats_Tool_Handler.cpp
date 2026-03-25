@@ -112,7 +112,7 @@ static constexpr uint32_t SHOW_PROCESSLIST_MAX_LIMIT_HARDCODED = 1000;
  * @param error Output validation message when parsing fails.
  * @return true when parsing succeeds and @p host/@p port are valid.
  */
-static bool parse_server_filter(const std::string& server_filter, std::string& host, int& port, std::string& error) {
+bool parse_server_filter(const std::string& server_filter, std::string& host, int& port, std::string& error) {
 	size_t colon = server_filter.rfind(':');
 	if (colon == std::string::npos || colon == 0 || colon == server_filter.size() - 1) {
 		error = "expected format host:port";
@@ -147,7 +147,7 @@ static bool parse_server_filter(const std::string& server_filter, std::string& h
  * @param error Parsing error details if conversion fails.
  * @return true on successful conversion.
  */
-static bool parse_digest_filter(const std::string& digest_filter, uint64_t& digest_value, std::string& error) {
+bool parse_digest_filter(const std::string& digest_filter, uint64_t& digest_value, std::string& error) {
 	if (digest_filter.empty()) {
 		error = "empty digest filter";
 		return false;
@@ -190,7 +190,7 @@ static bool parse_digest_filter(const std::string& digest_filter, uint64_t& dige
  * @param value Nullable C string from `SQLite3_row::fields`.
  * @return Parsed value, or zero when @p value is null.
  */
-static long long parse_ll_or_zero(const char* value) {
+long long parse_ll_or_zero(const char* value) {
 	if (!value || !value[0]) {
 		return 0LL;
 	}
@@ -214,7 +214,7 @@ static long long parse_ll_or_zero(const char* value) {
  * @param value Nullable C string from `SQLite3_row::fields`.
  * @return Parsed value, or zero when @p value is null.
  */
-static int parse_int_or_zero(const char* value) {
+int parse_int_or_zero(const char* value) {
 	const long long parsed = parse_ll_or_zero(value);
 	if (parsed > std::numeric_limits<int>::max()) {
 		return std::numeric_limits<int>::max();
