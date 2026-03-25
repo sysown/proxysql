@@ -102,7 +102,7 @@ using json = nlohmann::json;
  * @param userp User pointer (std::string* for response buffer)
  * @return Total bytes processed
  */
-static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
+size_t LLM_WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
 	size_t totalSize = size * nmemb;
 	std::string* response = static_cast<std::string*>(userp);
 	response->append(static_cast<char*>(contents), totalSize);
@@ -124,7 +124,7 @@ static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* use
  * @param curl_code libcurl error code
  * @return true if error is retryable, false otherwise
  */
-static bool is_retryable_error(int http_status_code, CURLcode curl_code) {
+bool is_retryable_error(int http_status_code, CURLcode curl_code) {
 	// Retry on specific HTTP status codes
 	if (http_status_code == 408 ||           // Request Timeout
 	    http_status_code == 429 ||           // Too Many Requests (rate limit)
@@ -263,7 +263,7 @@ std::string LLM_Bridge::call_generic_openai(const std::string& prompt, const std
 	curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
 	curl_easy_setopt(curl, CURLOPT_POST, 1L);
 	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_str.c_str());
-	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, LLM_WriteCallback);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_data);
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, config.timeout_ms);
 
@@ -435,7 +435,7 @@ std::string LLM_Bridge::call_generic_anthropic(const std::string& prompt, const 
 	curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
 	curl_easy_setopt(curl, CURLOPT_POST, 1L);
 	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_str.c_str());
-	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, LLM_WriteCallback);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_data);
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, config.timeout_ms);
 

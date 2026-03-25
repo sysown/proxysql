@@ -29,7 +29,7 @@ using json = nlohmann::json;
 
 extern ProxySQL_Admin *GloAdmin;
 
-static bool is_pgsql_protocol(const std::string& protocol) {
+bool is_pgsql_protocol(const std::string& protocol) {
 	return protocol == "pgsql";
 }
 
@@ -55,7 +55,7 @@ static int runtime_weight_col_idx(const std::string& protocol) {
 	return is_pgsql_protocol(protocol) ? 4 : 5;
 }
 
-static std::string uppercase_or_unknown(const char* s) {
+std::string uppercase_or_unknown(const char* s) {
 	if (s == NULL) {
 		return "UNKNOWN";
 	}
@@ -64,7 +64,7 @@ static std::string uppercase_or_unknown(const char* s) {
 	return out.empty() ? "UNKNOWN" : out;
 }
 
-static bool is_runtime_online_status(const std::string& status) {
+bool is_runtime_online_status(const std::string& status) {
 	return status == "ONLINE";
 }
 
@@ -155,7 +155,7 @@ static std::string get_runtime_hostgroup_status_summary(const std::string& proto
 //
 // Returns:
 //   String value, JSON dump, or default value
-static std::string json_string(const json& j, const std::string& key, const std::string& default_val = "") {
+std::string json_string(const json& j, const std::string& key, const std::string& default_val) {
 	if (j.contains(key) && !j[key].is_null()) {
 		if (j[key].is_string()) {
 			return j[key].get<std::string>();
@@ -180,7 +180,7 @@ static std::string json_string(const json& j, const std::string& key, const std:
 //
 // Returns:
 //   Integer value, or default value
-static int json_int(const json& j, const std::string& key, int default_val = 0) {
+int json_int(const json& j, const std::string& key, int default_val) {
 	if (j.contains(key) && !j[key].is_null()) {
 		const json& val = j[key];
 		// If it's already a number, return it
@@ -219,7 +219,7 @@ static int json_int(const json& j, const std::string& key, int default_val = 0) 
 //
 // Returns:
 //   Double value, or default value
-static double json_double(const json& j, const std::string& key, double default_val = 0.0) {
+double json_double(const json& j, const std::string& key, double default_val) {
 	if (j.contains(key) && !j[key].is_null()) {
 		const json& val = j[key];
 		// If it's already a number, return it
@@ -256,7 +256,7 @@ static double json_double(const json& j, const std::string& key, double default_
  * @param identifier The identifier to validate/escape
  * @return Empty string if unsafe, otherwise the validated identifier
  */
-static std::string validate_sql_identifier_sqlite(const std::string& identifier) {
+std::string validate_sql_identifier_sqlite(const std::string& identifier) {
 	if (identifier.empty()) {
 		return "";
 	}
@@ -290,7 +290,7 @@ static std::string validate_sql_identifier_sqlite(const std::string& identifier)
  * @param value The string value to escape
  * @return Escaped string safe for use in SQL queries
  */
-static std::string escape_string_literal(const std::string& value) {
+std::string escape_string_literal(const std::string& value) {
 	std::string escaped;
 	escaped.reserve(value.length() * 2 + 1);
 

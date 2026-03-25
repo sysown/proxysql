@@ -264,7 +264,11 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	genai_fts_string_unit-t \
 	sqlite3db_unit-t \
 	pgsql_error_helper_unit-t \
-	genai_stats_parsing_unit-t
+	genai_stats_parsing_unit-t \
+	genai_llm_clients_unit-t \
+	charset_find_unit-t \
+	genai_query_handler_unit-t \
+	genai_mcp_endpoint_unit-t
 
 .PHONY: all
 all: $(UNIT_TESTS)
