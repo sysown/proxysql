@@ -162,6 +162,9 @@
     "mysql93-g1",
     "mysql93-gr-g1"
   ],
+  "c_tokenizer_unit-t": [
+    "unit-tests-g1"
+  ],
   "charset_find_unit-t": [
     "unit-tests-g1"
   ],
@@ -181,6 +184,9 @@
     "mysql-query_digests_keep_comment=1-g1"
   ],
   "config_validation_unit-t": [
+    "unit-tests-g1"
+  ],
+  "config_write_unit-t": [
     "unit-tests-g1"
   ],
   "connection_pool_unit-t": [
@@ -251,6 +257,9 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4"
   ],
+  "ezoption_parser_unit-t": [
+    "unit-tests-g1"
+  ],
   "fast_forward_grace_close_libmysql-t": [
     "legacy-g3",
     "mysql84-g3",
@@ -294,6 +303,9 @@
     "ai-g1"
   ],
   "genai_async-t": [
+    "ai-g1"
+  ],
+  "genai_discovery_schema_unit-t": [
     "ai-g1"
   ],
   "genai_embedding_rerank-t": [
@@ -390,6 +402,9 @@
     "mysql92-gr-g1",
     "mysql93-g1",
     "mysql93-gr-g1"
+  ],
+  "listen_validator_unit-t": [
+    "unit-tests-g1"
   ],
   "listener_conflicts_validation-t": [
     "no-infra-g1"
