@@ -315,7 +315,7 @@ void * my_conn_thread(void *arg) {
 				(k == mysql_vars.end()) ||
 				(s == proxysql_vars["conn"].end()) ||
 				(special_sqlmode == false &&
-					(el.key() != "session_track_gtids" && (k.value() != el.value() || s.value() != el.value())) ||
+					(el.key() != "session_track_gtids" && (!values_equiv(k.value(), el.value()) || !values_equiv(s.value(), el.value()))) ||
 					(el.key() == "session_track_gtids" && !check_session_track_gtids(el.value(), s.value(), k.value()))
 				)
 			) {
