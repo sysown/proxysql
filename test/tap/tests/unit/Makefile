@@ -268,7 +268,13 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	genai_llm_clients_unit-t \
 	charset_find_unit-t \
 	genai_query_handler_unit-t \
-	genai_mcp_endpoint_unit-t
+	genai_mcp_endpoint_unit-t \
+	genai_mcp_thread_unit-t \
+	config_validation_unit-t \
+	query_processor_firewall_unit-t \
+	statistics_unit-t \
+	log_utils_unit-t \
+	genai_thread_unit-t
 
 .PHONY: all
 all: $(UNIT_TESTS)
