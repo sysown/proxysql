@@ -268,7 +268,7 @@ static void test_find_charset_collate_case_insensitive() {
 // ============================================================================
 
 int main() {
-	plan(63);
+	plan(62);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 

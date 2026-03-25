@@ -197,7 +197,7 @@ ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c MySQLFFTO),0)
 	PSQL31 := -DPROXYSQL31
 endif
 PSQLTSDB :=
-ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c ProxySQL_TSDB),0)
+ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c init_tsdb_variables),0)
 	PROXYSQLTSDB := 1
 	PSQLTSDB := -DPROXYSQLTSDB
 endif

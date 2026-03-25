@@ -46,17 +46,26 @@ static std::string tmpdb_path;
 
 static void setup_stats() {
 	// ProxySQL_Statistics constructor opens GloVars.statsdb_disk as a file path.
-	// Point it at a temp file so each test run is isolated.
-	tmpdb_path = std::string(GloVars.datadir) + "/test_statsdb_" + std::to_string(getpid()) + ".db";
+	// Use /tmp directly to avoid datadir issues in CI environments.
+	const char *tmpdir = getenv("TMPDIR");
+	if (tmpdir == nullptr) tmpdir = "/tmp";
+	tmpdb_path = std::string(tmpdir) + "/proxysql_test_statsdb_" + std::to_string(getpid()) + ".db";
 
-	// Ensure datadir exists
-	mkdir(GloVars.datadir, 0755);
+	// Ensure datadir exists (needed by other parts of ProxySQL_Statistics)
+	if (GloVars.datadir != nullptr)
+		mkdir(GloVars.datadir, 0755);
 
 	// Set the global so the constructor can open it
 	GloVars.statsdb_disk = strdup(tmpdb_path.c_str());
 
 	stats = new ProxySQL_Statistics();
-	stats->init();
+	if (stats->statsdb_disk == nullptr) {
+		diag("statsdb_disk is NULL after construction — possible struct layout mismatch");
+		diag("(rebuild with: make clean && make debug in test/tap/tests/unit/)");
+		diag("GloVars.statsdb_disk=%s", GloVars.statsdb_disk ? GloVars.statsdb_disk : "NULL");
+	}
+	if (stats->statsdb_disk != nullptr)
+		stats->init();
 }
 
 static void teardown_stats() {
@@ -80,12 +89,19 @@ static void teardown_stats() {
 // Constructor and init
 // ============================================================
 
+static bool statsdb_ok = false;
+
 static void test_constructor_creates_databases() {
 	ok(stats != nullptr, "ProxySQL_Statistics object created successfully");
-	ok(stats->statsdb_disk != nullptr, "statsdb_disk is not null after construction");
+	statsdb_ok = (stats != nullptr && stats->statsdb_disk != nullptr);
+	ok(statsdb_ok, "statsdb_disk is not null after construction");
 }
 
 static void test_init_creates_tables() {
+	if (!statsdb_ok) {
+		skip(3, "statsdb_disk is NULL — struct layout mismatch (clean rebuild needed)");
+		return;
+	}
 	// After init(), standard tables should exist. Verify by querying them.
 	SQLite3_result *resultset = nullptr;
 	char *error = nullptr;
