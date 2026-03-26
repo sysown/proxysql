@@ -16,6 +16,9 @@
     "mysql93-g1",
     "mysql93-gr-g1"
   ],
+  "admin_disk_upgrade_unit-t": [
+    "unit-tests-g1"
+  ],
   "admin_set_credentials_logging-t": [
     "no-infra-g1"
   ],
@@ -329,6 +332,9 @@
   "genai_module-t": [
     "ai-g1"
   ],
+  "genai_mysql_catalog_unit-t": [
+    "ai-g1"
+  ],
   "genai_query_handler_unit-t": [
     "ai-g1"
   ],
@@ -337,6 +343,12 @@
   ],
   "genai_thread_unit-t": [
     "ai-g1"
+  ],
+  "glovars_unit-t": [
+    "unit-tests-g1"
+  ],
+  "gtid_utils_unit-t": [
+    "unit-tests-g1"
   ],
   "hostgroup_routing_unit-t": [
     "unit-tests-g1"
@@ -1016,6 +1028,9 @@
     "mysql-multiplexing=false-g1",
     "mysql-query_digests=0-g1",
     "mysql-query_digests_keep_comment=1-g1"
+  ],
+  "pgsql_tokenizer_unit-t": [
+    "unit-tests-g1"
   ],
   "pgsql_txn_state_unit-t": [
     "unit-tests-g1"
