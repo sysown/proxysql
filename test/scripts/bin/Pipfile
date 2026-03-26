@@ -4,13 +4,13 @@ verify_ssl = true
 name = "proxysql-tester"
 
 [packages]
-pymysql = "*"
+pymysql = ">=1.1.1"
 packaging = "*"
 structlog = "*"
 pyyaml = "*"
-requests = "*"
+requests = ">=2.33.0"
 
 [dev-packages]
 
 [requires]
-python_version = "2.7"
+python_version = "3"
