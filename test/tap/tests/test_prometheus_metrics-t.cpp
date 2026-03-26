@@ -43,6 +43,10 @@ using std::tuple;
  */
 CommandLine cl;
 
+// Writer hostgroup: read from TAP_MYSQL8_BACKEND_HG, fallback to 0 for legacy
+static const int WRITER_HG = get_env_int("TAP_MYSQL8_BACKEND_HG", 0);
+static const string WRITER_HG_S = std::to_string(WRITER_HG);
+
 /**
  * @brief Helper function to execute a MySQL query and log it to diagnostics.
  * 
@@ -970,12 +974,13 @@ int get_target_metrics(
 }
 
 /**
- * @brief Prepares hostgroup 0 by issuing initial traffic.
+ * @brief Prepares the writer hostgroup by issuing initial traffic.
  */
 bool rm_add_server_connpool_setup(MYSQL* proxy, MYSQL* admin, const CommandLine& cl) {
-	// Exercise some load on the hostgroup 0
+	// Exercise some load on the writer hostgroup
+	const string q_load = "/* hostgroup=" + WRITER_HG_S + " */ SELECT 1";
 	for (size_t i = 0; i < 10; i++) {
-		int rc = mysql_query_d(proxy, "/* hostgroup=0 */ SELECT 1");
+		int rc = mysql_query_d(proxy, q_load.c_str());
 		if (rc != EXIT_SUCCESS) { return EXIT_FAILURE; }
 		mysql_free_result(mysql_store_result(proxy));
 	}
@@ -991,19 +996,20 @@ bool rm_add_server_connpool_setup(MYSQL* proxy, MYSQL* admin, const CommandLine&
  */
 bool rm_add_server_connpool_counters(MYSQL* proxy, MYSQL* admin, const CommandLine& cl) {
 	// Delete server and add it again to hostgroup
-	diag("Removing current 'mysql_servers' for target hostgroup '0'");
-	mysql_query_d(admin, "DELETE FROM mysql_servers WHERE hostgroup_id=0");
+	const string del_q = "DELETE FROM mysql_servers WHERE hostgroup_id=" + WRITER_HG_S;
+	diag("Removing current 'mysql_servers' for target hostgroup '%s'", WRITER_HG_S.c_str());
+	mysql_query_d(admin, del_q.c_str());
 	mysql_query_d(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
-	diag("Recover original servers for target hostgroup '0'");
+	diag("Recover original servers for target hostgroup '%s'", WRITER_HG_S.c_str());
 	mysql_query_d(admin, "LOAD MYSQL SERVERS FROM DISK");
 	mysql_query_d(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
-	// Exercise some load on the hostgroup 0
-	const char* query { "/* hostgroup=0,create_new_connection=1 */ SELECT 1" };
-	int rc = mysql_query_d(proxy, query);
+	// Exercise some load on the writer hostgroup
+	const string query = "/* hostgroup=" + WRITER_HG_S + ",create_new_connection=1 */ SELECT 1";
+	int rc = mysql_query_d(proxy, query.c_str());
 	if (rc != EXIT_SUCCESS) {
-		diag("Failed to execute query '%s' with error '%s'", query, mysql_error(proxy));
+		diag("Failed to execute query '%s' with error '%s'", query.c_str(), mysql_error(proxy));
 		return false;
 	}
 	mysql_free_result(mysql_store_result(proxy));
@@ -1022,7 +1028,7 @@ bool rm_add_server_connpool_counters(MYSQL* proxy, MYSQL* admin, const CommandLi
  */
 void check_server_data_recv(const map<string,double>& prev_metrics, const map<string,double>& after_metrics) {
 	// Endpoint we are going to target
-	const string endpoint_hg { "endpoint=\"" + std::string(cl.mysql_host) + ":" + std::to_string(cl.mysql_port) + "\",hostgroup=\"0\"" };
+	const string endpoint_hg { "endpoint=\"" + std::string(cl.mysql_host) + ":" + std::to_string(cl.mysql_port) + "\",hostgroup=\"" + WRITER_HG_S + "\",protocol=\"mysql\"" };
 
 	// Metrics identifiers
 	const vector<string> metrics_ids {
