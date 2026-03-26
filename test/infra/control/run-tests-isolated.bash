@@ -55,6 +55,13 @@ fi
 INFRAS_TO_CHECK=""
 BASE_GROUP=$(echo "${TAP_GROUP}" | sed -E "s/[-_]g[0-9]+.*//") # Strip -g1, -g2, _g1, _g2 etc.
 
+# Source group env.sh to pick up SKIP_PROXYSQL and other group-level settings
+if [ -f "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/env.sh" ]; then
+    source "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/env.sh"
+elif [ -f "${WORKSPACE}/test/tap/groups/${BASE_GROUP}/env.sh" ]; then
+    source "${WORKSPACE}/test/tap/groups/${BASE_GROUP}/env.sh"
+fi
+
 if [ -n "${TAP_GROUP}" ]; then
     if [ -f "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst" ]; then
         INFRAS_TO_CHECK=$(expand_infra_list "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst")
@@ -107,40 +114,127 @@ COVERAGE_DATA_DIR_HOST="${INFRA_LOGS_PATH}/${INFRA_ID}/gcov"
 
 
 
-# VERIFICATION: Verify ProxySQL is running
-PROXY_CONTAINER="proxysql.${INFRA_ID}"
-echo ">>> Verifying ProxySQL container: ${PROXY_CONTAINER}"
-if ! docker ps --format '{{.Names}}' | grep -q "^${PROXY_CONTAINER}$"; then
-    echo "ERROR: ProxySQL container ${PROXY_CONTAINER} is NOT running!"
-    exit 1
-fi
-
-# VERIFICATION: Verify all required backend containers are running
-for INFRA_NAME in ${INFRAS_TO_CHECK}; do
-    echo ">>> Verifying Backend: ${INFRA_NAME}"
-    # Extract container names from the infra's docker-compose.yml
-    if [ -f "${WORKSPACE}/test/infra/${INFRA_NAME}/docker-compose.yml" ]; then
-        # Project name used by init script
-        COMPOSE_PROJECT="${INFRA_NAME}-${INFRA_ID}"
-        # Get all services for this project
-        RUNNING_CONTAINERS=$(docker ps --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" --format '{{.Names}}')
-        if [ -z "${RUNNING_CONTAINERS}" ]; then
-            if [ -f "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst" ]; then LST_PATH="${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst"; else LST_PATH="${WORKSPACE}/test/tap/groups/${BASE_GROUP}/infras.lst"; fi
-            echo "ERROR: Required infrastructure '${INFRA_NAME}' is NOT running."
-            if [ -f "${LST_PATH}" ]; then
-                echo "According to '${LST_PATH}', this infrastructure is mandatory for the '${TAP_GROUP}' group."
-            fi
-            echo "Please run initialization for '${INFRA_NAME}' first (e.g. cd test/infra/${INFRA_NAME} && ./docker-compose-init.bash)."
-            exit 1
-        fi
-        echo "Found running containers: ${RUNNING_CONTAINERS//$'\n'/ }"
-    else
-        echo "ERROR: Infrastructure directory ${INFRA_NAME} not found!"
+if [ "${SKIP_PROXYSQL}" = "1" ]; then
+    echo ">>> SKIP_PROXYSQL=1: Skipping ProxySQL and backend verification for group '${TAP_GROUP}'."
+    echo ">>> Running unit tests directly (no infrastructure needed)."
+else
+    # VERIFICATION: Verify ProxySQL is running
+    PROXY_CONTAINER="proxysql.${INFRA_ID}"
+    echo ">>> Verifying ProxySQL container: ${PROXY_CONTAINER}"
+    if ! docker ps --format '{{.Names}}' | grep -q "^${PROXY_CONTAINER}$"; then
+        echo "ERROR: ProxySQL container ${PROXY_CONTAINER} is NOT running!"
         exit 1
     fi
-done
 
-echo ">>> INFRASTRUCTURE VERIFIED. LAUNCHING TEST RUNNER..."
+    # VERIFICATION: Verify all required backend containers are running
+    for INFRA_NAME in ${INFRAS_TO_CHECK}; do
+        echo ">>> Verifying Backend: ${INFRA_NAME}"
+        # Extract container names from the infra's docker-compose.yml
+        if [ -f "${WORKSPACE}/test/infra/${INFRA_NAME}/docker-compose.yml" ]; then
+            # Project name used by init script
+            COMPOSE_PROJECT="${INFRA_NAME}-${INFRA_ID}"
+            # Get all services for this project
+            RUNNING_CONTAINERS=$(docker ps --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" --format '{{.Names}}')
+            if [ -z "${RUNNING_CONTAINERS}" ]; then
+                if [ -f "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst" ]; then LST_PATH="${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst"; else LST_PATH="${WORKSPACE}/test/tap/groups/${BASE_GROUP}/infras.lst"; fi
+                echo "ERROR: Required infrastructure '${INFRA_NAME}' is NOT running."
+                if [ -f "${LST_PATH}" ]; then
+                    echo "According to '${LST_PATH}', this infrastructure is mandatory for the '${TAP_GROUP}' group."
+                fi
+                echo "Please run initialization for '${INFRA_NAME}' first (e.g. cd test/infra/${INFRA_NAME} && ./docker-compose-init.bash)."
+                exit 1
+            fi
+            echo "Found running containers: ${RUNNING_CONTAINERS//$'\n'/ }"
+        else
+            echo "ERROR: Infrastructure directory ${INFRA_NAME} not found!"
+            exit 1
+        fi
+    done
+
+    echo ">>> INFRASTRUCTURE VERIFIED. LAUNCHING TEST RUNNER..."
+fi
+
+# SKIP_PROXYSQL path: run test binaries directly on the host, no Docker needed.
+# We bypass proxysql-tester.py because it requires a ProxySQL admin connection
+# and Docker-specific environment variables that don't exist in this mode.
+if [ "${SKIP_PROXYSQL}" = "1" ]; then
+    echo ">>> Running tests directly on the host (no Docker container)..."
+
+    # Ensure transitive shared libs (e.g. libparser.so via libcpp_dotenv.so) are found.
+    # RUNPATH in intermediate libraries may contain stale absolute paths from the
+    # original build, so we add the known library directories explicitly.
+    export LD_LIBRARY_PATH="${WORKSPACE}/test/tap/tap${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+
+    # Discover test binaries from groups.json for this TAP_GROUP
+    GROUPS_JSON="${WORKSPACE}/test/tap/groups/groups.json"
+    if [ ! -f "${GROUPS_JSON}" ]; then
+        echo "ERROR: groups.json not found at ${GROUPS_JSON}"
+        exit 1
+    fi
+
+    # Extract test names belonging to this group
+    TEST_NAMES=$(python3 -c "
+import json, sys
+with open('${GROUPS_JSON}') as f:
+    groups = json.load(f)
+for test_name, test_groups in sorted(groups.items()):
+    if '${TAP_GROUP}' in test_groups:
+        print(test_name)
+")
+
+    if [ -z "${TEST_NAMES}" ]; then
+        echo "ERROR: No tests found for group '${TAP_GROUP}' in groups.json"
+        exit 1
+    fi
+
+    # Search for test binaries in known test directories
+    TEST_DIRS="${WORKSPACE}/test/tap/tests/unit ${WORKSPACE}/test/tap/tests"
+
+    TOTAL=0
+    PASSED=0
+    FAILED=0
+    FAILED_TESTS=""
+
+    for TEST_NAME in ${TEST_NAMES}; do
+        TEST_BIN=""
+        for DIR in ${TEST_DIRS}; do
+            if [ -x "${DIR}/${TEST_NAME}" ]; then
+                TEST_BIN="${DIR}/${TEST_NAME}"
+                break
+            fi
+        done
+
+        if [ -z "${TEST_BIN}" ]; then
+            echo "WARNING: Test binary '${TEST_NAME}' not found in: ${TEST_DIRS}"
+            TOTAL=$((TOTAL + 1))
+            FAILED=$((FAILED + 1))
+            FAILED_TESTS="${FAILED_TESTS} ${TEST_NAME}(not-found)"
+            continue
+        fi
+
+        TOTAL=$((TOTAL + 1))
+        echo ">>> Running: ${TEST_NAME}"
+        if "${TEST_BIN}"; then
+            PASSED=$((PASSED + 1))
+            echo ">>> PASSED: ${TEST_NAME}"
+        else
+            FAILED=$((FAILED + 1))
+            FAILED_TESTS="${FAILED_TESTS} ${TEST_NAME}"
+            echo ">>> FAILED: ${TEST_NAME}"
+        fi
+    done
+
+    echo ""
+    echo "================================================================================"
+    echo "Unit Test Summary: ${PASSED}/${TOTAL} passed, ${FAILED} failed"
+    if [ -n "${FAILED_TESTS}" ]; then
+        echo "Failed tests:${FAILED_TESTS}"
+    fi
+    echo "================================================================================"
+
+    [ "${FAILED}" -eq 0 ]
+    exit $?
+fi
 
 # Cleanup old test runner if exists
 docker rm -f "${TEST_CONTAINER}" >/dev/null 2>&1 || true
@@ -179,53 +273,83 @@ docker run \
     -e MYSQL_BINLOG_BIN="${MYSQL_BINLOG_BIN}" \
     -e BINLOG_READER_BIN="${BINLOG_READER_BIN}" \
     -e TAP_USE_NOISE="${TAP_USE_NOISE:-0}" \
+    -e MULTI_GROUP="${MULTI_GROUP:-0}" \
+    -e GCOV_PREFIX="/gcov/tap" \
+    -e GCOV_PREFIX_STRIP="3" \
     proxysql-ci-base:latest \
     /bin/bash -c "
         set -e
 
         # Coverage collection trap - runs on exit regardless of success/failure/timeout
+        #
+        # Data layout in /gcov (per-INFRA_ID mount):
+        #   /gcov/proxysql/{lib,src}/obj/*.gcda  — ProxySQL daemon (GCOV_PREFIX=/gcov, STRIP=3)
+        #   /gcov/tap/proxysql/{lib,src}/obj/*.gcda — TAP tests (GCOV_PREFIX=/gcov/tap, STRIP=3)
+        #
+        # This trap always copies .gcno files adjacent to .gcda so the data is
+        # ready for fastcov. When MULTI_GROUP=1, fastcov runs centrally later;
+        # when standalone, it runs here.
         collect_coverage() {
             local exit_code=\$?
             if [ \"\${COVERAGE_MODE}\" = \"1\" ]; then
                 echo \">>> Collecting code coverage data (exit code was: \${exit_code})...\"
 
-                if command -v fastcov >/dev/null 2>&1; then
-                    mkdir -p \"\${COVERAGE_REPORT_DIR}\"
-                    local coverage_file=\"\${COVERAGE_REPORT_DIR}/\${INFRA_ID}.info\"
-                    echo \">>> Generating coverage report: \${coverage_file}\"
-                    local nproc_val=\$(nproc)
-
-                    # Copy .gcno files to /gcov so fastcov can find both .gcno and .gcda together
-                    # This avoids race conditions when multiple groups run in parallel
-                    if [ -d \"/gcov\" ] && [ \"\$(ls -A /gcov 2>/dev/null)\" ]; then
-                        echo \">>> Preparing coverage data directory...\"
-                        cd \"\${WORKSPACE}\" && find . -path './ci_infra_logs' -prune -o -name '*.gcno' -type f -print | while read gcno; do
-                            target=\"/gcov/\${gcno#./}\"
-                            target_dir=\"\$(dirname \"\$target\")\"
-                            mkdir -p \"\$target_dir\"
-                            cp -f \"\$gcno\" \"\$target\"
+                if [ -d \"/gcov\" ] && [ \"\$(ls -A /gcov 2>/dev/null)\" ]; then
+                    # Copy .gcno files adjacent to each .gcda file.
+                    # .gcda paths have a GCOV_PREFIX_STRIP offset (e.g. proxysql/lib/obj/X.gcda)
+                    # while .gcno files are at \${WORKSPACE}/lib/obj/X.gcno. We strip leading
+                    # components from the .gcda relative path until we find the matching .gcno.
+                    echo \">>> Copying .gcno files adjacent to .gcda files in /gcov...\"
+                    cd /gcov && find . -name '*.gcda' -type f | while read gcda; do
+                        relpath=\"\${gcda#./}\"
+                        base=\"\${relpath%.gcda}\"
+                        remaining=\"\${base}\"
+                        while [ -n \"\${remaining}\" ]; do
+                            if [ -f \"\${WORKSPACE}/\${remaining}.gcno\" ]; then
+                                target=\"/gcov/\${base}.gcno\"
+                                mkdir -p \"\$(dirname \"\${target}\")\"
+                                cp -f \"\${WORKSPACE}/\${remaining}.gcno\" \"\${target}\"
+                                break
+                            fi
+                            next=\"\${remaining#*/}\"
+                            [ \"\${next}\" = \"\${remaining}\" ] && break
+                            remaining=\"\${next}\"
                         done
-                        echo \">>> Running fastcov on /gcov...\"
-                        cd /gcov
-                        fastcov -b -j\"\${nproc_val}\" --process-gcno -l -e /usr/include/ -e \"\${WORKSPACE}/test/tap/tests\" -e \"\${WORKSPACE}/deps/\" -d . -o \"\${coverage_file}\" 2>&1 || echo \">>> WARNING: Coverage generation failed\"
-                    else
-                        echo \">>> WARNING: /gcov directory is empty or missing, skipping coverage\"
-                    fi
+                    done
 
-                    if [ -f \"\${coverage_file}\" ]; then
-                        echo \">>> Coverage report generated: \${coverage_file}\"
-                        # Generate HTML report
-                        if command -v genhtml >/dev/null 2>&1; then
-                            local html_dir=\"\${COVERAGE_REPORT_DIR}/html\"
-                            mkdir -p \"\${html_dir}\"
-                            genhtml --branch-coverage --ignore-errors negative,source --synthesize-missing \"\${coverage_file}\" --output-directory \"\${html_dir}\" 2>&1 || echo \">>> WARNING: HTML generation failed\"
-                            [ -f \"\${html_dir}/index.html\" ] && echo \">>> HTML coverage report: \${html_dir}/index.html\"
-                        fi
+                    if [ \"\${MULTI_GROUP}\" = \"1\" ]; then
+                        # Multi-group mode: data is ready in /gcov for centralized collection
+                        echo \">>> MULTI_GROUP=1: skipping fastcov (will run centrally after all groups finish)\"
                     else
-                        echo \">>> WARNING: Coverage info file not generated\"
+                        # Standalone mode: run fastcov + genhtml here
+                        if command -v fastcov >/dev/null 2>&1; then
+                            mkdir -p \"\${COVERAGE_REPORT_DIR}\"
+                            local coverage_file=\"\${COVERAGE_REPORT_DIR}/\${INFRA_ID}.info\"
+                            local coverage_log=\"\${COVERAGE_REPORT_DIR}/coverage-generation.log\"
+                            echo \">>> Running fastcov on /gcov...\"
+                            cd /gcov
+                            fastcov -b -j\$(nproc) -l \
+                                -e /usr deps \
+                                -d . -o \"\${coverage_file}\" >> \"\${coverage_log}\" 2>&1 || echo \">>> WARNING: Coverage generation failed (see \${coverage_log})\"
+
+                            if [ -f \"\${coverage_file}\" ]; then
+                                echo \">>> Coverage report generated: \${coverage_file}\"
+                                if command -v genhtml >/dev/null 2>&1; then
+                                    local html_dir=\"\${COVERAGE_REPORT_DIR}/html\"
+                                    mkdir -p \"\${html_dir}\"
+                                    echo \">>> Generating HTML coverage report...\"
+                                    genhtml --branch-coverage --ignore-errors negative,source --synthesize-missing \"\${coverage_file}\" --output-directory \"\${html_dir}\" >> \"\${coverage_log}\" 2>&1 || echo \">>> WARNING: HTML generation failed (see \${coverage_log})\"
+                                    [ -f \"\${html_dir}/index.html\" ] && echo \">>> HTML coverage report: \${html_dir}/index.html\"
+                                fi
+                            else
+                                echo \">>> WARNING: Coverage info file not generated (see \${coverage_log})\"
+                            fi
+                        else
+                            echo \">>> WARNING: fastcov not found in container, skipping coverage collection\"
+                        fi
                     fi
                 else
-                    echo \">>> WARNING: fastcov not found in container, skipping coverage collection\"
+                    echo \">>> WARNING: /gcov directory is empty or missing, skipping coverage\"
                 fi
             fi
             exit \${exit_code}
@@ -246,9 +370,41 @@ docker run \
         mkdir -p \"${WORKSPACE}/test-scripts/deps\"
         [ -n \"${MYSQL_BINLOG_BIN}\" ] && ln -sf \"${MYSQL_BINLOG_BIN}\" \"${WORKSPACE}/test-scripts/deps/mysqlbinlog\"
         [ -n \"${BINLOG_READER_BIN}\" ] && ln -sf \"${BINLOG_READER_BIN}\" \"${WORKSPACE}/test-scripts/deps/test_binlog_reader-t\"
-        
-        # Source the local isolated environment
+
+        # Source group environment first (sets TEST_PY_* flags etc.)
+        if [ -n \"${TAP_GROUP}\" ]; then
+            BASE_GROUP=\$(echo \"${TAP_GROUP}\" | sed -E 's/[-_]g[0-9]+.*//')
+            if [ -f \"${WORKSPACE}/test/tap/groups/${TAP_GROUP}/env.sh\" ]; then
+                source \"${WORKSPACE}/test/tap/groups/${TAP_GROUP}/env.sh\"
+            elif [ -f \"${WORKSPACE}/test/tap/groups/\${BASE_GROUP}/env.sh\" ]; then
+                source \"${WORKSPACE}/test/tap/groups/\${BASE_GROUP}/env.sh\"
+            fi
+        fi
+
+        # Source the local isolated environment (defaults for unset vars)
         source ${SCRIPT_DIR}/env-isolated.bash
+
+        # Wait for ProxySQL to be reachable from this container
+        # Docker DNS resolution can take a few seconds on newly created containers
+        echo -n '>>> Waiting for ProxySQL admin (proxysql:6032) ...'
+        WAIT_COUNT=0
+        WAIT_MAX=30
+        while [ \$WAIT_COUNT -lt \$WAIT_MAX ]; do
+            if mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT 1' >/dev/null 2>&1; then
+                echo ' OK.'
+                break
+            fi
+            echo -n '.'
+            sleep 1
+            WAIT_COUNT=\$((WAIT_COUNT + 1))
+        done
+        if [ \$WAIT_COUNT -ge \$WAIT_MAX ]; then
+            echo ' FAILED after \${WAIT_MAX}s'
+            echo 'ERROR: Cannot reach ProxySQL admin from test-runner container.'
+            echo 'DNS resolution test:'
+            getent hosts proxysql || echo 'DNS lookup failed for proxysql'
+            exit 1
+        fi
 
         # Dump ProxySQL configuration before running tests
         echo '================================================================================'
@@ -257,32 +413,32 @@ docker run \
 
         # MySQL configuration
         echo '--- mysql_servers ---'
-        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT hostgroup_id, hostname, port, status, comment FROM mysql_servers ORDER BY hostgroup_id, hostname' 2>/dev/null || echo 'ERROR: Failed to query mysql_servers'
+        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT hostgroup_id, hostname, port, status, comment FROM mysql_servers ORDER BY hostgroup_id, hostname'
 
         echo '--- mysql_users ---'
-        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT username, password, active, default_hostgroup, transaction_persistent FROM mysql_users ORDER BY username' 2>/dev/null || echo 'ERROR: Failed to query mysql_users'
+        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT username, password, active, default_hostgroup, transaction_persistent FROM mysql_users ORDER BY username'
 
         echo '--- mysql_replication_hostgroups ---'
-        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT writer_hostgroup, reader_hostgroup, comment FROM mysql_replication_hostgroups' 2>/dev/null || echo 'ERROR: Failed to query mysql_replication_hostgroups'
+        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT writer_hostgroup, reader_hostgroup, comment FROM mysql_replication_hostgroups'
 
         echo '--- mysql_query_rules ---'
-        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT rule_id, active, username, match_pattern, destination_hostgroup, apply, comment FROM mysql_query_rules ORDER BY rule_id' 2>/dev/null || echo 'ERROR: Failed to query mysql_query_rules (or empty)'
+        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT rule_id, active, username, match_pattern, destination_hostgroup, apply, comment FROM mysql_query_rules ORDER BY rule_id'
 
         echo '--- runtime_mysql_query_rules ---'
-        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT rule_id, active, username, match_pattern, destination_hostgroup, apply, comment FROM runtime_mysql_query_rules ORDER BY rule_id' 2>/dev/null || echo 'ERROR: Failed to query runtime_mysql_query_rules (or empty)'
+        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT rule_id, active, username, match_pattern, destination_hostgroup, apply, comment FROM runtime_mysql_query_rules ORDER BY rule_id'
 
         # PgSQL configuration
         echo '--- pgsql_servers ---'
-        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT hostgroup_id, hostname, port, status, comment FROM pgsql_servers ORDER BY hostgroup_id, hostname' 2>/dev/null || echo 'INFO: pgsql_servers not configured (or error)'
+        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT hostgroup_id, hostname, port, status, comment FROM pgsql_servers ORDER BY hostgroup_id, hostname'
 
         echo '--- pgsql_users ---'
-        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT username, password, active, default_hostgroup FROM pgsql_users ORDER BY username' 2>/dev/null || echo 'INFO: pgsql_users not configured (or error)'
+        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT username, password, active, default_hostgroup FROM pgsql_users ORDER BY username'
 
         echo '--- pgsql_replication_hostgroups ---'
-        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT writer_hostgroup, reader_hostgroup, comment FROM pgsql_replication_hostgroups' 2>/dev/null || echo 'INFO: pgsql_replication_hostgroups not configured (or error)'
+        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT writer_hostgroup, reader_hostgroup, comment FROM pgsql_replication_hostgroups'
 
         echo '--- pgsql_query_rules ---'
-        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT rule_id, active, username, match_pattern, destination_hostgroup, apply, comment FROM pgsql_query_rules ORDER BY rule_id' 2>/dev/null || echo 'INFO: pgsql_query_rules not configured (or empty)'
+        mysql -uradmin -pradmin -hproxysql -P6032 -e 'SELECT rule_id, active, username, match_pattern, destination_hostgroup, apply, comment FROM pgsql_query_rules ORDER BY rule_id'
 
         echo '================================================================================'
 

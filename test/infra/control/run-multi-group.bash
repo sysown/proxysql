@@ -11,7 +11,7 @@ set -euo pipefail
 #   PARALLEL_JOBS=4        # Max parallel groups (default: unlimited)
 #   TIMEOUT_MINUTES=60     # Hard timeout per group (default: 60)
 #   EXIT_ON_FIRST_FAIL=0   # Stop on first failure (default: 0)
-#   AUTO_CLEANUP=0         # Auto cleanup successful groups (default: 0)
+#   AUTO_CLEANUP=1         # Auto cleanup successful groups (default: 1)
 #   SKIP_CLUSTER_START=1   # Skip ProxySQL cluster initialization (default: 0)
 #   COVERAGE=1             # Enable code coverage collection (default: 0)
 #   TAP_USE_NOISE=1        # Enable noise injection for race condition testing (default: 0)
@@ -35,7 +35,7 @@ TAP_GROUPS="${TAP_GROUPS:-}"
 PARALLEL_JOBS="${PARALLEL_JOBS:-2}"  # Default: 2 parallel groups
 TIMEOUT_MINUTES="${TIMEOUT_MINUTES:-60}"
 EXIT_ON_FIRST_FAIL="${EXIT_ON_FIRST_FAIL:-0}"
-AUTO_CLEANUP="${AUTO_CLEANUP:-0}"
+AUTO_CLEANUP="${AUTO_CLEANUP:-1}"
 SKIP_CLUSTER_START="${SKIP_CLUSTER_START:-0}"
 COVERAGE="${COVERAGE:-0}"
 TAP_USE_NOISE="${TAP_USE_NOISE:-0}"
@@ -135,6 +135,7 @@ run_single_group() {
     export TAP_GROUP="${group}"
     export SKIP_CLUSTER_START="${SKIP_CLUSTER_START}"
     export COVERAGE="${COVERAGE}"
+    export MULTI_GROUP=1
     export TAP_USE_NOISE="${TAP_USE_NOISE}"
 
     # Run infrastructure setup and tests with timeout
@@ -337,36 +338,67 @@ if [ "${COVERAGE}" -eq 1 ]; then
     COMBINED_COVERAGE_DIR="${RESULTS_DIR}/coverage-report"
     mkdir -p "${COMBINED_COVERAGE_DIR}"
 
-    # Find all individual coverage info files from each group
+    # Generate per-group coverage reports from /gcov directories.
+    # Each group's test-runner already copied .gcno adjacent to .gcda (in its
+    # EXIT trap). We run fastcov sequentially per group — no concurrent gcov.
+    COVERAGE_LOG="${COMBINED_COVERAGE_DIR}/coverage-generation.log"
+    for group in ${TAP_GROUPS}; do
+        infra_id="${group}-${RUN_ID}"
+        gcov_dir="${WORKSPACE}/ci_infra_logs/${infra_id}/gcov"
+        group_info="${COMBINED_COVERAGE_DIR}/${infra_id}.info"
+
+        if [ -d "${gcov_dir}" ] && [ "$(find "${gcov_dir}" -name '*.gcda' 2>/dev/null | head -1)" ]; then
+            echo ">>> Generating coverage for ${group} from ${gcov_dir}..."
+            docker run --rm \
+                -v "${WORKSPACE}:${WORKSPACE}" \
+                -e WORKSPACE="${WORKSPACE}" \
+                -e GCOV_DIR="${gcov_dir}" \
+                -e GROUP_INFO="${group_info}" \
+                -e COVERAGE_LOG="${COVERAGE_LOG}" \
+                proxysql-ci-base:latest \
+                bash -c '
+                    if command -v fastcov >/dev/null 2>&1; then
+                        cd "${GCOV_DIR}"
+                        fastcov -b -j4 -l \
+                            -e /usr deps \
+                            -d . -o "${GROUP_INFO}" >> "${COVERAGE_LOG}" 2>&1 || \
+                            echo ">>> WARNING: fastcov failed for ${GCOV_DIR}" >> "${COVERAGE_LOG}"
+                    fi
+                ' || echo ">>> WARNING: Coverage generation failed for ${group}"
+        else
+            echo ">>> No .gcda files found for ${group}, skipping"
+        fi
+    done
+
+    # Find all generated coverage info files
     COVERAGE_FILES=""
     for group in ${TAP_GROUPS}; do
         infra_id="${group}-${RUN_ID}"
-        group_coverage_dir="${WORKSPACE}/ci_infra_logs/${infra_id}/coverage-report"
-        if [ -d "${group_coverage_dir}" ]; then
-            for info_file in "${group_coverage_dir}"/*.info; do
-                if [ -f "${info_file}" ]; then
-                    COVERAGE_FILES="${COVERAGE_FILES} ${info_file}"
-                    echo ">>> Found coverage: ${info_file}"
-                fi
-            done
+        group_info="${COMBINED_COVERAGE_DIR}/${infra_id}.info"
+        if [ -f "${group_info}" ]; then
+            COVERAGE_FILES="${COVERAGE_FILES} ${group_info}"
+            echo ">>> Found coverage: ${group_info}"
         fi
     done
 
     if [ -n "${COVERAGE_FILES}" ]; then
         COMBINED_INFO="${COMBINED_COVERAGE_DIR}/combined-coverage.info"
+        COVERAGE_LOG="${COMBINED_COVERAGE_DIR}/coverage-generation.log"
         echo ">>> Combining coverage reports into: ${COMBINED_INFO}"
+        echo ">>> Coverage generation log: ${COVERAGE_LOG}"
 
         # Run coverage combination in container (tools may not be on host)
         docker run --rm \
             -v "${WORKSPACE}:${WORKSPACE}" \
             -e COVERAGE_FILES="${COVERAGE_FILES}" \
             -e COMBINED_INFO="${COMBINED_INFO}" \
+            -e COVERAGE_LOG="${COVERAGE_LOG}" \
             proxysql-ci-base:latest \
             bash -c '
                 set -e
                 if command -v fastcov >/dev/null 2>&1; then
-                    fastcov -b -l -C ${COVERAGE_FILES} -o "${COMBINED_INFO}" 2>&1 || {
-                        echo ">>> WARNING: fastcov combine failed, trying lcov..."
+                    fastcov -b -l -C ${COVERAGE_FILES} -o "${COMBINED_INFO}" >> "${COVERAGE_LOG}" 2>&1 || {
+                        echo ">>> WARNING: fastcov combine failed, trying lcov..." >> "${COVERAGE_LOG}"
                         if command -v lcov >/dev/null 2>&1; then
                             FIRST_FILE=true
                             for info_file in ${COVERAGE_FILES}; do
@@ -374,7 +406,7 @@ if [ "${COVERAGE}" -eq 1 ]; then
                                     cp "${info_file}" "${COMBINED_INFO}"
                                     FIRST_FILE=false
                                 else
-                                    lcov -a "${COMBINED_INFO}" -a "${info_file}" -o "${COMBINED_INFO}".tmp 2>/dev/null && \
+                                    lcov -a "${COMBINED_INFO}" -a "${info_file}" -o "${COMBINED_INFO}".tmp >> "${COVERAGE_LOG}" 2>&1 && \
                                         mv "${COMBINED_INFO}".tmp "${COMBINED_INFO}"
                                 fi
                             done
@@ -387,7 +419,7 @@ if [ "${COVERAGE}" -eq 1 ]; then
                             cp "${info_file}" "${COMBINED_INFO}"
                             FIRST_FILE=false
                         else
-                            lcov -a "${COMBINED_INFO}" -a "${info_file}" -o "${COMBINED_INFO}".tmp 2>/dev/null && \
+                            lcov -a "${COMBINED_INFO}" -a "${info_file}" -o "${COMBINED_INFO}".tmp >> "${COVERAGE_LOG}" 2>&1 && \
                                 mv "${COMBINED_INFO}".tmp "${COMBINED_INFO}"
                         fi
                     done
@@ -395,7 +427,7 @@ if [ "${COVERAGE}" -eq 1 ]; then
                     echo ">>> ERROR: Neither fastcov nor lcov available"
                     exit 1
                 fi
-            ' || echo ">>> WARNING: Coverage combination failed"
+            ' || echo ">>> WARNING: Coverage combination failed (see ${COVERAGE_LOG})"
 
         if [ -f "${COMBINED_INFO}" ]; then
             echo ">>> Combined coverage report: ${COMBINED_INFO}"
@@ -409,11 +441,12 @@ if [ "${COVERAGE}" -eq 1 ]; then
                 -v "${WORKSPACE}:${WORKSPACE}" \
                 -e COMBINED_INFO="${COMBINED_INFO}" \
                 -e COMBINED_HTML="${COMBINED_HTML}" \
+                -e COVERAGE_LOG="${COVERAGE_LOG}" \
                 proxysql-ci-base:latest \
                 bash -c '
                     if command -v genhtml >/dev/null 2>&1; then
-                        genhtml --branch-coverage --ignore-errors negative,source --synthesize-missing "${COMBINED_INFO}" --output-directory "${COMBINED_HTML}" 2>&1 || \
-                            echo ">>> WARNING: HTML generation failed"
+                        genhtml --branch-coverage --ignore-errors negative,source --synthesize-missing "${COMBINED_INFO}" --output-directory "${COMBINED_HTML}" >> "${COVERAGE_LOG}" 2>&1 || \
+                            echo ">>> WARNING: HTML generation failed (see ${COVERAGE_LOG})"
                     else
                         echo ">>> WARNING: genhtml not available"
                     fi

@@ -453,6 +453,59 @@ int add_more_rows_test_sbtest1(int num_rows, MYSQL *mysql, bool sqlite) {
 	return 0;
 }
 
+void dump_hostgroup_debug(MYSQL* admin, int hostgroup) {
+	if (!admin) return;
+	char query[512];
+
+	diag("=== Hostgroup %d Debug Dump ===", hostgroup);
+
+	// Dump runtime_mysql_servers for this hostgroup
+	snprintf(query, sizeof(query),
+		"SELECT hostgroup_id, hostname, port, status, max_connections, comment "
+		"FROM runtime_mysql_servers WHERE hostgroup_id=%d ORDER BY hostname", hostgroup);
+	if (mysql_query(admin, query) == 0) {
+		MYSQL_RES* res = mysql_store_result(admin);
+		if (res) {
+			MYSQL_ROW row;
+			diag("runtime_mysql_servers (hg=%d):", hostgroup);
+			while ((row = mysql_fetch_row(res))) {
+				diag("  hg=%s host=%s port=%s status=%s max_conn=%s comment=%s",
+					row[0], row[1], row[2], row[3], row[4], row[5] ? row[5] : "");
+			}
+			if (mysql_num_rows(res) == 0) {
+				diag("  (no servers in hostgroup %d)", hostgroup);
+			}
+			mysql_free_result(res);
+		}
+	} else {
+		diag("  Failed to query runtime_mysql_servers: %s", mysql_error(admin));
+	}
+
+	// Dump connection pool stats
+	snprintf(query, sizeof(query),
+		"SELECT hostgroup, srv_host, srv_port, status, ConnUsed, ConnFree, ConnOK, ConnERR, MaxConnUsed, Queries "
+		"FROM stats_mysql_connection_pool WHERE hostgroup=%d", hostgroup);
+	if (mysql_query(admin, query) == 0) {
+		MYSQL_RES* res = mysql_store_result(admin);
+		if (res) {
+			MYSQL_ROW row;
+			diag("stats_mysql_connection_pool (hg=%d):", hostgroup);
+			while ((row = mysql_fetch_row(res))) {
+				diag("  hg=%s host=%s port=%s status=%s ConnUsed=%s ConnFree=%s ConnOK=%s ConnERR=%s Queries=%s",
+					row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[9]);
+			}
+			if (mysql_num_rows(res) == 0) {
+				diag("  (no pool entries for hostgroup %d)", hostgroup);
+			}
+			mysql_free_result(res);
+		}
+	} else {
+		diag("  Failed to query stats_mysql_connection_pool: %s", mysql_error(admin));
+	}
+
+	diag("=== End Hostgroup %d Debug Dump ===", hostgroup);
+}
+
 int create_table_test_sbtest1(int num_rows, MYSQL *mysql) {
 	MYSQL_QUERY(mysql, "CREATE DATABASE IF NOT EXISTS test");
 	MYSQL_QUERY(mysql, "DROP TABLE IF EXISTS test.sbtest1");

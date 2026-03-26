@@ -54,16 +54,28 @@ export TESTS_LOGS_PATH="${WORKSPACE}/ci_infra_logs/${INFRA_ID}/tests"
 
 # Test directories and paths
 export TAP_WORKDIR="${WORKSPACE}/test/tap/tests/"
-export TAP_WORKDIRS="${WORKSPACE}/test/tap/tests/ ${WORKSPACE}/test/tap/tests_with_deps/deprecate_eof_support/"
+export TAP_WORKDIRS="${WORKSPACE}/test/tap/tests/ ${WORKSPACE}/test/tap/tests_with_deps/deprecate_eof_support/ ${WORKSPACE}/test/tap/tests/unit/"
 export TAP_DEPS="${WORKSPACE}/test/tap/tap"
+export TAP_DEPS_PATH="${WORKSPACE}/test/tap/tap"
 export TEST_DEPS_PATH="${WORKSPACE}/test-scripts/deps"
 export TEST_DEPS="${TEST_DEPS_PATH}"
 
-# Cluster Nodes
+# Cluster Nodes — primary (6032) + nodes inside the ProxySQL container
+# Port scheme: primary=6032, proxy-node1=6042, proxy-node2=6052, ..., proxy-node9=6122
+# From the test-runner container, reach them via the proxysql hostname
+# NOTE: primary MUST be first — test_cluster1-t expects conns[0] to be the primary
+NUM_CLUSTER_NODES=${PROXYSQL_CLUSTER_NODES:-9}
+if [[ "${SKIP_CLUSTER_START}" == "1" ]] || [[ "${SKIP_CLUSTER_START}" == "true" ]]; then
+    NUM_CLUSTER_NODES=0
+fi
 CLUSTER_NODES=""
-for i in $(seq 1 9); do
-    CLUSTER_NODES="${CLUSTER_NODES}proxy-node${i}:6032,"
-done
+if [ "${NUM_CLUSTER_NODES}" -gt 0 ]; then
+    CLUSTER_NODES="proxysql:6032,"
+    for i in $(seq 1 ${NUM_CLUSTER_NODES}); do
+        PORT=$((6032 + i * 10))
+        CLUSTER_NODES="${CLUSTER_NODES}proxysql:${PORT},"
+    done
+fi
 export TAP_CLUSTER_NODES=${CLUSTER_NODES%,}
 
 # Build and runtime essentials
@@ -73,7 +85,7 @@ export MALLOC_CONF="retain:false"
 export PROXYSQL_LAYOUT="flat"
 
 # Test execution defaults
-export WITHGCOV="${WITHGCOV:-1}"
+export WITHGCOV="${WITHGCOV:-0}"
 export WITHASAN="${WITHASAN:-0}"
 export TEST_EXIT_ON_FAIL="${TEST_EXIT_ON_FAIL:-0}"
 export TEST_JDBC="${TEST_JDBC:-1}"

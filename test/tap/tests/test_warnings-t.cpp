@@ -551,6 +551,15 @@ int main(int argc, char** argv) {
 	}
 	diag("Primary test hostgroup: %d", target_hg);
 
+	// Dump hostgroup state for debugging CI failures (hostgroup unreachable)
+	{
+		MYSQL* dbg_admin = mysql_init(NULL);
+		if (dbg_admin && mysql_real_connect(dbg_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+			dump_hostgroup_debug(dbg_admin, target_hg);
+			mysql_close(dbg_admin);
+		}
+	}
+
 	std::vector<std::pair<const char*, std::vector<TestInfo>>> all_tests(test_size(TESTS_COMBINED));
 
 	all_tests[0].first = "MYSQL VARIABLE (mysql-handle_warnings)";

@@ -296,14 +296,23 @@ void internal_noise_mysql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
     const char* my_user = cl.root_username[0] ? cl.root_username : "root";
     const char* my_pass = cl.root_password[0] ? cl.root_password : "";
 
+    noise_log("[NOISE] MySQL Traffic v2: Connecting with host=" + std::string(cl.host) +
+              " port=" + std::to_string(cl.port) +
+              " user=" + std::string(my_user) + "\n");
+
     // --- Phase A & B: Ensure tables exist and are populated ---
     MYSQL* setup_conn = mysql_init(NULL);
     if (!mysql_real_connect(setup_conn, cl.host, my_user, my_pass, NULL, cl.port, NULL, 0)) {
-        noise_log("[NOISE] MySQL Traffic v2: Setup connection failure: " + std::string(mysql_error(setup_conn)) + "\n");
+        noise_log("[NOISE] MySQL Traffic v2: Setup connection FAILED:"
+                  " host=" + std::string(cl.host) +
+                  " port=" + std::to_string(cl.port) +
+                  " user=" + std::string(my_user) +
+                  " error=" + std::string(mysql_error(setup_conn)) + "\n");
         mysql_close(setup_conn);
         register_noise_failure("MySQL Traffic v2 (Setup)");
         return;
     }
+    noise_log("[NOISE] MySQL Traffic v2: Setup connection OK\n");
 
     mysql_query(setup_conn, "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'test'");
     MYSQL_RES* db_res = mysql_store_result(setup_conn);
@@ -644,7 +653,11 @@ void internal_noise_mysql_traffic(const CommandLine& cl, const NoiseOptions& opt
             conn = mysql_init(NULL);
             if (!conn || !mysql_real_connect(conn, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
                 retries++;
-                noise_log("[NOISE] MySQL Traffic: Connection failure (retry " + std::to_string(retries) + "/" + std::to_string(max_retries) + ")\n");
+                noise_log("[NOISE] MySQL Traffic: Connection FAILED (retry " + std::to_string(retries) + "/" + std::to_string(max_retries) + "):"
+                          " host=" + std::string(cl.host) +
+                          " port=" + std::to_string(cl.port) +
+                          " user=" + std::string(cl.username) +
+                          " error=" + std::string(conn ? mysql_error(conn) : "mysql_init failed") + "\n");
                 if (retries >= max_retries) {
                     register_noise_failure("MySQL Traffic");
                     break;
@@ -686,7 +699,11 @@ void internal_noise_pgsql_traffic(const CommandLine& cl, const NoiseOptions& opt
             conn = PQconnectdb(conninfo.c_str());
             if (PQstatus(conn) != CONNECTION_OK) {
                 retries++;
-                noise_log("[NOISE] PgSQL Traffic: Connection failure (retry " + std::to_string(retries) + "/" + std::to_string(max_retries) + ")\n");
+                noise_log("[NOISE] PgSQL Traffic: Connection FAILED (retry " + std::to_string(retries) + "/" + std::to_string(max_retries) + "):"
+                          " host=" + std::string(cl.host) +
+                          " port=" + std::to_string(cl.pgsql_port) +
+                          " user=" + std::string(cl.pgsql_username) +
+                          " error=" + std::string(PQerrorMessage(conn)) + "\n");
                 if (retries >= max_retries) {
                     register_noise_failure("PgSQL Traffic");
                     break;
@@ -723,14 +740,24 @@ void internal_noise_pgsql_traffic_v2(const CommandLine& cl, const NoiseOptions& 
                            " user=" + std::string(pg_user) + " password=" + std::string(pg_pass) +
                            " dbname=postgres connect_timeout=5";
 
+    noise_log("[NOISE] PgSQL Traffic v2: Connecting with host=" + std::string(cl.host) +
+              " port=" + std::to_string(cl.pgsql_port) +
+              " user=" + std::string(pg_user) +
+              " dbname=postgres\n");
+
     // --- Phase A & B: Ensure tables exist and are populated ---
     PGconn* setup_conn = PQconnectdb(conninfo.c_str());
     if (PQstatus(setup_conn) != CONNECTION_OK) {
-        noise_log("[NOISE] PgSQL Traffic v2: Setup connection failure: " + std::string(PQerrorMessage(setup_conn)) + "\n");
+        noise_log("[NOISE] PgSQL Traffic v2: Setup connection FAILED:"
+                  " host=" + std::string(cl.host) +
+                  " port=" + std::to_string(cl.pgsql_port) +
+                  " user=" + std::string(pg_user) +
+                  " error=" + std::string(PQerrorMessage(setup_conn)) + "\n");
         PQfinish(setup_conn);
         register_noise_failure("PgSQL Traffic v2 (Setup)");
         return;
     }
+    noise_log("[NOISE] PgSQL Traffic v2: Setup connection OK\n");
 
     pg_noise_query(setup_conn, "SET search_path TO public");
 

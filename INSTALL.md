@@ -191,6 +191,8 @@ zypper install -y automake bzip2 cmake make gcc-c++ gcc git openssl openssl-deve
 brew install automake bzip2 cmake make git gpatch gnutls openssl@3 icu4c pkg-config libiconv zlib
 ```
 
+Note: zstd compression library is bundled with ProxySQL and statically linked, so it doesn't need to be installed separately.
+
 To compile on macOS, you must set the following environment variables to ensure the build system can find OpenSSL and Homebrew dependencies:
 
 ```bash
