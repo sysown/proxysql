@@ -59,7 +59,7 @@ const std::string TrxId_Interval::to_string(void) {
 
 // Attempts to append a new interval to this interval's end. Returns true if the append succeded, false otherwise.
 const bool TrxId_Interval::append(const TrxId_Interval& other) {
-	if (other.end >= end && other.start <= (end+1)) {
+	if (other.start >= start && other.end >= end && other.start <= (end+1)) {
 		// other overlaps interval at end
 		end = other.end;
 		return true;

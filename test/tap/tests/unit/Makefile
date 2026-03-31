@@ -285,7 +285,8 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	pgsql_tokenizer_unit-t \
 	ezoption_parser_unit-t \
 	genai_discovery_schema_unit-t \
-	gtid_utils_unit-t \
+	gtid_trxid_interval_unit-t \
+	gtid_set_unit-t \
 	genai_mysql_catalog_unit-t \
 	admin_disk_upgrade_unit-t \
 	glovars_unit-t
