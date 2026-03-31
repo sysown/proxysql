@@ -9,16 +9,63 @@
 ### export GIT_VERSION=3.x.y-dev
 ### ```
 
-GIT_VERSION ?= $(shell git describe --long --abbrev=7 2>/dev/null || git describe --long --abbrev=7 --always)
-ifndef GIT_VERSION
-    $(error GIT_VERSION is not set)
+GIT_VERSION_BASE := $(shell git describe --long --abbrev=7 2>/dev/null || git describe --long --abbrev=7 --always)
+ifndef GIT_VERSION_BASE
+    $(error GIT_VERSION_BASE is not set)
 endif
 
-# If PROXYSQLGENAI is enabled, increment the major version number by 1
-# Only increment if GIT_VERSION was not passed from environment (to avoid double-incrementing in Docker)
+### RELEASE TIERS & FEATURE FLAGS:
+### ProxySQL supports three distinct release tiers built from the same codebase.
+### The tier is controlled by environment variables which enable feature guards
+### and dynamically adjust the version number to maintain a clear upgrade path.
+###
+### 1. ProxySQL v3.0.x (Stable Tier)
+###    - The default build.
+###    - Includes bug fixes and core enhancements.
+###    - No extra flags required.
+###
+### 2. ProxySQL v3.1.x (Innovative Tier)
+###    - Enabled by setting `PROXYSQL31=1`.
+###    - Includes v3.0 features plus:
+###      * FFTO (Fast Forward Traffic Observer)
+###      * TSDB (Time Series Database subsystem)
+###    - Automatically increments the minor version (e.g., 3.0.6 -> 3.1.6).
+###
+### 3. ProxySQL v4.0.x (AI/MCP Tier)
+###    - Enabled by setting `PROXYSQLGENAI=1`.
+###    - Includes v3.1 features plus:
+###      * Generative AI module
+###      * MCP (Model Context Protocol) stack
+###      * Advanced Anomaly Detection
+###    - Automatically increments the major version (e.g., 3.0.6 -> 4.0.6).
+###    - Note: This tier requires the Rust toolchain for certain dependencies.
+###
+### HIERARCHY: `PROXYSQLGENAI=1` implies `PROXYSQL31=1`.
+
+# If PROXYSQLGENAI is enabled, it automatically enables PROXYSQL31
 ifeq ($(PROXYSQLGENAI),1)
-ifneq ($(origin GIT_VERSION),environment)
-    GIT_VERSION := $(shell echo "$(GIT_VERSION)" | awk -F. '{printf "%d.%s", $$1+1, substr($$0, length($$1)+2)}')
+    PROXYSQL31 := 1
+endif
+
+# If PROXYSQL31 is enabled, it automatically enables FFTO and TSDB
+ifeq ($(PROXYSQL31),1)
+    PROXYSQLFFTO := 1
+    PROXYSQLTSDB := 1
+endif
+
+# Only increment version at the top-level make to avoid double-incrementing in recursive makes
+GIT_VERSION ?= $(GIT_VERSION_BASE)
+ifeq ($(MAKELEVEL),0)
+# Normalize GIT_VERSION by stripping leading 'v' for arithmetic
+GIT_VERSION_NORM := $(shell echo "$(GIT_VERSION_BASE)" | sed 's/^v//')
+# If PROXYSQLGENAI is enabled, increment the major version number by 1
+ifeq ($(PROXYSQLGENAI),1)
+	GIT_VERSION := $(shell echo "$(GIT_VERSION_NORM)" | awk -F. '{printf "%d.%s", $$1+1, substr($$0, length($$1)+2)}')
+else
+# If PROXYSQL31 is enabled, increment the minor version number by 1
+ifeq ($(PROXYSQL31),1)
+	GIT_VERSION := $(shell echo "$(GIT_VERSION_NORM)" | awk -F. '{printf "%s.%d.%s", $$1, $$2+1, substr($$0, length($$1)+length($$2)+3)}')
+endif
 endif
 endif
 
@@ -36,6 +83,9 @@ endif
 
 export CURVER
 export PROXYSQLGENAI
+export PROXYSQL31
+export PROXYSQLFFTO
+export PROXYSQLTSDB
 
 ### NOTES:
 ### SOURCE_DATE_EPOCH is used for reproducible builds
@@ -97,8 +147,10 @@ endif
 ifneq (,$(findstring $(OS),Darwin FreeBSD))
 	NPROCS := $(shell sysctl -n hw.ncpu)
 	LEGACY_BUILD := 1
-    export CC=gcc
-    export CXX=g++
+    CC ?= cc
+    CXX ?= c++
+    export CC
+    export CXX
 endif
 export MAKEOPT := -j${NPROCS}
 
@@ -304,27 +356,27 @@ build_src_debug_clickhouse: build_src_debug_default
 
 .PHONY: build_deps_default
 build_deps_default:
-	cd deps && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) CC=${CC} CXX=${CXX} ${MAKE}
+	cd deps && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
 
-PHONY: build_deps_debug_default
+.PHONY: build_deps_debug_default
 build_deps_debug_default:
-	cd deps && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
+	cd deps && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_default
 build_lib_default: build_deps_default
-	cd lib && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) CC=${CC} CXX=${CXX} ${MAKE}
+	cd lib && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_debug_default
 build_lib_debug_default: build_deps_debug_default
-	cd lib && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) CC=${CC} CXX=${CXX} ${MAKE}
+	cd lib && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_default
 build_src_default: build_lib_default
-	cd src && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) CC=${CC} CXX=${CXX} ${MAKE}
+	cd src && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_debug_default
 build_src_debug_default: build_lib_debug_default
-	cd src && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) CC=${CC} CXX=${CXX} ${MAKE}
+	cd src && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
 
 
 ### packaging targets
@@ -335,11 +387,7 @@ SYS_ARCH := $(shell uname -m)
 REL_ARCH = $(subst x86_64,amd64,$(subst aarch64,arm64,$(SYS_ARCH)))
 RPM_ARCH = .$(SYS_ARCH)
 DEB_ARCH = _$(REL_ARCH)
-ifeq ($(UNAME_S),Darwin)
 REL_VERS := $(shell echo ${GIT_VERSION} | sed -E 's/^v//' | grep -Eo '^[0-9\.]+')
-else
-REL_VERS := $(shell echo ${GIT_VERSION} | grep -Po '(?<=^v|^)[\d\.]+')
-endif
 RPM_VERS := -$(REL_VERS)-1
 DEB_VERS := _$(REL_VERS)
 
@@ -361,7 +409,7 @@ amd64-fedora: fedora42 fedora42-clang fedora42-dbg fedora43 fedora43-clang fedor
 amd64-opensuse: opensuse15 opensuse15-clang opensuse15-dbg opensuse16 opensuse16-clang opensuse16-dbg
 amd64-ubuntu: ubuntu22 ubuntu22-clang ubuntu22-dbg ubuntu24 ubuntu24-clang ubuntu24-dbg
 amd64-pkglist:
-	@${MAKE} -nk amd64-packages 2>/dev/null | grep -Po '(?<=binaries/)proxysql\S+$$'
+	@${MAKE} -nk amd64-packages 2>/dev/null | grep -Eo 'binaries/proxysql[^ ]*' | sed 's,^binaries/,,'
 
 arm64-%: SYS_ARCH := aarch64
 arm64-packages: arm64-centos arm64-debian arm64-ubuntu arm64-fedora arm64-opensuse arm64-almalinux
@@ -372,7 +420,7 @@ arm64-fedora: fedora42 fedora43
 arm64-opensuse: opensuse15 opensuse16
 arm64-ubuntu: ubuntu22 ubuntu24
 arm64-pkglist:
-	@${MAKE} -nk arm64-packages 2>/dev/null | grep -Po '(?<=binaries/)proxysql\S+$$'
+	@${MAKE} -nk arm64-packages 2>/dev/null | grep -Eo 'binaries/proxysql[^ ]*' | sed 's,^binaries/,,'
 
 almalinux%: build-almalinux% ;
 centos%: build-centos% ;
@@ -385,12 +433,12 @@ ubuntu%: build-ubuntu% ;
 .PHONY: build-%
 .NOTPARALLEL: build-%
 build-%: BLD_NAME=$(patsubst build-%,%,$@)
-build-%: PKG_VERS=$(if $(filter $(shell echo ${BLD_NAME} | grep -Po '[a-z]+'),debian ubuntu),$(DEB_VERS),$(RPM_VERS))
-build-%: PKG_TYPE=$(if $(filter $(shell echo $(BLD_NAME) | grep -Po '\-de?bu?g|\-test|\-tap'),-dbg -debug -test -tap),-dbg,)
+build-%: PKG_VERS=$(if $(filter $(shell echo ${BLD_NAME} | grep -Eo '[a-z]+'),debian ubuntu),$(DEB_VERS),$(RPM_VERS))
+build-%: PKG_TYPE=$(if $(filter $(shell echo $(BLD_NAME) | grep -Eo '\-de?bu?g|\-test|\-tap'),-dbg -debug -test -tap),-dbg,)
 build-%: PKG_NAME=$(firstword $(subst -, ,$(BLD_NAME)))
-build-%: PKG_COMP=$(if $(filter $(shell echo $(BLD_NAME) | grep -Po '\-clang'),-clang),-clang,)
-build-%: PKG_ARCH=$(if $(filter $(shell echo ${BLD_NAME} | grep -Po '[a-z]+'),debian ubuntu),$(DEB_ARCH),$(RPM_ARCH))
-build-%: PKG_KIND=$(if $(filter $(shell echo ${BLD_NAME} | grep -Po '[a-z]+'),debian ubuntu),deb,rpm)
+build-%: PKG_COMP=$(if $(filter $(shell echo $(BLD_NAME) | grep -Eo '\-clang'),-clang),-clang,)
+build-%: PKG_ARCH=$(if $(filter $(shell echo ${BLD_NAME} | grep -Eo '[a-z]+'),debian ubuntu),$(DEB_ARCH),$(RPM_ARCH))
+build-%: PKG_KIND=$(if $(filter $(shell echo ${BLD_NAME} | grep -Eo '[a-z]+'),debian ubuntu),deb,rpm)
 build-%: PKG_FILE=binaries/proxysql$(PKG_VERS)$(PKG_TYPE)-$(PKG_NAME)$(PKG_COMP)$(PKG_ARCH).$(PKG_KIND)
 build-%:
 	@echo 'building $@'

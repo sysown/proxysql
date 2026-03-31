@@ -1,0 +1,14 @@
+admin_variables=
+{
+    admin_credentials="admin:admin;radmin:radmin;cluster1:secret1pass"
+    mysql_ifaces="0.0.0.0:6032"
+    cluster_username="cluster1"
+    cluster_password="secret1pass"
+}
+
+mysql_variables=
+{
+    threads=4
+    max_connections=2048
+    interfaces="0.0.0.0:6033"
+}

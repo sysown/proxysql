@@ -25,6 +25,7 @@
 
 #include "tap.h"
 #include "command_line.h"
+#include "noise_utils.h"
 #include "utils.h"
 
 using std::string;
@@ -112,22 +113,40 @@ int check_perf_diff(const string tcase, double time1, double time2, double exp_d
 }
 
 int main(int argc, char** argv) {
-	plan(8);
-
 	CommandLine cl;
 
 	if (cl.getEnv()) {
+        diag("=== MySQL Protocol Compression Level Test ===");
+        diag("This test measures the performance impact of different compression levels");
+        diag("on artificially large resultsets (~40MB).");
+        diag("It compares latency across:");
+        diag("  1. ProxySQL without compression.");
+        diag("  2. ProxySQL with compression (levels 3 and 8).");
+        diag("  3. Direct MySQL backend with and without compression.");
+        diag("====================================================");
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
 
-	MYSQL* admin = init_mysql_conn(cl.host, cl.admin_port, cl.admin_username, cl.admin_password);
+	spawn_internal_noise(cl, internal_noise_random_stats_poller);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
+	spawn_internal_noise(cl, internal_noise_pgsql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}, {"avg_delay_ms", "300"}});
+
+	if (cl.use_noise) {
+		plan(8 + 3);
+	} else {
+		plan(8);
+	}
+
+	diag("Connecting to ProxySQL Admin: %s:%d", cl.host, cl.admin_port);
+        MYSQL* admin = init_mysql_conn(cl.host, cl.admin_port, cl.admin_username, cl.admin_password);
 	if (!admin) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
 	}
 
-	MYSQL* proxy = init_mysql_conn(cl.host, cl.port, cl.username, cl.password);
+	diag("Connecting to ProxySQL Frontend: %s:%d", cl.host, cl.port);
+        MYSQL* proxy = init_mysql_conn(cl.host, cl.port, cl.username, cl.password);
 	if (!proxy) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
@@ -171,12 +190,14 @@ int main(int argc, char** argv) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_cmp));
 		return EXIT_FAILURE;
 	}
-	MYSQL* mysql = init_mysql_conn(cl.host, cl.mysql_port, cl.username, cl.password, false, false);
+	diag("Connecting directly to MySQL backend: %s:%d", cl.mysql_host, cl.mysql_port);
+        MYSQL* mysql = mysql_init(NULL); if (!mysql_real_connect(mysql, cl.mysql_host, cl.mysql_username, cl.mysql_password, NULL, cl.mysql_port, NULL, 0)) { diag("Direct connection failed: %s (User: %s, Pass: %s)", mysql_error(mysql), cl.mysql_username, cl.mysql_password); return EXIT_FAILURE; }
 	if (!mysql) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 		return EXIT_FAILURE;
 	}
-	MYSQL* mysql_cmp = init_mysql_conn(cl.host, cl.mysql_port, cl.username, cl.password, false, true);
+	diag("Connecting directly to MySQL backend (Compressed): %s:%d", cl.mysql_host, cl.mysql_port);
+        MYSQL* mysql_cmp = init_mysql_conn(cl.mysql_host, cl.mysql_port, cl.mysql_username, cl.mysql_password, false, true);
 	if (!mysql_cmp) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql_cmp));
 		return EXIT_FAILURE;

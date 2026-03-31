@@ -16,6 +16,7 @@
 #include "libpq-fe.h"
 #include "pg_lite_client.h"
 #include "command_line.h"
+#include "noise_utils.h"
 #include "tap.h"
 #include "utils.h"
 
@@ -5048,11 +5049,18 @@ void test_empty_query_without_describe_portal() {
 }
 
 int main(int argc, char** argv) {
+    if (cl.getEnv())
+        return exit_status();
 
-	plan(1061); // Adjust based on number of tests
+	spawn_internal_noise(cl, internal_noise_mysql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}, {"avg_delay_ms", "300"}});
+	spawn_internal_noise(cl, internal_noise_prometheus_poller);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
 
-	if (cl.getEnv())
-		return exit_status();
+	if (cl.use_noise) {
+		plan(1061 + 3);
+	} else {
+		plan(1061);
+	}
 
 	std::string f_path{get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log"};
 	int of_err = open_file_and_seek_end(f_path, f_proxysql_log);

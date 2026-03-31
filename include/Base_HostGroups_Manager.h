@@ -144,6 +144,8 @@ class MetricsCollector;
 
 typedef std::unordered_map<std::uint64_t, void *> umap_mysql_errors;
 
+#include "ConnectionPoolDecision.h"
+
 class MySrvConnList;
 class MySrvC;
 class MySrvList;

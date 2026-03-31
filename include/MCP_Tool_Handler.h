@@ -4,18 +4,18 @@
 #ifdef PROXYSQLGENAI
 
 #include <string>
-#include <memory>
 
-// Include JSON library
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
+
+class SQLite3_result;
 
 /**
  * @brief Base class for all MCP Tool Handlers
  *
  * This class defines the interface that all tool handlers must implement.
- * Each endpoint (config, query, admin, cache, observe) will have its own
+ * Each endpoint (config, query, admin, cache, stats) will have its own
  * dedicated tool handler that provides specific tools for that endpoint's purpose.
  *
  * Tool handlers are responsible for:
@@ -184,6 +184,25 @@ protected:
 		}
 		return response;
 	}
+
+		/**
+		 * @brief Convert a SQLite3_result into a JSON array of row objects.
+		 *
+		 * Each row becomes a JSON object keyed by column name. Field values
+		 * are parsed using the following precedence:
+		 * 1) signed 64-bit integer
+		 * 2) unsigned 64-bit integer (for large counters)
+		 * 3) finite double
+		 * 4) raw string fallback
+		 *
+		 * Conversion guards against overflow (`ERANGE`) and avoids non-finite
+		 * floating-point JSON values (`NaN`, `+/-Inf`). NULL fields become JSON null.
+		 *
+		 * @param resultset The SQLite3_result to convert (may be NULL).
+		 * @param cols      Number of columns in the result set.
+		 * @return JSON array of row objects (empty array when resultset is NULL or has no rows).
+		 */
+	static json resultset_to_json(SQLite3_result* resultset, int cols);
 };
 
 #endif /* PROXYSQLGENAI */

@@ -25,6 +25,36 @@ MCP_JSONRPC_Resource::~MCP_JSONRPC_Resource() {
 	proxy_debug(PROXY_DEBUG_GENERIC, 3, "Destroyed MCP JSON-RPC resource for endpoint '%s'\n", endpoint_name.c_str());
 }
 
+bool MCP_JSONRPC_Resource::validate_bearer_token(const std::string& auth_header, const std::string& expected_token) {
+	// Empty auth header means no token provided
+	if (auth_header.empty()) {
+		return false;
+	}
+
+	// Check if it's a Bearer token (RFC 7235: auth-scheme is case-insensitive)
+	const std::string bearer_prefix = "Bearer ";
+	if (auth_header.length() <= bearer_prefix.length() ||
+	    strncasecmp(auth_header.c_str(), bearer_prefix.c_str(), bearer_prefix.length()) != 0) {
+		return false;
+	}
+
+	// Extract the token
+	std::string provided_token = auth_header.substr(bearer_prefix.length());
+
+	// Trim whitespace
+	size_t start = provided_token.find_first_not_of(" \t\n\r");
+	size_t end = provided_token.find_last_not_of(" \t\n\r");
+	if (start != std::string::npos && end != std::string::npos) {
+		provided_token = provided_token.substr(start, end - start + 1);
+	} else {
+		// Token is all whitespace
+		return false;
+	}
+
+	// Compare tokens
+	return (provided_token == expected_token);
+}
+
 bool MCP_JSONRPC_Resource::authenticate_request(const httpserver::http_request& req) {
 	if (!handler) {
 		proxy_error("MCP authentication on %s: handler is NULL\n", endpoint_name.c_str());
@@ -36,14 +66,16 @@ bool MCP_JSONRPC_Resource::authenticate_request(const httpserver::http_request& 
 
 	if (endpoint_name == "config") {
 		expected_token = handler->variables.mcp_config_endpoint_auth;
-	} else if (endpoint_name == "observe") {
-		expected_token = handler->variables.mcp_observe_endpoint_auth;
+	} else if (endpoint_name == "stats") {
+		expected_token = handler->variables.mcp_stats_endpoint_auth;
 	} else if (endpoint_name == "query") {
 		expected_token = handler->variables.mcp_query_endpoint_auth;
 	} else if (endpoint_name == "admin") {
 		expected_token = handler->variables.mcp_admin_endpoint_auth;
 	} else if (endpoint_name == "cache") {
 		expected_token = handler->variables.mcp_cache_endpoint_auth;
+	} else if (endpoint_name == "ai") {
+		expected_token = handler->variables.mcp_ai_endpoint_auth;
 	} else if (endpoint_name == "rag") {
 		expected_token = handler->variables.mcp_rag_endpoint_auth;
 	} else {
@@ -74,26 +106,7 @@ bool MCP_JSONRPC_Resource::authenticate_request(const httpserver::http_request& 
 		return false;
 	}
 
-	// Check if it's a Bearer token
-	const std::string bearer_prefix = "Bearer ";
-	if (auth_header.length() <= bearer_prefix.length() ||
-	    auth_header.compare(0, bearer_prefix.length(), bearer_prefix) != 0) {
-		proxy_debug(PROXY_DEBUG_GENERIC, 4, "MCP authentication on %s: invalid Authorization header format\n", endpoint_name.c_str());
-		return false;
-	}
-
-	// Extract the token
-	std::string provided_token = auth_header.substr(bearer_prefix.length());
-
-	// Trim whitespace
-	size_t start = provided_token.find_first_not_of(" \t\n\r");
-	size_t end = provided_token.find_last_not_of(" \t\n\r");
-	if (start != std::string::npos && end != std::string::npos) {
-		provided_token = provided_token.substr(start, end - start + 1);
-	}
-
-	// Compare tokens
-	bool authenticated = (provided_token == expected_token);
+	bool authenticated = validate_bearer_token(auth_header, std::string(expected_token));
 
 	if (authenticated) {
 		proxy_debug(PROXY_DEBUG_GENERIC, 4, "MCP authentication on %s: success\n", endpoint_name.c_str());
@@ -319,7 +332,7 @@ std::shared_ptr<http_response> MCP_JSONRPC_Resource::handle_jsonrpc_request(
 		result["protocolVersion"] = "2025-06-18";
 		result["capabilities"]["tools"] = json::object();  // Explicitly declare tools support
 		result["serverInfo"] = {
-			{"name", "proxysql-mcp-mcp-mysql-tools"},
+			{"name", "proxysql-mcp-server"},
 			{"version", MCP_THREAD_VERSION}
 		};
 	} else if (method == "ping") {

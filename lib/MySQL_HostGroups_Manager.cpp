@@ -565,7 +565,8 @@ hg_metrics_map = std::make_tuple(
 			"proxysql_connpool_data_bytes_total",
 			"Amount of data (sent|recv) from the backend, excluding metadata.",
 			metric_tags {
-				{ "traffic_flow", "recv" }
+				{ "traffic_flow", "recv" },
+				{ "protocol", "mysql" }
 			}
 		),
 		std::make_tuple (
@@ -573,7 +574,8 @@ hg_metrics_map = std::make_tuple(
 			"proxysql_connpool_data_bytes_total",
 			"Amount of data (sent|recv) from the backend, excluding metadata.",
 			metric_tags {
-				{ "traffic_flow", "sent" }
+				{ "traffic_flow", "sent" },
+				{ "protocol", "mysql" }
 			}
 		),
 		// ====================================================================
@@ -584,7 +586,8 @@ hg_metrics_map = std::make_tuple(
 			"proxysql_connpool_conns_total",
 			"How many connections have been tried to be established.",
 			metric_tags {
-				{ "status", "err" }
+				{ "status", "err" },
+				{ "protocol", "mysql" }
 			}
 		),
 		std::make_tuple (
@@ -592,7 +595,8 @@ hg_metrics_map = std::make_tuple(
 			"proxysql_connpool_conns_total",
 			"How many connections have been tried to be established.",
 			metric_tags {
-				{ "status", "ok" }
+				{ "status", "ok" },
+				{ "protocol", "mysql" }
 			}
 		),
 		// ====================================================================
@@ -601,7 +605,9 @@ hg_metrics_map = std::make_tuple(
 			p_hg_dyn_counter::connection_pool_queries,
 			"proxysql_connpool_conns_queries_total",
 			"The number of queries routed towards this particular backend server.",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "mysql" }
+			}
 		),
 		// gtid
 		std::make_tuple (
@@ -631,7 +637,8 @@ hg_metrics_map = std::make_tuple(
 			"proxysql_connpool_conns",
 			"How many backend connections are currently (free|used).",
 			metric_tags {
-				{ "status", "free" }
+				{ "status", "free" },
+				{ "protocol", "mysql" }
 			}
 		),
 		std::make_tuple (
@@ -639,20 +646,25 @@ hg_metrics_map = std::make_tuple(
 			"proxysql_connpool_conns",
 			"How many backend connections are currently (free|used).",
 			metric_tags {
-				{ "status", "used" }
+				{ "status", "used" },
+				{ "protocol", "mysql" }
 			}
 		),
 		std::make_tuple (
 			p_hg_dyn_gauge::connection_pool_latency_us,
 			"proxysql_connpool_conns_latency_us",
 			"The currently ping time in microseconds, as reported from Monitor.",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "mysql" }
+			}
 		),
 		std::make_tuple (
 			p_hg_dyn_gauge::connection_pool_status,
 			"proxysql_connpool_conns_status",
 			"The status of the backend server (1 - ONLINE, 2 - SHUNNED, 3 - OFFLINE_SOFT, 4 - OFFLINE_HARD, 5 - SHUNNED_REPLICATION_LAG).",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "mysql" }
+			}
 		)
 	}
 );
@@ -3327,7 +3339,8 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 			std::string endpoint_id = hostgroup_id + ":" + endpoint_addr + ":" + endpoint_port;
 			const std::map<std::string, std::string> common_labels {
 				{"endpoint", endpoint_addr + ":" + endpoint_port},
-				{"hostgroup", hostgroup_id }
+				{"hostgroup", hostgroup_id },
+				{"protocol", "mysql" }
 			};
 			cur_servers_ids.push_back(endpoint_id);
 

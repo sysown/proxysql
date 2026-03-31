@@ -63,17 +63,27 @@ oldcode/tests/connect_speed
 #pidfile and errorlog
 *.pid
 *.log
+*.log.*
 *.err
+
+# generated test pems
+test/tap/tests/*.pem
+test/tap/tests/test_cluster_sync_config/proxysql*.pem
 
 #binary
 src/proxysql
-src/*pem
+src/*.pem
 binaries/*deb
 binaries/*rpm
 tools/eventslog_reader_sample
 tools/eventlog_reader_to_json
 src/proxysql-save.cfg
 src/*log*
+
+#test artifacts
+ci_infra_logs/
+test/tap/tap/*.mri
+test/tap/tests/test_cluster_sync_config/test_cluster_sync_withmonitor/cluster_sync_node_stderr.txt
 
 proxysql-2.0.0/
 docker/images/proxysql/rhel-compliant/rpmmacros
@@ -120,6 +130,7 @@ deps/coredumper/coredumper-*/
 deps/postgresql/postgresql-*/
 deps/postgresql/postgres-*/
 deps/libusual/libusual-*/
+deps/zstd/zstd-*/
 
 test/.vagrant
 .DS_Store
@@ -176,6 +187,7 @@ test/tap/tests/test_cluster_sync_config/proxysql*.pem
 test/tap/tests/test_cluster_sync_config/test_cluster_sync.cnf
 .aider*
 GEMINI.md
+.gemini
 
 # generated MySQL parser artifacts
 lib/MySQL_Lexer.yy.c
@@ -187,3 +199,5 @@ lib/MySQL_Parser.tab.h
 discovery_*.md
 database_discovery_report.md
 scripts/mcp/DiscoveryAgent/ClaudeCode_Headless/tmp/
+test/tap/tests/test_cluster_sync_config/test_cluster_sync_nomonitor/cluster_sync_node_stderr.txt
+test/tap/tests/test_cluster_sync_config/test_cluster_sync_withmonitor/cluster_sync_node_stderr.txt

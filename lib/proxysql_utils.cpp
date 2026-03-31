@@ -5,6 +5,7 @@
 #include <functional>
 #include <sstream>
 #include <algorithm>
+#include <cmath>
 #include <climits>
 
 #include <arpa/inet.h>
@@ -21,6 +22,10 @@
 #include <sys/syscall.h>
 #ifdef __linux__
 #include <linux/close_range.h>
+#endif
+#ifdef __FreeBSD__
+#include <sys/socket.h>
+#include <netinet/in.h>
 #endif
 
 using std::function;
@@ -742,4 +747,91 @@ std::string get_client_addr(struct sockaddr* client_addr) {
 	}
 
 	return str_client_addr;
+}
+
+/**
+ * @brief Escape a raw value for inclusion in a single-quoted SQL literal.
+ *
+ * This function is intentionally SQLite-centric and escapes only single quotes
+ * by doubling them (`'` -> `''`). Backslashes are preserved verbatim.
+ * NOT safe for MySQL backslash-escape mode.
+ *
+ * @param input Raw untrusted input value.
+ * @return Escaped value suitable for `... WHERE col = '<escaped>'`.
+ */
+std::string sql_escape(const std::string& input) {
+	std::string output;
+	output.reserve(input.size() * 2);
+	for (char c : input) {
+		if (c == '\'') {
+			output += "''";
+		} else {
+			output += c;
+		}
+	}
+	return output;
+}
+
+/**
+ * @brief Estimate a percentile from bucketed histogram counters.
+ *
+ * The function validates histogram shape, clamps percentile to `[0.0, 1.0]`,
+ * accumulates counts in 64-bit space, and returns the first threshold whose
+ * cumulative rank reaches the requested percentile. For p0, the first non-zero
+ * bucket threshold is returned.
+ *
+ * @param buckets Histogram counts by bucket.
+ * @param thresholds Upper-bound value for each bucket, same size as buckets.
+ * @param percentile Requested percentile in `[0.0, 1.0]` (clamped if out-of-range).
+ * @return Matching threshold, or 0 for empty/invalid/all-zero histograms.
+ */
+int calculate_percentile_from_histogram(
+	const std::vector<int>& buckets,
+	const std::vector<int>& thresholds,
+	double percentile
+) {
+	if (buckets.empty() || thresholds.empty() || buckets.size() != thresholds.size()) {
+		return 0;
+	}
+
+	if (percentile < 0.0) {
+		percentile = 0.0;
+	} else if (percentile > 1.0) {
+		percentile = 1.0;
+	}
+
+	long long total = 0;
+	for (int b : buckets) {
+		if (b > 0) {
+			total += b;
+		}
+	}
+
+	if (total == 0) return 0;
+
+	if (percentile == 0.0) {
+		for (size_t i = 0; i < buckets.size(); i++) {
+			if (buckets[i] > 0) {
+				return thresholds[i];
+			}
+		}
+		return 0;
+	}
+
+	long long target = static_cast<long long>(std::ceil(static_cast<long double>(total) * percentile));
+	if (target < 1) {
+		target = 1;
+	}
+	long long cumulative = 0;
+
+	for (size_t i = 0; i < buckets.size(); i++) {
+		if (buckets[i] > 0) {
+			cumulative += buckets[i];
+		}
+		if (cumulative >= target) {
+			return thresholds[i];
+		}
+	}
+
+	return thresholds.back();
 }

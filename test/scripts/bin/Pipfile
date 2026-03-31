@@ -1,0 +1,16 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "proxysql-tester"
+
+[packages]
+pymysql = ">=1.1.1"
+packaging = "*"
+structlog = "*"
+pyyaml = "*"
+requests = ">=2.33.0"
+
+[dev-packages]
+
+[requires]
+python_version = "3"

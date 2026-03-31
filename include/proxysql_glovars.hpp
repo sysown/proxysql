@@ -120,11 +120,6 @@ class ProxySQL_GlobalVariables {
 		bool clickhouse_server;
 #endif /* PROXYSQLCLICKHOUSE */
 
-#ifdef PROXYSQLGENAI
-		bool genai_enabled;
-		bool mcp_enabled;
-#endif /* PROXYSQLGENAI */
-
 		int gr_bootstrap_mode;
 		char* gr_bootstrap_uri;
 		char* gr_bootstrap_account;
@@ -146,6 +141,12 @@ class ProxySQL_GlobalVariables {
 		pthread_mutex_t ext_glomth_mutex;
 		pthread_mutex_t ext_glopth_mutex;
 		bool ssl_keylog_enabled;
+		uint64_t tls_load_count;
+		time_t tls_last_load_timestamp;
+		bool tls_last_load_ok;
+		char *tls_cert_file;
+		char *tls_ca_file;
+		char *tls_key_file;
 	} global;
 	struct mysql {
 		char *server_version;

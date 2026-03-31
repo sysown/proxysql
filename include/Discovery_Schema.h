@@ -38,7 +38,7 @@ struct MCP_Query_Rule {
 	int timeout_ms;
 	char *error_msg;
 	char *ok_msg;
-	bool log;
+	int log;                  // tri-state: -1=unset(NULL), 0=don't log, 1=log
 	bool apply;
 	char *comment;
 	uint64_t hits;            // in-memory only, not persisted to table
@@ -46,8 +46,8 @@ struct MCP_Query_Rule {
 
 	MCP_Query_Rule() : rule_id(0), active(false), username(NULL), target_id(NULL), schemaname(NULL),
 	                   tool_name(NULL), match_pattern(NULL), negate_match_pattern(false),
-	                   re_modifiers(1), flagIN(0), flagOUT(0), replace_pattern(NULL),
-	                   timeout_ms(0), error_msg(NULL), ok_msg(NULL), log(false), apply(true),
+	                   re_modifiers(1), flagIN(0), flagOUT(-1), replace_pattern(NULL),
+	                   timeout_ms(-1), error_msg(NULL), ok_msg(NULL), log(-1), apply(true),
 	                   comment(NULL), hits(0), regex_engine(NULL) {}
 };
 

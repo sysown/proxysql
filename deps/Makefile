@@ -46,6 +46,7 @@ targets :=	check_openssl_version \
 			sqlite3 \
 			pcre \
 			lz4 \
+			zstd \
 			cityhash \
 			microhttpd \
 			curl \
@@ -128,7 +129,7 @@ ev: libev/libev/.libs/libev.a
 coredumper/coredumper/src/libcoredumper.a:
 	cd coredumper && rm -rf coredumper-*/ || true
 	cd coredumper && tar -zxf coredumper-*.tar.gz
-	cd coredumper/coredumper && cmake . -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Debug
+	cd coredumper/coredumper && cmake . -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 	cd coredumper/coredumper && CC=${CC} CXX=${CXX} ${MAKE}
 
 coredumper: coredumper/coredumper/src/libcoredumper.a
@@ -172,6 +173,17 @@ lz4/lz4/lib/liblz4.a:
 	cd lz4/lz4 && CC=${CC} CXX=${CXX} ${MAKE}
 
 lz4: lz4/lz4/lib/liblz4.a
+
+
+# zstd - Zstandard compression library
+# Used for compressed protocol support in MySQL/PostgreSQL connections
+# Source: https://github.com/facebook/zstd
+zstd/zstd/lib/libzstd.a:
+	cd zstd && rm -rf zstd-*/ || true
+	cd zstd && tar -zxf zstd-*.tar.gz
+	cd zstd/zstd/lib && CC=${CC} CXX=${CXX} ${MAKE} libzstd.a
+
+zstd: zstd/zstd/lib/libzstd.a
 
 
 clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:
@@ -425,5 +437,6 @@ cleanall:
 	cd libusual && rm -rf libusual-*/ || true
 	cd libscram && rm -rf lib/* obj/* || true
 	cd json && rm -rf json-*/ || true
+	cd zstd && rm -rf zstd-*/ || true
 .PHONY: cleanall
 

@@ -41,7 +41,7 @@ LDIRS :=	-L$(TAP_LDIR) \
 			-L$(DOTENV_DYN_LDIR) \
 			-L$(PCRE_LDIR) \
 			-L$(LIBINJECTION_LDIR) \
-			-L$(POSTGRESQL_LDIR)\
+			-L$(POSTGRESQL_LDIR) \
 			-L$(LIBSCRAM_LDIR) \
 			-L$(LIBUSUAL_LDIR) \
 			-L$(SSL_LDIR)
@@ -61,11 +61,11 @@ OBJ := $(PROXYSQL_PATH)/src/obj/proxysql_global.o $(PROXYSQL_PATH)/src/obj/main.
 
 #SOURCES := ../tap/utils.cpp
 
-MYLIBS_DYNAMIC_PART := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -ltap -lcpp_dotenv -lcurl -lssl -lcrypto -luuid
+MYLIBS_DYNAMIC_PART := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -lcpp_dotenv -lcurl -lssl -lcrypto -luuid
 MYLIBS_STATIC_PART := -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core
 MYLIBS_PG_PART := -Wl,-Bstatic -lpq -lpgcommon -lpgport
-MYLIBS_LAST_PART := -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl $(EXTRALINK)
-MYLIBS := $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) $(MYLIBS_PG_PART) $(MYLIBS_LAST_PART)
+MYLIBS_LAST_PART := -Wl,-Bdynamic -lpthread -lm -lz -lzstd -lrt -ldl $(EXTRALINK)
+MYLIBS := -Wl,-Bdynamic -ltap $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) $(MYLIBS_PG_PART) $(MYLIBS_LAST_PART)
 #MYLIBS_PG := $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) $(MYLIBS_PG_PART) $(MYLIBS_LAST_PART)
 #MYLIBS := -Wl,--export-dynamic -Wl,-Bdynamic -lssl -lcrypto -lgnutls -ltap -lcpp_dotenv -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core -luuid -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl $(EXTRALINK)
 
@@ -83,22 +83,27 @@ ifeq ($(PROXYSQLGENAI),1)
 	STATIC_LIBS += $(SQLITE3_LDIR)/../libsqlite_rembed.a $(SQLITE3_LDIR)/vec.o
 endif
 
-OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
+OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/libpq -Wl,-rpath,$(RE2_LDIR) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
 
 ### main targets
 
 .DEFAULT: default
-.PHONY: default
+.PHONY: default debug
 default: all
 
 CUSTOMARGS := -I$(TAP_IDIR) -I$(CURL_IDIR) -I$(SQLITE3_IDIR) -I$(PROXYSQL_IDIR) -I$(JSON_IDIR) -I$(RE2_IDIR) -I$(SSL_IDIR)
-CUSTOMARGS += -L$(TAP_LDIR) -L$(CURL_LDIR) -L$(RE2_LDIR) -L$(SSL_LDIR)
-CUSTOMARGS += -Wl,-Bdynamic -lcpp_dotenv -lcurl -lssl -lcrypto -lre2 -lpthread -lz -ldl
+CUSTOMARGS += -L$(TAP_LDIR) -L$(CURL_LDIR) -L$(RE2_LDIR) -L$(SSL_LDIR) -L$(POSTGRESQL_LDIR)
+CUSTOMARGS += -Wl,-Bdynamic -ltap -lcpp_dotenv -lcurl -lssl -lcrypto -lre2 -lpthread -lz -lzstd -ldl -lpq $(LWGCOV)
 
 .PHONY: all
 all: tests
 
-debug: OPT := $(STDCPP) -O0 -DDEBUG -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
+.PHONY: tests_no_infra
+tests_no_infra: admin_set_credentials_logging-t listener_conflicts_validation-t
+	./admin_set_credentials_logging-t
+	./listener_conflicts_validation-t
+
+debug: OPT := $(STDCPP) -O0 -DDEBUG -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/libpq -Wl,-rpath,$(RE2_LDIR) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
 debug: tests
 
 tests: CUSTOMARGS += $(OPT)
@@ -129,9 +134,7 @@ tests: tests-cpp \
 	fast_forward_grace_close_libmysql-t \
 	fast_forward_switch_replication_deprecate_eof_libmysql-t \
 	reg_test_mariadb_stmt_store_result_libmysql-t \
-	reg_test_mariadb_stmt_store_result_async-t \
-	test_tsdb_variables-t \
-	test_tsdb_api-t
+	reg_test_mariadb_stmt_store_result_async-t
 tests:
 	@echo "Removing empty .gcno files ..."
 	find -L . -type f -name '*.gcno' -empty -ls -delete
@@ -319,6 +322,12 @@ pgsql-reg_test_5273_bind_parameter_format-t: pgsql-reg_test_5273_bind_parameter_
 	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 
 pgsql-reg_test_5300_threshold_resultset_deadlock-t: pgsql-reg_test_5300_threshold_resultset_deadlock-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
+	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
+
+test_ffto_pgsql_pipeline-t: test_ffto_pgsql_pipeline-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
+	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
+
+test_ffto_pgsql_stmt_portal-t: test_ffto_pgsql_stmt_portal-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 
 

@@ -26,6 +26,7 @@ enum proxysql_config_type {
  * cases where users mistakenly include the module prefix (e.g., "mysql-") in variable names.
  */
 class ProxySQL_Config {
+	friend class ProxySQL_Config_TestHelper;
 public:
 	SQLite3DB* admindb;
 	/** @brief Constructs ProxySQL_Config with a database handle */
