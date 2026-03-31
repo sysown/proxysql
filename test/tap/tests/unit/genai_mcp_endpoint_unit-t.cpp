@@ -94,11 +94,11 @@ static void test_missing_auth_header() {
 	ok(result == false, "validate_bearer_token: empty auth header rejected");
 }
 
-static void test_malformed_bearer_prefix_lowercase() {
+static void test_bearer_prefix_lowercase() {
 	bool result = MCP_JSONRPC_Resource::validate_bearer_token(
 		"bearer mytoken", "mytoken"
 	);
-	ok(result == false, "validate_bearer_token: lowercase 'bearer' prefix rejected");
+	ok(result == true, "validate_bearer_token: lowercase 'bearer' accepted (RFC 7235 case-insensitive)");
 }
 
 static void test_malformed_bearer_prefix_no_space() {
@@ -293,7 +293,7 @@ int main() {
 	test_valid_bearer_token_complex();            // 1
 	test_invalid_wrong_token();                   // 1
 	test_missing_auth_header();                   // 1
-	test_malformed_bearer_prefix_lowercase();     // 1
+	test_bearer_prefix_lowercase();               // 1
 	test_malformed_bearer_prefix_no_space();      // 1
 	test_malformed_basic_auth();                  // 1
 	test_empty_token_after_bearer();              // 1
