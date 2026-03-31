@@ -1,4 +1,3 @@
-#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -6,18 +5,8 @@
 
 #include "proxysql_gtid.h"
 
-// Initializes a UUID:GTID pair.
-Uuid_Gtid::Uuid_Gtid(const std::string _uuid, const gtid_t _gtid) : uuid(_uuid), gtid(_gtid) {
-}
-
-// Copies a UUID:GTID pair.
-Uuid_Gtid Uuid_Gtid::copy() {
-	return Uuid_Gtid(uuid, gtid);
-
-}
-
-// Initializes a GTID interval from a range.
-Gtid_Interval::Gtid_Interval(const gtid_t _start, const gtid_t _end) {
+// Initializes a trxid interval from a range.
+TrxId_Interval::TrxId_Interval(const trxid_t _start, const trxid_t _end) {
 	start = _start;
 	end = _end;
 
@@ -26,12 +15,12 @@ Gtid_Interval::Gtid_Interval(const gtid_t _start, const gtid_t _end) {
 	}
 }
 
-Gtid_Interval::Gtid_Interval(const gtid_t gtid) : Gtid_Interval(gtid, gtid) {
+TrxId_Interval::TrxId_Interval(const trxid_t trxid) : TrxId_Interval(trxid, trxid) {
 }
 
-// Initializes a GTID interval from a C string buffer, in [gtid]{-[gtid]} format.
-Gtid_Interval::Gtid_Interval(const char *s) {
-	gtid_t _start = 0, _end = 0;
+// Initializes a trxid interval from a C string buffer, in [trxid]{-[trxid]} format.
+TrxId_Interval::TrxId_Interval(const char *s) {
+	trxid_t _start = 0, _end = 0;
 
 	if (sscanf(s, "%ld-%ld", &_start, &_end) == 2) {
 		start = _start;
@@ -46,22 +35,22 @@ Gtid_Interval::Gtid_Interval(const char *s) {
 	}
 }
 
-// Initializes a GTID interval from a string, in [gtid]{-[gtid]} format.
-Gtid_Interval::Gtid_Interval(const std::string& s) : Gtid_Interval(s.c_str()) {
+// Initializes a trxid interval from a string, in [trxid]{-[trxid]} format.
+TrxId_Interval::TrxId_Interval(const std::string& s) : TrxId_Interval(s.c_str()) {
 }
 
-// Checks if another GTID interval is contained in this one,
-const bool Gtid_Interval::contains(const Gtid_Interval& other) {
+// Checks if another trxid interval is contained in this one,
+const bool TrxId_Interval::contains(const TrxId_Interval& other) {
 	return (other.start >= start && other.end <= end);
 }
 
-// Checks if a given GTID is contained in this interval.
-const bool Gtid_Interval::contains(gtid_t gtid) {
-	return (gtid >= start && gtid <= end);
+// Checks if a given trxid is contained in this interval.
+const bool TrxId_Interval::contains(trxid_t trxid) {
+	return (trxid >= start && trxid <= end);
 }
 
-// Yields a string representation for a GTID interval.
-const std::string Gtid_Interval::to_string(void) {
+// Yields a string representation for a trxid interval.
+const std::string TrxId_Interval::to_string(void) {
 	if (start == end) {
 		return std::to_string(start);
 	}
@@ -69,7 +58,7 @@ const std::string Gtid_Interval::to_string(void) {
 }
 
 // Attempts to append a new interval to this interval's end. Returns true if the append succeded, false otherwise.
-const bool Gtid_Interval::append(const Gtid_Interval& other) {
+const bool TrxId_Interval::append(const TrxId_Interval& other) {
 	if (other.end >= end && other.start <= (end+1)) {
 		// other overlaps interval at end
 		end = other.end;
@@ -79,8 +68,8 @@ const bool Gtid_Interval::append(const Gtid_Interval& other) {
 	return false;
 }
 
-// Attempts to merge two GTID intervals. Returns true if the intervals were merged (and potentially modified), false otherwise.
-const bool Gtid_Interval::merge(const Gtid_Interval& other) {
+// Attempts to merge two trxid intervals. Returns true if the intervals were merged (and potentially modified), false otherwise.
+const bool TrxId_Interval::merge(const TrxId_Interval& other) {
 	if (other.start >= start && other.end <= end) {
 		// other is contained by interval
 		return true;
@@ -105,8 +94,8 @@ const bool Gtid_Interval::merge(const Gtid_Interval& other) {
 	return false;
 }
 
-// Compares two GTID intervals, by strict weak ordering.
-const int Gtid_Interval::cmp(const Gtid_Interval& other) {
+// Compares two trxid intervals, by strict weak ordering.
+const int TrxId_Interval::cmp(const TrxId_Interval& other) {
 	if (start < other.start) {
 		return -1;
 	}
@@ -122,24 +111,24 @@ const int Gtid_Interval::cmp(const Gtid_Interval& other) {
 	return 0;
 }
 
-const bool Gtid_Interval::operator<(const Gtid_Interval& other) {
+const bool TrxId_Interval::operator<(const TrxId_Interval& other) {
 	return cmp(other) == -1;
 }
 
-const bool Gtid_Interval::operator==(const Gtid_Interval& other) {
+const bool TrxId_Interval::operator==(const TrxId_Interval& other) {
 	return cmp(other) == 0;
 }
 
-const bool Gtid_Interval::operator!=(const Gtid_Interval& other) {
+const bool TrxId_Interval::operator!=(const TrxId_Interval& other) {
 	return cmp(other) != 0;
 }
 
-// Initializes a GTID interval set.
-Gtid_Set::Gtid_Set() {}
+// Initializes a GTID set.
+GTID_Set::GTID_Set() {}
 
-// Creates a copy of this GTID interval set.
-Gtid_Set Gtid_Set::copy() {
-	auto cp = Gtid_Set();
+// Creates a copy of this GTID set.
+GTID_Set GTID_Set::copy() {
+	auto cp = GTID_Set();
 
 	for (auto const& x : map) {
 		for (auto const& iv : x.second) {
@@ -150,13 +139,13 @@ Gtid_Set Gtid_Set::copy() {
 	return cp;
 }
 
-// Clears all GTID interval set entries.
-void Gtid_Set::clear() {
+// Clears all GTID set entries.
+void GTID_Set::clear() {
 	map.clear();
 }
 
-// Adds a new GTID interval for a given UUID. Returns true if the set was modified, false otherwise.
-bool Gtid_Set::add(const std::string& uuid, const gtid_interval_t& iv) {
+// Adds a new trxid interval for a given UUID. Returns true if the set was modified, false otherwise.
+bool GTID_Set::add(const std::string& uuid, const TrxId_Interval& iv) {
 	auto it = map.find(uuid);
 	if (it == map.end()) {
 		// new UUID entry
@@ -166,16 +155,16 @@ bool Gtid_Set::add(const std::string& uuid, const gtid_interval_t& iv) {
 
 	if (!it->second.empty()) {
 		if (it->second.back().append(iv)) {
-			// if appending to the last GTID range succeded, gtid_executed was modified, but remains optimized - nothing else to do
+			// if appending to the last trxid range succeded, gtid_executed was modified, but remains optimized - nothing else to do
 			return true;
 		}
 	}
 
-	// insert/merge GTID interval...
+	// insert/merge trxid interval...
 	auto pos = it->second.begin();
 	for (; pos != it->second.end(); ++pos) {
 		if (pos->contains(iv)) {
-			// GTID interval is already present, nothing to do
+			// trxid interval is already present, nothing to do
 			return false;
 		}
 		if (pos->merge(iv))
@@ -185,7 +174,7 @@ bool Gtid_Set::add(const std::string& uuid, const gtid_interval_t& iv) {
 		it->second.emplace_back(iv);
 	}
 
-	// ...and merge overlapping GTID ranges, if any
+	// ...and merge overlapping trxid ranges, if any
 	it->second.sort();
 	auto a = it->second.begin();
 	while (a != it->second.end()) {
@@ -203,34 +192,34 @@ bool Gtid_Set::add(const std::string& uuid, const gtid_interval_t& iv) {
 	return true;
 }
 
-// Adds a single GTID for a given UUID. Returns true if the set was modified, false otherwise.
-bool Gtid_Set::add(const std::string& uuid, const gtid_t& gtid) {
-	return add(uuid, gtid_interval_t(gtid));
+// Adds a single trxid for a given UUID. Returns true if the set was modified, false otherwise.
+bool GTID_Set::add(const std::string& uuid, const trxid_t& trxid) {
+	return add(uuid, TrxId_Interval(trxid));
 }
 
-// Adds a new GTID range for a given UUID. Returns true if the set was modified, false otherwise.
-bool Gtid_Set::add(const std::string& uuid, const gtid_t& start, const gtid_t& end) {
-	return add(uuid, gtid_interval_t(start, end));
+// Adds a new trxid range for a given UUID. Returns true if the set was modified, false otherwise.
+bool GTID_Set::add(const std::string& uuid, const trxid_t& start, const trxid_t& end) {
+	return add(uuid, TrxId_Interval(start, end));
 }
 
-// Adds a new GTID range for a given UUID, as a C string buffer. Returns true if the set was modified, false otherwise.
-bool Gtid_Set::add(const std::string& uuid, const char *s) {
-	return add(uuid, gtid_interval_t(s));
+// Adds a new trxid range for a given UUID, as a C string buffer. Returns true if the set was modified, false otherwise.
+bool GTID_Set::add(const std::string& uuid, const char *s) {
+	return add(uuid, TrxId_Interval(s));
 }
 
-// Adds a new GTID range for a given UUID, as a string. Returns true if the set was modified, false otherwise.
-bool Gtid_Set::add(const std::string& uuid, const std::string& s) {
-	return add(uuid, gtid_interval_t(s));
+// Adds a new trxid range for a given UUID, as a string. Returns true if the set was modified, false otherwise.
+bool GTID_Set::add(const std::string& uuid, const std::string& s) {
+	return add(uuid, TrxId_Interval(s));
 }
 
-// Evaluates whether a GTID is present in any of the intervals for a given UUID.
-const bool Gtid_Set::has_gtid(const std::string& uuid, const gtid_t gtid) {
+// Evaluates whether a trxid is present in any of the intervals for a given UUID.
+const bool GTID_Set::has_gtid(const std::string& uuid, const trxid_t trxid) {
 	auto it = map.find(uuid);
 	if (it == map.end()) {
 		return false;
 	}
 	for (auto itr = it->second.begin(); itr != it->second.end(); ++itr) {
-		if (itr->contains(gtid)) {
+		if (itr->contains(trxid)) {
 			return true;
 		}
 	}
@@ -238,8 +227,8 @@ const bool Gtid_Set::has_gtid(const std::string& uuid, const gtid_t gtid) {
 	return false;
 }
 
-// Yields a string representation for a GTID interval set.
-const std::string Gtid_Set::to_string(void) {
+// Yields a string representation for a GTID set.
+const std::string GTID_Set::to_string(void) {
 	std::stringstream out;
 	for (auto it=map.begin(); it!=map.end(); ++it) {
 		std::string uuid = it->first;

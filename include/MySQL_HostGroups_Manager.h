@@ -1,22 +1,15 @@
 #ifndef __CLASS_MYSQL_HOSTGROUPS_MANAGER_H
 #define __CLASS_MYSQL_HOSTGROUPS_MANAGER_H
-#include "proxysql.h"
-#include "cpp.h"
-#include "proxysql_gtid.h"
-
 #include <atomic>
 #include <thread>
-#include <iostream>
 #include <mutex>
+
+#include "ev.h"
+#include "wqueue.h"
 
 // Headers for declaring Prometheus counters
 #include "prometheus/counter.h"
 #include "prometheus/gauge.h"
-
-#include "thread.h"
-#include "wqueue.h"
-
-#include "ev.h"
 
 #ifndef SPOOKYV2
 #include "SpookyV2.h"
@@ -28,15 +21,17 @@
 #include "../deps/json/json_fwd.hpp"
 #endif // PROXYJSON
 
+#include "proxysql.h"
+#include "cpp.h"
+#include "Base_HostGroups_Manager.h"
+#include "GTID_Server_Data.h"
+
 #ifdef DEBUG
 /* */
 //	Enabling STRESSTEST_POOL ProxySQL will do a lot of loops in the connection pool
 //	This is for internal testing ONLY!!!!
 //#define STRESSTEST_POOL
 #endif // DEBUG
-
-
-#include "Base_HostGroups_Manager.h"
 
 // we have 2 versions of the same tables: with (debug) and without (no debug) checks
 #ifdef DEBUG
@@ -138,34 +133,6 @@ class MyHGC;
 struct peer_runtime_mysql_servers_t;
 struct peer_mysql_servers_v2_t;
 
-#include "GTID_Server_Data.h"
-
-/*
-class GTID_Server_Data {
-	public:
-	char *address;
-	uint16_t port;
-	uint16_t mysql_port;
-	char *data;
-	size_t len;
-	size_t size;
-	size_t pos;
-	struct ev_io *w;
-	char uuid_server[64];
-	unsigned long long events_read;
-	gtid_set_t gtid_executed;
-	bool active;
-	GTID_Server_Data(struct ev_io *_w, char *_address, uint16_t _port, uint16_t _mysql_port);
-	void resize(size_t _s);
-	~GTID_Server_Data();
-	bool readall();
-	bool writeout();
-	bool read_next_gtid();
-	bool gtid_exists(char *gtid_uuid, uint64_t gtid_trxid);
-	void read_all_gtids();
-	void dump();
-};
-*/
 
 
 class MySrvConnList {

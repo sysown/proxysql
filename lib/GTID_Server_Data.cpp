@@ -261,7 +261,7 @@ bool GTID_Server_Data::readall() {
 
 
 bool GTID_Server_Data::gtid_exists(char *gtid_uuid, uint64_t gtid_trxid) {
-	return gtid_executed.has_gtid((std::string)gtid_uuid, (gtid_t)gtid_trxid);
+	return gtid_executed.has_gtid((std::string)gtid_uuid, gtid_trxid);
 }
 
 void GTID_Server_Data::read_all_gtids() {
@@ -302,9 +302,9 @@ bool GTID_Server_Data::writeout() {
 /*
  * The wire format for the binlogreader is three distinct messages, in plaintext:
  *
- * ST=<uuid>:<gtid>[-<gtid>][,<uuid>:<gtid>[-<gtid>], ...] : Bootstrap message, providing individual GTID or GTID ranges for all seen UUID servers.
- * I1=<uuid>:<gtid>[-<gtid>]                               : Latest seen GTID/GTID ranges for a given UUID.
- * I2=<gtid>[-<gtid>]                                      : Latest seen GTID/GTID ranges.
+ * ST=<uuid>:<trxid>[-<trxid>][,<uuid>:<trxid>[-<trxid>], ...] : Bootstrap message, providing individual transaction ID or trxid ranges for all seen UUID servers.
+ * I1=<uuid>:<trxid>[-<trxid>]                               : Latest seen trxid or trxid ranges for a given UUID.
+ * I2=<trxid>[-<trxid>]                                      : Latest seen trxid or trxid ranges.
  */
 bool GTID_Server_Data::read_next_gtid() {
 	if (len==0) {
@@ -350,7 +350,7 @@ bool GTID_Server_Data::read_next_gtid() {
 							p++;
 						}
 					}
-				} else { // we are reading the trxids
+				} else { // we are reading the trxid or trxid range
 					updated = gtid_executed.add((std::string)uuid_server, subtoken) || updated;
 				}
 			}

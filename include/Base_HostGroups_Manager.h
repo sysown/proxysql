@@ -18,7 +18,8 @@ class MetricsCollector;
 
 #include "proxysql.h"
 #include "cpp.h"
-#include "proxysql_gtid.h"
+#include "GTID_Server_Data.h"
+
 
 #include <atomic>
 #include <thread>
@@ -151,37 +152,6 @@ class MyHGC;
 struct peer_runtime_mysql_servers_t;
 struct peer_mysql_servers_v2_t;
 
-std::string gtid_executed_to_string(gtid_set_t& gtid_executed);
-void addGtid(const gtid_t& gtid, gtid_set_t& gtid_executed);
-
-#include "GTID_Server_Data.h"
-
-/*
-class GTID_Server_Data {
-	public:
-	char *address;
-	uint16_t port;
-	uint16_t mysql_port;
-	char *data;
-	size_t len;
-	size_t size;
-	size_t pos;
-	struct ev_io *w;
-	char uuid_server[64];
-	unsigned long long events_read;
-	gtid_set_t gtid_executed;
-	bool active;
-	GTID_Server_Data(struct ev_io *_w, char *_address, uint16_t _port, uint16_t _mysql_port);
-	void resize(size_t _s);
-	~GTID_Server_Data();
-	bool readall();
-	bool writeout();
-	bool read_next_gtid();
-	bool gtid_exists(char *gtid_uuid, uint64_t gtid_trxid);
-	void read_all_gtids();
-	void dump();
-};
-*/
 
 
 class MySrvConnList {
