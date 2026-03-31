@@ -1839,6 +1839,9 @@ handler_again:
 						const char* dig_text = myds->sess->CurrentQuery.QueryParserArgs.digest_text;
 						const size_t dig_len = strlen(dig_text);
 						is_show_warnings = (dig_len == 13 && strncasecmp(dig_text, "SHOW WARNINGS", 13) == 0);
+					} else {
+						// Fallback to raw query when digest is unavailable (digests disabled)
+						is_show_warnings = (query.length == 13 && strncasecmp(query.ptr, "SHOW WARNINGS", 13) == 0);
 					}
 					MyRS->add_eof(is_show_warnings);
 					NEXT_IMMEDIATE(ASYNC_QUERY_END);
