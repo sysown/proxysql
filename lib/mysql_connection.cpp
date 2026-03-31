@@ -1834,16 +1834,7 @@ handler_again:
 					update_warning_count_from_connection();
 					// we reach here if there was no error
 					// exclude warning_count from the OK/EOF packet for the SHOW WARNINGS statement
-					// Use digest_text (comments stripped) when available; fall back to raw query
-					bool is_show_warnings = false;
-					if (myds && myds->sess && myds->sess->CurrentQuery.QueryParserArgs.digest_text) {
-						const char* dig_text = myds->sess->CurrentQuery.QueryParserArgs.digest_text;
-						const size_t dig_len = strlen(dig_text);
-						is_show_warnings = (dig_len == 13 && strncasecmp(dig_text, "SHOW WARNINGS", 13) == 0);
-					} else {
-						is_show_warnings = (query.length == 13 && strncasecmp(query.ptr, "SHOW WARNINGS", 13) == 0);
-					}
-					MyRS->add_eof(is_show_warnings);
+					MyRS->add_eof(query.length == 13 && strncasecmp(query.ptr, "SHOW WARNINGS", 13) == 0);
 					NEXT_IMMEDIATE(ASYNC_QUERY_END);
 				}
 			}
