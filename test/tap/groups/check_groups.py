@@ -25,27 +25,27 @@ import sys
 
 def find_compiled_tests(tap_root):
     """Find all compiled test binaries (*-t) under the TAP test directories."""
-    test_dirs = [
+    scan_roots = [
         os.path.join(tap_root, "tests"),
-        os.path.join(tap_root, "tests", "unit"),
-        os.path.join(tap_root, "tests_with_deps", "deprecate_eof_support"),
+        os.path.join(tap_root, "tests_with_deps"),
     ]
 
     compiled = set()
-    for d in test_dirs:
-        if not os.path.isdir(d):
+    for scan_root in scan_roots:
+        if not os.path.isdir(scan_root):
             continue
-        for entry in os.listdir(d):
-            path = os.path.join(d, entry)
-            # Must be a file ending in -t, executable, and an ELF binary (not .cpp, .py, etc.)
-            if (
-                entry.endswith("-t")
-                and os.path.isfile(path)
-                and not entry.endswith(".cpp")
-                and os.access(path, os.X_OK)
-                and _is_elf(path)
-            ):
-                compiled.add(entry)
+        for dirpath, _, filenames in os.walk(scan_root):
+            for entry in filenames:
+                path = os.path.join(dirpath, entry)
+                # Must be a file ending in -t, executable, and an ELF binary (not .cpp, .py, etc.)
+                if (
+                    entry.endswith("-t")
+                    and os.path.isfile(path)
+                    and not entry.endswith(".cpp")
+                    and os.access(path, os.X_OK)
+                    and _is_elf(path)
+                ):
+                    compiled.add(entry)
 
     return compiled
 

@@ -31,10 +31,10 @@ bool MCP_JSONRPC_Resource::validate_bearer_token(const std::string& auth_header,
 		return false;
 	}
 
-	// Check if it's a Bearer token
+	// Check if it's a Bearer token (RFC 7235: auth-scheme is case-insensitive)
 	const std::string bearer_prefix = "Bearer ";
 	if (auth_header.length() <= bearer_prefix.length() ||
-	    auth_header.compare(0, bearer_prefix.length(), bearer_prefix) != 0) {
+	    strncasecmp(auth_header.c_str(), bearer_prefix.c_str(), bearer_prefix.length()) != 0) {
 		return false;
 	}
 

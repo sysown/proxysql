@@ -46,7 +46,7 @@ static void test_execute_insert_select() {
     char *error = nullptr;
     SQLite3_result *result = db->execute_statement("SELECT COUNT(*) FROM test_t", &error);
     ok(result != nullptr, "execute_statement: returns result for SELECT");
-    ok(result->rows_count == 1, "execute_statement: COUNT(*) returns 1 row");
+    ok(result != nullptr && result->rows_count == 1, "execute_statement: COUNT(*) returns 1 row");
     if (result && result->rows_count > 0) {
         ok(strcmp(result->rows[0]->fields[0], "2") == 0,
            "execute_statement: COUNT(*) = 2");

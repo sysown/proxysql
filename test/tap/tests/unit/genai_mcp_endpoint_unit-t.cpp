@@ -181,8 +181,6 @@ static void test_long_token() {
 
 static void test_jsonrpc_response_with_string_id() {
 	MCP_Threads_Handler handler;
-	memset(&handler.variables, 0, sizeof(handler.variables));
-	memset(&handler.status_variables, 0, sizeof(handler.status_variables));
 	auto resource = MCP_Endpoint_Test::make_resource(&handler, "config");
 
 	std::string result = MCP_Endpoint_Test::call_create_jsonrpc_response(
@@ -197,8 +195,6 @@ static void test_jsonrpc_response_with_string_id() {
 
 static void test_jsonrpc_response_with_numeric_id() {
 	MCP_Threads_Handler handler;
-	memset(&handler.variables, 0, sizeof(handler.variables));
-	memset(&handler.status_variables, 0, sizeof(handler.status_variables));
 	auto resource = MCP_Endpoint_Test::make_resource(&handler, "config");
 
 	std::string result = MCP_Endpoint_Test::call_create_jsonrpc_response(
@@ -213,8 +209,6 @@ static void test_jsonrpc_response_with_numeric_id() {
 
 static void test_jsonrpc_response_with_null_id() {
 	MCP_Threads_Handler handler;
-	memset(&handler.variables, 0, sizeof(handler.variables));
-	memset(&handler.status_variables, 0, sizeof(handler.status_variables));
 	auto resource = MCP_Endpoint_Test::make_resource(&handler, "config");
 
 	std::string result = MCP_Endpoint_Test::call_create_jsonrpc_response(
@@ -233,8 +227,6 @@ static void test_jsonrpc_response_with_null_id() {
 
 static void test_jsonrpc_error_parse_error() {
 	MCP_Threads_Handler handler;
-	memset(&handler.variables, 0, sizeof(handler.variables));
-	memset(&handler.status_variables, 0, sizeof(handler.status_variables));
 	auto resource = MCP_Endpoint_Test::make_resource(&handler, "config");
 
 	std::string result = MCP_Endpoint_Test::call_create_jsonrpc_error(
@@ -250,8 +242,6 @@ static void test_jsonrpc_error_parse_error() {
 
 static void test_jsonrpc_error_method_not_found() {
 	MCP_Threads_Handler handler;
-	memset(&handler.variables, 0, sizeof(handler.variables));
-	memset(&handler.status_variables, 0, sizeof(handler.status_variables));
 	auto resource = MCP_Endpoint_Test::make_resource(&handler, "config");
 
 	std::string result = MCP_Endpoint_Test::call_create_jsonrpc_error(
@@ -266,8 +256,6 @@ static void test_jsonrpc_error_method_not_found() {
 
 static void test_jsonrpc_error_null_id() {
 	MCP_Threads_Handler handler;
-	memset(&handler.variables, 0, sizeof(handler.variables));
-	memset(&handler.status_variables, 0, sizeof(handler.status_variables));
 	auto resource = MCP_Endpoint_Test::make_resource(&handler, "config");
 
 	std::string result = MCP_Endpoint_Test::call_create_jsonrpc_error(
@@ -282,8 +270,6 @@ static void test_jsonrpc_error_null_id() {
 
 static void test_jsonrpc_error_unauthorized() {
 	MCP_Threads_Handler handler;
-	memset(&handler.variables, 0, sizeof(handler.variables));
-	memset(&handler.status_variables, 0, sizeof(handler.status_variables));
 	auto resource = MCP_Endpoint_Test::make_resource(&handler, "config");
 
 	std::string result = MCP_Endpoint_Test::call_create_jsonrpc_error(

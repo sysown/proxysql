@@ -51,6 +51,12 @@ public:
 	ProxySQL_Admin *admin;
 
 	TestDiskUpgrade() {
+		// NOTE: We intentionally skip the ProxySQL_Admin constructor because it
+		// requires GloProxyStats, GloAdmin, and other daemon globals that are
+		// unavailable in unit tests. The disk_upgrade_*() methods only access
+		// this->configdb (a SQLite3DB pointer), so zeroed memory + setting
+		// configdb is sufficient for these tests. This is technically UB in
+		// C++ but is a pragmatic choice for test-only code.
 		void *mem = calloc(1, sizeof(ProxySQL_Admin));
 		admin = reinterpret_cast<ProxySQL_Admin*>(mem);
 		SQLite3DB *db_ = new SQLite3DB();
