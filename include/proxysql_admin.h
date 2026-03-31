@@ -310,6 +310,7 @@ struct processlist_config_t {
 void update_modules_metrics();
 
 class ProxySQL_Admin {
+	friend class TestDiskUpgrade;
 	private:
 	volatile int main_shutdown;
 

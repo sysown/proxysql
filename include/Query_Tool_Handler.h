@@ -209,6 +209,9 @@ private:
 	// Friend function for tracking tool invocations
 	friend void track_tool_invocation(Query_Tool_Handler*, const std::string&, const std::string&, const std::string&, unsigned long long);
 
+	// Friend class for unit testing private methods
+	friend class QueryToolHandlerUnitTest;
+
 public:
 	/**
 	 * @brief Constructor (creates catalog and harvester)
@@ -253,6 +256,16 @@ public:
 	 */
 	SQLite3_result* get_tool_usage_stats_resultset(bool reset = false);
 };
+
+// Free helper functions (defined in Query_Tool_Handler.cpp, exposed for unit testing)
+std::string validate_sql_identifier_sqlite(const std::string& identifier);
+std::string escape_string_literal(const std::string& value);
+bool is_pgsql_protocol(const std::string& protocol);
+bool is_runtime_online_status(const std::string& status);
+std::string uppercase_or_unknown(const char* s);
+std::string json_string(const nlohmann::json& j, const std::string& key, const std::string& default_val = "");
+int json_int(const nlohmann::json& j, const std::string& key, int default_val = 0);
+double json_double(const nlohmann::json& j, const std::string& key, double default_val = 0.0);
 
 #endif /* PROXYSQLGENAI */
 

@@ -58,6 +58,17 @@ if [ "${TOTAL_GROUPS}" -eq 0 ]; then
     exit 1
 fi
 
+# Verify all compiled tests are registered in groups.json
+GROUPS_DIR="${REPO_ROOT}/test/tap/groups"
+if [ -f "${GROUPS_DIR}/check_groups.py" ]; then
+    echo "Checking groups.json completeness..."
+    if ! python3 "${GROUPS_DIR}/check_groups.py" --tap-root "${REPO_ROOT}/test/tap"; then
+        echo "ERROR: Compiled tests missing from groups.json. Fix before running CI."
+        exit 1
+    fi
+    echo ""
+fi
+
 echo "=========================================="
 echo "Parallel TAP Group Execution"
 echo "=========================================="
