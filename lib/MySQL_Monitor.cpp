@@ -4685,7 +4685,7 @@ void* monitor_dns_resolver_thread(const std::vector<DNS_Resolve_Data*>& dns_reso
 	        always fail in connect or bind. */
 	hints.ai_flags = AI_ADDRCONFIG;
 	char* resolution_family = GloMTH ? GloMTH->get_variable_string((char *)"resolution_family") : NULL;
-	hints.ai_family = mysql_resolution_family_to_ai_family(resolution_family);     /*includes: IPv4, IPv6*/
+	hints.ai_family = mysql_resolution_family_to_ai_family(resolution_family);
 	if (resolution_family) {
 		free(resolution_family);
 	}

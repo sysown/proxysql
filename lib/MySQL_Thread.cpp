@@ -1305,7 +1305,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_local_dns_cache_ttl = 300000;
 	variables.monitor_local_dns_cache_refresh_interval = 60000;
 	variables.monitor_local_dns_resolver_queue_maxsize = 128;
-	variables.resolution_family=strdup((char *)"system");
+	variables.resolution_family = strdup((char *)"system");
 	variables.monitor_username=strdup((char *)"monitor");
 	variables.monitor_password=strdup((char *)"monitor");
 	variables.monitor_replication_lag_use_percona_heartbeat=strdup((char *)"");
