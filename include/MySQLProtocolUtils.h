@@ -48,4 +48,21 @@ size_t mysql_build_packet(
 	unsigned char *out_buf
 );
 
+/**
+ * @brief Parse a MySQL ERR packet payload to extract errno and error message.
+ *
+ * ERR packet format: 0xFF + errno(2) + ['#' + sqlstate(5)] + message
+ *
+ * @param payload    Full ERR packet payload (starting with 0xFF).
+ * @param len        Length of payload.
+ * @param out_errno  [out] MySQL error number.
+ * @param out_msg    [out] Pointer into payload where error message starts.
+ * @param out_msg_len [out] Length of error message.
+ * @return true if parsed successfully, false if payload too short.
+ */
+bool mysql_parse_err_packet(
+    const unsigned char* payload, size_t len,
+    uint16_t* out_errno, const char** out_msg, size_t* out_msg_len
+);
+
 #endif // MYSQL_PROTOCOL_UTILS_H
