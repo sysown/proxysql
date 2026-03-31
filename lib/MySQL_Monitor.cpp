@@ -26,6 +26,7 @@ using json = nlohmann::json;
 #include "ProxySQL_Cluster.hpp"
 #include "proxysql.h"
 #include "cpp.h"
+#include "MySQL_Resolution.h"
 #include "proxysql_utils.h"
 
 #include "thread.h"
@@ -4673,17 +4674,21 @@ void* monitor_dns_resolver_thread(const std::vector<DNS_Resolve_Data*>& dns_reso
 	/* set hints for getaddrinfo */
 	memset(&hints, 0, sizeof(hints));
 	hints.ai_protocol = IPPROTO_TCP; 
-	hints.ai_family = AF_UNSPEC;     /*includes: IPv4, IPv6*/
 	hints.ai_socktype = SOCK_STREAM;
 	/* AI_ADDRCONFIG: IPv4 addresses are returned in the list pointed to by res only if the
        local system has at least one IPv4 address configured, and IPv6
        addresses are returned only if the local system has at least one
        IPv6 address configured.  The loopback address is not considered
        for this case as valid as a configured address.  This flag is
-       useful on, for example, IPv4-only systems, to ensure that
-       getaddrinfo() does not return IPv6 socket addresses that would
-       always fail in connect or bind. */
+	        useful on, for example, IPv4-only systems, to ensure that
+	        getaddrinfo() does not return IPv6 socket addresses that would
+	        always fail in connect or bind. */
 	hints.ai_flags = AI_ADDRCONFIG;
+	char* resolution_family = GloMTH ? GloMTH->get_variable_string((char *)"resolution_family") : NULL;
+	hints.ai_family = mysql_resolution_family_to_ai_family(resolution_family);     /*includes: IPv4, IPv6*/
+	if (resolution_family) {
+		free(resolution_family);
+	}
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Resolving hostname:[%s] to its mapped IP address.\n", dns_resolve_data->hostname.c_str());
 	int gai_rc = getaddrinfo(dns_resolve_data->hostname.c_str(), NULL, &hints, &res);
 	
