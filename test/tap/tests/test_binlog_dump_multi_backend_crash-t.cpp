@@ -91,28 +91,8 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
-	// Save and lower wait_timeout
-	long orig_wait_timeout = 28800;
-	if (mysql_query(backend, "SELECT @@global.wait_timeout") == 0) {
-		MYSQL_RES* res = mysql_store_result(backend);
-		if (res) {
-			MYSQL_ROW row = mysql_fetch_row(res);
-			if (row && row[0]) orig_wait_timeout = strtol(row[0], NULL, 10);
-			mysql_free_result(res);
-		}
-	}
-	diag("Original wait_timeout: %ld, setting to %d", orig_wait_timeout, SHORT_WAIT_TIMEOUT);
-
-	std::string set_wt = "SET GLOBAL wait_timeout=" + std::to_string(SHORT_WAIT_TIMEOUT);
-	if (mysql_query(backend, set_wt.c_str()) != 0) {
-		diag("Failed to set wait_timeout: %s", mysql_error(backend));
-		mysql_close(backend);
-		mysql_close(admin);
-		return exit_status();
-	}
-
 	// ========================================================================
-	// Step 2: Discover hostgroup topology and set up routing
+	// Step 2: Discover hostgroup topology
 	// ========================================================================
 	int writer_hg = -1;
 	int reader_hg = -1;
@@ -139,6 +119,27 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 	diag("Discovered hostgroups: writer=%d, reader=%d", writer_hg, reader_hg);
+
+	// Save and lower wait_timeout (after skip checks so early returns don't
+	// leave it modified — addresses Copilot review feedback)
+	long orig_wait_timeout = 28800;
+	if (mysql_query(backend, "SELECT @@global.wait_timeout") == 0) {
+		MYSQL_RES* res = mysql_store_result(backend);
+		if (res) {
+			MYSQL_ROW row = mysql_fetch_row(res);
+			if (row && row[0]) orig_wait_timeout = strtol(row[0], NULL, 10);
+			mysql_free_result(res);
+		}
+	}
+	diag("Original wait_timeout: %ld, setting to %d", orig_wait_timeout, SHORT_WAIT_TIMEOUT);
+
+	std::string set_wt = "SET GLOBAL wait_timeout=" + std::to_string(SHORT_WAIT_TIMEOUT);
+	if (mysql_query(backend, set_wt.c_str()) != 0) {
+		diag("Failed to set wait_timeout: %s", mysql_error(backend));
+		mysql_close(backend);
+		mysql_close(admin);
+		return exit_status();
+	}
 
 	// Set up query rules: ^SELECT → reader_hg (multiplex=0), all else → writer_hg (default)
 	MYSQL_QUERY(admin, "DELETE FROM mysql_query_rules");
@@ -191,6 +192,37 @@ int main(int argc, char** argv) {
 	if (mysql_query(proxy, "DO 1") != 0) {
 		diag("DO 1 failed: %s", mysql_error(proxy));
 		goto cleanup;
+	}
+
+	// Verify connections were established to both hostgroups.
+	// We check ConnOK (total connections ever made) rather than ConnUsed,
+	// because the writer backend may already be returned to the pool after
+	// DO completes (it's still in the session's mybes array though).
+	{
+		bool has_writer = false, has_reader = false;
+		std::string pool_q = "SELECT hostgroup, ConnOK FROM stats_mysql_connection_pool "
+			"WHERE hostgroup IN (" + std::to_string(writer_hg) + "," + std::to_string(reader_hg) + ") "
+			"AND ConnOK > 0";
+		if (mysql_query(admin, pool_q.c_str()) == 0) {
+			MYSQL_RES* res = mysql_store_result(admin);
+			if (res) {
+				MYSQL_ROW row;
+				while ((row = mysql_fetch_row(res))) {
+					int hg = atoi(row[0]);
+					diag("  Connection pool: HG%d has %s total connections (ConnOK)", hg, row[1]);
+					if (hg == writer_hg) has_writer = true;
+					if (hg == reader_hg) has_reader = true;
+				}
+				mysql_free_result(res);
+			}
+		}
+		if (!has_writer || !has_reader) {
+			diag("PRECONDITION FAILED: Connections not established to both hostgroups "
+				"(writer=%s, reader=%s). Test cannot reproduce #5556.",
+				has_writer ? "yes" : "NO", has_reader ? "yes" : "NO");
+			goto cleanup;
+		}
+		diag("Confirmed connections to both writer HG%d and reader HG%d", writer_hg, reader_hg);
 	}
 
 	// ========================================================================
