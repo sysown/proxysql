@@ -4684,11 +4684,7 @@ void* monitor_dns_resolver_thread(const std::vector<DNS_Resolve_Data*>& dns_reso
 	        getaddrinfo() does not return IPv6 socket addresses that would
 	        always fail in connect or bind. */
 	hints.ai_flags = AI_ADDRCONFIG;
-	char* resolution_family = GloMTH ? GloMTH->get_variable_string((char *)"resolution_family") : NULL;
-	hints.ai_family = mysql_resolution_family_to_ai_family(resolution_family);
-	if (resolution_family) {
-		free(resolution_family);
-	}
+	hints.ai_family = mysql_resolution_family_to_ai_family(mysql_thread___resolution_family);
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Resolving hostname:[%s] to its mapped IP address.\n", dns_resolve_data->hostname.c_str());
 	int gai_rc = getaddrinfo(dns_resolve_data->hostname.c_str(), NULL, &hints, &res);
 	

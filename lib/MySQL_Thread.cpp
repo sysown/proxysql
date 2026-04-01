@@ -3250,6 +3250,7 @@ MySQL_Thread::~MySQL_Thread() {
 	if (my_idle_conns)
 		free(my_idle_conns);
 
+	if (mysql_thread___resolution_family) { free(mysql_thread___resolution_family); mysql_thread___resolution_family=NULL; }
 	if (mysql_thread___monitor_username) { free(mysql_thread___monitor_username); mysql_thread___monitor_username=NULL; }
 	if (mysql_thread___monitor_password) { free(mysql_thread___monitor_password); mysql_thread___monitor_password=NULL; }
 	if (mysql_thread___monitor_replication_lag_use_percona_heartbeat) {
@@ -4673,6 +4674,7 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(monitor_local_dns_cache_ttl);
 	REFRESH_VARIABLE_INT(monitor_local_dns_cache_refresh_interval);
 	REFRESH_VARIABLE_INT(monitor_local_dns_resolver_queue_maxsize);
+	REFRESH_VARIABLE_CHAR(resolution_family);
 
 	REFRESH_VARIABLE_CHAR(firewall_whitelist_errormsg);
 	REFRESH_VARIABLE_CHAR(init_connect);
