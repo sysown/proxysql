@@ -15,6 +15,9 @@
 
 #include "proxysql_gtid.h"
 
+#include <set>
+#include <sstream>
+
 static const std::string UUID_A = "aaaaaaaa000011112222aaaaaaaaaaaa";
 static const std::string UUID_B = "bbbbbbbb333344445555bbbbbbbbbbbb";
 
@@ -258,12 +261,19 @@ static void test_to_string() {
 		gs.add(UUID_B, TrxId_Interval(10, 30));
 		gs.add(UUID_B, "31-50");
 		std::string result = gs.to_string();
-		ok(result.find("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:9-30") != std::string::npos,
-			"to_string: contains UUID A range 9-30");
-		ok(result.find("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:40-50") != std::string::npos,
-			"to_string: contains UUID A range 40-50");
-		ok(result.find("bbbbbbbb-3333-4444-5555-bbbbbbbbbbbb:10-50") != std::string::npos,
-			"to_string: contains UUID B range 10-50");
+
+		std::set<std::string> parts;
+		std::istringstream iss(result);
+		std::string part;
+		while (std::getline(iss, part, ',')) {
+			parts.insert(part);
+		}
+
+		ok(parts.size() == 2, "to_string: two UUID sets separated by comma");
+		ok(parts.count("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:9-30:40-50") == 1,
+			"to_string: UUID A format is uuid:9-30:40-50");
+		ok(parts.count("bbbbbbbb-3333-4444-5555-bbbbbbbbbbbb:10-50") == 1,
+			"to_string: UUID B format is uuid:10-50");
 	}
 }
 

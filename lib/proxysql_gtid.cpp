@@ -20,6 +20,13 @@ TrxId_Interval::TrxId_Interval(const trxid_t trxid) : TrxId_Interval(trxid, trxi
 
 // Initializes a trxid interval from a C string buffer, in [trxid]{-[trxid]} format.
 TrxId_Interval::TrxId_Interval(const char *s) {
+	start = 0;
+	end = 0;
+
+	if (s == nullptr) {
+		return;
+	}
+
 	trxid_t _start = 0, _end = 0;
 
 	if (sscanf(s, "%ld-%ld", &_start, &_end) == 2) {
@@ -128,14 +135,8 @@ GTID_Set::GTID_Set() {}
 
 // Creates a copy of this GTID set.
 GTID_Set GTID_Set::copy() {
-	auto cp = GTID_Set();
-
-	for (auto const& x : map) {
-		for (auto const& iv : x.second) {
-			cp.map[x.first].emplace_back(iv);
-		}
-	}
-
+	GTID_Set cp;
+	cp.map = map;
 	return cp;
 }
 
@@ -154,8 +155,11 @@ bool GTID_Set::add(const std::string& uuid, const TrxId_Interval& iv) {
 	}
 
 	if (!it->second.empty()) {
-		if (it->second.back().append(iv)) {
-			// if appending to the last trxid range succeded, gtid_executed was modified, but remains optimized - nothing else to do
+		auto& last = it->second.back();
+		if (last.contains(iv)) {
+			return false;
+		}
+		if (last.append(iv)) {
 			return true;
 		}
 	}
@@ -230,18 +234,21 @@ const bool GTID_Set::has_gtid(const std::string& uuid, const trxid_t trxid) {
 // Yields a string representation for a GTID set.
 const std::string GTID_Set::to_string(void) {
 	std::stringstream out;
+	bool first_uuid = true;
 	for (auto it=map.begin(); it!=map.end(); ++it) {
+		if (!first_uuid) {
+			out << ",";
+		}
 		std::string uuid = it->first;
 		uuid.insert(8,"-");
 		uuid.insert(13,"-");
 		uuid.insert(18,"-");
 		uuid.insert(23,"-");
+		out << uuid;
 		for (auto itr = it->second.begin(); itr != it->second.end(); ++itr) {
-			if(itr != it->second.begin()) {
-				out << ",";
-			}
-			out << uuid << ":" << itr->to_string();
+			out << ":" << itr->to_string();
 		}
+		first_uuid = false;
 	}
 
 	return out.str();
