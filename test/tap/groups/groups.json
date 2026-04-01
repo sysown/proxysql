@@ -229,7 +229,7 @@
   "test_clickhouse_server_libmysql-t" : [ "legacy-clickhouse-g1","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3" ],
   "test_client_limit_error-t" : [ "todo-g1" ],
   "test_cluster1-t" : [ "legacy-g3","mysql84-g5","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3" ],
-  "test_cluster_sync-t" : [ "legacy-g5","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3" ],
+  "test_cluster_sync-t" : [ "legacy-g5","mysql84-g5","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3" ],
   "test_cluster_sync_mysql_servers-t" : [ "legacy-g3","mysql84-g5","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3" ],
   "test_com_binlog_dump_enables_fast_forward-t" : [ "legacy-binlog-g1","mysql84-binlog-g1" ],
   "test_com_register_slave_enables_fast_forward-t" : [ "legacy-g3","mysql84-binlog-g1","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3" ],
