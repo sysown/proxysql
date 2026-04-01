@@ -252,6 +252,7 @@
   "test_auth_methods-t" : [ "mysql84-g2","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2" ],
   "test_auto_increment_delay_multiplex-t" : [ "legacy-g2","mysql84-g2","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2" ],
   "test_backend_conn_ping-t" : [ "legacy-g2","mysql84-g2","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2" ],
+  "test_binlog_dump_multi_backend_crash-t" : [ "legacy-binlog-g1" ],
   "test_binlog_fast_forward-t" : [ "legacy-binlog-g1" ],
   "test_binlog_reader-t" : [ "legacy-binlog-g1" ],
   "test_binlog_reader_uses_previous_hostgroup-t" : [ "legacy-binlog-g1" ],

@@ -5101,6 +5101,33 @@ int MySQL_Session::GPFC_Replication_SwitchToFastForward(PtrSize_t& pkt, unsigned
 		set_status(FAST_FORWARD); // we can set status to FAST_FORWARD
 	}
 
+	// Issue #5556: Clean up idle backends from other hostgroups.
+	// When transitioning to FAST_FORWARD, only the active backend (mybe) is
+	// needed. Any other backends from different hostgroups are now idle and
+	// will never be used again. If left alive, they can receive POLLIN events
+	// (e.g. from MySQL wait_timeout) which causes a crash in handler() because
+	// ASYNC_IDLE is not handled in the switch-case.
+	{
+		unsigned int i = 0;
+		while (i < mybes->len) {
+			MySQL_Backend* _mybe = (MySQL_Backend*)mybes->index(i);
+			if (_mybe != mybe) {
+				if (_mybe->server_myds && _mybe->server_myds->myconn) {
+					proxy_info(
+						"Cleaning up idle backend from hostgroup %d during FAST_FORWARD transition\n",
+						_mybe->hostgroup_id
+					);
+					_mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
+				}
+				mybes->remove_index_fast(i);
+				_mybe->reset();
+				delete _mybe;
+			} else {
+				i++;
+			}
+		}
+	}
+
 	return 0;
 }
 
