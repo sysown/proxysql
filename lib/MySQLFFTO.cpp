@@ -7,6 +7,7 @@
 #include "MySQL_Protocol.h"
 #include "MySQL_Variables.h"
 #include "MySQLFFTO.hpp"
+#include "MySQLProtocolUtils.h"
 #ifndef SPOOKYV2
 #include "SpookyV2.h"
 #define SPOOKYV2
@@ -17,6 +18,7 @@
 #include <algorithm>
 
 extern class MySQL_Query_Processor* GloMyQPro;
+extern MySQL_HostGroups_Manager* MyHGM;
 
 /**
  * @brief Helper function to read a length-encoded integer from a MySQL packet buffer.
@@ -187,6 +189,7 @@ void MySQLFFTO::process_server_packet(const unsigned char* data, size_t len) {
             m_state = IDLE;
             m_pending_prepare_query.clear();
         } else if (first_byte == 0xFF) {
+            report_error(data, len);
             m_state = IDLE;
             m_pending_prepare_query.clear();
         }
@@ -201,6 +204,7 @@ void MySQLFFTO::process_server_packet(const unsigned char* data, size_t len) {
         } else if (first_byte == 0xFF) { // ERR
             unsigned long long duration = monotonic_time() - m_query_start_time;
             report_query_stats(m_current_query, duration);
+            report_error(data, len);
             m_state = IDLE;
             clear_active_query();
         } else if (first_byte == 0xFE && len < 9) { // EOF
@@ -217,6 +221,7 @@ void MySQLFFTO::process_server_packet(const unsigned char* data, size_t len) {
         } else if (first_byte == 0xFF) { // ERR while reading column metadata
             unsigned long long duration = monotonic_time() - m_query_start_time;
             report_query_stats(m_current_query, duration);
+            report_error(data, len);
             m_state = IDLE;
             clear_active_query();
         }
@@ -234,6 +239,7 @@ void MySQLFFTO::process_server_packet(const unsigned char* data, size_t len) {
         } else if (first_byte == 0xFF) { // ERR
             unsigned long long duration = monotonic_time() - m_query_start_time;
             report_query_stats(m_current_query, duration, 0, m_rows_sent);
+            report_error(data, len);
             m_state = IDLE;
             clear_active_query();
         } else {
@@ -278,6 +284,47 @@ void MySQLFFTO::report_query_stats(const std::string& query, unsigned long long 
         if (digest_text != qp.buf) free(digest_text);
     }
     if (fst_cmnt) free(fst_cmnt);
+}
+
+void MySQLFFTO::report_error(const unsigned char* data, size_t len) {
+    if (!m_session || !MyHGM) return;
+    if (!m_session->client_myds || !m_session->client_myds->myconn ||
+        !m_session->client_myds->myconn->userinfo) return;
+
+    uint16_t err_no = 0;
+    const char* errmsg = nullptr;
+    size_t errmsg_len = 0;
+    if (!mysql_parse_err_packet(data, len, &err_no, &errmsg, &errmsg_len)) return;
+
+    auto* ui = m_session->client_myds->myconn->userinfo;
+    if (!ui->username || !ui->schemaname) return;
+
+    // Build a null-terminated copy of the error message
+    std::string msg(errmsg ? errmsg : "", errmsg_len);
+
+    // Get backend server info if available
+    char* hostname = (char*)"";
+    int port = 0;
+    int hostgroup = m_session->current_hostgroup;
+    if (m_session->mybe && m_session->mybe->server_myds &&
+        m_session->mybe->server_myds->myconn &&
+        m_session->mybe->server_myds->myconn->parent) {
+        auto* parent = m_session->mybe->server_myds->myconn->parent;
+        hostname = parent->address;
+        port = parent->port;
+        hostgroup = parent->myhgc->hid;
+    }
+
+    char* client_addr = (char*)"unknown";
+    if (m_session->client_myds->addr.addr) {
+        client_addr = m_session->client_myds->addr.addr;
+    }
+
+    MyHGM->add_mysql_errors(
+        hostgroup, hostname, port,
+        ui->username, client_addr, ui->schemaname,
+        err_no, (char*)msg.c_str()
+    );
 }
 
 std::size_t MySQLFFTO::get_buffered_size() const {

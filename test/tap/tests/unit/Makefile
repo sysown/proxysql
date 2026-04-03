@@ -197,17 +197,21 @@ ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c MySQLFFTO),0)
 	PSQL31 := -DPROXYSQL31
 endif
 PSQLTSDB :=
-ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c ProxySQL_TSDB),0)
+ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c init_tsdb_variables),0)
 	PROXYSQLTSDB := 1
 	PSQLTSDB := -DPROXYSQLTSDB
 endif
+PSQLDEBUG :=
+ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -cw 'init_debug_struct'),0)
+	PSQLDEBUG := -DDEBUG
+endif
 
-OPT := $(STDCPP) -O0 -ggdb $(PSQLCH) $(PSQLGA) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) \
+OPT := $(STDCPP) -O0 -ggdb $(PSQLCH) $(PSQLGA) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLDEBUG) \
 	   -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN) \
 	   -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR)
 
 ifeq ($(UNAME_S),Darwin)
-	OPT := $(STDCPP) -O0 -ggdb $(PSQLCH) $(PSQLGA) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) \
+	OPT := $(STDCPP) -O0 -ggdb $(PSQLCH) $(PSQLGA) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLDEBUG) \
 		   -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
 endif
 
@@ -253,7 +257,38 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	pgsql_error_classifier_unit-t \
 	pgsql_monitor_unit-t \
 	mysql_error_classifier_unit-t \
-	backend_sync_unit-t
+	backend_sync_unit-t \
+	mysql_encode_unit-t \
+	pgsql_variables_validator_unit-t \
+	proxysql_utils_unit-t \
+	gen_utils_unit-t \
+	proxy_protocol_unit-t \
+	pgsql_txn_state_unit-t \
+	genai_anomaly_unit-t \
+	genai_fts_string_unit-t \
+	sqlite3db_unit-t \
+	pgsql_error_helper_unit-t \
+	genai_stats_parsing_unit-t \
+	genai_llm_clients_unit-t \
+	charset_find_unit-t \
+	genai_query_handler_unit-t \
+	genai_mcp_endpoint_unit-t \
+	genai_mcp_thread_unit-t \
+	config_validation_unit-t \
+	config_write_unit-t \
+	query_processor_firewall_unit-t \
+	statistics_unit-t \
+	log_utils_unit-t \
+	genai_thread_unit-t \
+	listen_validator_unit-t \
+	c_tokenizer_unit-t \
+	pgsql_tokenizer_unit-t \
+	ezoption_parser_unit-t \
+	genai_discovery_schema_unit-t \
+	gtid_utils_unit-t \
+	genai_mysql_catalog_unit-t \
+	admin_disk_upgrade_unit-t \
+	glovars_unit-t
 
 .PHONY: all
 all: $(UNIT_TESTS)
@@ -266,6 +301,16 @@ ALLOW_MULTI_DEF :=
 ifneq ($(UNAME_S),Darwin)
 	ALLOW_MULTI_DEF := -Wl,--allow-multiple-definition
 endif
+
+# Standalone header-only tests: need tap.o + noise stubs, no libproxysql.a
+$(ODIR)/tap_noise_stubs.o: | $(ODIR)
+	@printf '#include <vector>\n#include <string>\n#include <mutex>\nstd::vector<std::string> noise_failures;\nstd::mutex noise_failure_mutex;\nextern "C" { void stop_noise_tools(){} int get_noise_tools_count(){return 0;} }\n' | \
+		$(CXX) -x c++ -c -o $@ - $(STDCPP)
+
+ezoption_parser_unit-t: ezoption_parser_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include \
+		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) -lpthread -o $@
 
 # Pattern rule: all unit tests use the same compile + link flags.
 # Each test binary is built from its .cpp source, linked against

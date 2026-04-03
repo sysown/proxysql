@@ -57,3 +57,24 @@ size_t mysql_build_packet(
 	}
 	return payload_len + 4;
 }
+
+bool mysql_parse_err_packet(
+    const unsigned char* payload, size_t len,
+    uint16_t* out_errno, const char** out_msg, size_t* out_msg_len
+) {
+    // Minimum: 0xFF + 2 bytes errno = 3 bytes
+    if (!payload || len < 3 || payload[0] != 0xFF) return false;
+
+    *out_errno = payload[1] | (static_cast<uint16_t>(payload[2]) << 8);
+
+    if (len >= 9 && payload[3] == '#') {
+        // sqlstate at [4..8], message at [9..]
+        *out_msg = reinterpret_cast<const char*>(payload + 9);
+        *out_msg_len = len - 9;
+    } else {
+        // no sqlstate marker — message starts at [3]
+        *out_msg = reinterpret_cast<const char*>(payload + 3);
+        *out_msg_len = len - 3;
+    }
+    return true;
+}

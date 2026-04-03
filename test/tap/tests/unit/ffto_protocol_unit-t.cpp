@@ -16,6 +16,7 @@
 #include "proxysql.h"
 #include "MySQLProtocolUtils.h"
 #include "PgSQLCommandComplete.h"
+#include "PgSQLErrorFields.h"
 
 #include <cstring>
 #include <vector>
@@ -247,11 +248,118 @@ static void test_mysql_multi_packet_build() {
 }
 
 // ============================================================================
+// 6. MySQL: ERR packet parsing
+// ============================================================================
+
+static void test_mysql_err_packet_basic() {
+    unsigned char payload[] = {
+        0xFF,
+        0x15, 0x04,
+        '#',
+        '2','8','0','0','0',
+        'A','c','c','e','s','s',' ','d','e','n','i','e','d'
+    };
+    uint16_t err_no = 0;
+    const char* errmsg = nullptr;
+    size_t errmsg_len = 0;
+    bool ok_parse = mysql_parse_err_packet(payload, sizeof(payload), &err_no, &errmsg, &errmsg_len);
+    ok(ok_parse == true, "ERR parse: basic packet parsed successfully");
+    ok(err_no == 1045, "ERR parse: errno = 1045");
+    ok(errmsg_len == 13 && memcmp(errmsg, "Access denied", 13) == 0,
+       "ERR parse: message = 'Access denied'");
+}
+
+static void test_mysql_err_packet_no_sqlstate() {
+    unsigned char payload[] = {
+        0xFF,
+        0x01, 0x00,
+        'S','o','m','e',' ','e','r','r','o','r'
+    };
+    uint16_t err_no = 0;
+    const char* errmsg = nullptr;
+    size_t errmsg_len = 0;
+    bool ok_parse = mysql_parse_err_packet(payload, sizeof(payload), &err_no, &errmsg, &errmsg_len);
+    ok(ok_parse == true, "ERR parse no-sqlstate: parsed");
+    ok(err_no == 1, "ERR parse no-sqlstate: errno = 1");
+    ok(errmsg_len == 10 && memcmp(errmsg, "Some error", 10) == 0,
+       "ERR parse no-sqlstate: message correct");
+}
+
+static void test_mysql_err_packet_truncated() {
+    unsigned char payload[] = {0xFF};
+    uint16_t err_no = 0;
+    const char* errmsg = nullptr;
+    size_t errmsg_len = 0;
+    bool ok_parse = mysql_parse_err_packet(payload, 1, &err_no, &errmsg, &errmsg_len);
+    ok(ok_parse == false, "ERR parse truncated: returns false");
+}
+
+static void test_mysql_err_packet_empty_message() {
+    unsigned char payload[] = {
+        0xFF,
+        0x00, 0x04,
+        '#',
+        '4','2','0','0','0'
+    };
+    uint16_t err_no = 0;
+    const char* errmsg = nullptr;
+    size_t errmsg_len = 0;
+    bool ok_parse = mysql_parse_err_packet(payload, sizeof(payload), &err_no, &errmsg, &errmsg_len);
+    ok(ok_parse == true, "ERR parse empty msg: parsed");
+    ok(err_no == 1024, "ERR parse empty msg: errno = 1024");
+    ok(errmsg_len == 0, "ERR parse empty msg: empty message");
+}
+
+// ============================================================================
+// 7. PgSQL: ErrorResponse field parsing
+// ============================================================================
+
+static void test_pgsql_error_fields_basic() {
+    unsigned char payload[] = {
+        'S','E','R','R','O','R','\0',
+        'C','4','2','6','0','1','\0',
+        'M','s','y','n','t','a','x',' ','e','r','r','o','r','\0',
+        '\0'
+    };
+    PgSQLErrorResult r = pgsql_parse_error_response(payload, sizeof(payload));
+    ok(r.parsed == true, "PgSQL error parse: basic parsed");
+    ok(strcmp(r.sqlstate, "42601") == 0, "PgSQL error parse: sqlstate = 42601");
+    ok(r.message != nullptr && strncmp(r.message, "syntax error", 12) == 0,
+       "PgSQL error parse: message starts with 'syntax error'");
+}
+
+static void test_pgsql_error_fields_missing_code() {
+    unsigned char payload[] = {
+        'S','E','R','R','O','R','\0',
+        'M','s','o','m','e',' ','e','r','r','\0',
+        '\0'
+    };
+    PgSQLErrorResult r = pgsql_parse_error_response(payload, sizeof(payload));
+    ok(r.parsed == true, "PgSQL error no-code: parsed");
+    ok(strlen(r.sqlstate) == 0, "PgSQL error no-code: empty sqlstate");
+    ok(r.message != nullptr && strncmp(r.message, "some err", 8) == 0,
+       "PgSQL error no-code: message correct");
+}
+
+static void test_pgsql_error_fields_empty() {
+    unsigned char payload[] = {'\0'};
+    PgSQLErrorResult r = pgsql_parse_error_response(payload, 1);
+    ok(r.parsed == true, "PgSQL error empty: parsed (no fields)");
+    ok(strlen(r.sqlstate) == 0, "PgSQL error empty: empty sqlstate");
+    ok(r.message == nullptr, "PgSQL error empty: null message");
+}
+
+static void test_pgsql_error_fields_zero_length() {
+    PgSQLErrorResult r = pgsql_parse_error_response(nullptr, 0);
+    ok(r.parsed == false, "PgSQL error null: returns false");
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
 int main() {
-	plan(36);
+	plan(56);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -285,6 +393,18 @@ int main() {
 	// Total: 1+3+3+1+2+2+4+3+2+1+1+1+1+2+1+1+1+2+4 = 36... recount
 	// 1 (init) + 3+3+1+2+2 (lenenc=11) + 4+3+2 (build=9) + 1+1 (ok=2) +
 	// 1+1+2+1+1+1 (pgsql=7) + 2+4 (frag=6) = 1+11+9+2+7+6 = 36
+
+	// MySQL ERR packet parsing
+	test_mysql_err_packet_basic();          // 3
+	test_mysql_err_packet_no_sqlstate();    // 3
+	test_mysql_err_packet_truncated();      // 1
+	test_mysql_err_packet_empty_message();  // 3
+
+	// PgSQL ErrorResponse parsing
+	test_pgsql_error_fields_basic();        // 3
+	test_pgsql_error_fields_missing_code(); // 3
+	test_pgsql_error_fields_empty();        // 3
+	test_pgsql_error_fields_zero_length();  // 1
 
 	test_cleanup_minimal();
 	return exit_status();

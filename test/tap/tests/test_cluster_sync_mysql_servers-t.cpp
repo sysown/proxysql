@@ -604,6 +604,12 @@ int launch_proxysql_replica(const CommandLine& cl, uint32_t r_port, const std::s
 	const std::string& stats_db = workdir + "test_cluster_sync_config/test_cluster_sync_" + config_filename + "/proxysql_stats.db";
 	const std::string& fmt_config_file = workdir + "test_cluster_sync_config/test_cluster_sync_" + config_filename + "/test_cluster_sync.cnf";
 
+	// Remove stale databases from previous runs so ProxySQL reads the
+	// config file instead of loading the persisted (and potentially
+	// mismatched) configuration from a leftover proxysql.db.
+	remove(proxysql_db.c_str());
+	remove(stats_db.c_str());
+
 	// Setup the config file using the env variables in 'CommandLine'
 	if (setup_config_file(cl, r_port, config_filename)) {
 		return EXIT_FAILURE;

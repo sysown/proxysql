@@ -30,6 +30,8 @@ using json = nlohmann::json;
  * endpoint-specific tools.
  */
 class MCP_JSONRPC_Resource : public httpserver::http_resource {
+	// Allow unit tests to access private members for testing
+	friend class MCP_Endpoint_Test;
 private:
 	MCP_Threads_Handler* handler;       ///< Pointer to MCP handler for variable access
 	MCP_Tool_Handler* tool_handler;     ///< Pointer to endpoint's dedicated tool handler
@@ -132,6 +134,19 @@ private:
 	json handle_resources_list();
 
 public:
+	/**
+	 * @brief Validate a Bearer token from an Authorization header value
+	 *
+	 * Pure validation function that extracts and compares a Bearer token
+	 * from the given Authorization header against an expected token.
+	 * Handles whitespace trimming and "Bearer " prefix validation.
+	 *
+	 * @param auth_header The full Authorization header value (e.g., "Bearer mytoken")
+	 * @param expected_token The expected token to compare against
+	 * @return true if the token matches, false otherwise
+	 */
+	static bool validate_bearer_token(const std::string& auth_header, const std::string& expected_token);
+
 	/**
 	 * @brief Constructor for MCP_JSONRPC_Resource
 	 *
