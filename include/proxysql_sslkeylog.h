@@ -103,4 +103,19 @@ void proxysql_keylog_attach_callback(SSL_CTX* ssl_ctx);
  */
 void proxysql_keylog_write_line_callback(const SSL* ssl, const char* line);
 
+/**
+ * @brief Register the ProxySQL keylog callback with libpq
+ *
+ * Sets the global SSL keylog callback in libpq so that all PostgreSQL
+ * backend connections (regular, monitor, kill, harvester) will write
+ * TLS secrets to the keylog file.
+ *
+ * Must be called once at ProxySQL startup after proxysql_keylog_init().
+ *
+ * Thread-safety: Safe (should only be called during single-threaded initialization)
+ *
+ * @see PQsetSSLKeyLogCallback
+ */
+void proxysql_keylog_set_pgsql_callback();
+
 #endif // __PROXYSQL_SSLKEYLOG_H

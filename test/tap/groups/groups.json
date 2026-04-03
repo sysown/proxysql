@@ -145,6 +145,7 @@
   "pgsql-reg_test_5415_copy_error_recovery-t" : [ "legacy-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4" ],
   "pgsql-set_parameter_validation_test-t" : [ "legacy-g1","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1" ],
   "pgsql-set_statement_test-t" : [ "legacy-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4" ],
+  "pgsql-ssl_keylog-t" : [ "legacy-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4" ],
   "pgsql-test_malformed_packet-t" : [ "legacy-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4" ],
   "pgsql-transaction_state_comprehensive-t" : [ "legacy-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4" ],
   "pgsql-transaction_variable_state_tracking-t" : [ "legacy-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4" ],
