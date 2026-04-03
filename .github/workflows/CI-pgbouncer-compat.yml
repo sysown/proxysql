@@ -28,7 +28,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq build-essential g++ make
+          sudo apt-get install -y -qq build-essential g++ make libssl-dev
 
       - name: Build unit tests
         working-directory: test/tap/tests/unit
