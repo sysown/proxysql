@@ -3377,6 +3377,16 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			// we will now generate a unique stmt and send it to the client
 			uint32_t new_stmt_id=client_myds->myconn->local_stmts->generate_new_client_stmt_id(stmt_info->statement_id);
 			CurrentQuery.stmt_client_id=new_stmt_id;
+
+			// When first_comment_parsing is set to 1 (before query rules) or 3 (before_and_after query rules),
+			// query rules may strip the min_gtid annotation during STMT_PREPARE. Persist it per client
+			// statement ID so that STMT_EXECUTE can restore the original routing constraint.
+			// For more context, refer to https://github.com/sysown/proxysql/issues/5384
+			int first_comment_parsing = mysql_thread___query_processor_first_comment_parsing;
+			if (first_comment_parsing == 1 || first_comment_parsing == 3) {
+				client_myds->myconn->local_stmts->set_client_min_gtid(new_stmt_id, qpo->min_gtid);
+			}
+
 			client_myds->setDSS_STATE_QUERY_SENT_NET();
 			client_myds->myprot.generate_STMT_PREPARE_RESPONSE(client_myds->pkt_sid+1,stmt_info,new_stmt_id);
 			LogQuery(NULL);
@@ -3492,10 +3502,22 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			// but as we reached here, stmt_meta is not null and we save the metadata
 			sess_STMTs_meta->insert(stmt_global_id,stmt_meta);
 		}
-		// else
 
 		CurrentQuery.stmt_meta=stmt_meta;
 		//current_hostgroup=qpo->destination_hostgroup;
+
+		// When first_comment_parsing is set to 1 (before query rules) or 3 (before_and_after query rules),
+		// query rules may strip the min_gtid annotation during STMT_PREPARE. So we persist it per client
+		// statement ID and restore it during STMT_EXECUTE.
+		// For more context, refer to https://github.com/sysown/proxysql/issues/5384
+		int first_comment_parsing = mysql_thread___query_processor_first_comment_parsing;
+		if (!qpo->min_gtid && (first_comment_parsing == 1 || first_comment_parsing == 3)) {
+			const char *saved_min_gtid = client_myds->myconn->local_stmts->find_client_min_gtid(client_stmt_id);
+			if (saved_min_gtid) {
+				qpo->min_gtid = strdup(saved_min_gtid);
+			}
+		}
+
 		rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt, &lock_hostgroup, ps_type_execute_stmt);
 		if (rc_break==true) {
 			return;
@@ -5619,6 +5641,16 @@ bool MySQL_Session::handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st,
 		CurrentQuery.stmt_client_id=client_stmtid;
 	}
 	CurrentQuery.mysql_stmt=NULL;
+
+	// When first_comment_parsing is set to 1 (before query rules) or 3 (before_and_after query rules),
+	// query rules may strip the min_gtid annotation during STMT_PREPARE. Persist it per client
+	// statement ID so that STMT_EXECUTE can restore the original routing constraint.
+	// For more context, refer to https://github.com/sysown/proxysql/issues/5384
+	int first_comment_parsing = mysql_thread___query_processor_first_comment_parsing;
+	if (previous_status.size() == 0 && (first_comment_parsing == 1 || first_comment_parsing == 3)) {
+		client_myds->myconn->local_stmts->set_client_min_gtid(client_stmtid, qpo->min_gtid);
+	}
+
 	st=status;
 	size_t sts=previous_status.size();
 	if (sts) {
