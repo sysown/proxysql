@@ -68,8 +68,10 @@ static int cmd_import_pgbouncer(int argc, const char* argv[]) {
         for (const auto& err : result.errors) {
             std::cerr << "  ERROR: " << err.message << "\n";
         }
-        // Still show the dry-run output so the user can see what would have been converted
-        std::cout << PgBouncer::ConfigConverter::format_dry_run(result, config_path, strict);
+        // Show dry-run output on stderr only (never stdout — it could be piped to mysql)
+        if (dry_run) {
+            std::cerr << "\n" << PgBouncer::ConfigConverter::format_dry_run(result, config_path, strict);
+        }
         return 1;
     }
 
@@ -98,7 +100,7 @@ static int cmd_import_pgbouncer(int argc, const char* argv[]) {
         if (!entry.comment.empty()) {
             std::cout << "-- " << entry.comment << "\n";
         }
-        std::cout << entry.sql << ";\n";
+        std::cout << entry.sql << "\n";
     }
 
     if (!result.warnings.empty()) {

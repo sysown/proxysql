@@ -5465,42 +5465,74 @@ __end_show_commands:
 	if ((query_no_space_length > 30) && !strncasecmp("IMPORT PGBOUNCER CONFIG FROM ", query_no_space, 29)) {
 		proxy_info("Received %s command\n", query_no_space);
 
-		// Parse command: extract file path and flags
+		// Only allow from admin sessions, not stats
+		if (sess->session_type != PROXYSQL_SESSION_ADMIN) {
+			SPA->send_error_msg_to_client(sess, (char *)"IMPORT PGBOUNCER CONFIG requires admin privileges");
+			run_query = false;
+			goto __run_query;
+		}
+
+		// Parse flags as trailing tokens (after the quoted path).
+		// Syntax: IMPORT PGBOUNCER CONFIG FROM '/path' [DRY RUN] [IGNORE WARNINGS]
+		// Extract the quoted path first, then check remaining tokens for flags.
 		std::string cmd_rest = std::string(query_no_space + 29);
 		bool dry_run = false;
 		bool ignore_warnings = false;
 
-		// Check for DRY RUN and IGNORE WARNINGS flags (case-insensitive)
+		// Find the file path (first quoted or unquoted token)
+		std::string file_path_str;
+		std::string remaining;
 		{
-			std::string upper_rest = cmd_rest;
-			std::transform(upper_rest.begin(), upper_rest.end(), upper_rest.begin(), ::toupper);
-			if (upper_rest.find("DRY RUN") != std::string::npos) {
-				dry_run = true;
-				auto pos = upper_rest.find("DRY RUN");
-				cmd_rest.erase(pos, 7);
+			size_t start = cmd_rest.find_first_not_of(" \t");
+			if (start == std::string::npos) {
+				SPA->send_error_msg_to_client(sess, (char *)"Missing file path");
+				run_query = false;
+				goto __run_query;
 			}
-			upper_rest = cmd_rest;
-			std::transform(upper_rest.begin(), upper_rest.end(), upper_rest.begin(), ::toupper);
-			if (upper_rest.find("IGNORE WARNINGS") != std::string::npos) {
-				ignore_warnings = true;
-				auto pos = upper_rest.find("IGNORE WARNINGS");
-				cmd_rest.erase(pos, 15);
+			if (cmd_rest[start] == '\'' || cmd_rest[start] == '"') {
+				char quote = cmd_rest[start];
+				size_t end = cmd_rest.find(quote, start + 1);
+				if (end == std::string::npos) {
+					SPA->send_error_msg_to_client(sess, (char *)"Unterminated quote in file path");
+					run_query = false;
+					goto __run_query;
+				}
+				file_path_str = cmd_rest.substr(start + 1, end - start - 1);
+				remaining = cmd_rest.substr(end + 1);
+			} else {
+				size_t end = cmd_rest.find_first_of(" \t", start);
+				if (end == std::string::npos) {
+					file_path_str = cmd_rest.substr(start);
+				} else {
+					file_path_str = cmd_rest.substr(start, end - start);
+					remaining = cmd_rest.substr(end);
+				}
 			}
 		}
 
-		char *path_buf = strdup(cmd_rest.c_str());
-		char *file_path = trim_spaces_and_quotes_in_place(path_buf);
+		// Parse remaining tokens for flags
+		{
+			std::string upper_rem = remaining;
+			std::transform(upper_rem.begin(), upper_rem.end(), upper_rem.begin(), ::toupper);
+			// Remove extra whitespace for matching
+			// Check for "DRY RUN" and "IGNORE WARNINGS" as whole tokens
+			if (upper_rem.find("DRY RUN") != std::string::npos) {
+				dry_run = true;
+			}
+			if (upper_rem.find("IGNORE WARNINGS") != std::string::npos) {
+				ignore_warnings = true;
+			}
+		}
 
 		// Stage 1: Parse PgBouncer config
 		PgBouncer::Config pgb_config;
-		bool parse_ok = PgBouncer::parse_config_file(std::string(file_path), pgb_config);
+		bool parse_ok = PgBouncer::parse_config_file(file_path_str, pgb_config);
 		if (!parse_ok) {
-			std::string err_msg = "Failed to parse PgBouncer config: " + std::string(file_path);
+			std::string err_msg = "Failed to parse PgBouncer config: " + file_path_str;
 			for (const auto& e : pgb_config.errors) {
 				err_msg += "\n  " + e.file + ":" + std::to_string(e.line) + ": " + e.message;
 			}
 			SPA->send_error_msg_to_client(sess, (char *)err_msg.c_str());
-			free(path_buf);
 			run_query = false;
 			goto __run_query;
 		}
@@ -5516,16 +5548,15 @@ __end_show_commands:
 				err_msg += "\n  ERROR: " + e.message;
 			}
 			if (dry_run) {
-				err_msg += "\n\n" + PgBouncer::ConfigConverter::format_dry_run(result, file_path, strict);
+				err_msg += "\n\n" + PgBouncer::ConfigConverter::format_dry_run(result, file_path_str.c_str(), strict);
 			}
 			SPA->send_error_msg_to_client(sess, (char *)err_msg.c_str());
-			free(path_buf);
 			run_query = false;
 			goto __run_query;
 		}
 
 		if (dry_run) {
-			std::string dry_output = PgBouncer::ConfigConverter::format_dry_run(result, file_path, strict);
+			std::string dry_output = PgBouncer::ConfigConverter::format_dry_run(result, file_path_str.c_str(), strict);
 			std::string escaped = dry_output;
 			size_t pos = 0;
 			while ((pos = escaped.find('\'', pos)) != std::string::npos) {
@@ -5536,27 +5567,35 @@ __end_show_commands:
 			std::string select_q = "SELECT '" + escaped + "' AS dry_run_output";
 			query = l_strdup(select_q.c_str());
 			query_length = strlen(query) + 1;
-			free(path_buf);
 			goto __run_query;
 		}
 
-		// Execute: apply the conversion
+		// Execute atomically: wrap in transaction so partial failure rolls back
+		SPA->admindb->execute("BEGIN");
+		bool exec_ok = true;
 		for (const auto& entry : result.entries) {
 			if (!entry.sql.empty()) {
-				SPA->admindb->execute(entry.sql.c_str());
+				bool rc = SPA->admindb->execute(entry.sql.c_str());
+				if (!rc) {
+					exec_ok = false;
+					SPA->admindb->execute("ROLLBACK");
+					SPA->send_error_msg_to_client(sess, (char *)"Import failed during SQL execution; changes rolled back");
+					break;
+				}
 			}
 		}
-
-		std::string ok_msg = "PgBouncer config imported: " +
-			std::to_string(result.server_count) + " servers, " +
-			std::to_string(result.user_count) + " users, " +
-			std::to_string(result.rule_count) + " query rules, " +
-			std::to_string(result.variable_count) + " variables";
-		if (!result.warnings.empty()) {
-			ok_msg += " (" + std::to_string(result.warnings.size()) + " warnings)";
+		if (exec_ok) {
+			SPA->admindb->execute("COMMIT");
+			std::string ok_msg = "PgBouncer config imported: " +
+				std::to_string(result.server_count) + " servers, " +
+				std::to_string(result.user_count) + " users, " +
+				std::to_string(result.rule_count) + " query rules, " +
+				std::to_string(result.variable_count) + " variables";
+			if (!result.warnings.empty()) {
+				ok_msg += " (" + std::to_string(result.warnings.size()) + " warnings)";
+			}
+			SPA->send_ok_msg_to_client(sess, (char *)ok_msg.c_str(), 0, query_no_space);
 		}
-		SPA->send_ok_msg_to_client(sess, (char *)ok_msg.c_str(), 0, query_no_space);
-		free(path_buf);
 		run_query = false;
 		goto __run_query;
 	}

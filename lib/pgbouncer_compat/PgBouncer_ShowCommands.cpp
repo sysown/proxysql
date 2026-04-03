@@ -71,8 +71,8 @@ static std::vector<std::string> tokenize_upper(const std::string& s) {
 static std::string query_pools(bool extended) {
     std::string q =
         "SELECT "
-        "'default' AS database, "
-        "su.username AS user, "
+        "cp.srv_host AS database, "
+        "'-' AS user, "
         "0 AS cl_active, "
         "0 AS cl_waiting, "
         "0 AS cl_cancel_req, "
@@ -83,20 +83,16 @@ static std::string query_pools(bool extended) {
         "0 AS sv_login, "
         "0 AS maxwait, "
         "0 AS maxwait_us, "
-        "CASE WHEN su.fast_forward=1 THEN 'session' "
-             "WHEN su.transaction_persistent=1 THEN 'transaction' "
-             "ELSE 'statement' END AS pool_mode";
+        "'statement' AS pool_mode";
     if (extended) {
         q += ", cp.hostgroup AS hostgroup_id"
-             ", cp.ConnUsed AS multiplex"
+             ", 1 AS multiplex"
              ", cp.Latency_us AS latency_us"
              ", cp.Queries AS Queries"
              ", cp.Bytes_data_sent AS Bytes_data_sent"
              ", cp.Bytes_data_recv AS Bytes_data_recv";
     }
-    q += " FROM stats_pgsql_connection_pool cp"
-         " JOIN runtime_pgsql_users su ON 1=1"
-         " GROUP BY su.username";
+    q += " FROM stats_pgsql_connection_pool cp";
     return q;
 }
 
