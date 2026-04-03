@@ -127,7 +127,10 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	proxy_sqlite3_symbols.oo \
 	PgBouncer_ConfigParser.oo \
 	PgBouncer_AuthFileParser.oo \
-	PgBouncer_HBAParser.oo
+	PgBouncer_HBAParser.oo \
+	PgBouncer_ConfigConverter.oo \
+	PgBouncer_ShowCommands.oo \
+	ProxySQL_CLI.oo
 
 ifeq ($(PROXYSQL31),1)
 _OBJ_CXX += MySQL_Caching_Sha2_RSA.oo
@@ -165,6 +168,15 @@ $(ODIR)/PgBouncer_AuthFileParser.oo: pgbouncer_compat/PgBouncer_AuthFileParser.c
 	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS) -Ipgbouncer_compat
 
 $(ODIR)/PgBouncer_HBAParser.oo: pgbouncer_compat/PgBouncer_HBAParser.cpp $(HEADERS)
+	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS) -Ipgbouncer_compat
+
+$(ODIR)/PgBouncer_ConfigConverter.oo: pgbouncer_compat/PgBouncer_ConfigConverter.cpp $(HEADERS)
+	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS) -Ipgbouncer_compat
+
+$(ODIR)/PgBouncer_ShowCommands.oo: pgbouncer_compat/PgBouncer_ShowCommands.cpp $(HEADERS)
+	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS) -Ipgbouncer_compat
+
+$(ODIR)/ProxySQL_CLI.oo: pgbouncer_compat/ProxySQL_CLI.cpp $(HEADERS)
 	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS) -Ipgbouncer_compat
 
 $(ODIR)/%.oo: %.cpp $(HEADERS)

@@ -453,7 +453,9 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	ffto_state_machine_unit-t \
 	restapi_server_unit-t \
 	mcp_client_unit-t \
-	pgbouncer_config_parser_unit-t
+	pgbouncer_config_parser_unit-t \
+	pgbouncer_converter_unit-t \
+	pgbouncer_show_commands_unit-t
 
 ifeq ($(PROXYSQL31),1)
 UNIT_TESTS += caching_sha2_rsa_unit-t
@@ -861,6 +863,22 @@ PGBOUNCER_COMPAT_SRCS := $(PROXYSQL_PATH)/lib/pgbouncer_compat/PgBouncer_ConfigP
 
 pgbouncer_config_parser_unit-t: pgbouncer_config_parser_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o $(PGBOUNCER_COMPAT_SRCS)
 	$(CXX) $< $(PGBOUNCER_COMPAT_SRCS) $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include \
+		-I$(PROXYSQL_PATH)/lib/pgbouncer_compat \
+		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) -lpthread -o $@
+
+PGBOUNCER_CONVERTER_SRCS := $(PGBOUNCER_COMPAT_SRCS) \
+	$(PROXYSQL_PATH)/lib/pgbouncer_compat/PgBouncer_ConfigConverter.cpp
+
+pgbouncer_converter_unit-t: pgbouncer_converter_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o $(PGBOUNCER_CONVERTER_SRCS)
+	$(CXX) $< $(PGBOUNCER_CONVERTER_SRCS) $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include \
+		-I$(PROXYSQL_PATH)/lib/pgbouncer_compat \
+		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) -lpthread -o $@
+
+pgbouncer_show_commands_unit-t: pgbouncer_show_commands_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o $(PROXYSQL_PATH)/lib/pgbouncer_compat/PgBouncer_ShowCommands.cpp
+	$(CXX) $< $(PROXYSQL_PATH)/lib/pgbouncer_compat/PgBouncer_ShowCommands.cpp \
+		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
 		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include \
 		-I$(PROXYSQL_PATH)/lib/pgbouncer_compat \
 		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) -lpthread -o $@
