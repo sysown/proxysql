@@ -429,7 +429,7 @@ mysql_variables=
    LOAD PGSQL SERVERS TO RUNTIME;
    ```
 4. Make sure clients are connecting with SSL/TLS
-3. Check that `admin-ssl_keylog_file` is loaded into runtime:
+5. Check that `admin-ssl_keylog_file` is loaded into runtime:
    ```sql
    LOAD ADMIN VARIABLES TO RUNTIME;
    ```
