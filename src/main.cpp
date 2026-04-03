@@ -2780,7 +2780,25 @@ void watchdog_main_loop() {
 	}
 }
 
+// Forward declaration for proxysql-cli mode
+int proxysql_cli_main(int argc, const char* argv[]);
+
 int main(int argc, const char * argv[]) {
+
+	// Detect proxysql-cli mode via argv[0]
+	{
+		const char* binary_name = argv[0];
+		// Find the last path separator
+		const char* last_sep = strrchr(binary_name, '/');
+		if (last_sep) binary_name = last_sep + 1;
+#ifdef _WIN32
+		const char* last_bsep = strrchr(binary_name, '\\');
+		if (last_bsep && last_bsep > last_sep) binary_name = last_bsep + 1;
+#endif
+		if (strcmp(binary_name, "proxysql-cli") == 0) {
+			return proxysql_cli_main(argc, argv);
+		}
+	}
 
 	if (check_openssl_version() == false) {
 		exit(EXIT_FAILURE);
