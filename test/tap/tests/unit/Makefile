@@ -452,7 +452,8 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	pgsql_response_framer_traffic_unit-t \
 	ffto_state_machine_unit-t \
 	restapi_server_unit-t \
-	mcp_client_unit-t
+	mcp_client_unit-t \
+	pgbouncer_config_parser_unit-t
 
 ifeq ($(PROXYSQL31),1)
 UNIT_TESTS += caching_sha2_rsa_unit-t
@@ -852,6 +853,17 @@ ifeq ($(UNAME_S),Linux)
 # Let the RSA unit test observe the exact flock attempt without a production hook.
 caching_sha2_rsa_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=flock
 endif
+
+# PgBouncer config parser: standalone test (no libproxysql.a needed)
+PGBOUNCER_COMPAT_SRCS := $(PROXYSQL_PATH)/lib/pgbouncer_compat/PgBouncer_ConfigParser.cpp \
+	$(PROXYSQL_PATH)/lib/pgbouncer_compat/PgBouncer_AuthFileParser.cpp \
+	$(PROXYSQL_PATH)/lib/pgbouncer_compat/PgBouncer_HBAParser.cpp
+
+pgbouncer_config_parser_unit-t: pgbouncer_config_parser_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o $(PGBOUNCER_COMPAT_SRCS)
+	$(CXX) $< $(PGBOUNCER_COMPAT_SRCS) $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include \
+		-I$(PROXYSQL_PATH)/lib/pgbouncer_compat \
+		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) -lpthread -o $@
 
 # Pattern rule: all unit tests use the same compile + link flags.
 # Each test binary is built from its .cpp source, linked against

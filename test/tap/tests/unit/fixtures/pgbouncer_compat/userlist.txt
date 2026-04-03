@@ -1,0 +1,4 @@
+"appuser" "secretpassword"
+"admin" "md5abcdef0123456789abcdef0123456789"
+"scramuser" "SCRAM-SHA-256$4096:c2FsdA==$storedkey:serverkey"
+"quoted""user" "pass""word"

@@ -124,7 +124,10 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	MySQLErrorClassifier.oo \
 	BackendSyncDecision.oo \
 	Query_Processor_ParserSQL.oo \
-	proxy_sqlite3_symbols.oo
+	proxy_sqlite3_symbols.oo \
+	PgBouncer_ConfigParser.oo \
+	PgBouncer_AuthFileParser.oo \
+	PgBouncer_HBAParser.oo
 
 ifeq ($(PROXYSQL31),1)
 _OBJ_CXX += MySQL_Caching_Sha2_RSA.oo
@@ -153,6 +156,16 @@ HEADERS := ../include/*.h ../include/*.hpp
 
 $(ODIR)/proxy_sqlite3_symbols.oo: proxy_sqlite3_symbols.cpp $(HEADERS)
 	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS) -DSQLITE_CORE -DSQLITE_VEC_STATIC
+
+# PgBouncer compatibility module
+$(ODIR)/PgBouncer_ConfigParser.oo: pgbouncer_compat/PgBouncer_ConfigParser.cpp $(HEADERS)
+	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS) -Ipgbouncer_compat
+
+$(ODIR)/PgBouncer_AuthFileParser.oo: pgbouncer_compat/PgBouncer_AuthFileParser.cpp $(HEADERS)
+	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS) -Ipgbouncer_compat
+
+$(ODIR)/PgBouncer_HBAParser.oo: pgbouncer_compat/PgBouncer_HBAParser.cpp $(HEADERS)
+	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS) -Ipgbouncer_compat
 
 $(ODIR)/%.oo: %.cpp $(HEADERS)
 	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS)
