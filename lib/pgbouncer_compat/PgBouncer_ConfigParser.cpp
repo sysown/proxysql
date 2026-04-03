@@ -4,6 +4,7 @@
 #include <sstream>
 #include <algorithm>
 #include <cctype>
+#include <climits>
 
 namespace PgBouncer {
 
@@ -57,6 +58,7 @@ bool ConfigParser::parse_int(const std::string& value, int& result) {
         size_t pos = 0;
         long v = std::stol(value, &pos);
         if (pos != value.size()) return false;
+        if (v < INT_MIN || v > INT_MAX) return false;
         result = static_cast<int>(v);
         return true;
     } catch (...) {
@@ -70,6 +72,7 @@ bool ConfigParser::parse_uint(const std::string& value, unsigned int& result) {
         size_t pos = 0;
         unsigned long v = std::stoul(value, &pos);
         if (pos != value.size()) return false;
+        if (v > UINT_MAX) return false;
         result = static_cast<unsigned int>(v);
         return true;
     } catch (...) {
@@ -117,24 +120,27 @@ bool ConfigParser::parse_connstr_pairs(
             // Quoted value: collect until unescaped closing quote
             // PgBouncer escapes single quotes by doubling: ''
             ++i; // skip opening quote
-            std::string raw = "'";
+            bool closed = false;
             while (i < len) {
                 if (connstr[i] == '\'') {
                     if (i + 1 < len && connstr[i + 1] == '\'') {
-                        raw += "''";
+                        value += '\'';
                         i += 2;
                     } else {
                         // closing quote
                         ++i;
+                        closed = true;
                         break;
                     }
                 } else {
-                    raw += connstr[i];
+                    value += connstr[i];
                     ++i;
                 }
             }
-            raw += "'";
-            value = unquote(raw);
+            if (!closed) {
+                errors.push_back({file, line, "unterminated single quote in connection string value for key '" + key + "'"});
+                return false;
+            }
         } else {
             // Unquoted value: read until whitespace
             size_t val_start = i;
@@ -503,7 +509,7 @@ bool ConfigParser::parse_ini(
 {
     std::ifstream ifs(filepath);
     if (!ifs.is_open()) {
-        config.errors.push_back({"", 0, "cannot open file: " + filepath});
+        config.errors.push_back({filepath, 0, "cannot open file: " + filepath});
         return false;
     }
 

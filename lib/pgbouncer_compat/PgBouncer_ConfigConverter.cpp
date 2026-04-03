@@ -375,6 +375,13 @@ void ConfigConverter::convert_hba_rules(const Config& config,
 
     bool any_converted = false;
 
+    if (!config.hba_rules.empty()) {
+        result.entries.push_back({
+            "DELETE FROM pgsql_firewall_whitelist_rules;",
+            "Remove existing firewall whitelist rules before importing HBA rules"
+        });
+    }
+
     for (const auto& rule : config.hba_rules) {
         // Unsupported connection types
         if (rule.conn_type == "local") {
