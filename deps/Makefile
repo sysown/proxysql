@@ -56,7 +56,8 @@ targets :=	check_openssl_version \
 			prometheus-cpp \
 			postgresql \
 			libusual \
-			libscram
+			libscram \
+			nuraft
 
 ifeq ($(UNAME_S),Linux)
 	targets += coredumper
@@ -401,6 +402,12 @@ libscram/lib/libscram.a:postgresql/postgresql/src/interfaces/libpq/libpq.a
 libscram: libscram/lib/libscram.a
 
 
+nuraft/build/libnuraft.a:
+	cd nuraft && CC=${CC} CXX=${CXX} ${MAKE}
+
+nuraft: nuraft/build/libnuraft.a
+
+
 ### clean targets
 
 cleanpart:
@@ -438,5 +445,6 @@ cleanall:
 	cd libscram && rm -rf lib/* obj/* || true
 	cd json && rm -rf json-*/ || true
 	cd zstd && rm -rf zstd-*/ || true
+	cd nuraft && rm -rf build/ || true
 .PHONY: cleanall
 
