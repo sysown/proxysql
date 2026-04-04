@@ -2,9 +2,9 @@
  * ProxySQL_Raft.cpp — Raft leader-election implementation for ProxySQL clustering
  *
  * Election-only Raft using NuRaft. No application data flows through Raft;
- * it is used solely for leader election and heartbeats. On becoming leader,
- * epoch values are bumped on all config modules so the existing checksum-based
- * cluster sync mechanism propagates configuration from the new leader.
+ * it is used solely for leader election and heartbeats. Currently standalone
+ * with no effect on ProxySQL cluster behavior — integration with the cluster
+ * sync mechanism (epoch bumping, admin write guard) is planned separately.
  */
 
 #include "proxysql.h"
@@ -377,33 +377,20 @@ void ProxySQL_Raft_Manager::on_become_leader() {
 	is_leader_.store(true);
 	leader_id_.store(node_id_);
 
-	proxy_info("Raft: node %d became LEADER (term %" PRIu64 ")\n",
+	proxy_info("Raft: node %d became LEADER (term %llu)\n",
 	           node_id_,
-	           raft_instance_ ? raft_instance_->get_term() : 0);
+	           (unsigned long long)(raft_instance_ ? raft_instance_->get_term() : 0));
 
-	// CRITICAL: Bump epoch on all config modules so that the existing
-	// checksum-based cluster sync mechanism will push config from the
-	// new leader to all followers.
-	unsigned long long new_epoch = time(NULL);
-	pthread_mutex_lock(&GloVars.checksum_mutex);
-	__sync_lock_test_and_set(&GloVars.checksums_values.admin_variables.epoch, new_epoch);
-	__sync_lock_test_and_set(&GloVars.checksums_values.mysql_query_rules.epoch, new_epoch);
-	__sync_lock_test_and_set(&GloVars.checksums_values.mysql_servers.epoch, new_epoch);
-	__sync_lock_test_and_set(&GloVars.checksums_values.mysql_servers_v2.epoch, new_epoch);
-	__sync_lock_test_and_set(&GloVars.checksums_values.mysql_users.epoch, new_epoch);
-	__sync_lock_test_and_set(&GloVars.checksums_values.mysql_variables.epoch, new_epoch);
-	__sync_lock_test_and_set(&GloVars.checksums_values.proxysql_servers.epoch, new_epoch);
-	__sync_lock_test_and_set(&GloVars.checksums_values.ldap_variables.epoch, new_epoch);
-	pthread_mutex_unlock(&GloVars.checksum_mutex);
-
-	proxy_info("Raft: bumped config epochs to %llu for cluster sync\n", new_epoch);
+	// TODO: When cluster integration is implemented, bump epoch on all
+	// config modules here so the checksum-based sync mechanism will
+	// replicate config from the leader to followers.
 }
 
 void ProxySQL_Raft_Manager::on_become_follower(int leader_id) {
 	is_leader_.store(false);
 	leader_id_.store(leader_id);
 
-	proxy_info("Raft: node %d became FOLLOWER (leader=%d, term %" PRIu64 ")\n",
+	proxy_info("Raft: node %d became FOLLOWER (leader=%d, term %llu)\n",
 	           node_id_, leader_id,
-	           raft_instance_ ? raft_instance_->get_term() : 0);
+	           (unsigned long long)(raft_instance_ ? raft_instance_->get_term() : 0));
 }

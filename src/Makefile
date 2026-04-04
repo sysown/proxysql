@@ -28,6 +28,7 @@ IDIRS :=	-I$(PROXYSQL_IDIR) \
 			-I$(JSON_IDIR) \
 			-I$(SSL_IDIR) \
 			-I$(ZSTD_IDIR) \
+			-I$(NURAFT_IDIR) \
 
 LDIRS :=	-L$(PROXYSQL_LDIR) \
 			-L$(JEMALLOC_LDIR) \
@@ -45,7 +46,8 @@ LDIRS :=	-L$(PROXYSQL_LDIR) \
 			-L$(POSTGRESQL_LDIR) \
 			-L$(LIBUSUAL_LDIR) \
 			-L$(LIBSCRAM_LDIR) \
-			-L$(SSL_LDIR)
+			-L$(SSL_LDIR) \
+			-L$(NURAFT_LDIR)
 
 ifeq ($(UNAME_S),Linux)
 	LDIRS += -L$(COREDUMPER_LDIR)
@@ -174,6 +176,7 @@ ifeq ($(UNAME_S),Darwin)
 	LIBPROXYSQLAR += $(POSTGRESQL_PATH)/port/libpgport.a
 endif
 LIBPROXYSQLAR += $(ZSTD_LDIR)/libzstd.a
+LIBPROXYSQLAR += $(NURAFT_LDIR)/libnuraft.a
 LIBPROXYSQLAR += $(CITYHASH_LDIR)/libcityhash.a
 ifeq ($(PROXYSQLGENAI),1)
 LIBPROXYSQLAR += $(SQLITE_REMBED_LIB) $(SQLITE_VEC_OBJ)

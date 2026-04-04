@@ -29,6 +29,7 @@ IDIRS :=	-I$(PROXYSQL_IDIR) \
 			-I$(JSON_IDIR) \
 			-I$(SSL_IDIR) \
 			-I$(ZSTD_IDIR) \
+			-I$(NURAFT_IDIR) \
 
 ifeq ($(UNAME_S),Linux)
 	IDIRS += -I$(COREDUMPER_IDIR)
@@ -116,7 +117,8 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	PgSQLMonitorDecision.oo \
 	MySQLErrorClassifier.oo \
 	BackendSyncDecision.oo \
-	proxy_sqlite3_symbols.oo
+	proxy_sqlite3_symbols.oo \
+	ProxySQL_Raft.oo
 
 # TSDB object files
 ifeq ($(PROXYSQLTSDB),1)
