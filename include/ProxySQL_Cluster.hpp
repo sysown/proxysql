@@ -86,14 +86,15 @@
  *
  * This query retrieves the current operational status and configuration of PostgreSQL servers
  * from the runtime_pgsql_servers table. It includes server health metrics, connection settings,
- * and current operational status. The query filters out OFFLINE_HARD servers and converts
- * numeric status values to human-readable format.
+ * and current operational status. The query filters out OFFLINE_HARD servers, maps
+ * SHUNNED to ONLINE (consistent with pgsql_servers_v2), and includes an ELSE fallback
+ * to avoid producing NULL for any unexpected status values.
  *
  * Result columns:
  * - hostgroup_id: Logical grouping identifier for PostgreSQL servers
  * - hostname: Server hostname or IP address
  * - port: PostgreSQL server port number
- * - status: Converted status string (ONLINE, OFFLINE_SOFT, OFFLINE_HARD)
+ * - status: Mapped status string (SHUNNED→ONLINE, others pass through)
  * - weight: Load balancing weight for the server
  * - compression: Whether compression is enabled
  * - max_connections: Maximum allowed connections
@@ -105,7 +106,7 @@
  * @see runtime_pgsql_servers
  * @see pull_runtime_pgsql_servers_from_peer()
  */
-#define CLUSTER_QUERY_RUNTIME_PGSQL_SERVERS "PROXY_SELECT hostgroup_id, hostname, port, CASE status WHEN 'ONLINE' THEN 'ONLINE' WHEN 'OFFLINE_SOFT' THEN 'OFFLINE_SOFT' WHEN 'OFFLINE_HARD' THEN 'OFFLINE_HARD' END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM runtime_pgsql_servers WHERE status<>'OFFLINE_HARD' ORDER BY hostgroup_id, hostname, port"
+#define CLUSTER_QUERY_RUNTIME_PGSQL_SERVERS "PROXY_SELECT hostgroup_id, hostname, port, CASE status WHEN 'ONLINE' THEN 'ONLINE' WHEN 'SHUNNED' THEN 'ONLINE' WHEN 'OFFLINE_SOFT' THEN 'OFFLINE_SOFT' WHEN 'OFFLINE_HARD' THEN 'OFFLINE_HARD' ELSE status END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM runtime_pgsql_servers WHERE status<>'OFFLINE_HARD' ORDER BY hostgroup_id, hostname, port"
 
 /**
  * @brief Query to be intercepted by 'ProxySQL_Admin' for 'pgsql_servers_v2'.
