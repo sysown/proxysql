@@ -408,6 +408,11 @@ static char * admin_variables_names[]= {
 	(char *)"cluster_mysql_variables_save_to_disk",
 	(char *)"cluster_admin_variables_save_to_disk",
 	(char *)"cluster_ldap_variables_save_to_disk",
+	(char *)"cluster_raft_enabled",
+	(char *)"cluster_raft_node_id",
+	(char *)"cluster_raft_port",
+	(char *)"cluster_raft_heartbeat_ms",
+	(char *)"cluster_raft_election_timeout_ms",
 	(char *)"cluster_mysql_servers_sync_algorithm",
 	(char *)"checksum_mysql_query_rules",
 	(char *)"checksum_mysql_servers",
@@ -2911,6 +2916,11 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.cluster_mysql_variables_save_to_disk = true;
 	variables.cluster_admin_variables_save_to_disk = true;
 	variables.cluster_ldap_variables_save_to_disk = true;
+	variables.cluster_raft_enabled = false;
+	variables.cluster_raft_node_id = 0;
+	variables.cluster_raft_port = 6033;
+	variables.cluster_raft_heartbeat_ms = 500;
+	variables.cluster_raft_election_timeout_ms = 1000;
 	variables.stats_mysql_connection_pool = 60;
 	variables.stats_mysql_connections = 60;
 	variables.stats_mysql_query_cache = 60;
@@ -3933,6 +3943,25 @@ char * ProxySQL_Admin::get_variable(char *name) {
 	if (!strcasecmp(name,"cluster_ldap_variables_save_to_disk")) {
 		return strdup((variables.cluster_ldap_variables_save_to_disk ? "true" : "false"));
 	}
+	if (!strcasecmp(name,"cluster_raft_enabled")) {
+		return strdup((variables.cluster_raft_enabled ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"cluster_raft_node_id")) {
+		snprintf(intbuf, sizeof(intbuf),"%d",variables.cluster_raft_node_id);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"cluster_raft_port")) {
+		snprintf(intbuf, sizeof(intbuf),"%d",variables.cluster_raft_port);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"cluster_raft_heartbeat_ms")) {
+		snprintf(intbuf, sizeof(intbuf),"%d",variables.cluster_raft_heartbeat_ms);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"cluster_raft_election_timeout_ms")) {
+		snprintf(intbuf, sizeof(intbuf),"%d",variables.cluster_raft_election_timeout_ms);
+		return strdup(intbuf);
+	}
 	if (!strcasecmp(name,"refresh_interval")) {
 		snprintf(intbuf, sizeof(intbuf),"%d",variables.refresh_interval);
 		return strdup(intbuf);
@@ -4650,6 +4679,53 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 			return true;
 		}
 		return rt;
+	}
+	if (!strcasecmp(name,"cluster_raft_enabled")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.cluster_raft_enabled=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.cluster_raft_enabled=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"cluster_raft_node_id")) {
+		int intv=atoi(value);
+		if (intv >= 1 && intv <= 7) {
+			variables.cluster_raft_node_id=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"cluster_raft_port")) {
+		int intv=atoi(value);
+		if (intv >= 1024 && intv <= 65535) {
+			variables.cluster_raft_port=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"cluster_raft_heartbeat_ms")) {
+		int intv=atoi(value);
+		if (intv >= 100 && intv <= 5000) {
+			variables.cluster_raft_heartbeat_ms=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"cluster_raft_election_timeout_ms")) {
+		int intv=atoi(value);
+		if (intv >= 200 && intv <= 10000) {
+			variables.cluster_raft_election_timeout_ms=intv;
+			return true;
+		} else {
+			return false;
+		}
 	}
 	if (!strcasecmp(name,"checksum_mysql_query_rules")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {

@@ -382,6 +382,11 @@ class ProxySQL_Admin {
 		bool cluster_mysql_variables_save_to_disk;
 		bool cluster_admin_variables_save_to_disk;
 		bool cluster_ldap_variables_save_to_disk;
+		bool cluster_raft_enabled;
+		int cluster_raft_node_id;
+		int cluster_raft_port;
+		int cluster_raft_heartbeat_ms;
+		int cluster_raft_election_timeout_ms;
 		int stats_mysql_connection_pool;
 		int stats_mysql_connections;
 		int stats_mysql_query_cache;
