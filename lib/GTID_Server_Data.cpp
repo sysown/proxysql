@@ -81,6 +81,15 @@ void reader_cb(struct ev_loop *loop, struct ev_io *w, int revents) {
 			sd->w = nullptr;
 		} else {
 			sd->dump();
+			if (sd->active == false) {
+				// protocol error detected during parsing (e.g. unsupported message type)
+				MyHGM->gtid_missing_nodes = true;
+				proxy_warning("GTID: protocol error from ProxySQL binlog reader on port %d for server %s:%d , disconnecting\n", sd->port, sd->address, sd->mysql_port);
+				ev_io_stop(MyHGM->gtid_ev_loop, w);
+				close(w->fd);
+				free(w);
+				sd->w = nullptr;
+			}
 		}
 	}
 	pthread_mutex_unlock(&ev_loop_mutex);
@@ -300,11 +309,13 @@ bool GTID_Server_Data::writeout() {
 }
 
 /*
- * The wire format for the binlogreader is three distinct messages, in plaintext:
+ * The wire format for the binlogreader is five distinct messages, in plaintext:
  *
  * ST=<uuid>:<trxid>[-<trxid>][,<uuid>:<trxid>[-<trxid>], ...] : Bootstrap message, providing individual transaction ID or trxid ranges for all seen UUID servers.
- * I1=<uuid>:<trxid>[-<trxid>]                               : Latest seen trxid or trxid ranges for a given UUID.
- * I2=<trxid>[-<trxid>]                                      : Latest seen trxid or trxid ranges.
+ * I1=<uuid>:<trxid>                                            : Latest seen single trxid for a given UUID.
+ * I2=<trxid>                                                   : Latest seen single trxid, reusing UUID from previous I1/I3 message.
+ * I3=<uuid>:<trxid_start>-<trxid_end>                         : Latest seen trxid range for a given UUID.
+ * I4=<trxid_start>-<trxid_end>                                : Latest seen trxid range, reusing UUID from previous I1/I3 message.
  */
 bool GTID_Server_Data::read_next_gtid() {
 	if (len==0) {
@@ -369,20 +380,36 @@ bool GTID_Server_Data::read_next_gtid() {
 			char *a = NULL;
 			int ul = 0;
 			switch (rec_msg[1]) {
-				case '1':
+				case '1': // single trxid with UUID
+					a = strchr(rec_msg+3,':');
+					ul = a-rec_msg-3;
+					strncpy(uuid_server,rec_msg+3,ul);
+					uuid_server[ul] = 0;
+					gtid_executed.add((std::string)uuid_server, (trxid_t)atoll(a+1));
+					events_read++;
+					break;
+				case '2': // single trxid, reuse last UUID
+					gtid_executed.add((std::string)uuid_server, (trxid_t)atoll(rec_msg+3));
+					events_read++;
+					break;
+				case '3': // trxid range with UUID
 					a = strchr(rec_msg+3,':');
 					ul = a-rec_msg-3;
 					strncpy(uuid_server,rec_msg+3,ul);
 					uuid_server[ul] = 0;
 					gtid_executed.add((std::string)uuid_server, a+1);
+					events_read++;
 					break;
-				case '2':
+				case '4': // trxid range, reuse last UUID
 					gtid_executed.add((std::string)uuid_server, rec_msg+3);
+					events_read++;
 					break;
 				default:
-					break;
+					proxy_warning("GTID: unsupported message type 'I%c' from binlog reader on port %d for server %s:%d , disconnecting\n",
+						rec_msg[1], port, address, mysql_port);
+					active = false;
+					return false;
 			}
-			events_read++;
 		}
 	}
 	return true;
