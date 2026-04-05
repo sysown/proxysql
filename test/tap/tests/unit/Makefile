@@ -287,6 +287,7 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	genai_discovery_schema_unit-t \
 	gtid_trxid_interval_unit-t \
 	gtid_set_unit-t \
+	gtid_server_data_unit-t \
 	genai_mysql_catalog_unit-t \
 	admin_disk_upgrade_unit-t \
 	glovars_unit-t

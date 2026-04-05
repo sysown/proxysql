@@ -371,5 +371,6 @@
   "vector_db_performance-t" : [ "ai-g1" ],
   "vector_features-t" : [ "ai-g1" ],
   "gtid_trxid_interval_unit-t" : [ "unit-tests-g1" ],
-  "gtid_set_unit-t" : [ "unit-tests-g1" ]
+  "gtid_set_unit-t" : [ "unit-tests-g1" ],
+  "gtid_server_data_unit-t" : [ "unit-tests-g1" ]
 }
