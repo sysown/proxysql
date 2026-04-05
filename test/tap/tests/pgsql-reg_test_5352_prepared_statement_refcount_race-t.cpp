@@ -379,9 +379,17 @@ bool test_concurrent_prepared_statements() {
 
 	// Open a new connection and trigger a refcount change so the purge fires
 	backend_conn = createNewConnection(BACKEND);
-	if (backend_conn) {
-		execute_prepared_stmt(backend_conn, "purge_trigger", "SELECT 'trigger_purge'", {});
-		close_prepared_stmt(backend_conn, "purge_trigger");
+	if (!backend_conn) {
+		diag("FAIL: Could not create purge-trigger backend connection");
+		return false;
+	}
+	if (!execute_prepared_stmt(backend_conn, "purge_trigger", "SELECT 'trigger_purge'", {})) {
+		diag("FAIL: Could not execute purge-trigger prepared statement");
+		return false;
+	}
+	if (!close_prepared_stmt(backend_conn, "purge_trigger")) {
+		diag("FAIL: Could not deallocate purge-trigger prepared statement");
+		return false;
 	}
 
 	// Check how many statements remain after forcing a purge
