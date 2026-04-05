@@ -1362,7 +1362,11 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.ping_timeout_server=200;
 	variables.fast_forward_grace_close_ms=5000;
 #ifdef PROXYSQLFFTO
+#ifdef PROXYSQLGENAI
 	variables.ffto_enabled=true;
+#else
+	variables.ffto_enabled=false;
+#endif
 	variables.ffto_max_buffer_size=1048576;
 #endif
 	variables.default_schema=strdup((char *)"information_schema");
