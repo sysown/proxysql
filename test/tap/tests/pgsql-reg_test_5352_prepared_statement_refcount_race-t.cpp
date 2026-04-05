@@ -368,6 +368,22 @@ bool test_concurrent_prepared_statements() {
 		}
 	}
 
+	// The purge mechanism has a 1-second minimum interval between attempts
+	// (see PgSQL_PreparedStatement.cpp: ref_count_client___purge_stmts_if_needed).
+	// Close the verification connection to drop ref_count_client to 0 for all
+	// statements we just created, making them eligible for purge.
+	backend_conn.reset();
+
+	// Wait for the purge interval to elapse
+	std::this_thread::sleep_for(std::chrono::seconds(3));
+
+	// Open a new connection and trigger a refcount change so the purge fires
+	backend_conn = createNewConnection(BACKEND);
+	if (backend_conn) {
+		execute_prepared_stmt(backend_conn, "purge_trigger", "SELECT 'trigger_purge'", {});
+		close_prepared_stmt(backend_conn, "purge_trigger");
+	}
+
 	// Check how many statements remain after forcing a purge
 	int stmt_count_after = 0;
 	res = PQexec(admin_conn.get(), "SELECT COUNT(*) FROM stats_pgsql_prepared_statements_info");
