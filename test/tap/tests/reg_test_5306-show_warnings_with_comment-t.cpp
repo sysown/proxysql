@@ -47,8 +47,8 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
-	// Query that produces a warning (truncation warning)
-	const char* WARNING_QUERY = "SELECT CAST('abc' AS DOUBLE)";
+	// Query that produces a warning (truncation warning, works on MySQL 5.7+)
+	const char* WARNING_QUERY = "SELECT CAST('abc' AS SIGNED)";
 
 	// Test cases: SHOW WARNINGS without and with comment
 	const char* show_warnings_queries[] = {
