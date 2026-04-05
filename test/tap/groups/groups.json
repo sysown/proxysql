@@ -187,6 +187,7 @@
   "reg_test_3434-text_stmt_mix-t" : [ "legacy-g1","mysql84-g1","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1" ],
   "reg_test_3493-USE_with_comment-t" : [ "legacy-g1","mysql84-g1","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1" ],
   "reg_test_3504-change_user-t" : [ "legacy-g1","mysql84-g1","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1" ],
+  "reg_test_com_change_user_malformed_packet-t" : [ "mysql84-g1" ],
   "reg_test_3546-stmt_empty_params-t" : [ "legacy-g1","mysql84-g1","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1" ],
   "reg_test_3549-autocommit_tracking-t" : [ "legacy-g1","mysql84-g1","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1" ],
   "reg_test_3585-stmt_metadata-t" : [ "legacy-g1","mysql84-g1","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1" ],

@@ -1346,30 +1346,72 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	int cur=sizeof(mysql_hdr);
 	unsigned char *user=NULL;
 	char *db=NULL;
+	unsigned char *pass=NULL;
+	const unsigned char *packet_end = pkt + len;
 	mysql_hdr hdr;
+
+	if (len <= sizeof(mysql_hdr)) {
+		return false;
+	}
+
 	memcpy(&hdr,pkt,sizeof(mysql_hdr));
 	cur++;
-	user=pkt+cur;
-	cur+=strlen((const char *)user);
-	cur++;
+	// Validate each field before consuming it to avoid malformed-packet reads and writes.
+	const unsigned char *user_ptr = pkt + cur;
+	const size_t user_remaining = packet_end - user_ptr;
+	const size_t user_len = strnlen(reinterpret_cast<const char*>(user_ptr), user_remaining);
+	if (user_len == user_remaining) {
+		return false;
+	}
+	user=const_cast<unsigned char*>(user_ptr);
+	cur+=user_len + 1;
+	if (pkt + cur >= packet_end) {
+		return false;
+	}
 	unsigned char pass_len=pkt[cur];
 	cur++;
-	unsigned char pass[128];
-	memset(pass,0,128);
-	memcpy(pass, pkt+cur, pass_len);
+	const unsigned char *pass_ptr = pkt + cur;
+	if (static_cast<size_t>(packet_end - pass_ptr) < pass_len) {
+		return false;
+	}
+	pass=(unsigned char *)malloc(pass_len+1);
+	if (pass==NULL) {
+		return false;
+	}
+	memcpy(pass, pass_ptr, pass_len);
+	pass[pass_len]=0;
 	cur+=pass_len;
-	db=(char *)pkt+cur;
+	if (pkt + cur >= packet_end) {
+		free(pass);
+		return false;
+	}
+	const char *db_ptr = reinterpret_cast<const char*>(pkt + cur);
+	const size_t db_remaining = packet_end - (pkt + cur);
+	const size_t db_len = strnlen(db_ptr, db_remaining);
+	if (db_len == db_remaining) {
+		free(pass);
+		return false;
+	}
+	db=const_cast<char*>(db_ptr);
 	// Move to field after 'database'
-	cur += strlen(db) + 1;
-	// Skipt field 'character-set' (size 2)
+	cur += db_len + 1;
+	// Skip field 'character-set' (size 2)
+	if (static_cast<size_t>(packet_end - (pkt + cur)) < sizeof(uint16_t)) {
+		free(pass);
+		return false;
+	}
 	cur += 2;
 	// Check and get 'Client Auth Plugin' if capability is supported
 	char* client_auth_plugin = nullptr;
-	if (pkt + len > pkt + cur) {
-		int capabilities = (*myds)->sess->client_myds->myconn->options.client_flag;
-		if (capabilities & CLIENT_PLUGIN_AUTH) {
-			client_auth_plugin = reinterpret_cast<char*>(pkt + cur);
+	int capabilities = (*myds)->sess->client_myds->myconn->options.client_flag;
+	if (capabilities & CLIENT_PLUGIN_AUTH && pkt + cur < packet_end) {
+		const char *auth_plugin_ptr = reinterpret_cast<const char*>(pkt + cur);
+		const size_t auth_plugin_len = strnlen(auth_plugin_ptr, packet_end - (pkt + cur));
+		if (auth_plugin_len == static_cast<size_t>(packet_end - (pkt + cur))) {
+			free(pass);
+			return false;
 		}
+		client_auth_plugin = const_cast<char*>(auth_plugin_ptr);
 	}
 	// Default to 'mysql_native_password' in case 'auth_plugin' is not found.
 	if (client_auth_plugin == nullptr) {
@@ -1437,6 +1479,10 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 				);
 			}
 		}
+	}
+	if (pass) {
+		free(pass);
+		pass=NULL;
 	}
 	if (userinfo->username) free(userinfo->username);
 	if (userinfo->password) free(userinfo->password);
