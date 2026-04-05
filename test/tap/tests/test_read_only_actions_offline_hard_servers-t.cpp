@@ -210,6 +210,14 @@ int test_scenario_1(MYSQL* proxy_admin, const CommandLine& cl) {
 	MYSQL_QUERY__(proxy_admin, "DELETE FROM mysql_replication_hostgroups");
 	MYSQL_QUERY__(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
+	// Set default_hostgroup=0 to match writer_hostgroup used in this test
+	{
+		std::string update_user;
+		string_format("UPDATE mysql_users SET default_hostgroup=0 WHERE username='%s'", update_user, cl.root_username);
+		MYSQL_QUERY__(proxy_admin, update_user.c_str());
+		MYSQL_QUERY__(proxy_admin, "LOAD MYSQL USERS TO RUNTIME");
+	}
+
 	MYSQL_QUERY__(proxy_admin, "SET mysql-monitor_read_only_interval=200"); // setting read_only variables
 	MYSQL_QUERY__(proxy_admin, "SET mysql-monitor_read_only_timeout=100");
 	MYSQL_QUERY__(proxy_admin, "SET mysql-monitor_enabled='true'"); // enabling monitor
@@ -225,14 +233,14 @@ int test_scenario_1(MYSQL* proxy_admin, const CommandLine& cl) {
 
 		ok(read_only_val == 0, "MySQL Server '%s:%d' should function as a writer", cl.mysql_host, cl.mysql_port);
 
-		// Inserting new records into 'mysql_servers' and 'mysql_replication_hostgroups'. 
+		// Inserting new records into 'mysql_servers' and 'mysql_replication_hostgroups'.
 		result = insert_mysql_servers_records(proxy_admin, insert_mysql_servers_values, insert_replication_hostgroups_values);
 
 		if (result != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Failed to insert records in mysql_servers table.");
 			goto cleanup;
 		}
-	
+
 		std::string variable_val;
 
 		// get read_only interval variable value
@@ -362,6 +370,14 @@ int test_scenario_2(MYSQL* proxy_admin, const CommandLine& cl) {
 	MYSQL_QUERY__(proxy_admin, "DELETE FROM mysql_servers");
 	MYSQL_QUERY__(proxy_admin, "DELETE FROM mysql_replication_hostgroups");
 	MYSQL_QUERY__(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
+	// Set default_hostgroup=0 to match writer_hostgroup used in this test
+	{
+		std::string update_user;
+		string_format("UPDATE mysql_users SET default_hostgroup=0 WHERE username='%s'", update_user, cl.root_username);
+		MYSQL_QUERY__(proxy_admin, update_user.c_str());
+		MYSQL_QUERY__(proxy_admin, "LOAD MYSQL USERS TO RUNTIME");
+	}
 
 	MYSQL_QUERY__(proxy_admin, "SET mysql-monitor_read_only_interval=200"); // setting read_only variables
 	MYSQL_QUERY__(proxy_admin, "SET mysql-monitor_read_only_timeout=100");
