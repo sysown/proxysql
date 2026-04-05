@@ -116,7 +116,10 @@ The `docker-compose-init.bash` scripts implement a strict **non-destructive poli
 | `TAP_GROUP` | (none) | Run a specific group defined in `test/tap/groups/groups.json`. |
 | `TEST_PY_TAP_INCL` | (none) | Filter tests within the group (regex matching test names). |
 | `SKIP_CLUSTER_START`| `0` | Set to `1` to bypass starting additional ProxySQL nodes. |
+| `SKIP_PROXYSQL` | `0` | Set to `1` in a group's `env.sh` to skip ProxySQL and all backend infrastructure. When enabled, `ensure-infras.bash` exits immediately and `run-tests-isolated.bash` runs tests directly on the host without Docker. Used by the `unit-tests` group. |
 | `PROXY_DATA_DIR_HOST`| (dynamic) | Host path for ProxySQL persistent data. |
+| `COVERAGE` | `0` | Enable code coverage collection. |
+| `TAP_USE_NOISE` | `0` | Enable noise injection for race condition testing. |
 
 ---
 
@@ -172,6 +175,39 @@ For rapid iteration, you can create a temporary subgroup to target exactly the i
 
 ---
 
+## 6.1. Infrastructure-Free Groups (Unit Tests)
+
+Some test groups do not require ProxySQL or any backend infrastructure. These groups set `SKIP_PROXYSQL=1` in their `env.sh`, which causes:
+
+- `ensure-infras.bash` to exit immediately (no Docker containers started)
+- `run-tests-isolated.bash` to run tests directly on the host (no Docker test runner)
+
+The `unit-tests` group is the primary example. Unit tests link against `libproxysql.a` with stub globals and run as standalone binaries.
+
+### Running Unit Tests
+
+```bash
+# Build unit tests
+cd test/tap/tests/unit && make && cd -
+
+# Run via the multi-group runner (recommended)
+TAP_GROUPS="unit-tests-g1" ./test/infra/control/run-multi-group.bash
+
+# Or run directly
+export TAP_GROUP="unit-tests-g1"
+./test/infra/control/ensure-infras.bash   # exits immediately (SKIP_PROXYSQL=1)
+./test/infra/control/run-tests-isolated.bash
+```
+
+### Creating Your Own Infrastructure-Free Group
+
+1. Create a group directory: `test/tap/groups/my-group/`
+2. Add `env.sh` with `export SKIP_PROXYSQL=1`
+3. Add your tests to `groups.json` under `my-group-g1`
+4. No `infras.lst` needed
+
+---
+
 ## 7. ProxySQL Cluster Management
 
 By default, the infrastructure starts a single ProxySQL node. For cluster-specific testing, you can enable additional nodes.
@@ -191,7 +227,78 @@ export PROXYSQL_CLUSTER_NODES=3
 
 ---
 
-## 8. Troubleshooting
+## 8. Multi-Group Parallel Execution
+
+The `run-multi-group.bash` script enables running multiple TAP groups in parallel with proper isolation and resource management.
+
+### Basic Usage
+```bash
+RUN_ID="test-$(date +%s)" \
+TAP_GROUPS="legacy-g1 legacy-g2 legacy-g3 mysql84-g1" \
+./test/infra/control/run-multi-group.bash
+```
+
+### Configuration Options
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `RUN_ID` | (timestamp) | Unique identifier for the multi-group run. |
+| `TAP_GROUPS` | (required) | Space-separated list of TAP groups to run. |
+| `PARALLEL_JOBS` | `2` | Maximum number of groups running in parallel. |
+| `TIMEOUT_MINUTES` | `60` | Hard timeout per group in minutes. |
+| `EXIT_ON_FIRST_FAIL` | `0` | Stop all groups on first failure if set to `1`. |
+| `AUTO_CLEANUP` | `0` | Automatically cleanup successful groups if set to `1`. |
+| `STAGGER_DELAY` | `5` | Seconds between group startups to prevent resource contention. |
+| `COVERAGE` | `0` | Enable code coverage collection if set to `1`. |
+| `TAP_USE_NOISE` | `0` | Enable noise injection for race condition testing if set to `1`. |
+
+### Output Location
+- Individual group logs: `ci_infra_logs/multi-group-{RUN_ID}/{group}.log`
+- Combined coverage report: `ci_infra_logs/multi-group-{RUN_ID}/coverage-report/`
+
+---
+
+## 9. Code Coverage Collection
+
+When running tests with `COVERAGE=1`, the system collects code coverage data from ProxySQL.
+
+### Requirements
+- ProxySQL must be compiled with `COVERAGE=1` (adds `--coverage` flags)
+- `fastcov` and `genhtml` must be available in the `proxysql-ci-base` container
+
+### Usage
+```bash
+# Single group with coverage
+COVERAGE=1 ./test/infra/control/run-tests-isolated.bash
+
+# Multi-group with coverage (reports are combined)
+COVERAGE=1 RUN_ID="cov-$(date +%s)" TAP_GROUPS="legacy-g1 legacy-g2" ./test/infra/control/run-multi-group.bash
+```
+
+### Output
+- Individual reports: `ci_infra_logs/{INFRA_ID}/coverage-report/`
+- Combined report: `ci_infra_logs/multi-group-{RUN_ID}/coverage-report/`
+
+---
+
+## 10. Noise Injection Testing
+
+Noise injection helps detect race conditions and deadlocks by introducing random delays and stress during test execution.
+
+### Usage
+```bash
+# Enable noise injection for a single group
+TAP_USE_NOISE=1 ./test/infra/control/run-tests-isolated.bash
+
+# Enable noise injection for multi-group run
+TAP_USE_NOISE=1 RUN_ID="noise-$(date +%s)" TAP_GROUPS="legacy-g1 legacy-g2" ./test/infra/control/run-multi-group.bash
+```
+
+For more details, see `test/tap/NOISE_TESTING.md`.
+
+---
+
+## 11. Troubleshooting
 
 *   **"Directory Not Empty"**: Run `./test/infra/control/stop-proxysql-isolated.bash` with the same `INFRA_ID` to cleanup, or manually delete the folder in `ci_infra_logs/`.
 *   **Permission Denied**: The system uses `sudo` for log directory management. Ensure your user has sudo privileges.

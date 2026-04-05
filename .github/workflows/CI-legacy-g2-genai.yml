@@ -1,0 +1,19 @@
+name: CI-legacy-g2-genai
+run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: [ CI-trigger ]
+    types: [ in_progress ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  run:
+    uses: sysown/proxysql/.github/workflows/ci-legacy-g2-genai.yml@GH-Actions
+    secrets: inherit
+    with:
+      trigger: ${{ toJson(github) }}

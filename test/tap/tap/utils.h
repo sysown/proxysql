@@ -156,6 +156,14 @@ inline static int mysql_query_t__(MYSQL* mysql, const std::string& query, const 
 #define mysql_query_t(mysql, query)\
 	mysql_query_t__(mysql, query, __FILE__, __LINE__, __func__)
 
+/**
+ * @brief Dump hostgroup diagnostic info when a connection/query fails.
+ * @details Queries runtime_mysql_servers and stats_mysql_connection_pool
+ *   for the given hostgroup, printing results via diag(). Requires an
+ *   admin connection. Safe to call with NULL admin (no-op).
+ */
+void dump_hostgroup_debug(MYSQL* admin, int hostgroup);
+
 #define MYSQL_QUERY(mysql, query) \
 	do { \
 		if (mysql_query(mysql, query)) { \

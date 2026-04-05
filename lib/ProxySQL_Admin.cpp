@@ -1262,6 +1262,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_mysql_client_host_cache_reset=false;
 	bool stats_pgsql_client_host_cache = false;
 	bool stats_pgsql_client_host_cache_reset = false;
+	bool stats_tls_certificates=false;
+	bool stats_proxysql_global=false;
 	bool dump_global_variables=false;
 
 	bool runtime_scheduler=false;
@@ -1446,6 +1448,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_pgsql_client_host_cache = true; refresh = true; }
 	if (strstr(query_no_space, "stats_pgsql_client_host_cache_reset"))
 		{ stats_pgsql_client_host_cache_reset = true; refresh = true; }
+	if (strstr(query_no_space,"stats_tls_certificates"))
+		{ stats_tls_certificates=true; refresh=true; }
+	if (strstr(query_no_space,"stats_proxysql_global"))
+		{ stats_proxysql_global=true; refresh=true; }
 	if (strstr(query_no_space,"stats_proxysql_servers_checksums"))
 		{ stats_proxysql_servers_checksums = true; refresh = true; }
 	if (strstr(query_no_space,"stats_proxysql_servers_metrics"))
@@ -1704,6 +1710,12 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		}
 		if (stats_pgsql_client_host_cache_reset) {
 			stats___pgsql_client_host_cache(true);
+		}
+		if (stats_tls_certificates) {
+			stats___tls_certificates();
+		}
+		if (stats_proxysql_global) {
+			stats___proxysql_global();
 		}
 #ifdef PROXYSQLGENAI
 		if (stats_mcp_query_tools_counters) {

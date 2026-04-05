@@ -594,6 +594,11 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
         fo_cmd = ''
         tap_tests = []
 
+        # Initialize variables before try block to avoid UnboundLocalError in validation
+        TAP_GROUP = os.environ.get('TAP_GROUP', '')
+        group_has_tests = False
+        groups = {}
+
         if (internal):
             TAP = "INTERNAL TAP"
         else:
@@ -653,6 +658,10 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
             # Load group-specific environment variables if TAP_GROUP is set
             if TAP_GROUP:
                 group_env_file = f"{WORKSPACE}/test/tap/groups/{TAP_GROUP}/env.sh"
+                # Fallback to base group if subgroup env.sh doesn't exist (e.g., legacy-g1 -> legacy)
+                base_group = re.sub(r'[-_]g[0-9]+.*$', '', TAP_GROUP)
+                if not os.path.isfile(group_env_file) and base_group != TAP_GROUP:
+                    group_env_file = f"{WORKSPACE}/test/tap/groups/{base_group}/env.sh"
                 if os.path.isfile(group_env_file):
                     log.info(f"Loading group-specific environment from {group_env_file}")
                     try:
@@ -797,13 +806,13 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
 
                 if test_file in zero_sec_level_tap_tests:
                     tap_env["OPENSSL_CONF"] = (
-                        os.environ["JENKINS_SCRIPTS_PATH"] + "/test-scripts/datadir/openssl_level_zero.cnf"
+                        os.environ.get("WORKSPACE", ".") + "/test-scripts/datadir/openssl_level_zero.cnf"
                     )
 
                 try:
                     fop = subprocess.Popen(fo_cmd, shell=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0, env=tap_env)
                 except Exception as e:
-                    log.critical(f"TAP test {fo_num+1}/{len(tap_tests)} '{os.path.basename(fo_cmd)}' - test threw an exception !!!", exception=e)
+                    log.critical(f"TAP test {fo_num+1}/{len(tap_tests)} '{os.path.basename(fo_cmd)}' - test threw an exception !!!: {e}")
                     self.padmin_command(f"LOGENTRY '{TAP} test {fo_num+1}/{len(tap_tests)} \'{os.path.basename(fo_cmd)}\' - test threw an exception !!!'")
                     log.exception(e, exc_info=True)
                     rc = rc + 1
@@ -835,7 +844,7 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
                     for line in fop.stdout:
                         log.debug(f"msg: {line.decode('utf-8').strip()}")
                 except Exception as e:
-                    log.critical(f"TAP test {fo_num+1}/{len(tap_tests)} '{os.path.basename(fo_cmd)}' - test threw an exception !!!", exception=e)
+                    log.critical(f"TAP test {fo_num+1}/{len(tap_tests)} '{os.path.basename(fo_cmd)}' - test threw an exception !!!: {e}")
                     self.padmin_command(f"LOGENTRY '{TAP} test {fo_num+1}/{len(tap_tests)} \'{os.path.basename(fo_cmd)}\' - test threw an exception !!!'")
                     log.exception(e, exc_info=True)
                     rc = rc + 1
@@ -847,6 +856,9 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
 
                 self.padmin_command(f"LOGENTRY '{TAP} test {fo_num+1}/{len(tap_tests)} \'{os.path.basename(fo_cmd)}\' RC: {fop.returncode}'")
                 self.padmin_command(f"PROXYSQL FLUSH LOGS")
+                # Dump gcov counters for coverage collection
+                if self.coverage:
+                    self.padmin_command("PROXYSQL GCOV DUMP")
                 log.debug(f"{TAP} test {fo_num+1}/{len(tap_tests)} '{os.path.basename(fo_cmd)}' RC: {fop.returncode}")
 
                 # if returncode print extra info
@@ -917,6 +929,38 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
 
             if rc and int(os.environ['TEST_PY_EXIT_ON_FAIL_TEST']):
                 sys.exit(1)
+
+        # Validate that all expected tests for this group passed
+        # If TAP_GROUP is set and group_has_tests, we expect ALL tests in groups.json to pass
+        # NOTE: Only validate tests that actually exist in the current workdir to avoid
+        # false positives when processing secondary workdirs (e.g., deprecate_eof_support)
+        if TAP_GROUP and group_has_tests and groups:
+            # Get tests that exist in the current workdir and belong to TAP_GROUP
+            available_tests = set(os.path.basename(t) for t in tap_tests)
+            expected_in_workdir = set(test_name for test_name, test_groups in groups.items()
+                                       if TAP_GROUP in test_groups and test_name in available_tests)
+
+            # Only validate if this workdir has tests for our group
+            if expected_in_workdir:
+                passed_tests = set(os.path.basename(cmd) for cmd, rc_val in summary if rc_val == 0)
+                failed_tests = set(os.path.basename(cmd) for cmd, rc_val in summary if rc_val is not None and rc_val != 0)
+                skipped_tests = set(os.path.basename(cmd) for cmd, rc_val in summary if rc_val is None)
+
+                # Differentiate skipped tests from truly missing tests
+                # Skipped tests are intentionally excluded (version filter, group membership, etc.)
+                # Missing tests are expected but never encountered during execution
+                expected_runnable = expected_in_workdir - skipped_tests
+                missing_tests = expected_runnable - passed_tests - failed_tests
+
+                if missing_tests:
+                    log.critical(f"TAP_GROUP '{TAP_GROUP}': {len(missing_tests)} expected tests did not run: {sorted(missing_tests)}")
+                    rc = rc + len(missing_tests)
+
+                if len(passed_tests) != len(expected_runnable):
+                    log.critical(f"TAP_GROUP '{TAP_GROUP}': Expected {len(expected_runnable)} runnable tests to pass, but only {len(passed_tests)} passed. Failed: {len(failed_tests)}, Missing: {len(missing_tests)}, Skipped: {len(skipped_tests)}")
+                    # Ensure rc is non-zero to indicate failure
+                    if rc == 0:
+                        rc = len(expected_runnable) - len(passed_tests)
 
         return rc, logs, summary
 
@@ -1085,18 +1129,21 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
         summary = []
 
         self.pre_failover_tests()
+        mysql_infra = os.environ.get('DEFAULT_MYSQL_INFRA', 'infra-mysql57')
         if os.environ['DOCKER_MODE'].endswith('dns'):
-            orc_prefix = 'ORCHESTRATOR_API="http://orc1.infra-mysql57:3000/api http://orc2.infra-mysql57:3000/api http://orc3.infra-mysql57:3000/api"'
+            orc_prefix = 'ORCHESTRATOR_API="http://orc1.{infra}:3000/api http://orc2.{infra}:3000/api http://orc3.{infra}:3000/api"'.format(infra=mysql_infra)
+            mysql1_alias = 'mysql1.{}'.format(mysql_infra)
         else:
             orc_prefix = 'ORCHESTRATOR_API="http://localhost:23101/api http://localhost:23102/api http://localhost:23103/api"'
-        fo_cmd = '{} orchestrator-client -c graceful-master-takeover-auto -a mysql1'.format(orc_prefix)
+            mysql1_alias = 'mysql1'
+        fo_cmd = '{} orchestrator-client -c graceful-master-takeover-auto -a {}'.format(orc_prefix, mysql1_alias)
         fop = subprocess.Popen(fo_cmd,
                                shell=True,
                                stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE)
         fo_stdout, fo_stderr = fop.communicate()
         log.debug('Failover output is - {} / {}'.format(fo_stdout, fo_stderr))
-        cf_cmd = '{} orchestrator-client -c topology -i mysql1'.format(orc_prefix)
+        cf_cmd = '{} orchestrator-client -c topology -i {}:3306'.format(orc_prefix, mysql1_alias)
         cfp = subprocess.Popen(cf_cmd,
                                shell=True,
                                stdout=subprocess.PIPE,
@@ -1104,7 +1151,7 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
         cf_stdout, cf_stderr = cfp.communicate()
         log.debug('Topology verification - {} / {}'.format(cf_stdout, cf_stderr))
         self.post_failover_tests()
-        if b"mysql2:3306" in fo_stdout or b"mysql3:3306" in fo_stdout:
+        if b"mysql2" in fo_stdout or b"mysql3" in fo_stdout:
             rc = 0
         return rc, logs, summary
 
@@ -1507,7 +1554,7 @@ def start_proxysql(conn_args, timeout):
     subprocess.call(
         args="./test-scripts/proxysql_cluster_init.sh",
         shell=True,
-        cwd=os.environ["JENKINS_SCRIPTS_PATH"],
+        cwd=os.environ.get("WORKSPACE", "."),
         env=os.environ.copy()
     )
 
@@ -1589,7 +1636,10 @@ def main(argv):
         log.debug(f"TEST_PY_TAP_SHUFFLE_LIMIT is disabled (current value: {shuffle_limit})")
 
     # Options
-    coverage = int(os.environ['WITHGCOV'])
+    # When MULTI_GROUP=1, coverage collection is handled centrally by
+    # run-multi-group.bash after all groups finish — skip it here.
+    multi_group = int(os.environ.get('MULTI_GROUP', 0))
+    coverage = (int(os.environ.get('WITHGCOV', 0)) or int(os.environ.get('COVERAGE_MODE', 0))) and not multi_group
 
     for opt, arg in opts:
         if opt in ('-h', "--help"):

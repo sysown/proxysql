@@ -108,6 +108,13 @@ private:
      * @param rows_sent Number of rows returned.
      */
     void report_query_stats(const std::string& query, unsigned long long duration_us, uint64_t affected_rows = 0, uint64_t rows_sent = 0);
+
+    /**
+     * @brief Records an error from a MySQL ERR packet into stats_mysql_errors.
+     * @param data Pointer to the ERR packet payload (starting with 0xFF).
+     * @param len Length of the payload.
+     */
+    void report_error(const unsigned char* data, size_t len);
 };
 
 #endif // MYSQL_FFTO_HPP

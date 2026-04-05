@@ -1,4 +1,4 @@
-datadir = "/home/rene/proxysql/test/tap/tests/test_cluster_sync_config/test_cluster_sync_nomonitor";
+datadir = "/data/rene/proxysql2/proxysql/test/tap/tests/test_cluster_sync_config/test_cluster_sync_nomonitor";
 admin_variables : 
 {
   admin_credentials = "admin:admin;radmin:radmin";
@@ -16,6 +16,7 @@ admin_variables :
   cluster_mysql_users_diffs_before_sync = 3;
   cluster_admin_variables_diffs_before_sync = 3;
   cluster_proxysql_servers_diffs_before_sync = 3;
+  cluster_mysql_servers_sync_algorithm = 3;
   cluster_sync_interfaces = false;
 };
 mysql_variables : 

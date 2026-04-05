@@ -26,6 +26,21 @@ fi
 
 # 1. Determine Base Group (strip subgroup suffix)
 BASE_GROUP=$(echo "${TAP_GROUP}" | sed -E "s/[-_]g[0-9]+.*//")
+
+# Source group env.sh to pick up SKIP_PROXYSQL and other group-level settings
+if [ -f "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/env.sh" ]; then
+    source "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/env.sh"
+elif [ -f "${WORKSPACE}/test/tap/groups/${BASE_GROUP}/env.sh" ]; then
+    source "${WORKSPACE}/test/tap/groups/${BASE_GROUP}/env.sh"
+fi
+
+# If SKIP_PROXYSQL is set, skip all infrastructure setup
+if [ "${SKIP_PROXYSQL}" = "1" ]; then
+    echo ">>> SKIP_PROXYSQL=1: Skipping ProxySQL and backend infrastructure for group '${TAP_GROUP}'."
+    echo ">>> ensure-infras.bash completed (no infrastructure needed)."
+    exit 0
+fi
+
 LST_PATH=""
 
 if [ -f "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst" ]; then
@@ -59,11 +74,29 @@ else
     echo ">>> ProxySQL is already running."
 fi
 
-# 3. Ensure Docker Compose helper is available
+# 3. Execute pre-proxysql hook (cluster setup) — BEFORE starting backends
+# Backends need ProxySQL (and optionally the cluster) to be fully ready
+# because their docker-proxy-post.bash configures ProxySQL.
+PRE_PROXYSQL_HOOK="${WORKSPACE}/test/tap/groups/${TAP_GROUP}/pre-proxysql.bash"
+if [ ! -f "${PRE_PROXYSQL_HOOK}" ]; then
+    PRE_PROXYSQL_HOOK="${WORKSPACE}/test/tap/groups/${BASE_GROUP}/pre-proxysql.bash"
+fi
+if [ ! -f "${PRE_PROXYSQL_HOOK}" ]; then
+    PRE_PROXYSQL_HOOK="${WORKSPACE}/test/tap/groups/default/pre-proxysql.bash"
+fi
+
+if [ -f "${PRE_PROXYSQL_HOOK}" ]; then
+    echo ">>> Executing pre-proxysql hook: ${PRE_PROXYSQL_HOOK}"
+    "${PRE_PROXYSQL_HOOK}"
+fi
+
+# 4. Ensure Docker Compose helper is available
 COMPOSE_CMD="docker compose"
 if ! $COMPOSE_CMD version &>/dev/null; then COMPOSE_CMD="docker-compose"; fi
 
-# 4. Start Required Backends
+# 5. Start Required Backends — one by one, sequentially
+# Each backend's docker-compose-init.bash starts containers, waits for
+# health, provisions users, and configures ProxySQL via docker-proxy-post.bash.
 for INFRA_NAME in ${INFRAS}; do
     INFRA_DIR="${WORKSPACE}/test/infra/${INFRA_NAME}"
     if [ ! -d "${INFRA_DIR}" ]; then
@@ -73,8 +106,7 @@ for INFRA_NAME in ${INFRAS}; do
 
     COMPOSE_PROJECT="${INFRA_NAME}-${INFRA_ID}"
     echo ">>> Checking if backend '${INFRA_NAME}' (Project: ${COMPOSE_PROJECT}) is running..."
-    
-    # Check if ANY container for this project is running
+
     if [ -z "$($COMPOSE_CMD -p "${COMPOSE_PROJECT}" ps -q 2>/dev/null)" ]; then
         echo ">>> '${INFRA_NAME}' is NOT running. Starting it now..."
         cd "${INFRA_DIR}"
@@ -83,7 +115,37 @@ for INFRA_NAME in ${INFRAS}; do
         echo ">>> '${INFRA_NAME}' started successfully."
     else
         echo ">>> '${INFRA_NAME}' is already running."
+        if [ -f "${INFRA_DIR}/bin/docker-proxy-post.bash" ]; then
+            echo ">>> Ensuring ProxySQL configuration for '${INFRA_NAME}'..."
+            cd "${INFRA_DIR}"
+            ./bin/docker-proxy-post.bash
+            cd - >/dev/null
+        fi
     fi
 done
 
 echo ">>> All required infrastructures for '${TAP_GROUP}' are READY (INFRA_ID: ${INFRA_ID})."
+
+# 6. Derive DEFAULT_MYSQL_INFRA and DEFAULT_PGSQL_INFRA for hooks
+for INFRA_NAME in ${INFRAS}; do
+    if [[ "${INFRA_NAME}" == *mysql* ]] || [[ "${INFRA_NAME}" == *mariadb* ]]; then
+        export DEFAULT_MYSQL_INFRA="${DEFAULT_MYSQL_INFRA:-${INFRA_NAME}}"
+    fi
+    if [[ "${INFRA_NAME}" == *pgsql* ]] || [[ "${INFRA_NAME}" == *pgdb* ]]; then
+        export DEFAULT_PGSQL_INFRA="${DEFAULT_PGSQL_INFRA:-${INFRA_NAME}}"
+    fi
+done
+
+# 7. Execute group-specific setup hook if it exists
+# This allows TAP groups to perform additional setup after all backends are running
+SETUP_HOOK="${WORKSPACE}/test/tap/groups/${TAP_GROUP}/setup-infras.bash"
+if [ ! -f "${SETUP_HOOK}" ]; then
+    SETUP_HOOK="${WORKSPACE}/test/tap/groups/${BASE_GROUP}/setup-infras.bash"
+fi
+
+if [ -f "${SETUP_HOOK}" ]; then
+    echo ">>> Executing group setup hook: ${SETUP_HOOK}"
+    "${SETUP_HOOK}"
+fi
+
+# ensure-infras.bash completed successfully

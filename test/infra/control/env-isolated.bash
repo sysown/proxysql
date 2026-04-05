@@ -54,16 +54,28 @@ export TESTS_LOGS_PATH="${WORKSPACE}/ci_infra_logs/${INFRA_ID}/tests"
 
 # Test directories and paths
 export TAP_WORKDIR="${WORKSPACE}/test/tap/tests/"
-export TAP_WORKDIRS="${WORKSPACE}/test/tap/tests/ ${WORKSPACE}/test/tap/tests_with_deps/deprecate_eof_support/"
+export TAP_WORKDIRS="${WORKSPACE}/test/tap/tests/ ${WORKSPACE}/test/tap/tests_with_deps/deprecate_eof_support/ ${WORKSPACE}/test/tap/tests/unit/"
 export TAP_DEPS="${WORKSPACE}/test/tap/tap"
+export TAP_DEPS_PATH="${WORKSPACE}/test/tap/tap"
 export TEST_DEPS_PATH="${WORKSPACE}/test-scripts/deps"
 export TEST_DEPS="${TEST_DEPS_PATH}"
 
-# Cluster Nodes
+# Cluster Nodes — primary (6032) + nodes inside the ProxySQL container
+# Port scheme: primary=6032, proxy-node1=6042, proxy-node2=6052, ..., proxy-node9=6122
+# From the test-runner container, reach them via the proxysql hostname
+# NOTE: primary MUST be first — test_cluster1-t expects conns[0] to be the primary
+NUM_CLUSTER_NODES=${PROXYSQL_CLUSTER_NODES:-9}
+if [[ "${SKIP_CLUSTER_START}" == "1" ]] || [[ "${SKIP_CLUSTER_START}" == "true" ]]; then
+    NUM_CLUSTER_NODES=0
+fi
 CLUSTER_NODES=""
-for i in $(seq 1 9); do
-    CLUSTER_NODES="${CLUSTER_NODES}proxy-node${i}:6032,"
-done
+if [ "${NUM_CLUSTER_NODES}" -gt 0 ]; then
+    CLUSTER_NODES="proxysql:6032,"
+    for i in $(seq 1 ${NUM_CLUSTER_NODES}); do
+        PORT=$((6032 + i * 10))
+        CLUSTER_NODES="${CLUSTER_NODES}proxysql:${PORT},"
+    done
+fi
 export TAP_CLUSTER_NODES=${CLUSTER_NODES%,}
 
 # Build and runtime essentials
@@ -73,7 +85,7 @@ export MALLOC_CONF="retain:false"
 export PROXYSQL_LAYOUT="flat"
 
 # Test execution defaults
-export WITHGCOV="${WITHGCOV:-1}"
+export WITHGCOV="${WITHGCOV:-0}"
 export WITHASAN="${WITHASAN:-0}"
 export TEST_EXIT_ON_FAIL="${TEST_EXIT_ON_FAIL:-0}"
 export TEST_JDBC="${TEST_JDBC:-1}"
@@ -96,6 +108,12 @@ export TEST_PY_TAP_DUMP_RUNTIME="${TEST_PY_TAP_DUMP_RUNTIME:-1}"
 export TEST_PY_TAP_DUMP_STATS="${TEST_PY_TAP_DUMP_STATS:-1}"
 export TEST_TAP_TIMEOUT="${TEST_TAP_TIMEOUT:-0}"
 
+# Noise injection for race condition testing
+# When enabled, tests that support noise injection will introduce random delays
+# and stress to help detect race conditions and deadlocks
+# See test/tap/NOISE_TESTING.md for more details
+export TAP_USE_NOISE="${TAP_USE_NOISE:-0}"
+
 # TAP test filtering
 export TEST_PY_TAP_INCL="${TEST_PY_TAP_INCL:-}"
 export TEST_PY_TAP_EXCL="${TEST_PY_TAP_EXCL:-reg_test_3273_ssl_con-t}"
@@ -106,3 +124,6 @@ export TEST_PY_TAPINT_EXCL="${TEST_PY_TAPINT_EXCL:-}"
 export TAP_REG_TEST_3549_AUTOCOMMIT_TRACKING___MYSQL_SERVER_HOSTGROUP=1300
 
 echo ">>> Isolated Environment Loaded (INFRA_ID: ${INFRA_ID})"
+if [ "${TAP_USE_NOISE}" = "1" ] || [ "${TAP_USE_NOISE}" = "true" ]; then
+    echo ">>> Noise Injection ENABLED - tests will introduce random delays for race condition testing"
+fi

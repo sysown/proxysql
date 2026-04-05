@@ -87,7 +87,18 @@ int extract_module_host_port(MYSQL* proxysql_admin, const std::string varname, s
 	}
 
 	if (res == EXIT_SUCCESS) {
-		host_port = { module_host, i_module_port };
+		// Replace 0.0.0.0 with the appropriate hostname since 0.0.0.0 is not a connectable address
+		// In Docker, use 'proxysql' container hostname; otherwise use localhost
+		if (module_host == "0.0.0.0") {
+			const char* docker_mode = getenv("DOCKER_MODE");
+			if (docker_mode != nullptr) {
+				host_port = { "proxysql", i_module_port };
+			} else {
+				host_port = { "127.0.0.1", i_module_port };
+			}
+		} else {
+			host_port = { module_host, i_module_port };
+		}
 	}
 
 	return res;
