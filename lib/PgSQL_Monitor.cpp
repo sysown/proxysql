@@ -440,13 +440,34 @@ vector<mon_srv_t> ext_srvs(const unique_ptr<SQLite3_result>& srvs_info) {
 			string { row->fields[1] },
 			static_cast<uint16_t>(std::atoi(row->fields[2])),
 			static_cast<bool>(std::atoi(row->fields[3])),
-			mon_srv_t::ssl_opts_t {
-				string { pgsql_thread___ssl_p2s_key ? pgsql_thread___ssl_p2s_key : ""},
-				string { pgsql_thread___ssl_p2s_cert ? pgsql_thread___ssl_p2s_cert : "" },
-				string { pgsql_thread___ssl_p2s_ca ? pgsql_thread___ssl_p2s_ca : "" },
-				string { pgsql_thread___ssl_p2s_crl ? pgsql_thread___ssl_p2s_crl : "" },
-				string { pgsql_thread___ssl_p2s_crlpath ? pgsql_thread___ssl_p2s_crlpath : ""}
-			}
+			[&]() -> mon_srv_t::ssl_opts_t {
+				bool use_ssl_val = static_cast<bool>(std::atoi(row->fields[3]));
+				if (use_ssl_val) {
+					std::unique_ptr<PgSQLServers_SslParams> ssl_params {
+						PgHGM->get_Server_SSL_Params(
+							row->fields[1],
+							std::atoi(row->fields[2]),
+							pgsql_thread___monitor_username ? pgsql_thread___monitor_username : (char*)""
+						)
+					};
+					if (ssl_params != nullptr) {
+						return mon_srv_t::ssl_opts_t {
+							ssl_params->ssl_key.length() > 0 ? ssl_params->ssl_key : string { pgsql_thread___ssl_p2s_key ? pgsql_thread___ssl_p2s_key : "" },
+							ssl_params->ssl_cert.length() > 0 ? ssl_params->ssl_cert : string { pgsql_thread___ssl_p2s_cert ? pgsql_thread___ssl_p2s_cert : "" },
+							ssl_params->ssl_ca.length() > 0 ? ssl_params->ssl_ca : string { pgsql_thread___ssl_p2s_ca ? pgsql_thread___ssl_p2s_ca : "" },
+							ssl_params->ssl_crl.length() > 0 ? ssl_params->ssl_crl : string { pgsql_thread___ssl_p2s_crl ? pgsql_thread___ssl_p2s_crl : "" },
+							ssl_params->ssl_crlpath.length() > 0 ? ssl_params->ssl_crlpath : string { pgsql_thread___ssl_p2s_crlpath ? pgsql_thread___ssl_p2s_crlpath : "" }
+						};
+					}
+				}
+				return mon_srv_t::ssl_opts_t {
+					string { pgsql_thread___ssl_p2s_key ? pgsql_thread___ssl_p2s_key : ""},
+					string { pgsql_thread___ssl_p2s_cert ? pgsql_thread___ssl_p2s_cert : "" },
+					string { pgsql_thread___ssl_p2s_ca ? pgsql_thread___ssl_p2s_ca : "" },
+					string { pgsql_thread___ssl_p2s_crl ? pgsql_thread___ssl_p2s_crl : "" },
+					string { pgsql_thread___ssl_p2s_crlpath ? pgsql_thread___ssl_p2s_crlpath : ""}
+				};
+			}()
 		});
 	}
 	return srvs;
