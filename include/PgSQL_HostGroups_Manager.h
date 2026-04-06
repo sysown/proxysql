@@ -172,6 +172,11 @@ class PgSQL_SrvConnList {
 	PgSQL_Connection *index(unsigned int);
 };
 
+class PgSQLServers_SslParams : public Servers_SslParams {
+	public:
+	using Servers_SslParams::Servers_SslParams;
+};
+
 class PgSQL_SrvC {	// MySQL Server Container
 	public:
 	PgSQL_HGC *myhgc;
@@ -508,6 +513,9 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	 */
 	uint64_t hgsm_pgsql_replication_hostgroups_checksum = 0;
 
+	std::mutex PgSQL_Servers_SSL_Params_map_mutex;
+	std::unordered_map<std::string, PgSQLServers_SslParams> PgSQL_Servers_SSL_Params_map;
+
 #if 0
 	PtrArray *MyHostGroups;
 	std::unordered_map<unsigned int, PgSQL_HGC *>MyHostGroups_map;
@@ -555,7 +563,9 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	SQLite3_result *incoming_replication_hostgroups;
 
 	void generate_pgsql_hostgroup_attributes_table();
+	void generate_pgsql_servers_ssl_params_table();
 	SQLite3_result *incoming_hostgroup_attributes;
+	SQLite3_result *incoming_pgsql_servers_ssl_params = nullptr;
 
 	SQLite3_result* incoming_pgsql_servers_v2;
 
@@ -772,6 +782,7 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	 * @return The generated resultset.
 	 */
 	SQLite3_result* dump_table_pgsql(const string&);
+	PgSQLServers_SslParams * get_Server_SSL_Params(char *hostname, int port, char *username);
 
 	/**
 	 * @brief Update the public member resulset 'pgsql_servers_to_monitor'. This resulset should contain the latest
