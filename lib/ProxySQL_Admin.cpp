@@ -153,6 +153,7 @@ static const vector<string> pgsql_servers_tablenames = {
 //	"pgsql_galera_hostgroups",
 //	"pgsql_aws_aurora_hostgroups",
 	"pgsql_hostgroup_attributes",
+	"pgsql_servers_ssl_params",
 };
 
 static const vector<string> mysql_firewall_tablenames = {
