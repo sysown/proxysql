@@ -450,7 +450,7 @@ class AWS_Aurora_Info {
 	~AWS_Aurora_Info();
 };
 
-class MySQLServers_SslParams {
+class Servers_SslParams {
 	public:
 	string hostname;
 	int port;
@@ -465,7 +465,7 @@ class MySQLServers_SslParams {
 	string tls_version;
 	string comment;
 	string MapKey;
-	MySQLServers_SslParams(string _h, int _p, string _u,
+	Servers_SslParams(string _h, int _p, string _u,
 		string ca, string cert, string key, string capath,
 		string crl, string crlpath, string cipher, string tls,
 		string c) {
@@ -483,7 +483,7 @@ class MySQLServers_SslParams {
 		comment = c;
 		MapKey = "";
 	}
-	MySQLServers_SslParams(char * _h, int _p, char * _u,
+	Servers_SslParams(char * _h, int _p, char * _u,
 		char * ca, char * cert, char * key, char * capath,
 		char * crl, char * crlpath, char * cipher, char * tls,
 		char * c) {
@@ -501,15 +501,21 @@ class MySQLServers_SslParams {
 		comment = string(c);
 		MapKey = "";
 	}
-	MySQLServers_SslParams(string _h, int _p, string _u) {
-		MySQLServers_SslParams(_h, _p, _u, "", "", "", "", "", "", "", "", "");
+	Servers_SslParams(string _h, int _p, string _u) {
+		Servers_SslParams(_h, _p, _u, "", "", "", "", "", "", "", "", "");
 	}
+	virtual ~Servers_SslParams() = default;
 	string getMapKey(const char *del) {
 		if (MapKey == "") {
 			MapKey = hostname + string(del) + to_string(port) + string(del) + username;
 		}
 		return MapKey;
 	}
+};
+
+class MySQLServers_SslParams : public Servers_SslParams {
+	public:
+	using Servers_SslParams::Servers_SslParams;
 };
 
 struct p_hg_counter {
