@@ -2,6 +2,7 @@
 #include <fcntl.h>
 #include <sstream>
 #include <atomic>
+#include <memory>
 
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
@@ -963,14 +964,44 @@ void PgSQL_Connection::connect_start() {
 	//conninfo << "require_auth=" << AUTHENTICATION_METHOD_STR[pgsql_thread___authentication_method]; // authentication method
 	if (parent->use_ssl) {
 		conninfo << "sslmode='require' "; // SSL required
-		append_conninfo_param(conninfo, "sslkey", pgsql_thread___ssl_p2s_key);
-		append_conninfo_param(conninfo, "sslcert", pgsql_thread___ssl_p2s_cert);
-		append_conninfo_param(conninfo, "sslrootcert", pgsql_thread___ssl_p2s_ca);
-		append_conninfo_param(conninfo, "sslcrl", pgsql_thread___ssl_p2s_crl);
-		append_conninfo_param(conninfo, "sslcrldir", pgsql_thread___ssl_p2s_crlpath);
-		// Only supported in PostgreSQL Server
-		// if (pgsql_thread___ssl_p2s_cipher)
-		//	  conninfo << "sslcipher=" << pgsql_thread___ssl_p2s_cipher << " ";
+		std::unique_ptr<PgSQLServers_SslParams> ssl_params {
+			PgHGM->get_Server_SSL_Params(parent->address, parent->port, userinfo->username)
+		};
+		if (ssl_params != nullptr) {
+			// Use per-server SSL params
+			if (ssl_params->ssl_key.length() > 0)
+				append_conninfo_param(conninfo, "sslkey", (char*)ssl_params->ssl_key.c_str());
+			if (ssl_params->ssl_cert.length() > 0)
+				append_conninfo_param(conninfo, "sslcert", (char*)ssl_params->ssl_cert.c_str());
+			if (ssl_params->ssl_ca.length() > 0)
+				append_conninfo_param(conninfo, "sslrootcert", (char*)ssl_params->ssl_ca.c_str());
+			if (ssl_params->ssl_crl.length() > 0)
+				append_conninfo_param(conninfo, "sslcrl", (char*)ssl_params->ssl_crl.c_str());
+			if (ssl_params->ssl_crlpath.length() > 0)
+				append_conninfo_param(conninfo, "sslcrldir", (char*)ssl_params->ssl_crlpath.c_str());
+			// Parse ssl_protocol_version_range (format: "TLSv1.2-TLSv1.3" or "TLSv1.3")
+			if (ssl_params->tls_version.length() > 0) {
+				string tls_ver = ssl_params->tls_version;
+				size_t dash_pos = tls_ver.find('-');
+				if (dash_pos != string::npos) {
+					string min_ver = tls_ver.substr(0, dash_pos);
+					string max_ver = tls_ver.substr(dash_pos + 1);
+					append_conninfo_param(conninfo, "ssl_min_protocol_version", (char*)min_ver.c_str());
+					append_conninfo_param(conninfo, "ssl_max_protocol_version", (char*)max_ver.c_str());
+				} else {
+					// Single version = pin to that version
+					append_conninfo_param(conninfo, "ssl_min_protocol_version", (char*)tls_ver.c_str());
+					append_conninfo_param(conninfo, "ssl_max_protocol_version", (char*)tls_ver.c_str());
+				}
+			}
+		} else {
+			// Fall back to global SSL settings
+			append_conninfo_param(conninfo, "sslkey", pgsql_thread___ssl_p2s_key);
+			append_conninfo_param(conninfo, "sslcert", pgsql_thread___ssl_p2s_cert);
+			append_conninfo_param(conninfo, "sslrootcert", pgsql_thread___ssl_p2s_ca);
+			append_conninfo_param(conninfo, "sslcrl", pgsql_thread___ssl_p2s_crl);
+			append_conninfo_param(conninfo, "sslcrldir", pgsql_thread___ssl_p2s_crlpath);
+		}
 	} else {
 		conninfo << "sslmode='disable' "; // not supporting SSL
 	}
