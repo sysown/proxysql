@@ -834,6 +834,7 @@ PgSQL_HostGroups_Manager::PgSQL_HostGroups_Manager() {
 #endif /* DEBUG */
 	mydb->execute(MYHGM_PgSQL_SERVERS);
 	mydb->execute(MYHGM_PgSQL_SERVERS_INCOMING);
+	mydb->execute(MYHGM_PgSQL_SERVERS_SSL_PARAMS);
 	mydb->execute(MYHGM_PgSQL_REPLICATION_HOSTGROUPS);
 	mydb->execute(MYHGM_PgSQL_HOSTGROUP_ATTRIBUTES);
 	mydb->execute("CREATE INDEX IF NOT EXISTS idx_pgsql_servers_hostname_port ON pgsql_servers (hostname,port)");
