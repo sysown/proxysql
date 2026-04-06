@@ -2977,6 +2977,32 @@ PgSQL_Backend_Kill_Args::PgSQL_Backend_Kill_Args(PGconn* conn, const char* user,
 		ssl_config.sslrootcert = pgsql_thread___ssl_p2s_ca ? strdup(pgsql_thread___ssl_p2s_ca) : nullptr;
 		ssl_config.sslcrl = pgsql_thread___ssl_p2s_crl ? strdup(pgsql_thread___ssl_p2s_crl) : nullptr;
 		ssl_config.sslcrldir = pgsql_thread___ssl_p2s_crlpath ? strdup(pgsql_thread___ssl_p2s_crlpath) : nullptr;
+		// Override with per-server SSL params if available
+		std::unique_ptr<PgSQLServers_SslParams> params {
+			PgHGM->get_Server_SSL_Params(hostname, port, username)
+		};
+		if (params != nullptr) {
+			if (params->ssl_key.length() > 0) {
+				free(ssl_config.sslkey);
+				ssl_config.sslkey = strdup(params->ssl_key.c_str());
+			}
+			if (params->ssl_cert.length() > 0) {
+				free(ssl_config.sslcert);
+				ssl_config.sslcert = strdup(params->ssl_cert.c_str());
+			}
+			if (params->ssl_ca.length() > 0) {
+				free(ssl_config.sslrootcert);
+				ssl_config.sslrootcert = strdup(params->ssl_ca.c_str());
+			}
+			if (params->ssl_crl.length() > 0) {
+				free(ssl_config.sslcrl);
+				ssl_config.sslcrl = strdup(params->ssl_crl.c_str());
+			}
+			if (params->ssl_crlpath.length() > 0) {
+				free(ssl_config.sslcrldir);
+				ssl_config.sslcrldir = strdup(params->ssl_crlpath.c_str());
+			}
+		}
 	} else {
 		ssl_config.sslkey = nullptr;
 		ssl_config.sslcert = nullptr;
