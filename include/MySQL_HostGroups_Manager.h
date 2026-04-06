@@ -360,11 +360,6 @@ class AWS_Aurora_Info {
 	~AWS_Aurora_Info();
 };
 
-class MySQLServers_SslParams : public Servers_SslParams {
-	public:
-	using Servers_SslParams::Servers_SslParams;
-};
-
 struct p_hg_counter {
 	enum metric {
 		servers_table_version = 0,

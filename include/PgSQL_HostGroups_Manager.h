@@ -173,11 +173,6 @@ class PgSQL_SrvConnList {
 	PgSQL_Connection *index(unsigned int);
 };
 
-class PgSQLServers_SslParams : public Servers_SslParams {
-	public:
-	using Servers_SslParams::Servers_SslParams;
-};
-
 class PgSQL_SrvC {	// MySQL Server Container
 	public:
 	PgSQL_HGC *myhgc;
