@@ -1,9 +1,6 @@
 # Introduction
 This documentation provides an in-depth look at the internal workings of the ProxySQL Cluster feature. It is intended for readers who are already familiar with the basic concepts and functionality of ProxySQL Cluster.
 
-For PostgreSQL-specific branch status and implementation notes related to PR
-`#5297`, see `doc/proxysql_cluster/pgsql_cluster_sync_pr5297_status.md`.
-
 # Prerequisites
 Before reading this documentation, it is mandatory that the reader has gone through the official ProxySQL Cluster documentation available at [https://proxysql.com/documentation/proxysql-cluster/](https://proxysql.com/documentation/proxysql-cluster/). This will provide the necessary background knowledge and understanding of terminologies to understand the internal workings of the feature.
 
