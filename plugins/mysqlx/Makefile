@@ -18,12 +18,13 @@ CXXFLAGS := $(STDCPP) -fPIC $(OPTZ) $(WGCOV) $(WASAN)
 
 SRCS := $(PLUGIN_DIR)/src/mysqlx_plugin.cpp \
 	$(PLUGIN_DIR)/src/mysqlx_admin_schema.cpp
+HEADERS := $(wildcard $(PLUGIN_DIR)/include/*.h)
 OBJS := $(patsubst $(PLUGIN_DIR)/src/%.cpp,$(ODIR)/%.o,$(SRCS))
 
 $(ODIR):
 	mkdir -p $(ODIR)
 
-$(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp | $(ODIR)
+$(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) | $(ODIR)
 	$(CXX) -c -o $@ $< $(CXXFLAGS) $(IDIRS)
 
 $(PLUGIN_SO): $(OBJS)
