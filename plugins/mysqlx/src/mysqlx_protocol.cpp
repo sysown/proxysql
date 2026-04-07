@@ -104,6 +104,10 @@ bool mysqlx_read_frame(int fd, MysqlxFrameHeader& header, std::vector<uint8_t>& 
 
 	header = opt.value();
 
+	if (header.payload_size > MYSQLX_MAX_PAYLOAD_SIZE) {
+		return false;
+	}
+
 	// payload_size includes the 1-byte message_type already consumed in header.
 	uint32_t body_size = header.payload_size > 0 ? header.payload_size - 1 : 0;
 	payload.resize(body_size);

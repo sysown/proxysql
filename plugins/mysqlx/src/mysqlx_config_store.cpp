@@ -171,6 +171,8 @@ MysqlxBackendAuthMode mysqlx_backend_auth_mode_from_string(const std::string& va
 }
 
 bool MysqlxConfigStore::load_from_runtime(SQLite3DB& db, std::string& err) {
+	// Exclusive lock — no readers while we swap the maps.
+	std::unique_lock<std::shared_mutex> lock(mutex_);
 	err.clear();
 
 	std::unordered_map<std::string, MysqlxResolvedIdentity> new_identities {};
@@ -238,6 +240,7 @@ bool MysqlxConfigStore::load_from_runtime(SQLite3DB& db, std::string& err) {
 }
 
 std::optional<MysqlxResolvedIdentity> MysqlxConfigStore::resolve_identity(const std::string& username) const {
+	std::shared_lock<std::shared_mutex> lock(mutex_);
 	const auto it = identities_.find(username);
 	if (it == identities_.end()) {
 		return std::nullopt;
@@ -246,6 +249,7 @@ std::optional<MysqlxResolvedIdentity> MysqlxConfigStore::resolve_identity(const 
 }
 
 MysqlxBackendEndpoint MysqlxConfigStore::pick_from_hostgroup(int hostgroup_id, const std::string& strategy) const {
+	// Caller must hold mutex_ (shared lock).
 	const auto it = hostgroup_endpoints_.find(hostgroup_id);
 	if (it == hostgroup_endpoints_.end() || it->second.empty()) {
 		return {};
@@ -254,6 +258,7 @@ MysqlxBackendEndpoint MysqlxConfigStore::pick_from_hostgroup(int hostgroup_id, c
 	const auto& endpoints = it->second;
 
 	if (strategy == "round_robin" || strategy == "round_robin_with_fallback") {
+		std::lock_guard<std::mutex> rr_lock(rr_mutex_);
 		uint32_t& counter = rr_counters_[hostgroup_id];
 		uint32_t idx = counter++ % static_cast<uint32_t>(endpoints.size());
 		return endpoints[idx];
@@ -264,6 +269,7 @@ MysqlxBackendEndpoint MysqlxConfigStore::pick_from_hostgroup(int hostgroup_id, c
 }
 
 MysqlxBackendEndpoint MysqlxConfigStore::pick_endpoint(const std::string& route_name) const {
+	std::shared_lock<std::shared_mutex> lock(mutex_);
 	const auto route_it = routes_.find(route_name);
 	if (route_it == routes_.end()) {
 		return {};

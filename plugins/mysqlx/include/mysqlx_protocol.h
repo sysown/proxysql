@@ -15,6 +15,10 @@ struct MysqlxFrameHeader {
 
 static constexpr size_t MYSQLX_FRAME_HEADER_SIZE = 5; // 4 + 1
 
+// Maximum allowed X Protocol frame payload (16 MB).  Protects against
+// OOM from a malicious client claiming a multi-GB payload.
+static constexpr uint32_t MYSQLX_MAX_PAYLOAD_SIZE = 16 * 1024 * 1024;
+
 // Encode a frame header into a 5-byte buffer.
 std::vector<uint8_t> mysqlx_encode_frame_header(const MysqlxFrameHeader& hdr);
 

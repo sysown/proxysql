@@ -2,7 +2,26 @@
 
 #include "sqlite3db.h"
 
+#include <algorithm>
 #include <cstring>
+
+namespace {
+
+// Escape single quotes for safe SQLite string interpolation.
+std::string sqlite_escape(const std::string& input) {
+	std::string result;
+	result.reserve(input.size());
+	for (char c : input) {
+		if (c == '\'') {
+			result += "''";
+		} else {
+			result += c;
+		}
+	}
+	return result;
+}
+
+} // namespace
 
 MysqlxStatsStore& mysqlx_stats() {
 	static MysqlxStatsStore store {};
@@ -49,13 +68,14 @@ void MysqlxStatsStore::flush_to_sqlite(SQLite3DB& statsdb) {
 	statsdb.execute("DELETE FROM stats_mysqlx_routes");
 
 	for (const auto& [name, stats] : route_stats_) {
+		std::string escaped_name = sqlite_escape(name);
 		char sql[1024];
 		snprintf(sql, sizeof(sql),
 			"INSERT INTO stats_mysqlx_routes "
 			"(name, destination_hostgroup, ConnOK, ConnERR, ConnUsed, "
 			"Bytes_data_sent, Bytes_data_recv) "
 			"VALUES ('%s', %d, %lu, %lu, %lu, %lu, %lu)",
-			name.c_str(),
+			escaped_name.c_str(),
 			stats.destination_hostgroup,
 			stats.conn_ok.load(std::memory_order_relaxed),
 			stats.conn_err.load(std::memory_order_relaxed),

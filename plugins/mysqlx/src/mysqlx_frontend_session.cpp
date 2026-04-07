@@ -7,6 +7,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <openssl/crypto.h>
 #include <openssl/rand.h>
 #include <unistd.h>
 
@@ -144,9 +145,11 @@ bool MysqlxFrontendSession::run_handshake_and_auth(MysqlxConfigStore& config_sto
 						return false;
 					}
 
-					// For PLAIN, verify password against backend_password.
-					// (In a real deployment, passwords would be hashed; MVP uses plaintext match.)
-					if (password != identity_.backend_password) {
+					// For PLAIN, verify password against backend_password using
+					// constant-time comparison to prevent timing side-channels.
+					if (password.size() != identity_.backend_password.size() ||
+					    CRYPTO_memcmp(password.data(), identity_.backend_password.data(),
+					                  password.size()) != 0) {
 						mysqlx_send_error(client_fd_, 1045,
 							"Access denied for user '" + username + "'");
 						return false;
