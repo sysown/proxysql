@@ -221,6 +221,7 @@ endif
 # ===========================================================================
 
 TEST_HELPERS_DIR := $(PROXYSQL_PATH)/test/tap/test_helpers
+FAKE_PLUGIN_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin.so
 ODIR := obj
 
 TEST_HELPERS_OBJ := $(ODIR)/test_globals.o $(ODIR)/test_init.o $(ODIR)/tap.o
@@ -236,10 +237,21 @@ $(ODIR)/tap.o: $(TAP_SRC) | $(ODIR)
 	$(CXX) -c -o $@ $< $(OPT) $(IDIRS) -w
 
 $(ODIR)/test_globals.o: $(TEST_HELPERS_DIR)/test_globals.cpp | $(ODIR)
-	$(CXX) -c -o $@ $< $(OPT) $(IDIRS) -Wall
+	$(CXX) -c -o $@ $< $(OPT) $(IDIRS) -I$(PROXYSQL_PATH)/test -Wall
 
 $(ODIR)/test_init.o: $(TEST_HELPERS_DIR)/test_init.cpp | $(ODIR)
 	$(CXX) -c -o $@ $< $(OPT) $(IDIRS) -Wall
+
+$(FAKE_PLUGIN_SO): $(TEST_HELPERS_DIR)/fake_plugin.cpp | $(TEST_HELPERS_DIR)
+	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(IDIRS) -ldl
+
+# Keep on-demand unit-test library rebuilds aligned with the default top-level
+# feature set so incremental rebuilds do not mix incompatible objects.
+$(LIBPROXYSQLAR):
+	$(MAKE) -C $(PROXYSQL_PATH)/lib libproxysql.a \
+		PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) \
+		PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) \
+		PROXYSQL31=$(PROXYSQL31) CC=$(CC) CXX=$(CXX)
 
 
 # ===========================================================================
@@ -288,7 +300,8 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	gtid_utils_unit-t \
 	genai_mysql_catalog_unit-t \
 	admin_disk_upgrade_unit-t \
-	glovars_unit-t
+	glovars_unit-t \
+	plugin_manager_unit-t
 
 .PHONY: all
 all: $(UNIT_TESTS)
@@ -311,6 +324,11 @@ ezoption_parser_unit-t: ezoption_parser_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noi
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
 		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include \
 		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) -lpthread -o $@
+
+plugin_manager_unit-t: plugin_manager_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		$(IDIRS) $(LDIRS) $(OPT) $(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
 # Pattern rule: all unit tests use the same compile + link flags.
 # Each test binary is built from its .cpp source, linked against
