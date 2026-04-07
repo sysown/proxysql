@@ -61,6 +61,11 @@ private:
 };
 
 ProxySQL_PluginManager* proxysql_get_plugin_manager();
+bool proxysql_dispatch_configured_plugin_admin_command(
+	const ProxySQL_PluginCommandContext& ctx,
+	const std::string& sql,
+	ProxySQL_PluginCommandResult& result
+);
 bool proxysql_load_configured_plugins(
 	std::unique_ptr<ProxySQL_PluginManager>& manager,
 	const std::vector<std::string>& plugin_modules,

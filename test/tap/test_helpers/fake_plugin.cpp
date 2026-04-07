@@ -7,6 +7,10 @@ namespace {
 
 ProxySQL_PluginServices* fake_services = nullptr;
 
+ProxySQL_PluginCommandResult fake_command(const ProxySQL_PluginCommandContext&, const char*) {
+	return {0, 1, "fake command executed"};
+}
+
 void fake_log_event(const char *event) {
 	const char *log_path = std::getenv("PROXYSQL_FAKE_PLUGIN_LOG");
 	if (log_path == nullptr || *log_path == '\0') {
@@ -24,6 +28,21 @@ void fake_log_event(const char *event) {
 
 bool fake_init(ProxySQL_PluginServices *services) {
 	fake_services = services;
+	if (std::getenv("PROXYSQL_FAKE_PLUGIN_REGISTER_INVALID_TABLE") != nullptr &&
+	    services != nullptr &&
+	    services->register_table != nullptr) {
+		const ProxySQL_PluginTableDef invalid_table {
+			static_cast<ProxySQL_PluginDBKind>(255),
+			"fake_invalid_table",
+			"CREATE TABLE fake_invalid_table (id INTEGER)"
+		};
+		services->register_table(invalid_table);
+	}
+	if (std::getenv("PROXYSQL_FAKE_PLUGIN_REGISTER_COMMAND") != nullptr &&
+	    services != nullptr &&
+	    services->register_command != nullptr) {
+		services->register_command("PLUGIN FAKE NOOP", &fake_command);
+	}
 	fake_log_event("init");
 	return true;
 }

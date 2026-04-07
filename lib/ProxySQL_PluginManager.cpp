@@ -3,6 +3,7 @@
 #include <cctype>
 #include <cstring>
 #include <dlfcn.h>
+#include <mutex>
 #include <strings.h>
 
 #include "proxysql.h"
@@ -17,6 +18,9 @@ constexpr char kPluginCommandPrefix[] = "PLUGIN ";
 
 ProxySQL_PluginManager* g_active_plugin_manager = nullptr;
 ProxySQL_PluginManager* g_registry_target = nullptr;
+std::mutex g_active_plugin_manager_mutex {};
+bool g_registry_registration_failed = false;
+std::string g_registry_registration_error {};
 
 ProxySQL_PluginCommandResult ignored_test_command(const ProxySQL_PluginCommandContext&, const char*) {
 	return {0, 0, ""};
@@ -37,6 +41,20 @@ std::string plugin_name(const ProxySQL_PluginDescriptor *descriptor) {
 	return descriptor->name;
 }
 
+void note_registration_failure(const char* kind, const char* name) {
+	g_registry_registration_failed = true;
+	if (!g_registry_registration_error.empty()) {
+		return;
+	}
+
+	g_registry_registration_error = kind;
+	g_registry_registration_error += " registration failed";
+	if (name != nullptr && *name != '\0') {
+		g_registry_registration_error += ": ";
+		g_registry_registration_error += name;
+	}
+}
+
 void register_table_service(const ProxySQL_PluginTableDef& def) {
 	if (g_registry_target == nullptr) {
 		proxy_warning("Plugin table registration attempted outside init phase for %s\n",
@@ -45,6 +63,7 @@ void register_table_service(const ProxySQL_PluginTableDef& def) {
 	}
 
 	if (!g_registry_target->register_table(def)) {
+		note_registration_failure("plugin table", def.table_name);
 		proxy_warning("Plugin table registration failed for %s\n",
 			      def.table_name != nullptr ? def.table_name : "(null)");
 	}
@@ -58,6 +77,7 @@ void register_command_service(const char* sql, proxysql_plugin_admin_command_cb 
 	}
 
 	if (!g_registry_target->register_command(sql, cb)) {
+		note_registration_failure("plugin command", sql);
 		proxy_warning("Plugin command registration failed for %s\n",
 			      sql != nullptr ? sql : "(null)");
 	}
@@ -211,12 +231,25 @@ bool ProxySQL_PluginManager::init_all(std::string &err) {
 			continue;
 		}
 		g_registry_target = this;
-		if (!plugin.descriptor->init(&services_)) {
-			g_registry_target = nullptr;
+		g_registry_registration_failed = false;
+		g_registry_registration_error.clear();
+		const bool init_ok = plugin.descriptor->init(&services_);
+		const bool registration_failed = g_registry_registration_failed;
+		const std::string registration_error = g_registry_registration_error;
+		g_registry_registration_failed = false;
+		g_registry_registration_error.clear();
+		g_registry_target = nullptr;
+		if (!init_ok) {
 			err = "plugin init failed: " + plugin_name(plugin.descriptor);
 			return false;
 		}
-		g_registry_target = nullptr;
+		if (registration_failed) {
+			err = "plugin init failed: " + plugin_name(plugin.descriptor);
+			if (!registration_error.empty()) {
+				err += ": " + registration_error;
+			}
+			return false;
+		}
 		plugin.initialized = true;
 	}
 
@@ -401,14 +434,30 @@ ProxySQL_PluginManager* proxysql_get_plugin_manager() {
 	return g_active_plugin_manager;
 }
 
+bool proxysql_dispatch_configured_plugin_admin_command(
+	const ProxySQL_PluginCommandContext& ctx,
+	const std::string& sql,
+	ProxySQL_PluginCommandResult& result
+) {
+	std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
+	if (g_active_plugin_manager == nullptr) {
+		return false;
+	}
+
+	return g_active_plugin_manager->dispatch_admin_command(ctx, sql, result);
+}
+
 bool proxysql_load_configured_plugins(
 	std::unique_ptr<ProxySQL_PluginManager>& manager,
 	const std::vector<std::string>& plugin_modules,
 	std::string& err
 ) {
 	err.clear();
+	{
+		std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
+		g_active_plugin_manager = nullptr;
+	}
 	manager.reset();
-	g_active_plugin_manager = nullptr;
 
 	if (plugin_modules.empty()) {
 		return true;
@@ -426,8 +475,11 @@ bool proxysql_load_configured_plugins(
 		return false;
 	}
 
-	manager = std::move(next_manager);
-	g_active_plugin_manager = manager.get();
+	{
+		std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
+		manager = std::move(next_manager);
+		g_active_plugin_manager = manager.get();
+	}
 	return true;
 }
 
@@ -448,8 +500,11 @@ bool proxysql_stop_configured_plugins(
 	std::string& err
 ) {
 	err.clear();
-	if (!manager) {
+	{
+		std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
 		g_active_plugin_manager = nullptr;
+	}
+	if (!manager) {
 		return true;
 	}
 
@@ -459,6 +514,5 @@ bool proxysql_stop_configured_plugins(
 	}
 
 	manager.reset();
-	g_active_plugin_manager = nullptr;
 	return true;
 }

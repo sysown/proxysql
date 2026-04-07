@@ -6236,14 +6236,9 @@ void ProxySQL_Admin::send_error_msg_to_client(S* sess, const char *msg, uint16_t
 
 template <typename S>
 bool ProxySQL_Admin::dispatch_plugin_admin_command(S* sess, const char* sql) {
-	ProxySQL_PluginManager* plugin_manager = proxysql_get_plugin_manager();
-	if (plugin_manager == nullptr) {
-		return false;
-	}
-
 	ProxySQL_PluginCommandContext ctx { admindb, configdb, statsdb };
 	ProxySQL_PluginCommandResult result { 0, 0, "" };
-	if (!plugin_manager->dispatch_admin_command(ctx, sql, result)) {
+	if (!proxysql_dispatch_configured_plugin_admin_command(ctx, sql, result)) {
 		return false;
 	}
 

@@ -33,7 +33,7 @@ SQLite3DB* proxysql_plugin_get_statsdb() {
 }
 
 int main() {
-	plan(7);
+	plan(12);
 
 	Config cfg;
 	cfg.readString("plugins=(\"" PROXYSQL_FAKE_PLUGIN_PATH "\");");
@@ -74,6 +74,33 @@ int main() {
 				 std::istreambuf_iterator<char>());
 	ok(log_contents == "init\nstart\nstop\n",
 	   "configured plugin lifecycle runs init, start, stop in order");
+
+	setenv("PROXYSQL_FAKE_PLUGIN_REGISTER_INVALID_TABLE", "1", 1);
+	GloVars.plugin_modules.clear();
+	GloVars.plugin_modules.emplace_back(PROXYSQL_FAKE_PLUGIN_PATH);
+	ok(!proxysql_load_configured_plugins(configured_manager, GloVars.plugin_modules, err),
+	   "configured plugin load fails when plugin service registration fails during init");
+	ok(!err.empty(),
+	   "plugin init registration failure returns an error string");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_REGISTER_INVALID_TABLE");
+
+	setenv("PROXYSQL_FAKE_PLUGIN_REGISTER_COMMAND", "1", 1);
+	err.clear();
+	GloVars.plugin_modules.clear();
+	GloVars.plugin_modules.emplace_back(PROXYSQL_FAKE_PLUGIN_PATH);
+	ok(proxysql_load_configured_plugins(configured_manager, GloVars.plugin_modules, err),
+	   "configured plugin load succeeds when fake plugin registers an admin command");
+	ProxySQL_PluginCommandContext ctx { proxysql_plugin_get_admindb(), proxysql_plugin_get_configdb(), proxysql_plugin_get_statsdb() };
+	ProxySQL_PluginCommandResult result { 1, 0, "" };
+	ok(proxysql_dispatch_configured_plugin_admin_command(ctx, "PLUGIN FAKE NOOP", result) &&
+	   result.error_code == 0 &&
+	   result.rows_affected == 1 &&
+	   result.message == "fake command executed",
+	   "configured plugin admin commands dispatch through the active plugin manager");
+	ok(proxysql_stop_configured_plugins(configured_manager, err) &&
+	   !proxysql_dispatch_configured_plugin_admin_command(ctx, "PLUGIN FAKE NOOP", result),
+	   "plugin admin dispatch is disabled once configured plugins are stopped");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_REGISTER_COMMAND");
 
 	unsetenv("PROXYSQL_FAKE_PLUGIN_LOG");
 	std::remove(log_template);
