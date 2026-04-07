@@ -4,6 +4,7 @@
 #include "ProxySQL_Plugin.h"
 #include "mysqlx_admin_schema.h"
 #include "mysqlx_config_store.h"
+#include "mysqlx_worker.h"
 
 #include <memory>
 

@@ -16,11 +16,21 @@ bool mysqlx_init(ProxySQL_PluginServices* services) {
 
 bool mysqlx_start() {
 	MysqlxPluginContext& ctx = mysqlx_context();
+
+	// Open listener sockets for active routes if an admin DB is available.
+	if (ctx.services != nullptr && ctx.services->get_admindb != nullptr) {
+		SQLite3DB* admindb = ctx.services->get_admindb();
+		if (admindb != nullptr) {
+			mysqlx_start_listeners_from_runtime_routes(*admindb);
+		}
+	}
+
 	ctx.started = true;
 	return true;
 }
 
 bool mysqlx_stop() {
+	mysqlx_stop_listeners();
 	MysqlxPluginContext& ctx = mysqlx_context();
 	ctx.started = false;
 	return true;
