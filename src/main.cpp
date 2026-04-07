@@ -705,6 +705,7 @@ void* unified_query_cache_purge_thread(void *arg) {
 void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 	GloVars.errorlog = NULL;
 	GloVars.pid = NULL;
+	GloVars.plugin_modules.clear();
 	GloVars.parse(argc,argv);
 	GloVars.process_opts_pre();
 	GloVars.restart_on_missing_heartbeats = 10; // default
@@ -809,15 +810,7 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 				GloVars.ldap_auth_plugin=strdup(ldap_auth_plugin.c_str());
 			}
 		}
-		GloVars.plugin_modules.clear();
-		if (root.exists("plugins")==true) {
-			const Setting& plugins = root["plugins"];
-			for (int i = 0; i < plugins.getLength(); ++i) {
-				if (plugins[i].isString()) {
-					GloVars.plugin_modules.emplace_back(plugins[i].c_str());
-				}
-			}
-		}
+		proxysql_load_plugin_modules_from_config(root, GloVars.plugin_modules);
 		const map<string, char**> varnames_globals_map {
 			{ "mysql-ssl_p2s_ca", &GloVars.global.gr_bootstrap_ssl_ca },
 			{ "mysql-ssl_p2s_capath", &GloVars.global.gr_bootstrap_ssl_capath },
@@ -1494,48 +1487,26 @@ static void LoadPlugins() {
 }
 
 static void LoadConfiguredPlugins() {
-	if (GloVars.plugin_modules.empty()) {
-		GloPluginManager.reset();
-		return;
-	}
-
-	GloPluginManager = std::make_unique<ProxySQL_PluginManager>();
 	std::string plugin_error {};
-
-	for (const auto& path : GloVars.plugin_modules) {
-		if (!GloPluginManager->load(path, plugin_error)) {
-			proxy_error("Unable to load plugin %s: %s\n", path.c_str(), plugin_error.c_str());
-			exit(EXIT_FAILURE);
-		}
-	}
-
-	if (!GloPluginManager->init_all(plugin_error)) {
-		proxy_error("Plugin init failed: %s\n", plugin_error.c_str());
+	if (!proxysql_load_configured_plugins(GloPluginManager, GloVars.plugin_modules, plugin_error)) {
+		proxy_error("Plugin init/load failed: %s\n", plugin_error.c_str());
 		exit(EXIT_FAILURE);
 	}
 }
 
 static void StartConfiguredPlugins() {
-	if (!GloPluginManager) {
-		return;
-	}
-
 	std::string plugin_error {};
-	if (!GloPluginManager->start_all(plugin_error)) {
+	if (!proxysql_start_configured_plugins(GloPluginManager.get(), plugin_error)) {
 		proxy_error("Plugin start failed: %s\n", plugin_error.c_str());
 		exit(EXIT_FAILURE);
 	}
 }
 
 static void StopConfiguredPlugins() {
-	if (!GloPluginManager) {
-		return;
+	std::string plugin_error {};
+	if (!proxysql_stop_configured_plugins(GloPluginManager, plugin_error)) {
+		proxy_error("%s during shutdown\n", plugin_error.c_str());
 	}
-
-	if (!GloPluginManager->stop_all()) {
-		proxy_error("Plugin stop failed during shutdown\n");
-	}
-	GloPluginManager.reset();
 }
 
 /**

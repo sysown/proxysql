@@ -1,16 +1,37 @@
 #include "ProxySQL_Plugin.h"
 
+#include <cstdio>
+#include <cstdlib>
+
 namespace {
 
+void fake_log_event(const char *event) {
+	const char *log_path = std::getenv("PROXYSQL_FAKE_PLUGIN_LOG");
+	if (log_path == nullptr || *log_path == '\0') {
+		return;
+	}
+
+	FILE *log_file = std::fopen(log_path, "a");
+	if (log_file == nullptr) {
+		return;
+	}
+
+	std::fprintf(log_file, "%s\n", event);
+	std::fclose(log_file);
+}
+
 bool fake_init(ProxySQL_PluginServices *) {
+	fake_log_event("init");
 	return true;
 }
 
 bool fake_start() {
+	fake_log_event("start");
 	return true;
 }
 
 bool fake_stop() {
+	fake_log_event("stop");
 	return true;
 }
 

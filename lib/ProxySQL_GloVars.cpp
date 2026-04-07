@@ -85,6 +85,24 @@ void crash_handler(int sig) {
 	pthread_kill(pthread_self(), sig);
 }
 
+void proxysql_load_plugin_modules_from_config(
+	const Setting& root,
+	std::vector<std::string>& plugin_modules
+) {
+	plugin_modules.clear();
+
+	if (root.exists("plugins") == false) {
+		return;
+	}
+
+	const Setting& plugins = root["plugins"];
+	for (int i = 0; i < plugins.getLength(); ++i) {
+		if (plugins[i].isString()) {
+			plugin_modules.emplace_back(plugins[i].c_str());
+		}
+	}
+}
+
 ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
 	opt->reset();
 	delete opt;

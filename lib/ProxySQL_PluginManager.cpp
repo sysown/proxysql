@@ -143,3 +143,61 @@ bool ProxySQL_PluginManager::stop_all() {
 size_t ProxySQL_PluginManager::size() const {
 	return plugins_.size();
 }
+
+bool proxysql_load_configured_plugins(
+	std::unique_ptr<ProxySQL_PluginManager>& manager,
+	const std::vector<std::string>& plugin_modules,
+	std::string& err
+) {
+	err.clear();
+	manager.reset();
+
+	if (plugin_modules.empty()) {
+		return true;
+	}
+
+	auto next_manager = std::make_unique<ProxySQL_PluginManager>();
+	for (const auto& path : plugin_modules) {
+		if (!next_manager->load(path, err)) {
+			err = path + ": " + err;
+			return false;
+		}
+	}
+
+	if (!next_manager->init_all(err)) {
+		return false;
+	}
+
+	manager = std::move(next_manager);
+	return true;
+}
+
+bool proxysql_start_configured_plugins(
+	ProxySQL_PluginManager* manager,
+	std::string& err
+) {
+	err.clear();
+	if (manager == nullptr) {
+		return true;
+	}
+
+	return manager->start_all(err);
+}
+
+bool proxysql_stop_configured_plugins(
+	std::unique_ptr<ProxySQL_PluginManager>& manager,
+	std::string& err
+) {
+	err.clear();
+	if (!manager) {
+		return true;
+	}
+
+	if (!manager->stop_all()) {
+		err = "plugin stop failed";
+		return false;
+	}
+
+	manager.reset();
+	return true;
+}

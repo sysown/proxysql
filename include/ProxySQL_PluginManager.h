@@ -4,6 +4,7 @@
 #include "ProxySQL_Plugin.h"
 
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -34,5 +35,19 @@ private:
 	std::vector<plugin_handle_t> plugins_;
 	ProxySQL_PluginServices services_;
 };
+
+bool proxysql_load_configured_plugins(
+	std::unique_ptr<ProxySQL_PluginManager>& manager,
+	const std::vector<std::string>& plugin_modules,
+	std::string& err
+);
+bool proxysql_start_configured_plugins(
+	ProxySQL_PluginManager* manager,
+	std::string& err
+);
+bool proxysql_stop_configured_plugins(
+	std::unique_ptr<ProxySQL_PluginManager>& manager,
+	std::string& err
+);
 
 #endif /* PROXYSQL_PLUGIN_MANAGER_H */

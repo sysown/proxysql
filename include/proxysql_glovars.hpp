@@ -189,6 +189,11 @@ class ProxySQL_GlobalVariables {
 	void install_signal_handler();
 };
 
+void proxysql_load_plugin_modules_from_config(
+	const Setting& root,
+	std::vector<std::string>& plugin_modules
+);
+
 /*
 #ifndef PROXYSQL_EXTERN
 #define EXTERN extern
