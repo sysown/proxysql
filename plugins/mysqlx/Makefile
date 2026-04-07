@@ -9,7 +9,14 @@ PLUGIN_DIR := $(PROXYSQL_PATH)/plugins/mysqlx
 ODIR := $(PLUGIN_DIR)/obj
 PLUGIN_SO := $(PLUGIN_DIR)/ProxySQL_MySQLX_Plugin.so
 
-# Protobuf generated sources
+# Protobuf generated sources.
+# Generated from test/deps/mysql-connector-c-8.4.0/.../plugin/x/protocol/protobuf/*.proto
+# using protoc 3.21.12.  To regenerate:
+#   PROTO_SRC=test/deps/mysql-connector-c-8.4.0/mysql-8.4.0/plugin/x/protocol/protobuf
+#   protoc --proto_path=$PROTO_SRC --cpp_out=plugins/mysqlx/proto \
+#     mysqlx.proto mysqlx_connection.proto mysqlx_session.proto \
+#     mysqlx_datatypes.proto mysqlx_notice.proto mysqlx_sql.proto \
+#     mysqlx_resultset.proto mysqlx_expect.proto
 PROTO_DIR := $(PLUGIN_DIR)/proto
 PROTO_SRCS := $(wildcard $(PROTO_DIR)/*.pb.cc)
 PROTO_OBJS := $(patsubst $(PROTO_DIR)/%.pb.cc,$(ODIR)/%.pb.o,$(PROTO_SRCS))
