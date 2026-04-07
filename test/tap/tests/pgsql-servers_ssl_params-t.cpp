@@ -1,5 +1,5 @@
 /**
- * @file pgsql-pgsql_servers_ssl_params-t.cpp
+ * @file pgsql-servers_ssl_params-t.cpp
  * @brief TAP integration tests for pgsql_servers_ssl_params.
  *
  * Part 1: Admin CRUD operations via PgSQL admin port (6132).
