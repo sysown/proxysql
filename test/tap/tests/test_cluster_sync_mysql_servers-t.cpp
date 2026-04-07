@@ -917,21 +917,21 @@ int main(int, char**) {
 		}
 	
 		int read_only_val = -1;
-		int result = get_read_only_value("127.0.0.1", 13306, "root", "root", &read_only_val);
+		int result = get_read_only_value(cl.mysql_host, cl.mysql_port, cl.mysql_username, cl.mysql_password, &read_only_val);
 		if (result != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Fetching read_only value from mysql server failed.");
 			goto cleanup;
 		}
 
-		// For thorough testing of synchronization under all possible scenarios, it is necessary for 
-		// the MySQL server at 127.0.0.1:13306 to function as a writer.
-		ok(read_only_val == 0, "MySQL Server '127.0.0.1:13306' should function as a writer");
+		// For thorough testing of synchronization under all possible scenarios, it is necessary for
+		// the MySQL server to function as a writer.
+		ok(read_only_val == 0, "MySQL Server '%s:%d' should function as a writer", cl.mysql_host, cl.mysql_port);
 
 		const std::vector<mysql_server_tuple> insert_mysql_servers_values {
-			std::make_tuple(1, "127.0.0.1", 13306, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, ""), // this server has read_only value 0 (writer)
-			std::make_tuple(2, "127.0.0.1", 13307, 13, "OFFLINE_SOFT", 2, 1, 500, 300, 1, 200, ""),
-			std::make_tuple(3, "127.0.0.1", 13308, 14, "OFFLINE_HARD", 2, 1, 500, 300, 1, 200, ""),
-			std::make_tuple(4, "127.0.0.1", 13309, 15, "SHUNNED", 1, 0, 500, 300, 1, 200, "")
+			std::make_tuple(1, std::string(cl.mysql_host), cl.mysql_port, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, ""),
+			std::make_tuple(2, std::string(cl.mysql_host), cl.mysql_port + 1, 13, "OFFLINE_SOFT", 2, 1, 500, 300, 1, 200, ""),
+			std::make_tuple(3, std::string(cl.mysql_host), cl.mysql_port + 2, 14, "OFFLINE_HARD", 2, 1, 500, 300, 1, 200, ""),
+			std::make_tuple(4, std::string(cl.mysql_host), cl.mysql_port + 3, 15, "SHUNNED", 1, 0, 500, 300, 1, 200, "")
 		};
 
 		const std::vector<replication_hostgroups_tuple> insert_replication_hostgroups_values {
