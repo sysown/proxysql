@@ -12,6 +12,26 @@
 
 extern ProxySQL_GlobalVariables GloVars;
 
+namespace {
+
+char g_fake_admin_db = '\0';
+char g_fake_config_db = '\0';
+char g_fake_stats_db = '\0';
+
+} // namespace
+
+SQLite3DB* proxysql_plugin_get_admindb() {
+	return reinterpret_cast<SQLite3DB*>(&g_fake_admin_db);
+}
+
+SQLite3DB* proxysql_plugin_get_configdb() {
+	return reinterpret_cast<SQLite3DB*>(&g_fake_config_db);
+}
+
+SQLite3DB* proxysql_plugin_get_statsdb() {
+	return reinterpret_cast<SQLite3DB*>(&g_fake_stats_db);
+}
+
 int main() {
 	plan(7);
 

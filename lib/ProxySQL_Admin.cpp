@@ -338,6 +338,18 @@ extern AI_Features_Manager *GloAI;
 
 extern void (*flush_logs_function)();
 
+SQLite3DB* proxysql_plugin_get_admindb() {
+	return GloAdmin ? GloAdmin->admindb : nullptr;
+}
+
+SQLite3DB* proxysql_plugin_get_configdb() {
+	return GloAdmin ? GloAdmin->configdb : nullptr;
+}
+
+SQLite3DB* proxysql_plugin_get_statsdb() {
+	return GloAdmin ? GloAdmin->statsdb : nullptr;
+}
+
 extern Web_Interface *GloWebInterface;
 
 extern ProxySQL_Cluster *GloProxyCluster;

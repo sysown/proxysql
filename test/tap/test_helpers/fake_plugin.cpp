@@ -5,6 +5,8 @@
 
 namespace {
 
+ProxySQL_PluginServices* fake_services = nullptr;
+
 void fake_log_event(const char *event) {
 	const char *log_path = std::getenv("PROXYSQL_FAKE_PLUGIN_LOG");
 	if (log_path == nullptr || *log_path == '\0') {
@@ -20,12 +22,22 @@ void fake_log_event(const char *event) {
 	std::fclose(log_file);
 }
 
-bool fake_init(ProxySQL_PluginServices *) {
+bool fake_init(ProxySQL_PluginServices *services) {
+	fake_services = services;
 	fake_log_event("init");
 	return true;
 }
 
 bool fake_start() {
+	if (fake_services == nullptr ||
+	    fake_services->get_admindb == nullptr ||
+	    fake_services->get_configdb == nullptr ||
+	    fake_services->get_statsdb == nullptr ||
+	    fake_services->get_admindb() == nullptr ||
+	    fake_services->get_configdb() == nullptr ||
+	    fake_services->get_statsdb() == nullptr) {
+		return false;
+	}
 	fake_log_event("start");
 	return true;
 }

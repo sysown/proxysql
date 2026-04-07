@@ -6,6 +6,10 @@
 
 #include "proxysql.h"
 
+SQLite3DB* proxysql_plugin_get_admindb();
+SQLite3DB* proxysql_plugin_get_configdb();
+SQLite3DB* proxysql_plugin_get_statsdb();
+
 namespace {
 
 ProxySQL_PluginManager* g_active_plugin_manager = nullptr;
@@ -39,15 +43,15 @@ void register_command_service(const char* sql, proxysql_plugin_admin_command_cb 
 }
 
 SQLite3DB* get_admindb_service() {
-	return nullptr;
+	return proxysql_plugin_get_admindb();
 }
 
 SQLite3DB* get_configdb_service() {
-	return nullptr;
+	return proxysql_plugin_get_configdb();
 }
 
 SQLite3DB* get_statsdb_service() {
-	return nullptr;
+	return proxysql_plugin_get_statsdb();
 }
 
 void log_message_service(int level, const char* message) {
