@@ -211,6 +211,11 @@ test_mysqlx_plugin_load-t:
 	$(MAKE) -C unit test_mysqlx_plugin_load-t
 	ln -fs unit/test_mysqlx_plugin_load-t $@
 
+.PHONY: test_mysqlx_admin_tables-t
+test_mysqlx_admin_tables-t:
+	$(MAKE) -C unit test_mysqlx_admin_tables-t
+	ln -fs unit/test_mysqlx_admin_tables-t $@
+
 sqlite3-t: sqlite3-t.cpp $(TAP_LDIR)/libtap.so
 ifeq ($(PROXYSQLGENAI),1)
 	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) $(SQLITE3_LDIR)/../libsqlite_rembed.a $(SQLITE3_LDIR)/vec.o -o $@
