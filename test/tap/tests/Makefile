@@ -206,6 +206,10 @@ test_tokenizer-t: test_tokenizer-t.cpp $(TAP_LDIR)/libtap.so
 test_mysql_query_digests_stages-t: test_mysql_query_digests_stages-t.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
 
+test_mysqlx_plugin_load-t:
+	$(MAKE) -C unit test_mysqlx_plugin_load-t
+	ln -fs unit/test_mysqlx_plugin_load-t $@
+
 sqlite3-t: sqlite3-t.cpp $(TAP_LDIR)/libtap.so
 ifeq ($(PROXYSQLGENAI),1)
 	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) $(SQLITE3_LDIR)/../libsqlite_rembed.a $(SQLITE3_LDIR)/vec.o -o $@

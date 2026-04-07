@@ -1,4 +1,4 @@
-#include "mysqlx_plugin.h"
+#include "mysqlx_admin_schema.h"
 
 namespace {
 
@@ -8,10 +8,9 @@ const char kMysqlxUsersTableDef[] =
 
 } // namespace
 
-void mysqlx_register_admin_schema() {
-	MysqlxPluginContext& ctx = mysqlx_context();
-	if (ctx.services == nullptr || ctx.services->register_table == nullptr) {
-		return;
+bool mysqlx_register_admin_schema(ProxySQL_PluginServices& services) {
+	if (services.register_table == nullptr) {
+		return false;
 	}
 
 	ProxySQL_PluginTableDef admin_def {
@@ -25,6 +24,7 @@ void mysqlx_register_admin_schema() {
 		kMysqlxUsersTableDef
 	};
 
-	ctx.services->register_table(admin_def);
-	ctx.services->register_table(config_def);
+	services.register_table(admin_def);
+	services.register_table(config_def);
+	return true;
 }

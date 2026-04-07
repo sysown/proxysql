@@ -6,6 +6,8 @@
 
 #include <memory>
 
+class MysqlxConfigStore;
+
 struct MysqlxPluginContext {
 	ProxySQL_PluginServices* services { nullptr };
 	std::unique_ptr<MysqlxConfigStore> config_store {};
@@ -13,6 +15,5 @@ struct MysqlxPluginContext {
 };
 
 MysqlxPluginContext& mysqlx_context();
-void mysqlx_register_admin_schema();
 
 #endif /* PROXYSQL_MYSQLX_PLUGIN_H */

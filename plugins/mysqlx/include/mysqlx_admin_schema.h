@@ -3,12 +3,6 @@
 
 #include "ProxySQL_Plugin.h"
 
-class MysqlxConfigStore {
-public:
-	MysqlxConfigStore() = default;
-	MysqlxConfigStore(const MysqlxConfigStore&) = delete;
-	MysqlxConfigStore& operator=(const MysqlxConfigStore&) = delete;
-	~MysqlxConfigStore() = default;
-};
+bool mysqlx_register_admin_schema(ProxySQL_PluginServices& services);
 
 #endif /* PROXYSQL_MYSQLX_ADMIN_SCHEMA_H */
