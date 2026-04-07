@@ -17,6 +17,10 @@ constexpr char kPluginCommandPrefix[] = "PLUGIN ";
 ProxySQL_PluginManager* g_active_plugin_manager = nullptr;
 ProxySQL_PluginManager* g_registry_target = nullptr;
 
+ProxySQL_PluginCommandResult ignored_test_command(const ProxySQL_PluginCommandContext&, const char*) {
+	return {0, 0, ""};
+}
+
 std::string format_dl_error(const char *prefix) {
 	const char *dl_err = dlerror();
 	if (dl_err == nullptr) {
@@ -33,14 +37,16 @@ std::string plugin_name(const ProxySQL_PluginDescriptor *descriptor) {
 }
 
 void register_table_service(const ProxySQL_PluginTableDef& def) {
-	if (g_registry_target != nullptr) {
-		g_registry_target->register_table(def);
+	if (g_registry_target != nullptr && !g_registry_target->register_table(def)) {
+		proxy_warning("Plugin table registration failed for %s\n",
+			      def.table_name != nullptr ? def.table_name : "(null)");
 	}
 }
 
 void register_command_service(const char* sql, proxysql_plugin_admin_command_cb cb) {
-	if (g_registry_target != nullptr) {
-		g_registry_target->register_command(sql, cb);
+	if (g_registry_target != nullptr && !g_registry_target->register_command(sql, cb)) {
+		proxy_warning("Plugin command registration failed for %s\n",
+			      sql != nullptr ? sql : "(null)");
 	}
 }
 
@@ -258,7 +264,7 @@ void ProxySQL_PluginManager::register_table_for_test(const ProxySQL_PluginTableD
 }
 
 bool ProxySQL_PluginManager::register_command_for_test(const std::string& sql) {
-	return register_command(sql.c_str(), nullptr);
+	return register_command(sql.c_str(), &ignored_test_command);
 }
 
 bool ProxySQL_PluginManager::has_command_for_test(const std::string& sql) const {
@@ -270,11 +276,29 @@ bool ProxySQL_PluginManager::has_command_for_test(const std::string& sql) const 
 	return false;
 }
 
-void ProxySQL_PluginManager::register_table(const ProxySQL_PluginTableDef& def) {
+bool ProxySQL_PluginManager::register_table(const ProxySQL_PluginTableDef& def) {
 	if (def.table_name == nullptr || *def.table_name == '\0' ||
 	    def.table_def == nullptr || *def.table_def == '\0') {
-		proxy_warning("Ignoring plugin table registration with empty table metadata\n");
-		return;
+		return false;
+	}
+
+	const std::vector<ProxySQL_PluginTableDef>* existing_tables = nullptr;
+	switch (def.db_kind) {
+	case ProxySQL_PluginDBKind::admin_db:
+		existing_tables = &tables_admin_;
+		break;
+	case ProxySQL_PluginDBKind::config_db:
+		existing_tables = &tables_config_;
+		break;
+	case ProxySQL_PluginDBKind::stats_db:
+		existing_tables = &tables_stats_;
+		break;
+	}
+
+	for (const auto& existing : *existing_tables) {
+		if (strcasecmp(existing.table_name, def.table_name) == 0) {
+			return false;
+		}
 	}
 
 	table_storage_.push_back({def.table_name, def.table_def});
@@ -296,10 +320,12 @@ void ProxySQL_PluginManager::register_table(const ProxySQL_PluginTableDef& def) 
 		tables_stats_.push_back(owned_def);
 		break;
 	}
+
+	return true;
 }
 
 bool ProxySQL_PluginManager::register_command(const char* sql, proxysql_plugin_admin_command_cb cb) {
-	if (sql == nullptr || *sql == '\0' || !has_plugin_command_prefix(sql)) {
+	if (sql == nullptr || *sql == '\0' || !has_plugin_command_prefix(sql) || cb == nullptr) {
 		return false;
 	}
 

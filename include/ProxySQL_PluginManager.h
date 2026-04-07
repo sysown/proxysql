@@ -27,7 +27,7 @@ public:
 	void register_table_for_test(const ProxySQL_PluginTableDef& def);
 	bool register_command_for_test(const std::string& sql);
 	bool has_command_for_test(const std::string& sql) const;
-	void register_table(const ProxySQL_PluginTableDef& def);
+	bool register_table(const ProxySQL_PluginTableDef& def);
 	bool register_command(const char* sql, proxysql_plugin_admin_command_cb cb);
 
 	size_t size() const;

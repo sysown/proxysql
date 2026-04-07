@@ -939,15 +939,27 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	#endif /* PROXYSQLGENAI */
 
 	if (ProxySQL_PluginManager* plugin_manager = proxysql_get_plugin_manager()) {
-		for (const auto& def : plugin_manager->tables(ProxySQL_PluginDBKind::admin_db)) {
-			insert_into_tables_defs(tables_defs_admin, def.table_name, def.table_def);
-		}
-		for (const auto& def : plugin_manager->tables(ProxySQL_PluginDBKind::config_db)) {
-			insert_into_tables_defs(tables_defs_config, def.table_name, def.table_def);
-		}
-		for (const auto& def : plugin_manager->tables(ProxySQL_PluginDBKind::stats_db)) {
-			insert_into_tables_defs(tables_defs_stats, def.table_name, def.table_def);
-		}
+		auto merge_plugin_tables = [this](std::vector<table_def_t *>* target, const std::vector<ProxySQL_PluginTableDef>& defs, const char* db_name) {
+			for (const auto& def : defs) {
+				bool duplicate_name = false;
+				for (const auto* existing : *target) {
+					if (strcasecmp(existing->table_name, def.table_name) == 0) {
+						duplicate_name = true;
+						break;
+					}
+				}
+				if (duplicate_name) {
+					proxy_warning("Skipping plugin table %s for %s because the table name already exists\n",
+						      def.table_name, db_name);
+					continue;
+				}
+				insert_into_tables_defs(target, def.table_name, def.table_def);
+			}
+		};
+
+		merge_plugin_tables(tables_defs_admin, plugin_manager->tables(ProxySQL_PluginDBKind::admin_db), "admin");
+		merge_plugin_tables(tables_defs_config, plugin_manager->tables(ProxySQL_PluginDBKind::config_db), "config");
+		merge_plugin_tables(tables_defs_stats, plugin_manager->tables(ProxySQL_PluginDBKind::stats_db), "stats");
 	}
 
 	// init ldap here

@@ -13,15 +13,22 @@ ProxySQL_PluginCommandResult fake_plugin_command(const ProxySQL_PluginCommandCon
 } // namespace
 
 int main() {
-	plan(9);
+	plan(10);
 
 	ProxySQL_PluginManager mgr;
 	char table_name[] = "mysqlx_users";
 	char table_def[] = "CREATE TABLE mysqlx_users (username VARCHAR NOT NULL PRIMARY KEY)";
+	char duplicate_table_name[] = "mysqlx_users";
+	char duplicate_table_def[] = "CREATE TABLE mysqlx_users (username VARCHAR NOT NULL PRIMARY KEY)";
 	ProxySQL_PluginTableDef def {
 		ProxySQL_PluginDBKind::admin_db,
 		table_name,
 		table_def
+	};
+	ProxySQL_PluginTableDef duplicate_def {
+		ProxySQL_PluginDBKind::admin_db,
+		duplicate_table_name,
+		duplicate_table_def
 	};
 
 	mgr.register_table_for_test(def);
@@ -31,6 +38,8 @@ int main() {
 	ok(mgr.tables(ProxySQL_PluginDBKind::admin_db).size() == static_cast<size_t>(1), "plugin admin table is stored");
 	ok(std::strcmp(mgr.tables(ProxySQL_PluginDBKind::admin_db).front().table_name, "mysqlx_users") == 0, "plugin admin table name is copied");
 	ok(std::strcmp(mgr.tables(ProxySQL_PluginDBKind::admin_db).front().table_def, "CREATE TABLE mysqlx_users (username VARCHAR NOT NULL PRIMARY KEY)") == 0, "plugin admin table definition is copied");
+	mgr.register_table_for_test(duplicate_def);
+	ok(mgr.tables(ProxySQL_PluginDBKind::admin_db).size() == static_cast<size_t>(1), "duplicate table registration is rejected");
 	ok(mgr.tables(ProxySQL_PluginDBKind::config_db).size() == static_cast<size_t>(0), "config tables start empty");
 	ok(!mgr.register_command_for_test("SELECT 1"), "unnamespaced admin SQL is rejected");
 	ok(mgr.register_command("PLUGIN MYSQLX LOAD USERS TO RUNTIME", &fake_plugin_command), "namespaced command registration succeeds");
