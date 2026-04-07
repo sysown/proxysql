@@ -46,6 +46,10 @@ bool mysqlx_send_error(int fd, uint16_t code, const std::string& msg, const std:
 // Build and send an X Protocol Ok frame.
 bool mysqlx_send_ok(int fd, const std::string& msg = "");
 
+// Hex encoding for MYSQL41 wire format.
+std::string mysqlx_hex_encode(const std::vector<uint8_t>& data);
+bool mysqlx_hex_decode(const std::string& hex, std::vector<uint8_t>& out);
+
 // MYSQL41 auth helpers
 std::vector<uint8_t> mysqlx_mysql41_hash(const std::string& password);
 std::vector<uint8_t> mysqlx_mysql41_scramble(const std::vector<uint8_t>& challenge,

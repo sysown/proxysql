@@ -93,7 +93,7 @@ bool MysqlxBackendSession::authenticate_backend(const std::string& username,
 		}
 	}
 
-	// Step 2: Read Capabilities response.
+	// Step 2: Read Capabilities response (skip any preceding Notice frames).
 	{
 		MysqlxFrameHeader header {};
 		std::vector<uint8_t> payload {};
@@ -101,11 +101,16 @@ bool MysqlxBackendSession::authenticate_backend(const std::string& username,
 			err = "failed to read Capabilities from backend";
 			return false;
 		}
+		while (header.message_type == Mysqlx::ServerMessages_Type_NOTICE) {
+			if (!mysqlx_read_frame(backend_fd_, header, payload)) {
+				err = "failed to read frame after notice during capabilities";
+				return false;
+			}
+		}
 		if (header.message_type != Mysqlx::ServerMessages_Type_CONN_CAPABILITIES) {
 			err = "unexpected response to CapabilitiesGet from backend";
 			return false;
 		}
-		// We don't inspect capabilities in Phase 1 — just proceed with auth.
 	}
 
 	// Step 3: Send AuthenticateStart with MYSQL41.
@@ -131,7 +136,7 @@ bool MysqlxBackendSession::authenticate_backend(const std::string& username,
 		}
 	}
 
-	// Step 4: Read AuthenticateContinue with challenge from backend.
+	// Step 4: Read AuthenticateContinue with challenge (skip Notice frames).
 	std::vector<uint8_t> challenge {};
 	{
 		MysqlxFrameHeader header {};
@@ -139,6 +144,14 @@ bool MysqlxBackendSession::authenticate_backend(const std::string& username,
 		if (!mysqlx_read_frame(backend_fd_, header, payload)) {
 			err = "failed to read auth challenge from backend";
 			return false;
+		}
+
+		// Skip any intervening Notice frames.
+		while (header.message_type == Mysqlx::ServerMessages_Type_NOTICE) {
+			if (!mysqlx_read_frame(backend_fd_, header, payload)) {
+				err = "failed to read frame after notice during auth challenge";
+				return false;
+			}
 		}
 
 		if (header.message_type == Mysqlx::ServerMessages_Type_ERROR) {
@@ -164,11 +177,20 @@ bool MysqlxBackendSession::authenticate_backend(const std::string& username,
 	}
 
 	// Step 5: Compute MYSQL41 scramble and send AuthenticateContinue.
+	// Wire format: \0username\0*UPPERCASE_HEX(scramble)
 	{
 		auto scramble = mysqlx_mysql41_scramble(challenge, password);
+		std::string hex_scramble = mysqlx_hex_encode(scramble);
+
+		std::string auth_data;
+		auth_data += '\0'; // empty schema
+		auth_data += username;
+		auth_data += '\0';
+		auth_data += '*';
+		auth_data += hex_scramble;
 
 		Mysqlx::Session::AuthenticateContinue auth_continue;
-		auth_continue.set_auth_data(std::string(scramble.begin(), scramble.end()));
+		auth_continue.set_auth_data(auth_data);
 
 		std::string serialized;
 		auth_continue.SerializeToString(&serialized);

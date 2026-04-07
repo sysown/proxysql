@@ -365,9 +365,21 @@ bool MysqlxFrontendSession::handle_authenticate(MysqlxConfigStore& /* config_sto
 		return false;
 	}
 
-	// Client response is the scrambled auth data.
+	// Client response is formatted as: schema\0username\0*HEX(scramble)
+	// Parse out the hex scramble after the '*' marker.
 	const std::string& response_str = auth_continue.auth_data();
-	std::vector<uint8_t> client_response(response_str.begin(), response_str.end());
+	auto star_pos = response_str.find('*');
+	if (star_pos == std::string::npos || star_pos + 1 >= response_str.size()) {
+		mysqlx_send_error(client_fd_, 1045, "Invalid MYSQL41 response format");
+		return false;
+	}
+
+	std::string hex_part = response_str.substr(star_pos + 1);
+	std::vector<uint8_t> client_response {};
+	if (!mysqlx_hex_decode(hex_part, client_response)) {
+		mysqlx_send_error(client_fd_, 1045, "Invalid MYSQL41 hex scramble");
+		return false;
+	}
 
 	// Verify MYSQL41 scramble against the stored password.
 	if (!mysqlx_mysql41_verify(auth_challenge_, client_response, identity_.backend_password)) {

@@ -175,6 +175,39 @@ bool mysqlx_send_ok(int fd, const std::string& msg) {
 //   hash_stage2 = SHA1(hash_stage1)
 //   scramble = XOR(hash_stage1, SHA1(challenge + hash_stage2))
 
+std::string mysqlx_hex_encode(const std::vector<uint8_t>& data) {
+	static const char hex_chars[] = "0123456789ABCDEF";
+	std::string result;
+	result.reserve(data.size() * 2);
+	for (uint8_t b : data) {
+		result += hex_chars[(b >> 4) & 0x0F];
+		result += hex_chars[b & 0x0F];
+	}
+	return result;
+}
+
+bool mysqlx_hex_decode(const std::string& hex, std::vector<uint8_t>& out) {
+	if (hex.size() % 2 != 0) {
+		return false;
+	}
+	out.clear();
+	out.reserve(hex.size() / 2);
+	for (size_t i = 0; i < hex.size(); i += 2) {
+		uint8_t hi = 0, lo = 0;
+		char c_hi = hex[i], c_lo = hex[i + 1];
+		if (c_hi >= '0' && c_hi <= '9') hi = static_cast<uint8_t>(c_hi - '0');
+		else if (c_hi >= 'A' && c_hi <= 'F') hi = static_cast<uint8_t>(c_hi - 'A' + 10);
+		else if (c_hi >= 'a' && c_hi <= 'f') hi = static_cast<uint8_t>(c_hi - 'a' + 10);
+		else return false;
+		if (c_lo >= '0' && c_lo <= '9') lo = static_cast<uint8_t>(c_lo - '0');
+		else if (c_lo >= 'A' && c_lo <= 'F') lo = static_cast<uint8_t>(c_lo - 'A' + 10);
+		else if (c_lo >= 'a' && c_lo <= 'f') lo = static_cast<uint8_t>(c_lo - 'a' + 10);
+		else return false;
+		out.push_back(static_cast<uint8_t>((hi << 4) | lo));
+	}
+	return true;
+}
+
 std::vector<uint8_t> mysqlx_mysql41_hash(const std::string& password) {
 	uint8_t stage1[SHA1_LEN];
 	sha1_digest(reinterpret_cast<const uint8_t*>(password.data()), password.size(), stage1);
