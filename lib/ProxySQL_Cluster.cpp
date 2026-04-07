@@ -649,6 +649,11 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 		int sync_delayed_counter;           // Counter for version=1 delays
 
 		bool (*enabled_check)();   // Function to check if module is enabled (nullptr for always enabled)
+
+		// Suffix for the admin-cluster_*_diffs_before_sync variable name used in log messages.
+		// When nullptr, module_name is used.  Needed for modules where the variable name
+		// differs from the module name (e.g. mysql_servers_v2 uses mysql_servers).
+		const char* sync_var_suffix;
 	};
 
 	// Initialize all supported modules with their respective checksum field pointers
@@ -656,38 +661,38 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 		{"admin_variables", &checksums_values.admin_variables, &GloVars.checksums_values.admin_variables, &ProxySQL_Cluster::cluster_admin_variables_diffs_before_sync,
 		 "admin", RuntimeCommands::LOAD_ADMIN_VARIABLES,
 		 static_cast<int>(p_cluster_counter::sync_conflict_admin_variables_share_epoch),
-		 static_cast<int>(p_cluster_counter::sync_delayed_admin_variables_version_one), nullptr},
+		 static_cast<int>(p_cluster_counter::sync_delayed_admin_variables_version_one), nullptr, nullptr},
 		{ClusterModules::MYSQL_QUERY_RULES, &checksums_values.mysql_query_rules, &GloVars.checksums_values.mysql_query_rules, &ProxySQL_Cluster::cluster_mysql_query_rules_diffs_before_sync,
-		 nullptr, nullptr, 0, 0, nullptr},
+		 nullptr, nullptr, 0, 0, nullptr, nullptr},
 		{ClusterModules::MYSQL_SERVERS, &checksums_values.mysql_servers, &GloVars.checksums_values.mysql_servers, &ProxySQL_Cluster::cluster_mysql_servers_diffs_before_sync,
-		 nullptr, nullptr, 0, 0, nullptr},
+		 nullptr, nullptr, 0, 0, nullptr, nullptr},
 		{ClusterModules::MYSQL_SERVERS_V2, &checksums_values.mysql_servers_v2, &GloVars.checksums_values.mysql_servers_v2, &ProxySQL_Cluster::cluster_mysql_servers_diffs_before_sync,
-		 nullptr, nullptr, 0, 0, nullptr},
+		 nullptr, nullptr, 0, 0, nullptr, "mysql_servers"},
 		{ClusterModules::MYSQL_USERS, &checksums_values.mysql_users, &GloVars.checksums_values.mysql_users, &ProxySQL_Cluster::cluster_mysql_users_diffs_before_sync,
-		 nullptr, nullptr, 0, 0, nullptr},
+		 nullptr, nullptr, 0, 0, nullptr, nullptr},
 		{ClusterModules::MYSQL_VARIABLES, &checksums_values.mysql_variables, &GloVars.checksums_values.mysql_variables, &ProxySQL_Cluster::cluster_mysql_variables_diffs_before_sync,
 		 "mysql", RuntimeCommands::LOAD_MYSQL_VARIABLES,
 		 static_cast<int>(p_cluster_counter::sync_conflict_mysql_variables_share_epoch),
-		 static_cast<int>(p_cluster_counter::sync_delayed_mysql_variables_version_one), nullptr},
+		 static_cast<int>(p_cluster_counter::sync_delayed_mysql_variables_version_one), nullptr, nullptr},
 		{ClusterModules::PROXYSQL_SERVERS, &checksums_values.proxysql_servers, &GloVars.checksums_values.proxysql_servers, &ProxySQL_Cluster::cluster_proxysql_servers_diffs_before_sync,
-		 nullptr, nullptr, 0, 0, nullptr},
+		 nullptr, nullptr, 0, 0, nullptr, nullptr},
 		{ClusterModules::LDAP_VARIABLES, &checksums_values.ldap_variables, &GloVars.checksums_values.ldap_variables, &ProxySQL_Cluster::cluster_ldap_variables_diffs_before_sync,
 		 "ldap", RuntimeCommands::LOAD_LDAP_VARIABLES,
 		 static_cast<int>(p_cluster_counter::sync_conflict_ldap_variables_share_epoch),
 		 static_cast<int>(p_cluster_counter::sync_delayed_ldap_variables_version_one),
-		 []() { return GloMyLdapAuth != nullptr; }},
+		 []() { return GloMyLdapAuth != nullptr; }, nullptr},
 		{ClusterModules::PGSQL_QUERY_RULES, &checksums_values.pgsql_query_rules, &GloVars.checksums_values.pgsql_query_rules, &ProxySQL_Cluster::cluster_pgsql_query_rules_diffs_before_sync,
-		 nullptr, nullptr, 0, 0, nullptr},
+		 nullptr, nullptr, 0, 0, nullptr, nullptr},
 		{ClusterModules::PGSQL_SERVERS, &checksums_values.pgsql_servers, &GloVars.checksums_values.pgsql_servers, &ProxySQL_Cluster::cluster_pgsql_servers_diffs_before_sync,
-		 nullptr, nullptr, 0, 0, nullptr},
+		 nullptr, nullptr, 0, 0, nullptr, nullptr},
 		{ClusterModules::PGSQL_SERVERS_V2, &checksums_values.pgsql_servers_v2, &GloVars.checksums_values.pgsql_servers_v2, &ProxySQL_Cluster::cluster_pgsql_servers_diffs_before_sync,
-		 nullptr, nullptr, 0, 0, nullptr},
+		 nullptr, nullptr, 0, 0, nullptr, "pgsql_servers"},
 		{ClusterModules::PGSQL_USERS, &checksums_values.pgsql_users, &GloVars.checksums_values.pgsql_users, &ProxySQL_Cluster::cluster_pgsql_users_diffs_before_sync,
-		 nullptr, nullptr, 0, 0, nullptr},
+		 nullptr, nullptr, 0, 0, nullptr, nullptr},
 		{ClusterModules::PGSQL_VARIABLES, &checksums_values.pgsql_variables, &GloVars.checksums_values.pgsql_variables, &ProxySQL_Cluster::cluster_pgsql_variables_diffs_before_sync,
 		 "pgsql", RuntimeCommands::LOAD_PGSQL_VARIABLES,
 		 static_cast<int>(p_cluster_counter::sync_conflict_pgsql_variables_share_epoch),
-		 static_cast<int>(p_cluster_counter::sync_delayed_pgsql_variables_version_one), nullptr}
+		 static_cast<int>(p_cluster_counter::sync_delayed_pgsql_variables_version_one), nullptr, nullptr}
 	};
 
 	while ( _r && (row = mysql_fetch_row(_r))) {
@@ -714,9 +719,10 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 					// Get diff threshold using member pointer with atomic load
 					unsigned int diff_threshold = (unsigned int)(GloProxyCluster->*(module.diff_member)).load();
 
-					// Generate generalized sync message
+					// Generate generalized sync message using the actual variable suffix
 					char sync_msg[256];
-					snprintf(sync_msg, sizeof(sync_msg), ErrorMessages::DIFFS_BEFORE_SYNC_FORMAT, module.module_name);
+					const char* var_suffix = module.sync_var_suffix ? module.sync_var_suffix : module.module_name;
+					snprintf(sync_msg, sizeof(sync_msg), ErrorMessages::DIFFS_BEFORE_SYNC_FORMAT, var_suffix);
 
 					process_component_checksum(
 						row,
