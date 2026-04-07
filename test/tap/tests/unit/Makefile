@@ -242,12 +242,17 @@ $(ODIR)/test_globals.o: $(TEST_HELPERS_DIR)/test_globals.cpp | $(ODIR)
 $(ODIR)/test_init.o: $(TEST_HELPERS_DIR)/test_init.cpp | $(ODIR)
 	$(CXX) -c -o $@ $< $(OPT) $(IDIRS) -Wall
 
-$(FAKE_PLUGIN_SO): $(TEST_HELPERS_DIR)/fake_plugin.cpp | $(TEST_HELPERS_DIR)
+$(FAKE_PLUGIN_SO): $(TEST_HELPERS_DIR)/fake_plugin.cpp $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h | $(TEST_HELPERS_DIR)
 	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(IDIRS) -ldl
 
 # Keep on-demand unit-test library rebuilds aligned with the default top-level
 # feature set so incremental rebuilds do not mix incompatible objects.
-$(LIBPROXYSQLAR):
+# Always delegate libproxysql.a freshness checks to the lib submake so unit
+# tests do not link against a stale archive after source/header changes.
+.PHONY: FORCE
+FORCE:
+
+$(LIBPROXYSQLAR): FORCE
 	$(MAKE) -C $(PROXYSQL_PATH)/lib libproxysql.a \
 		PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) \
 		PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) \
@@ -293,6 +298,7 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	log_utils_unit-t \
 	genai_thread_unit-t \
 	listen_validator_unit-t \
+	plugin_config_unit-t \
 	c_tokenizer_unit-t \
 	pgsql_tokenizer_unit-t \
 	ezoption_parser_unit-t \
@@ -327,6 +333,7 @@ ezoption_parser_unit-t: ezoption_parser_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noi
 
 plugin_manager_unit-t: plugin_manager_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
 		$(IDIRS) $(LDIRS) $(OPT) $(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
@@ -346,4 +353,4 @@ plugin_manager_unit-t: plugin_manager_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)/tap.o
 .PHONY: clean
 .SILENT: clean
 clean:
-	rm -rf $(ODIR) $(UNIT_TESTS)
+	rm -rf $(ODIR) $(UNIT_TESTS) $(FAKE_PLUGIN_SO)
