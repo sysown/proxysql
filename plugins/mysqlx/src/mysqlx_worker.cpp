@@ -3,6 +3,7 @@
 #include "mysqlx_backend_session.h"
 #include "mysqlx_frontend_session.h"
 #include "mysqlx_plugin.h"
+#include "mysqlx_stats.h"
 #include "sqlite3db.h"
 
 #include <arpa/inet.h>
@@ -165,20 +166,27 @@ void MysqlxWorker::run() {
 			MysqlxPluginContext& ctx = mysqlx_context();
 
 			if (ctx.config_store && session.run_handshake_and_auth(*ctx.config_store)) {
-				// Frontend auth succeeded — connect to backend.
+				// Capture topology generation at session bind time.
+				// A future GR observer only needs to call bump_topology_generation()
+				// to trigger re-evaluation on the next session or reconnect.
+				uint64_t bound_generation = ctx.config_store->topology_generation();
+				(void)bound_generation; // Phase 2 seam: compare on reconnect/reroute.
+
 				const MysqlxResolvedIdentity& identity = session.identity();
 				MysqlxBackendEndpoint endpoint = ctx.config_store->pick_endpoint(identity.default_route);
 
 				if (endpoint.hostname.empty()) {
 					mysqlx_send_error(fd, 4000, "No backend endpoint available for route");
+					mysqlx_stats().record_conn_err(identity.default_route);
 				} else {
 					MysqlxBackendSession backend;
 					std::string err {};
 					if (backend.connect(identity, endpoint, err)) {
-						// Relay traffic bidirectionally until close.
+						mysqlx_stats().record_conn_ok(identity.default_route);
 						backend.relay(fd);
 					} else {
 						mysqlx_send_error(fd, 4001, "Backend connection failed: " + err);
+						mysqlx_stats().record_conn_err(identity.default_route);
 					}
 				}
 			}

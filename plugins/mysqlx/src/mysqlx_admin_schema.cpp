@@ -198,6 +198,33 @@ void register_runtime_table(
 	services.register_table(runtime_def);
 }
 
+const char kStatsMysqlxRoutesTable[] = "stats_mysqlx_routes";
+const char kStatsMysqlxRoutesTableDef[] =
+	"CREATE TABLE stats_mysqlx_routes ("
+	" name VARCHAR NOT NULL,"
+	" destination_hostgroup INT NOT NULL,"
+	" ConnOK INT NOT NULL DEFAULT 0,"
+	" ConnERR INT NOT NULL DEFAULT 0,"
+	" ConnUsed INT NOT NULL DEFAULT 0,"
+	" Bytes_data_sent BIGINT NOT NULL DEFAULT 0,"
+	" Bytes_data_recv BIGINT NOT NULL DEFAULT 0"
+	" )";
+
+const char kStatsMysqlxProcesslistTable[] = "stats_mysqlx_processlist";
+const char kStatsMysqlxProcesslistTableDef[] =
+	"CREATE TABLE stats_mysqlx_processlist ("
+	" username VARCHAR NOT NULL,"
+	" route VARCHAR NOT NULL,"
+	" worker_id INT NOT NULL,"
+	" backend_host VARCHAR NOT NULL,"
+	" backend_port INT NOT NULL,"
+	" auth_mode VARCHAR NOT NULL,"
+	" connection_state VARCHAR NOT NULL,"
+	" bytes_in BIGINT NOT NULL DEFAULT 0,"
+	" bytes_out BIGINT NOT NULL DEFAULT 0,"
+	" session_age_ms BIGINT NOT NULL DEFAULT 0"
+	" )";
+
 } // namespace
 
 bool mysqlx_register_admin_schema(ProxySQL_PluginServices& services) {
@@ -213,6 +240,24 @@ bool mysqlx_register_admin_schema(ProxySQL_PluginServices& services) {
 
 	register_table_pair(services, kMysqlxBackendEndpointsTable, kMysqlxBackendEndpointsTableDef);
 	register_runtime_table(services, kRuntimeMysqlxBackendEndpointsTable, kRuntimeMysqlxBackendEndpointsTableDef);
+
+	// Stats tables (stats_db only, no config copy needed).
+	{
+		ProxySQL_PluginTableDef stats_routes {
+			ProxySQL_PluginDBKind::stats_db,
+			kStatsMysqlxRoutesTable,
+			kStatsMysqlxRoutesTableDef
+		};
+		services.register_table(stats_routes);
+	}
+	{
+		ProxySQL_PluginTableDef stats_processlist {
+			ProxySQL_PluginDBKind::stats_db,
+			kStatsMysqlxProcesslistTable,
+			kStatsMysqlxProcesslistTableDef
+		};
+		services.register_table(stats_processlist);
+	}
 
 	services.register_command("PLUGIN MYSQLX LOAD USERS TO RUNTIME", &load_users_to_runtime);
 	services.register_command("PLUGIN MYSQLX LOAD ROUTES TO RUNTIME", &load_routes_to_runtime);
