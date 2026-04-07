@@ -4,62 +4,69 @@ Date: 2026-04-07
 Branch: `mysqlx-plugin-impl`
 Worktree: `/data/rene/proxysql/.worktrees/mysqlx-plugin-impl`
 
-## Completed on this branch
+## All 9 Tasks Complete
 
-- Task 1: generic plugin ABI and loader
-- Task 2: plugin configuration and core lifecycle wiring
-- Task 3: plugin-owned admin table and command registration
-- Task 4: mysqlx plugin scaffold, build integration, and plugin-load smoke test
+| Task | Description | Commit | Tests |
+|------|-------------|--------|-------|
+| 1 | Generic plugin ABI and loader | `7e1a12b8f` | plugin_manager_unit-t |
+| 2 | Plugin configuration and core lifecycle | `804771271` | plugin_config_unit-t |
+| 3 | Plugin-owned admin table/command registration | `cd15afdd1` | plugin_registry_unit-t |
+| 4 | mysqlx plugin scaffold and build integration | `19d48bdc1` | test_mysqlx_plugin_load-t (6/6) |
+| 5 | Config store, runtime tables, dual-mode identity | `0b11bce37` | mysqlx_config_store_unit-t (16/16), test_mysqlx_admin_tables-t (20/20) |
+| 6 | Listener sockets and worker threads | `5b5bbfbca` | test_mysqlx_listener_smoke-t (8/8) |
+| 7 | Frontend X handshake, auth, account enforcement | `05ca510f2` | mysqlx_protocol_unit-t (10/10) |
+| 8 | Backend X sessions and hostgroup-based routing | `e087fdda4` | mysqlx_route_store_unit-t (8/8) |
+| 9 | Stats, topology invalidation hooks | `c2e90d369` | mysqlx_stats_unit-t (7/7) |
 
-## Task 4 verification
+## Plugin Module Map
 
-The latest verified end-to-end smoke command was:
+| File | Responsibility |
+|------|----------------|
+| `mysqlx_plugin.h/cpp` | Plugin descriptor, context, lifecycle hooks |
+| `mysqlx_admin_schema.h/cpp` | DDL registration, LOAD TO RUNTIME commands, stats table schema |
+| `mysqlx_config_store.h/cpp` | Runtime caches, dual-mode identity merge, round_robin routing |
+| `mysqlx_worker.h/cpp` | Listener sockets, accept loop, worker threads |
+| `mysqlx_protocol.h/cpp` | X frame encode/decode, MYSQL41 scramble auth, protobuf helpers |
+| `mysqlx_frontend_session.h/cpp` | Client handshake state machine (CapabilitiesGet/Set, Auth) |
+| `mysqlx_backend_session.h/cpp` | Backend X connect, MYSQL41 auth, bidirectional byte relay |
+| `mysqlx_stats.h/cpp` | Atomic route counters, SQLite stats flush |
+| `proto/*.pb.h/cc` | Compiled X Protocol protobuf messages |
 
-```bash
-cd /data/rene/proxysql/.worktrees/mysqlx-plugin-impl/plugins/mysqlx && make clean && \
-cd /data/rene/proxysql/.worktrees/mysqlx-plugin-impl/test/tap/tests && \
-make test_mysqlx_plugin_load-t && \
-./test_mysqlx_plugin_load-t
-```
+## Config/Runtime Tables
 
-Result:
+- `mysqlx_users` / `runtime_mysqlx_users` — X-specific overrides for dual-mode accounts
+- `mysqlx_routes` / `runtime_mysqlx_routes` — route definitions with bind/hostgroup
+- `mysqlx_backend_endpoints` / `runtime_mysqlx_backend_endpoints` — X port mapping
+- `stats_mysqlx_routes` — per-route connection and byte counters
+- `stats_mysqlx_processlist` — (schema registered, flush not yet wired)
 
-- `ok 1` load mysqlx plugin succeeds
-- `ok 2` init_all registers mysqlx schema
-- `ok 3` mysqlx_users registered in admin_db
-- `ok 4` mysqlx_users registered in config_db
-- `ok 5` mysqlx_users admin schema includes allowed_auth_methods
-- `ok 6` mysqlx_users config schema includes backend_auth_mode
+## Admin Commands
 
-## Partial WIP
+- `PLUGIN MYSQLX LOAD USERS TO RUNTIME`
+- `PLUGIN MYSQLX LOAD ROUTES TO RUNTIME`
+- `PLUGIN MYSQLX LOAD BACKEND ENDPOINTS TO RUNTIME`
 
-Task 5 was started but not completed.
+## Auth Methods Supported
 
-Current branch state includes only failing-test scaffolding for:
+- MYSQL41 (challenge-response SHA1)
+- PLAIN (plaintext, should require TLS in production)
 
-- `test/tap/tests/unit/mysqlx_config_store_unit-t.cpp`
-- `test/tap/tests/test_mysqlx_admin_tables-t.cpp`
-- matching unit/top-level test Makefile wiring
+## Routing Strategies
 
-What is still missing from Task 5:
+- `first_available` — first ONLINE server in hostgroup
+- `round_robin` — rotate across ONLINE servers
+- `round_robin_with_fallback` — round_robin, then fallback_hostgroup
 
-- `plugins/mysqlx/include/mysqlx_config_store.h`
-- `plugins/mysqlx/src/mysqlx_config_store.cpp`
-- runtime table registration beyond `mysqlx_users`
-- `PLUGIN MYSQLX LOAD ... TO RUNTIME` command implementations
-- dual-mode identity merge logic
-- Task 5 verification
+## Phase 2 Seams
 
-## Remaining work tracked in GitHub
+- Topology generation counter captured at session bind time
+- `bump_topology_generation()` available for future GR notification observer
+- Policy profile field present on resolved identity but not enforced
 
-- Task 5: [#5585](https://github.com/sysown/proxysql/issues/5585) mysqlx runtime schema, load commands, and dual-mode identity resolution
-- Task 6: [#5588](https://github.com/sysown/proxysql/issues/5588) plugin-owned listeners and worker threads
-- Task 7: [#5584](https://github.com/sysown/proxysql/issues/5584) frontend X handshake, auth, and account enforcement
-- Task 8: [#5586](https://github.com/sysown/proxysql/issues/5586) backend X sessions and hostgroup-based route selection
-- Task 9: [#5587](https://github.com/sysown/proxysql/issues/5587) stats, end-to-end coverage, and topology invalidation hooks
+## Known Limitations (Phase 1)
 
-## Notes
-
-- The Task 5 implementer run was interrupted by a usage-limit error before it could finish the implementation.
-- Plugin admin commands must remain namespaced with the `PLUGIN ` prefix.
-- Runtime mysqlx tables should live in the admin DB; there is no separate plugin runtime DB kind.
+- One frontend session = one backend session (no pooling)
+- `pass_through` backend auth mode explicitly rejected
+- Stats processlist table registered but not flushed during relay
+- TLS negotiation acknowledged but not implemented in CapabilitiesSet
+- No end-to-end integration test with a live MySQL X backend (requires Docker infrastructure)
