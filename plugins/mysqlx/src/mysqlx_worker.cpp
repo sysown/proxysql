@@ -1,5 +1,7 @@
 #include "mysqlx_worker.h"
 
+#include "mysqlx_frontend_session.h"
+#include "mysqlx_plugin.h"
 #include "sqlite3db.h"
 
 #include <arpa/inet.h>
@@ -158,8 +160,15 @@ void MysqlxWorker::run() {
 		}
 
 		for (int fd : fds) {
-			// Phase 1 MVP: accept connection, then close it.
-			// Tasks 7-8 will add X Protocol handshake and backend relay here.
+			MysqlxFrontendSession session(fd);
+			MysqlxPluginContext& ctx = mysqlx_context();
+
+			if (ctx.config_store && session.run_handshake_and_auth(*ctx.config_store)) {
+				// Authentication succeeded.
+				// Task 8 will add backend session relay here.
+				// For now, send an error indicating no backend and close.
+				mysqlx_send_error(fd, 4000, "No backend session available (Phase 1 stub)");
+			}
 			close(fd);
 		}
 

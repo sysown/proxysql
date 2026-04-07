@@ -14,7 +14,7 @@ PROTO_DIR := $(PLUGIN_DIR)/proto
 PROTO_SRCS := $(wildcard $(PROTO_DIR)/*.pb.cc)
 PROTO_OBJS := $(patsubst $(PROTO_DIR)/%.pb.cc,$(ODIR)/%.pb.o,$(PROTO_SRCS))
 
-IDIRS := -I$(PROXYSQL_IDIR) -I$(PLUGIN_DIR)/include -I$(SQLITE3_IDIR) -I$(PROTO_DIR)
+IDIRS := -I$(PROXYSQL_IDIR) -I$(PLUGIN_DIR)/include -I$(SQLITE3_IDIR) -I$(PROTO_DIR) -I$(SSL_IDIR)
 
 OPTZ ?= -O2 -ggdb
 CXXFLAGS := $(STDCPP) -fPIC $(OPTZ) $(WGCOV) $(WASAN)
@@ -24,7 +24,9 @@ CXXFLAGS := $(STDCPP) -fPIC $(OPTZ) $(WGCOV) $(WASAN)
 SRCS := $(PLUGIN_DIR)/src/mysqlx_plugin.cpp \
 	$(PLUGIN_DIR)/src/mysqlx_admin_schema.cpp \
 	$(PLUGIN_DIR)/src/mysqlx_config_store.cpp \
-	$(PLUGIN_DIR)/src/mysqlx_worker.cpp
+	$(PLUGIN_DIR)/src/mysqlx_worker.cpp \
+	$(PLUGIN_DIR)/src/mysqlx_protocol.cpp \
+	$(PLUGIN_DIR)/src/mysqlx_frontend_session.cpp
 HEADERS := $(wildcard $(PLUGIN_DIR)/include/*.h) \
 	$(PROXYSQL_PATH)/include/ProxySQL_Plugin.h
 OBJS := $(patsubst $(PLUGIN_DIR)/src/%.cpp,$(ODIR)/%.o,$(SRCS))
@@ -39,7 +41,7 @@ $(ODIR)/%.pb.o: $(PROTO_DIR)/%.pb.cc | $(ODIR)
 	$(CXX) -c -o $@ $< $(CXXFLAGS) -I$(PROTO_DIR) -w
 
 $(PLUGIN_SO): $(OBJS) $(PROTO_OBJS)
-	$(CXX) -shared -o $@ $^ $(CXXFLAGS) -lprotobuf
+	$(CXX) -shared -o $@ $^ $(CXXFLAGS) -lprotobuf -lssl -lcrypto
 
 .PHONY: all
 all: $(PLUGIN_SO)
