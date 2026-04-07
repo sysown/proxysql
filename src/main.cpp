@@ -45,6 +45,7 @@ using json = nlohmann::json;
 #include "PgSQL_Query_Cache.h"
 #include "proxysql_restapi.h"
 #include "Web_Interface.hpp"
+#include "ProxySQL_PluginManager.h"
 #include "proxysql_utils.h"
 #include "PgSQL_Monitor.hpp"
 
@@ -98,6 +99,8 @@ void * __mysql_ldap_auth;
 
 volatile create_Web_Interface_t * create_Web_Interface = NULL;
 void * __web_interface;
+
+static std::unique_ptr<ProxySQL_PluginManager> GloPluginManager;
 
 std::thread* pgsql_monitor_thread = nullptr;
 
@@ -806,6 +809,15 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 				GloVars.ldap_auth_plugin=strdup(ldap_auth_plugin.c_str());
 			}
 		}
+		GloVars.plugin_modules.clear();
+		if (root.exists("plugins")==true) {
+			const Setting& plugins = root["plugins"];
+			for (int i = 0; i < plugins.getLength(); ++i) {
+				if (plugins[i].isString()) {
+					GloVars.plugin_modules.emplace_back(plugins[i].c_str());
+				}
+			}
+		}
 		const map<string, char**> varnames_globals_map {
 			{ "mysql-ssl_p2s_ca", &GloVars.global.gr_bootstrap_ssl_ca },
 			{ "mysql-ssl_p2s_capath", &GloVars.global.gr_bootstrap_ssl_capath },
@@ -1481,11 +1493,57 @@ static void LoadPlugins() {
 	}
 }
 
+static void LoadConfiguredPlugins() {
+	if (GloVars.plugin_modules.empty()) {
+		GloPluginManager.reset();
+		return;
+	}
+
+	GloPluginManager = std::make_unique<ProxySQL_PluginManager>();
+	std::string plugin_error {};
+
+	for (const auto& path : GloVars.plugin_modules) {
+		if (!GloPluginManager->load(path, plugin_error)) {
+			proxy_error("Unable to load plugin %s: %s\n", path.c_str(), plugin_error.c_str());
+			exit(EXIT_FAILURE);
+		}
+	}
+
+	if (!GloPluginManager->init_all(plugin_error)) {
+		proxy_error("Plugin init failed: %s\n", plugin_error.c_str());
+		exit(EXIT_FAILURE);
+	}
+}
+
+static void StartConfiguredPlugins() {
+	if (!GloPluginManager) {
+		return;
+	}
+
+	std::string plugin_error {};
+	if (!GloPluginManager->start_all(plugin_error)) {
+		proxy_error("Plugin start failed: %s\n", plugin_error.c_str());
+		exit(EXIT_FAILURE);
+	}
+}
+
+static void StopConfiguredPlugins() {
+	if (!GloPluginManager) {
+		return;
+	}
+
+	if (!GloPluginManager->stop_all()) {
+		proxy_error("Plugin stop failed during shutdown\n");
+	}
+	GloPluginManager.reset();
+}
+
 /**
  * @brief Unloads all the plugins that hold some resources that
  *  need to be deallocated.
  */
 void UnloadPlugins() {
+	StopConfiguredPlugins();
 	if (GloWebInterface) {
 		GloWebInterface->stop();
 	}
@@ -1504,7 +1562,9 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 	ProxySQL_Main_init_MCP_module();
 #endif /* PROXYSQLGENAI */
 
+	LoadConfiguredPlugins();
 	ProxySQL_Main_init_Admin_module(boostrap_info);
+	StartConfiguredPlugins();
 	GloMTH->print_version();
 
 	{

@@ -223,6 +223,7 @@ endif
 TEST_HELPERS_DIR := $(PROXYSQL_PATH)/test/tap/test_helpers
 FAKE_PLUGIN_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin.so
 ODIR := obj
+PROXYSQL_TEST_HEADERS := $(wildcard $(PROXYSQL_PATH)/include/*.h) $(wildcard $(PROXYSQL_PATH)/include/*.hpp)
 
 TEST_HELPERS_OBJ := $(ODIR)/test_globals.o $(ODIR)/test_init.o $(ODIR)/tap.o
 
@@ -236,10 +237,10 @@ TAP_SRC := $(TAP_PATH)/tap.cpp
 $(ODIR)/tap.o: $(TAP_SRC) | $(ODIR)
 	$(CXX) -c -o $@ $< $(OPT) $(IDIRS) -w
 
-$(ODIR)/test_globals.o: $(TEST_HELPERS_DIR)/test_globals.cpp | $(ODIR)
+$(ODIR)/test_globals.o: $(TEST_HELPERS_DIR)/test_globals.cpp $(PROXYSQL_TEST_HEADERS) | $(ODIR)
 	$(CXX) -c -o $@ $< $(OPT) $(IDIRS) -I$(PROXYSQL_PATH)/test -Wall
 
-$(ODIR)/test_init.o: $(TEST_HELPERS_DIR)/test_init.cpp | $(ODIR)
+$(ODIR)/test_init.o: $(TEST_HELPERS_DIR)/test_init.cpp $(PROXYSQL_TEST_HEADERS) | $(ODIR)
 	$(CXX) -c -o $@ $< $(OPT) $(IDIRS) -Wall
 
 $(FAKE_PLUGIN_SO): $(TEST_HELPERS_DIR)/fake_plugin.cpp $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h | $(TEST_HELPERS_DIR)
@@ -298,6 +299,7 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	log_utils_unit-t \
 	genai_thread_unit-t \
 	listen_validator_unit-t \
+	plugin_config_unit-t \
 	c_tokenizer_unit-t \
 	pgsql_tokenizer_unit-t \
 	ezoption_parser_unit-t \

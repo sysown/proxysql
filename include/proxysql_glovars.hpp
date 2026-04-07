@@ -5,6 +5,7 @@
 #define CLUSTER_SYNC_INTERFACES_MYSQL "('mysql-interfaces')"
 
 #include <memory>
+#include <vector>
 #include <string.h>
 #include "prometheus/registry.h"
 
@@ -80,6 +81,7 @@ class ProxySQL_GlobalVariables {
 	char * sqlite3_plugin;
 	char * web_interface_plugin;
 	char * ldap_auth_plugin;
+	std::vector<std::string> plugin_modules;
 	SSL_CTX *get_SSL_ctx();
 	SSL *get_SSL_new();
 	void get_SSL_pem_mem(char **key, char **cert);
