@@ -402,10 +402,13 @@ libscram/lib/libscram.a:postgresql/postgresql/src/interfaces/libpq/libpq.a
 libscram: libscram/lib/libscram.a
 
 
-nuraft/build/libnuraft.a:
-	cd nuraft && CC=${CC} CXX=${CXX} ${MAKE}
+nuraft/NuRaft-3.0.0/build/libnuraft.a:
+	cd nuraft && rm -rf NuRaft-*/ || true
+	cd nuraft && tar -zxf NuRaft-*.tar.gz
+	cd nuraft/NuRaft-3.0.0 && mkdir -p build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-fPIC" -DCMAKE_CXX_FLAGS="-fPIC" -DCMAKE_CXX_STANDARD=17 -DBOOST_INCLUDE_PATH=/usr/include -DBOOST_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu -DDISABLE_SSL=OFF -DOPENSSL_INCLUDE_DIR=$(SSL_IDIR) -DOPENSSL_SSL_LIBRARY=$(LIB_SSL_PATH) -DOPENSSL_CRYPTO_LIBRARY=$(LIB_CRYPTO_PATH) -DDISABLE_EXAMPLES=ON -DDISABLE_TESTS=ON
+	cd nuraft/NuRaft-3.0.0/build && CC=${CC} CXX=${CXX} ${MAKE} static_lib
 
-nuraft: nuraft/build/libnuraft.a
+nuraft: nuraft/NuRaft-3.0.0/build/libnuraft.a
 
 
 ### clean targets
@@ -445,6 +448,6 @@ cleanall:
 	cd libscram && rm -rf lib/* obj/* || true
 	cd json && rm -rf json-*/ || true
 	cd zstd && rm -rf zstd-*/ || true
-	cd nuraft && rm -rf build/ || true
+	cd nuraft && rm -rf NuRaft-*/ || true
 .PHONY: cleanall
 
