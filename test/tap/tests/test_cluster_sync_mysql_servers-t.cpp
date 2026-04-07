@@ -230,18 +230,18 @@ int check_mysql_servers_sync(
 	string_format(t_debug_query, print_master_runtime_mysql_servers_hostgroups, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_mysql_servers");
 
 	std::string print_nomonitor_replica_mysql_servers_hostgroups;
-	string_format(t_debug_query, print_nomonitor_replica_mysql_servers_hostgroups, "radmin", "radmin", cl.host, R_NOMONITOR_PORT, "SELECT * FROM mysql_servers");
+	string_format(t_debug_query, print_nomonitor_replica_mysql_servers_hostgroups, cl.admin_username, cl.admin_password, cl.host, R_NOMONITOR_PORT, "SELECT * FROM mysql_servers");
 	std::string print_nomonitor_replica_runtime_mysql_servers_hostgroups;
-	string_format(t_debug_query, print_nomonitor_replica_runtime_mysql_servers_hostgroups, "radmin", "radmin", cl.host, R_NOMONITOR_PORT, "SELECT * FROM runtime_mysql_servers");
+	string_format(t_debug_query, print_nomonitor_replica_runtime_mysql_servers_hostgroups, cl.admin_username, cl.admin_password, cl.host, R_NOMONITOR_PORT, "SELECT * FROM runtime_mysql_servers");
 	std::string print_nomonitor_replica_disk_mysql_servers_hostgroups;
-	string_format(t_debug_query, print_nomonitor_replica_disk_mysql_servers_hostgroups, "radmin", "radmin", cl.host, R_NOMONITOR_PORT, "SELECT * FROM disk.mysql_servers");
+	string_format(t_debug_query, print_nomonitor_replica_disk_mysql_servers_hostgroups, cl.admin_username, cl.admin_password, cl.host, R_NOMONITOR_PORT, "SELECT * FROM disk.mysql_servers");
 
 	std::string print_withmonitor_replica_mysql_servers_hostgroups;
-	string_format(t_debug_query, print_withmonitor_replica_mysql_servers_hostgroups, "radmin", "radmin", cl.host, R_WITHMONITOR_PORT, "SELECT * FROM mysql_servers");
+	string_format(t_debug_query, print_withmonitor_replica_mysql_servers_hostgroups, cl.admin_username, cl.admin_password, cl.host, R_WITHMONITOR_PORT, "SELECT * FROM mysql_servers");
 	std::string print_withmonitor_replica_runtime_mysql_servers_hostgroups;
-	string_format(t_debug_query, print_withmonitor_replica_runtime_mysql_servers_hostgroups, "radmin", "radmin", cl.host, R_WITHMONITOR_PORT, "SELECT * FROM runtime_mysql_servers");
+	string_format(t_debug_query, print_withmonitor_replica_runtime_mysql_servers_hostgroups, cl.admin_username, cl.admin_password, cl.host, R_WITHMONITOR_PORT, "SELECT * FROM runtime_mysql_servers");
 	std::string print_withmonitor_replica_disk_mysql_servers_hostgroups;
-	string_format(t_debug_query, print_withmonitor_replica_disk_mysql_servers_hostgroups, "radmin", "radmin", cl.host, R_WITHMONITOR_PORT, "SELECT * FROM disk.mysql_servers");
+	string_format(t_debug_query, print_withmonitor_replica_disk_mysql_servers_hostgroups, cl.admin_username, cl.admin_password, cl.host, R_WITHMONITOR_PORT, "SELECT * FROM disk.mysql_servers");
 
 
 	std::string variable_val;
@@ -604,6 +604,12 @@ int launch_proxysql_replica(const CommandLine& cl, uint32_t r_port, const std::s
 	const std::string& stats_db = workdir + "test_cluster_sync_config/test_cluster_sync_" + config_filename + "/proxysql_stats.db";
 	const std::string& fmt_config_file = workdir + "test_cluster_sync_config/test_cluster_sync_" + config_filename + "/test_cluster_sync.cnf";
 
+	// Remove stale databases from previous runs so ProxySQL reads the
+	// config file instead of loading the persisted (and potentially
+	// mismatched) configuration from a leftover proxysql.db.
+	remove(proxysql_db.c_str());
+	remove(stats_db.c_str());
+
 	// Setup the config file using the env variables in 'CommandLine'
 	if (setup_config_file(cl, r_port, config_filename)) {
 		return EXIT_FAILURE;
@@ -779,7 +785,13 @@ int main(int, char**) {
 	MYSQL_QUERY(proxy_admin, "CREATE TABLE proxysql_servers_sync_test_backup_2687 AS SELECT * FROM proxysql_servers");
 
 	// 2. Remove primary from Core nodes
-	MYSQL_QUERY(proxy_admin, "DELETE FROM proxysql_servers WHERE hostname=='127.0.0.1' AND PORT==6032");
+	// CI-isolated: Use cl.host and cl.admin_port instead of hardcoded values
+	std::string delete_primary_query;
+	string_format(
+		"DELETE FROM proxysql_servers WHERE hostname='%s' AND port=%d",
+		delete_primary_query, cl.host, cl.admin_port
+	);
+	MYSQL_QUERY(proxy_admin, delete_primary_query.c_str());
 	MYSQL_QUERY(proxy_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
 
 	pair<int,vector<srv_addr_t>> core_nodes { fetch_cluster_nodes(proxy_admin) };
@@ -844,8 +856,8 @@ int main(int, char**) {
 		// Waiting for proxysql to be ready
 		conn_opts_t conn_opts_nomonitor {};
 		conn_opts_nomonitor.host = cl.host;
-		conn_opts_nomonitor.user = "radmin";
-		conn_opts_nomonitor.pass = "radmin";
+		conn_opts_nomonitor.user = cl.admin_username;
+		conn_opts_nomonitor.pass = cl.admin_password;
 		conn_opts_nomonitor.port = R_NOMONITOR_PORT;
 
 		// connect to proxsqyl replica [nomonitor]
@@ -861,8 +873,8 @@ int main(int, char**) {
 
 		conn_opts_t conn_opts_withmonitor {};
 		conn_opts_withmonitor.host = cl.host;
-		conn_opts_withmonitor.user = "radmin";
-		conn_opts_withmonitor.pass = "radmin";
+		conn_opts_withmonitor.user = cl.admin_username;
+		conn_opts_withmonitor.pass = cl.admin_password;
 		conn_opts_withmonitor.port = R_WITHMONITOR_PORT;
 
 		// connect to proxsqyl replica [nomonitor]

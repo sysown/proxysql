@@ -798,6 +798,7 @@ handler_again:
 	case ASYNC_STMT_DESCRIBE_END:
 	case ASYNC_STMT_EXECUTE_END:
 		PROXY_TRACE2();
+
 		if (is_error_present()) {
 			compute_unknown_transaction_status();
 		} else {
@@ -919,6 +920,7 @@ handler_again:
 	}
 	break;
 	case ASYNC_RESET_SESSION_END:
+		PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::unhandled_notice_cb, this);
 		if (is_error_present()) {
 			NEXT_IMMEDIATE(ASYNC_RESET_SESSION_FAILED);
 		}
@@ -1212,7 +1214,7 @@ void PgSQL_Connection::fetch_result_cont(short event) {
 	}
 }
 
-void PgSQL_Connection::flush() {
+void PgSQL_Connection::flush(bool is_resync) {
 	int res = PQflush(pgsql_conn);
 
 	if (res > 0) {
@@ -1222,7 +1224,11 @@ void PgSQL_Connection::flush() {
 		async_exit_status = PG_EVENT_READ;
 	}
 	else {
-		set_error_from_PQerrorMessage();
+		if (!is_resync) {
+			set_error_from_PQerrorMessage();
+		} else {
+			resync_failed = true;
+		}
 		proxy_error("Failed to flush data to backend. %s\n", get_error_code_with_message().c_str());
 		async_exit_status = PG_EVENT_NONE;
 	}
@@ -1555,41 +1561,34 @@ int PgSQL_Connection::async_ping(short event) {
 }
 
 bool PgSQL_Connection::IsKnownActiveTransaction() {
-	bool in_txn = false;
-	if (pgsql_conn) {
-		// Get the transaction status
-		PGTransactionStatusType status = PQtransactionStatus(pgsql_conn);
-		if (status == PQTRANS_INTRANS || status == PQTRANS_INERROR) {
-			in_txn = true;
-		}
+	if (!pgsql_conn) return false;
+
+	PGTransactionStatusType status = PQtransactionStatus(pgsql_conn);
+	if (status == PQTRANS_INTRANS || status == PQTRANS_INERROR) {
+		return true;
 	}
-	return in_txn;
+
+	// In pipeline mode, libpq status may be stale because ReadyForQuery hasn't been processed yet
+	// Use the session's transaction state manager which tracks BEGIN/COMMIT/ROLLBACK via SQL parsing
+	if (PQpipelineStatus(pgsql_conn) == PQ_PIPELINE_ON && myds && myds->sess) {
+		return myds->sess->is_in_transaction();
+	}
+
+	return false;
 }
 
 bool PgSQL_Connection::IsActiveTransaction() {
-	bool in_txn = false;
-	if (pgsql_conn) {
-
-		// Get the transaction status
-		PGTransactionStatusType status = PQtransactionStatus(pgsql_conn);
-
-		switch (status) {
-		case PQTRANS_INTRANS:
-		case PQTRANS_INERROR:
-			in_txn = true;
-			break;
-		case PQTRANS_UNKNOWN:
-		case PQTRANS_IDLE:
-		case PQTRANS_ACTIVE:
-		default:
-			in_txn = false;
-		}
-
-		if (in_txn == false && is_error_present() && unknown_transaction_status == true) {
-			in_txn = true;
-		} 
+	// First check known state
+	if (IsKnownActiveTransaction()) {
+		return true;
 	}
-	return in_txn;
+
+	// Check unknown transaction status flag
+	if (is_error_present() && unknown_transaction_status) {
+		return true;
+	}
+
+	return false;
 }
 
 bool PgSQL_Connection::IsServerOffline() {
@@ -1773,7 +1772,7 @@ void PgSQL_Connection::resync_start() {
 		resync_failed = true;
 		return;
 	}
-	async_exit_status = PG_EVENT_WRITE;
+	flush(true);
 }
 
 void PgSQL_Connection::resync_cont(short event) {
@@ -1781,17 +1780,7 @@ void PgSQL_Connection::resync_cont(short event) {
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6, "event=%d\n", event);
 	async_exit_status = PG_EVENT_NONE;
 	if (event & POLLOUT) {
-		int res = PQflush(pgsql_conn);
-
-		if (res > 0) {
-			async_exit_status = PG_EVENT_WRITE;
-		} else if (res == 0) {
-			async_exit_status = PG_EVENT_READ;
-		} else {
-			proxy_error("Failed to flush data to backend.\n");
-			async_exit_status = PG_EVENT_NONE;
-			resync_failed = true;
-		}
+		flush(true);
 	}
 }
 
@@ -1940,6 +1929,7 @@ void PgSQL_Connection::reset_session_start() {
 	assert(pgsql_conn);
 	reset_error();
 	async_exit_status = PG_EVENT_NONE;
+	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::notice_handler_cb, this);
 
 	reset_session_in_pipeline = is_pipeline_active();
 	if (reset_session_in_pipeline) {
@@ -2195,6 +2185,15 @@ bool PgSQL_Connection::handle_copy_out(const PGresult* result, uint64_t* process
 void PgSQL_Connection::notice_handler_cb(void* arg, const PGresult* result) {
 	assert(arg);
 	PgSQL_Connection* conn = (PgSQL_Connection*)arg;
+	if (conn->query_result == nullptr) {
+		// Notice received without active query_result. This can happen when:
+		// - RESET SESSION is in progress (DISCARD ALL or ROLLBACK)
+		proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Notice received without active query_result [State: %d, FD: %d]: %s\n",
+			(int)conn->async_state_machine,
+			conn->get_pg_socket_fd(),
+			(result ? PQresultErrorMessage(result) : "unknown notice"));
+		return;
+	}
 	const unsigned int bytes_recv = conn->query_result->add_notice(result);
 	conn->update_bytes_recv(bytes_recv);
 }

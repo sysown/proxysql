@@ -61,6 +61,15 @@ utils_mysql8.o: utils.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.s
 tap.o: tap.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so -lssl -lcrypto libcpp_dotenv.so
 	$(CXX) -fPIC -c tap.cpp $(IDIRS) $(OPT)
 
+noise_utils_mariadb.o: noise_utils.cpp noise_utils.h utils.h command_line.h cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so -lssl -lcrypto libcpp_dotenv.so
+	$(CXX) -DEXCLUDE_REPLACE_STR -fPIC -c noise_utils.cpp $(IDIRS) -I$(MARIADB_IDIR) -I$(POSTGRESQL_IDIR) $(OPT) -o $@
+
+noise_utils_mysql57.o: noise_utils.cpp noise_utils.h utils.h command_line.h cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so -lssl -lcrypto libcpp_dotenv.so
+	$(CXX) -DEXCLUDE_REPLACE_STR -DDISABLE_WARNING_COUNT_LOGGING -fPIC -c noise_utils.cpp $(IDIRS) -I$(TEST_MYSQL_IDIR) -I$(TEST_MYSQL_EDIR) -I$(POSTGRESQL_IDIR) $(OPT) -o $@
+
+noise_utils_mysql8.o: noise_utils.cpp noise_utils.h utils.h command_line.h cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so -lssl -lcrypto libcpp_dotenv.so
+	$(CXX) -DEXCLUDE_REPLACE_STR -DDISABLE_WARNING_COUNT_LOGGING -fPIC -c noise_utils.cpp $(IDIRS) -I$(TEST_MYSQL8_IDIR) -I$(TEST_MYSQL_EDIR) -I$(POSTGRESQL_IDIR) $(OPT) -o $@
+
 mcp_client.o: mcp_client.cpp mcp_client.h libcurl.so
 	$(CXX) -fPIC -c mcp_client.cpp $(IDIRS) $(OPT)
 

@@ -210,6 +210,14 @@ int test_scenario_1(MYSQL* proxy_admin, const CommandLine& cl) {
 	MYSQL_QUERY__(proxy_admin, "DELETE FROM mysql_replication_hostgroups");
 	MYSQL_QUERY__(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
+	// Set default_hostgroup=0 to match writer_hostgroup used in this test
+	{
+		std::string update_user;
+		string_format("UPDATE mysql_users SET default_hostgroup=0 WHERE username='%s'", update_user, cl.root_username);
+		MYSQL_QUERY__(proxy_admin, update_user.c_str());
+		MYSQL_QUERY__(proxy_admin, "LOAD MYSQL USERS TO RUNTIME");
+	}
+
 	MYSQL_QUERY__(proxy_admin, "SET mysql-monitor_read_only_interval=200"); // setting read_only variables
 	MYSQL_QUERY__(proxy_admin, "SET mysql-monitor_read_only_timeout=100");
 	MYSQL_QUERY__(proxy_admin, "SET mysql-monitor_enabled='true'"); // enabling monitor
@@ -225,14 +233,14 @@ int test_scenario_1(MYSQL* proxy_admin, const CommandLine& cl) {
 
 		ok(read_only_val == 0, "MySQL Server '%s:%d' should function as a writer", cl.mysql_host, cl.mysql_port);
 
-		// Inserting new records into 'mysql_servers' and 'mysql_replication_hostgroups'. 
+		// Inserting new records into 'mysql_servers' and 'mysql_replication_hostgroups'.
 		result = insert_mysql_servers_records(proxy_admin, insert_mysql_servers_values, insert_replication_hostgroups_values);
 
 		if (result != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Failed to insert records in mysql_servers table.");
 			goto cleanup;
 		}
-	
+
 		std::string variable_val;
 
 		// get read_only interval variable value
@@ -363,6 +371,14 @@ int test_scenario_2(MYSQL* proxy_admin, const CommandLine& cl) {
 	MYSQL_QUERY__(proxy_admin, "DELETE FROM mysql_replication_hostgroups");
 	MYSQL_QUERY__(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
+	// Set default_hostgroup=0 to match writer_hostgroup used in this test
+	{
+		std::string update_user;
+		string_format("UPDATE mysql_users SET default_hostgroup=0 WHERE username='%s'", update_user, cl.root_username);
+		MYSQL_QUERY__(proxy_admin, update_user.c_str());
+		MYSQL_QUERY__(proxy_admin, "LOAD MYSQL USERS TO RUNTIME");
+	}
+
 	MYSQL_QUERY__(proxy_admin, "SET mysql-monitor_read_only_interval=200"); // setting read_only variables
 	MYSQL_QUERY__(proxy_admin, "SET mysql-monitor_read_only_timeout=100");
 	MYSQL_QUERY__(proxy_admin, "SET mysql-monitor_writer_is_also_reader='false'");
@@ -473,7 +489,13 @@ int test_read_only_offline_hard_servers(MYSQL* proxy_admin, const CommandLine& c
 		MYSQL_QUERY__(proxy_admin, "CREATE TABLE proxysql_servers_sync_test_backup_2687 AS SELECT * FROM proxysql_servers");
 
 		// 2. Remove primary from Core nodes
-		MYSQL_QUERY__(proxy_admin, "DELETE FROM proxysql_servers WHERE hostname=='127.0.0.1' AND PORT==6032");
+		// CI-isolated: Use cl.host and cl.admin_port instead of hardcoded values
+		std::string delete_primary_query;
+		string_format(
+			"DELETE FROM proxysql_servers WHERE hostname='%s' AND port=%d",
+			delete_primary_query, cl.host, cl.admin_port
+		);
+		MYSQL_QUERY__(proxy_admin, delete_primary_query.c_str());
 		MYSQL_QUERY__(proxy_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
 
 		core_nodes = fetch_cluster_nodes(proxy_admin);

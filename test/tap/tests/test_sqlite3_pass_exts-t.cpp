@@ -30,6 +30,70 @@ using std::string;
 using std::vector;
 using std::pair;
 
+// Global flag for MySQL version check
+static bool g_mysql_supports_random_password = false;
+static bool g_mysql_version_checked = false;
+
+/**
+ * @brief Check if MySQL server supports 'BY RANDOM PASSWORD' syntax (MySQL 8.0+)
+ * @param mysql MySQL connection handle
+ * @return true if MySQL 8.0+, false otherwise
+ */
+bool check_mysql_random_password_support(MYSQL* mysql) {
+	if (g_mysql_version_checked) {
+		return g_mysql_supports_random_password;
+	}
+
+	g_mysql_version_checked = true;
+
+	// Query MySQL version
+	if (mysql_query(mysql, "SELECT @@version") != 0) {
+		diag("Failed to query MySQL version: %s", mysql_error(mysql));
+		return false;
+	}
+
+	MYSQL_RES* res = mysql_store_result(mysql);
+	if (!res) {
+		diag("Failed to store MySQL version result");
+		return false;
+	}
+
+	MYSQL_ROW row = mysql_fetch_row(res);
+	if (!row || !row[0]) {
+		mysql_free_result(res);
+		diag("Failed to fetch MySQL version row");
+		return false;
+	}
+
+	string version(row[0]);
+	mysql_free_result(res);
+
+	// Check if version starts with 8.or higher
+	diag("MySQL server version: %s", version.c_str());
+
+	// MariaDB check
+	if (version.find("MariaDB") != string::npos) {
+		g_mysql_supports_random_password = false;
+		diag("MySQL server supports 'BY RANDOM PASSWORD': no (MariaDB detected)");
+		return false;
+	}
+
+	// Parse semantic version
+	int major = 0, minor = 0, patch = 0;
+	sscanf(version.c_str(), "%d.%d.%d", &major, &minor, &patch);
+
+	// MySQL 8.0.18+ required
+	if (major > 8 || (major == 8 && minor > 0) || (major == 8 && minor == 0 && patch >= 18)) {
+		g_mysql_supports_random_password = true;
+	} else {
+		g_mysql_supports_random_password = false;
+	}
+
+	diag("MySQL server supports 'BY RANDOM PASSWORD': %s", g_mysql_supports_random_password ? "yes" : "no");
+
+	return g_mysql_supports_random_password;
+}
+
 struct user_def_t {
 	string name;
 	string auth;
@@ -89,6 +153,13 @@ int config_proxysql_user(MYSQL* admin, const user_creds_t& creds) {
 
 pair<int,user_def_t> create_mysql_user_rnd_creds(MYSQL* mysql, const string& name, const string& auth) {
 	diag("Creating user with random pass   user:'%s'", name.c_str());
+
+	// Check MySQL version for 'BY RANDOM PASSWORD' support
+	if (!check_mysql_random_password_support(mysql)) {
+		diag("Skipping user creation: 'BY RANDOM PASSWORD' requires MySQL 8.0+");
+		diag("Current MySQL server does not support this feature");
+		return { EXIT_FAILURE, user_def_t {} };
+	}
 
 	const string CREATE_USER {
 		"CREATE USER '" + name + "'@'%' IDENTIFIED WITH '" + auth + "' BY RANDOM PASSWORD"
@@ -339,15 +410,6 @@ const vector<inv_input_t> INV_INPUTS {
 int main(int argc, char** argv) {
 	CommandLine cl;
 
-	plan(
-		INV_INPUTS.size() +
-		USER_GEN_COUNT +
-		PASS_GEN_COUNT * 2 +
-		2 + // EXTRA: Two extra correctness tests; forcing randomness
-		RAND_USERS_GEN +
-		1 // EXTRA: Conn count after 'RAND_USERS_GEN'; consistency check
-	);
-
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
@@ -355,17 +417,65 @@ int main(int argc, char** argv) {
 
 	TAP_MYSQL8_BACKEND_HG = get_env_int("TAP_MYSQL8_BACKEND_HG", 30);
 
+	// Verbose test header
+	diag("================================================================================");
+	diag("Test: test_sqlite3_pass_exts-t");
+	diag("================================================================================");
+	diag("This test verifies SQLite3 password extension functions in the ProxySQL Admin");
+	diag("interface, testing compatibility with MySQL authentication methods.");
+	diag("");
+	diag("Test scenarios:");
+	diag("  - MYSQL_NATIVE_PASSWORD: MySQL 4.1+ native password hashing");
+	diag("  - CACHING_SHA2_PASSWORD: MySQL 8.0+ caching SHA2 password hashing");
+	diag("  - Random password generation and hash verification");
+	diag("  - End-to-end connection testing with generated passwords");
+	diag("");
+	diag("Connection parameters:");
+	diag("  - MySQL Host: %s", cl.mysql_host);
+	diag("  - MySQL Port: %d", cl.mysql_port);
+	diag("  - MySQL User: %s", cl.mysql_username);
+	diag("  - Admin Host: %s", cl.admin_host);
+	diag("  - Admin Port: %d", cl.admin_port);
+	diag("================================================================================");
+	diag("");
+
 	MYSQL* mysql = mysql_init(NULL);
 
-	if (!mysql_real_connect(mysql, cl.host, cl.mysql_username, cl.mysql_password, NULL, cl.mysql_port, NULL, 0)) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
+	diag("Attempting to connect to MySQL backend at %s:%d", cl.mysql_host, cl.mysql_port);
+	if (!mysql_real_connect(mysql, cl.mysql_host, cl.mysql_username, cl.mysql_password, NULL, cl.mysql_port, NULL, 0)) {
+		diag("Failed to connect to MySQL backend: Error: %s", mysql_error(mysql));
+		diag("Connection details: host=%s, port=%d, username=%s", cl.mysql_host, cl.mysql_port, cl.mysql_username);
 		return EXIT_FAILURE;
 	}
+	diag("Successfully connected to MySQL backend");
+	diag("");
+
+	// Check MySQL version before calling plan() so we can set the correct test count
+	// MySQL 8.0+ supports 'BY RANDOM PASSWORD' syntax, MySQL 5.7 does not
+	check_mysql_random_password_support(mysql);
+
+	// Calculate the actual number of tests based on MySQL version
+	uint32_t actual_test_count =
+		INV_INPUTS.size() +           // Always run
+		PASS_GEN_COUNT * 2 +           // Always run
+		2;                             // EXTRA: Two extra correctness tests
+
+	if (g_mysql_supports_random_password) {
+		// These tests only run on MySQL 8.0+
+		actual_test_count += USER_GEN_COUNT;      // MySQL/Admin hash compatibility tests
+		actual_test_count += RAND_USERS_GEN;      // End-to-end connection tests
+		actual_test_count += 1;                   // Connection count check
+	}
+
+	diag("MySQL version supports 'BY RANDOM PASSWORD': %s", g_mysql_supports_random_password ? "yes" : "no");
+	diag("Planned test count: %u", actual_test_count);
+
+	plan(actual_test_count);
 
 
 	MYSQL* admin = mysql_init(NULL);
 
-	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+	if (!mysql_real_connect(admin, cl.admin_host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
 	}
@@ -388,8 +498,8 @@ int main(int argc, char** argv) {
 		}
 	}
 
-	// Tests MySQL/Admin hashes compatibility
-	{
+	// Tests MySQL/Admin hashes compatibility (requires MySQL 8.0+)
+	if (g_mysql_supports_random_password) {
 		vector<user_def_t> users {};
 
 		for (size_t i = 0; i < USER_GEN_COUNT/2; i++) {
@@ -423,6 +533,10 @@ int main(int argc, char** argv) {
 		for (const user_def_t& def : users) {
 			test_pass_match(admin, def);
 		}
+	} else {
+		diag("Skipping MySQL/Admin hashes compatibility tests: requires MySQL 8.0+");
+		diag("Current MySQL server does not support 'BY RANDOM PASSWORD' syntax");
+		// Note: These tests are not included in the plan for MySQL 5.7, so no skip() needed
 	}
 
 	// Tests correctness of randomly generated hashes
@@ -450,8 +564,8 @@ int main(int argc, char** argv) {
 		}
 	}
 
-	// Tests end-to-end connection with MySQL using same gen passwords
-	{
+	// Tests end-to-end connection with MySQL using same gen passwords (requires MySQL 8.0+ for caching_sha2_password)
+	if (g_mysql_supports_random_password) {
 		const string TAP_MYSQL8_BACKEND_HG_S { std::to_string(TAP_MYSQL8_BACKEND_HG) };
 		const string RAND_USERS_GEN_S { std::to_string(RAND_USERS_GEN) };
 

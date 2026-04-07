@@ -146,9 +146,17 @@ int setup_replication(int server_id, bool frontend_ssl, bool backend_ssl, std::v
 }
 
 int main(int argc, char** argv) {
+	diag("================================================================================");
+	diag("TEST DESCRIPTION: ProxySQL Binlog Fast Forward Validation");
+	diag("This test verifies ProxySQL's ability to handle MySQL replication traffic");
+	diag("using the 'Fast Forward' mode. It tests the protocol transparency when");
+	diag("streaming binlogs through ProxySQL with various SSL configurations.");
+	diag("================================================================================");
 
-	if(cl.getEnv())
+	if (cl.getEnv()) {
+		diag("ERROR: Failed to get the required environmental variables.");
 		return exit_status();
+	}
 
 	plan(8); // each test has 2 OK
 
@@ -157,19 +165,31 @@ int main(int argc, char** argv) {
 		return exit_status();
 
 	if (!mysql_real_connect(mysqladmin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n",
-				  __FILE__, __LINE__, mysql_error(mysqladmin));
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysqladmin));
 		return exit_status();
 	}
+	diag("Successfully connected to ProxySQL Admin.");
 
-	const std::vector<std::string> query_rules = { "INSERT OR IGNORE INTO mysql_query_rules (rule_id,active,match_digest,destination_hostgroup,multiplex,apply) VALUES\
-		(-1,1,'^(SELECT @rpl_semi_sync_slave=\\?.*|SET @rpl_semi_sync_slave=\\?.*)$',0,0,1)", 
-		"LOAD MYSQL QUERY RULES TO RUNTIME" };
-
-	for (const auto& query : query_rules) {
-		diag("Running on Admin: %s", query.c_str());
-		MYSQL_QUERY(mysqladmin, query.c_str());
+	// DYNAMIC DISCOVERY: Find the correct default hostgroup for the root user
+	int target_hg = 0;
+	std::string hg_query = "SELECT default_hostgroup FROM mysql_users WHERE username='" + std::string(cl.root_username) + "' LIMIT 1";
+	if (mysql_query(mysqladmin, hg_query.c_str()) == 0) {
+		MYSQL_RES *res = mysql_store_result(mysqladmin);
+		if (res) {
+			MYSQL_ROW row = mysql_fetch_row(res);
+			if (row) target_hg = atoi(row[0]);
+			mysql_free_result(res);
+		}
 	}
+	diag("Discovered target hostgroup for root user: %d", target_hg);
+
+	// Create rules using the DISCOVERED hostgroup instead of hardcoded 0
+	std::string rule_sql = "INSERT OR IGNORE INTO mysql_query_rules (rule_id,active,match_digest,destination_hostgroup,multiplex,apply) VALUES (-1,1,'^(SELECT @rpl_semi_sync_slave=\\?.*|SET @rpl_semi_sync_slave=\\?.*)$', " + std::to_string(target_hg) + ", 0, 1)";
+	
+	diag("Configuring ProxySQL rules for replication commands...");
+	MYSQL_QUERY(mysqladmin, "DELETE FROM mysql_query_rules");
+	MYSQL_QUERY(mysqladmin, rule_sql.c_str());
+	MYSQL_QUERY(mysqladmin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
 	// we now test various combination
 	setup_replication(11, false, false, repl_queries_set1);
@@ -181,4 +201,3 @@ int main(int argc, char** argv) {
 
 	return exit_status();
 }
-

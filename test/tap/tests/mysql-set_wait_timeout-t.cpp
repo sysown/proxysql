@@ -9,6 +9,7 @@
 
 #include "tap.h"
 #include "command_line.h"
+#include "noise_utils.h"
 #include "utils.h"
 #include "json.hpp"
 
@@ -180,12 +181,20 @@ int test_wait_timeout_json_values(CommandLine *cl, MYSQL *admin) {
 }
 
 int main(int argc, char** argv) {
-	plan(12); // 4 + 8 tests for new JSON validation function
-
 	CommandLine cl;
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
 		return exit_status();
+	}
+
+	spawn_internal_noise(cl, internal_noise_random_stats_poller);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
+	spawn_internal_noise(cl, internal_noise_pgsql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}, {"avg_delay_ms", "300"}});
+
+	if (cl.use_noise) {
+		plan(12 + 3);
+	} else {
+		plan(12);
 	}
 
 	MYSQL* admin = init_mysql_conn(cl.host, cl.admin_username, cl.admin_password, cl.admin_port);

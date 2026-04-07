@@ -39,6 +39,21 @@ struct cmd_opts_t {
 	int ping_delay { 10 };
 };
 
+static bool connect_or_diag(
+	MYSQL* conn, const char* label, const char* host, const char* user, const char* password, unsigned int port
+) {
+	diag("Connecting %s   host='%s' port=%u user='%s'", label, host, port, user);
+	if (mysql_real_connect(conn, host, user, password, NULL, port, NULL, 0)) {
+		return true;
+	}
+
+	diag(
+		"Connect failed for %s   host='%s' port=%u user='%s' errno=%u error=\"%s\"",
+		label, host, port, user, mysql_errno(conn), mysql_error(conn)
+	);
+	return false;
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 //          NOTE: JUST SOME DECLARATIONS (MARIADBCLIENT) FOR ACCESSING SSL CTX                    //
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -229,6 +244,26 @@ rc_t<map<string,double>> get_prometheus_metrics(MYSQL* admin) {
 	mysql_free_result(p_resulset);
 
 	return { 0, parse_prometheus_metrics(row_value) };
+}
+
+double get_metric_value_by_prefix(
+	const map<string, double>& metrics, const string& metric_name, size_t* match_count = nullptr
+) {
+	double metric_value { 0 };
+	size_t matches { 0 };
+
+	for (const auto& metric : metrics) {
+		if (metric.first == metric_name || metric.first.rfind(metric_name + "{", 0) == 0) {
+			metric_value += metric.second;
+			matches += 1;
+		}
+	}
+
+	if (match_count) {
+		*match_count = matches;
+	}
+
+	return metric_value;
 }
 
 int exec_config_queries(MYSQL* admin, const vector<string>& cfg_queries) {
@@ -506,14 +541,29 @@ int perfom_tests_with_cfgs(CommandLine& cl, MYSQL* admin, const cmd_opts_t& opts
 			int rc { test_unex_com_ping(rc_conn.second, opts) };
 			auto post_metrics { get_prometheus_metrics(admin) };
 
-			const auto pre_val { pre_metrics.second["proxysql_mysql_unexpected_frontend_com_ping_total"] };
-			const auto post_val { post_metrics.second["proxysql_mysql_unexpected_frontend_com_ping_total"] };
+			size_t pre_matches { 0 };
+			size_t post_matches { 0 };
+			const auto pre_val {
+				get_metric_value_by_prefix(
+					pre_metrics.second, "proxysql_mysql_unexpected_frontend_com_ping_total", &pre_matches
+				)
+			};
+			const auto post_val {
+				get_metric_value_by_prefix(
+					post_metrics.second, "proxysql_mysql_unexpected_frontend_com_ping_total", &post_matches
+				)
+			};
 			const auto diff { post_val - pre_val };
+
+			diag(
+				"Unexpected COM_PING metric lookup   pre_matches=%zu post_matches=%zu pre_val=%lf post_val=%lf diff=%lf",
+				pre_matches, post_matches, pre_val, post_val, diff
+			);
 
 			ok(rc == EXIT_SUCCESS, "Connection should be usable till close (no-disconnect)");
 
 			ok(
-				diff == opts.ping_count,
+				pre_matches > 0 && post_matches > 0 && diff == opts.ping_count,
 				"Metrics diff should match sent COM_PING packets   sent=%d pre_val=%lf post_val=%lf diff=%lf",
 				opts.ping_count, pre_val, post_val, diff
 			);
@@ -553,11 +603,7 @@ int main(int argc, const char* argv[]) {
 	{
 		MYSQL* proxy = mysql_init(NULL);
 
-		if (
-			!mysql_real_connect(
-				proxy, cl.root_host, cl.root_username, cl.root_password, NULL, cl.mysql_port, NULL, 0
-			)
-		) {
+		if (!connect_or_diag(proxy, "proxy root setup", cl.root_host, cl.root_username, cl.root_password, cl.root_port)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 			return EXIT_FAILURE;
 		}
@@ -578,11 +624,7 @@ int main(int argc, const char* argv[]) {
 	{
 		MYSQL* proxy = mysql_init(NULL);
 
-		if (
-			!mysql_real_connect(
-				proxy, cl.root_host, cl.root_username, cl.root_password, NULL, cl.mysql_port, NULL, 0
-			)
-		) {
+		if (!connect_or_diag(proxy, "proxy root data setup", cl.root_host, cl.root_username, cl.root_password, cl.root_port)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 			return EXIT_FAILURE;
 		}
@@ -614,13 +656,11 @@ int main(int argc, const char* argv[]) {
 		MYSQL_BIND bind[1];
 		memset(bind, 0, sizeof(bind));
 
-		{
-			uint64_t len = rnd_str.size();
-			bind[0].buffer_type = MYSQL_TYPE_STRING;
-			bind[0].buffer = const_cast<char*>(rnd_str.c_str());
-			bind[0].buffer_length = len;
-			bind[0].length = &len;
-		}
+		unsigned long rnd_str_len = rnd_str.size();
+		bind[0].buffer_type = MYSQL_TYPE_STRING;
+		bind[0].buffer = const_cast<char*>(rnd_str.c_str());
+		bind[0].buffer_length = rnd_str_len;
+		bind[0].length = &rnd_str_len;
 
 		if (mysql_stmt_bind_param(stmt, bind)) {
 			diag("INSERT bind failed   error=\"%s\"", mysql_stmt_error(stmt));
@@ -628,7 +668,7 @@ int main(int argc, const char* argv[]) {
 			return EXIT_FAILURE;
 		}
 
-		diag("Inserting test data");
+		diag("Inserting test data   payload_size=%lu", rnd_str_len);
 		if (mysql_stmt_execute(stmt)) {
 			diag("INSERT execute failed   error=\"%s\"", mysql_stmt_error(stmt));
 			mysql_stmt_close(stmt);
@@ -642,9 +682,7 @@ int main(int argc, const char* argv[]) {
 
 	MYSQL* admin = mysql_init(NULL);
 
-	if (!mysql_real_connect(
-		admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0
-	)) {
+	if (!connect_or_diag(admin, "proxy admin", cl.host, cl.admin_username, cl.admin_password, cl.admin_port)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
 	}

@@ -266,19 +266,27 @@ int main(int argc, char** argv) {
 		return -1;
 	}
 
+	diag("Test: SSL client busy/infinite loop regression");
+	diag("  Verifies that ProxySQL CPU usage stays low when SSL clients");
+	diag("  disconnect unexpectedly (both busy-loop and infinite-loop scenarios).");
+	diag("  Config: BUSY_THREADS=%d, BUSY_WAIT_SECS=%d, MAX_IDLE_CPU=%d%%, MAX_BUSY_CPU=%d%%",
+		BUSY_THREADS, BUSY_WAIT_SECS, MAX_IDLE_CPU, MAX_BUSY_CPU);
+
 	plan(4);
 
+	diag("Step 1: Connect to ProxySQL admin");
 	MYSQL* admin = mysql_init(NULL);
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
 	}
 
+	diag("Step 2: Disable cluster scheduler to reduce CPU noise during measurement");
 	pair<int,vector<MYSQL*>> p_err_nodes_conns { disable_core_nodes_scheduler(cl, admin) };
 	if (p_err_nodes_conns.first) { return EXIT_FAILURE; }
 	vector<MYSQL*>& nodes_conns { p_err_nodes_conns.second };
 
-	diag("Checking ProxySQL idle CPU usage");
+	diag("Step 3: Measure idle CPU baseline (sampling for %d seconds)", SAMPLE_INTV_SECS);
 	double idle_cpu = 0;
 	int ret_i_cpu = get_proxysql_cpu_usage(cl, idle_cpu, SAMPLE_INTV_SECS);
 	if (ret_i_cpu) {
@@ -293,10 +301,11 @@ int main(int argc, char** argv) {
 		MAX_IDLE_CPU, idle_cpu
 	);
 
-	diag("Trigger BUSY_LOOP regression    BUSY_THREADS=%d BUSY_WAIT_SECS=%d", BUSY_THREADS, BUSY_WAIT_SECS);
+	diag("Step 4: Trigger BUSY_LOOP regression (SSL clients disconnect during query)");
+	diag("  Creating %d threads that connect with SSL and close socket mid-query", BUSY_THREADS);
 	create_busy_loops(argc, argv, cl, BUSY_LOOP_T::BUSY_LOOP);
 
-	diag("Checking ProxySQL final CPU usage for 'BUSY_LOOP'");
+	diag("Step 5: Measure CPU after BUSY_LOOP (should stay below %d%%)", MAX_BUSY_CPU);
 	double final_cpu_usage = 0;
 	int ret_f_cpu = get_proxysql_cpu_usage(cl, final_cpu_usage, SAMPLE_INTV_SECS);
 
@@ -308,10 +317,10 @@ int main(int argc, char** argv) {
 
 	// Extra wait to ensure cleanup of faulty client conns. See 'BUSY_WAIT_SECS' NOTE in def.
 	int BUSY_WAIT_CLEANUP = BUSY_WAIT_SECS < 5 ? 5 : BUSY_WAIT_SECS / 2;
-	diag("Sleeping for %d secs for BUSY_LOOP client cleanup", BUSY_WAIT_CLEANUP);
+	diag("Step 6: Wait %d seconds for BUSY_LOOP client cleanup", BUSY_WAIT_CLEANUP);
 	sleep(BUSY_WAIT_CLEANUP);
 
-	diag("Checking ProxySQL idle CPU usage");
+	diag("Step 7: Verify CPU returned to idle after BUSY_LOOP cleanup");
 	ret_i_cpu = get_proxysql_cpu_usage(cl, idle_cpu, SAMPLE_INTV_SECS);
 	if (ret_i_cpu) {
 		diag("Getting initial CPU usage failed with error - %d", ret_i_cpu);
@@ -325,10 +334,11 @@ int main(int argc, char** argv) {
 		MAX_IDLE_CPU, idle_cpu
 	);
 
-	diag("Trigger INF_LOOP regression    BUSY_THREADS=%d BUSY_WAIT_SECS=%d", BUSY_THREADS, BUSY_WAIT_SECS);
+	diag("Step 8: Trigger INF_LOOP regression (SSL clients disconnect after data written)");
+	diag("  Creating %d threads that connect with SSL and close socket after response", BUSY_THREADS);
 	create_busy_loops(argc, argv, cl, BUSY_LOOP_T::INF_LOOP);
 
-	diag("Checking ProxySQL final CPU usage for 'BUSY_LOOP'");
+	diag("Step 9: Measure CPU after INF_LOOP (should stay below %d%%)", MAX_BUSY_CPU);
 	final_cpu_usage = 0;
 	ret_f_cpu = get_proxysql_cpu_usage(cl, final_cpu_usage, SAMPLE_INTV_SECS);
 
@@ -338,6 +348,7 @@ int main(int argc, char** argv) {
 		MAX_BUSY_CPU, final_cpu_usage
 	);
 
+	diag("Step 10: Recover cluster scheduler");
 	// Recover cluster scheduler
 	for (MYSQL* myconn : nodes_conns) {
 		MYSQL_QUERY_T(myconn, "LOAD SCHEDULER FROM DISK");

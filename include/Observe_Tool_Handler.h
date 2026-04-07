@@ -10,7 +10,7 @@
 class MCP_Threads_Handler;
 
 /**
- * @brief Observability Tool Handler for /mcp/observe endpoint
+ * @brief Observability Tool Handler for /mcp/stats endpoint (legacy observe naming)
  *
  * This handler provides tools for real-time metrics, statistics, and monitoring.
  *

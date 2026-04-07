@@ -9,6 +9,7 @@
 
 #include "tap.h"
 #include "command_line.h"
+#include "noise_utils.h"
 #include "utils.h"
 
 /*
@@ -23,7 +24,14 @@ int main(int argc, char** argv) {
 	if(cl.getEnv())
 		return exit_status();
 
-	plan(8);
+	spawn_internal_noise(cl, internal_noise_random_stats_poller);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
+
+	if (cl.use_noise) {
+		plan(8 + 2);
+	} else {
+		plan(8);
+	}
 
 	MYSQL* mysqladmin = mysql_init(NULL);
 	if (!mysqladmin)

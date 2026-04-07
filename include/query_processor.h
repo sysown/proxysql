@@ -17,6 +17,7 @@
 #include "../deps/json/json_fwd.hpp"
 #endif // PROXYJSON
 
+#include "query_digest_topk.h"
 #include "khash.h"
 KHASH_MAP_INIT_STR(khStrInt, int)
 
@@ -81,7 +82,7 @@ class QP_query_digest_stats {
 		unsigned long long cnt = 1
 	);
 	~QP_query_digest_stats();
-	char *get_digest_text(const umap_query_digest_text *digest_text_umap);
+	char *get_digest_text(const umap_query_digest_text *digest_text_umap) const;
 	char **get_row(umap_query_digest_text *digest_text_umap, query_digest_stats_pointers_t *qdsp);
 };
 
@@ -240,6 +241,41 @@ class Query_Processor_Output {
 void __reset_rules(std::vector<QP_rule_t*>* qrs);
 
 /**
+ * @brief Evaluates whether a query rule matches the supplied query and session attributes.
+ * @details The predicate only depends on the provided inputs. If the rule references regex
+ * patterns and does not already hold compiled regex engines, temporary regex objects are
+ * compiled on demand using the requested regex engine.
+ *
+ * @param rule Rule to evaluate.
+ * @param current_flagIN Current query flag.
+ * @param username Session username.
+ * @param schemaname Session schema name.
+ * @param client_addr Client address.
+ * @param proxy_addr Proxy listener address.
+ * @param proxy_port Proxy listener port.
+ * @param digest Parsed query digest.
+ * @param digest_text Parsed digest text.
+ * @param query_text Original query text.
+ * @param rewritten_query Rewritten query text produced by a previous rule, if any.
+ * @param query_processor_regex Regex engine selector: PCRE (1) or RE2 (2).
+ * @return true when all rule criteria match, otherwise false.
+ */
+bool rule_matches_query(
+	const QP_rule_t* rule,
+	int current_flagIN,
+	const char* username,
+	const char* schemaname,
+	const char* client_addr,
+	const char* proxy_addr,
+	int proxy_port,
+	uint64_t digest,
+	const char* digest_text,
+	const char* query_text,
+	const char* rewritten_query,
+	int query_processor_regex
+);
+
+/**
  * @brief Helper type for performing the 'mysql_rules_fast_routing' hashmaps creation.
  * @details Holds all the info 'Query_Processor' requires about the hashmap.
  */
@@ -301,6 +337,13 @@ public:
 		unsigned long long rows_affected, unsigned long long rows_sent);
 	std::pair<SQLite3_result*,int> get_query_digests_v2(const bool use_resultset = true);
 	std::pair<SQLite3_result*,int> get_query_digests_reset_v2(const bool copy, const bool use_resultset = true);
+	query_digest_topk_result_t get_query_digests_topk(
+		const query_digest_filter_opts_t& filters,
+		query_digest_sort_by_t sort_by,
+		uint32_t limit,
+		uint32_t offset,
+		uint32_t max_window
+	);
 	void get_query_digests_reset(umap_query_digest* uqd, umap_query_digest_text* uqdt);
 	unsigned long long purge_query_digests(bool async_purge, bool parallel, char** msg);
 

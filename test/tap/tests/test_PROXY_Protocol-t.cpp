@@ -82,6 +82,10 @@ int connect_and_run_query(CommandLine& cl, int tests, const char *hdr) {
 
 int main(int argc, char** argv) {
 	CommandLine cl;
+        if (cl.getEnv()) {
+                diag("Failed to get the required environmental variables.");
+                return -1;
+        }
 
 	std::vector<std::pair<int, std::string>> Headers;
 	Headers.push_back(std::make_pair(2, "PROXY TCP4 192.168.0.1 192.168.0.11 56324 443\r\n"));

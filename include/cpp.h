@@ -31,6 +31,7 @@
 #endif /* PROXYSQLCLICKHOUSE */
 
 #ifdef PROXYSQLGENAI
+#include "MCP_Tool_Handler.h"
 #include "AI_Features_Manager.h"
 #include "AI_Tool_Handler.h"
 #include "AI_Vector_Storage.h"
@@ -43,11 +44,10 @@
 #include "LLM_Bridge.h"
 #include "MCP_Endpoint.h"
 #include "MCP_Thread.h"
-#include "MCP_Tool_Handler.h"
 #include "MySQL_Catalog.h"
 #include "MySQL_FTS.h"
 #include "MySQL_Tool_Handler.h"
-#include "Observe_Tool_Handler.h"
+#include "Stats_Tool_Handler.h"
 #include "ProxySQL_MCP_Server.hpp"
 #include "Query_Tool_Handler.h"
 #include "RAG_Tool_Handler.h"

@@ -62,14 +62,14 @@ The following variables control authentication (Bearer tokens) for specific MCP 
   LOAD MCP VARIABLES TO RUNTIME;
   ```
 
-#### `mcp-observe_endpoint_auth`
+#### `mcp-stats_endpoint_auth`
 - **Type:** String
 - **Default:** `""` (empty)
-- **Description:** Bearer token for `/mcp/observe` endpoint
+- **Description:** Bearer token for `/mcp/stats` endpoint
 - **Runtime:** Yes
 - **Example:**
   ```sql
-  SET mcp-observe_endpoint_auth='observe-token';
+  SET mcp-stats_endpoint_auth='stats-token';
   LOAD MCP VARIABLES TO RUNTIME;
   ```
 
@@ -150,62 +150,6 @@ Backend credentials are defined in MCP tables, not in client requests:
 - `mcp_target_profiles` / `runtime_mcp_target_profiles`
 
 The in-memory target/auth map is loaded by `MCP_Threads_Handler` from runtime tables and used by the query executor connection pools.
-
-#### `mcp-mysql_hosts`
-- **Type:** String (comma-separated)
-- **Default:** `"127.0.0.1"`
-- **Description:** Legacy POC variable used by non-routed components (for example static harvester defaults). Routed query execution uses MCP profile tables.
-- **Runtime:** Yes
-- **Example:**
-  ```sql
-  SET mcp-mysql_hosts='192.168.1.10,192.168.1.11,192.168.1.12';
-  LOAD MCP VARIABLES TO RUNTIME;
-  ```
-
-#### `mcp-mysql_ports`
-- **Type:** String (comma-separated)
-- **Default:** `"3306"`
-- **Description:** Legacy POC variable used by non-routed components (for example static harvester defaults). Routed query execution uses MCP profile tables.
-- **Runtime:** Yes
-- **Example:**
-  ```sql
-  SET mcp-mysql_ports='3306,3307,3308';
-  LOAD MCP VARIABLES TO RUNTIME;
-  ```
-
-#### `mcp-mysql_user`
-- **Type:** String
-- **Default:** `""` (empty)
-- **Description:** Legacy POC variable. Routed query execution uses credentials from `mcp_auth_profiles`.
-- **Runtime:** Yes
-- **Example:**
-  ```sql
-  SET mcp-mysql_user='mcp_user';
-  LOAD MCP VARIABLES TO RUNTIME;
-  ```
-
-#### `mcp-mysql_password`
-- **Type:** String
-- **Default:** `""` (empty)
-- **Description:** Legacy POC variable. Routed query execution uses credentials from `mcp_auth_profiles`.
-- **Runtime:** Yes
-- **Note:** Password is stored in plaintext in `global_variables`. Use restrictive MySQL user permissions.
-- **Example:**
-  ```sql
-  SET mcp-mysql_password='secure-password';
-  LOAD MCP VARIABLES TO RUNTIME;
-  ```
-
-#### `mcp-mysql_schema`
-- **Type:** String
-- **Default:** `""` (empty)
-- **Description:** Legacy POC variable. Routed query execution uses `default_schema` from `mcp_auth_profiles`.
-- **Runtime:** Yes
-- **Example:**
-  ```sql
-  SET mcp-mysql_schema='mydb';
-  LOAD MCP VARIABLES TO RUNTIME;
-  ```
 
 ### Catalog Configuration
 

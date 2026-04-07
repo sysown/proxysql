@@ -25,6 +25,7 @@
 #include "Query_Tool_Handler.h"
 #include "RAG_Tool_Handler.h"
 #endif /* PROXYSQLGENAI */
+#include <openssl/x509v3.h>
 
 #define SAFE_SQLITE3_STEP(_stmt) do {\
   do {\
@@ -522,6 +523,18 @@ const void sqlite3_global_stats_row_step(
 	rc = (*proxy_sqlite3_reset)(stmt); ASSERT_SQLITE_OK(rc, db);
 };
 
+static void sqlite3_global_stats_row_step_str(
+	SQLite3DB* db, sqlite3_stmt* stmt, const char* name, const char* val
+) {
+	int rc = (*proxy_sqlite3_bind_text)(stmt, 1, name, -1, SQLITE_TRANSIENT);
+	ASSERT_SQLITE_OK(rc, db);
+	rc = (*proxy_sqlite3_bind_text)(stmt, 2, val ? val : "", -1, SQLITE_TRANSIENT);
+	ASSERT_SQLITE_OK(rc, db);
+	SAFE_SQLITE3_STEP2(stmt);
+	rc = (*proxy_sqlite3_clear_bindings)(stmt); ASSERT_SQLITE_OK(rc, db);
+	rc = (*proxy_sqlite3_reset)(stmt); ASSERT_SQLITE_OK(rc, db);
+};
+
 void ProxySQL_Admin::stats___mysql_global() {
 	if (!GloMTH) return;
 	SQLite3_result * resultset=GloMTH->SQL3_GlobalStatus(true);
@@ -614,7 +627,6 @@ void ProxySQL_Admin::stats___mysql_global() {
 
 	sqlite3_global_stats_row_step(statsdb, row_stmt, "mysql_listener_paused", admin_proxysql_mysql_paused);
 	sqlite3_global_stats_row_step(statsdb, row_stmt, "OpenSSL_Version_Num", OpenSSL_version_num());
-
 
 	if (GloMyLogger != nullptr) {
 		const string prefix = "MySQL_Logger_";
@@ -804,6 +816,49 @@ void ProxySQL_Admin::stats___pgsql_global() {
 	statsdb->execute("COMMIT");
 }
 
+/**
+ * @brief Populates the `stats_proxysql_global` table with ProxySQL-wide metrics
+ *   that are not specific to the MySQL or PgSQL protocol.
+ *
+ * @details This function is called at query time whenever the stats_proxysql_global table
+ *   is accessed (e.g. "SELECT * FROM stats.stats_proxysql_global"). It deletes all existing
+ *   rows and reinserts fresh values, ensuring `TLS_Last_Load_Timestamp` and other
+ *   time-sensitive data are always current.
+ *
+ *   Currently tracked variables:
+ *   - TLS_Load_Count          : Number of times TLS has been loaded or reloaded.
+ *   - TLS_Last_Load_Timestamp : Unix timestamp of the most recent successful TLS load.
+ *   - TLS_Last_Load_Result    : "NONE", "SUCCESS", or "FAILED" depending on last load outcome.
+ *   - TLS_Server_Cert_File    : Path to the server TLS certificate file.
+ *   - TLS_CA_Cert_File        : Path to the CA certificate file.
+ *   - TLS_Key_File            : Path to the private key file.
+ */
+void ProxySQL_Admin::stats___proxysql_global() {
+	statsdb->execute("BEGIN");
+	statsdb->execute("DELETE FROM stats_proxysql_global");
+
+	const string q_row_insert { "INSERT INTO stats_proxysql_global VALUES (?1, ?2)" };
+	int rc = 0;
+	stmt_unique_ptr u_row_stmt { nullptr };
+	std::tie(rc, u_row_stmt) = statsdb->prepare_v2(q_row_insert.c_str());
+	ASSERT_SQLITE_OK(rc, statsdb);
+	sqlite3_stmt *row_stmt = u_row_stmt.get();
+
+	{
+		std::lock_guard<std::mutex> lock(GloVars.global.ssl_mutex);
+		sqlite3_global_stats_row_step(statsdb, row_stmt, "TLS_Load_Count", GloVars.global.tls_load_count);
+		sqlite3_global_stats_row_step(statsdb, row_stmt, "TLS_Last_Load_Timestamp", (unsigned long long)GloVars.global.tls_last_load_timestamp);
+		const char *tls_result = GloVars.global.tls_load_count == 0 ? "NONE" : (GloVars.global.tls_last_load_ok ? "SUCCESS" : "FAILED");
+		sqlite3_global_stats_row_step_str(statsdb, row_stmt, "TLS_Last_Load_Result", tls_result);
+		sqlite3_global_stats_row_step_str(statsdb, row_stmt, "TLS_Server_Cert_File", GloVars.global.tls_cert_file ? GloVars.global.tls_cert_file : "");
+		sqlite3_global_stats_row_step_str(statsdb, row_stmt, "TLS_CA_Cert_File", GloVars.global.tls_ca_file ? GloVars.global.tls_ca_file : "");
+		sqlite3_global_stats_row_step_str(statsdb, row_stmt, "TLS_Key_File", GloVars.global.tls_key_file ? GloVars.global.tls_key_file : "");
+	}
+
+	statsdb->execute("COMMIT");
+}
+
+#ifdef PROXYSQLTSDB
 void ProxySQL_Admin::stats___tsdb() {
 	if (!GloProxyStats) return;
 	ProxySQL_Statistics::tsdb_status_t status = GloProxyStats->get_tsdb_status();
@@ -824,6 +879,7 @@ INSERT INTO stats_tsdb (Variable_Name, Variable_Value) VALUES ('%s', '%llu')", n
 	insert_stat("Newest_Datapoint_TS", status.newest_datapoint);
 	admindb->execute("COMMIT");
 }
+#endif
 
 
 void ProxySQL_Admin::stats___mysql_processlist() {
@@ -2839,3 +2895,147 @@ void ProxySQL_Admin::stats___mcp_query_rules() {
 	delete resultset;
 }
 #endif /* PROXYSQLGENAI */
+
+// Helper: convert ASN1_TIME to ISO 8601 string (YYYY-MM-DDTHH:MM:SSZ)
+static std::string asn1_time_to_iso8601(const ASN1_TIME *asn1t) {
+	if (!asn1t) return "";
+	struct tm t = {};
+	if (!ASN1_TIME_to_tm(asn1t, &t)) return "";
+	char buf[32] = {};
+	strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &t);
+	return std::string(buf);
+}
+
+// Helper: get CN from X509_NAME
+static std::string x509_name_cn(X509_NAME *name) {
+	if (!name) return "";
+	char buf[1024] = {};
+	if (X509_NAME_get_text_by_NID(name, NID_commonName, buf, sizeof(buf)) < 0)
+		return "";
+	return std::string(buf);
+}
+
+// Helper: get hex serial number from X509
+static std::string x509_serial_hex(X509 *cert) {
+	ASN1_INTEGER *serial = X509_get_serialNumber(cert);
+	if (!serial) return "";
+	BIGNUM *bn = ASN1_INTEGER_to_BN(serial, NULL);
+	if (!bn) return "";
+	char *hex = BN_bn2hex(bn);
+	std::string result = hex ? std::string(hex) : "";
+	OPENSSL_free(hex);
+	BN_free(bn);
+	return result;
+}
+
+// Helper: get SHA-256 fingerprint hex string from X509
+static std::string x509_sha256_fingerprint(X509 *cert) {
+	unsigned char md[EVP_MAX_MD_SIZE] = {};
+	unsigned int len = 0;
+	if (!X509_digest(cert, EVP_sha256(), md, &len)) return "";
+	std::string result;
+	result.reserve(len * 2);
+	char hex_byte[3] = {};
+	for (unsigned int i = 0; i < len; i++) {
+		snprintf(hex_byte, sizeof(hex_byte), "%02X", md[i]);
+		result += hex_byte;
+	}
+	return result;
+}
+
+// Helper: insert one certificate row into stats_tls_certificates
+static void insert_tls_cert_row(
+	SQLite3DB *statsdb, sqlite3_stmt *stmt,
+	const char *cert_type, const char *file_path,
+	X509 *cert, time_t loaded_at
+) {
+	std::string subject_cn = x509_name_cn(X509_get_subject_name(cert));
+	std::string issuer_cn  = x509_name_cn(X509_get_issuer_name(cert));
+	std::string serial_num = x509_serial_hex(cert);
+	std::string not_before = asn1_time_to_iso8601(X509_get0_notBefore(cert));
+	std::string not_after  = asn1_time_to_iso8601(X509_get0_notAfter(cert));
+	std::string fingerprint = x509_sha256_fingerprint(cert);
+
+	// Calculate days_until_expiry at query time
+	// pday = full days from now to not_after (negative if expired)
+	int pday = 0;
+	{
+		int psec = 0;
+		if (!ASN1_TIME_diff(&pday, &psec, NULL, X509_get0_notAfter(cert))) {
+			pday = 0; // on error, default to 0 (treat as expiring today)
+		}
+	}
+	int days_until_expiry = pday;
+
+	int rc = (*proxy_sqlite3_bind_text)(stmt, 1, cert_type, -1, SQLITE_TRANSIENT);       // cert_type
+	ASSERT_SQLITE_OK(rc, statsdb);
+	rc = (*proxy_sqlite3_bind_text)(stmt, 2, file_path, -1, SQLITE_TRANSIENT);            // file_path
+	ASSERT_SQLITE_OK(rc, statsdb);
+	rc = (*proxy_sqlite3_bind_text)(stmt, 3, subject_cn.c_str(), -1, SQLITE_TRANSIENT);   // subject_cn
+	ASSERT_SQLITE_OK(rc, statsdb);
+	rc = (*proxy_sqlite3_bind_text)(stmt, 4, issuer_cn.c_str(), -1, SQLITE_TRANSIENT);    // issuer_cn
+	ASSERT_SQLITE_OK(rc, statsdb);
+	rc = (*proxy_sqlite3_bind_text)(stmt, 5, serial_num.c_str(), -1, SQLITE_TRANSIENT);   // serial_number
+	ASSERT_SQLITE_OK(rc, statsdb);
+	rc = (*proxy_sqlite3_bind_text)(stmt, 6, not_before.c_str(), -1, SQLITE_TRANSIENT);   // not_before
+	ASSERT_SQLITE_OK(rc, statsdb);
+	rc = (*proxy_sqlite3_bind_text)(stmt, 7, not_after.c_str(), -1, SQLITE_TRANSIENT);    // not_after
+	ASSERT_SQLITE_OK(rc, statsdb);
+	rc = (*proxy_sqlite3_bind_int)(stmt, 8, days_until_expiry);                            // days_until_expiry
+	ASSERT_SQLITE_OK(rc, statsdb);
+	rc = (*proxy_sqlite3_bind_text)(stmt, 9, fingerprint.c_str(), -1, SQLITE_TRANSIENT);  // sha256_fingerprint
+	ASSERT_SQLITE_OK(rc, statsdb);
+	rc = (*proxy_sqlite3_bind_int64)(stmt, 10, (sqlite3_int64)loaded_at);                  // loaded_at
+	ASSERT_SQLITE_OK(rc, statsdb);
+
+	SAFE_SQLITE3_STEP2(stmt);
+	rc = (*proxy_sqlite3_clear_bindings)(stmt); ASSERT_SQLITE_OK(rc, statsdb);
+	rc = (*proxy_sqlite3_reset)(stmt); ASSERT_SQLITE_OK(rc, statsdb);
+}
+
+void ProxySQL_Admin::stats___tls_certificates() {
+	statsdb->execute("BEGIN");
+	statsdb->execute("DELETE FROM stats_tls_certificates");
+
+	// Copy cert file paths and tracking info under ssl_mutex to avoid races
+	char *cert_file = NULL;
+	char *ca_file = NULL;
+	time_t loaded_at = 0;
+
+	{
+		std::lock_guard<std::mutex> lock(GloVars.global.ssl_mutex);
+		if (GloVars.global.tls_cert_file)
+			cert_file = strdup(GloVars.global.tls_cert_file);
+		if (GloVars.global.tls_ca_file)
+			ca_file = strdup(GloVars.global.tls_ca_file);
+		loaded_at = GloVars.global.tls_last_load_timestamp;
+	}
+
+	const char *insert_q =
+		"INSERT INTO stats_tls_certificates VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)";
+	int rc = 0;
+	stmt_unique_ptr u_stmt { nullptr };
+	std::tie(rc, u_stmt) = statsdb->prepare_v2(insert_q);
+	ASSERT_SQLITE_OK(rc, statsdb);
+	sqlite3_stmt *stmt = u_stmt.get();
+
+	// Helper lambda: read a PEM cert from file and insert a row into stats_tls_certificates
+	auto process_cert = [&](const char *cert_type, char *file_path) {
+		if (!file_path) return;
+		BIO *bio = BIO_new_file(file_path, "r");
+		if (bio) {
+			X509 *cert = PEM_read_bio_X509(bio, NULL, NULL, NULL);
+			BIO_free_all(bio);
+			if (cert) {
+				insert_tls_cert_row(statsdb, stmt, cert_type, file_path, cert, loaded_at);
+				X509_free(cert);
+			}
+		}
+		free(file_path);
+	};
+
+	process_cert("server", cert_file);
+	process_cert("ca", ca_file);
+
+	statsdb->execute("COMMIT");
+}

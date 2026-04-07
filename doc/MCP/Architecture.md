@@ -31,7 +31,7 @@ The MCP module implements JSON-RPC 2.0 over HTTPS for LLM (Large Language Model)
 │  │  - query_tool_handler   (NEW)                                         │  │
 │  │  - admin_tool_handler   (NEW)                                         │  │
 │  │  - cache_tool_handler   (NEW)                                         │  │
-│  │  - observe_tool_handler (NEW)                                         │  │
+│  │  - stats_tool_handler   (NEW)                                         │  │
 │  │  - ai_tool_handler      (NEW)                                         │  │
 │  └──────────────────────────────────────────────────────────────────────┘  │
 │                                    │                                        │
@@ -47,7 +47,7 @@ The MCP module implements JSON-RPC 2.0 over HTTPS for LLM (Large Language Model)
 │    ┌──────────────┬──────────────┼──────────────┬──────────────┬─────────┐  │
 │    ▼              ▼              ▼              ▼              ▼         ▼  │
 │ ┌────┐        ┌────┐         ┌────┐         ┌────┐         ┌────┐    ┌───┐│
-│ │conf│        │obs │         │qry │         │adm │         │cach│    │ai ││
+│ │conf│        │sts │         │qry │         │adm │         │cach│    │ai ││
 │ │TH  │        │TH  │         │TH  │         │TH  │         │TH  │    │TH ││
 │ └─┬──┘        └─┬──┘         └─┬──┘         └─┬──┘         └─┬──┘    └─┬─┘│
 │   │             │               │               │               │        │  │
@@ -80,7 +80,7 @@ include/
 ├── Query_Tool_Handler.h  # Query endpoint tool handler (includes discovery tools)
 ├── Admin_Tool_Handler.h  # Administration endpoint tool handler
 ├── Cache_Tool_Handler.h  # Cache endpoint tool handler
-├── Observe_Tool_Handler.h # Observability endpoint tool handler
+├── Stats_Tool_Handler.h # Stats endpoint tool handler
 ├── AI_Tool_Handler.h     # AI endpoint tool handler
 ├── Discovery_Schema.h    # Discovery catalog implementation
 ├── Static_Harvester.h    # Static database harvester for discovery
@@ -94,7 +94,7 @@ lib/
 ├── Query_Tool_Handler.cpp # Query endpoint implementation
 ├── Admin_Tool_Handler.cpp # Administration endpoint implementation
 ├── Cache_Tool_Handler.cpp # Cache endpoint implementation
-├── Observe_Tool_Handler.cpp # Observability endpoint implementation
+├── Stats_Tool_Handler.cpp # Stats endpoint implementation
 ├── AI_Tool_Handler.cpp   # AI endpoint implementation
 ├── Discovery_Schema.cpp  # Discovery catalog implementation
 ├── Static_Harvester.cpp  # Static database harvester implementation
@@ -149,7 +149,7 @@ Each MCP endpoint has its own dedicated tool handler with specific tools designe
 
 ---
 
-#### `/mcp/observe` - Observability Endpoint
+#### `/mcp/stats` - Observability Endpoint
 
 **Purpose**: Real-time metrics, statistics, and monitoring data
 
@@ -166,7 +166,7 @@ Each MCP endpoint has its own dedicated tool handler with specific tools designe
 - Automated alerting and health checks
 - Performance analysis
 
-**Authentication**: `mcp-observe_endpoint_auth` (Bearer token)
+**Authentication**: `mcp-stats_endpoint_auth` (Bearer token)
 
 ---
 
@@ -379,8 +379,8 @@ bool MCP_JSONRPC_Resource::authenticate_request(const http_request& req) {
 
     if (endpoint_name == "config") {
         expected_token = handler->variables.mcp_config_endpoint_auth;
-    } else if (endpoint_name == "observe") {
-        expected_token = handler->variables.mcp_observe_endpoint_auth;
+    } else if (endpoint_name == "stats") {
+        expected_token = handler->variables.mcp_stats_endpoint_auth;
     } else if (endpoint_name == "query") {
         expected_token = handler->variables.mcp_query_endpoint_auth;
     } else if (endpoint_name == "admin") {
@@ -449,7 +449,7 @@ private:
 ### Phase 1: Base Infrastructure ✅ COMPLETED
 
 1. ✅ Create `MCP_Tool_Handler` base class
-2. ✅ Create implementations for all 6 tool handlers (config, query, admin, cache, observe, ai)
+2. ✅ Create implementations for all 6 tool handlers (config, query, admin, cache, stats, ai)
 3. ✅ Update `MCP_Threads_Handler` to manage all handlers
 4. ✅ Update `ProxySQL_MCP_Server` to pass handlers to endpoints
 
@@ -459,7 +459,7 @@ private:
 2. ✅ Implement Query_Tool_Handler tools (includes MySQL tools and discovery tools)
 3. ✅ Implement Admin_Tool_Handler tools
 4. ✅ Implement Cache_Tool_Handler tools
-5. ✅ Implement Observe_Tool_Handler tools
+5. ✅ Implement Stats_Tool_Handler tools
 6. ✅ Implement AI_Tool_Handler tools
 
 ### Phase 3: Authentication & Testing ✅ MOSTLY COMPLETED
@@ -488,7 +488,7 @@ The migration to multiple tool handlers has been completed while maintaining bac
 ✅ Step 3: Move MySQL tools to /mcp/query (existing tools migrate)
 ✅ Step 4: Implement /mcp/admin (new functionality)
 ✅ Step 5: Implement /mcp/cache (new functionality)
-✅ Step 6: Implement /mcp/observe (new functionality)
+✅ Step 6: Implement /mcp/stats (new functionality)
 ✅ Step 7: Enable per-endpoint auth
 ✅ Step 8: Add /mcp/ai endpoint (new AI functionality)
 ```

@@ -68,6 +68,16 @@ int main(int argc, char** argv) {
 			goto cleanup;
 		}
 
+		// When ProxySQL reports a wildcard listen address (0.0.0.0 or ::), replace it with
+		// the actual ProxySQL host so tests running in separate containers can connect.
+		if (host_port.first == "0.0.0.0" || host_port.first == "::" || host_port.first == "*") {
+			diag(
+				"SQLite3 server reported wildcard address '%s'; using ProxySQL host '%s' instead",
+				host_port.first.c_str(), cl.host
+			);
+			host_port.first = std::string(cl.host);
+		}
+
 		MYSQL* proxysql_sqlite3 = mysql_init(NULL);
 
 		// Enable 'client_error_limit'

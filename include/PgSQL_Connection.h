@@ -364,7 +364,7 @@ public:
 	bool is_connected() const;
 	void compute_unknown_transaction_status();
 	void async_free_result();
-	void flush();
+	void flush(bool is_resync = false);
 	bool IsActiveTransaction();
 	bool IsKnownActiveTransaction();
 	bool IsServerOffline();

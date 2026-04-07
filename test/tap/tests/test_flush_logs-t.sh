@@ -13,8 +13,28 @@ FAIL=0
 trap fn_exit EXIT
 trap fn_exit SIGINT
 
-PROXYSQL_PATH=$(while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; done; pwd)
+# Debugging: show environment if needed
+if [[ -n "${TAP_DEBUG}" ]]; then
+	set -x
+fi
+
+# Locate the ProxySQL path safely
+PROXYSQL_PATH=$(
+	curr_dir=$(pwd)
+	while [[ "$curr_dir" != "/" ]] && [[ ! -f "$curr_dir/src/proxysql_global.cpp" ]]; do
+		curr_dir=$(dirname "$curr_dir")
+	done
+	if [[ -f "$curr_dir/src/proxysql_global.cpp" ]]; then
+		echo "$curr_dir"
+	else
+		echo "."
+	fi
+)
 PROXYSQL_LOGS=${REGULAR_INFRA_DATADIR:-$PROXYSQL_PATH/src}
+
+echo "msg: # DEBUG: PROXY_CONTAINER='${PROXY_CONTAINER}'"
+echo "msg: # DEBUG: TAP_ADMINHOST='${TAP_ADMINHOST}'"
+echo "msg: # DEBUG: PROXYSQL_LOGS='${PROXYSQL_LOGS}'"
 
 fn_getenv () {
 	source .env 2>/dev/null
@@ -46,16 +66,37 @@ fn_padmin () {
 }
 
 fn_signal () {
-	# send signal to all - watchdog and worker processes
-#	ps aux | grep -P 'proxysql ' | grep -v 'grep' | awk '{ print $2 }' | sudo xargs -n1 kill -s ${1}
-	# send signal only to worker processes
-#	ps aux | grep -P 'proxysql ' | grep -v 'grep' | awk '{ print $2 }' | sort -n | sed '1 !d' | sudo xargs -n1 kill -s ${1}
-	sudo netstat -ntpl | grep proxysql | tr '/' ' ' | awk '{ print $7 }' | sort | uniq | sudo xargs -r -n1 kill -s ${1}
+	local sig=${1}
+	if command -v docker >/dev/null 2>&1; then
+		if [ -n "$PROXY_CONTAINER" ]; then
+			docker kill --signal ${sig} "$PROXY_CONTAINER"
+			return
+		fi
+	fi
+
+	# The Scheduler Hack: If we can't use docker, we ask ProxySQL to kill itself
+	# ProxySQL scheduler waits for the first interval before execution.
+	# We use /bin/sh -c to find the correct PID (worker process) and signal it.
+	echo "msg: # Using Scheduler Hack to send ${sig} to ProxySQL..."
+	fn_padmin "INSERT OR REPLACE INTO scheduler (id, active, interval_ms, filename, arg1, arg2) VALUES (9999, 1, 2000, '/bin/sh', '-c', 'kill -${sig#SIG} \$(pidof proxysql)');"
+	fn_padmin "LOAD SCHEDULER TO RUNTIME;"
+	sleep 4
+	fn_padmin "DELETE FROM scheduler WHERE id=9999; LOAD SCHEDULER TO RUNTIME;"
 }
 
 fn_get_rotations () {
 	sleep 1
-	cat $PROXYSQL_LOGS/proxysql.log | grep '\[INFO\] ProxySQL version' | wc -l
+	# Try local mount first (most efficient in CI)
+	if [ -f "$PROXYSQL_LOGS/proxysql.log" ]; then
+		cat "$PROXYSQL_LOGS/proxysql.log" | grep '\[INFO\] ProxySQL version' | wc -l
+	elif [ -n "$TAP_GET_LOGS_COMMAND" ]; then
+		$TAP_GET_LOGS_COMMAND | grep '\[INFO\] ProxySQL version' | wc -l
+	elif command -v docker >/dev/null 2>&1 && [ -n "$PROXY_CONTAINER" ]; then
+		docker exec "$PROXY_CONTAINER" cat /var/lib/proxysql/proxysql.log | grep '\[INFO\] ProxySQL version' | wc -l
+	else
+		# Fallback to local path relative to script
+		cat $PROXYSQL_LOGS/proxysql.log 2>/dev/null | grep '\[INFO\] ProxySQL version' | wc -l || echo 0
+	fi
 }
 
 fn_check_res () {

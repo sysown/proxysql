@@ -619,7 +619,7 @@ The same discovery pattern works for all MCP endpoints:
 - **Query**: `/mcp/query` - Database exploration, query, and discovery tools
 - **Admin**: `/mcp/admin` - Administrative operations
 - **Cache**: `/mcp/cache` - Cache management tools
-- **Observe**: `/mcp/observe` - Monitoring and metrics tools
+- **Stats**: `/mcp/stats` - Monitoring and metrics tools
 - **AI**: `/mcp/ai` - AI and LLM features
 
 Simply change the endpoint URL:
