@@ -201,3 +201,6 @@ database_discovery_report.md
 scripts/mcp/DiscoveryAgent/ClaudeCode_Headless/tmp/
 test/tap/tests/test_cluster_sync_config/test_cluster_sync_nomonitor/cluster_sync_node_stderr.txt
 test/tap/tests/test_cluster_sync_config/test_cluster_sync_withmonitor/cluster_sync_node_stderr.txt
+
+# test-scripts runtime dependencies (created by run-tests-isolated.bash)
+test-scripts/deps/
