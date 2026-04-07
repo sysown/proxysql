@@ -157,10 +157,18 @@ bool has_plugin_command_prefix(const std::string& sql) {
 
 } // namespace
 
+// Snapshot callbacks return nullptr until implemented.  This is safe to call
+// and allows plugins to check the return value rather than crashing on a
+// null function pointer.
+static SQLite3_result* snapshot_stub() { return nullptr; }
+
 ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	std::memset(&services_, 0, sizeof(services_));
 	services_.register_table = &register_table_service;
 	services_.register_command = &register_command_service;
+	services_.get_mysql_users_snapshot = &snapshot_stub;
+	services_.get_mysql_servers_snapshot = &snapshot_stub;
+	services_.get_mysql_group_replication_hostgroups_snapshot = &snapshot_stub;
 	services_.get_admindb = &get_admindb_service;
 	services_.get_configdb = &get_configdb_service;
 	services_.get_statsdb = &get_statsdb_service;
@@ -169,9 +177,8 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 
 ProxySQL_PluginManager::~ProxySQL_PluginManager() {
 	stop_all();
-	if (g_active_plugin_manager == this) {
-		g_active_plugin_manager = nullptr;
-	}
+	// Note: g_active_plugin_manager is cleared by callers under the mutex
+	// before reset() triggers this destructor.  No unsynchronized access here.
 	for (auto it = plugins_.rbegin(); it != plugins_.rend(); ++it) {
 		if (it->handle != nullptr) {
 			dlclose(it->handle);
@@ -285,8 +292,8 @@ bool ProxySQL_PluginManager::stop_all() {
 	bool ok = true;
 
 	for (auto it = plugins_.rbegin(); it != plugins_.rend(); ++it) {
-		if (!it->initialized && !it->started) {
-			continue;
+		if (!it->started) {
+			continue; // Only stop plugins that were actually started.
 		}
 		if (it->stopped) {
 			continue;
