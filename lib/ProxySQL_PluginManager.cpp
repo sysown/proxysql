@@ -272,14 +272,18 @@ size_t ProxySQL_PluginManager::size() const {
 }
 
 const std::vector<ProxySQL_PluginTableDef>& ProxySQL_PluginManager::tables(ProxySQL_PluginDBKind kind) const {
+	static const std::vector<ProxySQL_PluginTableDef> empty_tables {};
+
 	switch (kind) {
 	case ProxySQL_PluginDBKind::admin_db:
 		return tables_admin_;
 	case ProxySQL_PluginDBKind::config_db:
 		return tables_config_;
 	case ProxySQL_PluginDBKind::stats_db:
-	default:
 		return tables_stats_;
+	default:
+		proxy_warning("Invalid plugin table registry kind requested: %d\n", static_cast<int>(kind));
+		return empty_tables;
 	}
 }
 

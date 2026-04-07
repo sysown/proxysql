@@ -985,7 +985,10 @@ void ProxySQL_Main_init_Admin_module(const bootstrap_info_t& bootstrap_info) {
 	//GloProxyStats->init();
 	GloProxyStats->print_version();
 	GloAdmin = new ProxySQL_Admin();
-	GloAdmin->init(bootstrap_info);
+	if (!GloAdmin->init(bootstrap_info)) {
+		proxy_error("Admin module initialization failed\n");
+		exit(EXIT_FAILURE);
+	}
 	GloAdmin->print_version();
 	if (binary_sha1) {
 		proxy_info("ProxySQL SHA1 checksum: %s\n", binary_sha1);

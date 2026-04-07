@@ -13,7 +13,7 @@ ProxySQL_PluginCommandResult fake_plugin_command(const ProxySQL_PluginCommandCon
 } // namespace
 
 int main() {
-	plan(13);
+	plan(15);
 
 	ProxySQL_PluginManager mgr;
 	char table_name[] = "mysqlx_users";
@@ -45,8 +45,16 @@ int main() {
 		"invalid_table",
 		"CREATE TABLE invalid_table (id INTEGER)"
 	};
+	ProxySQL_PluginTableDef stats_def {
+		ProxySQL_PluginDBKind::stats_db,
+		"mysqlx_stats",
+		"CREATE TABLE mysqlx_stats (id INTEGER)"
+	};
 	mgr.register_table_for_test(invalid_def);
 	ok(mgr.tables(ProxySQL_PluginDBKind::admin_db).size() == static_cast<size_t>(1), "invalid db kind is rejected");
+	mgr.register_table_for_test(stats_def);
+	ok(mgr.tables(ProxySQL_PluginDBKind::stats_db).size() == static_cast<size_t>(1), "plugin stats table is stored");
+	ok(mgr.tables(static_cast<ProxySQL_PluginDBKind>(255)).empty(), "invalid table accessor returns empty");
 	ok(mgr.tables(ProxySQL_PluginDBKind::config_db).size() == static_cast<size_t>(0), "config tables start empty");
 	ok(!mgr.register_command_for_test("SELECT 1"), "unnamespaced admin SQL is rejected");
 	ok(mgr.register_command("PLUGIN MYSQLX LOAD USERS TO RUNTIME", &fake_plugin_command), "namespaced command registration succeeds");
