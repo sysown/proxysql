@@ -9,7 +9,7 @@ on:
         default: main
         type: string
   workflow_run:
-    workflows: [ CI-trigger ]
+    workflows: [ CI-builds ]
     types: [ completed ]
 
 concurrency:
