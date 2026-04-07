@@ -1,23 +1,16 @@
 #include "mysqlx_plugin.h"
 
-class MysqlxConfigStore {
-public:
-	MysqlxConfigStore() = default;
-	MysqlxConfigStore(const MysqlxConfigStore&) = delete;
-	MysqlxConfigStore& operator=(const MysqlxConfigStore&) = delete;
-	~MysqlxConfigStore() = default;
-};
-
 namespace {
 
 bool mysqlx_init(ProxySQL_PluginServices* services) {
+	if (services == nullptr) {
+		return false;
+	}
+
 	MysqlxPluginContext& ctx = mysqlx_context();
 	ctx.services = services;
 	ctx.config_store = std::make_unique<MysqlxConfigStore>();
 	ctx.started = false;
-	if (services == nullptr) {
-		return false;
-	}
 	return mysqlx_register_admin_schema(*services);
 }
 

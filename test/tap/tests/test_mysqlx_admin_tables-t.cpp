@@ -78,7 +78,7 @@ SQLite3DB* proxysql_plugin_get_statsdb() {
 }
 
 int main() {
-	plan(18);
+	plan(20);
 
 	ok(test_init_minimal() == 0, "minimal test globals initialize");
 

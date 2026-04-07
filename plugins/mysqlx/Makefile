@@ -9,7 +9,7 @@ PLUGIN_DIR := $(PROXYSQL_PATH)/plugins/mysqlx
 ODIR := $(PLUGIN_DIR)/obj
 PLUGIN_SO := $(PLUGIN_DIR)/ProxySQL_MySQLX_Plugin.so
 
-IDIRS := -I$(PROXYSQL_IDIR) -I$(PLUGIN_DIR)/include
+IDIRS := -I$(PROXYSQL_IDIR) -I$(PLUGIN_DIR)/include -I$(SQLITE3_IDIR)
 
 OPTZ ?= -O2 -ggdb
 CXXFLAGS := $(STDCPP) -fPIC $(OPTZ) $(WGCOV) $(WASAN)
@@ -17,7 +17,8 @@ CXXFLAGS := $(STDCPP) -fPIC $(OPTZ) $(WGCOV) $(WASAN)
 .DEFAULT_GOAL := all
 
 SRCS := $(PLUGIN_DIR)/src/mysqlx_plugin.cpp \
-	$(PLUGIN_DIR)/src/mysqlx_admin_schema.cpp
+	$(PLUGIN_DIR)/src/mysqlx_admin_schema.cpp \
+	$(PLUGIN_DIR)/src/mysqlx_config_store.cpp
 HEADERS := $(wildcard $(PLUGIN_DIR)/include/*.h) \
 	$(PROXYSQL_PATH)/include/ProxySQL_Plugin.h
 OBJS := $(patsubst $(PLUGIN_DIR)/src/%.cpp,$(ODIR)/%.o,$(SRCS))

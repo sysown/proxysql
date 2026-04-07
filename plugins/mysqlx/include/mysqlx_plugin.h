@@ -3,10 +3,9 @@
 
 #include "ProxySQL_Plugin.h"
 #include "mysqlx_admin_schema.h"
+#include "mysqlx_config_store.h"
 
 #include <memory>
-
-class MysqlxConfigStore;
 
 struct MysqlxPluginContext {
 	ProxySQL_PluginServices* services { nullptr };
