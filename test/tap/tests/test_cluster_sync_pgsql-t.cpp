@@ -128,48 +128,14 @@ cleanup:
 	return rc;
 }
 
-int fetch_single_count(MYSQL* admin, const string& query, int& count, bool fresh_connection = false) {
-	MYSQL* query_admin = admin;
-	MYSQL* fresh_admin = nullptr;
-
-	if (fresh_connection) {
-		fresh_admin = mysql_init(NULL);
-		if (!fresh_admin) {
-			diag("Failed to initialize fresh admin connection for query: %s", query.c_str());
-			return EXIT_FAILURE;
-		}
-
-		if (!mysql_real_connect(
-			fresh_admin,
-			admin->host,
-			admin->user,
-			admin->passwd,
-			admin->db,
-			admin->port,
-			admin->unix_socket,
-			admin->client_flag
-		)) {
-			diag("Failed to connect fresh admin session for query '%s': %s", query.c_str(), mysql_error(fresh_admin));
-			mysql_close(fresh_admin);
-			return EXIT_FAILURE;
-		}
-
-		query_admin = fresh_admin;
-	}
-
-	if (mysql_query_t(query_admin, query)) {
-		if (fresh_admin) {
-			mysql_close(fresh_admin);
-		}
+int fetch_single_count(MYSQL* admin, const string& query, int& count) {
+	if (mysql_query_t(admin, query)) {
 		return EXIT_FAILURE;
 	}
 
-	MYSQL_RES* result = mysql_store_result(query_admin);
+	MYSQL_RES* result = mysql_store_result(admin);
 	if (!result) {
 		diag("Failed to store result from query: %s", query.c_str());
-		if (fresh_admin) {
-			mysql_close(fresh_admin);
-		}
 		return EXIT_FAILURE;
 	}
 
@@ -177,27 +143,21 @@ int fetch_single_count(MYSQL* admin, const string& query, int& count, bool fresh
 	if (!row || !row[0]) {
 		diag("Failed to fetch count row from query: %s", query.c_str());
 		mysql_free_result(result);
-		if (fresh_admin) {
-			mysql_close(fresh_admin);
-		}
 		return EXIT_FAILURE;
 	}
 
 	count = atoi(row[0]);
 	mysql_free_result(result);
-	if (fresh_admin) {
-		mysql_close(fresh_admin);
-	}
 
 	return EXIT_SUCCESS;
 }
 
 int wait_for_expected_count(
-	MYSQL* admin, const string& query, int expected_count, const string& label, bool fresh_connection = false
+	MYSQL* admin, const string& query, int expected_count, const string& label
 ) {
 	for (uint32_t waited = 0; waited < SYNC_TIMEOUT; ++waited) {
 		int count = 0;
-		if (fetch_single_count(admin, query, count, fresh_connection) != EXIT_SUCCESS) {
+		if (fetch_single_count(admin, query, count) != EXIT_SUCCESS) {
 			return EXIT_FAILURE;
 		}
 		if (count == expected_count) {
@@ -287,7 +247,7 @@ int check_pgsql_servers_v2_sync(
 			std::get<9>(values),
 			std::get<10>(values).c_str()
 		);
-		if (wait_for_expected_count(replica_admin, runtime_pgsql_servers_query, 1, "runtime_pgsql_servers sync", true) != EXIT_SUCCESS) {
+		if (wait_for_expected_count(replica_admin, runtime_pgsql_servers_query, 1, "runtime_pgsql_servers sync") != EXIT_SUCCESS) {
 			goto cleanup;
 		}
 
@@ -306,7 +266,7 @@ int check_pgsql_servers_v2_sync(
 			std::get<9>(values),
 			std::get<10>(values).c_str()
 		);
-		if (wait_for_expected_count(replica_admin, main_pgsql_servers_query, 1, "pgsql_servers main sync", true) != EXIT_SUCCESS) {
+		if (wait_for_expected_count(replica_admin, main_pgsql_servers_query, 1, "pgsql_servers main sync") != EXIT_SUCCESS) {
 			goto cleanup;
 		}
 
@@ -320,7 +280,7 @@ int check_pgsql_servers_v2_sync(
 				goto cleanup;
 			}
 			disk_pgsql_servers_query.replace(from_pos, from_table.length(), to_table);
-			if (wait_for_expected_count(replica_admin, disk_pgsql_servers_query, 1, "pgsql_servers disk sync", true) != EXIT_SUCCESS) {
+			if (wait_for_expected_count(replica_admin, disk_pgsql_servers_query, 1, "pgsql_servers disk sync") != EXIT_SUCCESS) {
 				goto cleanup;
 			}
 		}
@@ -385,7 +345,7 @@ int check_pgsql_users_sync(MYSQL* proxy_admin, MYSQL* replica_admin, bool save_t
 		attributes.c_str(),
 		comment.c_str()
 	);
-	if (wait_for_expected_count(replica_admin, runtime_user_query, 1, "runtime_pgsql_users sync", true) != EXIT_SUCCESS) {
+	if (wait_for_expected_count(replica_admin, runtime_user_query, 1, "runtime_pgsql_users sync") != EXIT_SUCCESS) {
 		goto cleanup;
 	}
 
@@ -401,7 +361,7 @@ int check_pgsql_users_sync(MYSQL* proxy_admin, MYSQL* replica_admin, bool save_t
 		attributes.c_str(),
 		comment.c_str()
 	);
-	if (wait_for_expected_count(replica_admin, main_user_query, 1, "pgsql_users main sync", true) != EXIT_SUCCESS) {
+	if (wait_for_expected_count(replica_admin, main_user_query, 1, "pgsql_users main sync") != EXIT_SUCCESS) {
 		goto cleanup;
 	}
 
@@ -415,7 +375,7 @@ int check_pgsql_users_sync(MYSQL* proxy_admin, MYSQL* replica_admin, bool save_t
 			goto cleanup;
 		}
 		disk_user_query.replace(from_pos, from_table.length(), to_table);
-		if (wait_for_expected_count(replica_admin, disk_user_query, 1, "pgsql_users disk sync", true) != EXIT_SUCCESS) {
+		if (wait_for_expected_count(replica_admin, disk_user_query, 1, "pgsql_users disk sync") != EXIT_SUCCESS) {
 			goto cleanup;
 		}
 	}
@@ -501,7 +461,7 @@ int check_pgsql_query_rules_sync(MYSQL* proxy_admin, MYSQL* replica_admin, bool 
 		comment.c_str(),
 		database_name.c_str()
 	);
-	if (wait_for_expected_count(replica_admin, runtime_query_rules_query, 1, "runtime_pgsql_query_rules sync", true) != EXIT_SUCCESS) {
+	if (wait_for_expected_count(replica_admin, runtime_query_rules_query, 1, "runtime_pgsql_query_rules sync") != EXIT_SUCCESS) {
 		goto cleanup;
 	}
 
@@ -515,7 +475,7 @@ int check_pgsql_query_rules_sync(MYSQL* proxy_admin, MYSQL* replica_admin, bool 
 		destination_hostgroup,
 		fast_routing_comment.c_str()
 	);
-	if (wait_for_expected_count(replica_admin, runtime_fast_routing_query, 1, "runtime_pgsql_query_rules_fast_routing sync", true) != EXIT_SUCCESS) {
+	if (wait_for_expected_count(replica_admin, runtime_fast_routing_query, 1, "runtime_pgsql_query_rules_fast_routing sync") != EXIT_SUCCESS) {
 		goto cleanup;
 	}
 
@@ -529,7 +489,7 @@ int check_pgsql_query_rules_sync(MYSQL* proxy_admin, MYSQL* replica_admin, bool 
 		comment.c_str(),
 		database_name.c_str()
 	);
-	if (wait_for_expected_count(replica_admin, main_query_rules_query, 1, "pgsql_query_rules main sync", true) != EXIT_SUCCESS) {
+	if (wait_for_expected_count(replica_admin, main_query_rules_query, 1, "pgsql_query_rules main sync") != EXIT_SUCCESS) {
 		goto cleanup;
 	}
 
@@ -543,7 +503,7 @@ int check_pgsql_query_rules_sync(MYSQL* proxy_admin, MYSQL* replica_admin, bool 
 		destination_hostgroup,
 		fast_routing_comment.c_str()
 	);
-	if (wait_for_expected_count(replica_admin, main_fast_routing_query, 1, "pgsql_query_rules_fast_routing main sync", true) != EXIT_SUCCESS) {
+	if (wait_for_expected_count(replica_admin, main_fast_routing_query, 1, "pgsql_query_rules_fast_routing main sync") != EXIT_SUCCESS) {
 		goto cleanup;
 	}
 
@@ -562,10 +522,10 @@ int check_pgsql_query_rules_sync(MYSQL* proxy_admin, MYSQL* replica_admin, bool 
 		}
 		disk_query_rules_query.replace(rules_from_pos, rules_from_table.length(), rules_to_table);
 		disk_fast_routing_query.replace(fast_from_pos, fast_from_table.length(), fast_to_table);
-		if (wait_for_expected_count(replica_admin, disk_query_rules_query, 1, "pgsql_query_rules disk sync", true) != EXIT_SUCCESS) {
+		if (wait_for_expected_count(replica_admin, disk_query_rules_query, 1, "pgsql_query_rules disk sync") != EXIT_SUCCESS) {
 			goto cleanup;
 		}
-		if (wait_for_expected_count(replica_admin, disk_fast_routing_query, 1, "pgsql_query_rules_fast_routing disk sync", true) != EXIT_SUCCESS) {
+		if (wait_for_expected_count(replica_admin, disk_fast_routing_query, 1, "pgsql_query_rules_fast_routing disk sync") != EXIT_SUCCESS) {
 			goto cleanup;
 		}
 	}
