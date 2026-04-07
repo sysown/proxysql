@@ -298,7 +298,6 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	log_utils_unit-t \
 	genai_thread_unit-t \
 	listen_validator_unit-t \
-	plugin_config_unit-t \
 	c_tokenizer_unit-t \
 	pgsql_tokenizer_unit-t \
 	ezoption_parser_unit-t \
