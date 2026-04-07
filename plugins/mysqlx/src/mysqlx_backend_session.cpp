@@ -9,7 +9,8 @@
 #include <cerrno>
 #include <cstring>
 #include <netinet/in.h>
-#include <sys/select.h>
+#include <netinet/tcp.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -53,6 +54,11 @@ bool MysqlxBackendSession::connect(const MysqlxResolvedIdentity& identity,
 		backend_fd_ = -1;
 		return false;
 	}
+
+	// Set socket timeouts to prevent indefinite blocking.
+	struct timeval tv { 10, 0 }; // 10 second timeout for reads and writes
+	setsockopt(backend_fd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+	setsockopt(backend_fd_, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
 	if (::connect(backend_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
 		err = "connect() to " + endpoint.hostname + ":" +
@@ -211,32 +217,37 @@ bool MysqlxBackendSession::authenticate_backend(const std::string& username,
 
 bool MysqlxBackendSession::relay(int frontend_fd) {
 	// Byte-level bidirectional relay between frontend and backend.
-	// We use select() to multiplex reads from both sides.
 	uint8_t buf[65536];
 
+	struct pollfd pfds[2];
+	pfds[0].fd = frontend_fd;
+	pfds[0].events = POLLIN;
+	pfds[1].fd = backend_fd_;
+	pfds[1].events = POLLIN;
+
 	while (true) {
-		fd_set rfds;
-		FD_ZERO(&rfds);
-		FD_SET(frontend_fd, &rfds);
-		FD_SET(backend_fd_, &rfds);
+		pfds[0].revents = 0;
+		pfds[1].revents = 0;
 
-		int maxfd = (frontend_fd > backend_fd_) ? frontend_fd : backend_fd_;
-
-		struct timeval tv { 30, 0 }; // 30 second timeout
-		int ready = select(maxfd + 1, &rfds, nullptr, nullptr, &tv);
+		int ready = poll(pfds, 2, 30000 /*ms*/);
 		if (ready < 0) {
 			return false;
 		}
 		if (ready == 0) {
-			// Timeout — session idle too long.
+			return false; // idle timeout
+		}
+
+		// Check for errors/hangups.
+		if ((pfds[0].revents & (POLLERR | POLLHUP | POLLNVAL)) ||
+		    (pfds[1].revents & (POLLERR | POLLHUP | POLLNVAL))) {
 			return false;
 		}
 
 		// Frontend → Backend
-		if (FD_ISSET(frontend_fd, &rfds)) {
+		if (pfds[0].revents & POLLIN) {
 			ssize_t n = read(frontend_fd, buf, sizeof(buf));
 			if (n <= 0) {
-				return n == 0; // clean close vs error
+				return n == 0;
 			}
 			if (!mysqlx_write_all(backend_fd_, buf, static_cast<size_t>(n))) {
 				return false;
@@ -244,7 +255,7 @@ bool MysqlxBackendSession::relay(int frontend_fd) {
 		}
 
 		// Backend → Frontend
-		if (FD_ISSET(backend_fd_, &rfds)) {
+		if (pfds[1].revents & POLLIN) {
 			ssize_t n = read(backend_fd_, buf, sizeof(buf));
 			if (n <= 0) {
 				return n == 0;

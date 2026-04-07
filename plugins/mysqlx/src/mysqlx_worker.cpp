@@ -10,6 +10,7 @@
 #include <cerrno>
 #include <cstring>
 #include <netinet/in.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -20,7 +21,7 @@ std::vector<MysqlxListenerHandle> g_listeners {};
 std::vector<std::unique_ptr<MysqlxWorker>> g_workers {};
 std::atomic<bool> g_accept_running { false };
 std::thread g_accept_thread {};
-uint32_t g_rr_index { 0 };
+std::atomic<uint32_t> g_rr_index { 0 };
 
 bool parse_bind(const std::string& bind, std::string& host, uint16_t& port) {
 	auto pos = bind.rfind(':');
@@ -71,46 +72,37 @@ int create_listener_socket(const std::string& host, uint16_t port) {
 
 void accept_loop() {
 	while (g_accept_running.load()) {
-		// Simple poll across all listeners with a timeout so we can
-		// check g_accept_running periodically.
-		fd_set rfds;
-		FD_ZERO(&rfds);
-		int maxfd = -1;
-
+		// Build pollfd array from listeners.
+		std::vector<struct pollfd> pfds {};
 		for (const auto& listener : g_listeners) {
 			if (listener.fd >= 0) {
-				FD_SET(listener.fd, &rfds);
-				if (listener.fd > maxfd) {
-					maxfd = listener.fd;
-				}
+				pfds.push_back({ listener.fd, POLLIN, 0 });
 			}
 		}
 
-		if (maxfd < 0) {
-			// No valid listeners; sleep briefly and retry.
+		if (pfds.empty()) {
 			struct timespec ts { 0, 100000000 }; // 100ms
 			nanosleep(&ts, nullptr);
 			continue;
 		}
 
-		struct timeval tv { 0, 200000 }; // 200ms timeout
-		int ready = select(maxfd + 1, &rfds, nullptr, nullptr, &tv);
+		int ready = poll(pfds.data(), static_cast<nfds_t>(pfds.size()), 200 /*ms*/);
 		if (ready <= 0) {
 			continue;
 		}
 
-		for (const auto& listener : g_listeners) {
-			if (listener.fd >= 0 && FD_ISSET(listener.fd, &rfds)) {
+		for (const auto& pfd : pfds) {
+			if (pfd.revents & POLLIN) {
 				sockaddr_in client_addr {};
 				socklen_t client_len = sizeof(client_addr);
-				int client_fd = accept(listener.fd, reinterpret_cast<sockaddr*>(&client_addr), &client_len);
+				int client_fd = accept(pfd.fd, reinterpret_cast<sockaddr*>(&client_addr), &client_len);
 				if (client_fd < 0) {
 					continue;
 				}
 
-				// Round-robin dispatch to workers.
 				if (!g_workers.empty()) {
-					uint32_t idx = g_rr_index++ % static_cast<uint32_t>(g_workers.size());
+					uint32_t idx = g_rr_index.fetch_add(1, std::memory_order_relaxed)
+					             % static_cast<uint32_t>(g_workers.size());
 					g_workers[idx]->enqueue_client_fd(client_fd);
 				} else {
 					close(client_fd);

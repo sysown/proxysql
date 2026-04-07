@@ -9,6 +9,7 @@
 #include <cstring>
 #include <openssl/crypto.h>
 #include <openssl/rand.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 namespace {
@@ -60,10 +61,36 @@ bool parse_plain_auth_data(const std::string& auth_data,
 	return !username.empty();
 }
 
+// Check if the auth method is allowed for this user.
+// Empty allowed_auth_methods means all supported methods are allowed.
+bool is_auth_method_allowed(const std::string& method, const std::string& allowed) {
+	if (allowed.empty()) {
+		return true;
+	}
+	// allowed_auth_methods is comma-separated, e.g. "MYSQL41,PLAIN"
+	size_t pos = 0;
+	while (pos < allowed.size()) {
+		size_t comma = allowed.find(',', pos);
+		if (comma == std::string::npos) comma = allowed.size();
+		std::string token = allowed.substr(pos, comma - pos);
+		// Trim whitespace.
+		while (!token.empty() && token.front() == ' ') token.erase(0, 1);
+		while (!token.empty() && token.back() == ' ') token.pop_back();
+		if (token == method) return true;
+		pos = comma + 1;
+	}
+	return false;
+}
+
 } // namespace
 
 MysqlxFrontendSession::MysqlxFrontendSession(int client_fd)
 	: client_fd_(client_fd) {
+	// Set socket timeouts to prevent slow-client DoS.
+	struct timeval tv { 30, 0 }; // 30 second timeout
+	setsockopt(client_fd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+	setsockopt(client_fd_, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
 	// Generate random challenge for MYSQL41.
 	auth_challenge_.resize(CHALLENGE_LENGTH);
 	RAND_bytes(auth_challenge_.data(), CHALLENGE_LENGTH);
@@ -139,6 +166,18 @@ bool MysqlxFrontendSession::run_handshake_and_auth(MysqlxConfigStore& config_sto
 						return false;
 					}
 
+					if (identity_.require_tls) {
+						mysqlx_send_error(client_fd_, 1045,
+							"User '" + username + "' requires TLS for X Protocol access");
+						return false;
+					}
+
+					if (!is_auth_method_allowed("PLAIN", identity_.allowed_auth_methods)) {
+						mysqlx_send_error(client_fd_, 1251,
+							"Authentication method 'PLAIN' not allowed for user '" + username + "'");
+						return false;
+					}
+
 					if (identity_.backend_auth_mode == MysqlxBackendAuthMode::pass_through) {
 						mysqlx_send_error(client_fd_, 1045,
 							"pass_through backend auth mode not supported in Phase 1");
@@ -193,6 +232,18 @@ bool MysqlxFrontendSession::run_handshake_and_auth(MysqlxConfigStore& config_sto
 						return false;
 					}
 
+					if (identity_.require_tls) {
+						mysqlx_send_error(client_fd_, 1045,
+							"User '" + username + "' requires TLS for X Protocol access");
+						return false;
+					}
+
+					if (!is_auth_method_allowed("MYSQL41", identity_.allowed_auth_methods)) {
+						mysqlx_send_error(client_fd_, 1251,
+							"Authentication method 'MYSQL41' not allowed for user '" + username + "'");
+						return false;
+					}
+
 					if (identity_.backend_auth_mode == MysqlxBackendAuthMode::pass_through) {
 						mysqlx_send_error(client_fd_, 1045,
 							"pass_through backend auth mode not supported in Phase 1");
@@ -228,16 +279,23 @@ bool MysqlxFrontendSession::handle_capabilities_get() {
 }
 
 bool MysqlxFrontendSession::handle_capabilities_set(const std::vector<uint8_t>& payload) {
-	// Parse CapabilitiesSet. Phase 1: accept but ignore most capabilities.
-	// Just reply Ok to keep the handshake flowing.
 	Mysqlx::Connection::CapabilitiesSet cap_set;
 	if (!cap_set.ParseFromArray(payload.data(), static_cast<int>(payload.size()))) {
 		mysqlx_send_error(client_fd_, 5001, "Invalid CapabilitiesSet message");
 		return false;
 	}
 
-	// Phase 1: acknowledge the set without actually changing state.
-	// TLS negotiation would happen here in a full implementation.
+	// Phase 1: reject TLS requests explicitly since we don't implement it yet.
+	if (cap_set.has_capabilities()) {
+		for (const auto& cap : cap_set.capabilities().capabilities()) {
+			if (cap.name() == "tls") {
+				mysqlx_send_error(client_fd_, 5001,
+					"TLS capability not supported by mysqlx plugin in Phase 1");
+				return false;
+			}
+		}
+	}
+
 	return mysqlx_send_ok(client_fd_);
 }
 
