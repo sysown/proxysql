@@ -24,6 +24,8 @@
  */
 
 #include <unistd.h>
+#include <signal.h>
+#include <sys/wait.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <time.h>
@@ -595,8 +597,8 @@ int setup_config_file(const CommandLine& cl, uint32_t r_port, const std::string&
 	return 0;
 }
 
-int launch_proxysql_replica(const CommandLine& cl, uint32_t r_port, const std::string config_filename, bool monitor_enabled, 
-	const std::atomic<bool>& save_proxy_stderr) {
+int launch_proxysql_replica(const CommandLine& cl, uint32_t r_port, const std::string config_filename, bool monitor_enabled,
+	const std::atomic<bool>& save_proxy_stderr, std::atomic<pid_t>& child_pid) {
 
 	const std::string& workdir = std::string(cl.workdir);
 	const std::string& replica_stderr = workdir + "test_cluster_sync_config/test_cluster_sync_" + config_filename + "/cluster_sync_node_stderr.txt";
@@ -618,10 +620,21 @@ int launch_proxysql_replica(const CommandLine& cl, uint32_t r_port, const std::s
 	const std::string& proxy_binary_path = workdir + "../../../src/proxysql";
 	const std::string& proxy_command = proxy_binary_path + " -f " + (monitor_enabled == false ? "-M" : "") + " -c " + fmt_config_file + " > " + replica_stderr + " 2>&1";
 
-	diag("Launching replica ProxySQL [%s] via 'system' with command : `%s`", config_filename.c_str(), proxy_command.c_str());
-	int exec_res = system(proxy_command.c_str());
+	diag("Launching replica ProxySQL [%s] via fork/exec with command: `%s`", config_filename.c_str(), proxy_command.c_str());
 
-	ok(exec_res == 0, "proxysql cluster node [%s] should execute and shutdown nicely. 'system' result was: %d", config_filename.c_str(), exec_res);
+	pid_t pid = fork();
+	if (pid == 0) {
+		execl("/bin/sh", "sh", "-c", proxy_command.c_str(), nullptr);
+		_exit(127);
+	}
+
+	child_pid.store(pid);
+
+	int status = 0;
+	waitpid(pid, &status, 0);
+	int exec_res = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+
+	ok(exec_res == 0, "proxysql cluster node [%s] should execute and shutdown nicely. Exit status was: %d", config_filename.c_str(), exec_res);
 
 	// In case of error place in log the reason
 	if (exec_res || save_proxy_stderr.load()) {
@@ -845,10 +858,13 @@ int main(int, char**) {
 	MYSQL_QUERY(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
 	// Launch proxysql with cluster config and monitor feature disabled
-	std::thread proxysql_replica_nomonitor_thd(launch_proxysql_replica, std::ref(cl), R_NOMONITOR_PORT, "nomonitor", false, std::ref(save_proxy_stderr));
-	
+	std::atomic<pid_t> nomonitor_pid { 0 };
+	std::atomic<pid_t> withmonitor_pid { 0 };
+
+	std::thread proxysql_replica_nomonitor_thd(launch_proxysql_replica, std::ref(cl), R_NOMONITOR_PORT, "nomonitor", false, std::ref(save_proxy_stderr), std::ref(nomonitor_pid));
+
 	// Launch proxysql with cluster config - with -M commandline
-	std::thread proxysql_replica_withmonitor_thd(launch_proxysql_replica, std::ref(cl), R_WITHMONITOR_PORT, "withmonitor", true, std::ref(save_proxy_stderr));
+	std::thread proxysql_replica_withmonitor_thd(launch_proxysql_replica, std::ref(cl), R_WITHMONITOR_PORT, "withmonitor", true, std::ref(save_proxy_stderr), std::ref(withmonitor_pid));
 
 	MYSQL* r_proxysql_nomonitor_admin = NULL;
 	MYSQL* r_proxysql_withmonitor_admin = NULL;
@@ -958,6 +974,30 @@ cleanup:
 		mysql_options(r_proxysql_withmonitor_admin, MYSQL_OPT_WRITE_TIMEOUT, &mysql_timeout);
 		mysql_query(r_proxysql_withmonitor_admin, "PROXYSQL SHUTDOWN");
 		mysql_close(r_proxysql_withmonitor_admin);
+	}
+
+	// Ensure replica processes are dead before joining threads.
+	// If PROXYSQL SHUTDOWN failed or admin connection was NULL, the process
+	// launched via fork() would block the thread forever.
+	{
+		pid_t pids[] = { nomonitor_pid.load(), withmonitor_pid.load() };
+		const char* names[] = { "nomonitor", "withmonitor" };
+		for (int i = 0; i < 2; i++) {
+			if (pids[i] > 0) {
+				bool exited = false;
+				for (int w = 0; w < 5; w++) {
+					if (waitpid(pids[i], nullptr, WNOHANG) != 0) {
+						exited = true;
+						break;
+					}
+					sleep(1);
+				}
+				if (!exited) {
+					diag("Replica ProxySQL [%s] (pid=%d) did not exit after SHUTDOWN, sending SIGKILL", names[i], pids[i]);
+					kill(pids[i], SIGKILL);
+				}
+			}
+		}
 	}
 
 	proxysql_replica_nomonitor_thd.join();
