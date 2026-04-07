@@ -111,6 +111,21 @@ const uint32_t R_PORT = 16062;
 // Use 127.0.0.1 to connect to it, not cl.host (which may point to a different container).
 const char* R_HOST = "127.0.0.1";
 
+// Hostname visible to other containers on the Docker network.
+// Used when registering the replica in proxysql_servers on the primary so the
+// primary's cluster monitor can reach the replica.  Falls back to R_HOST when
+// not running in a container (e.g. bare-metal testing).
+const char* get_cluster_visible_host() {
+	// Detect hostname from env or from gethostname() — the test-runner container
+	// has --hostname set by the Unified CI infra.
+	static char buf[256] = {};
+	if (buf[0]) return buf;
+	if (gethostname(buf, sizeof(buf)) != 0) {
+		strncpy(buf, R_HOST, sizeof(buf) - 1);
+	}
+	return buf;
+}
+
 int setup_config_file(const CommandLine& cl) {
 	const std::string t_fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync-t.cnf";
 	const std::string fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync.cnf";
@@ -1285,8 +1300,11 @@ int main(int, char**) {
 	});
 
 	// Waiting for proxysql to be ready
+	// Use the cluster-visible hostname so the primary can also reach the replica
+	// via proxysql_servers.  Inside the test-runner container this resolves to
+	// the container's own IP, so the local connection works too.
 	conn_opts_t conn_opts {};
-	conn_opts.host = R_HOST;
+	conn_opts.host = get_cluster_visible_host();
 	conn_opts.user = cl.admin_username;
 	conn_opts.pass = cl.admin_password;
 	conn_opts.port = R_PORT;

@@ -234,6 +234,7 @@ BINLOG_READER_BIN=$(find "${WORKSPACE}" -path "${WORKSPACE}/ci_infra_logs" -prun
 # Execution: run the container
 docker run \
     --name "${TEST_CONTAINER}" \
+    --hostname "test-runner" \
     --network "${NETWORK_NAME}" \
     --cap-add=NET_ADMIN \
     --cap-add=SYS_ADMIN \

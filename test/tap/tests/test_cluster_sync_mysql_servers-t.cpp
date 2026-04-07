@@ -70,6 +70,16 @@ const uint32_t CONNECT_TIMEOUT = 10;
 const uint32_t R_NOMONITOR_PORT = 96061;
 const uint32_t R_WITHMONITOR_PORT = 96062;
 
+// Hostname visible to other containers on the Docker network.
+const char* get_cluster_visible_host() {
+	static char buf[256] = {};
+	if (buf[0]) return buf;
+	if (gethostname(buf, sizeof(buf)) != 0) {
+		strncpy(buf, "127.0.0.1", sizeof(buf) - 1);
+	}
+	return buf;
+}
+
 const std::string t_debug_query = "mysql -u%s -p%s -h %s -P%d -C -e \"%s\"";
 
 using mysql_server_tuple = std::tuple<int,std::string,int,int,std::string,int,int,int,int,int,int,std::string>;
@@ -870,8 +880,10 @@ int main(int, char**) {
 	MYSQL* r_proxysql_withmonitor_admin = NULL;
 	{
 		// Waiting for proxysql to be ready
+		// Use cluster-visible hostname — replicas run locally in the test-runner
+		// container, not in the primary ProxySQL container that cl.host points to.
 		conn_opts_t conn_opts_nomonitor {};
-		conn_opts_nomonitor.host = cl.host;
+		conn_opts_nomonitor.host = get_cluster_visible_host();
 		conn_opts_nomonitor.user = cl.admin_username;
 		conn_opts_nomonitor.pass = cl.admin_password;
 		conn_opts_nomonitor.port = R_NOMONITOR_PORT;
@@ -888,7 +900,7 @@ int main(int, char**) {
 		}
 
 		conn_opts_t conn_opts_withmonitor {};
-		conn_opts_withmonitor.host = cl.host;
+		conn_opts_withmonitor.host = get_cluster_visible_host();
 		conn_opts_withmonitor.user = cl.admin_username;
 		conn_opts_withmonitor.pass = cl.admin_password;
 		conn_opts_withmonitor.port = R_WITHMONITOR_PORT;
