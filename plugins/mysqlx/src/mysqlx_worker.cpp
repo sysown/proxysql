@@ -1,5 +1,6 @@
 #include "mysqlx_worker.h"
 
+#include "mysqlx_backend_session.h"
 #include "mysqlx_frontend_session.h"
 #include "mysqlx_plugin.h"
 #include "sqlite3db.h"
@@ -164,10 +165,22 @@ void MysqlxWorker::run() {
 			MysqlxPluginContext& ctx = mysqlx_context();
 
 			if (ctx.config_store && session.run_handshake_and_auth(*ctx.config_store)) {
-				// Authentication succeeded.
-				// Task 8 will add backend session relay here.
-				// For now, send an error indicating no backend and close.
-				mysqlx_send_error(fd, 4000, "No backend session available (Phase 1 stub)");
+				// Frontend auth succeeded — connect to backend.
+				const MysqlxResolvedIdentity& identity = session.identity();
+				MysqlxBackendEndpoint endpoint = ctx.config_store->pick_endpoint(identity.default_route);
+
+				if (endpoint.hostname.empty()) {
+					mysqlx_send_error(fd, 4000, "No backend endpoint available for route");
+				} else {
+					MysqlxBackendSession backend;
+					std::string err {};
+					if (backend.connect(identity, endpoint, err)) {
+						// Relay traffic bidirectionally until close.
+						backend.relay(fd);
+					} else {
+						mysqlx_send_error(fd, 4001, "Backend connection failed: " + err);
+					}
+				}
 			}
 			close(fd);
 		}

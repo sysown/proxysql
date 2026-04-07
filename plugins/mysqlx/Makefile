@@ -26,7 +26,8 @@ SRCS := $(PLUGIN_DIR)/src/mysqlx_plugin.cpp \
 	$(PLUGIN_DIR)/src/mysqlx_config_store.cpp \
 	$(PLUGIN_DIR)/src/mysqlx_worker.cpp \
 	$(PLUGIN_DIR)/src/mysqlx_protocol.cpp \
-	$(PLUGIN_DIR)/src/mysqlx_frontend_session.cpp
+	$(PLUGIN_DIR)/src/mysqlx_frontend_session.cpp \
+	$(PLUGIN_DIR)/src/mysqlx_backend_session.cpp
 HEADERS := $(wildcard $(PLUGIN_DIR)/include/*.h) \
 	$(PROXYSQL_PATH)/include/ProxySQL_Plugin.h
 OBJS := $(patsubst $(PLUGIN_DIR)/src/%.cpp,$(ODIR)/%.o,$(SRCS))

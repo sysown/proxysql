@@ -245,6 +245,24 @@ std::optional<MysqlxResolvedIdentity> MysqlxConfigStore::resolve_identity(const 
 	return it->second;
 }
 
+MysqlxBackendEndpoint MysqlxConfigStore::pick_from_hostgroup(int hostgroup_id, const std::string& strategy) const {
+	const auto it = hostgroup_endpoints_.find(hostgroup_id);
+	if (it == hostgroup_endpoints_.end() || it->second.empty()) {
+		return {};
+	}
+
+	const auto& endpoints = it->second;
+
+	if (strategy == "round_robin" || strategy == "round_robin_with_fallback") {
+		uint32_t& counter = rr_counters_[hostgroup_id];
+		uint32_t idx = counter++ % static_cast<uint32_t>(endpoints.size());
+		return endpoints[idx];
+	}
+
+	// first_available (default)
+	return endpoints.front();
+}
+
 MysqlxBackendEndpoint MysqlxConfigStore::pick_endpoint(const std::string& route_name) const {
 	const auto route_it = routes_.find(route_name);
 	if (route_it == routes_.end()) {
@@ -252,16 +270,13 @@ MysqlxBackendEndpoint MysqlxConfigStore::pick_endpoint(const std::string& route_
 	}
 
 	const MysqlxRoute& route = route_it->second;
-	const auto primary_it = hostgroup_endpoints_.find(route.destination_hostgroup);
-	if (primary_it != hostgroup_endpoints_.end() && !primary_it->second.empty()) {
-		return primary_it->second.front();
+	auto result = pick_from_hostgroup(route.destination_hostgroup, route.strategy);
+	if (!result.hostname.empty()) {
+		return result;
 	}
 
 	if (route.fallback_hostgroup >= 0) {
-		const auto fallback_it = hostgroup_endpoints_.find(route.fallback_hostgroup);
-		if (fallback_it != hostgroup_endpoints_.end() && !fallback_it->second.empty()) {
-			return fallback_it->second.front();
-		}
+		return pick_from_hostgroup(route.fallback_hostgroup, route.strategy);
 	}
 
 	return {};

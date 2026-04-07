@@ -322,7 +322,8 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	mysqlx_config_store_unit-t \
 	test_mysqlx_admin_tables-t \
 	test_mysqlx_listener_smoke-t \
-	mysqlx_protocol_unit-t
+	mysqlx_protocol_unit-t \
+	mysqlx_route_store_unit-t
 
 .PHONY: all
 all: $(UNIT_TESTS)
@@ -376,6 +377,12 @@ MYSQLX_PROTO_OBJS := $(patsubst $(MYSQLX_PROTO_DIR)/%.pb.cc,$(ODIR)/mysqlx_proto
 
 $(ODIR)/mysqlx_proto_%.pb.o: $(MYSQLX_PROTO_DIR)/%.pb.cc | $(ODIR)
 	$(CXX) -c -o $@ $< $(STDCPP) -fPIC -O0 -ggdb -I$(MYSQLX_PROTO_DIR) -w
+
+mysqlx_route_store_unit-t: mysqlx_route_store_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+		-I$(PROXYSQL_PATH)/plugins/mysqlx/include \
+		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) \
+		$(ALLOW_MULTI_DEF) -o $@
 
 mysqlx_protocol_unit-t: mysqlx_protocol_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) \

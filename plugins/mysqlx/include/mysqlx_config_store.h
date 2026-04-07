@@ -65,9 +65,11 @@ public:
 	void bump_topology_generation();
 
 private:
+	MysqlxBackendEndpoint pick_from_hostgroup(int hostgroup_id, const std::string& strategy) const;
 	std::unordered_map<std::string, MysqlxResolvedIdentity> identities_ {};
 	std::unordered_map<std::string, MysqlxRoute> routes_ {};
 	std::unordered_map<int, std::vector<MysqlxBackendEndpoint>> hostgroup_endpoints_ {};
+	mutable std::unordered_map<int, uint32_t> rr_counters_ {};
 	uint64_t topology_generation_ { 0 };
 };
 
