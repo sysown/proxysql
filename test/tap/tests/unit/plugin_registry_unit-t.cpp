@@ -13,7 +13,7 @@ ProxySQL_PluginCommandResult fake_plugin_command(const ProxySQL_PluginCommandCon
 } // namespace
 
 int main() {
-	plan(10);
+	plan(13);
 
 	ProxySQL_PluginManager mgr;
 	char table_name[] = "mysqlx_users";
@@ -40,10 +40,18 @@ int main() {
 	ok(std::strcmp(mgr.tables(ProxySQL_PluginDBKind::admin_db).front().table_def, "CREATE TABLE mysqlx_users (username VARCHAR NOT NULL PRIMARY KEY)") == 0, "plugin admin table definition is copied");
 	mgr.register_table_for_test(duplicate_def);
 	ok(mgr.tables(ProxySQL_PluginDBKind::admin_db).size() == static_cast<size_t>(1), "duplicate table registration is rejected");
+	ProxySQL_PluginTableDef invalid_def {
+		static_cast<ProxySQL_PluginDBKind>(255),
+		"invalid_table",
+		"CREATE TABLE invalid_table (id INTEGER)"
+	};
+	mgr.register_table_for_test(invalid_def);
+	ok(mgr.tables(ProxySQL_PluginDBKind::admin_db).size() == static_cast<size_t>(1), "invalid db kind is rejected");
 	ok(mgr.tables(ProxySQL_PluginDBKind::config_db).size() == static_cast<size_t>(0), "config tables start empty");
 	ok(!mgr.register_command_for_test("SELECT 1"), "unnamespaced admin SQL is rejected");
 	ok(mgr.register_command("PLUGIN MYSQLX LOAD USERS TO RUNTIME", &fake_plugin_command), "namespaced command registration succeeds");
 	ok(!mgr.register_command("PLUGIN MYSQLX LOAD USERS TO RUNTIME", &fake_plugin_command), "duplicate namespaced command is rejected");
+	ok(!mgr.register_command("PLUGIN   MYSQLX   LOAD USERS TO RUNTIME ;", &fake_plugin_command), "canonical duplicate command is rejected");
 	ok(mgr.has_command_for_test("PLUGIN MYSQLX LOAD USERS TO RUNTIME"), "registered command is discoverable");
 
 	ProxySQL_PluginCommandResult result { 1, 0, "" };
@@ -53,6 +61,11 @@ int main() {
 	   result.rows_affected == 7 &&
 	   result.message == "mysqlx users loaded",
 	   "registered command dispatches callback result");
+	ok(mgr.dispatch_admin_command(ctx, "PLUGIN   MYSQLX   LOAD USERS TO RUNTIME ;", result) &&
+	   result.error_code == 0 &&
+	   result.rows_affected == 7 &&
+	   result.message == "mysqlx users loaded",
+	   "dispatch canonicalizes whitespace and trailing semicolons");
 
 	return exit_status();
 }

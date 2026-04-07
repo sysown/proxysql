@@ -1,5 +1,6 @@
 #include "ProxySQL_PluginManager.h"
 
+#include <cctype>
 #include <cstring>
 #include <dlfcn.h>
 #include <strings.h>
@@ -37,14 +38,26 @@ std::string plugin_name(const ProxySQL_PluginDescriptor *descriptor) {
 }
 
 void register_table_service(const ProxySQL_PluginTableDef& def) {
-	if (g_registry_target != nullptr && !g_registry_target->register_table(def)) {
+	if (g_registry_target == nullptr) {
+		proxy_warning("Plugin table registration attempted outside init phase for %s\n",
+			      def.table_name != nullptr ? def.table_name : "(null)");
+		return;
+	}
+
+	if (!g_registry_target->register_table(def)) {
 		proxy_warning("Plugin table registration failed for %s\n",
 			      def.table_name != nullptr ? def.table_name : "(null)");
 	}
 }
 
 void register_command_service(const char* sql, proxysql_plugin_admin_command_cb cb) {
-	if (g_registry_target != nullptr && !g_registry_target->register_command(sql, cb)) {
+	if (g_registry_target == nullptr) {
+		proxy_warning("Plugin command registration attempted outside init phase for %s\n",
+			      sql != nullptr ? sql : "(null)");
+		return;
+	}
+
+	if (!g_registry_target->register_command(sql, cb)) {
 		proxy_warning("Plugin command registration failed for %s\n",
 			      sql != nullptr ? sql : "(null)");
 	}
@@ -84,12 +97,42 @@ bool sql_equals_ci(const std::string& lhs, const std::string& rhs) {
 	return strcasecmp(lhs.c_str(), rhs.c_str()) == 0;
 }
 
-bool has_plugin_command_prefix(const char* sql) {
-	if (sql == nullptr) {
+std::string canonicalize_plugin_command(const std::string& sql) {
+	size_t start = 0;
+	size_t end = sql.size();
+	while (start < end && std::isspace(static_cast<unsigned char>(sql[start]))) {
+		++start;
+	}
+	while (end > start &&
+	       (std::isspace(static_cast<unsigned char>(sql[end - 1])) || sql[end - 1] == ';')) {
+		--end;
+	}
+
+	std::string normalized {};
+	normalized.reserve(end - start);
+	bool pending_space = false;
+	for (size_t i = start; i < end; ++i) {
+		const unsigned char ch = static_cast<unsigned char>(sql[i]);
+		if (std::isspace(ch)) {
+			pending_space = !normalized.empty();
+			continue;
+		}
+		if (pending_space) {
+			normalized.push_back(' ');
+			pending_space = false;
+		}
+		normalized.push_back(static_cast<char>(ch));
+	}
+
+	return normalized;
+}
+
+bool has_plugin_command_prefix(const std::string& sql) {
+	if (sql.empty()) {
 		return false;
 	}
 
-	return strncasecmp(sql, kPluginCommandPrefix, sizeof(kPluginCommandPrefix) - 1) == 0;
+	return strncasecmp(sql.c_str(), kPluginCommandPrefix, sizeof(kPluginCommandPrefix) - 1) == 0;
 }
 
 } // namespace
@@ -241,18 +284,19 @@ const std::vector<ProxySQL_PluginTableDef>& ProxySQL_PluginManager::tables(Proxy
 }
 
 bool ProxySQL_PluginManager::dispatch_admin_command(const ProxySQL_PluginCommandContext& ctx, const std::string& sql, ProxySQL_PluginCommandResult& result) const {
-	if (!has_plugin_command_prefix(sql.c_str())) {
+	const std::string canonical_sql = canonicalize_plugin_command(sql);
+	if (!has_plugin_command_prefix(canonical_sql)) {
 		return false;
 	}
 
 	for (const auto& command : commands_) {
-		if (!sql_equals_ci(command.sql, sql)) {
+		if (!sql_equals_ci(command.sql, canonical_sql)) {
 			continue;
 		}
 		if (command.cb == nullptr) {
 			return false;
 		}
-		result = command.cb(ctx, sql.c_str());
+		result = command.cb(ctx, canonical_sql.c_str());
 		return true;
 	}
 
@@ -268,8 +312,9 @@ bool ProxySQL_PluginManager::register_command_for_test(const std::string& sql) {
 }
 
 bool ProxySQL_PluginManager::has_command_for_test(const std::string& sql) const {
+	const std::string canonical_sql = canonicalize_plugin_command(sql);
 	for (const auto& command : commands_) {
-		if (sql_equals_ci(command.sql, sql)) {
+		if (sql_equals_ci(command.sql, canonical_sql)) {
 			return true;
 		}
 	}
@@ -293,6 +338,8 @@ bool ProxySQL_PluginManager::register_table(const ProxySQL_PluginTableDef& def) 
 	case ProxySQL_PluginDBKind::stats_db:
 		existing_tables = &tables_stats_;
 		break;
+	default:
+		return false;
 	}
 
 	for (const auto& existing : *existing_tables) {
@@ -319,23 +366,30 @@ bool ProxySQL_PluginManager::register_table(const ProxySQL_PluginTableDef& def) 
 	case ProxySQL_PluginDBKind::stats_db:
 		tables_stats_.push_back(owned_def);
 		break;
+	default:
+		return false;
 	}
 
 	return true;
 }
 
 bool ProxySQL_PluginManager::register_command(const char* sql, proxysql_plugin_admin_command_cb cb) {
-	if (sql == nullptr || *sql == '\0' || !has_plugin_command_prefix(sql) || cb == nullptr) {
+	if (sql == nullptr || *sql == '\0' || cb == nullptr) {
+		return false;
+	}
+
+	const std::string canonical_sql = canonicalize_plugin_command(sql);
+	if (canonical_sql.empty() || !has_plugin_command_prefix(canonical_sql)) {
 		return false;
 	}
 
 	for (const auto& command : commands_) {
-		if (strcasecmp(command.sql.c_str(), sql) == 0) {
+		if (sql_equals_ci(command.sql, canonical_sql)) {
 			return false;
 		}
 	}
 
-	commands_.push_back({sql, cb});
+	commands_.push_back({canonical_sql, cb});
 	return true;
 }
 
