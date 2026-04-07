@@ -4,6 +4,7 @@
 #include "ProxySQL_Plugin.h"
 
 #include <cstddef>
+#include <deque>
 #include <memory>
 #include <string>
 #include <vector>
@@ -45,11 +46,17 @@ private:
 		proxysql_plugin_admin_command_cb cb { nullptr };
 	};
 
+	struct registered_table_storage_t {
+		std::string table_name {};
+		std::string table_def {};
+	};
+
 	std::vector<plugin_handle_t> plugins_;
 	ProxySQL_PluginServices services_;
 	std::vector<ProxySQL_PluginTableDef> tables_admin_;
 	std::vector<ProxySQL_PluginTableDef> tables_config_;
 	std::vector<ProxySQL_PluginTableDef> tables_stats_;
+	std::deque<registered_table_storage_t> table_storage_;
 	std::vector<registered_command_t> commands_;
 };
 

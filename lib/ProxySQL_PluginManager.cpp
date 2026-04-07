@@ -12,6 +12,8 @@ SQLite3DB* proxysql_plugin_get_statsdb();
 
 namespace {
 
+constexpr char kPluginCommandPrefix[] = "PLUGIN ";
+
 ProxySQL_PluginManager* g_active_plugin_manager = nullptr;
 ProxySQL_PluginManager* g_registry_target = nullptr;
 
@@ -74,6 +76,14 @@ void log_message_service(int level, const char* message) {
 
 bool sql_equals_ci(const std::string& lhs, const std::string& rhs) {
 	return strcasecmp(lhs.c_str(), rhs.c_str()) == 0;
+}
+
+bool has_plugin_command_prefix(const char* sql) {
+	if (sql == nullptr) {
+		return false;
+	}
+
+	return strncasecmp(sql, kPluginCommandPrefix, sizeof(kPluginCommandPrefix) - 1) == 0;
 }
 
 } // namespace
@@ -225,6 +235,10 @@ const std::vector<ProxySQL_PluginTableDef>& ProxySQL_PluginManager::tables(Proxy
 }
 
 bool ProxySQL_PluginManager::dispatch_admin_command(const ProxySQL_PluginCommandContext& ctx, const std::string& sql, ProxySQL_PluginCommandResult& result) const {
+	if (!has_plugin_command_prefix(sql.c_str())) {
+		return false;
+	}
+
 	for (const auto& command : commands_) {
 		if (!sql_equals_ci(command.sql, sql)) {
 			continue;
@@ -257,21 +271,35 @@ bool ProxySQL_PluginManager::has_command_for_test(const std::string& sql) const 
 }
 
 void ProxySQL_PluginManager::register_table(const ProxySQL_PluginTableDef& def) {
+	if (def.table_name == nullptr || *def.table_name == '\0' ||
+	    def.table_def == nullptr || *def.table_def == '\0') {
+		proxy_warning("Ignoring plugin table registration with empty table metadata\n");
+		return;
+	}
+
+	table_storage_.push_back({def.table_name, def.table_def});
+	const registered_table_storage_t& stored = table_storage_.back();
+	const ProxySQL_PluginTableDef owned_def {
+		def.db_kind,
+		stored.table_name.c_str(),
+		stored.table_def.c_str()
+	};
+
 	switch (def.db_kind) {
 	case ProxySQL_PluginDBKind::admin_db:
-		tables_admin_.push_back(def);
+		tables_admin_.push_back(owned_def);
 		break;
 	case ProxySQL_PluginDBKind::config_db:
-		tables_config_.push_back(def);
+		tables_config_.push_back(owned_def);
 		break;
 	case ProxySQL_PluginDBKind::stats_db:
-		tables_stats_.push_back(def);
+		tables_stats_.push_back(owned_def);
 		break;
 	}
 }
 
 bool ProxySQL_PluginManager::register_command(const char* sql, proxysql_plugin_admin_command_cb cb) {
-	if (sql == nullptr || *sql == '\0') {
+	if (sql == nullptr || *sql == '\0' || !has_plugin_command_prefix(sql)) {
 		return false;
 	}
 
