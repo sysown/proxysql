@@ -2,8 +2,14 @@
 
 #include <cstring>
 #include <dlfcn.h>
+#include <strings.h>
+
+#include "proxysql.h"
 
 namespace {
+
+ProxySQL_PluginManager* g_active_plugin_manager = nullptr;
+ProxySQL_PluginManager* g_registry_target = nullptr;
 
 std::string format_dl_error(const char *prefix) {
 	const char *dl_err = dlerror();
@@ -20,14 +26,69 @@ std::string plugin_name(const ProxySQL_PluginDescriptor *descriptor) {
 	return descriptor->name;
 }
 
+void register_table_service(const ProxySQL_PluginTableDef& def) {
+	if (g_registry_target != nullptr) {
+		g_registry_target->register_table(def);
+	}
+}
+
+void register_command_service(const char* sql, proxysql_plugin_admin_command_cb cb) {
+	if (g_registry_target != nullptr) {
+		g_registry_target->register_command(sql, cb);
+	}
+}
+
+SQLite3DB* get_admindb_service() {
+	return nullptr;
+}
+
+SQLite3DB* get_configdb_service() {
+	return nullptr;
+}
+
+SQLite3DB* get_statsdb_service() {
+	return nullptr;
+}
+
+void log_message_service(int level, const char* message) {
+	if (message == nullptr) {
+		return;
+	}
+
+	switch (level) {
+	case 3:
+		proxy_error("%s\n", message);
+		break;
+	case 4:
+		proxy_warning("%s\n", message);
+		break;
+	default:
+		proxy_info("%s\n", message);
+		break;
+	}
+}
+
+bool sql_equals_ci(const std::string& lhs, const std::string& rhs) {
+	return strcasecmp(lhs.c_str(), rhs.c_str()) == 0;
+}
+
 } // namespace
 
 ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	std::memset(&services_, 0, sizeof(services_));
+	services_.register_table = &register_table_service;
+	services_.register_command = &register_command_service;
+	services_.get_admindb = &get_admindb_service;
+	services_.get_configdb = &get_configdb_service;
+	services_.get_statsdb = &get_statsdb_service;
+	services_.log_message = &log_message_service;
 }
 
 ProxySQL_PluginManager::~ProxySQL_PluginManager() {
 	stop_all();
+	if (g_active_plugin_manager == this) {
+		g_active_plugin_manager = nullptr;
+	}
 	for (auto it = plugins_.rbegin(); it != plugins_.rend(); ++it) {
 		if (it->handle != nullptr) {
 			dlclose(it->handle);
@@ -86,10 +147,13 @@ bool ProxySQL_PluginManager::init_all(std::string &err) {
 			plugin.initialized = true;
 			continue;
 		}
+		g_registry_target = this;
 		if (!plugin.descriptor->init(&services_)) {
+			g_registry_target = nullptr;
 			err = "plugin init failed: " + plugin_name(plugin.descriptor);
 			return false;
 		}
+		g_registry_target = nullptr;
 		plugin.initialized = true;
 	}
 
@@ -144,6 +208,83 @@ size_t ProxySQL_PluginManager::size() const {
 	return plugins_.size();
 }
 
+const std::vector<ProxySQL_PluginTableDef>& ProxySQL_PluginManager::tables(ProxySQL_PluginDBKind kind) const {
+	switch (kind) {
+	case ProxySQL_PluginDBKind::admin_db:
+		return tables_admin_;
+	case ProxySQL_PluginDBKind::config_db:
+		return tables_config_;
+	case ProxySQL_PluginDBKind::stats_db:
+	default:
+		return tables_stats_;
+	}
+}
+
+bool ProxySQL_PluginManager::dispatch_admin_command(const ProxySQL_PluginCommandContext& ctx, const std::string& sql, ProxySQL_PluginCommandResult& result) const {
+	for (const auto& command : commands_) {
+		if (!sql_equals_ci(command.sql, sql)) {
+			continue;
+		}
+		if (command.cb == nullptr) {
+			return false;
+		}
+		result = command.cb(ctx, sql.c_str());
+		return true;
+	}
+
+	return false;
+}
+
+void ProxySQL_PluginManager::register_table_for_test(const ProxySQL_PluginTableDef& def) {
+	register_table(def);
+}
+
+bool ProxySQL_PluginManager::register_command_for_test(const std::string& sql) {
+	return register_command(sql.c_str(), nullptr);
+}
+
+bool ProxySQL_PluginManager::has_command_for_test(const std::string& sql) const {
+	for (const auto& command : commands_) {
+		if (sql_equals_ci(command.sql, sql)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+void ProxySQL_PluginManager::register_table(const ProxySQL_PluginTableDef& def) {
+	switch (def.db_kind) {
+	case ProxySQL_PluginDBKind::admin_db:
+		tables_admin_.push_back(def);
+		break;
+	case ProxySQL_PluginDBKind::config_db:
+		tables_config_.push_back(def);
+		break;
+	case ProxySQL_PluginDBKind::stats_db:
+		tables_stats_.push_back(def);
+		break;
+	}
+}
+
+bool ProxySQL_PluginManager::register_command(const char* sql, proxysql_plugin_admin_command_cb cb) {
+	if (sql == nullptr || *sql == '\0') {
+		return false;
+	}
+
+	for (const auto& command : commands_) {
+		if (strcasecmp(command.sql.c_str(), sql) == 0) {
+			return false;
+		}
+	}
+
+	commands_.push_back({sql, cb});
+	return true;
+}
+
+ProxySQL_PluginManager* proxysql_get_plugin_manager() {
+	return g_active_plugin_manager;
+}
+
 bool proxysql_load_configured_plugins(
 	std::unique_ptr<ProxySQL_PluginManager>& manager,
 	const std::vector<std::string>& plugin_modules,
@@ -151,6 +292,7 @@ bool proxysql_load_configured_plugins(
 ) {
 	err.clear();
 	manager.reset();
+	g_active_plugin_manager = nullptr;
 
 	if (plugin_modules.empty()) {
 		return true;
@@ -169,6 +311,7 @@ bool proxysql_load_configured_plugins(
 	}
 
 	manager = std::move(next_manager);
+	g_active_plugin_manager = manager.get();
 	return true;
 }
 
@@ -190,6 +333,7 @@ bool proxysql_stop_configured_plugins(
 ) {
 	err.clear();
 	if (!manager) {
+		g_active_plugin_manager = nullptr;
 		return true;
 	}
 
@@ -199,5 +343,6 @@ bool proxysql_stop_configured_plugins(
 	}
 
 	manager.reset();
+	g_active_plugin_manager = nullptr;
 	return true;
 }

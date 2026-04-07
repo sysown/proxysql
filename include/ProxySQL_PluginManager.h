@@ -20,6 +20,14 @@ public:
 	bool init_all(std::string &err);
 	bool start_all(std::string &err);
 	bool stop_all();
+	const std::vector<ProxySQL_PluginTableDef>& tables(ProxySQL_PluginDBKind kind) const;
+	bool dispatch_admin_command(const ProxySQL_PluginCommandContext& ctx, const std::string& sql, ProxySQL_PluginCommandResult& result) const;
+
+	void register_table_for_test(const ProxySQL_PluginTableDef& def);
+	bool register_command_for_test(const std::string& sql);
+	bool has_command_for_test(const std::string& sql) const;
+	void register_table(const ProxySQL_PluginTableDef& def);
+	bool register_command(const char* sql, proxysql_plugin_admin_command_cb cb);
 
 	size_t size() const;
 
@@ -32,10 +40,20 @@ private:
 		bool stopped{false};
 	};
 
+	struct registered_command_t {
+		std::string sql {};
+		proxysql_plugin_admin_command_cb cb { nullptr };
+	};
+
 	std::vector<plugin_handle_t> plugins_;
 	ProxySQL_PluginServices services_;
+	std::vector<ProxySQL_PluginTableDef> tables_admin_;
+	std::vector<ProxySQL_PluginTableDef> tables_config_;
+	std::vector<ProxySQL_PluginTableDef> tables_stats_;
+	std::vector<registered_command_t> commands_;
 };
 
+ProxySQL_PluginManager* proxysql_get_plugin_manager();
 bool proxysql_load_configured_plugins(
 	std::unique_ptr<ProxySQL_PluginManager>& manager,
 	const std::vector<std::string>& plugin_modules,

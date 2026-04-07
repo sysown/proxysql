@@ -308,7 +308,8 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	genai_mysql_catalog_unit-t \
 	admin_disk_upgrade_unit-t \
 	glovars_unit-t \
-	plugin_manager_unit-t
+	plugin_manager_unit-t \
+	plugin_registry_unit-t
 
 .PHONY: all
 all: $(UNIT_TESTS)

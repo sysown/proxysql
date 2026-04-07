@@ -43,12 +43,18 @@ using proxysql_plugin_register_command_cb =
 using proxysql_plugin_snapshot_cb =
 	SQLite3_result *(*)();
 
+using proxysql_plugin_db_handle_cb =
+	SQLite3DB *(*)();
+
 using proxysql_plugin_log_message_cb =
 	void (*)(int, const char *);
 
 struct ProxySQL_PluginServices {
 	proxysql_plugin_register_table_cb register_table;
 	proxysql_plugin_register_command_cb register_command;
+	proxysql_plugin_db_handle_cb get_admindb;
+	proxysql_plugin_db_handle_cb get_configdb;
+	proxysql_plugin_db_handle_cb get_statsdb;
 	proxysql_plugin_snapshot_cb get_mysql_users_snapshot;
 	proxysql_plugin_snapshot_cb get_mysql_servers_snapshot;
 	proxysql_plugin_snapshot_cb get_mysql_group_replication_hostgroups_snapshot;

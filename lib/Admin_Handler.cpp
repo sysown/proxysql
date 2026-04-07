@@ -5296,6 +5296,13 @@ __end_show_commands:
 			run_query=false;
 		}
 	}
+	if (run_query && sess->session_type == PROXYSQL_SESSION_ADMIN) {
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		if (SPA->dispatch_plugin_admin_command(sess, query_no_space)) {
+			run_query=false;
+			goto __run_query;
+		}
+	}
 
 __run_query:
 	if (sess->proxysql_node_address && (__sync_fetch_and_add(&glovars.shutdown,0)==0)) {

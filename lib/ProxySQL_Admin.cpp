@@ -18,6 +18,7 @@ using json = nlohmann::json;
 
 #include "MySQL_HostGroups_Manager.h"
 #include "PgSQL_HostGroups_Manager.h"
+#include "ProxySQL_PluginManager.h"
 #include "mysql.h"
 #include "proxysql_admin.h"
 #include "Discovery_Schema.h"
@@ -6221,12 +6222,35 @@ void ProxySQL_Admin::send_error_msg_to_client(S* sess, const char *msg, uint16_t
 	}
 }
 
+template <typename S>
+bool ProxySQL_Admin::dispatch_plugin_admin_command(S* sess, const char* sql) {
+	ProxySQL_PluginManager* plugin_manager = proxysql_get_plugin_manager();
+	if (plugin_manager == nullptr) {
+		return false;
+	}
+
+	ProxySQL_PluginCommandContext ctx { admindb, configdb, statsdb };
+	ProxySQL_PluginCommandResult result { 0, 0, "" };
+	if (!plugin_manager->dispatch_admin_command(ctx, sql, result)) {
+		return false;
+	}
+
+	if (result.error_code == 0) {
+		send_ok_msg_to_client(sess, result.message.empty() ? NULL : result.message.c_str(), static_cast<int>(result.rows_affected), sql);
+	} else {
+		send_error_msg_to_client(sess, result.message.c_str(), static_cast<uint16_t>(result.error_code));
+	}
+	return true;
+}
+
 // Explicit template instantiations for send_ok_msg_to_client and send_error_msg_to_client
 // These must come after the template definitions above
 template void ProxySQL_Admin::send_ok_msg_to_client<MySQL_Session>(MySQL_Session*, char const*, int, char const*);
 template void ProxySQL_Admin::send_ok_msg_to_client<PgSQL_Session>(PgSQL_Session*, char const*, int, char const*);
 template void ProxySQL_Admin::send_error_msg_to_client<MySQL_Session>(MySQL_Session*, char const*, unsigned short);
 template void ProxySQL_Admin::send_error_msg_to_client<PgSQL_Session>(PgSQL_Session*, char const*, unsigned short);
+template bool ProxySQL_Admin::dispatch_plugin_admin_command<MySQL_Session>(MySQL_Session*, const char*);
+template bool ProxySQL_Admin::dispatch_plugin_admin_command<PgSQL_Session>(PgSQL_Session*, const char*);
 
 template <enum SERVER_TYPE pt>
 void ProxySQL_Admin::__delete_inactive_users(enum cred_username_type usertype) {

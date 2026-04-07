@@ -16,6 +16,8 @@
 
 #include "ProxySQL_RESTAPI_Server.hpp"
 
+#include "ProxySQL_Plugin.h"
+
 #include "proxysql_typedefs.h"
 #include "query_digest_topk.h"
 
@@ -681,7 +683,9 @@ class ProxySQL_Admin {
 	void send_ok_msg_to_client(S* sess, const char *msg, int rows, const char* query);
 	template <typename S>
 	void send_error_msg_to_client(S* sess, const char *msg, uint16_t mysql_err_code=1045);
-#ifdef DEBUG
+	template <typename S>
+	bool dispatch_plugin_admin_command(S* sess, const char *sql);
+	#ifdef DEBUG
 	// these two following functions used to just call and return one function each
 	// this approach was replaced when we introduced debug filters
 	//int load_debug_to_runtime() { return flush_debug_levels_database_to_runtime(admindb); }

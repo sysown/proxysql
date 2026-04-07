@@ -38,6 +38,7 @@ using json = nlohmann::json;
 #include "PgSQL_Authentication.h"
 #include "MySQL_LDAP_Authentication.hpp"
 #include "MySQL_PreparedStatement.h"
+#include "ProxySQL_PluginManager.h"
 #include "ProxySQL_Cluster.hpp"
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_Logger.hpp"
@@ -927,15 +928,27 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_servers_clients_status", STATS_SQLITE_TABLE_PROXYSQL_SERVERS_CLIENTS_STATUS);
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_message_metrics", STATS_SQLITE_TABLE_PROXYSQL_MESSAGE_METRICS);
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_message_metrics_reset", STATS_SQLITE_TABLE_PROXYSQL_MESSAGE_METRICS_RESET);
-#ifdef PROXYSQLGENAI
-	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_tools_counters", STATS_SQLITE_TABLE_MCP_QUERY_TOOLS_COUNTERS);
-	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_tools_counters_reset", STATS_SQLITE_TABLE_MCP_QUERY_TOOLS_COUNTERS_RESET);
+	#ifdef PROXYSQLGENAI
+		insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_tools_counters", STATS_SQLITE_TABLE_MCP_QUERY_TOOLS_COUNTERS);
+		insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_tools_counters_reset", STATS_SQLITE_TABLE_MCP_QUERY_TOOLS_COUNTERS_RESET);
 
 	// MCP query digest stats
 	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_digest", STATS_SQLITE_TABLE_MCP_QUERY_DIGEST);
-	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_digest_reset", STATS_SQLITE_TABLE_MCP_QUERY_DIGEST_RESET);
-	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_rules", STATS_SQLITE_TABLE_MCP_QUERY_RULES); // Reuse same schema for stats
-#endif /* PROXYSQLGENAI */
+		insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_digest_reset", STATS_SQLITE_TABLE_MCP_QUERY_DIGEST_RESET);
+		insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_rules", STATS_SQLITE_TABLE_MCP_QUERY_RULES); // Reuse same schema for stats
+	#endif /* PROXYSQLGENAI */
+
+	if (ProxySQL_PluginManager* plugin_manager = proxysql_get_plugin_manager()) {
+		for (const auto& def : plugin_manager->tables(ProxySQL_PluginDBKind::admin_db)) {
+			insert_into_tables_defs(tables_defs_admin, def.table_name, def.table_def);
+		}
+		for (const auto& def : plugin_manager->tables(ProxySQL_PluginDBKind::config_db)) {
+			insert_into_tables_defs(tables_defs_config, def.table_name, def.table_def);
+		}
+		for (const auto& def : plugin_manager->tables(ProxySQL_PluginDBKind::stats_db)) {
+			insert_into_tables_defs(tables_defs_stats, def.table_name, def.table_def);
+		}
+	}
 
 	// init ldap here
 	init_ldap();
