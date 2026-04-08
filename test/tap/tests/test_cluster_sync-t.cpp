@@ -104,7 +104,7 @@ using std::fstream;
 using std::function;
 
 // GLOBAL TEST PARAMETERS
-const uint32_t SYNC_TIMEOUT = 30;
+const uint32_t SYNC_TIMEOUT = 10;
 const uint32_t CONNECT_TIMEOUT = 10;
 const uint32_t R_PORT = 16062;
 // The replica ProxySQL is spawned locally inside the test-runner container.
