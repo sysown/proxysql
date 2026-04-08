@@ -13,12 +13,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 export WORKSPACE="${REPO_ROOT}"
 
+source "${REPO_ROOT}/test/infra/control/docker-fs-helper.bash"
+
 set -e
 set -o pipefail
-
-# SUDO helper: empty if root
-SUDO=""
-if [ "$(id -u)" != "0" ]; then SUDO="sudo"; fi
 
 # relaunch self with timeout
 [[ $(ps -o command= $(ps -o ppid= $$)) =~ timeout ]] || exec timeout -v -s 9 ${TIMEOUT:-600} "${BASH_SOURCE}" "$@"
@@ -80,8 +78,8 @@ for RAW_PATH in ${MOUNTED_PATHS}; do
     fi
 
     echo "Preparing directory: ${ACTUAL_PATH}"
-    $SUDO mkdir -p "${ACTUAL_PATH}"
-    $SUDO chmod -R 777 "${ACTUAL_PATH}"
+    mkdir -p "${ACTUAL_PATH}"
+    docker_fs_exec "chmod -R 777 ." "${ACTUAL_PATH}"
 done
 
 # 3. Inject dynamic variables into Orchestrator configs
