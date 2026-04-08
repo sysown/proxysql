@@ -1,4 +1,4 @@
-name: CI-taptests-groups
+name: CI-mysql84-g4
 run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
 
 on:
@@ -18,4 +18,4 @@ jobs:
     secrets: inherit
     with:
       trigger: ${{ toJson(github) }}
-      testgroup: ${{ vars.MATRIX_TAPTESTS_GROUPS_testgroup }}
+      testgroup: '["mysql84-g4"]'
