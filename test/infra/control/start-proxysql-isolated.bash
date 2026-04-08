@@ -2,14 +2,12 @@
 set -e
 set -o pipefail
 
-# SUDO helper: empty if root
-SUDO=""
-if [ "$(id -u)" != "0" ]; then SUDO="sudo"; fi
-
 # Derive Workspace relative to script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 export WORKSPACE="${REPO_ROOT}"
+
+source "${SCRIPT_DIR}/docker-fs-helper.bash"
 
 if [ -z "${INFRA_ID}" ]; then echo "Error: INFRA_ID is not set."; exit 1; fi
 
@@ -35,9 +33,9 @@ echo ">>> Setting up isolated network: ${NETWORK_NAME}"
 docker network inspect ${NETWORK_NAME} >/dev/null 2>&1 || docker network create ${NETWORK_NAME}
 
 echo ">>> Preparing ProxySQL data directory: ${PROXY_DATA_DIR}"
-$SUDO mkdir -p "${PROXY_DATA_DIR}"
-$SUDO chmod -R 777 "${INFRA_LOGS_PATH}/${INFRA_ID}"
-$SUDO rm -f "${PROXY_DATA_DIR}/proxysql.db" "${PROXY_DATA_DIR}"/*.pem
+mkdir -p "${PROXY_DATA_DIR}"
+docker_fs_exec "chmod -R 777 ." "${INFRA_LOGS_PATH}/${INFRA_ID}"
+docker_fs_exec "rm -f proxysql/proxysql.db proxysql/*.pem" "${INFRA_LOGS_PATH}/${INFRA_ID}"
 
 docker rm -f "${PROXY_CONTAINER}" >/dev/null 2>&1 || true
 
