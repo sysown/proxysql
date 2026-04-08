@@ -16,10 +16,8 @@ CREATE TABLE pgsql_servers_ssl_params (
   ssl_ca VARCHAR NOT NULL DEFAULT '',
   ssl_cert VARCHAR NOT NULL DEFAULT '',
   ssl_key VARCHAR NOT NULL DEFAULT '',
-  ssl_capath VARCHAR NOT NULL DEFAULT '',
   ssl_crl VARCHAR NOT NULL DEFAULT '',
   ssl_crlpath VARCHAR NOT NULL DEFAULT '',
-  ssl_cipher VARCHAR NOT NULL DEFAULT '',
   ssl_protocol_version_range VARCHAR NOT NULL DEFAULT '',
   comment VARCHAR NOT NULL DEFAULT '',
   PRIMARY KEY (hostname, port, username)
@@ -33,13 +31,11 @@ CREATE TABLE pgsql_servers_ssl_params (
 | `hostname` | Backend server hostname. Must match the `hostname` in `pgsql_servers`. |
 | `port` | Backend server port. Default: `5432`. Must match the `port` in `pgsql_servers`. |
 | `username` | ProxySQL username. Empty string `''` acts as a wildcard fallback (see Lookup Hierarchy). |
-| `ssl_ca` | Path to the CA certificate file. Maps to libpq `sslrootcert`. |
+| `ssl_ca` | Path to the CA certificate file (PEM). May contain multiple concatenated CA certs. Maps to libpq `sslrootcert`. |
 | `ssl_cert` | Path to the client certificate file. Maps to libpq `sslcert`. |
 | `ssl_key` | Path to the client private key file. Maps to libpq `sslkey`. |
-| `ssl_capath` | Path to directory containing CA certificates. |
 | `ssl_crl` | Path to the certificate revocation list file. Maps to libpq `sslcrl`. |
 | `ssl_crlpath` | Path to directory containing CRL files. Maps to libpq `sslcrldir` (PostgreSQL 14+). |
-| `ssl_cipher` | SSL cipher specification. |
 | `ssl_protocol_version_range` | TLS protocol version constraint. See format below. |
 | `comment` | Free-form comment. |
 
@@ -85,6 +81,8 @@ When ProxySQL opens a new connection to a PostgreSQL backend, it looks up SSL pa
 3. **Global fallback:** If no match found, use the global `pgsql-ssl_p2s_*` variables.
 
 This allows you to set a default SSL configuration for a server (empty username) while overriding it for specific users.
+
+> **Important — matching is all-or-nothing.** Once a row in `pgsql_servers_ssl_params` matches (either at step 1 or step 2), ProxySQL uses **only** the SSL fields from that row. Empty columns in the matched row are passed through as empty (libpq defaults), they are **not** silently filled in from `pgsql-ssl_p2s_*`. The global variables are consulted **only** when no row matches at all (step 3). If you want a per-server row to inherit some defaults from the globals, you must copy those values into the row explicitly.
 
 ## Usage
 
@@ -190,4 +188,4 @@ If `use_ssl=0`, the backend connection does not use SSL regardless of `pgsql_ser
 
 - Empty fields in `pgsql_servers_ssl_params` are omitted from the libpq connection string (libpq defaults apply for those fields).
 - Per-server SSL params only affect **new** backend connections. Existing pooled connections continue using their original SSL settings. Use the `/* create_new_connection=1 */` query annotation to force ProxySQL to create a new backend connection.
-- The `ssl_cipher` column is reserved for future use. libpq does not expose a direct connection string parameter for cipher selection.
+- Per-server SSL params apply on the data path (`PgSQL_Connection`), the monitor path (`PgSQL_Monitor`), and the cancel/terminate path (`PgSQL_Backend_Kill_Args`).

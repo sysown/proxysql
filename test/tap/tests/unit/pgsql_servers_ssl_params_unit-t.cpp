@@ -47,6 +47,23 @@ static void test_base_constructor_string() {
 	ok(p.comment == "test comment", "string ctor: comment");
 }
 
+static void test_base_constructor_3arg() {
+	Servers_SslParams p(string("db3.example.com"), 5434, string("readonly"));
+
+	ok(p.hostname == "db3.example.com", "3-arg ctor: hostname");
+	ok(p.port == 5434, "3-arg ctor: port");
+	ok(p.username == "readonly", "3-arg ctor: username");
+	ok(p.ssl_ca == "", "3-arg ctor: ssl_ca defaults to empty");
+	ok(p.ssl_cert == "", "3-arg ctor: ssl_cert defaults to empty");
+	ok(p.ssl_key == "", "3-arg ctor: ssl_key defaults to empty");
+	ok(p.ssl_capath == "", "3-arg ctor: ssl_capath defaults to empty");
+	ok(p.ssl_crl == "", "3-arg ctor: ssl_crl defaults to empty");
+	ok(p.ssl_crlpath == "", "3-arg ctor: ssl_crlpath defaults to empty");
+	ok(p.ssl_cipher == "", "3-arg ctor: ssl_cipher defaults to empty");
+	ok(p.tls_version == "", "3-arg ctor: tls_version defaults to empty");
+	ok(p.comment == "", "3-arg ctor: comment defaults to empty");
+}
+
 static void test_base_constructor_charptr() {
 	char h[] = "db2.example.com";
 	char u[] = "admin";
@@ -110,16 +127,48 @@ static void test_pgsql_derived_class() {
 	PgSQLServers_SslParams p(
 		string("pghost"), 5432, string("pguser"),
 		string("/pg/ca.crt"), string("/pg/cert.crt"), string("/pg/key.pem"),
-		string(""), string(""), string(""),
-		string(""), string("TLSv1.2-TLSv1.3"), string("pg comment")
+		string(""), string(""),
+		string("TLSv1.2-TLSv1.3"), string("pg comment")
 	);
 
 	ok(p.hostname == "pghost", "PgSQL derived: hostname inherited");
 	ok(p.ssl_ca == "/pg/ca.crt", "PgSQL derived: ssl_ca inherited");
 	ok(p.tls_version == "TLSv1.2-TLSv1.3", "PgSQL derived: tls_version inherited");
+	ok(p.ssl_min_protocol_version == "TLSv1.2", "PgSQL derived: parsed min from range");
+	ok(p.ssl_max_protocol_version == "TLSv1.3", "PgSQL derived: parsed max from range");
 
 	string key = p.getMapKey("|");
 	ok(key == "pghost|5432|pguser", "PgSQL derived: getMapKey inherited");
+
+	// Single token pins both ends
+	PgSQLServers_SslParams pin(
+		string("pinhost"), 5432, string(""),
+		string(""), string(""), string(""),
+		string(""), string(""),
+		string("TLSv1.3"), string("")
+	);
+	ok(pin.ssl_min_protocol_version == "TLSv1.3", "PgSQL derived: single-token pin -> min");
+	ok(pin.ssl_max_protocol_version == "TLSv1.3", "PgSQL derived: single-token pin -> max");
+
+	// Empty tls_version leaves both empty
+	PgSQLServers_SslParams empty(
+		string("eh"), 5432, string(""),
+		string(""), string(""), string(""),
+		string(""), string(""),
+		string(""), string("")
+	);
+	ok(empty.ssl_min_protocol_version == "", "PgSQL derived: empty tls_version -> empty min");
+	ok(empty.ssl_max_protocol_version == "", "PgSQL derived: empty tls_version -> empty max");
+
+	// Malformed (one side missing) leaves both empty
+	PgSQLServers_SslParams bad(
+		string("bh"), 5432, string(""),
+		string(""), string(""), string(""),
+		string(""), string(""),
+		string("TLSv1.2-"), string("")
+	);
+	ok(bad.ssl_min_protocol_version == "", "PgSQL derived: malformed -> empty min");
+	ok(bad.ssl_max_protocol_version == "", "PgSQL derived: malformed -> empty max");
 }
 
 static void test_pgsql_storable_in_map() {
@@ -127,13 +176,15 @@ static void test_pgsql_storable_in_map() {
 
 	PgSQLServers_SslParams p1(
 		string("host1"), 5432, string("user1"),
-		string("/ca1"), string(""), string(""), string(""),
-		string(""), string(""), string(""), string(""), string("")
+		string("/ca1"), string(""), string(""),
+		string(""), string(""),
+		string(""), string("")
 	);
 	PgSQLServers_SslParams p2(
 		string("host2"), 5433, string("user2"),
-		string("/ca2"), string(""), string(""), string(""),
-		string(""), string(""), string(""), string(""), string("")
+		string("/ca2"), string(""), string(""),
+		string(""), string(""),
+		string(""), string("")
 	);
 
 	m.emplace("key1", p1);
@@ -149,29 +200,31 @@ static void test_pgsql_storable_in_map() {
 // ============================================================================
 
 static void populate_ssl_params() {
-	SQLite3_result *result = new SQLite3_result(12);
+	// Schema columns: hostname, port, username, ssl_ca, ssl_cert, ssl_key,
+	// ssl_crl, ssl_crlpath, ssl_protocol_version_range, comment
+	SQLite3_result *result = new SQLite3_result(10);
 
 	char *row1[] = {
 		(char*)"host1", (char*)"5432", (char*)"testuser",
 		(char*)"/certs/ca1.crt", (char*)"/certs/cert1.crt", (char*)"/certs/key1.pem",
-		(char*)"", (char*)"", (char*)"",
-		(char*)"", (char*)"TLSv1.3", (char*)"exact match row"
+		(char*)"", (char*)"",
+		(char*)"TLSv1.3", (char*)"exact match row"
 	};
 	result->add_row(row1);
 
 	char *row2[] = {
 		(char*)"host1", (char*)"5432", (char*)"",
 		(char*)"/certs/ca_fallback.crt", (char*)"/certs/cert_fb.crt", (char*)"/certs/key_fb.pem",
-		(char*)"", (char*)"", (char*)"",
-		(char*)"", (char*)"", (char*)"fallback row"
+		(char*)"", (char*)"",
+		(char*)"", (char*)"fallback row"
 	};
 	result->add_row(row2);
 
 	char *row3[] = {
 		(char*)"host2", (char*)"5433", (char*)"admin",
 		(char*)"/certs/ca2.crt", (char*)"", (char*)"",
-		(char*)"", (char*)"", (char*)"",
-		(char*)"AES256", (char*)"TLSv1.2-TLSv1.3", (char*)"host2 row"
+		(char*)"", (char*)"",
+		(char*)"TLSv1.2-TLSv1.3", (char*)"host2 row"
 	};
 	result->add_row(row3);
 
@@ -246,11 +299,13 @@ static void test_lookup_different_host() {
 	);
 	ok(p != NULL, "different host: found host2:5433:admin");
 	if (p) {
-		ok(p->ssl_cipher == "AES256", "different host: ssl_cipher correct");
+		ok(p->ssl_ca == "/certs/ca2.crt", "different host: ssl_ca correct");
 		ok(p->tls_version == "TLSv1.2-TLSv1.3", "different host: tls_version correct");
+		ok(p->ssl_min_protocol_version == "TLSv1.2", "different host: parsed min");
+		ok(p->ssl_max_protocol_version == "TLSv1.3", "different host: parsed max");
 		delete p;
 	} else {
-		skip(2, "host2 not found");
+		skip(4, "host2 not found");
 	}
 }
 
@@ -259,11 +314,12 @@ static void test_lookup_different_host() {
 // ============================================================================
 
 int main() {
-	plan(45);
+	plan(67);
 
 	test_init_minimal();
 
 	test_base_constructor_string();
+	test_base_constructor_3arg();
 	test_base_constructor_charptr();
 	test_getMapKey();
 	test_getMapKey_empty_username();

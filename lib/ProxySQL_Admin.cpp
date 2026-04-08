@@ -7730,7 +7730,7 @@ void ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 		StrQuery = "INSERT INTO ";
 		if (_runtime)
 			StrQuery += "runtime_";
-		StrQuery += "pgsql_servers_ssl_params (hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_capath, ssl_crl, ssl_crlpath, ssl_cipher, ssl_protocol_version_range, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+		StrQuery += "pgsql_servers_ssl_params (hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_crl, ssl_crlpath, ssl_protocol_version_range, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
 		auto [rc1, statement_unique] = admindb->prepare_v2(StrQuery.c_str());
 		rc = rc1;
 		statement = statement_unique.get();
@@ -7744,12 +7744,10 @@ void ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 			rc=(*proxy_sqlite3_bind_text)(statement,  4,  r->fields[3],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_ca
 			rc=(*proxy_sqlite3_bind_text)(statement,  5,  r->fields[4],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_cert
 			rc=(*proxy_sqlite3_bind_text)(statement,  6,  r->fields[5],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_key
-			rc=(*proxy_sqlite3_bind_text)(statement,  7,  r->fields[6],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_capath
-			rc=(*proxy_sqlite3_bind_text)(statement,  8,  r->fields[7],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_crl
-			rc=(*proxy_sqlite3_bind_text)(statement,  9,  r->fields[8],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_crlpath
-			rc=(*proxy_sqlite3_bind_text)(statement,  10, r->fields[9],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_cipher
-			rc=(*proxy_sqlite3_bind_text)(statement,  11, r->fields[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_protocol_version_range
-			rc=(*proxy_sqlite3_bind_text)(statement,  12, r->fields[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // comment
+			rc=(*proxy_sqlite3_bind_text)(statement,  7,  r->fields[6],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_crl
+			rc=(*proxy_sqlite3_bind_text)(statement,  8,  r->fields[7],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_crlpath
+			rc=(*proxy_sqlite3_bind_text)(statement,  9,  r->fields[8],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_protocol_version_range
+			rc=(*proxy_sqlite3_bind_text)(statement,  10, r->fields[9],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // comment
 
 			SAFE_SQLITE3_STEP2(statement);
 			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);

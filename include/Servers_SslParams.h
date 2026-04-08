@@ -57,9 +57,8 @@ class Servers_SslParams {
 		comment = string(c);
 		MapKey = "";
 	}
-	Servers_SslParams(string _h, int _p, string _u) {
-		Servers_SslParams(_h, _p, _u, "", "", "", "", "", "", "", "", "");
-	}
+	Servers_SslParams(string _h, int _p, string _u)
+		: Servers_SslParams(_h, _p, _u, "", "", "", "", "", "", "", "", "") {}
 	virtual ~Servers_SslParams() = default;
 	string getMapKey(const char *del) {
 		if (MapKey == "") {
@@ -76,7 +75,51 @@ class MySQLServers_SslParams : public Servers_SslParams {
 
 class PgSQLServers_SslParams : public Servers_SslParams {
 	public:
-	using Servers_SslParams::Servers_SslParams;
+	// Pre-parsed from tls_version (= the SQL column ssl_protocol_version_range).
+	// Populated once at construction so the data path does not have to re-parse
+	// the range string on every backend connection. Empty when tls_version is
+	// empty or malformed (in which case libpq defaults apply).
+	string ssl_min_protocol_version;
+	string ssl_max_protocol_version;
+
+	// PgSQL-specific constructors. libpq has no equivalent for the base class
+	// ssl_capath / ssl_cipher fields, so they are not exposed here — the base
+	// class members are forwarded as empty strings and stay unused on the
+	// PgSQL backend path.
+	PgSQLServers_SslParams(string _h, int _p, string _u,
+		string ca, string cert, string key,
+		string crl, string crlpath, string tls, string c)
+		: Servers_SslParams(_h, _p, _u, ca, cert, key, "", crl, crlpath, "", tls, c) {
+		parse_tls_version();
+	}
+	PgSQLServers_SslParams(char * _h, int _p, char * _u,
+		char * ca, char * cert, char * key,
+		char * crl, char * crlpath, char * tls, char * c)
+		: Servers_SslParams(_h, _p, _u, ca, cert, key, (char*)"", crl, crlpath, (char*)"", tls, c) {
+		parse_tls_version();
+	}
+	PgSQLServers_SslParams(string _h, int _p, string _u)
+		: Servers_SslParams(_h, _p, _u) {}
+
+	private:
+	// Parse tls_version into ssl_min_protocol_version / ssl_max_protocol_version.
+	// Format: "MIN-MAX" for a range, or a single token to pin both ends.
+	// Empty or malformed values leave both fields empty.
+	void parse_tls_version() {
+		if (tls_version.empty()) return;
+		size_t dash_pos = tls_version.find('-');
+		if (dash_pos == string::npos) {
+			ssl_min_protocol_version = tls_version;
+			ssl_max_protocol_version = tls_version;
+			return;
+		}
+		string min_ver = tls_version.substr(0, dash_pos);
+		string max_ver = tls_version.substr(dash_pos + 1);
+		if (!min_ver.empty() && !max_ver.empty()) {
+			ssl_min_protocol_version = min_ver;
+			ssl_max_protocol_version = max_ver;
+		}
+	}
 };
 
 #endif // __CLASS_SERVERS_SSL_PARAMS_H

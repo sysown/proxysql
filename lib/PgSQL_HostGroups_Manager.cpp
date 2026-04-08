@@ -1051,6 +1051,7 @@ void PgSQL_HostGroups_Manager::commit_update_checksums_from_tables(SpookyHash& m
 
 	CUCFT1(myhash,init,"pgsql_replication_hostgroups","writer_hostgroup", table_resultset_checksum[HGM_TABLES::PgSQL_REPLICATION_HOSTGROUPS]);
 	CUCFT1(myhash,init,"pgsql_hostgroup_attributes","hostgroup_id", table_resultset_checksum[HGM_TABLES::PgSQL_HOSTGROUP_ATTRIBUTES]);
+	CUCFT1(myhash,init,"pgsql_servers_ssl_params","hostname,port,username", table_resultset_checksum[HGM_TABLES::PgSQL_SERVERS_SSL_PARAMS]);
 }
 
 /**
@@ -1848,7 +1849,7 @@ SQLite3_result * PgSQL_HostGroups_Manager::dump_table_pgsql(const string& name) 
 	} else if (name == "cluster_pgsql_servers") {
 		query = (char *)PGHGM_GEN_CLUSTER_ADMIN_RUNTIME_SERVERS;
 	} else if (name == "pgsql_servers_ssl_params") {
-		query=(char *)"SELECT hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_capath, ssl_crl, ssl_crlpath, ssl_cipher, ssl_protocol_version_range, comment FROM pgsql_servers_ssl_params ORDER BY hostname, port, username";
+		query=(char *)"SELECT hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_crl, ssl_crlpath, ssl_protocol_version_range, comment FROM pgsql_servers_ssl_params ORDER BY hostname, port, username";
 	} else {
 		assert(0);
 	}
@@ -3977,9 +3978,9 @@ void PgSQL_HostGroups_Manager::generate_pgsql_servers_ssl_params_table() {
 	int rc;
 
 	const char * query = (const char *)"INSERT INTO pgsql_servers_ssl_params ("
-		"hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_capath, "
-		"ssl_crl, ssl_crlpath, ssl_cipher, ssl_protocol_version_range, comment) VALUES "
-		"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+		"hostname, port, username, ssl_ca, ssl_cert, ssl_key, "
+		"ssl_crl, ssl_crlpath, ssl_protocol_version_range, comment) VALUES "
+		"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
 
 	auto [rc1, statement_unique] = mydb->prepare_v2(query);
 	ASSERT_SQLITE_OK(rc1, mydb);
@@ -4000,12 +4001,10 @@ void PgSQL_HostGroups_Manager::generate_pgsql_servers_ssl_params_table() {
 		rc=(*proxy_sqlite3_bind_text)(statement,  4,  r->fields[3]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_ca
 		rc=(*proxy_sqlite3_bind_text)(statement,  5,  r->fields[4]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_cert
 		rc=(*proxy_sqlite3_bind_text)(statement,  6,  r->fields[5]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_key
-		rc=(*proxy_sqlite3_bind_text)(statement,  7,  r->fields[6]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_capath
-		rc=(*proxy_sqlite3_bind_text)(statement,  8,  r->fields[7]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_crl
-		rc=(*proxy_sqlite3_bind_text)(statement,  9,  r->fields[8]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_crlpath
-		rc=(*proxy_sqlite3_bind_text)(statement,  10, r->fields[9]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_cipher
-		rc=(*proxy_sqlite3_bind_text)(statement,  11, r->fields[10] , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_protocol_version_range
-		rc=(*proxy_sqlite3_bind_text)(statement,  12, r->fields[11] , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // comment
+		rc=(*proxy_sqlite3_bind_text)(statement,  7,  r->fields[6]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_crl
+		rc=(*proxy_sqlite3_bind_text)(statement,  8,  r->fields[7]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_crlpath
+		rc=(*proxy_sqlite3_bind_text)(statement,  9,  r->fields[8]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_protocol_version_range
+		rc=(*proxy_sqlite3_bind_text)(statement,  10, r->fields[9]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // comment
 
 		SAFE_SQLITE3_STEP2(statement);
 		rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mydb);
@@ -4013,9 +4012,9 @@ void PgSQL_HostGroups_Manager::generate_pgsql_servers_ssl_params_table() {
 
 		PgSQLServers_SslParams PSSP(
 			r->fields[0], atoi(r->fields[1]), r->fields[2],
-			r->fields[3], r->fields[4],  r->fields[5],
-			r->fields[6], r->fields[7],  r->fields[8],
-			r->fields[9], r->fields[10], r->fields[11]
+			r->fields[3], r->fields[4], r->fields[5],
+			r->fields[6], r->fields[7],
+			r->fields[8], r->fields[9]
 		);
 		string MapKey = PSSP.getMapKey(rand_del);
 		PgSQL_Servers_SSL_Params_map.emplace(MapKey, PSSP);

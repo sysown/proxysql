@@ -151,10 +151,10 @@ static void test_insert_and_select(PGconn* admin) {
 
 	ok(exec_ok(admin,
 		"INSERT INTO pgsql_servers_ssl_params "
-		"(hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_capath, "
-		"ssl_crl, ssl_crlpath, ssl_cipher, ssl_protocol_version_range, comment) "
+		"(hostname, port, username, ssl_ca, ssl_cert, ssl_key, "
+		"ssl_crl, ssl_crlpath, ssl_protocol_version_range, comment) "
 		"VALUES ('testhost', 5432, 'testuser', '/ca.crt', '/cert.crt', '/key.pem', "
-		"'/capath', '/crl.pem', '/crlpath', 'AES256', 'TLSv1.2-TLSv1.3', 'test row')"),
+		"'/crl.pem', '/crlpath', 'TLSv1.2-TLSv1.3', 'test row')"),
 		"INSERT into pgsql_servers_ssl_params succeeds");
 
 	int count = exec_count(admin, "SELECT * FROM pgsql_servers_ssl_params");
@@ -438,7 +438,71 @@ static void test_monitor_ssl_with_per_server_params(PGconn* admin) {
 	diag("After PgSQL_Monitor_ssl_connections_OK: %ld", after_ssl);
 
 	ok(after_ssl > initial_ssl,
-		"Monitor SSL counter increased with use_ssl=1");
+		"Monitor SSL counter increased with use_ssl=1 and no per-server row");
+}
+
+/**
+ * @brief Verify the monitor path actually consults pgsql_servers_ssl_params.
+ *
+ * Inserts a per-server row matching the actual backend with username=''
+ * (so the monitor's empty-username fallback in get_Server_SSL_Params hits
+ * it) and an ssl_protocol_version_range pinned to TLSv1 — disabled in
+ * modern PostgreSQL builds. If the monitor honors per-server params and
+ * propagates tls_version into its libpq conninfo, monitor SSL connections
+ * must fail and the OK counter must NOT advance over the wait window.
+ * If the monitor were ignoring per-server params (or dropping tls_version),
+ * the counter would keep climbing, which is the regression we want to catch.
+ */
+static void test_monitor_uses_per_server_row(PGconn* admin) {
+	std::string hostname;
+	int port;
+	if (!get_backend_server(admin, hostname, port)) {
+		ok(0, "Monitor per-server: no backend server found");
+		ok(0, "Monitor per-server: cleanup restores monitor SSL OK");
+		return;
+	}
+
+	cleanup_ssl_params(admin);
+	exec_ok(admin, "UPDATE pgsql_servers SET use_ssl=1");
+	exec_ok(admin, "LOAD PGSQL SERVERS TO RUNTIME");
+
+	// Insert a per-server row matching the backend, with TLSv1 pin so the
+	// monitor's connection attempt must fail if tls_version flows through.
+	std::stringstream q;
+	q << "INSERT INTO pgsql_servers_ssl_params "
+		"(hostname, port, username, ssl_protocol_version_range) VALUES ('"
+		<< hostname << "', " << port << ", '', 'TLSv1')";
+	exec_ok(admin, q.str().c_str());
+	exec_ok(admin, "LOAD PGSQL SERVERS TO RUNTIME");
+
+	long ok_before = getMonitorValue(admin, "PgSQL_Monitor_ssl_connections_OK");
+	diag("With TLSv1 per-server pin, ssl OK before wait: %ld", ok_before);
+
+	usleep(3000000); // 3 seconds — multiple monitor cycles
+
+	long ok_after = getMonitorValue(admin, "PgSQL_Monitor_ssl_connections_OK");
+	diag("With TLSv1 per-server pin, ssl OK after wait:  %ld (delta=%ld)",
+		ok_after, ok_after - ok_before);
+
+	ok(ok_after == ok_before,
+		"Monitor per-server: SSL OK counter does NOT advance when "
+		"per-server row pins ssl_protocol_version_range to TLSv1");
+
+	// Phase 2: remove the row and confirm the monitor recovers, proving
+	// the previous failure was caused by the per-server row and not by
+	// some unrelated breakage.
+	cleanup_ssl_params(admin);
+	exec_ok(admin, "LOAD PGSQL SERVERS TO RUNTIME");
+
+	long recover_before = getMonitorValue(admin, "PgSQL_Monitor_ssl_connections_OK");
+	usleep(3000000);
+	long recover_after = getMonitorValue(admin, "PgSQL_Monitor_ssl_connections_OK");
+	diag("After cleanup, ssl OK recovered from %ld to %ld",
+		recover_before, recover_after);
+
+	ok(recover_after > recover_before,
+		"Monitor per-server: SSL OK counter resumes advancing after "
+		"removing the per-server row");
 }
 
 // ============================================================================
@@ -446,7 +510,7 @@ static void test_monitor_ssl_with_per_server_params(PGconn* admin) {
 // ============================================================================
 
 int main(int argc, char** argv) {
-	plan(31);
+	plan(34);
 
 	if (cl.getEnv()) {
 		BAIL_OUT("Failed to get environment variables");
@@ -482,6 +546,8 @@ int main(int argc, char** argv) {
 	test_tls_version_pin_causes_failure(a);
 	test_per_server_overrides_global(a);
 	test_remove_per_server_fallback_to_global(a);
+	test_monitor_ssl_with_per_server_params(a);
+	test_monitor_uses_per_server_row(a);
 	// Cleanup
 	remove_bogus_cert_file();
 	cleanup_ssl_params(a);

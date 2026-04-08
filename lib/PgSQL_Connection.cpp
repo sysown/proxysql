@@ -979,21 +979,13 @@ void PgSQL_Connection::connect_start() {
 				append_conninfo_param(conninfo, "sslcrl", (char*)ssl_params->ssl_crl.c_str());
 			if (ssl_params->ssl_crlpath.length() > 0)
 				append_conninfo_param(conninfo, "sslcrldir", (char*)ssl_params->ssl_crlpath.c_str());
-			// Parse ssl_protocol_version_range (format: "TLSv1.2-TLSv1.3" or "TLSv1.3")
-			if (ssl_params->tls_version.length() > 0) {
-				string tls_ver = ssl_params->tls_version;
-				size_t dash_pos = tls_ver.find('-');
-				if (dash_pos != string::npos) {
-					string min_ver = tls_ver.substr(0, dash_pos);
-					string max_ver = tls_ver.substr(dash_pos + 1);
-					append_conninfo_param(conninfo, "ssl_min_protocol_version", (char*)min_ver.c_str());
-					append_conninfo_param(conninfo, "ssl_max_protocol_version", (char*)max_ver.c_str());
-				} else {
-					// Single version = pin to that version
-					append_conninfo_param(conninfo, "ssl_min_protocol_version", (char*)tls_ver.c_str());
-					append_conninfo_param(conninfo, "ssl_max_protocol_version", (char*)tls_ver.c_str());
-				}
-			}
+			// ssl_protocol_version_range was pre-parsed at PgSQLServers_SslParams
+			// construction time (see parse_tls_version()). Empty min/max means
+			// either unset or malformed — in both cases libpq defaults apply.
+			if (ssl_params->ssl_min_protocol_version.length() > 0)
+				append_conninfo_param(conninfo, "ssl_min_protocol_version", (char*)ssl_params->ssl_min_protocol_version.c_str());
+			if (ssl_params->ssl_max_protocol_version.length() > 0)
+				append_conninfo_param(conninfo, "ssl_max_protocol_version", (char*)ssl_params->ssl_max_protocol_version.c_str());
 		} else {
 			// Fall back to global SSL settings
 			append_conninfo_param(conninfo, "sslkey", pgsql_thread___ssl_p2s_key);
@@ -2972,36 +2964,25 @@ PgSQL_Backend_Kill_Args::PgSQL_Backend_Kill_Args(PGconn* conn, const char* user,
 	backend_pid = PQbackendPID(conn);
 	ssl_config.use_ssl = ssl;
 	if (ssl) {
-		ssl_config.sslkey = pgsql_thread___ssl_p2s_key ? strdup(pgsql_thread___ssl_p2s_key) : nullptr;
-		ssl_config.sslcert = pgsql_thread___ssl_p2s_cert ? strdup(pgsql_thread___ssl_p2s_cert) : nullptr;
-		ssl_config.sslrootcert = pgsql_thread___ssl_p2s_ca ? strdup(pgsql_thread___ssl_p2s_ca) : nullptr;
-		ssl_config.sslcrl = pgsql_thread___ssl_p2s_crl ? strdup(pgsql_thread___ssl_p2s_crl) : nullptr;
-		ssl_config.sslcrldir = pgsql_thread___ssl_p2s_crlpath ? strdup(pgsql_thread___ssl_p2s_crlpath) : nullptr;
-		// Override with per-server SSL params if available
 		std::unique_ptr<PgSQLServers_SslParams> params {
 			PgHGM->get_Server_SSL_Params(hostname, port, username)
 		};
 		if (params != nullptr) {
-			if (params->ssl_key.length() > 0) {
-				free(ssl_config.sslkey);
-				ssl_config.sslkey = strdup(params->ssl_key.c_str());
-			}
-			if (params->ssl_cert.length() > 0) {
-				free(ssl_config.sslcert);
-				ssl_config.sslcert = strdup(params->ssl_cert.c_str());
-			}
-			if (params->ssl_ca.length() > 0) {
-				free(ssl_config.sslrootcert);
-				ssl_config.sslrootcert = strdup(params->ssl_ca.c_str());
-			}
-			if (params->ssl_crl.length() > 0) {
-				free(ssl_config.sslcrl);
-				ssl_config.sslcrl = strdup(params->ssl_crl.c_str());
-			}
-			if (params->ssl_crlpath.length() > 0) {
-				free(ssl_config.sslcrldir);
-				ssl_config.sslcrldir = strdup(params->ssl_crlpath.c_str());
-			}
+			ssl_config.sslkey = params->ssl_key.length() > 0 ? strdup(params->ssl_key.c_str()) : nullptr;
+			ssl_config.sslcert = params->ssl_cert.length() > 0 ? strdup(params->ssl_cert.c_str()) : nullptr;
+			ssl_config.sslrootcert = params->ssl_ca.length() > 0 ? strdup(params->ssl_ca.c_str()) : nullptr;
+			ssl_config.sslcrl = params->ssl_crl.length() > 0 ? strdup(params->ssl_crl.c_str()) : nullptr;
+			ssl_config.sslcrldir = params->ssl_crlpath.length() > 0 ? strdup(params->ssl_crlpath.c_str()) : nullptr;
+			ssl_config.ssl_min_protocol_version = params->ssl_min_protocol_version.length() > 0 ? strdup(params->ssl_min_protocol_version.c_str()) : nullptr;
+			ssl_config.ssl_max_protocol_version = params->ssl_max_protocol_version.length() > 0 ? strdup(params->ssl_max_protocol_version.c_str()) : nullptr;
+		} else {
+			ssl_config.sslkey = pgsql_thread___ssl_p2s_key ? strdup(pgsql_thread___ssl_p2s_key) : nullptr;
+			ssl_config.sslcert = pgsql_thread___ssl_p2s_cert ? strdup(pgsql_thread___ssl_p2s_cert) : nullptr;
+			ssl_config.sslrootcert = pgsql_thread___ssl_p2s_ca ? strdup(pgsql_thread___ssl_p2s_ca) : nullptr;
+			ssl_config.sslcrl = pgsql_thread___ssl_p2s_crl ? strdup(pgsql_thread___ssl_p2s_crl) : nullptr;
+			ssl_config.sslcrldir = pgsql_thread___ssl_p2s_crlpath ? strdup(pgsql_thread___ssl_p2s_crlpath) : nullptr;
+			ssl_config.ssl_min_protocol_version = nullptr;
+			ssl_config.ssl_max_protocol_version = nullptr;
 		}
 	} else {
 		ssl_config.sslkey = nullptr;
@@ -3009,6 +2990,8 @@ PgSQL_Backend_Kill_Args::PgSQL_Backend_Kill_Args(PGconn* conn, const char* user,
 		ssl_config.sslrootcert = nullptr;
 		ssl_config.sslcrl = nullptr;
 		ssl_config.sslcrldir = nullptr;
+		ssl_config.ssl_min_protocol_version = nullptr;
+		ssl_config.ssl_max_protocol_version = nullptr;
 	}
 }
 
@@ -3022,7 +3005,9 @@ PgSQL_Backend_Kill_Args::~PgSQL_Backend_Kill_Args() {
 	free(ssl_config.sslrootcert);
 	free(ssl_config.sslcrl);
 	free(ssl_config.sslcrldir);
-	if (cancel_conn) 
+	free(ssl_config.ssl_min_protocol_version);
+	free(ssl_config.ssl_max_protocol_version);
+	if (cancel_conn)
 		PQfreeCancel(cancel_conn);
 }
 
@@ -3068,6 +3053,10 @@ void* PgSQL_backend_kill_thread(void* arg) {
 			append_conninfo_param(conninfo, "sslrootcert", backend_kill_args->ssl_config.sslrootcert);
 			append_conninfo_param(conninfo, "sslcrl", backend_kill_args->ssl_config.sslcrl);
 			append_conninfo_param(conninfo, "sslcrldir", backend_kill_args->ssl_config.sslcrldir);
+			// Per-server TLS protocol pinning was pre-parsed from
+			// ssl_protocol_version_range when the Kill_Args struct was built.
+			append_conninfo_param(conninfo, "ssl_min_protocol_version", backend_kill_args->ssl_config.ssl_min_protocol_version);
+			append_conninfo_param(conninfo, "ssl_max_protocol_version", backend_kill_args->ssl_config.ssl_max_protocol_version);
 		} else {
 			conninfo << "sslmode='disable' "; // not supporting SSL
 		}
