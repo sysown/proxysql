@@ -64,6 +64,18 @@ else
     fi
 fi
 
+export BINLOG_READER_START_DELAY="${BINLOG_READER_START_DELAY:-30}"
+BINLOG_INFRA_FOUND=0
+for INFRA_NAME in ${INFRAS}; do
+    if [[ "${INFRA_NAME}" == *-binlog ]]; then
+        BINLOG_INFRA_FOUND=1
+        break
+    fi
+done
+if [ "${BINLOG_INFRA_FOUND}" -eq 0 ]; then
+    export BINLOG_READER_START_DELAY=0
+fi
+
 # 2. Ensure ProxySQL Control Plane is running first
 PROXY_CONTAINER="proxysql.${INFRA_ID}"
 echo ">>> Checking if ProxySQL (${PROXY_CONTAINER}) is running..."

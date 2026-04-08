@@ -138,17 +138,17 @@ docker network inspect ${INFRA_ID}_backend
 
 ### Issue: "GTID: failed to connect to ProxySQL binlog reader on port 6020"
 
-**Cause:** Reader containers not running or gtid_port misconfigured.
+**Cause:** Binlog reader on the mysqlN containers is not listening on 6020, or `gtid_port` is misconfigured.
 
 **Solution:**
-1. Verify reader containers are running:
-   ```bash
-   docker ps | grep reader
-   ```
-2. Check mysql_servers has gtid_port set:
+1. Check mysql_servers has gtid_port set:
    ```bash
    docker exec proxysql.${INFRA_ID} mysql -uradmin -pradmin -h127.0.0.1 -P6032 \
      -e "SELECT hostname, gtid_port FROM mysql_servers;"
+   ```
+2. Verify the mysqlN container is listening on 6020:
+   ```bash
+   docker exec ${COMPOSE_PROJECT}-mysql1-1 bash -lc 'timeout 3 bash -lc "</dev/tcp/127.0.0.1/6020" && echo OPEN || echo CLOSED'
    ```
 
 ### Issue: Test runs but no queries executed (act_queries: 0)
@@ -194,7 +194,7 @@ zcat ci_infra_logs/${INFRA_ID}/tests/proxysql-tester.py/tests/test_name-t.log.gz
 docker exec -it proxysql.${INFRA_ID} bash
 mysql -h mysql1.infra-mysql57-binlog -P 3306 -u root -p
 
-# Test reader connection
+# Test binlog reader connection
 telnet mysql1.infra-mysql57-binlog 6020
 ```
 

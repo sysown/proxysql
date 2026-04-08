@@ -11,6 +11,18 @@ services:
           - mysql1.infra-mysql57-binlog
     environment:
       - MYSQL_ROOT_PASSWORD=${ROOT_PASSWORD}
+      - MYSQL_HOST=127.0.0.1
+      - MYSQL_USER=binlog
+      - MYSQL_PASSWORD=binlog
+      - LISTEN_PORT=6020
+      - BINLOG_READER_START_DELAY=${BINLOG_READER_START_DELAY}
+    command: >
+      bash -c "(docker-entrypoint.sh mysqld &);
+      sleep ${BINLOG_READER_START_DELAY};
+      while true; do
+        sleep 5;
+        proxysql_binlog_reader -h \"$${MYSQL_HOST:-127.0.0.1}\" -u \"$${MYSQL_USER:=root}\" -p \"$${MYSQL_PASSWORD:-root}\" -P \"$${MYSQL_PORT:-3306}\" -l \"$${LISTEN_PORT:-6020}\" -f 2>&1 | tee -a /var/log/mysql/binlogreader-error.log;
+      done"
     volumes:
       - ./conf/mysql/mysql1:/etc/mysql/conf.d
       - ./conf/mysql/ssl:/docker-entrypoint-initdb.d
@@ -34,6 +46,18 @@ services:
           - mysql2.infra-mysql57-binlog
     environment:
       - MYSQL_ROOT_PASSWORD=${ROOT_PASSWORD}
+      - MYSQL_HOST=127.0.0.1
+      - MYSQL_USER=binlog
+      - MYSQL_PASSWORD=binlog
+      - LISTEN_PORT=6020
+      - BINLOG_READER_START_DELAY=${BINLOG_READER_START_DELAY}
+    command: >
+      bash -c "(docker-entrypoint.sh mysqld &);
+      sleep ${BINLOG_READER_START_DELAY};
+      while true; do
+        sleep 5;
+        proxysql_binlog_reader -h \"$${MYSQL_HOST:-127.0.0.1}\" -u \"$${MYSQL_USER:=root}\" -p \"$${MYSQL_PASSWORD:-root}\" -P \"$${MYSQL_PORT:-3306}\" -l \"$${LISTEN_PORT:-6020}\" -f 2>&1 | tee -a /var/log/mysql/binlogreader-error.log;
+      done"
     volumes:
       - ./conf/mysql/mysql2:/etc/mysql/conf.d
       - ./conf/mysql/ssl:/docker-entrypoint-initdb.d
@@ -59,6 +83,18 @@ services:
           - mysql3.infra-mysql57-binlog
     environment:
       - MYSQL_ROOT_PASSWORD=${ROOT_PASSWORD}
+      - MYSQL_HOST=127.0.0.1
+      - MYSQL_USER=binlog
+      - MYSQL_PASSWORD=binlog
+      - LISTEN_PORT=6020
+      - BINLOG_READER_START_DELAY=${BINLOG_READER_START_DELAY}
+    command: >
+      bash -c "(docker-entrypoint.sh mysqld &);
+      sleep ${BINLOG_READER_START_DELAY};
+      while true; do
+        sleep 5;
+        proxysql_binlog_reader -h \"$${MYSQL_HOST:-127.0.0.1}\" -u \"$${MYSQL_USER:=root}\" -p \"$${MYSQL_PASSWORD:-root}\" -P \"$${MYSQL_PORT:-3306}\" -l \"$${LISTEN_PORT:-6020}\" -f 2>&1 | tee -a /var/log/mysql/binlogreader-error.log;
+      done"
     volumes:
       - ./conf/mysql/mysql3:/etc/mysql/conf.d
       - ./conf/mysql/ssl:/docker-entrypoint-initdb.d
@@ -72,63 +108,6 @@ services:
       nofile:
         soft: 1048576
         hard: 1048576
-
-  reader1:
-    image: proxysql/ci-infra:proxysql-mysqlbinlog
-    hostname: reader1.${INFRA}
-    container_name: ${COMPOSE_PROJECT}-reader1-1
-    environment:
-      - MYSQL_HOST=mysql1.${INFRA}
-      - MYSQL_USER=binlog
-      - MYSQL_PASSWORD=binlog
-      - GTID_PORT=6020
-    volumes:
-      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/reader1:/var/log/mysqlbinlog
-    networks:
-      backend:
-        aliases:
-          - reader1.${INFRA}
-          - mysql1.${INFRA}
-    depends_on:
-      - mysql1
-
-  reader2:
-    image: proxysql/ci-infra:proxysql-mysqlbinlog
-    hostname: reader2.${INFRA}
-    container_name: ${COMPOSE_PROJECT}-reader2-1
-    environment:
-      - MYSQL_HOST=mysql2.${INFRA}
-      - MYSQL_USER=binlog
-      - MYSQL_PASSWORD=binlog
-      - GTID_PORT=6020
-    volumes:
-      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/reader2:/var/log/mysqlbinlog
-    networks:
-      backend:
-        aliases:
-          - reader2.${INFRA}
-          - mysql2.${INFRA}
-    depends_on:
-      - mysql2
-
-  reader3:
-    image: proxysql/ci-infra:proxysql-mysqlbinlog
-    hostname: reader3.${INFRA}
-    container_name: ${COMPOSE_PROJECT}-reader3-1
-    environment:
-      - MYSQL_HOST=mysql3.${INFRA}
-      - MYSQL_USER=binlog
-      - MYSQL_PASSWORD=binlog
-      - GTID_PORT=6020
-    volumes:
-      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/reader3:/var/log/mysqlbinlog
-    networks:
-      backend:
-        aliases:
-          - reader3.${INFRA}
-          - mysql3.${INFRA}
-    depends_on:
-      - mysql3
 
   orc1:
     hostname: orc1.${INFRA}
