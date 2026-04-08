@@ -597,6 +597,9 @@ class ProxySQL_Admin {
 		bool checksum_mysql_variables;
 		bool checksum_admin_variables;
 		bool checksum_ldap_variables;
+		bool checksum_pgsql_query_rules;
+		bool checksum_pgsql_servers;
+		bool checksum_pgsql_users;
 		bool checksum_pgsql_variables;
 	} checksum_variables;
 	template<enum SERVER_TYPE pt>
