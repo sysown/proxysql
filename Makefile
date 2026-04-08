@@ -78,7 +78,7 @@ CURVER := $(shell echo "$(GIT_VERSION)" | sed -nE 's/^([0-9]+\.[0-9]+\.[0-9]+).*
 CURVER_CHECK := $(shell echo "$(CURVER)" | grep -cE '^[0-9]+\.[0-9]+\.[0-9]+$$')
 
 ifeq ($(CURVER_CHECK),0)
-    $(error CURVER "$(CURVER)" derived from GIT_VERSION "$(GIT_VERSION)" does not have 3 numbers separated by dots. Expected format: X.Y.Z
+    $(error CURVER "$(CURVER)" derived from GIT_VERSION "$(GIT_VERSION)" does not have 3 numbers separated by dots. Expected format: X.Y.Z)
 endif
 
 export CURVER
