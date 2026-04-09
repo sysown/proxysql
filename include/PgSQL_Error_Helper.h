@@ -380,7 +380,7 @@ struct PgSQL_ErrorInfo {
 	PGSQL_ERROR_CLASS type = PGSQL_ERROR_CLASS::ERRCLASS_UNKNOWN_ERROR;
 	PGSQL_ERROR_CATEGORY category = PGSQL_ERROR_CATEGORY::ERRCATEGORY_UNKNOWN_CATEGORY;
 	char sqlstate[5 + 1] = {}; // 5 bytes for SQLSTATE + 1 for null terminator
-	PgSQL_ErrorInfo_Ext* ext_info = NULL;
+	PgSQL_ErrorInfo_Ext* ext_info = nullptr;
 	std::string message;
 };
 

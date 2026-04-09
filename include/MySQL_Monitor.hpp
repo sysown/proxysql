@@ -85,9 +85,9 @@ A single AWS_Aurora_monitor_node will have a AWS_Aurora_status_entry per check.
 
 class AWS_Aurora_replica_host_status_entry {
 	public:
-	char * server_id = NULL;
-	char * session_id = NULL;
-	char * last_update_timestamp = NULL;
+	char * server_id = nullptr;
+	char * session_id = nullptr;
+	char * last_update_timestamp = nullptr;
 	float replica_lag_ms = 0.0; // originally a double
 	unsigned int estimated_lag_ms = 0;
 	float cpu = 0.0;
@@ -122,7 +122,7 @@ class AWS_Aurora_monitor_node {
 	~AWS_Aurora_monitor_node();
 	bool add_entry(AWS_Aurora_status_entry *ase); // return true if status changed
 	AWS_Aurora_status_entry *last_entry() {
-		if (idx_last_entry == -1) return NULL;
+		if (idx_last_entry == -1) return nullptr;
 		return (last_entries[idx_last_entry]);
 	}
 };
@@ -154,7 +154,7 @@ class Galera_monitor_node {
 	~Galera_monitor_node();
 	bool add_entry(unsigned long long _st, unsigned long long _ct, long long _tb, bool _pp, bool _ro, int _local_state, bool _desync, bool _reject, bool _sst_donor_reject, bool _pxc_maint_mode, char *_error); // return true if status changed
 	Galera_status_entry_t *last_entry() {
-		if (idx_last_entry == -1) return NULL;
+		if (idx_last_entry == -1) return nullptr;
 		return (&last_entries[idx_last_entry]);
 	}
 };
@@ -410,7 +410,7 @@ class DNS_Cache {
 
 public:
 	DNS_Cache() : enabled(true) {
-		int rc = pthread_rwlock_init(&rwlock_, NULL);
+		int rc = pthread_rwlock_init(&rwlock_, nullptr);
 		assert(rc == 0);
 	}
 
@@ -454,8 +454,8 @@ struct DNS_Resolve_Data {
 
 class MySQL_Monitor {
 	public:
-	static std::string dns_lookup(const std::string& hostname, bool return_hostname_if_lookup_fails = true, size_t* ip_count = NULL);
-	static std::string dns_lookup(const char* hostname, bool return_hostname_if_lookup_fails = true, size_t* ip_count = NULL);
+	static std::string dns_lookup(const std::string& hostname, bool return_hostname_if_lookup_fails = true, size_t* ip_count = nullptr);
+	static std::string dns_lookup(const char* hostname, bool return_hostname_if_lookup_fails = true, size_t* ip_count = nullptr);
 	static bool update_dns_cache_from_mysql_conn(const MYSQL* mysql);
 	static void trigger_dns_cache_update();
 

@@ -347,7 +347,7 @@ class BaseHGC {	// MySQL Host Group Container
 		bool connection_warming;
 		bool configured; // this variable controls if attributes are configured or not. If not configured, they do not apply
 		bool initialized; // this variable controls if attributes were ever configured or not. Used by reset_attributes()
-		nlohmann::json * ignore_session_variables_json = NULL; // the JSON format of ignore_session_variables
+		nlohmann::json * ignore_session_variables_json = nullptr; // the JSON format of ignore_session_variables
 	} attributes;
 	struct {
 		int64_t weight;

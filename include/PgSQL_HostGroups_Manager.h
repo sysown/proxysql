@@ -146,7 +146,7 @@ class PgSQL_SrvConnList {
 	int find_idx(PgSQL_Connection *c) {
 		//for (unsigned int i=0; i<conns_length(); i++) {
 		for (unsigned int i=0; i<conns->len; i++) {
-			PgSQL_Connection *conn = NULL;
+			PgSQL_Connection *conn = nullptr;
 			conn = (PgSQL_Connection *)conns->index(i);
 			if (conn==c) {
 				return (unsigned int)i;
@@ -422,7 +422,7 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 		};
 
 		struct Node {
-			PgSQL_SrvC* srv = NULL;
+			PgSQL_SrvC* srv = nullptr;
 			unsigned int reader_hostgroup_id = -1;
 			unsigned int writer_hostgroup_id = -1;
 			//MySerStatus server_status = PgSQL_SERVER_STATUS_OFFLINE_HARD;
@@ -829,7 +829,7 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 
 	void drop_all_idle_connections();
 	int get_multiple_idle_connections(int, unsigned long long, PgSQL_Connection **, int);
-	SQLite3_result * SQL3_Connection_Pool(bool _reset, int *hid = NULL);
+	SQLite3_result * SQL3_Connection_Pool(bool _reset, int *hid = nullptr);
 	SQLite3_result * SQL3_Free_Connections();
 
 	void push_MyConn_to_pool(PgSQL_Connection *, bool _lock=true);

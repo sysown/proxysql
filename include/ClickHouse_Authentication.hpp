@@ -79,7 +79,7 @@ class ClickHouse_Authentication {
 	             bool *fast_forward, int *max_connections, void **sha1_pass);
 	ch_account_details_t lookup(char* username, enum cred_username_type usertype, const ch_dup_account_details_t& dup_details);
 	int dump_all_users(ch_account_details_t ***, bool _complete = true);
-	int increase_frontend_user_connections(char *username, int *mc = NULL);
+	int increase_frontend_user_connections(char *username, int *mc = nullptr);
 	void decrease_frontend_user_connections(char *username);
 	void set_all_inactive(enum cred_username_type usertype);
 	void remove_inactives(enum cred_username_type usertype);
