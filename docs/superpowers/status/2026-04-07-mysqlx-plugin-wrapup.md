@@ -42,9 +42,12 @@ Worktree: `/data/rene/proxysql/.worktrees/mysqlx-plugin-impl`
 
 ## Admin Commands
 
-- `PLUGIN MYSQLX LOAD USERS TO RUNTIME`
-- `PLUGIN MYSQLX LOAD ROUTES TO RUNTIME`
-- `PLUGIN MYSQLX LOAD BACKEND ENDPOINTS TO RUNTIME`
+- `LOAD MYSQLX USERS TO RUNTIME` (aliases: `TO RUN`, `FROM MEMORY`, `FROM MEM`)
+- `SAVE MYSQLX USERS TO MEMORY` (aliases: `TO MEM`, `FROM RUNTIME`, `FROM RUN`)
+- `LOAD MYSQLX ROUTES TO RUNTIME` (aliases: same pattern)
+- `SAVE MYSQLX ROUTES TO MEMORY` (aliases: same pattern)
+- `LOAD MYSQLX BACKEND ENDPOINTS TO RUNTIME` (aliases: same pattern)
+- `SAVE MYSQLX BACKEND ENDPOINTS TO MEMORY` (aliases: same pattern)
 
 ## Auth Methods Supported
 
