@@ -112,10 +112,6 @@ ifeq ($(UNAME_S),Linux)
 	STATIC_LIBS += $(COREDUMPER_LDIR)/libcoredumper.a
 endif
 
-ifeq ($(PROXYSQLGENAI),1)
-	STATIC_LIBS += $(SQLITE3_LDIR)/../libsqlite_rembed.a $(SQLITE3_LDIR)/vec.o
-endif
-
 
 # ===========================================================================
 # Linker flags — platform-specific
@@ -200,6 +196,10 @@ PSQLTSDB :=
 ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c init_tsdb_variables),0)
 	PROXYSQLTSDB := 1
 	PSQLTSDB := -DPROXYSQLTSDB
+endif
+
+ifeq ($(PROXYSQLGENAI),1)
+	STATIC_LIBS += $(SQLITE3_LDIR)/../libsqlite_rembed.a $(SQLITE3_LDIR)/vec.o
 endif
 PSQLDEBUG :=
 ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -cw 'init_debug_struct'),0)
@@ -323,8 +323,12 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	test_mysqlx_admin_tables-t \
 	test_mysqlx_listener_smoke-t \
 	mysqlx_protocol_unit-t \
+	mysqlx_protocol_socket_unit-t \
 	mysqlx_route_store_unit-t \
-	mysqlx_stats_unit-t
+	mysqlx_stats_unit-t \
+	mysqlx_config_store_concurrent_unit-t \
+	mysqlx_config_store_pure_unit-t \
+	mysqlx_admin_schema_unit-t
 
 .PHONY: all
 all: $(UNIT_TESTS)
@@ -372,6 +376,24 @@ mysqlx_config_store_unit-t: mysqlx_config_store_unit-t.cpp $(PROXYSQL_PATH)/plug
 		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) \
 		$(ALLOW_MULTI_DEF) -o $@
 
+mysqlx_config_store_concurrent_unit-t: mysqlx_config_store_concurrent_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+		-I$(PROXYSQL_PATH)/plugins/mysqlx/include \
+		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) \
+		$(ALLOW_MULTI_DEF) -lpthread -o $@
+
+mysqlx_config_store_pure_unit-t: mysqlx_config_store_pure_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+		-I$(PROXYSQL_PATH)/plugins/mysqlx/include \
+		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) \
+		$(ALLOW_MULTI_DEF) -o $@
+
+mysqlx_admin_schema_unit-t: mysqlx_admin_schema_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_admin_schema.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_admin_schema.cpp $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+		-I$(PROXYSQL_PATH)/plugins/mysqlx/include \
+		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) \
+		$(ALLOW_MULTI_DEF) -o $@
+
 MYSQLX_PROTO_DIR := $(PROXYSQL_PATH)/plugins/mysqlx/proto
 MYSQLX_PROTO_SRCS := $(wildcard $(MYSQLX_PROTO_DIR)/*.pb.cc)
 MYSQLX_PROTO_OBJS := $(patsubst $(MYSQLX_PROTO_DIR)/%.pb.cc,$(ODIR)/mysqlx_proto_%.pb.o,$(MYSQLX_PROTO_SRCS))
@@ -392,6 +414,12 @@ mysqlx_route_store_unit-t: mysqlx_route_store_unit-t.cpp $(PROXYSQL_PATH)/plugin
 		$(ALLOW_MULTI_DEF) -o $@
 
 mysqlx_protocol_unit-t: mysqlx_protocol_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) \
+		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
+		$(IDIRS) $(LDIRS) $(OPT) $(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) \
+		$(MYLIBS) -lprotobuf -lssl -lcrypto $(ALLOW_MULTI_DEF) -o $@
+
+mysqlx_protocol_socket_unit-t: mysqlx_protocol_socket_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) \
