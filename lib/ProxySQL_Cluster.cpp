@@ -1428,18 +1428,18 @@ void update_pgsql_users(MYSQL_RES* result) {
 	int rc;
 
 	while (MYSQL_ROW row = mysql_fetch_row(result)) {
-		rc = (*proxy_sqlite3_bind_text)(statement1, 1, row[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // username
-		rc = (*proxy_sqlite3_bind_text)(statement1, 2, row[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // password
+	rc = (*proxy_sqlite3_bind_text)(statement1, 1, row[0] ? row[0] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // username
+	rc = (*proxy_sqlite3_bind_text)(statement1, 2, row[1] ? row[1] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // password
 		rc = (*proxy_sqlite3_bind_int64)(statement1, 3, 1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // active
-		rc = (*proxy_sqlite3_bind_int64)(statement1, 4, atoll(row[2])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // use_ssl
-		rc = (*proxy_sqlite3_bind_int64)(statement1, 5, atoll(row[3])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // default_hostgroup
-		rc = (*proxy_sqlite3_bind_int64)(statement1, 6, atoll(row[4])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // transaction_persistent
-		rc = (*proxy_sqlite3_bind_int64)(statement1, 7, atoll(row[5])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // fast_forward
-		rc = (*proxy_sqlite3_bind_int64)(statement1, 8, atoll(row[6])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // backend
-		rc = (*proxy_sqlite3_bind_int64)(statement1, 9, atoll(row[7])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // frontend
-		rc = (*proxy_sqlite3_bind_int64)(statement1, 10, atoll(row[8])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // max_connections
-		rc = (*proxy_sqlite3_bind_text)(statement1, 11, row[9], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // attributes
-		rc = (*proxy_sqlite3_bind_text)(statement1, 12, row[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // comment
+	rc = (*proxy_sqlite3_bind_int64)(statement1, 4, row[2] ? atoll(row[2]) : 0); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // use_ssl
+	rc = (*proxy_sqlite3_bind_int64)(statement1, 5, row[3] ? atoll(row[3]) : 0); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // default_hostgroup
+	rc = (*proxy_sqlite3_bind_int64)(statement1, 6, row[4] ? atoll(row[4]) : 0); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // transaction_persistent
+	rc = (*proxy_sqlite3_bind_int64)(statement1, 7, row[5] ? atoll(row[5]) : 0); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // fast_forward
+	rc = (*proxy_sqlite3_bind_int64)(statement1, 8, row[6] ? atoll(row[6]) : 0); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // backend
+	rc = (*proxy_sqlite3_bind_int64)(statement1, 9, row[7] ? atoll(row[7]) : 0); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // frontend
+	rc = (*proxy_sqlite3_bind_int64)(statement1, 10, row[8] ? atoll(row[8]) : 0); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // max_connections
+	rc = (*proxy_sqlite3_bind_text)(statement1, 11, row[9] ? row[9] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // attributes
+	rc = (*proxy_sqlite3_bind_text)(statement1, 12, row[10] ? row[10] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // comment
 
 		SAFE_SQLITE3_STEP2(statement1);
 		rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
@@ -2922,6 +2922,12 @@ void ProxySQL_Cluster::pull_pgsql_users_from_peer(const std::string& expected_ch
 			int rc_query = mysql_query(conn, CLUSTER_QUERY_PGSQL_USERS);
 			if (rc_query == 0) {
 				MYSQL_RES* pgsql_users_result = mysql_store_result(conn);
+				if (pgsql_users_result == nullptr) {
+					proxy_error("mysql_store_result returned NULL for pgsql_users from peer %s:%d\n", hostname, port);
+					metrics.p_counter_array[p_cluster_counter::pulled_pgsql_users_failure]->Increment();
+					fetch_failed = true;
+					goto __exit_pull_pgsql_users_from_peer;
+				}
 
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching PostgreSQL Users from peer %s:%d completed\n", hostname, port);
 				proxy_info("Cluster: Fetching PostgreSQL Users from peer %s:%d completed\n", hostname, port);
@@ -3027,6 +3033,12 @@ void ProxySQL_Cluster::pull_pgsql_variables_from_peer(const std::string& expecte
 			int rc_query = mysql_query(conn, CLUSTER_QUERY_PGSQL_VARIABLES);
 			if (rc_query == 0) {
 				MYSQL_RES* pgsql_variables_result = mysql_store_result(conn);
+				if (pgsql_variables_result == nullptr) {
+					proxy_error("mysql_store_result returned NULL for pgsql_variables from peer %s:%d\n", hostname, port);
+					metrics.p_counter_array[p_cluster_counter::pulled_pgsql_variables_failure]->Increment();
+					fetch_failed = true;
+					goto __exit_pull_pgsql_variables_from_peer;
+				}
 
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching PostgreSQL Variables from peer %s:%d completed\n", hostname, port);
 				proxy_info("Cluster: Fetching PostgreSQL Variables from peer %s:%d completed\n", hostname, port);
@@ -3186,12 +3198,25 @@ void ProxySQL_Cluster::pull_pgsql_query_rules_from_peer(const std::string& expec
 			int rc_query = mysql_query(conn, CLUSTER_QUERY_PGSQL_QUERY_RULES);
 			if (rc_query == 0) {
 				MYSQL_RES* query_rules_result = mysql_store_result(conn);
+				if (query_rules_result == nullptr) {
+					proxy_error("mysql_store_result returned NULL for pgsql_query_rules from peer %s:%d\n", hostname, port);
+					metrics.p_counter_array[p_cluster_counter::pulled_pgsql_query_rules_failure]->Increment();
+					fetch_failed = true;
+					goto __exit_pull_pgsql_query_rules_from_peer;
+				}
 				MYSQL_RES* fast_routing_result = nullptr;
 
 				// Fetch fast routing rules
 				int rc_query_fast = mysql_query(conn, CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING);
 				if (rc_query_fast == 0) {
 					fast_routing_result = mysql_store_result(conn);
+					if (fast_routing_result == nullptr) {
+						proxy_error("mysql_store_result returned NULL for pgsql_query_rules_fast_routing from peer %s:%d\n", hostname, port);
+						mysql_free_result(query_rules_result);
+						metrics.p_counter_array[p_cluster_counter::pulled_pgsql_query_rules_failure]->Increment();
+						fetch_failed = true;
+						goto __exit_pull_pgsql_query_rules_from_peer;
+					}
 				} else {
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching PostgreSQL Query Rules fast routing from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 					proxy_info("Cluster: Fetching PostgreSQL Query Rules fast routing from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));

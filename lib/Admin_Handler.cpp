@@ -3476,6 +3476,9 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 					GloAdmin->pgsql_servers_wrlock();
 					GloAdmin->admindb->execute_statement(query_empty_resultset.c_str(), &error, &cols, &affected_rows, &resultset);
 					GloAdmin->pgsql_servers_wrunlock();
+					if (error) {
+						proxy_error("Cluster: execute_statement failed for pgsql_servers_v2 fallback: %s\n", error);
+					}
 				} else {
 					resultset = PgHGM->dump_table_pgsql(tn);
 				}
@@ -3575,6 +3578,9 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 					delete resultset;
 					run_query = false;
 					goto __run_query;
+				} else {
+					proxy_error("Cluster: Both get_current_query_rules_inner() and "
+						"get_current_query_rules() returned NULL for pgsql query rules\n");
 				}
 			} else {
 				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
@@ -3595,6 +3601,9 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 					delete resultset;
 					run_query = false;
 					goto __run_query;
+				} else {
+					proxy_error("Cluster: Both get_current_query_rules_fast_routing_inner() and "
+						"get_current_query_rules_fast_routing() returned NULL for pgsql fast routing\n");
 				}
 			} else {
 				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);

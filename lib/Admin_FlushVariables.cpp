@@ -409,7 +409,12 @@ void ProxySQL_Admin::flush_GENERIC_variables__checksum__database_to_runtime(cons
 	}
 	q += " ORDER BY variable_name";
 	admindb->execute_statement(q.c_str(), &error , &cols , &affected_rows , &resultset);
-	uint64_t hash1 = resultset->raw_checksum();
+		if (error || resultset == NULL) {
+			proxy_error("flush_GENERIC_variables__checksum__database_to_runtime failed for %s: %s\n",
+				modname.c_str(), error ? error : "NULL resultset");
+			return;
+		}
+		uint64_t hash1 = resultset->raw_checksum();
 	uint32_t d32[2];
 	char buf[20];
 	memcpy(&d32, &hash1, sizeof(hash1));

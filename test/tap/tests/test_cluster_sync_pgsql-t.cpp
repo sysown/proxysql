@@ -232,13 +232,15 @@ int check_pgsql_servers_v2_sync(
 				" AND use_ssl=%d AND max_latency_ms=%d AND comment='%s'";
 		string runtime_pgsql_servers_query {};
 		string main_pgsql_servers_query {};
+		// SHUNNED servers are mapped to ONLINE by CLUSTER_QUERY_RUNTIME_PGSQL_SERVERS
+		const string runtime_status = (std::get<3>(values) == "SHUNNED") ? "ONLINE" : std::get<3>(values);
 		string_format(
 			t_runtime_pgsql_servers_query,
 			runtime_pgsql_servers_query,
 			std::get<0>(values),
 			std::get<1>(values).c_str(),
 			std::get<2>(values),
-			std::get<3>(values).c_str(),
+			runtime_status.c_str(),
 			std::get<4>(values),
 			std::get<5>(values),
 			std::get<6>(values),
@@ -542,6 +544,169 @@ cleanup:
 	return rc;
 }
 
+/**
+ * @brief Test that pgsql_variables sync between cluster nodes.
+ *
+ * Sets a pgsql variable on the primary, loads to runtime, then verifies
+ * the replica picks up the new value via cluster sync.
+ */
+int check_pgsql_variables_sync(MYSQL* proxy_admin, MYSQL* replica_admin) {
+	const string test_var { "pgsql-ping_timeout_server" };
+	const string test_value { "5297" };
+	int rc = EXIT_FAILURE;
+	string orig_value {};
+	string set_query {};
+	string restore_query {};
+
+	// Retrieve original value
+	{
+		if (mysql_query_t(proxy_admin, "SELECT variable_value FROM runtime_global_variables WHERE variable_name='" + test_var + "'") != EXIT_SUCCESS) {
+			diag("Failed to query original pgsql variable value");
+			return EXIT_FAILURE;
+		}
+		MYSQL_RES* res = mysql_store_result(proxy_admin);
+		if (!res || mysql_num_rows(res) == 0) {
+			diag("pgsql variable %s not found in runtime_global_variables", test_var.c_str());
+			if (res) mysql_free_result(res);
+			return EXIT_FAILURE;
+		}
+		MYSQL_ROW row = mysql_fetch_row(res);
+		orig_value = row[0] ? row[0] : "";
+		mysql_free_result(res);
+	}
+
+	// Set new value on primary
+	string_format("SET %s = '%s'", set_query, test_var.c_str(), test_value.c_str());
+	if (mysql_query_t(proxy_admin, set_query) != EXIT_SUCCESS) {
+		diag("Failed to SET %s on primary", test_var.c_str());
+		return EXIT_FAILURE;
+	}
+	if (mysql_query_t(proxy_admin, "LOAD PGSQL VARIABLES TO RUNTIME") != EXIT_SUCCESS) {
+		diag("Failed to LOAD PGSQL VARIABLES TO RUNTIME on primary");
+		goto cleanup;
+	}
+
+	// Wait for replica to receive the new value
+	{
+		string check_query {};
+		string_format(
+			"SELECT COUNT(*) FROM runtime_global_variables WHERE variable_name='%s' AND variable_value='%s'",
+			check_query, test_var.c_str(), test_value.c_str()
+		);
+		if (wait_for_expected_count(replica_admin, check_query, 1, "pgsql_variables sync") != EXIT_SUCCESS) {
+			diag("pgsql variable %s did not sync to replica", test_var.c_str());
+			goto cleanup;
+		}
+	}
+
+	rc = EXIT_SUCCESS;
+
+cleanup:
+	// Restore original value
+	string_format("SET %s = '%s'", restore_query, test_var.c_str(), orig_value.c_str());
+	mysql_query_t(proxy_admin, restore_query);
+	mysql_query_t(proxy_admin, "LOAD PGSQL VARIABLES TO RUNTIME");
+	return rc;
+}
+
+/**
+ * @brief Test that setting diffs_before_sync=0 prevents sync for a pgsql module.
+ *
+ * Sets cluster_pgsql_servers_diffs_before_sync=0 on the replica, inserts
+ * a server on the primary, and verifies it does NOT sync within a short window.
+ */
+int check_diffs_before_sync_disabled(MYSQL* proxy_admin, MYSQL* replica_admin) {
+	const string backup_table_name { "pgsql_servers_diffs_test_backup_5297" };
+	const string test_host { "diffs_test_host_5297" };
+	const int test_hg = 8597;
+	int rc = EXIT_FAILURE;
+	string set_query {};
+	string restore_diffs_query {};
+
+	// Get original diffs_before_sync value
+	string orig_diffs {};
+	{
+		if (mysql_query_t(proxy_admin, "SHOW VARIABLES LIKE 'admin-cluster_pgsql_servers_diffs_before_sync'") != EXIT_SUCCESS) {
+			diag("Failed to query cluster_pgsql_servers_diffs_before_sync");
+			return EXIT_FAILURE;
+		}
+		MYSQL_RES* res = mysql_store_result(proxy_admin);
+		if (!res) {
+			diag("Failed to store result");
+			return EXIT_FAILURE;
+		}
+		MYSQL_ROW row = mysql_fetch_row(res);
+		if (row && row[1]) {
+			orig_diffs = row[1];
+		}
+		mysql_free_result(res);
+	}
+
+	// Set diffs_before_sync=0 on the replica to disable sync
+	string_format("SET admin-cluster_pgsql_servers_diffs_before_sync = 0");
+	if (mysql_query_t(replica_admin, "SET admin-cluster_pgsql_servers_diffs_before_sync = 0") != EXIT_SUCCESS) {
+		diag("Failed to disable diffs_before_sync on replica");
+		return EXIT_FAILURE;
+	}
+	if (mysql_query_t(replica_admin, "LOAD ADMIN VARIABLES TO RUNTIME") != EXIT_SUCCESS) {
+		diag("Failed to load admin variables on replica");
+		goto cleanup;
+	}
+
+	// Backup and insert a test server on primary
+	if (backup_admin_table(proxy_admin, "pgsql_servers", backup_table_name) != EXIT_SUCCESS) {
+		goto cleanup;
+	}
+	{
+		string insert_query {};
+		string_format(
+			"INSERT INTO pgsql_servers (hostgroup_id, hostname, port, status, weight, compression, max_connections,"
+			" max_replication_lag, use_ssl, max_latency_ms, comment)"
+			" VALUES (%d, '%s', 15432, 'ONLINE', 1, 0, 200, 0, 0, 1000, 'diffs_test')",
+			insert_query, test_hg, test_host.c_str()
+		);
+		if (mysql_query_t(proxy_admin, insert_query) != EXIT_SUCCESS) {
+			restore_admin_table(proxy_admin, "pgsql_servers", backup_table_name, "LOAD PGSQL SERVERS TO RUNTIME");
+			goto cleanup;
+		}
+	}
+	if (mysql_query_t(proxy_admin, "LOAD PGSQL SERVERS TO RUNTIME") != EXIT_SUCCESS) {
+		restore_admin_table(proxy_admin, "pgsql_servers", backup_table_name, "LOAD PGSQL SERVERS TO RUNTIME");
+		goto cleanup;
+	}
+
+	// Wait a short time (3 seconds) then verify server did NOT sync
+	{
+		sleep(3);
+		string check_query {};
+		string_format(
+			"SELECT COUNT(*) FROM pgsql_servers WHERE hostname='%s' AND hostgroup_id=%d",
+			check_query, test_host.c_str(), test_hg
+		);
+		int count = 0;
+		if (fetch_single_count(replica_admin, check_query, count) != EXIT_SUCCESS) {
+			diag("Failed to check pgsql_servers on replica");
+			restore_admin_table(proxy_admin, "pgsql_servers", backup_table_name, "LOAD PGSQL SERVERS TO RUNTIME");
+			goto cleanup;
+		}
+		if (count != 0) {
+			diag("Server unexpectedly synced despite diffs_before_sync=0");
+			restore_admin_table(proxy_admin, "pgsql_servers", backup_table_name, "LOAD PGSQL SERVERS TO RUNTIME");
+			goto cleanup;
+		}
+	}
+
+	restore_admin_table(proxy_admin, "pgsql_servers", backup_table_name, "LOAD PGSQL SERVERS TO RUNTIME");
+	rc = EXIT_SUCCESS;
+
+cleanup:
+	// Restore original diffs_before_sync on replica
+	string_format("SET admin-cluster_pgsql_servers_diffs_before_sync = %s", restore_diffs_query, orig_diffs.empty() ? "3" : orig_diffs.c_str());
+	mysql_query_t(replica_admin, restore_diffs_query);
+	mysql_query_t(replica_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+	return rc;
+}
+
 int check_pgsql_checksums_in_runtime_table(MYSQL* admin) {
 	const char* pgsql_checksums[] = {
 		"pgsql_query_rules",
@@ -595,7 +760,7 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	plan(13);
+	plan(16);
 
 	// Connect to admin interfaces
 	MYSQL* proxysql_admin = mysql_init(NULL);
@@ -691,12 +856,18 @@ int main(int argc, char** argv) {
 			ok(true, "PostgreSQL servers_v2 sync check skipped (set TAP_PGSQL_SYNC_REPLICA_PORT to enable)");
 			ok(true, "PostgreSQL users sync check skipped (set TAP_PGSQL_SYNC_REPLICA_PORT to enable)");
 			ok(true, "PostgreSQL query rules sync check skipped (set TAP_PGSQL_SYNC_REPLICA_PORT to enable)");
+			ok(true, "PostgreSQL variables sync check skipped (set TAP_PGSQL_SYNC_REPLICA_PORT to enable)");
+			ok(true, "PostgreSQL diffs_before_sync test skipped (set TAP_PGSQL_SYNC_REPLICA_PORT to enable)");
+			ok(true, "SHUNNED status mapping test skipped (set TAP_PGSQL_SYNC_REPLICA_PORT to enable)");
 		} else {
 			MYSQL* replica_admin = mysql_init(NULL);
 			if (!replica_admin) {
 				ok(false, "Failed to initialize replica admin connection for PostgreSQL servers_v2 sync check");
 				ok(false, "Failed to initialize replica admin connection for PostgreSQL users sync check");
 				ok(false, "Failed to initialize replica admin connection for PostgreSQL query rules sync check");
+				ok(false, "Failed to initialize replica admin connection for PostgreSQL variables sync check");
+				ok(false, "Failed to initialize replica admin connection for PostgreSQL diffs_before_sync test");
+				ok(false, "Failed to initialize replica admin connection for SHUNNED status mapping test");
 			} else if (!mysql_real_connect(
 				replica_admin,
 				cl.host,
@@ -710,6 +881,9 @@ int main(int argc, char** argv) {
 					ok(false, "Failed to connect to replica admin for PostgreSQL servers_v2 sync check");
 					ok(false, "Failed to connect to replica admin for PostgreSQL users sync check");
 					ok(false, "Failed to connect to replica admin for PostgreSQL query rules sync check");
+					ok(false, "Failed to connect to replica admin for PostgreSQL variables sync check");
+					ok(false, "Failed to connect to replica admin for PostgreSQL diffs_before_sync test");
+					ok(false, "Failed to connect to replica admin for SHUNNED status mapping test");
 				} else {
 					const int servers_save_to_disk_rc = get_admin_bool_value(
 						proxysql_admin, "admin-cluster_pgsql_servers_save_to_disk", servers_save_to_disk
@@ -731,7 +905,9 @@ int main(int argc, char** argv) {
 					}
 
 					const vector<pgsql_server_tuple> pgsql_servers_values {
-						{ 801, "127.0.0.1", 15432, "ONLINE", 1, 0, 200, 0, 0, 1000, "cluster_sync_pgsql_test_5297" }
+						{ 801, "127.0.0.1", 15432, "ONLINE", 1, 0, 200, 0, 0, 1000, "cluster_sync_pgsql_test_5297" },
+						{ 801, "127.0.0.1", 15433, "SHUNNED", 1, 0, 200, 0, 0, 1000, "cluster_sync_pgsql_shunned_5297" },
+						{ 801, "127.0.0.1", 15434, "OFFLINE_SOFT", 1, 0, 200, 0, 0, 1000, "cluster_sync_pgsql_offline_soft_5297" }
 					};
 					const int servers_sync_res = (servers_save_to_disk_rc == EXIT_SUCCESS)
 						? check_pgsql_servers_v2_sync(
@@ -765,6 +941,40 @@ int main(int argc, char** argv) {
 						"PostgreSQL query rules synced to replica%s",
 					(query_rules_save_to_disk ? " and disk persisted" : "")
 				);
+						// Test: pgsql_variables sync
+						const int variables_sync_res = check_pgsql_variables_sync(proxysql_admin, replica_admin);
+						ok(
+							variables_sync_res == EXIT_SUCCESS,
+							"PostgreSQL variables synced to replica"
+						);
+
+						// Test: diffs_before_sync=0 prevents sync
+						const int diffs_disabled_res = check_diffs_before_sync_disabled(proxysql_admin, replica_admin);
+						ok(
+							diffs_disabled_res == EXIT_SUCCESS,
+							"PostgreSQL diffs_before_sync=0 prevents sync"
+						);
+
+						// Test: SHUNNED server appears as ONLINE in runtime on replica
+						{
+							string shunned_check {};
+							string_format(
+								"SELECT COUNT(*) FROM runtime_pgsql_servers WHERE hostname='127.0.0.1' AND port=15433 AND status='ONLINE'",
+								shunned_check
+							);
+							int shunned_count = 0;
+							// Re-insert the test data to check SHUNNED mapping
+							const vector<pgsql_server_tuple> shunned_test {
+								{ 802, "127.0.0.1", 15499, "SHUNNED", 1, 0, 200, 0, 0, 1000, "shunned_status_test_5297" }
+							};
+							const int shunned_res = check_pgsql_servers_v2_sync(
+								proxysql_admin, replica_admin, false, shunned_test
+							);
+							ok(
+								shunned_res == EXIT_SUCCESS,
+								"SHUNNED PostgreSQL server mapped to ONLINE in runtime"
+							);
+						}
 			}
 
 			if (replica_admin) {
