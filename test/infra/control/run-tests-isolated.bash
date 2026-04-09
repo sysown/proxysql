@@ -251,6 +251,7 @@ BINLOG_READER_BIN=$(find "${WORKSPACE}" -path "${WORKSPACE}/ci_infra_logs" -prun
 # Execution: run the container
 docker run \
     --name "${TEST_CONTAINER}" \
+    --hostname "test-runner" \
     --network "${NETWORK_NAME}" \
     --cap-add=NET_ADMIN \
     --cap-add=SYS_ADMIN \
@@ -273,6 +274,7 @@ docker run \
     -e MYSQL_BINLOG_BIN="${MYSQL_BINLOG_BIN}" \
     -e BINLOG_READER_BIN="${BINLOG_READER_BIN}" \
     -e TAP_USE_NOISE="${TAP_USE_NOISE:-0}" \
+    -e TAP_PGSQL_SYNC_REPLICA_PORT="${TAP_PGSQL_SYNC_REPLICA_PORT:-}" \
     -e MULTI_GROUP="${MULTI_GROUP:-0}" \
     -e GCOV_PREFIX="/gcov/tap" \
     -e GCOV_PREFIX_STRIP="3" \
