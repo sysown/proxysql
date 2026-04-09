@@ -27,6 +27,7 @@ lint-run:
 lint: lint-generate-cdb lint-run
 	@echo "Done lint"
 
+
 ### RELEASE TIERS & FEATURE FLAGS:
 ### ProxySQL supports three distinct release tiers built from the same codebase.
 ### The tier is controlled by environment variables which enable feature guards
