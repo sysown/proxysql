@@ -164,6 +164,48 @@ ProxySQL_PluginCommandResult load_backend_endpoints_to_runtime(const ProxySQL_Pl
 	return result;
 }
 
+ProxySQL_PluginCommandResult save_users_from_runtime(const ProxySQL_PluginCommandContext& ctx, const char*) {
+	if (ctx.admindb == nullptr) {
+		return command_failure("mysqlx users save requires admin db");
+	}
+	if (!copy_table(*ctx.admindb, kRuntimeMysqlxUsersTable, kMysqlxUsersTable)) {
+		return command_failure("failed to copy mysqlx users from runtime");
+	}
+
+	ProxySQL_PluginCommandResult result {0, 0, ""};
+	result.rows_affected = ctx.admindb->return_one_int("SELECT COUNT(*) FROM mysqlx_users");
+	result.message = "mysqlx users saved from runtime";
+	return result;
+}
+
+ProxySQL_PluginCommandResult save_routes_from_runtime(const ProxySQL_PluginCommandContext& ctx, const char*) {
+	if (ctx.admindb == nullptr) {
+		return command_failure("mysqlx routes save requires admin db");
+	}
+	if (!copy_table(*ctx.admindb, kRuntimeMysqlxRoutesTable, kMysqlxRoutesTable)) {
+		return command_failure("failed to copy mysqlx routes from runtime");
+	}
+
+	ProxySQL_PluginCommandResult result {0, 0, ""};
+	result.rows_affected = ctx.admindb->return_one_int("SELECT COUNT(*) FROM mysqlx_routes");
+	result.message = "mysqlx routes saved from runtime";
+	return result;
+}
+
+ProxySQL_PluginCommandResult save_backend_endpoints_from_runtime(const ProxySQL_PluginCommandContext& ctx, const char*) {
+	if (ctx.admindb == nullptr) {
+		return command_failure("mysqlx backend endpoints save requires admin db");
+	}
+	if (!copy_table(*ctx.admindb, kRuntimeMysqlxBackendEndpointsTable, kMysqlxBackendEndpointsTable)) {
+		return command_failure("failed to copy mysqlx backend endpoints from runtime");
+	}
+
+	ProxySQL_PluginCommandResult result {0, 0, ""};
+	result.rows_affected = ctx.admindb->return_one_int("SELECT COUNT(*) FROM mysqlx_backend_endpoints");
+	result.message = "mysqlx backend endpoints saved from runtime";
+	return result;
+}
+
 void register_table_pair(
 	ProxySQL_PluginServices& services,
 	const char* table_name,
@@ -259,8 +301,11 @@ bool mysqlx_register_admin_schema(ProxySQL_PluginServices& services) {
 		services.register_table(stats_processlist);
 	}
 
-	services.register_command("PLUGIN MYSQLX LOAD USERS TO RUNTIME", &load_users_to_runtime);
-	services.register_command("PLUGIN MYSQLX LOAD ROUTES TO RUNTIME", &load_routes_to_runtime);
-	services.register_command("PLUGIN MYSQLX LOAD BACKEND ENDPOINTS TO RUNTIME", &load_backend_endpoints_to_runtime);
+	services.register_command("LOAD MYSQLX USERS TO RUNTIME", &load_users_to_runtime);
+	services.register_command("SAVE MYSQLX USERS TO MEMORY", &save_users_from_runtime);
+	services.register_command("LOAD MYSQLX ROUTES TO RUNTIME", &load_routes_to_runtime);
+	services.register_command("SAVE MYSQLX ROUTES TO MEMORY", &save_routes_from_runtime);
+	services.register_command("LOAD MYSQLX BACKEND ENDPOINTS TO RUNTIME", &load_backend_endpoints_to_runtime);
+	services.register_command("SAVE MYSQLX BACKEND ENDPOINTS TO MEMORY", &save_backend_endpoints_from_runtime);
 	return true;
 }

@@ -313,6 +313,43 @@ const std::vector<std::string> SAVE_TSDB_VARIABLES_TO_MEMORY = {
 	"SAVE TSDB VARIABLES TO MEM" ,
 	"SAVE TSDB VARIABLES FROM RUNTIME" ,
 	"SAVE TSDB VARIABLES FROM RUN" };
+
+// MySQLX plugin
+const std::vector<std::string> LOAD_MYSQLX_USERS_FROM_MEMORY = {
+	"LOAD MYSQLX USERS FROM MEMORY" ,
+	"LOAD MYSQLX USERS FROM MEM" ,
+	"LOAD MYSQLX USERS TO RUNTIME" ,
+	"LOAD MYSQLX USERS TO RUN" };
+
+const std::vector<std::string> SAVE_MYSQLX_USERS_TO_MEMORY = {
+	"SAVE MYSQLX USERS TO MEMORY" ,
+	"SAVE MYSQLX USERS TO MEM" ,
+	"SAVE MYSQLX USERS FROM RUNTIME" ,
+	"SAVE MYSQLX USERS FROM RUN" };
+
+const std::vector<std::string> LOAD_MYSQLX_ROUTES_FROM_MEMORY = {
+	"LOAD MYSQLX ROUTES FROM MEMORY" ,
+	"LOAD MYSQLX ROUTES FROM MEM" ,
+	"LOAD MYSQLX ROUTES TO RUNTIME" ,
+	"LOAD MYSQLX ROUTES TO RUN" };
+
+const std::vector<std::string> SAVE_MYSQLX_ROUTES_TO_MEMORY = {
+	"SAVE MYSQLX ROUTES TO MEMORY" ,
+	"SAVE MYSQLX ROUTES TO MEM" ,
+	"SAVE MYSQLX ROUTES FROM RUNTIME" ,
+	"SAVE MYSQLX ROUTES FROM RUN" };
+
+const std::vector<std::string> LOAD_MYSQLX_BACKEND_ENDPOINTS_FROM_MEMORY = {
+	"LOAD MYSQLX BACKEND ENDPOINTS FROM MEMORY" ,
+	"LOAD MYSQLX BACKEND ENDPOINTS FROM MEM" ,
+	"LOAD MYSQLX BACKEND ENDPOINTS TO RUNTIME" ,
+	"LOAD MYSQLX BACKEND ENDPOINTS TO RUN" };
+
+const std::vector<std::string> SAVE_MYSQLX_BACKEND_ENDPOINTS_TO_MEMORY = {
+	"SAVE MYSQLX BACKEND ENDPOINTS TO MEMORY" ,
+	"SAVE MYSQLX BACKEND ENDPOINTS TO MEM" ,
+	"SAVE MYSQLX BACKEND ENDPOINTS FROM RUNTIME" ,
+	"SAVE MYSQLX BACKEND ENDPOINTS FROM RUN" };
 //
 const std::vector<std::string> LOAD_COREDUMP_FROM_MEMORY = {
 	"LOAD COREDUMP FROM MEMORY" ,
@@ -5298,9 +5335,17 @@ __end_show_commands:
 	}
 	if (run_query && sess->session_type == PROXYSQL_SESSION_ADMIN) {
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-		if (SPA->dispatch_plugin_admin_command(sess, query_no_space)) {
-			run_query=false;
-			goto __run_query;
+		if (
+			is_admin_command_or_alias(LOAD_MYSQLX_USERS_FROM_MEMORY, query_no_space, query_no_space_length) ||
+			is_admin_command_or_alias(SAVE_MYSQLX_USERS_TO_MEMORY, query_no_space, query_no_space_length) ||
+			is_admin_command_or_alias(LOAD_MYSQLX_ROUTES_FROM_MEMORY, query_no_space, query_no_space_length) ||
+			is_admin_command_or_alias(SAVE_MYSQLX_ROUTES_TO_MEMORY, query_no_space, query_no_space_length) ||
+			is_admin_command_or_alias(LOAD_MYSQLX_BACKEND_ENDPOINTS_FROM_MEMORY, query_no_space, query_no_space_length) ||
+			is_admin_command_or_alias(SAVE_MYSQLX_BACKEND_ENDPOINTS_TO_MEMORY, query_no_space, query_no_space_length)
+		) {
+			if (SPA->dispatch_plugin_admin_command(sess, query_no_space)) {
+				return false;
+			}
 		}
 	}
 
