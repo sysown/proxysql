@@ -3471,15 +3471,16 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 						string { PGHGM_GEN_CLUSTER_ADMIN_PGSQL_SERVERS } + " LIMIT 0"
 					};
 
-					char* error = NULL;
+					char* exec_error = NULL;
 					int cols = 0;
 					int affected_rows = 0;
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
 					GloAdmin->pgsql_servers_wrlock();
-					GloAdmin->admindb->execute_statement(query_empty_resultset.c_str(), &error, &cols, &affected_rows, &resultset);
+					GloAdmin->admindb->execute_statement(query_empty_resultset.c_str(), &exec_error, &cols, &affected_rows, &resultset);
 					GloAdmin->pgsql_servers_wrunlock();
-					if (error) {
-						proxy_error("Cluster: execute_statement failed for pgsql_servers_v2 fallback: %s\n", error);
+					if (exec_error) {
+						proxy_error("Cluster: execute_statement failed for pgsql_servers_v2 fallback: %s\n", exec_error);
+						free(exec_error);
 					}
 				} else {
 					resultset = PgHGM->dump_table_pgsql(tn);

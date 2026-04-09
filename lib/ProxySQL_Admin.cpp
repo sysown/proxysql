@@ -417,7 +417,7 @@ static char * admin_variables_names[]= {
 	(char *)"cluster_pgsql_query_rules_save_to_disk",
 	(char *)"cluster_pgsql_servers_save_to_disk",
 	(char *)"cluster_pgsql_users_save_to_disk",
-		(char *)"cluster_mysql_servers_sync_algorithm",
+	(char *)"cluster_mysql_servers_sync_algorithm",
 	(char *)"checksum_mysql_query_rules",
 	(char *)"checksum_mysql_servers",
 	(char *)"checksum_mysql_users",
@@ -2916,7 +2916,7 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.cluster_pgsql_query_rules_diffs_before_sync = 3;
 	variables.cluster_pgsql_servers_diffs_before_sync = 3;
 	variables.cluster_pgsql_users_diffs_before_sync = 3;
-		variables.cluster_mysql_servers_sync_algorithm = 1;
+	variables.cluster_mysql_servers_sync_algorithm = 1;
 	checksum_variables.checksum_mysql_query_rules = true;
 	checksum_variables.checksum_mysql_servers = true;
 	checksum_variables.checksum_mysql_users = true;
@@ -2938,7 +2938,7 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.cluster_pgsql_query_rules_save_to_disk = true;
 	variables.cluster_pgsql_servers_save_to_disk = true;
 	variables.cluster_pgsql_users_save_to_disk = true;
-		variables.stats_mysql_connection_pool = 60;
+	variables.stats_mysql_connection_pool = 60;
 	variables.stats_mysql_connections = 60;
 	variables.stats_mysql_query_cache = 60;
 	variables.stats_mysql_query_digest_to_disk = 0;
