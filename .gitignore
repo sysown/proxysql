@@ -1,6 +1,9 @@
 # Internal Repos
 priv-infra/
 
+# Lint output (do not commit)
+lint/
+
 # direnv
 .envrc.local
 
