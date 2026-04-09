@@ -14,8 +14,6 @@ SQLite3DB* proxysql_plugin_get_statsdb();
 
 namespace {
 
-constexpr char kPluginCommandPrefix[] = "PLUGIN ";
-
 ProxySQL_PluginManager* g_active_plugin_manager = nullptr;
 ProxySQL_PluginManager* g_registry_target = nullptr;
 std::mutex g_active_plugin_manager_mutex {};
@@ -145,14 +143,6 @@ std::string canonicalize_plugin_command(const std::string& sql) {
 	}
 
 	return normalized;
-}
-
-bool has_plugin_command_prefix(const std::string& sql) {
-	if (sql.empty()) {
-		return false;
-	}
-
-	return strncasecmp(sql.c_str(), kPluginCommandPrefix, sizeof(kPluginCommandPrefix) - 1) == 0;
 }
 
 } // namespace
@@ -329,9 +319,6 @@ const std::vector<ProxySQL_PluginTableDef>& ProxySQL_PluginManager::tables(Proxy
 
 bool ProxySQL_PluginManager::dispatch_admin_command(const ProxySQL_PluginCommandContext& ctx, const std::string& sql, ProxySQL_PluginCommandResult& result) const {
 	const std::string canonical_sql = canonicalize_plugin_command(sql);
-	if (!has_plugin_command_prefix(canonical_sql)) {
-		return false;
-	}
 
 	for (const auto& command : commands_) {
 		if (!sql_equals_ci(command.sql, canonical_sql)) {
@@ -423,7 +410,7 @@ bool ProxySQL_PluginManager::register_command(const char* sql, proxysql_plugin_a
 	}
 
 	const std::string canonical_sql = canonicalize_plugin_command(sql);
-	if (canonical_sql.empty() || !has_plugin_command_prefix(canonical_sql)) {
+	if (canonical_sql.empty()) {
 		return false;
 	}
 
