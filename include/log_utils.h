@@ -1,5 +1,5 @@
-#ifndef __CLASS_LOG_UTILS_H
-#define __CLASS_LOG_UTILS_H
+#ifndef PROXYSQL_LOG_UTILS_H
+#define PROXYSQL_LOG_UTILS_H
 
 #include <string>
 #include <cstdint>

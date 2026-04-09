@@ -1,5 +1,5 @@
-#ifndef __CLASS_MYSQL_CONNECTION_H
-#define __CLASS_MYSQL_CONNECTION_H
+#ifndef PROXYSQL_MYSQL_CONNECTION_H
+#define PROXYSQL_MYSQL_CONNECTION_H
 
 #include "proxysql.h"
 #include "cpp.h"

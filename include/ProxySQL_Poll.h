@@ -1,5 +1,5 @@
-#ifndef __CLASS_PROXYSQL_POLL
-#define __CLASS_PROXYSQL_POLL
+#ifndef PROXYSQL_POLL_H
+#define PROXYSQL_POLL_H
 
 //#include "MySQL_Data_Stream.h"
 

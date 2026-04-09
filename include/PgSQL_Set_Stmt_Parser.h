@@ -1,5 +1,5 @@
-#ifndef __CLASS_PGSQL_SET_STMT_PARSER_H
-#define __CLASS_PGSQL_SET_STMT_PARSER_H
+#ifndef PROXYSQL_PGSQL_SET_STMT_PARSER_H
+#define PROXYSQL_PGSQL_SET_STMT_PARSER_H
 
 #include <string>
 #include <map>

@@ -1,5 +1,5 @@
-#ifndef __CLASS_COMMAND_COUNTER_H
-#define __CLASS_COMMAND_COUNTER_H
+#ifndef PROXYSQL_COMMAND_COUNTER_H
+#define PROXYSQL_COMMAND_COUNTER_H
 
 class Command_Counter {
 public:

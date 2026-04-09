@@ -1,5 +1,5 @@
-#ifndef __CLASS_QUERY_CACHE_H
-#define __CLASS_QUERY_CACHE_H
+#ifndef PROXYSQL_QUERY_CACHE_H
+#define PROXYSQL_QUERY_CACHE_H
 #include "btree_map.h"
 #include "proxysql.h"
 #include "cpp.h"

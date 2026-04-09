@@ -1,5 +1,5 @@
-#ifndef __CLASS_PTR_ARRAY_H
-#define __CLASS_PTR_ARRAY_H
+#ifndef PROXYSQL_PTR_ARRAY_H
+#define PROXYSQL_PTR_ARRAY_H
 
 #include <memory>
 #include <queue>

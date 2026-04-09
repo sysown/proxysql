@@ -1,7 +1,7 @@
 #ifdef CLASS_BASE_SESSION_H
 
-#ifndef __CLASS_PGSQL_SESSION_H
-#define __CLASS_PGSQL_SESSION_H
+#ifndef PROXYSQL_PGSQL_SESSION_H
+#define PROXYSQL_PGSQL_SESSION_H
 
 #include <functional>
 #include <vector>

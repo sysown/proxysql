@@ -1,5 +1,5 @@
-#ifndef __CLASS_PROXYSQL_ADMIN_H
-#define __CLASS_PROXYSQL_ADMIN_H
+#ifndef PROXYSQL_ADMIN_H
+#define PROXYSQL_ADMIN_H
 
 #include "prometheus/exposer.h"
 #include "prometheus/counter.h"

@@ -4,8 +4,8 @@
  */
 
 #ifdef CLASS_BASE_SESSION_H
-#ifndef __CLASS_MYSQL_SESSION_H
-#define __CLASS_MYSQL_SESSION_H
+#ifndef PROXYSQL_MYSQL_SESSION_H
+#define PROXYSQL_MYSQL_SESSION_H
 
 #include <functional>
 #include <vector>

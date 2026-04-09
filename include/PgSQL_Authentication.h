@@ -1,5 +1,5 @@
-#ifndef __CLASS_PGSQL_AUTHENTICATION_H
-#define __CLASS_PGSQL_AUTHENTICATION_H
+#ifndef PROXYSQL_PGSQL_AUTHENTICATION_H
+#define PROXYSQL_PGSQL_AUTHENTICATION_H
 
 #include "proxysql.h"
 #include "cpp.h"

@@ -1,5 +1,5 @@
-#ifndef __CLASS_PGSQL_BACKEND_H
-#define __CLASS_PGSQL_BACKEND_H
+#ifndef PROXYSQL_PGSQL_BACKEND_H
+#define PROXYSQL_PGSQL_BACKEND_H
 #include "proxysql.h"
 #include "cpp.h"
 

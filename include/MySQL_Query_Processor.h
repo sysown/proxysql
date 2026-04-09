@@ -1,5 +1,5 @@
-#ifndef __CLASS_MYSQL_QUERY_PROCESSOR_H
-#define __CLASS_MYSQL_QUERY_PROCESSOR_H
+#ifndef PROXYSQL_MYSQL_QUERY_PROCESSOR_H
+#define PROXYSQL_MYSQL_QUERY_PROCESSOR_H
 #include "proxysql.h"
 #include "cpp.h"
 #include "QP_rule_text.h"

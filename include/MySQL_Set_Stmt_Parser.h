@@ -1,5 +1,5 @@
-#ifndef __CLASS_MYSQL_SET_STMT_PARSER_H
-#define __CLASS_MYSQL_SET_STMT_PARSER_H
+#ifndef PROXYSQL_MYSQL_SET_STMT_PARSER_H
+#define PROXYSQL_MYSQL_SET_STMT_PARSER_H
 
 #include <string>
 #include <map>

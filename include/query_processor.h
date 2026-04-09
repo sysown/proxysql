@@ -1,5 +1,5 @@
-#ifndef __CLASS_QUERY_PROCESSOR_H
-#define __CLASS_QUERY_PROCESSOR_H
+#ifndef PROXYSQL_QUERY_PROCESSOR_H
+#define PROXYSQL_QUERY_PROCESSOR_H
 #include <type_traits>
 #include <set>
 #include "proxysql.h"

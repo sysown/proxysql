@@ -1,5 +1,5 @@
-#ifndef __CLASS_PGSQL_CONNECTION_H
-#define __CLASS_PGSQL_CONNECTION_H
+#ifndef PROXYSQL_PGSQL_CONNECTION_H
+#define PROXYSQL_PGSQL_CONNECTION_H
 #include "libpq-fe.h"
 #include "proxysql.h"
 #include "cpp.h"

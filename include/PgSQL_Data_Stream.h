@@ -1,5 +1,5 @@
-#ifndef __CLASS_PGSQL_DATA_STREAM_H
-#define __CLASS_PGSQL_DATA_STREAM_H
+#ifndef PROXYSQL_PGSQL_DATA_STREAM_H
+#define PROXYSQL_PGSQL_DATA_STREAM_H
 
 #include "proxysql.h"
 #include "cpp.h"

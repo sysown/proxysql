@@ -1,6 +1,6 @@
-#ifndef __CLASS_MYSQL_THREAD_H
-#define __CLASS_MYSQL_THREAD_H
-#define ____CLASS_STANDARD_MYSQL_THREAD_H
+#ifndef PROXYSQL_MYSQL_THREAD_H
+#define PROXYSQL_MYSQL_THREAD_H
+#define PROXYSQL_STANDARD_MYSQL_THREAD_H
 #include "prometheus/counter.h"
 #include "prometheus/gauge.h"
 

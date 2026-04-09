@@ -1,5 +1,5 @@
-#ifndef __CLASS_STAT_COUNTERS_H
-#define __CLASS_STAT_COUNTERS_H
+#ifndef PROXYSQL_STAT_COUNTERS_H
+#define PROXYSQL_STAT_COUNTERS_H
 #include "proxysql_atomic.h"
 
 class StatCounters {

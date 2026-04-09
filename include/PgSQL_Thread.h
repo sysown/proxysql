@@ -1,6 +1,6 @@
-#ifndef __CLASS_PGSQL_THREAD_H
-#define __CLASS_PGSQL_THREAD_H
-#define ____CLASS_STANDARD_PGSQL_THREAD_H
+#ifndef PROXYSQL_PGSQL_THREAD_H
+#define PROXYSQL_PGSQL_THREAD_H
+#define PROXYSQL_STANDARD_PGSQL_THREAD_H
 #include <prometheus/counter.h>
 #include <prometheus/gauge.h>
 
