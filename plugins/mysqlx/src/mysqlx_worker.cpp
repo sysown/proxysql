@@ -194,6 +194,7 @@ void MysqlxWorker::run() {
 					int hg = ctx.config_store->route_hostgroup(identity.default_route);
 					if (backend.connect(identity, endpoint, err)) {
 						mysqlx_stats().record_conn_ok(identity.default_route, hg);
+						mysqlx_stats().record_conn_used(identity.default_route, hg);
 						backend.relay(fd);
 					} else {
 						mysqlx_send_error(fd, 4001, "Backend connection failed: " + err);

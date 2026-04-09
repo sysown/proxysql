@@ -125,7 +125,11 @@ bool copy_table(SQLite3DB& db, const char* source_table, const char* runtime_tab
 
 static void reload_config_store(SQLite3DB& admindb) {
 	std::string err;
-	mysqlx_context().config_store->load_from_runtime(admindb, err);
+	if (!mysqlx_context().config_store->load_from_runtime(admindb, err)) {
+		if (mysqlx_context().services && mysqlx_context().services->log_message) {
+			mysqlx_context().services->log_message(3, err.c_str());
+		}
+	}
 }
 
 ProxySQL_PluginCommandResult load_users_to_runtime(const ProxySQL_PluginCommandContext& ctx, const char*) {
