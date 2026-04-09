@@ -1172,9 +1172,9 @@ void ch_account_to_my(account_details_t& account, ch_account_details_t& ch_accou
     account.num_connections_used_addl_pass = 0;   // Assuming no additional password used
     account.clear_text_password[0] = nullptr;     // No clear text passwords by default
     account.clear_text_password[1] = nullptr;
-    account.__frontend = ch_account.__frontend;   // Copy frontend flag
-    account.__backend = ch_account.__backend;     // Copy backend flag
-    account.__active = ch_account.__active;       // Copy active flag
+    account.frontend_ = ch_account.frontend_;   // Copy frontend flag
+    account.backend_ = ch_account.backend_;     // Copy backend flag
+    account.active_ = ch_account.active_;       // Copy active flag
     account.attributes = nullptr;                 // No attributes by default
     account.comment = nullptr;                    // No comment by default
 }

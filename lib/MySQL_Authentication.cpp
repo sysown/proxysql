@@ -362,8 +362,8 @@ int MySQL_Authentication::dump_all_users(account_details_t ***ads, bool _complet
 			ad->schema_locked=ado->schema_locked;
 			ad->transaction_persistent=ado->transaction_persistent;
 			ad->fast_forward=ado->fast_forward;
-			ad->__frontend=1;
-			ad->__backend=0;
+			ad->frontend_=1;
+			ad->backend_=0;
 		}
 		_ads[idx_]=ad;
 		idx_++;
@@ -387,8 +387,8 @@ int MySQL_Authentication::dump_all_users(account_details_t ***ads, bool _complet
 		ad->transaction_persistent=ado->transaction_persistent;
 		ad->fast_forward=ado->fast_forward;
 		ad->max_connections=ado->max_connections;
-		ad->__frontend=0;
-		ad->__backend=1;
+		ad->frontend_=0;
+		ad->backend_=1;
 		_ads[idx_]=ad;
 		idx_++;
 	}

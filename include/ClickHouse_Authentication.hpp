@@ -20,9 +20,9 @@ typedef struct _ch_account_details_t {
 	bool fast_forward;
 	int max_connections;
 	int num_connections_used;
-	bool __frontend;  // this is used only during the dump
-	bool __backend;   // this is used only during the dump
-	bool __active;
+	bool frontend_;  // this is used only during the dump
+	bool backend_;   // this is used only during the dump
+	bool active_;
 } ch_account_details_t;
 
 struct ch_dup_account_details_t {

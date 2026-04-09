@@ -2018,7 +2018,7 @@ void MySQL_HostGroups_Manager::generate_mysql_group_replication_hostgroups_table
 	for (std::map<int , Group_Replication_Info *>::iterator it1 = Group_Replication_Info_Map.begin() ; it1 != Group_Replication_Info_Map.end(); ++it1) {
 		Group_Replication_Info *info=NULL;
 		info=it1->second;
-		info->__active=false;
+		info->active_=false;
 	}
 	for (std::vector<SQLite3_row *>::iterator it = incoming_group_replication_hostgroups->rows.begin() ; it != incoming_group_replication_hostgroups->rows.end(); ++it) {
 		SQLite3_row *r=*it;
@@ -2066,7 +2066,7 @@ void MySQL_HostGroups_Manager::generate_mysql_group_replication_hostgroups_table
 	// remove missing ones
 	for (auto it3 = Group_Replication_Info_Map.begin(); it3 != Group_Replication_Info_Map.end(); ) {
 		Group_Replication_Info *info=it3->second;
-		if (info->__active==false) {
+		if (info->active_==false) {
 			delete info;
 			it3 = Group_Replication_Info_Map.erase(it3);
 		} else {
@@ -2117,7 +2117,7 @@ void MySQL_HostGroups_Manager::generate_mysql_galera_hostgroups_table() {
 	for (std::map<int , Galera_Info *>::iterator it1 = Galera_Info_Map.begin() ; it1 != Galera_Info_Map.end(); ++it1) {
 		Galera_Info *info=NULL;
 		info=it1->second;
-		info->__active=false;
+		info->active_=false;
 	}
 	for (std::vector<SQLite3_row *>::iterator it = incoming_galera_hostgroups->rows.begin() ; it != incoming_galera_hostgroups->rows.end(); ++it) {
 		SQLite3_row *r=*it;
@@ -2165,7 +2165,7 @@ void MySQL_HostGroups_Manager::generate_mysql_galera_hostgroups_table() {
 	// remove missing ones
 	for (auto it3 = Galera_Info_Map.begin(); it3 != Galera_Info_Map.end(); ) {
 		Galera_Info *info=it3->second;
-		if (info->__active==false) {
+		if (info->active_==false) {
 			delete info;
 			it3 = Galera_Info_Map.erase(it3);
 		} else {
@@ -3988,7 +3988,7 @@ Group_Replication_Info::Group_Replication_Info(int w, int b, int r, int o, int m
 	current_num_backup_writers=0;
 	current_num_readers=0;
 	current_num_offline=0;
-	__active=true;
+	active_=true;
 	need_converge=true;
 }
 
@@ -4001,7 +4001,7 @@ Group_Replication_Info::~Group_Replication_Info() {
 
 bool Group_Replication_Info::update(int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c) {
 	bool ret=false;
-	__active=true;
+	active_=true;
 	if (backup_writer_hostgroup!=b) {
 		backup_writer_hostgroup=b;
 		ret=true;
@@ -4681,7 +4681,7 @@ Galera_Info::Galera_Info(int w, int b, int r, int o, int mw, int mtb, bool _a, i
 	current_num_backup_writers=0;
 	current_num_readers=0;
 	current_num_offline=0;
-	__active=true;
+	active_=true;
 	need_converge=true;
 }
 
@@ -4694,7 +4694,7 @@ Galera_Info::~Galera_Info() {
 
 bool Galera_Info::update(int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c) {
 	bool ret=false;
-	__active=true;
+	active_=true;
 	if (backup_writer_hostgroup!=b) {
 		backup_writer_hostgroup=b;
 		ret=true;
@@ -5800,7 +5800,7 @@ AWS_Aurora_Info::AWS_Aurora_Info(int w, int r, int _port, char *_end_addr, int m
 	writer_is_also_reader=wiar;
 	new_reader_weight=nrw;
 	active=_a;
-	__active=true;
+	active_=true;
 	//need_converge=true;
 	aurora_port = _port;
 	domain_name = strdup(_end_addr);
@@ -5819,7 +5819,7 @@ AWS_Aurora_Info::~AWS_Aurora_Info() {
 
 bool AWS_Aurora_Info::update(int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c) {
 	bool ret=false;
-	__active=true;
+	active_=true;
 	if (reader_hostgroup!=r) {
 		reader_hostgroup=r;
 		ret=true;
@@ -6174,7 +6174,7 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 	for (std::map<int , AWS_Aurora_Info *>::iterator it1 = AWS_Aurora_Info_Map.begin() ; it1 != AWS_Aurora_Info_Map.end(); ++it1) {
 		AWS_Aurora_Info *info=NULL;
 		info=it1->second;
-		info->__active=false;
+		info->active_=false;
 	}
 	for (std::vector<SQLite3_row *>::iterator it = incoming_aws_aurora_hostgroups->rows.begin() ; it != incoming_aws_aurora_hostgroups->rows.end(); ++it) {
 		SQLite3_row *r=*it;
@@ -6232,7 +6232,7 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 	// remove missing ones
 	for (auto it3 = AWS_Aurora_Info_Map.begin(); it3 != AWS_Aurora_Info_Map.end(); ) {
 		AWS_Aurora_Info *info=it3->second;
-		if (info->__active==false) {
+		if (info->active_==false) {
 			delete info;
 			it3 = AWS_Aurora_Info_Map.erase(it3);
 		} else {

@@ -393,7 +393,7 @@ class Group_Replication_Info {
 	char *comment;
 	bool active;
 	int writer_is_also_reader;
-	bool __active;
+	bool active_;
 	bool need_converge; // this is set to true on LOAD MYSQL SERVERS TO RUNTIME . This ensure that checks wil take an action
 	int current_num_writers;
 	int current_num_backup_writers;
@@ -415,7 +415,7 @@ class Galera_Info {
 	char *comment;
 	bool active;
 	int writer_is_also_reader;
-	bool __active;
+	bool active_;
 	bool need_converge; // this is set to true on LOAD MYSQL SERVERS TO RUNTIME . This ensure that checks wil take an action
 	int current_num_writers;
 	int current_num_backup_writers;
@@ -444,7 +444,7 @@ class AWS_Aurora_Info {
 	char * domain_name;
 	char * comment;
 	bool active;
-	bool __active;
+	bool active_;
 	AWS_Aurora_Info(int w, int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c);
 	bool update(int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c);
 	~AWS_Aurora_Info();
