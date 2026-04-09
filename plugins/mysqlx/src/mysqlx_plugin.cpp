@@ -21,6 +21,12 @@ bool mysqlx_start() {
 	if (ctx.services != nullptr && ctx.services->get_admindb != nullptr) {
 		SQLite3DB* admindb = ctx.services->get_admindb();
 		if (admindb != nullptr) {
+			std::string err;
+			if (!ctx.config_store->load_from_runtime(*admindb, err)) {
+				if (ctx.services->log_message != nullptr) {
+					ctx.services->log_message(3, err.c_str());
+				}
+			}
 			mysqlx_start_listeners_from_runtime_routes(*admindb);
 		}
 	}

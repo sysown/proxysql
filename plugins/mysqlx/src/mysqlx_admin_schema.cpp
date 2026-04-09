@@ -1,5 +1,6 @@
 #include "mysqlx_admin_schema.h"
 
+#include "mysqlx_plugin.h"
 #include "sqlite3db.h"
 
 #include <string>
@@ -122,6 +123,11 @@ bool copy_table(SQLite3DB& db, const char* source_table, const char* runtime_tab
 	return true;
 }
 
+static void reload_config_store(SQLite3DB& admindb) {
+	std::string err;
+	mysqlx_context().config_store->load_from_runtime(admindb, err);
+}
+
 ProxySQL_PluginCommandResult load_users_to_runtime(const ProxySQL_PluginCommandContext& ctx, const char*) {
 	if (ctx.admindb == nullptr) {
 		return command_failure("mysqlx users load requires admin db");
@@ -133,6 +139,7 @@ ProxySQL_PluginCommandResult load_users_to_runtime(const ProxySQL_PluginCommandC
 	ProxySQL_PluginCommandResult result {0, 0, ""};
 	result.rows_affected = ctx.admindb->return_one_int("SELECT COUNT(*) FROM runtime_mysqlx_users");
 	result.message = "mysqlx users loaded to runtime";
+	reload_config_store(*ctx.admindb);
 	return result;
 }
 
@@ -147,6 +154,7 @@ ProxySQL_PluginCommandResult load_routes_to_runtime(const ProxySQL_PluginCommand
 	ProxySQL_PluginCommandResult result {0, 0, ""};
 	result.rows_affected = ctx.admindb->return_one_int("SELECT COUNT(*) FROM runtime_mysqlx_routes");
 	result.message = "mysqlx routes loaded to runtime";
+	reload_config_store(*ctx.admindb);
 	return result;
 }
 
@@ -161,6 +169,7 @@ ProxySQL_PluginCommandResult load_backend_endpoints_to_runtime(const ProxySQL_Pl
 	ProxySQL_PluginCommandResult result {0, 0, ""};
 	result.rows_affected = ctx.admindb->return_one_int("SELECT COUNT(*) FROM runtime_mysqlx_backend_endpoints");
 	result.message = "mysqlx backend endpoints loaded to runtime";
+	reload_config_store(*ctx.admindb);
 	return result;
 }
 
