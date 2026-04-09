@@ -1,6 +1,7 @@
 #ifndef PROXYSQL_MYSQLX_CONFIG_STORE_H
 #define PROXYSQL_MYSQLX_CONFIG_STORE_H
 
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <optional>
@@ -62,6 +63,7 @@ public:
 	bool load_from_runtime(SQLite3DB& db, std::string& err);
 	std::optional<MysqlxResolvedIdentity> resolve_identity(const std::string& username) const;
 	MysqlxBackendEndpoint pick_endpoint(const std::string& route_name) const;
+	int route_hostgroup(const std::string& route_name) const;
 
 	uint64_t topology_generation() const;
 	void bump_topology_generation();
@@ -75,7 +77,7 @@ private:
 	std::unordered_map<int, std::vector<MysqlxBackendEndpoint>> hostgroup_endpoints_ {};
 	mutable std::mutex rr_mutex_ {};
 	mutable std::unordered_map<int, uint32_t> rr_counters_ {};
-	uint64_t topology_generation_ { 0 };
+	std::atomic<uint64_t> topology_generation_ { 0 };
 };
 
 #endif /* PROXYSQL_MYSQLX_CONFIG_STORE_H */

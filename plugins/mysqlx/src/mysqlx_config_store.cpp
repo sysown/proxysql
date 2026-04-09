@@ -288,6 +288,13 @@ MysqlxBackendEndpoint MysqlxConfigStore::pick_endpoint(const std::string& route_
 	return {};
 }
 
+int MysqlxConfigStore::route_hostgroup(const std::string& route_name) const {
+	std::shared_lock<std::shared_mutex> lock(mutex_);
+	auto it = routes_.find(route_name);
+	if (it == routes_.end()) return 0;
+	return it->second.destination_hostgroup;
+}
+
 uint64_t MysqlxConfigStore::topology_generation() const {
 	return topology_generation_;
 }

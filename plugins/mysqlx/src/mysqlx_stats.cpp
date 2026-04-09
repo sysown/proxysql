@@ -29,24 +29,30 @@ MysqlxStatsStore& mysqlx_stats() {
 	return store;
 }
 
-MysqlxRouteStats& MysqlxStatsStore::get_or_create(const std::string& route_name) {
+MysqlxRouteStats& MysqlxStatsStore::get_or_create(const std::string& route_name, int destination_hostgroup) {
 	auto it = route_stats_.find(route_name);
 	if (it == route_stats_.end()) {
-		auto [new_it, _] = route_stats_.try_emplace(route_name);
-		new_it->second.name = route_name;
-		return new_it->second;
+		auto [inserted, _] = route_stats_.try_emplace(route_name);
+		inserted->second.name = route_name;
+		inserted->second.destination_hostgroup = destination_hostgroup;
+		return inserted->second;
 	}
 	return it->second;
 }
 
-void MysqlxStatsStore::record_conn_ok(const std::string& route_name) {
+void MysqlxStatsStore::record_conn_ok(const std::string& route_name, int destination_hostgroup) {
 	std::lock_guard<std::mutex> lock(mutex_);
-	get_or_create(route_name).conn_ok.fetch_add(1, std::memory_order_relaxed);
+	get_or_create(route_name, destination_hostgroup).conn_ok.fetch_add(1, std::memory_order_relaxed);
 }
 
-void MysqlxStatsStore::record_conn_err(const std::string& route_name) {
+void MysqlxStatsStore::record_conn_err(const std::string& route_name, int destination_hostgroup) {
 	std::lock_guard<std::mutex> lock(mutex_);
-	get_or_create(route_name).conn_err.fetch_add(1, std::memory_order_relaxed);
+	get_or_create(route_name, destination_hostgroup).conn_err.fetch_add(1, std::memory_order_relaxed);
+}
+
+void MysqlxStatsStore::record_conn_used(const std::string& route_name, int destination_hostgroup) {
+	std::lock_guard<std::mutex> lock(mutex_);
+	get_or_create(route_name, destination_hostgroup).conn_used.fetch_add(1, std::memory_order_relaxed);
 }
 
 uint64_t MysqlxStatsStore::get_conn_ok(const std::string& route_name) const {

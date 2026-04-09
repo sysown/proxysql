@@ -22,8 +22,9 @@ public:
 	MysqlxStatsStore() = default;
 
 	// Increment connection counters for a route.
-	void record_conn_ok(const std::string& route_name);
-	void record_conn_err(const std::string& route_name);
+	void record_conn_ok(const std::string& route_name, int destination_hostgroup);
+	void record_conn_err(const std::string& route_name, int destination_hostgroup);
+	void record_conn_used(const std::string& route_name, int destination_hostgroup);
 
 	// Flush stats into the stats SQLite DB.
 	void flush_to_sqlite(class SQLite3DB& statsdb);
@@ -36,7 +37,7 @@ private:
 	mutable std::mutex mutex_ {};
 	std::unordered_map<std::string, MysqlxRouteStats> route_stats_ {};
 
-	MysqlxRouteStats& get_or_create(const std::string& route_name);
+	MysqlxRouteStats& get_or_create(const std::string& route_name, int destination_hostgroup);
 };
 
 // Global stats store (owned by plugin context).
