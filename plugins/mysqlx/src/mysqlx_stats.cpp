@@ -3,6 +3,7 @@
 #include "sqlite3db.h"
 
 #include <algorithm>
+#include <cinttypes>
 #include <cstring>
 
 namespace {
@@ -74,7 +75,7 @@ void MysqlxStatsStore::flush_to_sqlite(SQLite3DB& statsdb) {
 			"INSERT INTO stats_mysqlx_routes "
 			"(name, destination_hostgroup, ConnOK, ConnERR, ConnUsed, "
 			"Bytes_data_sent, Bytes_data_recv) "
-			"VALUES ('%s', %d, %lu, %lu, %lu, %lu, %lu)",
+			"VALUES ('%s', %d, %" PRIu64 ", %" PRIu64 ", %" PRIu64 ", %" PRIu64 ", %" PRIu64 ")",
 			escaped_name.c_str(),
 			stats.destination_hostgroup,
 			stats.conn_ok.load(std::memory_order_relaxed),
