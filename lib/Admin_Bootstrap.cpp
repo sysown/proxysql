@@ -817,6 +817,8 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_admin, "runtime_pgsql_firewall_whitelist_rules", ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_FIREWALL_WHITELIST_RULES);
 	insert_into_tables_defs(tables_defs_admin, "pgsql_firewall_whitelist_sqli_fingerprints", ADMIN_SQLITE_TABLE_PGSQL_FIREWALL_WHITELIST_SQLI_FINGERPRINTS);
 	insert_into_tables_defs(tables_defs_admin, "runtime_pgsql_firewall_whitelist_sqli_fingerprints", ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_FIREWALL_WHITELIST_SQLI_FINGERPRINTS);
+	insert_into_tables_defs(tables_defs_admin,"pgsql_servers_ssl_params", ADMIN_SQLITE_TABLE_PGSQL_SERVERS_SSL_PARAMS);
+	insert_into_tables_defs(tables_defs_admin,"runtime_pgsql_servers_ssl_params", ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_SERVERS_SSL_PARAMS);
 
 #ifdef PROXYSQLGENAI
 	// MCP query rules
@@ -842,6 +844,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_config, "pgsql_firewall_whitelist_users", ADMIN_SQLITE_TABLE_PGSQL_FIREWALL_WHITELIST_USERS);
 	insert_into_tables_defs(tables_defs_config, "pgsql_firewall_whitelist_rules", ADMIN_SQLITE_TABLE_PGSQL_FIREWALL_WHITELIST_RULES);
 	insert_into_tables_defs(tables_defs_config, "pgsql_firewall_whitelist_sqli_fingerprints", ADMIN_SQLITE_TABLE_PGSQL_FIREWALL_WHITELIST_SQLI_FINGERPRINTS);
+	insert_into_tables_defs(tables_defs_config,"pgsql_servers_ssl_params", ADMIN_SQLITE_TABLE_PGSQL_SERVERS_SSL_PARAMS);
 	//
 
 	insert_into_tables_defs(tables_defs_config,"mysql_servers", ADMIN_SQLITE_TABLE_MYSQL_SERVERS);

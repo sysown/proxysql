@@ -3447,6 +3447,26 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		}
 	}
 
+	// PgSQL cluster query interception for pgsql_servers_ssl_params
+	if (sess->session_type == PROXYSQL_SESSION_ADMIN) {
+		if (!strncasecmp(CLUSTER_QUERY_PGSQL_SERVERS_SSL_PARAMS, query_no_space, strlen(CLUSTER_QUERY_PGSQL_SERVERS_SSL_PARAMS))) {
+			GloAdmin->pgsql_servers_wrlock();
+			resultset = PgHGM->get_current_pgsql_table("pgsql_servers_ssl_params");
+			GloAdmin->pgsql_servers_wrunlock();
+
+			if (resultset == nullptr) {
+				resultset = PgHGM->dump_table_pgsql("pgsql_servers_ssl_params");
+			}
+
+			if (resultset) {
+				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+				delete resultset;
+				run_query=false;
+				goto __run_query;
+			}
+		}
+	}
+
 	if (!strncasecmp(CLUSTER_QUERY_MYSQL_USERS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_USERS))) {
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) {
 			pthread_mutex_lock(&users_mutex);

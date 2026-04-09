@@ -289,7 +289,8 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	gtid_utils_unit-t \
 	genai_mysql_catalog_unit-t \
 	admin_disk_upgrade_unit-t \
-	glovars_unit-t
+	glovars_unit-t \
+	pgsql_servers_ssl_params_unit-t
 
 .PHONY: all
 all: $(UNIT_TESTS)
