@@ -9,5 +9,4 @@ Checks: >
   readability-braces-around-statements
 WarningsAsErrors: ''
 HeaderFilterRegex: 'include/|lib/'
-AnalyzeTemporaryDtors: false
 FormatStyle: none
