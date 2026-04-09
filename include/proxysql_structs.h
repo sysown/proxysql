@@ -357,13 +357,13 @@ struct pgsql_variable_st {
 	const char* alias[2];				// alias for the variable
 };
 
-#define IS_PGTRACKED_VAR_OPTION_SET(opt, flag) ((opt & flag) == flag)
-#define IS_PGTRACKED_VAR_OPTION_UNSET(opt, flag) ((opt & flag) == 0)
+#define IS_PGTRACKED_VAR_OPTION_SET(opt, flag) (((opt) & (flag)) == (flag))
+#define IS_PGTRACKED_VAR_OPTION_UNSET(opt, flag) (((opt) & (flag)) == 0)
 
-#define IS_PGTRACKED_VAR_OPTION_SET_QUOTE(opt)			 IS_PGTRACKED_VAR_OPTION_SET(opt.options, PGTRACKED_VAR_OPT_QUOTE)
-#define IS_PGTRACKED_VAR_OPTION_SET_SET_TRANSACTION(opt) IS_PGTRACKED_VAR_OPTION_SET(opt.options, PGTRACKED_VAR_OPT_SET_TRANSACTION)
-#define IS_PGTRACKED_VAR_OPTION_SET_PARAM_STATUS(opt)	 IS_PGTRACKED_VAR_OPTION_SET(opt.options, PGTRACKED_VAR_OPT_PARAM_STATUS)
-#define IS_PGTRACKED_VAR_OPTION_SET_NO_STRIP_VALUE(opt)	 IS_PGTRACKED_VAR_OPTION_SET(opt.options, PGTRACKED_VAR_OPT_NO_STRIP_VALUE)
+#define IS_PGTRACKED_VAR_OPTION_SET_QUOTE(opt)			 IS_PGTRACKED_VAR_OPTION_SET((opt).options, PGTRACKED_VAR_OPT_QUOTE)
+#define IS_PGTRACKED_VAR_OPTION_SET_SET_TRANSACTION(opt) IS_PGTRACKED_VAR_OPTION_SET((opt).options, PGTRACKED_VAR_OPT_SET_TRANSACTION)
+#define IS_PGTRACKED_VAR_OPTION_SET_PARAM_STATUS(opt)	 IS_PGTRACKED_VAR_OPTION_SET((opt).options, PGTRACKED_VAR_OPT_PARAM_STATUS)
+#define IS_PGTRACKED_VAR_OPTION_SET_NO_STRIP_VALUE(opt)	 IS_PGTRACKED_VAR_OPTION_SET((opt).options, PGTRACKED_VAR_OPT_NO_STRIP_VALUE)
 
 inline bool variable_name_exists(const pgsql_variable_st& var, const char* variable_name) {
 	

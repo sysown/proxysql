@@ -19,9 +19,9 @@
 #include "proxysql_typedefs.h"
 #include "query_digest_topk.h"
 
-#define PROCESSLIST_MAX_QUERY_LEN_DEFAULT    2 * 1024 * 1024  //  2 MiB
-#define PROCESSLIST_MAX_QUERY_LEN_MIN        1 * 1024         //  1 KiB
-#define PROCESSLIST_MAX_QUERY_LEN_MAX       32 * 1024 * 1024  // 32 MiB
+#define PROCESSLIST_MAX_QUERY_LEN_DEFAULT    (2 * 1024 * 1024)  //  2 MiB
+#define PROCESSLIST_MAX_QUERY_LEN_MIN        (1 * 1024)         //  1 KiB
+#define PROCESSLIST_MAX_QUERY_LEN_MAX       (32 * 1024 * 1024)  // 32 MiB
 
 typedef struct { uint32_t hash; uint32_t key; } t_symstruct;
 class ProxySQL_Config;
