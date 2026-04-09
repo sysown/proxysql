@@ -482,7 +482,7 @@ struct p_hg_counter {
 		myhgm_myconnpool_reset,
 		myhgm_myconnpool_destroy,
 		auto_increment_delay_multiplex,
-		__size
+		SIZE_
 	};
 };
 
@@ -490,12 +490,12 @@ struct p_hg_gauge {
 	enum metric {
 		server_connections_connected = 0,
 		client_connections_connected,
-		__size
+		SIZE_
 	};
 };
 
 struct p_hg_dyn_counter {
-	enum metric {
+	enum metric : uint8_t {
 		conn_pool_bytes_data_recv = 0,
 		conn_pool_bytes_data_sent,
 		connection_pool_conn_err,
@@ -504,22 +504,22 @@ struct p_hg_dyn_counter {
 		gtid_executed,
 		proxysql_mysql_error,
 		mysql_error,
-		__size
+		SIZE_
 	};
 };
 
-enum class p_mysql_error_type {
+enum class p_mysql_error_type : uint8_t {
 	mysql,
 	proxysql
 };
 
 struct p_hg_dyn_gauge {
-	enum metric {
+	enum metric : uint8_t {
 		connection_pool_conn_free = 0,
 		connection_pool_conn_used,
 		connection_pool_latency_us,
 		connection_pool_status,
-		__size
+		SIZE_
 	};
 };
 
@@ -915,12 +915,12 @@ class MySQL_HostGroups_Manager {
 		//////////////////////////////////////////////////////
 
 		/// Prometheus metrics arrays
-		std::array<prometheus::Counter*, p_hg_counter::__size> p_counter_array {};
-		std::array<prometheus::Gauge*, p_hg_gauge::__size> p_gauge_array {};
+		std::array<prometheus::Counter*, p_hg_counter::SIZE_> p_counter_array {};
+		std::array<prometheus::Gauge*, p_hg_gauge::SIZE_> p_gauge_array {};
 
 		// Prometheus dyn_metrics families arrays
-		std::array<prometheus::Family<prometheus::Counter>*, p_hg_dyn_counter::__size> p_dyn_counter_array {};
-		std::array<prometheus::Family<prometheus::Gauge>*, p_hg_dyn_gauge::__size> p_dyn_gauge_array {};
+		std::array<prometheus::Family<prometheus::Counter>*, p_hg_dyn_counter::SIZE_> p_dyn_counter_array {};
+		std::array<prometheus::Family<prometheus::Gauge>*, p_hg_dyn_gauge::SIZE_> p_dyn_gauge_array {};
 
 		/// Prometheus connection_pool metrics
 		std::map<std::string, prometheus::Counter*> p_conn_pool_bytes_data_recv_map {};
