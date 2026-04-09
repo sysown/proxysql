@@ -1,3 +1,0 @@
-/usr/include/openssl/macros.h:139:0: error: #error "The requested API level higher than the configured API compatibility level" [preprocessorErrorDirective]
-#  error "The requested API level higher than the configured API compatibility level"
-^
