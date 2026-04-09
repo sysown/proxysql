@@ -606,6 +606,7 @@ int main(int argc, char** argv) {
 
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		diag("Failed to connect to primary admin: %s", mysql_error(proxysql_admin));
+		mysql_close(proxysql_admin);
 		return exit_status();
 	}
 
@@ -625,7 +626,11 @@ int main(int argc, char** argv) {
 		char query[256];
 		snprintf(query, sizeof(query), t_check_checksum, checksum_name);
 
-		MYSQL_QUERY(proxysql_admin, query);
+		if (mysql_query(proxysql_admin, query)) {
+			diag("Query failed: %s — %s", query, mysql_error(proxysql_admin));
+			ok(false, "PostgreSQL checksum '%s' found in runtime_checksums_values", checksum_name);
+			continue;
+		}
 		MYSQL_RES* result = mysql_store_result(proxysql_admin);
 		if (!result) {
 			diag("Failed to store result from query: %s", query);
@@ -655,33 +660,25 @@ int main(int argc, char** argv) {
 	ok(res == EXIT_SUCCESS, "PostgreSQL checksum validation passed");
 
 	// Test basic PostgreSQL configuration is supported
-	MYSQL_QUERY(proxysql_admin, "SELECT 1 FROM pgsql_servers LIMIT 1");
-	MYSQL_RES* pgsql_servers_result = mysql_store_result(proxysql_admin);
-	ok(mysql_errno(proxysql_admin) == 0, "PostgreSQL servers table is accessible");
-	if (pgsql_servers_result) {
-		mysql_free_result(pgsql_servers_result);
-	}
-
-	MYSQL_QUERY(proxysql_admin, "SELECT 1 FROM pgsql_users LIMIT 1");
-	MYSQL_RES* pgsql_users_result = mysql_store_result(proxysql_admin);
-	ok(mysql_errno(proxysql_admin) == 0, "PostgreSQL users table is accessible");
-	if (pgsql_users_result) {
-		mysql_free_result(pgsql_users_result);
-	}
-
-	MYSQL_QUERY(proxysql_admin, "SELECT 1 FROM pgsql_query_rules LIMIT 1");
-	MYSQL_RES* pgsql_query_rules_result = mysql_store_result(proxysql_admin);
-	ok(mysql_errno(proxysql_admin) == 0, "PostgreSQL query rules table is accessible");
-	if (pgsql_query_rules_result) {
-		mysql_free_result(pgsql_query_rules_result);
-	}
-
-	// Check cluster variables exist
-	MYSQL_QUERY(proxysql_admin, "SHOW VARIABLES LIKE 'cluster_pgsql_%'");
-	MYSQL_RES* pgsql_cluster_vars_result = mysql_store_result(proxysql_admin);
-	ok(mysql_errno(proxysql_admin) == 0, "PostgreSQL cluster variables are accessible");
-	if (pgsql_cluster_vars_result) {
-		mysql_free_result(pgsql_cluster_vars_result);
+	{
+		struct table_check {
+			const char* query;
+			const char* desc;
+		};
+		const table_check checks[] = {
+			{"SELECT 1 FROM pgsql_servers LIMIT 1", "PostgreSQL servers table is accessible"},
+			{"SELECT 1 FROM pgsql_users LIMIT 1", "PostgreSQL users table is accessible"},
+			{"SELECT 1 FROM pgsql_query_rules LIMIT 1", "PostgreSQL query rules table is accessible"},
+			{"SHOW VARIABLES LIKE 'cluster_pgsql_%'", "PostgreSQL cluster variables are accessible"},
+		};
+		for (const auto& check : checks) {
+			int rc = mysql_query(proxysql_admin, check.query);
+			if (rc == 0) {
+				MYSQL_RES* res = mysql_store_result(proxysql_admin);
+				if (res) mysql_free_result(res);
+			}
+			ok(rc == 0, "%s", check.desc);
+		}
 	}
 
 	{

@@ -3933,19 +3933,19 @@ char * ProxySQL_Admin::get_variable(char *name) {
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"cluster_pgsql_query_rules_diffs_before_sync")) {
-		sprintf(intbuf,"%d",variables.cluster_pgsql_query_rules_diffs_before_sync);
+		snprintf(intbuf, sizeof(intbuf),"%d",variables.cluster_pgsql_query_rules_diffs_before_sync);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"cluster_pgsql_servers_diffs_before_sync")) {
-		sprintf(intbuf,"%d",variables.cluster_pgsql_servers_diffs_before_sync);
+		snprintf(intbuf, sizeof(intbuf),"%d",variables.cluster_pgsql_servers_diffs_before_sync);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"cluster_pgsql_users_diffs_before_sync")) {
-		sprintf(intbuf,"%d",variables.cluster_pgsql_users_diffs_before_sync);
+		snprintf(intbuf, sizeof(intbuf),"%d",variables.cluster_pgsql_users_diffs_before_sync);
 		return strdup(intbuf);
 	}
-		if (!strcasecmp(name,"cluster_pgsql_variables_diffs_before_sync")) {
-		sprintf(intbuf,"%d",variables.cluster_pgsql_variables_diffs_before_sync);
+	if (!strcasecmp(name,"cluster_pgsql_variables_diffs_before_sync")) {
+		snprintf(intbuf, sizeof(intbuf),"%d",variables.cluster_pgsql_variables_diffs_before_sync);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"cluster_mysql_servers_sync_algorithm")) {
@@ -4561,7 +4561,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 			return false;
 		}
 	}
-		if (!strcasecmp(name,"cluster_pgsql_variables_diffs_before_sync")) {
+	if (!strcasecmp(name,"cluster_pgsql_variables_diffs_before_sync")) {
 		int intv=atoi(value);
 		if (intv >= 0 && intv <= 1000) {
 			intv = checksum_variables.checksum_pgsql_variables ? intv : 0;
@@ -4817,7 +4817,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		}
 		return rt;
 	}
-		if (!strcasecmp(name,"cluster_pgsql_variables_save_to_disk")) {
+	if (!strcasecmp(name,"cluster_pgsql_variables_save_to_disk")) {
 		bool rt = false;
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.cluster_pgsql_variables_save_to_disk=true;
@@ -4967,7 +4967,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 			checksum_variables.checksum_pgsql_variables=false;
 			variables.cluster_pgsql_variables_diffs_before_sync = 0;
 			GloProxyCluster->cluster_pgsql_variables_diffs_before_sync = 0;
-			proxy_warning("Disabling deprecated 'admin-checksum_pgsql_variables', setting 'admin-cluster_pgsql_variables_diffs_before_sync=0'\n");
+			proxy_warning("Disabling 'admin-checksum_pgsql_variables', setting 'admin-cluster_pgsql_variables_diffs_before_sync=0'\n");
 			return true;
 		}
 		return false;
