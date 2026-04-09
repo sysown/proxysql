@@ -284,6 +284,7 @@ void internal_noise_prometheus_poller(const CommandLine& cl, const NoiseOptions&
 }
 
 void internal_noise_mysql_traffic_v2(const CommandLine& cl, const NoiseOptions& opt, std::atomic<bool>& stop) {
+    if (!cl.use_noise_mysql) { noise_log("[NOISE] MySQL Traffic v2: skipped (no MySQL infra)\n"); return; }
     std::string base_tablename = get_opt_str(opt, "tablename", "mysql_noise_test");
     int num_tables = get_opt_int(opt, "num_tables", 4);
     int num_connections = get_opt_int(opt, "num_connections", 20);
@@ -634,6 +635,7 @@ void internal_noise_random_stats_poller(const CommandLine& cl, const NoiseOption
 }
 
 void internal_noise_mysql_traffic(const CommandLine& cl, const NoiseOptions& opt, std::atomic<bool>& stop) {
+    if (!cl.use_noise_mysql) { noise_log("[NOISE] MySQL Traffic: skipped (no MySQL infra)\n"); return; }
     int interval_ms = get_opt_int(opt, "interval_ms", 100);
     int max_retries = get_opt_int(opt, "max_retries", 5);
     int retries = 0;
@@ -680,6 +682,7 @@ void internal_noise_mysql_traffic(const CommandLine& cl, const NoiseOptions& opt
 }
 
 void internal_noise_pgsql_traffic(const CommandLine& cl, const NoiseOptions& opt, std::atomic<bool>& stop) {
+    if (!cl.use_noise_pgsql) { noise_log("[NOISE] PgSQL Traffic: skipped (no PgSQL infra)\n"); return; }
     int interval_ms = get_opt_int(opt, "interval_ms", 100);
     int max_retries = get_opt_int(opt, "max_retries", 5);
     int retries = 0;
@@ -723,6 +726,7 @@ void internal_noise_pgsql_traffic(const CommandLine& cl, const NoiseOptions& opt
 }
 
 void internal_noise_pgsql_traffic_v2(const CommandLine& cl, const NoiseOptions& opt, std::atomic<bool>& stop) {
+    if (!cl.use_noise_pgsql) { noise_log("[NOISE] PgSQL Traffic v2: skipped (no PgSQL infra)\n"); return; }
     std::string base_tablename = get_opt_str(opt, "tablename", "pgsql_noise_test");
     int num_tables = get_opt_int(opt, "num_tables", 4);
     int num_connections = get_opt_int(opt, "num_connections", 20);

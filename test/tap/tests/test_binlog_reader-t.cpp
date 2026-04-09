@@ -98,11 +98,16 @@ const double MAX_FAILURE_PCT = 15.0;
 const uint32_t NUM_ROWS = 3000;
 const uint32_t NUM_CHECKS = 500;
 
+// Writer and reader hostgroups - configurable via environment variables WHG/RHG
+// Defaults to 1200/1201 for backward compatibility with legacy-binlog (PREFIX=12)
+static uint32_t WHG = 1200;
+static uint32_t RHG = 1201;
+
 map<uint32_t, pair<uint32_t,uint32_t>> extract_hosgtroups_stats(const vector<mysql_res_row>& conn_pool_stats) {
-	uint32_t hg_1200_queries = 0;
-	uint32_t hg_1200_sync_queries = 0;
-	uint32_t hg_1201_queries = 0;
-	uint32_t hg_1201_sync_queries = 0;
+	uint32_t hg_whg_queries = 0;
+	uint32_t hg_whg_sync_queries = 0;
+	uint32_t hg_rhg_queries = 0;
+	uint32_t hg_rhg_sync_queries = 0;
 
 	for (const auto& conn_pool_stats_row : conn_pool_stats) {
 		if (conn_pool_stats_row.size() < 3) {
@@ -115,16 +120,16 @@ map<uint32_t, pair<uint32_t,uint32_t>> extract_hosgtroups_stats(const vector<mys
 		const uint32_t queries = std::stol(conn_pool_stats_row[1]);
 		const uint32_t queries_gtid_sync = std::stol(conn_pool_stats_row[2]);
 
-		if (hg == 1200) {
-			hg_1200_queries += queries;
-			hg_1200_sync_queries += queries_gtid_sync;
-		} else if (hg == 1201) {
-			hg_1201_queries += queries;
-			hg_1201_sync_queries += queries_gtid_sync;
+		if (hg == WHG) {
+			hg_whg_queries += queries;
+			hg_whg_sync_queries += queries_gtid_sync;
+		} else if (hg == RHG) {
+			hg_rhg_queries += queries;
+			hg_rhg_sync_queries += queries_gtid_sync;
 		}
 	}
 
-	return { { 1200, { hg_1200_queries, hg_1200_sync_queries } }, { 1201, { hg_1201_queries, hg_1201_sync_queries } } };
+	return { { WHG, { hg_whg_queries, hg_whg_sync_queries } }, { RHG, { hg_rhg_queries, hg_rhg_sync_queries } } };
 }
 
 int perform_rnd_selects(const CommandLine& cl, uint32_t NUM) {
@@ -192,28 +197,28 @@ int check_gitd_tracking(const CommandLine& cl, MYSQL* proxysql_mysql, MYSQL* pro
 	}
 
 	auto hg_stats { extract_hosgtroups_stats(conn_pool_stats) };
-	uint32_t hg_1200_queries = hg_stats.at(1200).first;
-	uint32_t hg_1200_sync_queries = hg_stats.at(1200).second;;
-	uint32_t hg_1201_queries = hg_stats.at(1201).first;
-	uint32_t hg_1201_sync_queries = hg_stats.at(1201).second;;
+	uint32_t hg_whg_queries = hg_stats.at(WHG).first;
+	uint32_t hg_whg_sync_queries = hg_stats.at(WHG).second;;
+	uint32_t hg_rhg_queries = hg_stats.at(RHG).first;
+	uint32_t hg_rhg_sync_queries = hg_stats.at(RHG).second;;
 
-	uint32_t hg_1200_exp_queries =
+	uint32_t hg_whg_exp_queries =
 		3 +            // Database creation + Table DROP + Table creation
 		NUM_ROWS +     // Initial data load
 		NUM_CHECKS;    // Updates (matching number of checks)
-	uint32_t hg_1200_exp_sync_queries = NUM_CHECKS - 1;
+	uint32_t hg_whg_exp_sync_queries = NUM_CHECKS - 1;
 
-	bool hg_1200_checks = hg_1200_exp_queries == hg_1200_queries && hg_1200_sync_queries == hg_1200_exp_sync_queries;
-	bool hg_1201_checks = hg_1201_queries == NUM_CHECKS && hg_1201_sync_queries == NUM_CHECKS;
+	bool hg_whg_checks = hg_whg_exp_queries == hg_whg_queries && hg_whg_sync_queries == hg_whg_exp_sync_queries;
+	bool hg_rhg_checks = hg_rhg_queries == NUM_CHECKS && hg_rhg_sync_queries == NUM_CHECKS;
 
 	ok(
-		hg_1200_checks && hg_1201_checks,
+		hg_whg_checks && hg_rhg_checks,
 		"GTID based query routing: {"
-			" hg_1200: { exp_queries: %d, act_queries: %d, exp_sync_queries: %d, act_sync_queries: %d },"
-			" hg_1201: { exp_queries: %d, act_queries: %d, exp_sync_queries: %d, act_sync_queries: %d }"
+			" hg_%d: { exp_queries: %d, act_queries: %d, exp_sync_queries: %d, act_sync_queries: %d },"
+			" hg_%d: { exp_queries: %d, act_queries: %d, exp_sync_queries: %d, act_sync_queries: %d }"
 		" }",
-		hg_1200_exp_queries, hg_1200_queries, hg_1200_exp_sync_queries, hg_1200_sync_queries,
-		NUM_CHECKS, hg_1201_queries, NUM_CHECKS, hg_1201_queries
+		WHG, hg_whg_exp_queries, hg_whg_queries, hg_whg_exp_sync_queries, hg_whg_sync_queries,
+		RHG, NUM_CHECKS, hg_rhg_queries, NUM_CHECKS, hg_rhg_queries
 	);
 
 	// Reset connection pool stats
@@ -233,19 +238,20 @@ int check_gitd_tracking(const CommandLine& cl, MYSQL* proxysql_mysql, MYSQL* pro
 
 	// Extract stats
 	hg_stats = extract_hosgtroups_stats(conn_pool_stats);
-	hg_1200_queries = hg_stats.at(1200).first;
-	hg_1200_sync_queries = hg_stats.at(1200).second;;
-	hg_1201_queries = hg_stats.at(1201).first;
-	hg_1201_sync_queries = hg_stats.at(1201).second;;
+	hg_whg_queries = hg_stats.at(WHG).first;
+	hg_whg_sync_queries = hg_stats.at(WHG).second;;
+	hg_rhg_queries = hg_stats.at(RHG).first;
+	hg_rhg_sync_queries = hg_stats.at(RHG).second;;
 
-	uint32_t hg_1201_exp_queries = NUM_CHECKS / 5;
+	uint32_t hg_rhg_exp_queries = NUM_CHECKS / 5;
 	ok(
-		hg_1200_queries == 0 && hg_1200_sync_queries == 0 && hg_1201_queries == hg_1201_exp_queries && hg_1201_sync_queries == 0,
-		"Queries should only be executed in 'HG 1201' and no GTID sync should take place: {"
-		" hg_1200: { exp_queries: 0, act_queries: %d, exp_sync_queries: 0, act_sync_queries: %d },"
-		" hg_1201: { exp_queries: %d, act_queries: %d, exp_sync_queries: 0, act_sync_queries: %d },"
+		hg_whg_queries == 0 && hg_whg_sync_queries == 0 && hg_rhg_queries == hg_rhg_exp_queries && hg_rhg_sync_queries == 0,
+		"Queries should only be executed in 'HG %d' and no GTID sync should take place: {"
+		" hg_%d: { exp_queries: 0, act_queries: %d, exp_sync_queries: 0, act_sync_queries: %d },"
+		" hg_%d: { exp_queries: %d, act_queries: %d, exp_sync_queries: 0, act_sync_queries: %d },"
 		" }",
-		hg_1200_queries, hg_1200_sync_queries, hg_1201_exp_queries, hg_1201_queries, hg_1201_sync_queries
+		RHG,
+		WHG, hg_whg_queries, hg_whg_sync_queries, RHG, hg_rhg_exp_queries, hg_rhg_queries, hg_rhg_sync_queries
 	);
 
 	return EXIT_SUCCESS;
@@ -278,6 +284,12 @@ int main(int argc, char** argv) {
 	//   - NUM_CHECKS: %d
 	// ================================================================================
 	CommandLine cl;
+
+	// Read hostgroups from environment (set by infra .env), default to 1200/1201 for legacy-binlog
+	const char* whg_env = getenv("BINLOG_WHG");
+	const char* rhg_env = getenv("BINLOG_RHG");
+	if (whg_env) WHG = std::stoul(whg_env);
+	if (rhg_env) RHG = std::stoul(rhg_env);
 
 	// Print test configuration for debugging
 	fprintf(stderr, "\n");

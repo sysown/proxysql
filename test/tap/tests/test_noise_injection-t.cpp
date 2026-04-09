@@ -24,6 +24,12 @@ int main(int argc, char** argv) {
 	// Force noise to be enabled for this test
 	cl.use_noise = true;
 
+	// Set protocol-specific noise flags based on available infrastructure
+	const char* mysql_infra = getenv("DEFAULT_MYSQL_INFRA");
+	const char* pgsql_infra = getenv("DEFAULT_PGSQL_INFRA");
+	cl.use_noise_mysql = (mysql_infra && mysql_infra[0] != '\0');
+	cl.use_noise_pgsql = (pgsql_infra && pgsql_infra[0] != '\0');
+
 	spawn_internal_noise(cl, internal_noise_admin_pinger);
 	spawn_internal_noise(cl, internal_noise_stats_poller);
 	spawn_internal_noise(cl, internal_noise_prometheus_poller);
