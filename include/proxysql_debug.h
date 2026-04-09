@@ -190,9 +190,9 @@ class Timer {
 	} while(0)
 
 struct p_debug_dyn_counter {
-	enum metric {
+	enum metric : uint8_t {
 		proxysql_message_count = 0,
-		__size
+		SIZE_
 	};
 };
 

@@ -33,7 +33,7 @@ using prometheus::Gauge;
 template <typename map_idx_enum, typename counters_enum, typename metrics_map>
 void init_prometheus_counter_array(
 	const metrics_map& map,
-	std::array<prometheus::Counter*, counters_enum::__size>& counter_array
+	std::array<prometheus::Counter*, counters_enum::SIZE_>& counter_array
 ) {
 	for (const auto& metric : std::get<map_idx_enum::counters>(map)) {
 		const auto& tg_metric = std::get<0>(metric);
@@ -91,7 +91,7 @@ void init_prometheus_counter_array(
 template <typename map_idx_enum, typename gauges_enum, typename metrics_map>
 void init_prometheus_gauge_array(
 	const metrics_map& map,
-	std::array<prometheus::Gauge*, gauges_enum::__size>& gauge_array
+	std::array<prometheus::Gauge*, gauges_enum::SIZE_>& gauge_array
 ) {
 	for (const auto& metric : std::get<map_idx_enum::gauges>(map)) {
 		const auto& tg_metric = std::get<0>(metric);
@@ -149,7 +149,7 @@ void init_prometheus_gauge_array(
 template <typename map_idx_enum, typename dyn_counter_enum, typename metrics_map>
 void init_prometheus_dyn_counter_array(
 	const metrics_map& map,
-	std::array<prometheus::Family<prometheus::Counter>*, dyn_counter_enum::__size>& dyn_counter_array
+	std::array<prometheus::Family<prometheus::Counter>*, dyn_counter_enum::SIZE_>& dyn_counter_array
 ) {
 	for (const auto& metric : std::get<map_idx_enum::dyn_counters>(map)) {
 		const auto& tg_metric = std::get<0>(metric);
@@ -205,7 +205,7 @@ void init_prometheus_dyn_counter_array(
 template <typename map_idx_enum, typename gauges_enum, typename metrics_map>
 void init_prometheus_dyn_gauge_array(
 	const metrics_map& map,
-	std::array<prometheus::Family<prometheus::Gauge>*, gauges_enum::__size>& dyn_gauge_array
+	std::array<prometheus::Family<prometheus::Gauge>*, gauges_enum::SIZE_>& dyn_gauge_array
 ) {
 	for (const auto& metric : std::get<map_idx_enum::dyn_gauges>(map)) {
 		const auto& tg_metric = std::get<0>(metric);

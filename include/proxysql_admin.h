@@ -65,15 +65,15 @@ class ProxySQL_External_Scheduler {
 };
 
 struct p_admin_counter {
-	enum metric {
+	enum metric : uint8_t {
 		uptime = 0,
 		jemalloc_allocated,
-		__size
+		SIZE_
 	};
 };
 
 struct p_admin_gauge {
-	enum metric {
+	enum metric : uint8_t {
 		// memory metrics
 		connpool_memory_bytes = 0,
 		sqlite3_memory_bytes,
@@ -105,20 +105,20 @@ struct p_admin_gauge {
 		version_info,
 		mysql_listener_paused,
 		pgsql_listener_paused,
-		__size
+		SIZE_
 	};
 };
 
 struct p_admin_dyn_counter {
-	enum metric {
-		__size
+	enum metric : uint8_t {
+		SIZE_
 	};
 };
 
 struct p_admin_dyn_gauge {
-	enum metric {
+	enum metric : uint8_t {
 		proxysql_servers_clients_status_last_seen_at = 0,
-		__size
+		SIZE_
 	};
 };
 
@@ -439,9 +439,9 @@ class ProxySQL_Admin {
 	unsigned long long last_p_memory_metrics_ts;
 
 	struct {
-		std::array<prometheus::Counter*, p_admin_counter::__size> p_counter_array {};
-		std::array<prometheus::Gauge*, p_admin_gauge::__size> p_gauge_array {};
-		std::array<prometheus::Family<prometheus::Gauge>*, p_admin_dyn_gauge::__size> p_dyn_gauge_array {};
+		std::array<prometheus::Counter*, p_admin_counter::SIZE_> p_counter_array {};
+		std::array<prometheus::Gauge*, p_admin_gauge::SIZE_> p_gauge_array {};
+		std::array<prometheus::Family<prometheus::Gauge>*, p_admin_dyn_gauge::SIZE_> p_dyn_gauge_array {};
 
 		std::map<std::string, prometheus::Gauge*> p_proxysql_servers_clients_status_map {};
 	} metrics;

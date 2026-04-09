@@ -15,7 +15,7 @@
 #define DEFAULT_purge_threshold_pct_max 90
 
 struct p_qc_counter {
-	enum metric {
+	enum metric : uint8_t {
 		query_cache_count_get = 0,
 		query_cache_count_get_ok,
 		query_cache_count_set,
@@ -23,14 +23,14 @@ struct p_qc_counter {
 		query_cache_bytes_out,
 		query_cache_purged,
 		query_cache_entries,
-		__size
+		SIZE_
 	};
 };
 
 struct p_qc_gauge {
-	enum metric {
+	enum metric : uint8_t {
 		query_cache_memory_bytes = 0,
-		__size
+		SIZE_
 	};
 };
 
@@ -211,8 +211,8 @@ private:
 	void purgeHash(uint64_t QCnow_ms, unsigned int curr_pct);
 
 	struct {
-		std::array<prometheus::Counter*, p_qc_counter::__size> p_counter_array{};
-		std::array<prometheus::Gauge*, p_qc_gauge::__size> p_gauge_array{};
+		std::array<prometheus::Counter*, p_qc_counter::SIZE_> p_counter_array{};
+		std::array<prometheus::Gauge*, p_qc_gauge::SIZE_> p_gauge_array{};
 	} metrics;
 };
 

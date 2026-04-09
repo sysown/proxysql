@@ -297,7 +297,7 @@ struct p_th_counter {
 		mysql_killed_backend_connections,
 		mysql_killed_backend_queries,
 		client_host_error_killed_connections,
-		__size
+		SIZE_
 	};
 };
 
@@ -327,7 +327,7 @@ struct p_th_gauge {
 		mysql_monitor_replication_lag_interval,
 		mysql_monitor_replication_lag_timeout,
 		mysql_monitor_history,
-		__size
+		SIZE_
 
 	};
 };
@@ -618,8 +618,8 @@ class MySQL_Threads_Handler
 		unsigned int mirror_sessions_current;
 		int threads_initialized = 0;
 		/// Prometheus metrics arrays
-		std::array<prometheus::Counter*, p_th_counter::__size> p_counter_array {};
-		std::array<prometheus::Gauge*, p_th_gauge::__size> p_gauge_array {};
+		std::array<prometheus::Counter*, p_th_counter::SIZE_> p_counter_array {};
+		std::array<prometheus::Gauge*, p_th_gauge::SIZE_> p_gauge_array {};
 	} status_variables;
 
 	std::atomic<bool> bootstrapping_listeners;

@@ -341,7 +341,7 @@ const std::tuple<debug_dyn_counter_vector> debug_metrics_map = std::make_tuple(
 );
 
 std::map<std::string, prometheus::Counter*> p_proxysql_messages_map {};
-std::array<prometheus::Family<prometheus::Counter>*, p_debug_dyn_counter::__size> p_debug_dyn_counter_array {};
+std::array<prometheus::Family<prometheus::Counter>*, p_debug_dyn_counter::SIZE_> p_debug_dyn_counter_array {};
 std::mutex msg_stats_mutex {};
 
 const int ProxySQL_MSG_STATS_FIELD_NUM = 7;
