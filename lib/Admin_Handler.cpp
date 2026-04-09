@@ -5346,6 +5346,8 @@ __end_show_commands:
 			if (SPA->dispatch_plugin_admin_command(sess, query_no_space)) {
 				return false;
 			}
+			SPA->send_error_msg_to_client(sess, (char*)"MYSQLX plugin is not loaded");
+			return false;
 		}
 	}
 

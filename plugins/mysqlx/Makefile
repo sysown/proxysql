@@ -24,7 +24,7 @@ PROTO_OBJS := $(patsubst $(PROTO_DIR)/%.pb.cc,$(ODIR)/%.pb.o,$(PROTO_SRCS))
 IDIRS := -I$(PROXYSQL_IDIR) -I$(PLUGIN_DIR)/include -I$(SQLITE3_IDIR) -I$(PROTO_DIR) -I$(SSL_IDIR)
 
 OPTZ ?= -O2 -ggdb
-CXXFLAGS := $(STDCPP) -fPIC $(OPTZ) $(WGCOV) $(WASAN)
+CXXFLAGS := $(STDCPP) -fPIC $(OPTZ) $(WGCOV) $(WASAN) -pthread
 
 .DEFAULT_GOAL := all
 
@@ -50,7 +50,7 @@ $(ODIR)/%.pb.o: $(PROTO_DIR)/%.pb.cc | $(ODIR)
 	$(CXX) -c -o $@ $< $(CXXFLAGS) -I$(PROTO_DIR) -w
 
 $(PLUGIN_SO): $(OBJS) $(PROTO_OBJS)
-	$(CXX) -shared -o $@ $^ $(CXXFLAGS) -lprotobuf -lssl -lcrypto
+	$(CXX) -shared -o $@ $^ $(CXXFLAGS) -pthread -lprotobuf -lssl -lcrypto
 
 .PHONY: all
 all: $(PLUGIN_SO)
