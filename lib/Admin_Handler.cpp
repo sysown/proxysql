@@ -5344,10 +5344,12 @@ __end_show_commands:
 			is_admin_command_or_alias(SAVE_MYSQLX_BACKEND_ENDPOINTS_TO_MEMORY, query_no_space, query_no_space_length)
 		) {
 			if (SPA->dispatch_plugin_admin_command(sess, query_no_space)) {
-				return false;
+				run_query = false;
+				goto __run_query;
 			}
 			SPA->send_error_msg_to_client(sess, (char*)"MYSQLX plugin is not loaded");
-			return false;
+			run_query = false;
+			goto __run_query;
 		}
 	}
 
