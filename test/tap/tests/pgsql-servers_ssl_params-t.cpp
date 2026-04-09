@@ -16,6 +16,7 @@
 #include <vector>
 #include <cstdlib>
 #include "libpq-fe.h"
+#include "mysql.h"
 #include "command_line.h"
 #include "tap.h"
 #include "utils.h"
@@ -133,6 +134,28 @@ static long getMonitorValue(PGconn* admin, const char* varname) {
 	long v = atol(PQgetvalue(res, 0, 0));
 	PQclear(res);
 	return v;
+}
+
+static long getConnectInterval(PGconn* admin) {
+	PGresult* res = PQexec(admin,
+		"SELECT Variable_Value FROM global_variables WHERE Variable_Name='pgsql-monitor_connect_interval';"
+	);
+	if (PQresultStatus(res) != PGRES_TUPLES_OK || PQntuples(res) == 0) {
+		PQclear(res);
+		return 60000;
+	}
+	long v = atol(PQgetvalue(res, 0, 0));
+	PQclear(res);
+	return v;
+}
+
+static bool setConnectInterval(PGconn* admin, int value) {
+	std::stringstream q;
+	q << "SET pgsql-monitor_connect_interval=" << value << ";";
+	bool ok1 = exec_ok(admin, q.str().c_str());
+	bool ok2 = exec_ok(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
+	usleep(10000);
+	return ok1 && ok2;
 }
 
 // ============================================================================
@@ -432,7 +455,8 @@ static void test_monitor_ssl_with_per_server_params(PGconn* admin) {
 	long initial_ssl = getMonitorValue(admin, "PgSQL_Monitor_ssl_connections_OK");
 	diag("Initial PgSQL_Monitor_ssl_connections_OK: %ld", initial_ssl);
 
-	usleep(3000000); // 3 seconds for monitor cycles
+	// Wait for at least 2 monitor cycles (interval was set to 2000ms in main)
+	usleep(5000000); // 5 seconds
 
 	long after_ssl = getMonitorValue(admin, "PgSQL_Monitor_ssl_connections_OK");
 	diag("After PgSQL_Monitor_ssl_connections_OK: %ld", after_ssl);
@@ -478,7 +502,7 @@ static void test_monitor_uses_per_server_row(PGconn* admin) {
 	long ok_before = getMonitorValue(admin, "PgSQL_Monitor_ssl_connections_OK");
 	diag("With TLSv1 per-server pin, ssl OK before wait: %ld", ok_before);
 
-	usleep(3000000); // 3 seconds — multiple monitor cycles
+	usleep(5000000); // 5 seconds — multiple monitor cycles
 
 	long ok_after = getMonitorValue(admin, "PgSQL_Monitor_ssl_connections_OK");
 	diag("With TLSv1 per-server pin, ssl OK after wait:  %ld (delta=%ld)",
@@ -495,7 +519,7 @@ static void test_monitor_uses_per_server_row(PGconn* admin) {
 	exec_ok(admin, "LOAD PGSQL SERVERS TO RUNTIME");
 
 	long recover_before = getMonitorValue(admin, "PgSQL_Monitor_ssl_connections_OK");
-	usleep(3000000);
+	usleep(5000000);
 	long recover_after = getMonitorValue(admin, "PgSQL_Monitor_ssl_connections_OK");
 	diag("After cleanup, ssl OK recovered from %ld to %ld",
 		recover_before, recover_after);
@@ -506,11 +530,85 @@ static void test_monitor_uses_per_server_row(PGconn* admin) {
 }
 
 // ============================================================================
+// Part 3: Cluster Query Support
+// ============================================================================
+
+/**
+ * @brief Test that the PROXY_SELECT cluster query for pgsql_servers_ssl_params
+ *        returns correct data via the MySQL admin port.
+ *
+ * Cluster sync uses MySQL-protocol admin connections. The PROXY_SELECT query
+ * is intercepted by Admin_Handler and returns data from
+ * get_current_pgsql_table() or dump_table_pgsql().
+ */
+static void test_cluster_query_ssl_params(PGconn* pgsql_admin) {
+	cleanup_ssl_params(pgsql_admin);
+
+	// Insert test data via PgSQL admin and load to runtime
+	exec_ok(pgsql_admin,
+		"INSERT INTO pgsql_servers_ssl_params "
+		"(hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_protocol_version_range, comment) "
+		"VALUES ('cluster-host', 5432, 'clusteruser', '/certs/ca.crt', '/certs/cert.crt', "
+		"'/certs/key.pem', 'TLSv1.2-TLSv1.3', 'cluster test')");
+	exec_ok(pgsql_admin, "LOAD PGSQL SERVERS TO RUNTIME");
+
+	// Connect to MySQL admin port and execute the cluster query
+	MYSQL* mysql_admin = mysql_init(NULL);
+	if (!mysql_real_connect(mysql_admin, cl.admin_host, cl.admin_username,
+			cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+		ok(0, "Cluster query: MySQL admin connection failed: %s", mysql_error(mysql_admin));
+		ok(0, "Cluster query: skipping result check");
+		ok(0, "Cluster query: skipping field check");
+		mysql_close(mysql_admin);
+		cleanup_ssl_params(pgsql_admin);
+		return;
+	}
+
+	ok(1, "Cluster query: MySQL admin connection established");
+
+	// Execute the PROXY_SELECT cluster query
+	const char* cluster_query =
+		"PROXY_SELECT hostname, port, username, ssl_ca, ssl_cert, ssl_key, "
+		"ssl_crl, ssl_crlpath, ssl_protocol_version_range, comment "
+		"FROM runtime_pgsql_servers_ssl_params ORDER BY hostname, port, username";
+
+	int rc = mysql_query(mysql_admin, cluster_query);
+	if (rc != 0) {
+		ok(0, "Cluster query: PROXY_SELECT failed: %s", mysql_error(mysql_admin));
+		ok(0, "Cluster query: skipping field check");
+		mysql_close(mysql_admin);
+		cleanup_ssl_params(pgsql_admin);
+		return;
+	}
+
+	MYSQL_RES* result = mysql_store_result(mysql_admin);
+	ok(result != NULL && mysql_num_rows(result) == 1,
+		"Cluster query: PROXY_SELECT returns 1 row");
+
+	if (result && mysql_num_rows(result) == 1) {
+		MYSQL_ROW row = mysql_fetch_row(result);
+		bool hostname_ok = (row[0] && strcmp(row[0], "cluster-host") == 0);
+		bool ssl_ca_ok = (row[3] && strcmp(row[3], "/certs/ca.crt") == 0);
+		bool tls_range_ok = (row[8] && strcmp(row[8], "TLSv1.2-TLSv1.3") == 0);
+
+		ok(hostname_ok && ssl_ca_ok && tls_range_ok,
+			"Cluster query: returned row has correct hostname, ssl_ca, and ssl_protocol_version_range");
+	} else {
+		ok(0, "Cluster query: skipping field check (no rows)");
+	}
+
+	if (result) mysql_free_result(result);
+	mysql_close(mysql_admin);
+
+	cleanup_ssl_params(pgsql_admin);
+}
+
+// ============================================================================
 // main
 // ============================================================================
 
 int main(int argc, char** argv) {
-	plan(34);
+	plan(37);
 
 	if (cl.getEnv()) {
 		BAIL_OUT("Failed to get environment variables");
@@ -546,8 +644,43 @@ int main(int argc, char** argv) {
 	test_tls_version_pin_causes_failure(a);
 	test_per_server_overrides_global(a);
 	test_remove_per_server_fallback_to_global(a);
+
+	// Configure monitor: use 'postgres' user which is accepted by the
+	// backend, set a tight connect_interval so cycles run within the test
+	// wait window. Restore original values afterwards.
+	long original_connect_interval = getConnectInterval(a);
+	std::string original_monitor_username = exec_scalar(a,
+		"SELECT Variable_Value FROM global_variables WHERE Variable_Name='pgsql-monitor_username'");
+	std::string original_monitor_password = exec_scalar(a,
+		"SELECT Variable_Value FROM global_variables WHERE Variable_Name='pgsql-monitor_password'");
+	diag("Original monitor: user=%s interval=%ld ms",
+		original_monitor_username.c_str(), original_connect_interval);
+
+	exec_ok(a, "SET pgsql-monitor_username='postgres'");
+	exec_ok(a, "SET pgsql-monitor_password='postgres'");
+	setConnectInterval(a, 2000);
+	exec_ok(a, "UPDATE pgsql_servers SET use_ssl=1");
+	exec_ok(a, "LOAD PGSQL SERVERS TO RUNTIME");
+	usleep(3000000); // let the monitor pick up the new settings
+
 	test_monitor_ssl_with_per_server_params(a);
 	test_monitor_uses_per_server_row(a);
+
+	// Restore original monitor settings
+	{
+		std::stringstream q;
+		q << "SET pgsql-monitor_username='" << original_monitor_username << "'";
+		exec_ok(a, q.str().c_str());
+		q.str("");
+		q << "SET pgsql-monitor_password='" << original_monitor_password << "'";
+		exec_ok(a, q.str().c_str());
+	}
+	setConnectInterval(a, (int)original_connect_interval);
+
+	// Part 3: Cluster query support
+	diag("---- Part 3: Cluster Query Support ----");
+	test_cluster_query_ssl_params(a);
+
 	// Cleanup
 	remove_bogus_cert_file();
 	cleanup_ssl_params(a);
