@@ -14,6 +14,19 @@ ifndef GIT_VERSION_BASE
     $(error GIT_VERSION_BASE is not set)
 endif
 
+.PHONY: lint lint-generate-cdb lint-run
+
+lint-generate-cdb:
+	@echo "Generating compile_commands.json (requires bear)"
+	./scripts/lint/generate-compile-commands.sh
+
+lint-run:
+	@echo "Running local linters"
+	./scripts/lint/run-local.sh
+
+lint: lint-generate-cdb lint-run
+	@echo "Done lint"
+
 ### RELEASE TIERS & FEATURE FLAGS:
 ### ProxySQL supports three distinct release tiers built from the same codebase.
 ### The tier is controlled by environment variables which enable feature guards
