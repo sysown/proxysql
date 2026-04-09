@@ -103,8 +103,8 @@ class PgSQLServers_SslParams : public Servers_SslParams {
 
 	private:
 	// Parse tls_version into ssl_min_protocol_version / ssl_max_protocol_version.
-	// Format: "MIN-MAX" for a range, or a single token to pin both ends.
-	// Empty or malformed values leave both fields empty.
+	// Format: "MIN-MAX" for a range, "MIN-" for min-only, "-MAX" for max-only,
+	// or a single token to pin both ends. A bare "-" is malformed and logged.
 	void parse_tls_version() {
 		if (tls_version.empty()) return;
 		size_t dash_pos = tls_version.find('-');
@@ -115,10 +115,13 @@ class PgSQLServers_SslParams : public Servers_SslParams {
 		}
 		string min_ver = tls_version.substr(0, dash_pos);
 		string max_ver = tls_version.substr(dash_pos + 1);
-		if (!min_ver.empty() && !max_ver.empty()) {
-			ssl_min_protocol_version = min_ver;
-			ssl_max_protocol_version = max_ver;
+		if (min_ver.empty() && max_ver.empty()) {
+			proxy_warning("Malformed ssl_protocol_version_range '%s' for %s:%d — ignoring\n",
+				tls_version.c_str(), hostname.c_str(), port);
+			return;
 		}
+		ssl_min_protocol_version = min_ver;
+		ssl_max_protocol_version = max_ver;
 	}
 };
 

@@ -160,15 +160,35 @@ static void test_pgsql_derived_class() {
 	ok(empty.ssl_min_protocol_version == "", "PgSQL derived: empty tls_version -> empty min");
 	ok(empty.ssl_max_protocol_version == "", "PgSQL derived: empty tls_version -> empty max");
 
-	// Malformed (one side missing) leaves both empty
-	PgSQLServers_SslParams bad(
+	// One-sided range: min-only ("TLSv1.2-") sets min, leaves max empty
+	PgSQLServers_SslParams min_only(
 		string("bh"), 5432, string(""),
 		string(""), string(""), string(""),
 		string(""), string(""),
 		string("TLSv1.2-"), string("")
 	);
-	ok(bad.ssl_min_protocol_version == "", "PgSQL derived: malformed -> empty min");
-	ok(bad.ssl_max_protocol_version == "", "PgSQL derived: malformed -> empty max");
+	ok(min_only.ssl_min_protocol_version == "TLSv1.2", "PgSQL derived: min-only range -> min set");
+	ok(min_only.ssl_max_protocol_version == "", "PgSQL derived: min-only range -> max empty");
+
+	// One-sided range: max-only ("-TLSv1.3") sets max, leaves min empty
+	PgSQLServers_SslParams max_only(
+		string("bh2"), 5432, string(""),
+		string(""), string(""), string(""),
+		string(""), string(""),
+		string("-TLSv1.3"), string("")
+	);
+	ok(max_only.ssl_min_protocol_version == "", "PgSQL derived: max-only range -> min empty");
+	ok(max_only.ssl_max_protocol_version == "TLSv1.3", "PgSQL derived: max-only range -> max set");
+
+	// Bare dash is malformed: both stay empty (logged as warning)
+	PgSQLServers_SslParams bare_dash(
+		string("bh3"), 5432, string(""),
+		string(""), string(""), string(""),
+		string(""), string(""),
+		string("-"), string("")
+	);
+	ok(bare_dash.ssl_min_protocol_version == "", "PgSQL derived: bare dash -> empty min");
+	ok(bare_dash.ssl_max_protocol_version == "", "PgSQL derived: bare dash -> empty max");
 }
 
 static void test_pgsql_storable_in_map() {
@@ -314,7 +334,7 @@ static void test_lookup_different_host() {
 // ============================================================================
 
 int main() {
-	plan(67);
+	plan(71);
 
 	test_init_minimal();
 

@@ -49,6 +49,14 @@ Controls which TLS protocol versions are allowed for backend connections. This m
 
 Allows connections using any TLS version from `min_version` to `max_version` inclusive.
 
+**Min-only:** `<min_version>-`
+
+Sets a minimum TLS version with no upper bound (libpq default max applies).
+
+**Max-only:** `-<max_version>`
+
+Sets a maximum TLS version. The minimum defaults to libpq's built-in default (`TLSv1.2`).
+
 **Single version (pin):** `<version>`
 
 Pins to exactly that TLS version. Both min and max are set to the same value.
@@ -56,6 +64,8 @@ Pins to exactly that TLS version. Both min and max are set to the same value.
 **Empty string:** `''`
 
 Uses libpq defaults (no restriction).
+
+A bare `-` is treated as malformed and ignored (a warning is logged).
 
 ### Valid Version Tokens
 
@@ -70,6 +80,8 @@ Uses libpq defaults (no restriction).
 | `TLSv1.2-TLSv1.3` | Allow TLS 1.2 and TLS 1.3 |
 | `TLSv1.3` | Pin to TLS 1.3 only |
 | `TLSv1.2-TLSv1.2` | Pin to TLS 1.2 only (equivalent to `TLSv1.2`) |
+| `TLSv1.2-` | Require at least TLS 1.2 (max defaults to highest OpenSSL supports) |
+| `-TLSv1.3` | Allow up to TLS 1.3 (min defaults to libpq's built-in `TLSv1.2`) |
 | `''` (empty) | Use libpq defaults |
 
 ## Lookup Hierarchy
