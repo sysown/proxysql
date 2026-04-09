@@ -25,6 +25,11 @@ struct ProxySQL_PluginCommandContext {
 	SQLite3DB *statsdb;
 };
 
+// NOTE: ProxySQL_PluginCommandResult contains std::string. Plugins MUST
+// be compiled with the same C++ standard library (same compiler, same
+// -std= flag, same libstdc++/libc++ version) as the ProxySQL core.
+// This is guaranteed when plugins are built within the ProxySQL build
+// tree. Third-party plugins must match the core's build environment.
 struct ProxySQL_PluginCommandResult {
 	int error_code;
 	uint64_t rows_affected;

@@ -186,9 +186,13 @@ bool MysqlxFrontendSession::run_handshake_and_auth(MysqlxConfigStore& config_sto
 
 					// For PLAIN, verify password against backend_password using
 					// constant-time comparison to prevent timing side-channels.
-					if (password.size() != identity_.backend_password.size() ||
-					    CRYPTO_memcmp(password.data(), identity_.backend_password.data(),
-					                  password.size()) != 0) {
+					bool pwd_match = false;
+					if (!password.empty() && !identity_.backend_password.empty() &&
+					    password.size() == identity_.backend_password.size()) {
+						pwd_match = CRYPTO_memcmp(password.data(), identity_.backend_password.data(),
+						                          password.size()) == 0;
+					}
+					if (!pwd_match) {
 						mysqlx_send_error(client_fd_, 1045,
 							"Access denied for user '" + username + "'");
 						return false;
