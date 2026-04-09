@@ -8,6 +8,7 @@
 #include <arpa/inet.h>
 #include <cerrno>
 #include <cstring>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
@@ -36,37 +37,47 @@ bool MysqlxBackendSession::connect(const MysqlxResolvedIdentity& identity,
 		return false;
 	}
 
-	// TCP connect to backend X port.
-	backend_fd_ = socket(AF_INET, SOCK_STREAM, 0);
-	if (backend_fd_ < 0) {
-		err = "socket() failed: ";
-		err += strerror(errno);
+	std::string port_str = std::to_string(endpoint.mysqlx_port);
+	struct addrinfo hints {}, *result = nullptr;
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_protocol = IPPROTO_TCP;
+
+	int gai_rc = getaddrinfo(endpoint.hostname.c_str(), port_str.c_str(), &hints, &result);
+	if (gai_rc != 0) {
+		err = "mysqlx backend: cannot resolve '";
+		err += endpoint.hostname;
+		err += "': ";
+		err += gai_strerror(gai_rc);
 		return false;
 	}
 
-	sockaddr_in addr {};
-	addr.sin_family = AF_INET;
-	addr.sin_port = htons(static_cast<uint16_t>(endpoint.mysqlx_port));
+	int fd = -1;
+	for (struct addrinfo* rp = result; rp != nullptr; rp = rp->ai_next) {
+		fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+		if (fd < 0) continue;
 
-	if (inet_pton(AF_INET, endpoint.hostname.c_str(), &addr.sin_addr) != 1) {
-		err = "invalid backend hostname: " + endpoint.hostname;
-		close(backend_fd_);
-		backend_fd_ = -1;
+		int flag = 1;
+		setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+
+		struct timeval tv { 10, 0 };
+		setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+		setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+		if (::connect(fd, rp->ai_addr, rp->ai_addrlen) == 0) {
+			break;
+		}
+		close(fd);
+		fd = -1;
+	}
+	freeaddrinfo(result);
+
+	if (fd < 0) {
+		err = "mysqlx backend: connect failed to ";
+		err += endpoint.hostname + ":" + std::to_string(endpoint.mysqlx_port);
 		return false;
 	}
-
-	// Set socket timeouts to prevent indefinite blocking.
-	struct timeval tv { 10, 0 }; // 10 second timeout for reads and writes
-	setsockopt(backend_fd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-	setsockopt(backend_fd_, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-
-	if (::connect(backend_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
-		err = "connect() to " + endpoint.hostname + ":" +
-		      std::to_string(endpoint.mysqlx_port) + " failed: " + strerror(errno);
-		close(backend_fd_);
-		backend_fd_ = -1;
-		return false;
-	}
+	backend_fd_ = fd;
 
 	// Authenticate to the backend MySQL X server.
 	std::string backend_user = identity.backend_username;

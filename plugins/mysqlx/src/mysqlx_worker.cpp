@@ -7,9 +7,12 @@
 #include "sqlite3db.h"
 
 #include <arpa/inet.h>
+#include <cstdlib>
 #include <cerrno>
 #include <cstring>
+#include <netdb.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -24,6 +27,17 @@ std::thread g_accept_thread {};
 std::atomic<uint32_t> g_rr_index { 0 };
 
 bool parse_bind(const std::string& bind, std::string& host, uint16_t& port) {
+	if (!bind.empty() && bind[0] == '[') {
+		auto closing = bind.find(']');
+		if (closing != std::string::npos) {
+			host = bind.substr(1, closing - 1);
+			port = 33060;
+			if (closing + 1 < bind.size() && bind[closing + 1] == ':') {
+				port = static_cast<uint16_t>(std::atoi(bind.substr(closing + 2).c_str()));
+			}
+			return true;
+		}
+	}
 	auto pos = bind.rfind(':');
 	if (pos == std::string::npos || pos == 0 || pos == bind.size() - 1) {
 		return false;
@@ -40,32 +54,34 @@ bool parse_bind(const std::string& bind, std::string& host, uint16_t& port) {
 }
 
 int create_listener_socket(const std::string& host, uint16_t port) {
-	int fd = socket(AF_INET, SOCK_STREAM, 0);
-	if (fd < 0) {
+	std::string port_str = std::to_string(port);
+	struct addrinfo hints {}, *result = nullptr;
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_flags = AI_PASSIVE;
+
+	if (getaddrinfo(host.empty() ? nullptr : host.c_str(), port_str.c_str(), &hints, &result) != 0) {
 		return -1;
 	}
 
-	int opt = 1;
-	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+	int fd = -1;
+	for (struct addrinfo* rp = result; rp != nullptr; rp = rp->ai_next) {
+		fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+		if (fd < 0) continue;
 
-	sockaddr_in addr {};
-	addr.sin_family = AF_INET;
-	addr.sin_port = htons(port);
+		int opt = 1;
+		setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
-	if (inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1) {
+		int nodelay = 1;
+		setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+
+		if (bind(fd, rp->ai_addr, rp->ai_addrlen) == 0 && listen(fd, 128) == 0) {
+			break;
+		}
 		close(fd);
-		return -1;
+		fd = -1;
 	}
-
-	if (bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
-		close(fd);
-		return -1;
-	}
-
-	if (listen(fd, 128) < 0) {
-		close(fd);
-		return -1;
-	}
+	freeaddrinfo(result);
 
 	return fd;
 }
@@ -93,12 +109,13 @@ void accept_loop() {
 
 		for (const auto& pfd : pfds) {
 			if (pfd.revents & POLLIN) {
-				sockaddr_in client_addr {};
-				socklen_t client_len = sizeof(client_addr);
-				int client_fd = accept(pfd.fd, reinterpret_cast<sockaddr*>(&client_addr), &client_len);
+				int client_fd = accept(pfd.fd, nullptr, nullptr);
 				if (client_fd < 0) {
 					continue;
 				}
+
+				int nodelay = 1;
+				setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
 
 				if (!g_workers.empty()) {
 					uint32_t idx = g_rr_index.fetch_add(1, std::memory_order_relaxed)
@@ -169,16 +186,18 @@ void MysqlxWorker::run() {
 
 				if (endpoint.hostname.empty()) {
 					mysqlx_send_error(fd, 4000, "No backend endpoint available for route");
-					mysqlx_stats().record_conn_err(identity.default_route);
+					int hg = ctx.config_store->route_hostgroup(identity.default_route);
+					mysqlx_stats().record_conn_err(identity.default_route, hg);
 				} else {
 					MysqlxBackendSession backend;
 					std::string err {};
+					int hg = ctx.config_store->route_hostgroup(identity.default_route);
 					if (backend.connect(identity, endpoint, err)) {
-						mysqlx_stats().record_conn_ok(identity.default_route);
+						mysqlx_stats().record_conn_ok(identity.default_route, hg);
 						backend.relay(fd);
 					} else {
 						mysqlx_send_error(fd, 4001, "Backend connection failed: " + err);
-						mysqlx_stats().record_conn_err(identity.default_route);
+						mysqlx_stats().record_conn_err(identity.default_route, hg);
 					}
 				}
 			}
