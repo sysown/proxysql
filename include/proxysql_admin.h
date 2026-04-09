@@ -375,6 +375,10 @@ class ProxySQL_Admin {
 		int cluster_mysql_variables_diffs_before_sync;
 		int cluster_admin_variables_diffs_before_sync;
 		int cluster_ldap_variables_diffs_before_sync;
+		int cluster_pgsql_variables_diffs_before_sync;
+		int cluster_pgsql_query_rules_diffs_before_sync;
+		int cluster_pgsql_servers_diffs_before_sync;
+		int cluster_pgsql_users_diffs_before_sync;
 		int cluster_mysql_servers_sync_algorithm;
 		bool cluster_mysql_query_rules_save_to_disk;
 		bool cluster_mysql_servers_save_to_disk;
@@ -383,6 +387,10 @@ class ProxySQL_Admin {
 		bool cluster_mysql_variables_save_to_disk;
 		bool cluster_admin_variables_save_to_disk;
 		bool cluster_ldap_variables_save_to_disk;
+		bool cluster_pgsql_variables_save_to_disk;
+		bool cluster_pgsql_query_rules_save_to_disk;
+		bool cluster_pgsql_servers_save_to_disk;
+		bool cluster_pgsql_users_save_to_disk;
 		int stats_mysql_connection_pool;
 		int stats_mysql_connections;
 		int stats_mysql_query_cache;
@@ -590,6 +598,10 @@ class ProxySQL_Admin {
 		bool checksum_mysql_variables;
 		bool checksum_admin_variables;
 		bool checksum_ldap_variables;
+		bool checksum_pgsql_query_rules;
+		bool checksum_pgsql_servers;
+		bool checksum_pgsql_users;
+		bool checksum_pgsql_variables;
 	} checksum_variables;
 	template<enum SERVER_TYPE pt>
 	void public_add_active_users(enum cred_username_type usertype, char *user=NULL) {
@@ -701,6 +713,7 @@ class ProxySQL_Admin {
 //	void flush_admin_variables__from_disk_to_memory(); // commented in 2.3 because unused
 	void flush_admin_variables__from_memory_to_disk();
 	void flush_ldap_variables__from_memory_to_disk();
+	void flush_pgsql_variables__from_memory_to_disk();
 	void load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers = {}, const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server = {},
 		const mysql_servers_v2_checksum_t& peer_mysql_server_v2 = {});
 	void save_mysql_servers_from_runtime();
