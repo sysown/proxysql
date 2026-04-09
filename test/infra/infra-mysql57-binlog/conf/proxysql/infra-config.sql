@@ -21,6 +21,7 @@ REPLACE INTO mysql_users (username,password,active,default_hostgroup,comment) va
 REPLACE INTO mysql_users (username,password,active,default_hostgroup,comment) values ('sbtest8','sbtest8',1,${WHG},'${INFRA}');
 REPLACE INTO mysql_users (username,password,active,default_hostgroup,comment) values ('${INFRA}','${INFRA}',1,${WHG},'${INFRA}');
 REPLACE INTO mysql_users (username,password,active,default_hostgroup,comment) values ('root','${ROOT_PASSWORD}',1,${WHG},'${INFRA}');
+REPLACE INTO mysql_users (username,password,active,default_hostgroup,comment) values ('testuser','testuser',1,${WHG},'${INFRA}');
 LOAD MYSQL USERS TO RUNTIME;
 SAVE MYSQL USERS TO DISK;
 

@@ -1346,30 +1346,72 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	int cur=sizeof(mysql_hdr);
 	unsigned char *user=NULL;
 	char *db=NULL;
+	unsigned char *pass=NULL;
+	const unsigned char *packet_end = pkt + len;
 	mysql_hdr hdr;
+
+	if (len <= sizeof(mysql_hdr)) {
+		return false;
+	}
+
 	memcpy(&hdr,pkt,sizeof(mysql_hdr));
 	cur++;
-	user=pkt+cur;
-	cur+=strlen((const char *)user);
-	cur++;
+	// Validate each field before consuming it to avoid malformed-packet reads and writes.
+	const unsigned char *user_ptr = pkt + cur;
+	const size_t user_remaining = packet_end - user_ptr;
+	const size_t user_len = strnlen(reinterpret_cast<const char*>(user_ptr), user_remaining);
+	if (user_len == user_remaining) {
+		return false;
+	}
+	user=const_cast<unsigned char*>(user_ptr);
+	cur+=user_len + 1;
+	if (pkt + cur >= packet_end) {
+		return false;
+	}
 	unsigned char pass_len=pkt[cur];
 	cur++;
-	unsigned char pass[128];
-	memset(pass,0,128);
-	memcpy(pass, pkt+cur, pass_len);
+	const unsigned char *pass_ptr = pkt + cur;
+	if (static_cast<size_t>(packet_end - pass_ptr) < pass_len) {
+		return false;
+	}
+	pass=(unsigned char *)malloc(pass_len+1);
+	if (pass==NULL) {
+		return false;
+	}
+	memcpy(pass, pass_ptr, pass_len);
+	pass[pass_len]=0;
 	cur+=pass_len;
-	db=(char *)pkt+cur;
+	if (pkt + cur >= packet_end) {
+		free(pass);
+		return false;
+	}
+	const char *db_ptr = reinterpret_cast<const char*>(pkt + cur);
+	const size_t db_remaining = packet_end - (pkt + cur);
+	const size_t db_len = strnlen(db_ptr, db_remaining);
+	if (db_len == db_remaining) {
+		free(pass);
+		return false;
+	}
+	db=const_cast<char*>(db_ptr);
 	// Move to field after 'database'
-	cur += strlen(db) + 1;
-	// Skipt field 'character-set' (size 2)
+	cur += db_len + 1;
+	// Skip field 'character-set' (size 2)
+	if (static_cast<size_t>(packet_end - (pkt + cur)) < sizeof(uint16_t)) {
+		free(pass);
+		return false;
+	}
 	cur += 2;
 	// Check and get 'Client Auth Plugin' if capability is supported
 	char* client_auth_plugin = nullptr;
-	if (pkt + len > pkt + cur) {
-		int capabilities = (*myds)->sess->client_myds->myconn->options.client_flag;
-		if (capabilities & CLIENT_PLUGIN_AUTH) {
-			client_auth_plugin = reinterpret_cast<char*>(pkt + cur);
+	int capabilities = (*myds)->sess->client_myds->myconn->options.client_flag;
+	if (capabilities & CLIENT_PLUGIN_AUTH && pkt + cur < packet_end) {
+		const char *auth_plugin_ptr = reinterpret_cast<const char*>(pkt + cur);
+		const size_t auth_plugin_len = strnlen(auth_plugin_ptr, packet_end - (pkt + cur));
+		if (auth_plugin_len == static_cast<size_t>(packet_end - (pkt + cur))) {
+			free(pass);
+			return false;
 		}
+		client_auth_plugin = const_cast<char*>(auth_plugin_ptr);
 	}
 	// Default to 'mysql_native_password' in case 'auth_plugin' is not found.
 	if (client_auth_plugin == nullptr) {
@@ -1437,6 +1479,10 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 				);
 			}
 		}
+	}
+	if (pass) {
+		free(pass);
+		pass=NULL;
 	}
 	if (userinfo->username) free(userinfo->username);
 	if (userinfo->password) free(userinfo->password);
@@ -1577,8 +1623,11 @@ int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyPr
 // this function was inline in process_pkt_handshake_response() , split for readibility
 bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1) { // process_pkt_handshake_response inner 2
 
-	// if packet length is less than 4, it's a malformed packet.
-	if ((len - sizeof(mysql_hdr)) < 4) return false;
+	// HandshakeResponse41 requires a 32-byte fixed header before any variable-length fields.
+	const unsigned int handshake_response_header_len = sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint8_t) + 23;
+	if (len < sizeof(mysql_hdr) + handshake_response_header_len) return false;
+
+	unsigned char* packet_end = vars1._ptr + len;
 
 	vars1.capabilities = CPY4(pkt);
 	// see bug #2916. If CLIENT_MULTI_STATEMENTS is set by the client
@@ -1634,12 +1683,28 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 //		(*myds)->encrypted=true;
 //		use_ssl=true;
 //	} else {
+	unsigned char* user_end = (unsigned char*)memchr(pkt, 0, packet_end - pkt);
+	if (user_end == NULL) {
+		ret = false;
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p . malformed username in handshake response\n", (*myds), (*myds)->sess);
+		return false;
+	}
 	vars1.user = pkt;
-	pkt += strlen((char *)vars1.user) + 1;
+	pkt = user_end + 1;
 
 	if (vars1.capabilities & CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA) {
+		if (packet_end <= pkt) {
+			ret = false;
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . missing auth response length in handshake response\n", (*myds), (*myds)->sess, vars1.user);
+			return false;
+		}
 		uint64_t passlen64;
 		int pass_len_enc=mysql_decode_length_ll(pkt,&passlen64);
+		if (pass_len_enc <= 0 || static_cast<size_t>(packet_end - pkt) < static_cast<size_t>(pass_len_enc)) {
+			ret = false;
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . malformed auth response length in handshake response\n", (*myds), (*myds)->sess, vars1.user);
+			return false;
+		}
 		vars1.pass_len = passlen64;
 		pkt	+= pass_len_enc;
 		if (vars1.pass_len > (len - (pkt - vars1._ptr))) {
@@ -1648,7 +1713,22 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 			return false;
 		}
 	} else {
-		vars1.pass_len = (vars1.capabilities & CLIENT_SECURE_CONNECTION ? *pkt++ : strlen((char *)pkt));
+		if (vars1.capabilities & CLIENT_SECURE_CONNECTION) {
+			if (packet_end <= pkt) {
+				ret = false;
+				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . missing auth response length in handshake response\n", (*myds), (*myds)->sess, vars1.user);
+				return false;
+			}
+			vars1.pass_len = *pkt++;
+		} else {
+			unsigned char* pass_end = (unsigned char*)memchr(pkt, 0, packet_end - pkt);
+			if (pass_end == NULL) {
+				ret = false;
+				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . malformed auth response in handshake response\n", (*myds), (*myds)->sess, vars1.user);
+				return false;
+			}
+			vars1.pass_len = pass_end - pkt;
+		}
 		if (vars1.pass_len > (len - (pkt - vars1._ptr))) {
 			ret = false;
 			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . goto __exit_process_pkt_handshake_response\n", (*myds), (*myds)->sess, vars1.user);
@@ -1661,14 +1741,18 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 
 	pkt += vars1.pass_len;
 	if (vars1.capabilities & CLIENT_CONNECT_WITH_DB) {
-		unsigned int remaining = len - (pkt - vars1._ptr);
-		vars1.db_tmp = strndup((const char *)pkt, remaining);
+		unsigned char* db_end = (unsigned char*)memchr(pkt, 0, packet_end - pkt);
+		if (db_end == NULL) {
+			ret = false;
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . malformed default schema in handshake response\n", (*myds), (*myds)->sess, vars1.user);
+			return false;
+		}
+		vars1.db_tmp = strndup((const char *)pkt, db_end - pkt);
 		if (vars1.db_tmp) {
 			vars1.db = vars1.db_tmp;
 		}
-		pkt++;
+		pkt = db_end + 1;
 		if (vars1.db) {
-			pkt+=strlen(vars1.db);
 			// TODO: Not ideal, but the flow is currently complex. Resource management should be simplified in
 			// a future rework, so we can 'centralize' the update to the session state with auth results.
 			userinfo->set_schemaname(vars1.db, strlen(vars1.db));
@@ -1682,9 +1766,8 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 		}
 	}
 	unsigned char *extra_pkt = pkt;
-	if (vars1._ptr+len > extra_pkt) {
+	if (packet_end > extra_pkt) {
 		if (vars1.capabilities & CLIENT_PLUGIN_AUTH) {
-			unsigned char *packet_end = vars1._ptr + len;
 			if (extra_pkt >= packet_end) {
 				ret = false;
 				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . malformed auth plugin offset in handshake response\n", (*myds), (*myds)->sess, vars1.user);

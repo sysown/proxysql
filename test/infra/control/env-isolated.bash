@@ -108,6 +108,11 @@ export TEST_PY_TAP_DUMP_RUNTIME="${TEST_PY_TAP_DUMP_RUNTIME:-1}"
 export TEST_PY_TAP_DUMP_STATS="${TEST_PY_TAP_DUMP_STATS:-1}"
 export TEST_TAP_TIMEOUT="${TEST_TAP_TIMEOUT:-0}"
 
+# Cluster sync test support — expose first cluster node admin port for replica validation
+if [ "${NUM_CLUSTER_NODES}" -gt 0 ]; then
+    export TAP_PGSQL_SYNC_REPLICA_PORT="${TAP_PGSQL_SYNC_REPLICA_PORT:-6042}"
+fi
+
 # Noise injection for race condition testing
 # When enabled, tests that support noise injection will introduce random delays
 # and stress to help detect race conditions and deadlocks

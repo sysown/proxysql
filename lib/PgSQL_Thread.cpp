@@ -1039,7 +1039,11 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.shun_on_failures = 5;
 	variables.shun_recovery_time_sec = 10;
 #ifdef PROXYSQLFFTO
+#ifdef PROXYSQLGENAI
 	variables.ffto_enabled = true;
+#else
+	variables.ffto_enabled = false;
+#endif
 	variables.ffto_max_buffer_size = 1048576;
 #endif
 	variables.unshun_algorithm = 0;
