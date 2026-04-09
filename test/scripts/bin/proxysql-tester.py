@@ -326,9 +326,10 @@ class ProxySQLTester:
 
         return rc, logs, summary
 
-    def filtered_by_version(self, test_path, proxysql_v):
+    def filtered_by_version(self, test_path, proxysql_v, groups=None):
         filtered = (False, '')
 
+        # Check hardcoded version requirements (legacy)
         for tap_test in internal_tap_tests_versions:
             tap_test_n = tap_test[0]
             tap_test_v = tap_test[1]
@@ -337,6 +338,17 @@ class ProxySQLTester:
             if tap_test_n in test_path and smaller_version:
                 filtered = (True, tap_test_v)
                 break
+
+        # Check @proxysql_min_version tag from groups.json
+        if not filtered[0] and groups:
+            test_basename = os.path.basename(test_path)
+            test_groups = groups.get(test_basename, [])
+            for entry in test_groups:
+                if isinstance(entry, str) and entry.startswith("@proxysql_min_version:"):
+                    min_ver = entry.split(":", 1)[1]
+                    if version.parse(proxysql_v) < version.parse(min_ver):
+                        filtered = (True, min_ver)
+                    break
 
         return filtered
 
@@ -716,10 +728,10 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
                     continue
 
                 # filtering
-                f_res = self.filtered_by_version(fo_cmd, fmt_ver)
+                f_res = self.filtered_by_version(fo_cmd, fmt_ver, groups)
                 if f_res[0]:
                     log.info(f"{TAP} test {fo_num+1}/{len(tap_tests)} '{os.path.basename(fo_cmd)}' skipped.")
-                    log.debug(f"skip: It requires a bigger of the one being tested: ({fmt_ver} < {f_res[1]})")
+                    log.debug(f"skip: Requires ProxySQL >= {f_res[1]}, current version: {fmt_ver}")
                     summary.append((fo_cmd, None))
                     continue
 
