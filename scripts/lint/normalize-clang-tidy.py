@@ -32,10 +32,10 @@ diagnostics = set()
 try:
     data = yaml.safe_load(content)
     if isinstance(data, dict) and 'Diagnostics' in data:
-        for diag in data.get('Diagnostics', []):
-            msg = diag.get('DiagnosticMessage', {})
-            file = msg.get('FilePath', '<unknown>')
-            offset = msg.get('FileOffset', 0)
+    for diag in data.get('Diagnostics', []):
+        msg = diag.get('DiagnosticMessage', {})
+        file = msg.get('FilePath', '<unknown>')
+        offset = msg.get('FileOffset', 0)
             # Map offset to line if possible
             try:
                 with open(file, 'rb') as fh:
@@ -45,7 +45,11 @@ try:
                 line_no = 0
             check = diag.get('CheckName', '')
             message = msg.get('Message', '').strip()
-            diagnostics.add(f"{file}:{line_no}: {check} - {message}")
+            # Only emit diagnostics that are within the repository include/ or lib/
+            # paths to avoid noise from deps/ headers. This mirrors the header
+            # filter behavior used when running clang-tidy.
+            if '/include/' in file or '/lib/' in file:
+                diagnostics.add(f"{file}:{line_no}: {check} - {message}")
     else:
         raise Exception("not yaml diagnostics")
 except Exception:

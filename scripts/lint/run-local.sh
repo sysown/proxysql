@@ -33,13 +33,19 @@ if [ ${#FILES[@]} -eq 0 ]; then
   echo "No source files found to lint under lib/" >&2
 else
   TMPD=$(mktemp -d)
+  # Compute an anchored header-filter that limits diagnostics to files inside
+  # this repository's include/ and lib/ directories. Use an absolute path so
+  # headers in deps/ that happen to contain '/include/' don't match.
+  REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo "$(pwd)")
+  HEADER_FILTER="^${REPO_ROOT}/(include|lib)/"
+  echo "Using clang-tidy header-filter: ${HEADER_FILTER}"
   n=0
   total=${#FILES[@]}
-    for f in "${FILES[@]}"; do
+  for f in "${FILES[@]}"; do
       n=$((n+1))
       echo "[$n/$total] clang-tidy $f"
       # Capture textual diagnostics per-file; still write export-fixes when available
-    ${CLANG_TIDY_BIN} -p . -checks='clang-analyzer-*,bugprone-*,performance-*,modernize-*,readability-*' --header-filter='include/|lib/' --export-fixes="${TMPD}/ct-${n}.yaml" "$f" 2> "${TMPD}/ct-${n}.stderr" || true
+    ${CLANG_TIDY_BIN} -p . -checks='clang-analyzer-*,bugprone-*,performance-*,modernize-*,readability-*' --header-filter="${HEADER_FILTER}" --export-fixes="${TMPD}/ct-${n}.yaml" "$f" 2> "${TMPD}/ct-${n}.stderr" || true
   done
 
   echo "Merging per-file clang-tidy fixes into lint/clang-tidy-fixes.yaml"
