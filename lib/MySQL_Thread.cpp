@@ -4801,6 +4801,7 @@ MySQL_Thread::MySQL_Thread() {
 	mysql_thread___add_ldap_user_comment=NULL;
 	mysql_thread___eventslog_filename=NULL;
 	mysql_thread___auditlog_filename=NULL;
+	mysql_thread___resolution_family=strdup("system");  // default: system (AF_UNSPEC)
 
 	// SSL proxy to server
 	mysql_thread___ssl_p2s_ca=NULL;

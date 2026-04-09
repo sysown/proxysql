@@ -4,6 +4,13 @@
 
 #include "MySQL_Resolution.h"
 
+// NOTE: This unit test covers the helper functions for mysql-resolution_family.
+// The actual DNS resolution path in MySQL_Monitor.cpp uses these helpers, but
+// only when the DNS cache is enabled. On DNS cache miss, the hostname is passed
+// directly to mysql_real_connect() which uses hardcoded AF_UNSPEC via the
+// MariaDB client library. This limitation is documented in the PR description.
+// A future enhancement may address this by patching the client library.
+
 int main() {
 	plan(12);
 
