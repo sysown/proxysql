@@ -2965,6 +2965,8 @@ SQLite3_result* PgSQL_HostGroups_Manager::get_current_pgsql_table(const string& 
 		return this->runtime_pgsql_servers;
 	} else if (name == "pgsql_servers_v2") {
 		return this->incoming_pgsql_servers_v2;
+	} else if (name == "pgsql_servers_ssl_params") {
+		return this->incoming_pgsql_servers_ssl_params;
 	} else {
 		assert(0);
 	}
