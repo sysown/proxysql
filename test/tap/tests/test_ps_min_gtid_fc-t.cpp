@@ -47,7 +47,7 @@ static int setup(MYSQL* admin, MYSQL* proxy, const CommandLine& cl) {
 	MYSQL_QUERY_T(admin, "DELETE FROM mysql_query_rules WHERE rule_id=42");
 	snprintf(rule_query, sizeof(rule_query),
 		"INSERT INTO mysql_query_rules (rule_id, active, match_pattern, replace_pattern, apply, destination_hostgroup, comment)"
-		" VALUES (42, 1, ';min_gtid=[\\\\:\\\\-\\\\w]+', '', 1, %d, 'Remove min_gtid annotation and route to dedicated HG')",
+		" VALUES (42, 1, ';min_gtid=[:\\-\\w]+', '', 1, %d, 'Remove min_gtid annotation and route to dedicated HG')",
 		DEDICATED_HG);
 	MYSQL_QUERY_T(admin, rule_query);
 	MYSQL_QUERY_T(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
@@ -79,7 +79,7 @@ static int cleanup(MYSQL* admin, MYSQL* proxy) {
 
 static int get_ps_cache_count(MYSQL* admin) {
 	std::string query = std::string("SELECT COUNT(*) FROM stats.stats_mysql_prepared_statements_info")
-		+ " WHERE schemaname='test' AND query='" + EXPECTED_PS_QUERY + "'";
+		+ " WHERE query='" + EXPECTED_PS_QUERY + "'";
 
 	ext_val_t<int32_t> result = mysql_query_ext_val(admin, query, int32_t(0));
 	if (result.err != 0) {
@@ -112,6 +112,8 @@ static int run_prepared_stmt(
 		mysql_stmt_close(stmt);
 		return -1;
 	}
+
+	diag("Prepared statement_id: %lu", stmt->stmt_id);
 
 	int id_val = 1;
 	unsigned long len = 0;
