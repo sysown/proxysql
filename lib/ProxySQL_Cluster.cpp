@@ -373,8 +373,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 		rc_bool = GloProxyCluster->Update_Node_Metrics(node->hostname, node->port, NULL, 0); // added extra check, see #1323
 	}
 __exit_monitor_thread:
-	if (conn)
-	if (conn->net.pvio) {
+	if (conn) {
 		mysql_close(conn);
 	}
 	proxy_info("Cluster: closing thread for peer %s:%d\n", node->hostname, node->port);
@@ -1354,9 +1353,7 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer(const string& expected_c
 		}
 __exit_pull_mysql_query_rules_from_peer:
 		if (conn) {
-			if (conn->net.pvio) {
-				mysql_close(conn);
-			}
+			mysql_close(conn);
 		}
 		free(hostname);
 
@@ -1734,9 +1731,7 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer(const string& expected_checksu
 		}
 __exit_pull_mysql_users_from_peer:
 		if (conn) {
-			if (conn->net.pvio) {
-				mysql_close(conn);
-			}
+			mysql_close(conn);
 		}
 		free(hostname);
 
@@ -1979,9 +1974,7 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 		}
 __exit_pull_mysql_servers_from_peer:
 		if (conn) {
-			if (conn->net.pvio) {
-				mysql_close(conn);
-			}
+			mysql_close(conn);
 		}
 		free(hostname);
 
@@ -2505,9 +2498,7 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 		}
 	__exit_pull_mysql_servers_v2_from_peer:
 		if (conn) {
-			if (conn->net.pvio) {
-				mysql_close(conn);
-			}
+			mysql_close(conn);
 		}
 		free(hostname);
 
@@ -2723,9 +2714,7 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, c
 		}
 __exit_pull_mysql_variables_from_peer:
 		if (conn) {
-			if (conn->net.pvio) {
-				mysql_close(conn);
-			}
+			mysql_close(conn);
 		}
 		free(hostname);
 
@@ -2849,9 +2838,7 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer(const std::string& expect
 		}
 __exit_pull_proxysql_servers_from_peer:
 		if (conn) {
-			if (conn->net.pvio) {
-				mysql_close(conn);
-			}
+			mysql_close(conn);
 		}
 		free(hostname);
 
@@ -2986,9 +2973,7 @@ void ProxySQL_Cluster::pull_pgsql_users_from_peer(const std::string& expected_ch
 		}
 __exit_pull_pgsql_users_from_peer:
 		if (conn) {
-			if (conn->net.pvio) {
-				mysql_close(conn);
-			}
+			mysql_close(conn);
 		}
 		free(hostname);
 
@@ -3117,9 +3102,7 @@ void ProxySQL_Cluster::pull_pgsql_variables_from_peer(const std::string& expecte
 		}
 __exit_pull_pgsql_variables_from_peer:
 		if (conn) {
-			if (conn->net.pvio) {
-				mysql_close(conn);
-			}
+			mysql_close(conn);
 		}
 		free(hostname);
 
@@ -3286,9 +3269,7 @@ void ProxySQL_Cluster::pull_pgsql_query_rules_from_peer(const std::string& expec
 		}
 __exit_pull_pgsql_query_rules_from_peer:
 		if (conn) {
-			if (conn->net.pvio) {
-				mysql_close(conn);
-			}
+			mysql_close(conn);
 		}
 		free(hostname);
 
@@ -3442,9 +3423,7 @@ void ProxySQL_Cluster::pull_runtime_pgsql_servers_from_peer(const runtime_pgsql_
 		}
 __exit_pull_runtime_pgsql_servers_from_peer:
 		if (conn) {
-			if (conn->net.pvio) {
-				mysql_close(conn);
-			}
+			mysql_close(conn);
 		}
 		free(hostname);
 
@@ -3684,9 +3663,7 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 		}
 __exit_pull_pgsql_servers_v2_from_peer:
 		if (conn) {
-			if (conn->net.pvio) {
-				mysql_close(conn);
-			}
+			mysql_close(conn);
 		}
 		free(hostname);
 
