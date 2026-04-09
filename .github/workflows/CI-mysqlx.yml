@@ -1,0 +1,145 @@
+name: CI-mysqlx
+run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: [ CI-trigger ]
+    types: [ completed ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout (sparse — test/tap)
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            test/tap
+            plugins/mysqlx
+            test/scripts
+
+      - name: Restore build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            src/proxysql
+            test/
+          key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
+          fail-on-cache-miss: true
+
+      - name: Build mysqlx plugin
+        run: |
+          chmod +x src/proxysql 2>/dev/null || true
+          cd plugins/mysqlx && make
+
+      - name: Run mysqlx unit tests
+        run: |
+          export SKIP_PROXYSQL=1
+          cd test/tap/tests/unit
+          for test_bin in mysqlx_*_unit-t plugin_*_unit-t; do
+            if [ -x "$test_bin" ]; then
+              echo "Running $test_bin..."
+              ./"$test_bin" || exit 1
+            fi
+          done
+
+  e2e-tests:
+    if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
+    runs-on: ubuntu-22.04
+    needs: unit-tests
+    steps:
+      - name: Checkout (sparse)
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            test/tap
+            plugins/mysqlx
+            test/scripts
+
+      - name: Restore build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            src/proxysql
+            test/
+          key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
+          fail-on-cache-miss: true
+
+      - name: Build mysqlx plugin
+        run: |
+          chmod +x src/proxysql 2>/dev/null || true
+          cd plugins/mysqlx && make
+
+      - name: Install dbdeployer
+        run: |
+          curl -s https://raw.githubusercontent.com/ProxySQL/dbdeployer/master/scripts/dbdeployer-install.sh | bash
+          dbdeployer --version
+
+      - name: Download and unpack MySQL 8.4
+        run: |
+          dbdeployer downloads get-by-version 8.4 --newest --minimal
+          TARBALL=$(ls -t mysql-8.4.*.tar.xz 2>/dev/null | head -1)
+          dbdeployer unpack "$TARBALL"
+
+      - name: Deploy MySQL 8.4 sandbox
+        run: |
+          VERSION=$(ls $HOME/opt/mysql/ | grep '^8\.4' | head -1)
+          dbdeployer deploy single "$VERSION"
+          SANDBOX="$HOME/sandboxes/msb_${VERSION//./_}"
+          "$SANDBOX/start"
+
+          # Wait for MySQL to be ready
+          for i in $(seq 1 30); do
+            if "$SANDBOX/use" -e "SELECT 1" &>/dev/null; then
+              echo "MySQL $VERSION is ready"
+              break
+            fi
+            sleep 2
+          done
+
+          # Create test user
+          "$SANDBOX/use" -e "
+            CREATE USER IF NOT EXISTS 'mysqlx_test'@'%' IDENTIFIED WITH mysql_native_password BY 'mysqlx_test';
+            GRANT ALL PRIVILEGES ON *.* TO 'mysqlx_test'@'%';
+            FLUSH PRIVILEGES;
+          "
+
+      - name: Verify X Protocol
+        run: |
+          for i in $(seq 1 30); do
+            if timeout 2 bash -c "echo > /dev/tcp/127.0.0.1/33060" 2>/dev/null; then
+              echo "X Protocol is listening on port 33060"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "ERROR: X Protocol not available on port 33060"
+          exit 1
+
+      - name: Run mysqlx E2E tests
+        run: |
+          export MYSQLX_E2E_HOST=127.0.0.1
+          export MYSQLX_E2E_PORT=33060
+          export MYSQLX_E2E_USER=mysqlx_test
+          export MYSQLX_E2E_PASS=mysqlx_test
+          cd test/tap/tests
+          for test_bin in test_mysqlx_e2e_*-t; do
+            if [ -x "$test_bin" ]; then
+              echo "Running $test_bin..."
+              ./"$test_bin" || exit 1
+            fi
+          done
+
+      - name: Cleanup sandbox
+        if: always()
+        run: |
+          VERSION=$(ls $HOME/opt/mysql/ | grep '^8\.4' | head -1 || echo "")
+          if [ -n "$VERSION" ]; then
+            dbdeployer delete single "$VERSION" 2>/dev/null || true
+          fi
