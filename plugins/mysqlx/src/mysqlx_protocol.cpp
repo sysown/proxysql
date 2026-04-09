@@ -3,7 +3,9 @@
 #include "mysqlx.pb.h"
 #include "mysqlx_session.pb.h"
 
+#include <cerrno>
 #include <cstring>
+#include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <unistd.h>
 
@@ -83,9 +85,11 @@ bool mysqlx_read_exact(int fd, uint8_t* buf, size_t len) {
 	size_t total = 0;
 	while (total < len) {
 		ssize_t n = read(fd, buf + total, len - total);
-		if (n <= 0) {
+		if (n < 0) {
+			if (errno == EINTR) continue;
 			return false;
 		}
+		if (n == 0) return false;
 		total += static_cast<size_t>(n);
 	}
 	return true;
@@ -124,9 +128,11 @@ bool mysqlx_write_all(int fd, const uint8_t* data, size_t len) {
 	size_t total = 0;
 	while (total < len) {
 		ssize_t n = write(fd, data + total, len - total);
-		if (n <= 0) {
+		if (n < 0) {
+			if (errno == EINTR) continue;
 			return false;
 		}
+		if (n == 0) return false;
 		total += static_cast<size_t>(n);
 	}
 	return true;
@@ -210,23 +216,33 @@ bool mysqlx_hex_decode(const std::string& hex, std::vector<uint8_t>& out) {
 
 std::vector<uint8_t> mysqlx_mysql41_hash(const std::string& password) {
 	uint8_t stage1[SHA1_LEN];
-	sha1_digest(reinterpret_cast<const uint8_t*>(password.data()), password.size(), stage1);
+	if (!sha1_digest(reinterpret_cast<const uint8_t*>(password.data()), password.size(), stage1)) {
+		return {};
+	}
 
 	std::vector<uint8_t> stage2(SHA1_LEN);
-	sha1_digest(stage1, SHA1_LEN, stage2.data());
+	if (!sha1_digest(stage1, SHA1_LEN, stage2.data())) {
+		return {};
+	}
 	return stage2;
 }
 
 std::vector<uint8_t> mysqlx_mysql41_scramble(const std::vector<uint8_t>& challenge,
                                               const std::string& password) {
 	uint8_t stage1[SHA1_LEN];
-	sha1_digest(reinterpret_cast<const uint8_t*>(password.data()), password.size(), stage1);
+	if (!sha1_digest(reinterpret_cast<const uint8_t*>(password.data()), password.size(), stage1)) {
+		return {};
+	}
 
 	uint8_t stage2[SHA1_LEN];
-	sha1_digest(stage1, SHA1_LEN, stage2);
+	if (!sha1_digest(stage1, SHA1_LEN, stage2)) {
+		return {};
+	}
 
 	uint8_t combined[SHA1_LEN];
-	sha1_digest_multi(challenge.data(), challenge.size(), stage2, SHA1_LEN, combined);
+	if (!sha1_digest_multi(challenge.data(), challenge.size(), stage2, SHA1_LEN, combined)) {
+		return {};
+	}
 
 	std::vector<uint8_t> result(SHA1_LEN);
 	for (size_t i = 0; i < SHA1_LEN; i++) {
@@ -243,5 +259,8 @@ bool mysqlx_mysql41_verify(const std::vector<uint8_t>& challenge,
 	}
 
 	auto expected = mysqlx_mysql41_scramble(challenge, password);
-	return expected == client_response;
+	if (expected.size() != SHA1_LEN) {
+		return false;
+	}
+	return CRYPTO_memcmp(expected.data(), client_response.data(), SHA1_LEN) == 0;
 }
