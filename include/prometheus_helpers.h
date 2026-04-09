@@ -19,7 +19,7 @@ using prometheus::Gauge;
  * @tparam map_idx_enum The enum holding the types of elements contained in the 'metrics_map' argument.
  *  This enum must contain an element '::counters'.
  * @tparam counters_enum The counters enum, holding all the identifiers of the metrics
- *  to be initialized in the 'counter_array' argument. It must contains a '::__size' element.
+ *  to be initialized in the 'counter_array' argument. It must contains a '::SIZE_' element.
  * @tparam metrics_map The type of the metrics map, it should be a 'tuple' holding the following elements:
  *  {
  *     int: metric_identifier,
@@ -77,7 +77,7 @@ void init_prometheus_counter_array(
  * @tparam map_idx_enum The enum holding the types of elements contained in the 'metrics_map' argument.
  *  This enum must contain an element '::gauges'.
  * @tparam gauges_enum The counters enum, holding all the identifiers of the metrics
- *  to be initialized in the 'gauge_array' argument. It must contains a '::__size' element.
+ *  to be initialized in the 'gauge_array' argument. It must contains a '::SIZE_' element.
  * @tparam metrics_map The type of the metrics map, it should be a 'tuple' holding the following elements:
  *  {
  *     int: metric_identifier,
@@ -135,7 +135,7 @@ void init_prometheus_gauge_array(
  * @tparam map_idx_enum The enum holding the types of elements contained in the 'metrics_map' argument.
  *  This enum must contain an element '::dyn_counters'.
  * @tparam dyn_counter_enum The counters enum, holding all the identifiers of the metrics
- *  to be initialized in the 'dyn_counter_array' argument. It must contains a '::__size' element.
+ *  to be initialized in the 'dyn_counter_array' argument. It must contains a '::SIZE_' element.
  * @tparam metrics_map The type of the metrics map, it should be a 'tuple' holding the following elements:
  *  {
  *     int: metric_identifier,
@@ -191,7 +191,7 @@ void init_prometheus_dyn_counter_array(
  * @tparam map_idx_enum The enum holding the types of elements contained in the 'metrics_map' argument.
  *  This enum must contain an element '::dyn_gauges'.
  * @tparam dyn_gauge_enum The 'dyn_gauges' enum, holding all the identifiers of the metrics
- *  to be initialized in the 'dyn_gauge_array' argument. It must contains a '::__size' element.
+ *  to be initialized in the 'dyn_gauge_array' argument. It must contains a '::SIZE_' element.
  * @tparam metrics_map The type of the metrics map, it should be a 'tuple' holding the following elements:
  *  {
  *     int: metric_identifier,

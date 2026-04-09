@@ -153,14 +153,14 @@ class PtrArray {
 	unsigned int len;
 	unsigned int size;
 	void **pdata;
-	PtrArray(unsigned int __size=0) {
+	PtrArray(unsigned int sz=0) {
 		len=0;
 		pdata=NULL;
 		size=0;
-		if (__size) {
-			expand(__size);
+		if (sz) {
+			expand(sz);
 		}
-		size=__size;
+		size=sz;
 	}
 	~PtrArray() {
 		if (pdata) ( free(pdata) );
@@ -240,7 +240,7 @@ class PtrSizeArray {
 	unsigned int len;
 	unsigned int size;
 	PtrSize_t *pdata;
-	PtrSizeArray(unsigned int __size=0);
+	PtrSizeArray(unsigned int sz=0);
 	~PtrSizeArray();
 
 	void add(void *p, unsigned int s) {
