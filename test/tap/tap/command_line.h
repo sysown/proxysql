@@ -13,6 +13,8 @@ class CommandLine {
 	bool checksum = true;
 	bool no_write = false;
 	bool use_noise = false;
+	bool use_noise_mysql = false;
+	bool use_noise_pgsql = false;
 	int silent = false;
 
 	// unpriviliged test connection

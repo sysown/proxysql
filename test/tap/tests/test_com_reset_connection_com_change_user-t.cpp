@@ -450,7 +450,7 @@ int test_simple_reset_admin(MYSQL*, const CommandLine& cl, const std::vector<use
 
 	if (
 		!mysql_real_connect(
-			admin, "127.0.0.1", cl.admin_username, cl.admin_password, "information_schema", cl.admin_port, NULL, 0
+			admin, cl.admin_host, cl.admin_username, cl.admin_password, "information_schema", cl.admin_port, NULL, 0
 		)
 	) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
@@ -1144,7 +1144,7 @@ int main(int argc, char** argv) {
 
 	if (
 		!mysql_real_connect(
-			proxysql, "127.0.0.1", cl.username, cl.password, "information_schema", cl.port, NULL, 0
+			proxysql, cl.host, cl.username, cl.password, "information_schema", cl.port, NULL, 0
 		)
 	) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql));
@@ -1154,7 +1154,7 @@ int main(int argc, char** argv) {
 	MYSQL* admin = mysql_init(NULL);
 	if (
 		!mysql_real_connect(
-			admin, "127.0.0.1", cl.admin_username, cl.admin_password, "information_schema", cl.admin_port, NULL, 0
+			admin, cl.admin_host, cl.admin_username, cl.admin_password, "information_schema", cl.admin_port, NULL, 0
 		)
 	) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
