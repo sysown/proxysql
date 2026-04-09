@@ -740,4 +740,4 @@ public:
 
 void* PgSQL_backend_kill_thread(void* arg);
 
-#endif /* __CLASS_PGSQL_CONNECTION_H */
+#endif /* PROXYSQL_PGSQL_CONNECTION_H */

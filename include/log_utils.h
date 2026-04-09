@@ -218,4 +218,4 @@ bool flush_and_rotate(
  */
 prometheus::Counter* get_logger_queries_logged_counter(const std::string& protocol);
 
-#endif /* __CLASS_LOG_UTILS_H */
+#endif /* PROXYSQL_LOG_UTILS_H */

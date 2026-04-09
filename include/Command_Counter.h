@@ -60,4 +60,4 @@ private:
 	}
 };
 
-#endif /* __CLASS_COMMAND_COUNTER_H */
+#endif /* PROXYSQL_COMMAND_COUNTER_H */

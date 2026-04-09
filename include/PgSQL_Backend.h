@@ -22,4 +22,4 @@ class PgSQL_Backend
 	void reset(); //< A method that resets and releases resources associated with this backend instance
 };
 
-#endif /* __CLASS_PGSQLL_BACKEND_H */
+#endif /* PROXYSQL_PGSQL_BACKEND_H */

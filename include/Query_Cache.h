@@ -216,4 +216,4 @@ private:
 	} metrics;
 };
 
-#endif /* __CLASS_QUERY_CACHE_H */
+#endif /* PROXYSQL_QUERY_CACHE_H */

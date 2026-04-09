@@ -1731,4 +1731,4 @@ public:
 };
 	
 	
-#endif /* __CLASS_PGSQL_THREAD_H */
+#endif /* PROXYSQL_PGSQL_THREAD_H */

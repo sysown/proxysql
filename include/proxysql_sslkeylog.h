@@ -14,8 +14,8 @@
  * @see https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSS/Key_Log_Format
  */
 
-#ifndef __PROXYSQL_SSLKEYLOG_H
-#define __PROXYSQL_SSLKEYLOG_H
+#ifndef PROXYSQL_SSLKEYLOG_H
+#define PROXYSQL_SSLKEYLOG_H
 #include "proxysql.h"
 
 /**

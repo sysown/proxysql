@@ -1,5 +1,5 @@
-#ifndef __PROXYSQL_CONFIG_H__
-#define __PROXYSQL_CONFIG_H__
+#ifndef PROXYSQL_CONFIG_H
+#define PROXYSQL_CONFIG_H
 
 #include <string>
 #include <libconfig.h++>

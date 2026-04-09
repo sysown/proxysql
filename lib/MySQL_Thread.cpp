@@ -6117,7 +6117,7 @@ unsigned long long MySQL_Threads_Handler::get_status_variable(
 		}
 	}
 #endif // IDLE_THREADS
-	if (m_idx != p_th_counter::__size) {
+	if (m_idx != p_th_counter::SIZE_) {
 		const auto& cur_val = status_variables.p_counter_array[m_idx]->Value();
 		double final_val = 0;
 
@@ -6158,7 +6158,7 @@ unsigned long long MySQL_Threads_Handler::get_status_variable(
 		}
 	}
 #endif // IDLE_THREADS
-	if (m_idx != p_th_gauge::__size) {
+	if (m_idx != p_th_gauge::SIZE_) {
 		double final_val = 0;
 
 		if (conv != 0) {

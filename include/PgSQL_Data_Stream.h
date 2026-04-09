@@ -269,4 +269,4 @@ public:
 
 	void reset_connection();
 };
-#endif /* __CLASS_PGSQL_DATA_STREAM_H */
+#endif /* PROXYSQL_PGSQL_DATA_STREAM_H */

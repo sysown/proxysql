@@ -618,5 +618,5 @@ private:
 
 void * kill_query_thread(void *arg);
 
-#endif /* __CLASS_MYSQL_SESSION_ H */
+#endif /* PROXYSQL_MYSQL_SESSION_H */
 #endif // CLASS_BASE_SESSION_H

@@ -244,4 +244,4 @@ class MySQL_Protocol {
 	bool verify_user_attributes(int calling_line, const char *calling_func, const unsigned char *user);
 	bool user_attributes_has_spiffe(int calling_line, const char *calling_func, const unsigned char *user);
 };
-#endif /* __CLASS_MYSQL_PROTOCOL_H */
+#endif /* PROXYSQL_MYSQL_PROTOCOL_H */

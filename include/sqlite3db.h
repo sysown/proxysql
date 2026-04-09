@@ -247,4 +247,4 @@ class SQLite3DB {
 	static void LoadPlugin(const char *);
 };
 
-#endif /* __CLASS_SQLITE3DB_H */
+#endif /* PROXYSQL_SQLITE3DB_H */

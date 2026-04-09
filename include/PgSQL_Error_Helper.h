@@ -669,4 +669,4 @@ private:
 
 #define PGSQL_GET_ERROR_CODE_STR(ENUM_CODE) PgSQL_Error_Helper::get_error_code(PGSQL_ERROR_CODES::ENUM_CODE)
 
-#endif /* __CLASS_PGSQL_ERROR_HELPER_H */
+#endif /* PROXYSQL_PGSQL_ERROR_HELPER_H */

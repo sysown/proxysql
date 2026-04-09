@@ -23,4 +23,4 @@ public:
 	//void* purgeHash_thread(void*);
 };
 
-#endif /* __CLASS_MYSQL_QUERY_CACHE_H */
+#endif /* PROXYSQL_MYSQL_QUERY_CACHE_H */

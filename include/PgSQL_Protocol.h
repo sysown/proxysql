@@ -1,5 +1,5 @@
-#ifndef __POSTGRES_PROTOCOL_H
-#define __POSTGRES_PROTOCOL_H
+#ifndef PROXYSQL_PGSQL_PROTOCOL_H
+#define PROXYSQL_PGSQL_PROTOCOL_H
 
 #include "proxysql.h"
 #include "gen_utils.h"

@@ -113,4 +113,4 @@ class PgSQL_Authentication {
 	SQLite3_result* get_current_pgsql_users();
 };
 
-#endif /* __CLASS_PGSQL_AUTHENTICATION_H */
+#endif /* PROXYSQL_PGSQL_AUTHENTICATION_H */

@@ -39,4 +39,4 @@ class PgSQL_Set_Stmt_Parser {
 	static void unquote_if_quoted(std::string& v);
 };
 
-#endif /* __CLASS_PGSQL_SET_STMT_PARSER_H */
+#endif /* PROXYSQL_PGSQL_SET_STMT_PARSER_H */

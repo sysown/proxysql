@@ -98,4 +98,4 @@ private:
 	friend class Query_Processor;
 };
 
-#endif /* __CLASS_MYSQL_QUERY_PROCESSOR_H */
+#endif /* PROXYSQL_MYSQL_QUERY_PROCESSOR_H */

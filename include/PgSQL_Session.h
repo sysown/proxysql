@@ -636,5 +636,5 @@ private:
 
 
 
-#endif /* __CLASS_PGSQL_SESSION_H */
+#endif /* PROXYSQL_PGSQL_SESSION_H */
 #endif // CLASS_BASE_SESSION_H

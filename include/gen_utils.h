@@ -374,7 +374,7 @@ public:
 	}
 };
 
-#endif /* __CLASS_PTR_ARRAY_H */
+#endif /* PROXYSQL_PTR_ARRAY_H */
 
 
 #ifdef CLOCK_MONOTONIC_RAW
@@ -383,8 +383,8 @@ public:
 #define PROXYSQL_CLOCK_MONOTONIC CLOCK_MONOTONIC
 #endif
 
-#ifndef __GEN_FUNCTIONS
-#define __GEN_FUNCTIONS
+#ifndef PROXYSQL_GEN_FUNCTIONS
+#define PROXYSQL_GEN_FUNCTIONS
 
 #ifdef __APPLE__
 #include <sys/types.h>
@@ -553,4 +553,4 @@ inline constexpr char* fast_uint32toa(uint32_t value, char* out) noexcept {
 	return p;
 }
 
-#endif /* __GEN_FUNCTIONS */
+#endif /* PROXYSQL_GEN_FUNCTIONS */

@@ -1,5 +1,5 @@
-#ifndef __PROXYSQL_DEBUG_H
-#define __PROXYSQL_DEBUG_H
+#ifndef PROXYSQL_DEBUG_H
+#define PROXYSQL_DEBUG_H
 
 #include <chrono>
 #include <iostream>

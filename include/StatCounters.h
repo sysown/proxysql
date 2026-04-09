@@ -71,5 +71,5 @@ class StatCounters {
 		return ret;
 	}
 };
-#endif /* __CLASS_STAT_COUNTERS_H */
+#endif /* PROXYSQL_STAT_COUNTERS_H */
 

@@ -19,4 +19,4 @@ public:
 	//void* purgeHash_thread(void*);
 };
 
-#endif /* __CLASS_PGSQL_QUERY_CACHE_H */
+#endif /* PROXYSQL_PGSQL_QUERY_CACHE_H */

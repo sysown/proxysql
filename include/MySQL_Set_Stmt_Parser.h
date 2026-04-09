@@ -52,4 +52,4 @@ class MySQL_Set_Stmt_Parser {
 	~MySQL_Set_Stmt_Parser();
 };
 
-#endif /* __CLASS_MYSQL_SET_STMT_PARSER_H */
+#endif /* PROXYSQL_MYSQL_SET_STMT_PARSER_H */

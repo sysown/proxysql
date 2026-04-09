@@ -407,10 +407,10 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 		PgSQL_SERVERS_SSL_PARAMS,
 		PgSQL_SERVERS,
 
-		__HGM_TABLES_SIZE
+		HGM_TABLES_SIZE_
 	};
 
-	std::array<uint64_t, __HGM_TABLES_SIZE> table_resultset_checksum { {0} };
+	std::array<uint64_t, HGM_TABLES_SIZE_> table_resultset_checksum { {0} };
 
 	class HostGroup_Server_Mapping {
 	public:
@@ -418,7 +418,7 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 			WRITER = 0,
 			READER = 1,
 
-			__TYPE_SIZE
+			TYPE_SIZE_
 		};
 
 		struct Node {
@@ -483,7 +483,7 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 		PgSQL_SrvC* insert_HGM(unsigned int hostgroup_id, const PgSQL_SrvC* srv);
 		void remove_HGM(PgSQL_SrvC* srv);
 
-		std::array<std::vector<Node>, __TYPE_SIZE> mapping; // index 0 contains reader and 1 contains writer hostgroups
+		std::array<std::vector<Node>, TYPE_SIZE_> mapping; // index 0 contains reader and 1 contains writer hostgroups
 		int readonly_flag;
 		PgSQL_HostGroups_Manager* myHGM;
 	};
@@ -864,4 +864,4 @@ private:
 };
 
 
-#endif /* __CLASS_PGSQL_HOSTGROUPS_MANAGER_H */
+#endif /* PROXYSQL_PGSQL_HOSTGROUPS_MANAGER_H */

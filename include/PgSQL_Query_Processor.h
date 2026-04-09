@@ -42,4 +42,4 @@ private:
 	friend class Query_Processor;
 };
 
-#endif /* __CLASS_PGSQL_QUERY_PROCESSOR_H */
+#endif /* PROXYSQL_PGSQL_QUERY_PROCESSOR_H */

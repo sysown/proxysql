@@ -1,5 +1,5 @@
-#ifndef __PROXYSQL_PROMETHEUS_HELPERS_H
-#define __PROXYSQL_PROMETHEUS_HELPERS_H
+#ifndef PROXYSQL_PROMETHEUS_HELPERS_H
+#define PROXYSQL_PROMETHEUS_HELPERS_H
 
 #include "prometheus/counter.h"
 #include "prometheus/gauge.h"
@@ -337,4 +337,4 @@ inline void p_inc_map_counter(
 	}
 }
 
-#endif /* __PROXYSQL_PROMETHEUS_HELPERS_H */
+#endif /* PROXYSQL_PROMETHEUS_HELPERS_H */

@@ -353,7 +353,7 @@ class WorkItem {
 };
 
 struct p_mon_counter {
-	enum metric {
+	enum metric : uint8_t {
 		mysql_monitor_workers_started,
 		mysql_monitor_connect_check_ok,
 		mysql_monitor_connect_check_err,
@@ -366,15 +366,15 @@ struct p_mon_counter {
 		mysql_monitor_dns_cache_queried,
 		mysql_monitor_dns_cache_lookup_success,
 		mysql_monitor_dns_cache_record_updated, 
-		__size
+		SIZE_
 	};
 };
 
 struct p_mon_gauge {
-	enum metric {
+	enum metric : uint8_t {
 		mysql_monitor_workers,
 		mysql_monitor_workers_aux,
-		__size
+		SIZE_
 	};
 };
 
@@ -501,8 +501,8 @@ class MySQL_Monitor {
 	std::atomic_bool force_dns_cache_update;
 	struct {
 		/// Prometheus metrics arrays
-		std::array<prometheus::Counter*, p_mon_counter::__size> p_counter_array {};
-		std::array<prometheus::Gauge*, p_mon_gauge::__size> p_gauge_array {};
+		std::array<prometheus::Counter*, p_mon_counter::SIZE_> p_counter_array {};
+		std::array<prometheus::Gauge*, p_mon_gauge::SIZE_> p_gauge_array {};
 	} metrics;
 	void p_update_metrics();
 	std::unique_ptr<wqueue<WorkItem<MySQL_Monitor_State_Data>*>> queue;

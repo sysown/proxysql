@@ -480,4 +480,4 @@ private:
 	friend Web_Interface_plugin;
 };
 
-#endif /* __CLASS_QUERY_PROCESSOR_H */
+#endif /* PROXYSQL_QUERY_PROCESSOR_H */

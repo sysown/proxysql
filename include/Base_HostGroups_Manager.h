@@ -637,10 +637,10 @@ class MySQL_HostGroups_Manager {
 		MYSQL_SERVERS_SSL_PARAMS,
 		MYSQL_SERVERS,
 
-		__HGM_TABLES_SIZE
+		HGM_TABLES_SIZE_
 	};
 
-	std::array<uint64_t, __HGM_TABLES_SIZE> table_resultset_checksum { {0} };
+	std::array<uint64_t, HGM_TABLES_SIZE_> table_resultset_checksum { {0} };
 
 	class HostGroup_Server_Mapping {
 	public:
@@ -648,7 +648,7 @@ class MySQL_HostGroups_Manager {
 			WRITER = 0,
 			READER = 1,
 
-			__TYPE_SIZE
+			TYPE_SIZE_
 		};
 
 		struct Node {
@@ -713,7 +713,7 @@ class MySQL_HostGroups_Manager {
 		MySrvC* insert_HGM(unsigned int hostgroup_id, const MySrvC* srv);
 		void remove_HGM(MySrvC* srv);
 
-		std::array<std::vector<Node>, __TYPE_SIZE> mapping; // index 0 contains reader and 1 contains writer hostgroups
+		std::array<std::vector<Node>, TYPE_SIZE_> mapping; // index 0 contains reader and 1 contains writer hostgroups
 		int readonly_flag;
 		MySQL_HostGroups_Manager* myHGM;
 	};

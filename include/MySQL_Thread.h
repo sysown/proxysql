@@ -762,4 +762,4 @@ class MySQL_Threads_Handler
 };
 
 
-#endif /* __CLASS_MYSQL_THREAD_H */
+#endif /* PROXYSQL_MYSQL_THREAD_H */

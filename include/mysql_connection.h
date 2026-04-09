@@ -276,4 +276,4 @@ class MySQL_Connection {
 	void get_mysql_info_json(nlohmann::json&);
 	void get_backend_conn_info_json(nlohmann::json&);
 };
-#endif /* __CLASS_MYSQL_CONNECTION_H */
+#endif /* PROXYSQL_MYSQL_CONNECTION_H */

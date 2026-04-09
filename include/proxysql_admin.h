@@ -1000,4 +1000,4 @@ class ProxySQL_Admin {
 	void flush_pgsql_stats();     // Reset PostgreSQL statistics only
 #endif // DEBUG
 };
-#endif /* __CLASS_PROXYSQL_ADMIN_H */
+#endif /* PROXYSQL_ADMIN_H */

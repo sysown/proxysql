@@ -22,4 +22,4 @@ class MySQL_Backend
 	void reset();
 };
 
-#endif /* __CLASS_MYSQL_BACKEND_H */
+#endif /* PROXYSQL_MYSQL_BACKEND_H */

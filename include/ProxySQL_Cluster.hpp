@@ -169,29 +169,29 @@ class ProxySQL_Node_Entry {
 };
 
 struct p_cluster_nodes_counter {
-	enum metric {
-		__size
+	enum metric : uint8_t {
+		SIZE_
 	};
 };
 
 struct p_cluster_nodes_gauge {
-	enum metric {
-		__size
+	enum metric : uint8_t {
+		SIZE_
 	};
 };
 
 struct p_cluster_nodes_dyn_counter {
-	enum metric {
+	enum metric : uint8_t {
 		proxysql_servers_checksums_version_total,
 		proxysql_servers_metrics_uptime_s,
 		proxysql_servers_metrics_queries,
 		proxysql_servers_metrics_client_conns_created,
-		__size
+		SIZE_
 	};
 };
 
 struct p_cluster_nodes_dyn_gauge {
-	enum metric {
+	enum metric : uint8_t {
 		proxysql_servers_checksums_epoch,
 		proxysql_servers_checksums_updated_at,
 		proxysql_servers_checksums_changed_at,
@@ -200,7 +200,7 @@ struct p_cluster_nodes_dyn_gauge {
 		proxysql_servers_metrics_response_time_ms,
 		proxysql_servers_metrics_last_check_ms,
 		proxysql_servers_metrics_client_conns_connected,
-		__size
+		SIZE_
 	};
 };
 
@@ -221,8 +221,8 @@ class ProxySQL_Cluster_Nodes {
 	void remove_inactives();
 	uint64_t generate_hash(char *_hostname, uint16_t _port);
 	struct {
-		std::array<prometheus::Family<prometheus::Counter>*, p_cluster_nodes_dyn_counter::__size> p_dyn_counter_array {};
-		std::array<prometheus::Family<prometheus::Gauge>*, p_cluster_nodes_dyn_gauge::__size> p_dyn_gauge_array {};
+		std::array<prometheus::Family<prometheus::Counter>*, p_cluster_nodes_dyn_counter::SIZE_> p_dyn_counter_array {};
+		std::array<prometheus::Family<prometheus::Gauge>*, p_cluster_nodes_dyn_gauge::SIZE_> p_dyn_gauge_array {};
 
 		// proxysql_servers_checksum
 		std::map<std::string, prometheus::Counter*> p_proxysql_servers_checksum_version {};
@@ -265,7 +265,7 @@ class ProxySQL_Cluster_Nodes {
 };
 
 struct p_cluster_counter {
-	enum metric {
+	enum metric : uint8_t {
 		pulled_mysql_query_rules_success = 0,
 		pulled_mysql_query_rules_failure,
 
@@ -320,13 +320,13 @@ struct p_cluster_counter {
 		sync_delayed_admin_variables_version_one,
 		sync_delayed_ldap_variables_version_one,
 
-		__size
+		SIZE_
 	};
 };
 
 struct p_cluster_gauge {
-	enum metric {
-		__size
+	enum metric : uint8_t {
+		SIZE_
 	};
 };
 
@@ -338,10 +338,10 @@ struct cluster_metrics_map_idx {
 };
 
 struct variable_type {
-	enum type {
+	enum type : uint8_t {
 		mysql,
 		admin,
-		__size
+		SIZE_
 	};
 };
 
@@ -395,8 +395,8 @@ private:
 	char* cluster_username;
 	char* cluster_password;
 	struct {
-		std::array<prometheus::Counter*, p_cluster_counter::__size> p_counter_array{};
-		std::array<prometheus::Gauge*, p_cluster_gauge::__size> p_gauge_array{};
+		std::array<prometheus::Counter*, p_cluster_counter::SIZE_> p_counter_array{};
+		std::array<prometheus::Gauge*, p_cluster_gauge::SIZE_> p_gauge_array{};
 	} metrics;
 	int fetch_and_store(MYSQL* conn, const fetch_query& f_query, MYSQL_RES** result);
 	friend class ProxySQL_Node_Entry;
