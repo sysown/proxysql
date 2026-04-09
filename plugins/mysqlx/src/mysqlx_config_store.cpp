@@ -296,9 +296,9 @@ int MysqlxConfigStore::route_hostgroup(const std::string& route_name) const {
 }
 
 uint64_t MysqlxConfigStore::topology_generation() const {
-	return topology_generation_;
+	return topology_generation_.load();
 }
 
 void MysqlxConfigStore::bump_topology_generation() {
-	++topology_generation_;
+	topology_generation_.fetch_add(1);
 }
