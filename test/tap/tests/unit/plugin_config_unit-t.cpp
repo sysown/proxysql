@@ -33,7 +33,7 @@ SQLite3DB* proxysql_plugin_get_statsdb() {
 }
 
 int main() {
-	plan(12);
+	plan(20);
 
 	Config cfg;
 	cfg.readString("plugins=(\"" PROXYSQL_FAKE_PLUGIN_PATH "\");");
@@ -104,5 +104,73 @@ int main() {
 
 	unsetenv("PROXYSQL_FAKE_PLUGIN_LOG");
 	std::remove(log_template);
+
+	// New assertions (13-20)
+
+	GloVars.plugin_modules.clear();
+	Config empty_plugins_cfg;
+	empty_plugins_cfg.readString("plugins=();");
+	proxysql_load_plugin_modules_from_config(empty_plugins_cfg.getRoot(), GloVars.plugin_modules);
+	ok(GloVars.plugin_modules.empty(),
+	   "config with empty plugins list produces empty plugin_modules");
+
+	GloVars.plugin_modules.clear();
+	Config two_cfg;
+	two_cfg.readString("plugins=(\"path/a.so\",\"path/b.so\");");
+	proxysql_load_plugin_modules_from_config(two_cfg.getRoot(), GloVars.plugin_modules);
+	ok(GloVars.plugin_modules.size() == static_cast<size_t>(2) &&
+	   GloVars.plugin_modules[0] == "path/a.so" &&
+	   GloVars.plugin_modules[1] == "path/b.so",
+	   "config parsing stores two plugin entries");
+
+	GloVars.plugin_modules.clear();
+	Config no_plugins_cfg;
+	no_plugins_cfg.readString("datadir=\"/tmp\";");
+	proxysql_load_plugin_modules_from_config(no_plugins_cfg.getRoot(), GloVars.plugin_modules);
+	ok(GloVars.plugin_modules.empty(),
+	   "config with no plugins key leaves plugin_modules empty with no crash");
+
+	{
+		GloVars.plugin_modules.clear();
+		Config first_cfg;
+		first_cfg.readString("plugins=(\"path/first.so\");");
+		proxysql_load_plugin_modules_from_config(first_cfg.getRoot(), GloVars.plugin_modules);
+
+		Config second_cfg;
+		second_cfg.readString("plugins=(\"path/a.so\",\"path/b.so\");");
+		proxysql_load_plugin_modules_from_config(second_cfg.getRoot(), GloVars.plugin_modules);
+		ok(GloVars.plugin_modules.size() == static_cast<size_t>(2) &&
+		   GloVars.plugin_modules[0] == "path/a.so" &&
+		   GloVars.plugin_modules[1] == "path/b.so",
+		   "second config parsing call replaces first plugin list");
+	}
+
+	{
+		std::unique_ptr<ProxySQL_PluginManager> null_mgr;
+		std::string stop_err;
+		ok(proxysql_stop_configured_plugins(null_mgr, stop_err),
+		   "proxysql_stop_configured_plugins with null manager returns true");
+	}
+
+	{
+		std::string start_err;
+		ok(proxysql_start_configured_plugins(nullptr, start_err),
+		   "proxysql_start_configured_plugins with null manager returns true");
+	}
+
+	{
+		std::unique_ptr<ProxySQL_PluginManager> empty_mgr;
+		std::vector<std::string> empty_list;
+		std::string load_err;
+		ok(proxysql_load_configured_plugins(empty_mgr, empty_list, load_err),
+		   "proxysql_load_configured_plugins with empty plugin list returns true");
+	}
+
+	{
+		ProxySQL_PluginCommandResult after_stop_result { 1, 0, "" };
+		ok(!proxysql_dispatch_configured_plugin_admin_command(ctx, "PLUGIN FAKE NOOP", after_stop_result),
+		   "dispatch returns false after configured plugins are stopped");
+	}
+
 	return exit_status();
 }
