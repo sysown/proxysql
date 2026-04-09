@@ -232,15 +232,16 @@ int check_pgsql_servers_v2_sync(
 				" AND use_ssl=%d AND max_latency_ms=%d AND comment='%s'";
 		string runtime_pgsql_servers_query {};
 		string main_pgsql_servers_query {};
-		// SHUNNED servers are mapped to ONLINE by CLUSTER_QUERY_RUNTIME_PGSQL_SERVERS
-		const string runtime_status = (std::get<3>(values) == "SHUNNED") ? "ONLINE" : std::get<3>(values);
+		// SHUNNED is a transient runtime state, never persisted in config.
+		// Both runtime and main tables store SHUNNED servers as ONLINE.
+		const string synced_status = (std::get<3>(values) == "SHUNNED") ? "ONLINE" : std::get<3>(values);
 		string_format(
 			t_runtime_pgsql_servers_query,
 			runtime_pgsql_servers_query,
 			std::get<0>(values),
 			std::get<1>(values).c_str(),
 			std::get<2>(values),
-			runtime_status.c_str(),
+			synced_status.c_str(),
 			std::get<4>(values),
 			std::get<5>(values),
 			std::get<6>(values),
@@ -259,7 +260,7 @@ int check_pgsql_servers_v2_sync(
 			std::get<0>(values),
 			std::get<1>(values).c_str(),
 			std::get<2>(values),
-			std::get<3>(values).c_str(),
+			synced_status.c_str(),
 			std::get<4>(values),
 			std::get<5>(values),
 			std::get<6>(values),
@@ -643,7 +644,6 @@ int check_diffs_before_sync_disabled(MYSQL* proxy_admin, MYSQL* replica_admin) {
 	}
 
 	// Set diffs_before_sync=0 on the replica to disable sync
-	string_format("SET admin-cluster_pgsql_servers_diffs_before_sync = 0");
 	if (mysql_query_t(replica_admin, "SET admin-cluster_pgsql_servers_diffs_before_sync = 0") != EXIT_SUCCESS) {
 		diag("Failed to disable diffs_before_sync on replica");
 		return EXIT_FAILURE;
