@@ -23,6 +23,7 @@
  */
 
 #include "proxysql_sslkeylog.h"
+#include "libpq-fe.h"
 
 // NSS Key Log Format reference:
 // https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSS/Key_Log_Format
@@ -228,4 +229,20 @@ void proxysql_keylog_attach_callback(SSL_CTX* ssl_ctx) {
     if (ssl_ctx && (SSL_CTX_get_keylog_callback(ssl_ctx) == (SSL_CTX_keylog_cb_func)NULL)) {
 	    SSL_CTX_set_keylog_callback(ssl_ctx, proxysql_keylog_write_line_callback);
     }
+}
+
+/**
+ * @brief Register the ProxySQL keylog callback with libpq
+ *
+ * Sets the global SSL keylog callback in libpq using PQsetSSLKeyLogCallback().
+ * This ensures all PostgreSQL backend connections write TLS secrets to the
+ * keylog file, matching the behavior already implemented for MySQL backends
+ * via MARIADB_OPT_SSL_KEYLOG_CALLBACK.
+ *
+ * The callback is set globally (not per-connection) because libpq creates
+ * a new SSL_CTX per connection internally. A global callback ensures coverage
+ * for both async (PQconnectStart) and sync (PQconnectdb) connection paths.
+ */
+void proxysql_keylog_set_pgsql_callback() {
+    PQsetSSLKeyLogCallback((PQsslKeyLogCallback_type)proxysql_keylog_write_line_callback);
 }
