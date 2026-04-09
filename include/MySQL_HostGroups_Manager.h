@@ -180,7 +180,10 @@ class MySrvConnList {
 			MySQL_Connection *conn = NULL;
 			conn = (MySQL_Connection *)conns->index(i);
 			if (conn==c) {
-				return (unsigned int)i;
+				// 'find_idx' returns an int; cast the unsigned loop index to int
+				// to avoid unsigned->signed narrowing warnings and keep the
+				// sentinel return value of -1 for "not found".
+				return static_cast<int>(i);
 			}
 		}
 		return -1;
