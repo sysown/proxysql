@@ -203,10 +203,11 @@ struct incoming_pgsql_servers_t {
 	SQLite3_result* incoming_pgsql_servers_v2 = NULL;
 	SQLite3_result* incoming_replication_hostgroups = NULL;
 	SQLite3_result* incoming_hostgroup_attributes = NULL;
+	SQLite3_result* incoming_pgsql_servers_ssl_params = NULL;
 	SQLite3_result* runtime_pgsql_servers = NULL;
 
 	incoming_pgsql_servers_t();
-	incoming_pgsql_servers_t(SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*);
+	incoming_pgsql_servers_t(SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*);
 };
 
 // Separate structs for runtime pgsql server and pgsql server v2 to avoid human error

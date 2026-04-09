@@ -834,6 +834,7 @@ PgSQL_HostGroups_Manager::PgSQL_HostGroups_Manager() {
 #endif /* DEBUG */
 	mydb->execute(MYHGM_PgSQL_SERVERS);
 	mydb->execute(MYHGM_PgSQL_SERVERS_INCOMING);
+	mydb->execute(MYHGM_PgSQL_SERVERS_SSL_PARAMS);
 	mydb->execute(MYHGM_PgSQL_REPLICATION_HOSTGROUPS);
 	mydb->execute(MYHGM_PgSQL_HOSTGROUP_ATTRIBUTES);
 	mydb->execute("CREATE INDEX IF NOT EXISTS idx_pgsql_servers_hostname_port ON pgsql_servers (hostname,port)");
@@ -1050,6 +1051,7 @@ void PgSQL_HostGroups_Manager::commit_update_checksums_from_tables(SpookyHash& m
 
 	CUCFT1(myhash,init,"pgsql_replication_hostgroups","writer_hostgroup", table_resultset_checksum[HGM_TABLES::PgSQL_REPLICATION_HOSTGROUPS]);
 	CUCFT1(myhash,init,"pgsql_hostgroup_attributes","hostgroup_id", table_resultset_checksum[HGM_TABLES::PgSQL_HOSTGROUP_ATTRIBUTES]);
+	CUCFT1(myhash,init,"pgsql_servers_ssl_params","hostname,port,username", table_resultset_checksum[HGM_TABLES::PgSQL_SERVERS_SSL_PARAMS]);
 }
 
 /**
@@ -1517,6 +1519,13 @@ bool PgSQL_HostGroups_Manager::commit(
 			generate_pgsql_hostgroup_attributes_table();
 		}
 
+		// SSL params
+		if (incoming_pgsql_servers_ssl_params) {
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM pgsql_servers_ssl_params\n");
+			mydb->execute("DELETE FROM pgsql_servers_ssl_params");
+			generate_pgsql_servers_ssl_params_table();
+		}
+
 		uint64_t new_hash = commit_update_checksum_from_pgsql_servers_v2(peer_pgsql_servers_v2.resultset);
 
 		{
@@ -1839,6 +1848,8 @@ SQLite3_result * PgSQL_HostGroups_Manager::dump_table_pgsql(const string& name) 
 		query = (char *)PGHGM_GEN_ADMIN_RUNTIME_SERVERS;
 	} else if (name == "cluster_pgsql_servers") {
 		query = (char *)PGHGM_GEN_CLUSTER_ADMIN_RUNTIME_SERVERS;
+	} else if (name == "pgsql_servers_ssl_params") {
+		query=(char *)"SELECT hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_crl, ssl_crlpath, ssl_protocol_version_range, comment FROM pgsql_servers_ssl_params ORDER BY hostname, port, username";
 	} else {
 		assert(0);
 	}
@@ -2917,6 +2928,8 @@ void PgSQL_HostGroups_Manager::save_incoming_pgsql_table(SQLite3_result *s, cons
 		inc = &incoming_replication_hostgroups;
 	} else if (name == "pgsql_hostgroup_attributes") {
 		inc = &incoming_hostgroup_attributes;
+	} else if (name == "pgsql_servers_ssl_params") {
+		inc = &incoming_pgsql_servers_ssl_params;
 	} else {
 		assert(0);
 	}
@@ -2952,6 +2965,8 @@ SQLite3_result* PgSQL_HostGroups_Manager::get_current_pgsql_table(const string& 
 		return this->runtime_pgsql_servers;
 	} else if (name == "pgsql_servers_v2") {
 		return this->incoming_pgsql_servers_v2;
+	} else if (name == "pgsql_servers_ssl_params") {
+		return this->incoming_pgsql_servers_ssl_params;
 	} else {
 		assert(0);
 	}
@@ -3956,6 +3971,76 @@ void PgSQL_HostGroups_Manager::generate_pgsql_hostgroup_attributes_table() {
 
 	delete incoming_hostgroup_attributes;
 	incoming_hostgroup_attributes=NULL;
+}
+
+void PgSQL_HostGroups_Manager::generate_pgsql_servers_ssl_params_table() {
+	if (incoming_pgsql_servers_ssl_params==NULL) {
+		return;
+	}
+	int rc;
+
+	const char * query = (const char *)"INSERT INTO pgsql_servers_ssl_params ("
+		"hostname, port, username, ssl_ca, ssl_cert, ssl_key, "
+		"ssl_crl, ssl_crlpath, ssl_protocol_version_range, comment) VALUES "
+		"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
+
+	auto [rc1, statement_unique] = mydb->prepare_v2(query);
+	ASSERT_SQLITE_OK(rc1, mydb);
+	sqlite3_stmt *statement = statement_unique.get();
+	proxy_info("New pgsql_servers_ssl_params table\n");
+	std::lock_guard<std::mutex> lock(PgSQL_Servers_SSL_Params_map_mutex);
+	PgSQL_Servers_SSL_Params_map.clear();
+
+	for (std::vector<SQLite3_row *>::iterator it = incoming_pgsql_servers_ssl_params->rows.begin() ; it != incoming_pgsql_servers_ssl_params->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		proxy_info("Loading PgSQL Server SSL Params for (%s,%s,%s)\n",
+			r->fields[0], r->fields[1], r->fields[2]
+		);
+
+		rc=(*proxy_sqlite3_bind_text)(statement,  1,  r->fields[0]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // hostname
+		rc=(*proxy_sqlite3_bind_int64)(statement, 2,  atoi(r->fields[1]));                   ASSERT_SQLITE_OK(rc, mydb); // port
+		rc=(*proxy_sqlite3_bind_text)(statement,  3,  r->fields[2]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // username
+		rc=(*proxy_sqlite3_bind_text)(statement,  4,  r->fields[3]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_ca
+		rc=(*proxy_sqlite3_bind_text)(statement,  5,  r->fields[4]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_cert
+		rc=(*proxy_sqlite3_bind_text)(statement,  6,  r->fields[5]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_key
+		rc=(*proxy_sqlite3_bind_text)(statement,  7,  r->fields[6]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_crl
+		rc=(*proxy_sqlite3_bind_text)(statement,  8,  r->fields[7]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_crlpath
+		rc=(*proxy_sqlite3_bind_text)(statement,  9,  r->fields[8]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_protocol_version_range
+		rc=(*proxy_sqlite3_bind_text)(statement,  10, r->fields[9]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // comment
+
+		SAFE_SQLITE3_STEP2(statement);
+		rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mydb);
+
+		PgSQLServers_SslParams PSSP(
+			r->fields[0], atoi(r->fields[1]), r->fields[2],
+			r->fields[3], r->fields[4], r->fields[5],
+			r->fields[6], r->fields[7],
+			r->fields[8], r->fields[9]
+		);
+		string MapKey = PSSP.getMapKey(rand_del);
+		PgSQL_Servers_SSL_Params_map.emplace(MapKey, PSSP);
+	}
+	delete incoming_pgsql_servers_ssl_params;
+	incoming_pgsql_servers_ssl_params=NULL;
+}
+
+PgSQLServers_SslParams * PgSQL_HostGroups_Manager::get_Server_SSL_Params(char *hostname, int port, char *username) {
+	string MapKey = string(hostname) + string(rand_del) + to_string(port) + string(rand_del) + string(username);
+	std::lock_guard<std::mutex> lock(PgSQL_Servers_SSL_Params_map_mutex);
+	auto it = PgSQL_Servers_SSL_Params_map.find(MapKey);
+	if (it != PgSQL_Servers_SSL_Params_map.end()) {
+		PgSQLServers_SslParams * PSSP = new PgSQLServers_SslParams(it->second);
+		return PSSP;
+	} else {
+		MapKey = string(hostname) + string(rand_del) + to_string(port) + string(rand_del) + "";
+		it = PgSQL_Servers_SSL_Params_map.find(MapKey);
+		if (it != PgSQL_Servers_SSL_Params_map.end()) {
+			PgSQLServers_SslParams * PSSP = new PgSQLServers_SslParams(it->second);
+			return PSSP;
+		}
+	}
+	return NULL;
 }
 
 int PgSQL_HostGroups_Manager::create_new_server_in_hg(

@@ -3457,6 +3457,8 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			tn = "pgsql_hostgroup_attributes";
 		} else if (!strncasecmp(CLUSTER_QUERY_PGSQL_SERVERS_V2, query_no_space, strlen(CLUSTER_QUERY_PGSQL_SERVERS_V2))) {
 			tn = "pgsql_servers_v2";
+		} else if (!strncasecmp(CLUSTER_QUERY_PGSQL_SERVERS_SSL_PARAMS, query_no_space, strlen(CLUSTER_QUERY_PGSQL_SERVERS_SSL_PARAMS))) {
+			tn = "pgsql_servers_ssl_params";
 		}
 		if (tn != "") {
 			GloAdmin->pgsql_servers_wrlock();

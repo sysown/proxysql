@@ -153,6 +153,7 @@ static const vector<string> pgsql_servers_tablenames = {
 //	"pgsql_galera_hostgroups",
 //	"pgsql_aws_aurora_hostgroups",
 	"pgsql_hostgroup_attributes",
+	"pgsql_servers_ssl_params",
 };
 
 static const vector<string> mysql_firewall_tablenames = {
@@ -898,11 +899,13 @@ incoming_pgsql_servers_t::incoming_pgsql_servers_t(
 	SQLite3_result* incoming_pgsql_servers_v2,
 	SQLite3_result* incoming_replication_hostgroups,
 	SQLite3_result* incoming_hostgroup_attributes,
+	SQLite3_result* incoming_pgsql_servers_ssl_params,
 	SQLite3_result* runtime_pgsql_servers
 ) :
 	incoming_pgsql_servers_v2(incoming_pgsql_servers_v2),
 	incoming_replication_hostgroups(incoming_replication_hostgroups),
 	incoming_hostgroup_attributes(incoming_hostgroup_attributes),
+	incoming_pgsql_servers_ssl_params(incoming_pgsql_servers_ssl_params),
 	runtime_pgsql_servers(runtime_pgsql_servers)
 {}
 
@@ -7963,6 +7966,48 @@ void ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 	}
 	if (resultset) delete resultset;
 	resultset = NULL;
+
+	// dump pgsql_servers_ssl_params
+
+	StrQuery = "DELETE FROM main.";
+	if (_runtime)
+		StrQuery += "runtime_";
+	StrQuery += "pgsql_servers_ssl_params";
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", StrQuery.c_str());
+	admindb->execute(StrQuery.c_str());
+	resultset=PgHGM->dump_table_pgsql("pgsql_servers_ssl_params");
+	if (resultset) {
+		int rc;
+		sqlite3_stmt *statement=NULL;
+		StrQuery = "INSERT INTO ";
+		if (_runtime)
+			StrQuery += "runtime_";
+		StrQuery += "pgsql_servers_ssl_params (hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_crl, ssl_crlpath, ssl_protocol_version_range, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
+		auto [rc1, statement_unique] = admindb->prepare_v2(StrQuery.c_str());
+		rc = rc1;
+		statement = statement_unique.get();
+		ASSERT_SQLITE_OK(rc, admindb);
+
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			rc=(*proxy_sqlite3_bind_text)(statement,  1,  r->fields[0],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // hostname
+			rc=(*proxy_sqlite3_bind_int64)(statement, 2,  atol(r->fields[1]));                  ASSERT_SQLITE_OK(rc, admindb); // port
+			rc=(*proxy_sqlite3_bind_text)(statement,  3,  r->fields[2],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // username
+			rc=(*proxy_sqlite3_bind_text)(statement,  4,  r->fields[3],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_ca
+			rc=(*proxy_sqlite3_bind_text)(statement,  5,  r->fields[4],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_cert
+			rc=(*proxy_sqlite3_bind_text)(statement,  6,  r->fields[5],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_key
+			rc=(*proxy_sqlite3_bind_text)(statement,  7,  r->fields[6],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_crl
+			rc=(*proxy_sqlite3_bind_text)(statement,  8,  r->fields[7],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_crlpath
+			rc=(*proxy_sqlite3_bind_text)(statement,  9,  r->fields[8],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_protocol_version_range
+			rc=(*proxy_sqlite3_bind_text)(statement,  10, r->fields[9],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // comment
+
+			SAFE_SQLITE3_STEP2(statement);
+			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);
+			rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, admindb);
+		}
+	}
+	if(resultset) delete resultset;
+	resultset=NULL;
 }
 
 
@@ -8314,6 +8359,22 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	else {
 		// Pass the resultset to PgHGM
 		PgHGM->save_incoming_pgsql_table(resultset_hostgroup_attributes, "pgsql_hostgroup_attributes");
+	}
+
+	// support for SSL parameters, table pgsql_servers_ssl_params
+	SQLite3_result* resultset_pgsql_servers_ssl_params = NULL;
+	query = (char *)"SELECT * FROM pgsql_servers_ssl_params ORDER BY hostname, port, username";
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	if (incoming_pgsql_servers.incoming_pgsql_servers_ssl_params == nullptr) {
+		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset_pgsql_servers_ssl_params);
+	} else {
+		resultset_pgsql_servers_ssl_params = incoming_pgsql_servers.incoming_pgsql_servers_ssl_params;
+	}
+	if (error) {
+		proxy_error("Error on %s : %s\n", query, error);
+	} else {
+		// Pass the resultset to PgHGM
+		PgHGM->save_incoming_pgsql_table(resultset_pgsql_servers_ssl_params, "pgsql_servers_ssl_params");
 	}
 
 	// commit all the changes

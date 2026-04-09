@@ -61,10 +61,14 @@ def _is_elf(path):
 
 
 def load_groups(groups_path):
-    """Load test names from groups.json."""
+    """Load test names from groups.json.
+
+    Entries whose keys start with '@' are metadata tags (e.g. @proxysql_min_version)
+    and are not test names, so they are excluded.
+    """
     with open(groups_path, "r") as f:
         data = json.load(f)
-    return set(data.keys())
+    return {k for k in data.keys() if not k.startswith("@")}
 
 
 def main():

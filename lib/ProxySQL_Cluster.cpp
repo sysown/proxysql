@@ -1547,6 +1547,31 @@ void update_pgsql_hostgroup_attributes(SQLite3_result* resultset) {
 	}
 }
 
+void update_pgsql_servers_ssl_params(SQLite3_result* resultset) {
+	GloAdmin->admindb->execute("DELETE FROM pgsql_servers_ssl_params");
+	if (resultset == nullptr) return;
+	const char* q = "INSERT INTO pgsql_servers_ssl_params (hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_crl, ssl_crlpath, ssl_protocol_version_range, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
+	auto [rc1, statement1_unique] = GloAdmin->admindb->prepare_v2(q);
+	ASSERT_SQLITE_OK(rc1, GloAdmin->admindb);
+	sqlite3_stmt* statement1 = statement1_unique.get();
+	int rc;
+	for (auto* row : resultset->rows) {
+		rc = (*proxy_sqlite3_bind_text)(statement1, 1, row->fields[0] ? row->fields[0] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 2, atoll(row->fields[1])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 3, row->fields[2] ? row->fields[2] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 4, row->fields[3] ? row->fields[3] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 5, row->fields[4] ? row->fields[4] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 6, row->fields[5] ? row->fields[5] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 7, row->fields[6] ? row->fields[6] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 8, row->fields[7] ? row->fields[7] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 9, row->fields[8] ? row->fields[8] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 10, row->fields[9] ? row->fields[9] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		SAFE_SQLITE3_STEP2(statement1);
+		rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+	}
+}
+
 void update_ldap_mappings(MYSQL_RES* result) {
 	GloAdmin->admindb->execute(SQLQueries::DELETE_MYSQL_LDAP_MAPPING);
 	char* q = const_cast<char*>(
@@ -1859,6 +1884,7 @@ incoming_pgsql_servers_t convert_pgsql_servers_resultsets(const std::vector<MYSQ
 			get_SQLite3_resulset(results[1]).release(),
 			get_SQLite3_resulset(results[2]).release(),
 			get_SQLite3_resulset(results[3]).release(),
+			get_SQLite3_resulset(results[4]).release(),
 		};
 	}
 }
@@ -3565,10 +3591,20 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 						"",
 						"Cluster: Fetching PostgreSQL Hostgroup Attributes from peer " + string(hostname) + ":" + std::to_string(port) + " failed: "
 					}
+				},
+				{
+					CLUSTER_QUERY_PGSQL_SERVERS_SSL_PARAMS,
+					p_cluster_counter::metric(-1),
+					p_cluster_counter::metric(-1),
+					{
+						"Cluster: Fetching PostgreSQL Servers SSL Params from peer " + string(hostname) + ":" + std::to_string(port) + " completed.",
+						"",
+						"Cluster: Fetching PostgreSQL Servers SSL Params from peer " + string(hostname) + ":" + std::to_string(port) + " failed: "
+					}
 				}
 			};
 
-			std::vector<MYSQL_RES*> results(4, nullptr);
+			std::vector<MYSQL_RES*> results(5, nullptr);
 			bool fetching_error = false;
 			for (size_t i = 0; i < sizeof(queries) / sizeof(fetch_query); i++) {
 				MYSQL_RES* fetch_res = nullptr;
@@ -3595,7 +3631,7 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 
 				MYSQL_RES* fetch_res = nullptr;
 				if (fetch_and_store(conn, runtime_query, &fetch_res) == 0) {
-					results[3] = fetch_res;
+					results[4] = fetch_res;
 				} else {
 					fetching_error = true;
 					fetch_failed = true;
@@ -3605,7 +3641,7 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 			if (fetching_error == false) {
 				const string expected_pgsql_v2_checksum = peer_pgsql_servers_v2_checksum
 					? string(peer_pgsql_servers_v2_checksum) : peer_pgsql_server_v2.value;
-				const uint64_t servers_hash = compute_servers_tables_raw_checksum(results, 3);
+				const uint64_t servers_hash = compute_servers_tables_raw_checksum(results, 4);
 				const string computed_pgsql_v2_checksum = get_checksum_from_hash(servers_hash);
 
 				bool runtime_checksum_matches = true;
@@ -3614,10 +3650,10 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 				string computed_runtime_pgsql_checksum;
 
 				if (fetch_runtime_pgsql_servers == true) {
-					if (results[3] == nullptr || expected_runtime_pgsql_checksum.empty()) {
+					if (results[4] == nullptr || expected_runtime_pgsql_checksum.empty()) {
 						runtime_checksum_matches = false;
 					} else {
-						const uint64_t runtime_hash = mysql_raw_checksum(results[3]);
+						const uint64_t runtime_hash = mysql_raw_checksum(results[4]);
 						computed_runtime_pgsql_checksum = get_checksum_from_hash(runtime_hash);
 						runtime_checksum_matches = (computed_runtime_pgsql_checksum == expected_runtime_pgsql_checksum);
 					}
@@ -3639,6 +3675,7 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 					update_pgsql_servers(incoming_pgsql_servers.incoming_pgsql_servers_v2);
 					update_pgsql_replication_hostgroups(incoming_pgsql_servers.incoming_replication_hostgroups);
 					update_pgsql_hostgroup_attributes(incoming_pgsql_servers.incoming_hostgroup_attributes);
+					update_pgsql_servers_ssl_params(incoming_pgsql_servers.incoming_pgsql_servers_ssl_params);
 					GloAdmin->load_pgsql_servers_to_runtime(
 						incoming_pgsql_servers,
 						fetch_runtime_pgsql_servers ? expected_runtime_pgsql_server : runtime_pgsql_servers_checksum_t {},

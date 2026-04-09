@@ -26,7 +26,7 @@
 #define STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT        0x00000800
 #define STATUS_MYSQL_CONNECTION_HAS_WARNINGS         0x00001000
 
-class MySQLServers_SslParams;
+#include "Servers_SslParams.h"
 
 class Variable {
 public:

@@ -301,6 +301,9 @@ struct mon_srv_t {
 		string ssl_p2s_ca;
 		string ssl_p2s_crl;
 		string ssl_p2s_crlpath;
+		// Pre-parsed from ssl_protocol_version_range; empty when unset/malformed.
+		string ssl_min_protocol_version;
+		string ssl_max_protocol_version;
 	} ssl_opt;
 };
 
@@ -440,13 +443,38 @@ vector<mon_srv_t> ext_srvs(const unique_ptr<SQLite3_result>& srvs_info) {
 			string { row->fields[1] },
 			static_cast<uint16_t>(std::atoi(row->fields[2])),
 			static_cast<bool>(std::atoi(row->fields[3])),
-			mon_srv_t::ssl_opts_t {
-				string { pgsql_thread___ssl_p2s_key ? pgsql_thread___ssl_p2s_key : ""},
-				string { pgsql_thread___ssl_p2s_cert ? pgsql_thread___ssl_p2s_cert : "" },
-				string { pgsql_thread___ssl_p2s_ca ? pgsql_thread___ssl_p2s_ca : "" },
-				string { pgsql_thread___ssl_p2s_crl ? pgsql_thread___ssl_p2s_crl : "" },
-				string { pgsql_thread___ssl_p2s_crlpath ? pgsql_thread___ssl_p2s_crlpath : ""}
-			}
+			[&]() -> mon_srv_t::ssl_opts_t {
+				bool use_ssl_val = static_cast<bool>(std::atoi(row->fields[3]));
+				if (use_ssl_val) {
+					std::unique_ptr<PgSQLServers_SslParams> ssl_params {
+						PgHGM->get_Server_SSL_Params(
+							row->fields[1],
+							std::atoi(row->fields[2]),
+							pgsql_thread___monitor_username ? pgsql_thread___monitor_username : (char*)""
+						)
+					};
+					if (ssl_params != nullptr) {
+						return mon_srv_t::ssl_opts_t {
+							ssl_params->ssl_key,
+							ssl_params->ssl_cert,
+							ssl_params->ssl_ca,
+							ssl_params->ssl_crl,
+							ssl_params->ssl_crlpath,
+							ssl_params->ssl_min_protocol_version,
+							ssl_params->ssl_max_protocol_version
+						};
+					}
+				}
+				return mon_srv_t::ssl_opts_t {
+					string { pgsql_thread___ssl_p2s_key ? pgsql_thread___ssl_p2s_key : ""},
+					string { pgsql_thread___ssl_p2s_cert ? pgsql_thread___ssl_p2s_cert : "" },
+					string { pgsql_thread___ssl_p2s_ca ? pgsql_thread___ssl_p2s_ca : "" },
+					string { pgsql_thread___ssl_p2s_crl ? pgsql_thread___ssl_p2s_crl : "" },
+					string { pgsql_thread___ssl_p2s_crlpath ? pgsql_thread___ssl_p2s_crlpath : ""},
+					string { "" },
+					string { "" }
+				};
+			}()
 		});
 	}
 	return srvs;
@@ -1082,6 +1110,13 @@ string build_conn_str(const task_st_t& task_st) {
 		append_conninfo_param(conninfo, "sslrootcert", srv_info.ssl_opt.ssl_p2s_ca);
 		append_conninfo_param(conninfo, "sslcrl", srv_info.ssl_opt.ssl_p2s_crl);
 		append_conninfo_param(conninfo, "sslcrldir", srv_info.ssl_opt.ssl_p2s_crlpath);
+		// Per-server TLS protocol pinning was pre-parsed from
+		// ssl_protocol_version_range when the row was loaded into
+		// PgSQLServers_SslParams. Empty fields => libpq defaults.
+		if (!srv_info.ssl_opt.ssl_min_protocol_version.empty())
+			append_conninfo_param(conninfo, "ssl_min_protocol_version", srv_info.ssl_opt.ssl_min_protocol_version);
+		if (!srv_info.ssl_opt.ssl_max_protocol_version.empty())
+			append_conninfo_param(conninfo, "ssl_max_protocol_version", srv_info.ssl_opt.ssl_max_protocol_version);
 	} else {
 		conninfo << "sslmode='disable' "; // not supporting SSL
 	}
