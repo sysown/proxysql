@@ -60,13 +60,30 @@ static void test_frame_enqueue_write() {
 	ok(wb[4] == 0x0E, "message type is 0x0E");
 }
 
+static void test_parse_error_zero_payload() {
+	MysqlxDataStream ds;
+	uint8_t bad[] = {0x00, 0x00, 0x00, 0x00, 0x01};
+	ds.feed_bytes(bad, 5);
+	ok(ds.has_parse_error(), "zero payload_size sets parse error");
+	ok(!ds.has_complete_frame(), "no frame produced after parse error");
+}
+
+static void test_parse_error_oversized_payload() {
+	MysqlxDataStream ds;
+	uint8_t big[] = {0x01, 0x00, 0x00, 0x01, 0x01};
+	ds.feed_bytes(big, 5);
+	ok(ds.has_parse_error(), "oversized payload (>16MB) sets parse error");
+}
+
 int main() {
-	plan(15);
+	plan(18);
 
 	test_frame_header_parse();
 	test_partial_frame();
 	test_multiple_frames();
 	test_frame_enqueue_write();
+	test_parse_error_zero_payload();
+	test_parse_error_oversized_payload();
 
 	return exit_status();
 }

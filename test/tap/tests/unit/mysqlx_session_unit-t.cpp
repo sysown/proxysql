@@ -1,4 +1,5 @@
 #include "mysqlx_session.h"
+#include "mysqlx_protocol.h"
 #include "tap.h"
 #include "test_globals.h"
 #include "test_init.h"
@@ -210,7 +211,7 @@ static void test_unexpected_message_during_connecting() {
 	close(fds[1]);
 }
 
-static void test_plain_auth_flow() {
+static void test_plain_rejected_without_tls() {
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -220,8 +221,7 @@ static void test_plain_auth_flow() {
 
 	Mysqlx::Session::AuthenticateStart auth_start;
 	auth_start.set_mech_name("PLAIN");
-	std::string auth_data = std::string("\0testuser\0testpass", 19);
-	auth_start.set_auth_data(auth_data);
+	auth_start.set_auth_data(std::string("\0testuser\0testpass", 19));
 	std::string serialized;
 	auth_start.SerializeToString(&serialized);
 
@@ -230,33 +230,44 @@ static void test_plain_auth_flow() {
 
 	sess.handler();
 
-	ok(sess.get_status() == MysqlxSession::WAITING_CLIENT_XMSG, "in WAITING_CLIENT_XMSG after PLAIN auth");
+	ok(!sess.is_healthy(), "unhealthy after PLAIN without TLS");
 
 	uint8_t buf[4096];
 	usleep(10000);
 	ssize_t r = read_x_frame(fds[1], buf, sizeof(buf));
-	ok(r > 0, "got auth response");
+	ok(r > 0, "got error response for PLAIN without TLS");
 	if (r > 0) {
-		ok(buf[4] == Mysqlx::ServerMessages_Type_SESS_AUTHENTICATE_OK,
-		   "response is SESS_AUTHENTICATE_OK");
+		ok(buf[4] == Mysqlx::ServerMessages_Type_ERROR, "response is ERROR");
+		Mysqlx::Error err;
+		if (err.ParseFromArray(buf + 5, static_cast<int>(r - 5))) {
+			ok(err.code() == 1045, "PLAIN rejected with 1045");
+		}
 	}
 
 	close(fds[0]);
 	close(fds[1]);
 }
 
-static void test_mysql41_auth_flow() {
+static void test_mysql41_auth_with_credentials() {
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
 	MysqlxSession sess;
 	sess.init(fds[0], nullptr);
+
+	sess.set_credential_lookup([](const std::string& user) -> MysqlxCredentials {
+		if (user == "testuser") {
+			std::vector<uint8_t> hash = mysqlx_mysql41_hash("testpass");
+			return { std::string(hash.begin(), hash.end()), true, "MYSQL41" };
+		}
+		return { "", false, "" };
+	});
+
 	sess.to_process = true;
 
 	Mysqlx::Session::AuthenticateStart auth_start;
 	auth_start.set_mech_name("MYSQL41");
-	std::string auth_data = std::string("\0testdb\0testuser", 16);
-	auth_start.set_auth_data(auth_data);
+	auth_start.set_auth_data(std::string("\0testdb\0testuser", 16));
 	std::string serialized;
 	auth_start.SerializeToString(&serialized);
 
@@ -265,37 +276,214 @@ static void test_mysql41_auth_flow() {
 
 	sess.handler();
 
-	ok(sess.get_status() == MysqlxSession::X_AUTH_CHALLENGE_SENT, "in X_AUTH_CHALLENGE_SENT after MYSQL41 start");
+	ok(sess.get_status() == MysqlxSession::X_AUTH_CHALLENGE_SENT, "in X_AUTH_CHALLENGE_SENT");
 
 	uint8_t buf[4096];
 	usleep(10000);
 	ssize_t r = read_x_frame(fds[1], buf, sizeof(buf));
-	ok(r > 0, "got auth continue response");
-	if (r > 0) {
+	ok(r > 5, "got auth challenge");
+	if (r > 5) {
 		ok(buf[4] == Mysqlx::ServerMessages_Type_SESS_AUTHENTICATE_CONTINUE,
-		   "response is SESS_AUTHENTICATE_CONTINUE");
+		   "response is AuthenticateContinue");
 	}
 
-	Mysqlx::Session::AuthenticateContinue auth_cont;
-	auth_cont.set_auth_data("*0123456789ABCDEF");
-	std::string cont_serialized;
-	auth_cont.SerializeToString(&cont_serialized);
+	Mysqlx::Session::AuthenticateContinue cont_msg;
+	cont_msg.ParseFromArray(buf + 5, r - 5);
+	std::vector<uint8_t> challenge(cont_msg.auth_data().begin(), cont_msg.auth_data().end());
+
+	std::vector<uint8_t> scramble = mysqlx_mysql41_scramble(challenge, "testpass");
+	std::string hex_scramble = mysqlx_hex_encode(scramble);
+	std::string response_str = std::string("*") + hex_scramble;
+
+	cont_msg.Clear();
+	cont_msg.set_auth_data(response_str);
+	cont_msg.SerializeToString(&serialized);
 
 	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_CONTINUE,
-		reinterpret_cast<const uint8_t*>(cont_serialized.data()), cont_serialized.size());
+		reinterpret_cast<const uint8_t*>(serialized.data()), serialized.size());
 
 	sess.to_process = true;
 	sess.handler();
 
+	usleep(10000);
+	r = read_x_frame(fds[1], buf, sizeof(buf));
+	ok(r > 0, "got auth response");
+	if (r > 0) {
+		ok(buf[4] == Mysqlx::ServerMessages_Type_SESS_AUTHENTICATE_OK,
+		   "auth succeeded for correct password");
+	}
+
 	ok(sess.get_status() == MysqlxSession::WAITING_CLIENT_XMSG,
-	   "in WAITING_CLIENT_XMSG after MYSQL41 complete");
+	   "session in WAITING_CLIENT_XMSG after auth");
+
+	close(fds[0]);
+	close(fds[1]);
+}
+
+static void test_mysql41_auth_wrong_password() {
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+
+	MysqlxSession sess;
+	sess.init(fds[0], nullptr);
+
+	sess.set_credential_lookup([](const std::string& user) -> MysqlxCredentials {
+		if (user == "testuser") {
+			std::vector<uint8_t> hash = mysqlx_mysql41_hash("testpass");
+			return { std::string(hash.begin(), hash.end()), true, "MYSQL41" };
+		}
+		return { "", false, "" };
+	});
+
+	sess.to_process = true;
+
+	Mysqlx::Session::AuthenticateStart auth_start;
+	auth_start.set_mech_name("MYSQL41");
+	auth_start.set_auth_data(std::string("\0testdb\0testuser", 16));
+	std::string serialized;
+	auth_start.SerializeToString(&serialized);
+
+	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_START,
+		reinterpret_cast<const uint8_t*>(serialized.data()), serialized.size());
+
+	sess.handler();
+
+	uint8_t buf[4096];
+	usleep(10000);
+	ssize_t r = read_x_frame(fds[1], buf, sizeof(buf));
+
+	Mysqlx::Session::AuthenticateContinue cont_msg;
+	cont_msg.ParseFromArray(buf + 5, r - 5);
+	std::vector<uint8_t> challenge(cont_msg.auth_data().begin(), cont_msg.auth_data().end());
+
+	std::vector<uint8_t> scramble = mysqlx_mysql41_scramble(challenge, "wrongpass");
+	std::string hex_scramble = mysqlx_hex_encode(scramble);
+	std::string response_str = std::string("*") + hex_scramble;
+
+	cont_msg.Clear();
+	cont_msg.set_auth_data(response_str);
+	cont_msg.SerializeToString(&serialized);
+
+	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_CONTINUE,
+		reinterpret_cast<const uint8_t*>(serialized.data()), serialized.size());
+
+	sess.to_process = true;
+	sess.handler();
 
 	usleep(10000);
 	r = read_x_frame(fds[1], buf, sizeof(buf));
-	ok(r > 0, "got auth ok response");
+	ok(r > 0, "got response for wrong password");
 	if (r > 0) {
-		ok(buf[4] == Mysqlx::ServerMessages_Type_SESS_AUTHENTICATE_OK,
-		   "response is SESS_AUTHENTICATE_OK");
+		ok(buf[4] == Mysqlx::ServerMessages_Type_ERROR,
+		   "auth rejected for wrong password");
+	}
+	ok(!sess.is_healthy(), "session unhealthy after auth failure");
+
+	close(fds[0]);
+	close(fds[1]);
+}
+
+static void test_error_severity_non_fatal() {
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+	MysqlxSession sess;
+	sess.init(fds[0], nullptr);
+	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
+	sess.to_process = true;
+
+	Mysqlx::Session::AuthenticateStart auth_start;
+	auth_start.set_mech_name("MYSQL41");
+	auth_start.set_auth_data(std::string("\0testdb\0testuser", 16));
+	std::string serialized;
+	auth_start.SerializeToString(&serialized);
+	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_START,
+		reinterpret_cast<const uint8_t*>(serialized.data()), serialized.size());
+
+	sess.handler();
+
+	uint8_t buf[4096];
+	usleep(10000);
+	read_x_frame(fds[1], buf, sizeof(buf));
+
+	Mysqlx::Session::AuthenticateContinue cont_msg;
+	cont_msg.set_auth_data("*DEADBEEF");
+	cont_msg.SerializeToString(&serialized);
+	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_CONTINUE,
+		reinterpret_cast<const uint8_t*>(serialized.data()), serialized.size());
+
+	sess.to_process = true;
+	sess.handler();
+
+	usleep(10000);
+	ssize_t r = read_x_frame(fds[1], buf, sizeof(buf));
+	ok(r > 0, "got response for bad scramble (no credential lookup)");
+	if (r > 0) {
+		Mysqlx::Error err;
+		if (err.ParseFromArray(buf + 5, static_cast<int>(r - 5))) {
+			ok(err.severity() == Mysqlx::Error::FATAL, "error severity is FATAL for invalid scramble format");
+			ok(err.code() == 1045, "error code is 1045");
+		} else {
+			ok(false, "parsed error response");
+			ok(false, "error severity");
+		}
+	} else {
+		ok(false, "got error response");
+		ok(false, "error severity");
+	}
+
+	close(fds[0]);
+	close(fds[1]);
+}
+
+static void test_compression_error_non_fatal() {
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+	MysqlxSession sess;
+	sess.init(fds[0], nullptr);
+	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
+	sess.to_process = true;
+
+	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_COMPRESSION, nullptr, 0);
+
+	sess.handler();
+
+	uint8_t buf[4096];
+	usleep(10000);
+	ssize_t r = read_x_frame(fds[1], buf, sizeof(buf));
+	ok(r > 0, "got error response for compression");
+	if (r > 0 && buf[4] == Mysqlx::ServerMessages_Type_ERROR) {
+		Mysqlx::Error err;
+		if (err.ParseFromArray(buf + 5, static_cast<int>(r - 5))) {
+			ok(err.severity() == Mysqlx::Error::ERROR, "compression error is non-fatal (ERROR severity)");
+		}
+	}
+	ok(sess.is_healthy(), "session still healthy after compression error");
+
+	close(fds[0]);
+	close(fds[1]);
+}
+
+static void test_post_auth_capabilities_get() {
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+	MysqlxSession sess;
+	sess.init(fds[0], nullptr);
+	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
+	sess.to_process = true;
+
+	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_CON_CAPABILITIES_GET, nullptr, 0);
+
+	sess.handler();
+
+	ok(sess.is_healthy(), "session still healthy after post-auth CapGet");
+
+	uint8_t buf[4096];
+	usleep(10000);
+	ssize_t r = read_x_frame(fds[1], buf, sizeof(buf));
+	ok(r > 5, "got capabilities response after post-auth CapGet");
+	if (r > 5) {
+		ok(buf[4] == Mysqlx::ServerMessages_Type_CONN_CAPABILITIES,
+		   "response is CONN_CAPABILITIES");
 	}
 
 	close(fds[0]);
@@ -382,8 +570,40 @@ static void test_reset() {
 	ok(sess.is_healthy(), "reset marks healthy");
 }
 
+static void test_parse_error_detection() {
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+	MysqlxSession sess;
+	sess.init(fds[0], nullptr);
+	sess.to_process = true;
+
+	uint8_t bad_frame[] = {0x00, 0x00, 0x00, 0x00, 0x01};
+	write(fds[1], bad_frame, 5);
+
+	int rc = sess.handler();
+	ok(!sess.is_healthy(), "session unhealthy after parse error (zero payload)");
+	ok(rc == -1, "handler returns -1 on parse error");
+
+	close(fds[0]);
+	close(fds[1]);
+}
+
+static void test_session_timestamps() {
+	MysqlxSession sess;
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+	sess.init(fds[0], nullptr);
+
+	ok(sess.get_start_time() > 0, "start_time initialized");
+	ok(sess.get_last_active_time() > 0, "last_active_time initialized");
+	ok(sess.get_start_time() == sess.get_last_active_time(), "start and last_active equal at init");
+
+	close(fds[0]);
+	close(fds[1]);
+}
+
 int main() {
-	plan(42);
+	plan(62);
 
 	test_session_init();
 	test_session_state_transitions();
@@ -392,12 +612,18 @@ int main() {
 	test_capabilities_set();
 	test_con_close_during_connecting();
 	test_unexpected_message_during_connecting();
-	test_plain_auth_flow();
-	test_mysql41_auth_flow();
+	test_plain_rejected_without_tls();
+	test_mysql41_auth_with_credentials();
+	test_mysql41_auth_wrong_password();
+	test_error_severity_non_fatal();
+	test_compression_error_non_fatal();
+	test_post_auth_capabilities_get();
 	test_unsupported_auth_method();
 	test_sess_close_in_main_loop();
 	test_con_close_in_main_loop();
 	test_reset();
+	test_parse_error_detection();
+	test_session_timestamps();
 
 	return exit_status();
 }

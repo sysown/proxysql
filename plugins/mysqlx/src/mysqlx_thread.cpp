@@ -11,10 +11,24 @@
 #include <ctime>
 #include <algorithm>
 
+namespace {
+
+uint64_t monotonic_time_ms() {
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return static_cast<uint64_t>(ts.tv_sec) * 1000 + static_cast<uint64_t>(ts.tv_nsec) / 1000000;
+}
+
+constexpr uint64_t HANDSHAKE_TIMEOUT_MS = 10000;
+constexpr uint64_t IDLE_TIMEOUT_MS = 28800000;
+
+}
+
 Mysqlx_Thread::Mysqlx_Thread()
 	: thread_index_(0)
 	, running_(false)
 	, max_cached_(100)
+	, max_sessions_(10000)
 	, signal_pipe_{-1, -1}
 	, curtime_(0) {
 }
@@ -115,15 +129,27 @@ void Mysqlx_Thread::rebuild_poll_set() {
 
 	std::lock_guard<std::mutex> lock(sessions_mutex_);
 	for (auto* sess : sessions_) {
-		MysqlxDataStream* ds = &sess->client_ds();
+		MysqlxDataStream* cds = &sess->client_ds();
 		struct pollfd spfd;
-		spfd.fd = ds->get_fd();
+		spfd.fd = cds->get_fd();
 		spfd.events = POLLIN;
-		if (ds->write_buffer_size() > 0) spfd.events |= POLLOUT;
+		if (cds->write_buffer_size() > 0) spfd.events |= POLLOUT;
 		spfd.revents = 0;
-		ds->poll_fds_idx = static_cast<int>(poll_fds_.size());
+		cds->poll_fds_idx = static_cast<int>(poll_fds_.size());
 		poll_fds_.push_back(spfd);
-		poll_ds_.push_back(ds);
+		poll_ds_.push_back(cds);
+
+		MysqlxDataStream* sds = &sess->server_ds();
+		if (sds->get_fd() >= 0 && sds->get_status() == XDS_READY) {
+			struct pollfd bpfd;
+			bpfd.fd = sds->get_fd();
+			bpfd.events = POLLIN;
+			if (sds->write_buffer_size() > 0) bpfd.events |= POLLOUT;
+			bpfd.revents = 0;
+			sds->poll_fds_idx = static_cast<int>(poll_fds_.size());
+			poll_fds_.push_back(bpfd);
+			poll_ds_.push_back(sds);
+		}
 	}
 }
 
@@ -157,30 +183,54 @@ void Mysqlx_Thread::process_ready_fds(int nfds) {
 }
 
 void Mysqlx_Thread::accept_new_connection(int listener_fd) {
-	struct sockaddr_in addr;
-	socklen_t addrlen = sizeof(addr);
-	int client_fd = accept(listener_fd, (struct sockaddr*)&addr, &addrlen);
-	if (client_fd < 0) return;
+	while (true) {
+		struct sockaddr_in addr;
+		socklen_t addrlen = sizeof(addr);
+		int client_fd = accept(listener_fd, (struct sockaddr*)&addr, &addrlen);
+		if (client_fd < 0) {
+			if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+			if (errno == EINTR) continue;
+			break;
+		}
 
-	int flag = 1;
-	setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+		{
+			std::lock_guard<std::mutex> lock(sessions_mutex_);
+			if (sessions_.size() >= max_sessions_) {
+				close(client_fd);
+				break;
+			}
+		}
 
-	MysqlxSession* sess = new MysqlxSession();
-	sess->init(client_fd, this);
-	sess->to_process = true;
+		int flag = 1;
+		setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 
-	std::lock_guard<std::mutex> lock(sessions_mutex_);
-	sessions_.push_back(sess);
+		MysqlxSession* sess = new MysqlxSession();
+		sess->init(client_fd, this);
+		sess->to_process = true;
+
+		std::lock_guard<std::mutex> lock(sessions_mutex_);
+		sessions_.push_back(sess);
+	}
 }
 
 void Mysqlx_Thread::process_all_sessions() {
+	uint64_t now = monotonic_time_ms();
 	std::lock_guard<std::mutex> lock(sessions_mutex_);
 	auto it = sessions_.begin();
 	while (it != sessions_.end()) {
 		MysqlxSession* sess = *it;
 		sess->to_process = true;
 		int rc = sess->handler();
-		if (!sess->is_healthy() || rc < 0) {
+
+		bool timeout = false;
+		MysqlxSession::Status st = sess->get_status();
+		if (st < MysqlxSession::WAITING_CLIENT_XMSG) {
+			timeout = (now - sess->get_start_time()) > HANDSHAKE_TIMEOUT_MS;
+		} else {
+			timeout = (now - sess->get_last_active_time()) > IDLE_TIMEOUT_MS;
+		}
+
+		if (!sess->is_healthy() || rc < 0 || timeout) {
 			delete sess;
 			it = sessions_.erase(it);
 		} else {

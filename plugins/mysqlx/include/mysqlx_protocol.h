@@ -58,4 +58,8 @@ bool mysqlx_mysql41_verify(const std::vector<uint8_t>& challenge,
                             const std::vector<uint8_t>& client_response,
                             const std::string& password);
 
+bool mysqlx_mysql41_verify_hash(const std::vector<uint8_t>& challenge,
+                                 const std::vector<uint8_t>& client_response,
+                                 const std::vector<uint8_t>& stored_hash);
+
 #endif /* PROXYSQL_MYSQLX_PROTOCOL_H */

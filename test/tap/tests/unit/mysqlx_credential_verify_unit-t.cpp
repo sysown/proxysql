@@ -1,0 +1,136 @@
+#include "mysqlx_protocol.h"
+#include "tap.h"
+#include "test_globals.h"
+#include "test_init.h"
+
+#include <cstring>
+#include <vector>
+
+static void test_verify_hash_correct() {
+	std::string password = "testpass";
+	std::vector<uint8_t> hash = mysqlx_mysql41_hash(password);
+
+	std::vector<uint8_t> challenge(20, 0xAB);
+	std::vector<uint8_t> scramble = mysqlx_mysql41_scramble(challenge, password);
+
+	ok(mysqlx_mysql41_verify(challenge, scramble, password),
+	   "verify returns true for correct password");
+	ok(mysqlx_mysql41_verify_hash(challenge, scramble, hash),
+	   "verify_hash returns true for correct hash");
+}
+
+static void test_verify_hash_wrong_password() {
+	std::vector<uint8_t> hash = mysqlx_mysql41_hash("correctpass");
+	std::vector<uint8_t> challenge(20, 0xCD);
+	std::vector<uint8_t> scramble = mysqlx_mysql41_scramble(challenge, "wrongpass");
+
+	ok(!mysqlx_mysql41_verify(challenge, scramble, "correctpass"),
+	   "verify returns false for wrong scramble vs password");
+	ok(!mysqlx_mysql41_verify_hash(challenge, scramble, hash),
+	   "verify_hash returns false for wrong scramble vs hash");
+}
+
+static void test_verify_hash_empty_password() {
+	std::vector<uint8_t> hash = mysqlx_mysql41_hash("");
+	std::vector<uint8_t> challenge(20, 0x11);
+	std::vector<uint8_t> scramble = mysqlx_mysql41_scramble(challenge, "");
+
+	ok(mysqlx_mysql41_verify_hash(challenge, scramble, hash),
+	   "verify_hash works with empty password");
+}
+
+static void test_verify_hash_wrong_size_inputs() {
+	std::vector<uint8_t> hash = mysqlx_mysql41_hash("pass");
+	std::vector<uint8_t> short_hash(10, 0xFF);
+	std::vector<uint8_t> challenge(20, 0x22);
+	std::vector<uint8_t> short_scramble(10, 0x33);
+
+	ok(!mysqlx_mysql41_verify_hash(challenge, short_scramble, hash),
+	   "verify_hash rejects short scramble");
+	ok(!mysqlx_mysql41_verify_hash(challenge, short_scramble, short_hash),
+	   "verify_hash rejects short hash");
+	ok(!mysqlx_mysql41_verify(challenge, short_scramble, "pass"),
+	   "verify rejects short scramble");
+}
+
+static void test_hex_encode_decode_roundtrip() {
+	std::vector<uint8_t> data = {0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF};
+	std::string hex = mysqlx_hex_encode(data);
+	ok(hex == "0123456789ABCDEF", "hex encode produces uppercase");
+
+	std::vector<uint8_t> decoded;
+	bool ok_flag = mysqlx_hex_decode(hex, decoded);
+	ok(ok_flag, "hex decode succeeds");
+	ok(decoded == data, "roundtrip matches original");
+}
+
+static void test_hex_decode_odd_length() {
+	std::vector<uint8_t> decoded;
+	bool ok_flag = mysqlx_hex_decode("ABC", decoded);
+	ok(!ok_flag, "hex decode rejects odd-length input");
+}
+
+static void test_hex_decode_invalid_chars() {
+	std::vector<uint8_t> decoded;
+	bool ok_flag = mysqlx_hex_decode("GH", decoded);
+	ok(!ok_flag, "hex decode rejects invalid characters");
+}
+
+static void test_hex_decode_lowercase() {
+	std::vector<uint8_t> decoded;
+	bool ok_flag = mysqlx_hex_decode("0a1b", decoded);
+	ok(ok_flag, "hex decode accepts lowercase");
+	if (ok_flag) {
+		ok(decoded.size() == 2, "decoded size is 2");
+		ok(decoded[0] == 0x0A && decoded[1] == 0x1B, "decoded values correct");
+	} else {
+		ok(false, "decoded size");
+		ok(false, "decoded values");
+	}
+}
+
+static void test_mysql41_hash_consistency() {
+	std::vector<uint8_t> h1 = mysqlx_mysql41_hash("password123");
+	std::vector<uint8_t> h2 = mysqlx_mysql41_hash("password123");
+	ok(h1 == h2, "same password produces same hash");
+	ok(h1.size() == 20, "hash is 20 bytes (SHA1)");
+}
+
+static void test_mysql41_hash_different_passwords() {
+	std::vector<uint8_t> h1 = mysqlx_mysql41_hash("pass1");
+	std::vector<uint8_t> h2 = mysqlx_mysql41_hash("pass2");
+	ok(h1 != h2, "different passwords produce different hashes");
+}
+
+static void test_scramble_deterministic() {
+	std::vector<uint8_t> challenge(20, 0x42);
+	std::vector<uint8_t> s1 = mysqlx_mysql41_scramble(challenge, "test");
+	std::vector<uint8_t> s2 = mysqlx_mysql41_scramble(challenge, "test");
+	ok(s1 == s2, "same challenge+password produces same scramble");
+	ok(s1.size() == 20, "scramble is 20 bytes");
+}
+
+static void test_is_supported_auth() {
+	ok(mysqlx_is_supported_auth_method("MYSQL41"), "MYSQL41 is supported");
+	ok(!mysqlx_is_supported_auth_method("SHA256_MEMORY"), "SHA256_MEMORY is not supported");
+	ok(!mysqlx_is_supported_auth_method("mysql41"), "case-sensitive: lowercase rejected");
+}
+
+int main() {
+	plan(24);
+
+	test_verify_hash_correct();
+	test_verify_hash_wrong_password();
+	test_verify_hash_empty_password();
+	test_verify_hash_wrong_size_inputs();
+	test_hex_encode_decode_roundtrip();
+	test_hex_decode_odd_length();
+	test_hex_decode_invalid_chars();
+	test_hex_decode_lowercase();
+	test_mysql41_hash_consistency();
+	test_mysql41_hash_different_passwords();
+	test_scramble_deterministic();
+	test_is_supported_auth();
+
+	return exit_status();
+}

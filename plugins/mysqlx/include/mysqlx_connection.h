@@ -1,9 +1,12 @@
 #ifndef __MYSQLX_CONNECTION_H
 #define __MYSQLX_CONNECTION_H
 
+#include "mysqlx_data_stream.h"
+
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <vector>
 
 class MysqlxConnection {
 public:
@@ -17,11 +20,25 @@ public:
 		CLOSED
 	};
 
+	enum BackendAuthState {
+		BACKEND_AUTH_NOT_STARTED = 0,
+		BACKEND_AUTH_CAPABILITIES_GET_SENT,
+		BACKEND_AUTH_CAPABILITIES_RECV,
+		BACKEND_AUTH_CAPABILITIES_SET_SENT,
+		BACKEND_AUTH_AUTHENTICATE_START_SENT,
+		BACKEND_AUTH_CHALLENGE_RECV,
+		BACKEND_AUTH_CONTINUE_SENT,
+		BACKEND_AUTH_DONE,
+		BACKEND_AUTH_ERROR
+	};
+
 	MysqlxConnection();
 	~MysqlxConnection();
 
 	State get_state() const { return state_; }
 	void set_state(State s) { state_ = s; }
+
+	BackendAuthState get_auth_state() const { return auth_state_; }
 
 	int get_fd() const { return fd_; }
 	void set_fd(int fd) { fd_ = fd; }
@@ -56,8 +73,17 @@ public:
 	int start_connect(const char* host, int port);
 	int check_connect();
 
+	void set_backend_user(const char* u) { backend_user_ = u; }
+	void set_backend_password(const char* p) { backend_password_ = p; }
+	void set_backend_schema(const char* s) { backend_schema_ = s; }
+
+	void init_backend_ds(int fd);
+	int step_auth();
+	MysqlxDataStream& backend_ds() { return backend_ds_; }
+
 private:
 	State state_;
+	BackendAuthState auth_state_;
 	int fd_;
 	int hostgroup_;
 	std::string user_;
@@ -68,6 +94,12 @@ private:
 	bool in_transaction_;
 	bool has_prepared_stmt_;
 	uint64_t last_used_time_;
+
+	std::string backend_user_;
+	std::string backend_password_;
+	std::string backend_schema_;
+	std::vector<uint8_t> backend_challenge_;
+	MysqlxDataStream backend_ds_;
 };
 
 #endif

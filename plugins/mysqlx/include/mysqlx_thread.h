@@ -35,6 +35,8 @@ public:
 	void return_connection_to_cache(MysqlxConnection* conn);
 	size_t get_cached_connection_count() const;
 	void set_max_cached_connections(size_t max) { max_cached_ = max; }
+	void set_max_sessions(size_t max) { max_sessions_ = max; }
+	size_t get_max_sessions() const { return max_sessions_; }
 
 private:
 	void accept_new_connection(int listener_fd);
@@ -58,6 +60,7 @@ private:
 	std::vector<MysqlxConnection*> conn_cache_;
 	std::mutex conn_cache_mutex_;
 	size_t max_cached_;
+	size_t max_sessions_;
 
 	int signal_pipe_[2];
 

@@ -7,8 +7,17 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <functional>
 
 class Mysqlx_Thread;
+
+struct MysqlxCredentials {
+	std::string password_hash;
+	bool x_enabled;
+	std::string allowed_auth;
+};
+
+typedef std::function<MysqlxCredentials(const std::string& username)> MysqlxCredentialLookup;
 
 class MysqlxSession {
 public:
@@ -54,6 +63,11 @@ public:
 	MysqlxDataStream& server_ds() { return server_ds_; }
 	MysqlxConnection*& backend_conn() { return backend_conn_; }
 
+	void set_credential_lookup(MysqlxCredentialLookup lookup) { credential_lookup_ = lookup; }
+	uint64_t get_start_time() const { return start_time_; }
+	uint64_t get_last_active_time() const { return last_active_time_; }
+	void set_last_active_time(uint64_t t) { last_active_time_ = t; }
+
 	bool to_process;
 
 private:
@@ -74,7 +88,7 @@ private:
 	void forward_to_backend();
 	void return_backend_to_pool();
 
-	void send_error(int code, const char* msg);
+	void send_error(int code, const char* msg, bool fatal = false);
 	void send_ok(const char* msg = "");
 	void send_auth_continue(const std::string& auth_data);
 	void send_auth_ok();
@@ -95,6 +109,9 @@ private:
 	int target_hostgroup_;
 	std::string target_address_;
 	int target_port_;
+	MysqlxCredentialLookup credential_lookup_;
+	uint64_t start_time_;
+	uint64_t last_active_time_;
 };
 
 #endif

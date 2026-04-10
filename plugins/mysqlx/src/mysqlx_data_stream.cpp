@@ -100,7 +100,10 @@ void MysqlxDataStream::enqueue_frame(uint8_t msg_type, const uint8_t* body, size
 ssize_t MysqlxDataStream::read_from_net() {
 	if (fd_ < 0) return -1;
 	uint8_t buf[65536];
-	ssize_t r = recv(fd_, buf, sizeof(buf), 0);
+	ssize_t r;
+	do {
+		r = recv(fd_, buf, sizeof(buf), 0);
+	} while (r < 0 && errno == EINTR);
 	if (r > 0) {
 		feed_bytes(buf, static_cast<size_t>(r));
 	}
@@ -111,7 +114,10 @@ ssize_t MysqlxDataStream::write_to_net() {
 	if (fd_ < 0) return -1;
 	if (write_buf_.empty()) return 0;
 	size_t available = write_buf_.size() - write_offset_;
-	ssize_t r = send(fd_, write_buf_.data() + write_offset_, available, MSG_NOSIGNAL);
+	ssize_t r;
+	do {
+		r = send(fd_, write_buf_.data() + write_offset_, available, MSG_NOSIGNAL);
+	} while (r < 0 && errno == EINTR);
 	if (r > 0) {
 		write_offset_ += static_cast<size_t>(r);
 		if (write_offset_ >= write_buf_.size()) {
@@ -120,4 +126,17 @@ ssize_t MysqlxDataStream::write_to_net() {
 		}
 	}
 	return r;
+}
+
+ssize_t MysqlxDataStream::write_raw(const uint8_t* data, size_t len) {
+	if (fd_ < 0) return -1;
+	return send(fd_, data, len, MSG_NOSIGNAL);
+}
+
+std::optional<MysqlxFrame> MysqlxDataStream::try_read_one_frame() {
+	read_from_net();
+	if (!has_complete_frame()) return std::nullopt;
+	MysqlxFrame f = front_frame();
+	pop_frame();
+	return f;
 }

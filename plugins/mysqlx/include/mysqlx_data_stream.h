@@ -6,6 +6,7 @@
 #include <sys/types.h>
 #include <vector>
 #include <deque>
+#include <optional>
 
 typedef std::vector<uint8_t> MysqlxFrame;
 
@@ -49,6 +50,9 @@ public:
 
 	ssize_t read_from_net();
 	ssize_t write_to_net();
+
+	ssize_t write_raw(const uint8_t* data, size_t len);
+	std::optional<MysqlxFrame> try_read_one_frame();
 
 	void set_poll_events(short events) { poll_events_ = events; }
 	short get_poll_events() const { return poll_events_; }

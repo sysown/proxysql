@@ -264,3 +264,29 @@ bool mysqlx_mysql41_verify(const std::vector<uint8_t>& challenge,
 	}
 	return CRYPTO_memcmp(expected.data(), client_response.data(), SHA1_LEN) == 0;
 }
+
+bool mysqlx_mysql41_verify_hash(const std::vector<uint8_t>& challenge,
+                                 const std::vector<uint8_t>& client_response,
+                                 const std::vector<uint8_t>& stored_hash) {
+	if (client_response.size() != SHA1_LEN || stored_hash.size() != SHA1_LEN) {
+		return false;
+	}
+
+	uint8_t combined[SHA1_LEN];
+	if (!sha1_digest_multi(challenge.data(), challenge.size(),
+	                       stored_hash.data(), stored_hash.size(), combined)) {
+		return false;
+	}
+
+	uint8_t hash_stage1[SHA1_LEN];
+	for (size_t i = 0; i < SHA1_LEN; i++) {
+		hash_stage1[i] = client_response[i] ^ combined[i];
+	}
+
+	uint8_t hash_stage2[SHA1_LEN];
+	if (!sha1_digest(hash_stage1, SHA1_LEN, hash_stage2)) {
+		return false;
+	}
+
+	return CRYPTO_memcmp(hash_stage2, stored_hash.data(), SHA1_LEN) == 0;
+}

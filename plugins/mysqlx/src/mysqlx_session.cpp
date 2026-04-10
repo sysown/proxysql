@@ -1,5 +1,6 @@
 #include "mysqlx_session.h"
 #include "mysqlx_thread.h"
+#include "mysqlx_protocol.h"
 
 #include "mysqlx.pb.h"
 #include "mysqlx_connection.pb.h"
@@ -8,12 +9,20 @@
 
 #include <cstring>
 #include <cstdlib>
+#include <ctime>
 #include <unistd.h>
 #include <openssl/rand.h>
+#include <openssl/crypto.h>
 
 namespace {
 
 constexpr size_t CHALLENGE_LENGTH = 20;
+
+uint64_t monotonic_time_ms() {
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return static_cast<uint64_t>(ts.tv_sec) * 1000 + static_cast<uint64_t>(ts.tv_nsec) / 1000000;
+}
 
 }
 
@@ -24,7 +33,9 @@ MysqlxSession::MysqlxSession()
 	, status_(NONE)
 	, healthy(true)
 	, target_hostgroup_(0)
-	, target_port_(0) {
+	, target_port_(0)
+	, start_time_(0)
+	, last_active_time_(0) {
 }
 
 MysqlxSession::~MysqlxSession() {
@@ -47,6 +58,8 @@ void MysqlxSession::init(int fd, void* thread_ptr) {
 	target_hostgroup_ = 0;
 	target_address_.clear();
 	target_port_ = 0;
+	start_time_ = monotonic_time_ms();
+	last_active_time_ = start_time_;
 }
 
 void MysqlxSession::reset() {
@@ -68,6 +81,9 @@ int MysqlxSession::handler() {
 	to_process = false;
 
 	ssize_t r = client_ds_.read_from_net();
+	if (client_ds_.has_parse_error()) {
+		healthy = false; return -1;
+	}
 	if (r == 0) { healthy = false; return -1; }
 	if (r < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
 		healthy = false; return -1;
@@ -94,7 +110,11 @@ handler_again:
 		goto handler_again;
 	}
 
-	client_ds_.write_to_net();
+	ssize_t wr = client_ds_.write_to_net();
+	if (wr < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+		healthy = false;
+		return -1;
+	}
 	return 0;
 }
 
@@ -187,6 +207,21 @@ void MysqlxSession::handler_auth_start() {
 	auth_method_ = auth_start.mech_name();
 
 	if (auth_method_ == "MYSQL41") {
+		const std::string& auth_data = auth_start.auth_data();
+		size_t first_nul = auth_data.find('\0');
+		if (first_nul != std::string::npos) {
+			size_t second_nul = auth_data.find('\0', first_nul + 1);
+			if (second_nul != std::string::npos) {
+				schema_ = auth_data.substr(first_nul + 1, second_nul - first_nul - 1);
+				size_t third_nul = auth_data.find('\0', second_nul + 1);
+				if (third_nul != std::string::npos) {
+					username_ = auth_data.substr(second_nul + 1, third_nul - second_nul - 1);
+				} else {
+					username_ = auth_data.substr(second_nul + 1);
+				}
+			}
+		}
+
 		auth_challenge_.resize(CHALLENGE_LENGTH);
 		RAND_bytes(auth_challenge_.data(), CHALLENGE_LENGTH);
 
@@ -195,6 +230,12 @@ void MysqlxSession::handler_auth_start() {
 
 		status_ = X_AUTH_CHALLENGE_SENT;
 	} else if (auth_method_ == "PLAIN") {
+		if (!client_ds_.is_encrypted()) {
+			send_error(1045, "PLAIN authentication requires TLS");
+			healthy = false;
+			return;
+		}
+
 		const std::string& auth_data = auth_start.auth_data();
 		if (auth_data.empty() || auth_data[0] != '\0') {
 			send_error(1045, "Invalid PLAIN auth data");
@@ -210,7 +251,26 @@ void MysqlxSession::handler_auth_start() {
 		}
 
 		username_ = auth_data.substr(1, second_nul - 1);
+		std::string password = auth_data.substr(second_nul + 1);
 
+		if (credential_lookup_) {
+			MysqlxCredentials creds = credential_lookup_(username_);
+			if (!creds.x_enabled || creds.password_hash.empty()) {
+				send_error(1045, "Access denied for user");
+				healthy = false;
+				return;
+			}
+			std::vector<uint8_t> input_hash_vec = mysqlx_mysql41_hash(password);
+			if (input_hash_vec.size() != 20 ||
+			    CRYPTO_memcmp(input_hash_vec.data(), creds.password_hash.data(),
+			                  std::min(input_hash_vec.size(), creds.password_hash.size())) != 0) {
+				send_error(1045, "Access denied for user");
+				healthy = false;
+				return;
+			}
+		}
+
+		last_active_time_ = monotonic_time_ms();
 		send_auth_ok();
 		status_ = WAITING_CLIENT_XMSG;
 	} else {
@@ -232,19 +292,60 @@ void MysqlxSession::handler_auth_challenge_response() {
 		return;
 	}
 
+	if (frame.size() <= 5) {
+		send_error(1045, "Empty auth response");
+		healthy = false;
+		client_ds_.pop_frame();
+		return;
+	}
+
+	Mysqlx::Session::AuthenticateContinue auth_cont;
+	if (!auth_cont.ParseFromArray(frame.data() + 5, static_cast<int>(frame.size() - 5))) {
+		send_error(1045, "Invalid auth response");
+		healthy = false;
+		client_ds_.pop_frame();
+		return;
+	}
+
 	client_ds_.pop_frame();
 
+	const std::string& auth_data = auth_cont.auth_data();
+	if (auth_data.size() > 1 && auth_data[0] == '*') {
+		std::string hex_scramble = auth_data.substr(1);
+		std::vector<uint8_t> scramble;
+		if (!mysqlx_hex_decode(hex_scramble, scramble) || scramble.size() != 20) {
+			send_error(1045, "Invalid scramble format", true);
+			healthy = false;
+			return;
+		}
+
+		if (credential_lookup_) {
+			MysqlxCredentials creds = credential_lookup_(username_);
+			if (!creds.x_enabled || creds.password_hash.empty()) {
+				send_error(1045, "Access denied for user");
+				healthy = false;
+				return;
+			}
+			std::vector<uint8_t> stored_hash(creds.password_hash.begin(), creds.password_hash.end());
+			if (!mysqlx_mysql41_verify_hash(auth_challenge_, scramble, stored_hash)) {
+				send_error(1045, "Access denied for user");
+				healthy = false;
+				return;
+			}
+		}
+	}
+
+	last_active_time_ = monotonic_time_ms();
 	send_auth_ok();
 	status_ = WAITING_CLIENT_XMSG;
+	to_process = true;
 }
 
 int MysqlxSession::dispatch_client_message(uint8_t msg_type) {
 	switch (msg_type) {
 		case Mysqlx::ClientMessages_Type_CON_CAPABILITIES_GET:
-			client_ds_.pop_frame();
 			handler_capabilities_get(); return 0;
 		case Mysqlx::ClientMessages_Type_CON_CAPABILITIES_SET:
-			client_ds_.pop_frame();
 			handler_capabilities_set(); return 0;
 		case Mysqlx::ClientMessages_Type_CON_CLOSE:
 		case Mysqlx::ClientMessages_Type_SESS_CLOSE:
@@ -252,10 +353,8 @@ int MysqlxSession::dispatch_client_message(uint8_t msg_type) {
 			status_ = X_SESSION_CLOSING; healthy = false;
 			to_process = true; return 0;
 		case Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_START:
-			client_ds_.pop_frame();
 			handler_auth_start(); return 0;
 		case Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_CONTINUE:
-			client_ds_.pop_frame();
 			handler_auth_challenge_response(); return 0;
 		case Mysqlx::ClientMessages_Type_SESS_RESET:
 			forward_to_backend(); return 0;
@@ -288,7 +387,7 @@ int MysqlxSession::dispatch_client_message(uint8_t msg_type) {
 			return 0;
 		default:
 			client_ds_.pop_frame();
-			send_error(5000, "Unknown message type");
+			send_error(5000, "Unknown message type", true);
 			status_ = X_SESSION_CLOSING; healthy = false;
 			return -1;
 	}
@@ -327,6 +426,25 @@ void MysqlxSession::forward_to_backend() {
 	status_ = WAITING_SERVER_XMSG;
 }
 
+namespace {
+
+bool is_terminal_server_frame(uint8_t msg_type) {
+	switch (msg_type) {
+		case Mysqlx::ServerMessages_Type_OK:
+		case Mysqlx::ServerMessages_Type_ERROR:
+		case Mysqlx::ServerMessages_Type_SQL_STMT_EXECUTE_OK:
+		case Mysqlx::ServerMessages_Type_RESULTSET_FETCH_DONE:
+		case Mysqlx::ServerMessages_Type_RESULTSET_FETCH_SUSPENDED:
+		case Mysqlx::ServerMessages_Type_RESULTSET_FETCH_DONE_MORE_RESULTSETS:
+		case Mysqlx::ServerMessages_Type_RESULTSET_FETCH_DONE_MORE_OUT_PARAMS:
+			return true;
+		default:
+			return false;
+	}
+}
+
+}
+
 void MysqlxSession::handler_waiting_server_msg() {
 	if (server_ds_.get_fd() < 0) {
 		return_backend_to_pool();
@@ -337,41 +455,42 @@ void MysqlxSession::handler_waiting_server_msg() {
 
 	ssize_t r = server_ds_.read_from_net();
 	if (r == 0) {
+		send_error(2013, "Lost connection to backend during query");
 		return_backend_to_pool();
-		status_ = WAITING_CLIENT_XMSG;
-		to_process = true;
+		healthy = false;
 		return;
 	}
 	if (r < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+		send_error(2013, "Backend read error during query");
 		return_backend_to_pool();
-		status_ = WAITING_CLIENT_XMSG;
-		to_process = true;
+		healthy = false;
 		return;
 	}
 
-	bool got_any = false;
+	bool got_terminal = false;
 	while (server_ds_.has_complete_frame()) {
 		const auto& frame = server_ds_.front_frame();
+		uint8_t msg_type = frame[4];
+
 		if (frame.size() > 5) {
-			client_ds_.enqueue_frame(frame[4], frame.data() + 5, frame.size() - 5);
+			client_ds_.enqueue_frame(msg_type, frame.data() + 5, frame.size() - 5);
 		} else {
-			client_ds_.enqueue_frame(frame[4], nullptr, 0);
+			client_ds_.enqueue_frame(msg_type, nullptr, 0);
 		}
 		server_ds_.pop_frame();
-		got_any = true;
+
+		if (is_terminal_server_frame(msg_type)) {
+			got_terminal = true;
+		}
 	}
 
-	if (got_any) {
+	if (got_terminal) {
 		client_ds_.write_to_net();
+		return_backend_to_pool();
+		last_active_time_ = monotonic_time_ms();
+		status_ = WAITING_CLIENT_XMSG;
+		to_process = true;
 	}
-
-	if (server_ds_.has_complete_frame()) {
-		return;
-	}
-
-	return_backend_to_pool();
-	status_ = WAITING_CLIENT_XMSG;
-	to_process = true;
 }
 
 void MysqlxSession::handler_fast_forward() {
@@ -431,6 +550,31 @@ void MysqlxSession::handler_connecting_server() {
 		}
 	}
 
+	if (backend_conn_ && backend_conn_->get_auth_state() == MysqlxConnection::BACKEND_AUTH_NOT_STARTED) {
+		backend_conn_->init_backend_ds(backend_conn_->get_fd());
+		backend_conn_->set_backend_user(username_.c_str());
+		backend_conn_->set_backend_schema(schema_.c_str());
+
+		if (credential_lookup_) {
+			MysqlxCredentials creds = credential_lookup_(username_);
+			backend_conn_->set_backend_password(creds.password_hash.c_str());
+		}
+	}
+
+	if (backend_conn_ && backend_conn_->get_auth_state() != MysqlxConnection::BACKEND_AUTH_DONE &&
+	    backend_conn_->get_auth_state() != MysqlxConnection::BACKEND_AUTH_ERROR) {
+		int auth_rc = backend_conn_->step_auth();
+		if (auth_rc == 1) {
+			return;
+		}
+		if (auth_rc == -1) {
+			send_error(1045, "Backend authentication failed");
+			delete backend_conn_; backend_conn_ = nullptr;
+			status_ = X_SESSION_CLOSING; healthy = false;
+			return;
+		}
+	}
+
 	server_ds_.init(XDS_BACKEND, backend_conn_->get_fd());
 	backend_conn_->set_state(MysqlxConnection::IDLE);
 	backend_conn_->set_reusable(true);
@@ -450,10 +594,10 @@ void MysqlxSession::return_backend_to_pool() {
 	server_ds_ = MysqlxDataStream();
 }
 
-void MysqlxSession::send_error(int code, const char* msg) {
+void MysqlxSession::send_error(int code, const char* msg, bool fatal) {
 	Mysqlx::Error err;
 	err.set_code(code);
-	err.set_severity(Mysqlx::Error::FATAL);
+	err.set_severity(fatal ? Mysqlx::Error::FATAL : Mysqlx::Error::ERROR);
 	err.set_sql_state("HY000");
 	err.set_msg(msg);
 	std::string s;
