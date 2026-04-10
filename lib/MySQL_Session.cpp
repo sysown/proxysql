@@ -2660,7 +2660,7 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 							break;
 						}
 					}
-					if (idx != SQL_NAME_LAST_LOW_WM) {
+					if (idx >= 0 && idx < SQL_NAME_LAST_HIGH_WM) {
 						myconn->var_absent[idx] = true;
 
 						myds->myconn->async_free_result();
