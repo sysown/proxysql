@@ -9,9 +9,20 @@
 MysqlxDataStream::MysqlxDataStream()
 	: fd_(-1), type_(XDS_FRONTEND), status_(XDS_NOT_CONNECTED),
 	  poll_events_(0), revents_(0), read_offset_(0), write_offset_(0),
-	  parse_error_(false), encrypted_(false), poll_fds_idx(-1) {}
+	  parse_error_(false), encrypted_(false), poll_fds_idx(-1),
+	  ssl_(nullptr), rbio_ssl_(nullptr), wbio_ssl_(nullptr),
+	  ssl_write_offset_(0), ssl_handshake_done_(false) {}
 
-MysqlxDataStream::~MysqlxDataStream() {}
+MysqlxDataStream::~MysqlxDataStream() {
+	if (ssl_) {
+		SSL_set_quiet_shutdown(ssl_, 1);
+		SSL_shutdown(ssl_);
+		SSL_free(ssl_);
+		ssl_ = nullptr;
+		rbio_ssl_ = nullptr;
+		wbio_ssl_ = nullptr;
+	}
+}
 
 void MysqlxDataStream::init(mysqlx_ds_type type, int fd) {
 	type_ = type;
@@ -97,8 +108,138 @@ void MysqlxDataStream::enqueue_frame(uint8_t msg_type, const uint8_t* body, size
 	}
 }
 
+void MysqlxDataStream::init_ssl(SSL_CTX* ctx) {
+	if (!ctx) return;
+	ssl_ = SSL_new(ctx);
+	rbio_ssl_ = BIO_new(BIO_s_mem());
+	wbio_ssl_ = BIO_new(BIO_s_mem());
+	SSL_set_bio(ssl_, rbio_ssl_, wbio_ssl_);
+	SSL_set_accept_state(ssl_);
+	ssl_handshake_done_ = false;
+	encrypted_ = false;
+}
+
+void MysqlxDataStream::init_ssl_connect(SSL_CTX* ctx) {
+	if (!ctx) return;
+	ssl_ = SSL_new(ctx);
+	rbio_ssl_ = BIO_new(BIO_s_mem());
+	wbio_ssl_ = BIO_new(BIO_s_mem());
+	SSL_set_bio(ssl_, rbio_ssl_, wbio_ssl_);
+	SSL_set_connect_state(ssl_);
+	ssl_handshake_done_ = false;
+	encrypted_ = false;
+}
+
+mysqlx_ssl_status MysqlxDataStream::get_ssl_status(SSL* ssl, int n) {
+	int err = SSL_get_error(ssl, n);
+	ERR_clear_error();
+	switch (err) {
+		case SSL_ERROR_NONE:
+			return MYSQLX_SSL_OK;
+		case SSL_ERROR_WANT_WRITE:
+		case SSL_ERROR_WANT_READ:
+			return MYSQLX_SSL_WANT_IO;
+		default:
+			return MYSQLX_SSL_FAIL;
+	}
+}
+
+void MysqlxDataStream::queue_encrypted_output() {
+	char buf[16384];
+	int n;
+	while ((n = BIO_read(wbio_ssl_, buf, sizeof(buf))) > 0) {
+		ssl_write_buf_.insert(ssl_write_buf_.end(), buf, buf + n);
+	}
+}
+
+bool MysqlxDataStream::do_ssl_handshake() {
+	if (!ssl_) return false;
+	if (ssl_handshake_done_) return true;
+	int n = SSL_do_handshake(ssl_);
+	if (n == 1) {
+		ssl_handshake_done_ = true;
+		encrypted_ = true;
+		queue_encrypted_output();
+		uint8_t plain[65536];
+		int dec;
+		while ((dec = SSL_read(ssl_, plain, sizeof(plain))) > 0) {
+			feed_bytes(plain, static_cast<size_t>(dec));
+		}
+		return true;
+	}
+	mysqlx_ssl_status status = get_ssl_status(ssl_, n);
+	if (status == MYSQLX_SSL_WANT_IO) {
+		queue_encrypted_output();
+	}
+	return false;
+}
+
+ssize_t MysqlxDataStream::flush_ssl_write_buf() {
+	if (ssl_write_buf_.empty() || fd_ < 0) return 0;
+	size_t avail = ssl_write_buf_.size() - ssl_write_offset_;
+	ssize_t r;
+	do {
+		r = send(fd_, ssl_write_buf_.data() + ssl_write_offset_, avail, MSG_NOSIGNAL);
+	} while (r < 0 && errno == EINTR);
+	if (r > 0) {
+		ssl_write_offset_ += static_cast<size_t>(r);
+		if (ssl_write_offset_ >= ssl_write_buf_.size()) {
+			ssl_write_buf_.clear();
+			ssl_write_offset_ = 0;
+		}
+	}
+	return r;
+}
+
+bool MysqlxDataStream::has_ssl_pending_write() const {
+	return !ssl_write_buf_.empty() ||
+		(wbio_ssl_ && BIO_number_written(wbio_ssl_) > BIO_number_read(wbio_ssl_));
+}
+
 ssize_t MysqlxDataStream::read_from_net() {
 	if (fd_ < 0) return -1;
+
+	if (ssl_ && !ssl_handshake_done_) {
+		uint8_t buf[65536];
+		ssize_t r;
+		do {
+			r = recv(fd_, buf, sizeof(buf), 0);
+		} while (r < 0 && errno == EINTR);
+		if (r > 0) {
+			BIO_write(rbio_ssl_, buf, static_cast<int>(r));
+		}
+		do_ssl_handshake();
+		return r;
+	}
+
+	if (encrypted_ && ssl_) {
+		uint8_t net_buf[65536];
+		ssize_t r;
+		do {
+			r = recv(fd_, net_buf, sizeof(net_buf), 0);
+		} while (r < 0 && errno == EINTR);
+		if (r > 0) {
+			BIO_write(rbio_ssl_, net_buf, static_cast<int>(r));
+		} else {
+			return r;
+		}
+
+		uint8_t plain_buf[65536];
+		int decrypted;
+		while ((decrypted = SSL_read(ssl_, plain_buf, sizeof(plain_buf))) > 0) {
+			feed_bytes(plain_buf, static_cast<size_t>(decrypted));
+		}
+		if (decrypted <= 0) {
+			mysqlx_ssl_status st = get_ssl_status(ssl_, decrypted);
+			if (st == MYSQLX_SSL_WANT_IO) {
+				queue_encrypted_output();
+			} else if (st == MYSQLX_SSL_FAIL) {
+				return -1;
+			}
+		}
+		return r;
+	}
+
 	uint8_t buf[65536];
 	ssize_t r;
 	do {
@@ -112,6 +253,35 @@ ssize_t MysqlxDataStream::read_from_net() {
 
 ssize_t MysqlxDataStream::write_to_net() {
 	if (fd_ < 0) return -1;
+
+	if (ssl_ && !ssl_handshake_done_) {
+		ssize_t r = flush_ssl_write_buf();
+		if (r < 0 && errno != EAGAIN && errno != EWOULDBLOCK) return r;
+		return 0;
+	}
+
+	if (encrypted_ && ssl_) {
+		flush_ssl_write_buf();
+
+		if (write_buf_.empty()) return 0;
+
+		size_t available = write_buf_.size() - write_offset_;
+		int n = SSL_write(ssl_, write_buf_.data() + write_offset_, static_cast<int>(available));
+		if (n <= 0) {
+			mysqlx_ssl_status st = get_ssl_status(ssl_, n);
+			if (st == MYSQLX_SSL_FAIL) return -1;
+			return 0;
+		}
+		write_offset_ += static_cast<size_t>(n);
+		if (write_offset_ >= write_buf_.size()) {
+			write_buf_.clear();
+			write_offset_ = 0;
+		}
+
+		queue_encrypted_output();
+		return flush_ssl_write_buf();
+	}
+
 	if (write_buf_.empty()) return 0;
 	size_t available = write_buf_.size() - write_offset_;
 	ssize_t r;
@@ -130,6 +300,12 @@ ssize_t MysqlxDataStream::write_to_net() {
 
 ssize_t MysqlxDataStream::write_raw(const uint8_t* data, size_t len) {
 	if (fd_ < 0) return -1;
+	if (encrypted_ && ssl_) {
+		int n = SSL_write(ssl_, data, static_cast<int>(len));
+		if (n <= 0) return -1;
+		queue_encrypted_output();
+		return flush_ssl_write_buf();
+	}
 	return send(fd_, data, len, MSG_NOSIGNAL);
 }
 

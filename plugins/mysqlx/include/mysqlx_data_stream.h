@@ -8,6 +8,10 @@
 #include <deque>
 #include <optional>
 
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <openssl/bio.h>
+
 typedef std::vector<uint8_t> MysqlxFrame;
 
 enum mysqlx_data_stream_status {
@@ -24,6 +28,12 @@ enum mysqlx_ds_type {
 	XDS_FRONTEND = 0,
 	XDS_BACKEND,
 	XDS_LISTENER
+};
+
+enum mysqlx_ssl_status {
+	MYSQLX_SSL_OK = 0,
+	MYSQLX_SSL_WANT_IO,
+	MYSQLX_SSL_FAIL
 };
 
 class MysqlxDataStream {
@@ -64,9 +74,23 @@ public:
 	void set_encrypted(bool e) { encrypted_ = e; }
 	bool is_encrypted() const { return encrypted_; }
 
+	void init_ssl(SSL_CTX* ctx);
+	bool do_ssl_handshake();
+	bool ssl_init_done() const { return ssl_ != nullptr; }
+	bool ssl_handshake_complete() const { return ssl_handshake_done_; }
+	bool has_ssl_pending_write() const;
+	ssize_t flush_ssl_write_buf();
+
+	void init_ssl_connect(SSL_CTX* ctx);
+	SSL* get_ssl() const { return ssl_; }
+	BIO* get_rbio_ssl() const { return rbio_ssl_; }
+
 	int poll_fds_idx;
 
 private:
+	mysqlx_ssl_status get_ssl_status(SSL* ssl, int n);
+	void queue_encrypted_output();
+
 	int fd_;
 	mysqlx_ds_type type_;
 	mysqlx_data_stream_status status_;
@@ -82,6 +106,13 @@ private:
 	std::deque<MysqlxFrame> complete_frames_;
 	bool parse_error_;
 	bool encrypted_;
+
+	SSL *ssl_;
+	BIO *rbio_ssl_;
+	BIO *wbio_ssl_;
+	std::vector<uint8_t> ssl_write_buf_;
+	size_t ssl_write_offset_;
+	bool ssl_handshake_done_;
 
 	bool try_parse_frame();
 	static constexpr size_t X_FRAME_HEADER_SIZE = 5;
