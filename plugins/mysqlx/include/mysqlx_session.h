@@ -19,6 +19,16 @@ struct MysqlxCredentials {
 
 typedef std::function<MysqlxCredentials(const std::string& username)> MysqlxCredentialLookup;
 
+enum MysqlxResponseState {
+	RESP_IDLE = 0,
+	RESP_WAITING_STMT_EXECUTE,
+	RESP_WAITING_CRUD,
+	RESP_WAITING_PREPARE,
+	RESP_WAITING_CURSOR,
+	RESP_WAITING_EXPECT,
+	RESP_WAITING_SESS_RESET
+};
+
 class MysqlxSession {
 public:
 	enum Status {
@@ -97,6 +107,7 @@ private:
 	void send_capabilities();
 
 	uint8_t extract_msg_type_from_frame(const MysqlxFrame& frame);
+	bool is_terminal_for_state(uint8_t msg_type) const;
 
 	MysqlxDataStream client_ds_;
 	MysqlxDataStream server_ds_;
@@ -114,6 +125,7 @@ private:
 	MysqlxCredentialLookup credential_lookup_;
 	uint64_t start_time_;
 	uint64_t last_active_time_;
+	MysqlxResponseState response_state_;
 };
 
 #endif

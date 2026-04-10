@@ -35,7 +35,8 @@ MysqlxSession::MysqlxSession()
 	, target_hostgroup_(0)
 	, target_port_(0)
 	, start_time_(0)
-	, last_active_time_(0) {
+	, last_active_time_(0)
+	, response_state_(RESP_IDLE) {
 }
 
 MysqlxSession::~MysqlxSession() {
@@ -381,11 +382,13 @@ int MysqlxSession::dispatch_client_message(uint8_t msg_type) {
 		case Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_CONTINUE:
 			handler_auth_challenge_response(); return 0;
 		case Mysqlx::ClientMessages_Type_SESS_RESET:
+			response_state_ = RESP_WAITING_SESS_RESET;
 			forward_to_backend();
 			status_ = X_SESSION_RESET_WAITING;
 			to_process = true;
 			return 0;
 		case Mysqlx::ClientMessages_Type_SQL_STMT_EXECUTE:
+			response_state_ = RESP_WAITING_STMT_EXECUTE;
 			forward_to_backend(); return 0;
 		case Mysqlx::ClientMessages_Type_CRUD_FIND:
 		case Mysqlx::ClientMessages_Type_CRUD_INSERT:
@@ -394,19 +397,24 @@ int MysqlxSession::dispatch_client_message(uint8_t msg_type) {
 		case Mysqlx::ClientMessages_Type_CRUD_CREATE_VIEW:
 		case Mysqlx::ClientMessages_Type_CRUD_MODIFY_VIEW:
 		case Mysqlx::ClientMessages_Type_CRUD_DROP_VIEW:
+			response_state_ = RESP_WAITING_CRUD;
 			forward_to_backend(); return 0;
 		case Mysqlx::ClientMessages_Type_PREPARE_PREPARE:
 			if (backend_conn_) backend_conn_->set_has_prepared_statement(true);
+			response_state_ = RESP_WAITING_PREPARE;
 			forward_to_backend(); return 0;
 		case Mysqlx::ClientMessages_Type_PREPARE_EXECUTE:
 		case Mysqlx::ClientMessages_Type_PREPARE_DEALLOCATE:
+			response_state_ = RESP_WAITING_PREPARE;
 			forward_to_backend(); return 0;
 		case Mysqlx::ClientMessages_Type_CURSOR_OPEN:
 		case Mysqlx::ClientMessages_Type_CURSOR_FETCH:
 		case Mysqlx::ClientMessages_Type_CURSOR_CLOSE:
+			response_state_ = RESP_WAITING_CURSOR;
 			forward_to_backend(); return 0;
 		case Mysqlx::ClientMessages_Type_EXPECT_OPEN:
 		case Mysqlx::ClientMessages_Type_EXPECT_CLOSE:
+			response_state_ = RESP_WAITING_EXPECT;
 			forward_to_backend(); return 0;
 		case Mysqlx::ClientMessages_Type_COMPRESSION:
 			client_ds_.pop_frame();
@@ -455,7 +463,7 @@ void MysqlxSession::forward_to_backend() {
 
 namespace {
 
-bool is_terminal_server_frame(uint8_t msg_type) {
+bool is_terminal_server_frame_generic(uint8_t msg_type) {
 	switch (msg_type) {
 		case Mysqlx::ServerMessages_Type_OK:
 		case Mysqlx::ServerMessages_Type_ERROR:
@@ -470,6 +478,31 @@ bool is_terminal_server_frame(uint8_t msg_type) {
 	}
 }
 
+}
+
+bool MysqlxSession::is_terminal_for_state(uint8_t msg_type) const {
+	if (msg_type == Mysqlx::ServerMessages_Type_ERROR) return true;
+
+	switch (response_state_) {
+		case RESP_WAITING_STMT_EXECUTE:
+			return msg_type == Mysqlx::ServerMessages_Type_SQL_STMT_EXECUTE_OK ||
+			       msg_type == Mysqlx::ServerMessages_Type_RESULTSET_FETCH_DONE;
+		case RESP_WAITING_CRUD:
+			return msg_type == Mysqlx::ServerMessages_Type_OK ||
+			       msg_type == Mysqlx::ServerMessages_Type_RESULTSET_FETCH_DONE ||
+			       msg_type == Mysqlx::ServerMessages_Type_RESULTSET_FETCH_SUSPENDED;
+		case RESP_WAITING_PREPARE:
+			return msg_type == Mysqlx::ServerMessages_Type_OK;
+		case RESP_WAITING_CURSOR:
+			return msg_type == Mysqlx::ServerMessages_Type_RESULTSET_FETCH_DONE ||
+			       msg_type == Mysqlx::ServerMessages_Type_RESULTSET_FETCH_SUSPENDED;
+		case RESP_WAITING_EXPECT:
+			return msg_type == Mysqlx::ServerMessages_Type_OK;
+		case RESP_WAITING_SESS_RESET:
+			return msg_type == Mysqlx::ServerMessages_Type_OK;
+		default:
+			return is_terminal_server_frame_generic(msg_type);
+	}
 }
 
 void MysqlxSession::handler_waiting_server_msg() {
@@ -516,12 +549,13 @@ void MysqlxSession::handler_waiting_server_msg() {
 		}
 		server_ds_.pop_frame();
 
-		if (is_terminal_server_frame(msg_type)) {
+		if (is_terminal_for_state(msg_type)) {
 			got_terminal = true;
 		}
 	}
 
 	if (got_terminal) {
+		response_state_ = RESP_IDLE;
 		client_ds_.write_to_net();
 		return_backend_to_pool();
 		last_active_time_ = monotonic_time_ms();
