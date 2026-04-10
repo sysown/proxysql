@@ -77,6 +77,9 @@ public:
 	void set_backend_password(const char* p) { backend_password_ = p; }
 	void set_backend_schema(const char* s) { backend_schema_ = s; }
 
+	void set_connect_timeout(uint64_t ms) { connect_timeout_ms_ = ms; }
+	uint64_t get_connect_timeout() const { return connect_timeout_ms_; }
+
 	void init_backend_ds(int fd);
 	int step_auth();
 	MysqlxDataStream& backend_ds() { return backend_ds_; }
@@ -94,6 +97,8 @@ private:
 	bool in_transaction_;
 	bool has_prepared_stmt_;
 	uint64_t last_used_time_;
+	uint64_t connect_timeout_ms_;
+	uint64_t connect_start_time_;
 
 	std::string backend_user_;
 	std::string backend_password_;

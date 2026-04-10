@@ -13,11 +13,13 @@
 #include <arpa/inet.h>
 #include <cerrno>
 #include <cstring>
+#include <chrono>
 
 MysqlxConnection::MysqlxConnection()
 	: state_(CREATED), auth_state_(BACKEND_AUTH_NOT_STARTED), fd_(-1), hostgroup_(-1), port_(0),
 	  reusable_(false), in_transaction_(false),
-	  has_prepared_stmt_(false), last_used_time_(0) {}
+	  has_prepared_stmt_(false), last_used_time_(0),
+	  connect_timeout_ms_(10000), connect_start_time_(0) {}
 
 MysqlxConnection::~MysqlxConnection() {
 	if (fd_ >= 0) {
@@ -40,6 +42,8 @@ void MysqlxConnection::reset() {
 }
 
 int MysqlxConnection::start_connect(const char* host, int port) {
+	connect_start_time_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count();
 	fd_ = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
 	if (fd_ < 0) { state_ = ERROR_STATE; return -1; }
 	int flag = 1;
@@ -56,6 +60,12 @@ int MysqlxConnection::start_connect(const char* host, int port) {
 }
 
 int MysqlxConnection::check_connect() {
+	uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count();
+	if (connect_start_time_ > 0 && (now - connect_start_time_) > connect_timeout_ms_) {
+		state_ = ERROR_STATE;
+		return -1;
+	}
 	int err = 0;
 	socklen_t len = sizeof(err);
 	getsockopt(fd_, SOL_SOCKET, SO_ERROR, &err, &len);

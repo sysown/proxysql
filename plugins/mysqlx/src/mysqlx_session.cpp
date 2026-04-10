@@ -562,6 +562,7 @@ void MysqlxSession::handler_connecting_server() {
 		backend_conn_->set_hostgroup(target_hostgroup_);
 		backend_conn_->set_user(username_.c_str());
 		backend_conn_->set_schema(schema_.c_str());
+		backend_conn_->set_connect_timeout(10000);
 
 		int rc = backend_conn_->start_connect(target_address_.c_str(), target_port_);
 		if (rc == -1) {
