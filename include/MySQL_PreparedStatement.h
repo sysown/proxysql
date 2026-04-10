@@ -86,13 +86,10 @@ class stmt_execute_metadata_t {
 	my_bool *is_nulls;
 	unsigned long *lengths;
 	void *pkt;
-	stmt_execute_metadata_t() {
-		size = 0;
-		stmt_id = 0;
-		binds=NULL;
-		is_nulls=NULL;
-		lengths=NULL;
-		pkt=NULL;
+	stmt_execute_metadata_t()
+	  : size(0), stmt_id(0), flags(0), num_params(0),
+	    binds(nullptr), is_nulls(nullptr), lengths(nullptr), pkt(nullptr)
+	{
 	}
 	~stmt_execute_metadata_t() {
 		if (binds)
