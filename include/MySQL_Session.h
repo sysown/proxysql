@@ -584,6 +584,9 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 
 	friend void SQLite3_Server_session_handler(MySQL_Session*, void *_pa, PtrSize_t *pkt);
 
+	MySQL_Session(const MySQL_Session&) = delete;
+	MySQL_Session& operator=(const MySQL_Session&) = delete;
+
 #if defined(__clang__)
 	template<typename SESS, typename DS, typename BE, typename THD>
 	friend class Base_Session;
@@ -611,6 +614,8 @@ public:
 	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned int _hid, unsigned long i, int kt, int _use_ssl, MySQL_Thread* _mt, char *ip);
 	~KillArgs();
 	const char* get_host_address() const;
+	KillArgs(const KillArgs&) = delete;
+	KillArgs& operator=(const KillArgs&) = delete;
 
 private:
 	char* ip_addr;

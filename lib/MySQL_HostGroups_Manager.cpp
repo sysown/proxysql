@@ -1877,7 +1877,7 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 						st=(char *)"SHUNNED";
 						break;
 				}
-				fprintf(stderr,"HID: %d , address: %s , port: %d , gtid_port: %d , weight: %ld , status: %s , max_connections: %ld , max_replication_lag: %u , use_ssl: %u , max_latency_ms: %u , comment: %s\n", mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->gtid_port, mysrvc->weight, st, mysrvc->max_connections, mysrvc->max_replication_lag, mysrvc->use_ssl, mysrvc->max_latency_us*1000, mysrvc->comment);
+				fprintf(stderr,"HID: %u , address: %s , port: %d , gtid_port: %d , weight: %ld , status: %s , max_connections: %ld , max_replication_lag: %u , use_ssl: %d , max_latency_ms: %u , comment: %s\n", mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->gtid_port, mysrvc->weight, st, mysrvc->max_connections, mysrvc->max_replication_lag, mysrvc->use_ssl, mysrvc->max_latency_us*1000, mysrvc->comment);
 			}
 			lst->add(mysrvc);
 			if (lst->len==32) {
@@ -3578,8 +3578,9 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_ser
 
 		HostGroup_Server_Mapping* host_server_mapping = itr->second.get();
 
-		if (!host_server_mapping)
-			assert(0);
+		if (!host_server_mapping) {
+			continue;
+		}
 
 		const std::vector<HostGroup_Server_Mapping::Node>& writer_map = host_server_mapping->get(HostGroup_Server_Mapping::Type::WRITER);
 

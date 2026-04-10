@@ -9572,7 +9572,7 @@ char* MySQL_Session::get_current_query(int max_length) {
 
 	if (query_len > 0) {
 		res = (char *) malloc(query_len + 1);
-		if (trunc_query) {
+		if (trunc_query && query_len > 3) {
 			// for truncated queries, add three dots at the end
 			memcpy(res, query_ptr, query_len - 3);
 			memcpy(res + (query_len - 3), "...", 3);
