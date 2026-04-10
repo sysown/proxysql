@@ -13,6 +13,8 @@ const char kMysqlxRoutesTable[] = "mysqlx_routes";
 const char kRuntimeMysqlxRoutesTable[] = "runtime_mysqlx_routes";
 const char kMysqlxBackendEndpointsTable[] = "mysqlx_backend_endpoints";
 const char kRuntimeMysqlxBackendEndpointsTable[] = "runtime_mysqlx_backend_endpoints";
+const char kMysqlxVariablesTable[] = "mysqlx_variables";
+const char kRuntimeMysqlxVariablesTable[] = "runtime_mysqlx_variables";
 
 const char kMysqlxUsersTableDef[] =
 	"CREATE TABLE mysqlx_users ("
@@ -88,6 +90,18 @@ const char kRuntimeMysqlxBackendEndpointsTableDef[] =
 	" attributes VARCHAR CHECK (JSON_VALID(attributes) OR attributes = '') NOT NULL DEFAULT '',"
 	" comment VARCHAR NOT NULL DEFAULT '',"
 	" PRIMARY KEY (hostname, mysql_port)"
+	" )";
+
+const char kMysqlxVariablesTableDef[] =
+	"CREATE TABLE mysqlx_variables ("
+	" variable_name VARCHAR NOT NULL PRIMARY KEY,"
+	" variable_value VARCHAR NOT NULL DEFAULT ''"
+	" )";
+
+const char kRuntimeMysqlxVariablesTableDef[] =
+	"CREATE TABLE runtime_mysqlx_variables ("
+	" variable_name VARCHAR NOT NULL PRIMARY KEY,"
+	" variable_value VARCHAR NOT NULL DEFAULT ''"
 	" )";
 
 ProxySQL_PluginCommandResult command_failure(const char* message) {
@@ -219,6 +233,35 @@ ProxySQL_PluginCommandResult save_backend_endpoints_from_runtime(const ProxySQL_
 	return result;
 }
 
+ProxySQL_PluginCommandResult load_variables_to_runtime(const ProxySQL_PluginCommandContext& ctx, const char*) {
+	if (ctx.admindb == nullptr) {
+		return command_failure("mysqlx variables load requires admin db");
+	}
+	if (!copy_table(*ctx.admindb, kMysqlxVariablesTable, kRuntimeMysqlxVariablesTable)) {
+		return command_failure("failed to copy mysqlx variables to runtime");
+	}
+
+	ProxySQL_PluginCommandResult result {0, 0, ""};
+	result.rows_affected = ctx.admindb->return_one_int("SELECT COUNT(*) FROM runtime_mysqlx_variables");
+	result.message = "mysqlx variables loaded to runtime";
+	reload_config_store(*ctx.admindb);
+	return result;
+}
+
+ProxySQL_PluginCommandResult save_variables_from_runtime(const ProxySQL_PluginCommandContext& ctx, const char*) {
+	if (ctx.admindb == nullptr) {
+		return command_failure("mysqlx variables save requires admin db");
+	}
+	if (!copy_table(*ctx.admindb, kRuntimeMysqlxVariablesTable, kMysqlxVariablesTable)) {
+		return command_failure("failed to copy mysqlx variables from runtime");
+	}
+
+	ProxySQL_PluginCommandResult result {0, 0, ""};
+	result.rows_affected = ctx.admindb->return_one_int("SELECT COUNT(*) FROM mysqlx_variables");
+	result.message = "mysqlx variables saved from runtime";
+	return result;
+}
+
 void register_table_pair(
 	ProxySQL_PluginServices& services,
 	const char* table_name,
@@ -296,6 +339,9 @@ bool mysqlx_register_admin_schema(ProxySQL_PluginServices& services) {
 	register_table_pair(services, kMysqlxBackendEndpointsTable, kMysqlxBackendEndpointsTableDef);
 	register_runtime_table(services, kRuntimeMysqlxBackendEndpointsTable, kRuntimeMysqlxBackendEndpointsTableDef);
 
+	register_table_pair(services, kMysqlxVariablesTable, kMysqlxVariablesTableDef);
+	register_runtime_table(services, kRuntimeMysqlxVariablesTable, kRuntimeMysqlxVariablesTableDef);
+
 	// Stats tables (stats_db only, no config copy needed).
 	{
 		ProxySQL_PluginTableDef stats_routes {
@@ -320,5 +366,7 @@ bool mysqlx_register_admin_schema(ProxySQL_PluginServices& services) {
 	services.register_command("SAVE MYSQLX ROUTES TO MEMORY", &save_routes_from_runtime);
 	services.register_command("LOAD MYSQLX BACKEND ENDPOINTS TO RUNTIME", &load_backend_endpoints_to_runtime);
 	services.register_command("SAVE MYSQLX BACKEND ENDPOINTS TO MEMORY", &save_backend_endpoints_from_runtime);
+	services.register_command("LOAD MYSQLX VARIABLES TO RUNTIME", &load_variables_to_runtime);
+	services.register_command("SAVE MYSQLX VARIABLES TO MEMORY", &save_variables_from_runtime);
 	return true;
 }

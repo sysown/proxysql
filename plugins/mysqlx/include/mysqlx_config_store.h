@@ -68,6 +68,11 @@ public:
 	uint64_t topology_generation() const;
 	void bump_topology_generation();
 
+	int get_thread_pool_size() const;
+	int get_connect_timeout() const;
+	const std::string& get_tls_mode() const;
+	int get_max_cached_connections() const;
+
 private:
 	MysqlxBackendEndpoint pick_from_hostgroup(int hostgroup_id, const std::string& strategy) const;
 
@@ -78,6 +83,11 @@ private:
 	mutable std::mutex rr_mutex_ {};
 	mutable std::unordered_map<int, uint32_t> rr_counters_ {};
 	std::atomic<uint64_t> topology_generation_ { 0 };
+
+	int thread_pool_size_ { 4 };
+	int connect_timeout_ { 10000 };
+	std::string tls_mode_ { "DISABLED" };
+	int max_cached_connections_ { 100 };
 };
 
 #endif /* PROXYSQL_MYSQLX_CONFIG_STORE_H */

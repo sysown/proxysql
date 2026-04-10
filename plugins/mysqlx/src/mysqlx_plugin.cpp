@@ -1,4 +1,11 @@
 #include "mysqlx_plugin.h"
+#include "mysqlx_config_store.h"
+#include "sqlite3db.h"
+
+#include <algorithm>
+#include <cstdlib>
+#include <cstring>
+#include <memory>
 
 namespace {
 
@@ -14,10 +21,36 @@ bool mysqlx_init(ProxySQL_PluginServices* services) {
 	return mysqlx_register_admin_schema(*services);
 }
 
+bool parse_bind_addr(const std::string& bind, std::string& host, int& port) {
+	if (!bind.empty() && bind[0] == '[') {
+		auto closing = bind.find(']');
+		if (closing != std::string::npos) {
+			host = bind.substr(1, closing - 1);
+			port = 33060;
+			if (closing + 1 < bind.size() && bind[closing + 1] == ':') {
+				port = std::atoi(bind.substr(closing + 2).c_str());
+			}
+			return true;
+		}
+	}
+	auto pos = bind.rfind(':');
+	if (pos == std::string::npos || pos == 0 || pos == bind.size() - 1) {
+		host = bind;
+		port = 33060;
+		return true;
+	}
+
+	host = bind.substr(0, pos);
+	port = std::atoi(bind.substr(pos + 1).c_str());
+	if (port <= 0 || port > 65535) {
+		port = 33060;
+	}
+	return true;
+}
+
 bool mysqlx_start() {
 	MysqlxPluginContext& ctx = mysqlx_context();
 
-	// Open listener sockets for active routes if an admin DB is available.
 	if (ctx.services != nullptr && ctx.services->get_admindb != nullptr) {
 		SQLite3DB* admindb = ctx.services->get_admindb();
 		if (admindb != nullptr) {
@@ -27,8 +60,58 @@ bool mysqlx_start() {
 					ctx.services->log_message(3, err.c_str());
 				}
 			}
-			mysqlx_start_listeners_from_runtime_routes(*admindb);
 		}
+	}
+
+	int pool_size = ctx.config_store->get_thread_pool_size();
+	if (pool_size < 1) pool_size = 1;
+	if (pool_size > 64) pool_size = 64;
+
+	int max_cached = ctx.config_store->get_max_cached_connections();
+
+	for (int i = 0; i < pool_size; i++) {
+		Mysqlx_Thread* thr = new Mysqlx_Thread();
+		thr->init(i);
+		thr->set_max_cached_connections(static_cast<size_t>(max_cached));
+		ctx.threads.push_back(thr);
+	}
+
+	if (ctx.services != nullptr && ctx.services->get_admindb != nullptr) {
+		SQLite3DB* admindb = ctx.services->get_admindb();
+		if (admindb != nullptr) {
+			char* error = nullptr;
+			std::unique_ptr<SQLite3_result> result(
+				admindb->execute_statement(
+					"SELECT name, bind FROM runtime_mysqlx_routes WHERE active=1",
+					&error
+				)
+			);
+			if (error != nullptr) {
+				free(error);
+			}
+			if (result && !result->rows.empty()) {
+				int ti = 0;
+				for (auto* row : result->rows) {
+					if (row == nullptr || row->fields[0] == nullptr || row->fields[1] == nullptr) {
+						continue;
+					}
+					std::string bind_str = row->fields[1];
+					std::string host {};
+					int port = 33060;
+					parse_bind_addr(bind_str, host, port);
+
+					if (ti < static_cast<int>(ctx.threads.size())) {
+						Mysqlx_Thread* thr = ctx.threads[ti % pool_size];
+						thr->add_listener(host.c_str(), port);
+					}
+					ti++;
+				}
+			}
+		}
+	}
+
+	for (auto* thr : ctx.threads) {
+		thr->start();
 	}
 
 	ctx.started = true;
@@ -36,8 +119,16 @@ bool mysqlx_start() {
 }
 
 bool mysqlx_stop() {
-	mysqlx_stop_listeners();
 	MysqlxPluginContext& ctx = mysqlx_context();
+
+	for (auto* thr : ctx.threads) {
+		thr->stop();
+	}
+	for (auto* thr : ctx.threads) {
+		delete thr;
+	}
+	ctx.threads.clear();
+
 	ctx.started = false;
 	return true;
 }

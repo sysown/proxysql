@@ -4,13 +4,15 @@
 #include "ProxySQL_Plugin.h"
 #include "mysqlx_admin_schema.h"
 #include "mysqlx_config_store.h"
-#include "mysqlx_worker.h"
+#include "mysqlx_thread.h"
 
 #include <memory>
+#include <vector>
 
 struct MysqlxPluginContext {
 	ProxySQL_PluginServices* services { nullptr };
 	std::unique_ptr<MysqlxConfigStore> config_store {};
+	std::vector<Mysqlx_Thread*> threads {};
 	bool started { false };
 };
 

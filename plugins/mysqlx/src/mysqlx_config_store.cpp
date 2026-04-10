@@ -158,6 +158,31 @@ void load_backend_servers(
 	}
 }
 
+void load_variables(
+	SQLite3_result& rows,
+	int& thread_pool_size,
+	int& connect_timeout,
+	std::string& tls_mode,
+	int& max_cached_connections
+) {
+	for (auto* row : rows.rows) {
+		if (row == nullptr || row->fields[0] == nullptr) {
+			continue;
+		}
+		const std::string name = row->fields[0];
+		const char* value = row->fields[1] ? row->fields[1] : "";
+		if (name == "mysqlx_thread_pool_size") {
+			thread_pool_size = std::atoi(value);
+		} else if (name == "mysqlx_connect_timeout") {
+			connect_timeout = std::atoi(value);
+		} else if (name == "mysqlx_tls_mode") {
+			tls_mode = value;
+		} else if (name == "mysqlx_max_cached_connections_per_thread") {
+			max_cached_connections = std::atoi(value);
+		}
+	}
+}
+
 } // namespace
 
 MysqlxBackendAuthMode mysqlx_backend_auth_mode_from_string(const std::string& value) {
@@ -233,9 +258,27 @@ bool MysqlxConfigStore::load_from_runtime(SQLite3DB& db, std::string& err) {
 	}
 	load_backend_servers(*result, endpoint_overrides, new_hostgroup_endpoints);
 
+	int new_pool_size = thread_pool_size_;
+	int new_connect_timeout = connect_timeout_;
+	std::string new_tls_mode = tls_mode_;
+	int new_max_cached = max_cached_connections_;
+
+	if (!fetch_result(
+		    db,
+		    "SELECT variable_name, variable_value FROM runtime_mysqlx_variables",
+		    result,
+		    err)) {
+		return false;
+	}
+	load_variables(*result, new_pool_size, new_connect_timeout, new_tls_mode, new_max_cached);
+
 	identities_.swap(new_identities);
 	routes_.swap(new_routes);
 	hostgroup_endpoints_.swap(new_hostgroup_endpoints);
+	thread_pool_size_ = new_pool_size;
+	connect_timeout_ = new_connect_timeout;
+	tls_mode_ = std::move(new_tls_mode);
+	max_cached_connections_ = new_max_cached;
 	return true;
 }
 
@@ -301,4 +344,24 @@ uint64_t MysqlxConfigStore::topology_generation() const {
 
 void MysqlxConfigStore::bump_topology_generation() {
 	topology_generation_.fetch_add(1);
+}
+
+int MysqlxConfigStore::get_thread_pool_size() const {
+	std::shared_lock<std::shared_mutex> lock(mutex_);
+	return thread_pool_size_;
+}
+
+int MysqlxConfigStore::get_connect_timeout() const {
+	std::shared_lock<std::shared_mutex> lock(mutex_);
+	return connect_timeout_;
+}
+
+const std::string& MysqlxConfigStore::get_tls_mode() const {
+	std::shared_lock<std::shared_mutex> lock(mutex_);
+	return tls_mode_;
+}
+
+int MysqlxConfigStore::get_max_cached_connections() const {
+	std::shared_lock<std::shared_mutex> lock(mutex_);
+	return max_cached_connections_;
 }
