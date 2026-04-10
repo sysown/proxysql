@@ -495,6 +495,16 @@ void MysqlxSession::handler_waiting_server_msg() {
 		const auto& frame = server_ds_.front_frame();
 		uint8_t msg_type = frame[4];
 
+		if (msg_type == Mysqlx::ServerMessages_Type_NOTICE) {
+			if (frame.size() > 5) {
+				client_ds_.enqueue_frame(msg_type, frame.data() + 5, frame.size() - 5);
+			} else {
+				client_ds_.enqueue_frame(msg_type, nullptr, 0);
+			}
+			server_ds_.pop_frame();
+			continue;
+		}
+
 		if (frame.size() > 5) {
 			client_ds_.enqueue_frame(msg_type, frame.data() + 5, frame.size() - 5);
 		} else {
