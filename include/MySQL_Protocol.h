@@ -142,7 +142,9 @@ class MySQL_Protocol {
 	uint16_t prot_status;
 	bool more_data_needed;
 	MySQL_Data_Stream *get_myds() { return *myds; }
-	MySQL_Protocol() {
+	MySQL_Protocol()
+	  : userinfo(nullptr), sess(nullptr), myds(nullptr), current_PreStmt(nullptr)
+	{
 		sent_auth_plugin_id = AUTH_MYSQL_NATIVE_PASSWORD;
 		auth_plugin_id = AUTH_UNKNOWN_PLUGIN;
 		prot_status=0;
