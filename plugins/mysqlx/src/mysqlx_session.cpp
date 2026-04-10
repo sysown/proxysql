@@ -101,6 +101,7 @@ handler_again:
 		case WAITING_SERVER_XMSG:    handler_waiting_server_msg(); break;
 		case X_FAST_FORWARD:         handler_fast_forward(); break;
 		case X_TLS_ACCEPT_INIT:      handler_tls_accept_init(); break;
+		case X_SESSION_RESET_WAITING: handler_session_reset_waiting(); break;
 		case X_SESSION_CLOSING:      handler_session_closing(); break;
 		default: break;
 	}
@@ -380,7 +381,10 @@ int MysqlxSession::dispatch_client_message(uint8_t msg_type) {
 		case Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_CONTINUE:
 			handler_auth_challenge_response(); return 0;
 		case Mysqlx::ClientMessages_Type_SESS_RESET:
-			forward_to_backend(); return 0;
+			forward_to_backend();
+			status_ = X_SESSION_RESET_WAITING;
+			to_process = true;
+			return 0;
 		case Mysqlx::ClientMessages_Type_SQL_STMT_EXECUTE:
 			forward_to_backend(); return 0;
 		case Mysqlx::ClientMessages_Type_CRUD_FIND:
@@ -527,6 +531,67 @@ void MysqlxSession::handler_waiting_server_msg() {
 }
 
 void MysqlxSession::handler_fast_forward() {
+}
+
+void MysqlxSession::handler_session_reset_waiting() {
+	if (server_ds_.get_fd() < 0) {
+		return_backend_to_pool();
+		status_ = WAITING_CLIENT_XMSG;
+		to_process = true;
+		return;
+	}
+
+	ssize_t r = server_ds_.read_from_net();
+	if (r == 0 || (r < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+		return_backend_to_pool();
+		status_ = WAITING_CLIENT_XMSG;
+		to_process = true;
+		return;
+	}
+
+	while (server_ds_.has_complete_frame()) {
+		const auto& frame = server_ds_.front_frame();
+		uint8_t msg_type = frame[4];
+
+		if (msg_type == Mysqlx::ServerMessages_Type_NOTICE) {
+			if (frame.size() > 5) {
+				client_ds_.enqueue_frame(msg_type, frame.data() + 5, frame.size() - 5);
+			} else {
+				client_ds_.enqueue_frame(msg_type, nullptr, 0);
+			}
+			server_ds_.pop_frame();
+			continue;
+		}
+
+		if (msg_type == Mysqlx::ServerMessages_Type_OK) {
+			server_ds_.pop_frame();
+			if (backend_conn_) {
+				backend_conn_->set_has_prepared_statement(false);
+				backend_conn_->set_in_transaction(false);
+			}
+			return_backend_to_pool();
+			last_active_time_ = monotonic_time_ms();
+			status_ = WAITING_CLIENT_XMSG;
+			to_process = true;
+			return;
+		}
+
+		if (msg_type == Mysqlx::ServerMessages_Type_ERROR) {
+			if (frame.size() > 5) {
+				client_ds_.enqueue_frame(msg_type, frame.data() + 5, frame.size() - 5);
+			} else {
+				client_ds_.enqueue_frame(msg_type, nullptr, 0);
+			}
+			server_ds_.pop_frame();
+			client_ds_.write_to_net();
+			return_backend_to_pool();
+			status_ = WAITING_CLIENT_XMSG;
+			to_process = true;
+			return;
+		}
+
+		server_ds_.pop_frame();
+	}
 }
 
 void MysqlxSession::handler_session_closing() {

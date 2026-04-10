@@ -42,7 +42,8 @@ public:
 		X_TLS_CONNECT_CONT,
 		X_TLS_CONNECT_DONE,
 		X_SESSION_CLOSING,
-		X_SESSION_CLOSED
+		X_SESSION_CLOSED,
+		X_SESSION_RESET_WAITING
 	};
 
 	MysqlxSession();
@@ -81,6 +82,7 @@ private:
 	void handler_fast_forward();
 	void handler_session_closing();
 	void handler_connecting_server();
+	void handler_session_reset_waiting();
 
 	void handler_tls_accept_init();
 
