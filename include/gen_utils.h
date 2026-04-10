@@ -146,8 +146,11 @@ class PtrArray {
 	}
 	void shrink() {
 		unsigned int new_size=l_near_pow_2(len+1);
-		pdata=(void **)realloc(pdata,new_size*sizeof(void *));
-		size=new_size;
+		void *new_pdata = realloc(pdata, new_size * sizeof(void *));
+		if (new_pdata) {
+			pdata = (void **)new_pdata;
+			size = new_size;
+		}
 	}
 	public:
 	unsigned int len;
