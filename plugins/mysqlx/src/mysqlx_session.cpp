@@ -406,7 +406,7 @@ int MysqlxSession::dispatch_client_message(uint8_t msg_type) {
 			forward_to_backend(); return 0;
 		case Mysqlx::ClientMessages_Type_COMPRESSION:
 			client_ds_.pop_frame();
-			send_error(5001, "Compression is not supported");
+			send_error(5008, "Compression is not supported");
 			return 0;
 		default:
 			client_ds_.pop_frame();
