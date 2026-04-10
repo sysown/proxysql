@@ -184,8 +184,15 @@ class Query_Processor_Output {
 	void operator delete(void *ptr) {
 		l_free(sizeof(Query_Processor_Output),ptr);
 	}
-	Query_Processor_Output() {
-		//init();
+	Query_Processor_Output()
+	  : ptr(nullptr), size(0), destination_hostgroup(-1), mirror_hostgroup(-1),
+	    mirror_flagOUT(false), next_query_flagIN(false), cache_ttl(0),
+	    cache_empty_result(false), cache_timeout(0), reconnect(true),
+	    timeout(0), retries(3), delay(0), error_msg(nullptr), OK_msg(nullptr),
+	    sticky_conn(false), multiplex(true), max_lag_ms(0), log(false),
+	    firewall_whitelist_mode(false), attributes(nullptr), comment(nullptr),
+	    create_new_conn(false), new_query(nullptr)
+	{
 	}
 	~Query_Processor_Output() {
 		//destroy();
