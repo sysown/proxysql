@@ -14,8 +14,8 @@
  * @see https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSS/Key_Log_Format
  */
 
-#ifndef __PROXYSQL_SSLKEYLOG_H
-#define __PROXYSQL_SSLKEYLOG_H
+#ifndef PROXYSQL_SSLKEYLOG_H
+#define PROXYSQL_SSLKEYLOG_H
 #include "proxysql.h"
 
 /**
@@ -118,4 +118,4 @@ void proxysql_keylog_write_line_callback(const SSL* ssl, const char* line);
  */
 void proxysql_keylog_set_pgsql_callback();
 
-#endif // __PROXYSQL_SSLKEYLOG_H
+#endif /* PROXYSQL_SSLKEYLOG_H */

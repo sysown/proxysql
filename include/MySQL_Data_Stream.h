@@ -1,5 +1,5 @@
-#ifndef __CLASS_MYSQL_DATA_STREAM_H
-#define __CLASS_MYSQL_DATA_STREAM_H
+#ifndef PROXYSQL_MYSQL_DATA_STREAM_H
+#define PROXYSQL_MYSQL_DATA_STREAM_H
 
 #include "proxysql.h"
 #include "cpp.h"
@@ -287,4 +287,4 @@ class MySQL_Data_Stream
 
 	void get_client_myds_info_json(nlohmann::json&);
 };
-#endif /* __CLASS_MYSQL_DATA_STREAM_H */
+#endif /* PROXYSQL_MYSQL_DATA_STREAM_H */

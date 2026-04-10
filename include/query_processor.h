@@ -1,5 +1,5 @@
-#ifndef __CLASS_QUERY_PROCESSOR_H
-#define __CLASS_QUERY_PROCESSOR_H
+#ifndef PROXYSQL_QUERY_PROCESSOR_H
+#define PROXYSQL_QUERY_PROCESSOR_H
 #include <type_traits>
 #include <set>
 #include "proxysql.h"
@@ -185,7 +185,7 @@ class Query_Processor_Output {
 		l_free(sizeof(Query_Processor_Output),ptr);
 	}
 	Query_Processor_Output() {
-		//init();
+		init();
 	}
 	~Query_Processor_Output() {
 		//destroy();
@@ -480,4 +480,4 @@ private:
 	friend Web_Interface_plugin;
 };
 
-#endif /* __CLASS_QUERY_PROCESSOR_H */
+#endif /* PROXYSQL_QUERY_PROCESSOR_H */

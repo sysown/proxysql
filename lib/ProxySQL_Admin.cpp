@@ -6999,7 +6999,7 @@ void ProxySQL_Admin::save_mysql_users_runtime_to_database(bool _runtime) {
 		sqlite3_stmt *statement1=NULL;
 
 		if (ads[i]->default_hostgroup >= 0) {
-			if (ad->__frontend) {
+			if (ad->frontend_) {
 				statement1=f_statement1;
 			} else {
 				statement1=b_statement1;
@@ -7082,13 +7082,13 @@ void ProxySQL_Admin::save_pgsql_users_runtime_to_database(bool _runtime) {
 			/*
 			char *q=NULL;
 			if (_runtime==false) {
-				if (ad->__frontend) {
+				if (ad->frontend_) {
 					q=qf;
 				} else {
 					q=qb;
 				}
 			} else { // _runtime==true
-				if (ad->__frontend) {
+				if (ad->frontend_) {
 					q=qfr;
 					statement1=f_statement1;
 				} else {
@@ -7097,7 +7097,7 @@ void ProxySQL_Admin::save_pgsql_users_runtime_to_database(bool _runtime) {
 				}
 			}
 			*/
-			if (ad->__frontend) {
+			if (ad->frontend_) {
 				statement1 = f_statement1;
 			}
 			else {
@@ -7320,13 +7320,13 @@ void ProxySQL_Admin::save_clickhouse_users_runtime_to_database(bool _runtime) {
 		if (ads[i]->default_hostgroup >= 0) {
 			char *q=NULL;
 			if (_runtime==false) {
-				if (ad->__frontend) {
+				if (ad->frontend_) {
 					q=qf;
 				} else {
 					q=qb;
 				}
 			} else { // _runtime==true
-				if (ad->__frontend) {
+				if (ad->frontend_) {
 					q=qfr;
 					statement1=f_statement1;
 				} else {

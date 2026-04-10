@@ -1,5 +1,5 @@
-#ifndef __CLASS_SERVERS_SSL_PARAMS_H
-#define __CLASS_SERVERS_SSL_PARAMS_H
+#ifndef PROXYSQL_SERVERS_SSL_PARAMS_H
+#define PROXYSQL_SERVERS_SSL_PARAMS_H
 
 #include <string>
 
@@ -24,39 +24,17 @@ class Servers_SslParams {
 	Servers_SslParams(string _h, int _p, string _u,
 		string ca, string cert, string key, string capath,
 		string crl, string crlpath, string cipher, string tls,
-		string c) {
-		hostname = _h;
-		port = _p;
-		username = _u;
-		ssl_ca = ca;
-		ssl_cert = cert;
-		ssl_key = key;
-		ssl_capath = capath;
-		ssl_crl = crl;
-		ssl_crlpath = crlpath;
-		ssl_cipher = cipher;
-		tls_version = tls;
-		comment = c;
-		MapKey = "";
-	}
+		string c)
+		: hostname(_h), port(_p), username(_u), ssl_ca(ca), ssl_cert(cert),
+		  ssl_key(key), ssl_capath(capath), ssl_crl(crl), ssl_crlpath(crlpath),
+		  ssl_cipher(cipher), tls_version(tls), comment(c), MapKey("") {}
 	Servers_SslParams(char * _h, int _p, char * _u,
 		char * ca, char * cert, char * key, char * capath,
 		char * crl, char * crlpath, char * cipher, char * tls,
-		char * c) {
-		hostname = string(_h);
-		port = _p;
-		username = string(_u);
-		ssl_ca = string(ca);
-		ssl_cert = string(cert);
-		ssl_key = string(key);
-		ssl_capath = string(capath);
-		ssl_crl = string(crl);
-		ssl_crlpath = string(crlpath);
-		ssl_cipher = string(cipher);
-		tls_version = string(tls);
-		comment = string(c);
-		MapKey = "";
-	}
+		char * c)
+		: hostname(_h), port(_p), username(_u), ssl_ca(ca), ssl_cert(cert),
+		  ssl_key(key), ssl_capath(capath), ssl_crl(crl), ssl_crlpath(crlpath),
+		  ssl_cipher(cipher), tls_version(tls), comment(c), MapKey("") {}
 	Servers_SslParams(string _h, int _p, string _u)
 		: Servers_SslParams(_h, _p, _u, "", "", "", "", "", "", "", "", "") {}
 	virtual ~Servers_SslParams() = default;

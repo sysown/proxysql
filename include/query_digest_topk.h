@@ -1,5 +1,5 @@
-#ifndef __PROXYSQL_QUERY_DIGEST_TOPK_H
-#define __PROXYSQL_QUERY_DIGEST_TOPK_H
+#ifndef PROXYSQL_QUERY_DIGEST_TOPK_H
+#define PROXYSQL_QUERY_DIGEST_TOPK_H
 
 #include <cstdint>
 #include <string>
