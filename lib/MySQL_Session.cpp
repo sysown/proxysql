@@ -363,7 +363,9 @@ extern MySQL_Threads_Handler *GloMTH;
  * @brief Default constructor.
  * Initializes all member variables to their default values.
  */
-Query_Info::Query_Info() {
+Query_Info::Query_Info()
+  : sess(nullptr), mysql_stmt(nullptr), stmt_meta(nullptr), stmt_global_id(0)
+{
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
 	QueryPointer=NULL;
 	QueryLength=0;
