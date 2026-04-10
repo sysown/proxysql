@@ -20,6 +20,8 @@ class iface_info {
 		free(address);
 		close(fd);
 	}
+	iface_info(const iface_info&) = delete;
+	iface_info& operator=(const iface_info&) = delete;
 };
 
 template<class T>
