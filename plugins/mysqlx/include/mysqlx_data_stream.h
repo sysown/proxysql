@@ -57,6 +57,9 @@ public:
 
 	bool has_parse_error() const { return parse_error_; }
 
+	void set_encrypted(bool e) { encrypted_ = e; }
+	bool is_encrypted() const { return encrypted_; }
+
 	int poll_fds_idx;
 
 private:
@@ -74,6 +77,7 @@ private:
 
 	std::deque<MysqlxFrame> complete_frames_;
 	bool parse_error_;
+	bool encrypted_;
 
 	bool try_parse_frame();
 	static constexpr size_t X_FRAME_HEADER_SIZE = 5;

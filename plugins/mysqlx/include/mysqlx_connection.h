@@ -53,6 +53,9 @@ public:
 
 	void reset();
 
+	int start_connect(const char* host, int port);
+	int check_connect();
+
 private:
 	State state_;
 	int fd_;

@@ -9,7 +9,7 @@
 MysqlxDataStream::MysqlxDataStream()
 	: fd_(-1), type_(XDS_FRONTEND), status_(XDS_NOT_CONNECTED),
 	  poll_events_(0), revents_(0), read_offset_(0), write_offset_(0),
-	  parse_error_(false), poll_fds_idx(-1) {}
+	  parse_error_(false), encrypted_(false), poll_fds_idx(-1) {}
 
 MysqlxDataStream::~MysqlxDataStream() {}
 

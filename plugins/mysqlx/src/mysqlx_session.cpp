@@ -1,4 +1,5 @@
 #include "mysqlx_session.h"
+#include "mysqlx_thread.h"
 
 #include "mysqlx.pb.h"
 #include "mysqlx_connection.pb.h"
@@ -17,23 +18,35 @@ constexpr size_t CHALLENGE_LENGTH = 20;
 }
 
 MysqlxSession::MysqlxSession()
-	: to_process(false)
+	: backend_conn_(nullptr)
+	, thread_ptr_(nullptr)
+	, to_process(false)
 	, status_(NONE)
-	, healthy(true) {
+	, healthy(true)
+	, target_hostgroup_(0)
+	, target_port_(0) {
 }
 
 MysqlxSession::~MysqlxSession() {
+	if (backend_conn_) {
+		return_backend_to_pool();
+	}
 	if (client_ds_.get_fd() >= 0) {
 		close(client_ds_.get_fd());
 	}
 }
 
-void MysqlxSession::init(int fd, void* /* thread_ptr */) {
+void MysqlxSession::init(int fd, void* thread_ptr) {
 	client_ds_.init(XDS_FRONTEND, fd);
 	client_ds_.set_nonblocking();
 	status_ = CONNECTING_CLIENT;
 	healthy = true;
 	to_process = false;
+	thread_ptr_ = thread_ptr;
+	backend_conn_ = nullptr;
+	target_hostgroup_ = 0;
+	target_address_.clear();
+	target_port_ = 0;
 }
 
 void MysqlxSession::reset() {
@@ -44,6 +57,10 @@ void MysqlxSession::reset() {
 	schema_.clear();
 	auth_method_.clear();
 	auth_challenge_.clear();
+	backend_conn_ = nullptr;
+	target_hostgroup_ = 0;
+	target_address_.clear();
+	target_port_ = 0;
 }
 
 int MysqlxSession::handler() {
@@ -64,8 +81,10 @@ handler_again:
 		case X_AUTH_START:           handler_auth_start(); break;
 		case X_AUTH_CHALLENGE_SENT:  handler_auth_challenge_response(); break;
 		case WAITING_CLIENT_XMSG:    handler_waiting_client_msg(); break;
+		case CONNECTING_SERVER:      handler_connecting_server(); break;
 		case WAITING_SERVER_XMSG:    handler_waiting_server_msg(); break;
 		case X_FAST_FORWARD:         handler_fast_forward(); break;
+		case X_TLS_ACCEPT_INIT:      handler_tls_accept_init(); break;
 		case X_SESSION_CLOSING:      handler_session_closing(); break;
 		default: break;
 	}
@@ -219,38 +238,216 @@ void MysqlxSession::handler_auth_challenge_response() {
 	status_ = WAITING_CLIENT_XMSG;
 }
 
+int MysqlxSession::dispatch_client_message(uint8_t msg_type) {
+	switch (msg_type) {
+		case Mysqlx::ClientMessages_Type_CON_CAPABILITIES_GET:
+			client_ds_.pop_frame();
+			handler_capabilities_get(); return 0;
+		case Mysqlx::ClientMessages_Type_CON_CAPABILITIES_SET:
+			client_ds_.pop_frame();
+			handler_capabilities_set(); return 0;
+		case Mysqlx::ClientMessages_Type_CON_CLOSE:
+		case Mysqlx::ClientMessages_Type_SESS_CLOSE:
+			client_ds_.pop_frame();
+			status_ = X_SESSION_CLOSING; healthy = false;
+			to_process = true; return 0;
+		case Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_START:
+			client_ds_.pop_frame();
+			handler_auth_start(); return 0;
+		case Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_CONTINUE:
+			client_ds_.pop_frame();
+			handler_auth_challenge_response(); return 0;
+		case Mysqlx::ClientMessages_Type_SESS_RESET:
+			forward_to_backend(); return 0;
+		case Mysqlx::ClientMessages_Type_SQL_STMT_EXECUTE:
+			forward_to_backend(); return 0;
+		case Mysqlx::ClientMessages_Type_CRUD_FIND:
+		case Mysqlx::ClientMessages_Type_CRUD_INSERT:
+		case Mysqlx::ClientMessages_Type_CRUD_UPDATE:
+		case Mysqlx::ClientMessages_Type_CRUD_DELETE:
+		case Mysqlx::ClientMessages_Type_CRUD_CREATE_VIEW:
+		case Mysqlx::ClientMessages_Type_CRUD_MODIFY_VIEW:
+		case Mysqlx::ClientMessages_Type_CRUD_DROP_VIEW:
+			forward_to_backend(); return 0;
+		case Mysqlx::ClientMessages_Type_PREPARE_PREPARE:
+			if (backend_conn_) backend_conn_->set_has_prepared_statement(true);
+			forward_to_backend(); return 0;
+		case Mysqlx::ClientMessages_Type_PREPARE_EXECUTE:
+		case Mysqlx::ClientMessages_Type_PREPARE_DEALLOCATE:
+			forward_to_backend(); return 0;
+		case Mysqlx::ClientMessages_Type_CURSOR_OPEN:
+		case Mysqlx::ClientMessages_Type_CURSOR_FETCH:
+		case Mysqlx::ClientMessages_Type_CURSOR_CLOSE:
+			forward_to_backend(); return 0;
+		case Mysqlx::ClientMessages_Type_EXPECT_OPEN:
+		case Mysqlx::ClientMessages_Type_EXPECT_CLOSE:
+			forward_to_backend(); return 0;
+		case Mysqlx::ClientMessages_Type_COMPRESSION:
+			client_ds_.pop_frame();
+			send_error(5001, "Compression is not supported");
+			return 0;
+		default:
+			client_ds_.pop_frame();
+			send_error(5000, "Unknown message type");
+			status_ = X_SESSION_CLOSING; healthy = false;
+			return -1;
+	}
+}
+
 void MysqlxSession::handler_waiting_client_msg() {
 	if (!client_ds_.has_complete_frame()) return;
 
 	const auto& frame = client_ds_.front_frame();
 	uint8_t msg_type = extract_msg_type_from_frame(frame);
-	client_ds_.pop_frame();
 
-	switch (msg_type) {
-		case Mysqlx::ClientMessages_Type_CON_CLOSE:
-			status_ = X_SESSION_CLOSING;
+	dispatch_client_message(msg_type);
+}
+
+void MysqlxSession::forward_to_backend() {
+	if (server_ds_.get_status() != XDS_READY) {
+		if (!backend_conn_ || backend_conn_->get_state() != MysqlxConnection::IDLE) {
+			status_ = CONNECTING_SERVER;
 			to_process = true;
-			break;
-
-		case Mysqlx::ClientMessages_Type_SESS_CLOSE:
-			status_ = X_SESSION_CLOSING;
-			to_process = true;
-			break;
-
-		default:
-			break;
+			return;
+		}
+		server_ds_.init(XDS_BACKEND, backend_conn_->get_fd());
 	}
+
+	if (client_ds_.has_complete_frame()) {
+		const auto& frame = client_ds_.front_frame();
+		if (frame.size() > 5) {
+			server_ds_.enqueue_frame(frame[4], frame.data() + 5, frame.size() - 5);
+		} else {
+			server_ds_.enqueue_frame(frame[4], nullptr, 0);
+		}
+		client_ds_.pop_frame();
+	}
+
+	server_ds_.write_to_net();
+	status_ = WAITING_SERVER_XMSG;
 }
 
 void MysqlxSession::handler_waiting_server_msg() {
+	if (server_ds_.get_fd() < 0) {
+		return_backend_to_pool();
+		status_ = WAITING_CLIENT_XMSG;
+		to_process = true;
+		return;
+	}
+
+	ssize_t r = server_ds_.read_from_net();
+	if (r == 0) {
+		return_backend_to_pool();
+		status_ = WAITING_CLIENT_XMSG;
+		to_process = true;
+		return;
+	}
+	if (r < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+		return_backend_to_pool();
+		status_ = WAITING_CLIENT_XMSG;
+		to_process = true;
+		return;
+	}
+
+	bool got_any = false;
+	while (server_ds_.has_complete_frame()) {
+		const auto& frame = server_ds_.front_frame();
+		if (frame.size() > 5) {
+			client_ds_.enqueue_frame(frame[4], frame.data() + 5, frame.size() - 5);
+		} else {
+			client_ds_.enqueue_frame(frame[4], nullptr, 0);
+		}
+		server_ds_.pop_frame();
+		got_any = true;
+	}
+
+	if (got_any) {
+		client_ds_.write_to_net();
+	}
+
+	if (server_ds_.has_complete_frame()) {
+		return;
+	}
+
+	return_backend_to_pool();
+	status_ = WAITING_CLIENT_XMSG;
+	to_process = true;
 }
 
 void MysqlxSession::handler_fast_forward() {
 }
 
 void MysqlxSession::handler_session_closing() {
+	return_backend_to_pool();
 	healthy = false;
 	status_ = X_SESSION_CLOSED;
+}
+
+void MysqlxSession::handler_tls_accept_init() {
+	status_ = X_TLS_ACCEPT_DONE;
+	to_process = true;
+}
+
+void MysqlxSession::handler_connecting_server() {
+	if (!backend_conn_) {
+		Mysqlx_Thread* thread = static_cast<Mysqlx_Thread*>(thread_ptr_);
+		if (thread) {
+			backend_conn_ = thread->get_connection_from_cache(
+				target_hostgroup_, username_.c_str(), schema_.c_str());
+		}
+
+		if (backend_conn_) {
+			server_ds_.init(XDS_BACKEND, backend_conn_->get_fd());
+			status_ = WAITING_CLIENT_XMSG;
+			to_process = true;
+			return;
+		}
+
+		backend_conn_ = new MysqlxConnection();
+		backend_conn_->set_hostgroup(target_hostgroup_);
+		backend_conn_->set_user(username_.c_str());
+		backend_conn_->set_schema(schema_.c_str());
+
+		int rc = backend_conn_->start_connect(target_address_.c_str(), target_port_);
+		if (rc == -1) {
+			send_error(2003, "Can't connect to backend");
+			delete backend_conn_; backend_conn_ = nullptr;
+			status_ = X_SESSION_CLOSING; healthy = false;
+			return;
+		}
+		if (rc == 1) {
+			return;
+		}
+	}
+
+	if (backend_conn_ && backend_conn_->get_state() == MysqlxConnection::CONNECTING) {
+		int rc = backend_conn_->check_connect();
+		if (rc == 1) return;
+		if (rc == -1) {
+			send_error(2003, "Backend connect failed");
+			delete backend_conn_; backend_conn_ = nullptr;
+			status_ = X_SESSION_CLOSING; healthy = false;
+			return;
+		}
+	}
+
+	server_ds_.init(XDS_BACKEND, backend_conn_->get_fd());
+	backend_conn_->set_state(MysqlxConnection::IDLE);
+	backend_conn_->set_reusable(true);
+	status_ = WAITING_CLIENT_XMSG;
+	to_process = true;
+}
+
+void MysqlxSession::return_backend_to_pool() {
+	if (!backend_conn_) return;
+	Mysqlx_Thread* thread = static_cast<Mysqlx_Thread*>(thread_ptr_);
+	if (thread) {
+		thread->return_connection_to_cache(backend_conn_);
+	} else {
+		delete backend_conn_;
+	}
+	backend_conn_ = nullptr;
+	server_ds_ = MysqlxDataStream();
 }
 
 void MysqlxSession::send_error(int code, const char* msg) {

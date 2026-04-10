@@ -2,10 +2,13 @@
 #define __MYSQLX_SESSION_H
 
 #include "mysqlx_data_stream.h"
+#include "mysqlx_connection.h"
 
 #include <cstdint>
 #include <string>
 #include <vector>
+
+class Mysqlx_Thread;
 
 class MysqlxSession {
 public:
@@ -23,6 +26,12 @@ public:
 		CONNECTING_SERVER,
 		WAITING_SERVER_XMSG,
 		X_FAST_FORWARD,
+		X_TLS_ACCEPT_INIT,
+		X_TLS_ACCEPT_CONT,
+		X_TLS_ACCEPT_DONE,
+		X_TLS_CONNECT_INIT,
+		X_TLS_CONNECT_CONT,
+		X_TLS_CONNECT_DONE,
 		X_SESSION_CLOSING,
 		X_SESSION_CLOSED
 	};
@@ -42,6 +51,8 @@ public:
 	int get_fd() const { return client_ds_.get_fd(); }
 
 	MysqlxDataStream& client_ds() { return client_ds_; }
+	MysqlxDataStream& server_ds() { return server_ds_; }
+	MysqlxConnection*& backend_conn() { return backend_conn_; }
 
 	bool to_process;
 
@@ -55,6 +66,13 @@ private:
 	void handler_waiting_server_msg();
 	void handler_fast_forward();
 	void handler_session_closing();
+	void handler_connecting_server();
+
+	void handler_tls_accept_init();
+
+	int dispatch_client_message(uint8_t msg_type);
+	void forward_to_backend();
+	void return_backend_to_pool();
 
 	void send_error(int code, const char* msg);
 	void send_ok(const char* msg = "");
@@ -65,12 +83,18 @@ private:
 	uint8_t extract_msg_type_from_frame(const MysqlxFrame& frame);
 
 	MysqlxDataStream client_ds_;
+	MysqlxDataStream server_ds_;
+	MysqlxConnection* backend_conn_;
+	void* thread_ptr_;
 	Status status_;
 	bool healthy;
 	std::string username_;
 	std::string schema_;
 	std::string auth_method_;
 	std::vector<uint8_t> auth_challenge_;
+	int target_hostgroup_;
+	std::string target_address_;
+	int target_port_;
 };
 
 #endif
