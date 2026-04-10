@@ -8,6 +8,7 @@
 #include <atomic>
 #include <mutex>
 #include <poll.h>
+#include <openssl/ssl.h>
 #include "mysqlx_data_stream.h"
 #include "mysqlx_session.h"
 #include "mysqlx_connection.h"
@@ -37,6 +38,8 @@ public:
 	void set_max_cached_connections(size_t max) { max_cached_ = max; }
 	void set_max_sessions(size_t max) { max_sessions_ = max; }
 	size_t get_max_sessions() const { return max_sessions_; }
+
+	SSL_CTX* get_ssl_ctx() const;
 
 private:
 	void accept_new_connection(int listener_fd);

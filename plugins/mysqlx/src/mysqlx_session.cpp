@@ -169,6 +169,29 @@ void MysqlxSession::handler_capabilities_get() {
 void MysqlxSession::handler_capabilities_set() {
 	if (!client_ds_.has_complete_frame()) return;
 
+	const auto& frame = client_ds_.front_frame();
+	if (frame.size() > 5) {
+		Mysqlx::Connection::CapabilitiesSet cap_set;
+		if (cap_set.ParseFromArray(frame.data() + 5, static_cast<int>(frame.size() - 5))) {
+			for (const auto& cap : cap_set.capabilities().capabilities()) {
+				if (cap.name() == "tls") {
+					client_ds_.pop_frame();
+					Mysqlx_Thread* thread = static_cast<Mysqlx_Thread*>(thread_ptr_);
+					SSL_CTX* ctx = thread ? thread->get_ssl_ctx() : nullptr;
+					if (!ctx) {
+						send_error(3150, "TLS is not configured on server");
+						healthy = false;
+						return;
+					}
+					send_ok();
+					status_ = X_TLS_ACCEPT_INIT;
+					to_process = true;
+					return;
+				}
+			}
+		}
+	}
+
 	client_ds_.pop_frame();
 	send_ok();
 	status_ = CONNECTING_CLIENT;
@@ -503,7 +526,20 @@ void MysqlxSession::handler_session_closing() {
 }
 
 void MysqlxSession::handler_tls_accept_init() {
-	status_ = X_TLS_ACCEPT_DONE;
+	if (!client_ds_.ssl_init_done()) {
+		Mysqlx_Thread* thread = static_cast<Mysqlx_Thread*>(thread_ptr_);
+		SSL_CTX* ctx = thread ? thread->get_ssl_ctx() : nullptr;
+		if (!ctx) {
+			send_error(3150, "TLS is not configured on server");
+			healthy = false;
+			return;
+		}
+		client_ds_.init_ssl(ctx);
+	}
+	if (!client_ds_.do_ssl_handshake()) {
+		return;
+	}
+	status_ = CONNECTING_CLIENT;
 	to_process = true;
 }
 
@@ -648,6 +684,17 @@ void MysqlxSession::send_capabilities() {
 	v2->set_type(Mysqlx::Datatypes::Any::SCALAR);
 	v2->mutable_scalar()->set_type(Mysqlx::Datatypes::Scalar::V_STRING);
 	v2->mutable_scalar()->mutable_v_string()->set_value("PLAIN");
+
+	Mysqlx_Thread* thread = static_cast<Mysqlx_Thread*>(thread_ptr_);
+	SSL_CTX* ctx = thread ? thread->get_ssl_ctx() : nullptr;
+	if (ctx) {
+		auto* tls_cap = caps.add_capabilities();
+		tls_cap->set_name("tls");
+		auto* tls_val = tls_cap->mutable_value();
+		tls_val->set_type(Mysqlx::Datatypes::Any::SCALAR);
+		tls_val->mutable_scalar()->set_type(Mysqlx::Datatypes::Scalar::V_BOOL);
+		tls_val->mutable_scalar()->set_v_bool(true);
+	}
 
 	std::string s;
 	caps.SerializeToString(&s);

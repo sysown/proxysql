@@ -11,6 +11,8 @@
 #include <ctime>
 #include <algorithm>
 
+#include "proxysql_structs.h"
+
 namespace {
 
 uint64_t monotonic_time_ms() {
@@ -133,7 +135,7 @@ void Mysqlx_Thread::rebuild_poll_set() {
 		struct pollfd spfd;
 		spfd.fd = cds->get_fd();
 		spfd.events = POLLIN;
-		if (cds->write_buffer_size() > 0) spfd.events |= POLLOUT;
+		if (cds->write_buffer_size() > 0 || cds->has_ssl_pending_write()) spfd.events |= POLLOUT;
 		spfd.revents = 0;
 		cds->poll_fds_idx = static_cast<int>(poll_fds_.size());
 		poll_fds_.push_back(spfd);
@@ -144,7 +146,7 @@ void Mysqlx_Thread::rebuild_poll_set() {
 			struct pollfd bpfd;
 			bpfd.fd = sds->get_fd();
 			bpfd.events = POLLIN;
-			if (sds->write_buffer_size() > 0) bpfd.events |= POLLOUT;
+			if (sds->write_buffer_size() > 0 || sds->has_ssl_pending_write()) bpfd.events |= POLLOUT;
 			bpfd.revents = 0;
 			sds->poll_fds_idx = static_cast<int>(poll_fds_.size());
 			poll_fds_.push_back(bpfd);
@@ -316,4 +318,8 @@ void Mysqlx_Thread::return_connection_to_cache(MysqlxConnection* conn) {
 
 size_t Mysqlx_Thread::get_cached_connection_count() const {
 	return conn_cache_.size();
+}
+
+SSL_CTX* Mysqlx_Thread::get_ssl_ctx() const {
+	return GloVars.get_SSL_ctx();
 }
