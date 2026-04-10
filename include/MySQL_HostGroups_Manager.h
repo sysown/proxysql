@@ -315,6 +315,8 @@ class Group_Replication_Info {
 	Group_Replication_Info(int w, int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c);
 	bool update(int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c);
 	~Group_Replication_Info();
+	Group_Replication_Info(const Group_Replication_Info&) = delete;
+	Group_Replication_Info& operator=(const Group_Replication_Info&) = delete;
 };
 
 class Galera_Info {
@@ -337,6 +339,8 @@ class Galera_Info {
 	Galera_Info(int w, int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c);
 	bool update(int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c);
 	~Galera_Info();
+	Galera_Info(const Galera_Info&) = delete;
+	Galera_Info& operator=(const Galera_Info&) = delete;
 };
 
 class AWS_Aurora_Info {
@@ -361,6 +365,8 @@ class AWS_Aurora_Info {
 	AWS_Aurora_Info(int w, int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c);
 	bool update(int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c);
 	~AWS_Aurora_Info();
+	AWS_Aurora_Info(const AWS_Aurora_Info&) = delete;
+	AWS_Aurora_Info& operator=(const AWS_Aurora_Info&) = delete;
 };
 
 struct p_hg_counter {

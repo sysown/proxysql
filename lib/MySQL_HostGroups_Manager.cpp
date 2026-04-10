@@ -5697,6 +5697,8 @@ class MySQL_Errors_stats {
 		}
 		free(pta);
 	}
+	MySQL_Errors_stats(const MySQL_Errors_stats&) = delete;
+	MySQL_Errors_stats& operator=(const MySQL_Errors_stats&) = delete;
 };
 
 void MySQL_HostGroups_Manager::add_mysql_errors(int hostgroup, char *hostname, int port, char *username, char *address, char *schemaname, int err_no, char *last_error) {
