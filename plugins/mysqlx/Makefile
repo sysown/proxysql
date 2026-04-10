@@ -36,6 +36,7 @@ SRCS := $(PLUGIN_DIR)/src/mysqlx_plugin.cpp \
 	$(PLUGIN_DIR)/src/mysqlx_frontend_session.cpp \
 	$(PLUGIN_DIR)/src/mysqlx_backend_session.cpp \
 	$(PLUGIN_DIR)/src/mysqlx_data_stream.cpp \
+	$(PLUGIN_DIR)/src/mysqlx_connection.cpp \
 	$(PLUGIN_DIR)/src/mysqlx_stats.cpp
 HEADERS := $(wildcard $(PLUGIN_DIR)/include/*.h) \
 	$(PROXYSQL_PATH)/include/ProxySQL_Plugin.h
