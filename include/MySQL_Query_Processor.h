@@ -12,7 +12,7 @@ typedef struct _MySQL_Query_processor_Rule_t : public QP_rule_t {
 
 class MySQL_Query_Processor_Output : public Query_Processor_Output {
 public:
-	MySQL_Query_Processor_Output() = default;
+MySQL_Query_Processor_Output() : Query_Processor_Output(), min_gtid(nullptr), gtid_from_hostgroup(-1) {}
 	~MySQL_Query_Processor_Output() = default;
 
 	void init() {
