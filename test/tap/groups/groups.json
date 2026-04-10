@@ -380,5 +380,6 @@
   "unit-strip_schema_from_query-t" : [ "unit-tests-g1" ],
   "vector_db_performance-t" : [ "ai-g1" ],
   "vector_features-t" : [ "ai-g1" ],
-  "test_ps_min_gtid_fc-t" : [ "legacy-binlog-g1" ]
+  "test_ps_min_gtid_fc-t" : [ "legacy-binlog-g1" ],
+  "test_ps_min_gtid-t" : [ "legacy-binlog-g1" ]
 }
