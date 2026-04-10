@@ -612,6 +612,18 @@ void MysqlxSession::handler_tls_accept_init() {
 		client_ds_.init_ssl(ctx);
 	}
 	if (!client_ds_.do_ssl_handshake()) {
+		if (client_ds_.ssl_handshake_failed()) {
+			char err_buf[256];
+			unsigned long ssl_err = ERR_get_error();
+			if (ssl_err != 0) {
+				ERR_error_string_n(ssl_err, err_buf, sizeof(err_buf));
+			} else {
+				snprintf(err_buf, sizeof(err_buf), "Unknown TLS error");
+			}
+			send_error(3151, "TLS handshake failed");
+			healthy = false;
+			return;
+		}
 		return;
 	}
 	status_ = CONNECTING_CLIENT;

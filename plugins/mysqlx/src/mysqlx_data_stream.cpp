@@ -11,7 +11,7 @@ MysqlxDataStream::MysqlxDataStream()
 	  poll_events_(0), revents_(0), read_offset_(0), write_offset_(0),
 	  parse_error_(false), encrypted_(false), poll_fds_idx(-1),
 	  ssl_(nullptr), rbio_ssl_(nullptr), wbio_ssl_(nullptr),
-	  ssl_write_offset_(0), ssl_handshake_done_(false) {}
+	  ssl_write_offset_(0), ssl_handshake_done_(false), ssl_failed_(false) {}
 
 MysqlxDataStream::~MysqlxDataStream() {
 	if (ssl_) {
@@ -116,6 +116,7 @@ void MysqlxDataStream::init_ssl(SSL_CTX* ctx) {
 	SSL_set_bio(ssl_, rbio_ssl_, wbio_ssl_);
 	SSL_set_accept_state(ssl_);
 	ssl_handshake_done_ = false;
+	ssl_failed_ = false;
 	encrypted_ = false;
 }
 
@@ -127,6 +128,7 @@ void MysqlxDataStream::init_ssl_connect(SSL_CTX* ctx) {
 	SSL_set_bio(ssl_, rbio_ssl_, wbio_ssl_);
 	SSL_set_connect_state(ssl_);
 	ssl_handshake_done_ = false;
+	ssl_failed_ = false;
 	encrypted_ = false;
 }
 
@@ -170,6 +172,8 @@ bool MysqlxDataStream::do_ssl_handshake() {
 	mysqlx_ssl_status status = get_ssl_status(ssl_, n);
 	if (status == MYSQLX_SSL_WANT_IO) {
 		queue_encrypted_output();
+	} else {
+		ssl_failed_ = true;
 	}
 	return false;
 }

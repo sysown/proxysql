@@ -78,6 +78,7 @@ public:
 	bool do_ssl_handshake();
 	bool ssl_init_done() const { return ssl_ != nullptr; }
 	bool ssl_handshake_complete() const { return ssl_handshake_done_; }
+	bool ssl_handshake_failed() const { return ssl_failed_; }
 	bool has_ssl_pending_write() const;
 	ssize_t flush_ssl_write_buf();
 
@@ -113,6 +114,7 @@ private:
 	std::vector<uint8_t> ssl_write_buf_;
 	size_t ssl_write_offset_;
 	bool ssl_handshake_done_;
+	bool ssl_failed_;
 
 	bool try_parse_frame();
 	static constexpr size_t X_FRAME_HEADER_SIZE = 5;
