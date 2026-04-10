@@ -118,4 +118,4 @@ void proxysql_keylog_write_line_callback(const SSL* ssl, const char* line);
  */
 void proxysql_keylog_set_pgsql_callback();
 
-#endif // __PROXYSQL_SSLKEYLOG_H
+#endif /* PROXYSQL_SSLKEYLOG_H */

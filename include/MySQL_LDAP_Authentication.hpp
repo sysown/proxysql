@@ -2,11 +2,11 @@
 #define CLASS_MYSQL_LDAP_AUTHENTICATION_H
 
 struct LDAP_USER_FIELD_IDX {
-	enum index {
+	enum index : uint8_t {
 		USERNAME = 0,
 		FRONTEND_CONNECTIONS = 1,
 		FRONTED_MAX_CONNECTIONS = 2,
-		__SIZE
+		SIZE_
 	};
 };
 

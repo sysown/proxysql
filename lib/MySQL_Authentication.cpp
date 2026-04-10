@@ -23,10 +23,6 @@ void free_account_details(account_details_t& ad) {
 		free(ad.sha1_pass);
 		ad.sha1_pass=NULL;
 	}
-	if (ad.password) {
-		free(ad.password);
-		ad.password = nullptr;
-	}
 	if (ad.clear_text_password[PASSWORD_TYPE::PRIMARY]) {
 		free(ad.clear_text_password[PASSWORD_TYPE::PRIMARY]);
 		ad.clear_text_password[PASSWORD_TYPE::PRIMARY] = nullptr;

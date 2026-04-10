@@ -40,4 +40,4 @@ public:
 	void save_restapi_runtime_to_database(bool);
 };
 
-#endif // #ifndef __PROXYSQL_RESTAPI_H__
+#endif /* PROXYSQL_RESTAPI_H */

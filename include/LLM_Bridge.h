@@ -334,4 +334,4 @@ public:
 
 #endif /* PROXYSQLGENAI */
 
-#endif // __CLASS_LLM_BRIDGE_H
+#endif /* PROXYSQL_LLM_BRIDGE_H */

@@ -24,4 +24,4 @@ void proxy_coredump_generate();
 	}\
 }
 
-#endif // __PROXYSQL_COREDUMP_H
+#endif /* PROXYSQL_COREDUMP_H */
