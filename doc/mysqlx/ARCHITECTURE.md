@@ -1,242 +1,564 @@
-# ProxySQL MySQL X Protocol Plugin — Architecture & Design
+# ProxySQL MySQL X Protocol Plugin — Architecture & Design (v2)
 
 ## 1. Executive Summary
 
 The mysqlx plugin is ProxySQL's first dynamically loaded plugin. It adds MySQL X Protocol support without modifying the core proxy engine. The plugin uses the ProxySQL Plugin ABI (version 1) to register admin tables, commands, and manage its own listener sockets and worker threads.
 
-Traditional MySQL connections use the classic wire protocol (port 3306). MySQL 8.x introduced the X Protocol (default port 33060), a document-oriented, protobuf-based protocol that supports CRUD operations, prepared statements, and pipelined commands. The mysqlx plugin makes ProxySQL a transparent proxy for X Protocol clients, handling authentication, connection routing, and bidirectional relay while reusing ProxySQL's admin SQLite infrastructure for configuration.
+**v2** introduces an event-driven architecture replacing the Phase 1 single-threaded blocking model. Instead of one thread handling one session at a time with blocking I/O, v2 uses N configurable threads each running an independent `poll()` event loop, cooperatively multiplexing thousands of concurrent X Protocol sessions — matching ProxySQL's core `MySQL_Thread` / `PgSQL_Thread` design.
+
+Traditional MySQL connections use the classic wire protocol (port 3306). MySQL 8.x introduced the X Protocol (default port 33060), a document-oriented, protobuf-based protocol that supports CRUD operations, prepared statements, and pipelined commands. The mysqlx plugin makes ProxySQL a transparent proxy for X Protocol clients, handling authentication, connection routing, protocol-aware frame forwarding for all 23 client message types, connection pooling, and bidirectional relay while reusing ProxySQL's admin SQLite infrastructure for configuration.
 
 ## 2. Architecture Diagram
 
 ```
-                              ┌─────────────────────────────────────┐
-                              │         ProxySQL Core               │
-                              │                                     │
-                              │  ┌──────────┐  ┌───────────────┐  │
-                              │  │ Admin    │  │ Plugin        │  │
-                              │  │ Handler  │  │ Manager       │  │
-                              │  │          │  │               │  │
-                              │  │ MYSQLX   │  │ dlopen/dlsym  │  │
-                              │  │ aliases  │  │ register_table│  │
-                              │  │    ↓     │  │ register_cmd  │  │
-                              │  │ dispatch │  │ dispatch_cmd  │  │
-                              │  └────┬─────┘  └───────┬───────┘  │
-                              │       │                │           │
-                              └───────┼────────────────┼───────────┘
-                                      │                │
-                    ┌─────────────────┼────────────────┼──────────────┐
-                    │  ProxySQL_MySQLX_Plugin.so       │              │
-                    │                                  │              │
-                    │  ┌───────────────────┐  ┌───────┴────────┐    │
-                    │  │  mysqlx_worker    │  │ mysqlx_admin_   │    │
-                    │  │                   │  │ schema          │    │
-                    │  │  Listeners (poll) │  │                  │    │
-                    │  │  Workers (thread) │  │ Table DDL        │    │
-                    │  │  Accept loop      │  │ LOAD/SAVE cmds   │    │
-                    │  └────────┬──────────┘  └────────────────┘    │
-                    │           │                                      │
-                    │  ┌────────┴──────────┐                         │
-                    │  │ mysqlx_frontend_   │                         │
-                    │  │ session            │                         │
-                    │  │                    │                         │
-                    │  │ Handshake state    │                         │
-                    │  │ Auth (MYSQL41/PLAIN│                         │
-                    │  │ Identity resolve   │                         │
-                    │  └────────┬──────────┘                         │
-                    │           │                                      │
-                    │  ┌────────┴──────────┐                         │
-                    │  │ mysqlx_backend_    │                         │
-                    │  │ session            │                         │
-                    │  │                    │                         │
-                    │  │ Connect (getaddrinfo)                       │
-                    │  │ Auth (MYSQL41)     │                         │
-                    │  │ Relay (poll)       │──────────┐             │
-                    │  └────────────────────┘          │             │
-                    │                                  │             │
-                    │  ┌──────────────────┐   ┌───────┴────────┐   │
-                    │  │ mysqlx_config_   │   │ mysqlx_stats   │   │
-                    │  │ store            │   │                │   │
-                    │  │                  │   │ Atomic counters│   │
-                    │  │ Identity cache   │   │ SQLite flush   │   │
-                    │  │ Route cache      │   │                │   │
-                    │  │ Endpoint cache   │   │                │   │
-                    │  │ Topology gen     │   │                │   │
-                    │  └──────────────────┘   └────────────────┘   │
-                    │                                                  │
-                    └──────────────────────────────────────────────────┘
-                                              │
-                                              ▼
-                                    ┌──────────────────┐
-                                    │  MySQL 8.x       │
-                                    │  (X Protocol     │
-                                    │   port 33060)    │
-                                    └──────────────────┘
+                               ┌─────────────────────────────────────┐
+                               │         ProxySQL Core               │
+                               │                                     │
+                               │  ┌──────────┐  ┌───────────────┐  │
+                               │  │ Admin    │  │ Plugin        │  │
+                               │  │ Handler  │  │ Manager       │  │
+                               │  │          │  │               │  │
+                               │  │ MYSQLX   │  │ dlopen/dlsym  │  │
+                               │  │ aliases  │  │ register_table│  │
+                               │  │    ↓     │  │ register_cmd  │  │
+                               │  │ dispatch │  │ dispatch_cmd  │  │
+                               │  └────┬─────┘  └───────┬───────┘  │
+                               │       │                │           │
+                               └───────┼────────────────┼───────────┘
+                                       │                │
+                     ┌─────────────────┼────────────────┼──────────────┐
+                     │  ProxySQL_MySQLX_Plugin.so       │              │
+                     │                                  │              │
+                     │  ┌───────────────────┐  ┌───────┴────────┐    │
+                     │  │  Mysqlx_Thread    │  │ mysqlx_admin_   │    │
+                     │  │  (x N threads)    │  │ schema          │    │
+                     │  │                   │  │                  │    │
+                     │  │  poll() loop      │  │ Table DDL        │    │
+                     │  │  Accept (builtin) │  │ LOAD/SAVE cmds   │    │
+                     │  │  Session dispatch │  │ Variables        │    │
+                     │  └────────┬──────────┘  └────────────────┘    │
+                     │           │                                      │
+                     │  ┌────────┴──────────┐                         │
+                     │  │ MysqlxSession     │                         │
+                     │  │ (per connection)  │                         │
+                     │  │                   │                         │
+                     │  │ 22 states         │                         │
+                     │  │  Auth (MYSQL41)   │                         │
+                     │  │  Message dispatch │                         │
+                     │  │  Frame forwarding │                         │
+                     │  └────┬─────────┬────┘                         │
+                     │       │         │                              │
+                     │  ┌────┴───┐ ┌───┴──────────┐                  │
+                     │  │client  │ │server         │                  │
+                     │  │DS      │ │DS             │                  │
+                     │  │        │ │               │                  │
+                     │  │Frame   │ │Frame          │                  │
+                     │  │parse   │ │forward        │                  │
+                     │  └────────┘ └──────┬────────┘                  │
+                     │                    │                            │
+                     │  ┌─────────────────┴──────────┐                │
+                     │  │ MysqlxConnection (pooled)   │                │
+                     │  │                              │                │
+                     │  │ Per-thread cache + global    │                │
+                     │  │ Match by hostgroup/user/schema│               │
+                     │  └──────────────────────────────┘                │
+                     │                                                  │
+                     │  ┌──────────────────┐   ┌────────────────┐     │
+                     │  │ mysqlx_config_   │   │ mysqlx_stats   │     │
+                     │  │ store            │   │                │     │
+                     │  │                  │   │ Atomic counters│     │
+                     │  │ Identity cache   │   │ SQLite flush   │     │
+                     │  │ Route cache      │   │                │     │
+                     │  │ Endpoint cache   │   │                │     │
+                     │  │ TLS config       │   │                │     │
+                     │  └──────────────────┘   └────────────────┘     │
+                     │                                                  │
+                     └──────────────────────────────────────────────────┘
+                                               │
+                                               ▼
+                                     ┌──────────────────┐
+                                     │  MySQL 8.x       │
+                                     │  (X Protocol     │
+                                     │   port 33060)    │
+                                     └──────────────────┘
 ```
 
 ## 3. Component Descriptions
 
-### 3.1 ProxySQL_PluginManager
+### 3.1 Mysqlx_Thread — Event Loop
 
 | | |
 |---|---|
-| **Header** | `include/ProxySQL_Plugin.h` |
-| **Source** | `lib/ProxySQL_PluginManager.cpp` |
-| **Responsibility** | Core plugin loader. Manages the full plugin lifecycle: `load` → `init` → `start` → `stop`. |
-| **Key methods** | `load(path)` — dlopen the shared library, dlsym the descriptor symbol. `init_all()` — call each plugin's `init()`, which triggers table/command registration. `start_all()` / `stop_all()` — lifecycle control. `dispatch_command(sql)` — route an admin SQL command to the owning plugin. |
-| **Thread safety** | `std::mutex g_active_plugin_manager_mutex` guards the active plugin list and dispatch. Table registration uses a lock-free `std::deque` appended during `init_all()` (single-writer, no concurrent readers yet). Command dispatch acquires the mutex per invocation. |
+| **Header** | `plugins/mysqlx/include/mysqlx_thread.h` |
+| **Source** | `plugins/mysqlx/src/mysqlx_thread.cpp` |
+| **Responsibility** | Core event loop. Each thread runs an independent `poll()` loop, accepting new connections (listeners are built into the poll set), processing session state machines, and managing a per-thread connection cache. Multiple threads run in parallel (configurable via `mysqlx_thread_pool_size`, default 4, max 64). |
+| **Key methods** | `init(thread_index)` — create signal pipe, initialize poll set. `start()` / `stop()` — thread lifecycle. `run()` — main poll loop: `poll()` → `process_ready_fds()` → `process_all_sessions()`. `add_listener(addr, port)` — add a listener socket to the poll set as `XDS_LISTENER`. `get_connection_from_cache(hostgroup, user, schema)` — per-thread pool lookup. `return_connection_to_cache(conn)` — return a reusable connection. |
+| **Thread safety** | Each `Mysqlx_Thread` is independent — no shared state between threads. The per-thread connection cache uses a `std::mutex` for safety. Signal pipe for wakeup on shutdown. |
 
-### 3.2 mysqlx_plugin (Entry Point)
+### 3.2 MysqlxSession — State Machine
 
 | | |
 |---|---|
-| **Header** | `plugins/mysqlx/mysqlx_plugin.h` |
-| **Source** | `plugins/mysqlx/mysqlx_plugin.cpp` |
-| **Responsibility** | Plugin entry point. Exports `proxysql_plugin_descriptor_v1` — the single symbol the PluginManager resolves. Owns the plugin context: a `MysqlxConfigStore`, a `MysqlxStatsStore`, and the cached `ProxySQL_PluginServices*`. |
-| **Key methods** | `mysqlx_init(services)` — create config/stats stores, register admin tables and commands via the services pointer. `mysqlx_start()` — load config from runtime SQLite, start listener threads. `mysqlx_stop()` — join listener and worker threads, free resources. `mysqlx_status_json()` — return a JSON string for monitoring. |
+| **Header** | `plugins/mysqlx/include/mysqlx_session.h` |
+| **Source** | `plugins/mysqlx/src/mysqlx_session.cpp` |
+| **Responsibility** | X Protocol session state machine with 22 states. Handles the full client connection lifecycle cooperatively: capabilities exchange → TLS negotiation → MYSQL41/PLAIN auth → identity resolution → backend connection (pool-first) → message dispatch → frame forwarding → session close. Each handler returns control immediately when waiting for I/O. |
+| **Key states** | `CONNECTING_CLIENT` → `X_CAPABILITIES_GET` → `X_CAPABILITIES_SET` → `X_TLS_ACCEPT_*` (optional) → `X_AUTH_START` → `X_AUTH_CHALLENGE_SENT` → `X_AUTH_OK_SENT` → `WAITING_CLIENT_XMSG` → `CONNECTING_SERVER` → `WAITING_SERVER_XMSG` → `X_FAST_FORWARD` → `X_SESSION_CLOSING` |
+| **Key methods** | `handler()` — top-level dispatcher using `switch(status)` with `to_process` flag. `handler_connecting_client()` — wait for first frame, detect message type. `handler_capabilities_get()` — build and send `ServerCapabilities`. `handler_capabilities_set()` — process TLS request, send OK. `handler_auth_start()` / `handler_auth_challenge_response()` — MYSQL41 challenge-response. `dispatch_client_message(msg_type)` — protocol-aware dispatch for all 23 client message types. `handler_waiting_server_msg()` — forward backend frames to client. `handler_fast_forward()` — bidirectional frame relay. |
+| **Thread safety** | Each session is owned by exactly one `Mysqlx_Thread`. No cross-thread access. The session reads from `MysqlxConfigStore` using shared (reader) locks. |
+
+### 3.3 MysqlxDataStream — Non-Blocking Frame I/O
+
+| | |
+|---|---|
+| **Header** | `plugins/mysqlx/include/mysqlx_data_stream.h` |
+| **Source** | `plugins/mysqlx/src/mysqlx_data_stream.cpp` |
+| **Responsibility** | Non-blocking X Protocol frame parsing from raw TCP byte streams. Handles partial reads: accumulates bytes in a read buffer, parses complete frames (5-byte header + protobuf body), and queues them for the session. Writes are buffered and flushed when `POLLOUT` is available. Supports TLS mode via OpenSSL (encrypted flag). |
+| **Key methods** | `init(type, fd)` — set type (FRONTEND/BACKEND/LISTENER) and non-blocking fd. `feed_bytes(data, len)` — append bytes, trigger frame parsing. `has_complete_frame()` / `front_frame()` / `pop_frame()` — frame queue access. `enqueue_frame(msg_type, body, len)` — buffer an X Protocol frame for writing. `read_from_net()` — `recv()` → `feed_bytes()`. `write_to_net()` — flush write buffer via `send()`. |
+| **Thread safety** | Each data stream is owned by exactly one session, which is owned by one thread. No concurrent access. |
+| **Constants** | `X_FRAME_HEADER_SIZE = 5` (4 bytes LE payload size + 1 byte message type). `X_MAX_PAYLOAD_SIZE = 16MB`. |
+
+### 3.4 MysqlxConnection — Pooled Backend Connection
+
+| | |
+|---|---|
+| **Header** | `plugins/mysqlx/include/mysqlx_connection.h` |
+| **Source** | `plugins/mysqlx/src/mysqlx_connection.cpp` |
+| **Responsibility** | Backend connection object for connection pooling. Tracks connection state (CREATED → CONNECTING → AUTHENTICATING → IDLE → IN_USE), multiplexing eligibility (transactions and prepared statements disable reuse), and connection metadata (hostgroup, user, schema, address, port). Supports non-blocking `connect()` with `EINPROGRESS`. |
+| **Key methods** | `is_reusable()` — true only if state is IDLE, not in transaction, no prepared statements. `reset()` — clear transaction/stmt flags, mark reusable. `start_connect(host, port)` — non-blocking `socket(SOCK_NONBLOCK)` + `connect()`, returns 0 (immediate), 1 (EINPROGRESS), or -1 (error). `check_connect()` — verify `SO_ERROR == 0` after poll returns. |
+| **Thread safety** | Owned by one thread at a time. When in the per-thread cache, protected by the thread's `conn_cache_mutex_`. |
+
+### 3.5 mysqlx_plugin (Entry Point)
+
+| | |
+|---|---|
+| **Header** | `plugins/mysqlx/include/mysqlx_plugin.h` |
+| **Source** | `plugins/mysqlx/src/mysqlx_plugin.cpp` |
+| **Responsibility** | Plugin entry point. Exports `proxysql_plugin_descriptor_v1` — the single symbol the PluginManager resolves. Owns the plugin context: a `MysqlxConfigStore`, a `MysqlxStatsStore`, and the cached `ProxySQL_PluginServices*`. Creates N `Mysqlx_Thread` instances on start, joins them on stop. |
+| **Key methods** | `mysqlx_init(services)` — create config/stats stores, register admin tables and commands via the services pointer. `mysqlx_start()` — load config from runtime SQLite, create thread pool, add listeners to threads, start all threads. `mysqlx_stop()` — stop and join all threads, free resources. `mysqlx_status_json()` — return a JSON string for monitoring. |
 | **Thread safety** | The descriptor functions are called sequentially by the PluginManager during startup/shutdown. No concurrent access to the plugin context during `init`/`start`/`stop`. |
 
-### 3.3 mysqlx_worker
+### 3.6 mysqlx_config_store
 
 | | |
 |---|---|
-| **Header** | `plugins/mysqlx/mysqlx_worker.h` |
-| **Source** | `plugins/mysqlx/mysqlx_worker.cpp` |
-| **Responsibility** | Listener and worker thread management. Each configured bind address spawns one listener thread that runs a `poll()` accept loop. Accepted file descriptors are dispatched round-robin to a pool of worker threads. Supports IPv4 and IPv6 via `getaddrinfo`. |
-| **Key methods** | `mysqlx_start_listeners_from_runtime_routes(config_store)` — resolve all configured bind addresses, spawn one listener thread per address. `mysqlx_listener_thread(arg)` — poll loop: `poll()` on the listening socket, `accept()` incoming connections, enqueue the fd to a worker's queue. `mysqlx_worker_thread(arg)` — dequeue an fd, create a `MysqlxFrontendSession`, run the handshake/auth/relay lifecycle. |
-| **Thread safety** | Each worker owns a `std::mutex` + `std::condition_variable` for its fd queue. The round-robin counter is protected by a separate `std::mutex` inside the config store. Listener threads never touch shared state beyond the worker queues. |
+| **Header** | `plugins/mysqlx/include/mysqlx_config_store.h` |
+| **Source** | `plugins/mysqlx/src/mysqlx_config_store.cpp` |
+| **Responsibility** | In-memory configuration cache loaded from SQLite runtime tables. Maintains caches for: identities (user → hostgroup + credentials), routes (listen address → backend endpoints), endpoints (backend host + port with health metadata), topology generation tracking for cache invalidation, TLS configuration (mode, cert paths), and connection pool settings. |
+| **Key methods** | `load_from_runtime(services)` — execute `SELECT` queries against the runtime SQLite database, populate in-memory caches. `resolve_identity(username)` — look up a user's hostgroup and credentials. `pick_endpoint(hostgroup)` — select a backend endpoint using round-robin. |
+| **Thread safety** | `std::shared_mutex` — shared (reader) lock for lookups, exclusive (writer) lock for `load_from_runtime`. |
 
-### 3.4 mysqlx_frontend_session
-
-| | |
-|---|---|
-| **Header** | `plugins/mysqlx/mysqlx_frontend_session.h` |
-| **Source** | `plugins/mysqlx/mysqlx_frontend_session.cpp` |
-| **Responsibility** | Client-side X Protocol handshake state machine. Handles the full client connection lifecycle: Capabilities exchange → AuthenticateStart → MYSQL41 or PLAIN auth → identity resolution → backend connection setup → bidirectional relay. |
-| **Key methods** | `run()` — top-level entry point called by the worker thread. Reads the client greeting, sends `ServerCapabilities`, processes `CapabilitiesSet`, then enters the auth phase. `handle_auth_mysql41(challenge)` — compute the double-SHA1 scramble, compare via `CRYPTO_memcmp`. `handle_auth_plain(username, password)` — direct password verification. `resolve_identity(username)` — query the config store for the user's default hostgroup and credentials. |
-| **Thread safety** | Each `MysqlxFrontendSession` is owned by exactly one worker thread for its entire lifetime. No cross-thread access. The session reads from `MysqlxConfigStore` using shared (reader) locks. |
-
-### 3.5 mysqlx_backend_session
+### 3.7 mysqlx_stats
 
 | | |
 |---|---|
-| **Header** | `plugins/mysqlx/mysqlx_backend_session.h` |
-| **Source** | `plugins/mysqlx/mysqlx_backend_session.cpp` |
-| **Responsibility** | Backend connection establishment and bidirectional relay. Opens a TCP connection to the target MySQL X Protocol endpoint, performs MYSQL41 authentication, then relays X Protocol frames between the frontend client and the backend server. |
-| **Key methods** | `connect(host, port)` — `getaddrinfo` for DNS resolution, `socket()` + `connect()`. `authenticate(username, password, challenge)` — perform MYSQL41 handshake against the backend X Protocol server. `relay(client_fd)` — poll-based bidirectional relay. Uses `poll()` with two fds (client and backend). Reads a complete X Protocol frame (4-byte header + payload), writes it to the other side. Runs until either side closes or an error occurs. |
-| **Thread safety** | Each `MysqlxBackendSession` is owned by exactly one worker thread (the same thread that owns the corresponding frontend session). No concurrent access. |
-
-### 3.6 mysqlx_protocol
-
-| | |
-|---|---|
-| **Header** | `plugins/mysqlx/mysqlx_protocol.h` |
-| **Source** | `plugins/mysqlx/mysqlx_protocol.cpp` |
-| **Responsibility** | Low-level X Protocol frame encoding and decoding. Provides helpers for MYSQL41 authentication (double-SHA1), socket I/O with EINTR handling, and frame construction (error frames, OK frames, capability frames). |
-| **Key methods** | `read_frame(fd, msg)` — read 4-byte header (payload length + type byte), then payload. Handles partial reads and `EINTR`. `write_frame(fd, type, data, len)` — write header + payload with EINTR retry. `build_server_capabilities()` — construct the `ServerCapabilities` protobuf message. `build_error_frame(code, sql_state, msg)` — construct an `Error` frame. `mysqlx_mysql41_scramble(password, challenge, scramble_out)` — compute the double-SHA1 scramble for MYSQL41 auth. |
-| **Thread safety** | All functions are stateless and reentrant. They operate on raw file descriptors passed as arguments. Safe to call from any thread. |
-
-### 3.7 mysqlx_config_store
-
-| | |
-|---|---|
-| **Header** | `plugins/mysqlx/mysqlx_config_store.h` |
-| **Source** | `plugins/mysqlx/mysqlx_config_store.cpp` |
-| **Responsibility** | In-memory configuration cache loaded from SQLite runtime tables. Maintains caches for: identities (user → hostgroup + credentials), routes (listen address → backend endpoints), endpoints (backend host + port with health metadata), and topology generation tracking for cache invalidation. |
-| **Key methods** | `load_from_runtime(services)` — execute `SELECT` queries against the runtime SQLite database, populate in-memory caches. Acquires an exclusive write lock. `resolve_identity(username)` — look up a user's hostgroup and credentials. Acquires a shared read lock. `pick_endpoint(hostgroup)` — select a backend endpoint from the route cache for the given hostgroup, using round-robin selection. Acquires a shared read lock for the endpoint list, a separate mutex for the round-robin counter. |
-| **Thread safety** | `std::shared_mutex` — shared (reader) lock for all lookup methods (`resolve_identity`, `pick_endpoint`, `get_routes`). Exclusive (writer) lock for `load_from_runtime`. Round-robin counters are protected by per-route `std::mutex` instances. |
-
-### 3.8 mysqlx_stats
-
-| | |
-|---|---|
-| **Header** | `plugins/mysqlx/mysqlx_stats.h` |
-| **Source** | `plugins/mysqlx/mysqlx_stats.cpp` |
+| **Header** | `plugins/mysqlx/include/mysqlx_stats.h` |
+| **Source** | `plugins/mysqlx/src/mysqlx_stats.cpp` |
 | **Responsibility** | Per-route atomic counters tracking connections, queries, errors, and bytes transferred. Periodically flushes aggregated statistics to the `stats_mysqlx_routes` SQLite table. |
-| **Key methods** | `inc_connections(route_id)` — atomically increment the connection counter for a route. `inc_queries(route_id)` — atomically increment the query counter. `inc_errors(route_id)` — atomically increment the error counter. `add_bytes_sent(route_id, n)` / `add_bytes_recv(route_id, n)` — atomically add byte counters. `flush_to_sqlite(services)` — write all counters to the `stats_mysqlx_routes` table via the stats database handle. |
-| **Thread safety** | All counters are `std::atomic<uint64_t>`. Increment/add operations are lock-free. Route creation (first access to a new route_id) acquires `std::mutex`. The `flush_to_sqlite` method is called from a single maintenance thread. |
+| **Thread safety** | All counters are `std::atomic<uint64_t>`. Lock-free per-counter increments. |
 
-### 3.9 mysqlx_admin_schema
+### 3.8 mysqlx_admin_schema
 
 | | |
 |---|---|
-| **Header** | `plugins/mysqlx/mysqlx_admin_schema.h` |
-| **Source** | `plugins/mysqlx/mysqlx_admin_schema.cpp` |
-| **Responsibility** | Admin table DDL definitions and LOAD/SAVE command handlers. Defines the schema for runtime configuration tables (`mysqlx_users`, `mysqlx_routes`, `mysqlx_endpoints`) and implements the `LOAD MYSQLX USERS TO RUNTIME`, `SAVE MYSQLX USERS FROM RUNTIME`, and similar commands. |
-| **Key methods** | `register_tables(services)` — call `services->register_table()` for each table definition. `register_commands(services)` — call `services->register_command()` for each LOAD/SAVE command. `cmd_load_users_to_runtime(services, result)` — copy `mysqlx_users` from the admin DB to the runtime DB, then trigger `config_store->load_from_runtime()`. `cmd_save_users_from_runtime(services, result)` — copy `mysqlx_users` from the runtime DB to the admin DB. |
-| **Thread safety** | Registration methods are called during `init()`, which is single-threaded. Command handlers are called from the admin thread via the PluginManager dispatch mutex. The handlers copy data between SQLite databases using the services-provided database pointers (valid only during the callback). |
+| **Header** | `plugins/mysqlx/include/mysqlx_admin_schema.h` |
+| **Source** | `plugins/mysqlx/src/mysqlx_admin_schema.cpp` |
+| **Responsibility** | Admin table DDL definitions, variable definitions, and LOAD/SAVE command handlers. Defines the schema for runtime configuration tables (`mysqlx_users`, `mysqlx_routes`, `mysqlx_endpoints`, `mysqlx_variables`) and implements all admin commands. |
+| **New v2 variables** | `mysqlx_thread_pool_size` (default 4), `mysqlx_connect_timeout` (default 10000ms), `mysqlx_tls_mode` (default DISABLED), `mysqlx_tls_cert`, `mysqlx_tls_key`, `mysqlx_tls_ca`, `mysqlx_tls_backend_mode` (default DISABLED), `mysqlx_max_cached_connections_per_thread` (default 100). |
 
-## 4. Data Flow Diagrams
+## 4. Thread Pool Architecture
 
-### 4.1 Client Connection Flow
+### 4.1 Thread Pool Diagram
 
 ```
-Client                Worker           FrontendSession    ConfigStore         BackendSession     MySQL
-  │                     │                    │                 │                    │              │
-  │── TCP connect ────→│                    │                 │                    │              │
-  │                     │── accept ─────→   │                 │                    │              │
-  │←── CapabilitiesGet ────────────────────│                 │                    │              │
-  │── CapabilitiesSet ─────────────────────→│                 │                    │              │
-  │←── AuthenticateStart ──────────────────│                 │                    │              │
-  │                     │                    │── resolve ───→ │                    │              │
-  │                     │                    │←─ identity ────│                    │              │
-  │── AuthContinue ─────────────────────────→│                │                    │              │
-  │                     │                    │── verify ─────→│ (check password)   │              │
-  │←── AuthenticateOk ──────────────────────│                │                    │              │
-  │                     │                    │── pick_endpoint──────────────→     │              │
-  │                     │                    │                 │    │── getaddrinfo│              │
-  │                     │                    │                 │    │── connect ──────────────→   │
-  │                     │                    │                 │    │── MYSQL41 auth ─────────→  │
-  │── SQL statement ────────────────────────│                 │    │←── Ok ────────────────── │
-  │                     │                    │── relay ───────────────────────→   │              │
-  │                     │                    │                 │    │── forward ──────────────→ │
-  │                     │                    │                 │    │←── resultset ─────────── │
-  │←── resultset ───────────────────────────│                │    │←── relay ─────────────── │
-  │                     │                    │                 │                    │              │
+                    mysqlx_start()
+                         │
+           ┌─────────────┼─────────────┐
+           │             │             │
+    ┌──────┴──────┐ ┌────┴─────┐ ┌────┴──────┐
+    │Mysqlx_Thread│ │Mysqlx_   │ │Mysqlx_    │
+    │     #0      │ │Thread #1 │ │Thread #N  │
+    │             │ │          │ │           │
+    │ poll() {    │ │ poll() { │ │ poll() {  │
+    │   listener  │ │  ...     │ │  ...      │
+    │   sess[0]   │ │          │ │           │
+    │   sess[1]   │ │          │ │           │
+    │   ...       │ │          │ │           │
+    │   sess[K]   │ │          │ │           │
+    │   signal_fd │ │          │ │           │
+    │ }           │ │ }        │ │ }         │
+    │             │ │          │ │           │
+    │ conn_cache  │ │conn_cache│ │conn_cache │
+    └─────────────┘ └──────────┘ └───────────┘
+
+    Each thread:
+    - Independent poll() loop (200ms timeout)
+    - Listeners baked into poll set (no separate accept thread)
+    - Thousands of concurrent sessions
+    - Per-thread connection cache (no lock contention)
 ```
 
-**Step-by-step description:**
+### 4.2 Cooperative Multitasking Model
 
-1. **TCP connect** — The client opens a TCP connection to the configured X Protocol listen port (e.g., 0.0.0.0:33060). The listener thread's `poll()` loop detects the incoming connection.
+Sessions never block. Each session's `handler()` method:
+1. Reads available bytes from the client data stream
+2. Dispatches based on the current session state
+3. Processes any complete frames
+4. Flushes pending writes
+5. Returns control to the thread
 
-2. **accept** — The listener thread calls `accept()`, obtains the client file descriptor, and enqueues it to a worker thread's fd queue (round-robin across workers).
+If a session needs more data (e.g., waiting for a client response), it returns immediately. The thread's `poll()` call will wake up when data arrives and call the session's handler again.
 
-3. **CapabilitiesGet** — The worker creates a `MysqlxFrontendSession` and begins the handshake. It sends a `ServerCapabilities` frame to the client, advertising supported auth mechanisms (MYSQL41, PLAIN) and TLS availability.
+```
+  Thread run() loop:
+  ┌────────────────────────────────────────┐
+  │ while (running):                       │
+  │   housekeeping()                       │
+  │   nfds = poll(poll_fds, timeout=200ms) │
+  │   process_ready_fds(nfds)              │
+  │     → accept new connections           │
+  │     → mark sessions with pending data  │
+  │   process_all_sessions()               │
+  │     → for each session:                │
+  │       sess.handler()                   │
+  │       update poll events               │
+  │       cleanup if unhealthy             │
+  └────────────────────────────────────────┘
+```
 
-4. **CapabilitiesSet** — The client responds with its selected capabilities, choosing an auth mechanism.
+## 5. Session State Machine
 
-5. **AuthenticateStart** — The frontend session sends an `AuthenticateStart` frame containing the auth mechanism name and initial auth data.
+### 5.1 State Diagram
 
-6. **resolve identity** — The frontend session calls `config_store->resolve_identity(username)` to look up the user's hostgroup and credentials in the in-memory cache.
+```
+                    ┌─────────────────┐
+                    │  NONE           │
+                    └────────┬────────┘
+                             │ init(fd)
+                    ┌────────▼────────┐
+                    │ CONNECTING_     │──── wait for first frame
+                    │ CLIENT          │
+                    └────────┬────────┘
+                             │
+              ┌──────────────┼──────────────┐
+              │              │              │
+     ┌────────▼──────┐      │      ┌───────▼────────┐
+     │ X_CAPABILITIES│      │      │ X_AUTH_START   │
+     │ _GET          │      │      │ (skip caps)    │
+     └────────┬──────┘      │      └───────┬────────┘
+              │              │              │
+     ┌────────▼──────┐      │              │
+     │ X_CAPABILITIES│      │              │
+     │ _SET          │      │              │
+     └────────┬──────┘      │              │
+              │              │              │
+     ┌────────▼──────┐      │              │
+     │ X_TLS_ACCEPT_ │──────┤              │
+     │ INIT/CONT/DONE│      │              │
+     │ (if TLS)      │      │              │
+     └────────┬──────┘      │              │
+              │              │              │
+              └──────────────┼──────────────┘
+                             │
+                    ┌────────▼────────┐
+                    │ X_AUTH_START    │
+                    └────────┬────────┘
+                             │
+                    ┌────────▼────────┐
+                    │ X_AUTH_CHALLENGE│
+                    │ _SENT           │
+                    └────────┬────────┘
+                             │
+                    ┌────────▼────────┐
+                    │ X_AUTH_OK_SENT  │──── or X_AUTH_FAILED → closing
+                    └────────┬────────┘
+                             │
+                    ┌────────▼────────┐
+                    │ WAITING_CLIENT_ │◄────────────────────────┐
+                    │ XMSG            │                         │
+                    └────────┬────────┘                         │
+                             │ dispatch_client_message()        │
+              ┌──────────────┼──────────────┐                   │
+              │              │              │                   │
+     ┌────────▼──────┐      │      ┌───────▼────────┐          │
+     │ CONNECTING_   │      │      │ forward to     │          │
+     │ SERVER        │      │      │ backend        │          │
+     └────────┬──────┘      │      └───────┬────────┘          │
+              │              │              │                   │
+              │              │      ┌───────▼────────┐          │
+              │              │      │ WAITING_SERVER_│          │
+              │              │      │ XMSG           │          │
+              │              │      └───────┬────────┘          │
+              │              │              │                   │
+              │              │      ┌───────▼────────┐          │
+              │              │      │ X_FAST_FORWARD │──────────┘
+              │              │      └────────────────┘
+              │              │
+     ┌────────▼──────────────▼───────┐
+     │ X_SESSION_CLOSING / X_SESSION │
+     │ _CLOSED                       │
+     └───────────────────────────────┘
+```
 
-7. **identity returned** — The config store returns the user's default hostgroup, password hash, and any attribute overrides.
+### 5.2 State Reference (22 States)
 
-8. **AuthContinue** — The client sends its authentication response (e.g., the MYSQL41 scramble).
+| State | Description |
+|-------|-------------|
+| `NONE` | Initial state before `init()` |
+| `CONNECTING_CLIENT` | Waiting for first client frame |
+| `X_CAPABILITIES_GET` | Processing CapabilitiesGet |
+| `X_CAPABILITIES_SET` | Processing CapabilitiesSet (may trigger TLS) |
+| `X_AUTH_START` | Authentication initiated |
+| `X_AUTH_CHALLENGE_SENT` | MYSQL41 challenge sent, waiting for response |
+| `X_AUTH_OK_SENT` | Authentication successful |
+| `X_AUTH_FAILED` | Authentication failed |
+| `WAITING_CLIENT_XMSG` | Main loop: waiting for client message (dispatches all 23 types) |
+| `PROCESSING_X_QUERY` | Processing a SQL statement |
+| `CONNECTING_SERVER` | Establishing backend connection (pool-first, then async connect) |
+| `WAITING_SERVER_XMSG` | Waiting for backend response frames |
+| `X_FAST_FORWARD` | Bidirectional frame relay |
+| `X_TLS_ACCEPT_INIT` | Starting TLS handshake (server-side, client connection) |
+| `X_TLS_ACCEPT_CONT` | TLS handshake in progress |
+| `X_TLS_ACCEPT_DONE` | TLS handshake complete |
+| `X_TLS_CONNECT_INIT` | Starting TLS handshake (client-side, backend connection) |
+| `X_TLS_CONNECT_CONT` | Backend TLS in progress |
+| `X_TLS_CONNECT_DONE` | Backend TLS complete |
+| `X_SESSION_CLOSING` | Session shutting down |
+| `X_SESSION_CLOSED` | Session terminated |
 
-9. **verify** — The frontend session verifies the scramble against the stored credentials. For PLAIN auth, the password is compared directly. For MYSQL41, the double-SHA1 scramble is recomputed and compared with `CRYPTO_memcmp`.
+## 6. Data Stream I/O — Non-Blocking Frame Parsing
 
-10. **AuthenticateOk** — If verification succeeds, the frontend sends an `AuthenticateOk` frame. If it fails, an `Error` frame is sent and the connection is closed.
+### 6.1 Frame Format
 
-11. **pick_endpoint** — The frontend session calls `config_store->pick_endpoint(hostgroup)` to select a backend server from the route's endpoint list (round-robin).
+X Protocol frames consist of a 5-byte header followed by a protobuf body:
 
-12. **getaddrinfo** — The backend session resolves the endpoint's hostname and port.
+```
+┌───────────────────────────────────────────────┐
+│ payload_size (4 bytes, little-endian)          │  ← includes msg_type byte
+│ msg_type (1 byte)                              │
+│ protobuf body (payload_size - 1 bytes)         │
+└───────────────────────────────────────────────┘
+```
 
-13. **connect** — The backend session opens a TCP connection to the MySQL X Protocol port.
+### 6.2 Partial Frame Buffering
 
-14. **MYSQL41 auth** — The backend session performs X Protocol MYSQL41 authentication with the backend MySQL server using the user's credentials.
+`MysqlxDataStream` handles partial reads from non-blocking sockets:
 
-15. **Ok from backend** — The backend MySQL server responds with `AuthenticateOk`.
+```
+  recv() returns N bytes (may be less than a full frame)
+       │
+       ▼
+  feed_bytes(data, N)
+       │
+       ▼
+  read_buf_ += data
+       │
+       ▼
+  try_parse_frame()
+       │
+       ├── available < 5 bytes? → return false (need header)
+       │
+       ├── decode payload_size from header
+       │   payload_size < 1 or > 16MB? → parse error
+       │
+       ├── available < frame_total? → return false (need body)
+       │
+       └── copy frame → complete_frames_.push()
+           advance read_offset_
+           try again (may be more frames in buffer)
+```
 
-16. **SQL statement** — The client sends an X Protocol `StmtExecute` or `CrudFind`/`CrudInsert`/etc. message.
+### 6.3 Write Buffering
 
-17. **relay** — The frontend session delegates to the backend session's relay loop. The `relay()` method uses `poll()` on both fds (client and backend).
+```
+  enqueue_frame(msg_type, body, body_len)
+       │
+       ▼
+  write_buf_ += [4-byte payload_size][msg_type][body]
+       │
+       ▼
+  Thread sets POLLOUT on fd when write_buf_ is non-empty
+       │
+       ▼
+  write_to_net() → send() → advance write_offset_
+       │
+       ▼
+  write_buf_.clear() when fully flushed
+```
 
-18. **forward** — The relay reads the client's X Protocol frame and writes it verbatim to the backend socket.
+## 7. Connection Pool
 
-19. **resultset from backend** — The backend MySQL server processes the statement and returns result frames.
+### 7.1 Two-Tier Pool Model
 
-20. **relay back** — The relay reads the backend's response frames and writes them verbatim to the client socket. The relay loop continues until one side closes the connection or an error occurs.
+```
+  Session needs backend connection
+       │
+       ▼
+  ┌─────────────────────────────────┐
+  │ Tier 1: Per-thread cache        │
+  │ (no lock contention)            │
+  │                                 │
+  │ Search: hostgroup + user +      │
+  │ schema match, reusable, no      │
+  │ active transaction/stmt         │
+  │                                 │
+  │ Found? → attach, set IN_USE     │
+  │ Not found? → ↓                  │
+  └─────────────┬───────────────────┘
+                │
+                ▼
+  ┌─────────────────────────────────┐
+  │ Create new connection           │
+  │                                 │
+  │ Non-blocking connect()          │
+  │ Authenticate via MYSQL41        │
+  │ Set IDLE + reusable             │
+  └─────────────────────────────────┘
 
-### 4.2 Admin Command Flow
+  When query completes:
+       │
+       ▼
+  return_connection_to_cache()
+       │
+       ├── reset() — clear tx/stmt flags
+       ├── set_state(IDLE)
+       └── push to thread's conn_cache_
+              │
+              ├── cache size > max_cached_?
+              │   → evict oldest (FIFO)
+              └── done
+```
+
+### 7.2 Pool Matching Rules
+
+A cached connection is returned only if ALL match:
+- Same `hostgroup`
+- Same `user`
+- Same `schema`
+- `is_reusable() == true` (state is IDLE, no transaction, no prepared statement)
+
+### 7.3 Pool Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `mysqlx_max_cached_connections_per_thread` | 100 | Max cached connections per thread |
+
+## 8. Frame Forwarding — Protocol-Aware Dispatch
+
+### 8.1 All 23 Client Message Types
+
+The session's `dispatch_client_message()` handles every X Protocol client message type:
+
+| Message | Action | Category |
+|---------|--------|----------|
+| `CON_CAPABILITIES_GET` | Handle locally (send capabilities) | Connection |
+| `CON_CAPABILITIES_SET` | Handle locally (process TLS request) | Connection |
+| `CON_CLOSE` | Handle locally (close session) | Connection |
+| `SESS_AUTHENTICATE_START` | Handle locally (start auth) | Session |
+| `SESS_AUTHENTICATE_CONTINUE` | Handle locally (continue auth) | Session |
+| `SESS_RESET` | Forward to backend | Session |
+| `SESS_CLOSE` | Handle locally (close session) | Session |
+| `SQL_STMT_EXECUTE` | Forward to backend | SQL |
+| `CRUD_FIND` | Forward to backend | CRUD |
+| `CRUD_INSERT` | Forward to backend | CRUD |
+| `CRUD_UPDATE` | Forward to backend | CRUD |
+| `CRUD_DELETE` | Forward to backend | CRUD |
+| `EXPECT_OPEN` | Forward to backend | Expect |
+| `EXPECT_CLOSE` | Forward to backend | Expect |
+| `CRUD_CREATE_VIEW` | Forward to backend | View |
+| `CRUD_MODIFY_VIEW` | Forward to backend | View |
+| `CRUD_DROP_VIEW` | Forward to backend | View |
+| `PREPARE_PREPARE` | Forward to backend (mark conn has stmt) | Prepared Stmt |
+| `PREPARE_EXECUTE` | Forward to backend | Prepared Stmt |
+| `PREPARE_DEALLOCATE` | Forward to backend | Prepared Stmt |
+| `CURSOR_OPEN` | Forward to backend | Cursor |
+| `CURSOR_CLOSE` | Forward to backend | Cursor |
+| `CURSOR_FETCH` | Forward to backend | Cursor |
+
+Unknown message types receive `ER_X_BAD_MESSAGE` error and session closure.
+
+### 8.2 Backend Response Forwarding
+
+Multi-frame responses from the backend (e.g., column metadata → rows → fetch done) are forwarded frame-by-frame to the client. The session reads all available frames from the server data stream and enqueues each one on the client data stream.
+
+## 9. TLS Architecture
+
+### 9.1 TLS Modes
+
+| Mode | Frontend Behavior | Backend Behavior |
+|------|-------------------|------------------|
+| `DISABLED` | No `tls` capability advertised. Plaintext only. | Plaintext only. |
+| `PREFERRED` | `tls` capability advertised. Client chooses. | TLS if backend supports. |
+| `REQUIRED` | `tls` capability advertised. Reject client that doesn't upgrade. | TLS required. |
+
+Default: `DISABLED` (stub — full TLS implementation pending).
+
+### 9.2 TLS State Machine
+
+TLS negotiation integrates into the session state machine:
+
+```
+  X_CAPABILITIES_SET
+       │
+       ├── client requests TLS? AND tls_mode != DISABLED
+       │         │
+       │         ▼
+       │   X_TLS_ACCEPT_INIT
+       │         │
+       │         ▼
+       │   X_TLS_ACCEPT_CONT (SSL_accept loop)
+       │         │
+       │         ▼
+       │   X_TLS_ACCEPT_DONE
+       │         │
+       │         ▼
+       │   X_AUTH_START
+       │
+       └── no TLS requested
+              │
+              ▼
+         X_AUTH_START
+```
+
+### 9.3 OpenSSL Memory BIO Pattern
+
+Following the same pattern as `MySQL_Data_Stream`:
+
+```
+  Read path:
+    recv(fd) → BIO_write(rbio_ssl) → SSL_read(ssl) → feed_bytes()
+
+  Write path:
+    SSL_write(ssl, data) → BIO_read(wbio_ssl) → send(fd)
+```
+
+Each `MysqlxDataStream` has `encrypted_` flag, `SSL*`, `rbio_ssl`, `wbio_ssl` members.
+
+## 10. Data Flow Diagrams
+
+### 10.1 Client Connection Flow (v2)
+
+```
+Client         Mysqlx_Thread      MysqlxSession     ConfigStore      MysqlxConnection   MySQL
+  │                  │                  │                 │                  │              │
+  │── TCP connect ──→│                  │                 │                  │              │
+  │                  │── accept ──────→ │                 │                  │              │
+  │                  │   (in poll set)  │                 │                  │              │
+  │←── Capabilities ──────────────────│                 │                  │              │
+  │── CapSet ────────────────────────→│                 │                  │              │
+  │                  │                  │ (optional TLS)  │                  │              │
+  │←── AuthStart ─────────────────────│                 │                  │              │
+  │                  │                  │── resolve ────→│                  │              │
+  │── AuthContinue ──────────────────→│                 │                  │              │
+  │←── AuthOk ────────────────────────│                 │                  │              │
+  │                  │                  │── pool lookup ──────────────────→│              │
+  │                  │                  │   (miss)        │                  │              │
+  │                  │                  │── async connect ─────────────────────────────→  │
+  │── SQL/CRUD ─────────────────────→│                 │                  │── forward ──→│
+  │                  │                  │                 │                  │←── result ───│
+  │←── result ────────────────────────│                 │                  │              │
+```
+
+### 10.2 Admin Command Flow
 
 ```
 Admin Client          Admin Handler       PluginManager      mysqlx_admin_schema    ConfigStore
@@ -253,209 +575,100 @@ Admin Client          Admin Handler       PluginManager      mysqlx_admin_schema
      │                     │                    │                      │                    │
 ```
 
-**Step-by-step description:**
-
-1. **LOAD MYSQLX USERS TO RUNTIME** — An admin client (e.g., the ProxySQL admin console or a management tool) issues the command.
-
-2. **alias match** — The Admin Handler recognizes the `MYSQLX` prefix and matches it against registered plugin command aliases. The `LOAD MYSQLX USERS TO RUNTIME` command was registered by the mysqlx plugin during `init()`.
-
-3. **dispatch** — The Admin Handler calls `PluginManager::dispatch_command(sql)`, which acquires `g_active_plugin_manager_mutex`, finds the owning plugin, and calls its registered callback.
-
-4. **copy_table** — The `cmd_load_users_to_runtime` handler obtains the admin DB and runtime DB pointers from the services struct. It copies the `mysqlx_users` table from admin to runtime using `INSERT OR REPLACE ... SELECT` across the two SQLite databases.
-
-5. **reload_config** — After the SQLite copy, the handler calls `config_store->load_from_runtime(services)`, which executes `SELECT` queries against the runtime database and populates the in-memory caches (identity cache, route cache, endpoint cache). This acquires the config store's exclusive write lock, blocking lookups briefly.
-
-6. **OK** — The command handler returns a `ProxySQL_PluginCommandResult` with success status. The PluginManager returns it to the Admin Handler, which formats the standard ProxySQL admin OK response to the client.
-
-## 5. Thread Model
+## 11. Thread Model
 
 ```
 Main Thread
   ├── ProxySQL_PluginManager::load()        (dlopen, dlsym)
   ├── ProxySQL_PluginManager::init_all()    (register tables/commands)
-  ├── ProxySQL_PluginManager::start_all()   (start listeners)
+  ├── ProxySQL_PluginManager::start_all()   (start thread pool)
   │     └── mysqlx_start()
   │           ├── config_store->load_from_runtime()   (SQLite → memory)
-  │           └── mysqlx_start_listeners_from_runtime_routes()
-  │                 ├── Listener Thread 1 (poll, accept on 0.0.0.0:33060)
-  │                 └── Listener Thread N (...)
-  │                       └── on accept → enqueue to Worker
-  ├── Worker Thread 1
-  │     ├── FrontendSession::run_handshake_and_auth()
-  │     ├── BackendSession::connect() + authenticate
-  │     └── BackendSession::relay() (poll loop)
-  └── Worker Thread N
-        └── (same)
+  │           └── Create N Mysqlx_Thread instances
+  │                 ├── Mysqlx_Thread #0 (poll loop, listeners, sessions, conn cache)
+  │                 ├── Mysqlx_Thread #1 (poll loop, listeners, sessions, conn cache)
+  │                 └── Mysqlx_Thread #N ...
+  └── ProxySQL_PluginManager::stop_all()
+        └── mysqlx_stop()
+              └── Stop and join all Mysqlx_Thread instances
 ```
 
 ### Thread Lifecycle
 
-1. **Startup (Main Thread)**: The main thread calls `PluginManager::load()` which dlopens the plugin shared library. Then `init_all()` invokes the plugin's `init()` callback, which registers admin tables and commands. Then `start_all()` invokes `mysqlx_start()`, which loads configuration from SQLite into the in-memory config store and spawns listener threads.
+1. **Startup (Main Thread)**: The main thread calls `PluginManager::load()` which dlopens the plugin shared library. Then `init_all()` invokes the plugin's `init()` callback, which registers admin tables and commands. Then `start_all()` invokes `mysqlx_start()`, which loads configuration from SQLite into the in-memory config store, creates N `Mysqlx_Thread` instances, adds listeners based on configured routes, and starts all threads.
 
-2. **Listener Threads**: Each listener thread runs a `poll()` loop on its assigned bind address. When a client connects, the listener calls `accept()`, picks the next worker thread (round-robin), enqueues the client fd to that worker's queue, and signals the worker's condition variable. The listener thread never performs I/O on the client connection.
+2. **Mysqlx_Thread**: Each thread runs an independent `poll()` loop. Listener sockets are baked into the poll set (no separate accept thread). When `POLLIN` fires on a listener fd, the thread calls `accept()`, creates a `MysqlxSession`, and adds the client data stream to the poll set. Sessions are processed cooperatively — each session's `handler()` returns immediately when waiting for I/O.
 
-3. **Worker Threads**: Each worker thread blocks on its condition variable waiting for enqueued fds. When woken, the worker creates a `MysqlxFrontendSession` for the client fd, runs the full connection lifecycle (handshake, auth, backend connect, relay), then returns to waiting. A worker handles one client connection at a time (synchronous, blocking I/O within the relay loop).
-
-4. **Shutdown (Main Thread)**: The main thread calls `PluginManager::stop_all()`, which invokes `mysqlx_stop()`. This sets a global shutdown flag, signals all listener and worker condition variables, and joins all threads.
+3. **Shutdown (Main Thread)**: The main thread calls `PluginManager::stop_all()`, which invokes `mysqlx_stop()`. This sets the running flag to false on each thread, writes to the signal pipe to wake up `poll()`, and joins all threads.
 
 ### Thread Safety Summary
 
 | Resource | Mechanism | Scope |
 |---|---|---|
-| `MysqlxConfigStore` caches | `std::shared_mutex` | Shared for reads (identity lookup, endpoint selection), exclusive for `load_from_runtime` |
+| `MysqlxConfigStore` caches | `std::shared_mutex` | Shared for reads, exclusive for `load_from_runtime` |
 | `MysqlxStatsStore` counters | `std::atomic<uint64_t>` | Lock-free per-counter increments |
-| `MysqlxStatsStore` route creation | `std::mutex` | Guards insertion of new route entries |
-| `ProxySQL_PluginManager` dispatch | `std::mutex` (`g_active_plugin_manager_mutex`) | Guards command dispatch |
-| Worker fd queues | `std::mutex` + `std::condition_variable` | Per-worker queue of pending client fds |
-| Round-robin counters | `std::mutex` (per-route) | Guards endpoint selection index |
-| `MysqlxFrontendSession` / `MysqlxBackendSession` | None needed | Single-owner (one worker thread) |
+| `ProxySQL_PluginManager` dispatch | `std::mutex` | Guards command dispatch |
+| Per-thread connection cache | `std::mutex` | Per-thread, no inter-thread contention |
+| `MysqlxSession` / `MysqlxDataStream` | None needed | Single-owner (one thread) |
 
-## 6. Plugin ABI
+## 12. Build System
 
-The Plugin ABI defines the contract between ProxySQL core and dynamically loaded plugins. It is versioned so that future ABI changes can be detected at load time.
-
-### 6.1 ABI Structure
-
-```
-┌─────────────────────────────────────┐
-│        ProxySQL_Plugin.h            │
-│                                     │
-│  ProxySQL_PluginDescriptor          │
-│  ├── name                           │
-│  ├── abi_version (= 1)              │
-│  ├── init(services) → bool          │
-│  ├── start() → bool                 │
-│  ├── stop() → bool                  │
-│  └── status_json() → const char*    │
-│                                     │
-│  ProxySQL_PluginServices            │
-│  ├── register_table(def)            │
-│  ├── register_command(sql, cb)       │
-│  ├── get_admindb() → SQLite3DB*     │
-│  ├── get_configdb() → SQLite3DB*     │
-│  ├── get_statsdb() → SQLite3DB*     │
-│  ├── log_message(level, msg)         │
-│  └── snapshot callbacks             │
-└─────────────────────────────────────┘
-```
-
-### 6.2 ABI Version Contract
-
-- The plugin exports a single C symbol: `proxysql_plugin_descriptor_v1` of type `ProxySQL_PluginDescriptor`.
-- The PluginManager calls `dlsym(handle, "proxysql_plugin_descriptor_v1")`.
-- If the symbol is not found, the load fails with an error logged.
-- The `abi_version` field must match `1`. A mismatch causes the load to fail.
-
-### 6.3 Lifecycle Callbacks
-
-| Callback | When Called | Purpose |
-|---|---|---|
-| `init(services)` | After `dlopen`, before any other callbacks | Register tables and commands. Store the `services` pointer. Return `true` on success. |
-| `start()` | After `init` succeeds | Start listener threads, load runtime config. Return `true` on success. |
-| `stop()` | During graceful shutdown | Join threads, free resources. Return `true` on success. |
-| `status_json()` | On admin `SELECT plugin_status` or monitoring | Return a JSON-formatted status string. Caller does not free. |
-
-### 6.4 Memory Ownership Rules
-
-The Plugin ABI has strict memory ownership rules to avoid use-after-free and double-free bugs across the plugin boundary:
-
-| Operation | Ownership | Lifetime |
-|---|---|---|
-| `register_table(table_name, table_def)` | Core copies both strings into stable storage (`std::deque`) | Plugin can free its strings immediately after `init()` returns |
-| `register_command(sql, callback)` | Core copies the SQL string | Plugin can free its string immediately after `init()` returns |
-| `get_admindb()` / `get_configdb()` / `get_statsdb()` | Core owns the database handle | Returned pointer is valid **only during the callback invocation**. The plugin must not store the pointer for later use. |
-| `ProxySQL_PluginCommandResult.message` | Core reads the `std::string` | ABI constraint: plugin and core must be compiled against the same C++ standard library (same `std::string` ABI). In practice, both use the ProxySQL build toolchain. |
-| `status_json()` return value | Plugin owns the string | Must remain valid until the next call to `status_json()` or `stop()` |
-| `log_message(level, msg)` | Core copies the message during the call | Plugin can free its string immediately after the call returns |
-
-### 6.5 Callback Registration During init()
-
-```
-PluginManager::init_all()
-  └── mysqlx_init(services)
-        ├── services->register_table("mysqlx_users", CREATE TABLE ...)
-        ├── services->register_table("mysqlx_routes", CREATE TABLE ...)
-        ├── services->register_table("mysqlx_endpoints", CREATE TABLE ...)
-        ├── services->register_command("LOAD MYSQLX USERS TO RUNTIME", cmd_load_users)
-        ├── services->register_command("SAVE MYSQLX USERS FROM RUNTIME", cmd_save_users)
-        ├── services->register_command("LOAD MYSQLX ROUTES TO RUNTIME", cmd_load_routes)
-        ├── services->register_command("SAVE MYSQLX ROUTES FROM RUNTIME", cmd_save_routes)
-        └── (etc.)
-```
-
-After `init()` returns, the PluginManager publishes the registered tables and commands to the Admin Handler. The Admin Handler creates SQL aliases so that `LOAD MYSQLX USERS TO RUNTIME` is recognized as a valid admin command and dispatched to the plugin.
-
-## 7. Build System
-
-### 7.1 Build Pipeline
-
-The mysqlx plugin is built as a standalone shared library, separate from the core ProxySQL binary.
+### 12.1 File Structure (v2)
 
 ```
 plugins/mysqlx/
-  ├── Makefile                 # Plugin-specific build rules
-  ├── mysqlx_plugin.cpp        # Entry point
-  ├── mysqlx_worker.cpp/.h     # Listener/worker threads
-  ├── mysqlx_frontend_session.cpp/.h
-  ├── mysqlx_backend_session.cpp/.h
-  ├── mysqlx_protocol.cpp/.h   # Frame encode/decode
-  ├── mysqlx_config_store.cpp/.h
-  ├── mysqlx_stats.cpp/.h
-  ├── mysqlx_admin_schema.cpp/.h
-  └── protobuf/                # Pre-generated protobuf sources
-      ├── mysqlx_connection.pb.cc/.h
-      ├── mysqlx_crud.pb.cc/.h
-      ├── mysqlx_expect.pb.cc/.h
-      ├── mysqlx_expr.pb.cc/.h
-      ├── mysqlx_notice.pb.cc/.h
-      ├── mysqlx_resultset.pb.cc/.h
-      ├── mysqlx_session.pb.cc/.h
-      ├── mysqlx_sql.pb.cc/.h
-      └── mysqlx_stmt.pb.cc/.h
+  ├── Makefile
+  ├── mysqlx_plugin.cpp/.h             # Entry point (rewritten for v2)
+  ├── mysqlx_thread.cpp/.h             # Event loop (NEW)
+  ├── mysqlx_session.cpp/.h            # State machine (NEW)
+  ├── mysqlx_data_stream.cpp/.h        # Non-blocking frame I/O (NEW)
+  ├── mysqlx_connection.cpp/.h         # Pooled backend connection (NEW)
+  ├── mysqlx_protocol.cpp/.h           # Frame encode/decode helpers
+  ├── mysqlx_config_store.cpp/.h       # Config cache (modified for v2)
+  ├── mysqlx_stats.cpp/.h              # Stats counters
+  ├── mysqlx_admin_schema.cpp/.h       # Admin tables/commands (new variables)
+  └── protobuf/                        # Pre-generated protobuf sources
 ```
 
-### 7.2 Build Commands
+### 12.2 Build Commands
 
 ```bash
 # Build the plugin (from project root or plugins/mysqlx/)
 make -C plugins/mysqlx
 
-# Output: plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
+# Output: plugins/mysqlx/mysqlx_plugin.so
 ```
 
-### 7.3 Build Flags
-
-| Flag | Purpose |
-|---|---|
-| `-std=c++17` | Required C++ standard |
-| `-fPIC` | Position-independent code for shared library |
-| `-pthread` | POSIX threads |
-| `-I include/` | ProxySQL core headers (for `ProxySQL_Plugin.h`) |
-| `-I deps/protobuf/...` | Protobuf headers |
-
-### 7.4 Dependencies
+### 12.3 Dependencies
 
 | Dependency | Purpose |
 |---|---|
 | **protobuf** | X Protocol message serialization/deserialization |
-| **OpenSSL** | SHA1 hash computation for MYSQL41 auth, `CRYPTO_memcmp` for constant-time comparison |
-| **SQLite3** | Admin/runtime database access (via PluginServices pointers at runtime, not linked at build time) |
+| **OpenSSL** | SHA1 hash for MYSQL41 auth, TLS (Memory BIOs), `CRYPTO_memcmp` |
+| **SQLite3** | Admin/runtime database access (via PluginServices pointers) |
 
-### 7.5 Protobuf Code Generation
+## 13. Comparison: Phase 1 vs Phase 2 vs MySQL Router
 
-The protobuf `.pb.cc` and `.pb.h` files are pre-generated from MySQL 8.4 proto definitions and committed to the repository. They are not regenerated during a normal build. To regenerate:
+| Aspect | Phase 1 | Phase 2 (v2) | MySQL Router |
+|--------|---------|--------------|--------------|
+| **Threading** | 1 thread, 1 session, blocking | N threads, thousands of sessions per thread | Event-driven |
+| **I/O model** | Blocking `read()`/`write()` | Non-blocking `poll()` | Non-blocking I/O |
+| **Frame forwarding** | Blind TCP relay | Protocol-aware: all 23 message types | Protocol-aware |
+| **TLS** | Not implemented | 3 modes (Disabled/Preferred/Required) | 3 modes + passthrough |
+| **Connection pooling** | None (1:1 pinned) | Two-tier: per-thread + global | None |
+| **Backend connect** | Blocking `connect()` | Non-blocking `connect()` with `EINPROGRESS` | Non-blocking |
+| **Error handling** | Basic string errors | Full X Protocol error frames | Full error frames |
+| **Message awareness** | 5 types (handshake) | All 23 client + server types | All types |
+| **Routing** | Static route → single endpoint | Hostgroup-based with pool | Static routing |
+| **Auth** | MYSQL41/PLAIN verify | MYSQL41/PLAIN + credential mapping | Passthrough |
+| **Admin interface** | LOAD/SAVE MYSQLX tables | Same + new variables | Config file only |
+| **Concurrency** | 1 session at a time | Thousands per thread | Concurrent |
 
-```bash
-# Requires protoc >= 3.19 with C++ plugin
-cd plugins/mysqlx/protobuf
-protoc --cpp_out=. *.proto
-```
-
-## 8. MYSQL41 Authentication Internals
+## 14. MYSQL41 Authentication Internals
 
 X Protocol supports multiple authentication mechanisms. The mysqlx plugin implements **MYSQL41**, which is the native MySQL authentication adapted for the X Protocol. It uses a challenge-response mechanism based on double-SHA1 hashing.
 
-### 8.1 Double-SHA1 Algorithm
+### 14.1 Double-SHA1 Algorithm
 
 ```
 hash_stage1 = SHA1(password)
@@ -463,23 +676,11 @@ hash_stage2 = SHA1(hash_stage1)
 scramble    = XOR(hash_stage1, SHA1(challenge + hash_stage2))
 ```
 
-**Detailed steps:**
-
-1. **hash_stage1**: The client computes `SHA1(plaintext_password)` to produce a 20-byte digest. This is the "stored hash" that would be in `mysql.user.authentication_string`.
-
-2. **hash_stage2**: The client computes `SHA1(hash_stage1)` to produce a second 20-byte digest. This is used as the "secret" in the challenge-response.
-
-3. **challenge**: The server sends a 20-byte random nonce during the `AuthenticateStart` phase.
-
-4. **scramble**: The client concatenates the challenge with `hash_stage2`, computes `SHA1(challenge || hash_stage2)`, then XORs the result with `hash_stage1`. The XOR output is the auth data sent to the server in `AuthContinue`.
-
-### 8.2 Server-Side Verification
-
-The backend MySQL server (or the frontend session when verifying client credentials against stored hashes) performs:
+### 14.2 Server-Side Verification
 
 ```
 received_scramble = auth_data from client
-hash_stage2       = SHA1(stored_hash)            -- stored_hash is hash_stage1
+hash_stage2       = SHA1(stored_hash)
 candidate         = SHA1(challenge || hash_stage2)
 hash_stage1       = XOR(received_scramble, candidate)
 computed_stage2   = SHA1(hash_stage1)
@@ -487,9 +688,7 @@ computed_stage2   = SHA1(hash_stage1)
 verified = CRYPTO_memcmp(computed_stage2, hash_stage2, 20) == 0
 ```
 
-The `CRYPTO_memcmp` function from OpenSSL performs a constant-time comparison to prevent timing side-channel attacks.
-
-### 8.3 Authentication Flow Diagram
+### 14.3 Authentication Flow Diagram
 
 ```
 Client                          ProxySQL (Frontend)               MySQL (Backend)
@@ -499,36 +698,24 @@ Client                          ProxySQL (Frontend)               MySQL (Backend
   │←── AuthenticateContinue ───────────│                               │
   │   (challenge: 20-byte nonce)       │                               │
   │                                    │                               │
-  │   scramble = XOR(SHA1(pwd),        │                               │
-  │     SHA1(challenge + SHA1(SHA1(pwd))))                             │
-  │                                    │                               │
   │── AuthContinue ───────────────────→│                               │
   │   (auth_data: 20-byte scramble)    │                               │
-  │                                    │                               │
   │                                    │── verify scramble ──→         │
   │                                    │   (if proxying auth)          │
-  │                                    │                               │
-  │                                    │   OR                          │
   │                                    │                               │
   │                                    │── connect to backend ────────→│
   │                                    │── AuthenticateStart ─────────→│
   │                                    │←── AuthenticateContinue ─────│
-  │                                    │   (challenge: 20-byte nonce)  │
   │                                    │── AuthContinue ──────────────→│
-  │                                    │   (recomputed scramble)       │
   │                                    │←── AuthenticateOk ───────────│
   │                                    │                               │
   │←── AuthenticateOk ────────────────│                               │
   │                                    │                               │
 ```
 
-### 8.4 PLAIN Authentication
+### 14.4 Security Considerations
 
-As an alternative, X Protocol supports PLAIN authentication where the client sends the plaintext password over the wire. The mysqlx plugin supports PLAIN auth for client connections (the password is verified against the stored double-SHA1 hash by computing the hash and comparing). However, the plugin always uses MYSQL41 when authenticating to backend MySQL servers, as PLAIN is typically disabled on MySQL X Protocol listeners for security.
-
-### 8.5 Security Considerations
-
-- **No password storage in plugin**: The plugin stores the double-SHA1 hash (`SHA1(SHA1(password))`), not the plaintext password. This matches MySQL's `mysql.user.authentication_string` format.
+- **No password storage in plugin**: The plugin stores the double-SHA1 hash, not the plaintext password.
 - **Constant-time comparison**: All hash comparisons use `CRYPTO_memcmp` to prevent timing attacks.
 - **Challenge freshness**: The 20-byte challenge is generated per-connection using OpenSSL's `RAND_bytes`.
-- **TLS recommended**: PLAIN authentication should only be enabled when the client connection uses TLS. The plugin advertises TLS capability in the capabilities exchange.
+- **TLS recommended**: PLAIN authentication should only be enabled when the client connection uses TLS.

@@ -1,18 +1,20 @@
-# MySQL X Protocol Plugin — Testing Documentation
+# MySQL X Protocol Plugin — Testing Documentation (v2)
 
 ## 1. Overview
 
-The mysqlx plugin has **292+ test assertions** across **16 test files** in three tiers:
+The mysqlx plugin has **467+ test assertions** across **22 test files** in three tiers:
 
 | Tier | Scope | Dependencies | Count |
 |------|-------|-------------|-------|
-| **Tier 1: Pure Unit Tests** | No external dependencies, no database, no globals | None | 11 files |
+| **Tier 1: Pure Unit Tests** | No external dependencies, no database, no globals | None | 17 files |
 | **Tier 2: Integration Tests** | In-memory SQLite3, plugin `.so` loading, TCP listener | Built plugin `.so` | 3 files |
 | **Tier 3: End-to-End Tests** | Real MySQL 8.x backend with X Protocol | MySQL 8.x sandbox | 2 files |
 
 ---
 
 ## 2. Test File Index
+
+### Phase 1 Tests (Retained)
 
 | File | Tier | Assertions | What It Tests |
 |------|------|------------|---------------|
@@ -33,7 +35,17 @@ The mysqlx plugin has **292+ test assertions** across **16 test files** in three
 | `test_mysqlx_e2e_handshake-t.cpp` | E2E | 10 | Full X Protocol handshake against real MySQL, auth failure cases |
 | `test_mysqlx_e2e_routing-t.cpp` | E2E | 10 | Query routing through ProxySQL X listener, DDL/DML roundtrip |
 
-**Total: 329 assertions across 16 files.**
+### v2 Tests (New)
+
+| File | Tier | Assertions | What It Tests |
+|------|------|------------|---------------|
+| `mysqlx_data_stream_unit-t.cpp` | Unit | 15 | Non-blocking frame header parsing, partial frame buffering, multiple concatenated frames, write buffer format, feed_bytes accumulation |
+| `mysqlx_connection_unit-t.cpp` | Unit | 10 | Connection state transitions, hostgroup/user/schema metadata, multiplexing eligibility (transaction/stmt disable reuse), reusable flag logic |
+| `mysqlx_session_unit-t.cpp` | Unit | 42 | 22 session state transitions, capabilities negotiation flow, MYSQL41 auth challenge-response, auth failure handling, session reset, backend connection flow, frame forwarding, session closing |
+| `mysqlx_thread_unit-t.cpp` | Unit | 22 | Thread initialization, listener add/remove, poll set management, session registration/unregistration, connection cache operations, pool matching (hostgroup/user/schema), pool exclusion (transaction/stmt), max cache eviction |
+| `mysqlx_message_dispatch_unit-t.cpp` | Unit | 49 | All 23 client message type dispatch (locally handled vs forwarded), multi-frame response forwarding, unknown message type error generation, SESS_RESET forwarding, CRUD operations, prepared statement tracking, cursor operations, expect operations |
+
+**Total: 467 assertions across 22 files (329 Phase 1 + 138 v2).**
 
 ---
 
@@ -49,7 +61,10 @@ cd test/tap/tests/unit
 make mysqlx_protocol_unit-t mysqlx_stats_unit-t mysqlx_config_store_unit-t \
      mysqlx_config_store_pure_unit-t mysqlx_config_store_concurrent_unit-t \
      mysqlx_route_store_unit-t mysqlx_admin_schema_unit-t \
-     plugin_manager_unit-t plugin_registry_unit-t plugin_config_unit-t
+     plugin_manager_unit-t plugin_registry_unit-t plugin_config_unit-t \
+     mysqlx_data_stream_unit-t mysqlx_connection_unit-t \
+     mysqlx_session_unit-t mysqlx_thread_unit-t \
+     mysqlx_message_dispatch_unit-t
 
 # Run all unit tests
 for t in mysqlx_*_unit-t plugin_*_unit-t; do
@@ -171,8 +186,6 @@ mysqlx_send_error(fds[0], 1045, "Access denied");
 
 // Read and verify on the other end
 mysqlx_read_frame(fds[1], header, payload);
-// assert header.type == ERR
-// assert payload contains error code 1045
 
 close(fds[0]);
 close(fds[1]);
@@ -204,13 +217,42 @@ std::vector<std::thread> threads;
 for (int i = 0; i < N_THREADS; i++) threads.emplace_back(worker);
 for (auto& t : threads) t.join();
 
-// Verify exact expected values
 ok(total_resolves == N_THREADS * N_ITER, "all resolves accounted for");
 ```
 
 This pattern is used by:
 - `mysqlx_config_store_concurrent_unit-t.cpp`
 - `mysqlx_stats_unit-t.cpp` (multi-thread stress section)
+
+### 4.5 Data Stream Feed Pattern (v2)
+
+v2 data stream tests use the `feed_bytes()` method to simulate network input:
+
+```cpp
+MysqlxDataStream ds;
+
+// Feed a complete frame
+uint8_t frame[] = {0x0a, 0x00, 0x00, 0x00, 0x01, /* body */};
+ds.feed_bytes(frame, sizeof(frame));
+
+ok(ds.has_complete_frame(), "complete frame detected");
+auto& pkt = ds.front_frame();
+ok(pkt[4] == 0x01, "message type is CON_CAPABILITIES_GET");
+ds.pop_frame();
+ok(!ds.has_complete_frame(), "no more frames after pop");
+```
+
+### 4.6 Session State Transition Pattern (v2)
+
+v2 session tests exercise state transitions by calling handlers directly:
+
+```cpp
+MysqlxSession sess;
+sess.set_status(MysqlxSession::CONNECTING_CLIENT);
+sess.handler_connecting_client();
+ok(sess.get_status() == MysqlxSession::X_CAPABILITIES_GET,
+   "transitioned to X_CAPABILITIES_GET");
+```
 
 ---
 
@@ -227,7 +269,7 @@ The CI workflow defines two jobs:
 - Checks out the repository
 - Installs build dependencies (cmake, g++, protobuf, sqlite3 dev packages)
 - Builds the plugin `.so`
-- Runs all 11 unit tests
+- Runs all 17 unit tests
 - No backend database needed
 - Runs on every push and pull request
 
@@ -267,12 +309,14 @@ Tests are registered in `test/tap/groups/groups.json`:
 
 | Group | Tests | Infrastructure |
 |-------|-------|----------------|
-| `unit-tests-g1` | All 11 unit tests | None (`SKIP_PROXYSQL=1`) |
+| `unit-tests-g1` | All 17 unit tests | None (`SKIP_PROXYSQL=1`) |
 | `mysqlx-e2e-g1` | 2 E2E tests | dbdeployer MySQL 8.4 sandbox |
 
 ---
 
 ## 6. Test Coverage Map
+
+### v1 Component Coverage
 
 | Component | Unit | Integration | E2E | Concurrent |
 |-----------|------|-------------|-----|------------|
@@ -288,14 +332,24 @@ Tests are registered in `test/tap/groups/groups.json`:
 | Full handshake | — | — | 10 | — |
 | Query routing | — | — | 10 | — |
 
+### v2 Component Coverage
+
+| Component | Unit | Integration | E2E | Concurrent |
+|-----------|------|-------------|-----|------------|
+| Data stream (frame I/O) | 15 | — | — | — |
+| Connection (pooled object) | 10 | — | — | — |
+| Session state machine | 42 | — | — | — |
+| Thread (event loop) | 22 | — | — | — |
+| Message dispatch (23 types) | 49 | — | — | — |
+
 ### Coverage by Tier
 
 ```
-Unit:           246 assertions  (75%)
-Integration:     63 assertions  (19%)
-E2E:             20 assertions  ( 6%)
-                   ─────────
-Total:          329 assertions
+Unit:           384 assertions  (82%)
+Integration:     63 assertions  (14%)
+E2E:             20 assertions  ( 4%)
+                    ─────────
+Total:          467 assertions
 ```
 
 ---
@@ -367,6 +421,7 @@ New tests must be registered in two places:
 - No filesystem writes, no network, no real database
 - Use in-memory SQLite3 (`":memory:"`) for any SQL needs
 - Use `socketpair()` for any I/O testing
+- Use `feed_bytes()` for data stream testing
 - Link against `libproxysql.a` via the test harness
 - Include `test_globals.h` and `test_init.h` for minimal initialization
 
@@ -392,40 +447,46 @@ New tests must be registered in two places:
 - Keep iteration counts reasonable (10,000 per thread is usually sufficient)
 - Do not depend on timing or scheduling order
 
-### 7.5 Example: Adding a New Unit Test
+### 7.5 Example: Adding a New v2 Unit Test
 
 ```cpp
-// test/tap/tests/unit/mysqlx_auth_cache_unit-t.cpp
+// test/tap/tests/unit/mysqlx_pool_unit-t.cpp
 #include "tap.h"
 #include "test_globals.h"
 #include "test_init.h"
-#include "mysqlx_auth_cache.h"
+#include "mysqlx_connection.h"
+#include "mysqlx_thread.h"
 
 int main() {
-    plan(8);
+    plan(6);
     test_globals_init();
 
-    // Basic cache operations
-    MysqlxAuthCache cache;
-    ok(cache.size() == 0, "cache starts empty");
+    // Test pool matching
+    Mysqlx_Thread thr;
+    thr.init(0);
 
-    cache.put("user1@host1", AuthEntry{...});
-    ok(cache.size() == 1, "insert increments size");
+    MysqlxConnection* conn = new MysqlxConnection();
+    conn->set_hostgroup(1);
+    conn->set_user("appuser");
+    conn->set_schema("appdb");
+    conn->set_state(MysqlxConnection::IDLE);
+    conn->set_reusable(true);
+    thr.return_connection_to_cache(conn);
 
-    auto entry = cache.get("user1@host1");
-    ok(entry.has_value(), "lookup finds entry");
-    ok(!cache.get("nonexistent").has_value(), "missing key returns nullopt");
+    MysqlxConnection* found = thr.get_connection_from_cache(1, "appuser", "appdb");
+    ok(found != nullptr, "connection found by matching hostgroup/user/schema");
+    ok(found == conn, "got the same connection back");
 
-    cache.remove("user1@host1");
-    ok(cache.size() == 0, "remove decrements size");
+    found = thr.get_connection_from_cache(1, "otheruser", "appdb");
+    ok(found == nullptr, "no match for different user");
 
-    // Edge cases
-    ok(cache.get("").has_value() == false, "empty key returns nullopt");
-    cache.put("user2@host2", AuthEntry{...});
-    cache.put("user2@host2", AuthEntry{...}); // duplicate
-    ok(cache.size() == 1, "duplicate put does not double-insert");
-    cache.clear();
-    ok(cache.size() == 0, "clear empties cache");
+    found = thr.get_connection_from_cache(1, "appuser", "otherdb");
+    ok(found == nullptr, "no match for different schema");
+
+    found = thr.get_connection_from_cache(2, "appuser", "appdb");
+    ok(found == nullptr, "no match for different hostgroup");
+
+    ok(thr.get_cached_connection_count() == 0, "cache empty after all retrieved");
 
     return exit_status();
 }
