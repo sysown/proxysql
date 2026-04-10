@@ -339,3 +339,143 @@ cppcheck -I include \
 ```
 
 Expected: Significant reduction in warnings (from ~100+ to <20)
+
+---
+
+## Task 8: Fix noCopyConstructor in Group_Replication_Info
+
+**Files:**
+- Modify: `lib/MySQL_HostGroups_Manager.cpp:3977`
+
+- [ ] **Step 1: Read the class**
+
+```cpp
+// Line 3977 in lib/MySQL_HostGroups_Manager.cpp
+class Group_Replication_Info {
+    // cppcheck warns: no copy constructor, no operator=
+};
+```
+
+- [ ] **Step 2: Add deleted copy operations**
+
+```cpp
+class Group_Replication_Info {
+    // ... existing members
+    Group_Replication_Info(const Group_Replication_Info&) = delete;
+    Group_Replication_Info& operator=(const Group_Replication_Info&) = delete;
+};
+```
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add lib/MySQL_HostGroups_Manager.cpp
+git commit -m "fix: delete copy operations in Group_Replication_Info class"
+```
+
+---
+
+## Task 9: Fix noCopyConstructor in Galera_Info
+
+**Files:**
+- Modify: `lib/MySQL_HostGroups_Manager.cpp:4670`
+
+Similar to Task 8, add deleted copy operations.
+
+---
+
+## Task 10: Fix noCopyConstructor in AWS_Aurora_Info
+
+**Files:**
+- Modify: `lib/MySQL_HostGroups_Manager.cpp:5806`
+
+Similar to Task 8, add deleted copy operations.
+
+---
+
+## Task 11: Fix noCopyConstructor in MySQL_Errors_stats
+
+**Files:**
+- Modify: `lib/MySQL_HostGroups_Manager.cpp:5600`
+
+Similar to Task 8, add deleted copy operations.
+
+---
+
+## Task 12: Fix invalidPrintfArgType in MySQL_HostGroups_Manager
+
+**Files:**
+- Modify: `lib/MySQL_HostGroups_Manager.cpp:1880`
+
+- [ ] **Step 1: Read the code**
+
+```cpp
+// Line 1880 - cppcheck warns:
+// %d requires int but argument is unsigned int
+// %u requires unsigned int but argument is signed int
+```
+
+- [ ] **Step 2: Fix format specifiers or cast arguments**
+
+Fix either the printf format string or the argument types to match.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add lib/MySQL_HostGroups_Manager.cpp
+git commit -m "fix: correct printf format specifiers in MySQL_HostGroups_Manager"
+```
+
+---
+
+## Task 13: Fix nullPointerRedundantCheck in MySQL_HostGroups_Manager
+
+**Files:**
+- Modify: `lib/MySQL_HostGroups_Manager.cpp:2338` and `lib/MySQL_HostGroups_Manager.cpp:3584`
+
+- [ ] **Step 1: Read the code**
+
+Lines with redundant null checks or possible null dereference.
+
+- [ ] **Step 2: Fix the logic**
+
+Either remove the redundant check or properly handle the null case.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add lib/MySQL_HostGroups_Manager.cpp
+git commit -m "fix: resolve null pointer issues in MySQL_HostGroups_Manager"
+```
+
+---
+
+## Task 14: Fix noCopyConstructor in MySQL_Session and KillArgs
+
+**Files:**
+- Modify: `lib/MySQL_Session.cpp:636` and `lib/MySQL_Session.cpp:205`
+
+Similar to Task 8, add deleted copy operations.
+
+---
+
+## Task 15: Fix invalidFunctionArg in MySQL_Session
+
+**Files:**
+- Modify: `lib/MySQL_Session.cpp:9577`
+
+- [ ] **Step 1: Read the code**
+
+```cpp
+// Line 9577 - cppcheck warns:
+// max_length>0 condition is redundant or memcpy argument 3 can have invalid value -2
+```
+
+- [ ] **Step 2: Fix the logic**
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add lib/MySQL_Session.cpp
+git commit -m "fix: resolve invalid memcpy argument in MySQL_Session"
+```
