@@ -328,7 +328,8 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	mysqlx_stats_unit-t \
 	mysqlx_config_store_concurrent_unit-t \
 	mysqlx_config_store_pure_unit-t \
-	mysqlx_admin_schema_unit-t
+	mysqlx_admin_schema_unit-t \
+	mysqlx_data_stream_unit-t
 
 .PHONY: all
 all: $(UNIT_TESTS)
@@ -438,6 +439,12 @@ test_mysqlx_admin_tables-t: ../test_mysqlx_admin_tables-t.cpp $(ODIR)/tap.o $(OD
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include \
 		$(IDIRS) $(LDIRS) $(OPT) $(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+mysqlx_data_stream_unit-t: mysqlx_data_stream_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+		-I$(PROXYSQL_PATH)/plugins/mysqlx/include \
+		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) \
+		$(ALLOW_MULTI_DEF) -o $@
 
 # Pattern rule: all unit tests use the same compile + link flags.
 # Each test binary is built from its .cpp source, linked against

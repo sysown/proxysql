@@ -1,0 +1,72 @@
+#include "mysqlx_data_stream.h"
+#include "tap.h"
+
+#include <cstring>
+
+static void test_frame_header_parse() {
+	MysqlxDataStream ds;
+	uint8_t frame[] = {
+		0x0a, 0x00, 0x00, 0x00,
+		0x01,
+		0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09
+	};
+	ds.feed_bytes(frame, sizeof(frame));
+	ok(ds.has_complete_frame(), "complete frame detected");
+	if (ds.has_complete_frame()) {
+		auto pkt = ds.front_frame();
+		ok(pkt.second == 14, "frame total size is 14 (4 header + 10 payload)");
+		ok(pkt.first[4] == 0x01, "message type is 1");
+	}
+	ds.pop_frame();
+	ok(!ds.has_complete_frame(), "no more frames after pop");
+}
+
+static void test_partial_frame() {
+	MysqlxDataStream ds;
+	uint8_t hdr[] = {0x0a, 0x00, 0x00, 0x00, 0x01};
+	ds.feed_bytes(hdr, 5);
+	ok(!ds.has_complete_frame(), "no complete frame with header only");
+	uint8_t body[] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09};
+	ds.feed_bytes(body, 9);
+	ok(ds.has_complete_frame(), "frame complete after body arrives");
+	ds.pop_frame();
+	ok(!ds.has_complete_frame(), "empty after pop");
+}
+
+static void test_multiple_frames() {
+	MysqlxDataStream ds;
+	uint8_t f1[] = {0x02, 0x00, 0x00, 0x00, 0x01, 0xAA};
+	uint8_t f2[] = {0x02, 0x00, 0x00, 0x00, 0x02, 0xBB};
+	uint8_t both[12];
+	memcpy(both, f1, 6);
+	memcpy(both + 6, f2, 6);
+	ds.feed_bytes(both, 12);
+	ok(ds.has_complete_frame(), "first frame ready");
+	ok(ds.front_frame().first[4] == 0x01, "first frame type is 1");
+	ds.pop_frame();
+	ok(ds.has_complete_frame(), "second frame ready");
+	ok(ds.front_frame().first[4] == 0x02, "second frame type is 2");
+	ds.pop_frame();
+	ok(!ds.has_complete_frame(), "empty after both popped");
+}
+
+static void test_frame_enqueue_write() {
+	MysqlxDataStream ds;
+	uint8_t body[] = {0x01, 0x02, 0x03};
+	ds.enqueue_frame(0x0E, body, 3);
+	ok(ds.write_buffer_size() == 8, "write buffer has 4 header + 1 msg_type + 3 body = 8 bytes");
+	const auto& wb = ds.write_buffer_raw();
+	ok(wb[0] == 0x04, "payload_size byte 0 is 4");
+	ok(wb[4] == 0x0E, "message type is 0x0E");
+}
+
+int main() {
+	plan(15);
+
+	test_frame_header_parse();
+	test_partial_frame();
+	test_multiple_frames();
+	test_frame_enqueue_write();
+
+	return exit_status();
+}
