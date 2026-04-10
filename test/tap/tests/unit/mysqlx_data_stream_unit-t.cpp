@@ -13,9 +13,9 @@ static void test_frame_header_parse() {
 	ds.feed_bytes(frame, sizeof(frame));
 	ok(ds.has_complete_frame(), "complete frame detected");
 	if (ds.has_complete_frame()) {
-		auto pkt = ds.front_frame();
-		ok(pkt.second == 14, "frame total size is 14 (4 header + 10 payload)");
-		ok(pkt.first[4] == 0x01, "message type is 1");
+		auto& pkt = ds.front_frame();
+		ok(pkt.size() == 14, "frame total size is 14 (4 header + 10 payload)");
+		ok(pkt[4] == 0x01, "message type is 1");
 	}
 	ds.pop_frame();
 	ok(!ds.has_complete_frame(), "no more frames after pop");
@@ -42,10 +42,10 @@ static void test_multiple_frames() {
 	memcpy(both + 6, f2, 6);
 	ds.feed_bytes(both, 12);
 	ok(ds.has_complete_frame(), "first frame ready");
-	ok(ds.front_frame().first[4] == 0x01, "first frame type is 1");
+	ok(ds.front_frame()[4] == 0x01, "first frame type is 1");
 	ds.pop_frame();
 	ok(ds.has_complete_frame(), "second frame ready");
-	ok(ds.front_frame().first[4] == 0x02, "second frame type is 2");
+	ok(ds.front_frame()[4] == 0x02, "second frame type is 2");
 	ds.pop_frame();
 	ok(!ds.has_complete_frame(), "empty after both popped");
 }

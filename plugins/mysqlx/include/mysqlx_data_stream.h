@@ -6,9 +6,8 @@
 #include <sys/types.h>
 #include <vector>
 #include <deque>
-#include <utility>
 
-typedef std::pair<uint8_t*, size_t> MysqlxFrame;
+typedef std::vector<uint8_t> MysqlxFrame;
 
 enum mysqlx_data_stream_status {
 	XDS_NOT_CONNECTED = 0,
@@ -41,7 +40,7 @@ public:
 
 	void feed_bytes(const uint8_t* data, size_t len);
 	bool has_complete_frame() const;
-	MysqlxFrame front_frame() const;
+	const MysqlxFrame& front_frame() const;
 	void pop_frame();
 
 	void enqueue_frame(uint8_t msg_type, const uint8_t* body, size_t body_len);
@@ -55,6 +54,8 @@ public:
 	short get_poll_events() const { return poll_events_; }
 	void set_revents(short revents) { revents_ = revents; }
 	short get_revents() const { return revents_; }
+
+	bool has_parse_error() const { return parse_error_; }
 
 	int poll_fds_idx;
 
@@ -72,6 +73,7 @@ private:
 	size_t write_offset_;
 
 	std::deque<MysqlxFrame> complete_frames_;
+	bool parse_error_;
 
 	bool try_parse_frame();
 	static constexpr size_t X_FRAME_HEADER_SIZE = 5;
