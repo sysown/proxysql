@@ -149,7 +149,11 @@ jobs:
           # build tap tests
           #sed -i "s/^build_tap_test_debug: build_src_debug$/build_tap_test_debug: build_src_debug_clickhouse/" Makefile
           #sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j$(nproc) build_tap_test_debug'" docker-compose.yml
-          make ${{ matrix.dist }}-dbg | tee ci_build_log/build-tap.log
+          # NOTE: target must be -tap (not -dbg): entrypoint.bash routes on BLD_NAME
+          # matching \-test|\-tap and selects build_tap_test_debug; -dbg takes the else
+          # branch which only builds src/proxysql, leaving test/tap/tests/**/*-t unbuilt
+          # (silent false-green — see v3.0 doc/GH-Actions/README.md debugging section).
+          make ${{ matrix.dist }}-tap | tee ci_build_log/build-tap.log
           
           # create matrix of all test folders containing *-t
           echo "[ "$(find test/tap/ -name '*-t' | xargs -n1 dirname | uniq | sed 's|test/tap/||' | xargs -I{} -n1 echo -n "'{}', ")"]" > tap-matrix.json
