@@ -25,15 +25,6 @@ using LEVEL = std::string;
 using CODE = int;
 using MESSAGE = std::string;
 
-#define MYSQL_QUERY__(mysql, query) \
-	do { \
-		if (mysql_query(mysql, query)) { \
-			fprintf(stderr, "File %s, line %d, Error: %s\n", \
-					__FILE__, __LINE__, mysql_error(mysql)); \
-			goto cleanup; \
-		} \
-	} while(0)
-
 #define MYSQL_CLEAR_RESULT(mysql)        mysql_free_result(mysql_store_result(mysql));
 #define MYSQL_CLEAR_STMT_RESULT(stmt)    mysql_stmt_store_result(stmt); \
 										 mysql_stmt_free_result(stmt);
@@ -103,7 +94,7 @@ MYSQL* get_connection(const Connection& conn, bool enable_client_deprecate_eof) 
 	// Initialize connection
 	MYSQL* proxysql = mysql_init(NULL);
 	if (!proxysql) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql));
+		fprintf(stderr, "File %s, line %d, Error: mysql_init failed\n", __FILE__, __LINE__);
 		return NULL;
 	}
 
@@ -116,12 +107,14 @@ MYSQL* get_connection(const Connection& conn, bool enable_client_deprecate_eof) 
 		// Connnect to ProxySQL
 		if (!mysql_real_connect(proxysql, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql));
+			mysql_close(proxysql);
 			return NULL;
 		}
 	} else if (conn.conn_type == kMySQL) {
 		// Connect to ProxySQL
 		if (!mysql_real_connect(proxysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql));
+			mysql_close(proxysql);
 			return NULL;
 		}
 	}
@@ -189,11 +182,14 @@ int get_warnings_count(MYSQL* mysql) {
 		return -1;
 	}
 	MYSQL_ROW row = mysql_fetch_row(mysql_result);
-	const int warning_count = atoi(row[0]);
-	if (mysql_result) {
-		mysql_free_result(mysql_result);
-		mysql_result = nullptr;
+	int warning_count = -1;
+	if (row != NULL && row[0] != NULL) {
+		warning_count = atoi(row[0]);
+	} else {
+		fprintf(stderr, "File %s, line %d, Error: empty row from SHOW COUNT(*) WARNINGS\n",
+			__FILE__, __LINE__);
 	}
+	mysql_free_result(mysql_result);
 	return warning_count;
 }
 
@@ -201,15 +197,16 @@ int get_warnings_count(MYSQL* mysql) {
 int get_warnings(MYSQL* mysql, std::list<std::tuple<LEVEL,CODE,MESSAGE>>& warning_list) {
 	MYSQL_QUERY(mysql, "SHOW WARNINGS");
 	MYSQL_RES* mysql_result = mysql_use_result(mysql);
+	if (!mysql_result) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
+		return -1;
+	}
 	unsigned long fetched_row_count = 0;
 	while (MYSQL_ROW row = mysql_fetch_row(mysql_result)) {
 		fetched_row_count++;
 		warning_list.emplace_back(std::make_tuple(std::string(row[0]),atoi(row[1]),std::string(row[2])));
 	}
-	if (mysql_result) {
-		mysql_free_result(mysql_result);
-		mysql_result = nullptr;
-	}
+	mysql_free_result(mysql_result);
 	return fetched_row_count;
 }
 
@@ -537,16 +534,19 @@ int main(int argc, char** argv) {
 	diag("Discovering target hostgroup for user %s...", cl.username);
 	int target_hg = 0;
 	MYSQL* admin_tmp = mysql_init(NULL);
-	if (mysql_real_connect(admin_tmp, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
-		std::string hg_query = "SELECT default_hostgroup FROM mysql_users WHERE username='" + std::string(cl.username) + "' LIMIT 1";
-		if (mysql_query(admin_tmp, hg_query.c_str()) == 0) {
-			MYSQL_RES *res = mysql_store_result(admin_tmp);
-			if (res) {
-				MYSQL_ROW row = mysql_fetch_row(res);
-				if (row) target_hg = atoi(row[0]);
-				mysql_free_result(res);
+	if (admin_tmp != NULL) {
+		if (mysql_real_connect(admin_tmp, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+			std::string hg_query = "SELECT default_hostgroup FROM mysql_users WHERE username='" + std::string(cl.username) + "' LIMIT 1";
+			if (mysql_query(admin_tmp, hg_query.c_str()) == 0) {
+				MYSQL_RES *res = mysql_store_result(admin_tmp);
+				if (res) {
+					MYSQL_ROW row = mysql_fetch_row(res);
+					if (row && row[0]) target_hg = atoi(row[0]);
+					mysql_free_result(res);
+				}
 			}
 		}
+		// Always close the handle, even on real_connect failure.
 		mysql_close(admin_tmp);
 	}
 	diag("Primary test hostgroup: %d", target_hg);
@@ -554,8 +554,11 @@ int main(int argc, char** argv) {
 	// Dump hostgroup state for debugging CI failures (hostgroup unreachable)
 	{
 		MYSQL* dbg_admin = mysql_init(NULL);
-		if (dbg_admin && mysql_real_connect(dbg_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
-			dump_hostgroup_debug(dbg_admin, target_hg);
+		if (dbg_admin != NULL) {
+			if (mysql_real_connect(dbg_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+				dump_hostgroup_debug(dbg_admin, target_hg);
+			}
+			// Close the handle even if real_connect failed.
 			mysql_close(dbg_admin);
 		}
 	}
@@ -586,20 +589,32 @@ int main(int argc, char** argv) {
 	all_tests[7].first = "MULTIPLEXING";
 	all_tests[7].second.insert(all_tests[7].second.end(), multiplexing_test.begin(), multiplexing_test.end());
 
-	// PRE-TEST FIXUP: Replace hardcoded Hostgroup 0 with the discovered target_hg
+	// PRE-TEST FIXUP: Replace hardcoded Hostgroup 0 with the discovered
+	// target_hg. Previously each rewrite did strdup() into info.query_info
+	// .query and leaked the buffer (plus overwrote-and-leaked the first
+	// strdup when a second rewrite ran on the same query). Store the
+	// rewritten strings in a std::list so the c_str() pointers remain
+	// stable and the allocation is freed when 'rewritten_queries' is
+	// destroyed at scope exit.
+	std::list<std::string> rewritten_queries;
 	for (auto& test_set : all_tests) {
 		for (auto& info : test_set.second) {
 			if (info.conn.conn_type == kAdmin) {
 				std::string q = info.query_info.query;
+				bool modified = false;
 				size_t pos = q.find("VALUES (0,");
 				if (pos != std::string::npos) {
 					q.replace(pos, 10, "VALUES (" + std::to_string(target_hg) + ",");
-					info.query_info.query = strdup(q.c_str());
+					modified = true;
 				}
 				pos = q.find("WHERE hostgroup_id=0");
 				if (pos != std::string::npos) {
 					q.replace(pos, 20, "WHERE hostgroup_id=" + std::to_string(target_hg));
-					info.query_info.query = strdup(q.c_str());
+					modified = true;
+				}
+				if (modified) {
+					rewritten_queries.push_back(std::move(q));
+					info.query_info.query = rewritten_queries.back().c_str();
 				}
 			}
 		}
