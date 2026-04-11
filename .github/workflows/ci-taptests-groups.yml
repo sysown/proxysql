@@ -335,6 +335,23 @@ jobs:
         sudo chmod -R 777 ${{ github.workspace }}/*
         echo "${{ matrix.testgroup }}" | tr -d '*|' | sed 's|.*/||' | xargs -0 printf 'TESTGROUP=%s' >> $GITHUB_ENV
           
+    # Security note: this step runs a static chmod command against a path
+    # under proxysql/; no untrusted user input is interpolated. The chmod
+    # target is a fixed literal, the only variable substitution is inside
+    # an if: expression that uses workflow-run state (failure/cancelled),
+    # not event body fields.
+    - name: Fix artifact permissions
+      if: ${{ failure() || cancelled() }}
+      run: |
+        # actions/upload-artifact dies with EACCES when it scandirs into
+        # directories under ci_*_logs/ that were created inside docker
+        # build containers (root-owned). Make everything readable by the
+        # runner user before upload. sudo required because files are
+        # root-owned; 2>/dev/null + || true because the path may not
+        # exist on all failure paths (e.g. a cache-restore failure before
+        # any test even runs).
+        sudo chmod -R a+rX proxysql/ci_*_logs/ 2>/dev/null || true
+
     - name: Archive artifacts logs
 #      if: ${{ failure() && !cancelled() }}
       if: ${{ failure() || cancelled() }}

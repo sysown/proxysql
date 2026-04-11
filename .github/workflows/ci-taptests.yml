@@ -256,6 +256,18 @@ jobs:
         sudo chmod -R 777 ${{ github.workspace }}/*
         echo "${{ matrix.taptests }}" | tr -d '*|' | xargs -0 printf 'TAPTESTS=%s' >> $GITHUB_ENV
 
+    - name: Fix artifact permissions
+      if: ${{ failure() && !cancelled() }}
+      run: |
+        # actions/upload-artifact dies with EACCES when it scandirs into
+        # directories under ci_*_logs/ that were created inside docker
+        # build containers (root-owned). Make everything readable by the
+        # runner user before upload. sudo required because files are
+        # root-owned; 2>/dev/null + || true because the path may not
+        # exist on all failure paths (e.g. a cache-restore failure before
+        # any test even runs).
+        sudo chmod -R a+rX proxysql/ci_*_logs/ 2>/dev/null || true
+
     - name: Archive artifacts logs
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
