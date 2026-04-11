@@ -39,12 +39,35 @@ int main(int argc, char** argv) {
 	MYSQL* proxysql_mysql = mysql_init(NULL);
 	MYSQL* proxysql_admin = mysql_init(NULL);
 
+	// mysql_init returns NULL on failure; calling mysql_error on a NULL
+	// handle is undefined. Check before use and clean up whichever side
+	// succeeded when the other fails.
+	if (!proxysql_mysql) {
+		fprintf(stderr, "File %s, line %d, Error: mysql_init failed for 'proxysql_mysql'\n",
+			__FILE__, __LINE__);
+		if (proxysql_admin) { mysql_close(proxysql_admin); }
+		return -1;
+	}
+	if (!proxysql_admin) {
+		fprintf(stderr, "File %s, line %d, Error: mysql_init failed for 'proxysql_admin'\n",
+			__FILE__, __LINE__);
+		mysql_close(proxysql_mysql);
+		return -1;
+	}
+
 	if (!mysql_real_connect(proxysql_mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
+		mysql_close(proxysql_mysql);
+		mysql_close(proxysql_admin);
 		return -1;
 	}
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
+		// The original code reported mysql_error(proxysql_mysql) here,
+		// which is the wrong handle — the connection that just failed is
+		// proxysql_admin.
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
+		mysql_close(proxysql_mysql);
+		mysql_close(proxysql_admin);
 		return -1;
 	}
 
@@ -109,6 +132,13 @@ int main(int argc, char** argv) {
 	diag("Recording initial connection counts for HG 1...");
 	MYSQL_QUERY(proxysql_admin, "SELECT ConnUsed, ConnFree, srv_host, srv_port FROM stats.stats_mysql_connection_pool WHERE hostgroup=1");
 	MYSQL_RES* proxy_res = mysql_store_result(proxysql_admin);
+	if (!proxy_res) {
+		fprintf(stderr, "File %s, line %d, Error: mysql_store_result returned NULL: %s\n",
+			__FILE__, __LINE__, mysql_error(proxysql_admin));
+		mysql_close(proxysql_mysql);
+		mysql_close(proxysql_admin);
+		return -1;
+	}
 
 	std::vector<int> cur_connections {};
 	MYSQL_ROW row;
@@ -138,12 +168,24 @@ int main(int argc, char** argv) {
 	diag("Verifying final connection counts for HG 1...");
 	MYSQL_QUERY(proxysql_admin, "SELECT ConnUsed, ConnFree, srv_host, srv_port FROM stats.stats_mysql_connection_pool WHERE hostgroup=1");
 	proxy_res = mysql_store_result(proxysql_admin);
+	if (!proxy_res) {
+		fprintf(stderr, "File %s, line %d, Error: mysql_store_result returned NULL: %s\n",
+			__FILE__, __LINE__, mysql_error(proxysql_admin));
+		mysql_close(proxysql_mysql);
+		mysql_close(proxysql_admin);
+		return -1;
+	}
 	std::vector<int> new_cur_connections {};
 
 	while ((row = mysql_fetch_row(proxy_res))) {
 		int row_used_conn = atoi(row[0]);
 		int row_free_conn = atoi(row[1]);
-		int srv_port = atoi(row[2]);
+		// Column order in the SELECT above is:
+		// ConnUsed, ConnFree, srv_host, srv_port → row[3] is the port.
+		// The original code passed row[2] (the host string) to atoi which
+		// silently produced a meaningless value (e.g. 127 for "127.0.0.1")
+		// in the diagnostic output.
+		int srv_port = atoi(row[3]);
 		new_cur_connections.push_back(row_used_conn + row_free_conn);
 
 		diag("srv_port: %d - ConnUsed: %d, ConnFree: %d", srv_port, row_used_conn, row_free_conn);
@@ -152,12 +194,17 @@ int main(int argc, char** argv) {
 	mysql_free_result(proxy_res);
 
 	int new_total_conn = 0;
-	// Sum the differences between previous free and new free connections
-	for (int i = 0; i < cur_connections.size(); i++) {
+	// Sum the differences between previous free and new free connections.
+	// If either side came back shorter (row count mismatch), use the
+	// smaller size so we don't read past the end of new_cur_connections.
+	size_t compare_n = std::min(cur_connections.size(), new_cur_connections.size());
+	for (size_t i = 0; i < compare_n; i++) {
 		new_total_conn += new_cur_connections[i] - cur_connections[i];
 	}
 
 	ok(rand_conn == new_total_conn, "The number of queries executed with annotations should be equal to the number of new connections: %d == %d", rand_conn, new_total_conn);
 
+	mysql_close(proxysql_mysql);
+	mysql_close(proxysql_admin);
 	return exit_status();
 }
