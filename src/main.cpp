@@ -1538,6 +1538,7 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 
 	ProxySQL_Main_init_Admin_module(boostrap_info);
 	LoadConfiguredPlugins();
+	GloAdmin->materialize_plugin_tables();
 	StartConfiguredPlugins();
 	GloMTH->print_version();
 

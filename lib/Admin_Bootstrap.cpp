@@ -1341,3 +1341,34 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 #endif
 return true;
 };
+
+void ProxySQL_Admin::materialize_plugin_tables() {
+	ProxySQL_PluginManager* plugin_manager = proxysql_get_plugin_manager();
+	if (!plugin_manager) return;
+
+	auto merge_new = [this](std::vector<table_def_t *>* target, const std::vector<ProxySQL_PluginTableDef>& defs) {
+		for (const auto& def : defs) {
+			bool exists = false;
+			for (const auto* existing : *target) {
+				if (strcasecmp(existing->table_name, def.table_name) == 0) {
+					exists = true;
+					break;
+				}
+			}
+			if (!exists) {
+				insert_into_tables_defs(target, def.table_name, def.table_def);
+			}
+		}
+	};
+
+	merge_new(tables_defs_admin, plugin_manager->tables(ProxySQL_PluginDBKind::admin_db));
+	merge_new(tables_defs_config, plugin_manager->tables(ProxySQL_PluginDBKind::config_db));
+	merge_new(tables_defs_stats, plugin_manager->tables(ProxySQL_PluginDBKind::stats_db));
+
+	check_and_build_standard_tables(admindb, tables_defs_admin);
+	check_and_build_standard_tables(configdb, tables_defs_config);
+	check_and_build_standard_tables(statsdb, tables_defs_stats);
+
+	__attach_db(admindb, configdb, (char *)"disk");
+	__attach_db(admindb, statsdb, (char *)"stats");
+}

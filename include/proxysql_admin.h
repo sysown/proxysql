@@ -622,6 +622,7 @@ class ProxySQL_Admin {
 	 * @return Always true.
 	 */
 	bool init(const bootstrap_info_t& bootstrap_info);
+	void materialize_plugin_tables();
 	void init_ldap();
 	/** @brief Initializes the HTTP server. For safety should be called after 'phase3'. */
 	void init_http_server();

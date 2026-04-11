@@ -350,6 +350,16 @@ const std::vector<std::string> SAVE_MYSQLX_BACKEND_ENDPOINTS_TO_MEMORY = {
 	"SAVE MYSQLX BACKEND ENDPOINTS TO MEM" ,
 	"SAVE MYSQLX BACKEND ENDPOINTS FROM RUNTIME" ,
 	"SAVE MYSQLX BACKEND ENDPOINTS FROM RUN" };
+const std::vector<std::string> LOAD_MYSQLX_VARIABLES_FROM_MEMORY = {
+	"LOAD MYSQLX VARIABLES FROM MEMORY" ,
+	"LOAD MYSQLX VARIABLES FROM MEM" ,
+	"LOAD MYSQLX VARIABLES TO RUNTIME" ,
+	"LOAD MYSQLX VARIABLES TO RUN" };
+const std::vector<std::string> SAVE_MYSQLX_VARIABLES_TO_MEMORY = {
+	"SAVE MYSQLX VARIABLES TO MEMORY" ,
+	"SAVE MYSQLX VARIABLES TO MEM" ,
+	"SAVE MYSQLX VARIABLES FROM RUNTIME" ,
+	"SAVE MYSQLX VARIABLES FROM RUN" };
 //
 const std::vector<std::string> LOAD_COREDUMP_FROM_MEMORY = {
 	"LOAD COREDUMP FROM MEMORY" ,
@@ -3870,6 +3880,26 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			//pthread_mutex_unlock(&admin_mutex);
 			goto __run_query;
 		}
+		if (
+			is_admin_command_or_alias(LOAD_MYSQLX_USERS_FROM_MEMORY, query_no_space, query_no_space_length) ||
+			is_admin_command_or_alias(SAVE_MYSQLX_USERS_TO_MEMORY, query_no_space, query_no_space_length) ||
+			is_admin_command_or_alias(LOAD_MYSQLX_ROUTES_FROM_MEMORY, query_no_space, query_no_space_length) ||
+			is_admin_command_or_alias(SAVE_MYSQLX_ROUTES_TO_MEMORY, query_no_space, query_no_space_length) ||
+			is_admin_command_or_alias(LOAD_MYSQLX_BACKEND_ENDPOINTS_FROM_MEMORY, query_no_space, query_no_space_length) ||
+			is_admin_command_or_alias(SAVE_MYSQLX_BACKEND_ENDPOINTS_TO_MEMORY, query_no_space, query_no_space_length) ||
+			is_admin_command_or_alias(LOAD_MYSQLX_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length) ||
+			is_admin_command_or_alias(SAVE_MYSQLX_VARIABLES_TO_MEMORY, query_no_space, query_no_space_length)
+		) {
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			if (SPA->dispatch_plugin_admin_command(sess, query_no_space)) {
+				run_query = false;
+				goto __run_query;
+			}
+			SPA->send_error_msg_to_client(sess, (char*)"MYSQLX plugin is not loaded");
+			run_query = false;
+			goto __run_query;
+		}
+
 		if ((query_no_space_length>5) && ( (!strncasecmp("SAVE ", query_no_space, 5)) || (!strncasecmp("LOAD ", query_no_space, 5))) ) {
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received LOAD or SAVE command\n");
 			run_query=admin_handler_command_load_or_save(query_no_space, query_no_space_length, sess, pa, &query, &query_length);
@@ -5331,25 +5361,6 @@ __end_show_commands:
 			proxy_error("[WARNING]: Commands executed from stats interface in Admin Module: \"%s\"\n", query_no_space);
 			SPA->send_error_msg_to_client(sess, (char *)"Command not allowed");
 			run_query=false;
-		}
-	}
-	if (run_query && sess->session_type == PROXYSQL_SESSION_ADMIN) {
-		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-		if (
-			is_admin_command_or_alias(LOAD_MYSQLX_USERS_FROM_MEMORY, query_no_space, query_no_space_length) ||
-			is_admin_command_or_alias(SAVE_MYSQLX_USERS_TO_MEMORY, query_no_space, query_no_space_length) ||
-			is_admin_command_or_alias(LOAD_MYSQLX_ROUTES_FROM_MEMORY, query_no_space, query_no_space_length) ||
-			is_admin_command_or_alias(SAVE_MYSQLX_ROUTES_TO_MEMORY, query_no_space, query_no_space_length) ||
-			is_admin_command_or_alias(LOAD_MYSQLX_BACKEND_ENDPOINTS_FROM_MEMORY, query_no_space, query_no_space_length) ||
-			is_admin_command_or_alias(SAVE_MYSQLX_BACKEND_ENDPOINTS_TO_MEMORY, query_no_space, query_no_space_length)
-		) {
-			if (SPA->dispatch_plugin_admin_command(sess, query_no_space)) {
-				run_query = false;
-				goto __run_query;
-			}
-			SPA->send_error_msg_to_client(sess, (char*)"MYSQLX plugin is not loaded");
-			run_query = false;
-			goto __run_query;
 		}
 	}
 
