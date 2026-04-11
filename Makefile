@@ -14,7 +14,7 @@ ifndef GIT_VERSION_BASE
     $(error GIT_VERSION_BASE is not set)
 endif
 
-.PHONY: lint lint-generate-cdb lint-run
+.PHONY: lint lint-generate-cdb lint-run lint-tests
 
 lint-generate-cdb:
 	@echo "Generating compile_commands.json (requires bear)"
@@ -26,6 +26,11 @@ lint-run:
 
 lint: lint-generate-cdb lint-run
 	@echo "Done lint"
+
+.PHONY: lint-tests
+lint-tests:
+	@echo "Running TAP test static analysis"
+	./scripts/lint/run_tap_tests.py $(FILES)
 
 
 ### RELEASE TIERS & FEATURE FLAGS:
