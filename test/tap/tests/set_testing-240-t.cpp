@@ -409,15 +409,21 @@ void * my_conn_thread(void *arg) {
 			if (std::find(possible_unknown_variables.begin(), possible_unknown_variables.end(), el.key()) != possible_unknown_variables.end()) {
 				vars_counters[el.key()].count++;
 			}
+			// The inner disjunction over session_track_gtids handling must
+			// be grouped so it only fires when special_sqlmode==false and
+			// parsing_optimizer_switch==false. Without the extra outer
+			// parentheses, operator precedence treated the
+			// 'el.key() == "session_track_gtids"' branch as a standalone
+			// failure condition that fired even in the other cases.
 			if (
 				(special_sqlmode == true && verified_special_sqlmode == false) ||
 				(k == mysql_vars.end()) ||
 				(s == proxysql_vars["conn"].end()) ||
 				( (parsing_optimizer_switch == true) && (optimizer_switch_matches == false) ) ||
-				(special_sqlmode == false && parsing_optimizer_switch == false &&
+				(special_sqlmode == false && parsing_optimizer_switch == false && (
 					(el.key() != "session_track_gtids" && (k.value() != el.value() || s.value() != el.value())) ||
 					(el.key() == "session_track_gtids" && !check_session_track_gtids(el.value(), s.value(), k.value()))
-				)
+				))
 			) {
 				if ( k != mysql_vars.end() && s != proxysql_vars["conn"].end()) {
 					if (k.value() == UNKNOWNVAR) { // mysql doesn't recognize the variable
