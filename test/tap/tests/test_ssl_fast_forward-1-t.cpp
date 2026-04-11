@@ -244,9 +244,10 @@ int main(int argc, char** argv) {
 
 
 	diag("We now create a connection using SSL for both client or backend");
-	if (run_queries_sets(queries_set4, mysqladmin, "Running on Admin")) // note: we use queries_set4 again
+	if (run_queries_sets(queries_set4, mysqladmin, "Running on Admin")) { // note: we use queries_set4 again
 		close_all();
 		return exit_status();
+	}
 	mysqls[4] = mysql_init(NULL);
 	if (!mysqls[4]) {
 		close_all();

@@ -315,7 +315,10 @@ int main(int argc, char** argv) {
 		);
 	}
 
-	if (tests_last() == nplan && tests_failed == 0) {
+	// Missing parentheses on tests_failed turned this into a comparison
+	// of the function's address against 0. The address is never NULL so
+	// the second operand was always false and the TRUNCATE was never run.
+	if (tests_last() == nplan && tests_failed() == 0) {
 		string q = "TRUNCATE TABLE stats.stats_mysql_query_digest";
 		diag("Running %s", q.c_str());
 		MYSQL_QUERY(proxy_admin, q.c_str());
