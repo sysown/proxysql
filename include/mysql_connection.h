@@ -1,5 +1,5 @@
-#ifndef __CLASS_MYSQL_CONNECTION_H
-#define __CLASS_MYSQL_CONNECTION_H
+#ifndef PROXYSQL_MYSQL_CONNECTION_H
+#define PROXYSQL_MYSQL_CONNECTION_H
 
 #include "proxysql.h"
 #include "cpp.h"
@@ -26,7 +26,7 @@
 #define STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT        0x00000800
 #define STATUS_MYSQL_CONNECTION_HAS_WARNINGS         0x00001000
 
-class MySQLServers_SslParams;
+#include "Servers_SslParams.h"
 
 class Variable {
 public:
@@ -276,4 +276,4 @@ class MySQL_Connection {
 	void get_mysql_info_json(nlohmann::json&);
 	void get_backend_conn_info_json(nlohmann::json&);
 };
-#endif /* __CLASS_MYSQL_CONNECTION_H */
+#endif /* PROXYSQL_MYSQL_CONNECTION_H */

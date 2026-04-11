@@ -25,8 +25,8 @@
  * @endcode
  */
 
-#ifndef __CLASS_LLM_BRIDGE_H
-#define __CLASS_LLM_BRIDGE_H
+#ifndef PROXYSQL_LLM_BRIDGE_H
+#define PROXYSQL_LLM_BRIDGE_H
 
 #ifdef PROXYSQLGENAI
 
@@ -334,4 +334,4 @@ public:
 
 #endif /* PROXYSQLGENAI */
 
-#endif // __CLASS_LLM_BRIDGE_H
+#endif /* PROXYSQL_LLM_BRIDGE_H */

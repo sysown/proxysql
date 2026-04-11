@@ -1,5 +1,5 @@
-#ifndef __CLASS_PGSQL_ERROR_HELPER_H
-#define __CLASS_PGSQL_ERROR_HELPER_H
+#ifndef PROXYSQL_PGSQL_ERROR_HELPER_H
+#define PROXYSQL_PGSQL_ERROR_HELPER_H
 
 #include <string>
 
@@ -380,7 +380,7 @@ struct PgSQL_ErrorInfo {
 	PGSQL_ERROR_CLASS type = PGSQL_ERROR_CLASS::ERRCLASS_UNKNOWN_ERROR;
 	PGSQL_ERROR_CATEGORY category = PGSQL_ERROR_CATEGORY::ERRCATEGORY_UNKNOWN_CATEGORY;
 	char sqlstate[5 + 1] = {}; // 5 bytes for SQLSTATE + 1 for null terminator
-	PgSQL_ErrorInfo_Ext* ext_info = NULL;
+	PgSQL_ErrorInfo_Ext* ext_info = nullptr;
 	std::string message;
 };
 
@@ -669,4 +669,4 @@ private:
 
 #define PGSQL_GET_ERROR_CODE_STR(ENUM_CODE) PgSQL_Error_Helper::get_error_code(PGSQL_ERROR_CODES::ENUM_CODE)
 
-#endif /* __CLASS_PGSQL_ERROR_HELPER_H */
+#endif /* PROXYSQL_PGSQL_ERROR_HELPER_H */

@@ -3,6 +3,7 @@
 
 #define CLUSTER_SYNC_INTERFACES_ADMIN "('admin-mysql_ifaces','admin-restapi_port','admin-telnet_admin_ifaces','admin-telnet_stats_ifaces','admin-web_port','admin-pgsql_ifaces')"
 #define CLUSTER_SYNC_INTERFACES_MYSQL "('mysql-interfaces')"
+#define CLUSTER_SYNC_INTERFACES_PGSQL "('pgsql-interfaces')"
 
 #include <memory>
 #include <string.h>

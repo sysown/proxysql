@@ -62,6 +62,8 @@
  */
 
 #include <unistd.h>
+#include <signal.h>
+#include <sys/wait.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <time.h>
@@ -108,6 +110,21 @@ const uint32_t R_PORT = 16062;
 // The replica ProxySQL is spawned locally inside the test-runner container.
 // Use 127.0.0.1 to connect to it, not cl.host (which may point to a different container).
 const char* R_HOST = "127.0.0.1";
+
+// Hostname visible to other containers on the Docker network.
+// Used when registering the replica in proxysql_servers on the primary so the
+// primary's cluster monitor can reach the replica.  Falls back to R_HOST when
+// not running in a container (e.g. bare-metal testing).
+const char* get_cluster_visible_host() {
+	// Detect hostname from env or from gethostname() — the test-runner container
+	// has --hostname set by the Unified CI infra.
+	static char buf[256] = {};
+	if (buf[0]) return buf;
+	if (gethostname(buf, sizeof(buf)) != 0) {
+		strncpy(buf, R_HOST, sizeof(buf) - 1);
+	}
+	return buf;
+}
 
 int setup_config_file(const CommandLine& cl) {
 	const std::string t_fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync-t.cnf";
@@ -1240,27 +1257,36 @@ int main(int, char**) {
 	MYSQL_QUERY(proxy_admin, update_proxysql_servers.c_str());
 	MYSQL_QUERY(proxy_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
 
-	// Launch proxysql with cluster config
-	std::thread proxy_replica_th([&save_proxy_stderr, &cl] () {
+	// Launch proxysql with cluster config via fork/exec so we can track the PID
+	std::atomic<pid_t> replica_pid { 0 };
+
+	std::thread proxy_replica_th([&save_proxy_stderr, &replica_pid, &cl] () {
 		const string replica_stderr { string(cl.workdir) + "test_cluster_sync_config/cluster_sync_node_stderr.txt" };
 		const std::string proxysql_db = std::string(cl.workdir) + "test_cluster_sync_config/proxysql.db";
 		const std::string stats_db = std::string(cl.workdir) + "test_cluster_sync_config/proxysql_stats.db";
 		const std::string fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync.cnf";
 
-		std::string proxy_stdout {};
-		std::string proxy_stderr {};
 		const string proxy_binary_path { string { cl.workdir } + "../../../src/proxysql" };
-
 		const string proxy_command {
 			proxy_binary_path + " -f -M -c " + fmt_config_file + " > " + replica_stderr + " 2>&1"
 		};
 
-		diag("Launching replica ProxySQL via 'system' with command: `%s`", proxy_command.c_str());
-		int exec_res = system(proxy_command.c_str());
+		diag("Launching replica ProxySQL via fork/exec with command: `%s`", proxy_command.c_str());
 
-		ok(exec_res == 0, "proxysql cluster node should execute and shutdown nicely. 'system' result was: %d", exec_res);
+		pid_t pid = fork();
+		if (pid == 0) {
+			execl("/bin/sh", "sh", "-c", proxy_command.c_str(), nullptr);
+			_exit(127);
+		}
 
-		// In case of error place in log the reason
+		replica_pid.store(pid);
+
+		int status = 0;
+		waitpid(pid, &status, 0);
+		int exec_res = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+
+		ok(exec_res == 0, "proxysql cluster node should execute and shutdown nicely. Exit status was: %d", exec_res);
+
 		if (exec_res || save_proxy_stderr.load()) {
 			if (exec_res) {
 				diag("LOG: Proxysql cluster node execution failed, logging stderr into 'test_cluster_sync_config/cluster_sync_node_stderr.txt'");
@@ -1274,8 +1300,11 @@ int main(int, char**) {
 	});
 
 	// Waiting for proxysql to be ready
+	// Use the cluster-visible hostname so the primary can also reach the replica
+	// via proxysql_servers.  Inside the test-runner container this resolves to
+	// the container's own IP, so the local connection works too.
 	conn_opts_t conn_opts {};
-	conn_opts.host = R_HOST;
+	conn_opts.host = get_cluster_visible_host();
 	conn_opts.user = cl.admin_username;
 	conn_opts.pass = cl.admin_password;
 	conn_opts.port = R_PORT;
@@ -2730,6 +2759,28 @@ cleanup:
 		mysql_options(r_proxy_admin, MYSQL_OPT_WRITE_TIMEOUT, &mysql_timeout);
 		mysql_query(r_proxy_admin, "PROXYSQL SHUTDOWN");
 		mysql_close(r_proxy_admin);
+	}
+
+	// Ensure the replica process is dead before joining the thread.
+	// If PROXYSQL SHUTDOWN failed or r_proxy_admin was NULL, the process
+	// launched via fork() would block the thread forever.
+	{
+		pid_t pid = replica_pid.load();
+		if (pid > 0) {
+			int wait_secs = 5;
+			bool exited = false;
+			for (int i = 0; i < wait_secs; i++) {
+				if (waitpid(pid, nullptr, WNOHANG) != 0) {
+					exited = true;
+					break;
+				}
+				sleep(1);
+			}
+			if (!exited) {
+				diag("Replica ProxySQL (pid=%d) did not exit after SHUTDOWN, sending SIGKILL", pid);
+				kill(pid, SIGKILL);
+			}
+		}
 	}
 
 	proxy_replica_th.join();

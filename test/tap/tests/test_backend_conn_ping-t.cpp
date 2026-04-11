@@ -622,13 +622,15 @@ int main(int, char**) {
 	vector<svr_addr> s_server_test;
 	vector<svr_addr> m_server_test;
 
+	const char* infra_env = getenv("DEFAULT_MYSQL_INFRA");
+	const string infra = infra_env ? infra_env : "infra-mysql57";
 	const string docker_mode = getenv("DOCKER_MODE");
 	if (docker_mode.find("dns") == docker_mode.size() - 3) {
-		s_server_test.assign({ { "mysql1.infra-mysql57", 3306 } });
+		s_server_test.assign({ { "mysql1." + infra, 3306 } });
 		m_server_test.assign({
-			{ "mysql1.infra-mysql57", 3306 },
-			{ "mysql2.infra-mysql57", 3306 },
-			{ "mysql3.infra-mysql57", 3306 }
+			{ "mysql1." + infra, 3306 },
+			{ "mysql2." + infra, 3306 },
+			{ "mysql3." + infra, 3306 }
 		});
 	} else {
 		s_server_test.assign({ { "127.0.0.1", 13306 } });

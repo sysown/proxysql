@@ -1,0 +1,63 @@
+diff -ruN ../tmp/src/interfaces/libpq/fe-secure-openssl.c ./src/interfaces/libpq/fe-secure-openssl.c
+--- ../tmp/src/interfaces/libpq/fe-secure-openssl.c	2025-08-11 21:06:43.000000000 +0000
++++ ./src/interfaces/libpq/fe-secure-openssl.c	2026-04-03 00:00:00.000000000 +0000
+@@ -97,6 +97,8 @@
+
+ static PQsslKeyPassHook_OpenSSL_type PQsslKeyPassHook = NULL;
+ static int	ssl_protocol_version_to_openssl(const char *protocol);
++
++static PQsslKeyLogCallback_type PQsslKeyLogCB = NULL;
+
+ /* ------------------------------------------------------------ */
+ /*			 Procedures common to all secure sessions			*/
+@@ -972,6 +974,10 @@
+ 	/* Disable old protocol versions */
+ 	SSL_CTX_set_options(SSL_context, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3);
+
++	/* Set SSL keylog callback if configured (for TLS traffic decryption) */
++	if (PQsslKeyLogCB)
++		SSL_CTX_set_keylog_callback(SSL_context, (void(*)(const SSL*, const char*))PQsslKeyLogCB);
++
+ 	/* Set the minimum and maximum protocol versions if necessary */
+ 	if (conn->ssl_min_protocol_version &&
+ 		strlen(conn->ssl_min_protocol_version) != 0)
+@@ -1758,6 +1764,24 @@
+ 	return NULL;
+ }
+
++/*
++ * SSL Key Log callback support
++ *
++ * Global callback for writing TLS secrets to a keylog file.
++ * Follows the same pattern as PQsslKeyPassHook.
++ */
++PQsslKeyLogCallback_type
++PQgetSSLKeyLogCallback(void)
++{
++	return PQsslKeyLogCB;
++}
++
++void
++PQsetSSLKeyLogCallback(PQsslKeyLogCallback_type cb)
++{
++	PQsslKeyLogCB = cb;
++}
++
+ const char *const *
+ PQsslAttributeNames(PGconn *conn)
+ {
+diff -ruN ../tmp/src/interfaces/libpq/libpq-fe.h ./src/interfaces/libpq/libpq-fe.h
+--- ../tmp/src/interfaces/libpq/libpq-fe.h	2025-08-11 21:06:43.000000000 +0000
++++ ./src/interfaces/libpq/libpq-fe.h	2026-04-03 00:00:00.000000000 +0000
+@@ -669,6 +669,11 @@
+ extern void PQsetSSLKeyPassHook_OpenSSL(PQsslKeyPassHook_OpenSSL_type hook);
+ extern int	PQdefaultSSLKeyPassHook_OpenSSL(char *buf, int size, PGconn *conn);
+
++/* Support for SSL key log callback (TLS traffic decryption) */
++typedef void (*PQsslKeyLogCallback_type)(const void *ssl, const char *line);
++extern PQsslKeyLogCallback_type PQgetSSLKeyLogCallback(void);
++extern void PQsetSSLKeyLogCallback(PQsslKeyLogCallback_type cb);
++
+ #ifdef __cplusplus
+ }
+ #endif

@@ -326,9 +326,10 @@ class ProxySQLTester:
 
         return rc, logs, summary
 
-    def filtered_by_version(self, test_path, proxysql_v):
+    def filtered_by_version(self, test_path, proxysql_v, groups=None):
         filtered = (False, '')
 
+        # Check hardcoded version requirements (legacy)
         for tap_test in internal_tap_tests_versions:
             tap_test_n = tap_test[0]
             tap_test_v = tap_test[1]
@@ -337,6 +338,17 @@ class ProxySQLTester:
             if tap_test_n in test_path and smaller_version:
                 filtered = (True, tap_test_v)
                 break
+
+        # Check @proxysql_min_version tag from groups.json
+        if not filtered[0] and groups:
+            test_basename = os.path.basename(test_path)
+            test_groups = groups.get(test_basename, [])
+            for entry in test_groups:
+                if isinstance(entry, str) and entry.startswith("@proxysql_min_version:"):
+                    min_ver = entry.split(":", 1)[1]
+                    if version.parse(proxysql_v) < version.parse(min_ver):
+                        filtered = (True, min_ver)
+                    break
 
         return filtered
 
@@ -716,10 +728,10 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
                     continue
 
                 # filtering
-                f_res = self.filtered_by_version(fo_cmd, fmt_ver)
+                f_res = self.filtered_by_version(fo_cmd, fmt_ver, groups)
                 if f_res[0]:
                     log.info(f"{TAP} test {fo_num+1}/{len(tap_tests)} '{os.path.basename(fo_cmd)}' skipped.")
-                    log.debug(f"skip: It requires a bigger of the one being tested: ({fmt_ver} < {f_res[1]})")
+                    log.debug(f"skip: Requires ProxySQL >= {f_res[1]}, current version: {fmt_ver}")
                     summary.append((fo_cmd, None))
                     continue
 
@@ -1076,6 +1088,50 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
 
         # Restore the original environment config
         os.environ['TAP_WORKDIR'] = orig_workdir
+
+        # Safety net: if glob(*-t) in every TAP workdir returned zero
+        # binaries, ret_summary is empty. That almost always means the
+        # TAP test binaries were never built (e.g. CI-builds running the
+        # wrong make target, docker-compose volume not writing through
+        # to the host, or a broken sed rewrite of the build command),
+        # not that there are legitimately no tests to run. Before this
+        # safety net existed the pipeline would silently report 0/0
+        # PASS and exit 0, producing a fake-green TAP suite that hid
+        # real regressions for weeks.
+        #
+        # Rule: if TAP_GROUP is set and groups.json declares that group
+        # has N > 0 tests, but zero binaries were discovered across all
+        # workdirs, treat it as a hard failure. Version-filter skips and
+        # INCL/EXCL filters still produce summary entries with rc=None,
+        # so legitimate "everything skipped" runs are not affected -- only
+        # the "nothing was even found on disk" case trips the safety net.
+        if len(ret_summary) == 0:
+            tap_group = os.environ.get('TAP_GROUP', '')
+            expected_tests = 0
+            if tap_group:
+                groups_json_path = f"{WORKSPACE}/test/tap/groups/groups.json"
+                if os.path.isfile(groups_json_path):
+                    try:
+                        with open(groups_json_path) as jf:
+                            groups = json.load(jf)
+                        expected_tests = sum(
+                            1 for _, test_groups in groups.items()
+                            if tap_group in test_groups
+                        )
+                    except Exception as e:
+                        log.warning(f"Safety net: could not parse groups.json: {e}")
+            if not tap_group or expected_tests > 0:
+                log.critical(
+                    f"SAFETY NET FAIL: zero TAP test binaries were discovered "
+                    f"across all workdirs. TAP_GROUP='{tap_group}' "
+                    f"expects {expected_tests} tests per groups.json. "
+                    f"This typically means test/tap/tests/**/*-t binaries "
+                    f"were never built -- check the CI-builds log for "
+                    f"'dirname: missing operand' right after the build "
+                    f"container exits, or verify make ubuntu22-tap "
+                    f"actually produced binaries on the host filesystem."
+                )
+                ret_rc = max(ret_rc, 1)
 
         return ret_rc, ret_logs, ret_summary
 

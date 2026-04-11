@@ -487,6 +487,7 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 	init_coredump_struct();
 
 	proxysql_keylog_init();
+	proxysql_keylog_set_pgsql_callback();
 };
 
 void ProxySQL_GlobalVariables::process_opts_post() {

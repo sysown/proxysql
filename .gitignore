@@ -1,6 +1,9 @@
 # Internal Repos
 priv-infra/
 
+# Lint output (do not commit)
+lint/
+
 # direnv
 .envrc.local
 
@@ -82,6 +85,7 @@ src/*log*
 
 #test artifacts
 ci_infra_logs/
+src/coverage_reports/
 test/tap/tap/*.mri
 test/tap/tests/test_cluster_sync_config/test_cluster_sync_withmonitor/cluster_sync_node_stderr.txt
 
@@ -201,3 +205,6 @@ database_discovery_report.md
 scripts/mcp/DiscoveryAgent/ClaudeCode_Headless/tmp/
 test/tap/tests/test_cluster_sync_config/test_cluster_sync_nomonitor/cluster_sync_node_stderr.txt
 test/tap/tests/test_cluster_sync_config/test_cluster_sync_withmonitor/cluster_sync_node_stderr.txt
+
+# test-scripts runtime dependencies (created by run-tests-isolated.bash)
+test-scripts/deps/

@@ -14,9 +14,10 @@
  * Compiled only when PROXYSQLGENAI=1 (auto-detected from libproxysql.a).
  */
 
+#include "tap.h"
+
 #ifdef PROXYSQLGENAI
 
-#include "tap.h"
 #include "test_globals.h"
 #include "test_init.h"
 #include "proxysql.h"

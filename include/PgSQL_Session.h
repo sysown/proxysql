@@ -1,7 +1,7 @@
 #ifdef CLASS_BASE_SESSION_H
 
-#ifndef __CLASS_PGSQL_SESSION_H
-#define __CLASS_PGSQL_SESSION_H
+#ifndef PROXYSQL_PGSQL_SESSION_H
+#define PROXYSQL_PGSQL_SESSION_H
 
 #include <functional>
 #include <vector>
@@ -570,7 +570,7 @@ public:
 	//PgSQL_Backend* find_or_create_backend(int, PgSQL_Data_Stream* _myds = NULL);
 
 	void SQLite3_to_MySQL(SQLite3_result*, char*, int, MySQL_Protocol*, bool in_transaction = false, bool deprecate_eof_active = false) override;
-	void PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* conn, PgSQL_Data_Stream* _myds = NULL);
+	void PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* conn, PgSQL_Data_Stream* _myds = nullptr);
 	
 	//unsigned int NumActiveTransactions(bool check_savpoint = false);
 	//bool HasOfflineBackends();
@@ -636,5 +636,5 @@ private:
 
 
 
-#endif /* __CLASS_PGSQL_SESSION_H */
+#endif /* PROXYSQL_PGSQL_SESSION_H */
 #endif // CLASS_BASE_SESSION_H
