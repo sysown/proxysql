@@ -1485,7 +1485,265 @@ cell of a shared workflow. Contrast with `CI-maketest`, where the 6
 build flavors ARE matrix cells of one shared workflow. Both patterns
 exist in the repo for historical reasons.
 
-### 12.6 Sanity-check yourself
+### 12.6 Seeing what actually ran — the terminal flow
+
+The GitHub web UI for check runs is genuinely broken: if you click on a
+row in the PR "Checks" tab, the page you land on is a **check-run page**
+(`/runs/<id>`), which shows only a status card — name, conclusion, and
+a short summary — and nothing else. The "View more details on GitHub
+Actions" link on that page usually points back at the same page,
+because for auto-created check runs the API field `details_url` is set
+to the check-run URL itself and there is no server-side redirect to the
+underlying workflow run. The same is true of the "Details" button that
+appears at the right edge of each row in the PR Checks table — it also
+navigates to a check-run page, not to a job log page.
+
+This is not ProxySQL-specific; it is a long-standing GitHub UX papercut
+affecting anyone whose workflows use matrix jobs + `LouisBrunner/checks-action`
+or the GitHub-auto-created check runs. You will hit it every time you
+try to investigate a CI failure from a PR.
+
+**The terminal saves you.** Given any row from `gh pr checks <PR>`
+output, four commands reach the actual log lines — no web navigation at
+all.
+
+We will walk this on one concrete row. The row is the one from the PR
+#5596 status output we used earlier in the session:
+
+```
+✓  CI-trigger/CI-legacy-g1 / tests (mysql57) (pull_request)   35m14s   https://github.com/sysown/proxysql/runs/70903090156
+```
+
+Reading the row character-by-character:
+
+```
+✓  CI-trigger/CI-legacy-g1 / tests (mysql57) (pull_request)   35m14s   https://github.com/sysown/proxysql/runs/70903090156
+│  │         │            │                │                │         │
+│  │         │            │                │                │         └─ check-run URL (DEAD END — do NOT click)
+│  │         │            │                │                └─ total wall time
+│  │         │            │                └─ GitHub event that fired the cascade
+│  │         │            └─ job + matrix cell inside the workflow
+│  │         └─ the workflow that produced this check
+│  └─ top-of-chain trigger workflow (the cascade starts at CI-trigger)
+└─ status icon: ✓ success, ✗ failure, ○ queued, ● in_progress
+```
+
+Two things to extract:
+
+1. **Workflow name** = `CI-legacy-g1` (the piece after `CI-trigger/` and
+   before the first ` / `).
+2. **The check-run URL is worthless.** You will not click it or use it
+   for navigation — it is the dead-end page. `gh pr checks` prints it
+   because the API returns it, not because it is useful.
+
+#### Step 1 — list recent runs of the workflow
+
+```bash
+gh run list -R sysown/proxysql --workflow CI-legacy-g1 --limit 5
+```
+
+Output (trimmed for width; full lines are tab-separated):
+
+```
+status     concl    display title                                                       workflow      branch  event         run id       duration
+completed  success  v3.0_pgsql-copy-matcher-5568 CI-legacy-g1 09b97547fd19ad86045...    CI-legacy-g1  v3.0    workflow_run  24281031512  41m21s
+completed  failure  v3.0_pgsql-copy-matcher-5568 CI-legacy-g1 2abbc4f3135a57b819...     CI-legacy-g1  v3.0    workflow_run  24279934338  1m8s
+…
+```
+
+**The critical column is #3 — the display title.** Break it apart:
+
+```
+v3.0_pgsql-copy-matcher-5568 CI-legacy-g1 09b97547fd19ad86045783f63218fdcfa484a910
+│                            │            │
+│                            │            └─ full SHA of the PR commit you care about
+│                            └─ the workflow name
+└─ the branch name of the PR
+```
+
+**Why column 6 (`branch`) is a liar.** It says `v3.0`, not
+`v3.0_pgsql-copy-matcher-5568`. This is because `CI-legacy-g1` is fired
+via a `workflow_run` chain, and GitHub records `workflow_run`-triggered
+runs as belonging to the *default branch*, not the PR's branch. The
+run's metadata `headSha` (not shown in the default column layout) is
+also the v3.0 branch HEAD at cascade time, **not the PR commit**. This
+is the documented gotcha in §10.2 ("workflow_run chains use the
+triggering workflow's head_sha").
+
+**The only place in this output where the actual PR commit SHA appears
+is the display title**, because `CI-legacy-g1.yml`'s `run-name:` field
+explicitly injects it:
+
+```yaml
+run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
+```
+
+So to identify "which run belongs to my PR commit", **grep the display
+title for the first 8-12 characters of the PR's head SHA**:
+
+```bash
+gh run list -R sysown/proxysql --workflow CI-legacy-g1 --limit 20 \
+  | grep 09b97547
+```
+
+Or, for a scriptable extraction via `--json`:
+
+```bash
+gh run list -R sysown/proxysql --workflow CI-legacy-g1 --limit 20 \
+  --json databaseId,displayTitle,status,conclusion \
+  -q '.[] | select(.displayTitle | contains("09b97547")) | "\(.databaseId)\t\(.status)/\(.conclusion)\t\(.displayTitle)"'
+```
+
+Either way, you get **run id 24281031512**. Note that number for the
+next step.
+
+#### Step 2 — view the run's job tree
+
+```bash
+gh run view 24281031512 -R sysown/proxysql
+```
+
+Output:
+
+```
+✓ v3.0 CI-legacy-g1 · 24281031512
+Triggered via workflow_run about 1 hour ago
+
+JOBS
+✓ run / tests (mysql57) in 35m20s (ID 70902846188)
+
+ANNOTATIONS
+! Node.js 20 actions are deprecated. …
+
+For more information about the job, try: gh run view --job=70902846188
+View this run on GitHub: https://github.com/sysown/proxysql/actions/runs/24281031512
+```
+
+**Extract the job id:** `70902846188`.
+
+Notice the job name here is `run / tests (mysql57)` — **not**
+`CI-legacy-g1 / tests (mysql57)` like the check-run row. The prefix
+differs because check runs and jobs live in different namespaces
+(see §12.1 and §12.4). Specifically:
+
+- **Job name** prefix `run /` comes from the caller stub on `v3.0`,
+  whose job is literally `jobs.run:`.
+- **Check-run name** prefix `CI-legacy-g1 /` comes from the workflow's
+  `name:` field, used by `LouisBrunner/checks-action` as the first piece
+  of its `name:` template (see §12.4).
+
+The suffix `tests (mysql57)` comes from the reusable on `GH-Actions`
+(the reusable has `jobs.tests:` with a `matrix.infradb: [mysql57]`
+expansion), and both views agree on it because both read the same
+reusable workflow.
+
+If the run has multiple jobs — e.g. a real six-cell matrix like
+`CI-maketest` — each is listed here with its own id. Pick the one
+whose name matches the row you started from.
+
+#### Step 3 — get the logs
+
+Three flavors, depending on what you want:
+
+```bash
+# Only the steps that failed. This is what you reach for 95% of the time
+# when investigating a red check. Useless here (job succeeded) but
+# invaluable on real failures.
+gh run view --log-failed --job=70902846188 -R sysown/proxysql
+
+# Full log of the whole job, every step. Pipe through less/grep/awk.
+gh run view --log --job=70902846188 -R sysown/proxysql | less
+
+# Full log of the whole run (every job, every step). Use when you don't
+# yet know which job has the answer.
+gh run view 24281031512 -R sysown/proxysql --log
+```
+
+The log format is **tab-separated**:
+
+```
+<job-name>\t<step-name>\t<timestamp> <log line>
+```
+
+which means `awk -F'\t'` works naturally. A few idioms worth memorizing:
+
+```bash
+# Only lines from the step you care about
+gh run view --log --job=70902846188 -R sysown/proxysql \
+  | awk -F'\t' '$2 == "Run legacy-g1 tests"'
+
+# TAP result markers only
+gh run view --log --job=70902846188 -R sysown/proxysql \
+  | grep -E '(^|\t)(ok|not ok|# ) '
+
+# Just the tail
+gh run view --log --job=70902846188 -R sysown/proxysql | tail -100
+```
+
+#### The condensed cheat sheet
+
+From any row of `gh pr checks` to the actual log lines is this pattern.
+Memorize it; the web UI is not going to help you.
+
+```bash
+PR=5596
+REPO=sysown/proxysql
+HEAD=$(gh pr view $PR -R $REPO --json headRefOid -q .headRefOid)
+
+# 1. Extract workflow name from the check row you care about.
+#    Example row from `gh pr checks`:
+#      "CI-trigger/CI-legacy-g1 / tests (mysql57)"  →  CI-legacy-g1
+WF=CI-legacy-g1
+
+# 2. Find the run whose display title contains the PR head SHA.
+RUN_ID=$(gh run list -R $REPO --workflow "$WF" --limit 20 \
+  --json databaseId,displayTitle \
+  -q ".[] | select(.displayTitle | contains(\"${HEAD:0:12}\")) | .databaseId" \
+  | head -1)
+echo "run id: $RUN_ID"
+
+# 3. Find the job id inside that run.
+gh run view "$RUN_ID" -R $REPO
+#    → note the job id(s) printed under JOBS
+
+# 4. Get logs for the job.
+JOB_ID=…       # copy from step 3 output
+gh run view --log-failed --job="$JOB_ID" -R $REPO
+```
+
+Four commands. Everything else (the `/runs/<check_id>` URL, the
+"Details" button, the "View more details on GitHub Actions" link, the
+PR checks panel navigation) is noise you can ignore.
+
+#### Why the web UI cannot do this (short version)
+
+Three problems stacked on top of each other:
+
+1. **Check runs and workflow runs are different objects** in GitHub's
+   data model, attached to different endpoints, with different URL
+   shapes (`/runs/<id>` for check runs, `/actions/runs/<id>/job/<id>`
+   for job logs). There is no explicit `job_id` link on a check run —
+   you have to reconstruct the mapping by joining on `head_sha` +
+   `started_at` + `name`, which is what `gh` is implicitly doing under
+   the hood in step 2 above.
+2. **`details_url` is self-referential** on auto-created check runs:
+   the field points at the check-run page itself rather than at the
+   underlying job log page, and there is no redirect. Clicking "View
+   more details on GitHub Actions" often just reloads the same page.
+3. **For `workflow_run`-triggered cascades**, the workflow run's
+   top-level `headSha` is the default branch's HEAD, not the PR's
+   commit. So even tools that try to find "the workflow run for this
+   commit" by querying `gh run list --commit <PR_HEAD>` return nothing,
+   because no workflow run is tagged with that SHA as its metadata
+   `headSha`. The actual PR commit lives only in the `run-name`
+   string, which is why step 1 above searches `displayTitle`.
+
+All three issues together mean: **do not try to navigate from a check
+row to a job log through the web UI**. Use the four-step terminal flow
+every time. It is faster, more reliable, and leaves a command history
+you can paste into PR reviews.
+
+### 12.7 Sanity-check yourself
 
 If you understand the vocabulary, you should be able to answer each of
 these in one sentence. Answers after each question.
@@ -1516,10 +1774,22 @@ these in one sentence. Answers after each question.
    in the root `Makefile@v3.0`. The workflow picks the matrix value and
    invokes the Makefile target in docker-compose.
 
-If those five answers feel comfortable, you can close this section. If
-not, re-read the [nesting diagram](#122-the-full-nesting-visualized) and
-then the [two-branch diagram](#123-the-proxysql-two-branch-split-visualized)
-until they do.
+6. **"I see the row `CI-trigger/CI-legacy-g1 / tests (mysql57)` in my
+   PR checks and it failed. What commands do I run in my terminal to
+   see the logs of the failing step?"**
+   → (a) `gh run list -R sysown/proxysql --workflow CI-legacy-g1 --limit 20`
+   and find the run whose display title contains the first 8-12 chars
+   of my PR's head SHA → record `RUN_ID`. (b) `gh run view $RUN_ID -R sysown/proxysql`
+   and note the job id under `JOBS`. (c) `gh run view --log-failed --job=$JOB_ID -R sysown/proxysql`
+   for the failed-step output. I do **not** touch the `/runs/<check_id>`
+   URL from `gh pr checks`, nor the web UI "Details" button — both are
+   dead ends.
+
+If those six answers feel comfortable, you can close this section. If
+not, re-read the [nesting diagram](#122-the-full-nesting-visualized)
+and then the [two-branch diagram](#123-the-proxysql-two-branch-split-visualized)
+until they do; if the last question stumped you, re-read
+[§12.6 Seeing what actually ran](#126-seeing-what-actually-ran--the-terminal-flow).
 
 ---
 
