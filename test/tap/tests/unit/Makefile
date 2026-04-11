@@ -113,7 +113,7 @@ ifeq ($(UNAME_S),Linux)
 endif
 
 ifeq ($(PROXYSQLGENAI),1)
-	STATIC_LIBS += $(SQLITE3_LDIR)/../libsqlite_rembed.a $(SQLITE3_LDIR)/vec.o
+	STATIC_LIBS += $(SQLITE3_LDIR)/vec.o
 endif
 
 
