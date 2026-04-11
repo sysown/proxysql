@@ -1,10 +1,12 @@
 #include "ProxySQL_Plugin.h"
 #include "mysqlx_admin_schema.h"
+#include "mysqlx_config_store.h"
 #include "tap.h"
 #include "test_init.h"
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -48,8 +50,19 @@ void reset_mocks() {
 
 } // namespace
 
+struct MysqlxPluginContext {
+	ProxySQL_PluginServices* services { nullptr };
+	std::unique_ptr<MysqlxConfigStore> config_store {};
+	bool started { false };
+};
+
+MysqlxPluginContext& mysqlx_context() {
+	static MysqlxPluginContext ctx {};
+	return ctx;
+}
+
 int main() {
-	plan(15);
+	plan(25);
 
 	reset_mocks();
 
@@ -89,19 +102,40 @@ int main() {
 	   "registered_tables contains mysqlx_backend_endpoints");
 	ok(has_table("runtime_mysqlx_backend_endpoints"),
 	   "registered_tables contains runtime_mysqlx_backend_endpoints");
+	ok(has_table("mysqlx_variables"),
+	   "registered_tables contains mysqlx_variables");
+	ok(has_table("runtime_mysqlx_variables"),
+	   "registered_tables contains runtime_mysqlx_variables");
 	ok(has_table("stats_mysqlx_routes"),
 	   "registered_tables contains stats_mysqlx_routes");
 	ok(has_table("stats_mysqlx_processlist"),
 	   "registered_tables contains stats_mysqlx_processlist");
 
-	ok(registered_commands.size() == 6,
-	   "registered_commands has exactly 6 entries");
-	ok(has_command_starting_with("LOAD MYSQLX USERS"),
-	   "registered_commands contains command starting with LOAD MYSQLX USERS");
-	ok(has_command_starting_with("SAVE MYSQLX USERS"),
-	   "registered_commands contains command starting with SAVE MYSQLX USERS");
-	ok(has_command_starting_with("LOAD MYSQLX ROUTES"),
-	   "registered_commands contains command starting with LOAD MYSQLX ROUTES");
+	ok(registered_commands.size() == 16,
+	   "registered_commands has exactly 16 entries (8 runtime + 8 disk)");
+
+	ok(has_command_starting_with("LOAD MYSQLX USERS TO RUNTIME"),
+	   "registered_commands contains LOAD MYSQLX USERS TO RUNTIME");
+	ok(has_command_starting_with("SAVE MYSQLX USERS TO MEMORY"),
+	   "registered_commands contains SAVE MYSQLX USERS TO MEMORY");
+	ok(has_command_starting_with("LOAD MYSQLX ROUTES TO RUNTIME"),
+	   "registered_commands contains LOAD MYSQLX ROUTES TO RUNTIME");
+	ok(has_command_starting_with("SAVE MYSQLX ROUTES TO MEMORY"),
+	   "registered_commands contains SAVE MYSQLX ROUTES TO MEMORY");
+	ok(has_command_starting_with("LOAD MYSQLX USERS FROM DISK"),
+	   "registered_commands contains LOAD MYSQLX USERS FROM DISK");
+	ok(has_command_starting_with("SAVE MYSQLX USERS TO DISK"),
+	   "registered_commands contains SAVE MYSQLX USERS TO DISK");
+	ok(has_command_starting_with("LOAD MYSQLX ROUTES FROM DISK"),
+	   "registered_commands contains LOAD MYSQLX ROUTES FROM DISK");
+	ok(has_command_starting_with("SAVE MYSQLX ROUTES TO DISK"),
+	   "registered_commands contains SAVE MYSQLX ROUTES TO DISK");
+	ok(has_command_starting_with("LOAD MYSQLX BACKEND ENDPOINTS FROM DISK"),
+	   "registered_commands contains LOAD MYSQLX BACKEND ENDPOINTS FROM DISK");
+	ok(has_command_starting_with("LOAD MYSQLX VARIABLES FROM DISK"),
+	   "registered_commands contains LOAD MYSQLX VARIABLES FROM DISK");
+	ok(has_command_starting_with("SAVE MYSQLX VARIABLES TO DISK"),
+	   "registered_commands contains SAVE MYSQLX VARIABLES TO DISK");
 
 	return exit_status();
 }
