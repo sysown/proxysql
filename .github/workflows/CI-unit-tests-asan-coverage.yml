@@ -1,0 +1,277 @@
+name: CI-unit-tests-asan-coverage
+run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
+
+# Builds ProxySQL with PROXYSQLGENAI=1, WITHASAN=1 (forces NOJEMALLOC=1),
+# WITHGCOV=1, then builds and runs every unit test under
+# test/tap/tests/unit/. On success, publishes an LCOV coverage report.
+#
+# Unlike the other CI-taptests-* workflows this one does NOT require the
+# private proxysql/jenkins-build-scripts repo or any backend MySQL/Docker
+# infrastructure: unit tests link against libproxysql.a via the stub
+# test_globals.o and run as standalone binaries, so we build and test
+# directly on the runner.
+#
+# The workflow runs on CI-trigger completion to match the convention used
+# by the rest of the CI workflows in this directory, and also supports
+# workflow_dispatch for manual runs.
+#
+# Security note: every 'run:' step in this workflow uses only values from
+# env: (SHA/ASAN_OPTIONS/...) or GitHub-provided env vars like
+# $GITHUB_WORKSPACE. No untrusted user input (PR titles, issue bodies,
+# commit messages, branch names from forks, etc.) is ever interpolated
+# into a shell command, so there is no command-injection surface here.
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: [ CI-trigger ]
+    types: [ completed ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  SHA: ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
+  # ASAN limits leak reporting and lives alongside gcov instrumentation.
+  # - detect_leaks=0 because the current TAP unit tests were not written
+  #   leak-free; flip to 1 once the known leaks are cleaned up and this
+  #   workflow will immediately become a leak regression guard.
+  # - abort_on_error=1 makes ASAN produce a non-zero exit on the first
+  #   hard error (UAF, buffer overflow, uninit read, etc.).
+  # - symbolize=1 + print_stacktrace=1 give usable reports in CI logs.
+  ASAN_OPTIONS: "detect_leaks=0:abort_on_error=1:symbolize=1:print_stacktrace=1:halt_on_error=1"
+
+jobs:
+  unit-tests:
+    # Only run on success of CI-trigger (same gate as every other CI-*
+    # workflow in this directory), or on manual dispatch.
+    if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+
+    - uses: LouisBrunner/checks-action@v2.0.0
+      id: checks
+      if: always()
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        name: '${{ github.workflow }} / ${{ github.job }}'
+        repo: ${{ github.repository }}
+        sha: ${{ env.SHA }}
+        status: 'in_progress'
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ env.SHA }}
+        fetch-depth: 0
+        submodules: 'false'
+
+    - name: Relax ASLR for AddressSanitizer
+      # ASAN on recent kernels fails to reserve its shadow region when
+      # vm.mmap_rnd_bits is the default 32; include/makefiles_vars.mk
+      # explicitly warns about this. Lower it to 28.
+      run: sudo sysctl -w vm.mmap_rnd_bits=28
+
+    - name: Install build tools
+      run: |
+        sudo apt-get update
+        sudo apt-get -y install \
+          make automake cmake bzip2 g++ gcc git libtool wget patch pkg-config \
+          python3 python3-pip
+
+    - name: Install build dependencies
+      # Mirrors the Ubuntu list in INSTALL.md. libmysqlclient-dev is
+      # needed by some internal build-time helpers used by the vendored
+      # deps.
+      run: |
+        sudo apt-get -y install \
+          libssl-dev libgnutls28-dev libmysqlclient-dev \
+          libboost-all-dev libunwind8 libunwind-dev uuid-dev \
+          libncurses-dev libicu-dev libevent-dev libtirpc-dev \
+          ca-certificates
+
+    - name: Install coverage tooling
+      run: |
+        sudo apt-get -y install lcov
+        sudo pip3 install --break-system-packages fastcov || sudo pip3 install fastcov
+
+    - name: Verify Rust toolchain
+      # PROXYSQLGENAI=1 pulls in Rust-backed vendored deps. Ubuntu 24.04
+      # GitHub runners ship rustup/cargo/rustc out of the box; just
+      # sanity-check they are on PATH so deps/Makefile's detection fires.
+      run: |
+        rustc --version
+        cargo --version
+
+    - name: Build deps (PROXYSQLGENAI + ASAN + gcov)
+      # Deps are vendored third-party libraries; we don't need debug
+      # builds of them - the ASAN / gcov instrumentation we care about
+      # is in lib/ and src/ (ProxySQL's own code), which are built in
+      # the next step with 'make debug'.
+      env:
+        PROXYSQLGENAI: "1"
+        NOJEMALLOC: "1"
+        WITHASAN: "1"
+        WITHGCOV: "1"
+      run: |
+        make build_deps -j$(nproc)
+
+    - name: Build lib + src
+      env:
+        PROXYSQLGENAI: "1"
+        NOJEMALLOC: "1"
+        WITHASAN: "1"
+        WITHGCOV: "1"
+      run: |
+        make debug -j$(nproc)
+
+    - name: Build TAP unit tests
+      env:
+        PROXYSQLGENAI: "1"
+        NOJEMALLOC: "1"
+        WITHASAN: "1"
+        WITHGCOV: "1"
+      # The unit_tests target in test/tap/Makefile recurses only into
+      # test/tap/tests/unit/. We intentionally do NOT run
+      # `make build_tap_test_debug` here because that also builds the
+      # integration tests under test/tap/tests/ which require running
+      # backends to do anything useful.
+      run: |
+        cd test/tap && make unit_tests -j$(nproc)
+
+    - name: Baseline coverage snapshot
+      # Capture a zero-coverage baseline so lcov can compute deltas even
+      # for code paths never hit by the test run.
+      run: |
+        mkdir -p coverage
+        lcov --quiet --capture --initial \
+             --directory lib --directory src \
+             --output-file coverage/lcov-base.info \
+             --ignore-errors gcov,source || true
+
+    - name: Run unit tests under ASAN
+      id: run-unit
+      run: |
+        set +e
+        cd test/tap/tests/unit
+
+        mkdir -p "$GITHUB_WORKSPACE/unit-test-logs"
+        FAILED=()
+        PASSED=0
+
+        # Iterate every built unit-test binary. The Makefile's UNIT_TESTS
+        # list is the source of truth; anything that exists and is
+        # executable must run.
+        shopt -s nullglob
+        for t in *-t; do
+          [ -x "./$t" ] || continue
+          log="$GITHUB_WORKSPACE/unit-test-logs/${t}.log"
+          echo "::group::${t}"
+          ./"$t" > "$log" 2>&1
+          rc=$?
+          if [ $rc -eq 0 ]; then
+            PASSED=$((PASSED + 1))
+            echo "PASS: $t"
+          else
+            FAILED+=("$t (rc=$rc)")
+            echo "FAIL: $t (rc=$rc)"
+            tail -n 80 "$log"
+          fi
+          echo "::endgroup::"
+        done
+
+        echo
+        echo "======================================================================"
+        echo "Unit test summary: ${PASSED} passed, ${#FAILED[@]} failed"
+        echo "======================================================================"
+        if [ ${#FAILED[@]} -gt 0 ]; then
+          printf '  %s\n' "${FAILED[@]}"
+          {
+            echo "### Unit tests: ${PASSED} passed, ${#FAILED[@]} failed"
+            echo ""
+            printf -- '- %s\n' "${FAILED[@]}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+        fi
+
+        {
+          echo "### Unit tests: ${PASSED} passed, 0 failed"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Capture coverage
+      if: always()
+      run: |
+        lcov --quiet --capture \
+             --directory lib --directory src \
+             --output-file coverage/lcov-tests.info \
+             --ignore-errors gcov,source,mismatch || true
+
+        # Merge baseline + tests so lines never executed still show up.
+        if [ -s coverage/lcov-base.info ] && [ -s coverage/lcov-tests.info ]; then
+          lcov --quiet \
+               --add-tracefile coverage/lcov-base.info \
+               --add-tracefile coverage/lcov-tests.info \
+               --output-file coverage/lcov.info \
+               --ignore-errors mismatch || true
+        elif [ -s coverage/lcov-tests.info ]; then
+          cp coverage/lcov-tests.info coverage/lcov.info
+        fi
+
+        # Exclude third-party / generated paths so the report stays
+        # focused on ProxySQL's own lib/ and src/.
+        if [ -s coverage/lcov.info ]; then
+          lcov --quiet --remove coverage/lcov.info \
+               '/usr/*' '*/deps/*' '*/test/*' \
+               --output-file coverage/lcov.info \
+               --ignore-errors unused || true
+        fi
+
+        if [ -s coverage/lcov.info ]; then
+          genhtml --quiet \
+                  --output-directory coverage/html \
+                  --title "ProxySQL unit tests coverage" \
+                  --demangle-cpp \
+                  --legend \
+                  coverage/lcov.info \
+                  --ignore-errors source,category || true
+          lcov --summary coverage/lcov.info || true
+        fi
+
+    - name: Upload coverage LCOV file
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: unit-tests-coverage-lcov-${{ env.SHA }}
+        path: coverage/lcov.info
+        if-no-files-found: warn
+
+    - name: Upload coverage HTML report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: unit-tests-coverage-html-${{ env.SHA }}
+        path: coverage/html/
+        if-no-files-found: warn
+
+    - name: Upload unit-test logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: unit-tests-logs-${{ env.SHA }}
+        path: unit-test-logs/
+        if-no-files-found: warn
+
+    - uses: LouisBrunner/checks-action@v2.0.0
+      if: always()
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        check_id: ${{ steps.checks.outputs.check_id }}
+        repo: ${{ github.repository }}
+        sha: ${{ env.SHA }}
+        conclusion: ${{ job.status }}
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
