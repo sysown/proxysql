@@ -223,10 +223,19 @@ int test_scenario_1(MYSQL* proxy_admin, const CommandLine& cl) {
 	MYSQL_QUERY__(proxy_admin, "DELETE FROM mysql_replication_hostgroups");
 	MYSQL_QUERY__(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
-	// Set default_hostgroup=0 to match writer_hostgroup used in this test
+	// Set default_hostgroup to match writer_hostgroup (WHG) used in this
+	// test. WHG defaults to 0 for the legacy infra but is overridden to
+	// 2900 by the mysql84-g4 group via TAP_MYSQL8_BACKEND_HG — see
+	// init_hostgroups() above. If we hardcode 0 here, the mysql84 group
+	// routes the test's BEGIN query to an empty hostgroup 0 and times
+	// out at 10 s. A previous fix (26c5a2572) hardcoded 0 because it
+	// predated the mysql84 hostgroup migration in 4f9ab49e7 — this
+	// commit finishes that fix by making the default_hostgroup follow
+	// WHG at runtime.
 	{
 		std::string update_user;
-		string_format("UPDATE mysql_users SET default_hostgroup=0 WHERE username='%s'", update_user, cl.root_username);
+		string_format("UPDATE mysql_users SET default_hostgroup=%d WHERE username='%s'",
+		              update_user, WHG, cl.root_username);
 		MYSQL_QUERY__(proxy_admin, update_user.c_str());
 		MYSQL_QUERY__(proxy_admin, "LOAD MYSQL USERS TO RUNTIME");
 	}
@@ -384,10 +393,19 @@ int test_scenario_2(MYSQL* proxy_admin, const CommandLine& cl) {
 	MYSQL_QUERY__(proxy_admin, "DELETE FROM mysql_replication_hostgroups");
 	MYSQL_QUERY__(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
-	// Set default_hostgroup=0 to match writer_hostgroup used in this test
+	// Set default_hostgroup to match writer_hostgroup (WHG) used in this
+	// test. WHG defaults to 0 for the legacy infra but is overridden to
+	// 2900 by the mysql84-g4 group via TAP_MYSQL8_BACKEND_HG — see
+	// init_hostgroups() above. If we hardcode 0 here, the mysql84 group
+	// routes the test's BEGIN query to an empty hostgroup 0 and times
+	// out at 10 s. A previous fix (26c5a2572) hardcoded 0 because it
+	// predated the mysql84 hostgroup migration in 4f9ab49e7 — this
+	// commit finishes that fix by making the default_hostgroup follow
+	// WHG at runtime.
 	{
 		std::string update_user;
-		string_format("UPDATE mysql_users SET default_hostgroup=0 WHERE username='%s'", update_user, cl.root_username);
+		string_format("UPDATE mysql_users SET default_hostgroup=%d WHERE username='%s'",
+		              update_user, WHG, cl.root_username);
 		MYSQL_QUERY__(proxy_admin, update_user.c_str());
 		MYSQL_QUERY__(proxy_admin, "LOAD MYSQL USERS TO RUNTIME");
 	}
