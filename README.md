@@ -13,7 +13,7 @@ If you're looking for ProxySQL itself, switch to the default branch:
 
 Only one directory matters on this branch:
 
-```
+```text
 .github/workflows/
 ├── ci-trigger.yml              ← Entry point; babysits CI-builds
 ├── ci-builds.yml               ← Builds ProxySQL in Docker, caches artefacts
@@ -38,8 +38,8 @@ are what trigger on push/PR; the files here are the actual job bodies.
 
 All other files on this branch (source code, docs, test directories, etc.)
 are **vestigial**. They're snapshots from an old point in history that
-happen to still exist on this branch because git never garbage-collected
-them. **Do not edit them here.** Any changes to source code, TAP tests,
+remain on this branch because they're still tracked here and nobody
+has removed them. **Do not edit them here.** Any changes to source code, TAP tests,
 infra scripts, or documentation belong on `v3.0`.
 
 ---
