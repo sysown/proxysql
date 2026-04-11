@@ -1365,9 +1365,15 @@ void ProxySQL_Admin::materialize_plugin_tables() {
 	merge_new(tables_defs_config, plugin_manager->tables(ProxySQL_PluginDBKind::config_db));
 	merge_new(tables_defs_stats, plugin_manager->tables(ProxySQL_PluginDBKind::stats_db));
 
-	check_and_build_standard_tables(admindb, tables_defs_admin);
-	check_and_build_standard_tables(configdb, tables_defs_config);
-	check_and_build_standard_tables(statsdb, tables_defs_stats);
+	for (const auto& def : plugin_manager->tables(ProxySQL_PluginDBKind::admin_db)) {
+		admindb->execute(def.table_def);
+	}
+	for (const auto& def : plugin_manager->tables(ProxySQL_PluginDBKind::config_db)) {
+		configdb->execute(def.table_def);
+	}
+	for (const auto& def : plugin_manager->tables(ProxySQL_PluginDBKind::stats_db)) {
+		statsdb->execute(def.table_def);
+	}
 
 	__attach_db(admindb, configdb, (char *)"disk");
 	__attach_db(admindb, statsdb, (char *)"stats");
