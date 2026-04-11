@@ -74,18 +74,34 @@ fn_signal () {
 		fi
 	fi
 
-	# The Scheduler Hack: If we can't use docker, we ask ProxySQL to kill itself
-	# ProxySQL scheduler waits for the first interval before execution.
-	# We use /bin/sh -c to find the correct PID (worker process) and signal it.
+	# The Scheduler Hack: If we can't use docker (e.g. we're running
+	# inside the test-runner container, which has no docker CLI), we ask
+	# ProxySQL to kill itself. We install a scheduler row with interval
+	# 500ms so it fires very quickly. We use /bin/sh -c to find the
+	# correct PID (worker process) and signal it.
+	#
+	# NOTE: the caller is responsible for tearing the scheduler row down
+	# via fn_signal_cleanup() after it has observed the effect it was
+	# waiting for. We intentionally do NOT delete the row here - that
+	# would race against the scheduler actually firing.
 	echo "msg: # Using Scheduler Hack to send ${sig} to ProxySQL..."
-	fn_padmin "INSERT OR REPLACE INTO scheduler (id, active, interval_ms, filename, arg1, arg2) VALUES (9999, 1, 2000, '/bin/sh', '-c', 'kill -${sig#SIG} \$(pidof proxysql)');"
+	fn_padmin "INSERT OR REPLACE INTO scheduler (id, active, interval_ms, filename, arg1, arg2) VALUES (9999, 1, 500, '/bin/sh', '-c', 'kill -${sig#SIG} \$(pidof proxysql)');"
 	fn_padmin "LOAD SCHEDULER TO RUNTIME;"
-	sleep 4
-	fn_padmin "DELETE FROM scheduler WHERE id=9999; LOAD SCHEDULER TO RUNTIME;"
+}
+
+fn_signal_cleanup () {
+	# Tear down any scheduler row installed by fn_signal. Safe to call
+	# unconditionally - if fn_signal used the docker path instead of the
+	# scheduler hack, this is a no-op on a non-existent row.
+	fn_padmin "DELETE FROM scheduler WHERE id=9999;" >/dev/null 2>&1 || true
+	fn_padmin "LOAD SCHEDULER TO RUNTIME;" >/dev/null 2>&1 || true
 }
 
 fn_get_rotations () {
-	sleep 1
+	# Raw count of rotation markers in the current proxysql.log. No
+	# sleep() here - callers that are racing against an in-progress
+	# rotation should use fn_wait_for_rotation_at_least instead, which
+	# polls in a bounded loop rather than relying on a fixed sleep.
 	# Try local mount first (most efficient in CI)
 	if [ -f "$PROXYSQL_LOGS/proxysql.log" ]; then
 		cat "$PROXYSQL_LOGS/proxysql.log" | grep '\[INFO\] ProxySQL version' | wc -l
@@ -99,14 +115,53 @@ fn_get_rotations () {
 	fi
 }
 
+fn_wait_for_rotation_at_least () {
+	# Poll fn_get_rotations every 500 ms until the observed count is
+	# >= $1, or until $2 seconds have elapsed. Prints the final observed
+	# count to stdout so the caller can compare against its expected
+	# value (even on timeout).
+	#
+	# This replaces the `fn_padmin COMMAND ; sleep N ; count` pattern
+	# that used to race on slow CI runners: the sleep window was fixed
+	# at 1-5 s but the actual rotation latency varies with runner load,
+	# and any sleep just shy of the latency silently produced a false
+	# failure. By polling we convert a timing race into a max-latency
+	# bound - on a fast machine the test is as quick as before, on a
+	# slow one it waits up to max_seconds instead of failing.
+	local target=${1}
+	local max_seconds=${2:-30}
+	local i=0
+	local count=0
+	local max_iterations=$(( max_seconds * 2 ))
+	while [ $i -lt $max_iterations ]; do
+		count=$(fn_get_rotations)
+		if [ "$count" -ge "$target" ]; then
+			echo $count
+			return 0
+		fi
+		sleep 0.5
+		i=$(( i + 1 ))
+	done
+	# Timeout. Emit whatever we last observed so fn_check_res will
+	# report a useful "BASELINE X expected Y got Z" message rather than
+	# an empty RES.
+	echo $count
+	return 1
+}
+
 fn_check_res () {
 	DONE=$(( $DONE + 1 ))
 	PLAN=$([[ $PLAN -lt $DONE ]] && echo $DONE || echo $PLAN)
-	if [[ $RES -ne $(( $BASELINE + 1)) ]]; then
-		echo "msg: not ok $DONE - command '$1' - initial BASELINE: $BASELINE - expected BASELINE + 1 : got $RES"
+	# Accept any count >= BASELINE+1. The test asks "did this command
+	# trigger at least one rotation" - two rotations (e.g. if the
+	# scheduler hack fired twice before fn_signal_cleanup tore it down)
+	# is still a pass signal. It used to be `-ne` which was stricter
+	# than the actual test semantics and contributed to flakiness.
+	if [[ $RES -lt $(( $BASELINE + 1)) ]]; then
+		echo "msg: not ok $DONE - command '$1' - BASELINE: $BASELINE - expected at least $(( $BASELINE + 1)) : got $RES"
 		FAIL=$(( $FAIL + 1 ))
 	else
-		echo "msg: ok $DONE - command '$1' - initial BASELINE: $BASELINE - expected BASELINE + 1 : got $RES"
+		echo "msg: ok $DONE - command '$1' - BASELINE: $BASELINE - got $RES (>= BASELINE + 1)"
 	fi
 }
 
@@ -118,13 +173,14 @@ fn_plan
 # test PROXYSQL FLUSH LOGS
 BASELINE=$(fn_get_rotations)
 fn_padmin "PROXYSQL FLUSH LOGS;"
-RES=$(fn_get_rotations)
+RES=$(fn_wait_for_rotation_at_least $(( $BASELINE + 1 )) 30)
 fn_check_res "PROXYSQL FLUSH LOGS;"
 
 # test SIGUSR1 signal
 BASELINE=$(fn_get_rotations)
 fn_signal "SIGUSR1"
-RES=$(fn_get_rotations)
+RES=$(fn_wait_for_rotation_at_least $(( $BASELINE + 1 )) 30)
+fn_signal_cleanup
 fn_check_res "kill -s SIGUSR1 \$PID"
 
 
