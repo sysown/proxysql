@@ -366,7 +366,5 @@ int main(int argc, char** argv) {
 	test_malformed_packet();
 	test_integrity_check(cl);
 
-cleanup:
-
 	return exit_status();
 }
