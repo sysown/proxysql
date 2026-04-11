@@ -201,7 +201,13 @@ jobs:
           # (52 binaries × 170 MB = 8.8 GB). CI-unittests on v3.0 is
           # disabled for now; when it's re-enabled it will need its own
           # rebuild strategy (probably a full docker-compose rebuild).
-          find test/tap/tests/unit -type f -name '*-t' -delete
+          #
+          # sudo is required: files under test/tap/tests/unit/ and test/deps/
+          # are created inside the docker build container running as root,
+          # and the host-side runner user can't always remove root-owned
+          # files under root-owned subdirectories (unlink needs write access
+          # to the parent directory, which the runner doesn't always have).
+          sudo find test/tap/tests/unit -type f -name '*-t' -delete
           echo ">>> Deleted ${UNIT_COUNT} unit test binaries from the cache payload"
 
           # Delete test/deps (~2.8 GB on disk). These are the test-framework
@@ -241,8 +247,11 @@ jobs:
           fi
           echo ">>> test/deps runtime-dependency check passed"
 
+          # sudo required: test/deps contents are owned by root (created
+          # inside the docker build container). See comment above on the
+          # unit test delete.
           if [ -d test/deps ]; then
-            rm -rf test/deps
+            sudo rm -rf test/deps
             echo ">>> Deleted test/deps from the cache payload"
           fi
 
