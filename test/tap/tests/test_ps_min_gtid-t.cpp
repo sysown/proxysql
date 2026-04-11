@@ -20,31 +20,7 @@
 #include "command_line.h"
 #include "utils.h"
 
-static const char* EXPECTED_PS_QUERY = "SELECT id FROM test.ps_min_gtid_fc WHERE id=?";
-
-static int setup(MYSQL* admin, MYSQL* proxy, const CommandLine& cl) {
-	diag("========== Setup ==========");
-
-	MYSQL_QUERY_T(proxy, "CREATE DATABASE IF NOT EXISTS test");
-	MYSQL_QUERY_T(proxy, "DROP TABLE IF EXISTS test.ps_min_gtid_fc");
-	MYSQL_QUERY_T(proxy, "CREATE TABLE test.ps_min_gtid_fc (id INT PRIMARY KEY)");
-	MYSQL_QUERY_T(proxy, "INSERT INTO test.ps_min_gtid_fc VALUES (1)");
-
-	return 0;
-}
-
-static int cleanup(MYSQL* admin, MYSQL* proxy) {
-	diag("========== Teardown ==========");
-
-	MYSQL_QUERY_T(admin, "DELETE FROM mysql_query_rules WHERE rule_id=42");
-	MYSQL_QUERY_T(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
-	MYSQL_QUERY_T(admin, "SET mysql-query_processor_first_comment_parsing = 2");
-	MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
-
-	MYSQL_QUERY_T(proxy, "DROP TABLE IF EXISTS test.ps_min_gtid_fc");
-
-	return 0;
-}
+static const char* EXPECTED_PS_QUERY = "SELECT id FROM test.ps_min_gtid WHERE id=?";
 
 static int get_ps_cache_count(MYSQL* admin) {
 	std::string query = std::string("SELECT COUNT(*) FROM stats.stats_mysql_prepared_statements_info")
@@ -64,7 +40,7 @@ static int run_prepared_stmt(
 	unsigned int& stmt_errno,
 	std::string& stmt_errmsg
 ) {
-	std::string query = "/*+ ;min_gtid=" + gtid + " */ SELECT id FROM test.ps_min_gtid_fc WHERE id=?";
+	std::string query = "/*+ ;min_gtid=" + gtid + " */ SELECT id FROM test.ps_min_gtid WHERE id=?";
 
 	MYSQL_STMT* stmt = mysql_stmt_init(proxy);
 	if (!stmt) {
@@ -73,7 +49,6 @@ static int run_prepared_stmt(
 		diag("mysql_stmt_init() failed: errno=%u, error=%s", stmt_errno, stmt_errmsg.c_str());
 		return -1;
 	}
-
 
 	if (mysql_stmt_prepare(stmt, query.c_str(), query.length()) != 0) {
 		stmt_errno = mysql_stmt_errno(stmt);
@@ -202,13 +177,15 @@ int main(int, char**) {
 		return exit_status();
 	}
 
-	cleanup(admin, proxy);
-
-	setup(admin, proxy, cl);
+	diag("========== Setup ==========");
+	MYSQL_QUERY_T(proxy, "CREATE DATABASE IF NOT EXISTS test");
+	MYSQL_QUERY_T(proxy, "DROP TABLE IF EXISTS test.ps_min_gtid");
+	MYSQL_QUERY_T(proxy, "CREATE TABLE test.ps_min_gtid (id INT PRIMARY KEY)");
+	MYSQL_QUERY_T(proxy, "INSERT INTO test.ps_min_gtid VALUES (1)");
 
 	std::string server_uuid;
 	uint64_t max_trxid = 0;
-	if (get_backend_gtid_position(admin, proxy, cl.mysql_host, cl.mysql_port, server_uuid, max_trxid) != 0) {
+	if (get_backend_gtid_position(admin, cl.mysql_host, cl.mysql_port, server_uuid, max_trxid) != 0) {
 		mysql_close(proxy);
 		mysql_close(admin);
 		BAIL_OUT("No GTID info available from stats.stats_mysql_gtid_executed for backend %s:%d",
@@ -226,6 +203,8 @@ int main(int, char**) {
 	test_prepare_stmt_valid_gtid(admin, proxy, current_gtid, (ps_cache_count + 1));
 	test_prepare_stmt_future_gtid(admin, proxy, future_gtid, (ps_cache_count + 1));
 
+	diag("========== Teardown ==========");
+	MYSQL_QUERY_T(proxy, "DROP TABLE IF EXISTS test.ps_min_gtid");
 	mysql_close(proxy);
 	mysql_close(admin);
 

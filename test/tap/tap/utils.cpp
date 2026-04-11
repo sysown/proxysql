@@ -2568,7 +2568,6 @@ void spawn_noise(const CommandLine& cl, const std::string& tool_path, const std:
 
 int get_backend_gtid_position(
 	MYSQL* admin,
-	MYSQL* proxy,
 	const std::string& backend_host,
 	uint32_t backend_port,
 	std::string& server_uuid,
@@ -2602,94 +2601,70 @@ int get_backend_gtid_position(
 		return true;
 	};
 
-	auto parse_gtid_for_uuid = [&](const std::string& gtid_executed_raw, const std::string& target_uuid) -> bool {
+	// A GTID executed set may contain multiple comma-separated GTID entries,
+	// we parse only the first GTID entry from the set.
+	auto parse_first_gtid = [&](const std::string& gtid_executed_raw) -> bool {
 		std::string gtid_executed = trim(gtid_executed_raw);
-		if (gtid_executed.empty() || target_uuid.empty()) return false;
+		if (gtid_executed.empty()) return false;
 
+		size_t comma_pos = gtid_executed.find(',');
+		std::string group = trim(
+			(comma_pos == std::string::npos) ? gtid_executed : gtid_executed.substr(0, comma_pos)
+		);
+		if (group.empty()) return false;
+
+		size_t colon_pos = group.find(':');
+		if (colon_pos == std::string::npos || colon_pos == 0 || colon_pos == group.size() - 1) {
+			return false;
+		}
+
+		server_uuid = strip_dashes(group.substr(0, colon_pos));
+		if (server_uuid.empty()) return false;
+
+		std::string intervals_str = group.substr(colon_pos + 1);
 		max_trxid = 0;
 		bool found = false;
 
-		size_t pos = 0;
-		while (pos < gtid_executed.size()) {
-			size_t comma_pos = gtid_executed.find(',', pos);
-			std::string group = (comma_pos == std::string::npos)
-				? gtid_executed.substr(pos)
-				: gtid_executed.substr(pos, comma_pos - pos);
+		size_t ipos = 0;
+		while (ipos < intervals_str.size()) {
+			size_t next_colon = intervals_str.find(':', ipos);
+			std::string token = trim(
+				(next_colon == std::string::npos) ? intervals_str.substr(ipos) : intervals_str.substr(ipos, next_colon - ipos)
+			);
 
-			group = trim(group);
-			size_t colon_pos = group.find(':');
-			if (colon_pos == std::string::npos || colon_pos == 0) {
-				pos = (comma_pos == std::string::npos) ? std::string::npos : comma_pos + 1;
-				continue;
-			}
-
-			std::string uuid = strip_dashes(group.substr(0, colon_pos));
-			if (uuid != target_uuid) {
-				pos = (comma_pos == std::string::npos) ? std::string::npos : comma_pos + 1;
-				continue;
-			}
-
-			std::string intervals_str = group.substr(colon_pos + 1);
-			size_t ipos = 0;
-			while (ipos < intervals_str.size()) {
-				size_t next_colon = intervals_str.find(':', ipos);
-				std::string token = (next_colon == std::string::npos)
-					? intervals_str.substr(ipos)
-					: intervals_str.substr(ipos, next_colon - ipos);
-
-				if (!token.empty()) {
-					uint64_t interval_end = 0;
-					if (parse_interval_end(token, interval_end)) {
-						if (interval_end > max_trxid) {
-							max_trxid = interval_end;
-						}
-						found = true;
-					}
+			if (!token.empty()) {
+				uint64_t interval_end = 0;
+				if (!parse_interval_end(token, interval_end)) {
+					return false;
 				}
-
-				ipos = (next_colon == std::string::npos) ? std::string::npos : next_colon + 1;
+				if (interval_end > max_trxid) {
+					max_trxid = interval_end;
+				}
+				found = true;
 			}
 
-			pos = (comma_pos == std::string::npos) ? std::string::npos : comma_pos + 1;
+			if (next_colon == std::string::npos) {
+				break;
+			}
+			ipos = next_colon + 1;
 		}
 
 		return found;
 	};
 
-	std::string query_uuid = "SELECT @@server_uuid";
-	int rc = mysql_query(proxy, query_uuid.c_str());
-	if (rc != 0) {
-		diag("Failed to query @@server_uuid from backend: %s", mysql_error(proxy));
-		return -1;
-	}
-
-	MYSQL_RES* res = mysql_store_result(proxy);
-	if (!res) {
-		diag("Failed to store result for @@server_uuid query");
-		return -1;
-	}
-
-	MYSQL_ROW row = mysql_fetch_row(res);
-	if (!row || !row[0]) {
-		mysql_free_result(res);
-		diag("No rows returned for @@server_uuid query");
-		return -1;
-	}
-
-	server_uuid = strip_dashes(row[0]);
-	mysql_free_result(res);
-
 	std::string gtid_query = "SELECT gtid_executed FROM stats.stats_mysql_gtid_executed"
 		" WHERE hostname='" + backend_host + "' AND port=" + std::to_string(backend_port) +
 		" AND gtid_executed IS NOT NULL AND gtid_executed != ''";
 
-	rc = mysql_query(admin, gtid_query.c_str());
+	int rc = mysql_query(admin, gtid_query.c_str());
 	if (rc != 0) {
 		diag("Failed to query gtid_executed from stats: %s", mysql_error(admin));
 		return -1;
 	}
 
-	res = mysql_store_result(admin);
+	MYSQL_RES* res = mysql_store_result(admin);
+	MYSQL_ROW row = nullptr;
+
 	if (!res) {
 		diag("Failed to store result for gtid_executed query");
 		return -1;
@@ -2705,8 +2680,8 @@ int get_backend_gtid_position(
 	std::string gtid_executed = row[0];
 	mysql_free_result(res);
 
-	if (!parse_gtid_for_uuid(gtid_executed, server_uuid)) {
-		diag("Failed to find UUID %s in gtid_executed: %s", server_uuid.c_str(), gtid_executed.c_str());
+	if (!parse_first_gtid(gtid_executed)) {
+		diag("Failed to parse GTID entry from gtid_executed: %s", gtid_executed.c_str());
 		return -1;
 	}
 

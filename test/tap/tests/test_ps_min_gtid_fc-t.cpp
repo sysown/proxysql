@@ -24,9 +24,8 @@
 #include "command_line.h"
 #include "utils.h"
 
-
-static const int DEDICATED_HG = 59999;
-static const char* EXPECTED_PS_QUERY = "/*+  */ SELECT id FROM test.ps_min_gtid_fc WHERE id=?";
+static const int TEST_HG = 59999;
+static const char* EXP_PS_CACHE_QUERY = "/*+  */ SELECT id FROM test.ps_min_gtid_fc WHERE id=?";
 
 static int setup(MYSQL* admin, MYSQL* proxy, const CommandLine& cl) {
 	diag("========== Setup ==========");
@@ -39,7 +38,7 @@ static int setup(MYSQL* admin, MYSQL* proxy, const CommandLine& cl) {
 	char server_query[512];
 	snprintf(server_query, sizeof(server_query),
 		"INSERT OR REPLACE INTO mysql_servers (hostgroup_id, hostname, port) VALUES (%d, '%s', %d)",
-		DEDICATED_HG, cl.mysql_host, cl.mysql_port);
+		TEST_HG, cl.mysql_host, cl.mysql_port);
 	MYSQL_QUERY_T(admin, server_query);
 	MYSQL_QUERY_T(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
@@ -47,8 +46,8 @@ static int setup(MYSQL* admin, MYSQL* proxy, const CommandLine& cl) {
 	MYSQL_QUERY_T(admin, "DELETE FROM mysql_query_rules WHERE rule_id=42");
 	snprintf(rule_query, sizeof(rule_query),
 		"INSERT INTO mysql_query_rules (rule_id, active, match_pattern, replace_pattern, apply, destination_hostgroup, comment)"
-		" VALUES (42, 1, ';min_gtid=[:\\-\\w]+', '', 1, %d, 'Remove min_gtid annotation and route to dedicated HG')",
-		DEDICATED_HG);
+		" VALUES (42, 1, ';min_gtid=[:\\-\\w]+', '', 1, %d, 'Strip min_gtid annotation and route to HG %d')",
+		TEST_HG, TEST_HG);
 	MYSQL_QUERY_T(admin, rule_query);
 	MYSQL_QUERY_T(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
@@ -68,7 +67,7 @@ static int cleanup(MYSQL* admin, MYSQL* proxy) {
 
 	char del_query[256];
 	snprintf(del_query, sizeof(del_query),
-		"DELETE FROM mysql_servers WHERE hostgroup_id=%d", DEDICATED_HG);
+		"DELETE FROM mysql_servers WHERE hostgroup_id=%d", TEST_HG);
 	MYSQL_QUERY_T(admin, del_query);
 	MYSQL_QUERY_T(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
@@ -79,7 +78,7 @@ static int cleanup(MYSQL* admin, MYSQL* proxy) {
 
 static int get_ps_cache_count(MYSQL* admin) {
 	std::string query = std::string("SELECT COUNT(*) FROM stats.stats_mysql_prepared_statements_info")
-		+ " WHERE query='" + EXPECTED_PS_QUERY + "'";
+		+ " WHERE query='" + EXP_PS_CACHE_QUERY + "'";
 
 	ext_val_t<int32_t> result = mysql_query_ext_val(admin, query, int32_t(0));
 	if (result.err != 0) {
@@ -235,7 +234,7 @@ int main(int, char**) {
 
 	std::string server_uuid;
 	uint64_t max_trxid = 0;
-	if (get_backend_gtid_position(admin, proxy, cl.mysql_host, cl.mysql_port, server_uuid, max_trxid) != 0) {
+	if (get_backend_gtid_position(admin, cl.mysql_host, cl.mysql_port, server_uuid, max_trxid) != 0) {
 		mysql_close(proxy);
 		mysql_close(admin);
 		BAIL_OUT("No GTID info available from stats.stats_mysql_gtid_executed for backend %s:%d",
