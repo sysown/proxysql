@@ -171,7 +171,81 @@ jobs:
             cat tap-matrix-${TESTS##*/}.txt
             echo "===================="
           done
-          
+
+          # ------------------------------------------------------------
+          # Cache size control: prune artifacts the _test cache doesn't
+          # need before it gets saved. Without this pruning, the _test
+          # cache grows to ~4 GB compressed (~16 GB uncompressed), and
+          # two concurrent cascades (each saving one ubuntu22-tap cache
+          # and one ubuntu24-tap-genai-gcov cache) exceed GitHub's 10 GB
+          # per-repo cache quota. LRU eviction then deletes caches
+          # between when CI-builds saves them and when downstream test
+          # workflows try to restore them, causing "Cache restore test"
+          # to fail and the entire TAP pipeline to break.
+          # ------------------------------------------------------------
+
+          # Compile-time safety check: make sure unit tests actually got
+          # built. If they didn't, the build step above silently ignored
+          # a compile error and the delete below would "succeed" on an
+          # empty set. Fail loudly instead.
+          UNIT_COUNT=$(find test/tap/tests/unit -type f -name '*-t' -executable 2>/dev/null | wc -l)
+          echo ">>> Compiled ${UNIT_COUNT} unit test binaries"
+          if [ "${UNIT_COUNT}" -lt 1 ]; then
+            echo "ERROR: no unit test binaries found at test/tap/tests/unit/*-t"
+            echo "       This typically means a unit test failed to compile."
+            exit 1
+          fi
+
+          # Delete unit test binaries before the cache save. Each is ~170 MB
+          # because they statically link libproxysql.a in debug mode
+          # (52 binaries × 170 MB = 8.8 GB). CI-unittests on v3.0 is
+          # disabled for now; when it's re-enabled it will need its own
+          # rebuild strategy (probably a full docker-compose rebuild).
+          find test/tap/tests/unit -type f -name '*-t' -delete
+          echo ">>> Deleted ${UNIT_COUNT} unit test binaries from the cache payload"
+
+          # Delete test/deps (~2.8 GB on disk). These are the test-framework
+          # dependencies (mariadb-connector-c, mysql-connector-c 5.7,
+          # mysql-connector-c 8.4) that TAP binaries statically link against
+          # at build time. Nothing at runtime looks at test/deps — the code
+          # it contains already lives inside the compiled *-t binaries.
+          # Dropping it from the cache saves ~700 MB per variant after
+          # zstd compression.
+          #
+          # Safety check: verify no TAP binary dynamically links against
+          # libraries that would be under test/deps, or has a RUNPATH /
+          # RPATH pointing at test/deps. If this check fails, someone has
+          # added a test that dynamically links to a test/deps library
+          # and deleting test/deps will break that test at runtime (with
+          # a cryptic .so-not-found error). Fail loudly in CI-builds now
+          # instead of silently corrupting the cache.
+          BAD_BINS=""
+          while IFS= read -r b; do
+            deps_needed=$(readelf -d "$b" 2>/dev/null | grep -E "NEEDED.*\b(libmysqlclient|libjson_binlog|libstrings_shared|libmariadbclient)\.so" || true)
+            deps_rpath=$(readelf -d "$b" 2>/dev/null | grep -E "R(UN)?PATH.*test/deps" || true)
+            if [ -n "${deps_needed}" ] || [ -n "${deps_rpath}" ]; then
+              BAD_BINS="${BAD_BINS}${b}\n"
+              echo ">>> UNSAFE: $(basename ${b})"
+              [ -n "${deps_needed}" ] && echo "    ${deps_needed}"
+              [ -n "${deps_rpath}" ] && echo "    ${deps_rpath}"
+            fi
+          done < <(find test/tap/tests test/tap/tests_with_deps -type f -name '*-t' 2>/dev/null)
+          if [ -n "${BAD_BINS}" ]; then
+            echo "ERROR: the following TAP binaries depend on test/deps at runtime:"
+            printf "${BAD_BINS}"
+            echo "       Cannot drop test/deps from the _test cache without"
+            echo "       breaking these tests. Fix the Makefile to link"
+            echo "       them statically, or update ci-builds.yml to keep"
+            echo "       test/deps in the cache."
+            exit 1
+          fi
+          echo ">>> test/deps runtime-dependency check passed"
+
+          if [ -d test/deps ]; then
+            rm -rf test/deps
+            echo ">>> Deleted test/deps from the cache payload"
+          fi
+
         elif [[ "${{ matrix.type }}" =~ "-test" ]]; then
           TYPE=${{ matrix.type }}
           # build TYPE
