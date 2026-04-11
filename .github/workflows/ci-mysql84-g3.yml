@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        infradb: [ 'mysql57' ]
+        infradb: [ 'mysql84' ]
     env:
       BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu22-tap_src
       MATRIX: '(${{ matrix.infradb }})'
