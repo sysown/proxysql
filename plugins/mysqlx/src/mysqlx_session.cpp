@@ -36,7 +36,8 @@ MysqlxSession::MysqlxSession()
 	, target_port_(0)
 	, start_time_(0)
 	, last_active_time_(0)
-	, response_state_(RESP_IDLE) {
+	, response_state_(RESP_IDLE)
+	, tls_mode_(TLS_OFF) {
 }
 
 MysqlxSession::~MysqlxSession() {
@@ -635,6 +636,12 @@ void MysqlxSession::handler_session_closing() {
 }
 
 void MysqlxSession::handler_tls_accept_init() {
+	if (tls_mode_ == TLS_PASSTHROUGH) {
+		status_ = CONNECTING_CLIENT;
+		to_process = true;
+		return;
+	}
+
 	if (!client_ds_.ssl_init_done()) {
 		Mysqlx_Thread* thread = static_cast<Mysqlx_Thread*>(thread_ptr_);
 		SSL_CTX* ctx = thread ? thread->get_ssl_ctx() : nullptr;
@@ -713,7 +720,7 @@ void MysqlxSession::handler_connecting_server() {
 		backend_conn_->set_backend_user(username_.c_str());
 		backend_conn_->set_backend_schema(schema_.c_str());
 
-		if (client_ds_.is_encrypted()) {
+		if (client_ds_.is_encrypted() && tls_mode_ != TLS_PASSTHROUGH) {
 			Mysqlx_Thread* thread = static_cast<Mysqlx_Thread*>(thread_ptr_);
 			if (thread && thread->get_ssl_ctx()) {
 				backend_conn_->set_backend_tls_required(true);

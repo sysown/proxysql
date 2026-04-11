@@ -29,6 +29,12 @@ enum MysqlxResponseState {
 	RESP_WAITING_SESS_RESET
 };
 
+enum MysqlxTlsMode {
+	TLS_OFF = 0,
+	TLS_TERMINATE,
+	TLS_PASSTHROUGH
+};
+
 class MysqlxSession {
 public:
 	enum Status {
@@ -75,6 +81,8 @@ public:
 	MysqlxConnection*& backend_conn() { return backend_conn_; }
 
 	void set_credential_lookup(MysqlxCredentialLookup lookup) { credential_lookup_ = lookup; }
+	void set_tls_mode(MysqlxTlsMode mode) { tls_mode_ = mode; }
+	MysqlxTlsMode get_tls_mode() const { return tls_mode_; }
 	uint64_t get_start_time() const { return start_time_; }
 	uint64_t get_last_active_time() const { return last_active_time_; }
 	void set_last_active_time(uint64_t t) { last_active_time_ = t; }
@@ -126,6 +134,7 @@ private:
 	uint64_t start_time_;
 	uint64_t last_active_time_;
 	MysqlxResponseState response_state_;
+	MysqlxTlsMode tls_mode_;
 };
 
 #endif
