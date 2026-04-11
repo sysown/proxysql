@@ -41,7 +41,7 @@ ProxySQL CI uses a **two-tier, two-branch** workflow split:
 Every test workflow you see in the GitHub Actions UI is a **pair** of files —
 one on each branch — that must be kept in sync.
 
-```
+```text
 branch: v3.0                                 branch: GH-Actions
   .github/workflows/CI-legacy-g1.yml    ──►    .github/workflows/ci-legacy-g1.yml
                  ▲                                         ▲
@@ -208,7 +208,7 @@ sequenceDiagram
 
 ### Sequence (the full cascade)
 
-```
+```text
 git push / open PR
   │
   ├─► CI-trigger (on: push, pull_request)  ← only this one is push-triggered
@@ -480,6 +480,17 @@ jobs:
 A new group file is cut from `ci-legacy-g4.yml` by changing **only**:
 
 * `name:` → `CI-<group>`
+* `matrix.infradb: [ 'mysql57' ]` → the primary backend of the new group
+  (e.g. `[ 'mysql84' ]` for `mysql84-g3`, `[ 'mysql57' ]` for `legacy-g1`).
+  This value is **cosmetic for routing** — `ensure-infras.bash` ignores
+  it and picks the real backends from
+  `test/tap/groups/<base-group>/infras.lst` — **but it is displayed** in
+  the PR UI via `env.MATRIX`, which is interpolated into the
+  `LouisBrunner/checks-action` step's `name` field
+  (`${{ github.workflow }} / ${{ github.job }} ${{ env.MATRIX }}`). If
+  you leave it as `mysql57` on a mysql84 workflow, the check run will
+  show up as `CI-mysql84-g3 / tests (mysql57)`, which misleads
+  reviewers. Set it to the real primary backend.
 * `INFRA_ID="ci-<group>"` (in steps 7, 8, 9)
 * `TAP_GROUP="<group>"` (in steps 7, 8, 9)
 * Step name `Run <group> tests`
@@ -544,7 +555,7 @@ keyed by `{SHA}_{dist}_{type}_{suffix}`:
 Example: for commit `abc123` built by matrix entry `ubuntu22, -tap`, the
 keys are:
 
-```
+```text
 abc123_ubuntu22-tap_bin
 abc123_ubuntu22-tap_src
 abc123_ubuntu22-tap_test
@@ -585,7 +596,7 @@ tests that require a newer ProxySQL than is being tested.
 
 Each *base group* has a directory under `test/tap/groups/`:
 
-```
+```text
 test/tap/groups/
   legacy/
     env.sh            # exports DEFAULT_MYSQL_INFRA, DEFAULT_PGSQL_INFRA, …
@@ -758,7 +769,7 @@ will run it automatically.
 
 ### 2. Group directory — `test/tap/groups/mysql90/` (on `v3.0`)
 
-```
+```text
 test/tap/groups/mysql90/
 ├── env.sh        # export DEFAULT_MYSQL_INFRA="infra-mysql90"
 └── infras.lst    # infra-mysql90
@@ -769,13 +780,17 @@ test/tap/groups/mysql90/
 
 ### 3. Reusable workflow — `ci-mysql90-g1.yml` (on `GH-Actions`)
 
-Cut from `ci-legacy-g4.yml`, change only `name:`, `INFRA_ID`, `TAP_GROUP`,
-and `docker logs proxysql.<id>`. Use `sed`:
+Cut from `ci-legacy-g4.yml`, change `name:`, `INFRA_ID`, `TAP_GROUP`,
+`docker logs proxysql.<id>`, and `matrix.infradb` (see
+[What a sibling differs in](#what-a-sibling-eg-ci-legacy-g1yml-differs-in)
+above for why `infradb` matters). Use `sed`:
 
 ```bash
 # on the GH-Actions branch:
 cd .github/workflows
-sed "s/legacy-g4/mysql90-g1/g" ci-legacy-g4.yml > ci-mysql90-g1.yml
+sed -e "s/legacy-g4/mysql90-g1/g" \
+    -e "s/infradb: \[ 'mysql57' \]/infradb: [ 'mysql90' ]/" \
+    ci-legacy-g4.yml > ci-mysql90-g1.yml
 # then manually drop the TAP_USE_NOISE=1 line unless you want it
 python3 -c "import yaml; yaml.safe_load(open('ci-mysql90-g1.yml'))"   # sanity check
 ```
@@ -837,7 +852,7 @@ If you see a run where the `select` job completes in 3 seconds, the
 45+ minutes before failing, the matrix came back empty. Check the
 `select` job log for:
 
-```
+```text
 matrix=[ ]
 ```
 
@@ -890,7 +905,7 @@ repo-wide cleanup across all workflows — don't introduce it piecemeal.
 
 ### Step 1: identify which layer failed
 
-```
+```text
 push / PR
    │
    ├─ CI-trigger failed?        → the push/PR itself has a problem
