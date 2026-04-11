@@ -25,6 +25,7 @@ public:
 		BACKEND_AUTH_CAPABILITIES_GET_SENT,
 		BACKEND_AUTH_CAPABILITIES_RECV,
 		BACKEND_AUTH_CAPABILITIES_SET_SENT,
+		BACKEND_AUTH_TLS_HANDSHAKE,
 		BACKEND_AUTH_AUTHENTICATE_START_SENT,
 		BACKEND_AUTH_CHALLENGE_RECV,
 		BACKEND_AUTH_CONTINUE_SENT,
@@ -80,8 +81,13 @@ public:
 	void set_connect_timeout(uint64_t ms) { connect_timeout_ms_ = ms; }
 	uint64_t get_connect_timeout() const { return connect_timeout_ms_; }
 
+	void set_backend_tls_required(bool r) { backend_tls_required_ = r; }
+	bool is_backend_tls_required() const { return backend_tls_required_; }
+	void set_ssl_ctx(SSL_CTX* ctx) { backend_ssl_ctx_ = ctx; }
+
 	void init_backend_ds(int fd);
 	int step_auth();
+	int send_authenticate_start();
 	MysqlxDataStream& backend_ds() { return backend_ds_; }
 
 private:
@@ -105,6 +111,8 @@ private:
 	std::string backend_schema_;
 	std::vector<uint8_t> backend_challenge_;
 	MysqlxDataStream backend_ds_;
+	bool backend_tls_required_;
+	SSL_CTX* backend_ssl_ctx_;
 };
 
 #endif

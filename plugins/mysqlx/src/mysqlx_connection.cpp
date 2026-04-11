@@ -19,7 +19,8 @@ MysqlxConnection::MysqlxConnection()
 	: state_(CREATED), auth_state_(BACKEND_AUTH_NOT_STARTED), fd_(-1), hostgroup_(-1), port_(0),
 	  reusable_(false), in_transaction_(false),
 	  has_prepared_stmt_(false), last_used_time_(0),
-	  connect_timeout_ms_(10000), connect_start_time_(0) {}
+	  connect_timeout_ms_(10000), connect_start_time_(0),
+	  backend_tls_required_(false), backend_ssl_ctx_(nullptr) {}
 
 MysqlxConnection::~MysqlxConnection() {
 	if (fd_ >= 0) {
@@ -77,6 +78,26 @@ void MysqlxConnection::init_backend_ds(int fd) {
 	backend_ds_.init(XDS_BACKEND, fd);
 }
 
+int MysqlxConnection::send_authenticate_start() {
+	Mysqlx::Session::AuthenticateStart auth_start;
+	auth_start.set_mech_name("MYSQL41");
+	auth_start.set_auth_data(backend_schema_ + std::string("\0", 1) + backend_user_ + std::string("\0", 1));
+	std::string s;
+	auth_start.SerializeToString(&s);
+	uint32_t plen = static_cast<uint32_t>(s.size()) + 1;
+	std::vector<uint8_t> buf(4 + plen);
+	buf[0] = plen & 0xFF; buf[1] = (plen >> 8) & 0xFF;
+	buf[2] = (plen >> 16) & 0xFF; buf[3] = (plen >> 24) & 0xFF;
+	buf[4] = Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_START;
+	memcpy(buf.data() + 5, s.data(), s.size());
+	if (backend_ds_.write_raw(buf.data(), buf.size()) != static_cast<ssize_t>(buf.size())) {
+		auth_state_ = BACKEND_AUTH_ERROR;
+		return -1;
+	}
+	auth_state_ = BACKEND_AUTH_AUTHENTICATE_START_SENT;
+	return 1;
+}
+
 int MysqlxConnection::step_auth() {
 	if (auth_state_ == BACKEND_AUTH_NOT_STARTED) {
 		uint8_t cap_get[] = {0x01, 0x00, 0x00, 0x00, 0x01};
@@ -111,6 +132,16 @@ int MysqlxConnection::step_auth() {
 		v->set_type(Mysqlx::Datatypes::Any::SCALAR);
 		v->mutable_scalar()->set_type(Mysqlx::Datatypes::Scalar::V_STRING);
 		v->mutable_scalar()->mutable_v_string()->set_value("MYSQL41");
+
+		if (backend_tls_required_ && backend_ssl_ctx_) {
+			auto* tls_cap = cap_set.mutable_capabilities()->add_capabilities();
+			tls_cap->set_name("tls");
+			auto* tls_val = tls_cap->mutable_value();
+			tls_val->set_type(Mysqlx::Datatypes::Any::SCALAR);
+			tls_val->mutable_scalar()->set_type(Mysqlx::Datatypes::Scalar::V_BOOL);
+			tls_val->mutable_scalar()->set_v_bool(true);
+		}
+
 		std::string s;
 		cap_set.SerializeToString(&s);
 		uint32_t plen = static_cast<uint32_t>(s.size()) + 1;
@@ -136,22 +167,30 @@ int MysqlxConnection::step_auth() {
 			return -1;
 		}
 
-		Mysqlx::Session::AuthenticateStart auth_start;
-		auth_start.set_mech_name("MYSQL41");
-		auth_start.set_auth_data(backend_schema_ + std::string("\0", 1) + backend_user_ + std::string("\0", 1));
-		std::string s;
-		auth_start.SerializeToString(&s);
-		uint32_t plen = static_cast<uint32_t>(s.size()) + 1;
-		std::vector<uint8_t> buf(4 + plen);
-		buf[0] = plen & 0xFF; buf[1] = (plen >> 8) & 0xFF;
-		buf[2] = (plen >> 16) & 0xFF; buf[3] = (plen >> 24) & 0xFF;
-		buf[4] = Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_START;
-		memcpy(buf.data() + 5, s.data(), s.size());
-		if (backend_ds_.write_raw(buf.data(), buf.size()) != static_cast<ssize_t>(buf.size())) {
+		if (backend_tls_required_ && backend_ssl_ctx_) {
+			backend_ds_.init_ssl_connect(backend_ssl_ctx_);
+			auth_state_ = BACKEND_AUTH_TLS_HANDSHAKE;
+			return 1;
+		}
+
+		return send_authenticate_start();
+	}
+
+	if (auth_state_ == BACKEND_AUTH_TLS_HANDSHAKE) {
+		if (!backend_ds_.ssl_init_done()) {
 			auth_state_ = BACKEND_AUTH_ERROR;
 			return -1;
 		}
-		auth_state_ = BACKEND_AUTH_AUTHENTICATE_START_SENT;
+		backend_ds_.read_from_net();
+		if (backend_ds_.do_ssl_handshake()) {
+			backend_ds_.flush_ssl_write_buf();
+			return send_authenticate_start();
+		}
+		backend_ds_.flush_ssl_write_buf();
+		if (backend_ds_.ssl_handshake_failed()) {
+			auth_state_ = BACKEND_AUTH_ERROR;
+			return -1;
+		}
 		return 1;
 	}
 

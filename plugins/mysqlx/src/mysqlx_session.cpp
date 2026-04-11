@@ -713,6 +713,14 @@ void MysqlxSession::handler_connecting_server() {
 		backend_conn_->set_backend_user(username_.c_str());
 		backend_conn_->set_backend_schema(schema_.c_str());
 
+		if (client_ds_.is_encrypted()) {
+			Mysqlx_Thread* thread = static_cast<Mysqlx_Thread*>(thread_ptr_);
+			if (thread && thread->get_ssl_ctx()) {
+				backend_conn_->set_backend_tls_required(true);
+				backend_conn_->set_ssl_ctx(thread->get_ssl_ctx());
+			}
+		}
+
 		if (credential_lookup_) {
 			MysqlxCredentials creds = credential_lookup_(username_);
 			backend_conn_->set_backend_password(creds.password_hash.c_str());
@@ -726,7 +734,12 @@ void MysqlxSession::handler_connecting_server() {
 			return;
 		}
 		if (auth_rc == -1) {
-			send_error(1045, "Backend authentication failed");
+			if (backend_conn_->get_auth_state() == MysqlxConnection::BACKEND_AUTH_TLS_HANDSHAKE ||
+			    backend_conn_->backend_ds().ssl_handshake_failed()) {
+				send_error(3152, "Backend TLS handshake failed");
+			} else {
+				send_error(1045, "Backend authentication failed");
+			}
 			delete backend_conn_; backend_conn_ = nullptr;
 			status_ = X_SESSION_CLOSING; healthy = false;
 			return;
