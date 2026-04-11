@@ -18,6 +18,7 @@
  *    2.4 Exercise all backend conns via trxs, exhausting the conn-pool, no errors should take place.
  */
 
+#include <cerrno>
 #include <cstring>
 #include <fcntl.h>
 #include <poll.h>
@@ -148,20 +149,29 @@ void* create_ssl_conn_inv_cert(void* arg) {
 	CommandLine& cl = th_args->in_args.cl;
 
 	MYSQL* myconn = mysql_init(NULL);
+	if (!myconn) {
+		fprintf(stderr, "File %s, line %d, Error: mysql_init failed\n", __FILE__, __LINE__);
+		return NULL;
+	}
 	mysql_options(myconn, MYSQL_OPT_NONBLOCK, 0);
 
 	char* inv_cert_path = tempnam(nullptr, "tap");
+	if (!inv_cert_path) {
+		fprintf(stderr, "File %s, line %d, Error: tempnam failed\n", __FILE__, __LINE__);
+		mysql_close(myconn);
+		return NULL;
+	}
 	diag("Setting invalid CERT for conn with tmp file   path=%s", inv_cert_path);
 	mysql_ssl_set(myconn, NULL, NULL, inv_cert_path, NULL, NULL);
 
-	MYSQL* ret = nullptr;
 	diag("Starting 'MySQL' connection with invalid CERT   thread=%ld", pthread_self());
 
 	if (!mysql_real_connect(myconn, cl.host, cl.username, cl.password, NULL, cl.port, NULL, CLIENT_SSL)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(myconn));
-		return NULL;
 	}
 
+	mysql_close(myconn);
+	free(inv_cert_path);
 	return NULL;
 }
 
@@ -180,26 +190,44 @@ void* create_ssl_conn_missing_cert(void* arg) {
 	CommandLine& cl = th_args->in_args.cl;
 
 	MYSQL* myconn = mysql_init(NULL);
+	if (!myconn) {
+		fprintf(stderr, "File %s, line %d, Error: mysql_init failed\n", __FILE__, __LINE__);
+		return NULL;
+	}
 	mysql_options(myconn, MYSQL_OPT_NONBLOCK, 0);
 
 	char* inv_cert_path = tempnam(nullptr, "tap");
-	FILE *tmp_file = fopen(inv_cert_path, "w");
-	fprintf(tmp_file, inv_cert);
+	if (!inv_cert_path) {
+		fprintf(stderr, "File %s, line %d, Error: tempnam failed\n", __FILE__, __LINE__);
+		mysql_close(myconn);
+		return NULL;
+	}
+	FILE* tmp_file = fopen(inv_cert_path, "w");
+	if (!tmp_file) {
+		fprintf(stderr, "File %s, line %d, Error: fopen('%s') failed: %s\n",
+			__FILE__, __LINE__, inv_cert_path, strerror(errno));
+		mysql_close(myconn);
+		free(inv_cert_path);
+		return NULL;
+	}
+	// Use an explicit format string; inv_cert is a const buffer but passing it
+	// as the format argument is a format-string pattern smell.
+	fprintf(tmp_file, "%s", inv_cert);
 	fflush(tmp_file);
+	fclose(tmp_file);
 
 	diag("Setting invalid CERT for conn with tmp file   path=%s", inv_cert_path);
 	mysql_ssl_set(myconn, NULL, NULL, inv_cert_path, NULL, NULL);
 
-	MYSQL* ret = nullptr;
 	diag("Starting 'MySQL' connection with invalid CERT   thread=%ld", pthread_self());
 
 	if (!mysql_real_connect(myconn, cl.host, cl.username, cl.password, NULL, cl.port, NULL, CLIENT_SSL)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(myconn));
-		return NULL;
 	}
 
-	fclose(tmp_file);
-
+	mysql_close(myconn);
+	unlink(inv_cert_path);
+	free(inv_cert_path);
 	return NULL;
 }
 
@@ -349,6 +377,10 @@ void* force_ssl_pre_handshake_failure(void* arg) {
 
 MYSQL* create_server_conn(CommandLine& cl) {
 	MYSQL* server = mysql_init(NULL);
+	if (!server) {
+		diag("mysql_init failed for backend MySQL connection");
+		return NULL;
+	}
 
 	diag("Connecting to backend MySQL at %s:%d as %s", cl.mysql_host, cl.mysql_port, cl.mysql_username);
 	if (
@@ -367,6 +399,7 @@ MYSQL* create_server_conn(CommandLine& cl) {
 			"Failed to create direct backend conn to MySQL   host=%s port=%d error=%s",
 			cl.mysql_host, cl.mysql_port, mysql_error(server)
 		);
+		mysql_close(server);
 		return NULL;
 	}
 
@@ -380,6 +413,7 @@ int create_test_database(CommandLine& cl, const string& name) {
 	const string q { "CREATE DATABASE IF NOT EXISTS " + name };
 	if (mysql_query_t(server, q.c_str())) {
 		diag("Query failed to execute   query=%s err=%s", q.c_str(), mysql_error(server));
+		mysql_close(server);
 		return EXIT_FAILURE;
 	}
 
@@ -410,18 +444,30 @@ pair<uint32_t,vector<MYSQL*>> warmup_conn_pool(CommandLine& cl, uint32_t CONNS_T
 
 	vector<MYSQL*> conns {};
 
-	for (int i = 0; i < CONNS_TOTAL; i++) {
+	// Helper that closes everything opened so far on the error paths, so we
+	// don't leak both the in-flight MYSQL handle and the already-pushed ones.
+	auto cleanup_and_fail = [&conns](MYSQL* current, uint32_t code) -> pair<uint32_t,vector<MYSQL*>> {
+		if (current) mysql_close(current);
+		for (MYSQL* c : conns) { if (c) mysql_close(c); }
+		return { code, {} };
+	};
+
+	for (uint32_t i = 0; i < CONNS_TOTAL; i++) {
 		MYSQL* myconn = mysql_init(NULL);
+		if (!myconn) {
+			diag("mysql_init failed during conn-pool warmup");
+			return cleanup_and_fail(nullptr, EXIT_FAILURE);
+		}
 
 		if (i % 20 == 0) {
-			diag("Connecting to ProxySQL frontend for warmup at %s:%d as %s (Conn %d/%d)", cl.host, cl.port, cl.username, i+1, CONNS_TOTAL);
+			diag("Connecting to ProxySQL frontend for warmup at %s:%d as %s (Conn %u/%u)", cl.host, cl.port, cl.username, i+1, CONNS_TOTAL);
 		}
 		if (!mysql_real_connect(myconn, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 			diag(
 				"Failed to connect to ProxySQL frontend   addr=%s port=%d user=%s pass=%s err=%s",
 				cl.host, cl.port, cl.username, cl.password, mysql_error(myconn)
 			);
-			return { EXIT_FAILURE, {} };
+			return cleanup_and_fail(myconn, EXIT_FAILURE);
 		}
 
 		const vector<const char*> CONN_CREATE_QUERIES {
@@ -433,7 +479,8 @@ pair<uint32_t,vector<MYSQL*>> warmup_conn_pool(CommandLine& cl, uint32_t CONNS_T
 		for (const char* q : CONN_CREATE_QUERIES) {
 			if (mysql_query_t(myconn, q)) {
 				diag("Query failed to execute   query=%s err=%s", q, mysql_error(myconn));
-				return { mysql_errno(myconn), {} };
+				uint32_t err_code = mysql_errno(myconn);
+				return cleanup_and_fail(myconn, err_code);
 			}
 		}
 
@@ -485,6 +532,7 @@ int clean_conn_pool(MYSQL* admin) {
 		MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_connection_pool");
 		MYSQL_RES* myres = mysql_store_result(admin);
 		diag("stats_mysql_connection_pool:\n%s", dump_as_table(myres).c_str());
+		mysql_free_result(myres);
 	}
 
 	const string COND_CONN_CLEANUP {
@@ -497,6 +545,7 @@ int clean_conn_pool(MYSQL* admin) {
 			MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_connection_pool");
 			MYSQL_RES* myres = mysql_store_result(admin);
 			diag("stats_mysql_connection_pool:\n%s", dump_as_table(myres).c_str());
+			mysql_free_result(myres);
 		}
 
 		diag("Waiting for backend connections failed   res:'%d'", w_res);
@@ -510,6 +559,7 @@ int clean_conn_pool(MYSQL* admin) {
 		MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_connection_pool");
 		MYSQL_RES* myres = mysql_store_result(admin);
 		diag("stats_mysql_connection_pool:\n%s", dump_as_table(myres).c_str());
+		mysql_free_result(myres);
 	}
 
 	return EXIT_SUCCESS;
