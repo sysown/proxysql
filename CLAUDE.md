@@ -132,7 +132,7 @@ MySQL and PostgreSQL share parallel class hierarchies with the same architecture
 - `src/main.cpp` — Entry point, daemon init, thread spawning (~95K lines).
 - `test/tap/` — TAP test framework and tests.
 - `test/infra/` — Docker-based test environments.
-- `.github/workflows/` — CI/CD pipelines (selftests, TAP tests, package builds, CodeQL).
+- `.github/workflows/` — CI/CD pipelines (selftests, TAP tests, package builds, CodeQL). **See `doc/GH-Actions/README.md` for the architecture overview** — ProxySQL uses a two-branch caller/reusable split (`CI-*.yml` on `v3.0`, `ci-*.yml` on the `GH-Actions` branch) and the doc is the authoritative reference for how it fits together.
 
 ## Agent Guidelines
 
