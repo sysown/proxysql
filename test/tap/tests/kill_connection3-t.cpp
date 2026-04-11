@@ -22,16 +22,31 @@ const int NUM_CONNS = 35;
 MYSQL * conns[NUM_CONNS];
 unsigned long mythreadid[NUM_CONNS];
 
+// Close any connection already stored in the global conns[] array. Used to
+// release connections that are about to be overwritten and on error paths
+// so partially-opened batches don't leak.
+static void close_all_conns() {
+	for (int i = 0; i < NUM_CONNS; i++) {
+		if (conns[i]) {
+			mysql_close(conns[i]);
+			conns[i] = NULL;
+		}
+	}
+}
+
 int create_connections(CommandLine& cl) {
 	for (int i = 0; i < NUM_CONNS ; i++) {
 		MYSQL * mysql = mysql_init(NULL);
 		if (!mysql) {
-			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
+			fprintf(stderr, "File %s, line %d, Error: mysql_init failed\n", __FILE__, __LINE__);
+			close_all_conns();
 			return exit_status();
 		}
 
 		if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
+			mysql_close(mysql);
+			close_all_conns();
 			return exit_status();
 		}
 		conns[i] = mysql;
@@ -42,12 +57,17 @@ int create_connections(CommandLine& cl) {
 int find_tids() {
 	for (int i = 0; i < NUM_CONNS ; i++) {
 		MYSQL * mysql = conns[i];
-		unsigned long tid;
+		unsigned long tid = 0;  // initialize: avoid uninit read if loop empty
 		MYSQL_ROW row;
 		MYSQL_QUERY(mysql, "SELECT CONNECTION_ID()");
 		MYSQL_RES * proxy_res = mysql_store_result(mysql);
+		if (!proxy_res) {
+			fprintf(stderr, "File %s, line %d, Error: mysql_store_result returned NULL: %s\n",
+				__FILE__, __LINE__, mysql_error(mysql));
+			return EXIT_FAILURE;
+		}
 		while ((row = mysql_fetch_row(proxy_res))) {
-			tid = atoll(row[0]);
+			if (row[0] != NULL) { tid = atoll(row[0]); }
 		}
 		mysql_free_result(proxy_res);
 		ok(tid == mysql_thread_id(mysql), "tid: %lu, mysql_thread_id(): %lu", tid, mysql_thread_id(mysql));
@@ -84,12 +104,14 @@ int main(int argc, char** argv) {
 	MYSQL* proxysql_admin = mysql_init(NULL);
 	// Initialize connections
 	if (!proxysql_admin) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
+		fprintf(stderr, "File %s, line %d, Error: mysql_init failed for 'proxysql_admin'\n",
+			__FILE__, __LINE__);
 		return -1;
 	}
 
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
+		mysql_close(proxysql_admin);
 		return -1;
 	}
 
@@ -102,6 +124,7 @@ int main(int argc, char** argv) {
 	int rc = 0;
 	rc = create_connections(cl);
 	if (rc != 0) {
+		mysql_close(proxysql_admin);
 		return exit_status();
 	}
 
@@ -115,11 +138,15 @@ int main(int argc, char** argv) {
 		if (i == 0) {
 			if (create_table_test_sbtest1(10,mysql)) {
 				fprintf(stderr, "File %s, line %d, Error: create_table_test_sbtest1() failed\n", __FILE__, __LINE__);
+				close_all_conns();
+				mysql_close(proxysql_admin);
 				return exit_status();
 			}
 		} else {
 			if (add_more_rows_test_sbtest1(10,mysql)) {
 				fprintf(stderr, "File %s, line %d, Error: add_more_rows_sbtest1() failed\n", __FILE__, __LINE__);
+				close_all_conns();
+				mysql_close(proxysql_admin);
 				return exit_status();
 			}
 		}
@@ -132,6 +159,8 @@ int main(int argc, char** argv) {
 
 	rc = find_tids();
 	if (rc != 0) {
+		close_all_conns();
+		mysql_close(proxysql_admin);
 		return exit_status();
 	}
 
@@ -155,13 +184,21 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(proxysql_admin, "SET mysql-show_processlist_extended=2");
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
+	// The previous batch of conns was just killed server-side; release the
+	// client-side MYSQL* structs before overwriting conns[] with the new
+	// batch created below.
+	close_all_conns();
+
 	rc = create_connections(cl);
 	if (rc != 0) {
+		mysql_close(proxysql_admin);
 		return exit_status();
 	}
 
 	rc = find_tids();
 	if (rc != 0) {
+		close_all_conns();
+		mysql_close(proxysql_admin);
 		return exit_status();
 	}
 
@@ -194,5 +231,7 @@ int main(int argc, char** argv) {
 		ok(rc != 0, (rc == 0 ? "Connection still alive" : "Connection killed"));
 	}
 
+	close_all_conns();
+	mysql_close(proxysql_admin);
 	return exit_status();
 }
