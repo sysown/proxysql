@@ -360,6 +360,22 @@ const std::vector<std::string> SAVE_MYSQLX_VARIABLES_TO_MEMORY = {
 	"SAVE MYSQLX VARIABLES TO MEM" ,
 	"SAVE MYSQLX VARIABLES FROM RUNTIME" ,
 	"SAVE MYSQLX VARIABLES FROM RUN" };
+const std::vector<std::string> LOAD_MYSQLX_USERS_FROM_DISK = {
+	"LOAD MYSQLX USERS FROM DISK" };
+const std::vector<std::string> SAVE_MYSQLX_USERS_TO_DISK = {
+	"SAVE MYSQLX USERS TO DISK" };
+const std::vector<std::string> LOAD_MYSQLX_ROUTES_FROM_DISK = {
+	"LOAD MYSQLX ROUTES FROM DISK" };
+const std::vector<std::string> SAVE_MYSQLX_ROUTES_TO_DISK = {
+	"SAVE MYSQLX ROUTES TO DISK" };
+const std::vector<std::string> LOAD_MYSQLX_BACKEND_ENDPOINTS_FROM_DISK = {
+	"LOAD MYSQLX BACKEND ENDPOINTS FROM DISK" };
+const std::vector<std::string> SAVE_MYSQLX_BACKEND_ENDPOINTS_TO_DISK = {
+	"SAVE MYSQLX BACKEND ENDPOINTS TO DISK" };
+const std::vector<std::string> LOAD_MYSQLX_VARIABLES_FROM_DISK = {
+	"LOAD MYSQLX VARIABLES FROM DISK" };
+const std::vector<std::string> SAVE_MYSQLX_VARIABLES_TO_DISK = {
+	"SAVE MYSQLX VARIABLES TO DISK" };
 //
 const std::vector<std::string> LOAD_COREDUMP_FROM_MEMORY = {
 	"LOAD COREDUMP FROM MEMORY" ,
@@ -3902,6 +3918,14 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		if (!mysqlx_canonical) mysqlx_canonical = resolve_admin_alias_to_canonical(SAVE_MYSQLX_BACKEND_ENDPOINTS_TO_MEMORY, "SAVE MYSQLX BACKEND ENDPOINTS TO MEMORY", query_no_space, query_no_space_length);
 		if (!mysqlx_canonical) mysqlx_canonical = resolve_admin_alias_to_canonical(LOAD_MYSQLX_VARIABLES_FROM_MEMORY, "LOAD MYSQLX VARIABLES TO RUNTIME", query_no_space, query_no_space_length);
 		if (!mysqlx_canonical) mysqlx_canonical = resolve_admin_alias_to_canonical(SAVE_MYSQLX_VARIABLES_TO_MEMORY, "SAVE MYSQLX VARIABLES TO MEMORY", query_no_space, query_no_space_length);
+		if (!mysqlx_canonical) mysqlx_canonical = resolve_admin_alias_to_canonical(LOAD_MYSQLX_USERS_FROM_DISK, "LOAD MYSQLX USERS FROM DISK", query_no_space, query_no_space_length);
+		if (!mysqlx_canonical) mysqlx_canonical = resolve_admin_alias_to_canonical(SAVE_MYSQLX_USERS_TO_DISK, "SAVE MYSQLX USERS TO DISK", query_no_space, query_no_space_length);
+		if (!mysqlx_canonical) mysqlx_canonical = resolve_admin_alias_to_canonical(LOAD_MYSQLX_ROUTES_FROM_DISK, "LOAD MYSQLX ROUTES FROM DISK", query_no_space, query_no_space_length);
+		if (!mysqlx_canonical) mysqlx_canonical = resolve_admin_alias_to_canonical(SAVE_MYSQLX_ROUTES_TO_DISK, "SAVE MYSQLX ROUTES TO DISK", query_no_space, query_no_space_length);
+		if (!mysqlx_canonical) mysqlx_canonical = resolve_admin_alias_to_canonical(LOAD_MYSQLX_BACKEND_ENDPOINTS_FROM_DISK, "LOAD MYSQLX BACKEND ENDPOINTS FROM DISK", query_no_space, query_no_space_length);
+		if (!mysqlx_canonical) mysqlx_canonical = resolve_admin_alias_to_canonical(SAVE_MYSQLX_BACKEND_ENDPOINTS_TO_DISK, "SAVE MYSQLX BACKEND ENDPOINTS TO DISK", query_no_space, query_no_space_length);
+		if (!mysqlx_canonical) mysqlx_canonical = resolve_admin_alias_to_canonical(LOAD_MYSQLX_VARIABLES_FROM_DISK, "LOAD MYSQLX VARIABLES FROM DISK", query_no_space, query_no_space_length);
+		if (!mysqlx_canonical) mysqlx_canonical = resolve_admin_alias_to_canonical(SAVE_MYSQLX_VARIABLES_TO_DISK, "SAVE MYSQLX VARIABLES TO DISK", query_no_space, query_no_space_length);
 		if (mysqlx_canonical) {
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			if (SPA->dispatch_plugin_admin_command(sess, mysqlx_canonical)) {

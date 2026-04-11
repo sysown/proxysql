@@ -262,6 +262,130 @@ ProxySQL_PluginCommandResult save_variables_from_runtime(const ProxySQL_PluginCo
 	return result;
 }
 
+bool disk_to_memory(SQLite3DB& admindb, const char* table_name) {
+	if (!admindb.execute("BEGIN")) {
+		return false;
+	}
+	std::string del = "DELETE FROM main.";
+	del += table_name;
+	if (!admindb.execute(del.c_str())) {
+		admindb.execute("ROLLBACK");
+		return false;
+	}
+	std::string ins = "INSERT INTO main.";
+	ins += table_name;
+	ins += " SELECT * FROM disk.";
+	ins += table_name;
+	if (!admindb.execute(ins.c_str())) {
+		admindb.execute("ROLLBACK");
+		return false;
+	}
+	admindb.execute("COMMIT");
+	return true;
+}
+
+bool memory_to_disk(SQLite3DB& admindb, const char* table_name) {
+	if (!admindb.execute("BEGIN")) {
+		return false;
+	}
+	std::string del = "DELETE FROM disk.";
+	del += table_name;
+	if (!admindb.execute(del.c_str())) {
+		admindb.execute("ROLLBACK");
+		return false;
+	}
+	std::string ins = "INSERT INTO disk.";
+	ins += table_name;
+	ins += " SELECT * FROM main.";
+	ins += table_name;
+	if (!admindb.execute(ins.c_str())) {
+		admindb.execute("ROLLBACK");
+		return false;
+	}
+	admindb.execute("COMMIT");
+	return true;
+}
+
+ProxySQL_PluginCommandResult load_users_from_disk(const ProxySQL_PluginCommandContext& ctx, const char*) {
+	if (ctx.admindb == nullptr) {
+		return command_failure("mysqlx users disk load requires admin db");
+	}
+	if (!disk_to_memory(*ctx.admindb, kMysqlxUsersTable)) {
+		return command_failure("failed to load mysqlx users from disk");
+	}
+	return {0, 0, "mysqlx users loaded from disk"};
+}
+
+ProxySQL_PluginCommandResult save_users_to_disk(const ProxySQL_PluginCommandContext& ctx, const char*) {
+	if (ctx.admindb == nullptr) {
+		return command_failure("mysqlx users disk save requires admin db");
+	}
+	if (!memory_to_disk(*ctx.admindb, kMysqlxUsersTable)) {
+		return command_failure("failed to save mysqlx users to disk");
+	}
+	return {0, 0, "mysqlx users saved to disk"};
+}
+
+ProxySQL_PluginCommandResult load_routes_from_disk(const ProxySQL_PluginCommandContext& ctx, const char*) {
+	if (ctx.admindb == nullptr) {
+		return command_failure("mysqlx routes disk load requires admin db");
+	}
+	if (!disk_to_memory(*ctx.admindb, kMysqlxRoutesTable)) {
+		return command_failure("failed to load mysqlx routes from disk");
+	}
+	return {0, 0, "mysqlx routes loaded from disk"};
+}
+
+ProxySQL_PluginCommandResult save_routes_to_disk(const ProxySQL_PluginCommandContext& ctx, const char*) {
+	if (ctx.admindb == nullptr) {
+		return command_failure("mysqlx routes disk save requires admin db");
+	}
+	if (!memory_to_disk(*ctx.admindb, kMysqlxRoutesTable)) {
+		return command_failure("failed to save mysqlx routes to disk");
+	}
+	return {0, 0, "mysqlx routes saved to disk"};
+}
+
+ProxySQL_PluginCommandResult load_backend_endpoints_from_disk(const ProxySQL_PluginCommandContext& ctx, const char*) {
+	if (ctx.admindb == nullptr) {
+		return command_failure("mysqlx backend endpoints disk load requires admin db");
+	}
+	if (!disk_to_memory(*ctx.admindb, kMysqlxBackendEndpointsTable)) {
+		return command_failure("failed to load mysqlx backend endpoints from disk");
+	}
+	return {0, 0, "mysqlx backend endpoints loaded from disk"};
+}
+
+ProxySQL_PluginCommandResult save_backend_endpoints_to_disk(const ProxySQL_PluginCommandContext& ctx, const char*) {
+	if (ctx.admindb == nullptr) {
+		return command_failure("mysqlx backend endpoints disk save requires admin db");
+	}
+	if (!memory_to_disk(*ctx.admindb, kMysqlxBackendEndpointsTable)) {
+		return command_failure("failed to save mysqlx backend endpoints to disk");
+	}
+	return {0, 0, "mysqlx backend endpoints saved to disk"};
+}
+
+ProxySQL_PluginCommandResult load_variables_from_disk(const ProxySQL_PluginCommandContext& ctx, const char*) {
+	if (ctx.admindb == nullptr) {
+		return command_failure("mysqlx variables disk load requires admin db");
+	}
+	if (!disk_to_memory(*ctx.admindb, kMysqlxVariablesTable)) {
+		return command_failure("failed to load mysqlx variables from disk");
+	}
+	return {0, 0, "mysqlx variables loaded from disk"};
+}
+
+ProxySQL_PluginCommandResult save_variables_to_disk(const ProxySQL_PluginCommandContext& ctx, const char*) {
+	if (ctx.admindb == nullptr) {
+		return command_failure("mysqlx variables disk save requires admin db");
+	}
+	if (!memory_to_disk(*ctx.admindb, kMysqlxVariablesTable)) {
+		return command_failure("failed to save mysqlx variables to disk");
+	}
+	return {0, 0, "mysqlx variables saved to disk"};
+}
+
 void register_table_pair(
 	ProxySQL_PluginServices& services,
 	const char* table_name,
@@ -368,5 +492,13 @@ bool mysqlx_register_admin_schema(ProxySQL_PluginServices& services) {
 	services.register_command("SAVE MYSQLX BACKEND ENDPOINTS TO MEMORY", &save_backend_endpoints_from_runtime);
 	services.register_command("LOAD MYSQLX VARIABLES TO RUNTIME", &load_variables_to_runtime);
 	services.register_command("SAVE MYSQLX VARIABLES TO MEMORY", &save_variables_from_runtime);
+	services.register_command("LOAD MYSQLX USERS FROM DISK", &load_users_from_disk);
+	services.register_command("SAVE MYSQLX USERS TO DISK", &save_users_to_disk);
+	services.register_command("LOAD MYSQLX ROUTES FROM DISK", &load_routes_from_disk);
+	services.register_command("SAVE MYSQLX ROUTES TO DISK", &save_routes_to_disk);
+	services.register_command("LOAD MYSQLX BACKEND ENDPOINTS FROM DISK", &load_backend_endpoints_from_disk);
+	services.register_command("SAVE MYSQLX BACKEND ENDPOINTS TO DISK", &save_backend_endpoints_to_disk);
+	services.register_command("LOAD MYSQLX VARIABLES FROM DISK", &load_variables_from_disk);
+	services.register_command("SAVE MYSQLX VARIABLES TO DISK", &save_variables_to_disk);
 	return true;
 }
