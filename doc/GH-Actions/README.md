@@ -10,6 +10,13 @@ pitfalls.
 If you touch anything under `.github/workflows/` on either `v3.0` or the
 `GH-Actions` branch, read this first.
 
+> **New to GitHub Actions terminology, or confused by check-run labels
+> like `CI-maketest / builds (testgalera)`?** Jump to
+> [§12 Understanding GitHub Actions vocabulary](#understanding-github-actions-vocabulary--read-this-first-if-confused)
+> first — it walks through every term (workflow / run / job / matrix /
+> check run / caller / reusable) with diagrams and a concrete walkthrough,
+> then come back here.
+
 ---
 
 ## Table of contents
@@ -25,7 +32,8 @@ If you touch anything under `.github/workflows/` on either `v3.0` or the
 9. [Adding a new test group end-to-end](#adding-a-new-test-group-end-to-end)
 10. [Common pitfalls and historical gotchas](#common-pitfalls-and-historical-gotchas)
 11. [Debugging a failing CI run](#debugging-a-failing-ci-run)
-12. [Glossary](#glossary)
+12. [Understanding GitHub Actions vocabulary — read this first if confused](#understanding-github-actions-vocabulary--read-this-first-if-confused)
+13. [Glossary (quick reference)](#glossary-quick-reference)
 
 ---
 
@@ -989,7 +997,533 @@ binary directly and print a summary.
 
 ---
 
-## Glossary
+## Understanding GitHub Actions vocabulary — read this first if confused
+
+This section is the long-form explanation of the terminology. If you just
+want a word defined quickly, skip to the [compact glossary](#glossary-quick-reference)
+at the end. If you look at a PR "Checks" tab and can't answer *"what file
+on disk corresponds to this row, and why can't I find it by grepping?"*,
+read this section.
+
+We will use **one concrete check label** throughout — the one from issue
+that prompted this section — and walk it all the way down from "string on
+the PR" to "YAML line on disk":
+
+```
+CI-maketest / builds (testgalera)
+```
+
+By the end of the section you should be able to open any PR, look at any
+check-run label, and know exactly which file (on which branch) produced it.
+
+### 12.1 The seven terms you need to keep straight
+
+These are **not** ProxySQL-specific — they are standard GitHub Actions
+vocabulary — except for #7 which is the ProxySQL caller/reusable split.
+They are ordered so each one builds on the previous.
+
+#### 1. Workflow — the YAML file on disk
+
+A **workflow** is *exactly one file* under `.github/workflows/`. Each file
+has a top-level `name:`, an `on:` block listing its triggers, and a `jobs:`
+block listing its jobs.
+
+The workflow's **identity in the GitHub UI is the `name:` field**, not the
+filename. Two different files with the same `name:` will look like "the
+same workflow" in the UI (this is important — ProxySQL does exactly this,
+see #7 below).
+
+Concrete example — `.github/workflows/ci-maketest.yml` on branch `GH-Actions`:
+
+```yaml
+name: CI-maketest                       ← ← ← this is the workflow name
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      trigger:
+        type: string
+      target:
+        type: string
+jobs:
+  builds:                               ← there is exactly one job: "builds"
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        target: [ testaurora, testgalera, testgrouprep,
+                  testreadonly, testreplicationlag, testall ]
+    steps:
+      - …
+```
+
+This file *is* a workflow. It will stay a workflow whether it ever runs or
+not, whether it has runs on 10 commits or zero commits. It is an
+**immutable object at rest on disk**.
+
+#### 2. Workflow run — one execution of a workflow
+
+A **workflow run** is what happens when a trigger fires on a specific
+commit. Every run is a **mutable object in GitHub's history** with:
+
+- a unique numeric **run id** (the big number in the URL)
+- a single `head_sha` (the commit it ran on)
+- a `status` — one of `queued`, `in_progress`, `completed`
+- a `conclusion` — one of `success`, `failure`, `cancelled`, `skipped`, …
+  (only meaningful after `status == completed`)
+
+If the `CI-maketest` workflow fires on commit `09b97547f` and again on
+commit `a1b2c3d4e`, those are **two different workflow runs** of *the same
+workflow*. Each has its own run id. You can list runs of a workflow with:
+
+```bash
+gh run list --workflow CI-maketest -R sysown/proxysql --limit 10
+```
+
+Workflow runs are what you see in the **Actions** tab of the repo.
+
+#### 3. Job — one block under `jobs:`
+
+A run contains one or more **jobs**. Jobs are keys under the `jobs:` block
+of the workflow file. Each job runs on its own **runner** (a VM or
+container) and contains its own sequence of **steps**.
+
+In our example, the `CI-maketest` workflow has *one* job definition:
+`builds` (look back at the YAML). That single definition is what will
+become one-or-more actual job runs once the matrix expands in #4.
+
+A workflow with two jobs and no matrix produces a run with exactly two
+parallel jobs. A workflow with one job and no matrix produces a run with
+one job. Simple.
+
+#### 4. Job matrix — one job definition → N parallel job-runs
+
+`CI-maketest` is not simple. Its one job (`builds`) declares:
+
+```yaml
+strategy:
+  matrix:
+    target: [ testaurora, testgalera, testgrouprep,
+              testreadonly, testreplicationlag, testall ]
+```
+
+This says: *"expand this single job definition into six parallel job-runs,
+one per value of `target`"*. Each expansion gets its own runner, its own
+steps executing top-to-bottom, and its own independent pass/fail. When
+matrix expansion happens, the expansions are sometimes called **matrix
+jobs** or **matrix cells** — there is no universally-agreed term; in this
+doc we use "matrix cell" or "matrix job".
+
+**One workflow run of `CI-maketest`** therefore contains **one job
+definition** (`builds`) which expands to **six matrix cells**, each of
+which is its own parallel execution. So `gh run view <runid>` on a
+`CI-maketest` run shows:
+
+```
+builds (testaurora)           success
+builds (testgalera)           success    ← the one we care about
+builds (testgrouprep)         failure
+builds (testreadonly)         success
+builds (testreplicationlag)   success
+builds (testall)              success
+```
+
+Six lines, one workflow run. *The word "galera" appears exactly once in
+the entire workflow file: as the second value in that matrix array.*
+There is no `ci-galera.yml`. There is no job called "testgalera". There
+is only a matrix value named "testgalera" inside the one `builds` job
+inside the one `CI-maketest` workflow.
+
+#### 5. Step — one `- name:` block inside a job
+
+A **step** is the smallest unit: one entry in a job's `steps:` list. Steps
+run sequentially top-to-bottom inside a single runner, sharing filesystem
+and environment. They are the actual shell commands or Action invocations.
+
+In `CI-maketest`, every matrix cell runs the same five steps:
+
+```
+1. checks (LouisBrunner) - "in_progress"
+2. Checkout repository
+3. Make-test              ← runs `make $TARGET` inside docker-compose
+4. Check build
+5. checks (LouisBrunner) - post job.status back
+```
+
+Steps are **per-matrix-cell**, so across the six cells of one workflow
+run, 30 step executions happen in total (6 cells × 5 steps each).
+
+#### 6. Check run — a status row attached to a commit SHA
+
+This is the one that is most confusing, because it is **not** in the
+workflow hierarchy at all. It is a *separate* object that lives on the
+**commit**, not on the workflow.
+
+GitHub's **Checks API** lets anything (an Action, an external bot, a
+webhook) attach a status row to a specific commit SHA with:
+
+- a `name` (free-form string, author's choice)
+- a `status` (`queued` / `in_progress` / `completed`)
+- a `conclusion` (`success` / `failure` / …)
+- an optional `details_url` (where to click for more info)
+
+**These check runs are what you see on the PR "Checks" tab.** PR
+merge-blocking is based on check runs, not on workflow runs directly.
+
+By default, GitHub Actions *auto-creates* one check run per job run —
+that is, for each matrix cell — with the check name equal to `{workflow
+name} / {job name}` or `{workflow name} / {job name} ({matrix values})`.
+For `CI-maketest`, the auto-generated labels would look like:
+
+```
+CI-maketest / builds (testaurora)
+CI-maketest / builds (testgalera)       ← could be auto-generated this way
+…
+```
+
+**But ProxySQL uses `LouisBrunner/checks-action@v2.0.0` instead**,
+which lets the workflow author **manually create their own check runs**
+with a custom `name:`. Look at the top of `ci-maketest.yml`:
+
+```yaml
+- uses: LouisBrunner/checks-action@v2.0.0
+  id: checks
+  if: always()
+  with:
+    name: '${{ github.workflow }} / ${{ github.job }} ${{ env.MATRIX }}'
+    sha: ${{ env.SHA }}
+    status: 'in_progress'
+```
+
+The `name:` is assembled from three runtime expressions:
+
+| Piece | Source | Value at runtime |
+|---|---|---|
+| `${{ github.workflow }}` | the workflow's `name:` field | `CI-maketest` |
+| `${{ github.job }}` | the job key | `builds` |
+| `${{ env.MATRIX }}` | set earlier by `env:` in the job: `MATRIX: '(${{ matrix.target }})'` | `(testgalera)` |
+
+So **the literal string `CI-maketest / builds (testgalera)` is constructed
+at runtime** by concatenating these three pieces. **It exists nowhere on
+disk.** You cannot grep for it and find it. You cannot search the repo
+for it. It only exists as a check-run object in GitHub's database, created
+after the action runs.
+
+One more important point: because `LouisBrunner/checks-action` creates the
+check runs manually, **GitHub's auto-generated check runs for the same
+jobs also exist**. So you often see *two* check rows per matrix cell in
+the PR UI — one from GitHub's auto-creation, one from the custom action.
+They will usually agree (same status), but they are not the same object.
+
+#### 7. Reusable workflow vs caller — the ProxySQL two-branch split
+
+This is not standard GitHub Actions vocabulary — it is a convention
+ProxySQL uses to work around GitHub's rule that `workflow_run`-triggered
+workflows must live on the default branch (`v3.0`).
+
+- A **caller** is a `.github/workflows/CI-*.yml` file on `v3.0` (uppercase
+  `CI-`). Its only job body is `uses: …@GH-Actions`, delegating to a
+  reusable on the other branch.
+- A **reusable** is a `.github/workflows/ci-*.yml` file on `GH-Actions`
+  (lowercase `ci-`). It declares `on: workflow_call` and contains the
+  actual logic.
+
+**Both files share the same `name:` field** — e.g. both `CI-maketest.yml`
+(caller on v3.0) and `ci-maketest.yml` (reusable on GH-Actions) declare
+`name: CI-maketest`. The GitHub UI groups them together in the Actions tab
+and the PR check rollup: you almost always see "CI-maketest" as a single
+entry, even though *internally there are two workflow runs per logical
+step* — one on each branch.
+
+See `§2 The two-branch architecture` for why this exists. For this
+section what matters is: **every time you click on `CI-maketest` in the
+UI, you may land on either the v3.0 caller run or the GH-Actions reusable
+run**, depending on which one the link points to. The caller run is
+always a thin one-job pass-through; the reusable run is the one with the
+matrix, the steps, and the actual test output.
+
+### 12.2 The full nesting, visualized
+
+Pin this diagram on the wall of your mental model. Every term from §12.1
+fits into exactly one slot here:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  WORKFLOW                                                           │
+│  (the YAML file on disk, e.g. ci-maketest.yml)                      │
+│  name: CI-maketest                                                  │
+│  lives on a branch (v3.0 if caller, GH-Actions if reusable)         │
+│                                                                     │
+│    ┌───────────────────────────────────────────────────────────┐    │
+│    │  WORKFLOW RUN                                             │    │
+│    │  (one execution on one commit, has a numeric run-id)      │    │
+│    │  head_sha = 09b97547f, status = in_progress, …            │    │
+│    │                                                           │    │
+│    │    ┌─────────────────────────────────────────────────┐    │    │
+│    │    │  JOB DEFINITION  (key under `jobs:`)            │    │    │
+│    │    │  builds                                         │    │    │
+│    │    │  expands via matrix →                           │    │    │
+│    │    │                                                 │    │    │
+│    │    │  ┌──────────────┐  ┌──────────────┐  ┌───────┐  │    │    │
+│    │    │  │ MATRIX CELL  │  │ MATRIX CELL  │  │  ...  │  │    │    │
+│    │    │  │ target=      │  │ target=      │  │       │  │    │    │
+│    │    │  │ testaurora   │  │ testgalera   │  │       │  │    │    │
+│    │    │  │              │  │              │  │       │  │    │    │
+│    │    │  │ ┌──────────┐ │  │ ┌──────────┐ │  │       │  │    │    │
+│    │    │  │ │  STEPS   │ │  │ │  STEPS   │ │  │       │  │    │    │
+│    │    │  │ │  1 2 3 4 │ │  │ │  1 2 3 4 │ │  │  ...  │  │    │    │
+│    │    │  │ │  5       │ │  │ │  5       │ │  │       │  │    │    │
+│    │    │  │ └──────────┘ │  │ └──────────┘ │  │       │  │    │    │
+│    │    │  └──────┬───────┘  └──────┬───────┘  └───────┘  │    │    │
+│    │    └─────────┼─────────────────┼──────────...────────┘    │    │
+│    └──────────────┼─────────────────┼──────────...─────────────┘    │
+└───────────────────┼─────────────────┼──────────...──────────────────┘
+                    │                 │
+                    ▼                 ▼
+               CHECK RUN         CHECK RUN
+               attached to       attached to
+               commit SHA        commit SHA
+               name:             name:
+               "CI-maketest /    "CI-maketest /
+                builds            builds
+                (testaurora)"     (testgalera)"   ← you clicked this
+```
+
+Key reading of the diagram:
+
+1. The **workflow** is the outermost box — one YAML file on disk.
+2. The **workflow run** is the next box in — one execution on a SHA.
+3. The **job definition** (`builds`) is the next box — written once in the
+   YAML.
+4. **Matrix cells** are the parallel sub-boxes — six of them here.
+5. **Steps** are the innermost list inside each cell — executed top-to-
+   bottom on one runner.
+6. **Check runs** (arrows leaving the bottom) are *separate objects* that
+   point at the commit. They are created by either GitHub
+   auto-generation, or manually by `LouisBrunner/checks-action`, or both.
+
+### 12.3 The ProxySQL two-branch split, visualized
+
+When ProxySQL's caller/reusable split is layered on top of the above, **the
+picture doubles up**:
+
+```
+                    PR HEAD COMMIT
+                   ┌──────────────┐
+                   │  09b97547f   │  ← one SHA that the PR is about
+                   └──────┬───────┘
+                          │
+                          │ push event / workflow_run chain fires
+                          ▼
+        ┌────────────────────────────────────────────────────────┐
+        │    CALLER WORKFLOW RUN  on v3.0                        │
+        │    file: .github/workflows/CI-maketest.yml@v3.0        │
+        │    workflow name: CI-maketest                          │
+        │    (20-line stub file — this run has ONE trivial job:  │
+        │    "run", whose only body is  uses: …@GH-Actions)      │
+        │                                                        │
+        │    status: completed   conclusion: success             │
+        │    (but almost nothing happened here!)                 │
+        └──────────────────────┬─────────────────────────────────┘
+                               │
+                               │ uses: .github/workflows/
+                               │   ci-maketest.yml@GH-Actions
+                               ▼
+        ┌────────────────────────────────────────────────────────┐
+        │    REUSABLE WORKFLOW RUN  on GH-Actions                │
+        │    file: .github/workflows/ci-maketest.yml@GH-Actions  │
+        │    workflow name: CI-maketest     ← same name!         │
+        │    job: builds                                         │
+        │    matrix: 6 cells (testaurora, testgalera, …)         │
+        │                                                        │
+        │    this is where the actual work happens               │
+        │    this is where the 6 check runs are created          │
+        └────────────────────────┬───────────────────────────────┘
+                                 │
+        ┌────────────────────────┼───────────────────────────────┐
+        │         six check runs │ attached to the SHA           │
+        │                        ▼                               │
+        │   CI-maketest / builds (testaurora)                    │
+        │   CI-maketest / builds (testgalera)  ← you clicked this│
+        │   CI-maketest / builds (testgrouprep)                  │
+        │   CI-maketest / builds (testreadonly)                  │
+        │   CI-maketest / builds (testreplicationlag)            │
+        │   CI-maketest / builds (testall)                       │
+        └────────────────────────────────────────────────────────┘
+```
+
+So when you click on **`CI-maketest / builds (testgalera)`** from the PR's
+Checks tab:
+
+- The workflow **name** (`CI-maketest`) is the same on both branches.
+- The **click-through link** (`details_url` on the check run) is set by
+  the reusable, so it takes you into the **reusable run on `GH-Actions`**,
+  not the caller run on `v3.0`.
+- To read the YAML that ran, you want the **GH-Actions branch version**.
+
+### 12.4 How the `CI-maketest / builds (testgalera)` label is built
+
+Tracing the literal string character-by-character from the YAML to what
+you see:
+
+```
+   Literal on disk                                Runtime value
+   ──────────────                                 ─────────────
+
+   name: CI-maketest             (top of file)
+     ↓
+     ↓ feeds                                      github.workflow
+     ↓                                               = "CI-maketest"
+     ↓
+   jobs:
+     builds:                     (job key)
+       ↓
+       ↓ feeds                                    github.job
+       ↓                                             = "builds"
+       ↓
+       env:
+         MATRIX: '(${{ matrix.target }})'
+         ↓
+         ↓ matrix.target expands per cell         env.MATRIX
+         ↓   (here: "testgalera")                    = "(testgalera)"
+         ↓
+       - uses: LouisBrunner/checks-action@v2.0.0
+         with:
+           name: '${{ github.workflow }} / ${{ github.job }} ${{ env.MATRIX }}'
+                          │                │                   │
+                          └───── CI-maketest │                  │
+                                             └──── / builds     │
+                                                                └──── (testgalera)
+
+                           final label: "CI-maketest / builds (testgalera)"
+                                          │             │      │
+                                         workflow      job    matrix-cell
+                                          name         name      value
+```
+
+Three independent pieces, concatenated by one action call, at runtime.
+**The full string never appears in the codebase.** This is why grepping
+for "CI-maketest / builds (testgalera)" or even just "galera" in the
+workflow directory of the v3.0 branch finds nothing useful:
+
+- The string "galera" appears in **one** workflow file: `ci-maketest.yml`,
+  and *that file is on the `GH-Actions` branch, not `v3.0`*. If you
+  grepped only your local `v3.0` checkout, you missed it entirely.
+- Even on `GH-Actions`, "galera" is not the file's name, not the job's
+  name, not the workflow's name — it is *one of six values inside one
+  `matrix.target` array*.
+- The other place "galera" appears in the repo is in the root `Makefile`,
+  where `testgalera:` is a Make target that compiles proxysql + TAP tests
+  with `-DTEST_GALERA` defined. Grepping `Makefile` on `v3.0` for
+  `testgalera` *does* find it, but that hit tells you what the Make target
+  does, not what the workflow does.
+
+### 12.5 Common confusions, answered directly
+
+**Q: "I see `CI-maketest` in the Actions tab, but when I click the run,
+the page URL says `/actions/runs/...` on the `GH-Actions` branch. Is that
+a bug?"**
+
+No. Because the caller on `v3.0` delegates via `uses:`, a single logical
+trigger creates *two* workflow runs — one on each branch. Click-throughs
+land wherever the particular link pointed. The caller run on `v3.0` is
+always almost-empty (just the delegation); the meaty one is on
+`GH-Actions`.
+
+**Q: "Why are there two rows in my Checks tab for the same test — e.g.
+`CI-maketest / builds (testgalera)` AND a plain `builds (testgalera)`?"**
+
+Because `LouisBrunner/checks-action` creates its own custom-named check
+run in addition to whatever GitHub auto-generates for the matrix cell.
+Both attach to the same commit and describe the same execution. If they
+disagree in status it usually means the post-job LouisBrunner call failed
+(e.g. permissions), not that the job result differs.
+
+**Q: "I want to know what `make testgalera` actually tests. Where do I
+look?"**
+
+Not in `.github/workflows/`. Look at the root `Makefile` on `v3.0`,
+search for `^testgalera:`. You will find (lines ~203-206):
+
+```make
+testgalera: build_src_testgalera
+    cd test/tap && OPTZ="-O0 -ggdb -DDEBUG -DTEST_GALERA" make
+    cd test/tap/tests && OPTZ="-O0 -ggdb -DDEBUG -DTEST_GALERA" make
+```
+
+That tells you: it's a **build target** that compiles proxysql and the TAP
+tests with `-DTEST_GALERA` defined. The `CI-maketest` workflow is a
+**compile-check matrix** — it verifies the proxysql source still compiles
+for each of 6 build flavors (testaurora, testgalera, …). It does **not**
+run Galera tests against a Galera cluster. That's what the job being
+named `builds` (not `tests`) is telling you.
+
+**Q: "If the check-run label is assembled at runtime, how do I search
+for 'which workflow file produced check X'?"**
+
+Use this decision table:
+
+| Check row on PR | What file produced it |
+|---|---|
+| `CI-foo` (no trailing `/ ...`) | Either the auto-generated top-level check of the caller run `CI-foo.yml@v3.0`, or the top-level rollup of the reusable `ci-foo.yml@GH-Actions`. Usually clicking the row tells you which. |
+| `CI-foo / jobname` | The job `jobname` inside `ci-foo.yml` on `GH-Actions`. Read the `jobs.jobname:` block there. |
+| `CI-foo / jobname (matrixvalue)` | A matrix cell of that job. Read the `jobs.jobname.strategy.matrix:` block — `matrixvalue` will appear as one of the values. |
+
+**Rule of thumb: if you see a check name with a workflow prefix
+(`CI-foo / ...`), the interesting file is always on `GH-Actions`, never
+on `v3.0`.** The `v3.0` caller is always a 20-line stub; the matrix,
+steps, and logic are in the reusable on `GH-Actions`.
+
+**Q: "Where is `CI-legacy-g2-genai` defined? Is it a group, a flavor, a
+matrix cell, a workflow?"**
+
+It is a whole separate **workflow** pair — one caller (`CI-legacy-g2-genai.yml@v3.0`)
+and one reusable (`ci-legacy-g2-genai.yml@GH-Actions`). Same pattern as
+`CI-legacy-g2.yml` / `ci-legacy-g2.yml`, but for the GenAI-with-coverage
+build flavor. So "there are 6 CI-legacy-g* workflows on v3.0"
+(`g1, g2, g2-genai, g3, g4, g5`) and each is its own file, not a matrix
+cell of a shared workflow. Contrast with `CI-maketest`, where the 6
+build flavors ARE matrix cells of one shared workflow. Both patterns
+exist in the repo for historical reasons.
+
+### 12.6 Sanity-check yourself
+
+If you understand the vocabulary, you should be able to answer each of
+these in one sentence. Answers after each question.
+
+1. **"How many workflows does `CI-maketest` have?"**
+   → Two files on disk: `CI-maketest.yml` on v3.0 (caller stub) and
+   `ci-maketest.yml` on GH-Actions (reusable with the real logic). They
+   share the `name:` field so the UI treats them as one.
+
+2. **"How many jobs does one `CI-maketest` workflow run have, and how
+   many matrix cells?"**
+   → One job definition (`builds`), expanded to 6 matrix cells, so 6
+   parallel job-runs.
+
+3. **"How many check runs does one `CI-maketest` workflow run create?"**
+   → At minimum 6 (one per matrix cell, created by
+   `LouisBrunner/checks-action`); in practice often 12 because GitHub
+   auto-generates matching check runs for the same cells.
+
+4. **"If `CI-maketest / builds (testgalera)` fails, which file on which
+   branch do I read to figure out why?"**
+   → `ci-maketest.yml` on `GH-Actions`, specifically the `builds` job's
+   steps. The v3.0 caller is never where a real failure lives.
+
+5. **"Where does the literal string `testgalera` come from?"**
+   → It is one value in the `strategy.matrix.target` array inside
+   `ci-maketest.yml@GH-Actions`. It is *also* a Makefile target name
+   in the root `Makefile@v3.0`. The workflow picks the matrix value and
+   invokes the Makefile target in docker-compose.
+
+If those five answers feel comfortable, you can close this section. If
+not, re-read the [nesting diagram](#122-the-full-nesting-visualized) and
+then the [two-branch diagram](#123-the-proxysql-two-branch-split-visualized)
+until they do.
+
+---
+
+## Glossary (quick reference)
 
 | Term | Definition |
 |---|---|
