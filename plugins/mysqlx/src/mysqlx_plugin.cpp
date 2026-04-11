@@ -48,12 +48,87 @@ bool parse_bind_addr(const std::string& bind, std::string& host, int& port) {
 	return true;
 }
 
+bool sync_disk_to_memory(SQLite3DB& admindb) {
+	const char* tables[] = {
+		"mysqlx_users",
+		"mysqlx_routes",
+		"mysqlx_backend_endpoints",
+		"mysqlx_variables",
+	};
+	for (const char* tbl : tables) {
+		char* err = nullptr;
+		std::string q = "SELECT COUNT(*) FROM disk.";
+		q += tbl;
+		SQLite3_result* disk_res = admindb.execute_statement(q.c_str(), &err);
+		if (err) {
+			free(err);
+			delete disk_res;
+			continue;
+		}
+		if (!disk_res || disk_res->rows.empty() || !disk_res->rows[0] || !disk_res->rows[0]->fields[0]) {
+			delete disk_res;
+			continue;
+		}
+		int disk_cnt = atoi(disk_res->rows[0]->fields[0]);
+		delete disk_res;
+		if (disk_cnt == 0) continue;
+
+		q = "DELETE FROM main.";
+		q += tbl;
+		admindb.execute(q.c_str());
+
+		q = "INSERT INTO main.";
+		q += tbl;
+		q += " SELECT * FROM disk.";
+		q += tbl;
+		admindb.execute(q.c_str());
+	}
+	return true;
+}
+
+bool copy_to_runtime(SQLite3DB& admindb) {
+	const char* pairs[][2] = {
+		{"mysqlx_users", "runtime_mysqlx_users"},
+		{"mysqlx_routes", "runtime_mysqlx_routes"},
+		{"mysqlx_backend_endpoints", "runtime_mysqlx_backend_endpoints"},
+		{"mysqlx_variables", "runtime_mysqlx_variables"},
+	};
+	for (const auto& p : pairs) {
+		char* err = nullptr;
+		std::string q = "SELECT COUNT(*) FROM main.";
+		q += p[0];
+		SQLite3_result* res = admindb.execute_statement(q.c_str(), &err);
+		if (err) { free(err); delete res; continue; }
+		if (!res || res->rows.empty() || !res->rows[0] || !res->rows[0]->fields[0]) {
+			delete res;
+			continue;
+		}
+		int cnt = atoi(res->rows[0]->fields[0]);
+		delete res;
+		if (cnt == 0) continue;
+
+		q = "DELETE FROM main.";
+		q += p[1];
+		admindb.execute(q.c_str());
+
+		q = "INSERT INTO main.";
+		q += p[1];
+		q += " SELECT * FROM main.";
+		q += p[0];
+		admindb.execute(q.c_str());
+	}
+	return true;
+}
+
 bool mysqlx_start() {
 	MysqlxPluginContext& ctx = mysqlx_context();
 
 	if (ctx.services != nullptr && ctx.services->get_admindb != nullptr) {
 		SQLite3DB* admindb = ctx.services->get_admindb();
 		if (admindb != nullptr) {
+			sync_disk_to_memory(*admindb);
+			copy_to_runtime(*admindb);
+
 			std::string err;
 			if (!ctx.config_store->load_from_runtime(*admindb, err)) {
 				if (ctx.services->log_message != nullptr) {
