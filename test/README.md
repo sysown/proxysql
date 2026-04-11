@@ -71,7 +71,7 @@ Common test groups (defined in `tap/groups/groups.json`):
 Once a run finishes (passed or failed), everything it produced lives under
 `ci_infra_logs/${INFRA_ID}/`. The layout is:
 
-```
+```text
 ci_infra_logs/${INFRA_ID}/
 ├── infra-mysql57/                      # per-backend logs (mysql, mariadb, pgsql, ...)
 │   └── mysql1/
@@ -138,8 +138,11 @@ done
 Then inspect which attempts failed and diff their per-test logs:
 
 ```bash
-# Which attempts had any FAIL?
-grep -l 'FAIL [1-9]' /tmp/flake-*.log
+# Which attempts had any failure? Matches both the TAP "not ok" marker and
+# proxysql-tester.py's own "FAIL N/M" summary line, so we don't miss a test
+# that failed at the TAP level but didn't produce a non-zero FAIL count in
+# the summary (e.g. when the test binary itself crashes).
+grep -lE 'not ok|FAIL [1-9]' /tmp/flake-*.log
 
 # Compare the TAP output of a failing attempt against a passing one
 zdiff /tmp/flake-runs/3/tests/test_flush_logs-t.log.gz \
@@ -156,4 +159,4 @@ useful information even if it doesn't point at a fix.
 - **"Directory Not Empty"**: Run `./test/infra/control/stop-proxysql-isolated.bash` with the same `INFRA_ID` that was used when you started the infra. If you lost the ID, `docker network ls` will show you active `*_backend` networks — each one is a stuck infra; the name before `_backend` is the `INFRA_ID`.
 - **Container issues**: Check logs in `ci_infra_logs/${INFRA_ID}/infra-*/` (per-backend) and `ci_infra_logs/${INFRA_ID}/proxysql/` (ProxySQL side).
 - **Test failures**: Read the per-test `.log.gz` files under `ci_infra_logs/${INFRA_ID}/tests/proxysql-tester.py/tests/` with `zless` or `zcat` — see the "Where logs actually live" section above for the full layout.
-- **Stale docker state**: `docker ps -a | grep "${INFRA_ID}"` shows any leftover containers; `docker network prune` after stopping infras cleans up dangling networks.
+- **Stale docker state**: `docker ps -a | grep "${INFRA_ID}"` shows any leftover containers; prefer targeted cleanup of just this infra's network with `docker network rm "${INFRA_ID}_backend"` over the global `docker network prune`, which would also wipe unrelated project networks on the same host.
