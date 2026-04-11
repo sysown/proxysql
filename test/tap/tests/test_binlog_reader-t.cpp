@@ -158,6 +158,7 @@ int perform_rnd_selects(const CommandLine& cl, uint32_t NUM) {
 		fprintf(stderr, "  This connection uses hardcoded credentials: sbtest8 / sbtest8\n");
 		fprintf(stderr, "  Ensure 'sbtest8' user is configured in ProxySQL mysql_users table\n");
 		fprintf(stderr, "\n");
+		mysql_close(select_conn);
 		return EXIT_FAILURE;
 	}
 	fprintf(stderr, "Connected successfully as sbtest8 for SELECT operations\n");
@@ -173,6 +174,7 @@ int perform_rnd_selects(const CommandLine& cl, uint32_t NUM) {
 		int rc = mysql_query(select_conn, s_query.c_str());
 		if (rc != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(select_conn));
+			mysql_close(select_conn);
 			return EXIT_FAILURE;
 		}
 		mysql_free_result(mysql_store_result(select_conn));
@@ -354,12 +356,18 @@ int main(int argc, char** argv) {
 	MYSQL* proxysql_mysql = mysql_init(NULL);
 	MYSQL* proxysql_admin = mysql_init(NULL);
 
+	// Both handles are initialized above. Close whichever succeeded so a
+	// failure on one side doesn't leak the other. The cleanup: label below
+	// can't be reached via goto from here because C++ forbids jumping past
+	// the non-trivial std::vector<> initializations farther down in main().
 	if (proxysql_mysql == NULL) {
 		fprintf(stderr, "FATAL: mysql_init() failed for proxysql_mysql connection\n");
+		if (proxysql_admin != NULL) { mysql_close(proxysql_admin); }
 		return EXIT_FAILURE;
 	}
 	if (proxysql_admin == NULL) {
 		fprintf(stderr, "FATAL: mysql_init() failed for proxysql_admin connection\n");
+		mysql_close(proxysql_mysql);
 		return EXIT_FAILURE;
 	}
 
@@ -393,6 +401,8 @@ int main(int argc, char** argv) {
 		fprintf(stderr, "  2. Verify user is loaded to runtime: SELECT * FROM runtime_mysql_users WHERE username='sbtest8';\n");
 		fprintf(stderr, "  3. Check if sbtest8 user exists on backend MySQL servers\n");
 		fprintf(stderr, "================================================================================\n");
+		mysql_close(proxysql_mysql);
+		mysql_close(proxysql_admin);
 		return EXIT_FAILURE;
 	}
 	fprintf(stderr, "SUCCESS: Connected to ProxySQL MySQL interface as sbtest8\n");
@@ -412,6 +422,8 @@ int main(int argc, char** argv) {
 		fprintf(stderr, "================================================================================\n");
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		fprintf(stderr, "\n");
+		mysql_close(proxysql_mysql);
+		mysql_close(proxysql_admin);
 		return EXIT_FAILURE;
 	}
 	fprintf(stderr, "SUCCESS: Connected to ProxySQL Admin interface\n");
@@ -441,9 +453,9 @@ int main(int argc, char** argv) {
 		rc = perform_update(proxysql_mysql, NUM_ROWS);
 		if (rc != EXIT_SUCCESS) { goto cleanup; }
 
-		MYSQL_RES* my_res = mysql_store_result(proxysql_admin);
-		vector<mysql_res_row> pre_select_rows = extract_mysql_rows(my_res);
-		mysql_free_result(my_res);
+		// Previously a mysql_store_result() was issued on proxysql_admin here
+		// with no corresponding preceding query; the resulting MYSQL_RES was
+		// always NULL and the extracted vector was dead code. Removed.
 
 		int r_row = rand() % NUM_ROWS;
 		if (r_row == 0) { r_row = 1; }
@@ -462,6 +474,12 @@ int main(int argc, char** argv) {
 		vector<mysql_res_row> res_row = extract_mysql_rows(my_s_res);
 		mysql_free_result(my_s_res);
 
+		if (res_row.empty() || res_row[0].size() < 2) {
+			fprintf(stderr, "File %s, line %d, Error: unexpected result set shape (rows=%zu)\n",
+				__FILE__, __LINE__, res_row.size());
+			rc = EXIT_FAILURE;
+			goto cleanup;
+		}
 		int cur_a = std::stol(res_row[0][1]);
 
 		if (cur_a != r_row + i) {
