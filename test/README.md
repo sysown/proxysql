@@ -66,8 +66,94 @@ Common test groups (defined in `tap/groups/groups.json`):
    make -j$(nproc) && make -j$(nproc) build_tap_test
    ```
 
+## Where logs actually live after a run
+
+Once a run finishes (passed or failed), everything it produced lives under
+`ci_infra_logs/${INFRA_ID}/`. The layout is:
+
+```
+ci_infra_logs/${INFRA_ID}/
+├── infra-mysql57/                      # per-backend logs (mysql, mariadb, pgsql, ...)
+│   └── mysql1/
+│       ├── error.log
+│       └── general.log
+├── infra-mariadb10/
+│   └── ...
+├── proxysql/                           # ProxySQL side
+│   ├── proxysql.log
+│   └── proxysql_audit.log
+└── tests/
+    └── proxysql-tester.py/
+        └── tests/
+            ├── test_flush_logs-t.log.gz             # per-test captured stdout+stderr
+            ├── test_flush_logs-t.proxysql.log.gz    # ProxySQL log during that test
+            ├── pgsql-servers_ssl_params-t.log.gz
+            └── ...                                  # one .log.gz per test attempt
+```
+
+**All the per-test `.log.gz` files are gzipped** to save space — read them with
+`zcat` or `zless`, not `cat`:
+
+```bash
+# Read the captured TAP output of a specific test
+zless ci_infra_logs/${INFRA_ID}/tests/proxysql-tester.py/tests/test_flush_logs-t.log.gz
+
+# Or the ProxySQL server log captured during that test
+zless ci_infra_logs/${INFRA_ID}/tests/proxysql-tester.py/tests/test_flush_logs-t.proxysql.log.gz
+
+# Grep across every test's TAP output for a pattern
+zgrep -H 'not ok\|FAIL' ci_infra_logs/${INFRA_ID}/tests/proxysql-tester.py/tests/*.log.gz
+```
+
+## Debugging a flaky test
+
+A test that passes locally but fails intermittently on CI is usually racing
+against a timeout or a slow backend. The recipe to reproduce and stress-test
+it locally is:
+
+```bash
+# Bring infra up once, run the same test N times back-to-back against the
+# same running ProxySQL, capture each attempt's log under a separate subdir.
+export WORKSPACE=$(pwd)
+export TAP_GROUP="legacy-g3"
+export TEST_PY_TAP_INCL="test_flush_logs-t"     # regex of the test(s) to focus on
+export SKIP_CLUSTER_START=1
+source test/infra/common/env.sh
+
+# One infra lifecycle, many test runs:
+export INFRA_ID="flake-$(date +%s)"
+./test/infra/control/ensure-infras.bash
+
+for i in $(seq 1 20); do
+    echo "===== attempt $i ====="
+    ./test/infra/control/run-tests-isolated.bash 2>&1 | tee /tmp/flake-$i.log
+    # stash the per-test log before the next attempt overwrites it
+    mkdir -p /tmp/flake-runs/$i
+    cp -a ci_infra_logs/${INFRA_ID}/tests/proxysql-tester.py/tests/ /tmp/flake-runs/$i/
+done
+
+./test/infra/control/stop-proxysql-isolated.bash
+```
+
+Then inspect which attempts failed and diff their per-test logs:
+
+```bash
+# Which attempts had any FAIL?
+grep -l 'FAIL [1-9]' /tmp/flake-*.log
+
+# Compare the TAP output of a failing attempt against a passing one
+zdiff /tmp/flake-runs/3/tests/test_flush_logs-t.log.gz \
+      /tmp/flake-runs/7/tests/test_flush_logs-t.log.gz
+```
+
+If 20 attempts all pass locally but CI still fails, the race is probably
+CI-runner-specific (slow I/O on the shared runner, docker volume consistency
+delays, etc.) rather than a bug in the test or the code. That diagnosis is
+useful information even if it doesn't point at a fix.
+
 ## Troubleshooting
 
-- **"Directory Not Empty"**: Run `./test/infra/control/stop-proxysql-isolated.bash` with the same `INFRA_ID`
-- **Container issues**: Check logs in `ci_infra_logs/${INFRA_ID}/`
-- **Test failures**: Check logs in `ci_infra_logs/${INFRA_ID}/tests/`
+- **"Directory Not Empty"**: Run `./test/infra/control/stop-proxysql-isolated.bash` with the same `INFRA_ID` that was used when you started the infra. If you lost the ID, `docker network ls` will show you active `*_backend` networks — each one is a stuck infra; the name before `_backend` is the `INFRA_ID`.
+- **Container issues**: Check logs in `ci_infra_logs/${INFRA_ID}/infra-*/` (per-backend) and `ci_infra_logs/${INFRA_ID}/proxysql/` (ProxySQL side).
+- **Test failures**: Read the per-test `.log.gz` files under `ci_infra_logs/${INFRA_ID}/tests/proxysql-tester.py/tests/` with `zless` or `zcat` — see the "Where logs actually live" section above for the full layout.
+- **Stale docker state**: `docker ps -a | grep "${INFRA_ID}"` shows any leftover containers; `docker network prune` after stopping infras cleans up dangling networks.
