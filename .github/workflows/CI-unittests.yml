@@ -1,4 +1,4 @@
-name: CI-mysql84-g1
+name: CI-unittests
 run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
 
 on:
@@ -14,7 +14,7 @@ concurrency:
 jobs:
   run:
     if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
-    uses: sysown/proxysql/.github/workflows/ci-mysql84-g1.yml@GH-Actions
+    uses: sysown/proxysql/.github/workflows/ci-unittests.yml@GH-Actions
     secrets: inherit
     with:
       trigger: ${{ toJson(github) }}
