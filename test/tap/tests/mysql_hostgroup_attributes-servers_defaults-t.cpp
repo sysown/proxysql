@@ -135,17 +135,62 @@ int main(int, char**) {
 	}
 
 	MYSQL* admin = mysql_init(NULL);
-
-	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
+	if (!admin) {
+		fprintf(stderr, "File %s, line %d, Error: mysql_init failed for admin\n",
+			__FILE__, __LINE__);
 		return EXIT_FAILURE;
 	}
 
-	// Cleanup
-	MYSQL_QUERY_T(admin, "DROP TABLE IF EXISTS mysql_hostgroup_attributes_0508");
-	MYSQL_QUERY_T(admin, "CREATE TABLE mysql_hostgroup_attributes_0508 AS SELECT * FROM disk.mysql_hostgroup_attributes");
-	MYSQL_QUERY_T(admin, "DELETE FROM mysql_hostgroup_attributes");
-	MYSQL_QUERY_T(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
+		mysql_close(admin);
+		return EXIT_FAILURE;
+	}
+
+	// Tracks whether the backup table has been created; the restore path
+	// below must only run if it has.
+	bool backup_created = false;
+	// Runs the disk-config restore (if the backup table exists) and then
+	// closes admin. Used by every error path after the backup is created,
+	// as well as the happy-path exit. The previous version of this file
+	// had a 'cleanup:' label with the same logic but nothing ever jumped
+	// to it, so every test failure leaked admin and left disk state
+	// corrupted for subsequent tests.
+	auto run_cleanup_and_exit = [&](int /*unused*/) -> int {
+		if (backup_created) {
+			if (mysql_query_t(admin, "DELETE FROM disk.mysql_hostgroup_attributes")) {
+				fprintf(stderr, "File %s, line %d, Error: %s\n",
+					__FILE__, __LINE__, mysql_error(admin));
+			}
+			if (mysql_query_t(admin, "INSERT INTO disk.mysql_hostgroup_attributes SELECT * FROM mysql_hostgroup_attributes_0508")) {
+				fprintf(stderr, "File %s, line %d, Error: %s\n",
+					__FILE__, __LINE__, mysql_error(admin));
+			}
+		}
+		mysql_close(admin);
+		return exit_status();
+	};
+
+	// Setup: create a backup of the on-disk config. Use explicit
+	// mysql_query_t so we can run the cleanup lambda on failure rather
+	// than having MYSQL_QUERY_T return EXIT_FAILURE and skip cleanup.
+	if (mysql_query_t(admin, "DROP TABLE IF EXISTS mysql_hostgroup_attributes_0508")) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
+		return run_cleanup_and_exit(EXIT_FAILURE);
+	}
+	if (mysql_query_t(admin, "CREATE TABLE mysql_hostgroup_attributes_0508 AS SELECT * FROM disk.mysql_hostgroup_attributes")) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
+		return run_cleanup_and_exit(EXIT_FAILURE);
+	}
+	backup_created = true;
+	if (mysql_query_t(admin, "DELETE FROM mysql_hostgroup_attributes")) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
+		return run_cleanup_and_exit(EXIT_FAILURE);
+	}
+	if (mysql_query_t(admin, "LOAD MYSQL SERVERS TO RUNTIME")) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
+		return run_cleanup_and_exit(EXIT_FAILURE);
+	}
 
 	// 1. Set multiple valid values, and check it's properly set.
 	json j_multiple_vals { { "weight", 100 }, { "max_connections", 10000 }, { "use_ssl", 1}, };
@@ -179,11 +224,5 @@ int main(int, char**) {
 	};
 	check_matching_logline(f_log, inv_type_regex);
 
-cleanup:
-
-	MYSQL_QUERY_T(admin, "DELETE FROM disk.mysql_hostgroup_attributes");
-	MYSQL_QUERY_T(admin, "INSERT INTO disk.mysql_hostgroup_attributes SELECT * FROM mysql_hostgroup_attributes_0508");
-	mysql_close(admin);
-
-	return exit_status();
+	return run_cleanup_and_exit(EXIT_SUCCESS);
 }
