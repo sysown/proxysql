@@ -1005,9 +1005,9 @@ at the end. If you look at a PR "Checks" tab and can't answer *"what file
 on disk corresponds to this row, and why can't I find it by grepping?"*,
 read this section.
 
-We will use **one concrete check label** throughout — the one from issue
-that prompted this section — and walk it all the way down from "string on
-the PR" to "YAML line on disk":
+We will use **one concrete check label** throughout — the one from the
+issue that prompted this section — and walk it all the way down from
+"string on the PR" to "YAML line on disk":
 
 ```
 CI-maketest / builds (testgalera)
@@ -1030,13 +1030,13 @@ block listing its jobs.
 
 The workflow's **identity in the GitHub UI is the `name:` field**, not the
 filename. Two different files with the same `name:` will look like "the
-same workflow" in the UI (this is important — ProxySQL does exactly this,
+same workflow" in the UI (this is important — ProxySQL does exactly this;
 see #7 below).
 
 Concrete example — `.github/workflows/ci-maketest.yml` on branch `GH-Actions`:
 
 ```yaml
-name: CI-maketest                       ← ← ← this is the workflow name
+name: CI-maketest                       # <- this is the workflow name
 on:
   workflow_dispatch:
   workflow_call:
@@ -1046,7 +1046,7 @@ on:
       target:
         type: string
 jobs:
-  builds:                               ← there is exactly one job: "builds"
+  builds:                               # <- there is exactly one job: "builds"
     runs-on: ubuntu-22.04
     strategy:
       matrix:
@@ -1057,7 +1057,7 @@ jobs:
 ```
 
 This file *is* a workflow. It will stay a workflow whether it ever runs or
-not, whether it has runs on 10 commits or zero commits. It is an
+not, whether it has run on 10 commits or zero commits. It is an
 **immutable object at rest on disk**.
 
 #### 2. Workflow run — one execution of a workflow
