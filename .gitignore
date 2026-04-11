@@ -1,6 +1,9 @@
 # Internal Repos
 priv-infra/
 
+# Git worktrees
+.worktrees/
+
 # Lint output (do not commit)
 lint/
 
