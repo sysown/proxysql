@@ -26,30 +26,30 @@ unsigned long mythreadid[NUM_CONNS];
 // release connections that are about to be overwritten and on error paths
 // so partially-opened batches don't leak.
 static void close_all_conns() {
-	for (int i = 0; i < NUM_CONNS; i++) {
-		if (conns[i]) {
-			mysql_close(conns[i]);
-			conns[i] = NULL;
+	for (auto& conn : conns) {
+		if (conn) {
+			mysql_close(conn);
+			conn = nullptr;
 		}
 	}
 }
 
 int create_connections(CommandLine& cl) {
-	for (int i = 0; i < NUM_CONNS ; i++) {
-		MYSQL * mysql = mysql_init(NULL);
+	for (auto& conn : conns) {
+		MYSQL * mysql = mysql_init(nullptr);
 		if (!mysql) {
 			fprintf(stderr, "File %s, line %d, Error: mysql_init failed\n", __FILE__, __LINE__);
 			close_all_conns();
 			return exit_status();
 		}
 
-		if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+		if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, nullptr, cl.port, nullptr, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 			mysql_close(mysql);
 			close_all_conns();
 			return exit_status();
 		}
-		conns[i] = mysql;
+		conn = mysql;
 	}
 	return 0;
 }
@@ -67,7 +67,7 @@ int find_tids() {
 			return EXIT_FAILURE;
 		}
 		while ((row = mysql_fetch_row(proxy_res))) {
-			if (row[0] != NULL) { tid = atoll(row[0]); }
+			if (row[0] != nullptr) { tid = atoll(row[0]); }
 		}
 		mysql_free_result(proxy_res);
 		ok(tid == mysql_thread_id(mysql), "tid: %lu, mysql_thread_id(): %lu", tid, mysql_thread_id(mysql));
@@ -101,7 +101,7 @@ int main(int argc, char** argv) {
 	}
 
 
-	MYSQL* proxysql_admin = mysql_init(NULL);
+	MYSQL* proxysql_admin = mysql_init(nullptr);
 	// Initialize connections
 	if (!proxysql_admin) {
 		fprintf(stderr, "File %s, line %d, Error: mysql_init failed for 'proxysql_admin'\n",
@@ -109,7 +109,7 @@ int main(int argc, char** argv) {
 		return -1;
 	}
 
-	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, nullptr, cl.admin_port, nullptr, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		mysql_close(proxysql_admin);
 		return -1;
@@ -170,14 +170,14 @@ int main(int argc, char** argv) {
 	mysql_free_result(proxy_res);
 
 	// kill all the connections
-	for (int i = 0; i < NUM_CONNS ; i++) {
+	for (unsigned i = 0; i < NUM_CONNS; i++) { // NOLINT(modernize-loop-convert)
 		std::string s = "KILL CONNECTION " + std::to_string(mythreadid[i]);
 		rc = run_q(proxysql_admin, s.c_str());
 		ok(rc == 0 , "%s" , s.c_str());
 	}
 	sleep(1);
-	for (int i = 0; i < NUM_CONNS ; i++) {
-		MYSQL * mysql = conns[i];
+	for (auto& conn : conns) {
+		MYSQL * mysql = conn;
 		int rc = run_q(mysql, "DO 1");
 		ok(rc != 0, (rc == 0 ? "Connection still alive" : "Connection killed"));
 	}
@@ -207,8 +207,8 @@ int main(int argc, char** argv) {
 	proxy_res = mysql_store_result(proxysql_admin);
 	mysql_free_result(proxy_res);
 
-	for (int i = 0; i < NUM_CONNS ; i++) {
-		MYSQL * mysql = conns[i];
+	for (auto& conn : conns) {
+		MYSQL * mysql = conn;
 		int rc = run_q(mysql, "BEGIN");
 		ok(rc == 0, "Running BEGIN on new connection");
 	}
@@ -219,14 +219,14 @@ int main(int argc, char** argv) {
 	mysql_free_result(proxy_res);
 
 	// kill all the connections
-	for (int i = 0; i < NUM_CONNS ; i++) {
+	for (unsigned i = 0; i < NUM_CONNS; i++) { // NOLINT(modernize-loop-convert)
 		std::string s = "KILL CONNECTION " + std::to_string(mythreadid[i]);
 		rc = run_q(proxysql_admin, s.c_str());
 		ok(rc == 0 , "%s" , s.c_str());
 	}
 	sleep(3);
-	for (int i = 0; i < NUM_CONNS ; i++) {
-		MYSQL * mysql = conns[i];
+	for (auto& conn : conns) {
+		MYSQL * mysql = conn;
 		int rc = run_q(mysql, "DO 1");
 		ok(rc != 0, (rc == 0 ? "Connection still alive" : "Connection killed"));
 	}
