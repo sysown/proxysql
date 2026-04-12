@@ -15,12 +15,22 @@ fi
 echo "Using MySQL version: ${MYSQL_VERSION}"
 
 # Deploy 3-node replication with GTID
+# --base-port=3305 because dbdeployer assigns base+1 to the first node (master=3306, node1=3307, node2=3308)
+# Each -c flag adds a separate line to my.sandbox.cnf (comma-separated --my-cnf-options doesn't work)
 dbdeployer deploy replication "${MYSQL_VERSION}" \
     --nodes=3 \
     --gtid \
     --bind-address=0.0.0.0 \
-    --base-port=3306 \
-    --my-cnf-options="log-slave-updates,binlog_format=ROW,max_connections=500,innodb_buffer_pool_size=128M,innodb_log_file_size=32M,innodb_flush_log_at_trx_commit=2,sync_binlog=0,binlog_checksum=NONE,show_compatibility_56=ON" \
+    --base-port=3305 \
+    -c log-slave-updates \
+    -c binlog_format=ROW \
+    -c max_connections=500 \
+    -c innodb_buffer_pool_size=128M \
+    -c innodb_log_file_size=32M \
+    -c innodb_flush_log_at_trx_commit=2 \
+    -c sync_binlog=0 \
+    -c binlog_checksum=NONE \
+    -c show_compatibility_56=ON \
     --repl-crash-safe
 
 echo "Replication deployed. Waiting for all nodes to be ready..."
@@ -33,13 +43,21 @@ if [ -z "${SANDBOX_DIR}" ]; then
 fi
 echo "Sandbox directory: ${SANDBOX_DIR}"
 
+# dbdeployer replication layout: master (port 3306), node1 (port 3307), node2 (port 3308)
+# dbdeployer default root password is 'msandbox'
+DBDEPLOYER_ROOT_PASS="msandbox"
+MYSQL_CMD="mysql -h127.0.0.1 -uroot -p${DBDEPLOYER_ROOT_PASS}"
+NODE_PORTS=(3306 3307 3308)
+NODE_NAMES=("master" "node1" "node2")
+
 # Wait for all 3 nodes to accept connections
-for NODE_NUM in 1 2 3; do
-    PORT=$((3305 + NODE_NUM))
-    echo -n "Waiting for node${NODE_NUM} on port ${PORT}..."
+for i in 0 1 2; do
+    PORT="${NODE_PORTS[$i]}"
+    NAME="${NODE_NAMES[$i]}"
+    echo -n "Waiting for ${NAME} on port ${PORT}..."
     MAX_WAIT=60
     COUNT=0
-    while ! "${SANDBOX_DIR}/node${NODE_NUM}/use" -e "SELECT 1" >/dev/null 2>&1; do
+    while ! ${MYSQL_CMD} -P${PORT} -e "SELECT 1" >/dev/null 2>&1; do
         if [ $COUNT -ge $MAX_WAIT ]; then
             echo " TIMEOUT"
             exit 1
@@ -57,16 +75,16 @@ ROOT_PASSWORD="${ROOT_PASSWORD:-default_password}"
 INFRA="${INFRA:-infra-dbdeployer57}"
 
 echo "Creating test users on all nodes..."
-for NODE_NUM in 1 2 3; do
-    NODE_SCRIPT="${SANDBOX_DIR}/node${NODE_NUM}/use"
-    echo "Configuring users on node${NODE_NUM}..."
+for PORT in "${NODE_PORTS[@]}"; do
+    echo "Configuring users on port ${PORT}..."
 
-    "${NODE_SCRIPT}" <<SQL
+    ${MYSQL_CMD} -P${PORT} <<SQL
 SET SQL_LOG_BIN=0;
 
--- root user with dynamic password
+-- root user with dynamic password (both remote and localhost)
 CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED WITH 'mysql_native_password' BY '${ROOT_PASSWORD}';
 ALTER USER 'root'@'%' IDENTIFIED WITH 'mysql_native_password' BY '${ROOT_PASSWORD}';
+ALTER USER 'root'@'localhost' IDENTIFIED WITH 'mysql_native_password' BY '${ROOT_PASSWORD}';
 GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
 
 -- Monitor user
@@ -105,6 +123,14 @@ GRANT ALL PRIVILEGES ON *.* TO 'user'@'%';
 
 FLUSH PRIVILEGES;
 SQL
+done
+
+# Set read_only=1 on replicas (ports 3307, 3308) to match infra-mysql57 behavior
+# Use ROOT_PASSWORD since we just changed the root password above
+echo "Setting read_only on replicas..."
+for PORT in 3307 3308; do
+    mysql -h127.0.0.1 -uroot -p"${ROOT_PASSWORD}" -P${PORT} -e "SET GLOBAL read_only=1; SET GLOBAL super_read_only=1;"
+    echo "  port ${PORT}: read_only=1"
 done
 
 # Signal readiness via marker file (used by docker-mysql-post.bash)

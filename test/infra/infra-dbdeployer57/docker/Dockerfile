@@ -21,13 +21,17 @@ RUN curl -fsSL "https://github.com/ProxySQL/dbdeployer/releases/download/v${DBDE
     && chmod +x /usr/local/bin/dbdeployer
 
 # Download and unpack MySQL 5.7 tarball (pre-baked so no download at runtime)
-RUN mkdir -p /root/downloads \
-    && curl -fsSL -o /root/downloads/mysql-5.7.44.tar.gz "${MYSQL_TARBALL_URL}" \
-    && dbdeployer unpack /root/downloads/mysql-5.7.44.tar.gz \
-    && rm -f /root/downloads/mysql-5.7.44.tar.gz
+RUN mkdir -p /root/downloads /root/opt/mysql \
+    && curl -fsSL -o /root/downloads/mysql-5.7.44-linux-glibc2.12-x86_64.tar.gz "${MYSQL_TARBALL_URL}" \
+    && dbdeployer unpack /root/downloads/mysql-5.7.44-linux-glibc2.12-x86_64.tar.gz \
+    && rm -f /root/downloads/mysql-5.7.44-linux-glibc2.12-x86_64.tar.gz
 
-# Clear reserved ports so dbdeployer allows 3306
-RUN dbdeployer defaults update reserved-ports ''
+# Clear reserved ports so dbdeployer allows base-port 3305 (nodes get 3306,3307,3308)
+# dbdeployer reserves 1186,3306,5432,33060,33062 by default; replace with harmless value
+RUN dbdeployer defaults update reserved-ports '0'
+
+# Make MySQL client available in PATH for docker exec health checks
+ENV PATH="/root/opt/mysql/5.7.44/bin:${PATH}"
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
