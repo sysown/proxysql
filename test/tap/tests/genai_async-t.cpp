@@ -861,12 +861,12 @@ int main() {
 
 	// If there were failures, provide a helpful hint about backend services
 	if (exit_status() != 0) {
-		diag("");
+		diag("%s", "");
 		diag("NOTICE: Some tests failed. If you see 'Failed to generate embeddings' or");
 		diag("'Failed to rerank documents', it most likely means the backend AI services");
 		diag("(e.g., llama-server) are not running or are unreachable at the configured URIs.");
 		diag("Check 'genai-embedding_uri' and 'genai-rerank_uri' in global_variables.");
-		diag("");
+		diag("%s", "");
 	}
 
 	return exit_status();

@@ -134,17 +134,17 @@ int main(int argc, char** argv) {
 	diag("Using RESTAPI base address: %s", base_address.c_str());
 
 	diag("=== Regression Test #3223: RESTAPI Script Execution & Return Codes ===");
-	diag("");
+	diag("%s", "");
 	diag("PURPOSE:");
 	diag("  This test validates that ProxySQL's RESTAPI correctly handles script");
 	diag("  execution and returns appropriate HTTP status codes and error codes.");
-	diag("");
+	diag("%s", "");
 	diag("TEST SCENARIOS:");
 	diag("  - Valid requests: Scripts returning proper JSON output (200 OK)");
 	diag("  - Invalid input: Malformed JSON or missing parameters (400 Bad Request)");
 	diag("  - Script failures: Timeouts, permission errors, signals (424 Failed)");
 	diag("  - Edge cases: Large outputs, partial flushes, closed pipes");
-	diag("");
+	diag("%s", "");
 	diag("SCRIPT PATH: Using '%s' for script resolution",
 		getenv("REGULAR_INFRA_DATADIR") ? getenv("REGULAR_INFRA_DATADIR") : cl.workdir);
 	diag("=========================================================================");

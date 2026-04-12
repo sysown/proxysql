@@ -423,13 +423,13 @@ int main(int argc, char** argv) {
 	diag("================================================================================");
 	diag("This test verifies SQLite3 password extension functions in the ProxySQL Admin");
 	diag("interface, testing compatibility with MySQL authentication methods.");
-	diag("");
+	diag("%s", "");
 	diag("Test scenarios:");
 	diag("  - MYSQL_NATIVE_PASSWORD: MySQL 4.1+ native password hashing");
 	diag("  - CACHING_SHA2_PASSWORD: MySQL 8.0+ caching SHA2 password hashing");
 	diag("  - Random password generation and hash verification");
 	diag("  - End-to-end connection testing with generated passwords");
-	diag("");
+	diag("%s", "");
 	diag("Connection parameters:");
 	diag("  - MySQL Host: %s", cl.mysql_host);
 	diag("  - MySQL Port: %d", cl.mysql_port);
@@ -437,7 +437,7 @@ int main(int argc, char** argv) {
 	diag("  - Admin Host: %s", cl.admin_host);
 	diag("  - Admin Port: %d", cl.admin_port);
 	diag("================================================================================");
-	diag("");
+	diag("%s", "");
 
 	MYSQL* mysql = mysql_init(NULL);
 
@@ -448,7 +448,7 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 	diag("Successfully connected to MySQL backend");
-	diag("");
+	diag("%s", "");
 
 	// Check MySQL version before calling plan() so we can set the correct test count
 	// MySQL 8.0+ supports 'BY RANDOM PASSWORD' syntax, MySQL 5.7 does not

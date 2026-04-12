@@ -524,12 +524,12 @@ int main(int argc, char** argv) {
 	diag("================================================================================");
 	diag("This test verifies that unsupported queries return the expected error codes,");
 	diag("and that conditionally-enabled queries work correctly when enabled/disabled.");
-	diag("");
+	diag("%s", "");
 	diag("Test scenarios:");
 	diag("  - Unsupported queries (LOAD DATA LOCAL INFILE) should fail with error 1047");
 	diag("  - Conditionally enabled queries should work when enabled");
 	diag("  - Conditionally enabled queries should fail when disabled");
-	diag("");
+	diag("%s", "");
 	diag("Connection parameters:");
 	diag("  - Host: %s", cl.host);
 	diag("  - Port: %d", cl.port);
@@ -555,7 +555,7 @@ int main(int argc, char** argv) {
 			mysql_close(dbg_admin);
 		}
 	}
-	diag("");
+	diag("%s", "");
 
 	// perform a different connection per query
 	for (const auto& unsupported_query : unsupported_queries) {

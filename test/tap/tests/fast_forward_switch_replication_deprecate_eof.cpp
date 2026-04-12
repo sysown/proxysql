@@ -117,18 +117,18 @@ int main() {
 
         rc = mysql_query(proxysql_admin,
                          ("UPDATE global_variables SET variable_value='" + client_value + "' WHERE variable_name='mysql-enable_client_deprecate_eof'").c_str());
-        ok(rc == 0, ("Set mysql-enable_client_deprecate_eof=" + client_value).c_str());
+        ok(rc == 0, "Set mysql-enable_client_deprecate_eof=%s", client_value.c_str());
 
         rc = mysql_query(proxysql_admin,
                          ("UPDATE global_variables SET variable_value='" + server_value + "' WHERE variable_name='mysql-enable_server_deprecate_eof'").c_str());
-        ok(rc == 0, ("Set mysql-enable_server_deprecate_eof=" + server_value).c_str());
+        ok(rc == 0, "Set mysql-enable_server_deprecate_eof=%s", server_value.c_str());
 
         rc = mysql_query(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
         ok(rc == 0, "Loaded MYSQL variables to runtime");
 
         // Connect for binlog reading
         MYSQL* binlog_conn = mysql_init(NULL);
-        diag("Iteration %d: Reading binlogs via ProxySQL at %s:%d as %s/%s", i, cl.host, cl.port, cl.root_username, cl.root_password);
+        diag("Iteration %zu: Reading binlogs via ProxySQL at %s:%d as %s/%s", i, cl.host, cl.port, cl.root_username, cl.root_password);
         if (!mysql_real_connect(binlog_conn, cl.host, cl.root_username, cl.root_password, NULL, cl.port, NULL, 0)) {
             diag("Binlog connection failed for config %s: %s", config.description.c_str(), mysql_error(binlog_conn));
             mysql_close(proxysql_admin);
