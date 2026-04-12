@@ -648,16 +648,25 @@ int main(int argc, char** argv) {
 	// Configure monitor: use 'postgres' user which is accepted by the
 	// backend, set a tight connect_interval so cycles run within the test
 	// wait window. Restore original values afterwards.
+	//
+	// We deliberately do NOT change pgsql-monitor_username /
+	// pgsql-monitor_password. An earlier version of this test set them
+	// to 'postgres'/'postgres' on the assumption that the backend had a
+	// postgres user with password 'postgres', but the actual CI infra
+	// (docker-pgsql16-single) randomizes POSTGRES_PASSWORD per container
+	// startup (e.g. "05e792e51d"), so the hardcoded credentials never
+	// authenticated and every monitor connect failed with
+	//   FATAL: password authentication failed for user "postgres"
+	// The default monitor/monitor user works against the infra's
+	// pg_hba.conf and is what the initial (pre-test) connect check
+	// already uses successfully.
 	long original_connect_interval = getConnectInterval(a);
-	std::string original_monitor_username = exec_scalar(a,
+	// Read current monitor username for diagnostic logging only.
+	std::string monitor_username = exec_scalar(a,
 		"SELECT Variable_Value FROM global_variables WHERE Variable_Name='pgsql-monitor_username'");
-	std::string original_monitor_password = exec_scalar(a,
-		"SELECT Variable_Value FROM global_variables WHERE Variable_Name='pgsql-monitor_password'");
-	diag("Original monitor: user=%s interval=%ld ms",
-		original_monitor_username.c_str(), original_connect_interval);
+	diag("Current monitor: user=%s interval=%ld ms",
+		monitor_username.c_str(), original_connect_interval);
 
-	exec_ok(a, "SET pgsql-monitor_username='postgres'");
-	exec_ok(a, "SET pgsql-monitor_password='postgres'");
 	setConnectInterval(a, 2000);
 	exec_ok(a, "UPDATE pgsql_servers SET use_ssl=1");
 	exec_ok(a, "LOAD PGSQL SERVERS TO RUNTIME");
@@ -666,15 +675,9 @@ int main(int argc, char** argv) {
 	test_monitor_ssl_with_per_server_params(a);
 	test_monitor_uses_per_server_row(a);
 
-	// Restore original monitor settings
-	{
-		std::stringstream q;
-		q << "SET pgsql-monitor_username='" << original_monitor_username << "'";
-		exec_ok(a, q.str().c_str());
-		q.str("");
-		q << "SET pgsql-monitor_password='" << original_monitor_password << "'";
-		exec_ok(a, q.str().c_str());
-	}
+	// Restore original connect interval. Monitor username/password are
+	// no longer touched by this test - see comment above - so there's
+	// nothing to restore there.
 	setConnectInterval(a, (int)original_connect_interval);
 
 	// Part 3: Cluster query support
