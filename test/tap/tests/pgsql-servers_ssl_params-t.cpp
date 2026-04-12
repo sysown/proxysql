@@ -661,10 +661,11 @@ int main(int argc, char** argv) {
 	// pg_hba.conf and is what the initial (pre-test) connect check
 	// already uses successfully.
 	long original_connect_interval = getConnectInterval(a);
-	std::string original_monitor_username = exec_scalar(a,
+	// Read current monitor username for diagnostic logging only.
+	std::string monitor_username = exec_scalar(a,
 		"SELECT Variable_Value FROM global_variables WHERE Variable_Name='pgsql-monitor_username'");
-	diag("Original monitor: user=%s interval=%ld ms",
-		original_monitor_username.c_str(), original_connect_interval);
+	diag("Current monitor: user=%s interval=%ld ms",
+		monitor_username.c_str(), original_connect_interval);
 
 	setConnectInterval(a, 2000);
 	exec_ok(a, "UPDATE pgsql_servers SET use_ssl=1");

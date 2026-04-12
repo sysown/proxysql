@@ -2575,24 +2575,36 @@ void* PgSQL_monitor_scheduler_thread() {
 				if (tasks_conf.ping.params.interval > 0) {
 					const uint64_t clamped = cur_intv_start + tasks_conf.ping.params.interval;
 					if (next_intvs.next_ping_at > clamped) {
+						proxy_debug(PROXY_DEBUG_MONITOR, 5,
+							"Clamped next_ping_at   old=%lu new=%lu interval=%d\n",
+							next_intvs.next_ping_at, clamped, tasks_conf.ping.params.interval);
 						next_intvs.next_ping_at = clamped;
 					}
 				}
 				if (tasks_conf.connect.params.interval > 0) {
 					const uint64_t clamped = cur_intv_start + tasks_conf.connect.params.interval;
 					if (next_intvs.next_connect_at > clamped) {
+						proxy_debug(PROXY_DEBUG_MONITOR, 5,
+							"Clamped next_connect_at   old=%lu new=%lu interval=%d\n",
+							next_intvs.next_connect_at, clamped, tasks_conf.connect.params.interval);
 						next_intvs.next_connect_at = clamped;
 					}
 				}
 				if (tasks_conf.readonly.params.interval > 0) {
 					const uint64_t clamped = cur_intv_start + tasks_conf.readonly.params.interval;
 					if (next_intvs.next_readonly_at > clamped) {
+						proxy_debug(PROXY_DEBUG_MONITOR, 5,
+							"Clamped next_readonly_at   old=%lu new=%lu interval=%d\n",
+							next_intvs.next_readonly_at, clamped, tasks_conf.readonly.params.interval);
 						next_intvs.next_readonly_at = clamped;
 					}
 				}
 				if (tasks_conf.repl_lag.params.interval > 0) {
 					const uint64_t clamped = cur_intv_start + tasks_conf.repl_lag.params.interval;
 					if (next_intvs.next_repl_lag_at > clamped) {
+						proxy_debug(PROXY_DEBUG_MONITOR, 5,
+							"Clamped next_repl_lag_at   old=%lu new=%lu interval=%d\n",
+							next_intvs.next_repl_lag_at, clamped, tasks_conf.repl_lag.params.interval);
 						next_intvs.next_repl_lag_at = clamped;
 					}
 				}
