@@ -98,9 +98,9 @@ int main() {
 */
 	};
 	if (cl.use_noise) {
-		plan(1+queries.size() + 2);
+		plan(1+static_cast<int>(queries.size()) + 2);
 	} else {
-		plan(1+queries.size());
+		plan(1+static_cast<int>(queries.size()));
 	}
 
 

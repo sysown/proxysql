@@ -70,9 +70,9 @@ int main() {
 	}
 	mysql_close(proxysql_admin);
 	if (cl.use_noise) {
-		plan(tables.size() + 1 + 2);
+		plan(static_cast<int>(tables.size()) + 1 + 2);
 	} else {
-		plan(tables.size() + 1);
+		plan(static_cast<int>(tables.size()) + 1);
 	}
 	ok(tables.size() > 40 , "Number of tables to check: %ld" , tables.size());
 

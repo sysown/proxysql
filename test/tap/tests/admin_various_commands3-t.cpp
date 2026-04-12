@@ -95,7 +95,7 @@ int main() {
 			p++;
 		}
 	}
-	plan(p);
+	plan(static_cast<int>(p));
 	diag("Running test with %lu queries", queries.size());
 
 
