@@ -15,8 +15,8 @@ The **mysqlx plugin** is a dynamically loaded plugin that adds MySQL X Protocol 
 | Protocol-aware frame forwarding | Supported (all 23 message types) |
 | Event-driven thread pool | Supported (configurable, default 4 threads) |
 | Connection pooling | Supported (per-thread cache, hostgroup/user/schema matching) |
-| TLS (frontend) | Stub (3 modes: Disabled/Preferred/Required) |
-| TLS (backend) | Stub |
+| TLS (frontend) | Supported (3 modes: Disabled/Preferred/Required, OpenSSL Memory BIO) |
+| TLS (backend) | Supported (via CapabilitiesSet negotiation, PREFERRED mode) |
 | CRUD / Document API | Forwarded to backend |
 | Prepared Statements | Forwarded to backend |
 | Cursors | Forwarded to backend |
@@ -95,13 +95,14 @@ Define X Protocol user accounts and authentication settings.
 | username | VARCHAR NOT NULL | — | Proxy username (must exist in `mysql_users`) |
 | active | INT CHECK (0,1) | 1 | Whether this user entry is active |
 | require_tls | INT CHECK (0,1) | 0 | Require TLS for X Protocol connections |
-| allowed_auth_methods | VARCHAR | `'MYSQL41,PLAIN'` | Comma-separated list of allowed authentication methods |
+| allowed_auth_methods | VARCHAR | `''` | Comma-separated list of allowed authentication methods (empty = all) |
 | default_route | VARCHAR | `''` | Default route name for this user |
 | policy_profile | VARCHAR | `''` | Policy profile name (reserved for future use) |
 | backend_auth_mode | VARCHAR CHECK | `'mapped'` | Backend authentication mode: `mapped`, `service_account`, or `pass_through` |
 | backend_username | VARCHAR | `''` | Backend username (used in `service_account` mode) |
 | backend_password | VARCHAR | `''` | Backend password (used in `service_account` mode) |
 | attributes | VARCHAR | `''` | JSON attributes for future extensions |
+| comment | VARCHAR | `''` | User comment |
 
 ### 4.2. `runtime_mysqlx_users` (Runtime Table)
 
@@ -120,6 +121,7 @@ Define X Protocol listener routes.
 | strategy | VARCHAR | `'first_available'` | Server selection strategy: `first_available` or `round_robin` |
 | active | INT CHECK (0,1) | `1` | Whether this route is active |
 | attributes | VARCHAR | `''` | JSON attributes for future extensions |
+| comment | VARCHAR | `''` | Route comment |
 
 ### 4.4. `runtime_mysqlx_routes` (Runtime Table)
 
@@ -136,6 +138,7 @@ Maps backend servers to their X Protocol ports.
 | mysqlx_port | INT | `33060` | X Protocol port on the backend |
 | use_ssl | INT CHECK (0,1) | `0` | Use SSL for backend X Protocol connection |
 | attributes | VARCHAR | `''` | JSON attributes |
+| comment | VARCHAR | `''` | Endpoint comment |
 
 ### 4.6. `runtime_mysqlx_backend_endpoints` (Runtime Table)
 
@@ -184,6 +187,30 @@ SAVE MYSQLX VARIABLES TO MEMORY;
 ```
 
 Aliases: `TO MEM`, `FROM RUNTIME`, `FROM RUN`.
+
+### 5.3. DISK Commands
+
+#### 5.3.1. LOAD FROM DISK (Disk → Configuration)
+
+```sql
+LOAD MYSQLX USERS FROM DISK;
+LOAD MYSQLX ROUTES FROM DISK;
+LOAD MYSQLX BACKEND ENDPOINTS FROM DISK;
+LOAD MYSQLX VARIABLES FROM DISK;
+```
+
+Loads persisted configuration from the on-disk SQLite database into the in-memory configuration tables.
+
+#### 5.3.2. SAVE TO DISK (Configuration → Disk)
+
+```sql
+SAVE MYSQLX USERS TO DISK;
+SAVE MYSQLX ROUTES TO DISK;
+SAVE MYSQLX BACKEND ENDPOINTS TO DISK;
+SAVE MYSQLX VARIABLES TO DISK;
+```
+
+Persists the in-memory configuration tables to the on-disk SQLite database, surviving ProxySQL restarts.
 
 ## 6. Authentication
 
@@ -394,7 +421,7 @@ mysqlsh root@127.0.0.1:33060 --sql
 
 | Limitation | Detail |
 |------------|--------|
-| TLS is a stub | Modes are defined but full OpenSSL BIO implementation is pending. |
+| TLS requires OpenSSL | TLS uses OpenSSL Memory BIO pattern. Certificates must be configured via `mysqlx_tls_*` variables. |
 | No query rules or policy engine | All traffic is routed based on route configuration only. |
 | No cluster sync | MYSQLX tables are not replicated between ProxySQL nodes. |
 | No Group Replication notifications | Not supported. |

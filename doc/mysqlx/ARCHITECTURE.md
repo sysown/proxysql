@@ -162,7 +162,7 @@ Traditional MySQL connections use the classic wire protocol (port 3306). MySQL 8
 |---|---|
 | **Header** | `plugins/mysqlx/include/mysqlx_admin_schema.h` |
 | **Source** | `plugins/mysqlx/src/mysqlx_admin_schema.cpp` |
-| **Responsibility** | Admin table DDL definitions, variable definitions, and LOAD/SAVE command handlers. Defines the schema for runtime configuration tables (`mysqlx_users`, `mysqlx_routes`, `mysqlx_endpoints`, `mysqlx_variables`) and implements all admin commands. |
+| **Responsibility** | Admin table DDL definitions, variable definitions, and LOAD/SAVE command handlers. Defines the schema for runtime configuration tables (`mysqlx_users`, `mysqlx_routes`, `mysqlx_backend_endpoints`, `mysqlx_variables`) and implements all admin commands. |
 | **New v2 variables** | `mysqlx_thread_pool_size` (default 4), `mysqlx_connect_timeout` (default 10000ms), `mysqlx_tls_mode` (default DISABLED), `mysqlx_tls_cert`, `mysqlx_tls_key`, `mysqlx_tls_ca`, `mysqlx_tls_backend_mode` (default DISABLED), `mysqlx_max_cached_connections_per_thread` (default 100). |
 
 ## 4. Thread Pool Architecture
@@ -324,6 +324,7 @@ If a session needs more data (e.g., waiting for a client response), it returns i
 | `X_TLS_CONNECT_DONE` | Backend TLS complete |
 | `X_SESSION_CLOSING` | Session shutting down |
 | `X_SESSION_CLOSED` | Session terminated |
+| `X_SESSION_RESET_WAITING` | Waiting for backend response to SESS_RESET |
 
 ## 6. Data Stream I/O — Non-Blocking Frame Parsing
 
@@ -490,7 +491,7 @@ Multi-frame responses from the backend (e.g., column metadata → rows → fetch
 | `PREFERRED` | `tls` capability advertised. Client chooses. | TLS if backend supports. |
 | `REQUIRED` | `tls` capability advertised. Reject client that doesn't upgrade. | TLS required. |
 
-Default: `DISABLED` (stub — full TLS implementation pending).
+Default: `DISABLED`. Frontend TLS uses OpenSSL Memory BIO pattern (SSL_new, BIO_new_mem_buf, SSL_set_accept_state). Backend TLS negotiates via CapabilitiesSet.
 
 ### 9.2 TLS State Machine
 

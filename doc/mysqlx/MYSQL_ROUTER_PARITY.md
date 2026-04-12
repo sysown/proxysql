@@ -10,9 +10,9 @@ gaps, and areas where ProxySQL is superior.
 |---|---|---|
 | Source | `x_connection.cc` (~3200 lines) | `mysqlx_session.cpp` + `mysqlx_thread.cpp` (~970 lines) |
 | Architecture | Async callback-based (ASIO-style) | poll()-based synchronous event loop |
-| State machine | ~100 enum states | 15 states in `MysqlxSession::Status` |
-| TLS modes | 5: Disabled, Preferred, Required, AsClient, Passthrough | Stub only (not yet implemented) |
-| TLS termination | Full: Router terminates TLS, re-encrypts to backend | Not implemented |
+| State machine | ~100 enum states | 23 states in `MysqlxSession::Status` |
+| TLS modes | 5: Disabled, Preferred, Required, AsClient, Passthrough | 3: Disabled, Preferred, Required |
+| TLS termination | Full: Router terminates TLS, re-encrypts to backend | Frontend: OpenSSL Memory BIO; Backend: CapabilitiesSet negotiation |
 | TLS passthrough | Yes - raw TLS record forwarding at record layer | No |
 | Asymmetric TLS | Yes (client-TLS + backend-plain, or vice versa) | No |
 | Authentication | Pass-through to backend (never sees passwords) | Local validation via credential_lookup callback |
@@ -36,7 +36,7 @@ gaps, and areas where ProxySQL is superior.
 | Handshake timeout | 9s (kDefaultClientConnectTimeout) | 10s (HANDSHAKE_TIMEOUT_MS) |
 | Idle timeout | 0 (disabled by default) | 8h (IDLE_TIMEOUT_MS) |
 | Max connections | Configurable, 0=unlimited | 10,000 per thread (max_sessions_) |
-| Backend connect timeout | Configurable (destination_connect_timeout) | No explicit timeout (relies on TCP) |
+| Backend connect timeout | Configurable (destination_connect_timeout) | 10s (HANDSHAKE_TIMEOUT_MS), configurable via mysqlx_connect_timeout |
 | Thread model | Connection-per-thread from thread pool | Dedicated thread(s) with poll() loop |
 | Admin interface | Config file based | SQL-based admin (mysqlx_admin_schema) |
 | Plugin architecture | Compiled in, cannot be loaded/unloaded | Dynamically loaded .so plugin |
@@ -68,9 +68,11 @@ The Router's server_init_tls() orchestrates checking server capabilities,
 sending CapabilitiesSet(tls=true) to backend, handling Ok/Error responses,
 then calling tls_connect().
 
-ProxySQL has TLS stubs only. handler_tls_accept_init() is a no-op. The
-encrypted_ flag exists on MysqlxDataStream but is never set to true. This
-is the biggest feature gap.
+ProxySQL implements frontend TLS using OpenSSL Memory BIOs (SSL_new,
+BIO_new_mem_buf, SSL_set_accept_state), integrated into the session state
+machine via X_TLS_ACCEPT_INIT/CONT/DONE states. Backend TLS is negotiated
+via CapabilitiesSet. Missing features compared to Router: AsClient mode,
+passthrough mode, and asymmetric TLS.
 
 ### Connection Lifecycle
 
@@ -95,12 +97,9 @@ of 7 terminal message types. All frames forwarded until terminal frame seen.
 
 | Priority | Feature | Notes |
 |---|---|---|
-| P0 | TLS termination | Without TLS, PLAIN auth is unusable and MYSQL41 credentials are exposed |
-| P0 | Backend TLS | Needed for end-to-end encryption; Router initiates TLS to backend via CapabilitiesSet |
 | P1 | TLS passthrough | Forward raw TLS records without termination |
+| P1 | Asymmetric TLS | AsClient mode — match client TLS choice on backend |
 | P1 | Per-message response state machines | More robust handling of multi-frame responses |
-| P1 | CapabilitiesSet TLS negotiation | Properly handle client requesting TLS via CapabilitiesSet |
-| P2 | Backend connect timeout | Router has destination_connect_timeout; we rely on TCP |
 | P2 | Notice forwarding awareness | Explicitly handle notices as non-terminal in all states |
 | P2 | Compression protocol error code | Match MySQL's specific X Protocol error code |
 | P3 | Session Reset passthrough | Full response tracking with pool invalidation |
@@ -121,11 +120,11 @@ of 7 terminal message types. All frames forwarded until terminal frame seen.
 
 ## Summary
 
-MySQL Router has a more mature protocol implementation (especially TLS with
-5 modes, per-message-type state machines, and proper Capabilities negotiation),
+MySQL Router has a more mature protocol implementation (per-message-type
+state machines, 5-mode TLS with passthrough, and proper Capabilities negotiation),
 but ProxySQL has a fundamentally superior proxy architecture (connection
 pooling, query-level routing, multiplexing, local auth) that MySQL Router
 does not support with its pass-through design.
 
-The biggest gap to close is TLS; everything else is either a nice-to-have
-or already handled differently by design.
+The core TLS gap (frontend termination + backend negotiation) is now closed.
+Remaining gaps are TLS passthrough and AsClient mode.

@@ -2,11 +2,11 @@
 
 ## 1. Overview
 
-The mysqlx plugin has **467+ test assertions** across **22 test files** in three tiers:
+The mysqlx plugin has **600+ test assertions** across **24 test files** in three tiers:
 
 | Tier | Scope | Dependencies | Count |
 |------|-------|-------------|-------|
-| **Tier 1: Pure Unit Tests** | No external dependencies, no database, no globals | None | 17 files |
+| **Tier 1: Pure Unit Tests** | No external dependencies, no database, no globals | None | 21 files |
 | **Tier 2: Integration Tests** | In-memory SQLite3, plugin `.so` loading, TCP listener | Built plugin `.so` | 3 files |
 | **Tier 3: End-to-End Tests** | Real MySQL 8.x backend with X Protocol | MySQL 8.x sandbox | 2 files |
 
@@ -44,8 +44,16 @@ The mysqlx plugin has **467+ test assertions** across **22 test files** in three
 | `mysqlx_session_unit-t.cpp` | Unit | 42 | 22 session state transitions, capabilities negotiation flow, MYSQL41 auth challenge-response, auth failure handling, session reset, backend connection flow, frame forwarding, session closing |
 | `mysqlx_thread_unit-t.cpp` | Unit | 22 | Thread initialization, listener add/remove, poll set management, session registration/unregistration, connection cache operations, pool matching (hostgroup/user/schema), pool exclusion (transaction/stmt), max cache eviction |
 | `mysqlx_message_dispatch_unit-t.cpp` | Unit | 49 | All 23 client message type dispatch (locally handled vs forwarded), multi-frame response forwarding, unknown message type error generation, SESS_RESET forwarding, CRUD operations, prepared statement tracking, cursor operations, expect operations |
+| `mysqlx_concurrent_unit-t.cpp` | Unit | 15 | Multi-thread session stress: concurrent handler invocations, session registration/deregistration, connection cache races |
+| `mysqlx_backend_auth_unit-t.cpp` | Unit | 15 | Backend authentication modes (mapped/service_account/pass_through), credential override, auth mode validation |
+| `mysqlx_credential_verify_unit-t.cpp` | Unit | 15 | MYSQL41 credential verification: correct/incorrect password, empty password, edge cases, constant-time comparison |
+| `mysqlx_robustness_unit-t.cpp` | Unit | 20 | Session robustness: unexpected disconnects, malformed frames, resource cleanup, error recovery |
+| `mysqlx_tls_unit-t.cpp` | Unit | 20 | TLS handshake states, Memory BIO pattern, encrypted read/write paths, TLS mode enforcement (DISABLED/PREFERRED/REQUIRED) |
+| `mysqlx_admin_commands_unit-t.cpp` | Unit | 15 | LOAD/SAVE admin command dispatch, alias resolution, error handling |
+| `mysqlx_admin_disk_commands_unit-t.cpp` | Unit | 15 | LOAD FROM DISK / SAVE TO DISK commands, disk-to-memory roundtrip |
+| `mysqlx_admin_alias_resolution_unit-t.cpp` | Unit | 10 | Admin command alias resolution: TO RUN/FROM MEM/FROM RUN aliases |
 
-**Total: 467 assertions across 22 files (329 Phase 1 + 138 v2).**
+**Total: 600+ assertions across 24 files.**
 
 ---
 
@@ -61,10 +69,14 @@ cd test/tap/tests/unit
 make mysqlx_protocol_unit-t mysqlx_stats_unit-t mysqlx_config_store_unit-t \
      mysqlx_config_store_pure_unit-t mysqlx_config_store_concurrent_unit-t \
      mysqlx_route_store_unit-t mysqlx_admin_schema_unit-t \
+     mysqlx_admin_commands_unit-t mysqlx_admin_disk_commands_unit-t \
+     mysqlx_admin_alias_resolution_unit-t \
      plugin_manager_unit-t plugin_registry_unit-t plugin_config_unit-t \
      mysqlx_data_stream_unit-t mysqlx_connection_unit-t \
      mysqlx_session_unit-t mysqlx_thread_unit-t \
-     mysqlx_message_dispatch_unit-t
+     mysqlx_message_dispatch_unit-t mysqlx_concurrent_unit-t \
+     mysqlx_backend_auth_unit-t mysqlx_credential_verify_unit-t \
+     mysqlx_robustness_unit-t mysqlx_tls_unit-t
 
 # Run all unit tests
 for t in mysqlx_*_unit-t plugin_*_unit-t; do
@@ -309,7 +321,7 @@ Tests are registered in `test/tap/groups/groups.json`:
 
 | Group | Tests | Infrastructure |
 |-------|-------|----------------|
-| `unit-tests-g1` | All 17 unit tests | None (`SKIP_PROXYSQL=1`) |
+| `unit-tests-g1` | All 21 unit tests | None (`SKIP_PROXYSQL=1`) |
 | `mysqlx-e2e-g1` | 2 E2E tests | dbdeployer MySQL 8.4 sandbox |
 
 ---
@@ -345,11 +357,12 @@ Tests are registered in `test/tap/groups/groups.json`:
 ### Coverage by Tier
 
 ```
-Unit:           384 assertions  (82%)
-Integration:     63 assertions  (14%)
-E2E:             20 assertions  ( 4%)
+Unit:           500+ assertions  (83%)
+Integration:     63 assertions   (11%)
+E2E:             20 assertions   ( 3%)
+Concurrent:      30 assertions   ( 3%)
                     ─────────
-Total:          467 assertions
+Total:          600+ assertions
 ```
 
 ---
