@@ -1,5 +1,5 @@
-#ifndef __CLASS_MYSQL_QUERY_PROCESSOR_H
-#define __CLASS_MYSQL_QUERY_PROCESSOR_H
+#ifndef PROXYSQL_MYSQL_QUERY_PROCESSOR_H
+#define PROXYSQL_MYSQL_QUERY_PROCESSOR_H
 #include "proxysql.h"
 #include "cpp.h"
 #include "QP_rule_text.h"
@@ -12,7 +12,7 @@ typedef struct _MySQL_Query_processor_Rule_t : public QP_rule_t {
 
 class MySQL_Query_Processor_Output : public Query_Processor_Output {
 public:
-	MySQL_Query_Processor_Output() = default;
+MySQL_Query_Processor_Output() : Query_Processor_Output(), min_gtid(nullptr), gtid_from_hostgroup(-1) {}
 	~MySQL_Query_Processor_Output() = default;
 
 	void init() {
@@ -98,4 +98,4 @@ private:
 	friend class Query_Processor;
 };
 
-#endif /* __CLASS_MYSQL_QUERY_PROCESSOR_H */
+#endif /* PROXYSQL_MYSQL_QUERY_PROCESSOR_H */

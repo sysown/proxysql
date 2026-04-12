@@ -1,5 +1,5 @@
-#ifndef __CLASS_PROXYSQL_ADMIN_H
-#define __CLASS_PROXYSQL_ADMIN_H
+#ifndef PROXYSQL_ADMIN_H
+#define PROXYSQL_ADMIN_H
 
 #include "prometheus/exposer.h"
 #include "prometheus/counter.h"
@@ -21,9 +21,9 @@
 #include "proxysql_typedefs.h"
 #include "query_digest_topk.h"
 
-#define PROCESSLIST_MAX_QUERY_LEN_DEFAULT    2 * 1024 * 1024  //  2 MiB
-#define PROCESSLIST_MAX_QUERY_LEN_MIN        1 * 1024         //  1 KiB
-#define PROCESSLIST_MAX_QUERY_LEN_MAX       32 * 1024 * 1024  // 32 MiB
+#define PROCESSLIST_MAX_QUERY_LEN_DEFAULT    (2 * 1024 * 1024)  //  2 MiB
+#define PROCESSLIST_MAX_QUERY_LEN_MIN        (1 * 1024)         //  1 KiB
+#define PROCESSLIST_MAX_QUERY_LEN_MAX       (32 * 1024 * 1024)  // 32 MiB
 
 typedef struct { uint32_t hash; uint32_t key; } t_symstruct;
 class ProxySQL_Config;
@@ -67,15 +67,15 @@ class ProxySQL_External_Scheduler {
 };
 
 struct p_admin_counter {
-	enum metric {
+	enum metric : uint8_t {
 		uptime = 0,
 		jemalloc_allocated,
-		__size
+		SIZE_
 	};
 };
 
 struct p_admin_gauge {
-	enum metric {
+	enum metric : uint8_t {
 		// memory metrics
 		connpool_memory_bytes = 0,
 		sqlite3_memory_bytes,
@@ -107,20 +107,20 @@ struct p_admin_gauge {
 		version_info,
 		mysql_listener_paused,
 		pgsql_listener_paused,
-		__size
+		SIZE_
 	};
 };
 
 struct p_admin_dyn_counter {
-	enum metric {
-		__size
+	enum metric : uint8_t {
+		SIZE_
 	};
 };
 
 struct p_admin_dyn_gauge {
-	enum metric {
+	enum metric : uint8_t {
 		proxysql_servers_clients_status_last_seen_at = 0,
-		__size
+		SIZE_
 	};
 };
 
@@ -205,10 +205,11 @@ struct incoming_pgsql_servers_t {
 	SQLite3_result* incoming_pgsql_servers_v2 = NULL;
 	SQLite3_result* incoming_replication_hostgroups = NULL;
 	SQLite3_result* incoming_hostgroup_attributes = NULL;
+	SQLite3_result* incoming_pgsql_servers_ssl_params = NULL;
 	SQLite3_result* runtime_pgsql_servers = NULL;
 
 	incoming_pgsql_servers_t();
-	incoming_pgsql_servers_t(SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*);
+	incoming_pgsql_servers_t(SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*);
 };
 
 // Separate structs for runtime pgsql server and pgsql server v2 to avoid human error
@@ -376,6 +377,10 @@ class ProxySQL_Admin {
 		int cluster_mysql_variables_diffs_before_sync;
 		int cluster_admin_variables_diffs_before_sync;
 		int cluster_ldap_variables_diffs_before_sync;
+		int cluster_pgsql_variables_diffs_before_sync;
+		int cluster_pgsql_query_rules_diffs_before_sync;
+		int cluster_pgsql_servers_diffs_before_sync;
+		int cluster_pgsql_users_diffs_before_sync;
 		int cluster_mysql_servers_sync_algorithm;
 		bool cluster_mysql_query_rules_save_to_disk;
 		bool cluster_mysql_servers_save_to_disk;
@@ -384,6 +389,10 @@ class ProxySQL_Admin {
 		bool cluster_mysql_variables_save_to_disk;
 		bool cluster_admin_variables_save_to_disk;
 		bool cluster_ldap_variables_save_to_disk;
+		bool cluster_pgsql_variables_save_to_disk;
+		bool cluster_pgsql_query_rules_save_to_disk;
+		bool cluster_pgsql_servers_save_to_disk;
+		bool cluster_pgsql_users_save_to_disk;
 		int stats_mysql_connection_pool;
 		int stats_mysql_connections;
 		int stats_mysql_query_cache;
@@ -440,9 +449,9 @@ class ProxySQL_Admin {
 	unsigned long long last_p_memory_metrics_ts;
 
 	struct {
-		std::array<prometheus::Counter*, p_admin_counter::__size> p_counter_array {};
-		std::array<prometheus::Gauge*, p_admin_gauge::__size> p_gauge_array {};
-		std::array<prometheus::Family<prometheus::Gauge>*, p_admin_dyn_gauge::__size> p_dyn_gauge_array {};
+		std::array<prometheus::Counter*, p_admin_counter::SIZE_> p_counter_array {};
+		std::array<prometheus::Gauge*, p_admin_gauge::SIZE_> p_gauge_array {};
+		std::array<prometheus::Family<prometheus::Gauge>*, p_admin_dyn_gauge::SIZE_> p_dyn_gauge_array {};
 
 		std::map<std::string, prometheus::Gauge*> p_proxysql_servers_clients_status_map {};
 	} metrics;
@@ -591,6 +600,10 @@ class ProxySQL_Admin {
 		bool checksum_mysql_variables;
 		bool checksum_admin_variables;
 		bool checksum_ldap_variables;
+		bool checksum_pgsql_query_rules;
+		bool checksum_pgsql_servers;
+		bool checksum_pgsql_users;
+		bool checksum_pgsql_variables;
 	} checksum_variables;
 	template<enum SERVER_TYPE pt>
 	void public_add_active_users(enum cred_username_type usertype, char *user=NULL) {
@@ -705,6 +718,7 @@ class ProxySQL_Admin {
 //	void flush_admin_variables__from_disk_to_memory(); // commented in 2.3 because unused
 	void flush_admin_variables__from_memory_to_disk();
 	void flush_ldap_variables__from_memory_to_disk();
+	void flush_pgsql_variables__from_memory_to_disk();
 	void load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers = {}, const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server = {},
 		const mysql_servers_v2_checksum_t& peer_mysql_server_v2 = {});
 	void save_mysql_servers_from_runtime();
@@ -1004,4 +1018,4 @@ class ProxySQL_Admin {
 	void flush_pgsql_stats();     // Reset PostgreSQL statistics only
 #endif // DEBUG
 };
-#endif /* __CLASS_PROXYSQL_ADMIN_H */
+#endif /* PROXYSQL_ADMIN_H */

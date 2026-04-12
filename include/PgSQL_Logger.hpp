@@ -20,7 +20,7 @@ class LogBufferThreadContext;
  * @brief Counter metric indices for PostgreSQL advanced query logging.
  */
 struct p_pl_counter {
-	enum metric {
+	enum metric : uint8_t {
 		memory_copy_count = 0,
 		disk_copy_count,
 		get_all_events_calls_count,
@@ -32,17 +32,14 @@ struct p_pl_counter {
 		total_events_copied_to_disk,
 		circular_buffer_events_added_count,
 		circular_buffer_events_dropped_count,
-		__size
+		SIZE_
 	};
 };
 
-/**
- * @brief Gauge metric indices for PostgreSQL advanced query logging.
- */
 struct p_pl_gauge {
-	enum metric {
+	enum metric : uint8_t {
 		circular_buffer_events_size,
-		__size
+		SIZE_
 	};
 };
 
@@ -272,8 +269,8 @@ class PgSQL_Logger {
 		struct {
 			std::atomic<unsigned long long> total_queries_logged { 0 };
 			prometheus::Counter* p_queries_logged_total { nullptr };
-			std::array<prometheus::Counter*, p_pl_counter::__size> p_counter_array {};
-			std::array<prometheus::Gauge*, p_pl_gauge::__size> p_gauge_array {};
+			std::array<prometheus::Counter*, p_pl_counter::SIZE_> p_counter_array {};
+			std::array<prometheus::Gauge*, p_pl_gauge::SIZE_> p_gauge_array {};
 		} prom_metrics;
 #ifdef PROXYSQL_LOGGER_PTHREAD_MUTEX
 	pthread_mutex_t wmutex;

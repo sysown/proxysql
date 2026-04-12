@@ -29,6 +29,19 @@ using std::pair;
 
 const uint32_t SYNC_TIMEOUT = 10;
 
+// Writer and reader hostgroups — read from TAP_MYSQL8_BACKEND_HG env var.
+// Defaults to 0/1 for backward compatibility with legacy infra.
+static int WHG = 0;
+static int RHG = 1;
+
+static void init_hostgroups() {
+	const char* hg_env = getenv("TAP_MYSQL8_BACKEND_HG");
+	if (hg_env) {
+		WHG = atoi(hg_env);
+		RHG = WHG + 1;
+	}
+}
+
 using mysql_server_tuple = std::tuple<int,std::string,int,int,std::string,int,int,int,int,int,int,std::string>;
 using replication_hostgroups_tuple = std::tuple<int,int,std::string>;
 
@@ -198,11 +211,11 @@ int test_scenario_1(MYSQL* proxy_admin, const CommandLine& cl) {
 	MYSQL* dummy_mysqldb = NULL;
 	
 	const std::vector<mysql_server_tuple> insert_mysql_servers_values {
-		std::make_tuple(0, cl.mysql_host, cl.mysql_port, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, "") // this server has read_only value 0 (writer)
+		std::make_tuple(WHG, cl.mysql_host, cl.mysql_port, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, "") // this server has read_only value 0 (writer)
 	};
 
 	const std::vector<replication_hostgroups_tuple> insert_replication_hostgroups_values {
-		std::make_tuple(0, 1, "read_only") 
+		std::make_tuple(WHG, RHG, "read_only")
 	};
 
 	// cleaning old records
@@ -210,10 +223,19 @@ int test_scenario_1(MYSQL* proxy_admin, const CommandLine& cl) {
 	MYSQL_QUERY__(proxy_admin, "DELETE FROM mysql_replication_hostgroups");
 	MYSQL_QUERY__(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
-	// Set default_hostgroup=0 to match writer_hostgroup used in this test
+	// Set default_hostgroup to match writer_hostgroup (WHG) used in this
+	// test. WHG defaults to 0 for the legacy infra but is overridden to
+	// 2900 by the mysql84-g4 group via TAP_MYSQL8_BACKEND_HG — see
+	// init_hostgroups() above. If we hardcode 0 here, the mysql84 group
+	// routes the test's BEGIN query to an empty hostgroup 0 and times
+	// out at 10 s. A previous fix (26c5a2572) hardcoded 0 because it
+	// predated the mysql84 hostgroup migration in 4f9ab49e7 — this
+	// commit finishes that fix by making the default_hostgroup follow
+	// WHG at runtime.
 	{
 		std::string update_user;
-		string_format("UPDATE mysql_users SET default_hostgroup=0 WHERE username='%s'", update_user, cl.root_username);
+		string_format("UPDATE mysql_users SET default_hostgroup=%d WHERE username='%s'",
+		              update_user, WHG, cl.root_username);
 		MYSQL_QUERY__(proxy_admin, update_user.c_str());
 		MYSQL_QUERY__(proxy_admin, "LOAD MYSQL USERS TO RUNTIME");
 	}
@@ -359,11 +381,11 @@ int test_scenario_2(MYSQL* proxy_admin, const CommandLine& cl) {
 	MYSQL* dummy_mysqldb = NULL;
 
 	const std::vector<mysql_server_tuple> insert_mysql_servers_values {
-		std::make_tuple(1, cl.mysql_host, cl.mysql_port, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, "") // this server has read_only value 0 (writer)
+		std::make_tuple(RHG, cl.mysql_host, cl.mysql_port, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, "") // this server has read_only value 0 (writer)
 	};
 
 	const std::vector<replication_hostgroups_tuple> insert_replication_hostgroups_values {
-		std::make_tuple(0, 1, "read_only") 
+		std::make_tuple(WHG, RHG, "read_only")
 	};
 
 	// cleaning old records
@@ -371,10 +393,19 @@ int test_scenario_2(MYSQL* proxy_admin, const CommandLine& cl) {
 	MYSQL_QUERY__(proxy_admin, "DELETE FROM mysql_replication_hostgroups");
 	MYSQL_QUERY__(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
-	// Set default_hostgroup=0 to match writer_hostgroup used in this test
+	// Set default_hostgroup to match writer_hostgroup (WHG) used in this
+	// test. WHG defaults to 0 for the legacy infra but is overridden to
+	// 2900 by the mysql84-g4 group via TAP_MYSQL8_BACKEND_HG — see
+	// init_hostgroups() above. If we hardcode 0 here, the mysql84 group
+	// routes the test's BEGIN query to an empty hostgroup 0 and times
+	// out at 10 s. A previous fix (26c5a2572) hardcoded 0 because it
+	// predated the mysql84 hostgroup migration in 4f9ab49e7 — this
+	// commit finishes that fix by making the default_hostgroup follow
+	// WHG at runtime.
 	{
 		std::string update_user;
-		string_format("UPDATE mysql_users SET default_hostgroup=0 WHERE username='%s'", update_user, cl.root_username);
+		string_format("UPDATE mysql_users SET default_hostgroup=%d WHERE username='%s'",
+		              update_user, WHG, cl.root_username);
 		MYSQL_QUERY__(proxy_admin, update_user.c_str());
 		MYSQL_QUERY__(proxy_admin, "LOAD MYSQL USERS TO RUNTIME");
 	}
@@ -602,6 +633,9 @@ int main(int, char**) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
+
+	init_hostgroups();
+	diag("Using hostgroups: WHG=%d, RHG=%d", WHG, RHG);
 
 	plan(9+9);
 

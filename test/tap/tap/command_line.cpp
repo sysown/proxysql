@@ -387,5 +387,13 @@ int CommandLine::getEnv() {
 		}
 	}
 
+	// Set protocol-specific noise flags based on available infrastructure
+	if (this->use_noise) {
+		const char* mysql_infra = getenv("DEFAULT_MYSQL_INFRA");
+		const char* pgsql_infra = getenv("DEFAULT_PGSQL_INFRA");
+		this->use_noise_mysql = (mysql_infra && mysql_infra[0] != '\0');
+		this->use_noise_pgsql = (pgsql_infra && pgsql_infra[0] != '\0');
+	}
+
 	return 0;
 }

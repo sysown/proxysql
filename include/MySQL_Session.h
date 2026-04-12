@@ -4,8 +4,8 @@
  */
 
 #ifdef CLASS_BASE_SESSION_H
-#ifndef __CLASS_MYSQL_SESSION_H
-#define __CLASS_MYSQL_SESSION_H
+#ifndef PROXYSQL_MYSQL_SESSION_H
+#define PROXYSQL_MYSQL_SESSION_H
 
 #include <functional>
 #include <vector>
@@ -521,7 +521,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	//MySQL_Backend * find_or_create_backend(int, MySQL_Data_Stream *_myds=NULL);
 
 	void SQLite3_to_MySQL(SQLite3_result *, char *, int , MySQL_Protocol *, bool in_transaction=false, bool deprecate_eof_active=false) override;
-	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, unsigned int warning_count, MySQL_Data_Stream *_myds=NULL);
+	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, unsigned int warning_count, MySQL_Data_Stream *_myds=nullptr);
 	void MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Connection *myconn);
 	//unsigned int NumActiveTransactions(bool check_savpoint=false);
 	//bool HasOfflineBackends();
@@ -584,6 +584,9 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 
 	friend void SQLite3_Server_session_handler(MySQL_Session*, void *_pa, PtrSize_t *pkt);
 
+	MySQL_Session(const MySQL_Session&) = delete;
+	MySQL_Session& operator=(const MySQL_Session&) = delete;
+
 #if defined(__clang__)
 	template<typename SESS, typename DS, typename BE, typename THD>
 	friend class Base_Session;
@@ -611,6 +614,8 @@ public:
 	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned int _hid, unsigned long i, int kt, int _use_ssl, MySQL_Thread* _mt, char *ip);
 	~KillArgs();
 	const char* get_host_address() const;
+	KillArgs(const KillArgs&) = delete;
+	KillArgs& operator=(const KillArgs&) = delete;
 
 private:
 	char* ip_addr;
@@ -618,5 +623,5 @@ private:
 
 void * kill_query_thread(void *arg);
 
-#endif /* __CLASS_MYSQL_SESSION_ H */
+#endif /* PROXYSQL_MYSQL_SESSION_H */
 #endif // CLASS_BASE_SESSION_H

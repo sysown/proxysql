@@ -27,6 +27,7 @@ using json = nlohmann::json;
 #include "StatCounters.h"
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Logger.hpp"
+#include "MySQL_Resolution.h"
 
 #include <fcntl.h>
 
@@ -421,6 +422,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_local_dns_cache_ttl",
 	(char *)"monitor_local_dns_cache_refresh_interval",
 	(char *)"monitor_local_dns_resolver_queue_maxsize",
+	(char *)"resolution_family",
 	(char *)"monitor_wait_timeout",
 	(char *)"monitor_writer_is_also_reader",
 	(char *)"max_allowed_packet",
@@ -1303,6 +1305,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_local_dns_cache_ttl = 300000;
 	variables.monitor_local_dns_cache_refresh_interval = 60000;
 	variables.monitor_local_dns_resolver_queue_maxsize = 128;
+	variables.resolution_family = strdup((char *)"system");
 	variables.monitor_username=strdup((char *)"monitor");
 	variables.monitor_password=strdup((char *)"monitor");
 	variables.monitor_replication_lag_use_percona_heartbeat=strdup((char *)"");
@@ -1672,6 +1675,7 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 	if (!strcmp(name,"eventslog_filename")) return strdup(variables.eventslog_filename);
 	if (!strcmp(name,"auditlog_filename")) return strdup(variables.auditlog_filename);
 	if (!strcmp(name,"interfaces")) return strdup(variables.interfaces);
+	if (!strcmp(name,"resolution_family")) return strdup(variables.resolution_family);
 	if (!strcmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
 	if (!strcmp(name,"default_authentication_plugin")) return strdup(variables.default_authentication_plugin);
 	if (!strcmp(name,"proxy_protocol_networks")) return strdup(variables.proxy_protocol_networks);
@@ -1829,6 +1833,7 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	if (!strcasecmp(name,"auditlog_filename")) return strdup(variables.auditlog_filename);
 	if (!strcasecmp(name,"eventslog_filename")) return strdup(variables.eventslog_filename);
 	if (!strcasecmp(name,"default_schema")) return strdup(variables.default_schema);
+	if (!strcasecmp(name,"resolution_family")) return strdup(variables.resolution_family);
 	if (!strcasecmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
 	if (!strcasecmp(name,"default_authentication_plugin")) return strdup(variables.default_authentication_plugin);
 	if (!strcasecmp(name,"proxy_protocol_networks")) return strdup(variables.proxy_protocol_networks);
@@ -2264,6 +2269,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		} else {
 			return false;
 		}
+	}
+	if (!strcasecmp(name,"resolution_family")) {
+		if (mysql_resolution_family_is_valid(value)) {
+			free(variables.resolution_family);
+			variables.resolution_family=strdup(mysql_resolution_family_normalize(value));
+			return true;
+		}
+		proxy_error("%s is an invalid value for %s. Supported values are system, ipv4, ipv6\n", value, name);
+		return false;
 	}
 	if (!strcasecmp(name,"proxy_protocol_networks")) {
 		bool ret = false;
@@ -3112,6 +3126,7 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 		free(variables.monitor_replication_lag_use_percona_heartbeat);
 		variables.monitor_replication_lag_use_percona_heartbeat=NULL;
 	}
+	if (variables.resolution_family) { free(variables.resolution_family); variables.resolution_family=NULL; }
 	if (variables.default_schema) free(variables.default_schema);
 	if (variables.interfaces) free(variables.interfaces);
 	if (variables.server_version) free(variables.server_version);
@@ -3239,6 +3254,7 @@ MySQL_Thread::~MySQL_Thread() {
 	if (my_idle_conns)
 		free(my_idle_conns);
 
+	if (mysql_thread___resolution_family) { free(mysql_thread___resolution_family); mysql_thread___resolution_family=NULL; }
 	if (mysql_thread___monitor_username) { free(mysql_thread___monitor_username); mysql_thread___monitor_username=NULL; }
 	if (mysql_thread___monitor_password) { free(mysql_thread___monitor_password); mysql_thread___monitor_password=NULL; }
 	if (mysql_thread___monitor_replication_lag_use_percona_heartbeat) {
@@ -4662,6 +4678,7 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(monitor_local_dns_cache_ttl);
 	REFRESH_VARIABLE_INT(monitor_local_dns_cache_refresh_interval);
 	REFRESH_VARIABLE_INT(monitor_local_dns_resolver_queue_maxsize);
+	REFRESH_VARIABLE_CHAR(resolution_family);
 
 	REFRESH_VARIABLE_CHAR(firewall_whitelist_errormsg);
 	REFRESH_VARIABLE_CHAR(init_connect);
@@ -4788,6 +4805,7 @@ MySQL_Thread::MySQL_Thread() {
 	mysql_thread___add_ldap_user_comment=NULL;
 	mysql_thread___eventslog_filename=NULL;
 	mysql_thread___auditlog_filename=NULL;
+	mysql_thread___resolution_family=strdup("system");  // default: system (AF_UNSPEC)
 
 	// SSL proxy to server
 	mysql_thread___ssl_p2s_ca=NULL;
@@ -6099,7 +6117,7 @@ unsigned long long MySQL_Threads_Handler::get_status_variable(
 		}
 	}
 #endif // IDLE_THREADS
-	if (m_idx != p_th_counter::__size) {
+	if (m_idx != p_th_counter::SIZE_) {
 		const auto& cur_val = status_variables.p_counter_array[m_idx]->Value();
 		double final_val = 0;
 
@@ -6140,7 +6158,7 @@ unsigned long long MySQL_Threads_Handler::get_status_variable(
 		}
 	}
 #endif // IDLE_THREADS
-	if (m_idx != p_th_gauge::__size) {
+	if (m_idx != p_th_gauge::SIZE_) {
 		double final_val = 0;
 
 		if (conv != 0) {

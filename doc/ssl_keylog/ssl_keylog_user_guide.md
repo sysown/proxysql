@@ -8,8 +8,8 @@ SSL/TLS key logging is a debugging feature that allows ProxySQL to write TLS enc
 
 This feature is primarily useful for:
 
-- **Debugging TLS connection issues** between clients and ProxySQL
-- **Analyzing encrypted traffic** without modifying application code
+- **Debugging TLS connection issues** between clients and ProxySQL, or between ProxySQL and MySQL/PostgreSQL backends
+- **Analyzing encrypted backend traffic** to MySQL and PostgreSQL servers without modifying application code
 - **Troubleshooting TLS handshake problems**
 - **Performance analysis** of TLS connections
 - **Security auditing** of TLS configurations
@@ -222,11 +222,16 @@ In production environments, you typically don't run Wireshark directly on the se
 On the ProxySQL server, capture network traffic to a pcap file:
 
 ```bash
-# Capture on the interface ProxySQL is listening on (e.g., eth0)
-# Replace 6033 with your ProxySQL MySQL port
+# Capture MySQL frontend traffic (client → ProxySQL)
 sudo tcpdump -i eth0 -w /tmp/proxysql_debug.pcap port 6033
 
-# Or capture traffic between specific hosts
+# Capture PgSQL frontend traffic (client → ProxySQL)
+sudo tcpdump -i eth0 -w /tmp/proxysql_debug.pcap port 6133
+
+# Capture PgSQL backend traffic (ProxySQL → PostgreSQL server)
+sudo tcpdump -i eth0 -w /tmp/proxysql_debug.pcap port 5432
+
+# Capture traffic between specific hosts
 sudo tcpdump -i eth0 -w /tmp/proxysql_debug.pcap host client_ip and host proxysql_ip
 
 # Run for a specific duration
@@ -270,6 +275,9 @@ On your analysis system with Wireshark installed:
    ```
    # Show only MySQL packets
    mysql
+   
+   # Show only PostgreSQL packets
+   pgsql
    
    # Show TLS handshake
    tls.handshake.type == 1
@@ -407,11 +415,21 @@ mysql_variables=
 **Solutions:**
 1. Verify TLS is actually being used:
    ```sql
-   -- Check if connections are using TLS
+   -- Check MySQL backend connections
    SELECT * FROM stats_mysql_connection_pool;
+   -- Check PgSQL backend connections
+   SELECT * FROM stats_pgsql_connection_pool;
    ```
-2. Make sure clients are connecting with SSL/TLS
-3. Check that `admin-ssl_keylog_file` is loaded into runtime:
+2. For PgSQL backends, ensure `use_ssl=1` is set on the servers:
+   ```sql
+   SELECT hostgroup_id, hostname, port, use_ssl FROM pgsql_servers;
+   ```
+3. Keylog entries are only written during **new** SSL handshakes. Existing pooled connections won't generate entries. To force new handshakes, reload servers:
+   ```sql
+   LOAD PGSQL SERVERS TO RUNTIME;
+   ```
+4. Make sure clients are connecting with SSL/TLS
+5. Check that `admin-ssl_keylog_file` is loaded into runtime:
    ```sql
    LOAD ADMIN VARIABLES TO RUNTIME;
    ```
@@ -476,9 +494,26 @@ sudo tcpdump -i eth0 -w /tmp/capture.pcap port 6033
 
 ---
 
+## Supported Connection Types
+
+When `admin-ssl_keylog_file` is configured, TLS secrets are captured from **all** SSL/TLS connection types:
+
+| Connection Type | Direction | Protocol |
+|----------------|-----------|----------|
+| Frontend (client) | Client → ProxySQL | MySQL |
+| Frontend (client) | Client → ProxySQL | PostgreSQL |
+| Backend | ProxySQL → MySQL server | MySQL |
+| Backend | ProxySQL → PostgreSQL server | PostgreSQL |
+| Monitor | ProxySQL → MySQL server | MySQL |
+| Monitor | ProxySQL → PostgreSQL server | PostgreSQL |
+| Cluster | ProxySQL → ProxySQL peer | MySQL |
+
+No additional configuration is needed per connection type — the single `admin-ssl_keylog_file` variable enables logging for all types.
+
+---
+
 ## Additional Resources
 
-- **Developer Documentation:** See `ssl_keylog_developer_guide.md` for implementation details
 - **NSS Key Log Format:** https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSS/Key_Log_Format
 - **Wireshark TLS Decryption:** https://wiki.wireshark.org/TLS
 - **tshark Manual:** `man tshark` or https://www.wireshark.org/docs/man-pages/tshark.html

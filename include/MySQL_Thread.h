@@ -1,6 +1,6 @@
-#ifndef __CLASS_MYSQL_THREAD_H
-#define __CLASS_MYSQL_THREAD_H
-#define ____CLASS_STANDARD_MYSQL_THREAD_H
+#ifndef PROXYSQL_MYSQL_THREAD_H
+#define PROXYSQL_MYSQL_THREAD_H
+#define PROXYSQL_STANDARD_MYSQL_THREAD_H
 #include "prometheus/counter.h"
 #include "prometheus/gauge.h"
 
@@ -24,9 +24,9 @@
 #define MY_EPOLL_THREAD_MAXEVENTS 128
 */
 
-#define ADMIN_HOSTGROUP	-2
-#define STATS_HOSTGROUP	-3
-#define SQLITE_HOSTGROUP -4
+#define ADMIN_HOSTGROUP	(-2)
+#define STATS_HOSTGROUP	(-3)
+#define SQLITE_HOSTGROUP (-4)
 
 
 #define MYSQL_DEFAULT_SESSION_TRACK_GTIDS      "OFF"
@@ -297,7 +297,7 @@ struct p_th_counter {
 		mysql_killed_backend_connections,
 		mysql_killed_backend_queries,
 		client_host_error_killed_connections,
-		__size
+		SIZE_
 	};
 };
 
@@ -327,7 +327,7 @@ struct p_th_gauge {
 		mysql_monitor_replication_lag_interval,
 		mysql_monitor_replication_lag_timeout,
 		mysql_monitor_history,
-		__size
+		SIZE_
 
 	};
 };
@@ -437,6 +437,7 @@ class MySQL_Threads_Handler
 		int monitor_local_dns_cache_ttl;
 		int monitor_local_dns_cache_refresh_interval;
 		int monitor_local_dns_resolver_queue_maxsize;
+		char *resolution_family;
 		char *monitor_username;
 		char *monitor_password;
 		char * monitor_replication_lag_use_percona_heartbeat;
@@ -617,8 +618,8 @@ class MySQL_Threads_Handler
 		unsigned int mirror_sessions_current;
 		int threads_initialized = 0;
 		/// Prometheus metrics arrays
-		std::array<prometheus::Counter*, p_th_counter::__size> p_counter_array {};
-		std::array<prometheus::Gauge*, p_th_gauge::__size> p_gauge_array {};
+		std::array<prometheus::Counter*, p_th_counter::SIZE_> p_counter_array {};
+		std::array<prometheus::Gauge*, p_th_gauge::SIZE_> p_gauge_array {};
 	} status_variables;
 
 	std::atomic<bool> bootstrapping_listeners;
@@ -761,4 +762,4 @@ class MySQL_Threads_Handler
 };
 
 
-#endif /* __CLASS_MYSQL_THREAD_H */
+#endif /* PROXYSQL_MYSQL_THREAD_H */

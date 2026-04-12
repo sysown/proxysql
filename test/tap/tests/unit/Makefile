@@ -112,6 +112,10 @@ ifeq ($(UNAME_S),Linux)
 	STATIC_LIBS += $(COREDUMPER_LDIR)/libcoredumper.a
 endif
 
+ifeq ($(PROXYSQLGENAI),1)
+	STATIC_LIBS += $(SQLITE3_LDIR)/vec.o
+endif
+
 
 # ===========================================================================
 # Linker flags — platform-specific
@@ -285,6 +289,7 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	mysql_error_classifier_unit-t \
 	backend_sync_unit-t \
 	mysql_encode_unit-t \
+	mysql_resolution_unit-t \
 	pgsql_variables_validator_unit-t \
 	proxysql_utils_unit-t \
 	gen_utils_unit-t \
@@ -342,6 +347,7 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	mysqlx_credential_verify_unit-t \
  	mysqlx_robustness_unit-t \
  	mysqlx_tls_unit-t
+	pgsql_servers_ssl_params_unit-t
 
 .PHONY: all
 all: $(UNIT_TESTS)
@@ -529,6 +535,10 @@ mysqlx_tls_unit-t: mysqlx_tls_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mys
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) \
 		$(MYLIBS) -lprotobuf -lssl -lcrypto $(ALLOW_MULTI_DEF) -lpthread -o $@
+mysql_resolution_unit-t: mysql_resolution_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include \
+		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) -lpthread -o $@
 
 # Pattern rule: all unit tests use the same compile + link flags.
 # Each test binary is built from its .cpp source, linked against

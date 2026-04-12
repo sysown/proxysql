@@ -31,12 +31,12 @@ fi
 # Determine which groups to destroy
 if [ -n "${TAP_GROUPS}" ]; then
     # Use specified groups
-    read -ra GROUPS <<< "${TAP_GROUPS}"
+    read -ra TARGET_GROUPS <<< "${TAP_GROUPS}"
     MODE="specific"
 else
     # Auto-discover groups by finding matching directories
     MODE="auto"
-    GROUPS=()
+    TARGET_GROUPS=()
 
     # Look for log directories matching *-${RUN_ID}
     LOGS_PATH="${WORKSPACE}/ci_infra_logs"
@@ -47,14 +47,14 @@ else
                 if [[ "${dir_name}" == *"-${RUN_ID}" ]]; then
                     # Extract group name from INFRA_ID
                     group_name="${dir_name%-${RUN_ID}}"
-                    GROUPS+=("${group_name}")
+                    TARGET_GROUPS+=("${group_name}")
                 fi
             fi
         done
     fi
 fi
 
-TOTAL_GROUPS=${#GROUPS[@]}
+TOTAL_GROUPS=${#TARGET_GROUPS[@]}
 
 if [ "${TOTAL_GROUPS}" -eq 0 ]; then
     echo "No groups found to destroy for RUN_ID: ${RUN_ID}"
@@ -67,14 +67,14 @@ echo "Destroy Multiple TAP Groups"
 echo "=========================================="
 echo "RUN_ID: ${RUN_ID}"
 echo "MODE: ${MODE}"
-echo "GROUPS: ${GROUPS[*]}"
+echo "TARGET_GROUPS: ${TARGET_GROUPS[*]}"
 echo "=========================================="
 
 # Confirmation prompt (unless FORCE=1)
 if [ "${FORCE}" -eq 0 ]; then
     echo ""
     echo "This will destroy the following ${TOTAL_GROUPS} infrastructure(s):"
-    for group in "${GROUPS[@]}"; do
+    for group in "${TARGET_GROUPS[@]}"; do
         echo "  - ${group}-${RUN_ID}"
     done
     echo ""
@@ -92,7 +92,7 @@ SUCCESS_COUNT=0
 FAIL_COUNT=0
 
 # Destroy each group's infrastructure
-for group in "${GROUPS[@]}"; do
+for group in "${TARGET_GROUPS[@]}"; do
     infra_id="${group}-${RUN_ID}"
     echo ""
     echo ">>> Destroying: ${group} (INFRA_ID: ${infra_id})"

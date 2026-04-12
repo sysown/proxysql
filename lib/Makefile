@@ -6,8 +6,6 @@ PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; don
 include $(PROXYSQL_PATH)/include/makefiles_vars.mk
 include $(PROXYSQL_PATH)/include/makefiles_paths.mk
 
-SQLITE_REMBED_LIB := $(SQLITE3_LDIR)/../libsqlite_rembed.a
-
 IDIRS :=	-I$(PROXYSQL_IDIR) \
 			-I$(JEMALLOC_IDIR) \
 			-I$(MARIADB_IDIR) \

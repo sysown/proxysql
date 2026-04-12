@@ -94,7 +94,6 @@ using json = nlohmann::json;
  * @see https://github.com/asg017/sqlite-vec for sqlite-vec documentation
  */
 extern int (*proxy_sqlite3_vec_init)(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi);
-extern int (*proxy_sqlite3_rembed_init)(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi);
 #include "microhttpd.h"
 
 #if (defined(__i386__) || defined(__x86_64__) || defined(__ARM_ARCH_3__) || defined(__mips__)) && defined(__linux)
@@ -617,7 +616,6 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	 * for SQLite's auto-extension mechanism.
 	 */
 	if (proxy_sqlite3_vec_init) (*proxy_sqlite3_auto_extension)( (void(*)(void))proxy_sqlite3_vec_init);
-	if (proxy_sqlite3_rembed_init) (*proxy_sqlite3_auto_extension)( (void(*)(void))proxy_sqlite3_rembed_init);
 
 	/**
 	 * @brief Open the stats database with shared cache mode
@@ -818,6 +816,8 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_admin, "runtime_pgsql_firewall_whitelist_rules", ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_FIREWALL_WHITELIST_RULES);
 	insert_into_tables_defs(tables_defs_admin, "pgsql_firewall_whitelist_sqli_fingerprints", ADMIN_SQLITE_TABLE_PGSQL_FIREWALL_WHITELIST_SQLI_FINGERPRINTS);
 	insert_into_tables_defs(tables_defs_admin, "runtime_pgsql_firewall_whitelist_sqli_fingerprints", ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_FIREWALL_WHITELIST_SQLI_FINGERPRINTS);
+	insert_into_tables_defs(tables_defs_admin,"pgsql_servers_ssl_params", ADMIN_SQLITE_TABLE_PGSQL_SERVERS_SSL_PARAMS);
+	insert_into_tables_defs(tables_defs_admin,"runtime_pgsql_servers_ssl_params", ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_SERVERS_SSL_PARAMS);
 
 #ifdef PROXYSQLGENAI
 	// MCP query rules
@@ -843,6 +843,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_config, "pgsql_firewall_whitelist_users", ADMIN_SQLITE_TABLE_PGSQL_FIREWALL_WHITELIST_USERS);
 	insert_into_tables_defs(tables_defs_config, "pgsql_firewall_whitelist_rules", ADMIN_SQLITE_TABLE_PGSQL_FIREWALL_WHITELIST_RULES);
 	insert_into_tables_defs(tables_defs_config, "pgsql_firewall_whitelist_sqli_fingerprints", ADMIN_SQLITE_TABLE_PGSQL_FIREWALL_WHITELIST_SQLI_FINGERPRINTS);
+	insert_into_tables_defs(tables_defs_config,"pgsql_servers_ssl_params", ADMIN_SQLITE_TABLE_PGSQL_SERVERS_SSL_PARAMS);
 	//
 
 	insert_into_tables_defs(tables_defs_config,"mysql_servers", ADMIN_SQLITE_TABLE_MYSQL_SERVERS);

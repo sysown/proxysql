@@ -1,5 +1,5 @@
-#ifndef __CLASS_MYSQL_AUTHENTICATION_H
-#define __CLASS_MYSQL_AUTHENTICATION_H
+#ifndef PROXYSQL_MYSQL_AUTHENTICATION_H
+#define PROXYSQL_MYSQL_AUTHENTICATION_H
 
 #include "proxysql.h"
 #include "cpp.h"
@@ -22,9 +22,9 @@ typedef struct _account_details_t {
 	int max_connections;
 	int num_connections_used;
 	int num_connections_used_addl_pass;
-	bool __frontend; // this is used only during the dump
-	bool __backend;	 // this is used only during the dump
-	bool __active;
+	bool frontend_; // this is used only during the dump
+	bool backend_;	 // this is used only during the dump
+	bool active_;
 	char *attributes = nullptr;
 	char *comment = nullptr;
 } account_details_t;
