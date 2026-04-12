@@ -40,7 +40,7 @@ The same codebase produces three product tiers via feature flags:
 |------|------|---------|------|
 | Stable | (default) | v3.0.x | Core proxy |
 | Innovative | `PROXYSQL31=1` | v3.1.x | FFTO, TSDB |
-| AI/MCP | `PROXYSQLGENAI=1` | v4.0.x | GenAI, MCP, Anomaly Detection (requires Rust toolchain) |
+| AI/MCP | `PROXYSQLGENAI=1` | v4.0.x | GenAI, MCP, Anomaly Detection |
 
 `PROXYSQLGENAI=1` implies `PROXYSQL31=1`, which implies `PROXYSQLFFTO=1` and `PROXYSQLTSDB=1`.
 

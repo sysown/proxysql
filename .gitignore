@@ -1,6 +1,9 @@
 # Internal Repos
 priv-infra/
 
+# Git worktrees
+.worktrees/
+
 # Lint output (do not commit)
 lint/
 
@@ -129,7 +132,6 @@ deps/pcre/pcre-*/
 deps/prometheus-cpp/prometheus-cpp-*/
 deps/re2/re2-*/
 deps/sqlite3/sqlite-amalgamation-*/
-deps/sqlite3/sqlite-rembed-*/
 deps/coredumper/coredumper-*/
 deps/postgresql/postgresql-*/
 deps/postgresql/postgres-*/
