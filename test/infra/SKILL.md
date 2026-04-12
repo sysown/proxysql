@@ -148,7 +148,7 @@ docker network inspect ${INFRA_ID}_backend
    ```
 2. Verify the mysqlN container is listening on 6020:
    ```bash
-   docker exec ${COMPOSE_PROJECT}-mysql1-1 bash -lc 'timeout 3 bash -lc "</dev/tcp/127.0.0.1/6020" && echo OPEN || echo CLOSED'
+   docker exec ${INFRA}-${INFRA_ID}-mysql1-1 bash -lc 'timeout 3 bash -lc "</dev/tcp/127.0.0.1/6020" && echo OPEN || echo CLOSED'
    ```
 
 ### Issue: Test runs but no queries executed (act_queries: 0)
