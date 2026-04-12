@@ -180,6 +180,14 @@ ProxySQL_PluginManager::~ProxySQL_PluginManager() {
 bool ProxySQL_PluginManager::load(const std::string &path, std::string &err) {
 	err.clear();
 
+	// Reject duplicate plugin paths
+	for (const auto& existing : plugins_) {
+		if (existing.path == path) {
+			err = "plugin already loaded: " + path;
+			return false;
+		}
+	}
+
 	void *handle = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
 	if (handle == nullptr) {
 		err = format_dl_error("dlopen failed: ");
@@ -212,6 +220,7 @@ bool ProxySQL_PluginManager::load(const std::string &path, std::string &err) {
 	plugin_handle_t plugin;
 	plugin.handle = handle;
 	plugin.descriptor = descriptor;
+	plugin.path = path;
 	plugins_.push_back(plugin);
 	return true;
 }
@@ -289,7 +298,11 @@ bool ProxySQL_PluginManager::stop_all() {
 			continue;
 		}
 		if (it->descriptor != nullptr && it->descriptor->stop != nullptr) {
-			ok = it->descriptor->stop() && ok;
+			if (!it->descriptor->stop()) {
+				proxy_warning("Plugin stop failed: %s\n", plugin_name(it->descriptor).c_str());
+				ok = false;
+				continue;
+			}
 		}
 		it->stopped = true;
 	}
@@ -425,6 +438,7 @@ bool ProxySQL_PluginManager::register_command(const char* sql, proxysql_plugin_a
 }
 
 ProxySQL_PluginManager* proxysql_get_plugin_manager() {
+	std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
 	return g_active_plugin_manager;
 }
 

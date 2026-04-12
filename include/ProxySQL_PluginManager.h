@@ -36,6 +36,7 @@ private:
 	struct plugin_handle_t {
 		void *handle{nullptr};
 		const ProxySQL_PluginDescriptor *descriptor{nullptr};
+		std::string path {};
 		bool initialized{false};
 		bool started{false};
 		bool stopped{false};

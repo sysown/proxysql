@@ -56,6 +56,7 @@ private:
 
 	std::vector<int> listener_fds_;
 	std::vector<std::string> listener_addrs_;
+	std::mutex listener_mutex_;
 
 	std::vector<MysqlxSession*> sessions_;
 	std::mutex sessions_mutex_;

@@ -356,7 +356,7 @@ int MysqlxConfigStore::get_connect_timeout() const {
 	return connect_timeout_;
 }
 
-const std::string& MysqlxConfigStore::get_tls_mode() const {
+std::string MysqlxConfigStore::get_tls_mode() const {
 	std::shared_lock<std::shared_mutex> lock(mutex_);
 	return tls_mode_;
 }

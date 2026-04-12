@@ -38,11 +38,14 @@ Mysqlx_Thread::Mysqlx_Thread()
 Mysqlx_Thread::~Mysqlx_Thread() {
 	stop();
 
-	for (int fd : listener_fds_) {
-		close(fd);
+	{
+		std::lock_guard<std::mutex> lock(listener_mutex_);
+		for (int fd : listener_fds_) {
+			close(fd);
+		}
+		listener_fds_.clear();
+		listener_addrs_.clear();
 	}
-	listener_fds_.clear();
-	listener_addrs_.clear();
 
 	for (auto* sess : sessions_) {
 		delete sess;
@@ -120,13 +123,16 @@ void Mysqlx_Thread::rebuild_poll_set() {
 	poll_fds_.push_back(pfd);
 	poll_ds_.push_back(nullptr);
 
-	for (int fd : listener_fds_) {
-		struct pollfd lpfd;
-		lpfd.fd = fd;
-		lpfd.events = POLLIN;
-		lpfd.revents = 0;
-		poll_fds_.push_back(lpfd);
-		poll_ds_.push_back(nullptr);
+	{
+		std::lock_guard<std::mutex> lock(listener_mutex_);
+		for (int fd : listener_fds_) {
+			struct pollfd lpfd;
+			lpfd.fd = fd;
+			lpfd.events = POLLIN;
+			lpfd.revents = 0;
+			poll_fds_.push_back(lpfd);
+			poll_ds_.push_back(nullptr);
+		}
 	}
 
 	std::lock_guard<std::mutex> lock(sessions_mutex_);
@@ -169,8 +175,11 @@ void Mysqlx_Thread::process_ready_fds(int nfds) {
 		int fd = poll_fds_[n].fd;
 
 		bool is_listener = false;
-		for (int lfd : listener_fds_) {
-			if (lfd == fd) { is_listener = true; break; }
+		{
+			std::lock_guard<std::mutex> lock(listener_mutex_);
+			for (int lfd : listener_fds_) {
+				if (lfd == fd) { is_listener = true; break; }
+			}
 		}
 		if (is_listener && (revents & POLLIN)) {
 			accept_new_connection(fd);
@@ -267,13 +276,17 @@ int Mysqlx_Thread::add_listener(const char* bind_addr, int port) {
 		return -1;
 	}
 
-	listener_fds_.push_back(fd);
-	if (bind_addr) listener_addrs_.push_back(bind_addr);
-	else listener_addrs_.push_back("0.0.0.0");
+	{
+		std::lock_guard<std::mutex> lock(listener_mutex_);
+		listener_fds_.push_back(fd);
+		if (bind_addr) listener_addrs_.push_back(bind_addr);
+		else listener_addrs_.push_back("0.0.0.0");
+	}
 	return 0;
 }
 
 void Mysqlx_Thread::remove_listeners() {
+	std::lock_guard<std::mutex> lock(listener_mutex_);
 	for (int fd : listener_fds_) {
 		close(fd);
 	}

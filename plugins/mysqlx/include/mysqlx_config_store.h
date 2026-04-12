@@ -70,7 +70,7 @@ public:
 
 	int get_thread_pool_size() const;
 	int get_connect_timeout() const;
-	const std::string& get_tls_mode() const;
+	std::string get_tls_mode() const;
 	int get_max_cached_connections() const;
 
 private:
