@@ -153,12 +153,15 @@ void* create_ssl_conn_inv_cert(void* arg) {
 	}
 	mysql_options(myconn, MYSQL_OPT_NONBLOCK, 0);
 
-	char* inv_cert_path = tempnam(nullptr, "tap");
-	if (!inv_cert_path) {
-		fprintf(stderr, "File %s, line %d, Error: tempnam failed\n", __FILE__, __LINE__);
+	char inv_cert_path[] = "/tmp/tap_XXXXXX";
+	int fd = mkstemp(inv_cert_path);
+	if (fd == -1) {
+		fprintf(stderr, "File %s, line %d, Error: mkstemp failed\n", __FILE__, __LINE__);
 		mysql_close(myconn);
 		return NULL;
 	}
+	close(fd);
+
 	diag("Setting invalid CERT for conn with tmp file   path=%s", inv_cert_path);
 	mysql_ssl_set(myconn, NULL, NULL, inv_cert_path, NULL, NULL);
 
@@ -169,7 +172,7 @@ void* create_ssl_conn_inv_cert(void* arg) {
 	}
 
 	mysql_close(myconn);
-	free(inv_cert_path);
+	unlink(inv_cert_path);
 	return NULL;
 }
 
@@ -194,18 +197,20 @@ void* create_ssl_conn_missing_cert(void* arg) {
 	}
 	mysql_options(myconn, MYSQL_OPT_NONBLOCK, 0);
 
-	char* inv_cert_path = tempnam(nullptr, "tap");
-	if (!inv_cert_path) {
-		fprintf(stderr, "File %s, line %d, Error: tempnam failed\n", __FILE__, __LINE__);
+	char inv_cert_path[] = "/tmp/tap_XXXXXX";
+	int fd = mkstemp(inv_cert_path);
+	if (fd == -1) {
+		fprintf(stderr, "File %s, line %d, Error: mkstemp failed\n", __FILE__, __LINE__);
 		mysql_close(myconn);
 		return NULL;
 	}
-	FILE* tmp_file = fopen(inv_cert_path, "w");
+	FILE* tmp_file = fdopen(fd, "w");
 	if (!tmp_file) {
-		fprintf(stderr, "File %s, line %d, Error: fopen('%s') failed: %s\n",
+		fprintf(stderr, "File %s, line %d, Error: fdopen('%s') failed: %s\n",
 			__FILE__, __LINE__, inv_cert_path, strerror(errno));
+		close(fd);
 		mysql_close(myconn);
-		free(inv_cert_path);
+		unlink(inv_cert_path);
 		return NULL;
 	}
 	// Use an explicit format string; inv_cert is a const buffer but passing it
@@ -225,7 +230,6 @@ void* create_ssl_conn_missing_cert(void* arg) {
 
 	mysql_close(myconn);
 	unlink(inv_cert_path);
-	free(inv_cert_path);
 	return NULL;
 }
 
