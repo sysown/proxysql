@@ -152,7 +152,7 @@ static void test_prepare_stmt_future_gtid(MYSQL* admin, MYSQL* proxy, const std:
 		BAIL_OUT("test_future_gtid: Failed to query PS cache count");
 	}
 
-	ok(ps_count == exp_ps_cache_count, "test_valid_gtid: PS cache should have exactly %d entry for query, got %d", exp_ps_cache_count, ps_count);
+	ok(ps_count == exp_ps_cache_count, "test_future_gtid: PS cache should have exactly %d entry for query, got %d", exp_ps_cache_count, ps_count);
 }
 
 int main(int, char**) {
