@@ -72,7 +72,7 @@ int AI_Features_Manager::init_vector_db() {
 	}
 
 	// Enable SQLite extensions for vector_db
-	// Once enabled, SQLite loads extensions such as vec0 and rembed automatically.
+	// Once enabled, SQLite loads extensions such as vec0 automatically.
 	// Refer - Admin_Bootstrap.cpp:590
 	(*proxy_sqlite3_enable_load_extension)(vector_db->get_db(), 1);
 

@@ -14,8 +14,7 @@ concurrency:
 jobs:
   run:
     if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
-    uses: sysown/proxysql/.github/workflows/ci-taptests-groups.yml@GH-Actions
+    uses: sysown/proxysql/.github/workflows/ci-legacy-g1.yml@GH-Actions
     secrets: inherit
     with:
       trigger: ${{ toJson(github) }}
-      testgroup: '["legacy-g1"]'

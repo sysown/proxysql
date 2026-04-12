@@ -57,7 +57,6 @@ lint-tests:
 ###      * MCP (Model Context Protocol) stack
 ###      * Advanced Anomaly Detection
 ###    - Automatically increments the major version (e.g., 3.0.6 -> 4.0.6).
-###    - Note: This tier requires the Rust toolchain for certain dependencies.
 ###
 ### HIERARCHY: `PROXYSQLGENAI=1` implies `PROXYSQL31=1`.
 
