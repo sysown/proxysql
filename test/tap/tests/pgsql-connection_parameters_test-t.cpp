@@ -78,7 +78,7 @@ bool executeQueries(PGconn* conn, const std::vector<std::string>& queries) {
         if (strncasecmp(buf, "SELECT", sizeof("SELECT") - 1) == 0) {
             return PGRES_TUPLES_OK;
         }
-        else if (strncasecmp(buf, "COPY", sizeof("COPY") - 1) == 0) {
+        if (strncasecmp(buf, "COPY", sizeof("COPY") - 1) == 0) {
             return PGRES_COPY_OUT;
         }
 
@@ -173,7 +173,7 @@ bool send_data(int sock, const void* data, size_t len) {
 std::vector<char> build_startup_message(const std::vector<parameter>& parameters) {
     // Build startup message
     std::vector<char> startup_body;
-    int32_t protocol = htonl(0x00030000);  // Protocol 3.0
+    int32_t protocol = static_cast<int32_t>(htonl(0x00030000));  // Protocol 3.0
     startup_body.insert(startup_body.end(), (char*)&protocol, (char*)&protocol + 4);
 
     // Add connection parameters
@@ -202,7 +202,7 @@ std::vector<char> build_startup_message(const std::vector<parameter>& parameters
  */
 std::vector<char> build_password_message(std::string_view password) {
     std::vector<char> password_message;
-    int pass_msg_len = htonl(password.size() + 1 + 4);
+    int pass_msg_len = static_cast<int>(htonl(password.size() + 1 + 4));
     password_message.push_back('p');
     password_message.insert(password_message.end(), (char*)&pass_msg_len, (char*)&pass_msg_len + 4);
     password_message.insert(password_message.end(), password.begin(), password.end());
@@ -406,7 +406,7 @@ bool handle_cleartext_auth(int sock, std::string_view password) {
         std::vector<PgSQLResponse> msg_list;
 
         while (true) {
-            int bytes_received = recv(sock, response, sizeof(response), MSG_DONTWAIT);
+            int bytes_received = static_cast<int>(recv(sock, response, sizeof(response), MSG_DONTWAIT));
             if (bytes_received == 0) {
                 fprintf(stderr, "Error: Connection closed in file %s, line %d\n", __FILE__, __LINE__);
                 return false;
@@ -431,7 +431,7 @@ bool handle_cleartext_auth(int sock, std::string_view password) {
                 }
 
                 memcpy(&messageLength, response + offset + 1, 4);
-                messageLength = ntohl(messageLength);
+                messageLength = static_cast<int32_t>(ntohl(messageLength));
 
                 if (offset + messageLength > static_cast<size_t>(bytes_received)) {
                     fprintf(stderr, "Incomplete message body received.\n");
@@ -544,7 +544,7 @@ std::unique_ptr<MyPGresult> execute_query(int sock, const std::string& query) {
                 int32_t field_len;
                 memcpy(&field_len, data + pos, 4);
                 pos += 4;
-                field_len = ntohl(field_len);
+                field_len = static_cast<int32_t>(ntohl(field_len));
 
                 if (field_len == -1) {
                     row.push_back("NULL");

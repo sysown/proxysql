@@ -203,10 +203,9 @@ int main(int argc, char** argv) {
 
 	rc = run_q(conns[0], "SELECT * FROM test.sbtest1");
 	ok(rc == 0 , "SELECT FROM test.sbtest1");
-	MYSQL_ROW row;
 	proxy_res = mysql_store_result(conns[0]);
 	if (proxy_res) {
-		while ((row = mysql_fetch_row(proxy_res))) {
+		while (mysql_fetch_row(proxy_res)) {
 			rows_read++;
 		}
 		mysql_free_result(proxy_res);

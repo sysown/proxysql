@@ -88,7 +88,6 @@ int main(int argc, char** argv) {
 		MYSQL_QUERY(mysqladmin, q);
 		res = mysql_store_result(mysqladmin);
 		MYSQL_ROW row;
-		unsigned long long num_rows = mysql_num_rows(res);
 		while ((row = mysql_fetch_row(res))) {
 				int hg = atoi(row[0]);
 				diag("Retrieve HG id: %d", hg);

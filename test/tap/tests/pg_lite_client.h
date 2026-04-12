@@ -62,7 +62,7 @@ public:
         if (pos_ + 2 > size_) throw PgException("Buffer underrun");
         int16_t value;
         memcpy(&value, data_ + pos_, 2);
-        pos_ += 2;
+        pos_ += static_cast<int>(2);
         return ntohs(value);
     }
 
@@ -70,7 +70,7 @@ public:
         if (pos_ + 4 > size_) throw PgException("Buffer underrun");
         int32_t value;
         memcpy(&value, data_ + pos_, 4);
-        pos_ += 4;
+        pos_ += static_cast<int>(4);
         return ntohl(value);
     }
 

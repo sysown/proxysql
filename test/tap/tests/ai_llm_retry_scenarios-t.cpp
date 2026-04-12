@@ -35,10 +35,7 @@ static int mock_http_status = 200;
 static long total_sleep_time_ms = 0;
 
 static void mock_sleep_with_jitter(int base_delay_ms, double jitter_factor = 0.1) {
-	// Add random jitter to prevent synchronized retries
-	int jitter_ms = static_cast<int>(base_delay_ms * jitter_factor);
-	// In real implementation, this would be random, but for testing we'll use a fixed value
-	int random_jitter = 0; // (rand() % (2 * jitter_ms)) - jitter_ms;
+	int random_jitter = 0; // (rand() % (2 * static_cast<int>(base_delay_ms * jitter_factor))) - static_cast<int>(base_delay_ms * jitter_factor);
 
 	int total_delay_ms = base_delay_ms + random_jitter;
 	if (total_delay_ms < 0) total_delay_ms = 0;
@@ -128,7 +125,7 @@ void test_exponential_backoff_timing() {
 
 	// Test basic exponential backoff
 	mock_success_on_attempt = -1; // Always fail to test retries
-	std::string result = mock_llm_call_with_retry(
+	mock_llm_call_with_retry(
 		"test prompt",
 		3,      // max_retries
 		100,    // initial_backoff_ms
@@ -221,7 +218,7 @@ void test_maximum_backoff_limit() {
 
 	// Test that backoff doesn't exceed maximum
 	mock_success_on_attempt = -1; // Always fail
-	std::string result = mock_llm_call_with_retry(
+	mock_llm_call_with_retry(
 		"test prompt",
 		5,      // max_retries
 		100,    // initial_backoff_ms

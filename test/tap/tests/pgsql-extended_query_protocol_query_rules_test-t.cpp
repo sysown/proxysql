@@ -132,8 +132,8 @@ void test_rule_flow(PGconn* admin, int rule_id, const std::string& test_name, co
             ok(PQresultStatus(res) != PGRES_TUPLES_OK, (test_name + ": Execute failed as expected").c_str());
         } else {
             ok(PQresultStatus(res) == PGRES_TUPLES_OK && std::string(PQgetisnull(res, 0, 0) ? "(null)" : PQgetvalue(res, 0, 0)) == expected_exec_result,
-                (test_name + ": '%s/%s' Execute returned expected value").c_str(), 
-                    (PQgetisnull(res, 0, 0) ? "(null)" : PQgetvalue(res, 0, 0)), expected_exec_result.c_str());
+                (test_name + ": '%s/%s' Execute returned expected value").c_str(),
+                (PQgetisnull(res, 0, 0) ? "(null)" : PQgetvalue(res, 0, 0)), expected_exec_result.c_str());
         }
         PQclear(res);
         int hits_after_exec = get_hits(admin, rule_id);

@@ -83,11 +83,11 @@ int update_and_check_servers_defaults(MYSQL* admin, const json& j_servers_defaul
 	return EXIT_SUCCESS;
 }
 
-void check_matching_logline(fstream& f_log, string regex) {
+void check_matching_logline(fstream& f_log, const string& regex) {
 	// Minimal wait for the error log to be written
 	usleep(500 * 1000);
 
-	const auto& [__1, matching_lines ] { get_matching_lines(f_log, regex) };
+	const auto& [match1, matching_lines ] { get_matching_lines(f_log, regex) };
 	for (const line_match_t& line_match : matching_lines) {
 		diag(
 			"Found matching logline - pos: %ld, line: `%s`",

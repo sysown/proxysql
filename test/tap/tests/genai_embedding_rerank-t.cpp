@@ -50,7 +50,7 @@ bool check_genai_initialized(MYSQL* admin) {
 		return false;
 	}
 
-	int num_rows = mysql_num_rows(res);
+	int num_rows = static_cast<int>(mysql_num_rows(res));
 	mysql_free_result(res);
 
 	// If we get a result, the GenAI module is loaded and initialized
@@ -80,7 +80,7 @@ bool execute_genai_query(MYSQL* client, const string& json_query, int expected_r
 		return false;
 	}
 
-	int num_rows = mysql_num_rows(res);
+	int num_rows = static_cast<int>(mysql_num_rows(res));
 	mysql_free_result(res);
 
 	if (expected_rows >= 0 && num_rows != expected_rows) {
@@ -115,7 +115,7 @@ bool execute_genai_query_expect_error(MYSQL* client, const string& json_query) {
 	}
 
 	// Check if result set contains an error message
-	int num_fields = mysql_num_fields(res);
+	int num_fields = static_cast<int>(mysql_num_fields(res));
 	bool has_error = false;
 
 	if (num_fields >= 1) {
@@ -506,7 +506,7 @@ int test_genai_configuration(MYSQL* admin) {
 	MYSQL_RES* res = mysql_store_result(admin);
 	ok(res != NULL, "genai-threads variable is accessible");
 	if (res) {
-		int num_rows = mysql_num_rows(res);
+		int num_rows = static_cast<int>(mysql_num_rows(res));
 		ok(num_rows == 1, "genai-threads returns 1 row");
 		test_count++;
 		mysql_free_result(res);
@@ -710,7 +710,7 @@ int main() {
 	// Part 10: Test GENAI: query syntax variations
 	// ============================================================================
 	diag("=== Part 10: Testing GENAI: query syntax variations ===");
-	test_count += test_genai_syntax(client);
+	test_genai_syntax(client);
 
 	// ============================================================================
 	// Cleanup

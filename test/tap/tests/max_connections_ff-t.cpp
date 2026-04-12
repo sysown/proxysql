@@ -356,7 +356,7 @@ int test_ff_sess_exceeds_max_conns(const CommandLine& cl, MYSQL* proxy_admin, lo
 		connect_timeout_server, srv_conn_to, connect_timeout
 	);
 
-	my_err = set_srv_conn_to(proxy_admin, srv_conn_to);
+	my_err = set_srv_conn_to(proxy_admin, static_cast<int>(srv_conn_to));
 	if (my_err) {
 		diag("Failed to set 'mysql-connect_timeout_server' to '%ld'", srv_conn_to);
 		res = EXIT_FAILURE;
@@ -402,19 +402,19 @@ int test_ff_sess_exceeds_max_conns(const CommandLine& cl, MYSQL* proxy_admin, lo
 
 		diag("Executing query on the (n+1)th fast_forward connection...");
 		int q_err = mysql_query(proxy_ff, "DO 1");
-		int m_errno = mysql_errno(proxy_ff);
+		int m_errno = static_cast<int>(mysql_errno(proxy_ff));
 		const char* m_error = mysql_error(proxy_ff);
 
 		hrc::time_point end = hrc::now();
 
 		duration = end - start;
-		double duration_s = duration.count() / pow(10,9);
+		double duration_s = static_cast<int>(duration.count()) / pow(10,9);
 
 		diag("Query completed - Error: %d, ErrMsg: %s", m_errno, m_error);
 		diag("Time waited: %lf seconds", duration_s);
 
-		const double srv_conn_to_s = connect_timeout / 1000.0;
-		const double poll_to_s = poll_timeout / 1000.0;
+		const double srv_conn_to_s = static_cast<int>(connect_timeout) / 1000.0;
+		const double poll_to_s = static_cast<int>(poll_timeout) / 1000.0;
 		const double grace = 500 / 1000.0;
 
 		ok(

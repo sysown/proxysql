@@ -56,7 +56,7 @@ bool check_genai_initialized(MYSQL* admin) {
 		return false;
 	}
 
-	int num_rows = mysql_num_rows(res);
+	int num_rows = static_cast<int>(mysql_num_rows(res));
 	mysql_free_result(res);
 
 	// If we get a result, the GenAI module is loaded and initialized
@@ -87,7 +87,7 @@ bool execute_genai_query(MYSQL* client, const string& json_query, int expected_r
 		return false;
 	}
 
-	int num_rows = mysql_num_rows(res);
+	int num_rows = static_cast<int>(mysql_num_rows(res));
 	diag("Result: %d rows", num_rows);
 	mysql_free_result(res);
 
@@ -126,7 +126,7 @@ bool execute_genai_query_expect_error(MYSQL* client, const string& json_query) {
 	}
 
 	// Check if result set contains an error message
-	int num_fields = mysql_num_fields(res);
+	int num_fields = static_cast<int>(mysql_num_fields(res));
 	bool has_error = false;
 
 	if (num_fields >= 1) {
@@ -473,7 +473,7 @@ int test_large_documents(MYSQL* client) {
 	json = R"({"type": "embed", "documents": [)";
 	for (int i = 0; i < 5; i++) {
 		if (i > 0) json += ",";
-		json += R"(")" + string(1000, 'A' + i) + R"(")";  // 1KB each
+		json += R"(")" + string(1000, static_cast<char>('A' + i)) + R"(")";  // 1KB each
 	}
 	json += "]}";
 
@@ -849,7 +849,7 @@ int main() {
 	// Part 11: Test concurrent connections
 	// ============================================================================
 	diag("=== Part 11: Testing concurrent connections ===");
-	test_count += test_concurrent_connections(cl.host, cl.username, cl.password, cl.port);
+	test_concurrent_connections(cl.host, cl.username, cl.password, cl.port);
 
 	// ============================================================================
 	// Cleanup
