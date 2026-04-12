@@ -1,5 +1,5 @@
-#ifndef __PROXYSQL_UTILS_H
-#define __PROXYSQL_UTILS_H
+#ifndef PROXYSQL_UTILS_H
+#define PROXYSQL_UTILS_H
 
 #include <cstdarg>
 #include <type_traits>

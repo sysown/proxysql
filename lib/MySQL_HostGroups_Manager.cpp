@@ -1048,10 +1048,10 @@ void MySQL_HostGroups_Manager::update_hostgroup_manager_mappings() {
 
 					if (itr == hostgroup_server_mapping.end()) {
 						std::unique_ptr<HostGroup_Server_Mapping> server_mapping(new HostGroup_Server_Mapping(this));
-						fetched_server_mapping = server_mapping.get();
 						hostgroup_server_mapping.insert( std::pair<std::string,std::unique_ptr<MySQL_HostGroups_Manager::HostGroup_Server_Mapping>> {
 															server_id, std::move(server_mapping)
 															} );
+						fetched_server_mapping = hostgroup_server_mapping.at(server_id).get();
 					} else {
 						fetched_server_mapping = itr->second.get();
 					}
@@ -1877,7 +1877,7 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 						st=(char *)"SHUNNED";
 						break;
 				}
-				fprintf(stderr,"HID: %d , address: %s , port: %d , gtid_port: %d , weight: %ld , status: %s , max_connections: %ld , max_replication_lag: %u , use_ssl: %u , max_latency_ms: %u , comment: %s\n", mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->gtid_port, mysrvc->weight, st, mysrvc->max_connections, mysrvc->max_replication_lag, mysrvc->use_ssl, mysrvc->max_latency_us*1000, mysrvc->comment);
+				fprintf(stderr,"HID: %u , address: %s , port: %d , gtid_port: %d , weight: %ld , status: %s , max_connections: %ld , max_replication_lag: %u , use_ssl: %d , max_latency_ms: %u , comment: %s\n", mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->gtid_port, mysrvc->weight, st, mysrvc->max_connections, mysrvc->max_replication_lag, mysrvc->use_ssl, mysrvc->max_latency_us*1000, mysrvc->comment);
 			}
 			lst->add(mysrvc);
 			if (lst->len==32) {
@@ -2018,7 +2018,7 @@ void MySQL_HostGroups_Manager::generate_mysql_group_replication_hostgroups_table
 	for (std::map<int , Group_Replication_Info *>::iterator it1 = Group_Replication_Info_Map.begin() ; it1 != Group_Replication_Info_Map.end(); ++it1) {
 		Group_Replication_Info *info=NULL;
 		info=it1->second;
-		info->__active=false;
+		info->active_=false;
 	}
 	for (std::vector<SQLite3_row *>::iterator it = incoming_group_replication_hostgroups->rows.begin() ; it != incoming_group_replication_hostgroups->rows.end(); ++it) {
 		SQLite3_row *r=*it;
@@ -2066,7 +2066,7 @@ void MySQL_HostGroups_Manager::generate_mysql_group_replication_hostgroups_table
 	// remove missing ones
 	for (auto it3 = Group_Replication_Info_Map.begin(); it3 != Group_Replication_Info_Map.end(); ) {
 		Group_Replication_Info *info=it3->second;
-		if (info->__active==false) {
+		if (info->active_==false) {
 			delete info;
 			it3 = Group_Replication_Info_Map.erase(it3);
 		} else {
@@ -2117,7 +2117,7 @@ void MySQL_HostGroups_Manager::generate_mysql_galera_hostgroups_table() {
 	for (std::map<int , Galera_Info *>::iterator it1 = Galera_Info_Map.begin() ; it1 != Galera_Info_Map.end(); ++it1) {
 		Galera_Info *info=NULL;
 		info=it1->second;
-		info->__active=false;
+		info->active_=false;
 	}
 	for (std::vector<SQLite3_row *>::iterator it = incoming_galera_hostgroups->rows.begin() ; it != incoming_galera_hostgroups->rows.end(); ++it) {
 		SQLite3_row *r=*it;
@@ -2165,7 +2165,7 @@ void MySQL_HostGroups_Manager::generate_mysql_galera_hostgroups_table() {
 	// remove missing ones
 	for (auto it3 = Galera_Info_Map.begin(); it3 != Galera_Info_Map.end(); ) {
 		Galera_Info *info=it3->second;
-		if (info->__active==false) {
+		if (info->active_==false) {
 			delete info;
 			it3 = Galera_Info_Map.erase(it3);
 		} else {
@@ -2335,7 +2335,7 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c, bool _lo
 	}
 
 	// If the largest query length exceeds the threshold, destroy the connection
-	if (c->largest_query_length > (unsigned int)GloMTH->variables.threshold_query_length) {
+	if (GloMTH && c->largest_query_length > (unsigned int)GloMTH->variables.threshold_query_length) {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying MySQL_Connection %p, server %s:%d with status %d . largest_query_length = %lu\n", c, mysrvc->address, mysrvc->port, (int)mysrvc->get_status(), c->largest_query_length);
 		delete c;
 		goto __exit_push_MyConn_to_pool;
@@ -3578,8 +3578,9 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_ser
 
 		HostGroup_Server_Mapping* host_server_mapping = itr->second.get();
 
-		if (!host_server_mapping)
-			assert(0);
+		if (!host_server_mapping) {
+			continue;
+		}
 
 		const std::vector<HostGroup_Server_Mapping::Node>& writer_map = host_server_mapping->get(HostGroup_Server_Mapping::Type::WRITER);
 
@@ -3988,7 +3989,7 @@ Group_Replication_Info::Group_Replication_Info(int w, int b, int r, int o, int m
 	current_num_backup_writers=0;
 	current_num_readers=0;
 	current_num_offline=0;
-	__active=true;
+	active_=true;
 	need_converge=true;
 }
 
@@ -4001,7 +4002,7 @@ Group_Replication_Info::~Group_Replication_Info() {
 
 bool Group_Replication_Info::update(int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c) {
 	bool ret=false;
-	__active=true;
+	active_=true;
 	if (backup_writer_hostgroup!=b) {
 		backup_writer_hostgroup=b;
 		ret=true;
@@ -4681,7 +4682,7 @@ Galera_Info::Galera_Info(int w, int b, int r, int o, int mw, int mtb, bool _a, i
 	current_num_backup_writers=0;
 	current_num_readers=0;
 	current_num_offline=0;
-	__active=true;
+	active_=true;
 	need_converge=true;
 }
 
@@ -4694,7 +4695,7 @@ Galera_Info::~Galera_Info() {
 
 bool Galera_Info::update(int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c) {
 	bool ret=false;
-	__active=true;
+	active_=true;
 	if (backup_writer_hostgroup!=b) {
 		backup_writer_hostgroup=b;
 		ret=true;
@@ -4988,13 +4989,14 @@ void MySQL_HostGroups_Manager::update_galera_set_read_only(char *_hostname, int 
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
 			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=%d WHERE hostname='%s' AND port=%d AND hostgroup_id in (%d, %d, %d)";
-			query=(char *)malloc(strlen(q)+strlen(_hostname)+512);
+			size_t qsz = strlen(q)+strlen(_hostname)+512;
+			query=(char *)malloc(qsz);
 			sprintf(query, q, info->reader_hostgroup, _hostname, _port, info->writer_hostgroup, info->backup_writer_hostgroup, info->offline_hostgroup);
 			mydb->execute(query);
 			//free(query);
-			q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id in (%d, %d, %d)";
+			q="DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id in (%d, %d, %d)";
 			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_hostname,_port, info->offline_hostgroup, info->backup_writer_hostgroup, info->writer_hostgroup, info->writer_hostgroup);
+			snprintf(query, qsz, q, _hostname, _port, info->offline_hostgroup, info->backup_writer_hostgroup, info->writer_hostgroup);
 			mydb->execute(query);
 			//free(query);
 			q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s' AND port=%d AND hostgroup_id=%d";
@@ -5697,6 +5699,8 @@ class MySQL_Errors_stats {
 		}
 		free(pta);
 	}
+	MySQL_Errors_stats(const MySQL_Errors_stats&) = delete;
+	MySQL_Errors_stats& operator=(const MySQL_Errors_stats&) = delete;
 };
 
 void MySQL_HostGroups_Manager::add_mysql_errors(int hostgroup, char *hostname, int port, char *username, char *address, char *schemaname, int err_no, char *last_error) {
@@ -5800,7 +5804,7 @@ AWS_Aurora_Info::AWS_Aurora_Info(int w, int r, int _port, char *_end_addr, int m
 	writer_is_also_reader=wiar;
 	new_reader_weight=nrw;
 	active=_a;
-	__active=true;
+	active_=true;
 	//need_converge=true;
 	aurora_port = _port;
 	domain_name = strdup(_end_addr);
@@ -5819,7 +5823,7 @@ AWS_Aurora_Info::~AWS_Aurora_Info() {
 
 bool AWS_Aurora_Info::update(int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c) {
 	bool ret=false;
-	__active=true;
+	active_=true;
 	if (reader_hostgroup!=r) {
 		reader_hostgroup=r;
 		ret=true;
@@ -6174,7 +6178,7 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 	for (std::map<int , AWS_Aurora_Info *>::iterator it1 = AWS_Aurora_Info_Map.begin() ; it1 != AWS_Aurora_Info_Map.end(); ++it1) {
 		AWS_Aurora_Info *info=NULL;
 		info=it1->second;
-		info->__active=false;
+		info->active_=false;
 	}
 	for (std::vector<SQLite3_row *>::iterator it = incoming_aws_aurora_hostgroups->rows.begin() ; it != incoming_aws_aurora_hostgroups->rows.end(); ++it) {
 		SQLite3_row *r=*it;
@@ -6232,7 +6236,7 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 	// remove missing ones
 	for (auto it3 = AWS_Aurora_Info_Map.begin(); it3 != AWS_Aurora_Info_Map.end(); ) {
 		AWS_Aurora_Info *info=it3->second;
-		if (info->__active==false) {
+		if (info->active_==false) {
 			delete info;
 			it3 = AWS_Aurora_Info_Map.erase(it3);
 		} else {

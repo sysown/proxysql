@@ -87,6 +87,23 @@ if [ "${BINLOG_INFRA_FOUND}" -eq 0 ]; then
     export BINLOG_READER_START_DELAY=0
 fi
 
+# Derive INFRA_TYPE from TAP_GROUP if not set
+# This is simple and deterministic - matches group naming convention
+if [ -z "${INFRA_TYPE}" ]; then
+    case "${TAP_GROUP}" in
+        mysql84*)  export INFRA_TYPE=infra-mysql84 ;;
+        mysql90*)  export INFRA_TYPE=infra-mysql90 ;;
+        mysql91*)  export INFRA_TYPE=infra-mysql91 ;;
+        mysql92*)  export INFRA_TYPE=infra-mysql92 ;;
+        mysql93*)  export INFRA_TYPE=infra-mysql93 ;;
+        mariadb*)  export INFRA_TYPE=infra-mariadb10 ;;
+        legacy*)   export INFRA_TYPE=infra-mysql57 ;;
+    esac
+    if [ -n "${INFRA_TYPE}" ]; then
+        echo ">>> Derived INFRA_TYPE from TAP_GROUP: ${INFRA_TYPE}"
+    fi
+fi
+
 # 2. Automatically derive DEFAULT_MYSQL_INFRA and DEFAULT_PGSQL_INFRA
 # We take the first compatible infrastructure found in the list.
 if [ -n "${INFRAS_TO_CHECK}" ]; then
@@ -167,14 +184,37 @@ if [ "${SKIP_PROXYSQL}" = "1" ]; then
         exit 1
     fi
 
-    # Extract test names belonging to this group
+    # Detect ProxySQL version for @proxysql_min_version filtering
+    PROXYSQL_BIN="${WORKSPACE}/src/proxysql"
+    PROXYSQL_VERSION=""
+    if [ -x "${PROXYSQL_BIN}" ]; then
+        PROXYSQL_VERSION=$(${PROXYSQL_BIN} --version 2>&1 | grep -oP 'ProxySQL version \K[0-9]+\.[0-9]+\.[0-9]+' || true)
+        echo ">>> Detected ProxySQL version: ${PROXYSQL_VERSION}"
+    else
+        echo ">>> WARNING: ProxySQL binary not found at ${PROXYSQL_BIN}, skipping version filtering"
+    fi
+
+    # Extract test names belonging to this group, filtering by @proxysql_min_version
     TEST_NAMES=$(python3 -c "
 import json, sys
+from packaging import version
+proxysql_ver = '${PROXYSQL_VERSION}'
 with open('${GROUPS_JSON}') as f:
     groups = json.load(f)
 for test_name, test_groups in sorted(groups.items()):
     if '${TAP_GROUP}' in test_groups:
-        print(test_name)
+        # Check @proxysql_min_version tag
+        skip = False
+        if proxysql_ver:
+            for entry in test_groups:
+                if isinstance(entry, str) and entry.startswith('@proxysql_min_version:'):
+                    min_ver = entry.split(':', 1)[1]
+                    if version.parse(proxysql_ver) < version.parse(min_ver):
+                        print(f'SKIP ({test_name}): requires ProxySQL >= {min_ver}, have {proxysql_ver}', file=sys.stderr)
+                        skip = True
+                    break
+        if not skip:
+            print(test_name)
 ")
 
     if [ -z "${TEST_NAMES}" ]; then

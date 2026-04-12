@@ -301,6 +301,9 @@ struct mon_srv_t {
 		string ssl_p2s_ca;
 		string ssl_p2s_crl;
 		string ssl_p2s_crlpath;
+		// Pre-parsed from ssl_protocol_version_range; empty when unset/malformed.
+		string ssl_min_protocol_version;
+		string ssl_max_protocol_version;
 	} ssl_opt;
 };
 
@@ -440,13 +443,38 @@ vector<mon_srv_t> ext_srvs(const unique_ptr<SQLite3_result>& srvs_info) {
 			string { row->fields[1] },
 			static_cast<uint16_t>(std::atoi(row->fields[2])),
 			static_cast<bool>(std::atoi(row->fields[3])),
-			mon_srv_t::ssl_opts_t {
-				string { pgsql_thread___ssl_p2s_key ? pgsql_thread___ssl_p2s_key : ""},
-				string { pgsql_thread___ssl_p2s_cert ? pgsql_thread___ssl_p2s_cert : "" },
-				string { pgsql_thread___ssl_p2s_ca ? pgsql_thread___ssl_p2s_ca : "" },
-				string { pgsql_thread___ssl_p2s_crl ? pgsql_thread___ssl_p2s_crl : "" },
-				string { pgsql_thread___ssl_p2s_crlpath ? pgsql_thread___ssl_p2s_crlpath : ""}
-			}
+			[&]() -> mon_srv_t::ssl_opts_t {
+				bool use_ssl_val = static_cast<bool>(std::atoi(row->fields[3]));
+				if (use_ssl_val) {
+					std::unique_ptr<PgSQLServers_SslParams> ssl_params {
+						PgHGM->get_Server_SSL_Params(
+							row->fields[1],
+							std::atoi(row->fields[2]),
+							pgsql_thread___monitor_username ? pgsql_thread___monitor_username : (char*)""
+						)
+					};
+					if (ssl_params != nullptr) {
+						return mon_srv_t::ssl_opts_t {
+							ssl_params->ssl_key,
+							ssl_params->ssl_cert,
+							ssl_params->ssl_ca,
+							ssl_params->ssl_crl,
+							ssl_params->ssl_crlpath,
+							ssl_params->ssl_min_protocol_version,
+							ssl_params->ssl_max_protocol_version
+						};
+					}
+				}
+				return mon_srv_t::ssl_opts_t {
+					string { pgsql_thread___ssl_p2s_key ? pgsql_thread___ssl_p2s_key : ""},
+					string { pgsql_thread___ssl_p2s_cert ? pgsql_thread___ssl_p2s_cert : "" },
+					string { pgsql_thread___ssl_p2s_ca ? pgsql_thread___ssl_p2s_ca : "" },
+					string { pgsql_thread___ssl_p2s_crl ? pgsql_thread___ssl_p2s_crl : "" },
+					string { pgsql_thread___ssl_p2s_crlpath ? pgsql_thread___ssl_p2s_crlpath : ""},
+					string { "" },
+					string { "" }
+				};
+			}()
 		});
 	}
 	return srvs;
@@ -1082,6 +1110,13 @@ string build_conn_str(const task_st_t& task_st) {
 		append_conninfo_param(conninfo, "sslrootcert", srv_info.ssl_opt.ssl_p2s_ca);
 		append_conninfo_param(conninfo, "sslcrl", srv_info.ssl_opt.ssl_p2s_crl);
 		append_conninfo_param(conninfo, "sslcrldir", srv_info.ssl_opt.ssl_p2s_crlpath);
+		// Per-server TLS protocol pinning was pre-parsed from
+		// ssl_protocol_version_range when the row was loaded into
+		// PgSQLServers_SslParams. Empty fields => libpq defaults.
+		if (!srv_info.ssl_opt.ssl_min_protocol_version.empty())
+			append_conninfo_param(conninfo, "ssl_min_protocol_version", srv_info.ssl_opt.ssl_min_protocol_version);
+		if (!srv_info.ssl_opt.ssl_max_protocol_version.empty())
+			append_conninfo_param(conninfo, "ssl_max_protocol_version", srv_info.ssl_opt.ssl_max_protocol_version);
 	} else {
 		conninfo << "sslmode='disable' "; // not supporting SSL
 	}
@@ -2498,13 +2533,82 @@ void* PgSQL_monitor_scheduler_thread() {
 
 			// Check variable version changes; refresh if needed
 			unsigned int glover = GloPTH->get_global_version();
+			bool vars_refreshed = false;
 			if (PgSQL_Thread__variables_version < glover) {
 				PgSQL_Thread__variables_version = glover;
 				pgsql_thread->refresh_variables();
+				vars_refreshed = true;
 			}
 
 			// Fetch config for next task scheduling
 			tasks_conf_t tasks_conf { fetch_updated_conf(GloPgMon, PgHGM) };
+
+			// When runtime variables were just refreshed (i.e. someone did
+			// SET pgsql-monitor_*_interval=<smaller_value>; LOAD PGSQL
+			// VARIABLES TO RUNTIME;), the newly-read interval values may be
+			// smaller than the ones we used the last time we recomputed
+			// next_intvs. Without the clamp below, each next_<type>_at still
+			// points at the cycle that was scheduled under the OLD (larger)
+			// interval, so a LOAD doesn't visibly take effect until the old
+			// cycle elapses — which can be up to ~2 minutes for connect
+			// checks under the default pgsql-monitor_connect_interval=120000.
+			//
+			// Example of the surprise this avoids:
+			//
+			//   T=0    proxysql starts with monitor_connect_interval=120000,
+			//          next_connect_at is scheduled for T=120000ms.
+			//   T=5    user runs SET pgsql-monitor_connect_interval=2000;
+			//          LOAD PGSQL VARIABLES TO RUNTIME; expecting the next
+			//          connect cycle within ~2 seconds.
+			//   T=7    without this clamp, next_connect_at is still 120000
+			//          — no new connect fires for another 113 seconds.
+			//
+			// The fix: after every successful refresh, shrink any
+			// next_<type>_at that's now farther in the future than
+			// (now + new_interval). We never push next_<type>_at further
+			// into the future — growing the interval should not delay an
+			// already-imminent check — so the direction of the clamp is
+			// one-way (min()). Types whose interval is 0 (disabled) are
+			// skipped and handled by the existing compute_next_intvs()
+			// which sets them to ULONG_MAX.
+			if (vars_refreshed) {
+				if (tasks_conf.ping.params.interval > 0) {
+					const uint64_t clamped = cur_intv_start + tasks_conf.ping.params.interval;
+					if (next_intvs.next_ping_at > clamped) {
+						proxy_debug(PROXY_DEBUG_MONITOR, 5,
+							"Clamped next_ping_at   old=%lu new=%lu interval=%d\n",
+							next_intvs.next_ping_at, clamped, tasks_conf.ping.params.interval);
+						next_intvs.next_ping_at = clamped;
+					}
+				}
+				if (tasks_conf.connect.params.interval > 0) {
+					const uint64_t clamped = cur_intv_start + tasks_conf.connect.params.interval;
+					if (next_intvs.next_connect_at > clamped) {
+						proxy_debug(PROXY_DEBUG_MONITOR, 5,
+							"Clamped next_connect_at   old=%lu new=%lu interval=%d\n",
+							next_intvs.next_connect_at, clamped, tasks_conf.connect.params.interval);
+						next_intvs.next_connect_at = clamped;
+					}
+				}
+				if (tasks_conf.readonly.params.interval > 0) {
+					const uint64_t clamped = cur_intv_start + tasks_conf.readonly.params.interval;
+					if (next_intvs.next_readonly_at > clamped) {
+						proxy_debug(PROXY_DEBUG_MONITOR, 5,
+							"Clamped next_readonly_at   old=%lu new=%lu interval=%d\n",
+							next_intvs.next_readonly_at, clamped, tasks_conf.readonly.params.interval);
+						next_intvs.next_readonly_at = clamped;
+					}
+				}
+				if (tasks_conf.repl_lag.params.interval > 0) {
+					const uint64_t clamped = cur_intv_start + tasks_conf.repl_lag.params.interval;
+					if (next_intvs.next_repl_lag_at > clamped) {
+						proxy_debug(PROXY_DEBUG_MONITOR, 5,
+							"Clamped next_repl_lag_at   old=%lu new=%lu interval=%d\n",
+							next_intvs.next_repl_lag_at, clamped, tasks_conf.repl_lag.params.interval);
+						next_intvs.next_repl_lag_at = clamped;
+					}
+				}
+			}
 
 			// Perform table maintenance
 			maint_mon_tables(tasks_conf, next_intvs, cur_intv_start);

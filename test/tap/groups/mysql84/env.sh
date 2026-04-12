@@ -1,8 +1,14 @@
-# Legacy Test Group Environment
-# Defines the primary targets for tests that expect a generic MySQL or PGSQL backend.
+# MySQL 8.4 Test Group Environment
 
 export DEFAULT_MYSQL_INFRA="infra-mysql84"
-export DEFAULT_PGSQL_INFRA="docker-pgsql16-single"
 
-# Path to test data directory for RESTAPI scripts (reg_test_3223)
-export REGULAR_INFRA_DATADIR="${WORKSPACE}/test/tap/tests"
+# Source infra .env to export TAP test variables (TAP_MYSQL8_BACKEND_HG, etc.)
+# Uses WORKSPACE (always set in CI) to avoid shell-specific BASH_SOURCE
+if [ -n "${WORKSPACE}" ]; then
+    _INFRA_ENV="${WORKSPACE}/test/infra/${DEFAULT_MYSQL_INFRA}/.env"
+    [ -f "${_INFRA_ENV}" ] && . "${_INFRA_ENV}"
+fi
+
+# Path to RESTAPI test scripts inside ProxySQL container
+# The setup-infras.bash hook copies scripts to the ProxySQL data directory
+export REGULAR_INFRA_DATADIR="/var/lib/proxysql"

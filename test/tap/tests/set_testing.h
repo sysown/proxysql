@@ -137,6 +137,21 @@ void parseResultJsonColumn(MYSQL_RES *result, json& j) {
 		j = json::parse(row[0]);
 }
 
+// Check if two JSON values are equivalent, treating 'utf8' and 'utf8mb3' prefixes as equal.
+// MySQL 8.4+ reports 'utf8mb3' / 'utf8mb3_general_ci' where older versions report 'utf8' / 'utf8_general_ci'.
+static inline bool values_equiv(const json& ja, const json& jb) {
+	if (ja == jb) return true;
+	if (!ja.is_string() || !jb.is_string()) return false;
+	const std::string a = ja.get<std::string>();
+	const std::string b = jb.get<std::string>();
+	// exact charset match
+	if ((a == "utf8" && b == "utf8mb3") || (a == "utf8mb3" && b == "utf8")) return true;
+	// collation match: e.g. "utf8_general_ci" vs "utf8mb3_general_ci"
+	if (a.rfind("utf8_", 0) == 0 && b == "utf8mb3" + a.substr(4)) return true;
+	if (b.rfind("utf8_", 0) == 0 && a == "utf8mb3" + b.substr(4)) return true;
+	return false;
+}
+
 void parseResult(MYSQL_RES *result, json& j) {
 	if(!result) return;
 	MYSQL_ROW row;

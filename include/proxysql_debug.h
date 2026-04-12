@@ -1,5 +1,5 @@
-#ifndef __PROXYSQL_DEBUG_H
-#define __PROXYSQL_DEBUG_H
+#ifndef PROXYSQL_DEBUG_H
+#define PROXYSQL_DEBUG_H
 
 #include <chrono>
 #include <iostream>
@@ -171,7 +171,7 @@ class Timer {
 
 #define ASSERT_SQLITE_OK(rc, db) \
 	do { \
-		if (rc!=SQLITE_OK) { \
+		if ((rc)!=SQLITE_OK) { \
 			proxy_error( \
 				"SQLite3 error. Shutting down   rc=%d msg='%s'\n", \
 				rc, db ? (*proxy_sqlite3_errmsg)(db->get_db()) : NULL_DB_MSG); \
@@ -181,7 +181,7 @@ class Timer {
 
 #define ASSERT_SQLITE3_OK(rc, db) \
 	do { \
-		if (rc!=SQLITE_OK) { \
+		if ((rc)!=SQLITE_OK) { \
 			proxy_error( \
 				"SQLite3 error. Shutting down   rc=%d msg='%s'\n", \
 				rc, db ? (*proxy_sqlite3_errmsg)(db) : NULL_DB_MSG); \
@@ -190,9 +190,9 @@ class Timer {
 	} while(0)
 
 struct p_debug_dyn_counter {
-	enum metric {
+	enum metric : uint8_t {
 		proxysql_message_count = 0,
-		__size
+		SIZE_
 	};
 };
 
