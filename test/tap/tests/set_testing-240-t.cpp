@@ -183,6 +183,13 @@ void * my_conn_thread(void *arg) {
 				continue;
 			}
 		}
+		if (is_mariadb) {
+			if (strstr(testCases[r2].command.c_str(),"session_track_gtids")) {
+				std::lock_guard<std::mutex> lock(mtx_);
+				skip(1, "connections mysql[%p] proxysql[%s], command [%s]", mysql, paddress.c_str(), testCases[r2].command.c_str());
+				continue;
+			}
+		}
 		diag("Thread_id: %lu, random number: %d . Query/ies: %s", mysql->thread_id, r2, testCases[r2].command.c_str());
 		std::vector<std::string> commands = split(testCases[r2].command.c_str(), ';');
 		for (auto c : commands) {
