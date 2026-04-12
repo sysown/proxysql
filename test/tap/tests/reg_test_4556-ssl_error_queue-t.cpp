@@ -64,18 +64,16 @@ static int wait_for_mysql(MYSQL *mysql, int status) {
 	int timeout, res;
 
 	pfd.fd = mysql_get_socket(mysql);
-	pfd.events =
+	pfd.events = static_cast<short>(
 		(status & MYSQL_WAIT_READ ? POLLIN : 0) |
 		(status & MYSQL_WAIT_WRITE ? POLLOUT : 0) |
-		(status & MYSQL_WAIT_EXCEPT ? POLLPRI : 0);
+		(status & MYSQL_WAIT_EXCEPT ? POLLPRI : 0));
 	if (status & MYSQL_WAIT_TIMEOUT)
-		timeout = 1000*mysql_get_timeout_value(mysql);
+		timeout = static_cast<int>(1000*mysql_get_timeout_value(mysql));
 	else
 		timeout = -1;
 	res = poll(&pfd, 1, timeout);
-	if (res == 0)
-		return MYSQL_WAIT_TIMEOUT;
-	else if (res < 0)
+	if (res <= 0)
 		return MYSQL_WAIT_TIMEOUT;
 	else {
 		int status = 0;
@@ -87,18 +85,18 @@ static int wait_for_mysql(MYSQL *mysql, int status) {
 }
 
 // Thread Input
-struct th_args__in_t {
+struct th_args_in_t {
 	CommandLine& cl;
 };
 
 // Thread Output
-struct th_args__out_t {
+struct th_args_out_t {
 	std::string thread_addr {};
 };
 
 struct th_args_t {
-	th_args__in_t in_args;
-	th_args__out_t out_args {};
+	th_args_in_t in_args;
+	th_args_out_t out_args {};
 };
 
 void* create_ssl_conn_and_close_socket(void* arg) {
@@ -296,14 +294,14 @@ int create_conn(const CommandLine& cl) {
 
 char net_buf[4096] { 0 };
 
-struct _mysql_hdr {
+struct mysql_hdr {
 	u_int pkt_length:24, pkt_id:8;
 };
 
 int read_srv_handshake(int fd) {
 	char* buf_pos = net_buf;
 
-	int r = read(fd, buf_pos, sizeof(net_buf));
+	int r = static_cast<int>(read(fd, buf_pos, sizeof(net_buf)));
 	if (r == -1) {
 		perror("'read' failed");
 		return r;
@@ -312,7 +310,7 @@ int read_srv_handshake(int fd) {
 	buf_pos += r;
 
 	while (r > 0 && r < NET_HEADER_SIZE) {
-		r = read(fd, buf_pos + r, sizeof(buf_pos));
+		r = static_cast<int>(read(fd, buf_pos + r, sizeof(buf_pos)));
 		buf_pos += r;
 
 		if (r == -1) {
@@ -321,11 +319,11 @@ int read_srv_handshake(int fd) {
 		}
 	}
 
-	_mysql_hdr myhdr;
-	memcpy(&myhdr, net_buf, sizeof(_mysql_hdr));
+	mysql_hdr myhdr;
+	memcpy(&myhdr, net_buf, sizeof(mysql_hdr));
 
 	while (r > 0 && r < myhdr.pkt_length) {
-		r = read(fd, buf_pos + r, sizeof(buf_pos));
+		r = static_cast<int>(read(fd, buf_pos + r, sizeof(buf_pos)));
 		buf_pos += r;
 
 		if (r == -1) {
@@ -363,7 +361,7 @@ void* force_ssl_pre_handshake_failure(void* arg) {
 	}
 
 	diag("Sending harcoded 'SSLRequest'");
-	rc = send(sock, SSL_REQUEST_PKT, sizeof(SSL_REQUEST_PKT), 0);
+	rc = static_cast<int>(send(sock, SSL_REQUEST_PKT, sizeof(SSL_REQUEST_PKT), 0));
 	if (rc == -1) {
 		perror("'send' failed");
 		return NULL;
@@ -435,9 +433,9 @@ pair<uint32_t,vector<MYSQL*>> warmup_conn_pool(CommandLine& cl, uint32_t CONNS_T
 	struct rlimit limits { 0, 0 };
 	getrlimit(RLIMIT_NOFILE, &limits);
 	diag("Old process limits   rlim_cur=%ld rlim_max=%ld", limits.rlim_cur, limits.rlim_max);
-	if (limits.rlim_cur < CONNS_TOTAL * 2) {
+	if (limits.rlim_cur < static_cast<rlim_t>(CONNS_TOTAL) * 2) {
 		diag("Updating process max FD limit");
-		limits.rlim_cur = CONNS_TOTAL * 2;
+		limits.rlim_cur = static_cast<rlim_t>(CONNS_TOTAL) * 2;
 		setrlimit(RLIMIT_NOFILE, &limits);
 	}
 	diag("New process limits   rlim_cur=%ld rlim_max=%ld", limits.rlim_cur, limits.rlim_max);
@@ -603,7 +601,7 @@ int check_frontend_ssl_errs(
 		pthread_t unexp_socket_close;
 		void* th_ret = nullptr;
 		std::unique_ptr<th_args_t> th_args {
-			new th_args_t { th_args__in_t { cl }, th_args__out_t {} }
+			new th_args_t { th_args_in_t { cl }, th_args_out_t {} }
 		};
 
 		diag("Force early SSL failure in thread");
@@ -873,7 +871,7 @@ int main(int argc, char** argv) {
 		backend_conns_checks = 2;
 	}
 
-	plan(frontend_conns_checks + conns_dist_checks + backend_conns_checks);
+	plan(static_cast<int>(frontend_conns_checks + conns_dist_checks + backend_conns_checks));
 
 	if (!frontend_conns_checks) {
 		goto backend_checks;
@@ -882,12 +880,11 @@ int main(int argc, char** argv) {
 frontend_checks:
 	diag("START: Regression testing of #4556 for frontend conns");
 	for (const pair<string, void*(*)(void*)> p_name_rt : ssl_failure_rts) {
-		const char* rt_name = p_name_rt.first.c_str();
 		void*(*ssl_fail_rt)(void*) = p_name_rt.second;
 
 		for (size_t ms_idle : idle_sess_ms) {
 			diag("Forcing SSL failure on fronted connection   routine=%s", p_name_rt.first.c_str());
-			int rc = check_frontend_ssl_errs(cl, admin, ext_thread_count.val, ms_idle, ssl_fail_rt);
+			int rc = check_frontend_ssl_errs(cl, admin, ext_thread_count.val, static_cast<int64_t>(ms_idle), ssl_fail_rt);
 			if (rc) {
 				diag("Unable to perform check, operation failed   routine=%s", p_name_rt.first.c_str());
 				return EXIT_FAILURE;

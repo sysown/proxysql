@@ -43,7 +43,7 @@ int check_all_collations(const CommandLine& cl, MYSQL* admin) {
 		}
 	}
 
-	plan(num_tests);
+	plan(static_cast<int>(num_tests));
 
 	do {
 		if (c[0].nr > 255) {

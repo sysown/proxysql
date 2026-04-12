@@ -67,7 +67,7 @@ int create_testing_tables(MYSQL* mysql_server) {
 }
 
 int insert_random_data(MYSQL* proxysql_mysql, uint32_t rows) {
-	int rnd_a = rand() % 1000;
+	[[maybe_unused]] int rnd_a = rand() % 1000;
 	string rnd_c = random_string(rand() % 100 + 5);
 	string rnd_pad = random_string(rand() % 50 + 5);
 
@@ -84,9 +84,7 @@ int insert_random_data(MYSQL* proxysql_mysql, uint32_t rows) {
 }
 
 int perform_update(MYSQL* proxysql_mysql, uint32_t rows) {
-	int rnd_a = rand() % 1000;
-	string rnd_c = random_string(rand() % 100 + 5);
-	string rnd_pad = random_string(rand() % 60 + 5);
+	[[maybe_unused]] int rnd_a = rand() % 1000;
 
 	string query { "UPDATE test.gtid_test SET a=a+1, c=REVERSE(c)" };
 	MYSQL_QUERY(proxysql_mysql, query.c_str());
@@ -164,13 +162,12 @@ int perform_rnd_selects(const CommandLine& cl, uint32_t NUM) {
 	fprintf(stderr, "Connected successfully as sbtest8 for SELECT operations\n");
 
 	for (uint32_t i = 0; i < NUM; i++) {
-		int r_row = rand() % NUM_ROWS;
+		int r_row = rand() % static_cast<int>(NUM_ROWS);
 		if (r_row == 0) { r_row = 1; }
 
 		string s_query {};
 		string_format("SELECT * FROM test.gtid_test WHERE id=%d", s_query, r_row);
 
-		// Perform the select and ignore the result
 		int rc = mysql_query(select_conn, s_query.c_str());
 		if (rc != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(select_conn));
@@ -457,13 +454,12 @@ int main(int argc, char** argv) {
 		// with no corresponding preceding query; the resulting MYSQL_RES was
 		// always NULL and the extracted vector was dead code. Removed.
 
-		int r_row = rand() % NUM_ROWS;
+		int r_row = rand() % static_cast<int>(NUM_ROWS);
 		if (r_row == 0) { r_row = 1; }
 
 		string s_query {};
 		string_format("SELECT * FROM test.gtid_test WHERE id=%d", s_query, r_row);
 
-		// Perform the select and ignore the result
 		rc = mysql_query(proxysql_mysql, s_query.c_str());
 		if (rc != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
@@ -477,10 +473,9 @@ int main(int argc, char** argv) {
 		if (res_row.empty() || res_row[0].size() < 2) {
 			fprintf(stderr, "File %s, line %d, Error: unexpected result set shape (rows=%zu)\n",
 				__FILE__, __LINE__, res_row.size());
-			rc = EXIT_FAILURE;
 			goto cleanup;
 		}
-		int cur_a = std::stol(res_row[0][1]);
+		int cur_a = static_cast<int>(std::stol(res_row[0][1]));
 
 		if (cur_a != r_row + i) {
 			failed_rows.push_back({r_row + i, res_row[0] });
@@ -495,7 +490,7 @@ int main(int argc, char** argv) {
 		if (stop_on_failure == 0) {
 			check_gitd_tracking(cl, proxysql_mysql, proxysql_admin);
 
-			const double pct_fail_rate = failed_rows.size() * 100 / static_cast<double>(NUM_CHECKS);
+			const double pct_fail_rate = static_cast<double>(failed_rows.size()) * 100 / static_cast<double>(NUM_CHECKS);
 			ok(
 				pct_fail_rate < MAX_FAILURE_PCT,
 				"Detected dirty reads shouldn't surpass the expected threshold: {"

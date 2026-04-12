@@ -28,13 +28,13 @@
 */
 
 void get_time(std::string& s) {
-        time_t __timer;
-        char __buffer[30];
-        struct tm __tm_info;
-        time(&__timer);
-        localtime_r(&__timer, &__tm_info);
-        strftime(__buffer, 25, "%Y-%m-%d %H:%M:%S", &__tm_info);
-        s = std::string(__buffer);
+	time_t timer_var;
+	char buffer_var[30];
+	struct tm tm_info_var;
+	time(&timer_var);
+	localtime_r(&timer_var, &tm_info_var);
+	strftime(buffer_var, 25, "%Y-%m-%d %H:%M:%S", &tm_info_var);
+	s = std::string(buffer_var);
 }
 
 
@@ -73,10 +73,10 @@ int dumping_checksums_return_uniq(MYSQL_RES *res, std::set<std::string>& checksu
                 std::string chk = row[5];
                 checksums.insert(chk);
         }
-        return checksums.size();
+	return static_cast<int>(checksums.size());
 }
 
-int _get_checksum(MYSQL* mysql, const std::string& name, std::string& value) {
+int get_checksum_impl(MYSQL* mysql, const std::string& name, std::string& value) {
         std::string query { "SELECT checksum FROM runtime_checksums_values WHERE name='" + name + "'" };
 
         if (mysql_query(mysql, query.c_str())) {
@@ -85,7 +85,7 @@ int _get_checksum(MYSQL* mysql, const std::string& name, std::string& value) {
         }
 
         MYSQL_RES * res = mysql_store_result(mysql);
-        int rr = mysql_num_rows(res);
+	int rr = static_cast<int>(mysql_num_rows(res));
         MYSQL_ROW row;
         while ((row = mysql_fetch_row(res))) {
                 value = std::string(row[0]);
@@ -96,7 +96,7 @@ int _get_checksum(MYSQL* mysql, const std::string& name, std::string& value) {
 }
 
 int get_checksum(MYSQL *mysql, const std::string& name, std::string& value) {
-        int rr = _get_checksum(mysql, name, value);
+	int rr = get_checksum_impl(mysql, name, value);
         ok(rr == 1 && value.length() > 0, "Checksum for %s = %s" , name.c_str(), value.c_str());
         if (rr == 1 && value.length() > 0) return 0;
         return 1;
@@ -123,7 +123,7 @@ int module_in_sync(
                         if (*it == checksum) {
                                 return 0;
                         } else {
-                                int chk_res = _get_checksum(fetch_conn, name, checksum);
+				int chk_res = get_checksum_impl(fetch_conn, name, checksum);
                                 if (chk_res != -1) {
                                         diag("Fetched new '%s' target checksum '%s'", name.c_str(), checksum.c_str());
                                 } else {
@@ -185,7 +185,7 @@ static void close_all_connections() {
         conns.clear();
 }
 
-int trigger_sync_and_check(MYSQL *mysql, std::string modname, const char *update_query, const char *load_query) {
+int trigger_sync_and_check(MYSQL *mysql, const std::string& modname, const char *update_query, const char *load_query) {
         int rc;
         std::string chk1;
         std::string chk2;
@@ -233,7 +233,7 @@ int main(int argc, char** argv) {
 
         size_t total_nodes = cluster_nodes.empty() ? cluster_ports.size() : cluster_nodes.size();
         int np = 8;
-        np += 4*5*(4+(total_nodes-4));
+	np += static_cast<int>(static_cast<size_t>(4)*5*(4+(total_nodes-4)));
 
         plan(np);
 
