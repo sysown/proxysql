@@ -85,14 +85,14 @@ def main():
 
     exit_code = 0
 
-    # --- Check 1: tests in groups.json but not found on disk (WARNING) ---
+    # --- Check 1: tests in groups.json but not found on disk (ERROR) ---
     in_groups_not_found = sorted(groups_tests - executable_tests)
     if in_groups_not_found:
-        print(f"NOTE: {len(in_groups_not_found)} test(s) in groups.json are not yet available on disk "
-              f"(not built, or feature-gated):")
+        print(f"ERROR: {len(in_groups_not_found)} test(s) in groups.json are not found on disk:")
         for t in in_groups_not_found:
             print(f"  - {t}")
         print()
+        exit_code = 1
 
     # --- Check 2: executable tests not in groups.json (ERROR) ---
     on_disk_not_in_groups = sorted(executable_tests - groups_tests)
