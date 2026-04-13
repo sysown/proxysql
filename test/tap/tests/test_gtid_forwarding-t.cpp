@@ -52,15 +52,27 @@ int main(int, char**) {
 		(proxysql_mysql->server_capabilities & CLIENT_SESSION_TRACKING) ? "YES" : "NO");
 
 	// Check ProxySQL's default_session_track_gtids via admin (separate connection, doesn't affect test)
+	// Ensure CLIENT_SESSION_TRACKING is advertised by ProxySQL so the client
+	// library can parse GTID session tracking data from OK packets.
 	{
 		MYSQL* admin = mysql_init(NULL);
 		if (admin && mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
-			if (mysql_query(admin, "SELECT variable_value FROM global_variables WHERE variable_name='mysql-default_session_track_gtids'") == 0) {
+			// Read current server_capabilities and enable CLIENT_SESSION_TRACKING if not set
+			if (mysql_query(admin, "SELECT variable_value FROM global_variables WHERE variable_name='mysql-server_capabilities'") == 0) {
 				MYSQL_RES* res = mysql_store_result(admin);
 				if (res) {
 					MYSQL_ROW row = mysql_fetch_row(res);
-					if (row) {
-						diag("ProxySQL mysql-default_session_track_gtids = '%s'", row[0] ? row[0] : "NULL");
+					if (row && row[0]) {
+						uint32_t caps = (uint32_t)strtoul(row[0], NULL, 10);
+						if (!(caps & CLIENT_SESSION_TRACKING)) {
+							caps |= CLIENT_SESSION_TRACKING;
+							std::string q = "SET mysql-server_capabilities=" + std::to_string(caps);
+							diag("Enabling CLIENT_SESSION_TRACKING: %s", q.c_str());
+							mysql_query(admin, q.c_str());
+							mysql_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+						} else {
+							diag("CLIENT_SESSION_TRACKING already enabled in server_capabilities");
+						}
 					}
 					mysql_free_result(res);
 				}
@@ -68,6 +80,18 @@ int main(int, char**) {
 			mysql_close(admin);
 		}
 	}
+
+	// Reconnect after capabilities change so the new greeting is used
+	mysql_close(proxysql_mysql);
+	proxysql_mysql = mysql_init(NULL);
+	if (!proxysql_mysql || !mysql_real_connect(proxysql_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__,
+			proxysql_mysql ? mysql_error(proxysql_mysql) : "mysql_init failed");
+		return -1;
+	}
+	diag("Reconnected. server_capabilities=0x%lx, CLIENT_SESSION_TRACKING=%s",
+		proxysql_mysql->server_capabilities,
+		(proxysql_mysql->server_capabilities & CLIENT_SESSION_TRACKING) ? "YES" : "NO");
 
 	MYSQL_QUERY(proxysql_mysql, "CREATE DATABASE IF NOT EXISTS test");
 	MYSQL_QUERY(proxysql_mysql, "CREATE TABLE IF NOT EXISTS test.gtid_forwarding_test (id INT NOT NULL)");
@@ -144,7 +168,9 @@ int main(int, char**) {
 		// Verify the received GTID
 		if (!s_gtid_uuid.empty()) {
 			std::string s_id {};
-			ok(re2::RE2::FullMatch(s_gtid_uuid, "[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}:([0-9]*)", &s_id), "'UIID' should have a valid format - %s", s_gtid_uuid.c_str());
+			// Accept both RFC 4122 UUIDs and dbdeployer-style synthetic UUIDs
+			// (e.g. "00003306-1111-1111-1111-111111111111")
+			ok(re2::RE2::FullMatch(s_gtid_uuid, "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:([0-9]*)", &s_id), "'UUID' should have a valid format - %s", s_gtid_uuid.c_str());
 
 			// Check the incremental id.
 			uint new_id = (std::atoi(s_id.c_str()));
