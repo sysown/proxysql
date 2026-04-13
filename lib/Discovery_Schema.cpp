@@ -13,15 +13,6 @@
 
 using json = nlohmann::json;
 
-// Helper function for current timestamp
-static std::string now_iso() {
-	char buf[64];
-	time_t now = time(NULL);
-	struct tm* tm_info = gmtime(&now);
-	strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", tm_info);
-	return std::string(buf);
-}
-
 Discovery_Schema::Discovery_Schema(const std::string& path)
 	: db(NULL), db_path(path), mcp_rules_version(0)
 {
