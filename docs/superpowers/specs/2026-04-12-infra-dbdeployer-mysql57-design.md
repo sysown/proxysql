@@ -1,4 +1,4 @@
-# Design: infra-dbdeployer57 — Replace infra-mysql57 with dbdeployer
+# Design: infra-dbdeployer-mysql57 — Replace infra-mysql57 with dbdeployer
 
 **Date:** 2026-04-12
 **Branch:** v3.0-dbdeployer01
@@ -19,7 +19,7 @@ Replace the 6-container `infra-mysql57` (3 MySQL + 3 Orchestrator) with a single
 
 **In scope:**
 - Docker image: Dockerfile with dbdeployer + MySQL 5.7 tarball pre-baked
-- Infra directory: `test/infra/infra-dbdeployer57/` with docker-compose, init/destroy, post-scripts, ProxySQL config
+- Infra directory: `test/infra/infra-dbdeployer-mysql57/` with docker-compose, init/destroy, post-scripts, ProxySQL config
 - Self-contained: image build artifacts live inside the infra directory under `docker/`
 
 **Out of scope:**
@@ -42,7 +42,7 @@ Hostnames: mysql1.infra-mysql57, mysql2.infra-mysql57, mysql3.infra-mysql57
 All on port 3306.
 ```
 
-### New: infra-dbdeployer57
+### New: infra-dbdeployer-mysql57
 
 ```
 1 container:
@@ -51,7 +51,7 @@ All on port 3306.
     mysqld node2: port 3307, replica
     mysqld node3: port 3308, replica
 
-Hostname: dbdeployer1.infra-dbdeployer57
+Hostname: dbdeployer1.infra-dbdeployer-mysql57
 Three ports: 3306, 3307, 3308.
 No orchestrator.
 ```
@@ -63,7 +63,7 @@ Tests currently see 3 hostnames on port 3306. After the swap, they see 1 hostnam
 ## Directory Structure
 
 ```
-test/infra/infra-dbdeployer57/
+test/infra/infra-dbdeployer-mysql57/
 ├── docker/
 │   ├── Dockerfile            # Ubuntu base + dbdeployer + MySQL 5.7 tarball
 │   ├── build.sh              # Builds and tags proxysql/ci-infra:dbdeployer-mysql57
@@ -159,7 +159,7 @@ services:
       backend:
         aliases:
           - dbdeployer1.${INFRA}
-          - dbdeployer1.infra-dbdeployer57
+          - dbdeployer1.infra-dbdeployer-mysql57
 
 networks:
   backend:
@@ -219,5 +219,5 @@ The rest of the SQL (users, query rules, debug filters, etc.) stays the same but
 ## Future Work
 
 - **MySQL 8.4 variant**: Same pattern, different tarball — `infra-dbdeployer84/`
-- **Swap legacy group**: Update `test/tap/groups/legacy/infras.lst` and `env.sh` to point to `infra-dbdeployer57`
+- **Swap legacy group**: Update `test/tap/groups/legacy/infras.lst` and `env.sh` to point to `infra-dbdeployer-mysql57`
 - **Fix test failures**: Address tests that assume separate hostnames per backend

@@ -1,8 +1,8 @@
-# infra-dbdeployer57 Implementation Plan
+# infra-dbdeployer-mysql57 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Create `test/infra/infra-dbdeployer57/` — a single-container replacement for `infra-mysql57` using dbdeployer to run 3 MySQL 5.7 instances inside one Docker container.
+**Goal:** Create `test/infra/infra-dbdeployer-mysql57/` — a single-container replacement for `infra-mysql57` using dbdeployer to run 3 MySQL 5.7 instances inside one Docker container.
 
 **Architecture:** One Docker image (`proxysql/ci-infra:dbdeployer-mysql57`) bundles dbdeployer v2.2.1 + a pre-unpacked MySQL 5.7 tarball. At container startup, the entrypoint runs `dbdeployer deploy replication` to create a 3-node master-slave topology on ports 3306/3307/3308, creates the test users, and stays alive. The infra directory wraps this with docker-compose, init/destroy scripts, and ProxySQL config — following the same patterns as existing infras.
 
@@ -23,7 +23,7 @@
 
 ## File Map
 
-All files created under `test/infra/infra-dbdeployer57/`:
+All files created under `test/infra/infra-dbdeployer-mysql57/`:
 
 | File | Responsibility |
 |------|---------------|
@@ -43,18 +43,18 @@ All files created under `test/infra/infra-dbdeployer57/`:
 ## Task 1: Create the Dockerfile
 
 **Files:**
-- Create: `test/infra/infra-dbdeployer57/docker/Dockerfile`
+- Create: `test/infra/infra-dbdeployer-mysql57/docker/Dockerfile`
 
 - [ ] **Step 1: Create directory structure**
 
 ```bash
 cd .worktrees/v3.0-dbdeployer01
-mkdir -p test/infra/infra-dbdeployer57/docker
+mkdir -p test/infra/infra-dbdeployer-mysql57/docker
 ```
 
 - [ ] **Step 2: Write the Dockerfile**
 
-Create `test/infra/infra-dbdeployer57/docker/Dockerfile`:
+Create `test/infra/infra-dbdeployer-mysql57/docker/Dockerfile`:
 
 ```dockerfile
 FROM ubuntu:22.04
@@ -104,7 +104,7 @@ ENTRYPOINT ["/entrypoint.sh"]
 - [ ] **Step 3: Commit**
 
 ```bash
-git add test/infra/infra-dbdeployer57/docker/Dockerfile
+git add test/infra/infra-dbdeployer-mysql57/docker/Dockerfile
 git commit -m "feat(infra): add Dockerfile for dbdeployer-mysql57 image
 
 Ubuntu 22.04 base with dbdeployer v2.2.1 and pre-unpacked MySQL 5.7.44
@@ -116,11 +116,11 @@ tarball. Clears reserved ports to allow base-port 3306."
 ## Task 2: Create the entrypoint script
 
 **Files:**
-- Create: `test/infra/infra-dbdeployer57/docker/entrypoint.sh`
+- Create: `test/infra/infra-dbdeployer-mysql57/docker/entrypoint.sh`
 
 - [ ] **Step 1: Write the entrypoint script**
 
-Create `test/infra/infra-dbdeployer57/docker/entrypoint.sh`:
+Create `test/infra/infra-dbdeployer-mysql57/docker/entrypoint.sh`:
 
 ```bash
 #!/bin/bash
@@ -179,7 +179,7 @@ done
 # Create test users on all 3 nodes
 # ROOT_PASSWORD and INFRA are passed via environment variables
 ROOT_PASSWORD="${ROOT_PASSWORD:-default_password}"
-INFRA="${INFRA:-infra-dbdeployer57}"
+INFRA="${INFRA:-infra-dbdeployer-mysql57}"
 
 echo "Creating test users on all nodes..."
 for NODE_NUM in 1 2 3; do
@@ -249,7 +249,7 @@ exec sleep infinity
 - [ ] **Step 2: Commit**
 
 ```bash
-git add test/infra/infra-dbdeployer57/docker/entrypoint.sh
+git add test/infra/infra-dbdeployer-mysql57/docker/entrypoint.sh
 git commit -m "feat(infra): add entrypoint script for dbdeployer-mysql57
 
 Deploys 3-node GTID replication via dbdeployer, creates all test users
@@ -262,11 +262,11 @@ creates test databases, signals readiness via marker file."
 ## Task 3: Create the build script
 
 **Files:**
-- Create: `test/infra/infra-dbdeployer57/docker/build.sh`
+- Create: `test/infra/infra-dbdeployer-mysql57/docker/build.sh`
 
 - [ ] **Step 1: Write the build script**
 
-Create `test/infra/infra-dbdeployer57/docker/build.sh`:
+Create `test/infra/infra-dbdeployer-mysql57/docker/build.sh`:
 
 ```bash
 #!/bin/bash
@@ -282,8 +282,8 @@ echo "Done: ${IMAGE_TAG}"
 - [ ] **Step 2: Make it executable and commit**
 
 ```bash
-chmod +x test/infra/infra-dbdeployer57/docker/build.sh
-git add test/infra/infra-dbdeployer57/docker/build.sh
+chmod +x test/infra/infra-dbdeployer-mysql57/docker/build.sh
+git add test/infra/infra-dbdeployer-mysql57/docker/build.sh
 git commit -m "feat(infra): add build script for dbdeployer-mysql57 image"
 ```
 
@@ -292,12 +292,12 @@ git commit -m "feat(infra): add build script for dbdeployer-mysql57 image"
 ## Task 4: Create .env and docker-compose.yml
 
 **Files:**
-- Create: `test/infra/infra-dbdeployer57/.env`
-- Create: `test/infra/infra-dbdeployer57/docker-compose.yml`
+- Create: `test/infra/infra-dbdeployer-mysql57/.env`
+- Create: `test/infra/infra-dbdeployer-mysql57/docker-compose.yml`
 
 - [ ] **Step 1: Write .env**
 
-Create `test/infra/infra-dbdeployer57/.env`:
+Create `test/infra/infra-dbdeployer-mysql57/.env`:
 
 ```
 MYSQL_VERSION=5.7
@@ -314,7 +314,7 @@ This is identical to `infra-mysql57/.env` — same hostgroup IDs for drop-in com
 
 - [ ] **Step 2: Write docker-compose.yml**
 
-Create `test/infra/infra-dbdeployer57/docker-compose.yml`:
+Create `test/infra/infra-dbdeployer-mysql57/docker-compose.yml`:
 
 ```yaml
 services:
@@ -330,7 +330,7 @@ services:
       backend:
         aliases:
           - dbdeployer1.${INFRA}
-          - dbdeployer1.infra-dbdeployer57
+          - dbdeployer1.infra-dbdeployer-mysql57
 
 networks:
   backend:
@@ -341,8 +341,8 @@ networks:
 - [ ] **Step 3: Commit**
 
 ```bash
-git add test/infra/infra-dbdeployer57/.env test/infra/infra-dbdeployer57/docker-compose.yml
-git commit -m "feat(infra): add .env and docker-compose.yml for infra-dbdeployer57
+git add test/infra/infra-dbdeployer-mysql57/.env test/infra/infra-dbdeployer-mysql57/docker-compose.yml
+git commit -m "feat(infra): add .env and docker-compose.yml for infra-dbdeployer-mysql57
 
 Single service (dbdeployer1) replaces 6 containers (3 mysql + 3 orc).
 Same hostgroup IDs as infra-mysql57 for compatibility."
@@ -353,12 +353,12 @@ Same hostgroup IDs as infra-mysql57 for compatibility."
 ## Task 5: Create docker-compose-init.bash
 
 **Files:**
-- Create: `test/infra/infra-dbdeployer57/docker-compose-init.bash`
+- Create: `test/infra/infra-dbdeployer-mysql57/docker-compose-init.bash`
 - Reference: `test/infra/infra-mysql57/docker-compose-init.bash`
 
 - [ ] **Step 1: Write the init script**
 
-Create `test/infra/infra-dbdeployer57/docker-compose-init.bash`. This is adapted from `infra-mysql57/docker-compose-init.bash` with these changes:
+Create `test/infra/infra-dbdeployer-mysql57/docker-compose-init.bash`. This is adapted from `infra-mysql57/docker-compose-init.bash` with these changes:
 - Remove orchestrator config patching (step 3 in the original)
 - Remove SSL transient setup (step 4 — not needed, MySQL 5.7 in dbdeployer generates its own certs)
 - Remove orchestrator post-script invocation
@@ -508,9 +508,9 @@ echo "==========================================================================
 - [ ] **Step 2: Make it executable and commit**
 
 ```bash
-chmod +x test/infra/infra-dbdeployer57/docker-compose-init.bash
-git add test/infra/infra-dbdeployer57/docker-compose-init.bash
-git commit -m "feat(infra): add init script for infra-dbdeployer57
+chmod +x test/infra/infra-dbdeployer-mysql57/docker-compose-init.bash
+git add test/infra/infra-dbdeployer-mysql57/docker-compose-init.bash
+git commit -m "feat(infra): add init script for infra-dbdeployer-mysql57
 
 Adapted from infra-mysql57. Removes orchestrator patching and SSL setup.
 Waits for dbdeployer readiness marker before running post-scripts."
@@ -521,12 +521,12 @@ Waits for dbdeployer readiness marker before running post-scripts."
 ## Task 6: Create docker-compose-destroy.bash
 
 **Files:**
-- Create: `test/infra/infra-dbdeployer57/docker-compose-destroy.bash`
+- Create: `test/infra/infra-dbdeployer-mysql57/docker-compose-destroy.bash`
 - Reference: `test/infra/infra-mysql57/docker-compose-destroy.bash`
 
 - [ ] **Step 1: Write the destroy script**
 
-Create `test/infra/infra-dbdeployer57/docker-compose-destroy.bash`:
+Create `test/infra/infra-dbdeployer-mysql57/docker-compose-destroy.bash`:
 
 ```bash
 #!/bin/bash
@@ -547,9 +547,9 @@ This is identical to the `infra-mysql57` version — the destroy pattern is gene
 - [ ] **Step 2: Make it executable and commit**
 
 ```bash
-chmod +x test/infra/infra-dbdeployer57/docker-compose-destroy.bash
-git add test/infra/infra-dbdeployer57/docker-compose-destroy.bash
-git commit -m "feat(infra): add destroy script for infra-dbdeployer57"
+chmod +x test/infra/infra-dbdeployer-mysql57/docker-compose-destroy.bash
+git add test/infra/infra-dbdeployer-mysql57/docker-compose-destroy.bash
+git commit -m "feat(infra): add destroy script for infra-dbdeployer-mysql57"
 ```
 
 ---
@@ -557,16 +557,16 @@ git commit -m "feat(infra): add destroy script for infra-dbdeployer57"
 ## Task 7: Create bin/docker-mysql-post.bash
 
 **Files:**
-- Create: `test/infra/infra-dbdeployer57/bin/docker-mysql-post.bash`
+- Create: `test/infra/infra-dbdeployer-mysql57/bin/docker-mysql-post.bash`
 - Reference: `test/infra/infra-mysql57/bin/docker-mysql-post.bash`
 
 - [ ] **Step 1: Create directory and write the script**
 
 ```bash
-mkdir -p test/infra/infra-dbdeployer57/bin
+mkdir -p test/infra/infra-dbdeployer-mysql57/bin
 ```
 
-Create `test/infra/infra-dbdeployer57/bin/docker-mysql-post.bash`:
+Create `test/infra/infra-dbdeployer-mysql57/bin/docker-mysql-post.bash`:
 
 ```bash
 #!/bin/bash
@@ -634,9 +634,9 @@ echo "docker-mysql-post.bash complete."
 - [ ] **Step 2: Make it executable and commit**
 
 ```bash
-chmod +x test/infra/infra-dbdeployer57/bin/docker-mysql-post.bash
-git add test/infra/infra-dbdeployer57/bin/docker-mysql-post.bash
-git commit -m "feat(infra): add docker-mysql-post for infra-dbdeployer57
+chmod +x test/infra/infra-dbdeployer-mysql57/bin/docker-mysql-post.bash
+git add test/infra/infra-dbdeployer-mysql57/bin/docker-mysql-post.bash
+git commit -m "feat(infra): add docker-mysql-post for infra-dbdeployer-mysql57
 
 Verifies all 3 MySQL nodes on ports 3306/3307/3308, checks replication
 status, and collects SSL cert bundles. User creation is handled by
@@ -648,16 +648,16 @@ the container entrypoint."
 ## Task 8: Create conf/proxysql/infra-config.sql
 
 **Files:**
-- Create: `test/infra/infra-dbdeployer57/conf/proxysql/infra-config.sql`
+- Create: `test/infra/infra-dbdeployer-mysql57/conf/proxysql/infra-config.sql`
 - Reference: `test/infra/infra-mysql57/conf/proxysql/infra-config.sql`
 
 - [ ] **Step 1: Create directory and write the SQL config**
 
 ```bash
-mkdir -p test/infra/infra-dbdeployer57/conf/proxysql
+mkdir -p test/infra/infra-dbdeployer-mysql57/conf/proxysql
 ```
 
-Create `test/infra/infra-dbdeployer57/conf/proxysql/infra-config.sql`. This is adapted from infra-mysql57 — the key change is replacing 3 hostnames (mysql1/mysql2/mysql3) with 1 hostname (dbdeployer1) on 3 ports (3306/3307/3308):
+Create `test/infra/infra-dbdeployer-mysql57/conf/proxysql/infra-config.sql`. This is adapted from infra-mysql57 — the key change is replacing 3 hostnames (mysql1/mysql2/mysql3) with 1 hostname (dbdeployer1) on 3 ports (3306/3307/3308):
 
 ```sql
 UPDATE global_variables SET variable_value='false' WHERE variable_name='admin-hash_passwords';
@@ -783,8 +783,8 @@ SAVE ADMIN VARIABLES TO DISK;
 - [ ] **Step 2: Commit**
 
 ```bash
-git add test/infra/infra-dbdeployer57/conf/proxysql/infra-config.sql
-git commit -m "feat(infra): add ProxySQL config for infra-dbdeployer57
+git add test/infra/infra-dbdeployer-mysql57/conf/proxysql/infra-config.sql
+git commit -m "feat(infra): add ProxySQL config for infra-dbdeployer-mysql57
 
 Adapted from infra-mysql57. Key change: single hostname (dbdeployer1)
 with 3 ports (3306/3307/3308) instead of 3 hostnames on port 3306.
@@ -796,12 +796,12 @@ All other config (users, query rules, debug filters) unchanged."
 ## Task 9: Create bin/docker-proxy-post.bash
 
 **Files:**
-- Create: `test/infra/infra-dbdeployer57/bin/docker-proxy-post.bash`
+- Create: `test/infra/infra-dbdeployer-mysql57/bin/docker-proxy-post.bash`
 - Reference: `test/infra/infra-mysql57/bin/docker-proxy-post.bash`
 
 - [ ] **Step 1: Write the proxy post-script**
 
-Create `test/infra/infra-dbdeployer57/bin/docker-proxy-post.bash`:
+Create `test/infra/infra-dbdeployer-mysql57/bin/docker-proxy-post.bash`:
 
 ```bash
 #!/bin/bash
@@ -865,9 +865,9 @@ if [ $? -eq 0 ]; then echo "Cluster ${INFRA} registered in ProxySQL."; else echo
 - [ ] **Step 2: Make it executable and commit**
 
 ```bash
-chmod +x test/infra/infra-dbdeployer57/bin/docker-proxy-post.bash
-git add test/infra/infra-dbdeployer57/bin/docker-proxy-post.bash
-git commit -m "feat(infra): add docker-proxy-post for infra-dbdeployer57
+chmod +x test/infra/infra-dbdeployer-mysql57/bin/docker-proxy-post.bash
+git add test/infra/infra-dbdeployer-mysql57/bin/docker-proxy-post.bash
+git commit -m "feat(infra): add docker-proxy-post for infra-dbdeployer-mysql57
 
 Same logic as infra-mysql57: registers backends in ProxySQL, creates
 fallback hostgroups 0/1, sets monitor credentials."
@@ -882,7 +882,7 @@ This task verifies the image builds and the entrypoint works.
 - [ ] **Step 1: Build the image**
 
 ```bash
-cd test/infra/infra-dbdeployer57
+cd test/infra/infra-dbdeployer-mysql57
 bash docker/build.sh
 ```
 
@@ -893,7 +893,7 @@ Expected: Image builds successfully, tagged `proxysql/ci-infra:dbdeployer-mysql5
 ```bash
 docker run --rm -d --name dbdeployer-test \
     -e ROOT_PASSWORD=testpass \
-    -e INFRA=infra-dbdeployer57 \
+    -e INFRA=infra-dbdeployer-mysql57 \
     proxysql/ci-infra:dbdeployer-mysql57
 
 # Wait for readiness (up to 2 minutes)
@@ -932,8 +932,8 @@ If the smoke test reveals issues (e.g. `--bind-address` not working, port confli
 - [ ] **Step 4: Commit success marker**
 
 ```bash
-git add -A test/infra/infra-dbdeployer57/
-git commit -m "feat(infra): infra-dbdeployer57 smoke-tested and working
+git add -A test/infra/infra-dbdeployer-mysql57/
+git commit -m "feat(infra): infra-dbdeployer-mysql57 smoke-tested and working
 
 Docker image builds, 3-node GTID replication deploys correctly,
 all test users created, SSL certs available."
@@ -955,7 +955,7 @@ docker network create "${INFRA_ID}_backend" || true
 - [ ] **Step 2: Run the init script**
 
 ```bash
-cd test/infra/infra-dbdeployer57
+cd test/infra/infra-dbdeployer-mysql57
 INFRA_ID="${INFRA_ID}" bash docker-compose-init.bash
 ```
 
@@ -964,7 +964,7 @@ Expected: Container starts, dbdeployer deploys MySQL, post-scripts run, "Done." 
 - [ ] **Step 3: Verify from outside the container**
 
 ```bash
-CONTAINER="infra-dbdeployer57-${INFRA_ID}-dbdeployer1-1"
+CONTAINER="infra-dbdeployer-mysql57-${INFRA_ID}-dbdeployer1-1"
 # Test connectivity to all 3 ports
 for PORT in 3306 3307 3308; do
     docker exec "${CONTAINER}" mysql -h127.0.0.1 -P${PORT} -uroot -p"$(echo -n ${INFRA_ID} | sha256sum | head -c 10)" -e "SELECT @@server_id, @@read_only"
@@ -983,7 +983,7 @@ Expected: Clean teardown, no orphaned containers.
 - [ ] **Step 5: Commit any final fixes**
 
 ```bash
-git add -A test/infra/infra-dbdeployer57/
+git add -A test/infra/infra-dbdeployer-mysql57/
 git commit -m "fix(infra): address issues found during full init/destroy cycle"
 ```
 

@@ -11,7 +11,7 @@ services:
       backend:
         aliases:
           - dbdeployer1.${INFRA}
-          - dbdeployer1.infra-dbdeployer57
+          - dbdeployer1.infra-dbdeployer-mysql57
 
 networks:
   backend:

@@ -72,7 +72,7 @@ done
 # Create test users on all 3 nodes
 # ROOT_PASSWORD and INFRA are passed via environment variables
 ROOT_PASSWORD="${ROOT_PASSWORD:-default_password}"
-INFRA="${INFRA:-infra-dbdeployer57}"
+INFRA="${INFRA:-infra-dbdeployer-mysql57}"
 
 echo "Creating test users on all nodes..."
 for PORT in "${NODE_PORTS[@]}"; do
