@@ -25,7 +25,6 @@ dbdeployer deploy replication "${MYSQL_VERSION}" \
     -c log-slave-updates \
     -c binlog_format=ROW \
     -c max_connections=500 \
-    -c max_connect_errors=10000 \
     -c innodb_buffer_pool_size=128M \
     -c innodb_log_file_size=32M \
     -c innodb_flush_log_at_trx_commit=2 \
