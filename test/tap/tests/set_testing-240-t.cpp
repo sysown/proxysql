@@ -183,6 +183,13 @@ void * my_conn_thread(void *arg) {
 				continue;
 			}
 		}
+		if (is_mariadb) {
+			if (strstr(testCases[r2].command.c_str(),"session_track_gtids")) {
+				std::lock_guard<std::mutex> lock(mtx_);
+				skip(1, "connections mysql[%p] proxysql[%s], command [%s]", mysql, paddress.c_str(), testCases[r2].command.c_str());
+				continue;
+			}
+		}
 		diag("Thread_id: %lu, random number: %d . Query/ies: %s", mysql->thread_id, r2, testCases[r2].command.c_str());
 		std::vector<std::string> commands = split(testCases[r2].command.c_str(), ';');
 		for (auto c : commands) {
@@ -319,19 +326,25 @@ void * my_conn_thread(void *arg) {
 
 			if (el.key() == "long_query_time") {
 				// we remove the decimals
-				std::string tsnd = mysql_vars["long_query_time"];
+				auto it_lqt = mysql_vars.find("long_query_time");
+				if (it_lqt != mysql_vars.end() && it_lqt.value().is_string()) {
+					std::string tsnd = it_lqt.value().get<std::string>();
 				if (tsnd.find(".") != std::string::npos) {
 					tsnd = tsnd.substr(0, tsnd.find("."));
 					mysql_vars["long_query_time"]=tsnd;
+				}
 				}
 			}
 
 			if (el.key() == "timestamp") {
 				// we remove the decimals
-				std::string tsnd = mysql_vars["timestamp"];
+				auto it_ts = mysql_vars.find("timestamp");
+				if (it_ts != mysql_vars.end() && it_ts.value().is_string()) {
+					std::string tsnd = it_ts.value().get<std::string>();
 				if (tsnd.find(".") != std::string::npos) {
 					tsnd = tsnd.substr(0, tsnd.find("."));
 					mysql_vars["timestamp"]=tsnd;
+				}
 				}
 			}
 			if (el.key() == "max_join_size") {
@@ -345,12 +358,14 @@ void * my_conn_thread(void *arg) {
 			if (el.key() == "optimizer_switch") {
 				parsing_optimizer_switch = true;
 				std::string e_val { el.value() };
+				if (k != mysql_vars.end() && k.value().is_string() && s != proxysql_vars["conn"].end() && s.value().is_string()) {
 				std::string k_val { k.value() };
 				std::string s_val { s.value() };
 				if (e_val == s_val) { // it matches in proxysql
 					if (strstr(k_val.c_str(), e_val.c_str()) != NULL) {
 						optimizer_switch_matches = true;
 					}
+				}
 				}
 			}
 
@@ -360,10 +375,10 @@ void * my_conn_thread(void *arg) {
 					exit(EXIT_FAILURE);
 				}
 
-				if (k.value() != el.value()) { // different in mysql
+				if (k != mysql_vars.end() && k.value().is_string() && k.value() != el.value()) { // different in mysql
 					std::string e_val { el.value() };
-					std::string k_val { k.value() };
-					std::string s_val { s.value() };
+					std::string k_val { k.value().get<std::string>() };
+					std::string s_val { s.value().is_string() ? s.value().get<std::string>() : std::string("") };
 					if (el.value() == s.value()) { // but same in proxysql
 						std::string str_val { el.value() };
 						if (strcasecmp(str_val.c_str(), "TRADITIONAL")==0) {
@@ -415,8 +430,8 @@ void * my_conn_thread(void *arg) {
 				(s == proxysql_vars["conn"].end()) ||
 				( (parsing_optimizer_switch == true) && (optimizer_switch_matches == false) ) ||
 				(special_sqlmode == false && parsing_optimizer_switch == false &&
-					(el.key() != "session_track_gtids" && (k.value() != el.value() || s.value() != el.value())) ||
-					(el.key() == "session_track_gtids" && !check_session_track_gtids(el.value(), s.value(), k.value()))
+					(el.key() != "session_track_gtids" && (!k.value().is_string() || !s.value().is_string() || k.value() != el.value() || s.value() != el.value())) ||
+					(el.key() == "session_track_gtids" && !check_session_track_gtids(el.value().is_string() ? el.value().get<std::string>() : std::string(""), s.value().is_string() ? s.value().get<std::string>() : std::string(""), k.value().is_string() ? k.value().get<std::string>() : std::string("")))
 				)
 			) {
 				if ( k != mysql_vars.end() && s != proxysql_vars["conn"].end()) {

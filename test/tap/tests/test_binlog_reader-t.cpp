@@ -421,6 +421,37 @@ int main(int argc, char** argv) {
 	fprintf(stderr, "================================================================================\n");
 	fprintf(stderr, "\n");
 
+	// Create GTID-based query rules for sbtest8
+	// Use rule_ids 100-102 to avoid overwriting rules set by calling tests
+	// (e.g. test_binlog_reader_uses_previous_hostgroup-t sets rule_id=1 for port-based routing
+	// that must survive so connections are tracked in the expected hostgroup)
+	{
+		string query;
+		query = "DELETE FROM mysql_query_rules WHERE rule_id IN (100,101,102) OR username='sbtest8'";
+		MYSQL_QUERY(proxysql_admin, query.c_str());
+		mysql_free_result(mysql_store_result(proxysql_admin));
+
+		query = "INSERT INTO mysql_query_rules (rule_id,active,username,match_digest,destination_hostgroup,apply,gtid_from_hostgroup,comment) "
+			"VALUES (100,1,'sbtest8','^SELECT.*FOR UPDATE'," + std::to_string(WHG) + ",1,null,'test_binlog_reader-t')";
+		MYSQL_QUERY(proxysql_admin, query.c_str());
+		mysql_free_result(mysql_store_result(proxysql_admin));
+
+		query = "INSERT INTO mysql_query_rules (rule_id,active,username,match_digest,destination_hostgroup,apply,gtid_from_hostgroup,comment) "
+			"VALUES (101,1,'sbtest8','^SELECT'," + std::to_string(RHG) + ",1," + std::to_string(WHG) + ",'test_binlog_reader-t')";
+		MYSQL_QUERY(proxysql_admin, query.c_str());
+		mysql_free_result(mysql_store_result(proxysql_admin));
+
+		query = "INSERT INTO mysql_query_rules (rule_id,active,username,match_digest,destination_hostgroup,apply,gtid_from_hostgroup,comment) "
+			"VALUES (102,1,'sbtest8','.*'," + std::to_string(WHG) + ",1,null,'test_binlog_reader-t')";
+		MYSQL_QUERY(proxysql_admin, query.c_str());
+		mysql_free_result(mysql_store_result(proxysql_admin));
+
+		query = "LOAD MYSQL QUERY RULES TO RUNTIME";
+		MYSQL_QUERY(proxysql_admin, query.c_str());
+		mysql_free_result(mysql_store_result(proxysql_admin));
+		fprintf(stderr, "GTID query rules created for sbtest8 (WHG=%d, RHG=%d)\n", WHG, RHG);
+	}
+
 	vector<pair<uint32_t, mysql_res_row>> failed_rows {};
 	vector<mysql_res_row> reader_1_read {};
 	vector<mysql_res_row> reader_2_read {};

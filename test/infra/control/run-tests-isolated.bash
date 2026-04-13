@@ -269,7 +269,6 @@ chmod 777 "${TESTS_LOGS_PATH_HOST}"
 
 # Find binaries
 MYSQL_BINLOG_BIN=$(find "${WORKSPACE}" -path "${WORKSPACE}/ci_infra_logs" -prune -o -path "${WORKSPACE}/.git" -prune -o -name "mysqlbinlog" -type f -executable -print | head -n 1)
-BINLOG_READER_BIN=$(find "${WORKSPACE}" -path "${WORKSPACE}/ci_infra_logs" -prune -o -path "${WORKSPACE}/.git" -prune -o -name "test_binlog_reader-t" -type f -executable -print | head -n 1)
 
 # Execution: run the container
 docker run \
@@ -295,7 +294,6 @@ docker run \
     -e COVERAGE_REPORT_DIR="${COVERAGE_REPORT_DIR}" \
     -e SCRIPT_DIR="${SCRIPT_DIR}" \
     -e MYSQL_BINLOG_BIN="${MYSQL_BINLOG_BIN}" \
-    -e BINLOG_READER_BIN="${BINLOG_READER_BIN}" \
     -e TAP_USE_NOISE="${TAP_USE_NOISE:-0}" \
     -e TAP_PGSQL_SYNC_REPLICA_PORT="${TAP_PGSQL_SYNC_REPLICA_PORT:-}" \
     -e MULTI_GROUP="${MULTI_GROUP:-0}" \
@@ -394,7 +392,6 @@ docker run \
 
         mkdir -p \"${WORKSPACE}/test-scripts/deps\"
         [ -n \"${MYSQL_BINLOG_BIN}\" ] && ln -sf \"${MYSQL_BINLOG_BIN}\" \"${WORKSPACE}/test-scripts/deps/mysqlbinlog\"
-        [ -n \"${BINLOG_READER_BIN}\" ] && ln -sf \"${BINLOG_READER_BIN}\" \"${WORKSPACE}/test-scripts/deps/test_binlog_reader-t\"
 
         # Source group environment first (sets TEST_PY_* flags etc.)
         if [ -n \"${TAP_GROUP}\" ]; then
