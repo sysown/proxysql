@@ -86,10 +86,15 @@ int main(int argc, char** argv) {
 		}
 	}
 
+	// Redirect stdout to /dev/null — we only care about the exit code (proving
+	// COM_BINLOG_DUMP triggered fast_forward), not the binlog content itself.
+	// Without this, the test harness captures every line, turning a fast read
+	// into minutes of Python line-by-line logging.
 	std::string cmd = mysqlbinlog_path + " " + binlog_file + " "
 						"--read-from-remote-server --user " + std::string(cl.root_username) +
 						" --password=" + std::string(cl.root_password) +
-						" --host " + std::string(cl.host) + " --port 6033";
+						" --host " + std::string(cl.host) + " --port 6033"
+						" > /dev/null";
 	
 	diag("Executing: %s", cmd.c_str());
 	const int mysqlbinlog_res = system(cmd.c_str());
