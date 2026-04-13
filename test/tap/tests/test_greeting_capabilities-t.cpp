@@ -38,24 +38,27 @@ pair<bool,uint64_t> check_server_capabilities(
 	uint64_t exp_caps = 0;
 
 	for (const uint64_t cap : def_capabilities) {
-		caps_match = proxy->server_capabilities & cap;
+		const bool has_cap = (proxy->server_capabilities & cap) != 0;
+		caps_match &= has_cap;
 		exp_caps |= cap;
 
-		if (caps_match == false) {
+		if (!has_cap) {
 			diag("Missing expected DEFAULT capability: %ld", cap);
 		}
 	}
 
 	for (const uint64_t exp_cap : exp_conn_caps) {
+		bool this_check_ok = false;
 		if (present) {
-			caps_match = proxy->server_capabilities & exp_cap;
+			this_check_ok = (proxy->server_capabilities & exp_cap) != 0;
 			exp_caps |= exp_cap;
 		} else {
-			caps_match = !(proxy->server_capabilities & exp_cap);
+			this_check_ok = (proxy->server_capabilities & exp_cap) == 0;
 			exp_caps &= ~exp_cap;
 		}
+		caps_match &= this_check_ok;
 
-		if (caps_match == false) {
+		if (!this_check_ok) {
 			diag("Missing expected CONDITIONAL capability: %ld", exp_cap);
 		}
 	}
@@ -109,13 +112,60 @@ int test_proxy_capabilites(const CommandLine& cl, MYSQL* admin) {
 
 	mysql_close(proxy);
 
+	// Test 3: enable CLIENT_DEPRECATE_EOF only (session_tracking disabled)
+	MYSQL_QUERY(admin, "SET mysql-enable_client_deprecate_eof=1");
+	MYSQL_QUERY(admin, "SET mysql-enable_client_session_tracking=0");
+	MYSQL_QUERY(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+
+	proxy = mysql_init(NULL);
+	proxy->options.client_flag |= CLIENT_DEPRECATE_EOF;
+
+	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
+		return EXIT_FAILURE;
+	}
+
+	caps_res = check_server_capabilities(proxy, { CLIENT_DEPRECATE_EOF }, true);
+	caps_res.first &= (check_server_capabilities(proxy, { CLIENT_SESSION_TRACKING }, false).first);
+	ext_caps = (proxy->server_capabilities >> 16) << 16;
+
+	ok(
+		caps_res.first, "ProxySQL greeting with deprecate_eof enabled and session_tracking disabled - Exp: '%ld', Act: '%ld'",
+		caps_res.second, ext_caps
+	);
+
+	mysql_close(proxy);
+
+	// Test 4: enable CLIENT_SESSION_TRACKING only (deprecate_eof disabled)
+	MYSQL_QUERY(admin, "SET mysql-enable_client_deprecate_eof=0");
+	MYSQL_QUERY(admin, "SET mysql-enable_client_session_tracking=1");
+	MYSQL_QUERY(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+
+	proxy = mysql_init(NULL);
+
+	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
+		return EXIT_FAILURE;
+	}
+
+	caps_res = check_server_capabilities(proxy, { CLIENT_DEPRECATE_EOF }, false);
+	caps_res.first &= (check_server_capabilities(proxy, { CLIENT_SESSION_TRACKING }, true).first);
+	ext_caps = (proxy->server_capabilities >> 16) << 16;
+
+	ok(
+		caps_res.first, "ProxySQL greeting with deprecate_eof disabled and session_tracking enabled - Exp: '%ld', Act: '%ld'",
+		caps_res.second, ext_caps
+	);
+
+	mysql_close(proxy);
+
 	return EXIT_SUCCESS;
 }
 
 int main(int argc, char** argv) {
 	CommandLine cl;
 
-	plan(2);
+	plan(4);
 
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
