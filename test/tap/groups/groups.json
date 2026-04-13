@@ -55,7 +55,6 @@
   "gtid_server_data_unit-t" : [ "unit-tests-g1" ],
   "gtid_set_unit-t" : [ "unit-tests-g1" ],
   "gtid_trxid_interval_unit-t" : [ "unit-tests-g1" ],
-  "gtid_utils_unit-t" : [ "unit-tests-g1" ],
   "hostgroup_routing_unit-t" : [ "unit-tests-g1" ],
   "hostgroups_unit-t" : [ "unit-tests-g1" ],
   "issue5384-t" : [ "legacy-g4","mysql84-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4" ],
