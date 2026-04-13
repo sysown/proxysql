@@ -5,14 +5,11 @@ set -o pipefail
 
 CONTAINER="${COMPOSE_PROJECT}-dbdeployer1-1"
 
-# Prepare cert bundle directories
-BUNDLE_DIR="${INFRA_LOGS_PATH}/${INFRA_ID}/proxysql"
-sudo mkdir -p "${BUNDLE_DIR}"
-sudo chmod 777 "${BUNDLE_DIR}"
-
-DB_BUNDLE="${BUNDLE_DIR}/dbservers-cert-bundle.pem"
-CA_BUNDLE="${BUNDLE_DIR}/caservers-cert-bundle.pem"
-sudo rm -f "${DB_BUNDLE}" "${CA_BUNDLE}"
+# NOTE: Do NOT delete/recreate cert bundles here.
+# The MySQL docker-mysql-post.bash (which runs first) already collected the
+# backend's CA cert into dbservers-cert-bundle.pem. MariaDB doesn't generate
+# SSL certs in the sandbox datadir, so deleting the bundle would remove the
+# MySQL certs without replacing them, breaking SSL tests.
 
 # Verify all 3 MySQL nodes are reachable
 for PORT in 3306 3307 3308; do
@@ -43,18 +40,5 @@ for PORT in 3307 3308; do
         echo " WARNING (IO: ${IO_RUNNING}, SQL: ${SQL_RUNNING})"
     fi
 done
-
-# Collect SSL certs from node1 (all nodes share the same datadir-generated certs)
-# dbdeployer sandbox datadirs are at ~/sandboxes/rsandbox_*/node1/data/
-DATADIR=$(docker exec "${CONTAINER}" bash -c 'ls -d /root/sandboxes/rsandbox_*/node1/data' 2>/dev/null)
-if [ -n "${DATADIR}" ]; then
-    if docker exec "${CONTAINER}" test -f "${DATADIR}/ca.pem"; then
-        echo "Collecting CA cert from node1..."
-        docker exec "${CONTAINER}" cat "${DATADIR}/ca.pem" | sudo tee -a "${DB_BUNDLE}" | sudo tee -a "${CA_BUNDLE}" > /dev/null
-    else
-        echo ">>> CA cert not found at ${DATADIR}/ca.pem. Skipping SSL collection."
-    fi
-fi
-[ -f "${DB_BUNDLE}" ] && sudo chmod 666 "${DB_BUNDLE}" "${CA_BUNDLE}" || true
 
 echo "docker-mysql-post.bash complete."
