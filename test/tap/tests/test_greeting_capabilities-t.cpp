@@ -1,8 +1,9 @@
 /**
  * @file test_greeting_capabilities-t.cpp
  * @brief Checks that ProxySQL sends the correct capabilities during handshake.
- * @details Thist test should also check conditional capabilities enabled by config variables. E.g:
+ * @details This test also checks conditional capabilities enabled by config variables. E.g:
  *   'CLIENT_DEPRECATE_EOF' when enabled through 'mysql-enable_client_deprecate_eof'.
+ *   'CLIENT_SESSION_TRACKING' when enabled through 'mysql-enable_client_session_tracking'.
  */
 
 #include <cstring>
@@ -27,7 +28,6 @@ std::vector<uint64_t> def_capabilities {
 	CLIENT_MULTI_STATEMENTS,
 	CLIENT_PS_MULTI_RESULTS,
 	CLIENT_PLUGIN_AUTH,
-	CLIENT_SESSION_TRACKING,
 	CLIENT_REMEMBER_OPTIONS
 };
 
@@ -64,7 +64,9 @@ pair<bool,uint64_t> check_server_capabilities(
 }
 
 int test_proxy_capabilites(const CommandLine& cl, MYSQL* admin) {
+	// Test 1: disable CLIENT_DEPRECATE_EOF and CLIENT_SESSION_TRACKING
 	MYSQL_QUERY(admin, "SET mysql-enable_client_deprecate_eof=0");
+	MYSQL_QUERY(admin, "SET mysql-enable_client_session_tracking=0");
 	MYSQL_QUERY(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 	MYSQL* proxy = mysql_init(NULL);
@@ -74,17 +76,19 @@ int test_proxy_capabilites(const CommandLine& cl, MYSQL* admin) {
 		return EXIT_FAILURE;
 	}
 
-	pair<bool,uint64_t> caps_res { check_server_capabilities(proxy, { CLIENT_DEPRECATE_EOF }, false) };
+	pair<bool,uint64_t> caps_res { check_server_capabilities(proxy, { CLIENT_DEPRECATE_EOF, CLIENT_SESSION_TRACKING }, false) };
 	uint64_t ext_caps = (proxy->server_capabilities >> 16) << 16;
 
 	mysql_close(proxy);
 
 	ok(
-		caps_res.first, "ProxySQL greeting should return the expected capabilities - Exp: '%ld', Act: '%ld'",
+		caps_res.first, "ProxySQL greeting should return the expected capabilities with deprecate_eof and session_tracking disabled - Exp: '%ld', Act: '%ld'",
 		caps_res.second, ext_caps
 	);
 
+	// Test 2: enable CLIENT_DEPRECATE_EOF and CLIENT_SESSION_TRACKING
 	MYSQL_QUERY(admin, "SET mysql-enable_client_deprecate_eof=1");
+	MYSQL_QUERY(admin, "SET mysql-enable_client_session_tracking=1");
 	MYSQL_QUERY(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 	proxy = mysql_init(NULL);
@@ -95,11 +99,11 @@ int test_proxy_capabilites(const CommandLine& cl, MYSQL* admin) {
 		return EXIT_FAILURE;
 	}
 
-	caps_res = check_server_capabilities(proxy, { CLIENT_DEPRECATE_EOF }, true);
+	caps_res = check_server_capabilities(proxy, { CLIENT_DEPRECATE_EOF, CLIENT_SESSION_TRACKING }, true);
 	ext_caps = (proxy->server_capabilities >> 16) << 16;
 
 	ok(
-		caps_res.first, "ProxySQL greeting should return the expected capabilities - Exp: '%ld', Act: '%ld'",
+		caps_res.first, "ProxySQL greeting should return the expected capabilities with deprecate_eof and session_tracking enabled - Exp: '%ld', Act: '%ld'",
 		caps_res.second, ext_caps
 	);
 
@@ -111,7 +115,6 @@ int test_proxy_capabilites(const CommandLine& cl, MYSQL* admin) {
 int main(int argc, char** argv) {
 	CommandLine cl;
 
-	// TODO: Harcoded for now, this is an initial version of the test.
 	plan(2);
 
 	if (cl.getEnv()) {

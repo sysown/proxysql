@@ -1093,6 +1093,11 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	} else {
 		mysql_thread___server_capabilities &= ~CLIENT_DEPRECATE_EOF;
 	}
+	if (mysql_thread___enable_client_session_tracking) {
+		mysql_thread___server_capabilities |= CLIENT_SESSION_TRACKING;
+	} else {
+		mysql_thread___server_capabilities &= ~CLIENT_SESSION_TRACKING;
+	}
 	uint32_t server_capabilities = mysql_thread___server_capabilities;
 	if (deprecate_eof_active && mysql_thread___enable_client_deprecate_eof) {
 		server_capabilities |= CLIENT_DEPRECATE_EOF;
@@ -1600,6 +1605,12 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 	// specifying no 'CLIENT_DEPRECATE_EOF' support in 'server_capabilities'.
 	if (!mysql_thread___enable_client_deprecate_eof) {
 		vars1.capabilities &= ~CLIENT_DEPRECATE_EOF;
+	}
+	// similarly, enforce disabling 'CLIENT_SESSION_TRACKING' from the supported
+	// capabilities when explicitly disabled by global variable
+	// 'mysql_thread___enable_client_session_tracking'.
+	if (!mysql_thread___enable_client_session_tracking) {
+		vars1.capabilities &= ~CLIENT_SESSION_TRACKING;
 	}
 	(*myds)->myconn->options.client_flag = vars1.capabilities;
 	pkt += sizeof(uint32_t);

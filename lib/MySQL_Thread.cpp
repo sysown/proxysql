@@ -358,6 +358,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"connect_timeout_server",
 	(char *)"connect_timeout_server_max",
 	(char *)"enable_client_deprecate_eof",
+	(char *)"enable_client_session_tracking",
 	(char *)"enable_server_deprecate_eof",
 	(char *)"enable_load_data_local_infile",
 	(char *)"eventslog_filename",
@@ -1441,6 +1442,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.query_digests_grouping_limit = 3;
 	variables.query_digests_groups_grouping_limit= 10; // changed in 2.6.0 , was 0
 	variables.enable_client_deprecate_eof=true;
+	variables.enable_client_session_tracking=true;
 	variables.enable_server_deprecate_eof=true;
 	variables.enable_load_data_local_infile=false;
 	variables.log_mysql_warnings_enabled=false;
@@ -2505,6 +2507,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["connection_warming"]              = make_tuple(&variables.connection_warming,              false);
 		VariablesPointers_bool["default_reconnect"]               = make_tuple(&variables.default_reconnect,               false);
 		VariablesPointers_bool["enable_client_deprecate_eof"]     = make_tuple(&variables.enable_client_deprecate_eof,     false);
+		VariablesPointers_bool["enable_client_session_tracking"]  = make_tuple(&variables.enable_client_session_tracking,  false);
 		VariablesPointers_bool["enable_server_deprecate_eof"]     = make_tuple(&variables.enable_server_deprecate_eof,     false);
 #ifdef PROXYSQLFFTO
 		VariablesPointers_bool["ffto_enabled"]                    = make_tuple(&variables.ffto_enabled,                    false);
@@ -4743,6 +4746,7 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_BOOL(servers_stats);
 	REFRESH_VARIABLE_BOOL(default_reconnect);
 	REFRESH_VARIABLE_BOOL(enable_client_deprecate_eof);
+	REFRESH_VARIABLE_BOOL(enable_client_session_tracking);
 	REFRESH_VARIABLE_BOOL(enable_server_deprecate_eof);
 	REFRESH_VARIABLE_BOOL(enable_load_data_local_infile);
 	REFRESH_VARIABLE_BOOL(log_mysql_warnings_enabled);
