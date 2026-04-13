@@ -1,6 +1,6 @@
 # MySQL 8.4 Test Group Environment
 
-export DEFAULT_MYSQL_INFRA="infra-mysql84"
+export DEFAULT_MYSQL_INFRA="infra-dbdeployer-mysql84"
 
 # Source infra .env to export TAP test variables (TAP_MYSQL8_BACKEND_HG, etc.)
 # Uses WORKSPACE (always set in CI) to avoid shell-specific BASH_SOURCE

@@ -10,6 +10,9 @@ priv-infra/
 # direnv
 .envrc.local
 
+# bear/clangd
+compile_commands.json
+compile_commands.events.json
 
 # Intelij
 .idea/

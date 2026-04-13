@@ -31,8 +31,10 @@ export DEFAULT_MYSQL_INFRA="${INFRA_TYPE:-${DEFAULT_MYSQL_INFRA:-infra-mysql84}}
 export DEFAULT_PGSQL_INFRA="${INFRA_TYPE:-${DEFAULT_PGSQL_INFRA:-docker-pgsql16-single}}"
 
 # MySQL/MariaDB Environment Variables
-export TAP_MYSQLHOST="mysql1.${DEFAULT_MYSQL_INFRA}"
-export TAP_MYSQLPORT=3306
+# MYSQL_PRIMARY_HOST/PORT can be set in the infra's .env to override defaults
+# (e.g. dbdeployer uses "dbdeployer1" instead of "mysql1")
+export TAP_MYSQLHOST="${MYSQL_PRIMARY_HOST:-mysql1}.${DEFAULT_MYSQL_INFRA}"
+export TAP_MYSQLPORT="${MYSQL_PRIMARY_PORT:-3306}"
 export TAP_MYSQLUSERNAME="root"
 export TAP_MYSQLPASSWORD="${ROOT_PASSWORD}"
 

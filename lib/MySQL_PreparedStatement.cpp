@@ -794,10 +794,31 @@ uint64_t MySQL_STMTs_local_v14::find_global_stmt_id_from_client(uint32_t client_
 	return ret;
 }
 
+void MySQL_STMTs_local_v14::set_client_min_gtid(uint32_t client_stmt_id, const char* min_gtid) {
+	if (min_gtid && min_gtid[0] != '\0') {
+		client_stmt_to_min_gtid[client_stmt_id] = min_gtid;
+	} else {
+		client_stmt_to_min_gtid.erase(client_stmt_id);
+	}
+}
+
+const char* MySQL_STMTs_local_v14::find_client_min_gtid(uint32_t client_stmt_id) const {
+	auto s = client_stmt_to_min_gtid.find(client_stmt_id);
+	if (s != client_stmt_to_min_gtid.end()) {
+		return s->second.c_str();
+	}
+	return NULL;
+}
+
+void MySQL_STMTs_local_v14::erase_client_min_gtid(uint32_t client_stmt_id) {
+	client_stmt_to_min_gtid.erase(client_stmt_id);
+}
+
 bool MySQL_STMTs_local_v14::client_close(uint32_t client_statement_id) {
 	auto s = client_stmt_to_global_ids.find(client_statement_id);
 	if (s != client_stmt_to_global_ids.end()) {  // found
 		uint64_t global_stmt_id = s->second;
+		erase_client_min_gtid(client_statement_id);
 		client_stmt_to_global_ids.erase(s);
 		GloMyStmt->ref_count_client(global_stmt_id, -1);
 		//auto s2 = global_stmt_to_client_ids.find(global_stmt_id);

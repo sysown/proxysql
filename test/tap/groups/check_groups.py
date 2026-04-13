@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-Check consistency between groups.json and compiled TAP test binaries.
+Check consistency between groups.json and executable TAP tests on disk.
 
 Two checks:
-1. All tests listed in groups.json are compiled/ready to run.
-   If not: WARNING (exit 0).
-2. All compiled test binaries are listed in groups.json.
+1. All tests listed in groups.json exist as executable files on disk.
+   If not: NOTE (exit 0). Tests may not be built yet or may be feature-gated.
+2. All executable test files on disk are listed in groups.json.
    If not: ERROR (exit 1).
 
 Usage:
     python3 check_groups.py [--tap-root /path/to/test/tap]
 
 Exit codes:
-    0 - All compiled tests are in groups.json (warnings are OK)
-    1 - Compiled tests found that are missing from groups.json
+    0 - All executable tests are in groups.json (notes are OK)
+    1 - Executable tests found that are missing from groups.json
 """
 
 import argparse
@@ -23,41 +23,34 @@ import stat
 import sys
 
 
-def find_compiled_tests(tap_root):
-    """Find all compiled test binaries (*-t) under the TAP test directories."""
+def find_executable_tests(tap_root):
+    """Find all executable test files (*-t) under the TAP test directories.
+
+    This includes ELF binaries, scripts (PHP, Python, shell), symlinks, etc.
+    Anything that is executable and ends with -t is considered a runnable test.
+    """
     scan_roots = [
         os.path.join(tap_root, "tests"),
         os.path.join(tap_root, "tests_with_deps"),
     ]
 
-    compiled = set()
+    executable = set()
     for scan_root in scan_roots:
         if not os.path.isdir(scan_root):
             continue
         for dirpath, _, filenames in os.walk(scan_root):
             for entry in filenames:
                 path = os.path.join(dirpath, entry)
-                # Must be a file ending in -t, executable, and an ELF binary (not .cpp, .py, etc.)
+                # Must be a file ending in -t, executable (any type: ELF, script, symlink)
                 if (
                     entry.endswith("-t")
                     and os.path.isfile(path)
                     and not entry.endswith(".cpp")
                     and os.access(path, os.X_OK)
-                    and _is_elf(path)
                 ):
-                    compiled.add(entry)
+                    executable.add(entry)
 
-    return compiled
-
-
-def _is_elf(path):
-    """Check if a file is an ELF binary by reading the magic bytes."""
-    try:
-        with open(path, "rb") as f:
-            magic = f.read(4)
-            return magic == b"\x7fELF"
-    except (OSError, IOError):
-        return False
+    return executable
 
 
 def load_groups(groups_path):
@@ -88,28 +81,29 @@ def main():
         return 1
 
     groups_tests = load_groups(groups_path)
-    compiled_tests = find_compiled_tests(tap_root)
+    executable_tests = find_executable_tests(tap_root)
 
     exit_code = 0
 
-    # --- Check 1: tests in groups.json but not compiled (WARNING) ---
-    in_groups_not_compiled = sorted(groups_tests - compiled_tests)
-    if in_groups_not_compiled:
-        print(f"WARNING: {len(in_groups_not_compiled)} test(s) in groups.json are not compiled:")
-        for t in in_groups_not_compiled:
+    # --- Check 1: tests in groups.json but not found on disk (WARNING) ---
+    in_groups_not_found = sorted(groups_tests - executable_tests)
+    if in_groups_not_found:
+        print(f"NOTE: {len(in_groups_not_found)} test(s) in groups.json are not yet available on disk "
+              f"(not built, or feature-gated):")
+        for t in in_groups_not_found:
             print(f"  - {t}")
         print()
 
-    # --- Check 2: compiled tests not in groups.json (ERROR) ---
-    compiled_not_in_groups = sorted(compiled_tests - groups_tests)
-    if compiled_not_in_groups:
-        print(f"ERROR: {len(compiled_not_in_groups)} compiled test(s) missing from groups.json:")
-        for t in compiled_not_in_groups:
+    # --- Check 2: executable tests not in groups.json (ERROR) ---
+    on_disk_not_in_groups = sorted(executable_tests - groups_tests)
+    if on_disk_not_in_groups:
+        print(f"ERROR: {len(on_disk_not_in_groups)} executable test(s) missing from groups.json:")
+        for t in on_disk_not_in_groups:
             print(f"  - {t}")
         exit_code = 1
     else:
         print(
-            f"OK: All {len(compiled_tests)} compiled test binaries are registered "
+            f"OK: All {len(executable_tests)} executable tests are registered "
             f"in groups.json ({len(groups_tests)} total entries)."
         )
 

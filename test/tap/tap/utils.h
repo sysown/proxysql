@@ -982,6 +982,23 @@ using pool_state_t = std::map<uint32_t,mysql_row_t>;
 std::pair<int,pool_state_t> fetch_conn_stats(MYSQL* admin, const std::vector<uint32_t> hgs);
 
 /**
+ * @brief Fetches GTID info for a backend from the gtid_executed set.
+ * @param admin An already opened connection to ProxySQL admin interface.
+ * @param backend_host The hostname of the backend server.
+ * @param backend_port The port of the backend server.
+ * @param server_uuid Output: the UUID of the first GTID entry in gtid_executed set, with dashes stripped.
+ * @param max_trxid Output: the maximum transaction ID found in the first GTID entry.
+ * @return 0 on success, -1 on failure (query error, missing UUID, parse error).
+ */
+int get_backend_gtid_position(
+	MYSQL* admin,
+	const std::string& backend_host,
+	uint32_t backend_port,
+	std::string& server_uuid,
+	uint64_t& max_trxid
+);
+
+/**
  * @brief Waits for a generic condition.
  * @details Wait finishes by a non-zero return code by the condition or by timeout.
  * @param cond Condition to be evaluated at each wait interval.

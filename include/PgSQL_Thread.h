@@ -139,9 +139,8 @@ struct CopyCmdMatcher {
 	CopyCmdMatcher() : 
 		options(RE2::Quiet), 
 		pattern(
-			R"(((?is)(?:--.*?$|/\*[\s\S]*?\*/|\s)*\bCOPY\b\s+[^;]*?\bFROM\b\s+(?:STDIN|STDOUT)\b(?:\s+WITH\s*\([^)]*\))?))",
+			R"(((?is)\bCOPY\b[^;]*?\bFROM\b[^;]*?\b(?:STDIN|STDOUT)\b))",
 			options) {
-		//((?is)(?:--.*?$|/\*[\s\S]*?\*/|\s)*\bCOPY\b\s+[^;]*?\bFROM\b\s+STDIN\b(?:\s+WITH\s*\([^)]*\))?)
 	}
 
 	inline
