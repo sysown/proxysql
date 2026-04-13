@@ -32,6 +32,7 @@ dbdeployer deploy replication "${MYSQL_VERSION}" \
     -c binlog_checksum=NONE \
     -c show_compatibility_56=ON \
     -c session_track_gtids=OWN_GTID \
+    -c slave_net_timeout=4 \
     --repl-crash-safe
 
 echo "Replication deployed. Waiting for all nodes to be ready..."
