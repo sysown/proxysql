@@ -71,7 +71,11 @@ int main(int argc, char** argv) {
 	{
 		MYSQL* admin = mysql_init(NULL);
 		if (admin && mysql_real_connect(admin, cl.host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
-			if (mysql_query(admin, "SHOW MASTER STATUS") == 0) {
+			// Try MySQL 8.4+ syntax first, fall back to legacy for 5.7
+			if (mysql_query(admin, "SHOW BINARY LOG STATUS") != 0) {
+				mysql_query(admin, "SHOW MASTER STATUS");
+			}
+			{
 				MYSQL_RES* res = mysql_store_result(admin);
 				if (res) {
 					MYSQL_ROW row = mysql_fetch_row(res);
