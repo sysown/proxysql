@@ -87,7 +87,7 @@ GRANT REPLICATION SLAVE ON *.* TO 'rpl_user'@'%';
 
 -- Monitor user
 CREATE USER IF NOT EXISTS 'monitor'@'%' IDENTIFIED BY 'monitor';
-GRANT USAGE, REPLICATION CLIENT ON *.* TO 'monitor'@'%';
+GRANT USAGE, REPLICATION CLIENT, SUPER ON *.* TO 'monitor'@'%';
 
 -- testuser
 CREATE USER IF NOT EXISTS 'testuser'@'%' IDENTIFIED BY 'testuser';

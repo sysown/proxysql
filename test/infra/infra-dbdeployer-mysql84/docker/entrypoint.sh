@@ -91,7 +91,7 @@ GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
 
 -- Monitor user
 CREATE USER IF NOT EXISTS 'monitor'@'%' IDENTIFIED WITH 'mysql_native_password' BY 'monitor';
-GRANT USAGE, REPLICATION CLIENT ON *.* TO 'monitor'@'%';
+GRANT USAGE, REPLICATION CLIENT, REPLICATION SLAVE ON *.* TO 'monitor'@'%';
 
 -- testuser
 CREATE USER IF NOT EXISTS 'testuser'@'%' IDENTIFIED WITH 'mysql_native_password' BY 'testuser';
