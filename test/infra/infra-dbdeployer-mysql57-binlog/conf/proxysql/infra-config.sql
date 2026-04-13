@@ -1,6 +1,10 @@
 UPDATE global_variables SET variable_value='false' WHERE variable_name='admin-hash_passwords';
+-- Enable GTID session tracking so ProxySQL forwards GTIDs to clients
+SET mysql-default_session_track_gtids='OWN_GTID';
 LOAD ADMIN VARIABLES TO RUNTIME;
+LOAD MYSQL VARIABLES TO RUNTIME;
 SAVE ADMIN VARIABLES TO DISK;
+SAVE MYSQL VARIABLES TO DISK;
 
 DELETE FROM mysql_servers WHERE comment LIKE '%${INFRA}';
 -- MySQL servers with gtid_port pointing to proxysql_binlog_reader instances

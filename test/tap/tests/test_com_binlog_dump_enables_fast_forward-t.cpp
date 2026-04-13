@@ -65,8 +65,29 @@ int main(int argc, char** argv) {
 		system(which_cmd.c_str());
 	}
 
-	std::string cmd = mysqlbinlog_path + " mysql1-bin.000001 "
-						"--read-from-remote-server --user " + std::string(cl.root_username) + 
+	// Query ProxySQL for the actual binlog filename instead of hardcoding it.
+	// The binlog name depends on the backend (e.g. "mysql1-bin" vs "mysql-bin" with dbdeployer).
+	std::string binlog_file = "mysql1-bin.000001"; // fallback
+	{
+		MYSQL* admin = mysql_init(NULL);
+		if (admin && mysql_real_connect(admin, cl.host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
+			if (mysql_query(admin, "SHOW MASTER STATUS") == 0) {
+				MYSQL_RES* res = mysql_store_result(admin);
+				if (res) {
+					MYSQL_ROW row = mysql_fetch_row(res);
+					if (row && row[0]) {
+						binlog_file = row[0];
+						diag("Detected binlog file from backend: %s", binlog_file.c_str());
+					}
+					mysql_free_result(res);
+				}
+			}
+			mysql_close(admin);
+		}
+	}
+
+	std::string cmd = mysqlbinlog_path + " " + binlog_file + " "
+						"--read-from-remote-server --user " + std::string(cl.root_username) +
 						" --password=" + std::string(cl.root_password) +
 						" --host " + std::string(cl.host) + " --port 6033";
 	
