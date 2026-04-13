@@ -54,6 +54,7 @@ using json = nlohmann::json;
 #include "AI_Features_Manager.h"
 #endif /* PROXYSQLGENAI */
 
+#include "sqlite3db.h"
 #include "SQLite3_Server.h"
 #include "MySQL_Query_Processor.h"
 #include "PgSQL_Query_Processor.h"
@@ -220,6 +221,21 @@ void ProxySQL_GlobalVariables::get_SSL_pem_mem(char **key, char **cert) {
  * @return 0 on success, non-zero on failure.
  */
 int test_globals_init() {
+	// Enable SQLite URI filename parsing, mirroring what the daemon does
+	// in src/main.cpp before constructing any component that opens a
+	// SQLite database. Without this, SQLite3DB::open() calls that pass a
+	// URI like "file:mem_mydb?mode=memory" — used by both
+	// MySQL_HostGroups_Manager and PgSQL_HostGroups_Manager — fall back
+	// to literal-filename behavior and create a stray on-disk file in
+	// the test process cwd instead of an in-memory database. This call
+	// must run before any sqlite3_open*() in the process; placing it at
+	// the top of test_globals_init() (the test harness's analog of the
+	// daemon's main() pre-component init block) guarantees that, since
+	// every unit test calls a test_init_*() helper that funnels through
+	// here before constructing any component. Idempotent across repeated
+	// invocations.
+	sqlite3_config(SQLITE_CONFIG_URI, 1);
+
 	// Ensure the global debug flag matches the build type so that
 	// components which validate debug compatibility in their
 	// constructors do not abort.

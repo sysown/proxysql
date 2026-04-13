@@ -202,9 +202,9 @@ KillArgs::KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hid,
 }
 
 KillArgs::KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hid, unsigned long i, int kt, int _use_ssl, MySQL_Thread *_mt, char *ip) {
-	username=strdup(u);
-	password=strdup(p);
-	hostname=strdup(h);
+	username=u ? strdup(u) : nullptr;
+	password=p ? strdup(p) : nullptr;
+	hostname=h ? strdup(h) : nullptr;
 	ip_addr = NULL;
 	if (ip)
 		ip_addr = strdup(ip);
@@ -363,7 +363,9 @@ extern MySQL_Threads_Handler *GloMTH;
  * @brief Default constructor.
  * Initializes all member variables to their default values.
  */
-Query_Info::Query_Info() {
+Query_Info::Query_Info()
+  : sess(nullptr), mysql_stmt(nullptr), stmt_meta(nullptr), stmt_global_id(0)
+{
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
 	QueryPointer=NULL;
 	QueryLength=0;
@@ -2658,7 +2660,7 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 							break;
 						}
 					}
-					if (idx != SQL_NAME_LAST_LOW_WM) {
+					if (idx >= 0 && idx < SQL_NAME_LAST_HIGH_WM) {
 						myconn->var_absent[idx] = true;
 
 						myds->myconn->async_free_result();
@@ -3347,7 +3349,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					string nqn = string((char *)CurrentQuery.QueryPointer,l);
 					char *err_msg = (char *)"Session trying to reach HG %d while locked on HG %d . Rejecting query: %s";
 					char *buf = (char *)malloc(strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64);
-					sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
+					sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str());
 					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9005,(char *)"HY000",buf, true);
 					thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
 					RequestEnd(NULL, 9005, buf);
@@ -3377,6 +3379,16 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			// we will now generate a unique stmt and send it to the client
 			uint32_t new_stmt_id=client_myds->myconn->local_stmts->generate_new_client_stmt_id(stmt_info->statement_id);
 			CurrentQuery.stmt_client_id=new_stmt_id;
+
+			// When first_comment_parsing is set to 1 (before query rules) or 3 (before_and_after query rules),
+			// query rules may strip the min_gtid annotation during STMT_PREPARE. Persist it per client
+			// statement ID so that STMT_EXECUTE can restore the original routing constraint.
+			// For more context, refer to https://github.com/sysown/proxysql/issues/5384
+			int first_comment_parsing = mysql_thread___query_processor_first_comment_parsing;
+			if (first_comment_parsing == 1 || first_comment_parsing == 3) {
+				client_myds->myconn->local_stmts->set_client_min_gtid(new_stmt_id, qpo->min_gtid);
+			}
+
 			client_myds->setDSS_STATE_QUERY_SENT_NET();
 			client_myds->myprot.generate_STMT_PREPARE_RESPONSE(client_myds->pkt_sid+1,stmt_info,new_stmt_id);
 			LogQuery(NULL);
@@ -3492,10 +3504,22 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			// but as we reached here, stmt_meta is not null and we save the metadata
 			sess_STMTs_meta->insert(stmt_global_id,stmt_meta);
 		}
-		// else
 
 		CurrentQuery.stmt_meta=stmt_meta;
 		//current_hostgroup=qpo->destination_hostgroup;
+
+		// When first_comment_parsing is set to 1 (before query rules) or 3 (before_and_after query rules),
+		// query rules may strip the min_gtid annotation during STMT_PREPARE. So we persist it per client
+		// statement ID and restore it during STMT_EXECUTE.
+		// For more context, refer to https://github.com/sysown/proxysql/issues/5384
+		int first_comment_parsing = mysql_thread___query_processor_first_comment_parsing;
+		if (!qpo->min_gtid && (first_comment_parsing == 1 || first_comment_parsing == 3)) {
+			const char *saved_min_gtid = client_myds->myconn->local_stmts->find_client_min_gtid(client_stmt_id);
+			if (saved_min_gtid) {
+				qpo->min_gtid = strdup(saved_min_gtid);
+			}
+		}
+
 		rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt, &lock_hostgroup, ps_type_execute_stmt);
 		if (rc_break==true) {
 			return;
@@ -3520,7 +3544,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					string nqn = string((char *)CurrentQuery.stmt_info->query,l);
 					char *err_msg = (char *)"Session trying to reach HG %d while locked on HG %d . Rejecting query: %s";
 					char *buf = (char *)malloc(strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64);
-					sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
+					sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str());
 					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9005,(char *)"HY000",buf, true);
 					thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
 					RequestEnd(NULL, 9005, buf);
@@ -5101,6 +5125,33 @@ int MySQL_Session::GPFC_Replication_SwitchToFastForward(PtrSize_t& pkt, unsigned
 		set_status(FAST_FORWARD); // we can set status to FAST_FORWARD
 	}
 
+	// Issue #5556: Clean up idle backends from other hostgroups.
+	// When transitioning to FAST_FORWARD, only the active backend (mybe) is
+	// needed. Any other backends from different hostgroups are now idle and
+	// will never be used again. If left alive, they can receive POLLIN events
+	// (e.g. from MySQL wait_timeout) which causes a crash in handler() because
+	// ASYNC_IDLE is not handled in the switch-case.
+	{
+		unsigned int i = 0;
+		while (i < mybes->len) {
+			MySQL_Backend* _mybe = (MySQL_Backend*)mybes->index(i);
+			if (_mybe != mybe) {
+				if (_mybe->server_myds && _mybe->server_myds->myconn) {
+					proxy_info(
+						"Cleaning up idle backend from hostgroup %d during FAST_FORWARD transition\n",
+						_mybe->hostgroup_id
+					);
+					_mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
+				}
+				mybes->remove_index_fast(i);
+				_mybe->reset();
+				delete _mybe;
+			} else {
+				i++;
+			}
+		}
+	}
+
 	return 0;
 }
 
@@ -5365,7 +5416,7 @@ __get_pkts_from_client:
 												string nqn = string((char *)CurrentQuery.QueryPointer,l);
 												char *err_msg = (char *)"Session trying to reach HG %d while locked on HG %d . Rejecting query: %s";
 												char *buf = (char *)malloc(strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64);
-												sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
+sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str());
 												client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9005,(char *)"HY000",buf, true);
 												thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
 												RequestEnd(NULL, 9005, buf);
@@ -5592,6 +5643,16 @@ bool MySQL_Session::handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st,
 		CurrentQuery.stmt_client_id=client_stmtid;
 	}
 	CurrentQuery.mysql_stmt=NULL;
+
+	// When first_comment_parsing is set to 1 (before query rules) or 3 (before_and_after query rules),
+	// query rules may strip the min_gtid annotation during STMT_PREPARE. Persist it per client
+	// statement ID so that STMT_EXECUTE can restore the original routing constraint.
+	// For more context, refer to https://github.com/sysown/proxysql/issues/5384
+	int first_comment_parsing = mysql_thread___query_processor_first_comment_parsing;
+	if (previous_status.size() == 0 && (first_comment_parsing == 1 || first_comment_parsing == 3)) {
+		client_myds->myconn->local_stmts->set_client_min_gtid(client_stmtid, qpo->min_gtid);
+	}
+
 	st=status;
 	size_t sts=previous_status.size();
 	if (sts) {
@@ -9401,6 +9462,16 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
  * @param pkt Reference to the packet containing the command and associated data.
  */
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_CLOSE(PtrSize_t& pkt) {
+	if (pkt.size < 9) {
+		proxy_warning(
+			"Received malformed COM_STMT_CLOSE packet of %lu bytes\n",
+			static_cast<unsigned long>(pkt.size)
+		);
+		l_free(pkt.size,pkt.ptr);
+		client_myds->DSS=STATE_SLEEP;
+		status=WAITING_CLIENT_DATA;
+		return;
+	}
 	uint32_t client_global_id=0;
 	memcpy(&client_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
 	// FIXME: no input validation
@@ -9421,10 +9492,19 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_SEND_LONG_DATA(PtrSize_t& pkt) {
-	// FIXME: no input validation
+	if (pkt.size < 11) {
+		proxy_warning(
+			"Received malformed COM_STMT_SEND_LONG_DATA packet of %lu bytes\n",
+			static_cast<unsigned long>(pkt.size)
+		);
+		client_myds->DSS=STATE_SLEEP;
+		status=WAITING_CLIENT_DATA;
+		l_free(pkt.size,pkt.ptr);
+		return;
+	}
 	uint32_t stmt_global_id=0;
 	memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
-	uint32_t stmt_param_id=0;
+	uint16_t stmt_param_id=0;
 	memcpy(&stmt_param_id,(char *)pkt.ptr+9,sizeof(uint16_t));
 	SLDH->add(stmt_global_id,stmt_param_id,(char *)pkt.ptr+11,pkt.size-11);
 	client_myds->DSS=STATE_SLEEP;
@@ -9524,10 +9604,10 @@ char* MySQL_Session::get_current_query(int max_length) {
 
 	if (query_len > 0) {
 		res = (char *) malloc(query_len + 1);
-		if (trunc_query) {
-			// for truncated queries, add three dots at the end
-			memcpy(res, query_ptr, query_len - 3);
-			memcpy(res + (query_len - 3), "...", 3);
+		if (trunc_query && query_len >= 4) {
+			size_t cp_len = (size_t)query_len - 3;
+			memcpy(res, query_ptr, cp_len);
+			memcpy(res + cp_len, "...", 3);
 		} else {
 			strncpy(res, query_ptr, query_len);
 		}

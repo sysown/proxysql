@@ -1,5 +1,5 @@
-#ifndef __CLASS_SQLITE3DB_H
-#define __CLASS_SQLITE3DB_H
+#ifndef PROXYSQL_SQLITE3DB_H
+#define PROXYSQL_SQLITE3DB_H
 #include <pthread.h>
 #include "sqlite3.h"
 #undef swap
@@ -247,4 +247,4 @@ class SQLite3DB {
 	static void LoadPlugin(const char *);
 };
 
-#endif /* __CLASS_SQLITE3DB_H */
+#endif /* PROXYSQL_SQLITE3DB_H */

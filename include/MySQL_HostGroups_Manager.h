@@ -1,5 +1,9 @@
-#ifndef __CLASS_MYSQL_HOSTGROUPS_MANAGER_H
-#define __CLASS_MYSQL_HOSTGROUPS_MANAGER_H
+#ifndef PROXYSQL_MYSQL_HOSTGROUPS_MANAGER_H
+#define PROXYSQL_MYSQL_HOSTGROUPS_MANAGER_H
+#include "proxysql.h"
+#include "cpp.h"
+#include "proxysql_gtid.h"
+
 #include <atomic>
 #include <thread>
 #include <mutex>
@@ -141,10 +145,13 @@ class MySrvConnList {
 	int find_idx(MySQL_Connection *c) {
 		//for (unsigned int i=0; i<conns_length(); i++) {
 		for (unsigned int i=0; i<conns->len; i++) {
-			MySQL_Connection *conn = NULL;
+			MySQL_Connection *conn = nullptr;
 			conn = (MySQL_Connection *)conns->index(i);
 			if (conn==c) {
-				return (unsigned int)i;
+				// 'find_idx' returns an int; cast the unsigned loop index to int
+				// to avoid unsigned->signed narrowing warnings and keep the
+				// sentinel return value of -1 for "not found".
+				return static_cast<int>(i);
 			}
 		}
 		return -1;
@@ -267,7 +274,7 @@ class Group_Replication_Info {
 	char *comment;
 	bool active;
 	int writer_is_also_reader;
-	bool __active;
+	bool active_;
 	bool need_converge; // this is set to true on LOAD MYSQL SERVERS TO RUNTIME . This ensure that checks wil take an action
 	int current_num_writers;
 	int current_num_backup_writers;
@@ -276,6 +283,8 @@ class Group_Replication_Info {
 	Group_Replication_Info(int w, int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c);
 	bool update(int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c);
 	~Group_Replication_Info();
+	Group_Replication_Info(const Group_Replication_Info&) = delete;
+	Group_Replication_Info& operator=(const Group_Replication_Info&) = delete;
 };
 
 class Galera_Info {
@@ -289,7 +298,7 @@ class Galera_Info {
 	char *comment;
 	bool active;
 	int writer_is_also_reader;
-	bool __active;
+	bool active_;
 	bool need_converge; // this is set to true on LOAD MYSQL SERVERS TO RUNTIME . This ensure that checks wil take an action
 	int current_num_writers;
 	int current_num_backup_writers;
@@ -298,6 +307,8 @@ class Galera_Info {
 	Galera_Info(int w, int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c);
 	bool update(int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c);
 	~Galera_Info();
+	Galera_Info(const Galera_Info&) = delete;
+	Galera_Info& operator=(const Galera_Info&) = delete;
 };
 
 class AWS_Aurora_Info {
@@ -318,72 +329,12 @@ class AWS_Aurora_Info {
 	char * domain_name;
 	char * comment;
 	bool active;
-	bool __active;
+	bool active_;
 	AWS_Aurora_Info(int w, int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c);
 	bool update(int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c);
 	~AWS_Aurora_Info();
-};
-
-class MySQLServers_SslParams {
-	public:
-	string hostname;
-	int port;
-	string username;
-	string ssl_ca;
-	string ssl_cert;
-	string ssl_key;
-	string ssl_capath;
-	string ssl_crl;
-	string ssl_crlpath;
-	string ssl_cipher;
-	string tls_version;
-	string comment;
-	string MapKey;
-	MySQLServers_SslParams(string _h, int _p, string _u,
-		string ca, string cert, string key, string capath,
-		string crl, string crlpath, string cipher, string tls,
-		string c) {
-		hostname = _h;
-		port = _p;
-		username = _u;
-		ssl_ca = ca;
-		ssl_cert = cert;
-		ssl_key = key;
-		ssl_capath = capath;
-		ssl_crl = crl;
-		ssl_crlpath = crlpath;
-		ssl_cipher = cipher;
-		tls_version = tls;
-		comment = c;
-		MapKey = "";
-	}
-	MySQLServers_SslParams(char * _h, int _p, char * _u,
-		char * ca, char * cert, char * key, char * capath,
-		char * crl, char * crlpath, char * cipher, char * tls,
-		char * c) {
-		hostname = string(_h);
-		port = _p;
-		username = string(_u);
-		ssl_ca = string(ca);
-		ssl_cert = string(cert);
-		ssl_key = string(key);
-		ssl_capath = string(capath);
-		ssl_crl = string(crl);
-		ssl_crlpath = string(crlpath);
-		ssl_cipher = string(cipher);
-		tls_version = string(tls);
-		comment = string(c);
-		MapKey = "";
-	}
-	MySQLServers_SslParams(string _h, int _p, string _u) {
-		MySQLServers_SslParams(_h, _p, _u, "", "", "", "", "", "", "", "", "");
-	}
-	string getMapKey(const char *del) {
-		if (MapKey == "") {
-			MapKey = hostname + string(del) + to_string(port) + string(del) + username;
-		}
-		return MapKey;
-	}
+	AWS_Aurora_Info(const AWS_Aurora_Info&) = delete;
+	AWS_Aurora_Info& operator=(const AWS_Aurora_Info&) = delete;
 };
 
 struct p_hg_counter {
@@ -419,7 +370,7 @@ struct p_hg_counter {
 		myhgm_myconnpool_reset,
 		myhgm_myconnpool_destroy,
 		auto_increment_delay_multiplex,
-		__size
+		SIZE_
 	};
 };
 
@@ -429,12 +380,12 @@ struct p_hg_gauge {
 		client_connections_connected,
 		client_connections_connected_prim,
 		client_connections_connected_addl,
-		__size
+		SIZE_
 	};
 };
 
 struct p_hg_dyn_counter {
-	enum metric {
+	enum metric : uint8_t {
 		conn_pool_bytes_data_recv = 0,
 		conn_pool_bytes_data_sent,
 		connection_pool_conn_err,
@@ -443,22 +394,22 @@ struct p_hg_dyn_counter {
 		gtid_executed,
 		proxysql_mysql_error,
 		mysql_error,
-		__size
+		SIZE_
 	};
 };
 
-enum class p_mysql_error_type {
+enum class p_mysql_error_type : uint8_t {
 	mysql,
 	proxysql
 };
 
 struct p_hg_dyn_gauge {
-	enum metric {
+	enum metric : uint8_t {
 		connection_pool_conn_free = 0,
 		connection_pool_conn_used,
 		connection_pool_latency_us,
 		connection_pool_status,
-		__size
+		SIZE_
 	};
 };
 
@@ -489,7 +440,7 @@ enum READ_ONLY_SERVER_T {
 	ROS_HOSTNAME = 0,
 	ROS_PORT,
 	ROS_READONLY,
-	ROS__SIZE
+	ROS_SIZE_
 };
 
 enum REPLICATION_LAG_SERVER_T {
@@ -498,7 +449,7 @@ enum REPLICATION_LAG_SERVER_T {
 	RLS_PORT,
 	RLS_CURRENT_REPLICATION_LAG,
 	RLS_OVERRIDE_REPLICATION_LAG,
-	RLS__SIZE
+	RLS_SIZE_
 };
 
 /**
@@ -542,10 +493,10 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 		MYSQL_SERVERS_SSL_PARAMS,
 		MYSQL_SERVERS,
 
-		__HGM_TABLES_SIZE
+		HGM_TABLES_SIZE_
 	};
 
-	std::array<uint64_t, __HGM_TABLES_SIZE> table_resultset_checksum { {0} };
+	std::array<uint64_t, HGM_TABLES_SIZE_> table_resultset_checksum { {0} };
 
 	class HostGroup_Server_Mapping {
 	public:
@@ -553,11 +504,11 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 			WRITER = 0,
 			READER = 1,
 
-			__TYPE_SIZE
+			TYPE_SIZE_
 		};
 
 		struct Node {
-			MySrvC* srv = NULL;
+			MySrvC* srv = nullptr;
 			unsigned int reader_hostgroup_id = -1;
 			unsigned int writer_hostgroup_id = -1;
 			//MySerStatus server_status = MYSQL_SERVER_STATUS_OFFLINE_HARD;
@@ -618,7 +569,7 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 		MySrvC* insert_HGM(unsigned int hostgroup_id, const MySrvC* srv);
 		void remove_HGM(MySrvC* srv);
 
-		std::array<std::vector<Node>, __TYPE_SIZE> mapping; // index 0 contains reader and 1 contains writer hostgroups
+		std::array<std::vector<Node>, TYPE_SIZE_> mapping; // index 0 contains reader and 1 contains writer hostgroups
 		int readonly_flag;
 		MySQL_HostGroups_Manager* myHGM;
 	};
@@ -827,12 +778,12 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 		//////////////////////////////////////////////////////
 
 		/// Prometheus metrics arrays
-		std::array<prometheus::Counter*, p_hg_counter::__size> p_counter_array {};
-		std::array<prometheus::Gauge*, p_hg_gauge::__size> p_gauge_array {};
+		std::array<prometheus::Counter*, p_hg_counter::SIZE_> p_counter_array {};
+		std::array<prometheus::Gauge*, p_hg_gauge::SIZE_> p_gauge_array {};
 
 		// Prometheus dyn_metrics families arrays
-		std::array<prometheus::Family<prometheus::Counter>*, p_hg_dyn_counter::__size> p_dyn_counter_array {};
-		std::array<prometheus::Family<prometheus::Gauge>*, p_hg_dyn_gauge::__size> p_dyn_gauge_array {};
+		std::array<prometheus::Family<prometheus::Counter>*, p_hg_dyn_counter::SIZE_> p_dyn_counter_array {};
+		std::array<prometheus::Family<prometheus::Gauge>*, p_hg_dyn_gauge::SIZE_> p_dyn_gauge_array {};
 
 		/// Prometheus connection_pool metrics
 		std::map<std::string, prometheus::Counter*> p_conn_pool_bytes_data_recv_map {};
@@ -1033,7 +984,7 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 
 	void drop_all_idle_connections();
 	int get_multiple_idle_connections(int, unsigned long long, MySQL_Connection **, int);
-	SQLite3_result * SQL3_Connection_Pool(bool _reset, int *hid = NULL);
+	SQLite3_result * SQL3_Connection_Pool(bool _reset, int *hid = nullptr);
 	SQLite3_result * SQL3_Free_Connections();
 
 	void push_MyConn_to_pool(MySQL_Connection *, bool _lock=true);
@@ -1158,4 +1109,4 @@ private:
 };
 
 
-#endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */
+#endif /* PROXYSQL_MYSQL_HOSTGROUPS_MANAGER_H */

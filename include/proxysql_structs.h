@@ -357,13 +357,13 @@ struct pgsql_variable_st {
 	const char* alias[2];				// alias for the variable
 };
 
-#define IS_PGTRACKED_VAR_OPTION_SET(opt, flag) ((opt & flag) == flag)
-#define IS_PGTRACKED_VAR_OPTION_UNSET(opt, flag) ((opt & flag) == 0)
+#define IS_PGTRACKED_VAR_OPTION_SET(opt, flag) (((opt) & (flag)) == (flag))
+#define IS_PGTRACKED_VAR_OPTION_UNSET(opt, flag) (((opt) & (flag)) == 0)
 
-#define IS_PGTRACKED_VAR_OPTION_SET_QUOTE(opt)			 IS_PGTRACKED_VAR_OPTION_SET(opt.options, PGTRACKED_VAR_OPT_QUOTE)
-#define IS_PGTRACKED_VAR_OPTION_SET_SET_TRANSACTION(opt) IS_PGTRACKED_VAR_OPTION_SET(opt.options, PGTRACKED_VAR_OPT_SET_TRANSACTION)
-#define IS_PGTRACKED_VAR_OPTION_SET_PARAM_STATUS(opt)	 IS_PGTRACKED_VAR_OPTION_SET(opt.options, PGTRACKED_VAR_OPT_PARAM_STATUS)
-#define IS_PGTRACKED_VAR_OPTION_SET_NO_STRIP_VALUE(opt)	 IS_PGTRACKED_VAR_OPTION_SET(opt.options, PGTRACKED_VAR_OPT_NO_STRIP_VALUE)
+#define IS_PGTRACKED_VAR_OPTION_SET_QUOTE(opt)			 IS_PGTRACKED_VAR_OPTION_SET((opt).options, PGTRACKED_VAR_OPT_QUOTE)
+#define IS_PGTRACKED_VAR_OPTION_SET_SET_TRANSACTION(opt) IS_PGTRACKED_VAR_OPTION_SET((opt).options, PGTRACKED_VAR_OPT_SET_TRANSACTION)
+#define IS_PGTRACKED_VAR_OPTION_SET_PARAM_STATUS(opt)	 IS_PGTRACKED_VAR_OPTION_SET((opt).options, PGTRACKED_VAR_OPT_PARAM_STATUS)
+#define IS_PGTRACKED_VAR_OPTION_SET_NO_STRIP_VALUE(opt)	 IS_PGTRACKED_VAR_OPTION_SET((opt).options, PGTRACKED_VAR_OPT_NO_STRIP_VALUE)
 
 inline bool variable_name_exists(const pgsql_variable_st& var, const char* variable_name) {
 	
@@ -1402,6 +1402,7 @@ __thread int mysql_thread___monitor_threads_queue_maxsize;
 __thread int mysql_thread___monitor_local_dns_cache_ttl;
 __thread int mysql_thread___monitor_local_dns_cache_refresh_interval;
 __thread int mysql_thread___monitor_local_dns_resolver_queue_maxsize;
+__thread char * mysql_thread___resolution_family;
 __thread char * mysql_thread___monitor_username;
 __thread char * mysql_thread___monitor_password;
 __thread char * mysql_thread___monitor_replication_lag_use_percona_heartbeat;
@@ -1734,6 +1735,7 @@ extern __thread int mysql_thread___monitor_threads_queue_maxsize;
 extern __thread int mysql_thread___monitor_local_dns_cache_ttl;
 extern __thread int mysql_thread___monitor_local_dns_cache_refresh_interval;
 extern __thread int mysql_thread___monitor_local_dns_resolver_queue_maxsize;
+extern __thread char * mysql_thread___resolution_family;
 extern __thread char * mysql_thread___monitor_username;
 extern __thread char * mysql_thread___monitor_password;
 extern __thread char * mysql_thread___monitor_replication_lag_use_percona_heartbeat;

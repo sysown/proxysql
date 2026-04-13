@@ -20,6 +20,9 @@
 #include "command_line.h"
 #include "utils.h"
 
+// Read from TAP_MYSQL8_BACKEND_HG env var if it is defined; otherwise, fall back to 1300.
+static const int WRITER_HG = get_env_int("TAP_MYSQL8_BACKEND_HG", 1300);
+
 /**
  * @brief Checks that 'SET NAMES' is being executed properly in the backend connection.
  * @param proxysql_mysql A MYSQL handle to an already stablished MySQL connection.
@@ -34,7 +37,8 @@ void check_set_names(MYSQL* proxysql_mysql) {
 		return;
 	}
 
-	query_res = mysql_query(proxysql_mysql, "SELECT /* ;hostgroup=1300 */ @@character_set_client, @@character_set_results, @@character_set_connection");
+	std::string set_names_q = "SELECT /* ;hostgroup=" + std::to_string(WRITER_HG) + " */ @@character_set_client, @@character_set_results, @@character_set_connection";
+	query_res = mysql_query(proxysql_mysql, set_names_q.c_str());
 	if (query_res) {
 		diag("Query failed with error: %s", mysql_error(proxysql_mysql));
 		return;
@@ -78,7 +82,8 @@ void check_set_names(MYSQL* proxysql_mysql) {
  * @param proxysql_mysql A MYSQL handle to an already stablished MySQL connection.
  */
 void check_autocommit(MYSQL* proxysql_mysql) {
-	int query_res = mysql_query(proxysql_mysql, "SELECT /* ;hostgroup=1300 */ @@autocommit");
+	std::string autocommit_sel_q = "SELECT /* ;hostgroup=" + std::to_string(WRITER_HG) + " */ @@autocommit";
+	int query_res = mysql_query(proxysql_mysql, autocommit_sel_q.c_str());
 	if (query_res) {
 		diag("Query failed with error: %s", mysql_error(proxysql_mysql));
 		return;
@@ -105,7 +110,7 @@ void check_autocommit(MYSQL* proxysql_mysql) {
 	}
 
 	// Check new status on @@autocommit
-	query_res = mysql_query(proxysql_mysql, "SELECT /* ;hostgroup=1300 */ @@autocommit");
+	query_res = mysql_query(proxysql_mysql, autocommit_sel_q.c_str());
 	if (query_res) {
 		diag("Query failed with error: %s", mysql_error(proxysql_mysql));
 		return;
@@ -140,7 +145,8 @@ void check_session_character_set_server(MYSQL* proxysql_mysql) {
 		return;
 	}
 
-	query_res = mysql_query(proxysql_mysql, "SELECT /* ;hostgroup=1300 */ @@character_set_server");
+	std::string charset_server_q = "SELECT /* ;hostgroup=" + std::to_string(WRITER_HG) + " */ @@character_set_server";
+	query_res = mysql_query(proxysql_mysql, charset_server_q.c_str());
 	if (query_res) {
 		diag("Query failed with error: %s", mysql_error(proxysql_mysql));
 		return;
@@ -179,7 +185,8 @@ void check_session_character_set_results(MYSQL* proxysql_mysql) {
 		return;
 	}
 
-	query_res = mysql_query(proxysql_mysql, "SELECT /* ;hostgroup=1300 */ @@character_set_results");
+	std::string charset_results_q = "SELECT /* ;hostgroup=" + std::to_string(WRITER_HG) + " */ @@character_set_results";
+	query_res = mysql_query(proxysql_mysql, charset_results_q.c_str());
 	if (query_res) {
 		diag("Query failed with error: %s", mysql_error(proxysql_mysql));
 		return;

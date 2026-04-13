@@ -14,6 +14,20 @@ ifndef GIT_VERSION_BASE
     $(error GIT_VERSION_BASE is not set)
 endif
 
+.PHONY: lint lint-generate-cdb lint-run
+
+lint-generate-cdb:
+	@echo "Generating compile_commands.json (requires bear)"
+	./scripts/lint/generate-compile-commands.sh
+
+lint-run:
+	@echo "Running local linters"
+	./scripts/lint/run-local.sh
+
+lint: lint-generate-cdb lint-run
+	@echo "Done lint"
+
+
 ### RELEASE TIERS & FEATURE FLAGS:
 ### ProxySQL supports three distinct release tiers built from the same codebase.
 ### The tier is controlled by environment variables which enable feature guards
@@ -38,7 +52,6 @@ endif
 ###      * MCP (Model Context Protocol) stack
 ###      * Advanced Anomaly Detection
 ###    - Automatically increments the major version (e.g., 3.0.6 -> 4.0.6).
-###    - Note: This tier requires the Rust toolchain for certain dependencies.
 ###
 ### HIERARCHY: `PROXYSQLGENAI=1` implies `PROXYSQL31=1`.
 
@@ -72,13 +85,13 @@ endif
 export GIT_VERSION
 
 # Extract CURVER from GIT_VERSION (first 3 numbers, e.g., 3.0.6 from 3.0.6-388-ga94b7d6)
-CURVER := $(shell echo "$(GIT_VERSION)" | sed -nE 's/^([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' | head -1)
+CURVER := $(shell echo "$(GIT_VERSION)" | sed -nE 's/^v?([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' | head -1)
 
 # Validate CURVER has 3 numbers separated by dots
 CURVER_CHECK := $(shell echo "$(CURVER)" | grep -cE '^[0-9]+\.[0-9]+\.[0-9]+$$')
 
 ifeq ($(CURVER_CHECK),0)
-    $(error CURVER "$(CURVER)" derived from GIT_VERSION "$(GIT_VERSION)" does not have 3 numbers separated by dots (expected format: X.Y.Z)
+    $(error CURVER "$(CURVER)" derived from GIT_VERSION "$(GIT_VERSION)" does not have 3 numbers separated by dots. Expected format: X.Y.Z)
 endif
 
 export CURVER

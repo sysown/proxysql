@@ -24,6 +24,8 @@
  */
 
 #include <unistd.h>
+#include <signal.h>
+#include <sys/wait.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <time.h>
@@ -67,6 +69,16 @@ const uint32_t SYNC_TIMEOUT = 10;
 const uint32_t CONNECT_TIMEOUT = 10;
 const uint32_t R_NOMONITOR_PORT = 96061;
 const uint32_t R_WITHMONITOR_PORT = 96062;
+
+// Hostname visible to other containers on the Docker network.
+const char* get_cluster_visible_host() {
+	static char buf[256] = {};
+	if (buf[0]) return buf;
+	if (gethostname(buf, sizeof(buf)) != 0) {
+		strncpy(buf, "127.0.0.1", sizeof(buf) - 1);
+	}
+	return buf;
+}
 
 const std::string t_debug_query = "mysql -u%s -p%s -h %s -P%d -C -e \"%s\"";
 
@@ -595,8 +607,8 @@ int setup_config_file(const CommandLine& cl, uint32_t r_port, const std::string&
 	return 0;
 }
 
-int launch_proxysql_replica(const CommandLine& cl, uint32_t r_port, const std::string config_filename, bool monitor_enabled, 
-	const std::atomic<bool>& save_proxy_stderr) {
+int launch_proxysql_replica(const CommandLine& cl, uint32_t r_port, const std::string config_filename, bool monitor_enabled,
+	const std::atomic<bool>& save_proxy_stderr, std::atomic<pid_t>& child_pid) {
 
 	const std::string& workdir = std::string(cl.workdir);
 	const std::string& replica_stderr = workdir + "test_cluster_sync_config/test_cluster_sync_" + config_filename + "/cluster_sync_node_stderr.txt";
@@ -618,10 +630,21 @@ int launch_proxysql_replica(const CommandLine& cl, uint32_t r_port, const std::s
 	const std::string& proxy_binary_path = workdir + "../../../src/proxysql";
 	const std::string& proxy_command = proxy_binary_path + " -f " + (monitor_enabled == false ? "-M" : "") + " -c " + fmt_config_file + " > " + replica_stderr + " 2>&1";
 
-	diag("Launching replica ProxySQL [%s] via 'system' with command : `%s`", config_filename.c_str(), proxy_command.c_str());
-	int exec_res = system(proxy_command.c_str());
+	diag("Launching replica ProxySQL [%s] via fork/exec with command: `%s`", config_filename.c_str(), proxy_command.c_str());
 
-	ok(exec_res == 0, "proxysql cluster node [%s] should execute and shutdown nicely. 'system' result was: %d", config_filename.c_str(), exec_res);
+	pid_t pid = fork();
+	if (pid == 0) {
+		execl("/bin/sh", "sh", "-c", proxy_command.c_str(), nullptr);
+		_exit(127);
+	}
+
+	child_pid.store(pid);
+
+	int status = 0;
+	waitpid(pid, &status, 0);
+	int exec_res = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+
+	ok(exec_res == 0, "proxysql cluster node [%s] should execute and shutdown nicely. Exit status was: %d", config_filename.c_str(), exec_res);
 
 	// In case of error place in log the reason
 	if (exec_res || save_proxy_stderr.load()) {
@@ -845,17 +868,22 @@ int main(int, char**) {
 	MYSQL_QUERY(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
 	// Launch proxysql with cluster config and monitor feature disabled
-	std::thread proxysql_replica_nomonitor_thd(launch_proxysql_replica, std::ref(cl), R_NOMONITOR_PORT, "nomonitor", false, std::ref(save_proxy_stderr));
-	
+	std::atomic<pid_t> nomonitor_pid { 0 };
+	std::atomic<pid_t> withmonitor_pid { 0 };
+
+	std::thread proxysql_replica_nomonitor_thd(launch_proxysql_replica, std::ref(cl), R_NOMONITOR_PORT, "nomonitor", false, std::ref(save_proxy_stderr), std::ref(nomonitor_pid));
+
 	// Launch proxysql with cluster config - with -M commandline
-	std::thread proxysql_replica_withmonitor_thd(launch_proxysql_replica, std::ref(cl), R_WITHMONITOR_PORT, "withmonitor", true, std::ref(save_proxy_stderr));
+	std::thread proxysql_replica_withmonitor_thd(launch_proxysql_replica, std::ref(cl), R_WITHMONITOR_PORT, "withmonitor", true, std::ref(save_proxy_stderr), std::ref(withmonitor_pid));
 
 	MYSQL* r_proxysql_nomonitor_admin = NULL;
 	MYSQL* r_proxysql_withmonitor_admin = NULL;
 	{
 		// Waiting for proxysql to be ready
+		// Use cluster-visible hostname — replicas run locally in the test-runner
+		// container, not in the primary ProxySQL container that cl.host points to.
 		conn_opts_t conn_opts_nomonitor {};
-		conn_opts_nomonitor.host = cl.host;
+		conn_opts_nomonitor.host = get_cluster_visible_host();
 		conn_opts_nomonitor.user = cl.admin_username;
 		conn_opts_nomonitor.pass = cl.admin_password;
 		conn_opts_nomonitor.port = R_NOMONITOR_PORT;
@@ -872,7 +900,7 @@ int main(int, char**) {
 		}
 
 		conn_opts_t conn_opts_withmonitor {};
-		conn_opts_withmonitor.host = cl.host;
+		conn_opts_withmonitor.host = get_cluster_visible_host();
 		conn_opts_withmonitor.user = cl.admin_username;
 		conn_opts_withmonitor.pass = cl.admin_password;
 		conn_opts_withmonitor.port = R_WITHMONITOR_PORT;
@@ -889,21 +917,21 @@ int main(int, char**) {
 		}
 	
 		int read_only_val = -1;
-		int result = get_read_only_value("127.0.0.1", 13306, "root", "root", &read_only_val);
+		int result = get_read_only_value(cl.mysql_host, cl.mysql_port, cl.mysql_username, cl.mysql_password, &read_only_val);
 		if (result != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Fetching read_only value from mysql server failed.");
 			goto cleanup;
 		}
 
-		// For thorough testing of synchronization under all possible scenarios, it is necessary for 
-		// the MySQL server at 127.0.0.1:13306 to function as a writer.
-		ok(read_only_val == 0, "MySQL Server '127.0.0.1:13306' should function as a writer");
+		// For thorough testing of synchronization under all possible scenarios, it is necessary for
+		// the MySQL server to function as a writer.
+		ok(read_only_val == 0, "MySQL Server '%s:%d' should function as a writer", cl.mysql_host, cl.mysql_port);
 
 		const std::vector<mysql_server_tuple> insert_mysql_servers_values {
-			std::make_tuple(1, "127.0.0.1", 13306, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, ""), // this server has read_only value 0 (writer)
-			std::make_tuple(2, "127.0.0.1", 13307, 13, "OFFLINE_SOFT", 2, 1, 500, 300, 1, 200, ""),
-			std::make_tuple(3, "127.0.0.1", 13308, 14, "OFFLINE_HARD", 2, 1, 500, 300, 1, 200, ""),
-			std::make_tuple(4, "127.0.0.1", 13309, 15, "SHUNNED", 1, 0, 500, 300, 1, 200, "")
+			std::make_tuple(1, std::string(cl.mysql_host), cl.mysql_port, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, ""),
+			std::make_tuple(2, std::string(cl.mysql_host), cl.mysql_port + 1, 13, "OFFLINE_SOFT", 2, 1, 500, 300, 1, 200, ""),
+			std::make_tuple(3, std::string(cl.mysql_host), cl.mysql_port + 2, 14, "OFFLINE_HARD", 2, 1, 500, 300, 1, 200, ""),
+			std::make_tuple(4, std::string(cl.mysql_host), cl.mysql_port + 3, 15, "SHUNNED", 1, 0, 500, 300, 1, 200, "")
 		};
 
 		const std::vector<replication_hostgroups_tuple> insert_replication_hostgroups_values {
@@ -958,6 +986,30 @@ cleanup:
 		mysql_options(r_proxysql_withmonitor_admin, MYSQL_OPT_WRITE_TIMEOUT, &mysql_timeout);
 		mysql_query(r_proxysql_withmonitor_admin, "PROXYSQL SHUTDOWN");
 		mysql_close(r_proxysql_withmonitor_admin);
+	}
+
+	// Ensure replica processes are dead before joining threads.
+	// If PROXYSQL SHUTDOWN failed or admin connection was NULL, the process
+	// launched via fork() would block the thread forever.
+	{
+		pid_t pids[] = { nomonitor_pid.load(), withmonitor_pid.load() };
+		const char* names[] = { "nomonitor", "withmonitor" };
+		for (int i = 0; i < 2; i++) {
+			if (pids[i] > 0) {
+				bool exited = false;
+				for (int w = 0; w < 5; w++) {
+					if (waitpid(pids[i], nullptr, WNOHANG) != 0) {
+						exited = true;
+						break;
+					}
+					sleep(1);
+				}
+				if (!exited) {
+					diag("Replica ProxySQL [%s] (pid=%d) did not exit after SHUTDOWN, sending SIGKILL", names[i], pids[i]);
+					kill(pids[i], SIGKILL);
+				}
+			}
+		}
 	}
 
 	proxysql_replica_nomonitor_thd.join();

@@ -302,11 +302,15 @@ int main() {
 
     if (mysql_query(nonExistentSchemaConn, "SELECT /* create_new_connection=1 */ 1")) {
         int error_code = mysql_errno(nonExistentSchemaConn);
-        // MySQL returns 1049 (Unknown database) when a user with full privileges connects
-        // to a non-existent schema, or 1044 (Access denied) in older/restricted setups.
+        const char* error_msg = mysql_error(nonExistentSchemaConn);
+        diag("Query failed with error code %d: %s", error_code, error_msg);
+        // MySQL 5.7/8.0 returns 1044 (Access denied) when connecting to non-existent schema.
+        // MySQL 8.4+ returns 1049 (Unknown database) for the same scenario.
+        // Accept both error codes for compatibility across versions.
+        bool is_expected_error = (error_code == 1044 || error_code == 1049);
         ok(
-            error_code == 1044 || error_code == 1049,
-            "Query on non-existent schema returned expected error (1044 or 1049): %d", error_code
+            is_expected_error,
+            "Query on non-existent schema returned expected error (1044 or 1049). Actual: %d", error_code
         );
     } else {
         diag("Query on non-existent schema succeeded unexpectedly.");

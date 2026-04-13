@@ -79,18 +79,28 @@ int run_change_user_on_all(const CommandLine& cl, const std::vector<std::string>
 	return 0;
 }
 
+static bool charset_equiv(const char* a, const char* b) {
+	if (strcmp(a, b) == 0) return true;
+	std::string sa(a), sb(b);
+	if ((sa == "utf8" && sb == "utf8mb3") || (sa == "utf8mb3" && sb == "utf8")) return true;
+	// collation equivalence: utf8_general_ci == utf8mb3_general_ci
+	if (sa.rfind("utf8_", 0) == 0 && sb == "utf8mb3" + sa.substr(4)) return true;
+	if (sb.rfind("utf8_", 0) == 0 && sa == "utf8mb3" + sb.substr(4)) return true;
+	return false;
+}
+
 void check_variables(MYSQL_RES *proxy_res, std::string collation) {
 	std::size_t found = collation.find("_");
 	std::string charset = collation.substr(0,found);
 
 	MYSQL_ROW row = mysql_fetch_row(proxy_res);
-	ok(strcmp(row[1], charset.c_str()) == 0, "'character_set_client' matches (expected: '%s') == (actual: '%s')", charset.c_str(), row[1]);
+	ok(charset_equiv(row[1], charset.c_str()), "'character_set_client' matches (expected: '%s') == (actual: '%s')", charset.c_str(), row[1]);
 	row = mysql_fetch_row(proxy_res);
-	ok(strcmp(row[1], charset.c_str()) == 0, "'character_set_connection' matches (expected: '%s') == (actual: '%s')", charset.c_str(), row[1]);
+	ok(charset_equiv(row[1], charset.c_str()), "'character_set_connection' matches (expected: '%s') == (actual: '%s')", charset.c_str(), row[1]);
 	row = mysql_fetch_row(proxy_res);
-	ok(strcmp(row[1], charset.c_str()) == 0, "'character_set_results' matches (expected: '%s') == (actual: '%s')", charset.c_str(), row[1]);
+	ok(charset_equiv(row[1], charset.c_str()), "'character_set_results' matches (expected: '%s') == (actual: '%s')", charset.c_str(), row[1]);
 	row = mysql_fetch_row(proxy_res);
-	ok(strcmp(row[1], collation.c_str()) == 0, "'collation_connection' matches (expected: '%s') == (actual: '%s')", collation.c_str(), row[1]);
+	ok(charset_equiv(row[1], collation.c_str()), "'collation_connection' matches (expected: '%s') == (actual: '%s')", collation.c_str(), row[1]);
 }
 
 

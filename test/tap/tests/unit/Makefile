@@ -113,7 +113,7 @@ ifeq ($(UNAME_S),Linux)
 endif
 
 ifeq ($(PROXYSQLGENAI),1)
-	STATIC_LIBS += $(SQLITE3_LDIR)/../libsqlite_rembed.a $(SQLITE3_LDIR)/vec.o
+	STATIC_LIBS += $(SQLITE3_LDIR)/vec.o
 endif
 
 
@@ -259,6 +259,7 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	mysql_error_classifier_unit-t \
 	backend_sync_unit-t \
 	mysql_encode_unit-t \
+	mysql_resolution_unit-t \
 	pgsql_variables_validator_unit-t \
 	proxysql_utils_unit-t \
 	gen_utils_unit-t \
@@ -290,7 +291,8 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	gtid_server_data_unit-t \
 	genai_mysql_catalog_unit-t \
 	admin_disk_upgrade_unit-t \
-	glovars_unit-t
+	glovars_unit-t \
+	pgsql_servers_ssl_params_unit-t
 
 .PHONY: all
 all: $(UNIT_TESTS)
@@ -310,6 +312,11 @@ $(ODIR)/tap_noise_stubs.o: | $(ODIR)
 		$(CXX) -x c++ -c -o $@ - $(STDCPP)
 
 ezoption_parser_unit-t: ezoption_parser_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include \
+		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) -lpthread -o $@
+
+mysql_resolution_unit-t: mysql_resolution_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
 		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include \
 		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) -lpthread -o $@

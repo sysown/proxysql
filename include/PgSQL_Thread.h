@@ -1,6 +1,6 @@
-#ifndef __CLASS_PGSQL_THREAD_H
-#define __CLASS_PGSQL_THREAD_H
-#define ____CLASS_STANDARD_PGSQL_THREAD_H
+#ifndef PROXYSQL_PGSQL_THREAD_H
+#define PROXYSQL_PGSQL_THREAD_H
+#define PROXYSQL_STANDARD_PGSQL_THREAD_H
 #include <prometheus/counter.h>
 #include <prometheus/gauge.h>
 
@@ -41,9 +41,9 @@ constexpr const char* AUTHENTICATION_METHOD_STR[] = {
 #define MY_EPOLL_THREAD_MAXEVENTS 128
 */
 
-#define ADMIN_HOSTGROUP	-2
-#define STATS_HOSTGROUP	-3
-#define SQLITE_HOSTGROUP -4
+#define ADMIN_HOSTGROUP	(-2)
+#define STATS_HOSTGROUP	(-3)
+#define SQLITE_HOSTGROUP (-4)
 
 
 #define MYSQL_DEFAULT_COLLATION_CONNECTION	""
@@ -1731,4 +1731,4 @@ public:
 };
 	
 	
-#endif /* __CLASS_PGSQL_THREAD_H */
+#endif /* PROXYSQL_PGSQL_THREAD_H */

@@ -1,0 +1,12 @@
+Checks: >
+  clang-analyzer-*,
+  bugprone-*,
+  performance-*,
+  modernize-use-nullptr,
+  modernize-use-override,
+  modernize-loop-convert,
+  modernize-pass-by-value,
+  readability-braces-around-statements
+WarningsAsErrors: ''
+HeaderFilterRegex: 'include/|lib/'
+FormatStyle: none

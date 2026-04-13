@@ -141,3 +141,20 @@ cleanall: clean
 	# Remove cpp-dotenv source directories (213MB)
 	cd cpp-dotenv/static && rm -rf cpp-dotenv-*/ || true
 	cd cpp-dotenv/dynamic && rm -rf cpp-dotenv-*/ || true
+
+# Keep the v3.0 archive recipes intact so future merges stay clean, but
+# preserve this branch's stale-archive workaround in separate helper rules.
+LIBTAP_ARCHIVES := libtap_mariadb.a libtap_mysql57.a libtap_mysql8.a
+
+$(LIBTAP_ARCHIVES): preclean-libtap-archives | Makefile
+
+.PHONY: preclean-libtap-archives
+preclean-libtap-archives:
+	rm -f $(LIBTAP_ARCHIVES)
+
+ifeq ($(wildcard noise_utils.cpp noise_utils.h),)
+NOISE_UTILS_STUBS := noise_utils_mariadb.o noise_utils_mysql57.o noise_utils_mysql8.o
+
+$(NOISE_UTILS_STUBS):
+	$(CXX) -x c++ -fPIC -c /dev/null $(IDIRS) $(OPT) -o $@
+endif

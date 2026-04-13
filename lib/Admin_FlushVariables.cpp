@@ -402,9 +402,18 @@ void ProxySQL_Admin::flush_GENERIC_variables__checksum__database_to_runtime(cons
 		if (GloVars.cluster_sync_interfaces == false) {
 			q += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_ADMIN);
 		}
+	} else if (modname == "pgsql") {
+		if (GloVars.cluster_sync_interfaces == false) {
+			q += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_PGSQL);
+		}
 	}
 	q += " ORDER BY variable_name";
 	admindb->execute_statement(q.c_str(), &error , &cols , &affected_rows , &resultset);
+	if (error || resultset == NULL) {
+		proxy_error("flush_GENERIC_variables__checksum__database_to_runtime failed for %s: %s\n",
+			modname.c_str(), error ? error : "NULL resultset");
+		return;
+	}
 	uint64_t hash1 = resultset->raw_checksum();
 	uint32_t d32[2];
 	char buf[20];
@@ -417,6 +426,8 @@ void ProxySQL_Admin::flush_GENERIC_variables__checksum__database_to_runtime(cons
 		checkvar = &GloVars.checksums_values.mysql_variables;
 	} else if (modname == "ldap") {
 		checkvar = &GloVars.checksums_values.ldap_variables;
+	} else if (modname == "pgsql") {
+		checkvar = &GloVars.checksums_values.pgsql_variables;
 	}
 	assert(checkvar != NULL);
 	checkvar->set_checksum(buf);
@@ -912,49 +923,14 @@ void ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(SQLite3DB* db, 
 		GloPTH->commit();
 		GloPTH->wrunlock();
 
-		/* Checksums are always generated - 'admin-checksum_*' deprecated
-		{
-			// NOTE: 'GloPTH->wrunlock()' should have been called before this point to avoid possible
-			// deadlocks. See issue #3847.
-			pthread_mutex_lock(&GloVars.checksum_mutex);
-			// generate checksum for cluster
-			flush_mysql_variables___runtime_to_database(admindb, false, false, false, true, true);
-			char* error = NULL;
-			int cols = 0;
-			int affected_rows = 0;
-			SQLite3_result* resultset = NULL;
-			std::string q;
-			q = "SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'mysql-\%' AND variable_name NOT IN ('mysql-threads')";
-			if (GloVars.cluster_sync_interfaces == false) {
-				q += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_MYSQL);
+			{
+				// NOTE: 'GloPTH->wrunlock()' should have been called before this point to avoid possible
+				// deadlocks. See issue #3847.
+				pthread_mutex_lock(&GloVars.checksum_mutex);
+				flush_pgsql_variables___runtime_to_database(admindb, false, false, false, true, true);
+				flush_GENERIC_variables__checksum__database_to_runtime("pgsql", checksum, epoch);
+				pthread_mutex_unlock(&GloVars.checksum_mutex);
 			}
-			q += " ORDER BY variable_name";
-			admindb->execute_statement(q.c_str(), &error, &cols, &affected_rows, &resultset);
-			uint64_t hash1 = resultset->raw_checksum();
-			uint32_t d32[2];
-			char buf[20];
-			memcpy(&d32, &hash1, sizeof(hash1));
-			snprintf(buf, sizeof(buf), "0x%0X%0X", d32[0], d32[1]);
-			GloVars.checksums_values.mysql_variables.set_checksum(buf);
-			GloVars.checksums_values.mysql_variables.version++;
-			time_t t = time(NULL);
-			if (epoch != 0 && checksum != "" && GloVars.checksums_values.mysql_variables.checksum == checksum) {
-				GloVars.checksums_values.mysql_variables.epoch = epoch;
-			}
-			else {
-				GloVars.checksums_values.mysql_variables.epoch = t;
-			}
-			GloVars.epoch_version = t;
-			GloVars.generate_global_checksum();
-			GloVars.checksums_values.updates_cnt++;
-			pthread_mutex_unlock(&GloVars.checksum_mutex);
-			delete resultset;
-		}
-		proxy_info(
-			"Computed checksum for 'LOAD MYSQL VARIABLES TO RUNTIME' was '%s', with epoch '%llu'\n",
-			GloVars.checksums_values.mysql_variables.checksum, GloVars.checksums_values.mysql_variables.epoch
-		);
-		*/
 	
 		/**
 		 * @brief Check and warn if TCP keepalive is disabled for PostgreSQL connections.
