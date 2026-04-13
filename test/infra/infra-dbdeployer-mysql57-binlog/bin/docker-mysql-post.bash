@@ -44,17 +44,19 @@ for PORT in 3307 3308; do
     fi
 done
 
-# Collect SSL certs from node1 (all nodes share the same datadir-generated certs)
-# dbdeployer sandbox datadirs are at ~/sandboxes/rsandbox_*/node1/data/
-DATADIR=$(docker exec "${CONTAINER}" bash -c 'ls -d /root/sandboxes/rsandbox_*/node1/data' 2>/dev/null)
-if [ -n "${DATADIR}" ]; then
-    if docker exec "${CONTAINER}" test -f "${DATADIR}/ca.pem"; then
-        echo "Collecting CA cert from node1..."
-        docker exec "${CONTAINER}" cat "${DATADIR}/ca.pem" | sudo tee -a "${DB_BUNDLE}" | sudo tee -a "${CA_BUNDLE}" > /dev/null
-    else
-        echo ">>> CA cert not found at ${DATADIR}/ca.pem. Skipping SSL collection."
+# Collect SSL CA certs from ALL nodes (master, node1, node2)
+# dbdeployer generates separate SSL certs per node, so each has a different CA
+for NODE_DIR in master node1 node2; do
+    DATADIR=$(docker exec "${CONTAINER}" bash -c "ls -d /root/sandboxes/rsandbox_*/${NODE_DIR}/data" 2>/dev/null)
+    if [ -n "${DATADIR}" ]; then
+        if docker exec "${CONTAINER}" test -f "${DATADIR}/ca.pem"; then
+            echo "Collecting CA cert from ${NODE_DIR}..."
+            docker exec "${CONTAINER}" cat "${DATADIR}/ca.pem" | sudo tee -a "${DB_BUNDLE}" | sudo tee -a "${CA_BUNDLE}" > /dev/null
+        else
+            echo ">>> CA cert not found at ${DATADIR}/ca.pem. Skipping ${NODE_DIR}."
+        fi
     fi
-fi
+done
 [ -f "${DB_BUNDLE}" ] && sudo chmod 666 "${DB_BUNDLE}" "${CA_BUNDLE}" || true
 
 echo "docker-mysql-post.bash complete."
