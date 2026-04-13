@@ -15,10 +15,8 @@ services:
       - BINLOG_READER_USER=root
       - BINLOG_READER_PASSWORD=${ROOT_PASSWORD}
       - LISTEN_PORT=6020
-      - BINLOG_READER_START_DELAY=${BINLOG_READER_START_DELAY}
     command: >
       bash -c "(docker-entrypoint.sh mysqld &);
-      sleep ${BINLOG_READER_START_DELAY};
       while true; do
         sleep 5;
         proxysql_binlog_reader -h \"$${MYSQL_HOST:-127.0.0.1}\" -u \"$${BINLOG_READER_USER:=root}\" -p \"$${BINLOG_READER_PASSWORD:-root}\" -P \"$${MYSQL_PORT:-3306}\" -l \"$${LISTEN_PORT:-6020}\" -f 2>&1 | tee -a /var/log/mysql/binlogreader-error.log;
@@ -50,10 +48,8 @@ services:
       - BINLOG_READER_USER=root
       - BINLOG_READER_PASSWORD=${ROOT_PASSWORD}
       - LISTEN_PORT=6020
-      - BINLOG_READER_START_DELAY=${BINLOG_READER_START_DELAY}
     command: >
       bash -c "(docker-entrypoint.sh mysqld &);
-      sleep ${BINLOG_READER_START_DELAY};
       while true; do
         sleep 5;
         proxysql_binlog_reader -h \"$${MYSQL_HOST:-127.0.0.1}\" -u \"$${BINLOG_READER_USER:=root}\" -p \"$${BINLOG_READER_PASSWORD:-root}\" -P \"$${MYSQL_PORT:-3306}\" -l \"$${LISTEN_PORT:-6020}\" -f 2>&1 | tee -a /var/log/mysql/binlogreader-error.log;
@@ -87,10 +83,8 @@ services:
       - BINLOG_READER_USER=root
       - BINLOG_READER_PASSWORD=${ROOT_PASSWORD}
       - LISTEN_PORT=6020
-      - BINLOG_READER_START_DELAY=${BINLOG_READER_START_DELAY}
     command: >
       bash -c "(docker-entrypoint.sh mysqld &);
-      sleep ${BINLOG_READER_START_DELAY};
       while true; do
         sleep 5;
         proxysql_binlog_reader -h \"$${MYSQL_HOST:-127.0.0.1}\" -u \"$${BINLOG_READER_USER:=root}\" -p \"$${BINLOG_READER_PASSWORD:-root}\" -P \"$${MYSQL_PORT:-3306}\" -l \"$${LISTEN_PORT:-6020}\" -f 2>&1 | tee -a /var/log/mysql/binlogreader-error.log;

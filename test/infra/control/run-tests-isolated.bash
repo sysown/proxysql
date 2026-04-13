@@ -75,18 +75,6 @@ if [ -z "${INFRAS_TO_CHECK}" ]; then
     INFRAS_TO_CHECK="${INFRA_TYPE}"
 fi
 
-export BINLOG_READER_START_DELAY="${BINLOG_READER_START_DELAY:-30}"
-BINLOG_INFRA_FOUND=0
-for INFRA in ${INFRAS_TO_CHECK}; do
-    if [[ "${INFRA}" == *-binlog ]]; then
-        BINLOG_INFRA_FOUND=1
-        break
-    fi
-done
-if [ "${BINLOG_INFRA_FOUND}" -eq 0 ]; then
-    export BINLOG_READER_START_DELAY=0
-fi
-
 # Derive INFRA_TYPE from TAP_GROUP if not set
 # This is simple and deterministic - matches group naming convention
 if [ -z "${INFRA_TYPE}" ]; then
@@ -309,7 +297,6 @@ docker run \
     -e TAP_USE_NOISE="${TAP_USE_NOISE:-0}" \
     -e TAP_PGSQL_SYNC_REPLICA_PORT="${TAP_PGSQL_SYNC_REPLICA_PORT:-}" \
     -e MULTI_GROUP="${MULTI_GROUP:-0}" \
-    -e BINLOG_READER_START_DELAY="${BINLOG_READER_START_DELAY:-}" \
     -e GCOV_PREFIX="/gcov/tap" \
     -e GCOV_PREFIX_STRIP="3" \
     proxysql-ci-base:latest \
@@ -440,9 +427,6 @@ docker run \
             getent hosts proxysql || echo 'DNS lookup failed for proxysql'
             exit 1
         fi
-
-        echo '>>> Waiting for binlog readers to be ready...'
-        sleep "\${BINLOG_READER_START_DELAY}"
 
         # Dump ProxySQL configuration before running tests
         echo '================================================================================'

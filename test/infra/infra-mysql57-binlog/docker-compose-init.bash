@@ -97,7 +97,6 @@ ROOT_PASSWORD=${ROOT_PASSWORD}
 INFRA=${INFRA}
 COMPOSE_PROJECT=${COMPOSE_PROJECT}
 INFRA_LOGS_PATH=${INFRA_LOGS_PATH}
-BINLOG_READER_START_DELAY=${BINLOG_READER_START_DELAY}
 ENVEOF
 
 # 5. START CONTAINERS
@@ -127,6 +126,34 @@ fi
 # 7. Run post-scripts if they exist
 sleep 2 # wait a bit for engines to start
 [ -f ./bin/docker-mysql-post.bash ] && ./bin/docker-mysql-post.bash
+
+if [[ "${INFRA}" == *-binlog ]]; then
+    echo ">>> Waiting for binlog readers on port 6020..."
+    for i in 1 2 3; do
+        MYSQL_CONTAINER="${COMPOSE_PROJECT}-mysql${i}-1"
+        READER_CONTAINER="${COMPOSE_PROJECT}-reader${i}-1"
+        echo -n "Waiting for mysql${i} binlog reader ..."
+        MAX_WAIT=60
+        COUNT=0
+        while ! docker exec "${MYSQL_CONTAINER}" bash -lc 'exec 3<>/dev/tcp/127.0.0.1/6020; exec 3>&-; exec 3<&-' >/dev/null 2>&1; do
+            echo -n "."
+            sleep 2
+            COUNT=$((COUNT+2))
+            if [ ${COUNT} -ge ${MAX_WAIT} ]; then
+                echo " FAILED"
+                echo ">>> ${MYSQL_CONTAINER} logs:"
+                docker logs "${MYSQL_CONTAINER}" | tail -n 50 || true
+                if docker inspect "${READER_CONTAINER}" >/dev/null 2>&1; then
+                    echo ">>> ${READER_CONTAINER} logs:"
+                    docker logs "${READER_CONTAINER}" | tail -n 50 || true
+                fi
+                exit 1
+            fi
+        done
+        echo " OK."
+    done
+fi
+
 [ -f ./bin/docker-orchestrator-post.bash ] && ./bin/docker-orchestrator-post.bash
 [ -f ./bin/docker-proxy-post.bash ] && ./bin/docker-proxy-post.bash "$1"
 
