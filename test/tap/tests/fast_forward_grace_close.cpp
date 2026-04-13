@@ -59,9 +59,12 @@ int main() {
 	MYSQL_QUERY(proxysql_conn, "CREATE DATABASE IF NOT EXISTS test");
 	MYSQL_QUERY(proxysql_conn, "USE test");
 	MYSQL_QUERY(proxysql_conn, "CREATE TABLE IF NOT EXISTS dummy_log_table (id INT PRIMARY KEY AUTO_INCREMENT, data LONGTEXT)");
-	MYSQL_QUERY(proxysql_conn, "INSERT INTO dummy_log_table (data) VALUES (REPEAT('a', 1024*50))");
-	MYSQL_QUERY(proxysql_conn, "INSERT INTO dummy_log_table (data) VALUES (REPEAT('a', 1024*50))");
-	MYSQL_QUERY(proxysql_conn, "INSERT INTO dummy_log_table (data) VALUES (REPEAT('a', 1024*50))");
+	// Generate enough binlog data so that throttled reads at target_time=20s
+	// actually take longer than the 8s grace close period. Each INSERT creates
+	// a ~50KB binlog event; we need many events so the per-event sleep adds up.
+	for (int i = 0; i < 50; i++) {
+		MYSQL_QUERY(proxysql_conn, "INSERT INTO dummy_log_table (data) VALUES (REPEAT('a', 1024*50))");
+	}
 	int rc = mysql_query(proxysql_conn, "FLUSH LOGS");
 	ok(rc == 0, "Generated data and flushed logs on backend via ProxySQL");
 
