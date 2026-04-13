@@ -68,7 +68,7 @@ services:
         hard: 1048576
 
   reader1:
-    image: proxysql/ci-infra:proxysql-mysqlbinlog-v2.3
+    image: proxysql/proxysql-mysqlbinlog
     container_name: ${COMPOSE_PROJECT}-reader1-1
     environment:
       - MYSQL_HOST=127.0.0.1
@@ -87,7 +87,7 @@ services:
       - mysql1
 
   reader2:
-    image: proxysql/ci-infra:proxysql-mysqlbinlog-v2.3
+    image: proxysql/proxysql-mysqlbinlog
     container_name: ${COMPOSE_PROJECT}-reader2-1
     environment:
       - MYSQL_HOST=127.0.0.1
@@ -106,7 +106,7 @@ services:
       - mysql2
 
   reader3:
-    image: proxysql/ci-infra:proxysql-mysqlbinlog-v2.3
+    image: proxysql/proxysql-mysqlbinlog
     container_name: ${COMPOSE_PROJECT}-reader3-1
     environment:
       - MYSQL_HOST=127.0.0.1
