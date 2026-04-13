@@ -31,6 +31,9 @@ int main(int, char**) {
 		return -1;
 	}
 
+	diag("=== test_gtid_forwarding-t: START ===");
+	diag("Connecting to ProxySQL: host=%s, port=%d, user=%s", cl.host, cl.port, cl.username);
+
 	MYSQL* proxysql_mysql = mysql_init(NULL);
 
 	// Initialize connections
@@ -44,9 +47,34 @@ int main(int, char**) {
 		return -1;
 	}
 
+	diag("Connected. server_capabilities=0x%lx, CLIENT_SESSION_TRACKING=%s",
+		proxysql_mysql->server_capabilities,
+		(proxysql_mysql->server_capabilities & CLIENT_SESSION_TRACKING) ? "YES" : "NO");
+
+	// Check ProxySQL's default_session_track_gtids via admin (separate connection, doesn't affect test)
+	{
+		MYSQL* admin = mysql_init(NULL);
+		if (admin && mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+			if (mysql_query(admin, "SELECT variable_value FROM global_variables WHERE variable_name='mysql-default_session_track_gtids'") == 0) {
+				MYSQL_RES* res = mysql_store_result(admin);
+				if (res) {
+					MYSQL_ROW row = mysql_fetch_row(res);
+					if (row) {
+						diag("ProxySQL mysql-default_session_track_gtids = '%s'", row[0] ? row[0] : "NULL");
+					}
+					mysql_free_result(res);
+				}
+			}
+			mysql_close(admin);
+		}
+	}
+
 	MYSQL_QUERY(proxysql_mysql, "CREATE DATABASE IF NOT EXISTS test");
 	MYSQL_QUERY(proxysql_mysql, "CREATE TABLE IF NOT EXISTS test.gtid_forwarding_test (id INT NOT NULL)");
+
+	diag("Issuing: SET SESSION_TRACK_GTIDS=OWN_GTID");
 	MYSQL_QUERY(proxysql_mysql, "SET SESSION_TRACK_GTIDS=OWN_GTID");
+	diag("SET done. server_status=0x%x", proxysql_mysql->server_status);
 
 	uint last_id { 0 };
 
@@ -69,7 +97,18 @@ int main(int, char**) {
 		const char* t_insert_query = "INSERT INTO test.gtid_forwarding_test VALUES (%i)";
 		std::string insert_query {};
 		string_format(t_insert_query, insert_query, i);
+
+		if (i < 5) {
+			diag("[i=%u] Executing INSERT...", i);
+		}
+
 		MYSQL_QUERY(proxysql_mysql, insert_query.c_str());
+
+		if (i < 5) {
+			diag("[i=%u] server_status=0x%x, SESSION_STATE_CHANGED=%s",
+				i, proxysql_mysql->server_status,
+				(proxysql_mysql->server_status & SERVER_SESSION_STATE_CHANGED) ? "YES" : "NO");
+		}
 
 		std::string s_gtid_uuid {};
 
@@ -79,7 +118,13 @@ int main(int, char**) {
 			size_t length { 0 };
 			char gtid_uuid[128] = { 0 };
 
-			if (mysql_session_track_get_first(proxysql_mysql, SESSION_TRACK_GTIDS, &data, &length) == 0) {
+			int rc = mysql_session_track_get_first(proxysql_mysql, SESSION_TRACK_GTIDS, &data, &length);
+			if (i < 5) {
+				diag("[i=%u] session_track_get_first(GTIDS) rc=%d, length=%zu, data='%.*s'",
+					i, rc, length, (data && length > 0) ? (int)length : 3, (data && length > 0) ? data : "n/a");
+			}
+
+			if (rc == 0) {
 				if (length >= (sizeof(gtid_uuid) - 1)) {
 					length = sizeof(gtid_uuid) - 1;
 				}
@@ -92,6 +137,8 @@ int main(int, char**) {
 			if (gtid_uuid[0] != 0) {
 				s_gtid_uuid = gtid_uuid;
 			}
+		} else if (i < 5) {
+			diag("[i=%u] SESSION_STATE_CHANGED NOT set after INSERT", i);
 		}
 
 		// Verify the received GTID
@@ -105,6 +152,7 @@ int main(int, char**) {
 
 			last_id = new_id;
 		} else {
+			diag("[i=%u] UUID IS EMPTY — GTID not forwarded by ProxySQL", i);
 			ok(false, "'UUID' Should never be empty");
 			break;
 		}
@@ -113,5 +161,6 @@ int main(int, char**) {
 	MYSQL_QUERY(proxysql_mysql, "DROP TABLE test.gtid_forwarding_test");
 	mysql_close(proxysql_mysql);
 
+	diag("=== test_gtid_forwarding-t: DONE ===");
 	return exit_status();
 }
