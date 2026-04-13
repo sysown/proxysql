@@ -80,6 +80,8 @@ SQL
     else
         echo "Configuring slave (mysql${i})..."
         docker exec -i "${CONTAINER}" mysql -h127.0.0.1 -uroot ${PASS_OPT} <<SQL || { echo "ERROR: Failed slave configuration on ${CONTAINER}"; exit 1; }
+SET SQL_LOG_BIN=0;
+STOP SLAVE;
 SET GLOBAL READ_ONLY=1;
 RESET MASTER;
 
@@ -88,8 +90,6 @@ RESET MASTER;
 -- Configure replication
 CHANGE MASTER TO MASTER_HOST='mysql1.${INFRA}', MASTER_USER='root', MASTER_PASSWORD='${ROOT_PASSWORD}', MASTER_AUTO_POSITION=1;
 START SLAVE;
-
-FLUSH PRIVILEGES;
 SQL
     fi
 done
