@@ -69,58 +69,64 @@ services:
 
   reader1:
     image: proxysql/ci-infra:proxysql-mysqlbinlog-v2.3
-    hostname: reader1.${INFRA}
     container_name: ${COMPOSE_PROJECT}-reader1-1
     environment:
-      - MYSQL_HOST=mysql1.${INFRA}
-      - MYSQL_USER=binlog
-      - MYSQL_PASSWORD=binlog
-      - GTID_PORT=6020
+      - MYSQL_HOST=127.0.0.1
+      - BINLOG_READER_USER=root
+      - BINLOG_READER_PASSWORD=${ROOT_PASSWORD}
+      - LISTEN_PORT=6020
+      - BINLOG_READER_START_DELAY=${BINLOG_READER_START_DELAY}
+    command: >
+      bash -c "sleep ${BINLOG_READER_START_DELAY};
+      while true; do
+        sleep 5;
+        proxysql_binlog_reader -h \"$${MYSQL_HOST:-127.0.0.1}\" -u \"$${BINLOG_READER_USER:=root}\" -p \"$${BINLOG_READER_PASSWORD:-root}\" -P \"$${MYSQL_PORT:-3306}\" -l \"$${LISTEN_PORT:-6020}\" -f 2>&1 | tee -a /var/log/mysqlbinlog/error.log;
+      done"
     volumes:
       - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/reader1:/var/log/mysqlbinlog
-    networks:
-      backend:
-        aliases:
-          - reader1.${INFRA}
-          - mysql1.${INFRA}
+    network_mode: service:mysql1
     depends_on:
       - mysql1
 
   reader2:
     image: proxysql/ci-infra:proxysql-mysqlbinlog-v2.3
-    hostname: reader2.${INFRA}
     container_name: ${COMPOSE_PROJECT}-reader2-1
     environment:
-      - MYSQL_HOST=mysql2.${INFRA}
-      - MYSQL_USER=binlog
-      - MYSQL_PASSWORD=binlog
-      - GTID_PORT=6020
+      - MYSQL_HOST=127.0.0.1
+      - BINLOG_READER_USER=root
+      - BINLOG_READER_PASSWORD=${ROOT_PASSWORD}
+      - LISTEN_PORT=6020
+      - BINLOG_READER_START_DELAY=${BINLOG_READER_START_DELAY}
+    command: >
+      bash -c "sleep ${BINLOG_READER_START_DELAY};
+      while true; do
+        sleep 5;
+        proxysql_binlog_reader -h \"$${MYSQL_HOST:-127.0.0.1}\" -u \"$${BINLOG_READER_USER:=root}\" -p \"$${BINLOG_READER_PASSWORD:-root}\" -P \"$${MYSQL_PORT:-3306}\" -l \"$${LISTEN_PORT:-6020}\" -f 2>&1 | tee -a /var/log/mysqlbinlog/error.log;
+      done"
     volumes:
       - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/reader2:/var/log/mysqlbinlog
-    networks:
-      backend:
-        aliases:
-          - reader2.${INFRA}
-          - mysql2.${INFRA}
+    network_mode: service:mysql2
     depends_on:
       - mysql2
 
   reader3:
     image: proxysql/ci-infra:proxysql-mysqlbinlog-v2.3
-    hostname: reader3.${INFRA}
     container_name: ${COMPOSE_PROJECT}-reader3-1
     environment:
-      - MYSQL_HOST=mysql3.${INFRA}
-      - MYSQL_USER=binlog
-      - MYSQL_PASSWORD=binlog
-      - GTID_PORT=6020
+      - MYSQL_HOST=127.0.0.1
+      - BINLOG_READER_USER=root
+      - BINLOG_READER_PASSWORD=${ROOT_PASSWORD}
+      - LISTEN_PORT=6020
+      - BINLOG_READER_START_DELAY=${BINLOG_READER_START_DELAY}
+    command: >
+      bash -c "sleep ${BINLOG_READER_START_DELAY};
+      while true; do
+        sleep 5;
+        proxysql_binlog_reader -h \"$${MYSQL_HOST:-127.0.0.1}\" -u \"$${BINLOG_READER_USER:=root}\" -p \"$${BINLOG_READER_PASSWORD:-root}\" -P \"$${MYSQL_PORT:-3306}\" -l \"$${LISTEN_PORT:-6020}\" -f 2>&1 | tee -a /var/log/mysqlbinlog/error.log;
+      done"
     volumes:
       - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/reader3:/var/log/mysqlbinlog
-    networks:
-      backend:
-        aliases:
-          - reader3.${INFRA}
-          - mysql3.${INFRA}
+    network_mode: service:mysql3
     depends_on:
       - mysql3
 

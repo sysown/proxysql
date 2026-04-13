@@ -80,14 +80,14 @@ SQL
     else
         echo "Configuring replica (mysql${i})..."
         docker exec -i "${CONTAINER}" mysql -h127.0.0.1 -uroot ${PASS_OPT} <<SQL || { echo "ERROR: Failed replica configuration on ${CONTAINER}"; exit 1; }
+SET SQL_LOG_BIN=0;
+STOP REPLICA;
 SET GLOBAL READ_ONLY=1;
 RESET BINARY LOGS AND GTIDS;
 
 -- Configure replication using MySQL 8.4 syntax
 CHANGE REPLICATION SOURCE TO SOURCE_HOST='mysql1.${INFRA}', SOURCE_USER='root', SOURCE_PASSWORD='${ROOT_PASSWORD}', SOURCE_AUTO_POSITION=1;
 START REPLICA;
-
-FLUSH PRIVILEGES;
 SQL
     fi
 done
