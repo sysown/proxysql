@@ -34,9 +34,9 @@ done
 # Verify replication is working on nodes 2 and 3
 for PORT in 3307 3308; do
     echo -n "Checking replication on port ${PORT}..."
-    SLAVE_STATUS=$(docker exec "${CONTAINER}" mysql -h127.0.0.1 -P${PORT} -uroot -p"${ROOT_PASSWORD}" -e "SHOW SLAVE STATUS\G" 2>/dev/null)
-    IO_RUNNING=$(echo "${SLAVE_STATUS}" | grep "Slave_IO_Running:" | awk '{print $2}')
-    SQL_RUNNING=$(echo "${SLAVE_STATUS}" | grep "Slave_SQL_Running:" | awk '{print $2}')
+    SLAVE_STATUS=$(docker exec "${CONTAINER}" mysql -h127.0.0.1 -P${PORT} -uroot -p"${ROOT_PASSWORD}" -e "SHOW REPLICA STATUS\G" 2>/dev/null)
+    IO_RUNNING=$(echo "${SLAVE_STATUS}" | grep "Replica_IO_Running:" | awk '{print $2}')
+    SQL_RUNNING=$(echo "${SLAVE_STATUS}" | grep "Replica_SQL_Running:" | awk '{print $2}')
     if [ "${IO_RUNNING}" = "Yes" ] && [ "${SQL_RUNNING}" = "Yes" ]; then
         echo " OK (IO: Yes, SQL: Yes)"
     else
