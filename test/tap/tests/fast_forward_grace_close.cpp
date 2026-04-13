@@ -79,7 +79,10 @@ int main() {
 	rc = mysql_query(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 	ok(rc == 0, "Loaded MYSQL variables to runtime");
 
-	// 3. Get first binary log file name
+	// 3. Get first binary log file name and its size
+	// Use the size of the FIRST binlog file (the one we'll read), not the total
+	// of all files. With dbdeployer, the binlog accumulates data from all earlier
+	// tests, making total_bytes much larger than the first file we actually read.
 	string binlog_file;
 	long total_bytes = 0;
 	if (mysql_query(proxysql_conn, "SHOW BINARY LOGS") == 0) {
@@ -89,12 +92,13 @@ int main() {
 			while ((row = mysql_fetch_row(res))) {
 				if (binlog_file.empty() && row[0]) {
 					binlog_file = row[0];
+					total_bytes = atol(row[1]);
 				}
-				total_bytes += atol(row[1]);
 			}
 			mysql_free_result(res);
 		}
 	}
+	diag("Binlog file: %s, size: %ld bytes", binlog_file.c_str(), total_bytes);
 	mysql_close(proxysql_conn);
 	ok(!binlog_file.empty(), "Retrieved binary log: %s", binlog_file.c_str());
 
