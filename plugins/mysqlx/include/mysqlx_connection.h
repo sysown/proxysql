@@ -7,6 +7,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <optional>
 
 class MysqlxConnection {
 public:
@@ -113,6 +114,15 @@ private:
 	MysqlxDataStream backend_ds_;
 	bool backend_tls_required_;
 	SSL_CTX* backend_ssl_ctx_;
+
+	int step_auth_capabilities_get();
+	int step_auth_capabilities_get_sent();
+	int step_auth_capabilities_set_sent();
+	int step_auth_tls_handshake();
+	int step_auth_authenticate_start_sent();
+	int step_auth_continue_sent();
+	int send_client_frame(uint8_t msg_type, const std::string& payload);
+	std::optional<MysqlxFrame> read_auth_frame();
 };
 
 #endif

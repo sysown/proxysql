@@ -96,6 +96,7 @@ static void test_ssl_handshake_and_io() {
 	SSL_CTX* server_ctx = create_test_ssl_ctx();
 	SSL_CTX* client_ctx = SSL_CTX_new(TLS_method());
 	SSL_CTX_set_min_proto_version(client_ctx, TLS1_2_VERSION);
+	// Test-only: using self-signed test certs, no CA to verify against
 	SSL_CTX_set_verify(client_ctx, SSL_VERIFY_NONE, nullptr);
 
 	if (!server_ctx || !client_ctx) {

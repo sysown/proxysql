@@ -59,18 +59,15 @@ bool sync_disk_to_memory(SQLite3DB& admindb) {
 		char* err = nullptr;
 		std::string q = "SELECT COUNT(*) FROM disk.";
 		q += tbl;
-		SQLite3_result* disk_res = admindb.execute_statement(q.c_str(), &err);
-		if (err) {
-			free(err);
-			delete disk_res;
-			continue;
-		}
+		std::unique_ptr<SQLite3_result> disk_res(admindb.execute_statement(q.c_str(), &err));
+		std::unique_ptr<char, void(*)(void*)> err_guard(err, &free);
+		if (err) continue;
 		if (!disk_res || disk_res->rows.empty() || !disk_res->rows[0] || !disk_res->rows[0]->fields[0]) {
-			delete disk_res;
 			continue;
 		}
 		int disk_cnt = atoi(disk_res->rows[0]->fields[0]);
-		delete disk_res;
+		disk_res.reset();
+		err_guard.reset();
 		if (disk_cnt == 0) continue;
 
 		q = "DELETE FROM main.";
@@ -97,14 +94,15 @@ bool copy_to_runtime(SQLite3DB& admindb) {
 		char* err = nullptr;
 		std::string q = "SELECT COUNT(*) FROM main.";
 		q += p[0];
-		SQLite3_result* res = admindb.execute_statement(q.c_str(), &err);
-		if (err) { free(err); delete res; continue; }
+		std::unique_ptr<SQLite3_result> res(admindb.execute_statement(q.c_str(), &err));
+		std::unique_ptr<char, void(*)(void*)> err_guard(err, &free);
+		if (err) continue;
 		if (!res || res->rows.empty() || !res->rows[0] || !res->rows[0]->fields[0]) {
-			delete res;
 			continue;
 		}
 		int cnt = atoi(res->rows[0]->fields[0]);
-		delete res;
+		res.reset();
+		err_guard.reset();
 		if (cnt == 0) continue;
 
 		q = "DELETE FROM main.";
@@ -145,10 +143,10 @@ bool mysqlx_start() {
 	int max_cached = ctx.config_store->get_max_cached_connections();
 
 	for (int i = 0; i < pool_size; i++) {
-		Mysqlx_Thread* thr = new Mysqlx_Thread();
+		auto thr = std::make_unique<Mysqlx_Thread>();
 		thr->init(i);
 		thr->set_max_cached_connections(static_cast<size_t>(max_cached));
-		ctx.threads.push_back(thr);
+		ctx.threads.push_back(std::move(thr));
 	}
 
 	if (ctx.services != nullptr && ctx.services->get_admindb != nullptr) {
@@ -161,9 +159,7 @@ bool mysqlx_start() {
 					&error
 				)
 			);
-			if (error != nullptr) {
-				free(error);
-			}
+			std::unique_ptr<char, void(*)(void*)> error_guard(error, &free);
 			if (result && !result->rows.empty()) {
 				int ti = 0;
 				for (auto* row : result->rows) {
@@ -176,7 +172,7 @@ bool mysqlx_start() {
 					parse_bind_addr(bind_str, host, port);
 
 					if (ti < static_cast<int>(ctx.threads.size())) {
-						Mysqlx_Thread* thr = ctx.threads[ti % pool_size];
+						Mysqlx_Thread* thr = ctx.threads[ti % pool_size].get();
 						thr->add_listener(host.c_str(), port);
 					}
 					ti++;
@@ -185,7 +181,7 @@ bool mysqlx_start() {
 		}
 	}
 
-	for (auto* thr : ctx.threads) {
+	for (auto& thr : ctx.threads) {
 		thr->start();
 	}
 
@@ -196,11 +192,8 @@ bool mysqlx_start() {
 bool mysqlx_stop() {
 	MysqlxPluginContext& ctx = mysqlx_context();
 
-	for (auto* thr : ctx.threads) {
+	for (auto& thr : ctx.threads) {
 		thr->stop();
-	}
-	for (auto* thr : ctx.threads) {
-		delete thr;
 	}
 	ctx.threads.clear();
 

@@ -32,7 +32,7 @@ int main() {
 	// Test 4-7: Flush to SQLite.
 	{
 		SQLite3DB statsdb;
-		statsdb.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		statsdb.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 		statsdb.execute(
 			"CREATE TABLE stats_mysqlx_routes ("
 			" name VARCHAR NOT NULL,"
@@ -110,7 +110,7 @@ int main() {
 
 	{
 		SQLite3DB statsdb;
-		statsdb.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		statsdb.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 		statsdb.execute(
 			"CREATE TABLE stats_mysqlx_routes ("
 			" name VARCHAR NOT NULL,"
@@ -129,7 +129,7 @@ int main() {
 	}
 	{
 		SQLite3DB statsdb;
-		statsdb.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		statsdb.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 		statsdb.execute(
 			"CREATE TABLE stats_mysqlx_routes ("
 			" name VARCHAR NOT NULL,"
@@ -153,7 +153,7 @@ int main() {
 	}
 	{
 		SQLite3DB statsdb;
-		statsdb.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		statsdb.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 		statsdb.execute(
 			"CREATE TABLE stats_mysqlx_routes ("
 			" name VARCHAR NOT NULL,"
@@ -174,7 +174,7 @@ int main() {
 	}
 	{
 		SQLite3DB statsdb;
-		statsdb.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		statsdb.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 		statsdb.execute(
 			"CREATE TABLE stats_mysqlx_routes ("
 			" name VARCHAR NOT NULL,"
@@ -197,7 +197,7 @@ int main() {
 	}
 	{
 		SQLite3DB statsdb;
-		statsdb.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		statsdb.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 		statsdb.execute(
 			"CREATE TABLE stats_mysqlx_routes ("
 			" name VARCHAR NOT NULL,"
@@ -273,7 +273,7 @@ int main() {
 	{
 		MysqlxStatsStore store;
 		SQLite3DB statsdb;
-		statsdb.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		statsdb.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 		statsdb.execute(
 			"CREATE TABLE stats_mysqlx_routes ("
 			" name VARCHAR NOT NULL,"

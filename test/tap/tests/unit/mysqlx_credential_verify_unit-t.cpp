@@ -6,8 +6,16 @@
 #include <cstring>
 #include <vector>
 
+// Test-only credential constants (not real credentials)
+static const char TEST_PASSWORD_A[] = "testpass";
+static const char TEST_PASSWORD_B[] = "correctpass";
+static const char TEST_PASSWORD_C[] = "wrongpass";
+static const char TEST_PASSWORD_D[] = "password123";
+static const char TEST_PASSWORD_E[] = "pass1";
+static const char TEST_PASSWORD_F[] = "pass2";
+
 static void test_verify_hash_correct() {
-	std::string password = "testpass";
+	std::string password = TEST_PASSWORD_A;
 	std::vector<uint8_t> hash = mysqlx_mysql41_hash(password);
 
 	std::vector<uint8_t> challenge(20, 0xAB);
@@ -20,11 +28,11 @@ static void test_verify_hash_correct() {
 }
 
 static void test_verify_hash_wrong_password() {
-	std::vector<uint8_t> hash = mysqlx_mysql41_hash("correctpass");
+	std::vector<uint8_t> hash = mysqlx_mysql41_hash(TEST_PASSWORD_B);
 	std::vector<uint8_t> challenge(20, 0xCD);
-	std::vector<uint8_t> scramble = mysqlx_mysql41_scramble(challenge, "wrongpass");
+	std::vector<uint8_t> scramble = mysqlx_mysql41_scramble(challenge, TEST_PASSWORD_C);
 
-	ok(!mysqlx_mysql41_verify(challenge, scramble, "correctpass"),
+	ok(!mysqlx_mysql41_verify(challenge, scramble, TEST_PASSWORD_B),
 	   "verify returns false for wrong scramble vs password");
 	ok(!mysqlx_mysql41_verify_hash(challenge, scramble, hash),
 	   "verify_hash returns false for wrong scramble vs hash");
@@ -40,7 +48,7 @@ static void test_verify_hash_empty_password() {
 }
 
 static void test_verify_hash_wrong_size_inputs() {
-	std::vector<uint8_t> hash = mysqlx_mysql41_hash("pass");
+	std::vector<uint8_t> hash = mysqlx_mysql41_hash(TEST_PASSWORD_A);
 	std::vector<uint8_t> short_hash(10, 0xFF);
 	std::vector<uint8_t> challenge(20, 0x22);
 	std::vector<uint8_t> short_scramble(10, 0x33);
@@ -49,7 +57,7 @@ static void test_verify_hash_wrong_size_inputs() {
 	   "verify_hash rejects short scramble");
 	ok(!mysqlx_mysql41_verify_hash(challenge, short_scramble, short_hash),
 	   "verify_hash rejects short hash");
-	ok(!mysqlx_mysql41_verify(challenge, short_scramble, "pass"),
+	ok(!mysqlx_mysql41_verify(challenge, short_scramble, TEST_PASSWORD_A),
 	   "verify rejects short scramble");
 }
 
@@ -90,15 +98,15 @@ static void test_hex_decode_lowercase() {
 }
 
 static void test_mysql41_hash_consistency() {
-	std::vector<uint8_t> h1 = mysqlx_mysql41_hash("password123");
-	std::vector<uint8_t> h2 = mysqlx_mysql41_hash("password123");
+	std::vector<uint8_t> h1 = mysqlx_mysql41_hash(TEST_PASSWORD_D);
+	std::vector<uint8_t> h2 = mysqlx_mysql41_hash(TEST_PASSWORD_D);
 	ok(h1 == h2, "same password produces same hash");
 	ok(h1.size() == 20, "hash is 20 bytes (SHA1)");
 }
 
 static void test_mysql41_hash_different_passwords() {
-	std::vector<uint8_t> h1 = mysqlx_mysql41_hash("pass1");
-	std::vector<uint8_t> h2 = mysqlx_mysql41_hash("pass2");
+	std::vector<uint8_t> h1 = mysqlx_mysql41_hash(TEST_PASSWORD_E);
+	std::vector<uint8_t> h2 = mysqlx_mysql41_hash(TEST_PASSWORD_F);
 	ok(h1 != h2, "different passwords produce different hashes");
 }
 

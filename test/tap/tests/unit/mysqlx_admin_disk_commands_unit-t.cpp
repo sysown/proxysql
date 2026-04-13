@@ -70,11 +70,11 @@ int main() {
 	ok(mysqlx_register_admin_schema(services), "mysqlx_register_admin_schema succeeds");
 
 	SQLite3DB admindb;
-	admindb.open(const_cast<char*>("file:mem_admindb?mode=memory&cache=shared"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI);
+	admindb.open(const_cast<char*>("file:mem_admindb?mode=memory&cache=shared")  // NOSONAR, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI);
 	create_all_tables(admindb);
 
 	SQLite3DB configdb;
-	configdb.open(const_cast<char*>("file:mem_configdb?mode=memory&cache=shared"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI);
+	configdb.open(const_cast<char*>("file:mem_configdb?mode=memory&cache=shared")  // NOSONAR, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI);
 	create_all_tables(configdb);
 
 	admindb.execute("ATTACH DATABASE 'file:mem_configdb?mode=memory&cache=shared' AS disk");

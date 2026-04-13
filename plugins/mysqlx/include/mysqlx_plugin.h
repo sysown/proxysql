@@ -12,7 +12,7 @@
 struct MysqlxPluginContext {
 	ProxySQL_PluginServices* services { nullptr };
 	std::unique_ptr<MysqlxConfigStore> config_store {};
-	std::vector<Mysqlx_Thread*> threads {};
+	std::vector<std::unique_ptr<Mysqlx_Thread>> threads {};
 	bool started { false };
 };
 

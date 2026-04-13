@@ -58,7 +58,7 @@ int main() {
 	// ====== Original tests (1-8) ======
 
 	SQLite3DB db;
-	db.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+	db.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 	create_runtime_tables(db);
 
 	db.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, use_ssl, status) "
@@ -124,7 +124,7 @@ int main() {
 
 	{
 		SQLite3DB db3;
-		db3.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		db3.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 		create_runtime_tables(db3);
 		db3.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, use_ssl, status) VALUES (30, 'rr-a', 3306, 0, 'ONLINE')");
 		db3.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, use_ssl, status) VALUES (30, 'rr-b', 3306, 0, 'ONLINE')");
@@ -144,7 +144,7 @@ int main() {
 
 	{
 		SQLite3DB dbw;
-		dbw.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		dbw.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 		create_runtime_tables(dbw);
 		dbw.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, use_ssl, status) VALUES (31, 'w-a', 3306, 0, 'ONLINE')");
 		dbw.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, use_ssl, status) VALUES (31, 'w-b', 3306, 0, 'ONLINE')");
@@ -162,7 +162,7 @@ int main() {
 
 	{
 		SQLite3DB dbphg;
-		dbphg.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		dbphg.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 		create_runtime_tables(dbphg);
 		dbphg.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, use_ssl, status) VALUES (10, 'hg10-a', 3306, 0, 'ONLINE')");
 		dbphg.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, use_ssl, status) VALUES (10, 'hg10-b', 3306, 0, 'ONLINE')");
@@ -184,7 +184,7 @@ int main() {
 
 	{
 		SQLite3DB dbs;
-		dbs.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		dbs.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 		create_runtime_tables(dbs);
 		dbs.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, use_ssl, status) VALUES (32, 'single', 3306, 0, 'ONLINE')");
 		dbs.execute("INSERT INTO runtime_mysqlx_routes (name, bind, destination_hostgroup, strategy, active) VALUES ('rr_single', '127.0.0.1:6608', 32, 'round_robin', 1)");
@@ -201,7 +201,7 @@ int main() {
 
 	{
 		SQLite3DB dbfa3;
-		dbfa3.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		dbfa3.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 		create_runtime_tables(dbfa3);
 		dbfa3.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, use_ssl, status) VALUES (33, 'fa-a', 3306, 0, 'ONLINE')");
 		dbfa3.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, use_ssl, status) VALUES (33, 'fa-b', 3306, 0, 'ONLINE')");
@@ -220,7 +220,7 @@ int main() {
 
 	{
 		SQLite3DB dbmix;
-		dbmix.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		dbmix.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 		create_runtime_tables(dbmix);
 		dbmix.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, use_ssl, status) VALUES (34, 'mix-a', 3306, 0, 'ONLINE')");
 		dbmix.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, use_ssl, status) VALUES (34, 'mix-b', 3306, 0, 'ONLINE')");
@@ -244,7 +244,7 @@ int main() {
 
 	{
 		SQLite3DB dbfb;
-		dbfb.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		dbfb.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 		create_runtime_tables(dbfb);
 		dbfb.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, use_ssl, status) VALUES (40, 'primary-srv', 3306, 0, 'ONLINE')");
 		dbfb.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, use_ssl, status) VALUES (41, 'fallback-srv', 3306, 0, 'ONLINE')");
@@ -259,7 +259,7 @@ int main() {
 
 	{
 		SQLite3DB dbfb2;
-		dbfb2.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		dbfb2.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 		create_runtime_tables(dbfb2);
 		dbfb2.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, use_ssl, status) VALUES (50, 'fb-only', 3306, 0, 'ONLINE')");
 		dbfb2.execute("INSERT INTO runtime_mysqlx_routes (name, bind, destination_hostgroup, fallback_hostgroup, strategy, active) VALUES ('fb_fallback', '127.0.0.1:6614', 42, 50, 'first_available', 1)");
@@ -273,7 +273,7 @@ int main() {
 
 	{
 		SQLite3DB dbfb3;
-		dbfb3.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		dbfb3.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 		create_runtime_tables(dbfb3);
 		dbfb3.execute("INSERT INTO runtime_mysqlx_routes (name, bind, destination_hostgroup, fallback_hostgroup, strategy, active) VALUES ('fb_none', '127.0.0.1:6615', 43, 44, 'first_available', 1)");
 
@@ -286,7 +286,7 @@ int main() {
 
 	{
 		SQLite3DB dbrrfb;
-		dbrrfb.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		dbrrfb.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 		create_runtime_tables(dbrrfb);
 		dbrrfb.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, use_ssl, status) VALUES (45, 'rr-pri', 3306, 0, 'ONLINE')");
 		dbrrfb.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, use_ssl, status) VALUES (46, 'rr-fb', 3306, 0, 'ONLINE')");
@@ -303,7 +303,7 @@ int main() {
 
 	{
 		SQLite3DB dbia;
-		dbia.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		dbia.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 		create_runtime_tables(dbia);
 		dbia.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, use_ssl, status) VALUES (50, 'ia-srv', 3306, 0, 'ONLINE')");
 		dbia.execute("INSERT INTO runtime_mysqlx_routes (name, bind, destination_hostgroup, strategy, active) VALUES ('inactive_route', '127.0.0.1:6617', 50, 'first_available', 0)");
@@ -317,7 +317,7 @@ int main() {
 
 	{
 		SQLite3DB dbia2;
-		dbia2.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		dbia2.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 		create_runtime_tables(dbia2);
 		dbia2.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, use_ssl, status) VALUES (51, 'ia-srv1', 3306, 0, 'ONLINE')");
 		dbia2.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, use_ssl, status) VALUES (52, 'ia-srv2', 3306, 0, 'ONLINE')");
@@ -334,7 +334,7 @@ int main() {
 
 	{
 		SQLite3DB dbia3;
-		dbia3.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		dbia3.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 		create_runtime_tables(dbia3);
 		dbia3.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, use_ssl, status) VALUES (53, 'ia-srv3', 3306, 0, 'ONLINE')");
 		dbia3.execute("INSERT INTO runtime_mysqlx_routes (name, bind, destination_hostgroup, strategy, active) VALUES ('all_off1', '127.0.0.1:6620', 53, 'first_available', 0)");
@@ -352,7 +352,7 @@ int main() {
 
 	{
 		SQLite3DB dbeo;
-		dbeo.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		dbeo.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 		create_runtime_tables(dbeo);
 		dbeo.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, use_ssl, status) VALUES (60, 'eo-srv', 3306, 0, 'ONLINE')");
 		dbeo.execute("INSERT INTO runtime_mysqlx_backend_endpoints (hostname, mysql_port, mysqlx_port, use_ssl) VALUES ('eo-srv', 3306, 33070, 0)");
@@ -367,7 +367,7 @@ int main() {
 
 	{
 		SQLite3DB dbss;
-		dbss.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		dbss.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 		create_runtime_tables(dbss);
 		dbss.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, use_ssl, status) VALUES (61, 'ssl-srv', 3306, 0, 'ONLINE')");
 		dbss.execute("INSERT INTO runtime_mysqlx_backend_endpoints (hostname, mysql_port, mysqlx_port, use_ssl) VALUES ('ssl-srv', 3306, 33060, 1)");
@@ -382,7 +382,7 @@ int main() {
 
 	{
 		SQLite3DB dbdef;
-		dbdef.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		dbdef.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 		create_runtime_tables(dbdef);
 		dbdef.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, use_ssl, status) VALUES (62, 'def-srv', 3306, 0, 'ONLINE')");
 		dbdef.execute("INSERT INTO runtime_mysqlx_routes (name, bind, destination_hostgroup, strategy, active) VALUES ('eo_def', '127.0.0.1:6624', 62, 'first_available', 1)");
@@ -399,7 +399,7 @@ int main() {
 
 	{
 		SQLite3DB dbmr;
-		dbmr.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		dbmr.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 		create_runtime_tables(dbmr);
 		dbmr.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, use_ssl, status) VALUES (70, 'mr-a', 3306, 0, 'ONLINE')");
 		dbmr.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, use_ssl, status) VALUES (71, 'mr-b', 3306, 0, 'ONLINE')");
@@ -416,7 +416,7 @@ int main() {
 
 	{
 		SQLite3DB dbss2;
-		dbss2.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		dbss2.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 		create_runtime_tables(dbss2);
 		dbss2.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, use_ssl, status) VALUES (80, 'ss-a', 3306, 0, 'ONLINE')");
 		dbss2.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, use_ssl, status) VALUES (80, 'ss-b', 3306, 0, 'ONLINE')");

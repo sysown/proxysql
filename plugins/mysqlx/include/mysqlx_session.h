@@ -65,7 +65,7 @@ public:
 	MysqlxSession();
 	~MysqlxSession();
 
-	void init(int fd, void* thread_ptr);
+	void init(int fd, Mysqlx_Thread* thread_ptr);
 	void reset();
 
 	int handler();
@@ -104,6 +104,10 @@ private:
 
 	void handler_tls_accept_init();
 
+	void handle_auth_mysql41(const std::string& auth_data);
+	void handle_auth_plain(const std::string& auth_data);
+	void forward_frame_to_client(uint8_t msg_type, const MysqlxFrame& frame);
+
 	int dispatch_client_message(uint8_t msg_type);
 	void forward_to_backend();
 	void return_backend_to_pool();
@@ -120,7 +124,7 @@ private:
 	MysqlxDataStream client_ds_;
 	MysqlxDataStream server_ds_;
 	MysqlxConnection* backend_conn_;
-	void* thread_ptr_;
+	Mysqlx_Thread* thread_ptr_;
 	Status status_;
 	bool healthy;
 	std::string username_;

@@ -345,8 +345,8 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	mysqlx_concurrent_unit-t \
 	mysqlx_backend_auth_unit-t \
 	mysqlx_credential_verify_unit-t \
- 	mysqlx_robustness_unit-t \
- 	mysqlx_tls_unit-t
+	mysqlx_robustness_unit-t \
+	mysqlx_tls_unit-t \
 	pgsql_servers_ssl_params_unit-t
 
 .PHONY: all

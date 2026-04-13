@@ -49,7 +49,7 @@ MysqlxSession::~MysqlxSession() {
 	}
 }
 
-void MysqlxSession::init(int fd, void* thread_ptr) {
+void MysqlxSession::init(int fd, Mysqlx_Thread* thread_ptr) {
 	client_ds_.init(XDS_FRONTEND, fd);
 	client_ds_.set_nonblocking();
 	status_ = CONNECTING_CLIENT;
@@ -126,6 +126,14 @@ uint8_t MysqlxSession::extract_msg_type_from_frame(const MysqlxFrame& frame) {
 	return frame[4];
 }
 
+void MysqlxSession::forward_frame_to_client(uint8_t msg_type, const MysqlxFrame& frame) {
+	if (frame.size() > 5) {
+		client_ds_.enqueue_frame(msg_type, frame.data() + 5, frame.size() - 5);
+	} else {
+		client_ds_.enqueue_frame(msg_type, nullptr, 0);
+	}
+}
+
 void MysqlxSession::handler_connecting_client() {
 	if (!client_ds_.has_complete_frame()) return;
 
@@ -179,8 +187,7 @@ void MysqlxSession::handler_capabilities_set() {
 			for (const auto& cap : cap_set.capabilities().capabilities()) {
 				if (cap.name() == "tls") {
 					client_ds_.pop_frame();
-					Mysqlx_Thread* thread = static_cast<Mysqlx_Thread*>(thread_ptr_);
-					SSL_CTX* ctx = thread ? thread->get_ssl_ctx() : nullptr;
+					SSL_CTX* ctx = thread_ptr_ ? thread_ptr_->get_ssl_ctx() : nullptr;
 					if (!ctx) {
 						send_error(3150, "TLS is not configured on server");
 						healthy = false;
@@ -198,6 +205,74 @@ void MysqlxSession::handler_capabilities_set() {
 	client_ds_.pop_frame();
 	send_ok();
 	status_ = CONNECTING_CLIENT;
+}
+
+void MysqlxSession::handle_auth_mysql41(const std::string& auth_data) {
+	size_t first_nul = auth_data.find('\0');
+	if (first_nul != std::string::npos) {
+		size_t second_nul = auth_data.find('\0', first_nul + 1);
+		if (second_nul != std::string::npos) {
+			schema_ = auth_data.substr(first_nul + 1, second_nul - first_nul - 1);
+			size_t third_nul = auth_data.find('\0', second_nul + 1);
+			if (third_nul != std::string::npos) {
+				username_ = auth_data.substr(second_nul + 1, third_nul - second_nul - 1);
+			} else {
+				username_ = auth_data.substr(second_nul + 1);
+			}
+		}
+	}
+
+	auth_challenge_.resize(CHALLENGE_LENGTH);
+	RAND_bytes(auth_challenge_.data(), CHALLENGE_LENGTH);
+
+	std::string challenge_str(auth_challenge_.begin(), auth_challenge_.end());
+	send_auth_continue(challenge_str);
+	status_ = X_AUTH_CHALLENGE_SENT;
+}
+
+void MysqlxSession::handle_auth_plain(const std::string& auth_data) {
+	if (!client_ds_.is_encrypted()) {
+		send_error(1045, "PLAIN authentication requires TLS");
+		healthy = false;
+		return;
+	}
+
+	if (auth_data.empty() || auth_data[0] != '\0') {
+		send_error(1045, "Invalid PLAIN auth data");
+		healthy = false;
+		return;
+	}
+
+	size_t second_nul = auth_data.find('\0', 1);
+	if (second_nul == std::string::npos) {
+		send_error(1045, "Invalid PLAIN auth data format");
+		healthy = false;
+		return;
+	}
+
+	username_ = auth_data.substr(1, second_nul - 1);
+	std::string password = auth_data.substr(second_nul + 1);
+
+	if (credential_lookup_) {
+		MysqlxCredentials creds = credential_lookup_(username_);
+		if (!creds.x_enabled || creds.password_hash.empty()) {
+			send_error(1045, "Access denied for user");
+			healthy = false;
+			return;
+		}
+		std::vector<uint8_t> input_hash_vec = mysqlx_mysql41_hash(password);
+		if (input_hash_vec.size() != 20 ||
+		    CRYPTO_memcmp(input_hash_vec.data(), creds.password_hash.data(),
+		                  std::min(input_hash_vec.size(), creds.password_hash.size())) != 0) {
+			send_error(1045, "Access denied for user");
+			healthy = false;
+			return;
+		}
+	}
+
+	last_active_time_ = monotonic_time_ms();
+	send_auth_ok();
+	status_ = WAITING_CLIENT_XMSG;
 }
 
 void MysqlxSession::handler_auth_start() {
@@ -229,76 +304,12 @@ void MysqlxSession::handler_auth_start() {
 	}
 
 	client_ds_.pop_frame();
-
 	auth_method_ = auth_start.mech_name();
 
 	if (auth_method_ == "MYSQL41") {
-		const std::string& auth_data = auth_start.auth_data();
-		size_t first_nul = auth_data.find('\0');
-		if (first_nul != std::string::npos) {
-			size_t second_nul = auth_data.find('\0', first_nul + 1);
-			if (second_nul != std::string::npos) {
-				schema_ = auth_data.substr(first_nul + 1, second_nul - first_nul - 1);
-				size_t third_nul = auth_data.find('\0', second_nul + 1);
-				if (third_nul != std::string::npos) {
-					username_ = auth_data.substr(second_nul + 1, third_nul - second_nul - 1);
-				} else {
-					username_ = auth_data.substr(second_nul + 1);
-				}
-			}
-		}
-
-		auth_challenge_.resize(CHALLENGE_LENGTH);
-		RAND_bytes(auth_challenge_.data(), CHALLENGE_LENGTH);
-
-		std::string challenge_str(auth_challenge_.begin(), auth_challenge_.end());
-		send_auth_continue(challenge_str);
-
-		status_ = X_AUTH_CHALLENGE_SENT;
+		handle_auth_mysql41(auth_start.auth_data());
 	} else if (auth_method_ == "PLAIN") {
-		if (!client_ds_.is_encrypted()) {
-			send_error(1045, "PLAIN authentication requires TLS");
-			healthy = false;
-			return;
-		}
-
-		const std::string& auth_data = auth_start.auth_data();
-		if (auth_data.empty() || auth_data[0] != '\0') {
-			send_error(1045, "Invalid PLAIN auth data");
-			healthy = false;
-			return;
-		}
-
-		size_t second_nul = auth_data.find('\0', 1);
-		if (second_nul == std::string::npos) {
-			send_error(1045, "Invalid PLAIN auth data format");
-			healthy = false;
-			return;
-		}
-
-		username_ = auth_data.substr(1, second_nul - 1);
-		std::string password = auth_data.substr(second_nul + 1);
-
-		if (credential_lookup_) {
-			MysqlxCredentials creds = credential_lookup_(username_);
-			if (!creds.x_enabled || creds.password_hash.empty()) {
-				send_error(1045, "Access denied for user");
-				healthy = false;
-				return;
-			}
-			std::vector<uint8_t> input_hash_vec = mysqlx_mysql41_hash(password);
-			if (input_hash_vec.size() != 20 ||
-			    CRYPTO_memcmp(input_hash_vec.data(), creds.password_hash.data(),
-			                  std::min(input_hash_vec.size(), creds.password_hash.size())) != 0) {
-				send_error(1045, "Access denied for user");
-				healthy = false;
-				return;
-			}
-		}
-
-		last_active_time_ = monotonic_time_ms();
-		send_auth_ok();
-		status_ = WAITING_CLIENT_XMSG;
+		handle_auth_plain(auth_start.auth_data());
 	} else {
 		send_error(1251, "Unsupported authentication method");
 		healthy = false;
@@ -533,24 +544,11 @@ void MysqlxSession::handler_waiting_server_msg() {
 		const auto& frame = server_ds_.front_frame();
 		uint8_t msg_type = frame[4];
 
-		if (msg_type == Mysqlx::ServerMessages_Type_NOTICE) {
-			if (frame.size() > 5) {
-				client_ds_.enqueue_frame(msg_type, frame.data() + 5, frame.size() - 5);
-			} else {
-				client_ds_.enqueue_frame(msg_type, nullptr, 0);
-			}
-			server_ds_.pop_frame();
-			continue;
-		}
-
-		if (frame.size() > 5) {
-			client_ds_.enqueue_frame(msg_type, frame.data() + 5, frame.size() - 5);
-		} else {
-			client_ds_.enqueue_frame(msg_type, nullptr, 0);
-		}
+		forward_frame_to_client(msg_type, frame);
 		server_ds_.pop_frame();
 
-		if (is_terminal_for_state(msg_type)) {
+		if (msg_type != Mysqlx::ServerMessages_Type_NOTICE &&
+		    is_terminal_for_state(msg_type)) {
 			got_terminal = true;
 		}
 	}
@@ -589,11 +587,7 @@ void MysqlxSession::handler_session_reset_waiting() {
 		uint8_t msg_type = frame[4];
 
 		if (msg_type == Mysqlx::ServerMessages_Type_NOTICE) {
-			if (frame.size() > 5) {
-				client_ds_.enqueue_frame(msg_type, frame.data() + 5, frame.size() - 5);
-			} else {
-				client_ds_.enqueue_frame(msg_type, nullptr, 0);
-			}
+			forward_frame_to_client(msg_type, frame);
 			server_ds_.pop_frame();
 			continue;
 		}
@@ -612,11 +606,7 @@ void MysqlxSession::handler_session_reset_waiting() {
 		}
 
 		if (msg_type == Mysqlx::ServerMessages_Type_ERROR) {
-			if (frame.size() > 5) {
-				client_ds_.enqueue_frame(msg_type, frame.data() + 5, frame.size() - 5);
-			} else {
-				client_ds_.enqueue_frame(msg_type, nullptr, 0);
-			}
+			forward_frame_to_client(msg_type, frame);
 			server_ds_.pop_frame();
 			client_ds_.write_to_net();
 			return_backend_to_pool();
@@ -643,8 +633,7 @@ void MysqlxSession::handler_tls_accept_init() {
 	}
 
 	if (!client_ds_.ssl_init_done()) {
-		Mysqlx_Thread* thread = static_cast<Mysqlx_Thread*>(thread_ptr_);
-		SSL_CTX* ctx = thread ? thread->get_ssl_ctx() : nullptr;
+		SSL_CTX* ctx = thread_ptr_ ? thread_ptr_->get_ssl_ctx() : nullptr;
 		if (!ctx) {
 			send_error(3150, "TLS is not configured on server");
 			healthy = false;
@@ -673,9 +662,8 @@ void MysqlxSession::handler_tls_accept_init() {
 
 void MysqlxSession::handler_connecting_server() {
 	if (!backend_conn_) {
-		Mysqlx_Thread* thread = static_cast<Mysqlx_Thread*>(thread_ptr_);
-		if (thread) {
-			backend_conn_ = thread->get_connection_from_cache(
+		if (thread_ptr_) {
+			backend_conn_ = thread_ptr_->get_connection_from_cache(
 				target_hostgroup_, username_.c_str(), schema_.c_str());
 		}
 
@@ -721,10 +709,9 @@ void MysqlxSession::handler_connecting_server() {
 		backend_conn_->set_backend_schema(schema_.c_str());
 
 		if (client_ds_.is_encrypted() && tls_mode_ != TLS_PASSTHROUGH) {
-			Mysqlx_Thread* thread = static_cast<Mysqlx_Thread*>(thread_ptr_);
-			if (thread && thread->get_ssl_ctx()) {
+			if (thread_ptr_ && thread_ptr_->get_ssl_ctx()) {
 				backend_conn_->set_backend_tls_required(true);
-				backend_conn_->set_ssl_ctx(thread->get_ssl_ctx());
+				backend_conn_->set_ssl_ctx(thread_ptr_->get_ssl_ctx());
 			}
 		}
 
@@ -762,9 +749,8 @@ void MysqlxSession::handler_connecting_server() {
 
 void MysqlxSession::return_backend_to_pool() {
 	if (!backend_conn_) return;
-	Mysqlx_Thread* thread = static_cast<Mysqlx_Thread*>(thread_ptr_);
-	if (thread) {
-		thread->return_connection_to_cache(backend_conn_);
+	if (thread_ptr_) {
+		thread_ptr_->return_connection_to_cache(backend_conn_);
 	} else {
 		delete backend_conn_;
 	}
@@ -827,8 +813,7 @@ void MysqlxSession::send_capabilities() {
 	v2->mutable_scalar()->set_type(Mysqlx::Datatypes::Scalar::V_STRING);
 	v2->mutable_scalar()->mutable_v_string()->set_value("PLAIN");
 
-	Mysqlx_Thread* thread = static_cast<Mysqlx_Thread*>(thread_ptr_);
-	SSL_CTX* ctx = thread ? thread->get_ssl_ctx() : nullptr;
+	SSL_CTX* ctx = thread_ptr_ ? thread_ptr_->get_ssl_ctx() : nullptr;
 	if (ctx) {
 		auto* tls_cap = caps.add_capabilities();
 		tls_cap->set_name("tls");
