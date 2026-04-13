@@ -23,6 +23,7 @@ dbdeployer deploy replication "${MYSQL_VERSION}" \
     --base-port=3305 \
     -c log-slave-updates \
     -c max_connections=500 \
+    -c max_connect_errors=100000 \
     -c max_binlog_size=100M \
     -c plugin_load_add=ha_blackhole
 
