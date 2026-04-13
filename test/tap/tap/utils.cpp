@@ -2565,3 +2565,125 @@ void spawn_noise(const CommandLine& cl, const std::string& tool_path, const std:
 		fprintf(stderr, "Failed to fork for noise tool: %s\n", tool_path.c_str());
 	}
 }
+
+int get_backend_gtid_position(
+	MYSQL* admin,
+	const std::string& backend_host,
+	uint32_t backend_port,
+	std::string& server_uuid,
+	uint64_t& max_trxid
+) {
+	auto trim = [](const std::string& s) -> std::string {
+		size_t start = s.find_first_not_of(" \t\n\r");
+		if (start == std::string::npos) return "";
+		size_t end = s.find_last_not_of(" \t\n\r");
+		return s.substr(start, end - start + 1);
+	};
+
+	auto strip_dashes = [](const std::string& uuid) -> std::string {
+		std::string result;
+		result.reserve(uuid.size());
+		for (char c : uuid) {
+			if (c != '-') result.push_back(c);
+		}
+		return result;
+	};
+
+	auto parse_interval_end = [](const std::string& token, uint64_t& interval_end) -> bool {
+		size_t dash_pos = token.find('-');
+		if (dash_pos == std::string::npos) {
+			interval_end = std::stoull(token);
+			return true;
+		}
+		std::string to_str = token.substr(dash_pos + 1);
+		if (to_str.empty()) return false;
+		interval_end = std::stoull(to_str);
+		return true;
+	};
+
+	// A GTID executed set may contain multiple comma-separated GTID entries,
+	// we parse only the first GTID entry from the set.
+	auto parse_first_gtid = [&](const std::string& gtid_executed_raw) -> bool {
+		std::string gtid_executed = trim(gtid_executed_raw);
+		if (gtid_executed.empty()) return false;
+
+		size_t comma_pos = gtid_executed.find(',');
+		std::string group = trim(
+			(comma_pos == std::string::npos) ? gtid_executed : gtid_executed.substr(0, comma_pos)
+		);
+		if (group.empty()) return false;
+
+		size_t colon_pos = group.find(':');
+		if (colon_pos == std::string::npos || colon_pos == 0 || colon_pos == group.size() - 1) {
+			return false;
+		}
+
+		server_uuid = strip_dashes(group.substr(0, colon_pos));
+		if (server_uuid.empty()) return false;
+
+		std::string intervals_str = group.substr(colon_pos + 1);
+		max_trxid = 0;
+		bool found = false;
+
+		size_t ipos = 0;
+		while (ipos < intervals_str.size()) {
+			size_t next_colon = intervals_str.find(':', ipos);
+			std::string token = trim(
+				(next_colon == std::string::npos) ? intervals_str.substr(ipos) : intervals_str.substr(ipos, next_colon - ipos)
+			);
+
+			if (!token.empty()) {
+				uint64_t interval_end = 0;
+				if (!parse_interval_end(token, interval_end)) {
+					return false;
+				}
+				if (interval_end > max_trxid) {
+					max_trxid = interval_end;
+				}
+				found = true;
+			}
+
+			if (next_colon == std::string::npos) {
+				break;
+			}
+			ipos = next_colon + 1;
+		}
+
+		return found;
+	};
+
+	std::string gtid_query = "SELECT gtid_executed FROM stats.stats_mysql_gtid_executed"
+		" WHERE hostname='" + backend_host + "' AND port=" + std::to_string(backend_port) +
+		" AND gtid_executed IS NOT NULL AND gtid_executed != ''";
+
+	int rc = mysql_query(admin, gtid_query.c_str());
+	if (rc != 0) {
+		diag("Failed to query gtid_executed from stats: %s", mysql_error(admin));
+		return -1;
+	}
+
+	MYSQL_RES* res = mysql_store_result(admin);
+	MYSQL_ROW row = nullptr;
+
+	if (!res) {
+		diag("Failed to store result for gtid_executed query");
+		return -1;
+	}
+
+	row = mysql_fetch_row(res);
+	if (!row || !row[0]) {
+		mysql_free_result(res);
+		diag("No GTID info for backend %s:%d", backend_host.c_str(), backend_port);
+		return -1;
+	}
+
+	std::string gtid_executed = row[0];
+	mysql_free_result(res);
+
+	if (!parse_first_gtid(gtid_executed)) {
+		diag("Failed to parse GTID entry from gtid_executed: %s", gtid_executed.c_str());
+		return -1;
+	}
+
+	return 0;
+}
