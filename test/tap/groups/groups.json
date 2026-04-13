@@ -52,8 +52,6 @@
   "genai_stats_parsing_unit-t" : [ "ai-g1","@proxysql_min_version:4.0" ],
   "genai_thread_unit-t" : [ "ai-g1","@proxysql_min_version:4.0" ],
   "glovars_unit-t" : [ "unit-tests-g1" ],
-  "gtid_server_data_unit-t" : [ "unit-tests-g1" ],
-  "gtid_utils_unit-t" : [ "unit-tests-g1" ],
   "hostgroup_routing_unit-t" : [ "unit-tests-g1" ],
   "hostgroups_unit-t" : [ "unit-tests-g1" ],
   "issue5384-t" : [ "legacy-g4","mysql84-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4" ],
@@ -383,5 +381,10 @@
   "transaction_state_unit-t" : [ "unit-tests-g1" ],
   "unit-strip_schema_from_query-t" : [ "unit-tests-g1" ],
   "vector_db_performance-t" : [ "ai-g1","@proxysql_min_version:4.0" ],
-  "vector_features-t" : [ "ai-g1","@proxysql_min_version:4.0" ]
+  "vector_features-t" : [ "ai-g1","@proxysql_min_version:4.0" ],
+  "test_ps_min_gtid_fc-t" : [ "legacy-binlog-g1" ],
+  "test_ps_min_gtid-t" : [ "legacy-binlog-g1" ],
+  "gtid_trxid_interval_unit-t" : [ "unit-tests-g1" ],
+  "gtid_set_unit-t" : [ "unit-tests-g1" ],
+  "gtid_server_data_unit-t" : [ "unit-tests-g1" ]
 }
