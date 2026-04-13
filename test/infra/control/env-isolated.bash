@@ -123,10 +123,14 @@ export TEST_PY_TAP_EXCL="${TEST_PY_TAP_EXCL:-reg_test_3273_ssl_con-t}"
 export TEST_PY_TAPINT_INCL="${TEST_PY_TAPINT_INCL:-}"
 export TEST_PY_TAPINT_EXCL="${TEST_PY_TAPINT_EXCL:-}"
 
-# Source infra-specific environment (exports WHG, RHG, and TAP test variables)
-if [ -n "${INFRA_TYPE}" ] && [ -f "${WORKSPACE}/test/infra/${INFRA_TYPE}/.env" ]; then
-    source "${WORKSPACE}/test/infra/${INFRA_TYPE}/.env"
-fi
+# Source infra-specific environments (exports WHG, RHG, MYSQL_PRIMARY_HOST, etc.)
+# INFRA_TYPE is set by binlog/special groups; DEFAULT_MYSQL_INFRA by all MySQL groups
+for _infra_env in "${INFRA_TYPE}" "${DEFAULT_MYSQL_INFRA}"; do
+    if [ -n "${_infra_env}" ] && [ -f "${WORKSPACE}/test/infra/${_infra_env}/.env" ]; then
+        source "${WORKSPACE}/test/infra/${_infra_env}/.env"
+    fi
+done
+unset _infra_env
 
 # Set TAP_MYSQLHOST/PORT after sourcing infra .env so that MYSQL_PRIMARY_HOST/PORT
 # overrides take effect (e.g. dbdeployer uses "dbdeployer1" instead of "mysql1")
