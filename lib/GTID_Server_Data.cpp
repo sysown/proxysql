@@ -376,12 +376,17 @@ bool GTID_Server_Data::read_next_gtid() {
 		strncpy(rec_msg,data+pos,l);
 		pos += l+1;
 		rec_msg[l] = 0;
+		bool invalid_msg = false;
 		if (rec_msg[0]=='I') {
 			char *a = NULL;
 			int ul = 0;
 			switch (rec_msg[1]) {
 				case '1': // single trxid with UUID
 					a = strchr(rec_msg+3,':');
+					if (a == NULL) {
+						invalid_msg = true;
+						break;
+					}
 					ul = a-rec_msg-3;
 					strncpy(uuid_server,rec_msg+3,ul);
 					uuid_server[ul] = 0;
@@ -394,6 +399,10 @@ bool GTID_Server_Data::read_next_gtid() {
 					break;
 				case '3': // trxid range with UUID
 					a = strchr(rec_msg+3,':');
+					if (a == NULL) {
+						invalid_msg = true;
+						break;
+					}
 					ul = a-rec_msg-3;
 					strncpy(uuid_server,rec_msg+3,ul);
 					uuid_server[ul] = 0;
@@ -405,10 +414,14 @@ bool GTID_Server_Data::read_next_gtid() {
 					events_read++;
 					break;
 				default:
-					proxy_warning("GTID: unsupported message type 'I%c' from binlog reader on port %d for server %s:%d , disconnecting\n",
-						rec_msg[1], port, address, mysql_port);
-					active = false;
-					return false;
+					invalid_msg = true;
+			}
+
+			if (invalid_msg) {
+				proxy_warning("GTID: unsupported message (%s) from binlog reader on port %d for server %s:%d, disconnecting\n",
+					rec_msg, port, address, mysql_port);
+				active = false;
+				return false;
 			}
 		}
 	}
