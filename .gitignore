@@ -5,7 +5,7 @@ priv-infra/
 .worktrees/
 
 # Lint output (do not commit)
-lint/
+/lint/
 
 # direnv
 .envrc.local

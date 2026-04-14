@@ -18,6 +18,7 @@
  *    2.4 Exercise all backend conns via trxs, exhausting the conn-pool, no errors should take place.
  */
 
+#include <cerrno>
 #include <cstring>
 #include <fcntl.h>
 #include <poll.h>
@@ -63,18 +64,16 @@ static int wait_for_mysql(MYSQL *mysql, int status) {
 	int timeout, res;
 
 	pfd.fd = mysql_get_socket(mysql);
-	pfd.events =
+	pfd.events = static_cast<short>(
 		(status & MYSQL_WAIT_READ ? POLLIN : 0) |
 		(status & MYSQL_WAIT_WRITE ? POLLOUT : 0) |
-		(status & MYSQL_WAIT_EXCEPT ? POLLPRI : 0);
+		(status & MYSQL_WAIT_EXCEPT ? POLLPRI : 0));
 	if (status & MYSQL_WAIT_TIMEOUT)
-		timeout = 1000*mysql_get_timeout_value(mysql);
+		timeout = static_cast<int>(1000*mysql_get_timeout_value(mysql));
 	else
 		timeout = -1;
 	res = poll(&pfd, 1, timeout);
-	if (res == 0)
-		return MYSQL_WAIT_TIMEOUT;
-	else if (res < 0)
+	if (res <= 0)
 		return MYSQL_WAIT_TIMEOUT;
 	else {
 		int status = 0;
@@ -86,18 +85,18 @@ static int wait_for_mysql(MYSQL *mysql, int status) {
 }
 
 // Thread Input
-struct th_args__in_t {
+struct th_args_in_t {
 	CommandLine& cl;
 };
 
 // Thread Output
-struct th_args__out_t {
+struct th_args_out_t {
 	std::string thread_addr {};
 };
 
 struct th_args_t {
-	th_args__in_t in_args;
-	th_args__out_t out_args {};
+	th_args_in_t in_args;
+	th_args_out_t out_args {};
 };
 
 void* create_ssl_conn_and_close_socket(void* arg) {
@@ -148,20 +147,32 @@ void* create_ssl_conn_inv_cert(void* arg) {
 	CommandLine& cl = th_args->in_args.cl;
 
 	MYSQL* myconn = mysql_init(NULL);
+	if (!myconn) {
+		fprintf(stderr, "File %s, line %d, Error: mysql_init failed\n", __FILE__, __LINE__);
+		return NULL;
+	}
 	mysql_options(myconn, MYSQL_OPT_NONBLOCK, 0);
 
-	char* inv_cert_path = tempnam(nullptr, "tap");
+	char inv_cert_path[] = "/tmp/tap_XXXXXX";
+	int fd = mkstemp(inv_cert_path);
+	if (fd == -1) {
+		fprintf(stderr, "File %s, line %d, Error: mkstemp failed\n", __FILE__, __LINE__);
+		mysql_close(myconn);
+		return NULL;
+	}
+	close(fd);
+
 	diag("Setting invalid CERT for conn with tmp file   path=%s", inv_cert_path);
 	mysql_ssl_set(myconn, NULL, NULL, inv_cert_path, NULL, NULL);
 
-	MYSQL* ret = nullptr;
 	diag("Starting 'MySQL' connection with invalid CERT   thread=%ld", pthread_self());
 
 	if (!mysql_real_connect(myconn, cl.host, cl.username, cl.password, NULL, cl.port, NULL, CLIENT_SSL)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(myconn));
-		return NULL;
 	}
 
+	mysql_close(myconn);
+	unlink(inv_cert_path);
 	return NULL;
 }
 
@@ -180,26 +191,45 @@ void* create_ssl_conn_missing_cert(void* arg) {
 	CommandLine& cl = th_args->in_args.cl;
 
 	MYSQL* myconn = mysql_init(NULL);
+	if (!myconn) {
+		fprintf(stderr, "File %s, line %d, Error: mysql_init failed\n", __FILE__, __LINE__);
+		return NULL;
+	}
 	mysql_options(myconn, MYSQL_OPT_NONBLOCK, 0);
 
-	char* inv_cert_path = tempnam(nullptr, "tap");
-	FILE *tmp_file = fopen(inv_cert_path, "w");
-	fprintf(tmp_file, inv_cert);
+	char inv_cert_path[] = "/tmp/tap_XXXXXX";
+	int fd = mkstemp(inv_cert_path);
+	if (fd == -1) {
+		fprintf(stderr, "File %s, line %d, Error: mkstemp failed\n", __FILE__, __LINE__);
+		mysql_close(myconn);
+		return NULL;
+	}
+	FILE* tmp_file = fdopen(fd, "w");
+	if (!tmp_file) {
+		fprintf(stderr, "File %s, line %d, Error: fdopen('%s') failed: %s\n",
+			__FILE__, __LINE__, inv_cert_path, strerror(errno));
+		close(fd);
+		mysql_close(myconn);
+		unlink(inv_cert_path);
+		return NULL;
+	}
+	// Use an explicit format string; inv_cert is a const buffer but passing it
+	// as the format argument is a format-string pattern smell.
+	fprintf(tmp_file, "%s", inv_cert);
 	fflush(tmp_file);
+	fclose(tmp_file);
 
 	diag("Setting invalid CERT for conn with tmp file   path=%s", inv_cert_path);
 	mysql_ssl_set(myconn, NULL, NULL, inv_cert_path, NULL, NULL);
 
-	MYSQL* ret = nullptr;
 	diag("Starting 'MySQL' connection with invalid CERT   thread=%ld", pthread_self());
 
 	if (!mysql_real_connect(myconn, cl.host, cl.username, cl.password, NULL, cl.port, NULL, CLIENT_SSL)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(myconn));
-		return NULL;
 	}
 
-	fclose(tmp_file);
-
+	mysql_close(myconn);
+	unlink(inv_cert_path);
 	return NULL;
 }
 
@@ -268,14 +298,14 @@ int create_conn(const CommandLine& cl) {
 
 char net_buf[4096] { 0 };
 
-struct _mysql_hdr {
+struct mysql_hdr {
 	u_int pkt_length:24, pkt_id:8;
 };
 
 int read_srv_handshake(int fd) {
 	char* buf_pos = net_buf;
 
-	int r = read(fd, buf_pos, sizeof(net_buf));
+	int r = static_cast<int>(read(fd, buf_pos, sizeof(net_buf)));
 	if (r == -1) {
 		perror("'read' failed");
 		return r;
@@ -284,7 +314,7 @@ int read_srv_handshake(int fd) {
 	buf_pos += r;
 
 	while (r > 0 && r < NET_HEADER_SIZE) {
-		r = read(fd, buf_pos + r, sizeof(buf_pos));
+		r = static_cast<int>(read(fd, buf_pos + r, sizeof(buf_pos)));
 		buf_pos += r;
 
 		if (r == -1) {
@@ -293,11 +323,11 @@ int read_srv_handshake(int fd) {
 		}
 	}
 
-	_mysql_hdr myhdr;
-	memcpy(&myhdr, net_buf, sizeof(_mysql_hdr));
+	mysql_hdr myhdr;
+	memcpy(&myhdr, net_buf, sizeof(mysql_hdr));
 
 	while (r > 0 && r < myhdr.pkt_length) {
-		r = read(fd, buf_pos + r, sizeof(buf_pos));
+		r = static_cast<int>(read(fd, buf_pos + r, sizeof(buf_pos)));
 		buf_pos += r;
 
 		if (r == -1) {
@@ -335,7 +365,7 @@ void* force_ssl_pre_handshake_failure(void* arg) {
 	}
 
 	diag("Sending harcoded 'SSLRequest'");
-	rc = send(sock, SSL_REQUEST_PKT, sizeof(SSL_REQUEST_PKT), 0);
+	rc = static_cast<int>(send(sock, SSL_REQUEST_PKT, sizeof(SSL_REQUEST_PKT), 0));
 	if (rc == -1) {
 		perror("'send' failed");
 		return NULL;
@@ -349,6 +379,10 @@ void* force_ssl_pre_handshake_failure(void* arg) {
 
 MYSQL* create_server_conn(CommandLine& cl) {
 	MYSQL* server = mysql_init(NULL);
+	if (!server) {
+		diag("mysql_init failed for backend MySQL connection");
+		return NULL;
+	}
 
 	diag("Connecting to backend MySQL at %s:%d as %s", cl.mysql_host, cl.mysql_port, cl.mysql_username);
 	if (
@@ -367,6 +401,7 @@ MYSQL* create_server_conn(CommandLine& cl) {
 			"Failed to create direct backend conn to MySQL   host=%s port=%d error=%s",
 			cl.mysql_host, cl.mysql_port, mysql_error(server)
 		);
+		mysql_close(server);
 		return NULL;
 	}
 
@@ -380,6 +415,7 @@ int create_test_database(CommandLine& cl, const string& name) {
 	const string q { "CREATE DATABASE IF NOT EXISTS " + name };
 	if (mysql_query_t(server, q.c_str())) {
 		diag("Query failed to execute   query=%s err=%s", q.c_str(), mysql_error(server));
+		mysql_close(server);
 		return EXIT_FAILURE;
 	}
 
@@ -401,27 +437,39 @@ pair<uint32_t,vector<MYSQL*>> warmup_conn_pool(CommandLine& cl, uint32_t CONNS_T
 	struct rlimit limits { 0, 0 };
 	getrlimit(RLIMIT_NOFILE, &limits);
 	diag("Old process limits   rlim_cur=%ld rlim_max=%ld", limits.rlim_cur, limits.rlim_max);
-	if (limits.rlim_cur < CONNS_TOTAL * 2) {
+	if (limits.rlim_cur < static_cast<rlim_t>(CONNS_TOTAL) * 2) {
 		diag("Updating process max FD limit");
-		limits.rlim_cur = CONNS_TOTAL * 2;
+		limits.rlim_cur = static_cast<rlim_t>(CONNS_TOTAL) * 2;
 		setrlimit(RLIMIT_NOFILE, &limits);
 	}
 	diag("New process limits   rlim_cur=%ld rlim_max=%ld", limits.rlim_cur, limits.rlim_max);
 
 	vector<MYSQL*> conns {};
 
-	for (int i = 0; i < CONNS_TOTAL; i++) {
+	// Helper that closes everything opened so far on the error paths, so we
+	// don't leak both the in-flight MYSQL handle and the already-pushed ones.
+	auto cleanup_and_fail = [&conns](MYSQL* current, uint32_t code) -> pair<uint32_t,vector<MYSQL*>> {
+		if (current) mysql_close(current);
+		for (MYSQL* c : conns) { if (c) mysql_close(c); }
+		return { code, {} };
+	};
+
+	for (uint32_t i = 0; i < CONNS_TOTAL; i++) {
 		MYSQL* myconn = mysql_init(NULL);
+		if (!myconn) {
+			diag("mysql_init failed during conn-pool warmup");
+			return cleanup_and_fail(nullptr, EXIT_FAILURE);
+		}
 
 		if (i % 20 == 0) {
-			diag("Connecting to ProxySQL frontend for warmup at %s:%d as %s (Conn %d/%d)", cl.host, cl.port, cl.username, i+1, CONNS_TOTAL);
+			diag("Connecting to ProxySQL frontend for warmup at %s:%d as %s (Conn %u/%u)", cl.host, cl.port, cl.username, i+1, CONNS_TOTAL);
 		}
 		if (!mysql_real_connect(myconn, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 			diag(
 				"Failed to connect to ProxySQL frontend   addr=%s port=%d user=%s pass=%s err=%s",
 				cl.host, cl.port, cl.username, cl.password, mysql_error(myconn)
 			);
-			return { EXIT_FAILURE, {} };
+			return cleanup_and_fail(myconn, EXIT_FAILURE);
 		}
 
 		const vector<const char*> CONN_CREATE_QUERIES {
@@ -433,7 +481,8 @@ pair<uint32_t,vector<MYSQL*>> warmup_conn_pool(CommandLine& cl, uint32_t CONNS_T
 		for (const char* q : CONN_CREATE_QUERIES) {
 			if (mysql_query_t(myconn, q)) {
 				diag("Query failed to execute   query=%s err=%s", q, mysql_error(myconn));
-				return { mysql_errno(myconn), {} };
+				uint32_t err_code = mysql_errno(myconn);
+				return cleanup_and_fail(myconn, err_code);
 			}
 		}
 
@@ -485,6 +534,7 @@ int clean_conn_pool(MYSQL* admin) {
 		MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_connection_pool");
 		MYSQL_RES* myres = mysql_store_result(admin);
 		diag("stats_mysql_connection_pool:\n%s", dump_as_table(myres).c_str());
+		mysql_free_result(myres);
 	}
 
 	const string COND_CONN_CLEANUP {
@@ -497,6 +547,7 @@ int clean_conn_pool(MYSQL* admin) {
 			MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_connection_pool");
 			MYSQL_RES* myres = mysql_store_result(admin);
 			diag("stats_mysql_connection_pool:\n%s", dump_as_table(myres).c_str());
+			mysql_free_result(myres);
 		}
 
 		diag("Waiting for backend connections failed   res:'%d'", w_res);
@@ -510,6 +561,7 @@ int clean_conn_pool(MYSQL* admin) {
 		MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_connection_pool");
 		MYSQL_RES* myres = mysql_store_result(admin);
 		diag("stats_mysql_connection_pool:\n%s", dump_as_table(myres).c_str());
+		mysql_free_result(myres);
 	}
 
 	return EXIT_SUCCESS;
@@ -553,7 +605,7 @@ int check_frontend_ssl_errs(
 		pthread_t unexp_socket_close;
 		void* th_ret = nullptr;
 		std::unique_ptr<th_args_t> th_args {
-			new th_args_t { th_args__in_t { cl }, th_args__out_t {} }
+			new th_args_t { th_args_in_t { cl }, th_args_out_t {} }
 		};
 
 		diag("Force early SSL failure in thread");
@@ -823,7 +875,7 @@ int main(int argc, char** argv) {
 		backend_conns_checks = 2;
 	}
 
-	plan(frontend_conns_checks + conns_dist_checks + backend_conns_checks);
+	plan(static_cast<int>(frontend_conns_checks + conns_dist_checks + backend_conns_checks));
 
 	if (!frontend_conns_checks) {
 		goto backend_checks;
@@ -832,12 +884,11 @@ int main(int argc, char** argv) {
 frontend_checks:
 	diag("START: Regression testing of #4556 for frontend conns");
 	for (const pair<string, void*(*)(void*)> p_name_rt : ssl_failure_rts) {
-		const char* rt_name = p_name_rt.first.c_str();
 		void*(*ssl_fail_rt)(void*) = p_name_rt.second;
 
 		for (size_t ms_idle : idle_sess_ms) {
 			diag("Forcing SSL failure on fronted connection   routine=%s", p_name_rt.first.c_str());
-			int rc = check_frontend_ssl_errs(cl, admin, ext_thread_count.val, ms_idle, ssl_fail_rt);
+			int rc = check_frontend_ssl_errs(cl, admin, ext_thread_count.val, static_cast<int64_t>(ms_idle), ssl_fail_rt);
 			if (rc) {
 				diag("Unable to perform check, operation failed   routine=%s", p_name_rt.first.c_str());
 				return EXIT_FAILURE;

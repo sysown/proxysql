@@ -281,7 +281,9 @@ static void test_mysql_rule_sorting() {
 		ok(0, "MySQL QP: first rule sorted (skipped)");
 		ok(0, "MySQL QP: second rule sorted (skipped)");
 		ok(0, "MySQL QP: third rule sorted (skipped)");
-		if (result) delete result;
+		if (result) {
+			delete result;
+		}
 	}
 }
 
@@ -392,7 +394,9 @@ static void test_mysql_flag_chaining() {
 	SQLite3_result *result = GloMyQPro->get_current_query_rules();
 	ok(result != nullptr && result->rows_count == 2,
 		"MySQL QP: 2 chained rules inserted correctly");
-	if (result) delete result;
+	if (result) {
+		delete result;
+	}
 }
 
 // ============================================================================
@@ -416,7 +420,9 @@ static void test_mysql_rule_with_username() {
 	SQLite3_result *result = GloMyQPro->get_current_query_rules();
 	ok(result != nullptr && result->rows_count == 2,
 		"MySQL QP: 2 rules with username filters inserted");
-	if (result) delete result;
+	if (result) {
+		delete result;
+	}
 }
 
 // ============================================================================
@@ -438,7 +444,9 @@ static void test_mysql_reset_all() {
 	SQLite3_result *result = GloMyQPro->get_current_query_rules();
 	ok(result != nullptr && result->rows_count == 0,
 		"MySQL QP: no rules after reset_all()");
-	if (result) delete result;
+	if (result) {
+		delete result;
+	}
 }
 
 // ============================================================================
@@ -482,7 +490,9 @@ static void test_pgsql_rule_creation_and_insert() {
 	SQLite3_result *result = GloPgQPro->get_current_query_rules();
 	ok(result != nullptr && result->rows_count >= 1,
 		"PgSQL QP: rule appears in get_current_query_rules()");
-	if (result) delete result;
+	if (result) {
+		delete result;
+	}
 }
 
 /**
@@ -493,7 +503,9 @@ static void test_pgsql_reset_and_stats() {
 	SQLite3_result *result = GloPgQPro->get_current_query_rules();
 	ok(result != nullptr && result->rows_count == 0,
 		"PgSQL QP: no rules after reset_all()");
-	if (result) delete result;
+	if (result) {
+		delete result;
+	}
 }
 
 // ============================================================================
@@ -695,8 +707,12 @@ static void test_pgsql_rule_attributes_flagouts() {
 		ok(0, "PgSQL QP: flagOUT_weights values are correct (skipped)");
 	}
 
-	if (rule->flagOUT_ids) delete rule->flagOUT_ids;
-	if (rule->flagOUT_weights) delete rule->flagOUT_weights;
+	if (rule->flagOUT_ids) {
+		delete rule->flagOUT_ids;
+	}
+	if (rule->flagOUT_weights) {
+		delete rule->flagOUT_weights;
+	}
 	free(rule->attributes);
 	free(rule);
 }
@@ -836,13 +852,15 @@ static void test_pgsql_get_current_query_rules_columns() {
 			ok(fields[33] != nullptr && strcmp(fields[33], "test comment") == 0,
 				"PgSQL QP: comment field is 'test comment'");
 		} else {
-			for (int i = 0; i < 13; i++)
+			for (int i = 0; i < 13; i++) {
 				ok(0, "PgSQL QP: field check skipped (no rows)");
+			}
 		}
 		delete result;
 	} else {
-		for (int i = 0; i < 15; i++)
+		for (int i = 0; i < 15; i++) {
 			ok(0, "PgSQL QP: get_current_query_rules column check (skipped)");
+		}
 	}
 }
 
@@ -884,7 +902,9 @@ static void test_pgsql_rule_sorting() {
 		ok(0, "PgSQL QP: first rule sorted (skipped)");
 		ok(0, "PgSQL QP: second rule sorted (skipped)");
 		ok(0, "PgSQL QP: third rule sorted (skipped)");
-		if (result) delete result;
+		if (result) {
+			delete result;
+		}
 	}
 }
 
@@ -921,7 +941,9 @@ static void test_pgsql_flag_chaining() {
 	SQLite3_result *result = GloPgQPro->get_current_query_rules();
 	ok(result != nullptr && result->rows_count == 2,
 		"PgSQL QP: 2 chained rules inserted correctly");
-	if (result) delete result;
+	if (result) {
+		delete result;
+	}
 }
 
 // ============================================================================
@@ -1318,7 +1340,9 @@ static void test_pgsql_fast_routing() {
 	int count = GloPgQPro->get_current_query_rules_fast_routing_count();
 	ok(count == 3, "PgSQL QP: fast routing count is 3");
 
-	if (old) delete old;
+	if (old) {
+		delete old;
+	}
 }
 
 // ============================================================================

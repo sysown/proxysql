@@ -268,7 +268,7 @@ int main(int argc, char** argv) {
 	diag("================================================================================");
 	diag("This test checks the COM_CHANGE_USER implementation introduced in issue #3504.");
 	diag("It verifies that ProxySQL correctly handles user switching during a connection.");
-	diag("");
+	diag("%s", "");
 	diag("Test scenarios:");
 	diag("  - Multiple authentication methods: mysql_clear_password, mysql_native_password,");
 	diag("    caching_sha2_password");
@@ -276,7 +276,7 @@ int main(int argc, char** argv) {
 	diag("  - Same user and different user switching");
 	diag("  - Hashed and non-hashed user passwords");
 	diag("  - Invalid password handling");
-	diag("");
+	diag("%s", "");
 	diag("Configuration:");
 	diag("  - ProxySQL admin host: %s", cl.admin_host);
 	diag("  - ProxySQL admin port: %d", cl.admin_port);
@@ -286,7 +286,7 @@ int main(int argc, char** argv) {
 	diag("  - Secondary user: %s", SECD_USER.c_str());
 	diag("  - Total test cases: %zu (per helper)", tests_defs.size());
 	diag("================================================================================");
-	diag("");
+	diag("%s", "");
 
 	diag("Starting tests for helper 'reg_test_3504-change_user_libmysql_helper'\n");
 

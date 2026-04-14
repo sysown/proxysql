@@ -78,7 +78,7 @@ int main() {
 
 
 
-	plan(queries.size());
+	plan(static_cast<int>(queries.size()));
 
 	for (std::vector<std::string>::iterator it2 = queries.begin(); it2 != queries.end(); it2++) {
 		MYSQL* proxysql_admin = mysql_init(NULL); // local scope . We intentionally create new connections

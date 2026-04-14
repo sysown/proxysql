@@ -424,6 +424,12 @@ void * my_conn_thread(void *arg) {
 			if (std::find(possible_unknown_variables.begin(), possible_unknown_variables.end(), el.key()) != possible_unknown_variables.end()) {
 				vars_counters[el.key()].count++;
 			}
+			// The inner disjunction over session_track_gtids handling must
+			// be grouped so it only fires when special_sqlmode==false and
+			// parsing_optimizer_switch==false. Without the extra outer
+			// parentheses, operator precedence treated the
+			// 'el.key() == "session_track_gtids"' branch as a standalone
+			// failure condition that fired even in the other cases.
 			if (
 				(special_sqlmode == true && verified_special_sqlmode == false) ||
 				(k == mysql_vars.end()) ||

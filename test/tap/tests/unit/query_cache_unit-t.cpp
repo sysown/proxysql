@@ -34,6 +34,7 @@
 #include "PgSQL_Query_Cache.h"
 
 #include <cstring>
+#include <cstdlib>
 
 // Extern declarations for Glo* pointers (defined in test_globals.cpp)
 extern MySQL_Query_Cache *GloMyQC;
@@ -44,6 +45,21 @@ extern PgSQL_Query_Cache *GloPgQC;
  */
 static uint64_t now_ms() {
 	return monotonic_time() / 1000;
+}
+
+static unsigned char *dup_value(const char *text) {
+	return reinterpret_cast<unsigned char *>(strdup(text));
+}
+
+static uint32_t value_len(const char *text) {
+	return static_cast<uint32_t>(strlen(text) + 1);
+}
+
+static unsigned char *dup_fill(size_t len, char ch) {
+	unsigned char *buf = static_cast<unsigned char *>(malloc(len + 1));
+	memset(buf, ch, len);
+	buf[len] = '\0';
+	return buf;
 }
 
 // ============================================================================
@@ -62,9 +78,8 @@ static void test_pgsql_set_get() {
 	uint32_t kl = 8;
 
 	// Create a value buffer — the cache takes ownership of the pointer
-	unsigned char *value = (unsigned char *)malloc(16);
-	memcpy(value, "result_data_001", 16);
-	uint32_t vl = 16;
+	unsigned char *value = dup_value("result_data_001");
+	uint32_t vl = value_len("result_data_001");
 
 	uint64_t t = now_ms();
 	uint64_t expire = t + 10000;  // 10 seconds from now
@@ -78,8 +93,8 @@ static void test_pgsql_set_get() {
 	ok(entry != nullptr, "PgSQL QC: get() returns non-null for cached entry");
 
 	if (entry != nullptr) {
-		ok(entry->length == 16, "PgSQL QC: retrieved entry has correct length");
-		ok(memcmp(entry->value, "result_data_001", 16) == 0,
+		ok(entry->length == value_len("result_data_001"), "PgSQL QC: retrieved entry has correct length");
+		ok(memcmp(entry->value, "result_data_001", value_len("result_data_001")) == 0,
 			"PgSQL QC: retrieved entry has correct value");
 	} else {
 		ok(0, "PgSQL QC: retrieved entry has correct length (skipped)");
@@ -108,9 +123,8 @@ static void test_pgsql_user_hash_isolation() {
 	uint32_t kl = 13;
 	uint64_t t = now_ms();
 
-	unsigned char *val1 = (unsigned char *)malloc(6);
-	memcpy(val1, "user_A", 6);
-	GloPgQC->set(100, key, kl, val1, 6, t, t, t + 10000);
+	unsigned char *val1 = dup_value("user_A");
+	GloPgQC->set(100, key, kl, val1, value_len("user_A"), t, t, t + 10000);
 
 	// Same key but different user_hash — should miss
 	auto entry = GloPgQC->get(200, key, kl, now_ms(), 10000);
@@ -136,18 +150,16 @@ static void test_pgsql_replace() {
 	uint32_t kl = 17;
 	uint64_t t = now_ms();
 
-	unsigned char *val1 = (unsigned char *)malloc(5);
-	memcpy(val1, "old_v", 5);
-	GloPgQC->set(user_hash, key, kl, val1, 5, t, t, t + 10000);
+	unsigned char *val1 = dup_value("old_v");
+	GloPgQC->set(user_hash, key, kl, val1, value_len("old_v"), t, t, t + 10000);
 
-	unsigned char *val2 = (unsigned char *)malloc(5);
-	memcpy(val2, "new_v", 5);
-	GloPgQC->set(user_hash, key, kl, val2, 5, t, t, t + 10000);
+	unsigned char *val2 = dup_value("new_v");
+	GloPgQC->set(user_hash, key, kl, val2, value_len("new_v"), t, t, t + 10000);
 
 	auto entry = GloPgQC->get(user_hash, key, kl, now_ms(), 10000);
 	ok(entry != nullptr, "PgSQL QC: get() after replace returns non-null");
 	if (entry != nullptr) {
-		ok(memcmp(entry->value, "new_v", 5) == 0,
+		ok(memcmp(entry->value, "new_v", value_len("new_v")) == 0,
 			"PgSQL QC: replaced entry has new value");
 	} else {
 		ok(0, "PgSQL QC: replaced entry has new value (skipped)");
@@ -171,9 +183,8 @@ static void test_pgsql_ttl_expired() {
 	uint64_t t = now_ms();
 
 	// Create entry that expires 1ms before "now"
-	unsigned char *val = (unsigned char *)malloc(4);
-	memcpy(val, "old!", 4);
-	GloPgQC->set(user_hash, key, kl, val, 4,
+	unsigned char *val = dup_value("old!");
+	GloPgQC->set(user_hash, key, kl, val, value_len("old!"),
 		t - 5000,     // created 5 seconds ago
 		t - 5000,     // curtime when set
 		t - 1);       // expired 1ms ago
@@ -193,10 +204,9 @@ static void test_pgsql_soft_ttl() {
 	uint32_t kl = 15;
 	uint64_t t = now_ms();
 
-	unsigned char *val = (unsigned char *)malloc(4);
-	memcpy(val, "soft", 4);
+	unsigned char *val = dup_value("soft");
 	// Hard TTL far in the future, but created 5 seconds ago
-	GloPgQC->set(user_hash, key, kl, val, 4,
+	GloPgQC->set(user_hash, key, kl, val, value_len("soft"),
 		t - 5000,     // created 5 seconds ago
 		t - 5000,
 		t + 60000);   // hard TTL 60s from now
@@ -224,11 +234,10 @@ static void test_pgsql_flush() {
 	for (int i = 0; i < 10; i++) {
 		char keybuf[32];
 		snprintf(keybuf, sizeof(keybuf), "SELECT flush_%d", i);
-		unsigned char *val = (unsigned char *)malloc(4);
-		memcpy(val, "data", 4);
+		unsigned char *val = dup_value("data");
 		GloPgQC->set(40000 + i,
 			(const unsigned char *)keybuf, strlen(keybuf),
-			val, 4, t, t, t + 60000);
+			val, value_len("data"), t, t, t + 60000);
 	}
 
 	uint64_t flushed = GloPgQC->flush();
@@ -252,7 +261,9 @@ static void test_pgsql_flush() {
  */
 static uint64_t get_qc_stat(PgSQL_Query_Cache *qc, const char *name) {
 	SQLite3_result *result = qc->SQL3_getStats();
-	if (result == nullptr) return 0;
+	if (result == nullptr) {
+		return 0;
+	}
 	uint64_t val = 0;
 	for (auto it = result->rows.begin(); it != result->rows.end(); it++) {
 		if (strcmp((*it)->fields[0], name) == 0) {
@@ -272,8 +283,7 @@ static void test_pgsql_set_flush_cycle() {
 	GloPgQC->flush();
 
 	uint64_t t = now_ms();
-	unsigned char *val = (unsigned char *)malloc(1024);
-	memset(val, 'A', 1024);
+	unsigned char *val = dup_fill(1024, 'A');
 	GloPgQC->set(50000,
 		(const unsigned char *)"SELECT cycle_test", 17,
 		val, 1024, t, t, t + 60000);
@@ -305,11 +315,10 @@ static void test_stats_counters() {
 	uint64_t get_before = get_qc_stat(GloPgQC, "Query_Cache_count_GET");
 
 	uint64_t t = now_ms();
-	unsigned char *val = (unsigned char *)malloc(8);
-	memcpy(val, "countval", 8);
+	unsigned char *val = dup_value("countval");
 	GloPgQC->set(60000,
 		(const unsigned char *)"SELECT counter", 14,
-		val, 8, t, t, t + 60000);
+		val, value_len("countval"), t, t, t + 60000);
 
 	uint64_t set_after = get_qc_stat(GloPgQC, "Query_Cache_count_SET");
 	ok(set_after > set_before,
@@ -374,6 +383,7 @@ static void test_mysql_construction_and_flush() {
 	if (result != nullptr) {
 		delete result;
 	}
+	GloMyQC->flush();
 }
 
 // ============================================================================
@@ -394,8 +404,7 @@ static void test_pgsql_purge_expired() {
 	for (int i = 0; i < 5; i++) {
 		char keybuf[32];
 		snprintf(keybuf, sizeof(keybuf), "SELECT purge_%d", i);
-		unsigned char *val = (unsigned char *)malloc(64);
-		memset(val, 'X', 64);
+		unsigned char *val = dup_fill(64, 'X');
 		GloPgQC->set(70000 + i,
 			(const unsigned char *)keybuf, strlen(keybuf),
 			val, 64,
@@ -405,8 +414,7 @@ static void test_pgsql_purge_expired() {
 	}
 
 	// Add one entry that is NOT expired
-	unsigned char *live_val = (unsigned char *)malloc(64);
-	memset(live_val, 'L', 64);
+	unsigned char *live_val = dup_fill(64, 'L');
 	GloPgQC->set(70099,
 		(const unsigned char *)"SELECT live", 11,
 		live_val, 64, t, t, t + 60000);
@@ -444,11 +452,12 @@ static void test_pgsql_many_entries() {
 	for (int i = 0; i < N; i++) {
 		char keybuf[32];
 		snprintf(keybuf, sizeof(keybuf), "SELECT many_%04d", i);
-		unsigned char *val = (unsigned char *)malloc(8);
-		snprintf((char *)val, 8, "val%04d", i);
+		char valbuf[8];
+		snprintf(valbuf, sizeof(valbuf), "val%04d", i);
+		unsigned char *val = dup_value(valbuf);
 		GloPgQC->set(80000,
 			(const unsigned char *)keybuf, strlen(keybuf),
-			val, 8, t, t, t + 60000);
+			val, value_len(valbuf), t, t, t + 60000);
 	}
 
 	// Verify a sample of entries are retrievable
@@ -459,7 +468,9 @@ static void test_pgsql_many_entries() {
 		auto entry = GloPgQC->get(80000,
 			(const unsigned char *)keybuf, strlen(keybuf),
 			now_ms(), 60000);
-		if (entry != nullptr) hits++;
+		if (entry != nullptr) {
+			hits++;
+		}
 	}
 	ok(hits == 10,
 		"PgSQL QC: all sampled entries retrievable from 100 inserts");

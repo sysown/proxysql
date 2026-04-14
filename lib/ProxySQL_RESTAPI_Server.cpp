@@ -376,7 +376,7 @@ public:
             } else {
                 std::vector<string> metrics;
                 if (res) {
-                    for (size_t i = 0; i < res->rows_count; i++) {
+                    for (int i = 0; i < res->rows_count; i++) {
                         metrics.push_back(res->rows[i]->fields[0]);
                     }
                     delete res;
@@ -420,7 +420,7 @@ public:
             if (!res) {
                 j_resp = json::array();
             } else {
-                for (size_t i = 0; i < res->rows_count; i++) {
+                for (int i = 0; i < res->rows_count; i++) {
                     json row;
                     row["ts"] = atol(res->rows[i]->fields[0]);
                     row["metric"] = res->rows[i]->fields[1];

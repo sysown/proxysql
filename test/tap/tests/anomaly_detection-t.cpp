@@ -52,7 +52,7 @@ extern AI_Features_Manager *GloAI;
 
 // Forward declarations
 class MySQL_Session;
-typedef struct _PtrSize_t PtrSize_t;
+typedef struct PtrSize_t_t PtrSize_t;
 
 // Stub for SQLite3_Server_session_handler - required by SQLite3_Server.cpp
 // This test uses admin MySQL connection, so this is just a placeholder

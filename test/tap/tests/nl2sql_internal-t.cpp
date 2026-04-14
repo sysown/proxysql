@@ -63,7 +63,7 @@ static float validate_and_score_sql(const std::string& sql) {
 	// Convert to uppercase for comparison
 	std::string upper_sql = sql;
 	for (size_t i = 0; i < upper_sql.length(); i++) {
-		upper_sql[i] = toupper(upper_sql[i]);
+		upper_sql[i] = static_cast<char>(toupper(upper_sql[i]));
 	}
 
 	// Check if starts with SELECT (read-only query)
@@ -291,7 +291,7 @@ void test_request_id_generation_hex() {
 
 	for (size_t i = 0; i < id.length(); i++) {
 		if (id[i] == '-') continue;
-		if (hex_chars.find(tolower(id[i])) == std::string::npos) {
+		if (hex_chars.find(static_cast<char>(tolower(id[i]))) == std::string::npos) {
 			all_hex = false;
 			break;
 		}

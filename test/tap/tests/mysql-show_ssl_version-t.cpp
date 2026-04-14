@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
 		"show status like 'Ssl_version%'",
 	};
 
-	int num_plans = ssl_version_queries.size() + 1; // +1 for query count check
+	int num_plans = static_cast<int>(ssl_version_queries.size()) + 1; // +1 for query count check
 	if (cl.use_noise) {
 		plan(num_plans + 3);
 	} else {

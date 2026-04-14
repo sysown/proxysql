@@ -496,9 +496,15 @@ static void test_firewall_get_current() {
 	ok(ret_sqli != nullptr && ret_sqli->rows_count == 1,
 		"Firewall get_current: sqli result has 1 row");
 
-	if (ret_users) delete ret_users;
-	if (ret_rules) delete ret_rules;
-	if (ret_sqli)  delete ret_sqli;
+	if (ret_users) {
+		delete ret_users;
+	}
+	if (ret_rules) {
+		delete ret_rules;
+	}
+	if (ret_sqli) {
+		delete ret_sqli;
+	}
 }
 
 // ============================================================================

@@ -38,10 +38,10 @@ using std::string;
 using std::vector;
 
 // Global admin connection
-MYSQL* g_admin = NULL;
+MYSQL* g_admin = nullptr;
 
 // Global ProxySQL connection for testing
-MYSQL* g_proxy = NULL;
+MYSQL* g_proxy = nullptr;
 
 // ============================================================================
 // Helper Functions
@@ -231,7 +231,7 @@ void test_status_variables() {
 	if (mysql_query(g_admin, query) == 0) {
 		MYSQL_RES* result = mysql_store_result(g_admin);
 		if (result) {
-			int rows = mysql_num_rows(result);
+			unsigned long rows = mysql_num_rows(result);
 			ok(rows > 0, "ai_detected_anomalies status variable exists");
 			mysql_free_result(result);
 		} else {
@@ -247,7 +247,7 @@ void test_status_variables() {
 	if (mysql_query(g_admin, query) == 0) {
 		MYSQL_RES* result = mysql_store_result(g_admin);
 		if (result) {
-			int rows = mysql_num_rows(result);
+			unsigned long rows = mysql_num_rows(result);
 			ok(rows > 0, "ai_blocked_queries status variable exists");
 			mysql_free_result(result);
 		} else {
@@ -315,9 +315,9 @@ int main(int argc, char** argv) {
 	}
 
 	// Connect to admin interface
-	g_admin = mysql_init(NULL);
+	g_admin = mysql_init(nullptr);
 	if (!mysql_real_connect(g_admin, cl.host, cl.admin_username, cl.admin_password,
-							NULL, cl.admin_port, NULL, 0)) {
+						nullptr, cl.admin_port, nullptr, 0)) {
 		diag("Failed to connect to admin interface");
 		return exit_status();
 	}

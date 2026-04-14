@@ -83,8 +83,8 @@ void execute_test(MYSQL* conn, const std::string& host, int port, const std::vec
     // For Admin interface, we are more interested in stability (ProxySQL alive) 
     // than immediate connection closure, as the handlers differ.
     ok(bytes_received == 0 || bytes_received < 0, "Connection closed or timed out (Stability maintained)");
-    close(sock);
-    sock = -1;
+	close(sock);
+	[[maybe_unused]] int sock_unused = sock;
 
     usleep(500000); // 0.5 second delay
 

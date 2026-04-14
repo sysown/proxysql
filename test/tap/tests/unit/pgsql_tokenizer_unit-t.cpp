@@ -61,28 +61,37 @@ static void setup_digest_defaults() {
  *
  * Returns the digest as a std::string. Uses a stack buffer to avoid malloc.
  */
-static std::string digest_query(const char* query, bool lowercase = true,
-                                 bool replace_null = true, bool no_digits = true,
-                                 int grouping_limit = 3, int groups_grouping_limit = 0,
-                                 bool keep_comment = false, int max_query_length = 2048) {
+struct DigestOptions {
+	bool lowercase = true;
+	bool replace_null = true;
+	bool no_digits = true;
+	int grouping_limit = 3;
+	int groups_grouping_limit = 0;
+	bool keep_comment = false;
+	int max_query_length = 2048;
+};
+
+static std::string digest_query(const char* query, const DigestOptions& digest_options = DigestOptions{}) {
 	char buf[2048];
 	memset(buf, 0, sizeof(buf));
 	char* first_comment = nullptr;
 
 	options opts;
-	opts.lowercase = lowercase;
-	opts.replace_null = replace_null;
-	opts.replace_number = no_digits;
-	opts.grouping_limit = grouping_limit;
-	opts.groups_grouping_limit = groups_grouping_limit;
-	opts.keep_comment = keep_comment;
-	opts.max_query_length = max_query_length;
+	opts.lowercase = digest_options.lowercase;
+	opts.replace_null = digest_options.replace_null;
+	opts.replace_number = digest_options.no_digits;
+	opts.grouping_limit = digest_options.grouping_limit;
+	opts.groups_grouping_limit = digest_options.groups_grouping_limit;
+	opts.keep_comment = digest_options.keep_comment;
+	opts.max_query_length = digest_options.max_query_length;
 
 	int q_len = (int)strlen(query);
 	char* result = pgsql_query_digest_and_first_comment(query, q_len, &first_comment, buf, &opts);
 
 	std::string ret(result);
-	if (first_comment) free(first_comment);
+	if (first_comment) {
+		free(first_comment);
+	}
 	return ret;
 }
 
@@ -98,7 +107,9 @@ static std::string digest_query_2(const char* query) {
 	char* result = pgsql_query_digest_and_first_comment_2(query, q_len, &first_comment, buf);
 
 	std::string ret(result);
-	if (first_comment) free(first_comment);
+	if (first_comment) {
+		free(first_comment);
+	}
 	return ret;
 }
 
@@ -114,7 +125,9 @@ static std::string digest_first_stage(const char* query) {
 	char* result = pgsql_query_digest_first_stage(query, q_len, &first_comment, buf);
 
 	std::string ret(result);
-	if (first_comment) free(first_comment);
+	if (first_comment) {
+		free(first_comment);
+	}
 	return ret;
 }
 
@@ -165,8 +178,9 @@ static void test_digest_null_replacement() {
 }
 
 static void test_digest_null_no_replacement() {
-	std::string d = digest_query("SELECT * FROM t WHERE val=NULL",
-		/* lowercase */ true, /* replace_null */ false);
+	DigestOptions opts;
+	opts.replace_null = false;
+	std::string d = digest_query("SELECT * FROM t WHERE val=NULL", opts);
 	ok(d.find("null") != std::string::npos,
 		"digest: NULL preserved when replace_null=false");
 }
@@ -331,13 +345,15 @@ static void test_digest_first_comment_extracted() {
 // ============================================================================
 
 static void test_digest_lowercase() {
-	std::string d = digest_query("SELECT * FROM Users", /* lowercase */ true);
+	std::string d = digest_query("SELECT * FROM Users");
 	ok(d == "select * from users",
 		"digest: keywords and identifiers lowercased");
 }
 
 static void test_digest_no_lowercase() {
-	std::string d = digest_query("SELECT * FROM Users", /* lowercase */ false);
+	DigestOptions opts;
+	opts.lowercase = false;
+	std::string d = digest_query("SELECT * FROM Users", opts);
 	ok(d == "SELECT * FROM Users",
 		"digest: case preserved when lowercase=false");
 }
@@ -347,9 +363,9 @@ static void test_digest_no_lowercase() {
 // ============================================================================
 
 static void test_digest_grouping_limit() {
-	std::string d = digest_query("SELECT * FROM t WHERE id IN (1,2,3,4,5)",
-		/* lowercase */ true, /* replace_null */ true, /* no_digits */ true,
-		/* grouping_limit */ 2);
+	DigestOptions opts;
+	opts.grouping_limit = 2;
+	std::string d = digest_query("SELECT * FROM t WHERE id IN (1,2,3,4,5)", opts);
 	ok(d.find("...") != std::string::npos,
 		"digest: grouping_limit=2 collapses excess IN-list values to '...'");
 }
@@ -361,9 +377,9 @@ static void test_digest_in_clause() {
 }
 
 static void test_digest_in_clause_grouping() {
-	std::string d = digest_query("SELECT * FROM t WHERE id IN (1,2,3,4,5)",
-		/* lowercase */ true, /* replace_null */ true, /* no_digits */ true,
-		/* grouping_limit */ 3);
+	DigestOptions opts;
+	opts.grouping_limit = 3;
+	std::string d = digest_query("SELECT * FROM t WHERE id IN (1,2,3,4,5)", opts);
 	ok(d.find("...") != std::string::npos,
 		"digest: IN clause with grouping_limit collapses to '...'");
 }

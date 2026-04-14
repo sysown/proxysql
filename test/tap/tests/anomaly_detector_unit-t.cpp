@@ -122,7 +122,7 @@ static std::string normalize_query(const std::string& query) {
  */
 static float calculate_risk_score(int pattern_matches) {
 	if (pattern_matches <= 0) return 0.0f;
-	return std::min(1.0f, pattern_matches * 0.3f);
+	return std::min(1.0f, static_cast<float>(pattern_matches) * 0.3f);
 }
 
 // ============================================================================

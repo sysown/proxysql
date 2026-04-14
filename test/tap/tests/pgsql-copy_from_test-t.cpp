@@ -174,11 +174,11 @@ bool encodeNumericBinary(uint8_t* out, const char* numStr) {
     for (size_t i = 0; i < paddedLen; i += 4) {
         char group[5] = { 0 }; // Temporary buffer for a group of up to 4 digits
         strncpy(group, combined + i, 4);
-        digits[digitCount++] = htons((int16_t)atoi(group)); // Convert group to 16-bit integer
+        digits[digitCount++] = static_cast<int16_t>(htons(static_cast<uint16_t>(atoi(group)))); // Convert group to 16-bit integer
     }
 
 
-    numDigits = (int16_t)(digitCount == 1 && combined[0] == '0') ? 0 : digitCount;
+    numDigits = static_cast<int16_t>((digitCount == 1 && combined[0] == '0') ? 0 : digitCount);
 
     // Calculate weight
     weight = (int16_t)((intPartLen + 3) / 4 - 1);
@@ -191,7 +191,7 @@ bool encodeNumericBinary(uint8_t* out, const char* numStr) {
     out += sizeof(int16_t);
     write_int16(out, weight);             // weight
     out += sizeof(int16_t);
-    write_int16(out, htons(sign));        // sign (converted to network byte order)
+    write_int16(out, static_cast<int16_t>(htons(sign)));        // sign (converted to network byte order)
     out += sizeof(int16_t);
     write_int16(out, scale);              // scale
     out += sizeof(int16_t);

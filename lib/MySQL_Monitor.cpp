@@ -109,7 +109,7 @@ class ConsumerThread : public Thread {
 	ConsumerThread(wqueue<WorkItem<T>*>& queue, int _n, const char *thread_name=NULL) : m_queue(queue) {
 		thrn=_n;
 		if (thread_name && thread_name[0]) {
-			snprintf(thr_name, sizeof(thr_name), "%.16s", thread_name);
+			snprintf(thr_name, sizeof(thr_name), "%.15s", thread_name);
 		} else {
 			snprintf(thr_name, sizeof(thr_name), "%.12s%03d", typeid(T).name(), thrn);
 		}

@@ -1,3 +1,4 @@
+#include <memory>
 #include <vector>
 #include <string>
 #include <stdio.h>
@@ -27,13 +28,13 @@
 */
 
 void get_time(std::string& s) {
-        time_t __timer;
-        char __buffer[30];
-        struct tm __tm_info;
-        time(&__timer);
-        localtime_r(&__timer, &__tm_info);
-        strftime(__buffer, 25, "%Y-%m-%d %H:%M:%S", &__tm_info);
-        s = std::string(__buffer);
+	time_t timer_var;
+	char buffer_var[30];
+	struct tm tm_info_var;
+	time(&timer_var);
+	localtime_r(&timer_var, &tm_info_var);
+	strftime(buffer_var, 25, "%Y-%m-%d %H:%M:%S", &tm_info_var);
+	s = std::string(buffer_var);
 }
 
 
@@ -72,10 +73,10 @@ int dumping_checksums_return_uniq(MYSQL_RES *res, std::set<std::string>& checksu
                 std::string chk = row[5];
                 checksums.insert(chk);
         }
-        return checksums.size();
+	return static_cast<int>(checksums.size());
 }
 
-int _get_checksum(MYSQL* mysql, const std::string& name, std::string& value) {
+int get_checksum_impl(MYSQL* mysql, const std::string& name, std::string& value) {
         std::string query { "SELECT checksum FROM runtime_checksums_values WHERE name='" + name + "'" };
 
         if (mysql_query(mysql, query.c_str())) {
@@ -84,7 +85,7 @@ int _get_checksum(MYSQL* mysql, const std::string& name, std::string& value) {
         }
 
         MYSQL_RES * res = mysql_store_result(mysql);
-        int rr = mysql_num_rows(res);
+	int rr = static_cast<int>(mysql_num_rows(res));
         MYSQL_ROW row;
         while ((row = mysql_fetch_row(res))) {
                 value = std::string(row[0]);
@@ -95,7 +96,7 @@ int _get_checksum(MYSQL* mysql, const std::string& name, std::string& value) {
 }
 
 int get_checksum(MYSQL *mysql, const std::string& name, std::string& value) {
-        int rr = _get_checksum(mysql, name, value);
+	int rr = get_checksum_impl(mysql, name, value);
         ok(rr == 1 && value.length() > 0, "Checksum for %s = %s" , name.c_str(), value.c_str());
         if (rr == 1 && value.length() > 0) return 0;
         return 1;
@@ -122,7 +123,7 @@ int module_in_sync(
                         if (*it == checksum) {
                                 return 0;
                         } else {
-                                int chk_res = _get_checksum(fetch_conn, name, checksum);
+				int chk_res = get_checksum_impl(fetch_conn, name, checksum);
                                 if (chk_res != -1) {
                                         diag("Fetched new '%s' target checksum '%s'", name.c_str(), checksum.c_str());
                                 } else {
@@ -139,16 +140,18 @@ int module_in_sync(
 
 int create_connections(CommandLine& cl) {
         if (cluster_nodes.empty()) {
-                for (int i = 0; i < cluster_ports.size() ; i++) {
+                for (size_t i = 0; i < cluster_ports.size() ; i++) {
                         MYSQL * mysql = mysql_init(NULL);
                         if (!mysql) {
-                                fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
+                                fprintf(stderr, "File %s, line %d, Error: mysql_init failed for port %d\n",
+                                        __FILE__, __LINE__, cluster_ports[i]);
                                 return exit_status();
                         }
 
                         mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
                         if (!mysql_real_connect(mysql, cl.host, cl.admin_username, cl.admin_password, NULL, cluster_ports[i], NULL, CLIENT_SSL|CLIENT_COMPRESS)) {
                                 fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
+                                mysql_close(mysql);
                                 return exit_status();
                         }
                         conns.push_back(mysql);
@@ -157,12 +160,14 @@ int create_connections(CommandLine& cl) {
                 for (size_t i = 0; i < cluster_nodes.size(); i++) {
                         MYSQL * mysql = mysql_init(NULL);
                         if (!mysql) {
-                                fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
+                                fprintf(stderr, "File %s, line %d, Error: mysql_init failed for node %s:%d\n",
+                                        __FILE__, __LINE__, cluster_nodes[i].first.c_str(), cluster_nodes[i].second);
                                 return exit_status();
                         }
                         mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
                         if (!mysql_real_connect(mysql, cluster_nodes[i].first.c_str(), cl.admin_username, cl.admin_password, NULL, cluster_nodes[i].second, NULL, CLIENT_SSL|CLIENT_COMPRESS)) {
                                 fprintf(stderr, "File %s, line %d, Node %s:%d, Error: %s\n", __FILE__, __LINE__, cluster_nodes[i].first.c_str(), cluster_nodes[i].second, mysql_error(mysql));
+                                mysql_close(mysql);
                                 return exit_status();
                         }
                         conns.push_back(mysql);
@@ -171,7 +176,16 @@ int create_connections(CommandLine& cl) {
         return 0;
 }
 
-int trigger_sync_and_check(MYSQL *mysql, std::string modname, const char *update_query, const char *load_query) {
+// Close and drop every connection that create_connections() opened. Safe to
+// call multiple times; the vector is cleared after closing.
+static void close_all_connections() {
+        for (MYSQL* m : conns) {
+                if (m) mysql_close(m);
+        }
+        conns.clear();
+}
+
+int trigger_sync_and_check(MYSQL *mysql, const std::string& modname, const char *update_query, const char *load_query) {
         int rc;
         std::string chk1;
         std::string chk2;
@@ -183,11 +197,11 @@ int trigger_sync_and_check(MYSQL *mysql, std::string modname, const char *update
         int retries = 0;
         rc = module_in_sync(mysql, mysql, modname, chk2, 30, retries);
         ok (rc == 0, "Module %s %sin sync after %d seconds" , modname.c_str() , rc == 0 ? "" : "NOT " , retries);
-        for (int i = 4 ; i<conns.size() ; i++) {
-                diag("Checking satellite node %d", i);
+        for (size_t i = 4 ; i<conns.size() ; i++) {
+                diag("Checking satellite node %zu", i);
                 int retries = 0;
                 rc = module_in_sync(conns[i], mysql, modname, chk2, 30, retries);
-                ok (rc == 0, "On satellite %d: Module %s %sin sync after %d seconds" , i, modname.c_str() , rc == 0 ? "" : "NOT " , retries);
+                ok (rc == 0, "On satellite %zu: Module %s %sin sync after %d seconds" , i, modname.c_str() , rc == 0 ? "" : "NOT " , retries);
         }
         return 0;
 }
@@ -219,14 +233,21 @@ int main(int argc, char** argv) {
 
         size_t total_nodes = cluster_nodes.empty() ? cluster_ports.size() : cluster_nodes.size();
         int np = 8;
-        np += 4*5*(4+(total_nodes-4));
+	np += static_cast<int>(static_cast<size_t>(4)*5*(4+(total_nodes-4)));
 
         plan(np);
 
-        MYSQL* proxysql_admin = mysql_init(NULL);
-        // Initialize connections
+        // RAII wrapper so proxysql_admin is closed on every exit path, including
+        // the early returns triggered by the MYSQL_QUERY macro on query failure.
+        std::unique_ptr<MYSQL, decltype(&mysql_close)> proxysql_admin_owner{
+                mysql_init(NULL), &mysql_close
+        };
+        MYSQL* proxysql_admin = proxysql_admin_owner.get();
+        // Initialize connections. mysql_init returns NULL on failure; do not
+        // call mysql_error on a NULL handle (undefined behavior).
         if (!proxysql_admin) {
-                fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
+                fprintf(stderr, "File %s, line %d, Error: mysql_init failed for 'proxysql_admin'\n",
+                        __FILE__, __LINE__);
                 return -1;
         }
 
@@ -269,10 +290,9 @@ int main(int argc, char** argv) {
 
 
 
-        MYSQL_RES* proxy_res;
-        int rc = 0;
-        rc = create_connections(cl);
+        int rc = create_connections(cl);
         if (rc != 0) {
+                close_all_connections();
                 return exit_status();
         }
         ok(conns.size() == total_nodes , "Known nodes: %lu . Connected nodes: %lu", total_nodes, conns.size());
@@ -310,5 +330,6 @@ int main(int argc, char** argv) {
                 trigger_sync_and_check(conns[i], "mysql_servers", update_mysql_servers_1, "LOAD MYSQL SERVERS TO RUNTIME");
         }
 
+        close_all_connections();
         return exit_status();
 }
