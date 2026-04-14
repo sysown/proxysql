@@ -408,13 +408,13 @@ int test_ff_sess_exceeds_max_conns(const CommandLine& cl, MYSQL* proxy_admin, lo
 		hrc::time_point end = hrc::now();
 
 		duration = end - start;
-		double duration_s = static_cast<int>(duration.count()) / pow(10,9);
+		double duration_s = static_cast<double>(duration.count()) / pow(10,9);
 
 		diag("Query completed - Error: %d, ErrMsg: %s", m_errno, m_error);
 		diag("Time waited: %lf seconds", duration_s);
 
-		const double srv_conn_to_s = static_cast<int>(connect_timeout) / 1000.0;
-		const double poll_to_s = static_cast<int>(poll_timeout) / 1000.0;
+		const double srv_conn_to_s = connect_timeout / 1000.0;
+		const double poll_to_s = poll_timeout / 1000.0;
 		const double grace = 500 / 1000.0;
 
 		ok(

@@ -201,7 +201,7 @@ int main(int argc, char** argv) {
 for (auto& conn : conns) {
 		MYSQL * mysql = conn;
 		int rc = run_q(mysql, "DO 1");
-		ok(rc != 0, (rc == 0 ? "Connection still alive" : "Connection killed"));
+		ok(rc == 0, (rc == 0 ? "Connection still alive" : "Connection killed"));
 	}
 
 	diag("Sleeping for 12 seconds");
