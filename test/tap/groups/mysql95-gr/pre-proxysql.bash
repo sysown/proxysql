@@ -2,14 +2,14 @@
 set -e
 set -o pipefail
 #
-# Pre-proxysql hook for mysql90-gr group.
+# Pre-proxysql hook for mysql95-gr group.
 # Runs on the HOST (not inside Docker). Uses docker exec to reach ProxySQL.
-# The infra (infra-dbdeployer-mysql90-gr) is started by the framework AFTER this hook.
+# The infra (infra-dbdeployer-mysql95-gr) is started by the framework AFTER this hook.
 # This hook configures ProxySQL with GR-specific fallback hostgroups, users, and routing.
 #
 
 PROXY_CONTAINER="proxysql.${INFRA_ID}"
-INFRA="${DEFAULT_MYSQL_INFRA:-infra-dbdeployer-mysql90-gr}"
+INFRA="${DEFAULT_MYSQL_INFRA:-infra-dbdeployer-mysql95-gr}"
 MYSQL_HOST="${MYSQL_PRIMARY_HOST:-dbdeployer1}.${INFRA}"
 
 run_admin() {
