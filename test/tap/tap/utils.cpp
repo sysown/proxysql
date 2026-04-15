@@ -1034,9 +1034,21 @@ int create_mysql_user(
 	string drop_user_query {};
 	string_format(t_drop_user_query, drop_user_query, user.c_str());
 
-	const string t_create_user_query {
-		"CREATE USER IF NOT EXISTS %s@'%%' IDENTIFIED WITH 'mysql_native_password' BY \"%s\""
-	};
+	// Pick the authentication plugin based on the backend version.
+	// MySQL 9.0 removed the 'mysql_native_password' server plugin; using
+	// IDENTIFIED WITH 'mysql_native_password' there returns
+	// ER_PLUGIN_IS_NOT_LOADED. Pre-9.0 keeps the explicit plugin clause so
+	// tests that implicitly rely on a native-password user continue to work
+	// on 5.7 / 8.4 backends.
+	const unsigned long server_version = mysql_get_server_version(mysql_server);
+	string t_create_user_query;
+	if (server_version >= 90000) {
+		t_create_user_query =
+			"CREATE USER IF NOT EXISTS %s@'%%' IDENTIFIED BY \"%s\"";
+	} else {
+		t_create_user_query =
+			"CREATE USER IF NOT EXISTS %s@'%%' IDENTIFIED WITH 'mysql_native_password' BY \"%s\"";
+	}
 	string create_user_query {};
 	string_format(t_create_user_query, create_user_query, user.c_str(), pass.c_str());
 
