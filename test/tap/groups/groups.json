@@ -1949,11 +1949,15 @@
   ],
   "test_binlog_fast_forward-t": [
     "legacy-binlog-g1",
-    "mysql84-binlog-g2"
+    "mysql84-binlog-g2",
+    "mysql90-binlog-g2",
+    "mysql95-binlog-g2"
   ],
   "test_binlog_reader-t": [
     "legacy-binlog-g1",
-    "mysql84-binlog-g1"
+    "mysql84-binlog-g1",
+    "mysql90-binlog-g1",
+    "mysql95-binlog-g1"
   ],
   "test_binlog_reader_uses_previous_hostgroup-t": [
     "legacy-binlog-g1",
@@ -2031,7 +2035,9 @@
   ],
   "test_com_binlog_dump_enables_fast_forward-t": [
     "legacy-binlog-g1",
-    "mysql84-binlog-g1"
+    "mysql84-binlog-g1",
+    "mysql90-binlog-g1",
+    "mysql95-binlog-g1"
   ],
   "test_com_register_slave_enables_fast_forward-t": [
     "legacy-binlog-g1",
@@ -2039,7 +2045,9 @@
     "mysql-multiplexing=false-g3",
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
-    "mysql84-binlog-g1"
+    "mysql84-binlog-g1",
+    "mysql90-binlog-g1",
+    "mysql95-binlog-g1"
   ],
   "test_com_reset_connection_com_change_user-t": [
     "legacy-g3",
