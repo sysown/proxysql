@@ -225,6 +225,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "envvars-t": [
@@ -253,6 +254,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "eof_conn_options_check-t": [
@@ -262,6 +264,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "eof_fast_forward-t": [
@@ -271,6 +274,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "eof_mixed_flags_queries-t": [
@@ -280,6 +284,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "eof_packet_mixed_queries-t": [
@@ -289,6 +294,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "ezoption_parser_unit-t": [
@@ -301,6 +307,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "fast_forward_switch_replication_deprecate_eof_libmysql-t": [
@@ -310,6 +317,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "ffto_protocol_unit-t": [
@@ -419,6 +427,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "kill_connection-t": [
@@ -709,6 +718,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "mysql-show_ssl_version-t": [
@@ -718,6 +728,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "mysql-sql_log_bin-error-t": [
@@ -754,6 +765,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "mysql_encode_unit-t": [
@@ -855,6 +867,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "pgsql-admin_metacmds-t": [
@@ -1466,6 +1479,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "reg_test_3838-restapi_eintr-t": [
@@ -1475,6 +1489,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "reg_test_3847_admin_lock-t": [
@@ -1484,6 +1499,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "reg_test_3992_fast_forward_malformed_packet-mysqlsh-t": [
@@ -1514,6 +1530,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "reg_test_4055_restapi-t": [
@@ -1523,6 +1540,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "reg_test_4072-show-warnings-t": [
@@ -1532,6 +1550,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "reg_test_4158_change_user-t": [
@@ -1541,6 +1560,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "reg_test_4264-commit_rollback-t": [
@@ -1550,6 +1570,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "reg_test_4300-dollar_quote_check-t": [
@@ -1559,6 +1580,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "reg_test_4399-stats_mysql_query_digest-t": [
@@ -1568,6 +1590,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "reg_test_4402-mysql_fields-t": [
@@ -1577,6 +1600,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "reg_test_4556-ssl_error_queue-t": [
@@ -1586,6 +1610,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "reg_test_4855_affected_rows_ddl-t": [
@@ -1603,6 +1628,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "reg_test_5212_tcp_keepalive_warnings-t": [
@@ -1624,11 +1650,13 @@
     "mysql-auto_increment_delay_multiplex=0-g2",
     "mysql-multiplexing=false-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "reg_test_5389-flush_logs_no_drop-t": [
     "legacy-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "reg_test__ssl_client_busy_wait-t": [
@@ -1638,6 +1666,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "reg_test_com_change_user_malformed_packet-t": [
@@ -1651,6 +1680,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "reg_test_fast_forward_split_packet-t": [
@@ -1660,6 +1690,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "reg_test_handshake_response_unterminated_username-t": [
@@ -1673,6 +1704,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "reg_test_mariadb_stmt_store_result-t": [
@@ -1682,6 +1714,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "reg_test_mariadb_stmt_store_result_async-t": [
@@ -1691,6 +1724,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "reg_test_mariadb_stmt_store_result_libmysql-t": [
@@ -1700,6 +1734,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "reg_test_proclist_use_after_free-t": [
@@ -1722,6 +1757,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "reg_test_stmt_close_short_packet-t": [
@@ -1735,6 +1771,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "reg_test_stmt_resultset_err_no_rows-t": [
@@ -1744,6 +1781,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "reg_test_stmt_resultset_err_no_rows_libmysql-t": [
@@ -1753,6 +1791,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "reg_test_stmt_resultset_err_no_rows_php-t": [
@@ -1762,6 +1801,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "reg_test_stmt_send_long_data_short_packet-t": [
@@ -1775,6 +1815,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "rule_matching_unit-t": [
@@ -1787,6 +1828,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "savepoint-948-t": [
@@ -1796,6 +1838,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "server_selection_unit-t": [
@@ -1808,6 +1851,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "set_testing-240-t": [
@@ -1817,6 +1861,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "set_testing-multi-t": [
@@ -1826,6 +1871,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "set_testing-t": [
@@ -1835,6 +1881,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "setparser_test-t": [
@@ -1844,6 +1891,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "setparser_test2-t": [
@@ -1853,6 +1901,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "setparser_test3-t": [
@@ -1862,6 +1911,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "smoke_test-t": [
@@ -1874,6 +1924,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "sqlite3db_unit-t": [
@@ -1886,6 +1937,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "statistics_unit-t": [
@@ -1898,6 +1950,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "test_PROXY_Protocol-t": [
@@ -1907,6 +1960,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_admin_stats-t": [
@@ -1916,6 +1970,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "test_auth_methods-t": [
@@ -1924,6 +1979,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "test_auto_increment_delay_multiplex-t": [
@@ -1933,6 +1989,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "test_backend_conn_ping-t": [
@@ -1942,6 +1999,7 @@
     "mysql-query_digests=0-g2",
     "mysql-query_digests_keep_comment=1-g2",
     "mysql84-g2",
+    "mysql90-g2",
     "mysql95-g2"
   ],
   "test_binlog_dump_multi_backend_crash-t": [
@@ -1962,6 +2020,7 @@
   "test_binlog_reader_uses_previous_hostgroup-t": [
     "legacy-binlog-g1",
     "mysql84-g5",
+    "mysql90-g5",
     "mysql95-g5"
   ],
   "test_cacert_load_and_verify_duration-t": [
@@ -1971,6 +2030,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_change_user-t": [
@@ -1980,6 +2040,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_clickhouse_server-t": [
@@ -2006,6 +2067,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g5",
+    "mysql90-g5",
     "mysql95-g5"
   ],
   "test_cluster_sync-t": [
@@ -2015,6 +2077,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g5",
+    "mysql90-g5",
     "mysql95-g5"
   ],
   "test_cluster_sync_mysql_servers-t": [
@@ -2024,6 +2087,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g5",
+    "mysql90-g5",
     "mysql95-g5"
   ],
   "test_cluster_sync_pgsql-t": [
@@ -2056,6 +2120,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_connection_annotation-t": [
@@ -2065,6 +2130,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_csharp_connector_support-t": [
@@ -2074,6 +2140,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_debug_filters-t": [
@@ -2083,6 +2150,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_default_conn_collation-t": [
@@ -2092,6 +2160,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_default_value_transaction_isolation_attr-t": [
@@ -2101,6 +2170,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_digest_umap_aux-t": [
@@ -2110,6 +2180,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_dns_cache-t": [
@@ -2119,6 +2190,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_empty_query-t": [
@@ -2128,6 +2200,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_enforce_autocommit_on_reads-t": [
@@ -2137,60 +2210,70 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_ffto_bypass-t": [
     "@proxysql_min_version:3.1",
     "legacy-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_ffto_mysql-t": [
     "@proxysql_min_version:3.1",
     "legacy-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_ffto_mysql_bypass_recovery-t": [
     "@proxysql_min_version:3.1",
     "legacy-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_ffto_mysql_concurrent-t": [
     "@proxysql_min_version:3.1",
     "legacy-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_ffto_mysql_errors-t": [
     "@proxysql_min_version:3.1",
     "legacy-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_ffto_mysql_large_queries-t": [
     "@proxysql_min_version:3.1",
     "legacy-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_ffto_mysql_large_resultsets-t": [
     "@proxysql_min_version:3.1",
     "legacy-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_ffto_mysql_mixed_protocol-t": [
     "@proxysql_min_version:3.1",
     "legacy-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_ffto_mysql_transactions-t": [
     "@proxysql_min_version:3.1",
     "legacy-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_ffto_pgsql-t": [
@@ -2236,6 +2319,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_firewall-t": [
@@ -2245,6 +2329,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_flagOUT_weight-t": [
@@ -2254,6 +2339,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_flush_logs-t": [
@@ -2263,6 +2349,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_format_utils-t": [
@@ -2272,6 +2359,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_greeting_capabilities-t": [
@@ -2281,6 +2369,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_gtid_forwarding-t": [
@@ -2290,6 +2379,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g5",
+    "mysql90-g5",
     "mysql95-g5"
   ],
   "test_hostgroup_attributes_online_servers-t": [
@@ -2299,6 +2389,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_ignore_min_gtid-t": [
@@ -2308,6 +2399,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_keep_multiplexing_variables-t": [
@@ -2317,6 +2409,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_load_from_config_prefix_stripping-t": [
@@ -2326,6 +2419,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_load_from_config_validation-t": [
@@ -2335,6 +2429,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_load_restapi_from_config_startup-t": [
@@ -2344,6 +2439,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_log_last_insert_id-t": [
@@ -2353,6 +2449,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_match_eof_conn_cap_libmariadb-t": [
@@ -2362,6 +2459,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_match_eof_conn_cap_libmysql-t": [
@@ -2371,6 +2469,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_max_transaction_time-t": [
@@ -2380,6 +2479,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_mcp_claude_headless_flow-t": [
@@ -2405,6 +2505,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_mysql_connect_retries_delay-t": [
@@ -2414,6 +2515,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_mysql_hostgroup_attributes-1-t": [
@@ -2423,6 +2525,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_mysql_query_digests_stages-t": [
@@ -2432,6 +2535,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_mysql_query_rules_fast_routing-t": [
@@ -2441,6 +2545,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_mysqlsh-t": [
@@ -2450,11 +2555,13 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_noise_injection-t": [
     "legacy-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_pgsql_replication_lag-t": [
@@ -2467,6 +2574,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_prometheus_metrics-t": [
@@ -2476,6 +2584,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_ps_async-t": [
@@ -2485,6 +2594,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_ps_hg_routing-t": [
@@ -2494,6 +2604,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_ps_large_result-t": [
@@ -2503,6 +2614,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_ps_logging-t": [
@@ -2512,6 +2624,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_ps_min_gtid-t": [
@@ -2527,6 +2640,7 @@
     "mysql-query_digests=0-g3",
     "mysql-query_digests_keep_comment=1-g3",
     "mysql84-g3",
+    "mysql90-g3",
     "mysql95-g3"
   ],
   "test_query_cache_soft_ttl_pct-t": [
@@ -2536,6 +2650,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_query_rules_fast_routing_algorithm-t": [
@@ -2545,6 +2660,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_query_rules_routing-t": [
@@ -2554,6 +2670,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_query_timeout-t": [
@@ -2563,6 +2680,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_read_only_actions_offline_hard_servers-t": [
@@ -2572,6 +2690,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_rw_binary_data-t": [
@@ -2581,6 +2700,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_server_sess_status-t": [
@@ -2590,6 +2710,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_session_status_flags-t": [
@@ -2599,6 +2720,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_set_character_results-t": [
@@ -2608,6 +2730,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_set_collation-t": [
@@ -2617,6 +2740,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_simple_embedded_HTTP_server-t": [
@@ -2626,6 +2750,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_sqlite3_from_unixtime-t": [
@@ -2635,6 +2760,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_sqlite3_pass_exts-t": [
@@ -2644,6 +2770,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_sqlite3_server-t": [
@@ -2653,6 +2780,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_sqlite3_server_and_fast_routing-t": [
@@ -2662,6 +2790,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_sqlite3_special_queries_libmariadb-t": [
@@ -2671,6 +2800,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_sqlite3_special_queries_libmysql-t": [
@@ -2680,6 +2810,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_ssl_connect-t": [
@@ -2689,6 +2820,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_ssl_fast_forward-1-t": [
@@ -2698,6 +2830,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_ssl_fast_forward-2_libmariadb-t": [
@@ -2707,6 +2840,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_ssl_fast_forward-2_libmysql-t": [
@@ -2716,6 +2850,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_ssl_fast_forward-3_libmariadb-t": [
@@ -2725,6 +2860,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_ssl_fast_forward-3_libmysql-t": [
@@ -2734,6 +2870,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_ssl_large_query-1-t": [
@@ -2743,6 +2880,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_ssl_large_query-2-t": [
@@ -2752,6 +2890,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_stats_proxysql_message_metrics-t": [
@@ -2761,6 +2900,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_thread_conn_dist-t": [
@@ -2770,6 +2910,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_throttle_max_bytes_per_second_to_client-t": [
@@ -2779,6 +2920,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_tls_stats-t": [
@@ -2788,6 +2930,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_tsdb_api-t": [
@@ -2805,6 +2948,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_unsupported_queries-t": [
@@ -2814,6 +2958,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_utf8mb4_as_ci-4841-t": [
@@ -2827,6 +2972,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "test_wexecvp_syscall_failures-t": [
@@ -2836,6 +2982,7 @@
     "mysql-query_digests=0-g4",
     "mysql-query_digests_keep_comment=1-g4",
     "mysql84-g4",
+    "mysql90-g4",
     "mysql95-g4"
   ],
   "transaction_state_unit-t": [
