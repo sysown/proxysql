@@ -21,7 +21,7 @@ RUN curl -fsSL "https://github.com/ProxySQL/dbdeployer/releases/download/v${DBDE
 
 # Download and unpack MySQL 9.3 tarball using dbdeployer (pre-baked so no download at runtime)
 RUN mkdir -p /root/opt/mysql \
-    && dbdeployer downloads get-unpack mysql-9.3.0-linux-glibc2.28-x86_64.tar.xz
+    && dbdeployer downloads get-unpack mysql-9.3.0-linux-glibc2.17-x86_64.tar.xz
 
 # Clear reserved ports so dbdeployer allows base-port 3305 (nodes get 3306,3307,3308)
 # dbdeployer reserves 1186,3306,5432,33060,33062 by default; replace with harmless value
