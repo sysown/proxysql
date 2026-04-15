@@ -15,6 +15,7 @@ struct MysqlxCredentials {
 	std::string password_hash;
 	bool x_enabled;
 	std::string allowed_auth;
+	std::string backend_password;
 };
 
 typedef std::function<MysqlxCredentials(const std::string& username)> MysqlxCredentialLookup;

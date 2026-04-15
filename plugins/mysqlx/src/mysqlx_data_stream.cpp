@@ -197,7 +197,7 @@ ssize_t MysqlxDataStream::flush_ssl_write_buf() {
 
 bool MysqlxDataStream::has_ssl_pending_write() const {
 	return !ssl_write_buf_.empty() ||
-		(wbio_ssl_ && BIO_number_written(wbio_ssl_) > BIO_number_read(wbio_ssl_));
+		(wbio_ssl_ && BIO_ctrl_pending(wbio_ssl_) > 0);
 }
 
 ssize_t MysqlxDataStream::read_from_net() {

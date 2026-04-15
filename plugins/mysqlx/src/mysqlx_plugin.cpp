@@ -70,6 +70,7 @@ bool sync_disk_to_memory(SQLite3DB& admindb) {
 		err_guard.reset();
 		if (disk_cnt == 0) continue;
 
+		admindb.execute("BEGIN");
 		q = "DELETE FROM main.";
 		q += tbl;
 		admindb.execute(q.c_str());
@@ -79,6 +80,7 @@ bool sync_disk_to_memory(SQLite3DB& admindb) {
 		q += " SELECT * FROM disk.";
 		q += tbl;
 		admindb.execute(q.c_str());
+		admindb.execute("COMMIT");
 	}
 	return true;
 }
@@ -105,6 +107,7 @@ bool copy_to_runtime(SQLite3DB& admindb) {
 		err_guard.reset();
 		if (cnt == 0) continue;
 
+		admindb.execute("BEGIN");
 		q = "DELETE FROM main.";
 		q += p[1];
 		admindb.execute(q.c_str());
@@ -114,6 +117,7 @@ bool copy_to_runtime(SQLite3DB& admindb) {
 		q += " SELECT * FROM main.";
 		q += p[0];
 		admindb.execute(q.c_str());
+		admindb.execute("COMMIT");
 	}
 	return true;
 }
@@ -146,6 +150,7 @@ bool mysqlx_start() {
 		auto thr = std::make_unique<Mysqlx_Thread>();
 		thr->init(i);
 		thr->set_max_cached_connections(static_cast<size_t>(max_cached));
+		thr->set_config_store(ctx.config_store.get());
 		ctx.threads.push_back(std::move(thr));
 	}
 

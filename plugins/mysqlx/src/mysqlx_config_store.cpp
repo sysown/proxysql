@@ -57,8 +57,9 @@ void load_canonical_users(
 
 		MysqlxResolvedIdentity identity {};
 		identity.username = nullable_string(row->fields[0]);
-		identity.default_hostgroup = nullable_int(row->fields[1]);
-		identity.max_connections = nullable_int(row->fields[2]);
+		identity.password = nullable_string(row->fields[1]);
+		identity.default_hostgroup = nullable_int(row->fields[2]);
+		identity.max_connections = nullable_int(row->fields[3]);
 		identities[identity.username] = std::move(identity);
 	}
 }
@@ -208,7 +209,7 @@ bool MysqlxConfigStore::load_from_runtime(SQLite3DB& db, std::string& err) {
 
 	if (!fetch_result(
 		    db,
-		    "SELECT username, default_hostgroup, max_connections "
+		    "SELECT username, password, default_hostgroup, max_connections "
 		    "FROM runtime_mysql_users WHERE active=1 AND frontend=1",
 		    result,
 		    err)) {

@@ -14,6 +14,7 @@
 #include <cerrno>
 #include <cstring>
 #include <chrono>
+#include <poll.h>
 
 MysqlxConnection::MysqlxConnection()
 	: state_(CREATED), auth_state_(BACKEND_AUTH_NOT_STARTED), fd_(-1), hostgroup_(-1), port_(0),
@@ -67,6 +68,12 @@ int MysqlxConnection::check_connect() {
 		state_ = ERROR_STATE;
 		return -1;
 	}
+	struct pollfd pfd;
+	pfd.fd = fd_;
+	pfd.events = POLLOUT;
+	pfd.revents = 0;
+	int pr = poll(&pfd, 1, 0);
+	if (pr <= 0) return 1;  // not ready yet
 	int err = 0;
 	socklen_t len = sizeof(err);
 	getsockopt(fd_, SOL_SOCKET, SO_ERROR, &err, &len);
