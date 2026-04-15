@@ -676,12 +676,19 @@ int main(int argc, char** argv) {
 			mysql_close(proxy);
 		}
 
+		// Only the iterations we actually ran produce backend connections.
+		// When the native_password half is skipped (MySQL 9.x), expected
+		// count is halved.
+		const uint32_t expected_conns =
+			g_mysql_supports_native_password ? RAND_USERS_GEN : (RAND_USERS_GEN / 2);
+		const string EXPECTED_CONNS_S { std::to_string(expected_conns) };
+
 		const string SEL_POOL_CONNS {
 			"SELECT SUM(ConnUsed + ConnFree) FROM stats.stats_mysql_connection_pool"
 				" WHERE hostgroup=" + TAP_MYSQL8_BACKEND_HG_S
 		};
 		const string COND_CONN_CREATION {
-			"SELECT IIF((" + SEL_POOL_CONNS + ")=" + RAND_USERS_GEN_S + ", 'TRUE', 'FALSE')"
+			"SELECT IIF((" + SEL_POOL_CONNS + ")=" + EXPECTED_CONNS_S + ", 'TRUE', 'FALSE')"
 		};
 		wait_for_cond(admin, COND_CONN_CREATION, 10);
 
@@ -693,9 +700,9 @@ int main(int argc, char** argv) {
 		}
 
 		ok(
-			RAND_USERS_GEN == cur_conns.val,
+			expected_conns == cur_conns.val,
 			"Number of backend conns created should match conn attempts   exp:'%u', act:'%lu'",
-			RAND_USERS_GEN, cur_conns.val
+			expected_conns, cur_conns.val
 		);
 	}
 
