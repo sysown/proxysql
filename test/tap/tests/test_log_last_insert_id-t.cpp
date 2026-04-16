@@ -77,11 +77,10 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(proxysql_mysql, "INSERT INTO test.test_insert_id VALUES (NULL)");
 	MYSQL_QUERY(proxysql_mysql, "DO 1");
 
-	/* in 3.0.6 we added buffering for query log . So we either flush logs or set mysql-eventslog_flush_timeout = 0 */
-	/*
+	/* in 3.0.6 we added buffering for query log; flush_timeout=0 alone leaves a race
+	 * between query completion and the periodic flush thread, so force a flush here. */
 	MYSQL_QUERY(proxysql_admin, "PROXYSQL FLUSH LOGS");
 	sleep(1);
-	*/
 	{
 		const string f_path { get_env("REGULAR_INFRA_DATADIR") + "/loginsertid.log.00000001" };
 		diag("Trying to open file %s" , f_path.c_str());

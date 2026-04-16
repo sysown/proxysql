@@ -33,6 +33,13 @@ using std::pair;
 // Global flag for MySQL version check
 static bool g_mysql_supports_random_password = false;
 static bool g_mysql_version_checked = false;
+// MySQL 9.0 removed the 'mysql_native_password' server plugin. CREATE USER
+// IDENTIFIED WITH 'mysql_native_password' returns ER_PLUGIN_IS_NOT_LOADED on
+// 9.x backends. This flag gates the backend-side native_password fixtures
+// (Phase 2 hash compat + Phase 3 end-to-end). ProxySQL's internal
+// MYSQL_NATIVE_PASSWORD() SQLite3 extension is unaffected — hash generation
+// is pure computation and still works.
+static bool g_mysql_supports_native_password = true;
 
 /**
  * @brief Check if MySQL server supports 'BY RANDOM PASSWORD' syntax (MySQL 8.0+)
@@ -454,20 +461,37 @@ int main(int argc, char** argv) {
 	// MySQL 8.0+ supports 'BY RANDOM PASSWORD' syntax, MySQL 5.7 does not
 	check_mysql_random_password_support(mysql);
 
+	// Detect whether the 'mysql_native_password' server plugin is usable.
+	// MySQL 9.0 removed it; we skip the native_password halves of Phase 2
+	// (MySQL/Admin hash compat) and Phase 3 (end-to-end) on 9.x backends.
+	unsigned long server_version = mysql_get_server_version(mysql);
+	if (server_version >= 90000) {
+		g_mysql_supports_native_password = false;
+		diag("Backend MySQL %lu: 'mysql_native_password' plugin not loadable. "
+			"Skipping native_password backend-side fixtures.", server_version);
+	}
+
 	// Calculate the actual number of tests based on MySQL version
 	uint32_t actual_test_count =
 		INV_INPUTS.size() +           // Always run
-		PASS_GEN_COUNT * 2 +           // Always run
+		PASS_GEN_COUNT * 2 +           // Always run (ProxySQL Admin SQLite3 extensions)
 		2;                             // EXTRA: Two extra correctness tests
 
 	if (g_mysql_supports_random_password) {
-		// These tests only run on MySQL 8.0+
-		actual_test_count += USER_GEN_COUNT;      // MySQL/Admin hash compatibility tests
-		actual_test_count += RAND_USERS_GEN;      // End-to-end connection tests
+		// Phase 2: MySQL/Admin hash compatibility tests (USER_GEN_COUNT total,
+		// half native + half sha2). On 9.x only the sha2 half runs.
+		actual_test_count +=
+			(g_mysql_supports_native_password ? USER_GEN_COUNT : USER_GEN_COUNT / 2);
+
+		// Phase 3: End-to-end connection tests (RAND_USERS_GEN total, same split).
+		actual_test_count +=
+			(g_mysql_supports_native_password ? RAND_USERS_GEN : RAND_USERS_GEN / 2);
+
 		actual_test_count += 1;                   // Connection count check
 	}
 
 	diag("MySQL version supports 'BY RANDOM PASSWORD': %s", g_mysql_supports_random_password ? "yes" : "no");
+	diag("MySQL server supports 'mysql_native_password' plugin: %s", g_mysql_supports_native_password ? "yes" : "no");
 	diag("Planned test count: %u", actual_test_count);
 
 	plan(actual_test_count);
@@ -502,17 +526,19 @@ int main(int argc, char** argv) {
 	if (g_mysql_supports_random_password) {
 		vector<user_def_t> users {};
 
-		for (size_t i = 0; i < USER_GEN_COUNT/2; i++) {
-			const string name { "rndextuser" + std::to_string(i) };
-			pair<int,user_def_t> user_def {
-				create_mysql_user_rnd_creds(mysql, name, "mysql_native_password")
-			};
+		if (g_mysql_supports_native_password) {
+			for (size_t i = 0; i < USER_GEN_COUNT/2; i++) {
+				const string name { "rndextuser" + std::to_string(i) };
+				pair<int,user_def_t> user_def {
+					create_mysql_user_rnd_creds(mysql, name, "mysql_native_password")
+				};
 
-			if (user_def.first) {
-				diag("User creation failed   user:'%s'", name.c_str());
-				goto cleanup;
-			} else {
-				users.push_back(user_def.second);
+				if (user_def.first) {
+					diag("User creation failed   user:'%s'", name.c_str());
+					goto cleanup;
+				} else {
+					users.push_back(user_def.second);
+				}
 			}
 		}
 
@@ -594,7 +620,10 @@ int main(int argc, char** argv) {
 		);
 		MYSQL_QUERY(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
-		for (uint32_t i = 0; i < RAND_USERS_GEN; i++) {
+		// On MySQL 9.x the native_password plugin is unavailable on the backend,
+		// so skip the first RAND_USERS_GEN/2 iterations (those are the native ones).
+		uint32_t rand_users_start = g_mysql_supports_native_password ? 0 : (RAND_USERS_GEN / 2);
+		for (uint32_t i = rand_users_start; i < RAND_USERS_GEN; i++) {
 			const string name { "username_" + std::to_string(i) };
 			const string pass { random_string(20) };
 			const string auth { i < 50 ? "MYSQL_NATIVE_PASSWORD" : "CACHING_SHA2_PASSWORD" };
@@ -647,12 +676,19 @@ int main(int argc, char** argv) {
 			mysql_close(proxy);
 		}
 
+		// Only the iterations we actually ran produce backend connections.
+		// When the native_password half is skipped (MySQL 9.x), expected
+		// count is halved.
+		const uint32_t expected_conns =
+			g_mysql_supports_native_password ? RAND_USERS_GEN : (RAND_USERS_GEN / 2);
+		const string EXPECTED_CONNS_S { std::to_string(expected_conns) };
+
 		const string SEL_POOL_CONNS {
 			"SELECT SUM(ConnUsed + ConnFree) FROM stats.stats_mysql_connection_pool"
 				" WHERE hostgroup=" + TAP_MYSQL8_BACKEND_HG_S
 		};
 		const string COND_CONN_CREATION {
-			"SELECT IIF((" + SEL_POOL_CONNS + ")=" + RAND_USERS_GEN_S + ", 'TRUE', 'FALSE')"
+			"SELECT IIF((" + SEL_POOL_CONNS + ")=" + EXPECTED_CONNS_S + ", 'TRUE', 'FALSE')"
 		};
 		wait_for_cond(admin, COND_CONN_CREATION, 10);
 
@@ -664,9 +700,9 @@ int main(int argc, char** argv) {
 		}
 
 		ok(
-			RAND_USERS_GEN == cur_conns.val,
+			expected_conns == cur_conns.val,
 			"Number of backend conns created should match conn attempts   exp:'%u', act:'%lu'",
-			RAND_USERS_GEN, cur_conns.val
+			expected_conns, cur_conns.val
 		);
 	}
 
