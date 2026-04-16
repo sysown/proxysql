@@ -488,6 +488,7 @@ class MySQL_Threads_Handler
 		bool default_reconnect;
 		bool have_compress;
 		int protocol_compression_level;
+		int zstd_compression_level;
 		bool have_ssl;
 		bool multiplexing;
 //		bool stmt_multiplexing;
