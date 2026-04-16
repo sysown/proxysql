@@ -6,7 +6,7 @@
  *   - Can be set and loaded to runtime
  *   - Rejects out-of-range values (0, 23)
  *   - Is independent from mysql-protocol_compression_level
- *   - Functional zstd compression works at different levels
+ *   - Compressed connections still work with zstd variable set
  */
 
 #include <cstdio>
@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
 	// Connect to admin
 	MYSQL* admin = init_mysql_conn(cl.host, cl.admin_port, cl.admin_username, cl.admin_password);
 	if (!admin) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
+		fprintf(stderr, "File %s, line %d, Error: Failed to connect to admin\n", __FILE__, __LINE__);
 		return EXIT_FAILURE;
 	}
 
@@ -127,16 +127,17 @@ int main(int argc, char** argv) {
 		ok(zlib_rt == 9, "zlib unchanged after zstd change: %d (expect 9)", zlib_rt);
 	}
 
-	// Test 10: Functional test - zstd compressed connection works
+	// Test 10: Functional test - compressed connection still works with zstd variable set
 	{
 		MYSQL_QUERY_T(admin, "SET mysql-zstd_compression_level=3");
 		MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
-		// Connect with compression enabled; this exercises zstd if the client supports it
+		// Connect with CLIENT_COMPRESS (zlib compression). This verifies that the
+		// new zstd variable does not break existing zlib-compressed connections.
 		MYSQL* proxy_cmp = init_mysql_conn(cl.host, cl.port, cl.username, cl.password, false, true);
 		if (proxy_cmp) {
 			int rc = mysql_query(proxy_cmp, "SELECT 1");
-			ok(rc == 0, "Compressed connection works with zstd_compression_level=3");
+			ok(rc == 0, "Compressed (zlib) connection works with zstd_compression_level=3");
 			mysql_close(proxy_cmp);
 		} else {
 			diag("Skipping compressed connection test - connection failed");
