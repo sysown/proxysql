@@ -28,6 +28,7 @@ using json = nlohmann::json;
 #include "MySQL_Variables.h"
 #include "ProxySQL_Cluster.hpp"
 #include "MySQL_Query_Cache.h"
+#include "ProxySQL_PluginManager.h"
 #ifdef PROXYSQLFFTO
 #include "MySQLFFTO.hpp"
 #endif
@@ -5448,6 +5449,42 @@ __get_pkts_from_client:
 											}
 										}
 #endif /* PROXYSQLGENAI */
+										// Plugin pre-execution query hook (Step 2 ABI extension).
+										// Lock-free fast path: skip the dispatch entirely when no
+										// plugin has registered a hook for the MySQL protocol.
+										if (proxysql_has_configured_plugin_query_hook(ProxySQL_PluginProtocol::mysql)) {
+											const char* hook_user = "";
+											const char* hook_addr = "";
+											const char* hook_schema = "";
+											if (client_myds && client_myds->myconn && client_myds->myconn->userinfo) {
+												if (client_myds->myconn->userinfo->username)
+													hook_user = client_myds->myconn->userinfo->username;
+												if (client_myds->myconn->userinfo->schemaname)
+													hook_schema = client_myds->myconn->userinfo->schemaname;
+											}
+											if (client_myds && client_myds->addr.addr)
+												hook_addr = client_myds->addr.addr;
+											ProxySQL_PluginQueryHookPayload hook_payload {
+												hook_user, hook_addr, hook_schema,
+												(const char*)CurrentQuery.QueryPointer,
+												static_cast<uint32_t>(CurrentQuery.QueryLength)
+											};
+											ProxySQL_PluginQueryHookResult hook_result {
+												ProxySQL_PluginQueryHookAction::allow, std::string()
+											};
+											if (proxysql_dispatch_configured_plugin_query_hook(
+													ProxySQL_PluginProtocol::mysql, hook_payload, hook_result) &&
+												hook_result.action == ProxySQL_PluginQueryHookAction::deny) {
+												const char* msg = hook_result.message.empty() ?
+													"Query blocked by plugin" : hook_result.message.c_str();
+												client_myds->DSS = STATE_QUERY_SENT_NET;
+												client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1313,
+													(char*)"HY000", (char*)msg, true);
+												RequestEnd(NULL, 1313, msg);
+												handler_ret = -1;
+												return handler_ret;
+											}
+										}
 									}
 									if (rc_break==true) {
 										if (mirror==false) {

@@ -4,6 +4,7 @@ using json = nlohmann::json;
 #include <variant>
 #include "PgSQL_HostGroups_Manager.h"
 #include "PgSQL_Thread.h"
+#include "ProxySQL_PluginManager.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include "proxysql_utils.h"
@@ -2403,6 +2404,42 @@ __implicit_sync:
 								if (mirror == false && rc_break == false) {
 									if (pgsql_thread___automatic_detect_sqli) {
 										if (handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_detect_SQLi()) {
+											handler_ret = -1;
+											return handler_ret;
+										}
+									}
+									// Plugin pre-execution query hook (Step 2 ABI extension).
+									// Lock-free fast path: skip the dispatch entirely when no
+									// plugin has registered a hook for the PgSQL protocol.
+									if (proxysql_has_configured_plugin_query_hook(ProxySQL_PluginProtocol::pgsql)) {
+										const char* hook_user = "";
+										const char* hook_addr = "";
+										const char* hook_schema = "";
+										if (client_myds && client_myds->myconn && client_myds->myconn->userinfo) {
+											if (client_myds->myconn->userinfo->username)
+												hook_user = client_myds->myconn->userinfo->username;
+											if (client_myds->myconn->userinfo->schemaname)
+												hook_schema = client_myds->myconn->userinfo->schemaname;
+										}
+										if (client_myds && client_myds->addr.addr)
+											hook_addr = client_myds->addr.addr;
+										ProxySQL_PluginQueryHookPayload hook_payload {
+											hook_user, hook_addr, hook_schema,
+											(const char*)CurrentQuery.QueryPointer,
+											static_cast<uint32_t>(CurrentQuery.QueryLength)
+										};
+										ProxySQL_PluginQueryHookResult hook_result {
+											ProxySQL_PluginQueryHookAction::allow, std::string()
+										};
+										if (proxysql_dispatch_configured_plugin_query_hook(
+												ProxySQL_PluginProtocol::pgsql, hook_payload, hook_result) &&
+											hook_result.action == ProxySQL_PluginQueryHookAction::deny) {
+											const char* msg = hook_result.message.empty() ?
+												"Query blocked by plugin" : hook_result.message.c_str();
+											client_myds->DSS = STATE_QUERY_SENT_NET;
+											client_myds->myprot.generate_error_packet(true, true, msg,
+												PGSQL_ERROR_CODES::ERRCODE_INSUFFICIENT_PRIVILEGE, false, true);
+											if (mirror == false) RequestEnd(NULL, true);
 											handler_ret = -1;
 											return handler_ret;
 										}
