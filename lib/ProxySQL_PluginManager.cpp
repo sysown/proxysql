@@ -83,6 +83,22 @@ void register_command_service(const char* sql, proxysql_plugin_admin_command_cb 
 	}
 }
 
+bool register_query_hook_service(ProxySQL_PluginProtocol proto,
+                                 proxysql_plugin_query_hook_cb cb) {
+	if (g_registry_target == nullptr) {
+		proxy_warning("Plugin query hook registration attempted outside init phase\n");
+		return false;
+	}
+	if (!g_registry_target->register_query_hook(proto, cb)) {
+		note_registration_failure("plugin query hook",
+			proto == ProxySQL_PluginProtocol::mysql ? "mysql" : "pgsql");
+		proxy_warning("Plugin query hook registration failed for %s\n",
+			proto == ProxySQL_PluginProtocol::mysql ? "mysql" : "pgsql");
+		return false;
+	}
+	return true;
+}
+
 SQLite3DB* get_admindb_service() {
 	return proxysql_plugin_get_admindb();
 }
@@ -165,6 +181,7 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_.get_configdb = &get_configdb_service;
 	services_.get_statsdb = &get_statsdb_service;
 	services_.log_message = &log_message_service;
+	services_.register_query_hook = &register_query_hook_service;
 }
 
 ProxySQL_PluginManager::~ProxySQL_PluginManager() {
@@ -430,6 +447,47 @@ bool ProxySQL_PluginManager::register_table(const ProxySQL_PluginTableDef& def) 
 	return true;
 }
 
+bool ProxySQL_PluginManager::register_query_hook(ProxySQL_PluginProtocol proto,
+                                                 proxysql_plugin_query_hook_cb cb) {
+	if (cb == nullptr) {
+		return false;
+	}
+	switch (proto) {
+	case ProxySQL_PluginProtocol::mysql:
+		if (mysql_query_hook_ != nullptr) return false;
+		mysql_query_hook_ = cb;
+		return true;
+	case ProxySQL_PluginProtocol::pgsql:
+		if (pgsql_query_hook_ != nullptr) return false;
+		pgsql_query_hook_ = cb;
+		return true;
+	}
+	return false;
+}
+
+bool ProxySQL_PluginManager::has_query_hook(ProxySQL_PluginProtocol proto) const {
+	switch (proto) {
+	case ProxySQL_PluginProtocol::mysql: return mysql_query_hook_ != nullptr;
+	case ProxySQL_PluginProtocol::pgsql: return pgsql_query_hook_ != nullptr;
+	}
+	return false;
+}
+
+bool ProxySQL_PluginManager::dispatch_query_hook(ProxySQL_PluginProtocol proto,
+                                                 const ProxySQL_PluginQueryHookPayload& payload,
+                                                 ProxySQL_PluginQueryHookResult& result) const {
+	proxysql_plugin_query_hook_cb cb = nullptr;
+	switch (proto) {
+	case ProxySQL_PluginProtocol::mysql: cb = mysql_query_hook_; break;
+	case ProxySQL_PluginProtocol::pgsql: cb = pgsql_query_hook_; break;
+	}
+	if (cb == nullptr) {
+		return false;
+	}
+	result = cb(payload);
+	return true;
+}
+
 bool ProxySQL_PluginManager::register_command(const char* sql, proxysql_plugin_admin_command_cb cb) {
 	if (sql == nullptr || *sql == '\0' || cb == nullptr) {
 		return false;
@@ -465,6 +523,33 @@ bool proxysql_dispatch_configured_plugin_admin_command(
 	}
 
 	return g_active_plugin_manager.load()->dispatch_admin_command(ctx, sql, result);
+}
+
+bool proxysql_dispatch_configured_plugin_query_hook(
+	ProxySQL_PluginProtocol proto,
+	const ProxySQL_PluginQueryHookPayload& payload,
+	ProxySQL_PluginQueryHookResult& result
+) {
+	std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
+	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load();
+	if (mgr == nullptr) {
+		return false;
+	}
+	return mgr->dispatch_query_hook(proto, payload, result);
+}
+
+bool proxysql_has_configured_plugin_query_hook(ProxySQL_PluginProtocol proto) {
+	// Hot path: lock-free.  Reads the atomic pointer; if non-null, calls
+	// has_query_hook() which only reads two pointer-sized fields.  A
+	// concurrent unload can null the pointer between this check and a
+	// subsequent dispatch call -- the dispatch helper handles that case
+	// by re-checking under the lock.  Callers must tolerate spurious
+	// "yes" returns.
+	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load(std::memory_order_acquire);
+	if (mgr == nullptr) {
+		return false;
+	}
+	return mgr->has_query_hook(proto);
 }
 
 bool proxysql_load_configured_plugins(

@@ -58,6 +58,56 @@ using proxysql_plugin_db_handle_cb =
 using proxysql_plugin_log_message_cb =
 	void (*)(int, const char *);
 
+// Pre-execution query hook (Step 2 ABI extension).
+//
+// Wire protocol the hook is being invoked for.  A plugin can register
+// independently for each protocol; one hook per protocol per plugin.
+enum class ProxySQL_PluginProtocol : uint8_t {
+	mysql = 0,
+	pgsql = 1
+};
+
+// Payload handed to a query-hook callback.  All pointers are owned by
+// core and remain valid only for the duration of the callback.  The
+// callback must not retain them or mutate the underlying buffers.
+//
+// query_text is the SQL the client sent, NOT NUL-terminated; query_len
+// is its length in bytes.  user / client_ip / schema are NUL-terminated
+// C strings and may be empty (never NULL).
+struct ProxySQL_PluginQueryHookPayload {
+	const char *user;
+	const char *client_ip;
+	const char *schema;
+	const char *query_text;
+	uint32_t    query_len;
+};
+
+// Outcome of a query hook.  ALLOW lets the query proceed to the
+// backend.  DENY returns an error to the client and the query never
+// dispatches; the message is copied by core, the plugin need not keep
+// it alive after the callback returns.
+//
+// NOTE: same std::string ABI coupling caveat as
+// ProxySQL_PluginCommandResult applies.
+enum class ProxySQL_PluginQueryHookAction : uint8_t {
+	allow = 0,
+	deny  = 1
+};
+
+struct ProxySQL_PluginQueryHookResult {
+	ProxySQL_PluginQueryHookAction action;
+	std::string message;
+};
+
+using proxysql_plugin_query_hook_cb =
+	ProxySQL_PluginQueryHookResult (*)(const ProxySQL_PluginQueryHookPayload &);
+
+// register_query_hook(proto, cb).  Returns true on success, false if a
+// hook for that protocol is already registered.  Valid only during the
+// init callback (same lifetime rule as register_table / register_command).
+using proxysql_plugin_register_query_hook_cb =
+	bool (*)(ProxySQL_PluginProtocol, proxysql_plugin_query_hook_cb);
+
 // Services provided to plugins during init.
 // register_table/register_command: valid only during the init callback.
 // get_*db, log_message, snapshots: valid for the plugin's entire lifetime.
@@ -71,6 +121,10 @@ struct ProxySQL_PluginServices {
 	proxysql_plugin_db_handle_cb get_admindb;
 	proxysql_plugin_db_handle_cb get_configdb;
 	proxysql_plugin_db_handle_cb get_statsdb;
+	// Step 2 ABI extension: pre-execution query hook.  Older plugins
+	// that don't know about this field stop reading the struct at the
+	// previous member; new plugins check for non-null before calling.
+	proxysql_plugin_register_query_hook_cb register_query_hook;
 };
 
 using proxysql_plugin_init_cb =

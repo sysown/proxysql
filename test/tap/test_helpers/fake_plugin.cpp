@@ -2,6 +2,8 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <string>
 
 namespace {
 
@@ -9,6 +11,21 @@ ProxySQL_PluginServices* fake_services = nullptr;
 
 ProxySQL_PluginCommandResult fake_command(const ProxySQL_PluginCommandContext&, const char*) {
 	return {0, 1, "fake command executed"};
+}
+
+ProxySQL_PluginQueryHookResult fake_query_hook(const ProxySQL_PluginQueryHookPayload& payload) {
+	// Echo the SQL back through the message field so tests can verify the
+	// payload was wired through.  DENY-vs-ALLOW is selected by env var so
+	// a test can exercise both paths without rebuilding the plugin.
+	std::string msg(payload.query_text, payload.query_len);
+	const char* deny_env = std::getenv("PROXYSQL_FAKE_PLUGIN_HOOK_DENY");
+	if (deny_env == nullptr) {
+		deny_env = std::getenv("PROXYSQL_FAKE_PLUGIN2_HOOK_DENY");
+	}
+	if (deny_env != nullptr && *deny_env != '\0') {
+		return {ProxySQL_PluginQueryHookAction::deny, std::string("denied: ") + msg};
+	}
+	return {ProxySQL_PluginQueryHookAction::allow, msg};
 }
 
 void fake_log_event(const char *event) {
@@ -46,6 +63,16 @@ bool fake_init(ProxySQL_PluginServices *services) {
 	    services != nullptr &&
 	    services->register_command != nullptr) {
 		services->register_command("PLUGIN FAKE NOOP", &fake_command);
+	}
+	if (std::getenv("PROXYSQL_FAKE_PLUGIN_REGISTER_QUERY_HOOK") != nullptr &&
+	    services != nullptr &&
+	    services->register_query_hook != nullptr) {
+		const char* proto_env = std::getenv("PROXYSQL_FAKE_PLUGIN_REGISTER_QUERY_HOOK_PROTO");
+		ProxySQL_PluginProtocol proto = ProxySQL_PluginProtocol::mysql;
+		if (proto_env != nullptr && std::strcmp(proto_env, "pgsql") == 0) {
+			proto = ProxySQL_PluginProtocol::pgsql;
+		}
+		services->register_query_hook(proto, &fake_query_hook);
 	}
 	fake_log_event("init");
 	return true;

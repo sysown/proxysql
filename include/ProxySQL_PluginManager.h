@@ -29,6 +29,11 @@ public:
 	bool has_command_for_test(const std::string& sql) const;
 	bool register_table(const ProxySQL_PluginTableDef& def);
 	bool register_command(const char* sql, proxysql_plugin_admin_command_cb cb);
+	bool register_query_hook(ProxySQL_PluginProtocol proto, proxysql_plugin_query_hook_cb cb);
+	bool has_query_hook(ProxySQL_PluginProtocol proto) const;
+	bool dispatch_query_hook(ProxySQL_PluginProtocol proto,
+	                         const ProxySQL_PluginQueryHookPayload& payload,
+	                         ProxySQL_PluginQueryHookResult& result) const;
 
 	size_t size() const;
 
@@ -59,6 +64,9 @@ private:
 	std::vector<ProxySQL_PluginTableDef> tables_stats_;
 	std::deque<registered_table_storage_t> table_storage_;
 	std::vector<registered_command_t> commands_;
+	// At most one hook per protocol; nullptr means "no hook".
+	proxysql_plugin_query_hook_cb mysql_query_hook_ { nullptr };
+	proxysql_plugin_query_hook_cb pgsql_query_hook_ { nullptr };
 };
 
 ProxySQL_PluginManager* proxysql_get_plugin_manager();
@@ -67,6 +75,17 @@ bool proxysql_dispatch_configured_plugin_admin_command(
 	const std::string& sql,
 	ProxySQL_PluginCommandResult& result
 );
+bool proxysql_dispatch_configured_plugin_query_hook(
+	ProxySQL_PluginProtocol proto,
+	const ProxySQL_PluginQueryHookPayload& payload,
+	ProxySQL_PluginQueryHookResult& result
+);
+// Fast path for hot code: returns true when the active manager has a hook
+// registered for the given protocol.  No locks taken.  Callers should still
+// invoke proxysql_dispatch_configured_plugin_query_hook to actually run the
+// hook (which takes the manager lock).  Use this to elide the dispatch call
+// entirely on the no-plugin path.
+bool proxysql_has_configured_plugin_query_hook(ProxySQL_PluginProtocol proto);
 bool proxysql_load_configured_plugins(
 	std::unique_ptr<ProxySQL_PluginManager>& manager,
 	const std::vector<std::string>& plugin_modules,
