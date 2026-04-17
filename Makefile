@@ -287,6 +287,7 @@ build_lib_legacy: build_deps_legacy
 build_src_legacy: build_lib_legacy
 	cd src && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysqlx && OPTZ="${O2} -ggdb" PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysqlx plugin (PROXYSQL40 not set)")
+	$(if $(filter 1,$(PROXYSQL40)),cd plugins/genai && OPTZ="${O2} -ggdb" PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] genai plugin (PROXYSQL40 not set)")
 
 .PHONY: build_deps_debug_legacy
 build_deps_debug_legacy:
@@ -300,6 +301,7 @@ build_lib_debug_legacy: build_deps_debug_legacy
 build_src_debug_legacy: build_lib_debug_legacy
 	cd src && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysqlx && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysqlx plugin (PROXYSQL40 not set)")
+	$(if $(filter 1,$(PROXYSQL40)),cd plugins/genai && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] genai plugin (PROXYSQL40 not set)")
 #--
 
 .PHONY: build_src_testaurora
@@ -411,11 +413,13 @@ build_lib_debug_default: build_deps_debug_default
 build_src_default: build_lib_default
 	cd src && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysqlx && OPTZ="${O2} -ggdb" PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysqlx plugin (PROXYSQL40 not set)")
+	$(if $(filter 1,$(PROXYSQL40)),cd plugins/genai && OPTZ="${O2} -ggdb" PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] genai plugin (PROXYSQL40 not set)")
 
 .PHONY: build_src_debug_default
 build_src_debug_default: build_lib_debug_default
 	cd src && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysqlx && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysqlx plugin (PROXYSQL40 not set)")
+	$(if $(filter 1,$(PROXYSQL40)),cd plugins/genai && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] genai plugin (PROXYSQL40 not set)")
 
 
 ### packaging targets
@@ -500,6 +504,7 @@ clean:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 	cd plugins/mysqlx && ${MAKE} clean
+	cd plugins/genai && ${MAKE} clean
 	cd test/tap && ${MAKE} clean
 	rm -f pkgroot || true
 
@@ -509,12 +514,14 @@ cleandeps:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 	cd plugins/mysqlx && ${MAKE} clean
+	cd plugins/genai && ${MAKE} clean
 
 .PHONY: cleandev
 cleandev:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 	cd plugins/mysqlx && ${MAKE} clean
+	cd plugins/genai && ${MAKE} clean
 
 .PHONY: cleantest
 cleantest:
@@ -527,6 +534,7 @@ cleanall:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 	cd plugins/mysqlx && ${MAKE} clean
+	cd plugins/genai && ${MAKE} clean
 	cd test/tap && ${MAKE} clean
 	cd test/deps && ${MAKE} cleanall
 	rm -f binaries/* || true
@@ -538,6 +546,7 @@ cleanbuild:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 	cd plugins/mysqlx && ${MAKE} clean
+	cd plugins/genai && ${MAKE} clean
 	rm -rf pkgroot || true
 
 

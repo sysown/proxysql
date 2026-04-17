@@ -378,6 +378,7 @@ UNIT_TESTS += \
 	plugin_query_hook_unit-t \
 	plugin_prometheus_unit-t \
 	plugin_lifecycle_unit-t \
+	genai_plugin_load_unit-t \
 	test_mysqlx_plugin_load-t \
 	test_mysqlx_admin_tables-t \
 	mysqlx_config_store_unit-t \
@@ -630,6 +631,21 @@ plugin_prometheus_unit-t: plugin_prometheus_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)
 plugin_lifecycle_unit-t: plugin_lifecycle_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
+		$(IDIRS) $(LDIRS) $(OPT) $(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+# genai_plugin_load_unit-t loads the real genai plugin .so (built by
+# plugins/genai/Makefile) and exercises its lifecycle.  The Makefile here
+# delegates the .so build to the plugin directory rather than restating
+# its compile rules.
+GENAI_PLUGIN_SO := $(PROXYSQL_PATH)/plugins/genai/ProxySQL_GenAI_Plugin.so
+.PHONY: $(GENAI_PLUGIN_SO)
+$(GENAI_PLUGIN_SO):
+	$(MAKE) -C $(PROXYSQL_PATH)/plugins/genai
+
+genai_plugin_load_unit-t: genai_plugin_load_unit-t.cpp $(GENAI_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		-DPROXYSQL_GENAI_PLUGIN_PATH=\"$(GENAI_PLUGIN_SO)\" \
 		$(IDIRS) $(LDIRS) $(OPT) $(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
