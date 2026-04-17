@@ -140,10 +140,11 @@ private:
 	// 4002 = route has no endpoints or prerequisites missing) and has
 	// already emitted an X-Protocol Error frame, recorded the failure
 	// via mysqlx_stats().record_conn_err(), and marked the session
-	// unhealthy. Designed to be called at auth-complete, before
-	// send_auth_ok(), so a routing failure never races with the client
-	// seeing a phantom Ok on the wire. Not yet wired into the auth flow
-	// (Task 4 wires it).
+	// unhealthy. Called from the auth handlers (handle_auth_plain,
+	// handler_auth_challenge_response) immediately before send_auth_ok()
+	// so any routing failure surfaces as an X-Protocol Error frame
+	// instead of leaving the client in a phantom "authenticated" state
+	// with no backend target.
 	int resolve_backend_target();
 
 	MysqlxDataStream client_ds_;

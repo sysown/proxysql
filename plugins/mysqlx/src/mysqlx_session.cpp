@@ -732,6 +732,7 @@ void MysqlxSession::handler_tls_accept_init() {
 int MysqlxSession::resolve_backend_target() {
 	if (!identity_) {
 		send_error(4002, "No backend available: missing identity");
+		mysqlx_stats().record_conn_err("", 0);
 		healthy = false;
 		return 4002;
 	}
