@@ -5,6 +5,8 @@
 
 #include <string>
 
+#include <cstdio>
+
 namespace {
 
 const char kMysqlxUsersTable[] = "mysqlx_users";
@@ -451,6 +453,7 @@ const char kStatsMysqlxProcesslistTableDef[] =
 
 bool mysqlx_register_admin_schema(ProxySQL_PluginServices& services) {
 	if (services.register_table == nullptr || services.register_command == nullptr) {
+		fprintf(stderr, "mysqlx: cannot register admin schema, services not available\n");
 		return false;
 	}
 

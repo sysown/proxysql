@@ -1,6 +1,7 @@
 #include "tap.h"
 #include "ProxySQL_PluginManager.h"
 
+#include <cstdlib>
 #include <string>
 #include <unistd.h>
 
@@ -148,12 +149,71 @@ static void test_lifecycle_edge_cases() {
 	}
 }
 
+static void test_init_failure() {
+	setenv("PROXYSQL_FAKE_PLUGIN_INIT_FAIL", "1", 1);
+	ProxySQL_PluginManager mgr;
+	std::string err;
+
+	ok(mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err), "plugin loads before init failure test");
+	ok(!mgr.init_all(err), "init_all returns false when plugin init fails");
+	ok(!err.empty(), "init failure reports an error string");
+	ok(err.find("fake_plugin") != std::string::npos,
+	   "init error message identifies the failing plugin");
+
+	unsetenv("PROXYSQL_FAKE_PLUGIN_INIT_FAIL");
+}
+
+static void test_start_failure() {
+	setenv("PROXYSQL_FAKE_PLUGIN_START_FAIL", "1", 1);
+	ProxySQL_PluginManager mgr;
+	std::string err;
+
+	ok(mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err), "plugin loads before start failure test");
+	ok(mgr.init_all(err), "init_all succeeds before start failure test");
+	ok(!mgr.start_all(err), "start_all returns false when plugin start fails");
+	ok(!err.empty(), "start failure reports an error string");
+	ok(err.find("fake_plugin") != std::string::npos,
+	   "start error message identifies the failing plugin");
+
+	unsetenv("PROXYSQL_FAKE_PLUGIN_START_FAIL");
+}
+
+static void test_stop_failure() {
+	setenv("PROXYSQL_FAKE_PLUGIN_STOP_FAIL", "1", 1);
+	ProxySQL_PluginManager mgr;
+	std::string err;
+
+	ok(mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err), "plugin loads before stop failure test");
+	ok(mgr.init_all(err), "init_all succeeds before stop failure test");
+	ok(mgr.start_all(err), "start_all succeeds before stop failure test");
+	ok(!mgr.stop_all(), "stop_all returns false when plugin stop fails");
+
+	unsetenv("PROXYSQL_FAKE_PLUGIN_STOP_FAIL");
+}
+
+static void test_double_load() {
+	ProxySQL_PluginManager mgr;
+	std::string err;
+
+	ok(mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err), "first load succeeds");
+	ok(mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err), "second load of same path also succeeds");
+	ok(mgr.size() == 2, "two plugin handles exist after double load");
+
+	ok(mgr.init_all(err), "init_all succeeds with both handles");
+	ok(mgr.start_all(err), "start_all succeeds with both handles");
+	ok(mgr.stop_all(), "stop_all succeeds with both handles");
+}
+
 int main() {
-	plan(20);
+	plan(39);
 
 	test_loader_round_trip();
 	test_load_error_cases();
 	test_lifecycle_edge_cases();
+	test_init_failure();
+	test_start_failure();
+	test_stop_failure();
+	test_double_load();
 
 	return exit_status();
 }

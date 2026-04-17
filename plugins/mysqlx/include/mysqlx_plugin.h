@@ -6,6 +6,7 @@
 #include "mysqlx_config_store.h"
 #include "mysqlx_thread.h"
 
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -13,7 +14,7 @@ struct MysqlxPluginContext {
 	ProxySQL_PluginServices* services { nullptr };
 	std::unique_ptr<MysqlxConfigStore> config_store {};
 	std::vector<std::unique_ptr<Mysqlx_Thread>> threads {};
-	bool started { false };
+	std::atomic<bool> started { false };
 };
 
 MysqlxPluginContext& mysqlx_context();

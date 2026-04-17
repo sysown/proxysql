@@ -1,5 +1,7 @@
 #include "ProxySQL_PluginManager.h"
 
+#include <atomic>
+#include <cassert>
 #include <cctype>
 #include <cstring>
 #include <dlfcn.h>
@@ -14,7 +16,7 @@ SQLite3DB* proxysql_plugin_get_statsdb();
 
 namespace {
 
-ProxySQL_PluginManager* g_active_plugin_manager = nullptr;
+std::atomic<ProxySQL_PluginManager*> g_active_plugin_manager { nullptr };
 ProxySQL_PluginManager* g_registry_target = nullptr;
 std::mutex g_active_plugin_manager_mutex {};
 bool g_registry_registration_failed = false;
@@ -211,6 +213,12 @@ bool ProxySQL_PluginManager::load(const std::string &path, std::string &err) {
 		return false;
 	}
 
+	if (descriptor->name == nullptr || descriptor->name[0] == '\0') {
+		err = "plugin descriptor has null or empty name";
+		dlclose(handle);
+		return false;
+	}
+
 	if (descriptor->abi_version != 1) {
 		err = "unsupported plugin ABI version";
 		dlclose(handle);
@@ -226,6 +234,9 @@ bool ProxySQL_PluginManager::load(const std::string &path, std::string &err) {
 }
 
 bool ProxySQL_PluginManager::init_all(std::string &err) {
+	// Only called during single-threaded startup; g_registry_target and
+	// g_registry_registration_* globals have no mutex protection by design.
+	assert(g_registry_target == nullptr);
 	err.clear();
 
 	for (auto &plugin : plugins_) {
@@ -340,6 +351,8 @@ bool ProxySQL_PluginManager::dispatch_admin_command(const ProxySQL_PluginCommand
 		if (command.cb == nullptr) {
 			return false;
 		}
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Dispatching plugin command: %s\n",
+			    command.sql.c_str());
 		result = command.cb(ctx, canonical_sql.c_str());
 		return true;
 	}
@@ -438,8 +451,7 @@ bool ProxySQL_PluginManager::register_command(const char* sql, proxysql_plugin_a
 }
 
 ProxySQL_PluginManager* proxysql_get_plugin_manager() {
-	std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
-	return g_active_plugin_manager;
+	return g_active_plugin_manager.load(std::memory_order_acquire);
 }
 
 bool proxysql_dispatch_configured_plugin_admin_command(
@@ -448,11 +460,11 @@ bool proxysql_dispatch_configured_plugin_admin_command(
 	ProxySQL_PluginCommandResult& result
 ) {
 	std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
-	if (g_active_plugin_manager == nullptr) {
+	if (g_active_plugin_manager.load() == nullptr) {
 		return false;
 	}
 
-	return g_active_plugin_manager->dispatch_admin_command(ctx, sql, result);
+	return g_active_plugin_manager.load()->dispatch_admin_command(ctx, sql, result);
 }
 
 bool proxysql_load_configured_plugins(
@@ -463,7 +475,7 @@ bool proxysql_load_configured_plugins(
 	err.clear();
 	{
 		std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
-		g_active_plugin_manager = nullptr;
+		g_active_plugin_manager.store(nullptr, std::memory_order_release);
 	}
 	manager.reset();
 
@@ -486,7 +498,7 @@ bool proxysql_load_configured_plugins(
 	{
 		std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
 		manager = std::move(next_manager);
-		g_active_plugin_manager = manager.get();
+		g_active_plugin_manager.store(manager.get(), std::memory_order_release);
 	}
 	return true;
 }
@@ -510,7 +522,7 @@ bool proxysql_stop_configured_plugins(
 	err.clear();
 	{
 		std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
-		g_active_plugin_manager = nullptr;
+		g_active_plugin_manager.store(nullptr, std::memory_order_release);
 	}
 	if (!manager) {
 		return true;

@@ -28,6 +28,10 @@ void fake_log_event(const char *event) {
 
 bool fake_init(ProxySQL_PluginServices *services) {
 	fake_services = services;
+	if (std::getenv("PROXYSQL_FAKE_PLUGIN_INIT_FAIL") != nullptr) {
+		fake_log_event("init_fail");
+		return false;
+	}
 	if (std::getenv("PROXYSQL_FAKE_PLUGIN_REGISTER_INVALID_TABLE") != nullptr &&
 	    services != nullptr &&
 	    services->register_table != nullptr) {
@@ -48,6 +52,10 @@ bool fake_init(ProxySQL_PluginServices *services) {
 }
 
 bool fake_start() {
+	if (std::getenv("PROXYSQL_FAKE_PLUGIN_START_FAIL") != nullptr) {
+		fake_log_event("start_fail");
+		return false;
+	}
 	if (fake_services == nullptr ||
 	    fake_services->get_admindb == nullptr ||
 	    fake_services->get_configdb == nullptr ||
@@ -62,6 +70,10 @@ bool fake_start() {
 }
 
 bool fake_stop() {
+	if (std::getenv("PROXYSQL_FAKE_PLUGIN_STOP_FAIL") != nullptr) {
+		fake_log_event("stop_fail");
+		return false;
+	}
 	fake_log_event("stop");
 	return true;
 }

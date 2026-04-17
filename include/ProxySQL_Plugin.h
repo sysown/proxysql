@@ -13,12 +13,16 @@ enum class ProxySQL_PluginDBKind : uint8_t {
 	stats_db = 2
 };
 
+// The manager deep-copies table_name and table_def; the plugin need not keep
+// the pointed-to strings alive after register_table returns.
 struct ProxySQL_PluginTableDef {
 	ProxySQL_PluginDBKind db_kind;
 	const char *table_name;
 	const char *table_def;
 };
 
+// Borrowed DB handles valid for the duration of the admin command callback.
+// Must not be stored beyond the callback invocation.
 struct ProxySQL_PluginCommandContext {
 	SQLite3DB *admindb;
 	SQLite3DB *configdb;
@@ -54,6 +58,9 @@ using proxysql_plugin_db_handle_cb =
 using proxysql_plugin_log_message_cb =
 	void (*)(int, const char *);
 
+// Services provided to plugins during init.
+// register_table/register_command: valid only during the init callback.
+// get_*db, log_message, snapshots: valid for the plugin's entire lifetime.
 struct ProxySQL_PluginServices {
 	proxysql_plugin_register_table_cb register_table;
 	proxysql_plugin_register_command_cb register_command;
@@ -75,6 +82,8 @@ using proxysql_plugin_start_cb =
 using proxysql_plugin_stop_cb =
 	bool (*)();
 
+// Returned pointer must have static storage duration (string literal or static
+// buffer). The caller does not free it.
 using proxysql_plugin_status_json_cb =
 	const char *(*)();
 
