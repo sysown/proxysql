@@ -6,6 +6,7 @@
 
 class SQLite3DB;
 class SQLite3_result;
+namespace prometheus { class Registry; }
 
 enum class ProxySQL_PluginDBKind : uint8_t {
 	admin_db = 0,
@@ -108,6 +109,24 @@ using proxysql_plugin_query_hook_cb =
 using proxysql_plugin_register_query_hook_cb =
 	bool (*)(ProxySQL_PluginProtocol, proxysql_plugin_query_hook_cb);
 
+// Returns the prometheus::Registry* that core uses for its own metrics.
+// Plugins register their counters / gauges / histograms against this
+// shared registry using prometheus-cpp directly; their metrics then
+// surface at the same /metrics endpoint scrapers already poll.
+//
+// NOTE: prometheus-cpp is a C++ library with C++ ABI surface.  Same
+// build-environment caveat applies as to std::string in this header:
+// plugins must be compiled in the ProxySQL build tree (or at least
+// against a matching prometheus-cpp version + matching libstdc++).
+//
+// Lifetime: GloVars and its prometheus registry are constructed
+// before any plugin is loaded, so the returned pointer is non-null
+// for every callback (init, start, admin command callback, query
+// hook).  Plugins may register metrics in init() if they want them
+// scraped immediately.
+using proxysql_plugin_get_prometheus_registry_cb =
+	prometheus::Registry* (*)();
+
 // Services provided to plugins during init.
 // register_table/register_command: valid only during the init callback.
 // get_*db, log_message, snapshots: valid for the plugin's entire lifetime.
@@ -121,10 +140,12 @@ struct ProxySQL_PluginServices {
 	proxysql_plugin_db_handle_cb get_admindb;
 	proxysql_plugin_db_handle_cb get_configdb;
 	proxysql_plugin_db_handle_cb get_statsdb;
-	// Step 2 ABI extension: pre-execution query hook.  Older plugins
-	// that don't know about this field stop reading the struct at the
-	// previous member; new plugins check for non-null before calling.
+	// Step 2 ABI extensions.  Both fields are additive at the end of
+	// the struct -- older plugins that were built against the previous
+	// layout don't read past the previous member; new plugins must
+	// check non-null before calling.
 	proxysql_plugin_register_query_hook_cb register_query_hook;
+	proxysql_plugin_get_prometheus_registry_cb get_prometheus_registry;
 };
 
 using proxysql_plugin_init_cb =

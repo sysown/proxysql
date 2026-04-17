@@ -9,6 +9,10 @@
 #include <strings.h>
 
 #include "proxysql.h"
+#include "proxysql_glovars.hpp"
+#include "prometheus/registry.h"
+
+extern ProxySQL_GlobalVariables GloVars;
 
 SQLite3DB* proxysql_plugin_get_admindb();
 SQLite3DB* proxysql_plugin_get_configdb();
@@ -111,6 +115,10 @@ SQLite3DB* get_statsdb_service() {
 	return proxysql_plugin_get_statsdb();
 }
 
+prometheus::Registry* get_prometheus_registry_service() {
+	return GloVars.prometheus_registry.get();
+}
+
 void log_message_service(int level, const char* message) {
 	if (message == nullptr) {
 		return;
@@ -182,6 +190,7 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_.get_statsdb = &get_statsdb_service;
 	services_.log_message = &log_message_service;
 	services_.register_query_hook = &register_query_hook_service;
+	services_.get_prometheus_registry = &get_prometheus_registry_service;
 }
 
 ProxySQL_PluginManager::~ProxySQL_PluginManager() {
