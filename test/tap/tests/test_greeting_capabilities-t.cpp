@@ -11,32 +11,37 @@
  * 32-bit capability bitmask that tells the client which protocol features the
  * server supports (see MySQL Client/Server Protocol documentation).
  *
- * A subset of those capability bits are controlled by runtime ProxySQL
- * variables and can therefore be toggled at will:
+ * Most of those bits are hard-coded to always-on values that match what a
+ * real MySQL server advertises — see @ref BASELINE_PRESENT_CAPS. One bit,
+ * `CLIENT_DEPRECATE_EOF`, is controlled at runtime by
+ * `mysql-enable_client_deprecate_eof`, because enabling it changes the wire
+ * protocol (no EOF packets) and not every client is ready for that.
  *
- *   - CLIENT_DEPRECATE_EOF    -> `mysql-enable_client_deprecate_eof`
- *   - CLIENT_SESSION_TRACKING -> `mysql-enable_client_session_tracking`
- *
- * This test exercises all four combinations of those two toggles and checks
- * the resulting capability bitmask returned by ProxySQL.
+ * Regression protection
+ * ---------------------
+ * The hard-coded bits were accidentally dropped during the zstd support
+ * refactor (commit `8c6a6444d`, shipped in v3.0.7). This regression manifested
+ * as `java.lang.ArrayIndexOutOfBoundsException` on JDBC clients relying on
+ * `CLIENT_SESSION_TRACKING` (see issues #4023 and #5621). The baseline check
+ * in @ref verify_caps is specifically designed to catch any future removal of
+ * those bits early.
  *
  * Test strategy
  * -------------
- * For each combination `{deprecate_eof, session_tracking}` in
- * `{off,off} / {on,on} / {on,off} / {off,on}`:
+ * The test runs two scenarios covering the `mysql-enable_client_deprecate_eof`
+ * toggle (`on` / `off`). Each scenario:
  *
- *  1. Set the two variables on the ProxySQL admin interface.
- *  2. Apply the variables to runtime (`LOAD MYSQL VARIABLES TO RUNTIME`).
- *  3. Open a fresh client connection against ProxySQL (mysql_real_connect).
- *  4. Read `mysql->server_capabilities` (populated by libmariadb from the
+ *  1. Sets the variable on the ProxySQL admin interface.
+ *  2. Applies it to runtime (`LOAD MYSQL VARIABLES TO RUNTIME`).
+ *  3. Opens a fresh client connection against ProxySQL (`mysql_real_connect`).
+ *  4. Reads `mysql->server_capabilities` (populated by libmariadb from the
  *     greeting packet).
- *  5. Check that every capability in the expectation's `present_caps` is set
- *     and every capability in `absent_caps` is cleared.
- *  6. Emit a single TAP `ok()` with a verbose message and `diag()` traces for
- *     every intermediate value so a failure can be debugged without attaching
- *     a protocol analyzer.
+ *  5. Checks that every bit in @ref BASELINE_PRESENT_CAPS is set, plus the
+ *     scenario-specific expectation on `CLIENT_DEPRECATE_EOF`.
+ *  6. Emits a TAP `ok()` plus `diag()` traces for every intermediate value so
+ *     a failure can be debugged without attaching a protocol analyzer.
  *
- * The suite keeps running after a failure so that a single run surfaces every
+ * The suite keeps running after a failure so a single run surfaces every
  * broken scenario at once.
  */
 
@@ -151,21 +156,30 @@ static string caps_to_string(uint64_t caps) {
 }
 
 /**
- * @brief Capability bits ProxySQL MUST advertise in every greeting, regardless
- *        of any runtime toggle.
+ * @brief Capability bits ProxySQL MUST advertise in every greeting.
  *
- * These match what a real MySQL 8.x server advertises in its Server Greeting
- * and are relied upon by several clients (JDBC in particular — see issue
- * #4023). Regressing any of them typically manifests as
- * `java.lang.ArrayIndexOutOfBoundsException` on the client side.
+ * These are hard-coded into the `extended_capabilities` local in
+ * `MySQL_Protocol::generate_pkt_initial_handshake` and match what a real
+ * MySQL 8.x server advertises. Several clients rely on them — in particular
+ * JDBC needs `CLIENT_SESSION_TRACKING` to parse GTID data from OK packets,
+ * and PS_MULTI_RESULTS is required for stored procedures returning multiple
+ * result sets.
  *
- * This list is checked against every scenario via @ref verify_caps.
+ * These bits are intentionally NOT configurable through
+ * `mysql-server_capabilities`: that admin variable is OR-combined with the
+ * greeting, so it can only *add* bits, never remove them — precisely so a
+ * misconfigured runtime cannot strip protocol-critical capabilities.
+ *
+ * Regressing any of these bits typically manifests as
+ * `java.lang.ArrayIndexOutOfBoundsException` on JDBC clients (issue #4023)
+ * or as clients silently losing session-tracking data (issue #5621).
  */
 static const vector<uint64_t> BASELINE_PRESENT_CAPS = {
 	CLIENT_MULTI_STATEMENTS,
 	CLIENT_MULTI_RESULTS,
 	CLIENT_PS_MULTI_RESULTS,
 	CLIENT_PLUGIN_AUTH,
+	CLIENT_SESSION_TRACKING,
 	CLIENT_REMEMBER_OPTIONS,
 };
 
@@ -175,8 +189,8 @@ static const vector<uint64_t> BASELINE_PRESENT_CAPS = {
  *
  * A test scenario supplies one `caps_expectation_t` describing ONLY the bits
  * it cares to toggle. Bits in @ref present_caps MUST be set in
- * `mysql->server_capabilities`; bits in @ref absent_caps MUST be cleared. Bits
- * appearing in neither list are ignored here because ProxySQL's baseline
+ * `mysql->server_capabilities`; bits in @ref absent_caps MUST be cleared.
+ * Bits appearing in neither list are ignored here because ProxySQL's baseline
  * greeting also flips bits like `CLIENT_COMPRESS`, `CLIENT_SSL`, etc. whose
  * values depend on global configuration unrelated to the scenario.
  *
@@ -234,32 +248,22 @@ static bool verify_caps(uint64_t actual_caps, const caps_expectation_t& exp) {
 }
 
 /**
- * @brief Apply the two runtime toggles under test and reload them.
+ * @brief Apply the `mysql-enable_client_deprecate_eof` toggle and reload.
  *
- * Runs three admin statements:
+ * Runs two admin statements:
  *   - `SET mysql-enable_client_deprecate_eof = <0|1>`
- *   - `SET mysql-enable_client_session_tracking = <0|1>`
  *   - `LOAD MYSQL VARIABLES TO RUNTIME`
  *
- * @param admin            Already-connected admin MYSQL* handle.
- * @param deprecate_eof    Desired value for `mysql-enable_client_deprecate_eof`.
- * @param session_tracking Desired value for `mysql-enable_client_session_tracking`.
- * @return                 `true` on success, `false` if any statement failed
- *                         (the error is printed via `diag()` before returning).
+ * @param admin         Already-connected admin MYSQL* handle.
+ * @param deprecate_eof Desired value for `mysql-enable_client_deprecate_eof`.
+ * @return              `true` on success, `false` if any statement failed
+ *                      (the error is printed via `diag()` before returning).
  */
-static bool apply_runtime_toggles(MYSQL* admin, bool deprecate_eof, bool session_tracking) {
+static bool apply_deprecate_eof(MYSQL* admin, bool deprecate_eof) {
 	char stmt[256];
 
 	snprintf(stmt, sizeof(stmt),
 			 "SET mysql-enable_client_deprecate_eof=%d", deprecate_eof ? 1 : 0);
-	diag("  admin> %s", stmt);
-	if (mysql_query(admin, stmt)) {
-		diag("  admin query failed: %s", mysql_error(admin));
-		return false;
-	}
-
-	snprintf(stmt, sizeof(stmt),
-			 "SET mysql-enable_client_session_tracking=%d", session_tracking ? 1 : 0);
 	diag("  admin> %s", stmt);
 	if (mysql_query(admin, stmt)) {
 		diag("  admin query failed: %s", mysql_error(admin));
@@ -314,16 +318,14 @@ static MYSQL* open_client(const CommandLine& cl, uint64_t client_flag) {
 
 /**
  * @struct scenario_t
- * @brief  One permutation of the runtime toggles plus its expectation.
+ * @brief  One permutation of the `deprecate_eof` toggle plus its expectation.
  *
- * Keeping the four scenarios in a table makes the main loop small and the
- * list of cases easy to extend: adding a fifth scenario only requires a new
- * row here, not more code.
+ * Keeping the scenarios in a table makes the main loop small and the list of
+ * cases easy to extend: adding a new row here is all that's needed.
  */
 struct scenario_t {
 	const char*        name;                ///< Short label used in TAP + diag.
 	bool               deprecate_eof;       ///< Value of the runtime toggle.
-	bool               session_tracking;    ///< Value of the runtime toggle.
 	uint64_t           client_flag;         ///< Extra `client_flag` the client advertises before connect.
 	caps_expectation_t expectation;         ///< Bits required/forbidden in the greeting.
 };
@@ -332,7 +334,7 @@ struct scenario_t {
  * @brief Execute every scenario once, emitting one TAP assertion per run.
  *
  * The function:
- *   - calls @ref apply_runtime_toggles to push the variables,
+ *   - calls @ref apply_deprecate_eof to push the variable,
  *   - calls @ref open_client to connect,
  *   - reads `proxy->server_capabilities`,
  *   - prints a full before/after trace via `diag()`,
@@ -346,43 +348,21 @@ struct scenario_t {
 static int run_scenarios(const CommandLine& cl, MYSQL* admin) {
 	const scenario_t scenarios[] = {
 		{
-			"both_off",
-			/* deprecate_eof    */ false,
-			/* session_tracking */ false,
-			/* client_flag      */ 0,
-			/* expectation      */ {
+			"deprecate_eof_off",
+			/* deprecate_eof */ false,
+			/* client_flag   */ 0,
+			/* expectation   */ {
 				/* present */ {},
-				/* absent  */ { CLIENT_DEPRECATE_EOF, CLIENT_SESSION_TRACKING },
-			},
-		},
-		{
-			"both_on",
-			/* deprecate_eof    */ true,
-			/* session_tracking */ true,
-			/* client_flag      */ CLIENT_DEPRECATE_EOF,
-			/* expectation      */ {
-				/* present */ { CLIENT_DEPRECATE_EOF, CLIENT_SESSION_TRACKING },
-				/* absent  */ {},
-			},
-		},
-		{
-			"eof_on_tracking_off",
-			/* deprecate_eof    */ true,
-			/* session_tracking */ false,
-			/* client_flag      */ CLIENT_DEPRECATE_EOF,
-			/* expectation      */ {
-				/* present */ { CLIENT_DEPRECATE_EOF },
-				/* absent  */ { CLIENT_SESSION_TRACKING },
-			},
-		},
-		{
-			"eof_off_tracking_on",
-			/* deprecate_eof    */ false,
-			/* session_tracking */ true,
-			/* client_flag      */ 0,
-			/* expectation      */ {
-				/* present */ { CLIENT_SESSION_TRACKING },
 				/* absent  */ { CLIENT_DEPRECATE_EOF },
+			},
+		},
+		{
+			"deprecate_eof_on",
+			/* deprecate_eof */ true,
+			/* client_flag   */ CLIENT_DEPRECATE_EOF,
+			/* expectation   */ {
+				/* present */ { CLIENT_DEPRECATE_EOF },
+				/* absent  */ {},
 			},
 		},
 	};
@@ -391,14 +371,14 @@ static int run_scenarios(const CommandLine& cl, MYSQL* admin) {
 	for (const scenario_t& s : scenarios) {
 		++scenario_idx;
 		diag("================================================================");
-		diag("Scenario %d/%zu: %s  (deprecate_eof=%d, session_tracking=%d)",
+		diag("Scenario %d/%zu: %s  (deprecate_eof=%d)",
 			 scenario_idx,
 			 sizeof(scenarios) / sizeof(scenarios[0]),
-			 s.name, s.deprecate_eof ? 1 : 0, s.session_tracking ? 1 : 0);
+			 s.name, s.deprecate_eof ? 1 : 0);
 		diag("================================================================");
 
-		if (!apply_runtime_toggles(admin, s.deprecate_eof, s.session_tracking)) {
-			ok(false, "scenario '%s': failed to apply runtime toggles", s.name);
+		if (!apply_deprecate_eof(admin, s.deprecate_eof)) {
+			ok(false, "scenario '%s': failed to apply runtime toggle", s.name);
 			continue;
 		}
 
@@ -417,8 +397,8 @@ static int run_scenarios(const CommandLine& cl, MYSQL* admin) {
 		const bool verdict = verify_caps(caps, s.expectation);
 
 		ok(verdict,
-		   "scenario '%s' (deprecate_eof=%d, session_tracking=%d): greeting capabilities match expectation",
-		   s.name, s.deprecate_eof ? 1 : 0, s.session_tracking ? 1 : 0);
+		   "scenario '%s' (deprecate_eof=%d): greeting capabilities match expectation",
+		   s.name, s.deprecate_eof ? 1 : 0);
 
 		mysql_close(proxy);
 	}
@@ -438,7 +418,7 @@ int main(int argc, char** argv) {
 
 	CommandLine cl;
 
-	plan(4);
+	plan(2);
 
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");

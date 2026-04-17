@@ -584,7 +584,6 @@ class MySQL_Threads_Handler
 		bool kill_backend_connection_when_disconnect;
 		bool client_session_track_gtid;
 		bool enable_client_deprecate_eof;
-		bool enable_client_session_tracking;
 		bool enable_server_deprecate_eof;
 		bool enable_load_data_local_infile;
 		bool log_mysql_warnings_enabled;
