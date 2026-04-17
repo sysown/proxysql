@@ -2300,7 +2300,7 @@ void MySQL_Protocol::PPHR_SetConnAttrs(MyProt_tmp_auth_vars& vars1, account_deta
 	const uint8_t zstd_compression_level =
 		(vars1.zstd_compression_level > 0 && vars1.zstd_compression_level <= ZSTD_maxCLevel())
 			? vars1.zstd_compression_level
-			: static_cast<uint8_t>(std::min<int>(ZSTD_maxCLevel(), std::max<int>(1, mysql_thread___protocol_compression_level)));
+			: static_cast<uint8_t>(mysql_thread___zstd_compression_level);
 
 	myconn->options.compression_zstd = false;
 	myconn->options.zstd_compression_level = 0;

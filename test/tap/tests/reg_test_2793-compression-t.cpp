@@ -34,7 +34,22 @@ int main(int argc, char** argv) {
 		&&
 		help_output.find("zstd-compression-level") != std::string::npos;
 
-	plan(mysql_supports_zstd ? 2 : 1);
+	// +1 test for the new variable visibility
+	plan(mysql_supports_zstd ? 3 : 2);
+
+	// Test: mysql-zstd_compression_level is visible via admin
+	MYSQL* admin = init_mysql_conn(cl.host, cl.admin_port, cl.admin_username, cl.admin_password);
+	if (admin) {
+		std::string val;
+		int rc = get_variable_value(admin, "mysql-zstd_compression_level", val, true);
+		ok(rc == EXIT_SUCCESS && val == "3",
+			"mysql-zstd_compression_level visible in admin, default=3, got: %s",
+			val.c_str());
+		mysql_close(admin);
+	} else {
+		diag("Failed to connect to admin, skipping variable visibility test");
+		skip(1, "admin connection failed");
+	}
 
 	const std::string name = std::string("-u") + cl.username;
 	const std::string pass = std::string("-p") + cl.password;
