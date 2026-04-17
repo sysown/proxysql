@@ -1088,13 +1088,6 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	}
 	mysql_thread___server_capabilities |= CLIENT_LONG_FLAG;
 	mysql_thread___server_capabilities |= CLIENT_MYSQL | CLIENT_PLUGIN_AUTH | CLIENT_RESERVED;
-	// Upper-word capabilities that ProxySQL always advertises, matching real
-	// MySQL server greetings (see issue #4023). These were previously supplied
-	// via a separate 'extended_capabilities' local and were accidentally
-	// dropped during the zstd refactor in 8c6a6444d.
-	mysql_thread___server_capabilities |=
-		CLIENT_MULTI_STATEMENTS | CLIENT_MULTI_RESULTS |
-		CLIENT_PS_MULTI_RESULTS | CLIENT_REMEMBER_OPTIONS;
 	if (mysql_thread___enable_client_deprecate_eof) {
 		mysql_thread___server_capabilities |= CLIENT_DEPRECATE_EOF;
 	} else {
@@ -1125,8 +1118,21 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
   uint8_t uint8_charset = ci->nr & 255;
   memcpy(_ptr+l,&uint8_charset, sizeof(uint8_charset)); l+=sizeof(uint8_charset);
   memcpy(_ptr+l,&server_status, sizeof(server_status)); l+=sizeof(server_status);
-	// Copy the upper 16 capability bits from the effective server capability mask.
-	uint16_t upper_word = static_cast<uint16_t>(server_capabilities >> 16);
+	// Upper-word ('capability_flags_2') capabilities advertised in the greeting.
+	// Baseline bits match what real MySQL servers advertise (see issue #4023);
+	// they were accidentally dropped during the zstd refactor in 8c6a6444d.
+	// The remaining upper-word bits (CLIENT_DEPRECATE_EOF, CLIENT_SESSION_TRACKING,
+	// CLIENT_ZSTD_COMPRESSION, ...) are folded in from 'server_capabilities' so
+	// the greeting stays in sync with the per-session / per-toggle state.
+	// 'extended_capabilities' is intentionally a local: it must NOT leak into
+	// '(*myds)->myconn->options.server_capabilities' nor into the low-word
+	// memcpy above, which record the per-connection state rather than the full
+	// greeting.
+	uint32_t extended_capabilities =
+		CLIENT_MULTI_RESULTS | CLIENT_MULTI_STATEMENTS | CLIENT_PS_MULTI_RESULTS |
+		CLIENT_PLUGIN_AUTH | CLIENT_REMEMBER_OPTIONS;
+	extended_capabilities |= server_capabilities & 0xFFFF0000u;
+	uint16_t upper_word = static_cast<uint16_t>(extended_capabilities >> 16);
 	memcpy(_ptr+l, static_cast<void*>(&upper_word), sizeof(upper_word)); l += sizeof(upper_word);
 	// Copy the 'auth_plugin_data_len'. Hardcoded due to 'CLIENT_PLUGIN_AUTH' always enabled and reported
 	// as 'mysql_native_password'.
