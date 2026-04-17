@@ -1088,6 +1088,13 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	}
 	mysql_thread___server_capabilities |= CLIENT_LONG_FLAG;
 	mysql_thread___server_capabilities |= CLIENT_MYSQL | CLIENT_PLUGIN_AUTH | CLIENT_RESERVED;
+	// Upper-word capabilities that ProxySQL always advertises, matching real
+	// MySQL server greetings (see issue #4023). These were previously supplied
+	// via a separate 'extended_capabilities' local and were accidentally
+	// dropped during the zstd refactor in 8c6a6444d.
+	mysql_thread___server_capabilities |=
+		CLIENT_MULTI_STATEMENTS | CLIENT_MULTI_RESULTS |
+		CLIENT_PS_MULTI_RESULTS | CLIENT_REMEMBER_OPTIONS;
 	if (mysql_thread___enable_client_deprecate_eof) {
 		mysql_thread___server_capabilities |= CLIENT_DEPRECATE_EOF;
 	} else {
@@ -1594,21 +1601,16 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 	if (vars1.capabilities & CLIENT_MULTI_STATEMENTS) {
 		vars1.capabilities |= CLIENT_MULTI_RESULTS;
 	}
-	// we enforce disabling 'CLIENT_DEPRECATE_EOF' from the supported capabilities
-	// in case it's explicitly disabled by global variable 'mysql_thread___enable_client_deprecate_eof'.
-	// This is because further checks to actually threat the connection as a connection
-	// supporting 'CLIENT_DEPRECATE_EOF' rely in 'client_flag' field from
-	// 'MySQL_Connection::options'.
-	// This is the second step for ensuring that the connection is being handling
-	// in both ProxySQL and client side as a connection without 'CLIENT_DEPRECATE_EOF' support.
-	// First step is replying to client during initial handshake (in 'generate_pkt_initial_handshake')
-	// specifying no 'CLIENT_DEPRECATE_EOF' support in 'server_capabilities'.
+	// Enforce disabling 'CLIENT_DEPRECATE_EOF' and 'CLIENT_SESSION_TRACKING' from the
+	// supported capabilities when explicitly disabled via
+	// 'mysql_thread___enable_client_deprecate_eof' / 'mysql_thread___enable_client_session_tracking'.
+	// Downstream logic that treats the connection as supporting either capability relies on
+	// the 'client_flag' field of 'MySQL_Connection::options'. This is the second step of a
+	// two-step enforcement: the first step omits these bits from 'server_capabilities'
+	// during the initial handshake (see 'generate_pkt_initial_handshake').
 	if (!mysql_thread___enable_client_deprecate_eof) {
 		vars1.capabilities &= ~CLIENT_DEPRECATE_EOF;
 	}
-	// similarly, enforce disabling 'CLIENT_SESSION_TRACKING' from the supported
-	// capabilities when explicitly disabled by global variable
-	// 'mysql_thread___enable_client_session_tracking'.
 	if (!mysql_thread___enable_client_session_tracking) {
 		vars1.capabilities &= ~CLIENT_SESSION_TRACKING;
 	}
