@@ -222,26 +222,12 @@ void Mysqlx_Thread::accept_new_connection(int listener_fd) {
 		sess->to_process = true;
 
 		const MysqlxConfigStore* store = config_store_;
-		sess->set_credential_lookup([store](const std::string& username) -> MysqlxCredentials {
-			MysqlxCredentials creds {};
-			if (!store) return creds;
-			auto identity = store->resolve_identity(username);
-			if (!identity) return creds;
-			creds.x_enabled = identity->x_enabled;
-			creds.allowed_auth = identity->allowed_auth_methods;
-			creds.backend_password = identity->backend_password;
-			const std::string& pwd = identity->password;
-			if (!pwd.empty() && pwd[0] == '*') {
-				std::vector<uint8_t> hash_bytes;
-				if (mysqlx_hex_decode(pwd.substr(1), hash_bytes) && hash_bytes.size() == 20) {
-					creds.password_hash.assign(hash_bytes.begin(), hash_bytes.end());
-				}
-			} else if (!pwd.empty()) {
-				auto hash = mysqlx_mysql41_hash(pwd);
-				creds.password_hash.assign(hash.begin(), hash.end());
+		sess->set_identity_lookup(
+			[store](const std::string& username) -> std::optional<MysqlxResolvedIdentity> {
+				if (!store) return std::nullopt;
+				return store->resolve_identity(username);
 			}
-			return creds;
-		});
+		);
 
 		std::lock_guard<std::mutex> lock(sessions_mutex_);
 		sessions_.push_back(sess);

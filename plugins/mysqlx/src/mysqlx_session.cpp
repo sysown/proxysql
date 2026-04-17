@@ -24,6 +24,25 @@ uint64_t monotonic_time_ms() {
 	return static_cast<uint64_t>(ts.tv_sec) * 1000 + static_cast<uint64_t>(ts.tv_nsec) / 1000000;
 }
 
+// Derive the 20-byte mysql_native_password hash from the stored form.
+// Accepts either the "*HEX40" mysql_native_password format or a cleartext
+// password. Returns false on any failure; in that case `out` is cleared.
+bool derive_stored_hash(const std::string& stored, std::vector<uint8_t>& out) {
+	out.clear();
+	if (stored.empty()) return false;
+	if (stored[0] == '*') {
+		if (!mysqlx_hex_decode(stored.substr(1), out) || out.size() != 20) {
+			out.clear();
+			return false;
+		}
+		return true;
+	}
+	auto hash = mysqlx_mysql41_hash(stored);
+	if (hash.size() != 20) return false;
+	out.assign(hash.begin(), hash.end());
+	return true;
+}
+
 }
 
 MysqlxSession::MysqlxSession()
@@ -60,6 +79,7 @@ void MysqlxSession::init(int fd, Mysqlx_Thread* thread_ptr) {
 	target_hostgroup_ = 0;
 	target_address_.clear();
 	target_port_ = 0;
+	identity_.reset();
 	start_time_ = monotonic_time_ms();
 	last_active_time_ = start_time_;
 }
@@ -76,6 +96,7 @@ void MysqlxSession::reset() {
 	target_hostgroup_ = 0;
 	target_address_.clear();
 	target_port_ = 0;
+	identity_.reset();
 }
 
 int MysqlxSession::handler() {
@@ -253,17 +274,24 @@ void MysqlxSession::handle_auth_plain(const std::string& auth_data) {
 	username_ = auth_data.substr(1, second_nul - 1);
 	std::string password = auth_data.substr(second_nul + 1);
 
-	if (credential_lookup_) {
-		MysqlxCredentials creds = credential_lookup_(username_);
-		if (!creds.x_enabled || creds.password_hash.empty()) {
+	if (identity_lookup_) {
+		identity_ = identity_lookup_(username_);
+		if (!identity_ || !identity_->x_enabled) {
 			send_error(1045, "Access denied for user");
 			healthy = false;
 			return;
 		}
+
+		std::vector<uint8_t> stored_hash;
+		if (!derive_stored_hash(identity_->password, stored_hash)) {
+			send_error(1045, "Access denied for user");
+			healthy = false;
+			return;
+		}
+
 		std::vector<uint8_t> input_hash_vec = mysqlx_mysql41_hash(password);
 		if (input_hash_vec.size() != 20 ||
-		    CRYPTO_memcmp(input_hash_vec.data(), creds.password_hash.data(),
-		                  std::min(input_hash_vec.size(), creds.password_hash.size())) != 0) {
+		    CRYPTO_memcmp(input_hash_vec.data(), stored_hash.data(), 20) != 0) {
 			send_error(1045, "Access denied for user");
 			healthy = false;
 			return;
@@ -356,14 +384,21 @@ void MysqlxSession::handler_auth_challenge_response() {
 			return;
 		}
 
-		if (credential_lookup_) {
-			MysqlxCredentials creds = credential_lookup_(username_);
-			if (!creds.x_enabled || creds.password_hash.empty()) {
+		if (identity_lookup_) {
+			identity_ = identity_lookup_(username_);
+			if (!identity_ || !identity_->x_enabled) {
 				send_error(1045, "Access denied for user");
 				healthy = false;
 				return;
 			}
-			std::vector<uint8_t> stored_hash(creds.password_hash.begin(), creds.password_hash.end());
+
+			std::vector<uint8_t> stored_hash;
+			if (!derive_stored_hash(identity_->password, stored_hash)) {
+				send_error(1045, "Access denied for user");
+				healthy = false;
+				return;
+			}
+
 			if (!mysqlx_mysql41_verify_hash(auth_challenge_, scramble, stored_hash)) {
 				send_error(1045, "Access denied for user");
 				healthy = false;
@@ -715,9 +750,8 @@ void MysqlxSession::handler_connecting_server() {
 			}
 		}
 
-		if (credential_lookup_) {
-			MysqlxCredentials creds = credential_lookup_(username_);
-			backend_conn_->set_backend_password(creds.backend_password.c_str());
+		if (identity_) {
+			backend_conn_->set_backend_password(identity_->backend_password.c_str());
 		}
 	}
 

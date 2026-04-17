@@ -3,22 +3,18 @@
 
 #include "mysqlx_data_stream.h"
 #include "mysqlx_connection.h"
+#include "mysqlx_config_store.h"
 
 #include <cstdint>
 #include <string>
 #include <vector>
 #include <functional>
+#include <optional>
 
 class Mysqlx_Thread;
 
-struct MysqlxCredentials {
-	std::string password_hash;
-	bool x_enabled;
-	std::string allowed_auth;
-	std::string backend_password;
-};
-
-typedef std::function<MysqlxCredentials(const std::string& username)> MysqlxCredentialLookup;
+using MysqlxIdentityLookup =
+	std::function<std::optional<MysqlxResolvedIdentity>(const std::string& username)>;
 
 enum MysqlxResponseState {
 	RESP_IDLE = 0,
@@ -81,7 +77,7 @@ public:
 	MysqlxDataStream& server_ds() { return server_ds_; }
 	MysqlxConnection*& backend_conn() { return backend_conn_; }
 
-	void set_credential_lookup(MysqlxCredentialLookup lookup) { credential_lookup_ = lookup; }
+	void set_identity_lookup(MysqlxIdentityLookup lookup) { identity_lookup_ = std::move(lookup); }
 	void set_tls_mode(MysqlxTlsMode mode) { tls_mode_ = mode; }
 	MysqlxTlsMode get_tls_mode() const { return tls_mode_; }
 	uint64_t get_start_time() const { return start_time_; }
@@ -135,7 +131,8 @@ private:
 	int target_hostgroup_;
 	std::string target_address_;
 	int target_port_;
-	MysqlxCredentialLookup credential_lookup_;
+	MysqlxIdentityLookup identity_lookup_;
+	std::optional<MysqlxResolvedIdentity> identity_;
 	uint64_t start_time_;
 	uint64_t last_active_time_;
 	MysqlxResponseState response_state_;
