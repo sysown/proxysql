@@ -14,7 +14,6 @@
 
 #include "AI_Tool_Handler.h"
 #include "LLM_Bridge.h"
-#include "Anomaly_Detector.h"
 #include "AI_Features_Manager.h"
 #include "proxysql_debug.h"
 #include "cpp.h"
@@ -31,29 +30,29 @@ using json = nlohmann::json;
 // ============================================================================
 
 /**
- * @brief Constructor using existing AI components
+ * @brief Constructor using an existing LLM_Bridge.
+ *
+ * @note Pre-Step 3 this constructor also accepted an Anomaly_Detector*
+ *       which was stored but never read; the field was removed when
+ *       Anomaly_Detector moved into the genai plugin.
  */
-AI_Tool_Handler::AI_Tool_Handler(LLM_Bridge* llm, Anomaly_Detector* anomaly)
+AI_Tool_Handler::AI_Tool_Handler(LLM_Bridge* llm)
 	: llm_bridge(llm),
-	  anomaly_detector(anomaly),
 	  owns_components(false)
 {
-	proxy_debug(PROXY_DEBUG_GENAI, 3, "AI_Tool_Handler created (wrapping existing components)\n");
+	proxy_debug(PROXY_DEBUG_GENAI, 3, "AI_Tool_Handler created (wrapping existing LLM_Bridge)\n");
 }
 
 /**
- * @brief Constructor - creates own components
- * Note: This implementation uses global instances
+ * @brief Default constructor — pulls the LLM_Bridge from the global
+ *        AI_Features_Manager.
  */
 AI_Tool_Handler::AI_Tool_Handler()
 	: llm_bridge(NULL),
-	  anomaly_detector(NULL),
 	  owns_components(false)
 {
-	// Use global instances from AI_Features_Manager
 	if (GloAI) {
 		llm_bridge = GloAI->get_llm_bridge();
-		anomaly_detector = GloAI->get_anomaly_detector();
 	}
 	proxy_debug(PROXY_DEBUG_GENAI, 3, "AI_Tool_Handler created (using global instances)\n");
 }

@@ -74,10 +74,11 @@
 #include "jemalloc.h"
 
 #ifdef PROXYSQLGENAI
-// AI Features includes
+// AI Features includes.  Anomaly_Detector.h moved to plugins/genai/
+// in Step 3 of the GenAI plugin carve-out and is no longer included
+// here.
 #include "AI_Features_Manager.h"
 #include "LLM_Bridge.h"
-#include "Anomaly_Detector.h"
 #include "AI_Vector_Storage.h"
 #endif /* PROXYSQLGENAI */
 

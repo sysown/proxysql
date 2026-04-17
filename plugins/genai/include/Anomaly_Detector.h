@@ -1,41 +1,40 @@
 /**
- * @file anomaly_detector.h
- * @brief Real-time Anomaly Detection for ProxySQL
+ * @file Anomaly_Detector.h
+ * @brief Real-time anomaly detection — plugin-side public interface.
  *
- * The Anomaly_Detector class provides security threat detection using:
- * - Embedding-based similarity to known threats
- * - Statistical outlier detection
- * - Rule-based pattern matching
- * - Rate limiting per user/host
+ * The Anomaly_Detector class implements multi-stage security analysis
+ * for incoming queries:
+ *   - Embedding-based similarity to known threats (currently inert
+ *     while GenAI_Threads_Handler still lives in core; reattached in
+ *     Step 5 of the GenAI plugin carve-out).
+ *   - Statistical outlier detection (z-score on per-user fingerprint
+ *     history).
+ *   - Regex-based SQL injection pattern matching.
+ *   - Per-user/host rate limiting.
  *
- * Key Features:
- * - Multi-stage detection pipeline
- * - Behavioral profiling and tracking
- * - Configurable risk thresholds
- * - Auto-block or log-only modes
+ * @par Carve-out history
+ * Lived at include/Anomaly_Detector.h inside core, gated by
+ * `#ifdef PROXYSQLGENAI`.  In Step 3 of the GenAI plugin carve-out it
+ * moved verbatim into plugins/genai/include/, the `#ifdef` guard was
+ * dropped, and the embedding back-end was disconnected from `GloGATH`
+ * (a core symbol that is still held by AI_Features_Manager).
  *
- * @date 2025-01-16
- * @version 0.1.0 (stub implementation)
- *
- * Example Usage:
+ * @par Usage from inside the plugin
  * @code
- * Anomaly_Detector* detector = GloAI->get_anomaly_detector();
- * AnomalyResult result = detector->analyze(
- *     "SELECT * FROM users",
- *     "app_user",
- *     "192.168.1.100",
- *     "production"
- * );
- * if (result.should_block) {
- *     proxy_warning("Query blocked: %s\n", result.explanation.c_str());
+ * Anomaly_Detector* d = genai_context().anomaly_detector;
+ * AnomalyResult r = d->analyze("SELECT * FROM users",
+ *                              "app_user", "192.168.1.100", "production");
+ * if (r.should_block) {
+ *   // ABI: return ProxySQL_PluginQueryHookAction::deny with r.explanation
  * }
  * @endcode
+ *
+ * @see plugins/genai/src/plugin_hooks.cpp for the query-hook adapter.
+ * @see docs/superpowers/specs/2026-04-16-genai-plugin-carveout-design.md
  */
 
 #ifndef PROXYSQL_ANOMALY_DETECTOR_H
 #define PROXYSQL_ANOMALY_DETECTOR_H
-
-#ifdef PROXYSQLGENAI
 
 #define ANOMALY_DETECTOR_VERSION "0.1.0"
 
@@ -142,6 +141,4 @@ public:
 // Global instance (defined by AI_Features_Manager)
 // extern Anomaly_Detector *GloAnomaly;
 
-#endif /* PROXYSQLGENAI */
-
-#endif // __CLASS_ANOMALY_DETECTOR_H
+#endif // PROXYSQL_ANOMALY_DETECTOR_H

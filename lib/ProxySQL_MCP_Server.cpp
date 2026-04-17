@@ -137,10 +137,15 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 		handler->stats_tool_handler = NULL;
 	}
 
-	// 6. AI Tool Handler (for LLM and other AI features)
+	// 6. AI Tool Handler (for LLM and other AI features).  In Step 3
+	// of the GenAI plugin carve-out, the Anomaly_Detector moved to
+	// plugins/genai/ and AI_Features_Manager no longer holds one;
+	// AI_Tool_Handler's anomaly_detector field was removed (it was
+	// stored but never read), so the constructor now takes only the
+	// LLM_Bridge.
 	extern AI_Features_Manager *GloAI;
 	if (GloAI) {
-		handler->ai_tool_handler = new AI_Tool_Handler(GloAI->get_llm_bridge(), GloAI->get_anomaly_detector());
+		handler->ai_tool_handler = new AI_Tool_Handler(GloAI->get_llm_bridge());
 		if (handler->ai_tool_handler->init() == 0) {
 			proxy_info("AI Tool Handler initialized\n");
 		} else {

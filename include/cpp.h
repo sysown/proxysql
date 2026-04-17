@@ -36,7 +36,8 @@
 #include "AI_Tool_Handler.h"
 #include "AI_Vector_Storage.h"
 #include "Admin_Tool_Handler.h"
-#include "Anomaly_Detector.h"
+// Anomaly_Detector.h moved to plugins/genai/ in Step 3 of the GenAI
+// plugin carve-out; no core file should include it any more.
 #include "Cache_Tool_Handler.h"
 #include "Config_Tool_Handler.h"
 #include "Discovery_Schema.h"

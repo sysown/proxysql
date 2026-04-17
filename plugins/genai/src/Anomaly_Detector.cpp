@@ -1,23 +1,31 @@
-#ifdef PROXYSQLGENAI
-
 /**
  * @file Anomaly_Detector.cpp
- * @brief Implementation of Real-time Anomaly Detection for ProxySQL
+ * @brief Implementation of real-time anomaly detection — plugin-side.
  *
- * Implements multi-stage anomaly detection pipeline:
- * 1. SQL Injection Pattern Detection
- * 2. Query Normalization and Pattern Matching
- * 3. Rate Limiting per User/Host
- * 4. Statistical Outlier Detection
- * 5. Embedding-based Threat Similarity
+ * Multi-stage anomaly detection pipeline:
+ *   1. SQL injection pattern detection (regex-based).
+ *   2. Query normalization + pattern matching.
+ *   3. Per-user/host rate limiting.
+ *   4. Statistical outlier detection (z-score on user fingerprint history).
+ *   5. Embedding-based threat similarity (currently inert: returns no
+ *      anomaly while GenAI_Threads_Handler still lives in core; the
+ *      embedding back-end is reattached in Step 5 of the GenAI plugin
+ *      carve-out, when GloGATH moves into the plugin).
+ *
+ * @par Carve-out history
+ * This file lived at lib/Anomaly_Detector.cpp inside libproxysql.a,
+ * gated by `#ifdef PROXYSQLGENAI`.  In Step 3 of the carve-out it
+ * moved verbatim into plugins/genai/, the `#ifdef` guard was dropped
+ * (the file only compiles inside the plugin), and the embedding path
+ * was disconnected from `GloGATH`.
  *
  * @see Anomaly_Detector.h
+ * @see docs/superpowers/specs/2026-04-16-genai-plugin-carveout-design.md
  */
 
 #include "Anomaly_Detector.h"
 #include "sqlite3db.h"
 #include "proxysql_utils.h"
-#include "GenAI_Thread.h"
 #include "cpp.h"
 #include <cstring>
 #include <cstdlib>
@@ -28,12 +36,9 @@
 #include <cmath>
 
 // JSON library
-#include "../deps/json/json.hpp"
+#include "../../../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
-
-// Global GenAI handler for embedding generation
-extern GenAI_Threads_Handler *GloGATH;
 
 // ============================================================================
 // Constants
@@ -508,43 +513,28 @@ AnomalyResult Anomaly_Detector::check_embedding_similarity(const std::string& qu
 }
 
 /**
- * @brief Get vector embedding for a query
+ * @brief Get vector embedding for a query.
  *
  * Generates a vector representation of the query using a sentence
  * transformer or similar embedding model.
  *
- * Uses the GenAI module (GloGATH) for embedding generation via llama-server.
+ * @par Step 3 carve-out status
+ * Currently returns an empty vector unconditionally.  The previous
+ * implementation forwarded to `GloGATH->embed_documents({normalized})`,
+ * but `GloGATH` (the GenAI_Threads_Handler) is still a core symbol that
+ * the plugin cannot reach.  When `GenAI_Thread` moves into the plugin
+ * in Step 5 of the carve-out, this function will be re-implemented to
+ * call the plugin-local handler.
  *
- * @param query SQL query
- * @return Vector embedding (empty if not available)
+ * Returning an empty vector is safe: the only caller
+ * (`check_embedding_similarity`) checks `embedding.empty()` and
+ * short-circuits to "no anomaly" before touching the vector store.
+ *
+ * @param query SQL query (unused while embedding is disabled).
+ * @return Empty vector.
  */
-std::vector<float> Anomaly_Detector::get_query_embedding(const std::string& query) {
-	if (!GloGATH) {
-		proxy_debug(PROXY_DEBUG_ANOMALY, 3, "GenAI handler not available for embedding");
-		return {};
-	}
-
-	// Normalize query first for better embedding quality
-	std::string normalized = normalize_query(query);
-
-	// Generate embedding using GenAI
-	GenAI_EmbeddingResult result = GloGATH->embed_documents({normalized});
-
-	if (!result.data || result.count == 0) {
-		proxy_debug(PROXY_DEBUG_ANOMALY, 3, "Failed to generate embedding");
-		return {};
-	}
-
-	// Convert to std::vector<float>
-	std::vector<float> embedding(result.data, result.data + result.embedding_size);
-
-	// Free the result data (GenAI allocates with malloc)
-	if (result.data) {
-		free(result.data);
-	}
-
-	proxy_debug(PROXY_DEBUG_ANOMALY, 3, "Generated embedding with %zu dimensions", embedding.size());
-	return embedding;
+std::vector<float> Anomaly_Detector::get_query_embedding(const std::string& /*query*/) {
+	return {};
 }
 
 // ============================================================================
@@ -953,5 +943,3 @@ void Anomaly_Detector::clear_user_statistics() {
 	user_statistics.clear();
 	proxy_info("Anomaly: Cleared statistics for %zu users\n", count);
 }
-
-#endif /* PROXYSQLGENAI */

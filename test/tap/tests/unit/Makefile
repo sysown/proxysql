@@ -335,7 +335,6 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	gen_utils_unit-t \
 	proxy_protocol_unit-t \
 	pgsql_txn_state_unit-t \
-	genai_anomaly_unit-t \
 	genai_fts_string_unit-t \
 	sqlite3db_unit-t \
 	pgsql_error_helper_unit-t \
@@ -379,6 +378,7 @@ UNIT_TESTS += \
 	plugin_prometheus_unit-t \
 	plugin_lifecycle_unit-t \
 	genai_plugin_load_unit-t \
+	genai_plugin_anomaly_unit-t \
 	test_mysqlx_plugin_load-t \
 	test_mysqlx_admin_tables-t \
 	mysqlx_config_store_unit-t \
@@ -632,6 +632,17 @@ plugin_lifecycle_unit-t: plugin_lifecycle_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)/t
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
 		$(IDIRS) $(LDIRS) $(OPT) $(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+# The plugin-side Anomaly_Detector unit test compiles the plugin's
+# Anomaly_Detector.cpp directly into the test binary so that private
+# methods (normalize_query, check_sql_injection) can be exercised via
+# the friend-class helper without dlopening the .so.
+GENAI_ANOMALY_SRC := $(PROXYSQL_PATH)/plugins/genai/src/Anomaly_Detector.cpp
+GENAI_PLUGIN_INCLUDE := -I$(PROXYSQL_PATH)/plugins/genai/include
+genai_plugin_anomaly_unit-t: genai_plugin_anomaly_unit-t.cpp $(GENAI_ANOMALY_SRC) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+	$(CXX) $< $(GENAI_ANOMALY_SRC) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		$(GENAI_PLUGIN_INCLUDE) $(IDIRS) $(LDIRS) $(OPT) $(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
 # genai_plugin_load_unit-t loads the real genai plugin .so (built by
