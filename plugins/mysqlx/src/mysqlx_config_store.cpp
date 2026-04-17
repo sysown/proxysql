@@ -339,6 +339,15 @@ int MysqlxConfigStore::route_hostgroup(const std::string& route_name) const {
 	return it->second.destination_hostgroup;
 }
 
+void MysqlxConfigStore::install_for_test(
+	std::unordered_map<std::string, MysqlxRoute> routes,
+	std::unordered_map<int, std::vector<MysqlxBackendEndpoint>> endpoints
+) {
+	std::unique_lock<std::shared_mutex> lock(mutex_);
+	routes_ = std::move(routes);
+	hostgroup_endpoints_ = std::move(endpoints);
+}
+
 uint64_t MysqlxConfigStore::topology_generation() const {
 	return topology_generation_.load();
 }
