@@ -1,12 +1,19 @@
 #include "tap.h"
 #include "ProxySQL_PluginManager.h"
 
+#include <cstdio>
 #include <cstdlib>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <unistd.h>
+#include <vector>
 
 #ifndef PROXYSQL_FAKE_PLUGIN_PATH
 #error "PROXYSQL_FAKE_PLUGIN_PATH must be defined"
+#endif
+#ifndef PROXYSQL_FAKE_PLUGIN2_PATH
+#error "PROXYSQL_FAKE_PLUGIN2_PATH must be defined"
 #endif
 
 namespace {
@@ -14,6 +21,35 @@ namespace {
 char g_fake_admin_db = '\0';
 char g_fake_config_db = '\0';
 char g_fake_stats_db = '\0';
+
+std::string g_log_path {};
+
+void make_log_path() {
+	char tpl[] = "/tmp/proxysql_plugin_mgr_log.XXXXXX";
+	int fd = mkstemp(tpl);
+	if (fd >= 0) close(fd);
+	g_log_path = tpl;
+	setenv("PROXYSQL_FAKE_PLUGIN_LOG", g_log_path.c_str(), 1);
+	setenv("PROXYSQL_FAKE_PLUGIN2_LOG", g_log_path.c_str(), 1);
+}
+
+void clear_log() {
+	if (g_log_path.empty()) return;
+	std::ofstream(g_log_path, std::ios::trunc);
+}
+
+std::string read_log() {
+	if (g_log_path.empty()) return "";
+	std::ifstream s(g_log_path);
+	return std::string((std::istreambuf_iterator<char>(s)), std::istreambuf_iterator<char>());
+}
+
+void cleanup_log() {
+	if (g_log_path.empty()) return;
+	std::remove(g_log_path.c_str());
+	unsetenv("PROXYSQL_FAKE_PLUGIN_LOG");
+	unsetenv("PROXYSQL_FAKE_PLUGIN2_LOG");
+}
 
 } // namespace
 
@@ -34,8 +70,7 @@ static void test_loader_round_trip() {
 	std::string err;
 
 	const bool loaded = mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err);
-	ok(loaded,
-	   "load fake plugin succeeds");
+	ok(loaded, "load fake plugin succeeds");
 	if (!loaded) {
 		diag("load error: %s", err.c_str());
 		BAIL_OUT("fake plugin must load before lifecycle assertions");
@@ -204,8 +239,190 @@ static void test_double_load() {
 	ok(mgr.stop_all(), "stop_all succeeds with both handles");
 }
 
+static void test_load_missing_path() {
+	ProxySQL_PluginManager mgr;
+	std::string err;
+	ok(!mgr.load("/definitely/missing/plugin.so", err),
+	   "load fails for missing path");
+	ok(!err.empty(), "missing path failure reports a non-empty error");
+	ok(err.find("dlopen") != std::string::npos,
+	   "missing path error mentions dlopen");
+	ok(mgr.size() == 0, "size remains 0 after failed load");
+}
+
+static void test_empty_manager_lifecycle() {
+	ProxySQL_PluginManager mgr;
+	std::string err;
+	ok(mgr.size() == 0, "empty manager has size 0");
+	ok(mgr.init_all(err), "init_all on empty manager succeeds");
+	ok(err.empty(), "empty init_all leaves err empty");
+	ok(mgr.start_all(err), "start_all on empty manager succeeds");
+	ok(mgr.stop_all(), "stop_all on empty manager succeeds");
+}
+
+static void test_idempotent_init_start_stop() {
+	ProxySQL_PluginManager mgr;
+	std::string err;
+	ok(mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err), "plugin loads");
+	ok(mgr.init_all(err), "first init_all succeeds");
+	ok(mgr.init_all(err), "second init_all is a no-op (already initialized)");
+	ok(mgr.start_all(err), "first start_all succeeds");
+	ok(mgr.start_all(err), "second start_all is a no-op (already started)");
+	ok(mgr.stop_all(), "first stop_all succeeds");
+	ok(mgr.stop_all(), "second stop_all is a no-op (already stopped)");
+}
+
+static void test_destructor_stops_started_plugins() {
+	clear_log();
+	{
+		ProxySQL_PluginManager mgr;
+		std::string err;
+		ok(mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err), "plugin loads");
+		ok(mgr.init_all(err), "init_all succeeds");
+		ok(mgr.start_all(err), "start_all succeeds");
+		// no explicit stop_all — destructor must do it
+	}
+	std::string contents = read_log();
+	ok(contents.find("fake_plugin:stop") != std::string::npos,
+	   "destructor invokes stop on started plugins");
+}
+
+static void test_destructor_skips_unstarted_plugins() {
+	clear_log();
+	{
+		ProxySQL_PluginManager mgr;
+		std::string err;
+		ok(mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err), "plugin loads");
+		ok(mgr.init_all(err), "init_all succeeds");
+		// destruct without start
+	}
+	std::string contents = read_log();
+	ok(contents.find("fake_plugin:stop") == std::string::npos,
+	   "destructor does NOT invoke stop on plugins that were never started");
+}
+
+static void test_destructor_no_double_stop() {
+	clear_log();
+	{
+		ProxySQL_PluginManager mgr;
+		std::string err;
+		ok(mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err), "plugin loads");
+		ok(mgr.init_all(err), "init succeeds");
+		ok(mgr.start_all(err), "start succeeds");
+		ok(mgr.stop_all(), "explicit stop succeeds");
+	}
+	std::string contents = read_log();
+	int stops = 0;
+	size_t pos = 0;
+	while ((pos = contents.find("fake_plugin:stop", pos)) != std::string::npos) {
+		++stops;
+		pos += 1;
+	}
+	ok(stops == 1, "stop runs exactly once even when destructor follows explicit stop_all (got %d)", stops);
+}
+
+static void test_multi_plugin_lifecycle_order() {
+	clear_log();
+	ProxySQL_PluginManager mgr;
+	std::string err;
+	ok(mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err), "load fake_plugin");
+	ok(mgr.load(PROXYSQL_FAKE_PLUGIN2_PATH, err), "load fake_plugin2");
+	ok(mgr.init_all(err), "init_all succeeds for both plugins");
+	ok(mgr.start_all(err), "start_all succeeds for both plugins");
+	ok(mgr.stop_all(), "stop_all succeeds for both plugins");
+
+	std::string contents = read_log();
+	const std::string expected =
+		"fake_plugin:init\n"
+		"fake_plugin2:init\n"
+		"fake_plugin:start\n"
+		"fake_plugin2:start\n"
+		"fake_plugin2:stop\n"
+		"fake_plugin:stop\n";
+	ok(contents == expected,
+	   "init/start happen in registration order; stop runs in reverse order (got: '%s')",
+	   contents.c_str());
+}
+
+static void test_multi_plugin_init_failure_short_circuits() {
+	clear_log();
+	setenv("PROXYSQL_FAKE_PLUGIN2_INIT_FAIL", "1", 1);
+	{
+		ProxySQL_PluginManager mgr;
+		std::string err;
+		ok(mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err), "load first plugin");
+		ok(mgr.load(PROXYSQL_FAKE_PLUGIN2_PATH, err), "load second plugin");
+		ok(!mgr.init_all(err), "init_all returns false because the second plugin's init fails");
+		ok(err.find("fake_plugin2") != std::string::npos,
+		   "init failure error names the failing plugin (second one)");
+	}
+	std::string contents = read_log();
+	ok(contents.find("fake_plugin:init\n") != std::string::npos,
+	   "first plugin's init ran before the failure");
+	ok(contents.find("fake_plugin2:init_fail\n") != std::string::npos,
+	   "second plugin's init ran and reported failure");
+	ok(contents.find("fake_plugin:start") == std::string::npos &&
+	   contents.find("fake_plugin2:start") == std::string::npos,
+	   "no start was attempted after init failure");
+	unsetenv("PROXYSQL_FAKE_PLUGIN2_INIT_FAIL");
+}
+
+static void test_multi_plugin_start_failure_stops_started() {
+	clear_log();
+	setenv("PROXYSQL_FAKE_PLUGIN2_START_FAIL", "1", 1);
+	{
+		ProxySQL_PluginManager mgr;
+		std::string err;
+		ok(mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err), "load first plugin");
+		ok(mgr.load(PROXYSQL_FAKE_PLUGIN2_PATH, err), "load second plugin");
+		ok(mgr.init_all(err), "init_all succeeds");
+		ok(!mgr.start_all(err), "start_all fails because second plugin's start fails");
+		// destructor runs, must stop only the started plugin (the first one)
+	}
+	std::string contents = read_log();
+	ok(contents.find("fake_plugin:start\n") != std::string::npos,
+	   "first plugin started before the failure");
+	ok(contents.find("fake_plugin2:start_fail\n") != std::string::npos,
+	   "second plugin start reported failure");
+	ok(contents.find("fake_plugin:stop\n") != std::string::npos,
+	   "destructor stopped the first plugin (which had successfully started)");
+	ok(contents.find("fake_plugin2:stop") == std::string::npos,
+	   "destructor did NOT call stop on the second plugin (it never successfully started)");
+	unsetenv("PROXYSQL_FAKE_PLUGIN2_START_FAIL");
+}
+
+static void test_register_command_failure_in_init_aborts() {
+	// fake_plugin registers "PLUGIN FAKE NOOP".  Ask it to register the
+	// SAME command twice via two loaded handles → second registration
+	// fails inside register_command_service → init_all reports error.
+	setenv("PROXYSQL_FAKE_PLUGIN_REGISTER_COMMAND", "1", 1);
+	ProxySQL_PluginManager mgr;
+	std::string err;
+	ok(mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err), "load 1");
+	ok(mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err), "load 2");
+	ok(!mgr.init_all(err),
+	   "init_all fails when a plugin's register_command call returns conflict");
+	ok(!err.empty(), "registration failure surfaces an error");
+	ok(err.find("plugin command registration failed") != std::string::npos,
+	   "error message identifies command registration as the failing operation");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_REGISTER_COMMAND");
+}
+
+static void test_register_table_invalid_kind_in_init_aborts() {
+	setenv("PROXYSQL_FAKE_PLUGIN_REGISTER_INVALID_TABLE", "1", 1);
+	ProxySQL_PluginManager mgr;
+	std::string err;
+	ok(mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err), "load");
+	ok(!mgr.init_all(err),
+	   "init_all fails when register_table is called with an invalid db_kind");
+	ok(err.find("plugin table registration failed") != std::string::npos,
+	   "error message identifies table registration as the failing operation");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_REGISTER_INVALID_TABLE");
+}
+
 int main() {
-	plan(39);
+	plan(96);
+	make_log_path();
 
 	test_loader_round_trip();
 	test_load_error_cases();
@@ -214,6 +431,18 @@ int main() {
 	test_start_failure();
 	test_stop_failure();
 	test_double_load();
+	test_load_missing_path();
+	test_empty_manager_lifecycle();
+	test_idempotent_init_start_stop();
+	test_destructor_stops_started_plugins();
+	test_destructor_skips_unstarted_plugins();
+	test_destructor_no_double_stop();
+	test_multi_plugin_lifecycle_order();
+	test_multi_plugin_init_failure_short_circuits();
+	test_multi_plugin_start_failure_stops_started();
+	test_register_command_failure_in_init_aborts();
+	test_register_table_invalid_kind_in_init_aborts();
 
+	cleanup_log();
 	return exit_status();
 }

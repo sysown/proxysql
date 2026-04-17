@@ -226,6 +226,7 @@ endif
 
 TEST_HELPERS_DIR := $(PROXYSQL_PATH)/test/tap/test_helpers
 FAKE_PLUGIN_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin.so
+FAKE_PLUGIN2_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin2.so
 MYSQLX_PLUGIN_SO := $(PROXYSQL_PATH)/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
 MYSQLX_PLUGIN_OPTZ := -O0 -ggdb $(filter -DDEBUG,$(OPT))
 ODIR := obj
@@ -257,6 +258,13 @@ mysqlx_plugin_build:
 	$(MAKE) -C $(PROXYSQL_PATH)/plugins/mysqlx all \
 		CC=$(CC) CXX=$(CXX) OPTZ="$(MYSQLX_PLUGIN_OPTZ)" \
 		WGCOV="$(WGCOV)" WASAN="$(WASAN)"
+
+# Same source compiled with different macros to produce a second plugin .so
+# with a distinct plugin name and env-var prefix.  Used by multi-plugin tests.
+$(FAKE_PLUGIN2_SO): $(TEST_HELPERS_DIR)/fake_plugin.cpp $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h | $(TEST_HELPERS_DIR)
+	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(IDIRS) -ldl \
+		-DFAKE_PLUGIN_NAME=\"fake_plugin2\" \
+		-DFAKE_PLUGIN_ENV_PREFIX=\"PROXYSQL_FAKE_PLUGIN2_\"
 
 # Keep on-demand unit-test library rebuilds aligned with the default top-level
 # feature set so incremental rebuilds do not mix incompatible objects.
@@ -349,7 +357,8 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	mysqlx_credential_verify_unit-t \
 	mysqlx_robustness_unit-t \
 	mysqlx_tls_unit-t \
-	pgsql_servers_ssl_params_unit-t
+	pgsql_servers_ssl_params_unit-t \
+	plugin_dispatch_unit-t
 
 .PHONY: all
 all: $(UNIT_TESTS)
@@ -373,13 +382,21 @@ ezoption_parser_unit-t: ezoption_parser_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noi
 		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include \
 		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) -lpthread -o $@
 
-plugin_manager_unit-t: plugin_manager_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+plugin_manager_unit-t: plugin_manager_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
+		-DPROXYSQL_FAKE_PLUGIN2_PATH=\"$(FAKE_PLUGIN2_SO)\" \
 		$(IDIRS) $(LDIRS) $(OPT) $(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
-plugin_config_unit-t: plugin_config_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+plugin_config_unit-t: plugin_config_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
+		-DPROXYSQL_FAKE_PLUGIN2_PATH=\"$(FAKE_PLUGIN2_SO)\" \
+		$(IDIRS) $(LDIRS) $(OPT) $(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+plugin_dispatch_unit-t: plugin_dispatch_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
 		$(IDIRS) $(LDIRS) $(OPT) $(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) \
@@ -570,4 +587,4 @@ plugin_prometheus_unit-t: plugin_prometheus_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)
 .PHONY: clean
 .SILENT: clean
 clean:
-	rm -rf $(ODIR) $(UNIT_TESTS) $(FAKE_PLUGIN_SO)
+	rm -rf $(ODIR) $(UNIT_TESTS) $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO)

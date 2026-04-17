@@ -5,6 +5,19 @@
 #include <cstring>
 #include <string>
 
+// Two builds of this source produce two distinct .so files used together
+// in multi-plugin tests:
+//   * libproxysql_fake_plugin.so   — plugin name "fake_plugin",  env vars PROXYSQL_FAKE_PLUGIN_*
+//   * libproxysql_fake_plugin2.so  — plugin name "fake_plugin2", env vars PROXYSQL_FAKE_PLUGIN2_*
+//
+// FAKE_PLUGIN_NAME / FAKE_PLUGIN_ENV_PREFIX are -D'd by the Makefile.
+#ifndef FAKE_PLUGIN_NAME
+#define FAKE_PLUGIN_NAME "fake_plugin"
+#endif
+#ifndef FAKE_PLUGIN_ENV_PREFIX
+#define FAKE_PLUGIN_ENV_PREFIX "PROXYSQL_FAKE_PLUGIN_"
+#endif
+
 namespace {
 
 ProxySQL_PluginServices* fake_services = nullptr;
@@ -28,8 +41,14 @@ ProxySQL_PluginQueryHookResult fake_query_hook(const ProxySQL_PluginQueryHookPay
 	return {ProxySQL_PluginQueryHookAction::allow, msg};
 }
 
+const char* env(const char* suffix) {
+	static char name[128];
+	std::snprintf(name, sizeof(name), "%s%s", FAKE_PLUGIN_ENV_PREFIX, suffix);
+	return std::getenv(name);
+}
+
 void fake_log_event(const char *event) {
-	const char *log_path = std::getenv("PROXYSQL_FAKE_PLUGIN_LOG");
+	const char *log_path = env("LOG");
 	if (log_path == nullptr || *log_path == '\0') {
 		return;
 	}
@@ -39,17 +58,17 @@ void fake_log_event(const char *event) {
 		return;
 	}
 
-	std::fprintf(log_file, "%s\n", event);
+	std::fprintf(log_file, "%s:%s\n", FAKE_PLUGIN_NAME, event);
 	std::fclose(log_file);
 }
 
 bool fake_init(ProxySQL_PluginServices *services) {
 	fake_services = services;
-	if (std::getenv("PROXYSQL_FAKE_PLUGIN_INIT_FAIL") != nullptr) {
+	if (env("INIT_FAIL") != nullptr) {
 		fake_log_event("init_fail");
 		return false;
 	}
-	if (std::getenv("PROXYSQL_FAKE_PLUGIN_REGISTER_INVALID_TABLE") != nullptr &&
+	if (env("REGISTER_INVALID_TABLE") != nullptr &&
 	    services != nullptr &&
 	    services->register_table != nullptr) {
 		const ProxySQL_PluginTableDef invalid_table {
@@ -59,15 +78,26 @@ bool fake_init(ProxySQL_PluginServices *services) {
 		};
 		services->register_table(invalid_table);
 	}
-	if (std::getenv("PROXYSQL_FAKE_PLUGIN_REGISTER_COMMAND") != nullptr &&
+	if (env("REGISTER_COMMAND") != nullptr &&
 	    services != nullptr &&
 	    services->register_command != nullptr) {
-		services->register_command("PLUGIN FAKE NOOP", &fake_command);
+		const char* sql = env("REGISTER_COMMAND_SQL");
+		services->register_command(sql != nullptr ? sql : "PLUGIN FAKE NOOP", &fake_command);
 	}
-	if (std::getenv("PROXYSQL_FAKE_PLUGIN_REGISTER_QUERY_HOOK") != nullptr &&
+	if (env("REGISTER_TABLE") != nullptr &&
+	    services != nullptr &&
+	    services->register_table != nullptr) {
+		const ProxySQL_PluginTableDef table {
+			ProxySQL_PluginDBKind::admin_db,
+			FAKE_PLUGIN_NAME "_table",
+			"CREATE TABLE " FAKE_PLUGIN_NAME "_table (id INTEGER)"
+		};
+		services->register_table(table);
+	}
+	if (env("REGISTER_QUERY_HOOK") != nullptr &&
 	    services != nullptr &&
 	    services->register_query_hook != nullptr) {
-		const char* proto_env = std::getenv("PROXYSQL_FAKE_PLUGIN_REGISTER_QUERY_HOOK_PROTO");
+		const char* proto_env = env("REGISTER_QUERY_HOOK_PROTO");
 		ProxySQL_PluginProtocol proto = ProxySQL_PluginProtocol::mysql;
 		if (proto_env != nullptr && std::strcmp(proto_env, "pgsql") == 0) {
 			proto = ProxySQL_PluginProtocol::pgsql;
@@ -79,7 +109,7 @@ bool fake_init(ProxySQL_PluginServices *services) {
 }
 
 bool fake_start() {
-	if (std::getenv("PROXYSQL_FAKE_PLUGIN_START_FAIL") != nullptr) {
+	if (env("START_FAIL") != nullptr) {
 		fake_log_event("start_fail");
 		return false;
 	}
@@ -97,7 +127,7 @@ bool fake_start() {
 }
 
 bool fake_stop() {
-	if (std::getenv("PROXYSQL_FAKE_PLUGIN_STOP_FAIL") != nullptr) {
+	if (env("STOP_FAIL") != nullptr) {
 		fake_log_event("stop_fail");
 		return false;
 	}
@@ -106,11 +136,11 @@ bool fake_stop() {
 }
 
 const char *fake_status_json() {
-	return "{\"name\":\"fake_plugin\",\"state\":\"running\"}";
+	return "{\"name\":\"" FAKE_PLUGIN_NAME "\",\"state\":\"running\"}";
 }
 
 const ProxySQL_PluginDescriptor fake_descriptor = {
-	"fake_plugin",
+	FAKE_PLUGIN_NAME,
 	1,
 	&fake_init,
 	&fake_start,
