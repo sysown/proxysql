@@ -1,6 +1,7 @@
 #include "mysqlx_session.h"
 #include "mysqlx_thread.h"
 #include "mysqlx_protocol.h"
+#include "mysqlx_stats.h"
 
 #include "mysqlx.pb.h"
 #include "mysqlx_connection.pb.h"
@@ -693,6 +694,84 @@ void MysqlxSession::handler_tls_accept_init() {
 	}
 	status_ = CONNECTING_CLIENT;
 	to_process = true;
+}
+
+// Translate the authenticated user's identity_->default_route into the
+// concrete (target_hostgroup_, target_address_, target_port_) triple that
+// handler_connecting_server uses to reach the backend. Invariant: called
+// only after the auth handler has populated identity_; missing identity is
+// therefore treated as a no-backend programming error (4002) rather than
+// an auth failure. The pre-Ok timing matters — once the X-Protocol Ok
+// frame is on the wire, there is no clean way to report a routing error,
+// so all three failure modes return a nonzero code here and leave the
+// caller responsible for sending Error + transitioning to closing state.
+int MysqlxSession::resolve_backend_target() {
+	if (!identity_) {
+		send_error(4002, "No backend available: missing identity");
+		healthy = false;
+		return 4002;
+	}
+
+	const std::string& route_name = identity_->default_route;
+	if (route_name.empty()) {
+		send_error(4000, "User has no default_route configured");
+		mysqlx_stats().record_conn_err("", 0);
+		healthy = false;
+		return 4000;
+	}
+
+	const MysqlxConfigStore* cs = thread_ptr_ ? thread_ptr_->get_config_store() : nullptr;
+	if (!cs) {
+		// Config store unavailable: structurally indistinguishable from a
+		// route with no backend from the client's perspective.
+		send_error(4002, "No backend available: config store unavailable");
+		mysqlx_stats().record_conn_err(route_name, 0);
+		healthy = false;
+		return 4002;
+	}
+
+	if (!cs->route_exists(route_name)) {
+		// Distinguished from the no-backend case (4002) via route_exists():
+		// route_hostgroup() alone returns 0 for both unknown routes and
+		// routes deliberately pointed at hostgroup 0.
+		std::string msg = "Route '";
+		msg += route_name;
+		msg += "' not found";
+		send_error(4001, msg.c_str());
+		mysqlx_stats().record_conn_err(route_name, 0);
+		healthy = false;
+		return 4001;
+	}
+
+	int hg = cs->route_hostgroup(route_name);
+	MysqlxBackendEndpoint ep = cs->pick_endpoint(route_name);
+	if (ep.hostname.empty()) {
+		std::string msg = "No backend available for route '";
+		msg += route_name;
+		msg += "'";
+		send_error(4002, msg.c_str());
+		mysqlx_stats().record_conn_err(route_name, hg);
+		healthy = false;
+		return 4002;
+	}
+
+	target_hostgroup_ = hg;
+	target_address_   = ep.hostname;
+	target_port_      = ep.mysqlx_port;
+	return 0;
+}
+
+// Test-only convenience overload. Mirrors what the auth handler does on a
+// real client connection: look up the identity via the thread's config
+// store, caching the result in identity_. Silently no-ops if the thread
+// has no store or the username is unknown, since tests exercising those
+// edge cases set up identity_ directly via the other overload.
+void MysqlxSession::inject_identity_for_test(const std::string& username) {
+	if (!thread_ptr_) return;
+	const MysqlxConfigStore* cs = thread_ptr_->get_config_store();
+	if (!cs) return;
+	auto id = cs->resolve_identity(username);
+	if (id) identity_ = *id;
 }
 
 void MysqlxSession::handler_connecting_server() {

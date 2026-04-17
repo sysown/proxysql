@@ -84,6 +84,21 @@ public:
 	uint64_t get_last_active_time() const { return last_active_time_; }
 	void set_last_active_time(uint64_t t) { last_active_time_ = t; }
 
+	// --- Test-only accessors ---
+	// These exist so unit tests can drive resolve_backend_target() in
+	// isolation from the full auth state machine. They are not called by
+	// production code. Tests that want full control over the resolved
+	// identity call inject_identity_for_test(MysqlxResolvedIdentity); the
+	// string overload is a convenience wrapper that fetches the identity
+	// from the thread's configured MysqlxConfigStore, mimicking what the
+	// auth handler does when a real client connects.
+	void inject_identity_for_test(const MysqlxResolvedIdentity& id) { identity_ = id; }
+	void inject_identity_for_test(const std::string& username);
+	int  resolve_backend_target_for_test() { return resolve_backend_target(); }
+	int  target_hostgroup_for_test() const { return target_hostgroup_; }
+	const std::string& target_address_for_test() const { return target_address_; }
+	int  target_port_for_test() const { return target_port_; }
+
 	bool to_process;
 
 private:
@@ -117,6 +132,19 @@ private:
 
 	uint8_t extract_msg_type_from_frame(const MysqlxFrame& frame);
 	bool is_terminal_for_state(uint8_t msg_type) const;
+
+	// Resolve identity_->default_route to concrete target_hostgroup_,
+	// target_address_, target_port_ via the thread's MysqlxConfigStore.
+	// Returns 0 on success; on failure returns a nonzero error code
+	// (4000 = empty default_route, 4001 = route name not in store,
+	// 4002 = route has no endpoints or prerequisites missing) and has
+	// already emitted an X-Protocol Error frame, recorded the failure
+	// via mysqlx_stats().record_conn_err(), and marked the session
+	// unhealthy. Designed to be called at auth-complete, before
+	// send_auth_ok(), so a routing failure never races with the client
+	// seeing a phantom Ok on the wire. Not yet wired into the auth flow
+	// (Task 4 wires it).
+	int resolve_backend_target();
 
 	MysqlxDataStream client_ds_;
 	MysqlxDataStream server_ds_;
