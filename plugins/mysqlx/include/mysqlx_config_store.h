@@ -65,6 +65,7 @@ public:
 	std::optional<MysqlxResolvedIdentity> resolve_identity(const std::string& username) const;
 	MysqlxBackendEndpoint pick_endpoint(const std::string& route_name) const;
 	int route_hostgroup(const std::string& route_name) const;
+	bool route_exists(const std::string& route_name) const;
 
 	// Test-only: inject routes + hostgroup endpoints directly, bypassing
 	// the SQLite3DB-based load_from_runtime path. Not called by production code.

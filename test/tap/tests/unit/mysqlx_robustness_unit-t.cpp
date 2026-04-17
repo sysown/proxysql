@@ -1,6 +1,7 @@
 #include "mysqlx_session.h"
 #include "mysqlx_protocol.h"
 #include "mysqlx_thread.h"
+#include "mysqlx_config_store.h"
 #include "tap.h"
 #include "test_globals.h"
 #include "test_init.h"
@@ -566,8 +567,34 @@ static void test_forward_empty_frame() {
 	close(backend_fds[0]); close(backend_fds[1]);
 }
 
+static void test_route_exists_predicate() {
+	// Empty store: any lookup returns false.
+	{
+		MysqlxConfigStore store;
+		ok(store.route_exists("nope") == false,
+		   "route_exists returns false for unknown route on empty store");
+	}
+	// Populated store: reports true for configured routes and false for
+	// unconfigured names, letting callers distinguish "unknown route" from
+	// "route exists but has no backend".
+	{
+		MysqlxConfigStore store;
+		std::unordered_map<std::string, MysqlxRoute> routes;
+		MysqlxRoute r {};
+		r.name = "reads";
+		r.destination_hostgroup = 20;
+		routes.emplace("reads", r);
+		std::unordered_map<int, std::vector<MysqlxBackendEndpoint>> endpoints;
+		store.install_for_test(std::move(routes), std::move(endpoints));
+		ok(store.route_exists("reads") == true,
+		   "route_exists returns true for configured route");
+		ok(store.route_exists("writes") == false,
+		   "route_exists returns false for route name not in store");
+	}
+}
+
 int main() {
-	plan(33);
+	plan(36);
 
 	test_server_response_terminal_frame();
 	test_server_response_non_terminal_keeps_waiting();
@@ -582,6 +609,7 @@ int main() {
 	test_connection_limit_config();
 	test_client_disconnect_detected();
 	test_forward_empty_frame();
+	test_route_exists_predicate();
 
 	return exit_status();
 }
