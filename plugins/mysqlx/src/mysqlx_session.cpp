@@ -299,6 +299,19 @@ void MysqlxSession::handle_auth_plain(const std::string& auth_data) {
 		}
 	}
 
+	// Resolve the user's default_route to a concrete backend target
+	// BEFORE sending the X-Protocol Ok frame. If this is skipped or
+	// deferred until after Ok, the client would see a successful
+	// authentication response and then the session would attempt to
+	// connect to an empty host on port 0 (or some other broken state).
+	// A routing failure here surfaces as an X-Protocol Error frame and
+	// transitions the session to X_SESSION_CLOSING; the client never
+	// reaches a "logged in" state against an unresolvable backend.
+	if (resolve_backend_target() != 0) {
+		status_ = X_SESSION_CLOSING;
+		return;
+	}
+
 	last_active_time_ = monotonic_time_ms();
 	send_auth_ok();
 	status_ = WAITING_CLIENT_XMSG;
@@ -406,6 +419,17 @@ void MysqlxSession::handler_auth_challenge_response() {
 				return;
 			}
 		}
+	}
+
+	// Resolve the user's default_route to a concrete backend target
+	// BEFORE sending the X-Protocol Ok frame. See handle_auth_plain for
+	// the full rationale; the same invariant holds on the MYSQL41 path.
+	// to_process is kept true on the failure branch so the session state
+	// machine drives itself to X_SESSION_CLOSED on the next handler tick.
+	if (resolve_backend_target() != 0) {
+		status_ = X_SESSION_CLOSING;
+		to_process = true;
+		return;
 	}
 
 	last_active_time_ = monotonic_time_ms();

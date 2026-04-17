@@ -68,8 +68,72 @@ static ssize_t read_x_frame(int fd, uint8_t* buf, size_t buf_size, int timeout_m
 	return 4 + payload_size;
 }
 
+// Shared "default" config store and thread used by setup_authenticated_session.
+// After the Task 4 wiring, a session that wants to reach WAITING_CLIENT_XMSG
+// via the real auth handler needs: (a) an identity_lookup that returns an
+// identity with a non-empty default_route, and (b) a config store reachable
+// via the session's thread_ptr_ that knows about that route and has at least
+// one endpoint in its hostgroup. Without these two ingredients,
+// resolve_backend_target() will fail (4000/4001/4002) and the session will
+// transition to X_SESSION_CLOSING instead of WAITING_CLIENT_XMSG.
+//
+// The helpers below lazily construct a process-global thread+store pair,
+// configured once for the "default_test_route" happy-path fixture. Tests
+// that want a different routing outcome should not call
+// setup_authenticated_session; they should drive the session state
+// machine directly (see test_routing_unknown_user for the pattern).
+static MysqlxConfigStore& default_test_config_store() {
+	static MysqlxConfigStore store;
+	static bool initialized = false;
+	if (!initialized) {
+		std::unordered_map<std::string, MysqlxRoute> routes;
+		MysqlxRoute r {};
+		r.name = "default_test_route";
+		r.destination_hostgroup = 10;
+		r.strategy = "first_available";
+		routes.emplace("default_test_route", r);
+
+		std::unordered_map<int, std::vector<MysqlxBackendEndpoint>> endpoints;
+		MysqlxBackendEndpoint ep {};
+		ep.hostname = "127.0.0.1";
+		ep.mysql_port = 3306;
+		ep.mysqlx_port = 33060;
+		endpoints[10].push_back(ep);
+
+		store.install_for_test(std::move(routes), std::move(endpoints));
+		initialized = true;
+	}
+	return store;
+}
+
+static Mysqlx_Thread& default_test_thread() {
+	static Mysqlx_Thread thr;
+	static bool initialized = false;
+	if (!initialized) {
+		thr.init(0);
+		thr.set_config_store(&default_test_config_store());
+		initialized = true;
+	}
+	return thr;
+}
+
 static void setup_authenticated_session(int fds[2], MysqlxSession& sess) {
-	sess.init(fds[0], nullptr);
+	// Attach the session to the shared test thread so resolve_backend_target()
+	// finds a populated config store at auth-complete. Pre-seed identity_
+	// directly rather than via set_identity_lookup: the latter would cause
+	// the MYSQL41 challenge-response handler to re-run scramble verification
+	// against a real password hash, which the helper's fixed all-zero
+	// scramble cannot satisfy. With identity_lookup_ unset, the auth
+	// handler's credential-verify block is skipped (matching the long-
+	// standing "open-proxy" behavior covered by
+	// test_mysql41_no_credential_lookup_accepts_any), but resolve_backend_target()
+	// still sees a populated identity_ with a valid default_route.
+	sess.init(fds[0], &default_test_thread());
+	MysqlxResolvedIdentity id {};
+	id.username = "testuser";
+	id.x_enabled = true;
+	id.default_route = "default_test_route";
+	sess.inject_identity_for_test(id);
 	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
 
 	sess.to_process = true;
@@ -351,7 +415,18 @@ static void test_mysql41_no_credential_lookup_accepts_any() {
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
 	MysqlxSession sess;
-	sess.init(fds[0], nullptr);
+	// Attach to the shared test thread+store and pre-seed a resolvable
+	// identity. The asserted invariant here is that without an
+	// identity_lookup set, credential verification in
+	// handler_auth_challenge_response is skipped; a valid default_route
+	// is still required to reach WAITING_CLIENT_XMSG (Task 4 wiring),
+	// so we inject one directly.
+	sess.init(fds[0], &default_test_thread());
+	MysqlxResolvedIdentity id {};
+	id.username = "testuser";
+	id.x_enabled = true;
+	id.default_route = "default_test_route";
+	sess.inject_identity_for_test(id);
 
 	sess.to_process = true;
 	Mysqlx::Session::AuthenticateStart auth_start;
@@ -826,8 +901,86 @@ static void test_routing_unknown_user() {
 	close(fds[0]); close(fds[1]);
 }
 
+// Integration test for the Task 4 wiring: PLAIN auth succeeds credential-
+// wise (correct password) but the resolved identity carries an empty
+// default_route. Expected outcome after resolve_backend_target() runs
+// pre-Ok:
+//   - session transitions to X_SESSION_CLOSING (not WAITING_CLIENT_XMSG).
+//   - is_healthy() is false.
+//   - the client sees an X-Protocol ERROR frame on the wire, NOT an Ok.
+// Prior to this wiring, sessions reached WAITING_CLIENT_XMSG with
+// target_address_ == "" and target_port_ == 0, then attempted to connect
+// to ""; port 0 on the first client query. This test locks that door.
+static void test_plain_auth_empty_default_route_closes_session() {
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+
+	// Dedicated store/thread for this test so we don't pollute the shared
+	// default fixture. The store is intentionally *not* populated with
+	// "default_test_route" here; what matters is that the identity_lookup
+	// returns an identity whose default_route is empty, which short-circuits
+	// resolve_backend_target() with 4000 before any route lookup runs.
+	MysqlxConfigStore store;
+	Mysqlx_Thread thr;
+	thr.init(0);
+	thr.set_config_store(&store);
+
+	MysqlxSession sess;
+	sess.init(fds[0], &thr);
+
+	// PLAIN auth requires TLS at the protocol layer; mark the client data
+	// stream as encrypted so handle_auth_plain() proceeds past the
+	// "PLAIN authentication requires TLS" gate.
+	sess.client_ds().set_encrypted(true);
+
+	// Identity lookup returns an enabled user with a KNOWN password and
+	// an EMPTY default_route. Credential verification must succeed so the
+	// auth path reaches resolve_backend_target(), which then fails with 4000.
+	sess.set_identity_lookup([](const std::string& username)
+		-> std::optional<MysqlxResolvedIdentity> {
+		MysqlxResolvedIdentity id {};
+		id.username = username;
+		id.x_enabled = true;
+		id.password = "secret123";   // cleartext; derive_stored_hash SHA1s it.
+		id.default_route = "";        // the point of this test
+		return id;
+	});
+
+	// Send AuthenticateStart with PLAIN mechanism and correct password.
+	// PLAIN auth_data is  \0 <authzid> \0 <user> \0 <password> ; we use
+	// an empty authzid, "testuser", then "secret123".
+	sess.to_process = true;
+	Mysqlx::Session::AuthenticateStart auth_start;
+	auth_start.set_mech_name("PLAIN");
+	std::string plain_payload;
+	plain_payload.push_back('\0');
+	plain_payload.append("testuser");
+	plain_payload.push_back('\0');
+	plain_payload.append("secret123");
+	auth_start.set_auth_data(plain_payload);
+	std::string serialized;
+	auth_start.SerializeToString(&serialized);
+	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_START,
+		reinterpret_cast<const uint8_t*>(serialized.data()), serialized.size());
+	sess.handler();
+
+	ok(sess.get_status() == MysqlxSession::X_SESSION_CLOSING,
+	   "PLAIN auth + empty default_route: session in X_SESSION_CLOSING");
+	ok(!sess.is_healthy(),
+	   "PLAIN auth + empty default_route: session marked unhealthy");
+
+	usleep(5000);
+	uint8_t buf[4096];
+	ssize_t r = read_x_frame(fds[1], buf, sizeof(buf));
+	ok(r > 5 && buf[4] == Mysqlx::ServerMessages_Type_ERROR,
+	   "PLAIN auth + empty default_route: client receives ERROR frame (not Ok)");
+
+	detach_session_fds(sess);
+	close(fds[0]); close(fds[1]);
+}
+
 int main() {
-	plan(43);
+	plan(46);
 
 	test_server_response_terminal_frame();
 	test_server_response_non_terminal_keeps_waiting();
@@ -850,6 +1003,8 @@ int main() {
 	test_routing_no_backend();
 	test_routing_stats_on_failure();
 	test_routing_unknown_user();
+
+	test_plain_auth_empty_default_route_closes_session();
 
 	return exit_status();
 }
