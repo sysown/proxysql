@@ -20,9 +20,19 @@ RUN curl -fsSL "https://github.com/ProxySQL/dbdeployer/releases/download/v${DBDE
     | tar -xz -C /usr/local/bin/ \
     && chmod +x /usr/local/bin/dbdeployer
 
-# Download and unpack MariaDB 10.11.9 tarball via dbdeployer
+# Download and unpack MariaDB 10.11.9 tarball via dbdeployer.
+# Cleanup in the same layer: remove the downloaded tarball, drop mysqld-debug if present,
+# and strip all ELF binaries/shared libs. binutils is installed temporarily and purged after.
 RUN mkdir -p /root/opt/mysql \
-    && dbdeployer downloads get-unpack mariadb-10.11.9-linux-systemd-x86_64.tar.gz
+    && dbdeployer downloads get-unpack mariadb-10.11.9-linux-systemd-x86_64.tar.gz \
+    && rm -f /*.tar.xz /*.tar.gz \
+    && rm -f /root/opt/mysql/*/bin/mysqld-debug \
+    && apt-get update && apt-get install -y --no-install-recommends binutils \
+    && find /root/opt/mysql -type f \( -path '*/bin/*' -o -name '*.so' -o -name '*.so.*' \) \
+         -exec sh -c 'strip --strip-unneeded "$1" 2>/dev/null || true' _ {} \; \
+    && apt-get purge -y binutils \
+    && apt-get autoremove -y --purge \
+    && rm -rf /var/lib/apt/lists/*
 
 # Clear reserved ports so dbdeployer allows base-port 3305 (nodes get 3306,3307,3308)
 # dbdeployer reserves 1186,3306,5432,33060,33062 by default; replace with harmless value
