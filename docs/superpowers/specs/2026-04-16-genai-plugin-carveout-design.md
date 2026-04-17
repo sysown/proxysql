@@ -23,7 +23,7 @@ session-level hooks today.
 This effort extracts all PROXYSQLGENAI code into an in-tree plugin at
 `plugins/genai/`, using the ProtocolX ABI cherry-picked into this branch and
 extended with two additive services (a pre-execution query hook and a
-status-variable registry). Motivations:
+shared Prometheus registry handle). Motivations:
 
 1. Separate core proxy from GenAI/MCP/LLM features so core can ship and be
    reviewed independently of AI features.
@@ -57,7 +57,7 @@ status-variable registry). Motivations:
    `PROXYSQLGENAI` the macro is deleted.
 3. The plugin communicates with core exclusively through a documented ABI
    (the ProtocolX loader's, with two additive extensions: query hook +
-   status-var registry).
+   shared Prometheus registry handle).
 4. Test isolation improves: plugin unit tests live with the plugin;
    integration tests live in-tree under a dedicated test group that loads
    the plugin.
@@ -99,7 +99,7 @@ Cherry-picked into this branch as a prerequisite step:
 
 ### ABI extensions added by this work
 
-Both extensions are additive fields inside `proxysql_plugin_descriptor_v1`
+Both extensions are additive fields inside `ProxySQL_PluginServices`
 (new function pointers that are `NULL` in older plugins) — no v2 bump.
 
 1. **Pre-execution query hook.**
@@ -109,12 +109,25 @@ Both extensions are additive fields inside `proxysql_plugin_descriptor_v1`
    and `PgSQL_Session` just before the query dispatches to a backend.
    Consumed by the anomaly detector. First real-time extension point.
 
-2. **Status-variable registry.**
-   `register_status_var(name) → opaque handle` plus
-   `status_var_inc(handle, delta)`. Plugin-owned metrics
-   (`ai_detected_anomalies`, `ai_blocked_queries`, etc.) become first-class
-   in `SHOW MYSQL STATUS` without core knowing their names at compile time.
-   Hard cap on registrations (~256) checked at registration.
+2. **Prometheus registry access.**
+   `get_prometheus_registry()` returns the `prometheus::Registry*` core
+   already uses (via `prometheus-cpp`, in `deps/`). Plugins register
+   their own counters / gauges / histograms against the shared registry,
+   so plugin-owned metrics show up alongside core metrics in the same
+   `/metrics` endpoint a scraper already polls. Same C++ ABI coupling
+   caveat as the existing `std::string` field: plugins must be built in
+   the ProxySQL build tree (or against a matching `prometheus-cpp`).
+
+   For plugin state that is naturally tabular (and queryable via admin
+   SQL), use the existing `register_table(stats_db, …)` path, not
+   Prometheus. GenAI's existing `stats_mcp_query_tools_counters`,
+   `stats_mcp_query_digest`, `stats_mcp_query_rules`, and their
+   `_reset` siblings — currently registered in `Admin_Bootstrap.cpp` —
+   move to the plugin via that path during Step 4.
+
+   *(`SHOW MYSQL STATUS` is intentionally NOT a target: it's a
+   MySQL-protocol-specific response that core owns; mixing plugin
+   metrics into it would couple plugins to wire-protocol details.)*
 
 ### What the plugin does NOT get
 
@@ -183,7 +196,7 @@ plugins/genai/
 │   ├── plugin_tables.cpp          # all register_table(...) calls (was ProxySQL_Admin glue)
 │   ├── plugin_commands.cpp        # all register_command(...) calls (was Admin_Handler glue)
 │   ├── plugin_hooks.cpp           # register_query_hook(...) → anomaly_detector
-│   ├── plugin_status_vars.cpp     # register_status_var(...) + helpers
+│   ├── plugin_metrics.cpp         # Prometheus counters/gauges via get_prometheus_registry()
 │   ├── backend_client.cpp         # shared MySQL+PGSQL client helper used by tool handlers
 │   ├── <one .cpp per module>      # existing lib/*.cpp files moved 1:1
 │   └── tool_handlers/             # the 9 *_Tool_Handler.cpp files
@@ -240,10 +253,12 @@ successfully.
 
 **Step 2 — ABI extensions land.**
 Add `register_query_hook` (MySQL + PgSQL hot-path call site, no-op when no
-hook registered) and `register_status_var` / `status_var_inc`. Tests: a
-synthetic test plugin that registers a hook counting queries and asserts the
-count. Does not yet touch anomaly detection. Isolates the hot-path change as
-its own PR for review scrutiny.
+hook registered) and `get_prometheus_registry` (returns the same
+`prometheus::Registry*` core uses). Tests: a synthetic test plugin that
+registers a hook counting queries and asserts the count; another that
+registers a Prometheus counter and asserts it appears at `/metrics`.
+Does not yet touch anomaly detection. Isolates the hot-path change as its
+own PR for review scrutiny.
 
 **Step 3 — Move Anomaly Detector.**
 Move `Anomaly_Detector.{h,cpp}` and the `st_var_ai_*` counters into the
@@ -286,9 +301,9 @@ isn't in the plugin yet). Step 7 is not.
 ### ProtocolX coordination
 
 Step 2 extends the ABI before ProtocolX is upstream. When ProtocolX merges
-to `v3.0`, either (a) it absorbs the hook + status-var extensions, or
-(b) this branch rebases onto the merged ProtocolX and moves its additions.
-The writing-plans phase will decide who owns this reconciliation.
+to `v3.0`, either (a) it absorbs the hook + Prometheus-registry extensions,
+or (b) this branch rebases onto the merged ProtocolX and moves its
+additions. The writing-plans phase will decide who owns this reconciliation.
 
 ## Error handling and failure modes
 
@@ -309,8 +324,11 @@ The writing-plans phase will decide who owns this reconciliation.
 - **Slow query hook**: no timeout enforcement in v1. Hook runs synchronously
   on the session thread; slow hook slows the proxy. Documented as
   plugin-author responsibility. Async/timeout is a future extension.
-- **Status-var registry overflow**: registration returns an error past the
-  cap; plugin aborts its init. GenAI registers ~5 in practice.
+- **Prometheus metric name collision**: registering a metric whose name is
+  already taken in the shared registry surfaces as a `prometheus-cpp`
+  exception inside the plugin's init; plugin aborts its init and core
+  refuses startup. Plugins should namespace their metric names
+  (e.g. `proxysql_genai_*`).
 - **Admin SQL dispatch failures** (plugin command handler throws): caught
   at the ABI boundary, returned to the admin client as a SQL error, logged.
   Does not crash core.
@@ -361,8 +379,9 @@ Docker, no backends. Follows the existing core unit-test harness pattern
 - `test_plugin_query_hook-t.cpp`: dummy plugin registers a counting hook;
   test asserts every query increments and that DENY returns the error to
   the client.
-- `test_plugin_status_var-t.cpp`: dummy plugin registers and increments a
-  status var; test asserts it appears in `SHOW MYSQL STATUS`.
+- `test_plugin_prometheus-t.cpp`: dummy plugin registers a Prometheus
+  counter against the shared registry; test scrapes `/metrics` and
+  asserts the metric (and its incremented value) is present.
 
 ### Test group wiring
 
