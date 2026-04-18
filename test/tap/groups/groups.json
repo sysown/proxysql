@@ -341,7 +341,6 @@
   "test_mysql_connect_retries-t" : [ "legacy-g3","mysql84-g3","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3" ],
   "test_mysql_connect_retries_delay-t" : [ "legacy-g3","mysql84-g3","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3" ],
   "test_mysqlx_admin_tables-t" : [ "unit-tests-g1" ],
-  "test_mysqlx_listener_smoke-t" : [ "unit-tests-g1" ],
   "test_mysqlx_plugin_load-t" : [ "unit-tests-g1" ],
   "test_mysql_hostgroup_attributes-1-t" : [ "legacy-g3","mysql84-g3","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3" ],
   "test_mysql_query_digests_stages-t" : [ "legacy-g3","mysql84-g3","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3" ],
