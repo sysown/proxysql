@@ -21,10 +21,45 @@ PROTO_DIR := $(PLUGIN_DIR)/proto
 PROTO_SRCS := $(wildcard $(PROTO_DIR)/*.pb.cc)
 PROTO_OBJS := $(patsubst $(PROTO_DIR)/%.pb.cc,$(ODIR)/%.pb.o,$(PROTO_SRCS))
 
+# Generated .pb.cc files were produced with protoc 3.21.12. The plugin links
+# dynamically against the system libprotobuf, which is ABI-compatible only
+# within the protobuf 3.x major version (the 4.x release cycle introduced an
+# incompatible ABI — libprotobuf.so SONAME changed). Detect the installed
+# version up front and fail fast so we never produce a .so that links cleanly
+# but crashes the first time a virtual is dispatched into the proto runtime.
+PROTOBUF_GENERATED_VERSION := 3.21.12
+PROTOBUF_VERSION := $(shell pkg-config --modversion protobuf 2>/dev/null)
+ifeq ($(PROTOBUF_VERSION),)
+    $(error libprotobuf not found via pkg-config. Install libprotobuf-dev (3.x). \
+        The mysqlx plugin's vendored .pb.cc/.pb.h were generated with protoc \
+        $(PROTOBUF_GENERATED_VERSION) and require an ABI-compatible 3.x runtime)
+endif
+PROTOBUF_MAJOR := $(firstword $(subst ., ,$(PROTOBUF_VERSION)))
+ifneq ($(PROTOBUF_MAJOR),3)
+    $(error libprotobuf $(PROTOBUF_VERSION) is not ABI-compatible with the \
+        vendored .pb.cc generated for protoc $(PROTOBUF_GENERATED_VERSION). \
+        Install libprotobuf 3.x (e.g. 3.21.12) or regenerate the proto sources \
+        against the installed version. See the regeneration recipe above)
+endif
+
 IDIRS := -I$(PROXYSQL_IDIR) -I$(PLUGIN_DIR)/include -I$(SQLITE3_IDIR) -I$(PROTO_DIR) -I$(SSL_IDIR) -I$(PROMETHEUS_IDIR) -I$(LIBCONFIG_IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) -I$(RE2_IDIR)
 
 OPTZ ?= -O2 -ggdb
-CXXFLAGS := $(STDCPP) -fPIC $(OPTZ) $(WGCOV) $(WASAN) -pthread
+# -fvisibility=hidden + -fvisibility-inlines-hidden hides every C++ symbol by
+# default; only the explicitly extern "C"-declared
+# proxysql_plugin_descriptor_v1 entry point is exported. This prevents ODR
+# collisions with the proxysql core when the .so is dlopen'd, and avoids
+# leaking template instantiations across the boundary.
+CXXFLAGS := $(STDCPP) -fPIC -fvisibility=hidden -fvisibility-inlines-hidden $(OPTZ) $(WGCOV) $(WASAN) -pthread
+
+# Hardening flags. Skip _FORTIFY_SOURCE under ASAN (incompatible) and when
+# OPTZ contains -O0 (requires optimisation to take effect).
+ifeq ($(WASAN),)
+    ifeq (,$(findstring -O0,$(OPTZ)))
+        CXXFLAGS += -D_FORTIFY_SOURCE=2
+    endif
+endif
+CXXFLAGS += -fstack-protector-strong
 
 .DEFAULT_GOAL := all
 
