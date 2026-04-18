@@ -844,7 +844,23 @@ void MysqlxSession::handler_connecting_server() {
 
 	if (backend_conn_ && backend_conn_->get_auth_state() == MysqlxConnection::BACKEND_AUTH_NOT_STARTED) {
 		backend_conn_->init_backend_ds(backend_conn_->get_fd());
-		backend_conn_->set_backend_user(username_.c_str());
+
+		// Pick the backend username consistently with the backend password
+		// sourced from identity_->backend_password. When backend_auth_mode
+		// is `service_account` the mysqlx_users row carries a distinct
+		// backend_username; in `mapped` mode (the default) that field is
+		// empty and the frontend username_ is reused verbatim. Using the
+		// frontend username here while passing the resolved backend password
+		// below would pair userA's password with userB's name for
+		// service-account rows — backend auth would then fail with
+		// access-denied even though both columns are internally consistent.
+		// See the MysqlxBackendAuthMode enum in mysqlx_config_store.h for
+		// the full set of modes and their semantics.
+		const std::string& backend_user =
+			(identity_ && !identity_->backend_username.empty())
+				? identity_->backend_username
+				: username_;
+		backend_conn_->set_backend_user(backend_user.c_str());
 		backend_conn_->set_backend_schema(schema_.c_str());
 
 		if (client_ds_.is_encrypted() && tls_mode_ != TLS_PASSTHROUGH) {

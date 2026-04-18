@@ -979,8 +979,102 @@ static void test_plain_auth_empty_default_route_closes_session() {
 	close(fds[0]); close(fds[1]);
 }
 
+// Exercise the session's backend-connection setup site in
+// handler_connecting_server and assert that the value passed to
+// set_backend_user() tracks the resolved identity rather than only the
+// frontend username. Pre-fix (PR #5641), the site hardcoded
+// backend_conn_->set_backend_user(username_.c_str()) while pairing it
+// with identity_->backend_password — which, for mysqlx_users rows whose
+// backend_auth_mode is `service_account` and whose backend_username
+// differs from the frontend username, paired userA's password with
+// userB's name and broke backend auth.
+//
+// Strategy: drive the session far enough that username_ and identity_
+// are both populated (setup_authenticated_session), then pre-seed
+// backend_conn_ in AUTHENTICATING + BACKEND_AUTH_NOT_STARTED state
+// attached to a valid socketpair fd. Flipping status_ to
+// CONNECTING_SERVER and firing handler() lands us at the set_backend_user
+// call site without invoking the real TCP connect. The socketpair is
+// nonblocking (MysqlxDataStream::init sets O_NONBLOCK) so
+// step_auth_capabilities_get() writes the cap-get frame and returns;
+// the subsequent try_read_one_frame() sees nothing and the handler
+// bails out cleanly with backend_user_ observable via the test accessor.
+static void test_backend_user_uses_backend_username_when_set() {
+	int client_fds[2], backend_fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
+	socketpair(AF_UNIX, SOCK_STREAM, 0, backend_fds);
+
+	MysqlxSession sess;
+	setup_authenticated_session(client_fds, sess);
+
+	// Replace identity_ so it carries a DISTINCT backend_username, mimicking
+	// a service_account-mode mysqlx_users row.
+	MysqlxResolvedIdentity id {};
+	id.username = "front_user";
+	id.x_enabled = true;
+	id.default_route = "default_test_route";
+	id.backend_auth_mode = MysqlxBackendAuthMode::service_account;
+	id.backend_username = "svc_account_42";
+	id.backend_password = "svc_pw";
+	sess.inject_identity_for_test(id);
+
+	MysqlxConnection* conn = new MysqlxConnection();
+	conn->set_fd(backend_fds[0]);
+	conn->set_state(MysqlxConnection::AUTHENTICATING);
+	sess.backend_conn() = conn;
+	sess.set_status(MysqlxSession::CONNECTING_SERVER);
+
+	sess.to_process = true;
+	sess.handler();
+
+	ok(std::string(conn->get_backend_user_for_test()) == "svc_account_42",
+	   "service_account mode: set_backend_user uses identity_->backend_username");
+
+	detach_session_fds(sess);
+	close(client_fds[0]); close(client_fds[1]);
+	close(backend_fds[0]); close(backend_fds[1]);
+}
+
+// Mirror test for the mapped-mode (default) path: identity has an EMPTY
+// backend_username, so the fallback must reuse the frontend username_.
+// setup_authenticated_session drives MYSQL41 auth with "testuser" as the
+// frontend username, so that is what we expect to land in backend_user_.
+static void test_backend_user_falls_back_to_frontend_username() {
+	int client_fds[2], backend_fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
+	socketpair(AF_UNIX, SOCK_STREAM, 0, backend_fds);
+
+	MysqlxSession sess;
+	setup_authenticated_session(client_fds, sess);
+
+	// Re-inject identity with EMPTY backend_username: mapped-mode default.
+	MysqlxResolvedIdentity id {};
+	id.username = "testuser";
+	id.x_enabled = true;
+	id.default_route = "default_test_route";
+	id.backend_auth_mode = MysqlxBackendAuthMode::mapped;
+	id.backend_username = "";  // the point of this test
+	sess.inject_identity_for_test(id);
+
+	MysqlxConnection* conn = new MysqlxConnection();
+	conn->set_fd(backend_fds[0]);
+	conn->set_state(MysqlxConnection::AUTHENTICATING);
+	sess.backend_conn() = conn;
+	sess.set_status(MysqlxSession::CONNECTING_SERVER);
+
+	sess.to_process = true;
+	sess.handler();
+
+	ok(std::string(conn->get_backend_user_for_test()) == "testuser",
+	   "mapped mode (empty backend_username): set_backend_user falls back to frontend username_");
+
+	detach_session_fds(sess);
+	close(client_fds[0]); close(client_fds[1]);
+	close(backend_fds[0]); close(backend_fds[1]);
+}
+
 int main() {
-	plan(46);
+	plan(48);
 
 	test_server_response_terminal_frame();
 	test_server_response_non_terminal_keeps_waiting();
@@ -1005,6 +1099,9 @@ int main() {
 	test_routing_unknown_user();
 
 	test_plain_auth_empty_default_route_closes_session();
+
+	test_backend_user_uses_backend_username_when_set();
+	test_backend_user_falls_back_to_frontend_username();
 
 	return exit_status();
 }
