@@ -565,7 +565,19 @@ int wait_for_node_sync(MYSQL* admin, const vector<string> queries, uint32_t time
 
 			mysql_free_result(myres);
 
-			if (row_value == 0) {
+			// <= 0 rather than == 0: "== 0" only flagged "row present but zero",
+			// which missed the "row absent" case (row_value stays at its -1
+			// default when mysql_fetch_row returns NULL). For the common
+			// 'SELECT LENGTH(checksum) FROM stats_proxysql_servers_checksums
+			// WHERE hostname=... AND port=... AND name=...' predicate the row
+			// does not yet exist at the moment a freshly-spawned replica is
+			// polled — so the loop was exiting as "synced" before the replica
+			// had recorded a checksum for its peer, after which the caller's
+			// fetch_remote_checksum() correctly returned empty and aborted the
+			// test with "Failed to fetch current checksum". The race is
+			// load-dependent: mysql95-g5 passed because it started minutes
+			// later when concurrent groups had finished.
+			if (row_value <= 0) {
 				not_synced = true;
 				failed_query = query;
 
@@ -670,7 +682,17 @@ int32_t get_checksum_sync_timeout(MYSQL* admin) {
 		return -1;
 	}
 
-	return ((ext_check_intv.val/1000) * ext_sts_freq.val) + 1;
+	// Compute the status-collection period in ms and round up to avoid the
+	// integer-division truncation of the earlier (interval_ms/1000 * freq) + 1
+	// formula (1001ms would collapse to 1s of period). Then enforce a 30s
+	// floor: the +1s slack was too tight under concurrent CI load — a single
+	// missed cycle on legacy-g5 / mysql84-g5 / mysql90-g5 was enough to time
+	// out. The fast path still exits on the first synced poll, so healthy
+	// clusters pay no extra cost.
+	const int64_t period_ms = ext_check_intv.val * ext_sts_freq.val;
+	const int32_t period_s = static_cast<int32_t>((period_ms + 999) / 1000);
+	const int32_t timeout_s = period_s + 5;
+	return timeout_s > 30 ? timeout_s : 30;
 }
 
 int check_module_checksums_sync(
@@ -920,27 +942,26 @@ int check_module_checksums_sync(
 	// This is important to avoid race conditions. If this sync is not performed, the primary may detect the
 	// new checksum in the replica confusing this with the previous check.
 	{
-		const char prim_repl_sync_t[] {
+		// Both assertions originally formatted the same template with the same
+		// args (conn_opts = primary), so "own" and "in the replica" polled the
+		// identical query. Distinguish them: the replica-check filters on
+		// r_admin, the own-check filters on admin (== conn_opts in this call).
+		const char prim_chksm_sync_t[] {
 			"SELECT count(*) FROM stats_proxysql_servers_checksums WHERE "
 				"hostname='%s' AND port='%d' AND name='%s' AND checksum='%s'"
 		};
 		cfmt_t wait_remote_chksm_syn {
-			cstr_format( prim_repl_sync_t,
-				conn_opts.host.c_str(),
-				conn_opts.port,
+			cstr_format( prim_chksm_sync_t,
+				r_admin->host,
+				r_admin->port,
 				module.c_str(),
 				ext_checksum.str.c_str()
 			)
 		};
-		const char prim_own_sync_t[] {
-			"SELECT count(*) FROM stats_proxysql_servers_checksums WHERE "
-				"hostname='%s' AND port='%d' AND name='%s' AND checksum='%s'"
-		};
 		cfmt_t wait_own_chksm_sync {
-			cstr_format(
-				prim_repl_sync_t,
-				conn_opts.host.c_str(),
-				conn_opts.port,
+			cstr_format( prim_chksm_sync_t,
+				admin->host,
+				admin->port,
 				module.c_str(),
 				ext_checksum.str.c_str()
 			)
@@ -953,7 +974,7 @@ int check_module_checksums_sync(
 			admin->host, admin->port, ext_checksum.str.c_str(), r_admin->host, r_admin->port
 		);
 
-		sync_res = wait_for_node_sync(admin, { wait_remote_chksm_syn.str }, CHECKSUM_SYNC_TIMEOUT);
+		sync_res = wait_for_node_sync(admin, { wait_own_chksm_sync.str }, CHECKSUM_SYNC_TIMEOUT);
 		ok(
 			sync_res == 0,
 			"Primary(%s:%d) has detected its own new checksum '%s'",

@@ -286,8 +286,15 @@ int is_string_in_result(PGresult* result, const char* target_str) {
 }
 
 bool check_logs_for_command(std::fstream& f_proxysql_log, const std::string& command_regex) {
-    const auto& [_, cmd_lines] { get_matching_lines(f_proxysql_log, command_regex) };
-	return cmd_lines.empty() ? false : true;
+    // ProxySQL's log writes for 'Switching {to Fast Forward,back to Normal} mode'
+    // happen asynchronously relative to the SQL that triggers them, so a single
+    // scan right after the SQL completes is racy. wait_for_log_match() retries
+    // with a short timeout, clearing EOF between scans; on hit it returns
+    // immediately, so assertions against a line that is already present pay no
+    // extra latency. Negative assertions (check_logs_for_command(...) == false)
+    // also benefit: they now wait up to the timeout to confirm absence, avoiding
+    // a false pass when the line would have arrived a few hundred ms later.
+    return wait_for_log_match(f_proxysql_log, command_regex);
 }
 
 bool setupTestTable(PGconn* conn) {

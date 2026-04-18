@@ -262,8 +262,29 @@ int test_pass_match(MYSQL* admin, const user_def_t& def) {
 
 		mysql_free_result(myres);
 	} else if (def.auth == "caching_sha2_password") {
+		// MySQL stores caching_sha2_password as '$A$<RRR>$<salt><hash>' (70 ASCII bytes).
+		// def.hash is the hex-encoding of those 70 bytes (140 chars). The 3 ASCII chars
+		// at offset 3..5 (hex offset 6..11) carry rounds/1000 in 3-char zero-padded
+		// uppercase hex. Decode and pass the resolved rounds value to the SQLite
+		// extension so the regenerated digest uses the same iteration count as the
+		// backend (matters once MySQL ships with default rounds != 5000).
+		long rounds = 5000;
+		if (def.hash.size() >= 12) {
+			string rounds_field;
+			for (size_t i = 6; i < 12; i += 2) {
+				rounds_field += static_cast<char>(stoi(def.hash.substr(i, 2), nullptr, 16));
+			}
+			try {
+				rounds = stol(rounds_field, nullptr, 16) * 1000;
+			} catch (const std::exception&) {
+				diag("Failed to parse rounds field '%s' from MySQL hash '%s'",
+					rounds_field.c_str(), def.hash.c_str());
+			}
+		}
+
 		const string GEN_SHA2_PASS {
-			"SELECT HEX(CACHING_SHA2_PASSWORD('" + def.pass + "', UNHEX('" + def.salt + "')))"
+			"SELECT HEX(CACHING_SHA2_PASSWORD('" + def.pass + "', UNHEX('" + def.salt + "'), "
+				+ std::to_string(rounds) + "))"
 		};
 		MYSQL_QUERY_T(admin, GEN_SHA2_PASS.c_str());
 
@@ -274,8 +295,8 @@ int test_pass_match(MYSQL* admin, const user_def_t& def) {
 
 		ok(
 			def.hash == admin_hash,
-			"MySQL hash should match ProxySQL generated   mysql:'%s', admin:'%s'",
-			def.hash.c_str(), admin_hash.c_str()
+			"MySQL hash should match ProxySQL generated   mysql:'%s', admin:'%s', rounds:%ld",
+			def.hash.c_str(), admin_hash.c_str(), rounds
 		);
 
 		mysql_free_result(myres);
@@ -404,13 +425,20 @@ const vector<inv_input_t> INV_INPUTS {
 		"ProxySQL Admin Error: wrong number of arguments to function CACHING_SHA2_PASSWORD()"
 	},
 	{
-		"SELECT CACHING_SHA2_PASSWORD('00', '00', '00')", 1,
+		"SELECT CACHING_SHA2_PASSWORD('00', '00', 5000, 'extra')", 1,
 		"ProxySQL Admin Error: wrong number of arguments to function CACHING_SHA2_PASSWORD()"
 	},
 	{ "SELECT CACHING_SHA2_PASSWORD('', '')", 0, "Invalid argument size" },
 	{ "SELECT CACHING_SHA2_PASSWORD('', '000000000000000000000')", 0, "Invalid argument size" },
 	{ "SELECT CACHING_SHA2_PASSWORD(2, '00')", 0, "Invalid argument type" },
 	{ "SELECT CACHING_SHA2_PASSWORD('00', 2)", 0, "Invalid argument type" },
+	{ "SELECT CACHING_SHA2_PASSWORD('00', '00', '00')", 0, "Invalid argument type" },
+	{ "SELECT CACHING_SHA2_PASSWORD('00', '00', 1000)", 0,
+		"Invalid rounds: expected multiple of 1000 in [5000,4095000]" },
+	{ "SELECT CACHING_SHA2_PASSWORD('00', '00', 5500)", 0,
+		"Invalid rounds: expected multiple of 1000 in [5000,4095000]" },
+	{ "SELECT CACHING_SHA2_PASSWORD('00', '00', 4096000)", 0,
+		"Invalid rounds: expected multiple of 1000 in [5000,4095000]" },
 };
 
 

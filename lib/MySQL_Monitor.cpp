@@ -4105,6 +4105,13 @@ void* monitor_GR_thread_HG(void *arg) {
 
 	uint64_t next_check_time = 0;
 	uint64_t MAX_CHECK_DELAY_US = 500000;
+	// On first iteration after thread (re)start, ignore the cached ping state
+	// in mysql_server_ping_log — it may reflect stale failures from before the
+	// monitor was reconfigured (e.g. a previous test left these hostnames
+	// marked unpingable). Probing all configured hosts forces a fresh ping_log
+	// entry, so subsequent iterations see real state instead of skipping
+	// healthcheck_interval seconds while the writer HG stays empty.
+	bool first_iteration = true;
 
 	while (GloMyMon->shutdown == false && mysql_thread___monitor_enabled == true) {
 		if (!GloMTH) { break; } // quick exit during shutdown/restart
@@ -4145,8 +4152,16 @@ void* monitor_GR_thread_HG(void *arg) {
 			continue;
 		}
 
-		// Get the current 'pingable' status for the servers.
-		const vector<gr_host_def_t>& resp_srvs { find_resp_srvs(hosts_defs) };
+		// Get the current 'pingable' status for the servers. See first_iteration
+		// note above: skip the cache filter on the very first cycle so we do not
+		// inherit stale ping failures from before this thread was started.
+		vector<gr_host_def_t> resp_srvs;
+		if (first_iteration) {
+			resp_srvs = hosts_defs;
+			first_iteration = false;
+		} else {
+			resp_srvs = find_resp_srvs(hosts_defs);
+		}
 		if (resp_srvs.empty()) {
 			proxy_error("No node is pingable for Group Replication cluster with writer HG %u\n", wr_hg);
 			next_check_time = curtime + mysql_thread___monitor_groupreplication_healthcheck_interval * 1000;
