@@ -48,50 +48,100 @@ bool parse_bind_addr(const std::string& bind, std::string& host, int& port) {
 	return true;
 }
 
-bool sync_disk_to_memory(SQLite3DB& admindb) {
+// Atomically replace `dest` with the rows from `source`. Every admindb.execute()
+// return value is checked: on any failure we ROLLBACK (defensively, even after a
+// failed BEGIN) and skip the table. Returns false if any step for this table
+// failed. The transaction wrap is what makes this safe — without the return
+// checks, a failed INSERT between a successful DELETE and an unconditional
+// COMMIT would silently wipe the destination.
+bool replace_table_atomically(SQLite3DB& admindb,
+                              ProxySQL_PluginServices* services,
+                              const char* dest,
+                              const char* source) {
+	auto log_err = [services](const char* msg) {
+		if (services != nullptr && services->log_message != nullptr) {
+			services->log_message(3, msg);
+		}
+	};
+
+	if (!admindb.execute("BEGIN")) {
+		std::string m = "mysqlx sync: BEGIN failed for ";
+		m += dest;
+		log_err(m.c_str());
+		return false;
+	}
+
+	std::string q = "DELETE FROM ";
+	q += dest;
+	if (!admindb.execute(q.c_str())) {
+		std::string m = "mysqlx sync: DELETE failed for ";
+		m += dest;
+		log_err(m.c_str());
+		admindb.execute("ROLLBACK");
+		return false;
+	}
+
+	q = "INSERT INTO ";
+	q += dest;
+	q += " SELECT * FROM ";
+	q += source;
+	if (!admindb.execute(q.c_str())) {
+		std::string m = "mysqlx sync: INSERT failed for ";
+		m += dest;
+		log_err(m.c_str());
+		admindb.execute("ROLLBACK");
+		return false;
+	}
+
+	if (!admindb.execute("COMMIT")) {
+		std::string m = "mysqlx sync: COMMIT failed for ";
+		m += dest;
+		log_err(m.c_str());
+		// Defensive — COMMIT may have partially succeeded; best-effort ROLLBACK.
+		admindb.execute("ROLLBACK");
+		return false;
+	}
+	return true;
+}
+
+bool sync_disk_to_memory(SQLite3DB& admindb, ProxySQL_PluginServices* services) {
 	const char* tables[] = {
 		"mysqlx_users",
 		"mysqlx_routes",
 		"mysqlx_backend_endpoints",
 		"mysqlx_variables",
 	};
+	bool all_ok = true;
 	for (const char* tbl : tables) {
-		admindb.execute("BEGIN");
-		std::string q = "DELETE FROM main.";
-		q += tbl;
-		admindb.execute(q.c_str());
-
-		q = "INSERT INTO main.";
-		q += tbl;
-		q += " SELECT * FROM disk.";
-		q += tbl;
-		admindb.execute(q.c_str());
-		admindb.execute("COMMIT");
+		std::string dest = "main.";
+		dest += tbl;
+		std::string source = "disk.";
+		source += tbl;
+		if (!replace_table_atomically(admindb, services, dest.c_str(), source.c_str())) {
+			all_ok = false;
+		}
 	}
-	return true;
+	return all_ok;
 }
 
-bool copy_to_runtime(SQLite3DB& admindb) {
+bool copy_to_runtime(SQLite3DB& admindb, ProxySQL_PluginServices* services) {
 	const char* pairs[][2] = {
 		{"mysqlx_users", "runtime_mysqlx_users"},
 		{"mysqlx_routes", "runtime_mysqlx_routes"},
 		{"mysqlx_backend_endpoints", "runtime_mysqlx_backend_endpoints"},
 		{"mysqlx_variables", "runtime_mysqlx_variables"},
 	};
+	bool all_ok = true;
 	for (const auto& p : pairs) {
-		admindb.execute("BEGIN");
-		std::string q = "DELETE FROM main.";
-		q += p[1];
-		admindb.execute(q.c_str());
-
-		q = "INSERT INTO main.";
-		q += p[1];
-		q += " SELECT * FROM main.";
-		q += p[0];
-		admindb.execute(q.c_str());
-		admindb.execute("COMMIT");
+		std::string dest = "main.";
+		dest += p[1];
+		std::string source = "main.";
+		source += p[0];
+		if (!replace_table_atomically(admindb, services, dest.c_str(), source.c_str())) {
+			all_ok = false;
+		}
 	}
-	return true;
+	return all_ok;
 }
 
 bool mysqlx_start() {
@@ -100,8 +150,8 @@ bool mysqlx_start() {
 	if (ctx.services != nullptr && ctx.services->get_admindb != nullptr) {
 		SQLite3DB* admindb = ctx.services->get_admindb();
 		if (admindb != nullptr) {
-			sync_disk_to_memory(*admindb);
-			copy_to_runtime(*admindb);
+			sync_disk_to_memory(*admindb, ctx.services);
+			copy_to_runtime(*admindb, ctx.services);
 
 			std::string err;
 			if (!ctx.config_store->load_from_runtime(*admindb, err)) {
