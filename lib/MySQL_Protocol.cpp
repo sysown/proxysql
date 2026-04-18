@@ -2194,7 +2194,12 @@ bool MySQL_Protocol::PPHR_verify_sha2(
 		} else if (passformat == AUTH_MYSQL_CACHING_SHA2_PASSWORD) {
 			assert(strlen(vars1.password) == 70);
 			string sp = string(vars1.password);
-			long rounds = stol(sp.substr(3,3));
+			// MySQL stores rounds as 3-char zero-padded uppercase hex of (rounds/1000).
+			// See sql/auth/sha2_password.cc::Caching_sha2_password::digest_round_separator():
+			//   sprintf(rounds_str, "%03X", m_stored_digest_rounds)
+			// Parsing as base-10 silently truncates at the first hex digit (A-F),
+			// breaking auth for any backend with caching_sha2_password_digest_rounds >= 10000.
+			long rounds = stol(sp.substr(3,3), nullptr, 16);
 			string salt = sp.substr(7,20);
 			string sha256hash = sp.substr(27,43);
 			char buf[100];
@@ -2248,7 +2253,9 @@ void MySQL_Protocol::PPHR_sha2full(
 		} else if (passformat == AUTH_MYSQL_CACHING_SHA2_PASSWORD) {
 			assert(strlen(vars1.password) == 70);
 			string sp = string(vars1.password);
-			long rounds = stol(sp.substr(3,3));
+			// MySQL stores rounds as 3-char zero-padded uppercase hex of (rounds/1000) — see
+			// PPHR_verify_sha2() above for the upstream format reference. Must parse base-16.
+			long rounds = stol(sp.substr(3,3), nullptr, 16);
 			string salt = sp.substr(7,20);
 			string sha256hash = sp.substr(27,43);
 			//char * sha256_crypt_r (const char *key, const char *salt, char *buffer, int buflen);
