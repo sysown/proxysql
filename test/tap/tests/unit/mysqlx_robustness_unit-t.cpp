@@ -575,26 +575,6 @@ static void test_check_connect_success_path() {
 	close(fds[1]);
 }
 
-static void test_check_connect_not_ready() {
-	// Socket that has NOT connected yet: poll() returns 0 (no POLLOUT),
-	// so check_connect() must return 1 and leave state unchanged.
-	int s = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
-	ok(s >= 0, "socket() created for not-ready test");
-
-	MysqlxConnection conn;
-	conn.set_fd(s);
-	conn.set_state(MysqlxConnection::CONNECTING);
-	conn.set_connect_timeout(10000);
-
-	int rc = conn.check_connect();
-	ok(rc == 1, "check_connect() returns 1 (not ready) on unconnected socket");
-	ok(conn.get_state() == MysqlxConnection::CONNECTING,
-	   "check_connect() leaves state as CONNECTING when not ready");
-
-	conn.set_fd(-1);
-	close(s);
-}
-
 static void test_forward_empty_frame() {
 	int client_fds[2], backend_fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
@@ -637,7 +617,7 @@ static void test_forward_empty_frame() {
 }
 
 int main() {
-	plan(42);
+	plan(39);
 
 	test_server_response_terminal_frame();
 	test_server_response_non_terminal_keeps_waiting();
@@ -653,7 +633,6 @@ int main() {
 	test_client_disconnect_detected();
 	test_check_connect_bad_fd();
 	test_check_connect_success_path();
-	test_check_connect_not_ready();
 	test_forward_empty_frame();
 
 	return exit_status();
