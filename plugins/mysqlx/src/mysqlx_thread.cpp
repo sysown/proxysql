@@ -47,6 +47,7 @@ Mysqlx_Thread::~Mysqlx_Thread() {
 		}
 		listener_fds_.clear();
 		listener_addrs_.clear();
+		listener_route_names_.clear();
 	}
 
 	for (auto* sess : sessions_) {
@@ -274,7 +275,7 @@ void Mysqlx_Thread::process_all_sessions() {
 	}
 }
 
-int Mysqlx_Thread::add_listener(const char* bind_addr, int port) {
+int Mysqlx_Thread::add_listener(const char* bind_addr, int port, const char* route_name) {
 	int fd = socket(AF_INET, SOCK_STREAM, 0);
 	if (fd < 0) return -1;
 
@@ -305,8 +306,24 @@ int Mysqlx_Thread::add_listener(const char* bind_addr, int port) {
 		listener_fds_.push_back(fd);
 		if (bind_addr) listener_addrs_.push_back(bind_addr);
 		else listener_addrs_.push_back("0.0.0.0");
+		listener_route_names_.push_back(route_name != nullptr ? route_name : "");
 	}
 	return 0;
+}
+
+bool Mysqlx_Thread::remove_listener_for_route(const char* route_name) {
+	if (route_name == nullptr) return false;
+	std::lock_guard<std::mutex> lock(listener_mutex_);
+	for (size_t i = 0; i < listener_route_names_.size(); i++) {
+		if (listener_route_names_[i] == route_name) {
+			close(listener_fds_[i]);
+			listener_fds_.erase(listener_fds_.begin() + i);
+			listener_addrs_.erase(listener_addrs_.begin() + i);
+			listener_route_names_.erase(listener_route_names_.begin() + i);
+			return true;
+		}
+	}
+	return false;
 }
 
 void Mysqlx_Thread::remove_listeners() {
@@ -316,6 +333,7 @@ void Mysqlx_Thread::remove_listeners() {
 	}
 	listener_fds_.clear();
 	listener_addrs_.clear();
+	listener_route_names_.clear();
 }
 
 int Mysqlx_Thread::get_listener_count() const {

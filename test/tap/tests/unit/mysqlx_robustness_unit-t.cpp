@@ -1,6 +1,8 @@
 #include "mysqlx_session.h"
 #include "mysqlx_protocol.h"
 #include "mysqlx_thread.h"
+#include "mysqlx_plugin.h"
+#include "sqlite3db.h"
 #include "tap.h"
 #include "test_globals.h"
 #include "test_init.h"
@@ -15,6 +17,9 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <map>
+#include <memory>
+#include <mutex>
 #include <poll.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -566,8 +571,84 @@ static void test_forward_empty_frame() {
 	close(backend_fds[0]); close(backend_fds[1]);
 }
 
+static void test_listener_route_tracking() {
+	// Construct two threads; associate a named route listener with each and
+	// verify that `remove_listener_for_route` tears down only the target
+	// listener and is idempotent when called a second time for the same name.
+	Mysqlx_Thread thr0;
+	Mysqlx_Thread thr1;
+	thr0.init(0);
+	thr1.init(1);
+
+	int rc_a = thr0.add_listener("127.0.0.1", 0, "A");
+	int rc_b = thr1.add_listener("127.0.0.1", 0, "B");
+	ok(rc_a == 0 && thr0.get_listener_count() == 1,
+	   "thread 0 has 1 listener for route A");
+	ok(rc_b == 0 && thr1.get_listener_count() == 1,
+	   "thread 1 has 1 listener for route B");
+
+	bool removed_a = thr0.remove_listener_for_route("A");
+	ok(removed_a && thr0.get_listener_count() == 0,
+	   "remove_listener_for_route('A') removed thread 0's only listener");
+
+	bool removed_again = thr0.remove_listener_for_route("A");
+	ok(!removed_again,
+	   "second remove_listener_for_route('A') returns false (idempotent)");
+
+	thr1.remove_listeners();
+}
+
+static void test_listener_reconciliation() {
+	// Build a minimal in-memory admin DB with one active route and verify
+	// that `mysqlx_reconcile_listeners_impl` binds exactly one listener
+	// across the two-thread pool and records the ownership mapping.
+	SQLite3DB admindb;
+	admindb.open(const_cast<char*>(":memory:"),
+		SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+	admindb.execute(
+		"CREATE TABLE runtime_mysqlx_routes ("
+		" name VARCHAR NOT NULL PRIMARY KEY,"
+		" bind VARCHAR NOT NULL,"
+		" destination_hostgroup INT NOT NULL,"
+		" fallback_hostgroup INT,"
+		" strategy VARCHAR NOT NULL DEFAULT 'first_available',"
+		" active INT NOT NULL DEFAULT 1,"
+		" attributes VARCHAR NOT NULL DEFAULT '',"
+		" comment VARCHAR NOT NULL DEFAULT ''"
+		" )"
+	);
+	admindb.execute(
+		"INSERT INTO runtime_mysqlx_routes "
+		"(name, bind, destination_hostgroup, active) "
+		"VALUES ('route_rec', '127.0.0.1:0', 0, 1)"
+	);
+
+	std::vector<std::unique_ptr<Mysqlx_Thread>> threads;
+	for (int i = 0; i < 2; i++) {
+		auto t = std::make_unique<Mysqlx_Thread>();
+		t->init(i);
+		threads.push_back(std::move(t));
+	}
+
+	std::map<std::string, int> route_to_thread;
+	std::mutex route_map_mutex;
+	int next_rr_index = 0;
+
+	mysqlx_reconcile_listeners_impl(
+		admindb, threads, route_to_thread, route_map_mutex, next_rr_index
+	);
+
+	int total = threads[0]->get_listener_count() + threads[1]->get_listener_count();
+	ok(total == 1 && route_to_thread.count("route_rec") == 1,
+	   "reconcile bound exactly one listener for route_rec and recorded mapping");
+
+	for (auto& t : threads) {
+		t->remove_listeners();
+	}
+}
+
 int main() {
-	plan(33);
+	plan(38);
 
 	test_server_response_terminal_frame();
 	test_server_response_non_terminal_keeps_waiting();
@@ -582,6 +663,8 @@ int main() {
 	test_connection_limit_config();
 	test_client_disconnect_detected();
 	test_forward_empty_frame();
+	test_listener_route_tracking();
+	test_listener_reconciliation();
 
 	return exit_status();
 }

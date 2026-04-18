@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <mutex>
 
 namespace {
 
@@ -19,33 +20,6 @@ bool mysqlx_init(ProxySQL_PluginServices* services) {
 	ctx.config_store = std::make_unique<MysqlxConfigStore>();
 	ctx.started = false;
 	return mysqlx_register_admin_schema(*services);
-}
-
-bool parse_bind_addr(const std::string& bind, std::string& host, int& port) {
-	if (!bind.empty() && bind[0] == '[') {
-		auto closing = bind.find(']');
-		if (closing != std::string::npos) {
-			host = bind.substr(1, closing - 1);
-			port = 33060;
-			if (closing + 1 < bind.size() && bind[closing + 1] == ':') {
-				port = std::atoi(bind.substr(closing + 2).c_str());
-			}
-			return true;
-		}
-	}
-	auto pos = bind.rfind(':');
-	if (pos == std::string::npos || pos == 0 || pos == bind.size() - 1) {
-		host = bind;
-		port = 33060;
-		return true;
-	}
-
-	host = bind.substr(0, pos);
-	port = std::atoi(bind.substr(pos + 1).c_str());
-	if (port <= 0 || port > 65535) {
-		port = 33060;
-	}
-	return true;
 }
 
 bool sync_disk_to_memory(SQLite3DB& admindb) {
@@ -154,35 +128,13 @@ bool mysqlx_start() {
 		ctx.threads.push_back(std::move(thr));
 	}
 
+	// Startup binds listeners via the same desired-state reconciliation used
+	// by LOAD MYSQLX ROUTES TO RUNTIME, so both paths agree on round-robin
+	// distribution and the `route_to_thread` map is populated identically.
 	if (ctx.services != nullptr && ctx.services->get_admindb != nullptr) {
 		SQLite3DB* admindb = ctx.services->get_admindb();
 		if (admindb != nullptr) {
-			char* error = nullptr;
-			std::unique_ptr<SQLite3_result> result(
-				admindb->execute_statement(
-					"SELECT name, bind FROM runtime_mysqlx_routes WHERE active=1",
-					&error
-				)
-			);
-			std::unique_ptr<char, void(*)(void*)> error_guard(error, &free);
-			if (result && !result->rows.empty()) {
-				int ti = 0;
-				for (auto* row : result->rows) {
-					if (row == nullptr || row->fields[0] == nullptr || row->fields[1] == nullptr) {
-						continue;
-					}
-					std::string bind_str = row->fields[1];
-					std::string host {};
-					int port = 33060;
-					parse_bind_addr(bind_str, host, port);
-
-					if (ti < static_cast<int>(ctx.threads.size())) {
-						Mysqlx_Thread* thr = ctx.threads[ti % pool_size].get();
-						thr->add_listener(host.c_str(), port);
-					}
-					ti++;
-				}
-			}
+			mysqlx_reconcile_listeners(*admindb);
 		}
 	}
 
@@ -201,6 +153,12 @@ bool mysqlx_stop() {
 		thr->stop();
 	}
 	ctx.threads.clear();
+
+	{
+		std::lock_guard<std::mutex> lock(ctx.route_to_thread_mutex);
+		ctx.route_to_thread.clear();
+		ctx.next_rr_index = 0;
+	}
 
 	ctx.started = false;
 	return true;
@@ -228,6 +186,17 @@ const ProxySQL_PluginDescriptor mysqlx_descriptor = {
 MysqlxPluginContext& mysqlx_context() {
 	static MysqlxPluginContext ctx {};
 	return ctx;
+}
+
+void mysqlx_reconcile_listeners(SQLite3DB& admindb) {
+	MysqlxPluginContext& ctx = mysqlx_context();
+	mysqlx_reconcile_listeners_impl(
+		admindb,
+		ctx.threads,
+		ctx.route_to_thread,
+		ctx.route_to_thread_mutex,
+		ctx.next_rr_index
+	);
 }
 
 extern "C" const ProxySQL_PluginDescriptor *proxysql_plugin_descriptor_v1() {
