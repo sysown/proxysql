@@ -49,6 +49,7 @@ void MysqlxStatsStore::record_conn_ok(const std::string& route_name, int destina
 void MysqlxStatsStore::record_conn_err(const std::string& route_name, int destination_hostgroup) {
 	std::lock_guard<std::mutex> lock(mutex_);
 	get_or_create(route_name, destination_hostgroup).conn_err.fetch_add(1, std::memory_order_relaxed);
+	last_conn_err_ = std::make_pair(route_name, destination_hostgroup);
 }
 
 void MysqlxStatsStore::record_conn_used(const std::string& route_name, int destination_hostgroup) {
@@ -68,6 +69,17 @@ uint64_t MysqlxStatsStore::get_conn_err(const std::string& route_name) const {
 	auto it = route_stats_.find(route_name);
 	if (it == route_stats_.end()) return 0;
 	return it->second.conn_err.load(std::memory_order_relaxed);
+}
+
+void MysqlxStatsStore::reset_for_test() {
+	std::lock_guard<std::mutex> lock(mutex_);
+	route_stats_.clear();
+	last_conn_err_.reset();
+}
+
+std::optional<std::pair<std::string, int>> MysqlxStatsStore::get_last_conn_err_for_test() const {
+	std::lock_guard<std::mutex> lock(mutex_);
+	return last_conn_err_;
 }
 
 void MysqlxStatsStore::flush_to_sqlite(SQLite3DB& statsdb) {

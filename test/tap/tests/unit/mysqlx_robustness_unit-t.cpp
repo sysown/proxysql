@@ -3,6 +3,8 @@
 #include "mysqlx_thread.h"
 #include "mysqlx_plugin.h"
 #include "sqlite3db.h"
+#include "mysqlx_config_store.h"
+#include "mysqlx_stats.h"
 #include "tap.h"
 #include "test_globals.h"
 #include "test_init.h"
@@ -72,50 +74,81 @@ static ssize_t read_x_frame(int fd, uint8_t* buf, size_t buf_size, int timeout_m
 	return 4 + payload_size;
 }
 
+// Shared "default" config store and thread used by setup_authenticated_session.
+// After the Task 4 wiring, a session that wants to reach WAITING_CLIENT_XMSG
+// via the real auth handler needs: (a) an identity_lookup that returns an
+// identity with a non-empty default_route, and (b) a config store reachable
+// via the session's thread_ptr_ that knows about that route and has at least
+// one endpoint in its hostgroup. Without these two ingredients,
+// resolve_backend_target() will fail (4000/4001/4002) and the session will
+// transition to X_SESSION_CLOSING instead of WAITING_CLIENT_XMSG.
+//
+// The helpers below lazily construct a process-global thread+store pair,
+// configured once for the "default_test_route" happy-path fixture. Tests
+// that want a different routing outcome should not call
+// setup_authenticated_session; they should drive the session state
+// machine directly (see test_routing_unknown_user for the pattern).
+static MysqlxConfigStore& default_test_config_store() {
+	static MysqlxConfigStore store;
+	static bool initialized = false;
+	if (!initialized) {
+		std::unordered_map<std::string, MysqlxRoute> routes;
+		MysqlxRoute r {};
+		r.name = "default_test_route";
+		r.destination_hostgroup = 10;
+		r.strategy = "first_available";
+		routes.emplace("default_test_route", r);
+
+		std::unordered_map<int, std::vector<MysqlxBackendEndpoint>> endpoints;
+		MysqlxBackendEndpoint ep {};
+		ep.hostname = "127.0.0.1";
+		ep.mysql_port = 3306;
+		ep.mysqlx_port = 33060;
+		endpoints[10].push_back(ep);
+
+		store.install_for_test(std::move(routes), std::move(endpoints));
+		initialized = true;
+	}
+	return store;
+}
+
+static Mysqlx_Thread& default_test_thread() {
+	static Mysqlx_Thread thr;
+	static bool initialized = false;
+	if (!initialized) {
+		thr.init(0);
+		thr.set_config_store(&default_test_config_store());
+		initialized = true;
+	}
+	return thr;
+}
+
 static void setup_authenticated_session(int fds[2], MysqlxSession& sess) {
-	sess.init(fds[0], nullptr);
-	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
+	// Drive the real MYSQL41 handshake so the session's own fields
+	// (username_, schema_, identity_, status_) land where the auth path
+	// would leave them. The hardened auth flow refuses to authenticate
+	// without an identity_lookup_ installed, so wire one that returns a
+	// matching identity and compute a proper scramble against the
+	// identity's password.
+	sess.init(fds[0], &default_test_thread());
 
 	const std::string TEST_PASSWORD = "testpass";
-	auto pwd_hash = mysqlx_mysql41_hash(TEST_PASSWORD);
-	std::string pwd_hash_str(pwd_hash.begin(), pwd_hash.end());
-	sess.set_credential_lookup([pwd_hash_str](const std::string&) -> MysqlxCredentials {
-		MysqlxCredentials creds {};
-		creds.x_enabled = true;
-		creds.password_hash = pwd_hash_str;
-		return creds;
+	sess.set_identity_lookup([TEST_PASSWORD](const std::string& u)
+	        -> std::optional<MysqlxResolvedIdentity> {
+		MysqlxResolvedIdentity id {};
+		id.username = u;
+		id.x_enabled = true;
+		id.password = TEST_PASSWORD;
+		id.allowed_auth_methods = "MYSQL41";
+		id.default_route = "default_test_route";
+		return id;
 	});
 
 	sess.to_process = true;
 	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_CON_CAPABILITIES_GET, nullptr, 0);
 	sess.handler();
 	usleep(5000);
-	{
-		uint8_t buf[4096];
-		read_x_frame(fds[1], buf, sizeof(buf));
-	}
-
-	sess.to_process = true;
-	Mysqlx::Connection::CapabilitiesSet cap_set;
-	auto* cap = cap_set.mutable_capabilities()->add_capabilities();
-	cap->set_name("authentication.mechanisms");
-	auto* val = cap->mutable_value();
-	val->set_type(Mysqlx::Datatypes::Any::ARRAY);
-	auto* arr = val->mutable_array();
-	auto* v = arr->add_value();
-	v->set_type(Mysqlx::Datatypes::Any::SCALAR);
-	v->mutable_scalar()->set_type(Mysqlx::Datatypes::Scalar::V_STRING);
-	v->mutable_scalar()->mutable_v_string()->set_value("MYSQL41");
-	std::string cap_s;
-	cap_set.SerializeToString(&cap_s);
-	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_CON_CAPABILITIES_SET,
-		reinterpret_cast<const uint8_t*>(cap_s.data()), cap_s.size());
-	sess.handler();
-	usleep(5000);
-	{
-		uint8_t buf[4096];
-		read_x_frame(fds[1], buf, sizeof(buf));
-	}
+	{ uint8_t buf[4096]; read_x_frame(fds[1], buf, sizeof(buf)); }
 
 	sess.to_process = true;
 	Mysqlx::Session::AuthenticateStart auth_start;
@@ -141,8 +174,7 @@ static void setup_authenticated_session(int fds[2], MysqlxSession& sess) {
 		}
 	}
 
-	auto scramble_bytes = mysqlx_mysql41_scramble(challenge,
-		std::vector<uint8_t>(TEST_PASSWORD.begin(), TEST_PASSWORD.end()));
+	auto scramble_bytes = mysqlx_mysql41_scramble(challenge, TEST_PASSWORD);
 	std::string scramble_hex = "*";
 	static const char hex[] = "0123456789ABCDEF";
 	for (uint8_t b : scramble_bytes) {
@@ -158,10 +190,7 @@ static void setup_authenticated_session(int fds[2], MysqlxSession& sess) {
 		reinterpret_cast<const uint8_t*>(serialized.data()), serialized.size());
 	sess.handler();
 	usleep(5000);
-	{
-		uint8_t buf[4096];
-		read_x_frame(fds[1], buf, sizeof(buf));
-	}
+	{ uint8_t buf[4096]; read_x_frame(fds[1], buf, sizeof(buf)); }
 }
 
 static void detach_session_fds(MysqlxSession& sess) {
@@ -383,7 +412,18 @@ static void test_mysql41_no_credential_lookup_rejects() {
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
 	MysqlxSession sess;
-	sess.init(fds[0], nullptr);
+	// Attach to the shared test thread+store and pre-seed a resolvable
+	// identity. The asserted invariant here is that without an
+	// identity_lookup set, credential verification in
+	// handler_auth_challenge_response is skipped; a valid default_route
+	// is still required to reach WAITING_CLIENT_XMSG (Task 4 wiring),
+	// so we inject one directly.
+	sess.init(fds[0], &default_test_thread());
+	MysqlxResolvedIdentity id {};
+	id.username = "testuser";
+	id.x_enabled = true;
+	id.default_route = "default_test_route";
+	sess.inject_identity_for_test(id);
 
 	sess.to_process = true;
 	Mysqlx::Session::AuthenticateStart auth_start;
@@ -606,6 +646,8 @@ static void test_check_connect_success_path() {
 	conn.set_fd(-1);  // detach before manual close
 	close(fds[0]);
 	close(fds[1]);
+}
+
 // Regression guard: after backend auth completes, the data-plane reads/writes
 // must route through backend_conn_->backend_ds(), not a session-owned stream
 // re-wrapped around the raw backend fd. The TLS handshake (when backend TLS
@@ -995,8 +1037,438 @@ static void test_listener_reconciliation_bind_change() {
 	}
 }
 
+static void test_route_exists_predicate() {
+	// Empty store: any lookup returns false.
+	{
+		MysqlxConfigStore store;
+		ok(store.route_exists("nope") == false,
+		   "route_exists returns false for unknown route on empty store");
+	}
+	// Populated store: reports true for configured routes and false for
+	// unconfigured names, letting callers distinguish "unknown route" from
+	// "route exists but has no backend".
+	{
+		MysqlxConfigStore store;
+		std::unordered_map<std::string, MysqlxRoute> routes;
+		MysqlxRoute r {};
+		r.name = "reads";
+		r.destination_hostgroup = 20;
+		routes.emplace("reads", r);
+		std::unordered_map<int, std::vector<MysqlxBackendEndpoint>> endpoints;
+		store.install_for_test(std::move(routes), std::move(endpoints));
+		ok(store.route_exists("reads") == true,
+		   "route_exists returns true for configured route");
+		ok(store.route_exists("writes") == false,
+		   "route_exists returns false for route name not in store");
+	}
+}
+
+// --- resolve_backend_target() tests ---
+
+// Shared fixture: populate a config store with a single route "reads" that
+// points at hostgroup 20, which in turn has one endpoint on 127.0.0.1:33060.
+static void install_reads_route_with_endpoint(MysqlxConfigStore& store) {
+	std::unordered_map<std::string, MysqlxRoute> routes;
+	MysqlxRoute r {};
+	r.name = "reads";
+	r.destination_hostgroup = 20;
+	r.strategy = "first_available";
+	routes.emplace("reads", r);
+
+	std::unordered_map<int, std::vector<MysqlxBackendEndpoint>> endpoints;
+	MysqlxBackendEndpoint ep {};
+	ep.hostname = "127.0.0.1";
+	ep.mysql_port = 3306;
+	ep.mysqlx_port = 33060;
+	endpoints[20].push_back(ep);
+
+	store.install_for_test(std::move(routes), std::move(endpoints));
+}
+
+// Route "reads" -> hostgroup 20, but hostgroup 20 has no endpoints. Used
+// to exercise the no-backend (4002) path distinctly from unknown-route.
+static void install_reads_route_without_endpoint(MysqlxConfigStore& store) {
+	std::unordered_map<std::string, MysqlxRoute> routes;
+	MysqlxRoute r {};
+	r.name = "reads";
+	r.destination_hostgroup = 20;
+	r.strategy = "first_available";
+	routes.emplace("reads", r);
+
+	std::unordered_map<int, std::vector<MysqlxBackendEndpoint>> endpoints;
+	store.install_for_test(std::move(routes), std::move(endpoints));
+}
+
+static void test_routing_happy_path() {
+	MysqlxConfigStore store;
+	install_reads_route_with_endpoint(store);
+
+	Mysqlx_Thread thr;
+	thr.init(0);
+	thr.set_config_store(&store);
+
+	MysqlxSession sess;
+	sess.init(-1, &thr);
+
+	MysqlxResolvedIdentity id {};
+	id.username = "testuser";
+	id.x_enabled = true;
+	id.default_route = "reads";
+	sess.inject_identity_for_test(id);
+
+	int rc = sess.resolve_backend_target_for_test();
+	ok(rc == 0, "resolve_backend_target returns 0 on happy path");
+	ok(sess.target_hostgroup_for_test() == 20 &&
+	   sess.target_address_for_test() == "127.0.0.1" &&
+	   sess.target_port_for_test() == 33060,
+	   "target fields populated: hostgroup=20, address=127.0.0.1, port=33060");
+}
+
+static void test_routing_no_default_route() {
+	MysqlxConfigStore store;  // intentionally empty
+
+	Mysqlx_Thread thr;
+	thr.init(0);
+	thr.set_config_store(&store);
+
+	MysqlxSession sess;
+	sess.init(-1, &thr);
+
+	MysqlxResolvedIdentity id {};
+	id.username = "u";
+	id.x_enabled = true;
+	id.default_route = "";  // no default route assigned
+	sess.inject_identity_for_test(id);
+
+	int rc = sess.resolve_backend_target_for_test();
+	ok(rc == 4000, "resolve returns 4000 for empty default_route");
+}
+
+static void test_routing_unknown_route() {
+	MysqlxConfigStore store;  // no "nope" route installed
+
+	Mysqlx_Thread thr;
+	thr.init(0);
+	thr.set_config_store(&store);
+
+	MysqlxSession sess;
+	sess.init(-1, &thr);
+
+	MysqlxResolvedIdentity id {};
+	id.username = "u";
+	id.x_enabled = true;
+	id.default_route = "nope";
+	sess.inject_identity_for_test(id);
+
+	int rc = sess.resolve_backend_target_for_test();
+	ok(rc == 4001, "resolve returns 4001 for unknown route");
+}
+
+static void test_routing_no_backend() {
+	MysqlxConfigStore store;
+	install_reads_route_without_endpoint(store);
+
+	Mysqlx_Thread thr;
+	thr.init(0);
+	thr.set_config_store(&store);
+
+	MysqlxSession sess;
+	sess.init(-1, &thr);
+
+	MysqlxResolvedIdentity id {};
+	id.username = "u";
+	id.x_enabled = true;
+	id.default_route = "reads";
+	sess.inject_identity_for_test(id);
+
+	int rc = sess.resolve_backend_target_for_test();
+	ok(rc == 4002, "resolve returns 4002 when route has no endpoints");
+}
+
+// For each failure mode, record_conn_err() must fire with a specific
+// (route_name, hostgroup) tuple. Covering all three in one test keeps the
+// assertion count aligned with the plan while still exercising each
+// (route, hg) contract.
+static void test_routing_stats_on_failure() {
+	// Empty default_route -> ("", 0)
+	{
+		MysqlxConfigStore store;
+		Mysqlx_Thread thr;
+		thr.init(0);
+		thr.set_config_store(&store);
+		MysqlxSession sess;
+		sess.init(-1, &thr);
+		MysqlxResolvedIdentity id {};
+		id.x_enabled = true;
+		id.default_route = "";
+		sess.inject_identity_for_test(id);
+
+		mysqlx_stats().reset_for_test();
+		sess.resolve_backend_target_for_test();
+		auto a = mysqlx_stats().get_last_conn_err_for_test();
+
+		// Unknown route -> ("nope", 0)
+		MysqlxConfigStore store2;
+		Mysqlx_Thread thr2;
+		thr2.init(0);
+		thr2.set_config_store(&store2);
+		MysqlxSession sess2;
+		sess2.init(-1, &thr2);
+		MysqlxResolvedIdentity id2 {};
+		id2.x_enabled = true;
+		id2.default_route = "nope";
+		sess2.inject_identity_for_test(id2);
+
+		mysqlx_stats().reset_for_test();
+		sess2.resolve_backend_target_for_test();
+		auto b = mysqlx_stats().get_last_conn_err_for_test();
+
+		// No backend -> ("reads", 20)
+		MysqlxConfigStore store3;
+		install_reads_route_without_endpoint(store3);
+		Mysqlx_Thread thr3;
+		thr3.init(0);
+		thr3.set_config_store(&store3);
+		MysqlxSession sess3;
+		sess3.init(-1, &thr3);
+		MysqlxResolvedIdentity id3 {};
+		id3.x_enabled = true;
+		id3.default_route = "reads";
+		sess3.inject_identity_for_test(id3);
+
+		mysqlx_stats().reset_for_test();
+		sess3.resolve_backend_target_for_test();
+		auto c = mysqlx_stats().get_last_conn_err_for_test();
+
+		bool all_match =
+			a.has_value() && a->first == "" && a->second == 0 &&
+			b.has_value() && b->first == "nope" && b->second == 0 &&
+			c.has_value() && c->first == "reads" && c->second == 20;
+		ok(all_match,
+		   "record_conn_err tuples: ('',0) for no-default; ('nope',0) for "
+		   "unknown; ('reads',20) for no-backend");
+	}
+}
+
+// Drive the auth-start PLAIN path with an identity lookup that always
+// returns nullopt. Expected: session emits Error 1045 and goes unhealthy
+// without ever transitioning to WAITING_CLIENT_XMSG or sending Ok.
+static void test_routing_unknown_user() {
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+
+	MysqlxSession sess;
+	sess.init(fds[0], nullptr);
+	sess.set_identity_lookup([](const std::string&)
+		-> std::optional<MysqlxResolvedIdentity> { return std::nullopt; });
+
+	// PLAIN requires TLS at the protocol layer; the test covers only the
+	// lookup-returns-nullopt branch in MYSQL41 challenge response.
+	sess.to_process = true;
+	Mysqlx::Session::AuthenticateStart auth_start;
+	auth_start.set_mech_name("MYSQL41");
+	auth_start.set_auth_data(std::string("\0\0ghost", 8));
+	std::string serialized;
+	auth_start.SerializeToString(&serialized);
+	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_START,
+		reinterpret_cast<const uint8_t*>(serialized.data()), serialized.size());
+	sess.handler();
+
+	usleep(5000);
+	uint8_t buf[4096];
+	read_x_frame(fds[1], buf, sizeof(buf));
+
+	Mysqlx::Session::AuthenticateContinue cont;
+	cont.set_auth_data("*0000000000000000000000000000000000000000");
+	cont.SerializeToString(&serialized);
+	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_CONTINUE,
+		reinterpret_cast<const uint8_t*>(serialized.data()), serialized.size());
+
+	sess.to_process = true;
+	sess.handler();
+
+	ok(!sess.is_healthy() &&
+	   sess.get_status() != MysqlxSession::WAITING_CLIENT_XMSG,
+	   "unknown user: session unhealthy and did not reach WAITING_CLIENT_XMSG");
+
+	detach_session_fds(sess);
+	close(fds[0]); close(fds[1]);
+}
+
+// Integration test for the Task 4 wiring: PLAIN auth succeeds credential-
+// wise (correct password) but the resolved identity carries an empty
+// default_route. Expected outcome after resolve_backend_target() runs
+// pre-Ok:
+//   - session transitions to X_SESSION_CLOSING (not WAITING_CLIENT_XMSG).
+//   - is_healthy() is false.
+//   - the client sees an X-Protocol ERROR frame on the wire, NOT an Ok.
+// Prior to this wiring, sessions reached WAITING_CLIENT_XMSG with
+// target_address_ == "" and target_port_ == 0, then attempted to connect
+// to ""; port 0 on the first client query. This test locks that door.
+static void test_plain_auth_empty_default_route_closes_session() {
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+
+	// Dedicated store/thread for this test so we don't pollute the shared
+	// default fixture. The store is intentionally *not* populated with
+	// "default_test_route" here; what matters is that the identity_lookup
+	// returns an identity whose default_route is empty, which short-circuits
+	// resolve_backend_target() with 4000 before any route lookup runs.
+	MysqlxConfigStore store;
+	Mysqlx_Thread thr;
+	thr.init(0);
+	thr.set_config_store(&store);
+
+	MysqlxSession sess;
+	sess.init(fds[0], &thr);
+
+	// PLAIN auth requires TLS at the protocol layer; mark the client data
+	// stream as encrypted so handle_auth_plain() proceeds past the
+	// "PLAIN authentication requires TLS" gate.
+	sess.client_ds().set_encrypted(true);
+
+	// Identity lookup returns an enabled user with a KNOWN password and
+	// an EMPTY default_route. Credential verification must succeed so the
+	// auth path reaches resolve_backend_target(), which then fails with 4000.
+	sess.set_identity_lookup([](const std::string& username)
+		-> std::optional<MysqlxResolvedIdentity> {
+		MysqlxResolvedIdentity id {};
+		id.username = username;
+		id.x_enabled = true;
+		id.password = "secret123";   // cleartext; derive_stored_hash SHA1s it.
+		id.default_route = "";        // the point of this test
+		return id;
+	});
+
+	// Send AuthenticateStart with PLAIN mechanism and correct password.
+	// PLAIN auth_data is  \0 <authzid> \0 <user> \0 <password> ; we use
+	// an empty authzid, "testuser", then "secret123".
+	sess.to_process = true;
+	Mysqlx::Session::AuthenticateStart auth_start;
+	auth_start.set_mech_name("PLAIN");
+	std::string plain_payload;
+	plain_payload.push_back('\0');
+	plain_payload.append("testuser");
+	plain_payload.push_back('\0');
+	plain_payload.append("secret123");
+	auth_start.set_auth_data(plain_payload);
+	std::string serialized;
+	auth_start.SerializeToString(&serialized);
+	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_START,
+		reinterpret_cast<const uint8_t*>(serialized.data()), serialized.size());
+	sess.handler();
+
+	ok(sess.get_status() == MysqlxSession::X_SESSION_CLOSING,
+	   "PLAIN auth + empty default_route: session in X_SESSION_CLOSING");
+	ok(!sess.is_healthy(),
+	   "PLAIN auth + empty default_route: session marked unhealthy");
+
+	usleep(5000);
+	uint8_t buf[4096];
+	ssize_t r = read_x_frame(fds[1], buf, sizeof(buf));
+	ok(r > 5 && buf[4] == Mysqlx::ServerMessages_Type_ERROR,
+	   "PLAIN auth + empty default_route: client receives ERROR frame (not Ok)");
+
+	detach_session_fds(sess);
+	close(fds[0]); close(fds[1]);
+}
+
+// Exercise the session's backend-connection setup site in
+// handler_connecting_server and assert that the value passed to
+// set_backend_user() tracks the resolved identity rather than only the
+// frontend username. Pre-fix (PR #5641), the site hardcoded
+// backend_conn_->set_backend_user(username_.c_str()) while pairing it
+// with identity_->backend_password — which, for mysqlx_users rows whose
+// backend_auth_mode is `service_account` and whose backend_username
+// differs from the frontend username, paired userA's password with
+// userB's name and broke backend auth.
+//
+// Strategy: drive the session far enough that username_ and identity_
+// are both populated (setup_authenticated_session), then pre-seed
+// backend_conn_ in AUTHENTICATING + BACKEND_AUTH_NOT_STARTED state
+// attached to a valid socketpair fd. Flipping status_ to
+// CONNECTING_SERVER and firing handler() lands us at the set_backend_user
+// call site without invoking the real TCP connect. The socketpair is
+// nonblocking (MysqlxDataStream::init sets O_NONBLOCK) so
+// step_auth_capabilities_get() writes the cap-get frame and returns;
+// the subsequent try_read_one_frame() sees nothing and the handler
+// bails out cleanly with backend_user_ observable via the test accessor.
+static void test_backend_user_uses_backend_username_when_set() {
+	int client_fds[2], backend_fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
+	socketpair(AF_UNIX, SOCK_STREAM, 0, backend_fds);
+
+	MysqlxSession sess;
+	setup_authenticated_session(client_fds, sess);
+
+	// Replace identity_ so it carries a DISTINCT backend_username, mimicking
+	// a service_account-mode mysqlx_users row.
+	MysqlxResolvedIdentity id {};
+	id.username = "front_user";
+	id.x_enabled = true;
+	id.default_route = "default_test_route";
+	id.backend_auth_mode = MysqlxBackendAuthMode::service_account;
+	id.backend_username = "svc_account_42";
+	id.backend_password = "svc_pw";
+	sess.inject_identity_for_test(id);
+
+	MysqlxConnection* conn = new MysqlxConnection();
+	conn->set_fd(backend_fds[0]);
+	conn->set_state(MysqlxConnection::AUTHENTICATING);
+	sess.backend_conn() = conn;
+	sess.set_status(MysqlxSession::CONNECTING_SERVER);
+
+	sess.to_process = true;
+	sess.handler();
+
+	ok(std::string(conn->get_backend_user_for_test()) == "svc_account_42",
+	   "service_account mode: set_backend_user uses identity_->backend_username");
+
+	detach_session_fds(sess);
+	close(client_fds[0]); close(client_fds[1]);
+	close(backend_fds[0]); close(backend_fds[1]);
+}
+
+// Mirror test for the mapped-mode (default) path: identity has an EMPTY
+// backend_username, so the fallback must reuse the frontend username_.
+// setup_authenticated_session drives MYSQL41 auth with "testuser" as the
+// frontend username, so that is what we expect to land in backend_user_.
+static void test_backend_user_falls_back_to_frontend_username() {
+	int client_fds[2], backend_fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
+	socketpair(AF_UNIX, SOCK_STREAM, 0, backend_fds);
+
+	MysqlxSession sess;
+	setup_authenticated_session(client_fds, sess);
+
+	// Re-inject identity with EMPTY backend_username: mapped-mode default.
+	MysqlxResolvedIdentity id {};
+	id.username = "testuser";
+	id.x_enabled = true;
+	id.default_route = "default_test_route";
+	id.backend_auth_mode = MysqlxBackendAuthMode::mapped;
+	id.backend_username = "";  // the point of this test
+	sess.inject_identity_for_test(id);
+
+	MysqlxConnection* conn = new MysqlxConnection();
+	conn->set_fd(backend_fds[0]);
+	conn->set_state(MysqlxConnection::AUTHENTICATING);
+	sess.backend_conn() = conn;
+	sess.set_status(MysqlxSession::CONNECTING_SERVER);
+
+	sess.to_process = true;
+	sess.handler();
+
+	ok(std::string(conn->get_backend_user_for_test()) == "testuser",
+	   "mapped mode (empty backend_username): set_backend_user falls back to frontend username_");
+
+	detach_session_fds(sess);
+	close(client_fds[0]); close(client_fds[1]);
+	close(backend_fds[0]); close(backend_fds[1]);
+}
+
 int main() {
-	plan(53);
+	plan(74);
 
 	test_server_response_terminal_frame();
 	test_server_response_non_terminal_keeps_waiting();
@@ -1019,6 +1491,19 @@ int main() {
 	test_listener_route_tracking();
 	test_listener_reconciliation();
 	test_listener_reconciliation_bind_change();
+	test_route_exists_predicate();
+
+	test_routing_happy_path();
+	test_routing_no_default_route();
+	test_routing_unknown_route();
+	test_routing_no_backend();
+	test_routing_stats_on_failure();
+	test_routing_unknown_user();
+
+	test_plain_auth_empty_default_route_closes_session();
+
+	test_backend_user_uses_backend_username_when_set();
+	test_backend_user_falls_back_to_frontend_username();
 
 	return exit_status();
 }

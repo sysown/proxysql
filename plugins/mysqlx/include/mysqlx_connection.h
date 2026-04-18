@@ -79,6 +79,13 @@ public:
 	void set_backend_password(const char* p) { backend_password_ = p; }
 	void set_backend_schema(const char* s) { backend_schema_ = s; }
 
+	// Test-only accessor: returns the last value passed to set_backend_user().
+	// Exists so unit tests can verify that the session's backend-connection
+	// setup site correctly chose between identity_->backend_username
+	// (service_account mode) and username_ (mapped / default mode). Not
+	// called by production code.
+	const char* get_backend_user_for_test() const { return backend_user_.c_str(); }
+
 	void set_connect_timeout(uint64_t ms) { connect_timeout_ms_ = ms; }
 	uint64_t get_connect_timeout() const { return connect_timeout_ms_; }
 

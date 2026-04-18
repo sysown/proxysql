@@ -77,6 +77,7 @@ public:
 	void set_max_sessions(size_t max) { max_sessions_ = max; }
 	size_t get_max_sessions() const { return max_sessions_; }
 	void set_config_store(const MysqlxConfigStore* store) { config_store_ = store; }
+	const MysqlxConfigStore* get_config_store() const { return config_store_; }
 
 	SSL_CTX* get_ssl_ctx() const;
 

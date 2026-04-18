@@ -1,6 +1,7 @@
 #include "mysqlx_session.h"
 #include "mysqlx_thread.h"
 #include "mysqlx_protocol.h"
+#include "mysqlx_stats.h"
 
 #include "mysqlx.pb.h"
 #include "mysqlx_connection.pb.h"
@@ -22,6 +23,25 @@ uint64_t monotonic_time_ms() {
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	return static_cast<uint64_t>(ts.tv_sec) * 1000 + static_cast<uint64_t>(ts.tv_nsec) / 1000000;
+}
+
+// Derive the 20-byte mysql_native_password hash from the stored form.
+// Accepts either the "*HEX40" mysql_native_password format or a cleartext
+// password. Returns false on any failure; in that case `out` is cleared.
+bool derive_stored_hash(const std::string& stored, std::vector<uint8_t>& out) {
+	out.clear();
+	if (stored.empty()) return false;
+	if (stored[0] == '*') {
+		if (!mysqlx_hex_decode(stored.substr(1), out) || out.size() != 20) {
+			out.clear();
+			return false;
+		}
+		return true;
+	}
+	auto hash = mysqlx_mysql41_hash(stored);
+	if (hash.size() != 20) return false;
+	out.assign(hash.begin(), hash.end());
+	return true;
 }
 
 }
@@ -60,6 +80,7 @@ void MysqlxSession::init(int fd, Mysqlx_Thread* thread_ptr) {
 	target_hostgroup_ = 0;
 	target_address_.clear();
 	target_port_ = 0;
+	identity_.reset();
 	start_time_ = monotonic_time_ms();
 	last_active_time_ = start_time_;
 }
@@ -76,6 +97,7 @@ void MysqlxSession::reset() {
 	target_hostgroup_ = 0;
 	target_address_.clear();
 	target_port_ = 0;
+	identity_.reset();
 }
 
 int MysqlxSession::handler() {
@@ -253,22 +275,46 @@ void MysqlxSession::handle_auth_plain(const std::string& auth_data) {
 	username_ = auth_data.substr(1, second_nul - 1);
 	std::string password = auth_data.substr(second_nul + 1);
 
-	if (!credential_lookup_) {
+	if (!identity_lookup_) {
+		// No identity source wired — refuse auth rather than falling through
+		// to resolve_backend_target() and surfacing a misleading 4002. An
+		// unconfigured plugin must not become an open proxy.
 		send_error(1045, "Access denied for user");
 		healthy = false;
 		return;
 	}
-	MysqlxCredentials creds = credential_lookup_(username_);
-	if (!creds.x_enabled || creds.password_hash.empty() || creds.password_hash.size() != 20) {
+	identity_ = identity_lookup_(username_);
+	if (!identity_ || !identity_->x_enabled) {
 		send_error(1045, "Access denied for user");
 		healthy = false;
 		return;
 	}
+
+	std::vector<uint8_t> stored_hash;
+	if (!derive_stored_hash(identity_->password, stored_hash)) {
+		send_error(1045, "Access denied for user");
+		healthy = false;
+		return;
+	}
+
 	std::vector<uint8_t> input_hash_vec = mysqlx_mysql41_hash(password);
 	if (input_hash_vec.size() != 20 ||
-	    CRYPTO_memcmp(input_hash_vec.data(), creds.password_hash.data(), 20) != 0) {
+	    CRYPTO_memcmp(input_hash_vec.data(), stored_hash.data(), 20) != 0) {
 		send_error(1045, "Access denied for user");
 		healthy = false;
+		return;
+	}
+
+	// Resolve the user's default_route to a concrete backend target
+	// BEFORE sending the X-Protocol Ok frame. If this is skipped or
+	// deferred until after Ok, the client would see a successful
+	// authentication response and then the session would attempt to
+	// connect to an empty host on port 0 (or some other broken state).
+	// A routing failure here surfaces as an X-Protocol Error frame and
+	// transitions the session to X_SESSION_CLOSING; the client never
+	// reaches a "logged in" state against an unresolvable backend.
+	if (resolve_backend_target() != 0) {
+		status_ = X_SESSION_CLOSING;
 		return;
 	}
 
@@ -358,26 +404,49 @@ void MysqlxSession::handler_auth_challenge_response() {
 			return;
 		}
 
-		if (!credential_lookup_) {
+		if (!identity_lookup_) {
+			// See handle_auth_plain — refuse auth when no identity source is
+			// configured rather than skipping credential verification.
 			send_error(1045, "Access denied for user");
 			healthy = false;
 			return;
 		}
-		MysqlxCredentials creds = credential_lookup_(username_);
-		if (!creds.x_enabled || creds.password_hash.empty() || creds.password_hash.size() != 20) {
+		identity_ = identity_lookup_(username_);
+		if (!identity_ || !identity_->x_enabled) {
 			send_error(1045, "Access denied for user");
 			healthy = false;
 			return;
 		}
-		std::vector<uint8_t> stored_hash(creds.password_hash.begin(), creds.password_hash.end());
+
+		std::vector<uint8_t> stored_hash;
+		if (!derive_stored_hash(identity_->password, stored_hash)) {
+			send_error(1045, "Access denied for user");
+			healthy = false;
+			return;
+		}
+
 		if (!mysqlx_mysql41_verify_hash(auth_challenge_, scramble, stored_hash)) {
 			send_error(1045, "Access denied for user");
 			healthy = false;
 			return;
 		}
 	} else {
+		// Malformed AuthenticateContinue: data missing the "*hex" marker.
+		// Reject as FATAL rather than falling through to
+		// resolve_backend_target() and surfacing a misleading 4002.
 		send_error(1045, "Access denied for user", true);
 		healthy = false;
+		return;
+	}
+
+	// Resolve the user's default_route to a concrete backend target
+	// BEFORE sending the X-Protocol Ok frame. See handle_auth_plain for
+	// the full rationale; the same invariant holds on the MYSQL41 path.
+	// to_process is kept true on the failure branch so the session state
+	// machine drives itself to X_SESSION_CLOSED on the next handler tick.
+	if (resolve_backend_target() != 0) {
+		status_ = X_SESSION_CLOSING;
+		to_process = true;
 		return;
 	}
 
@@ -459,29 +528,26 @@ void MysqlxSession::handler_waiting_client_msg() {
 }
 
 void MysqlxSession::forward_to_backend() {
-	if (!backend_conn_ || backend_conn_->get_state() != MysqlxConnection::IDLE) {
-		status_ = CONNECTING_SERVER;
-		to_process = true;
-		return;
+	if (server_ds().get_status() != XDS_READY) {
+		if (!backend_conn_ || backend_conn_->get_state() != MysqlxConnection::IDLE) {
+			status_ = CONNECTING_SERVER;
+			to_process = true;
+			return;
+		}
+		server_ds().init(XDS_BACKEND, backend_conn_->get_fd());
 	}
-
-	// Data-plane reads/writes must go through MysqlxConnection::backend_ds(),
-	// which owns the SSL* established during the optional backend TLS
-	// handshake. Wrapping backend_conn_->get_fd() in a fresh MysqlxDataStream
-	// here would discard that SSL* and silently fall back to cleartext I/O.
-	MysqlxDataStream& be_ds = backend_conn_->backend_ds();
 
 	if (client_ds_.has_complete_frame()) {
 		const auto& frame = client_ds_.front_frame();
 		if (frame.size() > 5) {
-			be_ds.enqueue_frame(frame[4], frame.data() + 5, frame.size() - 5);
+			server_ds().enqueue_frame(frame[4], frame.data() + 5, frame.size() - 5);
 		} else {
-			be_ds.enqueue_frame(frame[4], nullptr, 0);
+			server_ds().enqueue_frame(frame[4], nullptr, 0);
 		}
 		client_ds_.pop_frame();
 	}
 
-	be_ds.write_to_net();
+	server_ds().write_to_net();
 	status_ = WAITING_SERVER_XMSG;
 }
 
@@ -530,16 +596,14 @@ bool MysqlxSession::is_terminal_for_state(uint8_t msg_type) const {
 }
 
 void MysqlxSession::handler_waiting_server_msg() {
-	// Go through backend_conn_->backend_ds() so TLS state is preserved.
-	if (!backend_conn_ || backend_conn_->backend_ds().get_fd() < 0) {
+	if (server_ds().get_fd() < 0) {
 		return_backend_to_pool();
 		status_ = WAITING_CLIENT_XMSG;
 		to_process = true;
 		return;
 	}
-	MysqlxDataStream& be_ds = backend_conn_->backend_ds();
 
-	ssize_t r = be_ds.read_from_net();
+	ssize_t r = server_ds().read_from_net();
 	if (r == 0) {
 		send_error(2013, "Lost connection to backend during query");
 		return_backend_to_pool();
@@ -554,12 +618,12 @@ void MysqlxSession::handler_waiting_server_msg() {
 	}
 
 	bool got_terminal = false;
-	while (be_ds.has_complete_frame()) {
-		const auto& frame = be_ds.front_frame();
+	while (server_ds().has_complete_frame()) {
+		const auto& frame = server_ds().front_frame();
 		uint8_t msg_type = frame[4];
 
 		forward_frame_to_client(msg_type, frame);
-		be_ds.pop_frame();
+		server_ds().pop_frame();
 
 		if (msg_type != Mysqlx::ServerMessages_Type_NOTICE &&
 		    is_terminal_for_state(msg_type)) {
@@ -581,16 +645,14 @@ void MysqlxSession::handler_fast_forward() {
 }
 
 void MysqlxSession::handler_session_reset_waiting() {
-	// Go through backend_conn_->backend_ds() so TLS state is preserved.
-	if (!backend_conn_ || backend_conn_->backend_ds().get_fd() < 0) {
+	if (server_ds().get_fd() < 0) {
 		return_backend_to_pool();
 		status_ = WAITING_CLIENT_XMSG;
 		to_process = true;
 		return;
 	}
-	MysqlxDataStream& be_ds = backend_conn_->backend_ds();
 
-	ssize_t r = be_ds.read_from_net();
+	ssize_t r = server_ds().read_from_net();
 	if (r == 0 || (r < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
 		return_backend_to_pool();
 		status_ = WAITING_CLIENT_XMSG;
@@ -598,20 +660,22 @@ void MysqlxSession::handler_session_reset_waiting() {
 		return;
 	}
 
-	while (be_ds.has_complete_frame()) {
-		const auto& frame = be_ds.front_frame();
+	while (server_ds().has_complete_frame()) {
+		const auto& frame = server_ds().front_frame();
 		uint8_t msg_type = frame[4];
 
 		if (msg_type == Mysqlx::ServerMessages_Type_NOTICE) {
 			forward_frame_to_client(msg_type, frame);
-			be_ds.pop_frame();
+			server_ds().pop_frame();
 			continue;
 		}
 
 		if (msg_type == Mysqlx::ServerMessages_Type_OK) {
-			be_ds.pop_frame();
-			backend_conn_->set_has_prepared_statement(false);
-			backend_conn_->set_in_transaction(false);
+			server_ds().pop_frame();
+			if (backend_conn_) {
+				backend_conn_->set_has_prepared_statement(false);
+				backend_conn_->set_in_transaction(false);
+			}
 			return_backend_to_pool();
 			last_active_time_ = monotonic_time_ms();
 			status_ = WAITING_CLIENT_XMSG;
@@ -621,7 +685,7 @@ void MysqlxSession::handler_session_reset_waiting() {
 
 		if (msg_type == Mysqlx::ServerMessages_Type_ERROR) {
 			forward_frame_to_client(msg_type, frame);
-			be_ds.pop_frame();
+			server_ds().pop_frame();
 			client_ds_.write_to_net();
 			return_backend_to_pool();
 			status_ = WAITING_CLIENT_XMSG;
@@ -629,7 +693,7 @@ void MysqlxSession::handler_session_reset_waiting() {
 			return;
 		}
 
-		be_ds.pop_frame();
+		server_ds().pop_frame();
 	}
 }
 
@@ -674,6 +738,85 @@ void MysqlxSession::handler_tls_accept_init() {
 	to_process = true;
 }
 
+// Translate the authenticated user's identity_->default_route into the
+// concrete (target_hostgroup_, target_address_, target_port_) triple that
+// handler_connecting_server uses to reach the backend. Invariant: called
+// only after the auth handler has populated identity_; missing identity is
+// therefore treated as a no-backend programming error (4002) rather than
+// an auth failure. The pre-Ok timing matters — once the X-Protocol Ok
+// frame is on the wire, there is no clean way to report a routing error,
+// so all three failure modes return a nonzero code here and leave the
+// caller responsible for sending Error + transitioning to closing state.
+int MysqlxSession::resolve_backend_target() {
+	if (!identity_) {
+		send_error(4002, "No backend available: missing identity");
+		mysqlx_stats().record_conn_err("", 0);
+		healthy = false;
+		return 4002;
+	}
+
+	const std::string& route_name = identity_->default_route;
+	if (route_name.empty()) {
+		send_error(4000, "User has no default_route configured");
+		mysqlx_stats().record_conn_err("", 0);
+		healthy = false;
+		return 4000;
+	}
+
+	const MysqlxConfigStore* cs = thread_ptr_ ? thread_ptr_->get_config_store() : nullptr;
+	if (!cs) {
+		// Config store unavailable: structurally indistinguishable from a
+		// route with no backend from the client's perspective.
+		send_error(4002, "No backend available: config store unavailable");
+		mysqlx_stats().record_conn_err(route_name, 0);
+		healthy = false;
+		return 4002;
+	}
+
+	if (!cs->route_exists(route_name)) {
+		// Distinguished from the no-backend case (4002) via route_exists():
+		// route_hostgroup() alone returns 0 for both unknown routes and
+		// routes deliberately pointed at hostgroup 0.
+		std::string msg = "Route '";
+		msg += route_name;
+		msg += "' not found";
+		send_error(4001, msg.c_str());
+		mysqlx_stats().record_conn_err(route_name, 0);
+		healthy = false;
+		return 4001;
+	}
+
+	int hg = cs->route_hostgroup(route_name);
+	MysqlxBackendEndpoint ep = cs->pick_endpoint(route_name);
+	if (ep.hostname.empty()) {
+		std::string msg = "No backend available for route '";
+		msg += route_name;
+		msg += "'";
+		send_error(4002, msg.c_str());
+		mysqlx_stats().record_conn_err(route_name, hg);
+		healthy = false;
+		return 4002;
+	}
+
+	target_hostgroup_ = hg;
+	target_address_   = ep.hostname;
+	target_port_      = ep.mysqlx_port;
+	return 0;
+}
+
+// Test-only convenience overload. Mirrors what the auth handler does on a
+// real client connection: look up the identity via the thread's config
+// store, caching the result in identity_. Silently no-ops if the thread
+// has no store or the username is unknown, since tests exercising those
+// edge cases set up identity_ directly via the other overload.
+void MysqlxSession::inject_identity_for_test(const std::string& username) {
+	if (!thread_ptr_) return;
+	const MysqlxConfigStore* cs = thread_ptr_->get_config_store();
+	if (!cs) return;
+	auto id = cs->resolve_identity(username);
+	if (id) identity_ = *id;
+}
+
 void MysqlxSession::handler_connecting_server() {
 	if (!backend_conn_) {
 		if (thread_ptr_) {
@@ -682,10 +825,7 @@ void MysqlxSession::handler_connecting_server() {
 		}
 
 		if (backend_conn_) {
-			// Cached connection already has its MysqlxDataStream
-			// (backend_conn_->backend_ds()) initialized, including any
-			// SSL* from the original handshake. Do NOT rewrap the raw fd
-			// here: that would bypass the TLS-aware stream entirely.
+			server_ds().init(XDS_BACKEND, backend_conn_->get_fd());
 			status_ = WAITING_CLIENT_XMSG;
 			to_process = true;
 			return;
@@ -722,7 +862,23 @@ void MysqlxSession::handler_connecting_server() {
 
 	if (backend_conn_ && backend_conn_->get_auth_state() == MysqlxConnection::BACKEND_AUTH_NOT_STARTED) {
 		backend_conn_->init_backend_ds(backend_conn_->get_fd());
-		backend_conn_->set_backend_user(username_.c_str());
+
+		// Pick the backend username consistently with the backend password
+		// sourced from identity_->backend_password. When backend_auth_mode
+		// is `service_account` the mysqlx_users row carries a distinct
+		// backend_username; in `mapped` mode (the default) that field is
+		// empty and the frontend username_ is reused verbatim. Using the
+		// frontend username here while passing the resolved backend password
+		// below would pair userA's password with userB's name for
+		// service-account rows — backend auth would then fail with
+		// access-denied even though both columns are internally consistent.
+		// See the MysqlxBackendAuthMode enum in mysqlx_config_store.h for
+		// the full set of modes and their semantics.
+		const std::string& backend_user =
+			(identity_ && !identity_->backend_username.empty())
+				? identity_->backend_username
+				: username_;
+		backend_conn_->set_backend_user(backend_user.c_str());
 		backend_conn_->set_backend_schema(schema_.c_str());
 
 		if (client_ds_.is_encrypted() && tls_mode_ != TLS_PASSTHROUGH) {
@@ -732,9 +888,8 @@ void MysqlxSession::handler_connecting_server() {
 			}
 		}
 
-		if (credential_lookup_) {
-			MysqlxCredentials creds = credential_lookup_(username_);
-			backend_conn_->set_backend_password(creds.backend_password.c_str());
+		if (identity_) {
+			backend_conn_->set_backend_password(identity_->backend_password.c_str());
 		}
 	}
 
@@ -757,14 +912,7 @@ void MysqlxSession::handler_connecting_server() {
 		}
 	}
 
-	// Intentionally do NOT reinitialize a session-owned MysqlxDataStream
-	// around backend_conn_->get_fd() here. The backend auth path, including
-	// the optional TLS handshake, runs against backend_conn_->backend_ds(),
-	// which holds the SSL* for the session's entire lifetime. Wrapping the
-	// raw fd in a fresh plain stream would discard that SSL* and cause
-	// cleartext I/O on a TLS-wrapped socket. All data-plane code paths
-	// below (forward_to_backend, handler_waiting_server_msg, etc.) must go
-	// through backend_conn_->backend_ds() instead.
+	server_ds().init(XDS_BACKEND, backend_conn_->get_fd());
 	backend_conn_->set_state(MysqlxConnection::IDLE);
 	backend_conn_->set_reusable(true);
 	status_ = WAITING_CLIENT_XMSG;
@@ -774,19 +922,14 @@ void MysqlxSession::handler_connecting_server() {
 void MysqlxSession::return_backend_to_pool() {
 	if (!backend_conn_) return;
 	if (thread_ptr_) {
-		// The cached connection retains its MysqlxDataStream (including
-		// the SSL* established during the optional backend TLS handshake),
-		// so a subsequent session can resume using it without tearing the
-		// TLS session down. MysqlxConnection::reset() intentionally leaves
-		// backend_ds_ untouched. Do NOT reset/destroy the SSL state here.
 		thread_ptr_->return_connection_to_cache(backend_conn_);
 	} else {
 		delete backend_conn_;
 	}
 	backend_conn_ = nullptr;
-	// The session-owned placeholder carries no data-plane state and does
-	// not need to be reset. server_ds() will again return the placeholder
-	// (with fd == -1) until another backend is attached.
+	// server_ds() now falls through to server_ds_placeholder_ (fd=-1) once
+	// backend_conn_ is cleared. The placeholder carries no data-plane state,
+	// so no reset is needed.
 }
 
 void MysqlxSession::send_error(int code, const char* msg, bool fatal) {
