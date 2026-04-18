@@ -56,22 +56,8 @@ bool sync_disk_to_memory(SQLite3DB& admindb) {
 		"mysqlx_variables",
 	};
 	for (const char* tbl : tables) {
-		char* err = nullptr;
-		std::string q = "SELECT COUNT(*) FROM disk.";
-		q += tbl;
-		std::unique_ptr<SQLite3_result> disk_res(admindb.execute_statement(q.c_str(), &err));
-		std::unique_ptr<char, void(*)(void*)> err_guard(err, &free);
-		if (err) continue;
-		if (!disk_res || disk_res->rows.empty() || !disk_res->rows[0] || !disk_res->rows[0]->fields[0]) {
-			continue;
-		}
-		int disk_cnt = atoi(disk_res->rows[0]->fields[0]);
-		disk_res.reset();
-		err_guard.reset();
-		if (disk_cnt == 0) continue;
-
 		admindb.execute("BEGIN");
-		q = "DELETE FROM main.";
+		std::string q = "DELETE FROM main.";
 		q += tbl;
 		admindb.execute(q.c_str());
 
@@ -93,22 +79,8 @@ bool copy_to_runtime(SQLite3DB& admindb) {
 		{"mysqlx_variables", "runtime_mysqlx_variables"},
 	};
 	for (const auto& p : pairs) {
-		char* err = nullptr;
-		std::string q = "SELECT COUNT(*) FROM main.";
-		q += p[0];
-		std::unique_ptr<SQLite3_result> res(admindb.execute_statement(q.c_str(), &err));
-		std::unique_ptr<char, void(*)(void*)> err_guard(err, &free);
-		if (err) continue;
-		if (!res || res->rows.empty() || !res->rows[0] || !res->rows[0]->fields[0]) {
-			continue;
-		}
-		int cnt = atoi(res->rows[0]->fields[0]);
-		res.reset();
-		err_guard.reset();
-		if (cnt == 0) continue;
-
 		admindb.execute("BEGIN");
-		q = "DELETE FROM main.";
+		std::string q = "DELETE FROM main.";
 		q += p[1];
 		admindb.execute(q.c_str());
 

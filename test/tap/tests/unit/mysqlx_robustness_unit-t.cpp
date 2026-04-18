@@ -1,6 +1,7 @@
 #include "mysqlx_session.h"
 #include "mysqlx_protocol.h"
 #include "mysqlx_thread.h"
+#include "sqlite3db.h"
 #include "tap.h"
 #include "test_globals.h"
 #include "test_init.h"
@@ -566,8 +567,57 @@ static void test_forward_empty_frame() {
 	close(backend_fds[0]); close(backend_fds[1]);
 }
 
+// Mirrors the atomic replace sequence used by sync_disk_to_memory() /
+// copy_to_runtime() in plugins/mysqlx/src/mysqlx_plugin.cpp. Kept in the
+// test to exercise the invariant that an empty source table overwrites a
+// populated destination — the skip (if count==0) that used to guard this
+// was a correctness bug that left stale rows in main.* across restarts.
+static bool replace_table_contents(SQLite3DB& db,
+                                   const char* dest_table,
+                                   const char* source_table) {
+	db.execute("BEGIN");
+	std::string q = "DELETE FROM ";
+	q += dest_table;
+	db.execute(q.c_str());
+
+	q = "INSERT INTO ";
+	q += dest_table;
+	q += " SELECT * FROM ";
+	q += source_table;
+	db.execute(q.c_str());
+	db.execute("COMMIT");
+	return true;
+}
+
+static void test_empty_source_clears_stale_dest() {
+	SQLite3DB db;
+	db.open(const_cast<char*>(":memory:"),
+	        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+
+	db.execute("CREATE TABLE src (id INT PRIMARY KEY, name VARCHAR)");
+	db.execute("CREATE TABLE dst (id INT PRIMARY KEY, name VARCHAR)");
+
+	// Dest starts with stale rows; source is empty. This is exactly the
+	// scenario the old `if (count == 0) continue;` mishandled — after
+	// restart, sync_disk_to_memory would see disk count==0, skip, and
+	// leave the stale rows in main.*.
+	db.execute("INSERT INTO dst (id, name) VALUES (1, 'stale_a')");
+	db.execute("INSERT INTO dst (id, name) VALUES (2, 'stale_b')");
+
+	int src_cnt = db.return_one_int("SELECT COUNT(*) FROM src");
+	int dst_cnt_before = db.return_one_int("SELECT COUNT(*) FROM dst");
+	ok(src_cnt == 0 && dst_cnt_before == 2,
+	   "precondition: empty source, 2 stale rows in dest");
+
+	replace_table_contents(db, "dst", "src");
+
+	int dst_cnt_after = db.return_one_int("SELECT COUNT(*) FROM dst");
+	ok(dst_cnt_after == 0,
+	   "empty source overwrites stale dest (dest is empty after replace)");
+}
+
 int main() {
-	plan(33);
+	plan(35);
 
 	test_server_response_terminal_frame();
 	test_server_response_non_terminal_keeps_waiting();
@@ -582,6 +632,7 @@ int main() {
 	test_connection_limit_config();
 	test_client_disconnect_detected();
 	test_forward_empty_frame();
+	test_empty_source_clears_stale_dest();
 
 	return exit_status();
 }
