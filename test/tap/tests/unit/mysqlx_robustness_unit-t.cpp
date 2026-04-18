@@ -1,6 +1,7 @@
 #include "mysqlx_session.h"
 #include "mysqlx_protocol.h"
 #include "mysqlx_thread.h"
+#include "sqlite3db.h"
 #include "tap.h"
 #include "test_globals.h"
 #include "test_init.h"
@@ -566,8 +567,112 @@ static void test_forward_empty_frame() {
 	close(backend_fds[0]); close(backend_fds[1]);
 }
 
+// Mirrors the atomic replace sequence used by sync_disk_to_memory() /
+// copy_to_runtime() in plugins/mysqlx/src/mysqlx_plugin.cpp. Kept in the
+// test to exercise the invariant that an empty source table overwrites a
+// populated destination — the skip (if count==0) that used to guard this
+// was a correctness bug that left stale rows in main.* across restarts.
+//
+// The signature/semantics match the production replace_table_atomically():
+// every execute() return is checked, a failure at any step triggers ROLLBACK
+// and the function returns false. This preserves the destination's
+// pre-transaction state when the INSERT fails — the atomicity guarantee the
+// transaction wrap is supposed to deliver.
+static bool replace_table_contents(SQLite3DB& db,
+                                   const char* dest_table,
+                                   const char* source_table) {
+	if (!db.execute("BEGIN")) {
+		return false;
+	}
+	std::string q = "DELETE FROM ";
+	q += dest_table;
+	if (!db.execute(q.c_str())) {
+		db.execute("ROLLBACK");
+		return false;
+	}
+
+	q = "INSERT INTO ";
+	q += dest_table;
+	q += " SELECT * FROM ";
+	q += source_table;
+	if (!db.execute(q.c_str())) {
+		db.execute("ROLLBACK");
+		return false;
+	}
+	if (!db.execute("COMMIT")) {
+		db.execute("ROLLBACK");
+		return false;
+	}
+	return true;
+}
+
+static void test_empty_source_clears_stale_dest() {
+	SQLite3DB db;
+	db.open(const_cast<char*>(":memory:"),
+	        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+
+	db.execute("CREATE TABLE src (id INT PRIMARY KEY, name VARCHAR)");
+	db.execute("CREATE TABLE dst (id INT PRIMARY KEY, name VARCHAR)");
+
+	// Dest starts with stale rows; source is empty. This is exactly the
+	// scenario the old `if (count == 0) continue;` mishandled — after
+	// restart, sync_disk_to_memory would see disk count==0, skip, and
+	// leave the stale rows in main.*.
+	db.execute("INSERT INTO dst (id, name) VALUES (1, 'stale_a')");
+	db.execute("INSERT INTO dst (id, name) VALUES (2, 'stale_b')");
+
+	int src_cnt = db.return_one_int("SELECT COUNT(*) FROM src");
+	int dst_cnt_before = db.return_one_int("SELECT COUNT(*) FROM dst");
+	ok(src_cnt == 0 && dst_cnt_before == 2,
+	   "precondition: empty source, 2 stale rows in dest");
+
+	replace_table_contents(db, "dst", "src");
+
+	int dst_cnt_after = db.return_one_int("SELECT COUNT(*) FROM dst");
+	ok(dst_cnt_after == 0,
+	   "empty source overwrites stale dest (dest is empty after replace)");
+}
+
+// Verifies that when INSERT fails mid-transaction, the DELETE is rolled back
+// and the destination retains its pre-transaction contents. Without the
+// execute()-return checks added by this follow-up, the unconditional COMMIT
+// would persist the DELETE and silently wipe the destination.
+static void test_insert_failure_rolls_back() {
+	SQLite3DB db;
+	db.open(const_cast<char*>(":memory:"),
+	        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+
+	// src has odd ids; dst has a CHECK that requires even ids. The INSERT
+	// will fail at the first odd value, leaving the transaction needing
+	// ROLLBACK to preserve the stale rows we seeded into dst.
+	db.execute("CREATE TABLE src (id INT PRIMARY KEY)");
+	db.execute("CREATE TABLE dst (id INT PRIMARY KEY CHECK (id % 2 = 0))");
+
+	db.execute("INSERT INTO src (id) VALUES (1)");
+	db.execute("INSERT INTO src (id) VALUES (3)");
+
+	db.execute("INSERT INTO dst (id) VALUES (10)");
+	db.execute("INSERT INTO dst (id) VALUES (20)");
+
+	int dst_cnt_before = db.return_one_int("SELECT COUNT(*) FROM dst");
+	ok(dst_cnt_before == 2,
+	   "precondition: dst has 2 pre-existing rows");
+
+	bool ok_return = replace_table_contents(db, "dst", "src");
+	ok(ok_return == false,
+	   "replace_table_contents returns false when INSERT violates CHECK");
+
+	int dst_cnt_after = db.return_one_int("SELECT COUNT(*) FROM dst");
+	ok(dst_cnt_after == 2,
+	   "dst still has 2 rows after failed INSERT (DELETE was rolled back)");
+
+	int dst_sum = db.return_one_int("SELECT COALESCE(SUM(id), 0) FROM dst");
+	ok(dst_sum == 30,
+	   "dst retains original rows (sum=30), not the invalid odd ids from src");
+}
+
 int main() {
-	plan(33);
+	plan(39);
 
 	test_server_response_terminal_frame();
 	test_server_response_non_terminal_keeps_waiting();
@@ -582,6 +687,8 @@ int main() {
 	test_connection_limit_config();
 	test_client_disconnect_detected();
 	test_forward_empty_frame();
+	test_empty_source_clears_stale_dest();
+	test_insert_failure_rolls_back();
 
 	return exit_status();
 }
