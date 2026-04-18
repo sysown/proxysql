@@ -13,6 +13,8 @@
 #include "mysqlx_session.h"
 #include "mysqlx_connection.h"
 
+class MysqlxConfigStore;
+
 class Mysqlx_Thread {
 public:
 	Mysqlx_Thread();
@@ -38,6 +40,7 @@ public:
 	void set_max_cached_connections(size_t max) { max_cached_ = max; }
 	void set_max_sessions(size_t max) { max_sessions_ = max; }
 	size_t get_max_sessions() const { return max_sessions_; }
+	void set_config_store(const MysqlxConfigStore* store) { config_store_ = store; }
 
 	SSL_CTX* get_ssl_ctx() const;
 
@@ -50,6 +53,7 @@ private:
 	int thread_index_;
 	std::atomic<bool> running_;
 	std::thread thread_;
+	const MysqlxConfigStore* config_store_;
 
 	std::vector<struct pollfd> poll_fds_;
 	std::vector<MysqlxDataStream*> poll_ds_;

@@ -717,7 +717,7 @@ void MysqlxSession::handler_connecting_server() {
 
 		if (credential_lookup_) {
 			MysqlxCredentials creds = credential_lookup_(username_);
-			backend_conn_->set_backend_password(creds.password_hash.c_str());
+			backend_conn_->set_backend_password(creds.backend_password.c_str());
 		}
 	}
 

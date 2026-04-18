@@ -22,6 +22,7 @@ MysqlxBackendAuthMode mysqlx_backend_auth_mode_from_string(const std::string& va
 
 struct MysqlxResolvedIdentity {
 	std::string username {};
+	std::string password {};
 	int default_hostgroup { 0 };
 	int max_connections { 0 };
 	bool x_enabled { false };
