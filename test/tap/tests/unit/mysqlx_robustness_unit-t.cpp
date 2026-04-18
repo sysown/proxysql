@@ -16,6 +16,7 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <fcntl.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -526,6 +527,55 @@ static void test_client_disconnect_detected() {
 	close(fds[0]);
 }
 
+static void test_check_connect_bad_fd() {
+	// Bug fix (PR #5641 review): check_connect() must report a hard error
+	// when poll() sees POLLNVAL on a closed/invalid fd, instead of waiting
+	// out the connect timeout. Create an fd, close it so it's invalid, then
+	// hand it to the connection and call check_connect().
+	int s = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+	ok(s >= 0, "socket() created for bad-fd test");
+	close(s);
+
+	MysqlxConnection conn;
+	conn.set_fd(s);
+	conn.set_state(MysqlxConnection::CONNECTING);
+	conn.set_connect_timeout(10000);
+
+	int rc = conn.check_connect();
+	ok(rc == -1, "check_connect() returns -1 on invalid fd");
+	ok(conn.get_state() == MysqlxConnection::ERROR_STATE,
+	   "check_connect() transitions to ERROR_STATE on invalid fd");
+
+	conn.set_fd(-1);  // prevent dtor from double-closing
+}
+
+static void test_check_connect_success_path() {
+	// Positive path: an already-connected socketpair endpoint reports POLLOUT
+	// ready immediately, SO_ERROR is 0, so check_connect() must transition to
+	// AUTHENTICATING and return 0.
+	int fds[2];
+	int sp = socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+	ok(sp == 0, "socketpair() created for success-path test");
+
+	// Make non-blocking to mimic start_connect() fd flags.
+	int flags = fcntl(fds[0], F_GETFL, 0);
+	fcntl(fds[0], F_SETFL, flags | O_NONBLOCK);
+
+	MysqlxConnection conn;
+	conn.set_fd(fds[0]);
+	conn.set_state(MysqlxConnection::CONNECTING);
+	conn.set_connect_timeout(10000);
+
+	int rc = conn.check_connect();
+	ok(rc == 0, "check_connect() returns 0 when socket is writable and SO_ERROR==0");
+	ok(conn.get_state() == MysqlxConnection::AUTHENTICATING,
+	   "check_connect() transitions to AUTHENTICATING on successful connect");
+
+	conn.set_fd(-1);  // detach before manual close
+	close(fds[0]);
+	close(fds[1]);
+}
+
 static void test_forward_empty_frame() {
 	int client_fds[2], backend_fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
@@ -686,6 +736,8 @@ int main() {
 	test_return_backend_no_thread();
 	test_connection_limit_config();
 	test_client_disconnect_detected();
+	test_check_connect_bad_fd();
+	test_check_connect_success_path();
 	test_forward_empty_frame();
 	test_empty_source_clears_stale_dest();
 	test_insert_failure_rolls_back();
