@@ -42,6 +42,10 @@ public:
 	~MysqlxDataStream();
 
 	void init(mysqlx_ds_type type, int fd);
+	// Tear down owned SSL/BIO state and clear buffers without close()ing fd.
+	// Used when the underlying fd is owned by another object (e.g. the pooled
+	// MysqlxConnection) and must remain valid after the data stream is reset.
+	void close_and_reset();
 	void set_nonblocking();
 
 	int get_fd() const { return fd_; }

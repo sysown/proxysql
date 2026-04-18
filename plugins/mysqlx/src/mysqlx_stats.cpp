@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cstring>
+#include <string>
 
 namespace {
 
@@ -75,21 +76,26 @@ void MysqlxStatsStore::flush_to_sqlite(SQLite3DB& statsdb) {
 	statsdb.execute("DELETE FROM stats_mysqlx_routes");
 
 	for (const auto& [name, stats] : route_stats_) {
-		std::string escaped_name = sqlite_escape(name);
-		char sql[1024];
-		snprintf(sql, sizeof(sql),
-			"INSERT INTO stats_mysqlx_routes "
+		// Build with std::string so a long, escaped route name can never silently
+		// truncate the SQL (the previous fixed 1024-byte snprintf buffer dropped
+		// the row entirely on overflow).
+		std::string sql = "INSERT INTO stats_mysqlx_routes "
 			"(name, destination_hostgroup, ConnOK, ConnERR, ConnUsed, "
-			"Bytes_data_sent, Bytes_data_recv) "
-			"VALUES ('%s', %d, %" PRIu64 ", %" PRIu64 ", %" PRIu64 ", %" PRIu64 ", %" PRIu64 ")",
-			escaped_name.c_str(),
-			stats.destination_hostgroup,
-			stats.conn_ok.load(std::memory_order_relaxed),
-			stats.conn_err.load(std::memory_order_relaxed),
-			stats.conn_used.load(std::memory_order_relaxed),
-			stats.bytes_sent.load(std::memory_order_relaxed),
-			stats.bytes_recv.load(std::memory_order_relaxed)
-		);
-		statsdb.execute(sql);
+			"Bytes_data_sent, Bytes_data_recv) VALUES ('";
+		sql += sqlite_escape(name);
+		sql += "', ";
+		sql += std::to_string(stats.destination_hostgroup);
+		sql += ", ";
+		sql += std::to_string(stats.conn_ok.load(std::memory_order_relaxed));
+		sql += ", ";
+		sql += std::to_string(stats.conn_err.load(std::memory_order_relaxed));
+		sql += ", ";
+		sql += std::to_string(stats.conn_used.load(std::memory_order_relaxed));
+		sql += ", ";
+		sql += std::to_string(stats.bytes_sent.load(std::memory_order_relaxed));
+		sql += ", ";
+		sql += std::to_string(stats.bytes_recv.load(std::memory_order_relaxed));
+		sql += ")";
+		statsdb.execute(sql.c_str());
 	}
 }

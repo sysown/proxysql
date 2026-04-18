@@ -114,10 +114,18 @@ int MysqlxConnection::send_client_frame(uint8_t msg_type, const std::string& pay
 }
 
 std::optional<MysqlxFrame> MysqlxConnection::read_auth_frame() {
-	auto frame = backend_ds_.try_read_one_frame();
-	if (!frame) return std::nullopt;
-	if ((*frame)[4] == Mysqlx::ServerMessages_Type_NOTICE) return std::nullopt;
-	return frame;
+	// Consume any leading NOTICE frames in one shot. MySQL backends commonly
+	// emit a session-state-change notice before AuthenticateContinue / Ok;
+	// returning nullopt on a NOTICE without re-trying caused the auth state
+	// machine to spin until the 10s handshake timeout.
+	while (true) {
+		auto frame = backend_ds_.try_read_one_frame();
+		if (!frame) return std::nullopt;
+		if (frame->size() >= 5 && (*frame)[4] == Mysqlx::ServerMessages_Type_NOTICE) {
+			continue;
+		}
+		return frame;
+	}
 }
 
 int MysqlxConnection::step_auth() {
@@ -150,11 +158,10 @@ int MysqlxConnection::step_auth_capabilities_get() {
 }
 
 int MysqlxConnection::step_auth_capabilities_get_sent() {
-	auto frame = backend_ds_.try_read_one_frame();
+	auto frame = read_auth_frame();
 	if (!frame) return 1;
 
 	if (frame->size() < 5 || (*frame)[4] != Mysqlx::ServerMessages_Type_CONN_CAPABILITIES) {
-		if ((*frame)[4] == Mysqlx::ServerMessages_Type_NOTICE) return 1;
 		auth_state_ = BACKEND_AUTH_ERROR;
 		return -1;
 	}
@@ -188,10 +195,9 @@ int MysqlxConnection::step_auth_capabilities_get_sent() {
 }
 
 int MysqlxConnection::step_auth_capabilities_set_sent() {
-	auto frame = backend_ds_.try_read_one_frame();
+	auto frame = read_auth_frame();
 	if (!frame) return 1;
-	if ((*frame)[4] == Mysqlx::ServerMessages_Type_NOTICE) return 1;
-	if ((*frame)[4] != Mysqlx::ServerMessages_Type_OK) {
+	if (frame->size() < 5 || (*frame)[4] != Mysqlx::ServerMessages_Type_OK) {
 		auth_state_ = BACKEND_AUTH_ERROR;
 		return -1;
 	}
