@@ -1693,6 +1693,36 @@ pair<size_t,vector<line_match_t>> get_matching_lines(
 }
 
 
+bool wait_for_log_match(
+	fstream& f_stream, const string& s_regex, uint32_t timeout_ms, uint32_t poll_interval_ms
+) {
+	// Guard against a zero interval, which would spin.
+	if (poll_interval_ms == 0) { poll_interval_ms = 10; }
+
+	const useconds_t poll_us = poll_interval_ms * 1000;
+	uint32_t elapsed_ms = 0;
+
+	while (true) {
+		// Clear both eofbit and failbit so the subsequent getline() in
+		// get_matching_lines() can read any bytes appended since the last scan.
+		// Without this, once the stream hits EOF on the first iteration, every
+		// retry short-circuits and returns no matches.
+		f_stream.clear(f_stream.rdstate() & ~std::ios_base::eofbit & ~std::ios_base::failbit);
+
+		const auto& [_, matches] = get_matching_lines(f_stream, s_regex);
+		if (!matches.empty()) {
+			return true;
+		}
+		if (elapsed_ms >= timeout_ms) {
+			return false;
+		}
+
+		usleep(poll_us);
+		elapsed_ms += poll_interval_ms;
+	}
+}
+
+
 std::pair<size_t,std::vector<line_match_t>> get_matching_lines_from_filename(
 	const std::string& filename, const std::string& s_regex, bool get_matches, size_t max_lines
 ) {
