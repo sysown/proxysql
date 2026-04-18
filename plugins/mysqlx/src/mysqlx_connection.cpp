@@ -72,11 +72,25 @@ int MysqlxConnection::check_connect() {
 	pfd.fd = fd_;
 	pfd.events = POLLOUT;
 	pfd.revents = 0;
-	int pr = poll(&pfd, 1, 0);
-	if (pr <= 0) return 1;  // not ready yet
+	int pr;
+	do {
+		pr = poll(&pfd, 1, 0);
+	} while (pr < 0 && errno == EINTR);
+	if (pr < 0) {
+		state_ = ERROR_STATE;
+		return -1;
+	}
+	if (pr == 0) return 1;  // not ready yet
+	if (pfd.revents & (POLLNVAL | POLLERR | POLLHUP)) {
+		state_ = ERROR_STATE;
+		return -1;
+	}
 	int err = 0;
 	socklen_t len = sizeof(err);
-	getsockopt(fd_, SOL_SOCKET, SO_ERROR, &err, &len);
+	if (getsockopt(fd_, SOL_SOCKET, SO_ERROR, &err, &len) != 0) {
+		state_ = ERROR_STATE;
+		return -1;
+	}
 	if (err == 0) { state_ = AUTHENTICATING; return 0; }
 	state_ = ERROR_STATE; return -1;
 }
