@@ -6,6 +6,7 @@ export SKIP_PROXYSQL=1
 export DEFAULT_MYSQL_INFRA="dbdeployer-mysqlx"
 export MYSQLX_E2E_HOST=127.0.0.1
 export MYSQLX_E2E_PORT=33060
-export MYSQLX_E2E_USER=root
-export MYSQLX_E2E_PASS=''
+# Match the credentials provisioned by setup-infras.bash and CI-mysqlx.yml.
+export MYSQLX_E2E_USER=mysqlx_test
+export MYSQLX_E2E_PASS=mysqlx_test
 export MYSQLX_E2E_PROXYSQL_PORT=16603

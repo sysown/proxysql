@@ -81,5 +81,6 @@ if timeout 2 bash -c "echo > /dev/tcp/127.0.0.1/33060" 2>/dev/null; then
     exit 0
 fi
 
-echo "ERROR: X Protocol not available. Tests may fail."
-exit 0  # Don't fail the entire CI - let tests report the failure
+echo "ERROR: X Protocol not available on port 33060 — failing fast."
+echo "Tests would otherwise pass spuriously against a missing infra."
+exit 1

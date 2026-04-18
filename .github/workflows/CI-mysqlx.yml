@@ -122,19 +122,29 @@ jobs:
           echo "ERROR: X Protocol not available on port 33060"
           exit 1
 
-      - name: Run mysqlx E2E tests
+      - name: Run mysqlx integration and E2E tests
         run: |
-          export MYSQLX_E2E_HOST=127.0.0.1
-          export MYSQLX_E2E_PORT=33060
-          export MYSQLX_E2E_USER=mysqlx_test
-          export MYSQLX_E2E_PASS=mysqlx_test
+          # Source the group env file so every MYSQLX_E2E_* variable the tests
+          # look for is defined — especially MYSQLX_E2E_PROXYSQL_PORT, without
+          # which test_mysqlx_e2e_routing-t silently skips.
+          source test/tap/groups/mysqlx-e2e/env.sh
           cd test/tap/tests
-          for test_bin in test_mysqlx_e2e_*-t; do
+          # Run all test_mysqlx_*-t binaries. The glob covers e2e tests
+          # (test_mysqlx_e2e_*) plus the integration smoke tests
+          # (test_mysqlx_admin_tables, test_mysqlx_listener_smoke,
+          # test_mysqlx_plugin_load) that previously went unrun.
+          ran_any=0
+          for test_bin in test_mysqlx_*-t; do
             if [ -x "$test_bin" ]; then
               echo "Running $test_bin..."
               ./"$test_bin" || exit 1
+              ran_any=1
             fi
           done
+          if [ "$ran_any" = "0" ]; then
+            echo "ERROR: no test_mysqlx_*-t binaries were found"
+            exit 1
+          fi
 
       - name: Cleanup sandbox
         if: always()
