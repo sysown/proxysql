@@ -107,7 +107,7 @@ private:
 	mutable std::mutex listener_mutex_;
 
 	std::vector<MysqlxSession*> sessions_;
-	std::mutex sessions_mutex_;
+	mutable std::mutex sessions_mutex_;
 
 	std::vector<MysqlxConnection*> conn_cache_;
 	std::mutex conn_cache_mutex_;
