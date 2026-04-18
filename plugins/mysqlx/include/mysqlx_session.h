@@ -78,7 +78,15 @@ public:
 	int get_fd() const { return client_ds_.get_fd(); }
 
 	MysqlxDataStream& client_ds() { return client_ds_; }
-	MysqlxDataStream& server_ds() { return server_ds_; }
+	// Session-level accessor for the backend data stream. When a backend
+	// connection is attached, this proxies to MysqlxConnection::backend_ds()
+	// so the SSL* established during the optional backend TLS handshake is
+	// preserved for the rest of the session. Falls back to an uninitialized
+	// placeholder (fd == -1) when no backend is attached so that pollers and
+	// tests can safely query get_fd()/get_status() without crashing.
+	MysqlxDataStream& server_ds() {
+		return backend_conn_ ? backend_conn_->backend_ds() : server_ds_placeholder_;
+	}
 	MysqlxConnection*& backend_conn() { return backend_conn_; }
 
 	void set_credential_lookup(MysqlxCredentialLookup lookup) { credential_lookup_ = lookup; }
@@ -123,7 +131,13 @@ private:
 	bool is_terminal_for_state(uint8_t msg_type) const;
 
 	MysqlxDataStream client_ds_;
-	MysqlxDataStream server_ds_;
+	// Placeholder stream returned by server_ds() when no backend connection
+	// is attached. Intentionally never init()'d during the data-plane phase:
+	// the real backend stream lives on MysqlxConnection::backend_ds_, which
+	// owns the SSL* from the optional backend TLS handshake. Rewrapping the
+	// raw fd here after auth would discard that SSL* and silently regress
+	// TLS-wrapped sessions to cleartext I/O.
+	MysqlxDataStream server_ds_placeholder_;
 	MysqlxConnection* backend_conn_;
 	Mysqlx_Thread* thread_ptr_;
 	Status status_;

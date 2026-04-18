@@ -450,26 +450,29 @@ void MysqlxSession::handler_waiting_client_msg() {
 }
 
 void MysqlxSession::forward_to_backend() {
-	if (server_ds_.get_status() != XDS_READY) {
-		if (!backend_conn_ || backend_conn_->get_state() != MysqlxConnection::IDLE) {
-			status_ = CONNECTING_SERVER;
-			to_process = true;
-			return;
-		}
-		server_ds_.init(XDS_BACKEND, backend_conn_->get_fd());
+	if (!backend_conn_ || backend_conn_->get_state() != MysqlxConnection::IDLE) {
+		status_ = CONNECTING_SERVER;
+		to_process = true;
+		return;
 	}
+
+	// Data-plane reads/writes must go through MysqlxConnection::backend_ds(),
+	// which owns the SSL* established during the optional backend TLS
+	// handshake. Wrapping backend_conn_->get_fd() in a fresh MysqlxDataStream
+	// here would discard that SSL* and silently fall back to cleartext I/O.
+	MysqlxDataStream& be_ds = backend_conn_->backend_ds();
 
 	if (client_ds_.has_complete_frame()) {
 		const auto& frame = client_ds_.front_frame();
 		if (frame.size() > 5) {
-			server_ds_.enqueue_frame(frame[4], frame.data() + 5, frame.size() - 5);
+			be_ds.enqueue_frame(frame[4], frame.data() + 5, frame.size() - 5);
 		} else {
-			server_ds_.enqueue_frame(frame[4], nullptr, 0);
+			be_ds.enqueue_frame(frame[4], nullptr, 0);
 		}
 		client_ds_.pop_frame();
 	}
 
-	server_ds_.write_to_net();
+	be_ds.write_to_net();
 	status_ = WAITING_SERVER_XMSG;
 }
 
@@ -518,14 +521,16 @@ bool MysqlxSession::is_terminal_for_state(uint8_t msg_type) const {
 }
 
 void MysqlxSession::handler_waiting_server_msg() {
-	if (server_ds_.get_fd() < 0) {
+	// Go through backend_conn_->backend_ds() so TLS state is preserved.
+	if (!backend_conn_ || backend_conn_->backend_ds().get_fd() < 0) {
 		return_backend_to_pool();
 		status_ = WAITING_CLIENT_XMSG;
 		to_process = true;
 		return;
 	}
+	MysqlxDataStream& be_ds = backend_conn_->backend_ds();
 
-	ssize_t r = server_ds_.read_from_net();
+	ssize_t r = be_ds.read_from_net();
 	if (r == 0) {
 		send_error(2013, "Lost connection to backend during query");
 		return_backend_to_pool();
@@ -540,12 +545,12 @@ void MysqlxSession::handler_waiting_server_msg() {
 	}
 
 	bool got_terminal = false;
-	while (server_ds_.has_complete_frame()) {
-		const auto& frame = server_ds_.front_frame();
+	while (be_ds.has_complete_frame()) {
+		const auto& frame = be_ds.front_frame();
 		uint8_t msg_type = frame[4];
 
 		forward_frame_to_client(msg_type, frame);
-		server_ds_.pop_frame();
+		be_ds.pop_frame();
 
 		if (msg_type != Mysqlx::ServerMessages_Type_NOTICE &&
 		    is_terminal_for_state(msg_type)) {
@@ -567,14 +572,16 @@ void MysqlxSession::handler_fast_forward() {
 }
 
 void MysqlxSession::handler_session_reset_waiting() {
-	if (server_ds_.get_fd() < 0) {
+	// Go through backend_conn_->backend_ds() so TLS state is preserved.
+	if (!backend_conn_ || backend_conn_->backend_ds().get_fd() < 0) {
 		return_backend_to_pool();
 		status_ = WAITING_CLIENT_XMSG;
 		to_process = true;
 		return;
 	}
+	MysqlxDataStream& be_ds = backend_conn_->backend_ds();
 
-	ssize_t r = server_ds_.read_from_net();
+	ssize_t r = be_ds.read_from_net();
 	if (r == 0 || (r < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
 		return_backend_to_pool();
 		status_ = WAITING_CLIENT_XMSG;
@@ -582,22 +589,20 @@ void MysqlxSession::handler_session_reset_waiting() {
 		return;
 	}
 
-	while (server_ds_.has_complete_frame()) {
-		const auto& frame = server_ds_.front_frame();
+	while (be_ds.has_complete_frame()) {
+		const auto& frame = be_ds.front_frame();
 		uint8_t msg_type = frame[4];
 
 		if (msg_type == Mysqlx::ServerMessages_Type_NOTICE) {
 			forward_frame_to_client(msg_type, frame);
-			server_ds_.pop_frame();
+			be_ds.pop_frame();
 			continue;
 		}
 
 		if (msg_type == Mysqlx::ServerMessages_Type_OK) {
-			server_ds_.pop_frame();
-			if (backend_conn_) {
-				backend_conn_->set_has_prepared_statement(false);
-				backend_conn_->set_in_transaction(false);
-			}
+			be_ds.pop_frame();
+			backend_conn_->set_has_prepared_statement(false);
+			backend_conn_->set_in_transaction(false);
 			return_backend_to_pool();
 			last_active_time_ = monotonic_time_ms();
 			status_ = WAITING_CLIENT_XMSG;
@@ -607,7 +612,7 @@ void MysqlxSession::handler_session_reset_waiting() {
 
 		if (msg_type == Mysqlx::ServerMessages_Type_ERROR) {
 			forward_frame_to_client(msg_type, frame);
-			server_ds_.pop_frame();
+			be_ds.pop_frame();
 			client_ds_.write_to_net();
 			return_backend_to_pool();
 			status_ = WAITING_CLIENT_XMSG;
@@ -615,7 +620,7 @@ void MysqlxSession::handler_session_reset_waiting() {
 			return;
 		}
 
-		server_ds_.pop_frame();
+		be_ds.pop_frame();
 	}
 }
 
@@ -668,7 +673,10 @@ void MysqlxSession::handler_connecting_server() {
 		}
 
 		if (backend_conn_) {
-			server_ds_.init(XDS_BACKEND, backend_conn_->get_fd());
+			// Cached connection already has its MysqlxDataStream
+			// (backend_conn_->backend_ds()) initialized, including any
+			// SSL* from the original handshake. Do NOT rewrap the raw fd
+			// here: that would bypass the TLS-aware stream entirely.
 			status_ = WAITING_CLIENT_XMSG;
 			to_process = true;
 			return;
@@ -740,7 +748,14 @@ void MysqlxSession::handler_connecting_server() {
 		}
 	}
 
-	server_ds_.init(XDS_BACKEND, backend_conn_->get_fd());
+	// Intentionally do NOT reinitialize a session-owned MysqlxDataStream
+	// around backend_conn_->get_fd() here. The backend auth path, including
+	// the optional TLS handshake, runs against backend_conn_->backend_ds(),
+	// which holds the SSL* for the session's entire lifetime. Wrapping the
+	// raw fd in a fresh plain stream would discard that SSL* and cause
+	// cleartext I/O on a TLS-wrapped socket. All data-plane code paths
+	// below (forward_to_backend, handler_waiting_server_msg, etc.) must go
+	// through backend_conn_->backend_ds() instead.
 	backend_conn_->set_state(MysqlxConnection::IDLE);
 	backend_conn_->set_reusable(true);
 	status_ = WAITING_CLIENT_XMSG;
@@ -750,12 +765,19 @@ void MysqlxSession::handler_connecting_server() {
 void MysqlxSession::return_backend_to_pool() {
 	if (!backend_conn_) return;
 	if (thread_ptr_) {
+		// The cached connection retains its MysqlxDataStream (including
+		// the SSL* established during the optional backend TLS handshake),
+		// so a subsequent session can resume using it without tearing the
+		// TLS session down. MysqlxConnection::reset() intentionally leaves
+		// backend_ds_ untouched. Do NOT reset/destroy the SSL state here.
 		thread_ptr_->return_connection_to_cache(backend_conn_);
 	} else {
 		delete backend_conn_;
 	}
 	backend_conn_ = nullptr;
-	server_ds_ = MysqlxDataStream();
+	// The session-owned placeholder carries no data-plane state and does
+	// not need to be reset. server_ds() will again return the placeholder
+	// (with fd == -1) until another backend is attached.
 }
 
 void MysqlxSession::send_error(int code, const char* msg, bool fatal) {

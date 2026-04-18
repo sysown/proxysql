@@ -574,6 +574,64 @@ static void test_check_connect_success_path() {
 	conn.set_fd(-1);  // detach before manual close
 	close(fds[0]);
 	close(fds[1]);
+// Regression guard: after backend auth completes, the data-plane reads/writes
+// must route through backend_conn_->backend_ds(), not a session-owned stream
+// re-wrapped around the raw backend fd. The TLS handshake (when backend TLS
+// is required) runs against backend_conn_->backend_ds() and the resulting
+// SSL* lives on that stream; rewrapping the fd would discard it and cause
+// cleartext I/O on a TLS-expecting socket.
+//
+// We can't cheaply drive a full TLS handshake inside a unit test, so we
+// instead assert the structural invariant: MysqlxSession::server_ds() is an
+// alias for MysqlxConnection::backend_ds() whenever a backend is attached,
+// and the session's placeholder stream is never initialized post-auth.
+static void test_server_ds_aliases_backend_conn_backend_ds() {
+	int client_fds[2], backend_fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
+	socketpair(AF_UNIX, SOCK_STREAM, 0, backend_fds);
+
+	MysqlxSession sess;
+	setup_authenticated_session(client_fds, sess);
+
+	// With no backend attached yet, server_ds() returns the session's
+	// placeholder: fd == -1 and status never set to something data-plane
+	// readers would treat as live.
+	ok(sess.backend_conn() == nullptr,
+	   "pre-attach: no backend connection is associated with the session");
+	ok(sess.server_ds().get_fd() == -1,
+	   "pre-attach: server_ds() placeholder has fd == -1");
+
+	// Attach a backend and initialize its backend_ds() (as the real auth
+	// path does via MysqlxConnection::init_backend_ds()).
+	MysqlxConnection* conn = new MysqlxConnection();
+	conn->set_fd(backend_fds[0]);
+	conn->set_state(MysqlxConnection::IDLE);
+	conn->set_reusable(true);
+	conn->init_backend_ds(backend_fds[0]);
+	sess.backend_conn() = conn;
+
+	// The critical invariant: server_ds() now aliases backend_conn_->backend_ds().
+	// If this ever regresses to wrapping the raw fd in a fresh stream, the
+	// TLS state living on backend_conn_->backend_ds_ would be bypassed.
+	ok(&sess.server_ds() == &sess.backend_conn()->backend_ds(),
+	   "post-attach: server_ds() aliases backend_conn_->backend_ds() (TLS state preserved)");
+	ok(sess.server_ds().get_fd() == backend_fds[0],
+	   "post-attach: server_ds().get_fd() reflects the backend fd");
+
+	// return_backend_to_pool (via session close) must not tear down the
+	// TLS-aware stream on the cached connection. Driving this path via the
+	// session handler while the backend connection is null would invoke
+	// return_backend_to_pool(); here we simply verify that after clearing
+	// the backend pointer the placeholder is once again what server_ds()
+	// returns and its fd is still -1.
+	delete conn;
+	sess.backend_conn() = nullptr;
+	ok(sess.server_ds().get_fd() == -1,
+	   "post-detach: server_ds() placeholder has fd == -1 (never re-initialized)");
+
+	detach_session_fds(sess);
+	close(client_fds[0]); close(client_fds[1]);
+	close(backend_fds[0]); close(backend_fds[1]);
 }
 
 static void test_forward_empty_frame() {
@@ -722,7 +780,7 @@ static void test_insert_failure_rolls_back() {
 }
 
 int main() {
-	plan(39);
+	plan(44);
 
 	test_server_response_terminal_frame();
 	test_server_response_non_terminal_keeps_waiting();
@@ -738,6 +796,7 @@ int main() {
 	test_client_disconnect_detected();
 	test_check_connect_bad_fd();
 	test_check_connect_success_path();
+	test_server_ds_aliases_backend_conn_backend_ds();
 	test_forward_empty_frame();
 	test_empty_source_clears_stale_dest();
 	test_insert_failure_rolls_back();
