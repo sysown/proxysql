@@ -297,6 +297,12 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 .PHONY: all
 all: $(UNIT_TESTS)
 
+# Alias: top-level 'make unit_tests' (via test/tap/Makefile) forwards the goal
+# name here via $(MAKECMDGOALS), so this target must exist even though `all`
+# does the same thing.
+.PHONY: unit_tests
+unit_tests: all
+
 .PHONY: debug
 debug: OPT += -DDEBUG
 debug: $(UNIT_TESTS)
