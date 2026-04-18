@@ -29,10 +29,13 @@ jobs:
         sudo dpkg -i orchestrator-client_3.2.6_amd64.deb
         
         sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 467B942D3A79BD29
-        # Ubuntu keyserver serves the expired B7B3B788A8D3785C; fetch renewed key from MySQL.
-        wget -qO - https://repo.mysql.com/RPM-GPG-KEY-mysql-2025 | sudo apt-key add -
         wget https://repo.mysql.com/mysql-apt-config_0.8.29-1_all.deb
         sudo dpkg -i mysql-apt-config_0.8.29-1_all.deb
+        # mysql-apt-config.postinst writes an expired signing key into the
+        # keyring referenced by sources.list.d/mysql.list (signed-by=...).
+        # Overwrite with the renewed key (same fingerprint, valid through
+        # 2027-10-23) so apt-get update trusts the InRelease signature.
+        wget -qO - https://repo.mysql.com/RPM-GPG-KEY-mysql-2025 | sudo gpg --dearmor --yes -o /usr/share/keyrings/mysql-apt-config.gpg
         sudo apt-get update -y
         sudo apt-cache policy mysql-shell
         sudo apt-get install -y mysql-shell
