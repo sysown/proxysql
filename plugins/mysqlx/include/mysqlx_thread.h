@@ -36,10 +36,11 @@ public:
 	 * thread under an optional logical route name.
 	 *
 	 * The route name is stored in the parallel `listener_route_names_` vector
-	 * (same length / same index as `listener_fds_` and `listener_addrs_`),
-	 * which lets `remove_listener_for_route` tear down a single listener by
-	 * name. Passing `nullptr` or an empty string records an empty route name;
-	 * those listeners can only be torn down via `remove_listeners()`.
+	 * (same length / same index as `listener_fds_`, `listener_addrs_`, and
+	 * `listener_ports_`), which lets `remove_listener_for_route` tear down a
+	 * single listener by name. Passing `nullptr` or an empty string records an
+	 * empty route name; those listeners can only be torn down via
+	 * `remove_listeners()`.
 	 *
 	 * Returns 0 on success, -1 on any socket/bind/listen error.
 	 */
@@ -54,6 +55,18 @@ public:
 	 * idempotently.
 	 */
 	bool remove_listener_for_route(const char* route_name);
+
+	/**
+	 * Returns the recorded bind address of this thread's listener for
+	 * `route_name` in the canonical `"host:port"` form used by the reconciler
+	 * for equality comparison against desired bind specs.
+	 *
+	 * Returns an empty string if no listener under that name exists on this
+	 * thread. Intended for reconciliation logic that needs to detect a bind
+	 * change (e.g. a `bind` column edit from `:33061` to `:33062`) without
+	 * depending on kernel-side state like `getsockname()`.
+	 */
+	std::string get_listener_addr_for_route(const std::string& route_name) const;
 
 	void remove_listeners();
 
@@ -82,15 +95,16 @@ private:
 	std::vector<MysqlxDataStream*> poll_ds_;
 
 	// Parallel vectors describing this thread's listening sockets.
-	// Invariant: all three vectors always have the same length, and the
+	// Invariant: all four vectors always have the same length, and the
 	// element at a given index describes the same listener (its fd, its
-	// bind host, and its logical route name from `mysqlx_routes.name`).
-	// An empty string in `listener_route_names_` means the listener was
-	// not associated with a named route.
+	// bind host, its bind port, and its logical route name from
+	// `mysqlx_routes.name`). An empty string in `listener_route_names_`
+	// means the listener was not associated with a named route.
 	std::vector<int> listener_fds_;
 	std::vector<std::string> listener_addrs_;
+	std::vector<int> listener_ports_;
 	std::vector<std::string> listener_route_names_;
-	std::mutex listener_mutex_;
+	mutable std::mutex listener_mutex_;
 
 	std::vector<MysqlxSession*> sessions_;
 	std::mutex sessions_mutex_;

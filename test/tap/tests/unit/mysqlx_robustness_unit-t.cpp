@@ -647,8 +647,116 @@ static void test_listener_reconciliation() {
 	}
 }
 
+// Ask the kernel for a free TCP port by binding to :0, reading back the
+// assignment, and closing. Leaves a brief TIME_WAIT window but the listeners
+// we build use SO_REUSEADDR so reuse is safe.
+static int pick_free_port() {
+	int s = socket(AF_INET, SOCK_STREAM, 0);
+	if (s < 0) return -1;
+	int opt = 1;
+	setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+	struct sockaddr_in addr;
+	memset(&addr, 0, sizeof(addr));
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	addr.sin_port = 0;
+	if (bind(s, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+		close(s);
+		return -1;
+	}
+	socklen_t len = sizeof(addr);
+	if (getsockname(s, (struct sockaddr*)&addr, &len) < 0) {
+		close(s);
+		return -1;
+	}
+	int port = ntohs(addr.sin_port);
+	close(s);
+	return port;
+}
+
+static void test_listener_reconciliation_bind_change() {
+	// Verify that changing a route's `bind` column and re-running the reconciler
+	// closes the old listener and opens a new one at the new port — i.e. the
+	// reconciler does NOT silently keep the stale listener alive just because
+	// the route name is unchanged.
+	int port1 = pick_free_port();
+	int port2 = pick_free_port();
+	ok(port1 > 0 && port2 > 0 && port1 != port2,
+	   "picked two distinct free ports for bind-change reconcile test");
+
+	SQLite3DB admindb;
+	admindb.open(const_cast<char*>(":memory:"),
+		SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+	admindb.execute(
+		"CREATE TABLE runtime_mysqlx_routes ("
+		" name VARCHAR NOT NULL PRIMARY KEY,"
+		" bind VARCHAR NOT NULL,"
+		" destination_hostgroup INT NOT NULL,"
+		" fallback_hostgroup INT,"
+		" strategy VARCHAR NOT NULL DEFAULT 'first_available',"
+		" active INT NOT NULL DEFAULT 1,"
+		" attributes VARCHAR NOT NULL DEFAULT '',"
+		" comment VARCHAR NOT NULL DEFAULT ''"
+		" )"
+	);
+	char insert_sql[256];
+	snprintf(insert_sql, sizeof(insert_sql),
+		"INSERT INTO runtime_mysqlx_routes "
+		"(name, bind, destination_hostgroup, active) "
+		"VALUES ('reads', '127.0.0.1:%d', 0, 1)", port1);
+	admindb.execute(insert_sql);
+
+	std::vector<std::unique_ptr<Mysqlx_Thread>> threads;
+	for (int i = 0; i < 2; i++) {
+		auto t = std::make_unique<Mysqlx_Thread>();
+		t->init(i);
+		threads.push_back(std::move(t));
+	}
+
+	std::map<std::string, int> route_to_thread;
+	std::mutex route_map_mutex;
+	int next_rr_index = 0;
+
+	mysqlx_reconcile_listeners_impl(
+		admindb, threads, route_to_thread, route_map_mutex, next_rr_index
+	);
+
+	int total1 = threads[0]->get_listener_count() + threads[1]->get_listener_count();
+	ok(total1 == 1 && route_to_thread.count("reads") == 1,
+	   "initial reconcile: one listener for 'reads' at port1");
+
+	// Change the bind column and re-reconcile.
+	char update_sql[256];
+	snprintf(update_sql, sizeof(update_sql),
+		"UPDATE runtime_mysqlx_routes SET bind='127.0.0.1:%d' WHERE name='reads'",
+		port2);
+	admindb.execute(update_sql);
+
+	mysqlx_reconcile_listeners_impl(
+		admindb, threads, route_to_thread, route_map_mutex, next_rr_index
+	);
+
+	int total2 = threads[0]->get_listener_count() + threads[1]->get_listener_count();
+	ok(total2 == 1,
+	   "bind change reconcile: still exactly one listener (old closed, new opened)");
+
+	// Confirm the current listener is bound to port2, not port1.
+	int owner_tidx = route_to_thread.count("reads") ? route_to_thread["reads"] : -1;
+	std::string addr = (owner_tidx >= 0)
+		? threads[owner_tidx]->get_listener_addr_for_route("reads")
+		: std::string();
+	char expected[64];
+	snprintf(expected, sizeof(expected), "127.0.0.1:%d", port2);
+	ok(addr == expected,
+	   "bind change reconcile: listener now bound to the new port");
+
+	for (auto& t : threads) {
+		t->remove_listeners();
+	}
+}
+
 int main() {
-	plan(38);
+	plan(42);
 
 	test_server_response_terminal_frame();
 	test_server_response_non_terminal_keeps_waiting();
@@ -665,6 +773,7 @@ int main() {
 	test_forward_empty_frame();
 	test_listener_route_tracking();
 	test_listener_reconciliation();
+	test_listener_reconciliation_bind_change();
 
 	return exit_status();
 }

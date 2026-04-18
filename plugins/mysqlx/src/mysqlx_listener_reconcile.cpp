@@ -3,8 +3,8 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <memory>
-#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -60,9 +60,15 @@ void mysqlx_reconcile_listeners_impl(
 		return;
 	}
 
+	// Invariant: this function is only ever called from the admin thread
+	// (startup or LOAD MYSQLX ROUTES TO RUNTIME). The DB snapshot below is taken
+	// outside of route_to_thread_mutex on the assumption that no second reconcile
+	// can run concurrently. If ProxySQL ever gains a parallel admin execution path,
+	// move the mutex acquisition above the DB query.
+
 	// 1. Snapshot the desired route set from runtime_mysqlx_routes.
 	std::vector<DesiredRoute> desired;
-	std::set<std::string> desired_names;
+	std::map<std::string, const DesiredRoute*> desired_by_name;
 	{
 		char* error = nullptr;
 		std::unique_ptr<SQLite3_result> result(
@@ -73,6 +79,7 @@ void mysqlx_reconcile_listeners_impl(
 		);
 		std::unique_ptr<char, void(*)(void*)> error_guard(error, &free);
 		if (result) {
+			desired.reserve(result->rows.size());
 			for (auto* row : result->rows) {
 				if (row == nullptr ||
 				    row->fields[0] == nullptr ||
@@ -85,16 +92,35 @@ void mysqlx_reconcile_listeners_impl(
 				dr.port = 33060;
 				parse_bind_addr(bind_str, dr.host, dr.port);
 				desired.push_back(std::move(dr));
-				desired_names.insert(desired.back().name);
 			}
+		}
+		for (const auto& dr : desired) {
+			desired_by_name[dr.name] = &dr;
 		}
 	}
 
 	std::lock_guard<std::mutex> lock(route_to_thread_mutex);
 
-	// 2. Remove listeners for routes that are no longer desired.
+	// 2. Remove listeners for routes that are no longer desired OR whose bind
+	//    address has changed. A bind-address change is treated as remove+add:
+	//    the old listener fd is closed and step 3 rebinds under the new spec.
 	for (auto it = route_to_thread.begin(); it != route_to_thread.end(); ) {
-		if (desired_names.find(it->first) == desired_names.end()) {
+		bool needs_removal = false;
+		auto d_it = desired_by_name.find(it->first);
+		if (d_it == desired_by_name.end()) {
+			needs_removal = true;
+		} else {
+			int tidx = it->second;
+			if (tidx >= 0 && tidx < static_cast<int>(threads.size()) && threads[tidx]) {
+				std::string current = threads[tidx]->get_listener_addr_for_route(it->first);
+				std::string desired_addr = d_it->second->host + ":" +
+					std::to_string(d_it->second->port);
+				if (current != desired_addr) {
+					needs_removal = true;
+				}
+			}
+		}
+		if (needs_removal) {
 			int tidx = it->second;
 			if (tidx >= 0 && tidx < static_cast<int>(threads.size()) && threads[tidx]) {
 				threads[tidx]->remove_listener_for_route(it->first.c_str());
