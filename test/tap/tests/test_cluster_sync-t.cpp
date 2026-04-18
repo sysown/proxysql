@@ -565,7 +565,19 @@ int wait_for_node_sync(MYSQL* admin, const vector<string> queries, uint32_t time
 
 			mysql_free_result(myres);
 
-			if (row_value == 0) {
+			// <= 0 rather than == 0: "== 0" only flagged "row present but zero",
+			// which missed the "row absent" case (row_value stays at its -1
+			// default when mysql_fetch_row returns NULL). For the common
+			// 'SELECT LENGTH(checksum) FROM stats_proxysql_servers_checksums
+			// WHERE hostname=... AND port=... AND name=...' predicate the row
+			// does not yet exist at the moment a freshly-spawned replica is
+			// polled — so the loop was exiting as "synced" before the replica
+			// had recorded a checksum for its peer, after which the caller's
+			// fetch_remote_checksum() correctly returned empty and aborted the
+			// test with "Failed to fetch current checksum". The race is
+			// load-dependent: mysql95-g5 passed because it started minutes
+			// later when concurrent groups had finished.
+			if (row_value <= 0) {
 				not_synced = true;
 				failed_query = query;
 
