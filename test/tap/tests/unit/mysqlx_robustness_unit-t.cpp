@@ -76,6 +76,16 @@ static void setup_authenticated_session(int fds[2], MysqlxSession& sess) {
 	sess.init(fds[0], nullptr);
 	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
 
+	const std::string TEST_PASSWORD = "testpass";
+	auto pwd_hash = mysqlx_mysql41_hash(TEST_PASSWORD);
+	std::string pwd_hash_str(pwd_hash.begin(), pwd_hash.end());
+	sess.set_credential_lookup([pwd_hash_str](const std::string&) -> MysqlxCredentials {
+		MysqlxCredentials creds {};
+		creds.x_enabled = true;
+		creds.password_hash = pwd_hash_str;
+		return creds;
+	});
+
 	sess.to_process = true;
 	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_CON_CAPABILITIES_GET, nullptr, 0);
 	sess.handler();
@@ -116,15 +126,33 @@ static void setup_authenticated_session(int fds[2], MysqlxSession& sess) {
 	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_START,
 		reinterpret_cast<const uint8_t*>(serialized.data()), serialized.size());
 	sess.handler();
+
+	std::vector<uint8_t> challenge;
 	usleep(5000);
 	{
 		uint8_t buf[4096];
-		read_x_frame(fds[1], buf, sizeof(buf));
+		ssize_t r = read_x_frame(fds[1], buf, sizeof(buf));
+		if (r > 5 && buf[4] == Mysqlx::ServerMessages_Type_SESS_AUTHENTICATE_CONTINUE) {
+			Mysqlx::Session::AuthenticateContinue server_cont;
+			if (server_cont.ParseFromArray(buf + 5, static_cast<int>(r - 5))) {
+				const std::string& cd = server_cont.auth_data();
+				challenge.assign(cd.begin(), cd.end());
+			}
+		}
+	}
+
+	auto scramble_bytes = mysqlx_mysql41_scramble(challenge,
+		std::vector<uint8_t>(TEST_PASSWORD.begin(), TEST_PASSWORD.end()));
+	std::string scramble_hex = "*";
+	static const char hex[] = "0123456789ABCDEF";
+	for (uint8_t b : scramble_bytes) {
+		scramble_hex.push_back(hex[(b >> 4) & 0xF]);
+		scramble_hex.push_back(hex[b & 0xF]);
 	}
 
 	sess.to_process = true;
 	Mysqlx::Session::AuthenticateContinue cont;
-	cont.set_auth_data("*0000000000000000000000000000000000000000");
+	cont.set_auth_data(scramble_hex);
 	cont.SerializeToString(&serialized);
 	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_CONTINUE,
 		reinterpret_cast<const uint8_t*>(serialized.data()), serialized.size());
@@ -350,7 +378,7 @@ static void test_backend_fd_negative_no_crash() {
 	close(client_fds[0]); close(client_fds[1]);
 }
 
-static void test_mysql41_no_credential_lookup_accepts_any() {
+static void test_mysql41_no_credential_lookup_rejects() {
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -380,9 +408,9 @@ static void test_mysql41_no_credential_lookup_accepts_any() {
 	sess.to_process = true;
 	sess.handler();
 
-	ok(sess.is_healthy(), "without credential_lookup, invalid scramble accepted (open-proxy behavior)");
-	ok(sess.get_status() == MysqlxSession::WAITING_CLIENT_XMSG,
-	   "session in WAITING_CLIENT_XMSG after auth without verification");
+	ok(!sess.is_healthy(), "without credential_lookup, MYSQL41 auth must be rejected (no open-proxy fallback)");
+	ok(sess.get_status() != MysqlxSession::WAITING_CLIENT_XMSG,
+	   "session not in WAITING_CLIENT_XMSG after auth rejection");
 
 	detach_session_fds(sess);
 	close(fds[0]); close(fds[1]);
@@ -975,7 +1003,7 @@ int main() {
 	test_server_response_multi_frame_pipeline();
 	test_backend_disconnect_during_query();
 	test_backend_fd_negative_no_crash();
-	test_mysql41_no_credential_lookup_accepts_any();
+	test_mysql41_no_credential_lookup_rejects();
 	test_auth_start_empty_payload();
 	test_auth_start_malformed_protobuf();
 	test_auth_challenge_wrong_msg_type();

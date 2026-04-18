@@ -253,21 +253,23 @@ void MysqlxSession::handle_auth_plain(const std::string& auth_data) {
 	username_ = auth_data.substr(1, second_nul - 1);
 	std::string password = auth_data.substr(second_nul + 1);
 
-	if (credential_lookup_) {
-		MysqlxCredentials creds = credential_lookup_(username_);
-		if (!creds.x_enabled || creds.password_hash.empty()) {
-			send_error(1045, "Access denied for user");
-			healthy = false;
-			return;
-		}
-		std::vector<uint8_t> input_hash_vec = mysqlx_mysql41_hash(password);
-		if (input_hash_vec.size() != 20 ||
-		    CRYPTO_memcmp(input_hash_vec.data(), creds.password_hash.data(),
-		                  std::min(input_hash_vec.size(), creds.password_hash.size())) != 0) {
-			send_error(1045, "Access denied for user");
-			healthy = false;
-			return;
-		}
+	if (!credential_lookup_) {
+		send_error(1045, "Access denied for user");
+		healthy = false;
+		return;
+	}
+	MysqlxCredentials creds = credential_lookup_(username_);
+	if (!creds.x_enabled || creds.password_hash.empty() || creds.password_hash.size() != 20) {
+		send_error(1045, "Access denied for user");
+		healthy = false;
+		return;
+	}
+	std::vector<uint8_t> input_hash_vec = mysqlx_mysql41_hash(password);
+	if (input_hash_vec.size() != 20 ||
+	    CRYPTO_memcmp(input_hash_vec.data(), creds.password_hash.data(), 20) != 0) {
+		send_error(1045, "Access denied for user");
+		healthy = false;
+		return;
 	}
 
 	last_active_time_ = monotonic_time_ms();
@@ -356,20 +358,27 @@ void MysqlxSession::handler_auth_challenge_response() {
 			return;
 		}
 
-		if (credential_lookup_) {
-			MysqlxCredentials creds = credential_lookup_(username_);
-			if (!creds.x_enabled || creds.password_hash.empty()) {
-				send_error(1045, "Access denied for user");
-				healthy = false;
-				return;
-			}
-			std::vector<uint8_t> stored_hash(creds.password_hash.begin(), creds.password_hash.end());
-			if (!mysqlx_mysql41_verify_hash(auth_challenge_, scramble, stored_hash)) {
-				send_error(1045, "Access denied for user");
-				healthy = false;
-				return;
-			}
+		if (!credential_lookup_) {
+			send_error(1045, "Access denied for user");
+			healthy = false;
+			return;
 		}
+		MysqlxCredentials creds = credential_lookup_(username_);
+		if (!creds.x_enabled || creds.password_hash.empty() || creds.password_hash.size() != 20) {
+			send_error(1045, "Access denied for user");
+			healthy = false;
+			return;
+		}
+		std::vector<uint8_t> stored_hash(creds.password_hash.begin(), creds.password_hash.end());
+		if (!mysqlx_mysql41_verify_hash(auth_challenge_, scramble, stored_hash)) {
+			send_error(1045, "Access denied for user");
+			healthy = false;
+			return;
+		}
+	} else {
+		send_error(1045, "Access denied for user", true);
+		healthy = false;
+		return;
 	}
 
 	last_active_time_ = monotonic_time_ms();
