@@ -1497,6 +1497,7 @@ static void LoadConfiguredPlugins() {
 	}
 }
 
+#ifdef PROXYSQL40
 static void InitConfiguredPlugins() {
 	std::string plugin_error {};
 	if (!proxysql_init_configured_plugins(GloPluginManager.get(), plugin_error)) {
@@ -1504,6 +1505,7 @@ static void InitConfiguredPlugins() {
 		exit(EXIT_FAILURE);
 	}
 }
+#endif /* PROXYSQL40 */
 
 static void StartConfiguredPlugins() {
 	std::string plugin_error {};
@@ -1544,6 +1546,7 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 	ProxySQL_Main_init_MCP_module();
 #endif /* PROXYSQLGENAI */
 
+#ifdef PROXYSQL40
 	// Four-phase plugin lifecycle:
 	//   Phase A+B: dlopen + register_schemas (plugin-declared schemas
 	//              populate the pending-tables list).
@@ -1558,6 +1561,13 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 	GloAdmin->materialize_plugin_tables();
 	InitConfiguredPlugins();
 	StartConfiguredPlugins();
+#else
+	// Pre-chassis two-phase: admin init first, then load+init+materialize.
+	ProxySQL_Main_init_Admin_module(boostrap_info);
+	LoadConfiguredPlugins();
+	GloAdmin->materialize_plugin_tables();
+	StartConfiguredPlugins();
+#endif /* PROXYSQL40 */
 	GloMTH->print_version();
 
 	{

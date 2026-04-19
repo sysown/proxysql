@@ -87,6 +87,7 @@ void register_command_service(const char* sql, proxysql_plugin_admin_command_cb 
 	}
 }
 
+#ifdef PROXYSQL40
 void register_command_alias_service(const char* canonical, const char* alias) {
 	if (g_registry_target == nullptr) {
 		proxy_warning("Plugin command-alias registration attempted outside init phase "
@@ -119,6 +120,7 @@ bool register_query_hook_service(ProxySQL_PluginProtocol proto,
 	}
 	return true;
 }
+#endif /* PROXYSQL40 */
 
 SQLite3DB* get_admindb_service() {
 	return proxysql_plugin_get_admindb();
@@ -132,6 +134,7 @@ SQLite3DB* get_statsdb_service() {
 	return proxysql_plugin_get_statsdb();
 }
 
+#ifdef PROXYSQL40
 // Phase-B stubs: during register_schemas the admin module has not yet
 // materialized the SQLite schema, so DB handles are deliberately nullptr.
 // Plugins are documented to never call these during Phase B, but returning
@@ -154,6 +157,7 @@ bool register_query_hook_phase_b_stub(ProxySQL_PluginProtocol,
 prometheus::Registry* get_prometheus_registry_service() {
 	return GloVars.prometheus_registry.get();
 }
+#endif /* PROXYSQL40 */
 
 void log_message_service(int level, const char* message) {
 	if (message == nullptr) {
@@ -225,6 +229,7 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_.get_configdb = &get_configdb_service;
 	services_.get_statsdb = &get_statsdb_service;
 	services_.log_message = &log_message_service;
+#ifdef PROXYSQL40
 	services_.register_query_hook = &register_query_hook_service;
 	services_.get_prometheus_registry = &get_prometheus_registry_service;
 	services_.register_command_alias = &register_command_alias_service;
@@ -248,6 +253,7 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	// register_command() first, then register aliases. Since register_command
 	// is also available during Phase B, so is register_command_alias.
 	services_phase_b_.register_command_alias = &register_command_alias_service;
+#endif /* PROXYSQL40 */
 }
 
 ProxySQL_PluginManager::~ProxySQL_PluginManager() {
@@ -316,6 +322,7 @@ bool ProxySQL_PluginManager::load(const std::string &path, std::string &err) {
 	return true;
 }
 
+#ifdef PROXYSQL40
 bool ProxySQL_PluginManager::invoke_register_schemas_phase(std::string &err) {
 	// Phase B of the four-phase lifecycle.  Called after all plugins have
 	// been dlopen'd but before admin module bootstrap, so plugins can
@@ -365,6 +372,7 @@ bool ProxySQL_PluginManager::invoke_register_schemas_phase(std::string &err) {
 
 	return true;
 }
+#endif /* PROXYSQL40 */
 
 bool ProxySQL_PluginManager::init_all(std::string &err) {
 	// Only called during single-threaded startup; g_registry_target and
@@ -479,6 +487,7 @@ bool ProxySQL_PluginManager::dispatch_admin_command(const ProxySQL_PluginCommand
 
 	for (const auto& command : commands_) {
 		bool matches = sql_equals_ci(command.sql, normalized_sql);
+#ifdef PROXYSQL40
 		if (!matches) {
 			for (const auto& alias : command.aliases) {
 				if (sql_equals_ci(alias, normalized_sql)) {
@@ -487,6 +496,7 @@ bool ProxySQL_PluginManager::dispatch_admin_command(const ProxySQL_PluginCommand
 				}
 			}
 		}
+#endif /* PROXYSQL40 */
 		if (!matches) {
 			continue;
 		}
@@ -495,10 +505,14 @@ bool ProxySQL_PluginManager::dispatch_admin_command(const ProxySQL_PluginCommand
 		}
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Dispatching plugin command: %s (via %s)\n",
 			    command.sql.c_str(), normalized_sql.c_str());
+#ifdef PROXYSQL40
 		// Pass the CANONICAL form to the callback so plugins can ignore
 		// which alias the user typed — they match on their own canonical
 		// strings only.
 		result = command.cb(ctx, command.sql.c_str());
+#else
+		result = command.cb(ctx, normalized_sql.c_str());
+#endif /* PROXYSQL40 */
 		return true;
 	}
 
@@ -575,6 +589,7 @@ bool ProxySQL_PluginManager::register_table(const ProxySQL_PluginTableDef& def) 
 	return true;
 }
 
+#ifdef PROXYSQL40
 bool ProxySQL_PluginManager::register_query_hook(ProxySQL_PluginProtocol proto,
                                                  proxysql_plugin_query_hook_cb cb) {
 	if (cb == nullptr) {
@@ -615,6 +630,7 @@ bool ProxySQL_PluginManager::dispatch_query_hook(ProxySQL_PluginProtocol proto,
 	result = cb(payload);
 	return true;
 }
+#endif /* PROXYSQL40 */
 
 bool ProxySQL_PluginManager::register_command(const char* sql, proxysql_plugin_admin_command_cb cb) {
 	if (sql == nullptr || *sql == '\0' || cb == nullptr) {
@@ -636,6 +652,7 @@ bool ProxySQL_PluginManager::register_command(const char* sql, proxysql_plugin_a
 	return true;
 }
 
+#ifdef PROXYSQL40
 bool ProxySQL_PluginManager::register_command_alias(const char* canonical_sql, const char* alias_sql) {
 	if (canonical_sql == nullptr || *canonical_sql == '\0' ||
 	    alias_sql == nullptr || *alias_sql == '\0') {
@@ -699,6 +716,7 @@ const char* ProxySQL_PluginManager::resolve_alias_to_canonical(const std::string
 	}
 	return nullptr;
 }
+#endif /* PROXYSQL40 */
 
 ProxySQL_PluginManager* proxysql_get_plugin_manager() {
 	return g_active_plugin_manager.load(std::memory_order_acquire);
@@ -717,6 +735,7 @@ bool proxysql_dispatch_configured_plugin_admin_command(
 	return g_active_plugin_manager.load()->dispatch_admin_command(ctx, sql, result);
 }
 
+#ifdef PROXYSQL40
 const char* proxysql_resolve_configured_plugin_admin_alias(const std::string& sql) {
 	std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
 	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load();
@@ -752,12 +771,14 @@ bool proxysql_has_configured_plugin_query_hook(ProxySQL_PluginProtocol proto) {
 	}
 	return mgr->has_query_hook(proto);
 }
+#endif /* PROXYSQL40 */
 
 bool proxysql_load_configured_plugins(
 	std::unique_ptr<ProxySQL_PluginManager>& manager,
 	const std::vector<std::string>& plugin_modules,
 	std::string& err
 ) {
+#ifdef PROXYSQL40
 	// Phase A + Phase B of the four-phase lifecycle. Executed BEFORE
 	// ProxySQL_Main_init_Admin_module so that plugin-declared schemas are
 	// available when merge_plugin_tables materializes the SQLite schema.
@@ -805,8 +826,42 @@ bool proxysql_load_configured_plugins(
 		g_active_plugin_manager.store(manager.get(), std::memory_order_release);
 	}
 	return true;
+#else  /* !PROXYSQL40 */
+	// Pre-chassis two-phase: load + init_all in one call, installed as
+	// active manager only on full success.
+	err.clear();
+	{
+		std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
+		g_active_plugin_manager.store(nullptr, std::memory_order_release);
+	}
+	manager.reset();
+
+	if (plugin_modules.empty()) {
+		return true;
+	}
+
+	auto next_manager = std::make_unique<ProxySQL_PluginManager>();
+	for (const auto& path : plugin_modules) {
+		if (!next_manager->load(path, err)) {
+			err = path + ": " + err;
+			return false;
+		}
+	}
+
+	if (!next_manager->init_all(err)) {
+		return false;
+	}
+
+	{
+		std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
+		manager = std::move(next_manager);
+		g_active_plugin_manager.store(manager.get(), std::memory_order_release);
+	}
+	return true;
+#endif /* PROXYSQL40 */
 }
 
+#ifdef PROXYSQL40
 bool proxysql_init_configured_plugins(
 	ProxySQL_PluginManager* manager,
 	std::string& err
@@ -821,6 +876,7 @@ bool proxysql_init_configured_plugins(
 	}
 	return manager->init_all(err);
 }
+#endif /* PROXYSQL40 */
 
 bool proxysql_start_configured_plugins(
 	ProxySQL_PluginManager* manager,

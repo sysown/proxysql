@@ -26,6 +26,7 @@ ProxySQL_PluginCommandResult fake_command(const ProxySQL_PluginCommandContext&, 
 	return {0, 1, "fake command executed"};
 }
 
+#ifdef PROXYSQL40
 ProxySQL_PluginQueryHookResult fake_query_hook(const ProxySQL_PluginQueryHookPayload& payload) {
 	// Echo the SQL back through the message field so tests can verify the
 	// payload was wired through.  DENY-vs-ALLOW is selected by env var so
@@ -40,6 +41,7 @@ ProxySQL_PluginQueryHookResult fake_query_hook(const ProxySQL_PluginQueryHookPay
 	}
 	return {ProxySQL_PluginQueryHookAction::allow, msg};
 }
+#endif /* PROXYSQL40 */
 
 const char* env(const char* suffix) {
 	static char name[128];
@@ -62,6 +64,7 @@ void fake_log_event(const char *event) {
 	std::fclose(log_file);
 }
 
+#ifdef PROXYSQL40
 // Phase-B callback (Step 2 chassis ABI extension).  Only wired into the
 // descriptor when PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B (or the plugin2
 // variant) is set.  Toggles via env vars:
@@ -101,6 +104,7 @@ bool fake_register_schemas(ProxySQL_PluginServices *services) {
 	fake_log_event("phase_b");
 	return true;
 }
+#endif /* PROXYSQL40 */
 
 bool fake_init(ProxySQL_PluginServices *services) {
 	fake_services = services;
@@ -134,6 +138,7 @@ bool fake_init(ProxySQL_PluginServices *services) {
 		};
 		services->register_table(table);
 	}
+#ifdef PROXYSQL40
 	if (env("REGISTER_QUERY_HOOK") != nullptr &&
 	    services != nullptr &&
 	    services->register_query_hook != nullptr) {
@@ -144,6 +149,7 @@ bool fake_init(ProxySQL_PluginServices *services) {
 		}
 		services->register_query_hook(proto, &fake_query_hook);
 	}
+#endif /* PROXYSQL40 */
 	fake_log_event("init");
 	return true;
 }
@@ -192,6 +198,7 @@ const ProxySQL_PluginDescriptor fake_descriptor = {
 	&fake_status_json,
 };
 
+#ifdef PROXYSQL40
 // Phase-B-aware descriptor: same as above but wires the register_schemas
 // entry.  Selected at plugin-discovery time when the env toggle is set.
 const ProxySQL_PluginDescriptor fake_descriptor_with_phase_b = {
@@ -203,12 +210,15 @@ const ProxySQL_PluginDescriptor fake_descriptor_with_phase_b = {
 	&fake_status_json,
 	&fake_register_schemas,
 };
+#endif /* PROXYSQL40 */
 
 } // namespace
 
 extern "C" const ProxySQL_PluginDescriptor *proxysql_plugin_descriptor_v1() {
+#ifdef PROXYSQL40
 	if (env("ENABLE_PHASE_B") != nullptr) {
 		return &fake_descriptor_with_phase_b;
 	}
+#endif /* PROXYSQL40 */
 	return &fake_descriptor;
 }

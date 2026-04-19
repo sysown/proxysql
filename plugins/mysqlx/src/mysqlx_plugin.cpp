@@ -9,6 +9,7 @@
 
 namespace {
 
+#ifdef PROXYSQL40
 // Phase B: declare admin-schema tables only. Runs BEFORE the admin
 // module is initialized, so `services` has register_table live but the
 // DB handle getters return nullptr. mysqlx_register_admin_schema only
@@ -35,6 +36,21 @@ bool mysqlx_init(ProxySQL_PluginServices* services) {
 	ctx.started = false;
 	return true;
 }
+#else  /* !PROXYSQL40 */
+// Legacy two-phase init: schema + commands registered here in one shot,
+// ran at the same point in startup as pre-chassis plugin init.
+bool mysqlx_init(ProxySQL_PluginServices* services) {
+	if (services == nullptr) {
+		return false;
+	}
+
+	MysqlxPluginContext& ctx = mysqlx_context();
+	ctx.services = services;
+	ctx.config_store = std::make_unique<MysqlxConfigStore>();
+	ctx.started = false;
+	return mysqlx_register_admin_schema(*services);
+}
+#endif /* PROXYSQL40 */
 
 bool parse_bind_addr(const std::string& bind, std::string& host, int& port) {
 	if (!bind.empty() && bind[0] == '[') {
@@ -236,7 +252,9 @@ const ProxySQL_PluginDescriptor mysqlx_descriptor = {
 	&mysqlx_start,
 	&mysqlx_stop,
 	&mysqlx_status_json,
+#ifdef PROXYSQL40
 	&mysqlx_register_schemas,
+#endif /* PROXYSQL40 */
 };
 
 } // namespace

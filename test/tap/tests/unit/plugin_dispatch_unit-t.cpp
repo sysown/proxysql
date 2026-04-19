@@ -30,6 +30,20 @@ SQLite3DB* proxysql_plugin_get_admindb() { return reinterpret_cast<SQLite3DB*>(&
 SQLite3DB* proxysql_plugin_get_configdb() { return reinterpret_cast<SQLite3DB*>(&g_fake_config_db); }
 SQLite3DB* proxysql_plugin_get_statsdb() { return reinterpret_cast<SQLite3DB*>(&g_fake_stats_db); }
 
+// Under PROXYSQL40 the loader stops at Phase B (register_schemas) and Phase D
+// (init) runs separately. Without PROXYSQL40 the pre-chassis loader invokes
+// init inside proxysql_load_configured_plugins, so this helper is a no-op
+// that keeps the same test call sites compiling against both builds.
+#ifdef PROXYSQL40
+static inline bool proxysql_init_configured_plugins_compat(ProxySQL_PluginManager* m, std::string& err) {
+	return proxysql_init_configured_plugins(m, err);
+}
+#else
+static inline bool proxysql_init_configured_plugins_compat(ProxySQL_PluginManager*, std::string&) {
+	return true;
+}
+#endif
+
 static void test_dispatch_no_active_manager() {
 	std::unique_ptr<ProxySQL_PluginManager> mgr;
 	std::string err;
@@ -52,7 +66,7 @@ static void test_dispatch_after_stop() {
 	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
 	std::string err;
 
-	ok(proxysql_load_configured_plugins(mgr, paths, err) && proxysql_init_configured_plugins(mgr.get(), err),
+	ok(proxysql_load_configured_plugins(mgr, paths, err) && proxysql_init_configured_plugins_compat(mgr.get(), err),
 	   "load helper succeeds");
 	ok(proxysql_start_configured_plugins(mgr.get(), err),
 	   "start helper succeeds");
@@ -81,7 +95,7 @@ static void test_dispatch_unknown_command_with_active_manager() {
 	std::unique_ptr<ProxySQL_PluginManager> mgr;
 	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
 	std::string err;
-	ok(proxysql_load_configured_plugins(mgr, paths, err) && proxysql_init_configured_plugins(mgr.get(), err), "load");
+	ok(proxysql_load_configured_plugins(mgr, paths, err) && proxysql_init_configured_plugins_compat(mgr.get(), err), "load");
 	ok(proxysql_start_configured_plugins(mgr.get(), err), "start");
 
 	ProxySQL_PluginCommandContext ctx { proxysql_plugin_get_admindb(),
@@ -102,7 +116,7 @@ static void test_dispatch_canonicalises_input() {
 	std::unique_ptr<ProxySQL_PluginManager> mgr;
 	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
 	std::string err;
-	ok(proxysql_load_configured_plugins(mgr, paths, err) && proxysql_init_configured_plugins(mgr.get(), err), "load");
+	ok(proxysql_load_configured_plugins(mgr, paths, err) && proxysql_init_configured_plugins_compat(mgr.get(), err), "load");
 	ok(proxysql_start_configured_plugins(mgr.get(), err), "start");
 
 	ProxySQL_PluginCommandContext ctx { proxysql_plugin_get_admindb(),
@@ -135,7 +149,7 @@ static void test_dispatch_propagates_context() {
 	std::unique_ptr<ProxySQL_PluginManager> mgr;
 	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
 	std::string err;
-	ok(proxysql_load_configured_plugins(mgr, paths, err) && proxysql_init_configured_plugins(mgr.get(), err), "load");
+	ok(proxysql_load_configured_plugins(mgr, paths, err) && proxysql_init_configured_plugins_compat(mgr.get(), err), "load");
 	ok(proxysql_start_configured_plugins(mgr.get(), err), "start");
 
 	// Use a context with all-null DB pointers; dispatch should still work.
@@ -157,7 +171,7 @@ static void test_dispatch_concurrency() {
 	std::unique_ptr<ProxySQL_PluginManager> mgr;
 	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
 	std::string err;
-	ok(proxysql_load_configured_plugins(mgr, paths, err) && proxysql_init_configured_plugins(mgr.get(), err), "load");
+	ok(proxysql_load_configured_plugins(mgr, paths, err) && proxysql_init_configured_plugins_compat(mgr.get(), err), "load");
 	ok(proxysql_start_configured_plugins(mgr.get(), err), "start");
 
 	ProxySQL_PluginCommandContext ctx { proxysql_plugin_get_admindb(),
@@ -209,6 +223,7 @@ static void test_start_when_null_manager() {
 	ok(err.empty(), "start helper leaves err empty when there's nothing to start");
 }
 
+#ifdef PROXYSQL40
 // Count invocations per plugin to prove the alias-to-canonical resolver
 // routed each alias spelling to the correct plugin's callback.
 static int g_plugin_a_calls = 0;
@@ -310,9 +325,14 @@ static void test_alias_dispatch_two_non_conflicting_plugins() {
 	ok(mgr->register_command_alias("PLUGIN_A SYNC CONFIG", "PLUGIN_A RELOAD"),
 	   "register_command_alias is idempotent for the same canonical+alias pair");
 }
+#endif /* PROXYSQL40 */
 
 int main() {
+#ifdef PROXYSQL40
 	plan(50);
+#else
+	plan(32);
+#endif
 
 	test_dispatch_no_active_manager();
 	test_dispatch_after_stop();
@@ -322,7 +342,9 @@ int main() {
 	test_dispatch_concurrency();
 	test_stop_when_not_loaded();
 	test_start_when_null_manager();
+#ifdef PROXYSQL40
 	test_alias_dispatch_two_non_conflicting_plugins();
+#endif
 
 	return exit_status();
 }

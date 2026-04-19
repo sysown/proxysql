@@ -53,10 +53,25 @@ lint: lint-generate-cdb lint-run
 ###      * Advanced Anomaly Detection
 ###    - Automatically increments the major version (e.g., 3.0.6 -> 4.0.6).
 ###
-### HIERARCHY: `PROXYSQLGENAI=1` implies `PROXYSQL31=1`.
+### HIERARCHY: `PROXYSQLGENAI=1` implies `PROXYSQL40=1` implies `PROXYSQL31=1`.
+###
+### 4. ProxySQL v4.0.x (Plugin Chassis Tier)
+###    - Enabled by setting `PROXYSQL40=1`.
+###    - Includes v3.1 features plus:
+###      * Four-phase plugin lifecycle (register_schemas + init split)
+###      * Pre-execution query-hook plugin ABI
+###      * Shared Prometheus registry access for plugins
+###      * Generic admin-command alias dispatch
+###    - Automatically increments the major version (e.g., 3.0.6 -> 4.0.6).
+###    - `PROXYSQLGENAI=1` implies `PROXYSQL40=1`.
 
-# If PROXYSQLGENAI is enabled, it automatically enables PROXYSQL31
+# If PROXYSQLGENAI is enabled, it automatically enables PROXYSQL40
 ifeq ($(PROXYSQLGENAI),1)
+    PROXYSQL40 := 1
+endif
+
+# If PROXYSQL40 is enabled, it automatically enables PROXYSQL31
+ifeq ($(PROXYSQL40),1)
     PROXYSQL31 := 1
 endif
 
@@ -71,8 +86,9 @@ GIT_VERSION ?= $(GIT_VERSION_BASE)
 ifeq ($(MAKELEVEL),0)
 # Normalize GIT_VERSION by stripping leading 'v' for arithmetic
 GIT_VERSION_NORM := $(shell echo "$(GIT_VERSION_BASE)" | sed 's/^v//')
-# If PROXYSQLGENAI is enabled, increment the major version number by 1
-ifeq ($(PROXYSQLGENAI),1)
+# If PROXYSQL40 (or PROXYSQLGENAI, which implies it) is enabled,
+# increment the major version number by 1
+ifeq ($(PROXYSQL40),1)
 	GIT_VERSION := $(shell echo "$(GIT_VERSION_NORM)" | awk -F. '{printf "%d.%s", $$1+1, substr($$0, length($$1)+2)}')
 else
 # If PROXYSQL31 is enabled, increment the minor version number by 1
@@ -96,6 +112,7 @@ endif
 
 export CURVER
 export PROXYSQLGENAI
+export PROXYSQL40
 export PROXYSQL31
 export PROXYSQLFFTO
 export PROXYSQLTSDB

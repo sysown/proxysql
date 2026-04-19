@@ -196,6 +196,15 @@ ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c MySQLFFTO),0)
 	PROXYSQL31 := 1
 	PSQL31 := -DPROXYSQL31
 endif
+
+# PROXYSQL40 — detected via a chassis-exclusive symbol that only exists
+# when libproxysql.a was built with -DPROXYSQL40 (the four-phase plugin
+# lifecycle). `invoke_register_schemas_phase` is the canonical probe.
+PSQL40 :=
+ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c invoke_register_schemas_phase),0)
+	PROXYSQL40 := 1
+	PSQL40 := -DPROXYSQL40
+endif
 PSQLTSDB :=
 ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c init_tsdb_variables),0)
 	PROXYSQLTSDB := 1
@@ -210,12 +219,12 @@ ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -cw 'init_debug_struct'),0
 	PSQLDEBUG := -DDEBUG
 endif
 
-OPT := $(STDCPP) -O0 -ggdb $(PSQLCH) $(PSQLGA) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLDEBUG) \
+OPT := $(STDCPP) -O0 -ggdb $(PSQLCH) $(PSQLGA) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLDEBUG) \
 	   -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN) \
 	   -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR)
 
 ifeq ($(UNAME_S),Darwin)
-	OPT := $(STDCPP) -O0 -ggdb $(PSQLCH) $(PSQLGA) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLDEBUG) \
+	OPT := $(STDCPP) -O0 -ggdb $(PSQLCH) $(PSQLGA) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLDEBUG) \
 		   -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
 endif
 
@@ -251,7 +260,7 @@ $(ODIR)/test_init.o: $(TEST_HELPERS_DIR)/test_init.cpp $(PROXYSQL_TEST_HEADERS) 
 	$(CXX) -c -o $@ $< $(OPT) $(IDIRS) -Wall
 
 $(FAKE_PLUGIN_SO): $(TEST_HELPERS_DIR)/fake_plugin.cpp $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h | $(TEST_HELPERS_DIR)
-	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(IDIRS) -ldl
+	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(IDIRS) -ldl
 
 .PHONY: mysqlx_plugin_build
 mysqlx_plugin_build:
@@ -262,7 +271,7 @@ mysqlx_plugin_build:
 # Same source compiled with different macros to produce a second plugin .so
 # with a distinct plugin name and env-var prefix.  Used by multi-plugin tests.
 $(FAKE_PLUGIN2_SO): $(TEST_HELPERS_DIR)/fake_plugin.cpp $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h | $(TEST_HELPERS_DIR)
-	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(IDIRS) -ldl \
+	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(IDIRS) -ldl \
 		-DFAKE_PLUGIN_NAME=\"fake_plugin2\" \
 		-DFAKE_PLUGIN_ENV_PREFIX=\"PROXYSQL_FAKE_PLUGIN2_\"
 
@@ -277,7 +286,7 @@ $(LIBPROXYSQLAR): FORCE
 	$(MAKE) -C $(PROXYSQL_PATH)/lib libproxysql.a \
 		PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) \
 		PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) \
-		PROXYSQL31=$(PROXYSQL31) CC=$(CC) CXX=$(CXX)
+		PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) CC=$(CC) CXX=$(CXX)
 
 
 # ===========================================================================
@@ -331,9 +340,6 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	glovars_unit-t \
 	plugin_manager_unit-t \
 	plugin_registry_unit-t \
-	plugin_query_hook_unit-t \
-	plugin_prometheus_unit-t \
-	plugin_lifecycle_unit-t \
 	test_mysqlx_plugin_load-t \
 	mysqlx_config_store_unit-t \
 	test_mysqlx_admin_tables-t \
@@ -360,6 +366,15 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	mysqlx_tls_unit-t \
 	pgsql_servers_ssl_params_unit-t \
 	plugin_dispatch_unit-t
+
+# Plugin-chassis-only unit tests — built only when libproxysql.a was
+# compiled with -DPROXYSQL40 (autodetected higher up in this Makefile).
+ifeq ($(PROXYSQL40),1)
+UNIT_TESTS += \
+	plugin_query_hook_unit-t \
+	plugin_prometheus_unit-t \
+	plugin_lifecycle_unit-t
+endif
 
 .PHONY: all
 all: $(UNIT_TESTS)

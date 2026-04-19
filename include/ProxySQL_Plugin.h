@@ -6,7 +6,9 @@
 
 class SQLite3DB;
 class SQLite3_result;
+#ifdef PROXYSQL40
 namespace prometheus { class Registry; }
+#endif /* PROXYSQL40 */
 
 enum class ProxySQL_PluginDBKind : uint8_t {
 	admin_db = 0,
@@ -50,6 +52,7 @@ using proxysql_plugin_register_table_cb =
 using proxysql_plugin_register_command_cb =
 	void (*)(const char *, proxysql_plugin_admin_command_cb);
 
+#ifdef PROXYSQL40
 // Register an alternative spelling (alias) of an already-registered command.
 // The `canonical` argument MUST match the exact SQL passed to a prior
 // `register_command()` call (after whitespace normalization). Plugins use
@@ -63,6 +66,7 @@ using proxysql_plugin_register_command_cb =
 // command BEFORE its aliases). Silently skips duplicate aliases.
 using proxysql_plugin_register_command_alias_cb =
 	void (*)(const char *canonical, const char *alias);
+#endif /* PROXYSQL40 */
 
 using proxysql_plugin_snapshot_cb =
 	SQLite3_result *(*)();
@@ -73,6 +77,7 @@ using proxysql_plugin_db_handle_cb =
 using proxysql_plugin_log_message_cb =
 	void (*)(int, const char *);
 
+#ifdef PROXYSQL40
 // Pre-execution query hook (Step 2 ABI extension).
 //
 // Wire protocol the hook is being invoked for.  A plugin can register
@@ -140,6 +145,7 @@ using proxysql_plugin_register_query_hook_cb =
 // scraped immediately.
 using proxysql_plugin_get_prometheus_registry_cb =
 	prometheus::Registry* (*)();
+#endif /* PROXYSQL40 */
 
 // Services provided to plugins across the four-phase lifecycle.
 //
@@ -169,6 +175,7 @@ struct ProxySQL_PluginServices {
 	proxysql_plugin_db_handle_cb get_admindb;
 	proxysql_plugin_db_handle_cb get_configdb;
 	proxysql_plugin_db_handle_cb get_statsdb;
+#ifdef PROXYSQL40
 	// Step 2 ABI extensions.  Both fields are additive at the end of
 	// the struct -- older plugins that were built against the previous
 	// layout don't read past the previous member; new plugins must
@@ -181,6 +188,7 @@ struct ProxySQL_PluginServices {
 	// plugins avoid the MYSQLX-specific hardcoded alias ladder that
 	// previously lived in lib/Admin_Handler.cpp.
 	proxysql_plugin_register_command_alias_cb register_command_alias;
+#endif /* PROXYSQL40 */
 };
 
 using proxysql_plugin_init_cb =
@@ -197,6 +205,7 @@ using proxysql_plugin_stop_cb =
 using proxysql_plugin_status_json_cb =
 	const char *(*)();
 
+#ifdef PROXYSQL40
 // Phase B entry point: "declare your schema before admin bootstrap."
 //
 // Four-phase plugin lifecycle:
@@ -214,6 +223,7 @@ using proxysql_plugin_status_json_cb =
 // work (the mysqlx plugin does this today).
 using proxysql_plugin_register_schemas_cb =
 	bool (*)(ProxySQL_PluginServices *);
+#endif /* PROXYSQL40 */
 
 struct ProxySQL_PluginDescriptor {
 	const char *name;
@@ -222,6 +232,7 @@ struct ProxySQL_PluginDescriptor {
 	proxysql_plugin_start_cb start;
 	proxysql_plugin_stop_cb stop;
 	proxysql_plugin_status_json_cb status_json;
+#ifdef PROXYSQL40
 	/* Optional: called between load() and init().
 	 * `services` will have register_table available but DB handle getters
 	 * (get_admindb/get_configdb/get_statsdb) will return nullptr. Plugins
@@ -229,10 +240,12 @@ struct ProxySQL_PluginDescriptor {
 	 * init() after admin module bootstrap materializes schema. Plugins that
 	 * leave this field null keep the pre-existing two-phase behavior. */
 	proxysql_plugin_register_schemas_cb register_schemas;
+#endif /* PROXYSQL40 */
 };
 
 using proxysql_plugin_descriptor_v1_t = const ProxySQL_PluginDescriptor *(*)();
 
+#ifdef PROXYSQL40
 // ---------------------------------------------------------------------------
 // ABI guidance: disk/memory/runtime sync — empty-source MUST still clear
 // the destination.
@@ -268,5 +281,6 @@ using proxysql_plugin_descriptor_v1_t = const ProxySQL_PluginDescriptor *(*)();
 // empty source — run the DELETE+INSERT unconditionally inside a single
 // transaction and check each execute() return.
 // ---------------------------------------------------------------------------
+#endif /* PROXYSQL40 */
 
 #endif /* PROXYSQL_PLUGIN_H */

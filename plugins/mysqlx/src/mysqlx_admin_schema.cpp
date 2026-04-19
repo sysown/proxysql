@@ -488,6 +488,7 @@ bool mysqlx_register_admin_schema(ProxySQL_PluginServices& services) {
 		services.register_table(stats_processlist);
 	}
 
+#ifdef PROXYSQL40
 	// User-friendly alias groups that used to live as hardcoded vectors
 	// in lib/Admin_Handler.cpp. Every group maps aliases to the same
 	// canonical the command was registered under.
@@ -553,5 +554,26 @@ bool mysqlx_register_admin_schema(ProxySQL_PluginServices& services) {
 	reg("SAVE MYSQLX BACKEND ENDPOINTS TO DISK", &save_backend_endpoints_to_disk, {});
 	reg("LOAD MYSQLX VARIABLES FROM DISK", &load_variables_from_disk, {});
 	reg("SAVE MYSQLX VARIABLES TO DISK", &save_variables_to_disk, {});
+#else  /* !PROXYSQL40 */
+	// Pre-chassis: aliases are resolved by Admin_Handler's hardcoded
+	// ladder; plugin only needs to register the canonical form of each
+	// command.
+	services.register_command("LOAD MYSQLX USERS TO RUNTIME", &load_users_to_runtime);
+	services.register_command("SAVE MYSQLX USERS TO MEMORY", &save_users_from_runtime);
+	services.register_command("LOAD MYSQLX ROUTES TO RUNTIME", &load_routes_to_runtime);
+	services.register_command("SAVE MYSQLX ROUTES TO MEMORY", &save_routes_from_runtime);
+	services.register_command("LOAD MYSQLX BACKEND ENDPOINTS TO RUNTIME", &load_backend_endpoints_to_runtime);
+	services.register_command("SAVE MYSQLX BACKEND ENDPOINTS TO MEMORY", &save_backend_endpoints_from_runtime);
+	services.register_command("LOAD MYSQLX VARIABLES TO RUNTIME", &load_variables_to_runtime);
+	services.register_command("SAVE MYSQLX VARIABLES TO MEMORY", &save_variables_from_runtime);
+	services.register_command("LOAD MYSQLX USERS FROM DISK", &load_users_from_disk);
+	services.register_command("SAVE MYSQLX USERS TO DISK", &save_users_to_disk);
+	services.register_command("LOAD MYSQLX ROUTES FROM DISK", &load_routes_from_disk);
+	services.register_command("SAVE MYSQLX ROUTES TO DISK", &save_routes_to_disk);
+	services.register_command("LOAD MYSQLX BACKEND ENDPOINTS FROM DISK", &load_backend_endpoints_from_disk);
+	services.register_command("SAVE MYSQLX BACKEND ENDPOINTS TO DISK", &save_backend_endpoints_to_disk);
+	services.register_command("LOAD MYSQLX VARIABLES FROM DISK", &load_variables_from_disk);
+	services.register_command("SAVE MYSQLX VARIABLES TO DISK", &save_variables_to_disk);
+#endif /* PROXYSQL40 */
 	return true;
 }
