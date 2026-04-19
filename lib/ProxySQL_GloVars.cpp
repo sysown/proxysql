@@ -170,6 +170,18 @@ ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
 		free(global.gr_bootstrap_ssl_mode);
 		global.gr_bootstrap_ssl_mode = nullptr;
 	}
+	if (global.tls_cert_file) {
+		free(global.tls_cert_file);
+		global.tls_cert_file = nullptr;
+	}
+	if (global.tls_ca_file) {
+		free(global.tls_ca_file);
+		global.tls_ca_file = nullptr;
+	}
+	if (global.tls_key_file) {
+		free(global.tls_key_file);
+		global.tls_key_file = nullptr;
+	}
 };
 
 ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
@@ -246,6 +258,12 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	global.gr_bootstrap_ssl_key = nullptr;
 	global.gr_bootstrap_ssl_mode = nullptr;
 	global.ssl_keylog_enabled = false;
+	global.tls_load_count = 0;
+	global.tls_last_load_timestamp = 0;
+	global.tls_last_load_ok = false;
+	global.tls_cert_file = NULL;
+	global.tls_ca_file = NULL;
+	global.tls_key_file = NULL;
 	opt = new ez::ezOptionParser();
 	opt->overview = "High Performance Advanced Proxy for MySQL";
 	opt->syntax = "proxysql [OPTIONS]";
@@ -426,6 +444,7 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 		global.clickhouse_server=true;
 	}
 #endif /* PROXYSQLCLICKHOUSE */
+
 	update_string_var_if_set(&global.gr_bootstrap_uri, opt, "--bootstrap");
 	global.gr_bootstrap_mode = opt->isSet("--bootstrap");
 	update_ulong_var_if_set(global.gr_bootstrap_conf_base_port, opt, "--conf-base-port");
@@ -468,6 +487,7 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 	init_coredump_struct();
 
 	proxysql_keylog_init();
+	proxysql_keylog_set_pgsql_callback();
 };
 
 void ProxySQL_GlobalVariables::process_opts_post() {

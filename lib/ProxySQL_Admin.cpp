@@ -153,6 +153,7 @@ static const vector<string> pgsql_servers_tablenames = {
 //	"pgsql_galera_hostgroups",
 //	"pgsql_aws_aurora_hostgroups",
 	"pgsql_hostgroup_attributes",
+	"pgsql_servers_ssl_params",
 };
 
 static const vector<string> mysql_firewall_tablenames = {
@@ -401,6 +402,10 @@ static char * admin_variables_names[]= {
 	(char *)"cluster_mysql_variables_diffs_before_sync",
 	(char *)"cluster_admin_variables_diffs_before_sync",
 	(char *)"cluster_ldap_variables_diffs_before_sync",
+	(char *)"cluster_pgsql_variables_diffs_before_sync",
+	(char *)"cluster_pgsql_query_rules_diffs_before_sync",
+	(char *)"cluster_pgsql_servers_diffs_before_sync",
+	(char *)"cluster_pgsql_users_diffs_before_sync",
 	(char *)"cluster_mysql_query_rules_save_to_disk",
 	(char *)"cluster_mysql_servers_save_to_disk",
 	(char *)"cluster_mysql_users_save_to_disk",
@@ -408,6 +413,10 @@ static char * admin_variables_names[]= {
 	(char *)"cluster_mysql_variables_save_to_disk",
 	(char *)"cluster_admin_variables_save_to_disk",
 	(char *)"cluster_ldap_variables_save_to_disk",
+	(char *)"cluster_pgsql_variables_save_to_disk",
+	(char *)"cluster_pgsql_query_rules_save_to_disk",
+	(char *)"cluster_pgsql_servers_save_to_disk",
+	(char *)"cluster_pgsql_users_save_to_disk",
 	(char *)"cluster_mysql_servers_sync_algorithm",
 	(char *)"checksum_mysql_query_rules",
 	(char *)"checksum_mysql_servers",
@@ -415,6 +424,10 @@ static char * admin_variables_names[]= {
 	(char *)"checksum_mysql_variables",
 	(char *)"checksum_admin_variables",
 	(char *)"checksum_ldap_variables",
+	(char *)"checksum_pgsql_query_rules",
+	(char *)"checksum_pgsql_servers",
+	(char *)"checksum_pgsql_users",
+	(char *)"checksum_pgsql_variables",
 	(char *)"restapi_enabled",
 	(char *)"restapi_port",
 	(char *)"web_enabled",
@@ -886,11 +899,13 @@ incoming_pgsql_servers_t::incoming_pgsql_servers_t(
 	SQLite3_result* incoming_pgsql_servers_v2,
 	SQLite3_result* incoming_replication_hostgroups,
 	SQLite3_result* incoming_hostgroup_attributes,
+	SQLite3_result* incoming_pgsql_servers_ssl_params,
 	SQLite3_result* runtime_pgsql_servers
 ) :
 	incoming_pgsql_servers_v2(incoming_pgsql_servers_v2),
 	incoming_replication_hostgroups(incoming_replication_hostgroups),
 	incoming_hostgroup_attributes(incoming_hostgroup_attributes),
+	incoming_pgsql_servers_ssl_params(incoming_pgsql_servers_ssl_params),
 	runtime_pgsql_servers(runtime_pgsql_servers)
 {}
 
@@ -1087,6 +1102,42 @@ int ProxySQL_Admin::FlushDigestTableToDisk(SQLite3DB *_db) {
 	return r;
 }
 
+/**
+ * @brief Return Top-K query digest rows directly from in-memory digest maps.
+ *
+ * This wrapper centralizes access to Query Processor digest structures so
+ * callers (MCP/Web/Admin tools) do not need to read `stats.*` tables.
+ *
+ * @tparam pt Target protocol (`SERVER_TYPE_MYSQL` or `SERVER_TYPE_PGSQL`).
+ * @param filters In-memory digest filters.
+ * @param sort_by Primary sort metric.
+ * @param limit Requested page size.
+ * @param offset Requested page offset.
+ * @param max_window Maximum number of best rows to retain before pagination.
+ * @return Top-K resultset with matched counters and paged rows.
+ */
+template <enum SERVER_TYPE pt>
+query_digest_topk_result_t ProxySQL_Admin::QueryDigestTopK(
+	const query_digest_filter_opts_t& filters,
+	query_digest_sort_by_t sort_by,
+	uint32_t limit,
+	uint32_t offset,
+	uint32_t max_window
+) {
+	if constexpr (pt == SERVER_TYPE_MYSQL) {
+		if (!GloMyQPro) {
+			return {};
+		}
+		return GloMyQPro->get_query_digests_topk(filters, sort_by, limit, offset, max_window);
+	} else if constexpr (pt == SERVER_TYPE_PGSQL) {
+		if (!GloPgQPro) {
+			return {};
+		}
+		return GloPgQPro->get_query_digests_topk(filters, sort_by, limit, offset, max_window);
+	}
+	return {};
+}
+
 #include "Admin_ifaces.h"
 
 admin_main_loop_listeners S_amll;
@@ -1163,6 +1214,12 @@ void ProxySQL_Admin::flush_pgsql_stats() {
 // NOTE: send_ok_msg_to_client and send_error_msg_to_client instantiations moved to after definitions (near line 5730)
 template int ProxySQL_Admin::FlushDigestTableToDisk<(SERVER_TYPE)0>(SQLite3DB*);
 template int ProxySQL_Admin::FlushDigestTableToDisk<(SERVER_TYPE)1>(SQLite3DB*);
+template query_digest_topk_result_t ProxySQL_Admin::QueryDigestTopK<(SERVER_TYPE)0>(
+	const query_digest_filter_opts_t&, query_digest_sort_by_t, uint32_t, uint32_t, uint32_t
+);
+template query_digest_topk_result_t ProxySQL_Admin::QueryDigestTopK<(SERVER_TYPE)1>(
+	const query_digest_filter_opts_t&, query_digest_sort_by_t, uint32_t, uint32_t, uint32_t
+);
 
 void ProxySQL_Admin::flush_configdb() { // see #923
 	wrlock();
@@ -1220,6 +1277,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_mysql_client_host_cache_reset=false;
 	bool stats_pgsql_client_host_cache = false;
 	bool stats_pgsql_client_host_cache_reset = false;
+	bool stats_tls_certificates=false;
+	bool stats_proxysql_global=false;
 	bool dump_global_variables=false;
 
 	bool runtime_scheduler=false;
@@ -1246,7 +1305,9 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_pgsql_connection_pool = false;
 	bool stats_pgsql_connection_pool_reset = false;
 
+#ifdef PROXYSQLTSDB
 	bool stats_tsdb = false;
+#endif
 
 	bool runtime_proxysql_servers=false;
 	bool runtime_checksums_values=false;
@@ -1386,8 +1447,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_pgsql_query_rules = true; refresh = true; }
 	if (strstr(query_no_space,"stats_mysql_users"))
 		{ stats_mysql_users=true; refresh=true; }
+#ifdef PROXYSQLTSDB
 	if (strstr(query_no_space,"stats_tsdb") || strcasestr(query_no_space,"showtsdbstatus"))
 		{ stats_tsdb=true; refresh=true; }
+#endif
 	if (strstr(query_no_space,"stats_pgsql_users"))
 		{ stats_pgsql_users = true; refresh = true; }
 	if (strstr(query_no_space,"stats_mysql_gtid_executed"))
@@ -1400,6 +1463,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_pgsql_client_host_cache = true; refresh = true; }
 	if (strstr(query_no_space, "stats_pgsql_client_host_cache_reset"))
 		{ stats_pgsql_client_host_cache_reset = true; refresh = true; }
+	if (strstr(query_no_space,"stats_tls_certificates"))
+		{ stats_tls_certificates=true; refresh=true; }
+	if (strstr(query_no_space,"stats_proxysql_global"))
+		{ stats_proxysql_global=true; refresh=true; }
 	if (strstr(query_no_space,"stats_proxysql_servers_checksums"))
 		{ stats_proxysql_servers_checksums = true; refresh = true; }
 	if (strstr(query_no_space,"stats_proxysql_servers_metrics"))
@@ -1491,7 +1558,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 					runtime_mysql_ldap_mapping=true; refresh=true;
 				}
 				if (strstr(query_no_space, "runtime_pgsql_ldap_mapping")) {
-					runtime_mysql_ldap_mapping = true; refresh = true;
+					runtime_pgsql_ldap_mapping = true; refresh = true;
 				}
 			}
 			if (strstr(query_no_space,"runtime_mysql_query_rules")) {
@@ -1611,8 +1678,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			stats___pgsql_commands_counters();
 		if (stats_mysql_users)
 			stats___mysql_users();
+#ifdef PROXYSQLTSDB
 		if (stats_tsdb)
 			stats___tsdb();
+#endif
 		if (stats_pgsql_users)
 			stats___pgsql_users();
 		if (stats_mysql_gtid_executed)
@@ -1657,6 +1726,12 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		if (stats_pgsql_client_host_cache_reset) {
 			stats___pgsql_client_host_cache(true);
 		}
+		if (stats_tls_certificates) {
+			stats___tls_certificates();
+		}
+		if (stats_proxysql_global) {
+			stats___proxysql_global();
+		}
 #ifdef PROXYSQLGENAI
 		if (stats_mcp_query_tools_counters) {
 			stats___mcp_query_tools_counters(false);
@@ -1682,7 +1757,9 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				admindb->execute("DELETE FROM runtime_global_variables");	// extra
 				flush_admin_variables___runtime_to_database(admindb, false, false, false, true);
 				flush_mysql_variables___runtime_to_database(admindb, false, false, false, true);
+#ifdef PROXYSQLTSDB
 				flush_tsdb_variables___runtime_to_database(admindb, false, false, false, true);
+#endif
 #ifdef PROXYSQLCLICKHOUSE
 				flush_clickhouse_variables___runtime_to_database(admindb, false, false, false, true);
 #endif /* PROXYSQLCLICKHOUSE */
@@ -2546,6 +2623,7 @@ __end_while_pool:
 					GloProxyStats->system_memory_sets();
 				}
 #endif
+#ifdef PROXYSQLTSDB
 			if (GloProxyStats->tsdb_sampler_timetoget(curtime)) {
 				GloProxyStats->tsdb_sampler_loop();
 			}
@@ -2558,6 +2636,7 @@ __end_while_pool:
 			if (GloProxyStats->tsdb_retention_timetoget(curtime)) {
 				GloProxyStats->tsdb_retention_cleanup();
 			}
+#endif
 		}
 		if (S_amll.get_version()!=version) {
 			S_amll.wrlock();
@@ -2788,7 +2867,9 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	generate_load_save_disk_commands("mcp_query_rules",   "MCP QUERY RULES");
 	generate_load_save_disk_commands("mcp_variables",     "MCP VARIABLES");
 	generate_load_save_disk_commands("genai_variables",   "GENAI VARIABLES");
+#ifdef PROXYSQLTSDB
 	generate_load_save_disk_commands("tsdb_variables",    "TSDB VARIABLES");
+#endif
 	generate_load_save_disk_commands("scheduler",         "SCHEDULER");
 	generate_load_save_disk_commands("restapi",           "RESTAPI");
 	generate_load_save_disk_commands("proxysql_servers",  "PROXYSQL SERVERS");
@@ -2831,6 +2912,10 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.cluster_mysql_variables_diffs_before_sync = 3;
 	variables.cluster_admin_variables_diffs_before_sync = 3;
 	variables.cluster_ldap_variables_diffs_before_sync = 3;
+	variables.cluster_pgsql_variables_diffs_before_sync = 3;
+	variables.cluster_pgsql_query_rules_diffs_before_sync = 3;
+	variables.cluster_pgsql_servers_diffs_before_sync = 3;
+	variables.cluster_pgsql_users_diffs_before_sync = 3;
 	variables.cluster_mysql_servers_sync_algorithm = 1;
 	checksum_variables.checksum_mysql_query_rules = true;
 	checksum_variables.checksum_mysql_servers = true;
@@ -2838,6 +2923,10 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	checksum_variables.checksum_mysql_variables = true;
 	checksum_variables.checksum_admin_variables = true;
 	checksum_variables.checksum_ldap_variables = true;
+	checksum_variables.checksum_pgsql_query_rules = true;
+	checksum_variables.checksum_pgsql_servers = true;
+	checksum_variables.checksum_pgsql_users = true;
+	checksum_variables.checksum_pgsql_variables = true;
 	variables.cluster_mysql_query_rules_save_to_disk = true;
 	variables.cluster_mysql_servers_save_to_disk = true;
 	variables.cluster_mysql_users_save_to_disk = true;
@@ -2845,6 +2934,10 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.cluster_mysql_variables_save_to_disk = true;
 	variables.cluster_admin_variables_save_to_disk = true;
 	variables.cluster_ldap_variables_save_to_disk = true;
+	variables.cluster_pgsql_variables_save_to_disk = true;
+	variables.cluster_pgsql_query_rules_save_to_disk = true;
+	variables.cluster_pgsql_servers_save_to_disk = true;
+	variables.cluster_pgsql_users_save_to_disk = true;
 	variables.stats_mysql_connection_pool = 60;
 	variables.stats_mysql_connections = 60;
 	variables.stats_mysql_query_cache = 60;
@@ -3066,6 +3159,7 @@ void ProxySQL_Admin::init_genai_variables() {
 }
 #endif /* PROXYSQLGENAI */
 
+#ifdef PROXYSQLTSDB
 void ProxySQL_Admin::init_tsdb_variables() {
 	flush_tsdb_variables___runtime_to_database(configdb, false, false, false, false);
 	flush_tsdb_variables___runtime_to_database(admindb, false, true, false, false);
@@ -3155,6 +3249,7 @@ void ProxySQL_Admin::flush_tsdb_variables___runtime_to_database(SQLite3DB *db, b
 	}
 	free(varnames);
 }
+#endif
 
 void ProxySQL_Admin::admin_shutdown() {
 	int i;
@@ -3840,6 +3935,22 @@ char * ProxySQL_Admin::get_variable(char *name) {
 		snprintf(intbuf, sizeof(intbuf),"%d",variables.cluster_ldap_variables_diffs_before_sync);
 		return strdup(intbuf);
 	}
+	if (!strcasecmp(name,"cluster_pgsql_query_rules_diffs_before_sync")) {
+		snprintf(intbuf, sizeof(intbuf),"%d",variables.cluster_pgsql_query_rules_diffs_before_sync);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"cluster_pgsql_servers_diffs_before_sync")) {
+		snprintf(intbuf, sizeof(intbuf),"%d",variables.cluster_pgsql_servers_diffs_before_sync);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"cluster_pgsql_users_diffs_before_sync")) {
+		snprintf(intbuf, sizeof(intbuf),"%d",variables.cluster_pgsql_users_diffs_before_sync);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"cluster_pgsql_variables_diffs_before_sync")) {
+		snprintf(intbuf, sizeof(intbuf),"%d",variables.cluster_pgsql_variables_diffs_before_sync);
+		return strdup(intbuf);
+	}
 	if (!strcasecmp(name,"cluster_mysql_servers_sync_algorithm")) {
 		snprintf(intbuf, sizeof(intbuf), "%d", variables.cluster_mysql_servers_sync_algorithm);
 		return strdup(intbuf);
@@ -3864,6 +3975,18 @@ char * ProxySQL_Admin::get_variable(char *name) {
 	}
 	if (!strcasecmp(name,"cluster_ldap_variables_save_to_disk")) {
 		return strdup((variables.cluster_ldap_variables_save_to_disk ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"cluster_pgsql_query_rules_save_to_disk")) {
+		return strdup((variables.cluster_pgsql_query_rules_save_to_disk ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"cluster_pgsql_servers_save_to_disk")) {
+		return strdup((variables.cluster_pgsql_servers_save_to_disk ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"cluster_pgsql_users_save_to_disk")) {
+		return strdup((variables.cluster_pgsql_users_save_to_disk ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"cluster_pgsql_variables_save_to_disk")) {
+		return strdup((variables.cluster_pgsql_variables_save_to_disk ? "true" : "false"));
 	}
 	if (!strcasecmp(name,"refresh_interval")) {
 		snprintf(intbuf, sizeof(intbuf),"%d",variables.refresh_interval);
@@ -3897,6 +4020,18 @@ char * ProxySQL_Admin::get_variable(char *name) {
 	}
 	if (!strcasecmp(name,"checksum_ldap_variables")) {
 		return strdup((checksum_variables.checksum_ldap_variables ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"checksum_pgsql_query_rules")) {
+		return strdup((checksum_variables.checksum_pgsql_query_rules ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"checksum_pgsql_servers")) {
+		return strdup((checksum_variables.checksum_pgsql_servers ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"checksum_pgsql_users")) {
+		return strdup((checksum_variables.checksum_pgsql_users ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"checksum_pgsql_variables")) {
+		return strdup((checksum_variables.checksum_pgsql_variables ? "true" : "false"));
 	}
 	if (!strcasecmp(name,"restapi_enabled")) {
 		return strdup((variables.restapi_enabled ? "true" : "false"));
@@ -4285,11 +4420,11 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		if (intv >= 0 && intv <= 1000) {
 			intv = checksum_variables.checksum_mysql_query_rules ? intv : 0;
 			if (variables.cluster_mysql_query_rules_diffs_before_sync == 0 && intv != 0) {
-				proxy_info("Re-enabled previously disabled 'admin-cluster_admin_variables_diffs_before_sync'. Resetting global checksums to force Cluster re-sync.\n");
+				proxy_info("Re-enabled previously disabled 'admin-cluster_mysql_query_rules_diffs_before_sync'. Resetting global checksums to force Cluster re-sync.\n");
 				GloProxyCluster->Reset_Global_Checksums(lock);
 			}
 			variables.cluster_mysql_query_rules_diffs_before_sync=intv;
-			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_query_rules_diffs_before_sync, intv);
+			GloProxyCluster->cluster_mysql_query_rules_diffs_before_sync = intv;
 			return true;
 		} else {
 			return false;
@@ -4304,7 +4439,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 				GloProxyCluster->Reset_Global_Checksums(lock);
 			}
 			variables.cluster_mysql_servers_diffs_before_sync=intv;
-			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_servers_diffs_before_sync, intv);
+			GloProxyCluster->cluster_mysql_servers_diffs_before_sync = intv;
 			return true;
 		} else {
 			return false;
@@ -4319,7 +4454,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 				GloProxyCluster->Reset_Global_Checksums(lock);
 			}
 			variables.cluster_mysql_users_diffs_before_sync=intv;
-			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_users_diffs_before_sync, intv);
+			GloProxyCluster->cluster_mysql_users_diffs_before_sync = intv;
 			return true;
 		} else {
 			return false;
@@ -4333,7 +4468,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 				GloProxyCluster->Reset_Global_Checksums(lock);
 			}
 			variables.cluster_proxysql_servers_diffs_before_sync=intv;
-			__sync_lock_test_and_set(&GloProxyCluster->cluster_proxysql_servers_diffs_before_sync, intv);
+			GloProxyCluster->cluster_proxysql_servers_diffs_before_sync = intv;
 			return true;
 		} else {
 			return false;
@@ -4348,7 +4483,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 				GloProxyCluster->Reset_Global_Checksums(lock);
 			}
 			variables.cluster_mysql_variables_diffs_before_sync=intv;
-			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_variables_diffs_before_sync, intv);
+			GloProxyCluster->cluster_mysql_variables_diffs_before_sync = intv;
 			return true;
 		} else {
 			return false;
@@ -4363,7 +4498,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 				GloProxyCluster->Reset_Global_Checksums(lock);
 			}
 			variables.cluster_admin_variables_diffs_before_sync=intv;
-			__sync_lock_test_and_set(&GloProxyCluster->cluster_admin_variables_diffs_before_sync, intv);
+			GloProxyCluster->cluster_admin_variables_diffs_before_sync = intv;
 			return true;
 		} else {
 			return false;
@@ -4378,7 +4513,67 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 				GloProxyCluster->Reset_Global_Checksums(lock);
 			}
 			variables.cluster_ldap_variables_diffs_before_sync=intv;
-			__sync_lock_test_and_set(&GloProxyCluster->cluster_ldap_variables_diffs_before_sync, intv);
+			GloProxyCluster->cluster_ldap_variables_diffs_before_sync = intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"cluster_pgsql_query_rules_diffs_before_sync")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 1000) {
+			intv = checksum_variables.checksum_pgsql_query_rules ? intv : 0;
+			if (variables.cluster_pgsql_query_rules_diffs_before_sync == 0 && intv != 0) {
+				proxy_info("Re-enabled previously disabled 'admin-cluster_pgsql_query_rules_diffs_before_sync'. Resetting global checksums to force Cluster re-sync.\n");
+				GloProxyCluster->Reset_Global_Checksums(lock);
+			}
+			variables.cluster_pgsql_query_rules_diffs_before_sync=intv;
+			GloProxyCluster->cluster_pgsql_query_rules_diffs_before_sync = intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"cluster_pgsql_servers_diffs_before_sync")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 1000) {
+			intv = checksum_variables.checksum_pgsql_servers ? intv : 0;
+			if (variables.cluster_pgsql_servers_diffs_before_sync == 0 && intv != 0) {
+				proxy_info("Re-enabled previously disabled 'admin-cluster_pgsql_servers_diffs_before_sync'. Resetting global checksums to force Cluster re-sync.\n");
+				GloProxyCluster->Reset_Global_Checksums(lock);
+			}
+			variables.cluster_pgsql_servers_diffs_before_sync=intv;
+			GloProxyCluster->cluster_pgsql_servers_diffs_before_sync = intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"cluster_pgsql_users_diffs_before_sync")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 1000) {
+			intv = checksum_variables.checksum_pgsql_users ? intv : 0;
+			if (variables.cluster_pgsql_users_diffs_before_sync == 0 && intv != 0) {
+				proxy_info("Re-enabled previously disabled 'admin-cluster_pgsql_users_diffs_before_sync'. Resetting global checksums to force Cluster re-sync.\n");
+				GloProxyCluster->Reset_Global_Checksums(lock);
+			}
+			variables.cluster_pgsql_users_diffs_before_sync=intv;
+			GloProxyCluster->cluster_pgsql_users_diffs_before_sync = intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"cluster_pgsql_variables_diffs_before_sync")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 1000) {
+			intv = checksum_variables.checksum_pgsql_variables ? intv : 0;
+			if (variables.cluster_pgsql_variables_diffs_before_sync == 0 && intv != 0) {
+				proxy_info("Re-enabled previously disabled 'admin-cluster_pgsql_variables_diffs_before_sync'. Resetting global checksums to force Cluster re-sync.\n");
+				GloProxyCluster->Reset_Global_Checksums(lock);
+			}
+			variables.cluster_pgsql_variables_diffs_before_sync=intv;
+			GloProxyCluster->cluster_pgsql_variables_diffs_before_sync = intv;
 			return true;
 		} else {
 			return false;
@@ -4583,6 +4778,62 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		}
 		return rt;
 	}
+	if (!strcasecmp(name,"cluster_pgsql_query_rules_save_to_disk")) {
+		bool rt = false;
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.cluster_pgsql_query_rules_save_to_disk=true;
+			rt = __sync_lock_test_and_set(&GloProxyCluster->cluster_pgsql_query_rules_save_to_disk, true);
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.cluster_pgsql_query_rules_save_to_disk=false;
+			rt = __sync_lock_test_and_set(&GloProxyCluster->cluster_pgsql_query_rules_save_to_disk, false);
+			return true;
+		}
+		return rt;
+	}
+	if (!strcasecmp(name,"cluster_pgsql_servers_save_to_disk")) {
+		bool rt = false;
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.cluster_pgsql_servers_save_to_disk=true;
+			rt = __sync_lock_test_and_set(&GloProxyCluster->cluster_pgsql_servers_save_to_disk, true);
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.cluster_pgsql_servers_save_to_disk=false;
+			rt = __sync_lock_test_and_set(&GloProxyCluster->cluster_pgsql_servers_save_to_disk, false);
+			return true;
+		}
+		return rt;
+	}
+	if (!strcasecmp(name,"cluster_pgsql_users_save_to_disk")) {
+		bool rt = false;
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.cluster_pgsql_users_save_to_disk=true;
+			rt = __sync_lock_test_and_set(&GloProxyCluster->cluster_pgsql_users_save_to_disk, true);
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.cluster_pgsql_users_save_to_disk=false;
+			rt = __sync_lock_test_and_set(&GloProxyCluster->cluster_pgsql_users_save_to_disk, false);
+			return true;
+		}
+		return rt;
+	}
+	if (!strcasecmp(name,"cluster_pgsql_variables_save_to_disk")) {
+		bool rt = false;
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.cluster_pgsql_variables_save_to_disk=true;
+			rt = __sync_lock_test_and_set(&GloProxyCluster->cluster_pgsql_variables_save_to_disk, true);
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.cluster_pgsql_variables_save_to_disk=false;
+			rt = __sync_lock_test_and_set(&GloProxyCluster->cluster_pgsql_variables_save_to_disk, false);
+			return true;
+		}
+		return rt;
+	}
 	if (!strcasecmp(name,"checksum_mysql_query_rules")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			checksum_variables.checksum_mysql_query_rules=true;
@@ -4591,7 +4842,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			checksum_variables.checksum_mysql_query_rules=false;
 			variables.cluster_mysql_query_rules_diffs_before_sync = 0;
-			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_query_rules_diffs_before_sync, 0);
+			GloProxyCluster->cluster_mysql_query_rules_diffs_before_sync = 0;
 			proxy_warning("Disabling deprecated 'admin-checksum_mysql_query_rules', setting 'admin-cluster_mysql_query_rules_diffs_before_sync=0'\n");
 			return true;
 		}
@@ -4605,7 +4856,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			checksum_variables.checksum_mysql_servers=false;
 			variables.cluster_mysql_servers_diffs_before_sync = 0;
-			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_servers_diffs_before_sync, 0);
+			GloProxyCluster->cluster_mysql_servers_diffs_before_sync = 0;
 			proxy_warning("Disabling deprecated 'admin-checksum_mysql_servers', setting 'admin-cluster_mysql_servers_diffs_before_sync=0'\n");
 			return true;
 		}
@@ -4620,7 +4871,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			checksum_variables.checksum_mysql_users=false;
 			variables.cluster_mysql_users_diffs_before_sync = 0;
-			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_users_diffs_before_sync, 0);
+			GloProxyCluster->cluster_mysql_users_diffs_before_sync = 0;
 			proxy_warning("Disabling deprecated 'admin-checksum_mysql_users', setting 'admin-cluster_mysql_users_diffs_before_sync=0'\n");
 			return true;
 		}
@@ -4634,7 +4885,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			checksum_variables.checksum_mysql_variables=false;
 			variables.cluster_mysql_variables_diffs_before_sync = 0;
-			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_variables_diffs_before_sync, 0);
+			GloProxyCluster->cluster_mysql_variables_diffs_before_sync = 0;
 			proxy_warning("Disabling deprecated 'admin-checksum_mysql_variables', setting 'admin-cluster_mysql_variables_diffs_before_sync=0'\n");
 			return true;
 		}
@@ -4648,7 +4899,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			checksum_variables.checksum_admin_variables=false;
 			variables.cluster_admin_variables_diffs_before_sync = 0;
-			__sync_lock_test_and_set(&GloProxyCluster->cluster_admin_variables_diffs_before_sync, 0);
+			GloProxyCluster->cluster_admin_variables_diffs_before_sync = 0;
 			proxy_warning("Disabling deprecated 'admin-checksum_admin_variables', setting 'admin-cluster_admin_variables_diffs_before_sync=0'\n");
 			return true;
 		}
@@ -4662,8 +4913,64 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			checksum_variables.checksum_ldap_variables=false;
 			variables.cluster_ldap_variables_diffs_before_sync = 0;
-			__sync_lock_test_and_set(&GloProxyCluster->cluster_ldap_variables_diffs_before_sync, 0);
+			GloProxyCluster->cluster_ldap_variables_diffs_before_sync = 0;
 			proxy_warning("Disabling deprecated 'admin-checksum_ldap_variables', setting 'admin-cluster_ldap_variables_diffs_before_sync=0'\n");
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"checksum_pgsql_query_rules")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			checksum_variables.checksum_pgsql_query_rules=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			checksum_variables.checksum_pgsql_query_rules=false;
+			variables.cluster_pgsql_query_rules_diffs_before_sync = 0;
+			GloProxyCluster->cluster_pgsql_query_rules_diffs_before_sync = 0;
+			proxy_warning("Disabling 'admin-checksum_pgsql_query_rules', setting 'admin-cluster_pgsql_query_rules_diffs_before_sync=0'\n");
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"checksum_pgsql_servers")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			checksum_variables.checksum_pgsql_servers=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			checksum_variables.checksum_pgsql_servers=false;
+			variables.cluster_pgsql_servers_diffs_before_sync = 0;
+			GloProxyCluster->cluster_pgsql_servers_diffs_before_sync = 0;
+			proxy_warning("Disabling 'admin-checksum_pgsql_servers', setting 'admin-cluster_pgsql_servers_diffs_before_sync=0'\n");
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"checksum_pgsql_users")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			checksum_variables.checksum_pgsql_users=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			checksum_variables.checksum_pgsql_users=false;
+			variables.cluster_pgsql_users_diffs_before_sync = 0;
+			GloProxyCluster->cluster_pgsql_users_diffs_before_sync = 0;
+			proxy_warning("Disabling 'admin-checksum_pgsql_users', setting 'admin-cluster_pgsql_users_diffs_before_sync=0'\n");
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"checksum_pgsql_variables")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			checksum_variables.checksum_pgsql_variables=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			checksum_variables.checksum_pgsql_variables=false;
+			variables.cluster_pgsql_variables_diffs_before_sync = 0;
+			GloProxyCluster->cluster_pgsql_variables_diffs_before_sync = 0;
+			proxy_warning("Disabling 'admin-checksum_pgsql_variables', setting 'admin-cluster_pgsql_variables_diffs_before_sync=0'\n");
 			return true;
 		}
 		return false;
@@ -5840,6 +6147,14 @@ void ProxySQL_Admin::flush_ldap_variables__from_memory_to_disk() {
 	admindb->wrunlock();
 }
 
+void ProxySQL_Admin::flush_pgsql_variables__from_memory_to_disk() {
+	admindb->wrlock();
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	admindb->execute("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'pgsql-%'");
+	admindb->execute("PRAGMA foreign_keys = ON");
+	admindb->wrunlock();
+}
+
 void ProxySQL_Admin::__attach_db(SQLite3DB *db1, SQLite3DB *db2, char *alias) {
 	const char *a="ATTACH DATABASE '%s' AS %s";
 	int l=strlen(a)+strlen(db2->get_url())+strlen(alias)+5;
@@ -6613,6 +6928,14 @@ void ProxySQL_Admin::dump_checksums_values_table() {
 	SAFE_SQLITE3_STEP2(statement1);
 	rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, admindb);
 	rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, admindb);
+
+	rc = (*proxy_sqlite3_bind_text)(statement1, 1, "pgsql_servers_v2", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+	rc = (*proxy_sqlite3_bind_int64)(statement1, 2, GloVars.checksums_values.pgsql_servers_v2.version); ASSERT_SQLITE_OK(rc, admindb);
+	rc = (*proxy_sqlite3_bind_int64)(statement1, 3, GloVars.checksums_values.pgsql_servers_v2.epoch); ASSERT_SQLITE_OK(rc, admindb);
+	rc = (*proxy_sqlite3_bind_text)(statement1, 4, GloVars.checksums_values.pgsql_servers_v2.checksum, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+	SAFE_SQLITE3_STEP2(statement1);
+	rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, admindb);
+	rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, admindb);
 	//
 
 
@@ -6676,7 +6999,7 @@ void ProxySQL_Admin::save_mysql_users_runtime_to_database(bool _runtime) {
 		sqlite3_stmt *statement1=NULL;
 
 		if (ads[i]->default_hostgroup >= 0) {
-			if (ad->__frontend) {
+			if (ad->frontend_) {
 				statement1=f_statement1;
 			} else {
 				statement1=b_statement1;
@@ -6759,13 +7082,13 @@ void ProxySQL_Admin::save_pgsql_users_runtime_to_database(bool _runtime) {
 			/*
 			char *q=NULL;
 			if (_runtime==false) {
-				if (ad->__frontend) {
+				if (ad->frontend_) {
 					q=qf;
 				} else {
 					q=qb;
 				}
 			} else { // _runtime==true
-				if (ad->__frontend) {
+				if (ad->frontend_) {
 					q=qfr;
 					statement1=f_statement1;
 				} else {
@@ -6774,7 +7097,7 @@ void ProxySQL_Admin::save_pgsql_users_runtime_to_database(bool _runtime) {
 				}
 			}
 			*/
-			if (ad->__frontend) {
+			if (ad->frontend_) {
 				statement1 = f_statement1;
 			}
 			else {
@@ -6997,13 +7320,13 @@ void ProxySQL_Admin::save_clickhouse_users_runtime_to_database(bool _runtime) {
 		if (ads[i]->default_hostgroup >= 0) {
 			char *q=NULL;
 			if (_runtime==false) {
-				if (ad->__frontend) {
+				if (ad->frontend_) {
 					q=qf;
 				} else {
 					q=qb;
 				}
 			} else { // _runtime==true
-				if (ad->__frontend) {
+				if (ad->frontend_) {
 					q=qfr;
 					statement1=f_statement1;
 				} else {
@@ -7524,7 +7847,7 @@ void ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 11) + 1, atoi(r1->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
 				rc = (*proxy_sqlite3_bind_text)(statement32,  (idx * 11) + 2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 11) + 3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_text)(statement32,  (idx * 11) + 4, (_runtime ? r1->fields[3] : (strcmp(r1->fields[4], "SHUNNED") == 0 ? "ONLINE" : r1->fields[3])), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc = (*proxy_sqlite3_bind_text)(statement32,  (idx * 11) + 4, (_runtime ? r1->fields[3] : (strcmp(r1->fields[3], "SHUNNED") == 0 ? "ONLINE" : r1->fields[3])), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 11) + 5, atoi(r1->fields[4])); ASSERT_SQLITE_OK(rc, admindb);
 				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 11) + 6, atoi(r1->fields[5])); ASSERT_SQLITE_OK(rc, admindb);
 				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 11) + 7, atoi(r1->fields[6])); ASSERT_SQLITE_OK(rc, admindb);
@@ -7643,6 +7966,48 @@ void ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 	}
 	if (resultset) delete resultset;
 	resultset = NULL;
+
+	// dump pgsql_servers_ssl_params
+
+	StrQuery = "DELETE FROM main.";
+	if (_runtime)
+		StrQuery += "runtime_";
+	StrQuery += "pgsql_servers_ssl_params";
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", StrQuery.c_str());
+	admindb->execute(StrQuery.c_str());
+	resultset=PgHGM->dump_table_pgsql("pgsql_servers_ssl_params");
+	if (resultset) {
+		int rc;
+		sqlite3_stmt *statement=NULL;
+		StrQuery = "INSERT INTO ";
+		if (_runtime)
+			StrQuery += "runtime_";
+		StrQuery += "pgsql_servers_ssl_params (hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_crl, ssl_crlpath, ssl_protocol_version_range, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
+		auto [rc1, statement_unique] = admindb->prepare_v2(StrQuery.c_str());
+		rc = rc1;
+		statement = statement_unique.get();
+		ASSERT_SQLITE_OK(rc, admindb);
+
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			rc=(*proxy_sqlite3_bind_text)(statement,  1,  r->fields[0],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // hostname
+			rc=(*proxy_sqlite3_bind_int64)(statement, 2,  atol(r->fields[1]));                  ASSERT_SQLITE_OK(rc, admindb); // port
+			rc=(*proxy_sqlite3_bind_text)(statement,  3,  r->fields[2],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // username
+			rc=(*proxy_sqlite3_bind_text)(statement,  4,  r->fields[3],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_ca
+			rc=(*proxy_sqlite3_bind_text)(statement,  5,  r->fields[4],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_cert
+			rc=(*proxy_sqlite3_bind_text)(statement,  6,  r->fields[5],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_key
+			rc=(*proxy_sqlite3_bind_text)(statement,  7,  r->fields[6],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_crl
+			rc=(*proxy_sqlite3_bind_text)(statement,  8,  r->fields[7],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_crlpath
+			rc=(*proxy_sqlite3_bind_text)(statement,  9,  r->fields[8],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_protocol_version_range
+			rc=(*proxy_sqlite3_bind_text)(statement,  10, r->fields[9],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // comment
+
+			SAFE_SQLITE3_STEP2(statement);
+			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);
+			rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, admindb);
+		}
+	}
+	if(resultset) delete resultset;
+	resultset=NULL;
 }
 
 
@@ -7994,6 +8359,22 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	else {
 		// Pass the resultset to PgHGM
 		PgHGM->save_incoming_pgsql_table(resultset_hostgroup_attributes, "pgsql_hostgroup_attributes");
+	}
+
+	// support for SSL parameters, table pgsql_servers_ssl_params
+	SQLite3_result* resultset_pgsql_servers_ssl_params = NULL;
+	query = (char *)"SELECT * FROM pgsql_servers_ssl_params ORDER BY hostname, port, username";
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	if (incoming_pgsql_servers.incoming_pgsql_servers_ssl_params == nullptr) {
+		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset_pgsql_servers_ssl_params);
+	} else {
+		resultset_pgsql_servers_ssl_params = incoming_pgsql_servers.incoming_pgsql_servers_ssl_params;
+	}
+	if (error) {
+		proxy_error("Error on %s : %s\n", query, error);
+	} else {
+		// Pass the resultset to PgHGM
+		PgHGM->save_incoming_pgsql_table(resultset_pgsql_servers_ssl_params, "pgsql_servers_ssl_params");
 	}
 
 	// commit all the changes
@@ -9042,60 +9423,6 @@ void ProxySQL_Admin::enable_aurora_testing() {
 	load_mysql_query_rules_to_runtime();
 }
 #endif // TEST_AURORA
-
-void ProxySQL_Admin::load_tsdb_variables_to_runtime() {
-	if (GloProxyStats == NULL) {
-		return;
-	}
-	char *error=NULL;
-	int cols=0;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	// TSDB variables are in global_variables named 'tsdb-%'
-	if (flush_GENERIC_variables__retrieve__database_to_runtime("tsdb", error, cols, affected_rows, resultset) == true) {
-		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-			SQLite3_row *r=*it;
-			const char *name = r->fields[0];
-			const char *value = r->fields[1];
-			GloProxyStats->set_variable(name, value);
-		}
-		flush_tsdb_variables___runtime_to_database(admindb, false, false, false, true);
-	}
-	if (resultset) delete resultset;
-}
-
-void ProxySQL_Admin::save_tsdb_variables_from_runtime() {
-	if (GloProxyStats == NULL) {
-		return;
-	}
-	char **tsdb_vars = GloProxyStats->get_variables_list();
-	const char *query = "REPLACE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)";
-
-	stmt_unique_ptr u_stmt { nullptr };
-	int rc;
-
-	std::tie(rc, u_stmt) = admindb->prepare_v2(query);
-	ASSERT_SQLITE_OK(rc, admindb);
-
-	for (int i=0; tsdb_vars[i]; i++) {
-		char *val = GloProxyStats->get_variable(tsdb_vars[i]);
-		if (val) {
-			char qualified_name[128];
-			snprintf(qualified_name, sizeof(qualified_name), "tsdb-%s", tsdb_vars[i]);
-
-			rc = (*proxy_sqlite3_bind_text)(u_stmt.get(), 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_text)(u_stmt.get(), 2, val, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_step)(u_stmt.get());
-			if (rc != SQLITE_DONE) { ASSERT_SQLITE_OK(rc, admindb); }
-			rc = (*proxy_sqlite3_reset)(u_stmt.get()); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_clear_bindings)(u_stmt.get()); ASSERT_SQLITE_OK(rc, admindb);
-
-			free(val);
-		}
-		free(tsdb_vars[i]);
-	}
-	free(tsdb_vars);
-}
 
 #ifdef TEST_GROUPREP
 void ProxySQL_Admin::enable_grouprep_testing() {

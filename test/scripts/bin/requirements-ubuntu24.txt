@@ -1,0 +1,12 @@
+certifi>=2024.7.4
+chardet==4.0.0
+idna>=3.7
+packaging>=20.9
+PyMySQL>=1.1.1
+pyparsing>=2.4.7
+PyYAML>=6.0
+requests>=2.33.0
+six>=1.16.0
+structlog>=20.1.0
+urllib3>=2.6.3
+fastcov

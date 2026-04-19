@@ -19,6 +19,7 @@
 
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 #include <string>
 #include <sstream>
 #include <chrono>
@@ -77,7 +78,7 @@ bool executeQueries(PGconn* conn, const std::vector<std::string>& queries) {
         if (strncasecmp(buf, "SELECT", sizeof("SELECT") - 1) == 0) {
             return PGRES_TUPLES_OK;
         }
-        else if (strncasecmp(buf, "COPY", sizeof("COPY") - 1) == 0) {
+        if (strncasecmp(buf, "COPY", sizeof("COPY") - 1) == 0) {
             return PGRES_COPY_OUT;
         }
 
@@ -172,7 +173,7 @@ bool send_data(int sock, const void* data, size_t len) {
 std::vector<char> build_startup_message(const std::vector<parameter>& parameters) {
     // Build startup message
     std::vector<char> startup_body;
-    int32_t protocol = htonl(0x00030000);  // Protocol 3.0
+    int32_t protocol = static_cast<int32_t>(htonl(0x00030000));  // Protocol 3.0
     startup_body.insert(startup_body.end(), (char*)&protocol, (char*)&protocol + 4);
 
     // Add connection parameters
@@ -201,7 +202,7 @@ std::vector<char> build_startup_message(const std::vector<parameter>& parameters
  */
 std::vector<char> build_password_message(std::string_view password) {
     std::vector<char> password_message;
-    int pass_msg_len = htonl(password.size() + 1 + 4);
+    int pass_msg_len = static_cast<int>(htonl(password.size() + 1 + 4));
     password_message.push_back('p');
     password_message.insert(password_message.end(), (char*)&pass_msg_len, (char*)&pass_msg_len + 4);
     password_message.insert(password_message.end(), password.begin(), password.end());
@@ -221,25 +222,42 @@ std::vector<char> build_password_message(std::string_view password) {
  */
 int connect_server(const std::string& host, int port) {
     int sock;
-    struct sockaddr_in server;
+    struct addrinfo hints, *res = nullptr, *rp;
 
-    // Create socket
-    sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock == -1) {
-        perror("Socket creation failed");
-        return 1;
-    }
+    diag("connect_server: Attempting to connect to %s:%d", host.c_str(), port);
 
-    // Configure server address
-    server.sin_family = AF_INET;
-    server.sin_port = htons(port);
-    server.sin_addr.s_addr = inet_addr(host.c_str());
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
 
-    // Connect to PostgreSQL server
-    if (connect(sock, (struct sockaddr*)&server, sizeof(server)) < 0) {
-        fprintf(stderr, "Connection failed\n");
+    int status = getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &res);
+    if (status != 0) {
+        diag("connect_server: getaddrinfo failed for '%s': %s", host.c_str(), gai_strerror(status));
         return -1;
     }
+
+    for (rp = res; rp != nullptr; rp = rp->ai_next) {
+        sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+        if (sock == -1) {
+            continue;
+        }
+
+        if (connect(sock, rp->ai_addr, rp->ai_addrlen) == 0) {
+            break;  /* Success */
+        }
+
+        close(sock);
+        sock = -1;
+    }
+
+    freeaddrinfo(res);
+
+    if (rp == nullptr) {
+        diag("connect_server: Failed to connect to %s:%d", host.c_str(), port);
+        return -1;
+    }
+
+    diag("connect_server: Successfully connected to %s:%d (sock=%d)", host.c_str(), port, sock);
     return sock;
 }
 
@@ -388,7 +406,7 @@ bool handle_cleartext_auth(int sock, std::string_view password) {
         std::vector<PgSQLResponse> msg_list;
 
         while (true) {
-            int bytes_received = recv(sock, response, sizeof(response), MSG_DONTWAIT);
+            int bytes_received = static_cast<int>(recv(sock, response, sizeof(response), MSG_DONTWAIT));
             if (bytes_received == 0) {
                 fprintf(stderr, "Error: Connection closed in file %s, line %d\n", __FILE__, __LINE__);
                 return false;
@@ -413,7 +431,7 @@ bool handle_cleartext_auth(int sock, std::string_view password) {
                 }
 
                 memcpy(&messageLength, response + offset + 1, 4);
-                messageLength = ntohl(messageLength);
+                messageLength = static_cast<int32_t>(ntohl(messageLength));
 
                 if (offset + messageLength > static_cast<size_t>(bytes_received)) {
                     fprintf(stderr, "Incomplete message body received.\n");
@@ -526,7 +544,7 @@ std::unique_ptr<MyPGresult> execute_query(int sock, const std::string& query) {
                 int32_t field_len;
                 memcpy(&field_len, data + pos, 4);
                 pos += 4;
-                field_len = ntohl(field_len);
+                field_len = static_cast<int32_t>(ntohl(field_len));
 
                 if (field_len == -1) {
                     row.push_back("NULL");
@@ -923,6 +941,20 @@ int main(int argc, char** argv) {
     test_count += test_count_regression;
 
     plan(test_count);
+
+    diag("=== PostgreSQL Connection Parameters Test ===");
+    diag("PURPOSE:");
+    diag("  This test validates ProxySQL's handling of PostgreSQL connection");
+    diag("  parameters, including both standard and undocumented parameters.");
+    diag("TEST SCENARIOS:");
+    diag("  - Test connection with various valid and invalid parameters");
+    diag("  - Verify ProxySQL correctly forwards parameters to backend");
+    diag("  - Regression test for issue #4919 (invalid parameter handling)");
+    diag("CONNECTION INFO:");
+    diag("  PGSQL_HOST: %s, PGSQL_PORT: %d", cl.pgsql_host, cl.pgsql_port);
+    diag("  PGSQL_ADMIN_HOST: %s, PGSQL_ADMIN_PORT: %d", cl.pgsql_admin_host, cl.pgsql_admin_port);
+    diag("===========================================================");
+
 
     if (cl.getEnv())
         return exit_status();

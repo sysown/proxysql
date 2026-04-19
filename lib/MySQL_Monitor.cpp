@@ -26,6 +26,7 @@ using json = nlohmann::json;
 #include "ProxySQL_Cluster.hpp"
 #include "proxysql.h"
 #include "cpp.h"
+#include "MySQL_Resolution.h"
 #include "proxysql_utils.h"
 
 #include "thread.h"
@@ -108,7 +109,7 @@ class ConsumerThread : public Thread {
 	ConsumerThread(wqueue<WorkItem<T>*>& queue, int _n, const char *thread_name=NULL) : m_queue(queue) {
 		thrn=_n;
 		if (thread_name && thread_name[0]) {
-			snprintf(thr_name, sizeof(thr_name), "%.16s", thread_name);
+			snprintf(thr_name, sizeof(thr_name), "%.15s", thread_name);
 		} else {
 			snprintf(thr_name, sizeof(thr_name), "%.12s%03d", typeid(T).name(), thrn);
 		}
@@ -4104,6 +4105,13 @@ void* monitor_GR_thread_HG(void *arg) {
 
 	uint64_t next_check_time = 0;
 	uint64_t MAX_CHECK_DELAY_US = 500000;
+	// On first iteration after thread (re)start, ignore the cached ping state
+	// in mysql_server_ping_log — it may reflect stale failures from before the
+	// monitor was reconfigured (e.g. a previous test left these hostnames
+	// marked unpingable). Probing all configured hosts forces a fresh ping_log
+	// entry, so subsequent iterations see real state instead of skipping
+	// healthcheck_interval seconds while the writer HG stays empty.
+	bool first_iteration = true;
 
 	while (GloMyMon->shutdown == false && mysql_thread___monitor_enabled == true) {
 		if (!GloMTH) { break; } // quick exit during shutdown/restart
@@ -4144,8 +4152,16 @@ void* monitor_GR_thread_HG(void *arg) {
 			continue;
 		}
 
-		// Get the current 'pingable' status for the servers.
-		const vector<gr_host_def_t>& resp_srvs { find_resp_srvs(hosts_defs) };
+		// Get the current 'pingable' status for the servers. See first_iteration
+		// note above: skip the cache filter on the very first cycle so we do not
+		// inherit stale ping failures from before this thread was started.
+		vector<gr_host_def_t> resp_srvs;
+		if (first_iteration) {
+			resp_srvs = hosts_defs;
+			first_iteration = false;
+		} else {
+			resp_srvs = find_resp_srvs(hosts_defs);
+		}
 		if (resp_srvs.empty()) {
 			proxy_error("No node is pingable for Group Replication cluster with writer HG %u\n", wr_hg);
 			next_check_time = curtime + mysql_thread___monitor_groupreplication_healthcheck_interval * 1000;
@@ -4673,17 +4689,17 @@ void* monitor_dns_resolver_thread(const std::vector<DNS_Resolve_Data*>& dns_reso
 	/* set hints for getaddrinfo */
 	memset(&hints, 0, sizeof(hints));
 	hints.ai_protocol = IPPROTO_TCP; 
-	hints.ai_family = AF_UNSPEC;     /*includes: IPv4, IPv6*/
 	hints.ai_socktype = SOCK_STREAM;
 	/* AI_ADDRCONFIG: IPv4 addresses are returned in the list pointed to by res only if the
        local system has at least one IPv4 address configured, and IPv6
        addresses are returned only if the local system has at least one
        IPv6 address configured.  The loopback address is not considered
        for this case as valid as a configured address.  This flag is
-       useful on, for example, IPv4-only systems, to ensure that
-       getaddrinfo() does not return IPv6 socket addresses that would
-       always fail in connect or bind. */
+	        useful on, for example, IPv4-only systems, to ensure that
+	        getaddrinfo() does not return IPv6 socket addresses that would
+	        always fail in connect or bind. */
 	hints.ai_flags = AI_ADDRCONFIG;
+	hints.ai_family = mysql_resolution_family_to_ai_family(mysql_thread___resolution_family);
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Resolving hostname:[%s] to its mapped IP address.\n", dns_resolve_data->hostname.c_str());
 	int gai_rc = getaddrinfo(dns_resolve_data->hostname.c_str(), NULL, &hints, &res);
 	

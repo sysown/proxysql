@@ -11,7 +11,9 @@
 #include <string>
 #include <unistd.h>
 #include <fcntl.h>
+#ifdef __linux__
 #include <sys/eventfd.h>
+#endif
 #include <chrono>
 #include <random>
 #include <thread>
@@ -971,8 +973,6 @@ GenAI_EmbeddingResult GenAI_Threads_Handler::call_llama_batch_embedding(const st
 	headers = curl_slist_append(headers, "Content-Type: application/json");
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
-	// Perform request
-	auto start_time = std::chrono::steady_clock::now();
 	CURLcode res = curl_easy_perform(curl);
 
 	if (res != CURLE_OK) {

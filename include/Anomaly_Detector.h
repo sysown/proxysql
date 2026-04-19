@@ -32,8 +32,8 @@
  * @endcode
  */
 
-#ifndef __CLASS_ANOMALY_DETECTOR_H
-#define __CLASS_ANOMALY_DETECTOR_H
+#ifndef PROXYSQL_ANOMALY_DETECTOR_H
+#define PROXYSQL_ANOMALY_DETECTOR_H
 
 #ifdef PROXYSQLGENAI
 
@@ -86,6 +86,7 @@ struct QueryFingerprint {
  * - Rule-based pattern matching
  */
 class Anomaly_Detector {
+	friend class Anomaly_Detector_TestHelper;
 private:
 	struct {
 		bool enabled;

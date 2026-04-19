@@ -3,8 +3,16 @@
 #include <stdio.h>
 #include <assert.h>
 #include <iostream>
+#include <vector>
+#ifdef __FreeBSD__
+#include <sys/socket.h>
+#endif
 
 static bool DEBUG_ProxyProtocolInfo = false;
+
+#define PROXY_PROTOCOL_STRINGIFY_HELPER(x) #x
+#define PROXY_PROTOCOL_STRINGIFY(x) PROXY_PROTOCOL_STRINGIFY_HELPER(x)
+#define PROXY_PROTOCOL_ADDR_SCAN_FMT "%" PROXY_PROTOCOL_STRINGIFY(INET6_ADDRSTRLEN) "s"
 
 // Function to parse the PROXY protocol header
 bool ProxyProtocolInfo::parseProxyProtocolHeader(const char* packet, size_t packet_length) {
@@ -13,16 +21,16 @@ bool ProxyProtocolInfo::parseProxyProtocolHeader(const char* packet, size_t pack
 		return false; // Not a valid PROXY protocol header
 	}
 
-	// Create a temporary buffer on the stack
-	char temp_buffer[packet_length + 1]; 
+	// Copy the header into a NUL-terminated buffer before using C string parsers.
+	std::vector<char> temp_buffer(packet_length + 1);
 
 	// Copy the packet data
-	memcpy(temp_buffer, packet, packet_length);
+	memcpy(temp_buffer.data(), packet, packet_length);
 	temp_buffer[packet_length] = '\0'; // Null-terminate the buffer
 
 
 	// Verify the PROXY protocol signature
-	if (memcmp(temp_buffer, "PROXY", 5) != 0) {
+	if (memcmp(temp_buffer.data(), "PROXY", 5) != 0) {
 		return false; // Not a valid PROXY protocol header
 	}
 
@@ -32,14 +40,17 @@ bool ProxyProtocolInfo::parseProxyProtocolHeader(const char* packet, size_t pack
 	}
 
 	// Check for the protocol type
-	if (memcmp(temp_buffer + 6, "TCP4", 4) == 0 ||
-		memcmp(temp_buffer + 6, "TCP6", 4) == 0 ||
-		memcmp(temp_buffer + 6, "UNKNOWN", 7) == 0) {
+	if (memcmp(temp_buffer.data() + 6, "TCP4", 4) == 0 ||
+		memcmp(temp_buffer.data() + 6, "TCP6", 4) == 0 ||
+		memcmp(temp_buffer.data() + 6, "UNKNOWN", 7) == 0) {
 
 		// Parse the header using sscanf
-		int result = sscanf(temp_buffer, "PROXY %*s %s %s %hu %hu\r\n", 
+		int result = sscanf(
+			temp_buffer.data(),
+			"PROXY %*s " PROXY_PROTOCOL_ADDR_SCAN_FMT " " PROXY_PROTOCOL_ADDR_SCAN_FMT " %hu %hu\r\n",
 						   source_address, destination_address, 
-						   &source_port, &destination_port);
+						   &source_port, &destination_port
+		);
 
 		// Check if sscanf successfully parsed all fields
 		if (result == 4) {
@@ -241,7 +252,9 @@ sockaddr_in6 ProxyProtocolInfo::create_ipv6_addr(const std::string& ip) {
 }
 
 // Test cases for the is_in_network function
+#ifdef DEBUG
 void ProxyProtocolInfo::run_tests() {
+#endif
 	// IPv4 Tests
 	{
 		sockaddr_in client_addr = create_ipv4_addr("192.168.1.10");

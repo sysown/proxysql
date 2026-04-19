@@ -16,6 +16,7 @@
 CommandLine cl;
 
 constexpr unsigned int MAX_ITERATION = 10;
+std::string g_proxysql_log_path {};
 
 using PGConnPtr = std::unique_ptr<PGconn, decltype(&PQfinish)>;
 
@@ -103,8 +104,23 @@ bool sendCopyData(PGconn* conn, const char* data, int size, bool last) {
 }
 
 bool check_logs_for_command(std::fstream& f_proxysql_log, const std::string& command_regex) {
-    const auto& [_, cmd_lines] { get_matching_lines(f_proxysql_log, command_regex) };
-	return cmd_lines.empty() ? false : true;
+    // Retry with small delays to handle the race between ProxySQL writing
+    // the log line and the test reading it. The stream-based approach
+    // (get_matching_lines) can miss a line that hasn't been flushed yet.
+    constexpr int max_retries = 10;
+    constexpr useconds_t retry_delay_us = 10000; // 10ms
+    for (int i = 0; i < max_retries; i++) {
+        // First try the stream-based check (fast path, no filesystem hit)
+        const auto& [_, cmd_lines] { get_matching_lines(f_proxysql_log, command_regex) };
+        if (!cmd_lines.empty()) {
+            return true;
+        }
+        // Stream didn't find it yet — wait and retry from the file
+        usleep(retry_delay_us);
+    }
+    // Final attempt: read directly from file to avoid any stream position issues
+    const auto& [_, cmd_lines] { get_matching_lines_from_filename(g_proxysql_log_path, command_regex, false, 0) };
+    return !cmd_lines.empty();
 }
 
 bool setupTestTable(PGconn* conn) {
@@ -262,6 +278,7 @@ int main(int argc, char** argv) {
         return exit_status();
 
     std::string f_path{ get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log" };
+    g_proxysql_log_path = f_path;
     std::fstream f_proxysql_log{};
 
     int of_err = open_file_and_seek_end(f_path, f_proxysql_log);

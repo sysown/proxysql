@@ -19,7 +19,7 @@ class LogBufferThreadContext;
 class MySQL_Logger;
 
 struct p_ml_counter {
-	enum metric {
+	enum metric : uint8_t {
 		memory_copy_count = 0,
 		disk_copy_count,
 		get_all_events_calls_count,
@@ -31,14 +31,14 @@ struct p_ml_counter {
 		total_events_copied_to_disk,
 		circular_buffer_events_added_count,
 		circular_buffer_events_dropped_count,
-		__size
+		SIZE_
 	};
 };
 
 struct p_ml_gauge {
-	enum metric {
+	enum metric : uint8_t {
 		circular_buffer_events_size,
-		__size
+		SIZE_
 	};
 };
 
@@ -392,8 +392,8 @@ private:
 	 * @brief Structure holding the exposed Prometheus metrics for MySQL event logger.
 	 */
 	struct {
-		std::array<prometheus::Counter*, p_ml_counter::__size> p_counter_array {};
-		std::array<prometheus::Gauge*, p_ml_gauge::__size> p_gauge_array {};
+		std::array<prometheus::Counter*, p_ml_counter::SIZE_> p_counter_array {};
+		std::array<prometheus::Gauge*, p_ml_gauge::SIZE_> p_gauge_array {};
 		prometheus::Counter* p_queries_logged_total { nullptr };
 	} prom_metrics;
 

@@ -4,8 +4,8 @@
  */
 
 #ifdef CLASS_BASE_SESSION_H
-#ifndef __CLASS_MYSQL_SESSION_H
-#define __CLASS_MYSQL_SESSION_H
+#ifndef PROXYSQL_MYSQL_SESSION_H
+#define PROXYSQL_MYSQL_SESSION_H
 
 #include <functional>
 #include <vector>
@@ -104,9 +104,9 @@ class Query_Info {
 	Query_Info();
 	~Query_Info();
 	void init(unsigned char *_p, int len, bool mysql_header=false);
-	void query_parser_init(); 
-	enum MYSQL_COM_QUERY_command query_parser_command_type(); 
-	void query_parser_free(); 
+	void query_parser_init();
+	enum MYSQL_COM_QUERY_command query_parser_command_type();
+	void query_parser_free();
 	unsigned long long query_parser_update_counters();
 	void begin(unsigned char *_p, int len, bool mysql_header=false);
 	void end();
@@ -138,6 +138,8 @@ inline void Query_Info::set_end_time(unsigned long long time) {
 	end_time = start_time;
 #endif // CLOCK_MONOTONIC_RAW
 }
+
+class TrafficObserver;
 
 /**
  * @class MySQL_Session
@@ -193,7 +195,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(PtrSize_t *);
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *, bool *lock_hostgroup, ps_type prepare_stmt_type=ps_type_not_set);
 
-	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();	
+	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();
 
 	//void return_proxysql_internal(PtrSize_t *);
 	bool handler_special_queries(PtrSize_t *);
@@ -324,6 +326,9 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	// GPFC_ functions are subfunctions of get_pkts_from_client()
 	int GPFC_Statuses2(bool&, PtrSize_t&);
 	void GPFC_DetectedMultiPacket_SetDDS();
+#ifdef PROXYSQLFFTO
+	void observe_ffto_client_packet(const PtrSize_t& pkt);
+#endif
 	int GPFC_WaitingClientData_FastForwardSession(PtrSize_t&);
 	void GPFC_PreparedStatements(PtrSize_t&, unsigned char);
 	int GPFC_Replication_SwitchToFastForward(PtrSize_t&, unsigned char);
@@ -566,8 +571,14 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	StmtLongDataHandler *SLDH;
 
 	Session_Regex **match_regexes;
+#ifdef PROXYSQLFFTO
+	std::unique_ptr<TrafficObserver> m_ffto;
+	bool ffto_bypassed { false };
+#endif
 
-	ProxySQL_Node_Address * proxysql_node_address; // this is used ONLY for Admin, and only if the other party is another proxysql instance part of a cluster
+	ProxySQL_Node_Address * proxysql_node_address;
+
+	 // this is used ONLY for Admin, and only if the other party is another proxysql instance part of a cluster
 	bool use_ldap_auth;
 	// Fast forward grace close flags: track backend closure during fast forward mode
 	// to allow pending client data to drain before closing the session.
@@ -581,7 +592,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	~MySQL_Session();
 
 	//void set_unhealthy();
-	
+
 	void set_status(enum session_status e);
 	int handler();
 
@@ -589,9 +600,9 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	//MySQL_Backend * find_backend(int);
 	//MySQL_Backend * create_backend(int, MySQL_Data_Stream *_myds=NULL);
 	//MySQL_Backend * find_or_create_backend(int, MySQL_Data_Stream *_myds=NULL);
-	
+
 	void SQLite3_to_MySQL(SQLite3_result *, char *, int , MySQL_Protocol *, bool in_transaction=false, bool deprecate_eof_active=false) override;
-	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, unsigned int warning_count, MySQL_Data_Stream *_myds=NULL);
+	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, unsigned int warning_count, MySQL_Data_Stream *_myds=nullptr);
 	void MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Connection *myconn);
 	//unsigned int NumActiveTransactions(bool check_savpoint=false);
 	//bool HasOfflineBackends();
@@ -655,6 +666,9 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 
 	friend void SQLite3_Server_session_handler(MySQL_Session*, void *_pa, PtrSize_t *pkt);
 
+	MySQL_Session(const MySQL_Session&) = delete;
+	MySQL_Session& operator=(const MySQL_Session&) = delete;
+
 #if defined(__clang__)
 	template<typename SESS, typename DS, typename BE, typename THD>
 	friend class Base_Session;
@@ -682,6 +696,8 @@ public:
 	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned int _hid, unsigned long i, int kt, int _use_ssl, MySQL_Thread* _mt, char *ip);
 	~KillArgs();
 	const char* get_host_address() const;
+	KillArgs(const KillArgs&) = delete;
+	KillArgs& operator=(const KillArgs&) = delete;
 
 private:
 	char* ip_addr;
@@ -689,5 +705,5 @@ private:
 
 void * kill_query_thread(void *arg);
 
-#endif /* __CLASS_MYSQL_SESSION_ H */
+#endif /* PROXYSQL_MYSQL_SESSION_H */
 #endif // CLASS_BASE_SESSION_H

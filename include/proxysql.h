@@ -54,6 +54,18 @@
 #include "mariadb_com.h"
 #include "proxysql_mem.h"
 
+#if !defined(CLIENT_ZSTD_COMPRESSION_ALGORITHM) && defined(CLIENT_ZSTD_COMPRESSION)
+#define CLIENT_ZSTD_COMPRESSION_ALGORITHM CLIENT_ZSTD_COMPRESSION
+#endif
+
+#if !defined(CLIENT_ZSTD_COMPRESSION_ALGORITHM)
+#define CLIENT_ZSTD_COMPRESSION_ALGORITHM 0
+#endif
+
+#if !defined(CLIENT_ZSTD_COMPRESSION)
+#define CLIENT_ZSTD_COMPRESSION CLIENT_ZSTD_COMPRESSION_ALGORITHM
+#endif
+
 #include "proxysql_structs.h"
 #include "proxysql_debug.h"
 #include "proxysql_macros.h"
@@ -61,11 +73,13 @@
 #include "proxysql_sslkeylog.h"
 #include "jemalloc.h"
 
+#ifdef PROXYSQLGENAI
 // AI Features includes
 #include "AI_Features_Manager.h"
 #include "LLM_Bridge.h"
 #include "Anomaly_Detector.h"
 #include "AI_Vector_Storage.h"
+#endif /* PROXYSQLGENAI */
 
 #ifndef NOJEM
 #if defined(__APPLE__) && defined(__MACH__)

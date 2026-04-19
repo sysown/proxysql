@@ -10,6 +10,7 @@
 
 #include "tap.h"
 #include "command_line.h"
+#include "noise_utils.h"
 #include "utils.h"
 
 /*
@@ -25,11 +26,15 @@ int main(int argc, char** argv) {
 	if(cl.getEnv())
 		return exit_status();
 
+	spawn_internal_noise(cl, internal_noise_random_stats_poller);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
+	spawn_internal_noise(cl, internal_noise_pgsql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}, {"avg_delay_ms", "300"}});
+
 
 	char * p_infra_datadir = std::getenv("REGULAR_INFRA_DATADIR");
 	if (p_infra_datadir == NULL) {
 		// quick exit
-		plan(1);
+		plan(1 + (cl.use_noise ? 3 : 0));
 		ok(0, "REGULAR_INFRA_DATADIR not defined");
 		return exit_status();
 	}
@@ -58,7 +63,7 @@ int main(int argc, char** argv) {
 
 	if (pemfiles.size() == 0) {
 		// quick exit
-		plan(1);
+		plan(1 + (cl.use_noise ? 3 : 0));
 		ok(0, "No PEM files found");
 		return exit_status();
 	}
@@ -83,7 +88,6 @@ int main(int argc, char** argv) {
 		MYSQL_QUERY(mysqladmin, q);
 		res = mysql_store_result(mysqladmin);
 		MYSQL_ROW row;
-		unsigned long long num_rows = mysql_num_rows(res);
 		while ((row = mysql_fetch_row(res))) {
 				int hg = atoi(row[0]);
 				diag("Retrieve HG id: %d", hg);
@@ -93,10 +97,10 @@ int main(int argc, char** argv) {
 	}
 
 	if (hgs.size() > 0 ) {
-		plan(hgs.size()*pemfiles.size());
+		plan(hgs.size()*pemfiles.size() + (cl.use_noise ? 3 : 0));
 	} else {
 		// quick exit
-		plan(1);
+		plan(1 + (cl.use_noise ? 3 : 0));
 		ok(0, "No hostgroups found");
 		return exit_status();
 	}

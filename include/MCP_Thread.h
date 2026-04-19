@@ -1,5 +1,5 @@
-#ifndef __CLASS_MCP_THREAD_H
-#define __CLASS_MCP_THREAD_H
+#ifndef PROXYSQL_MCP_THREAD_H
+#define PROXYSQL_MCP_THREAD_H
 
 #ifdef PROXYSQLGENAI
 
@@ -20,7 +20,7 @@ class Config_Tool_Handler;
 class Query_Tool_Handler;
 class Admin_Tool_Handler;
 class Cache_Tool_Handler;
-class Observe_Tool_Handler;
+class Stats_Tool_Handler;
 class AI_Tool_Handler;
 class RAG_Tool_Handler;
 class SQLite3_result;
@@ -67,19 +67,38 @@ public:
 		int mcp_port;                           ///< HTTP/HTTPS port for MCP server (default: 6071)
 		bool mcp_use_ssl;                       ///< Enable/disable SSL/TLS (default: true)
 		char* mcp_config_endpoint_auth;         ///< Authentication for /mcp/config endpoint
-		char* mcp_observe_endpoint_auth;        ///< Authentication for /mcp/observe endpoint
+		char* mcp_stats_endpoint_auth;          ///< Authentication for /mcp/stats endpoint
 		char* mcp_query_endpoint_auth;          ///< Authentication for /mcp/query endpoint
 		char* mcp_admin_endpoint_auth;          ///< Authentication for /mcp/admin endpoint
 		char* mcp_cache_endpoint_auth;          ///< Authentication for /mcp/cache endpoint
+		char* mcp_ai_endpoint_auth;             ///< Authentication for /mcp/ai endpoint
 		char* mcp_rag_endpoint_auth;            ///< Authentication for /mcp/rag endpoint
 
 		int mcp_timeout_ms;                     ///< Request timeout in milliseconds (default: 30000)
-		// MySQL Tool Handler configuration
-		char* mcp_mysql_hosts;                  ///< Comma-separated list of MySQL hosts
-		char* mcp_mysql_ports;                  ///< Comma-separated list of MySQL ports
-		char* mcp_mysql_user;                   ///< MySQL username for tool connections
-		char* mcp_mysql_password;               ///< MySQL password for tool connections
-		char* mcp_mysql_schema;                 ///< Default schema/database
+			/**
+			 * @brief Runtime cap for `stats.show_queries` retained Top-K window.
+			 *
+			 * The MCP handler enforces this as a configurable upper bound for the
+			 * caller-requested page (`limit + offset`). It is further bounded by a
+			 * hardcoded safety maximum in `Stats_Tool_Handler`.
+			 */
+			int mcp_stats_show_queries_max_rows;
+			/**
+			 * @brief Runtime cap for `stats.show_processlist` returned rows.
+			 *
+			 * The handler applies this as an upper bound for caller-requested page
+			 * size (`limit`). The configurable value is itself clamped by a
+			 * hardcoded safety maximum in `Stats_Tool_Handler`.
+			 */
+			int mcp_stats_show_processlist_max_rows;
+			/**
+			 * @brief Enables MCP debug-oriented stats tools.
+			 *
+			 * When set to `false` (default), tools intended primarily for
+			 * troubleshooting and development diagnostics are hidden/blocked
+			 * from regular MCP usage.
+			 */
+			bool mcp_stats_enable_debug_tools;
 		// Catalog path is hardcoded to mcp_catalog.db in the datadir
 	} variables;
 
@@ -119,7 +138,7 @@ public:
 	 * - query_tool_handler: /mcp/query endpoint (includes two-phase discovery tools)
 	 * - admin_tool_handler: /mcp/admin endpoint
 	 * - cache_tool_handler: /mcp/cache endpoint
-	 * - observe_tool_handler: /mcp/observe endpoint
+	 * - stats_tool_handler: /mcp/stats endpoint
 	 * - ai_tool_handler: /mcp/ai endpoint
 	 * - rag_tool_handler: /mcp/rag endpoint
 	 */
@@ -127,7 +146,7 @@ public:
 	Query_Tool_Handler* query_tool_handler;
 	Admin_Tool_Handler* admin_tool_handler;
 	Cache_Tool_Handler* cache_tool_handler;
-	Observe_Tool_Handler* observe_tool_handler;
+	Stats_Tool_Handler* stats_tool_handler;
 	AI_Tool_Handler* ai_tool_handler;
 	RAG_Tool_Handler* rag_tool_handler;
 

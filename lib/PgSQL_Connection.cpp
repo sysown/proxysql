@@ -2,6 +2,7 @@
 #include <fcntl.h>
 #include <sstream>
 #include <atomic>
+#include <memory>
 
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
@@ -798,6 +799,7 @@ handler_again:
 	case ASYNC_STMT_DESCRIBE_END:
 	case ASYNC_STMT_EXECUTE_END:
 		PROXY_TRACE2();
+
 		if (is_error_present()) {
 			compute_unknown_transaction_status();
 		} else {
@@ -919,6 +921,7 @@ handler_again:
 	}
 	break;
 	case ASYNC_RESET_SESSION_END:
+		PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::unhandled_notice_cb, this);
 		if (is_error_present()) {
 			NEXT_IMMEDIATE(ASYNC_RESET_SESSION_FAILED);
 		}
@@ -961,14 +964,36 @@ void PgSQL_Connection::connect_start() {
 	//conninfo << "require_auth=" << AUTHENTICATION_METHOD_STR[pgsql_thread___authentication_method]; // authentication method
 	if (parent->use_ssl) {
 		conninfo << "sslmode='require' "; // SSL required
-		append_conninfo_param(conninfo, "sslkey", pgsql_thread___ssl_p2s_key);
-		append_conninfo_param(conninfo, "sslcert", pgsql_thread___ssl_p2s_cert);
-		append_conninfo_param(conninfo, "sslrootcert", pgsql_thread___ssl_p2s_ca);
-		append_conninfo_param(conninfo, "sslcrl", pgsql_thread___ssl_p2s_crl);
-		append_conninfo_param(conninfo, "sslcrldir", pgsql_thread___ssl_p2s_crlpath);
-		// Only supported in PostgreSQL Server
-		// if (pgsql_thread___ssl_p2s_cipher)
-		//	  conninfo << "sslcipher=" << pgsql_thread___ssl_p2s_cipher << " ";
+		std::unique_ptr<PgSQLServers_SslParams> ssl_params {
+			PgHGM->get_Server_SSL_Params(parent->address, parent->port, userinfo->username)
+		};
+		if (ssl_params != nullptr) {
+			// Use per-server SSL params
+			if (ssl_params->ssl_key.length() > 0)
+				append_conninfo_param(conninfo, "sslkey", (char*)ssl_params->ssl_key.c_str());
+			if (ssl_params->ssl_cert.length() > 0)
+				append_conninfo_param(conninfo, "sslcert", (char*)ssl_params->ssl_cert.c_str());
+			if (ssl_params->ssl_ca.length() > 0)
+				append_conninfo_param(conninfo, "sslrootcert", (char*)ssl_params->ssl_ca.c_str());
+			if (ssl_params->ssl_crl.length() > 0)
+				append_conninfo_param(conninfo, "sslcrl", (char*)ssl_params->ssl_crl.c_str());
+			if (ssl_params->ssl_crlpath.length() > 0)
+				append_conninfo_param(conninfo, "sslcrldir", (char*)ssl_params->ssl_crlpath.c_str());
+			// ssl_protocol_version_range was pre-parsed at PgSQLServers_SslParams
+			// construction time (see parse_tls_version()). Empty min/max means
+			// either unset or malformed — in both cases libpq defaults apply.
+			if (ssl_params->ssl_min_protocol_version.length() > 0)
+				append_conninfo_param(conninfo, "ssl_min_protocol_version", (char*)ssl_params->ssl_min_protocol_version.c_str());
+			if (ssl_params->ssl_max_protocol_version.length() > 0)
+				append_conninfo_param(conninfo, "ssl_max_protocol_version", (char*)ssl_params->ssl_max_protocol_version.c_str());
+		} else {
+			// Fall back to global SSL settings
+			append_conninfo_param(conninfo, "sslkey", pgsql_thread___ssl_p2s_key);
+			append_conninfo_param(conninfo, "sslcert", pgsql_thread___ssl_p2s_cert);
+			append_conninfo_param(conninfo, "sslrootcert", pgsql_thread___ssl_p2s_ca);
+			append_conninfo_param(conninfo, "sslcrl", pgsql_thread___ssl_p2s_crl);
+			append_conninfo_param(conninfo, "sslcrldir", pgsql_thread___ssl_p2s_crlpath);
+		}
 	} else {
 		conninfo << "sslmode='disable' "; // not supporting SSL
 	}
@@ -1212,7 +1237,7 @@ void PgSQL_Connection::fetch_result_cont(short event) {
 	}
 }
 
-void PgSQL_Connection::flush() {
+void PgSQL_Connection::flush(bool is_resync) {
 	int res = PQflush(pgsql_conn);
 
 	if (res > 0) {
@@ -1222,7 +1247,11 @@ void PgSQL_Connection::flush() {
 		async_exit_status = PG_EVENT_READ;
 	}
 	else {
-		set_error_from_PQerrorMessage();
+		if (!is_resync) {
+			set_error_from_PQerrorMessage();
+		} else {
+			resync_failed = true;
+		}
 		proxy_error("Failed to flush data to backend. %s\n", get_error_code_with_message().c_str());
 		async_exit_status = PG_EVENT_NONE;
 	}
@@ -1555,41 +1584,34 @@ int PgSQL_Connection::async_ping(short event) {
 }
 
 bool PgSQL_Connection::IsKnownActiveTransaction() {
-	bool in_txn = false;
-	if (pgsql_conn) {
-		// Get the transaction status
-		PGTransactionStatusType status = PQtransactionStatus(pgsql_conn);
-		if (status == PQTRANS_INTRANS || status == PQTRANS_INERROR) {
-			in_txn = true;
-		}
+	if (!pgsql_conn) return false;
+
+	PGTransactionStatusType status = PQtransactionStatus(pgsql_conn);
+	if (status == PQTRANS_INTRANS || status == PQTRANS_INERROR) {
+		return true;
 	}
-	return in_txn;
+
+	// In pipeline mode, libpq status may be stale because ReadyForQuery hasn't been processed yet
+	// Use the session's transaction state manager which tracks BEGIN/COMMIT/ROLLBACK via SQL parsing
+	if (PQpipelineStatus(pgsql_conn) == PQ_PIPELINE_ON && myds && myds->sess) {
+		return myds->sess->is_in_transaction();
+	}
+
+	return false;
 }
 
 bool PgSQL_Connection::IsActiveTransaction() {
-	bool in_txn = false;
-	if (pgsql_conn) {
-
-		// Get the transaction status
-		PGTransactionStatusType status = PQtransactionStatus(pgsql_conn);
-
-		switch (status) {
-		case PQTRANS_INTRANS:
-		case PQTRANS_INERROR:
-			in_txn = true;
-			break;
-		case PQTRANS_UNKNOWN:
-		case PQTRANS_IDLE:
-		case PQTRANS_ACTIVE:
-		default:
-			in_txn = false;
-		}
-
-		if (in_txn == false && is_error_present() && unknown_transaction_status == true) {
-			in_txn = true;
-		} 
+	// First check known state
+	if (IsKnownActiveTransaction()) {
+		return true;
 	}
-	return in_txn;
+
+	// Check unknown transaction status flag
+	if (is_error_present() && unknown_transaction_status) {
+		return true;
+	}
+
+	return false;
 }
 
 bool PgSQL_Connection::IsServerOffline() {
@@ -1773,7 +1795,7 @@ void PgSQL_Connection::resync_start() {
 		resync_failed = true;
 		return;
 	}
-	async_exit_status = PG_EVENT_WRITE;
+	flush(true);
 }
 
 void PgSQL_Connection::resync_cont(short event) {
@@ -1781,17 +1803,7 @@ void PgSQL_Connection::resync_cont(short event) {
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6, "event=%d\n", event);
 	async_exit_status = PG_EVENT_NONE;
 	if (event & POLLOUT) {
-		int res = PQflush(pgsql_conn);
-
-		if (res > 0) {
-			async_exit_status = PG_EVENT_WRITE;
-		} else if (res == 0) {
-			async_exit_status = PG_EVENT_READ;
-		} else {
-			proxy_error("Failed to flush data to backend.\n");
-			async_exit_status = PG_EVENT_NONE;
-			resync_failed = true;
-		}
+		flush(true);
 	}
 }
 
@@ -1940,6 +1952,7 @@ void PgSQL_Connection::reset_session_start() {
 	assert(pgsql_conn);
 	reset_error();
 	async_exit_status = PG_EVENT_NONE;
+	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::notice_handler_cb, this);
 
 	reset_session_in_pipeline = is_pipeline_active();
 	if (reset_session_in_pipeline) {
@@ -2195,6 +2208,15 @@ bool PgSQL_Connection::handle_copy_out(const PGresult* result, uint64_t* process
 void PgSQL_Connection::notice_handler_cb(void* arg, const PGresult* result) {
 	assert(arg);
 	PgSQL_Connection* conn = (PgSQL_Connection*)arg;
+	if (conn->query_result == nullptr) {
+		// Notice received without active query_result. This can happen when:
+		// - RESET SESSION is in progress (DISCARD ALL or ROLLBACK)
+		proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Notice received without active query_result [State: %d, FD: %d]: %s\n",
+			(int)conn->async_state_machine,
+			conn->get_pg_socket_fd(),
+			(result ? PQresultErrorMessage(result) : "unknown notice"));
+		return;
+	}
 	const unsigned int bytes_recv = conn->query_result->add_notice(result);
 	conn->update_bytes_recv(bytes_recv);
 }
@@ -2942,17 +2964,34 @@ PgSQL_Backend_Kill_Args::PgSQL_Backend_Kill_Args(PGconn* conn, const char* user,
 	backend_pid = PQbackendPID(conn);
 	ssl_config.use_ssl = ssl;
 	if (ssl) {
-		ssl_config.sslkey = pgsql_thread___ssl_p2s_key ? strdup(pgsql_thread___ssl_p2s_key) : nullptr;
-		ssl_config.sslcert = pgsql_thread___ssl_p2s_cert ? strdup(pgsql_thread___ssl_p2s_cert) : nullptr;
-		ssl_config.sslrootcert = pgsql_thread___ssl_p2s_ca ? strdup(pgsql_thread___ssl_p2s_ca) : nullptr;
-		ssl_config.sslcrl = pgsql_thread___ssl_p2s_crl ? strdup(pgsql_thread___ssl_p2s_crl) : nullptr;
-		ssl_config.sslcrldir = pgsql_thread___ssl_p2s_crlpath ? strdup(pgsql_thread___ssl_p2s_crlpath) : nullptr;
+		std::unique_ptr<PgSQLServers_SslParams> params {
+			PgHGM->get_Server_SSL_Params(hostname, port, username)
+		};
+		if (params != nullptr) {
+			ssl_config.sslkey = params->ssl_key.length() > 0 ? strdup(params->ssl_key.c_str()) : nullptr;
+			ssl_config.sslcert = params->ssl_cert.length() > 0 ? strdup(params->ssl_cert.c_str()) : nullptr;
+			ssl_config.sslrootcert = params->ssl_ca.length() > 0 ? strdup(params->ssl_ca.c_str()) : nullptr;
+			ssl_config.sslcrl = params->ssl_crl.length() > 0 ? strdup(params->ssl_crl.c_str()) : nullptr;
+			ssl_config.sslcrldir = params->ssl_crlpath.length() > 0 ? strdup(params->ssl_crlpath.c_str()) : nullptr;
+			ssl_config.ssl_min_protocol_version = params->ssl_min_protocol_version.length() > 0 ? strdup(params->ssl_min_protocol_version.c_str()) : nullptr;
+			ssl_config.ssl_max_protocol_version = params->ssl_max_protocol_version.length() > 0 ? strdup(params->ssl_max_protocol_version.c_str()) : nullptr;
+		} else {
+			ssl_config.sslkey = pgsql_thread___ssl_p2s_key ? strdup(pgsql_thread___ssl_p2s_key) : nullptr;
+			ssl_config.sslcert = pgsql_thread___ssl_p2s_cert ? strdup(pgsql_thread___ssl_p2s_cert) : nullptr;
+			ssl_config.sslrootcert = pgsql_thread___ssl_p2s_ca ? strdup(pgsql_thread___ssl_p2s_ca) : nullptr;
+			ssl_config.sslcrl = pgsql_thread___ssl_p2s_crl ? strdup(pgsql_thread___ssl_p2s_crl) : nullptr;
+			ssl_config.sslcrldir = pgsql_thread___ssl_p2s_crlpath ? strdup(pgsql_thread___ssl_p2s_crlpath) : nullptr;
+			ssl_config.ssl_min_protocol_version = nullptr;
+			ssl_config.ssl_max_protocol_version = nullptr;
+		}
 	} else {
 		ssl_config.sslkey = nullptr;
 		ssl_config.sslcert = nullptr;
 		ssl_config.sslrootcert = nullptr;
 		ssl_config.sslcrl = nullptr;
 		ssl_config.sslcrldir = nullptr;
+		ssl_config.ssl_min_protocol_version = nullptr;
+		ssl_config.ssl_max_protocol_version = nullptr;
 	}
 }
 
@@ -2966,7 +3005,9 @@ PgSQL_Backend_Kill_Args::~PgSQL_Backend_Kill_Args() {
 	free(ssl_config.sslrootcert);
 	free(ssl_config.sslcrl);
 	free(ssl_config.sslcrldir);
-	if (cancel_conn) 
+	free(ssl_config.ssl_min_protocol_version);
+	free(ssl_config.ssl_max_protocol_version);
+	if (cancel_conn)
 		PQfreeCancel(cancel_conn);
 }
 
@@ -3012,6 +3053,10 @@ void* PgSQL_backend_kill_thread(void* arg) {
 			append_conninfo_param(conninfo, "sslrootcert", backend_kill_args->ssl_config.sslrootcert);
 			append_conninfo_param(conninfo, "sslcrl", backend_kill_args->ssl_config.sslcrl);
 			append_conninfo_param(conninfo, "sslcrldir", backend_kill_args->ssl_config.sslcrldir);
+			// Per-server TLS protocol pinning was pre-parsed from
+			// ssl_protocol_version_range when the Kill_Args struct was built.
+			append_conninfo_param(conninfo, "ssl_min_protocol_version", backend_kill_args->ssl_config.ssl_min_protocol_version);
+			append_conninfo_param(conninfo, "ssl_max_protocol_version", backend_kill_args->ssl_config.ssl_max_protocol_version);
 		} else {
 			conninfo << "sslmode='disable' "; // not supporting SSL
 		}

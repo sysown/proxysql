@@ -36,6 +36,22 @@ const char PING_QUERY[] { "" };
  * @details If the server is not in this mode would be assumed to be a primary.
  */
 const char READ_ONLY_QUERY[] { "SELECT pg_is_in_recovery()" };
+/**
+ * @brief Used to detect the current replication lag in a PostgreSQL instance.
+ * @details Lag measurement is based in a difference between the most recent WAL location that has been
+ *  received and synced to disk (pg_last_wal_receive_lsn) and the most recent WAL location that has been
+ *  replayed the most recent WAL location that has been replayed (pg_last_wal_replay_lsn).
+ */
+const char REPLICATION_LAG_QUERY[] {
+	"SELECT CASE WHEN pg_last_wal_receive_lsn() = pg_last_wal_replay_lsn() THEN 0 ELSE GREATEST"
+		" (0, EXTRACT (EPOCH FROM now() - pg_last_xact_replay_timestamp())) END AS replication_lag"
+};
+/*
+ * @brief Used to detect current replication lag in a PostgreSQL instance when pt-heartbeat is used.
+ */
+const char REPLICATION_LAG_QUERY_PT_HEARTBEAT[] {
+	"SELECT EXTRACT(EPOCH FROM (LOCALTIMESTAMP - ts :: timestamp)) AS Seconds_Behind_Master FROM "
+};
 
 template <typename T>
 void append(std::vector<T>& dest, std::vector<T>&& src) {
@@ -258,9 +274,24 @@ void update_monitor_pgsql_servers(SQLite3_result* rs, SQLite3DB* db) {
 	}
 }
 
-enum class task_type_t { ping, connect, readonly };
+enum class task_type_t { ping, connect, readonly, repl_lag };
+
+const char* get_task_type_str(task_type_t task_type) {
+	if (task_type == task_type_t::ping) {
+		return "ping";
+	} else if (task_type == task_type_t::connect) {
+		return "connect";
+	} else if (task_type == task_type_t::readonly) {
+		return "readonly";
+	} else if (task_type == task_type_t::repl_lag) {
+		return "replication_lag";
+	} else {
+		assert(0 && "Invalid task type");
+	}
+}
 
 struct mon_srv_t {
+	int32_t hostgroup_id;
 	string addr;
 	uint16_t port;
 	bool ssl;
@@ -270,6 +301,9 @@ struct mon_srv_t {
 		string ssl_p2s_ca;
 		string ssl_p2s_crl;
 		string ssl_p2s_crlpath;
+		// Pre-parsed from ssl_protocol_version_range; empty when unset/malformed.
+		string ssl_min_protocol_version;
+		string ssl_max_protocol_version;
 	} ssl_opt;
 };
 
@@ -287,6 +321,10 @@ struct ping_params_t {
 };
 
 struct readonly_res_t {
+	int32_t val;
+};
+
+struct repl_lag_res_t {
 	int32_t val;
 };
 
@@ -323,10 +361,50 @@ struct readonly_conf_t {
 	readonly_params_t params;
 };
 
+struct repl_lag_params_t {
+	int32_t interval;
+	double interval_window;
+	int32_t timeout;
+	int32_t ping_max_failures;
+	int32_t ping_interval;
+	mf_unique_ptr<char> pt_heartbeat {};
+
+	repl_lag_params_t(
+		int32_t _interval,
+		double _interval_window,
+		int32_t _timeout,
+		int32_t _ping_max_failures,
+		int32_t _ping_interval,
+		char* _pt_heartbeat
+	) :
+		interval(_interval),
+		interval_window(_interval_window),
+		timeout(_timeout),
+		ping_max_failures(_ping_max_failures),
+		ping_interval(_ping_interval),
+		pt_heartbeat(_pt_heartbeat ? strdup(_pt_heartbeat) : nullptr)
+	{}
+
+	repl_lag_params_t(const repl_lag_params_t& o) :
+		interval(o.interval),
+		interval_window(o.interval_window),
+		timeout(o.timeout),
+		ping_max_failures(o.ping_max_failures),
+		ping_interval(o.ping_interval),
+		pt_heartbeat(o.pt_heartbeat ? strdup(o.pt_heartbeat.get()) : nullptr)
+	{}
+};
+
+struct repl_lag_conf_t {
+	unique_ptr<SQLite3_result> srvs_info;
+	repl_lag_params_t params;
+};
+
 struct tasks_conf_t {
 	ping_conf_t ping;
 	connect_conf_t connect;
 	readonly_conf_t readonly;
+	repl_lag_conf_t repl_lag;
 	mon_user_t user_info;
 };
 
@@ -361,16 +439,42 @@ vector<mon_srv_t> ext_srvs(const unique_ptr<SQLite3_result>& srvs_info) {
 	srvs.reserve(srvs_info->rows.size());
 	for (const auto& row : srvs_info->rows) {
 		srvs.push_back({
-			string { row->fields[0] },
-			static_cast<uint16_t>(std::atoi(row->fields[1])),
-			static_cast<bool>(std::atoi(row->fields[2])),
-			mon_srv_t::ssl_opts_t {
-				string { pgsql_thread___ssl_p2s_key ? pgsql_thread___ssl_p2s_key : ""},
-				string { pgsql_thread___ssl_p2s_cert ? pgsql_thread___ssl_p2s_cert : "" },
-				string { pgsql_thread___ssl_p2s_ca ? pgsql_thread___ssl_p2s_ca : "" },
-				string { pgsql_thread___ssl_p2s_crl ? pgsql_thread___ssl_p2s_crl : "" },
-				string { pgsql_thread___ssl_p2s_crlpath ? pgsql_thread___ssl_p2s_crlpath : ""}
-			}
+			static_cast<int32_t>(std::atoi(row->fields[0])),
+			string { row->fields[1] },
+			static_cast<uint16_t>(std::atoi(row->fields[2])),
+			static_cast<bool>(std::atoi(row->fields[3])),
+			[&]() -> mon_srv_t::ssl_opts_t {
+				bool use_ssl_val = static_cast<bool>(std::atoi(row->fields[3]));
+				if (use_ssl_val) {
+					std::unique_ptr<PgSQLServers_SslParams> ssl_params {
+						PgHGM->get_Server_SSL_Params(
+							row->fields[1],
+							std::atoi(row->fields[2]),
+							pgsql_thread___monitor_username ? pgsql_thread___monitor_username : (char*)""
+						)
+					};
+					if (ssl_params != nullptr) {
+						return mon_srv_t::ssl_opts_t {
+							ssl_params->ssl_key,
+							ssl_params->ssl_cert,
+							ssl_params->ssl_ca,
+							ssl_params->ssl_crl,
+							ssl_params->ssl_crlpath,
+							ssl_params->ssl_min_protocol_version,
+							ssl_params->ssl_max_protocol_version
+						};
+					}
+				}
+				return mon_srv_t::ssl_opts_t {
+					string { pgsql_thread___ssl_p2s_key ? pgsql_thread___ssl_p2s_key : ""},
+					string { pgsql_thread___ssl_p2s_cert ? pgsql_thread___ssl_p2s_cert : "" },
+					string { pgsql_thread___ssl_p2s_ca ? pgsql_thread___ssl_p2s_ca : "" },
+					string { pgsql_thread___ssl_p2s_crl ? pgsql_thread___ssl_p2s_crl : "" },
+					string { pgsql_thread___ssl_p2s_crlpath ? pgsql_thread___ssl_p2s_crlpath : ""},
+					string { "" },
+					string { "" }
+				};
+			}()
 		});
 	}
 	return srvs;
@@ -394,22 +498,28 @@ tasks_conf_t fetch_updated_conf(PgSQL_Monitor* mon, PgSQL_HostGroups_Manager* hg
 	}
 
 	unique_ptr<SQLite3_result> ping_srvrs { fetch_mon_srvs_conf(mon,
-		"SELECT hostname, port, MAX(use_ssl) use_ssl FROM monitor_internal.pgsql_servers"
+		"SELECT 0 hostgroup_id, hostname, port, MAX(use_ssl) use_ssl FROM monitor_internal.pgsql_servers"
 			" GROUP BY hostname, port ORDER BY RANDOM()"
 	)};
 
 	unique_ptr<SQLite3_result> connect_srvrs { fetch_mon_srvs_conf(mon,
-		"SELECT hostname, port, MAX(use_ssl) use_ssl FROM monitor_internal.pgsql_servers"
+		"SELECT 0 hostgroup_id, hostname, port, MAX(use_ssl) use_ssl FROM monitor_internal.pgsql_servers"
 			" GROUP BY hostname, port ORDER BY RANDOM()"
 	)};
 
 	unique_ptr<SQLite3_result> readonly_srvs { fetch_hgm_srvs_conf(hgm,
-		"SELECT hostname, port, MAX(use_ssl) use_ssl, check_type, reader_hostgroup"
+		"SELECT hostgroup_id, hostname, port, MAX(use_ssl) use_ssl, check_type, reader_hostgroup"
 			" FROM pgsql_servers JOIN pgsql_replication_hostgroups"
 				" ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup"
 			" WHERE status NOT IN (2,3) GROUP BY hostname, port ORDER BY RANDOM()"
 	)};
 
+	unique_ptr<SQLite3_result> repl_srvs { fetch_hgm_srvs_conf(hgm,
+		"SELECT hostgroup_id, hostname, port, MAX(use_ssl) use_ssl FROM pgsql_servers"
+			" JOIN pgsql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup"
+			" WHERE max_replication_lag > 0 AND status NOT IN (2,3)"
+			" GROUP BY hostgroup_id, hostname, port ORDER BY RANDOM()"
+	)};
 
 	return tasks_conf_t {
 		ping_conf_t {
@@ -446,11 +556,22 @@ tasks_conf_t fetch_updated_conf(PgSQL_Monitor* mon, PgSQL_HostGroups_Manager* hg
 				pgsql_thread___monitor_writer_is_also_reader
 			}
 		},
+		repl_lag_conf_t {
+			std::move(repl_srvs),
+			repl_lag_params_t {
+				pgsql_thread___monitor_replication_lag_interval * 1000,
+				pgsql_thread___monitor_replication_lag_interval_window / 100.0,
+				pgsql_thread___monitor_replication_lag_timeout * 1000,
+				pgsql_thread___monitor_ping_max_failures,
+				pgsql_thread___monitor_ping_interval * 1000,
+				pgsql_thread___monitor_replication_lag_use_percona_heartbeat
+			}
+		},
 		mon_user_t {
 			pgsql_thread___monitor_username,
 			pgsql_thread___monitor_password,
 			pgsql_thread___monitor_dbname
-		}
+		},
 	};
 }
 
@@ -562,15 +683,29 @@ short handle_async_check_cont(state_t& st, short _) {
 			int row_count = PQntuples(res);
 
 			if (row_count > 0) {
-				const char* value_str { PQgetvalue(res, 0, 0) };
-				bool value { strcmp(value_str, "t") == 0 };
+				if (st.task.type == task_type_t::readonly) {
+					const char* value_str { PQgetvalue(res, 0, 0) };
+					bool value { strcmp(value_str, "t") == 0 };
 
-				set_finish_st(st, ASYNC_QUERY_END,
-					op_result_t {
-						new readonly_res_t { value },
-						[] (void* v) { delete static_cast<readonly_res_t*>(v); }
-					}
-				);
+					set_finish_st(st, ASYNC_QUERY_END,
+						op_result_t {
+							new readonly_res_t { value },
+							[] (void* v) { delete static_cast<readonly_res_t*>(v); }
+						}
+					);
+				} else if (st.task.type == task_type_t::repl_lag) {
+					const char* value_str { PQgetvalue(res, 0, 0) };
+					int32_t value { std::atoi(value_str) };
+
+					set_finish_st(st, ASYNC_QUERY_END,
+						op_result_t {
+							new repl_lag_res_t { value },
+							[] (void* v) { delete static_cast<repl_lag_res_t*>(v); }
+						}
+					);
+				} else {
+					assert(0 && "Invalid task type");
+				}
 			} else {
 				const mon_srv_t& srv { st.task.op_st.srv_info };
 				const char err_t[] { "Invalid number of rows '%d'" };
@@ -578,8 +713,8 @@ short handle_async_check_cont(state_t& st, short _) {
 
 				cstr_format(err_b, err_t, row_count);
 				proxy_error(
-					"Monitor readonly failed   addr='%s:%d' status=%d error='%s'\n",
-					srv.addr.c_str(), srv.port, status, err_b
+					"Monitor %s failed   addr='%s:%d' status=%d error='%s'\n",
+					get_task_type_str(st.task.type), srv.addr.c_str(), srv.port, status, err_b
 				);
 				set_failed_st(st, ASYNC_QUERY_FAILED, mf_unique_ptr<char>(strdup(err_b)));
 			}
@@ -599,6 +734,12 @@ short handle_async_check_cont(state_t& st, short _) {
 			} else if (st.task.type == task_type_t::readonly) {
 				proxy_error(
 					"Monitor readonly failed   addr='%s:%d' status=%d error='%s'\n",
+					srv.addr.c_str(), srv.port, status, err.get()
+				);
+				set_failed_st(st, ASYNC_QUERY_FAILED, std::move(err));
+			} else if (st.task.type == task_type_t::repl_lag) {
+				proxy_error(
+					"Monitor repl_lag failed   addr='%s:%d' status=%d error='%s'\n",
 					srv.addr.c_str(), srv.port, status, err.get()
 				);
 				set_failed_st(st, ASYNC_QUERY_FAILED, std::move(err));
@@ -648,6 +789,8 @@ pair<short,bool> handle_async_connect_cont(state_t& st, short revent) {
 				proc_again = true;
 			} else if (st.task.type == task_type_t::readonly) {
 				proc_again = true;
+			} else if (st.task.type == task_type_t::repl_lag) {
+				proc_again = true;
 			} else {
 				assert(0 && "Non-implemented task-type");
 			}
@@ -669,13 +812,38 @@ pair<short,bool> handle_async_connect_cont(state_t& st, short revent) {
 	return { req_events, proc_again };
 }
 
+string get_task_query(const state_t& st) {
+	const task_type_t task_type { st.task.type };
+
+	if (task_type == task_type_t::ping) {
+		return PING_QUERY;
+	} else if (task_type == task_type_t::readonly) {
+		return READ_ONLY_QUERY;
+	} else if (task_type == task_type_t::repl_lag) {
+		repl_lag_params_t* params {
+			static_cast<repl_lag_params_t*>(st.task.op_st.op_params.get())
+		};
+
+		if (params->pt_heartbeat && strlen(params->pt_heartbeat.get())) {
+			// FIXME: This is a SQL injection vulnerability. 
+			// pt-heartbeat support for PostgreSQL is currently disabled.
+			// return string { REPLICATION_LAG_QUERY_PT_HEARTBEAT } + params->pt_heartbeat.get();
+			return REPLICATION_LAG_QUERY;
+		} else {
+			return REPLICATION_LAG_QUERY;
+		}
+	} else {
+		assert(0 && "Invalid task type");
+	}
+}
+
 short handle_async_connect_end(state_t& st, short _) {
 	pgsql_conn_t& pgconn { st.conn };
 
 	short req_events { 0 };
-	const char* QUERY { st.task.type == task_type_t::ping ? PING_QUERY : READ_ONLY_QUERY };
+	const string QUERY { get_task_query(st) };
 
-	int rc = PQsendQuery(pgconn.conn, QUERY);
+	int rc = PQsendQuery(pgconn.conn, QUERY.c_str());
 	if (rc == 0) {
 		const mon_srv_t& srv { st.task.op_st.srv_info };
 		auto err { strdup_no_lf(PQerrorMessage(pgconn.conn)) };
@@ -689,6 +857,12 @@ short handle_async_connect_end(state_t& st, short _) {
 		} else if (st.task.type == task_type_t::readonly) {
 			proxy_error(
 				"Monitor readonly start failed   addr='%s:%d' error='%s'\n",
+				srv.addr.c_str(), srv.port, err.get()
+			);
+			set_failed_st(st, ASYNC_QUERY_FAILED, std::move(err));
+		} else if (st.task.type == task_type_t::repl_lag) {
+			proxy_error(
+				"Monitor repl_lag start failed   addr='%s:%d' error='%s'\n",
 				srv.addr.c_str(), srv.port, err.get()
 			);
 			set_failed_st(st, ASYNC_QUERY_FAILED, std::move(err));
@@ -714,6 +888,12 @@ short handle_async_connect_end(state_t& st, short _) {
 					srv.addr.c_str(), srv.port, err.get()
 				);
 				set_failed_st(st, ASYNC_QUERY_FAILED, std::move(err));
+			} else if (st.task.type == task_type_t::repl_lag) {
+				proxy_error(
+					"Monitor repl_lag start failed   addr='%s:%d' error='%s'\n",
+					srv.addr.c_str(), srv.port, err.get()
+				);
+				set_failed_st(st, ASYNC_QUERY_FAILED, std::move(err));
 			} else {
 				assert(0 && "Invalid task type");
 			}
@@ -723,6 +903,8 @@ short handle_async_connect_end(state_t& st, short _) {
 			if (st.task.type == task_type_t::ping) {
 				pgconn.state = ASYNC_ST::ASYNC_PING_CONT;
 			} else if (st.task.type == task_type_t::readonly) {
+				pgconn.state = ASYNC_ST::ASYNC_QUERY_CONT;
+			} else if (st.task.type == task_type_t::repl_lag) {
 				pgconn.state = ASYNC_ST::ASYNC_QUERY_CONT;
 			} else {
 				assert(0 && "Invalid task type");
@@ -870,6 +1052,12 @@ uint64_t get_connpool_cleanup_intv(task_st_t& task) {
 		};
 
 		res = params->ping_interval;
+	} else if (task.type == task_type_t::repl_lag){
+		repl_lag_params_t* params {
+			static_cast<repl_lag_params_t*>(task.op_st.op_params.get())
+		};
+
+		res = params->ping_interval;
 	} else {
 		assert(0 && "Non-implemented task-type");
 	}
@@ -922,6 +1110,13 @@ string build_conn_str(const task_st_t& task_st) {
 		append_conninfo_param(conninfo, "sslrootcert", srv_info.ssl_opt.ssl_p2s_ca);
 		append_conninfo_param(conninfo, "sslcrl", srv_info.ssl_opt.ssl_p2s_crl);
 		append_conninfo_param(conninfo, "sslcrldir", srv_info.ssl_opt.ssl_p2s_crlpath);
+		// Per-server TLS protocol pinning was pre-parsed from
+		// ssl_protocol_version_range when the row was loaded into
+		// PgSQLServers_SslParams. Empty fields => libpq defaults.
+		if (!srv_info.ssl_opt.ssl_min_protocol_version.empty())
+			append_conninfo_param(conninfo, "ssl_min_protocol_version", srv_info.ssl_opt.ssl_min_protocol_version);
+		if (!srv_info.ssl_opt.ssl_max_protocol_version.empty())
+			append_conninfo_param(conninfo, "ssl_max_protocol_version", srv_info.ssl_opt.ssl_max_protocol_version);
 	} else {
 		conninfo << "sslmode='disable' "; // not supporting SSL
 	}
@@ -1041,6 +1236,7 @@ struct tasks_intvs_t {
 	uint64_t next_ping_at;
 	uint64_t next_connect_at;
 	uint64_t next_readonly_at;
+	uint64_t next_repl_lag_at;
 };
 
 struct task_poll_t {
@@ -1285,7 +1481,8 @@ bool is_task_success(pgsql_conn_t& c, task_st_t& st) {
 			|| (c.state != ASYNC_ST::ASYNC_QUERY_FAILED && c.state != ASYNC_QUERY_TIMEOUT))
 		&& ((c.state == ASYNC_ST::ASYNC_CONNECT_END && st.type == task_type_t::connect)
 			|| (c.state == ASYNC_ST::ASYNC_PING_END && st.type == task_type_t::ping)
-			|| (c.state == ASYNC_ST::ASYNC_QUERY_END && st.type == task_type_t::readonly));
+			|| (c.state == ASYNC_ST::ASYNC_QUERY_END && st.type == task_type_t::readonly)
+			|| (c.state == ASYNC_ST::ASYNC_QUERY_END && st.type == task_type_t::repl_lag));
 }
 
 bool is_task_finish(pgsql_conn_t& c, task_st_t& st) {
@@ -1295,7 +1492,8 @@ bool is_task_finish(pgsql_conn_t& c, task_st_t& st) {
 			|| (c.state == ASYNC_ST::ASYNC_QUERY_FAILED || c.state == ASYNC_ST::ASYNC_QUERY_TIMEOUT))
 		|| (c.state == ASYNC_ST::ASYNC_CONNECT_END && st.type == task_type_t::connect)
 		|| (c.state == ASYNC_ST::ASYNC_PING_END && st.type == task_type_t::ping)
-		|| (c.state == ASYNC_ST::ASYNC_QUERY_END && st.type == task_type_t::readonly);
+		|| (c.state == ASYNC_ST::ASYNC_QUERY_END && st.type == task_type_t::readonly)
+		|| (c.state == ASYNC_ST::ASYNC_QUERY_END && st.type == task_type_t::repl_lag);
 }
 
 void update_connect_table(SQLite3DB* db, state_t& state) {
@@ -1441,6 +1639,62 @@ void update_readonly_table(SQLite3DB* db, state_t& state) {
 		__sync_fetch_and_add(&GloPgMon->readonly_check_ERR, 1);
 	} else {
 		__sync_fetch_and_add(&GloPgMon->readonly_check_OK, 1);
+	}
+}
+
+void update_repl_lag_table(SQLite3DB* db, state_t& state) {
+	repl_lag_res_t* op_result {
+		static_cast<repl_lag_res_t*>(state.task.op_st.op_result.get())
+	};
+
+	auto [rc, stmt_unique] = db->prepare_v2(
+		"INSERT OR REPLACE INTO pgsql_server_replication_lag_log VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
+	);
+	ASSERT_SQLITE_OK(rc, db);
+	sqlite3_stmt* stmt = stmt_unique.get();
+
+	uint64_t op_dur_us { state.task.end - state.task.start };
+
+	sqlite_bind_text(stmt, 1, state.task.op_st.srv_info.addr.c_str());
+	sqlite_bind_int(stmt, 2, state.task.op_st.srv_info.port);
+
+	uint64_t time_start_us { realtime_time() - op_dur_us };
+	sqlite_bind_int64(stmt, 3, time_start_us);
+
+	uint64_t succ_time_us { is_task_success(state.conn, state.task) ? op_dur_us : 0 };
+	sqlite_bind_int64(stmt, 4, succ_time_us);
+
+	if (op_result) {
+		sqlite_bind_int64(stmt, 5, op_result->val);
+	} else {
+		sqlite_bind_null(stmt, 5);
+	}
+
+	sqlite_bind_text(stmt, 6, state.conn.err.get());
+
+	SAFE_SQLITE3_STEP2(stmt);
+
+	sqlite_clear_bindings(stmt);
+	sqlite_reset_statement(stmt);
+	// RAII auto-finalizes stmt
+
+	if (state.conn.err) {
+		const mon_srv_t& srv { state.task.op_st.srv_info };
+		char* srv_addr { const_cast<char*>(srv.addr.c_str()) };
+		int err_code { 0 };
+
+		if (state.conn.state != ASYNC_ST::ASYNC_QUERY_TIMEOUT) {
+			err_code = 9100 + state.conn.state;
+		} else {
+			err_code = ER_PROXYSQL_REPL_LAG_TIMEOUT;
+		};
+
+		PgHGM->p_update_pgsql_error_counter(
+			p_pgsql_error_type::proxysql, 0, srv_addr, srv.port, err_code
+		);
+		__sync_fetch_and_add(&GloPgMon->repl_lag_check_ERR, 1);
+	} else {
+		__sync_fetch_and_add(&GloPgMon->repl_lag_check_OK, 1);
 	}
 }
 
@@ -1621,6 +1875,28 @@ void perf_readonly_actions(SQLite3DB* db, state_t& state) {
 	}
 }
 
+void perf_repl_lag_actions(SQLite3DB* db, state_t& state) {
+	// Update table entries
+	update_repl_lag_table(db, state);
+
+	// Perform the repl_lag actions
+	{
+		const op_st_t& op_st { state.task.op_st };
+		const mon_srv_t& srv { state.task.op_st.srv_info };
+
+		if (is_task_success(state.conn, state.task)) {
+			repl_lag_res_t* op_result { static_cast<repl_lag_res_t*>(op_st.op_result.get()) };
+
+			// TODO: Override replication is hardcoded to 'false', this should be revisited.
+			PgHGM->replication_lag_action({{ srv.hostgroup_id, srv.addr, srv.port, op_result->val, false }});
+		} else {
+			proxy_error(
+				"Replication lag checked failed   error='%s'\n", state.conn.err.get()
+			);
+		}
+	}
+}
+
 uint64_t get_task_timeout(task_st_t& task) {
 	uint64_t task_to = 0;
 
@@ -1639,6 +1915,12 @@ uint64_t get_task_timeout(task_st_t& task) {
 	} else if (task.type == task_type_t::readonly) {
 		readonly_params_t* params {
 			static_cast<readonly_params_t*>(task.op_st.op_params.get())
+		};
+
+		task_to = params->timeout;
+	} else if (task.type == task_type_t::repl_lag) {
+		repl_lag_params_t* params {
+			static_cast<repl_lag_params_t*>(task.op_st.op_params.get())
 		};
 
 		task_to = params->timeout;
@@ -1667,6 +1949,12 @@ uint64_t get_task_max_ping_fails(task_st_t& task) {
 	} else if (task.type == task_type_t::readonly) {
 		readonly_params_t* params {
 			static_cast<readonly_params_t*>(task.op_st.op_params.get())
+		};
+
+		max_fails = params->ping_max_failures;
+	} else if (task.type == task_type_t::repl_lag) {
+		repl_lag_params_t* params {
+			static_cast<repl_lag_params_t*>(task.op_st.op_params.get())
 		};
 
 		max_fails = params->ping_max_failures;
@@ -1717,6 +2005,18 @@ void proc_task_state(state_t& state, uint64_t task_start) {
 		} else if (is_task_finish(state.conn, state.task)) {
 			perf_readonly_actions(&GloPgMon->monitordb, state);
 		}
+	} else if (state.task.type == task_type_t::repl_lag) {
+		if (monotonic_time() - state.task.start > get_task_timeout(state.task)) {
+			// TODO: Unified state processing
+			pg_conn.state = ASYNC_ST::ASYNC_QUERY_TIMEOUT;
+			pg_conn.err = mf_unique_ptr<char>(strdup("Operation timed out"));
+			state.task.end = monotonic_time();
+
+			// TODO: proxy_error + metrics update
+			perf_repl_lag_actions(&GloPgMon->monitordb, state);
+		} else if (is_task_finish(state.conn, state.task)) {
+			perf_repl_lag_actions(&GloPgMon->monitordb, state);
+		}
 	} else {
 		assert(0 && "Non-implemented task-type");
 	}
@@ -1751,6 +2051,20 @@ void* worker_thread(void* args) {
 	bool recv_stop_signal = 0;
 	uint64_t prev_it_time = 0;
 
+	//                        VARIABLE SYNCHRONIZATION
+	///////////////////////////////////////////////////////////////////////////
+	// NOTE: Ideally this section should be removed. It's required since some monitoring
+	// actions can internally use `pgsql_thread___` variables. This actions normally
+	// belong to 'PgSQL_HostGroups_Manager' and are out of the scope of this module, for
+	// now, until a refactor of those actions can take place and parametrize this
+	// configurations, this sync mechanism is required.
+	///////////////////////////////////////////////////////////////////////////
+	// Initial Monitor thread variables version
+	unsigned int PgSQL_Thread__variables_version = GloPTH->get_global_version();
+	// PgSQL thread structure used for variable refreshing
+	unique_ptr<PgSQL_Thread> pgsql_thread { init_pgsql_thread_struct() };
+	///////////////////////////////////////////////////////////////////////////
+
 	// Insert dummy task for scheduler comms
 	add_scheduler_comm_task(tasks_queue, task_poll);
 
@@ -1764,6 +2078,18 @@ void* worker_thread(void* args) {
 				continue;
 			}
 		}
+
+		//                     VARIABLE SYNCHRONIZATION
+		///////////////////////////////////////////////////////////////////////
+		// See NOTE above on this section.
+		///////////////////////////////////////////////////////////////////////
+		// Check variable version changes; refresh if needed
+		unsigned int glover = GloPTH->get_global_version();
+		if (PgSQL_Thread__variables_version < glover) {
+			PgSQL_Thread__variables_version = glover;
+			pgsql_thread->refresh_variables();
+		}
+		///////////////////////////////////////////////////////////////////////
 
 		// Fetch the next tasks from the queue
 		{
@@ -1972,6 +2298,10 @@ const char MAINT_READONLY_LOG_QUERY[] {
 	"DELETE FROM pgsql_server_read_only_log WHERE time_start_us < ?1"
 };
 
+const char MAINT_REPLICATION_LAG_LOG_QUERY[] {
+	"DELETE FROM pgsql_server_replication_lag_log WHERE time_start_us < ?1"
+};
+
 /**
  * @brief Performs the required maintenance in the monitor log tables.
  * @param tasks_conf The updated tasks config for the interval.
@@ -2005,6 +2335,15 @@ void maint_mon_tables(
 		);
 		maint_monitor_table(
 			&GloPgMon->monitordb, MAINT_READONLY_LOG_QUERY, tasks_conf.ping.params
+		);
+	}
+
+	if (next_intvs.next_repl_lag_at <= intv_start) {
+		proxy_debug(PROXY_DEBUG_MONITOR, 5,
+			"Performed REPLICATION_LAG table maintenance   intv_start=%lu\n", intv_start
+		);
+		maint_monitor_table(
+			&GloPgMon->monitordb, MAINT_REPLICATION_LAG_LOG_QUERY, tasks_conf.ping.params
 		);
 	}
 }
@@ -2072,6 +2411,23 @@ vector<task_batch_t> build_intv_batches(
 		);
 	}
 
+	if (next_intvs.next_repl_lag_at <= intv_start && tasks_conf.repl_lag.srvs_info->rows_count) {
+		intv_tasks.push_back({
+			task_type_t::repl_lag,
+			uint64_t(tasks_conf.repl_lag.srvs_info->rows_count),
+			tasks_conf.repl_lag.params.interval,
+			tasks_conf.repl_lag.params.interval_window,
+			intv_start,
+			create_simple_tasks<repl_lag_conf_t,repl_lag_params_t>(
+				intv_start, tasks_conf.user_info, tasks_conf.repl_lag, task_type_t::repl_lag
+			)
+		});
+		proxy_debug(PROXY_DEBUG_MONITOR, 5,
+			"Created REPL_LAG tasks   tasks=%lu intv_start=%lu\n",
+			intv_tasks.back().tasks.size(), intv_start
+		);
+	}
+
 	return intv_tasks;
 }
 
@@ -2106,6 +2462,13 @@ tasks_intvs_t compute_next_intvs(
 			upd_intvs.next_readonly_at = intv_start + conf.readonly.params.interval;
 		} else {
 			upd_intvs.next_readonly_at = ULONG_MAX;
+		}
+	}
+	if (next_intvs.next_repl_lag_at <= intv_start && conf.repl_lag.params.interval != 0) {
+		if (conf.repl_lag.params.interval != 0) {
+			upd_intvs.next_repl_lag_at = intv_start + conf.repl_lag.params.interval;
+		} else {
+			upd_intvs.next_repl_lag_at = ULONG_MAX;
 		}
 	}
 
@@ -2149,18 +2512,20 @@ void* PgSQL_monitor_scheduler_thread() {
 			std::min({
 				next_intvs.next_ping_at,
 				next_intvs.next_connect_at,
-				next_intvs.next_readonly_at
+				next_intvs.next_readonly_at,
+				next_intvs.next_repl_lag_at
 			})
 		};
 
 		if (cur_intv_start >= closest_intv)	 {
 			proxy_debug(PROXY_DEBUG_MONITOR, 5,
-				"Scheduling interval   time=%lu delta=%lu ping=%lu connect=%lu readonly=%lu\n",
+				"Scheduling interval   time=%lu delta=%lu ping=%lu connect=%lu readonly=%lu repl_lag=%lu\n",
 				cur_intv_start,
 				cur_intv_start - closest_intv,
 				next_intvs.next_ping_at,
 				next_intvs.next_connect_at,
-				next_intvs.next_readonly_at
+				next_intvs.next_readonly_at,
+				next_intvs.next_repl_lag_at
 			);
 
 			// Quick exit during shutdown/restart
@@ -2168,13 +2533,82 @@ void* PgSQL_monitor_scheduler_thread() {
 
 			// Check variable version changes; refresh if needed
 			unsigned int glover = GloPTH->get_global_version();
+			bool vars_refreshed = false;
 			if (PgSQL_Thread__variables_version < glover) {
 				PgSQL_Thread__variables_version = glover;
 				pgsql_thread->refresh_variables();
+				vars_refreshed = true;
 			}
 
 			// Fetch config for next task scheduling
 			tasks_conf_t tasks_conf { fetch_updated_conf(GloPgMon, PgHGM) };
+
+			// When runtime variables were just refreshed (i.e. someone did
+			// SET pgsql-monitor_*_interval=<smaller_value>; LOAD PGSQL
+			// VARIABLES TO RUNTIME;), the newly-read interval values may be
+			// smaller than the ones we used the last time we recomputed
+			// next_intvs. Without the clamp below, each next_<type>_at still
+			// points at the cycle that was scheduled under the OLD (larger)
+			// interval, so a LOAD doesn't visibly take effect until the old
+			// cycle elapses — which can be up to ~2 minutes for connect
+			// checks under the default pgsql-monitor_connect_interval=120000.
+			//
+			// Example of the surprise this avoids:
+			//
+			//   T=0    proxysql starts with monitor_connect_interval=120000,
+			//          next_connect_at is scheduled for T=120000ms.
+			//   T=5    user runs SET pgsql-monitor_connect_interval=2000;
+			//          LOAD PGSQL VARIABLES TO RUNTIME; expecting the next
+			//          connect cycle within ~2 seconds.
+			//   T=7    without this clamp, next_connect_at is still 120000
+			//          — no new connect fires for another 113 seconds.
+			//
+			// The fix: after every successful refresh, shrink any
+			// next_<type>_at that's now farther in the future than
+			// (now + new_interval). We never push next_<type>_at further
+			// into the future — growing the interval should not delay an
+			// already-imminent check — so the direction of the clamp is
+			// one-way (min()). Types whose interval is 0 (disabled) are
+			// skipped and handled by the existing compute_next_intvs()
+			// which sets them to ULONG_MAX.
+			if (vars_refreshed) {
+				if (tasks_conf.ping.params.interval > 0) {
+					const uint64_t clamped = cur_intv_start + tasks_conf.ping.params.interval;
+					if (next_intvs.next_ping_at > clamped) {
+						proxy_debug(PROXY_DEBUG_MONITOR, 5,
+							"Clamped next_ping_at   old=%lu new=%lu interval=%d\n",
+							next_intvs.next_ping_at, clamped, tasks_conf.ping.params.interval);
+						next_intvs.next_ping_at = clamped;
+					}
+				}
+				if (tasks_conf.connect.params.interval > 0) {
+					const uint64_t clamped = cur_intv_start + tasks_conf.connect.params.interval;
+					if (next_intvs.next_connect_at > clamped) {
+						proxy_debug(PROXY_DEBUG_MONITOR, 5,
+							"Clamped next_connect_at   old=%lu new=%lu interval=%d\n",
+							next_intvs.next_connect_at, clamped, tasks_conf.connect.params.interval);
+						next_intvs.next_connect_at = clamped;
+					}
+				}
+				if (tasks_conf.readonly.params.interval > 0) {
+					const uint64_t clamped = cur_intv_start + tasks_conf.readonly.params.interval;
+					if (next_intvs.next_readonly_at > clamped) {
+						proxy_debug(PROXY_DEBUG_MONITOR, 5,
+							"Clamped next_readonly_at   old=%lu new=%lu interval=%d\n",
+							next_intvs.next_readonly_at, clamped, tasks_conf.readonly.params.interval);
+						next_intvs.next_readonly_at = clamped;
+					}
+				}
+				if (tasks_conf.repl_lag.params.interval > 0) {
+					const uint64_t clamped = cur_intv_start + tasks_conf.repl_lag.params.interval;
+					if (next_intvs.next_repl_lag_at > clamped) {
+						proxy_debug(PROXY_DEBUG_MONITOR, 5,
+							"Clamped next_repl_lag_at   old=%lu new=%lu interval=%d\n",
+							next_intvs.next_repl_lag_at, clamped, tasks_conf.repl_lag.params.interval);
+						next_intvs.next_repl_lag_at = clamped;
+					}
+				}
+			}
 
 			// Perform table maintenance
 			maint_mon_tables(tasks_conf, next_intvs, cur_intv_start);
@@ -2241,7 +2675,8 @@ void* PgSQL_monitor_scheduler_thread() {
 				std::min({
 					next_intvs.next_ping_at,
 					next_intvs.next_connect_at,
-					next_intvs.next_readonly_at
+					next_intvs.next_readonly_at,
+					next_intvs.next_repl_lag_at
 				})
 			};
 			const uint64_t next_intv_diff { upd_closest_intv < curtime ? 0 : upd_closest_intv - curtime };

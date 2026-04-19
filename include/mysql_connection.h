@@ -1,5 +1,5 @@
-#ifndef __CLASS_MYSQL_CONNECTION_H
-#define __CLASS_MYSQL_CONNECTION_H
+#ifndef PROXYSQL_MYSQL_CONNECTION_H
+#define PROXYSQL_MYSQL_CONNECTION_H
 
 #include "proxysql.h"
 #include "cpp.h"
@@ -26,7 +26,7 @@
 #define STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT        0x00000800
 #define STATUS_MYSQL_CONNECTION_HAS_WARNINGS         0x00001000
 
-class MySQLServers_SslParams;
+#include "Servers_SslParams.h"
 
 class Variable {
 public:
@@ -83,6 +83,7 @@ class MySQL_Connection {
 		uint32_t server_capabilities;
 		uint32_t client_flag;
 		unsigned int compression_min_length;
+		uint8_t zstd_compression_level;
 		char *init_connect;
 		bool init_connect_sent;
 		char * session_track_gtids;
@@ -95,6 +96,7 @@ class MySQL_Connection {
 		uint8_t protocol_version;
 		int8_t last_set_autocommit;
 		bool autocommit;
+		bool compression_zstd;
 		bool no_backslash_escapes;
 	} options;
 
@@ -306,4 +308,4 @@ class MySQL_Connection {
 	void get_mysql_info_json(nlohmann::json&);
 	void get_backend_conn_info_json(nlohmann::json&);
 };
-#endif /* __CLASS_MYSQL_CONNECTION_H */
+#endif /* PROXYSQL_MYSQL_CONNECTION_H */

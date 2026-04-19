@@ -1,0 +1,108 @@
+services:
+
+  mysql1:
+    hostname: mysql1.${INFRA}
+    image: mysql:5.7
+    container_name: ${COMPOSE_PROJECT}-mysql1-1
+    volumes:
+      - ./conf/mysql/mysql1/my.cnf:/etc/mysql/my.cnf
+      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/mysql1:/var/lib/mysql
+    networks:
+      backend:
+        aliases:
+          - mysql1.${INFRA}
+          - mysql1.infra-mysql57
+    environment:
+      - MYSQL_ROOT_PASSWORD=${ROOT_PASSWORD}
+    cap_add:
+      - SYS_NICE
+
+  mysql2:
+    hostname: mysql2.${INFRA}
+    image: mysql:5.7
+    container_name: ${COMPOSE_PROJECT}-mysql2-1
+    volumes:
+      - ./conf/mysql/mysql2/my.cnf:/etc/mysql/my.cnf
+      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/mysql2:/var/lib/mysql
+    networks:
+      backend:
+        aliases:
+          - mysql2.${INFRA}
+          - mysql2.infra-mysql57
+    environment:
+      - MYSQL_ROOT_PASSWORD=${ROOT_PASSWORD}
+    cap_add:
+      - SYS_NICE
+
+  mysql3:
+    hostname: mysql3.${INFRA}
+    image: mysql:5.7
+    container_name: ${COMPOSE_PROJECT}-mysql3-1
+    volumes:
+      - ./conf/mysql/mysql3/my.cnf:/etc/mysql/my.cnf
+      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/mysql3:/var/lib/mysql
+    networks:
+      backend:
+        aliases:
+          - mysql3.${INFRA}
+          - mysql3.infra-mysql57
+    environment:
+      - MYSQL_ROOT_PASSWORD=${ROOT_PASSWORD}
+    cap_add:
+      - SYS_NICE
+
+  orc1:
+    hostname: orc1.${INFRA}
+    image: proxysql/ci-infra:percona-orchestrator
+    container_name: ${COMPOSE_PROJECT}-orc1-1
+    environment:
+      - MYSQL_ROOT_PASSWORD=${ROOT_PASSWORD}
+    volumes:
+      - ./conf/orchestrator/orc1/orchestrator.conf.json:/etc/orchestrator.conf.json
+    networks:
+      backend:
+        aliases:
+          - orc1.${INFRA}
+    depends_on:
+      - mysql1
+      - mysql2
+      - mysql3
+
+  orc2:
+    hostname: orc2.${INFRA}
+    image: proxysql/ci-infra:percona-orchestrator
+    container_name: ${COMPOSE_PROJECT}-orc2-1
+    environment:
+      - MYSQL_ROOT_PASSWORD=${ROOT_PASSWORD}
+    volumes:
+      - ./conf/orchestrator/orc2/orchestrator.conf.json:/etc/orchestrator.conf.json
+    networks:
+      backend:
+        aliases:
+          - orc2.${INFRA}
+    depends_on:
+      - mysql1
+      - mysql2
+      - mysql3
+
+  orc3:
+    hostname: orc3.${INFRA}
+    image: proxysql/ci-infra:percona-orchestrator
+    container_name: ${COMPOSE_PROJECT}-orc3-1
+    environment:
+      - MYSQL_ROOT_PASSWORD=${ROOT_PASSWORD}
+    volumes:
+      - ./conf/orchestrator/orc3/orchestrator.conf.json:/etc/orchestrator.conf.json
+    networks:
+      backend:
+        aliases:
+          - orc3.${INFRA}
+    depends_on:
+      - mysql1
+      - mysql2
+      - mysql3
+
+networks:
+  backend:
+    name: "${INFRA_ID}_backend"
+    external: true

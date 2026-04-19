@@ -18,6 +18,7 @@ using json = nlohmann::json;
 
 //#define PROXYSQL_EXTERN
 #include "cpp.h"
+#include "proxysql_listen_validator.h"
 
 #include "mysqld_error.h"
 
@@ -958,6 +959,7 @@ void ProxySQL_Main_init_main_modules() {
 #ifdef PROXYSQLGENAI
 void ProxySQL_Main_init_GenAI_module() {
 	GloGATH->init();
+	proxy_info("GenAI Threads Handler initialized\n");
 	GloAI = new AI_Features_Manager();
 	GloAI->init();
 	proxy_info("AI Features module initialized\n");
@@ -1496,14 +1498,12 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 	LoadPlugins();
 
 	ProxySQL_Main_init_main_modules();
+
 #ifdef PROXYSQLGENAI
-	if (GloVars.global.genai_enabled) {
-		ProxySQL_Main_init_GenAI_module();
-	}
-	if (GloVars.global.mcp_enabled) {
-		ProxySQL_Main_init_MCP_module();
-	}
+	ProxySQL_Main_init_GenAI_module();
+	ProxySQL_Main_init_MCP_module();
 #endif /* PROXYSQLGENAI */
+
 	ProxySQL_Main_init_Admin_module(boostrap_info);
 	GloMTH->print_version();
 
@@ -1538,7 +1538,18 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 	}
 }
 
-void ProxySQL_Main_init_phase3___start_all() {
+/**
+ * @brief Phase 3 of ProxySQL initialization.
+ * 
+ * This phase starts all the core modules, including MySQL and PostgreSQL
+ * threads handlers, monitor modules, and listeners. It also performs
+ * validation of listener configurations to detect cross-module conflicts
+ * before starting listeners.
+ * 
+ * @return True if all modules and listeners started successfully, false if a
+ * configuration conflict or other fatal error occurred.
+ */
+bool ProxySQL_Main_init_phase3___start_all() {
 
 	srandom((unsigned int)(time(NULL) ^ getpid()));
 	{
@@ -1602,23 +1613,44 @@ void ProxySQL_Main_init_phase3___start_all() {
 #endif
 	}
 
-	{
-		cpu_timer t;
-#ifdef PROXYSQLGENAI
-		if (GloVars.global.mcp_enabled && GloMCPH) {
-			ProxySQL_Main_init_MCP_module();
-		}
-#endif /* PROXYSQLGENAI */
-#ifdef DEBUG
-		std::cerr << "Main phase3 : MCP module initialized in ";
-#endif
-	}
-
 	unsigned int iter = 0;
 	do { sleep_iter(++iter); } while (load_ != 1);
 	load_ = 0;
 	__sync_fetch_and_add(&GloMTH->status_variables.threads_initialized, 1);
 	__sync_fetch_and_add(&GloPTH->status_variables.threads_initialized, 1);
+	{
+		char* admin_mysql_ifaces = GloAdmin->get_variable((char*)"mysql_ifaces");
+		char* admin_pgsql_ifaces = GloAdmin->get_variable((char*)"pgsql_ifaces");
+		char* admin_telnet_ifaces = GloAdmin->get_variable((char*)"telnet_admin_ifaces");
+		char* admin_stats_ifaces = GloAdmin->get_variable((char*)"telnet_stats_ifaces");
+		char* mysql_ifaces = GloMTH->get_variable((char*)"interfaces");
+		char* pgsql_ifaces = GloPTH->get_variable((char*)"interfaces");
+
+		std::vector<proxysql_listen_validator::module_listener_config> modules {
+			{ "Admin", admin_mysql_ifaces },
+			{ "Admin PostgreSQL", admin_pgsql_ifaces },
+			{ "Admin Telnet", admin_telnet_ifaces },
+			{ "Admin Stats Telnet", admin_stats_ifaces },
+			{ "MySQL", mysql_ifaces },
+			{ "PostgreSQL", pgsql_ifaces },
+		};
+		std::string error {};
+		bool valid = proxysql_listen_validator::validate_module_listener_conflicts(modules, error);
+
+		free(admin_mysql_ifaces);
+		free(admin_pgsql_ifaces);
+		free(admin_telnet_ifaces);
+		free(admin_stats_ifaces);
+		free(mysql_ifaces);
+		free(pgsql_ifaces);
+
+		if (valid == false) {
+			proxy_error("%s\n", error.c_str());
+			proxy_error("Use different listen interfaces/ports or disable one of the conflicting listeners.\n");
+			proxy_error("ProxySQL startup aborted due to configuration error\n");
+			return false;
+		}
+	}
 	{
 		cpu_timer t;
 		GloMTH->start_listeners();
@@ -1674,14 +1706,15 @@ void ProxySQL_Main_init_phase3___start_all() {
 		GloAdmin->init_ldap_variables();
 	}
 
+#ifdef PROXYSQLTSDB
 	GloAdmin->init_tsdb_variables();
+#endif
 
 #ifdef PROXYSQLGENAI
 	// GenAI
-	if (GloVars.global.genai_enabled && GloGATH) {
+	if (GloGATH)
 		GloAdmin->init_genai_variables();
-	}
-	if (GloVars.global.mcp_enabled && GloMCPH) {
+	if (GloMCPH) {
 		GloAdmin->init_mcp_variables();
 	}
 #endif /* PROXYSQLGENAI */
@@ -1696,6 +1729,8 @@ void ProxySQL_Main_init_phase3___start_all() {
 	// Load the config not previously loaded for these modules
 	GloAdmin->load_http_server();
 	GloAdmin->load_restapi_server();
+
+	return true;
 }
 
 
@@ -3116,7 +3151,9 @@ __start_label:
 
 	{
 		cpu_timer t;
-		ProxySQL_Main_init_phase3___start_all();
+		if (ProxySQL_Main_init_phase3___start_all() == false) {
+			goto finish;
+		}
 #ifdef DEBUG
 		std::cerr << "Main init phase3 completed in ";
 #endif

@@ -66,23 +66,23 @@ using json = nlohmann::json;
 	do { \
 		if (req_id && strlen(req_id) > 0) { \
 			proxy_debug(PROXY_DEBUG_NL2SQL, 3, \
-				"LLM [%s]: RESPONSE status=%d duration_ms=%ld response=%s\n", \
-				req_id, status, duration_ms, response_preview.c_str()); \
+				"LLM [%s]: RESPONSE status=%ld duration_ms=%ld response=%s\n", \
+				req_id, (long)(status), duration_ms, response_preview.c_str()); \
 		} else { \
 			proxy_debug(PROXY_DEBUG_NL2SQL, 3, \
-				"LLM: RESPONSE status=%d duration_ms=%ld response=%s\n", \
-				status, duration_ms, response_preview.c_str()); \
+				"LLM: RESPONSE status=%ld duration_ms=%ld response=%s\n", \
+				(long)(status), duration_ms, response_preview.c_str()); \
 		} \
 	} while(0)
 
 #define LOG_LLM_ERROR(req_id, phase, error, status) \
 	do { \
 		if (req_id && strlen(req_id) > 0) { \
-			proxy_error("LLM [%s]: ERROR phase=%s error=%s status=%d\n", \
-				req_id, phase, error, status); \
+			proxy_error("LLM [%s]: ERROR phase=%s error=%s status=%ld\n", \
+				req_id, phase, error, (long)(status)); \
 		} else { \
-			proxy_error("LLM: ERROR phase=%s error=%s status=%d\n", \
-				phase, error, status); \
+			proxy_error("LLM: ERROR phase=%s error=%s status=%ld\n", \
+				phase, error, (long)(status)); \
 		} \
 	} while(0)
 
@@ -102,7 +102,7 @@ using json = nlohmann::json;
  * @param userp User pointer (std::string* for response buffer)
  * @return Total bytes processed
  */
-static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
+size_t LLM_WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
 	size_t totalSize = size * nmemb;
 	std::string* response = static_cast<std::string*>(userp);
 	response->append(static_cast<char*>(contents), totalSize);
@@ -124,7 +124,7 @@ static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* use
  * @param curl_code libcurl error code
  * @return true if error is retryable, false otherwise
  */
-static bool is_retryable_error(int http_status_code, CURLcode curl_code) {
+bool is_retryable_error(int http_status_code, CURLcode curl_code) {
 	// Retry on specific HTTP status codes
 	if (http_status_code == 408 ||           // Request Timeout
 	    http_status_code == 429 ||           // Too Many Requests (rate limit)
@@ -263,7 +263,7 @@ std::string LLM_Bridge::call_generic_openai(const std::string& prompt, const std
 	curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
 	curl_easy_setopt(curl, CURLOPT_POST, 1L);
 	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_str.c_str());
-	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, LLM_WriteCallback);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_data);
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, config.timeout_ms);
 
@@ -435,7 +435,7 @@ std::string LLM_Bridge::call_generic_anthropic(const std::string& prompt, const 
 	curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
 	curl_easy_setopt(curl, CURLOPT_POST, 1L);
 	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_str.c_str());
-	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, LLM_WriteCallback);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_data);
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, config.timeout_ms);
 

@@ -1,6 +1,6 @@
-#ifndef __CLASS_MYSQL_THREAD_H
-#define __CLASS_MYSQL_THREAD_H
-#define ____CLASS_STANDARD_MYSQL_THREAD_H
+#ifndef PROXYSQL_MYSQL_THREAD_H
+#define PROXYSQL_MYSQL_THREAD_H
+#define PROXYSQL_STANDARD_MYSQL_THREAD_H
 #include "prometheus/counter.h"
 #include "prometheus/gauge.h"
 
@@ -24,9 +24,9 @@
 #define MY_EPOLL_THREAD_MAXEVENTS 128
 */
 
-#define ADMIN_HOSTGROUP	-2
-#define STATS_HOSTGROUP	-3
-#define SQLITE_HOSTGROUP -4
+#define ADMIN_HOSTGROUP	(-2)
+#define STATS_HOSTGROUP	(-3)
+#define SQLITE_HOSTGROUP (-4)
 
 
 #define MYSQL_DEFAULT_SESSION_TRACK_GTIDS      "OFF"
@@ -297,7 +297,7 @@ struct p_th_counter {
 		mysql_killed_backend_connections,
 		mysql_killed_backend_queries,
 		client_host_error_killed_connections,
-		__size
+		SIZE_
 	};
 };
 
@@ -327,7 +327,7 @@ struct p_th_gauge {
 		mysql_monitor_replication_lag_interval,
 		mysql_monitor_replication_lag_timeout,
 		mysql_monitor_history,
-		__size
+		SIZE_
 
 	};
 };
@@ -480,6 +480,7 @@ class MySQL_Threads_Handler
 		int monitor_local_dns_cache_ttl;
 		int monitor_local_dns_cache_refresh_interval;
 		int monitor_local_dns_resolver_queue_maxsize;
+		char *resolution_family;
 		char *monitor_username;
 		char *monitor_password;
 		char * monitor_replication_lag_use_percona_heartbeat;
@@ -530,6 +531,7 @@ class MySQL_Threads_Handler
 		bool default_reconnect;
 		bool have_compress;
 		int protocol_compression_level;
+		int zstd_compression_level;
 		bool have_ssl;
 		bool multiplexing;
 //		bool stmt_multiplexing;
@@ -563,6 +565,14 @@ class MySQL_Threads_Handler
 		int default_query_delay;
 		int default_query_timeout;
 		int query_processor_iterations;
+		/**
+		 * @brief Defines when the first comment of a query needs to be processed.
+		 * 0 : comment ignored
+		 * 1 : comment processed before the query rules
+		 * 2 : comment processed after the query rules (default behavior)
+		 * 3 : comment processed before and after the query rules
+		 */
+		int query_processor_first_comment_parsing;
 		int query_processor_regex;
 		int set_query_lock_on_hostgroup;
 		int set_parser_algorithm;
@@ -653,13 +663,17 @@ class MySQL_Threads_Handler
 		 * Default: session_track_variables::DISABLED (0)
 		 */
 		int session_track_variables;
+#ifdef PROXYSQLFFTO
+		bool ffto_enabled;
+		int ffto_max_buffer_size;
+#endif
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;
 		int threads_initialized = 0;
 		/// Prometheus metrics arrays
-		std::array<prometheus::Counter*, p_th_counter::__size> p_counter_array {};
-		std::array<prometheus::Gauge*, p_th_gauge::__size> p_gauge_array {};
+		std::array<prometheus::Counter*, p_th_counter::SIZE_> p_counter_array {};
+		std::array<prometheus::Gauge*, p_th_gauge::SIZE_> p_gauge_array {};
 	} status_variables;
 
 	std::atomic<bool> bootstrapping_listeners;
@@ -757,7 +771,7 @@ class MySQL_Threads_Handler
 	~MySQL_Threads_Handler();
 	
 	char *get_variable_string(char *name);
-	uint16_t get_variable_uint16(char *name);
+	uint32_t get_variable_uint32(char *name);
 	int get_variable_int(const char *name);
 	void print_version();
 	void init(unsigned int num=0, size_t stack=0);
@@ -770,6 +784,17 @@ class MySQL_Threads_Handler
 	void start_listeners();
 	void stop_listeners();
 	void signal_all_threads(unsigned char _c=0);
+	/**
+	 * @brief Build an in-memory processlist snapshot for MySQL sessions.
+	 *
+	 * The returned resultset always uses the canonical `stats_mysql_processlist`
+	 * column layout. When `args.query_options.enabled=true`, the snapshot is
+	 * post-processed in memory using typed filters, deterministic sorting, and
+	 * pagination controls from `processlist_query_options_t`.
+	 *
+	 * @param args Processlist rendering options and optional query options.
+	 * @return Newly allocated resultset owned by the caller.
+	 */
 	SQLite3_result * SQL3_Processlist(processlist_config_t args);
 	SQLite3_result * SQL3_GlobalStatus(bool _memory);
 	bool kill_session(uint32_t _thread_session_id);
@@ -791,4 +816,4 @@ class MySQL_Threads_Handler
 };
 
 
-#endif /* __CLASS_MYSQL_THREAD_H */
+#endif /* PROXYSQL_MYSQL_THREAD_H */

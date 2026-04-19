@@ -359,13 +359,13 @@ struct pgsql_variable_st {
 	const char* alias[2];				// alias for the variable
 };
 
-#define IS_PGTRACKED_VAR_OPTION_SET(opt, flag) ((opt & flag) == flag)
-#define IS_PGTRACKED_VAR_OPTION_UNSET(opt, flag) ((opt & flag) == 0)
+#define IS_PGTRACKED_VAR_OPTION_SET(opt, flag) (((opt) & (flag)) == (flag))
+#define IS_PGTRACKED_VAR_OPTION_UNSET(opt, flag) (((opt) & (flag)) == 0)
 
-#define IS_PGTRACKED_VAR_OPTION_SET_QUOTE(opt)			 IS_PGTRACKED_VAR_OPTION_SET(opt.options, PGTRACKED_VAR_OPT_QUOTE)
-#define IS_PGTRACKED_VAR_OPTION_SET_SET_TRANSACTION(opt) IS_PGTRACKED_VAR_OPTION_SET(opt.options, PGTRACKED_VAR_OPT_SET_TRANSACTION)
-#define IS_PGTRACKED_VAR_OPTION_SET_PARAM_STATUS(opt)	 IS_PGTRACKED_VAR_OPTION_SET(opt.options, PGTRACKED_VAR_OPT_PARAM_STATUS)
-#define IS_PGTRACKED_VAR_OPTION_SET_NO_STRIP_VALUE(opt)	 IS_PGTRACKED_VAR_OPTION_SET(opt.options, PGTRACKED_VAR_OPT_NO_STRIP_VALUE)
+#define IS_PGTRACKED_VAR_OPTION_SET_QUOTE(opt)			 IS_PGTRACKED_VAR_OPTION_SET((opt).options, PGTRACKED_VAR_OPT_QUOTE)
+#define IS_PGTRACKED_VAR_OPTION_SET_SET_TRANSACTION(opt) IS_PGTRACKED_VAR_OPTION_SET((opt).options, PGTRACKED_VAR_OPT_SET_TRANSACTION)
+#define IS_PGTRACKED_VAR_OPTION_SET_PARAM_STATUS(opt)	 IS_PGTRACKED_VAR_OPTION_SET((opt).options, PGTRACKED_VAR_OPT_PARAM_STATUS)
+#define IS_PGTRACKED_VAR_OPTION_SET_NO_STRIP_VALUE(opt)	 IS_PGTRACKED_VAR_OPTION_SET((opt).options, PGTRACKED_VAR_OPT_NO_STRIP_VALUE)
 
 inline bool variable_name_exists(const pgsql_variable_st& var, const char* variable_name) {
 	
@@ -751,6 +751,7 @@ enum PROXYSQL_MYSQL_ERR {
 	ER_PROXYSQL_CONNECT_TIMEOUT                       = 9020,
 	ER_PROXYSQL_READONLY_TIMEOUT                      = 9021,
 	ER_PROXYSQL_FAST_FORWARD_CONN_CREATE              = 9022,
+	ER_PROXYSQL_REPL_LAG_TIMEOUT                      = 9023,
 };
 
 enum proxysql_session_type {
@@ -1119,6 +1120,10 @@ __thread int pgsql_thread___throttle_max_bytes_per_second_to_client;
 __thread int pgsql_thread___throttle_ratio_server_to_client;
 __thread int pgsql_thread___shun_on_failures;
 __thread int pgsql_thread___shun_recovery_time_sec;
+#ifdef PROXYSQLFFTO
+__thread bool pgsql_thread___ffto_enabled;
+__thread int pgsql_thread___ffto_max_buffer_size;
+#endif
 __thread int pgsql_thread___hostgroup_manager_verbose;
 __thread int pgsql_thread___default_max_latency_ms;
 __thread int pgsql_thread___unshun_algorithm;
@@ -1189,6 +1194,7 @@ __thread int pgsql_thread___eventslog_rate_limit;
 __thread char* pgsql_thread___firewall_whitelist_errormsg;
 __thread bool pgsql_thread___firewall_whitelist_enabled;
 __thread int pgsql_thread___query_processor_iterations;
+__thread int pgsql_thread___query_processor_first_comment_parsing;
 __thread int pgsql_thread___query_processor_regex;
 
 __thread bool pgsql_thread___monitor_enabled;
@@ -1204,6 +1210,11 @@ __thread int pgsql_thread___monitor_read_only_interval;
 __thread int pgsql_thread___monitor_read_only_interval_window;
 __thread int pgsql_thread___monitor_read_only_timeout;
 __thread int pgsql_thread___monitor_read_only_max_timeout_count;
+__thread int pgsql_thread___monitor_replication_lag_interval;
+__thread int pgsql_thread___monitor_replication_lag_interval_window;
+__thread int pgsql_thread___monitor_replication_lag_timeout;
+__thread int pgsql_thread___monitor_replication_lag_count;
+__thread char* pgsql_thread___monitor_replication_lag_use_percona_heartbeat;
 __thread bool pgsql_thread___monitor_writer_is_also_reader;
 __thread int pgsql_thread___monitor_threads;
 __thread char* pgsql_thread___monitor_username;
@@ -1241,6 +1252,10 @@ __thread int mysql_thread___max_transaction_idle_time;
 __thread int mysql_thread___max_transaction_time;
 __thread int mysql_thread___threshold_query_length;
 __thread int mysql_thread___fast_forward_grace_close_ms;
+#ifdef PROXYSQLFFTO
+__thread bool mysql_thread___ffto_enabled;
+__thread int mysql_thread___ffto_max_buffer_size;
+#endif
 __thread int mysql_thread___threshold_resultset_size;
 __thread int mysql_thread___wait_timeout;
 __thread int mysql_thread___throttle_max_bytes_per_second_to_client;
@@ -1269,6 +1284,7 @@ __thread int mysql_thread___connect_timeout_client;
 __thread int mysql_thread___connect_timeout_server;
 __thread int mysql_thread___connect_timeout_server_max;
 __thread int mysql_thread___query_processor_iterations;
+__thread int mysql_thread___query_processor_first_comment_parsing;
 __thread int mysql_thread___query_processor_regex;
 __thread int mysql_thread___set_query_lock_on_hostgroup;
 __thread int mysql_thread___set_parser_algorithm;
@@ -1282,6 +1298,7 @@ __thread int mysql_thread___poll_timeout_on_failure;
 __thread bool mysql_thread___connection_warming;
 __thread bool mysql_thread___have_compress;
 __thread int mysql_thread___protocol_compression_level;
+__thread int mysql_thread___zstd_compression_level;
 __thread bool mysql_thread___have_ssl;
 __thread bool mysql_thread___multiplexing;
 __thread bool mysql_thread___log_unhealthy_connections;
@@ -1389,6 +1406,7 @@ __thread int mysql_thread___monitor_threads_queue_maxsize;
 __thread int mysql_thread___monitor_local_dns_cache_ttl;
 __thread int mysql_thread___monitor_local_dns_cache_refresh_interval;
 __thread int mysql_thread___monitor_local_dns_resolver_queue_maxsize;
+__thread char * mysql_thread___resolution_family;
 __thread char * mysql_thread___monitor_username;
 __thread char * mysql_thread___monitor_password;
 __thread char * mysql_thread___monitor_replication_lag_use_percona_heartbeat;
@@ -1439,6 +1457,10 @@ extern __thread int pgsql_thread___throttle_max_bytes_per_second_to_client;
 extern __thread int pgsql_thread___throttle_ratio_server_to_client;
 extern __thread int pgsql_thread___shun_on_failures;
 extern __thread int pgsql_thread___shun_recovery_time_sec;
+#ifdef PROXYSQLFFTO
+extern __thread bool pgsql_thread___ffto_enabled;
+extern __thread int pgsql_thread___ffto_max_buffer_size;
+#endif
 extern __thread int pgsql_thread___hostgroup_manager_verbose;
 extern __thread int pgsql_thread___default_max_latency_ms;
 extern __thread int pgsql_thread___unshun_algorithm;
@@ -1507,6 +1529,7 @@ extern __thread int pgsql_thread___eventslog_rate_limit;
 extern __thread char* pgsql_thread___firewall_whitelist_errormsg;
 extern __thread bool pgsql_thread___firewall_whitelist_enabled;
 extern __thread int pgsql_thread___query_processor_iterations;
+extern __thread int pgsql_thread___query_processor_first_comment_parsing;
 extern __thread int pgsql_thread___query_processor_regex;
 
 extern __thread bool pgsql_thread___monitor_enabled;
@@ -1521,6 +1544,11 @@ extern __thread int pgsql_thread___monitor_ping_timeout;
 extern __thread int pgsql_thread___monitor_read_only_interval;
 extern __thread int pgsql_thread___monitor_read_only_interval_window;
 extern __thread int pgsql_thread___monitor_read_only_timeout;
+extern __thread int pgsql_thread___monitor_replication_lag_interval;
+extern __thread int pgsql_thread___monitor_replication_lag_interval_window;
+extern __thread int pgsql_thread___monitor_replication_lag_timeout;
+extern __thread int pgsql_thread___monitor_replication_lag_count;
+extern __thread char* pgsql_thread___monitor_replication_lag_use_percona_heartbeat;
 extern __thread int pgsql_thread___monitor_read_only_max_timeout_count;
 extern __thread bool pgsql_thread___monitor_writer_is_also_reader;
 extern __thread int pgsql_thread___monitor_threads;
@@ -1559,6 +1587,10 @@ extern __thread int mysql_thread___max_transaction_idle_time;
 extern __thread int mysql_thread___max_transaction_time;
 extern __thread int mysql_thread___threshold_query_length;
 extern __thread int mysql_thread___fast_forward_grace_close_ms;
+#ifdef PROXYSQLFFTO
+extern __thread bool mysql_thread___ffto_enabled;
+extern __thread int mysql_thread___ffto_max_buffer_size;
+#endif
 extern __thread int mysql_thread___threshold_resultset_size;
 extern __thread int mysql_thread___wait_timeout;
 extern __thread int mysql_thread___throttle_max_bytes_per_second_to_client;
@@ -1587,6 +1619,7 @@ extern __thread int mysql_thread___connect_timeout_client;
 extern __thread int mysql_thread___connect_timeout_server;
 extern __thread int mysql_thread___connect_timeout_server_max;
 extern __thread int mysql_thread___query_processor_iterations;
+extern __thread int mysql_thread___query_processor_first_comment_parsing;
 extern __thread int mysql_thread___query_processor_regex;
 extern __thread int mysql_thread___set_query_lock_on_hostgroup;
 extern __thread int mysql_thread___set_parser_algorithm;
@@ -1600,6 +1633,7 @@ extern __thread int mysql_thread___poll_timeout_on_failure;
 extern __thread bool mysql_thread___connection_warming;
 extern __thread bool mysql_thread___have_compress;
 extern __thread int mysql_thread___protocol_compression_level;
+extern __thread int mysql_thread___zstd_compression_level;
 extern __thread bool mysql_thread___have_ssl;
 extern __thread bool mysql_thread___multiplexing;
 extern __thread bool mysql_thread___log_unhealthy_connections;
@@ -1707,6 +1741,7 @@ extern __thread int mysql_thread___monitor_threads_queue_maxsize;
 extern __thread int mysql_thread___monitor_local_dns_cache_ttl;
 extern __thread int mysql_thread___monitor_local_dns_cache_refresh_interval;
 extern __thread int mysql_thread___monitor_local_dns_resolver_queue_maxsize;
+extern __thread char * mysql_thread___resolution_family;
 extern __thread char * mysql_thread___monitor_username;
 extern __thread char * mysql_thread___monitor_password;
 extern __thread char * mysql_thread___monitor_replication_lag_use_percona_heartbeat;

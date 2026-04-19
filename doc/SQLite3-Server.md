@@ -69,39 +69,6 @@ SELECT rowid, distance FROM vec_data
 WHERE vector MATCH json('[0.1, 0.2, 0.3,...,0.128]');
 ```
 
-### Embedding Generation (with sqlite-rembed)
-
-```sql
--- Register an embedding API client
-INSERT INTO temp.rembed_clients(name, format, model, key)
-VALUES ('openai', 'openai', 'text-embedding-3-small', 'your-api-key');
-
--- Generate text embeddings
-SELECT rembed('openai', 'Hello world') as embedding;
-
--- Complete AI pipeline: generate embedding and search
-CREATE VECTOR TABLE documents (embedding float[1536]);
-
-INSERT INTO documents(rowid, embedding)
-VALUES (1, rembed('openai', 'First document text'));
-
-INSERT INTO documents(rowid, embedding)
-VALUES (2, rembed('openai', 'Second document text'));
-
--- Search for similar documents
-SELECT rowid, distance FROM documents
-WHERE embedding MATCH rembed('openai', 'Search query');
-```
-
-#### Supported Embedding Providers
-- **OpenAI**: `format='openai', model='text-embedding-3-small'`
-- **Ollama** (local): `format='ollama', model='nomic-embed-text'`
-- **Cohere**: `format='cohere', model='embed-english-v3.0'`
-- **Nomic**: `format='nomic', model='nomic-embed-text-v1.5'`
-- **Llamafile** (local): `format='llamafile'`
-
-See [sqlite-rembed integration documentation](./sqlite-rembed-integration.md) for full details.
-
 ### Available Databases
 
 ```sql
@@ -120,11 +87,9 @@ SHOW DATABASES;
 
 1. **Data Analysis**: Store and analyze temporary data
 2. **Vector Search**: Perform similarity searches with sqlite-vec
-3. **Embedding Generation**: Create text embeddings with sqlite-rembed (OpenAI, Ollama, Cohere, etc.)
-4. **AI Pipelines**: Complete RAG workflows: embedding generation → vector storage → similarity search
-5. **Testing**: Test SQLite features with MySQL clients
-6. **Prototyping**: Quick data storage and retrieval
-7. **Custom Applications**: Build applications using SQLite with MySQL tools
+3. **Testing**: Test SQLite features with MySQL clients
+4. **Prototyping**: Quick data storage and retrieval
+5. **Custom Applications**: Build applications using SQLite with MySQL tools
 
 ## Limitations
 

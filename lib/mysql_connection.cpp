@@ -444,9 +444,11 @@ MySQL_Connection::MySQL_Connection() {
 
 	options.client_flag = 0;
 	options.compression_min_length=0;
+	options.zstd_compression_level=0;
 	options.server_version=NULL;
 	options.last_set_autocommit=-1;	// -1 = never set
 	options.autocommit=true;
+	options.compression_zstd=false;
 	options.no_backslash_escapes=false;
 	options.init_connect=NULL;
 	options.init_connect_sent=false;
@@ -865,8 +867,10 @@ void MySQL_Connection::connect_start_SetCharset() {
 
 void MySQL_Connection::connect_start_SetClientFlag(unsigned long& client_flags) {
 	client_flags = 0;
-	if (parent->compression)
+	if (parent->compression) {
 		client_flags |= CLIENT_COMPRESS;
+		client_flags |= CLIENT_ZSTD_COMPRESSION_ALGORITHM;
+	}
 
 	if (myds) {
 		if (myds->sess) {
@@ -918,9 +922,13 @@ void MySQL_Connection::connect_start_SetClientFlag(unsigned long& client_flags) 
 				// In case of 'fast_forward', we only enable compression if both, client and backend matches. Otherwise,
 				// we honor the behavior of a regular connection of when a connection doesn't agree on using compression
 				// during handshake, and we fallback to an uncompressed connection.
-				client_flags &= ~(CLIENT_COMPRESS); // we disable it by default
-				if (c->options.client_flag & CLIENT_COMPRESS) {
-					if (c->options.server_capabilities & CLIENT_COMPRESS) {
+				client_flags &= ~(CLIENT_COMPRESS | CLIENT_ZSTD_COMPRESSION_ALGORITHM); // we disable it by default
+				if (c->options.compression_min_length > 0) {
+					if (c->options.compression_zstd) {
+						if (c->options.server_capabilities & CLIENT_ZSTD_COMPRESSION_ALGORITHM) {
+							client_flags |= CLIENT_ZSTD_COMPRESSION_ALGORITHM;
+						}
+					} else if (c->options.server_capabilities & CLIENT_COMPRESS) {
 						client_flags |= CLIENT_COMPRESS;
 					}
 				}
@@ -1006,7 +1014,7 @@ void MySQL_Connection::connect_start() {
 		char* host_ip = connect_start_DNS_lookup();
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, host_ip, userinfo->username, auth_password, userinfo->schemaname, parent->port, NULL, client_flags);
 	} else {
-		client_flags &= ~(CLIENT_COMPRESS); // disabling compression for connections made via Unix socket
+		client_flags &= ~(CLIENT_COMPRESS | CLIENT_ZSTD_COMPRESSION_ALGORITHM); // disabling compression for connections made via Unix socket
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, "localhost", userinfo->username, auth_password, userinfo->schemaname, parent->port, parent->address, client_flags);
 	}
 	fd=mysql_get_socket(mysql);
@@ -1833,7 +1841,16 @@ handler_again:
 					update_warning_count_from_connection();
 					// we reach here if there was no error
 					// exclude warning_count from the OK/EOF packet for the SHOW WARNINGS statement
-					MyRS->add_eof(query.length == 13 && strncasecmp(query.ptr, "SHOW WARNINGS", 13) == 0);
+					bool is_show_warnings = false;
+					if (myds && myds->sess && myds->sess->CurrentQuery.QueryParserArgs.digest_text) {
+						const char* dig_text = myds->sess->CurrentQuery.QueryParserArgs.digest_text;
+						const size_t dig_len = strlen(dig_text);
+						is_show_warnings = (dig_len == 13 && strncasecmp(dig_text, "SHOW WARNINGS", 13) == 0);
+					} else {
+						// Fallback to raw query when digest is unavailable (digests disabled)
+						is_show_warnings = (query.length == 13 && strncasecmp(query.ptr, "SHOW WARNINGS", 13) == 0);
+					}
+					MyRS->add_eof(is_show_warnings);
 					NEXT_IMMEDIATE(ASYNC_QUERY_END);
 				}
 			}

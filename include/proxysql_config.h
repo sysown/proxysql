@@ -1,5 +1,5 @@
-#ifndef __PROXYSQL_CONFIG_H__
-#define __PROXYSQL_CONFIG_H__
+#ifndef PROXYSQL_CONFIG_H
+#define PROXYSQL_CONFIG_H
 
 #include <string>
 #include <libconfig.h++>
@@ -26,6 +26,7 @@ enum proxysql_config_type {
  * cases where users mistakenly include the module prefix (e.g., "mysql-") in variable names.
  */
 class ProxySQL_Config {
+	friend class ProxySQL_Config_TestHelper;
 public:
 	SQLite3DB* admindb;
 	/** @brief Constructs ProxySQL_Config with a database handle */

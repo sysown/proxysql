@@ -3,6 +3,7 @@ using json = nlohmann::json;
 #define PROXYJSON
 
 #include "PgSQL_HostGroups_Manager.h"
+#include "ConnectionPoolDecision.h"
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -22,7 +23,6 @@ using json = nlohmann::json;
 #include "proxysql_utils.h"
 
 #define char_malloc (char *)malloc
-#define itostr(__s, __i)  { __s=char_malloc(32); sprintf(__s, "%lld", __i); }
 
 #include "thread.h"
 #include "wqueue.h"
@@ -682,7 +682,8 @@ hg_metrics_map = std::make_tuple(
 			"proxysql_connpool_data_bytes_total",
 			"Amount of data (sent|recv) from the backend, excluding metadata.",
 			metric_tags {
-				{ "traffic_flow", "recv" }
+				{ "traffic_flow", "recv" },
+				{ "protocol", "pgsql" }
 			}
 		),
 		std::make_tuple (
@@ -690,7 +691,8 @@ hg_metrics_map = std::make_tuple(
 			"proxysql_connpool_data_bytes_total",
 			"Amount of data (sent|recv) from the backend, excluding metadata.",
 			metric_tags {
-				{ "traffic_flow", "sent" }
+				{ "traffic_flow", "sent" },
+				{ "protocol", "pgsql" }
 			}
 		),
 		// ====================================================================
@@ -701,7 +703,8 @@ hg_metrics_map = std::make_tuple(
 			"proxysql_connpool_conns_total",
 			"How many connections have been tried to be established.",
 			metric_tags {
-				{ "status", "err" }
+				{ "status", "err" },
+				{ "protocol", "pgsql" }
 			}
 		),
 		std::make_tuple (
@@ -709,7 +712,8 @@ hg_metrics_map = std::make_tuple(
 			"proxysql_connpool_conns_total",
 			"How many connections have been tried to be established.",
 			metric_tags {
-				{ "status", "ok" }
+				{ "status", "ok" },
+				{ "protocol", "pgsql" }
 			}
 		),
 		// ====================================================================
@@ -718,7 +722,9 @@ hg_metrics_map = std::make_tuple(
 			PgSQL_p_hg_dyn_counter::connection_pool_queries,
 			"proxysql_connpool_conns_queries_total",
 			"The number of queries routed towards this particular backend server.",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "pgsql" }
+			}
 		),
 		// gtid
 		std::make_tuple (
@@ -748,7 +754,8 @@ hg_metrics_map = std::make_tuple(
 			"proxysql_connpool_conns",
 			"How many backend connections are currently (free|used).",
 			metric_tags {
-				{ "status", "free" }
+				{ "status", "free" },
+				{ "protocol", "pgsql" }
 			}
 		),
 		std::make_tuple (
@@ -756,20 +763,25 @@ hg_metrics_map = std::make_tuple(
 			"proxysql_connpool_conns",
 			"How many backend connections are currently (free|used).",
 			metric_tags {
-				{ "status", "used" }
+				{ "status", "used" },
+				{ "protocol", "pgsql" }
 			}
 		),
 		std::make_tuple (
 			PgSQL_p_hg_dyn_gauge::connection_pool_latency_us,
 			"proxysql_connpool_conns_latency_us",
 			"The currently ping time in microseconds, as reported from Monitor.",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "pgsql" }
+			}
 		),
 		std::make_tuple (
 			PgSQL_p_hg_dyn_gauge::connection_pool_status,
 			"proxysql_connpool_conns_status",
 			"The status of the backend server (1 - ONLINE, 2 - SHUNNED, 3 - OFFLINE_SOFT, 4 - OFFLINE_HARD).",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "pgsql" }
+			}
 		)
 	}
 );
@@ -821,6 +833,7 @@ PgSQL_HostGroups_Manager::PgSQL_HostGroups_Manager() {
 #endif /* DEBUG */
 	mydb->execute(MYHGM_PgSQL_SERVERS);
 	mydb->execute(MYHGM_PgSQL_SERVERS_INCOMING);
+	mydb->execute(MYHGM_PgSQL_SERVERS_SSL_PARAMS);
 	mydb->execute(MYHGM_PgSQL_REPLICATION_HOSTGROUPS);
 	mydb->execute(MYHGM_PgSQL_HOSTGROUP_ATTRIBUTES);
 	mydb->execute("CREATE INDEX IF NOT EXISTS idx_pgsql_servers_hostname_port ON pgsql_servers (hostname,port)");
@@ -1037,6 +1050,7 @@ void PgSQL_HostGroups_Manager::commit_update_checksums_from_tables(SpookyHash& m
 
 	CUCFT1(myhash,init,"pgsql_replication_hostgroups","writer_hostgroup", table_resultset_checksum[HGM_TABLES::PgSQL_REPLICATION_HOSTGROUPS]);
 	CUCFT1(myhash,init,"pgsql_hostgroup_attributes","hostgroup_id", table_resultset_checksum[HGM_TABLES::PgSQL_HOSTGROUP_ATTRIBUTES]);
+	CUCFT1(myhash,init,"pgsql_servers_ssl_params","hostname,port,username", table_resultset_checksum[HGM_TABLES::PgSQL_SERVERS_SSL_PARAMS]);
 }
 
 /**
@@ -1504,6 +1518,13 @@ bool PgSQL_HostGroups_Manager::commit(
 			generate_pgsql_hostgroup_attributes_table();
 		}
 
+		// SSL params
+		if (incoming_pgsql_servers_ssl_params) {
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM pgsql_servers_ssl_params\n");
+			mydb->execute("DELETE FROM pgsql_servers_ssl_params");
+			generate_pgsql_servers_ssl_params_table();
+		}
+
 		uint64_t new_hash = commit_update_checksum_from_pgsql_servers_v2(peer_pgsql_servers_v2.resultset);
 
 		{
@@ -1826,6 +1847,8 @@ SQLite3_result * PgSQL_HostGroups_Manager::dump_table_pgsql(const string& name) 
 		query = (char *)PGHGM_GEN_ADMIN_RUNTIME_SERVERS;
 	} else if (name == "cluster_pgsql_servers") {
 		query = (char *)PGHGM_GEN_CLUSTER_ADMIN_RUNTIME_SERVERS;
+	} else if (name == "pgsql_servers_ssl_params") {
+		query=(char *)"SELECT hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_crl, ssl_crlpath, ssl_protocol_version_range, comment FROM pgsql_servers_ssl_params ORDER BY hostname, port, username";
 	} else {
 		assert(0);
 	}
@@ -2318,7 +2341,7 @@ void PgSQL_SrvConnList::get_random_MyConn_inner_search(unsigned int start, unsig
 PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, bool ff) {
 	PgSQL_Connection * conn=NULL;
 	unsigned int i;
-	unsigned int conn_found_idx;
+	unsigned int conn_found_idx = 0;
 	unsigned int l=conns_length();
 	unsigned int connection_quality_level = 0;
 	bool needs_warming = false;
@@ -2335,19 +2358,16 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 		connection_warming = mysrvc->myhgc->attributes.connection_warming;
 		free_connections_pct = mysrvc->myhgc->attributes.free_connections_pct;
 	}
+	unsigned int conns_free = mysrvc->ConnectionsFree->conns_length();
+	unsigned int conns_used = mysrvc->ConnectionsUsed->conns_length();
 	if (connection_warming == true) {
-		unsigned int total_connections = mysrvc->ConnectionsFree->conns_length()+mysrvc->ConnectionsUsed->conns_length();
-		unsigned int expected_warm_connections = free_connections_pct*mysrvc->max_connections/100;
+		unsigned int total_connections = conns_free + conns_used;
+		unsigned int expected_warm_connections = (unsigned int)free_connections_pct * mysrvc->max_connections / 100;
 		if (total_connections < expected_warm_connections) {
 			needs_warming = true;
 		}
 	}
 	if (l && ff==false && needs_warming==false) {
-		//if (l>32768) {
-		//	i=rand()%l;
-		//} else {
-		//	i=fastrand()%l;
-		//}
 		i = rand_fast() % l;
 		if (sess && sess->client_myds && sess->client_myds->myconn && sess->client_myds->myconn->userinfo) {
 			PgSQL_Connection * client_conn = sess->client_myds->myconn;
@@ -2355,6 +2375,11 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 			if (connection_quality_level !=3 ) { // we didn't find the perfect connection
 				get_random_MyConn_inner_search(0, i, conn_found_idx, connection_quality_level, number_of_matching_session_variables, client_conn);
 			}
+			// Evaluate pool state to determine create-vs-reuse and eviction (warming already handled above)
+			ConnectionPoolDecision decision = evaluate_pool_state(
+				conns_free, conns_used, (unsigned int)mysrvc->max_connections,
+				connection_quality_level, false, 0
+			);
 			// connection_quality_level:
 			// 1 : tracked options are OK , but RESETTING SESSION is required
 			// 2 : tracked options are OK , RESETTING SESSION is not required, but some SET statement or INIT_DB needs to be executed
@@ -2363,25 +2388,14 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 					// we must check if connections need to be freed before
 					// creating a new connection
 					{
-						unsigned int conns_free = mysrvc->ConnectionsFree->conns_length();
-						unsigned int conns_used = mysrvc->ConnectionsUsed->conns_length();
-						unsigned int pct_max_connections = (3 * mysrvc->max_connections) / 4;
-						unsigned int connections_to_free = 0;
+						if (decision.evict_connections) {
+							unsigned int cur_free = conns_free;
+							unsigned int connections_to_free = decision.num_to_evict;
+							while (cur_free && connections_to_free) {
+								PgSQL_Connection* c = mysrvc->ConnectionsFree->remove(0);
+								delete c;
 
-						if (conns_free >= 1) {
-							// connection cleanup is triggered when connections exceed 3/4 of the total
-							// allowed max connections, this cleanup ensures that at least *one connection*
-							// will be freed.
-							if (pct_max_connections <= (conns_free + conns_used)) {
-								connections_to_free = (conns_free + conns_used) - pct_max_connections;
-								if (connections_to_free == 0) connections_to_free = 1;
-							}
-
-							while (conns_free && connections_to_free) {
-								PgSQL_Connection* conn = mysrvc->ConnectionsFree->remove(0);
-								delete conn;
-
-								conns_free = mysrvc->ConnectionsFree->conns_length();
+								cur_free = mysrvc->ConnectionsFree->conns_length();
 								connections_to_free -= 1;
 							}
 						}
@@ -2398,9 +2412,7 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 				case 1: //tracked options are OK , but RESETTING SESSION is required
 					// we may consider creating a new connection
 					{
-					unsigned int conns_free = mysrvc->ConnectionsFree->conns_length();
-					unsigned int conns_used = mysrvc->ConnectionsUsed->conns_length();
-					if ((conns_used > conns_free) && (mysrvc->max_connections > (conns_free/2 + conns_used/2)) ) {
+					if (decision.create_new_connection) {
 						conn = new PgSQL_Connection(false);
 						conn->parent=mysrvc;
 						// if attributes.multiplex == true , STATUS_PGSQL_CONNECTION_NO_MULTIPLEX_HG is set to false. And vice-versa
@@ -2442,7 +2454,7 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 			// pgsql_hostgroup_attributes takes priority
 			throttle_connections_per_sec_to_hostgroup = _myhgc->attributes.throttle_connections_per_sec;
 		}
-		if (_myhgc->new_connections_now > (unsigned int) throttle_connections_per_sec_to_hostgroup) {
+		if (should_throttle_connection_creation(_myhgc->new_connections_now, throttle_connections_per_sec_to_hostgroup)) {
 			__sync_fetch_and_add(&PgHGM->status.server_connections_delayed, 1);
 			return NULL;
 		} else {
@@ -2667,7 +2679,7 @@ void PgSQL_HostGroups_Manager::replication_lag_action_inner(PgSQL_HGC *myhgc, co
 				) {
 					// always increase the counter
 					mysrvc->cur_replication_lag_count += 1;
-					if (mysrvc->cur_replication_lag_count >= (unsigned int)mysql_thread___monitor_replication_lag_count) {
+					if (mysrvc->cur_replication_lag_count >= (unsigned int)pgsql_thread___monitor_replication_lag_count) {
 						proxy_warning("Shunning server %s:%d from HG %u with replication lag of %d second, count number: '%d'\n", address, port, myhgc->hid, current_replication_lag, mysrvc->cur_replication_lag_count);
 						mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
 					} else {
@@ -2678,7 +2690,7 @@ void PgSQL_HostGroups_Manager::replication_lag_action_inner(PgSQL_HGC *myhgc, co
 							myhgc->hid,
 							current_replication_lag,
 							mysrvc->cur_replication_lag_count,
-							mysql_thread___monitor_replication_lag_count
+							pgsql_thread___monitor_replication_lag_count
 						);
 					}
 				} else {
@@ -2716,7 +2728,7 @@ void PgSQL_HostGroups_Manager::replication_lag_action(const std::list<replicatio
 		const unsigned int port = std::get<PgSQL_REPLICATION_LAG_SERVER_T::PG_RLS_PORT>(server);
 		const int current_replication_lag = std::get<PgSQL_REPLICATION_LAG_SERVER_T::PG_RLS_CURRENT_REPLICATION_LAG>(server);
 
-		if (mysql_thread___monitor_replication_lag_group_by_host == false) {
+		if (/* pgsql_thread___monitor_replication_lag_group_by_host == */ false) { // feature currently not enabled
 			// legacy check. 1 check per server per hostgroup
 			PgSQL_HGC *myhgc = MyHGC_find(hid);
 			replication_lag_action_inner(myhgc,address.c_str(),port,current_replication_lag);
@@ -2915,6 +2927,8 @@ void PgSQL_HostGroups_Manager::save_incoming_pgsql_table(SQLite3_result *s, cons
 		inc = &incoming_replication_hostgroups;
 	} else if (name == "pgsql_hostgroup_attributes") {
 		inc = &incoming_hostgroup_attributes;
+	} else if (name == "pgsql_servers_ssl_params") {
+		inc = &incoming_pgsql_servers_ssl_params;
 	} else {
 		assert(0);
 	}
@@ -2950,6 +2964,8 @@ SQLite3_result* PgSQL_HostGroups_Manager::get_current_pgsql_table(const string& 
 		return this->runtime_pgsql_servers;
 	} else if (name == "pgsql_servers_v2") {
 		return this->incoming_pgsql_servers_v2;
+	} else if (name == "pgsql_servers_ssl_params") {
+		return this->incoming_pgsql_servers_ssl_params;
 	} else {
 		assert(0);
 	}
@@ -3123,7 +3139,8 @@ void PgSQL_HostGroups_Manager::p_update_connection_pool() {
 			std::string endpoint_id = hostgroup_id + ":" + endpoint_addr + ":" + endpoint_port;
 			const std::map<std::string, std::string> common_labels {
 				{"endpoint", endpoint_addr + ":" + endpoint_port},
-				{"hostgroup", hostgroup_id }
+				{"hostgroup", hostgroup_id },
+				{"protocol", "pgsql" }
 			};
 			cur_servers_ids.push_back(endpoint_id);
 
@@ -3953,6 +3970,76 @@ void PgSQL_HostGroups_Manager::generate_pgsql_hostgroup_attributes_table() {
 
 	delete incoming_hostgroup_attributes;
 	incoming_hostgroup_attributes=NULL;
+}
+
+void PgSQL_HostGroups_Manager::generate_pgsql_servers_ssl_params_table() {
+	if (incoming_pgsql_servers_ssl_params==NULL) {
+		return;
+	}
+	int rc;
+
+	const char * query = (const char *)"INSERT INTO pgsql_servers_ssl_params ("
+		"hostname, port, username, ssl_ca, ssl_cert, ssl_key, "
+		"ssl_crl, ssl_crlpath, ssl_protocol_version_range, comment) VALUES "
+		"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
+
+	auto [rc1, statement_unique] = mydb->prepare_v2(query);
+	ASSERT_SQLITE_OK(rc1, mydb);
+	sqlite3_stmt *statement = statement_unique.get();
+	proxy_info("New pgsql_servers_ssl_params table\n");
+	std::lock_guard<std::mutex> lock(PgSQL_Servers_SSL_Params_map_mutex);
+	PgSQL_Servers_SSL_Params_map.clear();
+
+	for (std::vector<SQLite3_row *>::iterator it = incoming_pgsql_servers_ssl_params->rows.begin() ; it != incoming_pgsql_servers_ssl_params->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		proxy_info("Loading PgSQL Server SSL Params for (%s,%s,%s)\n",
+			r->fields[0], r->fields[1], r->fields[2]
+		);
+
+		rc=(*proxy_sqlite3_bind_text)(statement,  1,  r->fields[0]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // hostname
+		rc=(*proxy_sqlite3_bind_int64)(statement, 2,  atoi(r->fields[1]));                   ASSERT_SQLITE_OK(rc, mydb); // port
+		rc=(*proxy_sqlite3_bind_text)(statement,  3,  r->fields[2]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // username
+		rc=(*proxy_sqlite3_bind_text)(statement,  4,  r->fields[3]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_ca
+		rc=(*proxy_sqlite3_bind_text)(statement,  5,  r->fields[4]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_cert
+		rc=(*proxy_sqlite3_bind_text)(statement,  6,  r->fields[5]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_key
+		rc=(*proxy_sqlite3_bind_text)(statement,  7,  r->fields[6]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_crl
+		rc=(*proxy_sqlite3_bind_text)(statement,  8,  r->fields[7]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_crlpath
+		rc=(*proxy_sqlite3_bind_text)(statement,  9,  r->fields[8]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_protocol_version_range
+		rc=(*proxy_sqlite3_bind_text)(statement,  10, r->fields[9]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // comment
+
+		SAFE_SQLITE3_STEP2(statement);
+		rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mydb);
+
+		PgSQLServers_SslParams PSSP(
+			r->fields[0], atoi(r->fields[1]), r->fields[2],
+			r->fields[3], r->fields[4], r->fields[5],
+			r->fields[6], r->fields[7],
+			r->fields[8], r->fields[9]
+		);
+		string MapKey = PSSP.getMapKey(rand_del);
+		PgSQL_Servers_SSL_Params_map.emplace(MapKey, PSSP);
+	}
+	delete incoming_pgsql_servers_ssl_params;
+	incoming_pgsql_servers_ssl_params=NULL;
+}
+
+PgSQLServers_SslParams * PgSQL_HostGroups_Manager::get_Server_SSL_Params(char *hostname, int port, char *username) {
+	string MapKey = string(hostname) + string(rand_del) + to_string(port) + string(rand_del) + string(username);
+	std::lock_guard<std::mutex> lock(PgSQL_Servers_SSL_Params_map_mutex);
+	auto it = PgSQL_Servers_SSL_Params_map.find(MapKey);
+	if (it != PgSQL_Servers_SSL_Params_map.end()) {
+		PgSQLServers_SslParams * PSSP = new PgSQLServers_SslParams(it->second);
+		return PSSP;
+	} else {
+		MapKey = string(hostname) + string(rand_del) + to_string(port) + string(rand_del) + "";
+		it = PgSQL_Servers_SSL_Params_map.find(MapKey);
+		if (it != PgSQL_Servers_SSL_Params_map.end()) {
+			PgSQLServers_SslParams * PSSP = new PgSQLServers_SslParams(it->second);
+			return PSSP;
+		}
+	}
+	return NULL;
 }
 
 int PgSQL_HostGroups_Manager::create_new_server_in_hg(

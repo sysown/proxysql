@@ -70,6 +70,7 @@ CommandLine::~CommandLine() {
 	if (pgsql_root_password)
 		free(pgsql_root_password);
 
+        if (cluster_nodes) free(cluster_nodes);
 	if (workdir)
 		free(workdir);
 }
@@ -351,6 +352,9 @@ int CommandLine::getEnv() {
 			replace_str_field(&this->pgsql_server_password, value);
 	}
 
+        value = getenv("TAP_CLUSTER_NODES");
+        if (value)
+                replace_str_field(&this->cluster_nodes, value);
 	value = getenv("TAP_WORKDIR");
 	if (value)
 		replace_str_field(&this->workdir, value);
@@ -374,6 +378,21 @@ int CommandLine::getEnv() {
 		} else {
 			this->client_flags = env_c_flags;
 		}
+	}
+
+	value = getenv("TAP_USE_NOISE");
+	if (value) {
+		if (strcmp(value, "1") == 0 || strcasecmp(value, "true") == 0) {
+			this->use_noise = true;
+		}
+	}
+
+	// Set protocol-specific noise flags based on available infrastructure
+	if (this->use_noise) {
+		const char* mysql_infra = getenv("DEFAULT_MYSQL_INFRA");
+		const char* pgsql_infra = getenv("DEFAULT_PGSQL_INFRA");
+		this->use_noise_mysql = (mysql_infra && mysql_infra[0] != '\0');
+		this->use_noise_pgsql = (pgsql_infra && pgsql_infra[0] != '\0');
 	}
 
 	return 0;

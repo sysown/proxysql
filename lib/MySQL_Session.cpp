@@ -27,6 +27,9 @@ using json = nlohmann::json;
 #include "MySQL_Variables.h"
 #include "ProxySQL_Cluster.hpp"
 #include "MySQL_Query_Cache.h"
+#ifdef PROXYSQLFFTO
+#include "MySQLFFTO.hpp"
+#endif
 
 #include "libinjection.h"
 #include "libinjection_sqli.h"
@@ -199,9 +202,9 @@ KillArgs::KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hid,
 }
 
 KillArgs::KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hid, unsigned long i, int kt, int _use_ssl, MySQL_Thread *_mt, char *ip) {
-	username=strdup(u);
-	password=strdup(p);
-	hostname=strdup(h);
+	username=u ? strdup(u) : nullptr;
+	password=p ? strdup(p) : nullptr;
+	hostname=h ? strdup(h) : nullptr;
 	ip_addr = NULL;
 	if (ip)
 		ip_addr = strdup(ip);
@@ -233,10 +236,10 @@ const char* KillArgs::get_host_address() const {
 
 /**
  * @brief Thread function to kill a query or connection on a MySQL server.
- * 
+ *
  * This function is executed in a separate thread to kill a query or connection on a MySQL server.
  * It establishes a connection to the MySQL server and sends a kill command to terminate the specified query or connection.
- * 
+ *
  * @param[in] arg A pointer to a KillArgs structure containing the necessary parameters for killing the query or connection.
  * @return nullptr.
  */
@@ -360,7 +363,9 @@ extern MySQL_Threads_Handler *GloMTH;
  * @brief Default constructor.
  * Initializes all member variables to their default values.
  */
-Query_Info::Query_Info() {
+Query_Info::Query_Info()
+  : sess(nullptr), mysql_stmt(nullptr), stmt_meta(nullptr), stmt_global_id(0)
+{
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
 	QueryPointer=NULL;
 	QueryLength=0;
@@ -648,6 +653,9 @@ MySQL_Session::MySQL_Session() {
 	user_attributes=NULL;
 	schema_locked=false;
 	session_fast_forward=SESSION_FORWARD_TYPE_NONE;
+#ifdef PROXYSQLFFTO
+	ffto_bypassed=false;
+#endif
 	//started_sending_data_to_client=false;
 	handler_function=NULL;
 	client_myds=NULL;
@@ -732,6 +740,13 @@ void MySQL_Session::reset() {
 	with_gtid = false;
 	backend_closed_in_fast_forward = false;
 	fast_forward_grace_start_time = 0;
+#ifdef PROXYSQLFFTO
+	ffto_bypassed = false;
+	if (m_ffto) {
+		m_ffto->on_close();
+	}
+	m_ffto.reset();
+#endif
 
 	//gtid_trxid = 0;
 	gtid_hid = -1;
@@ -756,8 +771,8 @@ void MySQL_Session::reset() {
  * @brief Destructor for the MySQL session.
  */
 MySQL_Session::~MySQL_Session() {
-
-	reset(); // we moved this out to allow CHANGE_USER
+	reset();
+ // we moved this out to allow CHANGE_USER
 
 	if (locked_on_hostgroup >= 0) {
 		thread->status_variables.stvar[st_var_hostgroup_locked]--;
@@ -1376,7 +1391,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			return true;
 		}
 	}
-	// if query digest is disabled, warnings in ProxySQL are also deactivated, 
+	// if query digest is disabled, warnings in ProxySQL are also deactivated,
 	// resulting in an empty response being sent to the client.
 	if ((pkt->size == 18) && (strncasecmp((char*)"SHOW WARNINGS", (char*)pkt->ptr + 5, 13) == 0) &&
 		CurrentQuery.QueryParserArgs.digest_text == nullptr) {
@@ -1395,7 +1410,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		l_free(pkt->size, pkt->ptr);
 		return true;
 	}
-	// if query digest is disabled, warnings in ProxySQL are also deactivated, 
+	// if query digest is disabled, warnings in ProxySQL are also deactivated,
 	// resulting in zero warning count sent to the client.
 	if ((pkt->size == 27) && (strncasecmp((char*)"SHOW COUNT(*) WARNINGS", (char*)pkt->ptr + 5, 22) == 0) &&
 		CurrentQuery.QueryParserArgs.digest_text == nullptr) {
@@ -2676,7 +2691,7 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 							break;
 						}
 					}
-					if (idx != SQL_NAME_LAST_LOW_WM) {
+					if (idx >= 0 && idx < SQL_NAME_LAST_HIGH_WM) {
 						myconn->var_absent[idx] = true;
 
 						myds->myconn->async_free_result();
@@ -3391,7 +3406,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					string nqn = string((char *)CurrentQuery.QueryPointer,l);
 					char *err_msg = (char *)"Session trying to reach HG %d while locked on HG %d . Rejecting query: %s";
 					char *buf = (char *)malloc(strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64);
-					sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
+					sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str());
 					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9005,(char *)"HY000",buf, true);
 					thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
 					RequestEnd(NULL, 9005, buf);
@@ -3421,6 +3436,16 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			// we will now generate a unique stmt and send it to the client
 			uint32_t new_stmt_id=client_myds->myconn->local_stmts->generate_new_client_stmt_id(stmt_info->statement_id);
 			CurrentQuery.stmt_client_id=new_stmt_id;
+
+			// When first_comment_parsing is set to 1 (before query rules) or 3 (before_and_after query rules),
+			// query rules may strip the min_gtid annotation during STMT_PREPARE. Persist it per client
+			// statement ID so that STMT_EXECUTE can restore the original routing constraint.
+			// For more context, refer to https://github.com/sysown/proxysql/issues/5384
+			int first_comment_parsing = mysql_thread___query_processor_first_comment_parsing;
+			if (first_comment_parsing == 1 || first_comment_parsing == 3) {
+				client_myds->myconn->local_stmts->set_client_min_gtid(new_stmt_id, qpo->min_gtid);
+			}
+
 			client_myds->setDSS_STATE_QUERY_SENT_NET();
 			client_myds->myprot.generate_STMT_PREPARE_RESPONSE(client_myds->pkt_sid+1,stmt_info,new_stmt_id);
 			LogQuery(NULL);
@@ -3536,10 +3561,22 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			// but as we reached here, stmt_meta is not null and we save the metadata
 			sess_STMTs_meta->insert(stmt_global_id,stmt_meta);
 		}
-		// else
 
 		CurrentQuery.stmt_meta=stmt_meta;
 		//current_hostgroup=qpo->destination_hostgroup;
+
+		// When first_comment_parsing is set to 1 (before query rules) or 3 (before_and_after query rules),
+		// query rules may strip the min_gtid annotation during STMT_PREPARE. So we persist it per client
+		// statement ID and restore it during STMT_EXECUTE.
+		// For more context, refer to https://github.com/sysown/proxysql/issues/5384
+		int first_comment_parsing = mysql_thread___query_processor_first_comment_parsing;
+		if (!qpo->min_gtid && (first_comment_parsing == 1 || first_comment_parsing == 3)) {
+			const char *saved_min_gtid = client_myds->myconn->local_stmts->find_client_min_gtid(client_stmt_id);
+			if (saved_min_gtid) {
+				qpo->min_gtid = strdup(saved_min_gtid);
+			}
+		}
+
 		rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt, &lock_hostgroup, ps_type_execute_stmt);
 		if (rc_break==true) {
 			return;
@@ -3564,7 +3601,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					string nqn = string((char *)CurrentQuery.stmt_info->query,l);
 					char *err_msg = (char *)"Session trying to reach HG %d while locked on HG %d . Rejecting query: %s";
 					char *buf = (char *)malloc(strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64);
-					sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
+					sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str());
 					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9005,(char *)"HY000",buf, true);
 					thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
 					RequestEnd(NULL, 9005, buf);
@@ -3785,6 +3822,15 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		status = WAITING_CLIENT_DATA;
 		return;
 	}
+	if (!GloGATH->variables.genai_enabled) {
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1238, (char*)"HY000",
+			"GenAI is disabled (set genai-enabled=true)", true);
+		l_free(pkt->size, pkt->ptr);
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+		return;
+	}
 
 #ifdef epoll_create1
 	// Use async path with socketpair for non-blocking operation
@@ -3963,6 +4009,15 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	if (!GloGATH) {
 		client_myds->DSS = STATE_QUERY_SENT_NET;
 		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1241, (char*)"HY000", "GenAI module is not initialized", true);
+		l_free(pkt->size, pkt->ptr);
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+		return;
+	}
+	if (!GloGATH->variables.genai_enabled || !GloGATH->variables.genai_llm_enabled) {
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1245, (char*)"HY000",
+			"LLM is disabled (set genai-enabled=true and genai-llm_enabled=true)", true);
 		l_free(pkt->size, pkt->ptr);
 		client_myds->DSS = STATE_SLEEP;
 		status = WAITING_CLIENT_DATA;
@@ -4223,6 +4278,11 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___genai_s
 	if (written != sizeof(hdr)) {
 		proxy_error("GenAI: Failed to write request header to fd %d: %s\n",
 					fds[0], strerror(errno));
+		auto it = pending_genai_requests_.find(hdr.request_id);
+		if (it != pending_genai_requests_.end() && it->second.original_pkt) {
+			it->second.original_pkt->ptr = nullptr;
+			it->second.original_pkt->size = 0;
+		}
 		genai_cleanup_request(hdr.request_id);
 		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1263, (char*)"HY000",
 			"Failed to send request to GenAI module", true);
@@ -4240,6 +4300,11 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___genai_s
 			}
 			proxy_error("GenAI: Failed to write JSON query to fd %d: %s\n",
 						fds[0], strerror(errno));
+			auto it = pending_genai_requests_.find(hdr.request_id);
+			if (it != pending_genai_requests_.end() && it->second.original_pkt) {
+				it->second.original_pkt->ptr = nullptr;
+				it->second.original_pkt->size = 0;
+			}
 			genai_cleanup_request(hdr.request_id);
 			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1264, (char*)"HY000",
 				"Failed to send query to GenAI module", true);
@@ -4798,6 +4863,9 @@ int MySQL_Session::GPFC_Statuses2(bool& wrong_pass, PtrSize_t& pkt) {
 			}
 			break;
 		case FAST_FORWARD:
+#ifdef PROXYSQLFFTO
+			observe_ffto_client_packet(pkt);
+#endif
 			mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
 			/*
 			 * Fast Forward Grace Close Logic:
@@ -4844,6 +4912,9 @@ int MySQL_Session::GPFC_Statuses2(bool& wrong_pass, PtrSize_t& pkt) {
 		//  'FAST_FORWARD' should be pushed to 'PSarrayOUT'.
 		case CONNECTING_SERVER:
 			if (previous_status.empty() == false && previous_status.top() == FAST_FORWARD) {
+#ifdef PROXYSQLFFTO
+				observe_ffto_client_packet(pkt);
+#endif
 				mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
 				break;
 			}
@@ -4856,6 +4927,30 @@ int MySQL_Session::GPFC_Statuses2(bool& wrong_pass, PtrSize_t& pkt) {
 	}
 	return handler_ret;
 }
+
+#ifdef PROXYSQLFFTO
+void MySQL_Session::observe_ffto_client_packet(const PtrSize_t& pkt) {
+	if (!pkt.ptr || pkt.size == 0) return;
+	if (!mysql_thread___ffto_enabled || ffto_bypassed) return;
+
+	std::size_t current_buffered = m_ffto ? m_ffto->get_buffered_size() : 0;
+	if (current_buffered + pkt.size > (size_t)mysql_thread___ffto_max_buffer_size) {
+		ffto_bypassed = true;
+		if (m_ffto) {
+			m_ffto->on_close();
+		}
+		m_ffto.reset();
+		return;
+	}
+
+	if (!m_ffto) {
+		m_ffto = std::make_unique<MySQLFFTO>(this);
+	}
+	if (m_ffto) {
+		m_ffto->on_client_data((const char*)pkt.ptr, pkt.size);
+	}
+}
+#endif
 
 void MySQL_Session::GPFC_DetectedMultiPacket_SetDDS() {
 	// this is handled only for real traffic, not mirror
@@ -4889,6 +4984,9 @@ int MySQL_Session::GPFC_WaitingClientData_FastForwardSession(PtrSize_t& pkt) {
 
 	mybe=find_or_create_backend(current_hostgroup); // set a backend
 	mybe->server_myds->reinit_queues();             // reinitialize the queues in the myds . By default, they are not active
+#ifdef PROXYSQLFFTO
+	observe_ffto_client_packet(pkt);
+#endif
 	mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size); // move the first packet
 	previous_status.push(FAST_FORWARD); // next status will be FAST_FORWARD . Now we need a connection
 
@@ -5082,7 +5180,34 @@ int MySQL_Session::GPFC_Replication_SwitchToFastForward(PtrSize_t& pkt, unsigned
 			}
 		}
 		set_status(FAST_FORWARD); // we can set status to FAST_FORWARD
-	}	
+	}
+
+	// Issue #5556: Clean up idle backends from other hostgroups.
+	// When transitioning to FAST_FORWARD, only the active backend (mybe) is
+	// needed. Any other backends from different hostgroups are now idle and
+	// will never be used again. If left alive, they can receive POLLIN events
+	// (e.g. from MySQL wait_timeout) which causes a crash in handler() because
+	// ASYNC_IDLE is not handled in the switch-case.
+	{
+		unsigned int i = 0;
+		while (i < mybes->len) {
+			MySQL_Backend* _mybe = (MySQL_Backend*)mybes->index(i);
+			if (_mybe != mybe) {
+				if (_mybe->server_myds && _mybe->server_myds->myconn) {
+					proxy_info(
+						"Cleaning up idle backend from hostgroup %d during FAST_FORWARD transition\n",
+						_mybe->hostgroup_id
+					);
+					_mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
+				}
+				mybes->remove_index_fast(i);
+				_mybe->reset();
+				delete _mybe;
+			} else {
+				i++;
+			}
+		}
+	}
 
 	return 0;
 }
@@ -5348,7 +5473,7 @@ __get_pkts_from_client:
 												string nqn = string((char *)CurrentQuery.QueryPointer,l);
 												char *err_msg = (char *)"Session trying to reach HG %d while locked on HG %d . Rejecting query: %s";
 												char *buf = (char *)malloc(strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64);
-												sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
+sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str());
 												client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9005,(char *)"HY000",buf, true);
 												thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
 												RequestEnd(NULL, 9005, buf);
@@ -5483,7 +5608,7 @@ int MySQL_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(MyS
 			proxy_error("Detected a lagging server during query: %s, %d, session_id:%u\n", myconn->parent->address, myconn->parent->port, this->thread_session_id);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_LAGGING_SRV);
 		} else if (myconn->server_status == MYSQL_SERVER_STATUS_ONLINE && myconn->parent->myhgc->online_servers_within_threshold() == false) {
-			//proxy_error("Number of online servers detected in a hostgroup exceeds the configured maximum online servers. %s, %d, hostgroup:%u, num_online_servers:%u, max_online_servers:%u, session_id:%u\n", 
+			//proxy_error("Number of online servers detected in a hostgroup exceeds the configured maximum online servers. %s, %d, hostgroup:%u, num_online_servers:%u, max_online_servers:%u, session_id:%u\n",
 			//	myconn->parent->address, myconn->parent->port, myconn->parent->myhgc->hid, num_online_servers, myconn->parent->myhgc->attributes.max_num_online_servers, this->thread_session_id);
 			myconn->parent->myhgc->log_num_online_server_count_error();
 		} else {
@@ -5575,6 +5700,16 @@ bool MySQL_Session::handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st,
 		CurrentQuery.stmt_client_id=client_stmtid;
 	}
 	CurrentQuery.mysql_stmt=NULL;
+
+	// When first_comment_parsing is set to 1 (before query rules) or 3 (before_and_after query rules),
+	// query rules may strip the min_gtid annotation during STMT_PREPARE. Persist it per client
+	// statement ID so that STMT_EXECUTE can restore the original routing constraint.
+	// For more context, refer to https://github.com/sysown/proxysql/issues/5384
+	int first_comment_parsing = mysql_thread___query_processor_first_comment_parsing;
+	if (previous_status.size() == 0 && (first_comment_parsing == 1 || first_comment_parsing == 3)) {
+		client_myds->myconn->local_stmts->set_client_min_gtid(client_stmtid, qpo->min_gtid);
+	}
+
 	st=status;
 	size_t sts=previous_status.size();
 	if (sts) {
@@ -6071,6 +6206,25 @@ handler_again:
 				// register the mysql_data_stream
 				thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
 			}
+#ifdef PROXYSQLFFTO
+			if (mysql_thread___ffto_enabled && !ffto_bypassed && m_ffto) {
+				for (unsigned int i = 0; i < mybe->server_myds->PSarrayIN->len; i++) {
+					std::size_t current_buffered = m_ffto->get_buffered_size();
+					if (current_buffered + mybe->server_myds->PSarrayIN->pdata[i].size > (size_t)mysql_thread___ffto_max_buffer_size) {
+						ffto_bypassed = true;
+						if (m_ffto) {
+							m_ffto->on_close();
+						}
+						m_ffto.reset();
+						break;
+					}
+					m_ffto->on_server_data(
+						(const char*)mybe->server_myds->PSarrayIN->pdata[i].ptr,
+						mybe->server_myds->PSarrayIN->pdata[i].size
+					);
+				}
+			}
+#endif
 			client_myds->PSarrayOUT->copy_add(mybe->server_myds->PSarrayIN, 0, mybe->server_myds->PSarrayIN->len);
 			while (mybe->server_myds->PSarrayIN->len) mybe->server_myds->PSarrayIN->remove_index(mybe->server_myds->PSarrayIN->len-1,NULL);
 			break;
@@ -7075,7 +7229,7 @@ void MySQL_Session::handler_WCD_SS_MCQ_qpo_QueryRewrite(PtrSize_t *pkt) {
  * @brief Handle the generation and sending of an OK message packet in response to a successful query execution.
  *
  * This (formely inline) function is responsible for setting up and sending an OK message packet to the client in response
- * to a successful query execution. It updates the session state, generates the OK message packet using the 
+ * to a successful query execution. It updates the session state, generates the OK message packet using the
  * appropriate protocol functions, and frees the memory occupied by the original packet.
  *
  * @param[in,out] pkt Pointer to the packet data structure containing the original packet.
@@ -9133,8 +9287,12 @@ bool MySQL_Session::handle_command_query_kill(PtrSize_t *pkt) {
 				MySQL_Connection *mc = client_myds->myconn;
 				if (mc->userinfo && mc->userinfo->username) {
 					if (CurrentQuery.MyComQueryCmd == MYSQL_COM_QUERY_KILL) {
-						char* qu = mysql_query_strip_comments((char *)pkt->ptr+1+sizeof(mysql_hdr), pkt->size-1-sizeof(mysql_hdr), 
+						char* qu = mysql_query_strip_comments((char *)pkt->ptr+1+sizeof(mysql_hdr), pkt->size-1-sizeof(mysql_hdr),
 							mysql_thread___query_digests_lowercase);
+						if (!qu) {
+							proxy_error("Failed to normalize KILL query for digest matching (out of memory)\n");
+							return false;
+						}
 						string nq=string(qu,strlen(qu));
 						re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
 						opt2->set_case_sensitive(false);
@@ -9408,6 +9566,16 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
  * @param pkt Reference to the packet containing the command and associated data.
  */
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_CLOSE(PtrSize_t& pkt) {
+	if (pkt.size < 9) {
+		proxy_warning(
+			"Received malformed COM_STMT_CLOSE packet of %lu bytes\n",
+			static_cast<unsigned long>(pkt.size)
+		);
+		l_free(pkt.size,pkt.ptr);
+		client_myds->DSS=STATE_SLEEP;
+		status=WAITING_CLIENT_DATA;
+		return;
+	}
 	uint32_t client_global_id=0;
 	memcpy(&client_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
 	// FIXME: no input validation
@@ -9428,10 +9596,19 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_SEND_LONG_DATA(PtrSize_t& pkt) {
-	// FIXME: no input validation
+	if (pkt.size < 11) {
+		proxy_warning(
+			"Received malformed COM_STMT_SEND_LONG_DATA packet of %lu bytes\n",
+			static_cast<unsigned long>(pkt.size)
+		);
+		client_myds->DSS=STATE_SLEEP;
+		status=WAITING_CLIENT_DATA;
+		l_free(pkt.size,pkt.ptr);
+		return;
+	}
 	uint32_t stmt_global_id=0;
 	memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
-	uint32_t stmt_param_id=0;
+	uint16_t stmt_param_id=0;
 	memcpy(&stmt_param_id,(char *)pkt.ptr+9,sizeof(uint16_t));
 	SLDH->add(stmt_global_id,stmt_param_id,(char *)pkt.ptr+11,pkt.size-11);
 	client_myds->DSS=STATE_SLEEP;
@@ -9488,7 +9665,7 @@ void MySQL_Session::generate_status_one_hostgroup(int hid, std::string& s) {
 void MySQL_Session::reset_warning_hostgroup_flag_and_release_connection() {
 	if (warning_in_hg > -1) {
 		// if we've reached this point, it means that warning was found in the previous query, but the
-		// current executed query is not 'SHOW WARNINGS' or 'SHOW COUNT(*) FROM WARNINGS', so we can safely reset warning_in_hg and 
+		// current executed query is not 'SHOW WARNINGS' or 'SHOW COUNT(*) FROM WARNINGS', so we can safely reset warning_in_hg and
 		// return connection back to the connection pool.
 		MySQL_Backend* _mybe = find_backend(warning_in_hg);
 		if (_mybe) {
@@ -9531,10 +9708,10 @@ char* MySQL_Session::get_current_query(int max_length) {
 
 	if (query_len > 0) {
 		res = (char *) malloc(query_len + 1);
-		if (trunc_query) {
-			// for truncated queries, add three dots at the end
-			memcpy(res, query_ptr, query_len - 3);
-			memcpy(res + (query_len - 3), "...", 3);
+		if (trunc_query && query_len >= 4) {
+			size_t cp_len = (size_t)query_len - 3;
+			memcpy(res, query_ptr, cp_len);
+			memcpy(res + cp_len, "...", 3);
 		} else {
 			strncpy(res, query_ptr, query_len);
 		}

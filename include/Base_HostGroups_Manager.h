@@ -18,7 +18,8 @@ class MetricsCollector;
 
 #include "proxysql.h"
 #include "cpp.h"
-#include "proxysql_gtid.h"
+#include "GTID_Server_Data.h"
+
 
 #include <atomic>
 #include <thread>
@@ -143,6 +144,8 @@ class MetricsCollector;
 
 typedef std::unordered_map<std::uint64_t, void *> umap_mysql_errors;
 
+#include "ConnectionPoolDecision.h"
+
 class MySrvConnList;
 class MySrvC;
 class MySrvList;
@@ -151,37 +154,6 @@ class MyHGC;
 struct peer_runtime_mysql_servers_t;
 struct peer_mysql_servers_v2_t;
 
-std::string gtid_executed_to_string(gtid_set_t& gtid_executed);
-void addGtid(const gtid_t& gtid, gtid_set_t& gtid_executed);
-
-#include "GTID_Server_Data.h"
-
-/*
-class GTID_Server_Data {
-	public:
-	char *address;
-	uint16_t port;
-	uint16_t mysql_port;
-	char *data;
-	size_t len;
-	size_t size;
-	size_t pos;
-	struct ev_io *w;
-	char uuid_server[64];
-	unsigned long long events_read;
-	gtid_set_t gtid_executed;
-	bool active;
-	GTID_Server_Data(struct ev_io *_w, char *_address, uint16_t _port, uint16_t _mysql_port);
-	void resize(size_t _s);
-	~GTID_Server_Data();
-	bool readall();
-	bool writeout();
-	bool read_next_gtid();
-	bool gtid_exists(char *gtid_uuid, uint64_t gtid_trxid);
-	void read_all_gtids();
-	void dump();
-};
-*/
 
 
 class MySrvConnList {
@@ -345,7 +317,7 @@ class BaseHGC {	// MySQL Host Group Container
 		bool connection_warming;
 		bool configured; // this variable controls if attributes are configured or not. If not configured, they do not apply
 		bool initialized; // this variable controls if attributes were ever configured or not. Used by reset_attributes()
-		nlohmann::json * ignore_session_variables_json = NULL; // the JSON format of ignore_session_variables
+		nlohmann::json * ignore_session_variables_json = nullptr; // the JSON format of ignore_session_variables
 	} attributes;
 	struct {
 		int64_t weight;
@@ -391,7 +363,7 @@ class Group_Replication_Info {
 	char *comment;
 	bool active;
 	int writer_is_also_reader;
-	bool __active;
+	bool active_;
 	bool need_converge; // this is set to true on LOAD MYSQL SERVERS TO RUNTIME . This ensure that checks wil take an action
 	int current_num_writers;
 	int current_num_backup_writers;
@@ -413,7 +385,7 @@ class Galera_Info {
 	char *comment;
 	bool active;
 	int writer_is_also_reader;
-	bool __active;
+	bool active_;
 	bool need_converge; // this is set to true on LOAD MYSQL SERVERS TO RUNTIME . This ensure that checks wil take an action
 	int current_num_writers;
 	int current_num_backup_writers;
@@ -442,72 +414,10 @@ class AWS_Aurora_Info {
 	char * domain_name;
 	char * comment;
 	bool active;
-	bool __active;
+	bool active_;
 	AWS_Aurora_Info(int w, int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c);
 	bool update(int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c);
 	~AWS_Aurora_Info();
-};
-
-class MySQLServers_SslParams {
-	public:
-	string hostname;
-	int port;
-	string username;
-	string ssl_ca;
-	string ssl_cert;
-	string ssl_key;
-	string ssl_capath;
-	string ssl_crl;
-	string ssl_crlpath;
-	string ssl_cipher;
-	string tls_version;
-	string comment;
-	string MapKey;
-	MySQLServers_SslParams(string _h, int _p, string _u,
-		string ca, string cert, string key, string capath,
-		string crl, string crlpath, string cipher, string tls,
-		string c) {
-		hostname = _h;
-		port = _p;
-		username = _u;
-		ssl_ca = ca;
-		ssl_cert = cert;
-		ssl_key = key;
-		ssl_capath = capath;
-		ssl_crl = crl;
-		ssl_crlpath = crlpath;
-		ssl_cipher = cipher;
-		tls_version = tls;
-		comment = c;
-		MapKey = "";
-	}
-	MySQLServers_SslParams(char * _h, int _p, char * _u,
-		char * ca, char * cert, char * key, char * capath,
-		char * crl, char * crlpath, char * cipher, char * tls,
-		char * c) {
-		hostname = string(_h);
-		port = _p;
-		username = string(_u);
-		ssl_ca = string(ca);
-		ssl_cert = string(cert);
-		ssl_key = string(key);
-		ssl_capath = string(capath);
-		ssl_crl = string(crl);
-		ssl_crlpath = string(crlpath);
-		ssl_cipher = string(cipher);
-		tls_version = string(tls);
-		comment = string(c);
-		MapKey = "";
-	}
-	MySQLServers_SslParams(string _h, int _p, string _u) {
-		MySQLServers_SslParams(_h, _p, _u, "", "", "", "", "", "", "", "", "");
-	}
-	string getMapKey(const char *del) {
-		if (MapKey == "") {
-			MapKey = hostname + string(del) + to_string(port) + string(del) + username;
-		}
-		return MapKey;
-	}
 };
 
 struct p_hg_counter {
@@ -542,7 +452,7 @@ struct p_hg_counter {
 		myhgm_myconnpool_reset,
 		myhgm_myconnpool_destroy,
 		auto_increment_delay_multiplex,
-		__size
+		SIZE_
 	};
 };
 
@@ -550,12 +460,12 @@ struct p_hg_gauge {
 	enum metric {
 		server_connections_connected = 0,
 		client_connections_connected,
-		__size
+		SIZE_
 	};
 };
 
 struct p_hg_dyn_counter {
-	enum metric {
+	enum metric : uint8_t {
 		conn_pool_bytes_data_recv = 0,
 		conn_pool_bytes_data_sent,
 		connection_pool_conn_err,
@@ -564,22 +474,22 @@ struct p_hg_dyn_counter {
 		gtid_executed,
 		proxysql_mysql_error,
 		mysql_error,
-		__size
+		SIZE_
 	};
 };
 
-enum class p_mysql_error_type {
+enum class p_mysql_error_type : uint8_t {
 	mysql,
 	proxysql
 };
 
 struct p_hg_dyn_gauge {
-	enum metric {
+	enum metric : uint8_t {
 		connection_pool_conn_free = 0,
 		connection_pool_conn_used,
 		connection_pool_latency_us,
 		connection_pool_status,
-		__size
+		SIZE_
 	};
 };
 
@@ -610,7 +520,7 @@ enum READ_ONLY_SERVER_T {
 	ROS_HOSTNAME = 0,
 	ROS_PORT,
 	ROS_READONLY,
-	ROS__SIZE
+	ROS_SIZE_
 };
 
 enum REPLICATION_LAG_SERVER_T {
@@ -619,7 +529,7 @@ enum REPLICATION_LAG_SERVER_T {
 	RLS_PORT,
 	RLS_CURRENT_REPLICATION_LAG,
 	RLS_OVERRIDE_REPLICATION_LAG,
-	RLS__SIZE
+	RLS_SIZE_
 };
 
 /**
@@ -697,10 +607,10 @@ class MySQL_HostGroups_Manager {
 		MYSQL_SERVERS_SSL_PARAMS,
 		MYSQL_SERVERS,
 
-		__HGM_TABLES_SIZE
+		HGM_TABLES_SIZE_
 	};
 
-	std::array<uint64_t, __HGM_TABLES_SIZE> table_resultset_checksum { {0} };
+	std::array<uint64_t, HGM_TABLES_SIZE_> table_resultset_checksum { {0} };
 
 	class HostGroup_Server_Mapping {
 	public:
@@ -708,7 +618,7 @@ class MySQL_HostGroups_Manager {
 			WRITER = 0,
 			READER = 1,
 
-			__TYPE_SIZE
+			TYPE_SIZE_
 		};
 
 		struct Node {
@@ -773,7 +683,7 @@ class MySQL_HostGroups_Manager {
 		MySrvC* insert_HGM(unsigned int hostgroup_id, const MySrvC* srv);
 		void remove_HGM(MySrvC* srv);
 
-		std::array<std::vector<Node>, __TYPE_SIZE> mapping; // index 0 contains reader and 1 contains writer hostgroups
+		std::array<std::vector<Node>, TYPE_SIZE_> mapping; // index 0 contains reader and 1 contains writer hostgroups
 		int readonly_flag;
 		MySQL_HostGroups_Manager* myHGM;
 	};
@@ -975,12 +885,12 @@ class MySQL_HostGroups_Manager {
 		//////////////////////////////////////////////////////
 
 		/// Prometheus metrics arrays
-		std::array<prometheus::Counter*, p_hg_counter::__size> p_counter_array {};
-		std::array<prometheus::Gauge*, p_hg_gauge::__size> p_gauge_array {};
+		std::array<prometheus::Counter*, p_hg_counter::SIZE_> p_counter_array {};
+		std::array<prometheus::Gauge*, p_hg_gauge::SIZE_> p_gauge_array {};
 
 		// Prometheus dyn_metrics families arrays
-		std::array<prometheus::Family<prometheus::Counter>*, p_hg_dyn_counter::__size> p_dyn_counter_array {};
-		std::array<prometheus::Family<prometheus::Gauge>*, p_hg_dyn_gauge::__size> p_dyn_gauge_array {};
+		std::array<prometheus::Family<prometheus::Counter>*, p_hg_dyn_counter::SIZE_> p_dyn_counter_array {};
+		std::array<prometheus::Family<prometheus::Gauge>*, p_hg_dyn_gauge::SIZE_> p_dyn_gauge_array {};
 
 		/// Prometheus connection_pool metrics
 		std::map<std::string, prometheus::Counter*> p_conn_pool_bytes_data_recv_map {};

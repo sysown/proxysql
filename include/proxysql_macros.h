@@ -1,10 +1,10 @@
 #ifndef PROXYSQL_MACROS_H
 #define PROXYSQL_MACROS_H
-#define strdup_null(__c) ( __c ? strdup(__c) : __c )
+#define strdup_null(__c) ( (__c) ? strdup(__c) : (__c) )
 #define char_malloc (char *)malloc
-#define free_null(__c) { if(__c) { free(__c); __c=NULL; } }
+#define free_null(__c) { if(__c) { free(__c); (__c)=NULL; } }
 
-#define itostr(__s, __i)  { __s=char_malloc(32); sprintf(__s, "%lld", __i); }
+#define itostr(__s, __i)  { (__s)=char_malloc(32); sprintf(__s, "%lld", (__i)); }
 
 // fast memory copy forward . Use this instead of memcpy for small buffers
 #define MEM_COPY_FWD(dst_p, src_p, bytes)  \
@@ -53,8 +53,8 @@
 // copy 4 bytes
 #define Copy4B(x,y) \
 	do { \
-		uint32_t *a=(uint32_t *)x; \
-		*a=*((uint32_t *)y); \
+		uint32_t *a=(uint32_t *)(x); \
+		*a=*((uint32_t *)(y)); \
 	} while(0)
 
 #ifndef PROXYSQL_LIKELY

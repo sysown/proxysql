@@ -13,15 +13,6 @@
 
 using json = nlohmann::json;
 
-// Helper function for current timestamp
-static std::string now_iso() {
-	char buf[64];
-	time_t now = time(NULL);
-	struct tm* tm_info = gmtime(&now);
-	strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", tm_info);
-	return std::string(buf);
-}
-
 Discovery_Schema::Discovery_Schema(const std::string& path)
 	: db(NULL), db_path(path), mcp_rules_version(0)
 {
@@ -2528,7 +2519,7 @@ void Discovery_Schema::load_mcp_query_rules(SQLite3_result* resultset) {
 	//               negate_match_pattern, re_modifiers, flagIN, flagOUT, replace_pattern,
 	//               timeout_ms, error_msg, OK_msg, log, apply, comment
 	// Expected: 18 columns (fields[0] through fields[17])
-	for (unsigned int i = 0; i < resultset->rows_count; i++) {
+	for (int i = 0; i < resultset->rows_count; i++) {
 		SQLite3_row* row = resultset->rows[i];
 
 		// Validate column count before accessing fields
@@ -2562,12 +2553,12 @@ void Discovery_Schema::load_mcp_query_rules(SQLite3_result* resultset) {
 			rule->re_modifiers = 1;  // default CASELESS
 		}
 		rule->flagIN = row->fields[9] ? atoi(row->fields[9]) : 0;  // flagIN
-		rule->flagOUT = row->fields[10] ? atoi(row->fields[10]) : 0;  // flagOUT
+		rule->flagOUT = row->fields[10] ? atoi(row->fields[10]) : -1;  // flagOUT: -1 = NULL/unset
 		rule->replace_pattern = row->fields[11] ? strdup(row->fields[11]) : NULL;  // replace_pattern
-		rule->timeout_ms = row->fields[12] ? atoi(row->fields[12]) : 0;  // timeout_ms
+		rule->timeout_ms = row->fields[12] ? atoi(row->fields[12]) : -1;  // timeout_ms: -1 = NULL/unset
 		rule->error_msg = row->fields[13] ? strdup(row->fields[13]) : NULL;  // error_msg
 		rule->ok_msg = row->fields[14] ? strdup(row->fields[14]) : NULL;  // OK_msg
-		rule->log = row->fields[15] ? atoi(row->fields[15]) != 0 : false;  // log
+		rule->log = row->fields[15] ? atoi(row->fields[15]) : -1;  // log: -1 = NULL/unset
 		rule->apply = row->fields[16] ? atoi(row->fields[16]) != 0 : true;  // apply
 		rule->comment = row->fields[17] ? strdup(row->fields[17]) : NULL;  // comment
 		// Note: hits is in-memory only, not loaded from table
@@ -2711,12 +2702,12 @@ MCP_Query_Processor_Output* Discovery_Schema::evaluate_mcp_query_rules(
 			// Collect rule actions in output object
 			if (!rule->apply) {
 				// Log-only rule, continue processing
-				if (rule->log) {
+				if (rule->log > 0) {
 					proxy_info("MCP query rule %d logged: tool=%s schema=%s\n",
 						rule->rule_id, tool_name.c_str(), schemaname.c_str());
 				}
-				if (qpo->log == -1) {
-					qpo->log = rule->log ? 1 : 0;
+				if (rule->log >= 0 && qpo->log == -1) {
+					qpo->log = rule->log;
 				}
 				continue;
 			}
@@ -2787,7 +2778,7 @@ MCP_Query_Processor_Output* Discovery_Schema::evaluate_mcp_query_rules(
 			}
 
 			// 5. Log flag
-			if (rule->log && qpo->log == -1) {
+			if (rule->log > 0 && qpo->log == -1) {
 				qpo->log = 1;
 			}
 
@@ -2856,14 +2847,19 @@ SQLite3_result* Discovery_Schema::get_mcp_query_rules() {
 		pta[5] = rule->tool_name ? strdup(rule->tool_name) : NULL;        // tool_name
 		pta[6] = rule->match_pattern ? strdup(rule->match_pattern) : NULL;  // match_pattern
 		pta[7] = strdup(std::to_string(rule->negate_match_pattern ? 1 : 0).c_str());  // negate_match_pattern
-		pta[8] = strdup(std::to_string(rule->re_modifiers).c_str());      // re_modifiers
+		// re_modifiers: reverse map bitmask back to string (matching MySQL pattern)
+		if (rule->re_modifiers & 1) {  // CASELESS bitmask
+			pta[8] = strdup("CASELESS");
+		} else {
+			pta[8] = strdup(std::to_string(rule->re_modifiers).c_str());
+		}
 		pta[9] = strdup(std::to_string(rule->flagIN).c_str());            // flagIN
-		pta[10] = strdup(std::to_string(rule->flagOUT).c_str());          // flagOUT
+		pta[10] = (rule->flagOUT == -1) ? NULL : strdup(std::to_string(rule->flagOUT).c_str());  // flagOUT: -1 = NULL
 		pta[11] = rule->replace_pattern ? strdup(rule->replace_pattern) : NULL;  // replace_pattern
-		pta[12] = strdup(std::to_string(rule->timeout_ms).c_str());       // timeout_ms
+		pta[12] = (rule->timeout_ms == -1) ? NULL : strdup(std::to_string(rule->timeout_ms).c_str());  // timeout_ms: -1 = NULL
 		pta[13] = rule->error_msg ? strdup(rule->error_msg) : NULL;       // error_msg
 		pta[14] = rule->ok_msg ? strdup(rule->ok_msg) : NULL;             // OK_msg
-		pta[15] = strdup(std::to_string(rule->log ? 1 : 0).c_str());      // log
+		pta[15] = (rule->log == -1) ? NULL : strdup(std::to_string(rule->log).c_str());  // log: -1 = NULL
 		pta[16] = strdup(std::to_string(rule->apply ? 1 : 0).c_str());    // apply
 		pta[17] = rule->comment ? strdup(rule->comment) : NULL;           // comment
 

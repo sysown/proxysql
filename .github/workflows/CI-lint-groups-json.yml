@@ -1,0 +1,17 @@
+name: CI-lint-groups-json
+
+on:
+  pull_request:
+    paths:
+      - 'test/tap/groups/groups.json'
+  push:
+    paths:
+      - 'test/tap/groups/groups.json'
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint groups.json format
+        run: python3 test/tap/groups/lint_groups_json.py
