@@ -47,11 +47,13 @@ public:
 	// (canonical, alias) pair are idempotent and return true.
 	bool register_command_alias(const char* canonical_sql, const char* alias_sql);
 	// Resolve an incoming admin-command spelling to its canonical form.
-	// Returns the canonical SQL (pointer owned by the manager, valid
-	// for its lifetime) if the query matches a registered command or
-	// any of its aliases; nullptr otherwise.  Whitespace and case are
-	// normalized on both sides.
-	const char* resolve_alias_to_canonical(const std::string& sql) const;
+	// Returns an owned copy of the canonical SQL if the query matches a
+	// registered command or any of its aliases; an empty string
+	// otherwise.  Whitespace and case are normalized on both sides.
+	// Returns by value (not const char*) so callers can release the
+	// manager lock before dispatching without risking pointer
+	// invalidation on concurrent reload.
+	std::string resolve_alias_to_canonical(const std::string& sql) const;
 	bool register_query_hook(ProxySQL_PluginProtocol proto, proxysql_plugin_query_hook_cb cb);
 	bool has_query_hook(ProxySQL_PluginProtocol proto) const;
 	bool dispatch_query_hook(ProxySQL_PluginProtocol proto,
@@ -130,9 +132,10 @@ bool proxysql_dispatch_configured_plugin_query_hook(
 bool proxysql_has_configured_plugin_query_hook(ProxySQL_PluginProtocol proto);
 // Admin-side helper: consult the active plugin manager's command table and
 // return the canonical spelling of `sql` if it's a registered command or
-// alias, nullptr otherwise.  The returned pointer is valid for the lifetime
-// of the active manager (reload invalidates it).
-const char* proxysql_resolve_configured_plugin_admin_alias(const std::string& sql);
+// alias, or an empty string otherwise.  Returns by value so callers can
+// release the manager lock before dispatching without risking pointer
+// invalidation on concurrent reload.
+std::string proxysql_resolve_configured_plugin_admin_alias(const std::string& sql);
 // Phase A + B of the four-phase lifecycle: dlopen() each module, read its
 // descriptor, then call register_schemas() on plugins that opted in. On
 // success, `manager` is populated AND installed as the active manager so

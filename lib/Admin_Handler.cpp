@@ -4063,10 +4063,13 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		// ladder.
 		{
 			std::string query_str(query_no_space, query_no_space_length);
-			const char* plugin_canonical = proxysql_resolve_configured_plugin_admin_alias(query_str);
-			if (plugin_canonical != nullptr) {
+			std::string plugin_canonical = proxysql_resolve_configured_plugin_admin_alias(query_str);
+			if (!plugin_canonical.empty()) {
+				// Hold a std::string by value (not a borrowed c_str()) so
+				// a concurrent plugin-manager reload between resolve and
+				// dispatch can't dangle the canonical-SQL pointer.
 				ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-				if (SPA->dispatch_plugin_admin_command(sess, plugin_canonical)) {
+				if (SPA->dispatch_plugin_admin_command(sess, plugin_canonical.c_str())) {
 					run_query = false;
 					goto __run_query;
 				}

@@ -10,6 +10,27 @@ class SQLite3_result;
 namespace prometheus { class Registry; }
 #endif /* PROXYSQL40 */
 
+// Descriptor ABI version the plugin was compiled for.  Plugins set
+// `abi_version` on their ProxySQL_PluginDescriptor literal to this macro
+// so the core loader can detect layout skew between plugin and loader
+// builds.
+//
+//   ABI 1: original 6-field descriptor (name, abi_version, init, start,
+//          stop, status_json). Pre-chassis build.
+//   ABI 2: appends `register_schemas` (four-phase lifecycle, PROXYSQL40).
+//
+// A v3 core (built without PROXYSQL40) only understands ABI 1 and MUST
+// reject ABI>=2 plugins — it would read past the end of its own struct
+// definition.  A v4 core accepts ABI 1 plugins by treating the
+// register_schemas field as if null (never dereferenced on ABI 1).
+#ifdef PROXYSQL40
+#define PROXYSQL_PLUGIN_ABI_VERSION 2u
+#define PROXYSQL_PLUGIN_ABI_VERSION_MAX 2u
+#else
+#define PROXYSQL_PLUGIN_ABI_VERSION 1u
+#define PROXYSQL_PLUGIN_ABI_VERSION_MAX 1u
+#endif
+
 enum class ProxySQL_PluginDBKind : uint8_t {
 	admin_db = 0,
 	config_db = 1,
@@ -159,12 +180,22 @@ using proxysql_plugin_get_prometheus_registry_cb =
 //         has not yet materialized the schema).  Plugins using this callback
 //         MUST NOT touch DB handles here; save that work for init().
 //       - register_query_hook:       RETURNS false (not yet wired).
-//       - snapshots:                 RETURN nullptr.
-//   * init (Phase D): every field LIVE.  register_table/register_command
-//     remain valid during init as well (they append to the same registry).
-//   * start (Phase E) and beyond: get_*db, log_message, snapshots,
+//       - snapshots:                 RETURN nullptr (see below).
+//   * init (Phase D): register_*, log_message, get_*db and
+//     get_prometheus_registry are LIVE.  Snapshot getters remain stubs —
+//     see the note below.
+//   * start (Phase E) and beyond: get_*db, log_message,
 //     get_prometheus_registry remain valid; register_* are no-ops (ignored
 //     with a warning — schemas must be declared before start).
+//
+// NOTE ON SNAPSHOT GETTERS (`get_mysql_users_snapshot`, etc.):
+// These are currently wired to a stub that returns nullptr in every phase.
+// The plan is to surface read-only SQLite3_result snapshots of the core's
+// runtime config tables, but the backing plumbing (snapshot acquisition,
+// lifetime, invalidation on reload) isn't implemented yet.  Plugins MUST
+// treat a nullptr return as "snapshot not available"; do not assume
+// non-null just because you're in Phase D.  When the feature lands, only
+// the nullptr contract will change — the field signatures won't.
 struct ProxySQL_PluginServices {
 	proxysql_plugin_register_table_cb register_table;
 	proxysql_plugin_register_command_cb register_command;
@@ -197,6 +228,14 @@ using proxysql_plugin_init_cb =
 using proxysql_plugin_start_cb =
 	bool (*)();
 
+// stop() pairs with init() for teardown, not with start().  The loader
+// guarantees that every plugin whose init() returned true will get stop()
+// called exactly once -- even if its own start() returned false, and even
+// if a later plugin's start() caused shutdown mid-startup.  Plugins must
+// therefore be able to tear down resources they allocated in init (config
+// stores, caches, worker pools not yet spawned, ...) without having seen
+// a matching start().  A plugin whose init() returned false never sees
+// stop().
 using proxysql_plugin_stop_cb =
 	bool (*)();
 

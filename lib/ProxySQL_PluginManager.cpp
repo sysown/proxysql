@@ -26,6 +26,27 @@ std::mutex g_active_plugin_manager_mutex {};
 bool g_registry_registration_failed = false;
 std::string g_registry_registration_error {};
 
+// RAII guard that sets g_registry_target to `mgr` on construction and
+// clears it on destruction.  Also resets the registration-failure sticky
+// bits. Used to bracket each plugin callback invocation during Phase B
+// (register_schemas) and Phase D (init) so an exception thrown from the
+// plugin can't leave the registry globals dirty and break the next
+// phase's `assert(g_registry_target == nullptr)`.
+struct ScopedRegistryTarget {
+	explicit ScopedRegistryTarget(ProxySQL_PluginManager* mgr) {
+		g_registry_target = mgr;
+		g_registry_registration_failed = false;
+		g_registry_registration_error.clear();
+	}
+	~ScopedRegistryTarget() {
+		g_registry_target = nullptr;
+		g_registry_registration_failed = false;
+		g_registry_registration_error.clear();
+	}
+	ScopedRegistryTarget(const ScopedRegistryTarget&) = delete;
+	ScopedRegistryTarget& operator=(const ScopedRegistryTarget&) = delete;
+};
+
 ProxySQL_PluginCommandResult ignored_test_command(const ProxySQL_PluginCommandContext&, const char*) {
 	return {0, 0, ""};
 }
@@ -181,6 +202,18 @@ bool sql_equals_ci(const std::string& lhs, const std::string& rhs) {
 	return strcasecmp(lhs.c_str(), rhs.c_str()) == 0;
 }
 
+// Normalize a plugin command for alias lookup: strip leading/trailing
+// whitespace, strip a trailing ';', collapse internal whitespace runs to
+// a single space.
+//
+// Intentional behavior delta from the pre-chassis v3 path
+// (Admin_Handler::resolve_admin_alias_to_canonical), which requires an
+// exact length match against the alias string via strncasecmp.  Under the
+// chassis, users can type "LOAD  MYSQLX USERS TO RUN" (extra inner
+// spaces) or "LOAD MYSQLX USERS TO RUN;" and have it resolve correctly;
+// under the !PROXYSQL40 build only the exact spelling matches.  Admin
+// commands are low-volume and unambiguous; the looser matching is a
+// strict UX improvement.
 std::string canonicalize_plugin_command(const std::string& sql) {
 	size_t start = 0;
 	size_t end = sql.size();
@@ -308,7 +341,14 @@ bool ProxySQL_PluginManager::load(const std::string &path, std::string &err) {
 		return false;
 	}
 
-	if (descriptor->abi_version != 1) {
+	// Reject plugins built for a newer ABI than this core understands: the
+	// plugin's descriptor struct would have more fields than ours, and
+	// dereferencing those fields would read past the end of our struct
+	// definition.  The reverse direction (older ABI plugin, newer core) is
+	// safe via the tail-append pattern -- fields the plugin didn't define
+	// are never dereferenced (see handling of register_schemas below).
+	if (descriptor->abi_version < 1u ||
+	    descriptor->abi_version > PROXYSQL_PLUGIN_ABI_VERSION_MAX) {
 		err = "unsupported plugin ABI version";
 		dlclose(handle);
 		return false;
@@ -339,28 +379,55 @@ bool ProxySQL_PluginManager::invoke_register_schemas_phase(std::string &err) {
 		if (plugin.schemas_registered || plugin.stopped) {
 			continue;
 		}
-		if (plugin.descriptor == nullptr ||
-		    plugin.descriptor->register_schemas == nullptr) {
+		// register_schemas only exists on ABI v2 descriptors.  Reading it
+		// from a v1 plugin's static descriptor would be an out-of-bounds
+		// read -- v1 plugins allocate only the first 6 fields.  Treat v1
+		// plugins as if they opted out of Phase B.
+		proxysql_plugin_register_schemas_cb register_schemas_cb = nullptr;
+		if (plugin.descriptor != nullptr && plugin.descriptor->abi_version >= 2u) {
+			register_schemas_cb = plugin.descriptor->register_schemas;
+		}
+		if (register_schemas_cb == nullptr) {
 			// Plugin opted out of Phase B -- the pre-existing two-phase
 			// path (init-only) still works: mark it as having completed
 			// Phase B so init_all doesn't get confused later.
 			plugin.schemas_registered = true;
 			continue;
 		}
-		g_registry_target = this;
-		g_registry_registration_failed = false;
-		g_registry_registration_error.clear();
-		const bool phase_b_ok = plugin.descriptor->register_schemas(&services_phase_b_);
-		const bool registration_failed = g_registry_registration_failed;
-		const std::string registration_error = g_registry_registration_error;
-		g_registry_registration_failed = false;
-		g_registry_registration_error.clear();
-		g_registry_target = nullptr;
+		// Snapshot the registration state before invoking the plugin so
+		// that a partial success followed by a failure (callback registers
+		// three tables, then returns false) doesn't leak registrations a
+		// retry would then reject as duplicates.
+		const size_t snap_tables_admin  = tables_admin_.size();
+		const size_t snap_tables_config = tables_config_.size();
+		const size_t snap_tables_stats  = tables_stats_.size();
+		const size_t snap_commands      = commands_.size();
+		const size_t snap_table_storage = table_storage_.size();
+		bool phase_b_ok;
+		bool registration_failed;
+		std::string registration_error;
+		{
+			ScopedRegistryTarget target_guard(this);
+			phase_b_ok = register_schemas_cb(&services_phase_b_);
+			registration_failed = g_registry_registration_failed;
+			registration_error = g_registry_registration_error;
+		}
+		auto rollback = [&]() {
+			tables_admin_.resize(snap_tables_admin);
+			tables_config_.resize(snap_tables_config);
+			tables_stats_.resize(snap_tables_stats);
+			commands_.resize(snap_commands);
+			while (table_storage_.size() > snap_table_storage) {
+				table_storage_.pop_back();
+			}
+		};
 		if (!phase_b_ok) {
+			rollback();
 			err = "plugin register_schemas failed: " + plugin_name(plugin.descriptor);
 			return false;
 		}
 		if (registration_failed) {
+			rollback();
 			err = "plugin register_schemas failed: " + plugin_name(plugin.descriptor);
 			if (!registration_error.empty()) {
 				err += ": " + registration_error;
@@ -388,20 +455,39 @@ bool ProxySQL_PluginManager::init_all(std::string &err) {
 			plugin.initialized = true;
 			continue;
 		}
-		g_registry_target = this;
-		g_registry_registration_failed = false;
-		g_registry_registration_error.clear();
-		const bool init_ok = plugin.descriptor->init(&services_);
-		const bool registration_failed = g_registry_registration_failed;
-		const std::string registration_error = g_registry_registration_error;
-		g_registry_registration_failed = false;
-		g_registry_registration_error.clear();
-		g_registry_target = nullptr;
+		// Same rollback contract as invoke_register_schemas_phase: on
+		// failure, trim any registrations this plugin performed so a
+		// retry doesn't duplicate-fail.
+		const size_t snap_tables_admin  = tables_admin_.size();
+		const size_t snap_tables_config = tables_config_.size();
+		const size_t snap_tables_stats  = tables_stats_.size();
+		const size_t snap_commands      = commands_.size();
+		const size_t snap_table_storage = table_storage_.size();
+		bool init_ok;
+		bool registration_failed;
+		std::string registration_error;
+		{
+			ScopedRegistryTarget target_guard(this);
+			init_ok = plugin.descriptor->init(&services_);
+			registration_failed = g_registry_registration_failed;
+			registration_error = g_registry_registration_error;
+		}
+		auto rollback = [&]() {
+			tables_admin_.resize(snap_tables_admin);
+			tables_config_.resize(snap_tables_config);
+			tables_stats_.resize(snap_tables_stats);
+			commands_.resize(snap_commands);
+			while (table_storage_.size() > snap_table_storage) {
+				table_storage_.pop_back();
+			}
+		};
 		if (!init_ok) {
+			rollback();
 			err = "plugin init failed: " + plugin_name(plugin.descriptor);
 			return false;
 		}
 		if (registration_failed) {
+			rollback();
 			err = "plugin init failed: " + plugin_name(plugin.descriptor);
 			if (!registration_error.empty()) {
 				err += ": " + registration_error;
@@ -443,8 +529,14 @@ bool ProxySQL_PluginManager::stop_all() {
 	bool ok = true;
 
 	for (auto it = plugins_.rbegin(); it != plugins_.rend(); ++it) {
-		if (!it->started) {
-			continue; // Only stop plugins that were actually started.
+		// stop() pairs with init() for teardown symmetry: any plugin
+		// that succeeded init() gets stop() called, even if start()
+		// later failed.  Otherwise resources the plugin allocated in
+		// init (config stores, worker threads, metric gauges, ...)
+		// leak on the init-success/start-fail path.  Plugins that
+		// never reached init are skipped.
+		if (!it->initialized) {
+			continue;
 		}
 		if (it->stopped) {
 			continue;
@@ -699,22 +791,22 @@ bool ProxySQL_PluginManager::register_command_alias(const char* canonical_sql, c
 	return false;
 }
 
-const char* ProxySQL_PluginManager::resolve_alias_to_canonical(const std::string& sql) const {
+std::string ProxySQL_PluginManager::resolve_alias_to_canonical(const std::string& sql) const {
 	const std::string canonical_sql = canonicalize_plugin_command(sql);
 	if (canonical_sql.empty()) {
-		return nullptr;
+		return {};
 	}
 	for (const auto& command : commands_) {
 		if (sql_equals_ci(command.sql, canonical_sql)) {
-			return command.sql.c_str();
+			return command.sql;
 		}
 		for (const auto& alias : command.aliases) {
 			if (sql_equals_ci(alias, canonical_sql)) {
-				return command.sql.c_str();
+				return command.sql;
 			}
 		}
 	}
-	return nullptr;
+	return {};
 }
 #endif /* PROXYSQL40 */
 
@@ -736,11 +828,15 @@ bool proxysql_dispatch_configured_plugin_admin_command(
 }
 
 #ifdef PROXYSQL40
-const char* proxysql_resolve_configured_plugin_admin_alias(const std::string& sql) {
+std::string proxysql_resolve_configured_plugin_admin_alias(const std::string& sql) {
+	// Return-by-value (not const char*) intentional: the alias table lives
+	// in the manager, and the caller typically releases the lock before
+	// dispatching. A borrowed c_str() would dangle if the manager is swapped
+	// out on reload between resolve and dispatch. Copy out under the lock.
 	std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
 	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load();
 	if (mgr == nullptr) {
-		return nullptr;
+		return {};
 	}
 	return mgr->resolve_alias_to_canonical(sql);
 }
@@ -820,6 +916,17 @@ bool proxysql_load_configured_plugins(
 	// proxysql_get_plugin_manager() — used by
 	// ProxySQL_Admin::materialize_plugin_tables — can find the
 	// registered tables.
+	//
+	// INVARIANT (publish-before-Phase-D): after this point Phase D
+	// (init_all via proxysql_init_configured_plugins) WILL still write
+	// to commands_ / mysql_query_hook_ / pgsql_query_hook_ on the
+	// published manager.  This is only safe because Phase D runs during
+	// single-threaded startup — before ProxySQL_Main_init_phase3___
+	// start_all spawns the threads that take the lock-free read path
+	// (proxysql_has_configured_plugin_query_hook, Admin_Handler alias
+	// resolution).  Any reordering that moves listener startup before
+	// proxysql_init_configured_plugins() returns will race plain writes
+	// against plain reads.
 	{
 		std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
 		manager = std::move(next_manager);
@@ -870,6 +977,22 @@ bool proxysql_init_configured_plugins(
 	// ProxySQL_Main_init_Admin_module has materialized plugin-owned
 	// tables, so each plugin's init() sees live DB handles against a
 	// schema that already contains its own tables.
+	//
+	// ORDERING INVARIANT: caller MUST invoke this BEFORE any thread
+	// that takes the lock-free read path on the manager
+	// (MySQL_Thread / PgSQL_Thread dispatch_query_hook, Admin_Handler
+	// alias resolution) comes up.  See src/main.cpp:
+	//   ProxySQL_Main_init_phase2___not_started  — runs Phase D
+	//   ProxySQL_Main_init_phase3___start_all    — spawns workers
+	// Phase 3 must run strictly after Phase 2 returns.
+	//
+	// FAILURE MODE: if this function returns false, the caller in
+	// src/main.cpp calls exit(EXIT_FAILURE) — Phase D failure is a
+	// fatal startup error.  The published manager is left in place;
+	// plugins that succeeded init() will have stop_all() called during
+	// process teardown (see stop_all's "initialized -> stop()"
+	// contract).  Runtime reload of plugin_modules is NOT supported by
+	// this code path: it is callable from the startup codepath only.
 	err.clear();
 	if (manager == nullptr) {
 		return true;

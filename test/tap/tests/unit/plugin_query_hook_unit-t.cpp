@@ -209,8 +209,63 @@ static void test_global_dispatcher_with_active_manager() {
 	   "dispatcher returns false after stop");
 }
 
+// query_text is a pointer+length pair, not a C string.  The hook must
+// use `query_len` to bound reads; plugins that strlen() the pointer will
+// truncate at the first embedded NUL (and leak data to plugins they
+// shouldn't see, if length is shorter than NUL offset).  This test pins
+// the contract on the dispatch side.
+static void test_embedded_nul_in_query_text() {
+	ProxySQL_PluginManager mgr;
+	mgr.register_query_hook(ProxySQL_PluginProtocol::mysql, &echo_hook);
+
+	const char raw[] = "SELECT\0id FROM t";   // 16 bytes incl. trailing \0
+	ProxySQL_PluginQueryHookPayload p {
+		"u", "ip", "s", raw, static_cast<uint32_t>(sizeof(raw) - 1)
+	};
+	ProxySQL_PluginQueryHookResult r {ProxySQL_PluginQueryHookAction::deny, ""};
+	ok(mgr.dispatch_query_hook(ProxySQL_PluginProtocol::mysql, p, r),
+	   "dispatch handles a payload with an embedded NUL in query_text");
+	ok(r.message.size() == std::string("u/ip/s:").size() + sizeof(raw) - 1,
+	   "hook received all %zu bytes — not truncated at the embedded NUL", sizeof(raw) - 1);
+}
+
+// A hook callback that itself calls dispatch_query_hook for the OTHER
+// protocol must not deadlock or crash.  The manager's dispatch path
+// takes no lock, so re-entry is safe; this test locks that down.
+static ProxySQL_PluginManager* g_reentrant_mgr = nullptr;
+static int g_reentrant_inner_calls = 0;
+ProxySQL_PluginQueryHookResult reentrant_outer_hook(const ProxySQL_PluginQueryHookPayload& outer) {
+	ProxySQL_PluginQueryHookResult inner {ProxySQL_PluginQueryHookAction::deny, ""};
+	// Re-enter from mysql hook into the pgsql protocol's hook.
+	if (g_reentrant_mgr != nullptr) {
+		auto p = payload_for("u", "ip", "s", "inner");
+		if (g_reentrant_mgr->dispatch_query_hook(ProxySQL_PluginProtocol::pgsql, p, inner)) {
+			g_reentrant_inner_calls++;
+		}
+	}
+	return {ProxySQL_PluginQueryHookAction::allow, std::string("outer:") + std::string(outer.query_text, outer.query_len)};
+}
+
+static void test_reentrant_dispatch_across_protocols() {
+	ProxySQL_PluginManager mgr;
+	g_reentrant_mgr = &mgr;
+	g_reentrant_inner_calls = 0;
+	mgr.register_query_hook(ProxySQL_PluginProtocol::mysql, &reentrant_outer_hook);
+	mgr.register_query_hook(ProxySQL_PluginProtocol::pgsql, &always_allow_hook);
+
+	auto p = payload_for("u", "ip", "s", "outer");
+	ProxySQL_PluginQueryHookResult r {ProxySQL_PluginQueryHookAction::deny, ""};
+	ok(mgr.dispatch_query_hook(ProxySQL_PluginProtocol::mysql, p, r),
+	   "re-entrant dispatch (mysql hook → pgsql hook) returns without deadlock");
+	ok(g_reentrant_inner_calls == 1,
+	   "inner (pgsql) hook fired exactly once during outer (mysql) hook");
+	ok(r.action == ProxySQL_PluginQueryHookAction::allow,
+	   "outer hook's ALLOW propagated to caller despite re-entry");
+	g_reentrant_mgr = nullptr;
+}
+
 int main() {
-	plan(41);
+	plan(46);
 
 	test_unregistered_protocols_have_no_hook();
 	test_register_and_dispatch_allow();
@@ -219,6 +274,8 @@ int main() {
 	test_duplicate_hook_rejected();
 	test_protocols_independent();
 	test_payload_threaded_through();
+	test_embedded_nul_in_query_text();
+	test_reentrant_dispatch_across_protocols();
 	test_global_dispatcher_no_active_manager();
 	test_global_dispatcher_with_active_manager();
 

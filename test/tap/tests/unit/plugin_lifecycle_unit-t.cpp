@@ -127,11 +127,22 @@ static void test_only_init_skips_phase_b() {
 	(void)proxysql_stop_configured_plugins(mgr, err);
 }
 
-// Case 3: register_schemas tries to call DB handle getters.  The loader
-// passes a services struct whose DB-handle getters are stubs returning
-// nullptr.  The plugin logs which it observed; we assert it saw null.
-// This pins down the lifecycle contract that the spec requires plugins
-// to respect.
+// Case 3: register_schemas tries to call DB handle getters.
+//
+// Contract: during Phase B the services struct passed to the plugin MUST
+// have the DB-handle getters wired to non-null stub functions that return
+// nullptr.  Two regressions this test has to catch:
+//   (a) loader passes the live `services_` (get_admindb() returns the
+//       real, non-null admin DB)
+//   (b) loader sets services_phase_b_.get_admindb = nullptr (plugins that
+//       call the getter unconditionally would crash)
+//
+// The fake plugin emits one of three markers depending on which state it
+// observes; the correct marker is phase_b_handles_null.  This test only
+// passes when the marker is present AND the two failure markers are
+// absent.  The harness itself returns non-null fakes from
+// proxysql_plugin_get_admindb(); if the loader mistakenly used the live
+// services, the fake plugin would log phase_b_handles_live.
 static void test_phase_b_db_handles_are_null() {
 	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B", "1", 1);
 	setenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_TOUCH_HANDLES", "1", 1);
@@ -149,6 +160,8 @@ static void test_phase_b_db_handles_are_null() {
 	   log.c_str());
 	ok(log.find("fake_plugin:phase_b_handles_live") == std::string::npos,
 	   "DB handles were NOT live during Phase B (contract)");
+	ok(log.find("fake_plugin:phase_b_getter_null") == std::string::npos,
+	   "Phase-B getters are non-null stubs, not nullptr pointers (contract)");
 
 	(void)proxysql_stop_configured_plugins(mgr, err);
 	unsetenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_TOUCH_HANDLES");
@@ -180,8 +193,91 @@ static void test_phase_b_failure_aborts_init() {
 	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");
 }
 
+// Case 4b: register_schemas registers a table, then returns false.
+// The loader MUST roll back the partial registration so a subsequent
+// retry (with the bug fixed) doesn't trip on a duplicate table
+// registration.  This is the contract that keeps reload-after-failure
+// viable: the registry is transactional per-plugin.
+static void test_phase_b_partial_failure_rolls_back() {
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_PARTIAL_THEN_FAIL", "1", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr1;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
+	std::string err;
+	ok(!proxysql_load_configured_plugins(mgr1, paths, err),
+	   "first load fails when register_schemas returns false after partial registration");
+	ok(read_log().find("fake_plugin:phase_b_partial_then_fail") != std::string::npos,
+	   "plugin actually registered a table before returning false");
+
+	// Retry with the toggle cleared.  If the loader didn't roll back
+	// the partial registration, we'd expect either a duplicate-table
+	// error or a dirty registry.  With rollback, load+init succeeds.
+	unsetenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_PARTIAL_THEN_FAIL");
+	clear_log();
+	std::unique_ptr<ProxySQL_PluginManager> mgr2;
+	std::string err2;
+	ok(proxysql_load_configured_plugins(mgr2, paths, err2) && proxysql_init_configured_plugins(mgr2.get(), err2),
+	   "retry succeeds — partial registration from the failed attempt was rolled back (err='%s')", err2.c_str());
+
+	(void)proxysql_stop_configured_plugins(mgr2, err2);
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");
+}
+
+// Case 5: init() succeeds but start() fails.  stop() MUST still be
+// called for teardown symmetry — anything init() allocated would otherwise
+// leak.  This is the "init pairs with stop" contract.
+static void test_stop_runs_when_start_fails() {
+	setenv("PROXYSQL_FAKE_PLUGIN_START_FAIL", "1", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
+	std::string err;
+	ok(proxysql_load_configured_plugins(mgr, paths, err) && proxysql_init_configured_plugins(mgr.get(), err),
+	   "load + init succeed on the plugin whose start will later fail");
+	ok(!proxysql_start_configured_plugins(mgr.get(), err),
+	   "start fails when plugin's start() returns false");
+
+	(void)proxysql_stop_configured_plugins(mgr, err);
+
+	const std::string log = read_log();
+	ok(log.find("fake_plugin:init") != std::string::npos,
+	   "init did run (necessary precondition for the stop contract)");
+	ok(log.find("fake_plugin:start_fail") != std::string::npos,
+	   "start_fail marker confirms start() was called and returned false");
+	ok(log.find("fake_plugin:stop") != std::string::npos,
+	   "stop() was called for init-success/start-fail plugin (teardown symmetry)");
+
+	unsetenv("PROXYSQL_FAKE_PLUGIN_START_FAIL");
+}
+
+// Case 6: plugin returns a descriptor with an unknown abi_version.  The
+// loader MUST refuse to load such a plugin rather than read past the end
+// of its own (compiled-against) struct definition.  This is the test that
+// keeps the tail-append pattern honest across plugin/core ABI skew.
+static void test_bogus_abi_version_rejected() {
+	setenv("PROXYSQL_FAKE_PLUGIN_FORCE_BOGUS_ABI", "1", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
+	std::string err;
+	ok(!proxysql_load_configured_plugins(mgr, paths, err),
+	   "load fails when plugin declares an unsupported ABI version");
+	ok(!err.empty() && err.find("ABI") != std::string::npos,
+	   "error message names the ABI mismatch (err='%s')", err.c_str());
+
+	const std::string log = read_log();
+	ok(log.find("fake_plugin:init") == std::string::npos,
+	   "init was NOT called on a plugin rejected by the ABI check");
+
+	unsetenv("PROXYSQL_FAKE_PLUGIN_FORCE_BOGUS_ABI");
+}
+
 int main() {
-	plan(14);
+	plan(26);
 
 	make_log_path();
 
@@ -189,6 +285,9 @@ int main() {
 	test_only_init_skips_phase_b();
 	test_phase_b_db_handles_are_null();
 	test_phase_b_failure_aborts_init();
+	test_phase_b_partial_failure_rolls_back();
+	test_stop_runs_when_start_fails();
+	test_bogus_abi_version_rejected();
 
 	cleanup_log();
 	return exit_status();

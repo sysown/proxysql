@@ -76,19 +76,46 @@ void fake_log_event(const char *event) {
 //                              lifecycle contract says they must be null).
 bool fake_register_schemas(ProxySQL_PluginServices *services) {
 	fake_services = services;
+	// _PHASE_B_PARTIAL_THEN_FAIL: register a table first, then return
+	// false.  Tests that the loader rolls back the registration so a
+	// retry doesn't trip on the leftover.
+	if (env("PHASE_B_PARTIAL_THEN_FAIL") != nullptr &&
+	    services != nullptr &&
+	    services->register_table != nullptr) {
+		const ProxySQL_PluginTableDef table {
+			ProxySQL_PluginDBKind::admin_db,
+			FAKE_PLUGIN_NAME "_partial_table",
+			"CREATE TABLE " FAKE_PLUGIN_NAME "_partial_table (id INTEGER)"
+		};
+		services->register_table(table);
+		fake_log_event("phase_b_partial_then_fail");
+		return false;
+	}
 	if (env("PHASE_B_FAIL") != nullptr) {
 		fake_log_event("phase_b_fail");
 		return false;
 	}
 	if (env("PHASE_B_TOUCH_HANDLES") != nullptr &&
 	    services != nullptr) {
-		SQLite3DB* a = (services->get_admindb  != nullptr) ? services->get_admindb()  : nullptr;
-		SQLite3DB* c = (services->get_configdb != nullptr) ? services->get_configdb() : nullptr;
-		SQLite3DB* s = (services->get_statsdb  != nullptr) ? services->get_statsdb()  : nullptr;
-		if (a == nullptr && c == nullptr && s == nullptr) {
-			fake_log_event("phase_b_handles_null");
+		// Contract: during Phase B the getters are non-null stub
+		// functions that return nullptr.  A nullptr function pointer
+		// would mean plugins can't even call them unconditionally —
+		// that breaks the contract just as much as returning a live
+		// handle does.  Distinguish the three outcomes so the test can
+		// assert the exact one we advertise.
+		if (services->get_admindb == nullptr ||
+		    services->get_configdb == nullptr ||
+		    services->get_statsdb == nullptr) {
+			fake_log_event("phase_b_getter_null");
 		} else {
-			fake_log_event("phase_b_handles_live");
+			SQLite3DB* a = services->get_admindb();
+			SQLite3DB* c = services->get_configdb();
+			SQLite3DB* s = services->get_statsdb();
+			if (a == nullptr && c == nullptr && s == nullptr) {
+				fake_log_event("phase_b_handles_null");
+			} else {
+				fake_log_event("phase_b_handles_live");
+			}
 		}
 	}
 	if (env("PHASE_B_REGISTER_TABLE") != nullptr &&
@@ -128,6 +155,17 @@ bool fake_init(ProxySQL_PluginServices *services) {
 		const char* sql = env("REGISTER_COMMAND_SQL");
 		services->register_command(sql != nullptr ? sql : "PLUGIN FAKE NOOP", &fake_command);
 	}
+#ifdef PROXYSQL40
+	if (env("REGISTER_COMMAND_ALIAS") != nullptr &&
+	    services != nullptr &&
+	    services->register_command_alias != nullptr) {
+		const char* canonical = env("REGISTER_COMMAND_ALIAS_CANONICAL");
+		const char* alias = env("REGISTER_COMMAND_ALIAS_SQL");
+		if (canonical != nullptr && alias != nullptr) {
+			services->register_command_alias(canonical, alias);
+		}
+	}
+#endif /* PROXYSQL40 */
 	if (env("REGISTER_TABLE") != nullptr &&
 	    services != nullptr &&
 	    services->register_table != nullptr) {
@@ -188,7 +226,9 @@ const char *fake_status_json() {
 // Pre-Step-2.2 descriptor layout (six fields).  Used when the plugin is
 // NOT opting into Phase B -- register_schemas is implicitly null because
 // the field is absent.  Leaves us testing that plugins built against the
-// older descriptor still work under the new loader.
+// older descriptor still work under the new loader.  abi_version stays
+// at 1 regardless of the compile-time PROXYSQL40 flag so this descriptor
+// represents the "legacy plugin" shape the v4 loader has to accept.
 const ProxySQL_PluginDescriptor fake_descriptor = {
 	FAKE_PLUGIN_NAME,
 	1,
@@ -201,9 +241,10 @@ const ProxySQL_PluginDescriptor fake_descriptor = {
 #ifdef PROXYSQL40
 // Phase-B-aware descriptor: same as above but wires the register_schemas
 // entry.  Selected at plugin-discovery time when the env toggle is set.
+// abi_version 2 tells the loader this descriptor has the seventh field.
 const ProxySQL_PluginDescriptor fake_descriptor_with_phase_b = {
 	FAKE_PLUGIN_NAME,
-	1,
+	2,
 	&fake_init,
 	&fake_start,
 	&fake_stop,
@@ -212,9 +253,24 @@ const ProxySQL_PluginDescriptor fake_descriptor_with_phase_b = {
 };
 #endif /* PROXYSQL40 */
 
+// Descriptor with a bogus ABI version -- used by lifecycle tests to
+// verify the loader's version check rejects unknown ABIs rather than
+// reading past the end of the plugin's struct.
+const ProxySQL_PluginDescriptor fake_descriptor_bogus_abi = {
+	FAKE_PLUGIN_NAME,
+	99,
+	&fake_init,
+	&fake_start,
+	&fake_stop,
+	&fake_status_json,
+};
+
 } // namespace
 
 extern "C" const ProxySQL_PluginDescriptor *proxysql_plugin_descriptor_v1() {
+	if (env("FORCE_BOGUS_ABI") != nullptr) {
+		return &fake_descriptor_bogus_abi;
+	}
 #ifdef PROXYSQL40
 	if (env("ENABLE_PHASE_B") != nullptr) {
 		return &fake_descriptor_with_phase_b;

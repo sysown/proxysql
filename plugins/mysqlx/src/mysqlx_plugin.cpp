@@ -247,7 +247,7 @@ const char* mysqlx_status_json() {
 
 const ProxySQL_PluginDescriptor mysqlx_descriptor = {
 	"mysqlx",
-	1,
+	PROXYSQL_PLUGIN_ABI_VERSION,
 	&mysqlx_init,
 	&mysqlx_start,
 	&mysqlx_stop,

@@ -1376,6 +1376,8 @@ void ProxySQL_Admin::materialize_plugin_tables() {
 		statsdb->execute(def.table_def);
 	}
 
-	__attach_db(admindb, configdb, (char *)"disk");
-	__attach_db(admindb, statsdb, (char *)"stats");
+	// admindb<->configdb("disk") and admindb<->statsdb("stats") are
+	// already attached by init_sqlite3db() above this function in the
+	// startup flow; duplicate ATTACH errors out in SQLite.  Do NOT
+	// re-attach them here.
 }

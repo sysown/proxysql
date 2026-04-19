@@ -191,11 +191,6 @@ ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c MySQLFFTO),0)
 	PROXYSQLFFTO := 1
 	PSQLFFTO := -DPROXYSQLFFTO
 endif
-PSQL31 :=
-ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c MySQLFFTO),0)
-	PROXYSQL31 := 1
-	PSQL31 := -DPROXYSQL31
-endif
 
 # PROXYSQL40 — detected via a chassis-exclusive symbol that only exists
 # when libproxysql.a was built with -DPROXYSQL40 (the four-phase plugin
@@ -209,6 +204,16 @@ PSQLTSDB :=
 ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c init_tsdb_variables),0)
 	PROXYSQLTSDB := 1
 	PSQLTSDB := -DPROXYSQLTSDB
+endif
+
+# PROXYSQL31 is the parent tier flag for FFTO + TSDB; the codebase has no
+# #ifdef PROXYSQL31 blocks of its own, so autodetect it as "at least one
+# of FFTO or TSDB is enabled".  This matches the top-level Makefile's
+# cascade (PROXYSQL31=1 => PROXYSQLFFTO=1 && PROXYSQLTSDB=1).
+PSQL31 :=
+ifneq ($(PROXYSQLFFTO)$(PROXYSQLTSDB),)
+	PROXYSQL31 := 1
+	PSQL31 := -DPROXYSQL31
 endif
 
 ifeq ($(PROXYSQLGENAI),1)
@@ -266,7 +271,10 @@ $(FAKE_PLUGIN_SO): $(TEST_HELPERS_DIR)/fake_plugin.cpp $(PROXYSQL_PATH)/include/
 mysqlx_plugin_build:
 	$(MAKE) -C $(PROXYSQL_PATH)/plugins/mysqlx all \
 		CC=$(CC) CXX=$(CXX) OPTZ="$(MYSQLX_PLUGIN_OPTZ)" \
-		WGCOV="$(WGCOV)" WASAN="$(WASAN)"
+		WGCOV="$(WGCOV)" WASAN="$(WASAN)" \
+		PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQL40=$(PROXYSQL40) \
+		PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) \
+		PROXYSQLTSDB=$(PROXYSQLTSDB)
 
 # Same source compiled with different macros to produce a second plugin .so
 # with a distinct plugin name and env-var prefix.  Used by multi-plugin tests.
@@ -412,9 +420,10 @@ plugin_config_unit-t: plugin_config_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_
 		$(IDIRS) $(LDIRS) $(OPT) $(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
-plugin_dispatch_unit-t: plugin_dispatch_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+plugin_dispatch_unit-t: plugin_dispatch_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
+		-DPROXYSQL_FAKE_PLUGIN2_PATH=\"$(FAKE_PLUGIN2_SO)\" \
 		$(IDIRS) $(LDIRS) $(OPT) $(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 

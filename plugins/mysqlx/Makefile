@@ -24,7 +24,36 @@ PROTO_OBJS := $(patsubst $(PROTO_DIR)/%.pb.cc,$(ODIR)/%.pb.o,$(PROTO_SRCS))
 IDIRS := -I$(PROXYSQL_IDIR) -I$(PLUGIN_DIR)/include -I$(SQLITE3_IDIR) -I$(PROTO_DIR) -I$(SSL_IDIR) -I$(PROMETHEUS_IDIR) -I$(LIBCONFIG_IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) -I$(RE2_IDIR)
 
 OPTZ ?= -O2 -ggdb
-CXXFLAGS := $(STDCPP) -fPIC $(OPTZ) $(WGCOV) $(WASAN) -pthread
+
+# Propagate feature-tier flags from the top-level build.  These MUST match
+# the flags libproxysql.a was built with; a mismatch silently changes the
+# ProxySQL_PluginDescriptor / ProxySQL_PluginServices layout the core and
+# the plugin each see, and the loader then reads past the end of the
+# plugin's static descriptor.  (If this Makefile is run standalone, the
+# caller is expected to export PROXYSQL40/31/etc. to match the lib.)
+PSQL40 :=
+ifeq ($(PROXYSQL40),1)
+	PSQL40 := -DPROXYSQL40
+endif
+PSQL31 :=
+ifeq ($(PROXYSQL31),1)
+	PSQL31 := -DPROXYSQL31
+endif
+PSQLFFTO :=
+ifeq ($(PROXYSQLFFTO),1)
+	PSQLFFTO := -DPROXYSQLFFTO
+endif
+PSQLTSDB :=
+ifeq ($(PROXYSQLTSDB),1)
+	PSQLTSDB := -DPROXYSQLTSDB
+endif
+PSQLGA :=
+ifeq ($(PROXYSQLGENAI),1)
+	PSQLGA := -DPROXYSQLGENAI
+endif
+
+CXXFLAGS := $(STDCPP) -fPIC $(OPTZ) $(WGCOV) $(WASAN) -pthread \
+	$(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLGA)
 
 .DEFAULT_GOAL := all
 

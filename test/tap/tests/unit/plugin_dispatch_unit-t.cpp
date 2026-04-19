@@ -305,15 +305,15 @@ static void test_alias_dispatch_two_non_conflicting_plugins() {
 
 	// resolve_alias_to_canonical returns the canonical, regardless of
 	// which spelling was used to probe it.
-	ok(std::string(mgr->resolve_alias_to_canonical("PLUGIN_A RELOAD")) == "PLUGIN_A SYNC CONFIG",
+	ok(mgr->resolve_alias_to_canonical("PLUGIN_A RELOAD") == "PLUGIN_A SYNC CONFIG",
 	   "resolve_alias_to_canonical maps alias -> canonical for plugin A");
-	ok(std::string(mgr->resolve_alias_to_canonical("PLUGIN_B PURGE")) == "PLUGIN_B FLUSH CACHE",
+	ok(mgr->resolve_alias_to_canonical("PLUGIN_B PURGE") == "PLUGIN_B FLUSH CACHE",
 	   "resolve_alias_to_canonical maps alias -> canonical for plugin B");
-	ok(mgr->resolve_alias_to_canonical("UNKNOWN") == nullptr,
-	   "resolve_alias_to_canonical returns nullptr for unknown spellings");
+	ok(mgr->resolve_alias_to_canonical("UNKNOWN").empty(),
+	   "resolve_alias_to_canonical returns empty for unknown spellings");
 
 	// Whitespace/case normalization on the lookup side.
-	ok(std::string(mgr->resolve_alias_to_canonical("  plugin_a   reload  ")) == "PLUGIN_A SYNC CONFIG",
+	ok(mgr->resolve_alias_to_canonical("  plugin_a   reload  ") == "PLUGIN_A SYNC CONFIG",
 	   "resolve_alias_to_canonical normalizes whitespace and case");
 
 	// Negative: an alias cannot shadow a different command's canonical
@@ -325,11 +325,49 @@ static void test_alias_dispatch_two_non_conflicting_plugins() {
 	ok(mgr->register_command_alias("PLUGIN_A SYNC CONFIG", "PLUGIN_A RELOAD"),
 	   "register_command_alias is idempotent for the same canonical+alias pair");
 }
+
+// Real cross-plugin alias collision: two independent .so plugins loaded
+// side-by-side, both trying to own the same admin command spelling.
+// The second plugin's init MUST fail and the loader MUST report the
+// collision rather than silently letting one win.  Exercises the full
+// dlopen + init_all + register_command path, not just the same-manager
+// API-level collision.
+#ifndef PROXYSQL_FAKE_PLUGIN2_PATH
+#error "PROXYSQL_FAKE_PLUGIN2_PATH must be defined"
+#endif
+static void test_cross_plugin_command_collision() {
+	// Both plugins try to register the SAME admin-command SQL.  The
+	// loader processes plugins in the order passed, so plugin2 is the
+	// one that finds the spelling already taken; its init must fail.
+	setenv("PROXYSQL_FAKE_PLUGIN_REGISTER_COMMAND", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_REGISTER_COMMAND_SQL", "PLUGIN SHARED CMD", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN2_REGISTER_COMMAND", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN2_REGISTER_COMMAND_SQL", "PLUGIN SHARED CMD", 1);
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths {
+		PROXYSQL_FAKE_PLUGIN_PATH,
+		PROXYSQL_FAKE_PLUGIN2_PATH
+	};
+	std::string err;
+	bool loaded = proxysql_load_configured_plugins(mgr, paths, err);
+	bool inited = loaded && proxysql_init_configured_plugins_compat(mgr.get(), err);
+	ok(!inited,
+	   "load+init fails when two plugins claim the same admin command");
+	ok(!err.empty(),
+	   "collision produces an error message (err='%s')", err.c_str());
+
+	(void)proxysql_stop_configured_plugins(mgr, err);
+	unsetenv("PROXYSQL_FAKE_PLUGIN_REGISTER_COMMAND");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_REGISTER_COMMAND_SQL");
+	unsetenv("PROXYSQL_FAKE_PLUGIN2_REGISTER_COMMAND");
+	unsetenv("PROXYSQL_FAKE_PLUGIN2_REGISTER_COMMAND_SQL");
+}
 #endif /* PROXYSQL40 */
 
 int main() {
 #ifdef PROXYSQL40
-	plan(50);
+	plan(52);
 #else
 	plan(32);
 #endif
@@ -344,6 +382,7 @@ int main() {
 	test_start_when_null_manager();
 #ifdef PROXYSQL40
 	test_alias_dispatch_two_non_conflicting_plugins();
+	test_cross_plugin_command_collision();
 #endif
 
 	return exit_status();
