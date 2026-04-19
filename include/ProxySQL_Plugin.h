@@ -233,4 +233,40 @@ struct ProxySQL_PluginDescriptor {
 
 using proxysql_plugin_descriptor_v1_t = const ProxySQL_PluginDescriptor *(*)();
 
+// ---------------------------------------------------------------------------
+// ABI guidance: disk/memory/runtime sync — empty-source MUST still clear
+// the destination.
+//
+// Plugins that implement a three-tier storage model (disk ↔ memory ↔
+// runtime, mirroring proxysql_admin) typically copy rows from one tier
+// into another via some variant of:
+//
+//     BEGIN;
+//     DELETE FROM dest;
+//     INSERT INTO dest SELECT * FROM source;
+//     COMMIT;
+//
+// Do NOT short-circuit this on `SELECT COUNT(*) FROM source == 0`. Early
+// return on an empty source leaves stale rows in the destination — the
+// exact bug that motivated PR #5643 on the mysqlx plugin, where
+//
+//     if (disk_cnt == 0) continue;          // stale rows in runtime
+//     if (cnt == 0) continue;               // stale rows in memory
+//
+// caused "I deleted every row from mysqlx_users on disk then reloaded,
+// but the runtime still has the old users" behavior across restarts.
+//
+// The correct invariant: after sync, `dest` contains exactly the rows
+// from `source` at the moment of the transaction. An empty source
+// produces an empty destination. Atomicity with ROLLBACK on any
+// intermediate error keeps the destination in a well-defined state on
+// failure.
+//
+// Applies to every LOAD/SAVE command a plugin registers. If you
+// register admin commands that copy between tiers (LOAD X TO RUNTIME,
+// SAVE X TO DISK, etc.), their callbacks MUST NOT skip the sync on an
+// empty source — run the DELETE+INSERT unconditionally inside a single
+// transaction and check each execute() return.
+// ---------------------------------------------------------------------------
+
 #endif /* PROXYSQL_PLUGIN_H */
