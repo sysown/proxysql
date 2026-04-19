@@ -40,6 +40,7 @@ using json = nlohmann::json;
 #include "MySQL_PreparedStatement.h"
 #include "ProxySQL_Cluster.hpp"
 #include "ProxySQL_Statistics.hpp"
+#include "ProxySQL_PluginManager.h"
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
 #include "MCP_Thread.h"
@@ -314,69 +315,14 @@ const std::vector<std::string> SAVE_TSDB_VARIABLES_TO_MEMORY = {
 	"SAVE TSDB VARIABLES FROM RUNTIME" ,
 	"SAVE TSDB VARIABLES FROM RUN" };
 
-// MySQLX plugin
-const std::vector<std::string> LOAD_MYSQLX_USERS_FROM_MEMORY = {
-	"LOAD MYSQLX USERS FROM MEMORY" ,
-	"LOAD MYSQLX USERS FROM MEM" ,
-	"LOAD MYSQLX USERS TO RUNTIME" ,
-	"LOAD MYSQLX USERS TO RUN" };
+// MYSQLX plugin-owned admin commands used to live here as hardcoded
+// alias vectors plus a 16-deep if-ladder in admin_handler_command_*().
+// They now live in the mysqlx plugin itself (plugins/mysqlx/src/
+// mysqlx_admin_schema.cpp) via the register_command +
+// register_command_alias ABI; admin dispatch resolves via
+// proxysql_resolve_configured_plugin_admin_alias(), which is
+// plugin-agnostic and requires no core change for a new plugin.
 
-const std::vector<std::string> SAVE_MYSQLX_USERS_TO_MEMORY = {
-	"SAVE MYSQLX USERS TO MEMORY" ,
-	"SAVE MYSQLX USERS TO MEM" ,
-	"SAVE MYSQLX USERS FROM RUNTIME" ,
-	"SAVE MYSQLX USERS FROM RUN" };
-
-const std::vector<std::string> LOAD_MYSQLX_ROUTES_FROM_MEMORY = {
-	"LOAD MYSQLX ROUTES FROM MEMORY" ,
-	"LOAD MYSQLX ROUTES FROM MEM" ,
-	"LOAD MYSQLX ROUTES TO RUNTIME" ,
-	"LOAD MYSQLX ROUTES TO RUN" };
-
-const std::vector<std::string> SAVE_MYSQLX_ROUTES_TO_MEMORY = {
-	"SAVE MYSQLX ROUTES TO MEMORY" ,
-	"SAVE MYSQLX ROUTES TO MEM" ,
-	"SAVE MYSQLX ROUTES FROM RUNTIME" ,
-	"SAVE MYSQLX ROUTES FROM RUN" };
-
-const std::vector<std::string> LOAD_MYSQLX_BACKEND_ENDPOINTS_FROM_MEMORY = {
-	"LOAD MYSQLX BACKEND ENDPOINTS FROM MEMORY" ,
-	"LOAD MYSQLX BACKEND ENDPOINTS FROM MEM" ,
-	"LOAD MYSQLX BACKEND ENDPOINTS TO RUNTIME" ,
-	"LOAD MYSQLX BACKEND ENDPOINTS TO RUN" };
-
-const std::vector<std::string> SAVE_MYSQLX_BACKEND_ENDPOINTS_TO_MEMORY = {
-	"SAVE MYSQLX BACKEND ENDPOINTS TO MEMORY" ,
-	"SAVE MYSQLX BACKEND ENDPOINTS TO MEM" ,
-	"SAVE MYSQLX BACKEND ENDPOINTS FROM RUNTIME" ,
-	"SAVE MYSQLX BACKEND ENDPOINTS FROM RUN" };
-const std::vector<std::string> LOAD_MYSQLX_VARIABLES_FROM_MEMORY = {
-	"LOAD MYSQLX VARIABLES FROM MEMORY" ,
-	"LOAD MYSQLX VARIABLES FROM MEM" ,
-	"LOAD MYSQLX VARIABLES TO RUNTIME" ,
-	"LOAD MYSQLX VARIABLES TO RUN" };
-const std::vector<std::string> SAVE_MYSQLX_VARIABLES_TO_MEMORY = {
-	"SAVE MYSQLX VARIABLES TO MEMORY" ,
-	"SAVE MYSQLX VARIABLES TO MEM" ,
-	"SAVE MYSQLX VARIABLES FROM RUNTIME" ,
-	"SAVE MYSQLX VARIABLES FROM RUN" };
-const std::vector<std::string> LOAD_MYSQLX_USERS_FROM_DISK = {
-	"LOAD MYSQLX USERS FROM DISK" };
-const std::vector<std::string> SAVE_MYSQLX_USERS_TO_DISK = {
-	"SAVE MYSQLX USERS TO DISK" };
-const std::vector<std::string> LOAD_MYSQLX_ROUTES_FROM_DISK = {
-	"LOAD MYSQLX ROUTES FROM DISK" };
-const std::vector<std::string> SAVE_MYSQLX_ROUTES_TO_DISK = {
-	"SAVE MYSQLX ROUTES TO DISK" };
-const std::vector<std::string> LOAD_MYSQLX_BACKEND_ENDPOINTS_FROM_DISK = {
-	"LOAD MYSQLX BACKEND ENDPOINTS FROM DISK" };
-const std::vector<std::string> SAVE_MYSQLX_BACKEND_ENDPOINTS_TO_DISK = {
-	"SAVE MYSQLX BACKEND ENDPOINTS TO DISK" };
-const std::vector<std::string> LOAD_MYSQLX_VARIABLES_FROM_DISK = {
-	"LOAD MYSQLX VARIABLES FROM DISK" };
-const std::vector<std::string> SAVE_MYSQLX_VARIABLES_TO_DISK = {
-	"SAVE MYSQLX VARIABLES TO DISK" };
-//
 const std::vector<std::string> LOAD_COREDUMP_FROM_MEMORY = {
 	"LOAD COREDUMP FROM MEMORY" ,
 	"LOAD COREDUMP FROM MEM" ,
@@ -4044,32 +3990,28 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			//pthread_mutex_unlock(&admin_mutex);
 			goto __run_query;
 		}
-		const char* mysqlx_canonical = nullptr;
-		if (!mysqlx_canonical) mysqlx_canonical = resolve_admin_alias_to_canonical(LOAD_MYSQLX_USERS_FROM_MEMORY, "LOAD MYSQLX USERS TO RUNTIME", query_no_space, query_no_space_length);
-		if (!mysqlx_canonical) mysqlx_canonical = resolve_admin_alias_to_canonical(SAVE_MYSQLX_USERS_TO_MEMORY, "SAVE MYSQLX USERS TO MEMORY", query_no_space, query_no_space_length);
-		if (!mysqlx_canonical) mysqlx_canonical = resolve_admin_alias_to_canonical(LOAD_MYSQLX_ROUTES_FROM_MEMORY, "LOAD MYSQLX ROUTES TO RUNTIME", query_no_space, query_no_space_length);
-		if (!mysqlx_canonical) mysqlx_canonical = resolve_admin_alias_to_canonical(SAVE_MYSQLX_ROUTES_TO_MEMORY, "SAVE MYSQLX ROUTES TO MEMORY", query_no_space, query_no_space_length);
-		if (!mysqlx_canonical) mysqlx_canonical = resolve_admin_alias_to_canonical(LOAD_MYSQLX_BACKEND_ENDPOINTS_FROM_MEMORY, "LOAD MYSQLX BACKEND ENDPOINTS TO RUNTIME", query_no_space, query_no_space_length);
-		if (!mysqlx_canonical) mysqlx_canonical = resolve_admin_alias_to_canonical(SAVE_MYSQLX_BACKEND_ENDPOINTS_TO_MEMORY, "SAVE MYSQLX BACKEND ENDPOINTS TO MEMORY", query_no_space, query_no_space_length);
-		if (!mysqlx_canonical) mysqlx_canonical = resolve_admin_alias_to_canonical(LOAD_MYSQLX_VARIABLES_FROM_MEMORY, "LOAD MYSQLX VARIABLES TO RUNTIME", query_no_space, query_no_space_length);
-		if (!mysqlx_canonical) mysqlx_canonical = resolve_admin_alias_to_canonical(SAVE_MYSQLX_VARIABLES_TO_MEMORY, "SAVE MYSQLX VARIABLES TO MEMORY", query_no_space, query_no_space_length);
-		if (!mysqlx_canonical) mysqlx_canonical = resolve_admin_alias_to_canonical(LOAD_MYSQLX_USERS_FROM_DISK, "LOAD MYSQLX USERS FROM DISK", query_no_space, query_no_space_length);
-		if (!mysqlx_canonical) mysqlx_canonical = resolve_admin_alias_to_canonical(SAVE_MYSQLX_USERS_TO_DISK, "SAVE MYSQLX USERS TO DISK", query_no_space, query_no_space_length);
-		if (!mysqlx_canonical) mysqlx_canonical = resolve_admin_alias_to_canonical(LOAD_MYSQLX_ROUTES_FROM_DISK, "LOAD MYSQLX ROUTES FROM DISK", query_no_space, query_no_space_length);
-		if (!mysqlx_canonical) mysqlx_canonical = resolve_admin_alias_to_canonical(SAVE_MYSQLX_ROUTES_TO_DISK, "SAVE MYSQLX ROUTES TO DISK", query_no_space, query_no_space_length);
-		if (!mysqlx_canonical) mysqlx_canonical = resolve_admin_alias_to_canonical(LOAD_MYSQLX_BACKEND_ENDPOINTS_FROM_DISK, "LOAD MYSQLX BACKEND ENDPOINTS FROM DISK", query_no_space, query_no_space_length);
-		if (!mysqlx_canonical) mysqlx_canonical = resolve_admin_alias_to_canonical(SAVE_MYSQLX_BACKEND_ENDPOINTS_TO_DISK, "SAVE MYSQLX BACKEND ENDPOINTS TO DISK", query_no_space, query_no_space_length);
-		if (!mysqlx_canonical) mysqlx_canonical = resolve_admin_alias_to_canonical(LOAD_MYSQLX_VARIABLES_FROM_DISK, "LOAD MYSQLX VARIABLES FROM DISK", query_no_space, query_no_space_length);
-		if (!mysqlx_canonical) mysqlx_canonical = resolve_admin_alias_to_canonical(SAVE_MYSQLX_VARIABLES_TO_DISK, "SAVE MYSQLX VARIABLES TO DISK", query_no_space, query_no_space_length);
-		if (mysqlx_canonical) {
-			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-			if (SPA->dispatch_plugin_admin_command(sess, mysqlx_canonical)) {
+		// Generic plugin admin-command dispatch. Each loaded plugin
+		// registers its commands (plus user-friendly aliases) with the
+		// plugin manager during init; the manager resolves an incoming
+		// query to the canonical SQL a plugin registered. No per-plugin
+		// code in core — this replaced a hardcoded 16-deep MYSQLX alias
+		// ladder.
+		{
+			std::string query_str(query_no_space, query_no_space_length);
+			const char* plugin_canonical = proxysql_resolve_configured_plugin_admin_alias(query_str);
+			if (plugin_canonical != nullptr) {
+				ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+				if (SPA->dispatch_plugin_admin_command(sess, plugin_canonical)) {
+					run_query = false;
+					goto __run_query;
+				}
+				// Reachable only if the command's plugin uninstalled its
+				// callback between resolve() and dispatch(). Treat as
+				// generic "plugin failed to handle command".
+				SPA->send_error_msg_to_client(sess, (char*)"Plugin failed to handle registered command");
 				run_query = false;
 				goto __run_query;
 			}
-			SPA->send_error_msg_to_client(sess, (char*)"MYSQLX plugin is not loaded");
-			run_query = false;
-			goto __run_query;
 		}
 
 		if ((query_no_space_length>5) && ( (!strncasecmp("SAVE ", query_no_space, 5)) || (!strncasecmp("LOAD ", query_no_space, 5))) ) {

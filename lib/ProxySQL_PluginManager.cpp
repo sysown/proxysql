@@ -87,6 +87,23 @@ void register_command_service(const char* sql, proxysql_plugin_admin_command_cb 
 	}
 }
 
+void register_command_alias_service(const char* canonical, const char* alias) {
+	if (g_registry_target == nullptr) {
+		proxy_warning("Plugin command-alias registration attempted outside init phase "
+			      "for %s -> %s\n",
+			      alias     != nullptr ? alias     : "(null)",
+			      canonical != nullptr ? canonical : "(null)");
+		return;
+	}
+
+	if (!g_registry_target->register_command_alias(canonical, alias)) {
+		note_registration_failure("plugin command alias", alias);
+		proxy_warning("Plugin command-alias registration failed: %s -> %s\n",
+			      alias     != nullptr ? alias     : "(null)",
+			      canonical != nullptr ? canonical : "(null)");
+	}
+}
+
 bool register_query_hook_service(ProxySQL_PluginProtocol proto,
                                  proxysql_plugin_query_hook_cb cb) {
 	if (g_registry_target == nullptr) {
@@ -210,6 +227,7 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_.log_message = &log_message_service;
 	services_.register_query_hook = &register_query_hook_service;
 	services_.get_prometheus_registry = &get_prometheus_registry_service;
+	services_.register_command_alias = &register_command_alias_service;
 
 	// Phase-B (register_schemas) services: same layout as init(), but DB
 	// handle getters and the query-hook registrar are stubbed -- see the
@@ -226,6 +244,10 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_phase_b_.log_message = &log_message_service;
 	services_phase_b_.register_query_hook = &register_query_hook_phase_b_stub;
 	services_phase_b_.get_prometheus_registry = &get_prometheus_registry_service;
+	// Alias registration is tied to a canonical command; plugins must
+	// register_command() first, then register aliases. Since register_command
+	// is also available during Phase B, so is register_command_alias.
+	services_phase_b_.register_command_alias = &register_command_alias_service;
 }
 
 ProxySQL_PluginManager::~ProxySQL_PluginManager() {
@@ -453,18 +475,30 @@ const std::vector<ProxySQL_PluginTableDef>& ProxySQL_PluginManager::tables(Proxy
 }
 
 bool ProxySQL_PluginManager::dispatch_admin_command(const ProxySQL_PluginCommandContext& ctx, const std::string& sql, ProxySQL_PluginCommandResult& result) const {
-	const std::string canonical_sql = canonicalize_plugin_command(sql);
+	const std::string normalized_sql = canonicalize_plugin_command(sql);
 
 	for (const auto& command : commands_) {
-		if (!sql_equals_ci(command.sql, canonical_sql)) {
+		bool matches = sql_equals_ci(command.sql, normalized_sql);
+		if (!matches) {
+			for (const auto& alias : command.aliases) {
+				if (sql_equals_ci(alias, normalized_sql)) {
+					matches = true;
+					break;
+				}
+			}
+		}
+		if (!matches) {
 			continue;
 		}
 		if (command.cb == nullptr) {
 			return false;
 		}
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Dispatching plugin command: %s\n",
-			    command.sql.c_str());
-		result = command.cb(ctx, canonical_sql.c_str());
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Dispatching plugin command: %s (via %s)\n",
+			    command.sql.c_str(), normalized_sql.c_str());
+		// Pass the CANONICAL form to the callback so plugins can ignore
+		// which alias the user typed — they match on their own canonical
+		// strings only.
+		result = command.cb(ctx, command.sql.c_str());
 		return true;
 	}
 
@@ -602,6 +636,70 @@ bool ProxySQL_PluginManager::register_command(const char* sql, proxysql_plugin_a
 	return true;
 }
 
+bool ProxySQL_PluginManager::register_command_alias(const char* canonical_sql, const char* alias_sql) {
+	if (canonical_sql == nullptr || *canonical_sql == '\0' ||
+	    alias_sql == nullptr || *alias_sql == '\0') {
+		return false;
+	}
+
+	const std::string canonical = canonicalize_plugin_command(canonical_sql);
+	const std::string alias = canonicalize_plugin_command(alias_sql);
+	if (canonical.empty() || alias.empty()) {
+		return false;
+	}
+
+	// Reject a request that would shadow another command's canonical
+	// spelling. Idempotent for duplicate (canonical, alias) pairs under
+	// the same entry.
+	for (auto& command : commands_) {
+		if (sql_equals_ci(command.sql, alias) && !sql_equals_ci(command.sql, canonical)) {
+			return false;
+		}
+		for (const auto& other_alias : command.aliases) {
+			if (sql_equals_ci(other_alias, alias) && !sql_equals_ci(command.sql, canonical)) {
+				return false;
+			}
+		}
+	}
+
+	for (auto& command : commands_) {
+		if (!sql_equals_ci(command.sql, canonical)) {
+			continue;
+		}
+		// Idempotent: skip if alias (or canonical itself) is already recorded.
+		if (sql_equals_ci(command.sql, alias)) {
+			return true;
+		}
+		for (const auto& existing : command.aliases) {
+			if (sql_equals_ci(existing, alias)) {
+				return true;
+			}
+		}
+		command.aliases.push_back(alias);
+		return true;
+	}
+
+	return false;
+}
+
+const char* ProxySQL_PluginManager::resolve_alias_to_canonical(const std::string& sql) const {
+	const std::string canonical_sql = canonicalize_plugin_command(sql);
+	if (canonical_sql.empty()) {
+		return nullptr;
+	}
+	for (const auto& command : commands_) {
+		if (sql_equals_ci(command.sql, canonical_sql)) {
+			return command.sql.c_str();
+		}
+		for (const auto& alias : command.aliases) {
+			if (sql_equals_ci(alias, canonical_sql)) {
+				return command.sql.c_str();
+			}
+		}
+	}
+	return nullptr;
+}
+
 ProxySQL_PluginManager* proxysql_get_plugin_manager() {
 	return g_active_plugin_manager.load(std::memory_order_acquire);
 }
@@ -617,6 +715,15 @@ bool proxysql_dispatch_configured_plugin_admin_command(
 	}
 
 	return g_active_plugin_manager.load()->dispatch_admin_command(ctx, sql, result);
+}
+
+const char* proxysql_resolve_configured_plugin_admin_alias(const std::string& sql) {
+	std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
+	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load();
+	if (mgr == nullptr) {
+		return nullptr;
+	}
+	return mgr->resolve_alias_to_canonical(sql);
 }
 
 bool proxysql_dispatch_configured_plugin_query_hook(

@@ -36,6 +36,19 @@ public:
 	bool has_command_for_test(const std::string& sql) const;
 	bool register_table(const ProxySQL_PluginTableDef& def);
 	bool register_command(const char* sql, proxysql_plugin_admin_command_cb cb);
+	// Register an alternate spelling (alias) of an already-registered
+	// command.  Returns true on successful registration, false if the
+	// canonical SQL isn't registered, if the alias is empty, or if the
+	// alias would collide with another (canonical or alias) of a
+	// different command. Duplicate registrations of the same
+	// (canonical, alias) pair are idempotent and return true.
+	bool register_command_alias(const char* canonical_sql, const char* alias_sql);
+	// Resolve an incoming admin-command spelling to its canonical form.
+	// Returns the canonical SQL (pointer owned by the manager, valid
+	// for its lifetime) if the query matches a registered command or
+	// any of its aliases; nullptr otherwise.  Whitespace and case are
+	// normalized on both sides.
+	const char* resolve_alias_to_canonical(const std::string& sql) const;
 	bool register_query_hook(ProxySQL_PluginProtocol proto, proxysql_plugin_query_hook_cb cb);
 	bool has_query_hook(ProxySQL_PluginProtocol proto) const;
 	bool dispatch_query_hook(ProxySQL_PluginProtocol proto,
@@ -58,6 +71,10 @@ private:
 	struct registered_command_t {
 		std::string sql {};
 		proxysql_plugin_admin_command_cb cb { nullptr };
+		// User-friendly alternate spellings for this canonical command.
+		// Admin's dispatcher resolves any of these to `sql` before
+		// invoking `cb`. Normalized (case + whitespace) on insertion.
+		std::vector<std::string> aliases {};
 	};
 
 	struct registered_table_storage_t {
@@ -98,6 +115,11 @@ bool proxysql_dispatch_configured_plugin_query_hook(
 // hook (which takes the manager lock).  Use this to elide the dispatch call
 // entirely on the no-plugin path.
 bool proxysql_has_configured_plugin_query_hook(ProxySQL_PluginProtocol proto);
+// Admin-side helper: consult the active plugin manager's command table and
+// return the canonical spelling of `sql` if it's a registered command or
+// alias, nullptr otherwise.  The returned pointer is valid for the lifetime
+// of the active manager (reload invalidates it).
+const char* proxysql_resolve_configured_plugin_admin_alias(const std::string& sql);
 // Phase A + B of the four-phase lifecycle: dlopen() each module, read its
 // descriptor, then call register_schemas() on plugins that opted in. On
 // success, `manager` is populated AND installed as the active manager so

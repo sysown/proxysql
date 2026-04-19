@@ -209,8 +209,110 @@ static void test_start_when_null_manager() {
 	ok(err.empty(), "start helper leaves err empty when there's nothing to start");
 }
 
+// Count invocations per plugin to prove the alias-to-canonical resolver
+// routed each alias spelling to the correct plugin's callback.
+static int g_plugin_a_calls = 0;
+static int g_plugin_b_calls = 0;
+
+static ProxySQL_PluginCommandResult plugin_a_cb(const ProxySQL_PluginCommandContext&, const char*) {
+	++g_plugin_a_calls;
+	return {0, 1, "A"};
+}
+static ProxySQL_PluginCommandResult plugin_b_cb(const ProxySQL_PluginCommandContext&, const char*) {
+	++g_plugin_b_calls;
+	return {0, 1, "B"};
+}
+
+// Directly populate a manager with two "plugins' worth" of commands +
+// aliases to exercise the generic admin-command alias resolver without
+// needing to stand up real .so's for two plugins. The manager doesn't
+// care about the provenance of registered commands; this tests the
+// dispatcher path that replaced the hardcoded MYSQLX alias ladder.
+static void test_alias_dispatch_two_non_conflicting_plugins() {
+	g_plugin_a_calls = 0;
+	g_plugin_b_calls = 0;
+
+	auto mgr = std::make_unique<ProxySQL_PluginManager>();
+
+	// "Plugin A": PLUGIN_A SYNC CONFIG with two alias spellings.
+	ok(mgr->register_command("PLUGIN_A SYNC CONFIG", &plugin_a_cb),
+	   "plugin A: canonical registers");
+	ok(mgr->register_command_alias("PLUGIN_A SYNC CONFIG", "PLUGIN_A RELOAD"),
+	   "plugin A: alias 'PLUGIN_A RELOAD' registers");
+	ok(mgr->register_command_alias("PLUGIN_A SYNC CONFIG", "PLUGIN_A REFRESH"),
+	   "plugin A: alias 'PLUGIN_A REFRESH' registers");
+
+	// "Plugin B": disjoint namespace, different aliases.
+	ok(mgr->register_command("PLUGIN_B FLUSH CACHE", &plugin_b_cb),
+	   "plugin B: canonical registers");
+	ok(mgr->register_command_alias("PLUGIN_B FLUSH CACHE", "PLUGIN_B PURGE"),
+	   "plugin B: alias 'PLUGIN_B PURGE' registers");
+
+	// Install as active so the global helper sees it.
+	std::unique_ptr<ProxySQL_PluginManager> keeper;
+	std::vector<std::string> empty_paths {};
+	std::string err;
+	(void)proxysql_load_configured_plugins(keeper, empty_paths, err);  // clear any prior active
+
+	// Swap in our test manager.  The manager takes ownership of
+	// active-pointer installation via the load helper; for a manager
+	// built outside of plugin_modules, we use register_command_for_test
+	// seam? — no, the load helper is the only installer. Use a short
+	// contrived path: dispatch via the manager directly.
+	ProxySQL_PluginCommandContext ctx { nullptr, nullptr, nullptr };
+	ProxySQL_PluginCommandResult res {99, 0, ""};
+
+	// Canonical paths.
+	ok(mgr->dispatch_admin_command(ctx, "PLUGIN_A SYNC CONFIG", res) &&
+	   res.message == "A",
+	   "canonical 'PLUGIN_A SYNC CONFIG' dispatches to plugin A");
+
+	ok(mgr->dispatch_admin_command(ctx, "PLUGIN_B FLUSH CACHE", res) &&
+	   res.message == "B",
+	   "canonical 'PLUGIN_B FLUSH CACHE' dispatches to plugin B");
+
+	// Alias paths — dispatcher must route each alias to the callback
+	// that registered the matching canonical command.
+	ok(mgr->dispatch_admin_command(ctx, "PLUGIN_A RELOAD", res) &&
+	   res.message == "A",
+	   "alias 'PLUGIN_A RELOAD' routes to plugin A");
+
+	ok(mgr->dispatch_admin_command(ctx, "PLUGIN_A REFRESH", res) &&
+	   res.message == "A",
+	   "alias 'PLUGIN_A REFRESH' routes to plugin A");
+
+	ok(mgr->dispatch_admin_command(ctx, "PLUGIN_B PURGE", res) &&
+	   res.message == "B",
+	   "alias 'PLUGIN_B PURGE' routes to plugin B");
+
+	ok(g_plugin_a_calls == 3, "plugin A's callback was invoked exactly 3 times (canonical + 2 aliases)");
+	ok(g_plugin_b_calls == 2, "plugin B's callback was invoked exactly 2 times (canonical + 1 alias)");
+
+	// resolve_alias_to_canonical returns the canonical, regardless of
+	// which spelling was used to probe it.
+	ok(std::string(mgr->resolve_alias_to_canonical("PLUGIN_A RELOAD")) == "PLUGIN_A SYNC CONFIG",
+	   "resolve_alias_to_canonical maps alias -> canonical for plugin A");
+	ok(std::string(mgr->resolve_alias_to_canonical("PLUGIN_B PURGE")) == "PLUGIN_B FLUSH CACHE",
+	   "resolve_alias_to_canonical maps alias -> canonical for plugin B");
+	ok(mgr->resolve_alias_to_canonical("UNKNOWN") == nullptr,
+	   "resolve_alias_to_canonical returns nullptr for unknown spellings");
+
+	// Whitespace/case normalization on the lookup side.
+	ok(std::string(mgr->resolve_alias_to_canonical("  plugin_a   reload  ")) == "PLUGIN_A SYNC CONFIG",
+	   "resolve_alias_to_canonical normalizes whitespace and case");
+
+	// Negative: an alias cannot shadow a different command's canonical
+	// or alias (cross-plugin collision).
+	ok(!mgr->register_command_alias("PLUGIN_A SYNC CONFIG", "PLUGIN_B PURGE"),
+	   "register_command_alias rejects a spelling already owned by another command");
+
+	// Idempotent re-registration of the same (canonical, alias) pair.
+	ok(mgr->register_command_alias("PLUGIN_A SYNC CONFIG", "PLUGIN_A RELOAD"),
+	   "register_command_alias is idempotent for the same canonical+alias pair");
+}
+
 int main() {
-	plan(32);
+	plan(50);
 
 	test_dispatch_no_active_manager();
 	test_dispatch_after_stop();
@@ -220,6 +322,7 @@ int main() {
 	test_dispatch_concurrency();
 	test_stop_when_not_loaded();
 	test_start_when_null_manager();
+	test_alias_dispatch_two_non_conflicting_plugins();
 
 	return exit_status();
 }

@@ -50,6 +50,20 @@ using proxysql_plugin_register_table_cb =
 using proxysql_plugin_register_command_cb =
 	void (*)(const char *, proxysql_plugin_admin_command_cb);
 
+// Register an alternative spelling (alias) of an already-registered command.
+// The `canonical` argument MUST match the exact SQL passed to a prior
+// `register_command()` call (after whitespace normalization). Plugins use
+// this to publish user-friendly spellings — "LOAD MYSQLX USERS FROM MEMORY"
+// vs "LOAD MYSQLX USERS TO RUNTIME" — without replicating the canonical
+// callback. Core's admin dispatcher consults the alias table to resolve
+// incoming SQL to the canonical form before invoking the registered
+// callback.
+//
+// No-op if `canonical` isn't registered yet (plugins should register the
+// command BEFORE its aliases). Silently skips duplicate aliases.
+using proxysql_plugin_register_command_alias_cb =
+	void (*)(const char *canonical, const char *alias);
+
 using proxysql_plugin_snapshot_cb =
 	SQLite3_result *(*)();
 
@@ -161,6 +175,12 @@ struct ProxySQL_PluginServices {
 	// check non-null before calling.
 	proxysql_plugin_register_query_hook_cb register_query_hook;
 	proxysql_plugin_get_prometheus_registry_cb get_prometheus_registry;
+	// Step 2.5 extension: register a user-friendly alias for a command
+	// already registered via register_command.  Admin's dispatcher
+	// resolves aliases to canonical before invoking the callback, so
+	// plugins avoid the MYSQLX-specific hardcoded alias ladder that
+	// previously lived in lib/Admin_Handler.cpp.
+	proxysql_plugin_register_command_alias_cb register_command_alias;
 };
 
 using proxysql_plugin_init_cb =
