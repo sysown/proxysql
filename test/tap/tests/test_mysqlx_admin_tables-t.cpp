@@ -78,7 +78,7 @@ SQLite3DB* proxysql_plugin_get_statsdb() {
 }
 
 int main() {
-	plan(42);
+	plan(43);
 
 	ok(test_init_minimal() == 0, "minimal test globals initialize");
 
@@ -106,7 +106,15 @@ int main() {
 		BAIL_OUT("mysqlx plugin must load before admin table assertions");
 	}
 
-	ok(mgr.init_all(err), "mysqlx plugin init registers schema and commands");
+	// Schema registration moved from init() to register_schemas() (Phase B)
+	// as part of the four-phase plugin lifecycle. Admin command registration
+	// still happens in init() (Phase D).
+	ok(mgr.invoke_register_schemas_phase(err),
+	   "mysqlx plugin register_schemas publishes admin tables");
+	if (!err.empty()) {
+		diag("register_schemas error: %s", err.c_str());
+	}
+	ok(mgr.init_all(err), "mysqlx plugin init completes after register_schemas");
 	if (!err.empty()) {
 		diag("init error: %s", err.c_str());
 	}

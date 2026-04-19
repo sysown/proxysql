@@ -127,9 +127,24 @@ using proxysql_plugin_register_query_hook_cb =
 using proxysql_plugin_get_prometheus_registry_cb =
 	prometheus::Registry* (*)();
 
-// Services provided to plugins during init.
-// register_table/register_command: valid only during the init callback.
-// get_*db, log_message, snapshots: valid for the plugin's entire lifetime.
+// Services provided to plugins across the four-phase lifecycle.
+//
+// Availability by phase:
+//   * register_schemas (Phase B, optional, run between load() and init()):
+//       - register_table:            LIVE (writes to pending-tables list)
+//       - register_command:          LIVE (orthogonal to schema, OK here)
+//       - log_message:               LIVE
+//       - get_prometheus_registry:   LIVE (registry is constructed at startup)
+//       - get_admindb/get_configdb/get_statsdb: RETURN nullptr (admin module
+//         has not yet materialized the schema).  Plugins using this callback
+//         MUST NOT touch DB handles here; save that work for init().
+//       - register_query_hook:       RETURNS false (not yet wired).
+//       - snapshots:                 RETURN nullptr.
+//   * init (Phase D): every field LIVE.  register_table/register_command
+//     remain valid during init as well (they append to the same registry).
+//   * start (Phase E) and beyond: get_*db, log_message, snapshots,
+//     get_prometheus_registry remain valid; register_* are no-ops (ignored
+//     with a warning — schemas must be declared before start).
 struct ProxySQL_PluginServices {
 	proxysql_plugin_register_table_cb register_table;
 	proxysql_plugin_register_command_cb register_command;
@@ -162,6 +177,24 @@ using proxysql_plugin_stop_cb =
 using proxysql_plugin_status_json_cb =
 	const char *(*)();
 
+// Phase B entry point: "declare your schema before admin bootstrap."
+//
+// Four-phase plugin lifecycle:
+//   Phase A: load()             -- dlopen the .so, read the descriptor
+//   Phase B: register_schemas() -- NEW, optional; plugin returns its table defs
+//   Phase C: admin module init  -- core materializes SQLite schema from the
+//                                  plugin-registered defs (merge_plugin_tables
+//                                  code path -- first-boot == reload)
+//   Phase D: init()             -- plugin runs startup logic with full services
+//   Phase E: start()            -- plugin launches its threads / accept loops
+//
+// This callback is optional (may be nullptr).  Plugins that leave it null
+// keep the pre-existing two-phase behavior: Phase B is skipped and the
+// plugin's init() is responsible for both schema registration and startup
+// work (the mysqlx plugin does this today).
+using proxysql_plugin_register_schemas_cb =
+	bool (*)(ProxySQL_PluginServices *);
+
 struct ProxySQL_PluginDescriptor {
 	const char *name;
 	uint32_t abi_version;
@@ -169,6 +202,13 @@ struct ProxySQL_PluginDescriptor {
 	proxysql_plugin_start_cb start;
 	proxysql_plugin_stop_cb stop;
 	proxysql_plugin_status_json_cb status_json;
+	/* Optional: called between load() and init().
+	 * `services` will have register_table available but DB handle getters
+	 * (get_admindb/get_configdb/get_statsdb) will return nullptr. Plugins
+	 * that use this callback MUST NOT touch DB handles here; they can in
+	 * init() after admin module bootstrap materializes schema. Plugins that
+	 * leave this field null keep the pre-existing two-phase behavior. */
+	proxysql_plugin_register_schemas_cb register_schemas;
 };
 
 using proxysql_plugin_descriptor_v1_t = const ProxySQL_PluginDescriptor *(*)();

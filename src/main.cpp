@@ -1492,7 +1492,15 @@ static void LoadPlugins() {
 static void LoadConfiguredPlugins() {
 	std::string plugin_error {};
 	if (!proxysql_load_configured_plugins(GloPluginManager, GloVars.plugin_modules, plugin_error)) {
-		proxy_error("Plugin init/load failed: %s\n", plugin_error.c_str());
+		proxy_error("Plugin load/register_schemas failed: %s\n", plugin_error.c_str());
+		exit(EXIT_FAILURE);
+	}
+}
+
+static void InitConfiguredPlugins() {
+	std::string plugin_error {};
+	if (!proxysql_init_configured_plugins(GloPluginManager.get(), plugin_error)) {
+		proxy_error("Plugin init failed: %s\n", plugin_error.c_str());
 		exit(EXIT_FAILURE);
 	}
 }
@@ -1536,9 +1544,19 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 	ProxySQL_Main_init_MCP_module();
 #endif /* PROXYSQLGENAI */
 
-	ProxySQL_Main_init_Admin_module(boostrap_info);
+	// Four-phase plugin lifecycle:
+	//   Phase A+B: dlopen + register_schemas (plugin-declared schemas
+	//              populate the pending-tables list).
+	//   Phase C:   admin module init + materialize_plugin_tables (creates
+	//              plugin-owned SQLite tables through the
+	//              merge_plugin_tables path — first-boot == reload).
+	//   Phase D:   init() with full services (live DB handles pointing at
+	//              a schema that already contains the plugin's own tables).
+	//   Phase E:   start() launches the plugin's threads / accept loops.
 	LoadConfiguredPlugins();
+	ProxySQL_Main_init_Admin_module(boostrap_info);
 	GloAdmin->materialize_plugin_tables();
+	InitConfiguredPlugins();
 	StartConfiguredPlugins();
 	GloMTH->print_version();
 

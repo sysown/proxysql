@@ -171,7 +171,7 @@ static void test_global_dispatcher_with_active_manager() {
 	std::unique_ptr<ProxySQL_PluginManager> mgr;
 	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
 	std::string err;
-	ok(proxysql_load_configured_plugins(mgr, paths, err),
+	ok(proxysql_load_configured_plugins(mgr, paths, err) && proxysql_init_configured_plugins(mgr.get(), err),
 	   "load fake plugin (which registers a MySQL query hook)");
 	ok(proxysql_has_configured_plugin_query_hook(ProxySQL_PluginProtocol::mysql),
 	   "has_hook helper reports a MySQL hook is now active");

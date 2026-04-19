@@ -52,7 +52,7 @@ static void test_dispatch_after_stop() {
 	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
 	std::string err;
 
-	ok(proxysql_load_configured_plugins(mgr, paths, err),
+	ok(proxysql_load_configured_plugins(mgr, paths, err) && proxysql_init_configured_plugins(mgr.get(), err),
 	   "load helper succeeds");
 	ok(proxysql_start_configured_plugins(mgr.get(), err),
 	   "start helper succeeds");
@@ -81,7 +81,7 @@ static void test_dispatch_unknown_command_with_active_manager() {
 	std::unique_ptr<ProxySQL_PluginManager> mgr;
 	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
 	std::string err;
-	ok(proxysql_load_configured_plugins(mgr, paths, err), "load");
+	ok(proxysql_load_configured_plugins(mgr, paths, err) && proxysql_init_configured_plugins(mgr.get(), err), "load");
 	ok(proxysql_start_configured_plugins(mgr.get(), err), "start");
 
 	ProxySQL_PluginCommandContext ctx { proxysql_plugin_get_admindb(),
@@ -102,7 +102,7 @@ static void test_dispatch_canonicalises_input() {
 	std::unique_ptr<ProxySQL_PluginManager> mgr;
 	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
 	std::string err;
-	ok(proxysql_load_configured_plugins(mgr, paths, err), "load");
+	ok(proxysql_load_configured_plugins(mgr, paths, err) && proxysql_init_configured_plugins(mgr.get(), err), "load");
 	ok(proxysql_start_configured_plugins(mgr.get(), err), "start");
 
 	ProxySQL_PluginCommandContext ctx { proxysql_plugin_get_admindb(),
@@ -135,7 +135,7 @@ static void test_dispatch_propagates_context() {
 	std::unique_ptr<ProxySQL_PluginManager> mgr;
 	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
 	std::string err;
-	ok(proxysql_load_configured_plugins(mgr, paths, err), "load");
+	ok(proxysql_load_configured_plugins(mgr, paths, err) && proxysql_init_configured_plugins(mgr.get(), err), "load");
 	ok(proxysql_start_configured_plugins(mgr.get(), err), "start");
 
 	// Use a context with all-null DB pointers; dispatch should still work.
@@ -157,7 +157,7 @@ static void test_dispatch_concurrency() {
 	std::unique_ptr<ProxySQL_PluginManager> mgr;
 	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
 	std::string err;
-	ok(proxysql_load_configured_plugins(mgr, paths, err), "load");
+	ok(proxysql_load_configured_plugins(mgr, paths, err) && proxysql_init_configured_plugins(mgr.get(), err), "load");
 	ok(proxysql_start_configured_plugins(mgr.get(), err), "start");
 
 	ProxySQL_PluginCommandContext ctx { proxysql_plugin_get_admindb(),

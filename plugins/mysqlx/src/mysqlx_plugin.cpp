@@ -9,6 +9,21 @@
 
 namespace {
 
+// Phase B: declare admin-schema tables only. Runs BEFORE the admin
+// module is initialized, so `services` has register_table live but the
+// DB handle getters return nullptr. mysqlx_register_admin_schema only
+// touches services->register_table, so this is a clean split.
+bool mysqlx_register_schemas(ProxySQL_PluginServices* services) {
+	if (services == nullptr) {
+		return false;
+	}
+	return mysqlx_register_admin_schema(*services);
+}
+
+// Phase D: plugin-context setup with full services (live DB handles).
+// Runs after admin bootstrap materializes the schemas registered in
+// Phase B, so any future DB queries from init() see a schema that
+// already contains the mysqlx_* tables.
 bool mysqlx_init(ProxySQL_PluginServices* services) {
 	if (services == nullptr) {
 		return false;
@@ -18,7 +33,7 @@ bool mysqlx_init(ProxySQL_PluginServices* services) {
 	ctx.services = services;
 	ctx.config_store = std::make_unique<MysqlxConfigStore>();
 	ctx.started = false;
-	return mysqlx_register_admin_schema(*services);
+	return true;
 }
 
 bool parse_bind_addr(const std::string& bind, std::string& host, int& port) {
@@ -221,6 +236,7 @@ const ProxySQL_PluginDescriptor mysqlx_descriptor = {
 	&mysqlx_start,
 	&mysqlx_stop,
 	&mysqlx_status_json,
+	&mysqlx_register_schemas,
 };
 
 } // namespace

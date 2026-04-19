@@ -18,6 +18,13 @@ public:
 	ProxySQL_PluginManager &operator=(const ProxySQL_PluginManager &) = delete;
 
 	bool load(const std::string &path, std::string &err);
+	// Phase B of the four-phase plugin lifecycle: after all plugins have
+	// been dlopen'd but BEFORE admin module bootstrap.  Invokes each
+	// plugin's optional register_schemas callback with a services struct
+	// that has register_table live but DB-handle getters stubbed to
+	// nullptr.  Plugins that left the descriptor field null are skipped.
+	// Returns false on the first register_schemas callback that fails.
+	bool invoke_register_schemas_phase(std::string &err);
 	bool init_all(std::string &err);
 	bool start_all(std::string &err);
 	bool stop_all();
@@ -42,6 +49,7 @@ private:
 		void *handle{nullptr};
 		const ProxySQL_PluginDescriptor *descriptor{nullptr};
 		std::string path {};
+		bool schemas_registered{false};
 		bool initialized{false};
 		bool started{false};
 		bool stopped{false};
@@ -59,6 +67,10 @@ private:
 
 	std::vector<plugin_handle_t> plugins_;
 	ProxySQL_PluginServices services_;
+	// Phase-B variant handed to register_schemas; DB-handle getters are
+	// stubbed, everything else mirrors services_.  See the contract in
+	// ProxySQL_Plugin.h next to ProxySQL_PluginServices.
+	ProxySQL_PluginServices services_phase_b_;
 	std::vector<ProxySQL_PluginTableDef> tables_admin_;
 	std::vector<ProxySQL_PluginTableDef> tables_config_;
 	std::vector<ProxySQL_PluginTableDef> tables_stats_;
@@ -86,9 +98,22 @@ bool proxysql_dispatch_configured_plugin_query_hook(
 // hook (which takes the manager lock).  Use this to elide the dispatch call
 // entirely on the no-plugin path.
 bool proxysql_has_configured_plugin_query_hook(ProxySQL_PluginProtocol proto);
+// Phase A + B of the four-phase lifecycle: dlopen() each module, read its
+// descriptor, then call register_schemas() on plugins that opted in. On
+// success, `manager` is populated AND installed as the active manager so
+// that ProxySQL_Admin::materialize_plugin_tables can see the declared
+// tables. Phase D (init) must be invoked separately — after admin module
+// bootstrap — via proxysql_init_configured_plugins.
 bool proxysql_load_configured_plugins(
 	std::unique_ptr<ProxySQL_PluginManager>& manager,
 	const std::vector<std::string>& plugin_modules,
+	std::string& err
+);
+// Phase D: call each plugin's init() with full services (live DB handles).
+// Must run after ProxySQL_Main_init_Admin_module so init() sees live
+// admindb/configdb/statsdb with plugin-owned tables already materialized.
+bool proxysql_init_configured_plugins(
+	ProxySQL_PluginManager* manager,
 	std::string& err
 );
 bool proxysql_start_configured_plugins(

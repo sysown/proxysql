@@ -78,7 +78,7 @@ MysqlxBackendEndpoint MysqlxConfigStore::pick_endpoint(const std::string&) const
 bool mysqlx_send_error(int, uint16_t, const std::string&, const std::string&) { return false; }
 
 int main() {
-	plan(15);
+	plan(16);
 
 	ProxySQL_PluginManager mgr;
 	std::string err {};
@@ -90,7 +90,11 @@ int main() {
 	int dbrc = admindb.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 	ok(dbrc == 0, "admin sqlite opens");
 
-	ok(mgr.init_all(err), "init_all registers schema: %s", err.c_str());
+	// Schema registration moved to register_schemas() (Phase B); init() now
+	// only wires plugin context.
+	ok(mgr.invoke_register_schemas_phase(err),
+	   "register_schemas publishes mysqlx admin tables: %s", err.c_str());
+	ok(mgr.init_all(err), "init_all completes after register_schemas: %s", err.c_str());
 
 	admindb.execute(
 		"CREATE TABLE IF NOT EXISTS runtime_mysqlx_routes ("

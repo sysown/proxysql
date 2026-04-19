@@ -145,7 +145,7 @@ static void test_lifecycle_logs_in_order() {
 	std::unique_ptr<ProxySQL_PluginManager> mgr;
 	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
 	std::string err;
-	ok(proxysql_load_configured_plugins(mgr, paths, err) &&
+	ok(proxysql_load_configured_plugins(mgr, paths, err) && proxysql_init_configured_plugins(mgr.get(), err) &&
 	   proxysql_start_configured_plugins(mgr.get(), err) &&
 	   proxysql_stop_configured_plugins(mgr, err),
 	   "single-plugin lifecycle helpers all succeed");
@@ -164,7 +164,7 @@ static void test_multi_lifecycle_logs_in_order() {
 		PROXYSQL_FAKE_PLUGIN2_PATH
 	};
 	std::string err;
-	ok(proxysql_load_configured_plugins(mgr, paths, err) &&
+	ok(proxysql_load_configured_plugins(mgr, paths, err) && proxysql_init_configured_plugins(mgr.get(), err) &&
 	   proxysql_start_configured_plugins(mgr.get(), err) &&
 	   proxysql_stop_configured_plugins(mgr, err),
 	   "two-plugin lifecycle helpers all succeed");
@@ -185,7 +185,7 @@ static void test_active_manager_visibility() {
 	std::string err;
 	ok(proxysql_get_plugin_manager() == nullptr,
 	   "no active manager before load");
-	ok(proxysql_load_configured_plugins(mgr, paths, err),
+	ok(proxysql_load_configured_plugins(mgr, paths, err) && proxysql_init_configured_plugins(mgr.get(), err),
 	   "load succeeds");
 	ok(proxysql_get_plugin_manager() == mgr.get(),
 	   "after load, the active pointer matches the unique_ptr");
@@ -202,12 +202,12 @@ static void test_reload_replaces_previous_manager() {
 	std::vector<std::string> second { PROXYSQL_FAKE_PLUGIN2_PATH };
 	std::string err;
 
-	ok(proxysql_load_configured_plugins(mgr, first, err), "first load");
+	ok(proxysql_load_configured_plugins(mgr, first, err) && proxysql_init_configured_plugins(mgr.get(), err), "first load");
 	ok(proxysql_start_configured_plugins(mgr.get(), err), "first start");
 
 	// Reload with a different set; the helper must tear down the previous
 	// manager (calling its destructor → no leaked plugin).
-	ok(proxysql_load_configured_plugins(mgr, second, err),
+	ok(proxysql_load_configured_plugins(mgr, second, err) && proxysql_init_configured_plugins(mgr.get(), err),
 	   "reload with a different plugin set succeeds");
 	ok(proxysql_start_configured_plugins(mgr.get(), err), "second start");
 	ok(proxysql_stop_configured_plugins(mgr, err), "stop helper");
@@ -230,9 +230,9 @@ static void test_reload_to_empty() {
 	std::vector<std::string> empty {};
 	std::string err;
 
-	ok(proxysql_load_configured_plugins(mgr, first, err), "initial load");
+	ok(proxysql_load_configured_plugins(mgr, first, err) && proxysql_init_configured_plugins(mgr.get(), err), "initial load");
 	ok(proxysql_start_configured_plugins(mgr.get(), err), "initial start");
-	ok(proxysql_load_configured_plugins(mgr, empty, err),
+	ok(proxysql_load_configured_plugins(mgr, empty, err) && proxysql_init_configured_plugins(mgr.get(), err),
 	   "reload with empty plugin list succeeds");
 	ok(mgr.get() == nullptr,
 	   "empty reload nulls out the unique_ptr");
@@ -261,13 +261,18 @@ static void test_load_partial_failure() {
 }
 
 static void test_init_registration_failure_aborts_load() {
+	// The fake plugin registers an invalid table from its init() callback
+	// (Phase D), not register_schemas (Phase B). After the four-phase split,
+	// load (Phase A+B) succeeds and the failure surfaces at init time.
 	setenv("PROXYSQL_FAKE_PLUGIN_REGISTER_INVALID_TABLE", "1", 1);
 	std::unique_ptr<ProxySQL_PluginManager> mgr;
 	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
 	std::string err;
-	ok(!proxysql_load_configured_plugins(mgr, paths, err),
-	   "load fails when plugin's init triggers a service-registration failure");
-	ok(!err.empty(), "load helper reports a non-empty error");
+	ok(proxysql_load_configured_plugins(mgr, paths, err),
+	   "Phase A+B succeeds; the registration failure is in init, not register_schemas");
+	ok(!proxysql_init_configured_plugins(mgr.get(), err),
+	   "init fails when plugin's init triggers a service-registration failure");
+	ok(!err.empty(), "init helper reports a non-empty error");
 	unsetenv("PROXYSQL_FAKE_PLUGIN_REGISTER_INVALID_TABLE");
 }
 
@@ -278,7 +283,7 @@ static void test_dispatch_via_active_manager() {
 	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
 	std::string err;
 
-	ok(proxysql_load_configured_plugins(mgr, paths, err),
+	ok(proxysql_load_configured_plugins(mgr, paths, err) && proxysql_init_configured_plugins(mgr.get(), err),
 	   "load with a plugin that registers an admin command");
 
 	ProxySQL_PluginCommandContext ctx { proxysql_plugin_get_admindb(),
@@ -311,7 +316,7 @@ static void test_dispatch_with_no_active_manager() {
 }
 
 int main() {
-	plan(47);
+	plan(48);
 	make_log_path();
 
 	test_config_parse_single();

@@ -105,11 +105,15 @@ static void test_load_error_cases() {
 	}
 
 	{
+		// v3.0 rejects duplicate-path loads.  The rejection message must
+		// identify the condition ("already loaded") so operators can tell
+		// this apart from other load failures.
 		ProxySQL_PluginManager mgr;
 		ok(mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err) &&
-		   mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err) &&
-		   mgr.size() == 2,
-		   "loading same plugin twice succeeds and size is 2");
+		   !mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err) &&
+		   err.find("already loaded") != std::string::npos &&
+		   mgr.size() == 1,
+		   "second load of same path is rejected with 'already loaded' (size stays 1)");
 	}
 
 	{
@@ -176,9 +180,12 @@ static void test_lifecycle_edge_cases() {
 	}
 
 	{
+		// Two-plugin lifecycle now requires two distinct paths (the loader
+		// rejects same-path duplicates).  fake_plugin + fake_plugin2 are
+		// built from the same source with different FAKE_PLUGIN_NAME.
 		ProxySQL_PluginManager mgr;
 		mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err);
-		mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err);
+		mgr.load(PROXYSQL_FAKE_PLUGIN2_PATH, err);
 		ok(mgr.init_all(err) && mgr.start_all(err) && mgr.stop_all() && mgr.size() == 2,
 		   "full lifecycle with two plugins succeeds");
 	}
@@ -226,17 +233,24 @@ static void test_stop_failure() {
 	unsetenv("PROXYSQL_FAKE_PLUGIN_STOP_FAIL");
 }
 
-static void test_double_load() {
+static void test_double_load_rejected() {
+	// Two distinct-path loads are the supported multi-plugin path; a
+	// second load of the SAME path is rejected and leaves the manager's
+	// state unchanged so the original handle is still usable.
 	ProxySQL_PluginManager mgr;
 	std::string err;
 
 	ok(mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err), "first load succeeds");
-	ok(mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err), "second load of same path also succeeds");
-	ok(mgr.size() == 2, "two plugin handles exist after double load");
+	ok(!mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err),
+	   "second load of same path is rejected");
+	ok(err.find("already loaded") != std::string::npos,
+	   "rejection error mentions 'already loaded'");
+	ok(mgr.size() == 1, "size remains 1 after rejected duplicate load");
 
-	ok(mgr.init_all(err), "init_all succeeds with both handles");
-	ok(mgr.start_all(err), "start_all succeeds with both handles");
-	ok(mgr.stop_all(), "stop_all succeeds with both handles");
+	err.clear();
+	ok(mgr.init_all(err) && mgr.start_all(err),
+	   "init_all + start_all succeed on the surviving single handle");
+	ok(mgr.stop_all(), "stop_all succeeds on the surviving single handle");
 }
 
 static void test_load_missing_path() {
@@ -392,20 +406,22 @@ static void test_multi_plugin_start_failure_stops_started() {
 }
 
 static void test_register_command_failure_in_init_aborts() {
-	// fake_plugin registers "PLUGIN FAKE NOOP".  Ask it to register the
-	// SAME command twice via two loaded handles → second registration
-	// fails inside register_command_service → init_all reports error.
+	// Two DIFFERENT plugins both ask to register "PLUGIN FAKE NOOP"
+	// (the default SQL used by the fake helper when REGISTER_COMMAND is
+	// set).  The second registration collides → init_all reports error.
 	setenv("PROXYSQL_FAKE_PLUGIN_REGISTER_COMMAND", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN2_REGISTER_COMMAND", "1", 1);
 	ProxySQL_PluginManager mgr;
 	std::string err;
-	ok(mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err), "load 1");
-	ok(mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err), "load 2");
+	ok(mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err), "load fake_plugin");
+	ok(mgr.load(PROXYSQL_FAKE_PLUGIN2_PATH, err), "load fake_plugin2");
 	ok(!mgr.init_all(err),
-	   "init_all fails when a plugin's register_command call returns conflict");
+	   "init_all fails when two plugins register the same command");
 	ok(!err.empty(), "registration failure surfaces an error");
 	ok(err.find("plugin command registration failed") != std::string::npos,
 	   "error message identifies command registration as the failing operation");
 	unsetenv("PROXYSQL_FAKE_PLUGIN_REGISTER_COMMAND");
+	unsetenv("PROXYSQL_FAKE_PLUGIN2_REGISTER_COMMAND");
 }
 
 static void test_register_table_invalid_kind_in_init_aborts() {
@@ -430,7 +446,7 @@ int main() {
 	test_init_failure();
 	test_start_failure();
 	test_stop_failure();
-	test_double_load();
+	test_double_load_rejected();
 	test_load_missing_path();
 	test_empty_manager_lifecycle();
 	test_idempotent_init_start_stop();

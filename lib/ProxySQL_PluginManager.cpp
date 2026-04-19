@@ -115,6 +115,25 @@ SQLite3DB* get_statsdb_service() {
 	return proxysql_plugin_get_statsdb();
 }
 
+// Phase-B stubs: during register_schemas the admin module has not yet
+// materialized the SQLite schema, so DB handles are deliberately nullptr.
+// Plugins are documented to never call these during Phase B, but returning
+// nullptr gracefully (vs. not installing them) lets misbehaving plugins
+// handle it without dereferencing a null function pointer.
+SQLite3DB* get_admindb_phase_b_stub()  { return nullptr; }
+SQLite3DB* get_configdb_phase_b_stub() { return nullptr; }
+SQLite3DB* get_statsdb_phase_b_stub()  { return nullptr; }
+
+// Query hooks are not available in Phase B -- the hook registry is also
+// phase-gated on g_registry_target like tables/commands, but we do not
+// publish a dispatch path for hooks during schema registration.  Returning
+// false lets plugins detect "too early" without crashing.
+bool register_query_hook_phase_b_stub(ProxySQL_PluginProtocol,
+                                      proxysql_plugin_query_hook_cb) {
+	proxy_warning("Plugin query hook registration attempted during register_schemas phase -- do this in init() instead\n");
+	return false;
+}
+
 prometheus::Registry* get_prometheus_registry_service() {
 	return GloVars.prometheus_registry.get();
 }
@@ -191,6 +210,22 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_.log_message = &log_message_service;
 	services_.register_query_hook = &register_query_hook_service;
 	services_.get_prometheus_registry = &get_prometheus_registry_service;
+
+	// Phase-B (register_schemas) services: same layout as init(), but DB
+	// handle getters and the query-hook registrar are stubbed -- see the
+	// ProxySQL_PluginServices comment in ProxySQL_Plugin.h for the contract.
+	std::memset(&services_phase_b_, 0, sizeof(services_phase_b_));
+	services_phase_b_.register_table = &register_table_service;
+	services_phase_b_.register_command = &register_command_service;
+	services_phase_b_.get_mysql_users_snapshot = &snapshot_stub;
+	services_phase_b_.get_mysql_servers_snapshot = &snapshot_stub;
+	services_phase_b_.get_mysql_group_replication_hostgroups_snapshot = &snapshot_stub;
+	services_phase_b_.get_admindb = &get_admindb_phase_b_stub;
+	services_phase_b_.get_configdb = &get_configdb_phase_b_stub;
+	services_phase_b_.get_statsdb = &get_statsdb_phase_b_stub;
+	services_phase_b_.log_message = &log_message_service;
+	services_phase_b_.register_query_hook = &register_query_hook_phase_b_stub;
+	services_phase_b_.get_prometheus_registry = &get_prometheus_registry_service;
 }
 
 ProxySQL_PluginManager::~ProxySQL_PluginManager() {
@@ -256,6 +291,56 @@ bool ProxySQL_PluginManager::load(const std::string &path, std::string &err) {
 	plugin.descriptor = descriptor;
 	plugin.path = path;
 	plugins_.push_back(plugin);
+	return true;
+}
+
+bool ProxySQL_PluginManager::invoke_register_schemas_phase(std::string &err) {
+	// Phase B of the four-phase lifecycle.  Called after all plugins have
+	// been dlopen'd but before admin module bootstrap, so plugins can
+	// declare schema for merge_plugin_tables to materialize.
+	//
+	// Like init_all, we use g_registry_target as the single-threaded seam
+	// so the free-standing service trampolines route writes to the right
+	// manager.  This path is only taken during startup / reload, never
+	// concurrently with the steady-state request path.
+	assert(g_registry_target == nullptr);
+	err.clear();
+
+	for (auto &plugin : plugins_) {
+		if (plugin.schemas_registered || plugin.stopped) {
+			continue;
+		}
+		if (plugin.descriptor == nullptr ||
+		    plugin.descriptor->register_schemas == nullptr) {
+			// Plugin opted out of Phase B -- the pre-existing two-phase
+			// path (init-only) still works: mark it as having completed
+			// Phase B so init_all doesn't get confused later.
+			plugin.schemas_registered = true;
+			continue;
+		}
+		g_registry_target = this;
+		g_registry_registration_failed = false;
+		g_registry_registration_error.clear();
+		const bool phase_b_ok = plugin.descriptor->register_schemas(&services_phase_b_);
+		const bool registration_failed = g_registry_registration_failed;
+		const std::string registration_error = g_registry_registration_error;
+		g_registry_registration_failed = false;
+		g_registry_registration_error.clear();
+		g_registry_target = nullptr;
+		if (!phase_b_ok) {
+			err = "plugin register_schemas failed: " + plugin_name(plugin.descriptor);
+			return false;
+		}
+		if (registration_failed) {
+			err = "plugin register_schemas failed: " + plugin_name(plugin.descriptor);
+			if (!registration_error.empty()) {
+				err += ": " + registration_error;
+			}
+			return false;
+		}
+		plugin.schemas_registered = true;
+	}
+
 	return true;
 }
 
@@ -566,6 +651,14 @@ bool proxysql_load_configured_plugins(
 	const std::vector<std::string>& plugin_modules,
 	std::string& err
 ) {
+	// Phase A + Phase B of the four-phase lifecycle. Executed BEFORE
+	// ProxySQL_Main_init_Admin_module so that plugin-declared schemas are
+	// available when merge_plugin_tables materializes the SQLite schema.
+	//
+	// On return, `manager` is populated and installed as the active
+	// manager — GloAdmin->materialize_plugin_tables() can then query it
+	// for the tables to CREATE. Phase D (init) runs later, via
+	// proxysql_init_configured_plugins, once admin is up.
 	err.clear();
 	{
 		std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
@@ -585,16 +678,41 @@ bool proxysql_load_configured_plugins(
 		}
 	}
 
-	if (!next_manager->init_all(err)) {
+	// Phase B: register_schemas runs here. Plugins declare their
+	// admin-schema tables into the manager's pending-tables list.
+	// GloAdmin->materialize_plugin_tables() (called after
+	// ProxySQL_Main_init_Admin_module in src/main.cpp) drains that list
+	// into SQLite via the merge_plugin_tables code path. Plugins that
+	// left register_schemas null are no-ops here.
+	if (!next_manager->invoke_register_schemas_phase(err)) {
 		return false;
 	}
 
+	// Install as active manager BEFORE admin init, so that
+	// proxysql_get_plugin_manager() — used by
+	// ProxySQL_Admin::materialize_plugin_tables — can find the
+	// registered tables.
 	{
 		std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
 		manager = std::move(next_manager);
 		g_active_plugin_manager.store(manager.get(), std::memory_order_release);
 	}
 	return true;
+}
+
+bool proxysql_init_configured_plugins(
+	ProxySQL_PluginManager* manager,
+	std::string& err
+) {
+	// Phase D of the four-phase lifecycle. Runs after
+	// ProxySQL_Main_init_Admin_module has materialized plugin-owned
+	// tables, so each plugin's init() sees live DB handles against a
+	// schema that already contains its own tables.
+	err.clear();
+	if (manager == nullptr) {
+		return true;
+	}
+	return manager->init_all(err);
 }
 
 bool proxysql_start_configured_plugins(
