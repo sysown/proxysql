@@ -201,7 +201,7 @@ endif
 
 ### main targets
 
-.DEFAULT: default
+.DEFAULT_GOAL := default
 .PHONY: default
 default: build_src
 
