@@ -1,6 +1,14 @@
 #!/bin/make -f
 
-PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; done; pwd)
+# Walk upward until we find the repo root (src/proxysql_global.cpp).  A hop
+# counter stops the climb at / on a sparse checkout that omits the marker
+# file -- otherwise we'd loop forever.  Fails fast with a clear message so
+# build output doesn't look like it's hanging.
+PROXYSQL_PATH := $(shell set -e; d="$$PWD"; for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do if [ -f "$$d/src/proxysql_global.cpp" ]; then echo "$$d"; exit 0; fi; if [ "$$d" = "/" ]; then break; fi; d="$$(dirname "$$d")"; done; echo "ERROR: plugins/mysqlx/Makefile: could not find src/proxysql_global.cpp (repo root) from $$PWD; sparse checkout missing include/ and src/proxysql_global.cpp?" >&2; exit 1)
+
+ifneq (,$(findstring ERROR,$(PROXYSQL_PATH)))
+$(error $(PROXYSQL_PATH))
+endif
 
 include $(PROXYSQL_PATH)/include/makefiles_vars.mk
 include $(PROXYSQL_PATH)/include/makefiles_paths.mk

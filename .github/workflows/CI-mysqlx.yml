@@ -20,6 +20,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           sparse-checkout: |
+            include
+            src/proxysql_global.cpp
             test/tap
             plugins/mysqlx
             test/scripts
@@ -31,7 +33,10 @@ jobs:
             src/proxysql
             test/
           key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
-          fail-on-cache-miss: true
+          # Strict cache dependency when CI-trigger populated the cache
+          # upstream; lenient on manual workflow_dispatch so a missing cache
+          # doesn't block an ad-hoc run.
+          fail-on-cache-miss: ${{ github.event_name == 'workflow_run' }}
 
       - name: Build mysqlx plugin
         run: |
@@ -58,6 +63,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           sparse-checkout: |
+            include
+            src/proxysql_global.cpp
             test/tap
             plugins/mysqlx
             test/scripts
@@ -69,7 +76,10 @@ jobs:
             src/proxysql
             test/
           key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
-          fail-on-cache-miss: true
+          # Strict cache dependency when CI-trigger populated the cache
+          # upstream; lenient on manual workflow_dispatch so a missing cache
+          # doesn't block an ad-hoc run.
+          fail-on-cache-miss: ${{ github.event_name == 'workflow_run' }}
 
       - name: Build mysqlx plugin
         run: |

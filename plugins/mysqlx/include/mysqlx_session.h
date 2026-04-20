@@ -12,10 +12,12 @@
 class Mysqlx_Thread;
 
 struct MysqlxCredentials {
-	std::string password_hash;
-	bool x_enabled;
-	std::string allowed_auth;
-	std::string backend_password;
+	std::string password_hash {};
+	// Default to false so default-constructed (e.g. lookup-miss) values
+	// never authenticate by accident via an indeterminate bool.
+	bool x_enabled { false };
+	std::string allowed_auth {};
+	std::string backend_password {};
 };
 
 typedef std::function<MysqlxCredentials(const std::string& username)> MysqlxCredentialLookup;
