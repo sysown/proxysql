@@ -139,7 +139,21 @@ tests:
 	@echo "Removing empty .gcno files ..."
 	find -L . -type f -name '*.gcno' -empty -ls -delete
 
-tests-cpp: $(patsubst %.cpp,%,$(wildcard *-t.cpp))
+# test_mysqlx_*-t.cpp reference chassis/plugin types (ProxySQL_PluginServices,
+# mysqlx_config_store.h from plugins/mysqlx/include) that only exist when
+# libproxysql.a was built with -DPROXYSQL40.  Autodetect the flag via a
+# chassis-exclusive symbol in the static lib; under !PROXYSQL40 filter
+# these tests out of the wildcard glob so plain v3.0/v3.1 `make debug`
+# doesn't try to compile them.
+LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
+PROXYSQL40_DETECTED := $(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c invoke_register_schemas_phase)
+ifeq ($(PROXYSQL40_DETECTED),0)
+TESTS_CPP := $(filter-out test_mysqlx_%,$(patsubst %.cpp,%,$(wildcard *-t.cpp)))
+else
+TESTS_CPP := $(patsubst %.cpp,%,$(wildcard *-t.cpp))
+endif
+
+tests-cpp: $(TESTS_CPP)
 tests-php: $(patsubst %,php-%,$(wildcard *-t.php))
 tests-py: $(patsubst %,py-%,$(wildcard *-t.py))
 tests-sh: $(patsubst %,sh-%,$(wildcard *-t.sh))
