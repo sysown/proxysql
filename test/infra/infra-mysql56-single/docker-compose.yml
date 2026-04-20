@@ -1,0 +1,27 @@
+services:
+
+  mysql1:
+    hostname: mysql1.${INFRA}
+    build:
+      context: ./conf/mysql
+      dockerfile: Dockerfile
+    container_name: ${COMPOSE_PROJECT}-mysql1-1
+    volumes:
+      - ./conf/mysql/mysql1/my.cnf:/etc/mysql/my.cnf
+      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/mysql1:/var/lib/mysql
+      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/mysql1:/var/log/mysql
+    networks:
+      backend:
+        aliases:
+          - mysql1.${INFRA}
+          - mysql1.infra-mysql56-single
+    environment:
+      - MYSQL_ROOT_PASSWORD=${ROOT_PASSWORD}
+      - INFRA=${INFRA}
+    cap_add:
+      - SYS_NICE
+
+networks:
+  backend:
+    name: "${INFRA_ID}_backend"
+    external: true
