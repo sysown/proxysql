@@ -69,11 +69,20 @@ MysqlxPluginContext& mysqlx_context() { return g_stub_context; }
 
 static MysqlxStatsStore g_stub_stats;
 MysqlxStatsStore& mysqlx_stats() { return g_stub_stats; }
-void MysqlxStatsStore::record_conn_ok(const std::string&) {}
-void MysqlxStatsStore::record_conn_err(const std::string&) {}
+void MysqlxStatsStore::record_conn_ok(const std::string&, int) {}
+void MysqlxStatsStore::record_conn_err(const std::string&, int) {}
+void MysqlxStatsStore::record_conn_used(const std::string&, int) {}
 
 uint64_t MysqlxConfigStore::topology_generation() const { return 0; }
 MysqlxBackendEndpoint MysqlxConfigStore::pick_endpoint(const std::string&) const { return {}; }
+int MysqlxConfigStore::route_hostgroup(const std::string&) const { return 0; }
+
+// Stub Mysqlx_Thread dtor so the vector<unique_ptr<Mysqlx_Thread>> in
+// MysqlxPluginContext (g_stub_context) compiles its destructor even
+// though we never link mysqlx_thread.cpp.  The vector is empty in the
+// stub context so this never actually runs, but the compiler still
+// emits the unique_ptr deleter template.
+Mysqlx_Thread::~Mysqlx_Thread() {}
 
 bool mysqlx_send_error(int, uint16_t, const std::string&, const std::string&) { return false; }
 

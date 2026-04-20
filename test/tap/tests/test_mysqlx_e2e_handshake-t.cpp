@@ -96,19 +96,29 @@ static bool send_capabilities_get(int fd) {
 	return mysqlx_write_all(fd, frame.data(), frame.size());
 }
 
+// NOTE: the generated protobuf API changed: Array::add_value() returns
+// Mysqlx::Datatypes::Any*, Capability::value is Any (not Array), and
+// AuthenticateStart::auth_data / AuthenticateContinue::auth_data are
+// raw bytes (std::string), not Scalar.  Helpers below wrap values in
+// Any and pass bytes directly.
 static bool send_capabilities_set_mysql41(int fd) {
 	Mysqlx::Connection::CapabilitiesSet cs;
 	Mysqlx::Connection::Capabilities* caps = new Mysqlx::Connection::Capabilities();
 	Mysqlx::Connection::Capability* cap = caps->add_capabilities();
 	cap->set_name("authentication.mechanisms");
 	{
-		Mysqlx::Datatypes::Array* arr = new Mysqlx::Datatypes::Array();
-		Mysqlx::Datatypes::Scalar* sv = arr->add_value();
+		// Capability::value is Any; wrap an Array of Any-wrapped Scalars.
+		auto* arr_any = new Mysqlx::Datatypes::Any();
+		arr_any->set_type(Mysqlx::Datatypes::Any::ARRAY);
+		auto* arr = arr_any->mutable_array();
+		auto* elem = arr->add_value();
+		elem->set_type(Mysqlx::Datatypes::Any::SCALAR);
+		auto* sv = elem->mutable_scalar();
 		sv->set_type(Mysqlx::Datatypes::Scalar::V_STRING);
-		Mysqlx::Datatypes::Scalar::String* str = new Mysqlx::Datatypes::Scalar::String();
+		auto* str = new Mysqlx::Datatypes::Scalar::String();
 		str->set_value("MYSQL41");
 		sv->set_allocated_v_string(str);
-		cap->set_allocated_value(arr);
+		cap->set_allocated_value(arr_any);
 	}
 	cs.set_allocated_capabilities(caps);
 	std::string s;
@@ -120,14 +130,9 @@ static bool send_capabilities_set_mysql41(int fd) {
 static bool send_auth_start(int fd, const std::string& user) {
 	Mysqlx::Session::AuthenticateStart auth;
 	auth.set_mech_name("MYSQL41");
-	{
-		Mysqlx::Datatypes::Scalar* s = new Mysqlx::Datatypes::Scalar();
-		s->set_type(Mysqlx::Datatypes::Scalar::V_STRING);
-		Mysqlx::Datatypes::Scalar::String* str = new Mysqlx::Datatypes::Scalar::String();
-		str->set_value(user);
-		s->set_allocated_v_string(str);
-		auth.set_allocated_auth_data(s);
-	}
+	// auth_data is `bytes` (std::string) in the current protobuf; pass the
+	// user name raw.
+	auth.set_auth_data(user);
 	std::string s;
 	if (!auth.SerializeToString(&s)) return false;
 	auto frame = mysqlx_build_frame(MSG_SESS_AUTH_START, s);
@@ -136,14 +141,7 @@ static bool send_auth_start(int fd, const std::string& user) {
 
 static bool send_auth_continue(int fd, const std::string& hex_scramble) {
 	Mysqlx::Session::AuthenticateContinue cont;
-	{
-		Mysqlx::Datatypes::Scalar* s = new Mysqlx::Datatypes::Scalar();
-		s->set_type(Mysqlx::Datatypes::Scalar::V_STRING);
-		Mysqlx::Datatypes::Scalar::String* str = new Mysqlx::Datatypes::Scalar::String();
-		str->set_value(hex_scramble);
-		s->set_allocated_v_string(str);
-		cont.set_allocated_auth_data(s);
-	}
+	cont.set_auth_data(hex_scramble);
 	std::string s;
 	if (!cont.SerializeToString(&s)) return false;
 	auto frame = mysqlx_build_frame(MSG_SESS_AUTH_CONTINUE, s);
@@ -200,8 +198,8 @@ static bool full_handshake(int fd, const E2EConfig& cfg) {
 		Mysqlx::Session::AuthenticateContinue cont;
 		if (!cont.ParseFromArray(payload.data(), static_cast<int>(payload.size())))
 			return false;
-		if (!cont.has_auth_data() || !cont.auth_data().has_v_string()) return false;
-		std::string challenge_hex = cont.auth_data().v_string().value();
+		if (!cont.has_auth_data()) return false;
+		std::string challenge_hex = cont.auth_data();
 		if (!mysqlx_hex_decode(challenge_hex, challenge)) return false;
 	}
 
@@ -225,8 +223,7 @@ int main() {
 	E2EConfig cfg;
 	const char* host_env = std::getenv("MYSQLX_E2E_HOST");
 	if (!host_env) {
-		plan(skip_all,
-		     "MYSQLX_E2E_HOST not set; skipping E2E handshake test");
+		skip_all("MYSQLX_E2E_HOST not set; skipping E2E handshake test");
 		return exit_status();
 	}
 	cfg.host = host_env;
@@ -320,7 +317,7 @@ int main() {
 			read_frame_skip_notices(fd, hdr, payload);
 			Mysqlx::Session::AuthenticateContinue cont;
 			cont.ParseFromArray(payload.data(), static_cast<int>(payload.size()));
-			std::string chex = cont.auth_data().v_string().value();
+			std::string chex = cont.auth_data();
 			mysqlx_hex_decode(chex, challenge);
 
 			auto scramble = mysqlx_mysql41_scramble(challenge, cfg.pass);

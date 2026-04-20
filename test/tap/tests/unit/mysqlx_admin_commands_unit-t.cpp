@@ -63,7 +63,7 @@ int main() {
 	   "mysqlx_register_admin_schema succeeds");
 
 	SQLite3DB admindb;
-	admindb.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+	admindb.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);  // NOSONAR: SQLite3DB::open requires non-const char*
 	for (const auto& t : registered_tables) {
 		if (t.db_kind == ProxySQL_PluginDBKind::admin_db) {
 			admindb.execute(t.table_def);
