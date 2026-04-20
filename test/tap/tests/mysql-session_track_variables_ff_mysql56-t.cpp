@@ -36,7 +36,7 @@ int test_ff_optional_mysql56(const CommandLine& cl, MYSQL* admin) {
 
 	MYSQL* proxy = mysql_init(NULL);
 	if (!mysql_real_connect(proxy, cl.host, "sbtest4", "sbtest4", NULL, cl.port, NULL, 0)) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
+		fprintf(stderr, "File %s, line %d, Error: Failed to connect to proxy\n", __FILE__, __LINE__);
 		return EXIT_FAILURE;
 	}
 
@@ -83,7 +83,7 @@ int test_ff_enforced_mysql56(const CommandLine& cl, MYSQL* admin) {
 	// Enable CLIENT_DEPRECATE_EOF as ENFORCED mode advertises it in the handshake
 	proxy->options.client_flag |= CLIENT_DEPRECATE_EOF;
 	if (!mysql_real_connect(proxy, cl.host, "sbtest4", "sbtest4", NULL, cl.port, NULL, 0)) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
+		fprintf(stderr, "File %s, line %d, Error: Failed to connect to proxy\n", __FILE__, __LINE__);
 		return EXIT_FAILURE;
 	}
 
@@ -117,7 +117,7 @@ int main(int argc, char** argv) {
 
 	MYSQL* admin = init_mysql_conn(cl.admin_host, cl.admin_port, cl.admin_username, cl.admin_password);
 	if (!admin) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
+		fprintf(stderr, "File %s, line %d, Error: Failed to connect to admin\n", __FILE__, __LINE__);
 		return exit_status();
 	}
 

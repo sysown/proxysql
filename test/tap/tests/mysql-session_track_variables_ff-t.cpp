@@ -35,7 +35,7 @@ int test_ff_session_tracking(const CommandLine& cl, MYSQL* admin, int mode) {
 	// Enable CLIENT_DEPRECATE_EOF. This is required for session tracking
 	proxy->options.client_flag |= CLIENT_DEPRECATE_EOF;
 	if (!mysql_real_connect(proxy, cl.host, "sbtest4", "sbtest4", NULL, cl.port, NULL, 0)) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
+		fprintf(stderr, "File %s, line %d, Error: Failed to connect to proxy\n", __FILE__, __LINE__);
 		return EXIT_FAILURE;
 	}
 
@@ -83,7 +83,7 @@ int main(int argc, char** argv) {
 
 	MYSQL* admin = init_mysql_conn(cl.admin_host, cl.admin_port, cl.admin_username, cl.admin_password);
 	if (!admin) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
+		fprintf(stderr, "File %s, line %d, Error: Failed to connect to admin\n", __FILE__, __LINE__);
 		return exit_status();
 	}
 

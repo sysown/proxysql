@@ -654,13 +654,18 @@ class MySQL_Threads_Handler
 
 		bool ignore_min_gtid_annotations;
 		/**
-		 * @brief Configuration flag to enable/disable session variable tracking.
+		 * @brief Controls session variable tracking behavior.
 		 *
-		 * When set to session_track_variables::ENABLED (1), ProxySQL will configure
-		 * backend connections to track system variable changes using MySQL's
-		 * session_track_system_variables and session_track_state_change capabilities.
+		 * Enum variants (see session_track_variables enum):
+		 * - DISABLED (0): Do not request session tracking from backends. Default.
+		 * - OPTIONAL (1): Enable session tracking if backend supports it;
+		 *   connection is used even if backend does not support tracking.
+		 * - ENFORCED (2): Enforce session tracking; connection fails if backend
+		 *   does not support CLIENT_DEPRECATE_EOF and CLIENT_SESSION_TRACKING.
 		 *
-		 * Default: session_track_variables::DISABLED (0)
+		 * When enabled, ProxySQL configures backends to track system variable
+		 * changes using MySQL's session_track_system_variables and
+		 * session_track_state_change capabilities.
 		 */
 		int session_track_variables;
 #ifdef PROXYSQLFFTO

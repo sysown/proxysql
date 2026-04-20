@@ -32,7 +32,7 @@ int main(int argc, char** argv) {
 
 	MYSQL* admin = init_mysql_conn(cl.admin_host, cl.admin_port, cl.admin_username, cl.admin_password);
 	if (!admin) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
+		fprintf(stderr, "File %s, line %d, Error: Failed to connect to admin\n", __FILE__, __LINE__);
 		return exit_status();
 	}
 
@@ -40,7 +40,7 @@ int main(int argc, char** argv) {
 	// backs off all 5.6 servers and we wouldn't be able to query @@version.
 	MYSQL* proxy = init_mysql_conn(cl.host, cl.port, cl.username, cl.password);
 	if (!proxy) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
+		fprintf(stderr, "File %s, line %d, Error: Failed to connect to proxy\n", __FILE__, __LINE__);
 		return exit_status();
 	}
 
