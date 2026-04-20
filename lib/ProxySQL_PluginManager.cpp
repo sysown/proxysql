@@ -1,3 +1,9 @@
+// Plugin chassis is a v4.0 feature.  Under v3.0/v3.1 this whole
+// translation unit compiles to nothing; the linker doesn't see a
+// ProxySQL_PluginManager symbol, and any caller that referenced it is
+// expected to gate its own code on PROXYSQL40 too.
+#ifdef PROXYSQL40
+
 #include "ProxySQL_PluginManager.h"
 
 #include <atomic>
@@ -1034,3 +1040,5 @@ bool proxysql_stop_configured_plugins(
 	manager.reset();
 	return true;
 }
+
+#endif /* PROXYSQL40 */

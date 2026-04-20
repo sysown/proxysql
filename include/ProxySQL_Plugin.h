@@ -1,14 +1,19 @@
 #ifndef PROXYSQL_PLUGIN_H
 #define PROXYSQL_PLUGIN_H
 
+// Plugin chassis is a v4.0 feature.  Including this header from a v3.x
+// (no PROXYSQL40) translation unit yields no declarations -- v3.0/v3.1
+// have no plugin concept whatsoever.  Plugins built for PROXYSQL40 set
+// abi_version to PROXYSQL_PLUGIN_ABI_VERSION; the loader rejects
+// abi_version values it doesn't understand.
+#ifdef PROXYSQL40
+
 #include <cstdint>
 #include <string>
 
 class SQLite3DB;
 class SQLite3_result;
-#ifdef PROXYSQL40
 namespace prometheus { class Registry; }
-#endif /* PROXYSQL40 */
 
 // Descriptor ABI version the plugin was compiled for.  Plugins set
 // `abi_version` on their ProxySQL_PluginDescriptor literal to this macro
@@ -23,13 +28,8 @@ namespace prometheus { class Registry; }
 // reject ABI>=2 plugins — it would read past the end of its own struct
 // definition.  A v4 core accepts ABI 1 plugins by treating the
 // register_schemas field as if null (never dereferenced on ABI 1).
-#ifdef PROXYSQL40
 #define PROXYSQL_PLUGIN_ABI_VERSION 2u
 #define PROXYSQL_PLUGIN_ABI_VERSION_MAX 2u
-#else
-#define PROXYSQL_PLUGIN_ABI_VERSION 1u
-#define PROXYSQL_PLUGIN_ABI_VERSION_MAX 1u
-#endif
 
 enum class ProxySQL_PluginDBKind : uint8_t {
 	admin_db = 0,
@@ -284,7 +284,6 @@ struct ProxySQL_PluginDescriptor {
 
 using proxysql_plugin_descriptor_v1_t = const ProxySQL_PluginDescriptor *(*)();
 
-#ifdef PROXYSQL40
 // ---------------------------------------------------------------------------
 // ABI guidance: disk/memory/runtime sync — empty-source MUST still clear
 // the destination.
@@ -320,6 +319,6 @@ using proxysql_plugin_descriptor_v1_t = const ProxySQL_PluginDescriptor *(*)();
 // empty source — run the DELETE+INSERT unconditionally inside a single
 // transaction and check each execute() return.
 // ---------------------------------------------------------------------------
-#endif /* PROXYSQL40 */
 
+#endif /* PROXYSQL40 (file-wide) */
 #endif /* PROXYSQL_PLUGIN_H */

@@ -38,7 +38,9 @@ using json = nlohmann::json;
 #include "PgSQL_Authentication.h"
 #include "MySQL_LDAP_Authentication.hpp"
 #include "MySQL_PreparedStatement.h"
+#ifdef PROXYSQL40
 #include "ProxySQL_PluginManager.h"
+#endif /* PROXYSQL40 */
 #include "ProxySQL_Cluster.hpp"
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_Logger.hpp"
@@ -939,6 +941,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 		insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_rules", STATS_SQLITE_TABLE_MCP_QUERY_RULES); // Reuse same schema for stats
 	#endif /* PROXYSQLGENAI */
 
+#ifdef PROXYSQL40
 	if (ProxySQL_PluginManager* plugin_manager = proxysql_get_plugin_manager()) {
 		auto merge_plugin_tables = [this](std::vector<table_def_t *>* target, const std::vector<ProxySQL_PluginTableDef>& defs, const char* db_name) -> bool {
 			for (const auto& def : defs) {
@@ -965,6 +968,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 			return false;
 		}
 	}
+#endif /* PROXYSQL40 */
 
 	// init ldap here
 	init_ldap();
@@ -1343,6 +1347,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 return true;
 };
 
+#ifdef PROXYSQL40
 void ProxySQL_Admin::materialize_plugin_tables() {
 	ProxySQL_PluginManager* plugin_manager = proxysql_get_plugin_manager();
 	if (!plugin_manager) return;
@@ -1381,3 +1386,4 @@ void ProxySQL_Admin::materialize_plugin_tables() {
 	// startup flow; duplicate ATTACH errors out in SQLite.  Do NOT
 	// re-attach them here.
 }
+#endif /* PROXYSQL40 */

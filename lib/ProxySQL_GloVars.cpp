@@ -85,6 +85,7 @@ void crash_handler(int sig) {
 	pthread_kill(pthread_self(), sig);
 }
 
+#ifdef PROXYSQL40
 void proxysql_load_plugin_modules_from_config(
 	const Setting& root,
 	std::vector<std::string>& plugin_modules
@@ -102,6 +103,7 @@ void proxysql_load_plugin_modules_from_config(
 		}
 	}
 }
+#endif /* PROXYSQL40 */
 
 ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
 	opt->reset();
@@ -115,7 +117,9 @@ ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
 		free(ldap_auth_plugin);
 		ldap_auth_plugin = NULL;
 	}
+#ifdef PROXYSQL40
 	plugin_modules.clear();
+#endif /* PROXYSQL40 */
 	/**
 	 * @brief set in_shutdown flag just the member 'checksums_values'.
 	 * @details This is performed to prevent the free() inside the 'ProxySQL_Checksum_Value' destructor for
@@ -249,7 +253,9 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	ldap_auth_plugin = NULL;
 	web_interface_plugin = NULL;
 	sqlite3_plugin = NULL;
+#ifdef PROXYSQL40
 	plugin_modules.clear();
+#endif /* PROXYSQL40 */
 #ifdef DEBUG
 	global.gdb=0;
 #endif

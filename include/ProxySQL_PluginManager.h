@@ -1,6 +1,12 @@
 #ifndef PROXYSQL_PLUGIN_MANAGER_H
 #define PROXYSQL_PLUGIN_MANAGER_H
 
+// Plugin chassis is a v4.0 feature.  Including this header from a v3.x
+// (no PROXYSQL40) translation unit is a no-op: no class, no free
+// functions, nothing.  Callers that intend to use the plugin manager
+// must guard their own code on PROXYSQL40 too.
+#ifdef PROXYSQL40
+
 #include "ProxySQL_Plugin.h"
 
 #include <cstddef>
@@ -171,4 +177,5 @@ bool proxysql_stop_configured_plugins(
 	std::string& err
 );
 
+#endif /* PROXYSQL40 */
 #endif /* PROXYSQL_PLUGIN_MANAGER_H */
