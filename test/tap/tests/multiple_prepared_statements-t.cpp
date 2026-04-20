@@ -57,7 +57,7 @@ int get_Stmt_Cached(MYSQL *admin) {
 	ok(rc==0,"Query: %s . Error: %s", query, (rc == 0 ? "None" : mysql_error(admin)));
 	if (rc == 0 ) {
 		MYSQL_RES* res = mysql_store_result(admin);
-		int num_rows = mysql_num_rows(res);
+		int num_rows = static_cast<int>(mysql_num_rows(res));
 		ok(num_rows==1,"1 row expected when querying Stmt_Cached. Returned: %d", num_rows);
 		if (num_rows == 0) {
 			diag("Fatal error in line %d: No result", __LINE__);
@@ -319,7 +319,7 @@ int main(int argc, char** argv) {
 	pthread_t thi[NTHREADS];
 	int tid[NTHREADS];
 	for (unsigned int i=0; i<NTHREADS; i++) {
-		tid[i] = i;
+		tid[i] = static_cast<int>(i);
 		if ( pthread_create(&thi[i], NULL, prepare_thread , &tid[i]) != 0 ) {
 			perror("Thread creation");
 			return EXIT_FAILURE;

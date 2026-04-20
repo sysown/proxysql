@@ -1136,6 +1136,12 @@ int main(int argc, char** argv) {
 	bool is_mariadb = (version_str.find("MariaDB") != string::npos);
 	unsigned long server_version = mysql_get_server_version(mysql);
 	bool has_sha2 = true;
+	// MySQL 9.0 removed the 'mysql_native_password' server plugin entirely
+	// (the .so is a client-lib stub only, INSTALL PLUGIN fails). Any
+	// CREATE USER ... IDENTIFIED WITH 'mysql_native_password' returns
+	// ER_PLUGIN_IS_NOT_LOADED. We use has_native_password to filter both
+	// the backend-user fixtures and the def_auths / req_auths iteration.
+	bool has_native_password = !is_mariadb;
 
 	if (server_version < 80000 && !is_mariadb) {
 		diag("This test requires MySQL 8.0+ but backend is version %lu. Skipping.", server_version);
@@ -1153,6 +1159,12 @@ int main(int argc, char** argv) {
 	} else if (server_version < 80018) {
 		diag("Backend MySQL version %lu < 8.0.18, disabling RANDOM password checks.", server_version);
 		setenv("TAP_DISABLE_SEQ_CHECKS_RAND_PASS", "1", 1);
+	}
+
+	if (!is_mariadb && server_version >= 90000) {
+		diag("Backend MySQL %lu: 'mysql_native_password' plugin not loadable on 9.x. "
+			"Skipping mysql_native_password fixtures and auth combinations.", server_version);
+		has_native_password = false;
 	}
 
 	MYSQL* admin = mysql_init(NULL);
@@ -1182,11 +1194,23 @@ int main(int argc, char** argv) {
 		}
 	}
 
-	// Backend users config
-	const auto cbres { config_mysql_backend_users(mysql, ::backend_users) };
+	// Backend users config.
+	// Filter out mysql_native_password fixtures when the plugin is
+	// unavailable on the backend (MySQL 9.x, MariaDB).
+	vector<user_def_t> effective_backend_users;
+	effective_backend_users.reserve(::backend_users.size());
+	for (const user_def_t& u : ::backend_users) {
+		if (!has_native_password && u.auth == "mysql_native_password") {
+			diag("Skipping mysql_native_password fixture '%s' (plugin not available on backend).", u.name.c_str());
+			continue;
+		}
+		effective_backend_users.push_back(u);
+	}
+
+	const auto cbres { config_mysql_backend_users(mysql, effective_backend_users) };
 	if (cbres.first) { return EXIT_FAILURE; }
 
-	vector<user_def_t> rnd_backend_users { ::backend_users };
+	vector<user_def_t> rnd_backend_users { effective_backend_users };
 
 	for (user_def_t& user_def : rnd_backend_users) {
 		user_def.name = "rnd" + user_def.name;
@@ -1218,17 +1242,20 @@ int main(int argc, char** argv) {
 
 	uint32_t NUM_CLIENT_THREADS = 4;
 
-	vector<string> def_auths {
-		"mysql_native_password"
-	};
+	vector<string> def_auths;
+	if (has_native_password) {
+		def_auths.push_back("mysql_native_password");
+	}
 	if (has_sha2) {
 		def_auths.push_back("caching_sha2_password");
 	}
 
 	vector<string> req_auths {
 		"mysql_clear_password",
-		"mysql_native_password"
 	};
+	if (has_native_password) {
+		req_auths.push_back("mysql_native_password");
+	}
 	if (has_sha2) {
 		req_auths.push_back("caching_sha2_password");
 	}

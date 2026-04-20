@@ -1,4 +1,5 @@
 
+#include <openssl/evp.h>
 #include <openssl/rand.h>
 #include "proxysql.h"
 #include "cpp.h"
@@ -973,20 +974,21 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 
 			unsigned char md5_digest[MD5_DIGEST_LENGTH];
 			char md5_string[MD5_DIGEST_LENGTH * 2 + sizeof((*myds)->tmp_login_salt)];
-			MD5_CTX md5_context;
-			// needs to be precalculated and stored in DB
-			MD5_Init(&md5_context);
-			MD5_Update(&md5_context, password, strlen(password));
-			MD5_Update(&md5_context, user, strlen(user));
-			MD5_Final(md5_digest, &md5_context);
+			EVP_MD_CTX* md5_context = EVP_MD_CTX_new();
+			EVP_DigestInit_ex(md5_context, EVP_md5(), NULL);
+			EVP_DigestUpdate(md5_context, password, strlen(password));
+			EVP_DigestUpdate(md5_context, user, strlen(user));
+			unsigned int md5_len = 0;
+			EVP_DigestFinal_ex(md5_context, md5_digest, &md5_len);
 			for (int i = 0; i < MD5_DIGEST_LENGTH; i++) {
 				sprintf(&md5_string[i * 2], "%02x", (unsigned int)md5_digest[i]);
 			}
 			//
 			memcpy(md5_string+(MD5_DIGEST_LENGTH*2), (*myds)->tmp_login_salt, sizeof((*myds)->tmp_login_salt));
-			MD5_Init(&md5_context);
-			MD5_Update(&md5_context, md5_string, (MD5_DIGEST_LENGTH*2)+sizeof((*myds)->tmp_login_salt));
-			MD5_Final(md5_digest, &md5_context);
+			EVP_DigestInit_ex(md5_context, EVP_md5(), NULL);
+			EVP_DigestUpdate(md5_context, md5_string, (MD5_DIGEST_LENGTH*2)+sizeof((*myds)->tmp_login_salt));
+			EVP_DigestFinal_ex(md5_context, md5_digest, &md5_len);
+			EVP_MD_CTX_free(md5_context);
 			memcpy(md5_string, "md5", 3);
 			for (int i = 0, j = 3;  i < MD5_DIGEST_LENGTH; i++, j+=2) {
 				sprintf(&md5_string[j], "%02x", (unsigned int)md5_digest[i]);

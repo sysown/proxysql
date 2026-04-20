@@ -39,7 +39,7 @@ static void *mcp_server_thread(void *arg) {
 }
 
 ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
-	: port(p), handler(h), thread_id(0), use_ssl(h->variables.mcp_use_ssl)
+	: port(p), use_ssl(h->variables.mcp_use_ssl), thread_id(0), handler(h)
 {
 	proxy_info("Creating ProxySQL MCP Server on port %d (SSL: %s)\n",
 		port, use_ssl ? "enabled" : "disabled");

@@ -647,11 +647,19 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
                     if group_has_tests:
                         log.info(f"Group '{TAP_GROUP}' has associated tests in groups.json")
                     else:
-                        log.warning(f"Group '{TAP_GROUP}' has no associated tests in groups.json - defaulting to all TAP tests")
-                        groups = {}
+                        log.critical(
+                            f"Group '{TAP_GROUP}' has no associated tests in groups.json. "
+                            f"Refusing to fall back to running all TAP tests — aborting. "
+                            f"Register tests for this group in test/tap/groups/groups.json, "
+                            f"or unset TAP_GROUP to run the full suite intentionally."
+                        )
+                        sys.exit(1)
                 else:
-                    log.warning(f"No groups.json found - group '{TAP_GROUP}' will default to all TAP tests")
-                    groups = {}
+                    log.critical(
+                        f"No groups.json found but TAP_GROUP='{TAP_GROUP}' is set. "
+                        f"Refusing to fall back to running all TAP tests — aborting."
+                    )
+                    sys.exit(1)
             else:
                 # No TAP_GROUP specified - load all groups for regular group membership checking
                 log.info("No TAP_GROUP specified - loading all groups for membership checking")

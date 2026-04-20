@@ -174,7 +174,7 @@ class Timer {
 		if ((rc)!=SQLITE_OK) { \
 			proxy_error( \
 				"SQLite3 error. Shutting down   rc=%d msg='%s'\n", \
-				rc, db ? (*proxy_sqlite3_errmsg)(db->get_db()) : NULL_DB_MSG); \
+				rc, (db) ? (*proxy_sqlite3_errmsg)((db)->get_db()) : NULL_DB_MSG); \
 			assert(0); \
 		} \
 	} while(0)
@@ -184,7 +184,7 @@ class Timer {
 		if ((rc)!=SQLITE_OK) { \
 			proxy_error( \
 				"SQLite3 error. Shutting down   rc=%d msg='%s'\n", \
-				rc, db ? (*proxy_sqlite3_errmsg)(db) : NULL_DB_MSG); \
+				rc, (db) ? (*proxy_sqlite3_errmsg)(db) : NULL_DB_MSG); \
 			assert(0); \
 		} \
 	} while(0)

@@ -394,14 +394,30 @@ int main(int argc, char** argv) {
 
 	MYSQL* proxy = mysql_init(NULL);
 	MYSQL* admin = mysql_init(NULL);
+	if (!proxy) {
+		fprintf(stderr, "File %s, line %d, Error: mysql_init failed for 'proxy'\n",
+			__FILE__, __LINE__);
+		if (admin) { mysql_close(admin); }
+		return EXIT_FAILURE;
+	}
+	if (!admin) {
+		fprintf(stderr, "File %s, line %d, Error: mysql_init failed for 'admin'\n",
+			__FILE__, __LINE__);
+		mysql_close(proxy);
+		return EXIT_FAILURE;
+	}
 
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
+		mysql_close(proxy);
+		mysql_close(admin);
 		return EXIT_FAILURE;
 	}
 	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 	// if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, 13306, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
+		mysql_close(proxy);
+		mysql_close(admin);
 		return EXIT_FAILURE;
 	}
 
@@ -504,8 +520,10 @@ int main(int argc, char** argv) {
 		ok(count_star == NUM_TESTS * 3, "Digest matches expected 'count_star' number");
 	}
 
-cleanup:
-
+	// Happy-path cleanup. Note: many MYSQL_QUERY calls above do an early
+	// 'return EXIT_FAILURE' on query failure, so they leak proxy/admin.
+	// Fixing that would require restructuring the whole main(), left for
+	// a follow-up.
 	mysql_close(proxy);
 	mysql_close(admin);
 

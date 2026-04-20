@@ -23,16 +23,30 @@ const int RPI = 50;
 MYSQL * conns[NUM_CONNS];
 unsigned long mythreadid[NUM_CONNS];
 
+// Close any connection already stored in the global conns[] array. Safe to
+// call multiple times; nulls each slot so repeat calls are no-ops.
+static void close_all_conns() {
+	for (int i = 0; i < NUM_CONNS; i++) {
+		if (conns[i]) {
+			mysql_close(conns[i]);
+			conns[i] = NULL;
+		}
+	}
+}
+
 int create_connections(CommandLine& cl) {
 	for (int i = 0; i < NUM_CONNS ; i++) {
 		MYSQL * mysql = mysql_init(NULL);
 		if (!mysql) {
-			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
+			fprintf(stderr, "File %s, line %d, Error: mysql_init failed\n", __FILE__, __LINE__);
+			close_all_conns();
 			return exit_status();
 		}
 
 		if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
+			mysql_close(mysql);
+			close_all_conns();
 			return exit_status();
 		}
 		conns[i] = mysql;
@@ -75,12 +89,14 @@ int main(int argc, char** argv) {
 	MYSQL* proxysql_admin = mysql_init(NULL);
 	// Initialize connections
 	if (!proxysql_admin) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
+		fprintf(stderr, "File %s, line %d, Error: mysql_init failed for 'proxysql_admin'\n",
+			__FILE__, __LINE__);
 		return -1;
 	}
 
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
+		mysql_close(proxysql_admin);
 		return -1;
 	}
 
@@ -95,6 +111,7 @@ int main(int argc, char** argv) {
 	int rc = 0;
 	rc = create_connections(cl);
 	if (rc != 0) {
+		mysql_close(proxysql_admin);
 		return exit_status();
 	}
 
@@ -109,11 +126,15 @@ int main(int argc, char** argv) {
 		if (i == 0) {
 			if (create_table_test_sbtest1(RPI,mysql)) {
 				fprintf(stderr, "File %s, line %d, Error: create_table_test_sbtest1() failed\n", __FILE__, __LINE__);
+				close_all_conns();
+				mysql_close(proxysql_admin);
 				return exit_status();
 			}
 		} else {
 			if (add_more_rows_test_sbtest1(RPI,mysql)) {
 				fprintf(stderr, "File %s, line %d, Error: add_more_rows_sbtest1() failed\n", __FILE__, __LINE__);
+				close_all_conns();
+				mysql_close(proxysql_admin);
 				return exit_status();
 			}
 		}
@@ -146,8 +167,13 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(proxysql_admin, "SET mysql-show_processlist_extended=2");
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
+	// Release the previous (now server-killed) batch before the next
+	// create_connections() overwrites the conns[] slots.
+	close_all_conns();
+
 	rc = create_connections(cl);
 	if (rc != 0) {
+		mysql_close(proxysql_admin);
 		return exit_status();
 	}
 
@@ -177,12 +203,16 @@ int main(int argc, char** argv) {
 
 	rc = run_q(conns[0], "SELECT * FROM test.sbtest1");
 	ok(rc == 0 , "SELECT FROM test.sbtest1");
-	MYSQL_ROW row;
 	proxy_res = mysql_store_result(conns[0]);
-	while ((row = mysql_fetch_row(proxy_res))) {
-		rows_read++;
+	if (proxy_res) {
+		while (mysql_fetch_row(proxy_res)) {
+			rows_read++;
+		}
+		mysql_free_result(proxy_res);
+	} else {
+		fprintf(stderr, "File %s, line %d, Error: mysql_store_result on conns[0] returned NULL: %s\n",
+			__FILE__, __LINE__, mysql_error(conns[0]));
 	}
-	mysql_free_result(proxy_res);
 	ok(rows_read == RPI*NUM_CONNS, "Rows expected: %u , received: %u" , RPI*NUM_CONNS , rows_read);
 
 	// stress the system
@@ -219,5 +249,8 @@ int main(int argc, char** argv) {
 		int rc = run_q(mysql, "DO 1");
 		ok(rc != 0, (rc == 0 ? "Connection still alive" : "Connection killed"));
 	}
+
+	close_all_conns();
+	mysql_close(proxysql_admin);
 	return exit_status();
 }

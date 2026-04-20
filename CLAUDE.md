@@ -55,21 +55,38 @@ The same codebase produces three product tiers via feature flags:
 
 Tests use TAP (Test Anything Protocol) with Docker-based backend infrastructure.
 
+### Running TAP tests — DO NOT manually set up Docker containers
+
+**ALWAYS use `run-tests-isolated.bash`**. It handles infrastructure setup, ProxySQL start, test execution, and cleanup. Never manually create Docker networks, start containers, or run init scripts — the runner does all of that.
+
 ```bash
-# Build and run all TAP tests
-make build_tap_tests
-cd test/tap && make
+# Set up infrastructure (backends + ProxySQL container)
+WORKSPACE=$(pwd) INFRA_ID=dev-$USER TAP_GROUP=mysql84-g1 test/infra/control/ensure-infras.bash
 
-# Run specific test groups
-cd test/tap/tests && make
-cd test/tap/tests_with_deps && make
+# Run all tests for a TAP group
+WORKSPACE=$(pwd) INFRA_ID=dev-$USER TAP_GROUP=mysql84-g1 test/infra/control/run-tests-isolated.bash
 
-# Test infrastructure (Docker environments)
-# Located in test/infra/ with docker-compose configs for:
-# mysql57, mysql84, mariadb10, pgsql16, pgsql17, clickhouse23, etc.
+# Build test binaries first (requires proxysql binary)
+make build_tap_tests          # release
+make build_tap_test_debug     # debug
 ```
 
+Available TAP groups are defined in `test/tap/groups/groups.json`. Group names follow the pattern `<infra>-g<N>` (e.g., `mysql84-g1`, `legacy-g2`, `pgsql16-g1`).
+
+### DO NOT
+
+- **DO NOT** manually create Docker networks (`docker network create`)
+- **DO NOT** manually start containers (`docker start`, `docker run`)
+- **DO NOT** run `docker-compose-init.bash` directly — use `ensure-infras.bash`
+- **DO NOT** symlink build artifacts between worktrees — build in each worktree separately
+- **DO NOT** copy source files between worktrees or repos
+- **DO NOT** run `cd test/tap/tests && make` and expect tests to pass without infrastructure
+
+### Test file conventions
+
 Test files follow the naming pattern `test_*.cpp` or `*-t.cpp` in `test/tap/tests/`.
+
+Test binaries are built via a pattern rule in `test/tap/tests/Makefile`: `make <testname>-t` compiles `<testname>-t.cpp` into `<testname>-t`. No special Makefile target is needed for new tests — just add the `.cpp` file and register it in `groups.json`.
 
 ## Architecture
 

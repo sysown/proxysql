@@ -122,7 +122,7 @@ static char *NODE_COMPUTE_DELIMITER=(char *)"-gtyw23a-"; // a random string used
  *
  * @return Returns true if allocation succeeded, false on memory allocation failure
  */
-static bool safe_update_peer_info(char** existing_hostname, char** existing_ip_addr,
+static bool __attribute__((unused)) safe_update_peer_info(char** existing_hostname, char** existing_ip_addr,
                                    const char* new_hostname, const char* new_ip_addr) {
 	// Free existing allocations
 	if (*existing_hostname) {

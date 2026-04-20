@@ -957,11 +957,8 @@ int main(int argc, char** argv) {
 
 						// Test: SHUNNED server appears as ONLINE in runtime on replica
 						{
-							string shunned_check {};
-							string_format(
-								"SELECT COUNT(*) FROM runtime_pgsql_servers WHERE hostname='127.0.0.1' AND port=15433 AND status='ONLINE'",
-								shunned_check
-							);
+							string shunned_check =
+								"SELECT COUNT(*) FROM runtime_pgsql_servers WHERE hostname='127.0.0.1' AND port=15433 AND status='ONLINE'";
 							int shunned_count = 0;
 							// Re-insert the test data to check SHUNNED mapping
 							const vector<pgsql_server_tuple> shunned_test {

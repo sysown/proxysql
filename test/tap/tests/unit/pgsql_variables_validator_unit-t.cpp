@@ -17,7 +17,9 @@ static void assert_validates(const pgsql_variable_validator& v, const char* inpu
         ok(strcmp(transformed, expected_transformed) == 0,
            "%s: transformed('%s') = '%s' (got '%s')", msg, input, expected_transformed, transformed);
     }
-    if (transformed) free(transformed);
+    if (transformed) {
+        free(transformed);
+    }
 }
 
 // ============================================================

@@ -71,7 +71,7 @@ unsigned char srv_greeting[] = {
 /**
  * @brief OK packet after accepting fake auth.
  */
-unsigned char srv_login_resp__ok_pkt[] = {
+unsigned char srv_login_resp_ok_pkt[] = {
 	0x07, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00
 };
 
@@ -93,7 +93,7 @@ unsigned char srv_malformed_resultset[] = {
  * @details This is used as a control query to check the client library status after
  *  reading through the whole previously sent 'srv_malformed_resultset'.
  */
-unsigned char srv_resp___select_1[] = {
+unsigned char srv_resp_select_1[] = {
 	// Column-Count packet
 	0x01, 0x00, 0x00, 0x01, 0x01,
 	// Field definition
@@ -114,13 +114,13 @@ const vector<pair<unsigned char*, size_t>> srv_resps = {
 	// Server greeting message
 	{ srv_greeting, sizeof(srv_greeting) },
 	// OK packet after 'Auth' packet from client; auth always works here :)
-	{ srv_login_resp__ok_pkt, sizeof(srv_login_resp__ok_pkt) },
+	{ srv_login_resp_ok_pkt, sizeof(srv_login_resp_ok_pkt) },
 	// Send malformed resultset; The resultset fields definitions are mangled, and the
 	// 'column-count' packet header purposely fails to encode the payload size.
 	{ srv_malformed_resultset, sizeof(srv_malformed_resultset) },
 	// A simple final resultset corresponding to a 'SELECT 1'. This is used to check if
 	// client is able to read through the whole invalid resulset.
-	{ srv_resp___select_1, sizeof(srv_resp___select_1) }
+	{ srv_resp_select_1, sizeof(srv_resp_select_1) }
 };
 
 /**
@@ -186,7 +186,7 @@ int fake_server(int port) {
 
 	// Receive data
 	for (const auto& resp : srv_resps) {
-		int n = write(clientfd, resp.first, resp.second);
+		int n = static_cast<int>(write(clientfd, resp.first, resp.second));
 		diag("Server: Written response   n=%d", n);
 
 		if (n < 0) {
@@ -201,7 +201,7 @@ int fake_server(int port) {
 				break;
 			}
 
-			n = recv(clientfd, dummy, sizeof(dummy), 0);
+			n = static_cast<int>(recv(clientfd, dummy, sizeof(dummy), 0));
 			diag("Server: Received response   n=%d", n);
 
 			if (n == 0) {
@@ -361,12 +361,10 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	plan(3 + cols_counts.size());
+	plan(3 + static_cast<int>(cols_counts.size()));
 
 	test_malformed_packet();
 	test_integrity_check(cl);
-
-cleanup:
 
 	return exit_status();
 }

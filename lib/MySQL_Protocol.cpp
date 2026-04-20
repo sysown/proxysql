@@ -1113,8 +1113,21 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
   uint8_t uint8_charset = ci->nr & 255;
   memcpy(_ptr+l,&uint8_charset, sizeof(uint8_charset)); l+=sizeof(uint8_charset);
   memcpy(_ptr+l,&server_status, sizeof(server_status)); l+=sizeof(server_status);
-	// Copy the upper 16 capability bits from the effective server capability mask.
-	uint16_t upper_word = static_cast<uint16_t>(server_capabilities >> 16);
+	// Upper-word ('capability_flags_2') capabilities advertised in the greeting.
+	// These match what real MySQL servers advertise (see issue #4023) and were
+	// accidentally dropped during the zstd refactor in 8c6a6444d; this local
+	// restores the baseline. 'extended_capabilities' is intentionally a local:
+	// it must NOT leak into '(*myds)->myconn->options.server_capabilities' nor
+	// into the low-word memcpy above, which record per-connection state rather
+	// than the full greeting. Per-session/per-toggle upper-word bits (e.g.
+	// CLIENT_DEPRECATE_EOF when 'deprecate_eof_active', CLIENT_ZSTD_COMPRESSION
+	// when 'have_compress') are folded in from 'server_capabilities' so the
+	// greeting stays in sync with their runtime state.
+	uint32_t extended_capabilities =
+		CLIENT_MULTI_RESULTS | CLIENT_MULTI_STATEMENTS | CLIENT_PS_MULTI_RESULTS |
+		CLIENT_PLUGIN_AUTH | CLIENT_SESSION_TRACKING | CLIENT_REMEMBER_OPTIONS;
+	extended_capabilities |= server_capabilities & 0xFFFF0000u;
+	uint16_t upper_word = static_cast<uint16_t>(extended_capabilities >> 16);
 	memcpy(_ptr+l, static_cast<void*>(&upper_word), sizeof(upper_word)); l += sizeof(upper_word);
 	// Copy the 'auth_plugin_data_len'. Hardcoded due to 'CLIENT_PLUGIN_AUTH' always enabled and reported
 	// as 'mysql_native_password'.
@@ -2181,7 +2194,12 @@ bool MySQL_Protocol::PPHR_verify_sha2(
 		} else if (passformat == AUTH_MYSQL_CACHING_SHA2_PASSWORD) {
 			assert(strlen(vars1.password) == 70);
 			string sp = string(vars1.password);
-			long rounds = stol(sp.substr(3,3));
+			// MySQL stores rounds as 3-char zero-padded uppercase hex of (rounds/1000).
+			// See sql/auth/sha2_password.cc::Caching_sha2_password::digest_round_separator():
+			//   sprintf(rounds_str, "%03X", m_stored_digest_rounds)
+			// Parsing as base-10 silently truncates at the first hex digit (A-F),
+			// breaking auth for any backend with caching_sha2_password_digest_rounds >= 10000.
+			long rounds = stol(sp.substr(3,3), nullptr, 16);
 			string salt = sp.substr(7,20);
 			string sha256hash = sp.substr(27,43);
 			char buf[100];
@@ -2235,7 +2253,9 @@ void MySQL_Protocol::PPHR_sha2full(
 		} else if (passformat == AUTH_MYSQL_CACHING_SHA2_PASSWORD) {
 			assert(strlen(vars1.password) == 70);
 			string sp = string(vars1.password);
-			long rounds = stol(sp.substr(3,3));
+			// MySQL stores rounds as 3-char zero-padded uppercase hex of (rounds/1000) — see
+			// PPHR_verify_sha2() above for the upstream format reference. Must parse base-16.
+			long rounds = stol(sp.substr(3,3), nullptr, 16);
 			string salt = sp.substr(7,20);
 			string sha256hash = sp.substr(27,43);
 			//char * sha256_crypt_r (const char *key, const char *salt, char *buffer, int buflen);
@@ -2300,7 +2320,7 @@ void MySQL_Protocol::PPHR_SetConnAttrs(MyProt_tmp_auth_vars& vars1, account_deta
 	const uint8_t zstd_compression_level =
 		(vars1.zstd_compression_level > 0 && vars1.zstd_compression_level <= ZSTD_maxCLevel())
 			? vars1.zstd_compression_level
-			: static_cast<uint8_t>(std::min<int>(ZSTD_maxCLevel(), std::max<int>(1, mysql_thread___protocol_compression_level)));
+			: static_cast<uint8_t>(mysql_thread___zstd_compression_level);
 
 	myconn->options.compression_zstd = false;
 	myconn->options.zstd_compression_level = 0;

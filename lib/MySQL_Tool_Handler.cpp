@@ -28,12 +28,12 @@ MySQL_Tool_Handler::MySQL_Tool_Handler(
 	const std::string& catalog_path,
 	const std::string& fts_path
 )
-	: catalog(NULL),
+	: pool_size(0),
+	  catalog(NULL),
 	  fts(NULL),
 	  max_rows(200),
 	  timeout_ms(2000),
-	  allow_select_star(false),
-	  pool_size(0)
+	  allow_select_star(false)
 {
 	// Initialize the pool mutex
 	pthread_mutex_init(&pool_lock, NULL);

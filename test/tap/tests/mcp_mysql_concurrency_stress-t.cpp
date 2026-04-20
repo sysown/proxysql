@@ -431,7 +431,7 @@ void run_mysql_worker(
 	stats.connected_workers.fetch_add(1, std::memory_order_relaxed);
 
 	std::mt19937 rng(static_cast<uint32_t>(
-		std::chrono::steady_clock::now().time_since_epoch().count() ^ (worker_id * 2654435761U)
+		std::chrono::steady_clock::now().time_since_epoch().count() ^ (static_cast<uint64_t>(worker_id) * 2654435761U)
 	));
 	std::uniform_int_distribution<int> op_dist(0, 99);
 	std::uniform_int_distribution<int> val_dist(1, 100000);

@@ -274,12 +274,18 @@ void * my_conn_thread(void *arg) {
 				}
 			}
 
+			// The inner disjunction over session_track_gtids handling must
+			// be grouped so it is only considered when special_sqlmode is
+			// false. Without the extra parentheses, operator precedence
+			// made the 'el.key() == "session_track_gtids"' branch a
+			// standalone failure condition that fired even when
+			// special_sqlmode == true.
 			if (
 				(special_sqlmode == true && verified_special_sqlmode == false) ||
-				(special_sqlmode == false &&
+				(special_sqlmode == false && (
 					(el.key() != "session_track_gtids" && (!values_equiv(k.value(), el.value()) || !values_equiv(s.value(), el.value()))) ||
 					(el.key() == "session_track_gtids" && !check_session_track_gtids(el.value(), s.value(), k.value()))
-				)
+				))
 			) {
 				__sync_fetch_and_add(&g_failed, 1);
 				testPassed = false;

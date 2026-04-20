@@ -29,8 +29,8 @@ static int get_zstd_compression_level(const MySQL_Connection* myconn) {
 	if (zstd_level > 0 && zstd_level <= ZSTD_maxCLevel()) {
 		return zstd_level;
 	}
-	if (mysql_thread___protocol_compression_level > 0 && mysql_thread___protocol_compression_level <= ZSTD_maxCLevel()) {
-		return mysql_thread___protocol_compression_level;
+	if (mysql_thread___zstd_compression_level > 0 && mysql_thread___zstd_compression_level <= ZSTD_maxCLevel()) {
+		return mysql_thread___zstd_compression_level;
 	}
 	return ZSTD_CLEVEL_DEFAULT;
 }

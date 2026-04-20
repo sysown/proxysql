@@ -356,7 +356,7 @@ int test_ff_sess_exceeds_max_conns(const CommandLine& cl, MYSQL* proxy_admin, lo
 		connect_timeout_server, srv_conn_to, connect_timeout
 	);
 
-	my_err = set_srv_conn_to(proxy_admin, srv_conn_to);
+	my_err = set_srv_conn_to(proxy_admin, static_cast<int>(srv_conn_to));
 	if (my_err) {
 		diag("Failed to set 'mysql-connect_timeout_server' to '%ld'", srv_conn_to);
 		res = EXIT_FAILURE;
@@ -402,13 +402,13 @@ int test_ff_sess_exceeds_max_conns(const CommandLine& cl, MYSQL* proxy_admin, lo
 
 		diag("Executing query on the (n+1)th fast_forward connection...");
 		int q_err = mysql_query(proxy_ff, "DO 1");
-		int m_errno = mysql_errno(proxy_ff);
+		int m_errno = static_cast<int>(mysql_errno(proxy_ff));
 		const char* m_error = mysql_error(proxy_ff);
 
 		hrc::time_point end = hrc::now();
 
 		duration = end - start;
-		double duration_s = duration.count() / pow(10,9);
+		double duration_s = static_cast<double>(duration.count()) / pow(10,9);
 
 		diag("Query completed - Error: %d, ErrMsg: %s", m_errno, m_error);
 		diag("Time waited: %lf seconds", duration_s);
@@ -686,7 +686,7 @@ int main(int argc, char** argv) {
 	diag("TEST: max_connections_ff - Fast Forward Connection Limits");
 	diag("===========================================================");
 	diag("This test verifies 'max_connections' is honored by ff connections");
-	diag("");
+	diag("%s", "");
 
 	// 'test_ff_sess_exceeds_max_conns' performs '1' check, 'test_ff_only_one_free_conn' performs '2' checks
 	plan(1 * 2 + 2 * 2);
@@ -708,7 +708,7 @@ int main(int argc, char** argv) {
 	}
 
 	diag("Connected to ProxySQL admin interface at %s:%d", cl.admin_host, cl.admin_port);
-	diag("");
+	diag("%s", "");
 
 	// 1. Test for: '8000' timeout, '1' max_connections
 	diag("-----------------------------------------------------------");
@@ -717,27 +717,27 @@ int main(int argc, char** argv) {
 	test_ff_sess_exceeds_max_conns(cl, proxy_admin, 8000, 1);
 
 	// 2. Test for: '2000' timeout, '3' max_connections
-	diag("");
+	diag("%s", "");
 	diag("-----------------------------------------------------------");
 	diag("TEST RUN 2: max_conns=3, connect_timeout=2000ms");
 	diag("-----------------------------------------------------------");
 	test_ff_sess_exceeds_max_conns(cl, proxy_admin, 2000, 3);
 
 	// 3. Test for only one 'FreeConn' that should be destroyed due to incoming 'fast_forward' conn - MaxConn: 1
-	diag("");
+	diag("%s", "");
 	diag("-----------------------------------------------------------");
 	diag("TEST RUN 3: test_ff_only_one_free_conn with max_conns=1");
 	diag("-----------------------------------------------------------");
 	test_ff_only_one_free_conn(cl, proxy_admin, 1);
 
 	// 4. Test for only one 'FreeConn' that should be destroyed due to incoming 'fast_forward' conn - MaxConn: 3
-	diag("");
+	diag("%s", "");
 	diag("-----------------------------------------------------------");
 	diag("TEST RUN 4: test_ff_only_one_free_conn with max_conns=3");
 	diag("-----------------------------------------------------------");
 	test_ff_only_one_free_conn(cl, proxy_admin, 3);
 
-	diag("");
+	diag("%s", "");
 	diag("===========================================================");
 	diag("All tests completed");
 	diag("===========================================================");

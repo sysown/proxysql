@@ -59,7 +59,7 @@ bool executeQueries(PGconn* conn, const std::vector<std::string>& queries) {
         if (strncasecmp(buf, "SELECT", sizeof("SELECT") - 1) == 0) {
             return PGRES_TUPLES_OK;
         }
-        else if (strncasecmp(buf, "COPY", sizeof("COPY") - 1) == 0) {
+        if (strncasecmp(buf, "COPY", sizeof("COPY") - 1) == 0) {
             return PGRES_COPY_OUT;
         }
 

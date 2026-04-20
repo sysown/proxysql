@@ -31,7 +31,7 @@ int main(int argc, char** argv) {
 	diag("================================================================================");
 	diag("This test verifies that ProxySQL correctly handles autocommit and transaction");
 	diag("status flags when communicating with a SQLite3 backend server.");
-	diag("");
+	diag("%s", "");
 	diag("Test scenarios:");
 	diag("  - SET autocommit=0: Verify SERVER_STATUS_AUTOCOMMIT is cleared");
 	diag("  - SET autocommit=1: Verify SERVER_STATUS_AUTOCOMMIT is set");
@@ -39,13 +39,13 @@ int main(int argc, char** argv) {
 	diag("  - FOR UPDATE and LOCK IN SHARE MODE: Verify transaction state");
 	diag("  - UPDATE queries: Verify transaction state during DML operations");
 	diag("  - COMMIT: Verify transaction state is cleared after commit");
-	diag("");
+	diag("%s", "");
 	diag("Connection parameters:");
 	diag("  - Host: %s", cl.host);
 	diag("  - Port: 6030 (SQLite3 Server)");
 	diag("  - Username: %s", cl.username);
 	diag("================================================================================");
-	diag("");
+	diag("%s", "");
 
 	MYSQL* mysql = mysql_init(NULL);
 	if (!mysql) {
@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 	diag("Successfully connected to SQLite3 Server");
-	diag("");
+	diag("%s", "");
 	MYSQL_RES *res;
 	if (create_table_test_sqlite_sbtest1(100,mysql)) {
 		fprintf(stderr, "File %s, line %d, Error: create_table_test_sbtest1() failed\n", __FILE__, __LINE__);

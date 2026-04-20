@@ -3166,8 +3166,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	unsigned int query_length = 0;
 	char* query_no_space = NULL;
 	unsigned int query_no_space_length = 0;
-	bool transform_pg_attribute_result = false; // Flag to transform PRAGMA result
-	unsigned int query_no_space_alloc_size = 0;
+	bool transform_pg_attribute_result = false;
 
 	if constexpr (std::is_same_v<S,MySQL_Session>) {
 		query_length = pkt->size - sizeof(mysql_hdr);
@@ -3216,7 +3215,6 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	}
 
 	query[query_length-1]=0;
-	query_no_space_alloc_size = query_length;
 	query_no_space=(char *)l_alloc(query_length);
 	memcpy(query_no_space,query,query_length);
 
@@ -5582,7 +5580,7 @@ __run_query:
 	}
 
 	if (query_no_space) {
-		l_free(query_no_space_alloc_size, query_no_space);
+		l_free(query_length, query_no_space);
 	}
 	if (query) {
 		l_free(query_length, query);

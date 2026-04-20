@@ -127,9 +127,9 @@ char* unique_str(ValueGenerator* vg, const char* field) {
 }
 
 char* unique_ip(ValueGenerator* vg) {
-    char* ip = (char*)malloc(16);
-    int octet = vg->base + vg->offset++;
-    sprintf(ip, "%d.%d.%d.%d",
+    char* ip = (char*)malloc(24);
+    unsigned int octet = vg->base + vg->offset++;
+    sprintf(ip, "%u.%u.%u.%u",
         octet % 256, (octet + 1) % 256, (octet + 2) % 256, (octet + 3) % 256);
     return ip;
 }

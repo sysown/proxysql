@@ -341,7 +341,9 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	pgsql_tokenizer_unit-t \
 	ezoption_parser_unit-t \
 	genai_discovery_schema_unit-t \
-	gtid_utils_unit-t \
+	gtid_trxid_interval_unit-t \
+	gtid_set_unit-t \
+	gtid_server_data_unit-t \
 	genai_mysql_catalog_unit-t \
 	admin_disk_upgrade_unit-t \
 	glovars_unit-t \
@@ -388,6 +390,12 @@ endif
 
 .PHONY: all
 all: $(UNIT_TESTS)
+
+# Alias: top-level 'make unit_tests' (via test/tap/Makefile) forwards the goal
+# name here via $(MAKECMDGOALS), so this target must exist even though `all`
+# does the same thing.
+.PHONY: unit_tests
+unit_tests: all
 
 .PHONY: debug
 debug: OPT += -DDEBUG

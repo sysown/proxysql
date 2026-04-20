@@ -33,6 +33,13 @@ using std::pair;
 // Global flag for MySQL version check
 static bool g_mysql_supports_random_password = false;
 static bool g_mysql_version_checked = false;
+// MySQL 9.0 removed the 'mysql_native_password' server plugin. CREATE USER
+// IDENTIFIED WITH 'mysql_native_password' returns ER_PLUGIN_IS_NOT_LOADED on
+// 9.x backends. This flag gates the backend-side native_password fixtures
+// (Phase 2 hash compat + Phase 3 end-to-end). ProxySQL's internal
+// MYSQL_NATIVE_PASSWORD() SQLite3 extension is unaffected — hash generation
+// is pure computation and still works.
+static bool g_mysql_supports_native_password = true;
 
 /**
  * @brief Check if MySQL server supports 'BY RANDOM PASSWORD' syntax (MySQL 8.0+)
@@ -255,8 +262,29 @@ int test_pass_match(MYSQL* admin, const user_def_t& def) {
 
 		mysql_free_result(myres);
 	} else if (def.auth == "caching_sha2_password") {
+		// MySQL stores caching_sha2_password as '$A$<RRR>$<salt><hash>' (70 ASCII bytes).
+		// def.hash is the hex-encoding of those 70 bytes (140 chars). The 3 ASCII chars
+		// at offset 3..5 (hex offset 6..11) carry rounds/1000 in 3-char zero-padded
+		// uppercase hex. Decode and pass the resolved rounds value to the SQLite
+		// extension so the regenerated digest uses the same iteration count as the
+		// backend (matters once MySQL ships with default rounds != 5000).
+		long rounds = 5000;
+		if (def.hash.size() >= 12) {
+			string rounds_field;
+			for (size_t i = 6; i < 12; i += 2) {
+				rounds_field += static_cast<char>(stoi(def.hash.substr(i, 2), nullptr, 16));
+			}
+			try {
+				rounds = stol(rounds_field, nullptr, 16) * 1000;
+			} catch (const std::exception&) {
+				diag("Failed to parse rounds field '%s' from MySQL hash '%s'",
+					rounds_field.c_str(), def.hash.c_str());
+			}
+		}
+
 		const string GEN_SHA2_PASS {
-			"SELECT HEX(CACHING_SHA2_PASSWORD('" + def.pass + "', UNHEX('" + def.salt + "')))"
+			"SELECT HEX(CACHING_SHA2_PASSWORD('" + def.pass + "', UNHEX('" + def.salt + "'), "
+				+ std::to_string(rounds) + "))"
 		};
 		MYSQL_QUERY_T(admin, GEN_SHA2_PASS.c_str());
 
@@ -267,8 +295,8 @@ int test_pass_match(MYSQL* admin, const user_def_t& def) {
 
 		ok(
 			def.hash == admin_hash,
-			"MySQL hash should match ProxySQL generated   mysql:'%s', admin:'%s'",
-			def.hash.c_str(), admin_hash.c_str()
+			"MySQL hash should match ProxySQL generated   mysql:'%s', admin:'%s', rounds:%ld",
+			def.hash.c_str(), admin_hash.c_str(), rounds
 		);
 
 		mysql_free_result(myres);
@@ -397,13 +425,20 @@ const vector<inv_input_t> INV_INPUTS {
 		"ProxySQL Admin Error: wrong number of arguments to function CACHING_SHA2_PASSWORD()"
 	},
 	{
-		"SELECT CACHING_SHA2_PASSWORD('00', '00', '00')", 1,
+		"SELECT CACHING_SHA2_PASSWORD('00', '00', 5000, 'extra')", 1,
 		"ProxySQL Admin Error: wrong number of arguments to function CACHING_SHA2_PASSWORD()"
 	},
 	{ "SELECT CACHING_SHA2_PASSWORD('', '')", 0, "Invalid argument size" },
 	{ "SELECT CACHING_SHA2_PASSWORD('', '000000000000000000000')", 0, "Invalid argument size" },
 	{ "SELECT CACHING_SHA2_PASSWORD(2, '00')", 0, "Invalid argument type" },
 	{ "SELECT CACHING_SHA2_PASSWORD('00', 2)", 0, "Invalid argument type" },
+	{ "SELECT CACHING_SHA2_PASSWORD('00', '00', '00')", 0, "Invalid argument type" },
+	{ "SELECT CACHING_SHA2_PASSWORD('00', '00', 1000)", 0,
+		"Invalid rounds: expected multiple of 1000 in [5000,4095000]" },
+	{ "SELECT CACHING_SHA2_PASSWORD('00', '00', 5500)", 0,
+		"Invalid rounds: expected multiple of 1000 in [5000,4095000]" },
+	{ "SELECT CACHING_SHA2_PASSWORD('00', '00', 4096000)", 0,
+		"Invalid rounds: expected multiple of 1000 in [5000,4095000]" },
 };
 
 
@@ -423,13 +458,13 @@ int main(int argc, char** argv) {
 	diag("================================================================================");
 	diag("This test verifies SQLite3 password extension functions in the ProxySQL Admin");
 	diag("interface, testing compatibility with MySQL authentication methods.");
-	diag("");
+	diag("%s", "");
 	diag("Test scenarios:");
 	diag("  - MYSQL_NATIVE_PASSWORD: MySQL 4.1+ native password hashing");
 	diag("  - CACHING_SHA2_PASSWORD: MySQL 8.0+ caching SHA2 password hashing");
 	diag("  - Random password generation and hash verification");
 	diag("  - End-to-end connection testing with generated passwords");
-	diag("");
+	diag("%s", "");
 	diag("Connection parameters:");
 	diag("  - MySQL Host: %s", cl.mysql_host);
 	diag("  - MySQL Port: %d", cl.mysql_port);
@@ -437,7 +472,7 @@ int main(int argc, char** argv) {
 	diag("  - Admin Host: %s", cl.admin_host);
 	diag("  - Admin Port: %d", cl.admin_port);
 	diag("================================================================================");
-	diag("");
+	diag("%s", "");
 
 	MYSQL* mysql = mysql_init(NULL);
 
@@ -448,26 +483,43 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 	diag("Successfully connected to MySQL backend");
-	diag("");
+	diag("%s", "");
 
 	// Check MySQL version before calling plan() so we can set the correct test count
 	// MySQL 8.0+ supports 'BY RANDOM PASSWORD' syntax, MySQL 5.7 does not
 	check_mysql_random_password_support(mysql);
 
+	// Detect whether the 'mysql_native_password' server plugin is usable.
+	// MySQL 9.0 removed it; we skip the native_password halves of Phase 2
+	// (MySQL/Admin hash compat) and Phase 3 (end-to-end) on 9.x backends.
+	unsigned long server_version = mysql_get_server_version(mysql);
+	if (server_version >= 90000) {
+		g_mysql_supports_native_password = false;
+		diag("Backend MySQL %lu: 'mysql_native_password' plugin not loadable. "
+			"Skipping native_password backend-side fixtures.", server_version);
+	}
+
 	// Calculate the actual number of tests based on MySQL version
 	uint32_t actual_test_count =
 		INV_INPUTS.size() +           // Always run
-		PASS_GEN_COUNT * 2 +           // Always run
+		PASS_GEN_COUNT * 2 +           // Always run (ProxySQL Admin SQLite3 extensions)
 		2;                             // EXTRA: Two extra correctness tests
 
 	if (g_mysql_supports_random_password) {
-		// These tests only run on MySQL 8.0+
-		actual_test_count += USER_GEN_COUNT;      // MySQL/Admin hash compatibility tests
-		actual_test_count += RAND_USERS_GEN;      // End-to-end connection tests
+		// Phase 2: MySQL/Admin hash compatibility tests (USER_GEN_COUNT total,
+		// half native + half sha2). On 9.x only the sha2 half runs.
+		actual_test_count +=
+			(g_mysql_supports_native_password ? USER_GEN_COUNT : USER_GEN_COUNT / 2);
+
+		// Phase 3: End-to-end connection tests (RAND_USERS_GEN total, same split).
+		actual_test_count +=
+			(g_mysql_supports_native_password ? RAND_USERS_GEN : RAND_USERS_GEN / 2);
+
 		actual_test_count += 1;                   // Connection count check
 	}
 
 	diag("MySQL version supports 'BY RANDOM PASSWORD': %s", g_mysql_supports_random_password ? "yes" : "no");
+	diag("MySQL server supports 'mysql_native_password' plugin: %s", g_mysql_supports_native_password ? "yes" : "no");
 	diag("Planned test count: %u", actual_test_count);
 
 	plan(actual_test_count);
@@ -502,17 +554,19 @@ int main(int argc, char** argv) {
 	if (g_mysql_supports_random_password) {
 		vector<user_def_t> users {};
 
-		for (size_t i = 0; i < USER_GEN_COUNT/2; i++) {
-			const string name { "rndextuser" + std::to_string(i) };
-			pair<int,user_def_t> user_def {
-				create_mysql_user_rnd_creds(mysql, name, "mysql_native_password")
-			};
+		if (g_mysql_supports_native_password) {
+			for (size_t i = 0; i < USER_GEN_COUNT/2; i++) {
+				const string name { "rndextuser" + std::to_string(i) };
+				pair<int,user_def_t> user_def {
+					create_mysql_user_rnd_creds(mysql, name, "mysql_native_password")
+				};
 
-			if (user_def.first) {
-				diag("User creation failed   user:'%s'", name.c_str());
-				goto cleanup;
-			} else {
-				users.push_back(user_def.second);
+				if (user_def.first) {
+					diag("User creation failed   user:'%s'", name.c_str());
+					goto cleanup;
+				} else {
+					users.push_back(user_def.second);
+				}
 			}
 		}
 
@@ -594,7 +648,10 @@ int main(int argc, char** argv) {
 		);
 		MYSQL_QUERY(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
-		for (uint32_t i = 0; i < RAND_USERS_GEN; i++) {
+		// On MySQL 9.x the native_password plugin is unavailable on the backend,
+		// so skip the first RAND_USERS_GEN/2 iterations (those are the native ones).
+		uint32_t rand_users_start = g_mysql_supports_native_password ? 0 : (RAND_USERS_GEN / 2);
+		for (uint32_t i = rand_users_start; i < RAND_USERS_GEN; i++) {
 			const string name { "username_" + std::to_string(i) };
 			const string pass { random_string(20) };
 			const string auth { i < 50 ? "MYSQL_NATIVE_PASSWORD" : "CACHING_SHA2_PASSWORD" };
@@ -647,12 +704,19 @@ int main(int argc, char** argv) {
 			mysql_close(proxy);
 		}
 
+		// Only the iterations we actually ran produce backend connections.
+		// When the native_password half is skipped (MySQL 9.x), expected
+		// count is halved.
+		const uint32_t expected_conns =
+			g_mysql_supports_native_password ? RAND_USERS_GEN : (RAND_USERS_GEN / 2);
+		const string EXPECTED_CONNS_S { std::to_string(expected_conns) };
+
 		const string SEL_POOL_CONNS {
 			"SELECT SUM(ConnUsed + ConnFree) FROM stats.stats_mysql_connection_pool"
 				" WHERE hostgroup=" + TAP_MYSQL8_BACKEND_HG_S
 		};
 		const string COND_CONN_CREATION {
-			"SELECT IIF((" + SEL_POOL_CONNS + ")=" + RAND_USERS_GEN_S + ", 'TRUE', 'FALSE')"
+			"SELECT IIF((" + SEL_POOL_CONNS + ")=" + EXPECTED_CONNS_S + ", 'TRUE', 'FALSE')"
 		};
 		wait_for_cond(admin, COND_CONN_CREATION, 10);
 
@@ -664,9 +728,9 @@ int main(int argc, char** argv) {
 		}
 
 		ok(
-			RAND_USERS_GEN == cur_conns.val,
+			expected_conns == cur_conns.val,
 			"Number of backend conns created should match conn attempts   exp:'%u', act:'%lu'",
-			RAND_USERS_GEN, cur_conns.val
+			expected_conns, cur_conns.val
 		);
 	}
 
