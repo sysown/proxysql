@@ -337,7 +337,6 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	log_utils_unit-t \
 	genai_thread_unit-t \
 	listen_validator_unit-t \
-	plugin_config_unit-t \
 	c_tokenizer_unit-t \
 	pgsql_tokenizer_unit-t \
 	ezoption_parser_unit-t \
@@ -346,18 +345,32 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	genai_mysql_catalog_unit-t \
 	admin_disk_upgrade_unit-t \
 	glovars_unit-t \
+	pgsql_servers_ssl_params_unit-t
+
+# Plugin-chassis + mysqlx-plugin unit tests — built only when
+# libproxysql.a was compiled with -DPROXYSQL40 (autodetected higher up
+# in this Makefile).  v3.0/v3.1 builds have no plugin loader and the
+# mysqlx plugin source references chassis types, so none of these are
+# compilable under !PROXYSQL40.
+ifeq ($(PROXYSQL40),1)
+UNIT_TESTS += \
+	plugin_config_unit-t \
+	plugin_dispatch_unit-t \
 	plugin_manager_unit-t \
 	plugin_registry_unit-t \
+	plugin_query_hook_unit-t \
+	plugin_prometheus_unit-t \
+	plugin_lifecycle_unit-t \
 	test_mysqlx_plugin_load-t \
-	mysqlx_config_store_unit-t \
 	test_mysqlx_admin_tables-t \
 	test_mysqlx_listener_smoke-t \
+	mysqlx_config_store_unit-t \
+	mysqlx_config_store_concurrent_unit-t \
+	mysqlx_config_store_pure_unit-t \
 	mysqlx_protocol_unit-t \
 	mysqlx_protocol_socket_unit-t \
 	mysqlx_route_store_unit-t \
 	mysqlx_stats_unit-t \
-	mysqlx_config_store_concurrent_unit-t \
-	mysqlx_config_store_pure_unit-t \
 	mysqlx_admin_schema_unit-t \
 	mysqlx_admin_commands_unit-t \
 	mysqlx_admin_disk_commands_unit-t \
@@ -370,17 +383,7 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	mysqlx_backend_auth_unit-t \
 	mysqlx_credential_verify_unit-t \
 	mysqlx_robustness_unit-t \
-	mysqlx_tls_unit-t \
-	pgsql_servers_ssl_params_unit-t \
-	plugin_dispatch_unit-t
-
-# Plugin-chassis-only unit tests — built only when libproxysql.a was
-# compiled with -DPROXYSQL40 (autodetected higher up in this Makefile).
-ifeq ($(PROXYSQL40),1)
-UNIT_TESTS += \
-	plugin_query_hook_unit-t \
-	plugin_prometheus_unit-t \
-	plugin_lifecycle_unit-t
+	mysqlx_tls_unit-t
 endif
 
 .PHONY: all
