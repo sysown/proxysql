@@ -73,7 +73,7 @@ bool executeQueries(PGconn* conn, const std::vector<std::string>& queries) {
 		if (strncasecmp(buf, "SELECT", sizeof("SELECT") - 1) == 0) {
 			return PGRES_TUPLES_OK;
 		}
-		else if (strncasecmp(buf, "COPY", sizeof("COPY") - 1) == 0) {
+		if (strncasecmp(buf, "COPY", sizeof("COPY") - 1) == 0) {
 			return PGRES_COPY_OUT;
 		}
 
@@ -134,14 +134,10 @@ bool has_immediate_response(int sock) {
 	// Restore original flags
 	fcntl(sock, F_SETFL, flags);
 
-	if (n > 0) {
-		return true;  // Data available
-	}
-	else if (n == 0) {
-		return true;  // Connection closed
+	if (n >= 0) {
+		return true;
 	}
 	else {
-		// Check if error was due to no data
 		return (errno != EAGAIN && errno != EWOULDBLOCK);
 	}
 }
@@ -265,7 +261,7 @@ void test_parse_use_same_stmt_name() {
 			if (type == PgConnection::ERROR_RESPONSE) {
 				BufferReader reader(buffer);
 				char field;
-				while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+				while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 					if (field == 'M') errormsg = reader.readString();
 					else if (field == 'C') errorcode = reader.readString();
 					else reader.readString();
@@ -420,7 +416,7 @@ void test_malformed_packet() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -712,7 +708,7 @@ void test_invalid_query_parse_packet() {
 
 				BufferReader reader(buffer);
 				char field;
-				while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+				while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 					if (field == 'M') {
 						errormsg = reader.readString();
 					} else if (field == 'C') {
@@ -765,7 +761,7 @@ bool test_text_binary_mix() {
 	res = PQdescribePrepared(conn, "stmt1");
 	PQclear(res);
 	// 2. Attempt to bind binary-formatted int32 to text param
-	int32_t intval = htonl(42); // Network byte order
+	int32_t intval = static_cast<int32_t>(htonl(42)); // Network byte order
 	const char* paramValues[1] = { (char*)&intval };
 	int paramLengths[1] = { sizeof(intval) };
 	int paramFormats[1] = { 1 }; // Binary format
@@ -817,7 +813,7 @@ bool test_text_binary_mix2() {
 	res = PQdescribePrepared(conn, "stmt1");
 	PQclear(res);
 	// 2. Attempt to bind binary-formatted int32 to text param
-	int32_t intval = htonl(42); // Network byte order
+	int32_t intval = static_cast<int32_t>(htonl(42)); // Network byte order
 	const char* paramValues[1] = { (char*)&intval };
 	int paramLengths[1] = { sizeof(intval) };
 	int paramFormats[1] = { 1 }; // Binary format
@@ -949,7 +945,7 @@ void test_describe_nonexistent_statement() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -1006,7 +1002,7 @@ void test_describe_without_sync() {
 				BufferReader reader(buffer);
 				std::string errorMsg;
 				char field;
-				while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+				while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 					if (field == 'M') errorMsg = reader.readString();
 					else reader.readString();
 				}
@@ -1047,7 +1043,7 @@ void test_describe_malformed_packet() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -1086,7 +1082,7 @@ void test_describe_after_close_statement() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -1404,7 +1400,7 @@ void test_close_existing_statement() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -1480,7 +1476,7 @@ void test_close_unnamed_statement() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -1602,7 +1598,7 @@ void test_close_malformed_packet() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -1786,7 +1782,7 @@ void test_parse_execute_without_bind() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -1997,7 +1993,7 @@ void test_bind_nonexistent_statement() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -2041,7 +2037,7 @@ void test_bind_incorrect_parameters() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -2067,7 +2063,7 @@ void test_binary_parameters() {
 		conn->prepareStatement("binary_params", "SELECT $1::int", true);
 
 		// Create binary representation of integer 42 (network byte order)
-		int32_t bin_value = htonl(42);
+		int32_t bin_value = static_cast<int32_t>(htonl(42));
 		PgConnection::Param param = {
 			std::string(reinterpret_cast<char*>(&bin_value), sizeof(bin_value)),
 			1 // Binary format
@@ -2275,7 +2271,7 @@ void test_bind_null_parameters() {
 		if (num_fields == 1) {
 			int32_t len = reader.readInt32();
 			if (len == 1) {
-				char val = reader.readByte();
+				char val = static_cast<char>(reader.readByte());
 				ok(val == 't', "Received correct NULL check: %c", val);
 			}
 		}
@@ -2314,7 +2310,7 @@ void test_malformed_bind_packet() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -2353,7 +2349,7 @@ void test_malformed_execute_packet() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -2396,7 +2392,7 @@ void test_bind_named_portal() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -2480,7 +2476,7 @@ void test_describe_portal() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -2545,7 +2541,7 @@ void test_close_portal() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -2654,7 +2650,7 @@ void test_portal_lifecycle() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -2690,7 +2686,7 @@ void test_portal_lifecycle() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -2761,7 +2757,7 @@ void test_describe_closed_portal() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -2966,7 +2962,7 @@ void test_multiple_execute_on_single_bind() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -3555,7 +3551,7 @@ void test_deallocate_having_stmt_name_via_simple_query() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -3618,7 +3614,7 @@ void test_deallocate_having_stmt_name_via_prepared() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -3664,7 +3660,7 @@ void test_deallocate_all_via_simple_query() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -3683,7 +3679,7 @@ void test_deallocate_all_via_simple_query() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -3702,7 +3698,7 @@ void test_deallocate_all_via_simple_query() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -3735,7 +3731,7 @@ void test_deallocate_all_via_prepared() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -3770,7 +3766,7 @@ void test_deallocate_all_via_prepared() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -3789,7 +3785,7 @@ void test_deallocate_all_via_prepared() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -3807,7 +3803,7 @@ void test_deallocate_all_via_prepared() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -3838,7 +3834,7 @@ void test_deallocate_non_existent_stmt() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -3928,7 +3924,7 @@ void test_multiple_parse_bind_describe_execute_fail() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -4220,7 +4216,7 @@ void test_pipeline_error() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();
@@ -4264,7 +4260,7 @@ void test_pipeline_error_2() {
 		if (type == PgConnection::ERROR_RESPONSE) {
 			BufferReader reader(buffer);
 			char field;
-			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
 				if (field == 'M') errormsg = reader.readString();
 				else if (field == 'C') errorcode = reader.readString();
 				else reader.readString();

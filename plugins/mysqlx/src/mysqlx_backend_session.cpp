@@ -83,7 +83,15 @@ bool MysqlxBackendSession::connect(const MysqlxResolvedIdentity& identity,
 	std::string backend_user = identity.backend_username;
 	std::string backend_pass = identity.backend_password;
 
-	return authenticate_backend(backend_user, backend_pass, err);
+	if (!authenticate_backend(backend_user, backend_pass, err)) {
+		// Auth failure: close the socket we just opened so a later retry
+		// on this MysqlxBackendSession doesn't overwrite backend_fd_ and
+		// leak the previous fd.
+		close(backend_fd_);
+		backend_fd_ = -1;
+		return false;
+	}
+	return true;
 }
 
 bool MysqlxBackendSession::authenticate_backend(const std::string& username,

@@ -791,6 +791,38 @@ std::pair<size_t,std::vector<line_match_t>> get_matching_lines(
 
 
 /**
+ * @brief Poll a log stream for a regex match, retrying until a match appears or the
+ *        timeout elapses. Handles the EOF sticky state that a single-shot
+ *        `get_matching_lines()` leaves behind after exhausting the stream.
+ *
+ * Use this in place of single-shot `get_matching_lines()` calls that check whether
+ * a log line was emitted as a consequence of an earlier action: ProxySQL's writes
+ * to its log are asynchronous with respect to the SQL that triggers them, so a
+ * single scan immediately after the SQL completes is racy. Retrying gives the
+ * producer time to flush; when the match is already present the first iteration
+ * returns immediately.
+ *
+ * @param f_stream Log stream (opened with `open_file_and_seek_end` or similar). On
+ *                 match, the stream position is advanced past the last match (same
+ *                 semantics as `get_matching_lines`); on no-match, the stream is
+ *                 rewound to its position at entry.
+ * @param regex Pattern to search for.
+ * @param timeout_ms Maximum wall time to wait for the first match. Defaults to
+ *                   2000 ms (20 attempts of 100 ms), which is the same budget used
+ *                   by admin_set_credentials_logging-t.
+ * @param poll_interval_ms Delay between scans when no match has appeared yet.
+ *                         Defaults to 100 ms.
+ * @return true if at least one matching line was observed within the budget.
+ */
+bool wait_for_log_match(
+	std::fstream& f_stream,
+	const std::string& regex,
+	uint32_t timeout_ms = 2000,
+	uint32_t poll_interval_ms = 100
+);
+
+
+/**
  * @brief Scan last N lines from a file and find lines matching a regex pattern.
  *
  * This function provides memory-efficient scanning of log files by processing only
@@ -980,6 +1012,23 @@ using pool_state_t = std::map<uint32_t,mysql_row_t>;
  * @return A pair of the shape {err_code, pool_state_t}.
  */
 std::pair<int,pool_state_t> fetch_conn_stats(MYSQL* admin, const std::vector<uint32_t> hgs);
+
+/**
+ * @brief Fetches GTID info for a backend from the gtid_executed set.
+ * @param admin An already opened connection to ProxySQL admin interface.
+ * @param backend_host The hostname of the backend server.
+ * @param backend_port The port of the backend server.
+ * @param server_uuid Output: the UUID of the first GTID entry in gtid_executed set, with dashes stripped.
+ * @param max_trxid Output: the maximum transaction ID found in the first GTID entry.
+ * @return 0 on success, -1 on failure (query error, missing UUID, parse error).
+ */
+int get_backend_gtid_position(
+	MYSQL* admin,
+	const std::string& backend_host,
+	uint32_t backend_port,
+	std::string& server_uuid,
+	uint64_t& max_trxid
+);
 
 /**
  * @brief Waits for a generic condition.

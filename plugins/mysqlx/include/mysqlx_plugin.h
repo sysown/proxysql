@@ -6,6 +6,7 @@
 #include "mysqlx_config_store.h"
 #include "mysqlx_thread.h"
 
+#include <atomic>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -18,7 +19,7 @@ struct MysqlxPluginContext {
 	ProxySQL_PluginServices* services { nullptr };
 	std::unique_ptr<MysqlxConfigStore> config_store {};
 	std::vector<std::unique_ptr<Mysqlx_Thread>> threads {};
-	bool started { false };
+	std::atomic<bool> started { false };
 
 	// Source of truth for route-to-thread ownership of listening sockets.
 	// Populated (and mutated) exclusively by `mysqlx_reconcile_listeners`

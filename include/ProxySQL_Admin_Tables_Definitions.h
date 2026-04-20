@@ -285,11 +285,7 @@
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_MCP_CONFIG "CREATE TABLE runtime_mcp_config (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
 
-// MCP Query Rules
-
-#define ADMIN_SQLITE_TABLE_MCP_QUERY_RULES "CREATE TABLE mcp_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , username VARCHAR , schemaname VARCHAR , client_addr VARCHAR , digest VARCHAR , match_digest VARCHAR , match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , re_modifiers VARCHAR DEFAULT 'CASELESS' , tool_name VARCHAR , action VARCHAR CHECK (action IN ('allow','block','rewrite')) NOT NULL DEFAULT 'allow' , comment VARCHAR)"
-
-#define ADMIN_SQLITE_TABLE_RUNTIME_MCP_QUERY_RULES "CREATE TABLE runtime_mcp_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , username VARCHAR , schemaname VARCHAR , client_addr VARCHAR , digest VARCHAR , match_digest VARCHAR , match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , re_modifiers VARCHAR DEFAULT 'CASELESS' , tool_name VARCHAR , action VARCHAR CHECK (action IN ('allow','block','rewrite')) NOT NULL DEFAULT 'allow' , comment VARCHAR)"
+// MCP Query Rules (defined below with extended schema)
 
 #endif /* PROXYSQLGENAI */
 

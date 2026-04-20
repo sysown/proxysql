@@ -132,6 +132,7 @@ tests: tests-cpp \
 	prepare_statement_err3024_libmysql-t \
 	prepare_statement_err3024_async-t \
 	fast_forward_grace_close_libmysql-t \
+	mysql-zstd_compression_level_libmysql-t \
 	fast_forward_switch_replication_deprecate_eof_libmysql-t \
 	reg_test_mariadb_stmt_store_result_libmysql-t \
 	reg_test_mariadb_stmt_store_result_async-t
@@ -139,7 +140,21 @@ tests:
 	@echo "Removing empty .gcno files ..."
 	find -L . -type f -name '*.gcno' -empty -ls -delete
 
-tests-cpp: $(patsubst %.cpp,%,$(wildcard *-t.cpp))
+# test_mysqlx_*-t.cpp reference chassis/plugin types (ProxySQL_PluginServices,
+# mysqlx_config_store.h from plugins/mysqlx/include) that only exist when
+# libproxysql.a was built with -DPROXYSQL40.  Autodetect the flag via a
+# chassis-exclusive symbol in the static lib; under !PROXYSQL40 filter
+# these tests out of the wildcard glob so plain v3.0/v3.1 `make debug`
+# doesn't try to compile them.
+LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
+PROXYSQL40_DETECTED := $(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c invoke_register_schemas_phase)
+ifeq ($(PROXYSQL40_DETECTED),0)
+TESTS_CPP := $(filter-out test_mysqlx_%,$(patsubst %.cpp,%,$(wildcard *-t.cpp)))
+else
+TESTS_CPP := $(patsubst %.cpp,%,$(wildcard *-t.cpp))
+endif
+
+tests-cpp: $(TESTS_CPP)
 tests-php: $(patsubst %,php-%,$(wildcard *-t.php))
 tests-py: $(patsubst %,py-%,$(wildcard *-t.py))
 tests-sh: $(patsubst %,sh-%,$(wildcard *-t.sh))
@@ -179,16 +194,19 @@ sh-%:
 	chmod +x $(patsubst sh-%.sh,%,$@)
 
 anomaly_detection-t: anomaly_detection-t.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) -DEXCLUDE_TRACKING_VARIABLES $< ../tap/SQLite3_Server.cpp -I$(CLICKHOUSE_CPP_IDIR) $(IDIRS) $(LDIRS) -L$(CLICKHOUSE_CPP_LDIR) -L$(LZ4_LDIR) $(OPT) $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(CLICKHOUSE_CPP_PATH)/contrib/zstd/zstd/libzstdstatic.a $(LZ4_LDIR)/liblz4.a -lscram -lusual -Wl,--allow-multiple-definition -o $@
+	$(CXX) -DEXCLUDE_TRACKING_VARIABLES $< ../../../src/SQLite3_Server.cpp -I$(CLICKHOUSE_CPP_IDIR) $(IDIRS) $(LDIRS) -L$(CLICKHOUSE_CPP_LDIR) -L$(LZ4_LDIR) $(OPT) $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(CLICKHOUSE_CPP_PATH)/contrib/zstd/zstd/libzstdstatic.a $(LZ4_LDIR)/liblz4.a -lscram -lusual -Wl,--allow-multiple-definition -o $@
+
+test_binlog_reader_uses_previous_hostgroup-t: binlog_rpl.h
+test_com_register_slave_enables_fast_forward-t: binlog_rpl.h
 
 %-t: %-t.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 
 galera_1_timeout_count: galera_1_timeout_count.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) -DTEST_GALERA $< ../tap/SQLite3_Server.cpp $(IDIRS) $(LDIRS) $(OPT) $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual -o $@
+	$(CXX) -DTEST_GALERA $< ../../../src/SQLite3_Server.cpp $(IDIRS) $(LDIRS) $(OPT) $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual -o $@
 
 galera_2_timeout_no_count: galera_2_timeout_no_count.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) -DTEST_GALERA $< ../tap/SQLite3_Server.cpp $(IDIRS) $(LDIRS) $(OPT) $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual -o $@
+	$(CXX) -DTEST_GALERA $< ../../../src/SQLite3_Server.cpp $(IDIRS) $(LDIRS) $(OPT) $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual -o $@
 
 generate_set_session_csv: generate_set_session_csv.cpp
 	$(CXX) $< $(OPT) -o $@
@@ -211,6 +229,11 @@ test_mysqlx_plugin_load-t:
 test_mysqlx_admin_tables-t:
 	$(MAKE) -C unit test_mysqlx_admin_tables-t
 	ln -fs unit/test_mysqlx_admin_tables-t $@
+
+.PHONY: test_mysqlx_listener_smoke-t
+test_mysqlx_listener_smoke-t:
+	$(MAKE) -C unit test_mysqlx_listener_smoke-t
+	ln -fs unit/test_mysqlx_listener_smoke-t $@
 
 sqlite3-t: sqlite3-t.cpp $(TAP_LDIR)/libtap.so
 ifeq ($(PROXYSQLGENAI),1)
@@ -268,6 +291,9 @@ mysql_reconnect_libmariadb-t: mysql_reconnect.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) -DDISABLE_WARNING_COUNT_LOGGING $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 
 mysql_reconnect_libmysql-t: mysql_reconnect.cpp $(TAP_LDIR)/libtap_mysql8.a
+	$(CXX) -DLIBMYSQL_HELPER8 -DDISABLE_WARNING_COUNT_LOGGING $< -I$(TEST_MYSQL8_IDIR) -I$(TEST_MYSQL8_EDIR) -L$(TEST_MYSQL8_LDIR) -lmysqlclient -ltap_mysql8 -lresolv $(CUSTOMARGS) -o $@
+
+mysql-zstd_compression_level_libmysql-t: mysql-zstd_compression_level-t.cpp $(TAP_LDIR)/libtap_mysql8.a
 	$(CXX) -DLIBMYSQL_HELPER8 -DDISABLE_WARNING_COUNT_LOGGING $< -I$(TEST_MYSQL8_IDIR) -I$(TEST_MYSQL8_EDIR) -L$(TEST_MYSQL8_LDIR) -lmysqlclient -ltap_mysql8 -lresolv $(CUSTOMARGS) -o $@
 
 fast_forward_grace_close_libmysql-t: fast_forward_grace_close.cpp $(TAP_LDIR)/libtap_mysql8.a
@@ -350,12 +376,12 @@ $(ODIR)/mysqlx_proto_%.pb.o: $(MYSQLX_PROTO_DIR)/%.pb.cc | $(ODIR)
 test_mysqlx_e2e_handshake-t: test_mysqlx_e2e_handshake-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TAP_LDIR)/libtap.so
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
-		$(IDIRS) $(LDIRS) $(OPT) -lprotobuf -lssl -lcrypto -ltap -lpthread -lz -ldl -o $@
+		$(IDIRS) $(LDIRS) $(OPT) -lprotobuf -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
 
 test_mysqlx_e2e_routing-t: test_mysqlx_e2e_routing-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TAP_LDIR)/libtap.so
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
-		$(IDIRS) $(LDIRS) $(OPT) -lprotobuf -lssl -lcrypto -ltap -lpthread -lz -ldl -o $@
+		$(IDIRS) $(LDIRS) $(OPT) -lprotobuf -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
 
 
 ### clean targets

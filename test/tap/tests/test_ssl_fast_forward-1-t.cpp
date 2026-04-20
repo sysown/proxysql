@@ -95,8 +95,27 @@ int run_queries_sets(std::vector<std::string>& queries, MYSQL *my, const std::st
 int main(int argc, char** argv) {
 	CommandLine cl;
 
-	if(cl.getEnv())
+	// Declare all owned handles and the close_all helper up front so every
+	// early-return path in main() can do uniform cleanup regardless of how
+	// far initialization got.
+	MYSQL* mysqladmin = NULL;
+	MYSQL* mysqls[5];
+	for (int i = 0 ; i<5 ; i++) {
+		mysqls[i] = NULL;
+	}
+	// Closes every non-NULL handle and nulls the slot. Safe to call
+	// repeatedly. Every early-return path below must call it.
+	auto close_all = [&]() {
+		for (int i = 0; i < 5; i++) {
+			if (mysqls[i]) { mysql_close(mysqls[i]); mysqls[i] = NULL; }
+		}
+		if (mysqladmin) { mysql_close(mysqladmin); mysqladmin = NULL; }
+	};
+
+	if(cl.getEnv()) {
+		close_all();
 		return exit_status();
+	}
 
 	unsigned int p = 0;
 	p += 5*ITER1;
@@ -104,19 +123,17 @@ int main(int argc, char** argv) {
 	plan(p);
 	diag("Testing SSL and fast_forward");
 
-	MYSQL* mysqladmin = mysql_init(NULL);
-	if (!mysqladmin)
+	mysqladmin = mysql_init(NULL);
+	if (!mysqladmin) {
+		close_all();
 		return exit_status();
+	}
 
 	if (!mysql_real_connect(mysqladmin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 	    fprintf(stderr, "File %s, line %d, Error: %s\n",
 	              __FILE__, __LINE__, mysql_error(mysqladmin));
+		close_all();
 		return exit_status();
-	}
-
-	MYSQL * mysqls[5];
-	for (int i = 0 ; i<5 ; i++) {
-		mysqls[i] = NULL;
 	}
 	// We will loop ITER1 times.
 	// On each iteration we create 5 connections with different configuration and run a simple SELECT 1
@@ -124,18 +141,23 @@ int main(int argc, char** argv) {
 	for (int it = 0 ; it<ITER1 ; it++) {
 
 	diag("We will reconfigure ProxySQL to use SQLite3 Server on hostgroup 1459, IP 127.0.0.1 and port 6030");
-	if (run_queries_sets(queries_set1, mysqladmin, "Running on Admin"))
+	if (run_queries_sets(queries_set1, mysqladmin, "Running on Admin")) {
+		close_all();
 		return exit_status();
+	}
 
 
 	diag("We now create a connection not using SSL for either client or backend");
 	mysqls[0] = mysql_init(NULL);
-	if (!mysqls[0])
+	if (!mysqls[0]) {
+		close_all();
 		return exit_status();
+	}
 
 	if (!mysql_real_connect(mysqls[0], cl.host, username, password, NULL, cl.port, NULL, 0)) {
 	    fprintf(stderr, "Failed to connect to database: Error: %s\n",
 	              mysql_error(mysqls[0]));
+		close_all();
 		return exit_status();
 	}
 	MYSQL_QUERY(mysqls[0], "select 1");
@@ -147,17 +169,22 @@ int main(int argc, char** argv) {
 
 
 	diag("We now create a connection using SSL for client connection only and no SSL for backend");
-	if (run_queries_sets(queries_set2, mysqladmin, "Running on Admin"))
+	if (run_queries_sets(queries_set2, mysqladmin, "Running on Admin")) {
+		close_all();
 		return exit_status();
+	}
 
 	mysqls[1] = mysql_init(NULL);
-	if (!mysqls[1])
+	if (!mysqls[1]) {
+		close_all();
 		return exit_status();
+	}
 
 	mysql_ssl_set(mysqls[1], NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(mysqls[1], cl.host, username, password, NULL, cl.port, NULL, CLIENT_SSL)) {
 	    fprintf(stderr, "Failed to connect to database: Error: %s\n",
 	              mysql_error(mysqls[1]));
+		close_all();
 		return exit_status();
 	}
 	MYSQL_QUERY(mysqls[1], "select 1");
@@ -169,15 +196,20 @@ int main(int argc, char** argv) {
 
 
 	diag("We now create a connection trying to use SSL for backend connection (but SSL is disabled globally) and not SSL for frontend");
-	if (run_queries_sets(queries_set3, mysqladmin, "Running on Admin"))
+	if (run_queries_sets(queries_set3, mysqladmin, "Running on Admin")) {
+		close_all();
 		return exit_status();
+	}
 	mysqls[2] = mysql_init(NULL);
-	if (!mysqls[2])
+	if (!mysqls[2]) {
+		close_all();
 		return exit_status();
+	}
 
 	if (!mysql_real_connect(mysqls[2], cl.host, username, password, NULL, cl.port, NULL, 0)) {
 	    fprintf(stderr, "Failed to connect to database: Error: %s\n",
 	              mysql_error(mysqls[2]));
+		close_all();
 		return exit_status();
 	}
 	MYSQL_QUERY(mysqls[2], "select 1");
@@ -188,15 +220,20 @@ int main(int argc, char** argv) {
 
 
 	diag("We now create a connection trying to use SSL for backend connection and not SSL for frontend");
-	if (run_queries_sets(queries_set4, mysqladmin, "Running on Admin"))
+	if (run_queries_sets(queries_set4, mysqladmin, "Running on Admin")) {
+		close_all();
 		return exit_status();
+	}
 	mysqls[3] = mysql_init(NULL);
-	if (!mysqls[3])
+	if (!mysqls[3]) {
+		close_all();
 		return exit_status();
+	}
 
 	if (!mysql_real_connect(mysqls[3], cl.host, username, password, NULL, cl.port, NULL, 0)) {
 	    fprintf(stderr, "Failed to connect to database: Error: %s\n",
 	              mysql_error(mysqls[3]));
+		close_all();
 		return exit_status();
 	}
 	MYSQL_QUERY(mysqls[3], "select 1");
@@ -207,16 +244,21 @@ int main(int argc, char** argv) {
 
 
 	diag("We now create a connection using SSL for both client or backend");
-	if (run_queries_sets(queries_set4, mysqladmin, "Running on Admin")) // note: we use queries_set4 again
+	if (run_queries_sets(queries_set4, mysqladmin, "Running on Admin")) { // note: we use queries_set4 again
+		close_all();
 		return exit_status();
+	}
 	mysqls[4] = mysql_init(NULL);
-	if (!mysqls[4])
+	if (!mysqls[4]) {
+		close_all();
 		return exit_status();
+	}
 
 	mysql_ssl_set(mysqls[4], NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(mysqls[4], cl.host, username, password, NULL, cl.port, NULL, CLIENT_SSL)) {
 	    fprintf(stderr, "Failed to connect to database: Error: %s\n",
 	              mysql_error(mysqls[4]));
+		close_all();
 		return exit_status();
 	}
 	MYSQL_QUERY(mysqls[4], "select 1");
@@ -228,6 +270,7 @@ int main(int argc, char** argv) {
 	if (it != ITER1 - 1) {
 		for (int i = 0 ; i<5 ; i++) {
 			mysql_close(mysqls[i]);
+			mysqls[i] = NULL;
 		}
 	}
 
@@ -235,11 +278,15 @@ int main(int argc, char** argv) {
 
 
 	// We now populate a table named tbl1459
-	if (run_queries_sets(queries_SQL1, mysqls[0], "Running on SQLite3"))
+	if (run_queries_sets(queries_SQL1, mysqls[0], "Running on SQLite3")) {
+		close_all();
 		return exit_status();
+	}
 	for (int i = 0 ; i<15 ; i++) {
-		if (run_queries_sets(queries_SQL2, mysqls[i%5], "Running on SQLite3"))
+		if (run_queries_sets(queries_SQL2, mysqls[i%5], "Running on SQLite3")) {
+			close_all();
 			return exit_status();
+		}
 	}
 
 	for (int it = 0 ; it<ITER2 ; it++) {
@@ -261,16 +308,19 @@ int main(int argc, char** argv) {
 
 
 	// clean up
-	if (run_queries_sets(queries_SQL4, mysqls[0], "Running on SQLite3"))
+	if (run_queries_sets(queries_SQL4, mysqls[0], "Running on SQLite3")) {
+		close_all();
 		return exit_status();
+	}
 
 
 	for (int i=0; i<5; i++) {
 		diag("Connection %d has thread_id: %lu", i, mysqls[i]->thread_id);
 	}
 
-	mysql_close(mysqladmin);
-
+	// close_all() closes mysqladmin and every mysqls[i] slot — the happy
+	// path previously leaked the 5 per-iteration conns entirely.
+	close_all();
 	return exit_status();
 }
 

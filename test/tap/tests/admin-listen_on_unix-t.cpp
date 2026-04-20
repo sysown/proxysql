@@ -22,7 +22,7 @@ std::string get_admin_mysql_ifaces(MYSQL *admin) {
     ok(rc==0,"Query: %s . Error: %s", query, (rc == 0 ? "None" : mysql_error(admin)));
     if (rc == 0 ) {
         MYSQL_RES* res = mysql_store_result(admin);
-        int num_rows = mysql_num_rows(res);
+        int num_rows = static_cast<int>(mysql_num_rows(res));
         ok(num_rows==1,"1 row expected when querying admin-mysql_ifaces. Returned: %d", num_rows);
         if (num_rows == 0) {
             diag("Fatal error in line %d: No result", __LINE__);

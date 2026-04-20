@@ -3,7 +3,10 @@
 #include "mysqlx_plugin.h"
 #include "sqlite3db.h"
 
+#include <initializer_list>
 #include <string>
+
+#include <cstdio>
 
 namespace {
 
@@ -458,6 +461,7 @@ const char kStatsMysqlxProcesslistTableDef[] =
 
 bool mysqlx_register_admin_schema(ProxySQL_PluginServices& services) {
 	if (services.register_table == nullptr || services.register_command == nullptr) {
+		fprintf(stderr, "mysqlx: cannot register admin schema, services not available\n");
 		return false;
 	}
 
@@ -491,21 +495,71 @@ bool mysqlx_register_admin_schema(ProxySQL_PluginServices& services) {
 		services.register_table(stats_processlist);
 	}
 
-	services.register_command("LOAD MYSQLX USERS TO RUNTIME", &load_users_to_runtime);
-	services.register_command("SAVE MYSQLX USERS TO MEMORY", &save_users_from_runtime);
-	services.register_command("LOAD MYSQLX ROUTES TO RUNTIME", &load_routes_to_runtime);
-	services.register_command("SAVE MYSQLX ROUTES TO MEMORY", &save_routes_from_runtime);
-	services.register_command("LOAD MYSQLX BACKEND ENDPOINTS TO RUNTIME", &load_backend_endpoints_to_runtime);
-	services.register_command("SAVE MYSQLX BACKEND ENDPOINTS TO MEMORY", &save_backend_endpoints_from_runtime);
-	services.register_command("LOAD MYSQLX VARIABLES TO RUNTIME", &load_variables_to_runtime);
-	services.register_command("SAVE MYSQLX VARIABLES TO MEMORY", &save_variables_from_runtime);
-	services.register_command("LOAD MYSQLX USERS FROM DISK", &load_users_from_disk);
-	services.register_command("SAVE MYSQLX USERS TO DISK", &save_users_to_disk);
-	services.register_command("LOAD MYSQLX ROUTES FROM DISK", &load_routes_from_disk);
-	services.register_command("SAVE MYSQLX ROUTES TO DISK", &save_routes_to_disk);
-	services.register_command("LOAD MYSQLX BACKEND ENDPOINTS FROM DISK", &load_backend_endpoints_from_disk);
-	services.register_command("SAVE MYSQLX BACKEND ENDPOINTS TO DISK", &save_backend_endpoints_to_disk);
-	services.register_command("LOAD MYSQLX VARIABLES FROM DISK", &load_variables_from_disk);
-	services.register_command("SAVE MYSQLX VARIABLES TO DISK", &save_variables_to_disk);
+	// User-friendly alias groups.  Each group maps multiple spellings
+	// to the same canonical the command was registered under.  The
+	// generic dispatcher in core resolves any spelling to the canonical
+	// before invoking the registered callback.
+	auto reg = [&services](const char* canonical,
+	                       proxysql_plugin_admin_command_cb cb,
+	                       std::initializer_list<const char*> aliases) {
+		services.register_command(canonical, cb);
+		if (services.register_command_alias != nullptr) {
+			for (const char* a : aliases) {
+				services.register_command_alias(canonical, a);
+			}
+		}
+	};
+
+	// "LOAD X TO RUNTIME" is canonical; users can also type
+	// "LOAD X FROM MEMORY" / "LOAD X FROM MEM" / "LOAD X TO RUN".
+	reg("LOAD MYSQLX USERS TO RUNTIME", &load_users_to_runtime, {
+		"LOAD MYSQLX USERS FROM MEMORY",
+		"LOAD MYSQLX USERS FROM MEM",
+		"LOAD MYSQLX USERS TO RUN",
+	});
+	reg("SAVE MYSQLX USERS TO MEMORY", &save_users_from_runtime, {
+		"SAVE MYSQLX USERS TO MEM",
+		"SAVE MYSQLX USERS FROM RUNTIME",
+		"SAVE MYSQLX USERS FROM RUN",
+	});
+	reg("LOAD MYSQLX ROUTES TO RUNTIME", &load_routes_to_runtime, {
+		"LOAD MYSQLX ROUTES FROM MEMORY",
+		"LOAD MYSQLX ROUTES FROM MEM",
+		"LOAD MYSQLX ROUTES TO RUN",
+	});
+	reg("SAVE MYSQLX ROUTES TO MEMORY", &save_routes_from_runtime, {
+		"SAVE MYSQLX ROUTES TO MEM",
+		"SAVE MYSQLX ROUTES FROM RUNTIME",
+		"SAVE MYSQLX ROUTES FROM RUN",
+	});
+	reg("LOAD MYSQLX BACKEND ENDPOINTS TO RUNTIME", &load_backend_endpoints_to_runtime, {
+		"LOAD MYSQLX BACKEND ENDPOINTS FROM MEMORY",
+		"LOAD MYSQLX BACKEND ENDPOINTS FROM MEM",
+		"LOAD MYSQLX BACKEND ENDPOINTS TO RUN",
+	});
+	reg("SAVE MYSQLX BACKEND ENDPOINTS TO MEMORY", &save_backend_endpoints_from_runtime, {
+		"SAVE MYSQLX BACKEND ENDPOINTS TO MEM",
+		"SAVE MYSQLX BACKEND ENDPOINTS FROM RUNTIME",
+		"SAVE MYSQLX BACKEND ENDPOINTS FROM RUN",
+	});
+	reg("LOAD MYSQLX VARIABLES TO RUNTIME", &load_variables_to_runtime, {
+		"LOAD MYSQLX VARIABLES FROM MEMORY",
+		"LOAD MYSQLX VARIABLES FROM MEM",
+		"LOAD MYSQLX VARIABLES TO RUN",
+	});
+	reg("SAVE MYSQLX VARIABLES TO MEMORY", &save_variables_from_runtime, {
+		"SAVE MYSQLX VARIABLES TO MEM",
+		"SAVE MYSQLX VARIABLES FROM RUNTIME",
+		"SAVE MYSQLX VARIABLES FROM RUN",
+	});
+	// Disk commands have no alias group — only the canonical spelling.
+	reg("LOAD MYSQLX USERS FROM DISK", &load_users_from_disk, {});
+	reg("SAVE MYSQLX USERS TO DISK", &save_users_to_disk, {});
+	reg("LOAD MYSQLX ROUTES FROM DISK", &load_routes_from_disk, {});
+	reg("SAVE MYSQLX ROUTES TO DISK", &save_routes_to_disk, {});
+	reg("LOAD MYSQLX BACKEND ENDPOINTS FROM DISK", &load_backend_endpoints_from_disk, {});
+	reg("SAVE MYSQLX BACKEND ENDPOINTS TO DISK", &save_backend_endpoints_to_disk, {});
+	reg("LOAD MYSQLX VARIABLES FROM DISK", &load_variables_from_disk, {});
+	reg("SAVE MYSQLX VARIABLES TO DISK", &save_variables_to_disk, {});
 	return true;
 }

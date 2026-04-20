@@ -52,7 +52,7 @@ uint64_t measure_avg_query_time(
 
 	uint64_t avg { 0 };
 	uint64_t row_count { 0 };
-	uint64_t delay_us = std::pow(10, 6) / its;
+	uint64_t delay_us = static_cast<uint64_t>(std::pow(10, 6) / its);
 
 	for (uint32_t i = 0; i < its; i++) {
 		const string it_fields { get_rnd_fields(fields) };
@@ -92,7 +92,7 @@ uint64_t measure_avg_query_time(
 
 const char version_comment_query[] { "select @@version_comment limit 1" };
 
-int check_perf_diff(const string tcase, double time1, double time2, double exp_diff, bool _diag=false) {
+int check_perf_diff(const string& tcase, double time1, double time2, double exp_diff, bool _diag=false) {
 	double diff = time2 - time1;
 	double perf_diff = double(diff * 100) / time1;
 
@@ -288,20 +288,20 @@ int main(int argc, char** argv) {
 	// proxy < proxy_cmp(3): Normally this value goes below '200%'. When the value goes above that threshold,
 	// isn't because the compressed workload is slower than in other runs, but because the non-compressed load
 	// slightly faster than usual. No further investigation have gone into this.
-	int rc = check_perf_diff("proxysql-proxysql_cmp(3)", proxy_time, proxy_cmp_time, 350);
+	int rc = check_perf_diff("proxysql-proxysql_cmp(3)", static_cast<double>(proxy_time), static_cast<double>(proxy_cmp_time), 350);
 	if (rc) { return EXIT_FAILURE; }
 
 	// proxy < proxy_cmp(8): Normally this diff goes below '500%'. See comment for 'proxysql-proxysql_cmp(3)'.
-	rc = check_perf_diff("proxysql-proxysql_cmp(8)", proxy_time, proxy_cmp8_time, 650);
+	rc = check_perf_diff("proxysql-proxysql_cmp(8)", static_cast<double>(proxy_time), static_cast<double>(proxy_cmp8_time), 650);
 	if (rc) { return EXIT_FAILURE; }
 
 	// proxy_cmp(3) < proxy_cmp(8)
-	rc = check_perf_diff("proxysql_cmp(3)-proxysql_cmp(8)", proxy_cmp_time, proxy_cmp8_time, 250);
+	rc = check_perf_diff("proxysql_cmp(3)-proxysql_cmp(8)", static_cast<double>(proxy_cmp_time), static_cast<double>(proxy_cmp8_time), 250);
 	if (rc) { return EXIT_FAILURE; }
 
 	// mysql < mysql_cmp: Normally this sits between 305-350. Since this measurement in isolation is the least
 	// interesting to us, we give it a bigger threshold.
-	rc = check_perf_diff("mysql-mysql_cmp", mysql_time, mysql_cmp_time, 550);
+	rc = check_perf_diff("mysql-mysql_cmp", static_cast<double>(mysql_time), static_cast<double>(mysql_cmp_time), 550);
 	if (rc) { return EXIT_FAILURE; }
 
 	// MYSQL PERF COMPARISONS
@@ -309,12 +309,12 @@ int main(int argc, char** argv) {
 	// proxy < mysql_cmp: Local tests show ProxySQL having at least a '200%' perf diff to MySQL. This
 	// measurements can't be reproduced on the CI, as the base 'proxy_time' is slower. The diff is left for
 	// further diagnosing.
-	rc = check_perf_diff("proxysql-mysql_cmp", proxy_time, mysql_cmp_time, -150, true);
+	check_perf_diff("proxysql-mysql_cmp", static_cast<double>(proxy_time), static_cast<double>(mysql_cmp_time), -150, true);
 
 	// proxy_cmp < mysql_cmp: Local tests show ProxySQL having at least a '60%' perf diff to MySQL. This
 	// measurements can't be reproduced on the CI, as the base 'proxy_time' is slower. But the diff is left
 	// for further diagnosing.
-	rc = check_perf_diff("proxysql_cmp-mysql_cmp", proxy_cmp_time, mysql_cmp_time, -5, true);
+	rc = check_perf_diff("proxysql_cmp-mysql_cmp", static_cast<double>(proxy_cmp_time), static_cast<double>(mysql_cmp_time), -5, true);
 	if (rc) { return EXIT_FAILURE; }
 
 	// Recover default query rules

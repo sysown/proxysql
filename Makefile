@@ -14,7 +14,7 @@ ifndef GIT_VERSION_BASE
     $(error GIT_VERSION_BASE is not set)
 endif
 
-.PHONY: lint lint-generate-cdb lint-run
+.PHONY: lint lint-generate-cdb lint-run lint-tests
 
 lint-generate-cdb:
 	@echo "Generating compile_commands.json (requires bear)"
@@ -26,6 +26,11 @@ lint-run:
 
 lint: lint-generate-cdb lint-run
 	@echo "Done lint"
+
+.PHONY: lint-tests
+lint-tests:
+	@echo "Running TAP test static analysis"
+	./scripts/lint/run_tap_tests.py $(FILES)
 
 
 ### RELEASE TIERS & FEATURE FLAGS:
@@ -53,10 +58,25 @@ lint: lint-generate-cdb lint-run
 ###      * Advanced Anomaly Detection
 ###    - Automatically increments the major version (e.g., 3.0.6 -> 4.0.6).
 ###
-### HIERARCHY: `PROXYSQLGENAI=1` implies `PROXYSQL31=1`.
+### HIERARCHY: `PROXYSQLGENAI=1` implies `PROXYSQL40=1` implies `PROXYSQL31=1`.
+###
+### 4. ProxySQL v4.0.x (Plugin Chassis Tier)
+###    - Enabled by setting `PROXYSQL40=1`.
+###    - Includes v3.1 features plus:
+###      * Four-phase plugin lifecycle (register_schemas + init split)
+###      * Pre-execution query-hook plugin ABI
+###      * Shared Prometheus registry access for plugins
+###      * Generic admin-command alias dispatch
+###    - Automatically increments the major version (e.g., 3.0.6 -> 4.0.6).
+###    - `PROXYSQLGENAI=1` implies `PROXYSQL40=1`.
 
-# If PROXYSQLGENAI is enabled, it automatically enables PROXYSQL31
+# If PROXYSQLGENAI is enabled, it automatically enables PROXYSQL40
 ifeq ($(PROXYSQLGENAI),1)
+    PROXYSQL40 := 1
+endif
+
+# If PROXYSQL40 is enabled, it automatically enables PROXYSQL31
+ifeq ($(PROXYSQL40),1)
     PROXYSQL31 := 1
 endif
 
@@ -71,8 +91,9 @@ GIT_VERSION ?= $(GIT_VERSION_BASE)
 ifeq ($(MAKELEVEL),0)
 # Normalize GIT_VERSION by stripping leading 'v' for arithmetic
 GIT_VERSION_NORM := $(shell echo "$(GIT_VERSION_BASE)" | sed 's/^v//')
-# If PROXYSQLGENAI is enabled, increment the major version number by 1
-ifeq ($(PROXYSQLGENAI),1)
+# If PROXYSQL40 (or PROXYSQLGENAI, which implies it) is enabled,
+# increment the major version number by 1
+ifeq ($(PROXYSQL40),1)
 	GIT_VERSION := $(shell echo "$(GIT_VERSION_NORM)" | awk -F. '{printf "%d.%s", $$1+1, substr($$0, length($$1)+2)}')
 else
 # If PROXYSQL31 is enabled, increment the minor version number by 1
@@ -96,6 +117,7 @@ endif
 
 export CURVER
 export PROXYSQLGENAI
+export PROXYSQL40
 export PROXYSQL31
 export PROXYSQLFFTO
 export PROXYSQLTSDB
@@ -264,7 +286,7 @@ build_lib_legacy: build_deps_legacy
 .PHONY: build_src_legacy
 build_src_legacy: build_lib_legacy
 	cd src && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
-	cd plugins/mysqlx && OPTZ="${O2} -ggdb" PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
+	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysqlx && OPTZ="${O2} -ggdb" PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysqlx plugin (PROXYSQL40 not set)")
 
 .PHONY: build_deps_debug_legacy
 build_deps_debug_legacy:
@@ -277,7 +299,7 @@ build_lib_debug_legacy: build_deps_debug_legacy
 .PHONY: build_src_debug_legacy
 build_src_debug_legacy: build_lib_debug_legacy
 	cd src && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
-	cd plugins/mysqlx && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
+	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysqlx && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysqlx plugin (PROXYSQL40 not set)")
 #--
 
 .PHONY: build_src_testaurora
@@ -388,12 +410,12 @@ build_lib_debug_default: build_deps_debug_default
 .PHONY: build_src_default
 build_src_default: build_lib_default
 	cd src && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
-	cd plugins/mysqlx && OPTZ="${O2} -ggdb" PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
+	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysqlx && OPTZ="${O2} -ggdb" PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysqlx plugin (PROXYSQL40 not set)")
 
 .PHONY: build_src_debug_default
 build_src_debug_default: build_lib_debug_default
 	cd src && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
-	cd plugins/mysqlx && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
+	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysqlx && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysqlx plugin (PROXYSQL40 not set)")
 
 
 ### packaging targets

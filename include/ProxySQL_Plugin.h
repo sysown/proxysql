@@ -1,11 +1,35 @@
 #ifndef PROXYSQL_PLUGIN_H
 #define PROXYSQL_PLUGIN_H
 
+// Plugin chassis is a v4.0 feature.  Including this header from a v3.x
+// (no PROXYSQL40) translation unit yields no declarations -- v3.0/v3.1
+// have no plugin concept whatsoever.  Plugins built for PROXYSQL40 set
+// abi_version to PROXYSQL_PLUGIN_ABI_VERSION; the loader rejects
+// abi_version values it doesn't understand.
+#ifdef PROXYSQL40
+
 #include <cstdint>
 #include <string>
 
 class SQLite3DB;
 class SQLite3_result;
+namespace prometheus { class Registry; }
+
+// Descriptor ABI version the plugin was compiled for.  Plugins set
+// `abi_version` on their ProxySQL_PluginDescriptor literal to this macro
+// so the core loader can detect layout skew between plugin and loader
+// builds.
+//
+//   ABI 1: original 6-field descriptor (name, abi_version, init, start,
+//          stop, status_json). Pre-chassis build.
+//   ABI 2: appends `register_schemas` (four-phase lifecycle, PROXYSQL40).
+//
+// A v3 core (built without PROXYSQL40) only understands ABI 1 and MUST
+// reject ABI>=2 plugins — it would read past the end of its own struct
+// definition.  A v4 core accepts ABI 1 plugins by treating the
+// register_schemas field as if null (never dereferenced on ABI 1).
+#define PROXYSQL_PLUGIN_ABI_VERSION 2u
+#define PROXYSQL_PLUGIN_ABI_VERSION_MAX 2u
 
 enum class ProxySQL_PluginDBKind : uint8_t {
 	admin_db = 0,
@@ -13,12 +37,16 @@ enum class ProxySQL_PluginDBKind : uint8_t {
 	stats_db = 2
 };
 
+// The manager deep-copies table_name and table_def; the plugin need not keep
+// the pointed-to strings alive after register_table returns.
 struct ProxySQL_PluginTableDef {
 	ProxySQL_PluginDBKind db_kind;
 	const char *table_name;
 	const char *table_def;
 };
 
+// Borrowed DB handles valid for the duration of the admin command callback.
+// Must not be stored beyond the callback invocation.
 struct ProxySQL_PluginCommandContext {
 	SQLite3DB *admindb;
 	SQLite3DB *configdb;
@@ -45,6 +73,22 @@ using proxysql_plugin_register_table_cb =
 using proxysql_plugin_register_command_cb =
 	void (*)(const char *, proxysql_plugin_admin_command_cb);
 
+#ifdef PROXYSQL40
+// Register an alternative spelling (alias) of an already-registered command.
+// The `canonical` argument MUST match the exact SQL passed to a prior
+// `register_command()` call (after whitespace normalization). Plugins use
+// this to publish user-friendly spellings — "LOAD MYSQLX USERS FROM MEMORY"
+// vs "LOAD MYSQLX USERS TO RUNTIME" — without replicating the canonical
+// callback. Core's admin dispatcher consults the alias table to resolve
+// incoming SQL to the canonical form before invoking the registered
+// callback.
+//
+// No-op if `canonical` isn't registered yet (plugins should register the
+// command BEFORE its aliases). Silently skips duplicate aliases.
+using proxysql_plugin_register_command_alias_cb =
+	void (*)(const char *canonical, const char *alias);
+#endif /* PROXYSQL40 */
+
 using proxysql_plugin_snapshot_cb =
 	SQLite3_result *(*)();
 
@@ -54,6 +98,104 @@ using proxysql_plugin_db_handle_cb =
 using proxysql_plugin_log_message_cb =
 	void (*)(int, const char *);
 
+#ifdef PROXYSQL40
+// Pre-execution query hook (Step 2 ABI extension).
+//
+// Wire protocol the hook is being invoked for.  A plugin can register
+// independently for each protocol; one hook per protocol per plugin.
+enum class ProxySQL_PluginProtocol : uint8_t {
+	mysql = 0,
+	pgsql = 1
+};
+
+// Payload handed to a query-hook callback.  All pointers are owned by
+// core and remain valid only for the duration of the callback.  The
+// callback must not retain them or mutate the underlying buffers.
+//
+// query_text is the SQL the client sent, NOT NUL-terminated; query_len
+// is its length in bytes.  user / client_ip / schema are NUL-terminated
+// C strings and may be empty (never NULL).
+struct ProxySQL_PluginQueryHookPayload {
+	const char *user;
+	const char *client_ip;
+	const char *schema;
+	const char *query_text;
+	uint32_t    query_len;
+};
+
+// Outcome of a query hook.  ALLOW lets the query proceed to the
+// backend.  DENY returns an error to the client and the query never
+// dispatches; the message is copied by core, the plugin need not keep
+// it alive after the callback returns.
+//
+// NOTE: same std::string ABI coupling caveat as
+// ProxySQL_PluginCommandResult applies.
+enum class ProxySQL_PluginQueryHookAction : uint8_t {
+	allow = 0,
+	deny  = 1
+};
+
+struct ProxySQL_PluginQueryHookResult {
+	ProxySQL_PluginQueryHookAction action;
+	std::string message;
+};
+
+using proxysql_plugin_query_hook_cb =
+	ProxySQL_PluginQueryHookResult (*)(const ProxySQL_PluginQueryHookPayload &);
+
+// register_query_hook(proto, cb).  Returns true on success, false if a
+// hook for that protocol is already registered.  Valid only during the
+// init callback (same lifetime rule as register_table / register_command).
+using proxysql_plugin_register_query_hook_cb =
+	bool (*)(ProxySQL_PluginProtocol, proxysql_plugin_query_hook_cb);
+
+// Returns the prometheus::Registry* that core uses for its own metrics.
+// Plugins register their counters / gauges / histograms against this
+// shared registry using prometheus-cpp directly; their metrics then
+// surface at the same /metrics endpoint scrapers already poll.
+//
+// NOTE: prometheus-cpp is a C++ library with C++ ABI surface.  Same
+// build-environment caveat applies as to std::string in this header:
+// plugins must be compiled in the ProxySQL build tree (or at least
+// against a matching prometheus-cpp version + matching libstdc++).
+//
+// Lifetime: GloVars and its prometheus registry are constructed
+// before any plugin is loaded, so the returned pointer is non-null
+// for every callback (init, start, admin command callback, query
+// hook).  Plugins may register metrics in init() if they want them
+// scraped immediately.
+using proxysql_plugin_get_prometheus_registry_cb =
+	prometheus::Registry* (*)();
+#endif /* PROXYSQL40 */
+
+// Services provided to plugins across the four-phase lifecycle.
+//
+// Availability by phase:
+//   * register_schemas (Phase B, optional, run between load() and init()):
+//       - register_table:            LIVE (writes to pending-tables list)
+//       - register_command:          LIVE (orthogonal to schema, OK here)
+//       - log_message:               LIVE
+//       - get_prometheus_registry:   LIVE (registry is constructed at startup)
+//       - get_admindb/get_configdb/get_statsdb: RETURN nullptr (admin module
+//         has not yet materialized the schema).  Plugins using this callback
+//         MUST NOT touch DB handles here; save that work for init().
+//       - register_query_hook:       RETURNS false (not yet wired).
+//       - snapshots:                 RETURN nullptr (see below).
+//   * init (Phase D): register_*, log_message, get_*db and
+//     get_prometheus_registry are LIVE.  Snapshot getters remain stubs —
+//     see the note below.
+//   * start (Phase E) and beyond: get_*db, log_message,
+//     get_prometheus_registry remain valid; register_* are no-ops (ignored
+//     with a warning — schemas must be declared before start).
+//
+// NOTE ON SNAPSHOT GETTERS (`get_mysql_users_snapshot`, etc.):
+// These are currently wired to a stub that returns nullptr in every phase.
+// The plan is to surface read-only SQLite3_result snapshots of the core's
+// runtime config tables, but the backing plumbing (snapshot acquisition,
+// lifetime, invalidation on reload) isn't implemented yet.  Plugins MUST
+// treat a nullptr return as "snapshot not available"; do not assume
+// non-null just because you're in Phase D.  When the feature lands, only
+// the nullptr contract will change — the field signatures won't.
 struct ProxySQL_PluginServices {
 	proxysql_plugin_register_table_cb register_table;
 	proxysql_plugin_register_command_cb register_command;
@@ -64,6 +206,20 @@ struct ProxySQL_PluginServices {
 	proxysql_plugin_db_handle_cb get_admindb;
 	proxysql_plugin_db_handle_cb get_configdb;
 	proxysql_plugin_db_handle_cb get_statsdb;
+#ifdef PROXYSQL40
+	// Step 2 ABI extensions.  Both fields are additive at the end of
+	// the struct -- older plugins that were built against the previous
+	// layout don't read past the previous member; new plugins must
+	// check non-null before calling.
+	proxysql_plugin_register_query_hook_cb register_query_hook;
+	proxysql_plugin_get_prometheus_registry_cb get_prometheus_registry;
+	// Step 2.5 extension: register a user-friendly alias for a command
+	// already registered via register_command.  Admin's dispatcher
+	// resolves aliases to canonical before invoking the callback, so
+	// plugins avoid the MYSQLX-specific hardcoded alias ladder that
+	// previously lived in lib/Admin_Handler.cpp.
+	proxysql_plugin_register_command_alias_cb register_command_alias;
+#endif /* PROXYSQL40 */
 };
 
 using proxysql_plugin_init_cb =
@@ -72,11 +228,41 @@ using proxysql_plugin_init_cb =
 using proxysql_plugin_start_cb =
 	bool (*)();
 
+// stop() pairs with init() for teardown, not with start().  The loader
+// guarantees that every plugin whose init() returned true will get stop()
+// called exactly once -- even if its own start() returned false, and even
+// if a later plugin's start() caused shutdown mid-startup.  Plugins must
+// therefore be able to tear down resources they allocated in init (config
+// stores, caches, worker pools not yet spawned, ...) without having seen
+// a matching start().  A plugin whose init() returned false never sees
+// stop().
 using proxysql_plugin_stop_cb =
 	bool (*)();
 
+// Returned pointer must have static storage duration (string literal or static
+// buffer). The caller does not free it.
 using proxysql_plugin_status_json_cb =
 	const char *(*)();
+
+#ifdef PROXYSQL40
+// Phase B entry point: "declare your schema before admin bootstrap."
+//
+// Four-phase plugin lifecycle:
+//   Phase A: load()             -- dlopen the .so, read the descriptor
+//   Phase B: register_schemas() -- NEW, optional; plugin returns its table defs
+//   Phase C: admin module init  -- core materializes SQLite schema from the
+//                                  plugin-registered defs (merge_plugin_tables
+//                                  code path -- first-boot == reload)
+//   Phase D: init()             -- plugin runs startup logic with full services
+//   Phase E: start()            -- plugin launches its threads / accept loops
+//
+// This callback is optional (may be nullptr).  Plugins that leave it null
+// keep the pre-existing two-phase behavior: Phase B is skipped and the
+// plugin's init() is responsible for both schema registration and startup
+// work (the mysqlx plugin does this today).
+using proxysql_plugin_register_schemas_cb =
+	bool (*)(ProxySQL_PluginServices *);
+#endif /* PROXYSQL40 */
 
 struct ProxySQL_PluginDescriptor {
 	const char *name;
@@ -85,8 +271,54 @@ struct ProxySQL_PluginDescriptor {
 	proxysql_plugin_start_cb start;
 	proxysql_plugin_stop_cb stop;
 	proxysql_plugin_status_json_cb status_json;
+#ifdef PROXYSQL40
+	/* Optional: called between load() and init().
+	 * `services` will have register_table available but DB handle getters
+	 * (get_admindb/get_configdb/get_statsdb) will return nullptr. Plugins
+	 * that use this callback MUST NOT touch DB handles here; they can in
+	 * init() after admin module bootstrap materializes schema. Plugins that
+	 * leave this field null keep the pre-existing two-phase behavior. */
+	proxysql_plugin_register_schemas_cb register_schemas;
+#endif /* PROXYSQL40 */
 };
 
 using proxysql_plugin_descriptor_v1_t = const ProxySQL_PluginDescriptor *(*)();
 
+// ---------------------------------------------------------------------------
+// ABI guidance: disk/memory/runtime sync — empty-source MUST still clear
+// the destination.
+//
+// Plugins that implement a three-tier storage model (disk ↔ memory ↔
+// runtime, mirroring proxysql_admin) typically copy rows from one tier
+// into another via some variant of:
+//
+//     BEGIN;
+//     DELETE FROM dest;
+//     INSERT INTO dest SELECT * FROM source;
+//     COMMIT;
+//
+// Do NOT short-circuit this on `SELECT COUNT(*) FROM source == 0`. Early
+// return on an empty source leaves stale rows in the destination — the
+// exact bug that motivated PR #5643 on the mysqlx plugin, where
+//
+//     if (disk_cnt == 0) continue;          // stale rows in runtime
+//     if (cnt == 0) continue;               // stale rows in memory
+//
+// caused "I deleted every row from mysqlx_users on disk then reloaded,
+// but the runtime still has the old users" behavior across restarts.
+//
+// The correct invariant: after sync, `dest` contains exactly the rows
+// from `source` at the moment of the transaction. An empty source
+// produces an empty destination. Atomicity with ROLLBACK on any
+// intermediate error keeps the destination in a well-defined state on
+// failure.
+//
+// Applies to every LOAD/SAVE command a plugin registers. If you
+// register admin commands that copy between tiers (LOAD X TO RUNTIME,
+// SAVE X TO DISK, etc.), their callbacks MUST NOT skip the sync on an
+// empty source — run the DELETE+INSERT unconditionally inside a single
+// transaction and check each execute() return.
+// ---------------------------------------------------------------------------
+
+#endif /* PROXYSQL40 (file-wide) */
 #endif /* PROXYSQL_PLUGIN_H */

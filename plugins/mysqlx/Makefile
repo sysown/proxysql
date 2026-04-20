@@ -1,6 +1,14 @@
 #!/bin/make -f
 
-PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; done; pwd)
+# Walk upward until we find the repo root (src/proxysql_global.cpp).  A hop
+# counter stops the climb at / on a sparse checkout that omits the marker
+# file -- otherwise we'd loop forever.  Fails fast with a clear message so
+# build output doesn't look like it's hanging.
+PROXYSQL_PATH := $(shell set -e; d="$$PWD"; for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do if [ -f "$$d/src/proxysql_global.cpp" ]; then echo "$$d"; exit 0; fi; if [ "$$d" = "/" ]; then break; fi; d="$$(dirname "$$d")"; done; echo "ERROR: plugins/mysqlx/Makefile: could not find src/proxysql_global.cpp (repo root) from $$PWD; sparse checkout missing include/ and src/proxysql_global.cpp?" >&2; exit 1)
+
+ifneq (,$(findstring ERROR,$(PROXYSQL_PATH)))
+$(error $(PROXYSQL_PATH))
+endif
 
 include $(PROXYSQL_PATH)/include/makefiles_vars.mk
 include $(PROXYSQL_PATH)/include/makefiles_paths.mk
@@ -45,12 +53,41 @@ endif
 IDIRS := -I$(PROXYSQL_IDIR) -I$(PLUGIN_DIR)/include -I$(SQLITE3_IDIR) -I$(PROTO_DIR) -I$(SSL_IDIR) -I$(PROMETHEUS_IDIR) -I$(LIBCONFIG_IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) -I$(RE2_IDIR)
 
 OPTZ ?= -O2 -ggdb
+# Propagate feature-tier flags from the top-level build.  These MUST match
+# the flags libproxysql.a was built with; a mismatch silently changes the
+# ProxySQL_PluginDescriptor / ProxySQL_PluginServices layout the core and
+# the plugin each see, and the loader then reads past the end of the
+# plugin's static descriptor.  (If this Makefile is run standalone, the
+# caller is expected to export PROXYSQL40/31/etc. to match the lib.)
+PSQL40 :=
+ifeq ($(PROXYSQL40),1)
+	PSQL40 := -DPROXYSQL40
+endif
+PSQL31 :=
+ifeq ($(PROXYSQL31),1)
+	PSQL31 := -DPROXYSQL31
+endif
+PSQLFFTO :=
+ifeq ($(PROXYSQLFFTO),1)
+	PSQLFFTO := -DPROXYSQLFFTO
+endif
+PSQLTSDB :=
+ifeq ($(PROXYSQLTSDB),1)
+	PSQLTSDB := -DPROXYSQLTSDB
+endif
+PSQLGA :=
+ifeq ($(PROXYSQLGENAI),1)
+	PSQLGA := -DPROXYSQLGENAI
+endif
+
 # -fvisibility=hidden + -fvisibility-inlines-hidden hides every C++ symbol by
 # default; only the explicitly extern "C"-declared
 # proxysql_plugin_descriptor_v1 entry point is exported. This prevents ODR
 # collisions with the proxysql core when the .so is dlopen'd, and avoids
 # leaking template instantiations across the boundary.
-CXXFLAGS := $(STDCPP) -fPIC -fvisibility=hidden -fvisibility-inlines-hidden $(OPTZ) $(WGCOV) $(WASAN) -pthread
+CXXFLAGS := $(STDCPP) -fPIC -fvisibility=hidden -fvisibility-inlines-hidden \
+	$(OPTZ) $(WGCOV) $(WASAN) -pthread \
+	$(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLGA)
 
 # Hardening flags. Skip _FORTIFY_SOURCE under ASAN (incompatible) and when
 # OPTZ contains -O0 (requires optimisation to take effect).

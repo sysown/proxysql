@@ -3040,10 +3040,19 @@ handler_again:
 				}
 			}
 			if (status == PROCESSING_QUERY || status == PROCESSING_STMT_PREPARE) {
-				// Swtich to fast forward mode if the query matches copy ... stdin command
+				// Switch to fast forward mode if the query matches copy ... stdin command
 				re2::StringPiece matched;
-				const char* query_to_match = (CurrentQuery.get_digest_text() ? CurrentQuery.get_digest_text() : (char*)CurrentQuery.QueryPointer);
-				if (copy_cmd_matcher->match(query_to_match, &matched)) {
+				const char* digest_text = CurrentQuery.get_digest_text();
+				bool run_match = true;
+				const char* query_to_match;
+				if (digest_text) {
+					if (strcasestr(digest_text, "COPY ") == NULL)
+						run_match = false;
+					query_to_match = digest_text;
+				} else {
+					query_to_match = (char*)CurrentQuery.QueryPointer;
+				}
+				if (run_match && copy_cmd_matcher->match(query_to_match, &matched)) {
 
 					if (status == PROCESSING_STMT_PREPARE) {
 						reset_extended_query_frame();

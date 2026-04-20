@@ -499,8 +499,20 @@ static void test_monitor_uses_per_server_row(PGconn* admin) {
 	exec_ok(admin, q.str().c_str());
 	exec_ok(admin, "LOAD PGSQL SERVERS TO RUNTIME");
 
+	// Drain any monitor connect cycle scheduled with the pre-LOAD config.
+	// Why: the monitor thread may already be mid-cycle when LOAD runs; that
+	// in-flight connect was scheduled with the OLD SSL params (no TLSv1 pin)
+	// and will succeed and bump the counter AFTER we sample ok_before. Wait
+	// until two consecutive 1s samples are equal — meaning the new config
+	// is in effect and the counter has plateaued.
 	long ok_before = getMonitorValue(admin, "PgSQL_Monitor_ssl_connections_OK");
-	diag("With TLSv1 per-server pin, ssl OK before wait: %ld", ok_before);
+	for (int i = 0; i < 10; i++) {
+		usleep(1000000); // 1s — longer than the test's monitor connect interval
+		long sample = getMonitorValue(admin, "PgSQL_Monitor_ssl_connections_OK");
+		if (sample == ok_before) break;
+		ok_before = sample;
+	}
+	diag("With TLSv1 per-server pin, ssl OK before wait (post-drain): %ld", ok_before);
 
 	usleep(5000000); // 5 seconds — multiple monitor cycles
 

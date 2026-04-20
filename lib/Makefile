@@ -56,6 +56,11 @@ ifeq ($(PROXYSQLGENAI),1)
 	PSQLGA := -DPROXYSQLGENAI
 endif
 
+PSQL40 :=
+ifeq ($(PROXYSQL40),1)
+	PSQL40 := -DPROXYSQL40
+endif
+
 PSQL31 :=
 ifeq ($(PROXYSQL31),1)
 	PSQL31 := -DPROXYSQL31
@@ -81,7 +86,7 @@ endif
 
 
 MYCFLAGS := $(IDIRS) $(OPTZ) $(DEBUG) -Wall -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
-MYCXXFLAGS := $(STDCPP) $(MYCFLAGS) $(PSQLCH) $(PSQLGA) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(ENABLE_EPOLL)
+MYCXXFLAGS := $(STDCPP) $(MYCFLAGS) $(PSQLCH) $(PSQLGA) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(ENABLE_EPOLL)
 
 default: libproxysql.a
 .PHONY: default
@@ -96,6 +101,7 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	ProxySQL_Admin_Tests.oo ProxySQL_Admin_Tests2.oo ProxySQL_Admin_Scheduler.oo ProxySQL_Admin_Disk_Upgrade.oo ProxySQL_Admin_Stats.oo \
 	Admin_Handler.oo Admin_FlushVariables.oo Admin_Bootstrap.oo \
 	Base_Session.oo Base_Thread.oo \
+	proxysql_gtid.oo \
 	proxy_protocol_info.oo \
 	proxysql_find_charset.oo ProxySQL_Poll.oo \
 	PgSQL_Protocol.oo PgSQL_Thread.oo PgSQL_Data_Stream.oo PgSQL_Session.oo PgSQL_Variables.oo PgSQL_HostGroups_Manager.oo PgSQL_Connection.oo PgSQL_Backend.oo PgSQL_Logger.oo PgSQL_Authentication.oo PgSQL_Error_Helper.oo \

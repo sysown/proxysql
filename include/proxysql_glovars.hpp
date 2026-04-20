@@ -15,6 +15,19 @@
 #include "proxysql_utils.h"
 #include <openssl/ssl.h>
 
+#ifdef DEBUG
+// `debug_level` is fully defined in proxysql_structs.h which itself
+// #include's this header at the bottom (circular chain -- structs.h
+// defines debug_level, then includes glovars.hpp to declare GloVars,
+// then glovars.hpp needs debug_level as a member pointer type).  Any
+// caller that #include's proxysql_structs.h gets the full definition
+// transitively; callers that #include glovars.hpp directly (e.g. the
+// plugin unit tests, which only need the GloVars layout) need this
+// forward decl so a pointer-typed member compiles.
+struct _debug_level;
+typedef struct _debug_level debug_level;
+#endif /* DEBUG */
+
 namespace ez {
 class ezOptionParser;
 };
@@ -82,7 +95,10 @@ class ProxySQL_GlobalVariables {
 	char * sqlite3_plugin;
 	char * web_interface_plugin;
 	char * ldap_auth_plugin;
+#ifdef PROXYSQL40
+	// Loadable plugin modules (chassis only -- v3.x has no plugin loader).
 	std::vector<std::string> plugin_modules;
+#endif /* PROXYSQL40 */
 	SSL_CTX *get_SSL_ctx();
 	SSL *get_SSL_new();
 	void get_SSL_pem_mem(char **key, char **cert);
@@ -190,10 +206,12 @@ class ProxySQL_GlobalVariables {
 	void install_signal_handler();
 };
 
+#ifdef PROXYSQL40
 void proxysql_load_plugin_modules_from_config(
 	const Setting& root,
 	std::vector<std::string>& plugin_modules
 );
+#endif /* PROXYSQL40 */
 
 /*
 #ifndef PROXYSQL_EXTERN

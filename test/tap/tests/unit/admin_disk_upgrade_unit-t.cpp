@@ -99,7 +99,9 @@ static std::string query_string(SQLite3DB *db, const char *sql) {
 	if (result && result->rows_count > 0 && result->rows[0]->fields[0]) {
 		val = result->rows[0]->fields[0];
 	}
-	if (error) free(error);
+	if (error) {
+		free(error);
+	}
 	delete result;
 	return val;
 }

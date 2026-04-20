@@ -66,23 +66,23 @@ using json = nlohmann::json;
 	do { \
 		if (req_id && strlen(req_id) > 0) { \
 			proxy_debug(PROXY_DEBUG_NL2SQL, 3, \
-				"LLM [%s]: RESPONSE status=%d duration_ms=%ld response=%s\n", \
-				req_id, status, duration_ms, response_preview.c_str()); \
+				"LLM [%s]: RESPONSE status=%ld duration_ms=%ld response=%s\n", \
+				req_id, (long)(status), duration_ms, response_preview.c_str()); \
 		} else { \
 			proxy_debug(PROXY_DEBUG_NL2SQL, 3, \
-				"LLM: RESPONSE status=%d duration_ms=%ld response=%s\n", \
-				status, duration_ms, response_preview.c_str()); \
+				"LLM: RESPONSE status=%ld duration_ms=%ld response=%s\n", \
+				(long)(status), duration_ms, response_preview.c_str()); \
 		} \
 	} while(0)
 
 #define LOG_LLM_ERROR(req_id, phase, error, status) \
 	do { \
 		if (req_id && strlen(req_id) > 0) { \
-			proxy_error("LLM [%s]: ERROR phase=%s error=%s status=%d\n", \
-				req_id, phase, error, status); \
+			proxy_error("LLM [%s]: ERROR phase=%s error=%s status=%ld\n", \
+				req_id, phase, error, (long)(status)); \
 		} else { \
-			proxy_error("LLM: ERROR phase=%s error=%s status=%d\n", \
-				phase, error, status); \
+			proxy_error("LLM: ERROR phase=%s error=%s status=%ld\n", \
+				phase, error, (long)(status)); \
 		} \
 	} while(0)
 

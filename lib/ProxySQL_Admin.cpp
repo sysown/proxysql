@@ -6481,6 +6481,7 @@ void ProxySQL_Admin::send_error_msg_to_client(S* sess, const char *msg, uint16_t
 	}
 }
 
+#ifdef PROXYSQL40
 template <typename S>
 bool ProxySQL_Admin::dispatch_plugin_admin_command(S* sess, const char* sql) {
 	ProxySQL_PluginCommandContext ctx { admindb, configdb, statsdb };
@@ -6496,6 +6497,7 @@ bool ProxySQL_Admin::dispatch_plugin_admin_command(S* sess, const char* sql) {
 	}
 	return true;
 }
+#endif /* PROXYSQL40 */
 
 // Explicit template instantiations for send_ok_msg_to_client and send_error_msg_to_client
 // These must come after the template definitions above
@@ -6503,8 +6505,10 @@ template void ProxySQL_Admin::send_ok_msg_to_client<MySQL_Session>(MySQL_Session
 template void ProxySQL_Admin::send_ok_msg_to_client<PgSQL_Session>(PgSQL_Session*, char const*, int, char const*);
 template void ProxySQL_Admin::send_error_msg_to_client<MySQL_Session>(MySQL_Session*, char const*, unsigned short);
 template void ProxySQL_Admin::send_error_msg_to_client<PgSQL_Session>(PgSQL_Session*, char const*, unsigned short);
+#ifdef PROXYSQL40
 template bool ProxySQL_Admin::dispatch_plugin_admin_command<MySQL_Session>(MySQL_Session*, const char*);
 template bool ProxySQL_Admin::dispatch_plugin_admin_command<PgSQL_Session>(PgSQL_Session*, const char*);
+#endif /* PROXYSQL40 */
 
 template <enum SERVER_TYPE pt>
 void ProxySQL_Admin::__delete_inactive_users(enum cred_username_type usertype) {

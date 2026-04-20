@@ -38,7 +38,9 @@ using json = nlohmann::json;
 #include "PgSQL_Authentication.h"
 #include "MySQL_LDAP_Authentication.hpp"
 #include "MySQL_PreparedStatement.h"
+#ifdef PROXYSQL40
 #include "ProxySQL_PluginManager.h"
+#endif /* PROXYSQL40 */
 #include "ProxySQL_Cluster.hpp"
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_Logger.hpp"
@@ -939,6 +941,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 		insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_rules", STATS_SQLITE_TABLE_MCP_QUERY_RULES); // Reuse same schema for stats
 	#endif /* PROXYSQLGENAI */
 
+#ifdef PROXYSQL40
 	if (ProxySQL_PluginManager* plugin_manager = proxysql_get_plugin_manager()) {
 		auto merge_plugin_tables = [this](std::vector<table_def_t *>* target, const std::vector<ProxySQL_PluginTableDef>& defs, const char* db_name) -> bool {
 			for (const auto& def : defs) {
@@ -965,6 +968,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 			return false;
 		}
 	}
+#endif /* PROXYSQL40 */
 
 	// init ldap here
 	init_ldap();
@@ -1343,11 +1347,22 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 return true;
 };
 
+#ifdef PROXYSQL40
 void ProxySQL_Admin::materialize_plugin_tables() {
 	ProxySQL_PluginManager* plugin_manager = proxysql_get_plugin_manager();
 	if (!plugin_manager) return;
 
-	auto merge_new = [this](std::vector<table_def_t *>* target, const std::vector<ProxySQL_PluginTableDef>& defs) {
+	// merge_new returns the subset of `defs` that were actually added
+	// (skipping entries whose table_name already exists in `target`).
+	// The caller runs DDL for only this subset so a repeat invocation
+	// would not re-execute CREATE TABLE statements for tables that
+	// already exist in the SQLite database.
+	auto merge_new = [this](
+		std::vector<table_def_t *>* target,
+		const std::vector<ProxySQL_PluginTableDef>& defs
+	) -> std::vector<const ProxySQL_PluginTableDef*> {
+		std::vector<const ProxySQL_PluginTableDef*> added;
+		added.reserve(defs.size());
 		for (const auto& def : defs) {
 			bool exists = false;
 			for (const auto* existing : *target) {
@@ -1358,24 +1373,38 @@ void ProxySQL_Admin::materialize_plugin_tables() {
 			}
 			if (!exists) {
 				insert_into_tables_defs(target, def.table_name, def.table_def);
+				added.push_back(&def);
+			}
+		}
+		return added;
+	};
+
+	const auto new_admin  = merge_new(tables_defs_admin,  plugin_manager->tables(ProxySQL_PluginDBKind::admin_db));
+	const auto new_config = merge_new(tables_defs_config, plugin_manager->tables(ProxySQL_PluginDBKind::config_db));
+	const auto new_stats  = merge_new(tables_defs_stats,  plugin_manager->tables(ProxySQL_PluginDBKind::stats_db));
+
+	// Plugin-declared DDL failures are startup-fatal: a partially
+	// materialized schema would only surface later as opaque runtime
+	// errors from the plugin itself.  Log the plugin, table name, and
+	// SQLite message, then abort.
+	auto run_ddl = [](SQLite3DB* db, const std::vector<const ProxySQL_PluginTableDef*>& defs, const char* kind) {
+		for (const auto* def : defs) {
+			if (!db->execute(def->table_def)) {
+				proxy_error("Plugin %s-db DDL failed for table %s: %s\n",
+				            kind,
+				            def->table_name ? def->table_name : "(null)",
+				            def->table_def ? def->table_def : "(null)");
+				exit(EXIT_FAILURE);
 			}
 		}
 	};
+	run_ddl(admindb,  new_admin,  "admin");
+	run_ddl(configdb, new_config, "config");
+	run_ddl(statsdb,  new_stats,  "stats");
 
-	merge_new(tables_defs_admin, plugin_manager->tables(ProxySQL_PluginDBKind::admin_db));
-	merge_new(tables_defs_config, plugin_manager->tables(ProxySQL_PluginDBKind::config_db));
-	merge_new(tables_defs_stats, plugin_manager->tables(ProxySQL_PluginDBKind::stats_db));
-
-	for (const auto& def : plugin_manager->tables(ProxySQL_PluginDBKind::admin_db)) {
-		admindb->execute(def.table_def);
-	}
-	for (const auto& def : plugin_manager->tables(ProxySQL_PluginDBKind::config_db)) {
-		configdb->execute(def.table_def);
-	}
-	for (const auto& def : plugin_manager->tables(ProxySQL_PluginDBKind::stats_db)) {
-		statsdb->execute(def.table_def);
-	}
-
-	__attach_db(admindb, configdb, (char *)"disk");
-	__attach_db(admindb, statsdb, (char *)"stats");
+	// admindb<->configdb("disk") and admindb<->statsdb("stats") are
+	// already attached by init_sqlite3db() above this function in the
+	// startup flow; duplicate ATTACH errors out in SQLite.  Do NOT
+	// re-attach them here.
 }
+#endif /* PROXYSQL40 */

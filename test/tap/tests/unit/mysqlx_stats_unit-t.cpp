@@ -19,10 +19,10 @@ int main() {
 	// Test 1-3: Stats counters.
 	{
 		MysqlxStatsStore store;
-		store.record_conn_ok("rw_route");
-		store.record_conn_ok("rw_route");
-		store.record_conn_err("rw_route");
-		store.record_conn_ok("ro_route");
+		store.record_conn_ok("rw_route", 0);
+		store.record_conn_ok("rw_route", 0);
+		store.record_conn_err("rw_route", 0);
+		store.record_conn_ok("ro_route", 0);
 
 		ok(store.get_conn_ok("rw_route") == 2, "rw_route conn_ok is 2");
 		ok(store.get_conn_err("rw_route") == 1, "rw_route conn_err is 1");
@@ -32,7 +32,7 @@ int main() {
 	// Test 4-7: Flush to SQLite.
 	{
 		SQLite3DB statsdb;
-		statsdb.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		statsdb.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);  // NOSONAR: SQLite3DB::open requires non-const char*
 		statsdb.execute(
 			"CREATE TABLE stats_mysqlx_routes ("
 			" name VARCHAR NOT NULL,"
@@ -45,9 +45,9 @@ int main() {
 		);
 
 		MysqlxStatsStore store;
-		store.record_conn_ok("test_route");
-		store.record_conn_ok("test_route");
-		store.record_conn_err("test_route");
+		store.record_conn_ok("test_route", 0);
+		store.record_conn_ok("test_route", 0);
+		store.record_conn_err("test_route", 0);
 
 		store.flush_to_sqlite(statsdb);
 
@@ -63,7 +63,7 @@ int main() {
 		ok(conn_err == 1, "flushed ConnERR is 1");
 
 		// Flush again — should replace, not accumulate.
-		store.record_conn_ok("test_route");
+		store.record_conn_ok("test_route", 0);
 		store.flush_to_sqlite(statsdb);
 		int conn_ok2 = statsdb.return_one_int(
 			"SELECT ConnOK FROM stats_mysqlx_routes WHERE name='test_route'");
@@ -84,24 +84,24 @@ int main() {
 	}
 	{
 		MysqlxStatsStore store;
-		store.record_conn_ok("triple_route");
-		store.record_conn_ok("triple_route");
-		store.record_conn_ok("triple_route");
+		store.record_conn_ok("triple_route", 0);
+		store.record_conn_ok("triple_route", 0);
+		store.record_conn_ok("triple_route", 0);
 		ok(store.get_conn_ok("triple_route") == 3,
 		   "three record_conn_ok calls yields get_conn_ok == 3");
 	}
 	{
 		MysqlxStatsStore store;
-		store.record_conn_ok("mixed_route");
-		store.record_conn_ok("mixed_route");
-		store.record_conn_err("mixed_route");
+		store.record_conn_ok("mixed_route", 0);
+		store.record_conn_ok("mixed_route", 0);
+		store.record_conn_err("mixed_route", 0);
 		ok(store.get_conn_ok("mixed_route") == 2 &&
 		   store.get_conn_err("mixed_route") == 1,
 		   "conn_ok and conn_err on same route are independent");
 	}
 	{
 		MysqlxStatsStore store;
-		store.record_conn_ok("route-with-dashes_v2");
+		store.record_conn_ok("route-with-dashes_v2", 0);
 		ok(store.get_conn_ok("route-with-dashes_v2") == 1,
 		   "route name with special characters works");
 	}
@@ -110,7 +110,7 @@ int main() {
 
 	{
 		SQLite3DB statsdb;
-		statsdb.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		statsdb.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);  // NOSONAR: SQLite3DB::open requires non-const char*
 		statsdb.execute(
 			"CREATE TABLE stats_mysqlx_routes ("
 			" name VARCHAR NOT NULL,"
@@ -129,7 +129,7 @@ int main() {
 	}
 	{
 		SQLite3DB statsdb;
-		statsdb.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		statsdb.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);  // NOSONAR: SQLite3DB::open requires non-const char*
 		statsdb.execute(
 			"CREATE TABLE stats_mysqlx_routes ("
 			" name VARCHAR NOT NULL,"
@@ -144,8 +144,8 @@ int main() {
 			"INSERT INTO stats_mysqlx_routes (name, ConnOK) VALUES ('stale', 999)");
 
 		MysqlxStatsStore store;
-		store.record_conn_ok("route_a");
-		store.record_conn_ok("route_b");
+		store.record_conn_ok("route_a", 0);
+		store.record_conn_ok("route_b", 0);
 		store.flush_to_sqlite(statsdb);
 
 		int row_count = statsdb.return_one_int("SELECT COUNT(*) FROM stats_mysqlx_routes");
@@ -153,7 +153,7 @@ int main() {
 	}
 	{
 		SQLite3DB statsdb;
-		statsdb.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		statsdb.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);  // NOSONAR: SQLite3DB::open requires non-const char*
 		statsdb.execute(
 			"CREATE TABLE stats_mysqlx_routes ("
 			" name VARCHAR NOT NULL,"
@@ -166,7 +166,7 @@ int main() {
 		);
 
 		MysqlxStatsStore store;
-		store.record_conn_ok("route'name");
+		store.record_conn_ok("route'name", 0);
 		store.flush_to_sqlite(statsdb);
 
 		int row_count = statsdb.return_one_int("SELECT COUNT(*) FROM stats_mysqlx_routes WHERE name='route''name'");
@@ -174,7 +174,7 @@ int main() {
 	}
 	{
 		SQLite3DB statsdb;
-		statsdb.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		statsdb.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);  // NOSONAR: SQLite3DB::open requires non-const char*
 		statsdb.execute(
 			"CREATE TABLE stats_mysqlx_routes ("
 			" name VARCHAR NOT NULL,"
@@ -187,8 +187,8 @@ int main() {
 		);
 
 		MysqlxStatsStore store;
-		store.record_conn_ok("route_a");
-		store.record_conn_ok("route_b");
+		store.record_conn_ok("route_a", 0);
+		store.record_conn_ok("route_b", 0);
 		store.flush_to_sqlite(statsdb);
 
 		int has_a = statsdb.return_one_int("SELECT COUNT(*) FROM stats_mysqlx_routes WHERE name='route_a'");
@@ -197,7 +197,7 @@ int main() {
 	}
 	{
 		SQLite3DB statsdb;
-		statsdb.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		statsdb.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);  // NOSONAR: SQLite3DB::open requires non-const char*
 		statsdb.execute(
 			"CREATE TABLE stats_mysqlx_routes ("
 			" name VARCHAR NOT NULL,"
@@ -211,7 +211,7 @@ int main() {
 
 		MysqlxStatsStore store;
 		for (int i = 0; i < 10000; ++i) {
-			store.record_conn_ok("big_route");
+			store.record_conn_ok("big_route", 0);
 		}
 		store.flush_to_sqlite(statsdb);
 
@@ -228,7 +228,7 @@ int main() {
 		for (int t = 0; t < 4; ++t) {
 			threads.emplace_back([&store]() {
 				for (int i = 0; i < 1000; ++i) {
-					store.record_conn_ok("stress_route");
+					store.record_conn_ok("stress_route", 0);
 				}
 			});
 		}
@@ -242,10 +242,10 @@ int main() {
 		for (int t = 0; t < 4; ++t) {
 			threads.emplace_back([&store]() {
 				for (int i = 0; i < 500; ++i) {
-					store.record_conn_ok("mix_route");
+					store.record_conn_ok("mix_route", 0);
 				}
 				for (int i = 0; i < 500; ++i) {
-					store.record_conn_err("mix_route");
+					store.record_conn_err("mix_route", 0);
 				}
 			});
 		}
@@ -258,11 +258,11 @@ int main() {
 		MysqlxStatsStore store;
 		std::thread ta([&store]() {
 			for (int i = 0; i < 1000; ++i)
-				store.record_conn_ok("route_A");
+				store.record_conn_ok("route_A", 0);
 		});
 		std::thread tb([&store]() {
 			for (int i = 0; i < 1000; ++i)
-				store.record_conn_ok("route_B");
+				store.record_conn_ok("route_B", 0);
 		});
 		ta.join();
 		tb.join();
@@ -273,7 +273,7 @@ int main() {
 	{
 		MysqlxStatsStore store;
 		SQLite3DB statsdb;
-		statsdb.open(const_cast<char*>(":memory:")  // NOSONAR: SQLite3DB::open requires non-const char*, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+		statsdb.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);  // NOSONAR: SQLite3DB::open requires non-const char*
 		statsdb.execute(
 			"CREATE TABLE stats_mysqlx_routes ("
 			" name VARCHAR NOT NULL,"
@@ -291,7 +291,7 @@ int main() {
 			threads.emplace_back([&store, &done]() {
 				while (!done.load()) {
 					for (int i = 0; i < 50; ++i)
-						store.record_conn_ok("flush_race");
+						store.record_conn_ok("flush_race", 0);
 				}
 			});
 		}
@@ -311,7 +311,7 @@ int main() {
 
 		std::thread writer([&store, &writer_done]() {
 			for (int i = 0; i < 1000; ++i)
-				store.record_conn_ok("reader_route");
+				store.record_conn_ok("reader_route", 0);
 			writer_done.store(true);
 		});
 		std::thread reader([&store, &writer_done, &min_read]() {

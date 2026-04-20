@@ -349,7 +349,7 @@ int main(int argc, char** argv) {
 	diag("Test: test_sqlite3_server-t");
 	diag("================================================================================");
 	diag("This test verifies ProxySQL SQLite3 server functionality.");
-	diag("");
+	diag("%s", "");
 	diag("Test scenarios:");
 	diag("  - Invalid user authentication should fail");
 	diag("  - Invalid password authentication should fail");
@@ -357,13 +357,13 @@ int main(int argc, char** argv) {
 	diag("  - Successful queries execution");
 	diag("  - Failing queries execution (syntax errors)");
 	diag("  - SQLite interface changes and reconnection");
-	diag("");
+	diag("%s", "");
 	diag("Connection parameters:");
 	diag("  - Admin Host: %s", cl.host);
 	diag("  - Admin Port: %d", cl.admin_port);
 	diag("  - SQLite3 Host: %s", cl.host);
 	diag("================================================================================");
-	diag("");
+	diag("%s", "");
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
 

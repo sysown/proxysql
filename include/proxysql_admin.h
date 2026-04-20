@@ -635,7 +635,9 @@ class ProxySQL_Admin {
 	 * @return Always true.
 	 */
 	bool init(const bootstrap_info_t& bootstrap_info);
+#ifdef PROXYSQL40
 	void materialize_plugin_tables();
+#endif /* PROXYSQL40 */
 	void init_ldap();
 	/** @brief Initializes the HTTP server. For safety should be called after 'phase3'. */
 	void init_http_server();
@@ -697,8 +699,10 @@ class ProxySQL_Admin {
 	void send_ok_msg_to_client(S* sess, const char *msg, int rows, const char* query);
 	template <typename S>
 	void send_error_msg_to_client(S* sess, const char *msg, uint16_t mysql_err_code=1045);
+#ifdef PROXYSQL40
 	template <typename S>
 	bool dispatch_plugin_admin_command(S* sess, const char *sql);
+#endif /* PROXYSQL40 */
 	#ifdef DEBUG
 	// these two following functions used to just call and return one function each
 	// this approach was replaced when we introduced debug filters

@@ -30,6 +30,7 @@ using json = nlohmann::json;
 #include "MySQL_Resolution.h"
 
 #include <fcntl.h>
+#include <zstd.h>
 
 using std::vector;
 using std::function;
@@ -528,6 +529,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"evaluate_replication_lag_on_servers_load",
 	(char *)"proxy_protocol_networks",
 	(char *)"protocol_compression_level",
+	(char *)"zstd_compression_level",
 	(char *)"ignore_min_gtid_annotations",
 	(char *)"fast_forward_grace_close_ms",
 #ifdef PROXYSQLFFTO
@@ -1453,6 +1455,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.log_mysql_warnings_enabled=false;
 	variables.data_packets_history_size=0;
 	variables.protocol_compression_level=3;
+	variables.zstd_compression_level=3;
 	variables.ignore_min_gtid_annotations=false;
 	// status variables
 	status_variables.mirror_sessions_current=0;
@@ -2669,6 +2672,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["handle_warnings"]			   = make_tuple(&variables.handle_warnings,				  0,			  1, false);
 		VariablesPointers_int["evaluate_replication_lag_on_servers_load"] = make_tuple(&variables.evaluate_replication_lag_on_servers_load, 0, 1, false);
 		VariablesPointers_int["protocol_compression_level"]    = make_tuple(&variables.protocol_compression_level,   -1,              9, false);
+		VariablesPointers_int["zstd_compression_level"]       = make_tuple(&variables.zstd_compression_level,       1,              ZSTD_maxCLevel(), false);
 
 		// logs
 		VariablesPointers_int["auditlog_filesize"]     = make_tuple(&variables.auditlog_filesize,    1024*1024, 1*1024*1024*1024, false);
@@ -4733,6 +4737,7 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(poll_timeout_on_failure);
 	REFRESH_VARIABLE_BOOL(have_compress);
 	REFRESH_VARIABLE_INT(protocol_compression_level);
+	REFRESH_VARIABLE_INT(zstd_compression_level);
 	REFRESH_VARIABLE_BOOL(have_ssl);
 	REFRESH_VARIABLE_BOOL(multiplexing);
 	REFRESH_VARIABLE_BOOL(log_unhealthy_connections);
@@ -4817,6 +4822,7 @@ MySQL_Thread::MySQL_Thread() {
 	mysql_thread___ssl_p2s_crlpath=NULL;
 
 	mysql_thread___protocol_compression_level=3;
+	mysql_thread___zstd_compression_level=3;
 
 	last_maintenance_time=0;
 	last_move_to_idle_thread_time=0;

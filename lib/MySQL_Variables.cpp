@@ -337,7 +337,9 @@ bool validate_charset(MySQL_Session* session, int idx, int &_rc) {
 		unsigned int replace_collation_nr = 0;
 		std::stringstream ss;
 		int charset = atoi(mysql_variables.client_get_value(session, idx));
-		if (charset >= 255 && myconn->mysql->server_version[0] != '8') {
+		// Pre-8.0 MySQL cannot handle collations with id >= 255.
+		// MySQL 8.x, 9.x and later can — match by numeric major version, not first character.
+		if (charset >= 255 && atoi(myconn->mysql->server_version) < 8) {
 			switch(mysql_thread___handle_unknown_charset) {
 				case HANDLE_UNKNOWN_CHARSET__DISCONNECT_CLIENT:
 					snprintf(msg,sizeof(msg),"Can't initialize character set %s", mysql_variables.client_get_value(session, idx));

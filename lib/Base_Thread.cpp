@@ -556,7 +556,7 @@ void Base_Thread::ProcessAllMyDS_BeforePoll() {
 
 template<typename T, typename S>
 void Base_Thread::run_SetAllSession_ToProcess0() {
-	T* thr = static_cast<T*>(this);
+	T* __attribute__((unused)) thr = static_cast<T*>(this);
 	unsigned int n;
 #ifdef IDLE_THREADS
 	// @note: in MySQL_Thread::run we have:  bool idle_maintenance_thread=epoll_thread;

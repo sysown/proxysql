@@ -18,11 +18,9 @@ export TAP_ADMINPORT=6032
 export TAP_ADMINUSERNAME="radmin"
 export TAP_ADMINPASSWORD="radmin"
 
-# NO HARDCODED DEFAULTS HERE
-# These must be provided by run-tests-isolated.bash or group env.sh
+# NOTE: TAP_MYSQLHOST/PORT are set later (after infra .env is sourced)
+# so that infra-specific overrides like MYSQL_PRIMARY_HOST take effect.
 if [ -n "${DEFAULT_MYSQL_INFRA}" ]; then
-    export TAP_MYSQLHOST="mysql1.${DEFAULT_MYSQL_INFRA}"
-    export TAP_MYSQLPORT=3306
     export TAP_MYSQLUSERNAME="root"
     export TAP_MYSQLPASSWORD="${ROOT_PASSWORD}"
 fi
@@ -125,9 +123,20 @@ export TEST_PY_TAP_EXCL="${TEST_PY_TAP_EXCL:-reg_test_3273_ssl_con-t}"
 export TEST_PY_TAPINT_INCL="${TEST_PY_TAPINT_INCL:-}"
 export TEST_PY_TAPINT_EXCL="${TEST_PY_TAPINT_EXCL:-}"
 
-# Source infra-specific environment (exports WHG, RHG, and TAP test variables)
-if [ -n "${INFRA_TYPE}" ] && [ -f "${WORKSPACE}/test/infra/${INFRA_TYPE}/.env" ]; then
-    source "${WORKSPACE}/test/infra/${INFRA_TYPE}/.env"
+# Source infra-specific environments (exports WHG, RHG, MYSQL_PRIMARY_HOST, etc.)
+# INFRA_TYPE is set by binlog/special groups; DEFAULT_MYSQL_INFRA by all MySQL groups
+for _infra_env in "${INFRA_TYPE}" "${DEFAULT_MYSQL_INFRA}"; do
+    if [ -n "${_infra_env}" ] && [ -f "${WORKSPACE}/test/infra/${_infra_env}/.env" ]; then
+        source "${WORKSPACE}/test/infra/${_infra_env}/.env"
+    fi
+done
+unset _infra_env
+
+# Set TAP_MYSQLHOST/PORT after sourcing infra .env so that MYSQL_PRIMARY_HOST/PORT
+# overrides take effect (e.g. dbdeployer uses "dbdeployer1" instead of "mysql1")
+if [ -n "${DEFAULT_MYSQL_INFRA}" ]; then
+    export TAP_MYSQLHOST="${MYSQL_PRIMARY_HOST:-mysql1}.${DEFAULT_MYSQL_INFRA}"
+    export TAP_MYSQLPORT="${MYSQL_PRIMARY_PORT:-3306}"
 fi
 
 echo ">>> Isolated Environment Loaded (INFRA_ID: ${INFRA_ID})"

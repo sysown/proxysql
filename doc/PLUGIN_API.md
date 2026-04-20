@@ -41,16 +41,37 @@ startup phase before the database takes precedence).
 
 ### Startup Sequence
 
-1. ProxySQL parses `proxysql.cnf` and populates the `plugins` list.
-2. Admin module initializes (creates SQLite databases).
-3. For each plugin path, ProxySQL calls `dlopen()` to load the `.so`.
-4. ProxySQL resolves the `proxysql_plugin_descriptor_v1` symbol.
-5. The plugin's `init()` callback is called, receiving `ProxySQL_PluginServices`.
-   The plugin registers its tables and commands during this call.
-6. ProxySQL creates the registered SQLite tables.
-7. The plugin's `start()` callback is called. The plugin should start its
-   threads, open listener sockets, and load runtime configuration.
-8. ProxySQL is ready. The plugin is live.
+ProxySQL uses a **four-phase** plugin lifecycle.  Every phase but Phase B
+is mandatory; Phase B is optional via the `register_schemas` descriptor
+field and only enabled when the plugin declares ABI version 2.
+
+1. **Phase A — load.**  ProxySQL parses `proxysql.cnf` and populates the
+   `plugins` list.  For each plugin path, ProxySQL calls `dlopen()`,
+   resolves the `proxysql_plugin_descriptor_v1` symbol, and validates
+   the descriptor (`abi_version`, `name`, callback pointers).
+2. **Phase B — register_schemas (optional, ABI 2 only).**  If the
+   descriptor wires `register_schemas`, the loader invokes it with a
+   `ProxySQL_PluginServices` whose `register_table` /
+   `register_command` / `register_command_alias` entries are LIVE but
+   whose DB-handle getters (`get_admindb`, `get_configdb`,
+   `get_statsdb`) are non-null stubs that return `nullptr`.  The plugin
+   declares the tables it owns and (optionally) its admin commands; it
+   MUST NOT touch DB handles here.  Plugins that leave
+   `register_schemas` null (or that declare ABI 1) skip this phase
+   entirely and do all their setup in Phase D.
+3. **Phase C — admin materialization.**  The admin module initializes
+   and materializes the SQLite schemas collected during Phase B
+   (`merge_plugin_tables` + `CREATE TABLE`).  On DDL failure ProxySQL
+   aborts startup.
+4. **Phase D — init.**  The plugin's `init()` callback is called,
+   receiving a fully live `ProxySQL_PluginServices` (DB handles now
+   valid).  Plugins that opted out of Phase B register their tables
+   AND commands here; plugins that used Phase B only finish their
+   context setup.
+5. **Phase E — start.**  The plugin's `start()` callback is called.
+   The plugin should start its threads, open listener sockets, and
+   load runtime configuration.  After this returns, ProxySQL is ready
+   and the plugin is live.
 
 ### Shutdown Sequence
 
@@ -80,26 +101,37 @@ All types are defined in `include/ProxySQL_Plugin.h`:
 ```cpp
 struct ProxySQL_PluginDescriptor {
     const char *name;                         // Human-readable plugin name
-    uint32_t abi_version;                     // Must be 1
+    uint32_t abi_version;                     // PROXYSQL_PLUGIN_ABI_VERSION (1 or 2)
     proxysql_plugin_init_cb init;             // bool (*)(ProxySQL_PluginServices *)
     proxysql_plugin_start_cb start;           // bool (*)()
     proxysql_plugin_stop_cb stop;             // bool (*)()
     proxysql_plugin_status_json_cb status_json;  // const char *(*)()
+    proxysql_plugin_register_schemas_cb register_schemas; // ABI 2 only, optional
 };
 ```
 
-| Field          | Type     | Description                                               |
-|----------------|----------|-----------------------------------------------------------|
-| `name`         | `const char*` | Plugin identifier, used in logging.                  |
-| `abi_version`  | `uint32_t`    | Must be `1`.                                         |
-| `init`         | callback      | Called once at startup. Receives `ProxySQL_PluginServices`. Register tables and commands here. |
-| `start`        | callback      | Called after `init`. Start threads, open sockets, load config. |
-| `stop`         | callback      | Called on shutdown. Stop threads, release resources.  |
-| `status_json`  | callback      | Return a JSON string describing plugin status.        |
+| Field              | Type          | Description                                               |
+|--------------------|---------------|-----------------------------------------------------------|
+| `name`             | `const char*` | Plugin identifier, used in logging.                        |
+| `abi_version`      | `uint32_t`    | Set from `PROXYSQL_PLUGIN_ABI_VERSION`.  Value `1` = pre-chassis descriptor (six fields).  Value `2` = PROXYSQL40 descriptor (adds `register_schemas`).  A v3/v3.1 ProxySQL core rejects `abi_version > 1`. |
+| `init`             | callback      | Phase D — called with live services; register tables and commands here (or finish context setup if `register_schemas` already did it). |
+| `start`            | callback      | Phase E — start threads, open sockets, load config.        |
+| `stop`             | callback      | Called on shutdown.  Pairs with `init`, not `start`: if `init` returned true and `start` later failed, `stop` is still called so the plugin can release resources it allocated in `init`. |
+| `status_json`      | callback      | Return a static JSON string describing plugin status.      |
+| `register_schemas` | callback      | Phase B (ABI 2 only).  Optional; leave null to skip Phase B entirely.  Services passed here have `register_table` / `register_command` / `register_command_alias` LIVE but DB-handle getters returning `nullptr`. |
 
 All callbacks return `bool` (except `status_json` which returns `const char*`).
-Return `true` on success, `false` on failure. A `false` return from `init` or
-`start` causes ProxySQL to exit.
+Return `true` on success, `false` on failure. A `false` return from
+`register_schemas`, `init`, or `start` causes ProxySQL to exit.
+
+#### ABI version
+
+`include/ProxySQL_Plugin.h` exposes `PROXYSQL_PLUGIN_ABI_VERSION` (2 under
+PROXYSQL40, undefined in pre-chassis builds — the descriptor is then a
+legacy six-field struct with `abi_version = 1`).  Plugins MUST assign
+`abi_version` from this macro rather than hard-coding a literal; the
+core's loader uses it to detect layout skew and reject plugins built
+for an unsupported ABI.  See `ProxySQL_Plugin.h` for the exact rules.
 
 ### The Entry Point
 

@@ -67,7 +67,7 @@ int create_testing_tables(MYSQL* mysql_server) {
 }
 
 int insert_random_data(MYSQL* proxysql_mysql, uint32_t rows) {
-	int rnd_a = rand() % 1000;
+	[[maybe_unused]] int rnd_a = rand() % 1000;
 	string rnd_c = random_string(rand() % 100 + 5);
 	string rnd_pad = random_string(rand() % 50 + 5);
 
@@ -84,9 +84,7 @@ int insert_random_data(MYSQL* proxysql_mysql, uint32_t rows) {
 }
 
 int perform_update(MYSQL* proxysql_mysql, uint32_t rows) {
-	int rnd_a = rand() % 1000;
-	string rnd_c = random_string(rand() % 100 + 5);
-	string rnd_pad = random_string(rand() % 60 + 5);
+	[[maybe_unused]] int rnd_a = rand() % 1000;
 
 	string query { "UPDATE test.gtid_test SET a=a+1, c=REVERSE(c)" };
 	MYSQL_QUERY(proxysql_mysql, query.c_str());
@@ -158,21 +156,22 @@ int perform_rnd_selects(const CommandLine& cl, uint32_t NUM) {
 		fprintf(stderr, "  This connection uses hardcoded credentials: sbtest8 / sbtest8\n");
 		fprintf(stderr, "  Ensure 'sbtest8' user is configured in ProxySQL mysql_users table\n");
 		fprintf(stderr, "\n");
+		mysql_close(select_conn);
 		return EXIT_FAILURE;
 	}
 	fprintf(stderr, "Connected successfully as sbtest8 for SELECT operations\n");
 
 	for (uint32_t i = 0; i < NUM; i++) {
-		int r_row = rand() % NUM_ROWS;
+		int r_row = rand() % static_cast<int>(NUM_ROWS);
 		if (r_row == 0) { r_row = 1; }
 
 		string s_query {};
 		string_format("SELECT * FROM test.gtid_test WHERE id=%d", s_query, r_row);
 
-		// Perform the select and ignore the result
 		int rc = mysql_query(select_conn, s_query.c_str());
 		if (rc != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(select_conn));
+			mysql_close(select_conn);
 			return EXIT_FAILURE;
 		}
 		mysql_free_result(mysql_store_result(select_conn));
@@ -354,12 +353,18 @@ int main(int argc, char** argv) {
 	MYSQL* proxysql_mysql = mysql_init(NULL);
 	MYSQL* proxysql_admin = mysql_init(NULL);
 
+	// Both handles are initialized above. Close whichever succeeded so a
+	// failure on one side doesn't leak the other. The cleanup: label below
+	// can't be reached via goto from here because C++ forbids jumping past
+	// the non-trivial std::vector<> initializations farther down in main().
 	if (proxysql_mysql == NULL) {
 		fprintf(stderr, "FATAL: mysql_init() failed for proxysql_mysql connection\n");
+		if (proxysql_admin != NULL) { mysql_close(proxysql_admin); }
 		return EXIT_FAILURE;
 	}
 	if (proxysql_admin == NULL) {
 		fprintf(stderr, "FATAL: mysql_init() failed for proxysql_admin connection\n");
+		mysql_close(proxysql_mysql);
 		return EXIT_FAILURE;
 	}
 
@@ -393,6 +398,8 @@ int main(int argc, char** argv) {
 		fprintf(stderr, "  2. Verify user is loaded to runtime: SELECT * FROM runtime_mysql_users WHERE username='sbtest8';\n");
 		fprintf(stderr, "  3. Check if sbtest8 user exists on backend MySQL servers\n");
 		fprintf(stderr, "================================================================================\n");
+		mysql_close(proxysql_mysql);
+		mysql_close(proxysql_admin);
 		return EXIT_FAILURE;
 	}
 	fprintf(stderr, "SUCCESS: Connected to ProxySQL MySQL interface as sbtest8\n");
@@ -412,6 +419,8 @@ int main(int argc, char** argv) {
 		fprintf(stderr, "================================================================================\n");
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		fprintf(stderr, "\n");
+		mysql_close(proxysql_mysql);
+		mysql_close(proxysql_admin);
 		return EXIT_FAILURE;
 	}
 	fprintf(stderr, "SUCCESS: Connected to ProxySQL Admin interface\n");
@@ -420,6 +429,37 @@ int main(int argc, char** argv) {
 	fprintf(stderr, "All connections established successfully. Starting test execution...\n");
 	fprintf(stderr, "================================================================================\n");
 	fprintf(stderr, "\n");
+
+	// Create GTID-based query rules for sbtest8
+	// Use rule_ids 100-102 to avoid overwriting rules set by calling tests
+	// (e.g. test_binlog_reader_uses_previous_hostgroup-t sets rule_id=1 for port-based routing
+	// that must survive so connections are tracked in the expected hostgroup)
+	{
+		string query;
+		query = "DELETE FROM mysql_query_rules WHERE rule_id IN (100,101,102) OR username='sbtest8'";
+		MYSQL_QUERY(proxysql_admin, query.c_str());
+		mysql_free_result(mysql_store_result(proxysql_admin));
+
+		query = "INSERT INTO mysql_query_rules (rule_id,active,username,match_digest,destination_hostgroup,apply,gtid_from_hostgroup,comment) "
+			"VALUES (100,1,'sbtest8','^SELECT.*FOR UPDATE'," + std::to_string(WHG) + ",1,null,'test_binlog_reader-t')";
+		MYSQL_QUERY(proxysql_admin, query.c_str());
+		mysql_free_result(mysql_store_result(proxysql_admin));
+
+		query = "INSERT INTO mysql_query_rules (rule_id,active,username,match_digest,destination_hostgroup,apply,gtid_from_hostgroup,comment) "
+			"VALUES (101,1,'sbtest8','^SELECT'," + std::to_string(RHG) + ",1," + std::to_string(WHG) + ",'test_binlog_reader-t')";
+		MYSQL_QUERY(proxysql_admin, query.c_str());
+		mysql_free_result(mysql_store_result(proxysql_admin));
+
+		query = "INSERT INTO mysql_query_rules (rule_id,active,username,match_digest,destination_hostgroup,apply,gtid_from_hostgroup,comment) "
+			"VALUES (102,1,'sbtest8','.*'," + std::to_string(WHG) + ",1,null,'test_binlog_reader-t')";
+		MYSQL_QUERY(proxysql_admin, query.c_str());
+		mysql_free_result(mysql_store_result(proxysql_admin));
+
+		query = "LOAD MYSQL QUERY RULES TO RUNTIME";
+		MYSQL_QUERY(proxysql_admin, query.c_str());
+		mysql_free_result(mysql_store_result(proxysql_admin));
+		fprintf(stderr, "GTID query rules created for sbtest8 (WHG=%d, RHG=%d)\n", WHG, RHG);
+	}
 
 	vector<pair<uint32_t, mysql_res_row>> failed_rows {};
 	vector<mysql_res_row> reader_1_read {};
@@ -441,17 +481,16 @@ int main(int argc, char** argv) {
 		rc = perform_update(proxysql_mysql, NUM_ROWS);
 		if (rc != EXIT_SUCCESS) { goto cleanup; }
 
-		MYSQL_RES* my_res = mysql_store_result(proxysql_admin);
-		vector<mysql_res_row> pre_select_rows = extract_mysql_rows(my_res);
-		mysql_free_result(my_res);
+		// Previously a mysql_store_result() was issued on proxysql_admin here
+		// with no corresponding preceding query; the resulting MYSQL_RES was
+		// always NULL and the extracted vector was dead code. Removed.
 
-		int r_row = rand() % NUM_ROWS;
+		int r_row = rand() % static_cast<int>(NUM_ROWS);
 		if (r_row == 0) { r_row = 1; }
 
 		string s_query {};
 		string_format("SELECT * FROM test.gtid_test WHERE id=%d", s_query, r_row);
 
-		// Perform the select and ignore the result
 		rc = mysql_query(proxysql_mysql, s_query.c_str());
 		if (rc != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
@@ -462,7 +501,12 @@ int main(int argc, char** argv) {
 		vector<mysql_res_row> res_row = extract_mysql_rows(my_s_res);
 		mysql_free_result(my_s_res);
 
-		int cur_a = std::stol(res_row[0][1]);
+		if (res_row.empty() || res_row[0].size() < 2) {
+			fprintf(stderr, "File %s, line %d, Error: unexpected result set shape (rows=%zu)\n",
+				__FILE__, __LINE__, res_row.size());
+			goto cleanup;
+		}
+		int cur_a = static_cast<int>(std::stol(res_row[0][1]));
 
 		if (cur_a != r_row + i) {
 			failed_rows.push_back({r_row + i, res_row[0] });
@@ -477,7 +521,7 @@ int main(int argc, char** argv) {
 		if (stop_on_failure == 0) {
 			check_gitd_tracking(cl, proxysql_mysql, proxysql_admin);
 
-			const double pct_fail_rate = failed_rows.size() * 100 / static_cast<double>(NUM_CHECKS);
+			const double pct_fail_rate = static_cast<double>(failed_rows.size()) * 100 / static_cast<double>(NUM_CHECKS);
 			ok(
 				pct_fail_rate < MAX_FAILURE_PCT,
 				"Detected dirty reads shouldn't surpass the expected threshold: {"
