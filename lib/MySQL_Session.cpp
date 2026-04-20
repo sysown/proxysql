@@ -6401,7 +6401,9 @@ handler_again:
 
 					handler_rc0_Process_GTID(myconn);
 
-					handler_rc0_Process_Variables(myconn);
+					if (mysql_thread___session_track_variables != session_track_variables::DISABLED) {
+						handler_rc0_Process_Variables(myconn);
+					}
 
 					// if we are locked on hostgroup, the value of autocommit is copied from the backend connection
 					// see bug #3549
