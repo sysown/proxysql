@@ -212,7 +212,7 @@ class MySrvC {	// MySQL Server Container
 	// This is primarily used when `session_track_variables::ENFORCED` mode is active.
 	// If a server lacks the required capabilities in this mode, it is temporarily
 	// excluded from selection for a specified duration.
-	unsigned long long server_backoff_time;
+	std::atomic<unsigned long long> server_backoff_time;
 
 	MySrvConnList *ConnectionsUsed;
 	MySrvConnList *ConnectionsFree;

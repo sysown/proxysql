@@ -1,4 +1,5 @@
 #include "../deps/json/json.hpp"
+#include <atomic>
 using json = nlohmann::json;
 #define PROXYJSON
 
@@ -6388,13 +6389,17 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 	if (sess->client_myds->myconn == NULL) return NULL;
 	if (sess->client_myds->myconn->userinfo == NULL) return NULL;
 	unsigned int i;
+	unsigned long long server_backoff_time;
 	std::vector<MySrvC *> parents; // this is a vector of srvers that needs to be excluded in case gtid_uuid is used
 	MySQL_Connection *c=NULL;
 	for (i=0; i<cached_connections->len; i++) {
 		c = (MySQL_Connection *) cached_connections->index(i);
+
 		// skip servers that are in backoff period
-		if (c->parent->server_backoff_time > curtime)
+		server_backoff_time = c->parent->server_backoff_time.load(std::memory_order_relaxed);
+		if (server_backoff_time > curtime) {
 			continue;
+		}
 
 		if (c->parent->myhgc->hid==_hid && sess->client_myds->myconn->match_tracked_options(c)) { // options are all identical
 			if (

@@ -1,4 +1,5 @@
 #include "../deps/json/json.hpp"
+#include <atomic>
 using json = nlohmann::json;
 #define PROXYJSON
 
@@ -9764,8 +9765,9 @@ bool MySQL_Session::handle_session_track_capabilities() {
 	}
 
 	if (!server_support_session_track) {
-		// be_conn->parent->server_backoff_time = thread->curtime + (600 * 1000000); // 10 minutes
-		be_conn->parent->server_backoff_time = thread->curtime + (30 * 1000000); // 30 seconds
+		// set 30 seconds backoff time
+		be_conn->parent->server_backoff_time.store(thread->curtime + (30 * 1000000), std::memory_order_relaxed);
+
 		if (session_fast_forward) {
 			mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
 		} else {
