@@ -15,6 +15,19 @@
 #include "proxysql_utils.h"
 #include <openssl/ssl.h>
 
+#ifdef DEBUG
+// `debug_level` is fully defined in proxysql_structs.h which itself
+// #include's this header at the bottom (circular chain -- structs.h
+// defines debug_level, then includes glovars.hpp to declare GloVars,
+// then glovars.hpp needs debug_level as a member pointer type).  Any
+// caller that #include's proxysql_structs.h gets the full definition
+// transitively; callers that #include glovars.hpp directly (e.g. the
+// plugin unit tests, which only need the GloVars layout) need this
+// forward decl so a pointer-typed member compiles.
+struct _debug_level;
+typedef struct _debug_level debug_level;
+#endif /* DEBUG */
+
 namespace ez {
 class ezOptionParser;
 };
