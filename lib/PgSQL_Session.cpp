@@ -2186,11 +2186,18 @@ __implicit_sync:
 						if (tx_poisoned && command != 'Q' && command != 'X') {
 							if (command == 'P' || command == 'B' || command == 'D' ||
 							    command == 'C' || command == 'E') {
-								thread->status_variables.tx_poisoned_rejected_statements_total++;
+								// Silent swallow — Parse/Bind/Describe/Close/Execute
+								// packets carry no client-visible response while
+								// poisoned. The whole logical ext-query gets
+								// accounted for once, at Sync.
 								l_free(pkt.size, pkt.ptr);
 								continue;
 							}
 							if (command == 'S') {
+								// One "rejected statement" per logical extended
+								// query (== per Sync), matching the simple-query
+								// path where a single 'Q' packet bumps the counter
+								// exactly once.
 								thread->status_variables.tx_poisoned_rejected_statements_total++;
 								PG_pkt pgpkt{};
 								pgpkt.set_multi_pkt_mode(true);
