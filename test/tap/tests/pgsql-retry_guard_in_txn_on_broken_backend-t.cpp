@@ -24,11 +24,12 @@
  *
  * Method:
  *   1. Open a client connection to ProxySQL and start an explicit transaction.
- *   2. Learn the backend-side PID currently serving this session via
- *      pg_backend_pid().
- *   3. Issue a long-running query (SELECT pg_sleep(N)) and, from a separate
- *      thread, use a DIRECT (non-ProxySQL) superuser connection to the primary
- *      to call pg_terminate_backend() on the PID from step 2.
+ *   2. Issue a long-running query (SELECT pg_sleep(N)) that carries a unique
+ *      string literal marker, so the backend running it can be identified by
+ *      scanning pg_stat_activity.
+ *   3. From a separate thread, use a DIRECT (non-ProxySQL) superuser connection
+ *      to the primary to find the backend whose currently-active query matches
+ *      the marker, and pg_terminate_backend() it.
  *   4. Assert that the long-running query returns PGRES_FATAL_ERROR (fix
  *      present). Without the fix, ProxySQL would silently retry the statement
  *      on a fresh backend and we'd see PGRES_TUPLES_OK instead.
@@ -36,11 +37,17 @@
  * Pre-fix failure mode of this test: the pg_sleep returns TUPLES_OK after ~3s
  * and the FATAL_ERROR assertion fails — exactly the signal you want a
  * regression guard to raise.
+ *
+ * Why not pg_backend_pid(): ProxySQL intercepts pg_backend_pid() and returns
+ * its own thread_session_id (see PgSQL_Protocol.cpp), not the real backend
+ * PID. Using pg_stat_activity from the direct superuser connection sidesteps
+ * that and identifies the backend authoritatively.
  */
 
 #include <unistd.h>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <string>
 #include <sstream>
 #include <thread>
@@ -72,7 +79,7 @@ static PGconn* openConnection(const char* host, int port,
 }
 
 int main(int /*argc*/, char** /*argv*/) {
-    plan(6);
+    plan(5);
 
     if (cl.getEnv()) {
         diag("Failed to get the required environmental variables.");
@@ -93,28 +100,27 @@ int main(int /*argc*/, char** /*argv*/) {
        "BEGIN succeeded (%s)", PQresStatus(PQresultStatus(r)));
     PQclear(r);
 
-    // Learn the backend-side PID for this session. pg_backend_pid() returns
-    // the real Postgres backend PID behind the ProxySQL session, which is
-    // what pg_terminate_backend() takes as its argument.
-    int backend_pid = -1;
-    r = PQexec(cli, "SELECT pg_backend_pid()");
-    bool pid_ok = (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1);
-    if (pid_ok) backend_pid = atoi(PQgetvalue(r, 0, 0));
-    PQclear(r);
-    ok(pid_ok && backend_pid > 0,
-       "SELECT pg_backend_pid() returned a pid (%d)", backend_pid);
-    if (!pid_ok) {
-        PQfinish(cli);
-        return exit_status();
-    }
+    // Build a unique marker so the superuser thread can identify the backend
+    // running our in-transaction query by scanning pg_stat_activity. We embed
+    // it as a string literal inside the sleep query; PostgreSQL records the
+    // full query text in pg_stat_activity.query, so a LIKE '%marker%' match
+    // uniquely finds the backend we want to kill.
+    char marker[96];
+    snprintf(marker, sizeof(marker),
+             "retry_guard_marker_%ld_%d",
+             (long)time(NULL), (int)getpid());
+
+    char sleep_query[256];
+    snprintf(sleep_query, sizeof(sleep_query),
+             "SELECT pg_sleep(3), '%s'", marker);
 
     // Fire the kill from a separate thread so it lands while the main thread
-    // is blocked inside PQexec(SELECT pg_sleep). We use a DIRECT superuser
+    // is blocked inside PQexec(sleep_query). We use a DIRECT superuser
     // connection to the primary (not ProxySQL) so the kill path is unrelated
     // to the code path under test.
     std::atomic<bool> kill_delivered(false);
     std::thread killer([&]() {
-        // Let the main thread enter pg_sleep before we fire.
+        // Let the main thread enter pg_sleep before we look it up.
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
         PGconn* direct = openConnection(cl.pgsql_server_host, cl.pgsql_server_port,
@@ -122,12 +128,24 @@ int main(int /*argc*/, char** /*argv*/) {
                                         "PG-direct (superuser)");
         if (!direct) return;
 
-        char q[96];
-        snprintf(q, sizeof(q), "SELECT pg_terminate_backend(%d)", backend_pid);
-        PGresult* kr = PQexec(direct, q);
-        if (PQresultStatus(kr) == PGRES_TUPLES_OK && PQntuples(kr) == 1) {
+        // Parameterized lookup + kill: find the active backend whose current
+        // query contains the marker, and terminate it. A single round-trip
+        // avoids a TOCTOU race where the backend state could change between
+        // lookup and kill.
+        const char* find_and_kill =
+            "SELECT pg_terminate_backend(pid) "
+            "FROM pg_stat_activity "
+            "WHERE state = 'active' AND query LIKE '%' || $1 || '%'";
+        const char* params[1] = { marker };
+        PGresult* kr = PQexecParams(direct, find_and_kill,
+                                    1, nullptr, params, nullptr, nullptr, 0);
+        if (PQresultStatus(kr) == PGRES_TUPLES_OK && PQntuples(kr) >= 1) {
             // pg_terminate_backend returns boolean: 't' iff signal delivered.
             kill_delivered.store(PQgetvalue(kr, 0, 0)[0] == 't');
+        } else {
+            diag("pg_stat_activity lookup failed: status=%s ntuples=%d err=%s",
+                 PQresStatus(PQresultStatus(kr)), PQntuples(kr),
+                 PQerrorMessage(direct));
         }
         PQclear(kr);
         PQfinish(direct);
@@ -138,11 +156,12 @@ int main(int /*argc*/, char** /*argv*/) {
     // an explicit transaction) and the error propagates to the client. Without
     // the fix, ProxySQL retries on a fresh backend as autocommit and we'd see
     // the sleep complete successfully — the silent-corruption path.
-    r = PQexec(cli, "SELECT pg_sleep(3)");
+    r = PQexec(cli, sleep_query);
     killer.join();
 
     ok(kill_delivered.load(),
-       "pg_terminate_backend(%d) signalled successfully", backend_pid);
+       "pg_terminate_backend via pg_stat_activity signalled successfully "
+       "(marker=%s)", marker);
 
     // THE KEY ASSERTION. Pre-fix: PGRES_TUPLES_OK (silent replay). Post-fix:
     // PGRES_FATAL_ERROR (correct error propagation).
