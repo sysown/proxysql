@@ -608,6 +608,54 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 		if (mysql_use_tcp_keepalive == 0) {
 			proxy_warning("mysql-use_tcp_keepalive is set to false. This may cause connection drops when ProxySQL is behind a network load balancer. Consider setting this to true.\n");
 		}
+
+		// Cross-variable validation for 'mysql-session_track_variables'.
+		//
+		// Session variable tracking depends on two other MySQL capability toggles and
+		// the interaction is non-obvious: an operator who sets only 'session_track_variables'
+		// can end up with the feature silently doing nothing (OPTIONAL) or with client
+		// behavior changing unexpectedly (ENFORCED). We emit warnings once per
+		// 'LOAD MYSQL VARIABLES TO RUNTIME' so a misconfiguration is visible in the
+		// normal operator workflow rather than having to be debugged later.
+		//
+		// The checks are only relevant when the feature is actually requested: when
+		// 'session_track_variables=DISABLED' (the default) none of these interactions
+		// matter and we emit nothing. We deliberately do not name specific backends
+		// here - this is a global configuration warning; per-backend capability
+		// mismatches are logged separately at the point where they are detected in
+		// 'MySQL_Session::handle_session_track_capabilities()'.
+		int session_track_variables_mode = GloMTH->get_variable_int((char *)"session_track_variables");
+		if (session_track_variables_mode != session_track_variables::DISABLED) {
+			int enable_client_deprecate_eof = GloMTH->get_variable_int((char *)"enable_client_deprecate_eof");
+			int enable_server_deprecate_eof = GloMTH->get_variable_int((char *)"enable_server_deprecate_eof");
+
+			if (session_track_variables_mode == session_track_variables::ENFORCED) {
+				// ENFORCED mode guarantees that session tracking is set up on every
+				// eligible backend connection, and to do that it must force
+				// CLIENT_DEPRECATE_EOF on both the client- and server-facing halves of
+				// the protocol even when the operator asked for the opposite. Warn
+				// explicitly so the behavior change is never silent: clients that do
+				// not negotiate CLIENT_DEPRECATE_EOF will see OK packets where they
+				// previously saw EOF packets, which can break older connectors.
+				if (enable_client_deprecate_eof == 0) {
+					proxy_warning("mysql-session_track_variables=ENFORCED overrides mysql-enable_client_deprecate_eof=false and forces CLIENT_DEPRECATE_EOF on frontend connections. Older clients that do not negotiate CLIENT_DEPRECATE_EOF may be affected.\n");
+				}
+				if (enable_server_deprecate_eof == 0) {
+					proxy_warning("mysql-session_track_variables=ENFORCED overrides mysql-enable_server_deprecate_eof=false and forces CLIENT_DEPRECATE_EOF on backend connections.\n");
+				}
+			} else if (session_track_variables_mode == session_track_variables::OPTIONAL) {
+				// OPTIONAL mode gracefully skips tracking on any backend that lacks the
+				// required capabilities - including when ProxySQL itself is configured
+				// not to negotiate CLIENT_DEPRECATE_EOF upstream. In that configuration
+				// tracking is a no-op: the feature appears enabled in the admin tables
+				// but nothing is ever tracked. Make the dependency explicit so the
+				// operator is not left wondering why 'PROXYSQL INTERNAL SESSION' shows
+				// no tracked variables.
+				if (enable_server_deprecate_eof == 0) {
+					proxy_warning("mysql-session_track_variables=OPTIONAL has no effect while mysql-enable_server_deprecate_eof=false; backend session tracking will be skipped. Set mysql-enable_server_deprecate_eof=true or use ENFORCED mode to activate tracking.\n");
+				}
+			}
+		}
 	}
 	if (resultset) delete resultset;
 }

@@ -9765,8 +9765,28 @@ bool MySQL_Session::handle_session_track_capabilities() {
 	}
 
 	if (!server_support_session_track) {
-		// set 30 seconds backoff time
-		be_conn->parent->server_backoff_time.store(thread->curtime + (30 * 1000000), std::memory_order_relaxed);
+		// ENFORCED mode requires the backend to advertise both CLIENT_SESSION_TRACKING and
+		// CLIENT_DEPRECATE_EOF. When one or both are missing we park the server in a short
+		// selection-backoff window (see 'MySrvC::session_track_backoff_until') so other
+		// sessions don't retry the same backend immediately. The server is NOT shunned,
+		// and no connect_ERR counter is incremented: Monitor and the rest of the pool
+		// continue to treat the backend as healthy for everything unrelated to session
+		// tracking. In a mixed hostgroup, peer servers that do support the capabilities
+		// keep serving traffic normally.
+		//
+		// The 30-second window is intentionally short: it paces retries without masking
+		// a misconfiguration for long. Because this function runs only on connection
+		// establishment (which is itself gated by the backoff on the selection path),
+		// the warning below naturally rate-limits to at most once per 30s per backend —
+		// just enough for an operator to notice and act on an incompatible server in a
+		// mixed fleet without drowning the log.
+		proxy_warning(
+			"Backend %s:%d lacks CLIENT_SESSION_TRACKING or CLIENT_DEPRECATE_EOF; "
+			"backing off from selection for 30 seconds "
+			"(mysql-session_track_variables=ENFORCED)\n",
+			be_conn->parent->address, be_conn->parent->port
+		);
+		be_conn->parent->session_track_backoff_until.store(thread->curtime + (30ULL * 1000000), std::memory_order_relaxed);
 
 		if (session_fast_forward) {
 			mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
