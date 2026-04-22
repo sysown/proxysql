@@ -2,11 +2,8 @@ name: CI-lint-groups-json
 
 on:
   pull_request:
-    paths:
-      - 'test/tap/groups/groups.json'
   push:
-    paths:
-      - 'test/tap/groups/groups.json'
+  workflow_dispatch:
 
 jobs:
   lint:
@@ -15,3 +12,5 @@ jobs:
       - uses: actions/checkout@v4
       - name: Lint groups.json format
         run: python3 test/tap/groups/lint_groups_json.py
+      - name: Check every TAP source is registered in groups.json
+        run: python3 test/tap/groups/check_groups.py --source
