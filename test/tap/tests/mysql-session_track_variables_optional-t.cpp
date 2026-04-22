@@ -3,10 +3,16 @@
  * @brief This test verifies that ProxySQL properly handles session variable tracking
  *   in OPTIONAL mode based on MySQL server version. Session tracking should work
  *   on MySQL 5.7+ and gracefully degrade on 5.6 and below.
+ *
+ * Coverage is broadened to multiple variables via 'session_track_default_vars':
+ * an integer variable plus string variables ('time_zone', 'sql_mode'), so the
+ * string-handling path in 'MySQL_Session::handler_rc0_Process_Variables' is
+ * exercised alongside the numeric path.
  */
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string>
 #include "mysql.h"
 #include "tap.h"
 #include "command_line.h"
@@ -20,7 +26,7 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
-	plan(1);
+	plan(session_track_default_vars_count);
 
 	MYSQL* admin = init_mysql_conn(cl.admin_host, cl.admin_port, cl.admin_username, cl.admin_password);
 	if (!admin) {
@@ -46,28 +52,28 @@ int main(int argc, char** argv) {
 
 	diag("Detected MySQL version: %d.%d", major, minor);
 
-	int set_value = -1;
-	int backend_value = -1;
-	int client_value = -1;
-
-	if (test_session_variables(proxy, set_value, backend_value, client_value) != EXIT_SUCCESS) {
-		diag("Failed to run test");
-		return exit_status();
-	}
-
-	// Verify results based on server version
 	bool mysql57_plus = (major > 5) || (major == 5 && minor >= 7);
 
-	if (mysql57_plus) {
-		ok(set_value == backend_value && set_value == client_value,
-			"MySQL %d.%d supports session tracking. Match innodb_lock_wait_timeout value with backend & client variable list. Expected: %d, Backend: %d, Client: %d",
-			major, minor, set_value, backend_value, client_value);
-	} else {
-		// MySQL 5.6 or below: session tracking should not be enabled
-		// The backend and client values should be -1
-		ok(backend_value == -1 && client_value == -1,
-			"MySQL %d.%d lacks session tracking. Verify tracking disabled. Backend: %d, Client: %d",
-			major, minor, backend_value, client_value);
+	for (size_t i = 0; i < session_track_default_vars_count; i++) {
+		const tracked_var_spec& var = session_track_default_vars[i];
+		std::string set_value, backend_value, client_value;
+
+		if (test_session_variables(proxy, var, set_value, backend_value, client_value) != EXIT_SUCCESS) {
+			diag("Failed to run test for %s", var.name);
+			continue;
+		}
+
+		if (mysql57_plus) {
+			ok(!set_value.empty() && set_value == backend_value && set_value == client_value,
+				"MySQL %d.%d, %s: Match value across server/backend/client maps. Expected: '%s', Backend: '%s', Client: '%s'",
+				major, minor, var.name, set_value.c_str(), backend_value.c_str(), client_value.c_str());
+		} else {
+			// MySQL 5.6 or below: session tracking is not active, so ProxySQL
+			// should not have populated the variable in either map.
+			ok(backend_value.empty() && client_value.empty(),
+				"MySQL %d.%d, %s: Tracking disabled on pre-5.7. Backend: '%s', Client: '%s'",
+				major, minor, var.name, backend_value.c_str(), client_value.c_str());
+		}
 	}
 
 	// Cleanup

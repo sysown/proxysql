@@ -3,16 +3,19 @@
  * @brief This test verifies that ProxySQL properly handles session variable tracking
  *        with fast_forward enabled on MySQL 5.6 for both OPTIONAL and ENFORCED modes.
  *
- *        OPTIONAL mode: session tracking should gracefully degrade (tracked_value == -1)
- *        without breaking the fast_forward connection.
+ *        OPTIONAL mode: session tracking should gracefully degrade -- tracked
+ *        values must be empty strings for every tracked variable -- without
+ *        breaking the fast_forward connection.
  *
- *        ENFORCED mode: handle_session_track_capabilities() rejects all 5.6 backends
- *        (they lack CLIENT_DEPRECATE_EOF and CLIENT_SESSION_TRACKING), so the first
- *        query through the fast_forward pipe should fail with error 9001.
+ *        ENFORCED mode: 'handle_session_track_capabilities()' rejects all 5.6
+ *        backends (they lack CLIENT_DEPRECATE_EOF and CLIENT_SESSION_TRACKING),
+ *        so the first query through the fast_forward pipe should fail with
+ *        error 9001.
  */
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string>
 #include "mysql.h"
 #include "tap.h"
 #include "command_line.h"
@@ -23,7 +26,8 @@
  * @brief Tests OPTIONAL mode (value 1) on MySQL 5.6 with fast_forward.
  *
  * Connects without CLIENT_DEPRECATE_EOF (to match the 5.6 backend's capabilities
- * per match_ff_req_options()) and verifies that session tracking is not active.
+ * per 'match_ff_req_options()') and verifies that session tracking is not active
+ * for any of the tracked variable specs.
  */
 int test_ff_optional_mysql56(const CommandLine& cl, MYSQL* admin) {
 	// Set session_track_variables to OPTIONAL mode (value 1)
@@ -40,18 +44,19 @@ int test_ff_optional_mysql56(const CommandLine& cl, MYSQL* admin) {
 		return EXIT_FAILURE;
 	}
 
-	int set_value = -1;
-	int tracked_value = -1;
+	for (size_t i = 0; i < session_track_default_vars_count; i++) {
+		const tracked_var_spec& var = session_track_default_vars[i];
+		std::string set_value, tracked_value;
 
-	if (test_session_variables_ff(proxy, set_value, tracked_value) != EXIT_SUCCESS) {
-		diag("Failed to run test for OPTIONAL mode");
-		mysql_close(proxy);
-		return EXIT_FAILURE;
+		if (test_session_variables_ff(proxy, var, set_value, tracked_value) != EXIT_SUCCESS) {
+			diag("Failed to run test for %s", var.name);
+			continue;
+		}
+
+		ok(tracked_value.empty(),
+			"FF OPTIONAL on MySQL 5.6, %s: Tracking disabled. Tracked: '%s'",
+			var.name, tracked_value.c_str());
 	}
-
-	ok(tracked_value == -1,
-		"Fast forward with OPTIONAL mode on MySQL 5.6: Tracking disabled. Tracked: %d",
-		tracked_value);
 
 	// Cleanup
 	MYSQL_QUERY_T(admin, "UPDATE mysql_users SET fast_forward=0 WHERE username='sbtest4'");
@@ -68,7 +73,7 @@ int test_ff_optional_mysql56(const CommandLine& cl, MYSQL* admin) {
  *
  * Connects with CLIENT_DEPRECATE_EOF (as ENFORCED mode advertises it in the
  * handshake) and verifies that the first query fails with error 9001, since
- * handle_session_track_capabilities() backs off all 5.6 servers.
+ * 'handle_session_track_capabilities()' backs off all 5.6 servers.
  */
 int test_ff_enforced_mysql56(const CommandLine& cl, MYSQL* admin) {
 	// Set session_track_variables to ENFORCED mode (value 2)
@@ -113,7 +118,10 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
-	plan(2);
+	// OPTIONAL test: one 'ok' per tracked variable. ENFORCED test: single 'ok'
+	// for the error-path assertion (the 5.6 backend is rejected before any
+	// per-variable tracking is attempted).
+	plan((int)session_track_default_vars_count + 1);
 
 	MYSQL* admin = init_mysql_conn(cl.admin_host, cl.admin_port, cl.admin_username, cl.admin_password);
 	if (!admin) {

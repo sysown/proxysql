@@ -2,12 +2,14 @@
  * @file mysql-session_track_variables_ff-t.cpp
  * @brief This test verifies that ProxySQL properly handles session variable tracking
  *        in both OPTIONAL and ENFORCED modes with fast_forward enabled on MySQL 5.7+.
- *        For each mode, it verifies that session tracking is active and tracked values
- *        match the actual variable value.
+ *        For each mode and for every tracked-variable spec in
+ *        'session_track_default_vars' the test verifies that the client-visible
+ *        tracking payload matches the actual server-side value.
  */
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string>
 #include "mysql.h"
 #include "tap.h"
 #include "command_line.h"
@@ -33,6 +35,7 @@ int test_ff_session_tracking(const CommandLine& cl, MYSQL* admin, int mode) {
 
 	MYSQL* proxy = mysql_init(NULL);
 	// Enable CLIENT_DEPRECATE_EOF. This is required for session tracking
+	// (session tracking payload is carried only in OK packets, not EOF).
 	proxy->options.client_flag |= CLIENT_DEPRECATE_EOF;
 	if (!mysql_real_connect(proxy, cl.host, "sbtest4", "sbtest4", NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: Failed to connect to proxy\n", __FILE__, __LINE__);
@@ -47,20 +50,24 @@ int test_ff_session_tracking(const CommandLine& cl, MYSQL* admin, int mode) {
 	}
 	diag("Detected MySQL version: %d.%d", major, minor);
 
-	// Enable session tracking on client for fast_forward mode
+	// Enable session tracking on the fast-forward client so backend-originated
+	// tracking data is exposed to 'mysql_session_track_get_*' on this handle.
 	MYSQL_QUERY_T(proxy, "SET session_track_system_variables='*'");
 	MYSQL_QUERY_T(proxy, "SET session_track_state_change=ON");
 
-	int set_value = -1;
-	int tracked_value = -1;
+	for (size_t i = 0; i < session_track_default_vars_count; i++) {
+		const tracked_var_spec& var = session_track_default_vars[i];
+		std::string set_value, tracked_value;
 
-	if (test_session_variables_ff(proxy, set_value, tracked_value) != EXIT_SUCCESS) {
-		diag("Failed to run test for %s mode", mode_name);
-		mysql_close(proxy);
-		return EXIT_FAILURE;
+		if (test_session_variables_ff(proxy, var, set_value, tracked_value) != EXIT_SUCCESS) {
+			diag("Failed to run test for %s mode, var %s", mode_name, var.name);
+			continue;
+		}
+
+		ok(!set_value.empty() && set_value == tracked_value,
+			"MySQL %d.%d FF %s, %s: Expected: '%s', Tracked: '%s'",
+			major, minor, mode_name, var.name, set_value.c_str(), tracked_value.c_str());
 	}
-
-	ok(set_value == tracked_value, "MySQL %d.%d: Fast forward with %s mode: Expected: %d, Tracked: %d", major, minor, mode_name, set_value, tracked_value);
 
 	// Cleanup
 	MYSQL_QUERY_T(admin, "UPDATE mysql_users SET fast_forward=0 WHERE username='sbtest4'");
@@ -79,7 +86,8 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
-	plan(2);
+	// One assertion per (mode, tracked-variable) pair; two modes.
+	plan(2 * (int)session_track_default_vars_count);
 
 	MYSQL* admin = init_mysql_conn(cl.admin_host, cl.admin_port, cl.admin_username, cl.admin_password);
 	if (!admin) {
