@@ -315,6 +315,8 @@ enum session_status {
 	SETTING_NEXT_TRANSACTION_READ,
 	PROCESSING_EXTENDED_QUERY_SYNC,
 	RESYNCHRONIZING_CONNECTION,
+	SETTING_SESSION_TRACK_VARIABLES,
+	SETTING_SESSION_TRACK_STATE,
 	session_status___NONE // special marker
 };
 
@@ -1334,6 +1336,7 @@ __thread int mysql_thread___client_host_error_counts;
 __thread int mysql_thread___handle_warnings;
 __thread int mysql_thread___evaluate_replication_lag_on_servers_load;
 __thread bool mysql_thread___ignore_min_gtid_annotations;
+__thread int mysql_thread___session_track_variables;
 
 /* variables used for Query Cache */
 __thread int mysql_thread___query_cache_size_MB;
@@ -1668,6 +1671,7 @@ extern __thread int mysql_thread___client_host_error_counts;
 extern __thread int mysql_thread___handle_warnings;
 extern __thread int mysql_thread___evaluate_replication_lag_on_servers_load;
 extern __thread bool mysql_thread___ignore_min_gtid_annotations;
+extern __thread int mysql_thread___session_track_variables;
 
 /* variables used for Query Cache */
 extern __thread int mysql_thread___query_cache_size_MB;

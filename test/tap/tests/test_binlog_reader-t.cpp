@@ -461,6 +461,9 @@ int main(int argc, char** argv) {
 		fprintf(stderr, "GTID query rules created for sbtest8 (WHG=%d, RHG=%d)\n", WHG, RHG);
 	}
 
+	MYSQL_QUERY_T(proxysql_admin, "SET mysql-session_track_variables=0");
+	MYSQL_QUERY_T(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+
 	vector<pair<uint32_t, mysql_res_row>> failed_rows {};
 	vector<mysql_res_row> reader_1_read {};
 	vector<mysql_res_row> reader_2_read {};

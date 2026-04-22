@@ -79,6 +79,7 @@ fi
 # This is simple and deterministic - matches group naming convention
 if [ -z "${INFRA_TYPE}" ]; then
     case "${TAP_GROUP}" in
+        mysql56-single*) export INFRA_TYPE="${DEFAULT_MYSQL_INFRA:-infra-dbdeployer-mysql56-single}" ;;
         mysql84*)  export INFRA_TYPE=infra-mysql84 ;;
         mysql90*)  export INFRA_TYPE=infra-mysql90 ;;
         mysql91*)  export INFRA_TYPE=infra-mysql91 ;;
