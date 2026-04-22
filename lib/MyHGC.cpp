@@ -18,7 +18,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 	unsigned int TotalUsedConn=0;
 	unsigned int l=mysrvs->cnt();
 	static time_t last_hg_log = 0;
-	unsigned long long server_backoff_time;
+	unsigned long long session_track_backoff_until;
 #ifdef TEST_AURORA
 	unsigned long long a1 = array_mysrvc_total/10000;
 	array_mysrvc_total += l;
@@ -39,10 +39,19 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 		for (j=0; j<l; j++) {
 			mysrvc=mysrvs->idx(j);
 			if (mysrvc->get_status() == MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
-				// skip servers that are in backoff period
-				server_backoff_time = mysrvc->server_backoff_time.load(std::memory_order_relaxed);
-				if (server_backoff_time > sess->thread->curtime) {
-					continue;
+				// Skip servers that are in a session-tracking capability backoff window.
+				// Only the ENFORCED mode ever writes 'session_track_backoff_until', so in
+				// DISABLED/OPTIONAL we elide the atomic read entirely: this keeps the hot
+				// server-selection loop free of per-iteration atomic loads in the common
+				// case. Flipping out of ENFORCED at runtime therefore also "forgets" any
+				// stale backoff deadlines immediately, which is the desired behavior
+				// (rejected servers become eligible again as soon as the operator relaxes
+				// the mode).
+				if (mysql_thread___session_track_variables == session_track_variables::ENFORCED) {
+					session_track_backoff_until = mysrvc->session_track_backoff_until.load(std::memory_order_relaxed);
+					if (session_track_backoff_until > sess->thread->curtime) {
+						continue;
+					}
 				}
 
 				if (mysrvc->myhgc->num_online_servers.load(std::memory_order_relaxed) <= mysrvc->myhgc->attributes.max_num_online_servers) { // number of online servers in HG is within configured range

@@ -31,7 +31,7 @@ MySrvC::MySrvC(
 	bytes_recv=0;
 	max_connections_used=0;
 	queries_gtid_sync=0;
-	server_backoff_time.store(0);
+	session_track_backoff_until.store(0);
 	time_last_detected_error=0;
 	connect_ERR_at_time_last_detected_error=0;
 	shunned_automatic=false;

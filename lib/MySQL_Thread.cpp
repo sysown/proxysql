@@ -6389,16 +6389,27 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 	if (sess->client_myds->myconn == NULL) return NULL;
 	if (sess->client_myds->myconn->userinfo == NULL) return NULL;
 	unsigned int i;
-	unsigned long long server_backoff_time;
+	unsigned long long session_track_backoff_until;
+	// Mirror of the hot-path optimization in 'MyHGC::get_random_MySrvC()': only ENFORCED
+	// mode ever writes 'MySrvC::session_track_backoff_until', so in DISABLED/OPTIONAL we
+	// can skip the per-iteration atomic load entirely. The common case stays allocation-
+	// and atomic-free; the branch is well-predicted because the mode changes rarely.
+	const bool check_session_track_backoff =
+		(mysql_thread___session_track_variables == session_track_variables::ENFORCED);
 	std::vector<MySrvC *> parents; // this is a vector of srvers that needs to be excluded in case gtid_uuid is used
 	MySQL_Connection *c=NULL;
 	for (i=0; i<cached_connections->len; i++) {
 		c = (MySQL_Connection *) cached_connections->index(i);
 
-		// skip servers that are in backoff period
-		server_backoff_time = c->parent->server_backoff_time.load(std::memory_order_relaxed);
-		if (server_backoff_time > curtime) {
-			continue;
+		// Skip cached connections whose parent server is inside the session-tracking
+		// capability backoff window. See 'MySrvC::session_track_backoff_until' for the
+		// full rationale; reads are relaxed because the deadline is compared against
+		// 'curtime' and small reordering is harmless.
+		if (check_session_track_backoff) {
+			session_track_backoff_until = c->parent->session_track_backoff_until.load(std::memory_order_relaxed);
+			if (session_track_backoff_until > curtime) {
+				continue;
+			}
 		}
 
 		if (c->parent->myhgc->hid==_hid && sess->client_myds->myconn->match_tracked_options(c)) { // options are all identical
