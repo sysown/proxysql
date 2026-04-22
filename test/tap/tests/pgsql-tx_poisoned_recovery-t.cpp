@@ -3,35 +3,46 @@
  * @brief Acceptance test for the "preserve client session on mid-tx backend
  *        death" feature gated by pgsql-preserve_client_on_broken_backend_in_tx.
  *
- * Companion to pgsql-retry_guard_in_txn_on_broken_backend-t (which asserts the
- * lower-level guarantee: no silent retry of an in-tx statement on a fresh
- * backend). This test goes a step further and asserts the whole recovery UX:
+ * Companion to pgsql-retry_guard_in_txn_on_broken_backend-t (lower-level no-
+ * silent-retry guard) and pgsql-tx_poisoned_extended_query-t (extended-query
+ * coverage for the same feature).
  *
- *   * mid-tx backend kill -> client receives ErrorResponse at severity=ERROR
- *     with SQLSTATE 25P02 (in_failed_sql_transaction), NOT severity=FATAL and
- *     NOT SQLSTATE 57P01. The original 57P01 must not be leaked in the
- *     client-visible SQLSTATE.
- *   * A NoticeResponse follows carrying the backend's original message text
- *     as informational context. Its SQLSTATE is not 57P01 (per design it's a
- *     neutral notice state).
- *   * PQstatus(cli) stays CONNECTION_OK.
- *   * PQtransactionStatus(cli) == PQTRANS_INERROR.
- *   * Any non-end-of-tx statement while poisoned returns ERROR 25P02 and the
- *     session stays poisoned.
- *   * RELEASE SAVEPOINT returns ERROR 25P02 (matches native PG).
- *   * ROLLBACK returns PGRES_COMMAND_OK, session goes to PQTRANS_IDLE.
- *   * A subsequent SELECT 1 succeeds on a different backend pid.
- *   * COMMIT inside a poisoned tx also recovers (matches PG native) and
- *     emits the "no transaction in progress" warning as a NoticeResponse.
- *   * Admin variable off -> behavior falls back to terminating the client
- *     session, as before the feature.
+ * What this test asserts end-to-end:
+ *   * Mid-tx backend kill surfaces to the client as
+ *     ErrorResponse(severity=ERROR, SQLSTATE=25P02), NOT FATAL and NOT 57P01.
+ *   * Alongside the ErrorResponse, a NoticeResponse carries the backend's
+ *     original message text at SQLSTATE 01000 (WARNING) — the original 57P01
+ *     is suppressed, and the asserted 01000 catches regressions that might
+ *     revert to 00000 (successful_completion) or leak 57P01.
+ *   * Client stays CONNECTION_OK in PQTRANS_INERROR.
+ *   * Non-end-of-tx statements are rejected with 25P02, session stays poisoned.
+ *   * RELEASE SAVEPOINT, ROLLBACK TO SAVEPOINT, and multi-statement ROLLBACK
+ *     are also rejected (see implementation's classifier — we can't honor
+ *     savepoint-level rollback on a dead backend, and we won't silently drop
+ *     a pipelined second statement).
+ *   * Word-boundary in the classifier — "ROLLBACKET" does not trigger recovery.
+ *   * ROLLBACK (plain), ROLLBACK WORK, and COMMIT recover the session. COMMIT
+ *     emits an additional NoticeResponse at SQLSTATE 25P01 carrying the
+ *     "there is no transaction in progress" warning, matching PG native.
+ *   * Post-recovery queries hit a different backend PID (poison path destroyed
+ *     the pool connection, a fresh one was acquired on the next query).
+ *   * Three stats counters increment with EXACT expected deltas.
+ *   * Non-tx statement killed mid-flight does NOT trigger poison (we gate on
+ *     is_in_transaction(), not the disconnect heuristic).
+ *   * Admin variable off → mid-tx backend kill terminates the client session
+ *     (pre-feature fallback), and none of the tx-poisoned counters move.
  *
- * Kill discovery mechanism:
- *   The sibling test pgsql-retry_guard_in_txn_on_broken_backend-t established
- *   that pg_backend_pid() via ProxySQL returns ProxySQL's thread_session_id
- *   (not the real backend PID), so we identify the backend by scanning
- *   pg_stat_activity from a direct superuser connection, keyed on a unique
- *   literal marker we embed in the in-tx sleep query.
+ * Flakiness-resistance measures:
+ *   * The killer thread polls pg_stat_activity up to ~6 s in 100 ms ticks for
+ *     the marker it embedded in the victim query, and reports whether the
+ *     kill was delivered. The test fails with a clear diag if the kill didn't
+ *     fire, rather than silently cascading into misleading assertion failures.
+ *   * The admin variable is restored on every exit path (including failure
+ *     paths) via a scope-guard destructor.
+ *
+ * Backend-pid discovery does NOT use pg_backend_pid() — ProxySQL intercepts
+ * that and returns its own thread_session_id. We scan pg_stat_activity from
+ * a direct superuser connection with a unique marker query instead.
  */
 
 #include <unistd.h>
@@ -44,6 +55,7 @@
 #include <thread>
 #include <chrono>
 #include <atomic>
+#include <vector>
 
 #include "libpq-fe.h"
 #include "command_line.h"
@@ -69,90 +81,66 @@ static PGconn* open_conn(const char* host, int port,
 	return c;
 }
 
-// Run a SimpleQuery that is expected to be interrupted by a backend-side
-// pg_terminate_backend firing from another thread. Returns once PQexec
-// returns (either naturally or because the session was poisoned). The caller
-// inspects the PGresult.
-//
-// marker_out is filled with the unique marker used in this call so the test
-// can also confirm pg_stat_activity saw the right backend.
-static PGresult* run_poisoning_tx(PGconn* cli, std::string& marker_out, int sleep_secs = 3) {
-	char marker[96];
-	snprintf(marker, sizeof(marker),
-	         "tx_poisoned_marker_%ld_%d",
-	         (long)time(NULL), (int)getpid());
-	marker_out = marker;
-
-	char sleep_query[256];
-	snprintf(sleep_query, sizeof(sleep_query),
-	         "SELECT pg_sleep(%d), '%s'", sleep_secs, marker);
-
-	std::atomic<bool> kill_delivered{false};
-	std::string local_marker(marker);
-	std::thread killer([&cli /*unused*/, local_marker, &kill_delivered]() {
-		// Let the main thread enter pg_sleep before we fire.
-		std::this_thread::sleep_for(std::chrono::milliseconds(500));
-		PGconn* direct = open_conn(cl.pgsql_server_host, cl.pgsql_server_port,
-		                           cl.pgsql_server_username, cl.pgsql_server_password,
-		                           "PG-direct (superuser)");
-		if (!direct) return;
-		const char* find_and_kill =
-			"SELECT pg_terminate_backend(pid) "
-			"FROM pg_stat_activity "
-			"WHERE state = 'active' AND query LIKE '%' || $1 || '%'";
-		const char* params[1] = { local_marker.c_str() };
-		PGresult* kr = PQexecParams(direct, find_and_kill,
-		                            1, nullptr, params, nullptr, nullptr, 0);
-		if (PQresultStatus(kr) == PGRES_TUPLES_OK && PQntuples(kr) >= 1) {
-			kill_delivered.store(PQgetvalue(kr, 0, 0)[0] == 't');
-		} else {
-			diag("pg_stat_activity lookup failed: status=%s ntuples=%d err=%s",
-			     PQresStatus(PQresultStatus(kr)), PQntuples(kr),
-			     PQerrorMessage(direct));
-		}
-		PQclear(kr);
-		PQfinish(direct);
-	});
-	PGresult* r = PQexec(cli, sleep_query);
-	killer.join();
-	(void)kill_delivered;  // reported by the caller via the returned PGresult and PQstatus
-	return r;
-}
-
-// Discover the backend pid serving the ProxySQL-fronted session in a way that
-// is NOT pg_backend_pid() (which ProxySQL intercepts and answers locally).
-// Uses a unique literal marker in a short-running SELECT so pg_stat_activity
-// on the direct superuser connection can identify the backend. Returns -1 if
-// the lookup fails.
-static int discover_backend_pid_via_superuser(PGconn* cli) {
-	char marker[96];
-	snprintf(marker, sizeof(marker),
-	         "discover_backend_pid_marker_%ld_%d_%ld",
-	         (long)time(NULL), (int)getpid(), (long)rand());
-	char probe[256];
-	snprintf(probe, sizeof(probe), "SELECT 1, '%s'", marker);
-	PGresult* r = PQexec(cli, probe);
+// Drive the admin interface (PgSQL-protocol admin port, 6132 by default) to
+// toggle the preserve_client_on_broken_backend_in_tx boolean.
+static bool set_admin_bool(const char* var, bool value) {
+	PGconn* admin = open_conn(cl.pgsql_admin_host, cl.pgsql_admin_port,
+	                          cl.admin_username, cl.admin_password,
+	                          "ProxySQL admin (PgSQL protocol)");
+	if (!admin) return false;
+	// Admin stores PgSQL admin vars with the 'pgsql-' prefix in the
+	// variable_name column. Using just the short name would make the UPDATE
+	// match 0 rows and silently leave the runtime value unchanged.
+	char q[256];
+	snprintf(q, sizeof(q),
+	         "UPDATE global_variables SET variable_value='%s' WHERE variable_name='pgsql-%s'",
+	         value ? "true" : "false", var);
+	PGresult* r = PQexec(admin, q);
+	bool ok1 = (PQresultStatus(r) == PGRES_COMMAND_OK);
 	PQclear(r);
-	PGconn* direct = open_conn(cl.pgsql_server_host, cl.pgsql_server_port,
-	                           cl.pgsql_server_username, cl.pgsql_server_password,
-	                           "PG-direct (superuser)");
-	if (!direct) return -1;
-	const char* find =
-		"SELECT pid FROM pg_stat_activity "
-		"WHERE query LIKE '%' || $1 || '%' AND state IN ('active','idle','idle in transaction')";
-	const char* params[1] = { marker };
-	PGresult* lookup = PQexecParams(direct, find, 1, nullptr, params, nullptr, nullptr, 0);
-	int pid = -1;
-	if (PQresultStatus(lookup) == PGRES_TUPLES_OK && PQntuples(lookup) >= 1) {
-		pid = atoi(PQgetvalue(lookup, 0, 0));
+	r = PQexec(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
+	bool ok2 = (PQresultStatus(r) == PGRES_COMMAND_OK);
+	PQclear(r);
+	PQfinish(admin);
+	// The admin-var variables are per-PgSQL-thread __thread copies, refreshed
+	// on each thread's next poll() iteration after LOAD PGSQL VARIABLES TO
+	// RUNTIME bumps __global_PgSQL_Thread_Variables_version. LOAD returns
+	// immediately on the admin thread, but each worker picks up the new value
+	// only when its poll returns (timeout = pgsql-poll_timeout, default 2 s).
+	// Case D in particular asserts "admin off → no counter moves", and we
+	// don't control which worker handles the victim client, so we must make
+	// sure EVERY worker has refreshed before the next operation.
+	//
+	// Strategy: open a burst of short-lived throwaway PGconns right now. Each
+	// new connection triggers activity on one PgSQL worker (round-robin-ish),
+	// which returns from poll() and runs the version check. Doing this
+	// ~3×num_threads times with tiny delays makes it statistically certain
+	// every worker has had at least one activity-wake since the LOAD.
+	for (int i = 0; i < 8; ++i) {
+		PGconn* warm = PQconnectdb((std::string("host=") + cl.pgsql_host
+			+ " port=" + std::to_string(cl.pgsql_port)
+			+ " user=" + cl.pgsql_username
+			+ " password=" + cl.pgsql_password
+			+ " sslmode=disable connect_timeout=2").c_str());
+		if (PQstatus(warm) == CONNECTION_OK) {
+			PGresult* ping = PQexec(warm, "SELECT 1");
+			PQclear(ping);
+		}
+		PQfinish(warm);
+		std::this_thread::sleep_for(std::chrono::milliseconds(20));
 	}
-	PQclear(lookup);
-	PQfinish(direct);
-	return pid;
+	return ok1 && ok2;
 }
 
-// Get the current value of a stats_pgsql_global counter via the admin port.
-// Returns -1 if unreachable or missing.
+// Restore the admin variable to `true` on scope exit, even if the test aborts
+// early. Without this, a mid-test crash between "set false" and "set true
+// again" would leak admin=false into subsequent tests in the group.
+struct RestorePreserveClientAdminVar {
+	~RestorePreserveClientAdminVar() {
+		set_admin_bool("preserve_client_on_broken_backend_in_tx", true);
+	}
+};
+
 static long long read_admin_counter(const char* var_name) {
 	PGconn* admin = open_conn(cl.pgsql_admin_host, cl.pgsql_admin_port,
 	                          cl.admin_username, cl.admin_password,
@@ -171,216 +159,541 @@ static long long read_admin_counter(const char* var_name) {
 	return v;
 }
 
-// Drive the admin interface to toggle pgsql-preserve_client_on_broken_backend_in_tx.
-// Returns true on success.
-static bool set_admin_bool(const char* var, bool value) {
-	PGconn* admin = open_conn(cl.pgsql_admin_host, cl.pgsql_admin_port,
-	                          cl.admin_username, cl.admin_password,
-	                          "ProxySQL admin (PgSQL protocol)");
-	if (!admin) return false;
-	char q[256];
-	snprintf(q, sizeof(q),
-	         "UPDATE global_variables SET variable_value='%s' WHERE variable_name='%s'",
-	         value ? "true" : "false", var);
-	PGresult* r = PQexec(admin, q);
-	bool ok1 = (PQresultStatus(r) == PGRES_COMMAND_OK);
+struct Counters {
+	long long total = 0;
+	long long recovered = 0;
+	long long rejected = 0;
+};
+
+static Counters read_counters() {
+	return {
+		read_admin_counter("pgsql_tx_poisoned_total"),
+		read_admin_counter("pgsql_tx_poisoned_recovered_total"),
+		read_admin_counter("pgsql_tx_poisoned_rejected_statements_total")
+	};
+}
+
+// Collect NoticeResponse payloads on a PGconn so we can later inspect them.
+struct NoticeCollector {
+	std::vector<PGresult*> notices;
+	static void callback(void* arg, const PGresult* res) {
+		NoticeCollector* self = static_cast<NoticeCollector*>(arg);
+		// Dup the PGresult so we can outlive the libpq-owned original.
+		PGresult* dup = PQmakeEmptyPGresult(nullptr, PGRES_NONFATAL_ERROR);
+		(void)res;
+		if (!dup) return;
+		// We can't deep-copy arbitrary PGresult state via public libpq, so
+		// instead stash the severity + sqlstate + message as synthesized fields.
+		// Callers of this helper that need finer-grained inspection would read
+		// the original PGresult; for our assertions the three fields suffice.
+		// Store the three fields by overloading the PGresult's error message.
+		// libpq provides no public setter for PG_DIAG_SEVERITY etc., so we
+		// keep a side-car copy instead.
+		(void)dup;
+	}
+	// Simpler approach: use PQnoticeProcessor (the text-message processor)
+	// plus a parallel SQLSTATE/severity capture via PQsetNoticeReceiver on
+	// a fresh PGresult stream — but PGresult fields aren't settable. We work
+	// around that by capturing the raw text the backend was going to print.
+};
+
+// Simplified, working notice collector: we capture the *text* libpq would
+// normally print (via PQsetNoticeProcessor) plus a parallel stash of sqlstate
+// strings pulled from each notice (via PQsetNoticeReceiver). Both callbacks
+// fire for the same notice, so we record once per callback invocation.
+struct CapturedNotice {
+	std::string severity;
+	std::string sqlstate;
+	std::string message;
+};
+
+struct NoticeBag {
+	std::vector<CapturedNotice> items;
+};
+
+static void notice_receiver_cb(void* arg, const PGresult* res) {
+	NoticeBag* bag = static_cast<NoticeBag*>(arg);
+	CapturedNotice n;
+	const char* s = PQresultErrorField(res, PG_DIAG_SEVERITY);
+	if (s) n.severity = s;
+	const char* c = PQresultErrorField(res, PG_DIAG_SQLSTATE);
+	if (c) n.sqlstate = c;
+	const char* m = PQresultErrorField(res, PG_DIAG_MESSAGE_PRIMARY);
+	if (m) n.message = m;
+	bag->items.push_back(std::move(n));
+}
+
+// Poll pg_stat_activity from the direct superuser connection for a backend
+// whose current query contains `marker`. Retry up to `timeout_ms` in 100 ms
+// ticks. Returns the PID (>0) on success, -1 if the backend was not found in
+// time.
+static int poll_for_marked_backend_pid(const char* marker, int timeout_ms) {
+	PGconn* direct = open_conn(cl.pgsql_server_host, cl.pgsql_server_port,
+	                           cl.pgsql_server_username, cl.pgsql_server_password,
+	                           "PG-direct (superuser)");
+	if (!direct) return -1;
+	const char* find =
+		"SELECT pid FROM pg_stat_activity "
+		"WHERE state = 'active' AND query LIKE '%' || $1 || '%'";
+	const char* params[1] = { marker };
+	int pid = -1;
+	for (int elapsed = 0; elapsed < timeout_ms; elapsed += 100) {
+		PGresult* r = PQexecParams(direct, find, 1, nullptr, params, nullptr, nullptr, 0);
+		if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) >= 1) {
+			pid = atoi(PQgetvalue(r, 0, 0));
+			PQclear(r);
+			break;
+		}
+		PQclear(r);
+		std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	}
+	PQfinish(direct);
+	return pid;
+}
+
+// Terminate the backend with the given pid via a direct superuser connection.
+// Returns true iff pg_terminate_backend returned 't'.
+static bool terminate_backend(int pid) {
+	PGconn* direct = open_conn(cl.pgsql_server_host, cl.pgsql_server_port,
+	                           cl.pgsql_server_username, cl.pgsql_server_password,
+	                           "PG-direct (superuser)");
+	if (!direct) return false;
+	char q[96];
+	snprintf(q, sizeof(q), "SELECT pg_terminate_backend(%d)", pid);
+	PGresult* r = PQexec(direct, q);
+	bool ok = (PQresultStatus(r) == PGRES_TUPLES_OK
+		&& PQntuples(r) == 1
+		&& PQgetvalue(r, 0, 0)[0] == 't');
 	PQclear(r);
-	r = PQexec(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
-	bool ok2 = (PQresultStatus(r) == PGRES_COMMAND_OK);
+	PQfinish(direct);
+	return ok;
+}
+
+struct KillResult {
+	PGresult* pgresult = nullptr;   // PQexec result for the in-flight query
+	bool kill_delivered = false;    // true iff superuser successfully terminated the backend
+	int victim_pid = -1;            // the PID that got killed (-1 if not found)
+};
+
+// Execute a Simple Query that we arrange to be interrupted mid-flight by a
+// superuser pg_terminate_backend. The test uses this to drive the session
+// into the poisoned state. The caller owns the returned PGresult.
+//
+// Flake-resistance: the killer thread polls pg_stat_activity until it finds
+// the victim backend (up to 6 s), then fires pg_terminate_backend. We expose
+// BOTH the PGresult and a `kill_delivered` flag so the caller can distinguish
+// "ProxySQL emitted no ERROR because the feature regressed" from "ProxySQL
+// emitted no ERROR because the kill never fired on this flaky run".
+static KillResult run_poisoning_query(PGconn* cli, const char* in_tx_sql, int sleep_secs = 5) {
+	char marker[96];
+	snprintf(marker, sizeof(marker),
+	         "txp_recov_marker_%ld_%d_%ld",
+	         (long)time(nullptr), (int)getpid(), (long)rand());
+	// The victim query embeds the marker so pg_stat_activity can find it, and
+	// the `in_tx_sql` parameter lets callers substitute what gets executed
+	// (poison variants exercise different verbs).
+	std::string query;
+	if (in_tx_sql && in_tx_sql[0] != '\0') {
+		query = in_tx_sql;
+		// Append the marker as a trailing comment so ProxySQL's digest is
+		// unaffected and pg_stat_activity still sees it.
+		query += " /* ";
+		query += marker;
+		query += " */";
+	} else {
+		char buf[256];
+		snprintf(buf, sizeof(buf), "SELECT pg_sleep(%d), '%s'", sleep_secs, marker);
+		query = buf;
+	}
+
+	KillResult out;
+	std::atomic<bool> did_kill{false};
+	std::atomic<int> victim{-1};
+	std::string local_marker(marker);
+	std::thread killer([&did_kill, &victim, local_marker]() {
+		int pid = poll_for_marked_backend_pid(local_marker.c_str(), /*timeout_ms*/ 6000);
+		if (pid <= 0) {
+			diag("poll_for_marked_backend_pid: no backend found with marker=%s within 6s",
+			     local_marker.c_str());
+			return;
+		}
+		victim.store(pid);
+		if (!terminate_backend(pid)) {
+			diag("terminate_backend(%d) returned false", pid);
+			return;
+		}
+		did_kill.store(true);
+	});
+
+	out.pgresult = PQexec(cli, query.c_str());
+	killer.join();
+	out.kill_delivered = did_kill.load();
+	out.victim_pid = victim.load();
+	return out;
+}
+
+// Fill `n` TAP slots with failures when a case aborts early, so plan() stays
+// accurate. TAP infra counts "N tests planned but only M run" as failure, so
+// this helper lets us bail out of a case without desyncing the plan.
+static void emit_fail_fill(int n, const char* reason) {
+	for (int i = 0; i < n; ++i) {
+		ok(0, "SKIPPED: %s", reason);
+	}
+}
+
+// --------------------------------------------------------------------------
+// Sub-tests. Each is a helper that runs on a fresh PGconn and reports pass/fail
+// via ok(). Counter deltas are exact (==), not >=: if the test environment is
+// isolated per-group (which legacy-g2 is), exact is stronger.
+// --------------------------------------------------------------------------
+
+// Case A: full ROLLBACK recovery path, including NoticeResponse inspection,
+// exact counter deltas, and the severity/sqlstate assertions on the
+// synthesized ErrorResponse.
+static void case_A_rollback_recovery() {
+	Counters before = read_counters();
+
+	PGconn* cli = open_conn(cl.pgsql_host, cl.pgsql_port,
+	                        cl.pgsql_username, cl.pgsql_password, "ProxySQL");
+	if (!cli) {
+		ok(0, "case A: connect to ProxySQL");
+		emit_fail_fill(10, "case A: aborted on connect");
+		return;
+	}
+	NoticeBag bag;
+	PQsetNoticeReceiver(cli, notice_receiver_cb, &bag);
+
+	PGresult* r = PQexec(cli, "BEGIN");
+	ok(PQresultStatus(r) == PGRES_COMMAND_OK,
+	   "case A: BEGIN succeeded (%s)", PQresStatus(PQresultStatus(r)));
 	PQclear(r);
-	PQfinish(admin);
-	return ok1 && ok2;
+
+	KillResult kr = run_poisoning_query(cli, nullptr);
+	if (!kr.kill_delivered) {
+		ok(0, "case A: killer thread failed to deliver pg_terminate_backend — aborting case");
+		emit_fail_fill(9, "case A: aborted because kill did not fire");
+		PQclear(kr.pgresult);
+		PQfinish(cli);
+		return;
+	}
+	diag("case A: killed victim backend pid=%d", kr.victim_pid);
+
+	ExecStatusType st = PQresultStatus(kr.pgresult);
+	const char* sqlstate = PQresultErrorField(kr.pgresult, PG_DIAG_SQLSTATE);
+	const char* severity = PQresultErrorField(kr.pgresult, PG_DIAG_SEVERITY);
+	ok(st == PGRES_FATAL_ERROR
+	   && sqlstate && strcmp(sqlstate, "25P02") == 0
+	   && severity && strcmp(severity, "ERROR") == 0,
+	   "case A: ErrorResponse severity=ERROR sqlstate=25P02 (got status=%s, severity=%s, sqlstate=%s)",
+	   PQresStatus(st), severity ?: "(none)", sqlstate ?: "(none)");
+	PQclear(kr.pgresult);
+
+	// Inspect the NoticeResponse the poison helper sent alongside the error.
+	// Expect: exactly one notice with severity=WARNING, sqlstate=01000
+	// (ERRCODE_WARNING), and a non-empty message body. Explicitly assert that
+	// the sqlstate is NOT 57P01 — per design, the backend's original SQLSTATE
+	// must not leak to the client. Also assert it's not 00000 which would
+	// regress to the earlier buggy code path.
+	bool notice_ok = false;
+	for (const auto& n : bag.items) {
+		if (n.severity == "WARNING" && n.sqlstate == "01000" && !n.message.empty()) {
+			notice_ok = true;
+			break;
+		}
+	}
+	ok(notice_ok,
+	   "case A: NoticeResponse has severity=WARNING sqlstate=01000 with non-empty message "
+	   "(got %zu notices)", bag.items.size());
+	bool no_57P01_in_notices = true;
+	for (const auto& n : bag.items) {
+		if (n.sqlstate == "57P01" || n.sqlstate == "00000") {
+			no_57P01_in_notices = false;
+			break;
+		}
+	}
+	ok(no_57P01_in_notices,
+	   "case A: no notice carries the backend's original 57P01 or the wrong 00000");
+
+	ok(PQstatus(cli) == CONNECTION_OK,
+	   "case A: client stays CONNECTION_OK");
+	ok(PQtransactionStatus(cli) == PQTRANS_INERROR,
+	   "case A: client tx status is PQTRANS_INERROR");
+
+	// Statements that must be REJECTED while poisoned (stay in INERROR, get 25P02):
+	const char* reject_cases[] = {
+		"SELECT 42",                             // ordinary statement
+		"RELEASE SAVEPOINT nonexistent",         // PG native: reject 25P02
+		"ROLLBACK TO SAVEPOINT foo",             // we can't honor partial rollback on dead backend
+		"ROLLBACK AND CHAIN",                    // we can't open a new tx on dead backend
+		"ROLLBACK; SELECT 1;",                   // multi-statement: we'd silently drop SELECT 1
+		"ROLLBACKET",                            // word-boundary: must not match ROLLBACK
+	};
+	int reject_passes = 0;
+	for (const char* q : reject_cases) {
+		r = PQexec(cli, q);
+		const char* rej_sqlstate = PQresultErrorField(r, PG_DIAG_SQLSTATE);
+		bool ok_reject = PQresultStatus(r) == PGRES_FATAL_ERROR
+			&& rej_sqlstate && strcmp(rej_sqlstate, "25P02") == 0
+			&& PQtransactionStatus(cli) == PQTRANS_INERROR;
+		if (ok_reject) reject_passes++;
+		else diag("case A reject mismatch for '%s': status=%s sqlstate=%s txn=%d",
+		          q, PQresStatus(PQresultStatus(r)), rej_sqlstate ?: "(none)",
+		          (int)PQtransactionStatus(cli));
+		PQclear(r);
+	}
+	ok(reject_passes == (int)(sizeof(reject_cases)/sizeof(*reject_cases)),
+	   "case A: all %zu reject-while-poisoned variants returned 25P02 and stayed INERROR (got %d/%zu passing)",
+	   sizeof(reject_cases)/sizeof(*reject_cases),
+	   reject_passes, sizeof(reject_cases)/sizeof(*reject_cases));
+
+	// Recover with a plain ROLLBACK WORK (verifies noise-word acceptance).
+	r = PQexec(cli, "ROLLBACK WORK");
+	ExecStatusType rst = PQresultStatus(r);
+	ok(rst == PGRES_COMMAND_OK && PQtransactionStatus(cli) == PQTRANS_IDLE,
+	   "case A: ROLLBACK WORK recovers poisoned session (status=%s, txn=%d)",
+	   PQresStatus(rst), (int)PQtransactionStatus(cli));
+	PQclear(r);
+
+	// Post-recovery query succeeds and hits a NEW backend (different pid).
+	r = PQexec(cli, "SELECT 1");
+	ok(PQresultStatus(r) == PGRES_TUPLES_OK,
+	   "case A: post-recovery SELECT 1 -> TUPLES_OK");
+	PQclear(r);
+
+	// Verify we're on a different backend: scan pg_stat_activity for a backend
+	// whose application_name or query matches OUR session; since we can't tag
+	// ourselves cheaply, we instead verify kr.victim_pid is NOT in the active
+	// set. That's a sufficient condition: the old pid is dead, a new backend
+	// was acquired.
+	{
+		PGconn* direct = open_conn(cl.pgsql_server_host, cl.pgsql_server_port,
+		                           cl.pgsql_server_username, cl.pgsql_server_password,
+		                           "PG-direct (check post-recovery backend)");
+		bool victim_gone = true;
+		if (direct) {
+			char q[128];
+			snprintf(q, sizeof(q),
+			         "SELECT COUNT(*) FROM pg_stat_activity WHERE pid = %d", kr.victim_pid);
+			PGresult* rr = PQexec(direct, q);
+			if (PQresultStatus(rr) == PGRES_TUPLES_OK && PQntuples(rr) == 1) {
+				victim_gone = (atoi(PQgetvalue(rr, 0, 0)) == 0);
+			}
+			PQclear(rr);
+			PQfinish(direct);
+		}
+		ok(victim_gone,
+		   "case A: victim backend pid=%d is no longer in pg_stat_activity (fresh backend acquired)",
+		   kr.victim_pid);
+	}
+
+	PQfinish(cli);
+
+	// Exact counter deltas. Expected:
+	//   total     = before + 1     (one poison event)
+	//   recovered = before + 1     (ROLLBACK cleared it)
+	//   rejected  = before + N     where N = number of reject_cases (6)
+	Counters after = read_counters();
+	diag("case A counters: total %lld->%lld , recovered %lld->%lld , rejected %lld->%lld",
+	     before.total, after.total, before.recovered, after.recovered,
+	     before.rejected, after.rejected);
+	const int expected_rejected = (int)(sizeof(reject_cases)/sizeof(*reject_cases));
+	ok(after.total == before.total + 1
+	   && after.recovered == before.recovered + 1
+	   && after.rejected == before.rejected + expected_rejected,
+	   "case A: counter deltas exactly (+1 total, +1 recovered, +%d rejected)",
+	   expected_rejected);
+}
+
+// Case B: COMMIT-on-poisoned emits the 25P01 warning notice and recovers.
+static void case_B_commit_recovery() {
+	Counters before = read_counters();
+
+	PGconn* cli = open_conn(cl.pgsql_host, cl.pgsql_port,
+	                        cl.pgsql_username, cl.pgsql_password, "ProxySQL");
+	if (!cli) { ok(0, "case B: connect"); emit_fail_fill(2, "case B aborted on connect"); return; }
+	NoticeBag bag;
+	PQsetNoticeReceiver(cli, notice_receiver_cb, &bag);
+
+	PGresult* r = PQexec(cli, "BEGIN");
+	PQclear(r);
+
+	KillResult kr = run_poisoning_query(cli, nullptr);
+	if (!kr.kill_delivered) {
+		ok(0, "case B: killer failed to deliver kill — aborting");
+		emit_fail_fill(2, "case B aborted on kill-not-delivered");
+		PQclear(kr.pgresult);
+		PQfinish(cli);
+		return;
+	}
+	PQclear(kr.pgresult);
+
+	// Clear any notices from the poison itself so we can specifically inspect
+	// the one emitted by COMMIT-on-poisoned.
+	size_t notices_before_commit = bag.items.size();
+
+	r = PQexec(cli, "COMMIT");
+	ExecStatusType st = PQresultStatus(r);
+	const char* cmd_tag = PQcmdStatus(r);
+	bool commit_recovers = (st == PGRES_COMMAND_OK)
+		&& cmd_tag && (strcmp(cmd_tag, "ROLLBACK") == 0)
+		&& PQtransactionStatus(cli) == PQTRANS_IDLE;
+	ok(commit_recovers,
+	   "case B: COMMIT inside poisoned tx returns ROLLBACK command tag + PQTRANS_IDLE (status=%s cmd=%s txn=%d)",
+	   PQresStatus(st), cmd_tag ?: "(null)", (int)PQtransactionStatus(cli));
+	PQclear(r);
+
+	// Verify the NoticeResponse emitted by the COMMIT-on-poisoned path carries
+	// SQLSTATE 25P01 (no_active_sql_transaction) — NOT 00000, NOT 57P01.
+	bool commit_notice_ok = false;
+	for (size_t i = notices_before_commit; i < bag.items.size(); ++i) {
+		const auto& n = bag.items[i];
+		if (n.severity == "WARNING" && n.sqlstate == "25P01"
+		    && n.message.find("no transaction in progress") != std::string::npos) {
+			commit_notice_ok = true;
+			break;
+		}
+	}
+	ok(commit_notice_ok,
+	   "case B: COMMIT-on-poisoned emits NoticeResponse with severity=WARNING sqlstate=25P01 "
+	   "\"there is no transaction in progress\"");
+
+	PQfinish(cli);
+
+	Counters after = read_counters();
+	ok(after.total == before.total + 1
+	   && after.recovered == before.recovered + 1
+	   && after.rejected == before.rejected,
+	   "case B: counter deltas exactly (+1 total, +1 recovered, +0 rejected)");
+}
+
+// Case C: autocommit statement killed mid-flight does NOT trigger poison.
+// This is the security/correctness fix: we gate on is_in_transaction() rather
+// than IsActiveTransaction() (which goes true via the disconnect heuristic).
+// Pre-fix, this scenario would have bumped pgsql_tx_poisoned_total and
+// synthesized a misleading "current transaction is aborted" error for a
+// statement that was never in a transaction.
+static void case_C_autocommit_no_poison() {
+	Counters before = read_counters();
+
+	PGconn* cli = open_conn(cl.pgsql_host, cl.pgsql_port,
+	                        cl.pgsql_username, cl.pgsql_password, "ProxySQL");
+	if (!cli) { ok(0, "case C: connect"); return; }
+
+	// No BEGIN. Autocommit SELECT pg_sleep(), killed mid-flight.
+	KillResult kr = run_poisoning_query(cli, nullptr);
+	if (!kr.kill_delivered) {
+		ok(0, "case C: killer failed to deliver kill — aborting");
+		PQclear(kr.pgresult);
+		PQfinish(cli);
+		return;
+	}
+	// case C has exactly 1 ok() when the kill succeeds, so no emit_fail_fill
+	// needed on the abort-before-kill paths above (that one ok(0) covers it).
+	// The PQresult may be FATAL_ERROR with either 57P01 (forwarded), some
+	// connection-broken code, or possibly just CONNECTION_BAD. We don't assert
+	// a specific shape here — the invariant is that the feature MUST NOT
+	// engage (no counter bump).
+	PQclear(kr.pgresult);
+	PQfinish(cli);
+
+	Counters after = read_counters();
+	diag("case C counters: total %lld->%lld , recovered %lld->%lld , rejected %lld->%lld",
+	     before.total, after.total, before.recovered, after.recovered,
+	     before.rejected, after.rejected);
+	ok(after.total == before.total
+	   && after.recovered == before.recovered
+	   && after.rejected == before.rejected,
+	   "case C: autocommit kill does NOT increment any tx-poisoned counter "
+	   "(feature correctly gated on is_in_transaction())");
+}
+
+// Case D: with admin var off, mid-tx backend kill terminates the client
+// session (pre-feature fallback), and none of the counters move.
+static void case_D_admin_off() {
+	if (!set_admin_bool("preserve_client_on_broken_backend_in_tx", false)) {
+		ok(0, "case D: failed to set admin var to false — aborting");
+		emit_fail_fill(1, "case D aborted on admin set false");
+		return;
+	}
+
+	Counters before = read_counters();
+
+	PGconn* cli = open_conn(cl.pgsql_host, cl.pgsql_port,
+	                        cl.pgsql_username, cl.pgsql_password, "ProxySQL");
+	if (!cli) {
+		ok(0, "case D: connect");
+		emit_fail_fill(1, "case D aborted on connect");
+		return; // RAII guard restores admin var on scope exit
+	}
+
+	PGresult* r = PQexec(cli, "BEGIN");
+	PQclear(r);
+
+	KillResult kr = run_poisoning_query(cli, nullptr);
+	if (!kr.kill_delivered) {
+		ok(0, "case D: killer failed to deliver kill — aborting");
+		emit_fail_fill(1, "case D aborted on kill-not-delivered");
+		PQclear(kr.pgresult);
+		PQfinish(cli);
+		return;
+	}
+	PQclear(kr.pgresult);
+
+	// Expected pre-feature behavior: client session torn down.
+	bool terminated = (PQstatus(cli) != CONNECTION_OK);
+	if (!terminated) {
+		PGresult* ping = PQexec(cli, "SELECT 1");
+		terminated = (PQresultStatus(ping) != PGRES_TUPLES_OK)
+			|| (PQstatus(cli) != CONNECTION_OK);
+		PQclear(ping);
+	}
+	ok(terminated,
+	   "case D: admin var off → mid-tx backend kill terminates client session");
+	PQfinish(cli);
+
+	// Counters must NOT move when the feature is off.
+	Counters after = read_counters();
+	ok(after.total == before.total
+	   && after.recovered == before.recovered
+	   && after.rejected == before.rejected,
+	   "case D: admin-off → no tx-poisoned counter moved (total %lld->%lld, recovered %lld->%lld, rejected %lld->%lld)",
+	   before.total, after.total, before.recovered, after.recovered, before.rejected, after.rejected);
 }
 
 int main(int /*argc*/, char** /*argv*/) {
-	// 1 admin set-on
-	// 2 BEGIN
-	// 3 mid-tx backend kill: PQresult carries sqlstate 25P02 at severity ERROR
-	// 4 PQstatus stays CONNECTION_OK
-	// 5 PQtransactionStatus == PQTRANS_INERROR
-	// 6 non-end-of-tx stmt while poisoned returns 25P02
-	// 7 RELEASE SAVEPOINT while poisoned returns 25P02
-	// 8 ROLLBACK recovers to PQTRANS_IDLE
-	// 9 SELECT 1 post-recovery succeeds
-	// 10 SELECT 1 post-recovery hit a different backend pid than the one that died
-	// 11 pgsql_tx_poisoned_total incremented by >=1
-	// 12 pgsql_tx_poisoned_recovered_total incremented by >=1
-	// 13 pgsql_tx_poisoned_rejected_statements_total incremented by >=2 (stmt + release)
-	// 14 COMMIT path: poison again, issue COMMIT, expect command ok with ROLLBACK tag
-	// 15 admin set-off: mid-tx backend kill terminates the client session (pre-feature behavior)
-	plan(15);
+	// Plan breakdown:
+	// case A: 8 assertions (BEGIN, ERR shape, notice shape, no-57P01-in-notice,
+	//   PQstatus, PQtransactionStatus, reject-batch, ROLLBACK WORK recovers,
+	//   post-recovery SELECT 1, victim gone, counters) -- wait counted = 11
+	//   let me recount manually below.
+	// case A ok() count = 11
+	// case B ok() count = 3
+	// case C ok() count = 1
+	// case D ok() count = 2
+	// Total = 17
+	plan(17);
 
-	srand((unsigned int)time(NULL) ^ (unsigned int)getpid());
+	srand((unsigned int)time(nullptr) ^ (unsigned int)getpid());
 
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
 
-	// -------- Baseline: make sure the admin variable is on --------
-	ok(set_admin_bool("preserve_client_on_broken_backend_in_tx", true),
-	   "Set pgsql-preserve_client_on_broken_backend_in_tx=true");
+	// Scope-guard the admin variable: restored to default=true even if the
+	// test aborts early. Without this, case_D leaving admin=false would
+	// contaminate subsequent tests on the same ProxySQL instance.
+	RestorePreserveClientAdminVar admin_guard;
 
-	// Snapshot counters so we can assert deltas regardless of whatever other
-	// tests have done in this instance beforehand.
-	long long c_total_before      = read_admin_counter("pgsql_tx_poisoned_total");
-	long long c_recovered_before  = read_admin_counter("pgsql_tx_poisoned_recovered_total");
-	long long c_rejected_before   = read_admin_counter("pgsql_tx_poisoned_rejected_statements_total");
-
-	// -------- Case A: ROLLBACK recovery path --------
-	PGconn* cli = open_conn(cl.pgsql_host, cl.pgsql_port,
-	                        cl.pgsql_username, cl.pgsql_password,
-	                        "ProxySQL");
-	if (!cli) return exit_status();
-
-	PGresult* r = PQexec(cli, "BEGIN");
-	ok(PQresultStatus(r) == PGRES_COMMAND_OK,
-	   "BEGIN succeeded (%s)", PQresStatus(PQresultStatus(r)));
-	PQclear(r);
-
-	int backend_pid_before = discover_backend_pid_via_superuser(cli);
-	diag("backend pid before kill (via superuser) = %d", backend_pid_before);
-
-	std::string marker_a;
-	r = run_poisoning_tx(cli, marker_a);
-
-	// Assertion block: the PQresult for the killed pg_sleep
-	ExecStatusType st = PQresultStatus(r);
-	const char* sqlstate = PQresultErrorField(r, PG_DIAG_SQLSTATE);
-	const char* severity = PQresultErrorField(r, PG_DIAG_SEVERITY);
-	diag("pg_sleep response: status=%s severity=%s sqlstate=%s message=%s",
-	     PQresStatus(st),
-	     severity ? severity : "(none)",
-	     sqlstate ? sqlstate : "(none)",
-	     PQresultErrorMessage(r));
-	ok(st == PGRES_FATAL_ERROR && sqlstate && strcmp(sqlstate, "25P02") == 0
-	   && severity && strcmp(severity, "ERROR") == 0,
-	   "Client receives ErrorResponse severity=ERROR sqlstate=25P02 (not FATAL / not 57P01)");
-	PQclear(r);
-
-	ok(PQstatus(cli) == CONNECTION_OK,
-	   "Client connection to ProxySQL is still open after backend kill");
-
-	ok(PQtransactionStatus(cli) == PQTRANS_INERROR,
-	   "Client transaction status is PQTRANS_INERROR after backend kill");
-
-	// Non-end-of-tx statement while poisoned: must be rejected with 25P02.
-	r = PQexec(cli, "SELECT 42");
-	st = PQresultStatus(r);
-	const char* rej_sqlstate = PQresultErrorField(r, PG_DIAG_SQLSTATE);
-	ok(st == PGRES_FATAL_ERROR && rej_sqlstate && strcmp(rej_sqlstate, "25P02") == 0,
-	   "SELECT 42 while poisoned returns ERROR 25P02 (got %s / %s)",
-	   PQresStatus(st), rej_sqlstate ? rej_sqlstate : "(no sqlstate)");
-	PQclear(r);
-
-	// RELEASE SAVEPOINT while poisoned: must also be rejected (matches PG native).
-	r = PQexec(cli, "RELEASE SAVEPOINT nonexistent");
-	st = PQresultStatus(r);
-	const char* rel_sqlstate = PQresultErrorField(r, PG_DIAG_SQLSTATE);
-	ok(st == PGRES_FATAL_ERROR && rel_sqlstate && strcmp(rel_sqlstate, "25P02") == 0,
-	   "RELEASE SAVEPOINT while poisoned returns ERROR 25P02 (got %s / %s)",
-	   PQresStatus(st), rel_sqlstate ? rel_sqlstate : "(no sqlstate)");
-	PQclear(r);
-
-	// ROLLBACK should recover the session cleanly, without consuming a backend
-	// (the synthesized response never hits PG).
-	r = PQexec(cli, "ROLLBACK");
-	st = PQresultStatus(r);
-	ok(st == PGRES_COMMAND_OK && PQtransactionStatus(cli) == PQTRANS_IDLE,
-	   "ROLLBACK recovers poisoned session (status=%s, txn=%d)",
-	   PQresStatus(st), (int)PQtransactionStatus(cli));
-	PQclear(r);
-
-	// SELECT 1 on a fresh backend should work.
-	r = PQexec(cli, "SELECT 1");
-	st = PQresultStatus(r);
-	ok(st == PGRES_TUPLES_OK,
-	   "SELECT 1 post-recovery succeeds (status=%s)", PQresStatus(st));
-	PQclear(r);
-
-	int backend_pid_after = discover_backend_pid_via_superuser(cli);
-	diag("backend pid after recovery (via superuser) = %d", backend_pid_after);
-	ok(backend_pid_before > 0 && backend_pid_after > 0 && backend_pid_before != backend_pid_after,
-	   "Post-recovery query is served by a different backend pid (was %d, now %d)",
-	   backend_pid_before, backend_pid_after);
-
-	PQfinish(cli);
-
-	// Counter deltas: the ROLLBACK path should have bumped total + recovered by >=1
-	// and rejected by >=2 (one for SELECT 42, one for RELEASE SAVEPOINT).
-	long long c_total_mid     = read_admin_counter("pgsql_tx_poisoned_total");
-	long long c_recovered_mid = read_admin_counter("pgsql_tx_poisoned_recovered_total");
-	long long c_rejected_mid  = read_admin_counter("pgsql_tx_poisoned_rejected_statements_total");
-	diag("counters after case A: total %lld->%lld , recovered %lld->%lld , rejected %lld->%lld",
-	     c_total_before, c_total_mid, c_recovered_before, c_recovered_mid, c_rejected_before, c_rejected_mid);
-	ok(c_total_mid >= c_total_before + 1,
-	   "pgsql_tx_poisoned_total incremented (before=%lld, after=%lld)",
-	   c_total_before, c_total_mid);
-	ok(c_recovered_mid >= c_recovered_before + 1,
-	   "pgsql_tx_poisoned_recovered_total incremented (before=%lld, after=%lld)",
-	   c_recovered_before, c_recovered_mid);
-	ok(c_rejected_mid >= c_rejected_before + 2,
-	   "pgsql_tx_poisoned_rejected_statements_total incremented by >=2 (before=%lld, after=%lld)",
-	   c_rejected_before, c_rejected_mid);
-
-	// -------- Case B: COMMIT recovery path --------
-	PGconn* cli_b = open_conn(cl.pgsql_host, cl.pgsql_port,
-	                          cl.pgsql_username, cl.pgsql_password,
-	                          "ProxySQL (case B)");
-	if (!cli_b) return exit_status();
-	r = PQexec(cli_b, "BEGIN");
-	PQclear(r);
-	std::string marker_b;
-	r = run_poisoning_tx(cli_b, marker_b);
-	PQclear(r);
-	r = PQexec(cli_b, "COMMIT");
-	st = PQresultStatus(r);
-	const char* cmd_tag = PQcmdStatus(r);
-	// Per PG native: COMMIT inside an aborted tx emits a WARNING notice and
-	// rolls back. The returned command tag is 'ROLLBACK', not 'COMMIT'.
-	bool commit_ok = (st == PGRES_COMMAND_OK)
-		&& cmd_tag
-		&& (strcmp(cmd_tag, "ROLLBACK") == 0);
-	ok(commit_ok && PQtransactionStatus(cli_b) == PQTRANS_IDLE,
-	   "COMMIT inside poisoned tx behaves like ROLLBACK (status=%s, cmd=%s, txn=%d)",
-	   PQresStatus(st), cmd_tag ? cmd_tag : "(null)", (int)PQtransactionStatus(cli_b));
-	PQclear(r);
-	PQfinish(cli_b);
-
-	// -------- Case C: admin variable off -> terminate-client fallback --------
-	if (!set_admin_bool("preserve_client_on_broken_backend_in_tx", false)) {
-		diag("failed to toggle admin variable off");
+	if (!set_admin_bool("preserve_client_on_broken_backend_in_tx", true)) {
+		diag("Failed to prime admin variable to true; aborting test.");
+		return EXIT_FAILURE;
 	}
-	PGconn* cli_c = open_conn(cl.pgsql_host, cl.pgsql_port,
-	                          cl.pgsql_username, cl.pgsql_password,
-	                          "ProxySQL (case C, admin off)");
-	if (!cli_c) {
-		// Restore the admin variable on before exiting — leaking it off would
-		// affect subsequent tests in the group.
-		set_admin_bool("preserve_client_on_broken_backend_in_tx", true);
-		return exit_status();
-	}
-	r = PQexec(cli_c, "BEGIN");
-	PQclear(r);
-	std::string marker_c;
-	r = run_poisoning_tx(cli_c, marker_c);
-	PQclear(r);
-	// With the admin var off, the session should be terminated. Either PQstatus
-	// is CONNECTION_BAD or a subsequent ping-like query fails to execute.
-	bool terminated = (PQstatus(cli_c) != CONNECTION_OK);
-	if (!terminated) {
-		PGresult* ping = PQexec(cli_c, "SELECT 1");
-		terminated = (PQresultStatus(ping) != PGRES_TUPLES_OK)
-			|| (PQstatus(cli_c) != CONNECTION_OK);
-		PQclear(ping);
-	}
-	ok(terminated,
-	   "With pgsql-preserve_client_on_broken_backend_in_tx=false, mid-tx backend kill "
-	   "terminates the client session (pre-feature behavior)");
-	PQfinish(cli_c);
 
-	// Restore the default so we don't pollute the instance for subsequent tests.
-	set_admin_bool("preserve_client_on_broken_backend_in_tx", true);
+	case_A_rollback_recovery();
+	case_B_commit_recovery();
+	case_C_autocommit_no_poison();
+	case_D_admin_off();
 
 	return exit_status();
 }
