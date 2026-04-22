@@ -154,9 +154,9 @@ static int discover_backend_pid_via_superuser(PGconn* cli) {
 // Get the current value of a stats_pgsql_global counter via the admin port.
 // Returns -1 if unreachable or missing.
 static long long read_admin_counter(const char* var_name) {
-	PGconn* admin = open_conn(cl.host, cl.admin_port,
+	PGconn* admin = open_conn(cl.pgsql_admin_host, cl.pgsql_admin_port,
 	                          cl.admin_username, cl.admin_password,
-	                          "ProxySQL admin");
+	                          "ProxySQL admin (PgSQL protocol)");
 	if (!admin) return -1;
 	std::string q = "SELECT Variable_Value FROM stats_pgsql_global WHERE Variable_Name = '";
 	q += var_name;
@@ -174,9 +174,9 @@ static long long read_admin_counter(const char* var_name) {
 // Drive the admin interface to toggle pgsql-preserve_client_on_broken_backend_in_tx.
 // Returns true on success.
 static bool set_admin_bool(const char* var, bool value) {
-	PGconn* admin = open_conn(cl.host, cl.admin_port,
+	PGconn* admin = open_conn(cl.pgsql_admin_host, cl.pgsql_admin_port,
 	                          cl.admin_username, cl.admin_password,
-	                          "ProxySQL admin");
+	                          "ProxySQL admin (PgSQL protocol)");
 	if (!admin) return false;
 	char q[256];
 	snprintf(q, sizeof(q),
@@ -195,21 +195,20 @@ static bool set_admin_bool(const char* var, bool value) {
 int main(int /*argc*/, char** /*argv*/) {
 	// 1 admin set-on
 	// 2 BEGIN
-	// 3 discover backend pid A (via superuser)
-	// 4 mid-tx backend kill, PQresult is FATAL-ish (25P02 propagated as ERROR)
-	// 5 PQstatus stays CONNECTION_OK
-	// 6 PQtransactionStatus == PQTRANS_INERROR
-	// 7 non-end-of-tx stmt while poisoned returns 25P02
-	// 8 RELEASE SAVEPOINT while poisoned returns 25P02
-	// 9 ROLLBACK recovers to PQTRANS_IDLE
-	// 10 SELECT 1 post-recovery succeeds
-	// 11 SELECT 1 post-recovery hit a different backend pid than A
-	// 12 pgsql_tx_poisoned_total incremented by >=1
-	// 13 pgsql_tx_poisoned_recovered_total incremented by >=1
-	// 14 pgsql_tx_poisoned_rejected_statements_total incremented by >=2 (stmt + release)
-	// 15 COMMIT path: poison again, issue COMMIT, expect command ok + warning notice
-	// 16 admin set-off: mid-tx backend kill terminates the client session (pre-feature behavior)
-	plan(16);
+	// 3 mid-tx backend kill: PQresult carries sqlstate 25P02 at severity ERROR
+	// 4 PQstatus stays CONNECTION_OK
+	// 5 PQtransactionStatus == PQTRANS_INERROR
+	// 6 non-end-of-tx stmt while poisoned returns 25P02
+	// 7 RELEASE SAVEPOINT while poisoned returns 25P02
+	// 8 ROLLBACK recovers to PQTRANS_IDLE
+	// 9 SELECT 1 post-recovery succeeds
+	// 10 SELECT 1 post-recovery hit a different backend pid than the one that died
+	// 11 pgsql_tx_poisoned_total incremented by >=1
+	// 12 pgsql_tx_poisoned_recovered_total incremented by >=1
+	// 13 pgsql_tx_poisoned_rejected_statements_total incremented by >=2 (stmt + release)
+	// 14 COMMIT path: poison again, issue COMMIT, expect command ok with ROLLBACK tag
+	// 15 admin set-off: mid-tx backend kill terminates the client session (pre-feature behavior)
+	plan(15);
 
 	srand((unsigned int)time(NULL) ^ (unsigned int)getpid());
 
