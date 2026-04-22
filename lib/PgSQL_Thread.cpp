@@ -4427,13 +4427,13 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	{	// Transactions poisoned by a mid-tx backend death. See
 		// pgsql-preserve_client_on_broken_backend_in_tx.
 		pta[0] = (char*)"pgsql_tx_poisoned_total";
-		sprintf(buf, "%llu", get_tx_poisoned_total());
+		snprintf(buf, sizeof(buf), "%llu", get_tx_poisoned_total());
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Poisoned sessions recovered via client ROLLBACK / COMMIT / ABORT.
 		pta[0] = (char*)"pgsql_tx_poisoned_recovered_total";
-		sprintf(buf, "%llu", get_tx_poisoned_recovered_total());
+		snprintf(buf, sizeof(buf), "%llu", get_tx_poisoned_recovered_total());
 		pta[1] = buf;
 		result->add_row(pta);
 	}
@@ -4441,7 +4441,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		// in the poisoned state (includes extended-query P/B/D/C/E/S while
 		// poisoned, and any non-recovery simple-query statement).
 		pta[0] = (char*)"pgsql_tx_poisoned_rejected_statements_total";
-		sprintf(buf, "%llu", get_tx_poisoned_rejected_statements_total());
+		snprintf(buf, sizeof(buf), "%llu", get_tx_poisoned_rejected_statements_total());
 		pta[1] = buf;
 		result->add_row(pta);
 	}
