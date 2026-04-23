@@ -271,7 +271,11 @@ sqlite3/sqlite3/sqlite3.o:
 	cd sqlite3/sqlite3 && patch -p0 < ../sqlite3_pass_exts.patch
 	cd sqlite3/sqlite3 && patch -p0 < ../throw.patch
 	cd sqlite3/sqlite3 && ${CC} ${MYCFLAGS} -fPIC -c -o sqlite3.o sqlite3.c -DSQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_ENABLE_JSON1 -DSQLITE_ENABLE_FTS5 -DSQLITE_DLL=1 -DSQLITE_ENABLE_MATH_FUNCTIONS
+ifeq ($(UNAME_S),Darwin)
+	cd sqlite3/sqlite3 && ${CC} -dynamiclib -install_name,@rpath/libsqlite3.so -o libsqlite3.so sqlite3.o $(LIB_SSL_PATH) $(LIB_CRYPTO_PATH)
+else
 	cd sqlite3/sqlite3 && ${CC} -shared -o libsqlite3.so sqlite3.o
+endif
 
 sqlite3/sqlite3/vec.o: sqlite3/sqlite3/sqlite3.o
 	cd sqlite3/sqlite3 && cp ../sqlite-vec-source/sqlite-vec.c . && cp ../sqlite-vec-source/sqlite-vec.h .
