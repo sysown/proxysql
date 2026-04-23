@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   checks: write
 
 concurrency:
@@ -19,6 +19,7 @@ jobs:
       ARCH: arm64
       DIST: almalinux10
       MATRIX: '(arm64,almalinux10)'
+      BRANCH: ${{ github.ref_name }}
 
     steps:
     - uses: LouisBrunner/checks-action@v2.0.0
@@ -43,13 +44,12 @@ jobs:
       run: |
         make ${{ env.DIST }}
 
-    - name: Upload package artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: proxysql-arm64-almalinux10
-        path: binaries/
-        retention-days: 90
-        if-no-files-found: error
+    - name: Upload to release
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        gh release create ${{ env.BRANCH }}-head --repo ${{ github.repository }} --title "${{ env.BRANCH }}-head" --target ${{ github.sha }} --draft --prerelease 2>/dev/null || true
+        gh release upload ${{ env.BRANCH }}-head --repo ${{ github.repository }} --clobber binaries/*.[mb] binaries/*.id-hash 2>/dev/null || true
 
     - uses: LouisBrunner/checks-action@v2.0.0
       if: always()
