@@ -458,11 +458,11 @@ PgSQL_Session::~PgSQL_Session() {
 // message.
 //
 // Response shape:
-//   * Recovery (ROLLBACK / ROLLBACK TO SAVEPOINT / ABORT / COMMIT):
+//   * Recovery (plain ROLLBACK / ABORT / COMMIT / END):
 //       CommandComplete('ROLLBACK') + ReadyForQuery('I'). For COMMIT also a
 //       preceding NoticeResponse with "there is no transaction in progress"
 //       — matches Postgres native behavior for COMMIT inside an aborted tx.
-//   * Rejection (anything else, incl. RELEASE SAVEPOINT):
+//   * Rejection (anything else, incl. ROLLBACK TO SAVEPOINT / RELEASE SAVEPOINT):
 //       ErrorResponse(25P02) + ReadyForQuery('E'), tx_poisoned stays true.
 bool PgSQL_Session::handler_poisoned_simple_query(PtrSize_t* pkt) {
 	if (pkt->size <= 5) {

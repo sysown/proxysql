@@ -78,6 +78,19 @@ static void test_add_string_range() {
 }
 
 /**
+ * @brief add() with malformed string ranges must not create a trxid 0 interval.
+ */
+static void test_add_invalid_string_range() {
+	GTID_Set gs;
+
+	ok(!gs.add(UUID_A, "abc"), "add invalid C string range: rejects non-numeric input");
+	ok(!gs.add(UUID_A, "10-abc"), "add invalid C string range: rejects malformed end");
+	ok(!gs.add(UUID_A, "10-20x"), "add invalid C string range: rejects trailing characters");
+	ok(gs.map.empty(), "add invalid C string range: no UUID entry created");
+	ok(!gs.has_gtid(UUID_A, 0), "add invalid C string range: trxid 0 was not added");
+}
+
+/**
  * @brief add() with explicit start, end parameters.
  */
 static void test_add_start_end() {
@@ -299,12 +312,13 @@ static void test_copy() {
 }
 
 int main() {
-	plan(62);
+	plan(67);
 
 	test_add_interval();				          // 8 assertions
 	test_add_trxid();                             // 2 assertions
 	test_add_cstring_range();                     // 5 assertions
 	test_add_string_range();                      // 3 assertions
+	test_add_invalid_string_range();              // 5 assertions
 	test_add_start_end();                         // 3 assertions
 	test_add_multi_uuid();                        // 3 assertions
 	test_add_consecutive_trxid();                 // 2 assertions

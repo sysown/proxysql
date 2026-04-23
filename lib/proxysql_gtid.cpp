@@ -1,3 +1,5 @@
+#include <cerrno>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -18,23 +20,61 @@ TrxId_Interval::TrxId_Interval(const trxid_t _start, const trxid_t _end) {
 TrxId_Interval::TrxId_Interval(const trxid_t trxid) : TrxId_Interval(trxid, trxid) {
 }
 
+static bool parse_trxid_component(const char*& p, trxid_t& out) {
+	if (p == nullptr || !std::isdigit(static_cast<unsigned char>(*p))) {
+		return false;
+	}
+
+	errno = 0;
+	char* end = nullptr;
+	long long parsed = strtoll(p, &end, 10);
+	if (end == p || errno == ERANGE || parsed < 0) {
+		return false;
+	}
+
+	out = static_cast<trxid_t>(parsed);
+	p = end;
+	return true;
+}
+
+bool TrxId_Interval::parse(const char* s, TrxId_Interval* out) {
+	if (s == nullptr || out == nullptr) {
+		return false;
+	}
+
+	const char* p = s;
+	trxid_t _start = 0;
+	trxid_t _end = 0;
+
+	if (!parse_trxid_component(p, _start)) {
+		return false;
+	}
+
+	_end = _start;
+	if (*p == '-') {
+		p++;
+		if (!parse_trxid_component(p, _end)) {
+			return false;
+		}
+	}
+
+	if (*p != '\0') {
+		return false;
+	}
+
+	*out = TrxId_Interval(_start, _end);
+	return true;
+}
+
 // Initializes a trxid interval from a C string buffer, in [trxid]{-[trxid]} format.
 TrxId_Interval::TrxId_Interval(const char *s) {
 	start = 0;
 	end = 0;
 
-	if (s == nullptr) {
-		return;
-	}
-
-	trxid_t _start = 0, _end = 0;
-
-	if (sscanf(s, "%ld-%ld", &_start, &_end) == 2) {
-		start = _start;
-		end = _end;
-	} else if (sscanf(s, "%ld", &_start) == 1) {
-		start = _start;
-		end = _start;
+	TrxId_Interval iv(trxid_t(0));
+	if (parse(s, &iv)) {
+		start = iv.start;
+		end = iv.end;
 	}
 
 	if (start > end) {
@@ -208,7 +248,11 @@ bool GTID_Set::add(const std::string& uuid, const trxid_t& start, const trxid_t&
 
 // Adds a new trxid range for a given UUID, as a C string buffer. Returns true if the set was modified, false otherwise.
 bool GTID_Set::add(const std::string& uuid, const char *s) {
-	return add(uuid, TrxId_Interval(s));
+	TrxId_Interval iv(trxid_t(0));
+	if (!TrxId_Interval::parse(s, &iv)) {
+		return false;
+	}
+	return add(uuid, iv);
 }
 
 // Adds a new trxid range for a given UUID, as a string. Returns true if the set was modified, false otherwise.
