@@ -1,0 +1,62 @@
+name: CI-package-arm64-fedora42
+run-name: '${{ github.ref_name }} ${{ github.workflow }} ${{ github.sha }}'
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    env:
+      ARCH: arm64
+      DIST: fedora42
+      MATRIX: '(arm64,fedora42)'
+
+    steps:
+    - uses: LouisBrunner/checks-action@v2.0.0
+      id: checks
+      if: always()
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        name: '${{ github.workflow }} / ${{ github.job }} ${{ env.MATRIX }}'
+        repo: ${{ github.repository }}
+        sha: ${{ github.sha }}
+        status: 'in_progress'
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ github.sha }}
+        fetch-depth: 0
+
+    - name: Build package
+      run: |
+        make ${{ env.DIST }}
+
+    - name: Upload package artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: proxysql-arm64-fedora42
+        path: binaries/
+        retention-days: 90
+        if-no-files-found: error
+
+    - uses: LouisBrunner/checks-action@v2.0.0
+      if: always()
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        check_id: ${{ steps.checks.outputs.check_id }}
+        repo: ${{ github.repository }}
+        sha: ${{ github.sha }}
+        conclusion: ${{ job.status }}
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
