@@ -36,7 +36,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        brew install automake bzip2 cmake gpatch gnutls openssl@3 icu4c pkg-config libiconv zlib
+        brew install automake bzip2 cmake gpatch gnutls libtool openssl@3 icu4c pkg-config libiconv zlib
 
     - name: Checkout repository
       uses: actions/checkout@v4
