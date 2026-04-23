@@ -108,12 +108,26 @@ export GCOV_PREFIX_STRIP=\${SAVED_GCOV_PREFIX_STRIP}
 exec /usr/bin/proxysql --idle-threads --clickhouse-server --sqlite3-server -f -c /etc/proxysql.cnf -D /var/lib/proxysql 2>&1 | tee /var/lib/proxysql/proxysql.log
 "
 
+# Simulator-backed TAP groups (aurora-sim, galera-sim, ...) export a
+# CLUSTER_SIM_HOST_FILE pointing at a plain "hostname ip" list. Inject each
+# entry as --add-host so ProxySQL's container /etc/hosts resolves the simulated
+# cluster aliases without bind-mounting /etc/hosts (bind-mount silently drops
+# --add-host; restart-in-hook is fragile because ProxySQL is PID 1).
+ADD_HOST_ARGS=()
+if [ -n "${CLUSTER_SIM_HOST_FILE:-}" ] && [ -f "${CLUSTER_SIM_HOST_FILE}" ]; then
+    while read -r host ip; do
+        [[ -z "${host}" || "${host}" =~ ^# ]] && continue
+        ADD_HOST_ARGS+=(--add-host="${host}:${ip}")
+    done < "${CLUSTER_SIM_HOST_FILE}"
+fi
+
 echo ">>> Starting ProxySQL container: ${PROXY_CONTAINER} (cluster nodes: ${NUM_NODES})"
 docker run -d \
     --name "${PROXY_CONTAINER}" \
     --hostname "proxysql" \
     --network "${NETWORK_NAME}" \
     --network-alias "proxysql" \
+    "${ADD_HOST_ARGS[@]}" \
     -v "${WORKSPACE}/src/proxysql:/usr/bin/proxysql" \
     -v "${GENERIC_CONFIG}:/etc/proxysql.cnf" \
     -v "${PROXY_DATA_DIR}:/var/lib/proxysql" \

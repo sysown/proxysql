@@ -53,15 +53,14 @@ INFRAS=""
 if [ -n "${LST_PATH}" ]; then
     INFRAS=$(expand_infra_list "${LST_PATH}")
     echo ">>> Found infrastructure requirements for group '${TAP_GROUP}' in '${LST_PATH}'"
+elif [ -n "${INFRA_TYPE}" ]; then
+    echo ">>> No infras.lst found. Using fallback INFRA_TYPE: ${INFRA_TYPE}"
+    INFRAS="${INFRA_TYPE}"
 else
-    if [ -n "${INFRA_TYPE}" ]; then
-        echo ">>> No infras.lst found. Using fallback INFRA_TYPE: ${INFRA_TYPE}"
-        INFRAS="${INFRA_TYPE}"
-    else
-        echo "ERROR: Could not find infrastructure requirements (infras.lst) for group '${TAP_GROUP}' or '${BASE_GROUP}'."
-        echo "Please ensure test/tap/groups/${BASE_GROUP}/infras.lst exists."
-        exit 1
-    fi
+    # Simulator-backed TAP groups (e.g. aurora-sim-g1) drive ProxySQL directly
+    # through its admin port and do not require any real backend containers,
+    # so it is legitimate for them to omit both infras.lst and INFRA_TYPE.
+    echo ">>> No infras.lst or INFRA_TYPE for group '${TAP_GROUP}'; continuing with no backend infrastructure."
 fi
 
 # 2. Ensure ProxySQL Control Plane is running first
@@ -74,21 +73,33 @@ else
     echo ">>> ProxySQL is already running."
 fi
 
-# 3. Execute pre-proxysql hook (cluster setup) — BEFORE starting backends
+# 3. Execute pre-proxysql hooks — BEFORE starting backends.
 # Backends need ProxySQL (and optionally the cluster) to be fully ready
 # because their docker-proxy-post.bash configures ProxySQL.
-PRE_PROXYSQL_HOOK="${WORKSPACE}/test/tap/groups/${TAP_GROUP}/pre-proxysql.bash"
-if [ ! -f "${PRE_PROXYSQL_HOOK}" ]; then
-    PRE_PROXYSQL_HOOK="${WORKSPACE}/test/tap/groups/${BASE_GROUP}/pre-proxysql.bash"
-fi
-if [ ! -f "${PRE_PROXYSQL_HOOK}" ]; then
-    PRE_PROXYSQL_HOOK="${WORKSPACE}/test/tap/groups/default/pre-proxysql.bash"
-fi
+#
+# Dispatches both flavors: `.bash` runs host-side; `.sql` is piped into the
+# ProxySQL container over the admin port. Per-flavor fallback: TAP_GROUP ->
+# BASE_GROUP -> default (default only supplies `.bash`). Both flavors run in
+# order so a group can do host-side setup first and admin-var tweaks after.
+for EXT in bash sql; do
+    HOOK="${WORKSPACE}/test/tap/groups/${TAP_GROUP}/pre-proxysql.${EXT}"
+    if [ ! -f "${HOOK}" ]; then
+        HOOK="${WORKSPACE}/test/tap/groups/${BASE_GROUP}/pre-proxysql.${EXT}"
+    fi
+    if [ ! -f "${HOOK}" ] && [ "${EXT}" = "bash" ]; then
+        HOOK="${WORKSPACE}/test/tap/groups/default/pre-proxysql.${EXT}"
+    fi
+    [ -f "${HOOK}" ] || continue
 
-if [ -f "${PRE_PROXYSQL_HOOK}" ]; then
-    echo ">>> Executing pre-proxysql hook: ${PRE_PROXYSQL_HOOK}"
-    "${PRE_PROXYSQL_HOOK}"
-fi
+    if [ "${EXT}" = "bash" ]; then
+        echo ">>> Executing pre-proxysql hook: ${HOOK}"
+        "${HOOK}"
+    else
+        echo ">>> Applying pre-proxysql admin SQL: ${HOOK}"
+        docker exec -i "proxysql.${INFRA_ID}" \
+            mysql -uadmin -padmin -h127.0.0.1 -P6032 < "${HOOK}"
+    fi
+done
 
 # 4. Ensure Docker Compose helper is available
 COMPOSE_CMD="docker compose"
