@@ -19,6 +19,7 @@ class TrxId_Interval {
 		explicit TrxId_Interval(const trxid_t trxid);
 		explicit TrxId_Interval(const char* s);
 		explicit TrxId_Interval(const std::string& s);
+		static bool parse(const char* s, TrxId_Interval* out);
 
 		const bool contains(const TrxId_Interval& other);
 		const bool contains(trxid_t trxid);

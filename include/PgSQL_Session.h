@@ -394,8 +394,9 @@ private:
 	// admin var off, result transfer already started, or a preflight failed).
 	bool handler_minus1_PoisonTransaction(PgSQL_Data_Stream* myds);
 	// While tx_poisoned, classify a 'Q' packet and either clear the poison
-	// and synthesize a ROLLBACK response (for ROLLBACK / COMMIT / ABORT /
-	// ROLLBACK TO SAVEPOINT) or reject with ERROR 25P02 (anything else).
+	// and synthesize a ROLLBACK response (for plain whole-transaction
+	// ROLLBACK / COMMIT / ABORT / END) or reject with ERROR 25P02
+	// (anything else, including ROLLBACK TO SAVEPOINT).
 	// Returns true if the packet was handled here. Increments the
 	// pgsql_tx_poisoned_{recovered,rejected_statements}_total counters.
 	bool handler_poisoned_simple_query(PtrSize_t* pkt);
@@ -481,12 +482,12 @@ public:
 	// the client, destroy the backend pool connection, and set this flag
 	// true instead of tearing down the client session. While this is true,
 	// the query intake path short-circuits before query rules:
-	//   ROLLBACK / ROLLBACK TO SAVEPOINT / ABORT -> synthesize
+	//   plain ROLLBACK / ABORT -> synthesize
 	//     CommandComplete('ROLLBACK') + ReadyForQuery('I'), clear flag.
-	//   COMMIT -> same ROLLBACK response + NoticeResponse carrying the
+	//   plain COMMIT / END -> same ROLLBACK response + NoticeResponse carrying the
 	//     "there is no transaction in progress" warning, clear flag.
-	//   anything else (including RELEASE SAVEPOINT) -> reply ERROR 25P02
-	//     + ReadyForQuery('E'), stay poisoned.
+	//   anything else (including ROLLBACK TO SAVEPOINT and RELEASE SAVEPOINT)
+	//     -> reply ERROR 25P02 + ReadyForQuery('E'), stay poisoned.
 	bool tx_poisoned{ false };
 
 #ifdef DEBUG

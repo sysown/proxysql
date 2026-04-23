@@ -330,6 +330,7 @@ bool GTID_Server_Data::read_next_gtid() {
 	char rec_msg[80];
 	if (strncmp(data+pos,(char *)"ST=",3)==0) {
 		// we are reading the bootstrap
+		bool invalid_msg = false;
 		char *bs = (char *)malloc(l+1-3); // length + 1 (null byte) - 3 (header)
 		memcpy(bs, data+pos+3, l-3);
 		bs[l-3] = '\0';
@@ -361,13 +362,30 @@ bool GTID_Server_Data::read_next_gtid() {
 							p++;
 						}
 					}
+					*p = '\0';
 				} else { // we are reading the trxid or trxid range
-					updated = gtid_executed.add((std::string)uuid_server, subtoken) || updated;
+					TrxId_Interval iv(trxid_t(0));
+					if (!TrxId_Interval::parse(subtoken, &iv)) {
+						invalid_msg = true;
+						break;
+					}
+					updated = gtid_executed.add((std::string)uuid_server, iv) || updated;
 				}
+			}
+			if (invalid_msg || j == 0 || j%2 != 0) {
+				invalid_msg = true;
+				break;
 			}
 		}
 		pos += l+1;
 		free(bs);
+
+		if (invalid_msg) {
+			proxy_warning("GTID: invalid bootstrap message from binlog reader on port %d for server %s:%d, disconnecting\n",
+				port, address, mysql_port);
+			active = false;
+			return false;
+		}
 
 		if (updated) {
 			events_read++;
@@ -406,11 +424,25 @@ bool GTID_Server_Data::read_next_gtid() {
 					ul = a-rec_msg-3;
 					strncpy(uuid_server,rec_msg+3,ul);
 					uuid_server[ul] = 0;
-					gtid_executed.add((std::string)uuid_server, a+1);
+					{
+						TrxId_Interval iv(trxid_t(0));
+						if (!TrxId_Interval::parse(a+1, &iv)) {
+							invalid_msg = true;
+							break;
+						}
+						gtid_executed.add((std::string)uuid_server, iv);
+					}
 					events_read++;
 					break;
 				case '4': // trxid range, reuse last UUID
-					gtid_executed.add((std::string)uuid_server, rec_msg+3);
+					{
+						TrxId_Interval iv(trxid_t(0));
+						if (!TrxId_Interval::parse(rec_msg+3, &iv)) {
+							invalid_msg = true;
+							break;
+						}
+						gtid_executed.add((std::string)uuid_server, iv);
+					}
 					events_read++;
 					break;
 				default:
@@ -418,7 +450,7 @@ bool GTID_Server_Data::read_next_gtid() {
 			}
 
 			if (invalid_msg) {
-				proxy_warning("GTID: unsupported message (%s) from binlog reader on port %d for server %s:%d, disconnecting\n",
+				proxy_warning("GTID: invalid or unsupported message (%s) from binlog reader on port %d for server %s:%d, disconnecting\n",
 					rec_msg, port, address, mysql_port);
 				active = false;
 				return false;
@@ -450,4 +482,3 @@ void * GTID_syncer_run() {
 	//sleep(1000);
 	return NULL;
 }
-
