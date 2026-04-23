@@ -4,6 +4,10 @@ run-name: '${{ github.ref_name }} ${{ github.workflow }} ${{ github.sha }}'
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+  checks: write
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
   cancel-in-progress: true
@@ -38,8 +42,6 @@ jobs:
     - name: Build package
       run: |
         PROXYSQLGENAI=1 make ${{ env.DIST }}
-        echo "BIN_PKG=$(ls -1 binaries/*[mb])" >> $GITHUB_ENV
-        echo "BIN_HASH=$(ls -1 binaries/*.id-hash 2>/dev/null || true)" >> $GITHUB_ENV
 
     - name: Upload package artifact
       uses: actions/upload-artifact@v4
