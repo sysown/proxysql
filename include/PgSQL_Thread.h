@@ -243,6 +243,12 @@ public:
 	struct {
 		unsigned long long stvar[PG_st_var_END];
 		unsigned int active_transactions;
+		// tx-poisoned feature counters. Each PgSQL thread maintains its own
+		// (lock-free) and PgSQL_Threads_Handler aggregates across threads for
+		// stats_pgsql_global exposure. See preserve_client_on_broken_backend_in_tx.
+		unsigned long long tx_poisoned_total;
+		unsigned long long tx_poisoned_recovered_total;
+		unsigned long long tx_poisoned_rejected_statements_total;
 	} status_variables;
 
 	struct {
@@ -976,6 +982,7 @@ public:
 		bool have_ssl;
 		bool multiplexing;
 		//		bool stmt_multiplexing;
+		bool preserve_client_on_broken_backend_in_tx;
 		bool log_unhealthy_connections;
 		bool enforce_autocommit_on_reads;
 		bool autocommit_false_not_reusable;
@@ -1626,6 +1633,13 @@ public:
 	 *
 	 */
 	unsigned int get_active_transations();
+
+	// Aggregated tx-poisoned counters across all PgSQL threads. These back the
+	// pgsql_tx_poisoned_total / pgsql_tx_poisoned_recovered_total /
+	// pgsql_tx_poisoned_rejected_statements_total rows in stats_pgsql_global.
+	unsigned long long get_tx_poisoned_total();
+	unsigned long long get_tx_poisoned_recovered_total();
+	unsigned long long get_tx_poisoned_rejected_statements_total();
 
 #ifdef IDLE_THREADS
 	/**
