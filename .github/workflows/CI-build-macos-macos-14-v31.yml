@@ -19,7 +19,6 @@ jobs:
       ARCH: arm64
       MATRIX: '(macos-arm64-v31)'
       BRANCH: ${{ github.ref_name }}
-      PATH: "/opt/homebrew/bin:${{ github.path }}"
       PKG_CONFIG_PATH: "/opt/homebrew/opt/openssl@3/lib/pkgconfig"
       OPENSSL_ROOT_DIR: "/opt/homebrew/opt/openssl@3"
 
@@ -37,7 +36,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        brew install automake bzip2 cmake make git gpatch gnutls openssl@3 icu4c pkg-config libiconv zlib
+        brew install automake bzip2 cmake gpatch gnutls openssl@3 icu4c pkg-config libiconv zlib
 
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -48,6 +47,7 @@ jobs:
 
     - name: Build ProxySQL
       run: |
+        export PATH="/opt/homebrew/bin:$PATH"
         PROXYSQL31=1 make -j$(sysctl -n hw.ncpu)
 
     - name: Package binary
