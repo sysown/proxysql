@@ -88,6 +88,69 @@ static const std::set<std::string> pgsql_other_variables = {
 
 #include "proxysql_find_charset.h"
 
+// --- tx-poisoned helpers ---------------------------------------------------
+// Local helpers shared by the tx_poisoned feature's four wire-synthesis sites
+// (poison helper + simple-query reject branch + simple-query malformed branch
+// + extended-query Sync branch). The feature synthesizes a small fixed palette
+// of PostgreSQL protocol messages; these helpers centralize the palette so a
+// change to (for example) the SQLSTATE of the informational NoticeResponse
+// lands in exactly one place.
+
+// Upper bound on how much of the backend's original error text we re-embed in
+// the NoticeResponse we send to the client. A compromised/rogue backend could
+// send a multi-megabyte error message and cause an unbounded reallocation in
+// the PG_pkt buffer. 4 KB is well above the size of every real-world Postgres
+// error text and keeps us protocol-compliant.
+static constexpr unsigned int kTxPoisonedNoticeMaxLen = 4096;
+
+// Strip NUL bytes and clamp length; return a std::string safe to embed.
+// Postgres protocol serializes NoticeResponse fields as null-terminated strings
+// (see PG_pkt::put_string -> strlen), so any embedded NUL in the backend
+// message would silently truncate the NoticeResponse payload. Replace with '?'
+// and cap to keep the wire format predictable.
+static std::string sanitize_backend_err_msg(const std::string& src) {
+	std::string out;
+	const size_t cap = std::min<size_t>(src.size(), kTxPoisonedNoticeMaxLen);
+	out.reserve(cap);
+	for (size_t i = 0; i < cap; ++i) {
+		char c = src[i];
+		out.push_back(c == '\0' ? '?' : c);
+	}
+	if (src.size() > kTxPoisonedNoticeMaxLen) {
+		out.append("...[truncated]");
+	}
+	return out;
+}
+
+// Append an ErrorResponse('E') at severity=ERROR with SQLSTATE 25P02
+// (ERRCODE_IN_FAILED_SQL_TRANSACTION). Caller owns the PG_pkt and is
+// responsible for the surrounding set_multi_pkt_mode / ReadyForQuery framing.
+static void write_tx_poisoned_error(PG_pkt& pgpkt, const char* msg_override = nullptr) {
+	const char* msg = msg_override ? msg_override
+		: "current transaction is aborted, commands ignored until end of transaction block";
+	pgpkt.write_generic('E', "cscscscsc",
+		'S', "ERROR", 'V', "ERROR",
+		'C', PgSQL_Error_Helper::get_error_code(PGSQL_ERROR_CODES::ERRCODE_IN_FAILED_SQL_TRANSACTION),
+		'M', msg,
+		0);
+}
+
+// Append a NoticeResponse('N') at severity=WARNING. Two concrete SQLSTATEs
+// are used by this feature: ERRCODE_WARNING (01000, generic warning, for the
+// relayed backend-error-context notice) and ERRCODE_NO_ACTIVE_SQL_TRANSACTION
+// (25P01, for the "there is no transaction in progress" notice emitted when
+// a client issues COMMIT against a poisoned session). SQLSTATE 00000 (which
+// an earlier revision used) is semantically wrong for a WARNING-class notice.
+static void write_tx_poisoned_warning_notice(PG_pkt& pgpkt, PGSQL_ERROR_CODES code, const char* msg) {
+	pgpkt.write_generic('N', "cscscscsc",
+		'S', "WARNING", 'V', "WARNING",
+		'C', PgSQL_Error_Helper::get_error_code(code),
+		'M', msg,
+		0);
+}
+
+// ---------------------------------------------------------------------------
+
 extern PgSQL_Authentication* GloPgAuth;
 extern MySQL_LDAP_Authentication* GloMyLdapAuth;
 extern ProxySQL_Admin* GloAdmin;
@@ -318,6 +381,9 @@ void PgSQL_Session::reset() {
 		transaction_state_manager->reset_state();
 	}
 	extended_query_phase = EXTQ_PHASE_IDLE;
+	// Clear any poisoned-transaction state — if the session is being reset we're
+	// past the scope of the poison.
+	tx_poisoned = false;
 #ifdef PROXYSQLFFTO
 	ffto_bypassed = false;
 	if (m_ffto) {
@@ -382,6 +448,164 @@ PgSQL_Session::~PgSQL_Session() {
 	}
 	if (transaction_state_manager)
 		delete transaction_state_manager;
+}
+
+// Called from handler_special_queries when tx_poisoned == true. Classifies the
+// incoming simple-query packet and either recovers the session (ROLLBACK /
+// COMMIT / ABORT family) or rejects with ERROR 25P02 (anything else, including
+// RELEASE SAVEPOINT per Postgres native behavior). Returns true in all cases
+// — the caller drops the packet and loops back to wait for the next client
+// message.
+//
+// Response shape:
+//   * Recovery (ROLLBACK / ROLLBACK TO SAVEPOINT / ABORT / COMMIT):
+//       CommandComplete('ROLLBACK') + ReadyForQuery('I'). For COMMIT also a
+//       preceding NoticeResponse with "there is no transaction in progress"
+//       — matches Postgres native behavior for COMMIT inside an aborted tx.
+//   * Rejection (anything else, incl. RELEASE SAVEPOINT):
+//       ErrorResponse(25P02) + ReadyForQuery('E'), tx_poisoned stays true.
+bool PgSQL_Session::handler_poisoned_simple_query(PtrSize_t* pkt) {
+	if (pkt->size <= 5) {
+		// malformed / empty — behave like rejection, keep poisoned.
+		thread->status_variables.tx_poisoned_rejected_statements_total++;
+		PG_pkt pgpkt{};
+		pgpkt.set_multi_pkt_mode(true);
+		write_tx_poisoned_error(pgpkt);
+		pgpkt.write_ReadyForQuery('E');
+		pgpkt.set_multi_pkt_mode(false);
+		auto buff = pgpkt.detach();
+		client_myds->PSarrayOUT->add((void*)buff.first, buff.second);
+		client_myds->DSS = STATE_SLEEP;
+		l_free(pkt->size, pkt->ptr);
+		if (mirror == false) RequestEnd(NULL, false);
+		return true;
+	}
+
+	const char* sql = (char*)pkt->ptr + 5;
+	unsigned int sql_len = pkt->size - 5;
+	// The Simple Query packet body is a null-terminated string; the caller at
+	// handler___status_WAITING_CLIENT_DATA has already validated the terminator.
+	// Trim it so the classifier's "is any non-whitespace content remaining?"
+	// check does not treat the null byte itself as trailing junk and reject an
+	// otherwise-valid statement (e.g. "ROLLBACK\0" or "ROLLBACK WORK\0").
+	if (sql_len > 0 && sql[sql_len - 1] == '\0') {
+		sql_len--;
+	}
+
+	// skip whitespace and SQL comments (-- to EOL, /* ... */ non-nesting) in-place.
+	auto skip_ws_and_comments = [](const char*& p, unsigned int& n) {
+		for (;;) {
+			while (n > 0 && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) { p++; n--; }
+			if (n >= 2 && p[0] == '-' && p[1] == '-') {
+				p += 2; n -= 2;
+				while (n > 0 && *p != '\n') { p++; n--; }
+				continue;
+			}
+			if (n >= 2 && p[0] == '/' && p[1] == '*') {
+				p += 2; n -= 2;
+				while (n >= 2 && !(p[0] == '*' && p[1] == '/')) { p++; n--; }
+				if (n >= 2) { p += 2; n -= 2; } else { n = 0; }
+				continue;
+			}
+			break;
+		}
+	};
+
+	// Skip leading whitespace and comments. An ORM-prepended `/* query tag */ ROLLBACK`
+	// must recover, not be rejected.
+	skip_ws_and_comments(sql, sql_len);
+
+	enum RecoveryKind { KIND_REJECT, KIND_ROLLBACK, KIND_COMMIT };
+	RecoveryKind kind = KIND_REJECT;
+
+	// Case-insensitive prefix match, followed by a word boundary so "ROLLBACKET"
+	// doesn't get classified as ROLLBACK.
+	auto matches_kw = [](const char* p, unsigned int n, const char* kw, unsigned int klen) -> bool {
+		if (n < klen) return false;
+		if (strncasecmp(p, kw, klen) != 0) return false;
+		if (n == klen) return true;
+		char ch = p[klen];
+		return !(ch == '_' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9'));
+	};
+
+	// ABORT is a Postgres synonym for ROLLBACK. END is a Postgres synonym for COMMIT.
+	// Both ROLLBACK and COMMIT recover the session to IDLE.
+	unsigned int verb_len = 0;
+	if (matches_kw(sql, sql_len, "ROLLBACK", 8)) { kind = KIND_ROLLBACK; verb_len = 8; }
+	else if (matches_kw(sql, sql_len, "ABORT", 5)) { kind = KIND_ROLLBACK; verb_len = 5; }
+	else if (matches_kw(sql, sql_len, "COMMIT", 6)) { kind = KIND_COMMIT;   verb_len = 6; }
+	else if (matches_kw(sql, sql_len, "END", 3))    { kind = KIND_COMMIT;   verb_len = 3; }
+
+	// Having identified a recovery verb, verify the rest of the statement is a
+	// *plain* whole-tx end — no modifiers that change the semantics into
+	// something we can't honor on a dead backend, and no second statement
+	// pipelined after it. The only modifiers we accept are:
+	//   WORK | TRANSACTION   (Postgres noise-word aliases; no semantic effect)
+	// Anything else — specifically ROLLBACK TO SAVEPOINT (partial rollback,
+	// keeps tx open) and AND CHAIN (rolls back and opens a new tx) — would
+	// leave the client's transaction-status view inconsistent with what we can
+	// actually deliver once the backend is gone. Reject those with 25P02 and
+	// keep the session poisoned; the client can then issue a plain ROLLBACK.
+	//
+	// Multi-statement Simple Query (e.g. "ROLLBACK; SELECT 1;") is rejected for
+	// the same reason: we would recover, synthesize a ROLLBACK response, and
+	// silently drop the second statement. Safer to make the client split.
+	if (kind != KIND_REJECT) {
+		const char* rest = sql + verb_len;
+		unsigned int rest_len = sql_len - verb_len;
+		skip_ws_and_comments(rest, rest_len);
+		// Optionally consume a single WORK or TRANSACTION noise word.
+		if (matches_kw(rest, rest_len, "WORK", 4)) {
+			rest += 4; rest_len -= 4;
+			skip_ws_and_comments(rest, rest_len);
+		} else if (matches_kw(rest, rest_len, "TRANSACTION", 11)) {
+			rest += 11; rest_len -= 11;
+			skip_ws_and_comments(rest, rest_len);
+		}
+		// Optional trailing semicolon.
+		if (rest_len > 0 && *rest == ';') {
+			rest++; rest_len--;
+			skip_ws_and_comments(rest, rest_len);
+		}
+		// Anything remaining is either a savepoint/chain modifier or a second
+		// pipelined statement. Either way, reject.
+		if (rest_len > 0) {
+			kind = KIND_REJECT;
+		}
+	}
+	// RELEASE SAVEPOINT and anything else: KIND_REJECT. Matches Postgres: only
+	// plain ROLLBACK / COMMIT / ABORT / END end an aborted tx cleanly.
+
+	PG_pkt pgpkt{};
+	pgpkt.set_multi_pkt_mode(true);
+
+	if (kind == KIND_REJECT) {
+		thread->status_variables.tx_poisoned_rejected_statements_total++;
+		write_tx_poisoned_error(pgpkt);
+		pgpkt.write_ReadyForQuery('E');
+	} else {
+		// Recovery. Clear the poison and issue a ROLLBACK-shaped response.
+		thread->status_variables.tx_poisoned_recovered_total++;
+		if (kind == KIND_COMMIT) {
+			// Match Postgres native: COMMIT inside an aborted tx emits a WARNING
+			// notice and rolls back. SQLSTATE 25P01 = no_active_sql_transaction
+			// is the correct code (not 00000, which would be successful_completion).
+			write_tx_poisoned_warning_notice(pgpkt,
+				PGSQL_ERROR_CODES::ERRCODE_NO_ACTIVE_SQL_TRANSACTION,
+				"there is no transaction in progress");
+		}
+		pgpkt.write_CommandComplete("ROLLBACK");
+		pgpkt.write_ReadyForQuery('I');
+		tx_poisoned = false;
+	}
+
+	pgpkt.set_multi_pkt_mode(false);
+	auto buff = pgpkt.detach();
+	client_myds->PSarrayOUT->add((void*)buff.first, buff.second);
+	client_myds->DSS = STATE_SLEEP;
+	l_free(pkt->size, pkt->ptr);
+	if (mirror == false) RequestEnd(NULL, false);
+	return true;
 }
 
 bool PgSQL_Session::handler_CommitRollback(PtrSize_t* pkt) {
@@ -627,6 +851,13 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 }
 
 bool PgSQL_Session::handler_special_queries(PtrSize_t* pkt, bool* lock_hostgroup) {
+
+	// Earliest gate: if the session is poisoned (backend died mid-tx and we
+	// kept the client session alive), classify-and-respond here, BEFORE query
+	// rules, digests, routing, mirror, SQLi detection, etc.
+	if (tx_poisoned) {
+		return handler_poisoned_simple_query(pkt);
+	}
 
 	if ((pkt->size >= 7 + 5) && (strncasecmp("LISTEN ", (const char*)pkt->ptr + 5, 7) == 0)) {
 		client_myds->DSS = STATE_QUERY_SENT_NET;
@@ -2059,6 +2290,43 @@ __implicit_sync:
 						}
 					} else {
 						char command = c = *((unsigned char*)pkt.ptr);
+						// Poisoned-session gate for Extended Query messages.
+						// Simple Query ('Q') falls through to handler_special_queries,
+						// which dispatches to handler_poisoned_simple_query. Extended
+						// Query (P/B/D/C/E/S) is rejected here in V1: P/B/D/C/E are
+						// swallowed silently, and S emits ErrorResponse(25P02) +
+						// ReadyForQuery('E'). Client must issue a Simple-Query ROLLBACK
+						// to recover. QUIT ('X') is always honored.
+						if (tx_poisoned && command != 'Q' && command != 'X') {
+							if (command == 'P' || command == 'B' || command == 'D' ||
+							    command == 'C' || command == 'E') {
+								// Silent swallow — Parse/Bind/Describe/Close/Execute
+								// packets carry no client-visible response while
+								// poisoned. The whole logical ext-query gets
+								// accounted for once, at Sync.
+								l_free(pkt.size, pkt.ptr);
+								continue;
+							}
+							if (command == 'S') {
+								// One "rejected statement" per logical extended
+								// query (== per Sync), matching the simple-query
+								// path where a single 'Q' packet bumps the counter
+								// exactly once.
+								thread->status_variables.tx_poisoned_rejected_statements_total++;
+								PG_pkt pgpkt{};
+								pgpkt.set_multi_pkt_mode(true);
+								write_tx_poisoned_error(pgpkt,
+									"current transaction is aborted, commands ignored until end of transaction block (extended-query path; issue ROLLBACK via simple query to recover)");
+								pgpkt.write_ReadyForQuery('E');
+								pgpkt.set_multi_pkt_mode(false);
+								auto buff = pgpkt.detach();
+								client_myds->PSarrayOUT->add((void*)buff.first, buff.second);
+								client_myds->DSS = STATE_SLEEP;
+								l_free(pkt.size, pkt.ptr);
+								if (mirror == false) RequestEnd(NULL, false);
+								continue;
+							}
+						}
 						switch (command) {
 						case 'Q':
 						{
@@ -2442,10 +2710,93 @@ void PgSQL_Session::SetQueryTimeout() {
 	}
 }
 
+// Synthesize an aborted-transaction ErrorResponse + NoticeResponse +
+// ReadyForQuery('E') to the client so the application can react with ROLLBACK
+// without having to reconnect. Called only from handler_minus1_ClientLibraryError
+// when we are certain: (a) admin variable is on, (b) the session was in an
+// explicit transaction, (c) the result-set transfer has not already started to
+// the client (synthesizing 25P02 mid-stream would corrupt the protocol), and
+// (d) the client data stream is valid.
+//
+// On success: the three messages are queued on client_myds->PSarrayOUT,
+// tx_poisoned is set to true, and the pgsql_tx_poisoned_total counter is
+// incremented. Returns true. The backend connection is NOT destroyed here —
+// that stays the caller's job.
+//
+// On failure (preflight not satisfied): returns false, no side effects.
+bool PgSQL_Session::handler_minus1_PoisonTransaction(PgSQL_Data_Stream* myds) {
+	if (pgsql_thread___preserve_client_on_broken_backend_in_tx == false) return false;
+	PgSQL_Connection* myconn = myds ? myds->myconn : nullptr;
+	if (myconn == nullptr) return false;
+	// Gate on the explicit-tx tracker (BEGIN/COMMIT/ROLLBACK state), NOT on
+	// IsActiveTransaction(). The latter reports true whenever the disconnect
+	// heuristic (compute_unknown_transaction_status) has marked the connection
+	// as "transaction status unknown" — which happens for ANY failed query on a
+	// severed connection, not just ones inside an explicit transaction. Using
+	// IsActiveTransaction() here would make us synthesize a misleading
+	// "current transaction is aborted" error for plain autocommit statements
+	// whose backend died mid-query. is_in_transaction() only returns true when
+	// the client has actually issued BEGIN.
+	if (is_in_transaction() == false) return false;
+	if (myconn->query_result && myconn->query_result->is_transfer_started()) {
+		// streaming-result fallback: too late to cleanly synthesize 25P02.
+		return false;
+	}
+	if (client_myds == nullptr || client_myds->PSarrayOUT == nullptr) return false;
+
+	// Sanitize + cap the backend message before embedding into a NoticeResponse.
+	// See sanitize_backend_err_msg() comment for NUL / length rationale.
+	const std::string backend_err_msg = sanitize_backend_err_msg(myconn->get_error_message());
+
+	PG_pkt pgpkt{};
+	pgpkt.set_multi_pkt_mode(true);
+	// ErrorResponse severity=ERROR SQLSTATE=25P02. Not FATAL — libpq treats
+	// FATAL as connection-loss and drops the socket.
+	write_tx_poisoned_error(pgpkt);
+	// NoticeResponse carries the backend's original message text as context at
+	// SQLSTATE 01000 (ERRCODE_WARNING). Per design, the backend's original
+	// SQLSTATE (e.g. 57P01 terminating connection due to administrator command)
+	// is NOT propagated — the only SQLSTATE surfaced to the client is the
+	// synthesized 25P02 on the ErrorResponse above.
+	if (!backend_err_msg.empty()) {
+		write_tx_poisoned_warning_notice(pgpkt, PGSQL_ERROR_CODES::ERRCODE_WARNING, backend_err_msg.c_str());
+	}
+	// ReadyForQuery with txn_state='E' signals the client it is in an aborted
+	// transaction — libpq will report PQTRANS_INERROR and accept only
+	// ROLLBACK/COMMIT/ABORT.
+	pgpkt.write_ReadyForQuery('E');
+	pgpkt.set_multi_pkt_mode(false);
+	auto buff = pgpkt.detach();
+	client_myds->PSarrayOUT->add((void*)buff.first, buff.second);
+	client_myds->DSS = STATE_SLEEP;
+
+	tx_poisoned = true;
+	thread->status_variables.tx_poisoned_total++;
+	// Rich log context for production debugging: hostgroup, backend addr:port,
+	// backend PID, client addr, frontend user, dbname, digest text, original
+	// backend error code+message. Mirrors handler_minus1_LogErrorDuringQuery so
+	// operators can correlate poison events with the query that triggered them.
+	const char* client_addr = (client_myds && client_myds->addr.addr) ? client_myds->addr.addr : "unknown";
+	const char* fe_user = (client_myds && client_myds->myconn && client_myds->myconn->userinfo)
+		? client_myds->myconn->userinfo->username : "?";
+	const char* fe_db = (client_myds && client_myds->myconn && client_myds->myconn->userinfo)
+		? client_myds->myconn->userinfo->dbname : "?";
+	const char* digest = CurrentQuery.QueryParserArgs.digest_text ? CurrentQuery.QueryParserArgs.digest_text : "";
+	proxy_warning("Backend broken mid-transaction; poisoning client session on "
+		"(hg=%d,%s:%d,backend_pid=%d) for user=\"%s@%s\" db=\"%s\" digest=\"%s\" backend_err=\"%s\". "
+		"Client must issue ROLLBACK to recover.\n",
+		myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port,
+		myconn->get_backend_pid(), fe_user, client_addr, fe_db, digest,
+		myconn->get_error_code_with_message().c_str());
+	return true;
+}
+
 // this function used to be inline.
 // now it returns:
 // true: NEXT_IMMEDIATE(CONNECTING_SERVER) needs to be called
-// false: continue
+// false: continue (caller must additionally check tx_poisoned — if set, the
+//        session is to stay open for the client to issue ROLLBACK; otherwise
+//        the caller should terminate the session with handler_ret=-1)
 bool PgSQL_Session::handler_minus1_ClientLibraryError(PgSQL_Data_Stream* myds) {
 	PgSQL_Connection* myconn = myds->myconn;
 	bool retry_conn = false;
@@ -2468,6 +2819,14 @@ bool PgSQL_Session::handler_minus1_ClientLibraryError(PgSQL_Data_Stream* myds) {
 				}
 			}
 		}
+	}
+	// If we're in an explicit transaction and retry was refused (per the
+	// unknown_transaction_status guard), try to poison the client session
+	// instead of terminating it. On success, tx_poisoned is set and the
+	// caller will see return=false + tx_poisoned=true and keep the session
+	// open for the client to issue ROLLBACK.
+	if (retry_conn == false) {
+		(void)handler_minus1_PoisonTransaction(myds);
 	}
 	if (transaction_state_manager) {
 		transaction_state_manager->reset_state();
@@ -2529,6 +2888,17 @@ bool PgSQL_Session::handler_minus1_HandleErrorCodes(PgSQL_Data_Stream* myds, int
 				retry_conn = true;
 				proxy_warning("Retrying query.\n");
 			}
+		}
+		// The 57P01/57P02/57P03 family is how a backend signals it is about to
+		// go away (pg_terminate_backend, graceful shutdown, crash shutdown).
+		// This is the most common real-world mid-transaction backend-death
+		// scenario. Before falling through to session teardown, offer the
+		// poison path: if the client is in an explicit transaction, synthesize
+		// ERROR 25P02 + ReadyForQuery('E') and keep the session alive so the
+		// client can issue ROLLBACK. Gated internally on is_in_transaction()
+		// and the preserve_client_on_broken_backend_in_tx admin variable.
+		if (retry_conn == false) {
+			handler_minus1_PoisonTransaction(myds);
 		}
 		if (transaction_state_manager) {
 			transaction_state_manager->reset_state();
@@ -3212,6 +3582,13 @@ handler_again:
 					if (myconn->is_connection_in_reusable_state() == false) {
 						if (handler_minus1_ClientLibraryError(myds)) {
 							NEXT_IMMEDIATE(CONNECTING_SERVER);
+						} else if (tx_poisoned) {
+							// Backend died mid-transaction and preserve_client_on_broken_backend_in_tx
+							// is on: the client already received the synthesized ERROR 25P02 +
+							// ReadyForQuery('E'). Keep the session open so the client can issue
+							// ROLLBACK; wrap up this query and fall through to the end of the
+							// processing loop.
+							RequestEnd(myds, true);
 						} else {
 							handler_ret = -1;
 							return handler_ret;
@@ -3223,9 +3600,19 @@ handler_again:
 								NEXT_IMMEDIATE(CONNECTING_SERVER);
 							return handler_ret;
 						}
-						handler_minus1_GenerateErrorMessage(myds, wrong_pass);
-						RequestEnd(myds, true);
-						handler_minus1_HandleBackendConnection(myds);
+						if (tx_poisoned) {
+							// HandleErrorCodes destroyed the backend and already
+							// synthesized ERROR 25P02 + ReadyForQuery('E') onto
+							// the client OUT queue via handler_minus1_PoisonTransaction.
+							// Skip the default GenerateErrorMessage (we don't want
+							// to forward the backend's 57P01 error) and skip
+							// HandleBackendConnection (backend already destroyed).
+							RequestEnd(myds, true);
+						} else {
+							handler_minus1_GenerateErrorMessage(myds, wrong_pass);
+							RequestEnd(myds, true);
+							handler_minus1_HandleBackendConnection(myds);
+						}
 					}
 				} else {
 					switch (rc) {
