@@ -15,9 +15,11 @@ concurrency:
 jobs:
   init_release:
     runs-on: ubuntu-latest
-    concurrency:
-      group: release-init-${{ github.sha }}
-      cancel-in-progress: false
+    # No concurrency group: GitHub's "1 running + 1 pending" rule causes
+    # mass cancellations when many workflows share a group. Instead we
+    # run all init jobs in parallel and converge via a race-tolerant
+    # find-or-create loop; all workers deterministically pick the
+    # lowest-id draft matching this SHA+tag.
     outputs:
       release_id: ${{ steps.release.outputs.release_id }}
       release_name: ${{ steps.release.outputs.release_name }}
@@ -38,22 +40,36 @@ jobs:
         GIT_DESC=$(git describe --long --abbrev=7 --tags)
         TAG_NAME="${{ github.ref_name }}-head"
         RELEASE_NAME="${TAG_NAME} - ${GIT_DESC}"
-        echo "Target: $RELEASE_NAME (sha ${{ github.sha }})"
+        REPO="${{ github.repository }}"
+        SHA="${{ github.sha }}"
+        echo "Target: $RELEASE_NAME (sha $SHA)"
 
-        RELEASE_ID=$(gh api "repos/${{ github.repository }}/releases" --paginate \
-          --jq ".[] | select(.draft==true and .name==\"${RELEASE_NAME}\") | .id" | head -1)
+        # Stagger start to reduce the thundering-herd on first create
+        sleep $(( RANDOM % 10 ))
 
-        if [ -z "$RELEASE_ID" ]; then
-          echo "No matching draft; creating."
-          RELEASE_ID=$(gh api -X POST "repos/${{ github.repository }}/releases" \
+        RELEASE_ID=""
+        for attempt in 1 2 3 4 5 6; do
+          IDS=$(gh api "repos/${REPO}/releases" --paginate \
+            --jq ".[] | select(.draft==true and .target_commitish==\"${SHA}\" and .tag_name==\"${TAG_NAME}\") | .id" \
+            | sort -n)
+          if [ -n "$IDS" ]; then
+            RELEASE_ID=$(echo "$IDS" | head -1)
+            NDUPES=$(echo "$IDS" | wc -l)
+            echo "attempt ${attempt}: found ${NDUPES} draft(s); using lowest id=${RELEASE_ID}"
+            break
+          fi
+          echo "attempt ${attempt}: no matching draft; creating"
+          gh api -X POST "repos/${REPO}/releases" \
             -f tag_name="${TAG_NAME}" \
             -f name="${RELEASE_NAME}" \
-            -f target_commitish="${{ github.sha }}" \
-            -F draft=true -F prerelease=true \
-            --jq '.id')
-          echo "Created release id=${RELEASE_ID}"
-        else
-          echo "Reusing existing draft id=${RELEASE_ID}"
+            -f target_commitish="${SHA}" \
+            -F draft=true -F prerelease=true >/dev/null 2>&1 || true
+          sleep $(( (RANDOM % 4) + 2 ))
+        done
+
+        if [ -z "$RELEASE_ID" ]; then
+          echo "ERROR: could not find or create draft release after retries" >&2
+          exit 1
         fi
 
         echo "release_id=${RELEASE_ID}" >> "$GITHUB_OUTPUT"
