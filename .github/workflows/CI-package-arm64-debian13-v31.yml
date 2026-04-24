@@ -13,13 +13,62 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  init_release:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-init-${{ github.sha }}
+      cancel-in-progress: false
+    outputs:
+      release_id: ${{ steps.release.outputs.release_id }}
+      release_name: ${{ steps.release.outputs.release_name }}
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ github.sha }}
+        fetch-depth: 0
+
+    - name: Find or create draft release
+      id: release
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+        GIT_DESC=$(git describe --long --abbrev=7 --tags)
+        TAG_NAME="${{ github.ref_name }}-head"
+        RELEASE_NAME="${TAG_NAME} - ${GIT_DESC}"
+        echo "Target: $RELEASE_NAME (sha ${{ github.sha }})"
+
+        RELEASE_ID=$(gh api "repos/${{ github.repository }}/releases" --paginate \
+          --jq ".[] | select(.draft==true and .name==\"${RELEASE_NAME}\") | .id" | head -1)
+
+        if [ -z "$RELEASE_ID" ]; then
+          echo "No matching draft; creating."
+          RELEASE_ID=$(gh api -X POST "repos/${{ github.repository }}/releases" \
+            -f tag_name="${TAG_NAME}" \
+            -f name="${RELEASE_NAME}" \
+            -f target_commitish="${{ github.sha }}" \
+            -F draft=true -F prerelease=true \
+            --jq '.id')
+          echo "Created release id=${RELEASE_ID}"
+        else
+          echo "Reusing existing draft id=${RELEASE_ID}"
+        fi
+
+        echo "release_id=${RELEASE_ID}" >> "$GITHUB_OUTPUT"
+        echo "release_name=${RELEASE_NAME}" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: init_release
     runs-on: ubuntu-24.04-arm
     env:
       ARCH: arm64
       DIST: debian13
+      MAKE_TARGET: debian13
       MATRIX: '(arm64,debian13-v31)'
       BRANCH: ${{ github.ref_name }}
+      RELEASE_ID: ${{ needs.init_release.outputs.release_id }}
 
     steps:
     - uses: LouisBrunner/checks-action@v2.0.0
@@ -42,14 +91,36 @@ jobs:
 
     - name: Build package
       run: |
-        PROXYSQL31=1 make ${{ env.DIST }}
+        PROXYSQL31=1 make ${{ env.MAKE_TARGET }}
 
     - name: Upload to release
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        gh release create ${{ env.BRANCH }}-head --repo ${{ github.repository }} --title "${{ env.BRANCH }}-head" --target ${{ github.sha }} --draft --prerelease 2>/dev/null || true
-        gh release upload ${{ env.BRANCH }}-head --repo ${{ github.repository }} --clobber binaries/*.[mb] binaries/*.id-hash 2>/dev/null || true
+        set -euo pipefail
+        shopt -s nullglob
+        uploaded=0
+        for f in binaries/*[mb] binaries/*.id-hash; do
+          FNAME=$(basename "$f")
+          EXISTING=$(gh api "repos/${{ github.repository }}/releases/${RELEASE_ID}/assets" \
+            --jq ".[] | select(.name==\"${FNAME}\") | .id" | head -1)
+          if [ -n "$EXISTING" ]; then
+            echo "Replacing existing asset ${FNAME} (id=${EXISTING})"
+            gh api -X DELETE "repos/${{ github.repository }}/releases/assets/${EXISTING}"
+          fi
+          echo "Uploading ${FNAME}"
+          gh api --method POST \
+            "https://uploads.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets?name=${FNAME}" \
+            --header "Content-Type: application/octet-stream" \
+            --input "$f"
+          uploaded=$((uploaded+1))
+        done
+        if [ "$uploaded" -eq 0 ]; then
+          echo "ERROR: no package files matched binaries/*[mb] or binaries/*.id-hash" >&2
+          ls -la binaries/ || true
+          exit 1
+        fi
+        echo "Uploaded $uploaded asset(s) to release id=${RELEASE_ID}"
 
     - uses: LouisBrunner/checks-action@v2.0.0
       if: always()
