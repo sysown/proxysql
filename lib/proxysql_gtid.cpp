@@ -142,7 +142,7 @@ const bool TrxId_Interval::merge(const TrxId_Interval& other) {
 }
 
 // Compares two trxid intervals, by strict weak ordering.
-const int TrxId_Interval::cmp(const TrxId_Interval& other) {
+int TrxId_Interval::cmp(const TrxId_Interval& other) const {
 	if (start < other.start) {
 		return -1;
 	}
