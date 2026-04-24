@@ -158,15 +158,15 @@ const int TrxId_Interval::cmp(const TrxId_Interval& other) {
 	return 0;
 }
 
-const bool TrxId_Interval::operator<(const TrxId_Interval& other) {
+bool TrxId_Interval::operator<(const TrxId_Interval& other) const {
 	return cmp(other) == -1;
 }
 
-const bool TrxId_Interval::operator==(const TrxId_Interval& other) {
+bool TrxId_Interval::operator==(const TrxId_Interval& other) const {
 	return cmp(other) == 0;
 }
 
-const bool TrxId_Interval::operator!=(const TrxId_Interval& other) {
+bool TrxId_Interval::operator!=(const TrxId_Interval& other) const {
 	return cmp(other) != 0;
 }
 

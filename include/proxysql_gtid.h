@@ -28,9 +28,9 @@ class TrxId_Interval {
 		const bool merge(const TrxId_Interval& other);
 
 		const int cmp(const TrxId_Interval& other);
-		const bool operator<(const TrxId_Interval& other);
-		const bool operator==(const TrxId_Interval& other);
-		const bool operator!=(const TrxId_Interval& other);
+bool operator<(const TrxId_Interval& other) const;
+bool operator==(const TrxId_Interval& other) const;
+bool operator!=(const TrxId_Interval& other) const;
 };
 
 // Encapsulates a map of UUID -> trxid intervals.
