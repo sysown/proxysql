@@ -65,6 +65,7 @@ jobs:
     env:
       ARCH: arm64
       DIST: debian12
+      MAKE_TARGET: debian12
       MATRIX: '(arm64,debian12)'
       BRANCH: ${{ github.ref_name }}
       RELEASE_ID: ${{ needs.init_release.outputs.release_id }}
@@ -90,7 +91,7 @@ jobs:
 
     - name: Build package
       run: |
-        make ${{ env.DIST }}
+        make ${{ env.MAKE_TARGET }}
 
     - name: Upload to release
       env:

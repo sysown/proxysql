@@ -65,6 +65,7 @@ jobs:
     env:
       ARCH: amd64
       DIST: opensuse16
+      MAKE_TARGET: opensuse16
       MATRIX: '(amd64,opensuse16)'
       BRANCH: ${{ github.ref_name }}
       RELEASE_ID: ${{ needs.init_release.outputs.release_id }}
@@ -90,7 +91,7 @@ jobs:
 
     - name: Build package
       run: |
-        make ${{ env.DIST }}
+        make ${{ env.MAKE_TARGET }}
 
     - name: Upload to release
       env:

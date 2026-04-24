@@ -65,6 +65,7 @@ jobs:
     env:
       ARCH: amd64
       DIST: ubuntu22
+      MAKE_TARGET: ubuntu22
       MATRIX: '(amd64,ubuntu22-v31)'
       BRANCH: ${{ github.ref_name }}
       RELEASE_ID: ${{ needs.init_release.outputs.release_id }}
@@ -90,7 +91,7 @@ jobs:
 
     - name: Build package
       run: |
-        PROXYSQL31=1 make ${{ env.DIST }}
+        PROXYSQL31=1 make ${{ env.MAKE_TARGET }}
 
     - name: Upload to release
       env:

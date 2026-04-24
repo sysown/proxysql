@@ -65,6 +65,7 @@ jobs:
     env:
       ARCH: amd64
       DIST: fedora43
+      MAKE_TARGET: fedora43
       MATRIX: '(amd64,fedora43-genai)'
       BRANCH: ${{ github.ref_name }}
       RELEASE_ID: ${{ needs.init_release.outputs.release_id }}
@@ -90,7 +91,7 @@ jobs:
 
     - name: Build package
       run: |
-        PROXYSQLGENAI=1 make ${{ env.DIST }}
+        PROXYSQLGENAI=1 make ${{ env.MAKE_TARGET }}
 
     - name: Upload to release
       env:
