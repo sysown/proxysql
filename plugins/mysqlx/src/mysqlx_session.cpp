@@ -123,7 +123,6 @@ handler_again:
 		case WAITING_CLIENT_XMSG:    handler_waiting_client_msg(); break;
 		case CONNECTING_SERVER:      handler_connecting_server(); break;
 		case WAITING_SERVER_XMSG:    handler_waiting_server_msg(); break;
-		case X_FAST_FORWARD:         handler_fast_forward(); break;
 		case X_TLS_ACCEPT_INIT:      handler_tls_accept_init(); break;
 		case X_SESSION_RESET_WAITING: handler_session_reset_waiting(); break;
 		case X_SESSION_CLOSING:      handler_session_closing(); break;
@@ -639,9 +638,6 @@ void MysqlxSession::handler_waiting_server_msg() {
 		status_ = WAITING_CLIENT_XMSG;
 		to_process = true;
 	}
-}
-
-void MysqlxSession::handler_fast_forward() {
 }
 
 void MysqlxSession::handler_session_reset_waiting() {

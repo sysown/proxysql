@@ -105,8 +105,6 @@ SRCS := $(PLUGIN_DIR)/src/mysqlx_plugin.cpp \
 	$(PLUGIN_DIR)/src/mysqlx_config_store.cpp \
 	$(PLUGIN_DIR)/src/mysqlx_listener_reconcile.cpp \
 	$(PLUGIN_DIR)/src/mysqlx_protocol.cpp \
-	$(PLUGIN_DIR)/src/mysqlx_frontend_session.cpp \
-	$(PLUGIN_DIR)/src/mysqlx_backend_session.cpp \
 	$(PLUGIN_DIR)/src/mysqlx_data_stream.cpp \
 	$(PLUGIN_DIR)/src/mysqlx_connection.cpp \
 	$(PLUGIN_DIR)/src/mysqlx_stats.cpp \

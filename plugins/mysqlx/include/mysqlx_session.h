@@ -47,7 +47,6 @@ public:
 		PROCESSING_X_QUERY,
 		CONNECTING_SERVER,
 		WAITING_SERVER_XMSG,
-		X_FAST_FORWARD,
 		X_TLS_ACCEPT_INIT,
 		X_TLS_ACCEPT_CONT,
 		X_TLS_ACCEPT_DONE,
@@ -117,7 +116,6 @@ private:
 	void handler_auth_challenge_response();
 	void handler_waiting_client_msg();
 	void handler_waiting_server_msg();
-	void handler_fast_forward();
 	void handler_session_closing();
 	void handler_connecting_server();
 	void handler_session_reset_waiting();
