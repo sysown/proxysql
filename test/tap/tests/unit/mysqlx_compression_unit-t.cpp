@@ -651,8 +651,323 @@ static void test_compression_without_negotiation_still_5008() {
 	close(fds[1]);
 }
 
+// ---------------------------------------------------------------------------
+// Phase 3: outbound compression — wrap server messages bound for the client
+// in Mysqlx.Connection.Compression frames when negotiated.
+// ---------------------------------------------------------------------------
+
+// Decompress a single zstd payload to a fresh vector. Returns empty on error.
+static std::vector<uint8_t> decompress_zstd(const std::string& payload) {
+	std::vector<uint8_t> out;
+	out.resize(1 * 1024 * 1024);
+	size_t r = ZSTD_decompress(out.data(), out.size(),
+	                           payload.data(), payload.size());
+	if (ZSTD_isError(r)) {
+		out.clear();
+		return out;
+	}
+	out.resize(r);
+	return out;
+}
+
+static std::vector<uint8_t> decompress_lz4(const std::string& payload, size_t expected) {
+	std::vector<uint8_t> out;
+	out.resize(expected ? expected : 64 * 1024);
+	int r = LZ4_decompress_safe(payload.data(),
+	                            reinterpret_cast<char*>(out.data()),
+	                            static_cast<int>(payload.size()),
+	                            static_cast<int>(out.size()));
+	if (r < 0) {
+		out.clear();
+		return out;
+	}
+	out.resize(static_cast<size_t>(r));
+	return out;
+}
+
+// Read everything currently in the session's write buffer back as a single
+// frame (assumes the test wrote exactly one frame). Returns the body bytes.
+static bool extract_one_frame_from_buffer(const std::vector<uint8_t>& buf,
+                                          uint8_t* out_msg_type,
+                                          std::vector<uint8_t>* out_body) {
+	if (buf.size() < 5) return false;
+	uint32_t payload_size = buf[0] | (buf[1] << 8) | (buf[2] << 16) | (buf[3] << 24);
+	if (payload_size < 1 || 4 + payload_size > buf.size()) return false;
+	*out_msg_type = buf[4];
+	if (payload_size > 1) {
+		out_body->assign(buf.begin() + 5, buf.begin() + 4 + payload_size);
+	} else {
+		out_body->clear();
+	}
+	return true;
+}
+
+static void test_compress_zstd_single_message() {
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+
+	MysqlxSession sess;
+	sess.init(fds[0], nullptr);
+	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
+	sess.to_process = true;
+
+	ok(negotiate_compression(sess, fds[1], "zstd_stream"),
+	   "Phase 3 zstd: negotiated zstd_stream");
+
+	// Build a body large enough to compress (>= COMPRESSION_MIN_OUTPUT_BYTES).
+	// 200 bytes of 'A' compresses to a tiny zstd frame.
+	std::vector<uint8_t> body(200, 'A');
+	// (negotiate_compression() already drained the Ok response from the
+	// wire; the session's outbound write buffer is empty here.)
+
+	// Drive send_to_client_compressed() via the test hook. With
+	// combine_mixed_messages = false (the negotiate_compression helper
+	// doesn't set it), this should emit ONE compressed frame.
+	sess.send_to_client_compressed_for_test(
+		Mysqlx::ServerMessages_Type_NOTICE, body.data(), body.size());
+
+	const std::vector<uint8_t>& wb = sess.client_write_buffer_for_test();
+	uint8_t mt;
+	std::vector<uint8_t> frame_body;
+	bool got = extract_one_frame_from_buffer(wb, &mt, &frame_body);
+	ok(got, "Phase 3 zstd: write buffer holds one frame after send");
+	ok(got && mt == Mysqlx::ServerMessages_Type_COMPRESSION,
+	   "Phase 3 zstd: frame is a COMPRESSION message");
+
+	if (got && mt == Mysqlx::ServerMessages_Type_COMPRESSION) {
+		Mysqlx::Connection::Compression cmsg;
+		bool parsed = cmsg.ParseFromArray(frame_body.data(),
+		                                  static_cast<int>(frame_body.size()));
+		ok(parsed, "Phase 3 zstd: Compression protobuf parses");
+		ok(parsed && cmsg.has_server_messages(),
+		   "Phase 3 zstd: server_messages set on outbound Compression");
+		ok(parsed && cmsg.server_messages() == Mysqlx::ServerMessages_Type_NOTICE,
+		   "Phase 3 zstd: server_messages is NOTICE");
+		ok(parsed && cmsg.uncompressed_size() == body.size(),
+		   "Phase 3 zstd: uncompressed_size matches body");
+
+		auto decoded = decompress_zstd(cmsg.payload());
+		ok(decoded.size() == body.size() && decoded == body,
+		   "Phase 3 zstd: payload round-trips back to original body");
+	} else {
+		ok(false, "Phase 3 zstd: Compression protobuf parses (skipped)");
+		ok(false, "Phase 3 zstd: server_messages set (skipped)");
+		ok(false, "Phase 3 zstd: server_messages is NOTICE (skipped)");
+		ok(false, "Phase 3 zstd: uncompressed_size matches body (skipped)");
+		ok(false, "Phase 3 zstd: payload round-trips (skipped)");
+	}
+
+	close(fds[0]);
+	close(fds[1]);
+}
+
+static void test_compress_lz4_single_message() {
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+
+	MysqlxSession sess;
+	sess.init(fds[0], nullptr);
+	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
+	sess.to_process = true;
+
+	ok(negotiate_compression(sess, fds[1], "lz4_message"),
+	   "Phase 3 lz4: negotiated lz4_message");
+
+	// (negotiate_compression already drained the Ok response.)
+
+	std::vector<uint8_t> body(200, 'B');
+	sess.send_to_client_compressed_for_test(
+		Mysqlx::ServerMessages_Type_NOTICE, body.data(), body.size());
+
+	const std::vector<uint8_t>& wb = sess.client_write_buffer_for_test();
+	uint8_t mt;
+	std::vector<uint8_t> frame_body;
+	bool got = extract_one_frame_from_buffer(wb, &mt, &frame_body);
+	ok(got && mt == Mysqlx::ServerMessages_Type_COMPRESSION,
+	   "Phase 3 lz4: frame is a COMPRESSION message");
+
+	if (got && mt == Mysqlx::ServerMessages_Type_COMPRESSION) {
+		Mysqlx::Connection::Compression cmsg;
+		bool parsed = cmsg.ParseFromArray(frame_body.data(),
+		                                  static_cast<int>(frame_body.size()));
+		ok(parsed && cmsg.server_messages() == Mysqlx::ServerMessages_Type_NOTICE,
+		   "Phase 3 lz4: server_messages is NOTICE");
+		auto decoded = decompress_lz4(cmsg.payload(), cmsg.uncompressed_size());
+		ok(decoded.size() == body.size() && decoded == body,
+		   "Phase 3 lz4: payload round-trips back to original body");
+	} else {
+		ok(false, "Phase 3 lz4: server_messages is NOTICE (skipped)");
+		ok(false, "Phase 3 lz4: payload round-trips (skipped)");
+	}
+
+	close(fds[0]);
+	close(fds[1]);
+}
+
+static void test_compress_below_threshold_passthrough() {
+	// Payload smaller than COMPRESSION_MIN_OUTPUT_BYTES (50) must be sent
+	// uncompressed even when compression is negotiated — the wrap
+	// overhead would dwarf any savings. We assert the frame on the wire
+	// is plain (msg type matches what the caller passed, NOT
+	// COMPRESSION) and the body is identical.
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+
+	MysqlxSession sess;
+	sess.init(fds[0], nullptr);
+	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
+	sess.to_process = true;
+	negotiate_compression(sess, fds[1], "zstd_stream");
+
+	// (negotiate_compression already drained the Ok response.)
+
+	std::vector<uint8_t> body(20, 'x'); // below 50-byte threshold
+	sess.send_to_client_compressed_for_test(
+		Mysqlx::ServerMessages_Type_NOTICE, body.data(), body.size());
+
+	const std::vector<uint8_t>& wb = sess.client_write_buffer_for_test();
+	uint8_t mt = 0;
+	std::vector<uint8_t> frame_body;
+	bool got = extract_one_frame_from_buffer(wb, &mt, &frame_body);
+	ok(got && mt == Mysqlx::ServerMessages_Type_NOTICE,
+	   "Phase 3 below-threshold: frame is sent uncompressed (NOTICE, not COMPRESSION)");
+	ok(got && frame_body == body,
+	   "Phase 3 below-threshold: body is unmodified");
+
+	close(fds[0]);
+	close(fds[1]);
+}
+
+static void test_compress_combine_mixed_batches() {
+	// With combine_mixed_messages=true and max_combine_messages=3, three
+	// successive sends should buffer the first two and emit ONE
+	// Compression message containing both after the third triggers the
+	// flush-on-cap path. We assert exactly one frame on the wire and
+	// that decompressing its payload yields three concatenated framed
+	// messages.
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+
+	MysqlxSession sess;
+	sess.init(fds[0], nullptr);
+	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
+	sess.to_process = true;
+
+	// Send a CapabilitiesSet that opts into combine_mixed_messages with
+	// a tight cap so we can hit the flush deterministically.
+	std::string payload = build_compression_capset("zstd_stream",
+	                                               /*with_combine_mixed=*/true,
+	                                               /*combine_mixed_value=*/true,
+	                                               /*with_max_combine=*/true,
+	                                               /*max_combine_value=*/3);
+	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_CON_CAPABILITIES_SET,
+		reinterpret_cast<const uint8_t*>(payload.data()), payload.size());
+	sess.handler();
+	// (negotiate_compression already drained the Ok response.)
+
+	ok(sess.compression_combine_mixed_for_test() == true,
+	   "Phase 3 batch: combine_mixed_messages enabled");
+	ok(sess.compression_max_combine_for_test() == 3,
+	   "Phase 3 batch: max_combine_messages = 3");
+
+	std::vector<uint8_t> body1(80, '1');
+	std::vector<uint8_t> body2(80, '2');
+	std::vector<uint8_t> body3(80, '3');
+	sess.send_to_client_compressed_for_test(
+		Mysqlx::ServerMessages_Type_NOTICE, body1.data(), body1.size());
+	ok(sess.compression_batch_count_for_test() == 1,
+	   "Phase 3 batch: 1 frame buffered after first send");
+	sess.send_to_client_compressed_for_test(
+		Mysqlx::ServerMessages_Type_NOTICE, body2.data(), body2.size());
+	ok(sess.compression_batch_count_for_test() == 2,
+	   "Phase 3 batch: 2 frames buffered after second send");
+	// Third send should trigger flush_compression_batch() inside.
+	sess.send_to_client_compressed_for_test(
+		Mysqlx::ServerMessages_Type_NOTICE, body3.data(), body3.size());
+	ok(sess.compression_batch_count_for_test() == 0,
+	   "Phase 3 batch: batch drained after hitting cap");
+
+	const std::vector<uint8_t>& wb = sess.client_write_buffer_for_test();
+	uint8_t mt;
+	std::vector<uint8_t> frame_body;
+	bool got = extract_one_frame_from_buffer(wb, &mt, &frame_body);
+	ok(got && mt == Mysqlx::ServerMessages_Type_COMPRESSION,
+	   "Phase 3 batch: emitted one COMPRESSION frame");
+
+	if (got && mt == Mysqlx::ServerMessages_Type_COMPRESSION) {
+		Mysqlx::Connection::Compression cmsg;
+		bool parsed = cmsg.ParseFromArray(frame_body.data(),
+		                                  static_cast<int>(frame_body.size()));
+		ok(parsed && !cmsg.has_server_messages() && !cmsg.has_client_messages(),
+		   "Phase 3 batch: neither server_messages nor client_messages set "
+		   "(=multi-frame payload)");
+		auto decoded = decompress_zstd(cmsg.payload());
+		// Decoded buffer should contain three back-to-back fully-framed
+		// X messages of body1, body2, body3.
+		ok(!decoded.empty(),
+		   "Phase 3 batch: payload decompresses");
+		size_t off = 0;
+		int seen = 0;
+		bool match = true;
+		std::vector<std::vector<uint8_t>> expected = {body1, body2, body3};
+		while (off + 5 <= decoded.size() && seen < 3) {
+			uint32_t ps = decoded[off] | (decoded[off+1] << 8) |
+			              (decoded[off+2] << 16) | (decoded[off+3] << 24);
+			if (off + 4 + ps > decoded.size()) { match = false; break; }
+			if (decoded[off+4] != Mysqlx::ServerMessages_Type_NOTICE) {
+				match = false;
+				break;
+			}
+			std::vector<uint8_t> b(decoded.begin() + off + 5,
+			                       decoded.begin() + off + 4 + ps);
+			if (b != expected[seen]) { match = false; break; }
+			off += 4 + ps;
+			seen++;
+		}
+		ok(match && seen == 3,
+		   "Phase 3 batch: payload contains three framed NOTICE messages "
+		   "in order");
+	} else {
+		ok(false, "Phase 3 batch: payload neither flag set (skipped)");
+		ok(false, "Phase 3 batch: payload decompresses (skipped)");
+		ok(false, "Phase 3 batch: payload contains three framed NOTICE messages (skipped)");
+	}
+
+	close(fds[0]);
+	close(fds[1]);
+}
+
+static void test_compress_passthrough_when_disabled() {
+	// Sanity: when compression hasn't been negotiated, the helper must
+	// just enqueue verbatim — the .so MUST work fine for clients that
+	// never opt in to compression.
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+
+	MysqlxSession sess;
+	sess.init(fds[0], nullptr);
+	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
+	sess.to_process = true;
+
+	std::vector<uint8_t> body(200, 'C');
+	sess.send_to_client_compressed_for_test(
+		Mysqlx::ServerMessages_Type_NOTICE, body.data(), body.size());
+
+	const std::vector<uint8_t>& wb = sess.client_write_buffer_for_test();
+	uint8_t mt;
+	std::vector<uint8_t> frame_body;
+	bool got = extract_one_frame_from_buffer(wb, &mt, &frame_body);
+	ok(got && mt == Mysqlx::ServerMessages_Type_NOTICE,
+	   "Phase 3 disabled: frame is plain NOTICE (not COMPRESSION)");
+	ok(got && frame_body == body,
+	   "Phase 3 disabled: body unmodified when compression off");
+
+	close(fds[0]);
+	close(fds[1]);
+}
+
 int main() {
-	plan(39);
+	plan(64);
 
 	test_capabilities_advertise_compression();
 	test_capabilities_set_zstd_accepted();
@@ -665,6 +980,12 @@ int main() {
 	test_decompress_oversize_rejected();
 	test_decompress_garbage_rejected();
 	test_compression_without_negotiation_still_5008();
+
+	test_compress_zstd_single_message();
+	test_compress_lz4_single_message();
+	test_compress_below_threshold_passthrough();
+	test_compress_combine_mixed_batches();
+	test_compress_passthrough_when_disabled();
 
 	return exit_status();
 }

@@ -221,11 +221,48 @@ private:
 	int handle_compression_message();
 	void reset_compression_state();
 
+	// Phase 3: outbound compression. send_to_client_compressed() is the
+	// chokepoint that data-plane senders go through: it decides whether
+	// to wrap a body in a Mysqlx.Connection.Compression message based on
+	// the negotiated algorithm + body size threshold + combine flags.
+	// When combine_mixed_messages is in effect the body may be buffered
+	// in compress_batch_framed_ rather than emitted immediately; callers
+	// must invoke flush_compression_batch() at the end of a draining
+	// round to drain the buffer before waiting on more I/O.
+	void send_to_client_compressed(uint8_t msg_type, const uint8_t* body, size_t body_len);
+	void flush_compression_batch();
+	// Internal helpers — the single-message variant emits a Compression
+	// frame with `server_messages` set; the batched variant emits one
+	// with neither client_messages nor server_messages set, carrying a
+	// sequence of fully-framed messages in the payload.
+	bool emit_single_compressed(uint8_t msg_type, const uint8_t* body, size_t body_len);
+	bool emit_batched_compressed();
+
+	// Pending-batch state for combine_mixed_messages mode. The buffer
+	// holds zero or more fully-framed X messages (each prefixed with
+	// its 5-byte X header) waiting to be coalesced into one Compression
+	// message; pending_count is the number of messages currently in the
+	// buffer (not the byte count). Both reset to zero after each flush.
+	std::vector<uint8_t> compress_batch_framed_;
+	uint32_t compress_batch_count_;
+
 public:
 	// Test-only accessors for compression negotiation outcome.
 	MysqlxCompressionAlgo compression_algo_for_test() const { return compression_algo_; }
 	bool compression_combine_mixed_for_test() const { return compression_combine_mixed_messages_; }
 	uint32_t compression_max_combine_for_test() const { return compression_max_combine_messages_; }
+	// Test-only access to the outbound batch state (Phase 3).
+	uint32_t compression_batch_count_for_test() const { return compress_batch_count_; }
+	void flush_compression_batch_for_test() { flush_compression_batch(); }
+	// Test-only chokepoint: drive send_to_client_compressed() directly
+	// so unit tests can exercise the outbound compression path without
+	// having to wire a fake backend that emits frames over the data plane.
+	void send_to_client_compressed_for_test(uint8_t msg_type, const uint8_t* body, size_t body_len) {
+		send_to_client_compressed(msg_type, body, body_len);
+	}
+	const std::vector<uint8_t>& client_write_buffer_for_test() const {
+		return client_ds_.write_buffer_raw();
+	}
 };
 
 #endif

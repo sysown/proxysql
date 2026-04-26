@@ -31,6 +31,17 @@ constexpr size_t CHALLENGE_LENGTH = 20;
 // what the rest of the data plane is willing to handle anyway.
 constexpr size_t COMPRESSION_MAX_DECOMPRESSED_BYTES = 16 * 1024 * 1024;
 
+// Outbound Phase 3: only compress frames whose body is at least this many
+// bytes. Below this size, the per-Compression-message overhead (protobuf
+// envelope, framing header, fixed compressor block prefix) dwarfs any
+// savings, so we send the body verbatim. 50 bytes is the same cutoff the
+// upstream MySQL X plugin uses by default.
+constexpr size_t COMPRESSION_MIN_OUTPUT_BYTES = 50;
+// When max_combine_messages is unset by the client (zero), default to a
+// modest cap so we never let the outbound batch grow unboundedly while
+// waiting for more frames.
+constexpr uint32_t COMPRESSION_DEFAULT_MAX_COMBINE = 64;
+
 // Push a uint32 little-endian payload size + 1-byte msg type + body into a
 // flat buffer in the same wire layout MysqlxDataStream::enqueue_frame()
 // produces. Used to re-frame a decompressed single message before feeding
@@ -92,7 +103,8 @@ MysqlxSession::MysqlxSession()
 	, compression_combine_mixed_messages_(false)
 	, compression_max_combine_messages_(0)
 	, zstd_dctx_(nullptr)
-	, zstd_cctx_(nullptr) {
+	, zstd_cctx_(nullptr)
+	, compress_batch_count_(0) {
 }
 
 MysqlxSession::~MysqlxSession() {
@@ -114,6 +126,8 @@ void MysqlxSession::reset_compression_state() {
 		ZSTD_freeCCtx(zstd_cctx_);
 		zstd_cctx_ = nullptr;
 	}
+	compress_batch_framed_.clear();
+	compress_batch_count_ = 0;
 }
 
 void MysqlxSession::init(int fd, Mysqlx_Thread* thread_ptr) {
@@ -203,10 +217,13 @@ uint8_t MysqlxSession::extract_msg_type_from_frame(const MysqlxFrame& frame) {
 }
 
 void MysqlxSession::forward_frame_to_client(uint8_t msg_type, const MysqlxFrame& frame) {
+	// Phase 3: route data-plane server frames through the compressor.
+	// send_to_client_compressed() is a no-op pass-through when
+	// compression isn't negotiated or the body is below the threshold.
 	if (frame.size() > 5) {
-		client_ds_.enqueue_frame(msg_type, frame.data() + 5, frame.size() - 5);
+		send_to_client_compressed(msg_type, frame.data() + 5, frame.size() - 5);
 	} else {
-		client_ds_.enqueue_frame(msg_type, nullptr, 0);
+		send_to_client_compressed(msg_type, nullptr, 0);
 	}
 }
 
@@ -807,6 +824,15 @@ void MysqlxSession::handler_waiting_server_msg() {
 	}
 
 	if (got_terminal) {
+		// Phase 3: drain any pending batched-Compression frames before
+		// we write to the wire. The terminal frame is the natural end
+		// of the response, so the client expects everything we've
+		// accumulated this round to be visible by the time we go back
+		// to WAITING_CLIENT_XMSG. Mid-response (no terminal) we let the
+		// batch sit so combine_mixed_messages can actually coalesce
+		// across rows; the count cap in send_to_client_compressed()
+		// bounds how long any single batch can grow.
+		flush_compression_batch();
 		response_state_ = RESP_IDLE;
 		client_ds_.write_to_net();
 		return_backend_to_pool();
@@ -858,6 +884,9 @@ void MysqlxSession::handler_session_reset_waiting() {
 		if (msg_type == Mysqlx::ServerMessages_Type_ERROR) {
 			forward_frame_to_client(msg_type, frame);
 			server_ds().pop_frame();
+			// Phase 3: drain the compression batch before writing to
+			// the wire — same reasoning as handler_waiting_server_msg.
+			flush_compression_batch();
 			client_ds_.write_to_net();
 			return_backend_to_pool();
 			status_ = WAITING_CLIENT_XMSG;
@@ -1358,4 +1387,183 @@ int MysqlxSession::handle_compression_message() {
 		to_process = true;
 	}
 	return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: outbound compression helpers
+//
+// Decision matrix in send_to_client_compressed():
+//
+//   compression_algo_ == NONE                 → enqueue verbatim
+//   body_len < MIN_OUTPUT_BYTES               → enqueue verbatim (overhead
+//                                                wins below the threshold)
+//   combine_mixed_messages == false           → emit_single_compressed():
+//                                                wrap one body in a
+//                                                Compression message with
+//                                                server_messages set
+//   combine_mixed_messages == true            → buffer the framed body in
+//                                                compress_batch_framed_;
+//                                                flush either when the
+//                                                count cap is hit OR the
+//                                                caller invokes
+//                                                flush_compression_batch()
+//                                                at the end of a draining
+//                                                round
+//
+// On any compressor error (out of memory, ZSTD_isError, lz4 returning <=
+// 0) we fall back to enqueueing the body uncompressed — losing the
+// compression benefit beats dropping the message. The session itself
+// stays healthy.
+// ---------------------------------------------------------------------------
+
+bool MysqlxSession::emit_single_compressed(uint8_t msg_type, const uint8_t* body, size_t body_len) {
+	std::string compressed;
+	if (compression_algo_ == MYSQLX_COMPR_LZ4_MESSAGE) {
+		int bound = LZ4_compressBound(static_cast<int>(body_len));
+		if (bound <= 0) return false;
+		compressed.resize(static_cast<size_t>(bound));
+		int produced = LZ4_compress_default(
+			reinterpret_cast<const char*>(body),
+			compressed.data(),
+			static_cast<int>(body_len),
+			bound);
+		if (produced <= 0) return false;
+		compressed.resize(static_cast<size_t>(produced));
+	} else if (compression_algo_ == MYSQLX_COMPR_ZSTD_STREAM) {
+		if (!zstd_cctx_) {
+			zstd_cctx_ = ZSTD_createCCtx();
+			if (!zstd_cctx_) return false;
+		}
+		// One-shot compress is fine here: the spec lets us start a fresh
+		// zstd frame per Compression message as long as the decompressor
+		// can handle the concatenation, which the streaming decompressor
+		// on the client side does.
+		size_t bound = ZSTD_compressBound(body_len);
+		if (ZSTD_isError(bound)) return false;
+		compressed.resize(bound);
+		size_t produced = ZSTD_compressCCtx(zstd_cctx_,
+		                                   compressed.data(), compressed.size(),
+		                                   body, body_len, 3);
+		if (ZSTD_isError(produced)) return false;
+		compressed.resize(produced);
+	} else {
+		return false;
+	}
+
+	Mysqlx::Connection::Compression cmsg;
+	cmsg.set_uncompressed_size(body_len);
+	cmsg.set_server_messages(static_cast<Mysqlx::ServerMessages::Type>(msg_type));
+	cmsg.set_payload(std::move(compressed));
+	std::string serialized;
+	cmsg.SerializeToString(&serialized);
+	client_ds_.enqueue_frame(Mysqlx::ServerMessages_Type_COMPRESSION,
+		reinterpret_cast<const uint8_t*>(serialized.data()), serialized.size());
+	return true;
+}
+
+bool MysqlxSession::emit_batched_compressed() {
+	if (compress_batch_framed_.empty()) return true;
+
+	std::string compressed;
+	size_t uncompressed_size = compress_batch_framed_.size();
+	if (compression_algo_ == MYSQLX_COMPR_LZ4_MESSAGE) {
+		int bound = LZ4_compressBound(static_cast<int>(uncompressed_size));
+		if (bound <= 0) return false;
+		compressed.resize(static_cast<size_t>(bound));
+		int produced = LZ4_compress_default(
+			reinterpret_cast<const char*>(compress_batch_framed_.data()),
+			compressed.data(),
+			static_cast<int>(uncompressed_size),
+			bound);
+		if (produced <= 0) return false;
+		compressed.resize(static_cast<size_t>(produced));
+	} else if (compression_algo_ == MYSQLX_COMPR_ZSTD_STREAM) {
+		if (!zstd_cctx_) {
+			zstd_cctx_ = ZSTD_createCCtx();
+			if (!zstd_cctx_) return false;
+		}
+		size_t bound = ZSTD_compressBound(uncompressed_size);
+		if (ZSTD_isError(bound)) return false;
+		compressed.resize(bound);
+		size_t produced = ZSTD_compressCCtx(zstd_cctx_,
+		                                   compressed.data(), compressed.size(),
+		                                   compress_batch_framed_.data(), uncompressed_size,
+		                                   3);
+		if (ZSTD_isError(produced)) return false;
+		compressed.resize(produced);
+	} else {
+		return false;
+	}
+
+	// Batched mode: neither client_messages nor server_messages set;
+	// payload contains a sequence of fully-framed messages.
+	Mysqlx::Connection::Compression cmsg;
+	cmsg.set_uncompressed_size(uncompressed_size);
+	cmsg.set_payload(std::move(compressed));
+	std::string serialized;
+	cmsg.SerializeToString(&serialized);
+	client_ds_.enqueue_frame(Mysqlx::ServerMessages_Type_COMPRESSION,
+		reinterpret_cast<const uint8_t*>(serialized.data()), serialized.size());
+
+	compress_batch_framed_.clear();
+	compress_batch_count_ = 0;
+	return true;
+}
+
+void MysqlxSession::flush_compression_batch() {
+	if (compress_batch_count_ == 0) return;
+	if (emit_batched_compressed()) return;
+
+	// Compression failed — re-iterate the buffered fully-framed messages
+	// and enqueue each one verbatim, so the client sees the same sequence
+	// of frames it would have seen if compression had never been on.
+	// compress_batch_framed_ is { [4-byte size][1-byte type][payload], ... }
+	// so we walk it the same way MysqlxDataStream::try_parse_frame does.
+	size_t off = 0;
+	while (off + 5 <= compress_batch_framed_.size()) {
+		const uint8_t* hdr = compress_batch_framed_.data() + off;
+		uint32_t payload_size =
+			static_cast<uint32_t>(hdr[0]) |
+			(static_cast<uint32_t>(hdr[1]) << 8) |
+			(static_cast<uint32_t>(hdr[2]) << 16) |
+			(static_cast<uint32_t>(hdr[3]) << 24);
+		if (payload_size < 1 || off + 4 + payload_size > compress_batch_framed_.size()) break;
+		uint8_t mt = hdr[4];
+		const uint8_t* body = (payload_size > 1) ? hdr + 5 : nullptr;
+		size_t body_len = (payload_size > 1) ? payload_size - 1 : 0;
+		client_ds_.enqueue_frame(mt, body, body_len);
+		off += 4 + payload_size;
+	}
+	compress_batch_framed_.clear();
+	compress_batch_count_ = 0;
+}
+
+void MysqlxSession::send_to_client_compressed(uint8_t msg_type, const uint8_t* body, size_t body_len) {
+	// Fast path: compression disabled or body too small to benefit.
+	if (compression_algo_ == MYSQLX_COMPR_NONE ||
+	    body_len < COMPRESSION_MIN_OUTPUT_BYTES) {
+		client_ds_.enqueue_frame(msg_type, body, body_len);
+		return;
+	}
+
+	if (!compression_combine_mixed_messages_) {
+		// Single-message wrap. On compressor error, fall back to direct.
+		if (!emit_single_compressed(msg_type, body, body_len)) {
+			client_ds_.enqueue_frame(msg_type, body, body_len);
+		}
+		return;
+	}
+
+	// Batched mode: append one fully-framed message into the batch
+	// buffer. We frame here (not at the call site) so the buffer always
+	// holds a self-contained sequence the receiver can re-iterate after
+	// decompression.
+	append_x_frame(compress_batch_framed_, msg_type, body, body_len);
+	compress_batch_count_++;
+
+	uint32_t cap = compression_max_combine_messages_;
+	if (cap == 0) cap = COMPRESSION_DEFAULT_MAX_COMBINE;
+	if (compress_batch_count_ >= cap) {
+		flush_compression_batch();
+	}
 }
