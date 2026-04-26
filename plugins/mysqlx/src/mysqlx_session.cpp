@@ -57,7 +57,10 @@ MysqlxSession::MysqlxSession()
 	, start_time_(0)
 	, last_active_time_(0)
 	, response_state_(RESP_IDLE)
-	, tls_mode_(TLS_OFF) {
+	, tls_mode_(TLS_OFF)
+	, compression_algo_(MYSQLX_COMPR_NONE)
+	, compression_combine_mixed_messages_(false)
+	, compression_max_combine_messages_(0) {
 }
 
 MysqlxSession::~MysqlxSession() {
@@ -83,6 +86,9 @@ void MysqlxSession::init(int fd, Mysqlx_Thread* thread_ptr) {
 	identity_.reset();
 	start_time_ = monotonic_time_ms();
 	last_active_time_ = start_time_;
+	compression_algo_ = MYSQLX_COMPR_NONE;
+	compression_combine_mixed_messages_ = false;
+	compression_max_combine_messages_ = 0;
 }
 
 void MysqlxSession::reset() {
@@ -98,6 +104,9 @@ void MysqlxSession::reset() {
 	target_address_.clear();
 	target_port_ = 0;
 	identity_.reset();
+	compression_algo_ = MYSQLX_COMPR_NONE;
+	compression_combine_mixed_messages_ = false;
+	compression_max_combine_messages_ = 0;
 }
 
 int MysqlxSession::handler() {
@@ -198,6 +207,85 @@ void MysqlxSession::handler_capabilities_get() {
 	status_ = CONNECTING_CLIENT;
 }
 
+// Walk the OBJECT-typed `compression` capability the client sent in
+// CapabilitiesSet, picking out the algorithm string and the two coalescing
+// hints. Returns true if the message was structurally valid AND the requested
+// algorithm is one we support; populates *out_algo / *out_combine /
+// *out_max_combine in that case. Returns false on any structural issue or
+// unsupported algorithm so the caller can emit a 5052 error frame.
+//
+// Object schema (per X Protocol):
+//   compression {
+//     algorithm: "zstd_stream" | "lz4_message" | "deflate_stream"
+//     server_combine_mixed_messages?: bool   // server -> client coalescing
+//     server_max_combine_messages?: uint     // server -> client batch cap
+//   }
+// We accept the same `combine_mixed_messages` / `max_combine_messages`
+// short-form keys that some clients send (mysql-connector-python in
+// particular). The MySQL server tolerates both spellings.
+static bool parse_compression_capability(
+	const Mysqlx::Connection::Capability& cap,
+	MysqlxCompressionAlgo* out_algo,
+	bool* out_combine,
+	uint32_t* out_max_combine)
+{
+	*out_algo = MYSQLX_COMPR_NONE;
+	*out_combine = false;
+	*out_max_combine = 0;
+
+	const auto& any = cap.value();
+	if (any.type() != Mysqlx::Datatypes::Any::OBJECT) return false;
+	const auto& obj = any.obj();
+
+	std::string algo_str;
+	bool have_algo = false;
+	for (const auto& fld : obj.fld()) {
+		const std::string& key = fld.key();
+		const auto& val = fld.value();
+		if (key == "algorithm") {
+			if (val.type() != Mysqlx::Datatypes::Any::SCALAR) return false;
+			const auto& sc = val.scalar();
+			if (sc.type() != Mysqlx::Datatypes::Scalar::V_STRING) return false;
+			algo_str = sc.v_string().value();
+			have_algo = true;
+		} else if (key == "server_combine_mixed_messages" ||
+		           key == "combine_mixed_messages") {
+			if (val.type() != Mysqlx::Datatypes::Any::SCALAR) return false;
+			const auto& sc = val.scalar();
+			if (sc.type() == Mysqlx::Datatypes::Scalar::V_BOOL) {
+				*out_combine = sc.v_bool();
+			} else {
+				return false;
+			}
+		} else if (key == "server_max_combine_messages" ||
+		           key == "max_combine_messages") {
+			if (val.type() != Mysqlx::Datatypes::Any::SCALAR) return false;
+			const auto& sc = val.scalar();
+			if (sc.type() == Mysqlx::Datatypes::Scalar::V_UINT) {
+				*out_max_combine = static_cast<uint32_t>(sc.v_unsigned_int());
+			} else {
+				return false;
+			}
+		}
+		// Unknown sub-keys are silently ignored: forward-compat with future
+		// fields the spec may add.
+	}
+
+	if (!have_algo) return false;
+
+	if (algo_str == "zstd_stream") {
+		*out_algo = MYSQLX_COMPR_ZSTD_STREAM;
+		return true;
+	}
+	if (algo_str == "lz4_message") {
+		*out_algo = MYSQLX_COMPR_LZ4_MESSAGE;
+		return true;
+	}
+	// deflate_stream is part of the spec but not implemented here; treat
+	// like any other unsupported algorithm.
+	return false;
+}
+
 void MysqlxSession::handler_capabilities_set() {
 	if (!client_ds_.has_complete_frame()) return;
 
@@ -205,6 +293,33 @@ void MysqlxSession::handler_capabilities_set() {
 	if (frame.size() > 5) {
 		Mysqlx::Connection::CapabilitiesSet cap_set;
 		if (cap_set.ParseFromArray(frame.data() + 5, static_cast<int>(frame.size() - 5))) {
+			// First pass: detect the `compression` capability before TLS so
+			// a single CapabilitiesSet message that combines both does not
+			// silently drop the compression negotiation. We process TLS
+			// in its own pass to preserve the existing handshake-flow
+			// invariant (TLS terminates capability negotiation).
+			MysqlxCompressionAlgo new_algo = MYSQLX_COMPR_NONE;
+			bool new_combine = false;
+			uint32_t new_max_combine = 0;
+			bool saw_compression = false;
+			for (const auto& cap : cap_set.capabilities().capabilities()) {
+				if (cap.name() == "compression") {
+					saw_compression = true;
+					if (!parse_compression_capability(cap, &new_algo,
+					                                 &new_combine,
+					                                 &new_max_combine)) {
+						client_ds_.pop_frame();
+						// 5052: Capability prepare failed for ... — the
+						// X Protocol convention for an unsupported or
+						// malformed capability value.
+						send_error(5052, "Capability 'compression' value not supported");
+						status_ = CONNECTING_CLIENT;
+						return;
+					}
+					break;
+				}
+			}
+
 			for (const auto& cap : cap_set.capabilities().capabilities()) {
 				if (cap.name() == "tls") {
 					client_ds_.pop_frame();
@@ -219,6 +334,12 @@ void MysqlxSession::handler_capabilities_set() {
 					to_process = true;
 					return;
 				}
+			}
+
+			if (saw_compression) {
+				compression_algo_ = new_algo;
+				compression_combine_mixed_messages_ = new_combine;
+				compression_max_combine_messages_ = new_max_combine;
 			}
 		}
 	}
@@ -991,6 +1112,34 @@ void MysqlxSession::send_capabilities() {
 		tls_val->set_type(Mysqlx::Datatypes::Any::SCALAR);
 		tls_val->mutable_scalar()->set_type(Mysqlx::Datatypes::Scalar::V_BOOL);
 		tls_val->mutable_scalar()->set_v_bool(true);
+	}
+
+	// Advertise compression. Per the X Protocol contract, the value is an
+	// OBJECT carrying an `algorithm` array — clients pick one entry from
+	// that array and echo it back via CapabilitiesSet.algorithm. We list
+	// the algorithms in the order we'd like clients to prefer; both
+	// libzstd and liblz4 are statically linked into the plugin already.
+	{
+		auto* cmp_cap = caps.add_capabilities();
+		cmp_cap->set_name("compression");
+		auto* obj_val = cmp_cap->mutable_value();
+		obj_val->set_type(Mysqlx::Datatypes::Any::OBJECT);
+		auto* obj = obj_val->mutable_obj();
+
+		auto* algo_field = obj->add_fld();
+		algo_field->set_key("algorithm");
+		auto* algo_any = algo_field->mutable_value();
+		algo_any->set_type(Mysqlx::Datatypes::Any::ARRAY);
+		auto* algo_arr = algo_any->mutable_array();
+
+		auto add_algo = [&](const char* name) {
+			auto* v = algo_arr->add_value();
+			v->set_type(Mysqlx::Datatypes::Any::SCALAR);
+			v->mutable_scalar()->set_type(Mysqlx::Datatypes::Scalar::V_STRING);
+			v->mutable_scalar()->mutable_v_string()->set_value(name);
+		};
+		add_algo("zstd_stream");
+		add_algo("lz4_message");
 	}
 
 	std::string s;

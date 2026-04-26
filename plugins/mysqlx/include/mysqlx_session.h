@@ -32,6 +32,17 @@ enum MysqlxTlsMode {
 	TLS_PASSTHROUGH
 };
 
+// X Protocol compression algorithm negotiated via Mysqlx.Connection.Capabilities.
+// NONE means no Compression message is expected on either direction. Anything
+// else is a value the client supplied via CapabilitiesSet that we accepted.
+// The set of values we are willing to accept is defined by send_capabilities()
+// and validated in handler_capabilities_set().
+enum MysqlxCompressionAlgo {
+	MYSQLX_COMPR_NONE = 0,
+	MYSQLX_COMPR_ZSTD_STREAM,
+	MYSQLX_COMPR_LZ4_MESSAGE
+};
+
 class MysqlxSession {
 public:
 	enum Status {
@@ -178,6 +189,21 @@ private:
 	uint64_t last_active_time_;
 	MysqlxResponseState response_state_;
 	MysqlxTlsMode tls_mode_;
+
+	// Compression negotiation state. compression_algo_ is set by
+	// handler_capabilities_set() once the client successfully sets the
+	// `compression` capability. The two combine_* fields are stored but
+	// not yet acted on; Phase 2 (decompression) and Phase 3 (compression
+	// on output) consume them to coalesce frames as the spec allows.
+	MysqlxCompressionAlgo compression_algo_;
+	bool compression_combine_mixed_messages_;
+	uint32_t compression_max_combine_messages_;
+
+public:
+	// Test-only accessors for compression negotiation outcome.
+	MysqlxCompressionAlgo compression_algo_for_test() const { return compression_algo_; }
+	bool compression_combine_mixed_for_test() const { return compression_combine_mixed_messages_; }
+	uint32_t compression_max_combine_for_test() const { return compression_max_combine_messages_; }
 };
 
 #endif
