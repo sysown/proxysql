@@ -13,6 +13,15 @@
 
 class Mysqlx_Thread;
 
+// Opaque forward decl for the zstd streaming decompression context.
+// Defined as ZSTD_CCtx in zstd.h, but we keep that header out of the
+// public session header — the typedef is anonymous to the consumer of
+// this header and only the .cpp instantiates it.
+struct ZSTD_DCtx_s;
+typedef struct ZSTD_DCtx_s ZSTD_DCtx;
+struct ZSTD_CCtx_s;
+typedef struct ZSTD_CCtx_s ZSTD_CCtx;
+
 using MysqlxIdentityLookup =
 	std::function<std::optional<MysqlxResolvedIdentity>(const std::string& username)>;
 
@@ -198,6 +207,19 @@ private:
 	MysqlxCompressionAlgo compression_algo_;
 	bool compression_combine_mixed_messages_;
 	uint32_t compression_max_combine_messages_;
+
+	// Streaming decompression context, lazily allocated when the first
+	// Compression message arrives. Only used for ZSTD_STREAM (lz4_message
+	// is one-shot per frame and needs no persistent state). Freed in
+	// reset_compression_state(); zero-init for sessions that never
+	// negotiate compression.
+	ZSTD_DCtx* zstd_dctx_;
+	// Streaming compression context for outbound frames (Phase 3).
+	ZSTD_CCtx* zstd_cctx_;
+
+	// Phase 2 / Phase 3 plumbing — kept private to the .cpp.
+	int handle_compression_message();
+	void reset_compression_state();
 
 public:
 	// Test-only accessors for compression negotiation outcome.

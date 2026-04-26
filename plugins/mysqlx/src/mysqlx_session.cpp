@@ -15,9 +15,39 @@
 #include <openssl/rand.h>
 #include <openssl/crypto.h>
 
+#include <zstd.h>
+#include <lz4.h>
+
 namespace {
 
 constexpr size_t CHALLENGE_LENGTH = 20;
+
+// Hard cap on the amount of bytes a single Compression message is allowed to
+// produce after decompression. The X Protocol spec leaves this open-ended;
+// without a cap a malicious client could send a tiny compressed payload that
+// inflates to multiple gigabytes (zip-bomb / billion-laughs equivalent). We
+// pick the same 16 MiB ceiling that MysqlxDataStream already enforces for
+// the on-the-wire payload size, so a Compression message can never exceed
+// what the rest of the data plane is willing to handle anyway.
+constexpr size_t COMPRESSION_MAX_DECOMPRESSED_BYTES = 16 * 1024 * 1024;
+
+// Push a uint32 little-endian payload size + 1-byte msg type + body into a
+// flat buffer in the same wire layout MysqlxDataStream::enqueue_frame()
+// produces. Used to re-frame a decompressed single message before feeding
+// it back through MysqlxDataStream::feed_bytes() so the frame parser can
+// pick it up as if it had arrived directly from the network.
+void append_x_frame(std::vector<uint8_t>& out, uint8_t msg_type,
+                    const uint8_t* body, size_t body_len) {
+	uint32_t payload_size = static_cast<uint32_t>(body_len) + 1;
+	out.push_back(static_cast<uint8_t>(payload_size & 0xFF));
+	out.push_back(static_cast<uint8_t>((payload_size >> 8) & 0xFF));
+	out.push_back(static_cast<uint8_t>((payload_size >> 16) & 0xFF));
+	out.push_back(static_cast<uint8_t>((payload_size >> 24) & 0xFF));
+	out.push_back(msg_type);
+	if (body_len > 0 && body) {
+		out.insert(out.end(), body, body + body_len);
+	}
+}
 
 uint64_t monotonic_time_ms() {
 	struct timespec ts;
@@ -60,7 +90,9 @@ MysqlxSession::MysqlxSession()
 	, tls_mode_(TLS_OFF)
 	, compression_algo_(MYSQLX_COMPR_NONE)
 	, compression_combine_mixed_messages_(false)
-	, compression_max_combine_messages_(0) {
+	, compression_max_combine_messages_(0)
+	, zstd_dctx_(nullptr)
+	, zstd_cctx_(nullptr) {
 }
 
 MysqlxSession::~MysqlxSession() {
@@ -69,6 +101,18 @@ MysqlxSession::~MysqlxSession() {
 	}
 	if (client_ds_.get_fd() >= 0) {
 		close(client_ds_.get_fd());
+	}
+	reset_compression_state();
+}
+
+void MysqlxSession::reset_compression_state() {
+	if (zstd_dctx_) {
+		ZSTD_freeDCtx(zstd_dctx_);
+		zstd_dctx_ = nullptr;
+	}
+	if (zstd_cctx_) {
+		ZSTD_freeCCtx(zstd_cctx_);
+		zstd_cctx_ = nullptr;
 	}
 }
 
@@ -89,6 +133,7 @@ void MysqlxSession::init(int fd, Mysqlx_Thread* thread_ptr) {
 	compression_algo_ = MYSQLX_COMPR_NONE;
 	compression_combine_mixed_messages_ = false;
 	compression_max_combine_messages_ = 0;
+	reset_compression_state();
 }
 
 void MysqlxSession::reset() {
@@ -107,6 +152,7 @@ void MysqlxSession::reset() {
 	compression_algo_ = MYSQLX_COMPR_NONE;
 	compression_combine_mixed_messages_ = false;
 	compression_max_combine_messages_ = 0;
+	reset_compression_state();
 }
 
 int MysqlxSession::handler() {
@@ -627,9 +673,18 @@ int MysqlxSession::dispatch_client_message(uint8_t msg_type) {
 			response_state_ = RESP_WAITING_EXPECT;
 			forward_to_backend(); return 0;
 		case Mysqlx::ClientMessages_Type_COMPRESSION:
-			client_ds_.pop_frame();
-			send_error(5008, "Compression is not supported");
-			return 0;
+			// Phase 2: when compression has been negotiated, decompress
+			// the payload, feed the resulting bytes back into client_ds_'s
+			// frame parser, and re-enter the dispatch loop on the next
+			// handler tick. handle_compression_message() already pops the
+			// frame on every path (success and failure) and sets to_process
+			// when there are decompressed frames to dispatch.
+			if (compression_algo_ == MYSQLX_COMPR_NONE) {
+				client_ds_.pop_frame();
+				send_error(5008, "Compression is not supported");
+				return 0;
+			}
+			return handle_compression_message();
 		default:
 			client_ds_.pop_frame();
 			send_error(5000, "Unknown message type", true);
@@ -1146,4 +1201,161 @@ void MysqlxSession::send_capabilities() {
 	caps.SerializeToString(&s);
 	client_ds_.enqueue_frame(Mysqlx::ServerMessages_Type_CONN_CAPABILITIES,
 		reinterpret_cast<const uint8_t*>(s.data()), s.size());
+}
+
+// Decompress the payload of a Mysqlx.Connection.Compression message and
+// re-inject the result into client_ds_'s frame parser so the existing
+// dispatch loop processes it on the next handler tick. Pops the
+// compression frame on every path (success or failure) and returns 0 to
+// match the dispatch_client_message() contract.
+//
+// Three payload shapes per spec:
+//   1. server_messages set: payload is a single decompressed server
+//      message of that type. NEVER expected on the client→server path —
+//      reject with 5008.
+//   2. client_messages set: payload is a single decompressed client
+//      message of that type. We re-frame with that type byte and feed
+//      it back through client_ds_.feed_bytes().
+//   3. neither set: payload is a sequence of zero or more fully-framed
+//      messages (each with its own 5-byte X header). Feed the raw
+//      decompressed bytes back through feed_bytes(); the parser will
+//      pick up each frame in sequence.
+//
+// Anti-bomb: hard-cap the decompressed size at the smaller of
+// uncompressed_size (when set) and COMPRESSION_MAX_DECOMPRESSED_BYTES.
+// Returns -1 on any failure path so the caller can short-circuit, but
+// we already emit the X-Protocol Error frame here.
+int MysqlxSession::handle_compression_message() {
+	const auto& frame = client_ds_.front_frame();
+	if (frame.size() <= 5) {
+		client_ds_.pop_frame();
+		send_error(5008, "Empty Compression message");
+		return 0;
+	}
+
+	Mysqlx::Connection::Compression cmsg;
+	if (!cmsg.ParseFromArray(frame.data() + 5, static_cast<int>(frame.size() - 5))) {
+		client_ds_.pop_frame();
+		send_error(5008, "Invalid Compression message");
+		return 0;
+	}
+	const std::string& payload = cmsg.payload();
+	client_ds_.pop_frame();
+
+	if (cmsg.has_server_messages()) {
+		// Server-direction compression on the client→server path is
+		// always wrong: only the server is supposed to set
+		// server_messages, and only when sending to the client.
+		send_error(5008, "Compression message has server_messages on client→server path");
+		return 0;
+	}
+
+	// Compute the size cap for this message.
+	size_t cap = COMPRESSION_MAX_DECOMPRESSED_BYTES;
+	if (cmsg.has_uncompressed_size()) {
+		uint64_t hint = cmsg.uncompressed_size();
+		if (hint == 0) {
+			// Hint of 0 with a non-empty payload is malformed; treat
+			// as a parse error rather than letting it through.
+			send_error(5008, "Compression: uncompressed_size hint is 0");
+			return 0;
+		}
+		if (hint < cap) cap = static_cast<size_t>(hint);
+	}
+
+	// Decompress into a flat buffer. Picked sizing rationale:
+	//   - zstd: use a working buffer that grows in 64 KiB chunks until
+	//     either the stream finishes or we hit `cap`.
+	//   - lz4_message: one-shot; allocate exactly `cap` bytes (LZ4 has
+	//     no streaming context for the per-message variant).
+	std::vector<uint8_t> decompressed;
+	if (compression_algo_ == MYSQLX_COMPR_LZ4_MESSAGE) {
+		// Allocate cap bytes; LZ4_decompress_safe writes at most
+		// dstCapacity, so this naturally enforces the size limit.
+		decompressed.resize(cap);
+		int produced = LZ4_decompress_safe(payload.data(),
+		                                   reinterpret_cast<char*>(decompressed.data()),
+		                                   static_cast<int>(payload.size()),
+		                                   static_cast<int>(cap));
+		if (produced < 0) {
+			send_error(5008, "Compression: lz4 decompression failed");
+			return 0;
+		}
+		decompressed.resize(static_cast<size_t>(produced));
+	} else if (compression_algo_ == MYSQLX_COMPR_ZSTD_STREAM) {
+		if (!zstd_dctx_) {
+			zstd_dctx_ = ZSTD_createDCtx();
+			if (!zstd_dctx_) {
+				send_error(5008, "Compression: out of memory");
+				return 0;
+			}
+		}
+		ZSTD_inBuffer zin{ payload.data(), payload.size(), 0 };
+		// Reserve a starting chunk to amortize realloc cost. The recommended
+		// ZSTD output block size is ~128 KiB; we cap each grow step at that.
+		const size_t grow_step = ZSTD_DStreamOutSize();
+		while (zin.pos < zin.size) {
+			if (decompressed.size() >= cap) {
+				// Hit the cap — bail out before zstd writes more.
+				send_error(5008, "Compression: decompressed payload exceeds cap");
+				return 0;
+			}
+			size_t old_sz = decompressed.size();
+			size_t new_sz = old_sz + grow_step;
+			if (new_sz > cap) new_sz = cap;
+			decompressed.resize(new_sz);
+
+			ZSTD_outBuffer zout{ decompressed.data() + old_sz,
+			                     new_sz - old_sz, 0 };
+			size_t r = ZSTD_decompressStream(zstd_dctx_, &zout, &zin);
+			decompressed.resize(old_sz + zout.pos);
+			if (ZSTD_isError(r)) {
+				send_error(5008, "Compression: zstd decompression failed");
+				return 0;
+			}
+			if (zout.pos == 0 && zin.pos < zin.size) {
+				// No forward progress despite remaining input; would
+				// otherwise be an infinite loop. Treat as a corrupt
+				// stream and bail.
+				send_error(5008, "Compression: zstd stalled (no progress)");
+				return 0;
+			}
+		}
+	} else {
+		// Negotiated to NONE somehow; we've already filtered NONE in the
+		// dispatch site, so this is a defensive branch only.
+		send_error(5008, "Compression algorithm not initialized");
+		return 0;
+	}
+
+	// Re-inject the decompressed bytes into the frame parser. Two shapes:
+	//   - client_messages set: payload is a SINGLE message body of that
+	//     type. Wrap it in a 5-byte X-frame header before feeding so the
+	//     parser sees a normal frame.
+	//   - neither: payload is already a sequence of full X-frames. Feed
+	//     verbatim.
+	if (cmsg.has_client_messages()) {
+		uint8_t msg_type = static_cast<uint8_t>(cmsg.client_messages());
+		std::vector<uint8_t> framed;
+		framed.reserve(5 + decompressed.size());
+		append_x_frame(framed, msg_type, decompressed.data(), decompressed.size());
+		client_ds_.feed_bytes(framed.data(), framed.size());
+	} else {
+		client_ds_.feed_bytes(decompressed.data(), decompressed.size());
+	}
+
+	if (client_ds_.has_parse_error()) {
+		// Decompressed bytes did not yield valid X frames. Signal the
+		// session as unhealthy so we close cleanly.
+		send_error(5008, "Compression: decompressed payload is malformed");
+		healthy = false;
+		return -1;
+	}
+
+	if (client_ds_.has_complete_frame()) {
+		// Drive the dispatch loop on the next tick so the just-decoded
+		// frames are processed without blocking on more network I/O.
+		to_process = true;
+	}
+	return 0;
 }

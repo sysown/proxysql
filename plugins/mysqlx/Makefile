@@ -50,7 +50,7 @@ ifneq ($(PROTOBUF_MAJOR),3)
         against the installed version. See the regeneration recipe above)
 endif
 
-IDIRS := -I$(PROXYSQL_IDIR) -I$(PLUGIN_DIR)/include -I$(SQLITE3_IDIR) -I$(PROTO_DIR) -I$(SSL_IDIR) -I$(PROMETHEUS_IDIR) -I$(LIBCONFIG_IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) -I$(RE2_IDIR)
+IDIRS := -I$(PROXYSQL_IDIR) -I$(PLUGIN_DIR)/include -I$(SQLITE3_IDIR) -I$(PROTO_DIR) -I$(SSL_IDIR) -I$(PROMETHEUS_IDIR) -I$(LIBCONFIG_IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) -I$(RE2_IDIR) -I$(ZSTD_IDIR) -I$(PROXYSQL_PATH)/deps/lz4/lz4/lib
 
 OPTZ ?= -O2 -ggdb
 # Propagate feature-tier flags from the top-level build.  These MUST match
@@ -123,8 +123,17 @@ $(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) | $(ODIR)
 $(ODIR)/%.pb.o: $(PROTO_DIR)/%.pb.cc | $(ODIR)
 	$(CXX) -c -o $@ $< $(CXXFLAGS) -I$(PROTO_DIR) -w
 
+# X Protocol compression (zstd_stream / lz4_message) needs the static
+# libzstd + liblz4 archives from deps/. We link them statically into the .so
+# so the plugin works whether or not the host process exports zstd/lz4
+# symbols globally — the loader uses RTLD_LOCAL, so a transitive dependency
+# from the proxysql binary would not be visible here.
+ZSTD_AR := $(PROXYSQL_PATH)/deps/zstd/zstd/lib/libzstd.a
+LZ4_AR  := $(PROXYSQL_PATH)/deps/lz4/lz4/lib/liblz4.a
+
 $(PLUGIN_SO): $(OBJS) $(PROTO_OBJS)
-	$(CXX) -shared -o $@ $^ $(CXXFLAGS) -pthread -lprotobuf -lssl -lcrypto
+	$(CXX) -shared -o $@ $^ $(CXXFLAGS) -pthread -lprotobuf -lssl -lcrypto \
+		$(ZSTD_AR) $(LZ4_AR)
 
 .PHONY: all
 all: $(PLUGIN_SO)

@@ -23,11 +23,17 @@
 #include "mysqlx.pb.h"
 #include "mysqlx_connection.pb.h"
 #include "mysqlx_datatypes.pb.h"
+#include "mysqlx_session.pb.h"
+#include "mysqlx_sql.pb.h"
 
 #include <sys/socket.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <cstring>
 #include <vector>
+
+#include <zstd.h>
+#include <lz4.h>
 
 static void write_x_frame(int fd, uint8_t msg_type, const uint8_t* payload, size_t payload_len) {
 	uint32_t size = static_cast<uint32_t>(payload_len) + 1;
@@ -55,6 +61,18 @@ static ssize_t read_x_frame(int fd, uint8_t* buf, size_t buf_size) {
 		if (r != static_cast<ssize_t>(payload_size - 1)) return -1;
 	}
 	return 4 + payload_size;
+}
+
+// Non-blocking read variant for the Phase 2/3 tests where the session may
+// legitimately not produce any output (because the dispatched message goes
+// to a backend the test doesn't fake out). Returns -1 immediately if no
+// data is available; -1 + errno EAGAIN should be treated as "no response".
+static ssize_t try_read_x_frame_nonblocking(int fd, uint8_t* buf, size_t buf_size) {
+	int flags = fcntl(fd, F_GETFL, 0);
+	fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+	ssize_t r = read_x_frame(fd, buf, buf_size);
+	fcntl(fd, F_SETFL, flags);
+	return r;
 }
 
 // Helper: build a CapabilitiesSet message that tries to set the `compression`
@@ -308,14 +326,345 @@ static void test_capabilities_set_garbage_rejected() {
 	close(fds[1]);
 }
 
+// ---------------------------------------------------------------------------
+// Phase 2: end-to-end decompression on the client→server path.
+//
+// Each of these tests:
+//   1. Drives the session through the CapabilitiesSet handshake to negotiate
+//      a specific compression algorithm (zstd_stream or lz4_message).
+//   2. Builds a fully-framed Mysqlx.Sql.StmtExecute message body.
+//   3. Compresses it with the matching algorithm.
+//   4. Wraps the compressed bytes in a Mysqlx.Connection.Compression message
+//      with `client_messages = SQL_STMT_EXECUTE` and feeds that frame to the
+//      session.
+//   5. Asserts the session reaches a state consistent with having dispatched
+//      a real StmtExecute (CONNECTING_SERVER — backend lookup happens before
+//      the test's fake connection cache returns nullptr).
+//
+// We don't have a backend, so the session legitimately can't complete the
+// query; we just verify the COMPRESSION envelope was unwrapped and the
+// inner message reached dispatch. The "decompressed but malformed" case is
+// covered separately and asserts the session emits 5008.
+// ---------------------------------------------------------------------------
+
+static std::string compress_zstd(const std::vector<uint8_t>& src) {
+	size_t bound = ZSTD_compressBound(src.size());
+	std::string out;
+	out.resize(bound);
+	size_t produced = ZSTD_compress(out.data(), out.size(),
+	                                src.data(), src.size(), 3);
+	if (ZSTD_isError(produced)) {
+		out.clear();
+		return out;
+	}
+	out.resize(produced);
+	return out;
+}
+
+static std::string compress_lz4(const std::vector<uint8_t>& src) {
+	int bound = LZ4_compressBound(static_cast<int>(src.size()));
+	std::string out;
+	out.resize(static_cast<size_t>(bound));
+	int produced = LZ4_compress_default(reinterpret_cast<const char*>(src.data()),
+	                                    out.data(),
+	                                    static_cast<int>(src.size()),
+	                                    bound);
+	if (produced <= 0) {
+		out.clear();
+		return out;
+	}
+	out.resize(static_cast<size_t>(produced));
+	return out;
+}
+
+// Drive `sess` through a capabilities-set handshake that enables `algo`.
+// Returns true on success. Leaves the session in WAITING_CLIENT_XMSG-equivalent
+// state (CONNECTING_CLIENT, since we don't go through full auth) with the
+// algorithm member populated.
+static bool negotiate_compression(MysqlxSession& sess, int peer_fd, const char* algo) {
+	std::string payload = build_compression_capset(algo);
+	write_x_frame(peer_fd, Mysqlx::ClientMessages_Type_CON_CAPABILITIES_SET,
+		reinterpret_cast<const uint8_t*>(payload.data()), payload.size());
+	sess.to_process = true;
+	sess.handler();
+	uint8_t buf[4096];
+	usleep(10000);
+	read_x_frame(peer_fd, buf, sizeof(buf)); // drain Ok response
+	return sess.compression_algo_for_test() != MYSQLX_COMPR_NONE;
+}
+
+// Build a Mysqlx.Sql.StmtExecute body — small, fits well under any cap.
+static std::vector<uint8_t> build_stmt_execute_body(const char* sql) {
+	Mysqlx::Sql::StmtExecute msg;
+	msg.set_namespace_("sql");
+	msg.set_stmt(sql);
+	std::string s;
+	msg.SerializeToString(&s);
+	return std::vector<uint8_t>(s.begin(), s.end());
+}
+
+// Wrap (msg_type, body) in a Compression message that says
+// "the decompressed payload is one client_messages of msg_type". Returns
+// the protobuf-serialized Compression message bytes (caller will frame).
+static std::string build_compression_envelope(uint8_t msg_type,
+                                              const std::string& compressed,
+                                              uint64_t uncompressed_size) {
+	Mysqlx::Connection::Compression c;
+	c.set_uncompressed_size(uncompressed_size);
+	c.set_client_messages(static_cast<Mysqlx::ClientMessages::Type>(msg_type));
+	c.set_payload(compressed);
+	std::string s;
+	c.SerializeToString(&s);
+	return s;
+}
+
+static void test_decompress_zstd_single_message() {
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+
+	MysqlxSession sess;
+	sess.init(fds[0], nullptr);
+	sess.to_process = true;
+	// Skip auth: jump straight to the post-auth state and enable
+	// compression directly so we don't have to wire a fake backend.
+	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
+
+	ok(negotiate_compression(sess, fds[1], "zstd_stream"),
+	   "negotiated zstd_stream pre-decompression test");
+
+	// Build a small StmtExecute, compress it, wrap in Compression.
+	auto body = build_stmt_execute_body("SELECT 42");
+	std::string compressed = compress_zstd(body);
+	ok(!compressed.empty(), "zstd compressed sample body");
+	std::string envelope = build_compression_envelope(
+		Mysqlx::ClientMessages_Type_SQL_STMT_EXECUTE,
+		compressed, body.size());
+
+	// Move session back to WAITING_CLIENT_XMSG (negotiate left it in
+	// CONNECTING_CLIENT / no auth) so the COMPRESSION dispatch runs.
+	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
+	sess.to_process = true;
+
+	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_COMPRESSION,
+		reinterpret_cast<const uint8_t*>(envelope.data()), envelope.size());
+	sess.handler();
+
+	// On a successful unwrap the inner StmtExecute will be dispatched;
+	// without a backend the session transitions to CONNECTING_SERVER (it
+	// expects the next handler tick to materialize a backend). It must
+	// NOT have emitted a 5008 error frame. The backend's connect()
+	// returns EINPROGRESS so the session may not have written anything
+	// yet — use a non-blocking read so we don't deadlock.
+	uint8_t buf[4096];
+	usleep(10000);
+	ssize_t r = try_read_x_frame_nonblocking(fds[1], buf, sizeof(buf));
+	bool got_5008 = false;
+	if (r > 5 && buf[4] == Mysqlx::ServerMessages_Type_ERROR) {
+		Mysqlx::Error err;
+		if (err.ParseFromArray(buf + 5, static_cast<int>(r - 5))) {
+			if (err.code() == 5008) got_5008 = true;
+		}
+	}
+	ok(!got_5008,
+	   "decompressed StmtExecute was dispatched (no 5008 error from session)");
+	// Also assert the session moved past WAITING_CLIENT_XMSG — proves we
+	// actually reached forward_to_backend on the unwrapped message.
+	ok(sess.get_status() != MysqlxSession::WAITING_CLIENT_XMSG,
+	   "session moved past WAITING_CLIENT_XMSG after unwrapping COMPRESSION");
+
+	close(fds[0]);
+	close(fds[1]);
+}
+
+static void test_decompress_lz4_single_message() {
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+
+	MysqlxSession sess;
+	sess.init(fds[0], nullptr);
+	sess.to_process = true;
+	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
+
+	ok(negotiate_compression(sess, fds[1], "lz4_message"),
+	   "negotiated lz4_message pre-decompression test");
+
+	auto body = build_stmt_execute_body("SHOW DATABASES");
+	std::string compressed = compress_lz4(body);
+	ok(!compressed.empty(), "lz4 compressed sample body");
+	std::string envelope = build_compression_envelope(
+		Mysqlx::ClientMessages_Type_SQL_STMT_EXECUTE,
+		compressed, body.size());
+
+	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
+	sess.to_process = true;
+	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_COMPRESSION,
+		reinterpret_cast<const uint8_t*>(envelope.data()), envelope.size());
+	sess.handler();
+
+	uint8_t buf[4096];
+	usleep(10000);
+	ssize_t r = try_read_x_frame_nonblocking(fds[1], buf, sizeof(buf));
+	bool got_5008 = false;
+	if (r > 5 && buf[4] == Mysqlx::ServerMessages_Type_ERROR) {
+		Mysqlx::Error err;
+		if (err.ParseFromArray(buf + 5, static_cast<int>(r - 5))) {
+			if (err.code() == 5008) got_5008 = true;
+		}
+	}
+	ok(!got_5008,
+	   "decompressed lz4 StmtExecute was dispatched (no 5008 error from session)");
+	ok(sess.get_status() != MysqlxSession::WAITING_CLIENT_XMSG,
+	   "lz4 path: session moved past WAITING_CLIENT_XMSG after unwrap");
+
+	close(fds[0]);
+	close(fds[1]);
+}
+
+static void test_decompress_oversize_rejected() {
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+
+	MysqlxSession sess;
+	sess.init(fds[0], nullptr);
+	sess.to_process = true;
+	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
+
+	ok(negotiate_compression(sess, fds[1], "zstd_stream"),
+	   "negotiated zstd_stream pre-oversize test");
+
+	// Compress 1 MiB of zeros (super-cheap to compress; payload is tiny).
+	std::vector<uint8_t> body(1 * 1024 * 1024, 0);
+	std::string compressed = compress_zstd(body);
+	ok(!compressed.empty(), "compressed 1 MiB of zeros");
+
+	// Lie about uncompressed_size: claim only 100 bytes. Decompressor
+	// should bail when the actual output would exceed the cap.
+	std::string envelope = build_compression_envelope(
+		Mysqlx::ClientMessages_Type_SQL_STMT_EXECUTE,
+		compressed, /*uncompressed_size=*/100);
+
+	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
+	sess.to_process = true;
+	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_COMPRESSION,
+		reinterpret_cast<const uint8_t*>(envelope.data()), envelope.size());
+	sess.handler();
+
+	uint8_t buf[8192];
+	usleep(10000);
+	ssize_t r = read_x_frame(fds[1], buf, sizeof(buf));
+	ok(r > 5 && buf[4] == Mysqlx::ServerMessages_Type_ERROR,
+	   "oversize-vs-hint message produced an Error frame");
+	if (r > 5 && buf[4] == Mysqlx::ServerMessages_Type_ERROR) {
+		Mysqlx::Error err;
+		if (err.ParseFromArray(buf + 5, static_cast<int>(r - 5))) {
+			ok(err.code() == 5008, "oversize rejected with 5008");
+		} else {
+			ok(false, "oversize rejected with 5008 (parse failed)");
+		}
+	} else {
+		ok(false, "oversize rejected with 5008 (no error frame)");
+	}
+
+	close(fds[0]);
+	close(fds[1]);
+}
+
+static void test_decompress_garbage_rejected() {
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+
+	MysqlxSession sess;
+	sess.init(fds[0], nullptr);
+	sess.to_process = true;
+	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
+
+	ok(negotiate_compression(sess, fds[1], "zstd_stream"),
+	   "negotiated zstd_stream pre-garbage test");
+
+	// Send a Compression message whose payload isn't valid zstd.
+	std::string garbage = "not zstd compressed data at all xxxxxxxx";
+	std::string envelope = build_compression_envelope(
+		Mysqlx::ClientMessages_Type_SQL_STMT_EXECUTE,
+		garbage, /*uncompressed_size=*/100);
+
+	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
+	sess.to_process = true;
+	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_COMPRESSION,
+		reinterpret_cast<const uint8_t*>(envelope.data()), envelope.size());
+	sess.handler();
+
+	uint8_t buf[4096];
+	usleep(10000);
+	ssize_t r = read_x_frame(fds[1], buf, sizeof(buf));
+	ok(r > 5 && buf[4] == Mysqlx::ServerMessages_Type_ERROR,
+	   "garbage compressed payload produced an Error frame");
+	if (r > 5 && buf[4] == Mysqlx::ServerMessages_Type_ERROR) {
+		Mysqlx::Error err;
+		if (err.ParseFromArray(buf + 5, static_cast<int>(r - 5))) {
+			ok(err.code() == 5008, "garbage rejected with 5008");
+		} else {
+			ok(false, "garbage rejected with 5008 (parse failed)");
+		}
+	} else {
+		ok(false, "garbage rejected with 5008 (no error frame)");
+	}
+
+	close(fds[0]);
+	close(fds[1]);
+}
+
+static void test_compression_without_negotiation_still_5008() {
+	// Sanity: if the client tries to send a Compression message before
+	// (or without) having set the compression capability, the dispatcher
+	// must still reject with 5008.
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+
+	MysqlxSession sess;
+	sess.init(fds[0], nullptr);
+	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
+	sess.to_process = true;
+
+	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_COMPRESSION, nullptr, 0);
+	sess.handler();
+
+	uint8_t buf[4096];
+	usleep(10000);
+	ssize_t r = read_x_frame(fds[1], buf, sizeof(buf));
+	ok(r > 5 && buf[4] == Mysqlx::ServerMessages_Type_ERROR,
+	   "compression without negotiation rejected");
+	if (r > 5 && buf[4] == Mysqlx::ServerMessages_Type_ERROR) {
+		Mysqlx::Error err;
+		if (err.ParseFromArray(buf + 5, static_cast<int>(r - 5))) {
+			ok(err.code() == 5008,
+			   "compression without negotiation rejected with 5008");
+		} else {
+			ok(false,
+			   "compression without negotiation rejected with 5008 (parse fail)");
+		}
+	} else {
+		ok(false,
+		   "compression without negotiation rejected with 5008 (no err frame)");
+	}
+
+	close(fds[0]);
+	close(fds[1]);
+}
+
 int main() {
-	plan(22);
+	plan(39);
 
 	test_capabilities_advertise_compression();
 	test_capabilities_set_zstd_accepted();
 	test_capabilities_set_lz4_accepted();
 	test_capabilities_set_unsupported_rejected();
 	test_capabilities_set_garbage_rejected();
+
+	test_decompress_zstd_single_message();
+	test_decompress_lz4_single_message();
+	test_decompress_oversize_rejected();
+	test_decompress_garbage_rejected();
+	test_compression_without_negotiation_still_5008();
 
 	return exit_status();
 }
