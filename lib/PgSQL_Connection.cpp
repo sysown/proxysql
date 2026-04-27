@@ -1308,10 +1308,16 @@ void PgSQL_Connection::compute_unknown_transaction_status() {
 			return;
 		}
 
-		/*if (is_connected() == false) {
+		// On a broken backend, PQtransactionStatus() returns PQTRANS_UNKNOWN
+		// even if a transaction was active — libpq has no cached INTRANS bit
+		// equivalent to MySQL's server_status & SERVER_STATUS_IN_TRANS. Force
+		// unknown_transaction_status=true so IsActiveTransaction() still
+		// reports true and the retry path does not replay inside-tx statements
+		// on a fresh connection (which would run them as autocommit).
+		if (is_connected() == false) {
 			unknown_transaction_status = true;
 			return;
-		}*/
+		}
 
 		switch (PQtransactionStatus(pgsql_conn)) {
 		case PQTRANS_INTRANS:
