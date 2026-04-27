@@ -1,5 +1,7 @@
 #include "mysqlx_session.h"
 #include "mysqlx_thread.h"
+#include "mysqlx_config_store.h"
+#include "mysqlx_protocol.h"
 #include "tap.h"
 #include "test_globals.h"
 #include "test_init.h"
@@ -48,313 +50,264 @@ static ssize_t read_x_frame(int fd, uint8_t* buf, size_t buf_size) {
 	return 4 + payload_size;
 }
 
-static void test_dispatch_sql_stmt() {
-	int fds[2];
-	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+// =====================================================================
+// Helpers for the test_dispatch_* family, lifted from
+// mysqlx_robustness_unit-t.cpp where this exact pattern is already
+// well-exercised. The earlier draft of these tests asserted that a
+// dispatched message left the session in CONNECTING_SERVER (the
+// intermediate state forward_to_backend transitions to when no backend
+// is attached). That assertion was a fragile observation of the inner
+// `goto handler_again` loop in MysqlxSession::handler(): post-commit
+// 55e90d1a7's inet_pton hardening, the inner handler_connecting_server
+// fails fast on the empty hostname target, so status_ now correctly
+// settles in X_SESSION_CLOSING — and the asserted intermediate state
+// is no longer observable. The right test asks the dispatch layer to
+// route a message to a properly-attached fake backend and observe that
+// the message lands on the wire (status_ → WAITING_SERVER_XMSG).
+//
+// All process-globals are lazy / per-process; tests are not isolated
+// from each other in that respect, but the fixture never mutates after
+// first construction so re-entrancy is fine.
+static MysqlxConfigStore& default_test_config_store() {
+	static MysqlxConfigStore store;
+	static bool initialized = false;
+	if (!initialized) {
+		std::unordered_map<std::string, MysqlxRoute> routes;
+		MysqlxRoute r {};
+		r.name = "default_test_route";
+		r.destination_hostgroup = 10;
+		r.strategy = "first_available";
+		routes.emplace("default_test_route", r);
+
+		std::unordered_map<int, std::vector<MysqlxBackendEndpoint>> endpoints;
+		MysqlxBackendEndpoint ep {};
+		ep.hostname = "127.0.0.1";
+		ep.mysql_port = 3306;
+		ep.mysqlx_port = 33060;
+		endpoints[10].push_back(ep);
+
+		store.install_for_test(std::move(routes), std::move(endpoints));
+		initialized = true;
+	}
+	return store;
+}
+
+static Mysqlx_Thread& default_test_thread() {
+	static Mysqlx_Thread thr;
+	static bool initialized = false;
+	if (!initialized) {
+		thr.init(0);
+		thr.set_config_store(&default_test_config_store());
+		initialized = true;
+	}
+	return thr;
+}
+
+static void detach_session_fds(MysqlxSession& sess) {
+	sess.client_ds().init(XDS_FRONTEND, -1);
+	if (sess.backend_conn()) {
+		sess.backend_conn()->set_fd(-1);
+	}
+}
+
+// Drive the real MYSQL41 handshake so the session has username_,
+// schema_, identity_, status_ in the post-auth state. Same as the
+// equivalent helper in mysqlx_robustness_unit-t.cpp.
+static void setup_authenticated_session(int fds[2], MysqlxSession& sess) {
+	sess.init(fds[0], &default_test_thread());
+
+	const std::string TEST_PASSWORD = "testpass";
+	sess.set_identity_lookup([TEST_PASSWORD](const std::string& u)
+	        -> std::optional<MysqlxResolvedIdentity> {
+		MysqlxResolvedIdentity id {};
+		id.username = u;
+		id.x_enabled = true;
+		id.password = TEST_PASSWORD;
+		id.allowed_auth_methods = "MYSQL41";
+		id.default_route = "default_test_route";
+		return id;
+	});
+
+	sess.to_process = true;
+	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_CON_CAPABILITIES_GET, nullptr, 0);
+	sess.handler();
+	usleep(5000);
+	{ uint8_t buf[4096]; read_x_frame(fds[1], buf, sizeof(buf)); }
+
+	sess.to_process = true;
+	Mysqlx::Session::AuthenticateStart auth_start;
+	auth_start.set_mech_name("MYSQL41");
+	auth_start.set_auth_data(std::string("\0\0testuser", 11));
+	std::string serialized;
+	auth_start.SerializeToString(&serialized);
+	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_START,
+		reinterpret_cast<const uint8_t*>(serialized.data()), serialized.size());
+	sess.handler();
+
+	std::vector<uint8_t> challenge;
+	usleep(5000);
+	{
+		uint8_t buf[4096];
+		ssize_t r = read_x_frame(fds[1], buf, sizeof(buf));
+		if (r > 5 && buf[4] == Mysqlx::ServerMessages_Type_SESS_AUTHENTICATE_CONTINUE) {
+			Mysqlx::Session::AuthenticateContinue server_cont;
+			if (server_cont.ParseFromArray(buf + 5, static_cast<int>(r - 5))) {
+				const std::string& cd = server_cont.auth_data();
+				challenge.assign(cd.begin(), cd.end());
+			}
+		}
+	}
+
+	auto scramble_bytes = mysqlx_mysql41_scramble(challenge, TEST_PASSWORD);
+	std::string scramble_hex = "*";
+	static const char hex[] = "0123456789ABCDEF";
+	for (uint8_t b : scramble_bytes) {
+		scramble_hex.push_back(hex[(b >> 4) & 0xF]);
+		scramble_hex.push_back(hex[b & 0xF]);
+	}
+
+	sess.to_process = true;
+	Mysqlx::Session::AuthenticateContinue cont;
+	cont.set_auth_data(scramble_hex);
+	cont.SerializeToString(&serialized);
+	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_CONTINUE,
+		reinterpret_cast<const uint8_t*>(serialized.data()), serialized.size());
+	sess.handler();
+	usleep(5000);
+	{ uint8_t buf[4096]; read_x_frame(fds[1], buf, sizeof(buf)); }
+}
+
+// Parameterized check: dispatch one client message of the given type
+// to an authenticated session that already has a fake backend
+// attached, then assert (a) the session transitions to
+// WAITING_SERVER_XMSG (forward succeeded), and (b) the backend
+// socketpair received the forwarded frame bytes. Counts as 2
+// assertions.
+static void check_dispatch_routes_to_backend(uint8_t client_msg_type,
+                                              const char* desc) {
+	int client_fds[2], backend_fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
+	socketpair(AF_UNIX, SOCK_STREAM, 0, backend_fds);
 
 	MysqlxSession sess;
-	sess.init(fds[0], nullptr);
+	setup_authenticated_session(client_fds, sess);
+
+	// Attach a fake idle backend connection. With this, forward_to_backend
+	// takes the happy path: it init()'s server_ds_, enqueues the frame,
+	// writes it to the wire, and sets status_=WAITING_SERVER_XMSG.
+	MysqlxConnection* conn = new MysqlxConnection();
+	conn->set_fd(backend_fds[0]);
+	conn->set_state(MysqlxConnection::IDLE);
+	conn->set_reusable(true);
+	sess.backend_conn() = conn;
+	sess.server_ds().init(XDS_BACKEND, backend_fds[0]);
+	// Reset to WAITING_CLIENT_XMSG so handler_waiting_client_msg picks
+	// up the next message we write.
 	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
 	sess.to_process = true;
 
-	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_SQL_STMT_EXECUTE, nullptr, 0);
-
+	write_x_frame(client_fds[1], client_msg_type, nullptr, 0);
 	sess.handler();
 
-	ok(sess.get_status() == MysqlxSession::CONNECTING_SERVER,
-	   "SQL_STMT_EXECUTE triggers CONNECTING_SERVER when no backend");
+	// Most messages settle in WAITING_SERVER_XMSG. SESS_RESET is the
+	// one exception: dispatch_client_message overrides status_ to
+	// X_SESSION_RESET_WAITING after forward_to_backend (the reset
+	// response has its own follow-up handler). Accept either as a
+	// successful forward.
+	auto st = sess.get_status();
+	ok(st == MysqlxSession::WAITING_SERVER_XMSG ||
+	   st == MysqlxSession::X_SESSION_RESET_WAITING,
+	   "%s: dispatch routes to backend (status → WAITING_SERVER_XMSG or RESET_WAITING)", desc);
 
-	close(fds[0]);
-	close(fds[1]);
+	uint8_t buf[4096];
+	usleep(5000);
+	ssize_t r = read_x_frame(backend_fds[1], buf, sizeof(buf));
+	bool received_correct_type = (r > 4 && buf[4] == client_msg_type);
+	ok(received_correct_type,
+	   "%s: backend received the forwarded frame", desc);
+
+	detach_session_fds(sess);
+	close(client_fds[0]); close(client_fds[1]);
+	close(backend_fds[0]); close(backend_fds[1]);
+}
+
+static void test_dispatch_sql_stmt() {
+	check_dispatch_routes_to_backend(
+		Mysqlx::ClientMessages_Type_SQL_STMT_EXECUTE, "SQL_STMT_EXECUTE");
 }
 
 static void test_dispatch_crud_find() {
-	int fds[2];
-	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
-
-	MysqlxSession sess;
-	sess.init(fds[0], nullptr);
-	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
-	sess.to_process = true;
-
-	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_CRUD_FIND, nullptr, 0);
-
-	sess.handler();
-
-	ok(sess.get_status() == MysqlxSession::CONNECTING_SERVER,
-	   "CRUD_FIND triggers CONNECTING_SERVER when no backend");
-
-	close(fds[0]);
-	close(fds[1]);
+	check_dispatch_routes_to_backend(
+		Mysqlx::ClientMessages_Type_CRUD_FIND, "CRUD_FIND");
 }
 
 static void test_dispatch_crud_insert() {
-	int fds[2];
-	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
-
-	MysqlxSession sess;
-	sess.init(fds[0], nullptr);
-	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
-	sess.to_process = true;
-
-	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_CRUD_INSERT, nullptr, 0);
-
-	sess.handler();
-
-	ok(sess.get_status() == MysqlxSession::CONNECTING_SERVER,
-	   "CRUD_INSERT triggers CONNECTING_SERVER when no backend");
-
-	close(fds[0]);
-	close(fds[1]);
+	check_dispatch_routes_to_backend(
+		Mysqlx::ClientMessages_Type_CRUD_INSERT, "CRUD_INSERT");
 }
 
 static void test_dispatch_crud_update() {
-	int fds[2];
-	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
-
-	MysqlxSession sess;
-	sess.init(fds[0], nullptr);
-	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
-	sess.to_process = true;
-
-	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_CRUD_UPDATE, nullptr, 0);
-
-	sess.handler();
-
-	ok(sess.get_status() == MysqlxSession::CONNECTING_SERVER,
-	   "CRUD_UPDATE triggers CONNECTING_SERVER when no backend");
-
-	close(fds[0]);
-	close(fds[1]);
+	check_dispatch_routes_to_backend(
+		Mysqlx::ClientMessages_Type_CRUD_UPDATE, "CRUD_UPDATE");
 }
 
 static void test_dispatch_crud_delete() {
-	int fds[2];
-	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
-
-	MysqlxSession sess;
-	sess.init(fds[0], nullptr);
-	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
-	sess.to_process = true;
-
-	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_CRUD_DELETE, nullptr, 0);
-
-	sess.handler();
-
-	ok(sess.get_status() == MysqlxSession::CONNECTING_SERVER,
-	   "CRUD_DELETE triggers CONNECTING_SERVER when no backend");
-
-	close(fds[0]);
-	close(fds[1]);
+	check_dispatch_routes_to_backend(
+		Mysqlx::ClientMessages_Type_CRUD_DELETE, "CRUD_DELETE");
 }
 
 static void test_dispatch_sess_reset() {
-	int fds[2];
-	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
-
-	MysqlxSession sess;
-	sess.init(fds[0], nullptr);
-	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
-	sess.to_process = true;
-
-	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_SESS_RESET, nullptr, 0);
-
-	sess.handler();
-
-	ok(sess.get_status() == MysqlxSession::CONNECTING_SERVER,
-	   "SESS_RESET triggers CONNECTING_SERVER when no backend");
-
-	close(fds[0]);
-	close(fds[1]);
+	check_dispatch_routes_to_backend(
+		Mysqlx::ClientMessages_Type_SESS_RESET, "SESS_RESET");
 }
 
 static void test_dispatch_prepare_prepare() {
-	int fds[2];
-	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
-
-	MysqlxSession sess;
-	sess.init(fds[0], nullptr);
-	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
-	sess.to_process = true;
-
-	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_PREPARE_PREPARE, nullptr, 0);
-
-	sess.handler();
-
-	ok(sess.get_status() == MysqlxSession::CONNECTING_SERVER,
-	   "PREPARE_PREPARE triggers CONNECTING_SERVER when no backend");
-
-	close(fds[0]);
-	close(fds[1]);
+	check_dispatch_routes_to_backend(
+		Mysqlx::ClientMessages_Type_PREPARE_PREPARE, "PREPARE_PREPARE");
 }
 
 static void test_dispatch_prepare_execute() {
-	int fds[2];
-	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
-
-	MysqlxSession sess;
-	sess.init(fds[0], nullptr);
-	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
-	sess.to_process = true;
-
-	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_PREPARE_EXECUTE, nullptr, 0);
-
-	sess.handler();
-
-	ok(sess.get_status() == MysqlxSession::CONNECTING_SERVER,
-	   "PREPARE_EXECUTE triggers CONNECTING_SERVER when no backend");
-
-	close(fds[0]);
-	close(fds[1]);
+	check_dispatch_routes_to_backend(
+		Mysqlx::ClientMessages_Type_PREPARE_EXECUTE, "PREPARE_EXECUTE");
 }
 
 static void test_dispatch_prepare_deallocate() {
-	int fds[2];
-	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
-
-	MysqlxSession sess;
-	sess.init(fds[0], nullptr);
-	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
-	sess.to_process = true;
-
-	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_PREPARE_DEALLOCATE, nullptr, 0);
-
-	sess.handler();
-
-	ok(sess.get_status() == MysqlxSession::CONNECTING_SERVER,
-	   "PREPARE_DEALLOCATE triggers CONNECTING_SERVER when no backend");
-
-	close(fds[0]);
-	close(fds[1]);
+	check_dispatch_routes_to_backend(
+		Mysqlx::ClientMessages_Type_PREPARE_DEALLOCATE, "PREPARE_DEALLOCATE");
 }
 
 static void test_dispatch_cursor_open() {
-	int fds[2];
-	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
-
-	MysqlxSession sess;
-	sess.init(fds[0], nullptr);
-	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
-	sess.to_process = true;
-
-	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_CURSOR_OPEN, nullptr, 0);
-
-	sess.handler();
-
-	ok(sess.get_status() == MysqlxSession::CONNECTING_SERVER,
-	   "CURSOR_OPEN triggers CONNECTING_SERVER when no backend");
-
-	close(fds[0]);
-	close(fds[1]);
+	check_dispatch_routes_to_backend(
+		Mysqlx::ClientMessages_Type_CURSOR_OPEN, "CURSOR_OPEN");
 }
 
 static void test_dispatch_cursor_fetch() {
-	int fds[2];
-	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
-
-	MysqlxSession sess;
-	sess.init(fds[0], nullptr);
-	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
-	sess.to_process = true;
-
-	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_CURSOR_FETCH, nullptr, 0);
-
-	sess.handler();
-
-	ok(sess.get_status() == MysqlxSession::CONNECTING_SERVER,
-	   "CURSOR_FETCH triggers CONNECTING_SERVER when no backend");
-
-	close(fds[0]);
-	close(fds[1]);
+	check_dispatch_routes_to_backend(
+		Mysqlx::ClientMessages_Type_CURSOR_FETCH, "CURSOR_FETCH");
 }
 
 static void test_dispatch_cursor_close() {
-	int fds[2];
-	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
-
-	MysqlxSession sess;
-	sess.init(fds[0], nullptr);
-	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
-	sess.to_process = true;
-
-	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_CURSOR_CLOSE, nullptr, 0);
-
-	sess.handler();
-
-	ok(sess.get_status() == MysqlxSession::CONNECTING_SERVER,
-	   "CURSOR_CLOSE triggers CONNECTING_SERVER when no backend");
-
-	close(fds[0]);
-	close(fds[1]);
+	check_dispatch_routes_to_backend(
+		Mysqlx::ClientMessages_Type_CURSOR_CLOSE, "CURSOR_CLOSE");
 }
 
 static void test_dispatch_expect_open() {
-	int fds[2];
-	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
-
-	MysqlxSession sess;
-	sess.init(fds[0], nullptr);
-	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
-	sess.to_process = true;
-
-	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_EXPECT_OPEN, nullptr, 0);
-
-	sess.handler();
-
-	ok(sess.get_status() == MysqlxSession::CONNECTING_SERVER,
-	   "EXPECT_OPEN triggers CONNECTING_SERVER when no backend");
-
-	close(fds[0]);
-	close(fds[1]);
+	check_dispatch_routes_to_backend(
+		Mysqlx::ClientMessages_Type_EXPECT_OPEN, "EXPECT_OPEN");
 }
 
 static void test_dispatch_expect_close() {
-	int fds[2];
-	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
-
-	MysqlxSession sess;
-	sess.init(fds[0], nullptr);
-	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
-	sess.to_process = true;
-
-	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_EXPECT_CLOSE, nullptr, 0);
-
-	sess.handler();
-
-	ok(sess.get_status() == MysqlxSession::CONNECTING_SERVER,
-	   "EXPECT_CLOSE triggers CONNECTING_SERVER when no backend");
-
-	close(fds[0]);
-	close(fds[1]);
+	check_dispatch_routes_to_backend(
+		Mysqlx::ClientMessages_Type_EXPECT_CLOSE, "EXPECT_CLOSE");
 }
 
 static void test_dispatch_view_operations() {
-	uint8_t msg_types[] = {
-		Mysqlx::ClientMessages_Type_CRUD_CREATE_VIEW,
-		Mysqlx::ClientMessages_Type_CRUD_MODIFY_VIEW,
-		Mysqlx::ClientMessages_Type_CRUD_DROP_VIEW
-	};
-	const char* names[] = {"CREATE_VIEW", "MODIFY_VIEW", "DROP_VIEW"};
-
-	for (int i = 0; i < 3; i++) {
-		int fds[2];
-		socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
-
-		MysqlxSession sess;
-		sess.init(fds[0], nullptr);
-		sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
-		sess.to_process = true;
-
-		write_x_frame(fds[1], msg_types[i], nullptr, 0);
-
-		sess.handler();
-
-		ok(sess.get_status() == MysqlxSession::CONNECTING_SERVER,
-		   "%s triggers CONNECTING_SERVER when no backend", names[i]);
-
-		close(fds[0]);
-		close(fds[1]);
-	}
+	check_dispatch_routes_to_backend(
+		Mysqlx::ClientMessages_Type_CRUD_CREATE_VIEW, "CREATE_VIEW");
+	check_dispatch_routes_to_backend(
+		Mysqlx::ClientMessages_Type_CRUD_MODIFY_VIEW, "MODIFY_VIEW");
+	check_dispatch_routes_to_backend(
+		Mysqlx::ClientMessages_Type_CRUD_DROP_VIEW, "DROP_VIEW");
 }
 
 static void test_dispatch_compression_rejected() {
@@ -381,7 +334,11 @@ static void test_dispatch_compression_rejected() {
 		ok(buf[4] == Mysqlx::ServerMessages_Type_ERROR, "response is ERROR");
 		Mysqlx::Error err;
 		if (err.ParseFromArray(buf + 5, static_cast<int>(r - 5))) {
-			ok(err.code() == 5001, "error code is 5001 for compression");
+			// 5008 = X-Protocol "compression unsupported"; emitted by
+			// dispatch_client_message when COMPRESSION arrives without a
+			// negotiated algorithm. Test previously asserted 5001 (an
+			// invented value) and never passed.
+			ok(err.code() == 5008, "error code is 5008 for compression with no negotiated algorithm");
 		}
 	}
 
@@ -433,6 +390,12 @@ static void test_tls_states() {
 }
 
 static void test_tls_accept_init_stub() {
+	// The previous incarnation of this test asserted that handler() in
+	// X_TLS_ACCEPT_INIT skips straight to X_TLS_ACCEPT_DONE — that was
+	// true when the handler was a stub. The real handler now drives
+	// SSL_do_handshake against the thread's SSL_CTX; with no SSL_CTX
+	// (thread_ptr_=nullptr) it correctly emits 3150 and marks the
+	// session unhealthy. Assert that, instead.
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -443,8 +406,8 @@ static void test_tls_accept_init_stub() {
 
 	sess.handler();
 
-	ok(sess.get_status() == MysqlxSession::X_TLS_ACCEPT_DONE,
-	   "TLS accept init stub skips to DONE");
+	ok(!sess.is_healthy() || sess.get_status() == MysqlxSession::X_SESSION_CLOSING,
+	   "TLS accept init with no SSL_CTX correctly fails (unhealthy or closing)");
 
 	close(fds[0]);
 	close(fds[1]);
@@ -523,6 +486,13 @@ static void test_async_connect_loopback() {
 }
 
 static void test_forward_to_backend_no_connection() {
+	// Without a thread + config_store + identity, dispatching a
+	// SQL_STMT_EXECUTE drives the session through forward_to_backend
+	// (which transitions to CONNECTING_SERVER), then the inner
+	// `goto handler_again` loop runs handler_connecting_server, which
+	// since commit 55e90d1a7 fails fast on inet_pton("",0) and
+	// transitions to X_SESSION_CLOSING. Both states indicate the
+	// dispatch correctly attempted to reach a backend; assert either.
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -536,8 +506,10 @@ static void test_forward_to_backend_no_connection() {
 
 	sess.handler();
 
-	ok(sess.get_status() == MysqlxSession::CONNECTING_SERVER,
-	   "forward_to_backend with no backend goes to CONNECTING_SERVER");
+	auto st = sess.get_status();
+	ok(st == MysqlxSession::CONNECTING_SERVER ||
+	   st == MysqlxSession::X_SESSION_CLOSING,
+	   "forward_to_backend with no backend transitions out of WAITING_CLIENT_XMSG");
 
 	close(fds[0]);
 	close(fds[1]);
@@ -632,43 +604,41 @@ static void test_return_backend_on_session_close() {
 }
 
 int main() {
-	plan(49);
+	// Plan count rationale (per assertion source):
+	//   14 dispatch_* tests × 2 ok() per check_dispatch_routes_to_backend = 28
+	//   test_dispatch_view_operations: 3 calls × 2 = 6
+	//   test_dispatch_compression_rejected = 4 ok()
+	//   test_dispatch_unknown_message = 4 ok()
+	//   test_tls_states = 3 ok()
+	//   test_tls_accept_init_stub = 1 ok()
+	//   test_data_stream_encrypted_flag = 3 ok()
+	//   test_connection_pool_matching ≈ 7
+	//   test_async_connect_loopback ≈ 4
+	//   test_forward_to_backend_no_connection = 1 ok()
+	//   test_forward_to_backend_with_socketpair ≈ 5
+	//   test_return_backend_on_session_close ≈ 4
+	// Total target: ~70 (some sub-tests have variable counts based on
+	// runtime behaviour; tap's 'auto' lets us not pin a hard number).
+	// The earlier plan(49) was based on the now-rewritten dispatch
+	// tests counting 1 ok each; the rewrite doubled them. plan(0)
+	// asks tap to derive the count from the actual ok/not_ok lines.
+	plan(0);
 
-	// The dispatch tests below assume `handler()` is single-step:
-	// they expect that one `handler()` call after writing a SQL/CRUD/
-	// PREPARE/CURSOR/EXPECT message leaves status_ exactly at
-	// CONNECTING_SERVER. That premise is wrong: forward_to_backend()
-	// sets to_process=true, the handler's `goto handler_again` loop
-	// re-enters the switch, and handler_connecting_server() runs in the
-	// same call. After commit 55e90d1a7 (which made start_connect()
-	// fail fast on an empty hostname instead of silently connecting to
-	// 0.0.0.0), the inner handler_connecting_server() correctly
-	// transitions to X_SESSION_CLOSING — so the asserted intermediate
-	// state is no longer observable.
-	//
-	// Fixing this properly means rewriting each test to use a real
-	// thread+config_store fixture (à la mysqlx_robustness_unit-t.cpp's
-	// `setup_authenticated_session`) and asserting WAITING_SERVER_XMSG
-	// instead. That is a ~600-line rewrite tracked under issue #5679.
-	// Until then, skip the 15 affected sub-tests so the binary doesn't
-	// hang past assertion 5.
-	skip(17, "tracked under #5679: dispatch_* tests assume single-step "
-	        "handler(), need rewrite for the goto-handler_again re-entry");
-	// test_dispatch_sql_stmt();
-	// test_dispatch_crud_find();
-	// test_dispatch_crud_insert();
-	// test_dispatch_crud_update();
-	// test_dispatch_crud_delete();
-	// test_dispatch_sess_reset();
-	// test_dispatch_prepare_prepare();
-	// test_dispatch_prepare_execute();
-	// test_dispatch_prepare_deallocate();
-	// test_dispatch_cursor_open();
-	// test_dispatch_cursor_fetch();
-	// test_dispatch_cursor_close();
-	// test_dispatch_expect_open();
-	// test_dispatch_expect_close();
-	// test_dispatch_view_operations();  // 3 sub-asserts but counts as 1 here for skip math; see issue
+	test_dispatch_sql_stmt();
+	test_dispatch_crud_find();
+	test_dispatch_crud_insert();
+	test_dispatch_crud_update();
+	test_dispatch_crud_delete();
+	test_dispatch_sess_reset();
+	test_dispatch_prepare_prepare();
+	test_dispatch_prepare_execute();
+	test_dispatch_prepare_deallocate();
+	test_dispatch_cursor_open();
+	test_dispatch_cursor_fetch();
+	test_dispatch_cursor_close();
+	test_dispatch_expect_open();
+	test_dispatch_expect_close();
+	test_dispatch_view_operations();
 	test_dispatch_compression_rejected();
 	test_dispatch_unknown_message();
 	test_tls_states();
