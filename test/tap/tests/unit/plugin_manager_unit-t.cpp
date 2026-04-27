@@ -35,7 +35,13 @@ void make_log_path() {
 
 void clear_log() {
 	if (g_log_path.empty()) return;
-	std::ofstream(g_log_path, std::ios::trunc);
+	// Truncate via constructor + immediate destructor.  The named local
+	// variable is intentional: SonarCloud's "Name this unused temporary
+	// object" rule does not recognise the truncate-via-temporary idiom,
+	// and the cosmetic name silences the false positive without changing
+	// behaviour.
+	std::ofstream truncate_handle(g_log_path, std::ios::trunc);
+	(void)truncate_handle;
 }
 
 std::string read_log() {
