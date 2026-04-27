@@ -144,9 +144,11 @@ std::string proxysql_resolve_configured_plugin_admin_alias(const std::string& sq
 // Phase A + B of the four-phase lifecycle: dlopen() each module, read its
 // descriptor, then call register_schemas() on plugins that opted in. On
 // success, `manager` is populated AND installed as the active manager so
-// that ProxySQL_Admin::materialize_plugin_tables can see the declared
-// tables. Phase D (init) must be invoked separately — after admin module
-// bootstrap — via proxysql_init_configured_plugins.
+// that ProxySQL_Admin::init() can see the declared tables and merge them
+// into tables_defs_{admin,config,stats} for the existing
+// check_and_build_standard_tables DDL pass. Phase D (init) must be
+// invoked separately — after admin module bootstrap — via
+// proxysql_init_configured_plugins.
 bool proxysql_load_configured_plugins(
 	std::unique_ptr<ProxySQL_PluginManager>& manager,
 	const std::vector<std::string>& plugin_modules,
