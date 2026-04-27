@@ -644,6 +644,13 @@ void MysqlxSession::handler_auth_challenge_response() {
 		return;
 	}
 
+	// Defense in depth: clear the verified challenge so a stale value
+	// cannot be re-used by a misbehaving client. Combined with the
+	// re-auth rejection in dispatch_client_message, this leaves no
+	// path for AuthenticateContinue to be replayed against the same
+	// challenge after AuthenticateOk.
+	auth_challenge_.clear();
+
 	last_active_time_ = monotonic_time_ms();
 	send_auth_ok();
 	status_ = WAITING_CLIENT_XMSG;
@@ -651,6 +658,26 @@ void MysqlxSession::handler_auth_challenge_response() {
 }
 
 int MysqlxSession::dispatch_client_message(uint8_t msg_type) {
+	// Re-authentication on an established session is not supported. The
+	// X Protocol uses Mysqlx::Session::Reset for that purpose; a direct
+	// AUTHENTICATE_START/CONTINUE after the session is already in
+	// WAITING_CLIENT_XMSG would otherwise overwrite username_,
+	// identity_, target_hostgroup_, target_address_, target_port_ —
+	// without tearing down backend_conn_, so the next StmtExecute would
+	// be forwarded over the previous user's pooled backend connection.
+	// That is an identity-coherence / audit hazard (the proxy bills the
+	// query as user B while the backend executes it as user A's role).
+	// Reject explicitly with a fatal error and drop the session.
+	if ((msg_type == Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_START ||
+	     msg_type == Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_CONTINUE) &&
+	    status_ == WAITING_CLIENT_XMSG) {
+		client_ds_.pop_frame();
+		send_error(1845, "Re-authentication is not supported on an active session; "
+		                 "use Mysqlx::Session::Reset to start a new session", true);
+		status_ = X_SESSION_CLOSING;
+		healthy = false;
+		return -1;
+	}
 	switch (msg_type) {
 		case Mysqlx::ClientMessages_Type_CON_CAPABILITIES_GET:
 			handler_capabilities_get(); return 0;

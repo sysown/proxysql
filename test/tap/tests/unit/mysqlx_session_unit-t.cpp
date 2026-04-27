@@ -396,7 +396,14 @@ static void test_error_severity_non_fatal() {
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 	MysqlxSession sess;
 	sess.init(fds[0], nullptr);
-	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
+	// Drive the auth flow from CONNECTING_CLIENT (the natural startup
+	// state set by init()). Earlier versions of this test forced status_
+	// to WAITING_CLIENT_XMSG as a shortcut, but that pre-authenticated
+	// shortcut now collides with the re-auth rejection in
+	// dispatch_client_message(): re-authenticating an active session is
+	// no longer permitted (the X Protocol uses Mysqlx::Session::Reset
+	// for that purpose). The session naturally reaches X_AUTH_CHALLENGE_
+	// SENT after AUTHENTICATE_START anyway, so just don't override.
 	sess.to_process = true;
 
 	Mysqlx::Session::AuthenticateStart auth_start;

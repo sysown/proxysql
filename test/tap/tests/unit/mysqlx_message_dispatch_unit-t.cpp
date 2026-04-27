@@ -421,7 +421,10 @@ static void test_dispatch_unknown_message() {
 }
 
 static void test_tls_states() {
-	ok(MysqlxSession::X_TLS_ACCEPT_INIT > MysqlxSession::X_FAST_FORWARD,
+	// X_FAST_FORWARD was retired with the dormant MysqlxWorker path
+	// (commit 79cac4c97); compare against a still-extant earlier state
+	// to keep the "TLS states are after the basic states" assertion.
+	ok(MysqlxSession::X_TLS_ACCEPT_INIT > MysqlxSession::CONNECTING_CLIENT,
 	   "X_TLS_ACCEPT_INIT is valid enum value");
 	ok(MysqlxSession::X_TLS_ACCEPT_DONE > MysqlxSession::X_TLS_ACCEPT_CONT,
 	   "X_TLS_ACCEPT_DONE > X_TLS_ACCEPT_CONT");
