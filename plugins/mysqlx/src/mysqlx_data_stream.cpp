@@ -65,6 +65,17 @@ void MysqlxDataStream::close_and_reset() {
 	type_ = XDS_FRONTEND;
 }
 
+void MysqlxDataStream::clear_io_buffers() {
+	read_buf_.clear();
+	read_offset_ = 0;
+	write_buf_.clear();
+	write_offset_ = 0;
+	complete_frames_.clear();
+	parse_error_ = false;
+	ssl_write_buf_.clear();
+	ssl_write_offset_ = 0;
+}
+
 void MysqlxDataStream::set_nonblocking() {
 	if (fd_ >= 0) {
 		int flags = fcntl(fd_, F_GETFL, 0);

@@ -355,55 +355,66 @@ void MysqlxSession::handler_capabilities_set() {
 	const auto& frame = client_ds_.front_frame();
 	if (frame.size() > 5) {
 		Mysqlx::Connection::CapabilitiesSet cap_set;
-		if (cap_set.ParseFromArray(frame.data() + 5, static_cast<int>(frame.size() - 5))) {
-			// First pass: detect the `compression` capability before TLS so
-			// a single CapabilitiesSet message that combines both does not
-			// silently drop the compression negotiation. We process TLS
-			// in its own pass to preserve the existing handshake-flow
-			// invariant (TLS terminates capability negotiation).
-			MysqlxCompressionAlgo new_algo = MYSQLX_COMPR_NONE;
-			bool new_combine = false;
-			uint32_t new_max_combine = 0;
-			bool saw_compression = false;
-			for (const auto& cap : cap_set.capabilities().capabilities()) {
-				if (cap.name() == "compression") {
-					saw_compression = true;
-					if (!parse_compression_capability(cap, &new_algo,
-					                                 &new_combine,
-					                                 &new_max_combine)) {
-						client_ds_.pop_frame();
-						// 5052: Capability prepare failed for ... — the
-						// X Protocol convention for an unsupported or
-						// malformed capability value.
-						send_error(5052, "Capability 'compression' value not supported");
-						status_ = CONNECTING_CLIENT;
-						return;
-					}
-					break;
-				}
-			}
+		if (!cap_set.ParseFromArray(frame.data() + 5, static_cast<int>(frame.size() - 5))) {
+			// Malformed CapabilitiesSet body: do NOT fall through to send_ok().
+			// A buggy or hostile client that ships unparseable capability
+			// payloads must not be told the negotiation succeeded — that
+			// would leave the server believing capabilities are in a state
+			// the client never actually selected. 5051 is the X Protocol
+			// convention for an unrecognized/unparseable capability message.
+			client_ds_.pop_frame();
+			send_error(5051, "Invalid CapabilitiesSet payload");
+			status_ = CONNECTING_CLIENT;
+			return;
+		}
 
-			for (const auto& cap : cap_set.capabilities().capabilities()) {
-				if (cap.name() == "tls") {
+		// First pass: detect the `compression` capability before TLS so
+		// a single CapabilitiesSet message that combines both does not
+		// silently drop the compression negotiation. We process TLS
+		// in its own pass to preserve the existing handshake-flow
+		// invariant (TLS terminates capability negotiation).
+		MysqlxCompressionAlgo new_algo = MYSQLX_COMPR_NONE;
+		bool new_combine = false;
+		uint32_t new_max_combine = 0;
+		bool saw_compression = false;
+		for (const auto& cap : cap_set.capabilities().capabilities()) {
+			if (cap.name() == "compression") {
+				saw_compression = true;
+				if (!parse_compression_capability(cap, &new_algo,
+				                                 &new_combine,
+				                                 &new_max_combine)) {
 					client_ds_.pop_frame();
-					SSL_CTX* ctx = thread_ptr_ ? thread_ptr_->get_ssl_ctx() : nullptr;
-					if (!ctx) {
-						send_error(3150, "TLS is not configured on server");
-						healthy = false;
-						return;
-					}
-					send_ok();
-					status_ = X_TLS_ACCEPT_INIT;
-					to_process = true;
+					// 5052: Capability prepare failed for ... — the
+					// X Protocol convention for an unsupported or
+					// malformed capability value.
+					send_error(5052, "Capability 'compression' value not supported");
+					status_ = CONNECTING_CLIENT;
 					return;
 				}
+				break;
 			}
+		}
 
-			if (saw_compression) {
-				compression_algo_ = new_algo;
-				compression_combine_mixed_messages_ = new_combine;
-				compression_max_combine_messages_ = new_max_combine;
+		for (const auto& cap : cap_set.capabilities().capabilities()) {
+			if (cap.name() == "tls") {
+				client_ds_.pop_frame();
+				SSL_CTX* ctx = thread_ptr_ ? thread_ptr_->get_ssl_ctx() : nullptr;
+				if (!ctx) {
+					send_error(3150, "TLS is not configured on server");
+					healthy = false;
+					return;
+				}
+				send_ok();
+				status_ = X_TLS_ACCEPT_INIT;
+				to_process = true;
+				return;
 			}
+		}
+
+		if (saw_compression) {
+			compression_algo_ = new_algo;
+			compression_combine_mixed_messages_ = new_combine;
+			compression_max_combine_messages_ = new_max_combine;
 		}
 	}
 

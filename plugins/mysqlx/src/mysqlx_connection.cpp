@@ -41,6 +41,14 @@ void MysqlxConnection::reset() {
 	has_prepared_stmt_ = false;
 	reusable_ = true;
 	auth_state_ = BACKEND_AUTH_NOT_STARTED;
+	// Scrub residual I/O so the next session that picks up this pooled
+	// connection cannot inherit straggler frames from the prior session.
+	// Examples: a NOTICE that arrived after the terminal frame, an unread
+	// row that the prior session abandoned, a half-parsed frame, or a
+	// queued write that was never flushed. clear_io_buffers() preserves
+	// the SSL*/BIO state so we don't force a fresh TLS handshake on
+	// every pool checkout.
+	backend_ds_.clear_io_buffers();
 }
 
 int MysqlxConnection::start_connect(const char* host, int port) {
@@ -242,7 +250,15 @@ int MysqlxConnection::step_auth_authenticate_start_sent() {
 	}
 
 	Mysqlx::Session::AuthenticateContinue cont;
-	cont.ParseFromArray(frame->data() + 5, frame->size() - 5);
+	if (!cont.ParseFromArray(frame->data() + 5, frame->size() - 5)) {
+		// Malformed AuthenticateContinue from the backend (or MITM that
+		// bypassed TLS). The previous code ignored the return and operated
+		// on a possibly-empty/uninitialized message, feeding a zero-length
+		// challenge into the scramble step — undefined-input territory.
+		// Fail the auth explicitly instead.
+		auth_state_ = BACKEND_AUTH_ERROR;
+		return -1;
+	}
 	backend_challenge_.assign(cont.auth_data().begin(), cont.auth_data().end());
 
 	std::string challenge(cont.auth_data().begin(), cont.auth_data().end());
