@@ -255,12 +255,16 @@ static void test_mysql41_auth_with_credentials() {
 	MysqlxSession sess;
 	sess.init(fds[0], nullptr);
 
-	sess.set_credential_lookup([](const std::string& user) -> MysqlxCredentials {
+	sess.set_identity_lookup([](const std::string& user) -> std::optional<MysqlxResolvedIdentity> {
 		if (user == "testuser") {
-			std::vector<uint8_t> hash = mysqlx_mysql41_hash("testpass");
-			return { std::string(hash.begin(), hash.end()), true, "MYSQL41" };
+			MysqlxResolvedIdentity id{};
+			id.username = user;
+			id.x_enabled = true;
+			id.password = "testpass";
+			id.allowed_auth_methods = "MYSQL41";
+			return id;
 		}
-		return { "", false, "" };
+		return std::nullopt;
 	});
 
 	sess.to_process = true;
@@ -327,12 +331,16 @@ static void test_mysql41_auth_wrong_password() {
 	MysqlxSession sess;
 	sess.init(fds[0], nullptr);
 
-	sess.set_credential_lookup([](const std::string& user) -> MysqlxCredentials {
+	sess.set_identity_lookup([](const std::string& user) -> std::optional<MysqlxResolvedIdentity> {
 		if (user == "testuser") {
-			std::vector<uint8_t> hash = mysqlx_mysql41_hash("testpass");
-			return { std::string(hash.begin(), hash.end()), true, "MYSQL41" };
+			MysqlxResolvedIdentity id{};
+			id.username = user;
+			id.x_enabled = true;
+			id.password = "testpass";
+			id.allowed_auth_methods = "MYSQL41";
+			return id;
 		}
-		return { "", false, "" };
+		return std::nullopt;
 	});
 
 	sess.to_process = true;

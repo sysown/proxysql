@@ -176,6 +176,13 @@ ProxySQL_PluginCommandResult load_routes_to_runtime(const ProxySQL_PluginCommand
 	result.rows_affected = ctx.admindb->return_one_int("SELECT COUNT(*) FROM runtime_mysqlx_routes");
 	result.message = "mysqlx routes loaded to runtime";
 	reload_config_store(*ctx.admindb);
+	// Propagate the new desired route set to the listener topology: bind new
+	// routes, close listeners for removed or deactivated routes. The symbol
+	// is weak so unit tests that don't link plugin.cpp can resolve cleanly;
+	// in that case it's nullptr and reconciliation is skipped.
+	if (mysqlx_reconcile_listeners) {
+		mysqlx_reconcile_listeners(*ctx.admindb);
+	}
 	return result;
 }
 

@@ -37,6 +37,34 @@ void MysqlxDataStream::init(mysqlx_ds_type type, int fd) {
 	set_nonblocking();
 }
 
+void MysqlxDataStream::close_and_reset() {
+	if (ssl_) {
+		SSL_set_quiet_shutdown(ssl_, 1);
+		SSL_shutdown(ssl_);
+		SSL_free(ssl_);
+		ssl_ = nullptr;
+		rbio_ssl_ = nullptr;
+		wbio_ssl_ = nullptr;
+	}
+	ssl_write_buf_.clear();
+	ssl_write_offset_ = 0;
+	ssl_handshake_done_ = false;
+	ssl_failed_ = false;
+	encrypted_ = false;
+	read_buf_.clear();
+	read_offset_ = 0;
+	write_buf_.clear();
+	write_offset_ = 0;
+	complete_frames_.clear();
+	parse_error_ = false;
+	poll_events_ = 0;
+	revents_ = 0;
+	poll_fds_idx = -1;
+	fd_ = -1;
+	status_ = XDS_NOT_CONNECTED;
+	type_ = XDS_FRONTEND;
+}
+
 void MysqlxDataStream::set_nonblocking() {
 	if (fd_ >= 0) {
 		int flags = fcntl(fd_, F_GETFL, 0);
@@ -229,11 +257,16 @@ ssize_t MysqlxDataStream::read_from_net() {
 		}
 
 		uint8_t plain_buf[65536];
-		int decrypted;
+		int decrypted = 0;
 		while ((decrypted = SSL_read(ssl_, plain_buf, sizeof(plain_buf))) > 0) {
 			feed_bytes(plain_buf, static_cast<size_t>(decrypted));
 		}
-		if (decrypted <= 0) {
+		if (decrypted == 0) {
+			// SSL_read returning 0 is a clean TLS shutdown (close_notify).
+			// Surface it as a connection close, not as WANT_IO.
+			return 0;
+		}
+		if (decrypted < 0) {
 			mysqlx_ssl_status st = get_ssl_status(ssl_, decrypted);
 			if (st == MYSQLX_SSL_WANT_IO) {
 				queue_encrypted_output();

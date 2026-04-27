@@ -46,6 +46,16 @@ const char kRuntimeMysqlxEndpointsDdl[] =
 	" PRIMARY KEY (hostname, mysql_port)"
 	" )";
 
+// load_from_runtime also queries runtime_mysqlx_variables. Without the table
+// fetch_result returns false and the load short-circuits before swapping in
+// the newly-loaded routes/identities, silently breaking every scenario in
+// this file that depended on data actually being loaded.
+const char kRuntimeMysqlxVariablesDdl[] =
+	"CREATE TABLE runtime_mysqlx_variables ("
+	" variable_name VARCHAR NOT NULL PRIMARY KEY,"
+	" variable_value VARCHAR NOT NULL DEFAULT ''"
+	" )";
+
 std::unique_ptr<SQLite3DB> create_test_db() {
 	auto db = std::make_unique<SQLite3DB>();
 	db->open((char*)":memory:", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
@@ -54,6 +64,7 @@ std::unique_ptr<SQLite3DB> create_test_db() {
 	db->execute(kRuntimeMysqlxUsersDdl);
 	db->execute(kRuntimeMysqlxRoutesDdl);
 	db->execute(kRuntimeMysqlxEndpointsDdl);
+	db->execute(kRuntimeMysqlxVariablesDdl);
 	return db;
 }
 

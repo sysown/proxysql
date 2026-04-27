@@ -29,6 +29,11 @@ namespace {
 std::atomic<ProxySQL_PluginManager*> g_active_plugin_manager { nullptr };
 ProxySQL_PluginManager* g_registry_target = nullptr;
 std::mutex g_active_plugin_manager_mutex {};
+// Serializes load/init/stop operations. Held for the duration of a plugin
+// lifecycle transition so two reload paths cannot race on g_registry_target /
+// g_registry_registration_*. Distinct from g_active_plugin_manager_mutex,
+// which only guards pointer reads from the dispatch path.
+std::mutex g_plugin_lifecycle_mutex {};
 bool g_registry_registration_failed = false;
 std::string g_registry_registration_error {};
 
@@ -551,9 +556,10 @@ bool ProxySQL_PluginManager::stop_all() {
 			if (!it->descriptor->stop()) {
 				proxy_warning("Plugin stop failed: %s\n", plugin_name(it->descriptor).c_str());
 				ok = false;
-				continue;
 			}
 		}
+		// Mark stopped even on failure — never retry stop() on the same plugin.
+		// The destructor's stop_all() call must be idempotent across failure paths.
 		it->stopped = true;
 	}
 
@@ -889,6 +895,7 @@ bool proxysql_load_configured_plugins(
 	// manager — GloAdmin->materialize_plugin_tables() can then query it
 	// for the tables to CREATE. Phase D (init) runs later, via
 	// proxysql_init_configured_plugins, once admin is up.
+	std::lock_guard<std::mutex> lifecycle_lock(g_plugin_lifecycle_mutex);
 	err.clear();
 	{
 		std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
@@ -1011,6 +1018,7 @@ bool proxysql_start_configured_plugins(
 	ProxySQL_PluginManager* manager,
 	std::string& err
 ) {
+	std::lock_guard<std::mutex> lifecycle_lock(g_plugin_lifecycle_mutex);
 	err.clear();
 	if (manager == nullptr) {
 		return true;
@@ -1023,6 +1031,7 @@ bool proxysql_stop_configured_plugins(
 	std::unique_ptr<ProxySQL_PluginManager>& manager,
 	std::string& err
 ) {
+	std::lock_guard<std::mutex> lifecycle_lock(g_plugin_lifecycle_mutex);
 	err.clear();
 	{
 		std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
@@ -1032,12 +1041,16 @@ bool proxysql_stop_configured_plugins(
 		return true;
 	}
 
-	if (!manager->stop_all()) {
+	const bool stop_ok = manager->stop_all();
+	// Always tear down the manager so the .so is unmapped and no stale function
+	// pointers remain reachable. stop_all() is idempotent across failure (each
+	// plugin is marked stopped after one attempt) so the destructor's stop_all()
+	// will be a no-op.
+	manager.reset();
+	if (!stop_ok) {
 		err = "plugin stop failed";
 		return false;
 	}
-
-	manager.reset();
 	return true;
 }
 

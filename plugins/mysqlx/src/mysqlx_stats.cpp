@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cstring>
+#include <string>
 
 namespace {
 
@@ -48,6 +49,7 @@ void MysqlxStatsStore::record_conn_ok(const std::string& route_name, int destina
 void MysqlxStatsStore::record_conn_err(const std::string& route_name, int destination_hostgroup) {
 	std::lock_guard<std::mutex> lock(mutex_);
 	get_or_create(route_name, destination_hostgroup).conn_err.fetch_add(1, std::memory_order_relaxed);
+	last_conn_err_ = std::make_pair(route_name, destination_hostgroup);
 }
 
 void MysqlxStatsStore::record_conn_used(const std::string& route_name, int destination_hostgroup) {
@@ -69,27 +71,43 @@ uint64_t MysqlxStatsStore::get_conn_err(const std::string& route_name) const {
 	return it->second.conn_err.load(std::memory_order_relaxed);
 }
 
+void MysqlxStatsStore::reset_for_test() {
+	std::lock_guard<std::mutex> lock(mutex_);
+	route_stats_.clear();
+	last_conn_err_.reset();
+}
+
+std::optional<std::pair<std::string, int>> MysqlxStatsStore::get_last_conn_err_for_test() const {
+	std::lock_guard<std::mutex> lock(mutex_);
+	return last_conn_err_;
+}
+
 void MysqlxStatsStore::flush_to_sqlite(SQLite3DB& statsdb) {
 	std::lock_guard<std::mutex> lock(mutex_);
 
 	statsdb.execute("DELETE FROM stats_mysqlx_routes");
 
 	for (const auto& [name, stats] : route_stats_) {
-		std::string escaped_name = sqlite_escape(name);
-		char sql[1024];
-		snprintf(sql, sizeof(sql),
-			"INSERT INTO stats_mysqlx_routes "
+		// Build with std::string so a long, escaped route name can never silently
+		// truncate the SQL (the previous fixed 1024-byte snprintf buffer dropped
+		// the row entirely on overflow).
+		std::string sql = "INSERT INTO stats_mysqlx_routes "
 			"(name, destination_hostgroup, ConnOK, ConnERR, ConnUsed, "
-			"Bytes_data_sent, Bytes_data_recv) "
-			"VALUES ('%s', %d, %" PRIu64 ", %" PRIu64 ", %" PRIu64 ", %" PRIu64 ", %" PRIu64 ")",
-			escaped_name.c_str(),
-			stats.destination_hostgroup,
-			stats.conn_ok.load(std::memory_order_relaxed),
-			stats.conn_err.load(std::memory_order_relaxed),
-			stats.conn_used.load(std::memory_order_relaxed),
-			stats.bytes_sent.load(std::memory_order_relaxed),
-			stats.bytes_recv.load(std::memory_order_relaxed)
-		);
-		statsdb.execute(sql);
+			"Bytes_data_sent, Bytes_data_recv) VALUES ('";
+		sql += sqlite_escape(name);
+		sql += "', ";
+		sql += std::to_string(stats.destination_hostgroup);
+		sql += ", ";
+		sql += std::to_string(stats.conn_ok.load(std::memory_order_relaxed));
+		sql += ", ";
+		sql += std::to_string(stats.conn_err.load(std::memory_order_relaxed));
+		sql += ", ";
+		sql += std::to_string(stats.conn_used.load(std::memory_order_relaxed));
+		sql += ", ";
+		sql += std::to_string(stats.bytes_sent.load(std::memory_order_relaxed));
+		sql += ", ";
+		sql += std::to_string(stats.bytes_recv.load(std::memory_order_relaxed));
+		sql += ")";
+		statsdb.execute(sql.c_str());
 	}
 }

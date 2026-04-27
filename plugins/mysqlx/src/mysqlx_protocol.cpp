@@ -73,7 +73,13 @@ bool mysqlx_is_supported_auth_method(const std::string& method) {
 }
 
 std::vector<uint8_t> mysqlx_build_frame(uint8_t message_type, const std::string& serialized_payload) {
-	// payload_size in the header includes the message_type byte.
+	// payload_size in the header includes the message_type byte. Reject
+	// payloads at the uint32 boundary so the +1 cannot wrap, and clamp at the
+	// X Protocol max payload to match the inbound parser (X_MAX_PAYLOAD_SIZE
+	// in MysqlxDataStream).
+	if (serialized_payload.size() >= MYSQLX_MAX_PAYLOAD_SIZE) {
+		return {};
+	}
 	uint32_t payload_size = static_cast<uint32_t>(serialized_payload.size()) + 1;
 	MysqlxFrameHeader hdr { payload_size, message_type };
 	std::vector<uint8_t> frame = mysqlx_encode_frame_header(hdr);

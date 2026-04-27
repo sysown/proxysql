@@ -220,13 +220,15 @@ Alias resolution (e.g., `"TO RUN"` → `"TO RUNTIME"`) must be handled in
 void log_message(int level, const char *message);
 ```
 
-Log a message through ProxySQL's logging system. Levels:
+Log a message through ProxySQL's logging system. The numeric levels match
+ProxySQL's internal `proxy_*` severity scheme — anything other than 3 or 4 is
+emitted as info:
 
 | Level | Meaning |
 |-------|---------|
-| 1     | Error   |
-| 2     | Warning |
-| 3     | Info    |
+| 3     | Error   |
+| 4     | Warning |
+| any other value | Info |
 
 #### `get_admindb`, `get_configdb`, `get_statsdb`
 

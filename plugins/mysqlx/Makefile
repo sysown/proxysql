@@ -29,10 +29,30 @@ PROTO_DIR := $(PLUGIN_DIR)/proto
 PROTO_SRCS := $(wildcard $(PROTO_DIR)/*.pb.cc)
 PROTO_OBJS := $(patsubst $(PROTO_DIR)/%.pb.cc,$(ODIR)/%.pb.o,$(PROTO_SRCS))
 
-IDIRS := -I$(PROXYSQL_IDIR) -I$(PLUGIN_DIR)/include -I$(SQLITE3_IDIR) -I$(PROTO_DIR) -I$(SSL_IDIR) -I$(PROMETHEUS_IDIR) -I$(LIBCONFIG_IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) -I$(RE2_IDIR)
+# Generated .pb.cc files were produced with protoc 3.21.12. The plugin links
+# dynamically against the system libprotobuf, which is ABI-compatible only
+# within the protobuf 3.x major version (the 4.x release cycle introduced an
+# incompatible ABI — libprotobuf.so SONAME changed). Detect the installed
+# version up front and fail fast so we never produce a .so that links cleanly
+# but crashes the first time a virtual is dispatched into the proto runtime.
+PROTOBUF_GENERATED_VERSION := 3.21.12
+PROTOBUF_VERSION := $(shell pkg-config --modversion protobuf 2>/dev/null)
+ifeq ($(PROTOBUF_VERSION),)
+    $(error libprotobuf not found via pkg-config. Install libprotobuf-dev (3.x). \
+        The mysqlx plugin's vendored .pb.cc/.pb.h were generated with protoc \
+        $(PROTOBUF_GENERATED_VERSION) and require an ABI-compatible 3.x runtime)
+endif
+PROTOBUF_MAJOR := $(firstword $(subst ., ,$(PROTOBUF_VERSION)))
+ifneq ($(PROTOBUF_MAJOR),3)
+    $(error libprotobuf $(PROTOBUF_VERSION) is not ABI-compatible with the \
+        vendored .pb.cc generated for protoc $(PROTOBUF_GENERATED_VERSION). \
+        Install libprotobuf 3.x (e.g. 3.21.12) or regenerate the proto sources \
+        against the installed version. See the regeneration recipe above)
+endif
+
+IDIRS := -I$(PROXYSQL_IDIR) -I$(PLUGIN_DIR)/include -I$(SQLITE3_IDIR) -I$(PROTO_DIR) -I$(SSL_IDIR) -I$(PROMETHEUS_IDIR) -I$(LIBCONFIG_IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) -I$(RE2_IDIR) -I$(ZSTD_IDIR) -I$(PROXYSQL_PATH)/deps/lz4/lz4/lib
 
 OPTZ ?= -O2 -ggdb
-
 # Propagate feature-tier flags from the top-level build.  These MUST match
 # the flags libproxysql.a was built with; a mismatch silently changes the
 # ProxySQL_PluginDescriptor / ProxySQL_PluginServices layout the core and
@@ -60,18 +80,31 @@ ifeq ($(PROXYSQLGENAI),1)
 	PSQLGA := -DPROXYSQLGENAI
 endif
 
-CXXFLAGS := $(STDCPP) -fPIC $(OPTZ) $(WGCOV) $(WASAN) -pthread \
+# -fvisibility=hidden + -fvisibility-inlines-hidden hides every C++ symbol by
+# default; only the explicitly extern "C"-declared
+# proxysql_plugin_descriptor_v1 entry point is exported. This prevents ODR
+# collisions with the proxysql core when the .so is dlopen'd, and avoids
+# leaking template instantiations across the boundary.
+CXXFLAGS := $(STDCPP) -fPIC -fvisibility=hidden -fvisibility-inlines-hidden \
+	$(OPTZ) $(WGCOV) $(WASAN) -pthread \
 	$(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLGA)
+
+# Hardening flags. Skip _FORTIFY_SOURCE under ASAN (incompatible) and when
+# OPTZ contains -O0 (requires optimisation to take effect).
+ifeq ($(WASAN),)
+    ifeq (,$(findstring -O0,$(OPTZ)))
+        CXXFLAGS += -D_FORTIFY_SOURCE=2
+    endif
+endif
+CXXFLAGS += -fstack-protector-strong
 
 .DEFAULT_GOAL := all
 
 SRCS := $(PLUGIN_DIR)/src/mysqlx_plugin.cpp \
 	$(PLUGIN_DIR)/src/mysqlx_admin_schema.cpp \
 	$(PLUGIN_DIR)/src/mysqlx_config_store.cpp \
-	$(PLUGIN_DIR)/src/mysqlx_worker.cpp \
+	$(PLUGIN_DIR)/src/mysqlx_listener_reconcile.cpp \
 	$(PLUGIN_DIR)/src/mysqlx_protocol.cpp \
-	$(PLUGIN_DIR)/src/mysqlx_frontend_session.cpp \
-	$(PLUGIN_DIR)/src/mysqlx_backend_session.cpp \
 	$(PLUGIN_DIR)/src/mysqlx_data_stream.cpp \
 	$(PLUGIN_DIR)/src/mysqlx_connection.cpp \
 	$(PLUGIN_DIR)/src/mysqlx_stats.cpp \
@@ -90,8 +123,17 @@ $(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) | $(ODIR)
 $(ODIR)/%.pb.o: $(PROTO_DIR)/%.pb.cc | $(ODIR)
 	$(CXX) -c -o $@ $< $(CXXFLAGS) -I$(PROTO_DIR) -w
 
+# X Protocol compression (zstd_stream / lz4_message) needs the static
+# libzstd + liblz4 archives from deps/. We link them statically into the .so
+# so the plugin works whether or not the host process exports zstd/lz4
+# symbols globally — the loader uses RTLD_LOCAL, so a transitive dependency
+# from the proxysql binary would not be visible here.
+ZSTD_AR := $(PROXYSQL_PATH)/deps/zstd/zstd/lib/libzstd.a
+LZ4_AR  := $(PROXYSQL_PATH)/deps/lz4/lz4/lib/liblz4.a
+
 $(PLUGIN_SO): $(OBJS) $(PROTO_OBJS)
-	$(CXX) -shared -o $@ $^ $(CXXFLAGS) -pthread -lprotobuf -lssl -lcrypto
+	$(CXX) -shared -o $@ $^ $(CXXFLAGS) -pthread -lprotobuf -lssl -lcrypto \
+		$(ZSTD_AR) $(LZ4_AR)
 
 .PHONY: all
 all: $(PLUGIN_SO)

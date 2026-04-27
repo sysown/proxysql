@@ -47,6 +47,8 @@ Mysqlx_Thread::~Mysqlx_Thread() {
 		}
 		listener_fds_.clear();
 		listener_addrs_.clear();
+		listener_ports_.clear();
+		listener_route_names_.clear();
 	}
 
 	for (auto* sess : sessions_) {
@@ -222,26 +224,12 @@ void Mysqlx_Thread::accept_new_connection(int listener_fd) {
 		sess->to_process = true;
 
 		const MysqlxConfigStore* store = config_store_;
-		sess->set_credential_lookup([store](const std::string& username) -> MysqlxCredentials {
-			MysqlxCredentials creds {};
-			if (!store) return creds;
-			auto identity = store->resolve_identity(username);
-			if (!identity) return creds;
-			creds.x_enabled = identity->x_enabled;
-			creds.allowed_auth = identity->allowed_auth_methods;
-			creds.backend_password = identity->backend_password;
-			const std::string& pwd = identity->password;
-			if (!pwd.empty() && pwd[0] == '*') {
-				std::vector<uint8_t> hash_bytes;
-				if (mysqlx_hex_decode(pwd.substr(1), hash_bytes) && hash_bytes.size() == 20) {
-					creds.password_hash.assign(hash_bytes.begin(), hash_bytes.end());
-				}
-			} else if (!pwd.empty()) {
-				auto hash = mysqlx_mysql41_hash(pwd);
-				creds.password_hash.assign(hash.begin(), hash.end());
+		sess->set_identity_lookup(
+			[store](const std::string& username) -> std::optional<MysqlxResolvedIdentity> {
+				if (!store) return std::nullopt;
+				return store->resolve_identity(username);
 			}
-			return creds;
-		});
+		);
 
 		std::lock_guard<std::mutex> lock(sessions_mutex_);
 		sessions_.push_back(sess);
@@ -254,8 +242,20 @@ void Mysqlx_Thread::process_all_sessions() {
 	auto it = sessions_.begin();
 	while (it != sessions_.end()) {
 		MysqlxSession* sess = *it;
-		sess->to_process = true;
-		int rc = sess->handler();
+
+		// Only invoke handler() when there is real work: a poll event landed
+		// on either data stream, the session asked to be re-run, or there are
+		// already-buffered frames to dispatch. Forcing to_process=true on every
+		// tick burned the CPU at large session counts.
+		short c_rev = sess->client_ds().get_revents();
+		short s_rev = sess->server_ds().get_revents();
+		bool fd_ready = (c_rev != 0) || (s_rev != 0);
+		bool buffered = sess->client_ds().has_complete_frame() || sess->server_ds().has_complete_frame();
+		int rc = 0;
+		if (fd_ready || buffered || sess->to_process) {
+			sess->to_process = true;
+			rc = sess->handler();
+		}
 
 		bool timeout = false;
 		MysqlxSession::Status st = sess->get_status();
@@ -274,7 +274,7 @@ void Mysqlx_Thread::process_all_sessions() {
 	}
 }
 
-int Mysqlx_Thread::add_listener(const char* bind_addr, int port) {
+int Mysqlx_Thread::add_listener(const char* bind_addr, int port, const char* route_name) {
 	int fd = socket(AF_INET, SOCK_STREAM, 0);
 	if (fd < 0) return -1;
 
@@ -305,8 +305,36 @@ int Mysqlx_Thread::add_listener(const char* bind_addr, int port) {
 		listener_fds_.push_back(fd);
 		if (bind_addr) listener_addrs_.push_back(bind_addr);
 		else listener_addrs_.push_back("0.0.0.0");
+		listener_ports_.push_back(port);
+		listener_route_names_.push_back(route_name != nullptr ? route_name : "");
 	}
 	return 0;
+}
+
+bool Mysqlx_Thread::remove_listener_for_route(const char* route_name) {
+	if (route_name == nullptr) return false;
+	std::lock_guard<std::mutex> lock(listener_mutex_);
+	for (size_t i = 0; i < listener_route_names_.size(); i++) {
+		if (listener_route_names_[i] == route_name) {
+			close(listener_fds_[i]);
+			listener_fds_.erase(listener_fds_.begin() + i);
+			listener_addrs_.erase(listener_addrs_.begin() + i);
+			listener_ports_.erase(listener_ports_.begin() + i);
+			listener_route_names_.erase(listener_route_names_.begin() + i);
+			return true;
+		}
+	}
+	return false;
+}
+
+std::string Mysqlx_Thread::get_listener_addr_for_route(const std::string& route_name) const {
+	std::lock_guard<std::mutex> lock(listener_mutex_);
+	for (size_t i = 0; i < listener_route_names_.size(); i++) {
+		if (listener_route_names_[i] == route_name) {
+			return listener_addrs_[i] + ":" + std::to_string(listener_ports_[i]);
+		}
+	}
+	return "";
 }
 
 void Mysqlx_Thread::remove_listeners() {
@@ -316,6 +344,8 @@ void Mysqlx_Thread::remove_listeners() {
 	}
 	listener_fds_.clear();
 	listener_addrs_.clear();
+	listener_ports_.clear();
+	listener_route_names_.clear();
 }
 
 int Mysqlx_Thread::get_listener_count() const {
@@ -323,6 +353,7 @@ int Mysqlx_Thread::get_listener_count() const {
 }
 
 size_t Mysqlx_Thread::get_session_count() const {
+	std::lock_guard<std::mutex> lock(sessions_mutex_);
 	return sessions_.size();
 }
 
