@@ -1016,6 +1016,7 @@ int MysqlxSession::resolve_backend_target() {
 	return 0;
 }
 
+#ifdef MYSQLX_TEST_BUILD
 // Test-only convenience overload. Mirrors what the auth handler does on a
 // real client connection: look up the identity via the thread's config
 // store, caching the result in identity_. Silently no-ops if the thread
@@ -1028,6 +1029,7 @@ void MysqlxSession::inject_identity_for_test(const std::string& username) {
 	auto id = cs->resolve_identity(username);
 	if (id) identity_ = *id;
 }
+#endif /* MYSQLX_TEST_BUILD */
 
 void MysqlxSession::handler_connecting_server() {
 	if (!backend_conn_) {

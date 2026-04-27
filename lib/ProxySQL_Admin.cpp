@@ -339,6 +339,12 @@ extern AI_Features_Manager *GloAI;
 
 extern void (*flush_logs_function)();
 
+#ifdef PROXYSQL40
+// Plugin DB-handle getters consumed by ProxySQL_PluginManager when it
+// builds the Phase-B services struct. Gated under PROXYSQL40 so v3.x
+// builds export no plugin-aware symbols at all (the chassis is a v4.0
+// feature; in v3.0/v3.1 these would be unused-but-reachable symbols
+// that contradict the "chassis fully invisible to v3.x" requirement).
 SQLite3DB* proxysql_plugin_get_admindb() {
 	return GloAdmin ? GloAdmin->admindb : nullptr;
 }
@@ -350,6 +356,7 @@ SQLite3DB* proxysql_plugin_get_configdb() {
 SQLite3DB* proxysql_plugin_get_statsdb() {
 	return GloAdmin ? GloAdmin->statsdb : nullptr;
 }
+#endif /* PROXYSQL40 */
 
 extern Web_Interface *GloWebInterface;
 

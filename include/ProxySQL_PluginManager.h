@@ -124,7 +124,6 @@ bool proxysql_dispatch_configured_plugin_admin_command(
 	const std::string& sql,
 	ProxySQL_PluginCommandResult& result
 );
-#ifdef PROXYSQL40
 bool proxysql_dispatch_configured_plugin_query_hook(
 	ProxySQL_PluginProtocol proto,
 	const ProxySQL_PluginQueryHookPayload& payload,
@@ -160,14 +159,6 @@ bool proxysql_init_configured_plugins(
 	ProxySQL_PluginManager* manager,
 	std::string& err
 );
-#else  /* !PROXYSQL40 */
-// Pre-chassis two-phase load: dlopen + init_all in one call.
-bool proxysql_load_configured_plugins(
-	std::unique_ptr<ProxySQL_PluginManager>& manager,
-	const std::vector<std::string>& plugin_modules,
-	std::string& err
-);
-#endif /* PROXYSQL40 */
 bool proxysql_start_configured_plugins(
 	ProxySQL_PluginManager* manager,
 	std::string& err

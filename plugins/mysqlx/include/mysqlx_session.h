@@ -119,9 +119,23 @@ public:
 	// string overload is a convenience wrapper that fetches the identity
 	// from the thread's configured MysqlxConfigStore, mimicking what the
 	// auth handler does when a real client connects.
+	//
+	// inject_identity_for_test and resolve_backend_target_for_test are
+	// gated behind MYSQLX_TEST_BUILD because they are forgery vectors:
+	// inject_identity_for_test bypasses the full auth flow (no credential
+	// check, no cap negotiation), and resolve_backend_target_for_test
+	// drives a private routing helper without an authenticated identity.
+	// The test Makefile defines MYSQLX_TEST_BUILD; the production .so
+	// build does not, so these methods do not exist in shipped binaries.
+	// The remaining target_*_for_test getters are read-only state
+	// observers and are left available unconditionally (they leak no
+	// state a debugger could not also observe and cannot mutate the
+	// session).
+#ifdef MYSQLX_TEST_BUILD
 	void inject_identity_for_test(const MysqlxResolvedIdentity& id) { identity_ = id; }
 	void inject_identity_for_test(const std::string& username);
 	int  resolve_backend_target_for_test() { return resolve_backend_target(); }
+#endif /* MYSQLX_TEST_BUILD */
 	int  target_hostgroup_for_test() const { return target_hostgroup_; }
 	const std::string& target_address_for_test() const { return target_address_; }
 	int  target_port_for_test() const { return target_port_; }

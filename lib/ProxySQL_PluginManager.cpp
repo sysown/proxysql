@@ -609,14 +609,10 @@ bool ProxySQL_PluginManager::dispatch_admin_command(const ProxySQL_PluginCommand
 		}
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Dispatching plugin command: %s (via %s)\n",
 			    command.sql.c_str(), normalized_sql.c_str());
-#ifdef PROXYSQL40
 		// Pass the CANONICAL form to the callback so plugins can ignore
 		// which alias the user typed — they match on their own canonical
 		// strings only.
 		result = command.cb(ctx, command.sql.c_str());
-#else
-		result = command.cb(ctx, normalized_sql.c_str());
-#endif /* PROXYSQL40 */
 		return true;
 	}
 
@@ -886,14 +882,14 @@ bool proxysql_load_configured_plugins(
 	const std::vector<std::string>& plugin_modules,
 	std::string& err
 ) {
-#ifdef PROXYSQL40
 	// Phase A + Phase B of the four-phase lifecycle. Executed BEFORE
 	// ProxySQL_Main_init_Admin_module so that plugin-declared schemas are
-	// available when merge_plugin_tables materializes the SQLite schema.
+	// available when Admin::init() merges them into tables_defs_* and
+	// runs the DDL via check_and_build_standard_tables.
 	//
 	// On return, `manager` is populated and installed as the active
-	// manager — GloAdmin->materialize_plugin_tables() can then query it
-	// for the tables to CREATE. Phase D (init) runs later, via
+	// manager — Admin::init() reads it via proxysql_get_plugin_manager()
+	// to find the tables to merge. Phase D (init) runs later, via
 	// proxysql_init_configured_plugins, once admin is up.
 	std::lock_guard<std::mutex> lifecycle_lock(g_plugin_lifecycle_mutex);
 	err.clear();
@@ -917,17 +913,19 @@ bool proxysql_load_configured_plugins(
 
 	// Phase B: register_schemas runs here. Plugins declare their
 	// admin-schema tables into the manager's pending-tables list.
-	// GloAdmin->materialize_plugin_tables() (called after
+	// ProxySQL_Admin::init() (called next, via
 	// ProxySQL_Main_init_Admin_module in src/main.cpp) drains that list
-	// into SQLite via the merge_plugin_tables code path. Plugins that
-	// left register_schemas null are no-ops here.
+	// by merging into tables_defs_{admin,config,stats} and then running
+	// the DDL via check_and_build_standard_tables — same code path as
+	// the core tables. Plugins that left register_schemas null are
+	// no-ops here.
 	if (!next_manager->invoke_register_schemas_phase(err)) {
 		return false;
 	}
 
 	// Install as active manager BEFORE admin init, so that
-	// proxysql_get_plugin_manager() — used by
-	// ProxySQL_Admin::materialize_plugin_tables — can find the
+	// proxysql_get_plugin_manager() — used by ProxySQL_Admin::init() to
+	// merge plugin-declared schemas into tables_defs_* — can find the
 	// registered tables.
 	//
 	// INVARIANT (publish-before-Phase-D): after this point Phase D
@@ -946,39 +944,6 @@ bool proxysql_load_configured_plugins(
 		g_active_plugin_manager.store(manager.get(), std::memory_order_release);
 	}
 	return true;
-#else  /* !PROXYSQL40 */
-	// Pre-chassis two-phase: load + init_all in one call, installed as
-	// active manager only on full success.
-	err.clear();
-	{
-		std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
-		g_active_plugin_manager.store(nullptr, std::memory_order_release);
-	}
-	manager.reset();
-
-	if (plugin_modules.empty()) {
-		return true;
-	}
-
-	auto next_manager = std::make_unique<ProxySQL_PluginManager>();
-	for (const auto& path : plugin_modules) {
-		if (!next_manager->load(path, err)) {
-			err = path + ": " + err;
-			return false;
-		}
-	}
-
-	if (!next_manager->init_all(err)) {
-		return false;
-	}
-
-	{
-		std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
-		manager = std::move(next_manager);
-		g_active_plugin_manager.store(manager.get(), std::memory_order_release);
-	}
-	return true;
-#endif /* PROXYSQL40 */
 }
 
 #ifdef PROXYSQL40

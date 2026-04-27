@@ -1561,15 +1561,15 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 	// loader at all):
 	//   Phase A+B: dlopen + register_schemas (plugin-declared schemas
 	//              populate the pending-tables list).
-	//   Phase C:   admin module init + materialize_plugin_tables (creates
-	//              plugin-owned SQLite tables through the
-	//              merge_plugin_tables path — first-boot == reload).
+	//   Phase C:   admin module init merges plugin-declared schemas into
+	//              tables_defs_{admin,config,stats} and runs the DDL via
+	//              check_and_build_standard_tables, all on the same
+	//              first-boot/reload code path as the core tables.
 	//   Phase D:   init() with full services (live DB handles pointing at
 	//              a schema that already contains the plugin's own tables).
 	//   Phase E:   start() launches the plugin's threads / accept loops.
 	LoadConfiguredPlugins();
 	ProxySQL_Main_init_Admin_module(boostrap_info);
-	GloAdmin->materialize_plugin_tables();
 	InitConfiguredPlugins();
 	StartConfiguredPlugins();
 #else  /* !PROXYSQL40 */

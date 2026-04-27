@@ -232,13 +232,20 @@ ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -cw 'init_debug_struct'),0
 	PSQLDEBUG := -DDEBUG
 endif
 
+# MYSQLX_TEST_BUILD enables the test-only methods (`*_for_test`) on the
+# mysqlx plugin's public classes (e.g. MysqlxSession::inject_identity_for_test).
+# Defined ONLY here, in the unit-test Makefile — never in plugins/mysqlx/Makefile.
+# That way the production .so does not compile in entry points that could be
+# misused (most importantly identity-forgery setters), while tests that include
+# the plugin headers and link against the plugin sources still see the helpers
+# they need.
 OPT := $(STDCPP) -O0 -ggdb $(PSQLCH) $(PSQLGA) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLDEBUG) \
-	   -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN) \
+	   -DGITVERSION=\"$(GIT_VERSION)\" -DMYSQLX_TEST_BUILD $(NOJEM) $(WGCOV) $(WASAN) \
 	   -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR)
 
 ifeq ($(UNAME_S),Darwin)
 	OPT := $(STDCPP) -O0 -ggdb $(PSQLCH) $(PSQLGA) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLDEBUG) \
-		   -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
+		   -DGITVERSION=\"$(GIT_VERSION)\" -DMYSQLX_TEST_BUILD $(NOJEM) $(WGCOV) $(WASAN)
 endif
 
 
