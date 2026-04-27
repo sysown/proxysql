@@ -317,8 +317,13 @@ static void test_destructor_skips_unstarted_plugins() {
 		// destruct without start
 	}
 	std::string contents = read_log();
-	ok(contents.find("fake_plugin:stop") == std::string::npos,
-	   "destructor does NOT invoke stop on plugins that were never started");
+	// Per the init/stop pairing contract introduced in commit ab9d5a103,
+	// stop() runs for every plugin where init() succeeded — irrespective
+	// of whether start() ran. Otherwise resources allocated in init()
+	// would leak. The previous version of this assertion encoded the
+	// older "skip-unstarted" contract and was a leak.
+	ok(contents.find("fake_plugin:stop") != std::string::npos,
+	   "destructor invokes stop on init-succeeded/never-started plugin (init/stop pairing)");
 }
 
 static void test_destructor_no_double_stop() {
@@ -406,8 +411,12 @@ static void test_multi_plugin_start_failure_stops_started() {
 	   "second plugin start reported failure");
 	ok(contents.find("fake_plugin:stop\n") != std::string::npos,
 	   "destructor stopped the first plugin (which had successfully started)");
-	ok(contents.find("fake_plugin2:stop") == std::string::npos,
-	   "destructor did NOT call stop on the second plugin (it never successfully started)");
+	// Per the init/stop pairing contract (ab9d5a103): stop() pairs with
+	// init(), NOT with start(). The second plugin's init() succeeded;
+	// only its start() failed. Resources acquired in its init() must be
+	// released, so destructor MUST call stop on it too.
+	ok(contents.find("fake_plugin2:stop") != std::string::npos,
+	   "destructor stops the second plugin too — init succeeded, start failed (init/stop pairing)");
 	unsetenv("PROXYSQL_FAKE_PLUGIN2_START_FAIL");
 }
 

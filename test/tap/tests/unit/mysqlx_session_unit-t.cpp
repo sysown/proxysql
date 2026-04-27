@@ -1,5 +1,7 @@
 #include "mysqlx_session.h"
 #include "mysqlx_protocol.h"
+#include "mysqlx_thread.h"
+#include "mysqlx_config_store.h"
 #include "tap.h"
 #include "test_globals.h"
 #include "test_init.h"
@@ -14,6 +16,49 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <vector>
+
+// Lazy process-global thread+store fixture for tests whose auth flow
+// runs all the way through `resolve_backend_target()`. The hardened
+// auth path (commit 74e678006) resolves the route+endpoint BEFORE
+// emitting Mysqlx::Session::AuthenticateOk; without a wired thread and
+// a `default_route` on the identity, auth correctly transitions to
+// X_SESSION_CLOSING with code 4002. Tests that care about the
+// happy-path post-auth state (WAITING_CLIENT_XMSG) need to plug both
+// in. Same pattern as mysqlx_robustness_unit-t.cpp.
+static MysqlxConfigStore& default_test_config_store() {
+	static MysqlxConfigStore store;
+	static bool initialized = false;
+	if (!initialized) {
+		std::unordered_map<std::string, MysqlxRoute> routes;
+		MysqlxRoute r {};
+		r.name = "default_test_route";
+		r.destination_hostgroup = 10;
+		r.strategy = "first_available";
+		routes.emplace("default_test_route", r);
+
+		std::unordered_map<int, std::vector<MysqlxBackendEndpoint>> endpoints;
+		MysqlxBackendEndpoint ep {};
+		ep.hostname = "127.0.0.1";
+		ep.mysql_port = 3306;
+		ep.mysqlx_port = 33060;
+		endpoints[10].push_back(ep);
+
+		store.install_for_test(std::move(routes), std::move(endpoints));
+		initialized = true;
+	}
+	return store;
+}
+
+static Mysqlx_Thread& default_test_thread() {
+	static Mysqlx_Thread thr;
+	static bool initialized = false;
+	if (!initialized) {
+		thr.init(0);
+		thr.set_config_store(&default_test_config_store());
+		initialized = true;
+	}
+	return thr;
+}
 
 static void test_session_init() {
 	MysqlxSession sess;
@@ -253,7 +298,11 @@ static void test_mysql41_auth_with_credentials() {
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
 	MysqlxSession sess;
-	sess.init(fds[0], nullptr);
+	// Wire a thread + config store so resolve_backend_target() (called
+	// by handler_auth_challenge_response after credential verify) finds
+	// a real route. Otherwise the post-74e678006 auth path correctly
+	// transitions to X_SESSION_CLOSING with code 4002 instead of OK.
+	sess.init(fds[0], &default_test_thread());
 
 	sess.set_identity_lookup([](const std::string& user) -> std::optional<MysqlxResolvedIdentity> {
 		if (user == "testuser") {
@@ -262,6 +311,7 @@ static void test_mysql41_auth_with_credentials() {
 			id.x_enabled = true;
 			id.password = "testpass";
 			id.allowed_auth_methods = "MYSQL41";
+			id.default_route = "default_test_route";
 			return id;
 		}
 		return std::nullopt;

@@ -1498,7 +1498,19 @@ static void LoadPlugins() {
 }
 
 #ifdef PROXYSQL40
+// Operator kill switch (--no-plugins / PROXYSQL_NO_PLUGINS=1) makes the
+// chassis lifecycle wrappers no-ops. The startup log line (printed once
+// in LoadConfiguredPlugins) tells the operator the bypass took effect.
+// Used to disable a misbehaving plugin without editing the config or
+// rolling back the proxysql package. See doc/plugin-chassis/REVIEW_GUIDE.md
+// for the rationale.
 static void LoadConfiguredPlugins() {
+	if (GloVars.no_plugins) {
+		proxy_info("Plugin chassis disabled by --no-plugins / PROXYSQL_NO_PLUGINS=1; "
+		           "skipping load of %zu configured plugin(s)\n",
+		           GloVars.plugin_modules.size());
+		return;
+	}
 	std::string plugin_error {};
 	if (!proxysql_load_configured_plugins(GloPluginManager, GloVars.plugin_modules, plugin_error)) {
 		proxy_error("Plugin load/register_schemas failed: %s\n", plugin_error.c_str());
@@ -1507,6 +1519,7 @@ static void LoadConfiguredPlugins() {
 }
 
 static void InitConfiguredPlugins() {
+	if (GloVars.no_plugins) return;
 	std::string plugin_error {};
 	if (!proxysql_init_configured_plugins(GloPluginManager.get(), plugin_error)) {
 		proxy_error("Plugin init failed: %s\n", plugin_error.c_str());
@@ -1515,6 +1528,7 @@ static void InitConfiguredPlugins() {
 }
 
 static void StartConfiguredPlugins() {
+	if (GloVars.no_plugins) return;
 	std::string plugin_error {};
 	if (!proxysql_start_configured_plugins(GloPluginManager.get(), plugin_error)) {
 		proxy_error("Plugin start failed: %s\n", plugin_error.c_str());
@@ -1523,6 +1537,7 @@ static void StartConfiguredPlugins() {
 }
 
 static void StopConfiguredPlugins() {
+	if (GloVars.no_plugins) return;
 	std::string plugin_error {};
 	if (!proxysql_stop_configured_plugins(GloPluginManager, plugin_error)) {
 		proxy_error("%s during shutdown\n", plugin_error.c_str());

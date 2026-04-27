@@ -98,6 +98,14 @@ class ProxySQL_GlobalVariables {
 #ifdef PROXYSQL40
 	// Loadable plugin modules (chassis only -- v3.x has no plugin loader).
 	std::vector<std::string> plugin_modules;
+	// Operator kill switch. When set (via --no-plugins CLI flag or
+	// PROXYSQL_NO_PLUGINS=1 env var), the plugin chassis is bypassed
+	// entirely: LoadConfiguredPlugins / InitConfiguredPlugins /
+	// StartConfiguredPlugins become no-ops, and the chassis-aware
+	// admin command dispatcher refuses plugin commands. Lets an
+	// operator disable a misbehaving plugin without editing the config
+	// file or downgrading. CLI takes priority over env, env over config.
+	bool no_plugins;
 #endif /* PROXYSQL40 */
 	SSL_CTX *get_SSL_ctx();
 	SSL *get_SSL_new();
