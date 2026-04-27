@@ -21,6 +21,15 @@ INFRA_LOGS_PATH="${WORKSPACE}/ci_infra_logs"
 PROXY_DATA_DIR="${INFRA_LOGS_PATH}/${INFRA_ID}/proxysql"
 GENERIC_CONFIG="${SCRIPT_DIR}/proxysql-ci.cnf"
 
+# Per-group override: a TAP group may need a config that differs from
+# the generic one (e.g. to declare a `plugins=("...")` line so the
+# chassis loads the mysqlx plugin at Phase A). The env var
+# PROXYSQL_CONFIG_OVERRIDE is set by the group's env.sh when needed.
+if [ -n "${PROXYSQL_CONFIG_OVERRIDE:-}" ] && [ -f "${PROXYSQL_CONFIG_OVERRIDE}" ]; then
+    GENERIC_CONFIG="${PROXYSQL_CONFIG_OVERRIDE}"
+    echo ">>> Using per-group ProxySQL config override: ${GENERIC_CONFIG}"
+fi
+
 # Cluster configuration
 NUM_NODES=${PROXYSQL_CLUSTER_NODES:-9}
 if [[ "${SKIP_CLUSTER_START}" == "1" ]] || [[ "${SKIP_CLUSTER_START}" == "true" ]]; then
@@ -108,6 +117,25 @@ export GCOV_PREFIX_STRIP=\${SAVED_GCOV_PREFIX_STRIP}
 exec /usr/bin/proxysql --idle-threads --clickhouse-server --sqlite3-server -f -c /etc/proxysql.cnf -D /var/lib/proxysql 2>&1 | tee /var/lib/proxysql/proxysql.log
 "
 
+# Optional: mount the mysqlx plugin .so into the container when the
+# group asked for it via PROXYSQL_LOAD_MYSQLX_PLUGIN=1. The .so must
+# already exist on the host (built via `make` in plugins/mysqlx). The
+# plugin path is exposed inside the container at a stable location;
+# the per-group setup-infras.bash adds `plugins=("/usr/lib/proxysql/
+# ProxySQL_MySQLX_Plugin.so")` to ProxySQL's runtime config before any
+# admin command provisioning.
+MYSQLX_PLUGIN_SRC="${WORKSPACE}/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so"
+MYSQLX_PLUGIN_MOUNT=""
+if [ "${PROXYSQL_LOAD_MYSQLX_PLUGIN:-0}" = "1" ]; then
+    if [ ! -f "${MYSQLX_PLUGIN_SRC}" ]; then
+        echo "ERROR: PROXYSQL_LOAD_MYSQLX_PLUGIN=1 but plugin .so missing at ${MYSQLX_PLUGIN_SRC}" >&2
+        echo "       Build it first: cd plugins/mysqlx && make (with PROXYSQL40=1 etc)" >&2
+        exit 1
+    fi
+    MYSQLX_PLUGIN_MOUNT="-v ${MYSQLX_PLUGIN_SRC}:/usr/lib/proxysql/ProxySQL_MySQLX_Plugin.so:ro"
+    echo ">>> Mounting mysqlx plugin .so into ProxySQL container"
+fi
+
 echo ">>> Starting ProxySQL container: ${PROXY_CONTAINER} (cluster nodes: ${NUM_NODES})"
 docker run -d \
     --name "${PROXY_CONTAINER}" \
@@ -118,6 +146,7 @@ docker run -d \
     -v "${GENERIC_CONFIG}:/etc/proxysql.cnf" \
     -v "${PROXY_DATA_DIR}:/var/lib/proxysql" \
     -v "${COVERAGE_DATA_DIR}:/gcov" \
+    ${MYSQLX_PLUGIN_MOUNT} \
     -e GCOV_PREFIX="/gcov" \
     -e GCOV_PREFIX_STRIP="3" \
     proxysql-ci-base:latest \
