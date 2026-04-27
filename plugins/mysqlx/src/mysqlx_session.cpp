@@ -916,12 +916,6 @@ void MysqlxSession::handler_session_closing() {
 }
 
 void MysqlxSession::handler_tls_accept_init() {
-	if (tls_mode_ == TLS_PASSTHROUGH) {
-		status_ = CONNECTING_CLIENT;
-		to_process = true;
-		return;
-	}
-
 	if (!client_ds_.ssl_init_done()) {
 		SSL_CTX* ctx = thread_ptr_ ? thread_ptr_->get_ssl_ctx() : nullptr;
 		if (!ctx) {
@@ -1095,7 +1089,7 @@ void MysqlxSession::handler_connecting_server() {
 		backend_conn_->set_backend_user(backend_user.c_str());
 		backend_conn_->set_backend_schema(schema_.c_str());
 
-		if (client_ds_.is_encrypted() && tls_mode_ != TLS_PASSTHROUGH) {
+		if (client_ds_.is_encrypted()) {
 			if (thread_ptr_ && thread_ptr_->get_ssl_ctx()) {
 				backend_conn_->set_backend_tls_required(true);
 				backend_conn_->set_ssl_ctx(thread_ptr_->get_ssl_ctx());
@@ -1144,6 +1138,34 @@ void MysqlxSession::return_backend_to_pool() {
 	// server_ds() now falls through to server_ds_placeholder_ (fd=-1) once
 	// backend_conn_ is cleared. The placeholder carries no data-plane state,
 	// so no reset is needed.
+}
+
+void MysqlxSession::shutdown_notify_client() {
+	// Best-effort: enqueue a fatal X-Protocol error frame, then push the
+	// queued bytes to the wire. Skip if the client write side is already
+	// gone (fd <0) or if the session is already closing. Both branches
+	// are reachable in normal lifecycle and we don't want shutdown to
+	// hang on a half-closed peer.
+	if (client_ds_.get_fd() < 0) return;
+	if (status_ == X_SESSION_CLOSED || status_ == X_SESSION_CLOSING) {
+		return;
+	}
+	send_error(1053, "Server is shutting down", /*fatal=*/true);
+	// Drain the queued frame to the wire. Best-effort: a single
+	// write_to_net() pass — if the client is unresponsive we don't want
+	// shutdown to block.
+	client_ds_.write_to_net();
+	// If TLS is active, ask OpenSSL to send close_notify so the peer's
+	// TLS stack sees a clean shutdown rather than a torn-down record.
+	// SSL_set_quiet_shutdown(1) suppresses the bidirectional handshake
+	// — appropriate during process exit when waiting for the peer's
+	// close_notify is undesirable.
+	if (SSL* ssl = client_ds_.get_ssl()) {
+		SSL_set_quiet_shutdown(ssl, 1);
+		SSL_shutdown(ssl);
+	}
+	status_ = X_SESSION_CLOSING;
+	healthy = false;
 }
 
 void MysqlxSession::send_error(int code, const char* msg, bool fatal) {

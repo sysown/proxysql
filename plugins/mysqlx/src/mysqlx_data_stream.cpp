@@ -201,7 +201,14 @@ bool MysqlxDataStream::do_ssl_handshake() {
 		ssl_handshake_done_ = true;
 		encrypted_ = true;
 		queue_encrypted_output();
-		uint8_t plain[65536];
+		// 64 KiB scratch buffer for the immediate post-handshake drain.
+		// thread_local static avoids putting it on the worker stack —
+		// some thread-stack budgets (e.g. ASan-instrumented builds, or
+		// thread_pool_size >> default thread stack rlimit) would put a
+		// stack-allocated 64 KiB local on the wrong side of the limit.
+		// Each Mysqlx_Thread owns its own thread_local instance so the
+		// buffer is not shared between threads.
+		static thread_local uint8_t plain[65536];
 		int dec;
 		while ((dec = SSL_read(ssl_, plain, sizeof(plain))) > 0) {
 			feed_bytes(plain, static_cast<size_t>(dec));

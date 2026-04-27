@@ -62,7 +62,21 @@ int MysqlxConnection::start_connect(const char* host, int port) {
 	memset(&addr, 0, sizeof(addr));
 	addr.sin_family = AF_INET;
 	addr.sin_port = htons(port);
-	inet_pton(AF_INET, host, &addr.sin_addr);
+	// Reject anything that isn't an IPv4 dotted-quad. Previously the
+	// return value was discarded and inet_pton on a hostname (or empty
+	// string, or "::1", or anything else) silently left sin_addr at
+	// 0.0.0.0, producing a connect to localhost-or-INADDR_ANY-equivalent
+	// — a real footgun because mysqlx_backend_endpoints.hostname accepts
+	// arbitrary strings. Hostnames are not supported here; the upstream
+	// path is expected to have already resolved them. Failing fast with
+	// ERROR_STATE surfaces the misconfig instead of silently routing
+	// traffic to the wrong target.
+	if (inet_pton(AF_INET, host ? host : "", &addr.sin_addr) != 1) {
+		close(fd_);
+		fd_ = -1;
+		state_ = ERROR_STATE;
+		return -1;
+	}
 	int rc = ::connect(fd_, (struct sockaddr*)&addr, sizeof(addr));
 	if (rc == 0) { state_ = AUTHENTICATING; return 0; }
 	if (errno == EINPROGRESS) { state_ = CONNECTING; return 1; }

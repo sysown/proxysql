@@ -114,6 +114,19 @@ void Mysqlx_Thread::run() {
 		if (rc > 0) process_ready_fds(nfds);
 		process_all_sessions();
 	}
+
+	// Shutdown drain. The destructor will close fds and free sessions
+	// shortly after we return. Before that, give every still-connected
+	// client a clean X-Protocol Error frame (code 1053, "Server is
+	// shutting down") plus a TLS close_notify so peers see a graceful
+	// teardown rather than an unannounced TCP RST or a torn TLS record.
+	// Best-effort: a single non-blocking write pass per session and a
+	// quiet-shutdown SSL_shutdown, since process exit is imminent and
+	// we cannot block on unresponsive peers.
+	std::lock_guard<std::mutex> lock(sessions_mutex_);
+	for (auto* sess : sessions_) {
+		if (sess) sess->shutdown_notify_client();
+	}
 }
 
 void Mysqlx_Thread::rebuild_poll_set() {
@@ -311,6 +324,19 @@ int Mysqlx_Thread::add_listener(const char* bind_addr, int port, const char* rou
 	return 0;
 }
 
+// Removes the listener fd associated with `route_name`. Sessions that
+// were already accepted on this listener and are mid-flight are NOT
+// disturbed — they continue against their existing target_hostgroup_ /
+// target_address_ / target_port_ until they finish their current
+// transaction or hit idle timeout. This matches the surrounding
+// MySQL-protocol behaviour (DROP TABLE doesn't cancel in-flight
+// queries; an ALTER doesn't kick off open prepared statements). The
+// route name is consulted at backend-target resolution time which only
+// happens during auth, so an authenticated session does not depend on
+// the route name still being live. If a future use case requires
+// active disconnection of in-flight sessions on route removal, walk
+// sessions_ here, match identity_->default_route, and call
+// shutdown_notify_client() on each.
 bool Mysqlx_Thread::remove_listener_for_route(const char* route_name) {
 	if (route_name == nullptr) return false;
 	std::lock_guard<std::mutex> lock(listener_mutex_);

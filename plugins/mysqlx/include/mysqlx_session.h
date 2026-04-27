@@ -35,10 +35,19 @@ enum MysqlxResponseState {
 	RESP_WAITING_SESS_RESET
 };
 
+// Per-session TLS posture. Today the runtime only distinguishes
+// "TLS termination is allowed" (TLS_TERMINATE) from "this session is
+// not configured for TLS at all" (TLS_OFF). The earlier draft also
+// carried a TLS_PASSTHROUGH value with two corresponding branches in
+// session.cpp that pretended to enable an end-to-end pipe; that path
+// was never actually wired up (no call to set_tls_mode() ever set
+// PASSTHROUGH, and the dead branches did not implement an opaque
+// pipe — they just skipped TLS termination and resumed clear-text
+// X-Protocol parsing, which would have desynced any real client).
+// Removing the value rather than leaving a misleading enum.
 enum MysqlxTlsMode {
 	TLS_OFF = 0,
-	TLS_TERMINATE,
-	TLS_PASSTHROUGH
+	TLS_TERMINATE
 };
 
 // X Protocol compression algorithm negotiated via Mysqlx.Connection.Capabilities.
@@ -110,6 +119,16 @@ public:
 	uint64_t get_start_time() const { return start_time_; }
 	uint64_t get_last_active_time() const { return last_active_time_; }
 	void set_last_active_time(uint64_t t) { last_active_time_ = t; }
+
+	// Best-effort graceful shutdown notification: send a Mysqlx::Error
+	// with code 1053 (server shutting down) to the client and drain any
+	// pending writes (and run SSL_shutdown if a TLS session is up). Used
+	// by Mysqlx_Thread::run() on the way out so connected clients see a
+	// clean X-Protocol error frame instead of an unannounced TCP RST or
+	// a half-finished TLS record. Safe to call regardless of session
+	// status_; idempotent in the sense that subsequent calls just no-op
+	// against an already-drained data stream.
+	void shutdown_notify_client();
 
 	// --- Test-only accessors ---
 	// These exist so unit tests can drive resolve_backend_target() in

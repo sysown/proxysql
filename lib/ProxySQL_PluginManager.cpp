@@ -12,6 +12,7 @@
 #include <cstring>
 #include <dlfcn.h>
 #include <mutex>
+#include <shared_mutex>
 #include <strings.h>
 
 #include "proxysql.h"
@@ -28,7 +29,15 @@ namespace {
 
 std::atomic<ProxySQL_PluginManager*> g_active_plugin_manager { nullptr };
 ProxySQL_PluginManager* g_registry_target = nullptr;
-std::mutex g_active_plugin_manager_mutex {};
+// Guards swaps of g_active_plugin_manager. Readers (dispatch_admin_command,
+// dispatch_query_hook, resolve_alias_to_canonical) take a shared lock, so
+// many worker threads can be running through plugin callbacks at the same
+// time without serializing on a single std::mutex. Writers — load/init/stop
+// paths that publish or unpublish the manager pointer — take the unique
+// lock. This change is what keeps query-hook dispatch from collapsing the
+// per-worker MySQL_Thread / PgSQL_Thread parallelism onto one mutex once a
+// plugin actually wires a hook into the hot path.
+std::shared_mutex g_active_plugin_manager_mutex {};
 // Serializes load/init/stop operations. Held for the duration of a plugin
 // lifecycle transition so two reload paths cannot race on g_registry_target /
 // g_registry_registration_*. Distinct from g_active_plugin_manager_mutex,
@@ -827,7 +836,10 @@ bool proxysql_dispatch_configured_plugin_admin_command(
 	const std::string& sql,
 	ProxySQL_PluginCommandResult& result
 ) {
-	std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
+	// Reader: shared lock so concurrent admin sessions can dispatch
+	// plugin commands in parallel. The unique-lock writers (publish /
+	// unpublish in load_/stop_configured_plugins) still serialize swaps.
+	std::shared_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
 	if (g_active_plugin_manager.load() == nullptr) {
 		return false;
 	}
@@ -841,7 +853,7 @@ std::string proxysql_resolve_configured_plugin_admin_alias(const std::string& sq
 	// in the manager, and the caller typically releases the lock before
 	// dispatching. A borrowed c_str() would dangle if the manager is swapped
 	// out on reload between resolve and dispatch. Copy out under the lock.
-	std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
+	std::shared_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
 	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load();
 	if (mgr == nullptr) {
 		return {};
@@ -854,7 +866,11 @@ bool proxysql_dispatch_configured_plugin_query_hook(
 	const ProxySQL_PluginQueryHookPayload& payload,
 	ProxySQL_PluginQueryHookResult& result
 ) {
-	std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
+	// Reader: shared lock so query-hook dispatch on the data-plane hot
+	// path scales across MySQL_Thread / PgSQL_Thread workers instead of
+	// serializing on a single std::mutex. This is the change that lets a
+	// plugin wire a query hook without collapsing per-worker parallelism.
+	std::shared_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
 	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load();
 	if (mgr == nullptr) {
 		return false;
@@ -894,7 +910,7 @@ bool proxysql_load_configured_plugins(
 	std::lock_guard<std::mutex> lifecycle_lock(g_plugin_lifecycle_mutex);
 	err.clear();
 	{
-		std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
+		std::unique_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
 		g_active_plugin_manager.store(nullptr, std::memory_order_release);
 	}
 	manager.reset();
@@ -939,7 +955,7 @@ bool proxysql_load_configured_plugins(
 	// proxysql_init_configured_plugins() returns will race plain writes
 	// against plain reads.
 	{
-		std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
+		std::unique_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
 		manager = std::move(next_manager);
 		g_active_plugin_manager.store(manager.get(), std::memory_order_release);
 	}
@@ -999,7 +1015,7 @@ bool proxysql_stop_configured_plugins(
 	std::lock_guard<std::mutex> lifecycle_lock(g_plugin_lifecycle_mutex);
 	err.clear();
 	{
-		std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
+		std::unique_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
 		g_active_plugin_manager.store(nullptr, std::memory_order_release);
 	}
 	if (!manager) {
