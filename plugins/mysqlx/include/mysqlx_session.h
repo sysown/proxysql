@@ -279,6 +279,16 @@ private:
 	std::vector<uint8_t> compress_batch_framed_;
 	uint32_t compress_batch_count_;
 
+	// Pre-auth capability-message replay counter. A hostile or buggy
+	// client can replay CapabilitiesGet / CapabilitiesSet arbitrarily
+	// many times before authenticating; each one runs through protobuf
+	// parsing and a small allocation. Bound the count per session so
+	// the path is not a free CPU/memory amplifier. Reset to zero on
+	// successful auth; bumps on every CapabilitiesGet/Set seen while
+	// status_ is still pre-auth (CONNECTING_CLIENT / X_CAPABILITIES_*).
+	uint32_t pre_auth_cap_msgs_;
+	static constexpr uint32_t MAX_PRE_AUTH_CAP_MSGS = 64;
+
 public:
 	// Test-only accessors for compression negotiation outcome.
 	MysqlxCompressionAlgo compression_algo_for_test() const { return compression_algo_; }

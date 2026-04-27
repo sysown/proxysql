@@ -140,10 +140,23 @@ std::optional<MysqlxFrame> MysqlxConnection::read_auth_frame() {
 	// emit a session-state-change notice before AuthenticateContinue / Ok;
 	// returning nullopt on a NOTICE without re-trying caused the auth state
 	// machine to spin until the 10s handshake timeout.
+	//
+	// Cap the NOTICE drain so a misbehaving or hostile backend can't pin
+	// this worker thread by streaming NOTICEs forever. 64 is more than any
+	// legitimate backend would emit during auth — typical is 1-2.
+	constexpr int MAX_LEADING_NOTICES = 64;
+	int notice_count = 0;
 	while (true) {
 		auto frame = backend_ds_.try_read_one_frame();
 		if (!frame) return std::nullopt;
 		if (frame->size() >= 5 && (*frame)[4] == Mysqlx::ServerMessages_Type_NOTICE) {
+			if (++notice_count > MAX_LEADING_NOTICES) {
+				// Treat as auth failure; the caller will mark the session
+				// unhealthy and the chassis will return the connection to
+				// the pool / drop it.
+				auth_state_ = BACKEND_AUTH_ERROR;
+				return std::nullopt;
+			}
 			continue;
 		}
 		return frame;

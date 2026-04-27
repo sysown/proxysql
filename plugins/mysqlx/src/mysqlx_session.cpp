@@ -104,7 +104,8 @@ MysqlxSession::MysqlxSession()
 	, compression_max_combine_messages_(0)
 	, zstd_dctx_(nullptr)
 	, zstd_cctx_(nullptr)
-	, compress_batch_count_(0) {
+	, compress_batch_count_(0)
+	, pre_auth_cap_msgs_(0) {
 }
 
 MysqlxSession::~MysqlxSession() {
@@ -167,6 +168,7 @@ void MysqlxSession::reset() {
 	compression_combine_mixed_messages_ = false;
 	compression_max_combine_messages_ = 0;
 	reset_compression_state();
+	pre_auth_cap_msgs_ = 0;
 }
 
 int MysqlxSession::handler() {
@@ -265,6 +267,22 @@ void MysqlxSession::handler_connecting_client() {
 void MysqlxSession::handler_capabilities_get() {
 	if (!client_ds_.has_complete_frame()) return;
 
+	// Bound how many pre-auth capability messages a client can ship per
+	// session. Each one runs through frame parsing + send_capabilities()
+	// allocations; without a cap, an idle hostile client can pin a
+	// worker on the cap-replay path forever. The counter applies only
+	// while still pre-auth; post-auth callers (dispatch_client_message
+	// → CON_CAPABILITIES_GET) routinely query capabilities and should
+	// not trip the bound. status_ == WAITING_CLIENT_XMSG indicates auth
+	// completed.
+	if (status_ != WAITING_CLIENT_XMSG &&
+	    ++pre_auth_cap_msgs_ > MAX_PRE_AUTH_CAP_MSGS) {
+		client_ds_.pop_frame();
+		send_error(5008, "Too many pre-auth capability messages", true);
+		healthy = false;
+		return;
+	}
+
 	client_ds_.pop_frame();
 	send_capabilities();
 	status_ = CONNECTING_CLIENT;
@@ -352,6 +370,16 @@ static bool parse_compression_capability(
 void MysqlxSession::handler_capabilities_set() {
 	if (!client_ds_.has_complete_frame()) return;
 
+	// Same per-session bound as handler_capabilities_get(); see comment
+	// there. Counter only applies pre-auth.
+	if (status_ != WAITING_CLIENT_XMSG &&
+	    ++pre_auth_cap_msgs_ > MAX_PRE_AUTH_CAP_MSGS) {
+		client_ds_.pop_frame();
+		send_error(5008, "Too many pre-auth capability messages", true);
+		healthy = false;
+		return;
+	}
+
 	const auto& frame = client_ds_.front_frame();
 	if (frame.size() > 5) {
 		Mysqlx::Connection::CapabilitiesSet cap_set;
@@ -398,6 +426,26 @@ void MysqlxSession::handler_capabilities_set() {
 		for (const auto& cap : cap_set.capabilities().capabilities()) {
 			if (cap.name() == "tls") {
 				client_ds_.pop_frame();
+				// Reject TLS upgrade post-auth or on an already-encrypted
+				// channel. The X Protocol forbids TLS negotiation after
+				// AuthenticateOk, and a second tls=true on an already-TLS
+				// channel would desync the state machine (the server
+				// expects a fresh handshake; the client expects to keep
+				// the existing TLS session). Either case is a hostile or
+				// confused client; respond with 5052 and drop the
+				// session before driving SSL_do_handshake.
+				if (client_ds_.is_encrypted()) {
+					send_error(5052, "TLS already negotiated on this session", true);
+					healthy = false;
+					return;
+				}
+				if (status_ != CONNECTING_CLIENT &&
+				    status_ != X_CAPABILITIES_GET &&
+				    status_ != X_CAPABILITIES_SET) {
+					send_error(5052, "TLS negotiation not allowed after authentication", true);
+					healthy = false;
+					return;
+				}
 				SSL_CTX* ctx = thread_ptr_ ? thread_ptr_->get_ssl_ctx() : nullptr;
 				if (!ctx) {
 					send_error(3150, "TLS is not configured on server");
