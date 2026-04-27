@@ -483,6 +483,27 @@ void ProxySQL_Admin::disk_upgrade_mysql_servers() {
 					      "check_timeout_ms, writer_is_also_reader, new_reader_weight, comment FROM mysql_aws_aurora_hostgroups_v208");
 	}
 
+	// Upgrade mysql_aws_aurora_hostgroups from V2_0_9 to V2_0_10 (adds autopurge_missing_checks column)
+	rci=configdb->check_table_structure((char *)"mysql_aws_aurora_hostgroups",(char *)ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS_V2_0_9);
+	if (rci) {
+		// upgrade is required
+		proxy_warning("Detected version pre-v2.0.10 of mysql_aws_aurora_hostgroups\n");
+		proxy_warning("ONLINE UPGRADE of table mysql_aws_aurora_hostgroups in progress\n");
+		// drop mysql_aws_aurora_hostgroups table with suffix _v209
+		configdb->execute("DROP TABLE IF EXISTS mysql_aws_aurora_hostgroups_v209");
+		// rename current table to add suffix _v209
+		configdb->execute("ALTER TABLE mysql_aws_aurora_hostgroups RENAME TO mysql_aws_aurora_hostgroups_v209");
+		// create new table
+		configdb->build_table((char *)"mysql_aws_aurora_hostgroups",(char *)ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS,false);
+		// copy fields from old table (all existing columns)
+		configdb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, aurora_port, domain_name, "
+					      "max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, "
+					      "add_lag_ms, min_lag_ms, lag_num_checks, comment) "
+					      "SELECT writer_hostgroup, reader_hostgroup, active, aurora_port, domain_name, max_lag_ms, check_interval_ms, "
+					      "check_timeout_ms, writer_is_also_reader, new_reader_weight, "
+					      "add_lag_ms, min_lag_ms, lag_num_checks, comment FROM mysql_aws_aurora_hostgroups_v209");
+	}
+
 	// upgrade mysql_hostgroup_attributes
 	rci=configdb->check_table_structure((char *)"mysql_hostgroup_attributes",(char *)ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES_V2_5_0);
 	if (rci) {

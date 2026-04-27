@@ -5971,7 +5971,9 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 	unsigned int add_lag_ms = 0;
 	unsigned int min_lag_ms = 0;
 	unsigned int lag_num_checks = 1;
-	//unsigned int i = 0;
+	unsigned int autopurge_missing_checks = 0;
+	std::string domain_name;
+	std::map<std::string, int> autopurge_counter;
 	set_thread_name("MonitorAuroraHG", GloVars.set_thread_name);
 	proxy_info("Started Monitor thread for AWS Aurora writer HG %u\n", wHG);
 
@@ -6015,6 +6017,10 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 			add_lag_ms = atoi(r->fields[8]);
 			min_lag_ms = atoi(r->fields[9]);
 			lag_num_checks = atoi(r->fields[10]);
+			autopurge_missing_checks = atoi(r->fields[11]);
+			if (domain_name.empty() && r->fields[12]) {
+				domain_name = r->fields[12];
+			}
 		}
 	}
 	host_def_t *hpa = (host_def_t *)malloc(sizeof(host_def_t)*num_hosts);
@@ -6317,6 +6323,13 @@ __exit_monitor_aws_aurora_HG_thread:
 			}
 			lasts_ase[ase_idx] = ase_l;
 			GloMyMon->evaluate_aws_aurora_results(wHG, rHG, &lasts_ase[0], ase_idx, max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks);
+
+			// Auto-purge servers that disappear from REPLICA_HOST_STATUS
+			// Only process if autopurge is enabled and query was successful with results
+			if (autopurge_missing_checks > 0 && mmsd->interr == 0 && ase->host_statuses->size() > 0) {
+				GloMyMon->aws_aurora_autopurge_servers(wHG, rHG, ase, autopurge_missing_checks, autopurge_counter, domain_name);
+			}
+
 			for (auto h : *(ase_l->host_statuses)) {
 				for (auto h2 : *(ase->host_statuses)) {
 					if (strcmp(h2->server_id, h->server_id) == 0) {
@@ -6563,6 +6576,73 @@ void print_aws_aurora_status_entry(AWS_Aurora_status_entry* aase) {
 			}
 		}
 	}
+}
+
+void MySQL_Monitor::aws_aurora_autopurge_servers(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry *ase, unsigned int threshold, std::map<std::string, int>& autopurge_counter, const std::string& domain_name) {
+	std::set<std::string> present_servers;
+	for (auto h : *(ase->host_statuses)) {
+		present_servers.insert(h->server_id);
+	}
+
+	MyHGM->wrlock();
+
+	// Writer hostgroup
+	MyHGC *whgc = MyHGM->MyHGC_lookup(wHG);
+	if (whgc && whgc->mysrvs) {
+		for (unsigned int j = 0; j < whgc->mysrvs->cnt(); j++) {
+			MySrvC *mysrvc = whgc->mysrvs->idx(j);
+			if (mysrvc->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD) continue;
+
+			std::string server_id(mysrvc->address);
+			size_t pos = server_id.rfind(domain_name);
+			if (pos != std::string::npos) {
+				server_id.erase(pos);
+			}
+
+			std::string srv_key = std::to_string(wHG) + ":" + server_id;
+			if (present_servers.find(server_id) == present_servers.end()) {
+				if (++autopurge_counter[srv_key] >= (int)threshold) {
+					proxy_warning("Auto-purging server %s:%d from hostgroup %u (absent from REPLICA_HOST_STATUS for %d checks)\n",
+						mysrvc->address, mysrvc->port, wHG, autopurge_counter[srv_key]);
+					MyHGM->remove_server_in_hg(wHG, mysrvc->address, mysrvc->port);
+					autopurge_counter.erase(srv_key);
+				}
+			} else {
+				autopurge_counter.erase(srv_key);
+			}
+		}
+	}
+
+	// Reader hostgroup
+	if (rHG > 0) {
+		MyHGC *rhgc = MyHGM->MyHGC_lookup(rHG);
+		if (rhgc && rhgc->mysrvs) {
+			for (unsigned int j = 0; j < rhgc->mysrvs->cnt(); j++) {
+				MySrvC *mysrvc = rhgc->mysrvs->idx(j);
+				if (mysrvc->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD) continue;
+
+				std::string server_id(mysrvc->address);
+				size_t pos = server_id.rfind(domain_name);
+				if (pos != std::string::npos) {
+					server_id.erase(pos);
+				}
+
+				std::string srv_key = std::to_string(rHG) + ":" + server_id;
+				if (present_servers.find(server_id) == present_servers.end()) {
+					if (++autopurge_counter[srv_key] >= (int)threshold) {
+						proxy_warning("Auto-purging server %s:%d from hostgroup %u (absent from REPLICA_HOST_STATUS for %d checks)\n",
+							mysrvc->address, mysrvc->port, rHG, autopurge_counter[srv_key]);
+						MyHGM->remove_server_in_hg(rHG, mysrvc->address, mysrvc->port);
+						autopurge_counter.erase(srv_key);
+					}
+				} else {
+					autopurge_counter.erase(srv_key);
+				}
+			}
+		}
+	}
+
+	MyHGM->wrunlock();
 }
 
 void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry **lasts_ase, unsigned int ase_idx, unsigned int max_latency_ms, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks) {

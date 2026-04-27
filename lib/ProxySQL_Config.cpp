@@ -1397,7 +1397,7 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
     if (root.exists("mysql_aws_aurora_hostgroups")==true) {
             const Setting &mysql_aws_aurora_hostgroups = root["mysql_aws_aurora_hostgroups"];
             int count = mysql_aws_aurora_hostgroups.getLength();
-            char *q=(char *)"INSERT OR REPLACE INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, aurora_port, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment ) VALUES (%d, %d, %d, %d, '%s', %d, %d, %d, %d, %d, %d, %d, %d, '%s')";
+            char *q=(char *)"INSERT OR REPLACE INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, aurora_port, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, autopurge_missing_checks, comment ) VALUES (%d, %d, %d, %d, '%s', %d, %d, %d, %d, %d, %d, %d, %d, %d, '%s')";
             for (i=0; i< count; i++) {
                     const Setting &line = mysql_aws_aurora_hostgroups[i];
                     int writer_hostgroup;
@@ -1412,6 +1412,7 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
                     int check_timeout_ms;
                     int writer_is_also_reader;
 					int new_reader_weight;
+                    int autopurge_missing_checks;
                     std::string comment="";
                     std::string domain_name="";
                     if (line.lookupValue("writer_hostgroup", writer_hostgroup)==false) {
@@ -1431,6 +1432,7 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
                     if (line.lookupValue("add_lag_ms", add_lag_ms)==false) add_lag_ms=30;
                     if (line.lookupValue("min_lag_ms", min_lag_ms)==false) min_lag_ms=30;
                     if (line.lookupValue("lag_num_checks", lag_num_checks)==false) lag_num_checks=1;
+                    if (line.lookupValue("autopurge_missing_checks", autopurge_missing_checks)==false) autopurge_missing_checks=0;
                     line.lookupValue("comment", comment);
                     line.lookupValue("domain_name", domain_name);
                     char *o1=strdup(comment.c_str());
@@ -1438,7 +1440,7 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
                     char *p1=strdup(domain_name.c_str());
                     char *p=escape_string_single_quotes(p1, false);
                     char *query=(char *)malloc(strlen(q)+strlen(o)+strlen(p)+256); // 128 vs sizeof(int)*8
-                    sprintf(query,q, writer_hostgroup, reader_hostgroup, active, aurora_port, p, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, o);
+                    sprintf(query,q, writer_hostgroup, reader_hostgroup, active, aurora_port, p, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, autopurge_missing_checks, o);
                     //fprintf(stderr, "%s\n", query);
                     admindb->execute(query);
                     if (o!=o1) free(o);
