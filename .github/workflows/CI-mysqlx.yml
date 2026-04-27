@@ -39,9 +39,15 @@ jobs:
           fail-on-cache-miss: ${{ github.event_name == 'workflow_run' }}
 
       - name: Build mysqlx plugin
+        # PROXYSQL40=1 (and the implied tier flags) MUST match what the
+        # cached src/proxysql was built with — otherwise the plugin .so
+        # is compiled with a different ProxySQL_PluginDescriptor /
+        # ProxySQL_PluginServices struct layout than the loader sees, the
+        # link succeeds, and the first virtual dispatch into a plugin
+        # callback corrupts memory. See plugins/mysqlx/Makefile:56-61.
         run: |
           chmod +x src/proxysql 2>/dev/null || true
-          cd plugins/mysqlx && make
+          cd plugins/mysqlx && PROXYSQL40=1 PROXYSQL31=1 PROXYSQLFFTO=1 PROXYSQLTSDB=1 PROXYSQLGENAI=1 make
 
       - name: Run mysqlx unit tests
         run: |
@@ -82,9 +88,15 @@ jobs:
           fail-on-cache-miss: ${{ github.event_name == 'workflow_run' }}
 
       - name: Build mysqlx plugin
+        # PROXYSQL40=1 (and the implied tier flags) MUST match what the
+        # cached src/proxysql was built with — otherwise the plugin .so
+        # is compiled with a different ProxySQL_PluginDescriptor /
+        # ProxySQL_PluginServices struct layout than the loader sees, the
+        # link succeeds, and the first virtual dispatch into a plugin
+        # callback corrupts memory. See plugins/mysqlx/Makefile:56-61.
         run: |
           chmod +x src/proxysql 2>/dev/null || true
-          cd plugins/mysqlx && make
+          cd plugins/mysqlx && PROXYSQL40=1 PROXYSQL31=1 PROXYSQLFFTO=1 PROXYSQLTSDB=1 PROXYSQLGENAI=1 make
 
       - name: Install dbdeployer
         run: |
@@ -141,8 +153,9 @@ jobs:
           cd test/tap/tests
           # Run all test_mysqlx_*-t binaries. The glob covers e2e tests
           # (test_mysqlx_e2e_*) plus the integration smoke tests
-          # (test_mysqlx_admin_tables, test_mysqlx_listener_smoke,
-          # test_mysqlx_plugin_load) that previously went unrun.
+          # (test_mysqlx_admin_tables, test_mysqlx_plugin_load) that
+          # previously went unrun. test_mysqlx_listener_smoke was
+          # retired with the dormant MysqlxWorker path in 98aee7db2.
           ran_any=0
           for test_bin in test_mysqlx_*-t; do
             if [ -x "$test_bin" ]; then

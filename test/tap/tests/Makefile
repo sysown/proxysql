@@ -230,10 +230,9 @@ test_mysqlx_admin_tables-t:
 	$(MAKE) -C unit test_mysqlx_admin_tables-t
 	ln -fs unit/test_mysqlx_admin_tables-t $@
 
-.PHONY: test_mysqlx_listener_smoke-t
-test_mysqlx_listener_smoke-t:
-	$(MAKE) -C unit test_mysqlx_listener_smoke-t
-	ln -fs unit/test_mysqlx_listener_smoke-t $@
+# test_mysqlx_listener_smoke-t was retired with the dormant MysqlxWorker
+# path in 98aee7db2. Listener-lifecycle coverage now lives in
+# mysqlx_thread_unit-t and mysqlx_robustness_unit-t under unit/.
 
 sqlite3-t: sqlite3-t.cpp $(TAP_LDIR)/libtap.so
 ifeq ($(PROXYSQLGENAI),1)
