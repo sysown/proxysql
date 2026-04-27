@@ -23,10 +23,12 @@ struct aurora_hostgroup_config_t {
 	int32_t active;
 	std::string domain_name;
 	int32_t max_lag_ms;
+	int32_t check_interval_ms;
 	int32_t writer_is_also_reader;
 	int32_t new_reader_weight;
 	int32_t add_lag_ms;
 	int32_t min_lag_ms;
+	int32_t autopurge_missing_checks;
 	std::string comment;
 };
 

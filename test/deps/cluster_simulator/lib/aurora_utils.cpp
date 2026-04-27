@@ -30,10 +30,12 @@ const vector<string> valid_aurora_hostgroup_entries {
 	"active",
 	"domain_name",
 	"max_lag_ms",
+	"check_interval_ms",
 	"writer_is_also_reader",
 	"new_reader_weight",
 	"add_lag_ms",
 	"min_lag_ms",
+	"autopurge_missing_checks",
 	"comment"
 };
 
@@ -44,13 +46,15 @@ const char t_aurora_hostgroup_insert[] {
 		" active,"
 		" domain_name,"
 		" max_lag_ms,"
+		" check_interval_ms,"
 		" writer_is_also_reader,"
 		" new_reader_weight,"
 		" add_lag_ms,"
 		" min_lag_ms,"
+		" autopurge_missing_checks,"
 		" comment"
 	") VALUES ("
-		" %d, %d, %d, '%s', %d, %d, %d, %d, %d, '%s'"
+		" %d, %d, %d, '%s', %d, %d, %d, %d, %d, %d, %d, '%s'"
 	")"
 };
 
@@ -107,6 +111,8 @@ std::pair<int,string> extract_aurora_hostgroup_config(
 		// Default values for optional fields
 		int32_t min_lag_ms = 30;
 		int32_t add_lag_ms = 30;
+		int32_t check_interval_ms = 1000;
+		int32_t autopurge_missing_checks = 0;
 
 		try {
 			writer_hostgroup = j_aurora_hg.at("writer_hostgroup");
@@ -123,6 +129,12 @@ std::pair<int,string> extract_aurora_hostgroup_config(
 			}
 			if (j_aurora_hg.find("min_lag_ms") != j_aurora_hg.end()) {
 				min_lag_ms = j_aurora_hg.at("min_lag_ms");
+			}
+			if (j_aurora_hg.find("check_interval_ms") != j_aurora_hg.end()) {
+				check_interval_ms = j_aurora_hg.at("check_interval_ms");
+			}
+			if (j_aurora_hg.find("autopurge_missing_checks") != j_aurora_hg.end()) {
+				autopurge_missing_checks = j_aurora_hg.at("autopurge_missing_checks");
 			}
 		} catch (const std::exception& e) {
 			// TODO: Improve error message here
@@ -147,10 +159,12 @@ std::pair<int,string> extract_aurora_hostgroup_config(
 				active,
 				domain_name,
 				max_lag_ms,
+				check_interval_ms,
 				writer_is_also_reader,
 				new_reader_weight,
 				add_lag_ms,
 				min_lag_ms,
+				autopurge_missing_checks,
 				comment
 			}
 		);
@@ -327,10 +341,12 @@ std::pair<int, string> prepare_mysql_aurora_hostgroups(
 			hostgroup_config.active,
 			hostgroup_config.domain_name.c_str(),
 			hostgroup_config.max_lag_ms,
+			hostgroup_config.check_interval_ms,
 			hostgroup_config.writer_is_also_reader,
 			hostgroup_config.new_reader_weight,
 			hostgroup_config.add_lag_ms,
 			hostgroup_config.min_lag_ms,
+			hostgroup_config.autopurge_missing_checks,
 			hostgroup_config.comment.c_str()
 		);
 
