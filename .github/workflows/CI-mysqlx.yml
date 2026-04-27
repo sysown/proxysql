@@ -176,3 +176,79 @@ jobs:
           if [ -n "$VERSION" ]; then
             dbdeployer delete single "$VERSION" 2>/dev/null || true
           fi
+
+  soak-tests:
+    # mysqlx-soak group: runs the harness scripts (behavioural validation
+    # + short stress) inside the docker-isolated TAP harness. Distinct
+    # from e2e-tests which uses dbdeployer locally and SKIP_PROXYSQL=1;
+    # this job stands up a real ProxySQL container with the chassis
+    # loaded and exercises the plugin end-to-end. See
+    # test/tap/groups/mysqlx-soak/README.md for the design and the
+    # remaining work items beyond what this job covers.
+    if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
+    runs-on: ubuntu-22.04
+    needs: unit-tests
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            src/proxysql
+            test/
+          key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
+          fail-on-cache-miss: ${{ github.event_name == 'workflow_run' }}
+
+      - name: Build mysqlx plugin
+        # Same flags as the unit-tests / e2e-tests jobs — the plugin .so
+        # MUST be ABI-compatible with the cached src/proxysql binary.
+        run: |
+          chmod +x src/proxysql 2>/dev/null || true
+          cd plugins/mysqlx && PROXYSQL40=1 PROXYSQL31=1 PROXYSQLFFTO=1 PROXYSQLTSDB=1 PROXYSQLGENAI=1 make
+
+      - name: Build proxysql-ci-base image
+        # The image now includes mysql-connector-python so the harness
+        # scripts (Python X DevAPI) can run in the test-runner container.
+        run: |
+          cd test/infra/docker-base
+          docker build --network host -t proxysql-ci-base:latest .
+
+      - name: Bring up infrastructure (dbdeployer-mysql84 + ProxySQL with mysqlx plugin)
+        run: |
+          export WORKSPACE="${GITHUB_WORKSPACE}"
+          export INFRA_ID="mysqlx-soak-${GITHUB_RUN_ID}"
+          export TAP_GROUP="mysqlx-soak"
+          [ -f test/infra/common/env.sh ] && source test/infra/common/env.sh
+          ./test/infra/control/ensure-infras.bash
+
+      - name: Run mysqlx-soak TAP tests (behavioural + short stress)
+        run: |
+          export WORKSPACE="${GITHUB_WORKSPACE}"
+          export INFRA_ID="mysqlx-soak-${GITHUB_RUN_ID}"
+          export TAP_GROUP="mysqlx-soak-g1"
+          # Keep stress short for CI; long soaks invoke stress.py
+          # directly with --duration 24h on staging (issue #5677).
+          export MYSQLX_SOAK_DURATION="60s"
+          export MYSQLX_SOAK_CONCURRENT="20"
+          [ -f test/infra/common/env.sh ] && source test/infra/common/env.sh
+          ./test/infra/control/run-tests-isolated.bash
+
+      - name: Cleanup
+        if: always()
+        run: |
+          export WORKSPACE="${GITHUB_WORKSPACE}"
+          export INFRA_ID="mysqlx-soak-${GITHUB_RUN_ID}"
+          export TAP_GROUP="mysqlx-soak"
+          [ -f test/infra/common/env.sh ] && source test/infra/common/env.sh
+          ./test/infra/control/stop-proxysql-isolated.bash || true
+          ./test/infra/control/destroy-infras.bash || true
+
+      - name: Archive logs
+        if: ${{ failure() && !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: mysqlx-soak-logs-${{ github.run_number }}
+          path: |
+            ci_infra_logs/
