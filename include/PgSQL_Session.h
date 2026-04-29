@@ -387,6 +387,19 @@ private:
 	int handler_ProcessingQueryError_CheckBackendConnectionStatus(PgSQL_Data_Stream* myds);
 	void SetQueryTimeout();
 	bool handler_minus1_ClientLibraryError(PgSQL_Data_Stream* myds);
+	// Synthesize ErrorResponse(25P02) + NoticeResponse(backend text, no 57P01) +
+	// ReadyForQuery('E') to the client, destroy the backend pool connection, set
+	// tx_poisoned=true. Returns true if poison was applied; false means the
+	// caller must fall back to the current terminate-the-session flow (e.g.
+	// admin var off, result transfer already started, or a preflight failed).
+	bool handler_minus1_PoisonTransaction(PgSQL_Data_Stream* myds);
+	// While tx_poisoned, classify a 'Q' packet and either clear the poison
+	// and synthesize a ROLLBACK response (for plain whole-transaction
+	// ROLLBACK / COMMIT / ABORT / END) or reject with ERROR 25P02
+	// (anything else, including ROLLBACK TO SAVEPOINT).
+	// Returns true if the packet was handled here. Increments the
+	// pgsql_tx_poisoned_{recovered,rejected_statements}_total counters.
+	bool handler_poisoned_simple_query(PtrSize_t* pkt);
 	void handler_minus1_LogErrorDuringQuery(PgSQL_Connection* myconn);
 	bool handler_minus1_HandleErrorCodes(PgSQL_Data_Stream* myds, int& handler_ret);
 	void handler_minus1_GenerateErrorMessage(PgSQL_Data_Stream* myds, bool& wrong_pass);
@@ -462,6 +475,20 @@ public:
 	// Describe mode state for \d tablename meta command
 	bool describe_mode{ false };
 	char describe_table_name[256]{ 0 };
+
+	// When a backend connection breaks mid-transaction AND the admin var
+	// pgsql-preserve_client_on_broken_backend_in_tx is on, we synthesize an
+	// ERROR 25P02 (current transaction is aborted) + ReadyForQuery('E') to
+	// the client, destroy the backend pool connection, and set this flag
+	// true instead of tearing down the client session. While this is true,
+	// the query intake path short-circuits before query rules:
+	//   plain ROLLBACK / ABORT -> synthesize
+	//     CommandComplete('ROLLBACK') + ReadyForQuery('I'), clear flag.
+	//   plain COMMIT / END -> same ROLLBACK response + NoticeResponse carrying the
+	//     "there is no transaction in progress" warning, clear flag.
+	//   anything else (including ROLLBACK TO SAVEPOINT and RELEASE SAVEPOINT)
+	//     -> reply ERROR 25P02 + ReadyForQuery('E'), stay poisoned.
+	bool tx_poisoned{ false };
 
 #ifdef DEBUG
 	PgSQL_Connection* dbg_extended_query_backend_conn = nullptr;

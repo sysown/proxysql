@@ -1,4 +1,5 @@
 #include "../deps/json/json.hpp"
+#include <atomic>
 using json = nlohmann::json;
 #define PROXYJSON
 
@@ -1937,10 +1938,12 @@ bool MySQL_Session::handler_again___verify_backend_session_track_gtids() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->options.session_track_gtids, mybe->server_myds->myconn->options.session_track_gtids);
 	// we first verify that the backend supports it
 	// if backend is old (or if it is not mysql) ignore this setting
-	if ((mybe->server_myds->myconn->mysql->server_capabilities & CLIENT_SESSION_TRACKING) == 0) {
-		// the backend doesn't support CLIENT_SESSION_TRACKING
-		return ret; // exit immediately
+	if ((mybe->server_myds->myconn->mysql->server_capabilities & CLIENT_SESSION_TRACKING) == 0
+		|| (mybe->server_myds->myconn->mysql->server_capabilities & CLIENT_DEPRECATE_EOF) == 0
+		|| mysql_thread___enable_server_deprecate_eof == false) {
+		return ret;
 	}
+
 	uint32_t b_int = mybe->server_myds->myconn->options.session_track_gtids_int;
 	uint32_t f_int = client_myds->myconn->options.session_track_gtids_int;
 
@@ -1986,6 +1989,35 @@ bool MySQL_Session::handler_again___verify_backend_session_track_gtids() {
 	return ret;
 }
 
+bool MySQL_Session::handler_again___verify_backend_session_track_variables() {
+	int mode = mysql_thread___session_track_variables;
+
+	// skip enabling session variable tracking in the following cases
+	if (mode == session_track_variables::DISABLED) {
+		return false;
+	}
+	if ((mybe->server_myds->myconn->mysql->server_capabilities & CLIENT_SESSION_TRACKING) == 0
+		|| (mybe->server_myds->myconn->mysql->server_capabilities & CLIENT_DEPRECATE_EOF) == 0) {
+		return false;
+	}
+	if (!mysql_thread___enable_server_deprecate_eof && mode != session_track_variables::ENFORCED) {
+		return false;
+	}
+
+	// enable session tracking
+	if (mybe->server_myds->myconn->options.session_track_variables_sent == false) {
+		mybe->server_myds->myconn->options.session_track_variables_sent = true;
+		set_previous_status_mode3();
+		NEXT_IMMEDIATE_NEW(SETTING_SESSION_TRACK_VARIABLES);
+	}
+	if (mybe->server_myds->myconn->options.session_track_state_sent == false) {
+		mybe->server_myds->myconn->options.session_track_state_sent = true;
+		set_previous_status_mode3();
+		NEXT_IMMEDIATE_NEW(SETTING_SESSION_TRACK_STATE);
+	}
+
+	return false;
+}
 
 bool MySQL_Session::handler_again___verify_multiple_variables(MySQL_Connection* myconn) {
 	for (auto i = 0; i < SQL_NAME_LAST_LOW_WM; i++) {
@@ -2786,6 +2818,20 @@ bool MySQL_Session::handler_again___status_SETTING_SESSION_TRACK_GTIDS(int *_rc)
 	return ret;
 }
 
+bool MySQL_Session::handler_again___status_SETTING_SESSION_TRACK_VARIABLES(int *_rc) {
+	bool ret=false;
+	assert(mybe->server_myds->myconn);
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"session_track_system_variables", "*", false);
+	return ret;
+}
+
+bool MySQL_Session::handler_again___status_SETTING_SESSION_TRACK_STATE(int *_rc) {
+	bool ret=false;
+	assert(mybe->server_myds->myconn);
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"session_track_state_change", "ON", false);
+	return ret;
+}
+
 bool MySQL_Session::handler_again___status_CHANGING_SCHEMA(int *_rc) {
 	bool ret=false;
 	//fprintf(stderr,"CHANGING_SCHEMA\n");
@@ -2933,6 +2979,11 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 		}
 		enum session_status st=status;
 		if (mybe->server_myds->myconn->async_state_machine==ASYNC_IDLE) {
+			if (handle_session_track_capabilities() == false) {
+				pause_until = thread->curtime + mysql_thread___connect_retries_delay*1000;
+				return false;
+			}
+
 			st=previous_status.top();
 			previous_status.pop();
 			NEXT_IMMEDIATE_NEW(st);
@@ -2961,6 +3012,13 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 				st=previous_status.top();
 				previous_status.pop();
 				myds->wait_until=0;
+
+				if (handle_session_track_capabilities() == false) {
+					previous_status.push(st);
+					pause_until = thread->curtime + mysql_thread___connect_retries_delay * 1000;
+					set_status(CONNECTING_SERVER);
+					return false;
+				}
 
 				// NOTE: Even if a connection has correctly been created, since the CLIENT_DEPRECATE_EOF
 				// capability isn't always enforced to match for backend conns (no direct propagation), a
@@ -6002,6 +6060,41 @@ void MySQL_Session::handler_rc0_Process_GTID(MySQL_Connection *myconn) {
 	}
 }
 
+void MySQL_Session::handler_rc0_Process_Variables(MySQL_Connection *myconn) {
+	std::unordered_map<string, string> var_map;
+
+	if(myconn->get_variables(var_map)) {
+		std::string variable;
+		std::string value;
+
+		for (int idx = 0 ; idx < SQL_NAME_LAST_HIGH_WM ; idx++) {
+			variable = mysql_tracked_variables[idx].set_variable_name;
+
+			auto itr = var_map.find(variable);
+			if(itr != var_map.end()) {
+				value = itr->second;
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p, backend=%p. Notification for session_track_system_variables: variable=%s, value=%s\n", this, this->mybe, variable.c_str(), value.c_str());
+
+				const MARIADB_CHARSET_INFO *ci = NULL;
+				if (variable == "character_set_results" || variable == "character_set_connection" ||
+						variable == "character_set_client" || variable == "character_set_database") {
+					ci = proxysql_find_charset_name(value.c_str());
+				}
+				else if (variable == "collation_connection") {
+					ci = proxysql_find_charset_collate(value.c_str());
+				}
+
+				if (ci) {
+					value = std::to_string(ci->nr);
+				}
+
+				mysql_variables.client_set_value(this, idx, value);
+				mysql_variables.server_set_value(this, idx, value.c_str());
+			}
+		}
+	}
+}
+
 void MySQL_Session::handler_KillConnectionIfNeeded() {
 	if ( // two conditions
 		// If the server connection is in a non-idle state (ASYNC_IDLE), and the current time is greater than or equal to mybe->server_myds->wait_until
@@ -6225,6 +6318,10 @@ handler_again:
 									goto handler_again;
 								}
 
+								if (handler_again___verify_backend_session_track_variables()) {
+									goto handler_again;
+								}
+
 								// Optimize network traffic when we can use 'SET NAMES'
 								if (verify_set_names(this)) {
 									goto handler_again;
@@ -6304,6 +6401,10 @@ handler_again:
 					}
 
 					handler_rc0_Process_GTID(myconn);
+
+					if (mysql_thread___session_track_variables != session_track_variables::DISABLED) {
+						handler_rc0_Process_Variables(myconn);
+					}
 
 					// if we are locked on hostgroup, the value of autocommit is copied from the backend connection
 					// see bug #3549
@@ -6601,6 +6702,12 @@ bool MySQL_Session::handler_again___multiple_statuses(int *rc) {
 			break;
 		case SETTING_SESSION_TRACK_GTIDS:
 			ret = handler_again___status_SETTING_SESSION_TRACK_GTIDS(rc);
+			break;
+		case SETTING_SESSION_TRACK_VARIABLES:
+			ret = handler_again___status_SETTING_SESSION_TRACK_VARIABLES(rc);
+			break;
+		case SETTING_SESSION_TRACK_STATE:
+			ret = handler_again___status_SETTING_SESSION_TRACK_STATE(rc);
 			break;
 		case SETTING_SET_NAMES:
 			ret = handler_again___status_CHANGING_CHARSET(rc);
@@ -9615,4 +9722,79 @@ char* MySQL_Session::get_current_query(int max_length) {
 	}
 
 	return res;
+}
+
+/**
+ * @brief Handle session track capabilities validation.
+ *
+ * This function validates whether the backend connection has capabilities such as 'CLIENT_DEPRECATE_EOF'
+ * and 'CLIENT_SESSION_TRACKING' which are required to enable 'session_track_system_variables' in a MySQL session.
+ *
+ * If the connection lacks the capabilities and ProxySQL configuration is set in 'ENFORCED' mode, it returns the
+ * connection to the pool and set a backoff time for the backend server. This backoff time prevents the server from
+ * being selected again during connection pooling.
+ *
+ * @return 'true' if backend connection has required capabilities, otherwise returns 'false'.
+ */
+bool MySQL_Session::handle_session_track_capabilities() {
+	if (mysql_thread___session_track_variables != session_track_variables::ENFORCED) {
+		return true;
+	}
+
+	// this function should not be called in these states
+	if (client_myds == NULL
+		|| client_myds->myconn == NULL
+		|| mybe == NULL
+		|| mybe->server_myds == NULL
+		|| mybe->server_myds->myconn == NULL
+		|| mybe->server_myds->myconn->mysql == NULL) {
+		return true;
+	}
+
+	MySQL_Connection *be_conn = mybe->server_myds->myconn;
+	unsigned long srv_cap = be_conn->mysql->server_capabilities;
+	uint32_t client_flag = client_myds->myconn->options.client_flag;
+
+	bool client_support_session_track = ((client_flag & CLIENT_SESSION_TRACKING) != 0 && (client_flag & CLIENT_DEPRECATE_EOF) != 0);
+	bool server_support_session_track = ((srv_cap & CLIENT_SESSION_TRACKING) != 0 && (srv_cap & CLIENT_DEPRECATE_EOF) != 0);
+
+	// In fast forward, if client does not support session tracking,
+	// then ProxySQL do not have to enforce session track on backend connections
+	if ((session_fast_forward == SESSION_FORWARD_TYPE_PERMANENT) && !client_support_session_track) {
+		return true;
+	}
+
+	if (!server_support_session_track) {
+		// ENFORCED mode requires the backend to advertise both CLIENT_SESSION_TRACKING and
+		// CLIENT_DEPRECATE_EOF. When one or both are missing we park the server in a short
+		// selection-backoff window (see 'MySrvC::session_track_backoff_until') so other
+		// sessions don't retry the same backend immediately. The server is NOT shunned,
+		// and no connect_ERR counter is incremented: Monitor and the rest of the pool
+		// continue to treat the backend as healthy for everything unrelated to session
+		// tracking. In a mixed hostgroup, peer servers that do support the capabilities
+		// keep serving traffic normally.
+		//
+		// The 30-second window is intentionally short: it paces retries without masking
+		// a misconfiguration for long. Because this function runs only on connection
+		// establishment (which is itself gated by the backoff on the selection path),
+		// the warning below naturally rate-limits to at most once per 30s per backend —
+		// just enough for an operator to notice and act on an incompatible server in a
+		// mixed fleet without drowning the log.
+		proxy_warning(
+			"Backend %s:%d lacks CLIENT_SESSION_TRACKING or CLIENT_DEPRECATE_EOF; "
+			"backing off from selection for 30 seconds "
+			"(mysql-session_track_variables=ENFORCED)\n",
+			be_conn->parent->address, be_conn->parent->port
+		);
+		be_conn->parent->session_track_backoff_until.store(thread->curtime + (30ULL * 1000000), std::memory_order_relaxed);
+
+		if (session_fast_forward) {
+			mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
+		} else {
+			mybe->server_myds->return_MySQL_Connection_To_Pool();
+		}
+		return false;
+	}
+
+	return true;
 }
