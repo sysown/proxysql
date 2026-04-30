@@ -516,25 +516,36 @@ AnomalyResult Anomaly_Detector::check_embedding_similarity(const std::string& qu
  * @brief Get vector embedding for a query.
  *
  * Generates a vector representation of the query using a sentence
- * transformer or similar embedding model.
+ * transformer or similar embedding model via GenAI_Threads_Handler.
  *
- * @par Step 3 carve-out status
- * Currently returns an empty vector unconditionally.  The previous
- * implementation forwarded to `GloGATH->embed_documents({normalized})`,
- * but `GloGATH` (the GenAI_Threads_Handler) is still a core symbol that
- * the plugin cannot reach.  When `GenAI_Thread` moves into the plugin
- * in Step 5 of the carve-out, this function will be re-implemented to
- * call the plugin-local handler.
+ * Step 5 reattached this to the now-plugin-local GloGATH (the
+ * GenAI_Threads_Handler that moved alongside Anomaly_Detector).  The
+ * empty-vector short-circuit in `check_embedding_similarity` still
+ * applies if the embedding back-end isn't available (config disabled,
+ * provider unreachable), so callers don't need to handle the
+ * pre-Step-5 always-empty case specially.
  *
- * Returning an empty vector is safe: the only caller
- * (`check_embedding_similarity`) checks `embedding.empty()` and
- * short-circuits to "no anomaly" before touching the vector store.
- *
- * @param query SQL query (unused while embedding is disabled).
- * @return Empty vector.
+ * @param query SQL query to embed.
+ * @return Embedding vector, or empty vector if the back-end is unavailable.
  */
-std::vector<float> Anomaly_Detector::get_query_embedding(const std::string& /*query*/) {
-	return {};
+// Embedding back-end indirection — the real implementation lives in
+// plugin_main.cpp (which links against GenAI_Thread/LLM_Bridge), and
+// installs itself by setting `genai_anomaly_embed_fn` during plugin
+// init.  Unit tests that compile Anomaly_Detector.cpp directly into a
+// test binary leave the pointer null, so embedding silently
+// short-circuits (the only caller already nullptr-guards via the
+// vector_db check that follows).
+//
+// Lifetime: the function pointer outlives any single call; both
+// install and clear happen on the lifecycle thread.  No mutex needed
+// because the read happens long after init() and after stop()
+// resets back to nullptr.
+using genai_anomaly_embed_fn_t = std::vector<float> (*)(const std::string& query);
+genai_anomaly_embed_fn_t genai_anomaly_embed_fn = nullptr;
+
+std::vector<float> Anomaly_Detector::get_query_embedding(const std::string& query) {
+	if (genai_anomaly_embed_fn == nullptr) return {};
+	return genai_anomaly_embed_fn(query);
 }
 
 // ============================================================================

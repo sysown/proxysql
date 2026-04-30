@@ -37,6 +37,8 @@
 #include "ProxySQL_MCP_Server.hpp"
 #include "Query_Tool_Handler.h"   // for Discovery_Schema*-returning get_catalog()
 #include "Discovery_Schema.h"     // load_mcp_query_rules / get_mcp_query_rules
+#include "GenAI_Thread.h"
+#include "AI_Features_Manager.h"
 #include "sqlite3db.h"
 #include "proxysql_utils.h"
 #include "proxysql.h"
@@ -49,12 +51,39 @@
 #include <cstdlib>
 #include <cstring>
 
-// Plugin-local definition of the MCP_Threads_Handler global, replacing
-// the core-side `GloMCPH` deleted in Step 4.C.  This stays inside the
-// .so — the plugin's tool handlers (Query_Tool_Handler etc.) reference
-// the symbol locally; core code never sees it.  Lifetime is managed by
-// `genai_init` / `genai_stop` below.
+// Plugin-local definitions of the legacy globals, replacing the
+// core-side `GloMCPH` deleted in Step 4.C and `GloGATH` / `GloAI`
+// deleted in Step 5.  These stay inside the .so — the plugin's tool
+// handlers reference them locally; core code never sees them.
+// Lifetime is managed by `genai_init` / `genai_stop` below.
 MCP_Threads_Handler *GloMCPH = nullptr;
+GenAI_Threads_Handler *GloGATH = nullptr;
+AI_Features_Manager *GloAI = nullptr;
+
+// Forward declare the function-pointer hook that Anomaly_Detector.cpp
+// calls into to embed a query for similarity-based anomaly detection.
+// Defined as a global in Anomaly_Detector.cpp; we set it here in
+// genai_init so the embedding back-end is reachable from the
+// detector hot path without making the detector depend on
+// GenAI_Threads_Handler at compile time (the test binary that
+// compiles Anomaly_Detector.cpp directly leaves this null and the
+// detector short-circuits to empty embedding cleanly).
+using genai_anomaly_embed_fn_t = std::vector<float> (*)(const std::string& query);
+extern genai_anomaly_embed_fn_t genai_anomaly_embed_fn;
+
+namespace {
+
+std::vector<float> embed_query_via_glogath(const std::string& query) {
+	if (GloGATH == nullptr) return {};
+	std::vector<std::string> docs { query };
+	GenAI_EmbeddingResult res = GloGATH->embed_documents(docs);
+	if (res.data == nullptr || res.count == 0 || res.embedding_size == 0) {
+		return {};
+	}
+	return std::vector<float>(res.data, res.data + res.embedding_size);
+}
+
+} // namespace
 
 namespace {
 
@@ -132,6 +161,11 @@ bool genai_init(ProxySQL_PluginServices* services) {
 		ctx.anomaly_detector = nullptr;
 		return false;
 	}
+	// Wire the embedding back-end into Anomaly_Detector via the
+	// function-pointer hook (Step 5).  Detector calls through this
+	// pointer; tests that compile Anomaly_Detector.cpp standalone
+	// leave it null and embedding silently short-circuits.
+	genai_anomaly_embed_fn = &embed_query_via_glogath;
 
 	// Step 4.C: take over MCP_Threads_Handler ownership from former
 	// core global GloMCPH.  Construct here; `init()` is called below.
@@ -143,6 +177,17 @@ bool genai_init(ProxySQL_PluginServices* services) {
 	ctx.mcp = new MCP_Threads_Handler();
 	GloMCPH = ctx.mcp;  // legacy alias used by Query_Tool_Handler etc.
 	ctx.mcp->init();
+
+	// Step 5: take over GenAI_Threads_Handler / AI_Features_Manager
+	// ownership.  Construction here mirrors the pre-Step-5 sequence
+	// in src/main.cpp (ProxySQL_Main_init_main_modules +
+	// ProxySQL_Main_init_GenAI_module): GloGATH built then init()'d,
+	// then GloAI constructed and init()'d.  AI_Features_Manager pulls
+	// LLM_Bridge etc. up from inside.
+	GloGATH = new GenAI_Threads_Handler();
+	GloGATH->init();
+	GloAI = new AI_Features_Manager();
+	GloAI->init();
 
 	// Register admin SQL verbs (LOAD / SAVE MCP …).  Defined in
 	// plugin_commands.cpp.  Must happen during init() per the
@@ -519,7 +564,22 @@ bool genai_stop() {
 		ctx.mcp = nullptr;
 		GloMCPH = nullptr;
 	}
+	// Step 5: tear down AI_Features_Manager and GenAI_Threads_Handler
+	// in reverse construction order.  Mirrors the pre-Step-5 shutdown
+	// in src/main.cpp.
+	if (GloAI != nullptr) {
+		delete GloAI;
+		GloAI = nullptr;
+	}
+	if (GloGATH != nullptr) {
+		delete GloGATH;
+		GloGATH = nullptr;
+	}
 	if (ctx.anomaly_detector != nullptr) {
+		// Clear the embedding hook before deleting the detector so
+		// any in-flight hot-path call sees a null pointer rather
+		// than a dangling GenAI_Threads_Handler reference.
+		genai_anomaly_embed_fn = nullptr;
 		ctx.anomaly_detector->close();
 		delete ctx.anomaly_detector;
 		ctx.anomaly_detector = nullptr;

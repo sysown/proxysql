@@ -333,8 +333,8 @@ extern PgSQL_Threads_Handler* GloPTH;
 
 #ifdef PROXYSQLGENAI
 // extern MCP_Threads_Handler* GloMCPH; — removed in Step 4.C.
-extern GenAI_Threads_Handler* GloGATH;
-extern AI_Features_Manager *GloAI;
+// extern GenAI_Threads_Handler* GloGATH; — removed in Step 5.
+// extern AI_Features_Manager *GloAI; — removed in Step 5.
 #endif /* PROXYSQLGENAI */
 
 extern void (*flush_logs_function)();

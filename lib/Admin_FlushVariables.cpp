@@ -26,8 +26,10 @@ using json = nlohmann::json;
 #include "proxysql_config.h"
 #include "proxysql_restapi.h"
 // MCP_Thread.h / ProxySQL_MCP_Server.hpp moved to the genai plugin in
-// Step 4.C.  flush_mcp_variables___*() are stubbed below until 4.F
-// re-routes them through the plugin command registry.
+// Step 4.C; GenAI_Thread.h moved in Step 5.  flush_mcp_variables___*()
+// are stubbed below; flush_genai_variables___*() were already
+// stubbed since Step 4.C (and remain so — Step 5 just removes the
+// extern decls).
 #include "proxysql_utils.h"
 #include "prometheus_helpers.h"
 #include "cpp.h"
@@ -45,7 +47,7 @@ using json = nlohmann::json;
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
-#include "GenAI_Thread.h"
+// GenAI_Thread.h moved to plugins/genai/include/ in Step 5.
 #include "SQLite3_Server.h"
 #include "Web_Interface.hpp"
 
@@ -143,11 +145,9 @@ extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern MySQL_Monitor *GloMyMon;
 extern PgSQL_Threads_Handler* GloPTH;
 
-#ifdef PROXYSQLGENAI
 // MCP_Threads_Handler ownership moved to the genai plugin in Step 4.C.
-extern GenAI_Threads_Handler* GloGATH;
-extern AI_Features_Manager *GloAI;
-#endif /* PROXYSQLGENAI */
+// GenAI_Threads_Handler / AI_Features_Manager moved in Step 5 — core
+// no longer references those globals.
 
 extern void (*flush_logs_function)();
 
@@ -1019,8 +1019,24 @@ void ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(SQLite3DB* db, 
 }
 
 #ifdef PROXYSQLGENAI
-// GenAI Variables Flush Functions
+// GenAI Variables Flush Functions — both stubbed in Step 5 because
+// GenAI_Threads_Handler (formerly GloGATH) and AI_Features_Manager
+// (GloAI) moved into the genai plugin.  4.F's pattern applies:
+// LOAD/SAVE GENAI VARIABLES TO/FROM RUNTIME admin SQL routes through
+// the plugin command registry instead.  Original bodies preserved
+// inside `#if 0` for follow-up reference.
 void ProxySQL_Admin::flush_genai_variables___runtime_to_database(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime, bool use_lock) {
+	(void)db; (void)replace; (void)del; (void)onlyifempty; (void)runtime; (void)use_lock;
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "flush_genai_variables___runtime_to_database: stubbed (Step 5); awaiting plugin LOAD/SAVE GENAI VARIABLES verbs\n");
+}
+
+void ProxySQL_Admin::flush_genai_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum, const time_t epoch, bool lock) {
+	(void)db; (void)replace; (void)checksum; (void)epoch; (void)lock;
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "flush_genai_variables___database_to_runtime: stubbed (Step 5); awaiting plugin LOAD/SAVE GENAI VARIABLES verbs\n");
+}
+
+#if 0  // Original genai-flush bodies preserved for the upcoming plugin port.
+void ProxySQL_Admin::flush_genai_variables___runtime_to_database_ORIGINAL(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime, bool use_lock) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing GenAI variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
 	if (onlyifempty) {
 		char* error = NULL;
@@ -1111,7 +1127,7 @@ void ProxySQL_Admin::flush_genai_variables___runtime_to_database(SQLite3DB* db, 
 	free(varnames);
 }
 
-void ProxySQL_Admin::flush_genai_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum, const time_t epoch, bool lock) {
+void ProxySQL_Admin::flush_genai_variables___database_to_runtime_ORIGINAL(SQLite3DB* db, bool replace, const std::string& checksum, const time_t epoch, bool lock) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing GenAI variables. Replace:%d\n", replace);
 	char* error = NULL;
 	int cols = 0;
@@ -1159,6 +1175,7 @@ void ProxySQL_Admin::flush_genai_variables___database_to_runtime(SQLite3DB* db, 
 	}
 	if (resultset) delete resultset;
 }
+#endif // 0 — original genai-flush bodies preserved for plugin port
 #endif /* PROXYSQLGENAI */
 
 void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime, bool use_lock) {

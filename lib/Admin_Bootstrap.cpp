@@ -191,11 +191,9 @@ extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern MySQL_Monitor *GloMyMon;
 extern PgSQL_Threads_Handler* GloPTH;
 
-#ifdef PROXYSQLGENAI
-// MCP_Threads_Handler ownership moved to the genai plugin in Step 4.C.
-extern GenAI_Threads_Handler* GloGATH;
-extern AI_Features_Manager *GloAI;
-#endif /* PROXYSQLGENAI */
+// MCP_Threads_Handler ownership moved to the genai plugin in Step 4.C;
+// GenAI_Threads_Handler / AI_Features_Manager followed in Step 5.
+// Core no longer references those globals.
 
 extern void (*flush_logs_function)();
 

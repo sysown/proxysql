@@ -75,10 +75,8 @@
 
 #ifdef PROXYSQLGENAI
 // AI Features includes.  Anomaly_Detector.h moved to plugins/genai/
-// in Step 3 of the GenAI plugin carve-out and is no longer included
-// here.
-#include "AI_Features_Manager.h"
-#include "LLM_Bridge.h"
+// in Step 3.  AI_Features_Manager.h, LLM_Bridge.h moved in Step 5.
+// AI_Vector_Storage.h stays in core for Step 6.
 #include "AI_Vector_Storage.h"
 #endif /* PROXYSQLGENAI */
 

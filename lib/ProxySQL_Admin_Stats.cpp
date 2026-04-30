@@ -20,15 +20,10 @@
 #include "PgSQL_Query_Processor.h"
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
-#ifdef PROXYSQLGENAI
-// MCP_Thread.h / Query_Tool_Handler.h moved to plugins/genai/include/
-// in Step 4.C.  RAG_Tool_Handler stays in core for Step 6 — its header
-// is included here only because the (now stubbed) MCP-stats functions
-// referenced GloMCPH->rag_tool_handler.  Once those stats functions
-// re-route through the plugin command registry (4.F), this include
-// can go too.
-#include "RAG_Tool_Handler.h"
-#endif /* PROXYSQLGENAI */
+// MCP_Thread.h / Query_Tool_Handler.h moved in Step 4.C;
+// RAG_Tool_Handler.h moved in Step 5.  All MCP-stats functions in
+// this file are stubbed (the original bodies live inside `#if 0`
+// for reference) so no header from those moved sets is needed.
 #include <openssl/x509v3.h>
 
 #define SAFE_SQLITE3_STEP(_stmt) do {\

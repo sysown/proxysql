@@ -15,9 +15,10 @@ using json = nlohmann::json;
 #include "MySQL_Data_Stream.h"
 #include "MySQL_Query_Processor.h"
 #include "MySQL_PreparedStatement.h"
-#include "GenAI_Thread.h"
-#include "AI_Features_Manager.h"
-#include "LLM_Bridge.h"
+// GenAI_Thread.h, AI_Features_Manager.h, LLM_Bridge.h moved to
+// plugins/genai/include/ in Step 5.  Step 4.A removed all session-side
+// GENAI:/LLM: prefix dispatch, so MySQL_Session no longer references
+// any of those classes.
 #include "MySQL_Logger.hpp"
 #include "StatCounters.h"
 #include "MySQL_Authentication.hpp"
@@ -158,10 +159,9 @@ extern ClickHouse_Authentication *GloClickHouseAuth;
 extern ClickHouse_Server *GloClickHouseServer;
 #endif /* PROXYSQLCLICKHOUSE */
 
-#ifdef PROXYSQLGENAI
-extern AI_Features_Manager *GloAI;
-extern GenAI_Threads_Handler *GloGATH;
-#endif /* PROXYSQLGENAI */
+// GloAI / GloGATH moved to the genai plugin in Step 5.
+// MySQL_Session no longer references either after Step 4.A removed
+// the GENAI:/LLM: prefix dispatch.
 
 /**
  * @brief Converts session type to a human-readable string.

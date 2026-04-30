@@ -32,8 +32,9 @@ using json = nlohmann::json;
 #ifdef PROXYSQLGENAI
 // MCP_Thread.h has moved to plugins/genai/include/ as of Step 4.C.
 // Core no longer references MCP_Threads_Handler — the plugin owns it.
-#include "GenAI_Thread.h"
-#include "AI_Features_Manager.h"
+// GenAI_Thread.h and AI_Features_Manager.h moved to plugins/genai/include/
+// in Step 5.  Core no longer references those classes — the plugin owns
+// GloGATH/GloAI now (renamed to plugin-local globals).
 #endif /* PROXYSQLGENAI */
 
 #include "SQLite3_Server.h"
@@ -499,12 +500,9 @@ ProxySQL_Admin *GloAdmin;
 MySQL_Threads_Handler *GloMTH = NULL;
 PgSQL_Threads_Handler* GloPTH = NULL;
 
-#ifdef PROXYSQLGENAI
-// GloMCPH removed in Step 4.C — the genai plugin owns the
-// MCP_Threads_Handler now.  GloGATH / GloAI follow in Step 5.
-GenAI_Threads_Handler* GloGATH = NULL;
-AI_Features_Manager *GloAI = NULL;
-#endif /* PROXYSQLGENAI */
+// GloMCPH removed in Step 4.C; GloGATH/GloAI removed in Step 5 — the
+// genai plugin owns those handlers now.  Symbol still appears in the
+// .so as a plugin-local global; core no longer references it.
 
 Web_Interface *GloWebInterface;
 MySQL_STMT_Manager_v14 *GloMyStmt;
@@ -933,13 +931,9 @@ void ProxySQL_Main_init_main_modules() {
 	GloMyAuth=NULL;
 	GloPgAuth=NULL;
 	GloPTH=NULL;
-#ifdef PROXYSQLGENAI
-	// MCP_Threads_Handler is now constructed by the genai plugin's
-	// init() callback (Step 4.C).  GenAI_Threads_Handler / AI_Features
-	// move similarly in Step 5.
-	GloGATH=new GenAI_Threads_Handler();
-	GloAI=NULL;
-#endif /* PROXYSQLGENAI */
+// MCP_Threads_Handler / GenAI_Threads_Handler / AI_Features_Manager
+// are all constructed by the genai plugin's init() callback now
+// (Steps 4.C and 5).  Core has no PROXYSQLGENAI initializers here.
 #ifdef PROXYSQLCLICKHOUSE
 	GloClickHouseAuth=NULL;
 #endif /* PROXYSQLCLICKHOUSE */
@@ -974,17 +968,11 @@ void ProxySQL_Main_init_main_modules() {
 }
 
 #ifdef PROXYSQLGENAI
-void ProxySQL_Main_init_GenAI_module() {
-	GloGATH->init();
-	proxy_info("GenAI Threads Handler initialized\n");
-	GloAI = new AI_Features_Manager();
-	GloAI->init();
-	proxy_info("AI Features module initialized\n");
-}
-
-// ProxySQL_Main_init_MCP_module() removed in Step 4.C.
-// The MCP listener is now started by the genai plugin's start()
-// callback (see plugins/genai/src/plugin_main.cpp).
+// ProxySQL_Main_init_GenAI_module / ProxySQL_Main_init_MCP_module both
+// removed in Steps 4.C / 5.  All GenAI lifecycle (MCP_Threads_Handler,
+// GenAI_Threads_Handler, AI_Features_Manager, ProxySQL_MCP_Server) is
+// now driven from the genai plugin's init/start/stop callbacks
+// (plugins/genai/src/plugin_main.cpp).
 #endif /* PROXYSQLGENAI */
 
 void ProxySQL_Main_init_Admin_module(const bootstrap_info_t& bootstrap_info) {
@@ -1318,25 +1306,9 @@ void ProxySQL_Main_shutdown_all_modules() {
 		std::cerr << "GloPTH shutdown in ";
 #endif
 	}
-#ifdef PROXYSQLGENAI
-	// MCP shutdown is performed by the genai plugin's stop() callback (Step 4.C).
-	if (GloGATH) {
-		cpu_timer t;
-		delete GloGATH;
-		GloGATH = NULL;
-#ifdef DEBUG
-		std::cerr << "GloGATH shutdown in ";
-#endif
-	}
-	if (GloAI) {
-		cpu_timer t;
-		delete GloAI;
-		GloAI = NULL;
-#ifdef DEBUG
-		std::cerr << "GloAI shutdown in ";
-#endif
-	}
-#endif /* PROXYSQLGENAI */
+// MCP / GenAI / AI shutdown is performed entirely by the genai plugin's
+// stop() callback (Steps 4.C and 5).  Core has no PROXYSQLGENAI
+// teardown here.
 	if (GloMyLogger) {
 		cpu_timer t;
 		delete GloMyLogger;
@@ -1562,10 +1534,8 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 
 	ProxySQL_Main_init_main_modules();
 
-#ifdef PROXYSQLGENAI
-	ProxySQL_Main_init_GenAI_module();
-	// MCP module init moved to the genai plugin (Step 4.C).
-#endif /* PROXYSQLGENAI */
+// PROXYSQLGENAI init moved entirely to the genai plugin's init/start
+// callbacks (Steps 4.C and 5).  No core invocation needed.
 
 #ifdef PROXYSQL40
 	// Four-phase plugin lifecycle (chassis only — v3.x has no plugin
@@ -1792,15 +1762,10 @@ bool ProxySQL_Main_init_phase3___start_all() {
 	GloAdmin->init_tsdb_variables();
 #endif
 
-#ifdef PROXYSQLGENAI
-	// GenAI
-	if (GloGATH)
-		GloAdmin->init_genai_variables();
-	// init_mcp_variables() moved to the genai plugin (Step 4.C).
-	// FIXME(4.F): the mcp-* admin SQL surface (SET mcp-port=...,
-	// LOAD MCP PROFILES ...) is non-functional between Step 4.C and
-	// Step 4.F.  Tracked in the carve-out plan.
-#endif /* PROXYSQLGENAI */
+// init_genai_variables() / init_mcp_variables() moved to the genai
+// plugin's start() callback (Steps 4.C, 4.F, 5).  Core no longer
+// reaches into the runtime via init_*_variables; the plugin pulls
+// from main.global_variables directly through services->get_admindb().
 
 	// HTTP Server should be initialized after other modules. See #4510
 	GloAdmin->init_http_server();

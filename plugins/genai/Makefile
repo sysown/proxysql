@@ -71,8 +71,13 @@ SRCS := $(PLUGIN_DIR)/src/plugin_main.cpp \
 	$(PLUGIN_DIR)/src/plugin_hooks.cpp \
 	$(PLUGIN_DIR)/src/plugin_commands.cpp \
 	$(PLUGIN_DIR)/src/plugin_tables.cpp \
+	$(PLUGIN_DIR)/src/AI_Features_Manager.cpp \
+	$(PLUGIN_DIR)/src/AI_Tool_Handler.cpp \
 	$(PLUGIN_DIR)/src/Anomaly_Detector.cpp \
 	$(PLUGIN_DIR)/src/backend_client.cpp \
+	$(PLUGIN_DIR)/src/GenAI_Thread.cpp \
+	$(PLUGIN_DIR)/src/LLM_Bridge.cpp \
+	$(PLUGIN_DIR)/src/LLM_Clients.cpp \
 	$(PLUGIN_DIR)/src/local_proxy_endpoint.cpp \
 	$(PLUGIN_DIR)/src/MCP_Endpoint.cpp \
 	$(PLUGIN_DIR)/src/MCP_Thread.cpp \
@@ -84,6 +89,7 @@ SRCS := $(PLUGIN_DIR)/src/plugin_main.cpp \
 	$(PLUGIN_DIR)/src/tool_handlers/MySQL_Tool_Handler.cpp \
 	$(PLUGIN_DIR)/src/tool_handlers/Observe_Tool_Handler.cpp \
 	$(PLUGIN_DIR)/src/tool_handlers/Query_Tool_Handler.cpp \
+	$(PLUGIN_DIR)/src/tool_handlers/RAG_Tool_Handler.cpp \
 	$(PLUGIN_DIR)/src/tool_handlers/Stats_Tool_Handler.cpp
 HEADERS := $(wildcard $(PLUGIN_DIR)/include/*.h) \
 	$(PROXYSQL_PATH)/include/ProxySQL_Plugin.h

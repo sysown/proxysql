@@ -183,7 +183,13 @@ ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c ClickHouse_Server),0)
 	PSQLCH := -DPROXYSQLCLICKHOUSE
 endif
 PSQLGA :=
-ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c GenAI_Thread),0)
+# Probe for a still-in-core GenAI symbol.  Step 5 moved GenAI_Thread,
+# LLM_Bridge etc. out of libproxysql.a into the plugin .so, so we can't
+# probe those any more.  AI_Vector_Storage stays in core for Step 6 and
+# is a stable marker until then.  After Step 6 the probe will switch
+# again (to whatever stays as the last GenAI-tier core symbol), and
+# after Step 7 the auto-detect goes away entirely.
+ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c AI_Vector_Storage),0)
 	PROXYSQLGENAI := 1
 	PSQLGA := -DPROXYSQLGENAI
 endif

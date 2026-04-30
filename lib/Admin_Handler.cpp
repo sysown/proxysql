@@ -45,8 +45,8 @@ using json = nlohmann::json;
 #endif /* PROXYSQL40 */
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
-// MCP_Thread.h moved to plugins/genai/include/ in Step 4.C.
-#include "GenAI_Thread.h"
+// MCP_Thread.h moved to plugins/genai/include/ in Step 4.C;
+// GenAI_Thread.h moved in Step 5.
 #include "SQLite3_Server.h"
 #include "Web_Interface.hpp"
 
@@ -159,8 +159,8 @@ extern PgSQL_Threads_Handler* GloPTH;
 
 #ifdef PROXYSQLGENAI
 // extern MCP_Threads_Handler* GloMCPH; — removed in Step 4.C.
-extern GenAI_Threads_Handler* GloGATH;
-extern AI_Features_Manager *GloAI;
+// extern GenAI_Threads_Handler* GloGATH; — removed in Step 5.
+// extern AI_Features_Manager *GloAI; — removed in Step 5.
 #endif /* PROXYSQLGENAI */
 
 extern void (*flush_logs_function)();
@@ -1175,7 +1175,12 @@ bool is_valid_global_variable(const char *var_name) {
 	// chassis-side `register_variable_namespace` ABI exists.
 	} else if (strlen(var_name) > 4 && !strncmp(var_name, "mcp-", 4)) {
 		return true;
-	} else if (strlen(var_name) > 6 && !strncmp(var_name, "genai-", 6) && GloGATH && GloGATH->has_variable(var_name + 6)) {
+	} else if (strlen(var_name) > 6 && !strncmp(var_name, "genai-", 6)) {
+		// `genai-*` variables now live in the genai plugin (Step 5);
+		// loose prefix match here for the same reason as `mcp-*` above.
+		// LOAD GENAI VARIABLES TO RUNTIME (registered by the plugin)
+		// is what actually validates the name when pushing into
+		// GenAI_Threads_Handler.
 		return true;
 #endif /* PROXYSQLGENAI */
 	} else {
