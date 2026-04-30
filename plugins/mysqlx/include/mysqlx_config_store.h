@@ -142,7 +142,6 @@ public:
 
 private:
 	MysqlxBackendEndpoint pick_from_hostgroup(int hostgroup_id, const std::string& strategy) const;
-	void rebuild_hostgroup_endpoints_locked();
 
 	mutable std::shared_mutex mutex_ {};
 	std::unordered_map<std::string, MysqlxResolvedIdentity> identities_ {};

@@ -270,6 +270,12 @@ void mysqlx_reconcile_listeners(SQLite3DB& admindb) {
 	);
 }
 
-extern "C" const ProxySQL_PluginDescriptor *proxysql_plugin_descriptor_v1() {
+// Default visibility is required because the plugin .so is built with
+// -fvisibility=hidden (see plugins/mysqlx/Makefile). Without an explicit
+// override the dlopen consumer cannot resolve this symbol via dlsym, and
+// ProxySQL_PluginManager::load() fails with "undefined symbol:
+// proxysql_plugin_descriptor_v1".
+extern "C" __attribute__((visibility("default")))
+const ProxySQL_PluginDescriptor *proxysql_plugin_descriptor_v1() {
 	return &mysqlx_descriptor;
 }
