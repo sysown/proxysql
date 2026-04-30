@@ -53,7 +53,7 @@ SQLite3DB* proxysql_plugin_get_configdb() { return g_configdb; }
 SQLite3DB* proxysql_plugin_get_statsdb()  { return g_statsdb; }
 
 int main() {
-	plan(19);
+	plan(25);
 
 	g_admindb  = new SQLite3DB();
 	g_configdb = new SQLite3DB();
@@ -127,6 +127,26 @@ int main() {
 	ok(mgr.resolve_alias_to_canonical("SAVE MCP VARIABLES TO MEM") ==
 	       "SAVE MCP VARIABLES TO MEMORY",
 	   "alias: SAVE MCP VARIABLES TO MEM -> TO MEMORY");
+
+	// MCP QUERY RULES verbs.
+	ok(mgr.resolve_alias_to_canonical("LOAD MCP QUERY RULES TO RUNTIME") ==
+	       "LOAD MCP QUERY RULES TO RUNTIME",
+	   "canonical: LOAD MCP QUERY RULES TO RUNTIME registered");
+	ok(mgr.resolve_alias_to_canonical("LOAD MCP QUERY RULES FROM MEMORY") ==
+	       "LOAD MCP QUERY RULES TO RUNTIME",
+	   "alias: LOAD MCP QUERY RULES FROM MEMORY -> TO RUNTIME");
+	ok(mgr.resolve_alias_to_canonical("LOAD MCP QUERY RULES FROM MEM") ==
+	       "LOAD MCP QUERY RULES TO RUNTIME",
+	   "alias: LOAD MCP QUERY RULES FROM MEM -> TO RUNTIME");
+	ok(mgr.resolve_alias_to_canonical("SAVE MCP QUERY RULES TO MEMORY") ==
+	       "SAVE MCP QUERY RULES TO MEMORY",
+	   "canonical: SAVE MCP QUERY RULES TO MEMORY registered");
+	ok(mgr.resolve_alias_to_canonical("SAVE MCP QUERY RULES FROM RUNTIME") ==
+	       "SAVE MCP QUERY RULES TO MEMORY",
+	   "alias: SAVE MCP QUERY RULES FROM RUNTIME -> TO MEMORY");
+	ok(mgr.resolve_alias_to_canonical("SAVE MCP QUERY RULES FROM RUN") ==
+	       "SAVE MCP QUERY RULES TO MEMORY",
+	   "alias: SAVE MCP QUERY RULES FROM RUN -> TO MEMORY");
 
 	// Sanity: an unrelated verb does NOT resolve via the plugin.
 	ok(mgr.resolve_alias_to_canonical("SELECT 1").empty(),

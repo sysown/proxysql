@@ -110,6 +110,31 @@ bool mcp_save_variables_to_admindb(GenAIPluginContext& ctx);
 bool mcp_load_target_auth_map_from_admindb(GenAIPluginContext& ctx);
 
 /**
+ * @brief Push active rows from `main.mcp_query_rules` into the
+ *        Discovery_Schema catalog owned by the running
+ *        `Query_Tool_Handler`.
+ *
+ * Defined in plugin_main.cpp.  Called by the
+ * `LOAD MCP QUERY RULES TO RUNTIME` admin command.  Mirrors the
+ * pre-4.C `ProxySQL_Admin::load_mcp_query_rules_to_runtime`.
+ *
+ * @return true on success; false if the MCP listener is not running
+ *         (no Query_Tool_Handler attached) or the SELECT errored out.
+ */
+bool mcp_load_query_rules_to_runtime(GenAIPluginContext& ctx);
+
+/**
+ * @brief Read the runtime Discovery_Schema MCP query rules cache and
+ *        REPLACE the corresponding rows in `main.mcp_query_rules`
+ *        (or `runtime_mcp_query_rules` if `runtime=true`).
+ *
+ * Defined in plugin_main.cpp.  Called by the
+ * `SAVE MCP QUERY RULES TO MEMORY` admin command.  Mirrors the
+ * pre-4.C `ProxySQL_Admin::save_mcp_query_rules_from_runtime`.
+ */
+bool mcp_save_query_rules_from_runtime(GenAIPluginContext& ctx, bool runtime);
+
+/**
  * @brief Bring the MCP listener (`ProxySQL_MCP_Server`) up if
  *        `ctx.mcp->variables.mcp_enabled` is true and no listener is
  *        currently running.

@@ -102,6 +102,45 @@ ProxySQL_PluginCommandResult save_mcp_variables_to_memory(
 }
 
 /**
+ * `LOAD MCP QUERY RULES TO RUNTIME` (and aliases).
+ *
+ * Pushes active rows from `main.mcp_query_rules` into the in-memory
+ * Discovery_Schema cache held by Query_Tool_Handler.  Required after
+ * the operator edits `mcp_query_rules` for changes to take effect on
+ * incoming MCP queries.
+ */
+ProxySQL_PluginCommandResult load_mcp_query_rules_to_runtime(
+	const ProxySQL_PluginCommandContext& cmd_ctx,
+	const char* sql
+) {
+	(void)cmd_ctx; (void)sql;
+	GenAIPluginContext& ctx = genai_context();
+	if (!mcp_load_query_rules_to_runtime(ctx)) {
+		return err_result("LOAD MCP QUERY RULES TO RUNTIME: failed (is the MCP listener running?)");
+	}
+	return ok_result("MCP query rules loaded to runtime");
+}
+
+/**
+ * `SAVE MCP QUERY RULES TO MEMORY` / `... FROM RUNTIME` (and aliases).
+ *
+ * Pulls rule-by-rule from the Discovery_Schema cache and REPLACEs
+ * the rows in `main.mcp_query_rules`.  The `runtime_mcp_query_rules`
+ * view is refreshed lazily by Stats; we only touch `main` here.
+ */
+ProxySQL_PluginCommandResult save_mcp_query_rules_to_memory(
+	const ProxySQL_PluginCommandContext& cmd_ctx,
+	const char* sql
+) {
+	(void)cmd_ctx; (void)sql;
+	GenAIPluginContext& ctx = genai_context();
+	if (!mcp_save_query_rules_from_runtime(ctx, /*runtime=*/false)) {
+		return err_result("SAVE MCP QUERY RULES TO MEMORY: failed (is the MCP listener running?)");
+	}
+	return ok_result("MCP query rules saved from runtime to main");
+}
+
+/**
  * `LOAD MCP PROFILES TO RUNTIME` (and aliases).
  *
  * Refreshes runtime_mcp_auth_profiles / runtime_mcp_target_profiles
@@ -169,5 +208,17 @@ void genai_register_admin_commands(ProxySQL_PluginServices* services) {
 		"LOAD MCP PROFILES FROM MEMORY",
 		"LOAD MCP PROFILES FROM MEM",
 		"LOAD MCP PROFILES TO RUN",
+	});
+
+	reg("LOAD MCP QUERY RULES TO RUNTIME", &load_mcp_query_rules_to_runtime, {
+		"LOAD MCP QUERY RULES FROM MEMORY",
+		"LOAD MCP QUERY RULES FROM MEM",
+		"LOAD MCP QUERY RULES TO RUN",
+	});
+
+	reg("SAVE MCP QUERY RULES TO MEMORY", &save_mcp_query_rules_to_memory, {
+		"SAVE MCP QUERY RULES TO MEM",
+		"SAVE MCP QUERY RULES FROM RUNTIME",
+		"SAVE MCP QUERY RULES FROM RUN",
 	});
 }
