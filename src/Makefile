@@ -71,10 +71,10 @@ ifeq ($(PROXYSQLCLICKHOUSE),1)
 	PSQLCH := -DPROXYSQLCLICKHOUSE
 endif
 
+# PROXYSQLGENAI macro removed in Step 7.  See lib/Makefile for the
+# carve-out note; PSQLGA stays empty to avoid touching every place
+# that references it in this file.
 PSQLGA :=
-ifeq ($(PROXYSQLGENAI),1)
-	PSQLGA := -DPROXYSQLGENAI
-endif
 
 PSQL40 :=
 ifeq ($(PROXYSQL40),1)
@@ -179,9 +179,12 @@ ifeq ($(UNAME_S),Darwin)
 endif
 LIBPROXYSQLAR += $(ZSTD_LDIR)/libzstd.a
 LIBPROXYSQLAR += $(CITYHASH_LDIR)/libcityhash.a
-ifeq ($(PROXYSQLGENAI),1)
+# SQLite `vec` extension object (similarity search).  Was gated
+# behind PROXYSQLGENAI through Step 6; Step 7 made it unconditional
+# because the genai plugin (when loaded via dlopen) calls
+# sqlite3_vec_init on the same SQLite that core links against, and
+# that requires the symbol to be present in the proxysql binary.
 LIBPROXYSQLAR += $(SQLITE_VEC_OBJ)
-endif
 
 ODIR := obj
 

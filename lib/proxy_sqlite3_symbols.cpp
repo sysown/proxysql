@@ -50,13 +50,13 @@ int (*proxy_sqlite3_prepare_v2)(sqlite3*, const char*, int, sqlite3_stmt**, cons
 int (*proxy_sqlite3_open_v2)(const char*, sqlite3**, int, const char*) = sqlite3_open_v2;
 int (*proxy_sqlite3_exec)(sqlite3*, const char*, int (*)(void*,int,char**,char**), void*, char**) = sqlite3_exec;
 
-// Hook for sqlite-vec (only available when PROXYSQLGENAI is enabled)
-#ifdef PROXYSQLGENAI
+// Hook for sqlite-vec.  Step 7 of the GenAI plugin carve-out made
+// this unconditional — sqlite-vec is now always linked into proxysql
+// (the genai plugin's AI_Vector_Storage uses it via this hook when
+// the plugin is dlopen'd; without the plugin loaded it's just dead
+// code inside SQLite, which is fine).
 #include "sqlite-vec.h"
 int (*proxy_sqlite3_vec_init)(sqlite3*, char**, const sqlite3_api_routines*) = sqlite3_vec_init;
-#else
-int (*proxy_sqlite3_vec_init)(sqlite3*, char**, const sqlite3_api_routines*) = NULL;
-#endif /* PROXYSQLGENAI */
 
 // Internal helpers used by admin stats batching; keep defaults as NULL
 void (*proxy_sqlite3_global_stats_row_step)(SQLite3DB*, sqlite3_stmt*, const char*, ...) = NULL;

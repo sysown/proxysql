@@ -57,10 +57,13 @@ PSQLTSDB :=
 ifeq ($(PROXYSQLTSDB),1)
 	PSQLTSDB := -DPROXYSQLTSDB
 endif
-PSQLGA :=
-ifeq ($(PROXYSQLGENAI),1)
-	PSQLGA := -DPROXYSQLGENAI
-endif
+# Step 7: PROXYSQLGENAI is always defined inside the genai plugin —
+# it's the genai plugin, after all.  Core no longer needs the macro
+# (the carve-out moved every PROXYSQLGENAI-guarded block out), but
+# the plugin's own source files still use `#ifdef PROXYSQLGENAI` to
+# bracket their content; force-defining it here keeps that working
+# until a separate cleanup pass strips the guards.
+PSQLGA := -DPROXYSQLGENAI
 
 CXXFLAGS := $(STDCPP) -fPIC $(OPTZ) $(WGCOV) $(WASAN) -pthread \
 	$(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLGA)
@@ -91,6 +94,7 @@ SRCS := $(PLUGIN_DIR)/src/plugin_main.cpp \
 	$(PLUGIN_DIR)/src/tool_handlers/Admin_Tool_Handler.cpp \
 	$(PLUGIN_DIR)/src/tool_handlers/Cache_Tool_Handler.cpp \
 	$(PLUGIN_DIR)/src/tool_handlers/Config_Tool_Handler.cpp \
+	$(PLUGIN_DIR)/src/tool_handlers/MCP_Tool_Handler.cpp \
 	$(PLUGIN_DIR)/src/tool_handlers/MySQL_Tool_Handler.cpp \
 	$(PLUGIN_DIR)/src/tool_handlers/Observe_Tool_Handler.cpp \
 	$(PLUGIN_DIR)/src/tool_handlers/Query_Tool_Handler.cpp \

@@ -51,10 +51,12 @@ ifeq ($(PROXYSQLCLICKHOUSE),1)
 	PSQLCH := -DPROXYSQLCLICKHOUSE
 endif
 
+# PROXYSQLGENAI macro removed in Step 7 of the GenAI plugin carve-out.
+# Core no longer guards anything with it; the macro lives only inside
+# the plugin's own compilation unit.  PSQLGA stays as an empty
+# variable so other Makefile fragments can keep the {$(PSQLCH)
+# $(PSQLGA) ...} cascade unchanged; remove on a follow-up cleanup.
 PSQLGA :=
-ifeq ($(PROXYSQLGENAI),1)
-	PSQLGA := -DPROXYSQLGENAI
-endif
 
 PSQL40 :=
 ifeq ($(PROXYSQL40),1)
@@ -139,14 +141,11 @@ endif
 # plugins/genai/.  Step 5 moved GenAI_Thread, LLM_Bridge, LLM_Clients,
 # AI_Features_Manager, AI_Tool_Handler.  RAG/Vector/Discovery surface
 # is the last bucket — it stays in core until Step 6.
-ifeq ($(PROXYSQLGENAI),1)
-# Step 6 of the GenAI plugin carve-out moved AI_Vector_Storage,
-# MySQL_Catalog, Discovery_Schema, and the Static_Harvester pair
-# into plugins/genai/.  The only object that lives in core under
-# PROXYSQLGENAI is MCP_Tool_Handler — the base class AI/RAG handlers
-# inherit from.  Step 7 will delete the macro entirely.
-_OBJ_CXX += MCP_Tool_Handler.oo
-endif
+# Step 7 of the GenAI plugin carve-out: PROXYSQLGENAI is no longer
+# used by core.  The whole feature surface — MCP, GenAI/LLM, AI,
+# RAG/Vector/discovery, plus the MCP_Tool_Handler base class — lives
+# in plugins/genai/.  No GenAI-specific .cpp belongs in libproxysql.a
+# any more.
 
 OBJ_CXX := $(patsubst %,$(ODIR)/%,$(_OBJ_CXX))
 HEADERS := ../include/*.h ../include/*.hpp
