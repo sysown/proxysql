@@ -15,6 +15,7 @@ static const char TEST_PASSWORD_E[] = "pass1";
 static const char TEST_PASSWORD_F[] = "pass2";
 
 static void test_verify_hash_correct() {
+	diag(">>> %s", __func__);
 	std::string password = TEST_PASSWORD_A;
 	std::vector<uint8_t> hash = mysqlx_mysql41_hash(password);
 
@@ -28,6 +29,7 @@ static void test_verify_hash_correct() {
 }
 
 static void test_verify_hash_wrong_password() {
+	diag(">>> %s", __func__);
 	std::vector<uint8_t> hash = mysqlx_mysql41_hash(TEST_PASSWORD_B);
 	std::vector<uint8_t> challenge(20, 0xCD);
 	std::vector<uint8_t> scramble = mysqlx_mysql41_scramble(challenge, TEST_PASSWORD_C);
@@ -39,6 +41,7 @@ static void test_verify_hash_wrong_password() {
 }
 
 static void test_verify_hash_empty_password() {
+	diag(">>> %s", __func__);
 	std::vector<uint8_t> hash = mysqlx_mysql41_hash("");
 	std::vector<uint8_t> challenge(20, 0x11);
 	std::vector<uint8_t> scramble = mysqlx_mysql41_scramble(challenge, "");
@@ -48,6 +51,7 @@ static void test_verify_hash_empty_password() {
 }
 
 static void test_verify_hash_wrong_size_inputs() {
+	diag(">>> %s", __func__);
 	std::vector<uint8_t> hash = mysqlx_mysql41_hash(TEST_PASSWORD_A);
 	std::vector<uint8_t> short_hash(10, 0xFF);
 	std::vector<uint8_t> challenge(20, 0x22);
@@ -62,6 +66,7 @@ static void test_verify_hash_wrong_size_inputs() {
 }
 
 static void test_hex_encode_decode_roundtrip() {
+	diag(">>> %s", __func__);
 	std::vector<uint8_t> data = {0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF};
 	std::string hex = mysqlx_hex_encode(data);
 	ok(hex == "0123456789ABCDEF", "hex encode produces uppercase");
@@ -73,18 +78,21 @@ static void test_hex_encode_decode_roundtrip() {
 }
 
 static void test_hex_decode_odd_length() {
+	diag(">>> %s", __func__);
 	std::vector<uint8_t> decoded;
 	bool ok_flag = mysqlx_hex_decode("ABC", decoded);
 	ok(!ok_flag, "hex decode rejects odd-length input");
 }
 
 static void test_hex_decode_invalid_chars() {
+	diag(">>> %s", __func__);
 	std::vector<uint8_t> decoded;
 	bool ok_flag = mysqlx_hex_decode("GH", decoded);
 	ok(!ok_flag, "hex decode rejects invalid characters");
 }
 
 static void test_hex_decode_lowercase() {
+	diag(">>> %s", __func__);
 	std::vector<uint8_t> decoded;
 	bool ok_flag = mysqlx_hex_decode("0a1b", decoded);
 	ok(ok_flag, "hex decode accepts lowercase");
@@ -98,6 +106,7 @@ static void test_hex_decode_lowercase() {
 }
 
 static void test_mysql41_hash_consistency() {
+	diag(">>> %s", __func__);
 	std::vector<uint8_t> h1 = mysqlx_mysql41_hash(TEST_PASSWORD_D);
 	std::vector<uint8_t> h2 = mysqlx_mysql41_hash(TEST_PASSWORD_D);
 	ok(h1 == h2, "same password produces same hash");
@@ -105,12 +114,14 @@ static void test_mysql41_hash_consistency() {
 }
 
 static void test_mysql41_hash_different_passwords() {
+	diag(">>> %s", __func__);
 	std::vector<uint8_t> h1 = mysqlx_mysql41_hash(TEST_PASSWORD_E);
 	std::vector<uint8_t> h2 = mysqlx_mysql41_hash(TEST_PASSWORD_F);
 	ok(h1 != h2, "different passwords produce different hashes");
 }
 
 static void test_scramble_deterministic() {
+	diag(">>> %s", __func__);
 	std::vector<uint8_t> challenge(20, 0x42);
 	std::vector<uint8_t> s1 = mysqlx_mysql41_scramble(challenge, "test");
 	std::vector<uint8_t> s2 = mysqlx_mysql41_scramble(challenge, "test");
@@ -119,13 +130,16 @@ static void test_scramble_deterministic() {
 }
 
 static void test_is_supported_auth() {
+	diag(">>> %s", __func__);
 	ok(mysqlx_is_supported_auth_method("MYSQL41"), "MYSQL41 is supported");
 	ok(!mysqlx_is_supported_auth_method("SHA256_MEMORY"), "SHA256_MEMORY is not supported");
 	ok(!mysqlx_is_supported_auth_method("mysql41"), "case-sensitive: lowercase rejected");
 }
 
 int main() {
+	setvbuf(stdout, nullptr, _IOLBF, 0);
 	plan(24);
+	diag("=== mysqlx_credential_verify_unit-t starting ===");
 
 	test_verify_hash_correct();
 	test_verify_hash_wrong_password();

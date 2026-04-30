@@ -49,7 +49,9 @@ MysqlxPluginContext& mysqlx_context() {
 }
 
 int main() {
+	setvbuf(stdout, nullptr, _IOLBF, 0);
 	plan(27);
+	diag("=== mysqlx_admin_commands_unit-t starting ===");
 
 	test_init_minimal();
 

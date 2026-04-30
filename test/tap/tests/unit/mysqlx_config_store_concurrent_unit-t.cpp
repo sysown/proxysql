@@ -131,7 +131,9 @@ void insert_endpoint(SQLite3DB& db, const std::string& hostname, int port, int m
 } // namespace
 
 int main() {
+	setvbuf(stdout, nullptr, _IOLBF, 0);
 	plan(15);
+	diag("=== mysqlx_config_store_concurrent_unit-t starting ===");
 
 	// === Concurrent reads during load (5) ===
 

@@ -16,7 +16,9 @@
 #include <vector>
 
 int main() {
+	setvbuf(stdout, nullptr, _IOLBF, 0);
 	plan(20);
+	diag("=== mysqlx_protocol_socket_unit-t starting ===");
 	signal(SIGPIPE, SIG_IGN);
 
 	// --- Frame I/O roundtrip (8 tests) ---

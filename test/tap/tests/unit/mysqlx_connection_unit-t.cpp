@@ -6,6 +6,7 @@
 #include <cstring>
 
 static void test_connection_creation() {
+	diag(">>> %s", __func__);
 	MysqlxConnection conn;
 	ok(conn.get_state() == MysqlxConnection::CREATED, "initial state is CREATED");
 	ok(conn.get_hostgroup() == -1, "no hostgroup initially");
@@ -19,6 +20,7 @@ static void test_connection_creation() {
 }
 
 static void test_connection_multiplexing() {
+	diag(">>> %s", __func__);
 	MysqlxConnection conn;
 	conn.set_reusable(true);
 	ok(conn.is_reusable(), "marked reusable");
@@ -32,7 +34,9 @@ static void test_connection_multiplexing() {
 }
 
 int main() {
+	setvbuf(stdout, nullptr, _IOLBF, 0);
 	plan(10);
+	diag("=== mysqlx_connection_unit-t starting ===");
 
 	test_connection_creation();
 	test_connection_multiplexing();

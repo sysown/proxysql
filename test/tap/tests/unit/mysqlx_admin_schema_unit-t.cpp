@@ -62,7 +62,9 @@ MysqlxPluginContext& mysqlx_context() {
 }
 
 int main() {
+	setvbuf(stdout, nullptr, _IOLBF, 0);
 	plan(25);
+	diag("=== mysqlx_admin_schema_unit-t starting ===");
 
 	reset_mocks();
 

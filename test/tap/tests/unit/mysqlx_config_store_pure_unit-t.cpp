@@ -126,7 +126,9 @@ void insert_route(SQLite3DB& db, const char* name, int dest_hg, int fallback_hg,
 } // namespace
 
 int main() {
+	setvbuf(stdout, nullptr, _IOLBF, 0);
 	plan(25);
+	diag("=== mysqlx_config_store_pure_unit-t starting ===");
 
 	// ====== Backend auth mode parsing (6 assertions) ======
 

@@ -201,6 +201,7 @@ static void detach_session_fds(MysqlxSession& sess) {
 }
 
 static void test_server_response_terminal_frame() {
+	diag(">>> %s", __func__);
 	int client_fds[2], backend_fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
 	socketpair(AF_UNIX, SOCK_STREAM, 0, backend_fds);
@@ -246,6 +247,7 @@ static void test_server_response_terminal_frame() {
 }
 
 static void test_server_response_non_terminal_keeps_waiting() {
+	diag(">>> %s", __func__);
 	int client_fds[2], backend_fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
 	socketpair(AF_UNIX, SOCK_STREAM, 0, backend_fds);
@@ -295,6 +297,7 @@ static void test_server_response_non_terminal_keeps_waiting() {
 }
 
 static void test_server_response_multi_frame_pipeline() {
+	diag(">>> %s", __func__);
 	int client_fds[2], backend_fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
 	socketpair(AF_UNIX, SOCK_STREAM, 0, backend_fds);
@@ -345,6 +348,7 @@ static void test_server_response_multi_frame_pipeline() {
 }
 
 static void test_backend_disconnect_during_query() {
+	diag(">>> %s", __func__);
 	int client_fds[2], backend_fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
 	socketpair(AF_UNIX, SOCK_STREAM, 0, backend_fds);
@@ -383,6 +387,7 @@ static void test_backend_disconnect_during_query() {
 }
 
 static void test_backend_fd_negative_no_crash() {
+	diag(">>> %s", __func__);
 	int client_fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
 
@@ -408,6 +413,7 @@ static void test_backend_fd_negative_no_crash() {
 }
 
 static void test_mysql41_no_credential_lookup_rejects() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -457,6 +463,7 @@ static void test_mysql41_no_credential_lookup_rejects() {
 }
 
 static void test_auth_start_empty_payload() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -485,6 +492,7 @@ static void test_auth_start_empty_payload() {
 }
 
 static void test_auth_start_malformed_protobuf() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -514,6 +522,7 @@ static void test_auth_start_malformed_protobuf() {
 }
 
 static void test_auth_challenge_wrong_msg_type() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -545,6 +554,7 @@ static void test_auth_challenge_wrong_msg_type() {
 }
 
 static void test_return_backend_no_thread() {
+	diag(">>> %s", __func__);
 	int fds[2], backend_fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 	socketpair(AF_UNIX, SOCK_STREAM, 0, backend_fds);
@@ -574,6 +584,7 @@ static void test_return_backend_no_thread() {
 }
 
 static void test_connection_limit_config() {
+	diag(">>> %s", __func__);
 	Mysqlx_Thread thread;
 	thread.set_max_sessions(1);
 	ok(thread.get_max_sessions() == 1, "max_sessions set to 1");
@@ -582,6 +593,7 @@ static void test_connection_limit_config() {
 }
 
 static void test_client_disconnect_detected() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -600,6 +612,7 @@ static void test_client_disconnect_detected() {
 }
 
 static void test_check_connect_bad_fd() {
+	diag(">>> %s", __func__);
 	// Bug fix (PR #5641 review): check_connect() must report a hard error
 	// when poll() sees POLLNVAL on a closed/invalid fd, instead of waiting
 	// out the connect timeout. Create an fd, close it so it's invalid, then
@@ -622,6 +635,7 @@ static void test_check_connect_bad_fd() {
 }
 
 static void test_check_connect_success_path() {
+	diag(">>> %s", __func__);
 	// Positive path: an already-connected socketpair endpoint reports POLLOUT
 	// ready immediately, SO_ERROR is 0, so check_connect() must transition to
 	// AUTHENTICATING and return 0.
@@ -660,6 +674,7 @@ static void test_check_connect_success_path() {
 // alias for MysqlxConnection::backend_ds() whenever a backend is attached,
 // and the session's placeholder stream is never initialized post-auth.
 static void test_server_ds_aliases_backend_conn_backend_ds() {
+	diag(">>> %s", __func__);
 	int client_fds[2], backend_fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
 	socketpair(AF_UNIX, SOCK_STREAM, 0, backend_fds);
@@ -709,6 +724,7 @@ static void test_server_ds_aliases_backend_conn_backend_ds() {
 }
 
 static void test_forward_empty_frame() {
+	diag(">>> %s", __func__);
 	int client_fds[2], backend_fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
 	socketpair(AF_UNIX, SOCK_STREAM, 0, backend_fds);
@@ -789,6 +805,7 @@ static bool replace_table_contents(SQLite3DB& db,
 }
 
 static void test_empty_source_clears_stale_dest() {
+	diag(">>> %s", __func__);
 	SQLite3DB db;
 	db.open(const_cast<char*>(":memory:"),
 	        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
@@ -820,6 +837,7 @@ static void test_empty_source_clears_stale_dest() {
 // execute()-return checks added by this follow-up, the unconditional COMMIT
 // would persist the DELETE and silently wipe the destination.
 static void test_insert_failure_rolls_back() {
+	diag(">>> %s", __func__);
 	SQLite3DB db;
 	db.open(const_cast<char*>(":memory:"),
 	        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
@@ -854,6 +872,7 @@ static void test_insert_failure_rolls_back() {
 }
 
 static void test_listener_route_tracking() {
+	diag(">>> %s", __func__);
 	// Construct two threads; associate a named route listener with each and
 	// verify that `remove_listener_for_route` tears down only the target
 	// listener and is idempotent when called a second time for the same name.
@@ -881,6 +900,7 @@ static void test_listener_route_tracking() {
 }
 
 static void test_listener_reconciliation() {
+	diag(">>> %s", __func__);
 	// Build a minimal in-memory admin DB with one active route and verify
 	// that `mysqlx_reconcile_listeners_impl` binds exactly one listener
 	// across the two-thread pool and records the ownership mapping.
@@ -957,6 +977,7 @@ static int pick_free_port() {
 }
 
 static void test_listener_reconciliation_bind_change() {
+	diag(">>> %s", __func__);
 	// Verify that changing a route's `bind` column and re-running the reconciler
 	// closes the old listener and opens a new one at the new port — i.e. the
 	// reconciler does NOT silently keep the stale listener alive just because
@@ -1038,6 +1059,7 @@ static void test_listener_reconciliation_bind_change() {
 }
 
 static void test_route_exists_predicate() {
+	diag(">>> %s", __func__);
 	// Empty store: any lookup returns false.
 	{
 		MysqlxConfigStore store;
@@ -1100,6 +1122,7 @@ static void install_reads_route_without_endpoint(MysqlxConfigStore& store) {
 }
 
 static void test_routing_happy_path() {
+	diag(">>> %s", __func__);
 	MysqlxConfigStore store;
 	install_reads_route_with_endpoint(store);
 
@@ -1125,6 +1148,7 @@ static void test_routing_happy_path() {
 }
 
 static void test_routing_no_default_route() {
+	diag(">>> %s", __func__);
 	MysqlxConfigStore store;  // intentionally empty
 
 	Mysqlx_Thread thr;
@@ -1145,6 +1169,7 @@ static void test_routing_no_default_route() {
 }
 
 static void test_routing_unknown_route() {
+	diag(">>> %s", __func__);
 	MysqlxConfigStore store;  // no "nope" route installed
 
 	Mysqlx_Thread thr;
@@ -1165,6 +1190,7 @@ static void test_routing_unknown_route() {
 }
 
 static void test_routing_no_backend() {
+	diag(">>> %s", __func__);
 	MysqlxConfigStore store;
 	install_reads_route_without_endpoint(store);
 
@@ -1190,6 +1216,7 @@ static void test_routing_no_backend() {
 // assertion count aligned with the plan while still exercising each
 // (route, hg) contract.
 static void test_routing_stats_on_failure() {
+	diag(">>> %s", __func__);
 	// Empty default_route -> ("", 0)
 	{
 		MysqlxConfigStore store;
@@ -1254,6 +1281,7 @@ static void test_routing_stats_on_failure() {
 // returns nullopt. Expected: session emits Error 1045 and goes unhealthy
 // without ever transitioning to WAITING_CLIENT_XMSG or sending Ok.
 static void test_routing_unknown_user() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -1306,6 +1334,7 @@ static void test_routing_unknown_user() {
 // target_address_ == "" and target_port_ == 0, then attempted to connect
 // to ""; port 0 on the first client query. This test locks that door.
 static void test_plain_auth_empty_default_route_closes_session() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -1394,6 +1423,7 @@ static void test_plain_auth_empty_default_route_closes_session() {
 // the subsequent try_read_one_frame() sees nothing and the handler
 // bails out cleanly with backend_user_ observable via the test accessor.
 static void test_backend_user_uses_backend_username_when_set() {
+	diag(">>> %s", __func__);
 	int client_fds[2], backend_fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
 	socketpair(AF_UNIX, SOCK_STREAM, 0, backend_fds);
@@ -1434,6 +1464,7 @@ static void test_backend_user_uses_backend_username_when_set() {
 // setup_authenticated_session drives MYSQL41 auth with "testuser" as the
 // frontend username, so that is what we expect to land in backend_user_.
 static void test_backend_user_falls_back_to_frontend_username() {
+	diag(">>> %s", __func__);
 	int client_fds[2], backend_fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
 	socketpair(AF_UNIX, SOCK_STREAM, 0, backend_fds);
@@ -1468,7 +1499,9 @@ static void test_backend_user_falls_back_to_frontend_username() {
 }
 
 int main() {
+	setvbuf(stdout, nullptr, _IOLBF, 0);
 	plan(74);
+	diag("=== mysqlx_robustness_unit-t starting ===");
 
 	test_server_response_terminal_frame();
 	test_server_response_non_terminal_keeps_waiting();

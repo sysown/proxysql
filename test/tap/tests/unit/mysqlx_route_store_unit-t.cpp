@@ -6,6 +6,7 @@
  */
 
 #include "mysqlx_config_store.h"
+#include "ProxySQL_Admin_Tables_Definitions.h"
 #include "sqlite3db.h"
 #include "tap.h"
 
@@ -16,16 +17,12 @@
 namespace {
 
 void create_runtime_tables(SQLite3DB& db) {
-	db.execute(
-		"CREATE TABLE runtime_mysql_users ("
-		" username VARCHAR, default_hostgroup INT, max_connections INT,"
-		" active INT DEFAULT 1, frontend INT DEFAULT 1)"
-	);
-	db.execute(
-		"CREATE TABLE runtime_mysql_servers ("
-		" hostgroup_id INT, hostname VARCHAR, port INT, use_ssl INT,"
-		" status VARCHAR DEFAULT 'ONLINE', weight INT DEFAULT 1)"
-	);
+	// Use the canonical Admin definitions for runtime_mysql_users and
+	// runtime_mysql_servers. load_from_runtime() SELECTs columns
+	// (e.g. password, weight, status) that an ad-hoc minimal schema
+	// would omit, breaking every assertion in this file.
+	db.execute(ADMIN_SQLITE_RUNTIME_MYSQL_USERS);
+	db.execute(ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS);
 	db.execute(
 		"CREATE TABLE runtime_mysqlx_users ("
 		" username VARCHAR PRIMARY KEY, active INT DEFAULT 1,"
@@ -48,12 +45,18 @@ void create_runtime_tables(SQLite3DB& db) {
 		" use_ssl INT DEFAULT 0, attributes VARCHAR DEFAULT '',"
 		" PRIMARY KEY (hostname, mysql_port))"
 	);
+	db.execute(
+		"CREATE TABLE runtime_mysqlx_variables ("
+		" variable_name VARCHAR PRIMARY KEY, variable_value VARCHAR DEFAULT '')"
+	);
 }
 
 } // namespace
 
 int main() {
+	setvbuf(stdout, nullptr, _IOLBF, 0);
 	plan(26);
+	diag("=== mysqlx_route_store_unit-t starting ===");
 
 	// ====== Original tests (1-8) ======
 

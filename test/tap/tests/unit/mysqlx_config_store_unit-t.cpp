@@ -46,6 +46,12 @@ const char kRuntimeMysqlxEndpointsDdl[] =
 	" PRIMARY KEY (hostname, mysql_port)"
 	" )";
 
+const char kRuntimeMysqlxVariablesDdl[] =
+	"CREATE TABLE runtime_mysqlx_variables ("
+	" variable_name VARCHAR NOT NULL PRIMARY KEY,"
+	" variable_value VARCHAR NOT NULL DEFAULT ''"
+	" )";
+
 std::unique_ptr<SQLite3DB> create_test_db() {
 	auto db = std::make_unique<SQLite3DB>();
 	db->open((char*)":memory:", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
@@ -55,7 +61,9 @@ std::unique_ptr<SQLite3DB> create_test_db() {
 } // namespace
 
 int main() {
+	setvbuf(stdout, nullptr, _IOLBF, 0);
 	plan(16);
+	diag("=== mysqlx_config_store_unit-t starting ===");
 
 	MysqlxResolvedIdentity identity {};
 	identity.username = "canonical_user";
@@ -81,7 +89,8 @@ int main() {
 	   "runtime mysql servers table is created");
 	ok(db->execute(kRuntimeMysqlxUsersDdl) &&
 	   db->execute(kRuntimeMysqlxRoutesDdl) &&
-	   db->execute(kRuntimeMysqlxEndpointsDdl),
+	   db->execute(kRuntimeMysqlxEndpointsDdl) &&
+	   db->execute(kRuntimeMysqlxVariablesDdl),
 	   "runtime mysqlx tables are created");
 
 	ok(db->execute("INSERT INTO runtime_mysql_users (username, password, active, use_ssl, default_hostgroup, "

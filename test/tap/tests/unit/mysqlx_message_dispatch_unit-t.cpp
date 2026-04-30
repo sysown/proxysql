@@ -232,76 +232,91 @@ static void check_dispatch_routes_to_backend(uint8_t client_msg_type,
 }
 
 static void test_dispatch_sql_stmt() {
+	diag(">>> %s", __func__);
 	check_dispatch_routes_to_backend(
 		Mysqlx::ClientMessages_Type_SQL_STMT_EXECUTE, "SQL_STMT_EXECUTE");
 }
 
 static void test_dispatch_crud_find() {
+	diag(">>> %s", __func__);
 	check_dispatch_routes_to_backend(
 		Mysqlx::ClientMessages_Type_CRUD_FIND, "CRUD_FIND");
 }
 
 static void test_dispatch_crud_insert() {
+	diag(">>> %s", __func__);
 	check_dispatch_routes_to_backend(
 		Mysqlx::ClientMessages_Type_CRUD_INSERT, "CRUD_INSERT");
 }
 
 static void test_dispatch_crud_update() {
+	diag(">>> %s", __func__);
 	check_dispatch_routes_to_backend(
 		Mysqlx::ClientMessages_Type_CRUD_UPDATE, "CRUD_UPDATE");
 }
 
 static void test_dispatch_crud_delete() {
+	diag(">>> %s", __func__);
 	check_dispatch_routes_to_backend(
 		Mysqlx::ClientMessages_Type_CRUD_DELETE, "CRUD_DELETE");
 }
 
 static void test_dispatch_sess_reset() {
+	diag(">>> %s", __func__);
 	check_dispatch_routes_to_backend(
 		Mysqlx::ClientMessages_Type_SESS_RESET, "SESS_RESET");
 }
 
 static void test_dispatch_prepare_prepare() {
+	diag(">>> %s", __func__);
 	check_dispatch_routes_to_backend(
 		Mysqlx::ClientMessages_Type_PREPARE_PREPARE, "PREPARE_PREPARE");
 }
 
 static void test_dispatch_prepare_execute() {
+	diag(">>> %s", __func__);
 	check_dispatch_routes_to_backend(
 		Mysqlx::ClientMessages_Type_PREPARE_EXECUTE, "PREPARE_EXECUTE");
 }
 
 static void test_dispatch_prepare_deallocate() {
+	diag(">>> %s", __func__);
 	check_dispatch_routes_to_backend(
 		Mysqlx::ClientMessages_Type_PREPARE_DEALLOCATE, "PREPARE_DEALLOCATE");
 }
 
 static void test_dispatch_cursor_open() {
+	diag(">>> %s", __func__);
 	check_dispatch_routes_to_backend(
 		Mysqlx::ClientMessages_Type_CURSOR_OPEN, "CURSOR_OPEN");
 }
 
 static void test_dispatch_cursor_fetch() {
+	diag(">>> %s", __func__);
 	check_dispatch_routes_to_backend(
 		Mysqlx::ClientMessages_Type_CURSOR_FETCH, "CURSOR_FETCH");
 }
 
 static void test_dispatch_cursor_close() {
+	diag(">>> %s", __func__);
 	check_dispatch_routes_to_backend(
 		Mysqlx::ClientMessages_Type_CURSOR_CLOSE, "CURSOR_CLOSE");
 }
 
 static void test_dispatch_expect_open() {
+	diag(">>> %s", __func__);
 	check_dispatch_routes_to_backend(
 		Mysqlx::ClientMessages_Type_EXPECT_OPEN, "EXPECT_OPEN");
 }
 
 static void test_dispatch_expect_close() {
+	diag(">>> %s", __func__);
 	check_dispatch_routes_to_backend(
 		Mysqlx::ClientMessages_Type_EXPECT_CLOSE, "EXPECT_CLOSE");
 }
 
 static void test_dispatch_view_operations() {
+	diag(">>> %s", __func__);
 	check_dispatch_routes_to_backend(
 		Mysqlx::ClientMessages_Type_CRUD_CREATE_VIEW, "CREATE_VIEW");
 	check_dispatch_routes_to_backend(
@@ -311,6 +326,7 @@ static void test_dispatch_view_operations() {
 }
 
 static void test_dispatch_compression_rejected() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -347,6 +363,7 @@ static void test_dispatch_compression_rejected() {
 }
 
 static void test_dispatch_unknown_message() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -378,6 +395,7 @@ static void test_dispatch_unknown_message() {
 }
 
 static void test_tls_states() {
+	diag(">>> %s", __func__);
 	// X_FAST_FORWARD was retired with the dormant MysqlxWorker path
 	// (commit 79cac4c97); compare against a still-extant earlier state
 	// to keep the "TLS states are after the basic states" assertion.
@@ -390,6 +408,7 @@ static void test_tls_states() {
 }
 
 static void test_tls_accept_init_stub() {
+	diag(">>> %s", __func__);
 	// The previous incarnation of this test asserted that handler() in
 	// X_TLS_ACCEPT_INIT skips straight to X_TLS_ACCEPT_DONE — that was
 	// true when the handler was a stub. The real handler now drives
@@ -414,6 +433,7 @@ static void test_tls_accept_init_stub() {
 }
 
 static void test_data_stream_encrypted_flag() {
+	diag(">>> %s", __func__);
 	MysqlxDataStream ds;
 	ok(!ds.is_encrypted(), "not encrypted by default");
 	ds.set_encrypted(true);
@@ -423,6 +443,7 @@ static void test_data_stream_encrypted_flag() {
 }
 
 static void test_connection_pool_matching() {
+	diag(">>> %s", __func__);
 	Mysqlx_Thread thr;
 	thr.init(0);
 	thr.set_max_cached_connections(10);
@@ -461,6 +482,7 @@ static void test_connection_pool_matching() {
 }
 
 static void test_async_connect_loopback() {
+	diag(">>> %s", __func__);
 	MysqlxConnection conn;
 	conn.set_hostgroup(0);
 	conn.set_user("root");
@@ -486,6 +508,7 @@ static void test_async_connect_loopback() {
 }
 
 static void test_forward_to_backend_no_connection() {
+	diag(">>> %s", __func__);
 	// Without a thread + config_store + identity, dispatching a
 	// SQL_STMT_EXECUTE drives the session through forward_to_backend
 	// (which transitions to CONNECTING_SERVER), then the inner
@@ -516,6 +539,7 @@ static void test_forward_to_backend_no_connection() {
 }
 
 static void test_forward_to_backend_with_socketpair() {
+	diag(">>> %s", __func__);
 	int client_fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
 
@@ -564,6 +588,7 @@ static void test_forward_to_backend_with_socketpair() {
 }
 
 static void test_return_backend_on_session_close() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -604,6 +629,7 @@ static void test_return_backend_on_session_close() {
 }
 
 int main() {
+	setvbuf(stdout, nullptr, _IOLBF, 0);
 	// Plan count rationale (per assertion source):
 	//   14 dispatch_* tests × 2 ok() per check_dispatch_routes_to_backend = 28
 	//   test_dispatch_view_operations: 3 calls × 2 = 6
@@ -623,6 +649,7 @@ int main() {
 	// tests counting 1 ok each; the rewrite doubled them. plan(0)
 	// asks tap to derive the count from the actual ok/not_ok lines.
 	plan(0);
+	diag("=== mysqlx_message_dispatch_unit-t starting ===");
 
 	test_dispatch_sql_stmt();
 	test_dispatch_crud_find();

@@ -25,6 +25,7 @@ static int find_free_port() {
 }
 
 static void test_thread_init() {
+	diag(">>> %s", __func__);
 	Mysqlx_Thread thr;
 	thr.init(0);
 	ok(thr.get_thread_index() == 0, "thread index is 0");
@@ -33,6 +34,7 @@ static void test_thread_init() {
 }
 
 static void test_thread_listener() {
+	diag(">>> %s", __func__);
 	Mysqlx_Thread thr;
 	thr.init(0);
 
@@ -45,6 +47,7 @@ static void test_thread_listener() {
 }
 
 static void test_thread_start_stop() {
+	diag(">>> %s", __func__);
 	Mysqlx_Thread thr;
 	thr.init(0);
 	thr.add_listener("127.0.0.1", 0);
@@ -62,6 +65,7 @@ static void test_thread_start_stop() {
 }
 
 static void test_thread_accept_connection() {
+	diag(">>> %s", __func__);
 	int port = find_free_port();
 
 	Mysqlx_Thread thr;
@@ -95,6 +99,7 @@ static void test_thread_accept_connection() {
 }
 
 static void test_connection_cache() {
+	diag(">>> %s", __func__);
 	Mysqlx_Thread thr;
 	thr.init(0);
 	thr.set_max_cached_connections(3);
@@ -135,7 +140,9 @@ static void test_connection_cache() {
 }
 
 int main() {
+	setvbuf(stdout, nullptr, _IOLBF, 0);
 	plan(22);
+	diag("=== mysqlx_thread_unit-t starting ===");
 
 	test_thread_init();
 	test_thread_listener();
