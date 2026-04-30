@@ -1,0 +1,149 @@
+/**
+ * @file backend_client.cpp
+ * @brief MySQL / PgSQL dial helpers for the genai plugin.
+ *
+ * Mirrors the dial sequence currently inlined in Query_Tool_Handler and
+ * MySQL_Tool_Handler (lib/Query_Tool_Handler.cpp:430-515 in the
+ * pre-rebase tree); 4.D rewires those callers to invoke `dial_*_local`
+ * and the inline code is deleted then.
+ */
+
+#include "backend_client.h"
+
+#include <mysql.h>
+#include <libpq-fe.h>
+
+#include <sstream>
+#include <string>
+
+namespace {
+
+/// Apply uniform connect/read/write timeouts to a freshly-`mysql_init`ed
+/// handle.  Matches the timeout strategy in Query_Tool_Handler today.
+void apply_mysql_timeouts(MYSQL* mysql, unsigned int seconds) {
+	mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, &seconds);
+	mysql_options(mysql, MYSQL_OPT_READ_TIMEOUT,    &seconds);
+	mysql_options(mysql, MYSQL_OPT_WRITE_TIMEOUT,   &seconds);
+}
+
+/// Compose a libpq conninfo string.  Values are passed through as-is —
+/// callers are responsible for not embedding back-ticks in user-supplied
+/// fields (auth profiles are operator-controlled, not end-user-supplied,
+/// so this is acceptable for 4.B).  4.D will add proper escaping if/when
+/// needed.
+std::string build_pgsql_conninfo(
+	const std::string& host,
+	int port,
+	const BackendTarget& target
+) {
+	std::ostringstream s;
+	s << "host=" << host
+	  << " port=" << port
+	  << " user=" << target.user
+	  << " password=" << target.password
+	  << " connect_timeout=" << target.connect_timeout_s;
+	if (!target.default_schema.empty()) {
+		s << " dbname=" << target.default_schema;
+	}
+	return s.str();
+}
+
+} // namespace
+
+MySQLDialResult dial_mysql(const std::string& host, int port, const BackendTarget& target) {
+	MySQLDialResult out;
+
+	if (host.empty() || port <= 0) {
+		out.error = "dial_mysql: invalid host/port";
+		return out;
+	}
+
+	MYSQL* mysql = mysql_init(nullptr);
+	if (mysql == nullptr) {
+		out.error = "dial_mysql: mysql_init returned null";
+		return out;
+	}
+
+	apply_mysql_timeouts(mysql, target.connect_timeout_s);
+
+	const char* schema = target.default_schema.empty()
+		? nullptr
+		: target.default_schema.c_str();
+
+	MYSQL* connected = mysql_real_connect(
+		mysql,
+		host.c_str(),
+		target.user.c_str(),
+		target.password.c_str(),
+		schema,
+		static_cast<unsigned int>(port),
+		/*unix_socket*/ nullptr,
+		CLIENT_MULTI_STATEMENTS
+	);
+	if (connected == nullptr) {
+		std::ostringstream e;
+		e << "mysql_real_connect failed for " << host << ":" << port
+		  << ": " << mysql_error(mysql);
+		out.error = e.str();
+		mysql_close(mysql);
+		return out;
+	}
+
+	out.conn = mysql;
+	return out;
+}
+
+PgSQLDialResult dial_pgsql(const std::string& host, int port, const BackendTarget& target) {
+	PgSQLDialResult out;
+
+	if (host.empty() || port <= 0) {
+		out.error = "dial_pgsql: invalid host/port";
+		return out;
+	}
+
+	std::string conninfo = build_pgsql_conninfo(host, port, target);
+	PGconn* pgconn = PQconnectdb(conninfo.c_str());
+	if (pgconn == nullptr) {
+		out.error = "dial_pgsql: PQconnectdb returned null";
+		return out;
+	}
+	if (PQstatus(pgconn) != CONNECTION_OK) {
+		std::ostringstream e;
+		e << "PQconnectdb failed for " << host << ":" << port
+		  << ": " << PQerrorMessage(pgconn);
+		out.error = e.str();
+		PQfinish(pgconn);
+		return out;
+	}
+
+	out.conn = pgconn;
+	return out;
+}
+
+MySQLDialResult dial_mysql_local(SQLite3DB* admindb, const BackendTarget& target) {
+	MySQLDialResult out;
+	if (admindb == nullptr) {
+		out.error = "dial_mysql_local: admindb is null (is the plugin past start()?)";
+		return out;
+	}
+	LocalProxyEndpoint ep = resolve_mysql_endpoint(admindb);
+	if (!ep.valid()) {
+		out.error = "dial_mysql_local: no usable mysql-interfaces TCP listener";
+		return out;
+	}
+	return dial_mysql(ep.host, ep.port, target);
+}
+
+PgSQLDialResult dial_pgsql_local(SQLite3DB* admindb, const BackendTarget& target) {
+	PgSQLDialResult out;
+	if (admindb == nullptr) {
+		out.error = "dial_pgsql_local: admindb is null (is the plugin past start()?)";
+		return out;
+	}
+	LocalProxyEndpoint ep = resolve_pgsql_endpoint(admindb);
+	if (!ep.valid()) {
+		out.error = "dial_pgsql_local: no usable pgsql-interfaces TCP listener";
+		return out;
+	}
+	return dial_pgsql(ep.host, ep.port, target);
+}

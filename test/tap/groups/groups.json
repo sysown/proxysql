@@ -45,6 +45,7 @@
   "genai_module-t" : [ "ai-g1","@proxysql_min_version:4.0" ],
   "genai_mysql_catalog_unit-t" : [ "ai-g1","@proxysql_min_version:4.0" ],
   "genai_plugin_anomaly_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
+  "genai_plugin_backend_client_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
   "genai_plugin_load_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
   "genai_query_handler_unit-t" : [ "ai-g1","@proxysql_min_version:4.0" ],
   "genai_stats_parsing_unit-t" : [ "ai-g1","@proxysql_min_version:4.0" ],
