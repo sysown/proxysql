@@ -56,7 +56,7 @@ The plugin is loaded after the Admin module initializes. The sequence is:
 3. The Admin module initializes (creates SQLite databases).
 4. The plugin manager calls `dlopen()` on each plugin path.
 5. The plugin's `init()` function registers tables and commands.
-6. The plugin's `start()` function loads configuration from runtime tables, creates the thread pool, and starts listeners.
+6. The plugin's `start()` function syncs disk → memory for the editable `mysqlx_*` admin tables, then drives the four `MysqlxConfigStore::install_*_from_admin` calls (each SELECTing the editable table plus the relevant cross-module `runtime_mysql_*` projection), creates the thread pool, and starts listeners.
 
 ## 3. Admin Variables (v2)
 
@@ -64,15 +64,21 @@ The plugin is loaded after the Admin module initializes. The sequence is:
 
 Global configuration variables for the mysqlx plugin.
 
+Only the four variables below are wired through `MysqlxConfigStore`'s
+install/save round-trip. Operator-defined rows with any other
+`variable_name` are accepted by the table's CHECK constraints and may be
+inserted, but are silently ignored on `LOAD MYSQLX VARIABLES TO RUNTIME`
+and *deleted* by the next `SAVE MYSQLX VARIABLES TO MEMORY` (the SAVE
+path replaces the entire table with the four canonical scalars from the
+store). TLS-related variables (`mysqlx_tls_cert`, `mysqlx_tls_key`,
+`mysqlx_tls_ca`, `mysqlx_tls_backend_mode`) are reserved names not yet
+wired — see issue tracker.
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `mysqlx_thread_pool_size` | `4` | Number of event loop threads. Range: 1–64. Each thread runs an independent `poll()` loop handling thousands of concurrent sessions. |
 | `mysqlx_connect_timeout` | `10000` | Backend connection timeout in milliseconds. Applied to non-blocking `connect()` + backend authentication. |
 | `mysqlx_tls_mode` | `DISABLED` | Frontend TLS mode: `DISABLED`, `PREFERRED`, or `REQUIRED`. See [TLS Modes](#81-tls-modes). |
-| `mysqlx_tls_cert` | *(empty)* | Path to TLS certificate file (PEM format). |
-| `mysqlx_tls_key` | *(empty)* | Path to TLS private key file (PEM format). |
-| `mysqlx_tls_ca` | *(empty)* | Path to CA certificate file for backend TLS verification. |
-| `mysqlx_tls_backend_mode` | `DISABLED` | Backend TLS mode: `DISABLED` or `PREFERRED`. |
 | `mysqlx_max_cached_connections_per_thread` | `100` | Maximum number of idle backend connections cached per thread. Connections are matched by hostgroup, user, and schema. |
 
 ```sql
@@ -339,10 +345,12 @@ Unknown message types receive `ER_X_BAD_MESSAGE` error.
 
 ```sql
 UPDATE mysqlx_variables SET variable_value='PREFERRED' WHERE variable_name='mysqlx_tls_mode';
-UPDATE mysqlx_variables SET variable_value='/path/to/cert.pem' WHERE variable_name='mysqlx_tls_cert';
-UPDATE mysqlx_variables SET variable_value='/path/to/key.pem' WHERE variable_name='mysqlx_tls_key';
 LOAD MYSQLX VARIABLES TO RUNTIME;
 ```
+
+Note: certificate / key paths are not configurable via `mysqlx_variables`
+yet — the only TLS-related variable currently wired through the
+`MysqlxConfigStore` install/save round-trip is `mysqlx_tls_mode`.
 
 ## 9. Connection Pooling
 
@@ -447,7 +455,7 @@ mysqlsh root@127.0.0.1:33060 --sql
 
 ## 13. Plugin ABI Version
 
-The mysqlx plugin uses **ProxySQL Plugin ABI version 1**. It requires:
+The mysqlx plugin sets `abi_version = PROXYSQL_PLUGIN_ABI_VERSION` (currently **3** — adds `services.register_runtime_view` for declaring admin-side projections of module state, on top of the ABI-2 `register_schemas` / four-phase lifecycle). The chassis loader accepts ABI 1, 2, and 3 plugins. It requires:
 
 - Same C++ compiler and standard library as the ProxySQL core build.
 - Same `-std=` flag (C++17).
