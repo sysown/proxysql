@@ -312,6 +312,11 @@ int Mysqlx_Thread::add_listener(const char* bind_addr, int port, const char* rou
 		close(fd);
 		return -1;
 	}
+	int flags = fcntl(fd, F_GETFL, 0);
+	if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+		close(fd);
+		return -1;
+	}
 
 	{
 		std::lock_guard<std::mutex> lock(listener_mutex_);
