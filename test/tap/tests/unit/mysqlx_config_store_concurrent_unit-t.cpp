@@ -12,8 +12,8 @@
 
 namespace {
 
-const char kRuntimeMysqlxUsersDdl[] =
-	"CREATE TABLE runtime_mysqlx_users ("
+const char kMysqlxUsersDdl[] =
+	"CREATE TABLE mysqlx_users ("
 	" username VARCHAR NOT NULL PRIMARY KEY,"
 	" active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1,"
 	" require_tls INT CHECK (require_tls IN (0,1)) NOT NULL DEFAULT 0,"
@@ -27,8 +27,8 @@ const char kRuntimeMysqlxUsersDdl[] =
 	" comment VARCHAR NOT NULL DEFAULT ''"
 	" )";
 
-const char kRuntimeMysqlxRoutesDdl[] =
-	"CREATE TABLE runtime_mysqlx_routes ("
+const char kMysqlxRoutesDdl[] =
+	"CREATE TABLE mysqlx_routes ("
 	" name VARCHAR NOT NULL PRIMARY KEY,"
 	" bind VARCHAR NOT NULL,"
 	" destination_hostgroup INT NOT NULL,"
@@ -39,8 +39,8 @@ const char kRuntimeMysqlxRoutesDdl[] =
 	" comment VARCHAR NOT NULL DEFAULT ''"
 	" )";
 
-const char kRuntimeMysqlxEndpointsDdl[] =
-	"CREATE TABLE runtime_mysqlx_backend_endpoints ("
+const char kMysqlxEndpointsDdl[] =
+	"CREATE TABLE mysqlx_backend_endpoints ("
 	" hostname VARCHAR NOT NULL,"
 	" mysql_port INT NOT NULL,"
 	" mysqlx_port INT NOT NULL DEFAULT 33060,"
@@ -50,14 +50,13 @@ const char kRuntimeMysqlxEndpointsDdl[] =
 	" PRIMARY KEY (hostname, mysql_port)"
 	" )";
 
-// load_from_runtime also queries runtime_mysqlx_variables. Without the
-// table, fetch_result returns false and the load short-circuits before
+// install_variables_from_admin queries mysqlx_variables. Without the
+// table, fetch_result returns false and install short-circuits before
 // swapping in the newly-loaded identities/routes — every assertion that
-// depends on data actually being loaded silently fails. This DDL match
-// ades the one in mysqlx_admin_schema.cpp; same fix as
-// mysqlx_config_store_pure_unit-t.cpp received in commit 017496bc4.
-const char kRuntimeMysqlxVariablesDdl[] =
-	"CREATE TABLE runtime_mysqlx_variables ("
+// depends on data actually being loaded silently fails. This DDL matches
+// the one in mysqlx_admin_schema.cpp.
+const char kMysqlxVariablesDdl[] =
+	"CREATE TABLE mysqlx_variables ("
 	" variable_name VARCHAR NOT NULL PRIMARY KEY,"
 	" variable_value VARCHAR NOT NULL DEFAULT ''"
 	" )";
@@ -67,10 +66,10 @@ std::unique_ptr<SQLite3DB> create_runtime_db() {
 	db->open((char*)":memory:", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 	db->execute(ADMIN_SQLITE_RUNTIME_MYSQL_USERS);
 	db->execute(ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS);
-	db->execute(kRuntimeMysqlxUsersDdl);
-	db->execute(kRuntimeMysqlxRoutesDdl);
-	db->execute(kRuntimeMysqlxEndpointsDdl);
-	db->execute(kRuntimeMysqlxVariablesDdl);
+	db->execute(kMysqlxUsersDdl);
+	db->execute(kMysqlxRoutesDdl);
+	db->execute(kMysqlxEndpointsDdl);
+	db->execute(kMysqlxVariablesDdl);
 	return db;
 }
 
@@ -89,7 +88,7 @@ void insert_user(SQLite3DB& db, const std::string& username, int hostgroup, int 
 void insert_mysqlx_user(SQLite3DB& db, const std::string& username, const std::string& default_route = "") {
 	char sql[512];
 	snprintf(sql, sizeof(sql),
-		"INSERT INTO runtime_mysqlx_users "
+		"INSERT INTO mysqlx_users "
 		"(username, active, require_tls, allowed_auth_methods, "
 		"default_route, policy_profile, backend_auth_mode, backend_username, backend_password, attributes, comment) VALUES "
 		"('%s', 1, 0, 'PLAIN', '%s', '', 'mapped', NULL, NULL, '', '')",
@@ -100,7 +99,7 @@ void insert_mysqlx_user(SQLite3DB& db, const std::string& username, const std::s
 void insert_route(SQLite3DB& db, const std::string& name, int hg, const std::string& strategy = "first_available") {
 	char sql[512];
 	snprintf(sql, sizeof(sql),
-		"INSERT INTO runtime_mysqlx_routes "
+		"INSERT INTO mysqlx_routes "
 		"(name, bind, destination_hostgroup, fallback_hostgroup, strategy, active, attributes, comment) VALUES "
 		"('%s', '127.0.0.1:6603', %d, -1, '%s', 1, '', '')",
 		name.c_str(), hg, strategy.c_str());
@@ -121,7 +120,7 @@ void insert_server(SQLite3DB& db, int hg, const std::string& hostname, int port)
 void insert_endpoint(SQLite3DB& db, const std::string& hostname, int port, int mysqlx_port = 33060) {
 	char sql[512];
 	snprintf(sql, sizeof(sql),
-		"INSERT INTO runtime_mysqlx_backend_endpoints "
+		"INSERT INTO mysqlx_backend_endpoints "
 		"(hostname, mysql_port, mysqlx_port, use_ssl, attributes, comment) VALUES "
 		"('%s', %d, %d, 0, '', '')",
 		hostname.c_str(), port, mysqlx_port);
@@ -150,7 +149,7 @@ int main() {
 
 		std::atomic<bool> load_done { false };
 		std::thread loader([&]() {
-			store.load_from_runtime(*db, err);
+			store.install_all_from_admin(*db, err);
 			load_done.store(true);
 		});
 		std::thread reader([&]() {
@@ -160,7 +159,7 @@ int main() {
 		});
 		loader.join();
 		reader.join();
-		ok(true, "resolve_identity during load_from_runtime: no crash");
+		ok(true, "resolve_identity during install_all_from_admin: no crash");
 	}
 	{
 		auto db = create_runtime_db();
@@ -175,7 +174,7 @@ int main() {
 
 		std::atomic<bool> load_done { false };
 		std::thread loader([&]() {
-			store.load_from_runtime(*db, err);
+			store.install_all_from_admin(*db, err);
 			load_done.store(true);
 		});
 		std::thread picker([&]() {
@@ -185,7 +184,7 @@ int main() {
 		});
 		loader.join();
 		picker.join();
-		ok(true, "pick_endpoint during load_from_runtime: no crash");
+		ok(true, "pick_endpoint during install_all_from_admin: no crash");
 	}
 	{
 		auto db = create_runtime_db();
@@ -194,7 +193,7 @@ int main() {
 
 		MysqlxConfigStore store;
 		std::string err;
-		store.load_from_runtime(*db, err);
+		store.install_all_from_admin(*db, err);
 
 		std::vector<std::thread> threads;
 		for (int t = 0; t < 4; ++t) {
@@ -218,10 +217,10 @@ int main() {
 
 		MysqlxConfigStore store;
 		std::string err;
-		store.load_from_runtime(*db1, err);
+		store.install_all_from_admin(*db1, err);
 		bool alice_found = store.resolve_identity("alice").has_value();
 
-		store.load_from_runtime(*db2, err);
+		store.install_all_from_admin(*db2, err);
 		bool alice_gone = !store.resolve_identity("alice").has_value();
 		bool bob_found = store.resolve_identity("bob").has_value();
 		ok(alice_found && alice_gone && bob_found,
@@ -238,7 +237,7 @@ int main() {
 
 		auto do_load = [&]() {
 			std::lock_guard<std::mutex> lk(load_mutex);
-			store.load_from_runtime(*db, err);
+			store.install_all_from_admin(*db, err);
 		};
 
 		std::vector<std::thread> threads;
@@ -260,7 +259,7 @@ int main() {
 
 		MysqlxConfigStore store;
 		std::string err;
-		store.load_from_runtime(*db, err);
+		store.install_all_from_admin(*db, err);
 
 		std::vector<std::thread> threads;
 		for (int t = 0; t < 4; ++t) {
@@ -283,7 +282,7 @@ int main() {
 
 		MysqlxConfigStore store;
 		std::string err;
-		store.load_from_runtime(*db, err);
+		store.install_all_from_admin(*db, err);
 
 		std::vector<std::thread> threads;
 		for (int t = 0; t < 4; ++t) {
@@ -309,11 +308,11 @@ int main() {
 
 		MysqlxConfigStore store;
 		std::string err;
-		store.load_from_runtime(*db_a, err);
+		store.install_all_from_admin(*db_a, err);
 
 		std::atomic<bool> done { false };
 		std::thread loader([&]() {
-			store.load_from_runtime(*db_b, err);
+			store.install_all_from_admin(*db_b, err);
 			done.store(true);
 		});
 		std::thread picker([&]() {
@@ -352,7 +351,7 @@ int main() {
 
 		MysqlxConfigStore store;
 		std::string err;
-		store.load_from_runtime(*db, err);
+		store.install_all_from_admin(*db, err);
 
 		std::vector<std::thread> threads;
 		for (int t = 0; t < 10; ++t) {
@@ -377,9 +376,9 @@ int main() {
 
 		MysqlxConfigStore store;
 		std::string err;
-		store.load_from_runtime(*db_a, err);
+		store.install_all_from_admin(*db_a, err);
 		auto r1 = store.resolve_identity("alice");
-		store.load_from_runtime(*db_b, err);
+		store.install_all_from_admin(*db_b, err);
 		auto r2 = store.resolve_identity("alice");
 		ok(r1.has_value() && !r2.has_value(),
 		   "load A has alice, load B empty: data replaced atomically");
@@ -395,9 +394,9 @@ int main() {
 
 		MysqlxConfigStore store;
 		std::string err;
-		store.load_from_runtime(*db_a, err);
+		store.install_all_from_admin(*db_a, err);
 		auto ep1 = store.pick_endpoint("rw");
-		store.load_from_runtime(*db_b, err);
+		store.install_all_from_admin(*db_b, err);
 		auto ep2 = store.pick_endpoint("rw");
 		ok(!ep1.hostname.empty() && ep2.hostname.empty(),
 		   "load A has servers, load B empty HG: complete swap");
@@ -417,8 +416,8 @@ int main() {
 
 		MysqlxConfigStore store;
 		std::string err;
-		store.load_from_runtime(*db_a, err);
-		store.load_from_runtime(*db_b, err);
+		store.install_all_from_admin(*db_a, err);
+		store.install_all_from_admin(*db_b, err);
 		auto ep_r1 = store.pick_endpoint("R1");
 		auto ep_r3 = store.pick_endpoint("R3");
 		ok(ep_r1.hostname.empty() && !ep_r3.hostname.empty(),
@@ -435,9 +434,9 @@ int main() {
 
 		MysqlxConfigStore store;
 		std::string err;
-		store.load_from_runtime(*db_a, err);
+		store.install_all_from_admin(*db_a, err);
 		auto ep1 = store.pick_endpoint("rw");
-		store.load_from_runtime(*db_b, err);
+		store.install_all_from_admin(*db_b, err);
 		auto ep2 = store.pick_endpoint("rw");
 		ok(!ep1.hostname.empty() && ep2.hostname.empty(),
 		   "HG with servers then same HG empty: endpoint goes empty");
@@ -452,12 +451,12 @@ int main() {
 
 		MysqlxConfigStore store;
 		std::string err;
-		store.load_from_runtime(*db, err);
+		store.install_all_from_admin(*db, err);
 
 		auto ep1 = store.pick_endpoint("rr");
 		auto ep2 = store.pick_endpoint("rr");
 
-		store.load_from_runtime(*db, err);
+		store.install_all_from_admin(*db, err);
 
 		auto ep3 = store.pick_endpoint("rr");
 		auto ep4 = store.pick_endpoint("rr");

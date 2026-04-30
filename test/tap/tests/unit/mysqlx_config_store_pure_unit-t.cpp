@@ -8,8 +8,8 @@
 
 namespace {
 
-const char kRuntimeMysqlxUsersDdl[] =
-	"CREATE TABLE runtime_mysqlx_users ("
+const char kMysqlxUsersDdl[] =
+	"CREATE TABLE mysqlx_users ("
 	" username VARCHAR NOT NULL PRIMARY KEY,"
 	" active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1,"
 	" require_tls INT CHECK (require_tls IN (0,1)) NOT NULL DEFAULT 0,"
@@ -23,8 +23,8 @@ const char kRuntimeMysqlxUsersDdl[] =
 	" comment VARCHAR NOT NULL DEFAULT ''"
 	" )";
 
-const char kRuntimeMysqlxRoutesDdl[] =
-	"CREATE TABLE runtime_mysqlx_routes ("
+const char kMysqlxRoutesDdl[] =
+	"CREATE TABLE mysqlx_routes ("
 	" name VARCHAR NOT NULL PRIMARY KEY,"
 	" bind VARCHAR NOT NULL,"
 	" destination_hostgroup INT NOT NULL,"
@@ -35,8 +35,8 @@ const char kRuntimeMysqlxRoutesDdl[] =
 	" comment VARCHAR NOT NULL DEFAULT ''"
 	" )";
 
-const char kRuntimeMysqlxEndpointsDdl[] =
-	"CREATE TABLE runtime_mysqlx_backend_endpoints ("
+const char kMysqlxEndpointsDdl[] =
+	"CREATE TABLE mysqlx_backend_endpoints ("
 	" hostname VARCHAR NOT NULL,"
 	" mysql_port INT NOT NULL,"
 	" mysqlx_port INT NOT NULL DEFAULT 33060,"
@@ -46,12 +46,12 @@ const char kRuntimeMysqlxEndpointsDdl[] =
 	" PRIMARY KEY (hostname, mysql_port)"
 	" )";
 
-// load_from_runtime also queries runtime_mysqlx_variables. Without the table
-// fetch_result returns false and the load short-circuits before swapping in
+// install_variables_from_admin queries mysqlx_variables. Without the table
+// fetch_result returns false and install short-circuits before swapping in
 // the newly-loaded routes/identities, silently breaking every scenario in
 // this file that depended on data actually being loaded.
-const char kRuntimeMysqlxVariablesDdl[] =
-	"CREATE TABLE runtime_mysqlx_variables ("
+const char kMysqlxVariablesDdl[] =
+	"CREATE TABLE mysqlx_variables ("
 	" variable_name VARCHAR NOT NULL PRIMARY KEY,"
 	" variable_value VARCHAR NOT NULL DEFAULT ''"
 	" )";
@@ -61,10 +61,10 @@ std::unique_ptr<SQLite3DB> create_test_db() {
 	db->open((char*)":memory:", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 	db->execute(ADMIN_SQLITE_RUNTIME_MYSQL_USERS);
 	db->execute(ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS);
-	db->execute(kRuntimeMysqlxUsersDdl);
-	db->execute(kRuntimeMysqlxRoutesDdl);
-	db->execute(kRuntimeMysqlxEndpointsDdl);
-	db->execute(kRuntimeMysqlxVariablesDdl);
+	db->execute(kMysqlxUsersDdl);
+	db->execute(kMysqlxRoutesDdl);
+	db->execute(kMysqlxEndpointsDdl);
+	db->execute(kMysqlxVariablesDdl);
 	return db;
 }
 
@@ -84,7 +84,7 @@ void insert_mysqlx_user(SQLite3DB& db, const char* username, const char* auth_mo
                          const char* route, const char* profile) {
 	char sql[1024];
 	snprintf(sql, sizeof(sql),
-		"INSERT INTO runtime_mysqlx_users (username, active, require_tls, allowed_auth_methods, "
+		"INSERT INTO mysqlx_users (username, active, require_tls, allowed_auth_methods, "
 		"default_route, policy_profile, backend_auth_mode, backend_username, backend_password, "
 		"attributes, comment) VALUES ('%s', 1, 0, '', '%s', '%s', '%s', '', '', '', '')",
 		username, route, profile, auth_mode);
@@ -106,7 +106,7 @@ void insert_endpoint(SQLite3DB& db, const char* hostname, int mysql_port, int my
                       int use_ssl) {
 	char sql[1024];
 	snprintf(sql, sizeof(sql),
-		"INSERT INTO runtime_mysqlx_backend_endpoints (hostname, mysql_port, mysqlx_port, "
+		"INSERT INTO mysqlx_backend_endpoints (hostname, mysql_port, mysqlx_port, "
 		"use_ssl, attributes, comment) VALUES ('%s', %d, %d, %d, '', '')",
 		hostname, mysql_port, mysqlx_port, use_ssl);
 	db.execute(sql);
@@ -116,7 +116,7 @@ void insert_route(SQLite3DB& db, const char* name, int dest_hg, int fallback_hg,
                    const char* strategy, int active) {
 	char sql[1024];
 	snprintf(sql, sizeof(sql),
-		"INSERT INTO runtime_mysqlx_routes (name, bind, destination_hostgroup, "
+		"INSERT INTO mysqlx_routes (name, bind, destination_hostgroup, "
 		"fallback_hostgroup, strategy, active, attributes, comment) VALUES "
 		"('%s', '127.0.0.1:6603', %d, %d, '%s', %d, '', '')",
 		name, dest_hg, fallback_hg, strategy, active);
@@ -155,7 +155,7 @@ int main() {
 		insert_mysql_user(*db, "alice", 10, 25, 1, 1);
 		MysqlxConfigStore store;
 		std::string err;
-		store.load_from_runtime(*db, err);
+		store.install_all_from_admin(*db, err);
 		ok(!store.resolve_identity("nonexistent_user").has_value(),
 		   "resolve_identity returns nullopt for nonexistent user");
 	}
@@ -165,11 +165,12 @@ int main() {
 		insert_mysql_user(*db, "bob", 5, 100, 1, 1);
 		MysqlxConfigStore store;
 		std::string err;
-		store.load_from_runtime(*db, err);
-		auto id = store.resolve_identity("bob");
-		ok(id.has_value() && id->username == "bob" && id->default_hostgroup == 5 &&
-		   !id->x_enabled,
-		   "user in mysql_users but not mysqlx_users has x_enabled=false");
+		store.install_all_from_admin(*db, err);
+		// install_users_from_admin drops canonical-only users (no mysqlx_users
+		// override row) so they have no x_enabled flag and would never
+		// authenticate via X anyway. resolve_identity returns nullopt.
+		ok(!store.resolve_identity("bob").has_value(),
+		   "user in mysql_users but not mysqlx_users is dropped (no x_enabled)");
 	}
 
 	{
@@ -177,7 +178,7 @@ int main() {
 		insert_mysqlx_user(*db, "orphan", "mapped", "", "");
 		MysqlxConfigStore store;
 		std::string err;
-		store.load_from_runtime(*db, err);
+		store.install_all_from_admin(*db, err);
 		ok(!store.resolve_identity("orphan").has_value(),
 		   "user in mysqlx_users but not mysql_users returns nullopt (canonical wins)");
 	}
@@ -186,9 +187,9 @@ int main() {
 		auto db = create_test_db();
 		MysqlxConfigStore store;
 		std::string err;
-		bool loaded = store.load_from_runtime(*db, err);
+		bool loaded = store.install_all_from_admin(*db, err);
 		ok(loaded && err.empty() && !store.resolve_identity("anyone").has_value(),
-		   "load_from_runtime with empty mysql_users returns true, resolve returns nullopt");
+		   "install_all_from_admin with empty mysql_users returns true, resolve returns nullopt");
 	}
 
 	{
@@ -196,12 +197,11 @@ int main() {
 		insert_mysql_user(*db, "charlie", 7, 200, 1, 1);
 		MysqlxConfigStore store;
 		std::string err;
-		bool loaded = store.load_from_runtime(*db, err);
-		auto id = store.resolve_identity("charlie");
-		ok(loaded && err.empty() && id.has_value() && id->default_hostgroup == 7 &&
-		   id->max_connections == 200 && !id->x_enabled && !id->require_tls &&
-		   id->default_route.empty() && id->backend_auth_mode == MysqlxBackendAuthMode::mapped,
-		   "load_from_runtime with empty mysqlx_users returns identity with defaults");
+		bool loaded = store.install_all_from_admin(*db, err);
+		// install_users_from_admin drops canonical-only users; charlie has
+		// no mysqlx_users row so he never gets x_enabled and is filtered out.
+		ok(loaded && err.empty() && !store.resolve_identity("charlie").has_value(),
+		   "install_all_from_admin with empty mysqlx_users drops canonical-only users");
 	}
 
 	{
@@ -211,14 +211,16 @@ int main() {
 		insert_mysqlx_user(*db, "alice", "service_account", "rw", "policy-a");
 		MysqlxConfigStore store;
 		std::string err;
-		store.load_from_runtime(*db, err);
+		store.install_all_from_admin(*db, err);
 		auto a = store.resolve_identity("alice");
 		auto b = store.resolve_identity("bob");
+		// alice has both canonical + mysqlx override; bob is canonical only
+		// and gets dropped by install_users_from_admin.
 		ok(a.has_value() && a->default_hostgroup == 10 && a->x_enabled &&
 		   a->backend_auth_mode == MysqlxBackendAuthMode::service_account &&
 		   a->default_route == "rw" && a->policy_profile == "policy-a" &&
-		   b.has_value() && b->default_hostgroup == 20 && !b->x_enabled,
-		   "multiple users resolve with correct identities");
+		   !b.has_value(),
+		   "users with mysqlx override are kept; canonical-only users are dropped");
 	}
 
 	{
@@ -226,7 +228,7 @@ int main() {
 		insert_mysql_user(*db, "inactive_user", 5, 100, 0, 1);
 		MysqlxConfigStore store;
 		std::string err;
-		store.load_from_runtime(*db, err);
+		store.install_all_from_admin(*db, err);
 		ok(!store.resolve_identity("inactive_user").has_value(),
 		   "inactive user (active=0) in mysql_users is excluded");
 	}
@@ -236,7 +238,7 @@ int main() {
 		insert_mysql_user(*db, "svc_account", 5, 100, 1, 0);
 		MysqlxConfigStore store;
 		std::string err;
-		store.load_from_runtime(*db, err);
+		store.install_all_from_admin(*db, err);
 		ok(!store.resolve_identity("svc_account").has_value(),
 		   "backend user (frontend=0) is excluded");
 	}
@@ -248,7 +250,7 @@ int main() {
 		insert_server(*db, 50, "srv1", 3306, "ONLINE");
 		MysqlxConfigStore store;
 		std::string err;
-		store.load_from_runtime(*db, err);
+		store.install_all_from_admin(*db, err);
 		ok(store.pick_endpoint("nonexistent_route").hostname.empty(),
 		   "pick_endpoint for nonexistent route returns empty endpoint");
 	}
@@ -259,7 +261,7 @@ int main() {
 		insert_server(*db, 999, "shunned_srv", 3306, "SHUNNED");
 		MysqlxConfigStore store;
 		std::string err;
-		store.load_from_runtime(*db, err);
+		store.install_all_from_admin(*db, err);
 		ok(store.pick_endpoint("empty_hg").hostname.empty(),
 		   "route whose hostgroup has no online servers returns empty");
 	}
@@ -271,7 +273,7 @@ int main() {
 		insert_endpoint(*db, "fb_srv", 3306, 33060, 0);
 		MysqlxConfigStore store;
 		std::string err;
-		store.load_from_runtime(*db, err);
+		store.install_all_from_admin(*db, err);
 		ok(store.pick_endpoint("fb_route").hostname == "fb_srv",
 		   "route with fallback uses fallback when primary empty");
 	}
@@ -281,7 +283,7 @@ int main() {
 		insert_route(*db, "no_fb", 997, -1, "first_available", 1);
 		MysqlxConfigStore store;
 		std::string err;
-		store.load_from_runtime(*db, err);
+		store.install_all_from_admin(*db, err);
 		ok(store.pick_endpoint("no_fb").hostname.empty(),
 		   "route with fallback=-1 and empty primary returns empty");
 	}
@@ -293,7 +295,7 @@ int main() {
 		insert_endpoint(*db, "xport_srv", 3306, 33070, 0);
 		MysqlxConfigStore store;
 		std::string err;
-		store.load_from_runtime(*db, err);
+		store.install_all_from_admin(*db, err);
 		auto ep = store.pick_endpoint("override_route");
 		ok(ep.hostname == "xport_srv" && ep.mysqlx_port == 33070,
 		   "endpoint with mysqlx_port override uses override");
@@ -305,7 +307,7 @@ int main() {
 		insert_server(*db, 61, "def_srv", 3306, "ONLINE");
 		MysqlxConfigStore store;
 		std::string err;
-		store.load_from_runtime(*db, err);
+		store.install_all_from_admin(*db, err);
 		auto ep = store.pick_endpoint("default_port");
 		ok(ep.hostname == "def_srv" && ep.mysqlx_port == 33060,
 		   "endpoint with no override defaults to mysqlx_port=33060");
@@ -317,15 +319,15 @@ int main() {
 		insert_server(*db1, 70, "srv_v1", 3306, "ONLINE");
 		MysqlxConfigStore store;
 		std::string err;
-		store.load_from_runtime(*db1, err);
-		store.load_from_runtime(*db1, err);
+		store.install_all_from_admin(*db1, err);
+		store.install_all_from_admin(*db1, err);
 		auto db2 = create_test_db();
 		insert_route(*db2, "second_route", 80, -1, "first_available", 1);
 		insert_server(*db2, 80, "srv_v2", 3306, "ONLINE");
-		store.load_from_runtime(*db2, err);
+		store.install_all_from_admin(*db2, err);
 		ok(store.pick_endpoint("first_route").hostname.empty() &&
 		   store.pick_endpoint("second_route").hostname == "srv_v2",
-		   "second load_from_runtime replaces all data");
+		   "second install_all_from_admin replaces all data");
 	}
 
 	// ====== Topology generation (4 assertions) ======
@@ -358,9 +360,9 @@ int main() {
 		store.bump_topology_generation();
 		auto db = create_test_db();
 		std::string err;
-		store.load_from_runtime(*db, err);
+		store.install_all_from_admin(*db, err);
 		ok(store.topology_generation() == 2,
-		   "topology generation survives load_from_runtime");
+		   "topology generation survives install_all_from_admin");
 	}
 
 	return exit_status();
