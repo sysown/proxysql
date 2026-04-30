@@ -34,12 +34,18 @@
 #include "genai_plugin.h"
 #include "Anomaly_Detector.h"
 #include "MCP_Thread.h"
+#include "ProxySQL_MCP_Server.hpp"
+#include "sqlite3db.h"
+#include "proxysql_utils.h"
+#include "proxysql.h"
 
 #include "prometheus/counter.h"
 #include "prometheus/family.h"
 #include "prometheus/registry.h"
 
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
 // Plugin-local definition of the MCP_Threads_Handler global, replacing
 // the core-side `GloMCPH` deleted in Step 4.C.  This stays inside the
@@ -139,25 +145,166 @@ bool genai_init(ProxySQL_PluginServices* services) {
 }
 
 /**
+ * @brief Push admin DB's mcp-* variables into the running
+ *        MCP_Threads_Handler.  Mirrors the pre-4.C
+ *        flush_mcp_variables___database_to_runtime in core.
+ *
+ * @param ctx  Plugin context (provides services + ctx.mcp).
+ * @return true on success; false on SQL error (logged and propagated
+ *         to caller).
+ */
+bool mcp_load_variables_from_admindb(GenAIPluginContext& ctx) {
+	if (ctx.services == nullptr || ctx.services->get_admindb == nullptr || ctx.mcp == nullptr) {
+		return false;
+	}
+	SQLite3DB* admindb = ctx.services->get_admindb();
+	if (admindb == nullptr) return false;
+
+	char* error = nullptr;
+	int cols = 0, affected_rows = 0;
+	SQLite3_result* rs = nullptr;
+	const char* q =
+		"SELECT variable_name, variable_value FROM main.global_variables "
+		"WHERE variable_name LIKE 'mcp-%'";
+	admindb->execute_statement(q, &error, &cols, &affected_rows, &rs);
+	if (error != nullptr) {
+		fprintf(stderr, "genai plugin: failed to read mcp-* vars: %s\n", error);
+		free(error);
+		if (rs != nullptr) delete rs;
+		return false;
+	}
+	if (rs != nullptr) {
+		ctx.mcp->wrlock();
+		for (auto* row : rs->rows) {
+			const char* qualified = row->fields[0];
+			const char* value = row->fields[1];
+			if (qualified != nullptr && std::strncmp(qualified, "mcp-", 4) == 0) {
+				ctx.mcp->set_variable(qualified + 4, value ? value : "");
+			}
+		}
+		ctx.mcp->wrunlock();
+		delete rs;
+	}
+	return true;
+}
+
+/**
+ * @brief Build and push the target-auth map from admindb into
+ *        MCP_Threads_Handler.  Mirrors the pre-4.C
+ *        ProxySQL_Admin::init_mcp_variables target-auth-map block.
+ */
+bool mcp_load_target_auth_map_from_admindb(GenAIPluginContext& ctx) {
+	if (ctx.services == nullptr || ctx.services->get_admindb == nullptr || ctx.mcp == nullptr) {
+		return false;
+	}
+	SQLite3DB* admindb = ctx.services->get_admindb();
+	if (admindb == nullptr) return false;
+
+	// Refresh the runtime view tables from main.* (pre-4.C did this in
+	// ProxySQL_Admin::init_mcp_variables before reading runtime_*).
+	admindb->execute("DELETE FROM runtime_mcp_auth_profiles");
+	admindb->execute("INSERT OR REPLACE INTO runtime_mcp_auth_profiles SELECT * FROM main.mcp_auth_profiles");
+	admindb->execute("DELETE FROM runtime_mcp_target_profiles");
+	admindb->execute("INSERT OR REPLACE INTO runtime_mcp_target_profiles SELECT * FROM main.mcp_target_profiles");
+
+	char* error = nullptr;
+	int cols = 0, affected_rows = 0;
+	SQLite3_result* rs = nullptr;
+	const char* q =
+		"SELECT t.target_id, t.protocol, t.hostgroup_id, t.auth_profile_id,"
+		" t.max_rows, t.timeout_ms, t.allow_explain, t.allow_discovery, t.description,"
+		" a.db_username, a.db_password, a.default_schema"
+		" FROM runtime_mcp_target_profiles t"
+		" JOIN runtime_mcp_auth_profiles a ON a.auth_profile_id=t.auth_profile_id"
+		" WHERE t.active=1"
+		" ORDER BY t.target_id";
+	admindb->execute_statement(q, &error, &cols, &affected_rows, &rs);
+	if (error != nullptr) {
+		fprintf(stderr, "genai plugin: failed to load MCP target auth map: %s\n", error);
+		free(error);
+		if (rs != nullptr) delete rs;
+		return false;
+	}
+	// load_target_auth_map takes ownership of rs (delete or store).
+	ctx.mcp->load_target_auth_map(rs);
+	return true;
+}
+
+/**
+ * @brief Bring the MCP listener up if mcp_enabled is true.
+ *
+ * Mirrors the pre-4.C ProxySQL_Admin::load_mcp_server() logic, minus
+ * the runtime reconfiguration branch (which 4.F's later work — admin
+ * SQL via register_command — restores).  This MVP only handles the
+ * startup case: at genai_start, if mcp_enabled, create and start a
+ * ProxySQL_MCP_Server.
+ */
+void mcp_start_listener_if_enabled(GenAIPluginContext& ctx) {
+	if (ctx.mcp == nullptr) return;
+	if (!ctx.mcp->variables.mcp_enabled) {
+		fprintf(stderr, "genai plugin: MCP disabled (mcp_enabled=false); listener not started\n");
+		return;
+	}
+	if (ctx.mcp->mcp_server != nullptr) {
+		// Already up.  Shouldn't happen on first start but defensive.
+		return;
+	}
+
+	const int port = ctx.mcp->variables.mcp_port;
+	const bool use_ssl = ctx.mcp->variables.mcp_use_ssl;
+	if (use_ssl) {
+		// Best-effort: warn if SSL certs aren't loaded yet.  Don't
+		// hard-fail — admin module owns ssl init and may run later.
+		// Pre-4.C core code returned early in this case; mirror that.
+		if (GloVars.global.ssl_key_pem_mem == nullptr ||
+		    GloVars.global.ssl_cert_pem_mem == nullptr) {
+			fprintf(stderr, "genai plugin: MCP listener requested SSL but SSL is not initialized; refusing to start\n");
+			return;
+		}
+	}
+
+	bool port_free = false;
+	const int port_check = check_port_availability(port, &port_free);
+	if (!port_free) {
+		fprintf(stderr, "genai plugin: MCP port %d not free (rc=%d); listener not started\n", port, port_check);
+		return;
+	}
+
+	ctx.mcp->mcp_server = new ProxySQL_MCP_Server(port, ctx.mcp);
+	if (ctx.mcp->mcp_server != nullptr) {
+		ctx.mcp->mcp_server->start();
+		fprintf(stderr, "genai plugin: MCP listener started on port %d (ssl=%s)\n",
+		        port, use_ssl ? "true" : "false");
+	} else {
+		fprintf(stderr, "genai plugin: failed to allocate ProxySQL_MCP_Server\n");
+	}
+}
+
+/**
  * @brief Plugin start callback.  Runs after Admin and the query
- *        processor are up.
+ *        processor are up.  Phase D of the chassis lifecycle —
+ *        services->get_admindb() is now non-null.
  *
- * Flips the `started` flag.  The hook adapter already tolerates a
- * not-yet-started state (returns ALLOW), so this is mostly bookkeeping
- * for the status_json response and any future health-check logic.
+ * Step 4.F MVP: read mcp-* admin variables, load target/auth profiles,
+ * then auto-start the MCP listener if mcp_enabled.  This restores the
+ * pre-4.C startup behaviour that the 4.C move temporarily disabled.
  *
- * @return true; this step has no failure mode today.
+ * Runtime reconfiguration via "LOAD MCP VARIABLES TO RUNTIME" /
+ * "LOAD MCP PROFILES …" admin SQL is not yet wired through the
+ * plugin command registry — those verbs still hit the FIXME stubs in
+ * core.  4.F continued / 4.G restore them.
+ *
+ * @return true; failures here are logged but non-fatal (the rest of
+ *         the plugin — Anomaly_Detector — runs regardless).
  */
 bool genai_start() {
 	GenAIPluginContext& ctx = genai_context();
 	ctx.started = true;
-	// FIXME(4.F): the MCP listener (ProxySQL_MCP_Server) does not
-	// auto-start here.  Pre-4.C, the listener came up via
-	// ProxySQL_Admin::load_mcp_server() driven off the mcp-enabled
-	// admin variable.  That admin surface is stubbed in core during
-	// the 4.C → 4.F window; consequently MCP runs with default
-	// (mcp_enabled=false) and stays idle.  4.F restores the admin
-	// SQL → plugin path and the listener auto-starts again.
+
+	(void)mcp_load_variables_from_admindb(ctx);
+	(void)mcp_load_target_auth_map_from_admindb(ctx);
+	mcp_start_listener_if_enabled(ctx);
+
 	return true;
 }
 

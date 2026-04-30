@@ -1,11 +1,14 @@
 // Step 1 acceptance test for the genai plugin scaffold.
 //
 // Drives the actual genai .so through load → init → start → stop → unload,
-// the same way proxysql will at startup.  Any future Step 2+ extension
-// (admin tables, query hook, status vars) gets its own assertion here as
-// it lands.
+// the same way proxysql will at startup.  Step 4.F extended the plugin
+// to actually read mcp-* admin variables and the mcp_auth/target profile
+// tables during start(), so this test now spins up real in-memory
+// SQLite3DBs (instead of the previous fake `char*` stubs) and creates
+// the tables genai_start expects.
 
 #include "ProxySQL_PluginManager.h"
+#include "sqlite3db.h"
 #include "tap.h"
 
 #include <string>
@@ -16,18 +19,49 @@
 
 namespace {
 
-char g_fake_admin_db = '\0';
-char g_fake_config_db = '\0';
-char g_fake_stats_db = '\0';
+// Real in-memory SQLite databases.  Pre-populated with the table
+// shapes genai_start() reads.  No data — that's enough to make the
+// plugin's admin-DB queries succeed and return empty result sets,
+// which is the "fresh-install" scenario.
+SQLite3DB* g_admindb  = nullptr;
+SQLite3DB* g_configdb = nullptr;
+SQLite3DB* g_statsdb  = nullptr;
+
+void setup_admindb_schema(SQLite3DB* db) {
+	// Minimal schema to satisfy mcp_load_variables_from_admindb /
+	// mcp_load_target_auth_map_from_admindb in the plugin.
+	db->execute("CREATE TABLE IF NOT EXISTS global_variables ("
+	            " variable_name TEXT PRIMARY KEY, variable_value TEXT)");
+	db->execute("CREATE TABLE IF NOT EXISTS mcp_auth_profiles ("
+	            " auth_profile_id INTEGER PRIMARY KEY, db_username TEXT,"
+	            " db_password TEXT, default_schema TEXT)");
+	db->execute("CREATE TABLE IF NOT EXISTS mcp_target_profiles ("
+	            " target_id TEXT PRIMARY KEY, protocol TEXT, hostgroup_id INTEGER,"
+	            " auth_profile_id INTEGER, max_rows INTEGER, timeout_ms INTEGER,"
+	            " allow_explain INTEGER, allow_discovery INTEGER, description TEXT,"
+	            " active INTEGER DEFAULT 1)");
+	db->execute("CREATE TABLE IF NOT EXISTS runtime_mcp_auth_profiles AS"
+	            " SELECT * FROM mcp_auth_profiles WHERE 0");
+	db->execute("CREATE TABLE IF NOT EXISTS runtime_mcp_target_profiles AS"
+	            " SELECT * FROM mcp_target_profiles WHERE 0");
+}
 
 } // namespace
 
-SQLite3DB* proxysql_plugin_get_admindb()  { return reinterpret_cast<SQLite3DB*>(&g_fake_admin_db); }
-SQLite3DB* proxysql_plugin_get_configdb() { return reinterpret_cast<SQLite3DB*>(&g_fake_config_db); }
-SQLite3DB* proxysql_plugin_get_statsdb()  { return reinterpret_cast<SQLite3DB*>(&g_fake_stats_db); }
+SQLite3DB* proxysql_plugin_get_admindb()  { return g_admindb; }
+SQLite3DB* proxysql_plugin_get_configdb() { return g_configdb; }
+SQLite3DB* proxysql_plugin_get_statsdb()  { return g_statsdb; }
 
 int main() {
 	plan(8);
+
+	g_admindb  = new SQLite3DB();
+	g_configdb = new SQLite3DB();
+	g_statsdb  = new SQLite3DB();
+	g_admindb->open((char*)":memory:", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+	g_configdb->open((char*)":memory:", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+	g_statsdb->open((char*)":memory:", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+	setup_admindb_schema(g_admindb);
 
 	ProxySQL_PluginManager mgr;
 	std::string err {};
@@ -56,6 +90,10 @@ int main() {
 	   "skeleton genai plugin registers no config tables (yet)");
 	ok(mgr.tables(ProxySQL_PluginDBKind::stats_db).empty(),
 	   "skeleton genai plugin registers no stats tables (yet)");
+
+	delete g_admindb;
+	delete g_configdb;
+	delete g_statsdb;
 
 	return exit_status();
 }
