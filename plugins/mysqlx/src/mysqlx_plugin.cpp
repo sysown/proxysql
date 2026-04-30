@@ -255,9 +255,14 @@ MysqlxPluginContext& mysqlx_context() {
 }
 
 void mysqlx_reconcile_listeners(SQLite3DB& admindb) {
+	(void)admindb; // no longer consulted; kept in the public signature
+	               // so the weak hook surface is stable for callers.
 	MysqlxPluginContext& ctx = mysqlx_context();
+	if (!ctx.config_store) {
+		return;
+	}
 	mysqlx_reconcile_listeners_impl(
-		admindb,
+		*ctx.config_store,
 		ctx.threads,
 		ctx.route_to_thread,
 		ctx.route_to_thread_mutex,

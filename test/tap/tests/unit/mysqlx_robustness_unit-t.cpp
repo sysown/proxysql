@@ -901,29 +901,23 @@ static void test_listener_route_tracking() {
 
 static void test_listener_reconciliation() {
 	diag(">>> %s", __func__);
-	// Build a minimal in-memory admin DB with one active route and verify
+	// Populate a fresh MysqlxConfigStore with one active route and verify
 	// that `mysqlx_reconcile_listeners_impl` binds exactly one listener
 	// across the two-thread pool and records the ownership mapping.
-	SQLite3DB admindb;
-	admindb.open(const_cast<char*>(":memory:"),
-		SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
-	admindb.execute(
-		"CREATE TABLE runtime_mysqlx_routes ("
-		" name VARCHAR NOT NULL PRIMARY KEY,"
-		" bind VARCHAR NOT NULL,"
-		" destination_hostgroup INT NOT NULL,"
-		" fallback_hostgroup INT,"
-		" strategy VARCHAR NOT NULL DEFAULT 'first_available',"
-		" active INT NOT NULL DEFAULT 1,"
-		" attributes VARCHAR NOT NULL DEFAULT '',"
-		" comment VARCHAR NOT NULL DEFAULT ''"
-		" )"
-	);
-	admindb.execute(
-		"INSERT INTO runtime_mysqlx_routes "
-		"(name, bind, destination_hostgroup, active) "
-		"VALUES ('route_rec', '127.0.0.1:0', 0, 1)"
-	);
+	// (The reconciler now reads its desired route set from the store, not
+	// from runtime_mysqlx_routes — which is an admin-side projection of the
+	// store, only populated on demand.)
+	MysqlxConfigStore store;
+	{
+		std::unordered_map<std::string, MysqlxRoute> routes;
+		MysqlxRoute r {};
+		r.name = "route_rec";
+		r.bind = "127.0.0.1:0";
+		r.destination_hostgroup = 0;
+		r.active = true;
+		routes.emplace("route_rec", r);
+		store.install_for_test(std::move(routes), {});
+	}
 
 	std::vector<std::unique_ptr<Mysqlx_Thread>> threads;
 	for (int i = 0; i < 2; i++) {
@@ -937,7 +931,7 @@ static void test_listener_reconciliation() {
 	int next_rr_index = 0;
 
 	mysqlx_reconcile_listeners_impl(
-		admindb, threads, route_to_thread, route_map_mutex, next_rr_index
+		store, threads, route_to_thread, route_map_mutex, next_rr_index
 	);
 
 	int total = threads[0]->get_listener_count() + threads[1]->get_listener_count();
@@ -978,36 +972,28 @@ static int pick_free_port() {
 
 static void test_listener_reconciliation_bind_change() {
 	diag(">>> %s", __func__);
-	// Verify that changing a route's `bind` column and re-running the reconciler
-	// closes the old listener and opens a new one at the new port — i.e. the
-	// reconciler does NOT silently keep the stale listener alive just because
-	// the route name is unchanged.
+	// Verify that mutating a route's `bind` in MysqlxConfigStore and re-running
+	// the reconciler closes the old listener and opens a new one at the new
+	// port — i.e. the reconciler does NOT silently keep the stale listener
+	// alive just because the route name is unchanged.
 	int port1 = pick_free_port();
 	int port2 = pick_free_port();
 	ok(port1 > 0 && port2 > 0 && port1 != port2,
 	   "picked two distinct free ports for bind-change reconcile test");
 
-	SQLite3DB admindb;
-	admindb.open(const_cast<char*>(":memory:"),
-		SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
-	admindb.execute(
-		"CREATE TABLE runtime_mysqlx_routes ("
-		" name VARCHAR NOT NULL PRIMARY KEY,"
-		" bind VARCHAR NOT NULL,"
-		" destination_hostgroup INT NOT NULL,"
-		" fallback_hostgroup INT,"
-		" strategy VARCHAR NOT NULL DEFAULT 'first_available',"
-		" active INT NOT NULL DEFAULT 1,"
-		" attributes VARCHAR NOT NULL DEFAULT '',"
-		" comment VARCHAR NOT NULL DEFAULT ''"
-		" )"
-	);
-	char insert_sql[256];
-	snprintf(insert_sql, sizeof(insert_sql),
-		"INSERT INTO runtime_mysqlx_routes "
-		"(name, bind, destination_hostgroup, active) "
-		"VALUES ('reads', '127.0.0.1:%d', 0, 1)", port1);
-	admindb.execute(insert_sql);
+	auto install_route_with_bind = [](MysqlxConfigStore& store, int port) {
+		std::unordered_map<std::string, MysqlxRoute> routes;
+		MysqlxRoute r {};
+		r.name = "reads";
+		r.bind = std::string("127.0.0.1:") + std::to_string(port);
+		r.destination_hostgroup = 0;
+		r.active = true;
+		routes.emplace("reads", r);
+		store.install_for_test(std::move(routes), {});
+	};
+
+	MysqlxConfigStore store_v1;
+	install_route_with_bind(store_v1, port1);
 
 	std::vector<std::unique_ptr<Mysqlx_Thread>> threads;
 	for (int i = 0; i < 2; i++) {
@@ -1021,22 +1007,19 @@ static void test_listener_reconciliation_bind_change() {
 	int next_rr_index = 0;
 
 	mysqlx_reconcile_listeners_impl(
-		admindb, threads, route_to_thread, route_map_mutex, next_rr_index
+		store_v1, threads, route_to_thread, route_map_mutex, next_rr_index
 	);
 
 	int total1 = threads[0]->get_listener_count() + threads[1]->get_listener_count();
 	ok(total1 == 1 && route_to_thread.count("reads") == 1,
 	   "initial reconcile: one listener for 'reads' at port1");
 
-	// Change the bind column and re-reconcile.
-	char update_sql[256];
-	snprintf(update_sql, sizeof(update_sql),
-		"UPDATE runtime_mysqlx_routes SET bind='127.0.0.1:%d' WHERE name='reads'",
-		port2);
-	admindb.execute(update_sql);
+	// Re-install with the new bind and re-reconcile.
+	MysqlxConfigStore store_v2;
+	install_route_with_bind(store_v2, port2);
 
 	mysqlx_reconcile_listeners_impl(
-		admindb, threads, route_to_thread, route_map_mutex, next_rr_index
+		store_v2, threads, route_to_thread, route_map_mutex, next_rr_index
 	);
 
 	int total2 = threads[0]->get_listener_count() + threads[1]->get_listener_count();

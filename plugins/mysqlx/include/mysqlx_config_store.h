@@ -117,6 +117,15 @@ public:
 	int route_hostgroup(const std::string& route_name) const;
 	bool route_exists(const std::string& route_name) const;
 
+	// Snapshot of active route names + bind specs. Used by the
+	// listener reconciler (mysqlx_listener_reconcile.cpp) to compute
+	// the desired listener set without going through the
+	// runtime_mysqlx_routes view (which is only populated on demand
+	// by an admin SELECT, not by LOAD MYSQLX ROUTES TO RUNTIME).
+	// Returns by value under a shared lock so the caller can drop
+	// the lock before reconciling listener fds.
+	std::vector<std::pair<std::string, std::string>> snapshot_active_routes() const;
+
 	// Test-only: inject routes + hostgroup endpoints directly, bypassing
 	// the SQLite3DB-based install path. Not called by production code.
 	void install_for_test(

@@ -676,6 +676,17 @@ bool MysqlxConfigStore::route_exists(const std::string& route_name) const {
 	return routes_.find(route_name) != routes_.end();
 }
 
+std::vector<std::pair<std::string, std::string>> MysqlxConfigStore::snapshot_active_routes() const {
+	std::shared_lock<std::shared_mutex> lock(mutex_);
+	std::vector<std::pair<std::string, std::string>> out;
+	out.reserve(routes_.size());
+	for (const auto& [name, route] : routes_) {
+		if (!route.active) continue;
+		out.emplace_back(route.name, route.bind);
+	}
+	return out;
+}
+
 void MysqlxConfigStore::install_for_test(
 	std::unordered_map<std::string, MysqlxRoute> routes,
 	std::unordered_map<int, std::vector<MysqlxBackendEndpoint>> endpoints
