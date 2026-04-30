@@ -121,6 +121,7 @@ static std::string build_compression_capset(const char* algorithm,
 }
 
 static void test_capabilities_advertise_compression() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -176,6 +177,7 @@ static void test_capabilities_advertise_compression() {
 }
 
 static void test_capabilities_set_zstd_accepted() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -210,6 +212,7 @@ static void test_capabilities_set_zstd_accepted() {
 }
 
 static void test_capabilities_set_lz4_accepted() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -235,6 +238,7 @@ static void test_capabilities_set_lz4_accepted() {
 }
 
 static void test_capabilities_set_unsupported_rejected() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -281,6 +285,7 @@ static void test_capabilities_set_unsupported_rejected() {
 }
 
 static void test_capabilities_set_garbage_rejected() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -419,6 +424,7 @@ static std::string build_compression_envelope(uint8_t msg_type,
 }
 
 static void test_decompress_zstd_single_message() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -477,6 +483,7 @@ static void test_decompress_zstd_single_message() {
 }
 
 static void test_decompress_lz4_single_message() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -521,6 +528,7 @@ static void test_decompress_lz4_single_message() {
 }
 
 static void test_decompress_oversize_rejected() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -570,6 +578,7 @@ static void test_decompress_oversize_rejected() {
 }
 
 static void test_decompress_garbage_rejected() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -614,6 +623,7 @@ static void test_decompress_garbage_rejected() {
 }
 
 static void test_compression_without_negotiation_still_5008() {
+	diag(">>> %s", __func__);
 	// Sanity: if the client tries to send a Compression message before
 	// (or without) having set the compression capability, the dispatcher
 	// must still reject with 5008.
@@ -703,6 +713,7 @@ static bool extract_one_frame_from_buffer(const std::vector<uint8_t>& buf,
 }
 
 static void test_compress_zstd_single_message() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -762,6 +773,7 @@ static void test_compress_zstd_single_message() {
 }
 
 static void test_compress_lz4_single_message() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -805,6 +817,7 @@ static void test_compress_lz4_single_message() {
 }
 
 static void test_compress_below_threshold_passthrough() {
+	diag(">>> %s", __func__);
 	// Payload smaller than COMPRESSION_MIN_OUTPUT_BYTES (50) must be sent
 	// uncompressed even when compression is negotiated — the wrap
 	// overhead would dwarf any savings. We assert the frame on the wire
@@ -839,6 +852,7 @@ static void test_compress_below_threshold_passthrough() {
 }
 
 static void test_compress_combine_mixed_batches() {
+	diag(">>> %s", __func__);
 	// With combine_mixed_messages=true and max_combine_messages=3, three
 	// successive sends should buffer the first two and emit ONE
 	// Compression message containing both after the third triggers the
@@ -938,6 +952,7 @@ static void test_compress_combine_mixed_batches() {
 }
 
 static void test_compress_passthrough_when_disabled() {
+	diag(">>> %s", __func__);
 	// Sanity: when compression hasn't been negotiated, the helper must
 	// just enqueue verbatim — the .so MUST work fine for clients that
 	// never opt in to compression.
@@ -967,7 +982,9 @@ static void test_compress_passthrough_when_disabled() {
 }
 
 int main() {
+	setvbuf(stdout, nullptr, _IOLBF, 0);
 	plan(64);
+	diag("=== mysqlx_compression_unit-t starting ===");
 
 	test_capabilities_advertise_compression();
 	test_capabilities_set_zstd_accepted();

@@ -35,10 +35,11 @@ struct MysqlxPluginContext {
 MysqlxPluginContext& mysqlx_context();
 
 /**
- * Desired-state listener reconciliation driven by `runtime_mysqlx_routes`.
+ * Desired-state listener reconciliation driven by `MysqlxConfigStore`.
  *
- * Reads the current desired route set (rows with `active=1`) from
- * `runtime_mysqlx_routes` and adjusts the listener topology to match:
+ * Reads the current desired route set from the in-memory store (active
+ * routes only, via `MysqlxConfigStore::snapshot_active_routes()`) and
+ * adjusts the listener topology to match:
  *   - Routes that are desired but not yet in the plugin-scope
  *     `route_to_thread` map get a freshly-created listener on a thread
  *     chosen round-robin via `next_rr_index`, and the mapping is recorded.
@@ -48,7 +49,11 @@ MysqlxPluginContext& mysqlx_context();
  *
  * Called from plugin startup and from the admin command
  * `LOAD MYSQLX ROUTES TO RUNTIME`, so both paths converge on the same
- * reconciliation logic.
+ * reconciliation logic. Both call sites run AFTER
+ * `install_routes_from_admin` populates the store, so the snapshot here
+ * reflects exactly the routes the operator asked for. The reconciler
+ * deliberately does NOT read `runtime_mysqlx_routes` — that is an
+ * on-demand admin-side projection, not authoritative module state.
  *
  * Declared weak so unit tests that exercise admin_schema.cpp in isolation
  * (without linking mysqlx_plugin.cpp) can link successfully; at runtime
@@ -63,8 +68,15 @@ __attribute__((weak)) void mysqlx_reconcile_listeners(SQLite3DB& admindb);
 // tests can construct a minimal fake context without pulling in the whole
 // plugin descriptor / registration surface. Not intended for production
 // callers.
+//
+// `store` is the in-memory route source: the reconciler reads its active
+// route set via MysqlxConfigStore::snapshot_active_routes(). admindb is
+// retained in the signature only because the weak hook on the public API
+// hands it through; this helper does not consult it. May be nullptr in
+// tests that pre-populated `store` via install_for_test() and don't care
+// about admindb.
 void mysqlx_reconcile_listeners_impl(
-	SQLite3DB& admindb,
+	const MysqlxConfigStore& store,
 	std::vector<std::unique_ptr<Mysqlx_Thread>>& threads,
 	std::map<std::string, int>& route_to_thread,
 	std::mutex& route_to_thread_mutex,

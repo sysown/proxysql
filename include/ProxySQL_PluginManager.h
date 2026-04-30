@@ -65,6 +65,20 @@ public:
 	bool dispatch_query_hook(ProxySQL_PluginProtocol proto,
 	                         const ProxySQL_PluginQueryHookPayload& payload,
 	                         ProxySQL_PluginQueryHookResult& result) const;
+
+	// Runtime-view (admin-side projection of module state) plumbing.
+	// register_runtime_view returns false if the table is already
+	// registered or if the refresh callback is null.
+	bool register_runtime_view(const ProxySQL_PluginRuntimeView& view);
+
+	// Refresh every registered view whose table_name appears as a
+	// case-insensitive substring of `sql`. Each refresh callback is
+	// invoked exactly once per call, regardless of how many times its
+	// table is mentioned. Best-effort: a callback that throws or
+	// otherwise misbehaves is logged but does not stop other views from
+	// refreshing. Caller supplies admindb so the chassis does not have
+	// to reach into the global admin module.
+	void refresh_runtime_views_for_query(const std::string& sql, SQLite3DB* admindb) const;
 #endif /* PROXYSQL40 */
 
 	size_t size() const;
@@ -115,6 +129,18 @@ private:
 	// At most one hook per protocol; nullptr means "no hook".
 	proxysql_plugin_query_hook_cb mysql_query_hook_ { nullptr };
 	proxysql_plugin_query_hook_cb pgsql_query_hook_ { nullptr };
+
+	// Runtime-view registry: one entry per admin-side projection of
+	// module state. Stored alongside an owned table_name copy so
+	// callers may free the input string after registration. The
+	// refresh callback pointer and opaque are plugin-owned with
+	// static lifetime (the .so isn't unloaded while a view is live).
+	struct registered_runtime_view_t {
+		std::string table_name {};
+		void (*refresh)(SQLite3DB*, void*) { nullptr };
+		void* opaque { nullptr };
+	};
+	std::vector<registered_runtime_view_t> runtime_views_ {};
 #endif /* PROXYSQL40 */
 };
 
@@ -141,6 +167,14 @@ bool proxysql_has_configured_plugin_query_hook(ProxySQL_PluginProtocol proto);
 // release the manager lock before dispatching without risking pointer
 // invalidation on concurrent reload.
 std::string proxysql_resolve_configured_plugin_admin_alias(const std::string& sql);
+
+// Admin-side helper: invoke every plugin runtime-view refresh callback
+// whose registered table is referenced by `sql`. Used by Admin's
+// pre-SELECT path, mirroring the way runtime_mysql_users is refreshed
+// before its SELECTs. No-op if no plugin manager is active or no views
+// match. Caller supplies admindb (typically the same handle Admin uses
+// for its own runtime_mysql_users refresh).
+void proxysql_refresh_configured_plugin_runtime_views(const std::string& sql, SQLite3DB* admindb);
 // Phase A + B of the four-phase lifecycle: dlopen() each module, read its
 // descriptor, then call register_schemas() on plugins that opted in. On
 // success, `manager` is populated AND installed as the active manager so

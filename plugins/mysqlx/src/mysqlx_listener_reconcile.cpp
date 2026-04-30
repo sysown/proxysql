@@ -1,4 +1,5 @@
 #include "mysqlx_plugin.h"
+#include "mysqlx_config_store.h"
 #include "sqlite3db.h"
 
 #include <cstdlib>
@@ -50,7 +51,7 @@ struct DesiredRoute {
 } // namespace
 
 void mysqlx_reconcile_listeners_impl(
-	SQLite3DB& admindb,
+	const MysqlxConfigStore& store,
 	std::vector<std::unique_ptr<Mysqlx_Thread>>& threads,
 	std::map<std::string, int>& route_to_thread,
 	std::mutex& route_to_thread_mutex,
@@ -61,38 +62,29 @@ void mysqlx_reconcile_listeners_impl(
 	}
 
 	// Invariant: this function is only ever called from the admin thread
-	// (startup or LOAD MYSQLX ROUTES TO RUNTIME). The DB snapshot below is taken
-	// outside of route_to_thread_mutex on the assumption that no second reconcile
-	// can run concurrently. If ProxySQL ever gains a parallel admin execution path,
-	// move the mutex acquisition above the DB query.
+	// (startup or LOAD MYSQLX ROUTES TO RUNTIME). The store snapshot below is
+	// taken outside of route_to_thread_mutex on the assumption that no second
+	// reconcile can run concurrently. If ProxySQL ever gains a parallel admin
+	// execution path, move the mutex acquisition above the snapshot.
 
-	// 1. Snapshot the desired route set from runtime_mysqlx_routes.
+	// 1. Snapshot the desired route set from MysqlxConfigStore directly.
+	//    We deliberately do NOT read runtime_mysqlx_routes — that table is an
+	//    on-demand projection of the store, only populated when admin runs a
+	//    SELECT against it. Reading it here would see empty/stale data on
+	//    every startup and every LOAD MYSQLX ROUTES TO RUNTIME call (the LOAD
+	//    callback writes the store and then calls this reconciler before any
+	//    SELECT has triggered the projection).
 	std::vector<DesiredRoute> desired;
 	std::map<std::string, const DesiredRoute*> desired_by_name;
 	{
-		char* error = nullptr;
-		std::unique_ptr<SQLite3_result> result(
-			admindb.execute_statement(
-				"SELECT name, bind FROM runtime_mysqlx_routes WHERE active=1",
-				&error
-			)
-		);
-		std::unique_ptr<char, void(*)(void*)> error_guard(error, &free);
-		if (result) {
-			desired.reserve(result->rows.size());
-			for (auto* row : result->rows) {
-				if (row == nullptr ||
-				    row->fields[0] == nullptr ||
-				    row->fields[1] == nullptr) {
-					continue;
-				}
-				DesiredRoute dr;
-				dr.name = row->fields[0];
-				std::string bind_str = row->fields[1];
-				dr.port = 33060;
-				parse_bind_addr(bind_str, dr.host, dr.port);
-				desired.push_back(std::move(dr));
-			}
+		auto routes = store.snapshot_active_routes();
+		desired.reserve(routes.size());
+		for (auto& r : routes) {
+			DesiredRoute dr;
+			dr.name = std::move(r.first);
+			dr.port = 33060;
+			parse_bind_addr(r.second, dr.host, dr.port);
+			desired.push_back(std::move(dr));
 		}
 		for (const auto& dr : desired) {
 			desired_by_name[dr.name] = &dr;

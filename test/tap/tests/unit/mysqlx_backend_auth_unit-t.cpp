@@ -31,6 +31,7 @@ static void write_x_frame(int fd, uint8_t msg_type, const uint8_t* payload, size
 }
 
 static void test_backend_auth_state_transitions() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -151,6 +152,7 @@ static void test_backend_auth_state_transitions() {
 }
 
 static void test_backend_auth_error_on_caps() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -175,6 +177,7 @@ static void test_backend_auth_error_on_caps() {
 }
 
 static void test_backend_auth_notice_skip() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -205,6 +208,7 @@ static void test_backend_auth_notice_skip() {
 }
 
 static void test_backend_auth_error_on_wrong_caps_response() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -229,6 +233,7 @@ static void test_backend_auth_error_on_wrong_caps_response() {
 }
 
 static void test_backend_auth_error_on_set_caps_reject() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -261,6 +266,7 @@ static void test_backend_auth_error_on_set_caps_reject() {
 }
 
 static void test_backend_auth_not_started_returns_progress() {
+	diag(">>> %s", __func__);
 	MysqlxConnection conn;
 	conn.set_state(MysqlxConnection::AUTHENTICATING);
 	conn.set_backend_user("testuser");
@@ -279,6 +285,7 @@ static void test_backend_auth_not_started_returns_progress() {
 }
 
 static void test_backend_reset_clears_auth() {
+	diag(">>> %s", __func__);
 	MysqlxConnection conn;
 	conn.set_state(MysqlxConnection::IDLE);
 	conn.reset();
@@ -288,7 +295,9 @@ static void test_backend_reset_clears_auth() {
 }
 
 int main() {
-	plan(42);
+	setvbuf(stdout, nullptr, _IOLBF, 0);
+	plan(34);
+	diag("=== mysqlx_backend_auth_unit-t starting ===");
 
 	test_backend_auth_state_transitions();
 	test_backend_auth_error_on_caps();

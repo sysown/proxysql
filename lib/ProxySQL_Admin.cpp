@@ -1633,6 +1633,27 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	if (strstr(query_no_space,"mysql_server_aws_aurora_check_status")) {
 		monitor_mysql_server_aws_aurora_check_status=true; refresh=true;
 	}
+#ifdef PROXYSQL40
+	// Plugin-registered runtime views: if the query references any chassis-
+	// registered runtime view (e.g. runtime_mysqlx_users), refresh it on
+	// the admin path BEFORE the SELECT runs against admindb. We always
+	// invoke the dispatcher when the session is on the admin port; the
+	// chassis itself decides whether to fire any plugin's refresh
+	// callback by per-view substring match against query_no_space, so a
+	// query that touches no registered view is a cheap no-op (one shared
+	// lock + N substring scans, N == registered-view count).
+	//
+	// Note: we do NOT toggle the existing `refresh` flag here. That flag
+	// gates a block of core-only refreshes (stats_mysql_processlist,
+	// runtime_mysql_users, etc.) and is unrelated to plugin views. We
+	// also place this OUTSIDE the `if (refresh==true)` block so a SELECT
+	// that touches only a plugin view (e.g. SELECT * FROM runtime_mysqlx_
+	// users with no other runtime_* mention) still gets its projection
+	// fired.
+	if (admin) {
+		proxysql_refresh_configured_plugin_runtime_views(query_no_space, admindb);
+	}
+#endif /* PROXYSQL40 */
 //	if (stats_mysql_processlist || stats_mysql_connection_pool || stats_mysql_query_digest || stats_mysql_query_digest_reset) {
 	if (refresh==true) {
 		//pthread_mutex_lock(&admin_mutex);

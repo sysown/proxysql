@@ -61,12 +61,14 @@ static Mysqlx_Thread& default_test_thread() {
 }
 
 static void test_session_init() {
+	diag(">>> %s", __func__);
 	MysqlxSession sess;
 	ok(sess.get_status() == MysqlxSession::NONE, "initial state NONE");
 	ok(sess.is_healthy(), "initially healthy");
 }
 
 static void test_session_state_transitions() {
+	diag(">>> %s", __func__);
 	MysqlxSession sess;
 	sess.set_status(MysqlxSession::CONNECTING_CLIENT);
 	ok(sess.get_status() == MysqlxSession::CONNECTING_CLIENT, "CONNECTING_CLIENT");
@@ -120,6 +122,7 @@ static ssize_t read_x_frame(int fd, uint8_t* buf, size_t buf_size) {
 }
 
 static void test_handler_no_data() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -135,6 +138,7 @@ static void test_handler_no_data() {
 }
 
 static void test_capabilities_response() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -173,6 +177,7 @@ static void test_capabilities_response() {
 }
 
 static void test_capabilities_set() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -213,6 +218,7 @@ static void test_capabilities_set() {
 }
 
 static void test_con_close_during_connecting() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -231,6 +237,7 @@ static void test_con_close_during_connecting() {
 }
 
 static void test_unexpected_message_during_connecting() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -257,6 +264,7 @@ static void test_unexpected_message_during_connecting() {
 }
 
 static void test_plain_rejected_without_tls() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -294,6 +302,7 @@ static void test_plain_rejected_without_tls() {
 }
 
 static void test_mysql41_auth_with_credentials() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -375,6 +384,7 @@ static void test_mysql41_auth_with_credentials() {
 }
 
 static void test_mysql41_auth_wrong_password() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -442,6 +452,7 @@ static void test_mysql41_auth_wrong_password() {
 }
 
 static void test_error_severity_non_fatal() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 	MysqlxSession sess;
@@ -501,6 +512,7 @@ static void test_error_severity_non_fatal() {
 }
 
 static void test_compression_error_non_fatal() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 	MysqlxSession sess;
@@ -529,6 +541,7 @@ static void test_compression_error_non_fatal() {
 }
 
 static void test_post_auth_capabilities_get() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 	MysqlxSession sess;
@@ -556,6 +569,7 @@ static void test_post_auth_capabilities_get() {
 }
 
 static void test_unsupported_auth_method() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -588,6 +602,7 @@ static void test_unsupported_auth_method() {
 }
 
 static void test_sess_close_in_main_loop() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -608,6 +623,7 @@ static void test_sess_close_in_main_loop() {
 }
 
 static void test_con_close_in_main_loop() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -628,6 +644,7 @@ static void test_con_close_in_main_loop() {
 }
 
 static void test_reset() {
+	diag(">>> %s", __func__);
 	MysqlxSession sess;
 	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
 	sess.reset();
@@ -636,6 +653,7 @@ static void test_reset() {
 }
 
 static void test_parse_error_detection() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 	MysqlxSession sess;
@@ -654,6 +672,7 @@ static void test_parse_error_detection() {
 }
 
 static void test_session_timestamps() {
+	diag(">>> %s", __func__);
 	MysqlxSession sess;
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
@@ -668,7 +687,9 @@ static void test_session_timestamps() {
 }
 
 int main() {
-	plan(62);
+	setvbuf(stdout, nullptr, _IOLBF, 0);
+	plan(60);
+	diag("=== mysqlx_session_unit-t starting ===");
 
 	test_session_init();
 	test_session_state_transitions();

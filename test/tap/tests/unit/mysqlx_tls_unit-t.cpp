@@ -26,6 +26,7 @@ static void write_x_frame(int fd, uint8_t msg_type, const uint8_t* payload, size
 }
 
 static void test_init_ssl_null_ctx() {
+	diag(">>> %s", __func__);
 	MysqlxDataStream ds;
 	ds.init(XDS_FRONTEND, -1);
 	ds.init_ssl(nullptr);
@@ -35,6 +36,7 @@ static void test_init_ssl_null_ctx() {
 }
 
 static void test_non_tls_read_write_unchanged() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -93,6 +95,7 @@ static SSL_CTX* create_test_ssl_ctx() {
 }
 
 static void test_ssl_handshake_and_io() {
+	diag(">>> %s", __func__);
 	SSL_CTX* server_ctx = create_test_ssl_ctx();
 	SSL_CTX* client_ctx = SSL_CTX_new(TLS_method());
 	SSL_CTX_set_min_proto_version(client_ctx, TLS1_2_VERSION);
@@ -223,12 +226,14 @@ static void test_ssl_handshake_and_io() {
 }
 
 static void test_has_ssl_pending_write() {
+	diag(">>> %s", __func__);
 	MysqlxDataStream ds;
 	ds.init(XDS_FRONTEND, -1);
 	ok(!ds.has_ssl_pending_write(), "no pending write without SSL");
 }
 
 static void test_ssl_connect_init() {
+	diag(">>> %s", __func__);
 	SSL_CTX* ctx = create_test_ssl_ctx();
 	if (!ctx) {
 		ok(false, "init_ssl_connect creates SSL object");
@@ -245,7 +250,9 @@ static void test_ssl_connect_init() {
 }
 
 int main() {
+	setvbuf(stdout, nullptr, _IOLBF, 0);
 	plan(18);
+	diag("=== mysqlx_tls_unit-t starting ===");
 
 	test_init_ssl_null_ctx();
 	test_non_tls_read_write_unchanged();

@@ -141,41 +141,41 @@ bool sync_disk_to_memory(SQLite3DB& admindb, ProxySQL_PluginServices* services) 
 	return all_ok;
 }
 
-bool copy_to_runtime(SQLite3DB& admindb, ProxySQL_PluginServices* services) {
-	const char* pairs[][2] = {
-		{"mysqlx_users", "runtime_mysqlx_users"},
-		{"mysqlx_routes", "runtime_mysqlx_routes"},
-		{"mysqlx_backend_endpoints", "runtime_mysqlx_backend_endpoints"},
-		{"mysqlx_variables", "runtime_mysqlx_variables"},
-	};
-	bool all_ok = true;
-	for (const auto& p : pairs) {
-		std::string dest = "main.";
-		dest += p[1];
-		std::string source = "main.";
-		source += p[0];
-		if (!replace_table_atomically(admindb, services, dest.c_str(), source.c_str())) {
-			all_ok = false;
-		}
-	}
-	return all_ok;
-}
-
 bool mysqlx_start() {
 	MysqlxPluginContext& ctx = mysqlx_context();
 
 	if (ctx.services != nullptr && ctx.services->get_admindb != nullptr) {
 		SQLite3DB* admindb = ctx.services->get_admindb();
 		if (admindb != nullptr) {
+			// Disk -> memory: keep the editable tables in sync with disk
+			// on startup, same as the canonical proxysql_admin path does
+			// for mysql_users / mysql_servers / etc. This is admin-tier
+			// persistence and is legitimate.
 			sync_disk_to_memory(*admindb, ctx.services);
-			copy_to_runtime(*admindb, ctx.services);
 
+			// Memory -> module: the editable mysqlx_* tables now drive
+			// the in-memory store directly. Each install_*_from_admin
+			// SELECTs the editable table (and the relevant cross-module
+			// runtime_mysql_* projections), builds a new local map, and
+			// atomically swaps it into MysqlxConfigStore. We deliberately
+			// do NOT replicate this data into runtime_mysqlx_* admin
+			// tables -- those are projected on demand via the chassis
+			// register_runtime_view() refresh callbacks declared below.
 			std::string err;
-			if (!ctx.config_store->load_from_runtime(*admindb, err)) {
+			auto report_err = [&](const char* what) {
 				if (ctx.services->log_message != nullptr) {
-					ctx.services->log_message(3, err.c_str());
+					std::string msg = "mysqlx: ";
+					msg += what;
+					msg += ": ";
+					msg += err;
+					ctx.services->log_message(3, msg.c_str());
 				}
-			}
+				err.clear();
+			};
+			if (!ctx.config_store->install_users_from_admin(*admindb, err))     report_err("install_users_from_admin failed");
+			if (!ctx.config_store->install_routes_from_admin(*admindb, err))    report_err("install_routes_from_admin failed");
+			if (!ctx.config_store->install_endpoints_from_admin(*admindb, err)) report_err("install_endpoints_from_admin failed");
+			if (!ctx.config_store->install_variables_from_admin(*admindb, err)) report_err("install_variables_from_admin failed");
 		}
 	}
 
@@ -255,9 +255,14 @@ MysqlxPluginContext& mysqlx_context() {
 }
 
 void mysqlx_reconcile_listeners(SQLite3DB& admindb) {
+	(void)admindb; // no longer consulted; kept in the public signature
+	               // so the weak hook surface is stable for callers.
 	MysqlxPluginContext& ctx = mysqlx_context();
+	if (!ctx.config_store) {
+		return;
+	}
 	mysqlx_reconcile_listeners_impl(
-		admindb,
+		*ctx.config_store,
 		ctx.threads,
 		ctx.route_to_thread,
 		ctx.route_to_thread_mutex,
@@ -265,6 +270,12 @@ void mysqlx_reconcile_listeners(SQLite3DB& admindb) {
 	);
 }
 
-extern "C" const ProxySQL_PluginDescriptor *proxysql_plugin_descriptor_v1() {
+// Default visibility is required because the plugin .so is built with
+// -fvisibility=hidden (see plugins/mysqlx/Makefile). Without an explicit
+// override the dlopen consumer cannot resolve this symbol via dlsym, and
+// ProxySQL_PluginManager::load() fails with "undefined symbol:
+// proxysql_plugin_descriptor_v1".
+extern "C" __attribute__((visibility("default")))
+const ProxySQL_PluginDescriptor *proxysql_plugin_descriptor_v1() {
 	return &mysqlx_descriptor;
 }

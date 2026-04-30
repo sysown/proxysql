@@ -14,7 +14,9 @@
 #include <vector>
 
 int main() {
+	setvbuf(stdout, nullptr, _IOLBF, 0);
 	plan(22);
+	diag("=== mysqlx_stats_unit-t starting ===");
 
 	// Test 1-3: Stats counters.
 	{

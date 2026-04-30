@@ -4,6 +4,7 @@
 #include <cstring>
 
 static void test_frame_header_parse() {
+	diag(">>> %s", __func__);
 	MysqlxDataStream ds;
 	uint8_t frame[] = {
 		0x0a, 0x00, 0x00, 0x00,
@@ -22,6 +23,7 @@ static void test_frame_header_parse() {
 }
 
 static void test_partial_frame() {
+	diag(">>> %s", __func__);
 	MysqlxDataStream ds;
 	uint8_t hdr[] = {0x0a, 0x00, 0x00, 0x00, 0x01};
 	ds.feed_bytes(hdr, 5);
@@ -34,6 +36,7 @@ static void test_partial_frame() {
 }
 
 static void test_multiple_frames() {
+	diag(">>> %s", __func__);
 	MysqlxDataStream ds;
 	uint8_t f1[] = {0x02, 0x00, 0x00, 0x00, 0x01, 0xAA};
 	uint8_t f2[] = {0x02, 0x00, 0x00, 0x00, 0x02, 0xBB};
@@ -51,6 +54,7 @@ static void test_multiple_frames() {
 }
 
 static void test_frame_enqueue_write() {
+	diag(">>> %s", __func__);
 	MysqlxDataStream ds;
 	uint8_t body[] = {0x01, 0x02, 0x03};
 	ds.enqueue_frame(0x0E, body, 3);
@@ -61,6 +65,7 @@ static void test_frame_enqueue_write() {
 }
 
 static void test_parse_error_zero_payload() {
+	diag(">>> %s", __func__);
 	MysqlxDataStream ds;
 	uint8_t bad[] = {0x00, 0x00, 0x00, 0x00, 0x01};
 	ds.feed_bytes(bad, 5);
@@ -69,6 +74,7 @@ static void test_parse_error_zero_payload() {
 }
 
 static void test_parse_error_oversized_payload() {
+	diag(">>> %s", __func__);
 	MysqlxDataStream ds;
 	uint8_t big[] = {0x01, 0x00, 0x00, 0x01, 0x01};
 	ds.feed_bytes(big, 5);
@@ -76,7 +82,9 @@ static void test_parse_error_oversized_payload() {
 }
 
 int main() {
+	setvbuf(stdout, nullptr, _IOLBF, 0);
 	plan(18);
+	diag("=== mysqlx_data_stream_unit-t starting ===");
 
 	test_frame_header_parse();
 	test_partial_frame();

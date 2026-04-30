@@ -161,6 +161,21 @@ bool register_query_hook_service(ProxySQL_PluginProtocol proto,
 	}
 	return true;
 }
+
+bool register_runtime_view_service(const ProxySQL_PluginRuntimeView& view) {
+	if (g_registry_target == nullptr) {
+		proxy_warning("Plugin runtime-view registration attempted outside init/register_schemas phase\n");
+		return false;
+	}
+	if (!g_registry_target->register_runtime_view(view)) {
+		note_registration_failure("plugin runtime view",
+			view.table_name != nullptr ? view.table_name : "(null)");
+		proxy_warning("Plugin runtime-view registration failed for %s\n",
+			view.table_name != nullptr ? view.table_name : "(null)");
+		return false;
+	}
+	return true;
+}
 #endif /* PROXYSQL40 */
 
 SQLite3DB* get_admindb_service() {
@@ -286,6 +301,7 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_.register_query_hook = &register_query_hook_service;
 	services_.get_prometheus_registry = &get_prometheus_registry_service;
 	services_.register_command_alias = &register_command_alias_service;
+	services_.register_runtime_view = &register_runtime_view_service;
 
 	// Phase-B (register_schemas) services: same layout as init(), but DB
 	// handle getters and the query-hook registrar are stubbed -- see the
@@ -306,6 +322,11 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	// register_command() first, then register aliases. Since register_command
 	// is also available during Phase B, so is register_command_alias.
 	services_phase_b_.register_command_alias = &register_command_alias_service;
+	// Runtime-view registration is live during register_schemas: views are
+	// declared alongside tables, well before init() runs. The actual
+	// refresh callback won't fire until Admin handles a SELECT, by which
+	// point admin module bootstrap has long since completed.
+	services_phase_b_.register_runtime_view = &register_runtime_view_service;
 #endif /* PROXYSQL40 */
 }
 
@@ -739,6 +760,65 @@ bool ProxySQL_PluginManager::dispatch_query_hook(ProxySQL_PluginProtocol proto,
 	result = cb(payload);
 	return true;
 }
+
+bool ProxySQL_PluginManager::register_runtime_view(const ProxySQL_PluginRuntimeView& view) {
+	if (view.table_name == nullptr || *view.table_name == '\0' || view.refresh == nullptr) {
+		return false;
+	}
+	for (const auto& existing : runtime_views_) {
+		if (strcasecmp(existing.table_name.c_str(), view.table_name) == 0) {
+			return false;
+		}
+	}
+	registered_runtime_view_t entry;
+	entry.table_name = view.table_name;
+	entry.refresh = view.refresh;
+	entry.opaque = view.opaque;
+	runtime_views_.push_back(std::move(entry));
+	return true;
+}
+
+namespace {
+
+// Case-insensitive substring check matching whole identifier-like
+// occurrences. We don't want a SELECT against `runtime_mysqlx_users`
+// to also fire the refresh for `runtime_mysqlx_users_extra` if
+// someone ever registers both. The match treats `[A-Za-z0-9_]` as
+// identifier characters and requires the surrounding chars (if any)
+// to be non-identifier — same convention as the sql_equals_ci
+// canonicaliser used elsewhere in this file.
+bool is_ident_char(unsigned char c) {
+	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+	       (c >= '0' && c <= '9') || c == '_';
+}
+
+bool sql_references_table_ci(const std::string& sql, const std::string& table_name) {
+	if (table_name.empty() || table_name.size() > sql.size()) {
+		return false;
+	}
+	for (size_t i = 0; i + table_name.size() <= sql.size(); i++) {
+		if (strncasecmp(sql.data() + i, table_name.data(), table_name.size()) != 0) {
+			continue;
+		}
+		const bool left_ok  = (i == 0) || !is_ident_char(static_cast<unsigned char>(sql[i - 1]));
+		const size_t after  = i + table_name.size();
+		const bool right_ok = (after == sql.size()) || !is_ident_char(static_cast<unsigned char>(sql[after]));
+		if (left_ok && right_ok) {
+			return true;
+		}
+	}
+	return false;
+}
+
+} // namespace
+
+void ProxySQL_PluginManager::refresh_runtime_views_for_query(const std::string& sql, SQLite3DB* admindb) const {
+	for (const auto& view : runtime_views_) {
+		if (view.refresh == nullptr) continue;
+		if (!sql_references_table_ci(sql, view.table_name)) continue;
+		view.refresh(admindb, view.opaque);
+	}
+}
 #endif /* PROXYSQL40 */
 
 bool ProxySQL_PluginManager::register_command(const char* sql, proxysql_plugin_admin_command_cb cb) {
@@ -890,6 +970,20 @@ bool proxysql_has_configured_plugin_query_hook(ProxySQL_PluginProtocol proto) {
 		return false;
 	}
 	return mgr->has_query_hook(proto);
+}
+
+void proxysql_refresh_configured_plugin_runtime_views(const std::string& sql, SQLite3DB* admindb) {
+	// Reader: shared lock. The refresh callbacks themselves write to
+	// admindb (DELETE+REPLACE INTO the projected runtime_<plugin>
+	// table) and read from the plugin's own in-memory store under that
+	// store's own lock. They must not call back into the plugin
+	// manager (no nested lock acquisition).
+	std::shared_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
+	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load();
+	if (mgr == nullptr) {
+		return;
+	}
+	mgr->refresh_runtime_views_for_query(sql, admindb);
 }
 #endif /* PROXYSQL40 */
 

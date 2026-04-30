@@ -452,6 +452,11 @@ plugin_dispatch_unit-t: plugin_dispatch_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUG
 		$(IDIRS) $(LDIRS) $(OPT) $(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
+plugin_runtime_views_unit-t: plugin_runtime_views_unit-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		$(IDIRS) $(LDIRS) $(OPT) $(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
 test_mysqlx_plugin_load-t: ../test_mysqlx_plugin_load-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) mysqlx_plugin_build
 	$(CXX) ../test_mysqlx_plugin_load-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		-DPROXYSQL_MYSQLX_PLUGIN_PATH=\"$(MYSQLX_PLUGIN_SO)\" \

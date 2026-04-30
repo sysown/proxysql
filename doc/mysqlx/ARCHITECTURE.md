@@ -2,7 +2,7 @@
 
 ## 1. Executive Summary
 
-The mysqlx plugin is ProxySQL's first dynamically loaded plugin. It adds MySQL X Protocol support without modifying the core proxy engine. The plugin uses the ProxySQL Plugin ABI (version 1) to register admin tables, commands, and manage its own listener sockets and worker threads.
+The mysqlx plugin is ProxySQL's first dynamically loaded plugin. It adds MySQL X Protocol support without modifying the core proxy engine. The plugin uses the ProxySQL Plugin ABI (currently version 3 — descriptor ABI 2 four-phase lifecycle plus the ABI-3 `services.register_runtime_view` callback for declaring admin-side projections of module state) to register admin tables, commands, runtime-view refreshes, and manage its own listener sockets and worker threads.
 
 **v2** introduces an event-driven architecture replacing the Phase 1 single-threaded blocking model. Instead of one thread handling one session at a time with blocking I/O, v2 uses N configurable threads each running an independent `poll()` event loop, cooperatively multiplexing thousands of concurrent X Protocol sessions — matching ProxySQL's core `MySQL_Thread` / `PgSQL_Thread` design.
 
@@ -133,7 +133,7 @@ Traditional MySQL connections use the classic wire protocol (port 3306). MySQL 8
 |---|---|
 | **Header** | `plugins/mysqlx/include/mysqlx_plugin.h` |
 | **Source** | `plugins/mysqlx/src/mysqlx_plugin.cpp` |
-| **Responsibility** | Plugin entry point. Exports `proxysql_plugin_descriptor_v1` — the single symbol the PluginManager resolves. Owns the plugin context: a `MysqlxConfigStore`, a `MysqlxStatsStore`, and the cached `ProxySQL_PluginServices*`. Creates N `Mysqlx_Thread` instances on start, joins them on stop. |
+| **Responsibility** | Plugin entry point. Exports `proxysql_plugin_descriptor_v1` — the single symbol the PluginManager resolves. Owns the plugin context: a `MysqlxConfigStore`, the cached `ProxySQL_PluginServices*`, the `Mysqlx_Thread` pool, and the `route_to_thread` mapping. Creates N `Mysqlx_Thread` instances on start, joins them on stop. |
 | **Key methods** | `mysqlx_init(services)` — create config/stats stores, register admin tables and commands via the services pointer. `mysqlx_start()` — load config from runtime SQLite, create thread pool, add listeners to threads, start all threads. `mysqlx_stop()` — stop and join all threads, free resources. `mysqlx_status_json()` — return a JSON string for monitoring. |
 | **Thread safety** | The descriptor functions are called sequentially by the PluginManager during startup/shutdown. No concurrent access to the plugin context during `init`/`start`/`stop`. |
 
@@ -143,9 +143,9 @@ Traditional MySQL connections use the classic wire protocol (port 3306). MySQL 8
 |---|---|
 | **Header** | `plugins/mysqlx/include/mysqlx_config_store.h` |
 | **Source** | `plugins/mysqlx/src/mysqlx_config_store.cpp` |
-| **Responsibility** | In-memory configuration cache loaded from SQLite runtime tables. Maintains caches for: identities (user → hostgroup + credentials), routes (listen address → backend endpoints), endpoints (backend host + port with health metadata), topology generation tracking for cache invalidation, TLS configuration (mode, cert paths), and connection pool settings. |
-| **Key methods** | `load_from_runtime(services)` — execute `SELECT` queries against the runtime SQLite database, populate in-memory caches. `resolve_identity(username)` — look up a user's hostgroup and credentials. `pick_endpoint(hostgroup)` — select a backend endpoint using round-robin. |
-| **Thread safety** | `std::shared_mutex` — shared (reader) lock for lookups, exclusive (writer) lock for `load_from_runtime`. |
+| **Responsibility** | Authoritative in-memory store of mysqlx configuration. **This is the canonical state** — the editable `mysqlx_*` admin tables are persistent input, the `runtime_mysqlx_*` tables are admin-side projections of this store (see §10.2). Maintains: identities (user → hostgroup + credentials), routes (name → listener bind + destination hostgroup), endpoint overrides (per-host X-Protocol port), per-hostgroup endpoint lists rebuilt from `runtime_mysql_servers`, topology generation tracking, TLS configuration, and connection pool settings. |
+| **Key methods** | Per-entity install (LOAD path): `install_users_from_admin(db, err)`, `install_routes_from_admin(db, err)`, `install_endpoints_from_admin(db, err)`, `install_variables_from_admin(db, err)` — each SELECTs the editable `mysqlx_<X>` table (plus, for users, `runtime_mysql_users` for canonical identity, and for endpoints, `runtime_mysql_servers` for the hostgroup → host topology), builds a fresh local map, and atomically swaps it under the exclusive lock. Per-entity save (SAVE path): `save_users_to_admin_table(db)`, `save_routes_to_admin_table(db)`, `save_endpoints_to_admin_table(db)`, `save_variables_to_admin_table(db)` — dump current store state into the editable `mysqlx_<X>` table (UPDATE active=0, then REPLACE INTO with active=1). Per-entity projection (runtime-view refresh): `project_users_to_runtime_view(db)` etc. — `DELETE FROM runtime_mysqlx_<X>; INSERT ... <store dump>`. Lookups: `resolve_identity(username)`, `pick_endpoint(route_name)`, `route_exists(route_name)`. |
+| **Thread safety** | `std::shared_mutex` — shared (reader) lock for lookups and projections, exclusive (writer) lock for the install/save paths. |
 
 ### 3.7 mysqlx_stats
 
@@ -162,7 +162,7 @@ Traditional MySQL connections use the classic wire protocol (port 3306). MySQL 8
 |---|---|
 | **Header** | `plugins/mysqlx/include/mysqlx_admin_schema.h` |
 | **Source** | `plugins/mysqlx/src/mysqlx_admin_schema.cpp` |
-| **Responsibility** | Admin table DDL definitions, variable definitions, and LOAD/SAVE command handlers. Defines the schema for runtime configuration tables (`mysqlx_users`, `mysqlx_routes`, `mysqlx_backend_endpoints`, `mysqlx_variables`) and implements all admin commands. |
+| **Responsibility** | Admin table DDL definitions, variable definitions, LOAD/SAVE command handlers, and runtime-view refresh callbacks. Defines the schema for the editable tables (`mysqlx_users`, `mysqlx_routes`, `mysqlx_backend_endpoints`, `mysqlx_variables`) and the projected views (`runtime_mysqlx_*`). LOAD/SAVE callbacks interact with `MysqlxConfigStore` directly (via `install_*_from_admin` / `save_*_to_admin_table`) — they do NOT do SQLite-to-SQLite copies between editable and runtime tables. The four `refresh_<X>_runtime_view` free functions are registered with the chassis via `services.register_runtime_view()` during schema registration; they fire when admin executes a `SELECT` against a `runtime_mysqlx_*` table and call `MysqlxConfigStore::project_<X>_to_runtime_view`. |
 | **New v2 variables** | `mysqlx_thread_pool_size` (default 4), `mysqlx_connect_timeout` (default 10000ms), `mysqlx_tls_mode` (default DISABLED), `mysqlx_tls_cert`, `mysqlx_tls_key`, `mysqlx_tls_ca`, `mysqlx_tls_backend_mode` (default DISABLED), `mysqlx_max_cached_connections_per_thread` (default 100). |
 
 ## 4. Thread Pool Architecture
@@ -561,20 +561,91 @@ Client         Mysqlx_Thread      MysqlxSession     ConfigStore      MysqlxConne
 
 ### 10.2 Admin Command Flow
 
+The mysqlx plugin follows the canonical Admin/module separation of duties used by core's `mysql_users` / `GloMyAuth` / `runtime_mysql_users` triplet (see `lib/ProxySQL_Admin.cpp::save_mysql_users_runtime_to_database`):
+
+* **Admin** owns the editable tables (`mysqlx_users`, `mysqlx_routes`, `mysqlx_backend_endpoints`, `mysqlx_variables`) and the chassis dispatch glue.
+* **`MysqlxConfigStore`** owns the authoritative runtime state in process memory.
+* **`runtime_mysqlx_*`** are *not* persistent storage. They are admin-side **views** of the store, rebuilt on demand by a refresh callback that the plugin registered via `services.register_runtime_view()`.
+
+#### 10.2.1 LOAD path — editable table → module
+
+`LOAD MYSQLX USERS TO RUNTIME` does **not** copy `mysqlx_users` into `runtime_mysqlx_users`. The runtime table is never written by this path.
+
 ```
-Admin Client          Admin Handler       PluginManager      mysqlx_admin_schema    ConfigStore
-     │                     │                    │                      │                    │
-     │── LOAD MYSQLX ────→│                    │                      │                    │
-     │   USERS TO RUNTIME │                    │                      │                    │
-     │                     │── alias match ───→│                      │                    │
-     │                     │                    │── dispatch ────────→│                    │
-     │                     │                    │                      │── copy_table ────→│
-     │                     │                    │                      │  (SQLite → SQLite)│
-     │                     │                    │                      │── reload_config──→│
-     │                     │                    │                      │  (SQLite → memory)│
-     │←── OK ─────────────│←──────────────────│←────────────────────│                    │
-     │                     │                    │                      │                    │
+Admin Client       Admin Handler   PluginManager   mysqlx_admin_schema           MysqlxConfigStore
+     │                  │                │                  │                            │
+     │── LOAD MYSQLX ──→│                │                  │                            │
+     │   USERS TO       │                │                  │                            │
+     │   RUNTIME        │                │                  │                            │
+     │                  │── alias ─────→│                  │                            │
+     │                  │   normalize    │── dispatch ────→│                            │
+     │                  │                │                  │── install_users_from_admin →│
+     │                  │                │                  │   reads:                   │   SELECT runtime_mysql_users
+     │                  │                │                  │   - runtime_mysql_users    │   SELECT mysqlx_users
+     │                  │                │                  │     (canonical identity)   │     WHERE active=1
+     │                  │                │                  │   - mysqlx_users           │
+     │                  │                │                  │     (X-side overlay)       │   build new unordered_map,
+     │                  │                │                  │                            │   atomic swap under
+     │                  │                │                  │                            │   shared_mutex.
+     │←── OK ──────────│←──────────────│←────────────────│←──────────────────────────│
 ```
+
+Same shape for `LOAD MYSQLX ROUTES`, `LOAD MYSQLX BACKEND ENDPOINTS`, and `LOAD MYSQLX VARIABLES TO RUNTIME` — each calls its own `install_<X>_from_admin`. None of them touch `runtime_mysqlx_<X>`.
+
+#### 10.2.2 Runtime-view refresh — module → projected view (on SELECT)
+
+When an operator runs `SELECT * FROM runtime_mysqlx_users`, Admin's pre-SELECT hook detects the table name and walks the chassis registry of runtime views (see `proxysql_refresh_configured_plugin_runtime_views` in `lib/ProxySQL_PluginManager.cpp`). For each registered view whose `table_name` appears as a whole identifier in the query, it invokes the plugin-supplied refresh callback **before** the SELECT runs.
+
+```
+Admin Client       Admin pre-SELECT hook        Chassis dispatch         mysqlx refresh cb        MysqlxConfigStore
+     │                    │                            │                         │                         │
+     │── SELECT * ───────→│                            │                         │                         │
+     │   FROM runtime_    │── refresh views? ────────→│                         │                         │
+     │   mysqlx_users     │                            │── matches view ───────→│                         │
+     │                    │                            │   "runtime_mysqlx_     │── project_users_to_     →│
+     │                    │                            │    users"              │   runtime_view(admindb)  │
+     │                    │                            │                         │                         │   under shared_mutex:
+     │                    │                            │                         │                         │   DELETE FROM
+     │                    │                            │                         │                         │     runtime_mysqlx_users;
+     │                    │                            │                         │                         │   INSERT INTO
+     │                    │                            │                         │                         │     runtime_mysqlx_users
+     │                    │                            │                         │                         │     <dump store state>
+     │                    │── now run SELECT ─────────────────────────────────────────────────────────────→│
+     │←── rows ───────────│                                                                                  │
+```
+
+The view is wiped and refilled on every qualifying SELECT, so deletions in the store always propagate. There is brief duplication (data lives in the module *and* in the projected admin table during the query) — that is by design, mirroring the canonical core pattern.
+
+#### 10.2.3 SAVE path — module → editable table
+
+`SAVE MYSQLX USERS FROM RUNTIME TO MEMORY` does **not** read `runtime_mysqlx_users`. It dumps the store directly into `mysqlx_users` (UPDATE active=0, then REPLACE INTO with active=1, mirror of the canonical pattern).
+
+```
+Admin Client       Admin Handler   PluginManager   mysqlx_admin_schema           MysqlxConfigStore
+     │                  │                │                  │                            │
+     │── SAVE MYSQLX ──→│                │                  │                            │
+     │   USERS FROM     │                │                  │                            │
+     │   RUNTIME TO     │── alias ─────→│                  │                            │
+     │   MEMORY         │   normalize    │── dispatch ────→│                            │
+     │                  │                │                  │── save_users_to_admin_ ───→│
+     │                  │                │                  │   table(admindb)           │
+     │                  │                │                  │                            │   under shared_mutex:
+     │                  │                │                  │   writes:                  │   UPDATE mysqlx_users
+     │                  │                │                  │   - mysqlx_users           │     SET active=0;
+     │                  │                │                  │     (editable, persistent) │   REPLACE INTO
+     │                  │                │                  │                            │     mysqlx_users
+     │                  │                │                  │                            │     <dump store state,
+     │                  │                │                  │                            │      active=1>
+     │←── OK ──────────│←──────────────│←────────────────│←──────────────────────────│
+```
+
+#### 10.2.4 Disk tier
+
+`LOAD MYSQLX <X> FROM DISK` and `SAVE MYSQLX <X> TO DISK` are unchanged — those copy between disk-backed and in-memory editable tables and have no module involvement. They remain plain `BEGIN; DELETE; INSERT; COMMIT` admin-tier persistence.
+
+#### 10.2.5 What changed from earlier versions
+
+Earlier revisions of this plugin treated `runtime_mysqlx_users` (and the other `runtime_mysqlx_*` tables) as authoritative SQLite-backed mirrors populated by `LOAD ... TO RUNTIME` via `INSERT INTO runtime_mysqlx_users SELECT * FROM mysqlx_users`. `MysqlxConfigStore` had a single `load_from_runtime()` that read those mirrors back into memory, and `mysqlx_admin_schema` did a `copy_table` SQLite-to-SQLite copy on every LOAD. Operators relying on that mental model need to unlearn it: the runtime tables now hold no persistent rows of their own, the LOAD path bypasses them entirely, and only the on-demand projection callback ever touches them.
 
 ## 11. Thread Model
 
@@ -584,7 +655,11 @@ Main Thread
   ├── ProxySQL_PluginManager::init_all()    (register tables/commands)
   ├── ProxySQL_PluginManager::start_all()   (start thread pool)
   │     └── mysqlx_start()
-  │           ├── config_store->load_from_runtime()   (SQLite → memory)
+  │           ├── sync_disk_to_memory()              (disk → editable mysqlx_* tables)
+  │           ├── config_store->install_users_from_admin()       (mysqlx_users → store)
+  │           ├── config_store->install_routes_from_admin()      (mysqlx_routes → store)
+  │           ├── config_store->install_endpoints_from_admin()   (mysqlx_backend_endpoints → store)
+  │           ├── config_store->install_variables_from_admin()   (mysqlx_variables → store)
   │           └── Create N Mysqlx_Thread instances
   │                 ├── Mysqlx_Thread #0 (poll loop, listeners, sessions, conn cache)
   │                 ├── Mysqlx_Thread #1 (poll loop, listeners, sessions, conn cache)
@@ -596,7 +671,7 @@ Main Thread
 
 ### Thread Lifecycle
 
-1. **Startup (Main Thread)**: The main thread calls `PluginManager::load()` which dlopens the plugin shared library. Then `init_all()` invokes the plugin's `init()` callback, which registers admin tables and commands. Then `start_all()` invokes `mysqlx_start()`, which loads configuration from SQLite into the in-memory config store, creates N `Mysqlx_Thread` instances, adds listeners based on configured routes, and starts all threads.
+1. **Startup (Main Thread)**: The main thread calls `PluginManager::load()` which dlopens the plugin shared library. Then `init_all()` invokes the plugin's `init()` callback, which registers admin tables, commands, and the four runtime-view refresh callbacks via `services.register_runtime_view()`. Then `start_all()` invokes `mysqlx_start()`, which (1) syncs the on-disk admin tables into the in-memory editable tables, (2) drives the four `install_<X>_from_admin` calls to populate `MysqlxConfigStore` from those editable tables (plus `runtime_mysql_users` for canonical identity), (3) creates N `Mysqlx_Thread` instances, (4) adds listeners based on configured routes, and (5) starts all threads.
 
 2. **Mysqlx_Thread**: Each thread runs an independent `poll()` loop. Listener sockets are baked into the poll set (no separate accept thread). When `POLLIN` fires on a listener fd, the thread calls `accept()`, creates a `MysqlxSession`, and adds the client data stream to the poll set. Sessions are processed cooperatively — each session's `handler()` returns immediately when waiting for I/O.
 
@@ -606,7 +681,7 @@ Main Thread
 
 | Resource | Mechanism | Scope |
 |---|---|---|
-| `MysqlxConfigStore` caches | `std::shared_mutex` | Shared for reads, exclusive for `load_from_runtime` |
+| `MysqlxConfigStore` caches | `std::shared_mutex` | Shared for reads (`resolve_identity`, `pick_endpoint`, `project_<X>_to_runtime_view`); exclusive for the install / save paths |
 | `MysqlxStatsStore` counters | `std::atomic<uint64_t>` | Lock-free per-counter increments |
 | `ProxySQL_PluginManager` dispatch | `std::mutex` | Guards command dispatch |
 | Per-thread connection cache | `std::mutex` | Per-thread, no inter-thread contention |

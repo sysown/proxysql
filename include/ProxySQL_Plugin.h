@@ -23,13 +23,14 @@ namespace prometheus { class Registry; }
 //   ABI 1: original 6-field descriptor (name, abi_version, init, start,
 //          stop, status_json). Pre-chassis build.
 //   ABI 2: appends `register_schemas` (four-phase lifecycle, PROXYSQL40).
-//
-// A v3 core (built without PROXYSQL40) only understands ABI 1 and MUST
-// reject ABI>=2 plugins — it would read past the end of its own struct
-// definition.  A v4 core accepts ABI 1 plugins by treating the
-// register_schemas field as if null (never dereferenced on ABI 1).
-#define PROXYSQL_PLUGIN_ABI_VERSION 2u
-#define PROXYSQL_PLUGIN_ABI_VERSION_MAX 2u
+//   ABI 3: same descriptor layout as ABI 2; ProxySQL_PluginServices grows
+//          a `register_runtime_view` field at the end so plugins can
+//          declare admin-side projections of module state. Plugins that
+//          stay on ABI 2 keep working — they simply don't see the new
+//          field in their compiled-against struct, and core never
+//          dereferences past the ABI-2 layout for them.
+#define PROXYSQL_PLUGIN_ABI_VERSION 3u
+#define PROXYSQL_PLUGIN_ABI_VERSION_MAX 3u
 
 enum class ProxySQL_PluginDBKind : uint8_t {
 	admin_db = 0,
@@ -166,6 +167,48 @@ using proxysql_plugin_register_query_hook_cb =
 // scraped immediately.
 using proxysql_plugin_get_prometheus_registry_cb =
 	prometheus::Registry* (*)();
+
+// Runtime-view projection (ABI 3 extension).
+//
+// Mirrors the canonical mysql_users / runtime_mysql_users pattern: Admin
+// owns the editable table (e.g. mysqlx_users), the plugin module owns
+// the runtime state (e.g. MysqlxConfigStore::identities_), and the
+// runtime_<table> in admin_db is an Admin-side *view* projected on
+// demand from the module. The view holds no persistent rows — it is
+// wiped and refilled by the plugin's refresh callback before any admin
+// SELECT touches it.
+//
+// Plugins call register_runtime_view(view) during register_schemas or
+// init. Each registration ties an admin-db table name (e.g.
+// "runtime_mysqlx_users") to a refresh callback. Admin's pre-SELECT
+// hook walks every registered view and invokes the callback for any
+// that the SQL references.
+//
+// The refresh callback gets a borrowed admindb handle and is expected
+// to do (typically) `BEGIN; DELETE FROM <table>; INSERT/REPLACE INTO
+// <table> ...; COMMIT;` from the module's in-memory state. The chassis
+// passes admindb explicitly (rather than the plugin reaching for it via
+// services.get_admindb) because the same callback might be invoked
+// against snapshot DBs in the future without the global-getter detour.
+//
+// Lifetime: the chassis deep-copies `table_name`, so the plugin need
+// not keep the pointed-to string alive. The callback pointer itself
+// must point at a function with static lifetime (typically a free
+// function in the plugin .so). `opaque` is plugin-owned; it is passed
+// back unchanged on each invocation. Plugins that don't need it should
+// pass nullptr.
+//
+// Returns true on successful registration, false if `table_name` is
+// already registered (by this or another plugin) or if `refresh` is
+// nullptr.
+struct ProxySQL_PluginRuntimeView {
+	const char *table_name;
+	void (*refresh)(SQLite3DB *admindb, void *opaque);
+	void *opaque;
+};
+
+using proxysql_plugin_register_runtime_view_cb =
+	bool (*)(const ProxySQL_PluginRuntimeView &);
 #endif /* PROXYSQL40 */
 
 // Services provided to plugins across the four-phase lifecycle.
@@ -219,6 +262,16 @@ struct ProxySQL_PluginServices {
 	// plugins avoid the MYSQLX-specific hardcoded alias ladder that
 	// previously lived in lib/Admin_Handler.cpp.
 	proxysql_plugin_register_command_alias_cb register_command_alias;
+
+	// ABI-3 extension: declare an admin-side view of module state
+	// (canonical pattern, mirrors Admin's own runtime_mysql_users /
+	// save_mysql_users_runtime_to_database flow).  See the contract
+	// next to ProxySQL_PluginRuntimeView above.  May be nullptr in
+	// services_phase_b_ — register_runtime_view is live both during
+	// register_schemas() and init(); plugins typically register views
+	// at the same point they register their tables, so the callback
+	// is wired in both phases.
+	proxysql_plugin_register_runtime_view_cb register_runtime_view;
 #endif /* PROXYSQL40 */
 };
 
@@ -285,39 +338,43 @@ struct ProxySQL_PluginDescriptor {
 using proxysql_plugin_descriptor_v1_t = const ProxySQL_PluginDescriptor *(*)();
 
 // ---------------------------------------------------------------------------
-// ABI guidance: disk/memory/runtime sync — empty-source MUST still clear
-// the destination.
+// ABI guidance: separation of duties between Admin and the plugin module.
 //
-// Plugins that implement a three-tier storage model (disk ↔ memory ↔
-// runtime, mirroring proxysql_admin) typically copy rows from one tier
-// into another via some variant of:
+// Admin owns the editable, persistent configuration tables (e.g.
+// mysqlx_users, mysqlx_routes). The plugin module owns the runtime
+// state — typically an in-memory snapshot kept under its own mutex.
+// The runtime_<table> in admin_db is NOT module storage; it is an
+// Admin-side *view* of module state, projected on demand.
 //
-//     BEGIN;
-//     DELETE FROM dest;
-//     INSERT INTO dest SELECT * FROM source;
-//     COMMIT;
+// LOAD <X> TO RUNTIME callbacks should:
+//   - read the editable admin table directly,
+//   - hand the rows to the module via a typed install API that swaps
+//     state under the module's own lock,
+//   - NOT touch runtime_<X> at all.
 //
-// Do NOT short-circuit this on `SELECT COUNT(*) FROM source == 0`. Early
-// return on an empty source leaves stale rows in the destination — the
-// exact bug that motivated PR #5643 on the mysqlx plugin, where
+// SAVE <X> [FROM RUNTIME] TO MEMORY callbacks should:
+//   - dump the module's in-memory state,
+//   - REPLACE INTO the editable admin table,
+//   - NOT read runtime_<X>.
 //
-//     if (disk_cnt == 0) continue;          // stale rows in runtime
-//     if (cnt == 0) continue;               // stale rows in memory
+// The runtime_<X> view is repopulated by a refresh callback registered
+// via services.register_runtime_view(...). Admin invokes the callback
+// before any SELECT against the registered table; the callback wipes
+// the table and re-projects from the module's in-memory state. This
+// matches the canonical MySQL_Authentication / runtime_mysql_users
+// pattern in core (lib/ProxySQL_Admin.cpp::save_mysql_users_runtime_to_
+// database). It does duplicate the data briefly (in module + in the
+// projected admin table during a query), and that is the point: the
+// module is isolated from Admin's persistence, and operators see a
+// faithful snapshot whenever they query.
 //
-// caused "I deleted every row from mysqlx_users on disk then reloaded,
-// but the runtime still has the old users" behavior across restarts.
-//
-// The correct invariant: after sync, `dest` contains exactly the rows
-// from `source` at the moment of the transaction. An empty source
-// produces an empty destination. Atomicity with ROLLBACK on any
-// intermediate error keeps the destination in a well-defined state on
-// failure.
-//
-// Applies to every LOAD/SAVE command a plugin registers. If you
-// register admin commands that copy between tiers (LOAD X TO RUNTIME,
-// SAVE X TO DISK, etc.), their callbacks MUST NOT skip the sync on an
-// empty source — run the DELETE+INSERT unconditionally inside a single
-// transaction and check each execute() return.
+// Disk-tier copies (LOAD X FROM DISK, SAVE X TO DISK) DO copy between
+// configdb and admindb persistent tables and remain a plain
+// BEGIN/DELETE/INSERT/COMMIT — there is no module involvement and no
+// view projection on that path. For those copies, the empty-source-
+// must-still-clear-destination rule still applies (see PR #5643): run
+// the DELETE+INSERT unconditionally inside a single transaction and
+// check each execute() return.
 // ---------------------------------------------------------------------------
 
 #endif /* PROXYSQL40 (file-wide) */

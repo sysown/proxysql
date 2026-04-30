@@ -99,6 +99,7 @@ static void client_thread(int port, int id) {
 }
 
 static void test_concurrent_handshakes() {
+	diag(">>> %s", __func__);
 	int port = find_free_port();
 
 	Mysqlx_Thread thr;
@@ -106,11 +107,13 @@ static void test_concurrent_handshakes() {
 	int rc = thr.add_listener("127.0.0.1", port);
 	ok(rc == 0, "listener added on port %d", port);
 
+	diag("starting Mysqlx_Thread on port %d", port);
 	bool started = thr.start();
 	ok(started, "thread started");
 	usleep(100000);
 
 	const int N = 20;
+	diag("thread started, spawning %d clients", N);
 	std::vector<std::thread> clients;
 	sessions_ok = 0;
 	sessions_err = 0;
@@ -118,8 +121,10 @@ static void test_concurrent_handshakes() {
 	for (int i = 0; i < N; i++) {
 		clients.emplace_back(client_thread, port, i);
 	}
+	diag("all clients spawned, joining");
 
 	for (auto& t : clients) t.join();
+	diag("all clients joined, sleeping 500ms");
 
 	usleep(500000);
 
@@ -128,16 +133,21 @@ static void test_concurrent_handshakes() {
 	   N, sessions_ok.load(), sessions_err.load());
 	ok(sessions_err.load() == 0, "no sessions failed");
 
+	diag("checking session count");
 	ok(thr.get_session_count() == 0,
 	   "all sessions cleaned up after disconnect");
 
+	diag("calling thr.stop()");
 	thr.stop();
+	diag("thr.stop() returned");
 	ok(!thr.is_running(), "thread stopped cleanly");
 	thr.remove_listeners();
 }
 
 int main() {
+	setvbuf(stdout, nullptr, _IOLBF, 0);
 	plan(6);
+	diag("=== mysqlx_concurrent_unit-t starting ===");
 	test_concurrent_handshakes();
 	return exit_status();
 }
