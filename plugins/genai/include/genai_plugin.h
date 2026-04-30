@@ -87,6 +87,20 @@ GenAIPluginContext& genai_context();
 bool mcp_load_variables_from_admindb(GenAIPluginContext& ctx);
 
 /**
+ * @brief Pull runtime mcp-* values from the running
+ *        MCP_Threads_Handler back into main.global_variables.
+ *
+ * Defined in plugin_main.cpp.  Called from the
+ * `SAVE MCP VARIABLES TO MEMORY` / `... FROM RUNTIME` admin command.
+ * Mirrors the pre-4.C `flush_mcp_variables___runtime_to_database`
+ * with `runtime=false` (write-back to main, not runtime).
+ *
+ * @return true on success; false on SQL error or if admindb /
+ *         ctx.mcp are unavailable.
+ */
+bool mcp_save_variables_to_admindb(GenAIPluginContext& ctx);
+
+/**
  * @brief Refresh the runtime mcp_auth_profiles / mcp_target_profiles
  *        tables from `main.*`, then rebuild the MCP target_auth_map.
  *

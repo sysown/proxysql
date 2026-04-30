@@ -29,13 +29,11 @@
 #include <initializer_list>
 #include <string>
 
-// Forward declarations from plugin_main.cpp — same TU would be cleaner
-// but plugin_main.cpp already crosses 250 lines.  Putting the
-// command callbacks in their own TU keeps lifecycle separate from
-// admin SQL surface.
-bool mcp_load_variables_from_admindb(GenAIPluginContext& ctx);
-bool mcp_load_target_auth_map_from_admindb(GenAIPluginContext& ctx);
-void mcp_start_listener_if_enabled(GenAIPluginContext& ctx);
+// Helpers from plugin_main.cpp — declared in genai_plugin.h:
+//   mcp_load_variables_from_admindb
+//   mcp_save_variables_to_admindb
+//   mcp_load_target_auth_map_from_admindb
+//   mcp_start_listener_if_enabled
 
 namespace {
 
@@ -80,6 +78,27 @@ ProxySQL_PluginCommandResult load_mcp_variables_to_runtime(
 	// helper too.
 	mcp_start_listener_if_enabled(ctx);
 	return ok_result("MCP variables loaded to runtime");
+}
+
+/**
+ * `SAVE MCP VARIABLES TO MEMORY` / `... FROM RUNTIME` (and aliases).
+ *
+ * Walks the running MCP_Threads_Handler's variables and REPLACEs
+ * matching `mcp-<name>` rows in `main.global_variables`.  Mirrors the
+ * pre-4.C SAVE-to-memory path; the on-disk write is a separate
+ * "SAVE MCP VARIABLES TO DISK" verb that core still owns (it's pure
+ * SQL DML, no plugin runtime state).
+ */
+ProxySQL_PluginCommandResult save_mcp_variables_to_memory(
+	const ProxySQL_PluginCommandContext& cmd_ctx,
+	const char* sql
+) {
+	(void)cmd_ctx; (void)sql;
+	GenAIPluginContext& ctx = genai_context();
+	if (!mcp_save_variables_to_admindb(ctx)) {
+		return err_result("SAVE MCP VARIABLES TO MEMORY: failed writing global_variables");
+	}
+	return ok_result("MCP variables saved from runtime to main");
 }
 
 /**
@@ -138,6 +157,12 @@ void genai_register_admin_commands(ProxySQL_PluginServices* services) {
 		"LOAD MCP VARIABLES FROM MEMORY",
 		"LOAD MCP VARIABLES FROM MEM",
 		"LOAD MCP VARIABLES TO RUN",
+	});
+
+	reg("SAVE MCP VARIABLES TO MEMORY", &save_mcp_variables_to_memory, {
+		"SAVE MCP VARIABLES TO MEM",
+		"SAVE MCP VARIABLES FROM RUNTIME",
+		"SAVE MCP VARIABLES FROM RUN",
 	});
 
 	reg("LOAD MCP PROFILES TO RUNTIME", &load_mcp_profiles_to_runtime, {

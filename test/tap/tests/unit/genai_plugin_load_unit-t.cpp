@@ -53,7 +53,7 @@ SQLite3DB* proxysql_plugin_get_configdb() { return g_configdb; }
 SQLite3DB* proxysql_plugin_get_statsdb()  { return g_statsdb; }
 
 int main() {
-	plan(15);
+	plan(19);
 
 	g_admindb  = new SQLite3DB();
 	g_configdb = new SQLite3DB();
@@ -113,6 +113,20 @@ int main() {
 	ok(mgr.resolve_alias_to_canonical("LOAD MCP PROFILES TO RUN") ==
 	       "LOAD MCP PROFILES TO RUNTIME",
 	   "alias: LOAD MCP PROFILES TO RUN -> TO RUNTIME");
+
+	// SAVE direction: pull runtime mcp-* values back into main.
+	ok(mgr.resolve_alias_to_canonical("SAVE MCP VARIABLES TO MEMORY") ==
+	       "SAVE MCP VARIABLES TO MEMORY",
+	   "canonical: SAVE MCP VARIABLES TO MEMORY registered");
+	ok(mgr.resolve_alias_to_canonical("SAVE MCP VARIABLES FROM RUNTIME") ==
+	       "SAVE MCP VARIABLES TO MEMORY",
+	   "alias: SAVE MCP VARIABLES FROM RUNTIME -> TO MEMORY");
+	ok(mgr.resolve_alias_to_canonical("SAVE MCP VARIABLES FROM RUN") ==
+	       "SAVE MCP VARIABLES TO MEMORY",
+	   "alias: SAVE MCP VARIABLES FROM RUN -> TO MEMORY");
+	ok(mgr.resolve_alias_to_canonical("SAVE MCP VARIABLES TO MEM") ==
+	       "SAVE MCP VARIABLES TO MEMORY",
+	   "alias: SAVE MCP VARIABLES TO MEM -> TO MEMORY");
 
 	// Sanity: an unrelated verb does NOT resolve via the plugin.
 	ok(mgr.resolve_alias_to_canonical("SELECT 1").empty(),

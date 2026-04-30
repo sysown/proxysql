@@ -199,6 +199,63 @@ bool mcp_load_variables_from_admindb(GenAIPluginContext& ctx) {
 }
 
 /**
+ * @brief Pull runtime mcp-* values from MCP_Threads_Handler back into
+ *        `main.global_variables`.
+ *
+ * Mirrors the pre-4.C `flush_mcp_variables___runtime_to_database` in
+ * core, with `runtime=false` (writes only to `main`, not the
+ * `runtime_global_variables` view).  Used by SAVE MCP VARIABLES TO
+ * MEMORY / FROM RUNTIME.
+ *
+ * Owns its own GloMCPH lock so callers don't have to coordinate.
+ */
+bool mcp_save_variables_to_admindb(GenAIPluginContext& ctx) {
+	if (ctx.services == nullptr || ctx.services->get_admindb == nullptr || ctx.mcp == nullptr) {
+		return false;
+	}
+	SQLite3DB* admindb = ctx.services->get_admindb();
+	if (admindb == nullptr) return false;
+
+	// Replace, not insert-or-ignore: SAVE FROM RUNTIME is meant to
+	// overwrite stale values on disk with the current truth in
+	// memory.  Caller-visible behavior matches pre-4.C SAVE.
+	auto [prep_rc, stmt] = admindb->prepare_v2(
+		"REPLACE INTO main.global_variables(variable_name, variable_value) VALUES(?1, ?2)"
+	);
+	if (prep_rc != SQLITE_OK) {
+		fprintf(stderr, "genai plugin: REPLACE prepare failed (rc=%d)\n", prep_rc);
+		return false;
+	}
+	sqlite3_stmt* statement = stmt.get();
+	int rc = 0;  // SAFE_SQLITE3_STEP2 macro reads/writes free `rc`
+
+	ctx.mcp->wrlock();
+	char** varnames = ctx.mcp->get_variables_list();
+	for (int i = 0; varnames[i] != nullptr; ++i) {
+		char val[256];
+		ctx.mcp->get_variable(varnames[i], val);
+
+		// MCP variables are stored under the "mcp-<name>" qualified
+		// form in global_variables, mirroring how mysql-* / pgsql-*
+		// vars are namespaced.
+		std::string qualified = std::string("mcp-") + varnames[i];
+
+		(*proxy_sqlite3_bind_text)(statement, 1, qualified.c_str(), -1, SQLITE_TRANSIENT);
+		(*proxy_sqlite3_bind_text)(statement, 2, val[0] ? val : "", -1, SQLITE_TRANSIENT);
+		SAFE_SQLITE3_STEP2(statement);
+		(*proxy_sqlite3_clear_bindings)(statement);
+		(*proxy_sqlite3_reset)(statement);
+	}
+	ctx.mcp->wrunlock();
+
+	for (int i = 0; varnames[i] != nullptr; ++i) {
+		free(varnames[i]);
+	}
+	free(varnames);
+	return true;
+}
+
+/**
  * @brief Build and push the target-auth map from admindb into
  *        MCP_Threads_Handler.  Mirrors the pre-4.C
  *        ProxySQL_Admin::init_mcp_variables target-auth-map block.
