@@ -53,7 +53,7 @@ SQLite3DB* proxysql_plugin_get_configdb() { return g_configdb; }
 SQLite3DB* proxysql_plugin_get_statsdb()  { return g_statsdb; }
 
 int main() {
-	plan(8);
+	plan(15);
 
 	g_admindb  = new SQLite3DB();
 	g_configdb = new SQLite3DB();
@@ -90,6 +90,33 @@ int main() {
 	   "skeleton genai plugin registers no config tables (yet)");
 	ok(mgr.tables(ProxySQL_PluginDBKind::stats_db).empty(),
 	   "skeleton genai plugin registers no stats tables (yet)");
+
+	// Step 4.F: the plugin registers MCP admin SQL verbs.  Verify
+	// each registered alias resolves back to the canonical command
+	// via the plugin manager's alias resolver (which is the same
+	// path admin SQL dispatch uses).
+	ok(mgr.resolve_alias_to_canonical("LOAD MCP VARIABLES TO RUNTIME") ==
+	       "LOAD MCP VARIABLES TO RUNTIME",
+	   "canonical: LOAD MCP VARIABLES TO RUNTIME registered");
+	ok(mgr.resolve_alias_to_canonical("LOAD MCP VARIABLES FROM MEMORY") ==
+	       "LOAD MCP VARIABLES TO RUNTIME",
+	   "alias: LOAD MCP VARIABLES FROM MEMORY -> TO RUNTIME");
+	ok(mgr.resolve_alias_to_canonical("LOAD MCP VARIABLES FROM MEM") ==
+	       "LOAD MCP VARIABLES TO RUNTIME",
+	   "alias: LOAD MCP VARIABLES FROM MEM -> TO RUNTIME");
+	ok(mgr.resolve_alias_to_canonical("LOAD MCP PROFILES TO RUNTIME") ==
+	       "LOAD MCP PROFILES TO RUNTIME",
+	   "canonical: LOAD MCP PROFILES TO RUNTIME registered");
+	ok(mgr.resolve_alias_to_canonical("LOAD MCP PROFILES FROM MEMORY") ==
+	       "LOAD MCP PROFILES TO RUNTIME",
+	   "alias: LOAD MCP PROFILES FROM MEMORY -> TO RUNTIME");
+	ok(mgr.resolve_alias_to_canonical("LOAD MCP PROFILES TO RUN") ==
+	       "LOAD MCP PROFILES TO RUNTIME",
+	   "alias: LOAD MCP PROFILES TO RUN -> TO RUNTIME");
+
+	// Sanity: an unrelated verb does NOT resolve via the plugin.
+	ok(mgr.resolve_alias_to_canonical("SELECT 1").empty(),
+	   "unknown SQL does not resolve via plugin command registry");
 
 	delete g_admindb;
 	delete g_configdb;

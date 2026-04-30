@@ -141,8 +141,18 @@ bool genai_init(ProxySQL_PluginServices* services) {
 	ctx.mcp = new MCP_Threads_Handler();
 	GloMCPH = ctx.mcp;  // legacy alias used by Query_Tool_Handler etc.
 	ctx.mcp->init();
+
+	// Register admin SQL verbs (LOAD / SAVE MCP …).  Defined in
+	// plugin_commands.cpp.  Must happen during init() per the
+	// chassis ABI.
+	genai_register_admin_commands(services);
+
 	return true;
 }
+
+} // namespace  (close anon ns; the `mcp_*` helpers below are
+//               externally visible, declared in genai_plugin.h, and
+//               called from plugin_commands.cpp.)
 
 /**
  * @brief Push admin DB's mcp-* variables into the running
@@ -360,8 +370,6 @@ const ProxySQL_PluginDescriptor genai_descriptor = {
 	&genai_stop,
 	&genai_status_json,
 };
-
-} // namespace
 
 GenAIPluginContext& genai_context() {
 	static GenAIPluginContext ctx {};

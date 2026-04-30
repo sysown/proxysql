@@ -73,6 +73,53 @@ struct GenAIPluginContext {
 GenAIPluginContext& genai_context();
 
 /**
+ * @brief Push admin DB's `mcp-*` global_variables values into the
+ *        running MCP_Threads_Handler.
+ *
+ * Defined in plugin_main.cpp.  Called from `genai_start()` (initial
+ * read at plugin start) and from the `LOAD MCP VARIABLES TO RUNTIME`
+ * admin command (in plugin_commands.cpp) — both go through this one
+ * helper to keep behavior consistent.
+ *
+ * @return true on success; false if admindb is unavailable or the
+ *         lookup query errored out.
+ */
+bool mcp_load_variables_from_admindb(GenAIPluginContext& ctx);
+
+/**
+ * @brief Refresh the runtime mcp_auth_profiles / mcp_target_profiles
+ *        tables from `main.*`, then rebuild the MCP target_auth_map.
+ *
+ * Defined in plugin_main.cpp.  Called from `genai_start()` and the
+ * `LOAD MCP PROFILES TO RUNTIME` admin command.
+ */
+bool mcp_load_target_auth_map_from_admindb(GenAIPluginContext& ctx);
+
+/**
+ * @brief Bring the MCP listener (`ProxySQL_MCP_Server`) up if
+ *        `ctx.mcp->variables.mcp_enabled` is true and no listener is
+ *        currently running.
+ *
+ * Defined in plugin_main.cpp.  Called from `genai_start()` and from
+ * the `LOAD MCP VARIABLES TO RUNTIME` admin command (after a
+ * variable change might have flipped mcp_enabled to true).
+ */
+void mcp_start_listener_if_enabled(GenAIPluginContext& ctx);
+
+/**
+ * @brief Register the plugin's admin SQL verbs (LOAD/SAVE MCP …)
+ *        with the chassis command registry.
+ *
+ * Defined in plugin_commands.cpp.  Called from `genai_init()`.
+ *
+ * @param services  The same pointer `genai_init` received.  Must
+ *                  expose `register_command` (and ideally
+ *                  `register_command_alias`) — both are valid during
+ *                  init() per the chassis ABI.
+ */
+void genai_register_admin_commands(ProxySQL_PluginServices* services);
+
+/**
  * @brief Query-hook adapter: ABI callback that runs the anomaly detector.
  *
  * Defined in plugin_hooks.cpp.  Registered with the plugin manager
