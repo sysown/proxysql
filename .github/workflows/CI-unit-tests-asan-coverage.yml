@@ -87,13 +87,19 @@ jobs:
     - name: Install build dependencies
       # Mirrors the Ubuntu list in INSTALL.md. libmysqlclient-dev is
       # needed by some internal build-time helpers used by the vendored
-      # deps.
+      # deps. libprotobuf-dev is required for the mysqlx plugin: with
+      # PROXYSQLGENAI=1 the top-level Makefile recurses into
+      # plugins/mysqlx (PROXYSQL40 is implied), and that Makefile's
+      # protobuf 3.x ABI guard fires at parse time without it. The
+      # docker-compose entrypoints (deb/rhel/suse-compliant) install
+      # this on demand for container-based builds; this workflow runs
+      # directly on the runner host so it has to be installed here.
       run: |
         sudo apt-get -y install \
           libssl-dev libgnutls28-dev libmysqlclient-dev \
           libboost-all-dev libunwind8 libunwind-dev uuid-dev \
           libncurses-dev libicu-dev libevent-dev libtirpc-dev \
-          ca-certificates
+          ca-certificates libprotobuf-dev
 
     - name: Install coverage tooling
       run: |
