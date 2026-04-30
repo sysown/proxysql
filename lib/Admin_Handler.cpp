@@ -1164,9 +1164,17 @@ bool is_valid_global_variable(const char *var_name) {
 		return true;
 #endif /* PROXYSQLCLICKHOUSE */
 #ifdef PROXYSQLGENAI
-	// FIXME(4.F): mcp-* variables routed via plugin command registry.
-	// Until 4.F lands, "SET mcp-port=..." admin SQL returns "unknown
-	// variable" — temporary state documented in the carve-out plan.
+	// `mcp-*` variables now live in the genai plugin (Step 4.C);
+	// core no longer holds an authoritative list.  Accept any
+	// `mcp-<name>` token as a valid global variable here so the
+	// SET / UPDATE admin path can reach `main.global_variables`;
+	// the plugin's `LOAD MCP VARIABLES TO RUNTIME` is what actually
+	// validates each name when pushing into MCP_Threads_Handler.
+	// Trade-off: a typo (e.g. `SET mcp-prot=9090`) writes the row
+	// silently and goes ignored at runtime.  Acceptable until a
+	// chassis-side `register_variable_namespace` ABI exists.
+	} else if (strlen(var_name) > 4 && !strncmp(var_name, "mcp-", 4)) {
+		return true;
 	} else if (strlen(var_name) > 6 && !strncmp(var_name, "genai-", 6) && GloGATH && GloGATH->has_variable(var_name + 6)) {
 		return true;
 #endif /* PROXYSQLGENAI */
