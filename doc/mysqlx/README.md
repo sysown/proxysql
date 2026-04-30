@@ -104,9 +104,17 @@ Define X Protocol user accounts and authentication settings.
 | attributes | VARCHAR | `''` | JSON attributes for future extensions |
 | comment | VARCHAR | `''` | User comment |
 
-### 4.2. `runtime_mysqlx_users` (Runtime Table)
+### 4.2. `runtime_mysqlx_users` (Runtime View)
 
-Mirror of `mysqlx_users` loaded into runtime memory. Populated by `LOAD MYSQLX USERS TO RUNTIME`.
+A read-only **view** of the in-memory user state held by `MysqlxConfigStore`. It is **not** a persistent mirror of `mysqlx_users` — the table holds no rows of its own.
+
+Whenever an admin client runs a `SELECT` that references `runtime_mysqlx_users`, the chassis (`proxysql_refresh_configured_plugin_runtime_views` in `lib/ProxySQL_PluginManager.cpp`) invokes the mysqlx plugin's refresh callback before the query executes. The callback wipes the table and re-projects the current store contents (`DELETE FROM runtime_mysqlx_users; INSERT INTO runtime_mysqlx_users <store dump>`). This matches how core's `runtime_mysql_users` is projected from `GloMyAuth`.
+
+Notes for operators:
+
+* `LOAD MYSQLX USERS TO RUNTIME` does **not** write to this table. It reads `mysqlx_users` (plus `runtime_mysql_users` for canonical identity) and pushes the rows directly into the in-memory store.
+* `SAVE MYSQLX USERS FROM RUNTIME TO MEMORY` does **not** read this table. It dumps the in-memory store directly into `mysqlx_users`.
+* The schema mirrors `mysqlx_users` so the view is convenient to inspect, but treat it as a debugging snapshot, not as truth: the store is truth.
 
 ### 4.3. `mysqlx_routes` (Configuration Table)
 
@@ -123,9 +131,9 @@ Define X Protocol listener routes.
 | attributes | VARCHAR | `''` | JSON attributes for future extensions |
 | comment | VARCHAR | `''` | Route comment |
 
-### 4.4. `runtime_mysqlx_routes` (Runtime Table)
+### 4.4. `runtime_mysqlx_routes` (Runtime View)
 
-Mirror of `mysqlx_routes`. Populated by `LOAD MYSQLX ROUTES TO RUNTIME`.
+A read-only view of the route map held by `MysqlxConfigStore`, projected on demand. Same mechanism as [`runtime_mysqlx_users`](#42-runtime_mysqlx_users-runtime-view): the table is wiped and refilled by a chassis-registered refresh callback before any `SELECT`. `LOAD MYSQLX ROUTES TO RUNTIME` writes the in-memory store from `mysqlx_routes` directly and never touches this view; `SAVE MYSQLX ROUTES FROM RUNTIME TO MEMORY` reads the store and writes `mysqlx_routes` directly.
 
 ### 4.5. `mysqlx_backend_endpoints` (Configuration Table)
 
@@ -140,11 +148,17 @@ Maps backend servers to their X Protocol ports.
 | attributes | VARCHAR | `''` | JSON attributes |
 | comment | VARCHAR | `''` | Endpoint comment |
 
-### 4.6. `runtime_mysqlx_backend_endpoints` (Runtime Table)
+### 4.6. `runtime_mysqlx_backend_endpoints` (Runtime View)
 
-Mirror of `mysqlx_backend_endpoints`. Populated by `LOAD MYSQLX BACKEND ENDPOINTS TO RUNTIME`.
+A read-only view of the per-host X-Protocol port overrides held by `MysqlxConfigStore`, projected on demand. Same mechanism as [`runtime_mysqlx_users`](#42-runtime_mysqlx_users-runtime-view): refilled by a chassis-registered refresh callback before any `SELECT`, never written by LOAD, never read by SAVE.
 
-### 4.7. `stats_mysqlx_routes` (Statistics Table)
+### 4.7. `runtime_mysqlx_variables` (Runtime View)
+
+A read-only view of the four mysqlx tunables held by `MysqlxConfigStore` (`mysqlx_thread_pool_size`, `mysqlx_connect_timeout`, `mysqlx_tls_mode`, `mysqlx_max_cached_connections_per_thread`). Same mechanism as [`runtime_mysqlx_users`](#42-runtime_mysqlx_users-runtime-view): refilled by a chassis-registered refresh callback before any `SELECT`, never written by LOAD, never read by SAVE.
+
+`LOAD MYSQLX VARIABLES TO RUNTIME` reads `mysqlx_variables` directly into the store; `SAVE MYSQLX VARIABLES FROM RUNTIME TO MEMORY` writes the store's four scalars back into `mysqlx_variables` (replacing the entire table). Operator-added rows in `mysqlx_variables` whose `variable_name` is not one of the four canonical names are not retained on SAVE — only the four known tunables round-trip.
+
+### 4.8. `stats_mysqlx_routes` (Statistics Table)
 
 Per-route connection statistics.
 
@@ -158,7 +172,7 @@ Per-route connection statistics.
 | Bytes_data_sent | INT | Bytes sent to backend |
 | Bytes_data_recv | INT | Bytes received from backend |
 
-### 4.8. `stats_mysqlx_processlist` (Statistics Table)
+### 4.9. `stats_mysqlx_processlist` (Statistics Table)
 
 Current active sessions.
 
@@ -233,12 +247,14 @@ Persists the in-memory configuration tables to the on-disk SQLite database, surv
 
 ### 6.3. Dual-Mode Identity Resolution
 
-The plugin uses a two-stage identity resolution:
+Identity resolution is performed entirely in process memory by `MysqlxConfigStore::resolve_identity(username)`, which reads from the in-memory `identities_` map. That map is built by `install_users_from_admin` at startup (and on every `LOAD MYSQLX USERS TO RUNTIME`) by joining two sources:
 
-1. **Canonical lookup**: Find the user in `runtime_mysql_users` (must have `frontend=1` and `active=1`).
-2. **X Protocol overlay**: If the user exists in `runtime_mysqlx_users`, merge the overlay settings (`allowed_auth_methods`, `backend_auth_mode`, `default_route`, etc.).
+1. **Canonical lookup** — `SELECT` against `runtime_mysql_users` (must have `frontend=1` and `active=1`). This is core's projection of `GloMyAuth`, owned by the MySQL_Authentication module; the mysqlx plugin consumes it read-only.
+2. **X Protocol overlay** — `SELECT` against the editable `mysqlx_users WHERE active=1`. If a row exists for the username, its X-side settings (`allowed_auth_methods`, `backend_auth_mode`, `default_route`, etc.) overlay the canonical row.
 
-If a user exists in `mysql_users` but not `mysqlx_users`, they can still connect with default X Protocol settings (all auth methods, mapped backend auth).
+The merged result is cached in `MysqlxConfigStore`. Authentication never re-reads either SQLite table — it consults the store's `identities_` map under a shared lock. (`runtime_mysqlx_users` is the projected view, not the source of truth, so identity resolution does not look at it.)
+
+A user must exist in **both** `mysql_users` (for canonical identity — password, default_hostgroup, max_connections) **and** `mysqlx_users` with `active=1` (to opt into X Protocol with whatever overlay the operator configured). `install_users_from_admin` explicitly drops any canonical-only user from the store, since a row with no `mysqlx_users` overlay has no `x_enabled` flag and would never authenticate via X anyway. To enable X Protocol for an existing mysql user, insert the corresponding `mysqlx_users` row, then run `LOAD MYSQLX USERS TO RUNTIME`.
 
 ### 6.4. Backend Authentication Modes
 
