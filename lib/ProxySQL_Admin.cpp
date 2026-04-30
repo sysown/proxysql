@@ -21,8 +21,11 @@ using json = nlohmann::json;
 #include "ProxySQL_PluginManager.h"
 #include "mysql.h"
 #include "proxysql_admin.h"
-#include "Discovery_Schema.h"
+// Discovery_Schema.h moved to plugins/genai/include/ in Step 6.
 // Query_Tool_Handler.h moved to plugins/genai/include/ in Step 4.C.
+// Discovery_Schema.h moved in Step 6 (the only remaining live core
+// reference was via the now-#if 0'd save/load_mcp_query_rules
+// blocks).
 #include "re2/re2.h"
 #include "re2/regexp.h"
 #include "proxysql.h"

@@ -73,12 +73,10 @@
 #include "proxysql_sslkeylog.h"
 #include "jemalloc.h"
 
-#ifdef PROXYSQLGENAI
-// AI Features includes.  Anomaly_Detector.h moved to plugins/genai/
-// in Step 3.  AI_Features_Manager.h, LLM_Bridge.h moved in Step 5.
-// AI_Vector_Storage.h stays in core for Step 6.
-#include "AI_Vector_Storage.h"
-#endif /* PROXYSQLGENAI */
+// AI Features includes — all moved to plugins/genai/include/.
+//   Step 3: Anomaly_Detector.h
+//   Step 5: AI_Features_Manager.h, LLM_Bridge.h, …
+//   Step 6: AI_Vector_Storage.h, etc.
 
 #ifndef NOJEM
 #if defined(__APPLE__) && defined(__MACH__)

@@ -183,13 +183,11 @@ ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c ClickHouse_Server),0)
 	PSQLCH := -DPROXYSQLCLICKHOUSE
 endif
 PSQLGA :=
-# Probe for a still-in-core GenAI symbol.  Step 5 moved GenAI_Thread,
-# LLM_Bridge etc. out of libproxysql.a into the plugin .so, so we can't
-# probe those any more.  AI_Vector_Storage stays in core for Step 6 and
-# is a stable marker until then.  After Step 6 the probe will switch
-# again (to whatever stays as the last GenAI-tier core symbol), and
-# after Step 7 the auto-detect goes away entirely.
-ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c AI_Vector_Storage),0)
+# Probe for the last still-in-core PROXYSQLGENAI symbol.  After Step 6
+# only MCP_Tool_Handler (the base class AI/RAG handlers in the plugin
+# inherit from) lives in libproxysql.a under the GenAI tier.  Step 7
+# deletes the macro entirely and this autodetect goes away.
+ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c MCP_Tool_Handler),0)
 	PROXYSQLGENAI := 1
 	PSQLGA := -DPROXYSQLGENAI
 endif

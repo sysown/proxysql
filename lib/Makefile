@@ -140,10 +140,12 @@ endif
 # AI_Features_Manager, AI_Tool_Handler.  RAG/Vector/Discovery surface
 # is the last bucket — it stays in core until Step 6.
 ifeq ($(PROXYSQLGENAI),1)
-_OBJ_CXX += MCP_Tool_Handler.oo \
-	MySQL_Catalog.oo \
-	AI_Vector_Storage.oo \
-	Discovery_Schema.oo Static_Harvester.oo PgSQL_Static_Harvester.oo
+# Step 6 of the GenAI plugin carve-out moved AI_Vector_Storage,
+# MySQL_Catalog, Discovery_Schema, and the Static_Harvester pair
+# into plugins/genai/.  The only object that lives in core under
+# PROXYSQLGENAI is MCP_Tool_Handler — the base class AI/RAG handlers
+# inherit from.  Step 7 will delete the macro entirely.
+_OBJ_CXX += MCP_Tool_Handler.oo
 endif
 
 OBJ_CXX := $(patsubst %,$(ODIR)/%,$(_OBJ_CXX))

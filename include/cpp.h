@@ -30,22 +30,17 @@
 #include "ClickHouse_Server.h"
 #endif /* PROXYSQLCLICKHOUSE */
 
-#ifdef PROXYSQLGENAI
-#include "AI_Vector_Storage.h"
-// Anomaly_Detector.h moved to plugins/genai/ in Step 3.
-//
-// Step 4.C moved MCP-related headers (Admin/Cache/Config/Observe/Stats/
-// MCP_Tool/MySQL/Query tool handlers, MCP_Endpoint, MCP_Thread,
-// ProxySQL_MCP_Server) into the plugin.  MySQL_FTS.h moved with them.
-//
-// Step 5 moved the GenAI/LLM/AI surface: GenAI_Thread, LLM_Bridge,
-// LLM_Clients, AI_Features_Manager, AI_Tool_Handler, RAG_Tool_Handler.
-// Their includes are removed from this aggregate header.
-#include "Discovery_Schema.h"
-#include "MySQL_Catalog.h"
-#include "PgSQL_Static_Harvester.h"
-#include "Static_Harvester.h"
-#endif /* PROXYSQLGENAI */
+// All GenAI-tier headers have moved to plugins/genai/include/ over
+// the carve-out:
+//   Step 3: Anomaly_Detector.h
+//   Step 4.C: Admin/Cache/Config/Observe/Stats/MCP_Tool/MySQL/Query
+//             tool handlers, MCP_Endpoint, MCP_Thread,
+//             ProxySQL_MCP_Server, MySQL_FTS
+//   Step 5:   GenAI_Thread, LLM_Bridge, LLM_Clients,
+//             AI_Features_Manager, AI_Tool_Handler, RAG_Tool_Handler
+//   Step 6:   AI_Vector_Storage, MySQL_Catalog, Discovery_Schema,
+//             Static_Harvester, PgSQL_Static_Harvester
+// Step 7 deletes the PROXYSQLGENAI macro (and this comment block).
 
 #include "MySQL_HostGroups_Manager.h"
 #include "PgSQL_HostGroups_Manager.h"

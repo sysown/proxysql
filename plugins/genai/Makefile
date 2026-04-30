@@ -73,16 +73,21 @@ SRCS := $(PLUGIN_DIR)/src/plugin_main.cpp \
 	$(PLUGIN_DIR)/src/plugin_tables.cpp \
 	$(PLUGIN_DIR)/src/AI_Features_Manager.cpp \
 	$(PLUGIN_DIR)/src/AI_Tool_Handler.cpp \
+	$(PLUGIN_DIR)/src/AI_Vector_Storage.cpp \
 	$(PLUGIN_DIR)/src/Anomaly_Detector.cpp \
 	$(PLUGIN_DIR)/src/backend_client.cpp \
+	$(PLUGIN_DIR)/src/Discovery_Schema.cpp \
 	$(PLUGIN_DIR)/src/GenAI_Thread.cpp \
 	$(PLUGIN_DIR)/src/LLM_Bridge.cpp \
 	$(PLUGIN_DIR)/src/LLM_Clients.cpp \
 	$(PLUGIN_DIR)/src/local_proxy_endpoint.cpp \
 	$(PLUGIN_DIR)/src/MCP_Endpoint.cpp \
 	$(PLUGIN_DIR)/src/MCP_Thread.cpp \
+	$(PLUGIN_DIR)/src/MySQL_Catalog.cpp \
 	$(PLUGIN_DIR)/src/MySQL_FTS.cpp \
+	$(PLUGIN_DIR)/src/PgSQL_Static_Harvester.cpp \
 	$(PLUGIN_DIR)/src/ProxySQL_MCP_Server.cpp \
+	$(PLUGIN_DIR)/src/Static_Harvester.cpp \
 	$(PLUGIN_DIR)/src/tool_handlers/Admin_Tool_Handler.cpp \
 	$(PLUGIN_DIR)/src/tool_handlers/Cache_Tool_Handler.cpp \
 	$(PLUGIN_DIR)/src/tool_handlers/Config_Tool_Handler.cpp \
