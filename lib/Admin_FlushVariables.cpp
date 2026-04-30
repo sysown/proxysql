@@ -25,8 +25,9 @@ using json = nlohmann::json;
 #include "proxysql.h"
 #include "proxysql_config.h"
 #include "proxysql_restapi.h"
-#include "MCP_Thread.h"
-#include "ProxySQL_MCP_Server.hpp"
+// MCP_Thread.h / ProxySQL_MCP_Server.hpp moved to the genai plugin in
+// Step 4.C.  flush_mcp_variables___*() are stubbed below until 4.F
+// re-routes them through the plugin command registry.
 #include "proxysql_utils.h"
 #include "prometheus_helpers.h"
 #include "cpp.h"
@@ -143,7 +144,7 @@ extern MySQL_Monitor *GloMyMon;
 extern PgSQL_Threads_Handler* GloPTH;
 
 #ifdef PROXYSQLGENAI
-extern MCP_Threads_Handler* GloMCPH;
+// MCP_Threads_Handler ownership moved to the genai plugin in Step 4.C.
 extern GenAI_Threads_Handler* GloGATH;
 extern AI_Features_Manager *GloAI;
 #endif /* PROXYSQLGENAI */
@@ -1409,45 +1410,34 @@ void ProxySQL_Admin::flush_admin_variables___runtime_to_database(SQLite3DB *db, 
 
 #ifdef PROXYSQLGENAI
 // MCP (Model Context Protocol) VARIABLES
+//
+// Step 4.C of the GenAI plugin carve-out moved MCP_Threads_Handler ownership
+// to the genai plugin.  Both flush_mcp_variables___* functions are stubbed
+// to no-ops here; Step 4.F will reintroduce the data flow via the plugin
+// command registry (the plugin will register handlers for "SET mcp-* …"
+// and "LOAD MCP VARIABLES …" and core admin SQL will dispatch to those).
+//
+// Effect during the 4.C → 4.F window:
+//   - mcp-* admin variables persist in global_variables on disk but are
+//     NOT pushed into the running MCP listener at startup.
+//   - "LOAD MCP VARIABLES TO RUNTIME" / "FROM DISK" are no-ops.
+//   - The MCP listener uses its compiled-in defaults.
+// Acceptable temporary state — documented in the carve-out plan.
 void ProxySQL_Admin::flush_mcp_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum, const time_t epoch, bool lock) {
-	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MCP variables. Replace:%d\n", replace);
-	if (GloMCPH == NULL) {
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, "MCP handler not initialized, skipping MCP variables\n");
-		return;
-	}
-	char* error = NULL;
-	int cols = 0;
-	int affected_rows = 0;
-	SQLite3_result* resultset = NULL;
-	char* q = (char*)"SELECT variable_name, variable_value FROM global_variables WHERE variable_name LIKE 'mcp-%'";
-	db->execute_statement(q, &error, &cols, &affected_rows, &resultset);
-	if (error) {
-		proxy_error("Error on %s : %s\n", q, error);
-		return;
-	}
-	if (resultset) {
-		if (lock) wrlock();
-		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
-			SQLite3_row* r = *it;
-			char* name = r->fields[0];
-			char* val = r->fields[1];
-			// Skip the 'mcp-' prefix
-			char* var_name = name + 4;
-			GloMCPH->set_variable(var_name, val);
-		}
-
-		// Update runtime_global_variables table to reflect current runtime state
-		flush_mcp_variables___runtime_to_database(admindb, false, false, false, true, false);
-
-		// Manage MCP server state
-		load_mcp_server();
-
-		if (lock) wrunlock();
-		delete resultset;
-	}
+	(void)db; (void)replace; (void)checksum; (void)epoch; (void)lock;
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "flush_mcp_variables___database_to_runtime: stubbed (Step 4.C); awaiting 4.F\n");
 }
 
 void ProxySQL_Admin::flush_mcp_variables___runtime_to_database(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime, bool use_lock) {
+	(void)db; (void)replace; (void)del; (void)onlyifempty; (void)runtime; (void)use_lock;
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "flush_mcp_variables___runtime_to_database: stubbed (Step 4.C); awaiting 4.F\n");
+}
+
+#if 0  // Original implementation preserved below for 4.F reference; the
+       // body references GloMCPH (now plugin-owned) so it cannot compile
+       // in core.  Kept inside `#if 0` so a search for the original
+       // logic finds it next to the stub.
+void ProxySQL_Admin::flush_mcp_variables___runtime_to_database_ORIGINAL(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime, bool use_lock) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MCP variables. Replace:%d, Delete:%d, Only_If_Empty:%d, Runtime:%d\n", replace, del, onlyifempty, runtime);
 	if (GloMCPH == NULL) {
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "MCP handler not initialized, skipping MCP variables\n");
@@ -1544,4 +1534,5 @@ void ProxySQL_Admin::flush_mcp_variables___runtime_to_database(SQLite3DB* db, bo
 	}
 	free(varnames);
 }
+#endif // 0 — original flush_mcp_variables___runtime_to_database body for 4.F reference
 #endif /* PROXYSQLGENAI */

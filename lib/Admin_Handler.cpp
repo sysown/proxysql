@@ -45,7 +45,7 @@ using json = nlohmann::json;
 #endif /* PROXYSQL40 */
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
-#include "MCP_Thread.h"
+// MCP_Thread.h moved to plugins/genai/include/ in Step 4.C.
 #include "GenAI_Thread.h"
 #include "SQLite3_Server.h"
 #include "Web_Interface.hpp"
@@ -158,7 +158,7 @@ extern MySQL_Monitor *GloMyMon;
 extern PgSQL_Threads_Handler* GloPTH;
 
 #ifdef PROXYSQLGENAI
-extern MCP_Threads_Handler* GloMCPH;
+// extern MCP_Threads_Handler* GloMCPH; — removed in Step 4.C.
 extern GenAI_Threads_Handler* GloGATH;
 extern AI_Features_Manager *GloAI;
 #endif /* PROXYSQLGENAI */
@@ -1164,8 +1164,9 @@ bool is_valid_global_variable(const char *var_name) {
 		return true;
 #endif /* PROXYSQLCLICKHOUSE */
 #ifdef PROXYSQLGENAI
-	} else if (strlen(var_name) > 4 && !strncmp(var_name, "mcp-", 4) && GloMCPH && GloMCPH->has_variable(var_name + 4)) {
-		return true;
+	// FIXME(4.F): mcp-* variables routed via plugin command registry.
+	// Until 4.F lands, "SET mcp-port=..." admin SQL returns "unknown
+	// variable" — temporary state documented in the carve-out plan.
 	} else if (strlen(var_name) > 6 && !strncmp(var_name, "genai-", 6) && GloGATH && GloGATH->has_variable(var_name + 6)) {
 		return true;
 #endif /* PROXYSQLGENAI */
@@ -2668,9 +2669,13 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				}
 				return false;
 			}
-			if (GloMCPH) {
-				GloMCPH->load_target_auth_map(resultset);
-			} else if (resultset) {
+			// FIXME(4.F): GloMCPH->load_target_auth_map(resultset)
+			// removed in Step 4.C.  4.F will route this via the plugin
+			// command registry.  Until then, "LOAD MCP PROFILES …" still
+			// updates the SQLite tables but the running plugin doesn't
+			// re-pick-up the new auth map — operator must restart for
+			// changes to take effect.  Documented in the carve-out plan.
+			if (resultset) {
 				delete resultset;
 			}
 			return true;

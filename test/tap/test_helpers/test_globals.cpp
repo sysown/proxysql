@@ -49,7 +49,9 @@ using json = nlohmann::json;
 #include "PgSQL_Logger.hpp"
 
 #ifdef PROXYSQLGENAI
-#include "MCP_Thread.h"
+// MCP_Thread.h moved to plugins/genai/include/ in Step 4.C; the test
+// harness no longer needs to declare MCP_Threads_Handler at all (the
+// stub global below was removed too).
 #include "GenAI_Thread.h"
 #include "AI_Features_Manager.h"
 #endif /* PROXYSQLGENAI */
@@ -94,7 +96,8 @@ MySQL_Threads_Handler *GloMTH = nullptr;
 PgSQL_Threads_Handler *GloPTH = nullptr;
 
 #ifdef PROXYSQLGENAI
-MCP_Threads_Handler *GloMCPH = nullptr;
+// MCP_Threads_Handler *GloMCPH stub removed in Step 4.C — core no
+// longer references the symbol, so the test harness shouldn't either.
 GenAI_Threads_Handler *GloGATH = nullptr;
 AI_Features_Manager *GloAI = nullptr;
 #endif /* PROXYSQLGENAI */

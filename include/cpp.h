@@ -31,26 +31,22 @@
 #endif /* PROXYSQLCLICKHOUSE */
 
 #ifdef PROXYSQLGENAI
-#include "MCP_Tool_Handler.h"
 #include "AI_Features_Manager.h"
 #include "AI_Tool_Handler.h"
 #include "AI_Vector_Storage.h"
-#include "Admin_Tool_Handler.h"
 // Anomaly_Detector.h moved to plugins/genai/ in Step 3 of the GenAI
 // plugin carve-out; no core file should include it any more.
-#include "Cache_Tool_Handler.h"
-#include "Config_Tool_Handler.h"
+//
+// Step 4.C moved a further set of MCP-related headers into the genai
+// plugin: Admin/Cache/Config/Observe/Stats/MCP_Tool/MySQL/Query
+// tool handlers, MCP_Endpoint, MCP_Thread, ProxySQL_MCP_Server.
+// Their includes were removed from this aggregate header.
 #include "Discovery_Schema.h"
 #include "GenAI_Thread.h"
 #include "LLM_Bridge.h"
-#include "MCP_Endpoint.h"
-#include "MCP_Thread.h"
 #include "MySQL_Catalog.h"
-#include "MySQL_FTS.h"
-#include "MySQL_Tool_Handler.h"
-#include "Stats_Tool_Handler.h"
-#include "ProxySQL_MCP_Server.hpp"
-#include "Query_Tool_Handler.h"
+// MySQL_FTS.h moved to plugins/genai/ in Step 4.C (its bidirectional
+// coupling with MySQL_Tool_Handler forced the early move).
 #include "RAG_Tool_Handler.h"
 #include "PgSQL_Static_Harvester.h"
 #include "Static_Harvester.h"

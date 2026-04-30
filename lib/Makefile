@@ -134,12 +134,14 @@ _OBJ_CXX += MySQLFFTO.oo PgSQLFFTO.oo
 endif
 
 # GenAI object files (conditionally included)
+# Step 4.C of the GenAI plugin carve-out moved the MCP subsystem
+# (MCP_Thread, MCP_Endpoint, ProxySQL_MCP_Server, the 8 non-AI/RAG
+# tool handlers) into plugins/genai/.  AI/RAG/discovery surface stays
+# in core for Steps 5/6.
 ifeq ($(PROXYSQLGENAI),1)
 _OBJ_CXX += GenAI_Thread.oo \
-	MCP_Thread.oo ProxySQL_MCP_Server.oo MCP_Endpoint.oo MCP_Tool_Handler.oo \
-	MySQL_Catalog.oo MySQL_Tool_Handler.oo MySQL_FTS.oo \
-	Config_Tool_Handler.oo Query_Tool_Handler.oo \
-	Admin_Tool_Handler.oo Cache_Tool_Handler.oo Stats_Tool_Handler.oo \
+	MCP_Tool_Handler.oo \
+	MySQL_Catalog.oo \
 	AI_Features_Manager.oo LLM_Bridge.oo LLM_Clients.oo AI_Vector_Storage.oo AI_Tool_Handler.oo \
 	RAG_Tool_Handler.oo \
 	Discovery_Schema.oo Static_Harvester.oo PgSQL_Static_Harvester.oo

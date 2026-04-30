@@ -71,15 +71,28 @@ SRCS := $(PLUGIN_DIR)/src/plugin_main.cpp \
 	$(PLUGIN_DIR)/src/plugin_hooks.cpp \
 	$(PLUGIN_DIR)/src/Anomaly_Detector.cpp \
 	$(PLUGIN_DIR)/src/backend_client.cpp \
-	$(PLUGIN_DIR)/src/local_proxy_endpoint.cpp
+	$(PLUGIN_DIR)/src/local_proxy_endpoint.cpp \
+	$(PLUGIN_DIR)/src/MCP_Endpoint.cpp \
+	$(PLUGIN_DIR)/src/MCP_Thread.cpp \
+	$(PLUGIN_DIR)/src/MySQL_FTS.cpp \
+	$(PLUGIN_DIR)/src/ProxySQL_MCP_Server.cpp \
+	$(PLUGIN_DIR)/src/tool_handlers/Admin_Tool_Handler.cpp \
+	$(PLUGIN_DIR)/src/tool_handlers/Cache_Tool_Handler.cpp \
+	$(PLUGIN_DIR)/src/tool_handlers/Config_Tool_Handler.cpp \
+	$(PLUGIN_DIR)/src/tool_handlers/MySQL_Tool_Handler.cpp \
+	$(PLUGIN_DIR)/src/tool_handlers/Observe_Tool_Handler.cpp \
+	$(PLUGIN_DIR)/src/tool_handlers/Query_Tool_Handler.cpp \
+	$(PLUGIN_DIR)/src/tool_handlers/Stats_Tool_Handler.cpp
 HEADERS := $(wildcard $(PLUGIN_DIR)/include/*.h) \
 	$(PROXYSQL_PATH)/include/ProxySQL_Plugin.h
 OBJS := $(patsubst $(PLUGIN_DIR)/src/%.cpp,$(ODIR)/%.o,$(SRCS))
 
 $(ODIR):
 	mkdir -p $(ODIR)
+	mkdir -p $(ODIR)/tool_handlers
 
 $(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) | $(ODIR)
+	@mkdir -p $(dir $@)
 	$(CXX) -c -o $@ $< $(CXXFLAGS) $(IDIRS)
 
 $(PLUGIN_SO): $(OBJS)

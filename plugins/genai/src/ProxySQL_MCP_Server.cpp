@@ -14,6 +14,16 @@ using json = nlohmann::json;
 #include "Admin_Tool_Handler.h"
 #include "Cache_Tool_Handler.h"
 #include "Stats_Tool_Handler.h"
+// AI_Tool_Handler / RAG_Tool_Handler stay in core for Steps 5 / 6.
+// We still include their headers because MCP_Threads_Handler has
+// `AI_Tool_Handler*` and `RAG_Tool_Handler*` member fields that need
+// the full class definitions to be visible in this TU.  Their
+// *constructions* below are wrapped in `#if 0` so the plugin .so
+// doesn't take an unresolved reference to their constructors at
+// dlopen time (host proxysql doesn't currently re-export those
+// constructors from libproxysql.a since nothing in core calls them
+// after the carve-out move).  Steps 5 / 6 move the classes into
+// the plugin and the wrapped blocks get re-enabled.
 #include "AI_Tool_Handler.h"
 #include "RAG_Tool_Handler.h"
 #include "AI_Features_Manager.h"
@@ -137,26 +147,11 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 		handler->stats_tool_handler = NULL;
 	}
 
-	// 6. AI Tool Handler (for LLM and other AI features).  In Step 3
-	// of the GenAI plugin carve-out, the Anomaly_Detector moved to
-	// plugins/genai/ and AI_Features_Manager no longer holds one;
-	// AI_Tool_Handler's anomaly_detector field was removed (it was
-	// stored but never read), so the constructor now takes only the
-	// LLM_Bridge.
-	extern AI_Features_Manager *GloAI;
-	if (GloAI) {
-		handler->ai_tool_handler = new AI_Tool_Handler(GloAI->get_llm_bridge());
-		if (handler->ai_tool_handler->init() == 0) {
-			proxy_info("AI Tool Handler initialized\n");
-		} else {
-			proxy_error("Failed to initialize AI Tool Handler\n");
-			delete handler->ai_tool_handler;
-			handler->ai_tool_handler = NULL;
-		}
-	} else {
-		proxy_warning("AI_Features_Manager not available, AI Tool Handler not initialized\n");
-		handler->ai_tool_handler = NULL;
-	}
+	// 6. AI Tool Handler — disabled during the 4.C → 5 window.
+	// AI_Tool_Handler still lives in lib/, and the plugin .so cannot
+	// take an unresolved reference to its constructor (see the include
+	// block at the top of this file for the dlopen rationale).
+	handler->ai_tool_handler = nullptr;
 
 	// Register MCP endpoints
 	// Each endpoint gets its own dedicated tool handler
@@ -178,34 +173,13 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 	register_endpoint("/mcp/admin", handler->admin_tool_handler, "admin");
 	register_endpoint("/mcp/cache", handler->cache_tool_handler, "cache");
 
-	// 6. AI endpoint (for LLM and other AI features)
-	if (handler->ai_tool_handler) {
-		std::unique_ptr<httpserver::http_resource> ai_resource =
-			std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, handler->ai_tool_handler, "ai"));
-		ws->register_resource("/mcp/ai", ai_resource.get(), true);
-		_endpoints.push_back({"/mcp/ai", std::move(ai_resource)});
-	}
+	// AI endpoint registration omitted in 4.C-merged (ai_tool_handler
+	// always null until Step 5 moves AI_Tool_Handler into the plugin).
 
-	// 7. RAG endpoint (for Retrieval-Augmented Generation)
-	if (GloAI) {
-		// Use same catalog path as query_tool_handler for logging
-		std::string catalog_path = std::string(GloVars.datadir) + "/mcp_catalog.db";
-		handler->rag_tool_handler = new RAG_Tool_Handler(GloAI, catalog_path);
-		if (handler->rag_tool_handler->init() == 0) {
-			std::unique_ptr<httpserver::http_resource> rag_resource =
-				std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, handler->rag_tool_handler, "rag"));
-			ws->register_resource("/mcp/rag", rag_resource.get(), true);
-			_endpoints.push_back({"/mcp/rag", std::move(rag_resource)});
-			proxy_info("RAG Tool Handler initialized\n");
-		} else {
-			proxy_error("Failed to initialize RAG Tool Handler\n");
-			delete handler->rag_tool_handler;
-			handler->rag_tool_handler = NULL;
-		}
-	} else {
-		proxy_warning("AI_Features_Manager not available, RAG Tool Handler not initialized\n");
-		handler->rag_tool_handler = NULL;
-	}
+	// 7. RAG endpoint — disabled during the 4.C → 6 window for the
+	// same reason as AI above.  Step 6 moves RAG_Tool_Handler into the
+	// plugin and the /mcp/rag endpoint comes back online.
+	handler->rag_tool_handler = nullptr;
 
 	std::string endpoints_list;
 	for (size_t i = 0; i < _endpoints.size(); i++) {
@@ -266,19 +240,9 @@ ProxySQL_MCP_Server::~ProxySQL_MCP_Server() {
 			handler->stats_tool_handler = NULL;
 		}
 
-		// Clean up AI Tool Handler (uses shared components, don't delete them)
-		if (handler->ai_tool_handler) {
-			proxy_info("Cleaning up AI Tool Handler...\n");
-			delete handler->ai_tool_handler;
-			handler->ai_tool_handler = NULL;
-		}
-
-		// Clean up RAG Tool Handler
-		if (handler->rag_tool_handler) {
-			proxy_info("Cleaning up RAG Tool Handler...\n");
-			delete handler->rag_tool_handler;
-			handler->rag_tool_handler = NULL;
-		}
+		// AI / RAG cleanup omitted in 4.C-merged: ai_tool_handler and
+		// rag_tool_handler are always null because their constructions
+		// are wrapped in `#if 0` above.  Re-enabled in Steps 5 / 6.
 	}
 }
 

@@ -24,6 +24,7 @@
 
 namespace prometheus { class Counter; }
 class Anomaly_Detector;
+class MCP_Threads_Handler;
 
 /**
  * @brief Process-wide state shared across the plugin's translation units.
@@ -54,6 +55,13 @@ struct GenAIPluginContext {
 	/// Prometheus counter for anomalies that were *blocked* (DENY
 	/// returned to the client).  Same lifetime rules as above.
 	prometheus::Counter* metric_blocked_queries { nullptr };
+
+	/// MCP listener handler.  Replaces the former core global
+	/// `GloMCPH` as of Step 4.C.  Constructed in `genai_init()`,
+	/// started by `genai_start()`, torn down by `genai_stop()`.
+	/// See plugins/genai/src/MCP_Thread.cpp for the listener
+	/// implementation.
+	MCP_Threads_Handler* mcp { nullptr };
 };
 
 /**

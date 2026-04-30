@@ -192,7 +192,7 @@ extern MySQL_Monitor *GloMyMon;
 extern PgSQL_Threads_Handler* GloPTH;
 
 #ifdef PROXYSQLGENAI
-extern MCP_Threads_Handler* GloMCPH;
+// MCP_Threads_Handler ownership moved to the genai plugin in Step 4.C.
 extern GenAI_Threads_Handler* GloGATH;
 extern AI_Features_Manager *GloAI;
 #endif /* PROXYSQLGENAI */

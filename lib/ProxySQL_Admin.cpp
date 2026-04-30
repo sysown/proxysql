@@ -22,7 +22,7 @@ using json = nlohmann::json;
 #include "mysql.h"
 #include "proxysql_admin.h"
 #include "Discovery_Schema.h"
-#include "Query_Tool_Handler.h"
+// Query_Tool_Handler.h moved to plugins/genai/include/ in Step 4.C.
 #include "re2/re2.h"
 #include "re2/regexp.h"
 #include "proxysql.h"
@@ -45,8 +45,8 @@ using json = nlohmann::json;
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
-#include "MCP_Thread.h"
-#include "ProxySQL_MCP_Server.hpp"
+// MCP_Thread.h / ProxySQL_MCP_Server.hpp moved to plugins/genai/include/
+// in Step 4.C.  The MCP listener lifecycle is owned by the genai plugin.
 #include "SQLite3_Server.h"
 #include "Web_Interface.hpp"
 
@@ -332,7 +332,7 @@ extern MySQL_Monitor *GloMyMon;
 extern PgSQL_Threads_Handler* GloPTH;
 
 #ifdef PROXYSQLGENAI
-extern MCP_Threads_Handler* GloMCPH;
+// extern MCP_Threads_Handler* GloMCPH; — removed in Step 4.C.
 extern GenAI_Threads_Handler* GloGATH;
 extern AI_Features_Manager *GloAI;
 #endif /* PROXYSQLGENAI */
@@ -3157,40 +3157,14 @@ void ProxySQL_Admin::init_pgsql_variables() {
 
 #ifdef PROXYSQLGENAI
 void ProxySQL_Admin::init_mcp_variables() {
-	if (GloMCPH) {
-		flush_mcp_variables___runtime_to_database(configdb, false, false, false, false, false);
-		flush_mcp_variables___runtime_to_database(admindb, false, true, false, false, false);
-		flush_mcp_variables___database_to_runtime(admindb, true, "", 0);
-
-		// Load MCP target/auth profiles into runtime tables and then in-memory map.
-		admindb->execute("DELETE FROM runtime_mcp_auth_profiles");
-		admindb->execute("INSERT OR REPLACE INTO runtime_mcp_auth_profiles SELECT * FROM main.mcp_auth_profiles");
-		admindb->execute("DELETE FROM runtime_mcp_target_profiles");
-		admindb->execute("INSERT OR REPLACE INTO runtime_mcp_target_profiles SELECT * FROM main.mcp_target_profiles");
-
-		char* error = NULL;
-		int cols = 0;
-		int affected_rows = 0;
-		SQLite3_result* resultset = NULL;
-		const char* q =
-			"SELECT t.target_id, t.protocol, t.hostgroup_id, t.auth_profile_id,"
-			" t.max_rows, t.timeout_ms, t.allow_explain, t.allow_discovery, t.description,"
-			" a.db_username, a.db_password, a.default_schema"
-			" FROM runtime_mcp_target_profiles t"
-			" JOIN runtime_mcp_auth_profiles a ON a.auth_profile_id=t.auth_profile_id"
-			" WHERE t.active=1"
-			" ORDER BY t.target_id";
-		admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
-		if (error) {
-			proxy_error("Failed to load MCP target auth map: %s\n", error);
-			free(error);
-			if (resultset) {
-				delete resultset;
-			}
-		} else {
-			GloMCPH->load_target_auth_map(resultset);
-		}
-	}
+	// FIXME(4.F/4.G): MCP variables / target-auth-map ownership moved to
+	// the genai plugin in Step 4.C.  This function becomes a no-op until
+	// 4.F wires the variable flow through the plugin command registry
+	// and 4.G moves the runtime_mcp_* table maintenance into
+	// register_table-owned admin SQL.  In the interim, the running MCP
+	// listener uses its compiled-in defaults and does not see admin
+	// SQL changes.  Documented in the carve-out plan.
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "init_mcp_variables: stubbed (Step 4.C); awaiting 4.F/4.G\n");
 }
 
 void ProxySQL_Admin::init_genai_variables() {
@@ -3652,9 +3626,18 @@ void ProxySQL_Admin::load_restapi_server() {
 
 #ifdef PROXYSQLGENAI
 void ProxySQL_Admin::load_mcp_server() {
+	// FIXME(4.F): MCP listener lifecycle moved to the genai plugin in
+	// Step 4.C; the plugin owns the MCP server's start/stop/reconfigure
+	// flow now.  This admin-side hook becomes a no-op.  4.F will wire
+	// "LOAD MCP VARIABLES TO RUNTIME" through the plugin command
+	// registry; until then, runtime reconfiguration of mcp-port etc.
+	// requires a process restart.
 	if (!all_modules_started) { return; }
-	if (GloMCPH == NULL) { return; }
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "load_mcp_server: stubbed (Step 4.C); awaiting 4.F\n");
+}
 
+#if 0  // Original load_mcp_server body preserved for 4.F reference.
+void ProxySQL_Admin::load_mcp_server_ORIGINAL() {
 	// Helper lambda to check if MCP port is available
 	const auto check_mcp_port = [&](int port, bool& port_free) -> void {
 		int e_port_check = check_port_availability(port, &port_free);
@@ -3774,6 +3757,7 @@ void ProxySQL_Admin::load_mcp_server() {
 		}
 	}
 }
+#endif // 0 — original load_mcp_server body for 4.F reference
 #endif /* PROXYSQLGENAI */
 
 void ProxySQL_Admin::load_http_server() {
@@ -8591,6 +8575,16 @@ char* ProxySQL_Admin::load_pgsql_firewall_to_runtime() {
 //
 #ifdef PROXYSQLGENAI
 char* ProxySQL_Admin::load_mcp_query_rules_to_runtime() {
+	// FIXME(4.F): MCP query rules now live with the genai plugin's
+	// Query_Tool_Handler.  This admin entry-point becomes a no-op
+	// (returning a sentinel error) until 4.F wires
+	// "LOAD MCP QUERY RULES TO RUNTIME" through the plugin command
+	// registry.
+	return (char*)"MCP query rules: command moved to genai plugin (Step 4.C); awaiting 4.F wiring";
+}
+
+#if 0  // Original body preserved for 4.F reference.
+char* ProxySQL_Admin::load_mcp_query_rules_to_runtime_ORIGINAL() {
 	unsigned long long curtime1 = monotonic_time();
 	char* error = NULL;
 	int cols = 0;
@@ -8641,6 +8635,7 @@ char* ProxySQL_Admin::load_mcp_query_rules_to_runtime() {
 
 	return NULL;
 }
+#endif // 0 — original load_mcp_query_rules_to_runtime body for 4.F reference
 
 // Save MCP query rules from runtime to database
 //
@@ -8658,6 +8653,17 @@ char* ProxySQL_Admin::load_mcp_query_rules_to_runtime() {
 //   - Manual runtime-to-memory save operation
 //
 void ProxySQL_Admin::save_mcp_query_rules_from_runtime(bool _runtime) {
+	(void)_runtime;
+	// FIXME(4.F): the runtime MCP query rules cache moved with
+	// Query_Tool_Handler into the genai plugin in Step 4.C.  Until 4.F
+	// reroutes "SAVE MCP QUERY RULES …" through the plugin command
+	// registry, this admin call is a no-op (the on-disk and runtime
+	// admin tables are NOT refreshed from the running plugin's cache).
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "save_mcp_query_rules_from_runtime: stubbed (Step 4.C); awaiting 4.F\n");
+}
+
+#if 0  // Original body preserved for 4.F reference.
+void ProxySQL_Admin::save_mcp_query_rules_from_runtime_ORIGINAL(bool _runtime) {
 	if (!GloMCPH) return;
 	Query_Tool_Handler* qth = GloMCPH->query_tool_handler;
 	if (!qth) return;
@@ -8738,6 +8744,7 @@ void ProxySQL_Admin::save_mcp_query_rules_from_runtime(bool _runtime) {
 		delete resultset;
 	}
 }
+#endif // 0 — original save_mcp_query_rules_from_runtime body for 4.F reference
 #endif /* PROXYSQLGENAI */
 
 char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset, SQLite3_result* SQLite3_query_rules_fast_routing_resultset, const std::string& checksum, const time_t epoch) {

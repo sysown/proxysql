@@ -33,12 +33,20 @@
 
 #include "genai_plugin.h"
 #include "Anomaly_Detector.h"
+#include "MCP_Thread.h"
 
 #include "prometheus/counter.h"
 #include "prometheus/family.h"
 #include "prometheus/registry.h"
 
 #include <cstdio>
+
+// Plugin-local definition of the MCP_Threads_Handler global, replacing
+// the core-side `GloMCPH` deleted in Step 4.C.  This stays inside the
+// .so — the plugin's tool handlers (Query_Tool_Handler etc.) reference
+// the symbol locally; core code never sees it.  Lifetime is managed by
+// `genai_init` / `genai_stop` below.
+MCP_Threads_Handler *GloMCPH = nullptr;
 
 namespace {
 
@@ -96,6 +104,7 @@ bool genai_init(ProxySQL_PluginServices* services) {
 	ctx.services = services;
 	ctx.started = false;
 	ctx.anomaly_detector = nullptr;
+	ctx.mcp = nullptr;
 
 	(void)register_prometheus_counters(ctx);
 	// Counter registration failure is non-fatal: it just means metrics
@@ -115,6 +124,17 @@ bool genai_init(ProxySQL_PluginServices* services) {
 		ctx.anomaly_detector = nullptr;
 		return false;
 	}
+
+	// Step 4.C: take over MCP_Threads_Handler ownership from former
+	// core global GloMCPH.  Construct here; `init()` is called below.
+	// `start()` (the listener launch) happens in genai_start().
+	//
+	// admindb access is not yet available during init() per the chassis
+	// ABI (services->get_admindb() returns nullptr until start()), so
+	// any plugin-side state that needs it must defer to genai_start.
+	ctx.mcp = new MCP_Threads_Handler();
+	GloMCPH = ctx.mcp;  // legacy alias used by Query_Tool_Handler etc.
+	ctx.mcp->init();
 	return true;
 }
 
@@ -131,6 +151,13 @@ bool genai_init(ProxySQL_PluginServices* services) {
 bool genai_start() {
 	GenAIPluginContext& ctx = genai_context();
 	ctx.started = true;
+	// FIXME(4.F): the MCP listener (ProxySQL_MCP_Server) does not
+	// auto-start here.  Pre-4.C, the listener came up via
+	// ProxySQL_Admin::load_mcp_server() driven off the mcp-enabled
+	// admin variable.  That admin surface is stubbed in core during
+	// the 4.C → 4.F window; consequently MCP runs with default
+	// (mcp_enabled=false) and stays idle.  4.F restores the admin
+	// SQL → plugin path and the listener auto-starts again.
 	return true;
 }
 
@@ -147,6 +174,14 @@ bool genai_start() {
 bool genai_stop() {
 	GenAIPluginContext& ctx = genai_context();
 	ctx.started = false;
+	if (ctx.mcp != nullptr) {
+		// MCP listener teardown.  ~MCP_Threads_Handler stops the
+		// embedded ProxySQL_MCP_Server (if running) and joins worker
+		// threads.  Mirrors the pre-4.C `delete GloMCPH` in main.cpp.
+		delete ctx.mcp;
+		ctx.mcp = nullptr;
+		GloMCPH = nullptr;
+	}
 	if (ctx.anomaly_detector != nullptr) {
 		ctx.anomaly_detector->close();
 		delete ctx.anomaly_detector;

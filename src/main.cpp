@@ -30,7 +30,8 @@ using json = nlohmann::json;
 #include "PgSQL_Logger.hpp"
 
 #ifdef PROXYSQLGENAI
-#include "MCP_Thread.h"
+// MCP_Thread.h has moved to plugins/genai/include/ as of Step 4.C.
+// Core no longer references MCP_Threads_Handler — the plugin owns it.
 #include "GenAI_Thread.h"
 #include "AI_Features_Manager.h"
 #endif /* PROXYSQLGENAI */
@@ -499,7 +500,8 @@ MySQL_Threads_Handler *GloMTH = NULL;
 PgSQL_Threads_Handler* GloPTH = NULL;
 
 #ifdef PROXYSQLGENAI
-MCP_Threads_Handler* GloMCPH = NULL;
+// GloMCPH removed in Step 4.C — the genai plugin owns the
+// MCP_Threads_Handler now.  GloGATH / GloAI follow in Step 5.
 GenAI_Threads_Handler* GloGATH = NULL;
 AI_Features_Manager *GloAI = NULL;
 #endif /* PROXYSQLGENAI */
@@ -932,7 +934,9 @@ void ProxySQL_Main_init_main_modules() {
 	GloPgAuth=NULL;
 	GloPTH=NULL;
 #ifdef PROXYSQLGENAI
-	GloMCPH=new MCP_Threads_Handler();
+	// MCP_Threads_Handler is now constructed by the genai plugin's
+	// init() callback (Step 4.C).  GenAI_Threads_Handler / AI_Features
+	// move similarly in Step 5.
 	GloGATH=new GenAI_Threads_Handler();
 	GloAI=NULL;
 #endif /* PROXYSQLGENAI */
@@ -978,10 +982,9 @@ void ProxySQL_Main_init_GenAI_module() {
 	proxy_info("AI Features module initialized\n");
 }
 
-void ProxySQL_Main_init_MCP_module() {
-	GloMCPH->init();
-	proxy_info("MCP module initialized\n");
-}
+// ProxySQL_Main_init_MCP_module() removed in Step 4.C.
+// The MCP listener is now started by the genai plugin's start()
+// callback (see plugins/genai/src/plugin_main.cpp).
 #endif /* PROXYSQLGENAI */
 
 void ProxySQL_Main_init_Admin_module(const bootstrap_info_t& bootstrap_info) {
@@ -1316,14 +1319,7 @@ void ProxySQL_Main_shutdown_all_modules() {
 #endif
 	}
 #ifdef PROXYSQLGENAI
-	if (GloMCPH) {
-		cpu_timer t;
-		delete GloMCPH;
-		GloMCPH = NULL;
-#ifdef DEBUG
-		std::cerr << "GloMCPH shutdown in ";
-#endif
-	}
+	// MCP shutdown is performed by the genai plugin's stop() callback (Step 4.C).
 	if (GloGATH) {
 		cpu_timer t;
 		delete GloGATH;
@@ -1568,7 +1564,7 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 
 #ifdef PROXYSQLGENAI
 	ProxySQL_Main_init_GenAI_module();
-	ProxySQL_Main_init_MCP_module();
+	// MCP module init moved to the genai plugin (Step 4.C).
 #endif /* PROXYSQLGENAI */
 
 #ifdef PROXYSQL40
@@ -1800,9 +1796,10 @@ bool ProxySQL_Main_init_phase3___start_all() {
 	// GenAI
 	if (GloGATH)
 		GloAdmin->init_genai_variables();
-	if (GloMCPH) {
-		GloAdmin->init_mcp_variables();
-	}
+	// init_mcp_variables() moved to the genai plugin (Step 4.C).
+	// FIXME(4.F): the mcp-* admin SQL surface (SET mcp-port=...,
+	// LOAD MCP PROFILES ...) is non-functional between Step 4.C and
+	// Step 4.F.  Tracked in the carve-out plan.
 #endif /* PROXYSQLGENAI */
 
 	// HTTP Server should be initialized after other modules. See #4510

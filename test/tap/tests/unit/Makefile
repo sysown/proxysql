@@ -154,7 +154,7 @@ else
 LIBPROXYSQLAR_FULL := $(LIBPROXYSQLAR)
 
 MYLIBS := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -lcurl -lssl -lcrypto -luuid \
-		  -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre \
+		  -Wl,-Bstatic -lconfig -Wl,--whole-archive -lproxysql -Wl,--no-whole-archive -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre \
 		  -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev \
 		  -lprometheus-cpp-pull -lprometheus-cpp-core \
 		  -Wl,-Bstatic -lpq -lpgcommon -lpgport \

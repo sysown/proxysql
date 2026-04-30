@@ -21,8 +21,12 @@
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
 #ifdef PROXYSQLGENAI
-#include "MCP_Thread.h"
-#include "Query_Tool_Handler.h"
+// MCP_Thread.h / Query_Tool_Handler.h moved to plugins/genai/include/
+// in Step 4.C.  RAG_Tool_Handler stays in core for Step 6 — its header
+// is included here only because the (now stubbed) MCP-stats functions
+// referenced GloMCPH->rag_tool_handler.  Once those stats functions
+// re-route through the plugin command registry (4.F), this include
+// can go too.
 #include "RAG_Tool_Handler.h"
 #endif /* PROXYSQLGENAI */
 #include <openssl/x509v3.h>
@@ -1679,6 +1683,19 @@ void ProxySQL_Admin::stats___proxysql_message_metrics(bool reset) {
 
 #ifdef PROXYSQLGENAI
 void ProxySQL_Admin::stats___mcp_query_tools_counters(bool reset) {
+	(void)reset;
+	// FIXME(4.F/4.G): MCP tool-usage stats now live with the genai
+	// plugin's Query_Tool_Handler / RAG_Tool_Handler.  Until 4.F wires
+	// the stats collection through the plugin command registry (or 4.G
+	// migrates the stats_mcp_* tables to the plugin), this admin call
+	// is a no-op.  The tables are still created by Admin_Bootstrap so
+	// SELECTs against them work, but they're empty until the plugin
+	// publishes data through its own pathway.
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "stats___mcp_query_tools_counters: stubbed (Step 4.C); awaiting 4.F\n");
+}
+
+#if 0  // Original body preserved for 4.F reference.
+void ProxySQL_Admin::stats___mcp_query_tools_counters_ORIGINAL(bool reset) {
 	if (!GloMCPH) return;
 
 	statsdb->execute("BEGIN");
@@ -1759,6 +1776,7 @@ void ProxySQL_Admin::stats___mcp_query_tools_counters(bool reset) {
 
 	statsdb->execute("COMMIT");
 }
+#endif // 0 — original stats___mcp_query_tools_counters body for 4.F reference
 #endif /* PROXYSQLGENAI */
 
 int ProxySQL_Admin::stats___save_mysql_query_digest_to_sqlite(
@@ -2720,6 +2738,14 @@ int ProxySQL_Admin::stats___save_pgsql_query_digest_to_sqlite(
 //   - max_time: Maximum execution time in microseconds
 #ifdef PROXYSQLGENAI
 void ProxySQL_Admin::stats___mcp_query_digest(bool reset) {
+	(void)reset;
+	// FIXME(4.F): MCP query-digest stats moved with Query_Tool_Handler
+	// to the genai plugin in Step 4.C.  No-op until 4.F.
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "stats___mcp_query_digest: stubbed (Step 4.C); awaiting 4.F\n");
+}
+
+#if 0  // Original body preserved for 4.F reference.
+void ProxySQL_Admin::stats___mcp_query_digest_ORIGINAL(bool reset) {
 	if (!GloMCPH) return;
 	Query_Tool_Handler* qth = GloMCPH->query_tool_handler;
 	if (!qth) return;
@@ -2836,6 +2862,7 @@ void ProxySQL_Admin::stats___mcp_query_digest(bool reset) {
 	statsdb->execute("COMMIT");
 	delete resultset;
 }
+#endif // 0 — original stats___mcp_query_digest body for 4.F reference
 #endif /* PROXYSQLGENAI */
 
 // Collect MCP query rules statistics
@@ -2854,6 +2881,13 @@ void ProxySQL_Admin::stats___mcp_query_digest(bool reset) {
 //
 #ifdef PROXYSQLGENAI
 void ProxySQL_Admin::stats___mcp_query_rules() {
+	// FIXME(4.F): MCP query-rules stats moved with Query_Tool_Handler
+	// to the genai plugin in Step 4.C.  No-op until 4.F.
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "stats___mcp_query_rules: stubbed (Step 4.C); awaiting 4.F\n");
+}
+
+#if 0  // Original body preserved for 4.F reference.
+void ProxySQL_Admin::stats___mcp_query_rules_ORIGINAL() {
 	if (!GloMCPH) return;
 	Query_Tool_Handler* qth = GloMCPH->query_tool_handler;
 	if (!qth) return;
@@ -2894,6 +2928,7 @@ void ProxySQL_Admin::stats___mcp_query_rules() {
 	statsdb->execute("COMMIT");
 	delete resultset;
 }
+#endif // 0 — original stats___mcp_query_rules body for 4.F reference
 #endif /* PROXYSQLGENAI */
 
 // Helper: convert ASN1_TIME to ISO 8601 string (YYYY-MM-DDTHH:MM:SSZ)
