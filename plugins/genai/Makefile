@@ -34,7 +34,36 @@ IDIRS := $(PLUGIN_IDIRS) -I$(PROXYSQL_IDIR) -I$(PROMETHEUS_IDIR) \
          -I$(CURL_IDIR) -I$(RE2_IDIR) -I$(PCRE_IDIR) -I$(ZSTD_IDIR)
 
 OPTZ ?= -O2 -ggdb
-CXXFLAGS := $(STDCPP) -fPIC $(OPTZ) $(WGCOV) $(WASAN) -pthread
+
+# Propagate feature-tier flags from the top-level build.  These MUST match
+# the flags libproxysql.a was built with; in particular, ProxySQL_Plugin.h
+# is fully gated behind PROXYSQL40 (the plugin chassis is a v4.0 feature),
+# so omitting -DPROXYSQL40 here yields an empty header and breaks the build.
+# (If this Makefile is run standalone, the caller is expected to export
+# PROXYSQL40/31/etc. to match the lib.)
+PSQL40 :=
+ifeq ($(PROXYSQL40),1)
+	PSQL40 := -DPROXYSQL40
+endif
+PSQL31 :=
+ifeq ($(PROXYSQL31),1)
+	PSQL31 := -DPROXYSQL31
+endif
+PSQLFFTO :=
+ifeq ($(PROXYSQLFFTO),1)
+	PSQLFFTO := -DPROXYSQLFFTO
+endif
+PSQLTSDB :=
+ifeq ($(PROXYSQLTSDB),1)
+	PSQLTSDB := -DPROXYSQLTSDB
+endif
+PSQLGA :=
+ifeq ($(PROXYSQLGENAI),1)
+	PSQLGA := -DPROXYSQLGENAI
+endif
+
+CXXFLAGS := $(STDCPP) -fPIC $(OPTZ) $(WGCOV) $(WASAN) -pthread \
+	$(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLGA)
 
 .DEFAULT_GOAL := all
 
