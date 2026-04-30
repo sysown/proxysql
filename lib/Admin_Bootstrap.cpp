@@ -821,19 +821,10 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_admin,"pgsql_servers_ssl_params", ADMIN_SQLITE_TABLE_PGSQL_SERVERS_SSL_PARAMS);
 	insert_into_tables_defs(tables_defs_admin,"runtime_pgsql_servers_ssl_params", ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_SERVERS_SSL_PARAMS);
 
-#ifdef PROXYSQLGENAI
-	// MCP query rules
-	insert_into_tables_defs(tables_defs_admin, "mcp_query_rules", ADMIN_SQLITE_TABLE_MCP_QUERY_RULES);
-	insert_into_tables_defs(tables_defs_admin, "runtime_mcp_query_rules", ADMIN_SQLITE_TABLE_RUNTIME_MCP_QUERY_RULES);
-	insert_into_tables_defs(tables_defs_admin, "mcp_auth_profiles", ADMIN_SQLITE_TABLE_MCP_AUTH_PROFILES);
-	insert_into_tables_defs(tables_defs_admin, "runtime_mcp_auth_profiles", ADMIN_SQLITE_TABLE_RUNTIME_MCP_AUTH_PROFILES);
-	insert_into_tables_defs(tables_defs_admin, "mcp_target_profiles", ADMIN_SQLITE_TABLE_MCP_TARGET_PROFILES);
-	insert_into_tables_defs(tables_defs_admin, "runtime_mcp_target_profiles", ADMIN_SQLITE_TABLE_RUNTIME_MCP_TARGET_PROFILES);
-
-	insert_into_tables_defs(tables_defs_config, "mcp_query_rules", ADMIN_SQLITE_TABLE_MCP_QUERY_RULES);
-	insert_into_tables_defs(tables_defs_config, "mcp_auth_profiles", ADMIN_SQLITE_TABLE_MCP_AUTH_PROFILES);
-	insert_into_tables_defs(tables_defs_config, "mcp_target_profiles", ADMIN_SQLITE_TABLE_MCP_TARGET_PROFILES);
-#endif /* PROXYSQLGENAI */
+// MCP admin / config tables (mcp_query_rules, mcp_auth_profiles,
+// mcp_target_profiles, and their runtime_* siblings) moved to the
+// genai plugin in Step 4.G.  See plugins/genai/src/plugin_tables.cpp,
+// where they're registered via the chassis register_table service.
 
 	insert_into_tables_defs(tables_defs_config, "pgsql_servers", ADMIN_SQLITE_TABLE_PGSQL_SERVERS);
 	insert_into_tables_defs(tables_defs_config, "pgsql_users", ADMIN_SQLITE_TABLE_PGSQL_USERS);
@@ -931,15 +922,9 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_servers_clients_status", STATS_SQLITE_TABLE_PROXYSQL_SERVERS_CLIENTS_STATUS);
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_message_metrics", STATS_SQLITE_TABLE_PROXYSQL_MESSAGE_METRICS);
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_message_metrics_reset", STATS_SQLITE_TABLE_PROXYSQL_MESSAGE_METRICS_RESET);
-	#ifdef PROXYSQLGENAI
-		insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_tools_counters", STATS_SQLITE_TABLE_MCP_QUERY_TOOLS_COUNTERS);
-		insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_tools_counters_reset", STATS_SQLITE_TABLE_MCP_QUERY_TOOLS_COUNTERS_RESET);
-
-	// MCP query digest stats
-	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_digest", STATS_SQLITE_TABLE_MCP_QUERY_DIGEST);
-		insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_digest_reset", STATS_SQLITE_TABLE_MCP_QUERY_DIGEST_RESET);
-		insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_rules", STATS_SQLITE_TABLE_MCP_QUERY_RULES); // Reuse same schema for stats
-	#endif /* PROXYSQLGENAI */
+	// MCP stats tables (stats_mcp_query_tools_counters, _reset,
+	// stats_mcp_query_digest, _reset, stats_mcp_query_rules) moved to
+	// the genai plugin in Step 4.G.  See plugins/genai/src/plugin_tables.cpp.
 
 #ifdef PROXYSQL40
 	if (ProxySQL_PluginManager* plugin_manager = proxysql_get_plugin_manager()) {

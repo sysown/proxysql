@@ -70,6 +70,7 @@ CXXFLAGS := $(STDCPP) -fPIC $(OPTZ) $(WGCOV) $(WASAN) -pthread \
 SRCS := $(PLUGIN_DIR)/src/plugin_main.cpp \
 	$(PLUGIN_DIR)/src/plugin_hooks.cpp \
 	$(PLUGIN_DIR)/src/plugin_commands.cpp \
+	$(PLUGIN_DIR)/src/plugin_tables.cpp \
 	$(PLUGIN_DIR)/src/Anomaly_Detector.cpp \
 	$(PLUGIN_DIR)/src/backend_client.cpp \
 	$(PLUGIN_DIR)/src/local_proxy_endpoint.cpp \

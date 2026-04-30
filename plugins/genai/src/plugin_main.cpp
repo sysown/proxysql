@@ -149,6 +149,11 @@ bool genai_init(ProxySQL_PluginServices* services) {
 	// chassis ABI.
 	genai_register_admin_commands(services);
 
+	// Register MCP admin / config / stats tables (Step 4.G).
+	// Replaces the corresponding insert_into_tables_defs() block in
+	// lib/Admin_Bootstrap.cpp.
+	genai_register_admin_tables(services);
+
 	return true;
 }
 

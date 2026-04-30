@@ -159,6 +159,18 @@ void mcp_start_listener_if_enabled(GenAIPluginContext& ctx);
 void genai_register_admin_commands(ProxySQL_PluginServices* services);
 
 /**
+ * @brief Register all MCP-related admin / config / stats tables
+ *        with the chassis `register_table` registry.
+ *
+ * Defined in plugin_tables.cpp.  Called from `genai_init()`.
+ *
+ * @param services  The same pointer `genai_init` received.  Must
+ *                  expose `register_table` — valid during init()
+ *                  per the chassis ABI.
+ */
+void genai_register_admin_tables(ProxySQL_PluginServices* services);
+
+/**
  * @brief Query-hook adapter: ABI callback that runs the anomaly detector.
  *
  * Defined in plugin_hooks.cpp.  Registered with the plugin manager

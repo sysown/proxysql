@@ -82,14 +82,23 @@ int main() {
 
 	ok(mgr.stop_all(),     "stop_all succeeds");
 
-	// Skeleton plugin currently registers no tables and no commands.
-	// These assertions tighten as Step 3+ start migrating GenAI surface.
-	ok(mgr.tables(ProxySQL_PluginDBKind::admin_db).empty(),
-	   "skeleton genai plugin registers no admin tables (yet)");
-	ok(mgr.tables(ProxySQL_PluginDBKind::config_db).empty(),
-	   "skeleton genai plugin registers no config tables (yet)");
-	ok(mgr.tables(ProxySQL_PluginDBKind::stats_db).empty(),
-	   "skeleton genai plugin registers no stats tables (yet)");
+	// Step 4.G: the plugin now owns the MCP admin / config / stats
+	// table set.  Counts match plugins/genai/src/plugin_tables.cpp.
+	//   admin:  6 (mcp_query_rules, mcp_auth_profiles, mcp_target_profiles
+	//              + their runtime_* siblings)
+	//   config: 3 (the persisted-only variants — no runtime_*)
+	//   stats:  5 (stats_mcp_query_tools_counters{,_reset},
+	//              stats_mcp_query_digest{,_reset},
+	//              stats_mcp_query_rules)
+	ok(mgr.tables(ProxySQL_PluginDBKind::admin_db).size() == 6,
+	   "genai plugin registers 6 admin-db tables (got %zu)",
+	   mgr.tables(ProxySQL_PluginDBKind::admin_db).size());
+	ok(mgr.tables(ProxySQL_PluginDBKind::config_db).size() == 3,
+	   "genai plugin registers 3 config-db tables (got %zu)",
+	   mgr.tables(ProxySQL_PluginDBKind::config_db).size());
+	ok(mgr.tables(ProxySQL_PluginDBKind::stats_db).size() == 5,
+	   "genai plugin registers 5 stats-db tables (got %zu)",
+	   mgr.tables(ProxySQL_PluginDBKind::stats_db).size());
 
 	// Step 4.F: the plugin registers MCP admin SQL verbs.  Verify
 	// each registered alias resolves back to the canonical command
