@@ -1872,6 +1872,17 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			}
 #endif /* PROXYSQLCLICKHOUSE */
 
+#ifdef PROXYSQL40
+			// Plugin-registered runtime views (canonical pattern, mirrors
+			// the runtime_mysql_users refresh above): each plugin declares
+			// its admin-side view of module state via
+			// services.register_runtime_view(); the chassis dispatcher
+			// invokes the registered refresh callback for any view whose
+			// table name is referenced in this query, before the query
+			// runs against admindb.
+			proxysql_refresh_configured_plugin_runtime_views(query_no_space, admindb);
+#endif /* PROXYSQL40 */
+
 		}
 		if (monitor_mysql_server_group_replication_log) {
 			if (GloMyMon) {
