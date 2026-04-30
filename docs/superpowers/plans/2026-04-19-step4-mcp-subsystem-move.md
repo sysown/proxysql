@@ -38,13 +38,76 @@ The "service user" terminology in the spec (`design.md` lines 144–153) collaps
 
 | Sub-step | Description | Status |
 |---|---|---|
-| 4.A | Remove `GENAI:` / `LLM:` query-prefix escape hatches from `MySQL_Session` | **done** (`5b936459a`) |
-| 4.B | Add `backend_client.cpp` to plugin (no callers yet); add unit test | pending |
-| 4.C | Move the 5 stateless tool handlers (Admin, Cache, Config, Observe, Stats) | pending |
-| 4.D | Move `MCP_Tool_Handler` (base) + `Query_Tool_Handler` + `MySQL_Tool_Handler`; rewire to `backend_client` going through `127.0.0.1:6033` | pending |
-| 4.E | Move `MCP_Endpoint`, `MCP_Thread`, `ProxySQL_MCP_Server`; replace `GloMCPH` with a plugin-internal singleton owned by `genai_init/start/stop` | pending |
+| 4.A | Remove `GENAI:` / `LLM:` query-prefix escape hatches from `MySQL_Session` | **done** (rebased: `a79a27a9e`) |
+| 4.B | Add `backend_client.cpp` to plugin (no callers yet); add unit test | **done** (`16a4340eb`) |
+| 4.C | **(revised — see "4.C/4.D/4.E merge" below)** Move all MCP code into the plugin as one atomic commit: 8 tool handlers + `MCP_Tool_Handler` base + `MCP_Endpoint` + `MCP_Thread` + `ProxySQL_MCP_Server`, rewire `Query`/`MySQL` handlers via `backend_client::dial_*_local`, take `MCP_Threads_Handler` ownership in `genai_init/start/stop`, delete `GloMCPH`. | pending |
+| ~~4.D~~ | ~~Move `MCP_Tool_Handler` (base) + `Query_Tool_Handler` + `MySQL_Tool_Handler`; rewire to `backend_client` going through `127.0.0.1:6033`~~ | merged into 4.C |
+| ~~4.E~~ | ~~Move `MCP_Endpoint`, `MCP_Thread`, `ProxySQL_MCP_Server`; replace `GloMCPH` with a plugin-internal singleton owned by `genai_init/start/stop`~~ | merged into 4.C |
 | 4.F | Replace `Admin_Handler.cpp` `has_variable("mcp-…")` and `load_target_auth_map` sites with `register_command` dispatch | pending |
 | 4.G | Move MCP admin tables (`mcp_*`, `runtime_mcp_*`, `stats_mcp_*`) registration from `ProxySQL_Admin.cpp` / `Admin_Bootstrap.cpp` to `plugin_tables.cpp` via `register_table` | pending |
+
+### 4.C / 4.D / 4.E merge (revision)
+
+**Why the original split doesn't work.** The original plan assumed the 5
+"stateless" tool handlers (Admin, Cache, Config, Observe, Stats) could
+move first because they don't dial backends.  In practice all five
+**except Observe** are constructed directly in
+`lib/ProxySQL_MCP_Server.cpp` (`new Admin_Tool_Handler(handler)` etc.,
+lines 84-131).  Moving any of those `.cpp` files out of `lib/` while
+leaving `ProxySQL_MCP_Server.cpp` in `lib/` makes
+`lib/libproxysql.a` reference symbols it no longer publishes — the
+`src/proxysql` link breaks.
+
+The transitional-shim escape hatch the original plan proposed
+(forwarding header in `include/`, leave `.cpp` in `lib/`) doesn't help
+either: the *symbols* still need to live in `lib/libproxysql.a` while
+core's MCP listener exists, and that's a `.cpp`-level question, not a
+header-level one.  `Observe_Tool_Handler` is the only one that's free
+to move on its own — but it's also orphan code (zero call sites; only
+self-referenced), so moving it standalone provides no architectural
+forward progress.
+
+**What does work.** Move the entire MCP construction surface together
+in one commit: the 8 tool handlers (Admin, Cache, Config, MCP_Tool,
+MySQL, Observe, Query, Stats — minus AI/RAG which stay for Steps 5/6),
+plus `MCP_Tool_Handler` base, plus `MCP_Endpoint` / `MCP_Thread` /
+`ProxySQL_MCP_Server`.  The plugin's `genai_init` / `genai_start` /
+`genai_stop` take ownership of the `MCP_Threads_Handler` object that
+used to be `GloMCPH` in core.  The Query and MySQL tool handlers'
+backend dialing is rewritten to call `backend_client::dial_*_local` (the
+helper added in 4.B) so this commit also delivers what 4.D promised.
+
+`AI_Tool_Handler` and `RAG_Tool_Handler` stay in `lib/` for Steps 5/6;
+the plugin's `ProxySQL_MCP_Server.cpp` keeps its existing
+`#ifdef PROXYSQLGENAI` guards around their construction.  Plugin-side
+references to those still-in-core types resolve at `dlopen` time via
+the host symbol table (the proxysql binary already exports them under
+`-Wl,--export-dynamic`).
+
+`Admin_Handler.cpp`'s two MCP call sites (`has_variable("mcp-…")` at
+~L1191 and `load_target_auth_map` at ~L2695) get FIXME stubs in this
+commit — the admin SQL surface for `mcp-*` variables and
+`LOAD MCP PROFILES …` is **temporarily non-functional between this
+commit and 4.F**.  This is called out explicitly in the commit message
+so reviewers know the gap is intentional and bounded.
+
+`lib/ProxySQL_Admin.cpp` keeps its 31 `GloMCPH` references for now;
+those are admin-table glue that 4.G replaces with `register_table`
+dispatch.  We delete only the **runtime** GloMCPH references in this
+commit (`src/main.cpp` lifecycle calls + `lib/ProxySQL_Admin.cpp`
+L3628-3744 listener-management block) — the table-registration glue
+stays until 4.G removes it.  The forward declaration of
+`MCP_Threads_Handler*` in `include/proxysql.h` is replaced by an
+opaque-pointer alias so the surviving `lib/ProxySQL_Admin.cpp` glue
+still compiles.
+
+**Commit size.** ~10K LOC moved, ~200 LOC of surgical changes in core.
+Big, but reviewable as "everything that was MCP in lib/ is now in
+plugins/genai/" — the diff per file is mostly path changes plus
+relocated `#include`s.  The handful of substantive edits
+(`backend_client::dial_*_local` rewires, FIXME stubs in
+`Admin_Handler.cpp`, lifecycle hooks in `genai_init`) are what
+reviewers spend their attention on.
 
 Net carve-out at end of Step 4 (estimate, before Step 5): **~13 K LOC** of `lib/` removed; **~8 K LOC** of `plugins/genai/src/` added (handler bodies move 1:1, plus `backend_client.cpp` and a per-step set of `plugin_*.cpp` adapter additions).
 
