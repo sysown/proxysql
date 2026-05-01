@@ -324,6 +324,94 @@ bool mcp_save_variables_to_admindb(GenAIPluginContext& ctx) {
 }
 
 /**
+ * @brief Push admin DB's genai-* values into the running
+ *        GenAI_Threads_Handler.  Mirrors the pre-Step-5
+ *        flush_genai_variables___database_to_runtime in core.
+ */
+bool genai_load_variables_from_admindb(GenAIPluginContext& ctx) {
+	if (ctx.services == nullptr || ctx.services->get_admindb == nullptr || GloGATH == nullptr) {
+		return false;
+	}
+	SQLite3DB* admindb = ctx.services->get_admindb();
+	if (admindb == nullptr) return false;
+
+	char* error = nullptr;
+	int cols = 0, affected_rows = 0;
+	SQLite3_result* rs = nullptr;
+	const char* q =
+		"SELECT variable_name, variable_value FROM main.global_variables "
+		"WHERE variable_name LIKE 'genai-%'";
+	admindb->execute_statement(q, &error, &cols, &affected_rows, &rs);
+	if (error != nullptr) {
+		fprintf(stderr, "genai plugin: failed to read genai-* vars: %s\n", error);
+		free(error);
+		if (rs != nullptr) delete rs;
+		return false;
+	}
+	if (rs != nullptr) {
+		GloGATH->wrlock();
+		for (auto* row : rs->rows) {
+			const char* qualified = row->fields[0];
+			const char* value = row->fields[1];
+			if (qualified != nullptr && std::strncmp(qualified, "genai-", 6) == 0) {
+				// GenAI_Threads_Handler::set_variable takes char* (non-const)
+				// — has_variable validates so unknown names are silently ignored.
+				GloGATH->set_variable(const_cast<char*>(qualified + 6), value ? value : "");
+			}
+		}
+		GloGATH->wrunlock();
+		delete rs;
+	}
+	return true;
+}
+
+/**
+ * @brief Pull runtime genai-* values from GenAI_Threads_Handler back
+ *        into `main.global_variables`.  Mirrors the pre-Step-5
+ *        flush_genai_variables___runtime_to_database in core.
+ */
+bool genai_save_variables_to_admindb(GenAIPluginContext& ctx) {
+	if (ctx.services == nullptr || ctx.services->get_admindb == nullptr || GloGATH == nullptr) {
+		return false;
+	}
+	SQLite3DB* admindb = ctx.services->get_admindb();
+	if (admindb == nullptr) return false;
+
+	auto [prep_rc, stmt] = admindb->prepare_v2(
+		"REPLACE INTO main.global_variables(variable_name, variable_value) VALUES(?1, ?2)"
+	);
+	if (prep_rc != SQLITE_OK) {
+		fprintf(stderr, "genai plugin: REPLACE prepare failed for genai (rc=%d)\n", prep_rc);
+		return false;
+	}
+	sqlite3_stmt* statement = stmt.get();
+	int rc = 0;
+
+	GloGATH->wrlock();
+	char** varnames = GloGATH->get_variables_list();
+	for (int i = 0; varnames[i] != nullptr; ++i) {
+		// GenAI_Threads_Handler::get_variable returns char* the caller frees.
+		char* val = GloGATH->get_variable(varnames[i]);
+		std::string qualified = std::string("genai-") + varnames[i];
+
+		(*proxy_sqlite3_bind_text)(statement, 1, qualified.c_str(), -1, SQLITE_TRANSIENT);
+		(*proxy_sqlite3_bind_text)(statement, 2, val ? val : "", -1, SQLITE_TRANSIENT);
+		SAFE_SQLITE3_STEP2(statement);
+		(*proxy_sqlite3_clear_bindings)(statement);
+		(*proxy_sqlite3_reset)(statement);
+
+		if (val != nullptr) free(val);
+	}
+	GloGATH->wrunlock();
+
+	for (int i = 0; varnames[i] != nullptr; ++i) {
+		free(varnames[i]);
+	}
+	free(varnames);
+	return true;
+}
+
+/**
  * @brief Push `main.mcp_query_rules` rows into the Discovery_Schema
  *        catalog held by the running Query_Tool_Handler.
  *

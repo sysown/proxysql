@@ -102,6 +102,43 @@ ProxySQL_PluginCommandResult save_mcp_variables_to_memory(
 }
 
 /**
+ * `LOAD GENAI VARIABLES TO RUNTIME` (and aliases).
+ *
+ * Re-pushes genai-* values from main.global_variables into the
+ * running GenAI_Threads_Handler.  Mirrors the LOAD MCP VARIABLES
+ * verb registered above.
+ */
+ProxySQL_PluginCommandResult load_genai_variables_to_runtime(
+	const ProxySQL_PluginCommandContext& cmd_ctx,
+	const char* sql
+) {
+	(void)cmd_ctx; (void)sql;
+	GenAIPluginContext& ctx = genai_context();
+	if (!genai_load_variables_from_admindb(ctx)) {
+		return err_result("LOAD GENAI VARIABLES TO RUNTIME: failed reading global_variables");
+	}
+	return ok_result("GenAI variables loaded to runtime");
+}
+
+/**
+ * `SAVE GENAI VARIABLES TO MEMORY` / `... FROM RUNTIME` (and aliases).
+ *
+ * Walks GenAI_Threads_Handler's variables and REPLACEs
+ * matching `genai-<name>` rows in `main.global_variables`.
+ */
+ProxySQL_PluginCommandResult save_genai_variables_to_memory(
+	const ProxySQL_PluginCommandContext& cmd_ctx,
+	const char* sql
+) {
+	(void)cmd_ctx; (void)sql;
+	GenAIPluginContext& ctx = genai_context();
+	if (!genai_save_variables_to_admindb(ctx)) {
+		return err_result("SAVE GENAI VARIABLES TO MEMORY: failed writing global_variables");
+	}
+	return ok_result("GenAI variables saved from runtime to main");
+}
+
+/**
  * `LOAD MCP QUERY RULES TO RUNTIME` (and aliases).
  *
  * Pushes active rows from `main.mcp_query_rules` into the in-memory
@@ -220,5 +257,18 @@ void genai_register_admin_commands(ProxySQL_PluginServices* services) {
 		"SAVE MCP QUERY RULES TO MEM",
 		"SAVE MCP QUERY RULES FROM RUNTIME",
 		"SAVE MCP QUERY RULES FROM RUN",
+	});
+
+	// genai-* variables: same alias scheme as the MCP verbs above.
+	reg("LOAD GENAI VARIABLES TO RUNTIME", &load_genai_variables_to_runtime, {
+		"LOAD GENAI VARIABLES FROM MEMORY",
+		"LOAD GENAI VARIABLES FROM MEM",
+		"LOAD GENAI VARIABLES TO RUN",
+	});
+
+	reg("SAVE GENAI VARIABLES TO MEMORY", &save_genai_variables_to_memory, {
+		"SAVE GENAI VARIABLES TO MEM",
+		"SAVE GENAI VARIABLES FROM RUNTIME",
+		"SAVE GENAI VARIABLES FROM RUN",
 	});
 }

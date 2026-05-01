@@ -87,6 +87,26 @@ GenAIPluginContext& genai_context();
 bool mcp_load_variables_from_admindb(GenAIPluginContext& ctx);
 
 /**
+ * @brief Push admin DB's `genai-*` global_variables values into the
+ *        running GenAI_Threads_Handler.
+ *
+ * Defined in plugin_main.cpp.  Called from the
+ * `LOAD GENAI VARIABLES TO RUNTIME` admin command.  Mirrors the
+ * pre-Step-5 `flush_genai_variables___database_to_runtime` in core.
+ */
+bool genai_load_variables_from_admindb(GenAIPluginContext& ctx);
+
+/**
+ * @brief Pull runtime `genai-*` values from the running
+ *        GenAI_Threads_Handler back into main.global_variables.
+ *
+ * Defined in plugin_main.cpp.  Called from the
+ * `SAVE GENAI VARIABLES TO MEMORY` admin command.  Mirrors the
+ * pre-Step-5 `flush_genai_variables___runtime_to_database` in core.
+ */
+bool genai_save_variables_to_admindb(GenAIPluginContext& ctx);
+
+/**
  * @brief Pull runtime mcp-* values from the running
  *        MCP_Threads_Handler back into main.global_variables.
  *
