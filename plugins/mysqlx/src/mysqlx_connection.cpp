@@ -31,6 +31,15 @@ MysqlxConnection::~MysqlxConnection() {
 }
 
 bool MysqlxConnection::is_reusable() const {
+	// State-machine disqualifiers: connection has reached a terminal /
+	// error state from which reuse is unsafe regardless of the
+	// reusable_ flag. These catch failure paths that callers might
+	// have forgotten to translate into set_reusable(false).
+	if (state_ == ERROR_STATE || state_ == CLOSED) return false;
+	if (auth_state_ == BACKEND_AUTH_ERROR) return false;
+	// Caller-marked: in_transaction_ or has_prepared_stmt_ being true
+	// means the next session picking up this connection from the pool
+	// would inherit session-scoped state.
 	if (in_transaction_) return false;
 	if (has_prepared_stmt_) return false;
 	return reusable_;

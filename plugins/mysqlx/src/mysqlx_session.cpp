@@ -875,6 +875,11 @@ bool MysqlxSession::is_terminal_for_state(uint8_t msg_type) const {
 
 void MysqlxSession::handler_waiting_server_msg() {
 	if (server_ds().get_fd() < 0) {
+		// server_ds fd is -1 means we lost the backend out-of-band
+		// (close, error, premature stream reset). Don't put it in the
+		// pool as if it were healthy; is_reusable() will refuse it
+		// even if we did, but be explicit at the call site too.
+		if (backend_conn_) backend_conn_->set_reusable(false);
 		return_backend_to_pool();
 		status_ = WAITING_CLIENT_XMSG;
 		to_process = true;
@@ -884,12 +889,18 @@ void MysqlxSession::handler_waiting_server_msg() {
 	ssize_t r = server_ds().read_from_net();
 	if (r == 0) {
 		send_error(2013, "Lost connection to backend during query");
+		// Mark non-reusable so return_backend_to_pool deletes the
+		// connection instead of caching a dead socket. Without this,
+		// the next session that pulls from the pool gets a backend
+		// whose fd is closed / EOF.
+		if (backend_conn_) backend_conn_->set_reusable(false);
 		return_backend_to_pool();
 		healthy = false;
 		return;
 	}
 	if (r < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
 		send_error(2013, "Backend read error during query");
+		if (backend_conn_) backend_conn_->set_reusable(false);
 		return_backend_to_pool();
 		healthy = false;
 		return;
@@ -930,6 +941,7 @@ void MysqlxSession::handler_waiting_server_msg() {
 
 void MysqlxSession::handler_session_reset_waiting() {
 	if (server_ds().get_fd() < 0) {
+		if (backend_conn_) backend_conn_->set_reusable(false);
 		return_backend_to_pool();
 		status_ = WAITING_CLIENT_XMSG;
 		to_process = true;
@@ -938,6 +950,9 @@ void MysqlxSession::handler_session_reset_waiting() {
 
 	ssize_t r = server_ds().read_from_net();
 	if (r == 0 || (r < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+		// Backend died while waiting for the SESS_RESET response — treat
+		// the connection as dead, don't recycle it.
+		if (backend_conn_) backend_conn_->set_reusable(false);
 		return_backend_to_pool();
 		status_ = WAITING_CLIENT_XMSG;
 		to_process = true;

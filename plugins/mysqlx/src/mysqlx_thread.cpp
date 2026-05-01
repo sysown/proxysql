@@ -418,6 +418,22 @@ MysqlxConnection* Mysqlx_Thread::get_connection_from_cache(
 }
 
 void Mysqlx_Thread::return_connection_to_cache(MysqlxConnection* conn) {
+	// Decide reuse BEFORE reset(). reset() unconditionally clears
+	// in_transaction_ / has_prepared_stmt_ / sets reusable_=true
+	// (mysqlx_connection.cpp::reset). If we called reset first and
+	// THEN consulted is_reusable(), every connection — including ones
+	// in mid-transaction, ones holding prepared statements, ones the
+	// session explicitly marked non-reusable on a backend EOF or read
+	// error — would come back as "reusable" and re-enter the cache.
+	//
+	// is_reusable() also fails if the underlying socket is dead (EOF
+	// or read error path in mysqlx_session.cpp::~884 sets reusable_=
+	// false before calling return_backend_to_pool); preserving that
+	// signal here keeps dead fds out of the cache.
+	if (!conn->is_reusable()) {
+		delete conn;
+		return;
+	}
 	conn->reset();
 	std::lock_guard<std::mutex> lock(conn_cache_mutex_);
 	if (conn_cache_.size() >= max_cached_) {
