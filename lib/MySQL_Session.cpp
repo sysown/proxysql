@@ -7460,6 +7460,11 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			if (pos != nq.npos) {
 				nq.erase(pos + 1); // remove trailing spaces and semicolumns
 			}
+			// detect MariaDB SET STATEMENT ... FOR syntax
+			// pass through to backend without hostgroup locking
+			if (strncasecmp(nq.c_str(), (char *)"SET STATEMENT ", 14) == 0 && strcasestr(nq.c_str(), (char *)" FOR ")) {
+				return false;
+			}
 			if (
 				(
 					match_regexes && (match_regexes[1]->match(dig))
