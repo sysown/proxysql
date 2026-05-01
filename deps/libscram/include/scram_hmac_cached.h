@@ -4,6 +4,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Optimized SCRAM-SHA-256 key derivation with cached OpenSSL EVP_MD*.
  * Avoids repeated EVP_MD_fetch() overhead on OpenSSL 3.x.
  * All functions hardcode SHA-256 / 32-byte key length.
@@ -33,5 +37,14 @@ int scram_fast_hmac_update(scram_fast_hmac_ctx *ctx, const uint8_t *data, size_t
 int scram_fast_hmac_final(scram_fast_hmac_ctx *ctx, uint8_t *dest, size_t len);
 void scram_fast_hmac_free(scram_fast_hmac_ctx *ctx);
 const char *scram_fast_hmac_error(scram_fast_hmac_ctx *ctx);
+
+/* Invalidate all thread-local SCRAM verifier caches.
+ * Incremented on user reload so stale entries are discarded
+ * on next lookup. */
+void scram_cache_invalidate(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

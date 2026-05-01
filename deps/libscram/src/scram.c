@@ -47,6 +47,11 @@ static __thread char errorBuffer[MAX_ERROR_LENGTH];
  * Thread safety: each thread has its own cache (thread-local).  The first
  * connection per thread per user pays the PBKDF2 cost; all subsequent ones
  * are fast.
+ *
+ * Cache invalidation: a global generation counter is atomically incremented
+ * by scram_cache_invalidate() when pgsql_users are reloaded.  Each thread
+ * checks its local generation on lookup; if stale, the entire cache is
+ * cleared and rebuilt from scratch.
  */
 #define SCRAM_VERIFIER_CACHE_SLOTS 64
 
@@ -55,16 +60,37 @@ struct scram_verifier_cache_entry {
 	char *verifier;		/* SCRAM-SHA-256$... verifier (value) */
 };
 
+static uint64_t scram_cache_generation = 0;
+static __thread uint64_t scram_my_generation = 0;
 static __thread struct scram_verifier_cache_entry scram_verifier_cache[SCRAM_VERIFIER_CACHE_SLOTS];
 static __thread int scram_verifier_cache_count = 0;
 
+static void scram_cache_clear(void)
+{
+	for (int i = 0; i < scram_verifier_cache_count; i++) {
+		free(scram_verifier_cache[i].password);
+		free(scram_verifier_cache[i].verifier);
+	}
+	scram_verifier_cache_count = 0;
+}
+
 static const char *scram_cache_lookup(const char *password)
 {
+	uint64_t gen = __atomic_load_n(&scram_cache_generation, __ATOMIC_RELAXED);
+	if (scram_my_generation != gen) {
+		scram_cache_clear();
+		scram_my_generation = gen;
+	}
 	for (int i = 0; i < scram_verifier_cache_count; i++) {
 		if (strcmp(scram_verifier_cache[i].password, password) == 0)
 			return scram_verifier_cache[i].verifier;
 	}
 	return NULL;
+}
+
+void scram_cache_invalidate(void)
+{
+	__atomic_add_fetch(&scram_cache_generation, 1, __ATOMIC_RELAXED);
 }
 
 static bool scram_cache_store(const char *password, const char *verifier)
