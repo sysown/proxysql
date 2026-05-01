@@ -59,11 +59,14 @@ The chassis (`lib/ProxySQL_PluginManager.cpp:324–383`) enforces:
 ### Current ABI version
 
 ```c
-#define PROXYSQL_PLUGIN_ABI_VERSION       2
-#define PROXYSQL_PLUGIN_ABI_VERSION_MAX   2
+#define PROXYSQL_PLUGIN_ABI_VERSION       3
+#define PROXYSQL_PLUGIN_ABI_VERSION_MAX   3
 ```
 
-ABI 1 and ABI 2 differ in **one field**: ABI 2 appends `register_schemas`. ABI-1 plugins skip Phase B entirely.
+ABI evolution so far:
+
+- **ABI 1 → ABI 2:** appends `register_schemas` to the descriptor (four-phase lifecycle). ABI-1 plugins skip Phase B entirely.
+- **ABI 2 → ABI 3:** descriptor layout is **unchanged**. The single addition is a `register_runtime_view` callback at the **tail of `ProxySQL_PluginServices`** (see §3 below). ABI-2 plugins keep loading on an ABI-3 core: their compiled-against `ProxySQL_PluginServices` simply ends one field earlier, and core never dereferences the trailing field for them. The accept range remains `[1, PROXYSQL_PLUGIN_ABI_VERSION_MAX]`.
 
 Future ABI versions append fields. The chassis bumps `PROXYSQL_PLUGIN_ABI_VERSION_MAX` and gates each new field's read on `abi_version >= N`.
 
@@ -88,16 +91,18 @@ The services struct is the **same shape** in every phase, but some function poin
 | `get_statsdb` | **returns nullptr** | live | live | live |
 | `register_query_hook` | **returns false (warn)** | live | n/a | n/a |
 | `get_prometheus_registry` | live | live | live | live |
+| `register_runtime_view` (ABI 3) | live | live | n/a | n/a |
 
 Reasons:
 
 - **DB handles in Phase B** — the admin module hasn't initialized yet, so the SQLite handles don't exist. Returning a nullptr from a stub is safer than not installing the function pointer (a misbehaving plugin sees a nullptr return instead of crashing on a null function pointer call).
 - **`register_query_hook` in Phase B** — query hooks are registered in `commands_` / `mysql_query_hook_` / `pgsql_query_hook_`, which Phase D writes and workers read lock-free. Phase B is too early; the plugin is told "no" and warned.
-- **Registration after Phase D** — the chassis does not currently support live registration. Once Phase D returns, `register_table` / `register_command` are not called by anyone. This is by design — see §6 for the worker-thread visibility argument.
+- **`register_runtime_view` in Phase B** — runtime views are typically declared alongside the editable tables they project, so the callback is wired live in BOTH `services_phase_b_` and `services_` (Phase D). Plugins may also register from `init`.
+- **Registration after Phase D** — the chassis does not currently support live registration. Once Phase D returns, `register_table` / `register_command` / `register_runtime_view` are not called by anyone. This is by design — see §6 for the worker-thread visibility argument.
 
 ### Field stability
 
-The services struct is **tail-extensible**. The chassis fills the struct in declaration order and the plugin reads what it knows about. A plugin compiled against ABI 2 that runs on a future ABI-3 chassis will simply not see the new fields; that's fine.
+The services struct is **tail-extensible**. The chassis fills the struct in declaration order and the plugin reads what it knows about. A plugin compiled against ABI 2 still loads on the current ABI-3 chassis: its compiled-against `ProxySQL_PluginServices` ends at `register_command_alias` and the chassis simply doesn't dereference the trailing `register_runtime_view` for that plugin. Same rule applies for any future ABI-N additions.
 
 The reverse — a future plugin trying to call a field that doesn't exist on the current chassis — would crash. The chassis prevents this by rejecting plugins whose `abi_version > PROXYSQL_PLUGIN_ABI_VERSION_MAX`.
 
@@ -136,15 +141,23 @@ The chassis loads with `RTLD_NOW | RTLD_LOCAL`. This means:
 
 ---
 
-## 5. The empty-source-sync invariant
+## 5. Separation of duties between Admin and the plugin module
 
-This is a behavioural invariant baked into how the chassis-driven LOAD/SAVE commands work. It's documented at the bottom of `include/ProxySQL_Plugin.h` and at length in `doc/PLUGIN_API.md`. Briefly:
+This is the central behavioural contract for chassis-driven LOAD/SAVE commands. It is documented in full at the bottom of `include/ProxySQL_Plugin.h` and at length in `doc/PLUGIN_API.md`. Briefly:
 
-When a plugin's `LOAD ... TO RUNTIME` command runs, it copies rows from a "source" table (e.g. `mysqlx_users`) to a "runtime" table (e.g. `runtime_mysqlx_users`). The convention is that this is a full replace: existing runtime rows are deleted, then the source rows are inserted. **Including when the source table is empty.** An empty source means "no users / no routes / nothing", not "leave the runtime alone".
+- **Admin** owns the editable, persistent configuration tables (e.g. `mysqlx_users`, `mysqlx_routes`).
+- The **plugin module** owns the runtime state — typically an in-memory snapshot kept under its own mutex (e.g. `MysqlxConfigStore`).
+- The `runtime_<X>` table in `admin_db` is **not module storage**; it is an admin-side **view** of module state, projected on demand by a callback the plugin registers via `services.register_runtime_view(...)`.
 
-This is the convention the core's own LOAD/SAVE commands follow. Plugins must do the same. PR #5643 fixed an early mysqlx implementation that did NOT delete first; it caused stale-row bugs after `DELETE FROM mysqlx_users; LOAD MYSQLX USERS TO RUNTIME;` left the runtime table populated with the previous values.
+Therefore:
 
-The reference implementation is `plugins/mysqlx/src/mysqlx_admin_schema.cpp:copy_table()` — it does `BEGIN; DELETE FROM <runtime>; INSERT INTO <runtime> SELECT * FROM <source>; COMMIT;` with checked rollback on any failure.
+- `LOAD <X> TO RUNTIME` reads the editable admin table and hands the rows to the module via a typed install API that swaps state under the module's own lock. It MUST NOT touch `runtime_<X>`.
+- `SAVE <X> [FROM RUNTIME] TO MEMORY` dumps the module's in-memory state and `REPLACE INTO`s the editable admin table. It MUST NOT read `runtime_<X>`.
+- `runtime_<X>` is repopulated by the registered refresh callback before any admin SELECT touches it. Admin's pre-SELECT hook walks every registered view and invokes the callback for any view whose table name is referenced as a whole identifier in the SQL query (case-insensitive; identifier-aware, so `runtime_<X>_extra` or `stats_runtime_<X>` do not match `runtime_<X>`).
+
+Disk-tier copies (`LOAD <X> FROM DISK`, `SAVE <X> TO DISK`) are the exception: those DO copy between configdb and admindb persistent tables, and they remain plain `BEGIN/DELETE/INSERT/COMMIT` with checked rollback. For those, the **empty-source-must-still-clear-destination** rule still applies — a `DELETE FROM mysqlx_users; SAVE MYSQLX USERS TO DISK;` must leave the disk table empty, not preserve the previous rows. PR #5643 fixed an early mysqlx implementation that omitted the unconditional DELETE on the disk path.
+
+The reference for the runtime-view path is `plugins/mysqlx/src/mysqlx_admin_schema.cpp` (each `load_<X>_to_runtime` callback calls `MysqlxConfigStore::install_<X>_from_admin`; each `save_<X>_from_runtime` calls `save_<X>_to_admin_table`; four free `refresh_<X>_runtime_view` callbacks are wired via `services.register_runtime_view`).
 
 ---
 
@@ -238,7 +251,7 @@ static bool my_stop(const ProxySQL_PluginServices* services) {
 
 static const ProxySQL_PluginDescriptor descriptor = {
     "my_plugin",                          // name
-    PROXYSQL_PLUGIN_ABI_VERSION,          // abi_version (= 2)
+    PROXYSQL_PLUGIN_ABI_VERSION,          // abi_version (= 3)
     my_init,                              // init   (Phase D)
     my_start,                             // start  (Phase E)
     my_stop,                              // stop
