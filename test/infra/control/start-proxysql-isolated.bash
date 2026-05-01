@@ -219,7 +219,7 @@ SET admin-cluster_username="cluster1";
 SET admin-cluster_password="secret1pass";
 SET admin-cluster_mysql_servers_sync_algorithm=3;
 SET admin-restapi_enabled='true';
-SET admin-debug='true';
+-- LOCAL PATCH: admin-debug not recognised in current builds
 UPDATE global_variables SET variable_value='false' WHERE variable_name='admin-hash_passwords';
 ${PROXYSQL_SERVERS_SQL}
 LOAD ADMIN VARIABLES TO RUNTIME;
@@ -239,7 +239,7 @@ UPDATE global_variables SET variable_value='false' WHERE variable_name='admin-ha
 SET admin-cluster_mysql_servers_sync_algorithm=3;
 SET admin-restapi_port=${RESTAPI_PORT};
 SET admin-restapi_enabled='true';
-SET admin-debug='true';
+-- LOCAL PATCH: admin-debug not recognised in current builds
 ${PROXYSQL_SERVERS_SQL}
 LOAD ADMIN VARIABLES TO RUNTIME;
 SAVE ADMIN VARIABLES TO DISK;

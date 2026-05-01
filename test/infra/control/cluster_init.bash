@@ -82,7 +82,9 @@ SET admin-cluster_password="secret1pass";
 UPDATE global_variables SET variable_value='false' WHERE variable_name='admin-hash_passwords';
 SET admin-restapi_port=$((6070 + i));
 SET admin-restapi_enabled='true';
-SET admin-debug='true';
+-- LOCAL PATCH (not for upstream): admin-debug is no longer a recognised
+-- global_variable in current builds; skipping the SET so cluster init
+-- can proceed.  Unrelated to the GenAI plugin carve-out.
 
 DELETE FROM proxysql_servers;
 -- Every node should know about the Primary
