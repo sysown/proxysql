@@ -152,6 +152,34 @@ private:
 	int step_auth_continue_sent();
 	int send_client_frame(uint8_t msg_type, const std::string& payload);
 	std::optional<MysqlxFrame> read_auth_frame();
+
+	// Per-state policy for backend-auth-phase NOTICE frames (issue
+	// #5695). Returns true iff the notice can be silently drained
+	// (legitimate type for the auth phase); returns false and sets
+	// auth_state_=BACKEND_AUTH_ERROR if the notice is malformed,
+	// unknown-type, or otherwise out of policy. See implementation
+	// comment in mysqlx_connection.cpp for the full per-type decision
+	// matrix.
+	//
+	// Frontend forwarding is NEVER allowed pre-auth — even legitimate
+	// notices are terminated on the backend leg here, since the
+	// frontend client has no context for backend NOTICEs before it sees
+	// AuthenticateOk and forwarding them would leak server-side state
+	// mid-handshake.
+	bool auth_phase_notice_is_drainable(const uint8_t* body, size_t body_len);
+
+#ifdef MYSQLX_TEST_BUILD
+public:
+	// Test-only access to the per-state policy under MYSQLX_TEST_BUILD
+	// so the unit tests can drive the decision matrix directly without
+	// running the full step_auth state machine. The helper mutates
+	// auth_state_ on failure paths; tests need to reset it between
+	// iterations via set_auth_state_for_test().
+	bool auth_phase_notice_is_drainable_for_test(const uint8_t* body, size_t body_len) {
+		return auth_phase_notice_is_drainable(body, body_len);
+	}
+	void set_auth_state_for_test(BackendAuthState s) { auth_state_ = s; }
+#endif
 };
 
 #endif
