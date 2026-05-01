@@ -46,16 +46,25 @@ int main() {
 	// tables(kind) getters below return empty vectors regardless of
 	// init_all() succeeding. Plugins that opt out of Phase B (ABI 1)
 	// register everything in init_all(); for those the call below is a
-	// no-op (returns true with err empty).
-	ok(mgr.invoke_register_schemas_phase(err),
-	   "invoke_register_schemas_phase registers mysqlx schema");
-	if (!err.empty()) {
+	// no-op (returns true with err empty). BAIL_OUT on failure because
+	// every subsequent assertion asserts on tables(kind) state populated
+	// during Phase B — they would all spuriously fail and obscure the
+	// real cause.
+	//
+	// Capture return values explicitly rather than reading `err` to
+	// detect failure: both invoke_register_schemas_phase and init_all
+	// call err.clear() on entry, so a leftover err from a prior call
+	// can't be used as a success indicator.
+	const bool schemas_ok = mgr.invoke_register_schemas_phase(err);
+	ok(schemas_ok, "invoke_register_schemas_phase registers mysqlx schema");
+	if (!schemas_ok) {
 		diag("register_schemas error: %s", err.c_str());
-		err.clear();
+		BAIL_OUT("mysqlx schema registration must succeed before table assertions");
 	}
 
-	ok(mgr.init_all(err), "init_all completes after schema registration");
-	if (!err.empty()) {
+	const bool init_ok = mgr.init_all(err);
+	ok(init_ok, "init_all completes after schema registration");
+	if (!init_ok) {
 		diag("init error: %s", err.c_str());
 	}
 
