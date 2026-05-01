@@ -245,6 +245,12 @@ private:
 	// sets mysqlx_backend_endpoints.use_ssl=1 to force backend TLS
 	// even when the client connected in plaintext.
 	bool target_use_ssl_;
+	// Cached identity_->default_route, captured in
+	// resolve_backend_target() so the data-plane bytes-counter sites
+	// (forward_to_backend / handler_waiting_server_msg) don't have
+	// to dereference identity_ on every frame. Empty until resolve
+	// succeeds; cleared by reset().
+	std::string route_name_;
 	MysqlxIdentityLookup identity_lookup_;
 	std::optional<MysqlxResolvedIdentity> identity_;
 	uint64_t start_time_;

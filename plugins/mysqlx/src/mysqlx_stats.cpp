@@ -57,6 +57,18 @@ void MysqlxStatsStore::record_conn_used(const std::string& route_name, int desti
 	get_or_create(route_name, destination_hostgroup).conn_used.fetch_add(1, std::memory_order_relaxed);
 }
 
+void MysqlxStatsStore::record_bytes_sent(const std::string& route_name, int destination_hostgroup, uint64_t n) {
+	if (n == 0) return;
+	std::lock_guard<std::mutex> lock(mutex_);
+	get_or_create(route_name, destination_hostgroup).bytes_sent.fetch_add(n, std::memory_order_relaxed);
+}
+
+void MysqlxStatsStore::record_bytes_recv(const std::string& route_name, int destination_hostgroup, uint64_t n) {
+	if (n == 0) return;
+	std::lock_guard<std::mutex> lock(mutex_);
+	get_or_create(route_name, destination_hostgroup).bytes_recv.fetch_add(n, std::memory_order_relaxed);
+}
+
 uint64_t MysqlxStatsStore::get_conn_ok(const std::string& route_name) const {
 	std::lock_guard<std::mutex> lock(mutex_);
 	auto it = route_stats_.find(route_name);
