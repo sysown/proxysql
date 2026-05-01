@@ -183,11 +183,18 @@ ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c ClickHouse_Server),0)
 	PSQLCH := -DPROXYSQLCLICKHOUSE
 endif
 PSQLGA :=
-# Probe for the last still-in-core PROXYSQLGENAI symbol.  After Step 6
-# only MCP_Tool_Handler (the base class AI/RAG handlers in the plugin
-# inherit from) lives in libproxysql.a under the GenAI tier.  Step 7
-# deletes the macro entirely and this autodetect goes away.
-ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c MCP_Tool_Handler),0)
+# Step 7 of the carve-out moved every GenAI symbol (MCP_Tool_Handler,
+# Anomaly_Detector, MCP_Threads_Handler, ...) out of libproxysql.a
+# into plugins/genai/.  There is no longer any in-core symbol to
+# probe for; the macro lives only inside plugin TUs and inside the
+# unit tests that exercise the plugin (which dlopen the .so or read
+# the plugin headers directly).  We therefore force it on whenever
+# the plugin chassis (PROXYSQL40) is present — the genai-plugin unit
+# tests are gated on PROXYSQL40 below anyway and need the macro to
+# compile their `#ifdef PROXYSQLGENAI` blocks.  When PROXYSQL40 is
+# absent (v3.0/v3.1 builds) the macro stays empty and the genai
+# unit-test subset is skipped entirely.
+ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c invoke_register_schemas_phase),0)
 	PROXYSQLGENAI := 1
 	PSQLGA := -DPROXYSQLGENAI
 endif

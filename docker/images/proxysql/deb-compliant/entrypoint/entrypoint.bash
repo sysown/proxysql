@@ -96,30 +96,48 @@ cp -r ../systemd ./systemd
 # files installed to /usr/lib/proxysql/ and named in proxysql.cnf
 # `plugins=("...")` to be loaded.  Conditional on the same flags that
 # gated the build above so v3.x deb packaging stays unchanged.
-PLUGIN_FILES_LINES=""
 mkdir -p ./plugins
-if [[ "${PROXYSQL40:-}" == "1" || "${PROXYSQLGENAI:-}" == "1" ]]; then
-    if [[ -f ../plugins/mysqlx/ProxySQL_Mysqlx_Plugin.so ]]; then
-        cp ../plugins/mysqlx/ProxySQL_Mysqlx_Plugin.so ./plugins/
-        PLUGIN_FILES_LINES+=" plugins/ProxySQL_Mysqlx_Plugin.so /usr/lib/proxysql/\n"
+PLUGIN_FILES_BLOCK=""
+add_plugin_to_pkg() {
+    # $1 = source path under ../plugins/, $2 = file basename to ship
+    local src="$1"
+    local basename="$2"
+    if [[ -f "${src}" ]]; then
+        cp "${src}" "./plugins/${basename}"
+        # Build the equivs `Files:` line for this plugin.  Each line
+        # starts with a single literal space (equivs continuation
+        # marker) and a real newline terminator.  Avoid string escapes
+        # — interpolation happens in bash here, not awk/sed later.
+        PLUGIN_FILES_BLOCK+=$' plugins/'"${basename}"$' /usr/lib/proxysql/\n'
     fi
+}
+if [[ "${PROXYSQL40:-}" == "1" || "${PROXYSQLGENAI:-}" == "1" ]]; then
+    add_plugin_to_pkg "../plugins/mysqlx/ProxySQL_Mysqlx_Plugin.so" "ProxySQL_Mysqlx_Plugin.so"
 fi
 if [[ "${PROXYSQLGENAI:-}" == "1" ]]; then
-    if [[ -f ../plugins/genai/ProxySQL_GenAI_Plugin.so ]]; then
-        cp ../plugins/genai/ProxySQL_GenAI_Plugin.so ./plugins/
-        PLUGIN_FILES_LINES+=" plugins/ProxySQL_GenAI_Plugin.so /usr/lib/proxysql/\n"
-    fi
+    add_plugin_to_pkg "../plugins/genai/ProxySQL_GenAI_Plugin.so" "ProxySQL_GenAI_Plugin.so"
 fi
-# Substitute the placeholder line in the ctl file.  If no plugins were
-# built (v3.x release builds), strip the placeholder line entirely.
-if [[ -n "${PLUGIN_FILES_LINES}" ]]; then
-    # awk so we don't have to escape the newline-laden RHS for sed.
-    awk -v repl="${PLUGIN_FILES_LINES%\\n}" '{
-        if ($0 == "PKG_PLUGIN_FILES_PLACEHOLDER") { gsub("\\\\n", "\n", repl); printf "%s", repl; }
-        else { print; }
-    }' ./proxysql.ctl > ./proxysql.ctl.new && mv ./proxysql.ctl.new ./proxysql.ctl
-else
-    sed -i '/^PKG_PLUGIN_FILES_PLACEHOLDER$/d' ./proxysql.ctl
+
+# Replace the PKG_PLUGIN_FILES_PLACEHOLDER line with the assembled
+# block.  We use `awk` reading the replacement block from a separate
+# file rather than via -v; -v parses backslash escapes in the value
+# string, which mangles paths.  Reading the file verbatim sidesteps
+# that entirely — and also handles the empty-replacement (v3.x) case
+# by simply not printing the placeholder line.
+printf '%s' "${PLUGIN_FILES_BLOCK}" > ./proxysql.ctl.plugins
+awk '
+    BEGIN { while ((getline line < "./proxysql.ctl.plugins") > 0) repl = repl line "\n"; close("./proxysql.ctl.plugins") }
+    $0 == "PKG_PLUGIN_FILES_PLACEHOLDER" { printf "%s", repl; next }
+    { print }
+' ./proxysql.ctl > ./proxysql.ctl.new && mv ./proxysql.ctl.new ./proxysql.ctl
+rm -f ./proxysql.ctl.plugins
+
+# Defensive fail-fast: if the placeholder somehow survived (ctl file
+# reorganised, awk failed silently), abort rather than ship a broken
+# package.
+if grep -q '^PKG_PLUGIN_FILES_PLACEHOLDER$' ./proxysql.ctl; then
+    echo "ERROR: PKG_PLUGIN_FILES_PLACEHOLDER not substituted in proxysql.ctl" >&2
+    exit 1
 fi
 DEB_BUILD_OPTIONS=nostrip equivs-build proxysql.ctl
 cp ./proxysql_${CURVER}_${ARCH}.deb ../binaries/proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}.deb

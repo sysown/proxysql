@@ -171,8 +171,13 @@ bool genai_init(ProxySQL_PluginServices* services) {
 	// Wire the embedding back-end into Anomaly_Detector via the
 	// function-pointer hook (Step 5).  Detector calls through this
 	// pointer; tests that compile Anomaly_Detector.cpp standalone
-	// leave it null and embedding silently short-circuits.
-	genai_anomaly_embed_fn.store(&embed_query_via_glogath, std::memory_order_relaxed);
+	// leave it null and embedding silently short-circuits.  Release
+	// ordering pairs with the acquire load in
+	// Anomaly_Detector::get_query_embedding so any reader that sees
+	// the non-null pointer ALSO sees the prior `GloGATH = new ...`
+	// store — see the long comment next to the definition for why
+	// relaxed isn't enough here.
+	genai_anomaly_embed_fn.store(&embed_query_via_glogath, std::memory_order_release);
 
 	// Step 4.C: take over MCP_Threads_Handler ownership from former
 	// core global GloMCPH.  Construct here; `init()` is called below.
@@ -484,14 +489,14 @@ bool mcp_load_target_auth_map_from_admindb(GenAIPluginContext& ctx) {
 	if (admindb == nullptr) return false;
 
 	std::string err;
-	if (!ctx.mcp->install_auth_profiles_from_admin(*admindb, err)) {
-		genai_log(6, "genai plugin: install_auth_profiles_from_admin failed: %s\n",
-		        err.empty() ? "(no error message)" : err.c_str());
-		return false;
-	}
-	err.clear();
-	if (!ctx.mcp->install_target_profiles_from_admin(*admindb, err)) {
-		genai_log(6, "genai plugin: install_target_profiles_from_admin failed: %s\n",
+	// Combined install: reads main.mcp_auth_profiles AND
+	// main.mcp_target_profiles, then under a single wrlock swaps both
+	// in-memory snapshots and rebuilds target_auth_map.  Calling the
+	// per-table install_*_from_admin methods sequentially leaves
+	// target_auth_map rebuilt from a mismatched snapshot if the second
+	// install fails (e.g. admindb hiccup).
+	if (!ctx.mcp->install_profiles_from_admin(*admindb, err)) {
+		genai_log(6, "genai plugin: install_profiles_from_admin failed: %s\n",
 		        err.empty() ? "(no error message)" : err.c_str());
 		return false;
 	}
@@ -500,8 +505,16 @@ bool mcp_load_target_auth_map_from_admindb(GenAIPluginContext& ctx) {
 
 /**
  * @brief Persist the MCP_Threads_Handler profile snapshots back to
- *        main.mcp_auth_profiles + main.mcp_target_profiles.  ABI-3
- *        SAVE side; never touches runtime_mcp_*.
+ *        main.mcp_auth_profiles + main.mcp_target_profiles in a single
+ *        transaction.  ABI-3 SAVE side; never touches runtime_mcp_*.
+ *
+ * Atomicity matters here: target.auth_profile_id has an FK reference to
+ * auth.auth_profile_id, so writing the two tables in separate
+ * transactions could leave a window where a concurrent reader sees the
+ * new auth_profiles + the old target_profiles (or vice versa) and
+ * concludes the FK is broken.  save_profiles_to_admin_table snapshots
+ * both vectors under one rdlock and writes both tables inside one
+ * BEGIN ... COMMIT.
  */
 bool mcp_save_target_auth_map_to_admindb(GenAIPluginContext& ctx) {
 	if (ctx.services == nullptr || ctx.services->get_admindb == nullptr || ctx.mcp == nullptr) {
@@ -509,12 +522,8 @@ bool mcp_save_target_auth_map_to_admindb(GenAIPluginContext& ctx) {
 	}
 	SQLite3DB* admindb = ctx.services->get_admindb();
 	if (admindb == nullptr) return false;
-	if (!ctx.mcp->save_auth_profiles_to_admin_table(*admindb)) {
-		genai_log(6, "genai plugin: save_auth_profiles_to_admin_table failed\n");
-		return false;
-	}
-	if (!ctx.mcp->save_target_profiles_to_admin_table(*admindb)) {
-		genai_log(6, "genai plugin: save_target_profiles_to_admin_table failed\n");
+	if (!ctx.mcp->save_profiles_to_admin_table(*admindb)) {
+		genai_log(6, "genai plugin: save_profiles_to_admin_table failed\n");
 		return false;
 	}
 	return true;
@@ -651,10 +660,14 @@ bool genai_stop() {
 	if (ctx.anomaly_detector != nullptr) {
 		// Clear the embedding hook before deleting the detector so
 		// any in-flight hot-path call sees a null pointer rather
-		// than a dangling GenAI_Threads_Handler reference.  Atomic
-		// store rather than plain assignment so a concurrent reader
-		// can never observe a torn pointer.
-		genai_anomaly_embed_fn.store(nullptr, std::memory_order_relaxed);
+		// than a dangling GenAI_Threads_Handler reference.  Release
+		// ordering pairs with the acquire load in
+		// Anomaly_Detector::get_query_embedding so subsequent
+		// readers either observe the null (and short-circuit)
+		// before the GloGATH delete becomes visible, or observe
+		// the prior non-null pointer paired with the
+		// still-live GloGATH from genai_init.
+		genai_anomaly_embed_fn.store(nullptr, std::memory_order_release);
 		ctx.anomaly_detector->close();
 		delete ctx.anomaly_detector;
 		ctx.anomaly_detector = nullptr;

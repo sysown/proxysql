@@ -545,7 +545,21 @@ void MCP_Threads_Handler::rebuild_target_auth_map_locked() {
 	target_auth_map.swap(new_map);
 }
 
-bool MCP_Threads_Handler::install_auth_profiles_from_admin(SQLite3DB& admindb, std::string& err) {
+namespace {
+
+// Read main.mcp_auth_profiles into a fresh vector.  No module-state
+// access — purely SELECT + parse.  Caller decides when to take the
+// wrlock to swap the result into MCP_Threads_Handler::auth_profiles_.
+// Lifting this out of install_auth_profiles_from_admin lets the
+// combined install_profiles_from_admin run both reads outside the
+// lock, hold one wrlock for both swaps, and rebuild target_auth_map
+// once after both succeed (avoids the partial-success window where
+// the joined map references new auth rows but stale target rows).
+bool read_auth_profiles_from_admin(
+	SQLite3DB& admindb,
+	std::vector<MCP_Threads_Handler::MCP_Auth_Profile_Row>& out,
+	std::string& err
+) {
 	char* sqlite_err = nullptr;
 	int cols = 0, affected_rows = 0;
 	SQLite3_result* rs = nullptr;
@@ -560,13 +574,11 @@ bool MCP_Threads_Handler::install_auth_profiles_from_admin(SQLite3DB& admindb, s
 		if (rs != nullptr) delete rs;
 		return false;
 	}
-
-	std::vector<MCP_Auth_Profile_Row> next;
 	if (rs != nullptr) {
-		next.reserve(rs->rows.size());
+		out.reserve(rs->rows.size());
 		for (auto* row : rs->rows) {
 			if (row->cnt < 7 || row->fields[0] == nullptr) continue;
-			MCP_Auth_Profile_Row a;
+			MCP_Threads_Handler::MCP_Auth_Profile_Row a;
 			a.auth_profile_id = nz(row->fields[0]);
 			a.db_username     = nz(row->fields[1]);
 			a.db_password     = nz(row->fields[2]);
@@ -574,19 +586,20 @@ bool MCP_Threads_Handler::install_auth_profiles_from_admin(SQLite3DB& admindb, s
 			a.use_ssl         = row->fields[4] ? atoi(row->fields[4]) : 0;
 			a.ssl_mode        = nz(row->fields[5]);
 			a.comment         = nz(row->fields[6]);
-			next.push_back(std::move(a));
+			out.push_back(std::move(a));
 		}
 		delete rs;
 	}
-
-	pthread_rwlock_wrlock(&rwlock);
-	auth_profiles_.swap(next);
-	rebuild_target_auth_map_locked();
-	pthread_rwlock_unlock(&rwlock);
 	return true;
 }
 
-bool MCP_Threads_Handler::install_target_profiles_from_admin(SQLite3DB& admindb, std::string& err) {
+// Read main.mcp_target_profiles into a fresh vector.  See
+// read_auth_profiles_from_admin above for the rationale.
+bool read_target_profiles_from_admin(
+	SQLite3DB& admindb,
+	std::vector<MCP_Threads_Handler::MCP_Target_Profile_Row>& out,
+	std::string& err
+) {
 	char* sqlite_err = nullptr;
 	int cols = 0, affected_rows = 0;
 	SQLite3_result* rs = nullptr;
@@ -601,13 +614,11 @@ bool MCP_Threads_Handler::install_target_profiles_from_admin(SQLite3DB& admindb,
 		if (rs != nullptr) delete rs;
 		return false;
 	}
-
-	std::vector<MCP_Target_Profile_Row> next;
 	if (rs != nullptr) {
-		next.reserve(rs->rows.size());
+		out.reserve(rs->rows.size());
 		for (auto* row : rs->rows) {
 			if (row->cnt < 11 || row->fields[0] == nullptr) continue;
-			MCP_Target_Profile_Row t;
+			MCP_Threads_Handler::MCP_Target_Profile_Row t;
 			t.target_id        = nz(row->fields[0]);
 			t.protocol         = nz(row->fields[1]);
 			t.hostgroup_id     = row->fields[2] ? atoi(row->fields[2]) : 0;
@@ -619,13 +630,123 @@ bool MCP_Threads_Handler::install_target_profiles_from_admin(SQLite3DB& admindb,
 			t.allow_discovery  = row->fields[8] ? atoi(row->fields[8]) : 1;
 			t.active           = row->fields[9] ? atoi(row->fields[9]) : 1;
 			t.comment          = nz(row->fields[10]);
-			next.push_back(std::move(t));
+			out.push_back(std::move(t));
 		}
 		delete rs;
 	}
+	return true;
+}
 
+// Per-row INSERT helpers: bind, step, return false on error.  The
+// transaction-level callers wrap a loop of these in BEGIN ... COMMIT
+// and ROLLBACK if any returns false, so the half-done DELETE+INSERT
+// state is never left committed.
+bool insert_auth_row(sqlite3_stmt* st, const MCP_Threads_Handler::MCP_Auth_Profile_Row& a) {
+	int rc = 0;
+	bind_text_or_null(st, 1, a.auth_profile_id.c_str());
+	bind_text_or_null(st, 2, a.db_username.c_str());
+	bind_text_or_null(st, 3, a.db_password.c_str());
+	bind_text_or_null(st, 4, a.default_schema.c_str());
+	bind_int        (st, 5, a.use_ssl);
+	bind_text_or_null(st, 6, a.ssl_mode.c_str());
+	bind_text_or_null(st, 7, a.comment.c_str());
+	SAFE_SQLITE3_STEP2(st);
+	const bool ok = (rc == SQLITE_DONE);
+	(*proxy_sqlite3_clear_bindings)(st);
+	(*proxy_sqlite3_reset)(st);
+	return ok;
+}
+
+bool insert_target_row(sqlite3_stmt* st, const MCP_Threads_Handler::MCP_Target_Profile_Row& t) {
+	int rc = 0;
+	bind_text_or_null(st, 1, t.target_id.c_str());
+	bind_text_or_null(st, 2, t.protocol.c_str());
+	bind_int         (st, 3, t.hostgroup_id);
+	bind_text_or_null(st, 4, t.auth_profile_id.c_str());
+	bind_text_or_null(st, 5, t.description.c_str());
+	bind_int         (st, 6, t.max_rows);
+	bind_int         (st, 7, t.timeout_ms);
+	bind_int         (st, 8, t.allow_explain);
+	bind_int         (st, 9, t.allow_discovery);
+	bind_int         (st, 10, t.active);
+	bind_text_or_null(st, 11, t.comment.c_str());
+	SAFE_SQLITE3_STEP2(st);
+	const bool ok = (rc == SQLITE_DONE);
+	(*proxy_sqlite3_clear_bindings)(st);
+	(*proxy_sqlite3_reset)(st);
+	return ok;
+}
+
+bool insert_query_rule_row(sqlite3_stmt* st, const MCP_Threads_Handler::MCP_Query_Rule_Row& r) {
+	int rc = 0;
+	bind_int         (st, 1,  r.rule_id);
+	bind_int         (st, 2,  r.active);
+	bind_text_or_null(st, 3,  r.username.c_str());
+	bind_text_or_null(st, 4,  r.target_id.c_str());
+	bind_text_or_null(st, 5,  r.schemaname.c_str());
+	bind_text_or_null(st, 6,  r.tool_name.c_str());
+	bind_text_or_null(st, 7,  r.match_pattern.c_str());
+	bind_int         (st, 8,  r.negate_match_pattern);
+	bind_text_or_null(st, 9,  r.re_modifiers.c_str());
+	bind_int         (st, 10, r.flagIN);
+	if (r.flagOUT_is_null) (*proxy_sqlite3_bind_null)(st, 11);
+	else                   bind_int(st, 11, r.flagOUT);
+	bind_text_or_null(st, 12, r.replace_pattern.c_str());
+	if (r.timeout_ms_is_null) (*proxy_sqlite3_bind_null)(st, 13);
+	else                      bind_int(st, 13, r.timeout_ms);
+	bind_text_or_null(st, 14, r.error_msg.c_str());
+	bind_text_or_null(st, 15, r.OK_msg.c_str());
+	if (r.log_is_null) (*proxy_sqlite3_bind_null)(st, 16);
+	else               bind_int(st, 16, r.log);
+	bind_int         (st, 17, r.apply);
+	bind_text_or_null(st, 18, r.comment.c_str());
+	SAFE_SQLITE3_STEP2(st);
+	const bool ok = (rc == SQLITE_DONE);
+	(*proxy_sqlite3_clear_bindings)(st);
+	(*proxy_sqlite3_reset)(st);
+	return ok;
+}
+
+} // namespace
+
+bool MCP_Threads_Handler::install_auth_profiles_from_admin(SQLite3DB& admindb, std::string& err) {
+	std::vector<MCP_Auth_Profile_Row> next;
+	if (!read_auth_profiles_from_admin(admindb, next, err)) {
+		return false;
+	}
+	pthread_rwlock_wrlock(&rwlock);
+	auth_profiles_.swap(next);
+	rebuild_target_auth_map_locked();
+	pthread_rwlock_unlock(&rwlock);
+	return true;
+}
+
+bool MCP_Threads_Handler::install_target_profiles_from_admin(SQLite3DB& admindb, std::string& err) {
+	std::vector<MCP_Target_Profile_Row> next;
+	if (!read_target_profiles_from_admin(admindb, next, err)) {
+		return false;
+	}
 	pthread_rwlock_wrlock(&rwlock);
 	target_profiles_.swap(next);
+	rebuild_target_auth_map_locked();
+	pthread_rwlock_unlock(&rwlock);
+	return true;
+}
+
+bool MCP_Threads_Handler::install_profiles_from_admin(SQLite3DB& admindb, std::string& err) {
+	std::vector<MCP_Auth_Profile_Row> auth_next;
+	std::vector<MCP_Target_Profile_Row> target_next;
+
+	// Read both source tables BEFORE acquiring the wrlock so a slow
+	// admin DB doesn't gate the listener (which holds rdlock during
+	// every request).  If either read fails, the in-memory state is
+	// untouched.
+	if (!read_auth_profiles_from_admin(admindb, auth_next, err))     return false;
+	if (!read_target_profiles_from_admin(admindb, target_next, err)) return false;
+
+	pthread_rwlock_wrlock(&rwlock);
+	auth_profiles_.swap(auth_next);
+	target_profiles_.swap(target_next);
 	rebuild_target_auth_map_locked();
 	pthread_rwlock_unlock(&rwlock);
 	return true;
@@ -647,27 +768,18 @@ bool MCP_Threads_Handler::save_auth_profiles_to_admin_table(SQLite3DB& admindb) 
 		return false;
 	}
 	sqlite3_stmt* st = stmt.get();
-	int rc = 0;
 
 	pthread_rwlock_rdlock(&rwlock);
 	auto snapshot = auth_profiles_;
 	pthread_rwlock_unlock(&rwlock);
 
 	for (const auto& a : snapshot) {
-		bind_text_or_null(st, 1, a.auth_profile_id.c_str());
-		bind_text_or_null(st, 2, a.db_username.c_str());
-		bind_text_or_null(st, 3, a.db_password.c_str());
-		bind_text_or_null(st, 4, a.default_schema.c_str());
-		bind_int        (st, 5, a.use_ssl);
-		bind_text_or_null(st, 6, a.ssl_mode.c_str());
-		bind_text_or_null(st, 7, a.comment.c_str());
-		SAFE_SQLITE3_STEP2(st);
-		(*proxy_sqlite3_clear_bindings)(st);
-		(*proxy_sqlite3_reset)(st);
+		if (!insert_auth_row(st, a)) {
+			admindb.execute("ROLLBACK");
+			return false;
+		}
 	}
-
-	admindb.execute("COMMIT");
-	return true;
+	return admindb.execute("COMMIT");
 }
 
 bool MCP_Threads_Handler::save_target_profiles_to_admin_table(SQLite3DB& admindb) {
@@ -686,31 +798,81 @@ bool MCP_Threads_Handler::save_target_profiles_to_admin_table(SQLite3DB& admindb
 		return false;
 	}
 	sqlite3_stmt* st = stmt.get();
-	int rc = 0;
 
 	pthread_rwlock_rdlock(&rwlock);
 	auto snapshot = target_profiles_;
 	pthread_rwlock_unlock(&rwlock);
 
 	for (const auto& t : snapshot) {
-		bind_text_or_null(st, 1, t.target_id.c_str());
-		bind_text_or_null(st, 2, t.protocol.c_str());
-		bind_int        (st, 3, t.hostgroup_id);
-		bind_text_or_null(st, 4, t.auth_profile_id.c_str());
-		bind_text_or_null(st, 5, t.description.c_str());
-		bind_int        (st, 6, t.max_rows);
-		bind_int        (st, 7, t.timeout_ms);
-		bind_int        (st, 8, t.allow_explain);
-		bind_int        (st, 9, t.allow_discovery);
-		bind_int        (st, 10, t.active);
-		bind_text_or_null(st, 11, t.comment.c_str());
-		SAFE_SQLITE3_STEP2(st);
-		(*proxy_sqlite3_clear_bindings)(st);
-		(*proxy_sqlite3_reset)(st);
+		if (!insert_target_row(st, t)) {
+			admindb.execute("ROLLBACK");
+			return false;
+		}
+	}
+	return admindb.execute("COMMIT");
+}
+
+bool MCP_Threads_Handler::save_profiles_to_admin_table(SQLite3DB& admindb) {
+	// Snapshot both vectors under a single rdlock so the two source
+	// arrays are coherent even if a concurrent LOAD MCP PROFILES is
+	// installing fresh state in between.  Then delete + repopulate
+	// both target tables in a single BEGIN ... COMMIT — operators
+	// querying main.mcp_<X> mid-save can never see one table updated
+	// and the other still on the old data, and the FK constraint
+	// enforced by SQLite has no chance to flag dangling
+	// target.auth_profile_id rows.
+	pthread_rwlock_rdlock(&rwlock);
+	auto auth_snapshot = auth_profiles_;
+	auto target_snapshot = target_profiles_;
+	pthread_rwlock_unlock(&rwlock);
+
+	if (!admindb.execute("BEGIN")) return false;
+	// Delete targets BEFORE auths so the FK constraint never trips
+	// during the delete pass: target.auth_profile_id references
+	// auth_profile_id, so removing parents (auths) first would orphan
+	// children (targets).  Reverse on the insert side: write parents
+	// before children for the same reason.
+	if (!admindb.execute("DELETE FROM main.mcp_target_profiles")) {
+		admindb.execute("ROLLBACK");
+		return false;
+	}
+	if (!admindb.execute("DELETE FROM main.mcp_auth_profiles")) {
+		admindb.execute("ROLLBACK");
+		return false;
 	}
 
-	admindb.execute("COMMIT");
-	return true;
+	auto [auth_prep_rc, auth_stmt] = admindb.prepare_v2(
+		"INSERT INTO main.mcp_auth_profiles"
+		" (auth_profile_id, db_username, db_password, default_schema,"
+		"  use_ssl, ssl_mode, comment)"
+		" VALUES(?1,?2,?3,?4,?5,?6,?7)");
+	if (auth_prep_rc != SQLITE_OK) {
+		admindb.execute("ROLLBACK");
+		return false;
+	}
+	for (const auto& a : auth_snapshot) {
+		if (!insert_auth_row(auth_stmt.get(), a)) {
+			admindb.execute("ROLLBACK");
+			return false;
+		}
+	}
+
+	auto [target_prep_rc, target_stmt] = admindb.prepare_v2(
+		"INSERT INTO main.mcp_target_profiles"
+		" (target_id, protocol, hostgroup_id, auth_profile_id, description,"
+		"  max_rows, timeout_ms, allow_explain, allow_discovery, active, comment)"
+		" VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)");
+	if (target_prep_rc != SQLITE_OK) {
+		admindb.execute("ROLLBACK");
+		return false;
+	}
+	for (const auto& t : target_snapshot) {
+		if (!insert_target_row(target_stmt.get(), t)) {
+			admindb.execute("ROLLBACK");
+			return false;
+		}
+	}
+	return admindb.execute("COMMIT");
 }
 
 void MCP_Threads_Handler::project_auth_profiles_to_runtime_view(SQLite3DB& admindb) {
@@ -729,23 +891,16 @@ void MCP_Threads_Handler::project_auth_profiles_to_runtime_view(SQLite3DB& admin
 		return;
 	}
 	sqlite3_stmt* st = stmt.get();
-	int rc = 0;
 
 	pthread_rwlock_rdlock(&rwlock);
 	auto snapshot = auth_profiles_;
 	pthread_rwlock_unlock(&rwlock);
 
 	for (const auto& a : snapshot) {
-		bind_text_or_null(st, 1, a.auth_profile_id.c_str());
-		bind_text_or_null(st, 2, a.db_username.c_str());
-		bind_text_or_null(st, 3, a.db_password.c_str());
-		bind_text_or_null(st, 4, a.default_schema.c_str());
-		bind_int        (st, 5, a.use_ssl);
-		bind_text_or_null(st, 6, a.ssl_mode.c_str());
-		bind_text_or_null(st, 7, a.comment.c_str());
-		SAFE_SQLITE3_STEP2(st);
-		(*proxy_sqlite3_clear_bindings)(st);
-		(*proxy_sqlite3_reset)(st);
+		if (!insert_auth_row(st, a)) {
+			admindb.execute("ROLLBACK");
+			return;
+		}
 	}
 	admindb.execute("COMMIT");
 }
@@ -766,27 +921,16 @@ void MCP_Threads_Handler::project_target_profiles_to_runtime_view(SQLite3DB& adm
 		return;
 	}
 	sqlite3_stmt* st = stmt.get();
-	int rc = 0;
 
 	pthread_rwlock_rdlock(&rwlock);
 	auto snapshot = target_profiles_;
 	pthread_rwlock_unlock(&rwlock);
 
 	for (const auto& t : snapshot) {
-		bind_text_or_null(st, 1, t.target_id.c_str());
-		bind_text_or_null(st, 2, t.protocol.c_str());
-		bind_int        (st, 3, t.hostgroup_id);
-		bind_text_or_null(st, 4, t.auth_profile_id.c_str());
-		bind_text_or_null(st, 5, t.description.c_str());
-		bind_int        (st, 6, t.max_rows);
-		bind_int        (st, 7, t.timeout_ms);
-		bind_int        (st, 8, t.allow_explain);
-		bind_int        (st, 9, t.allow_discovery);
-		bind_int        (st, 10, t.active);
-		bind_text_or_null(st, 11, t.comment.c_str());
-		SAFE_SQLITE3_STEP2(st);
-		(*proxy_sqlite3_clear_bindings)(st);
-		(*proxy_sqlite3_reset)(st);
+		if (!insert_target_row(st, t)) {
+			admindb.execute("ROLLBACK");
+			return;
+		}
 	}
 	admindb.execute("COMMIT");
 }
@@ -895,40 +1039,18 @@ bool MCP_Threads_Handler::save_query_rules_to_admin_table(SQLite3DB& admindb) {
 		return false;
 	}
 	sqlite3_stmt* st = stmt.get();
-	int rc = 0;
 
 	pthread_rwlock_rdlock(&rwlock);
 	auto snapshot = query_rules_;
 	pthread_rwlock_unlock(&rwlock);
 
 	for (const auto& r : snapshot) {
-		bind_int        (st, 1,  r.rule_id);
-		bind_int        (st, 2,  r.active);
-		bind_text_or_null(st, 3,  r.username.c_str());
-		bind_text_or_null(st, 4,  r.target_id.c_str());
-		bind_text_or_null(st, 5,  r.schemaname.c_str());
-		bind_text_or_null(st, 6,  r.tool_name.c_str());
-		bind_text_or_null(st, 7,  r.match_pattern.c_str());
-		bind_int        (st, 8,  r.negate_match_pattern);
-		bind_text_or_null(st, 9,  r.re_modifiers.c_str());
-		bind_int        (st, 10, r.flagIN);
-		if (r.flagOUT_is_null) (*proxy_sqlite3_bind_null)(st, 11);
-		else                   bind_int(st, 11, r.flagOUT);
-		bind_text_or_null(st, 12, r.replace_pattern.c_str());
-		if (r.timeout_ms_is_null) (*proxy_sqlite3_bind_null)(st, 13);
-		else                      bind_int(st, 13, r.timeout_ms);
-		bind_text_or_null(st, 14, r.error_msg.c_str());
-		bind_text_or_null(st, 15, r.OK_msg.c_str());
-		if (r.log_is_null) (*proxy_sqlite3_bind_null)(st, 16);
-		else               bind_int(st, 16, r.log);
-		bind_int        (st, 17, r.apply);
-		bind_text_or_null(st, 18, r.comment.c_str());
-		SAFE_SQLITE3_STEP2(st);
-		(*proxy_sqlite3_clear_bindings)(st);
-		(*proxy_sqlite3_reset)(st);
+		if (!insert_query_rule_row(st, r)) {
+			admindb.execute("ROLLBACK");
+			return false;
+		}
 	}
-	admindb.execute("COMMIT");
-	return true;
+	return admindb.execute("COMMIT");
 }
 
 void MCP_Threads_Handler::project_query_rules_to_runtime_view(SQLite3DB& admindb) {
@@ -948,37 +1070,16 @@ void MCP_Threads_Handler::project_query_rules_to_runtime_view(SQLite3DB& admindb
 		return;
 	}
 	sqlite3_stmt* st = stmt.get();
-	int rc = 0;
 
 	pthread_rwlock_rdlock(&rwlock);
 	auto snapshot = query_rules_;
 	pthread_rwlock_unlock(&rwlock);
 
 	for (const auto& r : snapshot) {
-		bind_int        (st, 1,  r.rule_id);
-		bind_int        (st, 2,  r.active);
-		bind_text_or_null(st, 3,  r.username.c_str());
-		bind_text_or_null(st, 4,  r.target_id.c_str());
-		bind_text_or_null(st, 5,  r.schemaname.c_str());
-		bind_text_or_null(st, 6,  r.tool_name.c_str());
-		bind_text_or_null(st, 7,  r.match_pattern.c_str());
-		bind_int        (st, 8,  r.negate_match_pattern);
-		bind_text_or_null(st, 9,  r.re_modifiers.c_str());
-		bind_int        (st, 10, r.flagIN);
-		if (r.flagOUT_is_null) (*proxy_sqlite3_bind_null)(st, 11);
-		else                   bind_int(st, 11, r.flagOUT);
-		bind_text_or_null(st, 12, r.replace_pattern.c_str());
-		if (r.timeout_ms_is_null) (*proxy_sqlite3_bind_null)(st, 13);
-		else                      bind_int(st, 13, r.timeout_ms);
-		bind_text_or_null(st, 14, r.error_msg.c_str());
-		bind_text_or_null(st, 15, r.OK_msg.c_str());
-		if (r.log_is_null) (*proxy_sqlite3_bind_null)(st, 16);
-		else               bind_int(st, 16, r.log);
-		bind_int        (st, 17, r.apply);
-		bind_text_or_null(st, 18, r.comment.c_str());
-		SAFE_SQLITE3_STEP2(st);
-		(*proxy_sqlite3_clear_bindings)(st);
-		(*proxy_sqlite3_reset)(st);
+		if (!insert_query_rule_row(st, r)) {
+			admindb.execute("ROLLBACK");
+			return;
+		}
 	}
 	admindb.execute("COMMIT");
 }

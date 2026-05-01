@@ -69,7 +69,7 @@ SQLite3DB* proxysql_plugin_get_configdb() { return g_configdb; }
 SQLite3DB* proxysql_plugin_get_statsdb()  { return g_statsdb; }
 
 int main() {
-	plan(26);
+	plan(36);
 
 	g_admindb  = new SQLite3DB();
 	g_configdb = new SQLite3DB();
@@ -104,6 +104,89 @@ int main() {
 
 	ok(mgr.start_all(err), "start_all succeeds");
 	if (!err.empty()) diag("start error: %s", err.c_str());
+
+	// Runtime-view dispatch: SELECT against runtime_mcp_<X> should
+	// trigger the chassis dispatcher to invoke the plugin's
+	// project_*_to_runtime_view callback before the SELECT runs.
+	// Seed the editable mcp_<X> tables, drive `LOAD MCP PROFILES TO
+	// RUNTIME` through the plugin command registry, then assert the
+	// runtime_<X> tables match.  This is the end-to-end coverage that
+	// plugin_runtime_views_unit-t can't provide because that test uses
+	// synthetic callbacks.
+	ok(g_admindb->execute(
+		"INSERT INTO mcp_auth_profiles"
+		" (auth_profile_id, db_username, db_password, default_schema,"
+		"  use_ssl, ssl_mode, comment)"
+		" VALUES('a','u','p','',0,'','')") ,
+	   "seed mcp_auth_profiles");
+	ok(g_admindb->execute(
+		"INSERT INTO mcp_target_profiles"
+		" (target_id, protocol, hostgroup_id, auth_profile_id, description,"
+		"  max_rows, timeout_ms, allow_explain, allow_discovery, active, comment)"
+		" VALUES('t','mysql',1,'a','',200,2000,1,1,1,'')") ,
+	   "seed mcp_target_profiles");
+
+	ProxySQL_PluginCommandContext cmd_ctx { g_admindb, g_configdb, g_statsdb };
+	ProxySQL_PluginCommandResult cmd_result;
+	const bool dispatched = mgr.dispatch_admin_command(
+		cmd_ctx, "LOAD MCP PROFILES TO RUNTIME", cmd_result);
+	ok(dispatched && cmd_result.error_code == 0,
+	   "LOAD MCP PROFILES TO RUNTIME dispatches via plugin (rc=%d, msg=%s)",
+	   cmd_result.error_code, cmd_result.message.c_str());
+
+	// The chassis pre-SELECT hook should have refreshed runtime_<X>
+	// from the plugin's snapshot.  In a real Admin SQL flow that hook
+	// fires during GenericRefreshStatistics; the unit test invokes it
+	// explicitly because we don't have a full Admin module wired up.
+	mgr.refresh_runtime_views_for_query(
+		"SELECT * FROM runtime_mcp_auth_profiles", g_admindb);
+	mgr.refresh_runtime_views_for_query(
+		"SELECT * FROM runtime_mcp_target_profiles", g_admindb);
+
+	ok(g_admindb->return_one_int(
+		"SELECT COUNT(*) FROM runtime_mcp_auth_profiles") == 1,
+	   "runtime_mcp_auth_profiles populated by project callback");
+	ok(g_admindb->return_one_int(
+		"SELECT COUNT(*) FROM runtime_mcp_target_profiles") == 1,
+	   "runtime_mcp_target_profiles populated by project callback");
+
+	// SAVE round-trip: edit main.* directly (operator typo), then
+	// dispatch SAVE MCP PROFILES TO MEMORY and verify the in-memory
+	// snapshot was written back over the operator's edit.  This
+	// closes the loop on the install/save/project triplet — without
+	// it, install + project would be tested but SAVE would not.
+	ok(g_admindb->execute(
+		"UPDATE mcp_target_profiles SET hostgroup_id=999 WHERE target_id='t'"),
+	   "operator stomps target hostgroup_id=999 in main");
+	ok(g_admindb->return_one_int(
+		"SELECT hostgroup_id FROM mcp_target_profiles WHERE target_id='t'") == 999,
+	   "main reflects operator stomp");
+
+	ProxySQL_PluginCommandResult save_result;
+	const bool save_dispatched = mgr.dispatch_admin_command(
+		cmd_ctx, "SAVE MCP PROFILES TO MEMORY", save_result);
+	ok(save_dispatched && save_result.error_code == 0,
+	   "SAVE MCP PROFILES TO MEMORY dispatches via plugin (rc=%d, msg=%s)",
+	   save_result.error_code, save_result.message.c_str());
+	ok(g_admindb->return_one_int(
+		"SELECT hostgroup_id FROM mcp_target_profiles WHERE target_id='t'") == 1,
+	   "SAVE restored hostgroup_id=1 from in-memory snapshot");
+
+	// Stats tables: registered with the plugin, but the populator
+	// path is stubbed (carve-out follow-up — see PR description for
+	// the rationale).  We can only sanity-check the registration here
+	// because the unit-test fixture does not attach a stats_db schema;
+	// the empty-result contract is enforced indirectly by the absence
+	// of any plugin code path that writes to stats_mcp_*.
+	bool found_stats_query_rules = false;
+	for (const auto& td : mgr.tables(ProxySQL_PluginDBKind::stats_db)) {
+		if (td.table_name && std::string(td.table_name) == "stats_mcp_query_rules") {
+			found_stats_query_rules = true;
+			break;
+		}
+	}
+	ok(found_stats_query_rules,
+	   "stats_mcp_query_rules schema is registered (even though populator is stubbed)");
 
 	ok(mgr.stop_all(),     "stop_all succeeds");
 

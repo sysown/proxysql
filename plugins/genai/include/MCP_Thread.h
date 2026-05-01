@@ -360,9 +360,26 @@ public:
 	bool install_target_profiles_from_admin(SQLite3DB& admindb, std::string& err);
 	bool install_query_rules_from_admin(SQLite3DB& admindb, std::string& err);
 
+	// Atomic install of BOTH profile tables: reads main.mcp_auth_profiles
+	// and main.mcp_target_profiles, then under a single wrlock swaps
+	// both vectors and rebuilds target_auth_map. Use this in preference
+	// to calling install_auth_profiles_from_admin +
+	// install_target_profiles_from_admin separately — that pair leaves
+	// target_auth_map rebuilt from a mismatched (auth_v2, target_v1)
+	// snapshot if the second install fails.
+	bool install_profiles_from_admin(SQLite3DB& admindb, std::string& err);
+
 	bool save_auth_profiles_to_admin_table(SQLite3DB& admindb);
 	bool save_target_profiles_to_admin_table(SQLite3DB& admindb);
 	bool save_query_rules_to_admin_table(SQLite3DB& admindb);
+
+	// Atomic save of BOTH profile tables: copies both in-memory
+	// snapshots under a single rdlock, then writes both
+	// main.mcp_auth_profiles and main.mcp_target_profiles inside one
+	// transaction. SQLite enforces FK integrity inside the txn, so
+	// dangling target.auth_profile_id rows can never be observed by an
+	// admin reader between the two table writes.
+	bool save_profiles_to_admin_table(SQLite3DB& admindb);
 
 	void project_auth_profiles_to_runtime_view(SQLite3DB& admindb);
 	void project_target_profiles_to_runtime_view(SQLite3DB& admindb);

@@ -101,12 +101,21 @@ if [[ "${PROXYSQLGENAI:-}" == "1" ]]; then
     fi
 fi
 
+# Belt-and-braces: only set with_plugins=1 when at least one .so was
+# actually staged.  rpmbuild aborts on "File not found by glob" if the
+# %files block lists /usr/lib/proxysql/*.so and the directory is empty.
+RPMBUILD_WITH_PLUGINS=0
+if compgen -G "proxysql-${CURVER}/usr/lib/proxysql/*.so" >/dev/null 2>&1; then
+    RPMBUILD_WITH_PLUGINS=1
+fi
+
 tar czvf "proxysql-${CURVER}.tar.gz" proxysql-${CURVER}
 mv "/opt/proxysql/proxysql-${CURVER}.tar.gz" "/root/rpmbuild/SOURCES"
 # build package
 RPMBUILD_DEFINES=( --define "version ${CURVER}" )
-if [[ "${PROXYSQL40:-}" == "1" || "${PROXYSQLGENAI:-}" == "1" ]]; then
-    # gates the %if 0%{?with_plugins} block in proxysql.spec %files
+if [[ "${RPMBUILD_WITH_PLUGINS}" == "1" ]]; then
+    # gates the %if 0%{?with_plugins} block in proxysql.spec %files —
+    # only enabled when at least one .so was actually staged above.
     RPMBUILD_DEFINES+=( --define "with_plugins 1" )
 fi
 rpmbuild -bb "${RPMBUILD_DEFINES[@]}" /root/rpmbuild/SPECS/proxysql.spec

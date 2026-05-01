@@ -101,6 +101,17 @@ if [[ "${PROXYSQLGENAI:-}" == "1" ]]; then
         cp plugins/genai/ProxySQL_GenAI_Plugin.so proxysql/usr/lib/proxysql/
     fi
 fi
+
+# Belt-and-braces: the spec gates `/usr/lib/proxysql/*.so` under
+# `%if 0%{?with_plugins}`, but rpmbuild aborts with "File not found
+# by glob" if the directory exists with no .so files.  This can
+# happen if a plugin build silently produced no artefact (link
+# failure that returned 0, etc.).  Only set with_plugins=1 when at
+# least one .so actually made it to the staging directory.
+RPMBUILD_WITH_PLUGINS=0
+if compgen -G "proxysql/usr/lib/proxysql/*.so" >/dev/null 2>&1; then
+    RPMBUILD_WITH_PLUGINS=1
+fi
 mv proxysql "proxysql-${CURVER}"
 tar czvf "proxysql-${CURVER}.tar.gz" proxysql-${CURVER}
 mkdir -p /root/rpmbuild/{RPMS,SRPMS,BUILD,SOURCES,SPECS,tmp}
@@ -108,8 +119,9 @@ chown -R root:root /root/rpmbuild/SPECS
 mv "/opt/proxysql/proxysql-${CURVER}.tar.gz" /root/rpmbuild/SOURCES
 # build package
 RPMBUILD_DEFINES=( --define "version ${CURVER}" )
-if [[ "${PROXYSQL40:-}" == "1" || "${PROXYSQLGENAI:-}" == "1" ]]; then
-    # gates the %if 0%{?with_plugins} block in proxysql.spec %files
+if [[ "${RPMBUILD_WITH_PLUGINS}" == "1" ]]; then
+    # gates the %if 0%{?with_plugins} block in proxysql.spec %files —
+    # only enabled when at least one .so was actually staged above.
     RPMBUILD_DEFINES+=( --define "with_plugins 1" )
 fi
 cd /root/rpmbuild && rpmbuild -ba SPECS/proxysql.spec "${RPMBUILD_DEFINES[@]}"

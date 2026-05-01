@@ -537,19 +537,33 @@ AnomalyResult Anomaly_Detector::check_embedding_similarity(const std::string& qu
 // short-circuits (the only caller already nullptr-guards via the
 // vector_db check that follows).
 //
-// Concurrency: the read in get_query_embedding() can race with the
-// store from genai_init() / genai_stop() on the lifecycle thread.
-// Use std::atomic with relaxed ordering — the only invariant we need
-// is that loads see either the previous value or the new one (no torn
-// pointer); we don't need to synchronise any other state with the
-// pointer write, so acquire / release fences would be overkill.  This
-// matches std::atomic<T*>'s guarantee on every architecture C++17
-// compiles for.
+// Concurrency.  The hot-path read in get_query_embedding() can race
+// against the store in genai_init() / genai_stop() on the lifecycle
+// thread.  We use std::atomic + acquire/release ordering rather than
+// relaxed because the *implementation* the pointer points at —
+// embed_query_via_glogath in plugin_main.cpp — dereferences `GloGATH`,
+// a plain non-atomic global that is also being mutated by the
+// lifecycle thread (`GloGATH = new ...` in genai_init, `delete GloGATH`
+// in genai_stop).  Pairing the embed-pointer load with acquire and the
+// store with release ensures that:
+//
+//   - When a reader observes a non-null embed pointer, it ALSO observes
+//     `GloGATH` already initialised (init's `GloGATH = new ...` happens-
+//     before init's atomic store(release) of the embed pointer).
+//   - When genai_stop atomically clears the embed pointer (release),
+//     any reader that later loads it (acquire) sees the null and
+//     short-circuits BEFORE it can read the now-deleted `GloGATH`.
+//
+// Relaxed ordering would only protect against torn pointers; it would
+// leave the GloGATH lifetime read open to seeing a half-constructed or
+// already-deleted handler.  The cost of acquire/release on x86_64 and
+// arm64 is zero — they're plain loads/stores at the ISA level — so
+// there's no perf reason to keep relaxed.
 using genai_anomaly_embed_fn_t = std::vector<float> (*)(const std::string& query);
 std::atomic<genai_anomaly_embed_fn_t> genai_anomaly_embed_fn { nullptr };
 
 std::vector<float> Anomaly_Detector::get_query_embedding(const std::string& query) {
-	auto fn = genai_anomaly_embed_fn.load(std::memory_order_relaxed);
+	auto fn = genai_anomaly_embed_fn.load(std::memory_order_acquire);
 	if (fn == nullptr) return {};
 	return fn(query);
 }
