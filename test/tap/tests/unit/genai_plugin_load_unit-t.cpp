@@ -29,21 +29,37 @@ SQLite3DB* g_statsdb  = nullptr;
 
 void setup_admindb_schema(SQLite3DB* db) {
 	// Minimal schema to satisfy mcp_load_variables_from_admindb /
-	// mcp_load_target_auth_map_from_admindb in the plugin.
+	// mcp_load_target_auth_map_from_admindb in the plugin.  Column
+	// shapes mirror the canonical DDLs in
+	// include/ProxySQL_Admin_Tables_Definitions.h so the plugin's
+	// SELECTs (which name every column by name) succeed.
 	db->execute("CREATE TABLE IF NOT EXISTS global_variables ("
 	            " variable_name TEXT PRIMARY KEY, variable_value TEXT)");
 	db->execute("CREATE TABLE IF NOT EXISTS mcp_auth_profiles ("
-	            " auth_profile_id INTEGER PRIMARY KEY, db_username TEXT,"
-	            " db_password TEXT, default_schema TEXT)");
+	            " auth_profile_id TEXT PRIMARY KEY, db_username TEXT,"
+	            " db_password TEXT, default_schema TEXT DEFAULT '',"
+	            " use_ssl INTEGER NOT NULL DEFAULT 0,"
+	            " ssl_mode TEXT DEFAULT '',"
+	            " comment TEXT DEFAULT '')");
 	db->execute("CREATE TABLE IF NOT EXISTS mcp_target_profiles ("
 	            " target_id TEXT PRIMARY KEY, protocol TEXT, hostgroup_id INTEGER,"
-	            " auth_profile_id INTEGER, max_rows INTEGER, timeout_ms INTEGER,"
-	            " allow_explain INTEGER, allow_discovery INTEGER, description TEXT,"
-	            " active INTEGER DEFAULT 1)");
+	            " auth_profile_id TEXT, description TEXT DEFAULT '',"
+	            " max_rows INTEGER DEFAULT 200, timeout_ms INTEGER DEFAULT 2000,"
+	            " allow_explain INTEGER DEFAULT 1, allow_discovery INTEGER DEFAULT 1,"
+	            " active INTEGER DEFAULT 1, comment TEXT DEFAULT '')");
 	db->execute("CREATE TABLE IF NOT EXISTS runtime_mcp_auth_profiles AS"
 	            " SELECT * FROM mcp_auth_profiles WHERE 0");
 	db->execute("CREATE TABLE IF NOT EXISTS runtime_mcp_target_profiles AS"
 	            " SELECT * FROM mcp_target_profiles WHERE 0");
+	db->execute("CREATE TABLE IF NOT EXISTS mcp_query_rules ("
+	            " rule_id INTEGER PRIMARY KEY, active INTEGER NOT NULL DEFAULT 0,"
+	            " username TEXT, target_id TEXT, schemaname TEXT, tool_name TEXT,"
+	            " match_pattern TEXT, negate_match_pattern INTEGER NOT NULL DEFAULT 0,"
+	            " re_modifiers TEXT, flagIN INTEGER NOT NULL DEFAULT 0, flagOUT INTEGER,"
+	            " replace_pattern TEXT, timeout_ms INTEGER, error_msg TEXT, OK_msg TEXT,"
+	            " log INTEGER, apply INTEGER NOT NULL DEFAULT 1, comment TEXT)");
+	db->execute("CREATE TABLE IF NOT EXISTS runtime_mcp_query_rules AS"
+	            " SELECT * FROM mcp_query_rules WHERE 0");
 }
 
 } // namespace
@@ -53,7 +69,7 @@ SQLite3DB* proxysql_plugin_get_configdb() { return g_configdb; }
 SQLite3DB* proxysql_plugin_get_statsdb()  { return g_statsdb; }
 
 int main() {
-	plan(25);
+	plan(26);
 
 	g_admindb  = new SQLite3DB();
 	g_configdb = new SQLite3DB();
@@ -73,6 +89,15 @@ int main() {
 		BAIL_OUT("genai plugin must load before lifecycle assertions");
 	}
 	ok(mgr.size() == 1, "exactly one plugin handle after load");
+
+	// Phase B (chassis): every plugin's register_schemas callback runs
+	// here, BEFORE init_all.  As of Step 4.G the genai plugin uses this
+	// callback to publish its admin/config/stats table set, so it MUST
+	// fire before the size assertions below or we'll see 0 tables in
+	// every kind.
+	ok(mgr.invoke_register_schemas_phase(err),
+	   "invoke_register_schemas_phase succeeds");
+	if (!err.empty()) diag("register_schemas error: %s", err.c_str());
 
 	ok(mgr.init_all(err),  "init_all succeeds");
 	if (!err.empty()) diag("init error: %s", err.c_str());

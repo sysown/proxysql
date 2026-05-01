@@ -381,6 +381,7 @@ UNIT_TESTS += \
 	plugin_query_hook_unit-t \
 	plugin_prometheus_unit-t \
 	plugin_lifecycle_unit-t \
+	plugin_runtime_views_unit-t \
 	genai_plugin_load_unit-t \
 	genai_plugin_anomaly_unit-t \
 	genai_plugin_backend_client_unit-t \
