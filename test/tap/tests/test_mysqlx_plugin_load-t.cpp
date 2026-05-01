@@ -28,7 +28,7 @@ const ProxySQL_PluginTableDef* find_table(
 } // namespace
 
 int main() {
-	plan(6);
+	plan(7);
 
 	ProxySQL_PluginManager mgr;
 	std::string err {};
@@ -41,7 +41,20 @@ int main() {
 		BAIL_OUT("mysqlx plugin must load before schema assertions");
 	}
 
-	ok(mgr.init_all(err), "init_all registers mysqlx schema");
+	// Phase B: the mysqlx plugin (ABI 2+) registers its admin tables in
+	// register_schemas() rather than init(). Without this call the
+	// tables(kind) getters below return empty vectors regardless of
+	// init_all() succeeding. Plugins that opt out of Phase B (ABI 1)
+	// register everything in init_all(); for those the call below is a
+	// no-op (returns true with err empty).
+	ok(mgr.invoke_register_schemas_phase(err),
+	   "invoke_register_schemas_phase registers mysqlx schema");
+	if (!err.empty()) {
+		diag("register_schemas error: %s", err.c_str());
+		err.clear();
+	}
+
+	ok(mgr.init_all(err), "init_all completes after schema registration");
 	if (!err.empty()) {
 		diag("init error: %s", err.c_str());
 	}
