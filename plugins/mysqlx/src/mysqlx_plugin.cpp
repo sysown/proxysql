@@ -5,8 +5,11 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <memory>
 #include <mutex>
+#include <string>
+#include <vector>
 
 namespace {
 
@@ -268,6 +271,65 @@ void mysqlx_reconcile_listeners(SQLite3DB& admindb) {
 		ctx.route_to_thread_mutex,
 		ctx.next_rr_index
 	);
+}
+
+namespace {
+
+// Local copy of the SQLite single-quote escape used by mysqlx_stats.cpp;
+// duplicating one tiny function is cheaper than introducing a shared
+// header just for it. If a third caller appears, lift to mysqlx_util.h.
+std::string sqlite_escape_local(const std::string& input) {
+	std::string result;
+	result.reserve(input.size());
+	for (char c : input) {
+		if (c == '\'') result += "''";
+		else result += c;
+	}
+	return result;
+}
+
+uint64_t monotonic_time_ms_local() {
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return static_cast<uint64_t>(ts.tv_sec) * 1000ULL + static_cast<uint64_t>(ts.tv_nsec) / 1000000ULL;
+}
+
+} // namespace
+
+void mysqlx_populate_stats_processlist(SQLite3DB& statsdb) {
+	MysqlxPluginContext& ctx = mysqlx_context();
+
+	// Always wipe the projection table — empty thread pool or empty
+	// session list both mean "no active sessions" and the operator
+	// must see that, not stale rows from the last refresh.
+	statsdb.execute("DELETE FROM stats_mysqlx_processlist");
+
+	if (ctx.threads.empty()) return;
+
+	uint64_t now_ms = monotonic_time_ms_local();
+	std::vector<MysqlxSessionSnapshot> rows;
+	for (const auto& thr : ctx.threads) {
+		if (thr) thr->snapshot_sessions_for_stats(rows, now_ms);
+	}
+
+	for (const auto& r : rows) {
+		std::string sql = "INSERT INTO stats_mysqlx_processlist "
+			"(username, route, worker_id, backend_host, backend_port, "
+			" auth_mode, connection_state, bytes_in, bytes_out, "
+			" session_age_ms) VALUES ('";
+		sql += sqlite_escape_local(r.username);
+		sql += "', '"; sql += sqlite_escape_local(r.route);
+		sql += "', "; sql += std::to_string(r.worker_id);
+		sql += ", '"; sql += sqlite_escape_local(r.backend_host);
+		sql += "', "; sql += std::to_string(r.backend_port);
+		sql += ", '"; sql += sqlite_escape_local(r.auth_mode);
+		sql += "', '"; sql += sqlite_escape_local(r.connection_state);
+		sql += "', "; sql += std::to_string(r.bytes_in);
+		sql += ", "; sql += std::to_string(r.bytes_out);
+		sql += ", "; sql += std::to_string(r.session_age_ms);
+		sql += ")";
+		statsdb.execute(sql.c_str());
+	}
 }
 
 // Default visibility is required because the plugin .so is built with

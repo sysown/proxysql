@@ -159,6 +159,20 @@ public:
 	const std::string& target_address_for_test() const { return target_address_; }
 	int  target_port_for_test() const { return target_port_; }
 
+	// Read-only state observers used by the stats_mysqlx_processlist
+	// projection (Mysqlx_Thread::snapshot_sessions_for_stats walks
+	// sessions_ and reads these under sessions_mutex_). Borrowed
+	// references — caller must copy if it needs the value past the
+	// snapshot scope. The identity_ accessor returns the optional by
+	// value because the projection wants the resolved fields, not the
+	// optional itself; this only happens once per session per admin
+	// SELECT against stats_mysqlx_processlist, so the copy cost is
+	// negligible.
+	const std::string& username_for_stats() const { return username_; }
+	const std::string& route_name_for_stats() const { return route_name_; }
+	std::optional<MysqlxResolvedIdentity> identity_for_stats() const { return identity_; }
+	uint64_t start_time_for_stats() const { return start_time_; }
+
 	bool to_process;
 
 private:

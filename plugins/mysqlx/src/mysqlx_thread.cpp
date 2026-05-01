@@ -400,6 +400,71 @@ size_t Mysqlx_Thread::get_session_count() const {
 	return sessions_.size();
 }
 
+namespace {
+
+const char* session_status_to_string(MysqlxSession::Status s) {
+	switch (s) {
+		case MysqlxSession::NONE:                  return "NONE";
+		case MysqlxSession::CONNECTING_CLIENT:     return "CONNECTING_CLIENT";
+		case MysqlxSession::X_CAPABILITIES_GET:    return "X_CAPABILITIES_GET";
+		case MysqlxSession::X_CAPABILITIES_SET:    return "X_CAPABILITIES_SET";
+		case MysqlxSession::X_AUTH_START:          return "X_AUTH_START";
+		case MysqlxSession::X_AUTH_CHALLENGE_SENT: return "X_AUTH_CHALLENGE_SENT";
+		case MysqlxSession::X_AUTH_OK_SENT:        return "X_AUTH_OK_SENT";
+		case MysqlxSession::X_AUTH_FAILED:         return "X_AUTH_FAILED";
+		case MysqlxSession::WAITING_CLIENT_XMSG:   return "WAITING_CLIENT_XMSG";
+		case MysqlxSession::PROCESSING_X_QUERY:    return "PROCESSING_X_QUERY";
+		case MysqlxSession::CONNECTING_SERVER:     return "CONNECTING_SERVER";
+		case MysqlxSession::WAITING_SERVER_XMSG:   return "WAITING_SERVER_XMSG";
+		case MysqlxSession::X_TLS_ACCEPT_INIT:     return "X_TLS_ACCEPT_INIT";
+		case MysqlxSession::X_TLS_ACCEPT_CONT:     return "X_TLS_ACCEPT_CONT";
+		case MysqlxSession::X_TLS_ACCEPT_DONE:     return "X_TLS_ACCEPT_DONE";
+		case MysqlxSession::X_TLS_CONNECT_INIT:    return "X_TLS_CONNECT_INIT";
+		case MysqlxSession::X_TLS_CONNECT_CONT:    return "X_TLS_CONNECT_CONT";
+		case MysqlxSession::X_TLS_CONNECT_DONE:    return "X_TLS_CONNECT_DONE";
+		case MysqlxSession::X_SESSION_CLOSING:     return "X_SESSION_CLOSING";
+		case MysqlxSession::X_SESSION_CLOSED:      return "X_SESSION_CLOSED";
+		case MysqlxSession::X_SESSION_RESET_WAITING: return "X_SESSION_RESET_WAITING";
+	}
+	return "UNKNOWN";
+}
+
+const char* backend_auth_mode_to_string(MysqlxBackendAuthMode m) {
+	switch (m) {
+		case MysqlxBackendAuthMode::mapped:          return "mapped";
+		case MysqlxBackendAuthMode::service_account: return "service_account";
+		case MysqlxBackendAuthMode::pass_through:    return "pass_through";
+	}
+	return "unknown";
+}
+
+} // namespace
+
+void Mysqlx_Thread::snapshot_sessions_for_stats(
+		std::vector<MysqlxSessionSnapshot>& out, uint64_t now_ms) const {
+	std::lock_guard<std::mutex> lock(sessions_mutex_);
+	out.reserve(out.size() + sessions_.size());
+	for (const MysqlxSession* s : sessions_) {
+		if (s == nullptr) continue;
+		MysqlxSessionSnapshot row;
+		row.username         = s->username_for_stats();
+		row.route            = s->route_name_for_stats();
+		row.worker_id        = thread_index_;
+		row.backend_host     = s->target_address_for_test();
+		row.backend_port     = s->target_port_for_test();
+		auto id              = s->identity_for_stats();
+		row.auth_mode        = id ? backend_auth_mode_to_string(id->backend_auth_mode) : "";
+		row.connection_state = session_status_to_string(s->get_status());
+		// bytes_in / bytes_out: aggregated per-route in P0; per-session
+		// counters land in P1.
+		row.bytes_in         = 0;
+		row.bytes_out        = 0;
+		uint64_t st          = s->start_time_for_stats();
+		row.session_age_ms   = (st > 0 && now_ms >= st) ? (now_ms - st) : 0;
+		out.push_back(std::move(row));
+	}
+}
+
 MysqlxConnection* Mysqlx_Thread::get_connection_from_cache(
 		int hostgroup, const char* user, const char* schema) {
 	std::lock_guard<std::mutex> lock(conn_cache_mutex_);
