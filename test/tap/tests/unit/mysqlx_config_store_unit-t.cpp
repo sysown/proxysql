@@ -62,7 +62,7 @@ std::unique_ptr<SQLite3DB> create_test_db() {
 
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(16);
+	plan(24);
 	diag("=== mysqlx_config_store_unit-t starting ===");
 
 	MysqlxResolvedIdentity identity {};
@@ -140,6 +140,56 @@ int main() {
 	store.bump_topology_generation();
 	ok(store.topology_generation() == 1,
 	   "topology generation increments on demand");
+
+	// --- mysqlx_tls_backend_mode (asymmetric TLS / AsClient mode) ---
+
+	// String parser exercise: each documented value parses, unknown
+	// values produce nullopt so the install path can surface a useful
+	// error to the operator instead of silently coercing to default.
+	ok(mysqlx_backend_tls_mode_from_string("disabled") ==
+	   std::optional<MysqlxBackendTlsMode>(MysqlxBackendTlsMode::disabled) &&
+	   mysqlx_backend_tls_mode_from_string("PREFERRED") ==
+	   std::optional<MysqlxBackendTlsMode>(MysqlxBackendTlsMode::preferred) &&
+	   mysqlx_backend_tls_mode_from_string("Required") ==
+	   std::optional<MysqlxBackendTlsMode>(MysqlxBackendTlsMode::required) &&
+	   mysqlx_backend_tls_mode_from_string("as_client") ==
+	   std::optional<MysqlxBackendTlsMode>(MysqlxBackendTlsMode::as_client),
+	   "backend tls mode parser accepts all four documented values case-insensitively");
+	ok(!mysqlx_backend_tls_mode_from_string("nonsense").has_value() &&
+	   !mysqlx_backend_tls_mode_from_string("").has_value(),
+	   "backend tls mode parser rejects unknown values");
+	ok(std::string(mysqlx_backend_tls_mode_to_string(MysqlxBackendTlsMode::as_client)) == "as_client",
+	   "backend tls mode renders to canonical lowercase string");
+
+	// Default value: as_client matches the legacy implicit behaviour
+	// where backend TLS was tied to client TLS at resolve time.
+	ok(store.get_backend_tls_mode() == MysqlxBackendTlsMode::as_client,
+	   "store defaults backend tls mode to as_client (matches legacy behaviour)");
+
+	// LOAD round-trip: an explicit row should be parsed and cached.
+	ok(db->execute("INSERT INTO mysqlx_variables (variable_name, variable_value) VALUES "
+	               "('mysqlx_tls_backend_mode', 'required')") &&
+	   store.install_variables_from_admin(*db, err) && err.empty() &&
+	   store.get_backend_tls_mode() == MysqlxBackendTlsMode::required,
+	   "store parses explicit mysqlx_tls_backend_mode='required' from admin");
+
+	// Invalid value: install must fail with a non-empty err describing the bad value.
+	ok(db->execute("UPDATE mysqlx_variables SET variable_value='garbage' "
+	               "WHERE variable_name='mysqlx_tls_backend_mode'") &&
+	   !store.install_variables_from_admin(*db, err) &&
+	   err.find("garbage") != std::string::npos,
+	   "store rejects invalid mysqlx_tls_backend_mode with descriptive error");
+	ok(store.get_backend_tls_mode() == MysqlxBackendTlsMode::required,
+	   "store retains last-good backend tls mode after rejected install");
+
+	// Absent row: removing the variable leaves the cached value alone.
+	// Reset `err` first because the previous failing call left a message
+	// in it; install_variables_from_admin only writes on failure.
+	err.clear();
+	ok(db->execute("DELETE FROM mysqlx_variables WHERE variable_name='mysqlx_tls_backend_mode'") &&
+	   store.install_variables_from_admin(*db, err) && err.empty() &&
+	   store.get_backend_tls_mode() == MysqlxBackendTlsMode::required,
+	   "absent mysqlx_tls_backend_mode row leaves cached mode untouched");
 
 	return exit_status();
 }
