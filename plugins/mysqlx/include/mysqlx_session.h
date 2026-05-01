@@ -25,6 +25,27 @@ typedef struct ZSTD_CCtx_s ZSTD_CCtx;
 using MysqlxIdentityLookup =
 	std::function<std::optional<MysqlxResolvedIdentity>(const std::string& username)>;
 
+// Resolved per-session backend TLS decision for a given combination of
+// runtime mode (mysqlx_tls_backend_mode), per-endpoint operator override
+// (mysqlx_backend_endpoints.use_ssl), and frontend TLS state
+// (client_ds_.is_encrypted()). Held by handler_connecting_server() across
+// the cache lookup and the fresh-connection setup so both sides see the
+// same posture.
+struct MysqlxBackendTlsDecision {
+	bool require_tls { false };       // ask the backend for TLS via CapabilitiesSet
+	bool fallback_allowed { false };  // on Mysqlx::Error, downgrade to plaintext
+};
+
+// Pure function: computes the per-session backend TLS decision from
+// the four inputs. Lifted out of MysqlxSession so the 8 (mode x
+// frontend_tls) combinations called out in issue #5693 can be unit-
+// tested without driving the full session state machine. Production
+// callsite: handler_connecting_server.
+MysqlxBackendTlsDecision mysqlx_resolve_backend_tls_decision(
+	MysqlxBackendTlsMode mode,
+	bool endpoint_use_ssl_override,
+	bool frontend_is_encrypted);
+
 // Per-message response state for the X-Protocol response sequence the
 // proxy is currently waiting on. The X protocol defines distinct frame
 // allow-sets and terminal markers per request type; this enum splits

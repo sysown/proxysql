@@ -457,11 +457,11 @@ static void test_connection_pool_matching() {
 	c1->set_state(MysqlxConnection::IDLE);
 	thr.return_connection_to_cache(c1);
 
-	MysqlxConnection* found = thr.get_connection_from_cache(0, "root", "test");
+	MysqlxConnection* found = thr.get_connection_from_cache(0, "root", "test", /*tls_active=*/false);
 	ok(found != nullptr, "found by hostgroup/user/schema");
 	ok(found == c1, "got correct connection");
 
-	MysqlxConnection* nf1 = thr.get_connection_from_cache(1, "root", "test");
+	MysqlxConnection* nf1 = thr.get_connection_from_cache(1, "root", "test", /*tls_active=*/false);
 	ok(nf1 == nullptr, "wrong hostgroup not found");
 
 	MysqlxConnection* c2 = new MysqlxConnection();
@@ -472,13 +472,13 @@ static void test_connection_pool_matching() {
 	c2->set_state(MysqlxConnection::IDLE);
 	thr.return_connection_to_cache(c2);
 
-	MysqlxConnection* nf2 = thr.get_connection_from_cache(0, "other", "test");
+	MysqlxConnection* nf2 = thr.get_connection_from_cache(0, "other", "test", /*tls_active=*/false);
 	ok(nf2 == nullptr, "wrong user not found");
 
-	MysqlxConnection* nf3 = thr.get_connection_from_cache(0, "root", "other");
+	MysqlxConnection* nf3 = thr.get_connection_from_cache(0, "root", "other", /*tls_active=*/false);
 	ok(nf3 == nullptr, "wrong schema not found");
 
-	MysqlxConnection* f2 = thr.get_connection_from_cache(0, "root", "test");
+	MysqlxConnection* f2 = thr.get_connection_from_cache(0, "root", "test", /*tls_active=*/false);
 	ok(f2 != nullptr, "found second cached connection");
 }
 
@@ -927,6 +927,98 @@ static void test_validation_cursor_fetch_row_without_metadata_allowed() {
 	close(backend_fds[0]); close(backend_fds[1]);
 }
 
+// =====================================================================
+// Backend TLS mode resolution (issue #5693, P1: asymmetric TLS /
+// AsClient mode parity gap with MySQL Router 8.0).
+//
+// `mysqlx_resolve_backend_tls_decision` is the per-session decision
+// function lifted out of MysqlxSession::handler_connecting_server so
+// the 8 (mode x frontend_tls) combinations called out in the issue
+// can be unit-tested directly. Each cell of the matrix asserts both
+// `require_tls` (whether CapabilitiesSet(tls=true) gets sent) and
+// `fallback_allowed` (whether a Mysqlx::Error from that exchange is
+// allowed to downgrade to plaintext).
+//
+// The 8 documented combinations:
+//
+//   | mode      | frontend TLS | require_tls | fallback_allowed |
+//   |-----------|--------------|-------------|------------------|
+//   | disabled  | plaintext    | false       | false            |
+//   | disabled  | TLS          | false       | false            |
+//   | preferred | plaintext    | true        | true             |
+//   | preferred | TLS          | true        | true             |
+//   | required  | plaintext    | true        | false            |
+//   | required  | TLS          | true        | false            |
+//   | as_client | plaintext    | false       | false            |
+//   | as_client | TLS          | true        | false            |
+//
+// Plus three orthogonal cases:
+//   * endpoint use_ssl=1 promotes plaintext -> TLS under mode=disabled
+//   * endpoint use_ssl=1 leaves TLS-already-required mode unchanged
+//   * endpoint use_ssl=1 under mode=preferred preserves fallback semantics
+static void check_tls_decision(MysqlxBackendTlsMode mode,
+                               bool endpoint_override,
+                               bool frontend_tls,
+                               bool expected_require_tls,
+                               bool expected_fallback,
+                               const char* desc) {
+	auto d = mysqlx_resolve_backend_tls_decision(mode, endpoint_override, frontend_tls);
+	ok(d.require_tls == expected_require_tls && d.fallback_allowed == expected_fallback,
+	   "%s: require_tls=%d fallback_allowed=%d (got require_tls=%d fallback_allowed=%d)",
+	   desc,
+	   expected_require_tls ? 1 : 0,
+	   expected_fallback ? 1 : 0,
+	   d.require_tls ? 1 : 0,
+	   d.fallback_allowed ? 1 : 0);
+}
+
+static void test_backend_tls_mode_resolution_8_combinations() {
+	diag(">>> %s", __func__);
+	// disabled: plaintext output regardless of frontend TLS.
+	check_tls_decision(MysqlxBackendTlsMode::disabled,  false, false, false, false,
+	                   "mode=disabled  frontend=plaintext");
+	check_tls_decision(MysqlxBackendTlsMode::disabled,  false, true,  false, false,
+	                   "mode=disabled  frontend=TLS");
+
+	// preferred: TLS attempted both times, fallback always allowed.
+	check_tls_decision(MysqlxBackendTlsMode::preferred, false, false, true,  true,
+	                   "mode=preferred frontend=plaintext");
+	check_tls_decision(MysqlxBackendTlsMode::preferred, false, true,  true,  true,
+	                   "mode=preferred frontend=TLS");
+
+	// required: TLS mandatory, fallback never allowed.
+	check_tls_decision(MysqlxBackendTlsMode::required,  false, false, true,  false,
+	                   "mode=required  frontend=plaintext");
+	check_tls_decision(MysqlxBackendTlsMode::required,  false, true,  true,  false,
+	                   "mode=required  frontend=TLS");
+
+	// as_client: backend posture mirrors frontend.
+	check_tls_decision(MysqlxBackendTlsMode::as_client, false, false, false, false,
+	                   "mode=as_client frontend=plaintext (mirrors)");
+	check_tls_decision(MysqlxBackendTlsMode::as_client, false, true,  true,  false,
+	                   "mode=as_client frontend=TLS (mirrors)");
+}
+
+static void test_backend_tls_mode_endpoint_override() {
+	diag(">>> %s", __func__);
+	// Endpoint override promotes plaintext to TLS even under mode=disabled.
+	check_tls_decision(MysqlxBackendTlsMode::disabled,  true,  false, true, false,
+	                   "endpoint use_ssl=1 promotes plaintext to TLS under mode=disabled");
+	// Endpoint override is idempotent under mode=required.
+	check_tls_decision(MysqlxBackendTlsMode::required,  true,  false, true, false,
+	                   "endpoint use_ssl=1 idempotent under mode=required");
+	// Endpoint override under mode=preferred preserves the soft "preferred"
+	// fallback semantics — promoting plaintext to TLS doesn't strip the
+	// best-effort downgrade path that the operator chose at the mode level.
+	check_tls_decision(MysqlxBackendTlsMode::preferred, true,  false, true, true,
+	                   "endpoint use_ssl=1 under mode=preferred preserves fallback");
+	// Endpoint override under mode=as_client + plaintext frontend is a way
+	// for an operator to force a single backend to TLS while leaving the
+	// rest of the fleet at the AsClient default.
+	check_tls_decision(MysqlxBackendTlsMode::as_client, true,  false, true, false,
+	                   "endpoint use_ssl=1 promotes plaintext->TLS under mode=as_client");
+}
+
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
 	// Plan count rationale (per assertion source):
@@ -985,6 +1077,10 @@ int main() {
 	test_validation_prepare_prepare_accepts_ok();
 	test_validation_notice_mid_result();
 	test_validation_cursor_fetch_row_without_metadata_allowed();
+
+	// Backend TLS mode resolution (#5693).
+	test_backend_tls_mode_resolution_8_combinations();
+	test_backend_tls_mode_endpoint_override();
 
 	return exit_status();
 }
