@@ -179,12 +179,16 @@ ifeq ($(UNAME_S),Darwin)
 endif
 LIBPROXYSQLAR += $(ZSTD_LDIR)/libzstd.a
 LIBPROXYSQLAR += $(CITYHASH_LDIR)/libcityhash.a
-# SQLite `vec` extension object (similarity search).  Was gated
-# behind PROXYSQLGENAI through Step 6; Step 7 made it unconditional
-# because the genai plugin (when loaded via dlopen) calls
-# sqlite3_vec_init on the same SQLite that core links against, and
-# that requires the symbol to be present in the proxysql binary.
-LIBPROXYSQLAR += $(SQLITE_VEC_OBJ)
+# SQLite `vec` extension object (similarity search).  Gated on
+# PROXYSQLGENAI: the genai plugin's AI_Vector_Storage is the only
+# consumer of the proxy_sqlite3_vec_init hook, so non-genai v3.0
+# release binaries skip vec.o entirely (saves ~1MB and avoids carrying
+# vector-search code that no plain MySQL/PgSQL proxy install needs).
+# A v4.0 binary built with PROXYSQLGENAI=1 always links it so the
+# plugin can call sqlite3_vec_init on the same SQLite that core links.
+ifeq ($(PROXYSQLGENAI),1)
+	LIBPROXYSQLAR += $(SQLITE_VEC_OBJ)
+endif
 
 ODIR := obj
 

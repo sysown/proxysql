@@ -95,7 +95,9 @@ using json = nlohmann::json;
  *
  * @see https://github.com/asg017/sqlite-vec for sqlite-vec documentation
  */
+#ifdef PROXYSQLGENAI
 extern int (*proxy_sqlite3_vec_init)(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi);
+#endif /* PROXYSQLGENAI */
 #include "microhttpd.h"
 
 #if (defined(__i386__) || defined(__x86_64__) || defined(__ARM_ARCH_3__) || defined(__mips__)) && defined(__linux)
@@ -614,8 +616,14 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	 *
 	 * @note The sqlite3_vec_init function is cast to a function pointer
 	 * for SQLite's auto-extension mechanism.
+	 *
+	 * Gated on PROXYSQLGENAI: the only consumer is the genai plugin's
+	 * AI_Vector_Storage; non-genai builds neither build vec.o (deps)
+	 * nor link it (src/Makefile), so the symbol doesn't exist.
 	 */
+#ifdef PROXYSQLGENAI
 	if (proxy_sqlite3_vec_init) (*proxy_sqlite3_auto_extension)( (void(*)(void))proxy_sqlite3_vec_init);
+#endif /* PROXYSQLGENAI */
 
 	/**
 	 * @brief Open the stats database with shared cache mode

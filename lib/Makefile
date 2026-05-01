@@ -51,12 +51,18 @@ ifeq ($(PROXYSQLCLICKHOUSE),1)
 	PSQLCH := -DPROXYSQLCLICKHOUSE
 endif
 
-# PROXYSQLGENAI macro removed in Step 7 of the GenAI plugin carve-out.
-# Core no longer guards anything with it; the macro lives only inside
-# the plugin's own compilation unit.  PSQLGA stays as an empty
-# variable so other Makefile fragments can keep the {$(PSQLCH)
-# $(PSQLGA) ...} cascade unchanged; remove on a follow-up cleanup.
+# PROXYSQLGENAI gates a small handful of GenAI-specific glue that
+# stays in core because the genai plugin (loaded via dlopen) calls
+# back into it: the sqlite-vec hook in proxy_sqlite3_symbols.cpp +
+# Admin_Bootstrap.cpp.  Step 7's premise that "core no longer
+# guards anything with PROXYSQLGENAI" turned out to be wrong — those
+# two call sites still need the macro so non-genai dbg builds don't
+# try to `#include "sqlite-vec.h"` (which deps doesn't even build
+# in that mode).
 PSQLGA :=
+ifeq ($(PROXYSQLGENAI),1)
+	PSQLGA := -DPROXYSQLGENAI
+endif
 
 PSQL40 :=
 ifeq ($(PROXYSQL40),1)
