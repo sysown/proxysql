@@ -169,12 +169,29 @@ void load_backend_servers(
 	}
 }
 
+// load_variables walks `mysqlx_variables` rows and writes the
+// recognised tunables back through reference parameters. The
+// backend-TLS-mode field is captured as a raw string + a parsed enum +
+// a "did the operator set it" flag so that:
+//
+//   * an unrecognised value can be reported back as a useful error
+//     instead of silently coerced to the default,
+//   * an absent row leaves the existing `backend_tls_mode_` cached on
+//     the store untouched (rather than resetting to as_client on every
+//     LOAD), matching how the other variables behave.
+//
+// `parse_err` is populated with the first malformed row encountered;
+// the caller is responsible for surfacing it back to the operator and
+// aborting the install if it is non-empty.
 void load_variables(
 	SQLite3_result& rows,
 	int& thread_pool_size,
 	int& connect_timeout,
 	std::string& tls_mode,
-	int& max_cached_connections
+	int& max_cached_connections,
+	MysqlxBackendTlsMode& backend_tls_mode,
+	bool& backend_tls_mode_set,
+	std::string& parse_err
 ) {
 	for (auto* row : rows.rows) {
 		if (row == nullptr || row->fields[0] == nullptr) {
@@ -190,6 +207,18 @@ void load_variables(
 			tls_mode = value;
 		} else if (name == "mysqlx_max_cached_connections_per_thread") {
 			max_cached_connections = std::atoi(value);
+		} else if (name == "mysqlx_tls_backend_mode") {
+			auto parsed = mysqlx_backend_tls_mode_from_string(value);
+			if (!parsed) {
+				if (parse_err.empty()) {
+					parse_err = "invalid mysqlx_tls_backend_mode '";
+					parse_err += value;
+					parse_err += "' (expected one of: disabled, preferred, required, as_client)";
+				}
+				continue;
+			}
+			backend_tls_mode = *parsed;
+			backend_tls_mode_set = true;
 		}
 	}
 }
@@ -230,6 +259,32 @@ MysqlxBackendAuthMode mysqlx_backend_auth_mode_from_string(const std::string& va
 		return MysqlxBackendAuthMode::service_account;
 	}
 	return MysqlxBackendAuthMode::mapped;
+}
+
+std::optional<MysqlxBackendTlsMode> mysqlx_backend_tls_mode_from_string(const std::string& value) {
+	if (strcasecmp(value.c_str(), "disabled") == 0) {
+		return MysqlxBackendTlsMode::disabled;
+	}
+	if (strcasecmp(value.c_str(), "preferred") == 0) {
+		return MysqlxBackendTlsMode::preferred;
+	}
+	if (strcasecmp(value.c_str(), "required") == 0) {
+		return MysqlxBackendTlsMode::required;
+	}
+	if (strcasecmp(value.c_str(), "as_client") == 0) {
+		return MysqlxBackendTlsMode::as_client;
+	}
+	return std::nullopt;
+}
+
+const char* mysqlx_backend_tls_mode_to_string(MysqlxBackendTlsMode m) {
+	switch (m) {
+		case MysqlxBackendTlsMode::disabled:  return "disabled";
+		case MysqlxBackendTlsMode::preferred: return "preferred";
+		case MysqlxBackendTlsMode::required:  return "required";
+		case MysqlxBackendTlsMode::as_client: return "as_client";
+	}
+	return "as_client";
 }
 
 // install_users_from_admin
@@ -374,6 +429,11 @@ bool MysqlxConfigStore::install_variables_from_admin(SQLite3DB& db, std::string&
 	int new_connect_timeout = connect_timeout_;
 	std::string new_tls_mode = tls_mode_;
 	int new_max_cached = max_cached_connections_;
+	// Seed with the currently-installed value so an absent
+	// mysqlx_tls_backend_mode row leaves the cached mode untouched.
+	MysqlxBackendTlsMode new_backend_tls_mode = backend_tls_mode_;
+	bool backend_tls_mode_set = false;
+	std::string parse_err;
 	std::unique_ptr<SQLite3_result> result {};
 
 	if (!fetch_result(
@@ -383,13 +443,21 @@ bool MysqlxConfigStore::install_variables_from_admin(SQLite3DB& db, std::string&
 		    err)) {
 		return false;
 	}
-	load_variables(*result, new_pool_size, new_connect_timeout, new_tls_mode, new_max_cached);
+	load_variables(*result, new_pool_size, new_connect_timeout, new_tls_mode, new_max_cached,
+	               new_backend_tls_mode, backend_tls_mode_set, parse_err);
+	if (!parse_err.empty()) {
+		err = std::move(parse_err);
+		return false;
+	}
 
 	std::unique_lock<std::shared_mutex> lock(mutex_);
 	thread_pool_size_ = new_pool_size;
 	connect_timeout_ = new_connect_timeout;
 	tls_mode_ = std::move(new_tls_mode);
 	max_cached_connections_ = new_max_cached;
+	if (backend_tls_mode_set) {
+		backend_tls_mode_ = new_backend_tls_mode;
+	}
 	return true;
 }
 
@@ -514,6 +582,9 @@ bool MysqlxConfigStore::save_variables_to_admin_table(SQLite3DB& db) const {
 	if (!put("mysqlx_max_cached_connections_per_thread", std::to_string(max_cached_connections_))) {
 		db.execute("ROLLBACK"); return false;
 	}
+	if (!put("mysqlx_tls_backend_mode", mysqlx_backend_tls_mode_to_string(backend_tls_mode_))) {
+		db.execute("ROLLBACK"); return false;
+	}
 	return db.execute("COMMIT");
 }
 
@@ -609,7 +680,8 @@ void MysqlxConfigStore::project_variables_to_runtime_view(SQLite3DB& db) const {
 	if (!put("mysqlx_thread_pool_size", std::to_string(thread_pool_size_)) ||
 	    !put("mysqlx_connect_timeout", std::to_string(connect_timeout_)) ||
 	    !put("mysqlx_tls_mode", tls_mode_) ||
-	    !put("mysqlx_max_cached_connections_per_thread", std::to_string(max_cached_connections_))) {
+	    !put("mysqlx_max_cached_connections_per_thread", std::to_string(max_cached_connections_)) ||
+	    !put("mysqlx_tls_backend_mode", mysqlx_backend_tls_mode_to_string(backend_tls_mode_))) {
 		db.execute("ROLLBACK"); return;
 	}
 	db.execute("COMMIT");
@@ -722,4 +794,9 @@ std::string MysqlxConfigStore::get_tls_mode() const {
 int MysqlxConfigStore::get_max_cached_connections() const {
 	std::shared_lock<std::shared_mutex> lock(mutex_);
 	return max_cached_connections_;
+}
+
+MysqlxBackendTlsMode MysqlxConfigStore::get_backend_tls_mode() const {
+	std::shared_lock<std::shared_mutex> lock(mutex_);
+	return backend_tls_mode_;
 }

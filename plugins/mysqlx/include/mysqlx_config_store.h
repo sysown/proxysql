@@ -20,6 +20,47 @@ enum class MysqlxBackendAuthMode : uint8_t {
 
 MysqlxBackendAuthMode mysqlx_backend_auth_mode_from_string(const std::string& value);
 
+// MysqlxBackendTlsMode mirrors MySQL Router 8.0's `client_ssl_mode` /
+// `server_ssl_mode` family for the proxy->backend leg of a session.
+//
+//   * disabled  -- never wrap the backend connection in TLS, regardless of
+//                  whether the client is using TLS. Plaintext only.
+//   * preferred -- send `CapabilitiesSet(tls=true)` to the backend; on
+//                  Mysqlx::Error, fall back to plaintext authentication.
+//                  Lets ProxySQL adapt to a mixed fleet where some
+//                  backends have TLS configured and some do not.
+//   * required  -- send `CapabilitiesSet(tls=true)`; on Mysqlx::Error
+//                  fail the backend connect. Use when policy mandates
+//                  encryption proxy<->backend.
+//   * as_client -- mirror the client's TLS choice. If the client
+//                  connected over TLS, encrypt the backend leg too;
+//                  if the client connected in plaintext, leave the
+//                  backend leg in plaintext. Matches MySQL Router's
+//                  AsClient semantics. This is the default because it
+//                  most closely matches the previous (pre-mode-aware)
+//                  ProxySQL behaviour where backend TLS was implicitly
+//                  driven by `client_ds_.is_encrypted()`.
+//
+// `mysqlx_backend_endpoints.use_ssl=1` remains an operator-controlled
+// override that forces TLS regardless of the mode (so an operator can
+// pin a single sensitive backend to TLS even under mode=disabled).
+enum class MysqlxBackendTlsMode : uint8_t {
+	disabled = 0,
+	preferred = 1,
+	required = 2,
+	as_client = 3
+};
+
+// Parses the string form of MysqlxBackendTlsMode (case-insensitive).
+// Returns std::nullopt on an unrecognised value so the caller can
+// surface a useful error to the operator instead of silently coercing
+// to a default. Accepted values: "disabled", "preferred", "required",
+// "as_client".
+std::optional<MysqlxBackendTlsMode> mysqlx_backend_tls_mode_from_string(const std::string& value);
+
+// Canonical lower-case rendering for SAVE / runtime-view projection.
+const char* mysqlx_backend_tls_mode_to_string(MysqlxBackendTlsMode m);
+
 struct MysqlxResolvedIdentity {
 	std::string username {};
 	std::string password {};
@@ -139,6 +180,11 @@ public:
 	int get_connect_timeout() const;
 	std::string get_tls_mode() const;
 	int get_max_cached_connections() const;
+	// Returns the parsed mysqlx_tls_backend_mode currently in effect.
+	// Defaults to MysqlxBackendTlsMode::as_client (the legacy implicit
+	// behaviour) until install_variables_from_admin parses a different
+	// value.
+	MysqlxBackendTlsMode get_backend_tls_mode() const;
 
 private:
 	MysqlxBackendEndpoint pick_from_hostgroup(int hostgroup_id, const std::string& strategy) const;
@@ -160,6 +206,11 @@ private:
 	int connect_timeout_ { 10000 };
 	std::string tls_mode_ { "DISABLED" };
 	int max_cached_connections_ { 100 };
+	// Default `as_client` matches the pre-modeaware behaviour where
+	// backend TLS was implicitly tied to client_ds_.is_encrypted() at
+	// resolve time, so existing deployments see no behavioural change
+	// after upgrading.
+	MysqlxBackendTlsMode backend_tls_mode_ { MysqlxBackendTlsMode::as_client };
 };
 
 #endif /* PROXYSQL_MYSQLX_CONFIG_STORE_H */
