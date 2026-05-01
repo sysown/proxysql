@@ -49,15 +49,9 @@ ifeq ($(PROXYSQLCLICKHOUSE),1)
 	targets += clickhouse-cpp
 endif
 
-# sqlite-vec: vector similarity search extension.  Originally gated
-# behind PROXYSQLGENAI; Step 7 of the carve-out made the call site in
-# core (lib/proxy_sqlite3_symbols.cpp + lib/Admin_Bootstrap.cpp)
-# unconditional so the genai plugin (when dlopen'd) can call
-# sqlite3_vec_init on the same SQLite that proxysql linked against.
-# That requires vec.o + sqlite-vec.h to exist regardless of
-# PROXYSQLGENAI; otherwise non-genai dbg/release builds fail at
-# `#include "sqlite-vec.h"`.  Always build it.
-targets += sqlite-vec
+ifeq ($(PROXYSQLGENAI),1)
+	targets += sqlite-vec
+endif
 
 default: $(targets)
 .PHONY: default
@@ -287,16 +281,13 @@ sqlite3/sqlite3/vec.o: sqlite3/sqlite3/sqlite3.o
 	cd sqlite3/sqlite3 && cp ../sqlite-vec-source/sqlite-vec.c . && cp ../sqlite-vec-source/sqlite-vec.h .
 	cd sqlite3/sqlite3 && ${CC} ${MYCFLAGS} -fPIC -c -o vec.o sqlite-vec.c -DSQLITE_CORE -DSQLITE_VEC_STATIC -DSQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_ENABLE_JSON1 -DSQLITE_ENABLE_FTS5 -DSQLITE_DLL=1
 
-# Step 7: vec.o is unconditionally linked into proxysql (see
-# src/Makefile $(SQLITE_VEC_OBJ)), so we always build it as part of
-# the sqlite3 target — no longer gated on PROXYSQLGENAI.  Without
-# this, non-genai dbg builds find sqlite-vec.h missing when
-# lib/proxy_sqlite3_symbols.cpp tries to `#include "sqlite-vec.h"`.
+ifeq ($(PROXYSQLGENAI),1)
 sqlite3: sqlite3/sqlite3/sqlite3.o sqlite3/sqlite3/vec.o
+else
+sqlite3: sqlite3/sqlite3/sqlite3.o
+endif
 
-# sqlite-vec: Vector similarity search extension.  Kept as a separate
-# target name so existing callers (top-level Makefile, packaging
-# entrypoints) keep working; sqlite3 above already pulls in vec.o.
+# sqlite-vec: Vector similarity search extension (for GenAI)
 sqlite-vec: sqlite3/sqlite3/vec.o
 
 
