@@ -10,6 +10,7 @@
 #include "mysqlx_connection.pb.h"
 #include "mysqlx_session.pb.h"
 #include "mysqlx_datatypes.pb.h"
+#include "mysqlx_notice.pb.h"
 
 #include <cerrno>
 #include <cstring>
@@ -931,6 +932,95 @@ static void test_validation_cursor_fetch_row_without_metadata_allowed() {
 }
 
 // =====================================================================
+// Notice-type validation (issue #5695, P2: explicit notice forwarding
+// awareness). Drives MysqlxSession::is_notice_frame_valid_for_test()
+// directly with synthetic bodies. The predicate must return true iff
+// the body parses as a Mysqlx::Notice::Frame AND the outer `type`
+// field is in the spec range (1..5 — WARNING, SESSION_VARIABLE_CHANGED,
+// SESSION_STATE_CHANGED, GROUP_REPLICATION_STATE_CHANGED, SERVER_HELLO).
+// =====================================================================
+
+// Helper: serialize a Mysqlx::Notice::Frame with the given type and a
+// minimal "Hello" payload. Returns the raw protobuf-encoded bytes (no
+// X-Protocol 5-byte header — the predicate operates on the body only).
+static std::string build_notice_body_with_type(int type_value) {
+	Mysqlx::Notice::Frame f;
+	f.set_type(type_value);
+	// scope is optional (LOCAL by default); payload is a bytes field
+	// the proxy must NOT inspect — leave empty.
+	std::string out;
+	f.SerializeToString(&out);
+	return out;
+}
+
+static void test_notice_validation_known_types_accepted() {
+	diag(">>> %s", __func__);
+	MysqlxSession sess;
+	const int known_types[] = {
+		Mysqlx::Notice::Frame_Type_WARNING,
+		Mysqlx::Notice::Frame_Type_SESSION_VARIABLE_CHANGED,
+		Mysqlx::Notice::Frame_Type_SESSION_STATE_CHANGED,
+		Mysqlx::Notice::Frame_Type_GROUP_REPLICATION_STATE_CHANGED,
+		Mysqlx::Notice::Frame_Type_SERVER_HELLO,
+	};
+	for (int t : known_types) {
+		std::string body = build_notice_body_with_type(t);
+		bool valid = sess.is_notice_frame_valid_for_test(
+			reinterpret_cast<const uint8_t*>(body.data()), body.size());
+		ok(valid, "Frame_Type=%d accepted as a known notice type", t);
+	}
+}
+
+static void test_notice_validation_unknown_type_rejected() {
+	diag(">>> %s", __func__);
+	MysqlxSession sess;
+	// 99 is not a defined Frame_Type value (max in spec is 5 / SERVER_HELLO).
+	// A backend or MITM shipping this would previously have been forwarded
+	// uncritically; with #5695's hook it is rejected.
+	std::string body = build_notice_body_with_type(99);
+	bool valid = sess.is_notice_frame_valid_for_test(
+		reinterpret_cast<const uint8_t*>(body.data()), body.size());
+	ok(!valid, "Frame_Type=99 rejected as unknown notice type");
+
+	// Edge cases at the boundary.
+	std::string body_zero = build_notice_body_with_type(0);
+	valid = sess.is_notice_frame_valid_for_test(
+		reinterpret_cast<const uint8_t*>(body_zero.data()), body_zero.size());
+	ok(!valid, "Frame_Type=0 rejected (below WARNING)");
+
+	std::string body_big = build_notice_body_with_type(100000);
+	valid = sess.is_notice_frame_valid_for_test(
+		reinterpret_cast<const uint8_t*>(body_big.data()), body_big.size());
+	ok(!valid, "Frame_Type=100000 rejected (well above SERVER_HELLO)");
+}
+
+static void test_notice_validation_empty_body_rejected() {
+	diag(">>> %s", __func__);
+	MysqlxSession sess;
+	bool valid = sess.is_notice_frame_valid_for_test(nullptr, 0);
+	ok(!valid, "empty notice body rejected (type field is required)");
+
+	// A NOTICE frame is always at least 5 bytes on the wire (its header),
+	// but the body can be empty. The predicate operates on body bytes
+	// only and treats "no bytes" as "no required type field".
+	uint8_t dummy = 0;
+	valid = sess.is_notice_frame_valid_for_test(&dummy, 0);
+	ok(!valid, "zero-length notice body rejected even with non-null pointer");
+}
+
+static void test_notice_validation_malformed_protobuf_rejected() {
+	diag(">>> %s", __func__);
+	MysqlxSession sess;
+	// Random non-protobuf bytes. Field tags in protobuf wire format follow
+	// strict rules; arbitrary bytes typically fail ParseFromArray. 0xff in
+	// particular is a varint continuation byte without a terminator, so
+	// the parser bails on the first field tag.
+	const uint8_t garbage[] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+	bool valid = sess.is_notice_frame_valid_for_test(garbage, sizeof(garbage));
+	ok(!valid, "malformed protobuf body rejected (parse failure)");
+}
+
+// =====================================================================
 // Backend TLS mode resolution (issue #5693, P1: asymmetric TLS /
 // AsClient mode parity gap with MySQL Router 8.0).
 //
@@ -1084,6 +1174,12 @@ int main() {
 	// Backend TLS mode resolution (#5693).
 	test_backend_tls_mode_resolution_8_combinations();
 	test_backend_tls_mode_endpoint_override();
+
+	// Notice-type validation (#5695).
+	test_notice_validation_known_types_accepted();
+	test_notice_validation_unknown_type_rejected();
+	test_notice_validation_empty_body_rejected();
+	test_notice_validation_malformed_protobuf_rejected();
 
 	return exit_status();
 }
