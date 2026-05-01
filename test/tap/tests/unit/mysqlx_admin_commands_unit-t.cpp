@@ -207,10 +207,8 @@ int main() {
 		mysqlx_context().config_store->project_users_to_runtime_view(admindb);
 		int cnt = admindb.return_one_int("SELECT COUNT(*) FROM runtime_mysqlx_users");
 		ok(cnt == 1, "re-loading users replaces runtime data (not appends)");
-		std::unique_ptr<SQLite3_result, void(*)(SQLite3_result*)> r(
-			admindb.execute_statement("SELECT username FROM runtime_mysqlx_users WHERE username='charlie'", nullptr),
-			[](SQLite3_result* p) { if (p) { /* leaked intentionally for test scope */ } }
-		);
+		std::unique_ptr<SQLite3_result> r(
+			admindb.execute_statement("SELECT username FROM runtime_mysqlx_users WHERE username='charlie'", nullptr));
 		ok(r && r->rows.size() == 1, "runtime contains charlie after reload");
 	}
 
