@@ -1,11 +1,20 @@
 /**
  * @file reg_test_5546-shun_recovery-t.cpp
- * @brief Regression test for #5546: monitor ping shun must not recover before the next ping window.
+ * @brief Regression test for #5546: a SHUNNED backend must not recover before the next monitor ping.
  *
- * The test creates a dummy unreachable backend, configures monitor ping failures to shun it after one
- * failed check, and uses a recovery time much shorter than the monitor ping interval. After the server is
- * shunned, a query routed to the dummy hostgroup exercises the server-selection unshun path. The server must
- * remain SHUNNED instead of becoming ONLINE before the monitor has had enough time to re-check it.
+ * A SHUNNED backend must remain SHUNNED for at least 2x monitor_ping_interval, even when
+ * shun_recovery_time_sec is shorter than monitor_ping_interval. Once 2x monitor_ping_interval
+ * elapses, the server-selection path may bring it back ONLINE.
+ *
+ * Test flow:
+ *   1. Add an unreachable backend
+ *   2. Configure the monitor to shun it after one failed ping, and set shun_recovery_time_sec
+ *      shorter than monitor_ping_interval
+ *   3. Disable the monitor immediately after the server is SHUNNED. This prevents the monitor
+ *      from further extending `time_last_detected_error`
+ *   4. Execute two queries to trigger the server-selection/unshun path:
+ *       i. Before 2x monitor_ping_interval elapses - assert the server stays SHUNNED
+ *      ii. After 2x monitor_ping_interval elapses - assert the server becomes ONLINE
  */
 
 #include <string>
@@ -19,13 +28,16 @@
 
 using std::string;
 
-constexpr int kHostgroup = 5546;
+// ProxySQL config
+constexpr const char* kBackendHost = "127.0.0.1";
 constexpr int kBackendPort = 3305;
+constexpr int kHostgroup = 5546;
 constexpr int kMonitorPingIntervalMs = 5000;
 constexpr int kShunRecoverySec = 1;
-constexpr int kPollIntervalMs = 100;
-constexpr int kShunWaitTimeoutMs = 10000;
-constexpr const char* kBackendHost = "127.0.0.1";
+
+// sleep intervals
+constexpr int kFirstPingIntervalSleepSec = 7;
+constexpr int kSecondPingIntervalSleepSec = 6;
 
 string get_runtime_server_status(MYSQL* admin) {
 	const string query =
@@ -40,15 +52,18 @@ string get_runtime_server_status(MYSQL* admin) {
 	return status.val;
 }
 
-bool wait_for_server_status(MYSQL* admin, const string& expected_status, int timeout_ms) {
-	for (int waited_ms = 0; waited_ms <= timeout_ms; waited_ms += kPollIntervalMs) {
+bool wait_for_server_status(MYSQL* admin, const string& expected_status) {
+    int poll_interval_ms = 100;
+    int poll_timeout_ms = 10000;
+
+	for (int waited_ms = 0; waited_ms <= poll_timeout_ms; waited_ms += poll_interval_ms) {
 		const string status = get_runtime_server_status(admin);
 		if (status == expected_status) {
-			diag("Server reached expected status   hostgroup=%d host=%s port=%d status=%s waited_ms=%d",
+			diag("Server reached expected status: hostgroup=%d host=%s port=%d status=%s waited_ms=%d",
 				kHostgroup, kBackendHost, kBackendPort, status.c_str(), waited_ms);
 			return true;
 		}
-		usleep(kPollIntervalMs * 1000);
+		usleep(poll_interval_ms * 1000);
 	}
 
 	diag("Timed out waiting for status %s; last status=%s", expected_status.c_str(), get_runtime_server_status(admin).c_str());
@@ -85,7 +100,7 @@ void setup(MYSQL* admin) {
 }
 
 int main(int argc, char** argv) {
-	plan(2);
+	plan(3);
 
 	CommandLine cl;
 	if (cl.getEnv()) {
@@ -109,31 +124,52 @@ int main(int argc, char** argv) {
 
 	setup(admin);
 
-	const bool shunned = wait_for_server_status(admin, "SHUNNED", kShunWaitTimeoutMs);
+	const bool shunned = wait_for_server_status(admin, "SHUNNED");
 	ok(shunned, "Unreachable backend is SHUNNED after one monitor ping failure");
 
-	bool stayed_shunned = shunned;
+	// Disable the monitor so subsequent pings do not refresh time_last_detected_error
+	// while the test waits out 2x of monitor_ping_interval.
+	run_q(admin, "SET mysql-monitor_enabled='false'");
+	run_q(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+
+	const string query = "DO /* ;hostgroup=" + std::to_string(kHostgroup) + " */ 1";
+
+	string status = "NOT_CHECKED";
+	bool shunned_past_1x_ping_interval = false;
 	if (shunned) {
-		const string routed_query = "DO /* ;hostgroup=" + std::to_string(kHostgroup) + " */ 1";
-		const int sleep_ms = kShunRecoverySec * 1000;
-		for (int waited_ms = 0; waited_ms < kMonitorPingIntervalMs; waited_ms += sleep_ms) {
-			sleep(kShunRecoverySec);
+		sleep(kFirstPingIntervalSleepSec);
 
-			const int query_rc = mysql_query(proxy, routed_query.c_str());
-			diag("Routed query after recovery window returned rc=%d errno=%d error=\"%s\" waited_ms=%d",
-				query_rc, mysql_errno(proxy), mysql_error(proxy), waited_ms + sleep_ms);
+		const int query_rc = mysql_query(proxy, query.c_str());
+		diag("Routed query after first wait returned rc=%d errno=%d error=\"%s\" sleep_sec=%d",
+			query_rc, mysql_errno(proxy), mysql_error(proxy), kFirstPingIntervalSleepSec);
 
-			const string status = get_runtime_server_status(admin);
-			diag("Observed status during one ping interval   waited_ms=%d status=%s",
-				waited_ms + sleep_ms, status.c_str());
-			stayed_shunned = status == "SHUNNED";
-			if (!stayed_shunned) {
-				diag("Server changed status after recovery-window selection   status=%s", status.c_str());
-				break;
-			}
-		}
+		status = get_runtime_server_status(admin);
+		diag("Status after first wait   sleep_sec=%d status=%s",
+			kFirstPingIntervalSleepSec, status.c_str());
+		shunned_past_1x_ping_interval = status == "SHUNNED";
 	}
-	ok(stayed_shunned, "SHUNNED backend does not become ONLINE before the next monitor ping window (#5546)");
+	ok(shunned_past_1x_ping_interval,
+		"Backend stays SHUNNED before 2x of monitor_ping_interval elapses: expected='%s' got='%s'",
+		"SHUNNED", status.c_str());
+
+	status = "NOT_CHECKED";
+	bool online_after_2x_ping_interval = false;
+	if (shunned) {
+		sleep(kSecondPingIntervalSleepSec);
+
+		const int query_rc = mysql_query(proxy, query.c_str());
+		const int total_sleep_sec = kFirstPingIntervalSleepSec + kSecondPingIntervalSleepSec;
+		diag("Routed query after second wait returned rc=%d errno=%d error=\"%s\" total_sleep_sec=%d",
+			query_rc, mysql_errno(proxy), mysql_error(proxy), total_sleep_sec);
+
+		status = get_runtime_server_status(admin);
+		diag("Status after second wait   total_sleep_sec=%d status=%s",
+			total_sleep_sec, status.c_str());
+		online_after_2x_ping_interval = status == "ONLINE";
+	}
+	ok(online_after_2x_ping_interval,
+		"Backend becomes ONLINE after 2x of monitor_ping_interval elapses: expected='%s' got='%s'",
+		"ONLINE", status.c_str());
 
 	cleanup(admin);
 
