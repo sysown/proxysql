@@ -73,6 +73,20 @@ struct GenAIPluginContext {
 GenAIPluginContext& genai_context();
 
 /**
+ * @brief Format-style log helper that routes through the chassis
+ *        services->log_message callback (so messages land in
+ *        proxysql.log) and falls back to stderr if the chassis isn't
+ *        wired up yet (e.g. very early init or unit-test harness).
+ *
+ * Severity follows syslog levels: 3=ERROR, 4=WARN, 6=INFO, 7=DEBUG.
+ * Messages over ~4 KiB after formatting are silently truncated;
+ * they're admin/operator log lines, not data.
+ *
+ * Defined in plugin_main.cpp.
+ */
+void genai_log(int level, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
+
+/**
  * @brief Push admin DB's `mcp-*` global_variables values into the
  *        running MCP_Threads_Handler.
  *

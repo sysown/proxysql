@@ -356,6 +356,29 @@ int MCP_Threads_Handler::set_variable(const char* name, const char* value) {
 	return -1;
 }
 
+bool MCP_Threads_Handler::get_variable_string(const char* name, std::string& out) {
+	if (!name) return false;
+
+	const auto bool_to_str = [](bool v) -> std::string { return v ? "true" : "false"; };
+	const auto int_to_str  = [](int v) -> std::string { return std::to_string(v); };
+
+	if (!strcmp(name, "enabled"))                          { out = bool_to_str(variables.mcp_enabled); return true; }
+	if (!strcmp(name, "port"))                             { out = int_to_str (variables.mcp_port); return true; }
+	if (!strcmp(name, "use_ssl"))                          { out = bool_to_str(variables.mcp_use_ssl); return true; }
+	if (!strcmp(name, "config_endpoint_auth"))             { out = variables.mcp_config_endpoint_auth ? variables.mcp_config_endpoint_auth : ""; return true; }
+	if (!strcmp(name, "stats_endpoint_auth"))              { out = variables.mcp_stats_endpoint_auth  ? variables.mcp_stats_endpoint_auth  : ""; return true; }
+	if (!strcmp(name, "query_endpoint_auth"))              { out = variables.mcp_query_endpoint_auth  ? variables.mcp_query_endpoint_auth  : ""; return true; }
+	if (!strcmp(name, "admin_endpoint_auth"))              { out = variables.mcp_admin_endpoint_auth  ? variables.mcp_admin_endpoint_auth  : ""; return true; }
+	if (!strcmp(name, "cache_endpoint_auth"))              { out = variables.mcp_cache_endpoint_auth  ? variables.mcp_cache_endpoint_auth  : ""; return true; }
+	if (!strcmp(name, "ai_endpoint_auth"))                 { out = variables.mcp_ai_endpoint_auth     ? variables.mcp_ai_endpoint_auth     : ""; return true; }
+	if (!strcmp(name, "rag_endpoint_auth"))                { out = variables.mcp_rag_endpoint_auth    ? variables.mcp_rag_endpoint_auth    : ""; return true; }
+	if (!strcmp(name, "timeout_ms"))                       { out = int_to_str (variables.mcp_timeout_ms); return true; }
+	if (!strcmp(name, "stats_show_queries_max_rows"))      { out = int_to_str (variables.mcp_stats_show_queries_max_rows); return true; }
+	if (!strcmp(name, "stats_show_processlist_max_rows"))  { out = int_to_str (variables.mcp_stats_show_processlist_max_rows); return true; }
+	if (!strcmp(name, "stats_enable_debug_tools"))         { out = bool_to_str(variables.mcp_stats_enable_debug_tools); return true; }
+	return false;
+}
+
 bool MCP_Threads_Handler::has_variable(const char* name) {
 	if (!name)
 		return false;

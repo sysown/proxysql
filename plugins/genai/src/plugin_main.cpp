@@ -47,6 +47,7 @@
 #include "prometheus/family.h"
 #include "prometheus/registry.h"
 
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -68,8 +69,14 @@ AI_Features_Manager *GloAI = nullptr;
 // GenAI_Threads_Handler at compile time (the test binary that
 // compiles Anomaly_Detector.cpp directly leaves this null and the
 // detector short-circuits to empty embedding cleanly).
+//
+// std::atomic so the detector's hot-path read can never see a torn
+// pointer racing with our install / clear on the lifecycle thread —
+// see the longer rationale comment next to the definition in
+// Anomaly_Detector.cpp.
+#include <atomic>
 using genai_anomaly_embed_fn_t = std::vector<float> (*)(const std::string& query);
-extern genai_anomaly_embed_fn_t genai_anomaly_embed_fn;
+extern std::atomic<genai_anomaly_embed_fn_t> genai_anomaly_embed_fn;
 
 namespace {
 
@@ -156,7 +163,7 @@ bool genai_init(ProxySQL_PluginServices* services) {
 
 	ctx.anomaly_detector = new Anomaly_Detector();
 	if (ctx.anomaly_detector->init() != 0) {
-		fprintf(stderr, "genai plugin: Anomaly_Detector::init() failed\n");
+		genai_log(6, "genai plugin: Anomaly_Detector::init() failed\n");
 		delete ctx.anomaly_detector;
 		ctx.anomaly_detector = nullptr;
 		return false;
@@ -165,15 +172,19 @@ bool genai_init(ProxySQL_PluginServices* services) {
 	// function-pointer hook (Step 5).  Detector calls through this
 	// pointer; tests that compile Anomaly_Detector.cpp standalone
 	// leave it null and embedding silently short-circuits.
-	genai_anomaly_embed_fn = &embed_query_via_glogath;
+	genai_anomaly_embed_fn.store(&embed_query_via_glogath, std::memory_order_relaxed);
 
 	// Step 4.C: take over MCP_Threads_Handler ownership from former
 	// core global GloMCPH.  Construct here; `init()` is called below.
 	// `start()` (the listener launch) happens in genai_start().
 	//
-	// admindb access is not yet available during init() per the chassis
-	// ABI (services->get_admindb() returns nullptr until start()), so
-	// any plugin-side state that needs it must defer to genai_start.
+	// services->get_admindb() IS live in Phase D (init), per the
+	// chassis ABI.  We defer the actual install_*_from_admin /
+	// listener start to genai_start() anyway, because the admin
+	// module hasn't yet finished merge_plugin_tables / loaded
+	// global_variables — reading would see an empty schema.  Once
+	// genai_start fires, both DB schema and rows are populated and
+	// we can drive the install path.
 	ctx.mcp = new MCP_Threads_Handler();
 	GloMCPH = ctx.mcp;  // legacy alias used by Query_Tool_Handler etc.
 	ctx.mcp->init();
@@ -246,7 +257,7 @@ bool mcp_load_variables_from_admindb(GenAIPluginContext& ctx) {
 		"WHERE variable_name LIKE 'mcp-%'";
 	admindb->execute_statement(q, &error, &cols, &affected_rows, &rs);
 	if (error != nullptr) {
-		fprintf(stderr, "genai plugin: failed to read mcp-* vars: %s\n", error);
+		genai_log(6, "genai plugin: failed to read mcp-* vars: %s\n", error);
 		free(error);
 		if (rs != nullptr) delete rs;
 		return false;
@@ -291,7 +302,7 @@ bool mcp_save_variables_to_admindb(GenAIPluginContext& ctx) {
 		"REPLACE INTO main.global_variables(variable_name, variable_value) VALUES(?1, ?2)"
 	);
 	if (prep_rc != SQLITE_OK) {
-		fprintf(stderr, "genai plugin: REPLACE prepare failed (rc=%d)\n", prep_rc);
+		genai_log(6, "genai plugin: REPLACE prepare failed (rc=%d)\n", prep_rc);
 		return false;
 	}
 	sqlite3_stmt* statement = stmt.get();
@@ -300,8 +311,11 @@ bool mcp_save_variables_to_admindb(GenAIPluginContext& ctx) {
 	ctx.mcp->wrlock();
 	char** varnames = ctx.mcp->get_variables_list();
 	for (int i = 0; varnames[i] != nullptr; ++i) {
-		char val[256];
-		ctx.mcp->get_variable(varnames[i], val);
+		// std::string variant — bearer-token endpoint_auth values can
+		// exceed any reasonable fixed-buffer size and the legacy
+		// get_variable(char*) sprintf had no bounds.
+		std::string val;
+		ctx.mcp->get_variable_string(varnames[i], val);
 
 		// MCP variables are stored under the "mcp-<name>" qualified
 		// form in global_variables, mirroring how mysql-* / pgsql-*
@@ -309,7 +323,7 @@ bool mcp_save_variables_to_admindb(GenAIPluginContext& ctx) {
 		std::string qualified = std::string("mcp-") + varnames[i];
 
 		(*proxy_sqlite3_bind_text)(statement, 1, qualified.c_str(), -1, SQLITE_TRANSIENT);
-		(*proxy_sqlite3_bind_text)(statement, 2, val[0] ? val : "", -1, SQLITE_TRANSIENT);
+		(*proxy_sqlite3_bind_text)(statement, 2, val.c_str(), -1, SQLITE_TRANSIENT);
 		SAFE_SQLITE3_STEP2(statement);
 		(*proxy_sqlite3_clear_bindings)(statement);
 		(*proxy_sqlite3_reset)(statement);
@@ -343,7 +357,7 @@ bool genai_load_variables_from_admindb(GenAIPluginContext& ctx) {
 		"WHERE variable_name LIKE 'genai-%'";
 	admindb->execute_statement(q, &error, &cols, &affected_rows, &rs);
 	if (error != nullptr) {
-		fprintf(stderr, "genai plugin: failed to read genai-* vars: %s\n", error);
+		genai_log(6, "genai plugin: failed to read genai-* vars: %s\n", error);
 		free(error);
 		if (rs != nullptr) delete rs;
 		return false;
@@ -381,7 +395,7 @@ bool genai_save_variables_to_admindb(GenAIPluginContext& ctx) {
 		"REPLACE INTO main.global_variables(variable_name, variable_value) VALUES(?1, ?2)"
 	);
 	if (prep_rc != SQLITE_OK) {
-		fprintf(stderr, "genai plugin: REPLACE prepare failed for genai (rc=%d)\n", prep_rc);
+		genai_log(6, "genai plugin: REPLACE prepare failed for genai (rc=%d)\n", prep_rc);
 		return false;
 	}
 	sqlite3_stmt* statement = stmt.get();
@@ -429,7 +443,7 @@ bool mcp_load_query_rules_to_runtime(GenAIPluginContext& ctx) {
 
 	std::string err;
 	if (!ctx.mcp->install_query_rules_from_admin(*admindb, err)) {
-		fprintf(stderr, "genai plugin: install_query_rules_from_admin failed: %s\n",
+		genai_log(6, "genai plugin: install_query_rules_from_admin failed: %s\n",
 		        err.empty() ? "(no error message)" : err.c_str());
 		return false;
 	}
@@ -471,13 +485,13 @@ bool mcp_load_target_auth_map_from_admindb(GenAIPluginContext& ctx) {
 
 	std::string err;
 	if (!ctx.mcp->install_auth_profiles_from_admin(*admindb, err)) {
-		fprintf(stderr, "genai plugin: install_auth_profiles_from_admin failed: %s\n",
+		genai_log(6, "genai plugin: install_auth_profiles_from_admin failed: %s\n",
 		        err.empty() ? "(no error message)" : err.c_str());
 		return false;
 	}
 	err.clear();
 	if (!ctx.mcp->install_target_profiles_from_admin(*admindb, err)) {
-		fprintf(stderr, "genai plugin: install_target_profiles_from_admin failed: %s\n",
+		genai_log(6, "genai plugin: install_target_profiles_from_admin failed: %s\n",
 		        err.empty() ? "(no error message)" : err.c_str());
 		return false;
 	}
@@ -496,11 +510,11 @@ bool mcp_save_target_auth_map_to_admindb(GenAIPluginContext& ctx) {
 	SQLite3DB* admindb = ctx.services->get_admindb();
 	if (admindb == nullptr) return false;
 	if (!ctx.mcp->save_auth_profiles_to_admin_table(*admindb)) {
-		fprintf(stderr, "genai plugin: save_auth_profiles_to_admin_table failed\n");
+		genai_log(6, "genai plugin: save_auth_profiles_to_admin_table failed\n");
 		return false;
 	}
 	if (!ctx.mcp->save_target_profiles_to_admin_table(*admindb)) {
-		fprintf(stderr, "genai plugin: save_target_profiles_to_admin_table failed\n");
+		genai_log(6, "genai plugin: save_target_profiles_to_admin_table failed\n");
 		return false;
 	}
 	return true;
@@ -518,7 +532,7 @@ bool mcp_save_target_auth_map_to_admindb(GenAIPluginContext& ctx) {
 void mcp_start_listener_if_enabled(GenAIPluginContext& ctx) {
 	if (ctx.mcp == nullptr) return;
 	if (!ctx.mcp->variables.mcp_enabled) {
-		fprintf(stderr, "genai plugin: MCP disabled (mcp_enabled=false); listener not started\n");
+		genai_log(6, "genai plugin: MCP disabled (mcp_enabled=false); listener not started\n");
 		return;
 	}
 	if (ctx.mcp->mcp_server != nullptr) {
@@ -534,7 +548,7 @@ void mcp_start_listener_if_enabled(GenAIPluginContext& ctx) {
 		// Pre-4.C core code returned early in this case; mirror that.
 		if (GloVars.global.ssl_key_pem_mem == nullptr ||
 		    GloVars.global.ssl_cert_pem_mem == nullptr) {
-			fprintf(stderr, "genai plugin: MCP listener requested SSL but SSL is not initialized; refusing to start\n");
+			genai_log(6, "genai plugin: MCP listener requested SSL but SSL is not initialized; refusing to start\n");
 			return;
 		}
 	}
@@ -542,17 +556,17 @@ void mcp_start_listener_if_enabled(GenAIPluginContext& ctx) {
 	bool port_free = false;
 	const int port_check = check_port_availability(port, &port_free);
 	if (!port_free) {
-		fprintf(stderr, "genai plugin: MCP port %d not free (rc=%d); listener not started\n", port, port_check);
+		genai_log(6, "genai plugin: MCP port %d not free (rc=%d); listener not started\n", port, port_check);
 		return;
 	}
 
 	ctx.mcp->mcp_server = new ProxySQL_MCP_Server(port, ctx.mcp);
 	if (ctx.mcp->mcp_server != nullptr) {
 		ctx.mcp->mcp_server->start();
-		fprintf(stderr, "genai plugin: MCP listener started on port %d (ssl=%s)\n",
+		genai_log(6, "genai plugin: MCP listener started on port %d (ssl=%s)\n",
 		        port, use_ssl ? "true" : "false");
 	} else {
-		fprintf(stderr, "genai plugin: failed to allocate ProxySQL_MCP_Server\n");
+		genai_log(6, "genai plugin: failed to allocate ProxySQL_MCP_Server\n");
 	}
 }
 
@@ -587,10 +601,28 @@ bool genai_start() {
 /**
  * @brief Plugin stop callback.  Runs during shutdown, before unload.
  *
- * Tears down the Anomaly_Detector.  Prometheus counters stay
- * registered (prometheus-cpp has no Unregister API and re-registering
- * on a future load+start of the same plugin would conflict — leaving
- * them registered at their last value is the documented choice).
+ * Tear-down order is the reverse of construction in genai_init() so
+ * that consumers go away before producers:
+ *   1. flip `started` to false — the query-hook adapter switches to
+ *      ALLOW-everything once this flips, draining in-flight readers
+ *      that observed `started == true` before the flip.
+ *   2. delete MCP_Threads_Handler — its destructor stops the
+ *      ProxySQL_MCP_Server (joining accept + worker threads), so by
+ *      the time we move on no listener thread is still alive that
+ *      could touch GloGATH/GloAI.
+ *   3. delete AI_Features_Manager and GenAI_Threads_Handler — safe
+ *      now because the listener / tool handlers (their only callers)
+ *      are gone.
+ *   4. clear the embedding hook ATOMICALLY before deleting the
+ *      anomaly detector, so any straggling hot-path reader (the
+ *      query hook ran concurrently with step 1) sees a null pointer
+ *      and short-circuits, not a dangling GenAI handler.
+ *   5. delete the anomaly detector itself.
+ *
+ * Prometheus counters stay registered: prometheus-cpp has no
+ * Unregister API and re-registering them on a future load+start of
+ * the same plugin would conflict.  Leaving them at their last value
+ * is the documented choice.
  *
  * @return true; tear-down has no failure mode today.
  */
@@ -619,8 +651,10 @@ bool genai_stop() {
 	if (ctx.anomaly_detector != nullptr) {
 		// Clear the embedding hook before deleting the detector so
 		// any in-flight hot-path call sees a null pointer rather
-		// than a dangling GenAI_Threads_Handler reference.
-		genai_anomaly_embed_fn = nullptr;
+		// than a dangling GenAI_Threads_Handler reference.  Atomic
+		// store rather than plain assignment so a concurrent reader
+		// can never observe a torn pointer.
+		genai_anomaly_embed_fn.store(nullptr, std::memory_order_relaxed);
 		ctx.anomaly_detector->close();
 		delete ctx.anomaly_detector;
 		ctx.anomaly_detector = nullptr;
@@ -661,6 +695,31 @@ GenAIPluginContext& genai_context() {
 	return ctx;
 }
 
-extern "C" const ProxySQL_PluginDescriptor* proxysql_plugin_descriptor_v1() {
+void genai_log(int level, const char* fmt, ...) {
+	char buf[4096];
+	va_list ap;
+	va_start(ap, fmt);
+	int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+	va_end(ap);
+	if (n < 0) return;
+
+	const GenAIPluginContext& ctx = genai_context();
+	if (ctx.services != nullptr && ctx.services->log_message != nullptr) {
+		ctx.services->log_message(level, buf);
+		return;
+	}
+	// Pre-init / unit-test fallback so callers don't lose messages
+	// just because services isn't wired up yet.
+	fputs(buf, stderr);
+	if (n == 0 || buf[n - 1] != '\n') fputc('\n', stderr);
+}
+
+// Default visibility is required because the plugin .so is built with
+// -fvisibility=hidden (see plugins/genai/Makefile). Without an explicit
+// `__attribute__((visibility("default")))` here, the symbol would not
+// be exported and the chassis loader's dlsym lookup would fail with
+// "undefined symbol: proxysql_plugin_descriptor_v1".
+extern "C" __attribute__((visibility("default")))
+const ProxySQL_PluginDescriptor* proxysql_plugin_descriptor_v1() {
 	return &genai_descriptor;
 }

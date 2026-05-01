@@ -272,22 +272,10 @@
 #define ADMIN_SQLITE_TABLE_RUNTIME_CLICKHOUSE_USERS "CREATE TABLE runtime_clickhouse_users (username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000 , PRIMARY KEY (username))"
 #endif /* PROXYSQLCLICKHOUSE */
 
-#ifdef PROXYSQLGENAI
-// GenAI Tables
-
-#define ADMIN_SQLITE_TABLE_GENAI_CONFIG "CREATE TABLE genai_config (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
-
-#define ADMIN_SQLITE_TABLE_RUNTIME_GENAI_CONFIG "CREATE TABLE runtime_genai_config (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
-
-// MCP Tables
-
-#define ADMIN_SQLITE_TABLE_MCP_CONFIG "CREATE TABLE mcp_config (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
-
-#define ADMIN_SQLITE_TABLE_RUNTIME_MCP_CONFIG "CREATE TABLE runtime_mcp_config (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
-
-// MCP Query Rules (defined below with extended schema)
-
-#endif /* PROXYSQLGENAI */
+// MCP-related editable / runtime / stats table DDL definitions still
+// live further down in this header so the genai plugin (which is the
+// only consumer) can include them.  Plugin Makefile defines
+// PROXYSQLGENAI for its own translation units.
 
 
 #define ADMIN_SQLITE_TABLE_STATS_MYSQL_PREPARED_STATEMENTS_INFO "CREATE TABLE stats_mysql_prepared_statements_info (global_stmt_id INT NOT NULL , schemaname VARCHAR NOT NULL , username VARCHAR NOT NULL , digest VARCHAR NOT NULL , ref_count_client INT NOT NULL , ref_count_server INT NOT NULL , num_columns INT NOT NULL, num_params INT NOT NULL, query VARCHAR NOT NULL)"

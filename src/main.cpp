@@ -29,14 +29,6 @@ using json = nlohmann::json;
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
 
-#ifdef PROXYSQLGENAI
-// MCP_Thread.h has moved to plugins/genai/include/ as of Step 4.C.
-// Core no longer references MCP_Threads_Handler — the plugin owns it.
-// GenAI_Thread.h and AI_Features_Manager.h moved to plugins/genai/include/
-// in Step 5.  Core no longer references those classes — the plugin owns
-// GloGATH/GloAI now (renamed to plugin-local globals).
-#endif /* PROXYSQLGENAI */
-
 #include "SQLite3_Server.h"
 #include "MySQL_Query_Processor.h"
 #include "PgSQL_Query_Processor.h"
@@ -966,14 +958,6 @@ void ProxySQL_Main_init_main_modules() {
 	_tmp_GloPTH = new PgSQL_Threads_Handler();
 	GloPTH = _tmp_GloPTH;
 }
-
-#ifdef PROXYSQLGENAI
-// ProxySQL_Main_init_GenAI_module / ProxySQL_Main_init_MCP_module both
-// removed in Steps 4.C / 5.  All GenAI lifecycle (MCP_Threads_Handler,
-// GenAI_Threads_Handler, AI_Features_Manager, ProxySQL_MCP_Server) is
-// now driven from the genai plugin's init/start/stop callbacks
-// (plugins/genai/src/plugin_main.cpp).
-#endif /* PROXYSQLGENAI */
 
 void ProxySQL_Main_init_Admin_module(const bootstrap_info_t& bootstrap_info) {
 	// cluster module needs to be initialized before

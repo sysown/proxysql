@@ -65,7 +65,20 @@ endif
 # until a separate cleanup pass strips the guards.
 PSQLGA := -DPROXYSQLGENAI
 
+# -fvisibility=hidden / -fvisibility-inlines-hidden keep the .so's
+# exported symbol surface to just `proxysql_plugin_descriptor_v1`
+# (declared `__attribute__((visibility("default")))` in plugin_main.cpp
+# via `extern "C"` and reached by dlsym).  Without this flag every
+# inline / non-static method we compile (Anomaly_Detector, MCP_Thread,
+# every tool handler) would be exported, bloating the symbol table and
+# risking accidental cross-plugin symbol collisions.  Mirrors the
+# plugins/mysqlx Makefile.
+#
+# -fstack-protector-strong is hardening; cheap insurance for a runtime-
+# loaded .so that handles untrusted SQL and JSON payloads.
 CXXFLAGS := $(STDCPP) -fPIC $(OPTZ) $(WGCOV) $(WASAN) -pthread \
+	-fvisibility=hidden -fvisibility-inlines-hidden \
+	-fstack-protector-strong \
 	$(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLGA)
 
 .DEFAULT_GOAL := all

@@ -728,20 +728,6 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	 * - Tool usage statistics
 	 * - Search history
 	 */
-#ifdef PROXYSQLGENAI
-	mcpdb = new SQLite3DB();
-	std::string mcp_catalog_path = std::string(GloVars.datadir) + "/mcp_catalog.db";
-	mcpdb->open((char *)mcp_catalog_path.c_str(), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
-
-	/**
-	 * @brief Enable SQLite extension loading for MCP catalog database
-	 *
-	 * Allows loading SQLite extensions at runtime. This enables sqlite-vec to be
-	 * registered for vector similarity searches in the catalog.
-	 */
-	(*proxy_sqlite3_enable_load_extension)(mcpdb->get_db(),1);
-#endif /* PROXYSQLGENAI */
-
 	tables_defs_admin=new std::vector<table_def_t *>;
 	tables_defs_stats=new std::vector<table_def_t *>;
 	tables_defs_config=new std::vector<table_def_t *>;
@@ -984,9 +970,6 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	__attach_db(statsdb, monitordb, (char *)"monitor");
 	__attach_db(admindb, statsdb_disk, (char *)"stats_history");
 	__attach_db(statsdb, statsdb_disk, (char *)"stats_history");
-#ifdef PROXYSQLGENAI
-	__attach_db(admindb, mcpdb, (char *)"mcp_catalog");
-#endif /* PROXYSQLGENAI */
 
 	dump_mysql_collations();
 
@@ -1286,10 +1269,6 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	flush_clickhouse_variables___database_to_runtime(admindb,true);
 #endif /* PROXYSQLCLICKHOUSE */
 	flush_sqliteserver_variables___database_to_runtime(admindb,true);
-#ifdef PROXYSQLGENAI
-	flush_mcp_variables___database_to_runtime(admindb, true);
-	flush_genai_variables___database_to_runtime(admindb, true);
-#endif /* PROXYSQLGENAI */
 #ifdef PROXYSQLTSDB
 	flush_tsdb_variables___database_to_runtime(admindb, true);
 #endif

@@ -76,7 +76,7 @@ void register_runtime_view_or_warn(
 ) {
 	ProxySQL_PluginRuntimeView v { name, cb, nullptr };
 	if (!services->register_runtime_view(v)) {
-		fprintf(stderr, "genai plugin: register_runtime_view(%s) failed\n", name);
+		genai_log(6, "genai plugin: register_runtime_view(%s) failed\n", name);
 	}
 }
 
@@ -92,7 +92,7 @@ void register_runtime_view_or_warn(
  */
 void genai_register_admin_tables(ProxySQL_PluginServices* services) {
 	if (services == nullptr || services->register_table == nullptr) {
-		fprintf(stderr, "genai plugin: register_table service not available\n");
+		genai_log(6, "genai plugin: register_table service not available\n");
 		return;
 	}
 

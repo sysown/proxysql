@@ -27,6 +27,7 @@
 #include "sqlite3db.h"
 #include "proxysql_utils.h"
 #include "cpp.h"
+#include <atomic>
 #include <cstring>
 #include <cstdlib>
 #include <sstream>
@@ -536,16 +537,21 @@ AnomalyResult Anomaly_Detector::check_embedding_similarity(const std::string& qu
 // short-circuits (the only caller already nullptr-guards via the
 // vector_db check that follows).
 //
-// Lifetime: the function pointer outlives any single call; both
-// install and clear happen on the lifecycle thread.  No mutex needed
-// because the read happens long after init() and after stop()
-// resets back to nullptr.
+// Concurrency: the read in get_query_embedding() can race with the
+// store from genai_init() / genai_stop() on the lifecycle thread.
+// Use std::atomic with relaxed ordering — the only invariant we need
+// is that loads see either the previous value or the new one (no torn
+// pointer); we don't need to synchronise any other state with the
+// pointer write, so acquire / release fences would be overkill.  This
+// matches std::atomic<T*>'s guarantee on every architecture C++17
+// compiles for.
 using genai_anomaly_embed_fn_t = std::vector<float> (*)(const std::string& query);
-genai_anomaly_embed_fn_t genai_anomaly_embed_fn = nullptr;
+std::atomic<genai_anomaly_embed_fn_t> genai_anomaly_embed_fn { nullptr };
 
 std::vector<float> Anomaly_Detector::get_query_embedding(const std::string& query) {
-	if (genai_anomaly_embed_fn == nullptr) return {};
-	return genai_anomaly_embed_fn(query);
+	auto fn = genai_anomaly_embed_fn.load(std::memory_order_relaxed);
+	if (fn == nullptr) return {};
+	return fn(query);
 }
 
 // ============================================================================
