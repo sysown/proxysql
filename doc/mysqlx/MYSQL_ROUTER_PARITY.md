@@ -11,9 +11,9 @@ gaps, and areas where ProxySQL is superior.
 | Source | `x_connection.cc` (~3200 lines) | `mysqlx_session.cpp` + `mysqlx_thread.cpp` (~970 lines) |
 | Architecture | Async callback-based (ASIO-style) | poll()-based synchronous event loop |
 | State machine | ~100 enum states | 23 states in `MysqlxSession::Status` |
-| TLS modes | 5: Disabled, Preferred, Required, AsClient, Passthrough | 4 frontend × 4 backend: frontend Disabled/Preferred/Required + backend disabled/preferred/required/as_client |
+| TLS modes | 5: Disabled, Preferred, Required, AsClient, Passthrough | All five at frontend × 4 backend: frontend `mysqlx_tls_mode` Disabled/Preferred/Required + per-route `mysqlx_routes.tls_mode` adds inherit/passthrough + backend disabled/preferred/required/as_client |
 | TLS termination | Full: Router terminates TLS, re-encrypts to backend | Frontend: OpenSSL Memory BIO; Backend: CapabilitiesSet negotiation with mode-driven posture |
-| TLS passthrough | Yes - raw TLS record forwarding at record layer | No |
+| TLS passthrough | Yes - raw TLS record forwarding at record layer | Yes via `mysqlx_routes.tls_mode='passthrough'` (issue #5692) — opt-in per route; the proxy splices raw bytes after CapabilitiesSet(tls=true) and never sees plaintext |
 | Asymmetric TLS | Yes (client-TLS + backend-plain, or vice versa) | Yes via `mysqlx_tls_backend_mode` (issue #5693) — independent frontend / backend modes, AsClient parity |
 | Authentication | Pass-through to backend (never sees passwords) | Local validation via credential_lookup callback |
 | Auth methods | Whatever backend supports (proxied) | MYSQL41 and PLAIN (PLAIN requires TLS) |
@@ -57,9 +57,12 @@ routing (different users to different backends) and connection pooling
 ### TLS Architecture
 
 MySQL Router has an extremely sophisticated 5-mode TLS model. ProxySQL
-exposes the same posture via two orthogonal variables: `mysqlx_tls_mode`
-(frontend, three values) and `mysqlx_tls_backend_mode` (backend, four
-values), giving full Router parity except for raw-record passthrough.
+exposes equivalent posture via three orthogonal handles: the deployment-
+wide `mysqlx_tls_mode` (frontend, three values), the deployment-wide
+`mysqlx_tls_backend_mode` (backend, four values), and a per-route
+override on `mysqlx_routes.tls_mode` (five values, including `passthrough`),
+giving full Router parity including raw-record passthrough at route
+granularity.
 
 Frontend modes (`mysqlx_tls_mode`):
 
@@ -82,8 +85,19 @@ BIO_new_mem_buf, SSL_set_accept_state), integrated into the session state
 machine via X_TLS_ACCEPT_INIT/CONT/DONE states. Backend TLS is negotiated
 via CapabilitiesSet, with the per-session decision driven by
 `mysqlx_resolve_backend_tls_decision()` against the four-mode runtime
-variable. The remaining Router-only feature is raw-record passthrough
-mode.
+variable.
+
+Per-route passthrough (`mysqlx_routes.tls_mode='passthrough'`,
+issue #5692) takes a different path: once the client sends
+`CapabilitiesSet(tls=true)` on a passthrough-flagged route, the session
+transitions to `X_PASSTHROUGH_FORWARD` and stops parsing X-Protocol
+frames entirely. From that point bytes are spliced verbatim with
+`read(2)`/`write(2)` between the client and a single dedicated backend
+fd; the proxy never sees the TLS handshake or any application data.
+Pooling, multiplexing, and per-query routing are intentionally disabled
+for the session — the operator's choice to opt into passthrough is the
+choice to give up those features in exchange for end-to-end encryption
+the proxy cannot inspect.
 
 ### Connection Lifecycle
 
@@ -108,7 +122,7 @@ of 7 terminal message types. All frames forwarded until terminal frame seen.
 
 | Priority | Feature | Notes |
 |---|---|---|
-| P1 | TLS passthrough | Forward raw TLS records without termination |
+| ✅  | ~~TLS passthrough~~ | Implemented via `mysqlx_routes.tls_mode='passthrough'` (#5692). Per-route opt-in. |
 | ✅  | ~~Asymmetric TLS / AsClient~~ | Implemented via `mysqlx_tls_backend_mode` (#5693). |
 | ✅  | ~~Per-message response state machines~~ | Implemented (#5694). |
 | P2 | Notice forwarding awareness | Explicitly handle notices as non-terminal in all states |
@@ -141,4 +155,8 @@ The core TLS gap (frontend termination + backend negotiation) is now closed.
 Asymmetric TLS / AsClient mode landed via `mysqlx_tls_backend_mode` (issue
 #5693) — Router's full four-mode backend posture (disabled / preferred /
 required / as_client) is now exposed, plus per-endpoint TLS overrides.
-The remaining TLS gap is raw-record passthrough mode (issue #5692).
+Raw-record passthrough mode landed via `mysqlx_routes.tls_mode='passthrough'`
+(issue #5692), exposed at per-route granularity rather than per-deployment
+so an operator can dedicate a single compliance-pinned route to passthrough
+while leaving neighbouring routes on the default proxy-terminated path.
+ProxySQL's mysqlx plugin now matches all five Router TLS modes.
