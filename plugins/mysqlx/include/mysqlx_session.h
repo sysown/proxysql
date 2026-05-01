@@ -25,12 +25,30 @@ typedef struct ZSTD_CCtx_s ZSTD_CCtx;
 using MysqlxIdentityLookup =
 	std::function<std::optional<MysqlxResolvedIdentity>(const std::string& username)>;
 
+// Per-message response state for the X-Protocol response sequence the
+// proxy is currently waiting on. The X protocol defines distinct frame
+// allow-sets and terminal markers per request type; this enum splits
+// PREPARE and CURSOR into their per-request sub-shapes so each per-state
+// contract can be expressed cleanly in is_frame_allowed / is_terminal_frame.
+//
+// Background: the previous coarse three-value model (PREPARE / CURSOR
+// each lumped together) over-accepted on PREPARE_PREPARE — which the
+// spec terminates with a bare Mysqlx.Ok — by also allowing the wider
+// SQL_STMT_EXECUTE_OK / FETCH_DONE_* terminators that only PREPARE_EXECUTE
+// can legitimately emit. Likewise CURSOR_OPEN's response always carries
+// ColumnMetaData while CURSOR_FETCH's never does (the metadata is sent
+// once at Open). Splitting the state lets the validation hook reject
+// out-of-shape backend frames precisely.
 enum MysqlxResponseState {
 	RESP_IDLE = 0,
 	RESP_WAITING_STMT_EXECUTE,
 	RESP_WAITING_CRUD,
-	RESP_WAITING_PREPARE,
-	RESP_WAITING_CURSOR,
+	RESP_WAITING_PREPARE_PREPARE,        // Prepare::Prepare — terminator: Ok
+	RESP_WAITING_PREPARE_EXECUTE,        // Prepare::Execute — terminators: Ok / SQL_STMT_EXECUTE_OK / FETCH_DONE / FETCH_SUSPENDED
+	RESP_WAITING_PREPARE_DEALLOCATE,     // Prepare::Deallocate — terminator: Ok
+	RESP_WAITING_CURSOR_OPEN,            // Cursor::Open — terminators: FETCH_DONE / FETCH_SUSPENDED; carries ColumnMetaData
+	RESP_WAITING_CURSOR_FETCH,           // Cursor::Fetch — terminators: FETCH_DONE / FETCH_SUSPENDED; rows-only (metadata was at Open)
+	RESP_WAITING_CURSOR_CLOSE,           // Cursor::Close — terminator: Ok
 	RESP_WAITING_EXPECT,
 	RESP_WAITING_SESS_RESET
 };
