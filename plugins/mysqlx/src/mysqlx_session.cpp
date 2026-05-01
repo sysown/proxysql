@@ -99,6 +99,7 @@ MysqlxSession::MysqlxSession()
 	, start_time_(0)
 	, last_active_time_(0)
 	, response_state_(RESP_IDLE)
+	, seen_column_metadata_(false)
 	, tls_mode_(TLS_OFF)
 	, compression_algo_(MYSQLX_COMPR_NONE)
 	, compression_combine_mixed_messages_(false)
@@ -152,6 +153,8 @@ void MysqlxSession::init(int fd, Mysqlx_Thread* thread_ptr) {
 	compression_combine_mixed_messages_ = false;
 	compression_max_combine_messages_ = 0;
 	reset_compression_state();
+	response_state_ = RESP_IDLE;
+	seen_column_metadata_ = false;
 }
 
 void MysqlxSession::reset() {
@@ -174,6 +177,8 @@ void MysqlxSession::reset() {
 	compression_max_combine_messages_ = 0;
 	reset_compression_state();
 	pre_auth_cap_msgs_ = 0;
+	response_state_ = RESP_IDLE;
+	seen_column_metadata_ = false;
 }
 
 int MysqlxSession::handler() {
@@ -827,6 +832,7 @@ int MysqlxSession::dispatch_client_message(uint8_t msg_type) {
 			return 0;
 		case Mysqlx::ClientMessages_Type_SQL_STMT_EXECUTE:
 			response_state_ = RESP_WAITING_STMT_EXECUTE;
+			seen_column_metadata_ = false;
 			forward_to_backend(); return 0;
 		case Mysqlx::ClientMessages_Type_CRUD_FIND:
 		case Mysqlx::ClientMessages_Type_CRUD_INSERT:
@@ -836,6 +842,7 @@ int MysqlxSession::dispatch_client_message(uint8_t msg_type) {
 		case Mysqlx::ClientMessages_Type_CRUD_MODIFY_VIEW:
 		case Mysqlx::ClientMessages_Type_CRUD_DROP_VIEW:
 			response_state_ = RESP_WAITING_CRUD;
+			seen_column_metadata_ = false;
 			forward_to_backend(); return 0;
 		case Mysqlx::ClientMessages_Type_PREPARE_PREPARE:
 			if (backend_conn_) backend_conn_->set_has_prepared_statement(true);
@@ -843,14 +850,19 @@ int MysqlxSession::dispatch_client_message(uint8_t msg_type) {
 			forward_to_backend(); return 0;
 		case Mysqlx::ClientMessages_Type_PREPARE_EXECUTE:
 			response_state_ = RESP_WAITING_PREPARE_EXECUTE;
+			seen_column_metadata_ = false;
 			forward_to_backend(); return 0;
 		case Mysqlx::ClientMessages_Type_PREPARE_DEALLOCATE:
 			response_state_ = RESP_WAITING_PREPARE_DEALLOCATE;
 			forward_to_backend(); return 0;
 		case Mysqlx::ClientMessages_Type_CURSOR_OPEN:
 			response_state_ = RESP_WAITING_CURSOR_OPEN;
+			seen_column_metadata_ = false;
 			forward_to_backend(); return 0;
 		case Mysqlx::ClientMessages_Type_CURSOR_FETCH:
+			// NOT cleared — Cursor::Fetch reuses ColumnMetaData from
+			// the preceding Cursor::Open, so the sub-state must carry
+			// across.
 			response_state_ = RESP_WAITING_CURSOR_FETCH;
 			forward_to_backend(); return 0;
 		case Mysqlx::ClientMessages_Type_CURSOR_CLOSE:
@@ -920,23 +932,78 @@ void MysqlxSession::forward_to_backend() {
 	status_ = WAITING_SERVER_XMSG;
 }
 
-// Permissive in this commit: returns true for every msg_type the previous
-// code path implicitly accepted (which was "everything", since the old
-// validation loop never rejected a frame — it only checked terminality
-// and forwarded otherwise). The explicit allowed-frame contract is
-// tightened in a follow-up commit; here we only split the predicate so
-// the validation hook has a separate seam from the terminality probe.
+// Per-state allowed-frame contract for backend frames. Returns true iff
+// a backend message of msg_type is acceptable to forward in the current
+// response_state_. Disallowed frames are rejected by the validation
+// hook in handler_waiting_server_msg() with X-Protocol Error 4006.
 //
-// NOTICE and ERROR are universal in every state. The remaining frames
-// are matched against a per-state allow-set; states with no explicit
-// case (RESP_IDLE today) currently fall through to the permissive
-// default. The next commit narrows this; today the function returns
-// true so behaviour is byte-for-byte identical to the prior path.
-bool MysqlxSession::is_frame_allowed(uint8_t /*msg_type*/) const {
-	// Permissive pass-through for the refactor commit; behaviour is
-	// preserved byte-for-byte. Subsequent commits replace this body
-	// with the per-state allowed-frame matrix.
-	return true;
+// Universal frames (allowed in every state):
+//   - NOTICE   (non-terminal status messages, may be interleaved freely)
+//   - ERROR    (terminates the response sequence with a per-message error)
+//
+// Per-state extras (in addition to the terminal frames already enumerated
+// in is_terminal_frame): COLUMN_META_DATA, RESULTSET_ROW, and the
+// non-terminal FETCH_DONE_MORE_* boundaries. RESULTSET_ROW is only
+// allowed once seen_column_metadata_ has been set by a preceding
+// COLUMN_META_DATA frame in the same response, except in CURSOR_FETCH
+// where the metadata was sent at Cursor::Open and is already in scope.
+//
+// RESP_IDLE accepts no frames at all — any backend frame in that state
+// is unsolicited and indicates a protocol-confused backend.
+bool MysqlxSession::is_frame_allowed(uint8_t msg_type) const {
+	if (msg_type == Mysqlx::ServerMessages_Type_NOTICE) return true;
+	if (msg_type == Mysqlx::ServerMessages_Type_ERROR) return true;
+	if (is_terminal_frame(msg_type)) return true;
+
+	switch (response_state_) {
+		case RESP_WAITING_STMT_EXECUTE:
+		case RESP_WAITING_CRUD:
+		case RESP_WAITING_PREPARE_EXECUTE:
+		case RESP_WAITING_CURSOR_OPEN:
+			// Resultset shape: ColumnMetaData, then zero or more Row,
+			// then non-terminal FetchDoneMore* boundaries between
+			// resultsets / out-params before the actual terminator.
+			if (msg_type == Mysqlx::ServerMessages_Type_RESULTSET_COLUMN_META_DATA) {
+				return true;
+			}
+			if (msg_type == Mysqlx::ServerMessages_Type_RESULTSET_ROW) {
+				// Row is only legal after metadata has been forwarded
+				// in this response. Without this guard a hostile
+				// backend could spray rows the client cannot parse.
+				return seen_column_metadata_;
+			}
+			if (msg_type == Mysqlx::ServerMessages_Type_RESULTSET_FETCH_DONE_MORE_RESULTSETS) {
+				return true;
+			}
+			// FETCH_DONE_MORE_OUT_PARAMS only flows through stored-proc
+			// shapes; STMT_EXECUTE and PREPARE_EXECUTE both can produce
+			// it. Allow on those two; CRUD doesn't have out-params but
+			// the allow is harmless (still requires a real terminator
+			// to advance the state machine).
+			if (msg_type == Mysqlx::ServerMessages_Type_RESULTSET_FETCH_DONE_MORE_OUT_PARAMS) {
+				return response_state_ == RESP_WAITING_STMT_EXECUTE ||
+				       response_state_ == RESP_WAITING_PREPARE_EXECUTE;
+			}
+			return false;
+		case RESP_WAITING_CURSOR_FETCH:
+			// Cursor::Fetch only carries Row frames (metadata was at
+			// Cursor::Open). FETCH_DONE / FETCH_SUSPENDED are terminal
+			// and already accepted via is_terminal_frame above.
+			return msg_type == Mysqlx::ServerMessages_Type_RESULTSET_ROW;
+		case RESP_WAITING_PREPARE_PREPARE:
+		case RESP_WAITING_PREPARE_DEALLOCATE:
+		case RESP_WAITING_CURSOR_CLOSE:
+		case RESP_WAITING_EXPECT:
+		case RESP_WAITING_SESS_RESET:
+			// These responses carry only their terminal Mysqlx.Ok
+			// (already handled above) plus universal NOTICE/ERROR.
+			return false;
+		case RESP_IDLE:
+			// No outstanding response — any backend frame here is
+			// unsolicited.
+			return false;
+	}
+	return false;
 }
 
 bool MysqlxSession::is_terminal_frame(uint8_t msg_type) const {
@@ -1034,7 +1101,40 @@ void MysqlxSession::handler_waiting_server_msg() {
 		const auto& frame = server_ds().front_frame();
 		uint8_t msg_type = frame[4];
 
+		// Per-message response state machine: drop and reject any
+		// backend frame that is not in the allowed set for the
+		// current response_state_. This guards against a buggy or
+		// hostile backend pushing an out-of-shape frame the client
+		// would otherwise have to parse (and potentially desync on).
+		// The canonical case: a Row before its ColumnMetaData. We
+		// emit X-Protocol Error 4006 fatal, mark the backend
+		// non-reusable so it gets evicted (not pooled) by
+		// return_backend_to_pool, and transition the session to
+		// X_SESSION_CLOSING. The disallowed frame is dropped, not
+		// forwarded — so the bytes_recv counter (charged below in
+		// the happy path) is naturally not incremented for it.
+		if (!is_frame_allowed(msg_type)) {
+			server_ds().pop_frame();
+			send_error(4006,
+				"Backend sent an unexpected message in the current response state; closing session.",
+				/*fatal=*/true);
+			if (backend_conn_) backend_conn_->set_reusable(false);
+			return_backend_to_pool();
+			healthy = false;
+			status_ = X_SESSION_CLOSING;
+			client_ds_.write_to_net();
+			return;
+		}
+
 		forward_frame_to_client(msg_type, frame);
+		// Track that the backend has shipped ColumnMetaData in this
+		// response so subsequent Row frames pass the gating check
+		// in is_frame_allowed. Set after the forward (the forward
+		// itself can fail TLS write, etc., but we don't unwind state
+		// on partial-write — the next iteration drives the data plane).
+		if (msg_type == Mysqlx::ServerMessages_Type_RESULTSET_COLUMN_META_DATA) {
+			seen_column_metadata_ = true;
+		}
 		// Account the X-Protocol payload bytes the proxy is forwarding
 		// from the backend to the client (size minus the 5-byte frame
 		// header; 0-payload OK/EOF frames contribute 0). Charged to the
@@ -1061,6 +1161,14 @@ void MysqlxSession::handler_waiting_server_msg() {
 		// bounds how long any single batch can grow.
 		flush_compression_batch();
 		response_state_ = RESP_IDLE;
+		// Clear the column-metadata sub-state on every response
+		// boundary. CURSOR_FETCH does not need the flag carried
+		// across (its allowed-frame set in is_frame_allowed accepts
+		// RESULTSET_ROW unconditionally because ColumnMetaData was
+		// sent at Cursor::Open); STMT_EXECUTE / CRUD /
+		// PREPARE_EXECUTE / CURSOR_OPEN all explicitly clear the
+		// flag at dispatch time.
+		seen_column_metadata_ = false;
 		client_ds_.write_to_net();
 		return_backend_to_pool();
 		last_active_time_ = monotonic_time_ms();

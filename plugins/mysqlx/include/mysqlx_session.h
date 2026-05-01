@@ -299,6 +299,17 @@ private:
 	uint64_t start_time_;
 	uint64_t last_active_time_;
 	MysqlxResponseState response_state_;
+	// Sub-state flag for the response_state_ matrix: gates whether
+	// RESULTSET_ROW frames are currently allowed in states where the
+	// X-Protocol requires ColumnMetaData to precede any Row. Set when
+	// COLUMN_META_DATA is forwarded from the backend in
+	// handler_waiting_server_msg(); cleared on each transition into a
+	// state that begins a new column-metadata sequence (STMT_EXECUTE,
+	// CRUD, PREPARE_EXECUTE, CURSOR_OPEN), at terminal-frame flush, and
+	// at init() / reset(). NOT cleared on entry to CURSOR_FETCH — per
+	// the X-Protocol spec, ColumnMetaData is sent at Cursor::Open and
+	// not re-sent at Cursor::Fetch, so the flag must carry across.
+	bool seen_column_metadata_;
 	MysqlxTlsMode tls_mode_;
 
 	// Compression negotiation state. compression_algo_ is set by
@@ -375,6 +386,16 @@ public:
 	const std::vector<uint8_t>& client_write_buffer_for_test() const {
 		return client_ds_.write_buffer_raw();
 	}
+#ifdef MYSQLX_TEST_BUILD
+	// Test-only observers for the per-message response state machine,
+	// gated behind MYSQLX_TEST_BUILD because they expose private state
+	// the production code never reads back. Used by the validation
+	// tests in mysqlx_message_dispatch_unit-t to assert state
+	// transitions after dispatching synthetic backend frames.
+	MysqlxResponseState response_state_for_test() const { return response_state_; }
+	bool seen_column_metadata_for_test() const { return seen_column_metadata_; }
+	void set_response_state_for_test(MysqlxResponseState s) { response_state_ = s; }
+#endif /* MYSQLX_TEST_BUILD */
 };
 
 #endif

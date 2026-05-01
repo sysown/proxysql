@@ -13,6 +13,7 @@
 
 #include <cerrno>
 #include <cstring>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <vector>
@@ -628,6 +629,304 @@ static void test_return_backend_on_session_close() {
 	close(fds[1]);
 }
 
+// ------------------------------------------------------------------
+// Per-message response-state validation tests (#5694).
+//
+// Each test drives an authenticated session into a specific
+// response_state_, hands the session a fake backend over a socketpair,
+// writes one or more synthetic server frames into the backend half of
+// the pair, then calls handler() and inspects what was forwarded to
+// the client and whether the session was rejected. The fixture mirrors
+// check_dispatch_routes_to_backend's setup but uses the test-only
+// set_response_state_for_test() to avoid having to drive a full client
+// message round-trip per scenario.
+// ------------------------------------------------------------------
+
+// Helper to send a server-shaped X-Protocol frame. Wire format is
+// direction-agnostic (5-byte header: little-endian length + msg type),
+// so this is a renamed alias of write_x_frame for reader clarity at
+// the call site.
+static inline void write_server_frame(int fd, uint8_t msg_type,
+                                       const uint8_t* payload, size_t payload_len) {
+	write_x_frame(fd, msg_type, payload, payload_len);
+}
+
+// Returns true iff the next frame on `fd` has the given server msg
+// type. Drains the frame; non-blocking via the socketpair's default.
+static bool client_received_frame(int fd, uint8_t expected_msg_type) {
+	uint8_t buf[4096];
+	usleep(5000);
+	ssize_t r = read_x_frame(fd, buf, sizeof(buf));
+	return (r > 4 && buf[4] == expected_msg_type);
+}
+
+// Drains and discards any frames pending on `fd`. Used to clear the
+// auth round-trip's leftover bytes before a test starts asserting on
+// what the validation hook produced. fd is made non-blocking so the
+// drain returns instead of waiting on an empty socket.
+static void drain_frames(int fd) {
+	int flags = fcntl(fd, F_GETFL, 0);
+	fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+	uint8_t buf[4096];
+	usleep(5000);
+	while (true) {
+		ssize_t r = read(fd, buf, sizeof(buf));
+		if (r <= 0) break;
+	}
+	fcntl(fd, F_SETFL, flags);
+}
+
+// Common setup: build an authenticated session backed by a fake idle
+// backend over a socketpair, drain the auth-OK frame from the client
+// side, parking the session in WAITING_SERVER_XMSG with the requested
+// response_state_ so the next handler() call enters the validation
+// loop. Returns the four fds via out-params; caller closes.
+static void setup_session_for_validation(MysqlxSession& sess,
+                                          int client_fds[2],
+                                          int backend_fds[2],
+                                          MysqlxResponseState rs) {
+	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
+	socketpair(AF_UNIX, SOCK_STREAM, 0, backend_fds);
+
+	setup_authenticated_session(client_fds, sess);
+	drain_frames(client_fds[1]);
+
+	MysqlxConnection* conn = new MysqlxConnection();
+	conn->set_fd(backend_fds[0]);
+	conn->set_state(MysqlxConnection::IDLE);
+	conn->set_reusable(true);
+	sess.backend_conn() = conn;
+	sess.server_ds().init(XDS_BACKEND, backend_fds[0]);
+
+	sess.set_status(MysqlxSession::WAITING_SERVER_XMSG);
+	sess.set_response_state_for_test(rs);
+	sess.to_process = true;
+}
+
+// Test 1: STMT_EXECUTE → ROW (without preceding ColumnMetaData) →
+// reject. Canonical hostile-backend case in the issue.
+static void test_validation_stmt_execute_row_without_metadata() {
+	diag(">>> %s", __func__);
+	int client_fds[2], backend_fds[2];
+	MysqlxSession sess;
+	setup_session_for_validation(sess, client_fds, backend_fds,
+	                             RESP_WAITING_STMT_EXECUTE);
+
+	write_server_frame(backend_fds[1],
+		Mysqlx::ServerMessages_Type_RESULTSET_ROW, nullptr, 0);
+	sess.handler();
+
+	ok(client_received_frame(client_fds[1], Mysqlx::ServerMessages_Type_ERROR),
+	   "validation rejects ROW-without-metadata with X-Protocol Error");
+	ok(!sess.is_healthy(),
+	   "session marked unhealthy after rejected backend frame");
+	ok(sess.get_status() == MysqlxSession::X_SESSION_CLOSING,
+	   "session transitions to X_SESSION_CLOSING on validation reject");
+
+	detach_session_fds(sess);
+	close(client_fds[0]); close(client_fds[1]);
+	close(backend_fds[0]); close(backend_fds[1]);
+}
+
+// Test 2: STMT_EXECUTE → ColumnMetaData → ROW → SQL_STMT_EXECUTE_OK →
+// happy-path forward. Validates the gating doesn't reject legitimate
+// well-ordered traffic.
+static void test_validation_stmt_execute_metadata_then_row() {
+	diag(">>> %s", __func__);
+	int client_fds[2], backend_fds[2];
+	MysqlxSession sess;
+	setup_session_for_validation(sess, client_fds, backend_fds,
+	                             RESP_WAITING_STMT_EXECUTE);
+
+	write_server_frame(backend_fds[1],
+		Mysqlx::ServerMessages_Type_RESULTSET_COLUMN_META_DATA, nullptr, 0);
+	write_server_frame(backend_fds[1],
+		Mysqlx::ServerMessages_Type_RESULTSET_ROW, nullptr, 0);
+	write_server_frame(backend_fds[1],
+		Mysqlx::ServerMessages_Type_SQL_STMT_EXECUTE_OK, nullptr, 0);
+	sess.handler();
+
+	ok(sess.is_healthy(),
+	   "happy-path STMT_EXECUTE response is not rejected");
+	ok(sess.response_state_for_test() == RESP_IDLE,
+	   "response_state_ resets to IDLE after terminal");
+	ok(!sess.seen_column_metadata_for_test(),
+	   "seen_column_metadata_ cleared at terminal-frame flush");
+
+	detach_session_fds(sess);
+	close(client_fds[0]); close(client_fds[1]);
+	close(backend_fds[0]); close(backend_fds[1]);
+}
+
+// Test 3: CURSOR_OPEN → ColumnMetaData → ROW → FETCH_SUSPENDED →
+// terminal, but seen_column_metadata_ is preserved per X-Protocol
+// (Cursor::Fetch reuses the metadata from Cursor::Open).
+static void test_validation_cursor_open_fetch_suspended() {
+	diag(">>> %s", __func__);
+	int client_fds[2], backend_fds[2];
+	MysqlxSession sess;
+	setup_session_for_validation(sess, client_fds, backend_fds,
+	                             RESP_WAITING_CURSOR_OPEN);
+
+	write_server_frame(backend_fds[1],
+		Mysqlx::ServerMessages_Type_RESULTSET_COLUMN_META_DATA, nullptr, 0);
+	write_server_frame(backend_fds[1],
+		Mysqlx::ServerMessages_Type_RESULTSET_ROW, nullptr, 0);
+	write_server_frame(backend_fds[1],
+		Mysqlx::ServerMessages_Type_RESULTSET_FETCH_SUSPENDED, nullptr, 0);
+	sess.handler();
+
+	ok(sess.is_healthy(),
+	   "CursorOpen with FETCH_SUSPENDED is not rejected");
+	ok(sess.response_state_for_test() == RESP_IDLE,
+	   "response_state_ resets after FETCH_SUSPENDED terminal");
+	// Documented invariant: the column-metadata flag is cleared at
+	// terminal-frame flush regardless of which response shape ended.
+	// Cursor::Fetch's allowed-set unconditionally accepts ROW (the
+	// metadata was sent at Cursor::Open and carries on the wire to
+	// the client; the proxy's flag does not need to track this).
+	ok(!sess.seen_column_metadata_for_test(),
+	   "seen_column_metadata_ cleared at FETCH_SUSPENDED terminal "
+	   "(Cursor::Fetch's allow-set does not consult the flag)");
+
+	detach_session_fds(sess);
+	close(client_fds[0]); close(client_fds[1]);
+	close(backend_fds[0]); close(backend_fds[1]);
+}
+
+// Test 4: CURSOR_OPEN → ColumnMetaData → ROW → FETCH_DONE → terminal
+// with the flag cleared. Mirrors test 3 for the fully-drained cursor
+// path.
+static void test_validation_cursor_open_fetch_done() {
+	diag(">>> %s", __func__);
+	int client_fds[2], backend_fds[2];
+	MysqlxSession sess;
+	setup_session_for_validation(sess, client_fds, backend_fds,
+	                             RESP_WAITING_CURSOR_OPEN);
+
+	write_server_frame(backend_fds[1],
+		Mysqlx::ServerMessages_Type_RESULTSET_COLUMN_META_DATA, nullptr, 0);
+	write_server_frame(backend_fds[1],
+		Mysqlx::ServerMessages_Type_RESULTSET_FETCH_DONE, nullptr, 0);
+	sess.handler();
+
+	ok(sess.is_healthy(), "CursorOpen with FETCH_DONE is not rejected");
+	ok(sess.response_state_for_test() == RESP_IDLE,
+	   "response_state_ resets after FETCH_DONE terminal");
+
+	detach_session_fds(sess);
+	close(client_fds[0]); close(client_fds[1]);
+	close(backend_fds[0]); close(backend_fds[1]);
+}
+
+// Test 5: PREPARE_PREPARE → SQL_STMT_EXECUTE_OK → reject (only Mysqlx.Ok
+// is the valid terminal for Prepare::Prepare).
+static void test_validation_prepare_prepare_rejects_stmt_execute_ok() {
+	diag(">>> %s", __func__);
+	int client_fds[2], backend_fds[2];
+	MysqlxSession sess;
+	setup_session_for_validation(sess, client_fds, backend_fds,
+	                             RESP_WAITING_PREPARE_PREPARE);
+
+	write_server_frame(backend_fds[1],
+		Mysqlx::ServerMessages_Type_SQL_STMT_EXECUTE_OK, nullptr, 0);
+	sess.handler();
+
+	ok(client_received_frame(client_fds[1], Mysqlx::ServerMessages_Type_ERROR),
+	   "PREPARE_PREPARE rejects SQL_STMT_EXECUTE_OK with X-Protocol Error");
+	ok(!sess.is_healthy(),
+	   "session marked unhealthy after PREPARE_PREPARE rejection");
+	ok(sess.get_status() == MysqlxSession::X_SESSION_CLOSING,
+	   "session transitions to X_SESSION_CLOSING on PREPARE_PREPARE reject");
+
+	detach_session_fds(sess);
+	close(client_fds[0]); close(client_fds[1]);
+	close(backend_fds[0]); close(backend_fds[1]);
+}
+
+// Test 6: PREPARE_PREPARE → OK → terminal. Happy-path counterpart
+// to test 5.
+static void test_validation_prepare_prepare_accepts_ok() {
+	diag(">>> %s", __func__);
+	int client_fds[2], backend_fds[2];
+	MysqlxSession sess;
+	setup_session_for_validation(sess, client_fds, backend_fds,
+	                             RESP_WAITING_PREPARE_PREPARE);
+
+	write_server_frame(backend_fds[1],
+		Mysqlx::ServerMessages_Type_OK, nullptr, 0);
+	sess.handler();
+
+	ok(sess.is_healthy(), "PREPARE_PREPARE happy-path OK is not rejected");
+	ok(sess.response_state_for_test() == RESP_IDLE,
+	   "response_state_ resets after PREPARE_PREPARE OK terminal");
+
+	detach_session_fds(sess);
+	close(client_fds[0]); close(client_fds[1]);
+	close(backend_fds[0]); close(backend_fds[1]);
+}
+
+// Test 7: STMT_EXECUTE → ColumnMetaData → NOTICE → ROW →
+// SQL_STMT_EXECUTE_OK. NOTICE is non-terminal in every state and must
+// not consume the terminal slot or trigger rejection.
+static void test_validation_notice_mid_result() {
+	diag(">>> %s", __func__);
+	int client_fds[2], backend_fds[2];
+	MysqlxSession sess;
+	setup_session_for_validation(sess, client_fds, backend_fds,
+	                             RESP_WAITING_STMT_EXECUTE);
+
+	write_server_frame(backend_fds[1],
+		Mysqlx::ServerMessages_Type_RESULTSET_COLUMN_META_DATA, nullptr, 0);
+	write_server_frame(backend_fds[1],
+		Mysqlx::ServerMessages_Type_NOTICE, nullptr, 0);
+	write_server_frame(backend_fds[1],
+		Mysqlx::ServerMessages_Type_RESULTSET_ROW, nullptr, 0);
+	write_server_frame(backend_fds[1],
+		Mysqlx::ServerMessages_Type_SQL_STMT_EXECUTE_OK, nullptr, 0);
+	sess.handler();
+
+	ok(sess.is_healthy(),
+	   "NOTICE mid-result is not rejected");
+	ok(sess.response_state_for_test() == RESP_IDLE,
+	   "STMT_EXECUTE_OK terminates response after intermixed NOTICE");
+
+	detach_session_fds(sess);
+	close(client_fds[0]); close(client_fds[1]);
+	close(backend_fds[0]); close(backend_fds[1]);
+}
+
+// Test 8: CURSOR_FETCH → ROW (with no preceding ColumnMetaData in this
+// response sequence) → forwarded, NOT rejected. Validates the
+// per-state-pair carve-out — Cursor::Fetch's allowed-set accepts ROW
+// unconditionally because the metadata was sent at Cursor::Open time.
+static void test_validation_cursor_fetch_row_without_metadata_allowed() {
+	diag(">>> %s", __func__);
+	int client_fds[2], backend_fds[2];
+	MysqlxSession sess;
+	setup_session_for_validation(sess, client_fds, backend_fds,
+	                             RESP_WAITING_CURSOR_FETCH);
+
+	// Note: seen_column_metadata_ is *false* here — we deliberately
+	// did NOT pre-set it. The point is to prove CURSOR_FETCH does not
+	// consult the flag.
+	write_server_frame(backend_fds[1],
+		Mysqlx::ServerMessages_Type_RESULTSET_ROW, nullptr, 0);
+	write_server_frame(backend_fds[1],
+		Mysqlx::ServerMessages_Type_RESULTSET_FETCH_DONE, nullptr, 0);
+	sess.handler();
+
+	ok(sess.is_healthy(),
+	   "CURSOR_FETCH accepts ROW without per-response metadata "
+	   "(metadata carried over from Cursor::Open in the X-Protocol)");
+	ok(sess.response_state_for_test() == RESP_IDLE,
+	   "FETCH_DONE terminates the CURSOR_FETCH response");
+
+	detach_session_fds(sess);
+	close(client_fds[0]); close(client_fds[1]);
+	close(backend_fds[0]); close(backend_fds[1]);
+}
+
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
 	// Plan count rationale (per assertion source):
@@ -676,6 +975,16 @@ int main() {
 	test_forward_to_backend_no_connection();
 	test_forward_to_backend_with_socketpair();
 	test_return_backend_on_session_close();
+
+	// Per-message response-state validation (#5694).
+	test_validation_stmt_execute_row_without_metadata();
+	test_validation_stmt_execute_metadata_then_row();
+	test_validation_cursor_open_fetch_suspended();
+	test_validation_cursor_open_fetch_done();
+	test_validation_prepare_prepare_rejects_stmt_execute_ok();
+	test_validation_prepare_prepare_accepts_ok();
+	test_validation_notice_mid_result();
+	test_validation_cursor_fetch_row_without_metadata_allowed();
 
 	return exit_status();
 }
