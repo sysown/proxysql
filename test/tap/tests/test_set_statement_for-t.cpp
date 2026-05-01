@@ -36,24 +36,30 @@
 
 /**
  * @brief Detect if the backend behind ProxySQL is MariaDB.
+ * @return 1 if MariaDB, 0 if not MariaDB, -1 on connection/query error.
  */
-static bool detect_mariadb(CommandLine& cl) {
+static int detect_mariadb(CommandLine& cl) {
 	MYSQL* mysql = mysql_init(NULL);
-	if (!mysql) return false;
+	if (!mysql) return -1;
 	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n",
 			__FILE__, __LINE__, mysql_error(mysql));
 		mysql_close(mysql);
-		return false;
+		return -1;
 	}
 
-	bool is_mariadb = false;
-	MYSQL_QUERY(mysql, "SELECT @@version");
+	int is_mariadb = 0;
+	if (mysql_query(mysql, "SELECT @@version") != 0) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n",
+			__FILE__, __LINE__, mysql_error(mysql));
+		mysql_close(mysql);
+		return -1;
+	}
 	MYSQL_RES* result = mysql_store_result(mysql);
 	MYSQL_ROW row;
 	while ((row = mysql_fetch_row(result))) {
 		if (strstr(row[0], "Maria")) {
-			is_mariadb = true;
+			is_mariadb = 1;
 		}
 	}
 	mysql_free_result(result);
@@ -70,9 +76,13 @@ int main(int argc, char** argv) {
 	}
 
 	// SET STATEMENT ... FOR is a MariaDB-specific feature.
-	// Skip all tests if the backend is not MariaDB.
-	bool is_mariadb = detect_mariadb(cl);
-	if (!is_mariadb) {
+	// Skip all tests if the backend is not MariaDB, but fail on errors.
+	int is_mariadb = detect_mariadb(cl);
+	if (is_mariadb == -1) {
+		diag("Error: Failed to connect to ProxySQL or query backend version.");
+		return -1;
+	}
+	if (is_mariadb == 0) {
 		skip_all("SET STATEMENT ... FOR requires a MariaDB backend");
 	}
 
