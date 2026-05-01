@@ -140,7 +140,21 @@ tests:
 	@echo "Removing empty .gcno files ..."
 	find -L . -type f -name '*.gcno' -empty -ls -delete
 
-tests-cpp: $(patsubst %.cpp,%,$(wildcard *-t.cpp))
+# test_mysqlx_*-t.cpp reference chassis/plugin types (ProxySQL_PluginServices,
+# mysqlx_config_store.h from plugins/mysqlx/include) that only exist when
+# libproxysql.a was built with -DPROXYSQL40.  Autodetect the flag via a
+# chassis-exclusive symbol in the static lib; under !PROXYSQL40 filter
+# these tests out of the wildcard glob so plain v3.0/v3.1 `make debug`
+# doesn't try to compile them.
+LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
+PROXYSQL40_DETECTED := $(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c invoke_register_schemas_phase)
+ifeq ($(PROXYSQL40_DETECTED),0)
+TESTS_CPP := $(filter-out test_mysqlx_%,$(patsubst %.cpp,%,$(wildcard *-t.cpp)))
+else
+TESTS_CPP := $(patsubst %.cpp,%,$(wildcard *-t.cpp))
+endif
+
+tests-cpp: $(TESTS_CPP)
 tests-php: $(patsubst %,php-%,$(wildcard *-t.php))
 tests-py: $(patsubst %,py-%,$(wildcard *-t.py))
 tests-sh: $(patsubst %,sh-%,$(wildcard *-t.sh))
@@ -205,6 +219,20 @@ test_tokenizer-t: test_tokenizer-t.cpp $(TAP_LDIR)/libtap.so
 
 test_mysql_query_digests_stages-t: test_mysql_query_digests_stages-t.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
+
+.PHONY: test_mysqlx_plugin_load-t
+test_mysqlx_plugin_load-t:
+	$(MAKE) -C unit test_mysqlx_plugin_load-t
+	ln -fs unit/test_mysqlx_plugin_load-t $@
+
+.PHONY: test_mysqlx_admin_tables-t
+test_mysqlx_admin_tables-t:
+	$(MAKE) -C unit test_mysqlx_admin_tables-t
+	ln -fs unit/test_mysqlx_admin_tables-t $@
+
+# test_mysqlx_listener_smoke-t was retired with the dormant MysqlxWorker
+# path in 98aee7db2. Listener-lifecycle coverage now lives in
+# mysqlx_thread_unit-t and mysqlx_robustness_unit-t under unit/.
 
 sqlite3-t: sqlite3-t.cpp $(TAP_LDIR)/libtap.so
 ifeq ($(PROXYSQLGENAI),1)
@@ -332,6 +360,27 @@ test_ffto_pgsql_pipeline-t: test_ffto_pgsql_pipeline-t.cpp pg_lite_client.cpp $(
 
 test_ffto_pgsql_stmt_portal-t: test_ffto_pgsql_stmt_portal-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
+
+
+MYSQLX_PROTO_DIR := $(PROXYSQL_PATH)/plugins/mysqlx/proto
+MYSQLX_PROTO_SRCS := $(wildcard $(MYSQLX_PROTO_DIR)/*.pb.cc)
+MYSQLX_PROTO_OBJS := $(patsubst $(MYSQLX_PROTO_DIR)/%.pb.cc,$(ODIR)/mysqlx_proto_%.pb.o,$(MYSQLX_PROTO_SRCS))
+
+$(ODIR):
+	@mkdir -p $(ODIR)
+
+$(ODIR)/mysqlx_proto_%.pb.o: $(MYSQLX_PROTO_DIR)/%.pb.cc | $(ODIR)
+	$(CXX) -c -o $@ $< $(STDCPP) -O2 -ggdb -I$(MYSQLX_PROTO_DIR) -w
+
+test_mysqlx_e2e_handshake-t: test_mysqlx_e2e_handshake-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TAP_LDIR)/libtap.so
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) \
+		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
+		$(IDIRS) $(LDIRS) $(OPT) -lprotobuf -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
+
+test_mysqlx_e2e_routing-t: test_mysqlx_e2e_routing-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TAP_LDIR)/libtap.so
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) \
+		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
+		$(IDIRS) $(LDIRS) $(OPT) -lprotobuf -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
 
 
 ### clean targets

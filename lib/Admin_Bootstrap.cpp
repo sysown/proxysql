@@ -38,6 +38,9 @@ using json = nlohmann::json;
 #include "PgSQL_Authentication.h"
 #include "MySQL_LDAP_Authentication.hpp"
 #include "MySQL_PreparedStatement.h"
+#ifdef PROXYSQL40
+#include "ProxySQL_PluginManager.h"
+#endif /* PROXYSQL40 */
 #include "ProxySQL_Cluster.hpp"
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_Logger.hpp"
@@ -928,15 +931,44 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_servers_clients_status", STATS_SQLITE_TABLE_PROXYSQL_SERVERS_CLIENTS_STATUS);
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_message_metrics", STATS_SQLITE_TABLE_PROXYSQL_MESSAGE_METRICS);
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_message_metrics_reset", STATS_SQLITE_TABLE_PROXYSQL_MESSAGE_METRICS_RESET);
-#ifdef PROXYSQLGENAI
-	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_tools_counters", STATS_SQLITE_TABLE_MCP_QUERY_TOOLS_COUNTERS);
-	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_tools_counters_reset", STATS_SQLITE_TABLE_MCP_QUERY_TOOLS_COUNTERS_RESET);
+	#ifdef PROXYSQLGENAI
+		insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_tools_counters", STATS_SQLITE_TABLE_MCP_QUERY_TOOLS_COUNTERS);
+		insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_tools_counters_reset", STATS_SQLITE_TABLE_MCP_QUERY_TOOLS_COUNTERS_RESET);
 
 	// MCP query digest stats
 	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_digest", STATS_SQLITE_TABLE_MCP_QUERY_DIGEST);
-	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_digest_reset", STATS_SQLITE_TABLE_MCP_QUERY_DIGEST_RESET);
-	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_rules", STATS_SQLITE_TABLE_MCP_QUERY_RULES); // Reuse same schema for stats
-#endif /* PROXYSQLGENAI */
+		insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_digest_reset", STATS_SQLITE_TABLE_MCP_QUERY_DIGEST_RESET);
+		insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_rules", STATS_SQLITE_TABLE_MCP_QUERY_RULES); // Reuse same schema for stats
+	#endif /* PROXYSQLGENAI */
+
+#ifdef PROXYSQL40
+	if (ProxySQL_PluginManager* plugin_manager = proxysql_get_plugin_manager()) {
+		auto merge_plugin_tables = [this](std::vector<table_def_t *>* target, const std::vector<ProxySQL_PluginTableDef>& defs, const char* db_name) -> bool {
+			for (const auto& def : defs) {
+				bool duplicate_name = false;
+				for (const auto* existing : *target) {
+					if (strcasecmp(existing->table_name, def.table_name) == 0) {
+						duplicate_name = true;
+						break;
+					}
+				}
+				if (duplicate_name) {
+					proxy_error("Plugin table %s for %s conflicts with an existing table name\n",
+						    def.table_name, db_name);
+					return false;
+				}
+				insert_into_tables_defs(target, def.table_name, def.table_def);
+			}
+			return true;
+		};
+
+		if (!merge_plugin_tables(tables_defs_admin, plugin_manager->tables(ProxySQL_PluginDBKind::admin_db), "admin") ||
+		    !merge_plugin_tables(tables_defs_config, plugin_manager->tables(ProxySQL_PluginDBKind::config_db), "config") ||
+		    !merge_plugin_tables(tables_defs_stats, plugin_manager->tables(ProxySQL_PluginDBKind::stats_db), "stats")) {
+			return false;
+		}
+	}
+#endif /* PROXYSQL40 */
 
 	// init ldap here
 	init_ldap();
@@ -1314,3 +1346,16 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 #endif
 return true;
 };
+
+// NOTE: materialize_plugin_tables() used to live here. It was removed
+// because plugin tables are already merged into tables_defs_{admin,
+// config,stats} by ProxySQL_Admin::init() (~line 944) and the DDL is
+// already executed by check_and_build_standard_tables() (~line 994) on
+// the same path. Calling materialize_plugin_tables() afterwards from
+// src/main.cpp would re-run a name-dedup pass that found everything
+// already present and produced an empty new-rows set, then run no DDL —
+// dead code that read as load-bearing. The merge in Admin::init() is
+// the single canonical site for plugin-table materialization. If a
+// future change wants Admin to expose plugin-tables for live reload
+// (admindb merge after init returns), reintroduce a function with a
+// clear contract; do not resurrect the previous post-init no-op.

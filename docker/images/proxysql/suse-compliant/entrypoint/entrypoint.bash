@@ -41,6 +41,23 @@ else
 	build_target="$PROXYSQL_BUILD_TYPE"
 fi
 
+# See deb-compliant entrypoint for the rationale: PROXYSQLGENAI=1
+# triggers a build of plugins/mysqlx/ which dynamically links against
+# the system libprotobuf (3.x). Some of the v4.0.0 packaging images
+# were built before plugins/mysqlx existed and do not yet ship
+# protobuf-devel. Install it on demand for SUSE-family images.
+if [[ "${PROXYSQLGENAI:-}" == "1" ]]; then
+    if ! pkg-config --exists protobuf 2>/dev/null; then
+        echo "==> Installing protobuf-devel (required for PROXYSQLGENAI=1 mysqlx plugin build)"
+        if command -v zypper >/dev/null 2>&1; then
+            zypper install -y libprotobuf-c-devel || zypper install -y protobuf-devel
+        else
+            echo "ERROR: cannot install protobuf-devel (zypper not present)" >&2
+            exit 1
+        fi
+    fi
+fi
+
 # clean is expensive, do it before, outside of container
 #${MAKE} cleanbuild
 if [[ "${PROXYSQLGENAI:-}" == "1" ]]; then

@@ -41,6 +41,22 @@ else
 	build_target="$PROXYSQL_BUILD_TYPE"
 fi
 
+# When PROXYSQLGENAI=1 is set, the build recurses into plugins/mysqlx/
+# which dynamically links against the system libprotobuf (3.x). Some of
+# the v4.0.0 packaging images were built before plugins/mysqlx existed
+# and do not yet ship libprotobuf-dev. Install it on demand here so the
+# plugin's pkg-config check at plugins/mysqlx/Makefile:47 succeeds. The
+# install is idempotent — apt-get returns 0 if the package is already
+# present. Skip silently for v3.x builds where PROXYSQLGENAI is unset
+# and the plugin path is not exercised.
+if [[ "${PROXYSQLGENAI:-}" == "1" ]]; then
+    if ! pkg-config --exists protobuf 2>/dev/null; then
+        echo "==> Installing libprotobuf-dev (required for PROXYSQLGENAI=1 mysqlx plugin build)"
+        apt-get update -qq
+        apt-get install -y --no-install-recommends libprotobuf-dev
+    fi
+fi
+
 # clean is expensive, do it before, outside of container
 #${MAKE} cleanbuild
 if [[ "${PROXYSQLGENAI:-}" == "1" ]]; then

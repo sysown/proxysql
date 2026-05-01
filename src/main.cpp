@@ -45,6 +45,9 @@ using json = nlohmann::json;
 #include "PgSQL_Query_Cache.h"
 #include "proxysql_restapi.h"
 #include "Web_Interface.hpp"
+#ifdef PROXYSQL40
+#include "ProxySQL_PluginManager.h"
+#endif /* PROXYSQL40 */
 #include "proxysql_utils.h"
 #include "PgSQL_Monitor.hpp"
 
@@ -98,6 +101,10 @@ void * __mysql_ldap_auth;
 
 volatile create_Web_Interface_t * create_Web_Interface = NULL;
 void * __web_interface;
+
+#ifdef PROXYSQL40
+static std::unique_ptr<ProxySQL_PluginManager> GloPluginManager;
+#endif /* PROXYSQL40 */
 
 std::thread* pgsql_monitor_thread = nullptr;
 
@@ -702,6 +709,9 @@ void* unified_query_cache_purge_thread(void *arg) {
 void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 	GloVars.errorlog = NULL;
 	GloVars.pid = NULL;
+#ifdef PROXYSQL40
+	GloVars.plugin_modules.clear();
+#endif /* PROXYSQL40 */
 	GloVars.parse(argc,argv);
 	GloVars.process_opts_pre();
 	GloVars.restart_on_missing_heartbeats = 10; // default
@@ -806,6 +816,9 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 				GloVars.ldap_auth_plugin=strdup(ldap_auth_plugin.c_str());
 			}
 		}
+#ifdef PROXYSQL40
+		proxysql_load_plugin_modules_from_config(root, GloVars.plugin_modules);
+#endif /* PROXYSQL40 */
 		const map<string, char**> varnames_globals_map {
 			{ "mysql-ssl_p2s_ca", &GloVars.global.gr_bootstrap_ssl_ca },
 			{ "mysql-ssl_p2s_capath", &GloVars.global.gr_bootstrap_ssl_capath },
@@ -980,7 +993,10 @@ void ProxySQL_Main_init_Admin_module(const bootstrap_info_t& bootstrap_info) {
 	//GloProxyStats->init();
 	GloProxyStats->print_version();
 	GloAdmin = new ProxySQL_Admin();
-	GloAdmin->init(bootstrap_info);
+	if (!GloAdmin->init(bootstrap_info)) {
+		proxy_error("Admin module initialization failed\n");
+		exit(EXIT_FAILURE);
+	}
 	GloAdmin->print_version();
 	if (binary_sha1) {
 		proxy_info("ProxySQL SHA1 checksum: %s\n", binary_sha1);
@@ -1481,11 +1497,62 @@ static void LoadPlugins() {
 	}
 }
 
+#ifdef PROXYSQL40
+// Operator kill switch (--no-plugins / PROXYSQL_NO_PLUGINS=1) makes the
+// chassis lifecycle wrappers no-ops. The startup log line (printed once
+// in LoadConfiguredPlugins) tells the operator the bypass took effect.
+// Used to disable a misbehaving plugin without editing the config or
+// rolling back the proxysql package. See doc/plugin-chassis/REVIEW_GUIDE.md
+// for the rationale.
+static void LoadConfiguredPlugins() {
+	if (GloVars.no_plugins) {
+		proxy_info("Plugin chassis disabled by --no-plugins / PROXYSQL_NO_PLUGINS=1; "
+		           "skipping load of %zu configured plugin(s)\n",
+		           GloVars.plugin_modules.size());
+		return;
+	}
+	std::string plugin_error {};
+	if (!proxysql_load_configured_plugins(GloPluginManager, GloVars.plugin_modules, plugin_error)) {
+		proxy_error("Plugin load/register_schemas failed: %s\n", plugin_error.c_str());
+		exit(EXIT_FAILURE);
+	}
+}
+
+static void InitConfiguredPlugins() {
+	if (GloVars.no_plugins) return;
+	std::string plugin_error {};
+	if (!proxysql_init_configured_plugins(GloPluginManager.get(), plugin_error)) {
+		proxy_error("Plugin init failed: %s\n", plugin_error.c_str());
+		exit(EXIT_FAILURE);
+	}
+}
+
+static void StartConfiguredPlugins() {
+	if (GloVars.no_plugins) return;
+	std::string plugin_error {};
+	if (!proxysql_start_configured_plugins(GloPluginManager.get(), plugin_error)) {
+		proxy_error("Plugin start failed: %s\n", plugin_error.c_str());
+		exit(EXIT_FAILURE);
+	}
+}
+
+static void StopConfiguredPlugins() {
+	if (GloVars.no_plugins) return;
+	std::string plugin_error {};
+	if (!proxysql_stop_configured_plugins(GloPluginManager, plugin_error)) {
+		proxy_error("%s during shutdown\n", plugin_error.c_str());
+	}
+}
+#endif /* PROXYSQL40 */
+
 /**
  * @brief Unloads all the plugins that hold some resources that
  *  need to be deallocated.
  */
 void UnloadPlugins() {
+#ifdef PROXYSQL40
+	StopConfiguredPlugins();
+#endif /* PROXYSQL40 */
 	if (GloWebInterface) {
 		GloWebInterface->stop();
 	}
@@ -1504,7 +1571,26 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 	ProxySQL_Main_init_MCP_module();
 #endif /* PROXYSQLGENAI */
 
+#ifdef PROXYSQL40
+	// Four-phase plugin lifecycle (chassis only — v3.x has no plugin
+	// loader at all):
+	//   Phase A+B: dlopen + register_schemas (plugin-declared schemas
+	//              populate the pending-tables list).
+	//   Phase C:   admin module init merges plugin-declared schemas into
+	//              tables_defs_{admin,config,stats} and runs the DDL via
+	//              check_and_build_standard_tables, all on the same
+	//              first-boot/reload code path as the core tables.
+	//   Phase D:   init() with full services (live DB handles pointing at
+	//              a schema that already contains the plugin's own tables).
+	//   Phase E:   start() launches the plugin's threads / accept loops.
+	LoadConfiguredPlugins();
 	ProxySQL_Main_init_Admin_module(boostrap_info);
+	InitConfiguredPlugins();
+	StartConfiguredPlugins();
+#else  /* !PROXYSQL40 */
+	// v3.0/v3.1 builds: no plugin loader.  Plain admin init only.
+	ProxySQL_Main_init_Admin_module(boostrap_info);
+#endif /* PROXYSQL40 */
 	GloMTH->print_version();
 
 	{

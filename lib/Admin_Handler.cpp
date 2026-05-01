@@ -40,6 +40,9 @@ using json = nlohmann::json;
 #include "MySQL_PreparedStatement.h"
 #include "ProxySQL_Cluster.hpp"
 #include "ProxySQL_Statistics.hpp"
+#ifdef PROXYSQL40
+#include "ProxySQL_PluginManager.h"
+#endif /* PROXYSQL40 */
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
 #include "MCP_Thread.h"
@@ -313,6 +316,14 @@ const std::vector<std::string> SAVE_TSDB_VARIABLES_TO_MEMORY = {
 	"SAVE TSDB VARIABLES TO MEM" ,
 	"SAVE TSDB VARIABLES FROM RUNTIME" ,
 	"SAVE TSDB VARIABLES FROM RUN" };
+
+// MYSQLX admin-command alias groups previously lived here as hardcoded
+// vectors paired with a 16-deep if-ladder in admin_session_handler().
+// They now live entirely inside the mysqlx plugin (registered via
+// services->register_command + services->register_command_alias) and the
+// dispatcher consults the plugin manager generically.  v3.0/v3.1 builds
+// have no plugin loader at all -- the mysqlx plugin only loads under
+// PROXYSQL40.
 //
 const std::vector<std::string> LOAD_COREDUMP_FROM_MEMORY = {
 	"LOAD COREDUMP FROM MEMORY" ,
@@ -460,6 +471,7 @@ bool is_admin_command_or_alias(const std::vector<std::string>& cmds, char *query
 	}
 	return false;
 }
+
 
 
 template <typename S>
@@ -3966,6 +3978,37 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			//pthread_mutex_unlock(&admin_mutex);
 			goto __run_query;
 		}
+#ifdef PROXYSQL40
+		// Generic plugin admin-command dispatch.  Each loaded plugin
+		// registers its admin commands (plus user-friendly aliases) with
+		// the plugin manager during init; the manager resolves an
+		// incoming query to the canonical SQL a plugin registered.  No
+		// per-plugin knowledge in core.
+		//
+		// v3.0/v3.1 builds have no plugin loader at all -- this whole
+		// branch compiles out.
+		{
+			std::string query_str(query_no_space, query_no_space_length);
+			std::string plugin_canonical = proxysql_resolve_configured_plugin_admin_alias(query_str);
+			if (!plugin_canonical.empty()) {
+				// Hold a std::string by value (not a borrowed c_str())
+				// so a concurrent plugin-manager reload between resolve
+				// and dispatch can't dangle the canonical-SQL pointer.
+				ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+				if (SPA->dispatch_plugin_admin_command(sess, plugin_canonical.c_str())) {
+					run_query = false;
+					goto __run_query;
+				}
+				// Reachable only if the command's plugin uninstalled its
+				// callback between resolve() and dispatch(). Treat as
+				// generic "plugin failed to handle command".
+				SPA->send_error_msg_to_client(sess, (char*)"Plugin failed to handle registered command");
+				run_query = false;
+				goto __run_query;
+			}
+		}
+#endif /* PROXYSQL40 */
+
 		if ((query_no_space_length>5) && ( (!strncasecmp("SAVE ", query_no_space, 5)) || (!strncasecmp("LOAD ", query_no_space, 5))) ) {
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received LOAD or SAVE command\n");
 			run_query=admin_handler_command_load_or_save(query_no_space, query_no_space_length, sess, pa, &query, &query_length);

@@ -197,6 +197,7 @@ test/tap/tests/test_cluster_sync_config/test_cluster_sync.cnf
 .aider*
 GEMINI.md
 .gemini
+.worktrees/
 
 # generated MySQL parser artifacts
 lib/MySQL_Lexer.yy.c

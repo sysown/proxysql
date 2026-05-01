@@ -56,6 +56,11 @@ ifeq ($(PROXYSQLGENAI),1)
 	PSQLGA := -DPROXYSQLGENAI
 endif
 
+PSQL40 :=
+ifeq ($(PROXYSQL40),1)
+	PSQL40 := -DPROXYSQL40
+endif
+
 PSQL31 :=
 ifeq ($(PROXYSQL31),1)
 	PSQL31 := -DPROXYSQL31
@@ -81,13 +86,14 @@ endif
 
 
 MYCFLAGS := $(IDIRS) $(OPTZ) $(DEBUG) -Wall -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
-MYCXXFLAGS := $(STDCPP) $(MYCFLAGS) $(PSQLCH) $(PSQLGA) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(ENABLE_EPOLL)
+MYCXXFLAGS := $(STDCPP) $(MYCFLAGS) $(PSQLCH) $(PSQLGA) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(ENABLE_EPOLL)
 
 default: libproxysql.a
 .PHONY: default
 
 _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo SpookyV2.oo MySQL_Authentication.oo gen_utils.oo sqlite3db.oo mysql_connection.oo MySQL_HostGroups_Manager.oo mysql_data_stream.oo MySQL_Thread.oo MySQL_Session.oo MySQL_Protocol.oo mysql_backend.oo Query_Processor.oo MySQL_Query_Processor.oo PgSQL_Query_Processor.oo  ProxySQL_Admin.oo ProxySQL_Config.oo ProxySQL_Restapi.oo MySQL_Monitor.oo MySQL_Logger.oo log_utils.oo thread.oo MySQL_PreparedStatement.oo ProxySQL_Cluster.oo ClickHouse_Authentication.oo ClickHouse_Server.oo ProxySQL_Statistics.oo Chart_bundle_js.oo ProxySQL_HTTP_Server.oo ProxySQL_RESTAPI_Server.oo font-awesome.min.css.oo main-bundle.min.css.oo MySQL_Variables.oo c_tokenizer.oo proxysql_utils.oo proxysql_coredump.oo proxysql_sslkeylog.oo \
 	sha256crypt.oo \
+	ProxySQL_PluginManager.oo \
 	BaseSrvList.oo BaseHGC.oo Base_HostGroups_Manager.oo \
 	QP_rule_text.oo QP_query_digest_stats.oo \
 	GTID_Server_Data.oo MyHGC.oo MySrvConnList.oo MySrvC.oo \

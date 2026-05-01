@@ -85,6 +85,26 @@ void crash_handler(int sig) {
 	pthread_kill(pthread_self(), sig);
 }
 
+#ifdef PROXYSQL40
+void proxysql_load_plugin_modules_from_config(
+	const Setting& root,
+	std::vector<std::string>& plugin_modules
+) {
+	plugin_modules.clear();
+
+	if (root.exists("plugins") == false) {
+		return;
+	}
+
+	const Setting& plugins = root["plugins"];
+	for (int i = 0; i < plugins.getLength(); ++i) {
+		if (plugins[i].isString()) {
+			plugin_modules.emplace_back(plugins[i].c_str());
+		}
+	}
+}
+#endif /* PROXYSQL40 */
+
 ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
 	opt->reset();
 	delete opt;
@@ -97,6 +117,10 @@ ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
 		free(ldap_auth_plugin);
 		ldap_auth_plugin = NULL;
 	}
+#ifdef PROXYSQL40
+	plugin_modules.clear();
+	no_plugins = false;
+#endif /* PROXYSQL40 */
 	/**
 	 * @brief set in_shutdown flag just the member 'checksums_values'.
 	 * @details This is performed to prevent the free() inside the 'ProxySQL_Checksum_Value' destructor for
@@ -230,6 +254,10 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	ldap_auth_plugin = NULL;
 	web_interface_plugin = NULL;
 	sqlite3_plugin = NULL;
+#ifdef PROXYSQL40
+	plugin_modules.clear();
+	no_plugins = false;
+#endif /* PROXYSQL40 */
 #ifdef DEBUG
 	global.gdb=0;
 #endif
@@ -296,6 +324,9 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	opt->add((const char *)"",0,0,0,(const char *)"Create auxiliary threads to handle idle connections",(const char *)"--idle-threads");
 #endif /* IDLE_THREADS */
 	opt->add((const char *)"",0,0,0,(const char *)"Do not check for the latest version of ProxySQL",(const char *)"--no-version-check");
+#ifdef PROXYSQL40
+	opt->add((const char *)"",0,0,0,(const char *)"Bypass plugin chassis: do not load any plugin .so listed in the config file. Useful as a kill switch when a plugin misbehaves.",(const char *)"--no-plugins");
+#endif /* PROXYSQL40 */
 	opt->add((const char *)"",0,1,0,(const char *)"Administration Unix Socket",(const char *)"-S",(const char *)"--admin-socket");
 
 	opt->add((const char *)"",0,0,0,(const char *)"Enable SQLite3 Server",(const char *)"--sqlite3-server");
@@ -436,6 +467,20 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 		global.version_check=false;
 		glovars.version_check=false;
 	}
+#ifdef PROXYSQL40
+	// Plugin chassis kill switch. Priority: CLI flag wins, then env var,
+	// otherwise leaves the default (false → load plugins normally).
+	// Setting this here in process_opts_pre means LoadConfiguredPlugins
+	// can read GloVars.no_plugins before any .so is dlopen'd.
+	if (opt->isSet("--no-plugins")) {
+		no_plugins = true;
+	} else {
+		const char* env = getenv("PROXYSQL_NO_PLUGINS");
+		if (env && env[0] == '1' && env[1] == '\0') {
+			no_plugins = true;
+		}
+	}
+#endif /* PROXYSQL40 */
 	if (opt->isSet("--sqlite3-server")) {
 		global.sqlite3_server=true;
 	}
