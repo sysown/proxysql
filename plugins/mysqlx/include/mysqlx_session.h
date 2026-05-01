@@ -177,6 +177,20 @@ private:
 
 	void handle_auth_mysql41(const std::string& auth_data);
 	void handle_auth_plain(const std::string& auth_data);
+
+	// After identity_ is resolved, validate that the user is allowed to
+	// authenticate with the negotiated mechanism over the current
+	// transport. Sends the appropriate X-Protocol error frame and
+	// returns false if any per-identity policy is violated:
+	//   - identity_->require_tls=1 and the frontend connection is
+	//     not encrypted
+	//   - identity_->allowed_auth_methods is set and does not contain
+	//     auth_method_ (a comma-separated list; empty means
+	//     "any wired method allowed", matching the historical default)
+	// Caller is expected to set `healthy = false` and return on a
+	// false return value (the helper itself does not change session
+	// state beyond emitting the error frame).
+	bool enforce_identity_policy();
 	void forward_frame_to_client(uint8_t msg_type, const MysqlxFrame& frame);
 
 	int dispatch_client_message(uint8_t msg_type);

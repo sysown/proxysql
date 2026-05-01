@@ -474,6 +474,51 @@ void MysqlxSession::handler_capabilities_set() {
 	status_ = CONNECTING_CLIENT;
 }
 
+bool MysqlxSession::enforce_identity_policy() {
+	if (!identity_) {
+		return true;  // nothing to enforce
+	}
+
+	// require_tls: per-user "MYSQL41 / PLAIN must run over TLS".
+	// PLAIN already has a hardcoded TLS gate at handle_auth_plain entry;
+	// this is the per-user knob that also covers MYSQL41 — operators set
+	// require_tls=1 on a row to forbid the (otherwise legal) "MYSQL41
+	// over plaintext" path.
+	if (identity_->require_tls && !client_ds_.is_encrypted()) {
+		send_error(1045, "User requires a TLS connection");
+		return false;
+	}
+
+	// allowed_auth_methods: per-user whitelist of mechanism names.
+	// Empty string preserves the historical "any wired method" default
+	// so existing rows don't require a backfill. Non-empty: comma-
+	// separated, case-insensitive match against auth_method_.
+	if (!identity_->allowed_auth_methods.empty()) {
+		const std::string& list = identity_->allowed_auth_methods;
+		bool matched = false;
+		size_t pos = 0;
+		while (pos < list.size()) {
+			size_t comma = list.find(',', pos);
+			if (comma == std::string::npos) comma = list.size();
+			std::string token = list.substr(pos, comma - pos);
+			// Trim leading/trailing whitespace.
+			while (!token.empty() && (token.front() == ' ' || token.front() == '\t')) token.erase(token.begin());
+			while (!token.empty() && (token.back()  == ' ' || token.back()  == '\t')) token.pop_back();
+			if (!token.empty() && strcasecmp(token.c_str(), auth_method_.c_str()) == 0) {
+				matched = true;
+				break;
+			}
+			pos = comma + 1;
+		}
+		if (!matched) {
+			send_error(1045, "Authentication mechanism not allowed for user");
+			return false;
+		}
+	}
+
+	return true;
+}
+
 void MysqlxSession::handle_auth_mysql41(const std::string& auth_data) {
 	size_t first_nul = auth_data.find('\0');
 	if (first_nul != std::string::npos) {
@@ -531,6 +576,11 @@ void MysqlxSession::handle_auth_plain(const std::string& auth_data) {
 	identity_ = identity_lookup_(username_);
 	if (!identity_ || !identity_->x_enabled) {
 		send_error(1045, "Access denied for user");
+		healthy = false;
+		return;
+	}
+
+	if (!enforce_identity_policy()) {
 		healthy = false;
 		return;
 	}
@@ -659,6 +709,11 @@ void MysqlxSession::handler_auth_challenge_response() {
 		identity_ = identity_lookup_(username_);
 		if (!identity_ || !identity_->x_enabled) {
 			send_error(1045, "Access denied for user");
+			healthy = false;
+			return;
+		}
+
+		if (!enforce_identity_policy()) {
 			healthy = false;
 			return;
 		}
