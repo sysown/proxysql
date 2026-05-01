@@ -64,8 +64,25 @@ OPTZ ?= -O2 -ggdb
 # the flags libproxysql.a was built with; a mismatch silently changes the
 # ProxySQL_PluginDescriptor / ProxySQL_PluginServices layout the core and
 # the plugin each see, and the loader then reads past the end of the
-# plugin's static descriptor.  (If this Makefile is run standalone, the
-# caller is expected to export PROXYSQL40/31/etc. to match the lib.)
+# plugin's static descriptor.
+#
+# Tier cascade (mirrors the top-level Makefile):
+#   PROXYSQLGENAI=1 ⇒ PROXYSQL40=1 ⇒ PROXYSQL31=1 ⇒ PROXYSQLFFTO=1 + PROXYSQLTSDB=1
+# A standalone `make -C plugins/mysqlx PROXYSQLGENAI=1` previously set only
+# -DPROXYSQLGENAI and quietly produced a layout-mismatched .so. The cascade
+# below forces the implied flags so the standalone path matches the
+# top-level build.
+ifeq ($(PROXYSQLGENAI),1)
+	PROXYSQL40 := 1
+endif
+ifeq ($(PROXYSQL40),1)
+	PROXYSQL31 := 1
+endif
+ifeq ($(PROXYSQL31),1)
+	PROXYSQLFFTO := 1
+	PROXYSQLTSDB := 1
+endif
+
 PSQL40 :=
 ifeq ($(PROXYSQL40),1)
 	PSQL40 := -DPROXYSQL40
