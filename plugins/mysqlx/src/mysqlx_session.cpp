@@ -986,7 +986,12 @@ int MysqlxSession::dispatch_client_message(uint8_t msg_type) {
 			// when there are decompressed frames to dispatch.
 			if (compression_algo_ == MYSQLX_COMPR_NONE) {
 				client_ds_.pop_frame();
-				send_error(5008, "Compression is not supported");
+				// Match upstream MySQL X plugin: ER_X_FRAME_COMPRESSION_DISABLED
+				// (5170) — see plugin/x/src/xpl_error.h in mysql-8.4 source.
+				// The upstream message is literally "Client didn't enable the
+				// compression."; we reproduce it verbatim so clients written
+				// against the upstream contract see the exact same shape.
+				send_error(5170, "Client didn't enable the compression.");
 				return 0;
 			}
 			return handle_compression_message();
@@ -1876,7 +1881,7 @@ void MysqlxSession::send_capabilities() {
 // Three payload shapes per spec:
 //   1. server_messages set: payload is a single decompressed server
 //      message of that type. NEVER expected on the client→server path —
-//      reject with 5008.
+//      reject with ER_X_BAD_MESSAGE (5000).
 //   2. client_messages set: payload is a single decompressed client
 //      message of that type. We re-frame with that type byte and feed
 //      it back through client_ds_.feed_bytes().
@@ -1889,18 +1894,31 @@ void MysqlxSession::send_capabilities() {
 // uncompressed_size (when set) and COMPRESSION_MAX_DECOMPRESSED_BYTES.
 // Returns -1 on any failure path so the caller can short-circuit, but
 // we already emit the X-Protocol Error frame here.
+//
+// Error code mapping (matches upstream MySQL plugin/x/src/xpl_error.h):
+//   - 5170 ER_X_FRAME_COMPRESSION_DISABLED — frame arrives without a
+//     negotiated algorithm. Handled in dispatch_client_message().
+//   - 5174 ER_X_BAD_COMPRESSED_FRAME — structural problem with the
+//     Compression envelope itself (empty body, malformed protobuf,
+//     bogus uncompressed_size hint, decompressed payload that doesn't
+//     reframe into valid X messages).
+//   - 5171 ER_X_DECOMPRESSION_FAILED — the algorithm rejects the
+//     payload (lz4/zstd error, OOM, stall, exceeds cap).
+//   - 5000 ER_X_BAD_MESSAGE — server-direction compression on the
+//     client→server path; this is a wrong-direction message rather
+//     than a compression-specific failure.
 int MysqlxSession::handle_compression_message() {
 	const auto& frame = client_ds_.front_frame();
 	if (frame.size() <= 5) {
 		client_ds_.pop_frame();
-		send_error(5008, "Empty Compression message");
+		send_error(5174, "Empty Compression message");
 		return 0;
 	}
 
 	Mysqlx::Connection::Compression cmsg;
 	if (!cmsg.ParseFromArray(frame.data() + 5, static_cast<int>(frame.size() - 5))) {
 		client_ds_.pop_frame();
-		send_error(5008, "Invalid Compression message");
+		send_error(5174, "Invalid Compression message");
 		return 0;
 	}
 	const std::string& payload = cmsg.payload();
@@ -1910,7 +1928,7 @@ int MysqlxSession::handle_compression_message() {
 		// Server-direction compression on the client→server path is
 		// always wrong: only the server is supposed to set
 		// server_messages, and only when sending to the client.
-		send_error(5008, "Compression message has server_messages on client→server path");
+		send_error(5000, "Compression message has server_messages on client→server path");
 		return 0;
 	}
 
@@ -1921,7 +1939,7 @@ int MysqlxSession::handle_compression_message() {
 		if (hint == 0) {
 			// Hint of 0 with a non-empty payload is malformed; treat
 			// as a parse error rather than letting it through.
-			send_error(5008, "Compression: uncompressed_size hint is 0");
+			send_error(5174, "Compression: uncompressed_size hint is 0");
 			return 0;
 		}
 		if (hint < cap) cap = static_cast<size_t>(hint);
@@ -1942,7 +1960,7 @@ int MysqlxSession::handle_compression_message() {
 		                                   static_cast<int>(payload.size()),
 		                                   static_cast<int>(cap));
 		if (produced < 0) {
-			send_error(5008, "Compression: lz4 decompression failed");
+			send_error(5171, "Compression: lz4 decompression failed");
 			return 0;
 		}
 		decompressed.resize(static_cast<size_t>(produced));
@@ -1950,7 +1968,7 @@ int MysqlxSession::handle_compression_message() {
 		if (!zstd_dctx_) {
 			zstd_dctx_ = ZSTD_createDCtx();
 			if (!zstd_dctx_) {
-				send_error(5008, "Compression: out of memory");
+				send_error(5171, "Compression: out of memory");
 				return 0;
 			}
 		}
@@ -1961,7 +1979,7 @@ int MysqlxSession::handle_compression_message() {
 		while (zin.pos < zin.size) {
 			if (decompressed.size() >= cap) {
 				// Hit the cap — bail out before zstd writes more.
-				send_error(5008, "Compression: decompressed payload exceeds cap");
+				send_error(5171, "Compression: decompressed payload exceeds cap");
 				return 0;
 			}
 			size_t old_sz = decompressed.size();
@@ -1974,21 +1992,23 @@ int MysqlxSession::handle_compression_message() {
 			size_t r = ZSTD_decompressStream(zstd_dctx_, &zout, &zin);
 			decompressed.resize(old_sz + zout.pos);
 			if (ZSTD_isError(r)) {
-				send_error(5008, "Compression: zstd decompression failed");
+				send_error(5171, "Compression: zstd decompression failed");
 				return 0;
 			}
 			if (zout.pos == 0 && zin.pos < zin.size) {
 				// No forward progress despite remaining input; would
 				// otherwise be an infinite loop. Treat as a corrupt
 				// stream and bail.
-				send_error(5008, "Compression: zstd stalled (no progress)");
+				send_error(5171, "Compression: zstd stalled (no progress)");
 				return 0;
 			}
 		}
 	} else {
 		// Negotiated to NONE somehow; we've already filtered NONE in the
-		// dispatch site, so this is a defensive branch only.
-		send_error(5008, "Compression algorithm not initialized");
+		// dispatch site, so this is a defensive branch only. Use 5170
+		// (frame compression disabled) since the underlying issue is
+		// "no algorithm selected".
+		send_error(5170, "Compression algorithm not initialized");
 		return 0;
 	}
 
@@ -2010,8 +2030,11 @@ int MysqlxSession::handle_compression_message() {
 
 	if (client_ds_.has_parse_error()) {
 		// Decompressed bytes did not yield valid X frames. Signal the
-		// session as unhealthy so we close cleanly.
-		send_error(5008, "Compression: decompressed payload is malformed");
+		// session as unhealthy so we close cleanly. Treated as a
+		// bad-compressed-frame condition rather than a decompression
+		// failure: decompression itself succeeded but produced output
+		// that isn't a valid X-Protocol message stream.
+		send_error(5174, "Compression: decompressed payload is malformed");
 		healthy = false;
 		return -1;
 	}

@@ -351,11 +351,14 @@ static void test_dispatch_compression_rejected() {
 		ok(buf[4] == Mysqlx::ServerMessages_Type_ERROR, "response is ERROR");
 		Mysqlx::Error err;
 		if (err.ParseFromArray(buf + 5, static_cast<int>(r - 5))) {
-			// 5008 = X-Protocol "compression unsupported"; emitted by
-			// dispatch_client_message when COMPRESSION arrives without a
-			// negotiated algorithm. Test previously asserted 5001 (an
-			// invented value) and never passed.
-			ok(err.code() == 5008, "error code is 5008 for compression with no negotiated algorithm");
+			// 5170 = ER_X_FRAME_COMPRESSION_DISABLED (upstream MySQL X
+			// plugin/x/src/xpl_error.h). Emitted by dispatch_client_message
+			// when COMPRESSION arrives without a negotiated algorithm.
+			// Aligned with upstream in the parity-cleanup pass (#5696);
+			// the previous code emitted 5008, which collides with
+			// ER_X_BAD_CONNECTION_SESSION_ATTRIBUTE_TYPE in upstream
+			// — wrong meaning entirely.
+			ok(err.code() == 5170, "error code is 5170 (ER_X_FRAME_COMPRESSION_DISABLED) for compression with no negotiated algorithm");
 		}
 	}
 
