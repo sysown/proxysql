@@ -95,6 +95,7 @@ MysqlxSession::MysqlxSession()
 	, healthy(true)
 	, target_hostgroup_(0)
 	, target_port_(0)
+	, target_use_ssl_(false)
 	, start_time_(0)
 	, last_active_time_(0)
 	, response_state_(RESP_IDLE)
@@ -142,6 +143,7 @@ void MysqlxSession::init(int fd, Mysqlx_Thread* thread_ptr) {
 	target_hostgroup_ = 0;
 	target_address_.clear();
 	target_port_ = 0;
+	target_use_ssl_ = false;
 	identity_.reset();
 	start_time_ = monotonic_time_ms();
 	last_active_time_ = start_time_;
@@ -163,6 +165,7 @@ void MysqlxSession::reset() {
 	target_hostgroup_ = 0;
 	target_address_.clear();
 	target_port_ = 0;
+	target_use_ssl_ = false;
 	identity_.reset();
 	compression_algo_ = MYSQLX_COMPR_NONE;
 	compression_combine_mixed_messages_ = false;
@@ -471,6 +474,69 @@ void MysqlxSession::handler_capabilities_set() {
 	status_ = CONNECTING_CLIENT;
 }
 
+bool MysqlxSession::enforce_identity_policy() {
+	if (!identity_) {
+		return true;  // nothing to enforce
+	}
+
+	// backend_auth_mode='pass_through' is parsed and round-trips through
+	// the config store but the backend-auth state machine does not
+	// actually forward AuthStart unmodified to the backend (the existing
+	// code maps the user's frontend creds to backend creds either via
+	// the mapped or service_account paths). Per the design spec
+	// (docs/superpowers/specs/2026-04-07-mysqlx-plugin-design.md §
+	// "Backend authentication", around the pass_through bullet:
+	// "configuration validation should reject pass_through rather than
+	// silently downgrading it"), refuse the auth attempt instead of
+	// approximating it. The accepted modes today are 'mapped' (default)
+	// and 'service_account'; pass_through is reserved for a future
+	// implementation that forwards the client's AuthStart frame
+	// verbatim to the backend.
+	if (identity_->backend_auth_mode == MysqlxBackendAuthMode::pass_through) {
+		send_error(1045, "backend_auth_mode 'pass_through' is not yet implemented; refusing rather than silently downgrading");
+		return false;
+	}
+
+	// require_tls: per-user "MYSQL41 / PLAIN must run over TLS".
+	// PLAIN already has a hardcoded TLS gate at handle_auth_plain entry;
+	// this is the per-user knob that also covers MYSQL41 — operators set
+	// require_tls=1 on a row to forbid the (otherwise legal) "MYSQL41
+	// over plaintext" path.
+	if (identity_->require_tls && !client_ds_.is_encrypted()) {
+		send_error(1045, "User requires a TLS connection");
+		return false;
+	}
+
+	// allowed_auth_methods: per-user whitelist of mechanism names.
+	// Empty string preserves the historical "any wired method" default
+	// so existing rows don't require a backfill. Non-empty: comma-
+	// separated, case-insensitive match against auth_method_.
+	if (!identity_->allowed_auth_methods.empty()) {
+		const std::string& list = identity_->allowed_auth_methods;
+		bool matched = false;
+		size_t pos = 0;
+		while (pos < list.size()) {
+			size_t comma = list.find(',', pos);
+			if (comma == std::string::npos) comma = list.size();
+			std::string token = list.substr(pos, comma - pos);
+			// Trim leading/trailing whitespace.
+			while (!token.empty() && (token.front() == ' ' || token.front() == '\t')) token.erase(token.begin());
+			while (!token.empty() && (token.back()  == ' ' || token.back()  == '\t')) token.pop_back();
+			if (!token.empty() && strcasecmp(token.c_str(), auth_method_.c_str()) == 0) {
+				matched = true;
+				break;
+			}
+			pos = comma + 1;
+		}
+		if (!matched) {
+			send_error(1045, "Authentication mechanism not allowed for user");
+			return false;
+		}
+	}
+
+	return true;
+}
+
 void MysqlxSession::handle_auth_mysql41(const std::string& auth_data) {
 	size_t first_nul = auth_data.find('\0');
 	if (first_nul != std::string::npos) {
@@ -528,6 +594,11 @@ void MysqlxSession::handle_auth_plain(const std::string& auth_data) {
 	identity_ = identity_lookup_(username_);
 	if (!identity_ || !identity_->x_enabled) {
 		send_error(1045, "Access denied for user");
+		healthy = false;
+		return;
+	}
+
+	if (!enforce_identity_policy()) {
 		healthy = false;
 		return;
 	}
@@ -656,6 +727,11 @@ void MysqlxSession::handler_auth_challenge_response() {
 		identity_ = identity_lookup_(username_);
 		if (!identity_ || !identity_->x_enabled) {
 			send_error(1045, "Access denied for user");
+			healthy = false;
+			return;
+		}
+
+		if (!enforce_identity_policy()) {
 			healthy = false;
 			return;
 		}
@@ -875,6 +951,11 @@ bool MysqlxSession::is_terminal_for_state(uint8_t msg_type) const {
 
 void MysqlxSession::handler_waiting_server_msg() {
 	if (server_ds().get_fd() < 0) {
+		// server_ds fd is -1 means we lost the backend out-of-band
+		// (close, error, premature stream reset). Don't put it in the
+		// pool as if it were healthy; is_reusable() will refuse it
+		// even if we did, but be explicit at the call site too.
+		if (backend_conn_) backend_conn_->set_reusable(false);
 		return_backend_to_pool();
 		status_ = WAITING_CLIENT_XMSG;
 		to_process = true;
@@ -884,12 +965,18 @@ void MysqlxSession::handler_waiting_server_msg() {
 	ssize_t r = server_ds().read_from_net();
 	if (r == 0) {
 		send_error(2013, "Lost connection to backend during query");
+		// Mark non-reusable so return_backend_to_pool deletes the
+		// connection instead of caching a dead socket. Without this,
+		// the next session that pulls from the pool gets a backend
+		// whose fd is closed / EOF.
+		if (backend_conn_) backend_conn_->set_reusable(false);
 		return_backend_to_pool();
 		healthy = false;
 		return;
 	}
 	if (r < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
 		send_error(2013, "Backend read error during query");
+		if (backend_conn_) backend_conn_->set_reusable(false);
 		return_backend_to_pool();
 		healthy = false;
 		return;
@@ -930,6 +1017,7 @@ void MysqlxSession::handler_waiting_server_msg() {
 
 void MysqlxSession::handler_session_reset_waiting() {
 	if (server_ds().get_fd() < 0) {
+		if (backend_conn_) backend_conn_->set_reusable(false);
 		return_backend_to_pool();
 		status_ = WAITING_CLIENT_XMSG;
 		to_process = true;
@@ -938,6 +1026,9 @@ void MysqlxSession::handler_session_reset_waiting() {
 
 	ssize_t r = server_ds().read_from_net();
 	if (r == 0 || (r < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+		// Backend died while waiting for the SESS_RESET response — treat
+		// the connection as dead, don't recycle it.
+		if (backend_conn_) backend_conn_->set_reusable(false);
 		return_backend_to_pool();
 		status_ = WAITING_CLIENT_XMSG;
 		to_process = true;
@@ -1082,6 +1173,7 @@ int MysqlxSession::resolve_backend_target() {
 	target_hostgroup_ = hg;
 	target_address_   = ep.hostname;
 	target_port_      = ep.mysqlx_port;
+	target_use_ssl_   = ep.use_ssl;
 	return 0;
 }
 
@@ -1164,7 +1256,18 @@ void MysqlxSession::handler_connecting_server() {
 		backend_conn_->set_backend_user(backend_user.c_str());
 		backend_conn_->set_backend_schema(schema_.c_str());
 
-		if (client_ds_.is_encrypted()) {
+		// Backend TLS is enabled when EITHER the operator forced it via
+		// the endpoint's use_ssl=1 flag (mysqlx_backend_endpoints.
+		// use_ssl, captured into target_use_ssl_ at
+		// resolve_backend_target time) OR the client connected to the
+		// proxy over TLS. The endpoint-flag path lets operators mandate
+		// proxy↔backend encryption even for plaintext clients on a
+		// trusted private network — previously the flag was loaded into
+		// MysqlxBackendEndpoint but silently dropped here, so plaintext
+		// clients always produced plaintext backend traffic regardless
+		// of the operator's setting.
+		const bool require_backend_tls = target_use_ssl_ || client_ds_.is_encrypted();
+		if (require_backend_tls) {
 			if (thread_ptr_ && thread_ptr_->get_ssl_ctx()) {
 				backend_conn_->set_backend_tls_required(true);
 				backend_conn_->set_ssl_ctx(thread_ptr_->get_ssl_ctx());

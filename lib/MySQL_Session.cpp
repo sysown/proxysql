@@ -3383,6 +3383,16 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				(begint.tv_sec*1000000000+begint.tv_nsec);
 		}
 		assert(qpo);	// GloMyQPro->process_mysql_query() should always return a qpo
+		// TODO(plugin-query-hook): inject pre-execution hook dispatch
+		// here, after CurrentQuery is populated and before the query
+		// is committed for backend execution. The chassis ABI surface
+		// (proxysql_has_configured_plugin_query_hook +
+		// proxysql_dispatch_configured_plugin_query_hook in
+		// include/ProxySQL_PluginManager.h) is in place; this is the
+		// missing data-plane integration. See ProxySQL_Plugin.h's
+		// "STATUS (chassis ABI 2 — initial baseline)" comment for
+		// the full scope. Same injection pattern needed at line ~5398
+		// (this same source file) and the PgSQL COM_QUERY entry.
 		// setting 'prepared' to prevent fetching results from the cache if the digest matches
 		rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt, &lock_hostgroup, ps_type_prepare_stmt);
 		if (rc_break==true) {
@@ -5402,6 +5412,11 @@ __get_pkts_from_client:
 											(endt.tv_sec*1000000000+endt.tv_nsec) -
 											(begint.tv_sec*1000000000+begint.tv_nsec);
 									}
+									// TODO(plugin-query-hook): inject pre-execution
+									// hook dispatch here for the COM_QUERY codepath,
+									// after CurrentQuery is populated. See
+									// ProxySQL_Plugin.h "STATUS (chassis ABI 2 —
+									// initial baseline)".
 									assert(qpo);	// GloMyQPro->process_mysql_query() should always return a qpo
 
 									{
