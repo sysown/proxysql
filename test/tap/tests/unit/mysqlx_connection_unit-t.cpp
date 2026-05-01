@@ -33,13 +33,48 @@ static void test_connection_multiplexing() {
 	ok(!conn.is_reusable(), "transaction disables reuse");
 }
 
+// Issue #5697: post-Session::Reset rehandshake flag invalidates the
+// connection for pool reuse. Default-constructed connections have the
+// flag clear; setting it forces is_reusable() to false even on an
+// otherwise-reusable connection; reset() clears the flag defensively.
+static void test_connection_post_reset_rehandshake_flag() {
+	diag(">>> %s", __func__);
+	MysqlxConnection conn;
+	ok(!conn.needs_post_reset_rehandshake(),
+	   "default: needs_post_reset_rehandshake() == false");
+
+	// Make the connection otherwise-reusable, then flip the flag.
+	conn.set_reusable(true);
+	ok(conn.is_reusable(), "pre-flag: is_reusable() == true");
+
+	conn.set_needs_post_reset_rehandshake(true);
+	ok(conn.needs_post_reset_rehandshake(),
+	   "after set: needs_post_reset_rehandshake() == true");
+	ok(!conn.is_reusable(),
+	   "after set: is_reusable() == false (post-reset state forces drop)");
+
+	// reset() defensively clears the flag — production path doesn't
+	// rely on this (the cache deletes non-reusable conns instead of
+	// resetting them), but the invariant matters for retry-on-error
+	// or any other future code path that calls reset() directly.
+	conn.reset();
+	ok(!conn.needs_post_reset_rehandshake(),
+	   "after reset(): needs_post_reset_rehandshake() == false (defensive clear)");
+	ok(conn.is_reusable(),
+	   "after reset(): is_reusable() == true (reset re-enables)");
+}
+
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(10);
+	// Plan derives from ok() count; new test_connection_post_reset_*
+	// adds 6 ok() so total is 10 + 6 = 16. Switching to plan(0) so
+	// further additions don't require re-counting.
+	plan(0);
 	diag("=== mysqlx_connection_unit-t starting ===");
 
 	test_connection_creation();
 	test_connection_multiplexing();
+	test_connection_post_reset_rehandshake_flag();
 
 	return exit_status();
 }
