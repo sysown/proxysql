@@ -61,6 +61,53 @@ std::optional<MysqlxBackendTlsMode> mysqlx_backend_tls_mode_from_string(const st
 // Canonical lower-case rendering for SAVE / runtime-view projection.
 const char* mysqlx_backend_tls_mode_to_string(MysqlxBackendTlsMode m);
 
+// Per-route TLS posture (`mysqlx_routes.tls_mode`). Mirrors MySQL Router
+// 8.0's five-mode TLS taxonomy at route granularity, so an operator can
+// dedicate one route to compliance-pinned passthrough while leaving
+// neighbouring routes on the default proxy-terminated path.
+//
+//   * inherit     -- defer to the global frontend TLS variable
+//                    (`mysqlx_tls_mode`). Default for every existing
+//                    deployment so no behaviour changes after upgrade.
+//   * disabled    -- route does not advertise TLS regardless of the
+//                    global setting. Operator opt-out for a single
+//                    route.
+//   * preferred   -- TLS capability advertised; client decides whether
+//                    to upgrade. Equivalent to global PREFERRED.
+//   * required    -- TLS capability advertised; reject the session if
+//                    the client does not upgrade.
+//   * passthrough -- after the X-Protocol CapabilitiesSet(tls=true)
+//                    handshake the proxy splices raw bytes between the
+//                    client and the backend. The proxy never sees
+//                    plaintext past the handshake; routing per query,
+//                    multiplexing, and pooling are disabled for the
+//                    session. Use case: end-to-end encryption where
+//                    policy forbids proxy MITM (compliance, original
+//                    cert/SNI/ALPN preservation).
+//
+// Encoded as a string in the editable `mysqlx_routes` table (default
+// "inherit") so the column round-trips cleanly through SAVE / LOAD and
+// the operator can `UPDATE` it without consulting an enum table.
+enum class MysqlxRouteTlsMode : uint8_t {
+	inherit = 0,
+	disabled = 1,
+	preferred = 2,
+	required = 3,
+	passthrough = 4
+};
+
+// Case-insensitive parse of `mysqlx_routes.tls_mode`. Empty string
+// resolves to `inherit` so a NULL/missing column behaves the same as
+// the documented default. Returns std::nullopt on any other unknown
+// value so the caller can surface a useful error (rather than silently
+// coercing to inherit and leaving the operator wondering why a typo
+// got accepted). Accepted values: "inherit", "disabled", "preferred",
+// "required", "passthrough".
+std::optional<MysqlxRouteTlsMode> mysqlx_route_tls_mode_from_string(const std::string& value);
+
+// Canonical lower-case rendering for SAVE / runtime-view projection.
+const char* mysqlx_route_tls_mode_to_string(MysqlxRouteTlsMode m);
+
 struct MysqlxResolvedIdentity {
 	std::string username {};
 	std::string password {};
@@ -94,6 +141,11 @@ struct MysqlxRoute {
 	int fallback_hostgroup { -1 };
 	std::string strategy { "first_available" };
 	bool active { true };
+	// Per-route TLS posture; defaults to `inherit` so existing rows
+	// (and tests that build MysqlxRoute by aggregate init) continue to
+	// behave identically to pre-passthrough builds. See
+	// MysqlxRouteTlsMode for the value semantics.
+	MysqlxRouteTlsMode tls_mode { MysqlxRouteTlsMode::inherit };
 	std::string attributes {};
 	std::string comment {};
 };
@@ -157,6 +209,14 @@ public:
 	MysqlxBackendEndpoint pick_endpoint(const std::string& route_name) const;
 	int route_hostgroup(const std::string& route_name) const;
 	bool route_exists(const std::string& route_name) const;
+
+	// Returns the per-route TLS posture for the named route, or
+	// `MysqlxRouteTlsMode::inherit` when the route is unknown. Callers
+	// that need to distinguish "unknown route" from "route with
+	// tls_mode=inherit" should `route_exists()` first; collapsing the
+	// two here mirrors how `route_hostgroup()` returns 0 for unknown
+	// routes — both fail closed onto the safest default.
+	MysqlxRouteTlsMode route_tls_mode(const std::string& route_name) const;
 
 	// Snapshot of active route names + bind specs. Used by the
 	// listener reconciler (mysqlx_listener_reconcile.cpp) to compute

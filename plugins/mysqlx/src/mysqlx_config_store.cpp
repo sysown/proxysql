@@ -100,9 +100,25 @@ void merge_mysqlx_users(
 	}
 }
 
+// Field layout matches the SELECT in install_routes_from_admin:
+//   0 name
+//   1 bind
+//   2 destination_hostgroup
+//   3 fallback_hostgroup
+//   4 strategy
+//   5 active
+//   6 attributes
+//   7 comment
+//   8 tls_mode      (added with mysqlx_routes.tls_mode column)
+//
+// `parse_err` mirrors load_variables(): a malformed tls_mode token is
+// recorded as a string the install path can surface to the operator,
+// rather than silently coerced to inherit. The route is then dropped
+// (not partially loaded) so the operator's intent isn't half-applied.
 void load_routes(
 	SQLite3_result& rows,
-	std::unordered_map<std::string, MysqlxRoute>& routes
+	std::unordered_map<std::string, MysqlxRoute>& routes,
+	std::string& parse_err
 ) {
 	for (auto* row : rows.rows) {
 		if (row == nullptr || row->fields[0] == nullptr) {
@@ -118,6 +134,23 @@ void load_routes(
 		route.active = nullable_bool(row->fields[5], true);
 		route.attributes = nullable_string(row->fields[6]);
 		route.comment = nullable_string(row->fields[7]);
+		// tls_mode column was added with issue #5692. A pre-upgrade
+		// admin DB without the column shows up as a NULL field here;
+		// nullable_string -> "" -> mysqlx_route_tls_mode_from_string
+		// resolves to inherit, preserving prior behaviour.
+		const std::string tls_mode_raw = nullable_string(row->fields[8]);
+		auto parsed = mysqlx_route_tls_mode_from_string(tls_mode_raw);
+		if (!parsed) {
+			if (parse_err.empty()) {
+				parse_err = "invalid tls_mode '";
+				parse_err += tls_mode_raw;
+				parse_err += "' for route '";
+				parse_err += route.name;
+				parse_err += "' (expected one of: inherit, disabled, preferred, required, passthrough)";
+			}
+			continue;
+		}
+		route.tls_mode = *parsed;
 		routes[route.name] = std::move(route);
 	}
 }
@@ -287,6 +320,42 @@ const char* mysqlx_backend_tls_mode_to_string(MysqlxBackendTlsMode m) {
 	return "as_client";
 }
 
+std::optional<MysqlxRouteTlsMode> mysqlx_route_tls_mode_from_string(const std::string& value) {
+	// An empty/NULL column collapses to `inherit` so the LOAD path
+	// can treat a freshly-added column on an upgraded admin DB as
+	// "default" without forcing the operator to back-fill every row.
+	if (value.empty()) {
+		return MysqlxRouteTlsMode::inherit;
+	}
+	if (strcasecmp(value.c_str(), "inherit") == 0) {
+		return MysqlxRouteTlsMode::inherit;
+	}
+	if (strcasecmp(value.c_str(), "disabled") == 0) {
+		return MysqlxRouteTlsMode::disabled;
+	}
+	if (strcasecmp(value.c_str(), "preferred") == 0) {
+		return MysqlxRouteTlsMode::preferred;
+	}
+	if (strcasecmp(value.c_str(), "required") == 0) {
+		return MysqlxRouteTlsMode::required;
+	}
+	if (strcasecmp(value.c_str(), "passthrough") == 0) {
+		return MysqlxRouteTlsMode::passthrough;
+	}
+	return std::nullopt;
+}
+
+const char* mysqlx_route_tls_mode_to_string(MysqlxRouteTlsMode m) {
+	switch (m) {
+		case MysqlxRouteTlsMode::inherit:     return "inherit";
+		case MysqlxRouteTlsMode::disabled:    return "disabled";
+		case MysqlxRouteTlsMode::preferred:   return "preferred";
+		case MysqlxRouteTlsMode::required:    return "required";
+		case MysqlxRouteTlsMode::passthrough: return "passthrough";
+	}
+	return "inherit";
+}
+
 // install_users_from_admin
 //
 // Reads two admin-side tables and atomically swaps `identities_` under
@@ -356,15 +425,43 @@ bool MysqlxConfigStore::install_routes_from_admin(SQLite3DB& db, std::string& er
 	std::unordered_map<std::string, MysqlxRoute> new_routes {};
 	std::unique_ptr<SQLite3_result> result {};
 
-	if (!fetch_result(
-		    db,
-		    "SELECT name, bind, destination_hostgroup, fallback_hostgroup, strategy, active, attributes, comment "
-		    "FROM mysqlx_routes WHERE active=1",
-		    result,
-		    err)) {
+	// SELECT tolerates pre-upgrade admin DBs missing the tls_mode column:
+	// fetch_result will surface the error from sqlite, but we'd rather
+	// emit a friendlier "default to inherit" path. Since the column is
+	// part of the canonical schema (mysqlx_admin_schema.cpp adds it),
+	// every fresh install has it; only an out-of-band ALTER-skipping
+	// upgrade would land here. Detect via a separate PRAGMA query and
+	// drop tls_mode from the SELECT in that case.
+	bool has_tls_mode = false;
+	{
+		std::unique_ptr<SQLite3_result> cols {};
+		std::string pragma_err;
+		if (fetch_result(db, "PRAGMA table_info(mysqlx_routes)", cols, pragma_err)) {
+			for (auto* row : cols->rows) {
+				if (row != nullptr && row->fields[1] != nullptr &&
+				    strcasecmp(row->fields[1], "tls_mode") == 0) {
+					has_tls_mode = true;
+					break;
+				}
+			}
+		}
+	}
+
+	const char* sql = has_tls_mode
+		? "SELECT name, bind, destination_hostgroup, fallback_hostgroup, strategy, active, attributes, comment, tls_mode "
+		  "FROM mysqlx_routes WHERE active=1"
+		: "SELECT name, bind, destination_hostgroup, fallback_hostgroup, strategy, active, attributes, comment, NULL AS tls_mode "
+		  "FROM mysqlx_routes WHERE active=1";
+
+	if (!fetch_result(db, sql, result, err)) {
 		return false;
 	}
-	load_routes(*result, new_routes);
+	std::string parse_err;
+	load_routes(*result, new_routes, parse_err);
+	if (!parse_err.empty()) {
+		err = std::move(parse_err);
+		return false;
+	}
 
 	std::unique_lock<std::shared_mutex> lock(mutex_);
 	routes_.swap(new_routes);
@@ -514,7 +611,7 @@ bool MysqlxConfigStore::save_routes_to_admin_table(SQLite3DB& db) const {
 	for (const auto& [name, route] : routes_) {
 		std::string sql = "REPLACE INTO mysqlx_routes "
 			"(name, bind, destination_hostgroup, fallback_hostgroup, strategy, "
-			"active, attributes, comment) VALUES (";
+			"active, attributes, comment, tls_mode) VALUES (";
 		sql += sqlite_quote(route.name) + ", ";
 		sql += sqlite_quote(route.bind) + ", ";
 		sql += std::to_string(route.destination_hostgroup) + ", ";
@@ -525,7 +622,8 @@ bool MysqlxConfigStore::save_routes_to_admin_table(SQLite3DB& db) const {
 		}
 		sql += sqlite_quote(route.strategy) + ", 1, ";
 		sql += sqlite_quote(route.attributes) + ", ";
-		sql += sqlite_quote(route.comment) + ")";
+		sql += sqlite_quote(route.comment) + ", ";
+		sql += sqlite_quote(mysqlx_route_tls_mode_to_string(route.tls_mode)) + ")";
 		if (!db.execute(sql.c_str())) {
 			db.execute("ROLLBACK");
 			return false;
@@ -625,7 +723,7 @@ void MysqlxConfigStore::project_routes_to_runtime_view(SQLite3DB& db) const {
 	for (const auto& [name, route] : routes_) {
 		std::string sql = "INSERT INTO runtime_mysqlx_routes "
 			"(name, bind, destination_hostgroup, fallback_hostgroup, strategy, "
-			"active, attributes, comment) VALUES (";
+			"active, attributes, comment, tls_mode) VALUES (";
 		sql += sqlite_quote(route.name) + ", ";
 		sql += sqlite_quote(route.bind) + ", ";
 		sql += std::to_string(route.destination_hostgroup) + ", ";
@@ -636,7 +734,8 @@ void MysqlxConfigStore::project_routes_to_runtime_view(SQLite3DB& db) const {
 		}
 		sql += sqlite_quote(route.strategy) + ", 1, ";
 		sql += sqlite_quote(route.attributes) + ", ";
-		sql += sqlite_quote(route.comment) + ")";
+		sql += sqlite_quote(route.comment) + ", ";
+		sql += sqlite_quote(mysqlx_route_tls_mode_to_string(route.tls_mode)) + ")";
 		if (!db.execute(sql.c_str())) {
 			db.execute("ROLLBACK"); return;
 		}
@@ -746,6 +845,18 @@ int MysqlxConfigStore::route_hostgroup(const std::string& route_name) const {
 bool MysqlxConfigStore::route_exists(const std::string& route_name) const {
 	std::shared_lock<std::shared_mutex> lock(mutex_);
 	return routes_.find(route_name) != routes_.end();
+}
+
+MysqlxRouteTlsMode MysqlxConfigStore::route_tls_mode(const std::string& route_name) const {
+	std::shared_lock<std::shared_mutex> lock(mutex_);
+	auto it = routes_.find(route_name);
+	if (it == routes_.end()) {
+		// Unknown route -> safest default. Caller can route_exists()
+		// first when it needs to distinguish "missing route" from "route
+		// configured to inherit".
+		return MysqlxRouteTlsMode::inherit;
+	}
+	return it->second.tls_mode;
 }
 
 std::vector<std::pair<std::string, std::string>> MysqlxConfigStore::snapshot_active_routes() const {
