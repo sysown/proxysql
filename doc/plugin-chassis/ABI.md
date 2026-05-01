@@ -153,7 +153,7 @@ Therefore:
 
 - `LOAD <X> TO RUNTIME` reads the editable admin table and hands the rows to the module via a typed install API that swaps state under the module's own lock. It MUST NOT touch `runtime_<X>`.
 - `SAVE <X> [FROM RUNTIME] TO MEMORY` dumps the module's in-memory state and `REPLACE INTO`s the editable admin table. It MUST NOT read `runtime_<X>`.
-- `runtime_<X>` is repopulated by the registered refresh callback before any admin SELECT touches it. Admin's pre-SELECT hook walks every registered view and invokes the callback for any whose table name appears in the SQL.
+- `runtime_<X>` is repopulated by the registered refresh callback before any admin SELECT touches it. Admin's pre-SELECT hook walks every registered view and invokes the callback for any view whose table name is referenced as a whole identifier in the SQL query (case-insensitive; identifier-aware, so `runtime_<X>_extra` or `stats_runtime_<X>` do not match `runtime_<X>`).
 
 Disk-tier copies (`LOAD <X> FROM DISK`, `SAVE <X> TO DISK`) are the exception: those DO copy between configdb and admindb persistent tables, and they remain plain `BEGIN/DELETE/INSERT/COMMIT` with checked rollback. For those, the **empty-source-must-still-clear-destination** rule still applies — a `DELETE FROM mysqlx_users; SAVE MYSQLX USERS TO DISK;` must leave the disk table empty, not preserve the previous rows. PR #5643 fixed an early mysqlx implementation that omitted the unconditional DELETE on the disk path.
 

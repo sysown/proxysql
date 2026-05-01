@@ -286,9 +286,13 @@ bool register_runtime_view(const ProxySQL_PluginRuntimeView &view);
 Declare an admin-side **view** of plugin-module state. The named
 `table_name` lives in `admin_db` (typically `runtime_<something>`) and
 holds no persistent rows — the chassis invokes `refresh(admindb,
-opaque)` before any admin SELECT against it. The refresh callback is
-expected to do (typically) `BEGIN; DELETE FROM <table>; INSERT/REPLACE
-INTO <table> ...; COMMIT;` from the module's own in-memory state.
+opaque)` before any admin `SELECT` that references the table as a
+whole identifier. The match is case-insensitive but identifier-aware:
+a query against `runtime_<table>_extra` (longer suffix) or
+`stats_runtime_<table>` (longer prefix) does NOT trigger the refresh
+for `runtime_<table>`. The refresh callback is expected to do
+(typically) `BEGIN; DELETE FROM <table>; INSERT/REPLACE INTO
+<table> ...; COMMIT;` from the module's own in-memory state.
 
 The chassis deep-copies `table_name` so the plugin need not keep the
 pointed-to string alive after registration. The callback pointer must
@@ -447,7 +451,7 @@ callbacks, not by linking against ProxySQL's SQLite wrapper.
 
 ProxySQL's three-tier configuration model is, in storage terms:
 
-```
+```text
 DISK (config_db)  ↔  MEMORY (admin_db editable tables)  ↔  RUNTIME (in-module state)
 ```
 
