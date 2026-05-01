@@ -2,6 +2,7 @@
 #define __MYSQLX_CONNECTION_H
 
 #include "mysqlx_data_stream.h"
+#include "mysqlx_protocol.h"
 
 #include <cstdint>
 #include <cstring>
@@ -95,6 +96,15 @@ public:
 	bool needs_post_reset_rehandshake() const { return needs_post_reset_rehandshake_; }
 	void set_needs_post_reset_rehandshake(bool v) { needs_post_reset_rehandshake_ = v; }
 
+	// Last classified backend-TLS error class (issue #5698). Set by
+	// step_auth_tls_handshake() / step_auth_capabilities_set_sent()
+	// when the handshake fails so the session can surface the right
+	// code to the client. Defaults to UNKNOWN; transitions to
+	// HANDSHAKE_FAILED-or-better on failure. The session reads this
+	// in handler_connecting_server() at the BACKEND_AUTH_ERROR branch.
+	MysqlxTlsErrorClass get_tls_error_class() const { return tls_error_class_; }
+	void set_tls_error_class(MysqlxTlsErrorClass c) { tls_error_class_ = c; }
+
 	uint64_t get_last_used_time() const { return last_used_time_; }
 	void set_last_used_time(uint64_t t) { last_used_time_ = t; }
 
@@ -171,6 +181,7 @@ private:
 	bool backend_tls_fallback_allowed_ { false };
 	bool tls_active_ { false };
 	bool needs_post_reset_rehandshake_ { false };
+	MysqlxTlsErrorClass tls_error_class_ { MysqlxTlsErrorClass::UNKNOWN };
 	SSL_CTX* backend_ssl_ctx_;
 
 	int step_auth_capabilities_get();
