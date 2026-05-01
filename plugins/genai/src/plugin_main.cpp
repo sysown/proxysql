@@ -412,14 +412,13 @@ bool genai_save_variables_to_admindb(GenAIPluginContext& ctx) {
 }
 
 /**
- * @brief Push `main.mcp_query_rules` rows into the Discovery_Schema
- *        catalog held by the running Query_Tool_Handler.
+ * @brief Push `main.mcp_query_rules` rows into the module's in-memory
+ *        snapshot, then attach them to the Discovery_Schema catalog if
+ *        the MCP listener is running.
  *
- * Mirrors the pre-4.C
- * `ProxySQL_Admin::load_mcp_query_rules_to_runtime` (which was
- * stubbed during 4.C).  Returns false if the MCP listener isn't
- * running (no Query_Tool_Handler), since there's no in-memory cache
- * to populate.
+ * ABI-3 install-from-admin path.  Always succeeds when admindb is up
+ * (the listener-dependent attach is best-effort, controlled by
+ * MCP_Threads_Handler internally).
  */
 bool mcp_load_query_rules_to_runtime(GenAIPluginContext& ctx) {
 	if (ctx.services == nullptr || ctx.services->get_admindb == nullptr || ctx.mcp == nullptr) {
@@ -428,109 +427,40 @@ bool mcp_load_query_rules_to_runtime(GenAIPluginContext& ctx) {
 	SQLite3DB* admindb = ctx.services->get_admindb();
 	if (admindb == nullptr) return false;
 
-	Query_Tool_Handler* qth = ctx.mcp->query_tool_handler;
-	if (qth == nullptr) {
-		fprintf(stderr, "genai plugin: LOAD MCP QUERY RULES TO RUNTIME requires the MCP listener to be running\n");
+	std::string err;
+	if (!ctx.mcp->install_query_rules_from_admin(*admindb, err)) {
+		fprintf(stderr, "genai plugin: install_query_rules_from_admin failed: %s\n",
+		        err.empty() ? "(no error message)" : err.c_str());
 		return false;
 	}
-	Discovery_Schema* catalog = qth->get_catalog();
-	if (catalog == nullptr) return false;
-
-	char* error = nullptr;
-	int cols = 0, affected_rows = 0;
-	SQLite3_result* rs = nullptr;
-	const char* q =
-		"SELECT rule_id, active, username, target_id, schemaname,"
-		" tool_name, match_pattern, negate_match_pattern, re_modifiers, flagIN, flagOUT,"
-		" replace_pattern, timeout_ms, error_msg, OK_msg, log, apply, comment FROM"
-		" main.mcp_query_rules WHERE active=1 ORDER BY rule_id";
-	admindb->execute_statement(q, &error, &cols, &affected_rows, &rs);
-	if (error != nullptr) {
-		fprintf(stderr, "genai plugin: failed to read mcp_query_rules: %s\n", error);
-		free(error);
-		if (rs != nullptr) delete rs;
-		return false;
-	}
-	// load_mcp_query_rules takes ownership of rs.
-	catalog->load_mcp_query_rules(rs);
 	return true;
 }
 
 /**
- * @brief Read the runtime MCP query rules from the Discovery_Schema
- *        catalog and write them back to `main.mcp_query_rules` (or
- *        `runtime_mcp_query_rules` when `runtime=true`).
+ * @brief Dump the module's in-memory MCP query rule snapshot back to
+ *        `main.mcp_query_rules`.
  *
- * Mirrors the pre-4.C
- * `ProxySQL_Admin::save_mcp_query_rules_from_runtime`.  Used by the
- * SAVE MCP QUERY RULES TO MEMORY admin verb.  Hits counter is
- * in-memory only and is NOT persisted (matches pre-4.C behavior).
+ * ABI-3 save-to-admin-table path.  Never reads runtime_mcp_query_rules
+ * (which is now an Admin-side projection of this very snapshot).
  */
-bool mcp_save_query_rules_from_runtime(GenAIPluginContext& ctx, bool runtime) {
+bool mcp_save_query_rules_from_runtime(GenAIPluginContext& ctx, bool /*runtime_unused*/) {
 	if (ctx.services == nullptr || ctx.services->get_admindb == nullptr || ctx.mcp == nullptr) {
 		return false;
 	}
 	SQLite3DB* admindb = ctx.services->get_admindb();
 	if (admindb == nullptr) return false;
-
-	Query_Tool_Handler* qth = ctx.mcp->query_tool_handler;
-	if (qth == nullptr) return false;
-	Discovery_Schema* catalog = qth->get_catalog();
-	if (catalog == nullptr) return false;
-
-	const char* delete_sql = runtime
-		? "DELETE FROM runtime_mcp_query_rules"
-		: "DELETE FROM mcp_query_rules";
-	admindb->execute(delete_sql);
-
-	SQLite3_result* rs = catalog->get_mcp_query_rules();
-	if (rs == nullptr) {
-		// Nothing to save — we already cleared the destination.
-		return true;
-	}
-
-	const char* insert_sql_tpl = runtime
-		? "INSERT INTO runtime_mcp_query_rules"
-		  " (rule_id, active, username, target_id, schemaname, tool_name,"
-		  " match_pattern, negate_match_pattern, re_modifiers, flagIN, flagOUT,"
-		  " replace_pattern, timeout_ms, error_msg, OK_msg, log, apply, comment)"
-		  " VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)"
-		: "INSERT INTO mcp_query_rules"
-		  " (rule_id, active, username, target_id, schemaname, tool_name,"
-		  " match_pattern, negate_match_pattern, re_modifiers, flagIN, flagOUT,"
-		  " replace_pattern, timeout_ms, error_msg, OK_msg, log, apply, comment)"
-		  " VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)";
-
-	auto [prep_rc, stmt] = admindb->prepare_v2(insert_sql_tpl);
-	if (prep_rc != SQLITE_OK) {
-		fprintf(stderr, "genai plugin: prepare insert mcp_query_rules failed (rc=%d)\n", prep_rc);
-		delete rs;
-		return false;
-	}
-	sqlite3_stmt* statement = stmt.get();
-	int rc = 0;
-
-	for (auto* row : rs->rows) {
-		for (int i = 0; i < 18; ++i) {
-			if (row->fields[i] != nullptr) {
-				(*proxy_sqlite3_bind_text)(statement, i + 1, row->fields[i], -1, SQLITE_TRANSIENT);
-			} else {
-				(*proxy_sqlite3_bind_null)(statement, i + 1);
-			}
-		}
-		SAFE_SQLITE3_STEP2(statement);
-		(*proxy_sqlite3_clear_bindings)(statement);
-		(*proxy_sqlite3_reset)(statement);
-	}
-
-	delete rs;
-	return true;
+	return ctx.mcp->save_query_rules_to_admin_table(*admindb);
 }
 
 /**
- * @brief Build and push the target-auth map from admindb into
- *        MCP_Threads_Handler.  Mirrors the pre-4.C
- *        ProxySQL_Admin::init_mcp_variables target-auth-map block.
+ * @brief Refresh the in-memory MCP target / auth profile snapshots from
+ *        the editable admin tables, then rebuild the joined
+ *        target_auth_map consumed by the listener.
+ *
+ * ABI 3 separation-of-duties: this is the install-from-admin path. The
+ * runtime_mcp_<X> projection tables are owned by the chassis and get
+ * refilled lazily by the registered runtime-view callbacks in
+ * plugin_views.cpp; we MUST NOT touch them here.
  */
 bool mcp_load_target_auth_map_from_admindb(GenAIPluginContext& ctx) {
 	if (ctx.services == nullptr || ctx.services->get_admindb == nullptr || ctx.mcp == nullptr) {
@@ -539,33 +469,40 @@ bool mcp_load_target_auth_map_from_admindb(GenAIPluginContext& ctx) {
 	SQLite3DB* admindb = ctx.services->get_admindb();
 	if (admindb == nullptr) return false;
 
-	// Refresh the runtime view tables from main.* (pre-4.C did this in
-	// ProxySQL_Admin::init_mcp_variables before reading runtime_*).
-	admindb->execute("DELETE FROM runtime_mcp_auth_profiles");
-	admindb->execute("INSERT OR REPLACE INTO runtime_mcp_auth_profiles SELECT * FROM main.mcp_auth_profiles");
-	admindb->execute("DELETE FROM runtime_mcp_target_profiles");
-	admindb->execute("INSERT OR REPLACE INTO runtime_mcp_target_profiles SELECT * FROM main.mcp_target_profiles");
-
-	char* error = nullptr;
-	int cols = 0, affected_rows = 0;
-	SQLite3_result* rs = nullptr;
-	const char* q =
-		"SELECT t.target_id, t.protocol, t.hostgroup_id, t.auth_profile_id,"
-		" t.max_rows, t.timeout_ms, t.allow_explain, t.allow_discovery, t.description,"
-		" a.db_username, a.db_password, a.default_schema"
-		" FROM runtime_mcp_target_profiles t"
-		" JOIN runtime_mcp_auth_profiles a ON a.auth_profile_id=t.auth_profile_id"
-		" WHERE t.active=1"
-		" ORDER BY t.target_id";
-	admindb->execute_statement(q, &error, &cols, &affected_rows, &rs);
-	if (error != nullptr) {
-		fprintf(stderr, "genai plugin: failed to load MCP target auth map: %s\n", error);
-		free(error);
-		if (rs != nullptr) delete rs;
+	std::string err;
+	if (!ctx.mcp->install_auth_profiles_from_admin(*admindb, err)) {
+		fprintf(stderr, "genai plugin: install_auth_profiles_from_admin failed: %s\n",
+		        err.empty() ? "(no error message)" : err.c_str());
 		return false;
 	}
-	// load_target_auth_map takes ownership of rs (delete or store).
-	ctx.mcp->load_target_auth_map(rs);
+	err.clear();
+	if (!ctx.mcp->install_target_profiles_from_admin(*admindb, err)) {
+		fprintf(stderr, "genai plugin: install_target_profiles_from_admin failed: %s\n",
+		        err.empty() ? "(no error message)" : err.c_str());
+		return false;
+	}
+	return true;
+}
+
+/**
+ * @brief Persist the MCP_Threads_Handler profile snapshots back to
+ *        main.mcp_auth_profiles + main.mcp_target_profiles.  ABI-3
+ *        SAVE side; never touches runtime_mcp_*.
+ */
+bool mcp_save_target_auth_map_to_admindb(GenAIPluginContext& ctx) {
+	if (ctx.services == nullptr || ctx.services->get_admindb == nullptr || ctx.mcp == nullptr) {
+		return false;
+	}
+	SQLite3DB* admindb = ctx.services->get_admindb();
+	if (admindb == nullptr) return false;
+	if (!ctx.mcp->save_auth_profiles_to_admin_table(*admindb)) {
+		fprintf(stderr, "genai plugin: save_auth_profiles_to_admin_table failed\n");
+		return false;
+	}
+	if (!ctx.mcp->save_target_profiles_to_admin_table(*admindb)) {
+		fprintf(stderr, "genai plugin: save_target_profiles_to_admin_table failed\n");
+		return false;
+	}
 	return true;
 }
 

@@ -121,36 +121,46 @@ bool genai_save_variables_to_admindb(GenAIPluginContext& ctx);
 bool mcp_save_variables_to_admindb(GenAIPluginContext& ctx);
 
 /**
- * @brief Refresh the runtime mcp_auth_profiles / mcp_target_profiles
- *        tables from `main.*`, then rebuild the MCP target_auth_map.
+ * @brief Install main.mcp_auth_profiles + main.mcp_target_profiles into
+ *        the MCP_Threads_Handler in-memory snapshot, then rebuild the
+ *        joined target_auth_map consumed by the listener.
  *
  * Defined in plugin_main.cpp.  Called from `genai_start()` and the
- * `LOAD MCP PROFILES TO RUNTIME` admin command.
+ * `LOAD MCP PROFILES TO RUNTIME` admin command.  Per the ABI-3
+ * separation-of-duties contract this MUST NOT touch runtime_mcp_*
+ * (those are admin-side projections owned by the chassis).
  */
 bool mcp_load_target_auth_map_from_admindb(GenAIPluginContext& ctx);
 
 /**
- * @brief Push active rows from `main.mcp_query_rules` into the
- *        Discovery_Schema catalog owned by the running
- *        `Query_Tool_Handler`.
+ * @brief Dump the MCP_Threads_Handler in-memory profile snapshots back
+ *        to main.mcp_auth_profiles + main.mcp_target_profiles.
  *
  * Defined in plugin_main.cpp.  Called by the
- * `LOAD MCP QUERY RULES TO RUNTIME` admin command.  Mirrors the
- * pre-4.C `ProxySQL_Admin::load_mcp_query_rules_to_runtime`.
+ * `SAVE MCP PROFILES TO MEMORY` admin command (ABI-3 SAVE side of the
+ * triplet).  Never reads runtime_mcp_*.
+ */
+bool mcp_save_target_auth_map_to_admindb(GenAIPluginContext& ctx);
+
+/**
+ * @brief Install main.mcp_query_rules into the MCP_Threads_Handler
+ *        in-memory snapshot.  When the MCP listener is running, the
+ *        rows are also pushed into Discovery_Schema for the request
+ *        hot-path; otherwise the snapshot stays for SAVE / projection.
  *
- * @return true on success; false if the MCP listener is not running
- *         (no Query_Tool_Handler attached) or the SELECT errored out.
+ * Defined in plugin_main.cpp.  Called by the
+ * `LOAD MCP QUERY RULES TO RUNTIME` admin command.
  */
 bool mcp_load_query_rules_to_runtime(GenAIPluginContext& ctx);
 
 /**
- * @brief Read the runtime Discovery_Schema MCP query rules cache and
- *        REPLACE the corresponding rows in `main.mcp_query_rules`
- *        (or `runtime_mcp_query_rules` if `runtime=true`).
+ * @brief Dump the MCP_Threads_Handler in-memory query-rule snapshot
+ *        back to main.mcp_query_rules.
  *
  * Defined in plugin_main.cpp.  Called by the
- * `SAVE MCP QUERY RULES TO MEMORY` admin command.  Mirrors the
- * pre-4.C `ProxySQL_Admin::save_mcp_query_rules_from_runtime`.
+ * `SAVE MCP QUERY RULES TO MEMORY` admin command.  The legacy second
+ * parameter is unused (kept only because callers haven't been
+ * regenerated); pass false.
  */
 bool mcp_save_query_rules_from_runtime(GenAIPluginContext& ctx, bool runtime);
 

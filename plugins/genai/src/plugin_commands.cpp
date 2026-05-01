@@ -180,10 +180,11 @@ ProxySQL_PluginCommandResult save_mcp_query_rules_to_memory(
 /**
  * `LOAD MCP PROFILES TO RUNTIME` (and aliases).
  *
- * Refreshes runtime_mcp_auth_profiles / runtime_mcp_target_profiles
- * from main.* and rebuilds the in-memory target_auth_map inside
- * MCP_Threads_Handler.  Also picks up mcp_query_endpoint auth changes
- * because they share the same profile rows.
+ * Installs main.mcp_auth_profiles + main.mcp_target_profiles into
+ * MCP_Threads_Handler's in-memory snapshot and rebuilds the joined
+ * target_auth_map.  Per ABI-3, runtime_mcp_<X> is the chassis-owned
+ * projection — refreshed lazily on SELECT — so this path no longer
+ * touches it.
  */
 ProxySQL_PluginCommandResult load_mcp_profiles_to_runtime(
 	const ProxySQL_PluginCommandContext& cmd_ctx,
@@ -195,6 +196,25 @@ ProxySQL_PluginCommandResult load_mcp_profiles_to_runtime(
 		return err_result("LOAD MCP PROFILES TO RUNTIME: failed reading mcp_*_profiles");
 	}
 	return ok_result("MCP profiles loaded to runtime");
+}
+
+/**
+ * `SAVE MCP PROFILES TO MEMORY` / `... FROM RUNTIME` (and aliases).
+ *
+ * Dumps MCP_Threads_Handler's in-memory profile snapshots back to
+ * main.mcp_auth_profiles + main.mcp_target_profiles.  ABI-3 SAVE
+ * side of the triplet — never reads runtime_mcp_*.
+ */
+ProxySQL_PluginCommandResult save_mcp_profiles_from_runtime(
+	const ProxySQL_PluginCommandContext& cmd_ctx,
+	const char* sql
+) {
+	(void)cmd_ctx; (void)sql;
+	GenAIPluginContext& ctx = genai_context();
+	if (!mcp_save_target_auth_map_to_admindb(ctx)) {
+		return err_result("SAVE MCP PROFILES TO MEMORY: failed writing mcp_*_profiles");
+	}
+	return ok_result("MCP profiles saved from runtime to main");
 }
 
 } // namespace
@@ -245,6 +265,12 @@ void genai_register_admin_commands(ProxySQL_PluginServices* services) {
 		"LOAD MCP PROFILES FROM MEMORY",
 		"LOAD MCP PROFILES FROM MEM",
 		"LOAD MCP PROFILES TO RUN",
+	});
+
+	reg("SAVE MCP PROFILES TO MEMORY", &save_mcp_profiles_from_runtime, {
+		"SAVE MCP PROFILES TO MEM",
+		"SAVE MCP PROFILES FROM RUNTIME",
+		"SAVE MCP PROFILES FROM RUN",
 	});
 
 	reg("LOAD MCP QUERY RULES TO RUNTIME", &load_mcp_query_rules_to_runtime, {
