@@ -15,6 +15,7 @@
 #include <unistd.h>
 #include <openssl/rand.h>
 #include <openssl/crypto.h>
+#include <openssl/err.h>
 
 #include <zstd.h>
 #include <lz4.h>
@@ -1577,7 +1578,11 @@ void MysqlxSession::handler_tls_accept_init() {
 	if (!client_ds_.ssl_init_done()) {
 		SSL_CTX* ctx = thread_ptr_ ? thread_ptr_->get_ssl_ctx() : nullptr;
 		if (!ctx) {
-			send_error(3150, "TLS is not configured on server");
+			// NO_SSL_CTX class — distinct from "handshake failed"
+			// since this is a configuration error, not a wire-level
+			// issue. Maps to 3150 in the frontend codespace.
+			send_error(mysqlx_frontend_tls_error_code(MysqlxTlsErrorClass::NO_SSL_CTX),
+			           mysqlx_frontend_tls_error_message(MysqlxTlsErrorClass::NO_SSL_CTX));
 			healthy = false;
 			return;
 		}
@@ -1585,14 +1590,30 @@ void MysqlxSession::handler_tls_accept_init() {
 	}
 	if (!client_ds_.do_ssl_handshake()) {
 		if (client_ds_.ssl_handshake_failed()) {
+			// Issue #5698: classify the frontend handshake failure.
+			// Threat model is asymmetric — the client may BE the
+			// attacker, so we MUST NOT leak cert-chain detail in the
+			// response. mysqlx_frontend_tls_error_message collapses
+			// most classes onto "TLS handshake failed" for that reason;
+			// only PROTOCOL_MISMATCH and NO_SSL_CTX get a distinct
+			// code. We still log the OpenSSL queue strings to stderr
+			// for the operator's benefit (server-side info).
+			MysqlxTlsErrorClass cls = mysqlx_classify_tls_error(
+				client_ds_.get_ssl(), /*peek_err_queue=*/true);
 			char err_buf[256];
 			unsigned long ssl_err = ERR_get_error();
 			if (ssl_err != 0) {
 				ERR_error_string_n(ssl_err, err_buf, sizeof(err_buf));
+				fprintf(stderr,
+					"mysqlx: frontend TLS handshake failed (class=%d): %s\n",
+					static_cast<int>(cls), err_buf);
 			} else {
-				snprintf(err_buf, sizeof(err_buf), "Unknown TLS error");
+				fprintf(stderr,
+					"mysqlx: frontend TLS handshake failed (class=%d, no OpenSSL detail)\n",
+					static_cast<int>(cls));
 			}
-			send_error(3151, "TLS handshake failed");
+			send_error(mysqlx_frontend_tls_error_code(cls),
+			           mysqlx_frontend_tls_error_message(cls));
 			healthy = false;
 			return;
 		}
@@ -1800,7 +1821,21 @@ void MysqlxSession::handler_connecting_server() {
 		if (auth_rc == -1) {
 			if (backend_conn_->get_auth_state() == MysqlxConnection::BACKEND_AUTH_TLS_HANDSHAKE ||
 			    backend_conn_->backend_ds().ssl_handshake_failed()) {
-				send_error(3152, "Backend TLS handshake failed");
+				// Issue #5698: emit a classified error code/message
+				// based on what the OpenSSL error queue / cert chain
+				// said. step_auth_tls_handshake() recorded the class
+				// on the connection at the failure site (the OpenSSL
+				// queue is thread-local FIFO and must be drained
+				// while fresh, so we couldn't defer the classification
+				// to here). Falls back to HANDSHAKE_FAILED if the
+				// connection didn't classify (e.g. failure happened in
+				// CapabilitiesSet rather than the TLS handshake itself).
+				MysqlxTlsErrorClass cls = backend_conn_->get_tls_error_class();
+				if (cls == MysqlxTlsErrorClass::UNKNOWN) {
+					cls = MysqlxTlsErrorClass::HANDSHAKE_FAILED;
+				}
+				send_error(mysqlx_backend_tls_error_code(cls),
+				           mysqlx_backend_tls_error_message(cls));
 			} else {
 				send_error(1045, "Backend authentication failed");
 			}

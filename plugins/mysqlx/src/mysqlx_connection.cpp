@@ -409,6 +409,11 @@ int MysqlxConnection::step_auth_capabilities_set_sent() {
 
 int MysqlxConnection::step_auth_tls_handshake() {
 	if (!backend_ds_.ssl_init_done()) {
+		// SSL_CTX wasn't supplied / init_ssl_connect was never called.
+		// Distinct enough class to give operators a hint at config error
+		// vs. wire-level handshake failure. Record before transitioning
+		// to BACKEND_AUTH_ERROR so the session can surface the code.
+		tls_error_class_ = MysqlxTlsErrorClass::NO_SSL_CTX;
 		auth_state_ = BACKEND_AUTH_ERROR;
 		return -1;
 	}
@@ -427,6 +432,14 @@ int MysqlxConnection::step_auth_tls_handshake() {
 	}
 	backend_ds_.flush_ssl_write_buf();
 	if (backend_ds_.ssl_handshake_failed()) {
+		// Issue #5698: classify before transitioning. The classifier
+		// drains the OpenSSL error queue for protocol-mismatch reasons,
+		// so it must run while the queue is fresh — between the
+		// SSL_do_handshake failure and any other OpenSSL call. Stored
+		// on the connection so the session can fetch it from the
+		// BACKEND_AUTH_ERROR branch in handler_connecting_server.
+		tls_error_class_ = mysqlx_classify_tls_error(
+			backend_ds_.get_ssl(), /*peek_err_queue=*/true);
 		auth_state_ = BACKEND_AUTH_ERROR;
 		return -1;
 	}
