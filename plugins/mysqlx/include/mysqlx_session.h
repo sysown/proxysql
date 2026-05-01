@@ -218,7 +218,18 @@ private:
 	void send_capabilities();
 
 	uint8_t extract_msg_type_from_frame(const MysqlxFrame& frame);
-	bool is_terminal_for_state(uint8_t msg_type) const;
+	// Per-state validation contract for backend frames. is_frame_allowed
+	// returns true iff a frame of msg_type is acceptable in the current
+	// response_state_ (NOTICE and ERROR are universal). is_terminal_frame
+	// returns true iff msg_type closes the current response sequence so
+	// the dispatch loop can transition back to RESP_IDLE.
+	//
+	// Both are pure queries — no mutation of response_state_ or session
+	// state. Replaces the older is_terminal_for_state() which conflated
+	// "valid mid-result frame" and "terminal frame" by deferring to a
+	// generic terminal table for any state outside the explicit cases.
+	bool is_frame_allowed(uint8_t msg_type) const;
+	bool is_terminal_frame(uint8_t msg_type) const;
 
 	// Resolve identity_->default_route to concrete target_hostgroup_,
 	// target_address_, target_port_ via the thread's MysqlxConfigStore.

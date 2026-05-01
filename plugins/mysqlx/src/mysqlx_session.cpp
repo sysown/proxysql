@@ -914,27 +914,33 @@ void MysqlxSession::forward_to_backend() {
 	status_ = WAITING_SERVER_XMSG;
 }
 
-namespace {
-
-bool is_terminal_server_frame_generic(uint8_t msg_type) {
-	switch (msg_type) {
-		case Mysqlx::ServerMessages_Type_OK:
-		case Mysqlx::ServerMessages_Type_ERROR:
-		case Mysqlx::ServerMessages_Type_SQL_STMT_EXECUTE_OK:
-		case Mysqlx::ServerMessages_Type_RESULTSET_FETCH_DONE:
-		case Mysqlx::ServerMessages_Type_RESULTSET_FETCH_SUSPENDED:
-		case Mysqlx::ServerMessages_Type_RESULTSET_FETCH_DONE_MORE_RESULTSETS:
-		case Mysqlx::ServerMessages_Type_RESULTSET_FETCH_DONE_MORE_OUT_PARAMS:
-			return true;
-		default:
-			return false;
-	}
+// Permissive in this commit: returns true for every msg_type the previous
+// code path implicitly accepted (which was "everything", since the old
+// validation loop never rejected a frame — it only checked terminality
+// and forwarded otherwise). The explicit allowed-frame contract is
+// tightened in a follow-up commit; here we only split the predicate so
+// the validation hook has a separate seam from the terminality probe.
+//
+// NOTICE and ERROR are universal in every state. The remaining frames
+// are matched against a per-state allow-set; states with no explicit
+// case (RESP_IDLE today) currently fall through to the permissive
+// default. The next commit narrows this; today the function returns
+// true so behaviour is byte-for-byte identical to the prior path.
+bool MysqlxSession::is_frame_allowed(uint8_t /*msg_type*/) const {
+	// Permissive pass-through for the refactor commit; behaviour is
+	// preserved byte-for-byte. Subsequent commits replace this body
+	// with the per-state allowed-frame matrix.
+	return true;
 }
 
-}
-
-bool MysqlxSession::is_terminal_for_state(uint8_t msg_type) const {
+bool MysqlxSession::is_terminal_frame(uint8_t msg_type) const {
+	// ERROR is terminal in every state — once the backend reports a
+	// per-message error the response sequence is over regardless of
+	// what state we were in. NOTICE never terminates: the X protocol
+	// allows backends to interleave Notice frames with rows / EOF
+	// markers, and they're explicitly non-terminal in the spec.
 	if (msg_type == Mysqlx::ServerMessages_Type_ERROR) return true;
+	if (msg_type == Mysqlx::ServerMessages_Type_NOTICE) return false;
 
 	switch (response_state_) {
 		case RESP_WAITING_STMT_EXECUTE:
@@ -953,9 +959,15 @@ bool MysqlxSession::is_terminal_for_state(uint8_t msg_type) const {
 			return msg_type == Mysqlx::ServerMessages_Type_OK;
 		case RESP_WAITING_SESS_RESET:
 			return msg_type == Mysqlx::ServerMessages_Type_OK;
-		default:
-			return is_terminal_server_frame_generic(msg_type);
+		case RESP_IDLE:
+			// No outstanding response — a frame here is unsolicited and
+			// will be treated as a protocol violation once the validation
+			// hook is wired (next commit). For terminality alone, return
+			// false so the dispatch loop's "got_terminal" tracking does
+			// nothing surprising while RESP_IDLE.
+			return false;
 	}
+	return false;
 }
 
 void MysqlxSession::handler_waiting_server_msg() {
@@ -1007,8 +1019,7 @@ void MysqlxSession::handler_waiting_server_msg() {
 		}
 		server_ds().pop_frame();
 
-		if (msg_type != Mysqlx::ServerMessages_Type_NOTICE &&
-		    is_terminal_for_state(msg_type)) {
+		if (is_terminal_frame(msg_type)) {
 			got_terminal = true;
 		}
 	}
