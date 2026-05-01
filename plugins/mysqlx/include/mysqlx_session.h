@@ -225,6 +225,12 @@ private:
 	int target_hostgroup_;
 	std::string target_address_;
 	int target_port_;
+	// Per-endpoint TLS posture, copied from the resolved
+	// MysqlxBackendEndpoint at resolve_backend_target time. Drives
+	// backend TLS independently of frontend TLS state — operator
+	// sets mysqlx_backend_endpoints.use_ssl=1 to force backend TLS
+	// even when the client connected in plaintext.
+	bool target_use_ssl_;
 	MysqlxIdentityLookup identity_lookup_;
 	std::optional<MysqlxResolvedIdentity> identity_;
 	uint64_t start_time_;

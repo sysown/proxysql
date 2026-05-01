@@ -95,6 +95,7 @@ MysqlxSession::MysqlxSession()
 	, healthy(true)
 	, target_hostgroup_(0)
 	, target_port_(0)
+	, target_use_ssl_(false)
 	, start_time_(0)
 	, last_active_time_(0)
 	, response_state_(RESP_IDLE)
@@ -142,6 +143,7 @@ void MysqlxSession::init(int fd, Mysqlx_Thread* thread_ptr) {
 	target_hostgroup_ = 0;
 	target_address_.clear();
 	target_port_ = 0;
+	target_use_ssl_ = false;
 	identity_.reset();
 	start_time_ = monotonic_time_ms();
 	last_active_time_ = start_time_;
@@ -163,6 +165,7 @@ void MysqlxSession::reset() {
 	target_hostgroup_ = 0;
 	target_address_.clear();
 	target_port_ = 0;
+	target_use_ssl_ = false;
 	identity_.reset();
 	compression_algo_ = MYSQLX_COMPR_NONE;
 	compression_combine_mixed_messages_ = false;
@@ -1097,6 +1100,7 @@ int MysqlxSession::resolve_backend_target() {
 	target_hostgroup_ = hg;
 	target_address_   = ep.hostname;
 	target_port_      = ep.mysqlx_port;
+	target_use_ssl_   = ep.use_ssl;
 	return 0;
 }
 
@@ -1179,7 +1183,18 @@ void MysqlxSession::handler_connecting_server() {
 		backend_conn_->set_backend_user(backend_user.c_str());
 		backend_conn_->set_backend_schema(schema_.c_str());
 
-		if (client_ds_.is_encrypted()) {
+		// Backend TLS is enabled when EITHER the operator forced it via
+		// the endpoint's use_ssl=1 flag (mysqlx_backend_endpoints.
+		// use_ssl, captured into target_use_ssl_ at
+		// resolve_backend_target time) OR the client connected to the
+		// proxy over TLS. The endpoint-flag path lets operators mandate
+		// proxy↔backend encryption even for plaintext clients on a
+		// trusted private network — previously the flag was loaded into
+		// MysqlxBackendEndpoint but silently dropped here, so plaintext
+		// clients always produced plaintext backend traffic regardless
+		// of the operator's setting.
+		const bool require_backend_tls = target_use_ssl_ || client_ds_.is_encrypted();
+		if (require_backend_tls) {
 			if (thread_ptr_ && thread_ptr_->get_ssl_ctx()) {
 				backend_conn_->set_backend_tls_required(true);
 				backend_conn_->set_ssl_ctx(thread_ptr_->get_ssl_ctx());
