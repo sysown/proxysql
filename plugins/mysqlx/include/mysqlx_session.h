@@ -74,19 +74,24 @@ enum MysqlxResponseState {
 	RESP_WAITING_SESS_RESET
 };
 
-// Per-session TLS posture. Today the runtime only distinguishes
-// "TLS termination is allowed" (TLS_TERMINATE) from "this session is
-// not configured for TLS at all" (TLS_OFF). The earlier draft also
-// carried a TLS_PASSTHROUGH value with two corresponding branches in
-// session.cpp that pretended to enable an end-to-end pipe; that path
-// was never actually wired up (no call to set_tls_mode() ever set
-// PASSTHROUGH, and the dead branches did not implement an opaque
-// pipe — they just skipped TLS termination and resumed clear-text
-// X-Protocol parsing, which would have desynced any real client).
-// Removing the value rather than leaving a misleading enum.
+// Per-session TLS posture. Today the runtime distinguishes:
+//   - TLS_OFF: this session is not configured for TLS at all.
+//   - TLS_TERMINATE: the proxy terminates TLS itself (the default).
+//   - TLS_PASSTHROUGH: after the X-Protocol CapabilitiesSet(tls=true)
+//     handshake, the proxy splices raw bytes between the client and
+//     the backend without decrypting them. Driven by the per-route
+//     `tls_mode='passthrough'` column on `mysqlx_routes` (issue #5692).
+//     The proxy stops parsing X-Protocol frames once the session
+//     enters this mode — backend connection is non-reusable, no per-
+//     query routing, no multiplexing.
+//
+// Historical note: an earlier prototype carried a TLS_PASSTHROUGH value
+// without an actual implementation; that branch was deleted in the
+// asymmetric-TLS series and is now reintroduced as a real feature.
 enum MysqlxTlsMode {
 	TLS_OFF = 0,
-	TLS_TERMINATE
+	TLS_TERMINATE,
+	TLS_PASSTHROUGH
 };
 
 // X Protocol compression algorithm negotiated via Mysqlx.Connection.Capabilities.
@@ -123,13 +128,29 @@ public:
 		X_TLS_CONNECT_DONE,
 		X_SESSION_CLOSING,
 		X_SESSION_CLOSED,
-		X_SESSION_RESET_WAITING
+		X_SESSION_RESET_WAITING,
+		// Raw-byte splice between client and backend. Reached after a
+		// CapabilitiesSet(tls=true) on a route configured with
+		// tls_mode='passthrough'; once entered, the session never
+		// returns to X-Protocol parsing (the bytes past this point are
+		// the client's TLS handshake + application data, opaque to the
+		// proxy). The session is permanently bound to one backend
+		// connection (no pooling, no multiplexing).
+		X_PASSTHROUGH_FORWARD
 	};
 
 	MysqlxSession();
 	~MysqlxSession();
 
 	void init(int fd, Mysqlx_Thread* thread_ptr);
+	// Listener-aware overload: records the logical route name the
+	// client connected through so per-route policies (e.g.
+	// tls_mode='passthrough') can be looked up before any X-Protocol
+	// auth message has arrived. The base init(fd, thread_ptr)
+	// overload calls this with an empty route, preserving prior
+	// behaviour for callers that have no listener context (notably
+	// the unit-test harness, which constructs sessions directly).
+	void init(int fd, Mysqlx_Thread* thread_ptr, const std::string& listener_route);
 	void reset();
 
 	int handler();
@@ -193,6 +214,23 @@ public:
 	void inject_identity_for_test(const MysqlxResolvedIdentity& id) { identity_ = id; }
 	void inject_identity_for_test(const std::string& username);
 	int  resolve_backend_target_for_test() { return resolve_backend_target(); }
+	// Drives the session straight into X_PASSTHROUGH_FORWARD with a
+	// caller-supplied backend fd, bypassing CapabilitiesSet / auth /
+	// resolve_backend_target. The fixture wraps the fd in a stub
+	// MysqlxConnection (owned by the session — destructor frees it)
+	// so the standard server_ds()/return_backend_to_pool plumbing is
+	// reusable. Must NOT exist in production (test/forgery hazard);
+	// gated behind MYSQLX_TEST_BUILD same as inject_identity_for_test.
+	void enter_passthrough_for_test(int backend_fd);
+	void set_listener_route_name_for_test(const std::string& route_name) {
+		listener_route_name_ = route_name;
+	}
+	const std::string& listener_route_name_for_test() const { return listener_route_name_; }
+	// Drives one pass of the splice loop without going through the
+	// outer handler() (which would also try to read X-Protocol frames
+	// from client_ds_ before dispatching). Used by the passthrough
+	// unit tests to assert byte forwarding in isolation.
+	void run_passthrough_pump_for_test() { handler_passthrough_forward(); }
 #endif /* MYSQLX_TEST_BUILD */
 	int  target_hostgroup_for_test() const { return target_hostgroup_; }
 	const std::string& target_address_for_test() const { return target_address_; }
@@ -227,6 +265,14 @@ private:
 	void handler_session_reset_waiting();
 
 	void handler_tls_accept_init();
+	// Raw-byte splice loop. Pumps available bytes both directions
+	// (client -> backend and backend -> client) using read(2)/write(2).
+	// EAGAIN/EWOULDBLOCK is the normal "no more data right now" exit;
+	// any other read/write error or 0-byte read (peer EOF) marks the
+	// session unhealthy and transitions to X_SESSION_CLOSING. No
+	// X-Protocol parsing — once this state is reached the bytes are
+	// opaque (TLS handshake + application data).
+	void handler_passthrough_forward();
 
 	void handle_auth_mysql41(const std::string& auth_data);
 	void handle_auth_plain(const std::string& auth_data);
@@ -315,6 +361,14 @@ private:
 	// to dereference identity_ on every frame. Empty until resolve
 	// succeeds; cleared by reset().
 	std::string route_name_;
+	// Logical route name the client connected through, captured at
+	// accept time from the listener's parallel route_name vector.
+	// Drives per-route policies that need to fire before any
+	// X-Protocol message has arrived (tls_mode='passthrough' is the
+	// only one today). Empty for sessions constructed without a
+	// listener (e.g. unit tests); the lookup paths fall back on the
+	// global default in that case.
+	std::string listener_route_name_;
 	MysqlxIdentityLookup identity_lookup_;
 	std::optional<MysqlxResolvedIdentity> identity_;
 	uint64_t start_time_;

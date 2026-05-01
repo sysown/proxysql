@@ -778,9 +778,235 @@ static void test_session_timestamps() {
 	close(fds[1]);
 }
 
+#include <fcntl.h>
+
+// Passthrough splice tests (issue #5692). These exercise the
+// X_PASSTHROUGH_FORWARD state in isolation: the test sets up a
+// session with a socketpair as the "client" and a second socketpair
+// as the "backend", drives the session into the splice state via the
+// MYSQLX_TEST_BUILD-only enter_passthrough_for_test() helper, then
+// asserts that bytes written to one socket emerge unchanged from the
+// other after a pump.
+
+static void set_nonblocking_fd(int fd) {
+	int flags = fcntl(fd, F_GETFL, 0);
+	fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
+static void test_passthrough_listener_route_propagation() {
+	diag(">>> %s", __func__);
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+	set_nonblocking_fd(fds[0]);
+	MysqlxSession sess;
+	// init() with a logical route name records it before any
+	// X-Protocol traffic is exchanged.
+	sess.init(fds[0], nullptr, "compliance_route");
+	ok(sess.listener_route_name_for_test() == "compliance_route",
+	   "listener_route_name_ captured at init time");
+
+	// reset() must clear the route name so a recycled session does
+	// not leak the prior route's identity.
+	sess.reset();
+	ok(sess.listener_route_name_for_test().empty(),
+	   "reset() clears listener_route_name_");
+
+	close(fds[0]);
+	close(fds[1]);
+}
+
+static void test_passthrough_forward_client_to_backend() {
+	diag(">>> %s", __func__);
+	// Two socketpairs: one for the client side (sess <-> client_peer),
+	// one for the backend side (sess <-> backend_peer). Both sess fds
+	// must be non-blocking so the splice's read(2)/write(2) pump exits
+	// on EAGAIN instead of deadlocking on the empty side.
+	int client_fds[2], backend_fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
+	socketpair(AF_UNIX, SOCK_STREAM, 0, backend_fds);
+	set_nonblocking_fd(client_fds[0]);
+	set_nonblocking_fd(backend_fds[0]);
+
+	MysqlxSession sess;
+	sess.init(client_fds[0], nullptr);
+	sess.enter_passthrough_for_test(backend_fds[0]);
+	ok(sess.get_status() == MysqlxSession::X_PASSTHROUGH_FORWARD,
+	   "session enters X_PASSTHROUGH_FORWARD via test helper");
+
+	// Push opaque bytes from the "client" peer toward the backend.
+	const char payload[] = "Hello backend, this is a TLS ClientHello surrogate.";
+	const ssize_t plen = static_cast<ssize_t>(sizeof(payload));
+	ssize_t written = write(client_fds[1], payload, plen);
+	ok(written == plen, "client peer wrote payload bytes");
+	usleep(5000);
+
+	// Drive one pump; bytes available on client_fds[0] should be
+	// read by the splice loop and forwarded to backend_fds[0].
+	sess.run_passthrough_pump_for_test();
+
+	char recv_buf[256] = {0};
+	ssize_t r = read(backend_fds[1], recv_buf, sizeof(recv_buf));
+	ok(r == plen, "backend peer received exactly the bytes the client sent");
+	ok(memcmp(recv_buf, payload, plen) == 0,
+	   "backend payload is byte-for-byte identical to the client payload");
+	ok(sess.is_healthy(), "session remains healthy after a successful pump");
+
+	close(client_fds[0]); close(client_fds[1]);
+	close(backend_fds[0]); close(backend_fds[1]);
+}
+
+static void test_passthrough_forward_backend_to_client() {
+	diag(">>> %s", __func__);
+	int client_fds[2], backend_fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
+	socketpair(AF_UNIX, SOCK_STREAM, 0, backend_fds);
+	set_nonblocking_fd(client_fds[0]);
+	set_nonblocking_fd(backend_fds[0]);
+
+	MysqlxSession sess;
+	sess.init(client_fds[0], nullptr);
+	sess.enter_passthrough_for_test(backend_fds[0]);
+
+	const char payload[] = "Server response: encrypted TLS record stream.";
+	const ssize_t plen = static_cast<ssize_t>(sizeof(payload));
+	ssize_t written = write(backend_fds[1], payload, plen);
+	ok(written == plen, "backend peer wrote response bytes");
+	usleep(5000);
+
+	sess.run_passthrough_pump_for_test();
+
+	char recv_buf[256] = {0};
+	ssize_t r = read(client_fds[1], recv_buf, sizeof(recv_buf));
+	ok(r == plen, "client peer received exactly the bytes the backend sent");
+	ok(memcmp(recv_buf, payload, plen) == 0,
+	   "client payload is byte-for-byte identical to the backend payload");
+
+	close(client_fds[0]); close(client_fds[1]);
+	close(backend_fds[0]); close(backend_fds[1]);
+}
+
+static void test_passthrough_close_on_client_eof() {
+	diag(">>> %s", __func__);
+	int client_fds[2], backend_fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
+	socketpair(AF_UNIX, SOCK_STREAM, 0, backend_fds);
+	set_nonblocking_fd(client_fds[0]);
+	set_nonblocking_fd(backend_fds[0]);
+
+	MysqlxSession sess;
+	sess.init(client_fds[0], nullptr);
+	sess.enter_passthrough_for_test(backend_fds[0]);
+
+	// Half-close the client peer so the next read on client_fds[0]
+	// returns 0 — the splice loop must transition to closing.
+	close(client_fds[1]);
+	usleep(5000);
+
+	sess.run_passthrough_pump_for_test();
+
+	ok(!sess.is_healthy(),
+	   "passthrough session marked unhealthy after client EOF");
+	ok(sess.get_status() == MysqlxSession::X_SESSION_CLOSING,
+	   "passthrough session transitions to X_SESSION_CLOSING after client EOF");
+
+	close(client_fds[0]);
+	close(backend_fds[0]); close(backend_fds[1]);
+}
+
+static void test_passthrough_close_on_backend_eof() {
+	diag(">>> %s", __func__);
+	int client_fds[2], backend_fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
+	socketpair(AF_UNIX, SOCK_STREAM, 0, backend_fds);
+	set_nonblocking_fd(client_fds[0]);
+	set_nonblocking_fd(backend_fds[0]);
+
+	MysqlxSession sess;
+	sess.init(client_fds[0], nullptr);
+	sess.enter_passthrough_for_test(backend_fds[0]);
+
+	// Backend disconnects (e.g. after sending close_notify).
+	close(backend_fds[1]);
+	usleep(5000);
+
+	sess.run_passthrough_pump_for_test();
+
+	ok(!sess.is_healthy(),
+	   "passthrough session marked unhealthy after backend EOF");
+	ok(sess.get_status() == MysqlxSession::X_SESSION_CLOSING,
+	   "passthrough session transitions to X_SESSION_CLOSING after backend EOF");
+
+	close(client_fds[0]); close(client_fds[1]);
+	close(backend_fds[0]);
+}
+
+static void test_passthrough_disables_backend_reuse() {
+	diag(">>> %s", __func__);
+	int client_fds[2], backend_fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
+	socketpair(AF_UNIX, SOCK_STREAM, 0, backend_fds);
+	set_nonblocking_fd(client_fds[0]);
+	set_nonblocking_fd(backend_fds[0]);
+
+	MysqlxSession sess;
+	sess.init(client_fds[0], nullptr);
+	sess.enter_passthrough_for_test(backend_fds[0]);
+
+	ok(sess.backend_conn() != nullptr,
+	   "passthrough session has a backend connection attached");
+	ok(!sess.backend_conn()->is_reusable(),
+	   "passthrough backend connection is non-reusable (never returns to pool)");
+	ok(sess.get_tls_mode() == TLS_PASSTHROUGH,
+	   "session reports TLS_PASSTHROUGH mode while in passthrough");
+
+	close(client_fds[0]); close(client_fds[1]);
+	close(backend_fds[0]); close(backend_fds[1]);
+}
+
+static void test_passthrough_handler_dispatch_skips_xprotocol() {
+	diag(">>> %s", __func__);
+	int client_fds[2], backend_fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
+	socketpair(AF_UNIX, SOCK_STREAM, 0, backend_fds);
+	set_nonblocking_fd(client_fds[0]);
+	set_nonblocking_fd(backend_fds[0]);
+
+	MysqlxSession sess;
+	sess.init(client_fds[0], nullptr);
+	sess.enter_passthrough_for_test(backend_fds[0]);
+
+	// Write a payload that LOOKS like it could be an X-Protocol frame
+	// header (size=4, msg_type=0x01) but is in fact opaque TLS bytes.
+	// In a non-passthrough state, handler() would parse this and
+	// almost certainly emit an error. In passthrough state it must
+	// be forwarded verbatim — proving the handler() fast-path skips
+	// the X-Protocol read/parse stage.
+	const uint8_t fake_frame[] = {0x04, 0x00, 0x00, 0x00, 0x01, 0xAA, 0xBB, 0xCC};
+	ssize_t w = write(client_fds[1], fake_frame, sizeof(fake_frame));
+	ok(w == static_cast<ssize_t>(sizeof(fake_frame)),
+	   "wrote fake-frame-shaped payload to client peer");
+	usleep(5000);
+
+	sess.to_process = true;
+	int rc = sess.handler();
+	ok(rc == 0, "handler() returns 0 in X_PASSTHROUGH_FORWARD state");
+	ok(sess.is_healthy(), "session healthy after splice — no X-Protocol parse");
+
+	uint8_t recv_buf[64] = {0};
+	ssize_t r = read(backend_fds[1], recv_buf, sizeof(recv_buf));
+	ok(r == static_cast<ssize_t>(sizeof(fake_frame)),
+	   "backend received the full opaque payload (no header strip)");
+	ok(memcmp(recv_buf, fake_frame, sizeof(fake_frame)) == 0,
+	   "backend bytes match — header bytes were forwarded, not consumed");
+
+	close(client_fds[0]); close(client_fds[1]);
+	close(backend_fds[0]); close(backend_fds[1]);
+}
+
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(65);
+	// 65 (existing) + 22 (passthrough block: 2 + 5 + 3 + 2 + 2 + 3 + 5)
+	plan(87);
 	diag("=== mysqlx_session_unit-t starting ===");
 
 	test_session_init();
@@ -803,6 +1029,15 @@ int main() {
 	test_reset();
 	test_parse_error_detection();
 	test_session_timestamps();
+
+	// X_PASSTHROUGH_FORWARD splice mechanics.
+	test_passthrough_listener_route_propagation();
+	test_passthrough_forward_client_to_backend();
+	test_passthrough_forward_backend_to_client();
+	test_passthrough_close_on_client_eof();
+	test_passthrough_close_on_backend_eof();
+	test_passthrough_disables_backend_reuse();
+	test_passthrough_handler_dispatch_skips_xprotocol();
 
 	return exit_status();
 }
