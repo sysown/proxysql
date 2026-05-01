@@ -2409,6 +2409,10 @@ __implicit_sync:
 										}
 									}
 									// Plugin pre-execution query hook (Step 2 ABI extension).
+									// Gated on PROXYSQL40 — see the matching block in
+									// MySQL_Session.cpp for the rationale; without the
+									// guard, v3.0/v3.1 dbg builds fail to compile.
+#ifdef PROXYSQL40
 									// Lock-free fast path: skip the dispatch entirely when no
 									// plugin has registered a hook for the PgSQL protocol.
 									if (proxysql_has_configured_plugin_query_hook(ProxySQL_PluginProtocol::pgsql)) {
@@ -2444,6 +2448,7 @@ __implicit_sync:
 											return handler_ret;
 										}
 									}
+#endif /* PROXYSQL40 */
 								}
 								if (rc_break == true) {
 									if (mirror == false) {

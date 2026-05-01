@@ -4472,6 +4472,12 @@ __get_pkts_from_client:
 										// in Step 3 of the GenAI plugin carve-out.
 
 										// Plugin pre-execution query hook (Step 2 ABI extension).
+										// Gated on PROXYSQL40 because the chassis types
+										// (ProxySQL_PluginProtocol, ProxySQL_PluginQueryHook*)
+										// are only declared when ProxySQL_Plugin.h is compiled
+										// with PROXYSQL40 defined — v3.0/v3.1 dbg builds set
+										// neither and would fail to compile this block.
+#ifdef PROXYSQL40
 										// Lock-free fast path: skip the dispatch entirely when no
 										// plugin has registered a hook for the MySQL protocol.
 										if (proxysql_has_configured_plugin_query_hook(ProxySQL_PluginProtocol::mysql)) {
@@ -4507,6 +4513,7 @@ __get_pkts_from_client:
 												return handler_ret;
 											}
 										}
+#endif /* PROXYSQL40 */
 									}
 									if (rc_break==true) {
 										if (mirror==false) {
