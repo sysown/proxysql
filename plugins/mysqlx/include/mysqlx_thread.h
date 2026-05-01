@@ -101,7 +101,17 @@ public:
 
 	void remove_listeners();
 
-	MysqlxConnection* get_connection_from_cache(int hostgroup, const char* user, const char* schema);
+	// Returns the most-recently-cached idle connection matching the
+	// given (hostgroup, user, schema, tls_active) tuple, or nullptr if
+	// none is available. The tls_active dimension is required to keep
+	// AsClient/required encrypted backends separate from plaintext
+	// backends in the same pool — handing a plaintext connection to a
+	// TLS-frontend session (or vice versa) would either silently break
+	// the encryption posture or cause the X-Protocol auth state machine
+	// to read frames over a half-encrypted socket. Callers that don't
+	// care about TLS state (currently: none in production) can pass
+	// false to match plaintext-only connections.
+	MysqlxConnection* get_connection_from_cache(int hostgroup, const char* user, const char* schema, bool tls_active);
 	void return_connection_to_cache(MysqlxConnection* conn);
 	size_t get_cached_connection_count() const;
 	void set_max_cached_connections(size_t max) { max_cached_ = max; }

@@ -466,13 +466,22 @@ void Mysqlx_Thread::snapshot_sessions_for_stats(
 }
 
 MysqlxConnection* Mysqlx_Thread::get_connection_from_cache(
-		int hostgroup, const char* user, const char* schema) {
+		int hostgroup, const char* user, const char* schema, bool tls_active) {
 	std::lock_guard<std::mutex> lock(conn_cache_mutex_);
 	for (auto it = conn_cache_.rbegin(); it != conn_cache_.rend(); ++it) {
 		auto* conn = *it;
+		// (hostgroup, user, schema, tls_active) is the cache key. The
+		// tls_active dimension was added with mysqlx_tls_backend_mode
+		// (issue #5693): an AsClient/required encrypted backend must
+		// not be handed to a plaintext-frontend session, and a
+		// plaintext-pooled backend must not be handed to a TLS
+		// session — either would land the next dispatch on a socket
+		// in the wrong encryption posture and corrupt the wire
+		// protocol.
 		if (conn->get_hostgroup() == hostgroup &&
 		    strcmp(conn->get_user(), user) == 0 &&
 		    strcmp(conn->get_schema(), schema) == 0 &&
+		    conn->is_tls_active() == tls_active &&
 		    conn->is_reusable()) {
 			conn->set_state(MysqlxConnection::IN_USE);
 			conn_cache_.erase(std::next(it).base());

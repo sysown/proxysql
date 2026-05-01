@@ -263,6 +263,14 @@ int MysqlxConnection::step_auth_tls_handshake() {
 	backend_ds_.read_from_net();
 	if (backend_ds_.do_ssl_handshake()) {
 		backend_ds_.flush_ssl_write_buf();
+		// Record that this connection is now operating over TLS so the
+		// connection-cache key can distinguish encrypted-pooled
+		// connections from plaintext-pooled ones. Cleared by reset()
+		// only when the connection is being recycled across hostgroup
+		// /user/schema identity boundaries; preserving it across pool
+		// checkouts is intentional — the pooled connection's
+		// encryption posture does not change.
+		tls_active_ = true;
 		return send_authenticate_start();
 	}
 	backend_ds_.flush_ssl_write_buf();

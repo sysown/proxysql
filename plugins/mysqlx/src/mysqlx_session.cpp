@@ -18,6 +18,84 @@
 #include <zstd.h>
 #include <lz4.h>
 
+// mysqlx_resolve_backend_tls_decision
+//
+// Pure function — translates the four runtime inputs governing the
+// proxy<->backend TLS posture into a (require_tls, fallback_allowed)
+// pair. Lives at file scope (not in the anonymous namespace) so the
+// unit test in mysqlx_message_dispatch_unit-t.cpp can exercise the 8
+// (mode x frontend_tls) combinations directly without driving the
+// session state machine.
+//
+// Inputs:
+//   * mode -- mysqlx_tls_backend_mode runtime variable, parsed by
+//     MysqlxConfigStore. Drives the four documented modes.
+//   * endpoint_use_ssl_override -- mysqlx_backend_endpoints.use_ssl=1
+//     for the resolved endpoint (target_use_ssl_ at the call site).
+//     Operator-controlled override that mandates TLS regardless of
+//     mode. Used when a single sensitive backend must always be
+//     encrypted even under mode=disabled.
+//   * frontend_is_encrypted -- client_ds_.is_encrypted() at the call
+//     site. Consulted only by mode=as_client (Router AsClient parity).
+//
+// Decisions:
+//   * disabled  -> require_tls=false, fallback=false.
+//                  Endpoint override can still force TLS. Plaintext
+//                  by policy otherwise.
+//   * preferred -> require_tls=true, fallback=true.
+//                  Send CapabilitiesSet(tls=true). On Mysqlx::Error
+//                  from the backend, downgrade to plaintext. The
+//                  fallback path itself is wired in a follow-up
+//                  commit; today fallback_allowed=true is read-only
+//                  metadata.
+//   * required  -> require_tls=true, fallback=false.
+//                  Hard-fail the backend connect on Mysqlx::Error.
+//   * as_client -> mirror frontend.
+//                  require_tls = frontend_is_encrypted; never falls
+//                  back (fallback_allowed=false). The intent is to
+//                  preserve the client's posture exactly.
+//
+// The endpoint-override step is applied AFTER the mode dispatch — it
+// can only PROMOTE a plaintext decision to TLS, never DEMOTE TLS to
+// plaintext. This matches the existing operator contract from before
+// the mode-aware rewrite (mysqlx_backend_endpoints.use_ssl was already
+// an OR with the implicit AsClient behaviour).
+MysqlxBackendTlsDecision mysqlx_resolve_backend_tls_decision(
+	MysqlxBackendTlsMode mode,
+	bool endpoint_use_ssl_override,
+	bool frontend_is_encrypted)
+{
+	MysqlxBackendTlsDecision out;
+	switch (mode) {
+		case MysqlxBackendTlsMode::disabled:
+			out.require_tls = false;
+			out.fallback_allowed = false;
+			break;
+		case MysqlxBackendTlsMode::preferred:
+			out.require_tls = true;
+			out.fallback_allowed = true;
+			break;
+		case MysqlxBackendTlsMode::required:
+			out.require_tls = true;
+			out.fallback_allowed = false;
+			break;
+		case MysqlxBackendTlsMode::as_client:
+			out.require_tls = frontend_is_encrypted;
+			out.fallback_allowed = false;
+			break;
+	}
+	// Per-endpoint operator override (mysqlx_backend_endpoints.use_ssl=1):
+	// promotes plaintext to TLS regardless of mode. When promoted under
+	// mode=preferred, leave fallback_allowed=true (the operator wants
+	// best-effort TLS); when promoted under any other mode, fallback
+	// is not allowed because there's no soft "preferred" semantics in
+	// play.
+	if (endpoint_use_ssl_override) {
+		out.require_tls = true;
+	}
+	return out;
+}
+
 namespace {
 
 constexpr size_t CHALLENGE_LENGTH = 20;
@@ -1356,10 +1434,27 @@ void MysqlxSession::inject_identity_for_test(const std::string& username) {
 #endif /* MYSQLX_TEST_BUILD */
 
 void MysqlxSession::handler_connecting_server() {
+	// Resolve the backend TLS posture for THIS session up front so that
+	//   (a) the connection-cache lookup can match on tls_active, and
+	//   (b) a fresh backend connection is configured with the same
+	//       backend_tls_required_ / backend_tls_fallback_allowed_ flags.
+	// The decision is per-session, not per-connection, because the
+	// pool key includes tls_active — connections with the wrong
+	// encryption posture for this session will simply not match.
+	const MysqlxConfigStore* cs_for_tls = thread_ptr_ ? thread_ptr_->get_config_store() : nullptr;
+	const MysqlxBackendTlsMode tls_mode = cs_for_tls
+		? cs_for_tls->get_backend_tls_mode()
+		: MysqlxBackendTlsMode::as_client;
+	const MysqlxBackendTlsDecision tls_decision = mysqlx_resolve_backend_tls_decision(
+		tls_mode, target_use_ssl_, client_ds_.is_encrypted());
+	const bool desired_backend_tls = tls_decision.require_tls;
+	const bool tls_fallback_allowed = tls_decision.fallback_allowed;
+
 	if (!backend_conn_) {
 		if (thread_ptr_) {
 			backend_conn_ = thread_ptr_->get_connection_from_cache(
-				target_hostgroup_, username_.c_str(), schema_.c_str());
+				target_hostgroup_, username_.c_str(), schema_.c_str(),
+				desired_backend_tls);
 		}
 
 		if (backend_conn_) {
@@ -1426,21 +1521,16 @@ void MysqlxSession::handler_connecting_server() {
 		backend_conn_->set_backend_user(backend_user.c_str());
 		backend_conn_->set_backend_schema(schema_.c_str());
 
-		// Backend TLS is enabled when EITHER the operator forced it via
-		// the endpoint's use_ssl=1 flag (mysqlx_backend_endpoints.
-		// use_ssl, captured into target_use_ssl_ at
-		// resolve_backend_target time) OR the client connected to the
-		// proxy over TLS. The endpoint-flag path lets operators mandate
-		// proxy↔backend encryption even for plaintext clients on a
-		// trusted private network — previously the flag was loaded into
-		// MysqlxBackendEndpoint but silently dropped here, so plaintext
-		// clients always produced plaintext backend traffic regardless
-		// of the operator's setting.
-		const bool require_backend_tls = target_use_ssl_ || client_ds_.is_encrypted();
-		if (require_backend_tls) {
+		// Backend TLS posture is resolved once at the top of
+		// handler_connecting_server() (search for "desired_backend_tls"
+		// above) using mysqlx_tls_backend_mode + per-endpoint
+		// use_ssl override + frontend TLS state. Replicate the decision
+		// here onto the freshly-allocated MysqlxConnection.
+		if (desired_backend_tls) {
 			if (thread_ptr_ && thread_ptr_->get_ssl_ctx()) {
 				backend_conn_->set_backend_tls_required(true);
 				backend_conn_->set_ssl_ctx(thread_ptr_->get_ssl_ctx());
+				backend_conn_->set_backend_tls_fallback_allowed(tls_fallback_allowed);
 			}
 		}
 

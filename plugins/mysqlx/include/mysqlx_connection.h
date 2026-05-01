@@ -93,6 +93,26 @@ public:
 	bool is_backend_tls_required() const { return backend_tls_required_; }
 	void set_ssl_ctx(SSL_CTX* ctx) { backend_ssl_ctx_ = ctx; }
 
+	// Whether this connection actually completed a TLS handshake on the
+	// backend leg. Distinct from is_backend_tls_required(): a `preferred`
+	// mode connect can have backend_tls_required_=true at start but
+	// fall back to plaintext on Mysqlx::Error from CapabilitiesSet, in
+	// which case tls_active_ stays false. Used by the connection-cache
+	// key in Mysqlx_Thread::get_connection_from_cache so an AsClient
+	// TLS session never picks up a plaintext-pooled backend (and vice
+	// versa) — the encryption posture is part of the cache identity.
+	bool is_tls_active() const { return tls_active_; }
+	void set_tls_active(bool a) { tls_active_ = a; }
+
+	// Whether the backend TLS request is allowed to silently fall back
+	// to plaintext on a Mysqlx::Error response from CapabilitiesSet
+	// (tls=true). Set by the session for `preferred` mode; left false
+	// for `required` and as_client+encrypted-frontend (where TLS is
+	// mandatory). The fallback path itself is wired in a follow-up
+	// commit; today this flag is read-only metadata.
+	bool is_backend_tls_fallback_allowed() const { return backend_tls_fallback_allowed_; }
+	void set_backend_tls_fallback_allowed(bool a) { backend_tls_fallback_allowed_ = a; }
+
 	void init_backend_ds(int fd);
 	int step_auth();
 	int send_authenticate_start();
@@ -120,6 +140,8 @@ private:
 	std::vector<uint8_t> backend_challenge_;
 	MysqlxDataStream backend_ds_;
 	bool backend_tls_required_;
+	bool backend_tls_fallback_allowed_ { false };
+	bool tls_active_ { false };
 	SSL_CTX* backend_ssl_ctx_;
 
 	int step_auth_capabilities_get();
