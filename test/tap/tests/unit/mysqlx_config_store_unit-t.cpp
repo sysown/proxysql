@@ -62,7 +62,7 @@ std::unique_ptr<SQLite3DB> create_test_db() {
 
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(24);
+	plan(33);
 	diag("=== mysqlx_config_store_unit-t starting ===");
 
 	MysqlxResolvedIdentity identity {};
@@ -190,6 +190,79 @@ int main() {
 	   store.install_variables_from_admin(*db, err) && err.empty() &&
 	   store.get_backend_tls_mode() == MysqlxBackendTlsMode::required,
 	   "absent mysqlx_tls_backend_mode row leaves cached mode untouched");
+
+	// --- per-route tls_mode (issue #5692, TLS passthrough) ---
+	//
+	// Parser exercise (mirrors the backend-tls-mode block above).
+	ok(mysqlx_route_tls_mode_from_string("inherit") ==
+	   std::optional<MysqlxRouteTlsMode>(MysqlxRouteTlsMode::inherit) &&
+	   mysqlx_route_tls_mode_from_string("DISABLED") ==
+	   std::optional<MysqlxRouteTlsMode>(MysqlxRouteTlsMode::disabled) &&
+	   mysqlx_route_tls_mode_from_string("Preferred") ==
+	   std::optional<MysqlxRouteTlsMode>(MysqlxRouteTlsMode::preferred) &&
+	   mysqlx_route_tls_mode_from_string("required") ==
+	   std::optional<MysqlxRouteTlsMode>(MysqlxRouteTlsMode::required) &&
+	   mysqlx_route_tls_mode_from_string("PASSTHROUGH") ==
+	   std::optional<MysqlxRouteTlsMode>(MysqlxRouteTlsMode::passthrough),
+	   "route tls mode parser accepts all five documented values case-insensitively");
+	ok(mysqlx_route_tls_mode_from_string("") ==
+	   std::optional<MysqlxRouteTlsMode>(MysqlxRouteTlsMode::inherit),
+	   "route tls mode parser collapses empty/NULL to inherit");
+	ok(!mysqlx_route_tls_mode_from_string("nonsense").has_value(),
+	   "route tls mode parser rejects unknown values");
+	ok(std::string(mysqlx_route_tls_mode_to_string(MysqlxRouteTlsMode::passthrough)) == "passthrough" &&
+	   std::string(mysqlx_route_tls_mode_to_string(MysqlxRouteTlsMode::inherit)) == "inherit",
+	   "route tls mode renders to canonical lowercase string");
+
+	// Default value: any route loaded without an explicit tls_mode
+	// remains inherit (already the case for the 'rw' route loaded above
+	// via install_all_from_admin against the legacy mysqlx_routes DDL,
+	// which has no tls_mode column).
+	ok(store.route_tls_mode("rw") == MysqlxRouteTlsMode::inherit,
+	   "route loaded from legacy schema (no tls_mode column) defaults to inherit");
+	ok(store.route_tls_mode("nonexistent") == MysqlxRouteTlsMode::inherit,
+	   "unknown route reports inherit (safest default)");
+
+	// Round-trip: SAVE a route with passthrough mode, then re-LOAD it
+	// against a schema that DOES have the tls_mode column.
+	{
+		auto db2 = create_test_db();
+		ok(db2->execute(ADMIN_SQLITE_RUNTIME_MYSQL_USERS) &&
+		   db2->execute(ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS) &&
+		   db2->execute(
+			   "CREATE TABLE mysqlx_routes ("
+			   " name VARCHAR NOT NULL PRIMARY KEY,"
+			   " bind VARCHAR NOT NULL,"
+			   " destination_hostgroup INT NOT NULL,"
+			   " fallback_hostgroup INT,"
+			   " strategy VARCHAR NOT NULL DEFAULT 'first_available',"
+			   " active INT NOT NULL DEFAULT 1,"
+			   " attributes VARCHAR NOT NULL DEFAULT '',"
+			   " comment VARCHAR NOT NULL DEFAULT '',"
+			   " tls_mode VARCHAR NOT NULL DEFAULT 'inherit')") &&
+		   db2->execute(
+			   "INSERT INTO mysqlx_routes "
+			   "(name, bind, destination_hostgroup, strategy, tls_mode) VALUES "
+			   "('compliance', '127.0.0.1:7777', 99, 'first_available', 'passthrough')") &&
+		   db2->execute(
+			   "INSERT INTO mysqlx_routes "
+			   "(name, bind, destination_hostgroup, strategy, tls_mode) VALUES "
+			   "('admin', '127.0.0.1:7778', 99, 'first_available', 'inherit')"),
+		   "schema with tls_mode column and two passthrough/inherit rows is created");
+
+		MysqlxConfigStore store2 {};
+		std::string err2;
+		ok(store2.install_routes_from_admin(*db2, err2) && err2.empty() &&
+		   store2.route_tls_mode("compliance") == MysqlxRouteTlsMode::passthrough &&
+		   store2.route_tls_mode("admin") == MysqlxRouteTlsMode::inherit,
+		   "install_routes_from_admin reads tls_mode column for each row");
+
+		// Reject a malformed value.
+		ok(db2->execute("UPDATE mysqlx_routes SET tls_mode='garbage' WHERE name='compliance'") &&
+		   !store2.install_routes_from_admin(*db2, err2) &&
+		   err2.find("garbage") != std::string::npos,
+		   "install_routes_from_admin surfaces malformed tls_mode with descriptive error");
+	}
 
 	return exit_status();
 }

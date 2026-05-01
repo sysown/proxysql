@@ -50,6 +50,12 @@ const char kRuntimeMysqlxUsersTableDef[] =
 	" comment VARCHAR NOT NULL DEFAULT ''"
 	" )";
 
+// `tls_mode` was added with issue #5692 (TLS passthrough). Values are
+// validated case-insensitively at LOAD time by mysqlx_route_tls_mode_
+// from_string(); the CHECK constraint here mirrors the canonical lower-
+// case spellings so a typo at INSERT time is caught early. Default
+// 'inherit' preserves prior behaviour: a route without an explicit
+// override defers to the deployment-wide `mysqlx_tls_mode`.
 const char kMysqlxRoutesTableDef[] =
 	"CREATE TABLE mysqlx_routes ("
 	" name VARCHAR NOT NULL PRIMARY KEY,"
@@ -59,7 +65,8 @@ const char kMysqlxRoutesTableDef[] =
 	" strategy VARCHAR NOT NULL DEFAULT 'first_available',"
 	" active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1,"
 	" attributes VARCHAR CHECK (JSON_VALID(attributes) OR attributes = '') NOT NULL DEFAULT '',"
-	" comment VARCHAR NOT NULL DEFAULT ''"
+	" comment VARCHAR NOT NULL DEFAULT '',"
+	" tls_mode VARCHAR CHECK (tls_mode IN ('inherit','disabled','preferred','required','passthrough')) NOT NULL DEFAULT 'inherit'"
 	" )";
 
 const char kRuntimeMysqlxRoutesTableDef[] =
@@ -71,7 +78,8 @@ const char kRuntimeMysqlxRoutesTableDef[] =
 	" strategy VARCHAR NOT NULL DEFAULT 'first_available',"
 	" active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1,"
 	" attributes VARCHAR CHECK (JSON_VALID(attributes) OR attributes = '') NOT NULL DEFAULT '',"
-	" comment VARCHAR NOT NULL DEFAULT ''"
+	" comment VARCHAR NOT NULL DEFAULT '',"
+	" tls_mode VARCHAR CHECK (tls_mode IN ('inherit','disabled','preferred','required','passthrough')) NOT NULL DEFAULT 'inherit'"
 	" )";
 
 const char kMysqlxBackendEndpointsTableDef[] =
