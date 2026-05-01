@@ -2385,6 +2385,15 @@ __implicit_sync:
 										(endt.tv_sec * 1000000000 + endt.tv_nsec) -
 										(begint.tv_sec * 1000000000 + begint.tv_nsec);
 								}
+								// TODO(plugin-query-hook): inject pre-execution
+								// hook dispatch here for the PgSQL COM_QUERY
+								// codepath, after CurrentQuery is populated.
+								// Use proxysql_dispatch_configured_plugin_
+								// query_hook with ProxySQL_PluginProtocol::pgsql.
+								// See ProxySQL_Plugin.h "STATUS (chassis ABI 2 —
+								// initial baseline)" — the dispatch ABI is
+								// already in place; this is the data-plane
+								// integration that needs to land.
 								assert(qpo);	// GloPgQPro->process_mysql_query() should always return a qpo
 								// ===================================================
 								if (qpo->max_lag_ms >= 0) {

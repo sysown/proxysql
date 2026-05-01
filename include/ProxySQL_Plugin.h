@@ -102,6 +102,19 @@ using proxysql_plugin_log_message_cb =
 #ifdef PROXYSQL40
 // Pre-execution query hook (Step 2 ABI extension).
 //
+// STATUS (chassis ABI 2 — initial baseline): the registration and
+// dispatch path are wired through ProxySQL_PluginManager and the
+// chassis fast-path probe (proxysql_has_configured_plugin_query_hook),
+// and unit tests exercise the dispatch surface end-to-end. However,
+// the production data plane (MySQL_Session::handler___status_WAITING_
+// CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo and the matching
+// PgSQL_Session COM_QUERY entry) does NOT yet call the dispatch
+// helper. Plugins that register a query hook today will see the
+// callback invoked from unit tests but not from real client traffic.
+// Wiring the production fast-path is a deliberate follow-up — search
+// for "TODO(plugin-query-hook)" in lib/MySQL_Session.cpp and
+// lib/PgSQL_Session.cpp for the precise injection points.
+//
 // Wire protocol the hook is being invoked for.  A plugin can register
 // independently for each protocol; one hook per protocol per plugin.
 enum class ProxySQL_PluginProtocol : uint8_t {
