@@ -202,6 +202,7 @@
   "plugin_prometheus_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
   "plugin_query_hook_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
   "plugin_registry_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
+  "plugin_runtime_views_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
   "prepare_statement_err3024-t" : [ "legacy-g1","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1","mysql84-g1","mysql90-g1","mysql95-g1" ],
   "prepare_statement_err3024_async-t" : [ "legacy-g1","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1","mysql84-g1","mysql90-g1","mysql95-g1" ],
   "prepare_statement_err3024_libmysql-t" : [ "legacy-g1","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1","mysql84-g1","mysql90-g1","mysql95-g1" ],
