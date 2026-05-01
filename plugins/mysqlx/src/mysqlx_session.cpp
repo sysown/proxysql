@@ -1201,6 +1201,13 @@ void MysqlxSession::handler_connecting_server() {
 		}
 
 		if (backend_conn_) {
+			// Cache hit — pulled a pre-warmed backend connection out of the
+			// per-thread pool. conn_used is the "took an existing connection
+			// off the cache" counter; conn_ok (further down) is the
+			// "established a fresh connection from scratch" counter.
+			mysqlx_stats().record_conn_used(
+				identity_ ? identity_->default_route : std::string(),
+				target_hostgroup_);
 			server_ds().init(XDS_BACKEND, backend_conn_->get_fd());
 			status_ = WAITING_CLIENT_XMSG;
 			to_process = true;
@@ -1299,6 +1306,13 @@ void MysqlxSession::handler_connecting_server() {
 		}
 	}
 
+	// Fresh-connection success: TCP connect, optional TLS handshake, and
+	// backend-auth all completed without a return earlier in this handler.
+	// Counts a brand-new backend connection only — cache hits go through
+	// the early-return branch above.
+	mysqlx_stats().record_conn_ok(
+		identity_ ? identity_->default_route : std::string(),
+		target_hostgroup_);
 	server_ds().init(XDS_BACKEND, backend_conn_->get_fd());
 	backend_conn_->set_state(MysqlxConnection::IDLE);
 	backend_conn_->set_reusable(true);
