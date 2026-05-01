@@ -316,6 +316,25 @@ private:
 	bool is_frame_allowed(uint8_t msg_type) const;
 	bool is_terminal_frame(uint8_t msg_type) const;
 
+	// Validate that a NOTICE frame's outer Mysqlx::Notice::Frame::type
+	// field is a known enum value (1..5 in the X-Protocol spec — WARNING,
+	// SESSION_VARIABLE_CHANGED, SESSION_STATE_CHANGED,
+	// GROUP_REPLICATION_STATE_CHANGED, SERVER_HELLO). Returns true iff
+	// the protobuf parses cleanly AND the type is in the known set.
+	//
+	// Rationale (issue #5695): the X-Protocol allows backends to emit
+	// NOTICE frames in essentially any state, and prior to this hook the
+	// proxy forwarded them uncritically. A buggy or hostile backend
+	// (or MITM that bypassed TLS) could ship a NOTICE with an unknown
+	// type field — clients written to a strict spec interpretation may
+	// crash or misbehave. We drop unknown types with a log line. Empty
+	// payload is treated as malformed (a notice with no fields is
+	// structurally invalid per the proto).
+	//
+	// Pure query — no session-state mutation. Caller decides the action
+	// (forward vs drop) based on the return value.
+	bool is_notice_frame_valid(const uint8_t* body, size_t body_len) const;
+
 	// Resolve identity_->default_route to concrete target_hostgroup_,
 	// target_address_, target_port_ via the thread's MysqlxConfigStore.
 	// Returns 0 on success; on failure returns a nonzero error code
@@ -470,6 +489,13 @@ public:
 	MysqlxResponseState response_state_for_test() const { return response_state_; }
 	bool seen_column_metadata_for_test() const { return seen_column_metadata_; }
 	void set_response_state_for_test(MysqlxResponseState s) { response_state_ = s; }
+	// Test-only access to the NOTICE validation predicate so tests can
+	// drive the parser directly with synthetic bodies (well-formed,
+	// unknown-type, malformed protobuf, empty). Pure query — no
+	// session-state mutation, safe to call from any test.
+	bool is_notice_frame_valid_for_test(const uint8_t* body, size_t body_len) const {
+		return is_notice_frame_valid(body, body_len);
+	}
 #endif /* MYSQLX_TEST_BUILD */
 };
 
