@@ -375,6 +375,7 @@
   "test_mysqlx_e2e_handshake-t" : [ "mysqlx-e2e-g1","@proxysql_min_version:4.0" ],
   "test_mysqlx_e2e_routing-t" : [ "mysqlx-e2e-g1","@proxysql_min_version:4.0" ],
   "test_mysqlx_plugin_load-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
+  "test_mysqlx_route_drop_inflight-t" : [ "mysqlx-soak-g1","@proxysql_min_version:4.0" ],
   "test_mysqlx_soak_behavioral-t" : [ "mysqlx-soak-g1","@proxysql_min_version:4.0" ],
   "test_mysqlx_soak_stress-t" : [ "mysqlx-soak-g1","@proxysql_min_version:4.0" ],
   "test_noise_injection-t" : [ "legacy-g3","mysql84-g3","mysql90-g3","mysql95-g3" ],
