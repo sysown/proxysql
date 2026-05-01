@@ -260,6 +260,14 @@ void Mysqlx_Thread::process_all_sessions() {
 		// on either data stream, the session asked to be re-run, or there are
 		// already-buffered frames to dispatch. Forcing to_process=true on every
 		// tick burned the CPU at large session counts.
+		//
+		// Clear the per-stream revents bitmask AFTER handler() consumes it.
+		// process_ready_fds() above writes set_revents(revents) on whichever
+		// streams poll() flagged this iteration, but nothing else clears the
+		// field — without the post-handler reset here, a session that received
+		// one POLLIN event would re-enter handler() every poll cycle (each
+		// time hitting EAGAIN) until the stream is closed, defeating the
+		// "real work only" gating this whole block was added to provide.
 		short c_rev = sess->client_ds().get_revents();
 		short s_rev = sess->server_ds().get_revents();
 		bool fd_ready = (c_rev != 0) || (s_rev != 0);
@@ -268,6 +276,10 @@ void Mysqlx_Thread::process_all_sessions() {
 		if (fd_ready || buffered || sess->to_process) {
 			sess->to_process = true;
 			rc = sess->handler();
+			// Consume the readiness flags so the next iteration only fires
+			// on a fresh poll event (or buffered work / explicit to_process).
+			sess->client_ds().set_revents(0);
+			sess->server_ds().set_revents(0);
 		}
 
 		bool timeout = false;
