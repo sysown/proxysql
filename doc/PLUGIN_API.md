@@ -43,22 +43,24 @@ startup phase before the database takes precedence).
 
 ProxySQL uses a **four-phase** plugin lifecycle.  Every phase but Phase B
 is mandatory; Phase B is optional via the `register_schemas` descriptor
-field and only enabled when the plugin declares ABI version 2.
+field and only enabled when the plugin declares ABI version 2 or higher.
 
 1. **Phase A — load.**  ProxySQL parses `proxysql.cnf` and populates the
    `plugins` list.  For each plugin path, ProxySQL calls `dlopen()`,
    resolves the `proxysql_plugin_descriptor_v1` symbol, and validates
    the descriptor (`abi_version`, `name`, callback pointers).
-2. **Phase B — register_schemas (optional, ABI 2 only).**  If the
+2. **Phase B — register_schemas (optional, ABI 2+).**  If the
    descriptor wires `register_schemas`, the loader invokes it with a
    `ProxySQL_PluginServices` whose `register_table` /
-   `register_command` / `register_command_alias` entries are LIVE but
-   whose DB-handle getters (`get_admindb`, `get_configdb`,
-   `get_statsdb`) are non-null stubs that return `nullptr`.  The plugin
-   declares the tables it owns and (optionally) its admin commands; it
-   MUST NOT touch DB handles here.  Plugins that leave
-   `register_schemas` null (or that declare ABI 1) skip this phase
-   entirely and do all their setup in Phase D.
+   `register_command` / `register_command_alias` /
+   `register_runtime_view` (ABI 3+) entries are LIVE but whose
+   DB-handle getters (`get_admindb`, `get_configdb`, `get_statsdb`)
+   are non-null stubs that return `nullptr`.  The plugin declares the
+   tables it owns, its admin commands, and any admin-side runtime
+   views it wants the chassis to project from module state; it MUST
+   NOT touch DB handles here.  Plugins that leave `register_schemas`
+   null (or that declare ABI 1) skip this phase entirely and do all
+   their setup in Phase D.
 3. **Phase C — admin materialization.**  The admin module initializes
    and materializes the SQLite schemas collected during Phase B
    (`merge_plugin_tables` + `CREATE TABLE`).  On DDL failure ProxySQL
@@ -101,24 +103,24 @@ All types are defined in `include/ProxySQL_Plugin.h`:
 ```cpp
 struct ProxySQL_PluginDescriptor {
     const char *name;                         // Human-readable plugin name
-    uint32_t abi_version;                     // PROXYSQL_PLUGIN_ABI_VERSION (1 or 2)
+    uint32_t abi_version;                     // PROXYSQL_PLUGIN_ABI_VERSION (1, 2, or 3)
     proxysql_plugin_init_cb init;             // bool (*)(ProxySQL_PluginServices *)
     proxysql_plugin_start_cb start;           // bool (*)()
     proxysql_plugin_stop_cb stop;             // bool (*)()
     proxysql_plugin_status_json_cb status_json;  // const char *(*)()
-    proxysql_plugin_register_schemas_cb register_schemas; // ABI 2 only, optional
+    proxysql_plugin_register_schemas_cb register_schemas; // ABI 2+, optional
 };
 ```
 
 | Field              | Type          | Description                                               |
 |--------------------|---------------|-----------------------------------------------------------|
 | `name`             | `const char*` | Plugin identifier, used in logging.                        |
-| `abi_version`      | `uint32_t`    | Set from `PROXYSQL_PLUGIN_ABI_VERSION`.  Value `1` = pre-chassis descriptor (six fields).  Value `2` = PROXYSQL40 descriptor (adds `register_schemas`).  A v3/v3.1 ProxySQL core rejects `abi_version > 1`. |
+| `abi_version`      | `uint32_t`    | Set from `PROXYSQL_PLUGIN_ABI_VERSION`.  Value `1` = pre-chassis descriptor (six fields).  Value `2` = adds `register_schemas` (four-phase lifecycle).  Value `3` = same descriptor layout as `2`; `ProxySQL_PluginServices` adds a tail-appended `register_runtime_view`.  A v3/v3.1 ProxySQL core rejects `abi_version > 1`; the current PROXYSQL40 core accepts `[1, 3]`. |
 | `init`             | callback      | Phase D — called with live services; register tables and commands here (or finish context setup if `register_schemas` already did it). |
 | `start`            | callback      | Phase E — start threads, open sockets, load config.        |
 | `stop`             | callback      | Called on shutdown.  Pairs with `init`, not `start`: if `init` returned true and `start` later failed, `stop` is still called so the plugin can release resources it allocated in `init`. |
 | `status_json`      | callback      | Return a static JSON string describing plugin status.      |
-| `register_schemas` | callback      | Phase B (ABI 2 only).  Optional; leave null to skip Phase B entirely.  Services passed here have `register_table` / `register_command` / `register_command_alias` LIVE but DB-handle getters returning `nullptr`. |
+| `register_schemas` | callback      | Phase B (ABI 2+).  Optional; leave null to skip Phase B entirely.  Services passed here have `register_table` / `register_command` / `register_command_alias` / `register_runtime_view` LIVE but DB-handle getters returning `nullptr`. |
 
 All callbacks return `bool` (except `status_json` which returns `const char*`).
 Return `true` on success, `false` on failure. A `false` return from
@@ -126,12 +128,16 @@ Return `true` on success, `false` on failure. A `false` return from
 
 #### ABI version
 
-`include/ProxySQL_Plugin.h` exposes `PROXYSQL_PLUGIN_ABI_VERSION` (2 under
+`include/ProxySQL_Plugin.h` exposes `PROXYSQL_PLUGIN_ABI_VERSION` (3 under
 PROXYSQL40, undefined in pre-chassis builds — the descriptor is then a
 legacy six-field struct with `abi_version = 1`).  Plugins MUST assign
 `abi_version` from this macro rather than hard-coding a literal; the
 core's loader uses it to detect layout skew and reject plugins built
-for an unsupported ABI.  See `ProxySQL_Plugin.h` for the exact rules.
+for an unsupported ABI.  ABI 3 keeps the descriptor layout identical to
+ABI 2 — the only addition is a tail-appended `register_runtime_view`
+field on `ProxySQL_PluginServices` — so plugins that compile against
+ABI 2 still load on the current core; the trailing services field is
+simply invisible to them.  See `ProxySQL_Plugin.h` for the exact rules.
 
 ### The Entry Point
 
@@ -157,6 +163,12 @@ struct ProxySQL_PluginServices {
     proxysql_plugin_db_handle_cb get_admindb;
     proxysql_plugin_db_handle_cb get_configdb;
     proxysql_plugin_db_handle_cb get_statsdb;
+    // ABI 2 (PROXYSQL40) tail extensions:
+    proxysql_plugin_register_query_hook_cb register_query_hook;
+    proxysql_plugin_get_prometheus_registry_cb get_prometheus_registry;
+    proxysql_plugin_register_command_alias_cb register_command_alias;
+    // ABI 3 tail extension:
+    proxysql_plugin_register_runtime_view_cb register_runtime_view;
 };
 ```
 
@@ -188,10 +200,15 @@ struct ProxySQL_PluginTableDef {
 | `stats_db`  | In-memory  | Statistics/metrics tables                            |
 
 **Convention**: For configuration tables that support the standard
-memory↔runtime↔disk tier model, register the table in **both** `admin_db` and
-`config_db`. Create a separate `runtime_`-prefixed table in `admin_db` only.
-This is the pattern used by ProxySQL's built-in modules (e.g., `mysql_users` +
-`runtime_mysql_users`).
+memory↔runtime↔disk tier model, register the editable table in **both**
+`admin_db` and `config_db`. Register a separate `runtime_`-prefixed
+table in `admin_db` only — but treat it as an admin-side **projection**,
+not as a tier the plugin maintains: declare it via `register_table`,
+then declare a refresh callback for it via `register_runtime_view` (ABI
+3+). The callback is invoked by the chassis before any admin SELECT
+against the table. This mirrors the canonical core pattern (`mysql_users`
++ `runtime_mysql_users`, where `runtime_mysql_users` is repopulated from
+the in-memory `MySQL_Authentication` state on demand).
 
 #### `register_command`
 
@@ -253,6 +270,41 @@ SQLite3_result *get_mysql_group_replication_hostgroups_snapshot();
 Return a snapshot of ProxySQL's internal MySQL topology state. These allow a
 plugin to access the current user list, server list, or group replication
 hostgroups without directly coupling to internal data structures.
+
+#### `register_runtime_view` (ABI 3+)
+
+```cpp
+struct ProxySQL_PluginRuntimeView {
+    const char *table_name;
+    void (*refresh)(SQLite3DB *admindb, void *opaque);
+    void *opaque;
+};
+
+bool register_runtime_view(const ProxySQL_PluginRuntimeView &view);
+```
+
+Declare an admin-side **view** of plugin-module state. The named
+`table_name` lives in `admin_db` (typically `runtime_<something>`) and
+holds no persistent rows — the chassis invokes `refresh(admindb,
+opaque)` before any admin SELECT against it. The refresh callback is
+expected to do (typically) `BEGIN; DELETE FROM <table>; INSERT/REPLACE
+INTO <table> ...; COMMIT;` from the module's own in-memory state.
+
+The chassis deep-copies `table_name` so the plugin need not keep the
+pointed-to string alive after registration. The callback pointer must
+have static lifetime (typically a free function in the plugin `.so`).
+`opaque` is plugin-owned and passed back unchanged on each invocation;
+plugins that don't need it should pass `nullptr`.
+
+Returns `true` on successful registration, `false` if `table_name` is
+already registered (by this or another plugin) or if `refresh` is
+`nullptr`.
+
+`register_runtime_view` is live both during `register_schemas` (Phase B)
+and `init` (Phase D). Plugins typically register views alongside the
+editable tables they project. See the separation-of-duties contract
+under [Admin Integration Patterns](#admin-integration-patterns) below
+for why this exists.
 
 ## Admin Command Context and Result
 
@@ -391,47 +443,84 @@ callbacks, not by linking against ProxySQL's SQLite wrapper.
 
 ## Admin Integration Patterns
 
-### The Three-Tier Configuration Model
+### Separation of duties: Admin, the module, and the runtime view
 
-ProxySQL uses a three-tier configuration model:
+ProxySQL's three-tier configuration model is, in storage terms:
 
 ```
-DISK (on-disk SQLite)  ↔  MEMORY (in-memory admin tables)  ↔  RUNTIME (live state)
+DISK (config_db)  ↔  MEMORY (admin_db editable tables)  ↔  RUNTIME (in-module state)
 ```
 
-Plugins that manage configuration should follow this pattern:
+The crucial point is that **only the first two are persistent SQLite tables**.
+"RUNTIME" is the plugin module's in-memory state — typically an object
+guarded by its own mutex (e.g. `MysqlxConfigStore`). The
+`runtime_<X>` table you register in `admin_db` is **not** module
+storage; it is an admin-side **view** of module state, projected on
+demand.
 
-1. Register tables in both `config_db` (for disk persistence) and `admin_db`
-   (for in-memory configuration).
-2. Register `runtime_`-prefixed tables in `admin_db` for the live runtime state.
-3. Register admin commands for each tier transition:
-   - `LOAD MYPLUGIN <OBJECT> TO RUNTIME` — copy from memory to runtime tables
-   - `SAVE MYPLUGIN <OBJECT> TO MEMORY` — copy from runtime to memory tables
+Therefore the canonical division of work is:
+
+- **Admin** owns the editable tables (`<X>` in both `admin_db` and `config_db`).
+- **The plugin module** owns the runtime state (an in-memory object).
+- The `runtime_<X>` table in `admin_db` is repopulated by the plugin's
+  refresh callback registered via `services.register_runtime_view(...)`.
+
+Concretely:
+
+| Command | What it does |
+|---------|--------------|
+| `LOAD <X> TO RUNTIME`   | Plugin reads the editable `admin_db.<X>` and hands rows to its module via a typed install API that swaps state under the module's lock. **Does not touch `runtime_<X>`.** |
+| `SAVE <X> [FROM RUNTIME] TO MEMORY` | Plugin dumps its in-memory state and `REPLACE INTO`s the editable `admin_db.<X>`. **Does not read `runtime_<X>`.** |
+| `LOAD <X> FROM DISK` / `SAVE <X> TO DISK` | Plain `BEGIN/DELETE/INSERT/COMMIT` between `config_db.<X>` and `admin_db.<X>`. No module involvement. |
+| `SELECT ... FROM runtime_<X>` (admin port) | Chassis fires the registered refresh callback, which wipes `runtime_<X>` and re-projects the module's current state. |
+
+This mirrors the core's own `MySQL_Authentication` / `runtime_mysql_users`
+pattern (see `lib/ProxySQL_Admin.cpp::save_mysql_users_runtime_to_database`).
+
+#### Disk-tier sync invariant
+
+The disk-tier copies (LOAD/SAVE FROM/TO DISK) are still subject to the
+**empty-source-must-still-clear-destination** rule. Run the
+`DELETE`+`INSERT` unconditionally inside a single transaction and check
+each `execute()` return; an empty source means "no rows", not "leave the
+destination alone". PR #5643 fixed an early implementation that had
+this wrong on the disk path.
+
+The runtime path does not need this discipline because the module-side
+install API is a typed swap, not a copy: replacing the in-memory state
+with an empty set is a single atomic operation.
 
 ### Registering Admin Commands
 
-Commands are registered with the canonical form. Alias support (e.g., `TO RUN`
-for `TO RUNTIME`, `FROM MEM` for `FROM MEMORY`) is handled in ProxySQL's
-`Admin_Handler.cpp`, not in the plugin. If you need new aliases, you must modify
-the ProxySQL core to add the alias vectors and dispatch mapping.
+Commands are registered with the canonical form. Aliases (e.g., `TO
+RUN` for `TO RUNTIME`, `FROM MEM` for `FROM MEMORY`) are registered by
+the plugin via `register_command_alias` (ABI 2+); the chassis resolves
+incoming admin SQL to the canonical form before invoking the plugin's
+callback. There is no longer a hardcoded alias ladder in
+`Admin_Handler.cpp`.
 
-### Table Registration Patterns
+### Table and view Registration Patterns
 
 ```cpp
-// Configuration table: visible in both admin and config databases
+// Editable configuration table: visible in both admin and config databases.
 void register_config_table(ProxySQL_PluginServices& services,
                            const char* name, const char* def) {
     services.register_table({ProxySQL_PluginDBKind::admin_db, name, def});
     services.register_table({ProxySQL_PluginDBKind::config_db, name, def});
 }
 
-// Runtime table: admin database only
-void register_runtime_table(ProxySQL_PluginServices& services,
-                            const char* name, const char* def) {
+// Admin-side projection of module state. Declare the empty table in
+// admin_db, then wire a refresh callback that reprojects from the
+// module before any admin SELECT.
+void register_runtime_view_table(ProxySQL_PluginServices& services,
+                                 const char* name, const char* def,
+                                 void (*refresh)(SQLite3DB*, void*),
+                                 void* opaque) {
     services.register_table({ProxySQL_PluginDBKind::admin_db, name, def});
+    services.register_runtime_view({name, refresh, opaque});
 }
 
-// Stats table: stats database only
+// Stats table: stats database only.
 void register_stats_table(ProxySQL_PluginServices& services,
                           const char* name, const char* def) {
     services.register_table({ProxySQL_PluginDBKind::stats_db, name, def});
@@ -446,7 +535,7 @@ void register_stats_table(ProxySQL_PluginServices& services,
 - **No dependency resolution**: Plugins are loaded in the order listed in
   `proxysql.cnf`. If one plugin depends on another, the dependency must be
   listed first.
-- **Single ABI version**: Only ABI version 1 is supported.
+- **ABI version range**: The current core accepts `abi_version` values in `[1, 3]`. Newly built plugins should set `abi_version = PROXYSQL_PLUGIN_ABI_VERSION`.
 - **Compiler coupling**: Plugins must match the ProxySQL core's C++ compiler
   and standard library due to `std::string` in `ProxySQL_PluginCommandResult`.
 

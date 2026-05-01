@@ -54,7 +54,7 @@ Pick one based on your time budget. Each is cumulative — the 2-hour pass conti
 Goal: convince yourself the chassis ABI and lifecycle are sane and the v3.x invisibility is real. Don't read mysqlx; trust that it's a consumer.
 
 1. Read **§3 (ABI surface)** below. Cross-check against [`ABI.md`](./ABI.md).
-2. Skim `include/ProxySQL_Plugin.h` (324 LOC) — note `PROXYSQL_PLUGIN_ABI_VERSION = 2`, the descriptor struct, the services struct.
+2. Skim `include/ProxySQL_Plugin.h` — note `PROXYSQL_PLUGIN_ABI_VERSION = 3`, the descriptor struct (unchanged from ABI 2), the services struct (ABI 3 appends `register_runtime_view` at the tail).
 3. Read **§4 (Four-phase lifecycle)** below.
 4. Skim `lib/ProxySQL_PluginManager.cpp` lines **324–461** (load + register_schemas + abi_version gating) and **548–576** (stop_all pairs with init).
 5. Check the v3.x invisibility claim:
@@ -93,9 +93,9 @@ The chassis is defined by **two headers** plus the loader implementation. The co
 
 **Key types (in `include/ProxySQL_Plugin.h`):**
 
-- `PROXYSQL_PLUGIN_ABI_VERSION` (currently `2`) — what newly-built plugins target. ABI 1 was the original 6-field descriptor; ABI 2 appends `register_schemas` for the four-phase lifecycle.
+- `PROXYSQL_PLUGIN_ABI_VERSION` (currently `3`) — what newly-built plugins target. ABI 1 was the original 6-field descriptor; ABI 2 appends `register_schemas` for the four-phase lifecycle; ABI 3 keeps the descriptor unchanged and appends `register_runtime_view` at the tail of `ProxySQL_PluginServices` so plugins can declare admin-side projections of module state.
 - `ProxySQL_PluginDescriptor` — 7-field struct returned via `extern "C" proxysql_plugin_descriptor_v1()`. The single mandatory entry point a plugin must export.
-- `ProxySQL_PluginServices` — services struct injected into the plugin: table/command/query-hook registration, log helper, three DB getters, prometheus registry. Tail-append discipline preserves ABI compatibility.
+- `ProxySQL_PluginServices` — services struct injected into the plugin: table/command/query-hook registration, log helper, three DB getters, prometheus registry, runtime-view registration. Tail-append discipline preserves ABI compatibility (ABI-2 plugins compile against the smaller layout and still load on an ABI-3 core).
 
 **The contract of the descriptor is:**
 - `name` is a non-null, non-empty C string. The loader rejects anything else.
@@ -191,10 +191,11 @@ client                                              ProxySQL                    
 
 The mysqlx plugin demonstrates every chassis affordance:
 
-- **Phase B** — `mysqlx_register_schemas` declares 8 admin-schema tables (`mysqlx_users`, `mysqlx_routes`, `mysqlx_backend_endpoints`, `mysqlx_variables`, plus their `runtime_*` mirrors and `stats_mysqlx_*` tables) and 16 admin commands (`LOAD MYSQLX USERS TO RUNTIME` and the 7 cousins, plus `SAVE` variants and aliases like `FROM MEMORY` / `FROM MEM` / `TO RUN`).
-- **Phase D** — `mysqlx_init` performs disk-to-runtime sync of the mysqlx tables on first boot.
-- **Phase E** — `mysqlx_start` clamps the thread-pool size, drives the listener reconciler from `runtime_mysqlx_routes`, and spawns N worker threads.
-- **Admin command dispatch** — every `LOAD MYSQLX … TO RUNTIME` / `SAVE` lands as a callback on `mysqlx_admin_schema.cpp:copy_table()`.
+- **Phase B** — `mysqlx_register_schemas` declares 8 admin-schema tables (`mysqlx_users`, `mysqlx_routes`, `mysqlx_backend_endpoints`, `mysqlx_variables`, plus their `runtime_*` admin-side projections and `stats_mysqlx_*` tables), 16 admin commands (`LOAD MYSQLX USERS TO RUNTIME` and the 7 cousins, plus `SAVE` variants and aliases like `FROM MEMORY` / `FROM MEM` / `TO RUN`), and four runtime-view refresh callbacks via `services.register_runtime_view` (one per `runtime_mysqlx_<X>` table).
+- **Phase D** — `mysqlx_init` performs disk-to-memory sync of the mysqlx tables on first boot, then loads the in-memory `MysqlxConfigStore` directly from the editable admin tables via four `install_<X>_from_admin` calls.
+- **Phase E** — `mysqlx_start` clamps the thread-pool size, drives the listener reconciler from `MysqlxConfigStore::snapshot_active_routes()`, and spawns N worker threads.
+- **Admin command dispatch** — `LOAD MYSQLX <X> TO RUNTIME` lands on a callback that invokes `MysqlxConfigStore::install_<X>_from_admin`; `SAVE MYSQLX <X> [FROM RUNTIME] TO MEMORY` invokes `MysqlxConfigStore::save_<X>_to_admin_table`. The disk-tier variants (LOAD/SAVE FROM/TO DISK) remain a plain BEGIN/DELETE/INSERT/COMMIT between configdb and admindb.
+- **Runtime-view projections** — when admin runs `SELECT * FROM runtime_mysqlx_users` (or one of the four cousins), the chassis fires the registered refresh callback, which calls `MysqlxConfigStore::project_<X>_to_runtime_view(admindb)` to wipe and refill the admin table from current module state.
 - **Identity callbacks** — each `MysqlxSession` is given an `identity_lookup_` closure that calls back into `MysqlxConfigStore::resolve_identity()` for the username the client sends.
 
 If you can convince yourself the chassis can host the mysqlx plugin coherently, the chassis is in good shape.

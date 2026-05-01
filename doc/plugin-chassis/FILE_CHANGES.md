@@ -18,15 +18,17 @@ Sections **A–G** cover the **chassis core**. Sections **H–O** cover the **my
 
 - **Purpose:** the C++ ABI a plugin compiles against; all types are file-wide guarded by `#ifdef PROXYSQL40` so v3.x TUs see nothing.
 - **Key contents:**
-  - `PROXYSQL_PLUGIN_ABI_VERSION` (currently `2`) and `_MAX`. ABI 1 = original 6-field descriptor; ABI 2 appends `register_schemas` for the four-phase lifecycle.
+  - `PROXYSQL_PLUGIN_ABI_VERSION` (currently `3`) and `_MAX` (also 3). ABI 1 = original 6-field descriptor; ABI 2 appends `register_schemas` for the four-phase lifecycle; ABI 3 keeps the descriptor layout unchanged from ABI 2 and adds a single `register_runtime_view` callback at the **tail of `ProxySQL_PluginServices`** so plugins can declare admin-side projections of module state. ABI-2 plugins still load on an ABI-3 core (loader range is `[1, 3]`; the trailing services field is invisible to the older compile).
   - `ProxySQL_PluginDescriptor` — 7-field struct `{name, abi_version, init, start, stop, status_json, register_schemas}` returned via `extern "C" proxysql_plugin_descriptor_v1()`.
-  - `ProxySQL_PluginServices` — services injected into the plugin: `register_table`, `register_command`, `register_command_alias`, three snapshot stubs (always nullptr today), `log_message`, three `get_*db` getters, `register_query_hook`, `get_prometheus_registry`. Tail-append discipline.
+  - `ProxySQL_PluginServices` — services injected into the plugin: `register_table`, `register_command`, `register_command_alias`, three snapshot stubs (always nullptr today), `log_message`, three `get_*db` getters, `register_query_hook`, `get_prometheus_registry`, `register_runtime_view` (ABI 3, tail-appended). Tail-append discipline.
   - Per-phase availability matrix is documented inline above the struct (Phase B: `register_table` live, DB getters return nullptr; Phase D: full services).
   - Query-hook ABI — `ProxySQL_PluginQueryHookPayload/Result/Action`; one hook per protocol per plugin.
+  - Runtime-view ABI — `ProxySQL_PluginRuntimeView{table_name, refresh, opaque}` plus `proxysql_plugin_register_runtime_view_cb`. The refresh callback gets a borrowed `SQLite3DB*` and re-projects module state into the named admin-db table on demand.
   - Header explicitly calls out the `std::string` / `prometheus-cpp` C++-ABI coupling: plugins MUST share toolchain with core.
-  - Long footer comment encodes the empty-source sync invariant (PR #5643 lesson).
+  - Footer comment block encodes the **separation-of-duties contract**: LOAD reads the editable admin table and hands rows to the module's typed install API (never touches `runtime_<X>`); SAVE dumps module state back to the editable table; `runtime_<X>` is an admin-side projection refreshed by the registered view callback. Disk-tier copies are still plain BEGIN/DELETE/INSERT/COMMIT and still subject to the empty-source-must-clear-destination rule (PR #5643).
 - **Spot-check:**
   - Verify `register_schemas` is only dereferenced when `abi_version >= 2`.
+  - Verify `register_runtime_view` lives at the END of `ProxySQL_PluginServices`; older plugins compiled against the ABI-2 layout never see the field.
   - Verify the loader rejects `abi_version > PROXYSQL_PLUGIN_ABI_VERSION_MAX` rather than reading past its struct.
 
 ### `include/ProxySQL_PluginManager.h` — NEW, 172 lines
@@ -34,10 +36,10 @@ Sections **A–G** cover the **chassis core**. Sections **H–O** cover the **my
 - **Purpose:** declares the in-process loader/dispatcher (`ProxySQL_PluginManager`) plus the free-standing helpers main.cpp/Admin call.
 - **Key contents:**
   - Class is move-only-ish (copy ctor/assign deleted).
-  - Public lifecycle: `load`, `invoke_register_schemas_phase`, `init_all`, `start_all`, `stop_all`; plus `tables(kind)`, `dispatch_admin_command`, `register_command_alias`, `resolve_alias_to_canonical`, `register_query_hook`, `has_query_hook`, `dispatch_query_hook`.
-  - Free-standing API: `proxysql_get_plugin_manager` (atomic load), `proxysql_load_configured_plugins` (Phase A+B, **publishes** the manager), `proxysql_init_configured_plugins` (Phase D), `proxysql_start_configured_plugins`, `proxysql_stop_configured_plugins`, plus three dispatch helpers (`dispatch_configured_plugin_admin_command`, `dispatch_configured_plugin_query_hook`, lock-free `has_configured_plugin_query_hook`) and `resolve_configured_plugin_admin_alias`.
-  - Internal `plugin_handle_t` carries dlopen handle + `schemas_registered/initialized/started/stopped` state flags.
-  - Two services structs: `services_` (Phase D) and `services_phase_b_` (Phase B, with stubbed DB getters and stubbed `register_query_hook`).
+  - Public lifecycle: `load`, `invoke_register_schemas_phase`, `init_all`, `start_all`, `stop_all`; plus `tables(kind)`, `dispatch_admin_command`, `register_command_alias`, `resolve_alias_to_canonical`, `register_query_hook`, `has_query_hook`, `dispatch_query_hook`, `register_runtime_view`, `refresh_runtime_views_for_query`.
+  - Free-standing API: `proxysql_get_plugin_manager` (atomic load), `proxysql_load_configured_plugins` (Phase A+B, **publishes** the manager), `proxysql_init_configured_plugins` (Phase D), `proxysql_start_configured_plugins`, `proxysql_stop_configured_plugins`, plus three dispatch helpers (`dispatch_configured_plugin_admin_command`, `dispatch_configured_plugin_query_hook`, lock-free `has_configured_plugin_query_hook`), `resolve_configured_plugin_admin_alias`, and `proxysql_refresh_configured_plugin_runtime_views` (admin pre-SELECT hook).
+  - Internal `plugin_handle_t` carries dlopen handle + `schemas_registered/initialized/started/stopped` state flags. `runtime_views_` vector holds `registered_runtime_view_t{table_name, refresh, opaque}` entries.
+  - Two services structs: `services_` (Phase D, full services) and `services_phase_b_` (Phase B, with stubbed DB getters and stubbed `register_query_hook`). **`register_runtime_view` is wired in BOTH structs** — plugins typically declare runtime views alongside their tables in `register_schemas`, so the callback is live in Phase B as well as Phase D.
 - **Spot-check:**
   - Lifecycle invariant: `proxysql_init_configured_plugins` must run BEFORE any worker thread takes the lock-free read path.
   - `resolve_alias_to_canonical` returns `std::string` by value (not borrowed `c_str()`) so a concurrent reload between resolve and dispatch can't dangle a pointer.
@@ -51,7 +53,8 @@ Sections **A–G** cover the **chassis core**. Sections **H–O** cover the **my
 - **Purpose:** dlopen orchestration, services trampolines, lifecycle state machine, dispatch.
 - **Key contents:**
   - **Concurrency model:** `g_active_plugin_manager` is a `std::atomic<ProxySQL_PluginManager*>`; reads/writes coordinated via `g_active_plugin_manager_mutex` (`std::shared_mutex` — readers from dispatch/resolve paths share, publishers/unpublishers take unique). A separate `std::mutex g_plugin_lifecycle_mutex` serializes load/start/stop transitions. The shared-mutex change exists explicitly to keep query-hook dispatch from collapsing per-worker thread parallelism.
-  - **Service trampolines** (file-static): `register_table_service`, `register_command_service`, `register_command_alias_service`, `register_query_hook_service`, `get_admindb/configdb/statsdb_service`, `log_message_service`, `get_prometheus_registry_service`. Each writes to `g_registry_target` set by a `ScopedRegistryTarget` RAII guard around plugin callbacks; `note_registration_failure` records the first failure.
+  - **Service trampolines** (file-static): `register_table_service`, `register_command_service`, `register_command_alias_service`, `register_query_hook_service`, `register_runtime_view_service`, `get_admindb/configdb/statsdb_service`, `log_message_service`, `get_prometheus_registry_service`. Each writes to `g_registry_target` set by a `ScopedRegistryTarget` RAII guard around plugin callbacks; `note_registration_failure` records the first failure.
+  - **`sql_references_table_ci()`** is the matcher used by `refresh_runtime_views_for_query`: case-insensitive whole-identifier substring match treating `[A-Za-z0-9_]` as identifier characters. So `runtime_mysqlx_users` matches in `` SELECT * FROM `runtime_mysqlx_users` `` but NOT in `runtime_mysqlx_users_extra` or `stats_runtime_mysqlx_users`.
   - **`load()`** (lines 324–383): rejects duplicate paths; `dlopen(RTLD_NOW|RTLD_LOCAL)`; resolves `proxysql_plugin_descriptor_v1`; rejects null/empty `name` and `abi_version` outside `[1, PROXYSQL_PLUGIN_ABI_VERSION_MAX]`.
   - **`invoke_register_schemas_phase()`** (lines 386–461): Phase B; only reads `descriptor->register_schemas` when `abi_version >= 2`; snapshots `tables_*`/`commands_`/storage sizes and rolls back on failure to keep retries idempotent.
   - **`init_all()`** has the same snapshot/rollback contract.
@@ -91,11 +94,12 @@ Sections **A–G** cover the **chassis core**. Sections **H–O** cover the **my
 
 ### `lib/ProxySQL_Admin.cpp` — MODIFIED, +42 lines
 
-- **Purpose:** exposes admin/config/stats DB handles to the loader and adds the templated dispatcher.
+- **Purpose:** exposes admin/config/stats DB handles to the loader, adds the templated dispatcher, and wires the pre-SELECT runtime-view dispatch.
 - **Key contents:**
   - Three free functions `proxysql_plugin_get_admindb/configdb/statsdb()` return `GloAdmin->{admindb,configdb,statsdb}` if `GloAdmin` is non-null. Gated by `PROXYSQL40` so v3.x exports no plugin-aware symbols at all.
   - `ProxySQL_Admin::dispatch_plugin_admin_command<S>(sess, sql)` builds a `ProxySQL_PluginCommandContext{admindb,configdb,statsdb}`, calls `proxysql_dispatch_configured_plugin_admin_command`, and translates `result` into `send_ok_msg_to_client` / `send_error_msg_to_client`.
   - Explicit template instantiations for `MySQL_Session` and `PgSQL_Session`.
+  - **Pre-SELECT runtime-view dispatch in `GenericRefreshStatistics`** (around line 1654): `proxysql_refresh_configured_plugin_runtime_views(query_no_space, admindb)` is called for **every admin-port query**, gated only on `if (admin)` and placed **outside** the existing `if (refresh==true)` block. The chassis itself decides whether any plugin's refresh callback fires, by per-view substring match against the query — a query that touches no registered view is a cheap no-op (one shared lock + N substring scans). The `refresh` flag is left untouched; it gates a separate set of core-only refreshes (stats_mysql_processlist, runtime_mysql_users, etc.).
 
 ### `include/proxysql_admin.h` — MODIFIED, +8 lines
 
@@ -181,7 +185,7 @@ The harness plugin source; one .cpp builds two .sos (`fake_plugin` and `fake_plu
 - Implements the `ProxySQL_PluginDescriptor` entry exported via `proxysql_plugin_descriptor_v1()`.
 - Four-phase lifecycle: `mysqlx_register_schemas` (Phase B, services without DB), `mysqlx_init` (Phase D, DB live), `mysqlx_start`, `mysqlx_stop`.
 - `replace_table_atomically()` — every `admindb.execute()` return is checked; defensive ROLLBACK on any failure including post-COMMIT, addresses the v3.0 silent-wipe bug.
-- `mysqlx_start()` does disk→memory→runtime sync, loads config store, clamps pool size 1..64, then drives `mysqlx_reconcile_listeners()` on the same path used by `LOAD MYSQLX ROUTES TO RUNTIME`.
+- `mysqlx_start()` does `sync_disk_to_memory()` (configdb → editable mysqlx_* tables) then four `install_<X>_from_admin` calls to populate the in-memory `MysqlxConfigStore` directly from the editable admin tables — no `runtime_mysqlx_*` write happens here, since runtime tables are now admin-side projections, not a tier the plugin maintains. Then clamps pool size 1..64 and drives `mysqlx_reconcile_listeners()` on the same path used by `LOAD MYSQLX ROUTES TO RUNTIME`.
 - `parse_bind_addr()` handles both `host:port` and `[ipv6]:port`; default port 33060.
 - Descriptor is constexpr-ish and pinned to `PROXYSQL_PLUGIN_ABI_VERSION`.
 
@@ -192,42 +196,45 @@ The harness plugin source; one .cpp builds two .sos (`fake_plugin` and `fake_plu
 ### `plugins/mysqlx/include/mysqlx_admin_schema.h` — NEW, 8 lines
 Single-symbol header declaring `mysqlx_register_admin_schema()`.
 
-### `plugins/mysqlx/src/mysqlx_admin_schema.cpp` — NEW, 565 lines
+### `plugins/mysqlx/src/mysqlx_admin_schema.cpp` — NEW
 
 - Registers DDL for all `mysqlx_*` tables and the `LOAD/SAVE` admin commands.
 - Four config-table pairs (memory + runtime): `mysqlx_users`, `mysqlx_routes`, `mysqlx_backend_endpoints`, `mysqlx_variables`, all with `JSON_VALID(attributes)` CHECK constraints.
 - Two stats-only tables: `stats_mysqlx_routes`, `stats_mysqlx_processlist`.
 - 8 LOAD/SAVE TO RUNTIME commands plus 8 disk variants; each has alias group (`FROM MEMORY`, `FROM MEM`, `TO RUN`, etc.) registered via `register_command_alias`.
-- `copy_table()` is BEGIN/DELETE/INSERT/COMMIT with checked rollback.
+- LOAD/SAVE callbacks no longer copy between admin tables. Each `load_<X>_to_runtime` callback invokes `MysqlxConfigStore::install_<X>_from_admin(admindb, err)` (read editable mysqlx_<X>, swap into the module's in-memory state under its own lock). Each `save_<X>_from_runtime` callback invokes `MysqlxConfigStore::save_<X>_to_admin_table(admindb)` (dump module state into the editable mysqlx_<X> table). Disk-tier copies (LOAD/SAVE FROM/TO DISK) remain plain BEGIN/DELETE/INSERT/COMMIT between configdb and admindb.
+- Four free functions `refresh_users_runtime_view` / `refresh_routes_runtime_view` / `refresh_endpoints_runtime_view` / `refresh_variables_runtime_view` are registered at schema-registration time via `services.register_runtime_view({"runtime_mysqlx_<X>", &refresh_<X>_runtime_view, nullptr})`. Each calls `MysqlxConfigStore::project_<X>_to_runtime_view(admindb)` to wipe the destination admin-db table and refill it from the module's in-memory state. The chassis fires the relevant callback before any admin SELECT against the projected table.
 - `load_routes_to_runtime` calls `mysqlx_reconcile_listeners` weak-pointer if non-null.
 
 ---
 
 ## J. Mysqlx plugin: configuration runtime
 
-### `plugins/mysqlx/include/mysqlx_config_store.h` — NEW, 101 lines
-### `plugins/mysqlx/src/mysqlx_config_store.cpp` — NEW, 382 lines
+### `plugins/mysqlx/include/mysqlx_config_store.h` — NEW
+### `plugins/mysqlx/src/mysqlx_config_store.cpp` — NEW
 
-- Thread-safe in-memory view of runtime tables consumed by sessions/threads.
-- `MysqlxResolvedIdentity` (was `MysqlxCredentials` — renamed in `84bbdfdca`).
+- **Authoritative in-memory source of truth** for X-protocol routing/identity state. Sessions/threads consume it directly; the `runtime_mysqlx_*` tables in admin_db are admin-side projections of this store, refilled on demand by the plugin's runtime-view refresh callbacks (see §I).
+- `MysqlxResolvedIdentity` (was `MysqlxCredentials` — renamed in `84bbdfdca`); now carries a `comment` field.
+- `MysqlxRoute` also carries a `comment` field.
 - `MysqlxBackendAuthMode` enum: `mapped` / `service_account` / `pass_through`.
-- API: `load_from_runtime`, `resolve_identity`, `pick_endpoint`, `route_hostgroup`, `route_exists`.
-- `mutable std::shared_mutex mutex_` — readers (resolve_identity, pick_endpoint, route_exists) take shared locks; load_from_runtime takes exclusive.
-- `load_from_runtime()` reads `runtime_mysql_users` (canonical password/hostgroup) then `runtime_mysqlx_users` (X-specific overrides), `runtime_mysqlx_routes`, `runtime_mysqlx_backend_endpoints`, `runtime_mysql_servers WHERE status='ONLINE'`, `runtime_mysqlx_variables`.
-- Endpoint overrides (mysqlx_port, use_ssl, attributes) are keyed by `(hostname, mysql_port)` and applied on top of `runtime_mysql_servers`.
+- Public struct `MysqlxBackendEndpointOverride{hostname, mysql_port, mysqlx_port, use_ssl, attributes, comment}` — promoted from a file-local `MysqlxEndpointOverride` so SAVE / projection can round-trip the per-(hostname, mysql_port) overrides.
+- API: per-entity install / save / project triplets — `install_users_from_admin(db, err)` / `save_users_to_admin_table(db)` / `project_users_to_runtime_view(db)`, same shape for routes / endpoints / variables; convenience `install_all_from_admin(db, err)` (test-only fixture helper); `snapshot_active_routes()` returning `vector<pair<name, bind>>` for the listener reconciler; plus the read-side `resolve_identity`, `pick_endpoint`, `route_hostgroup`, `route_exists`.
+- `mutable std::shared_mutex mutex_` — readers (resolve_identity, pick_endpoint, route_exists, snapshot_active_routes, project_*_to_runtime_view) take shared locks; install_*_from_admin takes exclusive. Each install is independent: LOAD MYSQLX USERS does not touch routes/endpoints/variables.
+- `install_users_from_admin()` reads the editable `mysqlx_users` plus cross-module `runtime_mysql_users` (canonical password/hostgroup); `install_endpoints_from_admin()` reads the editable `mysqlx_backend_endpoints` and cross-module `runtime_mysql_servers WHERE status='ONLINE'`. None of the install paths touch any `runtime_mysqlx_*` table — those are projections, not inputs.
+- `endpoint_overrides_` (the public-struct overrides) is preserved across install_endpoints calls so SAVE can round-trip and the runtime-view projection faithfully reflects what was loaded.
 - `pick_from_hostgroup()` supports `first_available` and `round_robin[_with_fallback]`; round-robin uses a separate `rr_mutex_` so RR state doesn't interfere with config swaps.
-- Test-only `install_for_test` is unconditionally available — note it bypasses `load_from_runtime`.
+- Test-only `install_for_test` is unconditionally available — note it bypasses `install_*_from_admin`.
 
 ---
 
 ## K. Mysqlx plugin: listener reconciliation
 
-### `plugins/mysqlx/src/mysqlx_listener_reconcile.cpp` — NEW, 151 lines
+### `plugins/mysqlx/src/mysqlx_listener_reconcile.cpp` — NEW
 
-- Desired-state reconciler from `runtime_mysqlx_routes` to per-thread listener fds.
+- Desired-state reconciler from the `MysqlxConfigStore` (the authoritative in-memory state) to per-thread listener fds. Signature is `mysqlx_reconcile_listeners_impl(const MysqlxConfigStore& store, ...)` — no DB handle.
 - 3-step algorithm: snapshot desired set → remove stale/mis-bound listeners → add missing listeners (RR over thread pool).
 - Bind-change detection compares `threads[tidx]->get_listener_addr_for_route()` to `host:port` string; mismatch is treated as remove+add.
-- Single-admin-thread assumption is documented inline; DB snapshot is taken outside `route_to_thread_mutex`.
+- Single-admin-thread assumption is documented inline; the desired set comes from `store.snapshot_active_routes()` (taken under the store's shared lock, dropped before listener fd manipulation) rather than a SELECT against `runtime_mysqlx_routes`. An inline comment calls out why we deliberately do NOT read `runtime_mysqlx_routes` here: that table is an on-demand admin-side projection of the store, only populated when admin runs a SELECT against it; reading it from the LOAD path would see empty/stale data on every startup and every `LOAD MYSQLX ROUTES TO RUNTIME` call.
 - RR cursor `next_rr_index` is wrapped via `((next_rr_index % pool) + pool) % pool` — defensive against negative.
 - **Note:** if `add_listener` fails (port in use), the route is silently not added to `route_to_thread`; operator gets no error feedback beyond the chassis-level log. Future enhancement opportunity.
 
