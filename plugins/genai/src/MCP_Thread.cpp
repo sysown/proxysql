@@ -172,151 +172,141 @@ int MCP_Threads_Handler::get_variable(const char* name, char* val) {
 	if (!name || !val)
 		return -1;
 
-	if (!strcmp(name, "enabled")) {
-		sprintf(val, "%s", variables.mcp_enabled ? "true" : "false");
-		return 0;
-	}
-	if (!strcmp(name, "port")) {
-		sprintf(val, "%d", variables.mcp_port);
-		return 0;
-	}
-	if (!strcmp(name, "use_ssl")) {
-		sprintf(val, "%s", variables.mcp_use_ssl ? "true" : "false");
-		return 0;
-	}
-	if (!strcmp(name, "config_endpoint_auth")) {
-		sprintf(val, "%s", variables.mcp_config_endpoint_auth ? variables.mcp_config_endpoint_auth : "");
-		return 0;
-	}
-	if (!strcmp(name, "stats_endpoint_auth")) {
-		sprintf(val, "%s", variables.mcp_stats_endpoint_auth ? variables.mcp_stats_endpoint_auth : "");
-		return 0;
-	}
-	if (!strcmp(name, "query_endpoint_auth")) {
-		sprintf(val, "%s", variables.mcp_query_endpoint_auth ? variables.mcp_query_endpoint_auth : "");
-		return 0;
-	}
-	if (!strcmp(name, "admin_endpoint_auth")) {
-		sprintf(val, "%s", variables.mcp_admin_endpoint_auth ? variables.mcp_admin_endpoint_auth : "");
-		return 0;
-	}
-	if (!strcmp(name, "cache_endpoint_auth")) {
-		sprintf(val, "%s", variables.mcp_cache_endpoint_auth ? variables.mcp_cache_endpoint_auth : "");
-		return 0;
-	}
-	if (!strcmp(name, "ai_endpoint_auth")) {
-		sprintf(val, "%s", variables.mcp_ai_endpoint_auth ? variables.mcp_ai_endpoint_auth : "");
-		return 0;
-	}
-	if (!strcmp(name, "rag_endpoint_auth")) {
-		sprintf(val, "%s", variables.mcp_rag_endpoint_auth ? variables.mcp_rag_endpoint_auth : "");
-		return 0;
-	}
-	if (!strcmp(name, "timeout_ms")) {
-		sprintf(val, "%d", variables.mcp_timeout_ms);
-		return 0;
-	}
-	if (!strcmp(name, "stats_show_queries_max_rows")) {
-		sprintf(val, "%d", variables.mcp_stats_show_queries_max_rows);
-		return 0;
-	}
-	if (!strcmp(name, "stats_show_processlist_max_rows")) {
-		sprintf(val, "%d", variables.mcp_stats_show_processlist_max_rows);
-		return 0;
-	}
-	if (!strcmp(name, "stats_enable_debug_tools")) {
-		sprintf(val, "%s", variables.mcp_stats_enable_debug_tools ? "true" : "false");
-		return 0;
-	}
+	pthread_rwlock_rdlock(&rwlock);
 
-	return -1;
+	std::string out;
+	int rc = 0;
+	if (!strcmp(name, "enabled")) {
+		out = variables.mcp_enabled ? "true" : "false";
+	} else if (!strcmp(name, "port")) {
+		out = std::to_string(variables.mcp_port);
+	} else if (!strcmp(name, "use_ssl")) {
+		out = variables.mcp_use_ssl ? "true" : "false";
+	} else if (!strcmp(name, "config_endpoint_auth")) {
+		out = variables.mcp_config_endpoint_auth ? variables.mcp_config_endpoint_auth : "";
+	} else if (!strcmp(name, "stats_endpoint_auth")) {
+		out = variables.mcp_stats_endpoint_auth ? variables.mcp_stats_endpoint_auth : "";
+	} else if (!strcmp(name, "query_endpoint_auth")) {
+		out = variables.mcp_query_endpoint_auth ? variables.mcp_query_endpoint_auth : "";
+	} else if (!strcmp(name, "admin_endpoint_auth")) {
+		out = variables.mcp_admin_endpoint_auth ? variables.mcp_admin_endpoint_auth : "";
+	} else if (!strcmp(name, "cache_endpoint_auth")) {
+		out = variables.mcp_cache_endpoint_auth ? variables.mcp_cache_endpoint_auth : "";
+	} else if (!strcmp(name, "ai_endpoint_auth")) {
+		out = variables.mcp_ai_endpoint_auth ? variables.mcp_ai_endpoint_auth : "";
+	} else if (!strcmp(name, "rag_endpoint_auth")) {
+		out = variables.mcp_rag_endpoint_auth ? variables.mcp_rag_endpoint_auth : "";
+	} else if (!strcmp(name, "timeout_ms")) {
+		out = std::to_string(variables.mcp_timeout_ms);
+	} else if (!strcmp(name, "stats_show_queries_max_rows")) {
+		out = std::to_string(variables.mcp_stats_show_queries_max_rows);
+	} else if (!strcmp(name, "stats_show_processlist_max_rows")) {
+		out = std::to_string(variables.mcp_stats_show_processlist_max_rows);
+	} else if (!strcmp(name, "stats_enable_debug_tools")) {
+		out = variables.mcp_stats_enable_debug_tools ? "true" : "false";
+	} else {
+		rc = -1;
+	}
+	pthread_rwlock_unlock(&rwlock);
+
+	if (rc == 0) {
+		sprintf(val, "%s", out.c_str());
+	}
+	return rc;
 }
 
 int MCP_Threads_Handler::set_variable(const char* name, const char* value) {
 	if (!name || !value)
 		return -1;
 
+	pthread_rwlock_wrlock(&rwlock);
+	int rc = -1;
+
 	if (!strcmp(name, "enabled")) {
 		if (strcasecmp(value, "true") == 0 || strcasecmp(value, "1") == 0) {
 			variables.mcp_enabled = true;
-			return 0;
-		}
-		if (strcasecmp(value, "false") == 0 || strcasecmp(value, "0") == 0) {
+			rc = 0;
+		} else if (strcasecmp(value, "false") == 0 || strcasecmp(value, "0") == 0) {
 			variables.mcp_enabled = false;
-			return 0;
+			rc = 0;
 		}
-		return -1;
-	}
-	if (!strcmp(name, "port")) {
+	} else if (!strcmp(name, "port")) {
 		int port = atoi(value);
 		if (port > 0 && port < 65536) {
 			variables.mcp_port = port;
-			return 0;
+			rc = 0;
 		}
-		return -1;
-	}
-	if (!strcmp(name, "use_ssl")) {
+	} else if (!strcmp(name, "use_ssl")) {
 		if (strcasecmp(value, "true") == 0 || strcasecmp(value, "1") == 0) {
 			variables.mcp_use_ssl = true;
-			return 0;
-		}
-		if (strcasecmp(value, "false") == 0 || strcasecmp(value, "0") == 0) {
+			rc = 0;
+		} else if (strcasecmp(value, "false") == 0 || strcasecmp(value, "0") == 0) {
 			variables.mcp_use_ssl = false;
-			return 0;
+			rc = 0;
 		}
-		return -1;
-	}
-	if (!strcmp(name, "config_endpoint_auth")) {
-		if (variables.mcp_config_endpoint_auth)
-			free(variables.mcp_config_endpoint_auth);
-		variables.mcp_config_endpoint_auth = strdup(value);
-		return 0;
-	}
-	if (!strcmp(name, "stats_endpoint_auth")) {
-		if (variables.mcp_stats_endpoint_auth)
-			free(variables.mcp_stats_endpoint_auth);
-		variables.mcp_stats_endpoint_auth = strdup(value);
-		return 0;
-	}
-	if (!strcmp(name, "query_endpoint_auth")) {
-		if (variables.mcp_query_endpoint_auth)
-			free(variables.mcp_query_endpoint_auth);
-		variables.mcp_query_endpoint_auth = strdup(value);
-		return 0;
-	}
-	if (!strcmp(name, "admin_endpoint_auth")) {
-		if (variables.mcp_admin_endpoint_auth)
-			free(variables.mcp_admin_endpoint_auth);
-		variables.mcp_admin_endpoint_auth = strdup(value);
-		return 0;
-	}
-	if (!strcmp(name, "cache_endpoint_auth")) {
-		if (variables.mcp_cache_endpoint_auth)
-			free(variables.mcp_cache_endpoint_auth);
-		variables.mcp_cache_endpoint_auth = strdup(value);
-		return 0;
-	}
-	if (!strcmp(name, "ai_endpoint_auth")) {
-		if (variables.mcp_ai_endpoint_auth)
-			free(variables.mcp_ai_endpoint_auth);
-		variables.mcp_ai_endpoint_auth = strdup(value);
-		return 0;
-	}
-	if (!strcmp(name, "rag_endpoint_auth")) {
-		if (variables.mcp_rag_endpoint_auth)
-			free(variables.mcp_rag_endpoint_auth);
-		variables.mcp_rag_endpoint_auth = strdup(value);
-		return 0;
-	}
-	if (!strcmp(name, "timeout_ms")) {
+	} else if (!strcmp(name, "config_endpoint_auth")) {
+		char* dup = strdup(value);
+		if (dup != nullptr) {
+			if (variables.mcp_config_endpoint_auth)
+				free(variables.mcp_config_endpoint_auth);
+			variables.mcp_config_endpoint_auth = dup;
+			rc = 0;
+		}
+	} else if (!strcmp(name, "stats_endpoint_auth")) {
+		char* dup = strdup(value);
+		if (dup != nullptr) {
+			if (variables.mcp_stats_endpoint_auth)
+				free(variables.mcp_stats_endpoint_auth);
+			variables.mcp_stats_endpoint_auth = dup;
+			rc = 0;
+		}
+	} else if (!strcmp(name, "query_endpoint_auth")) {
+		char* dup = strdup(value);
+		if (dup != nullptr) {
+			if (variables.mcp_query_endpoint_auth)
+				free(variables.mcp_query_endpoint_auth);
+			variables.mcp_query_endpoint_auth = dup;
+			rc = 0;
+		}
+	} else if (!strcmp(name, "admin_endpoint_auth")) {
+		char* dup = strdup(value);
+		if (dup != nullptr) {
+			if (variables.mcp_admin_endpoint_auth)
+				free(variables.mcp_admin_endpoint_auth);
+			variables.mcp_admin_endpoint_auth = dup;
+			rc = 0;
+		}
+	} else if (!strcmp(name, "cache_endpoint_auth")) {
+		char* dup = strdup(value);
+		if (dup != nullptr) {
+			if (variables.mcp_cache_endpoint_auth)
+				free(variables.mcp_cache_endpoint_auth);
+			variables.mcp_cache_endpoint_auth = dup;
+			rc = 0;
+		}
+	} else if (!strcmp(name, "ai_endpoint_auth")) {
+		char* dup = strdup(value);
+		if (dup != nullptr) {
+			if (variables.mcp_ai_endpoint_auth)
+				free(variables.mcp_ai_endpoint_auth);
+			variables.mcp_ai_endpoint_auth = dup;
+			rc = 0;
+		}
+	} else if (!strcmp(name, "rag_endpoint_auth")) {
+		char* dup = strdup(value);
+		if (dup != nullptr) {
+			if (variables.mcp_rag_endpoint_auth)
+				free(variables.mcp_rag_endpoint_auth);
+			variables.mcp_rag_endpoint_auth = dup;
+			rc = 0;
+		}
+	} else if (!strcmp(name, "timeout_ms")) {
 		int timeout = atoi(value);
 		if (timeout >= 0) {
 			variables.mcp_timeout_ms = timeout;
-			return 0;
+			rc = 0;
 		}
-		return -1;
-	}
-	if (!strcmp(name, "stats_show_queries_max_rows")) {
+	} else if (!strcmp(name, "stats_show_queries_max_rows")) {
 		/**
 		 * Hard safety cap: do not allow configuring values above 1000.
 		 * This keeps MCP show_queries bounded even if callers request large pages.
@@ -324,11 +314,9 @@ int MCP_Threads_Handler::set_variable(const char* name, const char* value) {
 		int max_rows = atoi(value);
 		if (max_rows >= 1 && max_rows <= 1000) {
 			variables.mcp_stats_show_queries_max_rows = max_rows;
-			return 0;
+			rc = 0;
 		}
-		return -1;
-	}
-	if (!strcmp(name, "stats_show_processlist_max_rows")) {
+	} else if (!strcmp(name, "stats_show_processlist_max_rows")) {
 		/**
 		 * Hard safety cap: do not allow configuring values above 1000.
 		 * This keeps MCP show_processlist bounded even if callers request
@@ -337,46 +325,67 @@ int MCP_Threads_Handler::set_variable(const char* name, const char* value) {
 		int max_rows = atoi(value);
 		if (max_rows >= 1 && max_rows <= 1000) {
 			variables.mcp_stats_show_processlist_max_rows = max_rows;
-			return 0;
+			rc = 0;
 		}
-		return -1;
-	}
-	if (!strcmp(name, "stats_enable_debug_tools")) {
+	} else if (!strcmp(name, "stats_enable_debug_tools")) {
 		if (strcasecmp(value, "true") == 0 || strcasecmp(value, "1") == 0) {
 			variables.mcp_stats_enable_debug_tools = true;
-			return 0;
-		}
-		if (strcasecmp(value, "false") == 0 || strcasecmp(value, "0") == 0) {
+			rc = 0;
+		} else if (strcasecmp(value, "false") == 0 || strcasecmp(value, "0") == 0) {
 			variables.mcp_stats_enable_debug_tools = false;
-			return 0;
+			rc = 0;
 		}
-		return -1;
 	}
 
-	return -1;
+	pthread_rwlock_unlock(&rwlock);
+	return rc;
 }
 
 bool MCP_Threads_Handler::get_variable_string(const char* name, std::string& out) {
-	if (!name) return false;
+	if (!name) {
+		out.clear();
+		return false;
+	}
 
 	const auto bool_to_str = [](bool v) -> std::string { return v ? "true" : "false"; };
 	const auto int_to_str  = [](int v) -> std::string { return std::to_string(v); };
 
-	if (!strcmp(name, "enabled"))                          { out = bool_to_str(variables.mcp_enabled); return true; }
-	if (!strcmp(name, "port"))                             { out = int_to_str (variables.mcp_port); return true; }
-	if (!strcmp(name, "use_ssl"))                          { out = bool_to_str(variables.mcp_use_ssl); return true; }
-	if (!strcmp(name, "config_endpoint_auth"))             { out = variables.mcp_config_endpoint_auth ? variables.mcp_config_endpoint_auth : ""; return true; }
-	if (!strcmp(name, "stats_endpoint_auth"))              { out = variables.mcp_stats_endpoint_auth  ? variables.mcp_stats_endpoint_auth  : ""; return true; }
-	if (!strcmp(name, "query_endpoint_auth"))              { out = variables.mcp_query_endpoint_auth  ? variables.mcp_query_endpoint_auth  : ""; return true; }
-	if (!strcmp(name, "admin_endpoint_auth"))              { out = variables.mcp_admin_endpoint_auth  ? variables.mcp_admin_endpoint_auth  : ""; return true; }
-	if (!strcmp(name, "cache_endpoint_auth"))              { out = variables.mcp_cache_endpoint_auth  ? variables.mcp_cache_endpoint_auth  : ""; return true; }
-	if (!strcmp(name, "ai_endpoint_auth"))                 { out = variables.mcp_ai_endpoint_auth     ? variables.mcp_ai_endpoint_auth     : ""; return true; }
-	if (!strcmp(name, "rag_endpoint_auth"))                { out = variables.mcp_rag_endpoint_auth    ? variables.mcp_rag_endpoint_auth    : ""; return true; }
-	if (!strcmp(name, "timeout_ms"))                       { out = int_to_str (variables.mcp_timeout_ms); return true; }
-	if (!strcmp(name, "stats_show_queries_max_rows"))      { out = int_to_str (variables.mcp_stats_show_queries_max_rows); return true; }
-	if (!strcmp(name, "stats_show_processlist_max_rows"))  { out = int_to_str (variables.mcp_stats_show_processlist_max_rows); return true; }
-	if (!strcmp(name, "stats_enable_debug_tools"))         { out = bool_to_str(variables.mcp_stats_enable_debug_tools); return true; }
-	return false;
+	pthread_rwlock_rdlock(&rwlock);
+	bool ok = true;
+	if (!strcmp(name, "enabled")) {
+		out = bool_to_str(variables.mcp_enabled);
+	} else if (!strcmp(name, "port")) {
+		out = int_to_str(variables.mcp_port);
+	} else if (!strcmp(name, "use_ssl")) {
+		out = bool_to_str(variables.mcp_use_ssl);
+	} else if (!strcmp(name, "config_endpoint_auth")) {
+		out = variables.mcp_config_endpoint_auth ? variables.mcp_config_endpoint_auth : "";
+	} else if (!strcmp(name, "stats_endpoint_auth")) {
+		out = variables.mcp_stats_endpoint_auth ? variables.mcp_stats_endpoint_auth : "";
+	} else if (!strcmp(name, "query_endpoint_auth")) {
+		out = variables.mcp_query_endpoint_auth ? variables.mcp_query_endpoint_auth : "";
+	} else if (!strcmp(name, "admin_endpoint_auth")) {
+		out = variables.mcp_admin_endpoint_auth ? variables.mcp_admin_endpoint_auth : "";
+	} else if (!strcmp(name, "cache_endpoint_auth")) {
+		out = variables.mcp_cache_endpoint_auth ? variables.mcp_cache_endpoint_auth : "";
+	} else if (!strcmp(name, "ai_endpoint_auth")) {
+		out = variables.mcp_ai_endpoint_auth ? variables.mcp_ai_endpoint_auth : "";
+	} else if (!strcmp(name, "rag_endpoint_auth")) {
+		out = variables.mcp_rag_endpoint_auth ? variables.mcp_rag_endpoint_auth : "";
+	} else if (!strcmp(name, "timeout_ms")) {
+		out = int_to_str(variables.mcp_timeout_ms);
+	} else if (!strcmp(name, "stats_show_queries_max_rows")) {
+		out = int_to_str(variables.mcp_stats_show_queries_max_rows);
+	} else if (!strcmp(name, "stats_show_processlist_max_rows")) {
+		out = int_to_str(variables.mcp_stats_show_processlist_max_rows);
+	} else if (!strcmp(name, "stats_enable_debug_tools")) {
+		out = bool_to_str(variables.mcp_stats_enable_debug_tools);
+	} else {
+		out.clear();
+		ok = false;
+	}
+	pthread_rwlock_unlock(&rwlock);
+	return ok;
 }
 
 bool MCP_Threads_Handler::has_variable(const char* name) {

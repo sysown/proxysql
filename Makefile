@@ -561,6 +561,10 @@ install: src/proxysql
 		install -d /usr/lib/proxysql/plugins ; \
 		install -m 0755 plugins/mysqlx/ProxySQL_MySQLX_Plugin.so /usr/lib/proxysql/plugins/ ; \
 	fi
+	if [ -f plugins/genai/ProxySQL_GenAI_Plugin.so ]; then \
+		install -d /usr/lib/proxysql/plugins ; \
+		install -m 0755 plugins/genai/ProxySQL_GenAI_Plugin.so /usr/lib/proxysql/plugins/ ; \
+	fi
 ifeq ($(findstring proxysql,$(USERCHECK)),)
 	@echo "Creating proxysql user and group"
 	useradd -r -U -s /bin/false proxysql
@@ -600,6 +604,7 @@ uninstall:
 	if [ -f /etc/proxysql.cnf ]; then rm /etc/proxysql.cnf ; fi
 	if [ -f /usr/bin/proxysql ]; then rm /usr/bin/proxysql ; fi
 	if [ -f /usr/lib/proxysql/plugins/ProxySQL_MySQLX_Plugin.so ]; then rm /usr/lib/proxysql/plugins/ProxySQL_MySQLX_Plugin.so ; fi
+	if [ -f /usr/lib/proxysql/plugins/ProxySQL_GenAI_Plugin.so ]; then rm /usr/lib/proxysql/plugins/ProxySQL_GenAI_Plugin.so ; fi
 	if [ -d /usr/lib/proxysql/plugins ]; then rmdir /usr/lib/proxysql/plugins 2>/dev/null || true ; fi
 	if [ -d /usr/lib/proxysql ]; then rmdir /usr/lib/proxysql 2>/dev/null || true ; fi
 	if [ -d /var/lib/proxysql ]; then rmdir /var/lib/proxysql 2>/dev/null || true ; fi

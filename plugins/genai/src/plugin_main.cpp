@@ -271,7 +271,6 @@ bool mcp_load_variables_from_admindb(GenAIPluginContext& ctx) {
 		return false;
 	}
 	if (rs != nullptr) {
-		ctx.mcp->wrlock();
 		for (auto* row : rs->rows) {
 			const char* qualified = row->fields[0];
 			const char* value = row->fields[1];
@@ -279,7 +278,6 @@ bool mcp_load_variables_from_admindb(GenAIPluginContext& ctx) {
 				ctx.mcp->set_variable(qualified + 4, value ? value : "");
 			}
 		}
-		ctx.mcp->wrunlock();
 		delete rs;
 	}
 	return true;
@@ -316,8 +314,14 @@ bool mcp_save_variables_to_admindb(GenAIPluginContext& ctx) {
 	sqlite3_stmt* statement = stmt.get();
 	int rc = 0;  // SAFE_SQLITE3_STEP2 macro reads/writes free `rc`
 
-	ctx.mcp->wrlock();
+	if (!admindb->execute("BEGIN")) {
+		return false;
+	}
 	char** varnames = ctx.mcp->get_variables_list();
+	if (varnames == nullptr) {
+		admindb->execute("ROLLBACK");
+		return false;
+	}
 	for (int i = 0; varnames[i] != nullptr; ++i) {
 		// std::string variant — bearer-token endpoint_auth values can
 		// exceed any reasonable fixed-buffer size and the legacy
@@ -333,15 +337,28 @@ bool mcp_save_variables_to_admindb(GenAIPluginContext& ctx) {
 		(*proxy_sqlite3_bind_text)(statement, 1, qualified.c_str(), -1, SQLITE_TRANSIENT);
 		(*proxy_sqlite3_bind_text)(statement, 2, val.c_str(), -1, SQLITE_TRANSIENT);
 		SAFE_SQLITE3_STEP2(statement);
+		if (rc != SQLITE_DONE) {
+			genai_log(6, "genai plugin: SAVE mcp variables failed for %s (rc=%d)\n",
+			          qualified.c_str(), rc);
+			for (int j = 0; varnames[j] != nullptr; ++j) {
+				free(varnames[j]);
+			}
+			free(varnames);
+			admindb->execute("ROLLBACK");
+			return false;
+		}
 		(*proxy_sqlite3_clear_bindings)(statement);
 		(*proxy_sqlite3_reset)(statement);
 	}
-	ctx.mcp->wrunlock();
 
 	for (int i = 0; varnames[i] != nullptr; ++i) {
 		free(varnames[i]);
 	}
 	free(varnames);
+	if (!admindb->execute("COMMIT")) {
+		admindb->execute("ROLLBACK");
+		return false;
+	}
 	return true;
 }
 
@@ -433,8 +450,14 @@ bool genai_save_variables_to_admindb(GenAIPluginContext& ctx) {
 	sqlite3_stmt* statement = stmt.get();
 	int rc = 0;
 
-	GloGATH->wrlock();
+	if (!admindb->execute("BEGIN")) {
+		return false;
+	}
 	char** varnames = GloGATH->get_variables_list();
+	if (varnames == nullptr) {
+		admindb->execute("ROLLBACK");
+		return false;
+	}
 	for (int i = 0; varnames[i] != nullptr; ++i) {
 		// GenAI_Threads_Handler::get_variable returns char* the caller frees.
 		char* val = GloGATH->get_variable(varnames[i]);
@@ -443,17 +466,31 @@ bool genai_save_variables_to_admindb(GenAIPluginContext& ctx) {
 		(*proxy_sqlite3_bind_text)(statement, 1, qualified.c_str(), -1, SQLITE_TRANSIENT);
 		(*proxy_sqlite3_bind_text)(statement, 2, val ? val : "", -1, SQLITE_TRANSIENT);
 		SAFE_SQLITE3_STEP2(statement);
+		if (rc != SQLITE_DONE) {
+			genai_log(6, "genai plugin: SAVE genai variables failed for %s (rc=%d)\n",
+			          qualified.c_str(), rc);
+			if (val != nullptr) free(val);
+			for (int j = 0; varnames[j] != nullptr; ++j) {
+				free(varnames[j]);
+			}
+			free(varnames);
+			admindb->execute("ROLLBACK");
+			return false;
+		}
 		(*proxy_sqlite3_clear_bindings)(statement);
 		(*proxy_sqlite3_reset)(statement);
 
 		if (val != nullptr) free(val);
 	}
-	GloGATH->wrunlock();
 
 	for (int i = 0; varnames[i] != nullptr; ++i) {
 		free(varnames[i]);
 	}
 	free(varnames);
+	if (!admindb->execute("COMMIT")) {
+		admindb->execute("ROLLBACK");
+		return false;
+	}
 	return true;
 }
 
@@ -778,7 +815,8 @@ void genai_log(int level, const char* fmt, ...) {
 	// Pre-init / unit-test fallback so callers don't lose messages
 	// just because services isn't wired up yet.
 	fputs(buf, stderr);
-	if (n == 0 || buf[n - 1] != '\n') fputc('\n', stderr);
+	const int written = (n < static_cast<int>(sizeof(buf))) ? n : static_cast<int>(sizeof(buf) - 1);
+	if (written == 0 || buf[written - 1] != '\n') fputc('\n', stderr);
 }
 
 // Default visibility is required because the plugin .so is built with

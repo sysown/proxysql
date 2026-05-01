@@ -26,28 +26,6 @@ void apply_mysql_timeouts(MYSQL* mysql, unsigned int seconds) {
 	mysql_options(mysql, MYSQL_OPT_WRITE_TIMEOUT,   &seconds);
 }
 
-/// Compose a libpq conninfo string.  Values are passed through as-is —
-/// callers are responsible for not embedding back-ticks in user-supplied
-/// fields (auth profiles are operator-controlled, not end-user-supplied,
-/// so this is acceptable for 4.B).  4.D will add proper escaping if/when
-/// needed.
-std::string build_pgsql_conninfo(
-	const std::string& host,
-	int port,
-	const BackendTarget& target
-) {
-	std::ostringstream s;
-	s << "host=" << host
-	  << " port=" << port
-	  << " user=" << target.user
-	  << " password=" << target.password
-	  << " connect_timeout=" << target.connect_timeout_s;
-	if (!target.default_schema.empty()) {
-		s << " dbname=" << target.default_schema;
-	}
-	return s.str();
-}
-
 } // namespace
 
 MySQLDialResult dial_mysql(const std::string& host, int port, const BackendTarget& target) {
@@ -101,8 +79,27 @@ PgSQLDialResult dial_pgsql(const std::string& host, int port, const BackendTarge
 		return out;
 	}
 
-	std::string conninfo = build_pgsql_conninfo(host, port, target);
-	PGconn* pgconn = PQconnectdb(conninfo.c_str());
+	const std::string port_str = std::to_string(port);
+	const std::string timeout_str = std::to_string(target.connect_timeout_s);
+	const char* keywords[] = {
+		"host",
+		"port",
+		"user",
+		"password",
+		"connect_timeout",
+		"dbname",
+		nullptr
+	};
+	const char* values[] = {
+		host.c_str(),
+		port_str.c_str(),
+		target.user.c_str(),
+		target.password.c_str(),
+		timeout_str.c_str(),
+		target.default_schema.empty() ? nullptr : target.default_schema.c_str(),
+		nullptr
+	};
+	PGconn* pgconn = PQconnectdbParams(keywords, values, 0);
 	if (pgconn == nullptr) {
 		out.error = "dial_pgsql: PQconnectdb returned null";
 		return out;
