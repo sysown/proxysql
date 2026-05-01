@@ -144,6 +144,7 @@ void MysqlxSession::init(int fd, Mysqlx_Thread* thread_ptr) {
 	target_address_.clear();
 	target_port_ = 0;
 	target_use_ssl_ = false;
+	route_name_.clear();
 	identity_.reset();
 	start_time_ = monotonic_time_ms();
 	last_active_time_ = start_time_;
@@ -166,6 +167,7 @@ void MysqlxSession::reset() {
 	target_address_.clear();
 	target_port_ = 0;
 	target_use_ssl_ = false;
+	route_name_.clear();
 	identity_.reset();
 	compression_algo_ = MYSQLX_COMPR_NONE;
 	compression_combine_mixed_messages_ = false;
@@ -896,6 +898,12 @@ void MysqlxSession::forward_to_backend() {
 		const auto& frame = client_ds_.front_frame();
 		if (frame.size() > 5) {
 			server_ds().enqueue_frame(frame[4], frame.data() + 5, frame.size() - 5);
+			// Account the X-Protocol payload bytes (excluding the 5-byte
+			// frame header) the proxy is forwarding to the backend. This
+			// is the "client → proxy → backend" leg; the counter is
+			// charged to the resolved route so operators can compare
+			// request volume across routes.
+			mysqlx_stats().record_bytes_sent(route_name_, target_hostgroup_, frame.size() - 5);
 		} else {
 			server_ds().enqueue_frame(frame[4], nullptr, 0);
 		}
@@ -989,6 +997,14 @@ void MysqlxSession::handler_waiting_server_msg() {
 		uint8_t msg_type = frame[4];
 
 		forward_frame_to_client(msg_type, frame);
+		// Account the X-Protocol payload bytes the proxy is forwarding
+		// from the backend to the client (size minus the 5-byte frame
+		// header; 0-payload OK/EOF frames contribute 0). Charged to the
+		// resolved route. NOTICE frames are also counted here — they're
+		// part of the data plane the operator paid for forwarding.
+		if (frame.size() > 5) {
+			mysqlx_stats().record_bytes_recv(route_name_, target_hostgroup_, frame.size() - 5);
+		}
 		server_ds().pop_frame();
 
 		if (msg_type != Mysqlx::ServerMessages_Type_NOTICE &&
@@ -1175,6 +1191,7 @@ int MysqlxSession::resolve_backend_target() {
 	target_address_   = ep.hostname;
 	target_port_      = ep.mysqlx_port;
 	target_use_ssl_   = ep.use_ssl;
+	route_name_       = route_name;
 	return 0;
 }
 

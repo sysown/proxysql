@@ -15,7 +15,7 @@
 
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(22);
+	plan(26);
 	diag("=== mysqlx_stats_unit-t starting ===");
 
 	// Test 1-3: Stats counters.
@@ -326,6 +326,59 @@ int main() {
 		writer.join();
 		reader.join();
 		ok(true, "concurrent get_conn_ok while record_conn_ok: no crash");
+	}
+
+	// Test 23-26: bytes_sent / bytes_recv accumulation (P0 of #5691).
+	{
+		MysqlxStatsStore store;
+		store.record_bytes_sent("rw", 1, 100);
+		store.record_bytes_sent("rw", 1, 250);
+		store.record_bytes_sent("ro", 2, 42);
+		store.record_bytes_recv("rw", 1, 1000);
+		store.record_bytes_recv("rw", 1, 1500);
+		store.record_bytes_recv("ro", 2, 7);
+		// Zero-sized payload increments must be a no-op.
+		store.record_bytes_sent("rw", 1, 0);
+		store.record_bytes_recv("rw", 1, 0);
+
+		// Mix in a conn_used so the row carries multiple counters.
+		store.record_conn_used("rw", 1);
+
+		SQLite3DB statsdb;
+		statsdb.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);  // NOSONAR: SQLite3DB::open requires non-const char*
+		statsdb.execute(
+			"CREATE TABLE stats_mysqlx_routes ("
+			" name TEXT PRIMARY KEY,"
+			" destination_hostgroup INT NOT NULL DEFAULT 0,"
+			" ConnOK INT NOT NULL DEFAULT 0,"
+			" ConnERR INT NOT NULL DEFAULT 0,"
+			" ConnUsed INT NOT NULL DEFAULT 0,"
+			" Bytes_data_sent BIGINT NOT NULL DEFAULT 0,"
+			" Bytes_data_recv BIGINT NOT NULL DEFAULT 0)"
+		);
+		store.flush_to_sqlite(statsdb);
+
+		int rw_sent = statsdb.return_one_int(
+			"SELECT Bytes_data_sent FROM stats_mysqlx_routes WHERE name='rw'");
+		int ro_sent = statsdb.return_one_int(
+			"SELECT Bytes_data_sent FROM stats_mysqlx_routes WHERE name='ro'");
+		ok(rw_sent == 350 && ro_sent == 42,
+		   "bytes_sent accumulates per route (rw=%d ro=%d)", rw_sent, ro_sent);
+
+		int rw_recv = statsdb.return_one_int(
+			"SELECT Bytes_data_recv FROM stats_mysqlx_routes WHERE name='rw'");
+		int ro_recv = statsdb.return_one_int(
+			"SELECT Bytes_data_recv FROM stats_mysqlx_routes WHERE name='ro'");
+		ok(rw_recv == 2500 && ro_recv == 7,
+		   "bytes_recv accumulates per route (rw=%d ro=%d)", rw_recv, ro_recv);
+
+		int rw_used = statsdb.return_one_int(
+			"SELECT ConnUsed FROM stats_mysqlx_routes WHERE name='rw'");
+		ok(rw_used == 1, "ConnUsed flushes to SQLite alongside bytes counters");
+
+		int ro_hg = statsdb.return_one_int(
+			"SELECT destination_hostgroup FROM stats_mysqlx_routes WHERE name='ro'");
+		ok(ro_hg == 2, "destination_hostgroup carried through bytes-only flush");
 	}
 
 	return exit_status();
