@@ -451,6 +451,98 @@ static void test_mysql41_auth_wrong_password() {
 	close(fds[1]);
 }
 
+// Regression test for the design-spec rule that backend_auth_mode
+// 'pass_through' must be rejected at auth time rather than silently
+// downgraded to mapped/service_account. See docs/superpowers/specs/
+// 2026-04-07-mysqlx-plugin-design.md:298-299 ("configuration validation
+// should reject pass_through rather than silently downgrading it") and
+// the MysqlxSession::enforce_identity_policy() rejection landed in
+// commit 2bfc88661.
+static void test_pass_through_rejected() {
+	diag(">>> %s", __func__);
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+
+	MysqlxSession sess;
+	sess.init(fds[0], nullptr);
+
+	// Identity opts into pass_through. Otherwise this is a perfectly
+	// valid MYSQL41-capable user — password matches, x_enabled=1,
+	// allowed_auth_methods permits MYSQL41 — so any rejection on this
+	// path can only come from the backend_auth_mode policy check.
+	sess.set_identity_lookup([](const std::string& user) -> std::optional<MysqlxResolvedIdentity> {
+		if (user == "ptuser") {
+			MysqlxResolvedIdentity id{};
+			id.username = user;
+			id.x_enabled = true;
+			id.password = "testpass";
+			id.allowed_auth_methods = "MYSQL41";
+			id.backend_auth_mode = MysqlxBackendAuthMode::pass_through;
+			return id;
+		}
+		return std::nullopt;
+	});
+
+	sess.to_process = true;
+
+	Mysqlx::Session::AuthenticateStart auth_start;
+	auth_start.set_mech_name("MYSQL41");
+	auth_start.set_auth_data(std::string("\0testdb\0ptuser", 14));
+	std::string serialized;
+	auth_start.SerializeToString(&serialized);
+
+	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_START,
+		reinterpret_cast<const uint8_t*>(serialized.data()), serialized.size());
+
+	sess.handler();
+
+	uint8_t buf[4096];
+	usleep(10000);
+	ssize_t r = read_x_frame(fds[1], buf, sizeof(buf));
+
+	Mysqlx::Session::AuthenticateContinue cont_msg;
+	cont_msg.ParseFromArray(buf + 5, r - 5);
+	std::vector<uint8_t> challenge(cont_msg.auth_data().begin(), cont_msg.auth_data().end());
+
+	// Send the *correct* scramble. If the rejection path didn't fire
+	// we'd see SESS_AUTHENTICATE_OK; the test asserts the contrary.
+	std::vector<uint8_t> scramble = mysqlx_mysql41_scramble(challenge, "testpass");
+	std::string hex_scramble = mysqlx_hex_encode(scramble);
+	std::string response_str = std::string("*") + hex_scramble;
+
+	cont_msg.Clear();
+	cont_msg.set_auth_data(response_str);
+	cont_msg.SerializeToString(&serialized);
+
+	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_CONTINUE,
+		reinterpret_cast<const uint8_t*>(serialized.data()), serialized.size());
+
+	sess.to_process = true;
+	sess.handler();
+
+	usleep(10000);
+	r = read_x_frame(fds[1], buf, sizeof(buf));
+	ok(r > 0, "got response for pass_through user");
+	if (r > 0) {
+		ok(buf[4] == Mysqlx::ServerMessages_Type_ERROR,
+		   "pass_through auth rejected (Error frame, not AUTHENTICATE_OK)");
+
+		// The error message must mention pass_through so an operator
+		// looking at the client-side error knows exactly which knob is
+		// the culprit.
+		Mysqlx::Error err;
+		if (err.ParseFromArray(buf + 5, static_cast<int>(r - 5))) {
+			ok(err.code() == 1045, "pass_through rejection uses code 1045");
+			ok(err.msg().find("pass_through") != std::string::npos,
+			   "error message mentions 'pass_through' (got: %s)", err.msg().c_str());
+		}
+	}
+	ok(!sess.is_healthy(), "session unhealthy after pass_through rejection");
+
+	close(fds[0]);
+	close(fds[1]);
+}
+
 static void test_error_severity_non_fatal() {
 	diag(">>> %s", __func__);
 	int fds[2];
@@ -688,7 +780,7 @@ static void test_session_timestamps() {
 
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(60);
+	plan(65);
 	diag("=== mysqlx_session_unit-t starting ===");
 
 	test_session_init();
@@ -701,6 +793,7 @@ int main() {
 	test_plain_rejected_without_tls();
 	test_mysql41_auth_with_credentials();
 	test_mysql41_auth_wrong_password();
+	test_pass_through_rejected();
 	test_error_severity_non_fatal();
 	test_compression_error_non_fatal();
 	test_post_auth_capabilities_get();
