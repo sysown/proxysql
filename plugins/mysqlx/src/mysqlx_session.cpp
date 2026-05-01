@@ -1405,6 +1405,15 @@ void MysqlxSession::handler_session_reset_waiting() {
 			if (backend_conn_) {
 				backend_conn_->set_has_prepared_statement(false);
 				backend_conn_->set_in_transaction(false);
+				// Issue #5697: mark the connection non-cacheable. A
+				// successful Session::Reset wiped backend session state
+				// (schema, isolation level, charset, prepared stmts,
+				// session vars); returning it to the pool would leak
+				// blank state to a future client expecting per-identity
+				// defaults. is_reusable() honors this flag and the
+				// subsequent return_backend_to_pool() will delete the
+				// connection instead of caching it.
+				backend_conn_->set_needs_post_reset_rehandshake(true);
 			}
 			return_backend_to_pool();
 			last_active_time_ = monotonic_time_ms();

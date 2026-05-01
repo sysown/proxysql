@@ -44,6 +44,15 @@ bool MysqlxConnection::is_reusable() const {
 	// would inherit session-scoped state.
 	if (in_transaction_) return false;
 	if (has_prepared_stmt_) return false;
+	// Post-Session::Reset (issue #5697): a connection whose backend
+	// just processed Session::Reset has had its session-scoped state
+	// wiped (current schema, isolation level, character set, prepared
+	// statements, session vars). Returning it to the pool without an
+	// explicit rehandshake would let a subsequent reuse start with
+	// blank state instead of the per-identity defaults the cache key
+	// implies. Drop it instead — the next request gets a fresh
+	// connection.
+	if (needs_post_reset_rehandshake_) return false;
 	return reusable_;
 }
 
@@ -52,6 +61,14 @@ void MysqlxConnection::reset() {
 	has_prepared_stmt_ = false;
 	reusable_ = true;
 	auth_state_ = BACKEND_AUTH_NOT_STARTED;
+	// Defensive: clear the post-reset rehandshake flag too. In practice
+	// is_reusable() catches the flag before reset() runs (the cache
+	// path checks reusable then either deletes or resets), so a
+	// connection with the flag set never reaches this function in the
+	// production return_connection_to_cache flow. Cleared here so any
+	// future code path that calls reset() directly (e.g. retry-on-error)
+	// doesn't permanently disable a connection by accident.
+	needs_post_reset_rehandshake_ = false;
 	// Scrub residual I/O so the next session that picks up this pooled
 	// connection cannot inherit straggler frames from the prior session.
 	// Examples: a NOTICE that arrived after the terminal frame, an unread
