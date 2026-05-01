@@ -1,6 +1,7 @@
 #include "mysqlx_admin_schema.h"
 
 #include "mysqlx_plugin.h"
+#include "mysqlx_stats.h"
 #include "sqlite3db.h"
 
 #include <initializer_list>
@@ -246,6 +247,25 @@ void refresh_variables_runtime_view(SQLite3DB* admindb, void*) {
 	mysqlx_context().config_store->project_variables_to_runtime_view(*admindb);
 }
 
+// Stats-projection refresh callback: chassis fires this on demand when an
+// admin SELECT references stats_mysqlx_routes, so the per-route counters
+// are refilled lazily from MysqlxStatsStore right before the operator
+// reads them.
+//
+// flush_to_sqlite writes to a bare table name, so the callback must hand
+// it the *statsdb* handle — the chassis-supplied `admindb` argument
+// reaches stats_mysqlx_routes only via the `stats.` attached schema, and
+// that's an unnecessary detour. The plugin already cached the services
+// pointer in mysqlx_context().services at Phase D init, so the get_statsdb
+// trampoline is reachable.
+void refresh_stats_routes_view(SQLite3DB* /*admindb*/, void*) {
+	if (mysqlx_context().services == nullptr) return;
+	if (mysqlx_context().services->get_statsdb == nullptr) return;
+	SQLite3DB* statsdb = mysqlx_context().services->get_statsdb();
+	if (statsdb == nullptr) return;
+	mysqlx_stats().flush_to_sqlite(*statsdb);
+}
+
 bool disk_to_memory(SQLite3DB& admindb, const char* table_name) {
 	if (!admindb.execute("BEGIN")) {
 		return false;
@@ -461,6 +481,7 @@ bool mysqlx_register_admin_schema(ProxySQL_PluginServices& services) {
 		services.register_runtime_view({kRuntimeMysqlxRoutesTable,            &refresh_routes_runtime_view,    nullptr});
 		services.register_runtime_view({kRuntimeMysqlxBackendEndpointsTable,  &refresh_endpoints_runtime_view, nullptr});
 		services.register_runtime_view({kRuntimeMysqlxVariablesTable,         &refresh_variables_runtime_view, nullptr});
+		services.register_runtime_view({kStatsMysqlxRoutesTable,              &refresh_stats_routes_view,      nullptr});
 	}
 
 	// Stats tables (stats_db only, no config copy needed).
