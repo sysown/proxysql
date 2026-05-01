@@ -211,6 +211,25 @@ void Mysqlx_Thread::process_ready_fds(int nfds) {
 }
 
 void Mysqlx_Thread::accept_new_connection(int listener_fd) {
+	// Resolve the listener's logical route name from the parallel
+	// vectors. The lookup is unconditional (cheap: tens of entries
+	// per thread max) so the session can pick up per-route policies
+	// such as `tls_mode='passthrough'` before any X-Protocol message
+	// arrives. An empty result is fine — sessions with no listener
+	// route fall back to the deployment-wide defaults.
+	std::string listener_route;
+	{
+		std::lock_guard<std::mutex> lock(listener_mutex_);
+		for (size_t i = 0; i < listener_fds_.size(); ++i) {
+			if (listener_fds_[i] == listener_fd) {
+				if (i < listener_route_names_.size()) {
+					listener_route = listener_route_names_[i];
+				}
+				break;
+			}
+		}
+	}
+
 	while (true) {
 		struct sockaddr_in addr;
 		socklen_t addrlen = sizeof(addr);
@@ -233,7 +252,7 @@ void Mysqlx_Thread::accept_new_connection(int listener_fd) {
 		setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 
 		MysqlxSession* sess = new MysqlxSession();
-		sess->init(client_fd, this);
+		sess->init(client_fd, this, listener_route);
 		sess->to_process = true;
 
 		const MysqlxConfigStore* store = config_store_;
