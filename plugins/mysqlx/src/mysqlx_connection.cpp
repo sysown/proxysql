@@ -241,7 +241,40 @@ int MysqlxConnection::step_auth_capabilities_get_sent() {
 int MysqlxConnection::step_auth_capabilities_set_sent() {
 	auto frame = read_auth_frame();
 	if (!frame) return 1;
-	if (frame->size() < 5 || (*frame)[4] != Mysqlx::ServerMessages_Type_OK) {
+	if (frame->size() < 5) {
+		auth_state_ = BACKEND_AUTH_ERROR;
+		return -1;
+	}
+	const uint8_t msg_type = (*frame)[4];
+
+	// `preferred` mode contract (mysqlx_tls_backend_mode=preferred):
+	// the backend may reject CapabilitiesSet(tls=true) with a
+	// Mysqlx::Error when it has no TLS configured. Under preferred,
+	// the proxy is allowed to silently downgrade to plaintext and
+	// continue with AuthenticateStart on the same TCP connection.
+	// Under `required` (and AsClient with frontend-TLS), an Error
+	// here is fatal — the operator's policy demands encryption.
+	//
+	// Two notes on the wire-level state after a fallback:
+	//   * No TLS handshake has occurred, so backend_ds_ remains in
+	//     plaintext mode and tls_active_ stays false. This keeps
+	//     the connection out of the encrypted half of the pool
+	//     (Mysqlx_Thread::get_connection_from_cache matches on
+	//     tls_active_), so a future AsClient session against an
+	//     encrypted client will not pick this connection up.
+	//   * backend_tls_required_ is cleared so the caller's later
+	//     step_auth_capabilities_set_sent / step_auth_tls_handshake
+	//     branches don't subsequently try to negotiate TLS again.
+	if (msg_type == Mysqlx::ServerMessages_Type_ERROR) {
+		if (backend_tls_required_ && backend_tls_fallback_allowed_) {
+			backend_tls_required_ = false;
+			return send_authenticate_start();
+		}
+		auth_state_ = BACKEND_AUTH_ERROR;
+		return -1;
+	}
+
+	if (msg_type != Mysqlx::ServerMessages_Type_OK) {
 		auth_state_ = BACKEND_AUTH_ERROR;
 		return -1;
 	}

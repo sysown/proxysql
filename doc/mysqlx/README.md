@@ -64,22 +64,22 @@ The plugin is loaded after the Admin module initializes. The sequence is:
 
 Global configuration variables for the mysqlx plugin.
 
-Only the four variables below are wired through `MysqlxConfigStore`'s
+Only the five variables below are wired through `MysqlxConfigStore`'s
 install/save round-trip. Operator-defined rows with any other
 `variable_name` are accepted by the table's CHECK constraints and may be
 inserted, but are silently ignored on `LOAD MYSQLX VARIABLES TO RUNTIME`
 and *deleted* by the next `SAVE MYSQLX VARIABLES TO MEMORY` (the SAVE
-path replaces the entire table with the four canonical scalars from the
-store). TLS-related variables (`mysqlx_tls_cert`, `mysqlx_tls_key`,
-`mysqlx_tls_ca`, `mysqlx_tls_backend_mode`) are reserved names not yet
-wired — see issue tracker.
+path replaces the entire table with the canonical scalars from the
+store). Reserved-but-not-wired TLS variables: `mysqlx_tls_cert`,
+`mysqlx_tls_key`, `mysqlx_tls_ca` — see issue tracker.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `mysqlx_thread_pool_size` | `4` | Number of event loop threads. Range: 1–64. Each thread runs an independent `poll()` loop handling thousands of concurrent sessions. |
 | `mysqlx_connect_timeout` | `10000` | Backend connection timeout in milliseconds. Applied to non-blocking `connect()` + backend authentication. |
 | `mysqlx_tls_mode` | `DISABLED` | Frontend TLS mode: `DISABLED`, `PREFERRED`, or `REQUIRED`. See [TLS Modes](#81-tls-modes). |
-| `mysqlx_max_cached_connections_per_thread` | `100` | Maximum number of idle backend connections cached per thread. Connections are matched by hostgroup, user, and schema. |
+| `mysqlx_tls_backend_mode` | `as_client` | Backend (proxy→backend) TLS mode: `disabled`, `preferred`, `required`, or `as_client`. See [Backend TLS Modes](#82-backend-tls-modes). |
+| `mysqlx_max_cached_connections_per_thread` | `100` | Maximum number of idle backend connections cached per thread. Connections are matched by hostgroup, user, schema, *and* backend TLS state. |
 
 ```sql
 -- View current variables
@@ -160,7 +160,7 @@ A read-only view of the per-host X-Protocol port overrides held by `MysqlxConfig
 
 ### 4.7. `runtime_mysqlx_variables` (Runtime View)
 
-A read-only view of the four mysqlx tunables held by `MysqlxConfigStore` (`mysqlx_thread_pool_size`, `mysqlx_connect_timeout`, `mysqlx_tls_mode`, `mysqlx_max_cached_connections_per_thread`). Same mechanism as [`runtime_mysqlx_users`](#42-runtime_mysqlx_users-runtime-view): refilled by a chassis-registered refresh callback before any `SELECT`, never written by LOAD, never read by SAVE.
+A read-only view of the five mysqlx tunables held by `MysqlxConfigStore` (`mysqlx_thread_pool_size`, `mysqlx_connect_timeout`, `mysqlx_tls_mode`, `mysqlx_tls_backend_mode`, `mysqlx_max_cached_connections_per_thread`). Same mechanism as [`runtime_mysqlx_users`](#42-runtime_mysqlx_users-runtime-view): refilled by a chassis-registered refresh callback before any `SELECT`, never written by LOAD, never read by SAVE.
 
 `LOAD MYSQLX VARIABLES TO RUNTIME` reads `mysqlx_variables` directly into the store; `SAVE MYSQLX VARIABLES FROM RUNTIME TO MEMORY` writes the store's four scalars back into `mysqlx_variables` (replacing the entire table). Operator-added rows in `mysqlx_variables` whose `variable_name` is not one of the four canonical names are not retained on SAVE — only the four known tunables round-trip.
 
@@ -333,7 +333,10 @@ Unknown message types receive `ER_X_BAD_MESSAGE` error.
 
 ## 8. TLS
 
-### 8.1. TLS Modes
+### 8.1. Frontend TLS Modes (client → proxy)
+
+Driven by `mysqlx_tls_mode` (uppercase values for backwards compatibility
+with the legacy mysql-side mode names).
 
 | Mode | Description |
 |------|-------------|
@@ -341,16 +344,64 @@ Unknown message types receive `ER_X_BAD_MESSAGE` error.
 | `PREFERRED` | TLS capability advertised. Client chooses whether to upgrade. |
 | `REQUIRED` | TLS capability advertised. Connection rejected if client does not upgrade. |
 
-### 8.2. Configuration
+### 8.2. Backend TLS Modes (proxy → backend)
+
+Driven by `mysqlx_tls_backend_mode` (lowercase values, matching MySQL
+Router 8.0's `client_ssl_mode` / `server_ssl_mode` taxonomy). Default is
+`as_client`, which matches the legacy implicit behaviour where backend
+TLS was tied to the frontend leg's TLS state.
+
+| Mode | Description |
+|------|-------------|
+| `disabled` | Never use TLS for the proxy→backend leg, regardless of frontend TLS. Plaintext only. |
+| `preferred` | Send `CapabilitiesSet(tls=true)` to the backend; on `Mysqlx::Error`, silently downgrade to plaintext on the same TCP connection and continue with `AuthenticateStart`. Best-effort encryption — works against fleets with mixed TLS configurations. |
+| `required` | Send `CapabilitiesSet(tls=true)`; on `Mysqlx::Error`, fail the backend connect with error 3152 (`Backend TLS handshake failed`). Use when policy mandates encryption proxy↔backend. |
+| `as_client` | Mirror the client's TLS choice. If the client connected over TLS, the backend leg is encrypted; if the client connected in plaintext, the backend leg is plaintext. Matches MySQL Router's AsClient mode. |
+
+The per-endpoint flag `mysqlx_backend_endpoints.use_ssl=1` is an
+operator-controlled override that **promotes** plaintext to TLS for that
+specific endpoint regardless of mode (it can never demote — there is no
+way to opt a single backend out of `mode=required`). Use it when one
+sensitive backend must always be encrypted under a deployment-wide
+`mode=disabled` or `mode=as_client` policy.
+
+#### Migration notes from MySQL Router AsClient
+
+Pre-mode-aware ProxySQL implicitly behaved like Router's AsClient mode:
+the backend leg was encrypted iff the client leg was. Setting
+`mysqlx_tls_backend_mode='as_client'` (the new default) preserves that
+behaviour exactly. Operators wanting Router-`Required` semantics should
+set `mysqlx_tls_backend_mode='required'`; Router-`PassthroughEncrypt` /
+`Disabled` map to `mysqlx_tls_backend_mode='disabled'`.
+
+#### Connection pool partitioning
+
+The per-thread connection cache key is
+`(hostgroup, user, schema, tls_active)`. An AsClient or required-TLS
+session never receives a plaintext-pooled backend (and vice versa) —
+the encryption posture is part of the cache identity. Operators with a
+mixed-mode workload (some sessions over TLS, some plaintext) will see
+two parallel pools per backend identity, which is intentional and
+correct: handing a plaintext connection to a TLS-frontend session
+would silently corrupt the wire protocol.
+
+### 8.3. Configuration
 
 ```sql
+-- Frontend TLS:
 UPDATE mysqlx_variables SET variable_value='PREFERRED' WHERE variable_name='mysqlx_tls_mode';
+
+-- Backend TLS (asymmetric example: client-required, backend-best-effort):
+UPDATE mysqlx_variables SET variable_value='REQUIRED'   WHERE variable_name='mysqlx_tls_mode';
+UPDATE mysqlx_variables SET variable_value='preferred'  WHERE variable_name='mysqlx_tls_backend_mode';
+
 LOAD MYSQLX VARIABLES TO RUNTIME;
 ```
 
 Note: certificate / key paths are not configurable via `mysqlx_variables`
-yet — the only TLS-related variable currently wired through the
-`MysqlxConfigStore` install/save round-trip is `mysqlx_tls_mode`.
+yet — the only TLS-related variables currently wired through the
+`MysqlxConfigStore` install/save round-trip are `mysqlx_tls_mode` and
+`mysqlx_tls_backend_mode`.
 
 ## 9. Connection Pooling
 

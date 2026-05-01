@@ -265,6 +265,147 @@ static void test_backend_auth_error_on_set_caps_reject() {
 	close(fds[1]);
 }
 
+// preferred-mode TLS fallback (issue #5693).
+// When mysqlx_tls_backend_mode=preferred, the proxy sends
+// CapabilitiesSet(tls=true). If the backend rejects with a
+// Mysqlx::Error (e.g. it has no TLS configured), the connection
+// must silently downgrade to plaintext authentication on the same
+// TCP socket -- not fail.
+//
+// Setup: drive auth to CAPABILITIES_SET_SENT with
+// backend_tls_required_=true AND backend_tls_fallback_allowed_=true,
+// then inject a Mysqlx::Error on the wire. Expect step_auth to
+// continue (rc=1), transition to AUTHENTICATE_START_SENT, and emit
+// a SESS_AUTHENTICATE_START frame on the wire.
+static void test_backend_auth_preferred_mode_fallback_to_plaintext() {
+	diag(">>> %s", __func__);
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+
+	MysqlxConnection conn;
+	conn.set_fd(fds[0]);
+	conn.set_backend_user("testuser");
+	conn.set_backend_schema("testdb");
+	conn.init_backend_ds(fds[0]);
+	conn.set_state(MysqlxConnection::AUTHENTICATING);
+
+	// Mark this connection as preferred-mode: TLS requested with
+	// fallback allowed. ssl_ctx is intentionally NOT set: the
+	// fallback path must trip BEFORE any TLS handshake is initiated,
+	// i.e. when CapabilitiesSet(tls=true) is rejected with Error.
+	conn.set_backend_tls_required(true);
+	conn.set_backend_tls_fallback_allowed(true);
+
+	// CapGet -> CapabilitiesSet(tls=true).
+	conn.step_auth();
+	{
+		uint8_t buf[4096];
+		usleep(5000);
+		read(fds[1], buf, sizeof(buf));  // drain CapGet from wire
+	}
+
+	// Backend returns capabilities with no TLS available, then we
+	// send CapabilitiesSet(tls=true), then it rejects with Error.
+	Mysqlx::Connection::Capabilities caps;
+	std::string caps_str;
+	caps.SerializeToString(&caps_str);
+	write_x_frame(fds[1], Mysqlx::ServerMessages_Type_CONN_CAPABILITIES,
+		reinterpret_cast<const uint8_t*>(caps_str.data()), caps_str.size());
+
+	conn.step_auth();
+	{
+		uint8_t buf[4096];
+		usleep(5000);
+		read(fds[1], buf, sizeof(buf));  // drain CapSet from wire
+	}
+	ok(conn.get_auth_state() == MysqlxConnection::BACKEND_AUTH_CAPABILITIES_SET_SENT,
+	   "preferred-mode: state is CAPABILITIES_SET_SENT after CapSet emitted");
+
+	// Inject the Mysqlx::Error response from the backend.
+	Mysqlx::Error err;
+	err.set_severity(Mysqlx::Error::ERROR);
+	err.set_code(5001);
+	err.set_msg("Capability prepare failed: tls");
+	err.set_sql_state("HY000");
+	std::string err_str;
+	err.SerializeToString(&err_str);
+	write_x_frame(fds[1], Mysqlx::ServerMessages_Type_ERROR,
+		reinterpret_cast<const uint8_t*>(err_str.data()), err_str.size());
+
+	usleep(5000);
+	int rc = conn.step_auth();
+	ok(rc == 1,
+	   "preferred-mode: step_auth returns 1 (in-progress) after Error -> fallback path taken");
+	ok(conn.get_auth_state() == MysqlxConnection::BACKEND_AUTH_AUTHENTICATE_START_SENT,
+	   "preferred-mode: fallback transitions to AUTHENTICATE_START_SENT");
+	ok(!conn.is_backend_tls_required(),
+	   "preferred-mode: backend_tls_required_ cleared so subsequent steps don't reattempt TLS");
+	ok(!conn.is_tls_active(),
+	   "preferred-mode: tls_active stays false after fallback (no handshake performed)");
+
+	// Verify the SESS_AUTHENTICATE_START frame landed on the wire.
+	uint8_t buf[4096];
+	usleep(5000);
+	ssize_t r = read(fds[1], buf, sizeof(buf));
+	ok(r >= 5 && buf[4] == Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_START,
+	   "preferred-mode: AuthenticateStart frame emitted on plaintext socket after fallback");
+
+	close(fds[0]);
+	close(fds[1]);
+}
+
+// required-mode TLS hard-fail (issue #5693).
+// Counterpart to the preferred-mode test: same Error injection, but
+// fallback_allowed=false (matches mysqlx_tls_backend_mode=required and
+// AsClient + frontend-TLS combinations). Expect the connection to
+// fail with rc=-1 and BACKEND_AUTH_ERROR — NOT to silently downgrade.
+static void test_backend_auth_required_mode_no_fallback_on_error() {
+	diag(">>> %s", __func__);
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+
+	MysqlxConnection conn;
+	conn.set_fd(fds[0]);
+	conn.set_backend_user("testuser");
+	conn.init_backend_ds(fds[0]);
+	conn.set_state(MysqlxConnection::AUTHENTICATING);
+
+	conn.set_backend_tls_required(true);
+	conn.set_backend_tls_fallback_allowed(false);
+
+	conn.step_auth();
+	{
+		uint8_t buf[4096];
+		usleep(5000);
+		read(fds[1], buf, sizeof(buf));
+	}
+
+	Mysqlx::Connection::Capabilities caps;
+	std::string caps_str;
+	caps.SerializeToString(&caps_str);
+	write_x_frame(fds[1], Mysqlx::ServerMessages_Type_CONN_CAPABILITIES,
+		reinterpret_cast<const uint8_t*>(caps_str.data()), caps_str.size());
+
+	conn.step_auth();
+	{
+		uint8_t buf[4096];
+		usleep(5000);
+		read(fds[1], buf, sizeof(buf));
+	}
+
+	write_x_frame(fds[1], Mysqlx::ServerMessages_Type_ERROR, nullptr, 0);
+
+	usleep(5000);
+	int rc = conn.step_auth();
+	ok(rc == -1,
+	   "required-mode: step_auth returns -1 on Error when fallback not allowed");
+	ok(conn.get_auth_state() == MysqlxConnection::BACKEND_AUTH_ERROR,
+	   "required-mode: auth_state is ERROR (no silent downgrade)");
+
+	close(fds[0]);
+	close(fds[1]);
+}
+
 static void test_backend_auth_not_started_returns_progress() {
 	diag(">>> %s", __func__);
 	MysqlxConnection conn;
@@ -296,7 +437,7 @@ static void test_backend_reset_clears_auth() {
 
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(34);
+	plan(42);
 	diag("=== mysqlx_backend_auth_unit-t starting ===");
 
 	test_backend_auth_state_transitions();
@@ -304,6 +445,8 @@ int main() {
 	test_backend_auth_notice_skip();
 	test_backend_auth_error_on_wrong_caps_response();
 	test_backend_auth_error_on_set_caps_reject();
+	test_backend_auth_preferred_mode_fallback_to_plaintext();
+	test_backend_auth_required_mode_no_fallback_on_error();
 	test_backend_auth_not_started_returns_progress();
 	test_backend_reset_clears_auth();
 
