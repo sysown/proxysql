@@ -136,6 +136,7 @@ Define X Protocol listener routes.
 | active | INT CHECK (0,1) | `1` | Whether this route is active |
 | attributes | VARCHAR | `''` | JSON attributes for future extensions |
 | comment | VARCHAR | `''` | Route comment |
+| tls_mode | VARCHAR | `'inherit'` | Per-route TLS posture: `inherit` (use `mysqlx_tls_mode`), `disabled`, `preferred`, `required`, or `passthrough`. See [§8.1](#81-frontend-tls-modes-client--proxy) and [§8.4](#84-end-to-end-tls-passthrough-per-route). |
 
 ### 4.4. `runtime_mysqlx_routes` (Runtime View)
 
@@ -344,6 +345,26 @@ with the legacy mysql-side mode names).
 | `PREFERRED` | TLS capability advertised. Client chooses whether to upgrade. |
 | `REQUIRED` | TLS capability advertised. Connection rejected if client does not upgrade. |
 
+#### Per-route override: `mysqlx_routes.tls_mode`
+
+The deployment-wide `mysqlx_tls_mode` can be overridden at the route
+level via the `tls_mode` column on `mysqlx_routes`. Default is
+`inherit`, which defers to `mysqlx_tls_mode` and matches the previous
+deployment-wide-only behaviour exactly.
+
+| Per-route value | Description |
+|-----------------|-------------|
+| `inherit` | Use the deployment-wide `mysqlx_tls_mode`. Default. |
+| `disabled` | This route never advertises TLS, regardless of the global mode. |
+| `preferred` | This route advertises TLS; client decides whether to upgrade. |
+| `required` | This route advertises TLS; reject the session if the client does not upgrade. |
+| `passthrough` | After `CapabilitiesSet(tls=true)`, the proxy splices raw bytes between client and backend without decrypting. End-to-end TLS — see §8.4. |
+
+Use case for the override: dedicate a single compliance-pinned route to
+`passthrough` while leaving the others on `inherit` so admin / monitoring
+routes still get the proxy's pooling, query-level routing, and
+multiplexing.
+
 ### 8.2. Backend TLS Modes (proxy → backend)
 
 Driven by `mysqlx_tls_backend_mode` (lowercase values, matching MySQL
@@ -402,6 +423,53 @@ Note: certificate / key paths are not configurable via `mysqlx_variables`
 yet — the only TLS-related variables currently wired through the
 `MysqlxConfigStore` install/save round-trip are `mysqlx_tls_mode` and
 `mysqlx_tls_backend_mode`.
+
+### 8.4. End-to-end TLS Passthrough (per-route)
+
+When operator policy forbids the proxy from decrypting traffic
+(compliance, original cert/SNI/ALPN preservation, third-party audit
+requirements), a route can be flagged for raw-record passthrough.
+ProxySQL still terminates the TCP connection on the listening port
+but, once the client requests TLS via `CapabilitiesSet(tls=true)`,
+hands off raw bytes between client and backend without ever decrypting
+them. The client and the backend establish a single end-to-end TLS
+session that the proxy is mechanically incapable of inspecting.
+
+```sql
+INSERT INTO mysqlx_routes (name, bind, destination_hostgroup, tls_mode)
+       VALUES ('compliance', '0.0.0.0:33099', 99, 'passthrough');
+LOAD MYSQLX ROUTES TO RUNTIME;
+```
+
+What the operator gives up by selecting passthrough on a route:
+
+* **No connection pooling.** The proxy cannot reuse a passthrough
+  backend connection across sessions — it never saw the auth
+  exchange, so it has no idea what user-state or transactional state
+  the backend session is in.
+* **No multiplexing / query-level routing.** The proxy cannot parse
+  X-Protocol frames once TLS is up, so it cannot dispatch a query to
+  a different hostgroup than the one originally bound at session
+  start.
+* **No observability beyond byte counts.** Per-query metrics, query
+  cache, and frame-level stats are unavailable for passthrough
+  sessions. Only TCP-level byte counters and session age are
+  recorded.
+
+What the operator keeps:
+
+* **Original certificate.** The client validates the backend's
+  certificate directly; SNI, ALPN, and the certificate chain are not
+  altered by the proxy.
+* **Per-route binding.** Different listening ports (route
+  `bind` columns) can independently use `passthrough`, `inherit`,
+  `required`, etc. An admin route can stay proxy-terminated while a
+  customer-facing route uses passthrough.
+
+If both compliance and pooling are required, dedicate two listening
+ports to two routes targeting the same hostgroup: one with
+`tls_mode='passthrough'` for the compliance traffic, and one with
+`tls_mode='inherit'` (or `required`) for the bulk of the workload.
 
 ## 9. Connection Pooling
 
