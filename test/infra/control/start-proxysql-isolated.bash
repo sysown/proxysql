@@ -136,6 +136,23 @@ if [ "${PROXYSQL_LOAD_MYSQLX_PLUGIN:-0}" = "1" ]; then
     echo ">>> Mounting mysqlx plugin .so into ProxySQL container"
 fi
 
+# Same pattern for the genai plugin (post-carve-out, GenAI/MCP/RAG/LLM
+# all live in plugins/genai/ and load as a .so at runtime).  Groups
+# that need the AI surface (e.g. ai-g1) set PROXYSQL_LOAD_GENAI_PLUGIN=1
+# in their env.sh and switch PROXYSQL_CONFIG_OVERRIDE to a per-group
+# cnf that contains `plugins=("/usr/lib/proxysql/ProxySQL_GenAI_Plugin.so")`.
+GENAI_PLUGIN_SRC="${WORKSPACE}/plugins/genai/ProxySQL_GenAI_Plugin.so"
+GENAI_PLUGIN_MOUNT=""
+if [ "${PROXYSQL_LOAD_GENAI_PLUGIN:-0}" = "1" ]; then
+    if [ ! -f "${GENAI_PLUGIN_SRC}" ]; then
+        echo "ERROR: PROXYSQL_LOAD_GENAI_PLUGIN=1 but plugin .so missing at ${GENAI_PLUGIN_SRC}" >&2
+        echo "       Build it first: PROXYSQLGENAI=1 make (or cd plugins/genai && make with the right flags)" >&2
+        exit 1
+    fi
+    GENAI_PLUGIN_MOUNT="-v ${GENAI_PLUGIN_SRC}:/usr/lib/proxysql/ProxySQL_GenAI_Plugin.so:ro"
+    echo ">>> Mounting genai plugin .so into ProxySQL container"
+fi
+
 echo ">>> Starting ProxySQL container: ${PROXY_CONTAINER} (cluster nodes: ${NUM_NODES})"
 docker run -d \
     --name "${PROXY_CONTAINER}" \
@@ -147,6 +164,7 @@ docker run -d \
     -v "${PROXY_DATA_DIR}:/var/lib/proxysql" \
     -v "${COVERAGE_DATA_DIR}:/gcov" \
     ${MYSQLX_PLUGIN_MOUNT} \
+    ${GENAI_PLUGIN_MOUNT} \
     -e GCOV_PREFIX="/gcov" \
     -e GCOV_PREFIX_STRIP="3" \
     proxysql-ci-base:latest \

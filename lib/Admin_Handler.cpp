@@ -1163,26 +1163,25 @@ bool is_valid_global_variable(const char *var_name) {
 	} else if (strlen(var_name) > 11 && !strncmp(var_name, "clickhouse-", 11) && GloClickHouseServer && GloClickHouseServer->has_variable(var_name + 11)) {
 		return true;
 #endif /* PROXYSQLCLICKHOUSE */
-#ifdef PROXYSQLGENAI
-	// `mcp-*` variables now live in the genai plugin (Step 4.C);
-	// core no longer holds an authoritative list.  Accept any
-	// `mcp-<name>` token as a valid global variable here so the
-	// SET / UPDATE admin path can reach `main.global_variables`;
-	// the plugin's `LOAD MCP VARIABLES TO RUNTIME` is what actually
-	// validates each name when pushing into MCP_Threads_Handler.
+	// `mcp-*` and `genai-*` variables live in the genai plugin
+	// (carve-out Steps 4.C and 5).  Core no longer holds an
+	// authoritative list, so we accept any `mcp-<name>` /
+	// `genai-<name>` token as a valid global_variables key here so
+	// the SET / UPDATE admin path can reach `main.global_variables`.
+	// The plugin's `LOAD {MCP,GENAI} VARIABLES TO RUNTIME` is what
+	// actually validates each name at push-into-runtime time.
+	//
 	// Trade-off: a typo (e.g. `SET mcp-prot=9090`) writes the row
 	// silently and goes ignored at runtime.  Acceptable until a
 	// chassis-side `register_variable_namespace` ABI exists.
+	//
+	// Step 7 removed the surrounding `#ifdef PROXYSQLGENAI` — these
+	// loose prefix checks are unconditional now: SET only succeeds
+	// at write-into-runtime time when the genai plugin is loaded.
 	} else if (strlen(var_name) > 4 && !strncmp(var_name, "mcp-", 4)) {
 		return true;
 	} else if (strlen(var_name) > 6 && !strncmp(var_name, "genai-", 6)) {
-		// `genai-*` variables now live in the genai plugin (Step 5);
-		// loose prefix match here for the same reason as `mcp-*` above.
-		// LOAD GENAI VARIABLES TO RUNTIME (registered by the plugin)
-		// is what actually validates the name when pushing into
-		// GenAI_Threads_Handler.
 		return true;
-#endif /* PROXYSQLGENAI */
 	} else {
 		return false;
 	}
@@ -2140,8 +2139,13 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 	}
 
-	// MCP (Model Context Protocol) VARIABLES - DISK commands
-#ifdef PROXYSQLGENAI
+	// MCP (Model Context Protocol) VARIABLES - DISK commands.
+	// Step 7 dropped the PROXYSQLGENAI gate: the disk <-> main copy is
+	// pure SQL DML against global_variables (LIKE 'mcp-%') and has no
+	// plugin runtime dependency, so it can stay in core unconditionally.
+	// Plugin-side LOAD MCP VARIABLES TO RUNTIME (registered via
+	// register_command in plugin_commands.cpp) handles the
+	// main -> running plugin push.
 	if ((query_no_space_length > 19) && ((!strncasecmp("SAVE MCP VARIABLES ", query_no_space, 19)) || (!strncasecmp("LOAD MCP VARIABLES ", query_no_space, 19)))) {
 		const std::string modname = "mcp_variables";
 		tuple<string, vector<string>, vector<string>>& t = load_save_disk_commands[modname];
@@ -2158,7 +2162,6 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return true;
 		}
 	}
-#endif /* PROXYSQLGENAI */
 
 	// MCP (Model Context Protocol) LOAD/SAVE handlers
 #ifdef PROXYSQLGENAI

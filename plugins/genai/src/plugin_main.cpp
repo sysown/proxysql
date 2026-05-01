@@ -194,11 +194,27 @@ bool genai_init(ProxySQL_PluginServices* services) {
 	// chassis ABI.
 	genai_register_admin_commands(services);
 
-	// Register MCP admin / config / stats tables (Step 4.G).
-	// Replaces the corresponding insert_into_tables_defs() block in
-	// lib/Admin_Bootstrap.cpp.
-	genai_register_admin_tables(services);
+	// NOTE: table registration (genai_register_admin_tables) was moved
+	// from here to genai_register_schemas (Phase B) — see below.
+	// Registering at init (Phase C) is too late: the admin module has
+	// already created the SQLite DBs from the merged schema set, so
+	// the plugin's tables wouldn't appear.
 
+	return true;
+}
+
+// Phase B of the chassis lifecycle.  Runs BEFORE the admin module
+// initialises its SQLite DBs, so any table the plugin declares here
+// is part of the schema admin bootstrap creates.  `services` exposes
+// register_table / register_command / register_command_alias here;
+// DB-handle getters return nullptr (admin DBs don't exist yet).
+//
+// Mirror of plugins/mysqlx/src/mysqlx_plugin.cpp::mysqlx_register_schemas.
+bool genai_register_schemas(ProxySQL_PluginServices* services) {
+	if (services == nullptr) {
+		return false;
+	}
+	genai_register_admin_tables(services);
 	return true;
 }
 
@@ -604,11 +620,15 @@ const char* genai_status_json() {
 
 const ProxySQL_PluginDescriptor genai_descriptor = {
 	"genai",
-	1,
+	PROXYSQL_PLUGIN_ABI_VERSION,
 	&genai_init,
 	&genai_start,
 	&genai_stop,
 	&genai_status_json,
+	&genai_register_schemas,  // Phase B (Step 4.G fix): table
+	                          // registration runs before admin DB
+	                          // bootstrap so the schema is present
+	                          // when admin module creates the DBs.
 };
 
 GenAIPluginContext& genai_context() {
