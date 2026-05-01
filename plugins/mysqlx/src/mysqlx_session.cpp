@@ -479,6 +479,24 @@ bool MysqlxSession::enforce_identity_policy() {
 		return true;  // nothing to enforce
 	}
 
+	// backend_auth_mode='pass_through' is parsed and round-trips through
+	// the config store but the backend-auth state machine does not
+	// actually forward AuthStart unmodified to the backend (the existing
+	// code maps the user's frontend creds to backend creds either via
+	// the mapped or service_account paths). Per the design spec
+	// (docs/superpowers/specs/2026-04-07-mysqlx-plugin-design.md §
+	// "Backend authentication", around the pass_through bullet:
+	// "configuration validation should reject pass_through rather than
+	// silently downgrading it"), refuse the auth attempt instead of
+	// approximating it. The accepted modes today are 'mapped' (default)
+	// and 'service_account'; pass_through is reserved for a future
+	// implementation that forwards the client's AuthStart frame
+	// verbatim to the backend.
+	if (identity_->backend_auth_mode == MysqlxBackendAuthMode::pass_through) {
+		send_error(1045, "backend_auth_mode 'pass_through' is not yet implemented; refusing rather than silently downgrading");
+		return false;
+	}
+
 	// require_tls: per-user "MYSQL41 / PLAIN must run over TLS".
 	// PLAIN already has a hardcoded TLS gate at handle_auth_plain entry;
 	// this is the per-user knob that also covers MYSQL41 — operators set
