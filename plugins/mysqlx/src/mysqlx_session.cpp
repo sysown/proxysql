@@ -839,16 +839,22 @@ int MysqlxSession::dispatch_client_message(uint8_t msg_type) {
 			forward_to_backend(); return 0;
 		case Mysqlx::ClientMessages_Type_PREPARE_PREPARE:
 			if (backend_conn_) backend_conn_->set_has_prepared_statement(true);
-			response_state_ = RESP_WAITING_PREPARE;
+			response_state_ = RESP_WAITING_PREPARE_PREPARE;
 			forward_to_backend(); return 0;
 		case Mysqlx::ClientMessages_Type_PREPARE_EXECUTE:
+			response_state_ = RESP_WAITING_PREPARE_EXECUTE;
+			forward_to_backend(); return 0;
 		case Mysqlx::ClientMessages_Type_PREPARE_DEALLOCATE:
-			response_state_ = RESP_WAITING_PREPARE;
+			response_state_ = RESP_WAITING_PREPARE_DEALLOCATE;
 			forward_to_backend(); return 0;
 		case Mysqlx::ClientMessages_Type_CURSOR_OPEN:
+			response_state_ = RESP_WAITING_CURSOR_OPEN;
+			forward_to_backend(); return 0;
 		case Mysqlx::ClientMessages_Type_CURSOR_FETCH:
+			response_state_ = RESP_WAITING_CURSOR_FETCH;
+			forward_to_backend(); return 0;
 		case Mysqlx::ClientMessages_Type_CURSOR_CLOSE:
-			response_state_ = RESP_WAITING_CURSOR;
+			response_state_ = RESP_WAITING_CURSOR_CLOSE;
 			forward_to_backend(); return 0;
 		case Mysqlx::ClientMessages_Type_EXPECT_OPEN:
 		case Mysqlx::ClientMessages_Type_EXPECT_CLOSE:
@@ -950,11 +956,31 @@ bool MysqlxSession::is_terminal_frame(uint8_t msg_type) const {
 			return msg_type == Mysqlx::ServerMessages_Type_OK ||
 			       msg_type == Mysqlx::ServerMessages_Type_RESULTSET_FETCH_DONE ||
 			       msg_type == Mysqlx::ServerMessages_Type_RESULTSET_FETCH_SUSPENDED;
-		case RESP_WAITING_PREPARE:
+		case RESP_WAITING_PREPARE_PREPARE:
+			// Prepare::Prepare returns only Mysqlx.Ok on success.
 			return msg_type == Mysqlx::ServerMessages_Type_OK;
-		case RESP_WAITING_CURSOR:
+		case RESP_WAITING_PREPARE_EXECUTE:
+			// Prepare::Execute behaves like the underlying request — for
+			// statement preparations the terminator is SQL_STMT_EXECUTE_OK,
+			// for CRUD it's Ok, for cursor-bound preparations it's
+			// FETCH_DONE / FETCH_SUSPENDED. Accept all four; the proxy
+			// can't tell at this layer which kind was prepared.
+			return msg_type == Mysqlx::ServerMessages_Type_OK ||
+			       msg_type == Mysqlx::ServerMessages_Type_SQL_STMT_EXECUTE_OK ||
+			       msg_type == Mysqlx::ServerMessages_Type_RESULTSET_FETCH_DONE ||
+			       msg_type == Mysqlx::ServerMessages_Type_RESULTSET_FETCH_SUSPENDED;
+		case RESP_WAITING_PREPARE_DEALLOCATE:
+			// Prepare::Deallocate returns only Mysqlx.Ok.
+			return msg_type == Mysqlx::ServerMessages_Type_OK;
+		case RESP_WAITING_CURSOR_OPEN:
 			return msg_type == Mysqlx::ServerMessages_Type_RESULTSET_FETCH_DONE ||
 			       msg_type == Mysqlx::ServerMessages_Type_RESULTSET_FETCH_SUSPENDED;
+		case RESP_WAITING_CURSOR_FETCH:
+			return msg_type == Mysqlx::ServerMessages_Type_RESULTSET_FETCH_DONE ||
+			       msg_type == Mysqlx::ServerMessages_Type_RESULTSET_FETCH_SUSPENDED;
+		case RESP_WAITING_CURSOR_CLOSE:
+			// Cursor::Close returns only Mysqlx.Ok.
+			return msg_type == Mysqlx::ServerMessages_Type_OK;
 		case RESP_WAITING_EXPECT:
 			return msg_type == Mysqlx::ServerMessages_Type_OK;
 		case RESP_WAITING_SESS_RESET:
