@@ -69,7 +69,7 @@ SQLite3DB* proxysql_plugin_get_configdb() { return g_configdb; }
 SQLite3DB* proxysql_plugin_get_statsdb()  { return g_statsdb; }
 
 int main() {
-	plan(36);
+	plan(44);
 
 	g_admindb  = new SQLite3DB();
 	g_configdb = new SQLite3DB();
@@ -172,41 +172,19 @@ int main() {
 		"SELECT hostgroup_id FROM mcp_target_profiles WHERE target_id='t'") == 1,
 	   "SAVE restored hostgroup_id=1 from in-memory snapshot");
 
-	// Stats tables: registered with the plugin, but the populator
-	// path is stubbed (carve-out follow-up — see PR description for
-	// the rationale).  We can only sanity-check the registration here
-	// because the unit-test fixture does not attach a stats_db schema;
-	// the empty-result contract is enforced indirectly by the absence
-	// of any plugin code path that writes to stats_mcp_*.
-	bool found_stats_query_rules = false;
-	for (const auto& td : mgr.tables(ProxySQL_PluginDBKind::stats_db)) {
-		if (td.table_name && std::string(td.table_name) == "stats_mcp_query_rules") {
-			found_stats_query_rules = true;
-			break;
-		}
-	}
-	ok(found_stats_query_rules,
-	   "stats_mcp_query_rules schema is registered (even though populator is stubbed)");
-
 	ok(mgr.stop_all(),     "stop_all succeeds");
 
-	// Step 4.G: the plugin now owns the MCP admin / config / stats
-	// table set.  Counts match plugins/genai/src/plugin_tables.cpp.
+	// Step 4.G: the plugin now owns the MCP admin / config table set.
+	// Counts match plugins/genai/src/plugin_tables.cpp.
 	//   admin:  6 (mcp_query_rules, mcp_auth_profiles, mcp_target_profiles
 	//              + their runtime_* siblings)
 	//   config: 3 (the persisted-only variants — no runtime_*)
-	//   stats:  5 (stats_mcp_query_tools_counters{,_reset},
-	//              stats_mcp_query_digest{,_reset},
-	//              stats_mcp_query_rules)
 	ok(mgr.tables(ProxySQL_PluginDBKind::admin_db).size() == 6,
 	   "genai plugin registers 6 admin-db tables (got %zu)",
 	   mgr.tables(ProxySQL_PluginDBKind::admin_db).size());
 	ok(mgr.tables(ProxySQL_PluginDBKind::config_db).size() == 3,
 	   "genai plugin registers 3 config-db tables (got %zu)",
 	   mgr.tables(ProxySQL_PluginDBKind::config_db).size());
-	ok(mgr.tables(ProxySQL_PluginDBKind::stats_db).size() == 5,
-	   "genai plugin registers 5 stats-db tables (got %zu)",
-	   mgr.tables(ProxySQL_PluginDBKind::stats_db).size());
 
 	// Step 4.F: the plugin registers MCP admin SQL verbs.  Verify
 	// each registered alias resolves back to the canonical command
@@ -221,6 +199,15 @@ int main() {
 	ok(mgr.resolve_alias_to_canonical("LOAD MCP VARIABLES FROM MEM") ==
 	       "LOAD MCP VARIABLES TO RUNTIME",
 	   "alias: LOAD MCP VARIABLES FROM MEM -> TO RUNTIME");
+	ok(mgr.resolve_alias_to_canonical("LOAD MCP VARIABLES FROM DISK") ==
+	       "LOAD MCP VARIABLES FROM DISK",
+	   "canonical: LOAD MCP VARIABLES FROM DISK registered");
+	ok(mgr.resolve_alias_to_canonical("LOAD MCP VARIABLES TO MEMORY") ==
+	       "LOAD MCP VARIABLES FROM DISK",
+	   "alias: LOAD MCP VARIABLES TO MEMORY -> FROM DISK");
+	ok(mgr.resolve_alias_to_canonical("LOAD MCP VARIABLES FROM CONFIG") ==
+	       "LOAD MCP VARIABLES FROM CONFIG",
+	   "canonical: LOAD MCP VARIABLES FROM CONFIG registered");
 	ok(mgr.resolve_alias_to_canonical("LOAD MCP PROFILES TO RUNTIME") ==
 	       "LOAD MCP PROFILES TO RUNTIME",
 	   "canonical: LOAD MCP PROFILES TO RUNTIME registered");
@@ -230,6 +217,12 @@ int main() {
 	ok(mgr.resolve_alias_to_canonical("LOAD MCP PROFILES TO RUN") ==
 	       "LOAD MCP PROFILES TO RUNTIME",
 	   "alias: LOAD MCP PROFILES TO RUN -> TO RUNTIME");
+	ok(mgr.resolve_alias_to_canonical("LOAD MCP PROFILES FROM DISK") ==
+	       "LOAD MCP PROFILES FROM DISK",
+	   "canonical: LOAD MCP PROFILES FROM DISK registered");
+	ok(mgr.resolve_alias_to_canonical("LOAD MCP PROFILES TO MEMORY") ==
+	       "LOAD MCP PROFILES FROM DISK",
+	   "alias: LOAD MCP PROFILES TO MEMORY -> FROM DISK");
 
 	// SAVE direction: pull runtime mcp-* values back into main.
 	ok(mgr.resolve_alias_to_canonical("SAVE MCP VARIABLES TO MEMORY") ==
@@ -244,6 +237,9 @@ int main() {
 	ok(mgr.resolve_alias_to_canonical("SAVE MCP VARIABLES TO MEM") ==
 	       "SAVE MCP VARIABLES TO MEMORY",
 	   "alias: SAVE MCP VARIABLES TO MEM -> TO MEMORY");
+	ok(mgr.resolve_alias_to_canonical("SAVE MCP VARIABLES TO DISK") ==
+	       "SAVE MCP VARIABLES TO DISK",
+	   "canonical: SAVE MCP VARIABLES TO DISK registered");
 
 	// MCP QUERY RULES verbs.
 	ok(mgr.resolve_alias_to_canonical("LOAD MCP QUERY RULES TO RUNTIME") ==
@@ -264,6 +260,18 @@ int main() {
 	ok(mgr.resolve_alias_to_canonical("SAVE MCP QUERY RULES FROM RUN") ==
 	       "SAVE MCP QUERY RULES TO MEMORY",
 	   "alias: SAVE MCP QUERY RULES FROM RUN -> TO MEMORY");
+	ok(mgr.resolve_alias_to_canonical("LOAD MCP QUERY RULES FROM DISK") ==
+	       "LOAD MCP QUERY RULES FROM DISK",
+	   "canonical: LOAD MCP QUERY RULES FROM DISK registered");
+	ok(mgr.resolve_alias_to_canonical("LOAD MCP QUERY RULES TO MEMORY") ==
+	       "LOAD MCP QUERY RULES FROM DISK",
+	   "alias: LOAD MCP QUERY RULES TO MEMORY -> FROM DISK");
+	ok(mgr.resolve_alias_to_canonical("SAVE MCP QUERY RULES TO DISK") ==
+	       "SAVE MCP QUERY RULES TO DISK",
+	   "canonical: SAVE MCP QUERY RULES TO DISK registered");
+	ok(mgr.resolve_alias_to_canonical("LOAD GENAI VARIABLES FROM CONFIG") ==
+	       "LOAD GENAI VARIABLES FROM CONFIG",
+	   "canonical: LOAD GENAI VARIABLES FROM CONFIG registered");
 
 	// Sanity: an unrelated verb does NOT resolve via the plugin.
 	ok(mgr.resolve_alias_to_canonical("SELECT 1").empty(),

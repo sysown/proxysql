@@ -52,6 +52,9 @@
 #include <cstdlib>
 #include <cstring>
 
+class ProxySQL_Admin;
+extern ProxySQL_Admin* GloAdmin;
+
 // Plugin-local definitions of the legacy globals, replacing the
 // core-side `GloMCPH` deleted in Step 4.C and `GloGATH` / `GloAI`
 // deleted in Step 5.  These stay inside the .so — the plugin's tool
@@ -197,13 +200,13 @@ bool genai_init(ProxySQL_PluginServices* services) {
 	// Step 5: take over GenAI_Threads_Handler / AI_Features_Manager
 	// ownership.  Construction here mirrors the pre-Step-5 sequence
 	// in src/main.cpp (ProxySQL_Main_init_main_modules +
-	// ProxySQL_Main_init_GenAI_module): GloGATH built then init()'d,
-	// then GloAI constructed and init()'d.  AI_Features_Manager pulls
-	// LLM_Bridge etc. up from inside.
+	// ProxySQL_Main_init_GenAI_module): GloGATH built first, then
+	// AI_Features_Manager constructed on top of it.  The actual init
+	// calls happen after runtime variables have been loaded in
+	// genai_start(), so the modules see the operator's configured
+	// values rather than constructor defaults.
 	GloGATH = new GenAI_Threads_Handler();
-	GloGATH->init();
 	GloAI = new AI_Features_Manager();
-	GloAI->init();
 
 	// Register admin SQL verbs (LOAD / SAVE MCP …).  Defined in
 	// plugin_commands.cpp.  Must happen during init() per the
@@ -385,6 +388,30 @@ bool genai_load_variables_from_admindb(GenAIPluginContext& ctx) {
 }
 
 /**
+ * @brief Reinitialize the GenAI runtime modules after genai-* variables change.
+ *
+ * The GenAI thread handler needs a full restart to pick up changes to
+ * worker count, endpoints, or other bootstrap-time values.  The AI
+ * features manager likewise needs to rebuild its vector store / LLM
+ * bridge from the refreshed GenAI configuration.
+ */
+bool genai_refresh_runtime_components(GenAIPluginContext& ctx) {
+	(void)ctx;
+	if (GloGATH != nullptr) {
+		GloGATH->shutdown();
+		GloGATH->init();
+	}
+	if (GloAI != nullptr) {
+		GloAI->shutdown();
+		if (GloAI->init() != 0) {
+			genai_log(6, "genai plugin: AI_Features_Manager::init() failed during reload\n");
+			return false;
+		}
+	}
+	return true;
+}
+
+/**
  * @brief Pull runtime genai-* values from GenAI_Threads_Handler back
  *        into `main.global_variables`.  Mirrors the pre-Step-5
  *        flush_genai_variables___runtime_to_database in core.
@@ -532,25 +559,37 @@ bool mcp_save_target_auth_map_to_admindb(GenAIPluginContext& ctx) {
 /**
  * @brief Bring the MCP listener up if mcp_enabled is true.
  *
- * Mirrors the pre-4.C ProxySQL_Admin::load_mcp_server() logic, minus
- * the runtime reconfiguration branch (which 4.F's later work — admin
- * SQL via register_command — restores).  This MVP only handles the
- * startup case: at genai_start, if mcp_enabled, create and start a
- * ProxySQL_MCP_Server.
+ * Mirrors the pre-4.C ProxySQL_Admin::load_mcp_server() logic,
+ * including the stop/restart path when the port or SSL mode changes.
+ * The helper is used both at plugin start and after admin/config
+ * reload commands mutate mcp-* variables.
  */
 void mcp_start_listener_if_enabled(GenAIPluginContext& ctx) {
 	if (ctx.mcp == nullptr) return;
 	if (!ctx.mcp->variables.mcp_enabled) {
+		if (ctx.mcp->mcp_server != nullptr) {
+			delete ctx.mcp->mcp_server;
+			ctx.mcp->mcp_server = nullptr;
+			genai_log(6, "genai plugin: MCP listener stopped (mcp_enabled=false)\n");
+		}
 		genai_log(6, "genai plugin: MCP disabled (mcp_enabled=false); listener not started\n");
 		return;
 	}
-	if (ctx.mcp->mcp_server != nullptr) {
-		// Already up.  Shouldn't happen on first start but defensive.
-		return;
-	}
-
 	const int port = ctx.mcp->variables.mcp_port;
 	const bool use_ssl = ctx.mcp->variables.mcp_use_ssl;
+
+	if (ctx.mcp->mcp_server != nullptr) {
+		const bool needs_restart =
+			ctx.mcp->mcp_server->get_port() != port ||
+			ctx.mcp->mcp_server->is_using_ssl() != use_ssl;
+		if (!needs_restart) {
+			return;
+		}
+		delete ctx.mcp->mcp_server;
+		ctx.mcp->mcp_server = nullptr;
+		genai_log(6, "genai plugin: MCP listener configuration changed; restarting\n");
+	}
+
 	if (use_ssl) {
 		// Best-effort: warn if SSL certs aren't loaded yet.  Don't
 		// hard-fail — admin module owns ssl init and may run later.
@@ -600,7 +639,22 @@ bool genai_start() {
 	GenAIPluginContext& ctx = genai_context();
 	ctx.started = true;
 
-	(void)mcp_load_variables_from_admindb(ctx);
+	if (!mcp_load_variables_from_admindb(ctx)) {
+		genai_log(6, "genai plugin: failed to load MCP variables at startup\n");
+		ctx.started = false;
+		return false;
+	}
+	if (!genai_load_variables_from_admindb(ctx)) {
+		genai_log(6, "genai plugin: failed to load GenAI variables at startup\n");
+		ctx.started = false;
+		return false;
+	}
+
+	if (!genai_refresh_runtime_components(ctx)) {
+		ctx.started = false;
+		return false;
+	}
+
 	(void)mcp_load_target_auth_map_from_admindb(ctx);
 	mcp_start_listener_if_enabled(ctx);
 

@@ -25,6 +25,7 @@
 namespace prometheus { class Counter; }
 class Anomaly_Detector;
 class MCP_Threads_Handler;
+class GenAI_Threads_Handler;
 
 /**
  * @brief Process-wide state shared across the plugin's translation units.
@@ -63,6 +64,16 @@ struct GenAIPluginContext {
 	/// implementation.
 	MCP_Threads_Handler* mcp { nullptr };
 };
+
+/**
+ * @brief Reload the GenAI runtime components after genai-* variables change.
+ *
+ * Defined in plugin_main.cpp.  Called after the initial
+ * `LOAD GENAI VARIABLES TO RUNTIME` during plugin start and from the
+ * admin command callback when the operator changes genai-* values at
+ * runtime.
+ */
+bool genai_refresh_runtime_components(GenAIPluginContext& ctx);
 
 /**
  * @brief Accessor for the plugin's shared context singleton.

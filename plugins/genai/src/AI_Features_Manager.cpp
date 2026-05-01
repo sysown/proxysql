@@ -424,6 +424,10 @@ void AI_Features_Manager::close_llm_bridge() {
 int AI_Features_Manager::init() {
 	proxy_info("AI: Initializing AI Features Manager v%s\n", AI_FEATURES_MANAGER_VERSION);
 
+	shutdown_ = 0;
+	close_llm_bridge();
+	close_vector_db();
+
 	if (!GloGATH || !GloGATH->variables.genai_enabled) {
 		proxy_info("AI: AI features disabled by configuration\n");
 		return 0;

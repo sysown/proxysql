@@ -41,10 +41,7 @@ OPTZ ?= -O2 -ggdb
 # so omitting -DPROXYSQL40 here yields an empty header and breaks the build.
 # (If this Makefile is run standalone, the caller is expected to export
 # PROXYSQL40/31/etc. to match the lib.)
-PSQL40 :=
-ifeq ($(PROXYSQL40),1)
-	PSQL40 := -DPROXYSQL40
-endif
+PSQL40 := -DPROXYSQL40
 PSQL31 :=
 ifeq ($(PROXYSQL31),1)
 	PSQL31 := -DPROXYSQL31

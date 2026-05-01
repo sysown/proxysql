@@ -1,14 +1,14 @@
 /**
  * @file plugin_tables.cpp
- * @brief Admin / config / stats SQLite tables + ABI-3 runtime-view
+ * @brief Admin / config SQLite tables + ABI-3 runtime-view
  *        projections the genai plugin contributes to ProxySQL.
  *
  * Two registration mechanisms in play:
  *
  *   1. register_table for the EDITABLE admin tables (mcp_query_rules,
- *      mcp_auth_profiles, mcp_target_profiles), their config_db
- *      mirrors, and the stats_mcp_* tables.  These are persistent
- *      Admin-owned tables; the chassis just creates the schema.
+ *      mcp_auth_profiles, mcp_target_profiles) and their config_db
+ *      mirrors.  These are persistent Admin-owned tables; the chassis
+ *      just creates the schema.
  *
  *   2. register_runtime_view for the runtime_mcp_* views.  The chassis
  *      still has to know they exist (so admin SELECTs can route to
@@ -36,11 +36,6 @@ void register_admin(ProxySQL_PluginServices* services, const char* name, const c
 
 void register_config(ProxySQL_PluginServices* services, const char* name, const char* def) {
 	ProxySQL_PluginTableDef td { ProxySQL_PluginDBKind::config_db, name, def };
-	services->register_table(td);
-}
-
-void register_stats(ProxySQL_PluginServices* services, const char* name, const char* def) {
-	ProxySQL_PluginTableDef td { ProxySQL_PluginDBKind::stats_db, name, def };
 	services->register_table(td);
 }
 
@@ -83,8 +78,8 @@ void register_runtime_view_or_warn(
 } // namespace
 
 /**
- * @brief Register all MCP-related admin / config / stats tables and
- *        runtime-view projections.
+ * @brief Register all MCP-related admin / config tables and runtime
+ *        view projections.
  *
  * Called from `genai_register_schemas` (Phase B) so the tables and
  * views are available the first time the admin module bootstraps the
@@ -122,18 +117,6 @@ void genai_register_admin_tables(ProxySQL_PluginServices* services) {
 	                ADMIN_SQLITE_TABLE_MCP_AUTH_PROFILES);
 	register_config(services, "mcp_target_profiles",
 	                ADMIN_SQLITE_TABLE_MCP_TARGET_PROFILES);
-
-	// Stats DB.
-	register_stats(services, "stats_mcp_query_tools_counters",
-	               STATS_SQLITE_TABLE_MCP_QUERY_TOOLS_COUNTERS);
-	register_stats(services, "stats_mcp_query_tools_counters_reset",
-	               STATS_SQLITE_TABLE_MCP_QUERY_TOOLS_COUNTERS_RESET);
-	register_stats(services, "stats_mcp_query_digest",
-	               STATS_SQLITE_TABLE_MCP_QUERY_DIGEST);
-	register_stats(services, "stats_mcp_query_digest_reset",
-	               STATS_SQLITE_TABLE_MCP_QUERY_DIGEST_RESET);
-	register_stats(services, "stats_mcp_query_rules",
-	               STATS_SQLITE_TABLE_MCP_QUERY_RULES);
 
 	// Runtime views (ABI 3).  Skip silently if the chassis is older
 	// (the field is nullptr until ABI 3); the plugin descriptor

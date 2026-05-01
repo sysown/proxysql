@@ -26,10 +26,14 @@
 
 #include "genai_plugin.h"
 #include "Anomaly_Detector.h"
+#include "GenAI_Thread.h"
 
 #include "prometheus/counter.h"
 
 #include <string>
+
+class GenAI_Threads_Handler;
+extern GenAI_Threads_Handler* GloGATH;
 
 ProxySQL_PluginQueryHookResult genai_query_hook(const ProxySQL_PluginQueryHookPayload& payload) {
 	GenAIPluginContext& ctx = genai_context();
@@ -41,6 +45,11 @@ ProxySQL_PluginQueryHookResult genai_query_hook(const ProxySQL_PluginQueryHookPa
 	// knows the hook is registered -- so this is the right place to
 	// degrade.
 	if (ctx.anomaly_detector == nullptr) {
+		return {ProxySQL_PluginQueryHookAction::allow, std::string()};
+	}
+
+	if (!ctx.started || GloGATH == nullptr || !GloGATH->variables.genai_enabled ||
+	    !GloGATH->variables.genai_anomaly_enabled) {
 		return {ProxySQL_PluginQueryHookAction::allow, std::string()};
 	}
 

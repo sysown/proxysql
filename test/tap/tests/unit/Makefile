@@ -688,8 +688,8 @@ $(GENAI_PLUGIN_SO):
 	$(MAKE) -C $(PROXYSQL_PATH)/plugins/genai
 
 genai_plugin_load_unit-t: genai_plugin_load_unit-t.cpp $(GENAI_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
-	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
-		-DPROXYSQL_GENAI_PLUGIN_PATH=\"$(GENAI_PLUGIN_SO)\" $(GENAI_PLUGIN_DEFINES) \
+	$(CXX) $< $(PROXYSQL_PATH)/lib/ProxySQL_PluginManager.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		-DPROXYSQL40 -DPROXYSQL_GENAI_PLUGIN_PATH=\"$(GENAI_PLUGIN_SO)\" $(GENAI_PLUGIN_DEFINES) \
 		$(IDIRS) $(LDIRS) $(OPT) $(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 

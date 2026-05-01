@@ -91,8 +91,8 @@ cp -a tools/proxysql_galera_checker.sh tools/proxysql_galera_writer.pl proxysql/
 # anything dropped in this directory ends up packaged automatically.
 if [[ "${PROXYSQL40:-}" == "1" || "${PROXYSQLGENAI:-}" == "1" ]]; then
     mkdir -p proxysql/usr/lib/proxysql
-    if [[ -f plugins/mysqlx/ProxySQL_Mysqlx_Plugin.so ]]; then
-        cp plugins/mysqlx/ProxySQL_Mysqlx_Plugin.so proxysql/usr/lib/proxysql/
+    if [[ -f plugins/mysqlx/ProxySQL_MySQLX_Plugin.so ]]; then
+        cp plugins/mysqlx/ProxySQL_MySQLX_Plugin.so proxysql/usr/lib/proxysql/
     fi
 fi
 if [[ "${PROXYSQLGENAI:-}" == "1" ]]; then

@@ -112,7 +112,7 @@ add_plugin_to_pkg() {
     fi
 }
 if [[ "${PROXYSQL40:-}" == "1" || "${PROXYSQLGENAI:-}" == "1" ]]; then
-    add_plugin_to_pkg "../plugins/mysqlx/ProxySQL_Mysqlx_Plugin.so" "ProxySQL_Mysqlx_Plugin.so"
+    add_plugin_to_pkg "../plugins/mysqlx/ProxySQL_MySQLX_Plugin.so" "ProxySQL_MySQLX_Plugin.so"
 fi
 if [[ "${PROXYSQLGENAI:-}" == "1" ]]; then
     add_plugin_to_pkg "../plugins/genai/ProxySQL_GenAI_Plugin.so" "ProxySQL_GenAI_Plugin.so"

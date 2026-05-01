@@ -175,7 +175,6 @@ bool ProxySQL_Admin::flush_GENERIC_variables__retrieve__database_to_runtime(cons
 	}
 	return true;
 }
-
 void ProxySQL_Admin::flush_GENERIC_variables__process__database_to_runtime(
 	const string& modname, SQLite3DB *db, SQLite3_result* resultset,
 	const bool& lock, const bool& replace,
@@ -1265,4 +1264,3 @@ void ProxySQL_Admin::flush_admin_variables___runtime_to_database(SQLite3DB *db, 
 	}
 	free(varnames);
 }
-

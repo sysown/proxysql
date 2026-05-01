@@ -19,6 +19,7 @@
 #include "genai_plugin.h"
 #include "MCP_Thread.h"
 #include "ProxySQL_MCP_Server.hpp"
+#include "proxysql_config.h"
 #include "sqlite3db.h"
 #include "proxysql_utils.h"
 #include "proxysql.h"
@@ -34,6 +35,10 @@
 //   mcp_save_variables_to_admindb
 //   mcp_load_target_auth_map_from_admindb
 //   mcp_start_listener_if_enabled
+//   genai_refresh_runtime_components
+
+class ProxySQL_Admin;
+extern ProxySQL_Admin* GloAdmin;
 
 namespace {
 
@@ -55,6 +60,49 @@ ProxySQL_PluginCommandResult err_result(const char* msg) {
 	return r;
 }
 
+bool exec_sql(SQLite3DB* db, const char* sql) {
+	return db != nullptr && sql != nullptr && db->execute(sql);
+}
+
+bool begin_tx(SQLite3DB* db) { return exec_sql(db, "BEGIN"); }
+bool commit_tx(SQLite3DB* db) { return exec_sql(db, "COMMIT"); }
+bool rollback_tx(SQLite3DB* db) {
+	if (db == nullptr) return false;
+	db->execute("ROLLBACK");
+	return true;
+}
+
+ProxySQL_PluginCommandResult load_variables_from_config(
+	const ProxySQL_PluginCommandContext& cmd_ctx,
+	const char* prefix,
+	const char* ok_msg,
+	const char* err_msg
+) {
+	(void)cmd_ctx;
+	if (GloAdmin == nullptr || GloVars.configfile_open == false || GloVars.confFile == nullptr) {
+		return err_result("Config file unknown");
+	}
+	if (!GloVars.confFile->OpenFile(nullptr)) {
+		return err_result("Unable to open or parse config file");
+	}
+	int rows = GloAdmin->proxysql_config().Read_Global_Variables_from_configfile(prefix);
+	GloVars.confFile->CloseFile();
+	if (rows < 0) {
+		return err_result(err_msg);
+	}
+	GenAIPluginContext& ctx = genai_context();
+	if (std::strcmp(prefix, "genai") == 0) {
+		if (!genai_refresh_runtime_components(ctx)) {
+			return err_result("LOAD GENAI VARIABLES FROM CONFIG: failed reloading runtime components");
+		}
+	} else if (std::strcmp(prefix, "mcp") == 0) {
+		mcp_start_listener_if_enabled(ctx);
+	}
+	ProxySQL_PluginCommandResult r = ok_result(ok_msg);
+	r.rows_affected = static_cast<uint64_t>(rows);
+	return r;
+}
+
 /**
  * `LOAD MCP VARIABLES TO RUNTIME` (and aliases).
  *
@@ -71,11 +119,6 @@ ProxySQL_PluginCommandResult load_mcp_variables_to_runtime(
 	if (!mcp_load_variables_from_admindb(ctx)) {
 		return err_result("LOAD MCP VARIABLES TO RUNTIME: failed reading global_variables");
 	}
-	// Re-evaluate listener state.  For now this only handles the
-	// "newly enabled, listener still down" transition; stop+restart
-	// on port/SSL change is a future-4.F follow-up that needs
-	// ProxySQL_MCP_Server teardown to be plumbed through the plugin
-	// helper too.
 	mcp_start_listener_if_enabled(ctx);
 	return ok_result("MCP variables loaded to runtime");
 }
@@ -102,6 +145,54 @@ ProxySQL_PluginCommandResult save_mcp_variables_to_memory(
 }
 
 /**
+ * `LOAD MCP VARIABLES FROM DISK` / `TO MEMORY`.
+ *
+ * Copies `mcp-*` variables from disk.global_variables into main and
+ * then refreshes the running MCP listener from the in-memory copy.
+ */
+ProxySQL_PluginCommandResult load_mcp_variables_from_disk(
+	const ProxySQL_PluginCommandContext& cmd_ctx,
+	const char* sql
+) {
+	(void)sql;
+	SQLite3DB* db = cmd_ctx.admindb;
+	if (db == nullptr) return err_result("LOAD MCP VARIABLES FROM DISK: missing admindb");
+	if (!begin_tx(db)) return err_result("LOAD MCP VARIABLES FROM DISK: failed to BEGIN");
+	if (!exec_sql(db, "DELETE FROM main.global_variables WHERE variable_name LIKE 'mcp-%'") ||
+	    !exec_sql(db, "INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'mcp-%'") ||
+	    !commit_tx(db)) {
+		rollback_tx(db);
+		return err_result("LOAD MCP VARIABLES FROM DISK: failed to copy variables");
+	}
+	GenAIPluginContext& ctx = genai_context();
+	if (!mcp_load_variables_from_admindb(ctx)) {
+		return err_result("LOAD MCP VARIABLES FROM DISK: failed to refresh runtime");
+	}
+	mcp_start_listener_if_enabled(ctx);
+	return ok_result("MCP variables loaded from disk");
+}
+
+/**
+ * `SAVE MCP VARIABLES TO DISK`.
+ */
+ProxySQL_PluginCommandResult save_mcp_variables_to_disk(
+	const ProxySQL_PluginCommandContext& cmd_ctx,
+	const char* sql
+) {
+	(void)sql;
+	SQLite3DB* db = cmd_ctx.admindb;
+	if (db == nullptr) return err_result("SAVE MCP VARIABLES TO DISK: missing admindb");
+	if (!begin_tx(db)) return err_result("SAVE MCP VARIABLES TO DISK: failed to BEGIN");
+	if (!exec_sql(db, "DELETE FROM disk.global_variables WHERE variable_name LIKE 'mcp-%'") ||
+	    !exec_sql(db, "INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'mcp-%'") ||
+	    !commit_tx(db)) {
+		rollback_tx(db);
+		return err_result("SAVE MCP VARIABLES TO DISK: failed to copy variables");
+	}
+	return ok_result("MCP variables saved to disk");
+}
+
+/**
  * `LOAD GENAI VARIABLES TO RUNTIME` (and aliases).
  *
  * Re-pushes genai-* values from main.global_variables into the
@@ -116,6 +207,9 @@ ProxySQL_PluginCommandResult load_genai_variables_to_runtime(
 	GenAIPluginContext& ctx = genai_context();
 	if (!genai_load_variables_from_admindb(ctx)) {
 		return err_result("LOAD GENAI VARIABLES TO RUNTIME: failed reading global_variables");
+	}
+	if (!genai_refresh_runtime_components(ctx)) {
+		return err_result("LOAD GENAI VARIABLES TO RUNTIME: failed reloading runtime components");
 	}
 	return ok_result("GenAI variables loaded to runtime");
 }
@@ -195,6 +289,7 @@ ProxySQL_PluginCommandResult load_mcp_profiles_to_runtime(
 	if (!mcp_load_target_auth_map_from_admindb(ctx)) {
 		return err_result("LOAD MCP PROFILES TO RUNTIME: failed reading mcp_*_profiles");
 	}
+	mcp_start_listener_if_enabled(ctx);
 	return ok_result("MCP profiles loaded to runtime");
 }
 
@@ -215,6 +310,113 @@ ProxySQL_PluginCommandResult save_mcp_profiles_from_runtime(
 		return err_result("SAVE MCP PROFILES TO MEMORY: failed writing mcp_*_profiles");
 	}
 	return ok_result("MCP profiles saved from runtime to main");
+}
+
+/**
+ * `LOAD MCP VARIABLES FROM CONFIG`.
+ */
+ProxySQL_PluginCommandResult load_mcp_variables_from_config(
+	const ProxySQL_PluginCommandContext& cmd_ctx,
+	const char* sql
+) {
+	(void)sql;
+	return load_variables_from_config(cmd_ctx, "mcp",
+	                                  "MCP variables loaded from config",
+	                                  "LOAD MCP VARIABLES FROM CONFIG: failed reading config");
+}
+
+/**
+ * `LOAD GENAI VARIABLES FROM CONFIG`.
+ */
+ProxySQL_PluginCommandResult load_genai_variables_from_config(
+	const ProxySQL_PluginCommandContext& cmd_ctx,
+	const char* sql
+) {
+	(void)sql;
+	return load_variables_from_config(cmd_ctx, "genai",
+	                                  "GenAI variables loaded from config",
+	                                  "LOAD GENAI VARIABLES FROM CONFIG: failed reading config");
+}
+
+ProxySQL_PluginCommandResult load_mcp_profiles_from_disk(
+	const ProxySQL_PluginCommandContext& cmd_ctx,
+	const char* sql
+) {
+	(void)sql;
+	SQLite3DB* db = cmd_ctx.admindb;
+	if (db == nullptr) return err_result("LOAD MCP PROFILES FROM DISK: missing admindb");
+	if (!begin_tx(db)) return err_result("LOAD MCP PROFILES FROM DISK: failed to BEGIN");
+	if (!exec_sql(db, "DELETE FROM main.mcp_auth_profiles") ||
+	    !exec_sql(db, "INSERT OR REPLACE INTO main.mcp_auth_profiles SELECT * FROM disk.mcp_auth_profiles") ||
+	    !exec_sql(db, "DELETE FROM main.mcp_target_profiles") ||
+	    !exec_sql(db, "INSERT OR REPLACE INTO main.mcp_target_profiles SELECT * FROM disk.mcp_target_profiles") ||
+	    !commit_tx(db)) {
+		rollback_tx(db);
+		return err_result("LOAD MCP PROFILES FROM DISK: failed to copy tables");
+	}
+	GenAIPluginContext& ctx = genai_context();
+	if (!mcp_load_target_auth_map_from_admindb(ctx)) {
+		return err_result("LOAD MCP PROFILES FROM DISK: failed to refresh runtime");
+	}
+	mcp_start_listener_if_enabled(ctx);
+	return ok_result("MCP profiles loaded from disk");
+}
+
+ProxySQL_PluginCommandResult save_mcp_profiles_to_disk(
+	const ProxySQL_PluginCommandContext& cmd_ctx,
+	const char* sql
+) {
+	(void)sql;
+	SQLite3DB* db = cmd_ctx.admindb;
+	if (db == nullptr) return err_result("SAVE MCP PROFILES TO DISK: missing admindb");
+	if (!begin_tx(db)) return err_result("SAVE MCP PROFILES TO DISK: failed to BEGIN");
+	if (!exec_sql(db, "DELETE FROM disk.mcp_auth_profiles") ||
+	    !exec_sql(db, "INSERT OR REPLACE INTO disk.mcp_auth_profiles SELECT * FROM main.mcp_auth_profiles") ||
+	    !exec_sql(db, "DELETE FROM disk.mcp_target_profiles") ||
+	    !exec_sql(db, "INSERT OR REPLACE INTO disk.mcp_target_profiles SELECT * FROM main.mcp_target_profiles") ||
+	    !commit_tx(db)) {
+		rollback_tx(db);
+		return err_result("SAVE MCP PROFILES TO DISK: failed to copy tables");
+	}
+	return ok_result("MCP profiles saved to disk");
+}
+
+ProxySQL_PluginCommandResult load_mcp_query_rules_from_disk(
+	const ProxySQL_PluginCommandContext& cmd_ctx,
+	const char* sql
+) {
+	(void)sql;
+	SQLite3DB* db = cmd_ctx.admindb;
+	if (db == nullptr) return err_result("LOAD MCP QUERY RULES FROM DISK: missing admindb");
+	if (!begin_tx(db)) return err_result("LOAD MCP QUERY RULES FROM DISK: failed to BEGIN");
+	if (!exec_sql(db, "DELETE FROM main.mcp_query_rules") ||
+	    !exec_sql(db, "INSERT OR REPLACE INTO main.mcp_query_rules SELECT * FROM disk.mcp_query_rules") ||
+	    !commit_tx(db)) {
+		rollback_tx(db);
+		return err_result("LOAD MCP QUERY RULES FROM DISK: failed to copy tables");
+	}
+	GenAIPluginContext& ctx = genai_context();
+	if (!mcp_load_query_rules_to_runtime(ctx)) {
+		return err_result("LOAD MCP QUERY RULES FROM DISK: failed to refresh runtime");
+	}
+	return ok_result("MCP query rules loaded from disk");
+}
+
+ProxySQL_PluginCommandResult save_mcp_query_rules_to_disk(
+	const ProxySQL_PluginCommandContext& cmd_ctx,
+	const char* sql
+) {
+	(void)sql;
+	SQLite3DB* db = cmd_ctx.admindb;
+	if (db == nullptr) return err_result("SAVE MCP QUERY RULES TO DISK: missing admindb");
+	if (!begin_tx(db)) return err_result("SAVE MCP QUERY RULES TO DISK: failed to BEGIN");
+	if (!exec_sql(db, "DELETE FROM disk.mcp_query_rules") ||
+	    !exec_sql(db, "INSERT OR REPLACE INTO disk.mcp_query_rules SELECT * FROM main.mcp_query_rules") ||
+	    !commit_tx(db)) {
+		rollback_tx(db);
+		return err_result("SAVE MCP QUERY RULES TO DISK: failed to copy tables");
+	}
+	return ok_result("MCP query rules saved to disk");
 }
 
 } // namespace
@@ -255,10 +457,22 @@ void genai_register_admin_commands(ProxySQL_PluginServices* services) {
 		"LOAD MCP VARIABLES TO RUN",
 	});
 
+	reg("LOAD MCP VARIABLES FROM DISK", &load_mcp_variables_from_disk, {
+		"LOAD MCP VARIABLES TO MEMORY",
+		"LOAD MCP VARIABLES TO MEM",
+	});
+
+	reg("LOAD MCP VARIABLES FROM CONFIG", &load_mcp_variables_from_config, {});
+
 	reg("SAVE MCP VARIABLES TO MEMORY", &save_mcp_variables_to_memory, {
 		"SAVE MCP VARIABLES TO MEM",
 		"SAVE MCP VARIABLES FROM RUNTIME",
 		"SAVE MCP VARIABLES FROM RUN",
+	});
+
+	reg("SAVE MCP VARIABLES TO DISK", &save_mcp_variables_to_disk, {
+		"SAVE MCP VARIABLES FROM MEMORY",
+		"SAVE MCP VARIABLES FROM MEM",
 	});
 
 	reg("LOAD MCP PROFILES TO RUNTIME", &load_mcp_profiles_to_runtime, {
@@ -267,16 +481,26 @@ void genai_register_admin_commands(ProxySQL_PluginServices* services) {
 		"LOAD MCP PROFILES TO RUN",
 	});
 
+	reg("LOAD MCP PROFILES FROM DISK", &load_mcp_profiles_from_disk, {
+		"LOAD MCP PROFILES TO MEMORY",
+	});
+
 	reg("SAVE MCP PROFILES TO MEMORY", &save_mcp_profiles_from_runtime, {
 		"SAVE MCP PROFILES TO MEM",
 		"SAVE MCP PROFILES FROM RUNTIME",
 		"SAVE MCP PROFILES FROM RUN",
 	});
 
+	reg("SAVE MCP PROFILES TO DISK", &save_mcp_profiles_to_disk, {});
+
 	reg("LOAD MCP QUERY RULES TO RUNTIME", &load_mcp_query_rules_to_runtime, {
 		"LOAD MCP QUERY RULES FROM MEMORY",
 		"LOAD MCP QUERY RULES FROM MEM",
 		"LOAD MCP QUERY RULES TO RUN",
+	});
+
+	reg("LOAD MCP QUERY RULES FROM DISK", &load_mcp_query_rules_from_disk, {
+		"LOAD MCP QUERY RULES TO MEMORY",
 	});
 
 	reg("SAVE MCP QUERY RULES TO MEMORY", &save_mcp_query_rules_to_memory, {
@@ -285,12 +509,16 @@ void genai_register_admin_commands(ProxySQL_PluginServices* services) {
 		"SAVE MCP QUERY RULES FROM RUN",
 	});
 
+	reg("SAVE MCP QUERY RULES TO DISK", &save_mcp_query_rules_to_disk, {});
+
 	// genai-* variables: same alias scheme as the MCP verbs above.
 	reg("LOAD GENAI VARIABLES TO RUNTIME", &load_genai_variables_to_runtime, {
 		"LOAD GENAI VARIABLES FROM MEMORY",
 		"LOAD GENAI VARIABLES FROM MEM",
 		"LOAD GENAI VARIABLES TO RUN",
 	});
+
+	reg("LOAD GENAI VARIABLES FROM CONFIG", &load_genai_variables_from_config, {});
 
 	reg("SAVE GENAI VARIABLES TO MEMORY", &save_genai_variables_to_memory, {
 		"SAVE GENAI VARIABLES TO MEM",

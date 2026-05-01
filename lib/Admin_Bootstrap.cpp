@@ -914,9 +914,9 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_servers_clients_status", STATS_SQLITE_TABLE_PROXYSQL_SERVERS_CLIENTS_STATUS);
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_message_metrics", STATS_SQLITE_TABLE_PROXYSQL_MESSAGE_METRICS);
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_message_metrics_reset", STATS_SQLITE_TABLE_PROXYSQL_MESSAGE_METRICS_RESET);
-	// MCP stats tables (stats_mcp_query_tools_counters, _reset,
-	// stats_mcp_query_digest, _reset, stats_mcp_query_rules) moved to
-	// the genai plugin in Step 4.G.  See plugins/genai/src/plugin_tables.cpp.
+	// MCP stats tables are not registered by the genai plugin yet.
+	// The plugin currently owns only the editable MCP admin/config
+	// tables plus the runtime projections.
 
 #ifdef PROXYSQL40
 	if (ProxySQL_PluginManager* plugin_manager = proxysql_get_plugin_manager()) {
