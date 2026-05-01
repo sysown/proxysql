@@ -130,7 +130,8 @@ static const std::set<std::string> mysql_variables_numeric = {
 	"sql_select_limit",
 	"timestamp",
 	"tmp_table_size",
-	"wsrep_sync_wait"
+	"wsrep_sync_wait",
+	"wsrep_trx_fragment_size"
 };
 static const std::set<std::string> mysql_variables_strings = {
 	"default_storage_engine",
@@ -141,6 +142,7 @@ static const std::set<std::string> mysql_variables_strings = {
 	"log_slow_filter",
 	"optimizer_switch",
 	"wsrep_osu_method",
+	"wsrep_trx_fragment_unit",
 };
 
 #include "proxysql_find_charset.h"

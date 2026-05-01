@@ -21,6 +21,8 @@ const std::vector<std::string> possible_unknown_variables = {
 	"group_replication_consistency",
 	"query_cache_type",
 	"wsrep_osu_method",
+	"wsrep_trx_fragment_size",
+	"wsrep_trx_fragment_unit",
 	"wsrep_sync_wait",
 	"max_execution_time",
 	"optimizer_use_condition_selectivity",

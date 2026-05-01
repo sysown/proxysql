@@ -250,6 +250,8 @@ enum mysql_variable_name {
 	SQL_UNIQUE_CHECKS,
 	SQL_WSREP_OSU_METHOD,
 	SQL_WSREP_SYNC_WAIT,
+	SQL_WSREP_TRX_FRAGMENT_SIZE,
+	SQL_WSREP_TRX_FRAGMENT_UNIT,
 	SQL_NAME_LAST_HIGH_WM,
 };
 
@@ -1850,6 +1852,8 @@ mysql_variable_st mysql_tracked_variables[] {
 	{ SQL_UNIQUE_CHECKS,              SETTING_VARIABLE, true,  false, false, true,  (char *)"unique_checks",              NULL, (char *)"" , false} ,
 	{ SQL_WSREP_OSU_METHOD,           SETTING_VARIABLE, true,  false, false, false, (char *)"wsrep_osu_method",           NULL, (char *)"" , false} ,
 	{ SQL_WSREP_SYNC_WAIT,			  SETTING_VARIABLE, false, false, true,  false, (char *)"wsrep_sync_wait",			  (char *)"wsrep_sync_wait", (char *)"0" , false} ,
+	{ SQL_WSREP_TRX_FRAGMENT_SIZE,   SETTING_VARIABLE, false, false, true,  false, (char *)"wsrep_trx_fragment_size",    NULL, (char *)"0" , false} ,
+	{ SQL_WSREP_TRX_FRAGMENT_UNIT,   SETTING_VARIABLE, true,  false, false, false, (char *)"wsrep_trx_fragment_unit",    NULL, (char *)"" , false} ,
 	/*
 	variables that will need input validation:
 	binlog_row_image
