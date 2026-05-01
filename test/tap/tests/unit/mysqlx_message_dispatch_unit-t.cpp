@@ -579,6 +579,15 @@ static void test_connection_pool_matching() {
 
 	MysqlxConnection* f2 = thr.get_connection_from_cache(0, "root", "test", /*tls_active=*/false);
 	ok(f2 != nullptr, "found second cached connection");
+
+	// get_connection_from_cache *extracts* the entry from conn_cache_,
+	// transferring ownership to the caller. The test never re-pools
+	// either lookup hit, so without these explicit deletes the two
+	// MysqlxConnection allocations from lines ~551 / ~566 leak under
+	// LeakSanitizer. (~Mysqlx_Thread cleans up whatever is still in
+	// conn_cache_, but extracted entries are no longer there.)
+	delete found;
+	delete f2;
 }
 
 static void test_async_connect_loopback() {
