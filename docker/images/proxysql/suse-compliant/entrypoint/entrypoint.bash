@@ -84,10 +84,32 @@ cp -a systemd proxysql-${CURVER}/etc/
 cp -a etc/proxysql.cnf proxysql-${CURVER}/etc/
 cp -a etc/logrotate.d proxysql-${CURVER}/etc/
 cp -a tools/proxysql_galera_checker.sh tools/proxysql_galera_writer.pl proxysql-${CURVER}/usr/share/proxysql/tools
+
+# Plugin .so artefacts (v4.0+ chassis); see rhel-compliant entrypoint
+# for the full rationale.  Gated on the same build flags so v3.x
+# packaging is unchanged.
+if [[ "${PROXYSQL40:-}" == "1" || "${PROXYSQLGENAI:-}" == "1" ]]; then
+    mkdir -p proxysql-${CURVER}/usr/lib/proxysql
+    if [[ -f plugins/mysqlx/ProxySQL_Mysqlx_Plugin.so ]]; then
+        cp plugins/mysqlx/ProxySQL_Mysqlx_Plugin.so proxysql-${CURVER}/usr/lib/proxysql/
+    fi
+fi
+if [[ "${PROXYSQLGENAI:-}" == "1" ]]; then
+    mkdir -p proxysql-${CURVER}/usr/lib/proxysql
+    if [[ -f plugins/genai/ProxySQL_GenAI_Plugin.so ]]; then
+        cp plugins/genai/ProxySQL_GenAI_Plugin.so proxysql-${CURVER}/usr/lib/proxysql/
+    fi
+fi
+
 tar czvf "proxysql-${CURVER}.tar.gz" proxysql-${CURVER}
 mv "/opt/proxysql/proxysql-${CURVER}.tar.gz" "/root/rpmbuild/SOURCES"
 # build package
-rpmbuild -bb --define "version ${CURVER}" /root/rpmbuild/SPECS/proxysql.spec
+RPMBUILD_DEFINES=( --define "version ${CURVER}" )
+if [[ "${PROXYSQL40:-}" == "1" || "${PROXYSQLGENAI:-}" == "1" ]]; then
+    # gates the %if 0%{?with_plugins} block in proxysql.spec %files
+    RPMBUILD_DEFINES+=( --define "with_plugins 1" )
+fi
+rpmbuild -bb "${RPMBUILD_DEFINES[@]}" /root/rpmbuild/SPECS/proxysql.spec
 cp /root/rpmbuild/RPMS/${ARCH}/proxysql-${CURVER}-1.${ARCH}.rpm ./binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.${ARCH}.rpm
 # get SHA1 of the packaged executable
 mkdir -p /opt/proxysql/pkgroot/tmp

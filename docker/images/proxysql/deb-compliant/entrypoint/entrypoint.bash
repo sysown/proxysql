@@ -90,6 +90,37 @@ cp ../src/proxysql ./
 cp -r ../etc ./etc
 cp -r ../tools ./tools
 cp -r ../systemd ./systemd
+
+# Plugin .so artefacts (v4.0+ chassis): the proxysql binary is the
+# loader; runtime features (mysqlx, genai/MCP) ship as separate .so
+# files installed to /usr/lib/proxysql/ and named in proxysql.cnf
+# `plugins=("...")` to be loaded.  Conditional on the same flags that
+# gated the build above so v3.x deb packaging stays unchanged.
+PLUGIN_FILES_LINES=""
+mkdir -p ./plugins
+if [[ "${PROXYSQL40:-}" == "1" || "${PROXYSQLGENAI:-}" == "1" ]]; then
+    if [[ -f ../plugins/mysqlx/ProxySQL_Mysqlx_Plugin.so ]]; then
+        cp ../plugins/mysqlx/ProxySQL_Mysqlx_Plugin.so ./plugins/
+        PLUGIN_FILES_LINES+=" plugins/ProxySQL_Mysqlx_Plugin.so /usr/lib/proxysql/\n"
+    fi
+fi
+if [[ "${PROXYSQLGENAI:-}" == "1" ]]; then
+    if [[ -f ../plugins/genai/ProxySQL_GenAI_Plugin.so ]]; then
+        cp ../plugins/genai/ProxySQL_GenAI_Plugin.so ./plugins/
+        PLUGIN_FILES_LINES+=" plugins/ProxySQL_GenAI_Plugin.so /usr/lib/proxysql/\n"
+    fi
+fi
+# Substitute the placeholder line in the ctl file.  If no plugins were
+# built (v3.x release builds), strip the placeholder line entirely.
+if [[ -n "${PLUGIN_FILES_LINES}" ]]; then
+    # awk so we don't have to escape the newline-laden RHS for sed.
+    awk -v repl="${PLUGIN_FILES_LINES%\\n}" '{
+        if ($0 == "PKG_PLUGIN_FILES_PLACEHOLDER") { gsub("\\\\n", "\n", repl); printf "%s", repl; }
+        else { print; }
+    }' ./proxysql.ctl > ./proxysql.ctl.new && mv ./proxysql.ctl.new ./proxysql.ctl
+else
+    sed -i '/^PKG_PLUGIN_FILES_PLACEHOLDER$/d' ./proxysql.ctl
+fi
 DEB_BUILD_OPTIONS=nostrip equivs-build proxysql.ctl
 cp ./proxysql_${CURVER}_${ARCH}.deb ../binaries/proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}.deb
 # get SHA1 of the packaged executable

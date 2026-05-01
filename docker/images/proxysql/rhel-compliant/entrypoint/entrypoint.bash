@@ -81,13 +81,38 @@ cp -a etc/proxysql.cnf proxysql/etc/
 cp -a etc/logrotate.d proxysql/etc/
 mkdir -p proxysql/usr/share/proxysql/tools
 cp -a tools/proxysql_galera_checker.sh tools/proxysql_galera_writer.pl proxysql/usr/share/proxysql/tools
+
+# Plugin .so artefacts (v4.0+ chassis): proxysql becomes the loader;
+# runtime features (mysqlx, genai/MCP) ship as separate .so files
+# installed to /usr/lib/proxysql/ and named in proxysql.cnf
+# `plugins=("...")` to be loaded.  Conditional on the same flags that
+# gated the build above so v3.x rpm packaging stays unchanged.  The
+# proxysql.spec %files section already lists /usr/lib/proxysql/* so
+# anything dropped in this directory ends up packaged automatically.
+if [[ "${PROXYSQL40:-}" == "1" || "${PROXYSQLGENAI:-}" == "1" ]]; then
+    mkdir -p proxysql/usr/lib/proxysql
+    if [[ -f plugins/mysqlx/ProxySQL_Mysqlx_Plugin.so ]]; then
+        cp plugins/mysqlx/ProxySQL_Mysqlx_Plugin.so proxysql/usr/lib/proxysql/
+    fi
+fi
+if [[ "${PROXYSQLGENAI:-}" == "1" ]]; then
+    mkdir -p proxysql/usr/lib/proxysql
+    if [[ -f plugins/genai/ProxySQL_GenAI_Plugin.so ]]; then
+        cp plugins/genai/ProxySQL_GenAI_Plugin.so proxysql/usr/lib/proxysql/
+    fi
+fi
 mv proxysql "proxysql-${CURVER}"
 tar czvf "proxysql-${CURVER}.tar.gz" proxysql-${CURVER}
 mkdir -p /root/rpmbuild/{RPMS,SRPMS,BUILD,SOURCES,SPECS,tmp}
 chown -R root:root /root/rpmbuild/SPECS
 mv "/opt/proxysql/proxysql-${CURVER}.tar.gz" /root/rpmbuild/SOURCES
 # build package
-cd /root/rpmbuild && rpmbuild -ba SPECS/proxysql.spec --define "version ${CURVER}"
+RPMBUILD_DEFINES=( --define "version ${CURVER}" )
+if [[ "${PROXYSQL40:-}" == "1" || "${PROXYSQLGENAI:-}" == "1" ]]; then
+    # gates the %if 0%{?with_plugins} block in proxysql.spec %files
+    RPMBUILD_DEFINES+=( --define "with_plugins 1" )
+fi
+cd /root/rpmbuild && rpmbuild -ba SPECS/proxysql.spec "${RPMBUILD_DEFINES[@]}"
 cp "/root/rpmbuild/RPMS/${ARCH}/proxysql-${CURVER}-1.${ARCH}.rpm" "/opt/proxysql/binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.${ARCH}.rpm"
 # get SHA1 of the packaged executable
 mkdir -p /opt/proxysql/pkgroot/tmp

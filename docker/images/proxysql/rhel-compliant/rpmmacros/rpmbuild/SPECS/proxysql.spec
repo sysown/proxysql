@@ -76,6 +76,15 @@ rm -rf %{buildroot}
 %{_sysconfdir}/systemd/system/%{name}-initial.service
 /usr/share/proxysql/tools/proxysql_galera_checker.sh
 /usr/share/proxysql/tools/proxysql_galera_writer.pl
+# Plugin .so artefacts for v4.0+ chassis builds (mysqlx, genai/MCP).
+# Gated on the `with_plugins` define passed by the rhel-compliant
+# entrypoint when PROXYSQL40=1 or PROXYSQLGENAI=1.  Without the gate
+# the wildcard match would fail on v3.x release builds where the
+# directory is empty and rpmbuild aborts on no-files-match.
+%if 0%{?with_plugins}
+%dir /usr/lib/proxysql
+/usr/lib/proxysql/*.so
+%endif
 %config(noreplace) %attr(750,%{name},%{name}) /var/run/%{name}/
 %config(noreplace) %attr(750,%{name},%{name}) /var/lib/%{name}/
 
