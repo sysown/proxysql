@@ -435,9 +435,88 @@ static void test_backend_reset_clears_auth() {
 	ok(conn.is_reusable(), "reset marks reusable");
 }
 
+// =====================================================================
+// Auth-phase NOTICE per-state policy (issue #5695 part 2). Drives
+// MysqlxConnection::auth_phase_notice_is_drainable_for_test() with
+// synthetic notice bodies. Verifies the per-type decision matrix:
+//   WARNING / SESSION_VARIABLE_CHANGED / SESSION_STATE_CHANGED /
+//   GROUP_REPLICATION_STATE_CHANGED / SERVER_HELLO -> drainable
+//   unknown / malformed / empty -> auth failure (auth_state_=BACKEND_AUTH_ERROR)
+// =====================================================================
+static std::string build_notice_body_with_type(int type_value) {
+	Mysqlx::Notice::Frame f;
+	f.set_type(type_value);
+	std::string out;
+	f.SerializeToString(&out);
+	return out;
+}
+
+static void test_auth_phase_notice_known_types_drained() {
+	diag(">>> %s", __func__);
+	MysqlxConnection conn;
+	const int known_types[] = {
+		Mysqlx::Notice::Frame_Type_WARNING,
+		Mysqlx::Notice::Frame_Type_SESSION_VARIABLE_CHANGED,
+		Mysqlx::Notice::Frame_Type_SESSION_STATE_CHANGED,
+		Mysqlx::Notice::Frame_Type_GROUP_REPLICATION_STATE_CHANGED,
+		Mysqlx::Notice::Frame_Type_SERVER_HELLO,
+	};
+	for (int t : known_types) {
+		// Reset auth state per iteration; the helper sets it to ERROR
+		// on the unknown-type branch and we want to assert no leakage.
+		conn.set_auth_state_for_test(MysqlxConnection::BACKEND_AUTH_CAPABILITIES_GET_SENT);
+		std::string body = build_notice_body_with_type(t);
+		bool drainable = conn.auth_phase_notice_is_drainable_for_test(
+			reinterpret_cast<const uint8_t*>(body.data()), body.size());
+		ok(drainable, "auth-phase NOTICE type=%d is drainable", t);
+		ok(conn.get_auth_state() == MysqlxConnection::BACKEND_AUTH_CAPABILITIES_GET_SENT,
+		   "auth-phase NOTICE type=%d does not perturb auth_state_", t);
+	}
+}
+
+static void test_auth_phase_notice_unknown_type_fails_auth() {
+	diag(">>> %s", __func__);
+	MysqlxConnection conn;
+	conn.set_auth_state_for_test(MysqlxConnection::BACKEND_AUTH_CAPABILITIES_GET_SENT);
+	// 99 is not in the spec-defined enum range. Auth must fail.
+	std::string body = build_notice_body_with_type(99);
+	bool drainable = conn.auth_phase_notice_is_drainable_for_test(
+		reinterpret_cast<const uint8_t*>(body.data()), body.size());
+	ok(!drainable, "auth-phase NOTICE with unknown type=99 is NOT drainable");
+	ok(conn.get_auth_state() == MysqlxConnection::BACKEND_AUTH_ERROR,
+	   "auth-phase NOTICE with unknown type=99 sets BACKEND_AUTH_ERROR");
+}
+
+static void test_auth_phase_notice_malformed_fails_auth() {
+	diag(">>> %s", __func__);
+	MysqlxConnection conn;
+	conn.set_auth_state_for_test(MysqlxConnection::BACKEND_AUTH_CAPABILITIES_GET_SENT);
+	const uint8_t garbage[] = { 0xff, 0xff, 0xff, 0xff, 0xff };
+	bool drainable = conn.auth_phase_notice_is_drainable_for_test(
+		garbage, sizeof(garbage));
+	ok(!drainable, "auth-phase NOTICE with malformed body is NOT drainable");
+	ok(conn.get_auth_state() == MysqlxConnection::BACKEND_AUTH_ERROR,
+	   "auth-phase NOTICE with malformed body sets BACKEND_AUTH_ERROR");
+}
+
+static void test_auth_phase_notice_empty_fails_auth() {
+	diag(">>> %s", __func__);
+	MysqlxConnection conn;
+	conn.set_auth_state_for_test(MysqlxConnection::BACKEND_AUTH_CAPABILITIES_GET_SENT);
+	bool drainable = conn.auth_phase_notice_is_drainable_for_test(nullptr, 0);
+	ok(!drainable, "auth-phase NOTICE with empty body is NOT drainable");
+	ok(conn.get_auth_state() == MysqlxConnection::BACKEND_AUTH_ERROR,
+	   "auth-phase NOTICE with empty body sets BACKEND_AUTH_ERROR");
+}
+
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(42);
+	// Plan derives from ok() count; 4 new auth-phase notice policy tests
+	// add 5*2 (known types: drainable + state-preserved) + 2 (unknown
+	// type) + 2 (malformed) + 2 (empty) = 16 ok() calls. Switching from
+	// hard-coded plan(42) to plan(0) so future additions don't require
+	// re-counting.
+	plan(0);
 	diag("=== mysqlx_backend_auth_unit-t starting ===");
 
 	test_backend_auth_state_transitions();
@@ -449,6 +528,12 @@ int main() {
 	test_backend_auth_required_mode_no_fallback_on_error();
 	test_backend_auth_not_started_returns_progress();
 	test_backend_reset_clears_auth();
+
+	// Auth-phase NOTICE per-state policy (#5695 part 2).
+	test_auth_phase_notice_known_types_drained();
+	test_auth_phase_notice_unknown_type_fails_auth();
+	test_auth_phase_notice_malformed_fails_auth();
+	test_auth_phase_notice_empty_fails_auth();
 
 	return exit_status();
 }

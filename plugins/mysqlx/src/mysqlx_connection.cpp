@@ -5,7 +5,9 @@
 #include "mysqlx_connection.pb.h"
 #include "mysqlx_session.pb.h"
 #include "mysqlx_datatypes.pb.h"
+#include "mysqlx_notice.pb.h"
 
+#include <cstdio>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -144,6 +146,95 @@ int MysqlxConnection::send_client_frame(uint8_t msg_type, const std::string& pay
 	return 0;
 }
 
+// Per-state policy for backend-auth-phase NOTICE frames (issue #5695).
+//
+// The X-Protocol places no formal restriction on which NOTICE types a
+// backend may emit during auth — but operationally the only legitimate
+// uses are:
+//
+//   - SESSION_STATE_CHANGED (3): emitted right before AuthenticateOk to
+//     announce the assigned client_id. Common; safe to drain.
+//   - SESSION_VARIABLE_CHANGED (2): rare during pure auth; some backends
+//     ship one for default schema. Safe to drain.
+//   - SERVER_HELLO (5): server greeting, primarily before auth handshake
+//     starts. Safe to drain.
+//
+// What is NOT legitimate during the backend auth phase, by Router's
+// per-state-machine rules and our hardened equivalent:
+//
+//   - WARNING (1): backend operational warnings during auth indicate a
+//     server-side misconfig (e.g. deprecated auth method); they are not
+//     security-relevant for the proxy and are dropped. Logged so the
+//     operator sees them.
+//   - GROUP_REPLICATION_STATE_CHANGED (4): cluster-membership changes
+//     are dispatched on data-plane connections, not auth handshakes.
+//     Treat as out-of-place; drop and log.
+//   - Any unknown enum value: a malformed/hostile backend, or a future
+//     spec extension. Fail the auth — the proxy can't reason about
+//     unknown notice classes.
+//
+// All "drain" cases consume the frame and continue reading until the
+// real auth response arrives. The MAX_LEADING_NOTICES cap (existing)
+// bounds total drain volume so a hostile backend can't pin a worker.
+//
+// Frontend-direction notices during auth: NEVER forwarded. The
+// frontend client has no context to interpret a backend NOTICE before
+// it sees AuthenticateOk; surfacing them would also leak server-side
+// state mid-handshake (issue #5695 explicit concern). The proxy
+// terminates them on the backend side.
+//
+// Returns true iff the NOTICE is "OK to drain and continue"; returns
+// false to signal the caller should fail the auth (auth_state_ has
+// already been set to BACKEND_AUTH_ERROR by the helper).
+bool MysqlxConnection::auth_phase_notice_is_drainable(const uint8_t* body, size_t body_len) {
+	if (body == nullptr || body_len == 0) {
+		// Empty NOTICE during auth is malformed; treat as auth failure.
+		fprintf(stderr, "mysqlx: empty NOTICE during backend auth — failing auth\n");
+		auth_state_ = BACKEND_AUTH_ERROR;
+		return false;
+	}
+	Mysqlx::Notice::Frame nframe;
+	if (!nframe.ParseFromArray(body, static_cast<int>(body_len))) {
+		fprintf(stderr, "mysqlx: malformed NOTICE during backend auth — failing auth\n");
+		auth_state_ = BACKEND_AUTH_ERROR;
+		return false;
+	}
+	if (!nframe.has_type() || !Mysqlx::Notice::Frame_Type_IsValid(nframe.type())) {
+		fprintf(stderr,
+			"mysqlx: unknown-type NOTICE (type=%d) during backend auth — failing auth\n",
+			nframe.has_type() ? nframe.type() : -1);
+		auth_state_ = BACKEND_AUTH_ERROR;
+		return false;
+	}
+	switch (nframe.type()) {
+		case Mysqlx::Notice::Frame_Type_SESSION_STATE_CHANGED:
+		case Mysqlx::Notice::Frame_Type_SESSION_VARIABLE_CHANGED:
+		case Mysqlx::Notice::Frame_Type_SERVER_HELLO:
+			// Legitimate during auth — drain silently.
+			return true;
+		case Mysqlx::Notice::Frame_Type_WARNING:
+			// Operationally suspect during auth (deprecated auth method
+			// notices, etc.). Drain but log so operators can see them.
+			fprintf(stderr,
+				"mysqlx: backend emitted WARNING NOTICE during auth (drained)\n");
+			return true;
+		case Mysqlx::Notice::Frame_Type_GROUP_REPLICATION_STATE_CHANGED:
+			// Cluster-membership notices during auth are out-of-place;
+			// they belong on data-plane connections after auth is done.
+			// Drain but log — don't fail the connection over what is
+			// likely an over-eager server, but make it visible.
+			fprintf(stderr,
+				"mysqlx: backend emitted GROUP_REPLICATION_STATE_CHANGED "
+				"NOTICE during auth (drained — unexpected on auth path)\n");
+			return true;
+	}
+	// Defensive default: known-but-not-enumerated-here type. Treat as
+	// unknown for forward-compat: we'd rather surface it than silently
+	// drop something a future spec adds.
+	auth_state_ = BACKEND_AUTH_ERROR;
+	return false;
+}
+
 std::optional<MysqlxFrame> MysqlxConnection::read_auth_frame() {
 	// Consume any leading NOTICE frames in one shot. MySQL backends commonly
 	// emit a session-state-change notice before AuthenticateContinue / Ok;
@@ -164,6 +255,17 @@ std::optional<MysqlxFrame> MysqlxConnection::read_auth_frame() {
 				// unhealthy and the chassis will return the connection to
 				// the pool / drop it.
 				auth_state_ = BACKEND_AUTH_ERROR;
+				return std::nullopt;
+			}
+			// Auth-phase per-state policy (#5695): validate notice type
+			// and enforce per-type drain/fail decisions. Frontend
+			// forwarding is NEVER allowed pre-auth — even legitimate
+			// notices are terminated on the backend leg here.
+			const uint8_t* body = (frame->size() > 5) ? (frame->data() + 5) : nullptr;
+			size_t body_len = (frame->size() > 5) ? (frame->size() - 5) : 0;
+			if (!auth_phase_notice_is_drainable(body, body_len)) {
+				// auth_phase_notice_is_drainable already set
+				// auth_state_=BACKEND_AUTH_ERROR and logged.
 				return std::nullopt;
 			}
 			continue;
