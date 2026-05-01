@@ -475,7 +475,7 @@ static void test_pass_through_rejected() {
 			MysqlxResolvedIdentity id{};
 			id.username = user;
 			id.x_enabled = true;
-			id.password = "testpass";
+			id.password = "testpass"; // NOSONAR(cpp:S2068): test fixture credential, not a real secret
 			id.allowed_auth_methods = "MYSQL41";
 			id.backend_auth_mode = MysqlxBackendAuthMode::pass_through;
 			return id;

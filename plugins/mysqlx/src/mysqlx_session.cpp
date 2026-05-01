@@ -474,6 +474,24 @@ void MysqlxSession::handler_capabilities_set() {
 	status_ = CONNECTING_CLIENT;
 }
 
+// Comma-separated, case-insensitive membership test. Tokens are trimmed
+// of leading/trailing ASCII whitespace; empty tokens are skipped.
+static bool csv_contains_ci(const std::string& list, const std::string& needle) {
+	size_t pos = 0;
+	while (pos < list.size()) {
+		size_t comma = list.find(',', pos);
+		if (comma == std::string::npos) comma = list.size();
+		std::string token = list.substr(pos, comma - pos);
+		while (!token.empty() && (token.front() == ' ' || token.front() == '\t')) token.erase(token.begin());
+		while (!token.empty() && (token.back()  == ' ' || token.back()  == '\t')) token.pop_back();
+		if (!token.empty() && strcasecmp(token.c_str(), needle.c_str()) == 0) {
+			return true;
+		}
+		pos = comma + 1;
+	}
+	return false;
+}
+
 bool MysqlxSession::enforce_identity_policy() {
 	if (!identity_) {
 		return true;  // nothing to enforce
@@ -511,27 +529,10 @@ bool MysqlxSession::enforce_identity_policy() {
 	// Empty string preserves the historical "any wired method" default
 	// so existing rows don't require a backfill. Non-empty: comma-
 	// separated, case-insensitive match against auth_method_.
-	if (!identity_->allowed_auth_methods.empty()) {
-		const std::string& list = identity_->allowed_auth_methods;
-		bool matched = false;
-		size_t pos = 0;
-		while (pos < list.size()) {
-			size_t comma = list.find(',', pos);
-			if (comma == std::string::npos) comma = list.size();
-			std::string token = list.substr(pos, comma - pos);
-			// Trim leading/trailing whitespace.
-			while (!token.empty() && (token.front() == ' ' || token.front() == '\t')) token.erase(token.begin());
-			while (!token.empty() && (token.back()  == ' ' || token.back()  == '\t')) token.pop_back();
-			if (!token.empty() && strcasecmp(token.c_str(), auth_method_.c_str()) == 0) {
-				matched = true;
-				break;
-			}
-			pos = comma + 1;
-		}
-		if (!matched) {
-			send_error(1045, "Authentication mechanism not allowed for user");
-			return false;
-		}
+	if (!identity_->allowed_auth_methods.empty() &&
+	    !csv_contains_ci(identity_->allowed_auth_methods, auth_method_)) {
+		send_error(1045, "Authentication mechanism not allowed for user");
+		return false;
 	}
 
 	return true;
