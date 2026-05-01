@@ -266,6 +266,21 @@ void refresh_stats_routes_view(SQLite3DB* /*admindb*/, void*) {
 	mysqlx_stats().flush_to_sqlite(*statsdb);
 }
 
+// Same shape, but for stats_mysqlx_processlist: the projector walks
+// every Mysqlx_Thread and emits one row per active session. Defined in
+// mysqlx_plugin.cpp; declared __attribute__((weak)) so the
+// mysqlx_admin_schema_unit-t and friends (which compile this TU but
+// don't link mysqlx_plugin.cpp) still link successfully — the null check
+// here is the runtime safety net for the test build.
+void refresh_stats_processlist_view(SQLite3DB* /*admindb*/, void*) {
+	if (mysqlx_context().services == nullptr) return;
+	if (mysqlx_context().services->get_statsdb == nullptr) return;
+	if (&mysqlx_populate_stats_processlist == nullptr) return;
+	SQLite3DB* statsdb = mysqlx_context().services->get_statsdb();
+	if (statsdb == nullptr) return;
+	mysqlx_populate_stats_processlist(*statsdb);
+}
+
 bool disk_to_memory(SQLite3DB& admindb, const char* table_name) {
 	if (!admindb.execute("BEGIN")) {
 		return false;
@@ -482,6 +497,7 @@ bool mysqlx_register_admin_schema(ProxySQL_PluginServices& services) {
 		services.register_runtime_view({kRuntimeMysqlxBackendEndpointsTable,  &refresh_endpoints_runtime_view, nullptr});
 		services.register_runtime_view({kRuntimeMysqlxVariablesTable,         &refresh_variables_runtime_view, nullptr});
 		services.register_runtime_view({kStatsMysqlxRoutesTable,              &refresh_stats_routes_view,      nullptr});
+		services.register_runtime_view({kStatsMysqlxProcesslistTable,         &refresh_stats_processlist_view, nullptr});
 	}
 
 	// Stats tables (stats_db only, no config copy needed).
