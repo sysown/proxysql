@@ -123,6 +123,7 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	PgSQLMonitorDecision.oo \
 	MySQLErrorClassifier.oo \
 	BackendSyncDecision.oo \
+	Query_Processor_ParserSQL.oo \
 	proxy_sqlite3_symbols.oo
 
 # TSDB object files

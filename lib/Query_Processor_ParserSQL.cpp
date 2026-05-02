@@ -1,3 +1,4 @@
+#include "proxysql.h"
 #include "Query_Processor_ParserSQL.h"
 #include "sql_parser/parser.h"
 #include "sql_parser/digest.h"
