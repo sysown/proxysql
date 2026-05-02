@@ -78,7 +78,6 @@ jobs:
         cd proxysql
         export INFRA_ID="ci-legacy-g5"
         export TAP_GROUP="legacy-g5"
-        export SKIP_CLUSTER_START=1
         test/infra/control/ensure-infras.bash
 
     - name: Run legacy-g5 tests
@@ -86,7 +85,6 @@ jobs:
         cd proxysql
         export INFRA_ID="ci-legacy-g5"
         export TAP_GROUP="legacy-g5"
-        export SKIP_CLUSTER_START=1
         test/infra/control/run-tests-isolated.bash
 
     - name: Cleanup
