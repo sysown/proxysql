@@ -6579,6 +6579,8 @@ void print_aws_aurora_status_entry(AWS_Aurora_status_entry* aase) {
 }
 
 void MySQL_Monitor::aws_aurora_autopurge_servers(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry *ase, unsigned int threshold, std::map<std::string, int>& autopurge_counter, const std::string& domain_name) {
+	bool server_purged = false;
+
 	std::set<std::string> present_servers;
 	for (auto h : *(ase->host_statuses)) {
 		present_servers.insert(h->server_id);
@@ -6606,6 +6608,7 @@ void MySQL_Monitor::aws_aurora_autopurge_servers(unsigned int wHG, unsigned int 
 						mysrvc->address, mysrvc->port, wHG, autopurge_counter[srv_key]);
 					MyHGM->remove_server_in_hg(wHG, mysrvc->address, mysrvc->port);
 					autopurge_counter.erase(srv_key);
+					server_purged = true;
 				}
 			} else {
 				autopurge_counter.erase(srv_key);
@@ -6634,12 +6637,18 @@ void MySQL_Monitor::aws_aurora_autopurge_servers(unsigned int wHG, unsigned int 
 							mysrvc->address, mysrvc->port, rHG, autopurge_counter[srv_key]);
 						MyHGM->remove_server_in_hg(rHG, mysrvc->address, mysrvc->port);
 						autopurge_counter.erase(srv_key);
+						server_purged = true;
 					}
 				} else {
 					autopurge_counter.erase(srv_key);
 				}
 			}
 		}
+	}
+
+	// when server are removed from HG, update AWS_Aurora_Hosts_resultset
+	if (server_purged) {
+		MyHGM->update_aws_aurora_hosts_monitor_resultset(true);
 	}
 
 	MyHGM->wrunlock();
