@@ -240,6 +240,8 @@ void MysqlxSession::init(int fd, Mysqlx_Thread* thread_ptr, const std::string& l
 	reset_compression_state();
 	response_state_ = RESP_IDLE;
 	seen_column_metadata_ = false;
+	passthrough_c2b_backlog_.clear();
+	passthrough_b2c_backlog_.clear();
 }
 
 void MysqlxSession::reset() {
@@ -265,6 +267,8 @@ void MysqlxSession::reset() {
 	pre_auth_cap_msgs_ = 0;
 	response_state_ = RESP_IDLE;
 	seen_column_metadata_ = false;
+	passthrough_c2b_backlog_.clear();
+	passthrough_b2c_backlog_.clear();
 }
 
 int MysqlxSession::handler() {
@@ -1455,18 +1459,39 @@ void MysqlxSession::handler_session_closing() {
 // the proxy cannot multiplex queries, evaluate routing rules, run the
 // query cache, or pool the backend.
 //
-// The pump uses bog-standard read(2)/write(2). EAGAIN/EWOULDBLOCK ends
-// the round (poll will wake us again when more bytes arrive); a 0-byte
-// read means the peer closed cleanly; any other I/O error puts the
-// session into X_SESSION_CLOSING. Short writes are tolerated by
-// continuing the loop on the next tick — read(2) buffers the unread
-// data inside the kernel and we'll pick it up next round.
+// The pump uses bog-standard read(2)/write(2). EAGAIN/EWOULDBLOCK on
+// the read side ends the round (poll will wake us again when more bytes
+// arrive); a 0-byte read means the peer closed cleanly; any other I/O
+// error puts the session into X_SESSION_CLOSING.
+//
+// EAGAIN on the WRITE side is NOT fatal (issue #5710 follow-up). When
+// the destination's kernel send buffer fills (slow client / slow
+// backend / asymmetric throughput), we used to kill the session — that
+// turns a transient back-pressure event into a connection drop. Now
+// the unwritten bytes are appended to a per-direction backlog
+// (passthrough_c2b_backlog_ / passthrough_b2c_backlog_) and re-tried
+// on the next handler tick. The libev loop wakes us on EV_READ for
+// either fd, which is sufficient for the backlog to drain in practice:
+// the next time the source side has bytes (or the next poll tick), we
+// re-enter handler_passthrough_forward(), drain the backlog first, and
+// only then resume reading. We keep `to_process = true` while a
+// backlog is non-empty so the outer dispatch loop will re-call us
+// without waiting for a new fd-readable event — this mirrors the
+// pattern used by handler_waiting_server_msg() for buffered work.
+//
+// Backlog cap: PASSTHROUGH_BACKLOG_CAP per direction (1 MiB). If a
+// direction's backlog exceeds the cap, the slow consumer is treated as
+// a memory-DoS source; the session is killed (X_SESSION_CLOSING). Cap
+// chosen as a balance between "absorbs a typical TLS record burst"
+// (TLS records can be up to 16 KiB but applications emit them in
+// fragments) and "bounded memory per session". An operator hitting
+// this in practice should investigate the slow side, not raise the
+// cap.
 //
 // We deliberately pump up to BURST_BYTES per direction per call so a
 // chatty session does not starve other sessions sharing this thread.
-// The burst limit also bounds the kernel-side buffering pressure on
-// short-write cases. 64 KiB is the size of a typical TLS record + a
-// few application frames, plenty per scheduler tick.
+// 64 KiB is the size of a typical TLS record + a few application
+// frames, plenty per scheduler tick.
 void MysqlxSession::handler_passthrough_forward() {
 	// No backend? The session is malformed — the entry path
 	// (handler_capabilities_set, or the test-only injection helper)
@@ -1489,7 +1514,67 @@ void MysqlxSession::handler_passthrough_forward() {
 	uint8_t buf[16384];
 	constexpr size_t BURST_BYTES = 65536;
 
-	auto pump_one_direction = [&](int from_fd, int to_fd) -> bool {
+	// Drain whatever is in `backlog` to to_fd. Returns true on
+	// success or partial-success (writes that left some bytes
+	// pending — caller should NOT proceed to a fresh read in that
+	// case so we don't grow the backlog further). Returns false if
+	// the destination signalled a fatal error or the backlog
+	// exceeded the cap (in either case session_closing is set).
+	auto drain_backlog = [&](std::vector<uint8_t>& backlog, int to_fd) -> bool {
+		while (!backlog.empty()) {
+			ssize_t w = write(to_fd, backlog.data(), backlog.size());
+			if (w > 0) {
+				backlog.erase(backlog.begin(), backlog.begin() + w);
+				continue;
+			}
+			if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+				// Destination still not ready; leave backlog in
+				// place and signal "back off this direction this
+				// tick" — caller treats false-with-healthy as a
+				// non-fatal pause.
+				return false;
+			}
+			// Genuine write error / EOF on the destination.
+			healthy = false;
+			status_ = X_SESSION_CLOSING;
+			return false;
+		}
+		return true;
+	};
+
+	// Append `bytes` to backlog and trip session-closing if the
+	// total would exceed the per-direction cap. Returns true on
+	// success, false if the cap was hit (session is closing).
+	auto append_to_backlog = [&](std::vector<uint8_t>& backlog,
+	                             const uint8_t* bytes, size_t n) -> bool {
+		if (backlog.size() + n > PASSTHROUGH_BACKLOG_CAP) {
+			// Slow-consumer DoS protection. Kill the session rather
+			// than grow memory unbounded. reusable_=false on the
+			// passthrough connection keeps it out of the pool; the
+			// thread-side teardown closes both fds.
+			healthy = false;
+			status_ = X_SESSION_CLOSING;
+			return false;
+		}
+		backlog.insert(backlog.end(), bytes, bytes + n);
+		return true;
+	};
+
+	auto pump_one_direction = [&](int from_fd, int to_fd,
+	                              std::vector<uint8_t>& backlog) -> bool {
+		// Drain pending bytes BEFORE reading more. If the destination
+		// is still EAGAIN, skip reading from this direction this tick;
+		// kernel-buffering on `from_fd` covers the source side.
+		if (!backlog.empty()) {
+			if (!drain_backlog(backlog, to_fd)) {
+				// Either destination still EAGAIN (healthy true,
+				// status unchanged) or fatal write error (healthy
+				// false, status = closing). Either way we leave
+				// this direction alone for now.
+				return healthy;
+			}
+		}
+
 		size_t bytes_this_round = 0;
 		while (bytes_this_round < BURST_BYTES) {
 			ssize_t r = read(from_fd, buf, sizeof(buf));
@@ -1501,21 +1586,17 @@ void MysqlxSession::handler_passthrough_forward() {
 						written += w;
 						continue;
 					}
-					if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-						// Drop unwritten bytes for this tick. The kernel-side
-						// receive buffer on `from_fd` retains the unread tail
-						// from the next loop iteration we'd have done; in
-						// reality we already drained that part. To keep the
-						// implementation honest we'd buffer the unwritten bytes
-						// internally here, but for an ASAN unit-test scope a
-						// short-write on a non-blocking pipe between
-						// socketpair fds essentially never happens (the
-						// kernel buffer is far larger than BURST_BYTES). If
-						// production ever observes this, the session is killed
-						// — reusable=false guarantees no leak into the pool.
-						healthy = false;
-						status_ = X_SESSION_CLOSING;
-						return false;
+					if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+						// Destination buffer is full — buffer the
+						// unwritten tail in this direction's backlog
+						// and stop reading further. Next tick will
+						// drain. Backlog-cap hit kills the session.
+						if (!append_to_backlog(backlog,
+						                       buf + written,
+						                       static_cast<size_t>(r) - written)) {
+							return false;
+						}
+						return true;
 					}
 					// Other write error or EOF on the destination.
 					healthy = false;
@@ -1545,8 +1626,21 @@ void MysqlxSession::handler_passthrough_forward() {
 		return true;
 	};
 
-	if (!pump_one_direction(client_fd, backend_fd)) return;
-	if (!pump_one_direction(backend_fd, client_fd)) return;
+	if (!pump_one_direction(client_fd, backend_fd, passthrough_c2b_backlog_)) return;
+	if (!pump_one_direction(backend_fd, client_fd, passthrough_b2c_backlog_)) return;
+
+	// Re-arm so the outer dispatch loop calls us again on the next
+	// tick when there's a backlog to drain. Without this, a long
+	// stall on the destination side would wait for the next
+	// fd-readable event (which may not come until the source sends
+	// more — by which time the backlog has only grown). The libev
+	// poll wakeup still drives most ticks; this just guarantees
+	// that an existing backlog gets a fair shot at draining even
+	// when no new bytes arrive on the source.
+	if (!passthrough_c2b_backlog_.empty() || !passthrough_b2c_backlog_.empty()) {
+		to_process = true;
+	}
+
 	last_active_time_ = monotonic_time_ms();
 }
 

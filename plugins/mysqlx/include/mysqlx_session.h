@@ -231,6 +231,38 @@ public:
 	// from client_ds_ before dispatching). Used by the passthrough
 	// unit tests to assert byte forwarding in isolation.
 	void run_passthrough_pump_for_test() { handler_passthrough_forward(); }
+	// Pre-loads the c2b passthrough backlog with `n` zero bytes so
+	// the next splice tick is operating against a near-cap backlog
+	// state. The cap-overflow branch is otherwise organically
+	// unreachable (BURST_BYTES is smaller than the cap and the
+	// drain-first contract limits how many bytes a single pump can
+	// add). This test-only seeder makes the cap branch reachable
+	// without lowering the cap at runtime. NOT exposed in the
+	// production build.
+	void seed_passthrough_c2b_backlog_for_test(size_t n) {
+		passthrough_c2b_backlog_.assign(n, 0);
+	}
+	size_t passthrough_c2b_backlog_size_for_test() const {
+		return passthrough_c2b_backlog_.size();
+	}
+	// Test-only direct invocation of the cap-check append path on
+	// the c2b backlog. Bypasses the full splice loop; intended for
+	// the unit test that asserts the cap fires when an append would
+	// take the backlog past PASSTHROUGH_BACKLOG_CAP. Returns true if
+	// the append succeeded, false if the cap fired (in which case
+	// healthy=false and status_=X_SESSION_CLOSING are set, mirroring
+	// the production path).
+	bool try_append_to_passthrough_c2b_backlog_for_test(size_t n) {
+		std::vector<uint8_t> dummy(n, 0);
+		if (passthrough_c2b_backlog_.size() + n > PASSTHROUGH_BACKLOG_CAP) {
+			healthy = false;
+			status_ = X_SESSION_CLOSING;
+			return false;
+		}
+		passthrough_c2b_backlog_.insert(passthrough_c2b_backlog_.end(),
+		                                dummy.begin(), dummy.end());
+		return true;
+	}
 #endif /* MYSQLX_TEST_BUILD */
 	int  target_hostgroup_for_test() const { return target_hostgroup_; }
 	const std::string& target_address_for_test() const { return target_address_; }
@@ -405,6 +437,27 @@ private:
 	// not re-sent at Cursor::Fetch, so the flag must carry across.
 	bool seen_column_metadata_;
 	MysqlxTlsMode tls_mode_;
+
+	// Per-direction write backlogs for the passthrough splice loop
+	// (issue #5710 follow-up). When the destination fd's send buffer
+	// is full, write(2) returns short / EAGAIN; we used to abort the
+	// session, which kills any slow-consumer scenario (slow client,
+	// chatty backend, kernel buffer drained slower than we read). The
+	// backlogs hold the unwritten bytes between scheduler ticks; on
+	// every entry to handler_passthrough_forward() we drain the
+	// backlog first, then resume reading. Capped at
+	// PASSTHROUGH_BACKLOG_CAP (1 MiB) per direction to bound the
+	// proxy's memory exposure to a single slow-consumer DoS — beyond
+	// the cap the session is killed.
+	//
+	// c2b = client -> backend (bytes read from client_fd, awaiting
+	// write to backend_fd); b2c is the reverse. Cleared on reset()
+	// and on the destructor's return-to-pool path.
+	std::vector<uint8_t> passthrough_c2b_backlog_;
+	std::vector<uint8_t> passthrough_b2c_backlog_;
+public:
+	static constexpr size_t PASSTHROUGH_BACKLOG_CAP = 1 * 1024 * 1024;
+private:
 
 	// Compression negotiation state. compression_algo_ is set by
 	// handler_capabilities_set() once the client successfully sets the

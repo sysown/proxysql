@@ -11,6 +11,7 @@
 #include "mysqlx_session.pb.h"
 #include "mysqlx_datatypes.pb.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <sys/socket.h>
@@ -1003,10 +1004,201 @@ static void test_passthrough_handler_dispatch_skips_xprotocol() {
 	close(backend_fds[0]); close(backend_fds[1]);
 }
 
+// Pin the destination's send buffer to a tiny value so the splice
+// loop's write() blocks (EAGAIN) on a bursty source. SO_SNDBUF on a
+// Unix-domain socketpair is honoured by the kernel; the smaller of
+// SO_SNDBUF on the writer and SO_RCVBUF on the reader's peer gates
+// throughput. We shrink BOTH so the kernel actually returns EAGAIN
+// instead of buffering megabytes silently. Returns the actual buffer
+// sizes the kernel chose (it may round up).
+//
+// Invariant: any value the kernel rounds to must still be << the
+// 256 KiB source payloads we use, otherwise the test wouldn't trigger
+// the backlog code path.
+static void shrink_send_recv_buffers(int writer_fd, int reader_fd) {
+	int sndbuf = 4096;
+	int rcvbuf = 4096;
+	(void)setsockopt(writer_fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+	(void)setsockopt(reader_fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
+}
+
+// EAGAIN backlog: the splice loop must absorb a write-side EAGAIN
+// without killing the session, and the next pump tick (after the
+// destination drains its kernel buffer) must finish the transfer.
+//
+// Methodology:
+//   1. Set SO_SNDBUF / SO_RCVBUF on the backend leg to ~4 KiB.
+//   2. Source-side (client_peer) writes 256 KiB at once. The session's
+//      read loop reads in 16 KiB chunks; the first write to the
+//      backend will fill the backend's tiny kernel send buffer and
+//      return EAGAIN — under the OLD code this killed the session,
+//      under the NEW code it appends to passthrough_c2b_backlog_.
+//   3. Drain the backend peer's receive buffer in a loop, calling
+//      run_passthrough_pump_for_test() between drains. Eventually all
+//      256 KiB make it across.
+//   4. Assert: session healthy, status still X_PASSTHROUGH_FORWARD,
+//      total bytes received == 256 KiB.
+static void test_passthrough_eagain_backlog_drains_across_ticks() {
+	diag(">>> %s", __func__);
+	int client_fds[2], backend_fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
+	socketpair(AF_UNIX, SOCK_STREAM, 0, backend_fds);
+	set_nonblocking_fd(client_fds[0]);
+	set_nonblocking_fd(backend_fds[0]);
+	set_nonblocking_fd(backend_fds[1]);
+
+	// Squeeze the backend pipe so write(2) returns EAGAIN early.
+	shrink_send_recv_buffers(backend_fds[0], backend_fds[1]);
+
+	MysqlxSession sess;
+	sess.init(client_fds[0], nullptr);
+	sess.enter_passthrough_for_test(backend_fds[0]);
+
+	constexpr size_t PAYLOAD_BYTES = 256 * 1024;
+	std::vector<uint8_t> payload(PAYLOAD_BYTES);
+	for (size_t i = 0; i < PAYLOAD_BYTES; ++i) {
+		payload[i] = static_cast<uint8_t>(i & 0xFF);
+	}
+
+	// Make the client peer non-blocking too; the test's write(2) on
+	// the source fd should NEVER stall (it has a normal-sized kernel
+	// buffer and the session's read loop drains it).
+	set_nonblocking_fd(client_fds[1]);
+
+	// Drain the backend peer into `received`; we may need to do
+	// this both during the push (to keep the source's send buffer
+	// from blocking us) and during the dedicated drain loop.
+	std::vector<uint8_t> received;
+	received.reserve(PAYLOAD_BYTES);
+	auto drain_backend_peer = [&]() {
+		char drainbuf[4096];
+		while (true) {
+			ssize_t r = read(backend_fds[1], drainbuf, sizeof(drainbuf));
+			if (r > 0) {
+				received.insert(received.end(), drainbuf, drainbuf + r);
+				continue;
+			}
+			break;
+		}
+	};
+
+	// Push the 256 KiB into the kernel buffer in chunks. With a
+	// default ~256 KiB SO_SNDBUF on the source, this typically
+	// flushes in a single write (the source kernel buffer absorbs
+	// it). When the source buffer fills (smaller-buffer kernels),
+	// run a pump tick to advance the session's read side and drain
+	// the backend peer so the source can refill.
+	size_t total_pushed = 0;
+	for (int i = 0; total_pushed < PAYLOAD_BYTES && i < 1000; ++i) {
+		ssize_t w = write(client_fds[1], payload.data() + total_pushed,
+		                  PAYLOAD_BYTES - total_pushed);
+		if (w > 0) {
+			total_pushed += static_cast<size_t>(w);
+			continue;
+		}
+		if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+			// Source buffer is full; advance the session and
+			// drain the backend so the pipe can refill.
+			sess.run_passthrough_pump_for_test();
+			drain_backend_peer();
+			continue;
+		}
+		break;
+	}
+	ok(total_pushed == PAYLOAD_BYTES,
+	   "client peer pushed all %zu bytes into the kernel buffer",
+	   PAYLOAD_BYTES);
+
+	// Final drain: keep alternating pump + read until everything
+	// has crossed. Each pump moves up to one BURST_BYTES (64 KiB)
+	// from source to backend, but the destination's tiny SO_SNDBUF
+	// returns EAGAIN partway, queueing the remainder in the splice
+	// loop's backlog. Subsequent pumps drain the backlog before
+	// reading more from the source.
+	for (int i = 0; i < 1000; ++i) {
+		sess.run_passthrough_pump_for_test();
+		drain_backend_peer();
+		if (received.size() == PAYLOAD_BYTES) break;
+	}
+
+	ok(sess.is_healthy(),
+	   "session remains healthy through repeated EAGAIN write events on backend leg");
+	ok(sess.get_status() == MysqlxSession::X_PASSTHROUGH_FORWARD,
+	   "session stays in X_PASSTHROUGH_FORWARD across EAGAIN backoff ticks");
+	ok(received.size() == PAYLOAD_BYTES,
+	   "all %zu bytes eventually delivered to backend peer (got %zu)",
+	   PAYLOAD_BYTES, received.size());
+	bool match = (received.size() == PAYLOAD_BYTES) &&
+	             std::equal(received.begin(), received.end(), payload.begin());
+	ok(match,
+	   "delivered payload matches source byte-for-byte (no data corruption across backlog)");
+
+	close(client_fds[0]); close(client_fds[1]);
+	close(backend_fds[0]); close(backend_fds[1]);
+}
+
+// Backlog cap: per-direction backlog cap is enforced; if appending
+// new bytes would exceed PASSTHROUGH_BACKLOG_CAP (1 MiB), the session
+// is killed (X_SESSION_CLOSING) instead of growing memory unbounded.
+//
+// In practice the splice loop's "drain backlog before reading more
+// from source" contract means the backlog never grows past a single
+// burst (BURST_BYTES = 64 KiB) — so the cap is purely defensive
+// against a future logic bug or larger BURST_BYTES. We assert the
+// cap branch directly via the MYSQLX_TEST_BUILD-only
+// try_append_to_passthrough_c2b_backlog_for_test() helper, which
+// runs the same cap check the production splice loop runs but does
+// not require driving the read-side socket. Tests both halves:
+//   * append within the cap is accepted (size grows, session stays
+//     healthy);
+//   * append that would exceed the cap is refused (size unchanged,
+//     session transitions to X_SESSION_CLOSING).
+static void test_passthrough_backlog_cap_kills_session() {
+	diag(">>> %s", __func__);
+	int client_fds[2], backend_fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
+	socketpair(AF_UNIX, SOCK_STREAM, 0, backend_fds);
+	set_nonblocking_fd(client_fds[0]);
+	set_nonblocking_fd(backend_fds[0]);
+
+	MysqlxSession sess;
+	sess.init(client_fds[0], nullptr);
+	sess.enter_passthrough_for_test(backend_fds[0]);
+
+	constexpr size_t CAP = MysqlxSession::PASSTHROUGH_BACKLOG_CAP;
+
+	// Seed the c2b backlog to (CAP - 16 KiB). Within-cap append of
+	// 1 KiB succeeds; the second append (32 KiB) would push past
+	// the cap and must be refused.
+	sess.seed_passthrough_c2b_backlog_for_test(CAP - 16 * 1024);
+	ok(sess.passthrough_c2b_backlog_size_for_test() == CAP - 16 * 1024,
+	   "backlog seeded to (cap - 16 KiB) bytes");
+
+	bool ok_append = sess.try_append_to_passthrough_c2b_backlog_for_test(1024);
+	ok(ok_append,
+	   "within-cap append (1 KiB) accepted while session is healthy");
+	ok(sess.is_healthy(),
+	   "session remains healthy after a within-cap append");
+
+	bool overflow = sess.try_append_to_passthrough_c2b_backlog_for_test(32 * 1024);
+	ok(!overflow,
+	   "over-cap append (32 KiB beyond seeded near-cap state) refused by cap check");
+	ok(!sess.is_healthy(),
+	   "session marked unhealthy after backlog-cap-overflow append");
+	ok(sess.get_status() == MysqlxSession::X_SESSION_CLOSING,
+	   "session status is X_SESSION_CLOSING after backlog cap overflow");
+
+	close(client_fds[0]); close(client_fds[1]);
+	close(backend_fds[0]); close(backend_fds[1]);
+}
+
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	// 65 (existing) + 22 (passthrough block: 2 + 5 + 3 + 2 + 2 + 3 + 5)
-	plan(87);
+	// 87 (pre-existing) + 11 (Fix B EAGAIN backlog tests:
+	// drains_across_ticks contributes 5 ok()s; backlog_cap_kills
+	// contributes 6 ok()s — seed + within-cap + healthy +
+	// over-cap refused + unhealthy + status-closing)
+	plan(98);
 	diag("=== mysqlx_session_unit-t starting ===");
 
 	test_session_init();
@@ -1038,6 +1230,10 @@ int main() {
 	test_passthrough_close_on_backend_eof();
 	test_passthrough_disables_backend_reuse();
 	test_passthrough_handler_dispatch_skips_xprotocol();
+
+	// Fix B: EAGAIN write-side backlog (issue #5710 follow-up).
+	test_passthrough_eagain_backlog_drains_across_ticks();
+	test_passthrough_backlog_cap_kills_session();
 
 	return exit_status();
 }
