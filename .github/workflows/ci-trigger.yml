@@ -23,7 +23,7 @@ jobs:
         sleep 5
         RUNID=$(gh -R ${{ github.repository }} run list -w CI-builds -s in_progress | grep -P "${RUNNAME1}|${RUNNAME2}|${RUNNAME3}" | grep -Po '(?<=workflow_run)\s+\d+')
         while [[ -z ${RUNID} ]]; do
-          sleep 5
+          sleep 20
           gh -R ${{ github.repository }} run list -w CI-builds -s in_progress | grep -P "${RUNNAME1}|${RUNNAME2}|${RUNNAME3}"
           RUNID=$(gh -R ${{ github.repository }} run list -w CI-builds -s in_progress | grep -P "${RUNNAME1}|${RUNNAME2}|${RUNNAME3}" | grep -Po '(?<=workflow_run)\s+\d+')
         done
