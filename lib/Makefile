@@ -27,6 +27,7 @@ IDIRS :=	-I$(PROXYSQL_IDIR) \
 			-I$(JSON_IDIR) \
 			-I$(SSL_IDIR) \
 			-I$(ZSTD_IDIR) \
+			-I$(PARSERSQL_IDIR) \
 
 ifeq ($(UNAME_S),Linux)
 	IDIRS += -I$(COREDUMPER_IDIR)
@@ -39,7 +40,8 @@ endif
 LDIRS :=	-L$(JEMALLOC_LDIR) \
 			-L$(RE2_LDIR) \
 			-L$(LIBINJECTION_LDIR) \
-			-L$(PROMETHEUS_LDIR)
+			-L$(PROMETHEUS_LDIR) \
+			-L$(PARSERSQL_LDIR) \
 
 #LIBS := -rdynamic -Wl,-Bstatic -ljemalloc_pic -lre2 -Wl,-Bdynamic -ldl -lpthread -lm -lz -lrt $(EXTRALINK)
 #LIBS := -Wl,--export-dynamic -Wl,-Bstatic -ljemalloc_pic -lre2 -Wl,-Bdynamic -ldl -lpthread -lm -lz -lrt $(EXTRALINK)
