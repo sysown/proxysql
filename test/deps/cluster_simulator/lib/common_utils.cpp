@@ -354,12 +354,12 @@ bool check_present_and_type(const json& j, const std::vector<std::string>& path,
 
 bool matching_server_status(const server_status& srv_st1, const server_status& srv_st2) {
 	bool res = false;
-	bool same_hid_hostname =
+	bool same_hid_host =
 		std::get<0>(srv_st1) == std::get<0>(srv_st2) &&
 		std::get<1>(srv_st1) == std::get<1>(srv_st2) &&
-		std::get<2>(srv_st2) == std::get<2>(srv_st2);
+		std::get<2>(srv_st1) == std::get<2>(srv_st2);
 
-	if (same_hid_hostname) {
+	if (same_hid_host) {
 		std::vector<std::string> allowed_sts {
 			str_split(std::get<3>(srv_st1), '|')
 		};
