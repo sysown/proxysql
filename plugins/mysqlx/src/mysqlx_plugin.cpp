@@ -299,19 +299,24 @@ uint64_t monotonic_time_ms_local() {
 void mysqlx_populate_stats_processlist(SQLite3DB& statsdb) {
 	MysqlxPluginContext& ctx = mysqlx_context();
 
-	// Always wipe the projection table — empty thread pool or empty
-	// session list both mean "no active sessions" and the operator
-	// must see that, not stale rows from the last refresh.
-	statsdb.execute("DELETE FROM stats_mysqlx_processlist");
-
-	if (ctx.threads.empty()) return;
-
 	uint64_t now_ms = monotonic_time_ms_local();
 	std::vector<MysqlxSessionSnapshot> rows;
 	for (const auto& thr : ctx.threads) {
 		if (thr) thr->snapshot_sessions_for_stats(rows, now_ms);
 	}
 
+	// Atomic rebuild: DELETE + INSERTs run in a single transaction so a
+	// failure in any INSERT rolls everything back, leaving the previous
+	// projection in place rather than a half-populated (or empty) table.
+	// Reviewer feedback (CodeRabbit / Gemini on PR #5704) flagged that the
+	// previous bare DELETE-then-loop-INSERTs would leave operators staring
+	// at "no sessions" right after a transient SQLite error, which is far
+	// more misleading than "stale-but-recent" data.
+	if (!statsdb.execute("BEGIN")) return;
+	if (!statsdb.execute("DELETE FROM stats_mysqlx_processlist")) {
+		statsdb.execute("ROLLBACK");
+		return;
+	}
 	for (const auto& r : rows) {
 		std::string sql = "INSERT INTO stats_mysqlx_processlist "
 			"(username, route, worker_id, backend_host, backend_port, "
@@ -328,8 +333,12 @@ void mysqlx_populate_stats_processlist(SQLite3DB& statsdb) {
 		sql += ", "; sql += std::to_string(r.bytes_out);
 		sql += ", "; sql += std::to_string(r.session_age_ms);
 		sql += ")";
-		statsdb.execute(sql.c_str());
+		if (!statsdb.execute(sql.c_str())) {
+			statsdb.execute("ROLLBACK");
+			return;
+		}
 	}
+	statsdb.execute("COMMIT");
 }
 
 // Default visibility is required because the plugin .so is built with

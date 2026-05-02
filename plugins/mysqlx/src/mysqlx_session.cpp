@@ -1799,12 +1799,26 @@ void MysqlxSession::handler_connecting_server() {
 		// above) using mysqlx_tls_backend_mode + per-endpoint
 		// use_ssl override + frontend TLS state. Replicate the decision
 		// here onto the freshly-allocated MysqlxConnection.
+		//
+		// Fail-closed contract: if backend TLS is desired but no SSL_CTX
+		// is available on this worker, refuse the connection rather than
+		// silently downgrading to plaintext. The earlier code had `if
+		// (desired_backend_tls) { if (ctx) { ... } }` — the inner ctx
+		// check was a guard, but the missing else-branch meant a
+		// missing/misconfigured SSL_CTX silently produced a plaintext
+		// connection in TLS-required and AsClient-on-TLS-frontend
+		// scenarios. CodeRabbit flagged this on PR #5707; fixed here.
 		if (desired_backend_tls) {
-			if (thread_ptr_ && thread_ptr_->get_ssl_ctx()) {
-				backend_conn_->set_backend_tls_required(true);
-				backend_conn_->set_ssl_ctx(thread_ptr_->get_ssl_ctx());
-				backend_conn_->set_backend_tls_fallback_allowed(tls_fallback_allowed);
+			SSL_CTX* ssl_ctx = thread_ptr_ ? thread_ptr_->get_ssl_ctx() : nullptr;
+			if (ssl_ctx == nullptr) {
+				send_error(2026, "Backend TLS required but no SSL context configured on this worker");
+				delete backend_conn_; backend_conn_ = nullptr;
+				status_ = X_SESSION_CLOSING; healthy = false;
+				return;
 			}
+			backend_conn_->set_backend_tls_required(true);
+			backend_conn_->set_ssl_ctx(ssl_ctx);
+			backend_conn_->set_backend_tls_fallback_allowed(tls_fallback_allowed);
 		}
 
 		if (identity_) {

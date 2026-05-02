@@ -444,6 +444,7 @@ const char* session_status_to_string(MysqlxSession::Status s) {
 		case MysqlxSession::X_SESSION_CLOSING:     return "X_SESSION_CLOSING";
 		case MysqlxSession::X_SESSION_CLOSED:      return "X_SESSION_CLOSED";
 		case MysqlxSession::X_SESSION_RESET_WAITING: return "X_SESSION_RESET_WAITING";
+		case MysqlxSession::X_PASSTHROUGH_FORWARD: return "X_PASSTHROUGH_FORWARD";
 	}
 	return "UNKNOWN";
 }
