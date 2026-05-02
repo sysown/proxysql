@@ -68,10 +68,32 @@ struct GenAIPluginContext {
 /**
  * @brief Reload the GenAI runtime components after genai-* variables change.
  *
- * Defined in plugin_main.cpp.  Called after the initial
- * `LOAD GENAI VARIABLES TO RUNTIME` during plugin start and from the
- * admin command callback when the operator changes genai-* values at
- * runtime.
+ * Defined in plugin_main.cpp.  Tears down and reinitialises the
+ * `GloGATH` (GenAI_Threads_Handler) and `GloAI` (AI_Features_Manager)
+ * singletons in place — the only way to pick up changes to bootstrap-
+ * time values like worker count, embedding endpoint, or LLM-bridge
+ * provider configuration.
+ *
+ * @par Concurrency contract
+ * Caller MUST guarantee no other thread is dereferencing `GloGATH` or
+ * `GloAI` while this runs.  The teardown calls `delete`-equivalent
+ * `shutdown()` methods on both globals; concurrent reads from MCP
+ * listener threads, tool-handler workers, or the anomaly-detector hot
+ * path would observe a half-destroyed handler.  Today the function is
+ * called from:
+ *
+ *   1. `genai_start()` — single-threaded plugin lifecycle, no traffic
+ *      yet, always safe.
+ *   2. `LOAD GENAI VARIABLES TO RUNTIME` admin command — runs on the
+ *      admin SQL thread while MCP listener / tool handlers may be
+ *      actively serving requests.  Currently this is racy; the
+ *      practical mitigation is operator-side: quiesce traffic before
+ *      issuing the LOAD command, or accept the brief reload window.
+ *   3. `LOAD GENAI VARIABLES FROM CONFIG` — same constraint as (2).
+ *
+ * Adding a proper rwlock-around-GloGATH/GloAI is a follow-up tracked
+ * separately; it touches every consumer of those globals (not just
+ * the reload path) and is too large for this carve-out PR.
  */
 bool genai_refresh_runtime_components(GenAIPluginContext& ctx);
 

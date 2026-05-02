@@ -92,32 +92,32 @@ LocalProxyEndpoint parse_token(const std::string& tok) {
  * missing, the value is NULL, or the query errors out (a logged error
  * message would be visible to the operator via the proxy log; here we
  * silently return empty so the caller treats the situation uniformly).
+ *
+ * `var_name` is bound as a parameter rather than concatenated into the
+ * SQL.  Today the only callers pass hardcoded `mysql-interfaces` /
+ * `pgsql-interfaces`, so the SQL injection surface is zero — but a
+ * future caller passing operator-controlled input shouldn't have to
+ * audit this helper to stay safe.
  */
 std::string read_global_variable(SQLite3DB* admindb, const char* var_name) {
 	if (admindb == nullptr || var_name == nullptr) return {};
 
-	// Parameterised lookup via prepared statement; same shape as
-	// existing admin code that reads global_variables.
-	const std::string q =
-		"SELECT variable_value FROM main.global_variables WHERE variable_name='" +
-		std::string(var_name) + "'";
+	auto [prep_rc, stmt] = admindb->prepare_v2(
+		"SELECT variable_value FROM main.global_variables WHERE variable_name = ?1"
+	);
+	if (prep_rc != SQLITE_OK) return {};
 
-	char* error = nullptr;
-	int cols = 0;
-	int affected_rows = 0;
-	SQLite3_result* resultset = nullptr;
-	admindb->execute_statement(q.c_str(), &error, &cols, &affected_rows, &resultset);
+	sqlite3_stmt* st = stmt.get();
+	(*proxy_sqlite3_bind_text)(st, 1, var_name, -1, SQLITE_TRANSIENT);
 
 	std::string value;
-	if (resultset != nullptr) {
-		if (!resultset->rows.empty() && resultset->rows[0]->fields[0] != nullptr) {
-			value = resultset->rows[0]->fields[0];
-		}
-		delete resultset;
+	const int step_rc = (*proxy_sqlite3_step)(st);
+	if (step_rc == SQLITE_ROW) {
+		const unsigned char* col = (*proxy_sqlite3_column_text)(st, 0);
+		if (col != nullptr) value.assign(reinterpret_cast<const char*>(col));
 	}
-	if (error != nullptr) {
-		free(error);
-	}
+	// SQLITE_DONE on no match, anything else (BUSY/ERROR) → return empty
+	// string with no logging — same semantics as the previous body.
 	return value;
 }
 
