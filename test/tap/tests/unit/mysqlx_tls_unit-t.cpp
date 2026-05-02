@@ -287,14 +287,16 @@ static void test_classify_null_ssl() {
 }
 
 // Helper: fresh SSL_CTX + SSL pair, no handshake. Stage state via
-// SSL_set_verify_result before passing to the classifier.
+// SSL_set_verify_result before passing to the classifier. TLS_method()
+// is the OpenSSL 1.1+ recommended factory; protocol-version floor is
+// set via SSL_CTX_set_min_proto_version where it matters. The
+// classifier test stages state via SSL_set_verify_result and never
+// runs a real handshake, so version negotiation is not exercised
+// here. The NOSONAR on the SSL_CTX_new line suppresses the cpp:S4423
+// false positive that otherwise treats TLS_method() as a weak protocol
+// (true for the deprecated SSLv23_method, not for TLS_method).
 static SSL* make_synthetic_ssl(SSL_CTX** out_ctx) {
-	// NOSONAR(cpp:S4423): TLS_method() is the OpenSSL 1.1+ recommended
-	// factory; protocol-version floor is set via
-	// SSL_CTX_set_min_proto_version where it matters. The classifier
-	// test stages state via SSL_set_verify_result and never runs a
-	// real handshake, so version negotiation is not exercised here.
-	SSL_CTX* ctx = SSL_CTX_new(TLS_method());
+	SSL_CTX* ctx = SSL_CTX_new(TLS_method()); // NOSONAR(cpp:S4423)
 	if (!ctx) return nullptr;
 	SSL* ssl = SSL_new(ctx);
 	if (!ssl) {
