@@ -16,7 +16,7 @@
  * These capabilities are toggled at runtime by two global variables:
  *
  *   - `mysql-query_processor_parser` (0 or 1): enables ParserSQL as the query parser instead
- *     of the default libinjection-based implementation.
+ *     of the default tokenizer-based implementation (c_tokenizer / pgsql_tokenizer).
  *   - `mysql-set_parser_algorithm` (1, 2, or 3): selects the SET parsing backend (1 = legacy
  *     regex, 2 = ProxySQL's internal parser, 3 = ParserSQL).
  *

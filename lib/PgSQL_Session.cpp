@@ -4451,7 +4451,8 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 		std::vector<std::pair<std::string, std::string>> param_status = {};
 		bool send_param_status = false;
 
-		if (pgsql_thread___set_parser_algorithm == 3) {
+		if (pgsql_thread___set_parser_algorithm == 3
+			|| pgsql_thread___query_processor_parser == 1) {
 			set = parsersql_parse_set_pgsql(nq);
 		} else {
 			thread->thr_SetParser->set_query(nq); // replace the query

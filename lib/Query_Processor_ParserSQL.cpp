@@ -185,6 +185,7 @@ void parsersql_digest_init_mysql(SQP_par_t* qp, const char* query, int query_len
     qp->digest_text = NULL;
     qp->first_comment = NULL;
     qp->query_prefix = NULL;
+    qp->digest = 0;
 
     auto result = tl_mysql_parser.parse(query, query_length);
 
@@ -215,6 +216,7 @@ void parsersql_digest_init_pgsql(SQP_par_t* qp, const char* query, int query_len
     qp->digest_text = NULL;
     qp->first_comment = NULL;
     qp->query_prefix = NULL;
+    qp->digest = 0;
 
     auto result = tl_pgsql_parser.parse(query, query_length);
 
@@ -396,7 +398,7 @@ static std::map<std::string, std::vector<std::string>> walk_set_stmt(
                     values.push_back(
                         strip_quotes(emit_node_text<D>(child->first_child, arena)));
                 }
-                result["character_set"] = values;
+                result["character_set_results"] = values;
                 break;
             }
             case NodeType::NODE_VAR_ASSIGNMENT: {
@@ -435,6 +437,12 @@ static std::map<std::string, std::vector<std::string>> walk_set_stmt(
                 result[var_name] = {val};
                 break;
             }
+            // SET TRANSACTION is handled separately by MySQL_Session::parse2()
+            // and never reaches this walker in the current code flow. Included
+            // here as a defensive no-op so that a future code path change does
+            // not silently drop transaction SET statements.
+            case NodeType::NODE_SET_TRANSACTION:
+                break;
             default:
                 break;
         }
