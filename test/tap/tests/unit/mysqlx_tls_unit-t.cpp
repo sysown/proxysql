@@ -289,6 +289,11 @@ static void test_classify_null_ssl() {
 // Helper: fresh SSL_CTX + SSL pair, no handshake. Stage state via
 // SSL_set_verify_result before passing to the classifier.
 static SSL* make_synthetic_ssl(SSL_CTX** out_ctx) {
+	// NOSONAR(cpp:S4423): TLS_method() is the OpenSSL 1.1+ recommended
+	// factory; protocol-version floor is set via
+	// SSL_CTX_set_min_proto_version where it matters. The classifier
+	// test stages state via SSL_set_verify_result and never runs a
+	// real handshake, so version negotiation is not exercised here.
 	SSL_CTX* ctx = SSL_CTX_new(TLS_method());
 	if (!ctx) return nullptr;
 	SSL* ssl = SSL_new(ctx);
