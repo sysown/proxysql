@@ -132,11 +132,15 @@ jobs:
       # same volume mounts (defined on ubuntu24_dbg_build →
       # ubuntu24_build → _build).
       #
-      # The compose project name has to match the one `make ubuntu24-
-      # tap` used (Makefile binaries/proxysql% rule: `${GIT_VERSION/.
-      # /}`) so docker compose can attach to the same network/volume
-      # set the build phase declared. We compute GIT_VERSION the same
-      # way the Makefile does and apply the same `s/.//g` transform.
+      # The compose project name uses the same single-dot strip the
+      # Makefile binaries/proxysql% rule applies (`${GIT_VERSION/./}`,
+      # not `${GIT_VERSION//./}`) so this `run` lands in the namespace
+      # `make ubuntu24-tap` declared. Practically the build recipe
+      # tears its project down before exiting, so the only thing we'd
+      # observe from a mismatched project name is `docker compose`
+      # creating a fresh network/volume set on the fly — but keeping
+      # them consistent is the contract the rest of the build chain
+      # relies on.
       #
       # SKIP_PROXYSQL=1 short-circuits the daemon + backend checks in
       # run-tests-isolated.bash, so it just iterates groups.json and
@@ -147,7 +151,7 @@ jobs:
         INFRA_ID: ci-unit-tests-tsan
       run: |
         GIT_VERSION="$(git describe --long --abbrev=7)"
-        PROJECT="${GIT_VERSION//./}"
+        PROJECT="${GIT_VERSION/./}"
         # Two on-the-fly apt installs: the build image is package-build-
         # focused, not test-execution-focused, so it ships neither.
         #   * python3-packaging: run-tests-isolated.bash uses it to

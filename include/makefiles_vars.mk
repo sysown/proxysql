@@ -58,14 +58,14 @@ endif
 # variable name to keep the propagation paths unchanged across deps/
 # lib/ src/ test/ Makefiles. Reuse means a build is *either* ASAN
 # *or* TSAN, never both. TSAN inherits ASAN's ASLR width constraint
-# (Linux 5.18+ defaults vm.mmap_rnd_bits=32; TSAN expects 28); the
-# warning above already covers both.
+# (Linux 5.18+ defaults vm.mmap_rnd_bits=32; TSAN expects 28).
 ifeq ($(WITHTSAN),1)
 ifeq ($(WITHASAN),1)
     $(error WITHASAN=1 and WITHTSAN=1 are mutually exclusive — pick one)
 endif
 	WASAN := -fsanitize=thread
 	export NOJEMALLOC=1
+    $(warning TSAN needs ASLR =< 28bits, make sure 'sysctl vm.mmap_rnd_bits=28' is set.)
 endif
 
 NOJEM :=
