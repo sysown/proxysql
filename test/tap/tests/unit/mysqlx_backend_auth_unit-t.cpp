@@ -354,6 +354,126 @@ static void test_backend_auth_preferred_mode_fallback_to_plaintext() {
 	close(fds[1]);
 }
 
+// preferred-mode + non-TLS error code: must NOT fall back (issue #5710).
+//
+// Counterpart to test_backend_auth_preferred_mode_fallback_to_plaintext
+// (which covers code 5001 = ER_X_CAPABILITIES_PREPARE_FAILED). Here the
+// backend rejects CapabilitiesSet(tls=true) with a non-TLS error
+// (e.g. ER_X_BAD_MESSAGE = 5000, or a generic permission-denied 1045
+// equivalent). Even under `preferred`, fallback must NOT trigger —
+// that would let the proxy silently swallow real backend failures.
+// The connection must transition to BACKEND_AUTH_ERROR.
+static void test_backend_auth_preferred_mode_non_tls_error_no_fallback() {
+	diag(">>> %s", __func__);
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+
+	MysqlxConnection conn;
+	conn.set_fd(fds[0]);
+	conn.set_backend_user("testuser");
+	conn.init_backend_ds(fds[0]);
+	conn.set_state(MysqlxConnection::AUTHENTICATING);
+
+	conn.set_backend_tls_required(true);
+	conn.set_backend_tls_fallback_allowed(true);  // preferred mode
+
+	conn.step_auth();
+	{
+		uint8_t buf[4096];
+		usleep(5000);
+		read(fds[1], buf, sizeof(buf));
+	}
+
+	Mysqlx::Connection::Capabilities caps;
+	std::string caps_str;
+	caps.SerializeToString(&caps_str);
+	write_x_frame(fds[1], Mysqlx::ServerMessages_Type_CONN_CAPABILITIES,
+		reinterpret_cast<const uint8_t*>(caps_str.data()), caps_str.size());
+
+	conn.step_auth();
+	{
+		uint8_t buf[4096];
+		usleep(5000);
+		read(fds[1], buf, sizeof(buf));
+	}
+
+	// Inject a non-TLS Error code. ER_X_BAD_MESSAGE = 5000, or a
+	// MySQL native code like 1045 ("Access denied") — anything but
+	// 5001. Use 1045 to model "permission denied at the auth layer".
+	Mysqlx::Error err;
+	err.set_severity(Mysqlx::Error::ERROR);
+	err.set_code(1045);
+	err.set_msg("Access denied for user");
+	err.set_sql_state("28000");
+	std::string err_str;
+	err.SerializeToString(&err_str);
+	write_x_frame(fds[1], Mysqlx::ServerMessages_Type_ERROR,
+		reinterpret_cast<const uint8_t*>(err_str.data()), err_str.size());
+
+	usleep(5000);
+	int rc = conn.step_auth();
+	ok(rc == -1,
+	   "preferred-mode + non-TLS error (1045): step_auth returns -1 (no silent fallback)");
+	ok(conn.get_auth_state() == MysqlxConnection::BACKEND_AUTH_ERROR,
+	   "preferred-mode + non-TLS error: auth_state is ERROR");
+	ok(!conn.is_tls_active(),
+	   "preferred-mode + non-TLS error: tls_active stays false");
+
+	close(fds[0]);
+	close(fds[1]);
+}
+
+// preferred-mode + Error frame with no decodable code: must NOT fall
+// back. A code-less or malformed Error body cannot be classified as
+// TLS-specific, so the conservative-default is to fail the connect.
+static void test_backend_auth_preferred_mode_codeless_error_no_fallback() {
+	diag(">>> %s", __func__);
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+
+	MysqlxConnection conn;
+	conn.set_fd(fds[0]);
+	conn.set_backend_user("testuser");
+	conn.init_backend_ds(fds[0]);
+	conn.set_state(MysqlxConnection::AUTHENTICATING);
+
+	conn.set_backend_tls_required(true);
+	conn.set_backend_tls_fallback_allowed(true);  // preferred mode
+
+	conn.step_auth();
+	{
+		uint8_t buf[4096];
+		usleep(5000);
+		read(fds[1], buf, sizeof(buf));
+	}
+
+	Mysqlx::Connection::Capabilities caps;
+	std::string caps_str;
+	caps.SerializeToString(&caps_str);
+	write_x_frame(fds[1], Mysqlx::ServerMessages_Type_CONN_CAPABILITIES,
+		reinterpret_cast<const uint8_t*>(caps_str.data()), caps_str.size());
+
+	conn.step_auth();
+	{
+		uint8_t buf[4096];
+		usleep(5000);
+		read(fds[1], buf, sizeof(buf));
+	}
+
+	// Empty Error body — no code field set.
+	write_x_frame(fds[1], Mysqlx::ServerMessages_Type_ERROR, nullptr, 0);
+
+	usleep(5000);
+	int rc = conn.step_auth();
+	ok(rc == -1,
+	   "preferred-mode + codeless Error: step_auth returns -1 (no fallback on undecodable code)");
+	ok(conn.get_auth_state() == MysqlxConnection::BACKEND_AUTH_ERROR,
+	   "preferred-mode + codeless Error: auth_state is ERROR");
+
+	close(fds[0]);
+	close(fds[1]);
+}
+
 // required-mode TLS hard-fail (issue #5693).
 // Counterpart to the preferred-mode test: same Error injection, but
 // fallback_allowed=false (matches mysqlx_tls_backend_mode=required and
@@ -525,6 +645,8 @@ int main() {
 	test_backend_auth_error_on_wrong_caps_response();
 	test_backend_auth_error_on_set_caps_reject();
 	test_backend_auth_preferred_mode_fallback_to_plaintext();
+	test_backend_auth_preferred_mode_non_tls_error_no_fallback();
+	test_backend_auth_preferred_mode_codeless_error_no_fallback();
 	test_backend_auth_required_mode_no_fallback_on_error();
 	test_backend_auth_not_started_returns_progress();
 	test_backend_reset_clears_auth();

@@ -384,8 +384,38 @@ int MysqlxConnection::step_auth_capabilities_set_sent() {
 	//   * backend_tls_required_ is cleared so the caller's later
 	//     step_auth_capabilities_set_sent / step_auth_tls_handshake
 	//     branches don't subsequently try to negotiate TLS again.
+	//
+	// Error-code gating on the fallback (issue #5710 follow-up):
+	// previously ANY Mysqlx::Error here triggered the fallback under
+	// `preferred`, which is wrong — non-TLS errors ("internal
+	// server error", "out of memory", "permission denied") would be
+	// silently swallowed and the auth would proceed on a backend
+	// that just told us it was unhealthy. The upstream MySQL X
+	// client (plugin/x/client/xsession_impl.cc) gates the fallback
+	// on the specific code `ER_X_CAPABILITIES_PREPARE_FAILED` (5001),
+	// which is what `Capability_tls::set_impl` returns when the
+	// server has no SSL context configured (see
+	// plugin/x/src/capabilities/handler_tls.cc). We mirror that
+	// policy here: only code 5001 in the Error.code field flips us
+	// to plaintext fallback; everything else (including a malformed
+	// or code-less Error frame) is fatal.
 	if (msg_type == Mysqlx::ServerMessages_Type_ERROR) {
-		if (backend_tls_required_ && backend_tls_fallback_allowed_) {
+		bool tls_specific = false;
+		if (backend_tls_required_ && backend_tls_fallback_allowed_ &&
+		    frame->size() > 5) {
+			Mysqlx::Error err_msg;
+			if (err_msg.ParseFromArray(frame->data() + 5, frame->size() - 5)) {
+				// 5001 == ER_X_CAPABILITIES_PREPARE_FAILED, the only code
+				// the upstream X plugin emits for "tls capability cannot
+				// be prepared" (see handler_tls.cc::Capability_tls::set_impl).
+				// Stricter than a range-based whitelist; matches what the
+				// official MySQL Connector/C++ accepts for Ssl_preferred.
+				if (err_msg.has_code() && err_msg.code() == 5001) {
+					tls_specific = true;
+				}
+			}
+		}
+		if (tls_specific) {
 			backend_tls_required_ = false;
 			return send_authenticate_start();
 		}
