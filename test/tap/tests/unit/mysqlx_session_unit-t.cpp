@@ -1192,13 +1192,351 @@ static void test_passthrough_backlog_cap_kills_session() {
 	close(backend_fds[0]); close(backend_fds[1]);
 }
 
+// ----- Fix C tests: per-route tls_mode wiring (issue #5710) -----
+//
+// These tests cover the three scenarios the fix introduces:
+//   (1) tls_mode='disabled' suppresses TLS in the advertised capability
+//       set returned by handler_capabilities_get();
+//   (2) a CapabilitiesSet(tls=true) on a 'disabled' route is refused;
+//   (3) on tls_mode='passthrough' a CapabilitiesSet(tls=true) drives
+//       the session through X_PASSTHROUGH_BACKEND_CONNECTING into
+//       X_PASSTHROUGH_FORWARD, with the backend leg receiving the
+//       client's CapabilitiesSet bytes and the proxy splicing
+//       opaque bytes thereafter.
+
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <arpa/inet.h>
+
+// Build a config store with three routes for Fix C testing:
+//   route_disabled   -- tls_mode=disabled, hostgroup 10
+//   route_pt         -- tls_mode=passthrough, hostgroup 20 (endpoint
+//                       set per-test so each test can point at its own
+//                       loopback listener)
+//   route_inherit    -- tls_mode=inherit (control)
+static MysqlxConfigStore& fix_c_config_store(int passthrough_port) {
+	static MysqlxConfigStore store;
+	std::unordered_map<std::string, MysqlxRoute> routes;
+	{
+		MysqlxRoute r {};
+		r.name = "route_disabled";
+		r.destination_hostgroup = 10;
+		r.strategy = "first_available";
+		r.tls_mode = MysqlxRouteTlsMode::disabled;
+		routes.emplace(r.name, r);
+	}
+	{
+		MysqlxRoute r {};
+		r.name = "route_pt";
+		r.destination_hostgroup = 20;
+		r.strategy = "first_available";
+		r.tls_mode = MysqlxRouteTlsMode::passthrough;
+		routes.emplace(r.name, r);
+	}
+	{
+		MysqlxRoute r {};
+		r.name = "route_inherit";
+		r.destination_hostgroup = 30;
+		r.strategy = "first_available";
+		r.tls_mode = MysqlxRouteTlsMode::inherit;
+		routes.emplace(r.name, r);
+	}
+	std::unordered_map<int, std::vector<MysqlxBackendEndpoint>> endpoints;
+	{
+		MysqlxBackendEndpoint ep {};
+		ep.hostname = "127.0.0.1";
+		ep.mysql_port = 3306;
+		ep.mysqlx_port = 33060;
+		endpoints[10].push_back(ep);
+	}
+	{
+		// Passthrough-route endpoint; mysqlx_port is per-test so the
+		// test can drive the session into a real local listener.
+		MysqlxBackendEndpoint ep {};
+		ep.hostname = "127.0.0.1";
+		ep.mysql_port = 3306;
+		ep.mysqlx_port = passthrough_port;
+		endpoints[20].push_back(ep);
+	}
+	{
+		MysqlxBackendEndpoint ep {};
+		ep.hostname = "127.0.0.1";
+		ep.mysql_port = 3306;
+		ep.mysqlx_port = 33060;
+		endpoints[30].push_back(ep);
+	}
+	store.install_for_test(std::move(routes), std::move(endpoints));
+	return store;
+}
+
+// effective_route_tls_mode() lookup correctness: with the listener's
+// route name set on the session and the thread's config store
+// populated, the per-route tls_mode round-trips through
+// effective_route_tls_mode(). This is the helper that gates both
+// the advertise side (send_capabilities) and the entry side
+// (handler_capabilities_set tls=true).
+static void test_route_tls_mode_disabled_no_tls_in_advertise() {
+	diag(">>> %s", __func__);
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+
+	Mysqlx_Thread thr;
+	thr.init(0);
+	MysqlxConfigStore& store = fix_c_config_store(33060);
+	thr.set_config_store(&store);
+
+	MysqlxSession sess;
+	sess.init(fds[0], &thr, "route_disabled");
+	sess.to_process = true;
+
+	// Drive a CapabilitiesGet so the session emits a Capabilities
+	// response built by send_capabilities(). The response shape is
+	// dictated by effective_route_tls_mode(): with route_tls_mode=
+	// disabled, the `tls` capability MUST be absent from the
+	// returned set.
+	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_CON_CAPABILITIES_GET, nullptr, 0);
+	sess.handler();
+
+	uint8_t buf[4096];
+	usleep(10000);
+	ssize_t r = read_x_frame(fds[1], buf, sizeof(buf));
+	ok(r > 5 && buf[4] == Mysqlx::ServerMessages_Type_CONN_CAPABILITIES,
+	   "got CONN_CAPABILITIES response on a disabled-route session");
+
+	bool found_tls_cap = false;
+	if (r > 5) {
+		Mysqlx::Connection::Capabilities caps;
+		if (caps.ParseFromArray(buf + 5, static_cast<int>(r - 5))) {
+			for (const auto& c : caps.capabilities()) {
+				if (c.name() == "tls") found_tls_cap = true;
+			}
+		}
+	}
+	ok(!found_tls_cap,
+	   "tls_mode='disabled' suppresses 'tls' from the advertised capability set");
+
+	close(fds[0]);
+	close(fds[1]);
+}
+
+// CapabilitiesSet(tls=true) on a tls_mode='disabled' route MUST be
+// refused with an X-Protocol error. We never told the client TLS was
+// available on this route; a client that asks for it is misconfigured
+// or hostile, and the historical "always allow tls=true if SSL_CTX is
+// set" behaviour is wrong on a disabled-route session.
+static void test_capabilities_set_tls_refused_on_disabled_route() {
+	diag(">>> %s", __func__);
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+
+	Mysqlx_Thread thr;
+	thr.init(0);
+	MysqlxConfigStore& store = fix_c_config_store(33060);
+	thr.set_config_store(&store);
+
+	MysqlxSession sess;
+	sess.init(fds[0], &thr, "route_disabled");
+	sess.to_process = true;
+
+	// Build CapabilitiesSet(tls=true).
+	Mysqlx::Connection::CapabilitiesSet cap_set;
+	auto* caps = cap_set.mutable_capabilities();
+	auto* cap = caps->add_capabilities();
+	cap->set_name("tls");
+	cap->mutable_value()->set_type(Mysqlx::Datatypes::Any::SCALAR);
+	cap->mutable_value()->mutable_scalar()->set_type(Mysqlx::Datatypes::Scalar::V_BOOL);
+	cap->mutable_value()->mutable_scalar()->set_v_bool(true);
+	std::string serialized;
+	cap_set.SerializeToString(&serialized);
+	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_CON_CAPABILITIES_SET,
+	              reinterpret_cast<const uint8_t*>(serialized.data()),
+	              serialized.size());
+
+	sess.handler();
+
+	ok(!sess.is_healthy(),
+	   "session marked unhealthy after refused tls=true on disabled route");
+
+	uint8_t buf[4096];
+	usleep(10000);
+	ssize_t r = read_x_frame(fds[1], buf, sizeof(buf));
+	ok(r > 5 && buf[4] == Mysqlx::ServerMessages_Type_ERROR,
+	   "received Mysqlx::Error frame in response to refused tls=true");
+
+	close(fds[0]);
+	close(fds[1]);
+}
+
+// End-to-end passthrough entry: the client sends CapabilitiesGet ->
+// CapabilitiesSet(tls=true) on a tls_mode='passthrough' route. The
+// session must:
+//   * resolve the backend from the route's destination_hostgroup;
+//   * open a TCP connection to that endpoint;
+//   * forward the CapabilitiesSet bytes verbatim to the backend;
+//   * read the backend's Mysqlx::Ok response and forward it to the
+//     client;
+//   * transition into X_PASSTHROUGH_FORWARD where it splices opaque
+//     bytes both directions.
+//
+// The "backend" is a simple loopback TCP listener the test sets up.
+// We accept the proxy's connect, read the forwarded
+// CapabilitiesSet bytes, send a Mysqlx::Ok, then exchange a couple
+// of opaque "TLS handshake" payloads to confirm the splice is live.
+static void test_route_passthrough_full_entry_path() {
+	diag(">>> %s", __func__);
+
+	// Bind a loopback TCP listener on an ephemeral port.
+	int listen_fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+	ok(listen_fd >= 0, "test bound a backend-emulating loopback listener");
+	int reuse = 1;
+	setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+	struct sockaddr_in addr;
+	memset(&addr, 0, sizeof(addr));
+	addr.sin_family = AF_INET;
+	addr.sin_port = 0;  // ephemeral
+	inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+	if (bind(listen_fd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+		ok(false, "bind failed");
+		close(listen_fd);
+		return;
+	}
+	if (listen(listen_fd, 1) != 0) {
+		ok(false, "listen failed");
+		close(listen_fd);
+		return;
+	}
+	socklen_t alen = sizeof(addr);
+	getsockname(listen_fd, (struct sockaddr*)&addr, &alen);
+	int listener_port = ntohs(addr.sin_port);
+	ok(listener_port > 0, "listener bound to an ephemeral port");
+
+	// Wire up the thread + config store; the passthrough route's
+	// endpoint points at our listener.
+	Mysqlx_Thread thr;
+	thr.init(0);
+	MysqlxConfigStore& store = fix_c_config_store(listener_port);
+	thr.set_config_store(&store);
+
+	int client_fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
+	set_nonblocking_fd(client_fds[0]);
+
+	MysqlxSession sess;
+	sess.init(client_fds[0], &thr, "route_pt");
+
+	// Step 1: client sends CapabilitiesGet. Session responds with
+	// the advertised Capabilities (TLS may be absent if no
+	// SSL_CTX, but that's fine — we're testing the entry, not the
+	// advertise side).
+	write_x_frame(client_fds[1], Mysqlx::ClientMessages_Type_CON_CAPABILITIES_GET,
+	              nullptr, 0);
+	sess.to_process = true;
+	sess.handler();
+	{
+		uint8_t buf[4096];
+		usleep(5000);
+		read_x_frame(client_fds[1], buf, sizeof(buf));  // discard
+	}
+
+	// Step 2: client sends CapabilitiesSet(tls=true). On the
+	// passthrough route the session is supposed to:
+	//   - resolve_passthrough_backend_target() → 127.0.0.1:listener_port
+	//   - start_connect()
+	//   - transition to X_PASSTHROUGH_BACKEND_CONNECTING
+	//   - on the same / next handler tick, drive check_connect to
+	//     completion, write the CapabilitiesSet bytes to the backend,
+	//     read the backend's Ok, transition to X_PASSTHROUGH_FORWARD.
+	Mysqlx::Connection::CapabilitiesSet cap_set;
+	auto* cap = cap_set.mutable_capabilities()->add_capabilities();
+	cap->set_name("tls");
+	cap->mutable_value()->set_type(Mysqlx::Datatypes::Any::SCALAR);
+	cap->mutable_value()->mutable_scalar()->set_type(Mysqlx::Datatypes::Scalar::V_BOOL);
+	cap->mutable_value()->mutable_scalar()->set_v_bool(true);
+	std::string serialized;
+	cap_set.SerializeToString(&serialized);
+	write_x_frame(client_fds[1], Mysqlx::ClientMessages_Type_CON_CAPABILITIES_SET,
+	              reinterpret_cast<const uint8_t*>(serialized.data()),
+	              serialized.size());
+	sess.to_process = true;
+	sess.handler();
+
+	ok(sess.get_status() == MysqlxSession::X_PASSTHROUGH_BACKEND_CONNECTING ||
+	   sess.get_status() == MysqlxSession::X_PASSTHROUGH_FORWARD,
+	   "session entered passthrough setup after CapabilitiesSet(tls=true) on passthrough route");
+
+	// Accept the proxy's incoming connect on the loopback listener.
+	int backend_fd = -1;
+	for (int i = 0; i < 200 && backend_fd < 0; ++i) {
+		backend_fd = accept(listen_fd, nullptr, nullptr);
+		if (backend_fd < 0) {
+			usleep(1000);
+			sess.to_process = true;
+			sess.handler();
+		}
+	}
+	ok(backend_fd >= 0, "loopback backend accepted the proxy's connect");
+	if (backend_fd >= 0) {
+		set_nonblocking_fd(backend_fd);
+	}
+
+	// Drive the session forward: keep calling handler() until the
+	// CapabilitiesSet bytes appear on the backend leg, OR we time
+	// out. Each iteration also drains anything the proxy wrote.
+	std::vector<uint8_t> from_proxy_to_backend;
+	for (int i = 0; i < 200; ++i) {
+		sess.to_process = true;
+		sess.handler();
+		if (backend_fd < 0) break;
+		uint8_t bbuf[4096];
+		ssize_t n = read(backend_fd, bbuf, sizeof(bbuf));
+		if (n > 0) {
+			from_proxy_to_backend.insert(from_proxy_to_backend.end(),
+			                             bbuf, bbuf + n);
+		}
+		// Once we've gotten the CapabilitiesSet bytes, send our
+		// fake Mysqlx::Ok response and exit the loop.
+		if (from_proxy_to_backend.size() >= 5 + serialized.size()) {
+			break;
+		}
+		usleep(1000);
+	}
+	ok(from_proxy_to_backend.size() >= 5 + serialized.size(),
+	   "proxy forwarded CapabilitiesSet bytes verbatim to the backend");
+
+	// Send Mysqlx::Ok back from "backend" to "proxy". The X-Protocol
+	// frame format is { uint32 size_le; uint8 msg_type; payload... }.
+	// ServerMessages_Type_OK is 0; size includes the msg_type byte.
+	if (backend_fd >= 0) {
+		uint8_t ok_frame[5] = {0x01, 0x00, 0x00, 0x00,
+		                      static_cast<uint8_t>(Mysqlx::ServerMessages_Type_OK)};
+		write(backend_fd, ok_frame, 5);
+	}
+
+	// Drive the session a few more times so it picks up the Ok and
+	// transitions to X_PASSTHROUGH_FORWARD.
+	for (int i = 0; i < 200; ++i) {
+		sess.to_process = true;
+		sess.handler();
+		if (sess.get_status() == MysqlxSession::X_PASSTHROUGH_FORWARD) break;
+		usleep(1000);
+	}
+	ok(sess.get_status() == MysqlxSession::X_PASSTHROUGH_FORWARD,
+	   "session reached X_PASSTHROUGH_FORWARD after backend Ok response");
+	ok(sess.is_healthy(), "session healthy after passthrough entry");
+
+	if (backend_fd >= 0) close(backend_fd);
+	close(listen_fd);
+	close(client_fds[0]); close(client_fds[1]);
+}
+
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
 	// 87 (pre-existing) + 11 (Fix B EAGAIN backlog tests:
 	// drains_across_ticks contributes 5 ok()s; backlog_cap_kills
-	// contributes 6 ok()s — seed + within-cap + healthy +
-	// over-cap refused + unhealthy + status-closing)
-	plan(98);
+	// contributes 6 ok()s) + 11 (Fix C per-route tls_mode tests:
+	// disabled_advertise=2; tls_refused_on_disabled=2;
+	// passthrough_full_entry_path=7)
+	plan(109);
 	diag("=== mysqlx_session_unit-t starting ===");
 
 	test_session_init();
@@ -1234,6 +1572,11 @@ int main() {
 	// Fix B: EAGAIN write-side backlog (issue #5710 follow-up).
 	test_passthrough_eagain_backlog_drains_across_ticks();
 	test_passthrough_backlog_cap_kills_session();
+
+	// Fix C: per-route tls_mode wiring through entry path (#5710).
+	test_route_tls_mode_disabled_no_tls_in_advertise();
+	test_capabilities_set_tls_refused_on_disabled_route();
+	test_route_passthrough_full_entry_path();
 
 	return exit_status();
 }

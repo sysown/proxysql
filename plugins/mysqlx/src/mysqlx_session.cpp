@@ -242,6 +242,7 @@ void MysqlxSession::init(int fd, Mysqlx_Thread* thread_ptr, const std::string& l
 	seen_column_metadata_ = false;
 	passthrough_c2b_backlog_.clear();
 	passthrough_b2c_backlog_.clear();
+	passthrough_pending_capset_frame_.clear();
 }
 
 void MysqlxSession::reset() {
@@ -269,6 +270,7 @@ void MysqlxSession::reset() {
 	seen_column_metadata_ = false;
 	passthrough_c2b_backlog_.clear();
 	passthrough_b2c_backlog_.clear();
+	passthrough_pending_capset_frame_.clear();
 }
 
 int MysqlxSession::handler() {
@@ -284,6 +286,18 @@ int MysqlxSession::handler() {
 	// frame parser.
 	if (status_ == X_PASSTHROUGH_FORWARD) {
 		handler_passthrough_forward();
+		return healthy ? 0 : -1;
+	}
+	// Passthrough setup state. The client has just sent
+	// CapabilitiesSet(tls=true) on a passthrough route; we are
+	// driving the backend connect + forward CapabilitiesSet bytes
+	// + read backend response sequence. Like the FORWARD case we
+	// skip the client X-Protocol read/parse — the client's next
+	// bytes after CapabilitiesSet are its TLS ClientHello, which
+	// cannot be parsed as an X-Protocol frame. The handler reads
+	// from the BACKEND data stream directly.
+	if (status_ == X_PASSTHROUGH_BACKEND_CONNECTING) {
+		handler_passthrough_backend_connecting();
 		return healthy ? 0 : -1;
 	}
 
@@ -307,6 +321,7 @@ handler_again:
 		case CONNECTING_SERVER:      handler_connecting_server(); break;
 		case WAITING_SERVER_XMSG:    handler_waiting_server_msg(); break;
 		case X_TLS_ACCEPT_INIT:      handler_tls_accept_init(); break;
+		case X_PASSTHROUGH_BACKEND_CONNECTING: handler_passthrough_backend_connecting(); break;
 		case X_PASSTHROUGH_FORWARD:  handler_passthrough_forward(); break;
 		case X_SESSION_RESET_WAITING: handler_session_reset_waiting(); break;
 		case X_SESSION_CLOSING:      handler_session_closing(); break;
@@ -316,11 +331,15 @@ handler_again:
 	if (to_process) {
 		to_process = false;
 		// Don't loop into the X-Protocol dispatch once we've entered
-		// the passthrough state — its handler is reachable through the
-		// fast path at the top of handler() on subsequent ticks, and
-		// re-entering here would re-read client_ds_ into the X frame
-		// parser, defeating the splice contract.
-		if (status_ == X_PASSTHROUGH_FORWARD) {
+		// either passthrough state — their handlers are reachable
+		// through the fast path at the top of handler() on subsequent
+		// ticks, and re-entering here would re-read client_ds_ into
+		// the X frame parser. For X_PASSTHROUGH_FORWARD that defeats
+		// the splice contract; for X_PASSTHROUGH_BACKEND_CONNECTING
+		// the client's next bytes are the TLS ClientHello which
+		// cannot be parsed as an X-Protocol frame.
+		if (status_ == X_PASSTHROUGH_FORWARD ||
+		    status_ == X_PASSTHROUGH_BACKEND_CONNECTING) {
 			return healthy ? 0 : -1;
 		}
 		goto handler_again;
@@ -383,6 +402,24 @@ void MysqlxSession::handler_connecting_client() {
 			healthy = false;
 			break;
 	}
+}
+
+// Effective per-route TLS posture (issue #5710 follow-up). Pure
+// query — no session-state mutation. Returns `inherit` when there's
+// no listener route or no config store, since both cases collapse to
+// the historical "global default" behaviour from before the per-route
+// taxonomy was introduced. The caller is responsible for translating
+// `inherit` into whatever the global setting calls for; this helper
+// only resolves the per-route override.
+MysqlxRouteTlsMode MysqlxSession::effective_route_tls_mode() const {
+	if (listener_route_name_.empty()) {
+		return MysqlxRouteTlsMode::inherit;
+	}
+	const MysqlxConfigStore* cs = thread_ptr_ ? thread_ptr_->get_config_store() : nullptr;
+	if (!cs) {
+		return MysqlxRouteTlsMode::inherit;
+	}
+	return cs->route_tls_mode(listener_route_name_);
 }
 
 void MysqlxSession::handler_capabilities_get() {
@@ -546,6 +583,14 @@ void MysqlxSession::handler_capabilities_set() {
 
 		for (const auto& cap : cap_set.capabilities().capabilities()) {
 			if (cap.name() == "tls") {
+				// Snapshot the original CapabilitiesSet frame BEFORE
+				// the pop. The passthrough entry path needs the bytes
+				// verbatim (they're forwarded to the backend so the
+				// backend's TLS handler sees the same negotiation the
+				// client started). The non-passthrough paths discard
+				// these bytes via pop_frame() as before.
+				const auto& full_frame = client_ds_.front_frame();
+				std::vector<uint8_t> capset_frame(full_frame.begin(), full_frame.end());
 				client_ds_.pop_frame();
 				// Reject TLS upgrade post-auth or on an already-encrypted
 				// channel. The X Protocol forbids TLS negotiation after
@@ -567,6 +612,51 @@ void MysqlxSession::handler_capabilities_set() {
 					healthy = false;
 					return;
 				}
+
+				// Per-route tls_mode wiring (issue #5710). The route's
+				// TLS posture decides whether this CapabilitiesSet
+				// (tls=true) should:
+				//   * be REFUSED (tls_mode='disabled' — we never
+				//     advertised TLS for this route, so a client
+				//     asking for it is misconfigured/hostile);
+				//   * trigger PASSTHROUGH backend setup
+				//     (tls_mode='passthrough' — open a new backend
+				//     TCP connection, forward the CapabilitiesSet
+				//     verbatim, then splice raw bytes the rest of
+				//     the way; the proxy never terminates this TLS
+				//     session);
+				//   * proceed with the historical proxy-terminated
+				//     handshake (inherit / preferred / required —
+				//     the proxy decrypts, parses, re-encrypts).
+				const MysqlxRouteTlsMode route_mode = effective_route_tls_mode();
+				if (route_mode == MysqlxRouteTlsMode::disabled) {
+					// Symmetric with the advertise gate in
+					// send_capabilities(): we never told the client
+					// TLS was available on this route, so refuse.
+					send_error(5052, "TLS is not enabled on this route", true);
+					healthy = false;
+					return;
+				}
+				if (route_mode == MysqlxRouteTlsMode::passthrough) {
+					// Buffer the original CapabilitiesSet frame for
+					// forwarding once the backend TCP connect
+					// completes. resolve_passthrough_backend_target()
+					// populates target_address_/target_port_ from the
+					// listener route's destination_hostgroup; on
+					// failure it has already emitted the error frame
+					// and marked the session unhealthy.
+					if (resolve_passthrough_backend_target() != 0) {
+						return;
+					}
+					passthrough_pending_capset_frame_ = std::move(capset_frame);
+					tls_mode_ = TLS_PASSTHROUGH;
+					status_ = X_PASSTHROUGH_BACKEND_CONNECTING;
+					to_process = true;
+					return;
+				}
+
+				// Default (proxy-terminated) TLS path — same as
+				// before this commit.
 				SSL_CTX* ctx = thread_ptr_ ? thread_ptr_->get_ssl_ctx() : nullptr;
 				if (!ctx) {
 					send_error(3150, "TLS is not configured on server");
@@ -1450,6 +1540,179 @@ void MysqlxSession::handler_session_closing() {
 	status_ = X_SESSION_CLOSED;
 }
 
+// handler_passthrough_backend_connecting
+//
+// Drives the passthrough entry sequence after the client has sent
+// CapabilitiesSet(tls=true) on a tls_mode='passthrough' route:
+//
+//   1. Allocate / pick up the backend connection. Start a non-
+//      blocking TCP connect if we haven't already.
+//   2. Poll the connect to completion (check_connect()).
+//   3. Forward the buffered CapabilitiesSet bytes verbatim to the
+//      backend.
+//   4. Read exactly one X-Protocol frame from the backend (via the
+//      backend data stream's frame parser). LAST X-Protocol parse
+//      this session will do.
+//   5. If the frame is CONN_CAPABILITIES_OK (Mysqlx::Ok), forward
+//      it to the client and transition to X_PASSTHROUGH_FORWARD.
+//      The client now sees a TLS-ready socket; everything past this
+//      tick is opaque bytes.
+//   6. If the frame is Mysqlx::Error, propagate to the client and
+//      close the session.
+//
+// Each step yields back to the dispatch loop on EAGAIN. The state
+// transitions are encoded by which intermediate fields are populated
+// (backend_conn_ presence, connecting state, pending bytes).
+void MysqlxSession::handler_passthrough_backend_connecting() {
+	// Step 1: ensure backend_conn_ exists with a TCP connect in
+	// flight. We pull from the cache only when the cache key would
+	// match — a passthrough connection is single-use anyway, so for
+	// simplicity we always start fresh here. (The cache lookup
+	// would require a TLS-active key the proxy doesn't have post-
+	// passthrough negotiation.)
+	if (!backend_conn_) {
+		backend_conn_ = new MysqlxConnection();
+		backend_conn_->set_hostgroup(target_hostgroup_);
+		backend_conn_->set_connect_timeout(10000);
+		// Mark non-reusable up front: passthrough connections never
+		// re-enter the pool (the proxy did not see plaintext past
+		// CapabilitiesSet, so it has no idea what session state
+		// the backend ended up in).
+		backend_conn_->set_reusable(false);
+
+		int rc = backend_conn_->start_connect(target_address_.c_str(), target_port_);
+		if (rc == -1) {
+			send_error(2003, "Can't connect to backend (passthrough)");
+			delete backend_conn_; backend_conn_ = nullptr;
+			status_ = X_SESSION_CLOSING; healthy = false;
+			return;
+		}
+		if (rc == 1) {
+			// Connect in progress; wait for the next handler tick.
+			return;
+		}
+		// rc == 0: immediate success, fall through to step 2.
+	}
+
+	// Step 2: drive the non-blocking connect to completion.
+	if (backend_conn_->get_state() == MysqlxConnection::CONNECTING) {
+		int rc = backend_conn_->check_connect();
+		if (rc == 1) return;  // still connecting
+		if (rc == -1) {
+			send_error(2003, "Backend connect failed (passthrough)");
+			delete backend_conn_; backend_conn_ = nullptr;
+			status_ = X_SESSION_CLOSING; healthy = false;
+			return;
+		}
+		// rc == 0: connected. Initialize the backend data stream so
+		// we can run one X-Protocol read for the backend's
+		// CapabilitiesSet response.
+		backend_conn_->init_backend_ds(backend_conn_->get_fd());
+	}
+
+	// Step 3: forward the buffered CapabilitiesSet bytes verbatim
+	// to the backend. Idempotent — once we drain
+	// passthrough_pending_capset_frame_ we don't try again. Use a
+	// blocking-ish style: write_raw on the backend_ds; the fd is
+	// non-blocking, so partial writes append to the c2b backlog and
+	// resume next tick. Given the frame is at most a few KiB, in
+	// practice this completes in one call.
+	if (!passthrough_pending_capset_frame_.empty()) {
+		ssize_t want = static_cast<ssize_t>(passthrough_pending_capset_frame_.size());
+		ssize_t w = write(backend_conn_->get_fd(),
+		                  passthrough_pending_capset_frame_.data(),
+		                  passthrough_pending_capset_frame_.size());
+		if (w < 0) {
+			if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+				return;  // try again next tick
+			}
+			send_error(2003, "Backend write failed (passthrough setup)");
+			delete backend_conn_; backend_conn_ = nullptr;
+			status_ = X_SESSION_CLOSING; healthy = false;
+			return;
+		}
+		if (w < want) {
+			// Partial write: drop the prefix, retry the rest.
+			passthrough_pending_capset_frame_.erase(
+				passthrough_pending_capset_frame_.begin(),
+				passthrough_pending_capset_frame_.begin() + w);
+			return;
+		}
+		// Full write — clear and proceed to read.
+		passthrough_pending_capset_frame_.clear();
+	}
+
+	// Step 4: read one X-Protocol frame from the backend. This is
+	// the LAST decode the proxy does on this session. We use the
+	// backend_conn_'s data stream frame parser to handle partial
+	// reads safely.
+	MysqlxDataStream& bds = backend_conn_->backend_ds();
+	bds.read_from_net();
+	if (!bds.has_complete_frame()) {
+		return;  // wait for more bytes
+	}
+
+	const auto& backend_frame = bds.front_frame();
+	if (backend_frame.size() < 5) {
+		send_error(2003, "Malformed backend frame (passthrough setup)");
+		bds.pop_frame();
+		delete backend_conn_; backend_conn_ = nullptr;
+		status_ = X_SESSION_CLOSING; healthy = false;
+		return;
+	}
+	const uint8_t backend_msg_type = backend_frame[4];
+
+	// Step 5/6: branch on the backend's response type. We accept
+	// only Mysqlx::Ok (in response to CapabilitiesSet) as the green
+	// light to splice. Anything else is propagated to the client
+	// and the session closes.
+	if (backend_msg_type == Mysqlx::ServerMessages_Type_OK) {
+		// Forward the OK frame to the client verbatim. The client's
+		// TLS stack will then send a ClientHello on the next bytes
+		// it pushes — those land on this session, which is now in
+		// X_PASSTHROUGH_FORWARD and splices them straight to the
+		// backend.
+		const uint8_t* body = (backend_frame.size() > 5)
+			? backend_frame.data() + 5 : nullptr;
+		size_t body_len = (backend_frame.size() > 5) ? backend_frame.size() - 5 : 0;
+		client_ds_.enqueue_frame(backend_msg_type, body, body_len);
+		bds.pop_frame();
+		client_ds_.write_to_net();
+
+		// Bind the data stream so server_ds() resolves to the
+		// backend connection's fd (matches handler_passthrough_
+		// forward()'s client_fd / backend_fd lookup).
+		server_ds().init(XDS_BACKEND, backend_conn_->get_fd());
+		// Mark the connection IN_USE so MysqlxConnection's reuse
+		// invariants hold; reusable_ remains false from start_connect.
+		backend_conn_->set_state(MysqlxConnection::IN_USE);
+
+		tls_mode_ = TLS_PASSTHROUGH;
+		status_ = X_PASSTHROUGH_FORWARD;
+		to_process = true;
+		return;
+	}
+
+	// Backend rejected (Error) — forward verbatim, close.
+	if (backend_msg_type == Mysqlx::ServerMessages_Type_ERROR) {
+		const uint8_t* body = (backend_frame.size() > 5)
+			? backend_frame.data() + 5 : nullptr;
+		size_t body_len = (backend_frame.size() > 5) ? backend_frame.size() - 5 : 0;
+		client_ds_.enqueue_frame(backend_msg_type, body, body_len);
+		bds.pop_frame();
+		client_ds_.write_to_net();
+		delete backend_conn_; backend_conn_ = nullptr;
+		status_ = X_SESSION_CLOSING; healthy = false;
+		return;
+	}
+
+	// Any other frame type is unexpected at this point.
+	send_error(5000, "Unexpected backend frame in passthrough setup");
+	bds.pop_frame();
+	delete backend_conn_; backend_conn_ = nullptr;
+	status_ = X_SESSION_CLOSING; healthy = false;
+}
+
 // handler_passthrough_forward
 //
 // Once the route's tls_mode='passthrough' policy is honoured at
@@ -1785,6 +2048,67 @@ int MysqlxSession::resolve_backend_target() {
 	return 0;
 }
 
+// Pre-auth, route-keyed backend resolution for the passthrough
+// entry path (issue #5710). Unlike resolve_backend_target() — which
+// keys off identity_->default_route — this looks at the
+// listener_route_name_ the client connected through. There is NO
+// authenticated identity yet (and there never will be on the proxy
+// side: passthrough authenticates end-to-end between client and
+// backend), so we route purely by the listener's logical name.
+//
+// Failure modes mirror resolve_backend_target's: empty route, route
+// not found in config store, or no endpoint available. Each emits an
+// X-Protocol Error frame, marks the session unhealthy + closing, and
+// returns the corresponding code.
+int MysqlxSession::resolve_passthrough_backend_target() {
+	if (listener_route_name_.empty()) {
+		// Sessions accepted via the unit-test path lack a listener
+		// route. Refuse — this is a programming error, not a runtime
+		// failure mode for production traffic.
+		send_error(4000, "Passthrough requires a listener route");
+		mysqlx_stats().record_conn_err("", 0);
+		healthy = false;
+		status_ = X_SESSION_CLOSING;
+		return 4000;
+	}
+	const MysqlxConfigStore* cs = thread_ptr_ ? thread_ptr_->get_config_store() : nullptr;
+	if (!cs) {
+		send_error(4002, "No backend available: config store unavailable");
+		mysqlx_stats().record_conn_err(listener_route_name_, 0);
+		healthy = false;
+		status_ = X_SESSION_CLOSING;
+		return 4002;
+	}
+	if (!cs->route_exists(listener_route_name_)) {
+		std::string msg = "Route '";
+		msg += listener_route_name_;
+		msg += "' not found";
+		send_error(4001, msg.c_str());
+		mysqlx_stats().record_conn_err(listener_route_name_, 0);
+		healthy = false;
+		status_ = X_SESSION_CLOSING;
+		return 4001;
+	}
+	int hg = cs->route_hostgroup(listener_route_name_);
+	MysqlxBackendEndpoint ep = cs->pick_endpoint(listener_route_name_);
+	if (ep.hostname.empty()) {
+		std::string msg = "No backend available for route '";
+		msg += listener_route_name_;
+		msg += "'";
+		send_error(4002, msg.c_str());
+		mysqlx_stats().record_conn_err(listener_route_name_, hg);
+		healthy = false;
+		status_ = X_SESSION_CLOSING;
+		return 4002;
+	}
+	target_hostgroup_ = hg;
+	target_address_   = ep.hostname;
+	target_port_      = ep.mysqlx_port;
+	target_use_ssl_   = ep.use_ssl;
+	route_name_       = listener_route_name_;
+	return 0;
+}
+
 #ifdef MYSQLX_TEST_BUILD
 // Test-only convenience overload. Mirrors what the auth handler does on a
 // real client connection: look up the identity via the thread's config
@@ -2063,8 +2387,18 @@ void MysqlxSession::send_capabilities() {
 	v2->mutable_scalar()->set_type(Mysqlx::Datatypes::Scalar::V_STRING);
 	v2->mutable_scalar()->mutable_v_string()->set_value("PLAIN");
 
+	// TLS advertise gating: per-route tls_mode='disabled' suppresses
+	// the `tls` capability in the response, even if the worker has an
+	// SSL_CTX configured. Operator opt-out for a single route. Other
+	// modes (inherit / preferred / required / passthrough) advertise
+	// TLS the same way historic behaviour does — passthrough is
+	// special only at CapabilitiesSet(tls=true) time, not at advertise
+	// time (a passthrough route MUST advertise TLS so the client even
+	// thinks to upgrade). See MysqlxRouteTlsMode in
+	// mysqlx_config_store.h for the full taxonomy.
+	const bool advertise_tls = (effective_route_tls_mode() != MysqlxRouteTlsMode::disabled);
 	SSL_CTX* ctx = thread_ptr_ ? thread_ptr_->get_ssl_ctx() : nullptr;
-	if (ctx) {
+	if (ctx && advertise_tls) {
 		auto* tls_cap = caps.add_capabilities();
 		tls_cap->set_name("tls");
 		auto* tls_val = tls_cap->mutable_value();

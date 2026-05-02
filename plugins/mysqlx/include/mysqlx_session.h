@@ -136,7 +136,21 @@ public:
 		// the client's TLS handshake + application data, opaque to the
 		// proxy). The session is permanently bound to one backend
 		// connection (no pooling, no multiplexing).
-		X_PASSTHROUGH_FORWARD
+		X_PASSTHROUGH_FORWARD,
+		// Transient state on the way to X_PASSTHROUGH_FORWARD. Reached
+		// when the client sends CapabilitiesSet(tls=true) on a route
+		// whose tls_mode='passthrough'. The proxy is mid-flight: it
+		// has already started a non-blocking TCP connect to the
+		// backend resolved from the route's destination_hostgroup, and
+		// is buffering the client's CapabilitiesSet frame so that
+		// once connect completes the bytes can be forwarded verbatim
+		// to the backend. The state machine reads the backend's
+		// single CONN_CAPABILITIES_OK / Mysqlx::Error response (this
+		// is the LAST X-Protocol frame the proxy parses) and, on Ok,
+		// forwards it to the client and transitions to
+		// X_PASSTHROUGH_FORWARD. On Error, the error is propagated to
+		// the client and the session closes.
+		X_PASSTHROUGH_BACKEND_CONNECTING
 	};
 
 	MysqlxSession();
@@ -305,6 +319,45 @@ private:
 	// X-Protocol parsing — once this state is reached the bytes are
 	// opaque (TLS handshake + application data).
 	void handler_passthrough_forward();
+	// Transient state ahead of X_PASSTHROUGH_FORWARD. Wired by
+	// handler_capabilities_set when a client sends
+	// CapabilitiesSet(tls=true) on a route with tls_mode='passthrough':
+	//
+	//   1. resolve the backend endpoint from the route's
+	//      destination_hostgroup (no identity yet — passthrough is
+	//      authenticated end-to-end between the client and the
+	//      backend, the proxy never sees plaintext past this);
+	//   2. start a non-blocking TCP connect (or pick up an in-progress
+	//      one);
+	//   3. once connected, forward the buffered CapabilitiesSet bytes
+	//      verbatim to the backend;
+	//   4. read exactly one frame back from the backend; if it's an
+	//      Ok, forward it to the client and transition the session to
+	//      X_PASSTHROUGH_FORWARD; if it's an Error, propagate to the
+	//      client and close.
+	//
+	// This is the last point the proxy parses an X-Protocol frame in
+	// a passthrough session — past step 4 the bytes are opaque
+	// (TLS ClientHello + application data) and handler_passthrough_
+	// forward() splices them blindly.
+	void handler_passthrough_backend_connecting();
+	// Pre-auth route-keyed backend endpoint resolution. Used by the
+	// passthrough entry path (no identity_, no default_route — the
+	// route is the listener_route_name_ the client connected through).
+	// Populates target_hostgroup_, target_address_, target_port_ from
+	// the route's destination_hostgroup. Returns 0 on success; nonzero
+	// error code on failure (already emitted an X-Protocol Error
+	// frame and marked the session unhealthy / closing).
+	int resolve_passthrough_backend_target();
+
+	// Effective per-route TLS posture for the listener this session
+	// was accepted on. Reads listener_route_name_ + thread's config
+	// store; returns MysqlxRouteTlsMode::inherit when either is
+	// unavailable or the route is unknown — same fail-safe semantics
+	// route_tls_mode() returns for unknown routes. Used by
+	// send_capabilities() (advertise gating) and
+	// handler_capabilities_set() (passthrough entry).
+	MysqlxRouteTlsMode effective_route_tls_mode() const;
 
 	void handle_auth_mysql41(const std::string& auth_data);
 	void handle_auth_plain(const std::string& auth_data);
@@ -455,6 +508,12 @@ private:
 	// and on the destructor's return-to-pool path.
 	std::vector<uint8_t> passthrough_c2b_backlog_;
 	std::vector<uint8_t> passthrough_b2c_backlog_;
+	// Buffered CapabilitiesSet(tls=true) frame the client sent on a
+	// passthrough-mode route. Forwarded verbatim to the backend once
+	// the X_PASSTHROUGH_BACKEND_CONNECTING state's TCP connect
+	// completes. Cleared by reset() / init() / on transition to
+	// X_PASSTHROUGH_FORWARD.
+	std::vector<uint8_t> passthrough_pending_capset_frame_;
 public:
 	static constexpr size_t PASSTHROUGH_BACKLOG_CAP = 1 * 1024 * 1024;
 private:
