@@ -1,0 +1,325 @@
+name: CI-mysqlx-stress
+run-name: '${{ github.workflow }} ${{ github.ref_name }} ${{ github.sha }}'
+
+# Spins up a MySQL 8.4 service container, builds ProxySQL with the
+# mysqlx plugin (release), runs the X-Protocol stress harness at 100
+# concurrent clients for 30 minutes, and asserts pass criteria
+# (error_rate < 0.1%, RSS_growth < 5%, fd_growth < 5%).
+#
+# Closes Phase 3 of issue #5681 — the post-merge stress run that gives
+# operational confidence in the mysqlx feature stack.
+#
+# Self-contained workflow (no caller/reusable split): one-shot run,
+# manually dispatched or nightly. NOT triggered on PRs (too expensive).
+#
+# Resource budget: 30-minute soak + ~10 min build + container setup
+# fits inside the GH-hosted runner 6-hour wall clock with headroom.
+#
+# Security note: every 'run:' step uses only values from env: or
+# GitHub-provided env vars. No untrusted user input is interpolated.
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: 'Stress duration (e.g. 30m, 1h)'
+        required: false
+        default: '30m'
+      concurrent:
+        description: 'Concurrent X-Protocol clients'
+        required: false
+        default: '100'
+  schedule:
+    # Nightly at 04:23 UTC. Off-peak so we do not contend with the
+    # rest of CI for runner capacity.
+    - cron: '23 4 * * *'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  # Don't cancel a long soak on a re-trigger — let it finish, then
+  # the new one will queue.
+  cancel-in-progress: false
+
+env:
+  STRESS_DURATION: ${{ github.event.inputs.duration || '30m' }}
+  STRESS_CONCURRENT: ${{ github.event.inputs.concurrent || '100' }}
+  PROXYSQL_HOST: 127.0.0.1
+  PROXYSQL_MYSQLX_PORT: 6603
+  PROXYSQL_ADMIN_PORT: 6032
+  MYSQL_BACKEND_HOST: 127.0.0.1
+  MYSQL_BACKEND_PORT: 33060
+
+jobs:
+  stress:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: test
+          MYSQL_USER: mysqlx_test
+          MYSQL_PASSWORD: mysqlx_test
+        ports:
+          # mysqlx (X Protocol) and classic mysql, both bound to localhost.
+          - 33060:33060
+          - 33306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -uroot -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=15
+
+    steps:
+
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        submodules: 'false'
+
+    - name: Install build tools
+      run: |
+        sudo apt-get update
+        sudo apt-get -y install \
+          make automake cmake bzip2 g++ gcc git libtool wget patch pkg-config \
+          python3 python3-pip mysql-client procps lsof tcpdump
+
+    - name: Install build dependencies
+      run: |
+        sudo apt-get -y install \
+          libssl-dev libgnutls28-dev libmysqlclient-dev \
+          libboost-all-dev libunwind8 libunwind-dev uuid-dev \
+          libncurses-dev libicu-dev libevent-dev libtirpc-dev \
+          ca-certificates
+
+    - name: Install Python deps for stress harness
+      # mysql-connector-python provides both classic mysql and X-DevAPI
+      # bindings. The stress.py script imports both `mysqlx` and
+      # `mysql.connector`.
+      run: |
+        sudo pip3 install --break-system-packages mysql-connector-python || \
+          sudo pip3 install mysql-connector-python
+
+    - name: Verify Rust toolchain
+      run: |
+        rustc --version || rustup default stable
+        cargo --version
+
+    - name: Wait for MySQL backend (X Protocol)
+      run: |
+        # GitHub Actions service container may take a moment after
+        # container reports healthy before mysqlx port is ready.
+        for i in $(seq 1 60); do
+          if timeout 2 bash -c "echo > /dev/tcp/${MYSQL_BACKEND_HOST}/${MYSQL_BACKEND_PORT}" 2>/dev/null; then
+            echo "MySQL X Protocol ready on ${MYSQL_BACKEND_HOST}:${MYSQL_BACKEND_PORT}"
+            break
+          fi
+          sleep 2
+        done
+        # Final liveness probe via classic protocol to confirm.
+        mysql -h "${MYSQL_BACKEND_HOST}" -P 33306 -uroot -proot -e "SELECT VERSION();"
+
+    - name: Grant privileges to test user
+      run: |
+        mysql -h "${MYSQL_BACKEND_HOST}" -P 33306 -uroot -proot <<'SQL'
+          GRANT ALL PRIVILEGES ON *.* TO 'mysqlx_test'@'%';
+          FLUSH PRIVILEGES;
+        SQL
+
+    - name: Build ProxySQL deps (release, PROXYSQLGENAI)
+      env:
+        PROXYSQLGENAI: "1"
+      run: |
+        make build_deps -j$(nproc)
+
+    - name: Build ProxySQL (release, PROXYSQLGENAI)
+      env:
+        PROXYSQLGENAI: "1"
+      run: |
+        make -j$(nproc)
+
+    - name: Build mysqlx plugin
+      env:
+        PROXYSQLGENAI: "1"
+      run: |
+        cd plugins/mysqlx && make -j$(nproc)
+        ls -la ProxySQL_MySQLX_Plugin.so
+
+    - name: Configure proxysql.cnf
+      # Minimal config: load mysqlx plugin, define a single backend route
+      # pointing at the MySQL service container, and the admin/mysqlx
+      # listeners on the env-defined ports.
+      run: |
+        mkdir -p /tmp/proxysql-stress
+        cat > /tmp/proxysql-stress/proxysql.cnf <<EOF
+        datadir="/tmp/proxysql-stress"
+        admin_variables=
+        {
+            admin_credentials="admin:admin"
+            mysql_ifaces="0.0.0.0:${PROXYSQL_ADMIN_PORT}"
+        }
+        mysql_variables=
+        {
+            interfaces="0.0.0.0:6033"
+            default_charset="utf8mb4"
+            monitor_username="monitor"
+            monitor_password="monitor"
+        }
+        mysqlx_variables=
+        {
+            interfaces="0.0.0.0:${PROXYSQL_MYSQLX_PORT}"
+        }
+        mysql_servers=
+        (
+          { address="${MYSQL_BACKEND_HOST}", port=33306, hostgroup=0 }
+        )
+        mysql_users=
+        (
+          { username="mysqlx_test", password="mysqlx_test", default_hostgroup=0, active=1 }
+        )
+        mysqlx_users=
+        (
+          { username="mysqlx_test", password="mysqlx_test", default_hostgroup=0, active=1 }
+        )
+        mysqlx_routes=
+        (
+          { name="r1", username="mysqlx_test", schema="test", backend_host="${MYSQL_BACKEND_HOST}", backend_port=${MYSQL_BACKEND_PORT}, backend_user="mysqlx_test", backend_password="mysqlx_test", active=1 }
+        )
+        EOF
+        cat /tmp/proxysql-stress/proxysql.cnf
+
+    - name: Start ProxySQL
+      run: |
+        # PROXYSQL_PLUGIN_DIR is read by the chassis to discover .so files.
+        # Use the build-tree plugin so we exercise exactly what we built.
+        export PROXYSQL_PLUGIN_DIR="$GITHUB_WORKSPACE/plugins/mysqlx"
+        ./src/proxysql -c /tmp/proxysql-stress/proxysql.cnf -D /tmp/proxysql-stress > /tmp/proxysql-stress/proxysql.log 2>&1 &
+        echo $! > /tmp/proxysql-stress/proxysql.pid
+        # Give it a moment to fork & daemonise.
+        sleep 5
+        # Wait for admin port.
+        for i in $(seq 1 30); do
+          if timeout 2 bash -c "echo > /dev/tcp/${PROXYSQL_HOST}/${PROXYSQL_ADMIN_PORT}" 2>/dev/null; then
+            echo "ProxySQL admin ready"
+            break
+          fi
+          sleep 2
+        done
+        # Wait for mysqlx port.
+        for i in $(seq 1 30); do
+          if timeout 2 bash -c "echo > /dev/tcp/${PROXYSQL_HOST}/${PROXYSQL_MYSQLX_PORT}" 2>/dev/null; then
+            echo "ProxySQL mysqlx listener ready"
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "ERROR: ProxySQL mysqlx listener did not come up"
+        tail -200 /tmp/proxysql-stress/proxysql.log || true
+        exit 1
+
+    - name: Run stress harness (${{ env.STRESS_CONCURRENT }} concurrent / ${{ env.STRESS_DURATION }})
+      id: stress
+      run: |
+        # The stress.py harness writes a CSV of per-tick metrics and
+        # prints a final pass/fail summary. Pass criteria:
+        #   error_rate < 0.1% (script-internal),
+        #   we additionally check RSS / fd growth here on the CSV.
+        python3 test/scripts/mysqlx/stress.py \
+          --proxysql-host "${PROXYSQL_HOST}" \
+          --proxysql-port "${PROXYSQL_MYSQLX_PORT}" \
+          --admin-host "${PROXYSQL_HOST}" \
+          --admin-port "${PROXYSQL_ADMIN_PORT}" \
+          --admin-user admin \
+          --admin-pass admin \
+          --user mysqlx_test \
+          --password mysqlx_test \
+          --concurrent "${STRESS_CONCURRENT}" \
+          --duration "${STRESS_DURATION}" \
+          --metrics-out /tmp/stress.csv \
+          --metrics-interval-sec 10 \
+          | tee /tmp/stress.log
+        # Preserve the script's exit code (tee otherwise eats it).
+        exit ${PIPESTATUS[0]}
+
+    - name: Verify RSS / fd growth bounds
+      if: always() && steps.stress.conclusion != 'skipped'
+      run: |
+        # The stress.py harness already enforces error_rate < 0.1%. Here
+        # we do the additional growth-budget check that the issue spec
+        # called out (#5681): RSS and fd count should not grow > 5%
+        # between the early-warmed sample and the final tick.
+        python3 - <<'PY'
+        import csv, sys
+        rows = list(csv.DictReader(open("/tmp/stress.csv")))
+        if len(rows) < 6:
+            print(f"ERROR: only {len(rows)} samples — run too short to assess growth")
+            sys.exit(2)
+        # Use sample #5 as warmed baseline (skip startup transients), final
+        # row as endpoint.
+        base = rows[5]
+        end  = rows[-1]
+        def num(s):
+            try: return float(s)
+            except: return 0.0
+        rss_b, rss_e = num(base["rss_kib"]), num(end["rss_kib"])
+        fd_b,  fd_e  = num(base["fds"]),     num(end["fds"])
+        rss_growth = (rss_e - rss_b) / max(1.0, rss_b)
+        fd_growth  = (fd_e  - fd_b ) / max(1.0, fd_b)
+        print(f"RSS baseline={rss_b:.0f} KiB  final={rss_e:.0f} KiB  growth={rss_growth*100:.2f}%")
+        print(f"FDs baseline={fd_b:.0f}        final={fd_e:.0f}        growth={fd_growth*100:.2f}%")
+        ok = True
+        if rss_growth > 0.05:
+            print(f"FAIL: RSS growth {rss_growth*100:.2f}% > 5%")
+            ok = False
+        if fd_growth > 0.05:
+            print(f"FAIL: FD growth {fd_growth*100:.2f}% > 5%")
+            ok = False
+        with open(__import__("os").environ["GITHUB_STEP_SUMMARY"], "a") as fh:
+            fh.write("## CI-mysqlx-stress results\n\n")
+            fh.write(f"- Samples: {len(rows)}\n")
+            fh.write(f"- RSS growth (warmed→final): {rss_growth*100:.2f}% (budget 5%)\n")
+            fh.write(f"- FD growth (warmed→final):  {fd_growth*100:.2f}% (budget 5%)\n")
+            fh.write(f"- Pass: {ok}\n")
+        sys.exit(0 if ok else 1)
+        PY
+
+    - name: Stop ProxySQL
+      if: always()
+      run: |
+        if [ -f /tmp/proxysql-stress/proxysql.pid ]; then
+          PID=$(cat /tmp/proxysql-stress/proxysql.pid)
+          kill -TERM "$PID" 2>/dev/null || true
+          # Give it 15s to drain.
+          for i in $(seq 1 15); do
+            kill -0 "$PID" 2>/dev/null || break
+            sleep 1
+          done
+          kill -KILL "$PID" 2>/dev/null || true
+        fi
+
+    - name: Upload stress CSV
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: mysqlx-stress-csv-${{ github.sha }}
+        path: /tmp/stress.csv
+        if-no-files-found: warn
+
+    - name: Upload stress log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: mysqlx-stress-log-${{ github.sha }}
+        path: /tmp/stress.log
+        if-no-files-found: warn
+
+    - name: Upload ProxySQL log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: mysqlx-stress-proxysql-log-${{ github.sha }}
+        path: /tmp/proxysql-stress/proxysql.log
+        if-no-files-found: warn
