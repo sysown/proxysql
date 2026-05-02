@@ -88,12 +88,14 @@ jobs:
           python3 python3-pip mysql-client procps lsof tcpdump
 
     - name: Install build dependencies
+      # valgrind is required because libmariadb's ma_context.c
+      # unconditionally #includes <valgrind/valgrind.h>.
       run: |
         sudo apt-get -y install \
           libssl-dev libgnutls28-dev libmysqlclient-dev \
           libboost-all-dev libunwind8 libunwind-dev uuid-dev \
           libncurses-dev libicu-dev libevent-dev libtirpc-dev \
-          ca-certificates
+          valgrind ca-certificates
 
     - name: Install Python deps for stress harness
       # mysql-connector-python provides both classic mysql and X-DevAPI

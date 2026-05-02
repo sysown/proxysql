@@ -78,12 +78,16 @@ jobs:
     - name: Install build dependencies
       # Mirrors INSTALL.md's Ubuntu list. libmysqlclient-dev is needed by
       # some internal build-time helpers used by the vendored deps.
+      # valgrind is required because libmariadb's ma_context.c
+      # #include <valgrind/valgrind.h> unconditionally — even when
+      # built without DBUG; the header is shipped in the `valgrind`
+      # apt package on Ubuntu 22.04.
       run: |
         sudo apt-get -y install \
           libssl-dev libgnutls28-dev libmysqlclient-dev \
           libboost-all-dev libunwind8 libunwind-dev uuid-dev \
           libncurses-dev libicu-dev libevent-dev libtirpc-dev \
-          ca-certificates
+          valgrind ca-certificates
 
     - name: Verify Rust toolchain
       # PROXYSQLGENAI=1 pulls in Rust-backed vendored deps. Ubuntu 22.04
