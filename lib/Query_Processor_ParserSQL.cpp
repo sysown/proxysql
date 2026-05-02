@@ -1,3 +1,34 @@
+/**
+ * @file Query_Processor_ParserSQL.cpp
+ * @brief Implementation of the ParserSQL adapter layer for ProxySQL's query processor.
+ *
+ * @details Architecture
+ * ----------
+ * Each dialect (MySQL, PostgreSQL) has a `thread_local` `Parser<D>` instance that
+ * persists for the lifetime of the thread.  Parsers use arena allocators — after each
+ * query, `reset()` recycles the arena in O(1) without freeing individual nodes, making
+ * per-query overhead negligible.
+ *
+ * The file is organised into three sections:
+ *
+ *   **Section 1 — Digest adapter**
+ *   Uses `Emitter::DIGEST` mode to produce normalised query text from a full AST, then
+ *   hashes it with SpookyHash for backward compatibility with ProxySQL's existing digest
+ *   infrastructure.  For statements that parse only to the token level (Tier 2 — no full
+ *   AST), it falls back to `Digest<D>` which normalises at the token level instead.
+ *
+ *   **Section 2 — Command type mapping**
+ *   Translates ParserSQL's `StmtType` enum to ProxySQL's `MYSQL_COM_QUERY_command` /
+ *   `PGSQL_QUERY_command` enums via static lookup functions.  Any `StmtType` value not
+ *   present in the switch maps to UNKNOWN.
+ *
+ *   **Section 3 — SET AST walker**
+ *   Traverses the children of a `NODE_SET_STMT` AST node, normalises variable names
+ *   (scope prefix stripping, lowercasing, legacy alias resolution for tx_isolation and
+ *   tx_read_only), and produces a `map<string, vector<string>>` identical in format to
+ *   the output of `MySQL_Set_Stmt_Parser`.
+ */
+
 #include "proxysql.h"
 #include "Query_Processor_ParserSQL.h"
 #include "sql_parser/parser.h"
@@ -12,6 +43,8 @@
 
 using namespace sql_parser;
 
+// Per-thread parser instances. Arena memory is reused across parses via reset(),
+// so there is no per-query allocation overhead.
 static thread_local Parser<Dialect::MySQL> tl_mysql_parser;
 static thread_local Parser<Dialect::PostgreSQL> tl_pgsql_parser;
 
@@ -24,6 +57,7 @@ static std::string lowercase(std::string s) {
     return s;
 }
 
+/** Strips a single layer of matching quotes ('' or "" or ``) from a string. */
 static std::string strip_quotes(const std::string& s) {
     if (s.size() >= 2) {
         char first = s.front();
@@ -34,6 +68,12 @@ static std::string strip_quotes(const std::string& s) {
     return s;
 }
 
+/**
+ * Removes scope prefixes from @-style variable names.
+ * For example, "@@session.wait_timeout" becomes "wait_timeout".
+ * Non-@ variables (system names like "SESSION wait_timeout") are left untouched
+ * here; they are handled by normalize_set_var_name below.
+ */
 static std::string strip_scope_prefix(std::string var_name) {
     if (var_name.size() > 2 && var_name[0] == '@' && var_name[1] == '@') {
         var_name = var_name.substr(2);
@@ -49,6 +89,19 @@ static std::string strip_scope_prefix(std::string var_name) {
     return var_name;
 }
 
+/**
+ * Normalises a SET variable name for consistent lookup.
+ *
+ * Steps:
+ *   1. Strip keyword scope prefix (SESSION/GLOBAL/LOCAL).
+ *   2. Strip @@-style scope prefix (@@session. → "").
+ *   3. Lowercase the result.
+ *   4. Resolve legacy aliases: "transaction_isolation" → "tx_isolation",
+ *      "transaction_read_only" → "tx_read_only".
+ *
+ * This ensures the same variable name is produced regardless of how the user
+ * wrote the SET statement, matching the behaviour of the regex-based parser.
+ */
 static std::string normalize_set_var_name(std::string var_name) {
     for (const char* prefix : {"SESSION ", "GLOBAL ", "LOCAL "}) {
         size_t plen = strlen(prefix);
@@ -60,11 +113,25 @@ static std::string normalize_set_var_name(std::string var_name) {
     }
     var_name = strip_scope_prefix(var_name);
     var_name = lowercase(var_name);
+    // Legacy aliases — older MySQL versions used tx_isolation/tx_read_only,
+    // newer ones use transaction_isolation/transaction_read_only.
     if (var_name == "transaction_isolation") var_name = "tx_isolation";
     if (var_name == "transaction_read_only") var_name = "tx_read_only";
     return var_name;
 }
 
+/**
+ * Reconstructs the textual representation of an AST subtree.
+ *
+ * This is used in the SET walker to extract variable names and values from
+ * individual AST nodes (e.g. NODE_VAR_TARGET, literal values). The emitter
+ * runs in NORMAL mode so that the original token spellings are preserved.
+ *
+ * @tparam D  SQL dialect (MySQL or PostgreSQL).
+ * @param node  Root of the subtree to emit.
+ * @param arena Arena used for temporary allocation during emission.
+ * @return      The emitted text, or "" if node is null.
+ */
 template <Dialect D>
 static std::string emit_node_text(const AstNode* node, Arena& arena) {
     if (!node) return "";
@@ -78,6 +145,19 @@ static std::string emit_node_text(const AstNode* node, Arena& arena) {
 // Section 1: Digest adapter
 // ---------------------------------------------------------------------------
 
+/**
+ * @brief MySQL digest: normalise then SpookyHash.
+ *
+ * Two-tier strategy:
+ *   - If the parser produces a full AST (Tier 1), `Emitter::DIGEST` mode walks
+ *     it and emits normalised text with literals replaced by placeholders (?).
+ *   - If the parser only reached the token level (Tier 2 — partial parse of
+ *     unsupported statement types), `Digest<D>` performs token-level
+ *     normalisation as a fallback.
+ *
+ * The resulting normalised text is hashed with SpookyHash::Hash64 to produce
+ * the 64-bit digest that ProxySQL uses for query rule matching and statistics.
+ */
 void parsersql_digest_init_mysql(SQP_par_t* qp, const char* query, int query_length) {
     qp->digest_text = NULL;
     qp->first_comment = NULL;
@@ -88,22 +168,26 @@ void parsersql_digest_init_mysql(SQP_par_t* qp, const char* query, int query_len
     if (result.status == ParseResult::OK || result.status == ParseResult::PARTIAL) {
         std::string normalized;
         if (result.ast) {
+            // Tier 1: full AST available — use Emitter in DIGEST mode
             Emitter<Dialect::MySQL> emitter(tl_mysql_parser.arena(), EmitMode::DIGEST);
             emitter.emit(result.ast);
             StringRef ref = emitter.result();
             normalized.assign(ref.ptr, ref.len);
         } else {
+            // Tier 2: token-level fallback for statements without full AST support
             Digest<Dialect::MySQL> digest(tl_mysql_parser.arena());
             DigestResult dr = digest.compute(query, query_length);
             normalized.assign(dr.normalized.ptr, dr.normalized.len);
         }
         qp->digest_text = strdup(normalized.c_str());
+        // SpookyHash is preserved for backward compatibility with existing digest stats
         qp->digest = SpookyHash::Hash64(normalized.c_str(), normalized.size(), 0);
     }
 
     tl_mysql_parser.reset();
 }
 
+/** PostgreSQL variant of the digest adapter. See parsersql_digest_init_mysql for details. */
 void parsersql_digest_init_pgsql(SQP_par_t* qp, const char* query, int query_length) {
     qp->digest_text = NULL;
     qp->first_comment = NULL;
@@ -133,7 +217,14 @@ void parsersql_digest_init_pgsql(SQP_par_t* qp, const char* query, int query_len
 // ---------------------------------------------------------------------------
 // Section 2: Command type mapping
 // ---------------------------------------------------------------------------
+// Each function maps ParserSQL's StmtType enum to ProxySQL's protocol-specific
+// command enum.  Types that have no meaningful equivalent in the target protocol
+// (e.g. REPLACE is MySQL-only, USE has no PostgreSQL counterpart) return UNKNOWN.
 
+/**
+ * Maps StmtType → MYSQL_COM_QUERY_command.
+ * RESET and DO have no dedicated enum in ProxySQL and are mapped to UNKNOWN.
+ */
 static enum MYSQL_COM_QUERY_command stmt_type_to_mysql_command(StmtType st) {
     switch (st) {
         case StmtType::SELECT:           return MYSQL_COM_QUERY_SELECT;
@@ -170,6 +261,13 @@ static enum MYSQL_COM_QUERY_command stmt_type_to_mysql_command(StmtType st) {
     }
 }
 
+/**
+ * Maps StmtType → PGSQL_QUERY_command.
+ * MySQL-only types (REPLACE, USE, UNLOCK, LOAD_DATA, DESCRIBE, DO) have no
+ * PostgreSQL equivalent and are mapped to UNKNOWN.  Both BEGIN and
+ * START_TRANSACTION map to PGSQL_QUERY_BEGIN since PostgreSQL treats them
+ * identically.
+ */
 static enum PGSQL_QUERY_command stmt_type_to_pgsql_command(StmtType st) {
     switch (st) {
         case StmtType::SELECT:           return PGSQL_QUERY_SELECT;
@@ -227,7 +325,22 @@ enum PGSQL_QUERY_command parsersql_command_type_pgsql(const char* query, int que
 // ---------------------------------------------------------------------------
 // Section 3: SET AST walker
 // ---------------------------------------------------------------------------
+// Walks the immediate children of a NODE_SET_STMT, handling three node types:
+//   - NODE_SET_NAMES   → key "names" with [charset] or [charset, collation]
+//   - NODE_SET_CHARSET  → key "character_set" with [charset_name]
+//   - NODE_VAR_ASSIGNMENT → normalised variable name → [value]
+//
+// The output format (map<string, vector<string>>) is identical to that produced
+// by the regex-based MySQL_Set_Stmt_Parser, ensuring drop-in compatibility.
 
+/**
+ * Walks the children of a NODE_SET_STMT AST and extracts variable assignments.
+ *
+ * @tparam D       SQL dialect (MySQL or PostgreSQL).
+ * @param set_stmt The NODE_SET_STMT root node.
+ * @param arena    Arena for temporary allocations during node text emission.
+ * @return         Map from normalised variable name to its value(s).
+ */
 template <Dialect D>
 static std::map<std::string, std::vector<std::string>> walk_set_stmt(
     const AstNode* set_stmt, Arena& arena)
@@ -275,6 +388,12 @@ static std::map<std::string, std::vector<std::string>> walk_set_stmt(
                 if (rhs) {
                     val = emit_node_text<D>(rhs, arena);
                 }
+                // Special case: an explicitly empty string literal ('' or "")
+                // must be preserved as the empty string, not stripped to nothing.
+                // strip_quotes would remove the quotes and leave "", which is
+                // correct — but for '' or "" (two-character strings), stripping
+                // would yield an empty string indistinguishable from a missing
+                // value.  We check for these literal forms first.
                 if (val == "''" || val == "\"\"") {
                     val = "";
                 } else {
