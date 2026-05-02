@@ -64,6 +64,17 @@ jobs:
           # ubuntu24 GenAI build with code coverage
           - dist: 'ubuntu24'
             type: '-tap-genai-gcov'
+          # ubuntu24 ThreadSanitizer build for the mysqlx + plugin chassis
+          # concurrent unit tests (issue #5675 phase 2). Scoped to the
+          # mysqlx feature stack — sets PROXYSQL40=1 (chassis tier) but
+          # NOT PROXYSQLGENAI=1; GenAI's modules aren't on the
+          # concurrency-heavy code paths TSAN targets and would inflate
+          # the cache size with no test benefit. WITHTSAN auto-forces
+          # NOJEMALLOC via include/makefiles_vars.mk. The 'tap' marker
+          # is required so the build target picks build_tap_test_debug
+          # (not just src/proxysql) — see Build step regex below.
+          - dist: 'ubuntu24'
+            type: '-tap-tsan'
           # ubuntu22 is needed for ASAN TAP testing
           # disabled to save cache space
           #- dist: 'ubuntu22'
@@ -135,6 +146,20 @@ jobs:
         if [[ "${{ matrix.type }}" =~ "-asan" ]]; then
           sed -i "/command/i \      - WITHASAN=1" docker-compose.yml
           sed -i "/command/i \      - TEST_WITHASAN=1" docker-compose.yml
+        fi
+        if [[ "${{ matrix.type }}" =~ "-tsan" ]]; then
+          # WITHTSAN auto-forces NOJEMALLOC via include/makefiles_vars.mk
+          # (TSAN is incompatible with jemalloc, same as ASAN). PROXYSQL40
+          # is set explicitly because the chassis tier is what enables the
+          # mysqlx plugin build — and TSAN's coverage target is exactly
+          # the mysqlx + plugin-chassis concurrent code paths. We do NOT
+          # set PROXYSQLGENAI here: the GenAI modules aren't on those
+          # concurrency-heavy paths and would inflate the cache for no
+          # test benefit. Note that PROXYSQL40 implies PROXYSQL31 +
+          # PROXYSQLFFTO + PROXYSQLTSDB via the Makefile cascade — those
+          # come along for free.
+          sed -i "/command/i \      - WITHTSAN=1" docker-compose.yml
+          sed -i "/command/i \      - PROXYSQL40=1" docker-compose.yml
         fi
         if [[ "${{ matrix.type }}" =~ "-genai" ]]; then
           sed -i "/command/i \      - PROXYSQLGENAI=1" docker-compose.yml

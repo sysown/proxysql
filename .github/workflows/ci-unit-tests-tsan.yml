@@ -1,0 +1,124 @@
+name: CI-unit-tests-tsan
+
+# Reusable workflow: restore the ${SHA}_ubuntu24-tap-tsan caches that
+# CI-builds populated with WITHTSAN=1 + PROXYSQL40=1, then run the
+# mysqlx-tsan-g1 TAP group (mysqlx + plugin-chassis concurrent unit
+# tests) under ThreadSanitizer.
+#
+# Closes Phase 2 of issue #5675. Mirrors the existing ci-unittests.yml
+# pattern; the only differences are (a) different cache key — the
+# tsan-instrumented build, (b) ASLR sysctl required for TSAN's shadow
+# region on Linux 5.18+ default vm.mmap_rnd_bits=32, (c) different
+# TAP group name (mysqlx-tsan-g1 not unit-tests-g1).
+#
+# Locally, a developer can produce the same effect with:
+#   make ubuntu24-tap-tsan
+#   sudo sysctl -w vm.mmap_rnd_bits=28
+#   WORKSPACE=$(pwd) INFRA_ID=dev-$USER TAP_GROUP=mysqlx-tsan-g1 \
+#       test/infra/control/run-tests-isolated.bash
+# Same harness; same TAP group; same TSAN_OPTIONS.
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      trigger:
+        type: string
+
+env:
+  SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    env:
+      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu24-tap-tsan_src
+      MATRIX: '(mysqlx-tsan-g1)'
+
+    steps:
+
+    - uses: LouisBrunner/checks-action@v2.0.0
+      id: checks
+      if: always()
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        name: '${{ github.workflow }} / ${{ github.job }} ${{ env.MATRIX }}'
+        repo: ${{ github.repository }}
+        sha: ${{ env.SHA }}
+        status: 'in_progress'
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ env.SHA }}
+        path: 'proxysql'
+        sparse-checkout: |
+          test/infra/control
+          test/tap/groups
+          test/scripts
+
+    - name: Cache restore src
+      id: cache-src
+      uses: actions/cache/restore@v4
+      with:
+        key: ${{ env.BLDCACHE }}
+        fail-on-cache-miss: true
+        path: |
+          proxysql/src/
+
+    - name: Cache restore test
+      id: cache-test
+      uses: actions/cache/restore@v4
+      with:
+        key: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu24-tap-tsan_test
+        fail-on-cache-miss: true
+        path: |
+          proxysql/test/
+
+    - name: Verify binary
+      run: |
+        chmod +x proxysql/src/proxysql
+        file proxysql/src/proxysql
+
+    - name: Relax ASLR for ThreadSanitizer
+      # TSAN cannot reserve its shadow region on kernels with the
+      # default vm.mmap_rnd_bits=32. Lower it BEFORE any TSAN-instrumented
+      # binary is loaded — including build-helper binaries that may run
+      # later in this job. Same constraint as ASAN; see
+      # include/makefiles_vars.mk's WASAN warning block.
+      run: sudo sysctl -w vm.mmap_rnd_bits=28
+
+    - name: Run mysqlx-tsan-g1 (mysqlx + plugin chassis under TSAN)
+      run: |
+        cd proxysql
+        export INFRA_ID="ci-unit-tests-tsan"
+        export TAP_GROUP="mysqlx-tsan-g1"
+        test/infra/control/run-tests-isolated.bash
+
+    - name: Fix artifact permissions
+      if: ${{ failure() && !cancelled() }}
+      run: |
+        # actions/upload-artifact dies with EACCES when it scandirs into
+        # directories created inside the build container (root-owned).
+        # Make everything readable by the runner user before upload.
+        sudo chmod -R a+rX proxysql/ci_*_logs/ 2>/dev/null || true
+
+    - name: Archive artifacts logs
+      if: ${{ failure() && !cancelled() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ github.workflow }}-${{ env.SHA }}-logs-run#${{ github.run_number }}
+        path: |
+          proxysql/ci_*_logs/
+
+    - uses: LouisBrunner/checks-action@v2.0.0
+      if: always()
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        check_id: ${{ steps.checks.outputs.check_id }}
+        repo: ${{ github.repository }}
+        sha: ${{ env.SHA }}
+        conclusion: ${{ job.status }}
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
