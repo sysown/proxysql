@@ -1,0 +1,198 @@
+name: CI-mysqlx-tsan
+run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
+
+# Builds the mysqlx plugin + chassis unit tests with WITHTSAN=1
+# (ThreadSanitizer) and runs every mysqlx_*-t and plugin_*-t binary.
+# Closes Phase 2 of issue #5675: validate that the mysqlx feature stack
+# is race-free under sustained TSAN coverage.
+#
+# Self-contained workflow (no caller/reusable split): TSAN is single-job,
+# does not need to fan out to a TAP group, and benefits from being on
+# v3.0 directly so paths-filtered PR triggers fire without depending on
+# the GH-Actions branch.
+#
+# IMPORTANT: TSAN on Ubuntu 22.04 / 24.04 GitHub-hosted runners requires
+# `vm.mmap_rnd_bits=28` to be set BEFORE any sanitized binary is loaded.
+# We sysctl at the start of the job, before build_deps_debug, so even
+# build-time tooling (which may run sanitized binaries from prior steps
+# in the future) sees the relaxed value.
+#
+# Security note: every 'run:' step uses only values from env: or
+# GitHub-provided env vars. No untrusted user input is ever interpolated
+# into a shell command, so there is no command-injection surface.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'plugins/mysqlx/**'
+      - 'lib/MySQL_Plugin*.cpp'
+      - 'include/MySQL_Plugin*.h'
+      - 'include/ProxySQL_Plugin*.h'
+      - 'test/tap/tests/unit/mysqlx_*'
+      - 'test/tap/tests/unit/plugin_*'
+      - '.github/workflows/CI-mysqlx-tsan.yml'
+  schedule:
+    # Nightly at 03:17 UTC — off-peak, avoids the top-of-hour rush.
+    - cron: '17 3 * * *'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  # halt_on_error=0 + abort_on_error=0 lets us collect EVERY race in a
+  # single run rather than bailing on the first one. We post-process the
+  # logs to count races and fail the job if count > 0.
+  # second_deadlock_stack=1 + history_size=7 give enough trace depth to
+  # diagnose intermittent races.
+  TSAN_OPTIONS: "halt_on_error=0:abort_on_error=0:second_deadlock_stack=1:history_size=7:exitcode=66"
+
+jobs:
+  tsan:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+
+    steps:
+
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        submodules: 'false'
+
+    - name: Relax ASLR for ThreadSanitizer
+      # TSAN cannot reserve its shadow region on kernels with the default
+      # vm.mmap_rnd_bits=32. Lower it to 28 BEFORE any build/run step so
+      # all sanitized binaries (build helpers and tests) see the same
+      # relaxed value.
+      run: sudo sysctl -w vm.mmap_rnd_bits=28
+
+    - name: Install build tools
+      run: |
+        sudo apt-get update
+        sudo apt-get -y install \
+          make automake cmake bzip2 g++ gcc git libtool wget patch pkg-config \
+          python3 python3-pip
+
+    - name: Install build dependencies
+      # Mirrors INSTALL.md's Ubuntu list. libmysqlclient-dev is needed by
+      # some internal build-time helpers used by the vendored deps.
+      run: |
+        sudo apt-get -y install \
+          libssl-dev libgnutls28-dev libmysqlclient-dev \
+          libboost-all-dev libunwind8 libunwind-dev uuid-dev \
+          libncurses-dev libicu-dev libevent-dev libtirpc-dev \
+          ca-certificates
+
+    - name: Verify Rust toolchain
+      # PROXYSQLGENAI=1 pulls in Rust-backed vendored deps. Ubuntu 22.04
+      # GitHub runners ship rustup/cargo/rustc out of the box; sanity-check
+      # they are on PATH so deps/Makefile's detection fires.
+      run: |
+        rustc --version || rustup default stable
+        cargo --version
+
+    - name: Build deps (PROXYSQLGENAI + TSAN)
+      env:
+        PROXYSQLGENAI: "1"
+        NOJEMALLOC: "1"
+        WITHTSAN: "1"
+      run: |
+        make build_deps_debug -j$(nproc)
+
+    - name: Build lib + src (debug + TSAN)
+      env:
+        PROXYSQLGENAI: "1"
+        NOJEMALLOC: "1"
+        WITHTSAN: "1"
+      run: |
+        make debug -j$(nproc)
+
+    - name: Build TAP unit tests (debug + TSAN)
+      env:
+        PROXYSQLGENAI: "1"
+        NOJEMALLOC: "1"
+        WITHTSAN: "1"
+      # We only need the unit tests target; integration tests need
+      # backends and aren't relevant for race coverage of the mysqlx
+      # plugin/chassis seams.
+      run: |
+        cd test/tap && make unit_tests -j$(nproc)
+
+    - name: Run mysqlx + plugin unit tests under TSAN
+      id: run-unit
+      run: |
+        set +e
+        cd test/tap/tests/unit
+
+        mkdir -p "$GITHUB_WORKSPACE/tsan-logs"
+        FAILED=()
+        PASSED=0
+        TOTAL_RACES=0
+
+        shopt -s nullglob
+        # Only mysqlx_*-t and plugin_*-t binaries — we are scoping TSAN
+        # to the mysqlx feature stack per #5675. Other unit tests
+        # exercise unrelated code and would just inflate runtime.
+        TESTS=()
+        for t in mysqlx_*-t plugin_*-t; do
+          [ -x "./$t" ] && TESTS+=("$t")
+        done
+
+        if [ ${#TESTS[@]} -eq 0 ]; then
+          echo "ERROR: no mysqlx_*-t or plugin_*-t binaries found"
+          exit 1
+        fi
+
+        for t in "${TESTS[@]}"; do
+          log="$GITHUB_WORKSPACE/tsan-logs/${t}.log"
+          echo "::group::${t}"
+          ./"$t" > "$log" 2>&1
+          rc=$?
+          # Count occurrences of the standard TSAN report header. A clean
+          # run has zero "WARNING: ThreadSanitizer:" lines.
+          races=$(grep -c "WARNING: ThreadSanitizer:" "$log" || true)
+          TOTAL_RACES=$((TOTAL_RACES + races))
+          if [ $rc -eq 0 ] && [ $races -eq 0 ]; then
+            PASSED=$((PASSED + 1))
+            echo "PASS: $t (0 races)"
+          else
+            FAILED+=("$t (rc=$rc, races=$races)")
+            echo "FAIL: $t (rc=$rc, races=$races)"
+            tail -n 200 "$log"
+          fi
+          echo "::endgroup::"
+        done
+
+        echo
+        echo "======================================================================"
+        echo "TSAN summary: ${PASSED} passed, ${#FAILED[@]} failed, ${TOTAL_RACES} total races"
+        echo "======================================================================"
+
+        {
+          echo "## CI-mysqlx-tsan results"
+          echo ""
+          echo "- Tests run: ${#TESTS[@]}"
+          echo "- Passed: ${PASSED}"
+          echo "- Failed: ${#FAILED[@]}"
+          echo "- Total ThreadSanitizer warnings: ${TOTAL_RACES}"
+          echo ""
+          if [ ${#FAILED[@]} -gt 0 ]; then
+            echo "### Failures"
+            printf -- '- %s\n' "${FAILED[@]}"
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        # Fail the job if anything raced or any test failed.
+        if [ ${#FAILED[@]} -gt 0 ] || [ $TOTAL_RACES -gt 0 ]; then
+          exit 1
+        fi
+
+    - name: Upload TSAN logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: mysqlx-tsan-logs-${{ github.event.pull_request.head.sha || github.sha }}
+        path: tsan-logs/
+        if-no-files-found: warn
