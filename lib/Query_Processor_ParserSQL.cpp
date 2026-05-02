@@ -141,6 +141,29 @@ static std::string emit_node_text(const AstNode* node, Arena& arena) {
     return std::string(ref.ptr, ref.len);
 }
 
+static std::string extract_paren_expr(const char* query, int query_len,
+                                       const char* after_var) {
+    if (!after_var || after_var >= query + query_len) return "";
+    const char* p = after_var;
+    const char* end = query + query_len;
+    while (p < end && (*p == ' ' || *p == '\t')) p++;
+    if (p >= end || (*p != '=' && *p != ':')) return "";
+    while (p < end && *p != '(') p++;
+    if (p >= end) return "";
+    const char* start = p;
+    int depth = 0;
+    while (p < end) {
+        if (*p == '(') depth++;
+        else if (*p == ')') { depth--; if (depth == 0) { p++; break; } }
+        else if (*p == '\'' || *p == '"') {
+            char q = *p; p++;
+            while (p < end && *p != q) { if (*p == '\\' && p + 1 < end) p++; p++; }
+        }
+        p++;
+    }
+    return std::string(start, p);
+}
+
 // ---------------------------------------------------------------------------
 // Section 1: Digest adapter
 // ---------------------------------------------------------------------------
@@ -343,7 +366,7 @@ enum PGSQL_QUERY_command parsersql_command_type_pgsql(const char* query, int que
  */
 template <Dialect D>
 static std::map<std::string, std::vector<std::string>> walk_set_stmt(
-    const AstNode* set_stmt, Arena& arena)
+    const AstNode* set_stmt, Arena& arena, const char* query, int query_len)
 {
     std::map<std::string, std::vector<std::string>> result;
     if (!set_stmt) return result;
@@ -386,7 +409,16 @@ static std::map<std::string, std::vector<std::string>> walk_set_stmt(
 
                 std::string val;
                 if (rhs) {
-                    val = emit_node_text<D>(rhs, arena);
+                    if (rhs->type == NodeType::NODE_SUBQUERY
+                        && !rhs->first_child && rhs->value_len == 0) {
+                        const AstNode* var_id = target->first_child;
+                        if (var_id && var_id->value_ptr && var_id->value_len) {
+                            const char* after = var_id->value_ptr + var_id->value_len;
+                            val = extract_paren_expr(query, query_len, after);
+                        }
+                    } else {
+                        val = emit_node_text<D>(rhs, arena);
+                    }
                 }
                 // Special case: an explicitly empty string literal ('' or "")
                 // must be preserved as the empty string, not stripped to nothing.
@@ -417,7 +449,7 @@ std::map<std::string, std::vector<std::string>> parsersql_parse_set_mysql(
     if (result.status == ParseResult::OK || result.status == ParseResult::PARTIAL) {
         if (result.ast && result.ast->type == NodeType::NODE_SET_STMT) {
             auto parsed = walk_set_stmt<Dialect::MySQL>(
-                result.ast, tl_mysql_parser.arena());
+                result.ast, tl_mysql_parser.arena(), query.c_str(), query.size());
             tl_mysql_parser.reset();
             return parsed;
         }
@@ -433,7 +465,7 @@ std::map<std::string, std::vector<std::string>> parsersql_parse_set_pgsql(
     if (result.status == ParseResult::OK || result.status == ParseResult::PARTIAL) {
         if (result.ast && result.ast->type == NodeType::NODE_SET_STMT) {
             auto parsed = walk_set_stmt<Dialect::PostgreSQL>(
-                result.ast, tl_pgsql_parser.arena());
+                result.ast, tl_pgsql_parser.arena(), query.c_str(), query.size());
             tl_pgsql_parser.reset();
             return parsed;
         }
