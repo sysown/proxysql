@@ -574,6 +574,7 @@ class MySQL_Threads_Handler
 		 */
 		int query_processor_first_comment_parsing;
 		int query_processor_regex;
+		int query_processor_parser;
 		int set_query_lock_on_hostgroup;
 		int set_parser_algorithm;
 		int reset_connection_algorithm;
