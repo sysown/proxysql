@@ -11,6 +11,7 @@ using json = nlohmann::json;
 #include "Command_Counter.h"
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Query_Processor.h"
+#include "Query_Processor_ParserSQL.h"
 
 extern MySQL_Threads_Handler *GloMTH;
 extern ProxySQL_Admin *GloAdmin;
@@ -161,6 +162,14 @@ enum MYSQL_COM_QUERY_command MySQL_Query_Processor::query_parser_command_type(SQ
 	}
 
 	enum MYSQL_COM_QUERY_command ret = MYSQL_COM_QUERY_UNKNOWN;
+
+	if (mysql_thread___query_processor_parser == 1) {
+		if (text) {
+			return parsersql_command_type_mysql(text, strlen(text));
+		}
+		return MYSQL_COM_QUERY_UNKNOWN;
+	}
+
 	char c1;
 
 	tokenizer_t tok;

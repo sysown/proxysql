@@ -10,6 +10,7 @@ using json = nlohmann::json;
 #include "Command_Counter.h"
 #include "PgSQL_PreparedStatement.h"
 #include "PgSQL_Query_Processor.h"
+#include "Query_Processor_ParserSQL.h"
 
 extern PgSQL_Threads_Handler* GloPTH;
 extern ProxySQL_Admin *GloAdmin;
@@ -666,6 +667,14 @@ enum PGSQL_QUERY_command PgSQL_Query_Processor::query_parser_command_type(SQP_pa
 	}
 
 	enum PGSQL_QUERY_command ret = PGSQL_QUERY_UNKNOWN;
+
+	if (pgsql_thread___query_processor_parser == 1) {
+		if (text) {
+			return parsersql_command_type_pgsql(text, strlen(text));
+		}
+		return PGSQL_QUERY_UNKNOWN;
+	}
+
 	char c1;
 
 	tokenizer_t tok;
