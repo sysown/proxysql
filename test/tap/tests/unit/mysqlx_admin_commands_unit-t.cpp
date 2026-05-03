@@ -186,11 +186,12 @@ int main() {
 		admindb.execute("DELETE FROM mysqlx_variables");
 		ProxySQL_PluginCommandResult res = cmd(ctx, nullptr);
 		ok(res.error_code == 0, "SAVE MYSQLX VARIABLES TO MEMORY succeeds");
-		// save_variables_to_admin_table dumps the four well-known variables
-		// (thread_pool_size, connect_timeout, tls_mode, max_cached_conns)
-		// from the in-memory store regardless of what was previously loaded.
+		// save_variables_to_admin_table dumps the five well-known variables
+		// (thread_pool_size, connect_timeout, tls_mode, max_cached_conns,
+		// tls_backend_mode) from the in-memory store regardless of what
+		// was previously loaded.
 		int cnt = admindb.return_one_int("SELECT COUNT(*) FROM mysqlx_variables");
-		ok(cnt == 4, "mysqlx_variables has 4 rows after save (all known variables)");
+		ok(cnt == 5, "mysqlx_variables has 5 rows after save (all known variables)");
 	}
 
 	{
