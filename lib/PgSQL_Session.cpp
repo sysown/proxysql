@@ -1105,8 +1105,10 @@ int PgSQL_Session::handler_again___status_PINGING_SERVER() {
 		} else {
 			myds->destroy_MySQL_Connection_From_Pool(true);
 		}
-		delete mybe->server_myds;
-		mybe->server_myds = NULL;
+		if (mybe->server_myds) {
+			delete mybe->server_myds;
+			mybe->server_myds = NULL;
+		}
 		set_status(session_status___NONE);
 		return -1;
 	}
@@ -1126,8 +1128,10 @@ int PgSQL_Session::handler_again___status_PINGING_SERVER() {
 			}
 			myds->destroy_MySQL_Connection_From_Pool(false);
 			myds->fd = 0;
-			delete mybe->server_myds;
-			mybe->server_myds = NULL;
+			if (mybe->server_myds) {
+				delete mybe->server_myds;
+				mybe->server_myds = NULL;
+			}
 			return -1;
 		}
 		else {
@@ -1157,8 +1161,10 @@ int PgSQL_Session::handler_again___status_RESETTING_CONNECTION() {
 		myds->DSS = STATE_MARIADB_GENERIC;
 		myconn->async_state_machine = ASYNC_IDLE;
 		myds->return_MySQL_Connection_To_Pool();
-		delete mybe->server_myds;
-		mybe->server_myds = NULL;
+		if (mybe->server_myds) {
+			delete mybe->server_myds;
+			mybe->server_myds = NULL;
+		}
 		set_status(session_status___NONE);
 		return -1;
 	} else {
