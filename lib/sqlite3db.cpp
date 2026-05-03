@@ -103,6 +103,8 @@ void SQLite3_row::add_fields(sqlite3_stmt *stmt) {
 	}
 	if (data_size) {
 		data=(char *)malloc(data_size);
+	} else {
+		data=NULL;
 	}
 	for (i=0;i<cnt;i++) {
 		t=(*proxy_sqlite3_column_type)(stmt,i);
@@ -110,17 +112,18 @@ void SQLite3_row::add_fields(sqlite3_stmt *stmt) {
 		if (t==SQLITE_NULL) {
 			//sizes[i]=0;
 			fields[i]=NULL;
-		} else {
+		} else if (data) {
 			memcpy(data+data_ptr,c,sizes[i]);
 			fields[i]=data+data_ptr;
 			data_ptr+=sizes[i];
-			data[data_ptr]='\0';
+			data[data_ptr]=0;
 			data_ptr++; // leading 0
+		} else {
+			fields[i]=NULL;
 		}
 	}
 	ds=data_size;
 }
-
 /**
  * @brief Adds fields to the SQLite3_row object based on provided field data.
  * 
@@ -141,9 +144,11 @@ void SQLite3_row::add_fields(char **_fields) {
 		}
 		if (data_size) {
 			data=(char *)malloc(data_size);
+		} else {
+			data=NULL;
 		}
 		for (i=0;i<cnt;i++) {
-			if (_fields[i]) {
+			if (_fields[i] && data) {
 				memcpy(data+data_ptr,_fields[i],sizes[i]);
 				fields[i]=data+data_ptr;
 				data_ptr+=sizes[i];
