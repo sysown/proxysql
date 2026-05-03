@@ -216,6 +216,13 @@ static void test_server_response_terminal_frame() {
 	sess.backend_conn() = conn;
 	sess.server_ds().init(XDS_BACKEND, backend_fds[0]);
 	sess.set_status(MysqlxSession::WAITING_SERVER_XMSG);
+	// SQL_STMT_EXECUTE_OK is only a terminal frame under the
+	// RESP_WAITING_STMT_EXECUTE / RESP_WAITING_PREPARE_EXECUTE
+	// response_state — see is_terminal_frame in mysqlx_session.cpp.
+	// The default RESP_IDLE rejects every frame, so the test must
+	// position the session in the response state matching the
+	// terminator it's about to send.
+	sess.set_response_state_for_test(RESP_WAITING_STMT_EXECUTE);
 
 	Mysqlx::Sql::StmtExecuteOk exec_ok;
 	std::string ok_s;
@@ -262,6 +269,12 @@ static void test_server_response_non_terminal_keeps_waiting() {
 	sess.backend_conn() = conn;
 	sess.server_ds().init(XDS_BACKEND, backend_fds[0]);
 	sess.set_status(MysqlxSession::WAITING_SERVER_XMSG);
+	// ColumnMetaData is only allowed under one of the resultset-
+	// producing response states (STMT_EXECUTE / CRUD / PREPARE_EXECUTE
+	// / CURSOR_OPEN). Pin to RESP_WAITING_STMT_EXECUTE — the
+	// is_frame_allowed contract is identical for ColumnMetaData
+	// across all four.
+	sess.set_response_state_for_test(RESP_WAITING_STMT_EXECUTE);
 
 	Mysqlx::Resultset::ColumnMetaData col;
 	col.set_type(Mysqlx::Resultset::ColumnMetaData_FieldType_SINT);
@@ -312,6 +325,11 @@ static void test_server_response_multi_frame_pipeline() {
 	sess.backend_conn() = conn;
 	sess.server_ds().init(XDS_BACKEND, backend_fds[0]);
 	sess.set_status(MysqlxSession::WAITING_SERVER_XMSG);
+	// Pipeline: ColumnMetaData → Row → SQL_STMT_EXECUTE_OK. All
+	// three are accepted under RESP_WAITING_STMT_EXECUTE; Row's
+	// allow-list is gated on seen_column_metadata_ which the
+	// handler flips when it forwards the metadata frame.
+	sess.set_response_state_for_test(RESP_WAITING_STMT_EXECUTE);
 
 	uint8_t dummy_payload[] = {0x01, 0x02, 0x03};
 	write_x_frame(backend_fds[1], Mysqlx::ServerMessages_Type_RESULTSET_COLUMN_META_DATA,

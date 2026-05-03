@@ -497,20 +497,20 @@ mysqlx_config_store_pure_unit-t: mysqlx_config_store_pure_unit-t.cpp $(PROXYSQL_
 		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) \
 		$(ALLOW_MULTI_DEF) -o $@
 
-mysqlx_admin_schema_unit-t: mysqlx_admin_schema_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_admin_schema.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
-	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_admin_schema.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+mysqlx_admin_schema_unit-t: mysqlx_admin_schema_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_admin_schema.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_admin_schema.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include \
 		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) \
 		$(ALLOW_MULTI_DEF) -o $@
 
-mysqlx_admin_commands_unit-t: mysqlx_admin_commands_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_admin_schema.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
-	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_admin_schema.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+mysqlx_admin_commands_unit-t: mysqlx_admin_commands_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_admin_schema.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_admin_schema.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include \
 		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) \
 		$(ALLOW_MULTI_DEF) -o $@
 
-mysqlx_admin_disk_commands_unit-t: mysqlx_admin_disk_commands_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_admin_schema.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
-	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_admin_schema.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+mysqlx_admin_disk_commands_unit-t: mysqlx_admin_disk_commands_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_admin_schema.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_admin_schema.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include \
 		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) \
 		$(ALLOW_MULTI_DEF) -o $@
