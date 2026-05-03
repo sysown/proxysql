@@ -132,15 +132,18 @@ jobs:
       # same volume mounts (defined on ubuntu24_dbg_build →
       # ubuntu24_build → _build).
       #
-      # The compose project name uses the same single-dot strip the
-      # Makefile binaries/proxysql% rule applies (`${GIT_VERSION/./}`,
-      # not `${GIT_VERSION//./}`) so this `run` lands in the namespace
-      # `make ubuntu24-tap` declared. Practically the build recipe
-      # tears its project down before exiting, so the only thing we'd
-      # observe from a mismatched project name is `docker compose`
-      # creating a fresh network/volume set on the fly — but keeping
-      # them consistent is the contract the rest of the build chain
-      # relies on.
+      # No `-p PROJECT` flag: the Makefile's `binaries/proxysql%`
+      # rule writes `-p "${GIT_VERSION/./}"` which *make* expands as
+      # a make variable reference (not bash parameter expansion), so
+      # the project name comes out as the empty string and docker
+      # compose falls back to the directory basename. We rely on the
+      # same default here so we land in the same project namespace.
+      # An earlier follow-up commit attempted to mirror the literal
+      # Makefile expression in bash, which kept a dot in the result
+      # and got rejected by docker compose v2's project-name
+      # validator ("invalid project name '30.8-693-gXXXX': must
+      # consist only of lowercase alphanumeric characters, hyphens,
+      # and underscores").
       #
       # SKIP_PROXYSQL=1 short-circuits the daemon + backend checks in
       # run-tests-isolated.bash, so it just iterates groups.json and
@@ -150,8 +153,6 @@ jobs:
         TAP_GROUP: mysqlx-tsan-g1
         INFRA_ID: ci-unit-tests-tsan
       run: |
-        GIT_VERSION="$(git describe --long --abbrev=7)"
-        PROJECT="${GIT_VERSION/./}"
         # Two on-the-fly apt installs: the build image is package-build-
         # focused, not test-execution-focused, so it ships neither.
         #   * python3-packaging: run-tests-isolated.bash uses it to
@@ -162,7 +163,7 @@ jobs:
         #     build phase, but `docker compose run --rm` starts from
         #     the original image so the runtime lib has to be
         #     re-installed here.
-        docker compose -p "${PROJECT}" run --rm \
+        docker compose run --rm \
           -e WORKSPACE=/opt/proxysql \
           -e INFRA_ID="${INFRA_ID}" \
           -e TAP_GROUP="${TAP_GROUP}" \
