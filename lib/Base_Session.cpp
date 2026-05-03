@@ -393,9 +393,8 @@ bool Base_Session<S,DS,B,T>::has_any_backend() {
  */
 template<typename S, typename DS, typename B, typename T>
 void Base_Session<S,DS,B,T>::reset_all_backends() {
-	B *mybe;
 	while(mybes->len) {
-		mybe=(B *)mybes->remove_index_fast(0);
+		B *mybe=(B *)mybes->remove_index_fast(0);
 		mybe->reset();
 		delete mybe;
 	}
