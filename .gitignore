@@ -140,6 +140,7 @@ deps/postgresql/postgresql-*/
 deps/postgresql/postgres-*/
 deps/libusual/libusual-*/
 deps/zstd/zstd-*/
+deps/parsersql/parsersql-*/
 
 test/.vagrant
 .DS_Store
