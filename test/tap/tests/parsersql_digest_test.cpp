@@ -38,7 +38,7 @@ int main(int argc, char** argv) {
 	for (int i = 0; test_queries[i]; i++) {
 		SQP_par_t qp;
 		memset(&qp, 0, sizeof(qp));
-		int len = strlen(test_queries[i]);
+		int len = strlen(test_queries[i]); // NOSONAR: length of null-terminated string literal array
 		parsersql_digest_init_mysql(&qp, test_queries[i], len);
 
 		ok(qp.digest_text != NULL, "Query %d: digest_text is non-NULL -- %s", i, test_queries[i]);

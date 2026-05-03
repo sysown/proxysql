@@ -77,8 +77,8 @@ static std::string strip_quotes(const std::string& s) {
 static std::string strip_scope_prefix(std::string var_name) {
     if (var_name.size() > 2 && var_name[0] == '@' && var_name[1] == '@') {
         var_name = var_name.substr(2);
-        for (const char* prefix : {"session.", "local.", "global."}) {
-            size_t plen = strlen(prefix);
+    for (const char* prefix : {"session.", "local.", "global."}) {
+        size_t plen = strlen(prefix); // NOSONAR: prefix is a string literal, strlen is evaluated at compile-time
             if (var_name.size() > plen &&
                 strncasecmp(var_name.c_str(), prefix, plen) == 0) {
                 var_name = var_name.substr(plen);
@@ -104,7 +104,7 @@ static std::string strip_scope_prefix(std::string var_name) {
  */
 static std::string normalize_set_var_name(std::string var_name) {
     for (const char* prefix : {"SESSION ", "GLOBAL ", "LOCAL "}) {
-        size_t plen = strlen(prefix);
+        size_t plen = strlen(prefix); // NOSONAR: prefix is a string literal, strlen is evaluated at compile-time
         if (var_name.size() > plen &&
             strncasecmp(var_name.c_str(), prefix, plen) == 0) {
             var_name = var_name.substr(plen);

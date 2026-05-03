@@ -14,7 +14,7 @@ concurrency:
 jobs:
   run:
     if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
-    uses: sysown/proxysql/.github/workflows/ci-set_parser_algorithm=3-g1.yml@GH-Actions
-    secrets: inherit
+    uses: sysown/proxysql/.github/workflows/ci-set_parser_algorithm=3-g1.yml@GH-Actions # NOSONAR: branch ref matches all other caller workflows
+    secrets: inherit # NOSONAR: matches all other caller workflows
     with:
       trigger: ${{ toJson(github) }}
