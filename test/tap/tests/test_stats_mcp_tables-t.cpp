@@ -91,7 +91,7 @@ int count_rows(MYSQL* admin, const char* table) {
 
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(12);
+	plan(11);
 
 	CommandLine cl;
 	if (cl.getEnv()) {

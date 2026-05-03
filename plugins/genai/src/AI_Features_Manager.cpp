@@ -55,11 +55,19 @@ int AI_Features_Manager::init_vector_db() {
 		for (size_t i = 1; i < dir_path.size(); ++i) {
 			if (dir_path[i] == '/') {
 				dir_path[i] = '\0';
-				mkdir(dir_path.c_str(), 0755);
+				if (mkdir(dir_path.c_str(), 0755) != 0 && errno != EEXIST) {
+					proxy_error("AI: Failed to create directory %s: %s\n", dir_path.c_str(), strerror(errno));
+					free(path_copy);
+					return -1;
+				}
 				dir_path[i] = '/';
 			}
 		}
-		mkdir(dir_path.c_str(), 0755);
+		if (mkdir(dir_path.c_str(), 0755) != 0 && errno != EEXIST) {
+			proxy_error("AI: Failed to create directory %s: %s\n", dir_path.c_str(), strerror(errno));
+			free(path_copy);
+			return -1;
+		}
 	}
 	free(path_copy);
 

@@ -22,16 +22,16 @@ Alternatives considered and rejected:
 
 ```cpp
 struct ProxySQL_PluginRuntimeView {
-    ProxySQL_PluginDBKind db_kind;   // NEW: chassis passes matching DB handle
     const char *table_name;
     void (*refresh)(SQLite3DB *db, void *opaque);
     void *opaque;
+    ProxySQL_PluginDBKind db_kind;   // NEW (ABI 4): tail-appended for backward compat
 };
 ```
 
 `PROXYSQL_PLUGIN_ABI_VERSION` bumps from 3 to 4.
 
-The `db_kind` field uses the existing `ProxySQL_PluginDBKind` enum (`admin_db`, `config_db`, `stats_db`). The chassis passes the matching handle to `refresh()`.
+The `db_kind` field uses the existing `ProxySQL_PluginDBKind` enum (`admin_db`, `config_db`, `stats_db`). The field is tail-appended so that existing `{table_name, refresh, opaque}` aggregate initializers in ABI-3 plugins continue to compile and zero-initialize the trailing field (which defaults to `admin_db` = 0). The chassis passes the matching handle to `refresh()`.
 
 ### `registered_runtime_view_t` (`include/ProxySQL_PluginManager.h`)
 

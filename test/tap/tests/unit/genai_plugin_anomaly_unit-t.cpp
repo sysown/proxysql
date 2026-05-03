@@ -172,7 +172,7 @@ static void test_analyze_pipeline_runs_without_vector_db() {
 }
 
 int main() {
-	plan(24);
+	plan(25);
 
 	test_init_minimal();
 

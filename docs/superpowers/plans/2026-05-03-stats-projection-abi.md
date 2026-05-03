@@ -47,10 +47,10 @@ And add `db_kind` to the struct at lines 217-221:
 
 ```cpp
 struct ProxySQL_PluginRuntimeView {
-	ProxySQL_PluginDBKind db_kind;
 	const char *table_name;
 	void (*refresh)(SQLite3DB *db, void *opaque);
 	void *opaque;
+	ProxySQL_PluginDBKind db_kind;
 };
 ```
 
@@ -631,37 +631,37 @@ git commit -m "refactor: remove MCP stats DDL macros and design comments from co
 
 - [ ] **Step 1: Update aggregate initialization to include `db_kind`**
 
-Every `register_runtime_view` call in the test uses aggregate init `{name, cb, opaque}`. Add `db_kind` as the first field:
+Every `register_runtime_view` call in the test uses aggregate init `{name, cb, opaque}`. Append `db_kind` at the tail:
 
 ```cpp
-{ProxySQL_PluginDBKind::admin_db, nullptr, &noop_cb, nullptr}
+{nullptr, &noop_cb, nullptr, ProxySQL_PluginDBKind::admin_db}
 ```
 
 Specifically, update these lines:
 
 Line 53:
 ```cpp
-ok(mgr.register_runtime_view({ProxySQL_PluginDBKind::admin_db, nullptr, &noop_cb, nullptr}) == false,
+ok(mgr.register_runtime_view({nullptr, &noop_cb, nullptr, ProxySQL_PluginDBKind::admin_db}) == false,
 ```
 
 Line 55:
 ```cpp
-ok(mgr.register_runtime_view({ProxySQL_PluginDBKind::admin_db, "", &noop_cb, nullptr}) == false,
+ok(mgr.register_runtime_view({"", &noop_cb, nullptr, ProxySQL_PluginDBKind::admin_db}) == false,
 ```
 
 Line 57:
 ```cpp
-ok(mgr.register_runtime_view({ProxySQL_PluginDBKind::admin_db, "runtime_x", nullptr, nullptr}) == false,
+ok(mgr.register_runtime_view({"runtime_x", nullptr, nullptr, ProxySQL_PluginDBKind::admin_db}) == false,
 ```
 
 Line 60:
 ```cpp
-ok(mgr.register_runtime_view({ProxySQL_PluginDBKind::admin_db, "runtime_x", &noop_cb, nullptr}) == true,
+ok(mgr.register_runtime_view({"runtime_x", &noop_cb, nullptr, ProxySQL_PluginDBKind::admin_db}) == true,
 ```
 
 Line 62:
 ```cpp
-ok(mgr.register_runtime_view({ProxySQL_PluginDBKind::admin_db, "runtime_x", &noop_cb, nullptr}) == false,
+ok(mgr.register_runtime_view({"runtime_x", &noop_cb, nullptr, ProxySQL_PluginDBKind::admin_db}) == false,
 ```
 
 Line 64:

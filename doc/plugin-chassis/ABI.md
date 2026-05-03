@@ -92,7 +92,7 @@ The services struct is the **same shape** in every phase, but some function poin
 | `get_statsdb` | **returns nullptr** | live | live | live |
 | `register_query_hook` | **returns false (warn)** | live | n/a | n/a |
 | `get_prometheus_registry` | live | live | live | live |
-| `register_runtime_view` (ABI 4) | live | live | n/a | n/a |
+| `register_runtime_view` (ABI 3+) | live | live | n/a | n/a |
 
 Reasons:
 

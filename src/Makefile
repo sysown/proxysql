@@ -203,6 +203,8 @@ $(ODIR)/%.o: %.cpp
 $(EXECUTABLE): $(ODIR) $(OBJ) $(LIBPROXYSQLAR)
 ifeq ($(PROXYSQLCLICKHOUSE),1)
 	$(CXX) -o $@ $(OBJ) $(CLANGFIX) -Wl,--whole-archive $(PROXYSQL_LDIR)/libproxysql.a -Wl,--no-whole-archive $(filter-out $(PROXYSQL_LDIR)/libproxysql.a,$(LIBPROXYSQLAR)) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(LZ4_LDIR)/liblz4.a $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)
+else ifeq ($(UNAME_S),Darwin)
+	$(CXX) -o $@ $(OBJ) $(CLANGFIX) -force_load $(PROXYSQL_LDIR)/libproxysql.a $(filter-out $(PROXYSQL_LDIR)/libproxysql.a,$(LIBPROXYSQLAR)) $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)
 else
 	$(CXX) -o $@ $(OBJ) $(CLANGFIX) -Wl,--whole-archive $(PROXYSQL_LDIR)/libproxysql.a -Wl,--no-whole-archive $(filter-out $(PROXYSQL_LDIR)/libproxysql.a,$(LIBPROXYSQLAR)) $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)
 endif

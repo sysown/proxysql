@@ -462,6 +462,7 @@ AnomalyResult Anomaly_Detector::check_embedding_similarity(const std::string& qu
 		"ORDER BY distance "
 		"LIMIT 5",
 		embedding_json.c_str(), embedding_json.c_str(), distance_threshold);
+	if (search_buf == nullptr) return result;
 	std::string search(search_buf);
 	sqlite3_free(search_buf);
 
