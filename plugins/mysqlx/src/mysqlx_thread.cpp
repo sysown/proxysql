@@ -114,6 +114,19 @@ void Mysqlx_Thread::run() {
 		if (rc > 0) process_ready_fds(nfds);
 		process_all_sessions();
 	}
+
+	// Shutdown drain. The destructor will close fds and free sessions
+	// shortly after we return. Before that, give every still-connected
+	// client a clean X-Protocol Error frame (code 1053, "Server is
+	// shutting down") plus a TLS close_notify so peers see a graceful
+	// teardown rather than an unannounced TCP RST or a torn TLS record.
+	// Best-effort: a single non-blocking write pass per session and a
+	// quiet-shutdown SSL_shutdown, since process exit is imminent and
+	// we cannot block on unresponsive peers.
+	std::lock_guard<std::mutex> lock(sessions_mutex_);
+	for (auto* sess : sessions_) {
+		if (sess) sess->shutdown_notify_client();
+	}
 }
 
 void Mysqlx_Thread::rebuild_poll_set() {
@@ -198,6 +211,25 @@ void Mysqlx_Thread::process_ready_fds(int nfds) {
 }
 
 void Mysqlx_Thread::accept_new_connection(int listener_fd) {
+	// Resolve the listener's logical route name from the parallel
+	// vectors. The lookup is unconditional (cheap: tens of entries
+	// per thread max) so the session can pick up per-route policies
+	// such as `tls_mode='passthrough'` before any X-Protocol message
+	// arrives. An empty result is fine — sessions with no listener
+	// route fall back to the deployment-wide defaults.
+	std::string listener_route;
+	{
+		std::lock_guard<std::mutex> lock(listener_mutex_);
+		for (size_t i = 0; i < listener_fds_.size(); ++i) {
+			if (listener_fds_[i] == listener_fd) {
+				if (i < listener_route_names_.size()) {
+					listener_route = listener_route_names_[i];
+				}
+				break;
+			}
+		}
+	}
+
 	while (true) {
 		struct sockaddr_in addr;
 		socklen_t addrlen = sizeof(addr);
@@ -220,7 +252,7 @@ void Mysqlx_Thread::accept_new_connection(int listener_fd) {
 		setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 
 		MysqlxSession* sess = new MysqlxSession();
-		sess->init(client_fd, this);
+		sess->init(client_fd, this, listener_route);
 		sess->to_process = true;
 
 		const MysqlxConfigStore* store = config_store_;
@@ -247,6 +279,14 @@ void Mysqlx_Thread::process_all_sessions() {
 		// on either data stream, the session asked to be re-run, or there are
 		// already-buffered frames to dispatch. Forcing to_process=true on every
 		// tick burned the CPU at large session counts.
+		//
+		// Clear the per-stream revents bitmask AFTER handler() consumes it.
+		// process_ready_fds() above writes set_revents(revents) on whichever
+		// streams poll() flagged this iteration, but nothing else clears the
+		// field — without the post-handler reset here, a session that received
+		// one POLLIN event would re-enter handler() every poll cycle (each
+		// time hitting EAGAIN) until the stream is closed, defeating the
+		// "real work only" gating this whole block was added to provide.
 		short c_rev = sess->client_ds().get_revents();
 		short s_rev = sess->server_ds().get_revents();
 		bool fd_ready = (c_rev != 0) || (s_rev != 0);
@@ -255,6 +295,10 @@ void Mysqlx_Thread::process_all_sessions() {
 		if (fd_ready || buffered || sess->to_process) {
 			sess->to_process = true;
 			rc = sess->handler();
+			// Consume the readiness flags so the next iteration only fires
+			// on a fresh poll event (or buffered work / explicit to_process).
+			sess->client_ds().set_revents(0);
+			sess->server_ds().set_revents(0);
 		}
 
 		bool timeout = false;
@@ -299,6 +343,11 @@ int Mysqlx_Thread::add_listener(const char* bind_addr, int port, const char* rou
 		close(fd);
 		return -1;
 	}
+	int flags = fcntl(fd, F_GETFL, 0);
+	if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+		close(fd);
+		return -1;
+	}
 
 	{
 		std::lock_guard<std::mutex> lock(listener_mutex_);
@@ -311,6 +360,19 @@ int Mysqlx_Thread::add_listener(const char* bind_addr, int port, const char* rou
 	return 0;
 }
 
+// Removes the listener fd associated with `route_name`. Sessions that
+// were already accepted on this listener and are mid-flight are NOT
+// disturbed — they continue against their existing target_hostgroup_ /
+// target_address_ / target_port_ until they finish their current
+// transaction or hit idle timeout. This matches the surrounding
+// MySQL-protocol behaviour (DROP TABLE doesn't cancel in-flight
+// queries; an ALTER doesn't kick off open prepared statements). The
+// route name is consulted at backend-target resolution time which only
+// happens during auth, so an authenticated session does not depend on
+// the route name still being live. If a future use case requires
+// active disconnection of in-flight sessions on route removal, walk
+// sessions_ here, match identity_->default_route, and call
+// shutdown_notify_client() on each.
 bool Mysqlx_Thread::remove_listener_for_route(const char* route_name) {
 	if (route_name == nullptr) return false;
 	std::lock_guard<std::mutex> lock(listener_mutex_);
@@ -357,14 +419,89 @@ size_t Mysqlx_Thread::get_session_count() const {
 	return sessions_.size();
 }
 
+namespace {
+
+const char* session_status_to_string(MysqlxSession::Status s) {
+	switch (s) {
+		case MysqlxSession::NONE:                  return "NONE";
+		case MysqlxSession::CONNECTING_CLIENT:     return "CONNECTING_CLIENT";
+		case MysqlxSession::X_CAPABILITIES_GET:    return "X_CAPABILITIES_GET";
+		case MysqlxSession::X_CAPABILITIES_SET:    return "X_CAPABILITIES_SET";
+		case MysqlxSession::X_AUTH_START:          return "X_AUTH_START";
+		case MysqlxSession::X_AUTH_CHALLENGE_SENT: return "X_AUTH_CHALLENGE_SENT";
+		case MysqlxSession::X_AUTH_OK_SENT:        return "X_AUTH_OK_SENT";
+		case MysqlxSession::X_AUTH_FAILED:         return "X_AUTH_FAILED";
+		case MysqlxSession::WAITING_CLIENT_XMSG:   return "WAITING_CLIENT_XMSG";
+		case MysqlxSession::PROCESSING_X_QUERY:    return "PROCESSING_X_QUERY";
+		case MysqlxSession::CONNECTING_SERVER:     return "CONNECTING_SERVER";
+		case MysqlxSession::WAITING_SERVER_XMSG:   return "WAITING_SERVER_XMSG";
+		case MysqlxSession::X_TLS_ACCEPT_INIT:     return "X_TLS_ACCEPT_INIT";
+		case MysqlxSession::X_TLS_ACCEPT_CONT:     return "X_TLS_ACCEPT_CONT";
+		case MysqlxSession::X_TLS_ACCEPT_DONE:     return "X_TLS_ACCEPT_DONE";
+		case MysqlxSession::X_TLS_CONNECT_INIT:    return "X_TLS_CONNECT_INIT";
+		case MysqlxSession::X_TLS_CONNECT_CONT:    return "X_TLS_CONNECT_CONT";
+		case MysqlxSession::X_TLS_CONNECT_DONE:    return "X_TLS_CONNECT_DONE";
+		case MysqlxSession::X_SESSION_CLOSING:     return "X_SESSION_CLOSING";
+		case MysqlxSession::X_SESSION_CLOSED:      return "X_SESSION_CLOSED";
+		case MysqlxSession::X_SESSION_RESET_WAITING: return "X_SESSION_RESET_WAITING";
+		case MysqlxSession::X_PASSTHROUGH_FORWARD: return "X_PASSTHROUGH_FORWARD";
+	}
+	return "UNKNOWN";
+}
+
+const char* backend_auth_mode_to_string(MysqlxBackendAuthMode m) {
+	switch (m) {
+		case MysqlxBackendAuthMode::mapped:          return "mapped";
+		case MysqlxBackendAuthMode::service_account: return "service_account";
+		case MysqlxBackendAuthMode::pass_through:    return "pass_through";
+	}
+	return "unknown";
+}
+
+} // namespace
+
+void Mysqlx_Thread::snapshot_sessions_for_stats(
+		std::vector<MysqlxSessionSnapshot>& out, uint64_t now_ms) const {
+	std::lock_guard<std::mutex> lock(sessions_mutex_);
+	out.reserve(out.size() + sessions_.size());
+	for (const MysqlxSession* s : sessions_) {
+		if (s == nullptr) continue;
+		MysqlxSessionSnapshot row;
+		row.username         = s->username_for_stats();
+		row.route            = s->route_name_for_stats();
+		row.worker_id        = thread_index_;
+		row.backend_host     = s->target_address_for_test();
+		row.backend_port     = s->target_port_for_test();
+		auto id              = s->identity_for_stats();
+		row.auth_mode        = id ? backend_auth_mode_to_string(id->backend_auth_mode) : "";
+		row.connection_state = session_status_to_string(s->get_status());
+		// bytes_in / bytes_out: aggregated per-route in P0; per-session
+		// counters land in P1.
+		row.bytes_in         = 0;
+		row.bytes_out        = 0;
+		uint64_t st          = s->start_time_for_stats();
+		row.session_age_ms   = (st > 0 && now_ms >= st) ? (now_ms - st) : 0;
+		out.push_back(std::move(row));
+	}
+}
+
 MysqlxConnection* Mysqlx_Thread::get_connection_from_cache(
-		int hostgroup, const char* user, const char* schema) {
+		int hostgroup, const char* user, const char* schema, bool tls_active) {
 	std::lock_guard<std::mutex> lock(conn_cache_mutex_);
 	for (auto it = conn_cache_.rbegin(); it != conn_cache_.rend(); ++it) {
 		auto* conn = *it;
+		// (hostgroup, user, schema, tls_active) is the cache key. The
+		// tls_active dimension was added with mysqlx_tls_backend_mode
+		// (issue #5693): an AsClient/required encrypted backend must
+		// not be handed to a plaintext-frontend session, and a
+		// plaintext-pooled backend must not be handed to a TLS
+		// session — either would land the next dispatch on a socket
+		// in the wrong encryption posture and corrupt the wire
+		// protocol.
 		if (conn->get_hostgroup() == hostgroup &&
 		    strcmp(conn->get_user(), user) == 0 &&
 		    strcmp(conn->get_schema(), schema) == 0 &&
+		    conn->is_tls_active() == tls_active &&
 		    conn->is_reusable()) {
 			conn->set_state(MysqlxConnection::IN_USE);
 			conn_cache_.erase(std::next(it).base());
@@ -375,6 +512,22 @@ MysqlxConnection* Mysqlx_Thread::get_connection_from_cache(
 }
 
 void Mysqlx_Thread::return_connection_to_cache(MysqlxConnection* conn) {
+	// Decide reuse BEFORE reset(). reset() unconditionally clears
+	// in_transaction_ / has_prepared_stmt_ / sets reusable_=true
+	// (mysqlx_connection.cpp::reset). If we called reset first and
+	// THEN consulted is_reusable(), every connection — including ones
+	// in mid-transaction, ones holding prepared statements, ones the
+	// session explicitly marked non-reusable on a backend EOF or read
+	// error — would come back as "reusable" and re-enter the cache.
+	//
+	// is_reusable() also fails if the underlying socket is dead (EOF
+	// or read error path in mysqlx_session.cpp::~884 sets reusable_=
+	// false before calling return_backend_to_pool); preserving that
+	// signal here keeps dead fds out of the cache.
+	if (!conn->is_reusable()) {
+		delete conn;
+		return;
+	}
 	conn->reset();
 	std::lock_guard<std::mutex> lock(conn_cache_mutex_);
 	if (conn_cache_.size() >= max_cached_) {

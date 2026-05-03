@@ -376,6 +376,7 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"max_transaction_idle_time",
 	(char*)"max_transaction_time",
 	(char*)"multiplexing",
+	(char*)"preserve_client_on_broken_backend_in_tx",
 	(char*)"log_unhealthy_connections",
 	(char*)"enforce_autocommit_on_reads",
 	(char*)"autocommit_false_not_reusable",
@@ -1039,11 +1040,10 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.shun_on_failures = 5;
 	variables.shun_recovery_time_sec = 10;
 #ifdef PROXYSQLFFTO
-#ifdef PROXYSQLGENAI
-	variables.ffto_enabled = true;
-#else
+	// Step 7 of the GenAI plugin carve-out: PROXYSQLGENAI used to
+	// flip this default to true.  With the macro gone, ffto_enabled
+	// defaults to false; operators can opt in via admin SQL.
 	variables.ffto_enabled = false;
-#endif
 	variables.ffto_max_buffer_size = 1048576;
 #endif
 	variables.unshun_algorithm = 0;
@@ -1173,6 +1173,7 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.have_ssl = true; // changed in 2.6.0 , was false by default for performance reason
 	variables.commands_stats = true;
 	variables.multiplexing = true;
+	variables.preserve_client_on_broken_backend_in_tx = true;
 	variables.log_unhealthy_connections = true;
 	variables.enforce_autocommit_on_reads = false;
 	variables.autocommit_false_not_reusable = false;
@@ -2198,6 +2199,7 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["monitor_wait_timeout"] = make_tuple(&variables.monitor_wait_timeout, false);
 		VariablesPointers_bool["monitor_writer_is_also_reader"] = make_tuple(&variables.monitor_writer_is_also_reader, false);
 		VariablesPointers_bool["multiplexing"] = make_tuple(&variables.multiplexing, false);
+		VariablesPointers_bool["preserve_client_on_broken_backend_in_tx"] = make_tuple(&variables.preserve_client_on_broken_backend_in_tx, false);
 		VariablesPointers_bool["query_cache_stores_empty_result"] = make_tuple(&variables.query_cache_stores_empty_result, false);
 		VariablesPointers_bool["query_digests"] = make_tuple(&variables.query_digests, false);
 		VariablesPointers_bool["query_digests_lowercase"] = make_tuple(&variables.query_digests_lowercase, false);
@@ -3965,6 +3967,7 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___connect_retries_on_failure = GloPTH->get_variable_int((char*)"connect_retries_on_failure");
 	pgsql_thread___connect_retries_delay = GloPTH->get_variable_int((char*)"connect_retries_delay");
 	pgsql_thread___multiplexing = (bool)GloPTH->get_variable_int((char*)"multiplexing");
+	pgsql_thread___preserve_client_on_broken_backend_in_tx = (bool)GloPTH->get_variable_int((char*)"preserve_client_on_broken_backend_in_tx");
 	pgsql_thread___connection_delay_multiplex_ms = GloPTH->get_variable_int((char*)"connection_delay_multiplex_ms");
 	pgsql_thread___connection_max_age_ms = GloPTH->get_variable_int((char*)"connection_max_age_ms");
 	pgsql_thread___connect_timeout_client = GloPTH->get_variable_int((char*)"connect_timeout_client");
@@ -4241,6 +4244,9 @@ PgSQL_Thread::PgSQL_Thread() {
 	servers_table_version_current = 0;
 
 	status_variables.active_transactions = 0;
+	status_variables.tx_poisoned_total = 0;
+	status_variables.tx_poisoned_recovered_total = 0;
+	status_variables.tx_poisoned_rejected_statements_total = 0;
 
 	for (unsigned int i = 0; i < PG_st_var_END; i++) {
 		status_variables.stvar[i] = 0;
@@ -4414,6 +4420,27 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	{	// Active Transactions
 		pta[0] = (char*)"Active_Transactions";
 		sprintf(buf, "%u", get_active_transations());
+		pta[1] = buf;
+		result->add_row(pta);
+	}
+	{	// Transactions poisoned by a mid-tx backend death. See
+		// pgsql-preserve_client_on_broken_backend_in_tx.
+		pta[0] = (char*)"pgsql_tx_poisoned_total";
+		snprintf(buf, sizeof(buf), "%llu", get_tx_poisoned_total());
+		pta[1] = buf;
+		result->add_row(pta);
+	}
+	{	// Poisoned sessions recovered via client ROLLBACK / COMMIT / ABORT.
+		pta[0] = (char*)"pgsql_tx_poisoned_recovered_total";
+		snprintf(buf, sizeof(buf), "%llu", get_tx_poisoned_recovered_total());
+		pta[1] = buf;
+		result->add_row(pta);
+	}
+	{	// Client statements rejected with ERROR 25P02 while the session was
+		// in the poisoned state (includes extended-query P/B/D/C/E/S while
+		// poisoned, and any non-recovery simple-query statement).
+		pta[0] = (char*)"pgsql_tx_poisoned_rejected_statements_total";
+		snprintf(buf, sizeof(buf), "%llu", get_tx_poisoned_rejected_statements_total());
 		pta[1] = buf;
 		result->add_row(pta);
 	}
@@ -5549,6 +5576,28 @@ unsigned int PgSQL_Threads_Handler::get_active_transations() {
 
 	return q;
 }
+
+// Tx-poisoned counter aggregators. These mirror get_active_transations() but
+// sum unsigned long long counters. Used when rendering stats_pgsql_global.
+#define DEFINE_PG_TXPOISON_GETTER(_name)                                          \
+	unsigned long long PgSQL_Threads_Handler::get_##_name() {                     \
+		if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) \
+		    || this->shutdown_) return 0;                                         \
+		unsigned long long total = 0;                                             \
+		for (unsigned int i = 0; i < num_threads; i++) {                          \
+			if (!pgsql_threads) break;                                            \
+			PgSQL_Thread* thr = (PgSQL_Thread*)pgsql_threads[i].worker;           \
+			if (thr)                                                              \
+				total += __sync_fetch_and_add(&thr->status_variables._name, 0);   \
+		}                                                                         \
+		return total;                                                             \
+	}
+
+DEFINE_PG_TXPOISON_GETTER(tx_poisoned_total)
+DEFINE_PG_TXPOISON_GETTER(tx_poisoned_recovered_total)
+DEFINE_PG_TXPOISON_GETTER(tx_poisoned_rejected_statements_total)
+
+#undef DEFINE_PG_TXPOISON_GETTER
 
 #ifdef IDLE_THREADS
 unsigned int PgSQL_Threads_Handler::get_non_idle_client_connections() {

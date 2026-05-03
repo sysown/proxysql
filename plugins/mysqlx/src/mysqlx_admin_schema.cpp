@@ -1,6 +1,7 @@
 #include "mysqlx_admin_schema.h"
 
 #include "mysqlx_plugin.h"
+#include "mysqlx_stats.h"
 #include "sqlite3db.h"
 
 #include <initializer_list>
@@ -49,6 +50,12 @@ const char kRuntimeMysqlxUsersTableDef[] =
 	" comment VARCHAR NOT NULL DEFAULT ''"
 	" )";
 
+// `tls_mode` was added with issue #5692 (TLS passthrough). Values are
+// validated case-insensitively at LOAD time by mysqlx_route_tls_mode_
+// from_string(); the CHECK constraint here mirrors the canonical lower-
+// case spellings so a typo at INSERT time is caught early. Default
+// 'inherit' preserves prior behaviour: a route without an explicit
+// override defers to the deployment-wide `mysqlx_tls_mode`.
 const char kMysqlxRoutesTableDef[] =
 	"CREATE TABLE mysqlx_routes ("
 	" name VARCHAR NOT NULL PRIMARY KEY,"
@@ -58,7 +65,8 @@ const char kMysqlxRoutesTableDef[] =
 	" strategy VARCHAR NOT NULL DEFAULT 'first_available',"
 	" active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1,"
 	" attributes VARCHAR CHECK (JSON_VALID(attributes) OR attributes = '') NOT NULL DEFAULT '',"
-	" comment VARCHAR NOT NULL DEFAULT ''"
+	" comment VARCHAR NOT NULL DEFAULT '',"
+	" tls_mode VARCHAR CHECK (tls_mode IN ('inherit','disabled','preferred','required','passthrough')) NOT NULL DEFAULT 'inherit'"
 	" )";
 
 const char kRuntimeMysqlxRoutesTableDef[] =
@@ -70,7 +78,8 @@ const char kRuntimeMysqlxRoutesTableDef[] =
 	" strategy VARCHAR NOT NULL DEFAULT 'first_available',"
 	" active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1,"
 	" attributes VARCHAR CHECK (JSON_VALID(attributes) OR attributes = '') NOT NULL DEFAULT '',"
-	" comment VARCHAR NOT NULL DEFAULT ''"
+	" comment VARCHAR NOT NULL DEFAULT '',"
+	" tls_mode VARCHAR CHECK (tls_mode IN ('inherit','disabled','preferred','required','passthrough')) NOT NULL DEFAULT 'inherit'"
 	" )";
 
 const char kMysqlxBackendEndpointsTableDef[] =
@@ -111,71 +120,33 @@ ProxySQL_PluginCommandResult command_failure(const char* message) {
 	return {1, 0, message != nullptr ? message : "mysqlx admin command failed"};
 }
 
-bool copy_table(SQLite3DB& db, const char* source_table, const char* runtime_table) {
-	if (!db.execute("BEGIN")) {
-		return false;
-	}
-
-	std::string delete_sql = "DELETE FROM ";
-	delete_sql += runtime_table;
-	if (!db.execute(delete_sql.c_str())) {
-		db.execute("ROLLBACK");
-		return false;
-	}
-
-	std::string insert_sql = "INSERT INTO ";
-	insert_sql += runtime_table;
-	insert_sql += " SELECT * FROM ";
-	insert_sql += source_table;
-	if (!db.execute(insert_sql.c_str())) {
-		db.execute("ROLLBACK");
-		return false;
-	}
-
-	if (!db.execute("COMMIT")) {
-		db.execute("ROLLBACK");
-		return false;
-	}
-
-	return true;
-}
-
-static void reload_config_store(SQLite3DB& admindb) {
-	std::string err;
-	if (!mysqlx_context().config_store->load_from_runtime(admindb, err)) {
-		if (mysqlx_context().services && mysqlx_context().services->log_message) {
-			mysqlx_context().services->log_message(3, err.c_str());
-		}
-	}
-}
+// LOAD <X> TO RUNTIME callbacks: read the editable mysqlx_<X> table
+// directly into MysqlxConfigStore via the typed install API. Never
+// touch runtime_mysqlx_<X> on this path -- that table is an admin-side
+// view of module state, projected on demand by the registered
+// runtime-view refresh callbacks below.
 
 ProxySQL_PluginCommandResult load_users_to_runtime(const ProxySQL_PluginCommandContext& ctx, const char*) {
 	if (ctx.admindb == nullptr) {
 		return command_failure("mysqlx users load requires admin db");
 	}
-	if (!copy_table(*ctx.admindb, kMysqlxUsersTable, kRuntimeMysqlxUsersTable)) {
-		return command_failure("failed to copy mysqlx users to runtime");
+	std::string err;
+	if (!mysqlx_context().config_store->install_users_from_admin(*ctx.admindb, err)) {
+		return command_failure(err.empty() ? "install_users_from_admin failed" : err.c_str());
 	}
-
-	ProxySQL_PluginCommandResult result {0, 0, ""};
-	result.rows_affected = ctx.admindb->return_one_int("SELECT COUNT(*) FROM runtime_mysqlx_users");
-	result.message = "mysqlx users loaded to runtime";
-	reload_config_store(*ctx.admindb);
-	return result;
+	uint64_t row_count = ctx.admindb->return_one_int("SELECT COUNT(*) FROM mysqlx_users WHERE active=1");
+	return {0, row_count, "mysqlx users loaded to runtime"};
 }
 
 ProxySQL_PluginCommandResult load_routes_to_runtime(const ProxySQL_PluginCommandContext& ctx, const char*) {
 	if (ctx.admindb == nullptr) {
 		return command_failure("mysqlx routes load requires admin db");
 	}
-	if (!copy_table(*ctx.admindb, kMysqlxRoutesTable, kRuntimeMysqlxRoutesTable)) {
-		return command_failure("failed to copy mysqlx routes to runtime");
+	std::string err;
+	if (!mysqlx_context().config_store->install_routes_from_admin(*ctx.admindb, err)) {
+		return command_failure(err.empty() ? "install_routes_from_admin failed" : err.c_str());
 	}
-
-	ProxySQL_PluginCommandResult result {0, 0, ""};
-	result.rows_affected = ctx.admindb->return_one_int("SELECT COUNT(*) FROM runtime_mysqlx_routes");
-	result.message = "mysqlx routes loaded to runtime";
-	reload_config_store(*ctx.admindb);
+	uint64_t row_count = ctx.admindb->return_one_int("SELECT COUNT(*) FROM mysqlx_routes WHERE active=1");
 	// Propagate the new desired route set to the listener topology: bind new
 	// routes, close listeners for removed or deactivated routes. The symbol
 	// is weak so unit tests that don't link plugin.cpp can resolve cleanly;
@@ -183,93 +154,123 @@ ProxySQL_PluginCommandResult load_routes_to_runtime(const ProxySQL_PluginCommand
 	if (mysqlx_reconcile_listeners) {
 		mysqlx_reconcile_listeners(*ctx.admindb);
 	}
-	return result;
+	return {0, row_count, "mysqlx routes loaded to runtime"};
 }
 
 ProxySQL_PluginCommandResult load_backend_endpoints_to_runtime(const ProxySQL_PluginCommandContext& ctx, const char*) {
 	if (ctx.admindb == nullptr) {
 		return command_failure("mysqlx backend endpoints load requires admin db");
 	}
-	if (!copy_table(*ctx.admindb, kMysqlxBackendEndpointsTable, kRuntimeMysqlxBackendEndpointsTable)) {
-		return command_failure("failed to copy mysqlx backend endpoints to runtime");
+	std::string err;
+	if (!mysqlx_context().config_store->install_endpoints_from_admin(*ctx.admindb, err)) {
+		return command_failure(err.empty() ? "install_endpoints_from_admin failed" : err.c_str());
 	}
-
-	ProxySQL_PluginCommandResult result {0, 0, ""};
-	result.rows_affected = ctx.admindb->return_one_int("SELECT COUNT(*) FROM runtime_mysqlx_backend_endpoints");
-	result.message = "mysqlx backend endpoints loaded to runtime";
-	reload_config_store(*ctx.admindb);
-	return result;
-}
-
-ProxySQL_PluginCommandResult save_users_from_runtime(const ProxySQL_PluginCommandContext& ctx, const char*) {
-	if (ctx.admindb == nullptr) {
-		return command_failure("mysqlx users save requires admin db");
-	}
-	if (!copy_table(*ctx.admindb, kRuntimeMysqlxUsersTable, kMysqlxUsersTable)) {
-		return command_failure("failed to copy mysqlx users from runtime");
-	}
-
-	ProxySQL_PluginCommandResult result {0, 0, ""};
-	result.rows_affected = ctx.admindb->return_one_int("SELECT COUNT(*) FROM mysqlx_users");
-	result.message = "mysqlx users saved from runtime";
-	return result;
-}
-
-ProxySQL_PluginCommandResult save_routes_from_runtime(const ProxySQL_PluginCommandContext& ctx, const char*) {
-	if (ctx.admindb == nullptr) {
-		return command_failure("mysqlx routes save requires admin db");
-	}
-	if (!copy_table(*ctx.admindb, kRuntimeMysqlxRoutesTable, kMysqlxRoutesTable)) {
-		return command_failure("failed to copy mysqlx routes from runtime");
-	}
-
-	ProxySQL_PluginCommandResult result {0, 0, ""};
-	result.rows_affected = ctx.admindb->return_one_int("SELECT COUNT(*) FROM mysqlx_routes");
-	result.message = "mysqlx routes saved from runtime";
-	return result;
-}
-
-ProxySQL_PluginCommandResult save_backend_endpoints_from_runtime(const ProxySQL_PluginCommandContext& ctx, const char*) {
-	if (ctx.admindb == nullptr) {
-		return command_failure("mysqlx backend endpoints save requires admin db");
-	}
-	if (!copy_table(*ctx.admindb, kRuntimeMysqlxBackendEndpointsTable, kMysqlxBackendEndpointsTable)) {
-		return command_failure("failed to copy mysqlx backend endpoints from runtime");
-	}
-
-	ProxySQL_PluginCommandResult result {0, 0, ""};
-	result.rows_affected = ctx.admindb->return_one_int("SELECT COUNT(*) FROM mysqlx_backend_endpoints");
-	result.message = "mysqlx backend endpoints saved from runtime";
-	return result;
+	uint64_t row_count = ctx.admindb->return_one_int("SELECT COUNT(*) FROM mysqlx_backend_endpoints");
+	return {0, row_count, "mysqlx backend endpoints loaded to runtime"};
 }
 
 ProxySQL_PluginCommandResult load_variables_to_runtime(const ProxySQL_PluginCommandContext& ctx, const char*) {
 	if (ctx.admindb == nullptr) {
 		return command_failure("mysqlx variables load requires admin db");
 	}
-	if (!copy_table(*ctx.admindb, kMysqlxVariablesTable, kRuntimeMysqlxVariablesTable)) {
-		return command_failure("failed to copy mysqlx variables to runtime");
+	std::string err;
+	if (!mysqlx_context().config_store->install_variables_from_admin(*ctx.admindb, err)) {
+		return command_failure(err.empty() ? "install_variables_from_admin failed" : err.c_str());
 	}
+	uint64_t row_count = ctx.admindb->return_one_int("SELECT COUNT(*) FROM mysqlx_variables");
+	return {0, row_count, "mysqlx variables loaded to runtime"};
+}
 
-	ProxySQL_PluginCommandResult result {0, 0, ""};
-	result.rows_affected = ctx.admindb->return_one_int("SELECT COUNT(*) FROM runtime_mysqlx_variables");
-	result.message = "mysqlx variables loaded to runtime";
-	reload_config_store(*ctx.admindb);
-	return result;
+// SAVE <X> [FROM RUNTIME] TO MEMORY callbacks: dump MysqlxConfigStore
+// directly into the editable mysqlx_<X> table. Never read
+// runtime_mysqlx_<X> on this path -- the source of truth is the
+// in-memory module state, not a SQL view.
+
+ProxySQL_PluginCommandResult save_users_from_runtime(const ProxySQL_PluginCommandContext& ctx, const char*) {
+	if (ctx.admindb == nullptr) {
+		return command_failure("mysqlx users save requires admin db");
+	}
+	if (!mysqlx_context().config_store->save_users_to_admin_table(*ctx.admindb)) {
+		return command_failure("failed to save mysqlx users to memory");
+	}
+	uint64_t row_count = ctx.admindb->return_one_int("SELECT COUNT(*) FROM mysqlx_users WHERE active=1");
+	return {0, row_count, "mysqlx users saved from runtime"};
+}
+
+ProxySQL_PluginCommandResult save_routes_from_runtime(const ProxySQL_PluginCommandContext& ctx, const char*) {
+	if (ctx.admindb == nullptr) {
+		return command_failure("mysqlx routes save requires admin db");
+	}
+	if (!mysqlx_context().config_store->save_routes_to_admin_table(*ctx.admindb)) {
+		return command_failure("failed to save mysqlx routes to memory");
+	}
+	uint64_t row_count = ctx.admindb->return_one_int("SELECT COUNT(*) FROM mysqlx_routes WHERE active=1");
+	return {0, row_count, "mysqlx routes saved from runtime"};
+}
+
+ProxySQL_PluginCommandResult save_backend_endpoints_from_runtime(const ProxySQL_PluginCommandContext& ctx, const char*) {
+	if (ctx.admindb == nullptr) {
+		return command_failure("mysqlx backend endpoints save requires admin db");
+	}
+	if (!mysqlx_context().config_store->save_endpoints_to_admin_table(*ctx.admindb)) {
+		return command_failure("failed to save mysqlx backend endpoints to memory");
+	}
+	uint64_t row_count = ctx.admindb->return_one_int("SELECT COUNT(*) FROM mysqlx_backend_endpoints");
+	return {0, row_count, "mysqlx backend endpoints saved from runtime"};
 }
 
 ProxySQL_PluginCommandResult save_variables_from_runtime(const ProxySQL_PluginCommandContext& ctx, const char*) {
 	if (ctx.admindb == nullptr) {
 		return command_failure("mysqlx variables save requires admin db");
 	}
-	if (!copy_table(*ctx.admindb, kRuntimeMysqlxVariablesTable, kMysqlxVariablesTable)) {
-		return command_failure("failed to copy mysqlx variables from runtime");
+	if (!mysqlx_context().config_store->save_variables_to_admin_table(*ctx.admindb)) {
+		return command_failure("failed to save mysqlx variables to memory");
 	}
+	uint64_t row_count = ctx.admindb->return_one_int("SELECT COUNT(*) FROM mysqlx_variables");
+	return {0, row_count, "mysqlx variables saved from runtime"};
+}
 
-	ProxySQL_PluginCommandResult result {0, 0, ""};
-	result.rows_affected = ctx.admindb->return_one_int("SELECT COUNT(*) FROM mysqlx_variables");
-	result.message = "mysqlx variables saved from runtime";
-	return result;
+// Runtime-view refresh callbacks invoked by the chassis before any
+// admin SELECT against the projected runtime_mysqlx_<X> tables.
+// `opaque` is unused here -- the global mysqlx_context() singleton
+// owns the config store.
+void refresh_users_runtime_view(SQLite3DB* admindb, void*) {
+	if (admindb == nullptr) return;
+	if (mysqlx_context().config_store == nullptr) return;
+	mysqlx_context().config_store->project_users_to_runtime_view(*admindb);
+}
+void refresh_routes_runtime_view(SQLite3DB* admindb, void*) {
+	if (admindb == nullptr) return;
+	if (mysqlx_context().config_store == nullptr) return;
+	mysqlx_context().config_store->project_routes_to_runtime_view(*admindb);
+}
+void refresh_endpoints_runtime_view(SQLite3DB* admindb, void*) {
+	if (admindb == nullptr) return;
+	if (mysqlx_context().config_store == nullptr) return;
+	mysqlx_context().config_store->project_endpoints_to_runtime_view(*admindb);
+}
+void refresh_variables_runtime_view(SQLite3DB* admindb, void*) {
+	if (admindb == nullptr) return;
+	if (mysqlx_context().config_store == nullptr) return;
+	mysqlx_context().config_store->project_variables_to_runtime_view(*admindb);
+}
+
+// Chassis passes statsdb directly via db_kind=stats_db.
+void refresh_stats_routes_view(SQLite3DB* db, void*) {
+	if (db == nullptr) return;
+	mysqlx_stats().flush_to_sqlite(*db);
+}
+
+// Same shape, but for stats_mysqlx_processlist: the projector walks
+// every Mysqlx_Thread and emits one row per active session. Defined in
+// mysqlx_plugin.cpp; declared __attribute__((weak)) so the
+// mysqlx_admin_schema_unit-t and friends (which compile this TU but
+// don't link mysqlx_plugin.cpp) still link successfully — the null check
+// here is the runtime safety net for the test build.
+void refresh_stats_processlist_view(SQLite3DB* db, void*) {
+	if (db == nullptr) return;
+	if (&mysqlx_populate_stats_processlist == nullptr) return;
+	mysqlx_populate_stats_processlist(*db);
 }
 
 bool disk_to_memory(SQLite3DB& admindb, const char* table_name) {
@@ -476,6 +477,20 @@ bool mysqlx_register_admin_schema(ProxySQL_PluginServices& services) {
 
 	register_table_pair(services, kMysqlxVariablesTable, kMysqlxVariablesTableDef);
 	register_runtime_table(services, kRuntimeMysqlxVariablesTable, kRuntimeMysqlxVariablesTableDef);
+
+	// Each runtime_mysqlx_<X> table is an admin-side projection of
+	// MysqlxConfigStore state, not a persistent admin table. The
+	// chassis invokes these refresh callbacks before any admin SELECT
+	// touches the matching table -- analogous to Admin's own
+	// save_mysql_users_runtime_to_database(true) refresh path.
+	if (services.register_runtime_view != nullptr) {
+		services.register_runtime_view({kRuntimeMysqlxUsersTable,             &refresh_users_runtime_view,     nullptr, ProxySQL_PluginDBKind::admin_db});
+		services.register_runtime_view({kRuntimeMysqlxRoutesTable,            &refresh_routes_runtime_view,    nullptr, ProxySQL_PluginDBKind::admin_db});
+		services.register_runtime_view({kRuntimeMysqlxBackendEndpointsTable,  &refresh_endpoints_runtime_view, nullptr, ProxySQL_PluginDBKind::admin_db});
+		services.register_runtime_view({kRuntimeMysqlxVariablesTable,         &refresh_variables_runtime_view, nullptr, ProxySQL_PluginDBKind::admin_db});
+		services.register_runtime_view({kStatsMysqlxRoutesTable,              &refresh_stats_routes_view,      nullptr, ProxySQL_PluginDBKind::stats_db});
+		services.register_runtime_view({kStatsMysqlxProcesslistTable,         &refresh_stats_processlist_view, nullptr, ProxySQL_PluginDBKind::stats_db});
+	}
 
 	// Stats tables (stats_db only, no config copy needed).
 	{

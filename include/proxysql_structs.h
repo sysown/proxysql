@@ -315,6 +315,8 @@ enum session_status {
 	SETTING_NEXT_TRANSACTION_READ,
 	PROCESSING_EXTENDED_QUERY_SYNC,
 	RESYNCHRONIZING_CONNECTION,
+	SETTING_SESSION_TRACK_VARIABLES,
+	SETTING_SESSION_TRACK_STATE,
 	session_status___NONE // special marker
 };
 
@@ -1107,6 +1109,7 @@ __thread int pgsql_thread___client_host_error_counts;
 __thread int pgsql_thread___connect_retries_on_failure;
 __thread int pgsql_thread___connect_retries_delay;
 __thread bool pgsql_thread___multiplexing;
+__thread bool pgsql_thread___preserve_client_on_broken_backend_in_tx;
 __thread int pgsql_thread___connection_delay_multiplex_ms;
 __thread int pgsql_thread___connection_max_age_ms;
 __thread int pgsql_thread___connect_timeout_client;
@@ -1334,6 +1337,7 @@ __thread int mysql_thread___client_host_error_counts;
 __thread int mysql_thread___handle_warnings;
 __thread int mysql_thread___evaluate_replication_lag_on_servers_load;
 __thread bool mysql_thread___ignore_min_gtid_annotations;
+__thread int mysql_thread___session_track_variables;
 
 /* variables used for Query Cache */
 __thread int mysql_thread___query_cache_size_MB;
@@ -1443,6 +1447,7 @@ extern __thread int pgsql_thread___client_host_error_counts;
 extern __thread int pgsql_thread___connect_retries_on_failure;
 extern __thread int pgsql_thread___connect_retries_delay;
 extern __thread bool pgsql_thread___multiplexing;
+extern __thread bool pgsql_thread___preserve_client_on_broken_backend_in_tx;
 extern __thread int pgsql_thread___connection_delay_multiplex_ms;
 extern __thread int pgsql_thread___connection_max_age_ms;
 extern __thread int pgsql_thread___connect_timeout_client;
@@ -1668,6 +1673,7 @@ extern __thread int mysql_thread___client_host_error_counts;
 extern __thread int mysql_thread___handle_warnings;
 extern __thread int mysql_thread___evaluate_replication_lag_on_servers_load;
 extern __thread bool mysql_thread___ignore_min_gtid_annotations;
+extern __thread int mysql_thread___session_track_variables;
 
 /* variables used for Query Cache */
 extern __thread int mysql_thread___query_cache_size_MB;

@@ -90,8 +90,11 @@ enum MySQL_Thread_status_variable {
 	st_var_aws_aurora_replicas_skipped_during_query,
 	st_var_automatic_detected_sqli,
 	st_var_mysql_whitelisted_sqli_fingerprint,
-	st_var_ai_detected_anomalies,
-	st_var_ai_blocked_queries,
+	// st_var_ai_detected_anomalies / st_var_ai_blocked_queries removed
+	// in Step 3 of the GenAI plugin carve-out -- the genai plugin now
+	// owns the equivalent counters as Prometheus metrics
+	// (proxysql_genai_detected_anomalies_total /
+	//  proxysql_genai_blocked_queries_total).
 	st_var_client_host_error_killed_connections,
 	st_var_set_wait_timeout_commands,
 	st_var_timeout_terminated_connections,
@@ -292,8 +295,9 @@ struct p_th_counter {
 		aws_aurora_replicas_skipped_during_query,
 		automatic_detected_sql_injection,
 		mysql_whitelisted_sqli_fingerprint,
-		ai_detected_anomalies,
-		ai_blocked_queries,
+		// ai_detected_anomalies / ai_blocked_queries removed in
+		// Step 3 of the GenAI plugin carve-out (see comment near
+		// st_var_ai_detected_anomalies above for details).
 		mysql_killed_backend_connections,
 		mysql_killed_backend_queries,
 		client_host_error_killed_connections,
@@ -337,6 +341,49 @@ struct th_metrics_map_idx {
 	enum index {
 		counters = 0,
 		gauges
+	};
+};
+
+/**
+ * @brief Configuration structure for session variable tracking functionality.
+ *
+ * === PR 5166: Session Variable Tracking Architecture ===
+ *
+ * This PR introduces comprehensive tracking of session-specific system variables
+ * by leveraging MySQL's native session tracking capabilities. The overall workflow
+ * consists of three main phases:
+ *
+ * 1. CONFIGURATION PHASE:
+ *    - Global enable/disable via mysql-session_track_variables variable
+ *    - Per-connection tracking state managed via flags in MySQL_Connection
+ *    - New session states handle configuration of tracking on backends
+ *
+ * 2. BACKEND SETUP PHASE:
+ *    - When enabled, configure session_track_system_variables="*"
+ *    - Configure session_track_state_change=ON
+ *    - MySQL server then automatically tracks all system variable changes
+ *
+ * 3. PROCESSING PHASE:
+ *    - After each query, check SERVER_SESSION_STATE_CHANGED flag
+ *    - Extract variable changes via MySQL's session tracking protocol
+ *    - Update both client and server variable maps for state consistency
+ *    - Special handling for character set variables (name → ID conversion)
+ *
+ * BENEFITS:
+ * - Captures changes that SQL parsing alone cannot detect (stored procedures, etc.)
+ * - Redundant tracking ensures accurate client/backend state synchronization
+ * - Leverages MySQL server's native capabilities for reliability
+ * - Performance optimized: only processes when session state actually changes
+ */
+struct session_track_variables {
+	enum mode {
+		// Disabled; default mode
+		DISABLED = 0,
+		// Enable session tracking if backend supports it
+		OPTIONAL,
+		// Enforce session tracking; connection fails if backend does
+		// not support CLIENT_DEPRECATE_EOF and CLIENT_SESSION_TRACKING
+		ENFORCED
 	};
 };
 
@@ -610,6 +657,21 @@ class MySQL_Threads_Handler
 		int processlist_max_query_length;
 
 		bool ignore_min_gtid_annotations;
+		/**
+		 * @brief Controls session variable tracking behavior.
+		 *
+		 * Enum variants (see session_track_variables enum):
+		 * - DISABLED (0): Do not request session tracking from backends. Default.
+		 * - OPTIONAL (1): Enable session tracking if backend supports it;
+		 *   connection is used even if backend does not support tracking.
+		 * - ENFORCED (2): Enforce session tracking; connection fails if backend
+		 *   does not support CLIENT_DEPRECATE_EOF and CLIENT_SESSION_TRACKING.
+		 *
+		 * When enabled, ProxySQL configures backends to track system variable
+		 * changes using MySQL's session_track_system_variables and
+		 * session_track_state_change capabilities.
+		 */
+		int session_track_variables;
 #ifdef PROXYSQLFFTO
 		bool ffto_enabled;
 		int ffto_max_buffer_size;

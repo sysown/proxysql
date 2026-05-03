@@ -35,7 +35,13 @@ PROTO_OBJS := $(patsubst $(PROTO_DIR)/%.pb.cc,$(ODIR)/%.pb.o,$(PROTO_SRCS))
 # incompatible ABI — libprotobuf.so SONAME changed). Detect the installed
 # version up front and fail fast so we never produce a .so that links cleanly
 # but crashes the first time a virtual is dispatched into the proto runtime.
+#
+# Skip the version check for `clean` and `cleanall` so a v3.0/v3.1 box without
+# libprotobuf-dev installed can still run `make clean` from the top-level
+# Makefile (which recurses here unconditionally). The check still fires for
+# any goal that actually compiles or links objects.
 PROTOBUF_GENERATED_VERSION := 3.21.12
+ifeq ($(filter clean cleanall,$(MAKECMDGOALS)),)
 PROTOBUF_VERSION := $(shell pkg-config --modversion protobuf 2>/dev/null)
 ifeq ($(PROTOBUF_VERSION),)
     $(error libprotobuf not found via pkg-config. Install libprotobuf-dev (3.x). \
@@ -49,6 +55,7 @@ ifneq ($(PROTOBUF_MAJOR),3)
         Install libprotobuf 3.x (e.g. 3.21.12) or regenerate the proto sources \
         against the installed version. See the regeneration recipe above)
 endif
+endif
 
 IDIRS := -I$(PROXYSQL_IDIR) -I$(PLUGIN_DIR)/include -I$(SQLITE3_IDIR) -I$(PROTO_DIR) -I$(SSL_IDIR) -I$(PROMETHEUS_IDIR) -I$(LIBCONFIG_IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) -I$(RE2_IDIR) -I$(ZSTD_IDIR) -I$(PROXYSQL_PATH)/deps/lz4/lz4/lib
 
@@ -57,8 +64,18 @@ OPTZ ?= -O2 -ggdb
 # the flags libproxysql.a was built with; a mismatch silently changes the
 # ProxySQL_PluginDescriptor / ProxySQL_PluginServices layout the core and
 # the plugin each see, and the loader then reads past the end of the
-# plugin's static descriptor.  (If this Makefile is run standalone, the
-# caller is expected to export PROXYSQL40/31/etc. to match the lib.)
+# plugin's static descriptor.
+#
+# Tier cascade (mirrors the top-level Makefile):
+#   PROXYSQL40=1 ⇒ PROXYSQL31=1 ⇒ PROXYSQLFFTO=1 + PROXYSQLTSDB=1
+ifeq ($(PROXYSQL40),1)
+	PROXYSQL31 := 1
+endif
+ifeq ($(PROXYSQL31),1)
+	PROXYSQLFFTO := 1
+	PROXYSQLTSDB := 1
+endif
+
 PSQL40 :=
 ifeq ($(PROXYSQL40),1)
 	PSQL40 := -DPROXYSQL40
@@ -75,10 +92,6 @@ PSQLTSDB :=
 ifeq ($(PROXYSQLTSDB),1)
 	PSQLTSDB := -DPROXYSQLTSDB
 endif
-PSQLGA :=
-ifeq ($(PROXYSQLGENAI),1)
-	PSQLGA := -DPROXYSQLGENAI
-endif
 
 # -fvisibility=hidden + -fvisibility-inlines-hidden hides every C++ symbol by
 # default; only the explicitly extern "C"-declared
@@ -87,7 +100,7 @@ endif
 # leaking template instantiations across the boundary.
 CXXFLAGS := $(STDCPP) -fPIC -fvisibility=hidden -fvisibility-inlines-hidden \
 	$(OPTZ) $(WGCOV) $(WASAN) -pthread \
-	$(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLGA)
+	$(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB)
 
 # Hardening flags. Skip _FORTIFY_SOURCE under ASAN (incompatible) and when
 # OPTZ contains -O0 (requires optimisation to take effect).

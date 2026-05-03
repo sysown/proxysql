@@ -1,4 +1,5 @@
 #include "../deps/json/json.hpp"
+#include <atomic>
 using json = nlohmann::json;
 #define PROXYJSON
 
@@ -169,8 +170,11 @@ mythr_st_vars_t MySQL_Thread_status_variables_counter_array[] {
 	{ st_var_aws_aurora_replicas_skipped_during_query , p_th_counter::aws_aurora_replicas_skipped_during_query,  (char *)"get_aws_aurora_replicas_skipped_during_query" },
 	{ st_var_automatic_detected_sqli,     p_th_counter::automatic_detected_sql_injection,  (char *)"automatic_detected_sql_injection" },
 	{ st_var_mysql_whitelisted_sqli_fingerprint,p_th_counter::mysql_whitelisted_sqli_fingerprint,     (char *)"mysql_whitelisted_sqli_fingerprint" },
-	{ st_var_ai_detected_anomalies,       p_th_counter::ai_detected_anomalies,                (char *)"ai_detected_anomalies" },
-	{ st_var_ai_blocked_queries,          p_th_counter::ai_blocked_queries,                   (char *)"ai_blocked_queries" },
+	// st_var_ai_detected_anomalies / st_var_ai_blocked_queries entries
+	// removed in Step 3 of the GenAI plugin carve-out; the equivalent
+	// counters are exposed by the genai plugin as Prometheus metrics
+	// (proxysql_genai_detected_anomalies_total /
+	//  proxysql_genai_blocked_queries_total).
 	{ st_var_max_connect_timeout_err,     p_th_counter::max_connect_timeouts,             (char *)"max_connect_timeouts" },
 	{ st_var_generated_pkt_err,           p_th_counter::generated_error_packets,          (char *)"generated_error_packets" },
 	{ st_var_client_host_error_killed_connections, p_th_counter::client_host_error_killed_connections, (char *)"client_host_error_killed_connections" },
@@ -532,6 +536,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"zstd_compression_level",
 	(char *)"ignore_min_gtid_annotations",
 	(char *)"fast_forward_grace_close_ms",
+	(char *)"session_track_variables",
 #ifdef PROXYSQLFFTO
 	(char *)"ffto_enabled",
 	(char *)"ffto_max_buffer_size",
@@ -930,26 +935,11 @@ th_metrics_map = std::make_tuple(
 
 			}
 		),
-		std::make_tuple (
-			p_th_counter::ai_detected_anomalies,
-			"proxysql_ai_detected_anomalies_total",
-			"AI Anomaly Detection detected anomalous query behavior.",
-			metric_tags {
-
-				{ "protocol", "mysql" }
-
-			}
-		),
-		std::make_tuple (
-			p_th_counter::ai_blocked_queries,
-			"proxysql_ai_blocked_queries_total",
-			"AI Anomaly Detection blocked a query.",
-			metric_tags {
-
-				{ "protocol", "mysql" }
-
-			}
-		),
+		// proxysql_ai_detected_anomalies_total /
+		// proxysql_ai_blocked_queries_total were removed in Step 3 of
+		// the GenAI plugin carve-out -- the genai plugin owns the
+		// equivalent metrics now (proxysql_genai_detected_anomalies_total /
+		// proxysql_genai_blocked_queries_total).
 		std::make_tuple (
 			p_th_counter::mysql_killed_backend_connections,
 			"proxysql_mysql_killed_backend_connections_total",
@@ -1367,11 +1357,10 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.ping_timeout_server=200;
 	variables.fast_forward_grace_close_ms=5000;
 #ifdef PROXYSQLFFTO
-#ifdef PROXYSQLGENAI
-	variables.ffto_enabled=true;
-#else
+	// Step 7 of the GenAI plugin carve-out: PROXYSQLGENAI used to
+	// flip this default to true.  With the macro gone, ffto_enabled
+	// defaults to false; operators can opt in via admin SQL.
 	variables.ffto_enabled=false;
-#endif
 	variables.ffto_max_buffer_size=1048576;
 #endif
 	variables.default_schema=strdup((char *)"information_schema");
@@ -1457,6 +1446,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.protocol_compression_level=3;
 	variables.zstd_compression_level=3;
 	variables.ignore_min_gtid_annotations=false;
+	variables.session_track_variables=session_track_variables::DISABLED;
+
 	// status variables
 	status_variables.mirror_sessions_current=0;
 	__global_MySQL_Thread_Variables_version=1;
@@ -2721,7 +2712,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["wait_timeout"]     = make_tuple(&variables.wait_timeout,     0, 0, true);
 		VariablesPointers_int["select_version_forwarding"] = make_tuple(&variables.select_version_forwarding, 0, 3, false);
 		VariablesPointers_int["data_packets_history_size"] = make_tuple(&variables.data_packets_history_size, 0, 0, true);
-
+		VariablesPointers_int["session_track_variables"]   = make_tuple(&variables.session_track_variables,   0, 2, false);
 	}
 
 
@@ -4777,6 +4768,7 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(handle_warnings);
 	REFRESH_VARIABLE_INT(evaluate_replication_lag_on_servers_load);
 	REFRESH_VARIABLE_BOOL(ignore_min_gtid_annotations);
+	REFRESH_VARIABLE_INT(session_track_variables);
 #ifdef DEBUG
 	REFRESH_VARIABLE_BOOL(session_debug);
 #endif /* DEBUG */
@@ -6384,10 +6376,29 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 	if (sess->client_myds->myconn == NULL) return NULL;
 	if (sess->client_myds->myconn->userinfo == NULL) return NULL;
 	unsigned int i;
+	unsigned long long session_track_backoff_until;
+	// Mirror of the hot-path optimization in 'MyHGC::get_random_MySrvC()': only ENFORCED
+	// mode ever writes 'MySrvC::session_track_backoff_until', so in DISABLED/OPTIONAL we
+	// can skip the per-iteration atomic load entirely. The common case stays allocation-
+	// and atomic-free; the branch is well-predicted because the mode changes rarely.
+	const bool check_session_track_backoff =
+		(mysql_thread___session_track_variables == session_track_variables::ENFORCED);
 	std::vector<MySrvC *> parents; // this is a vector of srvers that needs to be excluded in case gtid_uuid is used
 	MySQL_Connection *c=NULL;
 	for (i=0; i<cached_connections->len; i++) {
-		c=(MySQL_Connection *)cached_connections->index(i);
+		c = (MySQL_Connection *) cached_connections->index(i);
+
+		// Skip cached connections whose parent server is inside the session-tracking
+		// capability backoff window. See 'MySrvC::session_track_backoff_until' for the
+		// full rationale; reads are relaxed because the deadline is compared against
+		// 'curtime' and small reordering is harmless.
+		if (check_session_track_backoff) {
+			session_track_backoff_until = c->parent->session_track_backoff_until.load(std::memory_order_relaxed);
+			if (session_track_backoff_until > curtime) {
+				continue;
+			}
+		}
+
 		if (c->parent->myhgc->hid==_hid && sess->client_myds->myconn->match_tracked_options(c)) { // options are all identical
 			if (
 				(gtid_uuid == NULL) || // gtid_uuid is not used

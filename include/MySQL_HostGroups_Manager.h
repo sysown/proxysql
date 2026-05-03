@@ -205,6 +205,26 @@ class MySrvC {	// MySQL Server Container
 	bool shunned_and_kill_all_connections; // if a serious failure is detected, this will cause all connections to die even if the server is just shunned
 	int32_t use_ssl;
 	char *comment;
+
+	// 'session_track_backoff_until' stores a monotonic timestamp (in microseconds, matching
+	// 'MySQL_Thread::curtime' / 'MySQL_Session::thread->curtime') that prevents the server
+	// from being considered for selection by 'MyHGC::get_random_MySrvC()' and
+	// 'MySQL_Thread::get_MyConn_local()' until 'curtime' exceeds it.
+	//
+	// Scope: populated exclusively by 'MySQL_Session::handle_session_track_capabilities()'
+	// when 'mysql-session_track_variables' is in ENFORCED mode and the backend lacks the
+	// 'CLIENT_SESSION_TRACKING' / 'CLIENT_DEPRECATE_EOF' capabilities required to honor the
+	// mode. The name is intentionally feature-specific: if future code needs to exclude
+	// servers for an unrelated reason, introduce a separate field or rename this one to a
+	// more generic identifier at that point rather than overloading it silently.
+	//
+	// Reset policy: no explicit reset path; the field ages out naturally once 'curtime'
+	// surpasses the stored deadline. Selection sites must read it via 'load()' and may
+	// elide the atomic read entirely when 'mysql-session_track_variables' is not ENFORCED
+	// (since only that mode ever writes the field), keeping the hot connection-selection
+	// path free of atomic loads in default configurations.
+	std::atomic<unsigned long long> session_track_backoff_until;
+
 	MySrvConnList *ConnectionsUsed;
 	MySrvConnList *ConnectionsFree;
 	/**

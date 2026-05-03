@@ -14,3 +14,11 @@ export MCP_PGSQL_HOSTGROUP_ID="${MCP_PGSQL_HOSTGROUP_ID:-9200}"
 
 export MYSQL_DATABASE="${MYSQL_DATABASE:-test}"
 export PGSQL_DATABASE="${PGSQL_DATABASE:-postgres}"
+
+# Post-carve-out: GenAI/MCP/RAG/LLM all live in plugins/genai/.  The
+# proxysql binary itself no longer ships those subsystems, so for the
+# AI tests to have anything to talk to we (a) bind-mount the genai
+# plugin .so into the ProxySQL container and (b) point ProxySQL at a
+# per-group cnf that lists the plugin under `plugins=("...")`.
+export PROXYSQL_LOAD_GENAI_PLUGIN=1
+export PROXYSQL_CONFIG_OVERRIDE="${WORKSPACE}/test/tap/groups/ai/proxysql-ci.cnf"

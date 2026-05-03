@@ -46,6 +46,16 @@ public:
 	// Used when the underlying fd is owned by another object (e.g. the pooled
 	// MysqlxConnection) and must remain valid after the data stream is reset.
 	void close_and_reset();
+	// Scrub I/O buffers (read_buf_, write_buf_, ssl_write_buf_, complete_frames_,
+	// parse_error_) and reset frame-parser offsets without touching the fd, the
+	// SSL*/BIO context, or the encrypted_ flag. Called by MysqlxConnection::reset()
+	// between session reuses on a pooled backend connection so any straggler
+	// frame the prior session left in flight (e.g. a NOTICE arriving after the
+	// terminal frame, or a partial parse that did not complete) cannot be served
+	// to the next session as if it were a response to its first query. Preserving
+	// the SSL state is critical: rebuilding the SSL* would force a TLS handshake
+	// on every pool checkout and discard ALPN/cipher negotiation already done.
+	void clear_io_buffers();
 	void set_nonblocking();
 
 	int get_fd() const { return fd_; }

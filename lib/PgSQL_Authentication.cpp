@@ -250,11 +250,11 @@ unsigned int PgSQL_Authentication::memory_usage() {
 	ret += sizeof(PtrArray);
 	ret += (creds_backends.cred_array->size * sizeof(void *));
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
-	pthread_rwlock_unlock(&creds_frontends.lock);
 	pthread_rwlock_unlock(&creds_backends.lock);
+	pthread_rwlock_unlock(&creds_frontends.lock);
 #else
-	spin_rdunlock(&creds_frontends.lock);
 	spin_rdunlock(&creds_backends.lock);
+	spin_rdunlock(&creds_frontends.lock);
 #endif
 	return ret;
 }
@@ -327,11 +327,11 @@ int PgSQL_Authentication::dump_all_users(pgsql_account_details_t***ads, bool _co
 	*ads=_ads;
 __exit_dump_all_users:
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
-	pthread_rwlock_unlock(&creds_frontends.lock);
 	pthread_rwlock_unlock(&creds_backends.lock);
+	pthread_rwlock_unlock(&creds_frontends.lock);
 #else
-	spin_rdunlock(&creds_frontends.lock);
 	spin_rdunlock(&creds_backends.lock);
+	spin_rdunlock(&creds_frontends.lock);
 #endif
 	return total_size;
 }

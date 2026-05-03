@@ -121,6 +121,7 @@ static std::string build_compression_capset(const char* algorithm,
 }
 
 static void test_capabilities_advertise_compression() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -176,6 +177,7 @@ static void test_capabilities_advertise_compression() {
 }
 
 static void test_capabilities_set_zstd_accepted() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -210,6 +212,7 @@ static void test_capabilities_set_zstd_accepted() {
 }
 
 static void test_capabilities_set_lz4_accepted() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -235,6 +238,7 @@ static void test_capabilities_set_lz4_accepted() {
 }
 
 static void test_capabilities_set_unsupported_rejected() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -281,6 +285,7 @@ static void test_capabilities_set_unsupported_rejected() {
 }
 
 static void test_capabilities_set_garbage_rejected() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -344,7 +349,8 @@ static void test_capabilities_set_garbage_rejected() {
 // We don't have a backend, so the session legitimately can't complete the
 // query; we just verify the COMPRESSION envelope was unwrapped and the
 // inner message reached dispatch. The "decompressed but malformed" case is
-// covered separately and asserts the session emits 5008.
+// covered separately and asserts the session emits 5174 (bad compressed
+// frame) — see test_decompress_oversize_rejected / _garbage_rejected.
 // ---------------------------------------------------------------------------
 
 static std::string compress_zstd(const std::vector<uint8_t>& src) {
@@ -419,6 +425,7 @@ static std::string build_compression_envelope(uint8_t msg_type,
 }
 
 static void test_decompress_zstd_single_message() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -452,21 +459,24 @@ static void test_decompress_zstd_single_message() {
 	// On a successful unwrap the inner StmtExecute will be dispatched;
 	// without a backend the session transitions to CONNECTING_SERVER (it
 	// expects the next handler tick to materialize a backend). It must
-	// NOT have emitted a 5008 error frame. The backend's connect()
-	// returns EINPROGRESS so the session may not have written anything
-	// yet — use a non-blocking read so we don't deadlock.
+	// NOT have emitted a compression-related error frame (5170/5171/5174
+	// in upstream code-space; previously 5008 before the parity-cleanup
+	// pass in #5696). The backend's connect() returns EINPROGRESS so the
+	// session may not have written anything yet — use a non-blocking
+	// read so we don't deadlock.
 	uint8_t buf[4096];
 	usleep(10000);
 	ssize_t r = try_read_x_frame_nonblocking(fds[1], buf, sizeof(buf));
-	bool got_5008 = false;
+	bool got_compression_err = false;
 	if (r > 5 && buf[4] == Mysqlx::ServerMessages_Type_ERROR) {
 		Mysqlx::Error err;
 		if (err.ParseFromArray(buf + 5, static_cast<int>(r - 5))) {
-			if (err.code() == 5008) got_5008 = true;
+			int c = err.code();
+			if (c == 5170 || c == 5171 || c == 5174) got_compression_err = true;
 		}
 	}
-	ok(!got_5008,
-	   "decompressed StmtExecute was dispatched (no 5008 error from session)");
+	ok(!got_compression_err,
+	   "decompressed StmtExecute was dispatched (no compression error from session)");
 	// Also assert the session moved past WAITING_CLIENT_XMSG — proves we
 	// actually reached forward_to_backend on the unwrapped message.
 	ok(sess.get_status() != MysqlxSession::WAITING_CLIENT_XMSG,
@@ -477,6 +487,7 @@ static void test_decompress_zstd_single_message() {
 }
 
 static void test_decompress_lz4_single_message() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -504,15 +515,16 @@ static void test_decompress_lz4_single_message() {
 	uint8_t buf[4096];
 	usleep(10000);
 	ssize_t r = try_read_x_frame_nonblocking(fds[1], buf, sizeof(buf));
-	bool got_5008 = false;
+	bool got_compression_err = false;
 	if (r > 5 && buf[4] == Mysqlx::ServerMessages_Type_ERROR) {
 		Mysqlx::Error err;
 		if (err.ParseFromArray(buf + 5, static_cast<int>(r - 5))) {
-			if (err.code() == 5008) got_5008 = true;
+			int c = err.code();
+			if (c == 5170 || c == 5171 || c == 5174) got_compression_err = true;
 		}
 	}
-	ok(!got_5008,
-	   "decompressed lz4 StmtExecute was dispatched (no 5008 error from session)");
+	ok(!got_compression_err,
+	   "decompressed lz4 StmtExecute was dispatched (no compression error from session)");
 	ok(sess.get_status() != MysqlxSession::WAITING_CLIENT_XMSG,
 	   "lz4 path: session moved past WAITING_CLIENT_XMSG after unwrap");
 
@@ -521,6 +533,7 @@ static void test_decompress_lz4_single_message() {
 }
 
 static void test_decompress_oversize_rejected() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -557,12 +570,16 @@ static void test_decompress_oversize_rejected() {
 	if (r > 5 && buf[4] == Mysqlx::ServerMessages_Type_ERROR) {
 		Mysqlx::Error err;
 		if (err.ParseFromArray(buf + 5, static_cast<int>(r - 5))) {
-			ok(err.code() == 5008, "oversize rejected with 5008");
+			// 5171 = ER_X_DECOMPRESSION_FAILED (upstream MySQL
+			// plugin/x/src/xpl_error.h) — decompressed payload exceeds
+			// cap is treated as a decompression failure. Aligned with
+			// upstream in #5696.
+			ok(err.code() == 5171, "oversize rejected with 5171 (ER_X_DECOMPRESSION_FAILED)");
 		} else {
-			ok(false, "oversize rejected with 5008 (parse failed)");
+			ok(false, "oversize rejected with 5171 (parse failed)");
 		}
 	} else {
-		ok(false, "oversize rejected with 5008 (no error frame)");
+		ok(false, "oversize rejected with 5171 (no error frame)");
 	}
 
 	close(fds[0]);
@@ -570,6 +587,7 @@ static void test_decompress_oversize_rejected() {
 }
 
 static void test_decompress_garbage_rejected() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -601,22 +619,25 @@ static void test_decompress_garbage_rejected() {
 	if (r > 5 && buf[4] == Mysqlx::ServerMessages_Type_ERROR) {
 		Mysqlx::Error err;
 		if (err.ParseFromArray(buf + 5, static_cast<int>(r - 5))) {
-			ok(err.code() == 5008, "garbage rejected with 5008");
+			// 5171 = ER_X_DECOMPRESSION_FAILED (upstream).
+			ok(err.code() == 5171, "garbage rejected with 5171 (ER_X_DECOMPRESSION_FAILED)");
 		} else {
-			ok(false, "garbage rejected with 5008 (parse failed)");
+			ok(false, "garbage rejected with 5171 (parse failed)");
 		}
 	} else {
-		ok(false, "garbage rejected with 5008 (no error frame)");
+		ok(false, "garbage rejected with 5171 (no error frame)");
 	}
 
 	close(fds[0]);
 	close(fds[1]);
 }
 
-static void test_compression_without_negotiation_still_5008() {
+static void test_compression_without_negotiation_still_5170() {
+	diag(">>> %s", __func__);
 	// Sanity: if the client tries to send a Compression message before
 	// (or without) having set the compression capability, the dispatcher
-	// must still reject with 5008.
+	// must reject with 5170 (ER_X_FRAME_COMPRESSION_DISABLED — upstream
+	// MySQL plugin/x/src/xpl_error.h). Aligned with upstream in #5696.
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -636,15 +657,15 @@ static void test_compression_without_negotiation_still_5008() {
 	if (r > 5 && buf[4] == Mysqlx::ServerMessages_Type_ERROR) {
 		Mysqlx::Error err;
 		if (err.ParseFromArray(buf + 5, static_cast<int>(r - 5))) {
-			ok(err.code() == 5008,
-			   "compression without negotiation rejected with 5008");
+			ok(err.code() == 5170,
+			   "compression without negotiation rejected with 5170 (ER_X_FRAME_COMPRESSION_DISABLED)");
 		} else {
 			ok(false,
-			   "compression without negotiation rejected with 5008 (parse fail)");
+			   "compression without negotiation rejected with 5170 (parse fail)");
 		}
 	} else {
 		ok(false,
-		   "compression without negotiation rejected with 5008 (no err frame)");
+		   "compression without negotiation rejected with 5170 (no err frame)");
 	}
 
 	close(fds[0]);
@@ -703,6 +724,7 @@ static bool extract_one_frame_from_buffer(const std::vector<uint8_t>& buf,
 }
 
 static void test_compress_zstd_single_message() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -762,6 +784,7 @@ static void test_compress_zstd_single_message() {
 }
 
 static void test_compress_lz4_single_message() {
+	diag(">>> %s", __func__);
 	int fds[2];
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
@@ -805,6 +828,7 @@ static void test_compress_lz4_single_message() {
 }
 
 static void test_compress_below_threshold_passthrough() {
+	diag(">>> %s", __func__);
 	// Payload smaller than COMPRESSION_MIN_OUTPUT_BYTES (50) must be sent
 	// uncompressed even when compression is negotiated — the wrap
 	// overhead would dwarf any savings. We assert the frame on the wire
@@ -839,6 +863,7 @@ static void test_compress_below_threshold_passthrough() {
 }
 
 static void test_compress_combine_mixed_batches() {
+	diag(">>> %s", __func__);
 	// With combine_mixed_messages=true and max_combine_messages=3, three
 	// successive sends should buffer the first two and emit ONE
 	// Compression message containing both after the third triggers the
@@ -938,6 +963,7 @@ static void test_compress_combine_mixed_batches() {
 }
 
 static void test_compress_passthrough_when_disabled() {
+	diag(">>> %s", __func__);
 	// Sanity: when compression hasn't been negotiated, the helper must
 	// just enqueue verbatim — the .so MUST work fine for clients that
 	// never opt in to compression.
@@ -967,7 +993,9 @@ static void test_compress_passthrough_when_disabled() {
 }
 
 int main() {
+	setvbuf(stdout, nullptr, _IOLBF, 0);
 	plan(64);
+	diag("=== mysqlx_compression_unit-t starting ===");
 
 	test_capabilities_advertise_compression();
 	test_capabilities_set_zstd_accepted();
@@ -979,7 +1007,7 @@ int main() {
 	test_decompress_lz4_single_message();
 	test_decompress_oversize_rejected();
 	test_decompress_garbage_rejected();
-	test_compression_without_negotiation_still_5008();
+	test_compression_without_negotiation_still_5170();
 
 	test_compress_zstd_single_message();
 	test_compress_lz4_single_message();

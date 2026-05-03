@@ -48,7 +48,9 @@ void make_log_path() {
 
 void clear_log() {
 	if (g_log_path.empty()) return;
-	std::ofstream(g_log_path, std::ios::trunc);
+	// See plugin_manager_unit-t.cpp for the SonarCloud rationale.
+	std::ofstream truncate_handle(g_log_path, std::ios::trunc);
+	(void)truncate_handle;
 }
 
 std::string read_log() {

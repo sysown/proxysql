@@ -194,6 +194,56 @@ static void test_unknown_message_disconnects() {
 }
 
 /**
+ * @brief Malformed bootstrap trxid ranges disconnect without counting an event.
+ */
+static void test_malformed_bootstrap_disconnects() {
+	GTID_Server_Data sd(nullptr, (char *)"127.0.0.1", 0, 3306);
+
+	std::string msg = std::string("ST=") + UUID_A + ":abc\n";
+	stuff_buffer(sd, msg);
+
+	ok(sd.read_next_gtid() == false, "malformed ST: returns false");
+	ok(sd.active == false, "malformed ST: active set to false");
+	ok(sd.events_read == 0, "malformed ST: events_read NOT incremented");
+	ok(sd.gtid_exists((char *)UUID_A_STRIPPED, 0) == false, "malformed ST: trxid 0 was not added");
+}
+
+/**
+ * @brief Malformed I3 trxid ranges disconnect without counting an event.
+ */
+static void test_malformed_i3_disconnects() {
+	GTID_Server_Data sd(nullptr, (char *)"127.0.0.1", 0, 3306);
+
+	std::string msg = std::string("I3=") + UUID_A_STRIPPED + ":10-abc\n";
+	stuff_buffer(sd, msg);
+
+	ok(sd.read_next_gtid() == false, "malformed I3: returns false");
+	ok(sd.active == false, "malformed I3: active set to false");
+	ok(sd.events_read == 0, "malformed I3: events_read NOT incremented");
+	ok(sd.gtid_exists((char *)UUID_A_STRIPPED, 0) == false, "malformed I3: trxid 0 was not added");
+	ok(sd.gtid_exists((char *)UUID_A_STRIPPED, 10) == false, "malformed I3: trxid 10 was not added");
+}
+
+/**
+ * @brief Malformed I4 trxid ranges disconnect and preserve earlier event count.
+ */
+static void test_malformed_i4_disconnects() {
+	GTID_Server_Data sd(nullptr, (char *)"127.0.0.1", 0, 3306);
+
+	std::string msg1 = std::string("I3=") + UUID_B_STRIPPED + ":10-20\n";
+	stuff_buffer(sd, msg1);
+	sd.read_next_gtid();
+
+	std::string msg2 = "I4=30-40x\n";
+	stuff_buffer(sd, msg2);
+
+	ok(sd.read_next_gtid() == false, "malformed I4: returns false");
+	ok(sd.active == false, "malformed I4: active set to false");
+	ok(sd.events_read == 1, "malformed I4: events_read NOT incremented");
+	ok(sd.gtid_exists((char *)UUID_B_STRIPPED, 30) == false, "malformed I4: trxid 30 was not added");
+}
+
+/**
  * @brief Multiple messages in sequence: ST bootstrap, then I1, I3, I2, I4.
  */
 static void test_mixed_sequence() {
@@ -287,7 +337,7 @@ static void test_incomplete_message() {
 }
 
 int main() {
-	plan(70);
+	plan(83);
 
 	test_bootstrap_single();            //  6 assertions
 	test_bootstrap_range();             //  8 assertions
@@ -297,6 +347,9 @@ int main() {
 	test_i3_range();                    //  8 assertions
 	test_i4_range_reuse_uuid();         //  7 assertions
 	test_unknown_message_disconnects(); //  5 assertions
+	test_malformed_bootstrap_disconnects(); // 4 assertions
+	test_malformed_i3_disconnects();    //  5 assertions
+	test_malformed_i4_disconnects();    //  4 assertions
 	test_mixed_sequence();              // 14 assertions
 	test_read_all_stops_on_unknown();   //  4 assertions
 	test_empty_buffer();                //  3 assertions

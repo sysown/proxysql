@@ -1,4 +1,5 @@
 #include "ProxySQL_Plugin.h"
+#include "ProxySQL_Admin_Tables_Definitions.h"
 #include "mysqlx_admin_schema.h"
 #include "mysqlx_config_store.h"
 #include "tap.h"
@@ -49,7 +50,9 @@ MysqlxPluginContext& mysqlx_context() {
 }
 
 int main() {
+	setvbuf(stdout, nullptr, _IOLBF, 0);
 	plan(27);
+	diag("=== mysqlx_admin_commands_unit-t starting ===");
 
 	test_init_minimal();
 
@@ -70,6 +73,15 @@ int main() {
 		}
 	}
 
+	// install_users_from_admin and install_endpoints_from_admin read from
+	// the canonical cross-module tables runtime_mysql_users and
+	// runtime_mysql_servers respectively. These are admin-owned (managed
+	// by the mysql_servers / mysql_authentication code paths) and not
+	// part of mysqlx_register_admin_schema, so the test fixture must
+	// create them explicitly.
+	admindb.execute(ADMIN_SQLITE_RUNTIME_MYSQL_USERS);
+	admindb.execute(ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS);
+
 	ProxySQL_PluginCommandContext ctx;
 	ctx.admindb = &admindb;
 	ctx.configdb = nullptr;
@@ -78,13 +90,32 @@ int main() {
 	{
 		auto* cmd = find_command("LOAD MYSQLX USERS TO RUNTIME");
 		ok(cmd != nullptr, "LOAD MYSQLX USERS TO RUNTIME command registered");
+		// Canonical mysql user rows that install_users_from_admin merges
+		// against. Both must be active=1, frontend=1 for the merge to find them.
+		admindb.execute("INSERT INTO runtime_mysql_users (username, password, active, use_ssl, "
+		                "default_hostgroup, default_schema, schema_locked, transaction_persistent, "
+		                "fast_forward, backend, frontend, max_connections, attributes, comment) VALUES "
+		                "('alice', 'pw', 1, 0, 10, NULL, 0, 1, 0, 0, 1, 100, '', '')");
+		admindb.execute("INSERT INTO runtime_mysql_users (username, password, active, use_ssl, "
+		                "default_hostgroup, default_schema, schema_locked, transaction_persistent, "
+		                "fast_forward, backend, frontend, max_connections, attributes, comment) VALUES "
+		                "('bob', 'pw', 1, 0, 20, NULL, 0, 1, 0, 0, 1, 100, '', '')");
 		admindb.execute("INSERT INTO mysqlx_users (username, active) VALUES ('alice', 1)");
 		admindb.execute("INSERT INTO mysqlx_users (username, active) VALUES ('bob', 0)");
 		ProxySQL_PluginCommandResult res = cmd(ctx, nullptr);
 		ok(res.error_code == 0, "LOAD MYSQLX USERS TO RUNTIME succeeds");
-		ok(res.rows_affected == 2, "LOAD MYSQLX USERS TO RUNTIME reports 2 rows");
+		// rows_affected reports the editable mysqlx_users WHERE active=1
+		// count: only alice (bob is active=0).
+		ok(res.rows_affected == 1, "LOAD MYSQLX USERS TO RUNTIME reports 1 active row");
+		// runtime_mysqlx_users is now an admin-side projection of the
+		// in-memory store; the chassis register_runtime_view callback
+		// refreshes it on demand. This unit test bypasses the chassis,
+		// so project explicitly before asserting on the view contents.
+		// Only alice is loaded (bob's mysqlx row is inactive so it never
+		// gets x_enabled and is dropped by install_users_from_admin).
+		mysqlx_context().config_store->project_users_to_runtime_view(admindb);
 		int cnt = admindb.return_one_int("SELECT COUNT(*) FROM runtime_mysqlx_users");
-		ok(cnt == 2, "runtime_mysqlx_users has 2 rows after load");
+		ok(cnt == 1, "runtime_mysqlx_users has 1 row after load (only active mysqlx user)");
 	}
 
 	{
@@ -94,7 +125,7 @@ int main() {
 		ProxySQL_PluginCommandResult res = cmd(ctx, nullptr);
 		ok(res.error_code == 0, "SAVE MYSQLX USERS TO MEMORY succeeds");
 		int cnt = admindb.return_one_int("SELECT COUNT(*) FROM mysqlx_users");
-		ok(cnt == 2, "mysqlx_users has 2 rows after save from runtime");
+		ok(cnt == 1, "mysqlx_users has 1 row after save from runtime");
 	}
 
 	{
@@ -119,6 +150,13 @@ int main() {
 	{
 		auto* cmd = find_command("LOAD MYSQLX BACKEND ENDPOINTS TO RUNTIME");
 		ok(cmd != nullptr, "LOAD MYSQLX BACKEND ENDPOINTS TO RUNTIME command registered");
+		// install_endpoints_from_admin reads runtime_mysql_servers too; insert a
+		// canonical ONLINE server matching the override row so the merge has
+		// something to attach the override to.
+		admindb.execute("INSERT INTO runtime_mysql_servers (hostgroup_id, hostname, port, gtid_port, "
+		                "status, weight, compression, max_connections, max_replication_lag, use_ssl, "
+		                "max_latency_ms, comment) VALUES "
+		                "(10, '127.0.0.1', 3306, 0, 'ONLINE', 100, 0, 1000, 0, 0, 0, '')");
 		admindb.execute("INSERT INTO mysqlx_backend_endpoints (hostname, mysql_port, mysqlx_port) VALUES ('127.0.0.1', 3306, 33060)");
 		ProxySQL_PluginCommandResult res = cmd(ctx, nullptr);
 		ok(res.error_code == 0, "LOAD MYSQLX BACKEND ENDPOINTS TO RUNTIME succeeds");
@@ -148,21 +186,30 @@ int main() {
 		admindb.execute("DELETE FROM mysqlx_variables");
 		ProxySQL_PluginCommandResult res = cmd(ctx, nullptr);
 		ok(res.error_code == 0, "SAVE MYSQLX VARIABLES TO MEMORY succeeds");
+		// save_variables_to_admin_table dumps the five well-known variables
+		// (thread_pool_size, connect_timeout, tls_mode, max_cached_conns,
+		// tls_backend_mode) from the in-memory store regardless of what
+		// was previously loaded.
 		int cnt = admindb.return_one_int("SELECT COUNT(*) FROM mysqlx_variables");
-		ok(cnt == 1, "mysqlx_variables has 1 row after save");
+		ok(cnt == 5, "mysqlx_variables has 5 rows after save (all known variables)");
 	}
 
 	{
 		auto* cmd = find_command("LOAD MYSQLX USERS TO RUNTIME");
 		admindb.execute("DELETE FROM mysqlx_users");
+		// charlie also needs a canonical mysql_users row for install_users_from_admin
+		// to find a match and produce an identity.
+		admindb.execute("INSERT INTO runtime_mysql_users (username, password, active, use_ssl, "
+		                "default_hostgroup, default_schema, schema_locked, transaction_persistent, "
+		                "fast_forward, backend, frontend, max_connections, attributes, comment) VALUES "
+		                "('charlie', 'pw', 1, 0, 30, NULL, 0, 1, 0, 0, 1, 100, '', '')");
 		admindb.execute("INSERT INTO mysqlx_users (username, active) VALUES ('charlie', 1)");
 		ProxySQL_PluginCommandResult res = cmd(ctx, nullptr);
+		mysqlx_context().config_store->project_users_to_runtime_view(admindb);
 		int cnt = admindb.return_one_int("SELECT COUNT(*) FROM runtime_mysqlx_users");
 		ok(cnt == 1, "re-loading users replaces runtime data (not appends)");
-		std::unique_ptr<SQLite3_result, void(*)(SQLite3_result*)> r(
-			admindb.execute_statement("SELECT username FROM runtime_mysqlx_users WHERE username='charlie'", nullptr),
-			[](SQLite3_result* p) { if (p) { /* leaked intentionally for test scope */ } }
-		);
+		std::unique_ptr<SQLite3_result> r(
+			admindb.execute_statement("SELECT username FROM runtime_mysqlx_users WHERE username='charlie'", nullptr));
 		ok(r && r->rows.size() == 1, "runtime contains charlie after reload");
 	}
 

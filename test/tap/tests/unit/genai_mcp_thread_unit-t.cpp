@@ -10,6 +10,7 @@
  *   - has_variable() for known and unknown names
  *   - get_variables_list() completeness
  *   - Null-pointer safety in get_variable() / set_variable() / has_variable()
+ *   - get_variable_string() clears stale output on miss
  *   - get_target_auth_context() with empty map
  *   - get_all_target_auth_contexts() with empty map
  *
@@ -21,7 +22,7 @@
 #include "test_init.h"
 #include "proxysql.h"
 
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include "MCP_Thread.h"
 
@@ -376,6 +377,17 @@ static void test_null_safety(MCP_Threads_Handler& h) {
 }
 
 /**
+ * @brief get_variable_string() should overwrite stale output.
+ */
+static void test_get_variable_string_contract(MCP_Threads_Handler& h) {
+	std::string out = "stale";
+	ok(h.get_variable_string("nonexistent", out) == false && out.empty(),
+	   "get_variable_string(nonexistent) clears stale output");
+	ok(h.get_variable_string("enabled", out) == true && out == "false",
+	   "get_variable_string(enabled) returns current value");
+}
+
+/**
  * @brief get_variable for unknown name returns -1.
  */
 static void test_get_unknown_variable(MCP_Threads_Handler& h) {
@@ -439,15 +451,16 @@ static void test_wrlock_wrunlock(MCP_Threads_Handler& h) {
  * has_variable:          13
  * get_variables_list:    2 + 14 = 16
  * Null safety:           6
+ * get_variable_string:   2
  * Get unknown:           2
  * Set unknown:           2
  * Target auth empty:     2
  * Load target auth null: 1
  * wrlock/wrunlock:       1
  * -------------------------------------------------
- * Total:                 197
+ * Total:                 199
  */
-static const int TOTAL_TESTS = 197;
+static const int TOTAL_TESTS = 199;
 
 int main() {
 	plan(TOTAL_TESTS);
@@ -464,6 +477,7 @@ int main() {
 	test_has_variable(handler);
 	test_get_variables_list(handler);
 	test_null_safety(handler);
+	test_get_variable_string_contract(handler);
 	test_get_unknown_variable(handler);
 	test_set_unknown_variable(handler);
 	test_target_auth_empty(handler);
@@ -474,12 +488,12 @@ int main() {
 	return exit_status();
 }
 
-#else /* !PROXYSQLGENAI */
+#else /* !PROXYSQL40 */
 
 int main() {
 	plan(1);
-	ok(true, "PROXYSQLGENAI not enabled -- skipping MCP_Thread unit tests");
+	ok(true, "PROXYSQL40 not enabled -- skipping MCP_Thread unit tests");
 	return exit_status();
 }
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */
