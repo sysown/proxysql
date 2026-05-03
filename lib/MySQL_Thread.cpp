@@ -170,8 +170,11 @@ mythr_st_vars_t MySQL_Thread_status_variables_counter_array[] {
 	{ st_var_aws_aurora_replicas_skipped_during_query , p_th_counter::aws_aurora_replicas_skipped_during_query,  (char *)"get_aws_aurora_replicas_skipped_during_query" },
 	{ st_var_automatic_detected_sqli,     p_th_counter::automatic_detected_sql_injection,  (char *)"automatic_detected_sql_injection" },
 	{ st_var_mysql_whitelisted_sqli_fingerprint,p_th_counter::mysql_whitelisted_sqli_fingerprint,     (char *)"mysql_whitelisted_sqli_fingerprint" },
-	{ st_var_ai_detected_anomalies,       p_th_counter::ai_detected_anomalies,                (char *)"ai_detected_anomalies" },
-	{ st_var_ai_blocked_queries,          p_th_counter::ai_blocked_queries,                   (char *)"ai_blocked_queries" },
+	// st_var_ai_detected_anomalies / st_var_ai_blocked_queries entries
+	// removed in Step 3 of the GenAI plugin carve-out; the equivalent
+	// counters are exposed by the genai plugin as Prometheus metrics
+	// (proxysql_genai_detected_anomalies_total /
+	//  proxysql_genai_blocked_queries_total).
 	{ st_var_max_connect_timeout_err,     p_th_counter::max_connect_timeouts,             (char *)"max_connect_timeouts" },
 	{ st_var_generated_pkt_err,           p_th_counter::generated_error_packets,          (char *)"generated_error_packets" },
 	{ st_var_client_host_error_killed_connections, p_th_counter::client_host_error_killed_connections, (char *)"client_host_error_killed_connections" },
@@ -932,26 +935,11 @@ th_metrics_map = std::make_tuple(
 
 			}
 		),
-		std::make_tuple (
-			p_th_counter::ai_detected_anomalies,
-			"proxysql_ai_detected_anomalies_total",
-			"AI Anomaly Detection detected anomalous query behavior.",
-			metric_tags {
-
-				{ "protocol", "mysql" }
-
-			}
-		),
-		std::make_tuple (
-			p_th_counter::ai_blocked_queries,
-			"proxysql_ai_blocked_queries_total",
-			"AI Anomaly Detection blocked a query.",
-			metric_tags {
-
-				{ "protocol", "mysql" }
-
-			}
-		),
+		// proxysql_ai_detected_anomalies_total /
+		// proxysql_ai_blocked_queries_total were removed in Step 3 of
+		// the GenAI plugin carve-out -- the genai plugin owns the
+		// equivalent metrics now (proxysql_genai_detected_anomalies_total /
+		// proxysql_genai_blocked_queries_total).
 		std::make_tuple (
 			p_th_counter::mysql_killed_backend_connections,
 			"proxysql_mysql_killed_backend_connections_total",
@@ -1369,11 +1357,10 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.ping_timeout_server=200;
 	variables.fast_forward_grace_close_ms=5000;
 #ifdef PROXYSQLFFTO
-#ifdef PROXYSQLGENAI
-	variables.ffto_enabled=true;
-#else
+	// Step 7 of the GenAI plugin carve-out: PROXYSQLGENAI used to
+	// flip this default to true.  With the macro gone, ffto_enabled
+	// defaults to false; operators can opt in via admin SQL.
 	variables.ffto_enabled=false;
-#endif
 	variables.ffto_max_buffer_size=1048576;
 #endif
 	variables.default_schema=strdup((char *)"information_schema");

@@ -71,10 +71,10 @@ ifeq ($(PROXYSQLCLICKHOUSE),1)
 	PSQLCH := -DPROXYSQLCLICKHOUSE
 endif
 
+# PROXYSQLGENAI macro removed in Step 7.  See lib/Makefile for the
+# carve-out note; PSQLGA stays empty to avoid touching every place
+# that references it in this file.
 PSQLGA :=
-ifeq ($(PROXYSQLGENAI),1)
-	PSQLGA := -DPROXYSQLGENAI
-endif
 
 PSQL40 :=
 ifeq ($(PROXYSQL40),1)
@@ -179,8 +179,15 @@ ifeq ($(UNAME_S),Darwin)
 endif
 LIBPROXYSQLAR += $(ZSTD_LDIR)/libzstd.a
 LIBPROXYSQLAR += $(CITYHASH_LDIR)/libcityhash.a
+# SQLite `vec` extension object (similarity search).  Gated on
+# PROXYSQLGENAI: the genai plugin's AI_Vector_Storage is the only
+# consumer of the proxy_sqlite3_vec_init hook, so non-genai v3.0
+# release binaries skip vec.o entirely (saves ~1MB and avoids carrying
+# vector-search code that no plain MySQL/PgSQL proxy install needs).
+# A v4.0 binary built with PROXYSQLGENAI=1 always links it so the
+# plugin can call sqlite3_vec_init on the same SQLite that core links.
 ifeq ($(PROXYSQLGENAI),1)
-LIBPROXYSQLAR += $(SQLITE_VEC_OBJ)
+	LIBPROXYSQLAR += $(SQLITE_VEC_OBJ)
 endif
 
 ODIR := obj
@@ -195,7 +202,7 @@ $(ODIR)/%.o: %.cpp
 
 $(EXECUTABLE): $(ODIR) $(OBJ) $(LIBPROXYSQLAR)
 ifeq ($(PROXYSQLCLICKHOUSE),1)
-	$(CXX) -o $@ $(OBJ) $(CLANGFIX) $(LIBPROXYSQLAR) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(LZ4_LDIR)/liblz4.a $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)
+	$(CXX) -o $@ $(OBJ) $(CLANGFIX) -Wl,--whole-archive $(PROXYSQL_LDIR)/libproxysql.a -Wl,--no-whole-archive $(filter-out $(PROXYSQL_LDIR)/libproxysql.a,$(LIBPROXYSQLAR)) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(LZ4_LDIR)/liblz4.a $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)
 else
 	$(CXX) -o $@ $(OBJ) $(CLANGFIX) $(LIBPROXYSQLAR) $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)
 endif

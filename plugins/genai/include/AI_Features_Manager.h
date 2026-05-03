@@ -40,7 +40,6 @@
 
 // Forward declarations
 class LLM_Bridge;
-class Anomaly_Detector;
 class SQLite3DB;
 
 /**
@@ -66,17 +65,15 @@ private:
 	int shutdown_;
 	pthread_rwlock_t rwlock;
 
-	// Sub-components
+	// Sub-components.  Anomaly_Detector moved to plugins/genai/ in
+	// Step 3 of the GenAI plugin carve-out and is no longer owned here.
 	LLM_Bridge* llm_bridge;
-	Anomaly_Detector* anomaly_detector;
 	SQLite3DB* vector_db;
 
 	// Helper methods
 	int init_vector_db();
-	int init_anomaly_detector();
 	void close_vector_db();
 	void close_llm_bridge();
-	void close_anomaly_detector();
 
 public:
 	/**
@@ -178,14 +175,9 @@ public:
 	void increment_llm_cache_lookups() { __sync_fetch_and_add(&status_variables.llm_cache_lookups, 1); }
 	void increment_llm_cache_stores() { __sync_fetch_and_add(&status_variables.llm_cache_stores, 1); }
 
-	/**
-	 * @brief Get anomaly detector instance
-	 *
-	 * @return Pointer to Anomaly_Detector or NULL if not initialized
-	 *
-	 * @note Thread-safe when called within wrlock()/wrunlock() pair
-	 */
-	Anomaly_Detector* get_anomaly_detector() { return anomaly_detector; }
+	// Anomaly detector accessor was removed in Step 3 of the GenAI
+	// plugin carve-out -- the detector now lives in plugins/genai/ and
+	// is invoked through the plugin query-hook ABI.
 
 	/**
 	 * @brief Get vector database instance

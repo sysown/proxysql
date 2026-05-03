@@ -3,7 +3,6 @@
 #include "AI_Features_Manager.h"
 #include "GenAI_Thread.h"
 #include "LLM_Bridge.h"
-#include "Anomaly_Detector.h"
 #include "sqlite3db.h"
 #include "proxysql_utils.h"
 #include <cstring>
@@ -22,7 +21,7 @@ class ProxySQL_Admin;
 extern ProxySQL_Admin *GloAdmin;
 
 AI_Features_Manager::AI_Features_Manager()
-	: shutdown_(0), llm_bridge(NULL), anomaly_detector(NULL), vector_db(NULL)
+	: shutdown_(0), llm_bridge(NULL), vector_db(NULL)
 {
 	pthread_rwlock_init(&rwlock, NULL);
 
@@ -403,25 +402,9 @@ int AI_Features_Manager::init_llm_bridge() {
 	return 0;
 }
 
-int AI_Features_Manager::init_anomaly_detector() {
-	if (!GloGATH->variables.genai_anomaly_enabled) {
-		proxy_info("AI: Anomaly detection disabled ,  skipping initialization\n");
-		return 0;
-	}
-
-	proxy_info("AI: Initializing Anomaly Detector\n");
-
-	anomaly_detector = new Anomaly_Detector();
-	if (anomaly_detector->init() != 0) {
-		proxy_error("AI: Failed to initialize Anomaly Detector\n");
-		delete anomaly_detector;
-		anomaly_detector = NULL;
-		return -1;
-	}
-
-	proxy_info("AI: Anomaly Detector initialized\n");
-	return 0;
-}
+// init_anomaly_detector / close_anomaly_detector were removed in
+// Step 3 of the GenAI plugin carve-out: the Anomaly_Detector now lives
+// inside plugins/genai/, owned by the plugin's own lifecycle.
 
 void AI_Features_Manager::close_vector_db() {
 	if (vector_db) {
@@ -438,16 +421,12 @@ void AI_Features_Manager::close_llm_bridge() {
 	}
 }
 
-void AI_Features_Manager::close_anomaly_detector() {
-	if (anomaly_detector) {
-		anomaly_detector->close();
-		delete anomaly_detector;
-		anomaly_detector = NULL;
-	}
-}
-
 int AI_Features_Manager::init() {
 	proxy_info("AI: Initializing AI Features Manager v%s\n", AI_FEATURES_MANAGER_VERSION);
+
+	shutdown_ = 0;
+	close_llm_bridge();
+	close_vector_db();
 
 	if (!GloGATH || !GloGATH->variables.genai_enabled) {
 		proxy_info("AI: AI features disabled by configuration\n");
@@ -466,11 +445,8 @@ int AI_Features_Manager::init() {
 		return -1;
 	}
 
-	// Initialize Anomaly Detector
-	if (init_anomaly_detector() != 0) {
-		proxy_error("AI: Failed to initialize Anomaly Detector\n");
-		return -1;
-	}
+	// Anomaly Detector init moved to the genai plugin in Step 3 of
+	// the carve-out; AI_Features_Manager no longer owns it.
 
 	proxy_info("AI: AI Features Manager initialized successfully\n");
 	return 0;
@@ -483,7 +459,7 @@ void AI_Features_Manager::shutdown() {
 	proxy_info("AI: Shutting down AI Features Manager\n");
 
 	close_llm_bridge();
-	close_anomaly_detector();
+	// close_anomaly_detector() removed in Step 3 of the carve-out.
 	close_vector_db();
 
 	proxy_info("AI: AI Features Manager shutdown complete\n");

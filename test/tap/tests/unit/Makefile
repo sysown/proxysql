@@ -154,7 +154,7 @@ else
 LIBPROXYSQLAR_FULL := $(LIBPROXYSQLAR)
 
 MYLIBS := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -lcurl -lssl -lcrypto -luuid \
-		  -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre \
+		  -Wl,-Bstatic -lconfig -Wl,--whole-archive -lproxysql -Wl,--no-whole-archive -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre \
 		  -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev \
 		  -lprometheus-cpp-pull -lprometheus-cpp-core \
 		  -Wl,-Bstatic -lpq -lpgcommon -lpgport \
@@ -183,10 +183,23 @@ ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c ClickHouse_Server),0)
 	PSQLCH := -DPROXYSQLCLICKHOUSE
 endif
 PSQLGA :=
-ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c GenAI_Thread),0)
-	PROXYSQLGENAI := 1
-	PSQLGA := -DPROXYSQLGENAI
-endif
+# Step 7 of the carve-out moved every GenAI symbol (MCP_Tool_Handler,
+# Anomaly_Detector, MCP_Threads_Handler, MySQL_FTS, LLM_Client, ...)
+# out of libproxysql.a into plugins/genai/.  The unit-test build
+# links libproxysql.a but NOT the plugin .so or any individual plugin
+# .cpp file — so defining PROXYSQLGENAI here would unconditionally
+# compile-in `#ifdef PROXYSQLGENAI` test bodies that instantiate
+# plugin classes the linker has no definitions for.
+#
+# Solution: leave the macro undefined for the test build.  Tests that
+# legitimately need to test plugin internals (genai_plugin_load_unit-t,
+# genai_plugin_anomaly_unit-t, genai_plugin_backend_client_unit-t,
+# genai_fts_string_unit-t) compile in the specific plugin source
+# files they need via dedicated build rules below — and define
+# -DPROXYSQLGENAI on the command line in those rules.  All the other
+# genai_*_unit-t tests fall through to their `#else SKIP` path and
+# emit one ok() so the runner doesn't report them as missing.
+PSQLGA :=
 PSQLFFTO :=
 ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c MySQLFFTO),0)
 	PROXYSQLFFTO := 1
@@ -335,7 +348,6 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	gen_utils_unit-t \
 	proxy_protocol_unit-t \
 	pgsql_txn_state_unit-t \
-	genai_anomaly_unit-t \
 	genai_fts_string_unit-t \
 	sqlite3db_unit-t \
 	pgsql_error_helper_unit-t \
@@ -378,6 +390,10 @@ UNIT_TESTS += \
 	plugin_query_hook_unit-t \
 	plugin_prometheus_unit-t \
 	plugin_lifecycle_unit-t \
+	plugin_runtime_views_unit-t \
+	genai_plugin_load_unit-t \
+	genai_plugin_anomaly_unit-t \
+	genai_plugin_backend_client_unit-t \
 	test_mysqlx_plugin_load-t \
 	test_mysqlx_admin_tables-t \
 	mysqlx_config_store_unit-t \
@@ -631,6 +647,63 @@ plugin_lifecycle_unit-t: plugin_lifecycle_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)/t
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
 		$(IDIRS) $(LDIRS) $(OPT) $(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+# The plugin-side Anomaly_Detector unit test compiles the plugin's
+# Anomaly_Detector.cpp directly into the test binary so that private
+# methods (normalize_query, check_sql_injection) can be exercised via
+# the friend-class helper without dlopening the .so.
+GENAI_ANOMALY_SRC := $(PROXYSQL_PATH)/plugins/genai/src/Anomaly_Detector.cpp
+GENAI_PLUGIN_INCLUDE := -I$(PROXYSQL_PATH)/plugins/genai/include
+# Plugin-side .cpp files all wrap their body in `#ifdef PROXYSQLGENAI`,
+# so dedicated rules that compile them must pass -DPROXYSQLGENAI on the
+# command line.  The unit-test build's PSQLGA is intentionally empty
+# (libproxysql.a doesn't carry plugin code post-Step-7); each rule
+# below opts in for itself.
+GENAI_PLUGIN_DEFINES := -DPROXYSQLGENAI
+genai_plugin_anomaly_unit-t: genai_plugin_anomaly_unit-t.cpp $(GENAI_ANOMALY_SRC) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+	$(CXX) $< $(GENAI_ANOMALY_SRC) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		$(GENAI_PLUGIN_DEFINES) $(GENAI_PLUGIN_INCLUDE) $(IDIRS) $(LDIRS) $(OPT) $(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+# The plugin-side backend_client unit test compiles the plugin's
+# backend_client.cpp + local_proxy_endpoint.cpp directly into the test
+# binary; same compile-twice trick as genai_plugin_anomaly_unit-t.
+# Allows exercising the parser and dial guards without dlopening the .so.
+GENAI_BACKEND_CLIENT_SRCS := \
+	$(PROXYSQL_PATH)/plugins/genai/src/backend_client.cpp \
+	$(PROXYSQL_PATH)/plugins/genai/src/local_proxy_endpoint.cpp
+genai_plugin_backend_client_unit-t: genai_plugin_backend_client_unit-t.cpp $(GENAI_BACKEND_CLIENT_SRCS) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+	$(CXX) $< $(GENAI_BACKEND_CLIENT_SRCS) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		$(GENAI_PLUGIN_DEFINES) $(GENAI_PLUGIN_INCLUDE) $(IDIRS) $(LDIRS) $(OPT) $(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+# genai_plugin_load_unit-t loads the real genai plugin .so (built by
+# plugins/genai/Makefile) and exercises its lifecycle.  The Makefile here
+# delegates the .so build to the plugin directory rather than restating
+# its compile rules.
+GENAI_PLUGIN_SO := $(PROXYSQL_PATH)/plugins/genai/ProxySQL_GenAI_Plugin.so
+.PHONY: $(GENAI_PLUGIN_SO)
+$(GENAI_PLUGIN_SO):
+	$(MAKE) -C $(PROXYSQL_PATH)/plugins/genai
+
+genai_plugin_load_unit-t: genai_plugin_load_unit-t.cpp $(GENAI_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+	$(CXX) $< $(PROXYSQL_PATH)/lib/ProxySQL_PluginManager.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		-DPROXYSQL40 -DPROXYSQL_GENAI_PLUGIN_PATH=\"$(GENAI_PLUGIN_SO)\" $(GENAI_PLUGIN_DEFINES) \
+		$(IDIRS) $(LDIRS) $(OPT) $(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+# genai_fts_string_unit-t includes MySQL_FTS.h (lives in plugins/genai/
+# include/) and instantiates MySQL_FTS, so the source file gets
+# compiled directly into the test — same compile-twice trick as
+# genai_plugin_anomaly_unit-t.  Without the explicit include path on
+# this rule the default %-t rule would search only the core include
+# directory, miss the plugin header, and fail with the same error CI
+# saw on ubuntu24-tap-genai-gcov.
+GENAI_FTS_SRCS := $(PROXYSQL_PATH)/plugins/genai/src/MySQL_FTS.cpp
+genai_fts_string_unit-t: genai_fts_string_unit-t.cpp $(GENAI_FTS_SRCS) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+	$(CXX) $< $(GENAI_FTS_SRCS) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		$(GENAI_PLUGIN_DEFINES) $(GENAI_PLUGIN_INCLUDE) $(IDIRS) $(LDIRS) $(OPT) $(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
 # Pattern rule: all unit tests use the same compile + link flags.

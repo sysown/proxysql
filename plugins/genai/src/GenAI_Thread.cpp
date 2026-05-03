@@ -4,6 +4,8 @@
 #include "proxysql.h"
 #include "GenAI_Thread.h"
 #include "AI_Features_Manager.h"
+#include "LLM_Bridge.h"  // direct include after Step 5 stopped pulling
+                          // it in transitively via proxysql.h.
 #include "proxysql_debug.h"
 #include <cstring>
 #include <sstream>

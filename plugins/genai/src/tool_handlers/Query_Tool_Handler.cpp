@@ -535,32 +535,13 @@ void Query_Tool_Handler::refresh_target_registry() {
 		return;
 	}
 
-	// Refresh MCP target/auth map from runtime profile tables before resolving targets.
-	if (GloAdmin && GloAdmin->admindb) {
-		char* error = NULL;
-		int cols = 0;
-		int affected_rows = 0;
-		SQLite3_result* resultset = NULL;
-		const char* q =
-			"SELECT t.target_id, t.protocol, t.hostgroup_id, t.auth_profile_id,"
-			" t.max_rows, t.timeout_ms, t.allow_explain, t.allow_discovery, t.description,"
-			" a.db_username, a.db_password, a.default_schema"
-			" FROM runtime_mcp_target_profiles t"
-			" JOIN runtime_mcp_auth_profiles a ON a.auth_profile_id=t.auth_profile_id"
-			" WHERE t.active=1"
-			" ORDER BY t.target_id";
-		GloAdmin->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
-		if (error) {
-			proxy_warning("Query_Tool_Handler: failed refreshing target auth map: %s\n", error);
-			free(error);
-			if (resultset) {
-				delete resultset;
-			}
-		} else {
-			GloMCPH->load_target_auth_map(resultset);
-		}
-	}
-
+	// Per the ABI-3 separation-of-duties contract, the listener consumes
+	// MCP_Threads_Handler's in-memory snapshot, NOT a re-read of the
+	// runtime_mcp_<X> view tables (which are now admin-side projections
+	// owned by the chassis, refreshed lazily per-SELECT). The plugin's
+	// LOAD MCP PROFILES TO RUNTIME path (mcp_load_target_auth_map_from_admindb)
+	// is what installs main.mcp_<X> into that snapshot; here we just read
+	// what's already there.
 	const auto profiles = GloMCPH->get_all_target_auth_contexts();
 
 	const auto resolve_endpoint = [&](

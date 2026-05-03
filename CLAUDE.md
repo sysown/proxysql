@@ -40,9 +40,19 @@ The same codebase produces three product tiers via feature flags:
 |------|------|---------|------|
 | Stable | (default) | v3.0.x | Core proxy |
 | Innovative | `PROXYSQL31=1` | v3.1.x | FFTO, TSDB |
-| AI/MCP | `PROXYSQLGENAI=1` | v4.0.x | GenAI, MCP, Anomaly Detection |
+| Plugin Chassis | `PROXYSQL40=1` | v4.0.x | Plugin loader + ABI (4-phase lifecycle, query-hook, shared Prometheus) |
+| AI/MCP | `PROXYSQLGENAI=1` | v4.0.x | Builds the genai plugin (`plugins/genai/`) — GenAI, MCP, Anomaly Detection |
 
-`PROXYSQLGENAI=1` implies `PROXYSQL31=1`, which implies `PROXYSQLFFTO=1` and `PROXYSQLTSDB=1`.
+`PROXYSQLGENAI=1` implies `PROXYSQL40=1` implies `PROXYSQL31=1`, which
+implies `PROXYSQLFFTO=1` and `PROXYSQLTSDB=1`.
+
+**As of the GenAI plugin carve-out (Step 7), `PROXYSQLGENAI` no longer
+gates any code in core.**  All AI/MCP/RAG/LLM features live in
+`plugins/genai/` and load as a `.so` at runtime.  The user-facing
+`PROXYSQLGENAI=1` flag still exists, and now means "build the genai
+plugin alongside core proxysql" — it propagates through the plugin
+chassis (`PROXYSQL40=1`) but core compiles identically with or without
+it.
 
 ### Build Flags
 
@@ -139,8 +149,11 @@ MySQL and PostgreSQL share parallel class hierarchies with the same architecture
 
 - **FFTO** (Fast Forward Traffic Observer) — `MySQLFFTO.cpp`, `PgSQLFFTO.cpp`
 - **TSDB** — Time-series metrics with embedded dashboard
-- **GenAI/MCP** — `GenAI_Thread`, `MCP_Thread`, `LLM_Bridge`, `Anomaly_Detector`, tool handlers
 - **ClickHouse** — Native ClickHouse protocol support
+- **GenAI / MCP / RAG / LLM** — Lives entirely in `plugins/genai/`
+  as of the carve-out completed in Step 7.  Loaded via `dlopen` when
+  `plugins = (genai)` is configured in `proxysql.cnf`; not part of
+  `libproxysql.a` or the `proxysql` binary.
 
 ## Code Layout
 
@@ -167,7 +180,7 @@ Unit tests live in `test/tap/tests/unit/` and link against `libproxysql.a` via a
 - Class names: `PascalCase` with protocol prefixes (`MySQL_`, `PgSQL_`, `ProxySQL_`)
 - Member variables: `snake_case`
 - Constants/macros: `UPPER_SNAKE_CASE`
-- C++17 required; conditional compilation via `#ifdef PROXYSQLGENAI`, `#ifdef PROXYSQL31`, etc.
+- C++17 required; conditional compilation via `#ifdef PROXYSQL31`, `#ifdef PROXYSQL40`, `#ifdef PROXYSQLFFTO`, `#ifdef PROXYSQLTSDB`, `#ifdef PROXYSQLCLICKHOUSE`. (`PROXYSQLGENAI` no longer guards any core code as of Step 7 of the GenAI plugin carve-out — it lives only inside `plugins/genai/` now.)
 - Performance-critical code — consider implications of changes to hot paths
 - RAII for resource management; jemalloc for allocation
 - Pthread mutexes for synchronization; `std::atomic<>` for counters

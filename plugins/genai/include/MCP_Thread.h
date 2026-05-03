@@ -24,6 +24,7 @@ class Stats_Tool_Handler;
 class AI_Tool_Handler;
 class RAG_Tool_Handler;
 class SQLite3_result;
+class SQLite3DB;
 
 /**
  * @brief MCP Threads Handler class for managing MCP module configuration
@@ -54,6 +55,71 @@ public:
 		bool allow_explain;
 		bool allow_discovery;
 		std::string description;
+	};
+
+	// Full-row records for the editable admin tables — module-owned
+	// state, the source of truth that runtime_<X> projects from
+	// (ABI 3 separation-of-duties contract). target_auth_map above is
+	// the joined view consumed by the listener; auth_profiles_ and
+	// target_profiles_ retain the raw rows so SAVE TO MEMORY can
+	// reconstruct the editable tables and the runtime_<X> projection
+	// callbacks have something to project.
+	struct MCP_Auth_Profile_Row {
+		std::string auth_profile_id;
+		std::string db_username;
+		std::string db_password;
+		std::string default_schema;
+		int use_ssl;
+		std::string ssl_mode;
+		std::string comment;
+	};
+
+	struct MCP_Target_Profile_Row {
+		std::string target_id;
+		std::string protocol;
+		int hostgroup_id;
+		std::string auth_profile_id;
+		std::string description;
+		int max_rows;
+		int timeout_ms;
+		int allow_explain;
+		int allow_discovery;
+		int active;
+		std::string comment;
+	};
+
+	// Module-owned snapshot of mcp_query_rules.  See ABI-3 contract:
+	// the runtime_mcp_query_rules table is a chassis-projected view of
+	// this snapshot, and SAVE MCP QUERY RULES TO MEMORY pulls from
+	// here back into main.mcp_query_rules.  When the MCP listener is
+	// running, install_query_rules_from_admin also pushes the rows
+	// through Query_Tool_Handler::get_catalog()->load_mcp_query_rules
+	// so the request hot-path sees them; the snapshot guarantees
+	// SAVE / projection still work when the listener is down.
+	struct MCP_Query_Rule_Row {
+		// nullable_int = -1 means "NULL in main.mcp_query_rules" (for
+		// columns where SQLite stores NULL as a sentinel, not 0).
+		int rule_id;
+		int active;
+		std::string username;
+		std::string target_id;
+		std::string schemaname;
+		std::string tool_name;
+		std::string match_pattern;
+		int negate_match_pattern;
+		std::string re_modifiers;
+		int flagIN;
+		int flagOUT;          // -1 means NULL
+		bool flagOUT_is_null;
+		std::string replace_pattern;
+		int timeout_ms;       // -1 means NULL
+		bool timeout_ms_is_null;
+		std::string error_msg;
+		std::string OK_msg;
+		int log;
+		bool log_is_null;
+		int apply;
+		std::string comment;
 	};
 
 	/**
@@ -204,8 +270,23 @@ public:
 	 * @param name The name of the variable (without 'mcp-' prefix)
 	 * @param val Output buffer to store the value
 	 * @return 0 on success, -1 if variable not found
+	 *
+	 * @deprecated The unbounded sprintf into `val` is a stack-buffer
+	 *   overflow risk for variables that hold arbitrary-length values
+	 *   (the `*_endpoint_auth` strings are bearer tokens supplied by
+	 *   operators).  Prefer `get_variable_string()` below.  Retained
+	 *   for callers that haven't been updated yet.
 	 */
 	int get_variable(const char* name, char* val);
+
+	/**
+	 * @brief Get the value of a variable as a std::string.
+	 *
+	 * Safe replacement for `get_variable(name, char*)`: no caller
+	 * buffer to size or overflow.  Returns the empty string when the
+	 * variable is unknown — the bool return is the not-found signal.
+	 */
+	bool get_variable_string(const char* name, std::string& out);
 
 	/**
 	 * @brief Set the value of a variable
@@ -243,6 +324,13 @@ public:
 	/**
 	 * @brief Load MCP target/auth profiles from a joined runtime resultset into memory map
 	 * @return 0 on success, -1 on failure
+	 *
+	 * @deprecated Pre-ABI-3 helper: takes ownership of a JOINed resultset
+	 *   (runtime_mcp_target_profiles ⨝ runtime_mcp_auth_profiles) and
+	 *   replaces target_auth_map. Retained because the bootstrap path
+	 *   still calls it; new code should drive install_auth_profiles_from_admin
+	 *   + install_target_profiles_from_admin (which rebuild target_auth_map
+	 *   from the per-table in-memory snapshots).
 	 */
 	int load_target_auth_map(SQLite3_result* resultset);
 
@@ -256,8 +344,64 @@ public:
 	 */
 	std::vector<MCP_Target_Auth_Context> get_all_target_auth_contexts();
 
+	// ---- ABI-3 separation-of-duties triplets ----
+	//
+	// install_<X>_from_admin: read main.mcp_<X> rows under module mutex
+	//   and replace the in-memory snapshot. The joined target_auth_map
+	//   gets rebuilt whenever EITHER profile table changes so the
+	//   listener consumer always sees a coherent view.
+	// save_<X>_to_admin_table: REPLACE the editable main.mcp_<X> rows
+	//   from the in-memory snapshot. Never reads runtime_<X>.
+	// project_<X>_to_runtime_view: DELETE+INSERT runtime_mcp_<X> from
+	//   the in-memory snapshot. Invoked by the chassis just before any
+	//   admin SELECT against runtime_mcp_<X>.
+
+	bool install_auth_profiles_from_admin(SQLite3DB& admindb, std::string& err);
+	bool install_target_profiles_from_admin(SQLite3DB& admindb, std::string& err);
+	bool install_query_rules_from_admin(SQLite3DB& admindb, std::string& err);
+
+	// Atomic install of BOTH profile tables: reads main.mcp_auth_profiles
+	// and main.mcp_target_profiles, then under a single wrlock swaps
+	// both vectors and rebuilds target_auth_map. Use this in preference
+	// to calling install_auth_profiles_from_admin +
+	// install_target_profiles_from_admin separately — that pair leaves
+	// target_auth_map rebuilt from a mismatched (auth_v2, target_v1)
+	// snapshot if the second install fails.
+	bool install_profiles_from_admin(SQLite3DB& admindb, std::string& err);
+
+	bool save_auth_profiles_to_admin_table(SQLite3DB& admindb);
+	bool save_target_profiles_to_admin_table(SQLite3DB& admindb);
+	bool save_query_rules_to_admin_table(SQLite3DB& admindb);
+
+	// Atomic save of BOTH profile tables: copies both in-memory
+	// snapshots under a single rdlock, then writes both
+	// main.mcp_auth_profiles and main.mcp_target_profiles inside one
+	// transaction. SQLite enforces FK integrity inside the txn, so
+	// dangling target.auth_profile_id rows can never be observed by an
+	// admin reader between the two table writes.
+	bool save_profiles_to_admin_table(SQLite3DB& admindb);
+
+	void project_auth_profiles_to_runtime_view(SQLite3DB& admindb);
+	void project_target_profiles_to_runtime_view(SQLite3DB& admindb);
+	void project_query_rules_to_runtime_view(SQLite3DB& admindb);
+
+	std::vector<MCP_Auth_Profile_Row> get_auth_profiles_snapshot();
+	std::vector<MCP_Target_Profile_Row> get_target_profiles_snapshot();
+	std::vector<MCP_Query_Rule_Row> get_query_rules_snapshot();
+
 private:
 	std::map<std::string, MCP_Target_Auth_Context> target_auth_map;
+
+	// In-memory module-owned snapshots of the editable admin tables.
+	// All four collections (target_auth_map, auth_profiles_,
+	// target_profiles_, query_rules_) are guarded by `rwlock`.
+	std::vector<MCP_Auth_Profile_Row> auth_profiles_;
+	std::vector<MCP_Target_Profile_Row> target_profiles_;
+	std::vector<MCP_Query_Rule_Row> query_rules_;
+
+	// Rebuild target_auth_map from auth_profiles_ + target_profiles_.
+	// Caller MUST hold a write lock on `rwlock`.
+	void rebuild_target_auth_map_locked();
 };
 
 // Global instance of the MCP Threads Handler

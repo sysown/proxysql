@@ -16,6 +16,8 @@
 #include "sqlite3db.h"
 #include "proxysql_utils.h"
 #include "GenAI_Thread.h"
+#include "AI_Features_Manager.h"  // GloAI; previously came in via cpp.h
+                                   // before Step 5 pruned the dep.
 #include "cpp.h"
 #include <cstring>
 #include <cstdlib>
