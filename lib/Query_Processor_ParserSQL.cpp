@@ -387,6 +387,29 @@ static std::string finalize_var_value(std::string val) {
     return strip_quotes(val);
 }
 
+template <Dialect D>
+static std::vector<std::string> extract_names_values(const AstNode* node, Arena& arena) {
+    std::vector<std::string> values;
+    const AstNode* charset = node->first_child;
+    if (charset) {
+        values.push_back(strip_quotes(emit_node_text<D>(charset, arena)));
+        const AstNode* collation = charset->next_sibling;
+        if (collation) {
+            values.push_back(strip_quotes(emit_node_text<D>(collation, arena)));
+        }
+    }
+    return values;
+}
+
+template <Dialect D>
+static std::vector<std::string> extract_charset_values(const AstNode* node, Arena& arena) {
+    std::vector<std::string> values;
+    if (node->first_child) {
+        values.push_back(strip_quotes(emit_node_text<D>(node->first_child, arena)));
+    }
+    return values;
+}
+
 /**
  * Walks the children of a NODE_SET_STMT AST and extracts variable assignments.
  *
@@ -407,27 +430,11 @@ static std::map<std::string, std::vector<std::string>> walk_set_stmt(
     {
         switch (child->type) {
             case NodeType::NODE_SET_NAMES: {
-                std::vector<std::string> values;
-                const AstNode* charset = child->first_child;
-                if (charset) {
-                    values.push_back(
-                        strip_quotes(emit_node_text<D>(charset, arena)));
-                    const AstNode* collation = charset->next_sibling;
-                    if (collation) {
-                        values.push_back(
-                            strip_quotes(emit_node_text<D>(collation, arena)));
-                    }
-                }
-                result["names"] = values;
+                result["names"] = extract_names_values<D>(child, arena);
                 break;
             }
             case NodeType::NODE_SET_CHARSET: {
-                std::vector<std::string> values;
-                if (child->first_child) {
-                    values.push_back(
-                        strip_quotes(emit_node_text<D>(child->first_child, arena)));
-                }
-                result["character_set_results"] = values;
+                result["character_set_results"] = extract_charset_values<D>(child, arena);
                 break;
             }
             case NodeType::NODE_VAR_ASSIGNMENT: {

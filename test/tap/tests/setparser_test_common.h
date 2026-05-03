@@ -97,11 +97,12 @@ static Test sql_mode[] = {
   },
   // Empty set of 'sql_mode' should result into an empty value
   { "SET sql_mode=''", { Expected("sql_mode", { "" } ) } },
-  // Invalid 'non-matching' versions of 'sql_mode' — ParserSQL extracts the
-  // parenthesized expression even for invalid SQL inside the parens.
-  { "SET sql_mode=(SELECT CONCA(@@sql_mode, ',PIPES_AS_CONCAT,NO_ENGINE_SUBSTITUTION'))", { Expected("sql_mode", { "(SELECT CONCA(@@sql_mode, ',PIPES_AS_CONCAT,NO_ENGINE_SUBSTITUTION'))" } ) } },
-  { "SET sql_mode=(SELECT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))", { Expected("sql_mode", { "(SELECT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))" } ) } },
-  { "SET sql_mode=(SELCT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))", { Expected("sql_mode", { "SELCT" } ) } }
+  // Invalid 'non-matching' versions of 'sql_mode' — neither the regex
+  // parser (only recognizes CONCAT/REPLACE/IFNULL) nor ParserSQL can
+  // extract a value, so they return empty.
+  { "SET sql_mode=(SELECT CONCA(@@sql_mode, ',PIPES_AS_CONCAT,NO_ENGINE_SUBSTITUTION'))", {} },
+  { "SET sql_mode=(SELECT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))", {} },
+  { "SET sql_mode=(SELCT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))", {} }
 };
 
 static Test Set1_v1[] = {
