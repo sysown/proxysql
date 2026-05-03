@@ -59,14 +59,15 @@ The chassis (`lib/ProxySQL_PluginManager.cpp:324–383`) enforces:
 ### Current ABI version
 
 ```c
-#define PROXYSQL_PLUGIN_ABI_VERSION       3
-#define PROXYSQL_PLUGIN_ABI_VERSION_MAX   3
+#define PROXYSQL_PLUGIN_ABI_VERSION       4
+#define PROXYSQL_PLUGIN_ABI_VERSION_MAX   4
 ```
 
 ABI evolution so far:
 
 - **ABI 1 → ABI 2:** appends `register_schemas` to the descriptor (four-phase lifecycle). ABI-1 plugins skip Phase B entirely.
 - **ABI 2 → ABI 3:** descriptor layout is **unchanged**. The single addition is a `register_runtime_view` callback at the **tail of `ProxySQL_PluginServices`** (see §3 below). ABI-2 plugins keep loading on an ABI-3 core: their compiled-against `ProxySQL_PluginServices` simply ends one field earlier, and core never dereferences the trailing field for them. The accept range remains `[1, PROXYSQL_PLUGIN_ABI_VERSION_MAX]`.
+- **ABI 3 → ABI 4:** `ProxySQL_PluginDescriptor` and `ProxySQL_PluginServices` layouts are **unchanged** (same as ABI 2+). The change is in `ProxySQL_PluginRuntimeView`, which gains a `db_kind` field (`ProxySQL_PluginDBKind`) as its first field. The chassis now dispatches the correct DB handle (admindb/configdb/statsdb) to the refresh callback based on `db_kind`, instead of always passing `admindb`. Previously, plugins that needed statsdb (e.g. mysqlx's stats views) had to reach through a back-channel to obtain the handle. Plugins must now set `db_kind` explicitly when registering runtime views. ABI-3 plugins still load on an ABI-4 core: the chassis detects the old ABI and continues passing `admindb` to their refresh callbacks (matching the old behaviour).
 
 Future ABI versions append fields. The chassis bumps `PROXYSQL_PLUGIN_ABI_VERSION_MAX` and gates each new field's read on `abi_version >= N`.
 
