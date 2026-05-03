@@ -42,6 +42,10 @@ IDIRS :=	-I$(TAP_IDIR) \
 			-I$(PROXYSQL_PATH)/include \
 			-I$(PROXYSQL_PATH)/test/tap/test_helpers
 
+ifdef PROXYSQL40
+IDIRS += -I$(PROXYSQL_PATH)/plugins/genai/include
+endif
+
 
 # ===========================================================================
 # Library directories
@@ -352,27 +356,20 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	genai_fts_string_unit-t \
 	sqlite3db_unit-t \
 	pgsql_error_helper_unit-t \
-	genai_stats_parsing_unit-t \
 	genai_llm_clients_unit-t \
 	charset_find_unit-t \
-	genai_query_handler_unit-t \
-	genai_mcp_endpoint_unit-t \
-	genai_mcp_thread_unit-t \
 	config_validation_unit-t \
 	config_write_unit-t \
 	query_processor_firewall_unit-t \
 	statistics_unit-t \
 	log_utils_unit-t \
-	genai_thread_unit-t \
 	listen_validator_unit-t \
 	c_tokenizer_unit-t \
 	pgsql_tokenizer_unit-t \
 	ezoption_parser_unit-t \
-	genai_discovery_schema_unit-t \
 	gtid_trxid_interval_unit-t \
 	gtid_set_unit-t \
 	gtid_server_data_unit-t \
-	genai_mysql_catalog_unit-t \
 	admin_disk_upgrade_unit-t \
 	glovars_unit-t \
 	pgsql_servers_ssl_params_unit-t
@@ -395,6 +392,13 @@ UNIT_TESTS += \
 	genai_plugin_load_unit-t \
 	genai_plugin_anomaly_unit-t \
 	genai_plugin_backend_client_unit-t \
+	genai_stats_parsing_unit-t \
+	genai_query_handler_unit-t \
+	genai_mcp_endpoint_unit-t \
+	genai_mcp_thread_unit-t \
+	genai_thread_unit-t \
+	genai_discovery_schema_unit-t \
+	genai_mysql_catalog_unit-t \
 	test_mysqlx_plugin_load-t \
 	test_mysqlx_admin_tables-t \
 	mysqlx_config_store_unit-t \
@@ -706,6 +710,51 @@ genai_fts_string_unit-t: genai_fts_string_unit-t.cpp $(GENAI_FTS_SRCS) $(ODIR)/t
 	$(CXX) $< $(GENAI_FTS_SRCS) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		$(GENAI_PLUGIN_DEFINES) $(GENAI_PLUGIN_INCLUDE) $(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+# Genai tests that include plugin headers from plugins/genai/include/
+# and instantiate genai types.  These tests call genai functions directly
+# (not through dlopen), so the genai symbols must be compiled into the
+# test binary.  The genai sources have deep transitive dependencies
+# (Stats_Tool_Handler → MCP_Tool_Handler → MCP_Thread → …), so the
+# simplest reliable approach is to compile all genai .cpp files into
+# each test that needs them.  plugin_main.cpp is excluded because it
+# contains the dlopen/dlsym entry point that would conflict.
+GENAI_ALL_SRCS := $(wildcard $(PROXYSQL_PATH)/plugins/genai/src/*.cpp $(PROXYSQL_PATH)/plugins/genai/src/tool_handlers/*.cpp)
+
+genai_stats_parsing_unit-t: genai_stats_parsing_unit-t.cpp $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) \
+		$(GENAI_PLUGIN_DEFINES) $(IDIRS) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+genai_query_handler_unit-t: genai_query_handler_unit-t.cpp $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) \
+		$(GENAI_PLUGIN_DEFINES) $(IDIRS) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+genai_mcp_endpoint_unit-t: genai_mcp_endpoint_unit-t.cpp $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) \
+		$(GENAI_PLUGIN_DEFINES) $(IDIRS) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+genai_mcp_thread_unit-t: genai_mcp_thread_unit-t.cpp $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) \
+		$(GENAI_PLUGIN_DEFINES) $(IDIRS) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+genai_thread_unit-t: genai_thread_unit-t.cpp $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) \
+		$(GENAI_PLUGIN_DEFINES) $(IDIRS) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+genai_discovery_schema_unit-t: genai_discovery_schema_unit-t.cpp $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) \
+		$(GENAI_PLUGIN_DEFINES) $(IDIRS) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+genai_mysql_catalog_unit-t: genai_mysql_catalog_unit-t.cpp $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) \
+		$(GENAI_PLUGIN_DEFINES) $(IDIRS) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
 # Pattern rule: all unit tests use the same compile + link flags.
 # Each test binary is built from its .cpp source, linked against
