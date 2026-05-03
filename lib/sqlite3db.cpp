@@ -705,8 +705,8 @@ void SQLite3_result::dump_to_stderr() {
 		size_t len = strlen(r->name);
 		if (len > columns_lengths[i]) {
 			columns_lengths[i] = len;
-			i++;
 		}
+		i++;
 	}
 	for (std::vector<SQLite3_row *>::iterator it=rows.begin() ; it!=rows.end(); ++it) {
 		SQLite3_row *r=*it;
