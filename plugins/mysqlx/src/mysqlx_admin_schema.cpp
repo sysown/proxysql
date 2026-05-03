@@ -484,12 +484,12 @@ bool mysqlx_register_admin_schema(ProxySQL_PluginServices& services) {
 	// touches the matching table -- analogous to Admin's own
 	// save_mysql_users_runtime_to_database(true) refresh path.
 	if (services.register_runtime_view != nullptr) {
-		services.register_runtime_view({ProxySQL_PluginDBKind::admin_db, kRuntimeMysqlxUsersTable,             &refresh_users_runtime_view,     nullptr});
-		services.register_runtime_view({ProxySQL_PluginDBKind::admin_db, kRuntimeMysqlxRoutesTable,            &refresh_routes_runtime_view,    nullptr});
-		services.register_runtime_view({ProxySQL_PluginDBKind::admin_db, kRuntimeMysqlxBackendEndpointsTable,  &refresh_endpoints_runtime_view, nullptr});
-		services.register_runtime_view({ProxySQL_PluginDBKind::admin_db, kRuntimeMysqlxVariablesTable,         &refresh_variables_runtime_view, nullptr});
-		services.register_runtime_view({ProxySQL_PluginDBKind::stats_db, kStatsMysqlxRoutesTable,              &refresh_stats_routes_view,      nullptr});
-		services.register_runtime_view({ProxySQL_PluginDBKind::stats_db, kStatsMysqlxProcesslistTable,         &refresh_stats_processlist_view, nullptr});
+		services.register_runtime_view({kRuntimeMysqlxUsersTable,             &refresh_users_runtime_view,     nullptr, ProxySQL_PluginDBKind::admin_db});
+		services.register_runtime_view({kRuntimeMysqlxRoutesTable,            &refresh_routes_runtime_view,    nullptr, ProxySQL_PluginDBKind::admin_db});
+		services.register_runtime_view({kRuntimeMysqlxBackendEndpointsTable,  &refresh_endpoints_runtime_view, nullptr, ProxySQL_PluginDBKind::admin_db});
+		services.register_runtime_view({kRuntimeMysqlxVariablesTable,         &refresh_variables_runtime_view, nullptr, ProxySQL_PluginDBKind::admin_db});
+		services.register_runtime_view({kStatsMysqlxRoutesTable,              &refresh_stats_routes_view,      nullptr, ProxySQL_PluginDBKind::stats_db});
+		services.register_runtime_view({kStatsMysqlxProcesslistTable,         &refresh_stats_processlist_view, nullptr, ProxySQL_PluginDBKind::stats_db});
 	}
 
 	// Stats tables (stats_db only, no config copy needed).

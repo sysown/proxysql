@@ -30,9 +30,12 @@ namespace prometheus { class Registry; }
 //          field in their compiled-against struct, and core never
 //          dereferences past the ABI-2 layout for them.
 //   ABI 4: ProxySQL_PluginRuntimeView gains a `db_kind` field at the
-//          start of the struct. The chassis passes the matching DB handle
+//          end of the struct. The chassis passes the matching DB handle
 //          (admindb/configdb/statsdb) to the refresh callback instead of
-//          always passing admindb. Plugins must set db_kind explicitly.
+//          always passing admindb. ABI-3 plugins that initialize the
+//          struct with {table_name, refresh, opaque} automatically get
+//          db_kind = admin_db (value 0) via zero-initialization of the
+//          trailing field — matching the pre-ABI-4 behaviour.
 #define PROXYSQL_PLUGIN_ABI_VERSION 4u
 #define PROXYSQL_PLUGIN_ABI_VERSION_MAX 4u
 
@@ -218,10 +221,10 @@ using proxysql_plugin_get_prometheus_registry_cb =
 // already registered (by this or another plugin) or if `refresh` is
 // nullptr.
 struct ProxySQL_PluginRuntimeView {
-	ProxySQL_PluginDBKind db_kind;
 	const char *table_name;
 	void (*refresh)(SQLite3DB *db, void *opaque);
 	void *opaque;
+	ProxySQL_PluginDBKind db_kind;  // ABI 4: at tail, defaults to admin_db (0)
 };
 
 using proxysql_plugin_register_runtime_view_cb =

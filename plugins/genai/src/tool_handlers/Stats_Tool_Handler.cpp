@@ -2294,8 +2294,8 @@ json Stats_Tool_Handler::handle_show_errors(const json& arguments) {
 		return create_error_response("Failed to count error rows: " + count_err);
 	}
 	if (count_rs && count_rs->rows_count > 0) {
-		total_error_types = count_rs->rows[0]->fields[0] ? std::stoi(count_rs->rows[0]->fields[0]) : 0;
-		total_error_count = count_rs->rows[0]->fields[1] ? std::stoll(count_rs->rows[0]->fields[1]) : 0;
+		total_error_types = parse_int_or_zero(count_rs->rows[0]->fields[0]);
+		total_error_count = parse_ll_or_zero(count_rs->rows[0]->fields[1]);
 	}
 	if (count_rs) delete count_rs;
 
@@ -2304,25 +2304,25 @@ json Stats_Tool_Handler::handle_show_errors(const json& arguments) {
 
 	if (resultset) {
 		for (const auto& row : resultset->rows) {
-			long long count = row->fields[7] ? std::stoll(row->fields[7]) : 0;
-			long long first_seen = row->fields[8] ? std::stoll(row->fields[8]) : 0;
-			long long last_seen = row->fields[9] ? std::stoll(row->fields[9]) : 0;
+			long long count = parse_ll_or_zero(row->fields[7]);
+			long long first_seen = parse_ll_or_zero(row->fields[8]);
+			long long last_seen = parse_ll_or_zero(row->fields[9]);
 
 			// Calculate frequency (errors per hour)
 			double hours = (last_seen > first_seen) ? (double)(last_seen - first_seen) / 3600.0 : 1.0;
 			double freq_per_hour = count / hours;
 
 			json error;
-			error["hostgroup"] = row->fields[0] ? std::stoi(row->fields[0]) : 0;
+			error["hostgroup"] = parse_int_or_zero(row->fields[0]);
 			error["hostname"] = row->fields[1] ? row->fields[1] : "";
-			error["port"] = row->fields[2] ? std::stoi(row->fields[2]) : 0;
+			error["port"] = parse_int_or_zero(row->fields[2]);
 			error["username"] = row->fields[3] ? row->fields[3] : "";
 			error["client_address"] = row->fields[4] ? row->fields[4] : "";
 			error["database"] = row->fields[5] ? row->fields[5] : "";
 			if (db_type == "pgsql") {
 				error["sqlstate"] = row->fields[6] ? row->fields[6] : "";
 			} else {
-				error["errno"] = row->fields[6] ? std::stoi(row->fields[6]) : 0;
+				error["errno"] = parse_int_or_zero(row->fields[6]);
 			}
 			error["count_star"] = count;
 			error["first_seen"] = first_seen;
@@ -2597,12 +2597,12 @@ json Stats_Tool_Handler::handle_show_client_cache(const json& arguments) {
 
 	if (resultset) {
 		for (const auto& row : resultset->rows) {
-			int error_count = row->fields[1] ? std::stoi(row->fields[1]) : 0;
+			int error_count = parse_int_or_zero(row->fields[1]);
 
 			json host;
 			host["client_address"] = row->fields[0] ? row->fields[0] : "";
 			host["error_count"] = error_count;
-			host["last_updated"] = row->fields[2] ? std::stoll(row->fields[2]) : 0;
+			host["last_updated"] = parse_ll_or_zero(row->fields[2]);
 
 			hosts.push_back(host);
 			total_hosts++;
@@ -2684,7 +2684,7 @@ json Stats_Tool_Handler::handle_show_query_rules(const json& arguments) {
 		return create_error_response("Failed to count query rule rows: " + count_err);
 	}
 	if (count_rs && count_rs->rows_count > 0 && count_rs->rows[0]->fields[0]) {
-		total_rules = std::stoi(count_rs->rows[0]->fields[0]);
+		total_rules = parse_int_or_zero(count_rs->rows[0]->fields[0]);
 	}
 	if (count_rs) delete count_rs;
 
@@ -2695,13 +2695,13 @@ json Stats_Tool_Handler::handle_show_query_rules(const json& arguments) {
 
 	if (resultset) {
 		for (const auto& row : resultset->rows) {
-			long long hits = row->fields[1] ? std::stoll(row->fields[1]) : 0;
+			long long hits = parse_ll_or_zero(row->fields[1]);
 			total_hits += hits;
 			if (hits > 0) rules_with_hits++;
 			else rules_without_hits++;
 
 			json rule;
-			rule["rule_id"] = row->fields[0] ? std::stoi(row->fields[0]) : 0;
+			rule["rule_id"] = parse_int_or_zero(row->fields[0]);
 			rule["hits"] = hits;
 
 			rules.push_back(rule);
@@ -2784,18 +2784,18 @@ json Stats_Tool_Handler::handle_show_prepared_statements(const json& arguments) 
 	if (resultset) {
 		for (const auto& row : resultset->rows) {
 			json stmt;
-			stmt["global_stmt_id"] = row->fields[0] ? std::stoi(row->fields[0]) : 0;
+			stmt["global_stmt_id"] = parse_int_or_zero(row->fields[0]);
 			stmt["database"] = row->fields[1] ? row->fields[1] : "";
 			stmt["username"] = row->fields[2] ? row->fields[2] : "";
 			stmt["digest"] = row->fields[3] ? row->fields[3] : "";
-			stmt["ref_count_client"] = row->fields[4] ? std::stoi(row->fields[4]) : 0;
-			stmt["ref_count_server"] = row->fields[5] ? std::stoi(row->fields[5]) : 0;
+			stmt["ref_count_client"] = parse_int_or_zero(row->fields[4]);
+			stmt["ref_count_server"] = parse_int_or_zero(row->fields[5]);
 			if (db_type == "pgsql") {
-				stmt["num_param_types"] = row->fields[6] ? std::stoi(row->fields[6]) : 0;
+				stmt["num_param_types"] = parse_int_or_zero(row->fields[6]);
 				stmt["query"] = row->fields[7] ? row->fields[7] : "";
 			} else {
-				stmt["num_columns"] = row->fields[6] ? std::stoi(row->fields[6]) : 0;
-				stmt["num_params"] = row->fields[7] ? std::stoi(row->fields[7]) : 0;
+				stmt["num_columns"] = parse_int_or_zero(row->fields[6]);
+				stmt["num_params"] = parse_int_or_zero(row->fields[7]);
 				stmt["query"] = row->fields[8] ? row->fields[8] : "";
 			}
 
@@ -2852,12 +2852,12 @@ json Stats_Tool_Handler::handle_show_gtid(const json& arguments) {
 
 	if (resultset) {
 		for (const auto& row : resultset->rows) {
-			long long events = row->fields[3] ? std::stoll(row->fields[3]) : 0;
+			long long events = parse_ll_or_zero(row->fields[3]);
 			total_events += events;
 
 			json srv;
 			srv["hostname"] = row->fields[0] ? row->fields[0] : "";
-			srv["port"] = row->fields[1] ? std::stoi(row->fields[1]) : 0;
+			srv["port"] = parse_int_or_zero(row->fields[1]);
 			srv["gtid_executed"] = row->fields[2] ? row->fields[2] : "";
 			srv["events"] = events;
 
@@ -2916,21 +2916,21 @@ json Stats_Tool_Handler::handle_show_cluster(const json& arguments) {
 
 	if (resultset) {
 		for (const auto& row : resultset->rows) {
-			long long checks_ok = row->fields[7] ? std::stoll(row->fields[7]) : 0;
-			long long checks_err = row->fields[8] ? std::stoll(row->fields[8]) : 0;
+			long long checks_ok = parse_ll_or_zero(row->fields[7]);
+			long long checks_err = parse_ll_or_zero(row->fields[8]);
 			double success_rate = (checks_ok + checks_err > 0) ?
 				(double)checks_ok / (double)(checks_ok + checks_err) : 0.0;
 
 			bool is_master = row->fields[3] && std::string(row->fields[3]) == "TRUE";
-			long long ping = row->fields[6] ? std::stoll(row->fields[6]) : 0;
+			long long ping = parse_ll_or_zero(row->fields[6]);
 
 			json node;
 			node["hostname"] = row->fields[0] ? row->fields[0] : "";
-			node["port"] = row->fields[1] ? std::stoi(row->fields[1]) : 0;
-			node["weight"] = row->fields[2] ? std::stoi(row->fields[2]) : 0;
+			node["port"] = parse_int_or_zero(row->fields[1]);
+			node["weight"] = parse_int_or_zero(row->fields[2]);
 			node["master"] = is_master;
-			node["global_version"] = row->fields[4] ? std::stoi(row->fields[4]) : 0;
-			node["check_age_us"] = row->fields[5] ? std::stoll(row->fields[5]) : 0;
+			node["global_version"] = parse_int_or_zero(row->fields[4]);
+			node["check_age_us"] = parse_ll_or_zero(row->fields[5]);
 			node["ping_time_us"] = ping;
 			node["checks_ok"] = checks_ok;
 			node["checks_err"] = checks_err;
@@ -2972,16 +2972,16 @@ json Stats_Tool_Handler::handle_show_cluster(const json& arguments) {
 	if (metrics_rs) {
 		for (const auto& mrow : metrics_rs->rows) {
 			std::string host = mrow->fields[0] ? mrow->fields[0] : "";
-			int port = mrow->fields[1] ? std::stoi(mrow->fields[1]) : 0;
+			int port = parse_int_or_zero(mrow->fields[1]);
 
 			// Find matching node and add metrics
 			for (auto& node : nodes) {
 				if (node["hostname"] == host && node["port"] == port) {
-					node["uptime_s"] = mrow->fields[2] ? std::stoll(mrow->fields[2]) : 0;
-					node["queries"] = mrow->fields[3] ? std::stoll(mrow->fields[3]) : 0;
-					node["client_connections"] = mrow->fields[4] ? std::stoll(mrow->fields[4]) : 0;
-					total_queries += mrow->fields[3] ? std::stoll(mrow->fields[3]) : 0;
-					total_client_connections += mrow->fields[4] ? std::stoll(mrow->fields[4]) : 0;
+					node["uptime_s"] = parse_ll_or_zero(mrow->fields[2]);
+					node["queries"] = parse_ll_or_zero(mrow->fields[3]);
+					node["client_connections"] = parse_ll_or_zero(mrow->fields[4]);
+					total_queries += parse_ll_or_zero(mrow->fields[3]);
+					total_client_connections += parse_ll_or_zero(mrow->fields[4]);
 					break;
 				}
 			}
@@ -3017,7 +3017,7 @@ json Stats_Tool_Handler::handle_show_cluster(const json& arguments) {
 
 		if (cksum_rs) {
 			for (const auto& crow : cksum_rs->rows) {
-				int diff_check = crow->fields[8] ? std::stoi(crow->fields[8]) : 0;
+				int diff_check = parse_int_or_zero(crow->fields[8]);
 				std::string node_key = std::string(crow->fields[0] ? crow->fields[0] : "") + ":" +
 					std::string(crow->fields[1] ? crow->fields[1] : "");
 
@@ -3030,13 +3030,13 @@ json Stats_Tool_Handler::handle_show_cluster(const json& arguments) {
 
 				json cs;
 				cs["hostname"] = crow->fields[0] ? crow->fields[0] : "";
-				cs["port"] = crow->fields[1] ? std::stoi(crow->fields[1]) : 0;
+				cs["port"] = parse_int_or_zero(crow->fields[1]);
 				cs["name"] = crow->fields[2] ? crow->fields[2] : "";
-				cs["version"] = crow->fields[3] ? std::stoi(crow->fields[3]) : 0;
-				cs["epoch"] = crow->fields[4] ? std::stoll(crow->fields[4]) : 0;
+				cs["version"] = parse_int_or_zero(crow->fields[3]);
+				cs["epoch"] = parse_ll_or_zero(crow->fields[4]);
 				cs["checksum"] = crow->fields[5] ? crow->fields[5] : "";
-				cs["changed_at"] = crow->fields[6] ? std::stoll(crow->fields[6]) : 0;
-				cs["updated_at"] = crow->fields[7] ? std::stoll(crow->fields[7]) : 0;
+				cs["changed_at"] = parse_ll_or_zero(crow->fields[6]);
+				cs["updated_at"] = parse_ll_or_zero(crow->fields[7]);
 				cs["diff_check"] = diff_check;
 
 				checksums.push_back(cs);
@@ -3133,9 +3133,9 @@ json Stats_Tool_Handler::handle_show_system_history(const json& arguments) {
 		if (err.empty() && resultset) {
 			for (const auto& row : resultset->rows) {
 				json entry;
-				entry["timestamp"] = row->fields[0] ? std::stoll(row->fields[0]) : 0;
-				entry["tms_utime"] = row->fields[1] ? std::stoll(row->fields[1]) : 0;
-				entry["tms_stime"] = row->fields[2] ? std::stoll(row->fields[2]) : 0;
+				entry["timestamp"] = parse_ll_or_zero(row->fields[0]);
+				entry["tms_utime"] = parse_ll_or_zero(row->fields[1]);
+				entry["tms_stime"] = parse_ll_or_zero(row->fields[2]);
 				cpu.push_back(entry);
 			}
 			delete resultset;
@@ -3158,13 +3158,13 @@ json Stats_Tool_Handler::handle_show_system_history(const json& arguments) {
 		if (err.empty() && resultset) {
 			for (const auto& row : resultset->rows) {
 				json entry;
-				entry["timestamp"] = row->fields[0] ? std::stoll(row->fields[0]) : 0;
-				entry["allocated"] = row->fields[1] ? std::stoll(row->fields[1]) : 0;
-				entry["resident"] = row->fields[2] ? std::stoll(row->fields[2]) : 0;
-				entry["active"] = row->fields[3] ? std::stoll(row->fields[3]) : 0;
-				entry["mapped"] = row->fields[4] ? std::stoll(row->fields[4]) : 0;
-				entry["metadata"] = row->fields[5] ? std::stoll(row->fields[5]) : 0;
-				entry["retained"] = row->fields[6] ? std::stoll(row->fields[6]) : 0;
+				entry["timestamp"] = parse_ll_or_zero(row->fields[0]);
+				entry["allocated"] = parse_ll_or_zero(row->fields[1]);
+				entry["resident"] = parse_ll_or_zero(row->fields[2]);
+				entry["active"] = parse_ll_or_zero(row->fields[3]);
+				entry["mapped"] = parse_ll_or_zero(row->fields[4]);
+				entry["metadata"] = parse_ll_or_zero(row->fields[5]);
+				entry["retained"] = parse_ll_or_zero(row->fields[6]);
 				memory.push_back(entry);
 			}
 			delete resultset;
@@ -3228,20 +3228,20 @@ json Stats_Tool_Handler::handle_show_query_cache_history(const json& arguments) 
 	json data = json::array();
 	if (resultset) {
 		for (const auto& row : resultset->rows) {
-			long long count_get = row->fields[1] ? std::stoll(row->fields[1]) : 0;
-			long long count_get_ok = row->fields[2] ? std::stoll(row->fields[2]) : 0;
+			long long count_get = parse_ll_or_zero(row->fields[1]);
+			long long count_get_ok = parse_ll_or_zero(row->fields[2]);
 			double hit_rate = (count_get > 0) ? (double)count_get_ok / (double)count_get : 0.0;
 
 			json entry;
-			entry["timestamp"] = row->fields[0] ? std::stoll(row->fields[0]) : 0;
+			entry["timestamp"] = parse_ll_or_zero(row->fields[0]);
 			entry["count_GET"] = count_get;
 			entry["count_GET_OK"] = count_get_ok;
-			entry["count_SET"] = row->fields[3] ? std::stoll(row->fields[3]) : 0;
-			entry["bytes_IN"] = row->fields[4] ? std::stoll(row->fields[4]) : 0;
-			entry["bytes_OUT"] = row->fields[5] ? std::stoll(row->fields[5]) : 0;
-			entry["entries_purged"] = row->fields[6] ? std::stoll(row->fields[6]) : 0;
-			entry["entries_in_cache"] = row->fields[7] ? std::stoll(row->fields[7]) : 0;
-			entry["memory_bytes"] = row->fields[8] ? std::stoll(row->fields[8]) : 0;
+			entry["count_SET"] = parse_ll_or_zero(row->fields[3]);
+			entry["bytes_IN"] = parse_ll_or_zero(row->fields[4]);
+			entry["bytes_OUT"] = parse_ll_or_zero(row->fields[5]);
+			entry["entries_purged"] = parse_ll_or_zero(row->fields[6]);
+			entry["entries_in_cache"] = parse_ll_or_zero(row->fields[7]);
+			entry["memory_bytes"] = parse_ll_or_zero(row->fields[8]);
 			entry["hit_rate"] = hit_rate;
 			data.push_back(entry);
 		}
@@ -3470,28 +3470,28 @@ json Stats_Tool_Handler::handle_show_query_history(const json& arguments) {
 
 	if (resultset) {
 		for (const auto& row : resultset->rows) {
-			long long dt = row->fields[0] ? std::stoll(row->fields[0]) : 0;
+			long long dt = parse_ll_or_zero(row->fields[0]);
 			if (dt < earliest) earliest = dt;
 			if (dt > latest) latest = dt;
 
-			long long count_star = row->fields[7] ? std::stoll(row->fields[7]) : 0;
-			long long sum_time = row->fields[10] ? std::stoll(row->fields[10]) : 0;
+			long long count_star = parse_ll_or_zero(row->fields[7]);
+			long long sum_time = parse_ll_or_zero(row->fields[10]);
 
 			json query;
-			query["hostgroup"] = row->fields[1] ? std::stoi(row->fields[1]) : 0;
+			query["hostgroup"] = parse_int_or_zero(row->fields[1]);
 			query["database"] = row->fields[2] ? row->fields[2] : "";
 			query["username"] = row->fields[3] ? row->fields[3] : "";
 			query["client_address"] = row->fields[4] ? row->fields[4] : "";
 			query["digest"] = row->fields[5] ? row->fields[5] : "";
 			query["digest_text"] = row->fields[6] ? row->fields[6] : "";
 			query["count_star"] = count_star;
-			query["first_seen"] = row->fields[8] ? std::stoll(row->fields[8]) : 0;
-			query["last_seen"] = row->fields[9] ? std::stoll(row->fields[9]) : 0;
+			query["first_seen"] = parse_ll_or_zero(row->fields[8]);
+			query["last_seen"] = parse_ll_or_zero(row->fields[9]);
 			query["sum_time_us"] = sum_time;
-			query["min_time_us"] = row->fields[11] ? std::stoll(row->fields[11]) : 0;
-			query["max_time_us"] = row->fields[12] ? std::stoll(row->fields[12]) : 0;
-			query["sum_rows_affected"] = row->fields[13] ? std::stoll(row->fields[13]) : 0;
-			query["sum_rows_sent"] = row->fields[14] ? std::stoll(row->fields[14]) : 0;
+			query["min_time_us"] = parse_ll_or_zero(row->fields[11]);
+			query["max_time_us"] = parse_ll_or_zero(row->fields[12]);
+			query["sum_rows_affected"] = parse_ll_or_zero(row->fields[13]);
+			query["sum_rows_sent"] = parse_ll_or_zero(row->fields[14]);
 
 			if (snapshot_map.find(dt) == snapshot_map.end()) {
 				snapshot_map[dt] = json::array();
@@ -3684,27 +3684,27 @@ json Stats_Tool_Handler::handle_show_query_log(const json& arguments) {
 
 	if (resultset) {
 		for (const auto& row : resultset->rows) {
-			long long st = row->fields[3] ? std::stoll(row->fields[3]) : 0;
-			int err_no = row->fields[13] ? std::stoi(row->fields[13]) : 0;
+			long long st = parse_ll_or_zero(row->fields[3]);
+			int err_no = parse_int_or_zero(row->fields[13]);
 
 			if (st < earliest) earliest = st;
 			if (st > latest) latest = st;
 			if (err_no != 0) total_errors++;
 
 			json event;
-			event["thread_id"] = row->fields[0] ? std::stoi(row->fields[0]) : 0;
+			event["thread_id"] = parse_int_or_zero(row->fields[0]);
 			event["username"] = row->fields[1] ? row->fields[1] : "";
 			event["database"] = row->fields[2] ? row->fields[2] : "";
 			event["start_time"] = st;
-			event["end_time"] = row->fields[4] ? std::stoll(row->fields[4]) : 0;
+			event["end_time"] = parse_ll_or_zero(row->fields[4]);
 			event["query_digest"] = row->fields[5] ? row->fields[5] : "";
 			event["query"] = row->fields[6] ? row->fields[6] : "";
 			event["server"] = row->fields[7] ? row->fields[7] : "";
 			event["client"] = row->fields[8] ? row->fields[8] : "";
-			event["event_type"] = row->fields[9] ? std::stoi(row->fields[9]) : 0;
-			event["hostgroup"] = row->fields[10] ? std::stoi(row->fields[10]) : 0;
-			event["affected_rows"] = row->fields[11] ? std::stoll(row->fields[11]) : 0;
-			event["rows_sent"] = row->fields[12] ? std::stoll(row->fields[12]) : 0;
+			event["event_type"] = parse_int_or_zero(row->fields[9]);
+			event["hostgroup"] = parse_int_or_zero(row->fields[10]);
+			event["affected_rows"] = parse_ll_or_zero(row->fields[11]);
+			event["rows_sent"] = parse_ll_or_zero(row->fields[12]);
 			event["errno"] = err_no;
 			event["error"] = row->fields[14] ? row->fields[14] : nullptr;
 

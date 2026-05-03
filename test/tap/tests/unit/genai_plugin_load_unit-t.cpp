@@ -69,7 +69,7 @@ SQLite3DB* proxysql_plugin_get_configdb() { return g_configdb; }
 SQLite3DB* proxysql_plugin_get_statsdb()  { return g_statsdb; }
 
 int main() {
-	plan(44);
+	plan(45);
 
 	g_admindb  = new SQLite3DB();
 	g_configdb = new SQLite3DB();
@@ -173,6 +173,9 @@ int main() {
 	   "SAVE restored hostgroup_id=1 from in-memory snapshot");
 
 	ok(mgr.stop_all(),     "stop_all succeeds");
+
+	// Verify the plugin handles are still live (pre-destructor).
+	ok(mgr.size() == 1, "plugin handle still present after stop_all");
 
 	// Step 4.G: the plugin now owns the MCP admin / config table set.
 	// Counts match plugins/genai/src/plugin_tables.cpp.

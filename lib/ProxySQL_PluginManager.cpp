@@ -824,6 +824,10 @@ void ProxySQL_PluginManager::refresh_runtime_views_for_query(const std::string& 
 		case ProxySQL_PluginDBKind::admin_db:  db = admindb; break;
 		case ProxySQL_PluginDBKind::config_db: db = configdb; break;
 		case ProxySQL_PluginDBKind::stats_db:  db = statsdb;  break;
+		default:
+			proxy_warning("Unknown db_kind %d for runtime view '%s', skipping\n",
+				static_cast<uint8_t>(view.db_kind), view.table_name.c_str());
+			break;
 		}
 		if (db == nullptr) continue;
 		view.refresh(db, view.opaque);

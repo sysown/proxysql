@@ -1,6 +1,6 @@
 /**
  * @file plugin_tables.cpp
- * @brief Admin / config SQLite tables + ABI-3 runtime-view
+ * @brief Admin / config SQLite tables + ABI-4 runtime-view
  *        projections the genai plugin contributes to ProxySQL.
  *
  * Two registration mechanisms in play:
@@ -17,7 +17,7 @@
  *      from the module's in-memory snapshot in MCP_Threads_Handler.
  *      No persistent rows live in admin_db for these.
  *
- * This is the ABI-3 separation-of-duties contract documented in
+ * This is the ABI-4 separation-of-duties contract documented in
  * include/ProxySQL_Plugin.h next to ProxySQL_PluginRuntimeView.
  */
 
@@ -107,7 +107,7 @@ static constexpr const char* kStatsMCPQueryRules =
 	"  target_id VARCHAR ,"
 	"  hits INTEGER NOT NULL)";
 
-// Runtime-view refresh callbacks (ABI 3).  Invoked by the chassis just
+// Runtime-view refresh callbacks (ABI 4).  Invoked by the chassis just
 // before any admin SELECT touches the registered table; we wipe and
 // repopulate from MCP_Threads_Handler's in-memory snapshot.  `opaque`
 // is unused — the singleton genai_context() owns the handler.
@@ -272,7 +272,7 @@ void register_runtime_view_or_warn(
 	const char* name,
 	void (*cb)(SQLite3DB*, void*)
 ) {
-	ProxySQL_PluginRuntimeView v { db_kind, name, cb, nullptr };
+	ProxySQL_PluginRuntimeView v { name, cb, nullptr, db_kind };
 	if (!services->register_runtime_view(v)) {
 		genai_log(6, "genai plugin: register_runtime_view(%s) failed\n", name);
 	}
@@ -298,7 +298,7 @@ void genai_register_admin_tables(ProxySQL_PluginServices* services) {
 	// projection sinks need a schema in admin_db.  The runtime tables
 	// are registered for their CREATE TABLE only; their rows are
 	// owned by the per-SELECT refresh callbacks wired below via
-	// register_runtime_view (ABI 3).  Per the contract, no other code
+	// register_runtime_view (ABI 4).  Per the contract, no other code
 	// path writes to the runtime_<X> tables.
 	register_admin(services, "mcp_query_rules",
 	               ADMIN_SQLITE_TABLE_MCP_QUERY_RULES);
@@ -321,7 +321,7 @@ void genai_register_admin_tables(ProxySQL_PluginServices* services) {
 	register_config(services, "mcp_target_profiles",
 	                ADMIN_SQLITE_TABLE_MCP_TARGET_PROFILES);
 
-	// Runtime views (ABI 3).  Skip silently if the chassis is older
+	// Runtime views (ABI 4).  Skip silently if the chassis is older
 	// (the field is nullptr until ABI 3); the plugin descriptor
 	// declares ABI 3 already so any chassis that loaded us at all has
 	// these wired, but defending against null is cheap.

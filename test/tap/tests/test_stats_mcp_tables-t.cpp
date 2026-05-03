@@ -151,7 +151,7 @@ int main() {
 	}
 
 	int digest_rows = count_rows(admin, "stats_mcp_query_digest");
-	ok(digest_rows >= 2, "stats_mcp_query_digest has >= 2 rows (got %d)", digest_rows);
+	ok(digest_rows == 2, "stats_mcp_query_digest has exactly 2 rows (got %d)", digest_rows);
 
 	int counters_rows = count_rows(admin, "stats_mcp_query_tools_counters");
 	ok(counters_rows >= 1, "stats_mcp_query_tools_counters has >= 1 row (got %d)", counters_rows);

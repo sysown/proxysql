@@ -76,8 +76,8 @@ public:
 	// invoked exactly once per call, regardless of how many times its
 	// table is mentioned. Best-effort: a callback that throws or
 	// otherwise misbehaves is logged but does not stop other views from
-	// refreshing. Caller supplies admindb so the chassis does not have
-	// to reach into the global admin module.
+	// refreshing. Caller supplies all three DB handles so the chassis
+	// does not have to reach into the global admin module.
 	void refresh_runtime_views_for_query(const std::string& sql,
 		SQLite3DB* admindb, SQLite3DB* configdb, SQLite3DB* statsdb) const;
 #endif /* PROXYSQL40 */

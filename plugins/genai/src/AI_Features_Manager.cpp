@@ -51,10 +51,15 @@ int AI_Features_Manager::init_vector_db() {
 	char* dir = dirname(path_copy);
 	struct stat st;
 	if (stat(dir, &st) != 0) {
-		// Create directory if it doesn't exist
-		char cmd[512];
-		snprintf(cmd, sizeof(cmd), "mkdir -p %s", dir);
-		system(cmd);
+		std::string dir_path(dir);
+		for (size_t i = 1; i < dir_path.size(); ++i) {
+			if (dir_path[i] == '/') {
+				dir_path[i] = '\0';
+				mkdir(dir_path.c_str(), 0755);
+				dir_path[i] = '/';
+			}
+		}
+		mkdir(dir_path.c_str(), 0755);
 	}
 	free(path_copy);
 

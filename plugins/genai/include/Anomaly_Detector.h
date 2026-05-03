@@ -105,6 +105,7 @@ private:
 		std::vector<std::string> recent_queries;
 	};
 	std::unordered_map<std::string, UserStats> user_statistics;
+	pthread_mutex_t user_stats_mutex;
 
 	// Detection methods
 	AnomalyResult check_sql_injection(const std::string& query);

@@ -81,6 +81,7 @@ static const char* SUSPICIOUS_KEYWORDS[] = {
 // ============================================================================
 
 Anomaly_Detector::Anomaly_Detector() : vector_db(NULL) {
+	pthread_mutex_init(&user_stats_mutex, NULL);
 	config.enabled = true;
 	config.risk_threshold = DEFAULT_RISK_THRESHOLD;
 	config.similarity_threshold = DEFAULT_SIMILARITY_THRESHOLD;
@@ -120,6 +121,8 @@ int Anomaly_Detector::init() {
 void Anomaly_Detector::close() {
 	// Clear user statistics
 	clear_user_statistics();
+
+	pthread_mutex_destroy(&user_stats_mutex);
 
 	proxy_info("Anomaly: Anomaly Detector closed\n");
 }
@@ -271,6 +274,8 @@ AnomalyResult Anomaly_Detector::check_rate_limiting(const std::string& user,
 		return result;
 	}
 
+	pthread_mutex_lock(&user_stats_mutex);
+
 	// Get current time
 	uint64_t current_time = (uint64_t)time(NULL);
 	std::string key = user + "@" + client_host;
@@ -311,6 +316,7 @@ AnomalyResult Anomaly_Detector::check_rate_limiting(const std::string& user,
 		             key.c_str(), stats.query_count);
 	}
 
+	pthread_mutex_unlock(&user_stats_mutex);
 	return result;
 }
 
@@ -341,6 +347,8 @@ AnomalyResult Anomaly_Detector::check_statistical_anomaly(const QueryFingerprint
 		return result;
 	}
 
+	pthread_mutex_lock(&user_stats_mutex);
+
 	std::string key = fp.user + "@" + fp.client_host;
 	UserStats& stats = user_statistics[key];
 
@@ -364,6 +372,8 @@ AnomalyResult Anomaly_Detector::check_statistical_anomaly(const QueryFingerprint
 		           "Anomaly: Statistical anomaly for %s: z-score=%.2f\n",
 		           key.c_str(), z_score);
 	}
+
+	pthread_mutex_unlock(&user_stats_mutex);
 
 	// Check for abnormal execution time or rows affected
 	if (fp.execution_time_ms > 5000) {  // 5 seconds
@@ -442,22 +452,23 @@ AnomalyResult Anomaly_Detector::check_embedding_similarity(const std::string& qu
 	float distance_threshold = 2.0f - (config.similarity_threshold / 50.0f);
 
 	// Search for similar threat patterns
-	char search[1024];
-	snprintf(search, sizeof(search),
+	char* search_buf = sqlite3_mprintf(
 		"SELECT p.pattern_name, p.pattern_type, p.severity, "
-		"       vec_distance_cosine(v.embedding, '%s') as distance "
+		"       vec_distance_cosine(v.embedding, '%q') as distance "
 		"FROM anomaly_patterns p "
 		"JOIN anomaly_patterns_vec v ON p.id = v.rowid "
-		"WHERE v.embedding MATCH '%s' "
+		"WHERE v.embedding MATCH '%q' "
 		"AND distance < %f "
 		"ORDER BY distance "
 		"LIMIT 5",
 		embedding_json.c_str(), embedding_json.c_str(), distance_threshold);
+	std::string search(search_buf);
+	sqlite3_free(search_buf);
 
 	// Execute search
 	sqlite3* db = vector_db->get_db();
 	sqlite3_stmt* stmt = NULL;
-	int rc = (*proxy_sqlite3_prepare_v2)(db, search, -1, &stmt, NULL);
+	int rc = (*proxy_sqlite3_prepare_v2)(db, search.c_str(), search.size(), &stmt, NULL);
 
 	if (rc != SQLITE_OK) {
 		proxy_debug(PROXY_DEBUG_ANOMALY, 3, "Embedding search prepare failed: %s", (*proxy_sqlite3_errmsg)(db));
@@ -584,6 +595,8 @@ void Anomaly_Detector::update_user_statistics(const QueryFingerprint& fp) {
 		return;
 	}
 
+	pthread_mutex_lock(&user_stats_mutex);
+
 	std::string key = fp.user + "@" + fp.client_host;
 	UserStats& stats = user_statistics[key];
 
@@ -611,6 +624,8 @@ void Anomaly_Detector::update_user_statistics(const QueryFingerprint& fp) {
 			}
 		}
 	}
+
+	pthread_mutex_unlock(&user_stats_mutex);
 }
 
 // ============================================================================
@@ -913,7 +928,15 @@ bool Anomaly_Detector::remove_threat_pattern(int pattern_id) {
 std::string Anomaly_Detector::get_statistics() {
 	json stats;
 
-	stats["users_tracked"] = user_statistics.size();
+	pthread_mutex_lock(&user_stats_mutex);
+	size_t users_count = user_statistics.size();
+	uint64_t total_queries = 0;
+	for (const auto& entry : user_statistics) {
+		total_queries += entry.second.query_count;
+	}
+	pthread_mutex_unlock(&user_stats_mutex);
+
+	stats["users_tracked"] = users_count;
 	stats["config"] = {
 		{"enabled", config.enabled},
 		{"risk_threshold", config.risk_threshold},
@@ -923,11 +946,6 @@ std::string Anomaly_Detector::get_statistics() {
 		{"log_only", config.log_only}
 	};
 
-	// Count total queries
-	uint64_t total_queries = 0;
-	for (const auto& entry : user_statistics) {
-		total_queries += entry.second.query_count;
-	}
 	stats["total_queries_tracked"] = total_queries;
 
 	// Count threat patterns
@@ -970,7 +988,9 @@ std::string Anomaly_Detector::get_statistics() {
  * @brief Clear all user statistics
  */
 void Anomaly_Detector::clear_user_statistics() {
+	pthread_mutex_lock(&user_stats_mutex);
 	size_t count = user_statistics.size();
 	user_statistics.clear();
+	pthread_mutex_unlock(&user_stats_mutex);
 	proxy_info("Anomaly: Cleared statistics for %zu users\n", count);
 }
