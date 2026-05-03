@@ -382,6 +382,27 @@ test_mysqlx_e2e_routing-t: test_mysqlx_e2e_routing-t.cpp $(PROXYSQL_PATH)/plugin
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) -lprotobuf -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
 
+# Behavioural validation TAP test for issue #5678 part (b): the X-Protocol
+# clients are driven directly via the protocol helpers (same set used by
+# test_mysqlx_e2e_*-t), and the admin DELETE+LOAD is issued through
+# libmariadbclient (classic protocol on port 6032). Same link-line as the
+# e2e routing test.
+test_mysqlx_route_drop_inflight-t: test_mysqlx_route_drop_inflight-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TAP_LDIR)/libtap.so
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) \
+		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
+		$(IDIRS) $(LDIRS) $(OPT) -lprotobuf -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
+
+# Behavioural validation TAP scaffolding for issue #5678 part (a): runtime
+# is skip_all() unless MYSQLX_SIGTERM_INFLIGHT_OPT_IN=1 is set. The body
+# would mirror behavioral_validation.py --scenario sigterm; today it
+# refuses to run automated and points operators at that script. Link
+# line keeps -lssl/-lcrypto and -lmariadbclient because libtap.so pulls
+# in those symbols (admin connection helpers); we don't use protobuf
+# here so we omit -lprotobuf and the .pb.o objects.
+test_mysqlx_sigterm_inflight-t: test_mysqlx_sigterm_inflight-t.cpp $(TAP_LDIR)/libtap.so
+	$(CXX) $< \
+		$(IDIRS) $(LDIRS) $(OPT) -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
+
 
 ### clean targets
 

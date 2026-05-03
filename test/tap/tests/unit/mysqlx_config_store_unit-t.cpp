@@ -62,7 +62,7 @@ std::unique_ptr<SQLite3DB> create_test_db() {
 
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(16);
+	plan(33);
 	diag("=== mysqlx_config_store_unit-t starting ===");
 
 	MysqlxResolvedIdentity identity {};
@@ -140,6 +140,129 @@ int main() {
 	store.bump_topology_generation();
 	ok(store.topology_generation() == 1,
 	   "topology generation increments on demand");
+
+	// --- mysqlx_tls_backend_mode (asymmetric TLS / AsClient mode) ---
+
+	// String parser exercise: each documented value parses, unknown
+	// values produce nullopt so the install path can surface a useful
+	// error to the operator instead of silently coercing to default.
+	ok(mysqlx_backend_tls_mode_from_string("disabled") ==
+	   std::optional<MysqlxBackendTlsMode>(MysqlxBackendTlsMode::disabled) &&
+	   mysqlx_backend_tls_mode_from_string("PREFERRED") ==
+	   std::optional<MysqlxBackendTlsMode>(MysqlxBackendTlsMode::preferred) &&
+	   mysqlx_backend_tls_mode_from_string("Required") ==
+	   std::optional<MysqlxBackendTlsMode>(MysqlxBackendTlsMode::required) &&
+	   mysqlx_backend_tls_mode_from_string("as_client") ==
+	   std::optional<MysqlxBackendTlsMode>(MysqlxBackendTlsMode::as_client),
+	   "backend tls mode parser accepts all four documented values case-insensitively");
+	ok(!mysqlx_backend_tls_mode_from_string("nonsense").has_value() &&
+	   !mysqlx_backend_tls_mode_from_string("").has_value(),
+	   "backend tls mode parser rejects unknown values");
+	ok(std::string(mysqlx_backend_tls_mode_to_string(MysqlxBackendTlsMode::as_client)) == "as_client",
+	   "backend tls mode renders to canonical lowercase string");
+
+	// Default value: as_client matches the legacy implicit behaviour
+	// where backend TLS was tied to client TLS at resolve time.
+	ok(store.get_backend_tls_mode() == MysqlxBackendTlsMode::as_client,
+	   "store defaults backend tls mode to as_client (matches legacy behaviour)");
+
+	// LOAD round-trip: an explicit row should be parsed and cached.
+	ok(db->execute("INSERT INTO mysqlx_variables (variable_name, variable_value) VALUES "
+	               "('mysqlx_tls_backend_mode', 'required')") &&
+	   store.install_variables_from_admin(*db, err) && err.empty() &&
+	   store.get_backend_tls_mode() == MysqlxBackendTlsMode::required,
+	   "store parses explicit mysqlx_tls_backend_mode='required' from admin");
+
+	// Invalid value: install must fail with a non-empty err describing the bad value.
+	ok(db->execute("UPDATE mysqlx_variables SET variable_value='garbage' "
+	               "WHERE variable_name='mysqlx_tls_backend_mode'") &&
+	   !store.install_variables_from_admin(*db, err) &&
+	   err.find("garbage") != std::string::npos,
+	   "store rejects invalid mysqlx_tls_backend_mode with descriptive error");
+	ok(store.get_backend_tls_mode() == MysqlxBackendTlsMode::required,
+	   "store retains last-good backend tls mode after rejected install");
+
+	// Absent row: removing the variable leaves the cached value alone.
+	// Reset `err` first because the previous failing call left a message
+	// in it; install_variables_from_admin only writes on failure.
+	err.clear();
+	ok(db->execute("DELETE FROM mysqlx_variables WHERE variable_name='mysqlx_tls_backend_mode'") &&
+	   store.install_variables_from_admin(*db, err) && err.empty() &&
+	   store.get_backend_tls_mode() == MysqlxBackendTlsMode::required,
+	   "absent mysqlx_tls_backend_mode row leaves cached mode untouched");
+
+	// --- per-route tls_mode (issue #5692, TLS passthrough) ---
+	//
+	// Parser exercise (mirrors the backend-tls-mode block above).
+	ok(mysqlx_route_tls_mode_from_string("inherit") ==
+	   std::optional<MysqlxRouteTlsMode>(MysqlxRouteTlsMode::inherit) &&
+	   mysqlx_route_tls_mode_from_string("DISABLED") ==
+	   std::optional<MysqlxRouteTlsMode>(MysqlxRouteTlsMode::disabled) &&
+	   mysqlx_route_tls_mode_from_string("Preferred") ==
+	   std::optional<MysqlxRouteTlsMode>(MysqlxRouteTlsMode::preferred) &&
+	   mysqlx_route_tls_mode_from_string("required") ==
+	   std::optional<MysqlxRouteTlsMode>(MysqlxRouteTlsMode::required) &&
+	   mysqlx_route_tls_mode_from_string("PASSTHROUGH") ==
+	   std::optional<MysqlxRouteTlsMode>(MysqlxRouteTlsMode::passthrough),
+	   "route tls mode parser accepts all five documented values case-insensitively");
+	ok(mysqlx_route_tls_mode_from_string("") ==
+	   std::optional<MysqlxRouteTlsMode>(MysqlxRouteTlsMode::inherit),
+	   "route tls mode parser collapses empty/NULL to inherit");
+	ok(!mysqlx_route_tls_mode_from_string("nonsense").has_value(),
+	   "route tls mode parser rejects unknown values");
+	ok(std::string(mysqlx_route_tls_mode_to_string(MysqlxRouteTlsMode::passthrough)) == "passthrough" &&
+	   std::string(mysqlx_route_tls_mode_to_string(MysqlxRouteTlsMode::inherit)) == "inherit",
+	   "route tls mode renders to canonical lowercase string");
+
+	// Default value: any route loaded without an explicit tls_mode
+	// remains inherit (already the case for the 'rw' route loaded above
+	// via install_all_from_admin against the legacy mysqlx_routes DDL,
+	// which has no tls_mode column).
+	ok(store.route_tls_mode("rw") == MysqlxRouteTlsMode::inherit,
+	   "route loaded from legacy schema (no tls_mode column) defaults to inherit");
+	ok(store.route_tls_mode("nonexistent") == MysqlxRouteTlsMode::inherit,
+	   "unknown route reports inherit (safest default)");
+
+	// Round-trip: SAVE a route with passthrough mode, then re-LOAD it
+	// against a schema that DOES have the tls_mode column.
+	{
+		auto db2 = create_test_db();
+		ok(db2->execute(ADMIN_SQLITE_RUNTIME_MYSQL_USERS) &&
+		   db2->execute(ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS) &&
+		   db2->execute(
+			   "CREATE TABLE mysqlx_routes ("
+			   " name VARCHAR NOT NULL PRIMARY KEY,"
+			   " bind VARCHAR NOT NULL,"
+			   " destination_hostgroup INT NOT NULL,"
+			   " fallback_hostgroup INT,"
+			   " strategy VARCHAR NOT NULL DEFAULT 'first_available',"
+			   " active INT NOT NULL DEFAULT 1,"
+			   " attributes VARCHAR NOT NULL DEFAULT '',"
+			   " comment VARCHAR NOT NULL DEFAULT '',"
+			   " tls_mode VARCHAR NOT NULL DEFAULT 'inherit')") &&
+		   db2->execute(
+			   "INSERT INTO mysqlx_routes "
+			   "(name, bind, destination_hostgroup, strategy, tls_mode) VALUES "
+			   "('compliance', '127.0.0.1:7777', 99, 'first_available', 'passthrough')") &&
+		   db2->execute(
+			   "INSERT INTO mysqlx_routes "
+			   "(name, bind, destination_hostgroup, strategy, tls_mode) VALUES "
+			   "('admin', '127.0.0.1:7778', 99, 'first_available', 'inherit')"),
+		   "schema with tls_mode column and two passthrough/inherit rows is created");
+
+		MysqlxConfigStore store2 {};
+		std::string err2;
+		ok(store2.install_routes_from_admin(*db2, err2) && err2.empty() &&
+		   store2.route_tls_mode("compliance") == MysqlxRouteTlsMode::passthrough &&
+		   store2.route_tls_mode("admin") == MysqlxRouteTlsMode::inherit,
+		   "install_routes_from_admin reads tls_mode column for each row");
+
+		// Reject a malformed value.
+		ok(db2->execute("UPDATE mysqlx_routes SET tls_mode='garbage' WHERE name='compliance'") &&
+		   !store2.install_routes_from_admin(*db2, err2) &&
+		   err2.find("garbage") != std::string::npos,
+		   "install_routes_from_admin surfaces malformed tls_mode with descriptive error");
+	}
 
 	return exit_status();
 }

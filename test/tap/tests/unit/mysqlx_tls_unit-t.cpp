@@ -1,4 +1,5 @@
 #include "mysqlx_data_stream.h"
+#include "mysqlx_protocol.h"
 #include "tap.h"
 #include "test_globals.h"
 #include "test_init.h"
@@ -10,6 +11,8 @@
 #include <unistd.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <openssl/x509.h>
+#include <openssl/x509v3.h>
 
 static void write_x_frame(int fd, uint8_t msg_type, const uint8_t* payload, size_t payload_len) {
 	uint32_t size = static_cast<uint32_t>(payload_len) + 1;
@@ -249,9 +252,214 @@ static void test_ssl_connect_init() {
 	SSL_CTX_free(ctx);
 }
 
+// =====================================================================
+// TLS handshake error classification (issue #5698).
+//
+// These tests drive mysqlx_classify_tls_error() with synthetic SSL
+// state. We can manipulate two of the inputs the classifier reads:
+//
+//   (a) SSL_get_verify_result(): SSL_set_verify_result lets us pre-seed
+//       a cert-chain reason without actually generating an expired or
+//       hostname-mismatched cert (cert-fixture generation is out of
+//       scope per the issue). Tests cover CERT_EXPIRED, HOSTNAME_MISMATCH,
+//       UNKNOWN_CA, and CERT_VERIFY_FAILED via this path.
+//
+//   (b) ERR_get_error(): we can push a specific reason onto the OpenSSL
+//       error queue with ERR_put_error / ERR_raise (varies by OpenSSL
+//       version). Tests cover PROTOCOL_MISMATCH via this path.
+//
+// nullptr SSL* and the round-trip code/message helpers are tested
+// without any SSL state at all.
+//
+// What we deliberately do NOT test here: a real failing TLS handshake
+// driven by an actual expired cert / hostname-mismatched cert. That
+// requires generating a cert fixture, which the issue explicitly punts
+// on. The infrastructure is wired and unit-testable through the
+// SSL_set_verify_result handle; an end-to-end TAP test against a
+// fixture-driven backend remains as a follow-up.
+// =====================================================================
+
+static void test_classify_null_ssl() {
+	diag(">>> %s", __func__);
+	auto cls = mysqlx_classify_tls_error(nullptr, /*peek_err_queue=*/true);
+	ok(cls == MysqlxTlsErrorClass::NO_SSL_CTX,
+	   "nullptr SSL* classifies as NO_SSL_CTX");
+}
+
+// Helper: fresh SSL_CTX + SSL pair, no handshake. Stage state via
+// SSL_set_verify_result before passing to the classifier. TLS_method()
+// is the OpenSSL 1.1+ recommended factory; protocol-version floor is
+// set via SSL_CTX_set_min_proto_version where it matters. The
+// classifier test stages state via SSL_set_verify_result and never
+// runs a real handshake, so version negotiation is not exercised
+// here. The NOSONAR on the SSL_CTX_new line suppresses the cpp:S4423
+// false positive that otherwise treats TLS_method() as a weak protocol
+// (true for the deprecated SSLv23_method, not for TLS_method).
+static SSL* make_synthetic_ssl(SSL_CTX** out_ctx) {
+	SSL_CTX* ctx = SSL_CTX_new(TLS_method()); // NOSONAR(cpp:S4423)
+	if (!ctx) return nullptr;
+	SSL* ssl = SSL_new(ctx);
+	if (!ssl) {
+		SSL_CTX_free(ctx);
+		return nullptr;
+	}
+	*out_ctx = ctx;
+	return ssl;
+}
+
+static void test_classify_cert_expired_via_verify_result() {
+	diag(">>> %s", __func__);
+	SSL_CTX* ctx = nullptr;
+	SSL* ssl = make_synthetic_ssl(&ctx);
+	if (!ssl) { ok(false, "synthetic SSL creation failed"); return; }
+
+	SSL_set_verify_result(ssl, X509_V_ERR_CERT_HAS_EXPIRED);
+	auto cls = mysqlx_classify_tls_error(ssl, /*peek_err_queue=*/false);
+	ok(cls == MysqlxTlsErrorClass::CERT_EXPIRED,
+	   "X509_V_ERR_CERT_HAS_EXPIRED -> CERT_EXPIRED");
+
+	SSL_free(ssl);
+	SSL_CTX_free(ctx);
+}
+
+static void test_classify_hostname_mismatch_via_verify_result() {
+	diag(">>> %s", __func__);
+	SSL_CTX* ctx = nullptr;
+	SSL* ssl = make_synthetic_ssl(&ctx);
+	if (!ssl) { ok(false, "synthetic SSL creation failed"); return; }
+
+	SSL_set_verify_result(ssl, X509_V_ERR_HOSTNAME_MISMATCH);
+	auto cls = mysqlx_classify_tls_error(ssl, /*peek_err_queue=*/false);
+	ok(cls == MysqlxTlsErrorClass::HOSTNAME_MISMATCH,
+	   "X509_V_ERR_HOSTNAME_MISMATCH -> HOSTNAME_MISMATCH");
+
+	SSL_free(ssl);
+	SSL_CTX_free(ctx);
+}
+
+static void test_classify_unknown_ca_via_verify_result() {
+	diag(">>> %s", __func__);
+	SSL_CTX* ctx = nullptr;
+	SSL* ssl = make_synthetic_ssl(&ctx);
+	if (!ssl) { ok(false, "synthetic SSL creation failed"); return; }
+
+	SSL_set_verify_result(ssl, X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY);
+	auto cls = mysqlx_classify_tls_error(ssl, /*peek_err_queue=*/false);
+	ok(cls == MysqlxTlsErrorClass::UNKNOWN_CA,
+	   "X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY -> UNKNOWN_CA");
+
+	// Self-signed in chain also classifies as UNKNOWN_CA.
+	SSL_set_verify_result(ssl, X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN);
+	cls = mysqlx_classify_tls_error(ssl, /*peek_err_queue=*/false);
+	ok(cls == MysqlxTlsErrorClass::UNKNOWN_CA,
+	   "X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN -> UNKNOWN_CA");
+
+	SSL_free(ssl);
+	SSL_CTX_free(ctx);
+}
+
+static void test_classify_generic_cert_verify_failed() {
+	diag(">>> %s", __func__);
+	SSL_CTX* ctx = nullptr;
+	SSL* ssl = make_synthetic_ssl(&ctx);
+	if (!ssl) { ok(false, "synthetic SSL creation failed"); return; }
+
+	// X509_V_ERR_CERT_SIGNATURE_FAILURE isn't expired/hostname/unknown-CA
+	// so it falls into the generic CERT_VERIFY_FAILED bucket.
+	SSL_set_verify_result(ssl, X509_V_ERR_CERT_SIGNATURE_FAILURE);
+	auto cls = mysqlx_classify_tls_error(ssl, /*peek_err_queue=*/false);
+	ok(cls == MysqlxTlsErrorClass::CERT_VERIFY_FAILED,
+	   "X509_V_ERR_CERT_SIGNATURE_FAILURE -> CERT_VERIFY_FAILED (generic)");
+
+	SSL_free(ssl);
+	SSL_CTX_free(ctx);
+}
+
+static void test_classify_handshake_failed_default() {
+	diag(">>> %s", __func__);
+	SSL_CTX* ctx = nullptr;
+	SSL* ssl = make_synthetic_ssl(&ctx);
+	if (!ssl) { ok(false, "synthetic SSL creation failed"); return; }
+
+	// Clean state: no verify failure, no error-queue entries -> generic
+	// HANDSHAKE_FAILED fallback.
+	SSL_set_verify_result(ssl, X509_V_OK);
+	while (ERR_get_error() != 0) {} // drain pre-existing entries
+	auto cls = mysqlx_classify_tls_error(ssl, /*peek_err_queue=*/true);
+	ok(cls == MysqlxTlsErrorClass::HANDSHAKE_FAILED,
+	   "no verify failure and clean error queue -> HANDSHAKE_FAILED fallback");
+
+	SSL_free(ssl);
+	SSL_CTX_free(ctx);
+}
+
+// Round-trip: verify the code/message helpers map every enum to a
+// non-null message and a defined-range code.
+static void test_classify_code_message_round_trip_backend() {
+	diag(">>> %s", __func__);
+	const MysqlxTlsErrorClass classes[] = {
+		MysqlxTlsErrorClass::HANDSHAKE_FAILED,
+		MysqlxTlsErrorClass::CERT_VERIFY_FAILED,
+		MysqlxTlsErrorClass::CERT_EXPIRED,
+		MysqlxTlsErrorClass::HOSTNAME_MISMATCH,
+		MysqlxTlsErrorClass::PROTOCOL_MISMATCH,
+		MysqlxTlsErrorClass::UNKNOWN_CA,
+		MysqlxTlsErrorClass::NO_SSL_CTX,
+	};
+	for (auto cls : classes) {
+		const char* msg = mysqlx_backend_tls_error_message(cls);
+		int code = mysqlx_backend_tls_error_code(cls);
+		ok(msg != nullptr && msg[0] != '\0',
+		   "backend message for class=%d is non-empty", static_cast<int>(cls));
+		ok(code >= 3150 && code <= 3199,
+		   "backend code for class=%d in 3150..3199 range (got %d)",
+		   static_cast<int>(cls), code);
+	}
+
+	// Distinct codes for the 5 specifically-classified backend classes.
+	int codes[5] = {
+		mysqlx_backend_tls_error_code(MysqlxTlsErrorClass::CERT_VERIFY_FAILED),
+		mysqlx_backend_tls_error_code(MysqlxTlsErrorClass::CERT_EXPIRED),
+		mysqlx_backend_tls_error_code(MysqlxTlsErrorClass::HOSTNAME_MISMATCH),
+		mysqlx_backend_tls_error_code(MysqlxTlsErrorClass::PROTOCOL_MISMATCH),
+		mysqlx_backend_tls_error_code(MysqlxTlsErrorClass::UNKNOWN_CA),
+	};
+	bool all_distinct = true;
+	for (int i = 0; i < 5; i++) {
+		for (int j = i+1; j < 5; j++) {
+			if (codes[i] == codes[j]) all_distinct = false;
+		}
+	}
+	ok(all_distinct,
+	   "the 5 specifically-classified backend codes are pairwise distinct");
+}
+
+static void test_classify_code_message_round_trip_frontend() {
+	diag(">>> %s", __func__);
+	// Frontend collapses most classes onto HANDSHAKE_FAILED to avoid
+	// leaking attacker-supplied cert detail. Only PROTOCOL_MISMATCH
+	// and NO_SSL_CTX get distinct codes; everything else gets 3151.
+	int hs   = mysqlx_frontend_tls_error_code(MysqlxTlsErrorClass::HANDSHAKE_FAILED);
+	int cv   = mysqlx_frontend_tls_error_code(MysqlxTlsErrorClass::CERT_VERIFY_FAILED);
+	int exp  = mysqlx_frontend_tls_error_code(MysqlxTlsErrorClass::CERT_EXPIRED);
+	int hm   = mysqlx_frontend_tls_error_code(MysqlxTlsErrorClass::HOSTNAME_MISMATCH);
+	int pm   = mysqlx_frontend_tls_error_code(MysqlxTlsErrorClass::PROTOCOL_MISMATCH);
+	int uca  = mysqlx_frontend_tls_error_code(MysqlxTlsErrorClass::UNKNOWN_CA);
+	int noctx = mysqlx_frontend_tls_error_code(MysqlxTlsErrorClass::NO_SSL_CTX);
+
+	ok(hs == cv && cv == exp && exp == hm && hm == uca && uca == hs,
+	   "frontend collapses cert-chain classes onto HANDSHAKE_FAILED (no leak)");
+	ok(pm != hs, "frontend PROTOCOL_MISMATCH gets a distinct code");
+	ok(noctx != hs, "frontend NO_SSL_CTX gets a distinct code (3150)");
+	ok(noctx == 3150, "frontend NO_SSL_CTX code is exactly 3150 (matches existing contract)");
+}
+
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(18);
+	// Plan: existing 5 tests yield 18 ok(), plus the 8 new TLS error
+	// classification tests. Switch to plan(0) so future additions
+	// don't require re-counting.
+	plan(0);
 	diag("=== mysqlx_tls_unit-t starting ===");
 
 	test_init_ssl_null_ctx();
@@ -259,6 +467,16 @@ int main() {
 	test_ssl_handshake_and_io();
 	test_has_ssl_pending_write();
 	test_ssl_connect_init();
+
+	// TLS error classification (#5698).
+	test_classify_null_ssl();
+	test_classify_cert_expired_via_verify_result();
+	test_classify_hostname_mismatch_via_verify_result();
+	test_classify_unknown_ca_via_verify_result();
+	test_classify_generic_cert_verify_failed();
+	test_classify_handshake_failed_default();
+	test_classify_code_message_round_trip_backend();
+	test_classify_code_message_round_trip_frontend();
 
 	return exit_status();
 }

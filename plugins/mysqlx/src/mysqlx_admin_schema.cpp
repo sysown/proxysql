@@ -1,6 +1,7 @@
 #include "mysqlx_admin_schema.h"
 
 #include "mysqlx_plugin.h"
+#include "mysqlx_stats.h"
 #include "sqlite3db.h"
 
 #include <initializer_list>
@@ -49,6 +50,12 @@ const char kRuntimeMysqlxUsersTableDef[] =
 	" comment VARCHAR NOT NULL DEFAULT ''"
 	" )";
 
+// `tls_mode` was added with issue #5692 (TLS passthrough). Values are
+// validated case-insensitively at LOAD time by mysqlx_route_tls_mode_
+// from_string(); the CHECK constraint here mirrors the canonical lower-
+// case spellings so a typo at INSERT time is caught early. Default
+// 'inherit' preserves prior behaviour: a route without an explicit
+// override defers to the deployment-wide `mysqlx_tls_mode`.
 const char kMysqlxRoutesTableDef[] =
 	"CREATE TABLE mysqlx_routes ("
 	" name VARCHAR NOT NULL PRIMARY KEY,"
@@ -58,7 +65,8 @@ const char kMysqlxRoutesTableDef[] =
 	" strategy VARCHAR NOT NULL DEFAULT 'first_available',"
 	" active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1,"
 	" attributes VARCHAR CHECK (JSON_VALID(attributes) OR attributes = '') NOT NULL DEFAULT '',"
-	" comment VARCHAR NOT NULL DEFAULT ''"
+	" comment VARCHAR NOT NULL DEFAULT '',"
+	" tls_mode VARCHAR CHECK (tls_mode IN ('inherit','disabled','preferred','required','passthrough')) NOT NULL DEFAULT 'inherit'"
 	" )";
 
 const char kRuntimeMysqlxRoutesTableDef[] =
@@ -70,7 +78,8 @@ const char kRuntimeMysqlxRoutesTableDef[] =
 	" strategy VARCHAR NOT NULL DEFAULT 'first_available',"
 	" active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1,"
 	" attributes VARCHAR CHECK (JSON_VALID(attributes) OR attributes = '') NOT NULL DEFAULT '',"
-	" comment VARCHAR NOT NULL DEFAULT ''"
+	" comment VARCHAR NOT NULL DEFAULT '',"
+	" tls_mode VARCHAR CHECK (tls_mode IN ('inherit','disabled','preferred','required','passthrough')) NOT NULL DEFAULT 'inherit'"
 	" )";
 
 const char kMysqlxBackendEndpointsTableDef[] =
@@ -244,6 +253,40 @@ void refresh_variables_runtime_view(SQLite3DB* admindb, void*) {
 	if (admindb == nullptr) return;
 	if (mysqlx_context().config_store == nullptr) return;
 	mysqlx_context().config_store->project_variables_to_runtime_view(*admindb);
+}
+
+// Stats-projection refresh callback: chassis fires this on demand when an
+// admin SELECT references stats_mysqlx_routes, so the per-route counters
+// are refilled lazily from MysqlxStatsStore right before the operator
+// reads them.
+//
+// flush_to_sqlite writes to a bare table name, so the callback must hand
+// it the *statsdb* handle — the chassis-supplied `admindb` argument
+// reaches stats_mysqlx_routes only via the `stats.` attached schema, and
+// that's an unnecessary detour. The plugin already cached the services
+// pointer in mysqlx_context().services at Phase D init, so the get_statsdb
+// trampoline is reachable.
+void refresh_stats_routes_view(SQLite3DB* /*admindb*/, void*) {
+	if (mysqlx_context().services == nullptr) return;
+	if (mysqlx_context().services->get_statsdb == nullptr) return;
+	SQLite3DB* statsdb = mysqlx_context().services->get_statsdb();
+	if (statsdb == nullptr) return;
+	mysqlx_stats().flush_to_sqlite(*statsdb);
+}
+
+// Same shape, but for stats_mysqlx_processlist: the projector walks
+// every Mysqlx_Thread and emits one row per active session. Defined in
+// mysqlx_plugin.cpp; declared __attribute__((weak)) so the
+// mysqlx_admin_schema_unit-t and friends (which compile this TU but
+// don't link mysqlx_plugin.cpp) still link successfully — the null check
+// here is the runtime safety net for the test build.
+void refresh_stats_processlist_view(SQLite3DB* /*admindb*/, void*) {
+	if (mysqlx_context().services == nullptr) return;
+	if (mysqlx_context().services->get_statsdb == nullptr) return;
+	if (&mysqlx_populate_stats_processlist == nullptr) return;
+	SQLite3DB* statsdb = mysqlx_context().services->get_statsdb();
+	if (statsdb == nullptr) return;
+	mysqlx_populate_stats_processlist(*statsdb);
 }
 
 bool disk_to_memory(SQLite3DB& admindb, const char* table_name) {
@@ -461,6 +504,8 @@ bool mysqlx_register_admin_schema(ProxySQL_PluginServices& services) {
 		services.register_runtime_view({kRuntimeMysqlxRoutesTable,            &refresh_routes_runtime_view,    nullptr});
 		services.register_runtime_view({kRuntimeMysqlxBackendEndpointsTable,  &refresh_endpoints_runtime_view, nullptr});
 		services.register_runtime_view({kRuntimeMysqlxVariablesTable,         &refresh_variables_runtime_view, nullptr});
+		services.register_runtime_view({kStatsMysqlxRoutesTable,              &refresh_stats_routes_view,      nullptr});
+		services.register_runtime_view({kStatsMysqlxProcesslistTable,         &refresh_stats_processlist_view, nullptr});
 	}
 
 	// Stats tables (stats_db only, no config copy needed).
