@@ -38,6 +38,7 @@ IDIRS :=	-I$(TAP_IDIR) \
 			-I$(LIBUSUAL_IDIR) \
 			-I$(SSL_IDIR) \
 			-I$(ZSTD_IDIR) \
+			-I$(PARSERSQL_IDIR) \
 			-I$(PROXYSQL_PATH)/deps/lz4/lz4/lib \
 			-I$(PROXYSQL_PATH)/include \
 			-I$(PROXYSQL_PATH)/test/tap/test_helpers
@@ -64,7 +65,8 @@ LDIRS :=	-L$(TAP_LDIR) \
 			-L$(POSTGRESQL_LDIR) \
 			-L$(LIBSCRAM_LDIR) \
 			-L$(LIBUSUAL_LDIR) \
-			-L$(SSL_LDIR)
+			-L$(SSL_LDIR) \
+			-L$(PARSERSQL_LDIR)
 
 ifeq ($(UNAME_S),Linux)
 	LDIRS += -L$(COREDUMPER_LDIR)
@@ -154,7 +156,7 @@ else
 LIBPROXYSQLAR_FULL := $(LIBPROXYSQLAR)
 
 MYLIBS := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -lcurl -lssl -lcrypto -luuid \
-		  -Wl,-Bstatic -lconfig -Wl,--whole-archive -lproxysql -Wl,--no-whole-archive -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre \
+		  -Wl,-Bstatic -lconfig -Wl,--whole-archive -lproxysql -Wl,--no-whole-archive -lsqlparser -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre \
 		  -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev \
 		  -lprometheus-cpp-pull -lprometheus-cpp-core \
 		  -Wl,-Bstatic -lpq -lpgcommon -lpgport \
