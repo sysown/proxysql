@@ -1,7 +1,7 @@
 #ifndef CLASS_MCP_TOOL_HANDLER_H
 #define CLASS_MCP_TOOL_HANDLER_H
 
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include <string>
 
@@ -205,5 +205,5 @@ protected:
 	static json resultset_to_json(SQLite3_result* resultset, int cols);
 };
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */
 #endif /* CLASS_MCP_TOOL_HANDLER_H */

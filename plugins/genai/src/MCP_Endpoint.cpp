@@ -1,4 +1,4 @@
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 
 #include "proxysql.h"
@@ -567,4 +567,4 @@ json MCP_JSONRPC_Resource::handle_resources_list() {
 	return result;
 }
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */

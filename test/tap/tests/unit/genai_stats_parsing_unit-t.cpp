@@ -18,7 +18,7 @@
 #include "test_init.h"
 #include "proxysql.h"
 
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include "Stats_Tool_Handler.h"
 
@@ -349,10 +349,10 @@ static void test_percentile_p100() {
 	ok(p100 == 1000, "calculate_percentile: p100 returns last bucket threshold");
 }
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */
 
 int main() {
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 	plan(79);
 	test_init_minimal();
 

@@ -413,6 +413,7 @@
   "test_ssl_fast_forward-3_libmysql-t" : [ "legacy-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g4","mysql90-g4","mysql95-g4" ],
   "test_ssl_large_query-1-t" : [ "legacy-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g4","mysql90-g4","mysql95-g4" ],
   "test_ssl_large_query-2-t" : [ "legacy-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g4","mysql90-g4","mysql95-g4" ],
+  "test_stats_mcp_tables-t" : [ "ai-g1","@proxysql_min_version:4.0" ],
   "test_stats_proxysql_message_metrics-t" : [ "legacy-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g4","mysql90-g4","mysql95-g4" ],
   "test_thread_conn_dist-t" : [ "legacy-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g4","mysql90-g4","mysql95-g4" ],
   "test_throttle_max_bytes_per_second_to_client-t" : [ "legacy-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g4","mysql90-g4","mysql95-g4" ],

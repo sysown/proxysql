@@ -47,12 +47,15 @@ The same codebase produces three product tiers via feature flags:
 implies `PROXYSQLFFTO=1` and `PROXYSQLTSDB=1`.
 
 **As of the GenAI plugin carve-out (Step 7), `PROXYSQLGENAI` no longer
-gates any code in core.**  All AI/MCP/RAG/LLM features live in
-`plugins/genai/` and load as a `.so` at runtime.  The user-facing
-`PROXYSQLGENAI=1` flag still exists, and now means "build the genai
-plugin alongside core proxysql" — it propagates through the plugin
-chassis (`PROXYSQL40=1`) but core compiles identically with or without
-it.
+gates any code in core with the exception of the sqlite-vec hook
+(`proxy_sqlite3_vec_init` in `lib/proxy_sqlite3_symbols.cpp` and the
+`vec.o` link in `lib/Makefile` / `src/Makefile`), which is only needed
+when the genai plugin is loaded.**  All other AI/MCP/RAG/LLM features
+live in `plugins/genai/` and load as a `.so` at runtime.  The
+user-facing `PROXYSQLGENAI=1` flag still exists, and now means "build
+the genai plugin alongside core proxysql" — it propagates through the
+plugin chassis (`PROXYSQL40=1`) and the sqlite-vec link, but core
+compiles identically with or without it otherwise.
 
 ### Build Flags
 

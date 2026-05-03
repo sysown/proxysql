@@ -1,7 +1,7 @@
 #ifndef CLASS_MYSQL_FTS_H
 #define CLASS_MYSQL_FTS_H
 
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include "sqlite3db.h"
 #include <string>
@@ -203,5 +203,5 @@ public:
 	SQLite3DB* get_db() { return db; }
 };
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */
 #endif /* CLASS_MYSQL_FTS_H */

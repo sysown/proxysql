@@ -1,4 +1,4 @@
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 
 #include "proxysql.h"
@@ -1421,4 +1421,4 @@ std::string Static_Harvester::get_harvest_stats(int run_id) {
 	return stats.dump();
 }
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */

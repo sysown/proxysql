@@ -1,4 +1,4 @@
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include "AI_Vector_Storage.h"
 #include "proxysql_utils.h"
@@ -37,4 +37,4 @@ std::vector<std::pair<std::string, float>> AI_Vector_Storage::search_similar(
 	return std::vector<std::pair<std::string, float>>();
 }
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */

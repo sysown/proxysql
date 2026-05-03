@@ -108,7 +108,7 @@ jobs:
       #             mysqlx plugin to build at all. The cascade in
       #             plugins/mysqlx/Makefile implies PROXYSQL31 +
       #             PROXYSQLFFTO + PROXYSQLTSDB. We deliberately do
-      #             NOT set PROXYSQLGENAI=1: the GenAI/MCP/AI/RAG
+      #             NOT set PROXYSQL40=1: the GenAI/MCP/AI/RAG
       #             modules aren't on the concurrency-heavy code
       #             paths TSAN targets and would just add wall-clock.
       run: |

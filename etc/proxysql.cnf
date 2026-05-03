@@ -41,7 +41,7 @@ errorlog="/var/lib/proxysql/proxysql.log"
 # explanatory message.
 #
 # plugins=(
-# 	"/usr/lib/proxysql/ProxySQL_Mysqlx_Plugin.so"
+# 	"/usr/lib/proxysql/ProxySQL_MySQLX_Plugin.so"
 # 	"/usr/lib/proxysql/ProxySQL_GenAI_Plugin.so"
 # )
 

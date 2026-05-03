@@ -29,8 +29,15 @@ namespace prometheus { class Registry; }
 //          stay on ABI 2 keep working — they simply don't see the new
 //          field in their compiled-against struct, and core never
 //          dereferences past the ABI-2 layout for them.
-#define PROXYSQL_PLUGIN_ABI_VERSION 3u
-#define PROXYSQL_PLUGIN_ABI_VERSION_MAX 3u
+//   ABI 4: ProxySQL_PluginRuntimeView gains a `db_kind` field at the
+//          end of the struct. The chassis passes the matching DB handle
+//          (admindb/configdb/statsdb) to the refresh callback instead of
+//          always passing admindb. ABI-3 plugins that initialize the
+//          struct with {table_name, refresh, opaque} automatically get
+//          db_kind = admin_db (value 0) via zero-initialization of the
+//          trailing field — matching the pre-ABI-4 behaviour.
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = 4u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = 4u;
 
 enum class ProxySQL_PluginDBKind : uint8_t {
 	admin_db = 0,
@@ -197,12 +204,11 @@ using proxysql_plugin_get_prometheus_registry_cb =
 // hook walks every registered view and invokes the callback for any
 // that the SQL references.
 //
-// The refresh callback gets a borrowed admindb handle and is expected
-// to do (typically) `BEGIN; DELETE FROM <table>; INSERT/REPLACE INTO
-// <table> ...; COMMIT;` from the module's in-memory state. The chassis
-// passes admindb explicitly (rather than the plugin reaching for it via
-// services.get_admindb) because the same callback might be invoked
-// against snapshot DBs in the future without the global-getter detour.
+// The refresh callback receives a borrowed DB handle matching the
+// registered db_kind (admin_db → admindb, config_db → configdb,
+// stats_db → statsdb) and is expected to do (typically) `BEGIN;
+// DELETE FROM <table>; INSERT/REPLACE INTO <table> ...; COMMIT;`
+// from the module's in-memory state.
 //
 // Lifetime: the chassis deep-copies `table_name`, so the plugin need
 // not keep the pointed-to string alive. The callback pointer itself
@@ -216,8 +222,9 @@ using proxysql_plugin_get_prometheus_registry_cb =
 // nullptr.
 struct ProxySQL_PluginRuntimeView {
 	const char *table_name;
-	void (*refresh)(SQLite3DB *admindb, void *opaque);
+	void (*refresh)(SQLite3DB *db, void *opaque);
 	void *opaque;
+	ProxySQL_PluginDBKind db_kind;  // ABI 4: at tail, defaults to admin_db (0)
 };
 
 using proxysql_plugin_register_runtime_view_cb =

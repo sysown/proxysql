@@ -22,7 +22,7 @@
 #include "test_init.h"
 #include "proxysql.h"
 
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include "MCP_Thread.h"
 
@@ -488,12 +488,12 @@ int main() {
 	return exit_status();
 }
 
-#else /* !PROXYSQLGENAI */
+#else /* !PROXYSQL40 */
 
 int main() {
 	plan(1);
-	ok(true, "PROXYSQLGENAI not enabled -- skipping MCP_Thread unit tests");
+	ok(true, "PROXYSQL40 not enabled -- skipping MCP_Thread unit tests");
 	return exit_status();
 }
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */

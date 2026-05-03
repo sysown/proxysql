@@ -1620,7 +1620,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	// users with no other runtime_* mention) still gets its projection
 	// fired.
 	if (admin) {
-		proxysql_refresh_configured_plugin_runtime_views(query_no_space, admindb);
+		proxysql_refresh_configured_plugin_runtime_views(query_no_space, admindb, configdb, statsdb);
 	}
 #endif /* PROXYSQL40 */
 //	if (stats_mysql_processlist || stats_mysql_connection_pool || stats_mysql_query_digest || stats_mysql_query_digest_reset) {

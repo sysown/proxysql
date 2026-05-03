@@ -43,6 +43,10 @@ IDIRS :=	-I$(TAP_IDIR) \
 			-I$(PROXYSQL_PATH)/include \
 			-I$(PROXYSQL_PATH)/test/tap/test_helpers
 
+ifdef PROXYSQL40
+IDIRS += -I$(PROXYSQL_PATH)/plugins/genai/include
+endif
+
 
 # ===========================================================================
 # Library directories
@@ -115,8 +119,10 @@ ifeq ($(UNAME_S),Linux)
 	STATIC_LIBS += $(COREDUMPER_LDIR)/libcoredumper.a
 endif
 
-ifeq ($(PROXYSQLGENAI),1)
+ifneq ($(PROXYSQL40),)
+ifneq ($(wildcard $(SQLITE3_LDIR)/vec.o),)
 	STATIC_LIBS += $(SQLITE3_LDIR)/vec.o
+endif
 endif
 
 
@@ -206,23 +212,6 @@ ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c ClickHouse_Server),0)
 	PSQLCH := -DPROXYSQLCLICKHOUSE
 endif
 PSQLGA :=
-# Step 7 of the carve-out moved every GenAI symbol (MCP_Tool_Handler,
-# Anomaly_Detector, MCP_Threads_Handler, MySQL_FTS, LLM_Client, ...)
-# out of libproxysql.a into plugins/genai/.  The unit-test build
-# links libproxysql.a but NOT the plugin .so or any individual plugin
-# .cpp file — so defining PROXYSQLGENAI here would unconditionally
-# compile-in `#ifdef PROXYSQLGENAI` test bodies that instantiate
-# plugin classes the linker has no definitions for.
-#
-# Solution: leave the macro undefined for the test build.  Tests that
-# legitimately need to test plugin internals (genai_plugin_load_unit-t,
-# genai_plugin_anomaly_unit-t, genai_plugin_backend_client_unit-t,
-# genai_fts_string_unit-t) compile in the specific plugin source
-# files they need via dedicated build rules below — and define
-# -DPROXYSQLGENAI on the command line in those rules.  All the other
-# genai_*_unit-t tests fall through to their `#else SKIP` path and
-# emit one ok() so the runner doesn't report them as missing.
-PSQLGA :=
 PSQLFFTO :=
 ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c MySQLFFTO),0)
 	PROXYSQLFFTO := 1
@@ -253,15 +242,10 @@ ifneq ($(PROXYSQLFFTO)$(PROXYSQLTSDB),)
 	PSQL31 := -DPROXYSQL31
 endif
 
-ifeq ($(PROXYSQLGENAI),1)
-	# libsqlite_rembed.a was previously linked here for the (now-removed)
-	# sqlite-rembed Rust extension. The lib is no longer produced on this
-	# branch (see deps/sqlite3/README.md — only sqlite-vec remains as a
-	# GenAI-tier dep), and libproxysql.a does not reference its symbols,
-	# so referencing the .a here just causes the linker to fail when the
-	# stale path doesn't exist on disk. Mirroring the upstream fix that
-	# already landed on other branches: keep vec.o, drop rembed.
+ifneq ($(PROXYSQL40),)
+ifneq ($(wildcard $(SQLITE3_LDIR)/vec.o),)
 	STATIC_LIBS += $(SQLITE3_LDIR)/vec.o
+endif
 endif
 PSQLDEBUG :=
 ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -cw 'init_debug_struct'),0)
@@ -323,7 +307,7 @@ mysqlx_plugin_build:
 	$(MAKE) -C $(PROXYSQL_PATH)/plugins/mysqlx all \
 		CC=$(CC) CXX=$(CXX) OPTZ="$(MYSQLX_PLUGIN_OPTZ)" \
 		WGCOV="$(WGCOV)" WASAN="$(WASAN)" \
-		PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQL40=$(PROXYSQL40) \
+		PROXYSQL40=$(PROXYSQL40) \
 		PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) \
 		PROXYSQLTSDB=$(PROXYSQLTSDB)
 
@@ -343,7 +327,7 @@ FORCE:
 
 $(LIBPROXYSQLAR): FORCE
 	$(MAKE) -C $(PROXYSQL_PATH)/lib libproxysql.a \
-		PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) \
+		PROXYSQLCLICKHOUSE=1 \
 		PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) \
 		PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) CC=$(CC) CXX=$(CXX)
 
@@ -374,27 +358,20 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	genai_fts_string_unit-t \
 	sqlite3db_unit-t \
 	pgsql_error_helper_unit-t \
-	genai_stats_parsing_unit-t \
 	genai_llm_clients_unit-t \
 	charset_find_unit-t \
-	genai_query_handler_unit-t \
-	genai_mcp_endpoint_unit-t \
-	genai_mcp_thread_unit-t \
 	config_validation_unit-t \
 	config_write_unit-t \
 	query_processor_firewall_unit-t \
 	statistics_unit-t \
 	log_utils_unit-t \
-	genai_thread_unit-t \
 	listen_validator_unit-t \
 	c_tokenizer_unit-t \
 	pgsql_tokenizer_unit-t \
 	ezoption_parser_unit-t \
-	genai_discovery_schema_unit-t \
 	gtid_trxid_interval_unit-t \
 	gtid_set_unit-t \
 	gtid_server_data_unit-t \
-	genai_mysql_catalog_unit-t \
 	admin_disk_upgrade_unit-t \
 	glovars_unit-t \
 	pgsql_servers_ssl_params_unit-t
@@ -417,6 +394,13 @@ UNIT_TESTS += \
 	genai_plugin_load_unit-t \
 	genai_plugin_anomaly_unit-t \
 	genai_plugin_backend_client_unit-t \
+	genai_stats_parsing_unit-t \
+	genai_query_handler_unit-t \
+	genai_mcp_endpoint_unit-t \
+	genai_mcp_thread_unit-t \
+	genai_thread_unit-t \
+	genai_discovery_schema_unit-t \
+	genai_mysql_catalog_unit-t \
 	test_mysqlx_plugin_load-t \
 	test_mysqlx_admin_tables-t \
 	mysqlx_config_store_unit-t \
@@ -678,12 +662,12 @@ plugin_lifecycle_unit-t: plugin_lifecycle_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)/t
 # the friend-class helper without dlopening the .so.
 GENAI_ANOMALY_SRC := $(PROXYSQL_PATH)/plugins/genai/src/Anomaly_Detector.cpp
 GENAI_PLUGIN_INCLUDE := -I$(PROXYSQL_PATH)/plugins/genai/include
-# Plugin-side .cpp files all wrap their body in `#ifdef PROXYSQLGENAI`,
-# so dedicated rules that compile them must pass -DPROXYSQLGENAI on the
+# Plugin-side .cpp files all wrap their body in `#ifdef PROXYSQL40`,
+# so dedicated rules that compile them must pass -DPROXYSQL40 on the
 # command line.  The unit-test build's PSQLGA is intentionally empty
 # (libproxysql.a doesn't carry plugin code post-Step-7); each rule
 # below opts in for itself.
-GENAI_PLUGIN_DEFINES := -DPROXYSQLGENAI
+GENAI_PLUGIN_DEFINES := -DPROXYSQL40
 genai_plugin_anomaly_unit-t: genai_plugin_anomaly_unit-t.cpp $(GENAI_ANOMALY_SRC) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
 	$(CXX) $< $(GENAI_ANOMALY_SRC) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		$(GENAI_PLUGIN_DEFINES) $(GENAI_PLUGIN_INCLUDE) $(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
@@ -728,6 +712,51 @@ genai_fts_string_unit-t: genai_fts_string_unit-t.cpp $(GENAI_FTS_SRCS) $(ODIR)/t
 	$(CXX) $< $(GENAI_FTS_SRCS) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		$(GENAI_PLUGIN_DEFINES) $(GENAI_PLUGIN_INCLUDE) $(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+# Genai tests that include plugin headers from plugins/genai/include/
+# and instantiate genai types.  These tests call genai functions directly
+# (not through dlopen), so the genai symbols must be compiled into the
+# test binary.  The genai sources have deep transitive dependencies
+# (Stats_Tool_Handler → MCP_Tool_Handler → MCP_Thread → …), so the
+# simplest reliable approach is to compile all genai .cpp files into
+# each test that needs them.  plugin_main.cpp is excluded because it
+# contains the dlopen/dlsym entry point that would conflict.
+GENAI_ALL_SRCS := $(wildcard $(PROXYSQL_PATH)/plugins/genai/src/*.cpp $(PROXYSQL_PATH)/plugins/genai/src/tool_handlers/*.cpp)
+
+genai_stats_parsing_unit-t: genai_stats_parsing_unit-t.cpp $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) \
+		$(GENAI_PLUGIN_DEFINES) $(IDIRS) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+genai_query_handler_unit-t: genai_query_handler_unit-t.cpp $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) \
+		$(GENAI_PLUGIN_DEFINES) $(IDIRS) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+genai_mcp_endpoint_unit-t: genai_mcp_endpoint_unit-t.cpp $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) \
+		$(GENAI_PLUGIN_DEFINES) $(IDIRS) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+genai_mcp_thread_unit-t: genai_mcp_thread_unit-t.cpp $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) \
+		$(GENAI_PLUGIN_DEFINES) $(IDIRS) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+genai_thread_unit-t: genai_thread_unit-t.cpp $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) \
+		$(GENAI_PLUGIN_DEFINES) $(IDIRS) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+genai_discovery_schema_unit-t: genai_discovery_schema_unit-t.cpp $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) \
+		$(GENAI_PLUGIN_DEFINES) $(IDIRS) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+genai_mysql_catalog_unit-t: genai_mysql_catalog_unit-t.cpp $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) \
+		$(GENAI_PLUGIN_DEFINES) $(IDIRS) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
 # Pattern rule: all unit tests use the same compile + link flags.
 # Each test binary is built from its .cpp source, linked against
