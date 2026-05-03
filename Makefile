@@ -287,6 +287,7 @@ build_lib_legacy: build_deps_legacy
 build_src_legacy: build_lib_legacy
 	cd src && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysqlx && OPTZ="${O2} -ggdb" PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysqlx plugin (PROXYSQL40 not set)")
+	$(if $(filter 1,$(PROXYSQLGENAI)),cd plugins/genai && OPTZ="${O2} -ggdb" PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] genai plugin (PROXYSQLGENAI not set)")
 
 .PHONY: build_deps_debug_legacy
 build_deps_debug_legacy:
@@ -300,6 +301,7 @@ build_lib_debug_legacy: build_deps_debug_legacy
 build_src_debug_legacy: build_lib_debug_legacy
 	cd src && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysqlx && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysqlx plugin (PROXYSQL40 not set)")
+	$(if $(filter 1,$(PROXYSQLGENAI)),cd plugins/genai && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] genai plugin (PROXYSQLGENAI not set)")
 #--
 
 .PHONY: build_src_testaurora
@@ -411,11 +413,13 @@ build_lib_debug_default: build_deps_debug_default
 build_src_default: build_lib_default
 	cd src && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysqlx && OPTZ="${O2} -ggdb" PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysqlx plugin (PROXYSQL40 not set)")
+	$(if $(filter 1,$(PROXYSQLGENAI)),cd plugins/genai && OPTZ="${O2} -ggdb" PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] genai plugin (PROXYSQLGENAI not set)")
 
 .PHONY: build_src_debug_default
 build_src_debug_default: build_lib_debug_default
 	cd src && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysqlx && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysqlx plugin (PROXYSQL40 not set)")
+	$(if $(filter 1,$(PROXYSQLGENAI)),cd plugins/genai && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] genai plugin (PROXYSQLGENAI not set)")
 
 
 ### packaging targets
@@ -500,6 +504,7 @@ clean:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 	cd plugins/mysqlx && ${MAKE} clean
+	cd plugins/genai && ${MAKE} clean
 	cd test/tap && ${MAKE} clean
 	rm -f pkgroot || true
 
@@ -509,12 +514,14 @@ cleandeps:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 	cd plugins/mysqlx && ${MAKE} clean
+	cd plugins/genai && ${MAKE} clean
 
 .PHONY: cleandev
 cleandev:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 	cd plugins/mysqlx && ${MAKE} clean
+	cd plugins/genai && ${MAKE} clean
 
 .PHONY: cleantest
 cleantest:
@@ -527,6 +534,7 @@ cleanall:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 	cd plugins/mysqlx && ${MAKE} clean
+	cd plugins/genai && ${MAKE} clean
 	cd test/tap && ${MAKE} clean
 	cd test/deps && ${MAKE} cleanall
 	rm -f binaries/* || true
@@ -538,6 +546,7 @@ cleanbuild:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 	cd plugins/mysqlx && ${MAKE} clean
+	cd plugins/genai && ${MAKE} clean
 	rm -rf pkgroot || true
 
 
@@ -551,6 +560,10 @@ install: src/proxysql
 	if [ -f plugins/mysqlx/ProxySQL_MySQLX_Plugin.so ]; then \
 		install -d /usr/lib/proxysql/plugins ; \
 		install -m 0755 plugins/mysqlx/ProxySQL_MySQLX_Plugin.so /usr/lib/proxysql/plugins/ ; \
+	fi
+	if [ -f plugins/genai/ProxySQL_GenAI_Plugin.so ]; then \
+		install -d /usr/lib/proxysql/plugins ; \
+		install -m 0755 plugins/genai/ProxySQL_GenAI_Plugin.so /usr/lib/proxysql/plugins/ ; \
 	fi
 ifeq ($(findstring proxysql,$(USERCHECK)),)
 	@echo "Creating proxysql user and group"
@@ -591,6 +604,7 @@ uninstall:
 	if [ -f /etc/proxysql.cnf ]; then rm /etc/proxysql.cnf ; fi
 	if [ -f /usr/bin/proxysql ]; then rm /usr/bin/proxysql ; fi
 	if [ -f /usr/lib/proxysql/plugins/ProxySQL_MySQLX_Plugin.so ]; then rm /usr/lib/proxysql/plugins/ProxySQL_MySQLX_Plugin.so ; fi
+	if [ -f /usr/lib/proxysql/plugins/ProxySQL_GenAI_Plugin.so ]; then rm /usr/lib/proxysql/plugins/ProxySQL_GenAI_Plugin.so ; fi
 	if [ -d /usr/lib/proxysql/plugins ]; then rmdir /usr/lib/proxysql/plugins 2>/dev/null || true ; fi
 	if [ -d /usr/lib/proxysql ]; then rmdir /usr/lib/proxysql 2>/dev/null || true ; fi
 	if [ -d /var/lib/proxysql ]; then rmdir /var/lib/proxysql 2>/dev/null || true ; fi

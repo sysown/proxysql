@@ -22,19 +22,22 @@
 
 // Forward declarations
 class LLM_Bridge;
-class Anomaly_Detector;
 
 /**
  * @brief AI Tool Handler for MCP
  *
  * Provides AI-powered tools through the MCP protocol:
  * - ai_nl2sql_convert: Convert natural language to SQL
- * - Future: anomaly detection, vector operations
+ * - Future: vector operations
+ *
+ * @note Pre-Step 3 of the GenAI plugin carve-out, this class also held
+ *       a borrowed Anomaly_Detector pointer that was never read.  The
+ *       field and its constructor parameter were removed when
+ *       Anomaly_Detector moved into plugins/genai/.
  */
 class AI_Tool_Handler : public MCP_Tool_Handler {
 private:
 	LLM_Bridge* llm_bridge;
-	Anomaly_Detector* anomaly_detector;
 	bool owns_components;
 
 	/**
@@ -50,12 +53,13 @@ private:
 
 public:
 	/**
-	 * @brief Constructor - uses existing AI components
+	 * @brief Constructor — wraps an existing LLM_Bridge.
 	 */
-	AI_Tool_Handler(LLM_Bridge* llm, Anomaly_Detector* anomaly);
+	AI_Tool_Handler(LLM_Bridge* llm);
 
 	/**
-	 * @brief Constructor - creates own components
+	 * @brief Default constructor — pulls the LLM_Bridge from the
+	 *        global AI_Features_Manager.
 	 */
 	AI_Tool_Handler();
 

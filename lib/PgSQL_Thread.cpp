@@ -1041,11 +1041,10 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.shun_on_failures = 5;
 	variables.shun_recovery_time_sec = 10;
 #ifdef PROXYSQLFFTO
-#ifdef PROXYSQLGENAI
-	variables.ffto_enabled = true;
-#else
+	// Step 7 of the GenAI plugin carve-out: PROXYSQLGENAI used to
+	// flip this default to true.  With the macro gone, ffto_enabled
+	// defaults to false; operators can opt in via admin SQL.
 	variables.ffto_enabled = false;
-#endif
 	variables.ffto_max_buffer_size = 1048576;
 #endif
 	variables.unshun_algorithm = 0;

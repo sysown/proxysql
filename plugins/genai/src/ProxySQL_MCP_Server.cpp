@@ -14,6 +14,8 @@ using json = nlohmann::json;
 #include "Admin_Tool_Handler.h"
 #include "Cache_Tool_Handler.h"
 #include "Stats_Tool_Handler.h"
+// AI_Tool_Handler / RAG_Tool_Handler are now plugin-side (Step 5).
+// Their endpoint registrations re-enabled below.
 #include "AI_Tool_Handler.h"
 #include "RAG_Tool_Handler.h"
 #include "AI_Features_Manager.h"
@@ -137,10 +139,13 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 		handler->stats_tool_handler = NULL;
 	}
 
-	// 6. AI Tool Handler (for LLM and other AI features)
+	// 6. AI Tool Handler (for LLM and other AI features).  After
+	// Step 5 the AI_Tool_Handler class lives in the plugin alongside
+	// AI_Features_Manager / LLM_Bridge, so this construction is
+	// once again the plugin's responsibility.
 	extern AI_Features_Manager *GloAI;
 	if (GloAI) {
-		handler->ai_tool_handler = new AI_Tool_Handler(GloAI->get_llm_bridge(), GloAI->get_anomaly_detector());
+		handler->ai_tool_handler = new AI_Tool_Handler(GloAI->get_llm_bridge());
 		if (handler->ai_tool_handler->init() == 0) {
 			proxy_info("AI Tool Handler initialized\n");
 		} else {
@@ -173,7 +178,7 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 	register_endpoint("/mcp/admin", handler->admin_tool_handler, "admin");
 	register_endpoint("/mcp/cache", handler->cache_tool_handler, "cache");
 
-	// 6. AI endpoint (for LLM and other AI features)
+	// 6. AI endpoint (for LLM and other AI features).
 	if (handler->ai_tool_handler) {
 		std::unique_ptr<httpserver::http_resource> ai_resource =
 			std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, handler->ai_tool_handler, "ai"));
@@ -181,9 +186,10 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 		_endpoints.push_back({"/mcp/ai", std::move(ai_resource)});
 	}
 
-	// 7. RAG endpoint (for Retrieval-Augmented Generation)
+	// 7. RAG endpoint (Retrieval-Augmented Generation).  Step 5
+	// pulled RAG_Tool_Handler in alongside AI_Features_Manager (it
+	// shares LLM_Bridge), so this construction is now plugin-owned.
 	if (GloAI) {
-		// Use same catalog path as query_tool_handler for logging
 		std::string catalog_path = std::string(GloVars.datadir) + "/mcp_catalog.db";
 		handler->rag_tool_handler = new RAG_Tool_Handler(GloAI, catalog_path);
 		if (handler->rag_tool_handler->init() == 0) {

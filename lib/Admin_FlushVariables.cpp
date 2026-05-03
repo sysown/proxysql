@@ -25,8 +25,11 @@ using json = nlohmann::json;
 #include "proxysql.h"
 #include "proxysql_config.h"
 #include "proxysql_restapi.h"
-#include "MCP_Thread.h"
-#include "ProxySQL_MCP_Server.hpp"
+// MCP_Thread.h / ProxySQL_MCP_Server.hpp moved to the genai plugin in
+// Step 4.C; GenAI_Thread.h moved in Step 5.  flush_mcp_variables___*()
+// are stubbed below; flush_genai_variables___*() were already
+// stubbed since Step 4.C (and remain so — Step 5 just removes the
+// extern decls).
 #include "proxysql_utils.h"
 #include "prometheus_helpers.h"
 #include "cpp.h"
@@ -44,7 +47,7 @@ using json = nlohmann::json;
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
-#include "GenAI_Thread.h"
+// GenAI_Thread.h moved to plugins/genai/include/ in Step 5.
 #include "SQLite3_Server.h"
 #include "Web_Interface.hpp"
 
@@ -142,11 +145,9 @@ extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern MySQL_Monitor *GloMyMon;
 extern PgSQL_Threads_Handler* GloPTH;
 
-#ifdef PROXYSQLGENAI
-extern MCP_Threads_Handler* GloMCPH;
-extern GenAI_Threads_Handler* GloGATH;
-extern AI_Features_Manager *GloAI;
-#endif /* PROXYSQLGENAI */
+// MCP_Threads_Handler ownership moved to the genai plugin in Step 4.C.
+// GenAI_Threads_Handler / AI_Features_Manager moved in Step 5 — core
+// no longer references those globals.
 
 extern void (*flush_logs_function)();
 
@@ -174,7 +175,6 @@ bool ProxySQL_Admin::flush_GENERIC_variables__retrieve__database_to_runtime(cons
 	}
 	return true;
 }
-
 void ProxySQL_Admin::flush_GENERIC_variables__process__database_to_runtime(
 	const string& modname, SQLite3DB *db, SQLite3_result* resultset,
 	const bool& lock, const bool& replace,
@@ -1017,148 +1017,6 @@ void ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(SQLite3DB* db, 
 	if (resultset) delete resultset;
 }
 
-#ifdef PROXYSQLGENAI
-// GenAI Variables Flush Functions
-void ProxySQL_Admin::flush_genai_variables___runtime_to_database(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime, bool use_lock) {
-	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing GenAI variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
-	if (onlyifempty) {
-		char* error = NULL;
-		int cols = 0;
-		int affected_rows = 0;
-		SQLite3_result* resultset = NULL;
-		char* q = (char*)"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'genai-%'";
-		db->execute_statement(q, &error, &cols, &affected_rows, &resultset);
-		int matching_rows = 0;
-		if (error) {
-			proxy_error("Error on %s : %s\n", q, error);
-			return;
-		}
-		else {
-			for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
-				SQLite3_row* r = *it;
-				matching_rows += atoi(r->fields[0]);
-			}
-		}
-		if (resultset) delete resultset;
-		if (matching_rows) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Table global_variables has GenAI variables - skipping\n");
-			return;
-		}
-	}
-	if (del) {
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Deleting GenAI variables from global_variables\n");
-		db->execute("DELETE FROM global_variables WHERE variable_name LIKE 'genai-%'");
-	}
-	static char* a;
-	static char* b;
-	if (replace) {
-		a = (char*)"REPLACE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)";
-	}
-	else {
-		a = (char*)"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)";
-	}
-	int rc;
-	sqlite3_stmt* statement1 = NULL;
-	sqlite3_stmt* statement2 = NULL;
-	auto [rc1, statement1_unique] = db->prepare_v2(a);
-	rc = rc1;
-	statement1 = statement1_unique.get();
-	ASSERT_SQLITE_OK(rc, db);
-	stmt_unique_ptr statement2_unique {};
-	if (runtime) {
-		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'genai-%'");
-		b = (char*)"INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(?1, ?2)";
-		auto [rc2, prepared_statement2] = db->prepare_v2(b);
-		rc = rc2;
-		statement2_unique = std::move(prepared_statement2);
-		statement2 = statement2_unique.get();
-		ASSERT_SQLITE_OK(rc, db);
-	}
-	if (use_lock) {
-		GloGATH->wrlock();
-		db->execute("BEGIN");
-	}
-	char** varnames = GloGATH->get_variables_list();
-	for (int i = 0; varnames[i]; i++) {
-		char* val = GloGATH->get_variable(varnames[i]);
-		size_t qualified_name_len = strlen(varnames[i]) + sizeof("genai-");
-		char* qualified_name = (char*)malloc(qualified_name_len);
-		snprintf(qualified_name, qualified_name_len, "genai-%s", varnames[i]);
-		rc = (*proxy_sqlite3_bind_text)(statement1, 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-		rc = (*proxy_sqlite3_bind_text)(statement1, 2, (val ? val : (char*)""), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-		SAFE_SQLITE3_STEP2(statement1);
-		rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, db);
-		rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, db);
-		if (runtime) {
-			rc = (*proxy_sqlite3_bind_text)(statement2, 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-			rc = (*proxy_sqlite3_bind_text)(statement2, 2, (val ? val : (char*)""), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-			SAFE_SQLITE3_STEP2(statement2);
-			rc = (*proxy_sqlite3_clear_bindings)(statement2); ASSERT_SQLITE_OK(rc, db);
-			rc = (*proxy_sqlite3_reset)(statement2); ASSERT_SQLITE_OK(rc, db);
-		}
-		if (val)
-			free(val);
-		free(qualified_name);
-	}
-	if (use_lock) {
-		db->execute("COMMIT");
-		GloGATH->wrunlock();
-	}
-	for (int i = 0; varnames[i]; i++) {
-		free(varnames[i]);
-	}
-	free(varnames);
-}
-
-void ProxySQL_Admin::flush_genai_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum, const time_t epoch, bool lock) {
-	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing GenAI variables. Replace:%d\n", replace);
-	char* error = NULL;
-	int cols = 0;
-	int affected_rows = 0;
-	SQLite3_result* resultset = NULL;
-	char* q = (char*)"SELECT variable_name, variable_value FROM global_variables WHERE variable_name LIKE 'genai-%'";
-	db->execute_statement(q, &error, &cols, &affected_rows, &resultset);
-	if (error) {
-		proxy_error("Error on %s : %s\n", q, error);
-		return;
-	}
-	if (resultset) {
-		if (lock) wrlock();
-		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
-			SQLite3_row* r = *it;
-			char* name = r->fields[0];
-			char* val = r->fields[1];
-			// Skip the 'genai-' prefix
-			char* var_name = name + 6;
-			GloGATH->set_variable(var_name, val);
-		}
-
-		// Populate runtime_global_variables
-		{
-			pthread_mutex_lock(&GloVars.checksum_mutex);
-			wrunlock();  // Release outer lock before calling runtime_to_database
-			flush_genai_variables___runtime_to_database(admindb, false, false, false, true, true);
-			wrlock();  // Re-acquire outer lock
-			pthread_mutex_unlock(&GloVars.checksum_mutex);
-		}
-
-		// Check if LLM bridge needs to be initialized
-		if (GloAI && GloGATH->variables.genai_llm_enabled && !GloAI->get_llm_bridge()) {
-			proxy_info("LLM bridge enabled but not initialized, initializing now\n");
-			if (GloAI->init_llm_bridge() != 0) {
-				proxy_error("Failed to initialize LLM bridge\n");
-			}
-		}
-
-		if (GloAI && GloGATH->variables.genai_enabled) {
-			GloAI->init();
-		}
-
-		if (lock) wrunlock();
-	}
-	if (resultset) delete resultset;
-}
-#endif /* PROXYSQLGENAI */
 
 void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime, bool use_lock) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MySQL variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
@@ -1406,142 +1264,3 @@ void ProxySQL_Admin::flush_admin_variables___runtime_to_database(SQLite3DB *db, 
 	}
 	free(varnames);
 }
-
-#ifdef PROXYSQLGENAI
-// MCP (Model Context Protocol) VARIABLES
-void ProxySQL_Admin::flush_mcp_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum, const time_t epoch, bool lock) {
-	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MCP variables. Replace:%d\n", replace);
-	if (GloMCPH == NULL) {
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, "MCP handler not initialized, skipping MCP variables\n");
-		return;
-	}
-	char* error = NULL;
-	int cols = 0;
-	int affected_rows = 0;
-	SQLite3_result* resultset = NULL;
-	char* q = (char*)"SELECT variable_name, variable_value FROM global_variables WHERE variable_name LIKE 'mcp-%'";
-	db->execute_statement(q, &error, &cols, &affected_rows, &resultset);
-	if (error) {
-		proxy_error("Error on %s : %s\n", q, error);
-		return;
-	}
-	if (resultset) {
-		if (lock) wrlock();
-		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
-			SQLite3_row* r = *it;
-			char* name = r->fields[0];
-			char* val = r->fields[1];
-			// Skip the 'mcp-' prefix
-			char* var_name = name + 4;
-			GloMCPH->set_variable(var_name, val);
-		}
-
-		// Update runtime_global_variables table to reflect current runtime state
-		flush_mcp_variables___runtime_to_database(admindb, false, false, false, true, false);
-
-		// Manage MCP server state
-		load_mcp_server();
-
-		if (lock) wrunlock();
-		delete resultset;
-	}
-}
-
-void ProxySQL_Admin::flush_mcp_variables___runtime_to_database(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime, bool use_lock) {
-	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MCP variables. Replace:%d, Delete:%d, Only_If_Empty:%d, Runtime:%d\n", replace, del, onlyifempty, runtime);
-	if (GloMCPH == NULL) {
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, "MCP handler not initialized, skipping MCP variables\n");
-		return;
-	}
-	if (onlyifempty) {
-		char* error = NULL;
-		int cols = 0;
-		int affected_rows = 0;
-		SQLite3_result* resultset = NULL;
-		char* q = (char*)"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'mcp-%'";
-		db->execute_statement(q, &error, &cols, &affected_rows, &resultset);
-		int matching_rows = 0;
-		if (error) {
-			proxy_error("Error on %s : %s\n", q, error);
-			return;
-		}
-		else {
-			for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
-				SQLite3_row* r = *it;
-				matching_rows += atoi(r->fields[0]);
-			}
-		}
-		if (resultset) delete resultset;
-		if (matching_rows) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Table global_variables has MCP variables - skipping\n");
-			return;
-		}
-	}
-	if (del) {
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Deleting MCP variables from global_variables\n");
-		db->execute("DELETE FROM global_variables WHERE variable_name LIKE 'mcp-%'");
-	}
-	if (runtime) {
-		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'mcp-%'");
-	}
-	int rc;
-	const char* a;
-	if (replace) {
-		a = "REPLACE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)";
-	} else {
-		a = "INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)";
-	}
-	auto [rc1, stmt1] = db->prepare_v2(a);
-	ASSERT_SQLITE_OK(rc1, db);
-	sqlite3_stmt* statement1 = stmt1.get();
-
-	// Only prepare runtime_global_variables statement if runtime flag is set
-	// (table may not exist during early initialization)
-	sqlite3_stmt* statement2 = nullptr;
-	stmt_unique_ptr stmt2 {};
-	if (runtime) {
-		auto [rc2, st2] = db->prepare_v2("INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(?1, ?2)");
-		ASSERT_SQLITE_OK(rc2, db);
-		stmt2 = std::move(st2);
-		statement2 = stmt2.get();
-	}
-
-	if (use_lock) {
-		GloMCPH->wrlock();
-	}
-	char** varnames = GloMCPH->get_variables_list();
-	for (int i = 0; varnames[i]; i++) {
-		char val[256];
-		GloMCPH->get_variable(varnames[i], val);
-		size_t qualified_name_len = strlen(varnames[i]) + sizeof("mcp-");
-		char* qualified_name = (char*)malloc(qualified_name_len);
-		snprintf(qualified_name, qualified_name_len, "mcp-%s", varnames[i]);
-
-		// Insert into global_variables
-		rc = (*proxy_sqlite3_bind_text)(statement1, 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-		rc = (*proxy_sqlite3_bind_text)(statement1, 2, (val[0] ? val : (char*)""), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-		SAFE_SQLITE3_STEP2(statement1);
-		rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, db);
-		rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, db);
-
-		// Insert into runtime_global_variables if runtime flag is set
-		if (runtime && statement2) {
-			rc = (*proxy_sqlite3_bind_text)(statement2, 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-			rc = (*proxy_sqlite3_bind_text)(statement2, 2, (val[0] ? val : (char*)""), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-			SAFE_SQLITE3_STEP2(statement2);
-			rc = (*proxy_sqlite3_clear_bindings)(statement2); ASSERT_SQLITE_OK(rc, db);
-			rc = (*proxy_sqlite3_reset)(statement2); ASSERT_SQLITE_OK(rc, db);
-		}
-
-		free(qualified_name);
-	}
-
-	if (use_lock) {
-		GloMCPH->wrunlock();
-	}
-	for (int i = 0; varnames[i]; i++) {
-		free(varnames[i]);
-	}
-	free(varnames);
-}
-#endif /* PROXYSQLGENAI */

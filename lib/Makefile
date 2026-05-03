@@ -53,6 +53,14 @@ ifeq ($(PROXYSQLCLICKHOUSE),1)
 	PSQLCH := -DPROXYSQLCLICKHOUSE
 endif
 
+# PROXYSQLGENAI gates a small handful of GenAI-specific glue that
+# stays in core because the genai plugin (loaded via dlopen) calls
+# back into it: the sqlite-vec hook in proxy_sqlite3_symbols.cpp +
+# Admin_Bootstrap.cpp.  Step 7's premise that "core no longer
+# guards anything with PROXYSQLGENAI" turned out to be wrong — those
+# two call sites still need the macro so non-genai dbg builds don't
+# try to `#include "sqlite-vec.h"` (which deps doesn't even build
+# in that mode).
 PSQLGA :=
 ifeq ($(PROXYSQLGENAI),1)
 	PSQLGA := -DPROXYSQLGENAI
@@ -137,16 +145,16 @@ _OBJ_CXX += MySQLFFTO.oo PgSQLFFTO.oo
 endif
 
 # GenAI object files (conditionally included)
-ifeq ($(PROXYSQLGENAI),1)
-_OBJ_CXX += GenAI_Thread.oo \
-	MCP_Thread.oo ProxySQL_MCP_Server.oo MCP_Endpoint.oo MCP_Tool_Handler.oo \
-	MySQL_Catalog.oo MySQL_Tool_Handler.oo MySQL_FTS.oo \
-	Config_Tool_Handler.oo Query_Tool_Handler.oo \
-	Admin_Tool_Handler.oo Cache_Tool_Handler.oo Stats_Tool_Handler.oo \
-	AI_Features_Manager.oo LLM_Bridge.oo LLM_Clients.oo Anomaly_Detector.oo AI_Vector_Storage.oo AI_Tool_Handler.oo \
-	RAG_Tool_Handler.oo \
-	Discovery_Schema.oo Static_Harvester.oo PgSQL_Static_Harvester.oo
-endif
+# Step 4.C moved the MCP subsystem (MCP_Thread, MCP_Endpoint,
+# ProxySQL_MCP_Server, the 8 non-AI/RAG tool handlers) into
+# plugins/genai/.  Step 5 moved GenAI_Thread, LLM_Bridge, LLM_Clients,
+# AI_Features_Manager, AI_Tool_Handler.  RAG/Vector/Discovery surface
+# is the last bucket — it stays in core until Step 6.
+# Step 7 of the GenAI plugin carve-out: PROXYSQLGENAI is no longer
+# used by core.  The whole feature surface — MCP, GenAI/LLM, AI,
+# RAG/Vector/discovery, plus the MCP_Tool_Handler base class — lives
+# in plugins/genai/.  No GenAI-specific .cpp belongs in libproxysql.a
+# any more.
 
 OBJ_CXX := $(patsubst %,$(ODIR)/%,$(_OBJ_CXX))
 HEADERS := ../include/*.h ../include/*.hpp

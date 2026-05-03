@@ -1,24 +1,33 @@
-#ifdef PROXYSQLGENAI
-
 /**
  * @file Anomaly_Detector.cpp
- * @brief Implementation of Real-time Anomaly Detection for ProxySQL
+ * @brief Implementation of real-time anomaly detection — plugin-side.
  *
- * Implements multi-stage anomaly detection pipeline:
- * 1. SQL Injection Pattern Detection
- * 2. Query Normalization and Pattern Matching
- * 3. Rate Limiting per User/Host
- * 4. Statistical Outlier Detection
- * 5. Embedding-based Threat Similarity
+ * Multi-stage anomaly detection pipeline:
+ *   1. SQL injection pattern detection (regex-based).
+ *   2. Query normalization + pattern matching.
+ *   3. Per-user/host rate limiting.
+ *   4. Statistical outlier detection (z-score on user fingerprint history).
+ *   5. Embedding-based threat similarity (currently inert: returns no
+ *      anomaly while GenAI_Threads_Handler still lives in core; the
+ *      embedding back-end is reattached in Step 5 of the GenAI plugin
+ *      carve-out, when GloGATH moves into the plugin).
+ *
+ * @par Carve-out history
+ * This file lived at lib/Anomaly_Detector.cpp inside libproxysql.a,
+ * gated by `#ifdef PROXYSQLGENAI`.  In Step 3 of the carve-out it
+ * moved verbatim into plugins/genai/, the `#ifdef` guard was dropped
+ * (the file only compiles inside the plugin), and the embedding path
+ * was disconnected from `GloGATH`.
  *
  * @see Anomaly_Detector.h
+ * @see docs/superpowers/specs/2026-04-16-genai-plugin-carveout-design.md
  */
 
 #include "Anomaly_Detector.h"
 #include "sqlite3db.h"
 #include "proxysql_utils.h"
-#include "GenAI_Thread.h"
 #include "cpp.h"
+#include <atomic>
 #include <cstring>
 #include <cstdlib>
 #include <sstream>
@@ -28,12 +37,9 @@
 #include <cmath>
 
 // JSON library
-#include "../deps/json/json.hpp"
+#include "../../../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
-
-// Global GenAI handler for embedding generation
-extern GenAI_Threads_Handler *GloGATH;
 
 // ============================================================================
 // Constants
@@ -508,43 +514,58 @@ AnomalyResult Anomaly_Detector::check_embedding_similarity(const std::string& qu
 }
 
 /**
- * @brief Get vector embedding for a query
+ * @brief Get vector embedding for a query.
  *
  * Generates a vector representation of the query using a sentence
- * transformer or similar embedding model.
+ * transformer or similar embedding model via GenAI_Threads_Handler.
  *
- * Uses the GenAI module (GloGATH) for embedding generation via llama-server.
+ * Step 5 reattached this to the now-plugin-local GloGATH (the
+ * GenAI_Threads_Handler that moved alongside Anomaly_Detector).  The
+ * empty-vector short-circuit in `check_embedding_similarity` still
+ * applies if the embedding back-end isn't available (config disabled,
+ * provider unreachable), so callers don't need to handle the
+ * pre-Step-5 always-empty case specially.
  *
- * @param query SQL query
- * @return Vector embedding (empty if not available)
+ * @param query SQL query to embed.
+ * @return Embedding vector, or empty vector if the back-end is unavailable.
  */
+// Embedding back-end indirection — the real implementation lives in
+// plugin_main.cpp (which links against GenAI_Thread/LLM_Bridge), and
+// installs itself by setting `genai_anomaly_embed_fn` during plugin
+// init.  Unit tests that compile Anomaly_Detector.cpp directly into a
+// test binary leave the pointer null, so embedding silently
+// short-circuits (the only caller already nullptr-guards via the
+// vector_db check that follows).
+//
+// Concurrency.  The hot-path read in get_query_embedding() can race
+// against the store in genai_init() / genai_stop() on the lifecycle
+// thread.  We use std::atomic + acquire/release ordering rather than
+// relaxed because the *implementation* the pointer points at —
+// embed_query_via_glogath in plugin_main.cpp — dereferences `GloGATH`,
+// a plain non-atomic global that is also being mutated by the
+// lifecycle thread (`GloGATH = new ...` in genai_init, `delete GloGATH`
+// in genai_stop).  Pairing the embed-pointer load with acquire and the
+// store with release ensures that:
+//
+//   - When a reader observes a non-null embed pointer, it ALSO observes
+//     `GloGATH` already initialised (init's `GloGATH = new ...` happens-
+//     before init's atomic store(release) of the embed pointer).
+//   - When genai_stop atomically clears the embed pointer (release),
+//     any reader that later loads it (acquire) sees the null and
+//     short-circuits BEFORE it can read the now-deleted `GloGATH`.
+//
+// Relaxed ordering would only protect against torn pointers; it would
+// leave the GloGATH lifetime read open to seeing a half-constructed or
+// already-deleted handler.  The cost of acquire/release on x86_64 and
+// arm64 is zero — they're plain loads/stores at the ISA level — so
+// there's no perf reason to keep relaxed.
+using genai_anomaly_embed_fn_t = std::vector<float> (*)(const std::string& query);
+std::atomic<genai_anomaly_embed_fn_t> genai_anomaly_embed_fn { nullptr };
+
 std::vector<float> Anomaly_Detector::get_query_embedding(const std::string& query) {
-	if (!GloGATH) {
-		proxy_debug(PROXY_DEBUG_ANOMALY, 3, "GenAI handler not available for embedding");
-		return {};
-	}
-
-	// Normalize query first for better embedding quality
-	std::string normalized = normalize_query(query);
-
-	// Generate embedding using GenAI
-	GenAI_EmbeddingResult result = GloGATH->embed_documents({normalized});
-
-	if (!result.data || result.count == 0) {
-		proxy_debug(PROXY_DEBUG_ANOMALY, 3, "Failed to generate embedding");
-		return {};
-	}
-
-	// Convert to std::vector<float>
-	std::vector<float> embedding(result.data, result.data + result.embedding_size);
-
-	// Free the result data (GenAI allocates with malloc)
-	if (result.data) {
-		free(result.data);
-	}
-
-	proxy_debug(PROXY_DEBUG_ANOMALY, 3, "Generated embedding with %zu dimensions", embedding.size());
-	return embedding;
+	auto fn = genai_anomaly_embed_fn.load(std::memory_order_acquire);
+	if (fn == nullptr) return {};
+	return fn(query);
 }
 
 // ============================================================================
@@ -953,5 +974,3 @@ void Anomaly_Detector::clear_user_statistics() {
 	user_statistics.clear();
 	proxy_info("Anomaly: Cleared statistics for %zu users\n", count);
 }
-
-#endif /* PROXYSQLGENAI */

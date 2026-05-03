@@ -2,6 +2,8 @@
 
 #include "sqlite3db.h"
 #include "cpp.h"
+#include "MCP_Tool_Handler.h"  // Direct include after Step 4.C/5
+                               // shrank cpp.h's transitive surface.
 
 #include <cerrno>
 #include <cmath>
