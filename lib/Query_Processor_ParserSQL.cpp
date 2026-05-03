@@ -141,6 +141,15 @@ static std::string emit_node_text(const AstNode* node, Arena& arena) {
     return std::string(ref.ptr, ref.len);
 }
 
+static void skip_quoted_char(const char*& p, const char* end) {
+    char q = *p;
+    p++;
+    while (p < end && *p != q) {
+        if (*p == '\\' && p + 1 < end) p++;
+        p++;
+    }
+}
+
 static std::string extract_paren_expr(const char* query, int query_len,
                                        const char* after_var) {
     if (!after_var || after_var >= query + query_len) return "";
@@ -155,10 +164,7 @@ static std::string extract_paren_expr(const char* query, int query_len,
     while (p < end) {
         if (*p == '(') depth++;
         else if (*p == ')') { depth--; if (depth == 0) { p++; break; } }
-        else if (*p == '\'' || *p == '"') {
-            char q = *p; p++;
-            while (p < end && *p != q) { if (*p == '\\' && p + 1 < end) p++; p++; }
-        }
+        else if (*p == '\'' || *p == '"') { skip_quoted_char(p, end); }
         p++;
     }
     return std::string(start, p);
@@ -358,6 +364,29 @@ enum PGSQL_QUERY_command parsersql_command_type_pgsql(const char* query, int que
 // The output format (map<string, vector<string>>) is identical to that produced
 // by the regex-based MySQL_Set_Stmt_Parser, ensuring drop-in compatibility.
 
+template <Dialect D>
+static std::string resolve_var_value(
+    const AstNode* target, const AstNode* rhs,
+    const char* query, int query_len, Arena& arena)
+{
+    if (!rhs) return "";
+    if (rhs->type == NodeType::NODE_SUBQUERY
+        && !rhs->first_child && rhs->value_len == 0) {
+        const AstNode* var_id = target->first_child;
+        if (var_id && var_id->value_ptr && var_id->value_len) {
+            const char* after = var_id->value_ptr + var_id->value_len;
+            return extract_paren_expr(query, query_len, after);
+        }
+        return "";
+    }
+    return emit_node_text<D>(rhs, arena);
+}
+
+static std::string finalize_var_value(std::string val) {
+    if (val == "''" || val == "\"\"") return "";
+    return strip_quotes(val);
+}
+
 /**
  * Walks the children of a NODE_SET_STMT AST and extracts variable assignments.
  *
@@ -406,33 +435,10 @@ static std::map<std::string, std::vector<std::string>> walk_set_stmt(
                 const AstNode* rhs = target ? target->next_sibling : nullptr;
                 if (!target || target->type != NodeType::NODE_VAR_TARGET) break;
 
-                std::string var_name = emit_node_text<D>(target, arena);
-                var_name = normalize_set_var_name(var_name);
-
-                std::string val;
-                if (rhs) {
-                    if (rhs->type == NodeType::NODE_SUBQUERY
-                        && !rhs->first_child && rhs->value_len == 0) {
-                        const AstNode* var_id = target->first_child;
-                        if (var_id && var_id->value_ptr && var_id->value_len) {
-                            const char* after = var_id->value_ptr + var_id->value_len;
-                            val = extract_paren_expr(query, query_len, after);
-                        }
-                    } else {
-                        val = emit_node_text<D>(rhs, arena);
-                    }
-                }
-                // Special case: an explicitly empty string literal ('' or "")
-                // must be preserved as the empty string, not stripped to nothing.
-                // strip_quotes would remove the quotes and leave "", which is
-                // correct — but for '' or "" (two-character strings), stripping
-                // would yield an empty string indistinguishable from a missing
-                // value.  We check for these literal forms first.
-                if (val == "''" || val == "\"\"") {
-                    val = "";
-                } else {
-                    val = strip_quotes(val);
-                }
+                std::string var_name = normalize_set_var_name(
+                    emit_node_text<D>(target, arena));
+                std::string val = finalize_var_value(
+                    resolve_var_value<D>(target, rhs, query, query_len, arena));
 
                 result[var_name] = {val};
                 break;

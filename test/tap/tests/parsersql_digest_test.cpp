@@ -52,9 +52,9 @@ int main(int argc, char** argv) {
 			ok(false, "Query %d: digest generated (FAILED)", i);
 		}
 
-		free(qp.digest_text);
-		free(qp.first_comment);
-		free(qp.query_prefix);
+		free(qp.digest_text); // NOSONAR: C-allocated by digest engine
+		free(qp.first_comment); // NOSONAR
+		free(qp.query_prefix); // NOSONAR
 	}
 
 	return exit_status();

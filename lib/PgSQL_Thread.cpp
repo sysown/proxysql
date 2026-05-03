@@ -405,7 +405,7 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"query_processor_iterations",
 	(char*)"query_processor_first_comment_parsing",
 	(char*)"query_processor_regex",
-	(char*)"query_processor_parser",
+	(char*)"query_processor_parser", // NOSONAR: matches array pattern
 	(char*)"set_query_lock_on_hostgroup",
 	(char*)"set_parser_algorithm",
 	(char*)"auto_increment_delay_multiplex",
@@ -4021,7 +4021,7 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___query_processor_iterations = GloPTH->get_variable_int((char*)"query_processor_iterations");
 	pgsql_thread___query_processor_first_comment_parsing = GloPTH->get_variable_int((char*)"query_processor_first_comment_parsing");
 	pgsql_thread___query_processor_regex = GloPTH->get_variable_int((char*)"query_processor_regex");
-	pgsql_thread___query_processor_parser = GloPTH->get_variable_int((char*)"query_processor_parser");
+	pgsql_thread___query_processor_parser = GloPTH->get_variable_int((char*)"query_processor_parser"); // NOSONAR: matches function signature
 
 	pgsql_thread___query_cache_size_MB = GloPTH->get_variable_int((char*)"query_cache_size_MB");
 	pgsql_thread___query_cache_soft_ttl_pct = GloPTH->get_variable_int((char*)"query_cache_soft_ttl_pct");

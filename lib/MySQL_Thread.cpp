@@ -468,7 +468,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"query_processor_iterations",
 	(char *)"query_processor_first_comment_parsing",
 	(char *)"query_processor_regex",
-	(char *)"query_processor_parser",
+	(char *)"query_processor_parser", // NOSONAR: matches array pattern
 	(char *)"set_query_lock_on_hostgroup",
 	(char *)"set_parser_algorithm",
 	(char *)"reset_connection_algorithm",
