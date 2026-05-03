@@ -2601,55 +2601,6 @@ int ProxySQL_Admin::stats___save_pgsql_query_digest_to_sqlite(
 	return row_idx;
 }
 
-// ============================================================
-// MCP QUERY DIGEST STATS
-// ============================================================
-
-// Collect MCP query digest statistics and populate stats tables.
-//
-// Populates the stats_mcp_query_digest or stats_mcp_query_digest_reset
-// table with current digest statistics from all MCP queries processed.
-// This is called automatically when the stats_mcp_query_digest table is queried.
-//
-// The function:
-//   1. Deletes all existing rows from stats_mcp_query_digest (or stats_mcp_query_digest_reset)
-//   2. Reads digest statistics from Discovery Schema's in-memory digest map
-//   3. Inserts fresh data into the stats table
-//
-// Parameters:
-//   reset - If true, populates stats_mcp_query_digest_reset and clears in-memory stats.
-//           If false, populates stats_mcp_query_digest (non-reset view).
-//
-// Note: This is currently a simplified implementation. The digest statistics
-// are stored in memory in the Discovery_Schema and accessed via get_mcp_query_digest().
-//
-// Stats columns returned:
-//   - tool_name: Name of the MCP tool that was called
-//   - run_id: Discovery run identifier
-//   - digest: 128-bit hash (lower 64 bits) identifying the query fingerprint
-//   - digest_text: Fingerprinted JSON with literals replaced by '?'
-//   - count_star: Number of times this digest was seen
-//   - first_seen: Unix timestamp of first occurrence
-//   - last_seen: Unix timestamp of most recent occurrence
-//   - sum_time: Total execution time in microseconds
-//   - min_time: Minimum execution time in microseconds
-//   - max_time: Maximum execution time in microseconds
-
-// Collect MCP query rules statistics
-//
-// Populates the stats_mcp_query_rules table with current hit counters
-// from all MCP query rules in memory. This is called automatically
-// when the stats_mcp_query_rules table is queried.
-//
-// The function:
-//   1. Deletes all existing rows from stats_mcp_query_rules
-//   2. Reads rule_id, username, target_id and hits from Discovery Schema's in-memory rules
-//   3. Inserts fresh data into stats_mcp_query_rules table
-//
-// Note: Unlike digest stats, query rules stats do not support reset-on-read.
-// The stats table is simply refreshed with current hit counts.
-//
-
 // Helper: convert ASN1_TIME to ISO 8601 string (YYYY-MM-DDTHH:MM:SSZ)
 static std::string asn1_time_to_iso8601(const ASN1_TIME *asn1t) {
 	if (!asn1t) return "";
