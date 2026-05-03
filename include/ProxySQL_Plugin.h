@@ -36,8 +36,8 @@ namespace prometheus { class Registry; }
 //          struct with {table_name, refresh, opaque} automatically get
 //          db_kind = admin_db (value 0) via zero-initialization of the
 //          trailing field — matching the pre-ABI-4 behaviour.
-#define PROXYSQL_PLUGIN_ABI_VERSION 4u
-#define PROXYSQL_PLUGIN_ABI_VERSION_MAX 4u
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = 4u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = 4u;
 
 enum class ProxySQL_PluginDBKind : uint8_t {
 	admin_db = 0,
