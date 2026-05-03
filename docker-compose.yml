@@ -15,7 +15,9 @@ services:
       - WITHGCOV
       - NOJEMALLOC
       - WITHASAN
+      - WITHTSAN
       - BLD_NAME
+      - PROXYSQL40
       - PROXYSQLGENAI
       - PROXYSQL31
       - PROXYSQLFFTO

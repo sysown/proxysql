@@ -116,7 +116,7 @@ static void test_connection_cache() {
 	thr.return_connection_to_cache(c1);
 	ok(thr.get_cached_connection_count() == 1, "cache has 1 connection");
 
-	MysqlxConnection* found = thr.get_connection_from_cache(0, "user1", "db1");
+	MysqlxConnection* found = thr.get_connection_from_cache(0, "user1", "db1", /*tls_active=*/false);
 	ok(found != nullptr, "found connection in cache");
 	ok(found == c1, "got the same connection back");
 	ok(thr.get_cached_connection_count() == 0, "cache empty after get");
@@ -124,7 +124,7 @@ static void test_connection_cache() {
 	thr.return_connection_to_cache(found);
 	ok(thr.get_cached_connection_count() == 1, "cache has 1 again");
 
-	MysqlxConnection* nf = thr.get_connection_from_cache(0, "wrong", "db1");
+	MysqlxConnection* nf = thr.get_connection_from_cache(0, "wrong", "db1", /*tls_active=*/false);
 	ok(nf == nullptr, "not found with wrong user");
 
 	for (int i = 0; i < 3; i++) {
@@ -139,9 +139,58 @@ static void test_connection_cache() {
 	ok(thr.get_cached_connection_count() == 3, "cache at max capacity after eviction");
 }
 
+// Connection-cache key: tls_active is a hard partition. A plaintext-
+// pooled connection MUST NOT be returned to a TLS-frontend session
+// (and vice versa); the encryption posture is part of the cache
+// identity. Without this dimension the AsClient/required modes would
+// hand TLS-required sessions plaintext backends and corrupt the wire
+// protocol.
+static void test_connection_cache_tls_partition() {
+	diag(">>> %s", __func__);
+	Mysqlx_Thread thr;
+	thr.init(0);
+	thr.set_max_cached_connections(10);
+
+	// Insert one plaintext and one encrypted connection at the same
+	// (hostgroup, user, schema) key.
+	MysqlxConnection* plaintext = new MysqlxConnection();
+	plaintext->set_hostgroup(7);
+	plaintext->set_user("u");
+	plaintext->set_schema("s");
+	plaintext->set_reusable(true);
+	plaintext->set_state(MysqlxConnection::IDLE);
+	plaintext->set_tls_active(false);
+	thr.return_connection_to_cache(plaintext);
+
+	MysqlxConnection* encrypted = new MysqlxConnection();
+	encrypted->set_hostgroup(7);
+	encrypted->set_user("u");
+	encrypted->set_schema("s");
+	encrypted->set_reusable(true);
+	encrypted->set_state(MysqlxConnection::IDLE);
+	encrypted->set_tls_active(true);
+	thr.return_connection_to_cache(encrypted);
+
+	// Plaintext lookup must return the plaintext connection only.
+	MysqlxConnection* got_pt = thr.get_connection_from_cache(7, "u", "s", /*tls_active=*/false);
+	ok(got_pt == plaintext, "plaintext lookup returns the plaintext-pooled conn");
+
+	// Now only the encrypted one is left. A plaintext lookup must miss.
+	MysqlxConnection* miss_pt = thr.get_connection_from_cache(7, "u", "s", /*tls_active=*/false);
+	ok(miss_pt == nullptr, "plaintext lookup misses an encrypted-pooled conn");
+
+	// The encrypted lookup picks up the remaining one.
+	MysqlxConnection* got_tls = thr.get_connection_from_cache(7, "u", "s", /*tls_active=*/true);
+	ok(got_tls == encrypted, "tls lookup returns the encrypted-pooled conn");
+
+	// Cleanup: tests own the conns once pulled out of the cache.
+	delete got_pt;
+	delete got_tls;
+}
+
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(22);
+	plan(25);
 	diag("=== mysqlx_thread_unit-t starting ===");
 
 	test_thread_init();
@@ -149,6 +198,7 @@ int main() {
 	test_thread_start_stop();
 	test_thread_accept_connection();
 	test_connection_cache();
+	test_connection_cache_tls_partition();
 
 	return exit_status();
 }

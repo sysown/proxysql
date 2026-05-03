@@ -63,6 +63,24 @@ MysqlxPluginContext& mysqlx_context();
  */
 __attribute__((weak)) void mysqlx_reconcile_listeners(SQLite3DB& admindb);
 
+/**
+ * Walks every Mysqlx_Thread in mysqlx_context().threads, snapshots each
+ * thread's sessions_ under its sessions_mutex_, and projects one row per
+ * active session into stats_mysqlx_processlist. Called from the chassis
+ * runtime-view refresh callback before any admin SELECT against the
+ * table runs (the callback in mysqlx_admin_schema.cpp).
+ *
+ * Snapshot work is bounded per thread: a string-copy + a few struct field
+ * reads under the mutex, no I/O. Lock ordering: each thread's
+ * sessions_mutex_ is acquired in turn; no cross-thread lock is held.
+ *
+ * Declared __attribute__((weak)) for the same reason
+ * mysqlx_reconcile_listeners is — admin_schema.cpp's unit tests don't
+ * link mysqlx_plugin.cpp, so the projection registration must tolerate
+ * an unresolved hook at test-build link time.
+ */
+__attribute__((weak)) void mysqlx_populate_stats_processlist(SQLite3DB& statsdb);
+
 // Pure variant of `mysqlx_reconcile_listeners` that takes the plugin state
 // as parameters instead of going through `mysqlx_context()`. Exists so unit
 // tests can construct a minimal fake context without pulling in the whole

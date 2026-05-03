@@ -6,7 +6,11 @@
 #include <cerrno>
 #include <cstring>
 #include <openssl/crypto.h>
+#include <openssl/err.h>
 #include <openssl/evp.h>
+#include <openssl/ssl.h>
+#include <openssl/x509.h>
+#include <openssl/x509v3.h>
 #include <unistd.h>
 
 namespace {
@@ -295,4 +299,164 @@ bool mysqlx_mysql41_verify_hash(const std::vector<uint8_t>& challenge,
 	}
 
 	return CRYPTO_memcmp(hash_stage2, stored_hash.data(), SHA1_LEN) == 0;
+}
+
+// =====================================================================
+// TLS handshake error classification (issue #5698).
+//
+// Walks the OpenSSL state to translate "SSL_do_handshake failed" into
+// one of the named error classes. Classification logic, in order:
+//
+//   1. ssl == nullptr       -> NO_SSL_CTX
+//   2. SSL_get_verify_result() != X509_V_OK -> a chain-related class
+//      (CERT_EXPIRED, HOSTNAME_MISMATCH, UNKNOWN_CA, CERT_VERIFY_FAILED).
+//      We check the cert chain first because OpenSSL's error queue
+//      sometimes carries both a chain reason and a generic SSL_R_*
+//      reason; the chain reason is more actionable for operators.
+//   3. ERR_get_error() reasons checked for SSL_R_UNSUPPORTED_PROTOCOL
+//      / SSL_R_TLSV1_ALERT_PROTOCOL_VERSION / SSL_R_WRONG_VERSION_NUMBER
+//      -> PROTOCOL_MISMATCH.
+//   4. Fallback -> HANDSHAKE_FAILED.
+//
+// peek_err_queue=false skips step 3 (caller may already have drained
+// the queue elsewhere or want to preserve it for downstream logging).
+// =====================================================================
+
+MysqlxTlsErrorClass mysqlx_classify_tls_error(SSL* ssl, bool peek_err_queue) {
+	if (ssl == nullptr) return MysqlxTlsErrorClass::NO_SSL_CTX;
+
+	// Step 1: cert-chain reasons take precedence.
+	long verify_rc = SSL_get_verify_result(ssl);
+	if (verify_rc != X509_V_OK) {
+		switch (verify_rc) {
+			case X509_V_ERR_CERT_HAS_EXPIRED:
+			case X509_V_ERR_CERT_NOT_YET_VALID:
+				return MysqlxTlsErrorClass::CERT_EXPIRED;
+			case X509_V_ERR_HOSTNAME_MISMATCH:
+				return MysqlxTlsErrorClass::HOSTNAME_MISMATCH;
+			case X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY:
+			case X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT:
+			case X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT:
+			case X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN:
+				return MysqlxTlsErrorClass::UNKNOWN_CA;
+			default:
+				// Other cert-chain failures: untrusted root, bad
+				// signature, key usage mismatch, etc. Group under
+				// CERT_VERIFY_FAILED so operators get the right ballpark.
+				return MysqlxTlsErrorClass::CERT_VERIFY_FAILED;
+		}
+	}
+
+	// Step 2: protocol-mismatch reasons in the OpenSSL error queue.
+	if (peek_err_queue) {
+		while (true) {
+			unsigned long e = ERR_get_error();
+			if (e == 0) break;
+			int reason = ERR_GET_REASON(e);
+			switch (reason) {
+				case SSL_R_UNSUPPORTED_PROTOCOL:
+				case SSL_R_TLSV1_ALERT_PROTOCOL_VERSION:
+				case SSL_R_WRONG_VERSION_NUMBER:
+				case SSL_R_UNKNOWN_PROTOCOL:
+					// Drain the rest of the queue then return.
+					while (ERR_get_error() != 0) {}
+					return MysqlxTlsErrorClass::PROTOCOL_MISMATCH;
+				default:
+					break;
+			}
+		}
+	}
+
+	// Step 3: fallback. Couldn't classify into a specific class —
+	// emit the generic handshake failure.
+	return MysqlxTlsErrorClass::HANDSHAKE_FAILED;
+}
+
+// Backend-side messages: include enough detail to be operationally
+// useful (operator looking at the client's error response can
+// immediately see "self-signed CA" vs "expired cert"). Does NOT
+// include OpenSSL queue strings — those are appended by the caller in
+// the log line, not the wire frame, since exposing chain detail to
+// the client is a leak risk if the client is the attacker.
+const char* mysqlx_backend_tls_error_message(MysqlxTlsErrorClass cls) {
+	switch (cls) {
+		case MysqlxTlsErrorClass::CERT_VERIFY_FAILED:
+			return "Backend TLS handshake failed: certificate verify failed";
+		case MysqlxTlsErrorClass::CERT_EXPIRED:
+			return "Backend TLS handshake failed: certificate expired or not yet valid";
+		case MysqlxTlsErrorClass::HOSTNAME_MISMATCH:
+			return "Backend TLS handshake failed: certificate hostname mismatch";
+		case MysqlxTlsErrorClass::PROTOCOL_MISMATCH:
+			return "Backend TLS handshake failed: TLS protocol version not supported by backend";
+		case MysqlxTlsErrorClass::UNKNOWN_CA:
+			return "Backend TLS handshake failed: unknown / untrusted CA in certificate chain";
+		case MysqlxTlsErrorClass::NO_SSL_CTX:
+			return "Backend TLS handshake failed: SSL context not initialized";
+		case MysqlxTlsErrorClass::HANDSHAKE_FAILED:
+		case MysqlxTlsErrorClass::UNKNOWN:
+		default:
+			return "Backend TLS handshake failed";
+	}
+}
+
+int mysqlx_backend_tls_error_code(MysqlxTlsErrorClass cls) {
+	switch (cls) {
+		case MysqlxTlsErrorClass::CERT_VERIFY_FAILED:
+			return MYSQLX_BACKEND_TLS_ERR_CERT_VERIFY_FAILED;
+		case MysqlxTlsErrorClass::CERT_EXPIRED:
+			return MYSQLX_BACKEND_TLS_ERR_CERT_EXPIRED;
+		case MysqlxTlsErrorClass::HOSTNAME_MISMATCH:
+			return MYSQLX_BACKEND_TLS_ERR_HOSTNAME_MISMATCH;
+		case MysqlxTlsErrorClass::PROTOCOL_MISMATCH:
+			return MYSQLX_BACKEND_TLS_ERR_PROTOCOL_MISMATCH;
+		case MysqlxTlsErrorClass::UNKNOWN_CA:
+			return MYSQLX_BACKEND_TLS_ERR_UNKNOWN_CA;
+		case MysqlxTlsErrorClass::HANDSHAKE_FAILED:
+		case MysqlxTlsErrorClass::NO_SSL_CTX:
+		case MysqlxTlsErrorClass::UNKNOWN:
+		default:
+			return MYSQLX_BACKEND_TLS_ERR_HANDSHAKE_FAILED;
+	}
+}
+
+// Frontend-side messages: deliberately collapse most classes onto
+// HANDSHAKE_FAILED. Cert-chain detail in particular can leak
+// attacker-supplied cert information through the proxy's response —
+// the threat model on the frontend is different from the backend's
+// (the frontend client is the potential attacker; the backend is
+// trusted infrastructure). PROTOCOL_MISMATCH is operationally useful
+// for legitimate clients hitting a too-old/too-new TLS version, so
+// it gets its own code; NO_SSL_CTX maps to "TLS not configured".
+const char* mysqlx_frontend_tls_error_message(MysqlxTlsErrorClass cls) {
+	switch (cls) {
+		case MysqlxTlsErrorClass::NO_SSL_CTX:
+			return "TLS is not configured on server";
+		case MysqlxTlsErrorClass::PROTOCOL_MISMATCH:
+			return "TLS protocol version not supported";
+		case MysqlxTlsErrorClass::CERT_VERIFY_FAILED:
+		case MysqlxTlsErrorClass::CERT_EXPIRED:
+		case MysqlxTlsErrorClass::HOSTNAME_MISMATCH:
+		case MysqlxTlsErrorClass::UNKNOWN_CA:
+		case MysqlxTlsErrorClass::HANDSHAKE_FAILED:
+		case MysqlxTlsErrorClass::UNKNOWN:
+		default:
+			return "TLS handshake failed";
+	}
+}
+
+int mysqlx_frontend_tls_error_code(MysqlxTlsErrorClass cls) {
+	switch (cls) {
+		case MysqlxTlsErrorClass::NO_SSL_CTX:
+			return MYSQLX_FRONTEND_TLS_ERR_NOT_CONFIGURED;
+		case MysqlxTlsErrorClass::PROTOCOL_MISMATCH:
+			return MYSQLX_FRONTEND_TLS_ERR_PROTOCOL_MISMATCH;
+		case MysqlxTlsErrorClass::CERT_VERIFY_FAILED:
+		case MysqlxTlsErrorClass::CERT_EXPIRED:
+		case MysqlxTlsErrorClass::HOSTNAME_MISMATCH:
+		case MysqlxTlsErrorClass::UNKNOWN_CA:
+		case MysqlxTlsErrorClass::HANDSHAKE_FAILED:
+		case MysqlxTlsErrorClass::UNKNOWN:
+		default:
+			return MYSQLX_FRONTEND_TLS_ERR_HANDSHAKE_FAILED;
+	}
 }

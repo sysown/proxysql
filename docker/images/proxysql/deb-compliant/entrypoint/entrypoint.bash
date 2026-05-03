@@ -41,17 +41,19 @@ else
 	build_target="$PROXYSQL_BUILD_TYPE"
 fi
 
-# When PROXYSQLGENAI=1 is set, the build recurses into plugins/mysqlx/
-# which dynamically links against the system libprotobuf (3.x). Some of
-# the v4.0.0 packaging images were built before plugins/mysqlx existed
-# and do not yet ship libprotobuf-dev. Install it on demand here so the
-# plugin's pkg-config check at plugins/mysqlx/Makefile:47 succeeds. The
-# install is idempotent — apt-get returns 0 if the package is already
-# present. Skip silently for v3.x builds where PROXYSQLGENAI is unset
-# and the plugin path is not exercised.
-if [[ "${PROXYSQLGENAI:-}" == "1" ]]; then
+# When the chassis tier is enabled (PROXYSQL40=1, or PROXYSQLGENAI=1
+# which implies PROXYSQL40 via the cascade in include/makefiles_vars.mk),
+# the build recurses into plugins/mysqlx/ which dynamically links
+# against the system libprotobuf (3.x). Some of the v4.0.0 packaging
+# images were built before plugins/mysqlx existed and do not yet ship
+# libprotobuf-dev. Install it on demand here so the plugin's pkg-config
+# check at plugins/mysqlx/Makefile:47 succeeds. The install is
+# idempotent — apt-get returns 0 if the package is already present.
+# Skip silently for v3.x builds where neither flag is set and the plugin
+# path is not exercised.
+if [[ "${PROXYSQLGENAI:-}" == "1" || "${PROXYSQL40:-}" == "1" ]]; then
     if ! pkg-config --exists protobuf 2>/dev/null; then
-        echo "==> Installing libprotobuf-dev (required for PROXYSQLGENAI=1 mysqlx plugin build)"
+        echo "==> Installing libprotobuf-dev (required for the mysqlx plugin build under PROXYSQL40 / PROXYSQLGENAI)"
         apt-get update -qq
         apt-get install -y --no-install-recommends libprotobuf-dev
     fi
@@ -59,13 +61,19 @@ fi
 
 # clean is expensive, do it before, outside of container
 #${MAKE} cleanbuild
-if [[ "${PROXYSQLGENAI:-}" == "1" ]]; then
-    ${MAKE} ${MAKEOPT} PROXYSQLGENAI=1 ${deps_target}
-    ${MAKE} ${MAKEOPT} PROXYSQLGENAI=1 ${build_target}
-else
-    ${MAKE} ${MAKEOPT} ${deps_target}
-    ${MAKE} ${MAKEOPT} ${build_target}
-fi
+#
+# Pass through the chassis tier flag explicitly to make. WITHTSAN /
+# WITHASAN / WITHGCOV come through via the docker-compose.yml env
+# passthrough (the Makefile reads them via $(WITHTSAN) etc.), so they
+# don't need to be replicated here. PROXYSQLGENAI=1 implies
+# PROXYSQL40=1 via the Makefile cascade, so passing one is sufficient
+# in either case — but we mirror whichever the operator set so the
+# matrix stays explicit for downstream commands that match on env.
+EXTRA=""
+[[ "${PROXYSQL40:-}" == "1" ]] && EXTRA="$EXTRA PROXYSQL40=1"
+[[ "${PROXYSQLGENAI:-}" == "1" ]] && EXTRA="$EXTRA PROXYSQLGENAI=1"
+${MAKE} ${MAKEOPT} ${EXTRA} ${deps_target}
+${MAKE} ${MAKEOPT} ${EXTRA} ${build_target}
 
 touch /opt/proxysql/src/proxysql
 
