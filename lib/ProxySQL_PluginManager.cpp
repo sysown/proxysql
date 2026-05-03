@@ -771,6 +771,7 @@ bool ProxySQL_PluginManager::register_runtime_view(const ProxySQL_PluginRuntimeV
 		}
 	}
 	registered_runtime_view_t entry;
+	entry.db_kind = view.db_kind;
 	entry.table_name = view.table_name;
 	entry.refresh = view.refresh;
 	entry.opaque = view.opaque;
@@ -812,11 +813,20 @@ bool sql_references_table_ci(const std::string& sql, const std::string& table_na
 
 } // namespace
 
-void ProxySQL_PluginManager::refresh_runtime_views_for_query(const std::string& sql, SQLite3DB* admindb) const {
+void ProxySQL_PluginManager::refresh_runtime_views_for_query(const std::string& sql,
+	SQLite3DB* admindb, SQLite3DB* configdb, SQLite3DB* statsdb) const
+{
 	for (const auto& view : runtime_views_) {
 		if (view.refresh == nullptr) continue;
 		if (!sql_references_table_ci(sql, view.table_name)) continue;
-		view.refresh(admindb, view.opaque);
+		SQLite3DB* db = nullptr;
+		switch (view.db_kind) {
+		case ProxySQL_PluginDBKind::admin_db:  db = admindb; break;
+		case ProxySQL_PluginDBKind::config_db: db = configdb; break;
+		case ProxySQL_PluginDBKind::stats_db:  db = statsdb;  break;
+		}
+		if (db == nullptr) continue;
+		view.refresh(db, view.opaque);
 	}
 }
 #endif /* PROXYSQL40 */
@@ -972,18 +982,15 @@ bool proxysql_has_configured_plugin_query_hook(ProxySQL_PluginProtocol proto) {
 	return mgr->has_query_hook(proto);
 }
 
-void proxysql_refresh_configured_plugin_runtime_views(const std::string& sql, SQLite3DB* admindb) {
-	// Reader: shared lock. The refresh callbacks themselves write to
-	// admindb (DELETE+REPLACE INTO the projected runtime_<plugin>
-	// table) and read from the plugin's own in-memory store under that
-	// store's own lock. They must not call back into the plugin
-	// manager (no nested lock acquisition).
+void proxysql_refresh_configured_plugin_runtime_views(const std::string& sql,
+	SQLite3DB* admindb, SQLite3DB* configdb, SQLite3DB* statsdb)
+{
 	std::shared_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
 	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load();
 	if (mgr == nullptr) {
 		return;
 	}
-	mgr->refresh_runtime_views_for_query(sql, admindb);
+	mgr->refresh_runtime_views_for_query(sql, admindb, configdb, statsdb);
 }
 #endif /* PROXYSQL40 */
 
