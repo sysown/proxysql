@@ -202,11 +202,7 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 		}
 	}
 	if (l && ff==false && needs_warming==false) {
-		if (l>32768) {
-			i=rand()%l;
-		} else {
-			i=fastrand()%l;
-		}
+		i=rand_fast()%l;
 		if (sess && sess->client_myds && sess->client_myds->myconn && sess->client_myds->myconn->userinfo) {
 			MySQL_Connection * client_conn = sess->client_myds->myconn;
 			get_random_MyConn_inner_search(i, l, conn_found_idx, connection_quality_level, number_of_matching_session_variables, client_conn);
