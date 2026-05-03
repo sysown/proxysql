@@ -14,6 +14,7 @@ using json = nlohmann::json;
 
 #include "MySQL_Data_Stream.h"
 #include "MySQL_Query_Processor.h"
+#include "Query_Processor_ParserSQL.h"
 #include "MySQL_PreparedStatement.h"
 // GenAI_Thread.h, AI_Features_Manager.h, LLM_Bridge.h moved to
 // plugins/genai/include/ in Step 5.  Step 4.A removed all session-side
