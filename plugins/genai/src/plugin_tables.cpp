@@ -144,8 +144,8 @@ void refresh_stats_mcp_query_digest(SQLite3DB* db, void*) {
 	if (result == nullptr) return;
 	if (!db->execute("BEGIN")) { delete result; result = nullptr; return; }
 	if (!db->execute("DELETE FROM stats_mcp_query_digest")) { db->execute("ROLLBACK"); delete result; result = nullptr; return; }
-	char** row;
-	while ((row = result->next_row()) != nullptr) {
+	for (int i = 0; i < result->rows_count; i++) {
+		char** row = result->rows[i]->fields;
 		char* q = sqlite3_mprintf(
 			"INSERT INTO stats_mcp_query_digest"
 			" (tool_name, run_id, digest, digest_text, count_star,"
@@ -172,8 +172,8 @@ void refresh_stats_mcp_query_digest_reset(SQLite3DB* db, void*) {
 	if (result == nullptr) return;
 	if (!db->execute("BEGIN")) { delete result; result = nullptr; return; }
 	if (!db->execute("DELETE FROM stats_mcp_query_digest_reset")) { db->execute("ROLLBACK"); delete result; result = nullptr; return; }
-	char** row;
-	while ((row = result->next_row()) != nullptr) {
+	for (int i = 0; i < result->rows_count; i++) {
+		char** row = result->rows[i]->fields;
 		char* q = sqlite3_mprintf(
 			"INSERT INTO stats_mcp_query_digest_reset"
 			" (tool_name, run_id, digest, digest_text, count_star,"
@@ -200,8 +200,8 @@ void refresh_stats_mcp_query_rules(SQLite3DB* db, void*) {
 	if (result == nullptr) return;
 	if (!db->execute("BEGIN")) { delete result; result = nullptr; return; }
 	if (!db->execute("DELETE FROM stats_mcp_query_rules")) { db->execute("ROLLBACK"); delete result; result = nullptr; return; }
-	char** row;
-	while ((row = result->next_row()) != nullptr) {
+	for (int i = 0; i < result->rows_count; i++) {
+		char** row = result->rows[i]->fields;
 		char* q = sqlite3_mprintf(
 			"INSERT INTO stats_mcp_query_rules"
 			" (rule_id, username, target_id, hits)"
@@ -224,8 +224,8 @@ void refresh_stats_mcp_query_tools_counters(SQLite3DB* db, void*) {
 	if (result == nullptr) return;
 	if (!db->execute("BEGIN")) { delete result; result = nullptr; return; }
 	if (!db->execute("DELETE FROM stats_mcp_query_tools_counters")) { db->execute("ROLLBACK"); delete result; result = nullptr; return; }
-	char** row;
-	while ((row = result->next_row()) != nullptr) {
+	for (int i = 0; i < result->rows_count; i++) {
+		char** row = result->rows[i]->fields;
 		char* q = sqlite3_mprintf(
 			"INSERT INTO stats_mcp_query_tools_counters"
 			" (endpoint, tool, schema, count, first_seen,"
@@ -250,8 +250,8 @@ void refresh_stats_mcp_query_tools_counters_reset(SQLite3DB* db, void*) {
 	if (result == nullptr) return;
 	if (!db->execute("BEGIN")) { delete result; result = nullptr; return; }
 	if (!db->execute("DELETE FROM stats_mcp_query_tools_counters_reset")) { db->execute("ROLLBACK"); delete result; result = nullptr; return; }
-	char** row;
-	while ((row = result->next_row()) != nullptr) {
+	for (int i = 0; i < result->rows_count; i++) {
+		char** row = result->rows[i]->fields;
 		char* q = sqlite3_mprintf(
 			"INSERT INTO stats_mcp_query_tools_counters_reset"
 			" (endpoint, tool, schema, count, first_seen,"
