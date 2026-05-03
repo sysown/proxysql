@@ -87,7 +87,7 @@ int main(int argc, char** argv) {
 	p += arraysize(various);
 	p += arraysize(multiple);
 	p += arraysize(Set1_v2);
-	p += arraysize(syntax_errors);
+	p += arraysize(parsersql_syntax_errors);
 	p *= 2;
 	plan(p);
 	TestParse(sql_mode, arraysize(sql_mode), "sql_mode");
@@ -98,6 +98,6 @@ int main(int argc, char** argv) {
 	TestParse(various, arraysize(various), "various");
 	TestParse(multiple, arraysize(multiple), "multiple");
 	TestParse(Set1_v2, arraysize(Set1_v2), "Set1_v2");
-	TestParse(syntax_errors, arraysize(syntax_errors), "syntax_errors");
+	TestParse(parsersql_syntax_errors, arraysize(parsersql_syntax_errors), "parsersql_syntax_errors");
 	return exit_status();
 }

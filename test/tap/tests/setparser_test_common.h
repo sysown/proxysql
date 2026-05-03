@@ -144,6 +144,23 @@ static Test syntax_errors[] = {
   { "SET sql_mode='TRADITIONAL' , whatever = ", { Expected("sql_mode", {"TRADITIONAL"}) } },
 };
 
+// ParserSQL-specific syntax-error expectations. Unlike the regex parser
+// (which only recognizes CONCAT/REPLACE/IFNULL), ParserSQL parses the
+// SET statement structurally and can extract values even when the SQL
+// inside parentheses is invalid. This array is only used by
+// setparser_parsersql_test-t.
+static Test parsersql_syntax_errors[] = {
+  // CONCA is a typo (not CONCAT); ParserSQL still extracts the paren expr
+  { "SET sql_mode=(SELECT CONCA(@@sql_mode, ',PIPES_AS_CONCAT,NO_ENGINE_SUBSTITUTION'))",
+    { Expected("sql_mode", { "(SELECT CONCA(@@sql_mode, ',PIPES_AS_CONCAT,NO_ENGINE_SUBSTITUTION'))" } ) } },
+  // Mismatched bracket inside string; ParserSQL still extracts the paren expr
+  { "SET sql_mode=(SELECT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))",
+    { Expected("sql_mode", { "(SELECT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))" } ) } },
+  // SELCT is a typo (not SELECT); ParserSQL treats it as a bare identifier value
+  { "SET sql_mode=(SELCT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))",
+    { Expected("sql_mode", { "SELCT" } ) } },
+};
+
 static Test time_zone[] = {
   // Original tests - 2 component timezone names
   { "SET @@time_zone = 'Europe/Paris'", { Expected("time_zone",  {"Europe/Paris"}) } },
