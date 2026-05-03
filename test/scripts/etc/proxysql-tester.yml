@@ -1,3 +1,2 @@
 GLOBAL:
-  OG_API_KEY: c4a8af4e-ac7c-4641-81b4-bd4935b46af4
   BENCHMARK_SCRIPT: $WORKSPACE/test/infra/infra-mysql57/bin/local-docker-benchmark.bash

@@ -1622,8 +1622,10 @@ int MySQL_Session::handler_again___status_PINGING_SERVER() {
 		} else {
 			myds->destroy_MySQL_Connection_From_Pool(true);
 		}
-		delete mybe->server_myds;
-		mybe->server_myds=NULL;
+		if (mybe->server_myds) {
+			delete mybe->server_myds;
+			mybe->server_myds=NULL;
+		}
 		set_status(session_status___NONE);
 			return -1;
 	} else {
@@ -1641,8 +1643,10 @@ int MySQL_Session::handler_again___status_PINGING_SERVER() {
 			}
 			myds->destroy_MySQL_Connection_From_Pool(false);
 			myds->fd=0;
-			delete mybe->server_myds;
-			mybe->server_myds=NULL;
+			if (mybe->server_myds) {
+				delete mybe->server_myds;
+				mybe->server_myds=NULL;
+			}
 			return -1;
 		} else {
 			// rc==1 , nothing to do for now
@@ -1694,10 +1698,10 @@ int MySQL_Session::handler_again___status_RESETTING_CONNECTION() {
 //		if (mysql_thread___multiplexing && (myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 			myds->return_MySQL_Connection_To_Pool();
 //		} else {
-//			myds->destroy_MySQL_Connection_From_Pool(true);
-//		}
-		delete mybe->server_myds;
-		mybe->server_myds=NULL;
+		if (mybe->server_myds) {
+			delete mybe->server_myds;
+			mybe->server_myds=NULL;
+		}
 		set_status(session_status___NONE);
 		return -1;
 	} else {
