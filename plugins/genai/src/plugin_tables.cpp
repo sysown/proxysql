@@ -142,8 +142,8 @@ void refresh_stats_mcp_query_digest(SQLite3DB* db, void*) {
 	if (catalog == nullptr) return;
 	SQLite3_result* result = catalog->get_mcp_query_digest(false);
 	if (result == nullptr) return;
-	if (!db->execute("BEGIN")) { delete result; return; }
-	if (!db->execute("DELETE FROM stats_mcp_query_digest")) { db->execute("ROLLBACK"); delete result; return; }
+	if (!db->execute("BEGIN")) { delete result; result = nullptr; return; }
+	if (!db->execute("DELETE FROM stats_mcp_query_digest")) { db->execute("ROLLBACK"); delete result; result = nullptr; return; }
 	char** row;
 	while ((row = result->next_row()) != nullptr) {
 		char* q = sqlite3_mprintf(
@@ -156,8 +156,8 @@ void refresh_stats_mcp_query_digest(SQLite3DB* db, void*) {
 		db->execute(q);
 		sqlite3_free(q);
 	}
-	if (!db->execute("COMMIT")) { delete result; return; }
-	delete result;
+	if (!db->execute("COMMIT")) { delete result; result = nullptr; return; }
+	delete result; result = nullptr;
 }
 
 void refresh_stats_mcp_query_digest_reset(SQLite3DB* db, void*) {
@@ -170,8 +170,8 @@ void refresh_stats_mcp_query_digest_reset(SQLite3DB* db, void*) {
 	if (catalog == nullptr) return;
 	SQLite3_result* result = catalog->get_mcp_query_digest(true);
 	if (result == nullptr) return;
-	if (!db->execute("BEGIN")) { delete result; return; }
-	if (!db->execute("DELETE FROM stats_mcp_query_digest_reset")) { db->execute("ROLLBACK"); delete result; return; }
+	if (!db->execute("BEGIN")) { delete result; result = nullptr; return; }
+	if (!db->execute("DELETE FROM stats_mcp_query_digest_reset")) { db->execute("ROLLBACK"); delete result; result = nullptr; return; }
 	char** row;
 	while ((row = result->next_row()) != nullptr) {
 		char* q = sqlite3_mprintf(
@@ -184,8 +184,8 @@ void refresh_stats_mcp_query_digest_reset(SQLite3DB* db, void*) {
 		db->execute(q);
 		sqlite3_free(q);
 	}
-	if (!db->execute("COMMIT")) { delete result; return; }
-	delete result;
+	if (!db->execute("COMMIT")) { delete result; result = nullptr; return; }
+	delete result; result = nullptr;
 }
 
 void refresh_stats_mcp_query_rules(SQLite3DB* db, void*) {
@@ -198,8 +198,8 @@ void refresh_stats_mcp_query_rules(SQLite3DB* db, void*) {
 	if (catalog == nullptr) return;
 	SQLite3_result* result = catalog->get_stats_mcp_query_rules();
 	if (result == nullptr) return;
-	if (!db->execute("BEGIN")) { delete result; return; }
-	if (!db->execute("DELETE FROM stats_mcp_query_rules")) { db->execute("ROLLBACK"); delete result; return; }
+	if (!db->execute("BEGIN")) { delete result; result = nullptr; return; }
+	if (!db->execute("DELETE FROM stats_mcp_query_rules")) { db->execute("ROLLBACK"); delete result; result = nullptr; return; }
 	char** row;
 	while ((row = result->next_row()) != nullptr) {
 		char* q = sqlite3_mprintf(
@@ -210,8 +210,8 @@ void refresh_stats_mcp_query_rules(SQLite3DB* db, void*) {
 		db->execute(q);
 		sqlite3_free(q);
 	}
-	if (!db->execute("COMMIT")) { delete result; return; }
-	delete result;
+	if (!db->execute("COMMIT")) { delete result; result = nullptr; return; }
+	delete result; result = nullptr;
 }
 
 void refresh_stats_mcp_query_tools_counters(SQLite3DB* db, void*) {
@@ -222,8 +222,8 @@ void refresh_stats_mcp_query_tools_counters(SQLite3DB* db, void*) {
 	if (qth == nullptr) return;
 	SQLite3_result* result = qth->get_tool_usage_stats_resultset(false);
 	if (result == nullptr) return;
-	if (!db->execute("BEGIN")) { delete result; return; }
-	if (!db->execute("DELETE FROM stats_mcp_query_tools_counters")) { db->execute("ROLLBACK"); delete result; return; }
+	if (!db->execute("BEGIN")) { delete result; result = nullptr; return; }
+	if (!db->execute("DELETE FROM stats_mcp_query_tools_counters")) { db->execute("ROLLBACK"); delete result; result = nullptr; return; }
 	char** row;
 	while ((row = result->next_row()) != nullptr) {
 		char* q = sqlite3_mprintf(
@@ -236,8 +236,8 @@ void refresh_stats_mcp_query_tools_counters(SQLite3DB* db, void*) {
 		db->execute(q);
 		sqlite3_free(q);
 	}
-	if (!db->execute("COMMIT")) { delete result; return; }
-	delete result;
+	if (!db->execute("COMMIT")) { delete result; result = nullptr; return; }
+	delete result; result = nullptr;
 }
 
 void refresh_stats_mcp_query_tools_counters_reset(SQLite3DB* db, void*) {
@@ -248,8 +248,8 @@ void refresh_stats_mcp_query_tools_counters_reset(SQLite3DB* db, void*) {
 	if (qth == nullptr) return;
 	SQLite3_result* result = qth->get_tool_usage_stats_resultset(true);
 	if (result == nullptr) return;
-	if (!db->execute("BEGIN")) { delete result; return; }
-	if (!db->execute("DELETE FROM stats_mcp_query_tools_counters_reset")) { db->execute("ROLLBACK"); delete result; return; }
+	if (!db->execute("BEGIN")) { delete result; result = nullptr; return; }
+	if (!db->execute("DELETE FROM stats_mcp_query_tools_counters_reset")) { db->execute("ROLLBACK"); delete result; result = nullptr; return; }
 	char** row;
 	while ((row = result->next_row()) != nullptr) {
 		char* q = sqlite3_mprintf(
@@ -262,8 +262,8 @@ void refresh_stats_mcp_query_tools_counters_reset(SQLite3DB* db, void*) {
 		db->execute(q);
 		sqlite3_free(q);
 	}
-	if (!db->execute("COMMIT")) { delete result; return; }
-	delete result;
+	if (!db->execute("COMMIT")) { delete result; result = nullptr; return; }
+	delete result; result = nullptr;
 }
 
 void register_runtime_view_or_warn(
