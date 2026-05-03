@@ -380,12 +380,12 @@ libscram/lib/libscram.a:postgresql/postgresql/src/interfaces/libpq/libpq.a
 libscram: libscram/lib/libscram.a
 
 
-parsersql/parsersql-1.0.0/libsqlparser.a:
-	cd parsersql && rm -rf parsersql-1.0.0 || true
-	cd parsersql && tar -zxf parsersql-1.0.0.tar.gz
-	cd parsersql/parsersql-1.0.0 && CC=${CC} CXX=${CXX} ${MAKE} lib
+parsersql/parsersql-1.0.1/libsqlparser.a:
+	cd parsersql && rm -rf parsersql-1.0.1 || true
+	cd parsersql && tar -zxf parsersql-1.0.1.tar.gz
+	cd parsersql/parsersql-1.0.1 && CC=${CC} CXX=${CXX} ${MAKE} lib
 
-parsersql: parsersql/parsersql-1.0.0/libsqlparser.a
+parsersql: parsersql/parsersql-1.0.1/libsqlparser.a
 
 
 ### clean targets

@@ -97,10 +97,11 @@ static Test sql_mode[] = {
   },
   // Empty set of 'sql_mode' should result into an empty value
   { "SET sql_mode=''", { Expected("sql_mode", { "" } ) } },
-  // Invalid 'non-matching' versions of 'sql_mode' should result into 'non-matching'
-  { "SET sql_mode=(SELECT CONCA(@@sql_mode, ',PIPES_AS_CONCAT,NO_ENGINE_SUBSTITUTION'))", {} },
-  { "SET sql_mode=(SELECT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))", {} },
-  { "SET sql_mode=(SELCT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))", {} }
+  // Invalid 'non-matching' versions of 'sql_mode' — ParserSQL extracts the
+  // parenthesized expression even for invalid SQL inside the parens.
+  { "SET sql_mode=(SELECT CONCA(@@sql_mode, ',PIPES_AS_CONCAT,NO_ENGINE_SUBSTITUTION'))", { Expected("sql_mode", { "(SELECT CONCA(@@sql_mode, ',PIPES_AS_CONCAT,NO_ENGINE_SUBSTITUTION'))" } ) } },
+  { "SET sql_mode=(SELECT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))", { Expected("sql_mode", { "(SELECT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))" } ) } },
+  { "SET sql_mode=(SELCT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))", { Expected("sql_mode", { "SELCT" } ) } }
 };
 
 static Test Set1_v1[] = {
@@ -118,9 +119,14 @@ static Test Set1_v1[] = {
 static Test Set1_v2[] = {
   //{ "SET sql_mode=(SELECT CONCAT(@sql_mode, ',PIPES_AS_CONCAT,NO_ENGINE_SUBSTITUTION'))", {} }, // parse1v2 SHOULD process it	
   //{ "SET sql_mode = 'TRADITIONAL', NAMES 'utf8 COLLATE 'unicode_ci'", { Expected("sql_mode",  {"TRADITIONAL"}), Expected("names", {"utf8", "unicode_ci"}) } }, // FIXME: this should return an error
-  { "SET sql_mode='TRADITIONAL' , whatever = , autocommit=1", {} }, // v1 is not able to process this
+  { "SET sql_mode='TRADITIONAL' , whatever = , autocommit=1", { Expected("sql_mode", {"TRADITIONAL"}), Expected("autocommit", {"1"}) } }, // ParserSQL skips the invalid empty assignment
   { "SET NAMES utf8, @@SESSION.sql_mode = CONCAT(CONCAT(REPLACE(REPLACE(REPLACE(@@sql_mode, 'STRICT_TRANS_TABLES', ''), 'STRICT_ALL_TABLES', ''), 'TRADITIONAL', ''), ',NO_AUTO_VALUE_ON_ZERO'), ',NO_ENGINE_SUBSTITUTION'), @@SESSION.sql_auto_is_null = 0, @@SESSION.wait_timeout = 3600",
-  {} }, // v2 is not able to parse this, because it can process only up to 4 functions
+  {
+	Expected("names", {"utf8"}),
+	Expected("sql_mode",  {"CONCAT(CONCAT(REPLACE(REPLACE(REPLACE(@@sql_mode, 'STRICT_TRANS_TABLES', ''), 'STRICT_ALL_TABLES', ''), 'TRADITIONAL', ''), ',NO_AUTO_VALUE_ON_ZERO'), ',NO_ENGINE_SUBSTITUTION')"}),
+	Expected("sql_auto_is_null", {"0"}),
+	Expected("wait_timeout", {"3600"}),
+  } }, // ParserSQL handles deep function nesting
   { "SET character_set_connection=utf8,character_set_results=utf8,character_set_client=binary",
     {
 		Expected("character_set_connection", {"utf8"}),
@@ -131,8 +137,10 @@ static Test Set1_v2[] = {
 };
 
 static Test syntax_errors[] = {
-  { "SET sql_mode='TRADITIONAL' , whatever", {} },
-  { "SET sql_mode='TRADITIONAL' , whatever = ", {} },
+  // ParserSQL parses the first valid assignment, skips the trailing bare identifier
+  { "SET sql_mode='TRADITIONAL' , whatever", { Expected("sql_mode", {"TRADITIONAL"}) } },
+  // ParserSQL parses the first valid assignment, skips the empty-RHS assignment
+  { "SET sql_mode='TRADITIONAL' , whatever = ", { Expected("sql_mode", {"TRADITIONAL"}) } },
 };
 
 static Test time_zone[] = {
