@@ -24,6 +24,8 @@
 #include "genai_plugin.h"
 #include "MCP_Thread.h"
 #include "ProxySQL_Admin_Tables_Definitions.h"
+#include "Query_Tool_Handler.h"
+#include "Discovery_Schema.h"
 
 #include <cstdio>
 
@@ -38,6 +40,72 @@ void register_config(ProxySQL_PluginServices* services, const char* name, const 
 	ProxySQL_PluginTableDef td { ProxySQL_PluginDBKind::config_db, name, def };
 	services->register_table(td);
 }
+
+void register_stats(ProxySQL_PluginServices* services, const char* name, const char* def) {
+	ProxySQL_PluginTableDef td { ProxySQL_PluginDBKind::stats_db, name, def };
+	services->register_table(td);
+}
+
+static constexpr const char* kStatsMCPQueryToolsCounters =
+	"CREATE TABLE stats_mcp_query_tools_counters ("
+	"  endpoint VARCHAR NOT NULL ,"
+	"  tool VARCHAR NOT NULL ,"
+	"  schema VARCHAR NOT NULL ,"
+	"  count INT NOT NULL ,"
+	"  first_seen INTEGER NOT NULL ,"
+	"  last_seen INTEGER NOT NULL ,"
+	"  sum_time INTEGER NOT NULL ,"
+	"  min_time INTEGER NOT NULL ,"
+	"  max_time INTEGER NOT NULL ,"
+	"  PRIMARY KEY (endpoint, tool, schema))";
+
+static constexpr const char* kStatsMCPQueryToolsCountersReset =
+	"CREATE TABLE stats_mcp_query_tools_counters_reset ("
+	"  endpoint VARCHAR NOT NULL ,"
+	"  tool VARCHAR NOT NULL ,"
+	"  schema VARCHAR NOT NULL ,"
+	"  count INT NOT NULL ,"
+	"  first_seen INTEGER NOT NULL ,"
+	"  last_seen INTEGER NOT NULL ,"
+	"  sum_time INTEGER NOT NULL ,"
+	"  min_time INTEGER NOT NULL ,"
+	"  max_time INTEGER NOT NULL ,"
+	"  PRIMARY KEY (endpoint, tool, schema))";
+
+static constexpr const char* kStatsMCPQueryDigest =
+	"CREATE TABLE stats_mcp_query_digest ("
+	"  tool_name VARCHAR NOT NULL ,"
+	"  run_id INT ,"
+	"  digest VARCHAR NOT NULL ,"
+	"  digest_text VARCHAR NOT NULL ,"
+	"  count_star INTEGER NOT NULL ,"
+	"  first_seen INTEGER NOT NULL ,"
+	"  last_seen INTEGER NOT NULL ,"
+	"  sum_time INTEGER NOT NULL ,"
+	"  min_time INTEGER NOT NULL ,"
+	"  max_time INTEGER NOT NULL ,"
+	"  PRIMARY KEY(tool_name, run_id, digest))";
+
+static constexpr const char* kStatsMCPQueryDigestReset =
+	"CREATE TABLE stats_mcp_query_digest_reset ("
+	"  tool_name VARCHAR NOT NULL ,"
+	"  run_id INT ,"
+	"  digest VARCHAR NOT NULL ,"
+	"  digest_text VARCHAR NOT NULL ,"
+	"  count_star INTEGER NOT NULL ,"
+	"  first_seen INTEGER NOT NULL ,"
+	"  last_seen INTEGER NOT NULL ,"
+	"  sum_time INTEGER NOT NULL ,"
+	"  min_time INTEGER NOT NULL ,"
+	"  max_time INTEGER NOT NULL ,"
+	"  PRIMARY KEY(tool_name, run_id, digest))";
+
+static constexpr const char* kStatsMCPQueryRules =
+	"CREATE TABLE stats_mcp_query_rules ("
+	"  rule_id INTEGER PRIMARY KEY NOT NULL ,"
+	"  username VARCHAR ,"
+	"  target_id VARCHAR ,"
+	"  hits INTEGER NOT NULL)";
 
 // Runtime-view refresh callbacks (ABI 3).  Invoked by the chassis just
 // before any admin SELECT touches the registered table; we wipe and
@@ -64,12 +132,147 @@ void refresh_runtime_mcp_query_rules(SQLite3DB* admindb, void*) {
 	mcp->project_query_rules_to_runtime_view(*admindb);
 }
 
+void refresh_stats_mcp_query_digest(SQLite3DB* db, void*) {
+	if (db == nullptr) return;
+	MCP_Threads_Handler* mcp = genai_context().mcp;
+	if (mcp == nullptr) return;
+	Query_Tool_Handler* qth = mcp->query_tool_handler;
+	if (qth == nullptr) return;
+	Discovery_Schema* catalog = qth->get_catalog();
+	if (catalog == nullptr) return;
+	SQLite3_result* result = catalog->get_mcp_query_digest(false);
+	if (result == nullptr) return;
+	if (!db->execute("BEGIN")) { delete result; return; }
+	db->execute("DELETE FROM stats_mcp_query_digest");
+	char** row;
+	while ((row = result->next_row()) != nullptr) {
+		char* q = sqlite3_mprintf(
+			"INSERT INTO stats_mcp_query_digest"
+			" (tool_name, run_id, digest, digest_text, count_star,"
+			"  first_seen, last_seen, sum_time, min_time, max_time)"
+			" VALUES('%q','%q','%q','%q','%q','%q','%q','%q','%q','%q')",
+			row[0], row[1], row[2], row[3], row[4],
+			row[5], row[6], row[7], row[8], row[9]);
+		db->execute(q);
+		sqlite3_free(q);
+	}
+	db->execute("COMMIT");
+	delete result;
+}
+
+void refresh_stats_mcp_query_digest_reset(SQLite3DB* db, void*) {
+	if (db == nullptr) return;
+	MCP_Threads_Handler* mcp = genai_context().mcp;
+	if (mcp == nullptr) return;
+	Query_Tool_Handler* qth = mcp->query_tool_handler;
+	if (qth == nullptr) return;
+	Discovery_Schema* catalog = qth->get_catalog();
+	if (catalog == nullptr) return;
+	SQLite3_result* result = catalog->get_mcp_query_digest(true);
+	if (result == nullptr) return;
+	if (!db->execute("BEGIN")) { delete result; return; }
+	db->execute("DELETE FROM stats_mcp_query_digest_reset");
+	char** row;
+	while ((row = result->next_row()) != nullptr) {
+		char* q = sqlite3_mprintf(
+			"INSERT INTO stats_mcp_query_digest_reset"
+			" (tool_name, run_id, digest, digest_text, count_star,"
+			"  first_seen, last_seen, sum_time, min_time, max_time)"
+			" VALUES('%q','%q','%q','%q','%q','%q','%q','%q','%q','%q')",
+			row[0], row[1], row[2], row[3], row[4],
+			row[5], row[6], row[7], row[8], row[9]);
+		db->execute(q);
+		sqlite3_free(q);
+	}
+	db->execute("COMMIT");
+	delete result;
+}
+
+void refresh_stats_mcp_query_rules(SQLite3DB* db, void*) {
+	if (db == nullptr) return;
+	MCP_Threads_Handler* mcp = genai_context().mcp;
+	if (mcp == nullptr) return;
+	Query_Tool_Handler* qth = mcp->query_tool_handler;
+	if (qth == nullptr) return;
+	Discovery_Schema* catalog = qth->get_catalog();
+	if (catalog == nullptr) return;
+	SQLite3_result* result = catalog->get_stats_mcp_query_rules();
+	if (result == nullptr) return;
+	if (!db->execute("BEGIN")) { delete result; return; }
+	db->execute("DELETE FROM stats_mcp_query_rules");
+	char** row;
+	while ((row = result->next_row()) != nullptr) {
+		char* q = sqlite3_mprintf(
+			"INSERT INTO stats_mcp_query_rules"
+			" (rule_id, username, target_id, hits)"
+			" VALUES('%q','%q','%q','%q')",
+			row[0], row[1], row[2], row[3]);
+		db->execute(q);
+		sqlite3_free(q);
+	}
+	db->execute("COMMIT");
+	delete result;
+}
+
+void refresh_stats_mcp_query_tools_counters(SQLite3DB* db, void*) {
+	if (db == nullptr) return;
+	MCP_Threads_Handler* mcp = genai_context().mcp;
+	if (mcp == nullptr) return;
+	Query_Tool_Handler* qth = mcp->query_tool_handler;
+	if (qth == nullptr) return;
+	SQLite3_result* result = qth->get_tool_usage_stats_resultset(false);
+	if (result == nullptr) return;
+	if (!db->execute("BEGIN")) { delete result; return; }
+	db->execute("DELETE FROM stats_mcp_query_tools_counters");
+	char** row;
+	while ((row = result->next_row()) != nullptr) {
+		char* q = sqlite3_mprintf(
+			"INSERT INTO stats_mcp_query_tools_counters"
+			" (endpoint, tool, schema, count, first_seen,"
+			"  last_seen, sum_time, min_time, max_time)"
+			" VALUES('%q','%q','%q','%q','%q','%q','%q','%q','%q')",
+			row[0], row[1], row[2], row[3], row[4],
+			row[5], row[6], row[7], row[8]);
+		db->execute(q);
+		sqlite3_free(q);
+	}
+	db->execute("COMMIT");
+	delete result;
+}
+
+void refresh_stats_mcp_query_tools_counters_reset(SQLite3DB* db, void*) {
+	if (db == nullptr) return;
+	MCP_Threads_Handler* mcp = genai_context().mcp;
+	if (mcp == nullptr) return;
+	Query_Tool_Handler* qth = mcp->query_tool_handler;
+	if (qth == nullptr) return;
+	SQLite3_result* result = qth->get_tool_usage_stats_resultset(true);
+	if (result == nullptr) return;
+	if (!db->execute("BEGIN")) { delete result; return; }
+	db->execute("DELETE FROM stats_mcp_query_tools_counters_reset");
+	char** row;
+	while ((row = result->next_row()) != nullptr) {
+		char* q = sqlite3_mprintf(
+			"INSERT INTO stats_mcp_query_tools_counters_reset"
+			" (endpoint, tool, schema, count, first_seen,"
+			"  last_seen, sum_time, min_time, max_time)"
+			" VALUES('%q','%q','%q','%q','%q','%q','%q','%q','%q')",
+			row[0], row[1], row[2], row[3], row[4],
+			row[5], row[6], row[7], row[8]);
+		db->execute(q);
+		sqlite3_free(q);
+	}
+	db->execute("COMMIT");
+	delete result;
+}
+
 void register_runtime_view_or_warn(
 	ProxySQL_PluginServices* services,
+	ProxySQL_PluginDBKind db_kind,
 	const char* name,
 	void (*cb)(SQLite3DB*, void*)
 ) {
-	ProxySQL_PluginRuntimeView v { name, cb, nullptr };
+	ProxySQL_PluginRuntimeView v { db_kind, name, cb, nullptr };
 	if (!services->register_runtime_view(v)) {
 		genai_log(6, "genai plugin: register_runtime_view(%s) failed\n", name);
 	}
@@ -123,11 +326,43 @@ void genai_register_admin_tables(ProxySQL_PluginServices* services) {
 	// declares ABI 3 already so any chassis that loaded us at all has
 	// these wired, but defending against null is cheap.
 	if (services->register_runtime_view != nullptr) {
-		register_runtime_view_or_warn(services, "runtime_mcp_auth_profiles",
+		register_runtime_view_or_warn(services, ProxySQL_PluginDBKind::admin_db,
+		                              "runtime_mcp_auth_profiles",
 		                              &refresh_runtime_mcp_auth_profiles);
-		register_runtime_view_or_warn(services, "runtime_mcp_target_profiles",
+		register_runtime_view_or_warn(services, ProxySQL_PluginDBKind::admin_db,
+		                              "runtime_mcp_target_profiles",
 		                              &refresh_runtime_mcp_target_profiles);
-		register_runtime_view_or_warn(services, "runtime_mcp_query_rules",
+		register_runtime_view_or_warn(services, ProxySQL_PluginDBKind::admin_db,
+		                              "runtime_mcp_query_rules",
 		                              &refresh_runtime_mcp_query_rules);
+	}
+
+	register_stats(services, "stats_mcp_query_tools_counters",
+	               kStatsMCPQueryToolsCounters);
+	register_stats(services, "stats_mcp_query_tools_counters_reset",
+	               kStatsMCPQueryToolsCountersReset);
+	register_stats(services, "stats_mcp_query_digest",
+	               kStatsMCPQueryDigest);
+	register_stats(services, "stats_mcp_query_digest_reset",
+	               kStatsMCPQueryDigestReset);
+	register_stats(services, "stats_mcp_query_rules",
+	               kStatsMCPQueryRules);
+
+	if (services->register_runtime_view != nullptr) {
+		register_runtime_view_or_warn(services, ProxySQL_PluginDBKind::stats_db,
+		                              "stats_mcp_query_digest",
+		                              &refresh_stats_mcp_query_digest);
+		register_runtime_view_or_warn(services, ProxySQL_PluginDBKind::stats_db,
+		                              "stats_mcp_query_digest_reset",
+		                              &refresh_stats_mcp_query_digest_reset);
+		register_runtime_view_or_warn(services, ProxySQL_PluginDBKind::stats_db,
+		                              "stats_mcp_query_rules",
+		                              &refresh_stats_mcp_query_rules);
+		register_runtime_view_or_warn(services, ProxySQL_PluginDBKind::stats_db,
+		                              "stats_mcp_query_tools_counters",
+		                              &refresh_stats_mcp_query_tools_counters);
+		register_runtime_view_or_warn(services, ProxySQL_PluginDBKind::stats_db,
+		                              "stats_mcp_query_tools_counters_reset",
+		                              &refresh_stats_mcp_query_tools_counters_reset);
 	}
 }
