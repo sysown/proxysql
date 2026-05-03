@@ -76,6 +76,12 @@ rm -rf %{buildroot}
 %{_sysconfdir}/systemd/system/%{name}-initial.service
 /usr/share/proxysql/tools/proxysql_galera_checker.sh
 /usr/share/proxysql/tools/proxysql_galera_writer.pl
+# Plugin .so artefacts for v4.0+ chassis builds (mysqlx, genai/MCP).
+# See rhel-compliant proxysql.spec for the rationale on the gate.
+%if 0%{?with_plugins}
+%dir /usr/lib/proxysql
+/usr/lib/proxysql/*.so
+%endif
 %config(noreplace) %attr(750,%{name},%{name}) /var/run/%{name}/
 %config(noreplace) %attr(750,%{name},%{name}) /var/lib/%{name}/
 

@@ -1,25 +1,39 @@
 name: CI-unit-tests-asan-coverage
 run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
 
-# Builds ProxySQL with PROXYSQLGENAI=1, WITHASAN=1 (forces NOJEMALLOC=1),
-# WITHGCOV=1, then builds and runs every unit test under
-# test/tap/tests/unit/. On success, publishes an LCOV coverage report.
+# Builds ProxySQL with PROXYSQL40=1, WITHASAN=1 (forces NOJEMALLOC=1),
+# WITHGCOV=1, runs every unit test under test/tap/tests/unit/, and
+# publishes an LCOV coverage report.
 #
-# Unlike the other CI-taptests-* workflows this one does NOT require the
-# private proxysql/jenkins-build-scripts repo or any backend MySQL/Docker
-# infrastructure: unit tests link against libproxysql.a via the stub
-# test_globals.o and run as standalone binaries, so we build and test
-# directly on the runner.
+# Both the build and the test+coverage phase run INSIDE the
+# ubuntu24_dbg_build container — same isolation contract as
+# CI-unit-tests-tsan (PR #5725). Two parallel CI runs on a shared /
+# self-hosted runner can never collide on the host filesystem (no
+# /opt/proxysql contention, no toolchain skew between build env and
+# run env). No host-direct `apt install` polluting the runner.
 #
-# The workflow runs on CI-trigger completion to match the convention used
-# by the rest of the CI workflows in this directory, and also supports
-# workflow_dispatch for manual runs.
+# The test+coverage logic lives in
+# `test/infra/control/run-unit-tests-asan-coverage.bash` so local and
+# CI run the exact same script. PROXYSQL40=1 is used because the
+# unit test set includes genai_*_unit-t entries that only build under
+# the genai tier — coverage scope is unchanged from the pre-Docker
+# workflow.
 #
-# Security note: every 'run:' step in this workflow uses only values from
-# env: (SHA/ASAN_OPTIONS/...) or GitHub-provided env vars like
-# $GITHUB_WORKSPACE. No untrusted user input (PR titles, issue bodies,
-# commit messages, branch names from forks, etc.) is ever interpolated
-# into a shell command, so there is no command-injection surface here.
+# Local repro — same image, same script, same flags as CI:
+#
+#   sudo sysctl -w vm.mmap_rnd_bits=28
+#   WITHASAN=1 WITHGCOV=1 NOJEMALLOC=1 PROXYSQL40=1 make ubuntu24-tap
+#   docker compose run --rm \
+#     -e ASAN_OPTIONS="detect_leaks=0:abort_on_error=1:symbolize=1:print_stacktrace=1:halt_on_error=1" \
+#     --entrypoint bash ubuntu24_dbg_build \
+#     -lc 'cd /opt/proxysql && test/infra/control/run-unit-tests-asan-coverage.bash'
+#
+# The script is the canonical test+coverage runner; this workflow
+# is just a wrapper that drives it from a GitHub Actions runner.
+#
+# Security note: every 'run:' step uses only env-injected values from
+# env: blocks or GitHub-provided env vars — no untrusted user input is
+# interpolated into a shell command.
 
 on:
   workflow_dispatch:
@@ -33,10 +47,10 @@ concurrency:
 
 env:
   SHA: ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
-  # ASAN limits leak reporting and lives alongside gcov instrumentation.
-  # - detect_leaks=0 because the current TAP unit tests were not written
-  #   leak-free; flip to 1 once the known leaks are cleaned up and this
-  #   workflow will immediately become a leak regression guard.
+  # ASAN options live alongside gcov instrumentation.
+  # - detect_leaks=0 because the current TAP unit tests were not
+  #   written leak-free; flip to 1 once known leaks are cleaned up
+  #   and this workflow becomes a leak regression guard.
   # - abort_on_error=1 makes ASAN produce a non-zero exit on the first
   #   hard error (UAF, buffer overflow, uninit read, etc.).
   # - symbolize=1 + print_stacktrace=1 give usable reports in CI logs.
@@ -44,8 +58,6 @@ env:
 
 jobs:
   unit-tests:
-    # Only run on success of CI-trigger (same gate as every other CI-*
-    # workflow in this directory), or on manual dispatch.
     if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
@@ -72,175 +84,65 @@ jobs:
         submodules: 'false'
 
     - name: Relax ASLR for AddressSanitizer
-      # ASAN on recent kernels fails to reserve its shadow region when
-      # vm.mmap_rnd_bits is the default 32; include/makefiles_vars.mk
-      # explicitly warns about this. Lower it to 28.
+      # ASAN cannot reserve its shadow region on kernels with the
+      # default vm.mmap_rnd_bits=32. Lower it to 28 BEFORE any
+      # sanitized binary is loaded. The privileged container that
+      # runs the tests inherits the host's ASLR setting.
       run: sudo sysctl -w vm.mmap_rnd_bits=28
 
-    - name: Install build tools
-      run: |
-        sudo apt-get update
-        sudo apt-get -y install \
-          make automake cmake bzip2 g++ gcc git libtool wget patch pkg-config \
-          python3 python3-pip
-
-    - name: Install build dependencies
-      # Mirrors the Ubuntu list in INSTALL.md. libmysqlclient-dev is
-      # needed by some internal build-time helpers used by the vendored
-      # deps.
-      run: |
-        sudo apt-get -y install \
-          libssl-dev libgnutls28-dev libmysqlclient-dev \
-          libboost-all-dev libunwind8 libunwind-dev uuid-dev \
-          libncurses-dev libicu-dev libevent-dev libtirpc-dev \
-          ca-certificates
-
-    - name: Install coverage tooling
-      run: |
-        sudo apt-get -y install lcov
-        sudo pip3 install --break-system-packages fastcov || sudo pip3 install fastcov
-
-    - name: Verify Rust toolchain
-      # PROXYSQLGENAI=1 pulls in Rust-backed vendored deps. Ubuntu 24.04
-      # GitHub runners ship rustup/cargo/rustc out of the box; just
-      # sanity-check they are on PATH so deps/Makefile's detection fires.
-      run: |
-        rustc --version
-        cargo --version
-
-    - name: Build deps (PROXYSQLGENAI + ASAN + gcov)
-      # Deps are vendored third-party libraries; we don't need debug
-      # builds of them - the ASAN / gcov instrumentation we care about
-      # is in lib/ and src/ (ProxySQL's own code), which are built in
-      # the next step with 'make debug'.
+    - name: Build (WITHASAN=1, WITHGCOV=1, PROXYSQL40=1) inside Docker
       env:
-        PROXYSQLGENAI: "1"
-        NOJEMALLOC: "1"
         WITHASAN: "1"
         WITHGCOV: "1"
-      run: |
-        make build_deps -j$(nproc)
-
-    - name: Build lib + src
-      env:
-        PROXYSQLGENAI: "1"
         NOJEMALLOC: "1"
-        WITHASAN: "1"
-        WITHGCOV: "1"
+        PROXYSQL40: "1"
+      # `make ubuntu24-tap` invokes docker-compose to spin up the
+      # ubuntu24_dbg_build service, which builds inside the container
+      # with the source tree volume-mounted in. Output binaries land
+      # back on the host filesystem (under test/tap/tests/unit/) via
+      # the same volume mount.
+      #
+      # WITHASAN=1: enables -fsanitize=address (forces NOJEMALLOC=1
+      #             via include/makefiles_vars.mk).
+      # WITHGCOV=1: enables -fprofile-arcs -ftest-coverage and links
+      #             libgcov so .gcda/.gcno files are produced.
+      # PROXYSQL40=1: enables the full chassis + genai tier so
+      #             genai_*_unit-t binaries (registered in
+      #             unit-tests-g1) build. Cascades to PROXYSQL40 +
+      #             PROXYSQL31 + PROXYSQLFFTO + PROXYSQLTSDB via the
+      #             Makefile cascade.
       run: |
-        make debug -j$(nproc)
+        make ubuntu24-tap
 
-    - name: Build TAP unit tests
-      env:
-        PROXYSQLGENAI: "1"
-        NOJEMALLOC: "1"
-        WITHASAN: "1"
-        WITHGCOV: "1"
-      # The unit_tests target in test/tap/Makefile recurses only into
-      # test/tap/tests/unit/. We intentionally do NOT run
-      # `make build_tap_test_debug` here because that also builds the
-      # integration tests under test/tap/tests/ which require running
-      # backends to do anything useful.
+    - name: Run unit tests + capture coverage inside Docker
+      # Re-enter the same image used for the build via
+      # `docker compose run --rm` and delegate to the canonical
+      # script `test/infra/control/run-unit-tests-asan-coverage.bash`.
+      # The script is the single source of truth for the test loop +
+      # LCOV capture; local repro is exactly the same `docker compose
+      # run` invocation.
+      #
+      # No `-p PROJECT` flag: the Makefile's `binaries/proxysql%`
+      # rule writes `-p "${GIT_VERSION/./}"` which make expands as a
+      # make variable reference (not bash parameter expansion), so
+      # the project name comes out as the empty string and docker
+      # compose falls back to the directory basename. We rely on the
+      # same default here so we land in the same project namespace.
       run: |
-        cd test/tap && make unit_tests -j$(nproc)
+        docker compose run --rm \
+          -e ASAN_OPTIONS="${ASAN_OPTIONS}" \
+          --entrypoint bash \
+          ubuntu24_dbg_build \
+          -lc 'cd /opt/proxysql && test/infra/control/run-unit-tests-asan-coverage.bash'
 
-    - name: Baseline coverage snapshot
-      # Capture a zero-coverage baseline so lcov can compute deltas even
-      # for code paths never hit by the test run.
-      run: |
-        mkdir -p coverage
-        lcov --quiet --capture --initial \
-             --directory lib --directory src \
-             --output-file coverage/lcov-base.info \
-             --ignore-errors gcov,source || true
-
-    - name: Run unit tests under ASAN
-      id: run-unit
-      run: |
-        set +e
-        cd test/tap/tests/unit
-
-        mkdir -p "$GITHUB_WORKSPACE/unit-test-logs"
-        FAILED=()
-        PASSED=0
-
-        # Iterate every built unit-test binary. The Makefile's UNIT_TESTS
-        # list is the source of truth; anything that exists and is
-        # executable must run.
-        shopt -s nullglob
-        for t in *-t; do
-          [ -x "./$t" ] || continue
-          log="$GITHUB_WORKSPACE/unit-test-logs/${t}.log"
-          echo "::group::${t}"
-          ./"$t" > "$log" 2>&1
-          rc=$?
-          if [ $rc -eq 0 ]; then
-            PASSED=$((PASSED + 1))
-            echo "PASS: $t"
-          else
-            FAILED+=("$t (rc=$rc)")
-            echo "FAIL: $t (rc=$rc)"
-            tail -n 80 "$log"
-          fi
-          echo "::endgroup::"
-        done
-
-        echo
-        echo "======================================================================"
-        echo "Unit test summary: ${PASSED} passed, ${#FAILED[@]} failed"
-        echo "======================================================================"
-        if [ ${#FAILED[@]} -gt 0 ]; then
-          printf '  %s\n' "${FAILED[@]}"
-          {
-            echo "### Unit tests: ${PASSED} passed, ${#FAILED[@]} failed"
-            echo ""
-            printf -- '- %s\n' "${FAILED[@]}"
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit 1
-        fi
-
-        {
-          echo "### Unit tests: ${PASSED} passed, 0 failed"
-        } >> "$GITHUB_STEP_SUMMARY"
-
-    - name: Capture coverage
+    - name: Fix artifact permissions
       if: always()
+      # actions/upload-artifact dies with EACCES when it scandirs
+      # into directories that were created inside the docker build
+      # container (root-owned). Make everything readable by the
+      # runner user before upload.
       run: |
-        lcov --quiet --capture \
-             --directory lib --directory src \
-             --output-file coverage/lcov-tests.info \
-             --ignore-errors gcov,source,mismatch || true
-
-        # Merge baseline + tests so lines never executed still show up.
-        if [ -s coverage/lcov-base.info ] && [ -s coverage/lcov-tests.info ]; then
-          lcov --quiet \
-               --add-tracefile coverage/lcov-base.info \
-               --add-tracefile coverage/lcov-tests.info \
-               --output-file coverage/lcov.info \
-               --ignore-errors mismatch || true
-        elif [ -s coverage/lcov-tests.info ]; then
-          cp coverage/lcov-tests.info coverage/lcov.info
-        fi
-
-        # Exclude third-party / generated paths so the report stays
-        # focused on ProxySQL's own lib/ and src/.
-        if [ -s coverage/lcov.info ]; then
-          lcov --quiet --remove coverage/lcov.info \
-               '/usr/*' '*/deps/*' '*/test/*' \
-               --output-file coverage/lcov.info \
-               --ignore-errors unused || true
-        fi
-
-        if [ -s coverage/lcov.info ]; then
-          genhtml --quiet \
-                  --output-directory coverage/html \
-                  --title "ProxySQL unit tests coverage" \
-                  --demangle-cpp \
-                  --legend \
-                  coverage/lcov.info \
-                  --ignore-errors source,category || true
-          lcov --summary coverage/lcov.info || true
-        fi
+        sudo chmod -R a+rX coverage/ unit-test-logs/ 2>/dev/null || true
 
     - name: Upload coverage LCOV file
       if: always()
@@ -259,7 +161,7 @@ jobs:
         if-no-files-found: warn
 
     - name: Upload unit-test logs
-      if: always()
+      if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
         name: unit-tests-logs-${{ env.SHA }}

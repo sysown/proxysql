@@ -23,7 +23,7 @@
 #include "test_init.h"
 #include "proxysql.h"
 
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include "GenAI_Thread.h"
 #include <cstring>
@@ -808,12 +808,12 @@ int main() {
 	return exit_status();
 }
 
-#else /* !PROXYSQLGENAI */
+#else /* !PROXYSQL40 */
 
 int main() {
 	plan(1);
-	ok(1, "SKIP: GenAI_Thread tests require PROXYSQLGENAI=1 build");
+	ok(1, "SKIP: GenAI_Thread tests require PROXYSQL40=1 build");
 	return exit_status();
 }
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */

@@ -15,7 +15,7 @@
  * Requires: PROXYSQLGENAI=1 build
  */
 
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 // Include all standard and proxysql headers FIRST (before the private hack)
 #include "tap.h"
@@ -32,8 +32,19 @@
 #define private public
 #define protected public
 #include "MySQL_FTS.h"
+#include "MySQL_Tool_Handler.h"
 #undef private
 #undef protected
+
+// Stub: MySQL_FTS.cpp's index_table() calls
+// MySQL_Tool_Handler::execute_query(), but this unit test only
+// exercises the pure string helpers (sanitize_name / escape_*) and
+// never reaches index_table.  Provide an empty body so the linker is
+// satisfied — the real implementation lives in MySQL_Tool_Handler.cpp,
+// which we can't link without dragging in the full plugin runtime.
+std::string MySQL_Tool_Handler::execute_query(const std::string&) {
+	return "{}";
+}
 
 // ============================================================
 // sanitize_name() — identifier sanitization
@@ -267,7 +278,7 @@ int main() {
 	return exit_status();
 }
 
-#else /* !PROXYSQLGENAI */
+#else /* !PROXYSQL40 */
 
 #include "tap.h"
 
@@ -277,4 +288,4 @@ int main() {
 	return exit_status();
 }
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */

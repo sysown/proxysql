@@ -454,6 +454,8 @@ MySQL_Connection::MySQL_Connection() {
 	options.init_connect_sent=false;
 	options.session_track_gtids = NULL;
 	options.session_track_gtids_sent = false;
+	options.session_track_variables_sent = false;
+	options.session_track_state_sent = false;
 	options.ldap_user_variable=NULL;
 	options.ldap_user_variable_value=NULL;
 	options.ldap_user_variable_sent=false;
@@ -892,10 +894,15 @@ void MySQL_Connection::connect_start_SetClientFlag(unsigned long& client_flags) 
 		}
 	}
 
-	// set 'CLIENT_DEPRECATE_EOF' flag if explicitly stated by 'mysql-enable_server_deprecate_eof'.
-	// Capability is disabled by default in 'mariadb_client', so setting this option is not optional
-	// for having 'CLIENT_DEPRECATE_EOF' in the connection to be stablished.
+	// 'CLIENT_DEPRECATE_EOF' capability is disabled by default in mariadb_client.
+	// Based on the value of 'mysql-enable_server_deprecate_eof', enable this
+	// capability in a new connection.
 	if (mysql_thread___enable_server_deprecate_eof) {
+		mysql->options.client_flag |= CLIENT_DEPRECATE_EOF;
+	}
+
+	// override 'mysql-enable_server_deprecate_eof' behavior if 'session_track_variables' is set to 'ENFORCED'
+	if (mysql_thread___session_track_variables == session_track_variables::ENFORCED) {
 		mysql->options.client_flag |= CLIENT_DEPRECATE_EOF;
 	}
 
@@ -3121,6 +3128,8 @@ void MySQL_Connection::reset() {
 		options.session_track_gtids = NULL;
 		options.session_track_gtids_sent = false;
 	}
+	options.session_track_variables_sent = false;
+	options.session_track_state_sent = false;
 }
 
 bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
@@ -3152,6 +3161,46 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 			}
 		}
 	}
+	return ret;
+}
+
+bool MySQL_Connection::get_variables(std::unordered_map<string, string>& variables) {
+	bool ret = false;
+
+	if ((mysql != nullptr)
+		&& (mysql->net.last_errno == 0)
+		&& (mysql->server_status & SERVER_SESSION_STATE_CHANGED)) {
+		// when there is no error and status changed
+		const char *data;
+		size_t length;
+
+		if (mysql_session_track_get_first(mysql, SESSION_TRACK_SYSTEM_VARIABLES, &data, &length) == 0) {
+			string var_name(data, length);
+			string val;
+
+			// get_first() returns a variable_name
+			// get_next() will return the value
+			bool expect_value = true;
+
+			while (mysql_session_track_get_next(mysql, SESSION_TRACK_SYSTEM_VARIABLES, &data, &length) == 0) {
+				if (expect_value) {
+					val = string(data, length);
+					variables[var_name] = val;
+					// got a value in this iteration
+					// in the next iteration, we have to expect a variable_name
+					expect_value = false;
+				} else {
+					var_name = string(data, length);
+					// got a variable_name in this iteration
+					// in the next iteration, we have to expect the value of this variable
+					expect_value = true;
+				}
+			}
+
+			ret = true;
+		}
+	}
+
 	return ret;
 }
 

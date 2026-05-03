@@ -12,6 +12,7 @@
 #include <cstring>
 #include <dlfcn.h>
 #include <mutex>
+#include <shared_mutex>
 #include <strings.h>
 
 #include "proxysql.h"
@@ -28,7 +29,15 @@ namespace {
 
 std::atomic<ProxySQL_PluginManager*> g_active_plugin_manager { nullptr };
 ProxySQL_PluginManager* g_registry_target = nullptr;
-std::mutex g_active_plugin_manager_mutex {};
+// Guards swaps of g_active_plugin_manager. Readers (dispatch_admin_command,
+// dispatch_query_hook, resolve_alias_to_canonical) take a shared lock, so
+// many worker threads can be running through plugin callbacks at the same
+// time without serializing on a single std::mutex. Writers — load/init/stop
+// paths that publish or unpublish the manager pointer — take the unique
+// lock. This change is what keeps query-hook dispatch from collapsing the
+// per-worker MySQL_Thread / PgSQL_Thread parallelism onto one mutex once a
+// plugin actually wires a hook into the hot path.
+std::shared_mutex g_active_plugin_manager_mutex {};
 // Serializes load/init/stop operations. Held for the duration of a plugin
 // lifecycle transition so two reload paths cannot race on g_registry_target /
 // g_registry_registration_*. Distinct from g_active_plugin_manager_mutex,
@@ -148,6 +157,21 @@ bool register_query_hook_service(ProxySQL_PluginProtocol proto,
 			proto == ProxySQL_PluginProtocol::mysql ? "mysql" : "pgsql");
 		proxy_warning("Plugin query hook registration failed for %s\n",
 			proto == ProxySQL_PluginProtocol::mysql ? "mysql" : "pgsql");
+		return false;
+	}
+	return true;
+}
+
+bool register_runtime_view_service(const ProxySQL_PluginRuntimeView& view) {
+	if (g_registry_target == nullptr) {
+		proxy_warning("Plugin runtime-view registration attempted outside init/register_schemas phase\n");
+		return false;
+	}
+	if (!g_registry_target->register_runtime_view(view)) {
+		note_registration_failure("plugin runtime view",
+			view.table_name != nullptr ? view.table_name : "(null)");
+		proxy_warning("Plugin runtime-view registration failed for %s\n",
+			view.table_name != nullptr ? view.table_name : "(null)");
 		return false;
 	}
 	return true;
@@ -277,6 +301,7 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_.register_query_hook = &register_query_hook_service;
 	services_.get_prometheus_registry = &get_prometheus_registry_service;
 	services_.register_command_alias = &register_command_alias_service;
+	services_.register_runtime_view = &register_runtime_view_service;
 
 	// Phase-B (register_schemas) services: same layout as init(), but DB
 	// handle getters and the query-hook registrar are stubbed -- see the
@@ -297,6 +322,11 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	// register_command() first, then register aliases. Since register_command
 	// is also available during Phase B, so is register_command_alias.
 	services_phase_b_.register_command_alias = &register_command_alias_service;
+	// Runtime-view registration is live during register_schemas: views are
+	// declared alongside tables, well before init() runs. The actual
+	// refresh callback won't fire until Admin handles a SELECT, by which
+	// point admin module bootstrap has long since completed.
+	services_phase_b_.register_runtime_view = &register_runtime_view_service;
 #endif /* PROXYSQL40 */
 }
 
@@ -609,14 +639,10 @@ bool ProxySQL_PluginManager::dispatch_admin_command(const ProxySQL_PluginCommand
 		}
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Dispatching plugin command: %s (via %s)\n",
 			    command.sql.c_str(), normalized_sql.c_str());
-#ifdef PROXYSQL40
 		// Pass the CANONICAL form to the callback so plugins can ignore
 		// which alias the user typed — they match on their own canonical
 		// strings only.
 		result = command.cb(ctx, command.sql.c_str());
-#else
-		result = command.cb(ctx, normalized_sql.c_str());
-#endif /* PROXYSQL40 */
 		return true;
 	}
 
@@ -734,6 +760,79 @@ bool ProxySQL_PluginManager::dispatch_query_hook(ProxySQL_PluginProtocol proto,
 	result = cb(payload);
 	return true;
 }
+
+bool ProxySQL_PluginManager::register_runtime_view(const ProxySQL_PluginRuntimeView& view) {
+	if (view.table_name == nullptr || *view.table_name == '\0' || view.refresh == nullptr) {
+		return false;
+	}
+	for (const auto& existing : runtime_views_) {
+		if (strcasecmp(existing.table_name.c_str(), view.table_name) == 0) {
+			return false;
+		}
+	}
+	registered_runtime_view_t entry;
+	entry.db_kind = view.db_kind;
+	entry.table_name = view.table_name;
+	entry.refresh = view.refresh;
+	entry.opaque = view.opaque;
+	runtime_views_.push_back(std::move(entry));
+	return true;
+}
+
+namespace {
+
+// Case-insensitive substring check matching whole identifier-like
+// occurrences. We don't want a SELECT against `runtime_mysqlx_users`
+// to also fire the refresh for `runtime_mysqlx_users_extra` if
+// someone ever registers both. The match treats `[A-Za-z0-9_]` as
+// identifier characters and requires the surrounding chars (if any)
+// to be non-identifier — same convention as the sql_equals_ci
+// canonicaliser used elsewhere in this file.
+bool is_ident_char(unsigned char c) {
+	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+	       (c >= '0' && c <= '9') || c == '_';
+}
+
+bool sql_references_table_ci(const std::string& sql, const std::string& table_name) {
+	if (table_name.empty() || table_name.size() > sql.size()) {
+		return false;
+	}
+	for (size_t i = 0; i + table_name.size() <= sql.size(); i++) {
+		if (strncasecmp(sql.data() + i, table_name.data(), table_name.size()) != 0) {
+			continue;
+		}
+		const bool left_ok  = (i == 0) || !is_ident_char(static_cast<unsigned char>(sql[i - 1]));
+		const size_t after  = i + table_name.size();
+		const bool right_ok = (after == sql.size()) || !is_ident_char(static_cast<unsigned char>(sql[after]));
+		if (left_ok && right_ok) {
+			return true;
+		}
+	}
+	return false;
+}
+
+} // namespace
+
+void ProxySQL_PluginManager::refresh_runtime_views_for_query(const std::string& sql,
+	SQLite3DB* admindb, SQLite3DB* configdb, SQLite3DB* statsdb) const
+{
+	for (const auto& view : runtime_views_) {
+		if (view.refresh == nullptr) continue;
+		if (!sql_references_table_ci(sql, view.table_name)) continue;
+		SQLite3DB* db = nullptr;
+		switch (view.db_kind) {
+		case ProxySQL_PluginDBKind::admin_db:  db = admindb; break;
+		case ProxySQL_PluginDBKind::config_db: db = configdb; break;
+		case ProxySQL_PluginDBKind::stats_db:  db = statsdb;  break;
+		default:
+			proxy_warning("Unknown db_kind %d for runtime view '%s', skipping\n",
+				static_cast<uint8_t>(view.db_kind), view.table_name.c_str());
+			break;
+		}
+		if (db == nullptr) continue;
+		view.refresh(db, view.opaque);
+	}
+}
 #endif /* PROXYSQL40 */
 
 bool ProxySQL_PluginManager::register_command(const char* sql, proxysql_plugin_admin_command_cb cb) {
@@ -831,7 +930,10 @@ bool proxysql_dispatch_configured_plugin_admin_command(
 	const std::string& sql,
 	ProxySQL_PluginCommandResult& result
 ) {
-	std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
+	// Reader: shared lock so concurrent admin sessions can dispatch
+	// plugin commands in parallel. The unique-lock writers (publish /
+	// unpublish in load_/stop_configured_plugins) still serialize swaps.
+	std::shared_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
 	if (g_active_plugin_manager.load() == nullptr) {
 		return false;
 	}
@@ -845,7 +947,7 @@ std::string proxysql_resolve_configured_plugin_admin_alias(const std::string& sq
 	// in the manager, and the caller typically releases the lock before
 	// dispatching. A borrowed c_str() would dangle if the manager is swapped
 	// out on reload between resolve and dispatch. Copy out under the lock.
-	std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
+	std::shared_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
 	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load();
 	if (mgr == nullptr) {
 		return {};
@@ -858,7 +960,11 @@ bool proxysql_dispatch_configured_plugin_query_hook(
 	const ProxySQL_PluginQueryHookPayload& payload,
 	ProxySQL_PluginQueryHookResult& result
 ) {
-	std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
+	// Reader: shared lock so query-hook dispatch on the data-plane hot
+	// path scales across MySQL_Thread / PgSQL_Thread workers instead of
+	// serializing on a single std::mutex. This is the change that lets a
+	// plugin wire a query hook without collapsing per-worker parallelism.
+	std::shared_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
 	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load();
 	if (mgr == nullptr) {
 		return false;
@@ -879,6 +985,17 @@ bool proxysql_has_configured_plugin_query_hook(ProxySQL_PluginProtocol proto) {
 	}
 	return mgr->has_query_hook(proto);
 }
+
+void proxysql_refresh_configured_plugin_runtime_views(const std::string& sql,
+	SQLite3DB* admindb, SQLite3DB* configdb, SQLite3DB* statsdb)
+{
+	std::shared_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
+	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load();
+	if (mgr == nullptr) {
+		return;
+	}
+	mgr->refresh_runtime_views_for_query(sql, admindb, configdb, statsdb);
+}
 #endif /* PROXYSQL40 */
 
 bool proxysql_load_configured_plugins(
@@ -886,19 +1003,19 @@ bool proxysql_load_configured_plugins(
 	const std::vector<std::string>& plugin_modules,
 	std::string& err
 ) {
-#ifdef PROXYSQL40
 	// Phase A + Phase B of the four-phase lifecycle. Executed BEFORE
 	// ProxySQL_Main_init_Admin_module so that plugin-declared schemas are
-	// available when merge_plugin_tables materializes the SQLite schema.
+	// available when Admin::init() merges them into tables_defs_* and
+	// runs the DDL via check_and_build_standard_tables.
 	//
 	// On return, `manager` is populated and installed as the active
-	// manager — GloAdmin->materialize_plugin_tables() can then query it
-	// for the tables to CREATE. Phase D (init) runs later, via
+	// manager — Admin::init() reads it via proxysql_get_plugin_manager()
+	// to find the tables to merge. Phase D (init) runs later, via
 	// proxysql_init_configured_plugins, once admin is up.
 	std::lock_guard<std::mutex> lifecycle_lock(g_plugin_lifecycle_mutex);
 	err.clear();
 	{
-		std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
+		std::unique_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
 		g_active_plugin_manager.store(nullptr, std::memory_order_release);
 	}
 	manager.reset();
@@ -917,17 +1034,19 @@ bool proxysql_load_configured_plugins(
 
 	// Phase B: register_schemas runs here. Plugins declare their
 	// admin-schema tables into the manager's pending-tables list.
-	// GloAdmin->materialize_plugin_tables() (called after
+	// ProxySQL_Admin::init() (called next, via
 	// ProxySQL_Main_init_Admin_module in src/main.cpp) drains that list
-	// into SQLite via the merge_plugin_tables code path. Plugins that
-	// left register_schemas null are no-ops here.
+	// by merging into tables_defs_{admin,config,stats} and then running
+	// the DDL via check_and_build_standard_tables — same code path as
+	// the core tables. Plugins that left register_schemas null are
+	// no-ops here.
 	if (!next_manager->invoke_register_schemas_phase(err)) {
 		return false;
 	}
 
 	// Install as active manager BEFORE admin init, so that
-	// proxysql_get_plugin_manager() — used by
-	// ProxySQL_Admin::materialize_plugin_tables — can find the
+	// proxysql_get_plugin_manager() — used by ProxySQL_Admin::init() to
+	// merge plugin-declared schemas into tables_defs_* — can find the
 	// registered tables.
 	//
 	// INVARIANT (publish-before-Phase-D): after this point Phase D
@@ -941,44 +1060,11 @@ bool proxysql_load_configured_plugins(
 	// proxysql_init_configured_plugins() returns will race plain writes
 	// against plain reads.
 	{
-		std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
+		std::unique_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
 		manager = std::move(next_manager);
 		g_active_plugin_manager.store(manager.get(), std::memory_order_release);
 	}
 	return true;
-#else  /* !PROXYSQL40 */
-	// Pre-chassis two-phase: load + init_all in one call, installed as
-	// active manager only on full success.
-	err.clear();
-	{
-		std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
-		g_active_plugin_manager.store(nullptr, std::memory_order_release);
-	}
-	manager.reset();
-
-	if (plugin_modules.empty()) {
-		return true;
-	}
-
-	auto next_manager = std::make_unique<ProxySQL_PluginManager>();
-	for (const auto& path : plugin_modules) {
-		if (!next_manager->load(path, err)) {
-			err = path + ": " + err;
-			return false;
-		}
-	}
-
-	if (!next_manager->init_all(err)) {
-		return false;
-	}
-
-	{
-		std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
-		manager = std::move(next_manager);
-		g_active_plugin_manager.store(manager.get(), std::memory_order_release);
-	}
-	return true;
-#endif /* PROXYSQL40 */
 }
 
 #ifdef PROXYSQL40
@@ -1034,7 +1120,7 @@ bool proxysql_stop_configured_plugins(
 	std::lock_guard<std::mutex> lifecycle_lock(g_plugin_lifecycle_mutex);
 	err.clear();
 	{
-		std::lock_guard<std::mutex> lock(g_active_plugin_manager_mutex);
+		std::unique_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
 		g_active_plugin_manager.store(nullptr, std::memory_order_release);
 	}
 	if (!manager) {

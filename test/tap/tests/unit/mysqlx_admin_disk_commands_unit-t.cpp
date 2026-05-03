@@ -58,7 +58,9 @@ static void create_all_tables(SQLite3DB& db) {
 }
 
 int main() {
+	setvbuf(stdout, nullptr, _IOLBF, 0);
 	plan(32);
+	diag("=== mysqlx_admin_disk_commands_unit-t starting ===");
 
 	test_init_minimal();
 	mysqlx_context().config_store = std::make_unique<MysqlxConfigStore>();

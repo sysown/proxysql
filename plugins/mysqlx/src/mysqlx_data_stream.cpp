@@ -65,6 +65,17 @@ void MysqlxDataStream::close_and_reset() {
 	type_ = XDS_FRONTEND;
 }
 
+void MysqlxDataStream::clear_io_buffers() {
+	read_buf_.clear();
+	read_offset_ = 0;
+	write_buf_.clear();
+	write_offset_ = 0;
+	complete_frames_.clear();
+	parse_error_ = false;
+	ssl_write_buf_.clear();
+	ssl_write_offset_ = 0;
+}
+
 void MysqlxDataStream::set_nonblocking() {
 	if (fd_ >= 0) {
 		int flags = fcntl(fd_, F_GETFL, 0);
@@ -124,7 +135,19 @@ void MysqlxDataStream::pop_frame() {
 }
 
 void MysqlxDataStream::enqueue_frame(uint8_t msg_type, const uint8_t* body, size_t body_len) {
-	if (body_len + 1 > X_MAX_PAYLOAD_SIZE) return;
+	if (body_len + 1 > X_MAX_PAYLOAD_SIZE) {
+		// Server attempted to enqueue a frame larger than the X-Protocol
+		// 16 MiB cap. Silently dropping the body would leave the client
+		// expecting a frame that never arrives — usually a protocol
+		// stall. Mark the parser as broken so the session loop tears
+		// down cleanly instead of half-working. The caller (always a
+		// server-side path: send_error, send_capabilities, compression
+		// emit) is responsible for never feeding bodies anywhere near
+		// this size; reaching here means an internal bug, not a
+		// protocol-level event.
+		parse_error_ = true;
+		return;
+	}
 	uint32_t payload_size = static_cast<uint32_t>(body_len) + 1;
 	write_buf_.push_back(static_cast<uint8_t>(payload_size & 0xFF));
 	write_buf_.push_back(static_cast<uint8_t>((payload_size >> 8) & 0xFF));
@@ -190,7 +213,14 @@ bool MysqlxDataStream::do_ssl_handshake() {
 		ssl_handshake_done_ = true;
 		encrypted_ = true;
 		queue_encrypted_output();
-		uint8_t plain[65536];
+		// 64 KiB scratch buffer for the immediate post-handshake drain.
+		// thread_local static avoids putting it on the worker stack —
+		// some thread-stack budgets (e.g. ASan-instrumented builds, or
+		// thread_pool_size >> default thread stack rlimit) would put a
+		// stack-allocated 64 KiB local on the wrong side of the limit.
+		// Each Mysqlx_Thread owns its own thread_local instance so the
+		// buffer is not shared between threads.
+		static thread_local uint8_t plain[65536];
 		int dec;
 		while ((dec = SSL_read(ssl_, plain, sizeof(plain))) > 0) {
 			feed_bytes(plain, static_cast<size_t>(dec));

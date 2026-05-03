@@ -184,7 +184,7 @@ void dump_hostgroup_debug(MYSQL* admin, int hostgroup);
 #define MYSQL_QUERY_T(mysql, query) \
 	do { \
 		if (mysql_query_t(mysql, query)) { \
-			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql)); \
+			fprintf(stderr, "File %s, line %d, Error: %d - %s\n", __FILE__, __LINE__, mysql_errno(mysql), mysql_error(mysql)); \
 			return EXIT_FAILURE; \
 		} \
 	} while(0)

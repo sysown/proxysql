@@ -15,7 +15,7 @@
 #include "test_init.h"
 #include "proxysql.h"
 
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include "MCP_Endpoint.h"
 #include "MCP_Thread.h"
@@ -281,10 +281,10 @@ static void test_jsonrpc_error_unauthorized() {
 	ok(parsed["error"]["message"] == "Unauthorized", "create_jsonrpc_error: Unauthorized message");
 }
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */
 
 int main() {
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 	plan(36);
 	test_init_minimal();
 

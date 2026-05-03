@@ -5,7 +5,9 @@
 #include "mysqlx_connection.pb.h"
 #include "mysqlx_session.pb.h"
 #include "mysqlx_datatypes.pb.h"
+#include "mysqlx_notice.pb.h"
 
+#include <cstdio>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -31,8 +33,26 @@ MysqlxConnection::~MysqlxConnection() {
 }
 
 bool MysqlxConnection::is_reusable() const {
+	// State-machine disqualifiers: connection has reached a terminal /
+	// error state from which reuse is unsafe regardless of the
+	// reusable_ flag. These catch failure paths that callers might
+	// have forgotten to translate into set_reusable(false).
+	if (state_ == ERROR_STATE || state_ == CLOSED) return false;
+	if (auth_state_ == BACKEND_AUTH_ERROR) return false;
+	// Caller-marked: in_transaction_ or has_prepared_stmt_ being true
+	// means the next session picking up this connection from the pool
+	// would inherit session-scoped state.
 	if (in_transaction_) return false;
 	if (has_prepared_stmt_) return false;
+	// Post-Session::Reset (issue #5697): a connection whose backend
+	// just processed Session::Reset has had its session-scoped state
+	// wiped (current schema, isolation level, character set, prepared
+	// statements, session vars). Returning it to the pool without an
+	// explicit rehandshake would let a subsequent reuse start with
+	// blank state instead of the per-identity defaults the cache key
+	// implies. Drop it instead — the next request gets a fresh
+	// connection.
+	if (needs_post_reset_rehandshake_) return false;
 	return reusable_;
 }
 
@@ -41,6 +61,22 @@ void MysqlxConnection::reset() {
 	has_prepared_stmt_ = false;
 	reusable_ = true;
 	auth_state_ = BACKEND_AUTH_NOT_STARTED;
+	// Defensive: clear the post-reset rehandshake flag too. In practice
+	// is_reusable() catches the flag before reset() runs (the cache
+	// path checks reusable then either deletes or resets), so a
+	// connection with the flag set never reaches this function in the
+	// production return_connection_to_cache flow. Cleared here so any
+	// future code path that calls reset() directly (e.g. retry-on-error)
+	// doesn't permanently disable a connection by accident.
+	needs_post_reset_rehandshake_ = false;
+	// Scrub residual I/O so the next session that picks up this pooled
+	// connection cannot inherit straggler frames from the prior session.
+	// Examples: a NOTICE that arrived after the terminal frame, an unread
+	// row that the prior session abandoned, a half-parsed frame, or a
+	// queued write that was never flushed. clear_io_buffers() preserves
+	// the SSL*/BIO state so we don't force a fresh TLS handshake on
+	// every pool checkout.
+	backend_ds_.clear_io_buffers();
 }
 
 int MysqlxConnection::start_connect(const char* host, int port) {
@@ -54,7 +90,21 @@ int MysqlxConnection::start_connect(const char* host, int port) {
 	memset(&addr, 0, sizeof(addr));
 	addr.sin_family = AF_INET;
 	addr.sin_port = htons(port);
-	inet_pton(AF_INET, host, &addr.sin_addr);
+	// Reject anything that isn't an IPv4 dotted-quad. Previously the
+	// return value was discarded and inet_pton on a hostname (or empty
+	// string, or "::1", or anything else) silently left sin_addr at
+	// 0.0.0.0, producing a connect to localhost-or-INADDR_ANY-equivalent
+	// — a real footgun because mysqlx_backend_endpoints.hostname accepts
+	// arbitrary strings. Hostnames are not supported here; the upstream
+	// path is expected to have already resolved them. Failing fast with
+	// ERROR_STATE surfaces the misconfig instead of silently routing
+	// traffic to the wrong target.
+	if (inet_pton(AF_INET, host ? host : "", &addr.sin_addr) != 1) {
+		close(fd_);
+		fd_ = -1;
+		state_ = ERROR_STATE;
+		return -1;
+	}
 	int rc = ::connect(fd_, (struct sockaddr*)&addr, sizeof(addr));
 	if (rc == 0) { state_ = AUTHENTICATING; return 0; }
 	if (errno == EINPROGRESS) { state_ = CONNECTING; return 1; }
@@ -113,15 +163,128 @@ int MysqlxConnection::send_client_frame(uint8_t msg_type, const std::string& pay
 	return 0;
 }
 
+// Per-state policy for backend-auth-phase NOTICE frames (issue #5695).
+//
+// The X-Protocol places no formal restriction on which NOTICE types a
+// backend may emit during auth — but operationally the only legitimate
+// uses are:
+//
+//   - SESSION_STATE_CHANGED (3): emitted right before AuthenticateOk to
+//     announce the assigned client_id. Common; safe to drain.
+//   - SESSION_VARIABLE_CHANGED (2): rare during pure auth; some backends
+//     ship one for default schema. Safe to drain.
+//   - SERVER_HELLO (5): server greeting, primarily before auth handshake
+//     starts. Safe to drain.
+//
+// What is NOT legitimate during the backend auth phase, by Router's
+// per-state-machine rules and our hardened equivalent:
+//
+//   - WARNING (1): backend operational warnings during auth indicate a
+//     server-side misconfig (e.g. deprecated auth method); they are not
+//     security-relevant for the proxy and are dropped. Logged so the
+//     operator sees them.
+//   - GROUP_REPLICATION_STATE_CHANGED (4): cluster-membership changes
+//     are dispatched on data-plane connections, not auth handshakes.
+//     Treat as out-of-place; drop and log.
+//   - Any unknown enum value: a malformed/hostile backend, or a future
+//     spec extension. Fail the auth — the proxy can't reason about
+//     unknown notice classes.
+//
+// All "drain" cases consume the frame and continue reading until the
+// real auth response arrives. The MAX_LEADING_NOTICES cap (existing)
+// bounds total drain volume so a hostile backend can't pin a worker.
+//
+// Frontend-direction notices during auth: NEVER forwarded. The
+// frontend client has no context to interpret a backend NOTICE before
+// it sees AuthenticateOk; surfacing them would also leak server-side
+// state mid-handshake (issue #5695 explicit concern). The proxy
+// terminates them on the backend side.
+//
+// Returns true iff the NOTICE is "OK to drain and continue"; returns
+// false to signal the caller should fail the auth (auth_state_ has
+// already been set to BACKEND_AUTH_ERROR by the helper).
+bool MysqlxConnection::auth_phase_notice_is_drainable(const uint8_t* body, size_t body_len) {
+	if (body == nullptr || body_len == 0) {
+		// Empty NOTICE during auth is malformed; treat as auth failure.
+		fprintf(stderr, "mysqlx: empty NOTICE during backend auth — failing auth\n");
+		auth_state_ = BACKEND_AUTH_ERROR;
+		return false;
+	}
+	Mysqlx::Notice::Frame nframe;
+	if (!nframe.ParseFromArray(body, static_cast<int>(body_len))) {
+		fprintf(stderr, "mysqlx: malformed NOTICE during backend auth — failing auth\n");
+		auth_state_ = BACKEND_AUTH_ERROR;
+		return false;
+	}
+	if (!nframe.has_type() || !Mysqlx::Notice::Frame_Type_IsValid(nframe.type())) {
+		fprintf(stderr,
+			"mysqlx: unknown-type NOTICE (type=%d) during backend auth — failing auth\n",
+			nframe.has_type() ? nframe.type() : -1);
+		auth_state_ = BACKEND_AUTH_ERROR;
+		return false;
+	}
+	switch (nframe.type()) {
+		case Mysqlx::Notice::Frame_Type_SESSION_STATE_CHANGED:
+		case Mysqlx::Notice::Frame_Type_SESSION_VARIABLE_CHANGED:
+		case Mysqlx::Notice::Frame_Type_SERVER_HELLO:
+			// Legitimate during auth — drain silently.
+			return true;
+		case Mysqlx::Notice::Frame_Type_WARNING:
+			// Operationally suspect during auth (deprecated auth method
+			// notices, etc.). Drain but log so operators can see them.
+			fprintf(stderr,
+				"mysqlx: backend emitted WARNING NOTICE during auth (drained)\n");
+			return true;
+		case Mysqlx::Notice::Frame_Type_GROUP_REPLICATION_STATE_CHANGED:
+			// Cluster-membership notices during auth are out-of-place;
+			// they belong on data-plane connections after auth is done.
+			// Drain but log — don't fail the connection over what is
+			// likely an over-eager server, but make it visible.
+			fprintf(stderr,
+				"mysqlx: backend emitted GROUP_REPLICATION_STATE_CHANGED "
+				"NOTICE during auth (drained — unexpected on auth path)\n");
+			return true;
+	}
+	// Defensive default: known-but-not-enumerated-here type. Treat as
+	// unknown for forward-compat: we'd rather surface it than silently
+	// drop something a future spec adds.
+	auth_state_ = BACKEND_AUTH_ERROR;
+	return false;
+}
+
 std::optional<MysqlxFrame> MysqlxConnection::read_auth_frame() {
 	// Consume any leading NOTICE frames in one shot. MySQL backends commonly
 	// emit a session-state-change notice before AuthenticateContinue / Ok;
 	// returning nullopt on a NOTICE without re-trying caused the auth state
 	// machine to spin until the 10s handshake timeout.
+	//
+	// Cap the NOTICE drain so a misbehaving or hostile backend can't pin
+	// this worker thread by streaming NOTICEs forever. 64 is more than any
+	// legitimate backend would emit during auth — typical is 1-2.
+	constexpr int MAX_LEADING_NOTICES = 64;
+	int notice_count = 0;
 	while (true) {
 		auto frame = backend_ds_.try_read_one_frame();
 		if (!frame) return std::nullopt;
 		if (frame->size() >= 5 && (*frame)[4] == Mysqlx::ServerMessages_Type_NOTICE) {
+			if (++notice_count > MAX_LEADING_NOTICES) {
+				// Treat as auth failure; the caller will mark the session
+				// unhealthy and the chassis will return the connection to
+				// the pool / drop it.
+				auth_state_ = BACKEND_AUTH_ERROR;
+				return std::nullopt;
+			}
+			// Auth-phase per-state policy (#5695): validate notice type
+			// and enforce per-type drain/fail decisions. Frontend
+			// forwarding is NEVER allowed pre-auth — even legitimate
+			// notices are terminated on the backend leg here.
+			const uint8_t* body = (frame->size() > 5) ? (frame->data() + 5) : nullptr;
+			size_t body_len = (frame->size() > 5) ? (frame->size() - 5) : 0;
+			if (!auth_phase_notice_is_drainable(body, body_len)) {
+				// auth_phase_notice_is_drainable already set
+				// auth_state_=BACKEND_AUTH_ERROR and logged.
+				return std::nullopt;
+			}
 			continue;
 		}
 		return frame;
@@ -197,7 +360,70 @@ int MysqlxConnection::step_auth_capabilities_get_sent() {
 int MysqlxConnection::step_auth_capabilities_set_sent() {
 	auto frame = read_auth_frame();
 	if (!frame) return 1;
-	if (frame->size() < 5 || (*frame)[4] != Mysqlx::ServerMessages_Type_OK) {
+	if (frame->size() < 5) {
+		auth_state_ = BACKEND_AUTH_ERROR;
+		return -1;
+	}
+	const uint8_t msg_type = (*frame)[4];
+
+	// `preferred` mode contract (mysqlx_tls_backend_mode=preferred):
+	// the backend may reject CapabilitiesSet(tls=true) with a
+	// Mysqlx::Error when it has no TLS configured. Under preferred,
+	// the proxy is allowed to silently downgrade to plaintext and
+	// continue with AuthenticateStart on the same TCP connection.
+	// Under `required` (and AsClient with frontend-TLS), an Error
+	// here is fatal — the operator's policy demands encryption.
+	//
+	// Two notes on the wire-level state after a fallback:
+	//   * No TLS handshake has occurred, so backend_ds_ remains in
+	//     plaintext mode and tls_active_ stays false. This keeps
+	//     the connection out of the encrypted half of the pool
+	//     (Mysqlx_Thread::get_connection_from_cache matches on
+	//     tls_active_), so a future AsClient session against an
+	//     encrypted client will not pick this connection up.
+	//   * backend_tls_required_ is cleared so the caller's later
+	//     step_auth_capabilities_set_sent / step_auth_tls_handshake
+	//     branches don't subsequently try to negotiate TLS again.
+	//
+	// Error-code gating on the fallback (issue #5710 follow-up):
+	// previously ANY Mysqlx::Error here triggered the fallback under
+	// `preferred`, which is wrong — non-TLS errors ("internal
+	// server error", "out of memory", "permission denied") would be
+	// silently swallowed and the auth would proceed on a backend
+	// that just told us it was unhealthy. The upstream MySQL X
+	// client (plugin/x/client/xsession_impl.cc) gates the fallback
+	// on the specific code `ER_X_CAPABILITIES_PREPARE_FAILED` (5001),
+	// which is what `Capability_tls::set_impl` returns when the
+	// server has no SSL context configured (see
+	// plugin/x/src/capabilities/handler_tls.cc). We mirror that
+	// policy here: only code 5001 in the Error.code field flips us
+	// to plaintext fallback; everything else (including a malformed
+	// or code-less Error frame) is fatal.
+	if (msg_type == Mysqlx::ServerMessages_Type_ERROR) {
+		bool tls_specific = false;
+		if (backend_tls_required_ && backend_tls_fallback_allowed_ &&
+		    frame->size() > 5) {
+			Mysqlx::Error err_msg;
+			if (err_msg.ParseFromArray(frame->data() + 5, frame->size() - 5)) {
+				// 5001 == ER_X_CAPABILITIES_PREPARE_FAILED, the only code
+				// the upstream X plugin emits for "tls capability cannot
+				// be prepared" (see handler_tls.cc::Capability_tls::set_impl).
+				// Stricter than a range-based whitelist; matches what the
+				// official MySQL Connector/C++ accepts for Ssl_preferred.
+				if (err_msg.has_code() && err_msg.code() == 5001) {
+					tls_specific = true;
+				}
+			}
+		}
+		if (tls_specific) {
+			backend_tls_required_ = false;
+			return send_authenticate_start();
+		}
+		auth_state_ = BACKEND_AUTH_ERROR;
+		return -1;
+	}
+
+	if (msg_type != Mysqlx::ServerMessages_Type_OK) {
 		auth_state_ = BACKEND_AUTH_ERROR;
 		return -1;
 	}
@@ -213,16 +439,37 @@ int MysqlxConnection::step_auth_capabilities_set_sent() {
 
 int MysqlxConnection::step_auth_tls_handshake() {
 	if (!backend_ds_.ssl_init_done()) {
+		// SSL_CTX wasn't supplied / init_ssl_connect was never called.
+		// Distinct enough class to give operators a hint at config error
+		// vs. wire-level handshake failure. Record before transitioning
+		// to BACKEND_AUTH_ERROR so the session can surface the code.
+		tls_error_class_ = MysqlxTlsErrorClass::NO_SSL_CTX;
 		auth_state_ = BACKEND_AUTH_ERROR;
 		return -1;
 	}
 	backend_ds_.read_from_net();
 	if (backend_ds_.do_ssl_handshake()) {
 		backend_ds_.flush_ssl_write_buf();
+		// Record that this connection is now operating over TLS so the
+		// connection-cache key can distinguish encrypted-pooled
+		// connections from plaintext-pooled ones. Cleared by reset()
+		// only when the connection is being recycled across hostgroup
+		// /user/schema identity boundaries; preserving it across pool
+		// checkouts is intentional — the pooled connection's
+		// encryption posture does not change.
+		tls_active_ = true;
 		return send_authenticate_start();
 	}
 	backend_ds_.flush_ssl_write_buf();
 	if (backend_ds_.ssl_handshake_failed()) {
+		// Issue #5698: classify before transitioning. The classifier
+		// drains the OpenSSL error queue for protocol-mismatch reasons,
+		// so it must run while the queue is fresh — between the
+		// SSL_do_handshake failure and any other OpenSSL call. Stored
+		// on the connection so the session can fetch it from the
+		// BACKEND_AUTH_ERROR branch in handler_connecting_server.
+		tls_error_class_ = mysqlx_classify_tls_error(
+			backend_ds_.get_ssl(), /*peek_err_queue=*/true);
 		auth_state_ = BACKEND_AUTH_ERROR;
 		return -1;
 	}
@@ -242,7 +489,15 @@ int MysqlxConnection::step_auth_authenticate_start_sent() {
 	}
 
 	Mysqlx::Session::AuthenticateContinue cont;
-	cont.ParseFromArray(frame->data() + 5, frame->size() - 5);
+	if (!cont.ParseFromArray(frame->data() + 5, frame->size() - 5)) {
+		// Malformed AuthenticateContinue from the backend (or MITM that
+		// bypassed TLS). The previous code ignored the return and operated
+		// on a possibly-empty/uninitialized message, feeding a zero-length
+		// challenge into the scramble step — undefined-input territory.
+		// Fail the auth explicitly instead.
+		auth_state_ = BACKEND_AUTH_ERROR;
+		return -1;
+	}
 	backend_challenge_.assign(cont.auth_data().begin(), cont.auth_data().end());
 
 	std::string challenge(cont.auth_data().begin(), cont.auth_data().end());

@@ -45,8 +45,8 @@ using json = nlohmann::json;
 #endif /* PROXYSQL40 */
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
-#include "MCP_Thread.h"
-#include "GenAI_Thread.h"
+// MCP_Thread.h moved to plugins/genai/include/ in Step 4.C;
+// GenAI_Thread.h moved in Step 5.
 #include "SQLite3_Server.h"
 #include "Web_Interface.hpp"
 
@@ -156,12 +156,6 @@ extern PgSQL_Logger* GloPgSQL_Logger;
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern MySQL_Monitor *GloMyMon;
 extern PgSQL_Threads_Handler* GloPTH;
-
-#ifdef PROXYSQLGENAI
-extern MCP_Threads_Handler* GloMCPH;
-extern GenAI_Threads_Handler* GloGATH;
-extern AI_Features_Manager *GloAI;
-#endif /* PROXYSQLGENAI */
 
 extern void (*flush_logs_function)();
 
@@ -1163,12 +1157,25 @@ bool is_valid_global_variable(const char *var_name) {
 	} else if (strlen(var_name) > 11 && !strncmp(var_name, "clickhouse-", 11) && GloClickHouseServer && GloClickHouseServer->has_variable(var_name + 11)) {
 		return true;
 #endif /* PROXYSQLCLICKHOUSE */
-#ifdef PROXYSQLGENAI
-	} else if (strlen(var_name) > 4 && !strncmp(var_name, "mcp-", 4) && GloMCPH && GloMCPH->has_variable(var_name + 4)) {
+	// `mcp-*` and `genai-*` variables live in the genai plugin
+	// (carve-out Steps 4.C and 5).  Core no longer holds an
+	// authoritative list, so we accept any `mcp-<name>` /
+	// `genai-<name>` token as a valid global_variables key here so
+	// the SET / UPDATE admin path can reach `main.global_variables`.
+	// The plugin's `LOAD {MCP,GENAI} VARIABLES TO RUNTIME` is what
+	// actually validates each name at push-into-runtime time.
+	//
+	// Trade-off: a typo (e.g. `SET mcp-prot=9090`) writes the row
+	// silently and goes ignored at runtime.  Acceptable until a
+	// chassis-side `register_variable_namespace` ABI exists.
+	//
+	// Step 7 removed the surrounding `#ifdef PROXYSQLGENAI` — these
+	// loose prefix checks are unconditional now: SET only succeeds
+	// at write-into-runtime time when the genai plugin is loaded.
+	} else if (strlen(var_name) > 4 && !strncmp(var_name, "mcp-", 4)) {
 		return true;
-	} else if (strlen(var_name) > 6 && !strncmp(var_name, "genai-", 6) && GloGATH && GloGATH->has_variable(var_name + 6)) {
+	} else if (strlen(var_name) > 6 && !strncmp(var_name, "genai-", 6)) {
 		return true;
-#endif /* PROXYSQLGENAI */
 	} else {
 		return false;
 	}
@@ -2028,17 +2035,6 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					return false;
 				}
 			}
-#ifdef PROXYSQLGENAI
-			else if (is_genai) {
-				if (is_admin_command_or_alias(LOAD_GENAI_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length)) {
-					ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
-					SPA->load_genai_variables_to_runtime();
-					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded genai variables to RUNTIME\n");
-					SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
-					return false;
-				}
-			}
-#endif /* PROXYSQLGENAI */
 			else {
 				if (is_admin_command_or_alias(LOAD_MYSQL_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length)) {
 					ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
@@ -2104,17 +2100,6 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				return false;
 			}
 		}
-#ifdef PROXYSQLGENAI
-		else if (is_genai) {
-			if (is_admin_command_or_alias(SAVE_GENAI_VARIABLES_TO_MEMORY, query_no_space, query_no_space_length)) {
-				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
-				SPA->save_genai_variables_from_runtime();
-				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved genai variables from RUNTIME\n");
-				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
-				return false;
-			}
-		}
-#endif /* PROXYSQLGENAI */
 		else {
 			if (is_admin_command_or_alias(SAVE_MYSQL_VARIABLES_TO_MEMORY, query_no_space, query_no_space_length)) {
 				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
@@ -2126,8 +2111,13 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 	}
 
-	// MCP (Model Context Protocol) VARIABLES - DISK commands
-#ifdef PROXYSQLGENAI
+	// MCP (Model Context Protocol) VARIABLES - DISK commands.
+	// Step 7 dropped the PROXYSQLGENAI gate: the disk <-> main copy is
+	// pure SQL DML against global_variables (LIKE 'mcp-%') and has no
+	// plugin runtime dependency, so it can stay in core unconditionally.
+	// Plugin-side LOAD MCP VARIABLES TO RUNTIME (registered via
+	// register_command in plugin_commands.cpp) handles the
+	// main -> running plugin push.
 	if ((query_no_space_length > 19) && ((!strncasecmp("SAVE MCP VARIABLES ", query_no_space, 19)) || (!strncasecmp("LOAD MCP VARIABLES ", query_no_space, 19)))) {
 		const std::string modname = "mcp_variables";
 		tuple<string, vector<string>, vector<string>>& t = load_save_disk_commands[modname];
@@ -2144,51 +2134,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return true;
 		}
 	}
-#endif /* PROXYSQLGENAI */
 
-	// MCP (Model Context Protocol) LOAD/SAVE handlers
-#ifdef PROXYSQLGENAI
-	if (is_admin_command_or_alias(LOAD_MCP_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length)) {
-		ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
-		SPA->load_mcp_variables_to_runtime();
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mcp variables to RUNTIME\n");
-		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
-		return false;
-	}
-	if (is_admin_command_or_alias(SAVE_MCP_VARIABLES_TO_MEMORY, query_no_space, query_no_space_length)) {
-		ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
-		SPA->save_mcp_variables_from_runtime();
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mcp variables from RUNTIME\n");
-		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
-		return false;
-	}
-
-	if ((query_no_space_length == 31) && (!strncasecmp("LOAD MCP VARIABLES FROM CONFIG", query_no_space, query_no_space_length))) {
-		proxy_info("Received %s command\n", query_no_space);
-		if (GloVars.configfile_open) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading from file %s\n", GloVars.config_file);
-			if (GloVars.confFile->OpenFile(NULL)==true) {
-				int rows=0;
-				ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-				rows=SPA->proxysql_config().Read_Global_Variables_from_configfile("mcp");
-				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mcp global variables from CONFIG\n");
-				SPA->send_ok_msg_to_client(sess, NULL, rows, query_no_space);
-				GloVars.confFile->CloseFile();
-			} else {
-				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
-				char *s=(char *)"Unable to open or parse config file %s";
-				char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-				sprintf(m,s,GloVars.config_file);
-				SPA->send_error_msg_to_client(sess, m);
-				free(m);
-			}
-		} else {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unknown config file\n");
-			SPA->send_error_msg_to_client(sess, (char *)"Config file unknown");
-		}
-		return false;
-	}
-#endif /* PROXYSQLGENAI */
 
 	if ((query_no_space_length > 14) && (!strncasecmp("LOAD COREDUMP ", query_no_space, 14))) {
 
@@ -2632,317 +2578,6 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 	}
 
-	// ============================================================
-	// MCP QUERY RULES COMMAND HANDLERS
-	// ============================================================
-#ifdef PROXYSQLGENAI
-	// ============================================================
-	// MCP PROFILES COMMAND HANDLERS (auth + target together)
-	// ============================================================
-	if ((query_no_space_length > 17) &&
-		((!strncasecmp("SAVE MCP PROFILES ", query_no_space, 18)) ||
-		 (!strncasecmp("LOAD MCP PROFILES ", query_no_space, 18)))) {
-
-		ProxySQL_Admin *SPA = (ProxySQL_Admin *)pa;
-		proxy_info("Received %s command\n", query_no_space);
-
-		const auto load_target_auth_map_from_runtime = [&]() -> bool {
-			char* error = NULL;
-			int cols = 0;
-			int affected_rows = 0;
-			SQLite3_result* resultset = NULL;
-			const char* q =
-				"SELECT t.target_id, t.protocol, t.hostgroup_id, t.auth_profile_id,"
-				" t.max_rows, t.timeout_ms, t.allow_explain, t.allow_discovery, t.description,"
-				" a.db_username, a.db_password, a.default_schema"
-				" FROM runtime_mcp_target_profiles t"
-				" JOIN runtime_mcp_auth_profiles a ON a.auth_profile_id=t.auth_profile_id"
-				" WHERE t.active=1"
-				" ORDER BY t.target_id";
-			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
-			if (error) {
-				proxy_error("Failed to load MCP target auth map: %s\n", error);
-				free(error);
-				if (resultset) {
-					delete resultset;
-				}
-				return false;
-			}
-			if (GloMCPH) {
-				GloMCPH->load_target_auth_map(resultset);
-			} else if (resultset) {
-				delete resultset;
-			}
-			return true;
-		};
-
-		// LOAD MCP PROFILES FROM DISK / TO MEMORY
-		if (
-			(query_no_space_length == strlen("LOAD MCP PROFILES FROM DISK") &&
-			 !strncasecmp("LOAD MCP PROFILES FROM DISK", query_no_space, query_no_space_length)) ||
-			(query_no_space_length == strlen("LOAD MCP PROFILES TO MEMORY") &&
-			 !strncasecmp("LOAD MCP PROFILES TO MEMORY", query_no_space, query_no_space_length))
-		) {
-			if (!SPA->admindb->execute("BEGIN")) {
-				SPA->send_error_msg_to_client(sess, (char *)"Failed to BEGIN transaction");
-				return false;
-			}
-			if (!SPA->admindb->execute("DELETE FROM main.mcp_auth_profiles") ||
-			    !SPA->admindb->execute("INSERT OR REPLACE INTO main.mcp_auth_profiles SELECT * FROM disk.mcp_auth_profiles") ||
-			    !SPA->admindb->execute("DELETE FROM main.mcp_target_profiles") ||
-			    !SPA->admindb->execute("INSERT OR REPLACE INTO main.mcp_target_profiles SELECT * FROM disk.mcp_target_profiles")) {
-				SPA->admindb->execute("ROLLBACK");
-				SPA->send_error_msg_to_client(sess, (char *)"Failed to load MCP profiles from disk");
-				return false;
-			}
-			if (!SPA->admindb->execute("COMMIT")) {
-				SPA->send_error_msg_to_client(sess, (char *)"Failed to COMMIT transaction");
-				return false;
-			}
-			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
-			return false;
-		}
-
-		// SAVE MCP PROFILES TO DISK
-		if (
-			(query_no_space_length == strlen("SAVE MCP PROFILES TO DISK") &&
-			 !strncasecmp("SAVE MCP PROFILES TO DISK", query_no_space, query_no_space_length))
-		) {
-			if (!SPA->admindb->execute("BEGIN")) {
-				SPA->send_error_msg_to_client(sess, (char *)"Failed to BEGIN transaction");
-				return false;
-			}
-			if (!SPA->admindb->execute("DELETE FROM disk.mcp_auth_profiles") ||
-			    !SPA->admindb->execute("INSERT OR REPLACE INTO disk.mcp_auth_profiles SELECT * FROM main.mcp_auth_profiles") ||
-			    !SPA->admindb->execute("DELETE FROM disk.mcp_target_profiles") ||
-			    !SPA->admindb->execute("INSERT OR REPLACE INTO disk.mcp_target_profiles SELECT * FROM main.mcp_target_profiles")) {
-				SPA->admindb->execute("ROLLBACK");
-				SPA->send_error_msg_to_client(sess, (char *)"Failed to save MCP profiles to disk");
-				return false;
-			}
-			if (!SPA->admindb->execute("COMMIT")) {
-				SPA->send_error_msg_to_client(sess, (char *)"Failed to COMMIT transaction");
-				return false;
-			}
-			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
-			return false;
-		}
-
-		// LOAD MCP PROFILES TO RUNTIME / FROM MEMORY
-		if (
-			(query_no_space_length == strlen("LOAD MCP PROFILES TO RUNTIME") &&
-			 !strncasecmp("LOAD MCP PROFILES TO RUNTIME", query_no_space, query_no_space_length)) ||
-			(query_no_space_length == strlen("LOAD MCP PROFILES TO RUN") &&
-			 !strncasecmp("LOAD MCP PROFILES TO RUN", query_no_space, query_no_space_length)) ||
-			(query_no_space_length == strlen("LOAD MCP PROFILES FROM MEMORY") &&
-			 !strncasecmp("LOAD MCP PROFILES FROM MEMORY", query_no_space, query_no_space_length)) ||
-			(query_no_space_length == strlen("LOAD MCP PROFILES FROM MEM") &&
-			 !strncasecmp("LOAD MCP PROFILES FROM MEM", query_no_space, query_no_space_length))
-		) {
-			if (!SPA->admindb->execute("BEGIN")) {
-				SPA->send_error_msg_to_client(sess, (char *)"Failed to BEGIN transaction");
-				return false;
-			}
-			if (!SPA->admindb->execute("DELETE FROM runtime_mcp_auth_profiles") ||
-			    !SPA->admindb->execute("INSERT OR REPLACE INTO runtime_mcp_auth_profiles SELECT * FROM main.mcp_auth_profiles") ||
-			    !SPA->admindb->execute("DELETE FROM runtime_mcp_target_profiles") ||
-			    !SPA->admindb->execute("INSERT OR REPLACE INTO runtime_mcp_target_profiles SELECT * FROM main.mcp_target_profiles")) {
-				SPA->admindb->execute("ROLLBACK");
-				SPA->send_error_msg_to_client(sess, (char *)"Failed to load MCP profiles to runtime");
-				return false;
-			}
-			if (!SPA->admindb->execute("COMMIT")) {
-				SPA->send_error_msg_to_client(sess, (char *)"Failed to COMMIT transaction");
-				return false;
-			}
-			if (!load_target_auth_map_from_runtime()) {
-				SPA->send_error_msg_to_client(sess, (char *)"Failed to refresh MCP runtime profile map");
-				return false;
-			}
-			// Ensure MCP server/query handler reflects the newly loaded runtime profiles.
-			// This recovers cases where MCP server was started before profiles were available.
-			SPA->load_mcp_server();
-			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
-			return false;
-		}
-
-		// SAVE MCP PROFILES FROM RUNTIME / TO MEMORY
-		if (
-			(query_no_space_length == strlen("SAVE MCP PROFILES TO MEMORY") &&
-			 !strncasecmp("SAVE MCP PROFILES TO MEMORY", query_no_space, query_no_space_length)) ||
-			(query_no_space_length == strlen("SAVE MCP PROFILES TO MEM") &&
-			 !strncasecmp("SAVE MCP PROFILES TO MEM", query_no_space, query_no_space_length)) ||
-			(query_no_space_length == strlen("SAVE MCP PROFILES FROM RUNTIME") &&
-			 !strncasecmp("SAVE MCP PROFILES FROM RUNTIME", query_no_space, query_no_space_length)) ||
-			(query_no_space_length == strlen("SAVE MCP PROFILES FROM RUN") &&
-			 !strncasecmp("SAVE MCP PROFILES FROM RUN", query_no_space, query_no_space_length))
-		) {
-			if (!SPA->admindb->execute("BEGIN")) {
-				SPA->send_error_msg_to_client(sess, (char *)"Failed to BEGIN transaction");
-				return false;
-			}
-			if (!SPA->admindb->execute("DELETE FROM main.mcp_auth_profiles") ||
-			    !SPA->admindb->execute("INSERT OR REPLACE INTO main.mcp_auth_profiles SELECT * FROM runtime_mcp_auth_profiles") ||
-			    !SPA->admindb->execute("DELETE FROM main.mcp_target_profiles") ||
-			    !SPA->admindb->execute("INSERT OR REPLACE INTO main.mcp_target_profiles SELECT * FROM runtime_mcp_target_profiles")) {
-				SPA->admindb->execute("ROLLBACK");
-				SPA->send_error_msg_to_client(sess, (char *)"Failed to save MCP profiles from runtime");
-				return false;
-			}
-			if (!SPA->admindb->execute("COMMIT")) {
-				SPA->send_error_msg_to_client(sess, (char *)"Failed to COMMIT transaction");
-				return false;
-			}
-			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
-			return false;
-		}
-	}
-
-	// Supported commands:
-	//   LOAD MCP QUERY RULES FROM DISK  - Copy from disk to memory
-	//   LOAD MCP QUERY RULES TO MEMORY  - Copy from disk to memory (alias)
-	//   LOAD MCP QUERY RULES TO RUNTIME - Load from memory to in-memory cache
-	//   LOAD MCP QUERY RULES FROM MEMORY - Load from memory to in-memory cache (alias)
-	//   SAVE MCP QUERY RULES TO DISK    - Copy from memory to disk
-	//   SAVE MCP QUERY RULES TO MEMORY   - Save from in-memory cache to memory
-	//   SAVE MCP QUERY RULES FROM RUNTIME - Save from in-memory cache to memory (alias)
-	// ============================================================
-	if ((query_no_space_length>20) && ( (!strncasecmp("SAVE MCP QUERY RULES ", query_no_space, 21)) || (!strncasecmp("LOAD MCP QUERY RULES ", query_no_space, 21)) ) ) {
-
-		// LOAD MCP QUERY RULES FROM DISK / TO MEMORY
-		// Copies rules from persistent storage (disk.mcp_query_rules) to working memory (main.mcp_query_rules)
-		if (
-			(query_no_space_length == strlen("LOAD MCP QUERY RULES FROM DISK") && !strncasecmp("LOAD MCP QUERY RULES FROM DISK", query_no_space, query_no_space_length))
-			||
-			(query_no_space_length == strlen("LOAD MCP QUERY RULES TO MEMORY") && !strncasecmp("LOAD MCP QUERY RULES TO MEMORY", query_no_space, query_no_space_length))
-			) {
-			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-
-			// Execute as transaction to ensure both statements run atomically
-			// Begin transaction
-			if (!SPA->admindb->execute("BEGIN")) {
-				proxy_error("Failed to BEGIN transaction for LOAD MCP QUERY RULES\n");
-				SPA->send_error_msg_to_client(sess, (char *)"Failed to BEGIN transaction");
-				return false;
-			}
-
-			// Clear target table
-			if (!SPA->admindb->execute("DELETE FROM main.mcp_query_rules")) {
-				proxy_error("Failed to DELETE from main.mcp_query_rules\n");
-				SPA->admindb->execute("ROLLBACK");
-				SPA->send_error_msg_to_client(sess, (char *)"Failed to DELETE from main.mcp_query_rules");
-				return false;
-			}
-
-			// Insert from source
-			if (!SPA->admindb->execute("INSERT OR REPLACE INTO main.mcp_query_rules SELECT * FROM disk.mcp_query_rules")) {
-				proxy_error("Failed to INSERT into main.mcp_query_rules\n");
-				SPA->admindb->execute("ROLLBACK");
-				SPA->send_error_msg_to_client(sess, (char *)"Failed to INSERT into main.mcp_query_rules");
-				return false;
-			}
-
-			// Commit transaction
-			if (!SPA->admindb->execute("COMMIT")) {
-				proxy_error("Failed to COMMIT transaction for LOAD MCP QUERY RULES\n");
-				SPA->send_error_msg_to_client(sess, (char *)"Failed to COMMIT transaction");
-				return false;
-			}
-
-			proxy_info("Received %s command\n", query_no_space);
-			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
-			return false;
-		}
-
-		// SAVE MCP QUERY RULES TO DISK
-		// Copies rules from working memory (main.mcp_query_rules) to persistent storage (disk.mcp_query_rules)
-		if (
-			(query_no_space_length == strlen("SAVE MCP QUERY RULES TO DISK") && !strncasecmp("SAVE MCP QUERY RULES TO DISK", query_no_space, query_no_space_length))
-			) {
-			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-
-			// Execute as transaction to ensure both statements run atomically
-			// Begin transaction
-			if (!SPA->admindb->execute("BEGIN")) {
-				proxy_error("Failed to BEGIN transaction for SAVE MCP QUERY RULES TO DISK\n");
-				SPA->send_error_msg_to_client(sess, (char *)"Failed to BEGIN transaction");
-				return false;
-			}
-
-			// Clear target table
-			if (!SPA->admindb->execute("DELETE FROM disk.mcp_query_rules")) {
-				proxy_error("Failed to DELETE from disk.mcp_query_rules\n");
-				SPA->admindb->execute("ROLLBACK");
-				SPA->send_error_msg_to_client(sess, (char *)"Failed to DELETE from disk.mcp_query_rules");
-				return false;
-			}
-
-			// Insert from source
-			if (!SPA->admindb->execute("INSERT OR REPLACE INTO disk.mcp_query_rules SELECT * FROM main.mcp_query_rules")) {
-				proxy_error("Failed to INSERT into disk.mcp_query_rules\n");
-				SPA->admindb->execute("ROLLBACK");
-				SPA->send_error_msg_to_client(sess, (char *)"Failed to INSERT into disk.mcp_query_rules");
-				return false;
-			}
-
-			// Commit transaction
-			if (!SPA->admindb->execute("COMMIT")) {
-				proxy_error("Failed to COMMIT transaction for SAVE MCP QUERY RULES TO DISK\n");
-				SPA->send_error_msg_to_client(sess, (char *)"Failed to COMMIT transaction");
-				return false;
-			}
-
-			proxy_info("Received %s command\n", query_no_space);
-			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
-			return false;
-		}
-
-		// SAVE MCP QUERY RULES FROM RUNTIME / TO MEMORY
-		// Saves rules from in-memory cache to working memory (main.mcp_query_rules)
-		// This persists the currently active rules (with their hit counters) to the database
-		if (
-			(query_no_space_length == strlen("SAVE MCP QUERY RULES TO MEMORY") && !strncasecmp("SAVE MCP QUERY RULES TO MEMORY", query_no_space, query_no_space_length))
-			||
-			(query_no_space_length == strlen("SAVE MCP QUERY RULES TO MEM") && !strncasecmp("SAVE MCP QUERY RULES TO MEM", query_no_space, query_no_space_length))
-			||
-			(query_no_space_length == strlen("SAVE MCP QUERY RULES FROM RUNTIME") && !strncasecmp("SAVE MCP QUERY RULES FROM RUNTIME", query_no_space, query_no_space_length))
-			||
-			(query_no_space_length == strlen("SAVE MCP QUERY RULES FROM RUN") && !strncasecmp("SAVE MCP QUERY RULES FROM RUN", query_no_space, query_no_space_length))
-			) {
-			proxy_info("Received %s command\n", query_no_space);
-			ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
-			SPA->save_mcp_query_rules_from_runtime(false);
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mcp query rules from RUNTIME\n");
-			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
-			return false;
-		}
-
-		// LOAD MCP QUERY RULES TO RUNTIME / FROM MEMORY
-		// Loads rules from working memory (main.mcp_query_rules) to in-memory cache
-		// This makes the rules active for query processing
-		if (
-			(query_no_space_length == strlen("LOAD MCP QUERY RULES TO RUNTIME") && !strncasecmp("LOAD MCP QUERY RULES TO RUNTIME", query_no_space, query_no_space_length))
-			||
-			(query_no_space_length == strlen("LOAD MCP QUERY RULES TO RUN") && !strncasecmp("LOAD MCP QUERY RULES TO RUN", query_no_space, query_no_space_length))
-			||
-			(query_no_space_length == strlen("LOAD MCP QUERY RULES FROM MEMORY") && !strncasecmp("LOAD MCP QUERY RULES FROM MEMORY", query_no_space, query_no_space_length))
-			||
-			(query_no_space_length == strlen("LOAD MCP QUERY RULES FROM MEM") && !strncasecmp("LOAD MCP QUERY RULES FROM MEM", query_no_space, query_no_space_length))
-		) {
-			proxy_info("Received %s command\n", query_no_space);
-			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-			char* err = SPA->load_mcp_query_rules_to_runtime();
-
-			if (err==NULL) {
-				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mcp query rules to RUNTIME\n");
-				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
-			} else {
-				SPA->send_error_msg_to_client(sess, err);
-			}
-			return false;
-		}
-	}
-#endif /* PROXYSQLGENAI */
 
 	if ((query_no_space_length>21) && ( (!strncasecmp("SAVE ADMIN VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD ADMIN VARIABLES ", query_no_space, 21))) ) {
 

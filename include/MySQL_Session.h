@@ -243,6 +243,36 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	bool handler_again___verify_ldap_user_variable();
 	bool handler_again___verify_backend_autocommit();
 	bool handler_again___verify_backend_session_track_gtids();
+	/**
+	 * @brief Verify and configure session variable tracking on backend connections.
+	 *
+	 * === PR 5166: Backend Configuration Entry Point ===
+	 *
+	 * This function is the main orchestrator for setting up session tracking on backend
+	 * connections. It's called during connection initialization to ensure tracking is
+	 * properly configured before query processing begins.
+	 *
+	 * CONFIGURATION LOGIC:
+	 * 1. Check if global mysql-session_track_variables is enabled
+	 * 2. For each tracking flag that's not yet set on the connection:
+	 *    - Mark the flag as sent (prevents duplicate configuration)
+	 *    - Transition session to appropriate configuration state
+	 *    - Return true to indicate state machine needs re-processing
+	 *
+	 * STATE MACHINE INTEGRATION:
+	 * - SETTING_SESSION_TRACK_VARIABLES: Sets session_track_system_variables="*"
+	 * - SETTING_SESSION_TRACK_STATE: Sets session_track_state_change=ON
+	 * - Returns true to continue state machine processing until both are configured
+	 *
+	 * WHY THIS APPROACH:
+	 * - Ensures tracking is configured exactly once per backend connection
+	 * - Integrates cleanly with existing ProxySQL session state machine
+	 * - Handles both tracking capabilities independently for flexibility
+	 * - Prevents redundant SET commands on already configured connections
+	 *
+	 * @return true if session state needs to be re-processed (configuration pending), false otherwise
+	 */
+	bool handler_again___verify_backend_session_track_variables();
 	bool handler_again___verify_backend_multi_statement();
 	bool handler_again___verify_backend_user_schema();
 	bool handler_again___verify_multiple_variables(MySQL_Connection *);
@@ -250,6 +280,28 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	bool handler_again___status_SETTING_LDAP_USER_VARIABLE(int *);
 	bool handler_again___status_SETTING_SQL_MODE(int *);
 	bool handler_again___status_SETTING_SESSION_TRACK_GTIDS(int *);
+	/**
+	 * @brief Handle the SETTING_SESSION_TRACK_VARIABLES state.
+	 *
+	 * This method executes the SET command to configure session_track_system_variables="*"
+	 * on the backend connection, enabling the server to track changes to all system
+	 * variables and report them back to ProxySQL.
+	 *
+	 * @param _rc Pointer to return code that will be set with the operation result
+	 * @return true if session state needs to be re-processed, false otherwise
+	 */
+	bool handler_again___status_SETTING_SESSION_TRACK_VARIABLES(int *);
+	/**
+	 * @brief Handle the SETTING_SESSION_TRACK_STATE state.
+	 *
+	 * This method executes the SET command to configure session_track_state_change=ON
+	 * on the backend connection, enabling the server to report when session state
+	 * changes occur (including system variable changes).
+	 *
+	 * @param _rc Pointer to return code that will be set with the operation result
+	 * @return true if session state needs to be re-processed, false otherwise
+	 */
+	bool handler_again___status_SETTING_SESSION_TRACK_STATE(int *);
 	bool handler_again___status_CHANGING_CHARSET(int *_rc);
 	bool handler_again___status_CHANGING_SCHEMA(int *);
 	bool handler_again___status_CONNECTING_SERVER(int *);
@@ -301,79 +353,48 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	int RunQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn);
 	void handler___status_WAITING_CLIENT_DATA();
 	void handler_rc0_Process_GTID(MySQL_Connection *myconn);
+	/**
+	 * @brief Process session variable changes from backend connection response.
+	 *
+	 * === PR 5166: Variable Processing Workflow ===
+	 *
+	 * This function is the core of the variable tracking system and is called after
+	 * every successful query execution when SERVER_SESSION_STATE_CHANGED flag is set.
+	 *
+	 * DETAILED WORKFLOW:
+	 * 1. Extract variable changes from MySQL's session tracking data via get_variables()
+	 * 2. Iterate through all tracked variables in mysql_tracked_variables array
+	 * 3. For each variable that changed in the backend:
+	 *    - Update both client and server variable maps for state consistency
+	 *    - Handle character set variables specially (convert names to internal IDs)
+	 * 4. This ensures ProxySQL's internal state matches the actual backend state
+	 *
+	 * WHY THIS IS NEEDED:
+	 * - SQL statement parsing cannot detect all variable changes (e.g., stored procedures)
+	 * - Some variables are changed implicitly by MySQL server operations
+	 * - Without this tracking, client and backend states can diverge
+	 *
+	 * PERFORMANCE CONSIDERATIONS:
+	 * - Only called when SERVER_SESSION_STATE_CHANGED flag is set
+	 * - Processes all tracked variables but only updates those that actually changed
+	 * - Character set conversions are done only for relevant variables
+	 *
+	 * @param myconn Pointer to the MySQL connection from which to extract variable changes
+	 */
+	void handler_rc0_Process_Variables(MySQL_Connection *myconn);
 	void handler_rc0_RefreshActiveTransactions(MySQL_Connection* myconn);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB_replace_CLICKHOUSE(PtrSize_t& pkt);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(PtrSize_t& pkt);
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___genai(const char* query, size_t query_len, PtrSize_t* pkt);
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___llm(const char* query, size_t query_len, PtrSize_t* pkt);
-#ifdef epoll_create1
-	/**
-	 * @brief Handle GenAI response from socketpair
-	 *
-	 * Called when epoll notifies that a GenAI response is available on a client fd.
-	 * Reads the GenAI_ResponseHeader and JSON result, then sends the resultset
-	 * to the MySQL client.
-	 *
-	 * @param fd The socketpair fd (MySQL side) with data available to read
-	 *
-	 * @see handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___genai_send_async()
-	 * @see check_genai_events()
-	 */
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_genai_response(int fd);
+	// MYSQL_COM_QUERY___genai / MYSQL_COM_QUERY___llm and the entire
+	// async-genai socketpair infrastructure (handle_genai_response,
+	// genai_send_async, genai_cleanup_request, check_genai_events) were
+	// removed in Step 4 of the GenAI plugin carve-out (decision Q2 in
+	// the design doc).  GenAI now reaches clients through MCP / admin
+	// SQL / REST -- the in-line MySQL-protocol "GENAI:" / "LLM:"
+	// prefix escape hatches were a debug/POC convenience that bypassed
+	// routing, ACLs, and the query processor.
 
-	/**
-	 * @brief Send GenAI request asynchronously via socketpair
-	 *
-	 * Creates a socketpair for async communication with the GenAI module:
-	 * 1. Creates socketpair(fds)
-	 * 2. Registers fds[1] with GenAI module
-	 * 3. Sends GenAI_RequestHeader + JSON query via fds[0]
-	 * 4. Adds fds[0] to session's epoll for response notification
-	 * 5. Returns immediately (MySQL thread is free to process other queries)
-	 *
-	 * The response will be handled by handle_genai_response() when ready.
-	 *
-	 * @param query The JSON query string (after "GENAI:" prefix)
-	 * @param query_len Length of the query string
-	 * @param pkt Original packet (stored for later cleanup)
-	 * @return true if request was sent successfully, false on error
-	 *
-	 * @see handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_genai_response()
-	 */
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___genai_send_async(const char* query, size_t query_len, PtrSize_t* pkt);
-
-	/**
-	 * @brief Cleanup a GenAI pending request
-	 *
-	 * Removes the request from the pending map, closes the socketpair fd,
-	 * removes from epoll, and frees the original packet. Called after
-	 * the response is processed or on error.
-	 *
-	 * @param request_id The request ID to clean up
-	 *
-	 * @see handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___genai_send_async()
-	 */
-	void genai_cleanup_request(uint64_t request_id);
-
-	/**
-	 * @brief Check for pending GenAI responses
-	 *
-	 * Performs a non-blocking epoll_wait on the session's GenAI epoll fd
-	 * to check if any responses are ready. If a response is found, it's
-	 * processed immediately by calling handle_genai_response().
-	 *
-	 * This is called from the main handler() loop in the WAITING_CLIENT_DATA
-	 * case to ensure GenAI responses are processed promptly even when
-	 * there's no new client data.
-	 *
-	 * @return true if a response was processed, false if no responses were ready
-	 *
-	 * @see handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_genai_response()
-	 */
-	bool check_genai_events();
-#endif
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_detect_SQLi();
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_detect_ai_anomaly();
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP_MULTI_PACKET(PtrSize_t& pkt);
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM__various(PtrSize_t* pkt, bool* wrong_pass);
 	void handler___status_WAITING_CLIENT_DATA___default();
@@ -569,6 +590,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	void reset_warning_hostgroup_flag_and_release_connection();
 	void set_previous_status_mode3(bool allow_execute=true);
 	char* get_current_query(int max_length = -1);
+	bool handle_session_track_capabilities();
 	/**
 	 * @brief Attempts to get the server version string from a backend connection in the specified hostgroup.
 	 * @details This function iterates through servers in the hostgroup and checks for any available

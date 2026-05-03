@@ -13,6 +13,7 @@
 #include <cstring>
 
 static void test_frame_header_extra() {
+	diag(">>> %s", __func__);
 	{
 		uint8_t zeros[5] = {0x00, 0x00, 0x00, 0x00, 0x00};
 		auto decoded = mysqlx_decode_frame_header(zeros, 5);
@@ -43,6 +44,7 @@ static void test_frame_header_extra() {
 }
 
 static void test_frame_building() {
+	diag(">>> %s", __func__);
 	{
 		std::string payload = "hello";
 		auto frame = mysqlx_build_frame(42, payload);
@@ -68,11 +70,13 @@ static void test_frame_building() {
 }
 
 static void test_auth_method_extra() {
+	diag(">>> %s", __func__);
 	ok(mysqlx_is_supported_auth_method("PLAIN"), "PLAIN is supported");
 	ok(!mysqlx_is_supported_auth_method(""), "empty auth method not supported");
 }
 
 static void test_mysql41_auth_extra() {
+	diag(">>> %s", __func__);
 	{
 		std::vector<uint8_t> challenge(20, 0x01);
 		std::string password = "correctpass";
@@ -117,6 +121,7 @@ static void test_mysql41_auth_extra() {
 }
 
 static void test_hex_encode_decode() {
+	diag(">>> %s", __func__);
 	ok(mysqlx_hex_encode({0x00}) == "00", "hex_encode({0x00}) == \"00\"");
 	ok(mysqlx_hex_encode({0xFF}) == "FF", "hex_encode({0xFF}) == \"FF\" (uppercase)");
 	ok(mysqlx_hex_encode({0xAB, 0xCD}) == "ABCD", "hex_encode({0xAB, 0xCD}) == \"ABCD\"");
@@ -150,6 +155,7 @@ static void test_hex_encode_decode() {
 }
 
 static void test_error_ok_frame_building() {
+	diag(">>> %s", __func__);
 	{
 		int fds[2];
 		socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
@@ -252,7 +258,9 @@ static void test_error_ok_frame_building() {
 }
 
 int main() {
+	setvbuf(stdout, nullptr, _IOLBF, 0);
 	plan(42);
+	diag("=== mysqlx_protocol_unit-t starting ===");
 
 	signal(SIGPIPE, SIG_IGN);
 

@@ -5,8 +5,11 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <memory>
 #include <mutex>
+#include <string>
+#include <vector>
 
 namespace {
 
@@ -141,41 +144,41 @@ bool sync_disk_to_memory(SQLite3DB& admindb, ProxySQL_PluginServices* services) 
 	return all_ok;
 }
 
-bool copy_to_runtime(SQLite3DB& admindb, ProxySQL_PluginServices* services) {
-	const char* pairs[][2] = {
-		{"mysqlx_users", "runtime_mysqlx_users"},
-		{"mysqlx_routes", "runtime_mysqlx_routes"},
-		{"mysqlx_backend_endpoints", "runtime_mysqlx_backend_endpoints"},
-		{"mysqlx_variables", "runtime_mysqlx_variables"},
-	};
-	bool all_ok = true;
-	for (const auto& p : pairs) {
-		std::string dest = "main.";
-		dest += p[1];
-		std::string source = "main.";
-		source += p[0];
-		if (!replace_table_atomically(admindb, services, dest.c_str(), source.c_str())) {
-			all_ok = false;
-		}
-	}
-	return all_ok;
-}
-
 bool mysqlx_start() {
 	MysqlxPluginContext& ctx = mysqlx_context();
 
 	if (ctx.services != nullptr && ctx.services->get_admindb != nullptr) {
 		SQLite3DB* admindb = ctx.services->get_admindb();
 		if (admindb != nullptr) {
+			// Disk -> memory: keep the editable tables in sync with disk
+			// on startup, same as the canonical proxysql_admin path does
+			// for mysql_users / mysql_servers / etc. This is admin-tier
+			// persistence and is legitimate.
 			sync_disk_to_memory(*admindb, ctx.services);
-			copy_to_runtime(*admindb, ctx.services);
 
+			// Memory -> module: the editable mysqlx_* tables now drive
+			// the in-memory store directly. Each install_*_from_admin
+			// SELECTs the editable table (and the relevant cross-module
+			// runtime_mysql_* projections), builds a new local map, and
+			// atomically swaps it into MysqlxConfigStore. We deliberately
+			// do NOT replicate this data into runtime_mysqlx_* admin
+			// tables -- those are projected on demand via the chassis
+			// register_runtime_view() refresh callbacks declared below.
 			std::string err;
-			if (!ctx.config_store->load_from_runtime(*admindb, err)) {
+			auto report_err = [&](const char* what) {
 				if (ctx.services->log_message != nullptr) {
-					ctx.services->log_message(3, err.c_str());
+					std::string msg = "mysqlx: ";
+					msg += what;
+					msg += ": ";
+					msg += err;
+					ctx.services->log_message(3, msg.c_str());
 				}
-			}
+				err.clear();
+			};
+			if (!ctx.config_store->install_users_from_admin(*admindb, err))     report_err("install_users_from_admin failed");
+			if (!ctx.config_store->install_routes_from_admin(*admindb, err))    report_err("install_routes_from_admin failed");
+			if (!ctx.config_store->install_endpoints_from_admin(*admindb, err)) report_err("install_endpoints_from_admin failed");
+			if (!ctx.config_store->install_variables_from_admin(*admindb, err)) report_err("install_variables_from_admin failed");
 		}
 	}
 
@@ -255,9 +258,14 @@ MysqlxPluginContext& mysqlx_context() {
 }
 
 void mysqlx_reconcile_listeners(SQLite3DB& admindb) {
+	(void)admindb; // no longer consulted; kept in the public signature
+	               // so the weak hook surface is stable for callers.
 	MysqlxPluginContext& ctx = mysqlx_context();
+	if (!ctx.config_store) {
+		return;
+	}
 	mysqlx_reconcile_listeners_impl(
-		admindb,
+		*ctx.config_store,
 		ctx.threads,
 		ctx.route_to_thread,
 		ctx.route_to_thread_mutex,
@@ -265,6 +273,80 @@ void mysqlx_reconcile_listeners(SQLite3DB& admindb) {
 	);
 }
 
-extern "C" const ProxySQL_PluginDescriptor *proxysql_plugin_descriptor_v1() {
+namespace {
+
+// Local copy of the SQLite single-quote escape used by mysqlx_stats.cpp;
+// duplicating one tiny function is cheaper than introducing a shared
+// header just for it. If a third caller appears, lift to mysqlx_util.h.
+std::string sqlite_escape_local(const std::string& input) {
+	std::string result;
+	result.reserve(input.size());
+	for (char c : input) {
+		if (c == '\'') result += "''";
+		else result += c;
+	}
+	return result;
+}
+
+uint64_t monotonic_time_ms_local() {
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return static_cast<uint64_t>(ts.tv_sec) * 1000ULL + static_cast<uint64_t>(ts.tv_nsec) / 1000000ULL;
+}
+
+} // namespace
+
+void mysqlx_populate_stats_processlist(SQLite3DB& statsdb) {
+	MysqlxPluginContext& ctx = mysqlx_context();
+
+	uint64_t now_ms = monotonic_time_ms_local();
+	std::vector<MysqlxSessionSnapshot> rows;
+	for (const auto& thr : ctx.threads) {
+		if (thr) thr->snapshot_sessions_for_stats(rows, now_ms);
+	}
+
+	// Atomic rebuild: DELETE + INSERTs run in a single transaction so a
+	// failure in any INSERT rolls everything back, leaving the previous
+	// projection in place rather than a half-populated (or empty) table.
+	// Reviewer feedback (CodeRabbit / Gemini on PR #5704) flagged that the
+	// previous bare DELETE-then-loop-INSERTs would leave operators staring
+	// at "no sessions" right after a transient SQLite error, which is far
+	// more misleading than "stale-but-recent" data.
+	if (!statsdb.execute("BEGIN")) return;
+	if (!statsdb.execute("DELETE FROM stats_mysqlx_processlist")) {
+		statsdb.execute("ROLLBACK");
+		return;
+	}
+	for (const auto& r : rows) {
+		std::string sql = "INSERT INTO stats_mysqlx_processlist "
+			"(username, route, worker_id, backend_host, backend_port, "
+			" auth_mode, connection_state, bytes_in, bytes_out, "
+			" session_age_ms) VALUES ('";
+		sql += sqlite_escape_local(r.username);
+		sql += "', '"; sql += sqlite_escape_local(r.route);
+		sql += "', "; sql += std::to_string(r.worker_id);
+		sql += ", '"; sql += sqlite_escape_local(r.backend_host);
+		sql += "', "; sql += std::to_string(r.backend_port);
+		sql += ", '"; sql += sqlite_escape_local(r.auth_mode);
+		sql += "', '"; sql += sqlite_escape_local(r.connection_state);
+		sql += "', "; sql += std::to_string(r.bytes_in);
+		sql += ", "; sql += std::to_string(r.bytes_out);
+		sql += ", "; sql += std::to_string(r.session_age_ms);
+		sql += ")";
+		if (!statsdb.execute(sql.c_str())) {
+			statsdb.execute("ROLLBACK");
+			return;
+		}
+	}
+	statsdb.execute("COMMIT");
+}
+
+// Default visibility is required because the plugin .so is built with
+// -fvisibility=hidden (see plugins/mysqlx/Makefile). Without an explicit
+// override the dlopen consumer cannot resolve this symbol via dlsym, and
+// ProxySQL_PluginManager::load() fails with "undefined symbol:
+// proxysql_plugin_descriptor_v1".
+extern "C" __attribute__((visibility("default")))
+const ProxySQL_PluginDescriptor *proxysql_plugin_descriptor_v1() {
 	return &mysqlx_descriptor;
 }

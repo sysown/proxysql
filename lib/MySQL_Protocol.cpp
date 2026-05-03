@@ -1088,17 +1088,22 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	}
 	mysql_thread___server_capabilities |= CLIENT_LONG_FLAG;
 	mysql_thread___server_capabilities |= CLIENT_MYSQL | CLIENT_PLUGIN_AUTH | CLIENT_RESERVED;
-	if (mysql_thread___enable_client_deprecate_eof) {
+
+	// Advertise CLIENT_DEPRECATE_EOF in the server greeting when either:
+	// 1) mysql_thread___enable_client_deprecate_eof is explicitly enabled, OR
+	// 2) session_track_variables is ENFORCED (backends must support CLIENT_DEPRECATE_EOF
+	//    to properly handle session tracking capabilities in this mode).
+	// This is coordinated with the corresponding logic in PPHR_2() to ensure consistent
+	// CLIENT_DEPRECATE_EOF handling between server greeting and client capabilities negotiation.
+	if (deprecate_eof_active
+		&& (mysql_thread___enable_client_deprecate_eof
+			|| mysql_thread___session_track_variables == session_track_variables::ENFORCED)) {
 		mysql_thread___server_capabilities |= CLIENT_DEPRECATE_EOF;
 	} else {
 		mysql_thread___server_capabilities &= ~CLIENT_DEPRECATE_EOF;
 	}
+
 	uint32_t server_capabilities = mysql_thread___server_capabilities;
-	if (deprecate_eof_active && mysql_thread___enable_client_deprecate_eof) {
-		server_capabilities |= CLIENT_DEPRECATE_EOF;
-	} else {
-		server_capabilities &= ~CLIENT_DEPRECATE_EOF;
-	}
 	(*myds)->myconn->options.server_capabilities=server_capabilities;
   memcpy(_ptr+l,&server_capabilities, sizeof(server_capabilities)/2); l+=sizeof(server_capabilities)/2;
   const MARIADB_CHARSET_INFO *ci = NULL;
@@ -1652,16 +1657,16 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 	if (vars1.capabilities & CLIENT_MULTI_STATEMENTS) {
 		vars1.capabilities |= CLIENT_MULTI_RESULTS;
 	}
-	// we enforce disabling 'CLIENT_DEPRECATE_EOF' from the supported capabilities
-	// in case it's explicitly disabled by global variable 'mysql_thread___enable_client_deprecate_eof'.
-	// This is because further checks to actually threat the connection as a connection
-	// supporting 'CLIENT_DEPRECATE_EOF' rely in 'client_flag' field from
-	// 'MySQL_Connection::options'.
-	// This is the second step for ensuring that the connection is being handling
-	// in both ProxySQL and client side as a connection without 'CLIENT_DEPRECATE_EOF' support.
-	// First step is replying to client during initial handshake (in 'generate_pkt_initial_handshake')
-	// specifying no 'CLIENT_DEPRECATE_EOF' support in 'server_capabilities'.
-	if (!mysql_thread___enable_client_deprecate_eof) {
+	// CLIENT_DEPRECATE_EOF is disabled in client capabilities unless either:
+	// 1) mysql_thread___enable_client_deprecate_eof is explicitly set, OR
+	// 2) session_track_variables is ENFORCED (which requires CLIENT_DEPRECATE_EOF support
+	//    since backends must support both CLIENT_DEPRECATE_EOF and CLIENT_SESSION_TRACKING).
+	// This flag is stored in 'client_flag' field from 'MySQL_Connection::options' and is
+	// used in subsequent connection checks throughout the session lifecycle.
+	// This step, combined with the corresponding logic in 'generate_pkt_initial_handshake',
+	// ensures consistent CLIENT_DEPRECATE_EOF handling across client and backend connections.
+	if (!mysql_thread___enable_client_deprecate_eof
+		&& mysql_thread___session_track_variables != session_track_variables::ENFORCED) {
 		vars1.capabilities &= ~CLIENT_DEPRECATE_EOF;
 	}
 	(*myds)->myconn->options.client_flag = vars1.capabilities;
