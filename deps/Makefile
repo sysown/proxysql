@@ -381,8 +381,9 @@ libscram: libscram/lib/libscram.a
 
 
 parsersql/parsersql/libsqlparser.a:
-	cd parsersql && rm -rf parsersql-*/ || true
+	cd parsersql && rm -rf parsersql-*/ ParserSQL-*/ || true
 	cd parsersql && tar -zxf parsersql-*.tar.gz
+	cd parsersql && for d in ParserSQL-*/; do [ -d "$$d" ] && mv "$$d" "parsersql-$${d#ParserSQL-}"; done || true
 	cd parsersql/parsersql && CC=${CC} CXX=${CXX} ${MAKE} lib
 
 parsersql: parsersql/parsersql/libsqlparser.a
@@ -423,6 +424,6 @@ cleanall:
 	cd libscram && rm -rf lib/* obj/* || true
 	cd json && rm -rf json-*/ || true
 	cd zstd && rm -rf zstd-*/ || true
-	cd parsersql && rm -rf parsersql-*/ || true
+	cd parsersql && rm -rf parsersql-*/ ParserSQL-*/ || true
 .PHONY: cleanall
 
