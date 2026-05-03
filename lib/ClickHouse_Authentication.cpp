@@ -210,11 +210,11 @@ int ClickHouse_Authentication::dump_all_users(ch_account_details_t ***ads, bool 
 	*ads=_ads;
 __exit_dump_all_users:
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
-	pthread_rwlock_unlock(&creds_frontends.lock);
 	pthread_rwlock_unlock(&creds_backends.lock);
+	pthread_rwlock_unlock(&creds_frontends.lock);
 #else
-	spin_rdunlock(&creds_frontends.lock);
 	spin_rdunlock(&creds_backends.lock);
+	spin_rdunlock(&creds_frontends.lock);
 #endif
 	return total_size;
 }
