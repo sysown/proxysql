@@ -15,7 +15,7 @@
  * Requires: PROXYSQLGENAI=1 build
  */
 
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 // Include all standard and proxysql headers FIRST (before the private hack)
 #include "tap.h"
@@ -278,7 +278,7 @@ int main() {
 	return exit_status();
 }
 
-#else /* !PROXYSQLGENAI */
+#else /* !PROXYSQL40 */
 
 #include "tap.h"
 
@@ -288,4 +288,4 @@ int main() {
 	return exit_status();
 }
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */

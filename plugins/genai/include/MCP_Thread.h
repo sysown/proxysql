@@ -1,7 +1,7 @@
 #ifndef PROXYSQL_MCP_THREAD_H
 #define PROXYSQL_MCP_THREAD_H
 
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #define MCP_THREAD_VERSION "0.1.0"
 
@@ -407,6 +407,6 @@ private:
 // Global instance of the MCP Threads Handler
 extern MCP_Threads_Handler *GloMCPH;
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */
 
 #endif // __CLASS_MCP_THREAD_H

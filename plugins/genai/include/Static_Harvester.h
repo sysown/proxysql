@@ -1,7 +1,7 @@
 #ifndef CLASS_STATIC_HARVESTER_H
 #define CLASS_STATIC_HARVESTER_H
 
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include "Discovery_Schema.h"
 #include <string>
@@ -418,5 +418,5 @@ public:
 	std::vector<FKRow> fetch_foreign_keys(const std::string& filter = "");
 };
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */
 #endif /* CLASS_STATIC_HARVESTER_H */

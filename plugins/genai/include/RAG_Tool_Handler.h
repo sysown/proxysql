@@ -28,7 +28,7 @@
 #ifndef CLASS_RAG_TOOL_HANDLER_H
 #define CLASS_RAG_TOOL_HANDLER_H
 
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include "MCP_Tool_Handler.h"
 #include "sqlite3db.h"
@@ -512,5 +512,5 @@ public:
 	SQLite3_result* get_tool_usage_stats_resultset(bool reset = false);
 };
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */
 #endif /* CLASS_RAG_TOOL_HANDLER_H */

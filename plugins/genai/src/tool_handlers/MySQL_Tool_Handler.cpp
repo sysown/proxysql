@@ -1,4 +1,4 @@
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 
 #include "proxysql.h"
@@ -1488,4 +1488,4 @@ int MySQL_Tool_Handler::reinit_fts(const std::string& fts_path) {
 	return 0;
 }
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */

@@ -1,7 +1,7 @@
 name: CI-unit-tests-asan-coverage
 run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
 
-# Builds ProxySQL with PROXYSQLGENAI=1, WITHASAN=1 (forces NOJEMALLOC=1),
+# Builds ProxySQL with PROXYSQL40=1, WITHASAN=1 (forces NOJEMALLOC=1),
 # WITHGCOV=1, runs every unit test under test/tap/tests/unit/, and
 # publishes an LCOV coverage report.
 #
@@ -14,15 +14,15 @@ run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branc
 #
 # The test+coverage logic lives in
 # `test/infra/control/run-unit-tests-asan-coverage.bash` so local and
-# CI run the exact same script. PROXYSQLGENAI=1 is kept (not dropped
-# to PROXYSQL40=1) because the unit test set includes genai_*_unit-t
-# entries that only build under the genai tier — coverage scope is
-# unchanged from the pre-Docker workflow.
+# CI run the exact same script. PROXYSQL40=1 is used because the
+# unit test set includes genai_*_unit-t entries that only build under
+# the genai tier — coverage scope is unchanged from the pre-Docker
+# workflow.
 #
 # Local repro — same image, same script, same flags as CI:
 #
 #   sudo sysctl -w vm.mmap_rnd_bits=28
-#   WITHASAN=1 WITHGCOV=1 NOJEMALLOC=1 PROXYSQLGENAI=1 make ubuntu24-tap
+#   WITHASAN=1 WITHGCOV=1 NOJEMALLOC=1 PROXYSQL40=1 make ubuntu24-tap
 #   docker compose run --rm \
 #     -e ASAN_OPTIONS="detect_leaks=0:abort_on_error=1:symbolize=1:print_stacktrace=1:halt_on_error=1" \
 #     --entrypoint bash ubuntu24_dbg_build \
@@ -90,12 +90,12 @@ jobs:
       # runs the tests inherits the host's ASLR setting.
       run: sudo sysctl -w vm.mmap_rnd_bits=28
 
-    - name: Build (WITHASAN=1, WITHGCOV=1, PROXYSQLGENAI=1) inside Docker
+    - name: Build (WITHASAN=1, WITHGCOV=1, PROXYSQL40=1) inside Docker
       env:
         WITHASAN: "1"
         WITHGCOV: "1"
         NOJEMALLOC: "1"
-        PROXYSQLGENAI: "1"
+        PROXYSQL40: "1"
       # `make ubuntu24-tap` invokes docker-compose to spin up the
       # ubuntu24_dbg_build service, which builds inside the container
       # with the source tree volume-mounted in. Output binaries land
@@ -106,7 +106,7 @@ jobs:
       #             via include/makefiles_vars.mk).
       # WITHGCOV=1: enables -fprofile-arcs -ftest-coverage and links
       #             libgcov so .gcda/.gcno files are produced.
-      # PROXYSQLGENAI=1: enables the full chassis + genai tier so
+      # PROXYSQL40=1: enables the full chassis + genai tier so
       #             genai_*_unit-t binaries (registered in
       #             unit-tests-g1) build. Cascades to PROXYSQL40 +
       #             PROXYSQL31 + PROXYSQLFFTO + PROXYSQLTSDB via the

@@ -1,4 +1,4 @@
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include <cstring>
 #include <cerrno>
@@ -3782,4 +3782,4 @@ json Stats_Tool_Handler::handle_flush_queries(const json& arguments) {
 	return create_success_response(result);
 }
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */

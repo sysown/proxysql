@@ -47,7 +47,7 @@ jobs:
         # callback corrupts memory. See plugins/mysqlx/Makefile:56-61.
         run: |
           chmod +x src/proxysql 2>/dev/null || true
-          cd plugins/mysqlx && PROXYSQL40=1 PROXYSQL31=1 PROXYSQLFFTO=1 PROXYSQLTSDB=1 PROXYSQLGENAI=1 make
+          cd plugins/mysqlx && PROXYSQL40=1 PROXYSQL31=1 PROXYSQLFFTO=1 PROXYSQLTSDB=1 make
 
       - name: Run mysqlx unit tests
         run: |
@@ -96,7 +96,7 @@ jobs:
         # callback corrupts memory. See plugins/mysqlx/Makefile:56-61.
         run: |
           chmod +x src/proxysql 2>/dev/null || true
-          cd plugins/mysqlx && PROXYSQL40=1 PROXYSQL31=1 PROXYSQLFFTO=1 PROXYSQLTSDB=1 PROXYSQLGENAI=1 make
+          cd plugins/mysqlx && PROXYSQL40=1 PROXYSQL31=1 PROXYSQLFFTO=1 PROXYSQLTSDB=1 make
 
       - name: Install dbdeployer
         run: |
@@ -206,7 +206,7 @@ jobs:
         # MUST be ABI-compatible with the cached src/proxysql binary.
         run: |
           chmod +x src/proxysql 2>/dev/null || true
-          cd plugins/mysqlx && PROXYSQL40=1 PROXYSQL31=1 PROXYSQLFFTO=1 PROXYSQLTSDB=1 PROXYSQLGENAI=1 make
+          cd plugins/mysqlx && PROXYSQL40=1 PROXYSQL31=1 PROXYSQLFFTO=1 PROXYSQLTSDB=1 make
 
       - name: Build proxysql-ci-base image
         # The image now includes mysql-connector-python so the harness

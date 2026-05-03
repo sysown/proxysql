@@ -67,14 +67,7 @@ OPTZ ?= -O2 -ggdb
 # plugin's static descriptor.
 #
 # Tier cascade (mirrors the top-level Makefile):
-#   PROXYSQLGENAI=1 ⇒ PROXYSQL40=1 ⇒ PROXYSQL31=1 ⇒ PROXYSQLFFTO=1 + PROXYSQLTSDB=1
-# A standalone `make -C plugins/mysqlx PROXYSQLGENAI=1` previously set only
-# -DPROXYSQLGENAI and quietly produced a layout-mismatched .so. The cascade
-# below forces the implied flags so the standalone path matches the
-# top-level build.
-ifeq ($(PROXYSQLGENAI),1)
-	PROXYSQL40 := 1
-endif
+#   PROXYSQL40=1 ⇒ PROXYSQL31=1 ⇒ PROXYSQLFFTO=1 + PROXYSQLTSDB=1
 ifeq ($(PROXYSQL40),1)
 	PROXYSQL31 := 1
 endif
@@ -99,10 +92,6 @@ PSQLTSDB :=
 ifeq ($(PROXYSQLTSDB),1)
 	PSQLTSDB := -DPROXYSQLTSDB
 endif
-PSQLGA :=
-ifeq ($(PROXYSQLGENAI),1)
-	PSQLGA := -DPROXYSQLGENAI
-endif
 
 # -fvisibility=hidden + -fvisibility-inlines-hidden hides every C++ symbol by
 # default; only the explicitly extern "C"-declared
@@ -111,7 +100,7 @@ endif
 # leaking template instantiations across the boundary.
 CXXFLAGS := $(STDCPP) -fPIC -fvisibility=hidden -fvisibility-inlines-hidden \
 	$(OPTZ) $(WGCOV) $(WASAN) -pthread \
-	$(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLGA)
+	$(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB)
 
 # Hardening flags. Skip _FORTIFY_SOURCE under ASAN (incompatible) and when
 # OPTZ contains -O0 (requires optimisation to take effect).

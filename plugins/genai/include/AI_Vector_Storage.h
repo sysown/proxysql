@@ -1,7 +1,7 @@
 #ifndef PROXYSQL_AI_VECTOR_STORAGE_H
 #define PROXYSQL_AI_VECTOR_STORAGE_H
 
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #define AI_VECTOR_STORAGE_VERSION "0.1.0"
 
@@ -39,6 +39,6 @@ public:
 	);
 };
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */
 
 #endif // __CLASS_AI_VECTOR_STORAGE_H

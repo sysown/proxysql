@@ -1,7 +1,7 @@
 #ifndef CLASS_PROXYSQL_MCP_SERVER_H
 #define CLASS_PROXYSQL_MCP_SERVER_H
 
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include "proxysql.h"
 #include "cpp.h"
@@ -84,6 +84,6 @@ public:
 	bool is_using_ssl() const { return use_ssl; }
 };
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */
 
 #endif /* CLASS_PROXYSQL_MCP_SERVER_H */

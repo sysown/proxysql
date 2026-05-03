@@ -49,7 +49,7 @@ ifeq ($(PROXYSQLCLICKHOUSE),1)
 	targets += clickhouse-cpp
 endif
 
-ifeq ($(PROXYSQLGENAI),1)
+ifeq ($(PROXYSQL40),1)
 	targets += sqlite-vec
 endif
 
@@ -281,7 +281,7 @@ sqlite3/sqlite3/vec.o: sqlite3/sqlite3/sqlite3.o
 	cd sqlite3/sqlite3 && cp ../sqlite-vec-source/sqlite-vec.c . && cp ../sqlite-vec-source/sqlite-vec.h .
 	cd sqlite3/sqlite3 && ${CC} ${MYCFLAGS} -fPIC -c -o vec.o sqlite-vec.c -DSQLITE_CORE -DSQLITE_VEC_STATIC -DSQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_ENABLE_JSON1 -DSQLITE_ENABLE_FTS5 -DSQLITE_DLL=1
 
-ifeq ($(PROXYSQLGENAI),1)
+ifeq ($(PROXYSQL40),1)
 sqlite3: sqlite3/sqlite3/sqlite3.o sqlite3/sqlite3/vec.o
 else
 sqlite3: sqlite3/sqlite3/sqlite3.o

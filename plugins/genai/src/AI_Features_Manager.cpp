@@ -1,4 +1,4 @@
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include "AI_Features_Manager.h"
 #include "GenAI_Thread.h"
@@ -528,4 +528,4 @@ std::string AI_Features_Manager::get_status_json() {
 	return std::string(buf);
 }
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */

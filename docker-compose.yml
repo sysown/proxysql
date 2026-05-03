@@ -18,7 +18,6 @@ services:
       - WITHTSAN
       - BLD_NAME
       - PROXYSQL40
-      - PROXYSQLGENAI
       - PROXYSQL31
       - PROXYSQLFFTO
       - PROXYSQLTSDB
