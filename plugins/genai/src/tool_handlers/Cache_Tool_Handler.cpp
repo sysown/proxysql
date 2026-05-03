@@ -1,4 +1,4 @@
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include "proxysql.h"
 
@@ -180,4 +180,4 @@ json Cache_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 	return result;
 }
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */

@@ -1,7 +1,7 @@
 #ifndef CLASS_PGSQL_STATIC_HARVESTER_H
 #define CLASS_PGSQL_STATIC_HARVESTER_H
 
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include "Discovery_Schema.h"
 #include <string>
@@ -67,5 +67,5 @@ public:
 	std::string get_harvest_stats(int run_id);
 };
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */
 #endif /* CLASS_PGSQL_STATIC_HARVESTER_H */

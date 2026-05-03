@@ -1,4 +1,4 @@
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 
 #include "proxysql.h"
@@ -223,4 +223,4 @@ json AI_Tool_Handler::execute_tool(const std::string& tool_name, const json& arg
 	}
 }
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */

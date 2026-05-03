@@ -1,7 +1,7 @@
 #ifndef CLASS_DISCOVERY_SCHEMA_H
 #define CLASS_DISCOVERY_SCHEMA_H
 
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include "sqlite3db.h"
 #include <string>
@@ -908,6 +908,6 @@ public:
 	static std::string fingerprint_mcp_args(const nlohmann::json& arguments);
 };
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */
 
 #endif /* CLASS_DISCOVERY_SCHEMA_H */

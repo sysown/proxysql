@@ -16,7 +16,7 @@
 
 #include "tap.h"
 
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include "test_globals.h"
 #include "test_init.h"
@@ -344,10 +344,10 @@ static void test_uppercase_or_unknown_empty() {
 		"uppercase_or_unknown: empty string returns 'UNKNOWN'");
 }
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */
 
 int main() {
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 	plan(65);
 	test_init_minimal();
 

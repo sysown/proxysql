@@ -1,4 +1,4 @@
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include "proxysql.h"
 
@@ -268,4 +268,4 @@ json Config_Tool_Handler::handle_get_status() {
 	return create_success_response(status);
 }
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */

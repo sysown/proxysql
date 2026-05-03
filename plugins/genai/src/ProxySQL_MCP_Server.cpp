@@ -1,4 +1,4 @@
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
@@ -316,4 +316,4 @@ void ProxySQL_MCP_Server::stop() {
 	}
 }
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */

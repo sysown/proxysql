@@ -1,4 +1,4 @@
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 /**
  * @file LLM_Bridge.cpp
@@ -378,4 +378,4 @@ std::string LLM_Bridge::get_cache_stats() {
 	return stats.dump();
 }
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */

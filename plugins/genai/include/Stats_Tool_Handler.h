@@ -1,7 +1,7 @@
 #ifndef CLASS_STATS_TOOL_HANDLER_H
 #define CLASS_STATS_TOOL_HANDLER_H
 
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include <cstdint>
 #include <map>
@@ -299,5 +299,5 @@ public:
 	std::string get_handler_name() const override { return "stats"; }
 };
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */
 #endif /* CLASS_STATS_TOOL_HANDLER_H */

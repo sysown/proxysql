@@ -58,10 +58,10 @@ int (*proxy_sqlite3_exec)(sqlite3*, const char*, int (*)(void*,int,char**,char**
 // earlier Step-7 attempt to make this unconditional was wrong — it
 // left non-genai dbg builds failing at `#include "sqlite-vec.h"`
 // because deps still skipped sqlite-vec when PROXYSQLGENAI was unset.
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 #include "sqlite-vec.h"
 int (*proxy_sqlite3_vec_init)(sqlite3*, char**, const sqlite3_api_routines*) = sqlite3_vec_init;
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */
 
 // Internal helpers used by admin stats batching; keep defaults as NULL
 void (*proxy_sqlite3_global_stats_row_step)(SQLite3DB*, sqlite3_stmt*, const char*, ...) = NULL;

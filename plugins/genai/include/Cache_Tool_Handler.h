@@ -1,7 +1,7 @@
 #ifndef CLASS_CACHE_TOOL_HANDLER_H
 #define CLASS_CACHE_TOOL_HANDLER_H
 
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include "MCP_Tool_Handler.h"
 #include <pthread.h>
@@ -48,5 +48,5 @@ public:
 	std::string get_handler_name() const override { return "cache"; }
 };
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */
 #endif /* CLASS_CACHE_TOOL_HANDLER_H */

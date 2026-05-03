@@ -76,9 +76,10 @@ public:
 	// invoked exactly once per call, regardless of how many times its
 	// table is mentioned. Best-effort: a callback that throws or
 	// otherwise misbehaves is logged but does not stop other views from
-	// refreshing. Caller supplies admindb so the chassis does not have
-	// to reach into the global admin module.
-	void refresh_runtime_views_for_query(const std::string& sql, SQLite3DB* admindb) const;
+	// refreshing. Caller supplies all three DB handles so the chassis
+	// does not have to reach into the global admin module.
+	void refresh_runtime_views_for_query(const std::string& sql,
+		SQLite3DB* admindb, SQLite3DB* configdb, SQLite3DB* statsdb) const;
 #endif /* PROXYSQL40 */
 
 	size_t size() const;
@@ -136,6 +137,7 @@ private:
 	// refresh callback pointer and opaque are plugin-owned with
 	// static lifetime (the .so isn't unloaded while a view is live).
 	struct registered_runtime_view_t {
+		ProxySQL_PluginDBKind db_kind { ProxySQL_PluginDBKind::admin_db };
 		std::string table_name {};
 		void (*refresh)(SQLite3DB*, void*) { nullptr };
 		void* opaque { nullptr };
@@ -172,9 +174,10 @@ std::string proxysql_resolve_configured_plugin_admin_alias(const std::string& sq
 // whose registered table is referenced by `sql`. Used by Admin's
 // pre-SELECT path, mirroring the way runtime_mysql_users is refreshed
 // before its SELECTs. No-op if no plugin manager is active or no views
-// match. Caller supplies admindb (typically the same handle Admin uses
-// for its own runtime_mysql_users refresh).
-void proxysql_refresh_configured_plugin_runtime_views(const std::string& sql, SQLite3DB* admindb);
+// match. Caller supplies all three DB handles; the chassis dispatches
+// the correct one based on each view's registered db_kind.
+void proxysql_refresh_configured_plugin_runtime_views(const std::string& sql,
+	SQLite3DB* admindb, SQLite3DB* configdb, SQLite3DB* statsdb);
 // Phase A + B of the four-phase lifecycle: dlopen() each module, read its
 // descriptor, then call register_schemas() on plugins that opted in. On
 // success, `manager` is populated AND installed as the active manager so

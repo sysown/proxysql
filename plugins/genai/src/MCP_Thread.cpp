@@ -1,4 +1,4 @@
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 
 #include "proxysql.h"
@@ -1101,4 +1101,4 @@ MCP_Threads_Handler::get_query_rules_snapshot() {
 	return snapshot;
 }
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */

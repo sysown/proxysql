@@ -1,7 +1,7 @@
 #ifndef CLASS_MCP_ENDPOINT_H
 #define CLASS_MCP_ENDPOINT_H
 
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include "proxysql.h"
 #include <string>
@@ -219,5 +219,5 @@ public:
 	) override;
 };
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */
 #endif /* CLASS_MCP_ENDPOINT_H */

@@ -1,4 +1,4 @@
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include "Discovery_Schema.h"
 #include "cpp.h"
@@ -3263,4 +3263,4 @@ std::string Discovery_Schema::fingerprint_mcp_args(const nlohmann::json& argumen
 	return result;
 }
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */

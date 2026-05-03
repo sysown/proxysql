@@ -1,7 +1,7 @@
 #ifndef CLASS_QUERY_TOOL_HANDLER_H
 #define CLASS_QUERY_TOOL_HANDLER_H
 
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include "MCP_Tool_Handler.h"
 #include "Discovery_Schema.h"
@@ -267,6 +267,6 @@ std::string json_string(const nlohmann::json& j, const std::string& key, const s
 int json_int(const nlohmann::json& j, const std::string& key, int default_val = 0);
 double json_double(const nlohmann::json& j, const std::string& key, double default_val = 0.0);
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */
 
 #endif /* CLASS_QUERY_TOOL_HANDLER_H */

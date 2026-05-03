@@ -1,4 +1,4 @@
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include "proxysql.h"
 #include "cpp.h"
@@ -2886,4 +2886,4 @@ SQLite3_result* Query_Tool_Handler::get_tool_usage_stats_resultset(bool reset) {
 	return result;
 }
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */

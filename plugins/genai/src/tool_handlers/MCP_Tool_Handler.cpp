@@ -1,4 +1,4 @@
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include "sqlite3db.h"
 #include "cpp.h"
@@ -65,4 +65,4 @@ json MCP_Tool_Handler::resultset_to_json(SQLite3_result* resultset, int cols) {
 	return rows;
 }
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */

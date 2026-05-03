@@ -1,4 +1,4 @@
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 
 #include "proxysql.h"
@@ -1909,4 +1909,4 @@ std::string GenAI_Threads_Handler::process_json_query(const std::string& json_qu
 	}
 }
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */

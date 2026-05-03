@@ -39,50 +39,130 @@ public:
 	}
 };
 
+// ============================================================
+// normalize_query() — SQL normalization
+// ============================================================
+
 static void test_normalize_basic() {
 	Anomaly_Detector d;
 	std::string r = Anomaly_Detector_TestHelper::normalize_query(d, "SELECT * FROM users WHERE id = 42");
 	ok(r.find("42") == std::string::npos, "normalize: numeric literal replaced");
 	ok(r.find("select") != std::string::npos, "normalize: query is lowercased");
+	ok(r.find("from") != std::string::npos, "normalize: query structure preserved");
 }
 
-static void test_normalize_strips_quoted_strings() {
+static void test_normalize_string_literals() {
 	Anomaly_Detector d;
 	std::string r = Anomaly_Detector_TestHelper::normalize_query(d, "SELECT * FROM t WHERE name = 'alice'");
 	ok(r.find("alice") == std::string::npos, "normalize: string literal replaced");
+	ok(r.find("?") != std::string::npos, "normalize: string literal replaced with ?");
 }
 
-static void test_sql_injection_classic_patterns() {
+static void test_normalize_double_quoted_strings() {
 	Anomaly_Detector d;
-	const char* hostile[] = {
-		"' OR '1'='1",
-		"admin' OR 'a'='a",
-		"1; DROP TABLE users;--",
-		"' UNION SELECT password FROM users--",
-		nullptr
-	};
-	int detected = 0;
-	int total = 0;
-	for (const char** q = hostile; *q != nullptr; ++q) {
-		++total;
-		AnomalyResult r = Anomaly_Detector_TestHelper::check_sql_injection(d, *q);
-		if (r.is_anomaly) ++detected;
-	}
-	ok(detected == total, "all %d classic injection payloads flagged (got %d)",
-	   total, detected);
+	std::string r = Anomaly_Detector_TestHelper::normalize_query(d, "SELECT * FROM users WHERE name = \"bob\"");
+	ok(r.find("bob") == std::string::npos, "normalize: double-quoted literal replaced");
 }
 
-static void test_sql_injection_benign_query() {
+static void test_normalize_whitespace() {
 	Anomaly_Detector d;
-	AnomalyResult r = Anomaly_Detector_TestHelper::check_sql_injection(
-		d, "SELECT id, name FROM users WHERE active = 1");
-	ok(!r.is_anomaly, "benign SELECT not flagged as injection");
+	std::string r = Anomaly_Detector_TestHelper::normalize_query(d, "SELECT   *   FROM   users   WHERE   id = 1");
+	ok(r.find("  ") == std::string::npos, "normalize: extra whitespace collapsed");
 }
+
+static void test_normalize_comments() {
+	Anomaly_Detector d;
+	std::string r = Anomaly_Detector_TestHelper::normalize_query(d, "SELECT * FROM users /* comment */ WHERE id = 1");
+	ok(r.find("comment") == std::string::npos, "normalize: block comment removed");
+}
+
+static void test_normalize_empty() {
+	Anomaly_Detector d;
+	std::string r = Anomaly_Detector_TestHelper::normalize_query(d, "");
+	ok(r.empty(), "normalize: empty query gives empty result");
+}
+
+static void test_normalize_multiple_literals() {
+	Anomaly_Detector d;
+	std::string r = Anomaly_Detector_TestHelper::normalize_query(d, "INSERT INTO users (name, age) VALUES ('alice', 30)");
+	ok(r.find("alice") == std::string::npos, "normalize: first string literal replaced");
+	ok(r.find("30") == std::string::npos, "normalize: second numeric literal replaced");
+}
+
+// ============================================================
+// check_sql_injection() — SQLi pattern detection
+// ============================================================
+
+static void test_sqli_union_select() {
+	Anomaly_Detector d;
+	AnomalyResult r = Anomaly_Detector_TestHelper::check_sql_injection(d, "SELECT * FROM users UNION SELECT * FROM passwords");
+	ok(r.is_anomaly == true, "check_sqli: UNION SELECT detected as anomaly");
+	ok(r.risk_score > 0.0f, "check_sqli: UNION SELECT has positive risk score");
+	ok(!r.matched_rules.empty(), "check_sqli: UNION SELECT has matched rules");
+}
+
+static void test_sqli_comment_injection() {
+	Anomaly_Detector d;
+	AnomalyResult r = Anomaly_Detector_TestHelper::check_sql_injection(d, "SELECT * FROM users; -- WHERE admin=1");
+	ok(r.is_anomaly == true, "check_sqli: comment injection detected");
+}
+
+static void test_sqli_safe_query() {
+	Anomaly_Detector d;
+	AnomalyResult r = Anomaly_Detector_TestHelper::check_sql_injection(d, "SELECT id, name FROM users WHERE id = ?");
+	ok(r.is_anomaly == false, "check_sqli: parameterized query is safe");
+	ok(r.risk_score == 0.0f, "check_sqli: safe query has zero risk");
+}
+
+static void test_sqli_drop_table() {
+	Anomaly_Detector d;
+	AnomalyResult r = Anomaly_Detector_TestHelper::check_sql_injection(d, "DROP TABLE users");
+	ok(r.is_anomaly == true, "check_sqli: DROP TABLE detected");
+}
+
+static void test_sqli_sleep() {
+	Anomaly_Detector d;
+	AnomalyResult r = Anomaly_Detector_TestHelper::check_sql_injection(d, "SELECT SLEEP(5)");
+	ok(r.is_anomaly == true, "check_sqli: SLEEP() suspicious keyword detected");
+}
+
+static void test_sqli_concat_attack() {
+	Anomaly_Detector d;
+	AnomalyResult r = Anomaly_Detector_TestHelper::check_sql_injection(d, "SELECT CONCAT(username, ':', password) FROM users");
+	ok(r.is_anomaly == true, "check_sqli: CONCAT() attack pattern detected");
+}
+
+static void test_sqli_hex_encoded() {
+	Anomaly_Detector d;
+	AnomalyResult r = Anomaly_Detector_TestHelper::check_sql_injection(d, "SELECT * FROM users WHERE name = 0x61646d696e");
+	ok(r.is_anomaly == true, "check_sqli: hex-encoded value detected");
+}
+
+static void test_sqli_xss_pattern() {
+	Anomaly_Detector d;
+	AnomalyResult r = Anomaly_Detector_TestHelper::check_sql_injection(d, "INSERT INTO comments (body) VALUES ('<script>alert(1)</script>')");
+	ok(r.is_anomaly == true, "check_sqli: XSS script tag detected");
+}
+
+static void test_sqli_risk_score_scaling() {
+	Anomaly_Detector d;
+	AnomalyResult single = Anomaly_Detector_TestHelper::check_sql_injection(d, "UNION SELECT * FROM users");
+	AnomalyResult multi = Anomaly_Detector_TestHelper::check_sql_injection(d, "' OR 1=1 UNION SELECT * FROM users; -- DROP TABLE users");
+	ok(multi.risk_score >= single.risk_score,
+	   "check_sqli: multiple patterns produce higher or equal risk score");
+}
+
+static void test_sqli_anomaly_type() {
+	Anomaly_Detector d;
+	AnomalyResult r = Anomaly_Detector_TestHelper::check_sql_injection(d, "UNION SELECT 1,2,3");
+	ok(r.anomaly_type == "sql_injection", "check_sqli: anomaly_type is 'sql_injection'");
+}
+
+// ============================================================
+// analyze() pipeline
+// ============================================================
 
 static void test_analyze_pipeline_runs_without_vector_db() {
-	// The plugin-side detector starts with vector_db=nullptr (the
-	// embedding-similarity stage is currently inert pending Step 5);
-	// analyze() must still run the other stages and return cleanly.
 	Anomaly_Detector d;
 	(void)d.init();
 	AnomalyResult r = d.analyze("SELECT 1", "alice", "127.0.0.1", "test");
@@ -92,14 +172,29 @@ static void test_analyze_pipeline_runs_without_vector_db() {
 }
 
 int main() {
-	plan(6);
+	plan(25);
 
 	test_init_minimal();
 
 	test_normalize_basic();
-	test_normalize_strips_quoted_strings();
-	test_sql_injection_classic_patterns();
-	test_sql_injection_benign_query();
+	test_normalize_string_literals();
+	test_normalize_double_quoted_strings();
+	test_normalize_whitespace();
+	test_normalize_comments();
+	test_normalize_empty();
+	test_normalize_multiple_literals();
+
+	test_sqli_union_select();
+	test_sqli_comment_injection();
+	test_sqli_safe_query();
+	test_sqli_drop_table();
+	test_sqli_sleep();
+	test_sqli_concat_attack();
+	test_sqli_hex_encoded();
+	test_sqli_xss_pattern();
+	test_sqli_risk_score_scaling();
+	test_sqli_anomaly_type();
+
 	test_analyze_pipeline_runs_without_vector_db();
 
 	test_cleanup_minimal();

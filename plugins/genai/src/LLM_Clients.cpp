@@ -1,4 +1,4 @@
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 /**
  * @file LLM_Clients.cpp
@@ -681,4 +681,4 @@ std::string LLM_Bridge::call_generic_anthropic_with_retry(
 	return "";
 }
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */
