@@ -139,9 +139,9 @@ int main() {
 	// fires during GenericRefreshStatistics; the unit test invokes it
 	// explicitly because we don't have a full Admin module wired up.
 	mgr.refresh_runtime_views_for_query(
-		"SELECT * FROM runtime_mcp_auth_profiles", g_admindb);
+		"SELECT * FROM runtime_mcp_auth_profiles", g_admindb, nullptr, nullptr);
 	mgr.refresh_runtime_views_for_query(
-		"SELECT * FROM runtime_mcp_target_profiles", g_admindb);
+		"SELECT * FROM runtime_mcp_target_profiles", g_admindb, nullptr, nullptr);
 
 	ok(g_admindb->return_one_int(
 		"SELECT COUNT(*) FROM runtime_mcp_auth_profiles") == 1,
