@@ -39,7 +39,8 @@ targets :=	check_openssl_version \
 			prometheus-cpp \
 			postgresql \
 			libusual \
-			libscram
+			libscram \
+			parsersql
 
 ifeq ($(UNAME_S),Linux)
 	targets += coredumper
@@ -379,6 +380,15 @@ libscram/lib/libscram.a:postgresql/postgresql/src/interfaces/libpq/libpq.a
 libscram: libscram/lib/libscram.a
 
 
+parsersql/parsersql/libsqlparser.a:
+	cd parsersql && rm -rf parsersql-*/ ParserSQL-*/ || true
+	cd parsersql && tar -zxf parsersql-*.tar.gz
+	cd parsersql && for d in ParserSQL-*/; do [ -d "$$d" ] && mv "$$d" "parsersql-$${d#ParserSQL-}"; done || true
+	cd parsersql/parsersql && CC=${CC} CXX=${CXX} ${MAKE} lib
+
+parsersql: parsersql/parsersql/libsqlparser.a
+
+
 ### clean targets
 
 cleanpart:
@@ -414,5 +424,6 @@ cleanall:
 	cd libscram && rm -rf lib/* obj/* || true
 	cd json && rm -rf json-*/ || true
 	cd zstd && rm -rf zstd-*/ || true
+	cd parsersql && rm -rf parsersql-*/ ParserSQL-*/ || true
 .PHONY: cleanall
 

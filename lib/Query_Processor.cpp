@@ -24,6 +24,7 @@ using json = nlohmann::json;
 #include "QP_rule_text.h"
 #include "MySQL_Query_Processor.h"
 #include "PgSQL_Query_Processor.h"
+#include "Query_Processor_ParserSQL.h"
 
 #ifdef DEBUG
 #define DEB "_DEBUG"
@@ -2121,37 +2122,52 @@ void Query_Processor<QP_DERIVED>::update_query_processor_stats() {
 };
 
 template <typename QP_DERIVED>
+static void qp_digest_parsersql(SQP_par_t* qp, const char* query, int query_length) {
+	if constexpr (std::is_same_v<QP_DERIVED, MySQL_Query_Processor>) {
+		parsersql_digest_init_mysql(qp, query, query_length);
+	} else if constexpr (std::is_same_v<QP_DERIVED, PgSQL_Query_Processor>) {
+		parsersql_digest_init_pgsql(qp, query, query_length);
+	}
+}
+
+template <typename QP_DERIVED>
+static void qp_digest_legacy(SQP_par_t* qp, const char* query, int query_length) {
+	options opts;
+	opts.lowercase = GET_THREAD_VARIABLE(query_digests_lowercase);
+	opts.replace_null = GET_THREAD_VARIABLE(query_digests_replace_null);
+	opts.replace_number = GET_THREAD_VARIABLE(query_digests_no_digits);
+	opts.grouping_limit = GET_THREAD_VARIABLE(query_digests_grouping_limit);
+	opts.groups_grouping_limit = GET_THREAD_VARIABLE(query_digests_groups_grouping_limit);
+	opts.keep_comment = GET_THREAD_VARIABLE(query_digests_keep_comment);
+	opts.max_query_length = GET_THREAD_VARIABLE(query_digests_max_query_length);
+
+	if constexpr (std::is_same_v<QP_DERIVED, MySQL_Query_Processor>) {
+		qp->digest_text = mysql_query_digest_and_first_comment(query, query_length, &qp->first_comment,
+			((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL), &opts);
+	} else if constexpr (std::is_same_v<QP_DERIVED, PgSQL_Query_Processor>) {
+		qp->digest_text = pgsql_query_digest_and_first_comment(query, query_length, &qp->first_comment,
+			((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL), &opts);
+	}
+	const int digest_text_length=strnlen(qp->digest_text, GET_THREAD_VARIABLE(query_digests_max_digest_length));
+	qp->digest=SpookyHash::Hash64(qp->digest_text, digest_text_length, 0);
+#ifdef DEBUG
+	if (qp->first_comment && strlen(qp->first_comment)) {
+		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Comment in query = %s \n", qp->first_comment);
+	}
+#endif
+}
+
+template <typename QP_DERIVED>
 void Query_Processor<QP_DERIVED>::query_parser_init(SQP_par_t *qp, const char *query, int query_length, int flags) {
-	// trying to get rid of libinjection
-	// instead of initializing qp->sf , we copy query info later in this function
 	qp->digest_text=NULL;
 	qp->first_comment=NULL;
 	qp->query_prefix=NULL;
 	if (GET_THREAD_VARIABLE(query_digests)) {
-		options opts;
-		opts.lowercase = GET_THREAD_VARIABLE(query_digests_lowercase);
-		opts.replace_null = GET_THREAD_VARIABLE(query_digests_replace_null);
-		opts.replace_number = GET_THREAD_VARIABLE(query_digests_no_digits);
-		opts.grouping_limit = GET_THREAD_VARIABLE(query_digests_grouping_limit);
-		opts.groups_grouping_limit = GET_THREAD_VARIABLE(query_digests_groups_grouping_limit);
-		opts.keep_comment = GET_THREAD_VARIABLE(query_digests_keep_comment);
-		opts.max_query_length = GET_THREAD_VARIABLE(query_digests_max_query_length);
-
-		if constexpr (std::is_same_v<QP_DERIVED, MySQL_Query_Processor>) {
-			qp->digest_text = mysql_query_digest_and_first_comment(query, query_length, &qp->first_comment,
-				((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL), &opts);
-		} else if constexpr (std::is_same_v<QP_DERIVED, PgSQL_Query_Processor>) {
-			qp->digest_text = pgsql_query_digest_and_first_comment(query, query_length, &qp->first_comment,
-				((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL), &opts);
+		if (GET_THREAD_VARIABLE(query_processor_parser) == 1) {
+			qp_digest_parsersql<QP_DERIVED>(qp, query, query_length);
+		} else {
+			qp_digest_legacy<QP_DERIVED>(qp, query, query_length);
 		}
-		// the hash is computed only up to query_digests_max_digest_length bytes
-		const int digest_text_length=strnlen(qp->digest_text, GET_THREAD_VARIABLE(query_digests_max_digest_length));
-		qp->digest=SpookyHash::Hash64(qp->digest_text, digest_text_length, 0);
-#ifdef DEBUG
-		if (qp->first_comment && strlen(qp->first_comment)) {
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Comment in query = %s \n", qp->first_comment);
-		}
-#endif /* DEBUG */
 	} else {
 		if (GET_THREAD_VARIABLE(commands_stats)) {
 			size_t sl=32;

@@ -23,6 +23,8 @@
 
 #include "genai_plugin.h"
 #include "MCP_Thread.h"
+#include "GenAI_Thread.h"
+#include "AI_Features_Manager.h"
 #include "ProxySQL_Admin_Tables_Definitions.h"
 #include "Query_Tool_Handler.h"
 #include "Discovery_Schema.h"
@@ -106,6 +108,12 @@ static constexpr const char* kStatsMCPQueryRules =
 	"  username VARCHAR ,"
 	"  target_id VARCHAR ,"
 	"  hits INTEGER NOT NULL)";
+
+static constexpr const char* kStatsGenaiGlobal =
+	"CREATE TABLE stats_genai_global ("
+	"  Variable_name VARCHAR NOT NULL, "
+	"  Value VARCHAR NOT NULL, "
+	"  PRIMARY KEY (Variable_name))";
 
 // Runtime-view refresh callbacks (ABI 4).  Invoked by the chassis just
 // before any admin SELECT touches the registered table; we wipe and
@@ -266,6 +274,36 @@ void refresh_stats_mcp_query_tools_counters_reset(SQLite3DB* db, void*) {
 	delete result; result = nullptr;
 }
 
+void refresh_stats_genai_global(SQLite3DB* db, void*) {
+	if (db == nullptr) return;
+
+	std::vector<std::pair<std::string, std::string>> all_vars;
+
+	if (GloGATH) {
+		auto vars = GloGATH->collect_status_variables();
+		all_vars.insert(all_vars.end(), vars.begin(), vars.end());
+	}
+	if (genai_context().mcp) {
+		auto vars = genai_context().mcp->collect_status_variables();
+		all_vars.insert(all_vars.end(), vars.begin(), vars.end());
+	}
+	if (GloAI) {
+		auto vars = GloAI->collect_status_variables();
+		all_vars.insert(all_vars.end(), vars.begin(), vars.end());
+	}
+
+	if (!db->execute("BEGIN")) return;
+	db->execute("DELETE FROM stats_genai_global");
+	for (auto& [name, value] : all_vars) {
+		char* q = sqlite3_mprintf(
+			"INSERT INTO stats_genai_global (Variable_name, Value) VALUES ('%q', '%q')",
+			name.c_str(), value.c_str());
+		db->execute(q);
+		sqlite3_free(q);
+	}
+	db->execute("COMMIT");
+}
+
 void register_runtime_view_or_warn(
 	ProxySQL_PluginServices* services,
 	ProxySQL_PluginDBKind db_kind,
@@ -347,6 +385,8 @@ void genai_register_admin_tables(ProxySQL_PluginServices* services) {
 	               kStatsMCPQueryDigestReset);
 	register_stats(services, "stats_mcp_query_rules",
 	               kStatsMCPQueryRules);
+	register_stats(services, "stats_genai_global",
+	               kStatsGenaiGlobal);
 
 	if (services->register_runtime_view != nullptr) {
 		register_runtime_view_or_warn(services, ProxySQL_PluginDBKind::stats_db,
@@ -364,5 +404,8 @@ void genai_register_admin_tables(ProxySQL_PluginServices* services) {
 		register_runtime_view_or_warn(services, ProxySQL_PluginDBKind::stats_db,
 		                              "stats_mcp_query_tools_counters_reset",
 		                              &refresh_stats_mcp_query_tools_counters_reset);
+		register_runtime_view_or_warn(services, ProxySQL_PluginDBKind::stats_db,
+		                              "stats_genai_global",
+		                              &refresh_stats_genai_global);
 	}
 }

@@ -43,6 +43,7 @@ using json = nlohmann::json;
 #include "ProxySQL_HTTP_Server.hpp" // HTTP server
 #include "MySQL_Authentication.hpp"
 #include "PgSQL_Authentication.h"
+#include "scram_hmac_cached.h"
 #include "MySQL_LDAP_Authentication.hpp"
 #include "MySQL_PreparedStatement.h"
 #include "ProxySQL_Cluster.hpp"
@@ -6207,6 +6208,8 @@ void ProxySQL_Admin::__refresh_pgsql_users(
 
 		// store the new 'added_users' resultset after generating the new checksum
 		GloPgAuth->save_pgsql_users(std::move(pgsql_users_resultset));
+
+		scram_cache_invalidate();
 	}
 	pthread_mutex_unlock(&GloVars.checksum_mutex);
 

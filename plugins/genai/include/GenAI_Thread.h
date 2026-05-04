@@ -18,6 +18,7 @@
 #endif
 
 #include "curl/curl.h"
+#include <utility>
 
 #define GENAI_THREAD_VERSION "0.1.0"
 
@@ -439,6 +440,8 @@ public:
 	 * @see embed_documents(), rerank_documents()
 	 */
 	std::string process_json_query(const std::string& json_query);
+
+	std::vector<std::pair<std::string, std::string>> collect_status_variables();
 };
 
 // Global instance of the GenAI Threads Handler

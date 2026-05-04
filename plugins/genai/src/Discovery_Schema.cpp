@@ -220,6 +220,9 @@ int Discovery_Schema::init_schema() {
 		return -1;
 	}
 
+	create_digest_persist_table();
+	load_persisted_digests();
+
 	proxy_info("Discovery Schema database initialized at %s\n", db_path.c_str());
 	return 0;
 }
@@ -2995,7 +2998,7 @@ void Discovery_Schema::update_mcp_query_digest(
 	// Periodically persist to SQLite (every 100 updates or so)
 	static thread_local unsigned int update_count = 0;
 	if (++update_count % 100 == 0) {
-		// TODO: Implement batch persistence
+		flush_digest_to_sqlite();
 	}
 }
 
@@ -3081,13 +3084,14 @@ SQLite3_result* Discovery_Schema::get_mcp_query_digest(bool reset) {
 	}
 
 	if (reset) {
-		// Clear all digest stats (we already have write lock)
 		for (auto const& [key1, inner_map] : mcp_digest_umap) {
 			for (auto const& [key2, stats] : inner_map) {
 				delete (MCP_Query_Digest_Stats*)stats;
 			}
 		}
 		mcp_digest_umap.clear();
+
+		db->execute("DELETE FROM mcp_query_digest_persist");
 	}
 
 	pthread_rwlock_unlock(&mcp_digest_rwlock);
@@ -3261,6 +3265,96 @@ std::string Discovery_Schema::fingerprint_mcp_args(const nlohmann::json& argumen
 	}
 
 	return result;
+}
+
+void Discovery_Schema::create_digest_persist_table() {
+	if (!db) return;
+	db->execute(
+		"CREATE TABLE IF NOT EXISTS mcp_query_digest_persist ("
+		"tool_name VARCHAR NOT NULL,"
+		"run_id INTEGER NOT NULL,"
+		"digest VARCHAR NOT NULL,"
+		"digest_text VARCHAR NOT NULL,"
+		"count_star INTEGER NOT NULL,"
+		"first_seen INTEGER NOT NULL,"
+		"last_seen INTEGER NOT NULL,"
+		"sum_time INTEGER NOT NULL,"
+		"min_time INTEGER NOT NULL,"
+		"max_time INTEGER NOT NULL,"
+		"PRIMARY KEY(tool_name, run_id, digest))");
+}
+
+void Discovery_Schema::flush_digest_to_sqlite() {
+	if (!db) return;
+
+	pthread_rwlock_rdlock(&mcp_digest_rwlock);
+
+	db->execute("BEGIN IMMEDIATE");
+	for (auto const& [key1, inner_map] : mcp_digest_umap) {
+		for (auto const& [digest, stats_ptr] : inner_map) {
+			MCP_Query_Digest_Stats* stats = (MCP_Query_Digest_Stats*)stats_ptr;
+			char* sql = sqlite3_mprintf(
+				"INSERT OR REPLACE INTO mcp_query_digest_persist "
+				"(tool_name, run_id, digest, digest_text, count_star, "
+				"first_seen, last_seen, sum_time, min_time, max_time) "
+				"VALUES (%Q, %d, '%llu', %Q, %llu, %ld, %ld, %llu, %llu, %llu)",
+				stats->tool_name.c_str(), stats->run_id,
+				(unsigned long long)stats->digest, stats->digest_text.c_str(),
+				(unsigned long long)stats->count_star,
+				(long)stats->first_seen, (long)stats->last_seen,
+				(unsigned long long)stats->sum_time,
+				(unsigned long long)stats->min_time,
+				(unsigned long long)stats->max_time);
+			if (sql) {
+				db->execute(sql);
+				sqlite3_free(sql);
+			}
+		}
+	}
+	db->execute("COMMIT");
+
+	pthread_rwlock_unlock(&mcp_digest_rwlock);
+}
+
+void Discovery_Schema::load_persisted_digests() {
+	if (!db) return;
+
+	char* errmsg = NULL;
+	sqlite3_stmt* stmt = NULL;
+	int rc = sqlite3_prepare_v2(db->get_db(),
+		"SELECT tool_name, run_id, digest, digest_text, count_star, "
+		"first_seen, last_seen, sum_time, min_time, max_time "
+		"FROM mcp_query_digest_persist", -1, &stmt, NULL);
+	if (rc != SQLITE_OK) return;
+
+	pthread_rwlock_wrlock(&mcp_digest_rwlock);
+
+	while (sqlite3_step(stmt) == SQLITE_ROW) {
+		std::string tool_name = (const char*)sqlite3_column_text(stmt, 0);
+		int run_id = sqlite3_column_int(stmt, 1);
+		uint64_t dgst = (uint64_t)sqlite3_column_int64(stmt, 2);
+		std::string digest_text = (const char*)sqlite3_column_text(stmt, 3);
+
+		std::string key = tool_name + "|" + std::to_string(run_id);
+		auto& tool_map = mcp_digest_umap[key];
+
+		MCP_Query_Digest_Stats* stats = new MCP_Query_Digest_Stats();
+		stats->tool_name = tool_name;
+		stats->run_id = run_id;
+		stats->digest = dgst;
+		stats->digest_text = digest_text;
+		stats->count_star = (unsigned int)sqlite3_column_int64(stmt, 4);
+		stats->first_seen = (time_t)sqlite3_column_int64(stmt, 5);
+		stats->last_seen = (time_t)sqlite3_column_int64(stmt, 6);
+		stats->sum_time = (unsigned long long)sqlite3_column_int64(stmt, 7);
+		stats->min_time = (unsigned long long)sqlite3_column_int64(stmt, 8);
+		stats->max_time = (unsigned long long)sqlite3_column_int64(stmt, 9);
+
+		tool_map[dgst] = stats;
+	}
+
+	pthread_rwlock_unlock(&mcp_digest_rwlock);
+	sqlite3_finalize(stmt);
 }
 
 #endif /* PROXYSQL40 */
