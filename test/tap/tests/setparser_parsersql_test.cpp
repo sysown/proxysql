@@ -14,6 +14,15 @@
 #include "setparser_test_common.h"
 #include "Query_Processor_ParserSQL.h"
 
+static Test parsersql_syntax_errors[] = {
+  { "SET sql_mode=(SELECT CONCA(@@sql_mode, ',PIPES_AS_CONCAT,NO_ENGINE_SUBSTITUTION'))",
+    { Expected("sql_mode", { "(SELECT CONCA(@@sql_mode, ',PIPES_AS_CONCAT,NO_ENGINE_SUBSTITUTION'))" } ) } },
+  { "SET sql_mode=(SELECT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))",
+    { Expected("sql_mode", { "(SELECT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))" } ) } },
+  { "SET sql_mode=(SELCT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))",
+    { Expected("sql_mode", { "SELCT" } ) } },
+};
+
 static std::string normalize_value(const std::string& s) {
 	std::string r;
 	r.reserve(s.size());
