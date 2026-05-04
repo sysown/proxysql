@@ -86,8 +86,8 @@ static void *thread_worker(void *varg) {
 int main(int argc, char **argv) {
     const char *host = "127.0.0.1";
     int port = 16432;
-    const char *user = "benchuser";
-    const char *password = "bench123";
+    const char *user = "benchuser"; // NOSONAR: benchmark default, not a real credential
+    const char *password = "bench123"; // NOSONAR: benchmark default, not a real credential
     const char *dbname = "pgbouncer";
     const char *ssl_ca = NULL;
     int iterations = 10000;
