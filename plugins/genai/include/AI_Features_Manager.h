@@ -37,6 +37,8 @@
 #include "proxysql.h"
 #include <pthread.h>
 #include <string>
+#include <vector>
+#include <utility>
 
 // Forward declarations
 class LLM_Bridge;
@@ -202,6 +204,8 @@ public:
 	 * @return JSON string with status information
 	 */
 	std::string get_status_json();
+
+	std::vector<std::pair<std::string, std::string>> collect_status_variables();
 };
 
 // Global instance

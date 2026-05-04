@@ -79,6 +79,7 @@ LLM_Bridge::LLM_Bridge()
 {
 	// Set default configuration
 	config.enabled = false;
+	config.cache_enabled = true;
 	config.provider = strdup("openai");
 	config.provider_url = strdup("http://localhost:11434/v1/chat/completions");
 	config.provider_model = strdup("llama3.2");
@@ -120,7 +121,7 @@ void LLM_Bridge::close() {
  * @brief Update configuration from AI_Features_Manager
  */
 void LLM_Bridge::update_config(const char* provider, const char* provider_url, const char* provider_model,
-                                const char* provider_key, int cache_threshold, int timeout) {
+                                const char* provider_key, int cache_threshold, int timeout, bool cache_en) {
 	if (provider) {
 		if (config.provider) free(config.provider);
 		config.provider = strdup(provider);
@@ -139,6 +140,7 @@ void LLM_Bridge::update_config(const char* provider, const char* provider_url, c
 	}
 	config.cache_similarity_threshold = cache_threshold;
 	config.timeout_ms = timeout;
+	config.cache_enabled = cache_en;
 
 	proxy_debug(PROXY_DEBUG_GENAI, 3, "LLM_Bridge: Configuration updated\n");
 }
@@ -166,20 +168,80 @@ LLMResult LLM_Bridge::check_cache(const LLMRequest& req) {
 	result.cached = false;
 	result.cache_hit = false;
 
-	if (!vector_db || !req.allow_cache) {
+	if (!config.cache_enabled || !vector_db || !req.allow_cache) {
 		return result;
 	}
 
 	auto start_time = std::chrono::high_resolution_clock::now();
 
-	// TODO: Implement vector similarity search
-	// This would involve:
-	// 1. Generate embedding for the prompt
-	// 2. Search vector database for similar prompts
-	// 3. If similarity >= threshold, return cached response
+	std::vector<float> embedding = get_text_embedding(req.prompt);
+	if (embedding.empty()) {
+		return result;
+	}
+
+	size_t blob_size = embedding.size() * sizeof(float);
+	std::string emb_blob(reinterpret_cast<const char*>(embedding.data()), blob_size);
+
+	sqlite3* db = vector_db->get_db();
+	sqlite3_stmt* stmt = nullptr;
+
+	int rc = sqlite3_prepare_v2(db,
+		"SELECT lc.id, lc.response, lc.hit_count, lcv.distance "
+		"FROM llm_cache_vec lcv "
+		"JOIN llm_cache lc ON lc.rowid = lcv.rowid "
+		"WHERE lcv.embedding MATCH ?1 AND k = 1 "
+		"ORDER BY lcv.distance",
+		-1, &stmt, nullptr);
+
+	if (rc != SQLITE_OK) {
+		auto end_time = std::chrono::high_resolution_clock::now();
+		result.cache_lookup_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+		return result;
+	}
+
+	sqlite3_bind_blob(stmt, 1, emb_blob.data(), emb_blob.size(), SQLITE_STATIC);
+
+	if (sqlite3_step(stmt) == SQLITE_ROW) {
+		int64_t cache_id = sqlite3_column_int64(stmt, 0);
+		const char* response_text = (const char*)sqlite3_column_text(stmt, 1);
+		double distance = sqlite3_column_double(stmt, 3);
+
+		double similarity = 1.0 - distance;
+		double threshold = config.cache_similarity_threshold / 100.0;
+
+		if (similarity >= threshold) {
+			result.cached = true;
+			result.cache_hit = true;
+			result.cache_id = cache_id;
+			if (response_text) result.text_response = response_text;
+
+			char* update_sql = sqlite3_mprintf(
+				"UPDATE llm_cache SET hit_count = hit_count + 1, last_hit = unixepoch() WHERE id = %lld",
+				(long long)cache_id);
+			if (update_sql) {
+				sqlite3_exec(db, update_sql, nullptr, nullptr, nullptr);
+				sqlite3_free(update_sql);
+			}
+
+			if (GloAI) {
+				GloAI->increment_llm_cache_hits();
+			}
+		} else {
+			if (GloAI) {
+				GloAI->increment_llm_cache_misses();
+			}
+		}
+	}
+
+	sqlite3_finalize(stmt);
 
 	auto end_time = std::chrono::high_resolution_clock::now();
 	result.cache_lookup_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+
+	if (GloAI) {
+		GloAI->increment_llm_cache_lookups();
+		GloAI->add_llm_cache_lookup_time_ms(result.cache_lookup_time_ms);
+	}
 
 	return result;
 }
@@ -188,19 +250,64 @@ LLMResult LLM_Bridge::check_cache(const LLMRequest& req) {
  * @brief Store result in vector cache
  */
 void LLM_Bridge::store_in_cache(const LLMRequest& req, const LLMResult& result) {
-	if (!vector_db || !req.allow_cache) {
+	if (!config.cache_enabled || !vector_db || !req.allow_cache) {
+		return;
+	}
+	if (result.text_response.empty()) {
 		return;
 	}
 
 	auto start_time = std::chrono::high_resolution_clock::now();
 
-	// TODO: Implement cache storage
-	// This would involve:
-	// 1. Generate embedding for the prompt
-	// 2. Store prompt embedding, response, and metadata in cache table
+	std::vector<float> embedding = get_text_embedding(req.prompt);
+	if (embedding.empty()) {
+		return;
+	}
+
+	sqlite3* db = vector_db->get_db();
+
+	char* insert_sql = sqlite3_mprintf(
+		"INSERT INTO llm_cache (prompt, response, system_message, hit_count, created_at) "
+		"VALUES (%Q, %Q, %Q, 0, unixepoch())",
+		req.prompt.c_str(), result.text_response.c_str(),
+		req.system_message.c_str());
+
+	if (!insert_sql) return;
+
+	sqlite3_stmt* stmt = nullptr;
+	int rc = sqlite3_prepare_v2(db, insert_sql, -1, &stmt, nullptr);
+	sqlite3_free(insert_sql);
+
+	if (rc != SQLITE_OK) return;
+
+	if (sqlite3_step(stmt) != SQLITE_DONE) {
+		sqlite3_finalize(stmt);
+		return;
+	}
+	sqlite3_finalize(stmt);
+
+	sqlite3_int64 rowid = sqlite3_last_insert_rowid(db);
+
+	size_t blob_size = embedding.size() * sizeof(float);
+	std::string emb_blob(reinterpret_cast<const char*>(embedding.data()), blob_size);
+
+	const char* vec_sql = "INSERT INTO llm_cache_vec (rowid, embedding) VALUES (?, ?)";
+	rc = sqlite3_prepare_v2(db, vec_sql, -1, &stmt, nullptr);
+	if (rc != SQLITE_OK) return;
+
+	sqlite3_bind_int64(stmt, 1, rowid);
+	sqlite3_bind_blob(stmt, 2, emb_blob.data(), emb_blob.size(), SQLITE_STATIC);
+	sqlite3_step(stmt);
+	sqlite3_finalize(stmt);
 
 	auto end_time = std::chrono::high_resolution_clock::now();
-	const_cast<LLMResult&>(result).cache_store_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+	const_cast<LLMResult&>(result).cache_store_time_ms =
+		std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+
+	if (GloAI) {
+		GloAI->increment_llm_cache_stores();
+		GloAI->add_llm_cache_store_time_ms(result.cache_store_time_ms);
+	}
 }
 
 /**
@@ -357,8 +464,8 @@ void LLM_Bridge::clear_cache() {
 		return;
 	}
 
-	// TODO: Implement cache clearing
-	// This would involve deleting all rows from llm_cache table
+	vector_db->execute("DELETE FROM llm_cache_vec");
+	vector_db->execute("DELETE FROM llm_cache");
 
 	proxy_info("LLM_Bridge: Cache cleared\n");
 }
@@ -367,13 +474,37 @@ void LLM_Bridge::clear_cache() {
  * @brief Get cache statistics
  */
 std::string LLM_Bridge::get_cache_stats() {
-	// TODO: Implement cache statistics
-	// This would involve querying the llm_cache table for metrics
-
 	json stats;
 	stats["entries"] = 0;
 	stats["hits"] = 0;
 	stats["misses"] = 0;
+
+	if (!vector_db) {
+		return stats.dump();
+	}
+
+	sqlite3* db = vector_db->get_db();
+	sqlite3_stmt* stmt = nullptr;
+
+	int rc = sqlite3_prepare_v2(db,
+		"SELECT COUNT(*), COALESCE(SUM(hit_count), 0) FROM llm_cache",
+		-1, &stmt, nullptr);
+
+	if (rc == SQLITE_OK && sqlite3_step(stmt) == SQLITE_ROW) {
+		stats["entries"] = sqlite3_column_int(stmt, 0);
+		stats["hits"] = sqlite3_column_int(stmt, 1);
+	}
+
+	sqlite3_finalize(stmt);
+
+	if (GloAI) {
+		auto vars = GloAI->collect_status_variables();
+		for (auto& [name, value] : vars) {
+			if (name == "llm_cache_misses") stats["misses"] = std::stoull(value);
+			if (name == "llm_cache_lookups") stats["lookups"] = std::stoull(value);
+			if (name == "llm_cache_stores") stats["stores"] = std::stoull(value);
+		}
+	}
 
 	return stats.dump();
 }
