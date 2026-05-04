@@ -1,4 +1,4 @@
-name: CI-set_parser_algorithm=3-g1
+name: CI-set_parser_algorithm_3-g1
 
 on:
   workflow_dispatch:
@@ -77,15 +77,15 @@ jobs:
       run: |
         cd proxysql
         export INFRA_ID="ci-set-parser-algorithm-3-g1"
-        export TAP_GROUP="set_parser_algorithm=3-g1"
+        export TAP_GROUP="set_parser_algorithm_3-g1"
         export SKIP_CLUSTER_START=1
         test/infra/control/ensure-infras.bash
 
-    - name: Run set_parser_algorithm=3-g1 tests
+    - name: Run set_parser_algorithm_3-g1 tests
       run: |
         cd proxysql
         export INFRA_ID="ci-set-parser-algorithm-3-g1"
-        export TAP_GROUP="set_parser_algorithm=3-g1"
+        export TAP_GROUP="set_parser_algorithm_3-g1"
         export SKIP_CLUSTER_START=1
         export TAP_USE_NOISE=1
         test/infra/control/run-tests-isolated.bash
@@ -96,7 +96,7 @@ jobs:
         set +e
         cd proxysql
         export INFRA_ID="ci-set-parser-algorithm-3-g1"
-        export TAP_GROUP="set_parser_algorithm=3-g1"
+        export TAP_GROUP="set_parser_algorithm_3-g1"
         docker logs proxysql.ci-set-parser-algorithm-3-g1 2>&1 | tail -50 || true
         test/infra/control/stop-proxysql-isolated.bash
         test/infra/control/destroy-infras.bash

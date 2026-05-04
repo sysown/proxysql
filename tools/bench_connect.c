@@ -14,7 +14,7 @@ static int cmp_double(const void *a, const void *b) {
     return (da > db) - (da < db);
 }
 
-static double percentile(double *sorted, int n, double p) {
+static double percentile(const double *sorted, int n, double p) {
     int idx = (int)(n * p);
     if (idx >= n) idx = n - 1;
     return sorted[idx];
@@ -83,87 +83,132 @@ static void *thread_worker(void *varg) {
     return NULL;
 }
 
-int main(int argc, char **argv) {
-    const char *host = "127.0.0.1";
-    int port = 16432;
-    const char *user = "benchuser"; // NOSONAR: benchmark default, not a real credential
-    const char *password = "bench123"; // NOSONAR: benchmark default, not a real credential
-    const char *dbname = "pgbouncer";
-    const char *ssl_ca = NULL;
-    int iterations = 10000;
-    int warmup = 200;
-    const char *label = "";
-    int threads = 1;
+struct bench_config {
+    const char *host;
+    int port;
+    const char *user;
+    const char *password;
+    const char *dbname;
+    const char *ssl_ca;
+    int iterations;
+    int warmup;
+    const char *label;
+    int threads;
+};
+
+static int parse_args(int argc, char **argv, struct bench_config *cfg) {
+    cfg->host = "127.0.0.1";
+    cfg->port = 16432;
+    cfg->user = "benchuser";
+    cfg->password = "bench123";
+    cfg->dbname = "pgbouncer";
+    cfg->ssl_ca = NULL;
+    cfg->iterations = 10000;
+    cfg->warmup = 200;
+    cfg->label = "";
+    cfg->threads = 1;
 
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--host") == 0 && i+1 < argc) host = argv[++i];
-        else if (strcmp(argv[i], "--port") == 0 && i+1 < argc) port = atoi(argv[++i]);
-        else if (strcmp(argv[i], "--user") == 0 && i+1 < argc) user = argv[++i];
-        else if (strcmp(argv[i], "--password") == 0 && i+1 < argc) password = argv[++i];
-        else if (strcmp(argv[i], "--dbname") == 0 && i+1 < argc) dbname = argv[++i];
-        else if (strcmp(argv[i], "--ssl-ca") == 0 && i+1 < argc) ssl_ca = argv[++i];
-        else if (strcmp(argv[i], "--iterations") == 0 && i+1 < argc) iterations = atoi(argv[++i]);
-        else if (strcmp(argv[i], "--warmup") == 0 && i+1 < argc) warmup = atoi(argv[++i]);
-        else if (strcmp(argv[i], "--label") == 0 && i+1 < argc) label = argv[++i];
-        else if (strcmp(argv[i], "--threads") == 0 && i+1 < argc) threads = atoi(argv[++i]);
-        else { fprintf(stderr, "Unknown arg: %s\n", argv[i]); return 1; }
+        if (strcmp(argv[i], "--host") == 0 && i+1 < argc) { cfg->host = argv[++i]; continue; }
+        if (strcmp(argv[i], "--port") == 0 && i+1 < argc) { cfg->port = atoi(argv[++i]); continue; }
+        if (strcmp(argv[i], "--user") == 0 && i+1 < argc) { cfg->user = argv[++i]; continue; }
+        if (strcmp(argv[i], "--password") == 0 && i+1 < argc) { cfg->password = argv[++i]; continue; }
+        if (strcmp(argv[i], "--dbname") == 0 && i+1 < argc) { cfg->dbname = argv[++i]; continue; }
+        if (strcmp(argv[i], "--ssl-ca") == 0 && i+1 < argc) { cfg->ssl_ca = argv[++i]; continue; }
+        if (strcmp(argv[i], "--iterations") == 0 && i+1 < argc) { cfg->iterations = atoi(argv[++i]); continue; }
+        if (strcmp(argv[i], "--warmup") == 0 && i+1 < argc) { cfg->warmup = atoi(argv[++i]); continue; }
+        if (strcmp(argv[i], "--label") == 0 && i+1 < argc) { cfg->label = argv[++i]; continue; }
+        if (strcmp(argv[i], "--threads") == 0 && i+1 < argc) { cfg->threads = atoi(argv[++i]); continue; }
+        fprintf(stderr, "Unknown arg: %s\n", argv[i]);
+        return -1;
     }
 
-    if (iterations > MAX_ITERS) {
+    if (cfg->iterations > MAX_ITERS) {
         fprintf(stderr, "Too many iterations (max %d)\n", MAX_ITERS);
-        return 1;
+        return -1;
     }
+    return 0;
+}
+
+static void print_json(const char *label, int threads, int n, int errors,
+                       double cps, const double *sorted_conn, const double *close_us,
+                       double avg_conn, double avg_close, double avg_total,
+                       const double *sorted_total, int total_n, double wall_elapsed) {
+    fprintf(stderr, "{");
+    fprintf(stderr, "\"label\":\"%s\",", label);
+    fprintf(stderr, "\"threads\":%d,", threads);
+    fprintf(stderr, "\"iterations\":%d,", n);
+    fprintf(stderr, "\"errors\":%d,", errors);
+    fprintf(stderr, "\"connections_per_sec\":%.1f,", cps);
+    fprintf(stderr, "\"connect_us\":{\"min\":%.1f,\"avg\":%.1f,\"p50\":%.1f,\"p90\":%.1f,\"p99\":%.1f,\"max\":%.1f},",
+            sorted_conn[0], avg_conn,
+            percentile(sorted_conn, total_n, 0.50),
+            percentile(sorted_conn, total_n, 0.90),
+            percentile(sorted_conn, total_n, 0.99),
+            sorted_conn[total_n-1]);
+    fprintf(stderr, "\"close_us\":{\"min\":%.1f,\"avg\":%.1f,\"p50\":%.1f},",
+            close_us[0], avg_close, close_us[total_n/2]);
+    fprintf(stderr, "\"total_us\":{\"min\":%.1f,\"avg\":%.1f,\"p50\":%.1f,\"p90\":%.1f,\"p99\":%.1f,\"max\":%.1f},",
+            sorted_total[0], avg_total,
+            percentile(sorted_total, total_n, 0.50),
+            percentile(sorted_total, total_n, 0.90),
+            percentile(sorted_total, total_n, 0.99),
+            sorted_total[total_n-1]);
+    fprintf(stderr, "\"elapsed_s\":%.3f", wall_elapsed);
+    fprintf(stderr, "}\n");
+}
+
+int main(int argc, char **argv) {
+    struct bench_config cfg;
+    if (parse_args(argc, argv, &cfg) != 0) return 1;
 
     char conninfo[1024];
     snprintf(conninfo, sizeof(conninfo),
         "host=%s port=%d user=%s password=%s dbname=%s sslmode=require%s%s",
-        host, port, user, password, dbname,
-        ssl_ca ? " sslrootcert=" : "",
-        ssl_ca ? ssl_ca : "");
+        cfg.host, cfg.port, cfg.user, cfg.password, cfg.dbname,
+        cfg.ssl_ca ? " sslrootcert=" : "",
+        cfg.ssl_ca ? cfg.ssl_ca : "");
 
-    /* Launch threads */
-    pthread_t *tids = calloc(threads, sizeof(pthread_t));
-    struct thread_arg *args = calloc(threads, sizeof(struct thread_arg));
+    pthread_t *tids = calloc(cfg.threads, sizeof(pthread_t));
+    struct thread_arg *args = calloc(cfg.threads, sizeof(struct thread_arg));
 
     struct timespec wall0, wall1;
     clock_gettime(CLOCK_MONOTONIC, &wall0);
 
-    for (int t = 0; t < threads; t++) {
+    for (int t = 0; t < cfg.threads; t++) {
         args[t].thread_id = t;
         strncpy(args[t].conninfo, conninfo, sizeof(args[t].conninfo) - 1);
-        args[t].iterations = iterations;
-        args[t].warmup = warmup;
+        args[t].iterations = cfg.iterations;
+        args[t].warmup = cfg.warmup;
         pthread_create(&tids[t], NULL, thread_worker, &args[t]);
     }
-    for (int t = 0; t < threads; t++)
+    for (int t = 0; t < cfg.threads; t++)
         pthread_join(tids[t], NULL);
 
     clock_gettime(CLOCK_MONOTONIC, &wall1);
     double wall_elapsed = (wall1.tv_sec - wall0.tv_sec) + (wall1.tv_nsec - wall0.tv_nsec) / 1e9;
 
-    /* Merge results from all threads */
-    int total_n = threads * iterations;
+    int total_n = cfg.threads * cfg.iterations;
     double *connect_us = malloc(total_n * sizeof(double));
     double *close_us   = malloc(total_n * sizeof(double));
     double *total_us   = malloc(total_n * sizeof(double));
     int total_errors = 0;
     int idx = 0;
-    for (int t = 0; t < threads; t++) {
+    for (int t = 0; t < cfg.threads; t++) {
         total_errors += args[t].errors;
-        memcpy(connect_us + idx, args[t].connect_us, iterations * sizeof(double));
-        memcpy(close_us   + idx, args[t].close_us,   iterations * sizeof(double));
-        memcpy(total_us   + idx, args[t].total_us,    iterations * sizeof(double));
+        memcpy(connect_us + idx, args[t].connect_us, cfg.iterations * sizeof(double));
+        memcpy(close_us   + idx, args[t].close_us,   cfg.iterations * sizeof(double));
+        memcpy(total_us   + idx, args[t].total_us,    cfg.iterations * sizeof(double));
         free(args[t].connect_us);
         free(args[t].close_us);
         free(args[t].total_us);
-        idx += iterations;
+        idx += cfg.iterations;
     }
     free(args);
     free(tids);
 
     int n = total_n;
 
-    /* Compute stats */
     double sum_total = 0;
     for (int i = 0; i < n; i++) sum_total += total_us[i];
     double cps = n / wall_elapsed;
@@ -183,12 +228,11 @@ int main(int argc, char **argv) {
     }
     avg_conn /= n; avg_close /= n; avg_total /= n;
 
-    /* Output human-readable */
     printf("\n============================================================\n");
-    printf("  %s\n", label);
+    printf("  %s\n", cfg.label);
     printf("============================================================\n");
-    printf("  Threads:         %d\n", threads);
-    printf("  Iterations:      %d (per thread: %d)\n", n, iterations);
+    printf("  Threads:         %d\n", cfg.threads);
+    printf("  Iterations:      %d (per thread: %d)\n", n, cfg.iterations);
     printf("  Errors:          %d\n", total_errors);
     printf("  Conns/sec:       %.1f\n", cps);
     printf("  Wall elapsed:    %.3f s\n", wall_elapsed);
@@ -213,29 +257,9 @@ int main(int argc, char **argv) {
            sorted_total[n-1]);
     printf("  (all times in microseconds)\n\n");
 
-    /* Output JSON to stderr */
-    fprintf(stderr, "{");
-    fprintf(stderr, "\"label\":\"%s\",", label);
-    fprintf(stderr, "\"threads\":%d,", threads);
-    fprintf(stderr, "\"iterations\":%d,", n);
-    fprintf(stderr, "\"errors\":%d,", total_errors);
-    fprintf(stderr, "\"connections_per_sec\":%.1f,", cps);
-    fprintf(stderr, "\"connect_us\":{\"min\":%.1f,\"avg\":%.1f,\"p50\":%.1f,\"p90\":%.1f,\"p99\":%.1f,\"max\":%.1f},",
-            sorted_conn[0], avg_conn,
-            percentile(sorted_conn, n, 0.50),
-            percentile(sorted_conn, n, 0.90),
-            percentile(sorted_conn, n, 0.99),
-            sorted_conn[n-1]);
-    fprintf(stderr, "\"close_us\":{\"min\":%.1f,\"avg\":%.1f,\"p50\":%.1f},",
-            close_us[0], avg_close, close_us[n/2]);
-    fprintf(stderr, "\"total_us\":{\"min\":%.1f,\"avg\":%.1f,\"p50\":%.1f,\"p90\":%.1f,\"p99\":%.1f,\"max\":%.1f},",
-            sorted_total[0], avg_total,
-            percentile(sorted_total, n, 0.50),
-            percentile(sorted_total, n, 0.90),
-            percentile(sorted_total, n, 0.99),
-            sorted_total[n-1]);
-    fprintf(stderr, "\"elapsed_s\":%.3f", wall_elapsed);
-    fprintf(stderr, "}\n");
+    print_json(cfg.label, cfg.threads, n, total_errors, cps,
+               sorted_conn, close_us, avg_conn, avg_close, avg_total,
+               sorted_total, n, wall_elapsed);
 
     free(connect_us); free(close_us); free(total_us);
     free(sorted_conn); free(sorted_total);
