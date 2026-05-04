@@ -468,6 +468,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"query_processor_iterations",
 	(char *)"query_processor_first_comment_parsing",
 	(char *)"query_processor_regex",
+	(char *)"query_processor_parser", // NOSONAR: matches array pattern
 	(char *)"set_query_lock_on_hostgroup",
 	(char *)"set_parser_algorithm",
 	(char *)"reset_connection_algorithm",
@@ -1334,6 +1335,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.query_processor_iterations=0;
 	variables.query_processor_first_comment_parsing=2;
 	variables.query_processor_regex=1;
+	variables.query_processor_parser=0;
 	variables.set_query_lock_on_hostgroup=1;
 	variables.set_parser_algorithm=2; // before 2.6.0 this was 1
 	variables.reset_connection_algorithm=2;
@@ -2621,9 +2623,10 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["query_processor_iterations"]      = make_tuple(&variables.query_processor_iterations,       0,   1000*1000, false);
 		VariablesPointers_int["query_processor_first_comment_parsing"] = make_tuple(&variables.query_processor_first_comment_parsing, 0, 3, false);
 		VariablesPointers_int["query_processor_regex"]           = make_tuple(&variables.query_processor_regex,            1,           2, false);
+		VariablesPointers_int["query_processor_parser"]           = make_tuple(&variables.query_processor_parser,            0,           1, false);
 		VariablesPointers_int["query_retries_on_failure"]        = make_tuple(&variables.query_retries_on_failure,         0,        1000, false);
 		VariablesPointers_int["set_query_lock_on_hostgroup"]     = make_tuple(&variables.set_query_lock_on_hostgroup,      0,           1, false);
-		VariablesPointers_int["set_parser_algorithm"]            = make_tuple(&variables.set_parser_algorithm,             1,           2, false);
+		VariablesPointers_int["set_parser_algorithm"]            = make_tuple(&variables.set_parser_algorithm,             1,           3, false);
 
 		// throttle
 		VariablesPointers_int["throttle_connections_per_sec_to_hostgroup"] = make_tuple(&variables.throttle_connections_per_sec_to_hostgroup, 1, 100*1000*1000, false);
@@ -4592,6 +4595,7 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(query_processor_iterations);
 	REFRESH_VARIABLE_INT(query_processor_first_comment_parsing);
 	REFRESH_VARIABLE_INT(query_processor_regex);
+	REFRESH_VARIABLE_INT(query_processor_parser);
 	REFRESH_VARIABLE_INT(set_query_lock_on_hostgroup);
 	REFRESH_VARIABLE_INT(set_parser_algorithm);
 	REFRESH_VARIABLE_INT(reset_connection_algorithm);

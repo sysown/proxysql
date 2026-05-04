@@ -14,6 +14,7 @@ using json = nlohmann::json;
 
 #include "MySQL_Data_Stream.h"
 #include "MySQL_Query_Processor.h"
+#include "Query_Processor_ParserSQL.h"
 #include "MySQL_PreparedStatement.h"
 // GenAI_Thread.h, AI_Features_Manager.h, LLM_Bridge.h moved to
 // plugins/genai/include/ in Step 5.  Step 4.A removed all session-side
@@ -6532,6 +6533,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				} else if (mysql_thread___set_parser_algorithm == 2) { // we use a single SetParser per thread
 					thread->thr_SetParser->set_query(nq); // replace the query
 					set = thread->thr_SetParser->parse1v2(); // use algorithm v2
+				} else if (mysql_thread___set_parser_algorithm == 3
+				|| mysql_thread___query_processor_parser == 1) {
+					set = parsersql_parse_set_mysql(nq);
 				} else {
 					assert(0);
 				}
