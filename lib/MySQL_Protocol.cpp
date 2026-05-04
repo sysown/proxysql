@@ -1130,7 +1130,8 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	// greeting stays in sync with their runtime state.
 	uint32_t extended_capabilities =
 		CLIENT_MULTI_RESULTS | CLIENT_MULTI_STATEMENTS | CLIENT_PS_MULTI_RESULTS |
-		CLIENT_PLUGIN_AUTH | CLIENT_SESSION_TRACKING | CLIENT_REMEMBER_OPTIONS;
+		CLIENT_PLUGIN_AUTH | CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA |
+		CLIENT_SESSION_TRACKING | CLIENT_REMEMBER_OPTIONS;
 	extended_capabilities |= server_capabilities & 0xFFFF0000u;
 	uint16_t upper_word = static_cast<uint16_t>(extended_capabilities >> 16);
 	memcpy(_ptr+l, static_cast<void*>(&upper_word), sizeof(upper_word)); l += sizeof(upper_word);
