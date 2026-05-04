@@ -39,7 +39,7 @@
 #include "test_init.h"
 #include "proxysql.h"
 
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include "Discovery_Schema.h"
 #include <string>
@@ -1204,12 +1204,12 @@ int main() {
 	return exit_status();
 }
 
-#else /* !PROXYSQLGENAI */
+#else /* !PROXYSQL40 */
 
 int main() {
 	plan(1);
-	ok(1, "PROXYSQLGENAI not enabled — skipping Discovery_Schema tests");
+	ok(1, "PROXYSQL40 not enabled — skipping Discovery_Schema tests");
 	return exit_status();
 }
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */

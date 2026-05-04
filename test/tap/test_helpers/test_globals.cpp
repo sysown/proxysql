@@ -48,11 +48,11 @@ using json = nlohmann::json;
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
 
-#ifdef PROXYSQLGENAI
-#include "MCP_Thread.h"
-#include "GenAI_Thread.h"
-#include "AI_Features_Manager.h"
-#endif /* PROXYSQLGENAI */
+// MCP_Thread.h moved to plugins/genai/ in Step 4.C; GenAI_Thread.h and
+// AI_Features_Manager.h moved in Step 5.  The test harness no longer
+// declares MCP_Threads_Handler / GenAI_Threads_Handler /
+// AI_Features_Manager — the corresponding stub globals below were
+// removed at the same time.
 
 #include "sqlite3db.h"
 #include "SQLite3_Server.h"
@@ -93,11 +93,10 @@ ProxySQL_Admin *GloAdmin = nullptr;
 MySQL_Threads_Handler *GloMTH = nullptr;
 PgSQL_Threads_Handler *GloPTH = nullptr;
 
-#ifdef PROXYSQLGENAI
-MCP_Threads_Handler *GloMCPH = nullptr;
-GenAI_Threads_Handler *GloGATH = nullptr;
-AI_Features_Manager *GloAI = nullptr;
-#endif /* PROXYSQLGENAI */
+// MCP_Threads_Handler *GloMCPH stub removed in Step 4.C; GloGATH and
+// GloAI stubs removed in Step 5 — core no longer references those
+// symbols, so the test harness shouldn't either.  The plugin .so
+// publishes its own copies (see plugins/genai/src/plugin_main.cpp).
 
 Web_Interface *GloWebInterface = nullptr;
 MySQL_STMT_Manager_v14 *GloMyStmt = nullptr;

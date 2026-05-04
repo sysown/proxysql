@@ -16,6 +16,8 @@
 
 #include "ProxySQL_RESTAPI_Server.hpp"
 
+#include "ProxySQL_Plugin.h"
+
 #include "proxysql_typedefs.h"
 #include "query_digest_topk.h"
 
@@ -563,16 +565,6 @@ class ProxySQL_Admin {
 	void flush_pgsql_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
 	//
 
-#ifdef PROXYSQLGENAI
-	// GenAI
-	void flush_genai_variables___runtime_to_database(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime = false, bool use_lock = true);
-	void flush_genai_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum = "", const time_t epoch = 0, bool lock = true);
-
-	// MCP (Model Context Protocol)
-	void flush_mcp_variables___runtime_to_database(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime = false, bool use_lock = true);
-	void flush_mcp_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum = "", const time_t epoch = 0, bool lock = true);
-#endif /* PROXYSQLGENAI */
-
 	void flush_sqliteserver_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void flush_sqliteserver_variables___database_to_runtime(SQLite3DB *db, bool replace);
 
@@ -616,9 +608,6 @@ class ProxySQL_Admin {
 	SQLite3DB *configdb; // on disk
 	SQLite3DB *monitordb;	// in memory
 	SQLite3DB *statsdb_disk; // on disk
-#ifdef PROXYSQLGENAI
-	SQLite3DB *mcpdb; // MCP catalog database
-#endif /* PROXYSQLGENAI */
 #ifdef DEBUG
 	SQLite3DB *debugdb_disk; // on disk for debug
 	int debug_output;
@@ -646,13 +635,6 @@ class ProxySQL_Admin {
 	 * @details Modules ready when 'all_modules_started=true'. See 'all_modules_started'.
 	 */
 	void load_restapi_server();
-#ifdef PROXYSQLGENAI
-	/**
-	 * @brief Loads the MCP server config to runtime if all modules are ready, no-op otherwise.
-	 * @details Modules ready when 'all_modules_started=true'. See 'all_modules_started'.
-	 */
-	void load_mcp_server();
-#endif /* PROXYSQLGENAI */
 	bool get_read_only() { return variables.admin_read_only; }
 	bool set_read_only(bool ro) { variables.admin_read_only=ro; return variables.admin_read_only; }
 	bool has_variable(const char *name);
@@ -694,7 +676,11 @@ class ProxySQL_Admin {
 	void send_ok_msg_to_client(S* sess, const char *msg, int rows, const char* query);
 	template <typename S>
 	void send_error_msg_to_client(S* sess, const char *msg, uint16_t mysql_err_code=1045);
-#ifdef DEBUG
+#ifdef PROXYSQL40
+	template <typename S>
+	bool dispatch_plugin_admin_command(S* sess, const char *sql);
+#endif /* PROXYSQL40 */
+	#ifdef DEBUG
 	// these two following functions used to just call and return one function each
 	// this approach was replaced when we introduced debug filters
 	//int load_debug_to_runtime() { return flush_debug_levels_database_to_runtime(admindb); }
@@ -749,12 +735,6 @@ class ProxySQL_Admin {
 	void save_mysql_firewall_whitelist_users_from_runtime(bool, SQLite3_result *);
 	void save_mysql_firewall_whitelist_rules_from_runtime(bool, SQLite3_result *);
 	void save_mysql_firewall_whitelist_sqli_fingerprints_from_runtime(bool, SQLite3_result *);
-
-#ifdef PROXYSQLGENAI
-	// MCP query rules
-	char* load_mcp_query_rules_to_runtime();
-	void save_mcp_query_rules_from_runtime(bool _runtime = false);
-#endif /* PROXYSQLGENAI */
 
 	char* load_pgsql_firewall_to_runtime();
 
@@ -826,12 +806,6 @@ class ProxySQL_Admin {
 	void stats___tls_certificates();
 	void stats___proxysql_global();
 
-#ifdef PROXYSQLGENAI
-	void stats___mcp_query_tools_counters(bool reset);
-	void stats___mcp_query_digest(bool reset);
-	void stats___mcp_query_rules();
-#endif /* PROXYSQLGENAI */
-
 	// Update prometheus metrics
 	void p_stats___memory_metrics();
 	void p_update_stmt_metrics();
@@ -896,13 +870,6 @@ class ProxySQL_Admin {
 	void load_pgsql_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_pgsql_variables___database_to_runtime(admindb, true, checksum, epoch); }
 	void save_pgsql_variables_from_runtime() { flush_pgsql_variables___runtime_to_database(admindb, true, true, false); }
 
-#ifdef PROXYSQLGENAI
-	//GenAI
-	void init_genai_variables();
-	void load_genai_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_genai_variables___database_to_runtime(admindb, true, checksum, epoch); }
-	void save_genai_variables_from_runtime() { flush_genai_variables___runtime_to_database(admindb, true, true, false); }
-#endif /* PROXYSQLGENAI */
-
 	void init_pgsql_users(std::unique_ptr<SQLite3_result>&& pgsql_users_resultset = nullptr, const std::string& checksum = "", const time_t epoch = 0);
 	void flush_pgsql_users__from_memory_to_disk();
 	void flush_pgsql_users__from_disk_to_memory();
@@ -911,13 +878,6 @@ class ProxySQL_Admin {
 
 	void load_pgsql_servers_to_runtime(const incoming_pgsql_servers_t& incoming_pgsql_servers = {}, const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server = {},
 		const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2 = {});
-
-#ifdef PROXYSQLGENAI
-	// MCP (Model Context Protocol)
-	void init_mcp_variables();
-	void load_mcp_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_mcp_variables___database_to_runtime(admindb, true, checksum, epoch); }
-	void save_mcp_variables_from_runtime() { flush_mcp_variables___runtime_to_database(admindb, true, true, false); }
-#endif /* PROXYSQLGENAI */
 
 	char* load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset = NULL, 
 		SQLite3_result* SQLite3_query_rules_fast_routing_resultset = NULL, const std::string& checksum = "", const time_t epoch = 0);

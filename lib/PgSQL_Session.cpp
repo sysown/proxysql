@@ -4,6 +4,7 @@ using json = nlohmann::json;
 #include <variant>
 #include "PgSQL_HostGroups_Manager.h"
 #include "PgSQL_Thread.h"
+#include "ProxySQL_PluginManager.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include "proxysql_utils.h"
@@ -1103,8 +1104,10 @@ int PgSQL_Session::handler_again___status_PINGING_SERVER() {
 		} else {
 			myds->destroy_MySQL_Connection_From_Pool(true);
 		}
-		delete mybe->server_myds;
-		mybe->server_myds = NULL;
+		if (mybe->server_myds) {
+			delete mybe->server_myds;
+			mybe->server_myds = NULL;
+		}
 		set_status(session_status___NONE);
 		return -1;
 	}
@@ -1124,8 +1127,10 @@ int PgSQL_Session::handler_again___status_PINGING_SERVER() {
 			}
 			myds->destroy_MySQL_Connection_From_Pool(false);
 			myds->fd = 0;
-			delete mybe->server_myds;
-			mybe->server_myds = NULL;
+			if (mybe->server_myds) {
+				delete mybe->server_myds;
+				mybe->server_myds = NULL;
+			}
 			return -1;
 		}
 		else {
@@ -1155,8 +1160,10 @@ int PgSQL_Session::handler_again___status_RESETTING_CONNECTION() {
 		myds->DSS = STATE_MARIADB_GENERIC;
 		myconn->async_state_machine = ASYNC_IDLE;
 		myds->return_MySQL_Connection_To_Pool();
-		delete mybe->server_myds;
-		mybe->server_myds = NULL;
+		if (mybe->server_myds) {
+			delete mybe->server_myds;
+			mybe->server_myds = NULL;
+		}
 		set_status(session_status___NONE);
 		return -1;
 	} else {
@@ -2385,6 +2392,15 @@ __implicit_sync:
 										(endt.tv_sec * 1000000000 + endt.tv_nsec) -
 										(begint.tv_sec * 1000000000 + begint.tv_nsec);
 								}
+								// TODO(plugin-query-hook): inject pre-execution
+								// hook dispatch here for the PgSQL COM_QUERY
+								// codepath, after CurrentQuery is populated.
+								// Use proxysql_dispatch_configured_plugin_
+								// query_hook with ProxySQL_PluginProtocol::pgsql.
+								// See ProxySQL_Plugin.h "STATUS (chassis ABI 2 —
+								// initial baseline)" — the dispatch ABI is
+								// already in place; this is the data-plane
+								// integration that needs to land.
 								assert(qpo);	// GloPgQPro->process_mysql_query() should always return a qpo
 								// ===================================================
 								if (qpo->max_lag_ms >= 0) {
@@ -2398,6 +2414,47 @@ __implicit_sync:
 											return handler_ret;
 										}
 									}
+									// Plugin pre-execution query hook (Step 2 ABI extension).
+									// Gated on PROXYSQL40 — see the matching block in
+									// MySQL_Session.cpp for the rationale; without the
+									// guard, v3.0/v3.1 dbg builds fail to compile.
+#ifdef PROXYSQL40
+									// Lock-free fast path: skip the dispatch entirely when no
+									// plugin has registered a hook for the PgSQL protocol.
+									if (proxysql_has_configured_plugin_query_hook(ProxySQL_PluginProtocol::pgsql)) {
+										const char* hook_user = "";
+										const char* hook_addr = "";
+										const char* hook_schema = "";
+										if (client_myds && client_myds->myconn && client_myds->myconn->userinfo) {
+											if (client_myds->myconn->userinfo->username)
+												hook_user = client_myds->myconn->userinfo->username;
+											if (client_myds->myconn->userinfo->schemaname)
+												hook_schema = client_myds->myconn->userinfo->schemaname;
+										}
+										if (client_myds && client_myds->addr.addr)
+											hook_addr = client_myds->addr.addr;
+										ProxySQL_PluginQueryHookPayload hook_payload {
+											hook_user, hook_addr, hook_schema,
+											(const char*)CurrentQuery.QueryPointer,
+											static_cast<uint32_t>(CurrentQuery.QueryLength)
+										};
+										ProxySQL_PluginQueryHookResult hook_result {
+											ProxySQL_PluginQueryHookAction::allow, std::string()
+										};
+										if (proxysql_dispatch_configured_plugin_query_hook(
+												ProxySQL_PluginProtocol::pgsql, hook_payload, hook_result) &&
+											hook_result.action == ProxySQL_PluginQueryHookAction::deny) {
+											const char* msg = hook_result.message.empty() ?
+												"Query blocked by plugin" : hook_result.message.c_str();
+											client_myds->DSS = STATE_QUERY_SENT_NET;
+											client_myds->myprot.generate_error_packet(true, true, msg,
+												PGSQL_ERROR_CODES::ERRCODE_INSUFFICIENT_PRIVILEGE, false, true);
+											if (mirror == false) RequestEnd(NULL, true);
+											handler_ret = -1;
+											return handler_ret;
+										}
+									}
+#endif /* PROXYSQL40 */
 								}
 								if (rc_break == true) {
 									if (mirror == false) {

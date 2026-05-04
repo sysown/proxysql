@@ -14,7 +14,7 @@
 #include "test_init.h"
 #include "proxysql.h"
 
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include <curl/curl.h>
 #include <cstring>
@@ -230,10 +230,10 @@ static void test_write_callback_binary_data() {
 		"LLM_WriteCallback: binary content preserved correctly");
 }
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */
 
 int main() {
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 	plan(35);
 	test_init_minimal();
 

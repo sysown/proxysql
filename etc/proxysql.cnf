@@ -34,6 +34,17 @@
 datadir="/var/lib/proxysql"
 errorlog="/var/lib/proxysql/proxysql.log"
 
+# Plugin chassis (v4.0+).  Uncomment to load runtime-loadable
+# extensions.  Each entry is the absolute path to a .so file shipped
+# under /usr/lib/proxysql/.  Plugins are loaded in declaration order
+# during startup; missing files cause the proxy to abort with an
+# explanatory message.
+#
+# plugins=(
+# 	"/usr/lib/proxysql/ProxySQL_MySQLX_Plugin.so"
+# 	"/usr/lib/proxysql/ProxySQL_GenAI_Plugin.so"
+# )
+
 admin_variables=
 {
 	admin_credentials="admin:admin"

@@ -38,6 +38,9 @@ using json = nlohmann::json;
 #include "PgSQL_Authentication.h"
 #include "MySQL_LDAP_Authentication.hpp"
 #include "MySQL_PreparedStatement.h"
+#ifdef PROXYSQL40
+#include "ProxySQL_PluginManager.h"
+#endif /* PROXYSQL40 */
 #include "ProxySQL_Cluster.hpp"
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_Logger.hpp"
@@ -92,7 +95,9 @@ using json = nlohmann::json;
  *
  * @see https://github.com/asg017/sqlite-vec for sqlite-vec documentation
  */
+#ifdef PROXYSQL40
 extern int (*proxy_sqlite3_vec_init)(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi);
+#endif /* PROXYSQL40 */
 #include "microhttpd.h"
 
 #if (defined(__i386__) || defined(__x86_64__) || defined(__ARM_ARCH_3__) || defined(__mips__)) && defined(__linux)
@@ -188,11 +193,9 @@ extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern MySQL_Monitor *GloMyMon;
 extern PgSQL_Threads_Handler* GloPTH;
 
-#ifdef PROXYSQLGENAI
-extern MCP_Threads_Handler* GloMCPH;
-extern GenAI_Threads_Handler* GloGATH;
-extern AI_Features_Manager *GloAI;
-#endif /* PROXYSQLGENAI */
+// MCP_Threads_Handler ownership moved to the genai plugin in Step 4.C;
+// GenAI_Threads_Handler / AI_Features_Manager followed in Step 5.
+// Core no longer references those globals.
 
 extern void (*flush_logs_function)();
 
@@ -613,8 +616,14 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	 *
 	 * @note The sqlite3_vec_init function is cast to a function pointer
 	 * for SQLite's auto-extension mechanism.
+	 *
+	 * Gated on PROXYSQLGENAI: the only consumer is the genai plugin's
+	 * AI_Vector_Storage; non-genai builds neither build vec.o (deps)
+	 * nor link it (src/Makefile), so the symbol doesn't exist.
 	 */
+#ifdef PROXYSQL40
 	if (proxy_sqlite3_vec_init) (*proxy_sqlite3_auto_extension)( (void(*)(void))proxy_sqlite3_vec_init);
+#endif /* PROXYSQL40 */
 
 	/**
 	 * @brief Open the stats database with shared cache mode
@@ -727,20 +736,6 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	 * - Tool usage statistics
 	 * - Search history
 	 */
-#ifdef PROXYSQLGENAI
-	mcpdb = new SQLite3DB();
-	std::string mcp_catalog_path = std::string(GloVars.datadir) + "/mcp_catalog.db";
-	mcpdb->open((char *)mcp_catalog_path.c_str(), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
-
-	/**
-	 * @brief Enable SQLite extension loading for MCP catalog database
-	 *
-	 * Allows loading SQLite extensions at runtime. This enables sqlite-vec to be
-	 * registered for vector similarity searches in the catalog.
-	 */
-	(*proxy_sqlite3_enable_load_extension)(mcpdb->get_db(),1);
-#endif /* PROXYSQLGENAI */
-
 	tables_defs_admin=new std::vector<table_def_t *>;
 	tables_defs_stats=new std::vector<table_def_t *>;
 	tables_defs_config=new std::vector<table_def_t *>;
@@ -818,19 +813,10 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_admin,"pgsql_servers_ssl_params", ADMIN_SQLITE_TABLE_PGSQL_SERVERS_SSL_PARAMS);
 	insert_into_tables_defs(tables_defs_admin,"runtime_pgsql_servers_ssl_params", ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_SERVERS_SSL_PARAMS);
 
-#ifdef PROXYSQLGENAI
-	// MCP query rules
-	insert_into_tables_defs(tables_defs_admin, "mcp_query_rules", ADMIN_SQLITE_TABLE_MCP_QUERY_RULES);
-	insert_into_tables_defs(tables_defs_admin, "runtime_mcp_query_rules", ADMIN_SQLITE_TABLE_RUNTIME_MCP_QUERY_RULES);
-	insert_into_tables_defs(tables_defs_admin, "mcp_auth_profiles", ADMIN_SQLITE_TABLE_MCP_AUTH_PROFILES);
-	insert_into_tables_defs(tables_defs_admin, "runtime_mcp_auth_profiles", ADMIN_SQLITE_TABLE_RUNTIME_MCP_AUTH_PROFILES);
-	insert_into_tables_defs(tables_defs_admin, "mcp_target_profiles", ADMIN_SQLITE_TABLE_MCP_TARGET_PROFILES);
-	insert_into_tables_defs(tables_defs_admin, "runtime_mcp_target_profiles", ADMIN_SQLITE_TABLE_RUNTIME_MCP_TARGET_PROFILES);
-
-	insert_into_tables_defs(tables_defs_config, "mcp_query_rules", ADMIN_SQLITE_TABLE_MCP_QUERY_RULES);
-	insert_into_tables_defs(tables_defs_config, "mcp_auth_profiles", ADMIN_SQLITE_TABLE_MCP_AUTH_PROFILES);
-	insert_into_tables_defs(tables_defs_config, "mcp_target_profiles", ADMIN_SQLITE_TABLE_MCP_TARGET_PROFILES);
-#endif /* PROXYSQLGENAI */
+// MCP admin / config tables (mcp_query_rules, mcp_auth_profiles,
+// mcp_target_profiles, and their runtime_* siblings) moved to the
+// genai plugin in Step 4.G.  See plugins/genai/src/plugin_tables.cpp,
+// where they're registered via the chassis register_table service.
 
 	insert_into_tables_defs(tables_defs_config, "pgsql_servers", ADMIN_SQLITE_TABLE_PGSQL_SERVERS);
 	insert_into_tables_defs(tables_defs_config, "pgsql_users", ADMIN_SQLITE_TABLE_PGSQL_USERS);
@@ -928,15 +914,38 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_servers_clients_status", STATS_SQLITE_TABLE_PROXYSQL_SERVERS_CLIENTS_STATUS);
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_message_metrics", STATS_SQLITE_TABLE_PROXYSQL_MESSAGE_METRICS);
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_message_metrics_reset", STATS_SQLITE_TABLE_PROXYSQL_MESSAGE_METRICS_RESET);
-#ifdef PROXYSQLGENAI
-	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_tools_counters", STATS_SQLITE_TABLE_MCP_QUERY_TOOLS_COUNTERS);
-	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_tools_counters_reset", STATS_SQLITE_TABLE_MCP_QUERY_TOOLS_COUNTERS_RESET);
+	// MCP stats tables are not registered by the genai plugin yet.
+	// The plugin currently owns only the editable MCP admin/config
+	// tables plus the runtime projections.
 
-	// MCP query digest stats
-	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_digest", STATS_SQLITE_TABLE_MCP_QUERY_DIGEST);
-	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_digest_reset", STATS_SQLITE_TABLE_MCP_QUERY_DIGEST_RESET);
-	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_rules", STATS_SQLITE_TABLE_MCP_QUERY_RULES); // Reuse same schema for stats
-#endif /* PROXYSQLGENAI */
+#ifdef PROXYSQL40
+	if (ProxySQL_PluginManager* plugin_manager = proxysql_get_plugin_manager()) {
+		auto merge_plugin_tables = [this](std::vector<table_def_t *>* target, const std::vector<ProxySQL_PluginTableDef>& defs, const char* db_name) -> bool {
+			for (const auto& def : defs) {
+				bool duplicate_name = false;
+				for (const auto* existing : *target) {
+					if (strcasecmp(existing->table_name, def.table_name) == 0) {
+						duplicate_name = true;
+						break;
+					}
+				}
+				if (duplicate_name) {
+					proxy_error("Plugin table %s for %s conflicts with an existing table name\n",
+						    def.table_name, db_name);
+					return false;
+				}
+				insert_into_tables_defs(target, def.table_name, def.table_def);
+			}
+			return true;
+		};
+
+		if (!merge_plugin_tables(tables_defs_admin, plugin_manager->tables(ProxySQL_PluginDBKind::admin_db), "admin") ||
+		    !merge_plugin_tables(tables_defs_config, plugin_manager->tables(ProxySQL_PluginDBKind::config_db), "config") ||
+		    !merge_plugin_tables(tables_defs_stats, plugin_manager->tables(ProxySQL_PluginDBKind::stats_db), "stats")) {
+			return false;
+		}
+	}
+#endif /* PROXYSQL40 */
 
 	// init ldap here
 	init_ldap();
@@ -969,9 +978,6 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	__attach_db(statsdb, monitordb, (char *)"monitor");
 	__attach_db(admindb, statsdb_disk, (char *)"stats_history");
 	__attach_db(statsdb, statsdb_disk, (char *)"stats_history");
-#ifdef PROXYSQLGENAI
-	__attach_db(admindb, mcpdb, (char *)"mcp_catalog");
-#endif /* PROXYSQLGENAI */
 
 	dump_mysql_collations();
 
@@ -1271,10 +1277,6 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	flush_clickhouse_variables___database_to_runtime(admindb,true);
 #endif /* PROXYSQLCLICKHOUSE */
 	flush_sqliteserver_variables___database_to_runtime(admindb,true);
-#ifdef PROXYSQLGENAI
-	flush_mcp_variables___database_to_runtime(admindb, true);
-	flush_genai_variables___database_to_runtime(admindb, true);
-#endif /* PROXYSQLGENAI */
 #ifdef PROXYSQLTSDB
 	flush_tsdb_variables___database_to_runtime(admindb, true);
 #endif
@@ -1314,3 +1316,16 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 #endif
 return true;
 };
+
+// NOTE: materialize_plugin_tables() used to live here. It was removed
+// because plugin tables are already merged into tables_defs_{admin,
+// config,stats} by ProxySQL_Admin::init() (~line 944) and the DDL is
+// already executed by check_and_build_standard_tables() (~line 994) on
+// the same path. Calling materialize_plugin_tables() afterwards from
+// src/main.cpp would re-run a name-dedup pass that found everything
+// already present and produced an empty new-rows set, then run no DDL —
+// dead code that read as load-bearing. The merge in Admin::init() is
+// the single canonical site for plugin-table materialization. If a
+// future change wants Admin to expose plugin-tables for live reload
+// (admindb merge after init returns), reintroduce a function with a
+// clear contract; do not resurrect the previous post-init no-op.

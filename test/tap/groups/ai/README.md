@@ -140,7 +140,7 @@ Tests included in the AI group (defined in `groups.json`):
 
 - **AI Module Tests**: `ai_validation-t`, `ai_error_handling_edge_cases-t`, `ai_llm_retry_scenarios-t`
 - **Anomaly Detection**: `anomaly_detection-t`, `anomaly_detector_unit-t`, `anomaly_detection_integration-t`
-- **GenAI Tests**: `genai_module-t`, `genai_async-t`, `genai_embedding_rerank-t`, `genai_live_validation-t`
+- **GenAI Tests**: `genai_module-t`
 - **MCP Tests**: `mcp_module-t`, `mcp_query_rules-t`, `mcp_stats_refresh-t`, `mcp_semantic_lifecycle-t`, etc.
 - **NL2SQL Tests**: `nl2sql_integration-t`, `nl2sql_prompt_builder-t`, `nl2sql_model_selection-t`, etc.
 - **Vector Tests**: `vector_features-t`, `vector_db_performance-t`

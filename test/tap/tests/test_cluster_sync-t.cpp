@@ -968,11 +968,19 @@ int check_module_checksums_sync(
 		};
 
 		int sync_res = wait_for_node_sync(admin, { wait_remote_chksm_syn.str }, CHECKSUM_SYNC_TIMEOUT);
-		ok(
-			sync_res == 0,
-			"Primary(%s:%d) has detected the new checksum '%s' in the replica(%s:%d)",
-			admin->host, admin->port, ext_checksum.str.c_str(), r_admin->host, r_admin->port
-		);
+		if (module == "admin_variables" && diffs_sync == 0) {
+			ok(
+				sync_res == 1,
+				"Primary(%s:%d) has not detected disabled admin_variables checksum '%s' in the replica(%s:%d)",
+				admin->host, admin->port, ext_checksum.str.c_str(), r_admin->host, r_admin->port
+			);
+		} else {
+			ok(
+				sync_res == 0,
+				"Primary(%s:%d) has detected the new checksum '%s' in the replica(%s:%d)",
+				admin->host, admin->port, ext_checksum.str.c_str(), r_admin->host, r_admin->port
+			);
+		}
 
 		sync_res = wait_for_node_sync(admin, { wait_own_chksm_sync.str }, CHECKSUM_SYNC_TIMEOUT);
 		ok(

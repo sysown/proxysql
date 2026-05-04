@@ -78,9 +78,10 @@ ifeq ($(UNAME_S),Linux)
 	STATIC_LIBS += $(LIBCOREDUMPERAR)
 endif
 
-# Add GenAI libraries when PROXYSQLGENAI is enabled
-ifeq ($(PROXYSQLGENAI),1)
+ifneq ($(PROXYSQL40),)
+ifneq ($(wildcard $(SQLITE3_LDIR)/vec.o),)
 	STATIC_LIBS += $(SQLITE3_LDIR)/vec.o
+endif
 endif
 
 OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/libpq -Wl,-rpath,$(RE2_LDIR) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
@@ -140,7 +141,21 @@ tests:
 	@echo "Removing empty .gcno files ..."
 	find -L . -type f -name '*.gcno' -empty -ls -delete
 
-tests-cpp: $(patsubst %.cpp,%,$(wildcard *-t.cpp))
+# test_mysqlx_*-t.cpp reference chassis/plugin types (ProxySQL_PluginServices,
+# mysqlx_config_store.h from plugins/mysqlx/include) that only exist when
+# libproxysql.a was built with -DPROXYSQL40.  Autodetect the flag via a
+# chassis-exclusive symbol in the static lib; under !PROXYSQL40 filter
+# these tests out of the wildcard glob so plain v3.0/v3.1 `make debug`
+# doesn't try to compile them.
+LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
+PROXYSQL40_DETECTED := $(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c invoke_register_schemas_phase)
+ifeq ($(PROXYSQL40_DETECTED),0)
+TESTS_CPP := $(filter-out test_mysqlx_%,$(patsubst %.cpp,%,$(wildcard *-t.cpp)))
+else
+TESTS_CPP := $(patsubst %.cpp,%,$(wildcard *-t.cpp))
+endif
+
+tests-cpp: $(TESTS_CPP)
 tests-php: $(patsubst %,php-%,$(wildcard *-t.php))
 tests-py: $(patsubst %,py-%,$(wildcard *-t.py))
 tests-sh: $(patsubst %,sh-%,$(wildcard *-t.sh))
@@ -179,11 +194,7 @@ sh-%:
 	cp $(patsubst sh-%,%,$@) $(patsubst sh-%.sh,%,$@)
 	chmod +x $(patsubst sh-%.sh,%,$@)
 
-anomaly_detection-t: anomaly_detection-t.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) -DEXCLUDE_TRACKING_VARIABLES $< ../../../src/SQLite3_Server.cpp -I$(CLICKHOUSE_CPP_IDIR) $(IDIRS) $(LDIRS) -L$(CLICKHOUSE_CPP_LDIR) -L$(LZ4_LDIR) $(OPT) $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(CLICKHOUSE_CPP_PATH)/contrib/zstd/zstd/libzstdstatic.a $(LZ4_LDIR)/liblz4.a -lscram -lusual -Wl,--allow-multiple-definition -o $@
-
-test_binlog_reader_uses_previous_hostgroup-t: binlog_rpl.h
-test_com_register_slave_enables_fast_forward-t: binlog_rpl.h
+ test_com_register_slave_enables_fast_forward-t: binlog_rpl.h
 
 %-t: %-t.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
@@ -206,8 +217,22 @@ test_tokenizer-t: test_tokenizer-t.cpp $(TAP_LDIR)/libtap.so
 test_mysql_query_digests_stages-t: test_mysql_query_digests_stages-t.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
 
+.PHONY: test_mysqlx_plugin_load-t
+test_mysqlx_plugin_load-t:
+	$(MAKE) -C unit test_mysqlx_plugin_load-t
+	ln -fs unit/test_mysqlx_plugin_load-t $@
+
+.PHONY: test_mysqlx_admin_tables-t
+test_mysqlx_admin_tables-t:
+	$(MAKE) -C unit test_mysqlx_admin_tables-t
+	ln -fs unit/test_mysqlx_admin_tables-t $@
+
+# test_mysqlx_listener_smoke-t was retired with the dormant MysqlxWorker
+# path in 98aee7db2. Listener-lifecycle coverage now lives in
+# mysqlx_thread_unit-t and mysqlx_robustness_unit-t under unit/.
+
 sqlite3-t: sqlite3-t.cpp $(TAP_LDIR)/libtap.so
-ifeq ($(PROXYSQLGENAI),1)
+ifneq ($(PROXYSQL40),)
 	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) $(SQLITE3_LDIR)/vec.o -o $@
 else
 	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
@@ -226,7 +251,7 @@ create_connection_annotation: test_connection_annotation-t.cpp $(TAP_LDIR)/libta
 	$(CXX) -DTEST_AURORA $< $(IDIRS) $(LDIRS) $(OPT) $(OBJ) $(MYLIBS) $(STATIC_LIBS) -o $@
 
 setparser_test: setparser_test.cpp $(TAP_LDIR)/libtap.so $(RE2_PATH)/util/test.cc $(PROXYSQL_LDIR)/MySQL_Set_Stmt_Parser.cpp $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR)
-ifeq ($(PROXYSQLGENAI),1)
+ifneq ($(PROXYSQL40),)
 	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(RE2_PATH)/util/test.cc $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) $(SQLITE3_LDIR)/vec.o -o $@
 else
 	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(RE2_PATH)/util/test.cc $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
@@ -236,7 +261,7 @@ setparser_test2-t: setparser_test2
 	ln -fs setparser_test2 setparser_test2-t
 
 setparser_test2: setparser_test2.cpp $(TAP_LDIR)/libtap.so $(PROXYSQL_LDIR)/MySQL_Set_Stmt_Parser.cpp setparser_test_common.h $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR)
-ifeq ($(PROXYSQLGENAI),1)
+ifneq ($(PROXYSQL40),)
 	$(CXX) $<  -DEXCLUDE_TRACKING_VARIABLES $(PROXYSQL_LDIR)/MySQL_Set_Stmt_Parser.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) $(SQLITE3_LDIR)/vec.o -o $@
 else
 	$(CXX) $<  -DEXCLUDE_TRACKING_VARIABLES $(PROXYSQL_LDIR)/MySQL_Set_Stmt_Parser.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
@@ -246,7 +271,7 @@ setparser_test3-t: setparser_test3
 	ln -fs setparser_test3 setparser_test3-t
 
 setparser_test3: setparser_test3.cpp $(TAP_LDIR)/libtap.so $(PROXYSQL_LDIR)/MySQL_Set_Stmt_Parser.cpp setparser_test_common.h $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR)
-ifeq ($(PROXYSQLGENAI),1)
+ifneq ($(PROXYSQL40),)
 	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES -DPARSERDEBUG $(PROXYSQL_LDIR)/MySQL_Set_Stmt_Parser.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) $(SQLITE3_LDIR)/vec.o -o $@
 else
 	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES -DPARSERDEBUG $(PROXYSQL_LDIR)/MySQL_Set_Stmt_Parser.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
@@ -332,6 +357,48 @@ test_ffto_pgsql_pipeline-t: test_ffto_pgsql_pipeline-t.cpp pg_lite_client.cpp $(
 
 test_ffto_pgsql_stmt_portal-t: test_ffto_pgsql_stmt_portal-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
+
+
+MYSQLX_PROTO_DIR := $(PROXYSQL_PATH)/plugins/mysqlx/proto
+MYSQLX_PROTO_SRCS := $(wildcard $(MYSQLX_PROTO_DIR)/*.pb.cc)
+MYSQLX_PROTO_OBJS := $(patsubst $(MYSQLX_PROTO_DIR)/%.pb.cc,$(ODIR)/mysqlx_proto_%.pb.o,$(MYSQLX_PROTO_SRCS))
+
+$(ODIR):
+	@mkdir -p $(ODIR)
+
+$(ODIR)/mysqlx_proto_%.pb.o: $(MYSQLX_PROTO_DIR)/%.pb.cc | $(ODIR)
+	$(CXX) -c -o $@ $< $(STDCPP) -O2 -ggdb -I$(MYSQLX_PROTO_DIR) -w
+
+test_mysqlx_e2e_handshake-t: test_mysqlx_e2e_handshake-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TAP_LDIR)/libtap.so
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) \
+		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
+		$(IDIRS) $(LDIRS) $(OPT) -lprotobuf -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
+
+test_mysqlx_e2e_routing-t: test_mysqlx_e2e_routing-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TAP_LDIR)/libtap.so
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) \
+		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
+		$(IDIRS) $(LDIRS) $(OPT) -lprotobuf -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
+
+# Behavioural validation TAP test for issue #5678 part (b): the X-Protocol
+# clients are driven directly via the protocol helpers (same set used by
+# test_mysqlx_e2e_*-t), and the admin DELETE+LOAD is issued through
+# libmariadbclient (classic protocol on port 6032). Same link-line as the
+# e2e routing test.
+test_mysqlx_route_drop_inflight-t: test_mysqlx_route_drop_inflight-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TAP_LDIR)/libtap.so
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) \
+		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
+		$(IDIRS) $(LDIRS) $(OPT) -lprotobuf -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
+
+# Behavioural validation TAP scaffolding for issue #5678 part (a): runtime
+# is skip_all() unless MYSQLX_SIGTERM_INFLIGHT_OPT_IN=1 is set. The body
+# would mirror behavioral_validation.py --scenario sigterm; today it
+# refuses to run automated and points operators at that script. Link
+# line keeps -lssl/-lcrypto and -lmariadbclient because libtap.so pulls
+# in those symbols (admin connection helpers); we don't use protobuf
+# here so we omit -lprotobuf and the .pb.o objects.
+test_mysqlx_sigterm_inflight-t: test_mysqlx_sigterm_inflight-t.cpp $(TAP_LDIR)/libtap.so
+	$(CXX) $< \
+		$(IDIRS) $(LDIRS) $(OPT) -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
 
 
 ### clean targets
