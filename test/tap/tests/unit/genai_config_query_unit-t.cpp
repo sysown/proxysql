@@ -13,6 +13,8 @@
 #include "test_globals.h"
 #include "test_init.h"
 
+#include "proxysql.h"
+#include "cpp.h"
 #include "Config_Tool_Handler.h"
 #include "proxysql_admin.h"
 #include "sqlite3db.h"
