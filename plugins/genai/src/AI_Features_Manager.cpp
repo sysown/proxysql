@@ -393,7 +393,8 @@ int AI_Features_Manager::init_llm_bridge() {
 		GloGATH->variables.genai_llm_provider_model,
 		GloGATH->variables.genai_llm_provider_key,
 		GloGATH->variables.genai_llm_cache_similarity_threshold,
-		GloGATH->variables.genai_llm_timeout_ms
+		GloGATH->variables.genai_llm_timeout_ms,
+		GloGATH->variables.genai_llm_cache_enabled
 	);
 
 	if (llm_bridge->init() != 0) {
@@ -526,6 +527,25 @@ std::string AI_Features_Manager::get_status_json() {
 	);
 
 	return std::string(buf);
+}
+
+std::vector<std::pair<std::string, std::string>> AI_Features_Manager::collect_status_variables() {
+	std::vector<std::pair<std::string, std::string>> vars;
+	vars.push_back({"llm_total_requests", std::to_string(status_variables.llm_total_requests)});
+	vars.push_back({"llm_cache_hits", std::to_string(status_variables.llm_cache_hits)});
+	vars.push_back({"llm_cache_misses", std::to_string(status_variables.llm_cache_misses)});
+	vars.push_back({"llm_local_model_calls", std::to_string(status_variables.llm_local_model_calls)});
+	vars.push_back({"llm_cloud_model_calls", std::to_string(status_variables.llm_cloud_model_calls)});
+	vars.push_back({"llm_total_response_time_ms", std::to_string(status_variables.llm_total_response_time_ms)});
+	vars.push_back({"llm_cache_total_lookup_time_ms", std::to_string(status_variables.llm_cache_total_lookup_time_ms)});
+	vars.push_back({"llm_cache_total_store_time_ms", std::to_string(status_variables.llm_cache_total_store_time_ms)});
+	vars.push_back({"llm_cache_lookups", std::to_string(status_variables.llm_cache_lookups)});
+	vars.push_back({"llm_cache_stores", std::to_string(status_variables.llm_cache_stores)});
+	vars.push_back({"anomaly_total_checks", std::to_string(status_variables.anomaly_total_checks)});
+	vars.push_back({"anomaly_blocked_queries", std::to_string(status_variables.anomaly_blocked_queries)});
+	vars.push_back({"anomaly_flagged_queries", std::to_string(status_variables.anomaly_flagged_queries)});
+	vars.push_back({"daily_cloud_spend_usd", std::to_string(status_variables.daily_cloud_spend_usd)});
+	return vars;
 }
 
 #endif /* PROXYSQL40 */
