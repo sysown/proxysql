@@ -9,11 +9,10 @@ HTTP listener, the LLM bridge (OpenAI / Anthropic / generic / local
 llama.cpp), the FTS- and vector-backed schema discovery cache, and a
 pre-execution query hook that feeds the anomaly detector.
 
-This is a v4.0+ plugin: it requires the chassis (`PROXYSQL40=1` →
-implied by `PROXYSQLGENAI=1`) and is built only when the operator
-explicitly opts in via `PROXYSQLGENAI=1`. Without the flag, none of
-this code ships in `proxysql` — the binary stays a plain MySQL/PgSQL
-proxy.
+This is a v4.0+ plugin: it requires the chassis (`PROXYSQL40=1`) and
+is built only when the operator explicitly opts in. Without the flag,
+none of this code ships in `proxysql` — the binary stays a plain
+MySQL/PgSQL proxy.
 
 ### What the plugin owns
 
@@ -40,19 +39,18 @@ contract**.
 ## 2. Building
 
 ```bash
-PROXYSQLGENAI=1 make            # builds proxysql + the .so
-PROXYSQLGENAI=1 make install    # installs both
+PROXYSQL40=1 make            # builds proxysql + the .so
+PROXYSQL40=1 make install    # installs both
 ```
 
-`PROXYSQLGENAI=1` cascades to `PROXYSQL40=1` → `PROXYSQL31=1` →
-`PROXYSQLFFTO=1` + `PROXYSQLTSDB=1`. The plugin .so lands at
+`PROXYSQL40=1` cascades to `PROXYSQL31=1` → `PROXYSQLFFTO=1` +
+`PROXYSQLTSDB=1`. The plugin .so lands at
 `/usr/lib/proxysql/ProxySQL_GenAI_Plugin.so`.
 
 The build also pulls `sqlite-vec` from `deps/` and links `vec.o` into
 `libproxysql.a` so the plugin's `AI_Vector_Storage` can register the
 extension via `proxy_sqlite3_vec_init`. v3.0 builds (no
-`PROXYSQLGENAI`) skip both — see `lib/proxy_sqlite3_symbols.cpp` and
-`src/Makefile` for the `#ifdef PROXYSQLGENAI` / `ifeq` gates.
+`PROXYSQL40`) skip both.
 
 ## 3. Loading
 
@@ -128,16 +126,42 @@ Tables owned by the plugin (registered in Phase B):
 | admin | `mcp_target_profiles` | editable MCP target → hostgroup mapping |
 | admin | `runtime_mcp_query_rules` / `runtime_mcp_auth_profiles` / `runtime_mcp_target_profiles` | chassis-projected views (no persistent rows; refreshed per SELECT from module snapshot) |
 | config | persistent copies of the three editable tables above | for `LOAD ... FROM DISK` |
-| stats | (none currently — see "Known gaps" below) | |
+| stats | `stats_mcp_query_digest` / `stats_mcp_query_digest_reset` | MCP tool call digest statistics (periodic + reset variants) |
+| stats | `stats_mcp_query_tools_counters` / `stats_mcp_query_tools_counters_reset` | per-endpoint tool invocation counters |
+| stats | `stats_mcp_query_rules` | rule hit counts |
+| stats | `stats_genai_global` | aggregated GenAI/MCP/AI status variables (21 counters) |
 
 ## 7. Observability
 
-Prometheus counters registered against the shared `services->get_prometheus_registry()`:
+### Prometheus counters
+
+Registered against the shared `services->get_prometheus_registry()`:
 
 | Counter | Increments when |
 |---|---|
 | `proxysql_genai_detected_anomalies_total` | the anomaly detector flags a query (any risk) |
 | `proxysql_genai_blocked_queries_total` | the detector blocks a query (DENY returned to client) |
+
+### SQL status variables
+
+`SELECT * FROM stats_genai_global ORDER BY Variable_name;`
+
+Returns 21 counters aggregated from three handler classes:
+
+| Variable_name prefix | Source | Count |
+|---|---|---|
+| `genai_*` | GenAI_Threads_Handler | 4 |
+| `mcp_*` | MCP_Threads_Handler | 3 |
+| `llm_*` | AI_Features_Manager | 10 |
+| `anomaly_*` | AI_Features_Manager | 3 |
+| `daily_cloud_spend_usd` | AI_Features_Manager | 1 |
+
+### MCP query digest
+
+`SELECT * FROM stats_mcp_query_digest;` — MCP tool call digest
+statistics with tool_name, run_id, fingerprint, count_star, timing
+(min/max/sum). Stats are persisted to SQLite and survive restarts.
+`stats_mcp_query_digest_reset` variant clears stats on read.
 
 Plugin log lines route through `services->log_message` (see
 `genai_log()` in `plugin_main.cpp`). Severity follows syslog levels;
@@ -191,14 +215,8 @@ the most worth closing given vector-storage complexity.
 
 ## 10. Known gaps
 
-- **`stats_mcp_*` tables**: previously registered, dropped in the
-  carve-out because there's no plugin-side writer in this branch.
-  A plugin-side stats projection ABI is the natural follow-up
-  (parallel to `register_runtime_view`).
 - **`genai_refresh_runtime_components` race**: see Concurrency notes
   above; needs a proper rwlock around `GloGATH`/`GloAI` consumers.
-- **`LLM_Bridge` cache**: lookup returns cache-miss, store is no-op
-  (see `// TODO` markers). Callers handle the miss naturally.
 - **Tool-handler unit tests**: see Testing section.
 
 ## 11. History
