@@ -60,6 +60,9 @@ struct AdminFixture {
 
 static void expect_query_value(const json& resp, int expected) {
 	ok(resp.value("success", false), "query succeeds");
+	ok(resp["result"].value("row_count", 0) == 1, "query returns one row");
+	ok(resp["result"]["columns"].is_array() && resp["result"]["columns"].size() == 1,
+	   "query returns one column");
 	const auto& rows = resp["result"]["rows"];
 	ok(rows.is_array() && rows.size() == 1, "query returns one row");
 	ok(rows[0]["variable_value"] == expected, "query returns expected value");
@@ -68,7 +71,7 @@ static void expect_query_value(const json& resp, int expected) {
 } // namespace
 
 int main() {
-	plan(15);
+	plan(30);
 
 	test_init_minimal();
 
@@ -96,9 +99,34 @@ int main() {
 		json verify_resp = handler.execute_tool("query", json{{"sql", "SELECT variable_value FROM global_variables WHERE variable_name='mcp-port'"}} );
 		expect_query_value(verify_resp, 6040);
 
+		json with_resp = handler.execute_tool("query", json{{"sql", "WITH one(v) AS (SELECT 1) SELECT v FROM one"}} );
+		ok(with_resp.value("success", false), "WITH query succeeds");
+		ok(with_resp["result"].value("row_count", 0) == 1, "WITH query returns one row");
+		ok(with_resp["result"]["rows"][0]["v"] == 1, "WITH query returns expected value");
+
+		json literal_resp = handler.execute_tool("query", json{{"sql", "SELECT 'load_extension' AS literal"}} );
+		ok(literal_resp.value("success", false), "string literal containing forbidden token is allowed");
+		ok(literal_resp["result"].value("row_count", 0) == 1, "string literal query returns one row");
+		ok(literal_resp["result"]["rows"][0]["literal"] == "load_extension",
+		   "string literal query returns expected value");
+
+		json comment_resp = handler.execute_tool("query", json{{"sql", "SELECT 1 /* create table */"}} );
+		ok(comment_resp.value("success", false), "comment containing forbidden token is allowed");
+		ok(comment_resp["result"].value("row_count", 0) == 1, "comment query returns one row");
+
+		json pragma_resp = handler.execute_tool("query", json{{"sql", "PRAGMA user_version"}} );
+		ok(!pragma_resp.value("success", true), "PRAGMA is rejected");
+		ok(pragma_resp.value("error", "").find("not allowed") != std::string::npos,
+		   "PRAGMA rejection explains the policy");
+
 		json ddl_resp = handler.execute_tool("query", json{{"sql", "CREATE TABLE blocked(id INT)"}} );
 		ok(!ddl_resp.value("success", true), "DDL is rejected");
 		ok(ddl_resp.value("error", "").find("not allowed") != std::string::npos, "DDL rejection explains the policy");
+
+		json attach_resp = handler.execute_tool("query", json{{"sql", "ATTACH ':memory:' AS aux"}} );
+		ok(!attach_resp.value("success", true), "ATTACH is rejected");
+		ok(attach_resp.value("error", "").find("not allowed") != std::string::npos,
+		   "ATTACH rejection explains the policy");
 
 		json extension_resp = handler.execute_tool("query", json{{"sql", "SELECT load_extension('/tmp/x')"}} );
 		ok(!extension_resp.value("success", true), "load_extension is rejected");

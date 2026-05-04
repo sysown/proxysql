@@ -139,6 +139,13 @@ Each MCP endpoint has its own dedicated tool handler with specific tools designe
 - `reload_config` - Reload configuration from disk/memory
 - `list_variables` - List all available variables
 - `get_status` - Get server status information
+- `query` - Execute constrained SQL against the admin/config database
+
+**Query policy**:
+- Allows read/write SQL that starts with `SELECT`, `WITH`, `INSERT`, `UPDATE`, `DELETE`, `REPLACE`, or `VALUES`
+- Rejects DDL and dangerous control statements, including `PRAGMA`, `ATTACH`, `DETACH`, `LOAD_EXTENSION`, transaction control, and schema-altering statements
+- Rejects multi-statement input
+- Returns structured JSON with the SQL text, `rows_affected`, `row_count`, `columns`, and `rows`
 
 **Use Cases**:
 - LLM assistants that need to configure ProxySQL
