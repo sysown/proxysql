@@ -1,6 +1,7 @@
 #ifdef PROXYSQL40
 
 #include "proxysql.h"
+#include "cpp.h"
 
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
@@ -9,9 +10,11 @@ using json = nlohmann::json;
 #include "MCP_Thread.h"
 #include "MCP_Tool_Handler.h"
 #include "Config_Tool_Handler.h"
-#include "proxysql_admin.h"
 #include "proxysql_debug.h"
+#include "proxysql_admin.h"
 #include "proxysql_utils.h"
+#include "MySQL_HostGroups_Manager.h"
+#include "PgSQL_HostGroups_Manager.h"
 #include "sqlite3db.h"
 
 #include <cctype>
