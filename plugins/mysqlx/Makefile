@@ -126,8 +126,13 @@ $(ODIR)/%.pb.o: $(PROTO_DIR)/%.pb.cc $(PROTOBUF_LIB) | $(ODIR)
 ZSTD_AR := $(PROXYSQL_PATH)/deps/zstd/zstd/lib/libzstd.a
 LZ4_AR  := $(PROXYSQL_PATH)/deps/lz4/lz4/lib/liblz4.a
 
+PLUGIN_LDFLAGS :=
+ifeq ($(UNAME_S),Darwin)
+PLUGIN_LDFLAGS += -Wl,-undefined,dynamic_lookup
+endif
+
 $(PLUGIN_SO): $(OBJS) $(PROTO_OBJS) $(PROTOBUF_LIB)
-	$(CXX) -shared -o $@ $^ $(CXXFLAGS) -pthread -lssl -lcrypto \
+	$(CXX) -shared -o $@ $^ $(CXXFLAGS) -pthread -L$(SSL_LDIR) -lssl -lcrypto $(PLUGIN_LDFLAGS) \
 		$(ZSTD_AR) $(LZ4_AR)
 
 .PHONY: all
