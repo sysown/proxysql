@@ -1101,4 +1101,12 @@ MCP_Threads_Handler::get_query_rules_snapshot() {
 	return snapshot;
 }
 
+std::vector<std::pair<std::string, std::string>> MCP_Threads_Handler::collect_status_variables() {
+	std::vector<std::pair<std::string, std::string>> vars;
+	vars.push_back({"mcp_total_requests", std::to_string(status_variables.total_requests)});
+	vars.push_back({"mcp_failed_requests", std::to_string(status_variables.failed_requests)});
+	vars.push_back({"mcp_active_connections", std::to_string(status_variables.active_connections)});
+	return vars;
+}
+
 #endif /* PROXYSQL40 */

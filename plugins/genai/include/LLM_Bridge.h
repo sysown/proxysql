@@ -195,6 +195,7 @@ class LLM_Bridge {
 private:
 	struct {
 		bool enabled;
+		bool cache_enabled;
 		char* provider;                 ///< "openai" or "anthropic"
 		char* provider_url;             ///< Generic endpoint URL
 		char* provider_model;           ///< Model name
@@ -281,7 +282,7 @@ public:
 	 * This is called by AI_Features_Manager when variables change.
 	 */
 	void update_config(const char* provider, const char* provider_url, const char* provider_model,
-	                   const char* provider_key, int cache_threshold, int timeout);
+	                   const char* provider_key, int cache_threshold, int timeout, bool cache_en);
 
 	/**
 	 * @brief Process a prompt using the LLM

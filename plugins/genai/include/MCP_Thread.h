@@ -11,6 +11,7 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <utility>
 
 // Forward declarations
 class ProxySQL_MCP_Server;
@@ -388,6 +389,8 @@ public:
 	std::vector<MCP_Auth_Profile_Row> get_auth_profiles_snapshot();
 	std::vector<MCP_Target_Profile_Row> get_target_profiles_snapshot();
 	std::vector<MCP_Query_Rule_Row> get_query_rules_snapshot();
+
+	std::vector<std::pair<std::string, std::string>> collect_status_variables();
 
 private:
 	std::map<std::string, MCP_Target_Auth_Context> target_auth_map;
