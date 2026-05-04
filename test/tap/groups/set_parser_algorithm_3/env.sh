@@ -1,4 +1,4 @@
-# set_parser_algorithm=3 Test Group Environment
+# set_parser_algorithm_3 Test Group Environment
 # Runs all SET-related tests with ParserSQL-based SET parser enabled
 # for both MySQL and PostgreSQL protocols.
 
