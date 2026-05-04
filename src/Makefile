@@ -166,7 +166,7 @@ ifeq ($(UNAME_S),Darwin)
 	LIBPROXYSQLAR += $(LIBCONFIG_LDIR)/libconfig++.a
 	LIBPROXYSQLAR += $(LIBCONFIG_LDIR)/libconfig.a
 	LIBPROXYSQLAR += $(CURL_LDIR)/libcurl.a
-	LIBPROXYSQLAR += $(SQLITE3_LDIR)/sqlite3.o
+	LIBPROXYSQLAR += $(PARSERSQL_LDIR)/libsqlparser.a
 	LIBPROXYSQLAR += $(LIBINJECTION_LDIR)/libinjection.a
 	LIBPROXYSQLAR += $(EV_LDIR)/libev.a
 	LIBPROXYSQLAR += $(LIBSCRAM_LDIR)/libscram.a

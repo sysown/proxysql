@@ -143,7 +143,7 @@ LIBPROXYSQLAR_FULL := $(LIBPROXYSQLAR) \
 	$(LIBCONFIG_LDIR)/libconfig++.a \
 	$(LIBCONFIG_LDIR)/libconfig.a \
 	$(CURL_LDIR)/libcurl.a \
-	$(SQLITE3_LDIR)/sqlite3.o \
+	$(PARSERSQL_LDIR)/libsqlparser.a \
 	$(LIBINJECTION_LDIR)/libinjection.a \
 	$(EV_LDIR)/libev.a \
 	$(LIBSCRAM_LDIR)/libscram.a \
