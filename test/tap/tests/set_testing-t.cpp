@@ -327,6 +327,9 @@ void * my_conn_thread(void *arg) {
 			) {
 				if (el.key() == "wsrep_sync_wait" && k == mysql_vars.end() && (s.value() == el.value())) {
 					variables_tested++;
+				} else if (k == mysql_vars.end() && s != proxysql_vars["conn"].end() && s.value() == el.value()
+					&& std::find(possible_unknown_variables.begin(), possible_unknown_variables.end(), el.key()) != possible_unknown_variables.end()) {
+					variables_tested++;
 				} else {
 					__sync_fetch_and_add(&g_failed, 1);
 					testPassed = false;
