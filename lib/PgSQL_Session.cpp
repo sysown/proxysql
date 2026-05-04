@@ -1,4 +1,4 @@
-﻿#include "../deps/json/json.hpp"
+#include "../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
 #include <variant>
@@ -16,6 +16,7 @@ using json = nlohmann::json;
 #include "MySQL_Data_Stream.h"
 #include "PgSQL_Query_Processor.h"
 #include "PgSQL_PreparedStatement.h"
+#include "Query_Processor_ParserSQL.h"
 #include "PgSQL_Logger.hpp"
 #include "StatCounters.h"
 #include "PgSQL_Authentication.h"
@@ -4498,8 +4499,13 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 		std::vector<std::pair<std::string, std::string>> param_status = {};
 		bool send_param_status = false;
 
-		thread->thr_SetParser->set_query(nq); // replace the query
-		set = thread->thr_SetParser->parse1v2(); // use algorithm v2
+		if (pgsql_thread___set_parser_algorithm == 3
+			|| pgsql_thread___query_processor_parser == 1) {
+			set = parsersql_parse_set_pgsql(nq);
+		} else {
+			thread->thr_SetParser->set_query(nq); // replace the query
+			set = thread->thr_SetParser->parse1v2(); // use algorithm v2
+		}
 
 		// Flag to be set if any variable within the 'SET' statement fails to be tracked,
 		// due to being unknown or because it's an user defined variable.

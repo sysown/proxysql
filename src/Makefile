@@ -28,6 +28,7 @@ IDIRS :=	-I$(PROXYSQL_IDIR) \
 			-I$(JSON_IDIR) \
 			-I$(SSL_IDIR) \
 			-I$(ZSTD_IDIR) \
+			-I$(PARSERSQL_IDIR) \
 
 LDIRS :=	-L$(PROXYSQL_LDIR) \
 			-L$(JEMALLOC_LDIR) \
@@ -45,7 +46,8 @@ LDIRS :=	-L$(PROXYSQL_LDIR) \
 			-L$(POSTGRESQL_LDIR) \
 			-L$(LIBUSUAL_LDIR) \
 			-L$(LIBSCRAM_LDIR) \
-			-L$(SSL_LDIR)
+			-L$(SSL_LDIR) \
+			-L$(PARSERSQL_LDIR) \
 
 ifeq ($(UNAME_S),Linux)
 	LDIRS += -L$(COREDUMPER_LDIR)
@@ -118,7 +120,8 @@ STATICMYLIBS := -Wl,-Bstatic \
 				-lusual \
 				-lpq \
 				-lpgcommon \
-				-lpgport
+				-lpgport \
+				-lsqlparser \
 
 ifneq ($(NOJEMALLOC),1)
 	STATICMYLIBS += -ljemalloc

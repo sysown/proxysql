@@ -405,6 +405,7 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"query_processor_iterations",
 	(char*)"query_processor_first_comment_parsing",
 	(char*)"query_processor_regex",
+	(char*)"query_processor_parser", // NOSONAR: matches array pattern
 	(char*)"set_query_lock_on_hostgroup",
 	(char*)"set_parser_algorithm",
 	(char*)"auto_increment_delay_multiplex",
@@ -1134,6 +1135,7 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.query_processor_iterations = 0;
 	variables.query_processor_first_comment_parsing = 2;
 	variables.query_processor_regex = 1;
+	variables.query_processor_parser = 0;
 	variables.set_query_lock_on_hostgroup = 1;
 	variables.set_parser_algorithm = 2; // before 2.6.0 this was 1
 	variables.auto_increment_delay_multiplex = 5;
@@ -2300,9 +2302,10 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["query_processor_iterations"] = make_tuple(&variables.query_processor_iterations, 0, 1000 * 1000, false);
 		VariablesPointers_int["query_processor_first_comment_parsing"] = make_tuple(&variables.query_processor_first_comment_parsing, 0, 3, false);
 		VariablesPointers_int["query_processor_regex"] = make_tuple(&variables.query_processor_regex, 1, 2, false);
+		VariablesPointers_int["query_processor_parser"] = make_tuple(&variables.query_processor_parser, 0, 1, false);
 		VariablesPointers_int["query_retries_on_failure"] = make_tuple(&variables.query_retries_on_failure, 0, 1000, false);
 		VariablesPointers_int["set_query_lock_on_hostgroup"] = make_tuple(&variables.set_query_lock_on_hostgroup, 0, 1, false);
-		VariablesPointers_int["set_parser_algorithm"] = make_tuple(&variables.set_parser_algorithm, 1, 2, false);
+		VariablesPointers_int["set_parser_algorithm"] = make_tuple(&variables.set_parser_algorithm, 1, 3, false);
 
 		// throttle
 		VariablesPointers_int["throttle_connections_per_sec_to_hostgroup"] = make_tuple(&variables.throttle_connections_per_sec_to_hostgroup, 1, 100 * 1000 * 1000, false);
@@ -4018,6 +4021,7 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___query_processor_iterations = GloPTH->get_variable_int((char*)"query_processor_iterations");
 	pgsql_thread___query_processor_first_comment_parsing = GloPTH->get_variable_int((char*)"query_processor_first_comment_parsing");
 	pgsql_thread___query_processor_regex = GloPTH->get_variable_int((char*)"query_processor_regex");
+	pgsql_thread___query_processor_parser = GloPTH->get_variable_int((char*)"query_processor_parser"); // NOSONAR: matches function signature
 
 	pgsql_thread___query_cache_size_MB = GloPTH->get_variable_int((char*)"query_cache_size_MB");
 	pgsql_thread___query_cache_soft_ttl_pct = GloPTH->get_variable_int((char*)"query_cache_soft_ttl_pct");
