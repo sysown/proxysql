@@ -396,6 +396,7 @@ UNIT_TESTS += \
 	genai_plugin_backend_client_unit-t \
 	genai_stats_parsing_unit-t \
 	genai_query_handler_unit-t \
+	genai_config_query_unit-t \
 	genai_mcp_endpoint_unit-t \
 	genai_mcp_thread_unit-t \
 	genai_thread_unit-t \
@@ -735,6 +736,11 @@ genai_stats_parsing_unit-t: genai_stats_parsing_unit-t.cpp $(GENAI_ALL_SRCS) $(T
 		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
 genai_query_handler_unit-t: genai_query_handler_unit-t.cpp $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) \
+		$(GENAI_PLUGIN_DEFINES) $(IDIRS) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+genai_config_query_unit-t: genai_config_query_unit-t.cpp $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(GENAI_ALL_SRCS) $(TEST_HELPERS_OBJ) \
 		$(GENAI_PLUGIN_DEFINES) $(IDIRS) $(LDIRS) $(OPT) \
 		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@

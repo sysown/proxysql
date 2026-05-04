@@ -9,10 +9,237 @@ using json = nlohmann::json;
 #include "MCP_Thread.h"
 #include "MCP_Tool_Handler.h"
 #include "Config_Tool_Handler.h"
+#include "proxysql_admin.h"
 #include "proxysql_debug.h"
 #include "proxysql_utils.h"
+#include "sqlite3db.h"
 
+#include <cctype>
 #include <cstring>
+#include <string>
+#include <unordered_set>
+
+extern ProxySQL_Admin *GloAdmin;
+
+namespace {
+
+const char* skip_sql_whitespace_and_comments(const char* p) {
+	while (p && *p) {
+		while (*p && std::isspace(static_cast<unsigned char>(*p))) {
+			++p;
+		}
+		if (p[0] == '-' && p[1] == '-') {
+			p += 2;
+			while (*p && *p != '\n' && *p != '\r') {
+				++p;
+			}
+			continue;
+		}
+		if (p[0] == '/' && p[1] == '*') {
+			p += 2;
+			while (*p && !(p[0] == '*' && p[1] == '/')) {
+				++p;
+			}
+			if (*p) {
+				p += 2;
+			}
+			continue;
+		}
+		break;
+	}
+	return p ? p : "";
+}
+
+std::string first_sql_keyword(const std::string& sql) {
+	const char* p = skip_sql_whitespace_and_comments(sql.c_str());
+	if (!p || !*p) {
+		return "";
+	}
+
+	const char* start = p;
+	while (*p && (std::isalpha(static_cast<unsigned char>(*p)) || *p == '_')) {
+		++p;
+	}
+
+	std::string keyword(start, static_cast<size_t>(p - start));
+	for (char& c : keyword) {
+		c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+	}
+	return keyword;
+}
+
+bool is_allowed_config_sql_keyword(const std::string& keyword) {
+	static const std::unordered_set<std::string> allowed = {
+		"SELECT",
+		"WITH",
+		"INSERT",
+		"UPDATE",
+		"DELETE",
+		"REPLACE",
+		"VALUES"
+	};
+	return allowed.find(keyword) != allowed.end();
+}
+
+bool contains_forbidden_sql_token(const std::string& sql) {
+	static const std::unordered_set<std::string> forbidden = {
+		"ATTACH",
+		"ALTER",
+		"BEGIN",
+		"COMMIT",
+		"CREATE",
+		"DETACH",
+		"DROP",
+		"LOAD_EXTENSION",
+		"PRAGMA",
+		"REINDEX",
+		"RELEASE",
+		"ROLLBACK",
+		"SAVEPOINT",
+		"TRUNCATE",
+		"VACUUM"
+	};
+
+	enum class State {
+		Normal,
+		SingleQuote,
+		DoubleQuote,
+		LineComment,
+		BlockComment
+	};
+
+	State state = State::Normal;
+	std::string token;
+
+	auto flush_token = [&]() -> bool {
+		if (token.empty()) {
+			return false;
+		}
+		for (char& c : token) {
+			c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+		}
+		const bool blocked = forbidden.find(token) != forbidden.end();
+		token.clear();
+		return blocked;
+	};
+
+	for (size_t i = 0; i < sql.size(); ++i) {
+		const char c = sql[i];
+		const char next = (i + 1 < sql.size()) ? sql[i + 1] : '\0';
+
+		switch (state) {
+			case State::Normal:
+				if (c == '\'') {
+					if (flush_token()) {
+						return true;
+					}
+					state = State::SingleQuote;
+					continue;
+				}
+				if (c == '"') {
+					if (flush_token()) {
+						return true;
+					}
+					state = State::DoubleQuote;
+					continue;
+				}
+				if (c == '-' && next == '-') {
+					if (flush_token()) {
+						return true;
+					}
+					state = State::LineComment;
+					++i;
+					continue;
+				}
+				if (c == '/' && next == '*') {
+					if (flush_token()) {
+						return true;
+					}
+					state = State::BlockComment;
+					++i;
+					continue;
+				}
+				if (std::isalnum(static_cast<unsigned char>(c)) || c == '_') {
+					token.push_back(c);
+				} else if (flush_token()) {
+					return true;
+				}
+				break;
+
+			case State::SingleQuote:
+				if (c == '\'' && next == '\'') {
+					++i;
+				} else if (c == '\'') {
+					state = State::Normal;
+				}
+				break;
+
+			case State::DoubleQuote:
+				if (c == '"' && next == '"') {
+					++i;
+				} else if (c == '"') {
+					state = State::Normal;
+				}
+				break;
+
+			case State::LineComment:
+				if (c == '\n' || c == '\r') {
+					state = State::Normal;
+				}
+				break;
+
+			case State::BlockComment:
+				if (c == '*' && next == '/') {
+					state = State::Normal;
+					++i;
+				}
+				break;
+		}
+	}
+
+	return flush_token();
+}
+
+std::string validate_config_sql(SQLite3DB* db, const std::string& sql) {
+	if (!db || !db->get_db()) {
+		return "Admin database not available";
+	}
+
+	const std::string keyword = first_sql_keyword(sql);
+	if (keyword.empty()) {
+		return "SQL statement is empty";
+	}
+	if (!is_allowed_config_sql_keyword(keyword)) {
+		return "Statement type not allowed: " + keyword;
+	}
+	if (contains_forbidden_sql_token(sql)) {
+		return "Statement contains a forbidden SQL token";
+	}
+
+	sqlite3_stmt* stmt = nullptr;
+	const char* tail = nullptr;
+	int rc = (*proxy_sqlite3_prepare_v2)(db->get_db(), sql.c_str(), -1, &stmt, &tail);
+	if (stmt) {
+		(*proxy_sqlite3_finalize)(stmt);
+		stmt = nullptr;
+	}
+	if (rc != SQLITE_OK) {
+		const char* err = (*proxy_sqlite3_errmsg)(db->get_db());
+		return std::string("SQL error: ") + (err ? err : "unknown error");
+	}
+
+	const char* rest = skip_sql_whitespace_and_comments(tail ? tail : "");
+	if (*rest == ';') {
+		rest = skip_sql_whitespace_and_comments(rest + 1);
+	}
+	if (*rest != '\0') {
+		return "Only a single SQL statement is allowed";
+	}
+
+	return "";
+}
+
+} // namespace
 
 Config_Tool_Handler::Config_Tool_Handler(MCP_Threads_Handler* handler)
 	: mcp_handler(handler)
@@ -117,6 +344,22 @@ json Config_Tool_Handler::get_tool_list() {
 		}
 	));
 
+	// query
+	tools.push_back(create_tool_description(
+		"query",
+		"Execute constrained SQL against the ProxySQL admin/config database",
+		{
+			{"type", "object"},
+			{"properties", {
+				{"sql", {
+					{"type", "string"},
+					{"description", "Single SQL statement to execute"}
+				}}
+			}},
+			{"required", {"sql"}}
+		}
+	));
+
 	json result;
 	result["tools"] = tools;
 	return result;
@@ -155,6 +398,9 @@ json Config_Tool_Handler::execute_tool(const std::string& tool_name, const json&
 			result = handle_list_variables(filter);
 		} else if (tool_name == "get_status") {
 			result = handle_get_status();
+		} else if (tool_name == "query") {
+			std::string sql = arguments.value("sql", "");
+			result = handle_query(sql);
 		} else {
 			result = create_error_response("Unknown tool: " + tool_name);
 		}
@@ -209,6 +455,69 @@ json Config_Tool_Handler::handle_reload_config(const std::string& scope) {
 	result["scope"] = scope;
 	result["message"] = "Configuration reload functionality to be implemented";
 	return create_success_response(result);
+}
+
+json Config_Tool_Handler::handle_query(const std::string& sql) {
+	if (!GloAdmin || !GloAdmin->admindb) {
+		return create_error_response("ProxySQL Admin database not available");
+	}
+
+	const std::string validation_error = validate_config_sql(GloAdmin->admindb, sql);
+	if (!validation_error.empty()) {
+		return create_error_response(validation_error);
+	}
+
+	if (pthread_mutex_lock(&GloAdmin->sql_query_global_mutex) != 0) {
+		return create_error_response("Failed to lock sql_query_global_mutex");
+	}
+
+	char* error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result* resultset = NULL;
+	GloAdmin->admindb->execute_statement(sql.c_str(), &error, &cols, &affected_rows, &resultset);
+
+	int unlock_rc = pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
+	if (unlock_rc != 0) {
+		if (error) {
+			std::string err_msg = error;
+			free(error);
+			if (resultset) {
+				delete resultset;
+			}
+			return create_error_response(err_msg + "; also failed to unlock sql_query_global_mutex");
+		}
+		if (resultset) {
+			delete resultset;
+		}
+		return create_error_response("Failed to unlock sql_query_global_mutex");
+	}
+
+	if (error) {
+		std::string err_msg = error;
+		free(error);
+		if (resultset) {
+			delete resultset;
+		}
+		return create_error_response(err_msg);
+	}
+
+	json payload;
+	payload["sql"] = sql;
+	payload["rows_affected"] = affected_rows;
+	payload["row_count"] = resultset ? resultset->rows_count : 0;
+	payload["columns"] = json::array();
+	if (resultset) {
+		for (const auto* column : resultset->column_definition) {
+			payload["columns"].push_back(column ? column->name : "");
+		}
+		payload["rows"] = resultset_to_json(resultset, cols);
+		delete resultset;
+	} else {
+		payload["rows"] = json::array();
+	}
+
+	return create_success_response(payload);
 }
 
 json Config_Tool_Handler::handle_list_variables(const std::string& filter) {
