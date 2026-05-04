@@ -353,10 +353,8 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	gen_utils_unit-t \
 	proxy_protocol_unit-t \
 	pgsql_txn_state_unit-t \
-	genai_fts_string_unit-t \
 	sqlite3db_unit-t \
 	pgsql_error_helper_unit-t \
-	genai_llm_clients_unit-t \
 	charset_find_unit-t \
 	config_validation_unit-t \
 	config_write_unit-t \
@@ -381,6 +379,8 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 # compilable under !PROXYSQL40.
 ifeq ($(PROXYSQL40),1)
 UNIT_TESTS += \
+	genai_fts_string_unit-t \
+	genai_llm_clients_unit-t \
 	plugin_config_unit-t \
 	plugin_dispatch_unit-t \
 	plugin_manager_unit-t \
@@ -708,6 +708,12 @@ genai_plugin_load_unit-t: genai_plugin_load_unit-t.cpp $(GENAI_PLUGIN_SO) $(ODIR
 GENAI_FTS_SRCS := $(PROXYSQL_PATH)/plugins/genai/src/MySQL_FTS.cpp
 genai_fts_string_unit-t: genai_fts_string_unit-t.cpp $(GENAI_FTS_SRCS) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
 	$(CXX) $< $(GENAI_FTS_SRCS) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		$(GENAI_PLUGIN_DEFINES) $(GENAI_PLUGIN_INCLUDE) $(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+GENAI_LLM_SRCS := $(PROXYSQL_PATH)/plugins/genai/src/LLM_Clients.cpp
+genai_llm_clients_unit-t: genai_llm_clients_unit-t.cpp $(GENAI_LLM_SRCS) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+	$(CXX) $< $(GENAI_LLM_SRCS) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		$(GENAI_PLUGIN_DEFINES) $(GENAI_PLUGIN_INCLUDE) $(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
