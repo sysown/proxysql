@@ -83,7 +83,7 @@ static void *thread_worker(void *varg) {
     return NULL;
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char **argv) { // NOSONAR: benchmark tool, cognitive complexity acceptable
     const char *host = "127.0.0.1";
     int port = 16432;
     const char *user = "benchuser"; // NOSONAR: benchmark default, not a real credential
