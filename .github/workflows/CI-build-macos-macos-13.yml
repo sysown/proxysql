@@ -83,7 +83,6 @@ jobs:
       BRANCH: ${{ github.ref_name }}
       RELEASE_ID: ${{ needs.init_release.outputs.release_id }}
       PROXYSQL31: "0"
-      PROXYSQLGENAI: "0"
       PKG_CONFIG_PATH: "/usr/local/opt/openssl@3/lib/pkgconfig"
       OPENSSL_ROOT_DIR: "/usr/local/opt/openssl@3"
 
@@ -120,7 +119,7 @@ jobs:
         set -euo pipefail
         # Mirror Makefile tier-version bump so tarball matches the built binary's version.
         BASE=$(git describe --long --abbrev=7 --tags | sed 's/^v//')
-        if [ "${PROXYSQLGENAI:-0}" = "1" ]; then
+        if [ "${PROXYSQL40:-0}" = "1" ]; then
           VERSION=$(echo "$BASE" | awk -F. '{printf "%d.%s", $1+1, substr($0, length($1)+2)}')
         elif [ "${PROXYSQL31:-0}" = "1" ]; then
           VERSION=$(echo "$BASE" | awk -F. '{printf "%s.%d.%s", $1, $2+1, substr($0, length($1)+length($2)+3)}')

@@ -5,7 +5,6 @@
 import os
 import yaml
 import pymysql
-import requests
 import subprocess
 import sys
 import re
@@ -37,21 +36,6 @@ def sorted_nicely( l , reverse=False):
     convert = lambda text: int(text) if text.isdigit() else text
     alphanum_key = lambda key: [convert(c) for c in re.split('([0-9]+)', key)]
     return sorted(l, key = alphanum_key, reverse = reverse)
-
-def generate_og_alert(service_key, message, description, debug):
-    if debug:
-        log.warn(message, exception=description)
-    else:
-        payload = {
-            "service_key": service_key,
-            "incident_key": message,
-            "event_type": "trigger",
-            "description": description
-        }
-
-        payload = json.dumps(payload)
-        r = requests.post("https://events.pagerduty.com/generic/2010-04-15/create_event.json",
-                          data=payload)
 
 def init_config(cfg_filename):
     # Initialise config file

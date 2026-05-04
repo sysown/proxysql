@@ -271,23 +271,26 @@ Return a snapshot of ProxySQL's internal MySQL topology state. These allow a
 plugin to access the current user list, server list, or group replication
 hostgroups without directly coupling to internal data structures.
 
-#### `register_runtime_view` (ABI 3+)
+#### `register_runtime_view` (ABI 4+)
 
 ```cpp
 struct ProxySQL_PluginRuntimeView {
     const char *table_name;
-    void (*refresh)(SQLite3DB *admindb, void *opaque);
+    void (*refresh)(SQLite3DB *db, void *opaque);
     void *opaque;
+    ProxySQL_PluginDBKind db_kind;  // ABI 4: at tail, defaults to admin_db (0)
 };
 
 bool register_runtime_view(const ProxySQL_PluginRuntimeView &view);
 ```
 
 Declare an admin-side **view** of plugin-module state. The named
-`table_name` lives in `admin_db` (typically `runtime_<something>`) and
-holds no persistent rows — the chassis invokes `refresh(admindb,
+`table_name` typically lives in `admin_db` (for `runtime_<something>`)
+or `stats_db` (for `stats_<something>`), depending on `db_kind`. The
+table holds no persistent rows — the chassis invokes `refresh(db,
 opaque)` before any admin `SELECT` that references the table as a
-whole identifier. The match is case-insensitive but identifier-aware:
+whole identifier, passing the DB handle matching `db_kind`. The match
+is case-insensitive but identifier-aware:
 a query against `runtime_<table>_extra` (longer suffix) or
 `stats_runtime_<table>` (longer prefix) does NOT trigger the refresh
 for `runtime_<table>`. The refresh callback is expected to do

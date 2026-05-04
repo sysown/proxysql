@@ -27,6 +27,7 @@ IDIRS :=	-I$(PROXYSQL_IDIR) \
 			-I$(JSON_IDIR) \
 			-I$(SSL_IDIR) \
 			-I$(ZSTD_IDIR) \
+			-I$(PARSERSQL_IDIR) \
 
 ifeq ($(UNAME_S),Linux)
 	IDIRS += -I$(COREDUMPER_IDIR)
@@ -39,7 +40,8 @@ endif
 LDIRS :=	-L$(JEMALLOC_LDIR) \
 			-L$(RE2_LDIR) \
 			-L$(LIBINJECTION_LDIR) \
-			-L$(PROMETHEUS_LDIR)
+			-L$(PROMETHEUS_LDIR) \
+			-L$(PARSERSQL_LDIR) \
 
 #LIBS := -rdynamic -Wl,-Bstatic -ljemalloc_pic -lre2 -Wl,-Bdynamic -ldl -lpthread -lm -lz -lrt $(EXTRALINK)
 #LIBS := -Wl,--export-dynamic -Wl,-Bstatic -ljemalloc_pic -lre2 -Wl,-Bdynamic -ldl -lpthread -lm -lz -lrt $(EXTRALINK)
@@ -49,11 +51,6 @@ ODIR := obj
 PSQLCH :=
 ifeq ($(PROXYSQLCLICKHOUSE),1)
 	PSQLCH := -DPROXYSQLCLICKHOUSE
-endif
-
-PSQLGA :=
-ifeq ($(PROXYSQLGENAI),1)
-	PSQLGA := -DPROXYSQLGENAI
 endif
 
 PSQL40 :=
@@ -86,7 +83,7 @@ endif
 
 
 MYCFLAGS := $(IDIRS) $(OPTZ) $(DEBUG) -Wall -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
-MYCXXFLAGS := $(STDCPP) $(MYCFLAGS) $(PSQLCH) $(PSQLGA) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(ENABLE_EPOLL)
+MYCXXFLAGS := $(STDCPP) $(MYCFLAGS) $(PSQLCH) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(ENABLE_EPOLL)
 
 default: libproxysql.a
 .PHONY: default
@@ -121,6 +118,7 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	PgSQLMonitorDecision.oo \
 	MySQLErrorClassifier.oo \
 	BackendSyncDecision.oo \
+	Query_Processor_ParserSQL.oo \
 	proxy_sqlite3_symbols.oo
 
 # TSDB object files
@@ -131,18 +129,6 @@ endif
 # FFTO object files
 ifeq ($(PROXYSQLFFTO),1)
 _OBJ_CXX += MySQLFFTO.oo PgSQLFFTO.oo
-endif
-
-# GenAI object files (conditionally included)
-ifeq ($(PROXYSQLGENAI),1)
-_OBJ_CXX += GenAI_Thread.oo \
-	MCP_Thread.oo ProxySQL_MCP_Server.oo MCP_Endpoint.oo MCP_Tool_Handler.oo \
-	MySQL_Catalog.oo MySQL_Tool_Handler.oo MySQL_FTS.oo \
-	Config_Tool_Handler.oo Query_Tool_Handler.oo \
-	Admin_Tool_Handler.oo Cache_Tool_Handler.oo Stats_Tool_Handler.oo \
-	AI_Features_Manager.oo LLM_Bridge.oo LLM_Clients.oo Anomaly_Detector.oo AI_Vector_Storage.oo AI_Tool_Handler.oo \
-	RAG_Tool_Handler.oo \
-	Discovery_Schema.oo Static_Harvester.oo PgSQL_Static_Harvester.oo
 endif
 
 OBJ_CXX := $(patsubst %,$(ODIR)/%,$(_OBJ_CXX))

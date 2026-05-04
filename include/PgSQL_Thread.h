@@ -1022,6 +1022,7 @@ public:
 		 */
 		int query_processor_first_comment_parsing;
 		int query_processor_regex;
+		int query_processor_parser;
 		int set_query_lock_on_hostgroup;
 		int set_parser_algorithm;
 		int auto_increment_delay_multiplex;

@@ -329,11 +329,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 
 
 		unsigned int k;
-		if (New_sum > 32768) {
-			k=rand()%New_sum;
-		} else {
-			k=fastrand()%New_sum;
-		}
+		k=rand_fast()%New_sum;
 		k++;
 		New_sum=0;
 

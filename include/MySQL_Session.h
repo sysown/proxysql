@@ -385,76 +385,16 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	void handler_rc0_RefreshActiveTransactions(MySQL_Connection* myconn);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB_replace_CLICKHOUSE(PtrSize_t& pkt);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(PtrSize_t& pkt);
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___genai(const char* query, size_t query_len, PtrSize_t* pkt);
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___llm(const char* query, size_t query_len, PtrSize_t* pkt);
-#ifdef epoll_create1
-	/**
-	 * @brief Handle GenAI response from socketpair
-	 *
-	 * Called when epoll notifies that a GenAI response is available on a client fd.
-	 * Reads the GenAI_ResponseHeader and JSON result, then sends the resultset
-	 * to the MySQL client.
-	 *
-	 * @param fd The socketpair fd (MySQL side) with data available to read
-	 *
-	 * @see handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___genai_send_async()
-	 * @see check_genai_events()
-	 */
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_genai_response(int fd);
+	// MYSQL_COM_QUERY___genai / MYSQL_COM_QUERY___llm and the entire
+	// async-genai socketpair infrastructure (handle_genai_response,
+	// genai_send_async, genai_cleanup_request, check_genai_events) were
+	// removed in Step 4 of the GenAI plugin carve-out (decision Q2 in
+	// the design doc).  GenAI now reaches clients through MCP / admin
+	// SQL / REST -- the in-line MySQL-protocol "GENAI:" / "LLM:"
+	// prefix escape hatches were a debug/POC convenience that bypassed
+	// routing, ACLs, and the query processor.
 
-	/**
-	 * @brief Send GenAI request asynchronously via socketpair
-	 *
-	 * Creates a socketpair for async communication with the GenAI module:
-	 * 1. Creates socketpair(fds)
-	 * 2. Registers fds[1] with GenAI module
-	 * 3. Sends GenAI_RequestHeader + JSON query via fds[0]
-	 * 4. Adds fds[0] to session's epoll for response notification
-	 * 5. Returns immediately (MySQL thread is free to process other queries)
-	 *
-	 * The response will be handled by handle_genai_response() when ready.
-	 *
-	 * @param query The JSON query string (after "GENAI:" prefix)
-	 * @param query_len Length of the query string
-	 * @param pkt Original packet (stored for later cleanup)
-	 * @return true if request was sent successfully, false on error
-	 *
-	 * @see handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_genai_response()
-	 */
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___genai_send_async(const char* query, size_t query_len, PtrSize_t* pkt);
-
-	/**
-	 * @brief Cleanup a GenAI pending request
-	 *
-	 * Removes the request from the pending map, closes the socketpair fd,
-	 * removes from epoll, and frees the original packet. Called after
-	 * the response is processed or on error.
-	 *
-	 * @param request_id The request ID to clean up
-	 *
-	 * @see handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___genai_send_async()
-	 */
-	void genai_cleanup_request(uint64_t request_id);
-
-	/**
-	 * @brief Check for pending GenAI responses
-	 *
-	 * Performs a non-blocking epoll_wait on the session's GenAI epoll fd
-	 * to check if any responses are ready. If a response is found, it's
-	 * processed immediately by calling handle_genai_response().
-	 *
-	 * This is called from the main handler() loop in the WAITING_CLIENT_DATA
-	 * case to ensure GenAI responses are processed promptly even when
-	 * there's no new client data.
-	 *
-	 * @return true if a response was processed, false if no responses were ready
-	 *
-	 * @see handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_genai_response()
-	 */
-	bool check_genai_events();
-#endif
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_detect_SQLi();
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_detect_ai_anomaly();
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP_MULTI_PACKET(PtrSize_t& pkt);
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM__various(PtrSize_t* pkt, bool* wrong_pass);
 	void handler___status_WAITING_CLIENT_DATA___default();

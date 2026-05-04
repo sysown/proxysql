@@ -1,9 +1,10 @@
-﻿#include "../deps/json/json.hpp"
+#include "../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
 #include <variant>
 #include "PgSQL_HostGroups_Manager.h"
 #include "PgSQL_Thread.h"
+#include "ProxySQL_PluginManager.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include "proxysql_utils.h"
@@ -15,6 +16,7 @@ using json = nlohmann::json;
 #include "MySQL_Data_Stream.h"
 #include "PgSQL_Query_Processor.h"
 #include "PgSQL_PreparedStatement.h"
+#include "Query_Processor_ParserSQL.h"
 #include "PgSQL_Logger.hpp"
 #include "StatCounters.h"
 #include "PgSQL_Authentication.h"
@@ -1103,8 +1105,10 @@ int PgSQL_Session::handler_again___status_PINGING_SERVER() {
 		} else {
 			myds->destroy_MySQL_Connection_From_Pool(true);
 		}
-		delete mybe->server_myds;
-		mybe->server_myds = NULL;
+		if (mybe->server_myds) {
+			delete mybe->server_myds;
+			mybe->server_myds = NULL;
+		}
 		set_status(session_status___NONE);
 		return -1;
 	}
@@ -1124,8 +1128,10 @@ int PgSQL_Session::handler_again___status_PINGING_SERVER() {
 			}
 			myds->destroy_MySQL_Connection_From_Pool(false);
 			myds->fd = 0;
-			delete mybe->server_myds;
-			mybe->server_myds = NULL;
+			if (mybe->server_myds) {
+				delete mybe->server_myds;
+				mybe->server_myds = NULL;
+			}
 			return -1;
 		}
 		else {
@@ -1155,8 +1161,10 @@ int PgSQL_Session::handler_again___status_RESETTING_CONNECTION() {
 		myds->DSS = STATE_MARIADB_GENERIC;
 		myconn->async_state_machine = ASYNC_IDLE;
 		myds->return_MySQL_Connection_To_Pool();
-		delete mybe->server_myds;
-		mybe->server_myds = NULL;
+		if (mybe->server_myds) {
+			delete mybe->server_myds;
+			mybe->server_myds = NULL;
+		}
 		set_status(session_status___NONE);
 		return -1;
 	} else {
@@ -2407,6 +2415,47 @@ __implicit_sync:
 											return handler_ret;
 										}
 									}
+									// Plugin pre-execution query hook (Step 2 ABI extension).
+									// Gated on PROXYSQL40 — see the matching block in
+									// MySQL_Session.cpp for the rationale; without the
+									// guard, v3.0/v3.1 dbg builds fail to compile.
+#ifdef PROXYSQL40
+									// Lock-free fast path: skip the dispatch entirely when no
+									// plugin has registered a hook for the PgSQL protocol.
+									if (proxysql_has_configured_plugin_query_hook(ProxySQL_PluginProtocol::pgsql)) {
+										const char* hook_user = "";
+										const char* hook_addr = "";
+										const char* hook_schema = "";
+										if (client_myds && client_myds->myconn && client_myds->myconn->userinfo) {
+											if (client_myds->myconn->userinfo->username)
+												hook_user = client_myds->myconn->userinfo->username;
+											if (client_myds->myconn->userinfo->schemaname)
+												hook_schema = client_myds->myconn->userinfo->schemaname;
+										}
+										if (client_myds && client_myds->addr.addr)
+											hook_addr = client_myds->addr.addr;
+										ProxySQL_PluginQueryHookPayload hook_payload {
+											hook_user, hook_addr, hook_schema,
+											(const char*)CurrentQuery.QueryPointer,
+											static_cast<uint32_t>(CurrentQuery.QueryLength)
+										};
+										ProxySQL_PluginQueryHookResult hook_result {
+											ProxySQL_PluginQueryHookAction::allow, std::string()
+										};
+										if (proxysql_dispatch_configured_plugin_query_hook(
+												ProxySQL_PluginProtocol::pgsql, hook_payload, hook_result) &&
+											hook_result.action == ProxySQL_PluginQueryHookAction::deny) {
+											const char* msg = hook_result.message.empty() ?
+												"Query blocked by plugin" : hook_result.message.c_str();
+											client_myds->DSS = STATE_QUERY_SENT_NET;
+											client_myds->myprot.generate_error_packet(true, true, msg,
+												PGSQL_ERROR_CODES::ERRCODE_INSUFFICIENT_PRIVILEGE, false, true);
+											if (mirror == false) RequestEnd(NULL, true);
+											handler_ret = -1;
+											return handler_ret;
+										}
+									}
+#endif /* PROXYSQL40 */
 								}
 								if (rc_break == true) {
 									if (mirror == false) {
@@ -4450,8 +4499,13 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 		std::vector<std::pair<std::string, std::string>> param_status = {};
 		bool send_param_status = false;
 
-		thread->thr_SetParser->set_query(nq); // replace the query
-		set = thread->thr_SetParser->parse1v2(); // use algorithm v2
+		if (pgsql_thread___set_parser_algorithm == 3
+			|| pgsql_thread___query_processor_parser == 1) {
+			set = parsersql_parse_set_pgsql(nq);
+		} else {
+			thread->thr_SetParser->set_query(nq); // replace the query
+			set = thread->thr_SetParser->parse1v2(); // use algorithm v2
+		}
 
 		// Flag to be set if any variable within the 'SET' statement fails to be tracked,
 		// due to being unknown or because it's an user defined variable.

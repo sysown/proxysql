@@ -28,6 +28,15 @@ public:
 	void record_conn_err(const std::string& route_name, int destination_hostgroup);
 	void record_conn_used(const std::string& route_name, int destination_hostgroup);
 
+	// Accumulate per-route data-plane payload bytes. The argument is the
+	// X-Protocol *payload* size (excluding the 5-byte frame header) that
+	// the proxy forwarded between client and backend; framing overhead is
+	// intentionally not counted so the counter tracks operator-meaningful
+	// query/result bytes rather than the wire-level total. Both directions
+	// get their own counter so operators can spot asymmetric traffic.
+	void record_bytes_sent(const std::string& route_name, int destination_hostgroup, uint64_t n);
+	void record_bytes_recv(const std::string& route_name, int destination_hostgroup, uint64_t n);
+
 	// Flush stats into the stats SQLite DB.
 	void flush_to_sqlite(class SQLite3DB& statsdb);
 

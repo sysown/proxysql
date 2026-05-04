@@ -107,7 +107,7 @@ jobs:
 
     - name: Build package
       run: |
-        PROXYSQLGENAI=1 make ${{ env.MAKE_TARGET }}
+        PROXYSQL40=1 make ${{ env.MAKE_TARGET }}
 
     - name: Upload to release
       env:

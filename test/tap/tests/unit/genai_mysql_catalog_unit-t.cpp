@@ -25,7 +25,7 @@
 #include "test_init.h"
 #include "proxysql.h"
 
-#ifdef PROXYSQLGENAI
+#ifdef PROXYSQL40
 
 #include "MySQL_Catalog.h"
 #include <string>
@@ -743,12 +743,12 @@ int main() {
 	return exit_status();
 }
 
-#else /* !PROXYSQLGENAI */
+#else /* !PROXYSQL40 */
 
 int main() {
 	plan(1);
-	ok(1, "PROXYSQLGENAI not enabled -- skipping MySQL_Catalog tests");
+	ok(1, "PROXYSQL40 not enabled -- skipping MySQL_Catalog tests");
 	return exit_status();
 }
 
-#endif /* PROXYSQLGENAI */
+#endif /* PROXYSQL40 */

@@ -90,8 +90,11 @@ enum MySQL_Thread_status_variable {
 	st_var_aws_aurora_replicas_skipped_during_query,
 	st_var_automatic_detected_sqli,
 	st_var_mysql_whitelisted_sqli_fingerprint,
-	st_var_ai_detected_anomalies,
-	st_var_ai_blocked_queries,
+	// st_var_ai_detected_anomalies / st_var_ai_blocked_queries removed
+	// in Step 3 of the GenAI plugin carve-out -- the genai plugin now
+	// owns the equivalent counters as Prometheus metrics
+	// (proxysql_genai_detected_anomalies_total /
+	//  proxysql_genai_blocked_queries_total).
 	st_var_client_host_error_killed_connections,
 	st_var_set_wait_timeout_commands,
 	st_var_timeout_terminated_connections,
@@ -292,8 +295,9 @@ struct p_th_counter {
 		aws_aurora_replicas_skipped_during_query,
 		automatic_detected_sql_injection,
 		mysql_whitelisted_sqli_fingerprint,
-		ai_detected_anomalies,
-		ai_blocked_queries,
+		// ai_detected_anomalies / ai_blocked_queries removed in
+		// Step 3 of the GenAI plugin carve-out (see comment near
+		// st_var_ai_detected_anomalies above for details).
 		mysql_killed_backend_connections,
 		mysql_killed_backend_queries,
 		client_host_error_killed_connections,
@@ -574,6 +578,7 @@ class MySQL_Threads_Handler
 		 */
 		int query_processor_first_comment_parsing;
 		int query_processor_regex;
+		int query_processor_parser;
 		int set_query_lock_on_hostgroup;
 		int set_parser_algorithm;
 		int reset_connection_algorithm;
