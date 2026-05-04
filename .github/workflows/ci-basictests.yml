@@ -63,6 +63,13 @@ jobs:
         chmod +x proxysql/src/proxysql
         file proxysql/src/proxysql
 
+    - name: Log in to GHCR
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
     - name: Pull CI base image
       run: |
         docker pull ghcr.io/sysown/proxysql-ci-base:latest
