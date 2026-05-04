@@ -4,6 +4,7 @@
  * @date 2022-03-23
  */
 
+#include <memory>
 #include <vector>
 #include <string>
 #include <unistd.h>
@@ -16,6 +17,12 @@
 
 using std::vector;
 using std::string;
+
+// RAII handles so every early-return path (including the MYSQL_QUERY macro,
+// which returns EXIT_FAILURE from the enclosing function on query failure)
+// releases the MYSQL connection and any outstanding result set.
+using MysqlConn = std::unique_ptr<MYSQL, decltype(&mysql_close)>;
+using MysqlRes = std::unique_ptr<MYSQL_RES, decltype(&mysql_free_result)>;
 
 int induce_set_parsing_failure(MYSQL* proxy) {
 	int rc = mysql_query(proxy, "SET NAMES");
@@ -34,14 +41,13 @@ int test_table_reset(MYSQL* proxy_admin) {
 	// Initial reset
 	int rc = mysql_query(proxy_admin, "SELECT * FROM stats.stats_proxysql_message_metrics_reset");
 	ok(rc == EXIT_SUCCESS, "Successfully queries 'stats.stats_proxysql_message_metrics_reset'");
-	mysql_free_result(mysql_store_result(proxy_admin));
-	if (rc == EXIT_FAILURE) { return EXIT_FAILURE; }
+	MysqlRes reset_res{mysql_store_result(proxy_admin), &mysql_free_result};
+	if (rc != EXIT_SUCCESS) { return EXIT_FAILURE; }
 
 	// Query the table again and check it's empty
 	MYSQL_QUERY(proxy_admin, "SELECT * FROM stats.stats_proxysql_message_metrics");
-	MYSQL_RES* my_res = mysql_store_result(proxy_admin);
-	uint64_t num_rows = mysql_num_rows(my_res);
-	mysql_free_result(my_res);
+	MysqlRes my_res{mysql_store_result(proxy_admin), &mysql_free_result};
+	uint64_t num_rows = mysql_num_rows(my_res.get());
 	ok(num_rows == 0, "After reset 'stats.stats_proxysql_message_metrics' should be empty");
 
 	return EXIT_SUCCESS;
@@ -61,43 +67,46 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	MYSQL* proxy = mysql_init(NULL);
-	MYSQL* proxy_admin = mysql_init(NULL);
+	MysqlConn proxy{mysql_init(nullptr), &mysql_close};
+	MysqlConn proxy_admin{mysql_init(nullptr), &mysql_close};
 
-	// Initialize connections
+	// Initialize connections. Note: mysql_init returns NULL on failure; do
+	// not call mysql_error on a NULL handle (undefined behavior).
 	if (!proxy) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
+		fprintf(stderr, "File %s, line %d, Error: mysql_init failed for 'proxy'\n",
+				__FILE__, __LINE__);
 		return EXIT_FAILURE;
 	}
 	if (!proxy_admin) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_admin));
+		fprintf(stderr, "File %s, line %d, Error: mysql_init failed for 'proxy_admin'\n",
+				__FILE__, __LINE__);
 		return EXIT_FAILURE;
 	}
 
-	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
+	if (!mysql_real_connect(proxy.get(), cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy.get()));
 		return EXIT_FAILURE;
 	}
-	if (!mysql_real_connect(proxy_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_admin));
+	if (!mysql_real_connect(proxy_admin.get(), cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_admin.get()));
 		return EXIT_FAILURE;
 	}
 
 	// Reset the target table and check it's empty but present in 'stats' db
 	{
-		if (test_table_reset(proxy_admin) != EXIT_SUCCESS) { return EXIT_FAILURE; }
+		if (test_table_reset(proxy_admin.get()) != EXIT_SUCCESS) { return EXIT_FAILURE; }
 	}
 
 	// Create failure triggering the intented logging: PMC-10002
 	{
-		if (induce_set_parsing_failure(proxy) != EXIT_SUCCESS) { return EXIT_FAILURE; }
+		if (induce_set_parsing_failure(proxy.get()) != EXIT_SUCCESS) { return EXIT_FAILURE; }
 	}
 
 	// Check table is populated
 	{
-		MYSQL_QUERY(proxy_admin, "SELECT * FROM stats.stats_proxysql_message_metrics");
-		MYSQL_RES* my_res = mysql_store_result(proxy_admin);
-		uint64_t num_rows = mysql_num_rows(my_res);
+		MYSQL_QUERY(proxy_admin.get(), "SELECT * FROM stats.stats_proxysql_message_metrics");
+		MysqlRes my_res{mysql_store_result(proxy_admin.get()), &mysql_free_result};
+		uint64_t num_rows = mysql_num_rows(my_res.get());
 
 		// Data expected not to change in a regular basis
 		const string exp_msgid { "10002" };
@@ -109,7 +118,7 @@ int main(int argc, char** argv) {
 
 		ok(num_rows == 1, "Table has been properly populated and now contains '%ld' rows", num_rows);
 		if (num_rows == 1) {
-			vector<string> row = extract_mysql_rows(my_res)[0];
+			vector<string> row = extract_mysql_rows(my_res.get())[0];
 
 			const string act_msgid { row[0] };
 			const string act_filename { row[1] };
@@ -145,10 +154,17 @@ int main(int argc, char** argv) {
 			// Check that values are properly incremented
 			usleep(1000*1500);
 
-			if (induce_set_parsing_failure(proxy) != EXIT_SUCCESS) { return EXIT_FAILURE; }
-			MYSQL_QUERY(proxy_admin, "SELECT * FROM stats.stats_proxysql_message_metrics");
-			my_res = mysql_store_result(proxy_admin);
-			row = extract_mysql_rows(my_res)[0];
+			if (induce_set_parsing_failure(proxy.get()) != EXIT_SUCCESS) { return EXIT_FAILURE; }
+			MYSQL_QUERY(proxy_admin.get(), "SELECT * FROM stats.stats_proxysql_message_metrics");
+			// unique_ptr::reset() frees the previous result set before taking
+			// ownership of the new one.
+			my_res.reset(mysql_store_result(proxy_admin.get()));
+			vector<vector<string>> refreshed_rows = extract_mysql_rows(my_res.get());
+			if (refreshed_rows.empty()) {
+				diag("Refreshed 'stats.stats_proxysql_message_metrics' query returned no rows");
+				return EXIT_FAILURE;
+			}
+			row = refreshed_rows[0];
 
 			const uint64_t new_count_star = std::stoll(row[4]);
 			const uint64_t new_first_seen = std::stoll(row[5]);
@@ -171,7 +187,9 @@ int main(int argc, char** argv) {
 			);
 
 			// Check table reset again once it's populated
-			if (test_table_reset(proxy_admin) != EXIT_SUCCESS) { return EXIT_FAILURE; }
+			if (test_table_reset(proxy_admin.get()) != EXIT_SUCCESS) { return EXIT_FAILURE; }
 		}
 	}
+
+	return EXIT_SUCCESS;
 }

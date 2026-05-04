@@ -14,6 +14,7 @@
 
 #include "tap.h"
 #include "command_line.h"
+#include "noise_utils.h"
 #include "utils.h"
 
 using std::string;
@@ -24,6 +25,10 @@ int main(int argc, char** argv) {
 		diag("Failed to get the required environmental variables.");
 		return exit_status();
 	}
+
+	spawn_internal_noise(cl, internal_noise_random_stats_poller);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
+	spawn_internal_noise(cl, internal_noise_pgsql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}, {"avg_delay_ms", "300"}});
 
 	std::vector<string> ssl_version_queries = {
 		"SHOW STATUS LIKE 'Ssl_version'",
@@ -37,8 +42,12 @@ int main(int argc, char** argv) {
 		"show status like 'Ssl_version%'",
 	};
 
-	int num_plans = ssl_version_queries.size() + 1; // +1 for query count check
-	plan(num_plans);
+	int num_plans = static_cast<int>(ssl_version_queries.size()) + 1; // +1 for query count check
+	if (cl.use_noise) {
+		plan(num_plans + 3);
+	} else {
+		plan(num_plans);
+	}
 
 	MYSQL* admin = init_mysql_conn(cl.host, cl.admin_port, cl.admin_username, cl.admin_password);
 	if (!admin) {

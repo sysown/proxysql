@@ -85,6 +85,26 @@ void crash_handler(int sig) {
 	pthread_kill(pthread_self(), sig);
 }
 
+#ifdef PROXYSQL40
+void proxysql_load_plugin_modules_from_config(
+	const Setting& root,
+	std::vector<std::string>& plugin_modules
+) {
+	plugin_modules.clear();
+
+	if (root.exists("plugins") == false) {
+		return;
+	}
+
+	const Setting& plugins = root["plugins"];
+	for (int i = 0; i < plugins.getLength(); ++i) {
+		if (plugins[i].isString()) {
+			plugin_modules.emplace_back(plugins[i].c_str());
+		}
+	}
+}
+#endif /* PROXYSQL40 */
+
 ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
 	opt->reset();
 	delete opt;
@@ -97,6 +117,10 @@ ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
 		free(ldap_auth_plugin);
 		ldap_auth_plugin = NULL;
 	}
+#ifdef PROXYSQL40
+	plugin_modules.clear();
+	no_plugins = false;
+#endif /* PROXYSQL40 */
 	/**
 	 * @brief set in_shutdown flag just the member 'checksums_values'.
 	 * @details This is performed to prevent the free() inside the 'ProxySQL_Checksum_Value' destructor for
@@ -170,6 +194,18 @@ ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
 		free(global.gr_bootstrap_ssl_mode);
 		global.gr_bootstrap_ssl_mode = nullptr;
 	}
+	if (global.tls_cert_file) {
+		free(global.tls_cert_file);
+		global.tls_cert_file = nullptr;
+	}
+	if (global.tls_ca_file) {
+		free(global.tls_ca_file);
+		global.tls_ca_file = nullptr;
+	}
+	if (global.tls_key_file) {
+		free(global.tls_key_file);
+		global.tls_key_file = nullptr;
+	}
 };
 
 ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
@@ -218,6 +254,10 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	ldap_auth_plugin = NULL;
 	web_interface_plugin = NULL;
 	sqlite3_plugin = NULL;
+#ifdef PROXYSQL40
+	plugin_modules.clear();
+	no_plugins = false;
+#endif /* PROXYSQL40 */
 #ifdef DEBUG
 	global.gdb=0;
 #endif
@@ -246,6 +286,12 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	global.gr_bootstrap_ssl_key = nullptr;
 	global.gr_bootstrap_ssl_mode = nullptr;
 	global.ssl_keylog_enabled = false;
+	global.tls_load_count = 0;
+	global.tls_last_load_timestamp = 0;
+	global.tls_last_load_ok = false;
+	global.tls_cert_file = NULL;
+	global.tls_ca_file = NULL;
+	global.tls_key_file = NULL;
 	opt = new ez::ezOptionParser();
 	opt->overview = "High Performance Advanced Proxy for MySQL";
 	opt->syntax = "proxysql [OPTIONS]";
@@ -278,6 +324,9 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	opt->add((const char *)"",0,0,0,(const char *)"Create auxiliary threads to handle idle connections",(const char *)"--idle-threads");
 #endif /* IDLE_THREADS */
 	opt->add((const char *)"",0,0,0,(const char *)"Do not check for the latest version of ProxySQL",(const char *)"--no-version-check");
+#ifdef PROXYSQL40
+	opt->add((const char *)"",0,0,0,(const char *)"Bypass plugin chassis: do not load any plugin .so listed in the config file. Useful as a kill switch when a plugin misbehaves.",(const char *)"--no-plugins");
+#endif /* PROXYSQL40 */
 	opt->add((const char *)"",0,1,0,(const char *)"Administration Unix Socket",(const char *)"-S",(const char *)"--admin-socket");
 
 	opt->add((const char *)"",0,0,0,(const char *)"Enable SQLite3 Server",(const char *)"--sqlite3-server");
@@ -340,7 +389,9 @@ void update_string_var_if_set(char** cur_val, ez::ezOptionParser* opt, const cha
 
 void update_ulong_var_if_set(uint64_t& cur_val, ez::ezOptionParser* opt, const char* cmd_opt) {
 	if (opt->isSet(cmd_opt)) {
-		opt->get(cmd_opt)->getULong(cur_val);
+		unsigned long val;
+		opt->get(cmd_opt)->getULong(val);
+		cur_val = val;
 	}
 }
 
@@ -416,6 +467,20 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 		global.version_check=false;
 		glovars.version_check=false;
 	}
+#ifdef PROXYSQL40
+	// Plugin chassis kill switch. Priority: CLI flag wins, then env var,
+	// otherwise leaves the default (false → load plugins normally).
+	// Setting this here in process_opts_pre means LoadConfiguredPlugins
+	// can read GloVars.no_plugins before any .so is dlopen'd.
+	if (opt->isSet("--no-plugins")) {
+		no_plugins = true;
+	} else {
+		const char* env = getenv("PROXYSQL_NO_PLUGINS");
+		if (env && env[0] == '1' && env[1] == '\0') {
+			no_plugins = true;
+		}
+	}
+#endif /* PROXYSQL40 */
 	if (opt->isSet("--sqlite3-server")) {
 		global.sqlite3_server=true;
 	}
@@ -424,6 +489,7 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 		global.clickhouse_server=true;
 	}
 #endif /* PROXYSQLCLICKHOUSE */
+
 	update_string_var_if_set(&global.gr_bootstrap_uri, opt, "--bootstrap");
 	global.gr_bootstrap_mode = opt->isSet("--bootstrap");
 	update_ulong_var_if_set(global.gr_bootstrap_conf_base_port, opt, "--conf-base-port");
@@ -466,6 +532,7 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 	init_coredump_struct();
 
 	proxysql_keylog_init();
+	proxysql_keylog_set_pgsql_callback();
 };
 
 void ProxySQL_GlobalVariables::process_opts_post() {

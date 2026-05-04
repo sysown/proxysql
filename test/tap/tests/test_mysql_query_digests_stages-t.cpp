@@ -38,6 +38,7 @@
 #include "proxysql_utils.h"
 #include "re2/re2.h"
 #include "command_line.h"
+#include "noise_utils.h"
 #include "tap.h"
 
 __thread int mysql_thread___query_digests_max_query_length = 65000;
@@ -47,6 +48,14 @@ __thread bool mysql_thread___query_digests_no_digits = false;
 __thread bool mysql_thread___query_digests_keep_comment = false;
 __thread int mysql_thread___query_digests_grouping_limit = 3;
 __thread int mysql_thread___query_digests_groups_grouping_limit = 1;
+
+__thread int pgsql_thread___query_digests_max_query_length = 65000;
+__thread bool pgsql_thread___query_digests_lowercase = false;
+__thread bool pgsql_thread___query_digests_replace_null = true;
+__thread bool pgsql_thread___query_digests_no_digits = false;
+__thread bool pgsql_thread___query_digests_keep_comment = false;
+__thread int pgsql_thread___query_digests_grouping_limit = 3;
+__thread int pgsql_thread___query_digests_groups_grouping_limit = 1;
 
 using std::vector;
 using std::string;
@@ -269,7 +278,7 @@ void process_mz_test_def(const nlohmann::json& test_def, const char* c_query, co
 			int no_digits_backup = mysql_thread___query_digests_no_digits;
 			mysql_thread___query_digests_no_digits = replace_digits;
 			int lowercase_backup = mysql_thread___query_digests_lowercase;
-			mysql_thread___query_digests_lowercase = lowercase_backup;
+			mysql_thread___query_digests_lowercase = lowercase;
 			int replace_null_backup = mysql_thread___query_digests_replace_null;
 			mysql_thread___query_digests_replace_null = replace_null;
 			int keep_comment_backup = mysql_thread___query_digests_keep_comment;
@@ -775,6 +784,10 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
+	spawn_internal_noise(cl, internal_noise_random_stats_poller);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
+	spawn_internal_noise(cl, internal_noise_pgsql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}, {"avg_delay_ms", "300"}});
+
 	bool exec_crashing_tests = true;
 	bool exec_grouping_tests = true;
 	bool exec_regular_tests = true;
@@ -841,7 +854,11 @@ int main(int argc, char** argv) {
 	if (exec_grouping_tests) { tests_planned += grouping_tests_num; };
 	if (exec_crashing_tests) { tests_planned += crashing_tests_num; };
 
-	plan(tests_planned);
+	if (cl.use_noise) {
+		plan(tests_planned + 3);
+	} else {
+		plan(tests_planned);
+	}
 
 	if (exec_regular_tests) {
 		process_digest_tests(regular_tests_defs);

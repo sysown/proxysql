@@ -24,7 +24,7 @@ int main(int argc, char** argv) {
 
     std::vector<const char*> queries = { ";", " ", "", ";  ", "  ;" };
 
-    plan(queries.size() + 1); // Total number of tests planned
+    plan(static_cast<int>(queries.size()) + 1); // Total number of tests planned
 
     if (cl.getEnv())
         return exit_status();
@@ -44,7 +44,7 @@ int main(int argc, char** argv) {
 
     for (const char* query : queries) {
         MYSQL_QUERY_err(proxysql_admin, query);
-        const int _errorno = mysql_errno(proxysql_admin);
+        const int _errorno = static_cast<int>(mysql_errno(proxysql_admin));
         ok(_errorno > 0, "Error Code:%d, Message:%s", _errorno, mysql_error(proxysql_admin));
     }
 

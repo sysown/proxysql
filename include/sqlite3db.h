@@ -1,5 +1,5 @@
-#ifndef __CLASS_SQLITE3DB_H
-#define __CLASS_SQLITE3DB_H
+#ifndef PROXYSQL_SQLITE3DB_H
+#define PROXYSQL_SQLITE3DB_H
 #include <pthread.h>
 #include "sqlite3.h"
 #undef swap
@@ -22,18 +22,34 @@
 } while (0)
 #endif // SAFE_SQLITE3_STEP2
 
+/* Forward-declare core proxy types that appear in function pointer prototypes */
+class SQLite3_row;
+class SQLite3_result;
+class SQLite3DB;
+
+
 #ifndef MAIN_PROXY_SQLITE3
 extern int (*proxy_sqlite3_bind_double)(sqlite3_stmt*, int, double);
 extern int (*proxy_sqlite3_bind_int)(sqlite3_stmt*, int, int);
 extern int (*proxy_sqlite3_bind_int64)(sqlite3_stmt*, int, sqlite3_int64);
 extern int (*proxy_sqlite3_bind_null)(sqlite3_stmt*, int);
 extern int (*proxy_sqlite3_bind_text)(sqlite3_stmt*,int,const char*,int,void(*)(void*));
+extern int (*proxy_sqlite3_bind_blob)(sqlite3_stmt*, int, const void*, int, void(*)(void*));
 extern const char *(*proxy_sqlite3_column_name)(sqlite3_stmt*, int N);
 extern const unsigned char *(*proxy_sqlite3_column_text)(sqlite3_stmt*, int iCol);
 extern int (*proxy_sqlite3_column_bytes)(sqlite3_stmt*, int iCol);
 extern int (*proxy_sqlite3_column_type)(sqlite3_stmt*, int iCol);
 extern int (*proxy_sqlite3_column_count)(sqlite3_stmt *pStmt);
 extern int (*proxy_sqlite3_column_int)(sqlite3_stmt*, int iCol);
+extern sqlite3_int64 (*proxy_sqlite3_column_int64)(sqlite3_stmt*, int iCol);
+extern double (*proxy_sqlite3_column_double)(sqlite3_stmt*, int iCol);
+extern sqlite3_int64 (*proxy_sqlite3_last_insert_rowid)(sqlite3*);
+extern const char *(*proxy_sqlite3_errstr)(int);
+extern sqlite3* (*proxy_sqlite3_db_handle)(sqlite3_stmt*);
+extern int (*proxy_sqlite3_enable_load_extension)(sqlite3*, int);
+extern int (*proxy_sqlite3_auto_extension)(void(*)(void));
+
+extern void (*proxy_sqlite3_global_stats_row_step)(SQLite3DB*, sqlite3_stmt*, const char*, ...);
 extern const char *(*proxy_sqlite3_errmsg)(sqlite3*);
 extern int (*proxy_sqlite3_finalize)(sqlite3_stmt *pStmt);
 extern int (*proxy_sqlite3_reset)(sqlite3_stmt *pStmt);
@@ -44,6 +60,7 @@ extern void (*proxy_sqlite3_free)(void*);
 extern int (*proxy_sqlite3_status)(int op, int *pCurrent, int *pHighwater, int resetFlag);
 extern int (*proxy_sqlite3_status64)(int op, long long *pCurrent, long long *pHighwater, int resetFlag);
 extern int (*proxy_sqlite3_changes)(sqlite3*);
+extern long long (*proxy_sqlite3_total_changes64)(sqlite3*);
 extern int (*proxy_sqlite3_step)(sqlite3_stmt*);
 extern int (*proxy_sqlite3_config)(int, ...);
 extern int (*proxy_sqlite3_shutdown)(void);
@@ -76,12 +93,21 @@ int (*proxy_sqlite3_bind_int)(sqlite3_stmt*, int, int);
 int (*proxy_sqlite3_bind_int64)(sqlite3_stmt*, int, sqlite3_int64);
 int (*proxy_sqlite3_bind_null)(sqlite3_stmt*, int);
 int (*proxy_sqlite3_bind_text)(sqlite3_stmt*,int,const char*,int,void(*)(void*));
+int (*proxy_sqlite3_bind_blob)(sqlite3_stmt*, int, const void*, int, void(*)(void*));
+sqlite3_int64 (*proxy_sqlite3_column_int64)(sqlite3_stmt*, int iCol);
+double (*proxy_sqlite3_column_double)(sqlite3_stmt*, int iCol);
+sqlite3_int64 (*proxy_sqlite3_last_insert_rowid)(sqlite3*);
+const char *(*proxy_sqlite3_errstr)(int);
+sqlite3* (*proxy_sqlite3_db_handle)(sqlite3_stmt*);
 const char *(*proxy_sqlite3_column_name)(sqlite3_stmt*, int N);
 const unsigned char *(*proxy_sqlite3_column_text)(sqlite3_stmt*, int iCol);
 int (*proxy_sqlite3_column_bytes)(sqlite3_stmt*, int iCol);
 int (*proxy_sqlite3_column_type)(sqlite3_stmt*, int iCol);
 int (*proxy_sqlite3_column_count)(sqlite3_stmt *pStmt);
 int (*proxy_sqlite3_column_int)(sqlite3_stmt*, int iCol);
+int (*proxy_sqlite3_enable_load_extension)(sqlite3*, int);
+int (*proxy_sqlite3_auto_extension)(void(*)(void));
+void (*proxy_sqlite3_global_stats_row_step)(SQLite3DB*, sqlite3_stmt*, const char*, ...);
 const char *(*proxy_sqlite3_errmsg)(sqlite3*);
 int (*proxy_sqlite3_finalize)(sqlite3_stmt *pStmt);
 int (*proxy_sqlite3_reset)(sqlite3_stmt *pStmt);
@@ -93,6 +119,7 @@ int (*proxy_sqlite3_status)(int op, int *pCurrent, int *pHighwater, int resetFla
 int (*proxy_sqlite3_status64)(int op, long long *pCurrent, long long *pHighwater, int resetFlag);
 
 int (*proxy_sqlite3_changes)(sqlite3*);
+long long (*proxy_sqlite3_total_changes64)(sqlite3*);
 int (*proxy_sqlite3_step)(sqlite3_stmt*);
 int (*proxy_sqlite3_config)(int, ...);
 int (*proxy_sqlite3_shutdown)(void);
@@ -120,7 +147,6 @@ int (*proxy_sqlite3_exec)(
   char **errmsg                              /* Error msg written here */
 );
 #endif //MAIN_PROXY_SQLITE3
-
 class SQLite3_row {
 	public:
 	int cnt;
@@ -204,6 +230,8 @@ class SQLite3DB {
 	bool execute_statement(const char *, char **, int *, int *, SQLite3_result **);
 	SQLite3_result* execute_statement(const char *, char **_error=NULL, int *_cols=NULL, int *_affected_rows=NULL);
 	bool execute_statement_raw(const char *, char **, int *, int *, sqlite3_stmt **);
+	bool execute_prepared(sqlite3_stmt* statement, char** error, int* cols, int* affected_rows, SQLite3_result** resultset);
+	SQLite3_result* execute_prepared(sqlite3_stmt* statement, char** _error, int* cols, int* affected_rows);
 	int return_one_int(const char *);
 	int check_table_structure(char *table_name, char *table_def);
 	bool build_table(char *table_name, char *table_def, bool dropit);
@@ -219,4 +247,4 @@ class SQLite3DB {
 	static void LoadPlugin(const char *);
 };
 
-#endif /* __CLASS_SQLITE3DB_H */
+#endif /* PROXYSQL_SQLITE3DB_H */

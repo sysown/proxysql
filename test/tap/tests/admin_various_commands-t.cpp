@@ -11,6 +11,7 @@
 
 #include "tap.h"
 #include "command_line.h"
+#include "noise_utils.h"
 #include "utils.h"
 
 using std::string;
@@ -27,6 +28,9 @@ int main() {
 		diag("Failed to get the required environmental variables.");
 		return -1;
 	}
+
+	spawn_internal_noise(cl, internal_noise_admin_pinger);
+	spawn_internal_noise(cl, internal_noise_random_stats_poller);
 
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
@@ -93,7 +97,11 @@ int main() {
 		{  , "" },
 */
 	};
-	plan(1+queries.size());
+	if (cl.use_noise) {
+		plan(1+static_cast<int>(queries.size()) + 2);
+	} else {
+		plan(1+static_cast<int>(queries.size()));
+	}
 
 
 	proxysql_admin = mysql_init(NULL);

@@ -5,6 +5,7 @@ using json = nlohmann::json;
 #include "proxysql.h"
 #include "cpp.h"
 #include <zlib.h>
+#include <zstd.h>
 #ifndef UNIX_PATH_MAX
 #define UNIX_PATH_MAX    108
 #endif 
@@ -18,6 +19,68 @@ using json = nlohmann::json;
 #define RESULTSET_BUFLEN_DS_1M 1000*1024
 
 extern MySQL_Threads_Handler *GloMTH;
+
+static inline bool use_zstd_compression(const MySQL_Connection* myconn) {
+	return myconn && myconn->options.compression_zstd;
+}
+
+static int get_zstd_compression_level(const MySQL_Connection* myconn) {
+	const int zstd_level = myconn ? myconn->options.zstd_compression_level : 0;
+	if (zstd_level > 0 && zstd_level <= ZSTD_maxCLevel()) {
+		return zstd_level;
+	}
+	if (mysql_thread___zstd_compression_level > 0 && mysql_thread___zstd_compression_level <= ZSTD_maxCLevel()) {
+		return mysql_thread___zstd_compression_level;
+	}
+	return ZSTD_CLEVEL_DEFAULT;
+}
+
+static bool decompress_mysql_payload(
+	const MySQL_Connection* myconn, Bytef* dest, uLongf destLen, const unsigned char* source, size_t sourceLen
+) {
+	if (use_zstd_compression(myconn)) {
+		const size_t rc = ZSTD_decompress(dest, destLen, source, sourceLen);
+		return !ZSTD_isError(rc) && rc == destLen;
+	}
+
+	const int rc = uncompress(dest, &destLen, source, sourceLen);
+	return rc == Z_OK;
+}
+
+static bool fallback_to_uncompressed_mysql_payload(
+	Bytef* dest, uLongf destLen, unsigned int& datalength, const unsigned char* source, size_t sourceLen,
+	const unsigned char* packet
+) {
+	if (sourceLen > destLen || sourceLen < 3) {
+		return false;
+	}
+
+	memcpy(dest, source, sourceLen);
+	datalength = sourceLen;
+
+	return packet[9] == 0 && packet[8] == 0 && packet[7] == sourceLen;
+}
+
+static bool compress_mysql_payload(
+	const MySQL_Connection* myconn, Bytef* dest, size_t& destLen, const unsigned char* source, size_t sourceLen
+) {
+	if (use_zstd_compression(myconn)) {
+		const size_t rc = ZSTD_compress(dest, destLen, source, sourceLen, get_zstd_compression_level(myconn));
+		if (ZSTD_isError(rc)) {
+			return false;
+		}
+		destLen = rc;
+		return true;
+	}
+
+	uLongf zlib_dest_len = destLen;
+	const int rc = compress2(dest, &zlib_dest_len, source, sourceLen, mysql_thread___protocol_compression_level);
+	if (rc != Z_OK) {
+		return false;
+	}
+	destLen = zlib_dest_len;
+	return true;
+}
 
 #ifdef DEBUG
 static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) {
@@ -241,6 +304,8 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	connect_tries=0;
 	poll_fds_idx=-1;
 	resultset_length=0;
+	status=0;
+	fd=-1;
 
 	revents = 0;
 
@@ -259,6 +324,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	switching_auth_type = AUTH_UNKNOWN_PLUGIN;
 	switching_auth_sent = AUTH_UNKNOWN_PLUGIN;
 	auth_in_progress = 0;
+	tmp_charset = 0;
 	x509_subject_alt_name=NULL;
 	ssl=NULL;
 	rbio_ssl = NULL;
@@ -334,6 +400,24 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 		}
 	delete resultset;
 	}
+	/**
+	 * @brief Remove data stream from poll set during MySQL_Data_Stream destruction
+	 *
+	 * This usage pattern demonstrates how ProxySQL_Poll is used during data stream cleanup:
+	 * - Removes the data stream entry from the poll set to prevent polling on closed socket
+	 * - Uses the stored poll_fds_idx for efficient removal (O(1) operation)
+	 * - Called only if mypolls is not NULL (data stream is registered with a poll instance)
+	 *
+	 * Usage pattern: if (mypolls) mypolls->remove_index_fast(poll_fds_idx)
+	 * - mypolls: Check if data stream is registered with a poll instance
+	 * - remove_index_fast(poll_fds_idx): Remove by stored index from data stream
+	 *
+	 * Called during: MySQL_Data_Stream destructor
+	 * Purpose: Prevent memory leaks and ensure proper cleanup of poll entries
+	 *
+	 * Note: Each data stream maintains its poll_fds_idx to track its position in the poll array
+	 *       for efficient removal without requiring find_index() lookup.
+	 */
 	if (mypolls) mypolls->remove_index_fast(poll_fds_idx);
 
 
@@ -449,12 +533,77 @@ void MySQL_Data_Stream::shut_hard() {
 	}
 }
 
+/**
+ * @brief Checks data flow conditions and handles exceptional cases
+ *
+ * This function performs critical checks on the data flow state of a MySQL data stream connection.
+ * It handles two main scenarios:
+ * 1. Data present in both input and output queues simultaneously (bidirectional data)
+ * 2. Backend connection establishment completion
+ *
+ * @note For permanent fast-forward sessions (SESSION_FORWARD_TYPE_PERMANENT), bidirectional data
+ *       generates a warning but continues operation. All other session types treat this as a fatal error.
+ *
+ * @warning In non-fast-forward sessions, bidirectional data will trigger:
+ *          - Error logging
+ *          - Soft shutdown of the connection
+ *          - Core dump generation for debugging
+ *
+ * For backend connections (MYDS_BACKEND) during establishment:
+ * - Checks socket error status after a POLLOUT event
+ * - On success: Associates socket fd with MySQL_Connection
+ * - On error: Performs soft shutdown and logs perror()
+ *
+ * @see generate_coredump()
+ * @see shut_soft()
+ */
 void MySQL_Data_Stream::check_data_flow() {
 	if ( (PSarrayIN->len || queue_data(queueIN) ) && ( PSarrayOUT->len || queue_data(queueOUT) ) ){
-		// there is data at both sides of the data stream: this is considered a fatal error
-		proxy_error("Session=%p, DataStream=%p -- Data at both ends of a MySQL data stream: IN <%d bytes %d packets> , OUT <%d bytes %d packets>\n", sess, this, PSarrayIN->len , queue_data(queueIN) , PSarrayOUT->len , queue_data(queueOUT));
-		shut_soft();
-		generate_coredump();
+		// NOTE: Unexpected-Ping-Handling: Section 1-2
+		///////////////////////////////////////////////////////////////////////////////////////////////
+		// Implements part-1 of the temporary workaround for the handling of unexpected 'COM_PING' packets
+		// received during query processing, while a resultset is yet being streamed to the client. Received
+		// 'COM_PING' packets are queued in the form of a counter. This counter is later used to sent the
+		// corresponding number of 'OK' packets to the client. This should be ALWAYS done before
+		// 'MySQL_Session' transitions back to 'WAITING_CLIENT_DATA'.
+		//
+		// @note This is a "temporary" solution that should be removed if packet queueing is implemented, since
+		// it will make the 'unexp_com_pings' field obsolete.
+		///////////////////////////////////////////////////////////////////////////////////////////////
+		if (PSarrayIN->len >= 1 && PSarrayIN->pdata[0].size == 5) {
+			const uint8_t c = *(static_cast<uint8_t*>(PSarrayIN->pdata[0].ptr) + sizeof(mysql_hdr));
+
+			if (c == _MYSQL_COM_PING && this->sess->status != WAITING_CLIENT_DATA) {
+				const string cli_addr { get_client_addr(this->client_addr) };
+				proxy_warning(
+					"Handling unexpected COM_PING packet   client_addr=\"%s\" sess_status=%d myds_status=%d\n",
+					cli_addr.c_str(), this->sess->status, this->DSS
+				);
+
+				// Queue the COM_PING for later handling at MySQL_Session level
+				this->unexp_com_pings += 1;
+				this->sess->thread->status_variables.stvar[st_var_unexpected_com_ping] += 1;
+
+				// Discard the packet before session attempts to handle it
+				PtrSize_t pkt {};
+				PSarrayIN->remove_index(0, &pkt);
+				l_free(pkt.size, pkt.ptr);
+
+				// Return without further checks
+				return;
+			}
+		}
+		///////////////////////////////////////////////////////////////////////////////////////////////
+
+		if (sess && sess->status == FAST_FORWARD && sess->session_fast_forward == SESSION_FORWARD_TYPE_PERMANENT) {
+			// Permanent fast-forward sessions: log warning but continue
+			proxy_warning("Session=%p, DataStream=%p -- Data at both ends of a MySQL data stream: IN <%d bytes %d packets> , OUT <%d bytes %d packets>\n", sess, this, queue_data(queueIN), PSarrayIN->len, queue_data(queueOUT), PSarrayOUT->len);
+		} else {
+			// All other sessions: treat as fatal error
+			proxy_error("Session=%p, DataStream=%p -- Data at both ends of a MySQL data stream: IN <%d bytes %d packets> , OUT <%d bytes %d packets>\n", sess, this, queue_data(queueIN), PSarrayIN->len, queue_data(queueOUT), PSarrayOUT->len);
+			shut_soft();
+			generate_coredump();
+		}
 	}
 	if ((myds_type==MYDS_BACKEND) && myconn && (myconn->fd==0) && (revents & POLLOUT)) {
 		int rc;
@@ -503,10 +652,18 @@ int MySQL_Data_Stream::read_from_net() {
 				// to avoid issue with SSL, we will only read the header and eventually the first packet
 				r = recv(fd, queue_w_ptr(queueIN), 4, 0);
 				if (r == 4) {
-					// let's try to read a whole packet
-					mysql_hdr Hdr;
-					memcpy(&Hdr,queueIN.buffer,sizeof(mysql_hdr));
-					r += recv(fd, queue_w_ptr(queueIN)+4, Hdr.pkt_length, 0);
+					// Check for PROXY protocol before treating as MySQL header
+					// PROXY protocol starts with "PROXY " (6 bytes), but we only have 4 bytes here
+					// If first 4 bytes are "PROX", don't interpret as MySQL header
+					if (strncmp((char *)queueIN.buffer, "PROX", 4) == 0) {
+						// PROXY protocol detected - read more data without MySQL header parsing
+						r += recv(fd, queue_w_ptr(queueIN)+4, s-4, 0);
+					} else {
+						// let's try to read a whole packet
+						mysql_hdr Hdr;
+						memcpy(&Hdr,queueIN.buffer,sizeof(mysql_hdr));
+						r += recv(fd, queue_w_ptr(queueIN)+4, Hdr.pkt_length, 0);
+					}
 				}
 			} else {
 				r = recv(fd, queue_w_ptr(queueIN), s, 0);
@@ -576,7 +733,26 @@ int MySQL_Data_Stream::read_from_net() {
 		} else {
 			// Shutdown if we either received the EOF, or operation failed with non-retryable error.
 			if (ssl_recv_bytes==0 || (ssl_recv_bytes==-1 && errno != EINTR && errno != EAGAIN)) {
-				proxy_debug(PROXY_DEBUG_NET, 5, "Received EOF, shutting down soft socket -- Session=%p, Datastream=%p\n", sess, this);
+				/*
+				 * Fast Forward Grace Close Logic:
+				 * When the backend connection closes unexpectedly (EOF) during fast forward mode,
+				 * instead of immediately closing the session, we check if there are pending
+				 * client output buffers. If so, we initiate a grace period to allow the
+				 * buffers to drain before closing the session.
+				 *
+				 * This prevents data loss in fast forward scenarios where ProxySQL forwards
+				 * packets without buffering, and the backend closes before all data is sent.
+				 */
+				if (myds_type == MYDS_BACKEND && sess && sess->session_fast_forward && ssl_recv_bytes==0) {
+					if (PSarrayIN->len > 0 || sess->client_myds->PSarrayOUT->len > 0 || queue_data(sess->client_myds->queueOUT) > 0) {
+						if (sess->backend_closed_in_fast_forward == false) {
+							sess->backend_closed_in_fast_forward = true;
+							sess->fast_forward_grace_start_time = sess->thread->curtime;
+							sess->client_myds->defer_close_due_to_fast_forward = true;
+						}
+					}
+				}
+				proxy_debug(PROXY_DEBUG_NET, 5, "Received EOF, shutting down soft socket -- Session=%p, Datastream=%p", sess, this);
 				shut_soft();
 				return -1;
 			}
@@ -590,6 +766,19 @@ int MySQL_Data_Stream::read_from_net() {
 		if (encrypted==false) {
 			int myds_errno=errno;
 			if (r==0 || (r==-1 && myds_errno != EINTR && myds_errno != EAGAIN)) {
+				/*
+				 * Fast Forward Grace Close Logic:
+				 * Similar check for non-encrypted connections when backend closes with EOF.
+				 */
+				if (myds_type == MYDS_BACKEND && sess && sess->session_fast_forward && r==0) {
+					if (PSarrayIN->len > 0 || sess->client_myds->PSarrayOUT->len > 0 || queue_data(sess->client_myds->queueOUT) > 0) {
+						if (sess->backend_closed_in_fast_forward == false) {
+							sess->backend_closed_in_fast_forward = true;
+							sess->fast_forward_grace_start_time = sess->thread->curtime;
+							sess->client_myds->defer_close_due_to_fast_forward = true;
+						}
+					}
+				}
 				shut_soft();
 			}
 		} else {
@@ -622,12 +811,44 @@ int MySQL_Data_Stream::read_from_net() {
 		if ( (revents & POLLHUP) ) {
 			// this is a final check
 			// Only if the amount of data read is 0 or less, then we check POLLHUP
-			proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, Datastream=%p -- shutdown soft. revents=%d , bytes read = %d\n", sess, this, revents, r);
+			/*
+			 * Fast Forward Grace Close Logic:
+			 * Handle POLLHUP event similarly, initiating grace close if buffers are pending.
+			 */
+			if (myds_type == MYDS_BACKEND && sess && sess->session_fast_forward) {
+				if (PSarrayIN->len > 0 || sess->client_myds->PSarrayOUT->len > 0 || queue_data(sess->client_myds->queueOUT) > 0) {
+					if (sess->backend_closed_in_fast_forward == false) {
+						sess->backend_closed_in_fast_forward = true;
+						sess->fast_forward_grace_start_time = sess->thread->curtime;
+						sess->client_myds->defer_close_due_to_fast_forward = true;
+					}
+				}
+			}
+			proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, Datastream=%p -- shutdown soft. revents=%d , bytes read = %d", sess, this, revents, r);
 			shut_soft();
 		}
 	} else {
 		queue_w(queueIN,r);
 		bytes_info.bytes_recv+=r;
+		/**
+	 * @brief Update receive timestamp in ProxySQL_Poll for activity tracking
+	 *
+	 * This usage pattern demonstrates how ProxySQL_Poll is used for activity monitoring:
+	 * - Updates the last receive timestamp in the poll entry for timeout management
+	 * - Called after successful data reception to track connection activity
+	 * - Uses the stored poll_fds_idx for direct array access (O(1) operation)
+	 *
+	 * Usage pattern: if (mypolls) mypolls->last_recv[poll_fds_idx] = sess->thread->curtime
+	 * - mypolls: Check if data stream is registered with a poll instance
+	 * - last_recv[poll_fds_idx]: Update the receive timestamp for this data stream
+	 * - sess->thread->curtime: Current timestamp from the thread
+	 *
+	 * Called during: After receiving data on the data stream
+	 * Purpose: Enable timeout management and connection activity monitoring
+	 *
+	 * Note: This timestamp is used by the idle connection timeout system to detect
+	 *       inactive connections that should be closed.
+	 */
 		if (mypolls) mypolls->last_recv[poll_fds_idx]=sess->thread->curtime;
 	}
 	return r;
@@ -729,6 +950,26 @@ int MySQL_Data_Stream::write_to_net() {
 		}
 	} else {
 		queue_r(queueOUT, bytes_io);
+
+		/**
+		 * @brief Update send timestamp in ProxySQL_Poll for activity tracking
+		 *
+		 * This usage pattern demonstrates how ProxySQL_Poll is used for activity monitoring:
+		 * - Updates the last send timestamp in the poll entry for timeout management
+		 * - Called after successful data transmission to track connection activity
+		 * - Uses the stored poll_fds_idx for direct array access (O(1) operation)
+		 *
+		 * Usage pattern: if (mypolls) mypolls->last_sent[poll_fds_idx] = sess->thread->curtime
+		 * - mypolls: Check if data stream is registered with a poll instance
+		 * - last_sent[poll_fds_idx]: Update the send timestamp for this data stream
+		 * - sess->thread->curtime: Current timestamp from the thread
+		 *
+		 * Called during: After sending data on the data stream
+		 * Purpose: Enable timeout management and connection activity monitoring
+		 *
+		 * Note: This timestamp is used by the idle connection timeout system to detect
+		 *       inactive connections that should be closed.
+		 */
 		if (mypolls) mypolls->last_sent[poll_fds_idx]=sess->thread->curtime;
 		bytes_info.bytes_sent+=bytes_io;
 	}
@@ -765,6 +1006,22 @@ void MySQL_Data_Stream::set_pollout() {
 		_pollfd->events = myconn->wait_events;
 	} else {
 		_pollfd->events = POLLIN;
+		if (myds_type == MYDS_BACKEND && sess && sess->session_fast_forward && sess->backend_closed_in_fast_forward == true) {
+			/*
+			 * Fast Forward Grace Close Logic:
+			 * During the grace period after backend closure, we manage polling to avoid busy-waiting.
+			 * If POLLIN is set, poll() will return immediately since the socket is closed,
+			 * causing the thread to spin. To prevent this, we clear POLLIN during the grace period
+			 * and rely on timeouts to eventually close the session.
+			 */
+			// this is a fast forward session where the backend connection was already closed
+			// if we set POLLIN : the thread will spin on poll() until the socket is closed
+			// if we do not set POLLIN : we won't be able to timeout
+			if (sess->thread->curtime - sess->fast_forward_grace_start_time < (unsigned long long)mysql_thread___fast_forward_grace_close_ms * 1000) {
+				// for the reason listed above, we remove POLLIN unless the timeout has reached
+				_pollfd->events = 0;
+			}
+		}
 		//if (PSarrayOUT->len || available_data_out() || queueOUT.partial || (encrypted && !SSL_is_init_finished(ssl))) {
 		if (PSarrayOUT->len || available_data_out() || queueOUT.partial) {
 			_pollfd->events |= POLLOUT;
@@ -1106,36 +1363,19 @@ int MySQL_Data_Stream::buffer2array() {
 				destLen=payload_length;
 				//dest=(Bytef *)l_alloc(destLen);
 				dest=(Bytef *)malloc(destLen);
-				int rc=uncompress(dest, &destLen, _ptr, queueIN.pkt.size-7);
-				if (rc!=Z_OK) {
+				const bool decompressed = decompress_mysql_payload(myconn, dest, destLen, _ptr, queueIN.pkt.size-7);
+				if (!decompressed) {
 					// for some reason, uncompress failed
 					// accoding to debugging on #1410 , it seems some library may send uncompress data claiming it is compressed
 					// we try to assume it is not compressed, and we do some sanity check
-					memcpy(dest, _ptr, queueIN.pkt.size-7);
-					datalength=queueIN.pkt.size-7;
-					// some sanity check now
-					unsigned char _u;
-					bool sanity_check = false;
-					_u = *(u+9);
-					// 2nd and 3rd bytes are 0
-					if (_u == 0) {
-						_u = *(u+8);
-						if (_u == 0) {
-							_u = *(u+7);
-							// 1st byte = size - 7
-							unsigned int _size = _u ;
-							if (queueIN.pkt.size-7 == _size) {
-								sanity_check = true;
-							}
-						}
-					}
-					if (sanity_check == false) {
+					if (!fallback_to_uncompressed_mysql_payload(dest, destLen, datalength, _ptr, queueIN.pkt.size-7, u)) {
 						proxy_error("Unable to uncompress a compressed packet\n");
 						shut_soft();
 						return ret;
 					}
+				} else {
+					datalength=payload_length;
 				}
-				datalength=payload_length;
 				// change _ptr to the new buffer
 				_ptr=dest;
 			} else {
@@ -1223,7 +1463,7 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 		// this worked in the past . it applies for small packets
 		uLong sourceLen=total_size;
 		Bytef *source=(Bytef *)l_alloc(total_size);
-		uLongf destLen=total_size*120/100+12;
+		size_t destLen=use_zstd_compression(myconn) ? ZSTD_compressBound(total_size) : total_size*120/100+12;
 		Bytef *dest=(Bytef *)malloc(destLen);
 		i=0;
 		total_size=0;
@@ -1234,8 +1474,8 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 			total_size+=p2.size;
 			l_free(p2.size,p2.ptr);
 		}
-		int rc=compress2(dest, &destLen, source, sourceLen, mysql_thread___protocol_compression_level);
-		assert(rc==Z_OK);
+		const bool compressed = compress_mysql_payload(myconn, dest, destLen, source, sourceLen);
+		assert(compressed);
 		l_free(total_size, source);
 		queueOUT.pkt.size=destLen+7;
 		queueOUT.pkt.ptr=l_alloc(queueOUT.pkt.size);
@@ -1254,22 +1494,21 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 
 		unsigned int len1=MAX_COMPRESSED_PACKET_SIZE/2;
 		unsigned int len2=p2.size-len1;
-		uLongf destLen1;
-		uLongf destLen2;
+		size_t destLen1;
+		size_t destLen2;
 		Bytef *dest1;
 		Bytef *dest2;
-		int rc;
 
 		mysql_hdr hdr;
 
-		destLen1=len1*120/100+12;
+		destLen1=use_zstd_compression(myconn) ? ZSTD_compressBound(len1) : len1*120/100+12;
 		dest1=(Bytef *)malloc(destLen1+7);
-		destLen2=len2*120/100+12;
+		destLen2=use_zstd_compression(myconn) ? ZSTD_compressBound(len2) : len2*120/100+12;
 		dest2=(Bytef *)malloc(destLen2+7);
-		rc=compress2(dest1+7, &destLen1, (const unsigned char *)p2.ptr, len1, mysql_thread___protocol_compression_level);
-		assert(rc==Z_OK);
-		rc=compress2(dest2+7, &destLen2, (const unsigned char *)p2.ptr+len1, len2, mysql_thread___protocol_compression_level);
-		assert(rc==Z_OK);
+		const bool compressed1 = compress_mysql_payload(myconn, dest1+7, destLen1, (const unsigned char *)p2.ptr, len1);
+		assert(compressed1);
+		const bool compressed2 = compress_mysql_payload(myconn, dest2+7, destLen2, (const unsigned char *)p2.ptr+len1, len2);
+		assert(compressed2);
 
 		hdr.pkt_length=destLen1;
 		hdr.pkt_id=++myconn->compression_pkt_id;
@@ -1338,13 +1577,15 @@ int MySQL_Data_Stream::array2buffer() {
 					if (DSS==STATE_CLIENT_AUTH_OK && idx == PSarrayOUT->len) {
 						DSS=STATE_SLEEP;
 						// enable compression
-						if (myconn->options.server_capabilities & CLIENT_COMPRESS) {
+						if (myconn->options.server_capabilities & (CLIENT_COMPRESS | CLIENT_ZSTD_COMPRESSION_ALGORITHM)) {
 							if (myconn->options.compression_min_length) {
 								myconn->set_status(true, STATUS_MYSQL_CONNECTION_COMPRESSION);
 							}
 						} else {
 							//explicitly disable compression
 							myconn->options.compression_min_length=0;
+							myconn->options.compression_zstd=false;
+							myconn->options.zstd_compression_level=0;
 							myconn->set_status(false, STATUS_MYSQL_CONNECTION_COMPRESSION);
 						}
 					}

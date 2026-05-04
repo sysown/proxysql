@@ -183,7 +183,7 @@ bool pgsql_variable_validate_maintenance_work_mem(const char* value, const param
 	if (transformed_value) *transformed_value = nullptr;
 
 	// Skip leading whitespace
-	while (isspace((unsigned char)*p)) p++;
+	while (fast_isspace((unsigned char)*p)) p++;
 
 	// Parse numeric part
 	num = strtoll(p, &endptr, 10);
@@ -196,11 +196,11 @@ bool pgsql_variable_validate_maintenance_work_mem(const char* value, const param
 	p = endptr;
 
 	// Skip whitespace after number
-	while (isspace((unsigned char)*p)) p++;
+	while (fast_isspace((unsigned char)*p)) p++;
 
 	// Parse unit
 	if (*p != '\0') {
-		char tmp_unit = tolower(*p);
+		char tmp_unit = ::tolower(*p);
 		switch (tmp_unit) {
 		case 'k': 
 		case 'm': 
@@ -210,7 +210,7 @@ bool pgsql_variable_validate_maintenance_work_mem(const char* value, const param
 				unit = toupper(*p++);
 			has_unit = true;
 			// Check optional 'b'/'B'
-			if (tolower(*p) == 'b') p++;
+			if (::tolower(*p) == 'b') p++;
 			break;
 		default:
 			return false;
@@ -218,7 +218,7 @@ bool pgsql_variable_validate_maintenance_work_mem(const char* value, const param
 	}
 
 	// Skip trailing whitespace
-	while (isspace((unsigned char)*p)) p++;
+	while (fast_isspace((unsigned char)*p)) p++;
 
 	// Validate entire string consumed
 	if (*p != '\0') return false;
@@ -241,7 +241,7 @@ bool pgsql_variable_validate_maintenance_work_mem_v2(const char* value, const pa
 	const char* input = value;
 
 	/* Trim leading whitespace */
-	while (isspace((unsigned char)*input)) input++;
+	while (fast_isspace((unsigned char)*input)) input++;
 
 	/* Parse numeric part */
 	uint64_t number;
@@ -256,7 +256,7 @@ bool pgsql_variable_validate_maintenance_work_mem_v2(const char* value, const pa
 	//num_len = endptr - input;
 
 	// Skip whitespace after number
-	while (isspace((unsigned char)*endptr)) endptr++;
+	while (fast_isspace((unsigned char)*endptr)) endptr++;
 
 	/* Parse unit part */
 	const char* unit_ptr = endptr;
@@ -273,7 +273,7 @@ bool pgsql_variable_validate_maintenance_work_mem_v2(const char* value, const pa
 		/* Convert unit to lowercase for validation */
 		char u[3] = { 0 };
 		for (int i = 0; i < 2 && unit_ptr[i]; i++)
-			u[i] = tolower((unsigned char)unit_ptr[i]);
+			u[i] = ::tolower((unsigned char)unit_ptr[i]);
 
 		/* Validate unit and set multiplier */
 		if (unit_len == 1 && u[0] == 'b') {
@@ -332,7 +332,7 @@ bool pgsql_variable_validate_maintenance_work_mem_v3(const char* value, const pa
 	(void)session;
 
 	// Trim leading whitespace
-	while (isspace((unsigned char)*value)) value++;
+	while (fast_isspace((unsigned char)*value)) value++;
 
 	char* endptr;
 	const char* num_start = value;
@@ -371,7 +371,7 @@ bool pgsql_variable_validate_maintenance_work_mem_v3(const char* value, const pa
 		// Convert unit to lowercase for validation
 		char u[3] = { 0 };
 		for (int i = 0; i < 2 && unit_ptr[i]; i++)
-			u[i] = tolower((unsigned char)unit_ptr[i]);
+			u[i] = ::tolower((unsigned char)unit_ptr[i]);
 
 		// Validate units and set multipliers
 		if (unit_len == 1 && u[0] == 'b') {
@@ -471,7 +471,7 @@ bool pgsql_variable_validate_search_path(const char* value, const params_t* para
 
 	while (*token && result) {
 		/* skip leading whitespace */
-		while (*token && isspace((unsigned char)*token)) token++;
+		while (*token && fast_isspace((unsigned char)*token)) token++;
 		if (*token == '\0') break;
 
 		const char* part_start = token;
@@ -508,7 +508,7 @@ bool pgsql_variable_validate_search_path(const char* value, const params_t* para
 			}
 		} else {
 			// unquoted identifier or $user
-			while (*token && *token != ',' && !isspace(*token)) token++;
+			while (*token && *token != ',' && !fast_isspace(*token)) token++;
 			part_len = (size_t)(token - part_start);
 			if (part_len == 0 || part_len > 63) {
 				result = false;
@@ -543,7 +543,7 @@ bool pgsql_variable_validate_search_path(const char* value, const params_t* para
 		normalized[norm_pos] = '\0';
 
 		// skip whitespace after part
-		while (*token && isspace(*token)) token++;
+		while (*token && fast_isspace(*token)) token++;
 
 		// expect comma or end
 		if (*token == ',') {
@@ -637,5 +637,35 @@ const pgsql_variable_validator pgsql_variable_validator_client_encoding = {
 const pgsql_variable_validator pgsql_variable_validator_search_path = {
 	.type = VARIABLE_TYPE_STRING,
 	.validate = &pgsql_variable_validate_search_path,
+	.params = {}
+};
+
+/**
+ * @brief Validates an integer variable for PostgreSQL.
+ *
+ * This function checks if the provided value is a valid integer representation
+ * and falls within the specified range. The range is defined by the params
+ * parameter.
+ *
+ * @param value The value to validate.
+ * @param params The parameter structure containing the integer range.
+ * @param session Unused parameter.
+ * @param transformed_value If not null, will be set to null.
+ * @return true if the value is a valid integer representation within the specified range, false otherwise.
+ */
+bool pgsql_variable_validate_integer(const char* value, const params_t* params, PgSQL_Session* session, char** transformed_value) {
+   (void)session;
+   if (transformed_value) *transformed_value = nullptr;
+   char* end = nullptr;
+   errno = 0;
+   long num = strtol(value, &end, 10);
+   if (end == value || *end != '\0' || errno == ERANGE) return false;
+   if (num < params->int_range.min || num > params->int_range.max) return false;
+   return true;
+}
+
+const pgsql_variable_validator pgsql_variable_validator_integer = {
+	.type = VARIABLE_TYPE_INT,
+	.validate = &pgsql_variable_validate_integer,
 	.params = {}
 };

@@ -1,5 +1,5 @@
-#ifndef __POSTGRES_PROTOCOL_H
-#define __POSTGRES_PROTOCOL_H
+#ifndef PROXYSQL_PGSQL_PROTOCOL_H
+#define PROXYSQL_PGSQL_PROTOCOL_H
 
 #include "proxysql.h"
 #include "gen_utils.h"
@@ -295,27 +295,6 @@ struct ColumnMetadata {
 	int32_t type_modifier;  // Type modifier (-1 if none)
 	uint16_t format;        // 0 = text, 1 = binary
 };
-
-/* Not Used anymore. To be removed in next iteration
-class PgSQL_Describe_Prepared_Info {
-public:
-	uint32_t* parameter_types;	   // Array of parameter type OIDs
-	size_t parameter_types_count;  // Number of parameters
-	ColumnMetadata* columns;       // Array of column metadata
-	size_t columns_count;          // Number of columns
-
-	PgSQL_Describe_Prepared_Info();
-	~PgSQL_Describe_Prepared_Info();
-
-	// Populate metadata from PGresult
-	void populate(const PGresult* result);
-	void clear();
-
-private:
-	void extract_parameters(const PGresult* result);
-	void extract_columns(const PGresult* result);
-};
-*/
 
 #define PGSQL_QUERY_RESULT_NO_DATA	0x00
 #define PGSQL_QUERY_RESULT_TUPLE	0x01
@@ -827,13 +806,11 @@ public:
 	 *       updates the output buffer with the generated packet. If `ready` is 
 	 *       true, it also generates and sends a ready-for-query packet.
 	 */
-	bool generate_ok_packet(bool send, bool ready, const char* msg, int rows, const char* query, char trx_state = 'I', PtrSize_t* _ptr = NULL, 
+	bool generate_ok_packet(bool send, bool ready, const char* msg, int rows, const char* query, char txn_state = 'I', PtrSize_t* _ptr = NULL,
 		const std::vector<std::pair<std::string,std::string>>& param_status = std::vector<std::pair<std::string, std::string>>());
 
 	bool generate_parse_completion_packet(bool send, bool ready, char trx_state, PtrSize_t* _ptr = NULL);
 	bool generate_ready_for_query_packet(bool send, char trx_state, PtrSize_t* _ptr = NULL);
-	// Not Used anymore. To be removed in next iteration
-	//bool generate_describe_completion_packet(bool send, bool ready, const PgSQL_Describe_Prepared_Info* desc, uint8_t stmt_type, char trx_state, PtrSize_t* _ptr = NULL);
 	bool generate_close_completion_packet(bool send, bool ready, char trx_state, PtrSize_t* _ptr = NULL);
 	bool generate_bind_completion_packet(bool send, bool ready, char trx_state, PtrSize_t* _ptr = NULL);
 	bool generate_no_data_packet(bool send, PtrSize_t* _ptr = NULL);
@@ -1200,7 +1177,7 @@ private:
 	bool scram_handle_client_final(ScramState* scram_state, PgCredentials* user, const unsigned char* data, uint32_t datalen);
 
 	// parse options parameter
-	static std::vector<std::pair<std::string, std::string>> parse_options(const char* options);
+	static bool parse_options(const char* options, std::vector<std::pair<std::string, std::string>>& options_list);
 
 	PgSQL_Data_Stream** myds;
 	PgSQL_Connection_userinfo* userinfo;

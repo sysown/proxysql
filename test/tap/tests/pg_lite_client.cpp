@@ -4,6 +4,7 @@
  * This library provides basic functionality to connect to a PostgreSQL database and execute simple queries.
 */
 #include "pg_lite_client.h"
+#include <netdb.h>
 #include <fcntl.h>
 #include <sstream>
 #include <iomanip>
@@ -190,21 +191,23 @@ void PgConnection::connect(const std::string& host, int port,
         throw PgException("Socket creation failed");
     }
     
-    // Connect to server
-    sockaddr_in server_addr{};
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(port);
-    
-    if (inet_pton(AF_INET, host.c_str(), &server_addr.sin_addr) <= 0) {
+    // Resolve hostname and connect
+    struct addrinfo hints{}, *res;
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    std::string port_str = std::to_string(port);
+    int status = getaddrinfo(host.c_str(), port_str.c_str(), &hints, &res);
+    if (status != 0) {
         close(sock_);
-        throw PgException("Invalid address: " + host);
+        throw PgException("Failed to resolve host: " + host + " (" + std::string(gai_strerror(status)) + ")");
     }
-    
-    if (::connect(sock_, (sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+    if (::connect(sock_, res->ai_addr, res->ai_addrlen) < 0) {
+        freeaddrinfo(res);
         close(sock_);
         sock_ = -1;
         throw PgException("Connection failed to " + host + ":" + std::to_string(port));
     }
+    freeaddrinfo(res);
     
     // Save credentials
     user_ = user;
@@ -562,25 +565,34 @@ void PgConnection::bindStatement(
     // Statement name
     writeStringToBuffer(packet, stmtName);
 
-    // Parameter formats
-    bool any_binary_format = false;
+    
+   // Check if all parameters have the same format
+   bool all_same_format = true;
+   int16_t first_format = params.empty() ? 0 : params[0].format;
 
     for (const auto& param : params) {
-        if (param.format == 1) {
-			any_binary_format = true;
-			break;  // At least one binary format
-       }
+        if (param.format != first_format) {
+            all_same_format = false;
+            break;
+        }
     }
 
-    if (any_binary_format) {
+    if (params.empty()) {
+        writeInt16ToBuffer(packet, 0); // No parameters
+    } else if (all_same_format && first_format == 0) {
+        // All text format - send 0 formats (default)
+        writeInt16ToBuffer(packet, 0);
+    } else if (all_same_format) {
+        // All same non-text format - send single format
+        writeInt16ToBuffer(packet, 1);
+        writeInt16ToBuffer(packet, first_format);
+    } else {
+        // Mixed formats - send format for each parameter
         writeInt16ToBuffer(packet, params.size());
         for (const auto& param : params) {
             writeInt16ToBuffer(packet, param.format);
         }
-    } else {
-        writeInt16ToBuffer(packet, 0); // Default: all text
-	}
-
+    }
   
     // Parameters
     writeInt16ToBuffer(packet, params.size());
@@ -624,6 +636,82 @@ void PgConnection::bindStatement(
         sendSync();
 		waitForMessage(BIND_COMPLETE, "bind", sync);
     }
+}
+
+// Extended bind with explicit format control
+void PgConnection::bindStatementEx(
+    const std::string& stmtName,
+    const std::string& portalName,
+    const std::vector<Param>& params,
+    const std::vector<int16_t>& paramFormats,
+    const std::vector<int16_t>& resultFormats,
+    bool sync
+) {
+    std::vector<uint8_t> packet;
+
+    // Portal name
+    writeStringToBuffer(packet, portalName);
+    // Statement name
+    writeStringToBuffer(packet, stmtName);
+    
+    // Parameter formats (explicit array)
+    writeInt16ToBuffer(packet, paramFormats.size());
+    for (int16_t fmt : paramFormats) {
+        writeInt16ToBuffer(packet, fmt);
+    }
+    
+    // Parameters
+    writeInt16ToBuffer(packet, params.size());
+    for (const auto& param : params) {
+        if (std::holds_alternative<std::monostate>(param.value)) {
+            writeInt32ToBuffer(packet, -1); // NULL
+        } else if (std::holds_alternative<std::string>(param.value)) {
+            const std::string & s = std::get<std::string>(param.value);
+            writeInt32ToBuffer(packet, s.size());
+            packet.insert(packet.end(), s.begin(), s.end());
+            
+        } else if (std::holds_alternative<std::vector<uint8_t>>(param.value)) {
+            const std::vector<uint8_t>&v = std::get<std::vector<uint8_t>>(param.value);
+            writeInt32ToBuffer(packet, v.size());
+            packet.insert(packet.end(), v.begin(), v.end());  
+         } else if (std::holds_alternative<int32_t>(param.value)) {
+            const int32_t & v = std::get<int32_t>(param.value);
+            writeInt32ToBuffer(packet, sizeof(int32_t));
+            packet.push_back((v >> 24) & 0xFF);
+            packet.push_back((v >> 16) & 0xFF);
+            packet.push_back((v >> 8) & 0xFF);
+            packet.push_back(v & 0xFF);
+        }
+    }
+    // Result formats
+    if (resultFormats.empty()) {
+        writeInt16ToBuffer(packet, 0); // Default: all text
+    } else {
+        writeInt16ToBuffer(packet, resultFormats.size());
+        for (int16_t fmt : resultFormats) {
+            writeInt16ToBuffer(packet, fmt);
+        }
+    }
+    
+    sendMessage('B', packet);
+    if (sync) {
+        sendSync();
+        waitForMessage(BIND_COMPLETE, "bind", sync);
+    }
+}
+
+// Helper for single format case
+void PgConnection::bindStatementSingleFormat(
+    const std::string& stmtName,
+    const std::string& portalName,
+    const std::vector<Param>& params,
+    int16_t singleFormat,
+    const std::vector<int16_t>& resultFormats,
+    bool sync
+) {
+    // Create a format array with single element
+    std::vector<int16_t> paramFormats = { singleFormat };
+    bindStatementEx(stmtName, portalName, params, paramFormats, resultFormats, sync);
 }
 
 void PgConnection::executePortal(

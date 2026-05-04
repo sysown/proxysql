@@ -69,7 +69,10 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess) {
 	int rc;
     char *query=(char *)"INSERT INTO REPLICA_HOST_STATUS VALUES (?1, ?2, ?3, ?4, ?5)";
     //rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
-    rc = sessdb->prepare_v2(query, &statement);
+    auto prepared_statement = sessdb->prepare_v2(query);
+    rc = prepared_statement.first;
+    stmt_unique_ptr statement_unique = std::move(prepared_statement.second);
+    statement = statement_unique.get();
     ASSERT_SQLITE_OK(rc, sessdb);
 	time_t __timer;
 	char lut[30];
@@ -132,7 +135,6 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess) {
 		rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, sessdb);
 		rc=sqlite3_reset(statement); ASSERT_SQLITE_OK(rc, sessdb);
 	}
-	sqlite3_finalize(statement);
 }
 
 void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
@@ -471,5 +473,3 @@ __run_query:
 	l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
 	l_free(query_length,query);
 }
-
-

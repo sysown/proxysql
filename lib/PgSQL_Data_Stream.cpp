@@ -65,7 +65,7 @@ static void __dump_pkt(const char* func, unsigned char* _ptr, unsigned int len) 
 
 #define queue_zero(_q) { \
   if (_q.tail != 0) { \
-    memcpy(_q.buffer, (unsigned char *)_q.buffer + _q.tail, _q.head - _q.tail); \
+	memmove(_q.buffer, (unsigned char *)_q.buffer + _q.tail, _q.head - _q.tail); \
   } \
   _q.head-=_q.tail; \
   _q.tail=0; \
@@ -239,6 +239,7 @@ PgSQL_Data_Stream::PgSQL_Data_Stream() {
 	connect_tries = 0;
 	poll_fds_idx = -1;
 	//resultset_length = 0;
+	fd = -1;
 
 	revents = 0;
 
@@ -255,6 +256,7 @@ PgSQL_Data_Stream::PgSQL_Data_Stream() {
 	encrypted = false;
 	switching_auth_stage = 0;
 	switching_auth_type = 0;
+	tmp_charset = 0;
 	x509_subject_alt_name = NULL;
 	ssl = NULL;
 	rbio_ssl = NULL;
@@ -321,6 +323,24 @@ PgSQL_Data_Stream::~PgSQL_Data_Stream() {
 		delete PSarrayOUT;
 	}
 
+	/**
+	 * @brief Remove PostgreSQL data stream from poll set during destruction
+	 *
+	 * This usage pattern demonstrates how ProxySQL_Poll is used during PgSQL_Data_Stream cleanup:
+	 * - Removes the data stream entry from the poll set to prevent polling on closed socket
+	 * - Uses the stored poll_fds_idx for efficient removal (O(1) operation)
+	 * - Called only if mypolls is not NULL (data stream is registered with a poll instance)
+	 *
+	 * Usage pattern: if (mypolls) mypolls->remove_index_fast(poll_fds_idx)
+	 * - mypolls: Check if data stream is registered with a poll instance
+	 * - remove_index_fast(poll_fds_idx): Remove by stored index from data stream
+	 *
+	 * Called during: PgSQL_Data_Stream destructor
+	 * Purpose: Prevent memory leaks and ensure proper cleanup of poll entries
+	 *
+	 * Note: Each data stream maintains its poll_fds_idx to track its position in the poll array
+	 *       for efficient removal without requiring find_index() lookup.
+	 */
 	if (mypolls) mypolls->remove_index_fast(poll_fds_idx);
 
 	if (fd > 0) {
@@ -438,7 +458,8 @@ void PgSQL_Data_Stream::shut_hard() {
 }
 
 void PgSQL_Data_Stream::check_data_flow() {
-	if ((PSarrayIN->len || queue_data(queueIN)) && (PSarrayOUT->len || queue_data(queueOUT))) {
+	// This does not apply to frontend data streams because response data is buffered during extended queries.
+	if ((myds_type != MYDS_FRONTEND) && (PSarrayIN->len || queue_data(queueIN)) && (PSarrayOUT->len || queue_data(queueOUT))) {
 		// there is data at both sides of the data stream: this is considered a fatal error
 		proxy_error("Session=%p, DataStream=%p -- Data at both ends of a PgSQL data stream: IN <%d bytes %d packets> , OUT <%d bytes %d packets>\n", sess, this, PSarrayIN->len, queue_data(queueIN), PSarrayOUT->len, queue_data(queueOUT));
 		shut_soft();
@@ -651,6 +672,26 @@ int PgSQL_Data_Stream::read_from_net() {
 	else {
 		queue_w(queueIN, r);
 		bytes_info.bytes_recv += r;
+
+		/**
+		 * @brief Update receive timestamp in ProxySQL_Poll for PostgreSQL activity tracking
+		 *
+		 * This usage pattern demonstrates how ProxySQL_Poll is used for PostgreSQL activity monitoring:
+		 * - Updates the last receive timestamp in the poll entry for timeout management
+		 * - Called after successful data reception to track connection activity
+		 * - Uses the stored poll_fds_idx for direct array access (O(1) operation)
+		 *
+		 * Usage pattern: if (mypolls) mypolls->last_recv[poll_fds_idx] = sess->thread->curtime
+		 * - mypolls: Check if data stream is registered with a poll instance
+		 * - last_recv[poll_fds_idx]: Update the receive timestamp for this data stream
+		 * - sess->thread->curtime: Current timestamp from the thread
+		 *
+		 * Called during: After receiving data on the PostgreSQL data stream
+		 * Purpose: Enable timeout management and connection activity monitoring
+		 *
+		 * Note: This timestamp is used by the idle connection timeout system to detect
+		 *       inactive PostgreSQL connections that should be closed.
+		 */
 		if (mypolls) mypolls->last_recv[poll_fds_idx] = sess->thread->curtime;
 	}
 	return r;
@@ -758,6 +799,25 @@ int PgSQL_Data_Stream::write_to_net() {
 	}
 	else {
 		queue_r(queueOUT, bytes_io);
+		/**
+		 * @brief Update send timestamp in ProxySQL_Poll for PostgreSQL activity tracking
+		 *
+		 * This usage pattern demonstrates how ProxySQL_Poll is used for PostgreSQL activity monitoring:
+		 * - Updates the last send timestamp in the poll entry for timeout management
+		 * - Called after successful data transmission to track connection activity
+		 * - Uses the stored poll_fds_idx for direct array access (O(1) operation)
+		 *
+		 * Usage pattern: if (mypolls) mypolls->last_sent[poll_fds_idx] = sess->thread->curtime
+		 * - mypolls: Check if data stream is registered with a poll instance
+		 * - last_sent[poll_fds_idx]: Update the send timestamp for this data stream
+		 * - sess->thread->curtime: Current timestamp from the thread
+		 *
+		 * Called during: After sending data on the PostgreSQL data stream
+		 * Purpose: Enable timeout management and connection activity monitoring
+		 *
+		 * Note: This timestamp is used by the idle connection timeout system to detect
+		 *       inactive PostgreSQL connections that should be closed.
+		 */
 		if (mypolls) mypolls->last_sent[poll_fds_idx] = sess->thread->curtime;
 		bytes_info.bytes_sent += bytes_io;
 	}
@@ -1221,14 +1281,15 @@ void PgSQL_Data_Stream::reset_connection() {
 
 int PgSQL_Data_Stream::buffer2array() {
 	int ret = 0;
+	unsigned char header[5];
+
 	{
 		unsigned long s = queue_data(queueIN);
 		if (s == 0) return ret;
-		if ((queueIN.pkt.size == 0) && s < 5) {
+		if ((queueIN.pkt.size == 0) && s < sizeof(header)) {
 			queue_zero(queueIN);
 		}
 	}
-	unsigned char header[5];
 	if ((queueIN.pkt.size == 0) && queue_data(queueIN) >= sizeof(header)) {
 		proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Session=%p . Reading the header of a new packet\n", sess);
 		memcpy(header, queue_r_ptr(queueIN), sizeof(header));
@@ -1251,8 +1312,16 @@ int PgSQL_Data_Stream::buffer2array() {
 		d = header[read_pos++];
 		pkgsize += (a << 24) | (b << 16) | (c << 8) | d;
 
+		if (pkgsize < sizeof(header)) {
+			proxy_error("Malformed packet (size=%u) received from received from client %s:%d\n", pkgsize, addr.addr ? addr.addr : "", addr.port);
+			shut_soft();
+			return 0;
+		}
+
+		// PostgreSQL packets should always be >= 5 bytes.
 		queueIN.pkt.size = pkgsize;
-		queueIN.pkt.ptr = l_alloc(queueIN.pkt.size);
+		queueIN.pkt.ptr = l_alloc(pkgsize);
+
 		memcpy(queueIN.pkt.ptr, header, sizeof(header)); // immediately copy the header into the packet
 		queueIN.partial = sizeof(header);
 		ret += sizeof(header);

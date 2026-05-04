@@ -151,9 +151,9 @@ void parseResult(MYSQL_RES *result, json& j) {
 	assert(nr > 16);
 	while ((row = mysql_fetch_row(result))) {
 		if (j.find(row[0]) == j.end()) {
-			j[row[0]] = row[1];
+			j[row[0]] = row[1] ? row[1] : "";
 		} else {
-			if (strcmp(row[1],UNKNOWNVAR)!=0) {
+			if (row[1] && strcmp(row[1],UNKNOWNVAR)!=0) {
 				j[row[0]] = row[1]; // we override only if the new value it is not UNKNOWNVAR
 			}
 		}
@@ -474,7 +474,7 @@ int detect_version(CommandLine& cl, bool& is_mariadb) {
 		return 1;
 	}
 
-	MYSQL_QUERY(mysql, "select @@version");
+	MYSQL_QUERY(mysql, "select /* set_testing */ @@version");
 	MYSQL_RES *result = mysql_store_result(mysql);
 	MYSQL_ROW row;
 	while ((row = mysql_fetch_row(result)))

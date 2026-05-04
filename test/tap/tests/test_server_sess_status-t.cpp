@@ -19,6 +19,7 @@
 
 using std::pair;
 using std::string;
+using std::vector;
 
 int get_user_def_hg(MYSQL* admin, const string& user) {
 	const string sel_q { "SELECT default_hostgroup FROM mysql_users WHERE username='" + user + "'" };
@@ -100,6 +101,32 @@ int main(int argc, char** argv) {
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
+	}
+
+	// Create required extra users; also used in 'test_com_reset_connection_com_change_user-t.cpp'
+	{
+		MYSQL* mysql_server = mysql_init(NULL);
+
+		if (!mysql_real_connect(mysql_server, cl.mysql_host, cl.mysql_username, cl.mysql_password, NULL, cl.mysql_port, NULL, 0)) {
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql_server));
+			return EXIT_FAILURE;
+		}
+
+		int err_code = create_extra_users(admin, mysql_server,
+			vector<user_config> {
+				std::make_tuple(
+					"sbtest_reset_conn_1",
+					"sbtest_reset_conn_1",
+					"{\"default-transaction_isolation\":\"REPEATABLE READ\"}"
+				)
+			}
+		);
+		if (err_code) {
+			diag("'create_extra_users' failed at ('%s':'%d') with error '%d'", __FILE__, __LINE__, err_code);
+			return EXIT_FAILURE;
+		}
+
+		mysql_close(mysql_server);
 	}
 
 	const pair<string,int> srv_host { get_def_srv_host(admin, cl.username) };

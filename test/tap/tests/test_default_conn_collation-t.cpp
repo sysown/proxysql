@@ -43,7 +43,7 @@ int check_all_collations(const CommandLine& cl, MYSQL* admin) {
 		}
 	}
 
-	plan(num_tests);
+	plan(static_cast<int>(num_tests));
 
 	do {
 		if (c[0].nr > 255) {
@@ -86,25 +86,28 @@ int check_all_collations(const CommandLine& cl, MYSQL* admin) {
 
 int main(int argc, char** argv) {
 	CommandLine cl;
+	MYSQL* admin = NULL;
 
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
 
-
-	MYSQL* admin = mysql_init(NULL);
+	admin = mysql_init(NULL);
+	if (!admin) {
+		fprintf(stderr, "File %s, line %d, Error: mysql_init failed for admin\n",
+			__FILE__, __LINE__);
+		return EXIT_FAILURE;
+	}
 
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
+		mysql_close(admin);
 		return EXIT_FAILURE;
 	}
 
 	check_all_collations(cl, admin);
 
-cleanup:
-
 	mysql_close(admin);
-
 	return exit_status();
 }

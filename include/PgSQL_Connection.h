@@ -1,5 +1,5 @@
-#ifndef __CLASS_PGSQL_CONNECTION_H
-#define __CLASS_PGSQL_CONNECTION_H
+#ifndef PROXYSQL_PGSQL_CONNECTION_H
+#define PROXYSQL_PGSQL_CONNECTION_H
 #include "libpq-fe.h"
 #include "proxysql.h"
 #include "cpp.h"
@@ -12,7 +12,7 @@
 
 class PgSQL_SrvC;
 class PgSQL_Query_Result;
-class PgSQL_STMTs_local_v14;
+class PgSQL_STMT_Local;
 //class PgSQL_Describe_Prepared_Info;
 class PgSQL_Bind_Info;
 //#define STATUS_PGSQL_CONNECTION_SEQUENCE			 0x00000001
@@ -61,7 +61,7 @@ enum PgSQL_Param_Name {
 	PG_SSLROOTCERT,  // Specifies the name of a file containing SSL certificate authority (CA) certificate(s)
 	PG_SSLCRL,  // Specifies the file name of the SSL server certificate revocation list (CRL)
 	PG_SSLCRLDIR,  // Specifies the directory name of the SSL server certificate revocation list (CRL)
-	PG_SSLSNI,  // Sets the TLS extension “Server Name Indication” (SNI) on SSL-enabled connections
+	PG_SSLSNI,  // Sets the TLS extension Server Name Indication (SNI) on SSL-enabled connections
 	PG_REQUIREPEER,  // Specifies the operating-system user name of the server
 	PG_SSL_MIN_PROTOCOL_VERSION,  // Specifies the minimum SSL/TLS protocol version to allow for the connection
 	PG_SSL_MAX_PROTOCOL_VERSION,  // Specifies the maximum SSL/TLS protocol version to allow for the connection
@@ -364,7 +364,7 @@ public:
 	bool is_connected() const;
 	void compute_unknown_transaction_status();
 	void async_free_result();
-	void flush();
+	void flush(bool is_resync = false);
 	bool IsActiveTransaction();
 	bool IsKnownActiveTransaction();
 	bool IsServerOffline();
@@ -639,7 +639,7 @@ public:
 	bool exit_pipeline_mode; // true if it is safe to exit pipeline mode
 	bool resync_failed; // true if the last resync attempt failed
 
-	PgSQL_STMTs_local_v14* local_stmts;
+	PgSQL_STMT_Local* local_stmts;
 	PgSQL_SrvC *parent;
 	PgSQL_Connection_userinfo* userinfo;
 	PgSQL_Data_Stream* myds;
@@ -729,6 +729,8 @@ public:
 		char* sslrootcert;
 		char* sslcrl;
 		char* sslcrldir;
+		char* ssl_min_protocol_version;
+		char* ssl_max_protocol_version;
 	} ssl_config;
 
 	PgSQL_Backend_Kill_Args(PGconn* conn, const char* user, const char* pass, const char* db, const char* host,
@@ -738,4 +740,4 @@ public:
 
 void* PgSQL_backend_kill_thread(void* arg);
 
-#endif /* __CLASS_PGSQL_CONNECTION_H */
+#endif /* PROXYSQL_PGSQL_CONNECTION_H */

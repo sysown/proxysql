@@ -22,7 +22,13 @@ template void Base_Thread::register_session(PgSQL_Thread*, PgSQL_Session*, bool)
 template void Base_Thread::run_SetAllSession_ToProcess0<MySQL_Thread, MySQL_Session>();
 template void Base_Thread::run_SetAllSession_ToProcess0<PgSQL_Thread, PgSQL_Session>();
 
-Base_Thread::Base_Thread() {
+Base_Thread::Base_Thread() :
+	curtime(0),
+	last_move_to_idle_thread_time(0),
+	epoll_thread(false),
+	shutdown(0),
+	mysql_sessions(nullptr)
+{
 };
 
 Base_Thread::~Base_Thread() {
@@ -550,7 +556,7 @@ void Base_Thread::ProcessAllMyDS_BeforePoll() {
 
 template<typename T, typename S>
 void Base_Thread::run_SetAllSession_ToProcess0() {
-	T* thr = static_cast<T*>(this);
+	T* __attribute__((unused)) thr = static_cast<T*>(this);
 	unsigned int n;
 #ifdef IDLE_THREADS
 	// @note: in MySQL_Thread::run we have:  bool idle_maintenance_thread=epoll_thread;

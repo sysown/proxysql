@@ -1,0 +1,4 @@
+httpx==0.28.1
+pydantic==2.12.5
+python-dotenv==1.2.2
+rich==14.2.0

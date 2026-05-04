@@ -1,0 +1,2 @@
+GLOBAL:
+  BENCHMARK_SCRIPT: $WORKSPACE/test/infra/infra-mysql57/bin/local-docker-benchmark.bash

@@ -80,9 +80,9 @@ char* unique_str(ValueGenerator* vg, const char* field) {
 }
 
 char* unique_ip(ValueGenerator* vg) {
-    char* ip = (char*)malloc(16);
-    int octet = vg->base + vg->offset++;
-    sprintf(ip, "%d.%d.%d.%d",
+    char* ip = (char*)malloc(24);
+    unsigned int octet = vg->base + vg->offset++;
+    sprintf(ip, "%u.%u.%u.%u",
         octet % 256, (octet + 1) % 256, (octet + 2) % 256, (octet + 3) % 256);
     return ip;
 }
@@ -257,13 +257,13 @@ bool check_result(MYSQL_RES* res, RuleData* expected, bool runtime_table) {
     int field_idx = 1; // excluding rule_id
 #define COMPARE_INT(expected_val, col) \
         if (row[field_idx] == NULL) { \
-            if (expected_val != -1) { \
+            if ((expected_val) != -1) { \
                 diag("Expected %s to be %d, got NULL", #col, expected_val); \
                 match = false; \
             } \
         } else { \
             int val = atoi(row[field_idx]); \
-            if (val != expected_val) { \
+            if (val != (expected_val)) { \
                 diag("Expected %s to be %d, got %d", #col, expected_val, val); \
                 match = false; \
             } \
@@ -272,12 +272,12 @@ bool check_result(MYSQL_RES* res, RuleData* expected, bool runtime_table) {
 
 #define COMPARE_STR(expected_str, col) \
         if (row[field_idx] == NULL) { \
-            if (expected_str != NULL) { \
+            if ((expected_str) != NULL) { \
                 diag("Expected %s to be '%s', got NULL", #col, expected_str); \
                 match = false; \
             } \
         } else { \
-            if (strcmp(row[field_idx], expected_str ? expected_str : "") != 0) { \
+            if (strcmp(row[field_idx], (expected_str) ? (expected_str) : "") != 0) { \
                 diag("Expected %s to be '%s', got '%s'", #col, expected_str, row[field_idx]); \
                 match = false; \
             } \
@@ -392,7 +392,7 @@ int main() {
             MYSQL_ROW row;
             res = mysql_store_result(proxysql_admin);
             while ((row = mysql_fetch_row(res))) {
-                rule_ids[i] = atoll(row[0]);
+                rule_ids[i] = static_cast<int>(atoll(row[0]));
             }
             mysql_free_result(res);
         } else {

@@ -41,6 +41,29 @@ static void gtid_timer_cb (struct ev_loop *loop, struct ev_timer *timer, int rev
 	return;
 }
 
+/**
+ * @brief Data reception callback for established GTID server connections
+ *
+ * This callback handles reading GTID data from established connections to binlog readers.
+ * It processes incoming GTID information and manages connection failures gracefully.
+ *
+ * On successful read:
+ * - Processes the received GTID data
+ * - Calls dump() to parse and update GTID sets
+ *
+ * On read failure:
+ * - Marks the server connection as inactive
+ * - Sets gtid_missing_nodes flag to trigger reconnection
+ * - Performs proper cleanup of socket and watcher resources
+ * - Clears the watcher reference to maintain clean state
+ *
+ * @param loop The event loop (unused in this implementation)
+ * @param w The I/O watcher for data reception
+ * @param revents The events that triggered this callback
+ *
+ * @note This function is critical for maintaining GTID synchronization stability
+ * @note Proper resource cleanup prevents memory leaks and maintains system stability
+ */
 void reader_cb(struct ev_loop *loop, struct ev_io *w, int revents) {
 	pthread_mutex_lock(&ev_loop_mutex);
 	if (revents & EV_READ) {
@@ -55,13 +78,47 @@ void reader_cb(struct ev_loop *loop, struct ev_io *w, int revents) {
 			ev_io_stop(MyHGM->gtid_ev_loop, w);
 			close(w->fd);
 			free(w);
+			sd->w = nullptr;
 		} else {
 			sd->dump();
+			if (sd->active == false) {
+				// protocol error detected during parsing (e.g. unsupported message type)
+				MyHGM->gtid_missing_nodes = true;
+				proxy_warning("GTID: protocol error from ProxySQL binlog reader on port %d for server %s:%d , disconnecting\n", sd->port, sd->address, sd->mysql_port);
+				ev_io_stop(MyHGM->gtid_ev_loop, w);
+				close(w->fd);
+				free(w);
+				sd->w = nullptr;
+			}
 		}
 	}
 	pthread_mutex_unlock(&ev_loop_mutex);
 }
 
+/**
+ * @brief Connection establishment callback for GTID server connections
+ *
+ * This callback is triggered when a non-blocking connect() operation completes.
+ * It handles both successful connections and connection failures with proper
+ * resource cleanup and state management.
+ *
+ * On successful connection:
+ * - Stops and frees the connect watcher
+ * - Creates a new read watcher for data reception
+ * - Starts the read watcher to begin GTID data processing
+ *
+ * On connection failure:
+ * - Marks server as inactive
+ * - Logs appropriate warning messages
+ * - Performs proper cleanup of socket and watcher resources
+ *
+ * @param loop The event loop (unused in this implementation)
+ * @param w The I/O watcher for the connection
+ * @param revents The events that triggered this callback
+ *
+ * @note This function ensures proper resource management to prevent memory leaks
+ * @note Takes ev_loop_mutex to ensure thread-safe operations
+ */
 void connect_cb(EV_P_ ev_io *w, int revents) {
 	pthread_mutex_lock(&ev_loop_mutex);
 	if (revents & EV_WRITE) {
@@ -71,6 +128,7 @@ void connect_cb(EV_P_ ev_io *w, int revents) {
 		// connect() completed, this watcher is no longer needed
 		ev_io_stop(MyHGM->gtid_ev_loop, w);
 		free(w);
+		sd->w = nullptr;
 
 		// Based on fd status, proceed to next step -> waiting for read event on the socket
 		int error = 0;
@@ -164,6 +222,23 @@ GTID_Server_Data::~GTID_Server_Data() {
 	free(data);
 }
 
+/**
+ * @brief Reads data from the GTID server connection socket
+ *
+ * Reads available data from the socket connection to the binlog reader.
+ * Handles different read conditions to provide robust connection management:
+ * - Successful read: Data is appended to internal buffer
+ * - EOF (rc == 0): Connection was gracefully closed by peer
+ * - Error conditions: Distinguishes between transient (EINTR/EAGAIN) and fatal errors
+ *
+ * This function is critical for maintaining stable GTID synchronization and
+ * properly detecting connection failures for reconnection handling.
+ *
+ * @return bool True if read was successful or should be retried, false on fatal errors
+ *
+ * @note Expands buffer automatically when full to prevent data loss
+ * @note EINTR and EAGAIN are not treated as errors for non-blocking sockets
+ */
 bool GTID_Server_Data::readall() {
 	if (size == len) {
 		// buffer is full, expand
@@ -195,21 +270,7 @@ bool GTID_Server_Data::readall() {
 
 
 bool GTID_Server_Data::gtid_exists(char *gtid_uuid, uint64_t gtid_trxid) {
-	std::string s = gtid_uuid;
-	auto it = gtid_executed.find(s);
-//	fprintf(stderr,"Checking if server %s:%d has GTID %s:%lu ... ", address, port, gtid_uuid, gtid_trxid);
-	if (it == gtid_executed.end()) {
-//		fprintf(stderr,"NO\n");
-		return false;
-	}
-	for (auto itr = it->second.begin(); itr != it->second.end(); ++itr) {
-		if ((int64_t)gtid_trxid >= itr->first && (int64_t)gtid_trxid <= itr->second) {
-//			fprintf(stderr,"YES\n");
-			return true;
-		}
-	}
-//	fprintf(stderr,"NO\n");
-	return false;
+	return gtid_executed.has_gtid((std::string)gtid_uuid, gtid_trxid);
 }
 
 void GTID_Server_Data::read_all_gtids() {
@@ -247,6 +308,15 @@ bool GTID_Server_Data::writeout() {
 	return ret;
 }
 
+/*
+ * The wire format for the binlogreader is five distinct messages, in plaintext:
+ *
+ * ST=<uuid>:<trxid>[-<trxid>][,<uuid>:<trxid>[-<trxid>], ...] : Bootstrap message, providing individual transaction ID or trxid ranges for all seen UUID servers.
+ * I1=<uuid>:<trxid>                                            : Latest seen single trxid for a given UUID.
+ * I2=<trxid>                                                   : Latest seen single trxid, reusing UUID from previous I1/I3 message.
+ * I3=<uuid>:<trxid_start>-<trxid_end>                         : Latest seen trxid range for a given UUID.
+ * I4=<trxid_start>-<trxid_end>                                : Latest seen trxid range, reusing UUID from previous I1/I3 message.
+ */
 bool GTID_Server_Data::read_next_gtid() {
 	if (len==0) {
 		return false;
@@ -260,6 +330,7 @@ bool GTID_Server_Data::read_next_gtid() {
 	char rec_msg[80];
 	if (strncmp(data+pos,(char *)"ST=",3)==0) {
 		// we are reading the bootstrap
+		bool invalid_msg = false;
 		char *bs = (char *)malloc(l+1-3); // length + 1 (null byte) - 3 (header)
 		memcpy(bs, data+pos+3, l-3);
 		bs[l-3] = '\0';
@@ -291,16 +362,30 @@ bool GTID_Server_Data::read_next_gtid() {
 							p++;
 						}
 					}
-				} else { // we are reading the trxids
-					uint64_t trx_from;
-					uint64_t trx_to;
-					sscanf(subtoken,"%lu-%lu",&trx_from,&trx_to);
-					updated = addGtidInterval(gtid_executed, uuid_server, trx_from, trx_to) || updated;
-			   }
+					*p = '\0';
+				} else { // we are reading the trxid or trxid range
+					TrxId_Interval iv(trxid_t(0));
+					if (!TrxId_Interval::parse(subtoken, &iv)) {
+						invalid_msg = true;
+						break;
+					}
+					updated = gtid_executed.add((std::string)uuid_server, iv) || updated;
+				}
+			}
+			if (invalid_msg || j == 0 || j%2 != 0) {
+				invalid_msg = true;
+				break;
 			}
 		}
 		pos += l+1;
 		free(bs);
+
+		if (invalid_msg) {
+			proxy_warning("GTID: invalid bootstrap message from binlog reader on port %d for server %s:%d, disconnecting\n",
+				port, address, mysql_port);
+			active = false;
+			return false;
+		}
 
 		if (updated) {
 			events_read++;
@@ -309,142 +394,70 @@ bool GTID_Server_Data::read_next_gtid() {
 		strncpy(rec_msg,data+pos,l);
 		pos += l+1;
 		rec_msg[l] = 0;
+		bool invalid_msg = false;
 		if (rec_msg[0]=='I') {
-			uint64_t rec_trxid = 0;
 			char *a = NULL;
 			int ul = 0;
 			switch (rec_msg[1]) {
-				case '1':
+				case '1': // single trxid with UUID
 					a = strchr(rec_msg+3,':');
+					if (a == NULL) {
+						invalid_msg = true;
+						break;
+					}
 					ul = a-rec_msg-3;
 					strncpy(uuid_server,rec_msg+3,ul);
 					uuid_server[ul] = 0;
-					rec_trxid=atoll(a+1);
+					gtid_executed.add((std::string)uuid_server, (trxid_t)atoll(a+1));
+					events_read++;
 					break;
-				case '2':
-					rec_trxid=atoll(rec_msg+3);
+				case '2': // single trxid, reuse last UUID
+					gtid_executed.add((std::string)uuid_server, (trxid_t)atoll(rec_msg+3));
+					events_read++;
+					break;
+				case '3': // trxid range with UUID
+					a = strchr(rec_msg+3,':');
+					if (a == NULL) {
+						invalid_msg = true;
+						break;
+					}
+					ul = a-rec_msg-3;
+					strncpy(uuid_server,rec_msg+3,ul);
+					uuid_server[ul] = 0;
+					{
+						TrxId_Interval iv(trxid_t(0));
+						if (!TrxId_Interval::parse(a+1, &iv)) {
+							invalid_msg = true;
+							break;
+						}
+						gtid_executed.add((std::string)uuid_server, iv);
+					}
+					events_read++;
+					break;
+				case '4': // trxid range, reuse last UUID
+					{
+						TrxId_Interval iv(trxid_t(0));
+						if (!TrxId_Interval::parse(rec_msg+3, &iv)) {
+							invalid_msg = true;
+							break;
+						}
+						gtid_executed.add((std::string)uuid_server, iv);
+					}
+					events_read++;
 					break;
 				default:
-					break;
+					invalid_msg = true;
 			}
-			std::string s = uuid_server;
-			gtid_t new_gtid = std::make_pair(s,rec_trxid);
-			addGtid(new_gtid,gtid_executed);
-			events_read++;
+
+			if (invalid_msg) {
+				proxy_warning("GTID: invalid or unsupported message (%s) from binlog reader on port %d for server %s:%d, disconnecting\n",
+					rec_msg, port, address, mysql_port);
+				active = false;
+				return false;
+			}
 		}
 	}
 	return true;
-}
-
-std::string gtid_executed_to_string(gtid_set_t& gtid_executed) {
-	std::string gtid_set;
-	for (auto it=gtid_executed.begin(); it!=gtid_executed.end(); ++it) {
-		std::string s = it->first;
-		s.insert(8,"-");
-		s.insert(13,"-");
-		s.insert(18,"-");
-		s.insert(23,"-");
-		s = s + ":";
-		for (auto itr = it->second.begin(); itr != it->second.end(); ++itr) {
-			std::string s2 = s;
-			s2 = s2 + std::to_string(itr->first);
-			s2 = s2 + "-";
-			s2 = s2 + std::to_string(itr->second);
-			s2 = s2 + ",";
-			gtid_set = gtid_set + s2;
-		}
-	}
-	// Extract latest comma only in case 'gtid_executed' isn't empty
-	if (gtid_set.empty() == false) {
-		gtid_set.pop_back();
-	}
-	return gtid_set;
-}
-
-
-
-void addGtid(const gtid_t& gtid, gtid_set_t& gtid_executed) {
-	auto it = gtid_executed.find(gtid.first);
-	if (it == gtid_executed.end())
-	{
-		gtid_executed[gtid.first].emplace_back(gtid.second, gtid.second);
-		return;
-	}
-
-	bool flag = true;
-	for (auto itr = it->second.begin(); itr != it->second.end(); ++itr)
-	{
-		if (gtid.second >= itr->first && gtid.second <= itr->second)
-			return;
-		if (gtid.second + 1 == itr->first)
-		{
-			--itr->first;
-			flag = false;
-			break;
-		}
-		else if (gtid.second == itr->second + 1)
-		{
-			++itr->second;
-			flag = false;
-			break;
-		}
-		else if (gtid.second < itr->first)
-		{
-			it->second.emplace(itr, gtid.second, gtid.second);
-			return;
-		}
-	}
-
-	if (flag)
-		it->second.emplace_back(gtid.second, gtid.second);
-
-	for (auto itr = it->second.begin(); itr != it->second.end(); ++itr)
-	{
-		auto next_itr = std::next(itr);
-		if (next_itr != it->second.end() && itr->second + 1 == next_itr->first)
-		{
-			itr->second = next_itr->second;
-			it->second.erase(next_itr);
-			break;
-		}
-	}
-}
-
-bool addGtidInterval(gtid_set_t& gtid_executed, std::string server_uuid, int64_t txid_start, int64_t txid_end) {
-	bool updated = true;
-
-	auto it = gtid_executed.find(server_uuid);
-	if (it == gtid_executed.end()) {
-		gtid_executed[server_uuid].emplace_back(txid_start, txid_end);
-		return updated;
-	}
-
-	bool insert = true;
-
-	// When ProxySQL reconnects with binlog reader, it might
-	// receive updated txid intervals in the bootstrap message.
-	// For example,
-	// before disconnection -> server_UUID:1-10
-	// after reconnection   -> server_UUID:1-19
-	auto &txid_intervals = it->second;
-	for (auto &interval : txid_intervals) {
-		if (interval.first == txid_start) {
-			if(interval.second == txid_end) {
-				updated = false;
-			} else {
-				interval.second = txid_end;
-			}
-			insert = false;
-			break;
-		}
-	}
-
-	if (insert) {
-		txid_intervals.emplace_back(txid_start, txid_end);
-
-	}
-
-	return updated;
 }
 
 void * GTID_syncer_run() {
@@ -469,4 +482,3 @@ void * GTID_syncer_run() {
 	//sleep(1000);
 	return NULL;
 }
-

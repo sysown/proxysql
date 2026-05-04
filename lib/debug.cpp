@@ -18,9 +18,10 @@ using std::unordered_map;
 
 __thread unsigned long long pretime=0;
 static pthread_mutex_t debug_mutex;
-static pthread_rwlock_t filters_rwlock;
+static pthread_rwlock_t filters_rwlock = PTHREAD_RWLOCK_INITIALIZER;
 static SQLite3DB * debugdb_disk = NULL;
 sqlite3_stmt *statement1=NULL;
+static stmt_unique_ptr statement1_unique {};
 static unsigned int debug_output = 1;
 
 
@@ -30,21 +31,27 @@ static unsigned int debug_output = 1;
 
 
 struct DebugLogEntry {
-	unsigned long long time;
-	unsigned long long lapse;
-	int thr;
+	unsigned long long time = 0;
+	unsigned long long lapse = 0;
+	int thr = 0;
 	std::string file;
-	int line;
+	int line = 0;
 	std::string funct;
-	int module;
+	int module = 0;
 	std::string modname;
-	int verbosity;
+	int verbosity = 0;
 	std::string message;
 	std::string backtrace;
 };
 
 static const size_t limitSize = 100;
-static std::vector<DebugLogEntry> log_buffer = {};
+/*
+ * NOTE: Intentionally leaked.
+ * During fast shutdown paths we can call exit() while worker threads are still
+ * emitting debug logs. A static std::vector would be destroyed by exit handlers
+ * and could race with concurrent push_back(), causing use-after-free.
+ */
+static std::vector<DebugLogEntry>* log_buffer = new std::vector<DebugLogEntry>();
 
 
 /**
@@ -60,7 +67,7 @@ static std::vector<DebugLogEntry> log_buffer = {};
 void sync_log_buffer_to_disk(SQLite3DB *db) {
 	int rc;
 	db->execute("BEGIN TRANSACTION");
-	for (const auto& entry : log_buffer) {
+	for (const auto& entry : *log_buffer) {
 		rc=(*proxy_sqlite3_bind_int64)(statement1, 1, entry.time); ASSERT_SQLITE_OK(rc, db);
 		rc=(*proxy_sqlite3_bind_int64)(statement1, 2, entry.lapse);ASSERT_SQLITE_OK(rc, db);
 		rc=(*proxy_sqlite3_bind_int64)(statement1, 3, entry.thr); ASSERT_SQLITE_OK(rc, db);
@@ -74,11 +81,11 @@ void sync_log_buffer_to_disk(SQLite3DB *db) {
 		rc=(*proxy_sqlite3_bind_text)(statement1, 11, entry.backtrace.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 		SAFE_SQLITE3_STEP2(statement1);
 		rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, db);
-		// Note: no assert() in proxy_debug_func() after sqlite3_reset() because it is possible that we are in shutdown
+		// Note: no assert() in proxy_debug_func() after (*proxy_sqlite3_reset)() because it is possible that we are in shutdown
 		rc=(*proxy_sqlite3_reset)(statement1); // ASSERT_SQLITE_OK(rc, db);
 	}
 	db->execute("COMMIT");
-	log_buffer.clear();
+	log_buffer->clear();
 }
 
 /**
@@ -160,8 +167,10 @@ void proxy_debug_load_filters(std::set<std::string>& f) {
 	pthread_rwlock_unlock(&filters_rwlock);
 }
 
+#endif
+
 // REMINDER: This function should always save/restore 'errno', otherwise it could influence error handling.
-void proxy_debug_func(
+extern "C" void proxy_debug_func(
 	enum debug_module module,
 	int verbosity,
 	int thr,
@@ -171,15 +180,20 @@ void proxy_debug_func(
 	const char *fmt,
 	...
 ) {
-	int saved_errno = errno;
+#ifdef DEBUG
 	assert(module<PROXY_DEBUG_UNKNOWN);
+	// Safety check: ensure debug struct is initialized
+	if (GloVars.global.gdbg_lvl == NULL) {
+		return;
+	}
 	if (pretime == 0) { // never initialized
 		pretime=realtime_time();
 	}
 	if (GloVars.global.gdbg_lvl[module].verbosity < verbosity) {
-		errno = saved_errno;
 		return;
 	}
+	// Save errno only after passing early return checks
+	int saved_errno = errno;
 	// check if the entry must be filtered
 	if (filter_debug_entry(__file, __line, __func)) {
 		errno = saved_errno;
@@ -250,12 +264,15 @@ void proxy_debug_func(
 		}
 	} else {
 		SQLite3DB *db = debugdb_disk;
-		int rc = 0;
-		if (statement1==NULL) {
-			const char *a = "INSERT INTO debug_log (id, time, lapse, thread, file, line, funct, modnum, modname, verbosity, message, note, backtrace) VALUES (NULL, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11)";
-			rc=db->prepare_v2(a, &statement1);
-			ASSERT_SQLITE_OK(rc, db);
-		}
+			int rc = 0;
+			if (statement1==NULL) {
+				const char *a = "INSERT INTO debug_log (id, time, lapse, thread, file, line, funct, modnum, modname, verbosity, message, note, backtrace) VALUES (NULL, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11)";
+				auto [stmt_rc, prepared_statement_unique] = db->prepare_v2(a);
+				rc = stmt_rc;
+				ASSERT_SQLITE_OK(rc, db);
+				statement1_unique = std::move(prepared_statement_unique);
+				statement1 = statement1_unique.get();
+			}
 		if (debug_output == 1 || debug_output == 3) {
 			// to stderr
 			if (longdebugbuff[0] != 0) {
@@ -279,14 +296,14 @@ void proxy_debug_func(
 			entry.verbosity = verbosity;
 			entry.message = origdebugbuff;
 			entry.backtrace = longdebugbuff2;
-			log_buffer.push_back(entry);
+			log_buffer->push_back(entry);
 			// we now batch writes
 			// note1: in case of crash, the database will have some missing entries,
 			// but the entries can be read in `log_buffer` in the core dump
 			// note2: also in case of shutdown , `log_buffer` will have entries that won't be saved.
 			// if we really want *all* entries, we could just call sync_log_buffer_to_disk() on shutdown
 			if (
-				(log_buffer.size() >= limitSize)
+				(log_buffer->size() >= limitSize)
 				||
 				(entry.file == "ProxySQL_Admin.cpp" && entry.funct == "flush_logs")
 			) {
@@ -299,7 +316,10 @@ void proxy_debug_func(
 		pretime=curtime;
 
 	errno = saved_errno;
+#endif
 };
+
+#ifdef DEBUG
 #endif
 
 using metric_name = std::string;
@@ -321,7 +341,7 @@ const std::tuple<debug_dyn_counter_vector> debug_metrics_map = std::make_tuple(
 );
 
 std::map<std::string, prometheus::Counter*> p_proxysql_messages_map {};
-std::array<prometheus::Family<prometheus::Counter>*, p_debug_dyn_counter::__size> p_debug_dyn_counter_array {};
+std::array<prometheus::Family<prometheus::Counter>*, p_debug_dyn_counter::SIZE_> p_debug_dyn_counter_array {};
 std::mutex msg_stats_mutex {};
 
 const int ProxySQL_MSG_STATS_FIELD_NUM = 7;
@@ -400,7 +420,7 @@ unordered_map<string, ProxySQL_messages_stats> umap_msg_stats {};
  * @param fmt The formatted string to be pass to 'vfprintf'.
  * @param ... The variadic list of arguments to be passed to 'vfprintf'.
  */
-void proxy_error_func(int msgid, const char *fmt, ...) {
+extern "C" void proxy_error_func(int msgid, const char *fmt, ...) {
 	va_list ap;
 	va_start(ap, fmt);
 
@@ -510,10 +530,9 @@ void print_backtrace(void)
 }
 
 #ifdef DEBUG
-void init_debug_struct() {	
+void init_debug_struct() {
 	int i;
 	pthread_mutex_init(&debug_mutex,NULL);
-	pthread_rwlock_init(&filters_rwlock, NULL);
 	GloVars.global.gdbg_lvl= (debug_level *) malloc(PROXY_DEBUG_UNKNOWN*sizeof(debug_level));
 	for (i=0;i<PROXY_DEBUG_UNKNOWN;i++) {
 		GloVars.global.gdbg_lvl[i].module=(enum debug_module)i;
@@ -541,6 +560,9 @@ void init_debug_struct() {
 	GloVars.global.gdbg_lvl[PROXY_DEBUG_RESTAPI].name=(char *)"debug_restapi";
 	GloVars.global.gdbg_lvl[PROXY_DEBUG_MONITOR].name=(char *)"debug_monitor";
 	GloVars.global.gdbg_lvl[PROXY_DEBUG_CLUSTER].name=(char *)"debug_cluster";
+	GloVars.global.gdbg_lvl[PROXY_DEBUG_GENAI].name=(char *)"debug_genai";
+	GloVars.global.gdbg_lvl[PROXY_DEBUG_NL2SQL].name=(char *)"debug_nl2sql";
+	GloVars.global.gdbg_lvl[PROXY_DEBUG_ANOMALY].name=(char *)"debug_anomaly";
 
 	for (i=0;i<PROXY_DEBUG_UNKNOWN;i++) {
 		// if this happen, the above table is not populated correctly

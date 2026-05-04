@@ -77,6 +77,7 @@ class Base_Session {
 	int transaction_persistent_hostgroup;
 	int to_process;
 	enum proxysql_session_type session_type;
+	int wait_timeout; //in milliseconds
 
 	// bool
 	bool autocommit;
@@ -97,6 +98,11 @@ class Base_Session {
 	bool use_ssl;
 	//MySQL_STMTs_meta *sess_STMTs_meta;
 	//StmtLongDataHandler *SLDH;
+
+	// GenAI async support (per-session epoll fd + pending-request map)
+	// removed in Step 4 of the GenAI plugin carve-out -- the
+	// GENAI:/LLM: prefix handlers that owned this state are gone.
+	// See decision Q2 in the design doc.
 
 
 

@@ -1,5 +1,5 @@
-#ifndef __CLASS_PGSQL_AUTHENTICATION_H
-#define __CLASS_PGSQL_AUTHENTICATION_H
+#ifndef PROXYSQL_PGSQL_AUTHENTICATION_H
+#define PROXYSQL_PGSQL_AUTHENTICATION_H
 
 #include "proxysql.h"
 #include "cpp.h"
@@ -28,9 +28,9 @@ typedef struct _pgsql_account_details_t {
 	bool use_ssl;
 	bool transaction_persistent;
 	bool fast_forward;
-	bool __frontend;	// this is used only during the dump
-	bool __backend;	// this is used only during the dump
-	bool __active;
+	bool frontend_;	// this is used only during the dump
+	bool backend_;	// this is used only during the dump
+	bool active_;
 
 } pgsql_account_details_t;
 
@@ -113,4 +113,4 @@ class PgSQL_Authentication {
 	SQLite3_result* get_current_pgsql_users();
 };
 
-#endif /* __CLASS_PGSQL_AUTHENTICATION_H */
+#endif /* PROXYSQL_PGSQL_AUTHENTICATION_H */

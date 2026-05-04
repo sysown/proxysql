@@ -1,5 +1,5 @@
-#ifndef __CLASS_PTR_ARRAY_H
-#define __CLASS_PTR_ARRAY_H
+#ifndef PROXYSQL_PTR_ARRAY_H
+#define PROXYSQL_PTR_ARRAY_H
 
 #include <memory>
 #include <queue>
@@ -24,6 +24,111 @@ inline int fastrand() {
 #define def_fastrand
 #endif
 
+/**
+ * @brief Thread-local state for the xoshiro128++ PRNG.
+ *
+ * s[0..3] hold the internal 128-bit state. Keeping it thread_local guarantees
+ * that each thread uses an independent sequence without synchronization.
+ */
+static thread_local uint32_t s[4];
+
+/**
+ * @brief Thread-local flag indicating whether the PRNG state has been seeded.
+ *
+ * Lazy initialization is used to seed the state on the first use per thread.
+ */
+static thread_local uint8_t seeded = 0;
+
+/**
+ * @brief Initialize the thread-local PRNG state.
+ *
+ * Seeds the 128-bit xoshiro state using a mix of the monotonic clock and the
+ * calling thread identifier. A splitmix-like mixing function is applied to
+ * produce well-dispersed bits. Ensures the state is not all zeros.
+ *
+ * Important:
+ * - Uses CLOCK_MONOTONIC to reduce susceptibility to wall-clock changes.
+ * - Not cryptographically secure. Do not use for security-sensitive code.
+ */
+static void init_seed(void) {
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+
+	uint64_t t = ((uint64_t)ts.tv_nsec) ^ ((uint64_t)ts.tv_sec << 32);
+	uint64_t tid = (uintptr_t)pthread_self();
+
+	// Simple mixing: XOR, shifts, multiplies
+	uint64_t x = t ^ tid;
+	x ^= x >> 33;
+	x *= 0xff51afd7ed558ccdULL;
+	x ^= x >> 33;
+	x *= 0xc4ceb9fe1a85ec53ULL;
+	x ^= x >> 33;
+
+	// Split into four 32-bit words
+	s[0] = (uint32_t)x;
+	s[1] = (uint32_t)(x >> 32);
+	s[2] = ~s[0];  // invert for extra diversity
+	s[3] = ~s[1];
+
+	// avoid all-zero state
+	if (!s[0] && !s[1] && !s[2] && !s[3])
+		s[0] = 1;
+
+	seeded = 1;
+}
+
+/**
+ * @brief Rotate left utility.
+ *
+ * @param x Value to rotate.
+ * @param k Rotation amount in bits (0..31).
+ * @return x rotated left by k bits.
+ */
+static inline uint32_t rotl(uint32_t x, int k) {
+	return (x << k) | (x >> (32 - k));
+}
+
+/**
+ * @brief xoshiro128++ PRNG round function.
+ *
+ * This is the "++" variant: result = rotl(s0 + s3, 7) + s0.
+ * It updates the internal state using xorshift operations and a rotation.
+ * The algorithm is designed for speed and statistical quality.
+ *
+ * Thread safety:
+ * - Uses thread-local state; no locks required.
+ *
+ * @return A 32-bit pseudo-random number.
+ */
+static uint32_t xoshiro128_plus_plus(void) {
+	if (!seeded) init_seed();
+
+	const uint32_t result = rotl(s[0] + s[3], 7) + s[0];
+	const uint32_t t = s[1] << 9;
+
+	s[2] ^= s[0];
+	s[3] ^= s[1];
+	s[1] ^= s[2];
+	s[0] ^= s[3];
+	s[2] ^= t;
+	s[3] = rotl(s[3], 11);
+
+	return result;
+}
+
+/**
+ * @brief Fast, non-cryptographic random number generator.
+ *
+ * Convenience wrapper over xoshiro128_plus_plus(). Returns a 32-bit
+ * pseudo-random value. On first call per thread, the generator is seeded.
+ *
+ * @return A 32-bit pseudo-random number.
+ */
+static inline uint32_t rand_fast() {
+	return xoshiro128_plus_plus();
+}
+
 class PtrArray {
 	private:
 	void expand(unsigned int more) {
@@ -41,21 +146,24 @@ class PtrArray {
 	}
 	void shrink() {
 		unsigned int new_size=l_near_pow_2(len+1);
-		pdata=(void **)realloc(pdata,new_size*sizeof(void *));
-		size=new_size;
+		void *new_pdata = realloc(pdata, new_size * sizeof(void *));
+		if (new_pdata) {
+			pdata = (void **)new_pdata;
+			size = new_size;
+		}
 	}
 	public:
 	unsigned int len;
 	unsigned int size;
 	void **pdata;
-	PtrArray(unsigned int __size=0) {
+	explicit PtrArray(unsigned int sz=0) {
 		len=0;
 		pdata=NULL;
 		size=0;
-		if (__size) {
-			expand(__size);
+		if (sz) {
+			expand(sz);
 		}
-		size=__size;
+		size=sz;
 	}
 	~PtrArray() {
 		if (pdata) ( free(pdata) );
@@ -135,7 +243,7 @@ class PtrSizeArray {
 	unsigned int len;
 	unsigned int size;
 	PtrSize_t *pdata;
-	PtrSizeArray(unsigned int __size=0);
+	explicit PtrSizeArray(unsigned int sz=0);
 	~PtrSizeArray();
 
 	void add(void *p, unsigned int s) {
@@ -269,7 +377,7 @@ public:
 	}
 };
 
-#endif /* __CLASS_PTR_ARRAY_H */
+#endif /* PROXYSQL_PTR_ARRAY_H */
 
 
 #ifdef CLOCK_MONOTONIC_RAW
@@ -278,8 +386,8 @@ public:
 #define PROXYSQL_CLOCK_MONOTONIC CLOCK_MONOTONIC
 #endif
 
-#ifndef __GEN_FUNCTIONS
-#define __GEN_FUNCTIONS
+#ifndef PROXYSQL_GEN_FUNCTIONS
+#define PROXYSQL_GEN_FUNCTIONS
 
 #ifdef __APPLE__
 #include <sys/types.h>
@@ -331,6 +439,31 @@ inline T overflow_safe_multiply(T val) {
 	return (val * FACTOR);
 }
 
+/**
+ * @brief Read a 64-bit unsigned integer from a big-endian byte buffer.
+ *
+ * Reads 8 bytes from the provided buffer and converts them from
+ * big-endian (network byte order) into host byte order.
+ *
+ * @param pkt   Pointer to at least 8 bytes of input data.
+ * @param dst_p Pointer to the destination uint64_t where the result
+ *              will be stored.
+ *
+ * @return true Always returns true.
+ */
+inline bool get_uint64be(const unsigned char* pkt, uint64_t* dst_p) {
+	*dst_p =
+		((uint64_t)pkt[0] << 56) |
+		((uint64_t)pkt[1] << 48) |
+		((uint64_t)pkt[2] << 40) |
+		((uint64_t)pkt[3] << 32) |
+		((uint64_t)pkt[4] << 24) |
+		((uint64_t)pkt[5] << 16) |
+		((uint64_t)pkt[6] << 8)  |
+		((uint64_t)pkt[7]);
+	return true;
+}
+
 /*
  * @brief Reads and converts a big endian 32-bit unsigned integer from the provided packet buffer into the destination pointer.
  *
@@ -343,9 +476,9 @@ inline T overflow_safe_multiply(T val) {
  */
 inline bool get_uint32be(const unsigned char* pkt, uint32_t* dst_p) {
 	*dst_p = ((uint32_t)pkt[0] << 24) |
-			 ((uint32_t)pkt[1] << 16) |
-			 ((uint32_t)pkt[2] << 8) |
-			 ((uint32_t)pkt[3]);
+		((uint32_t)pkt[1] << 16) |
+		((uint32_t)pkt[2] << 8) |
+		((uint32_t)pkt[3]);
 	return true;
 }
 
@@ -394,4 +527,33 @@ std::unique_ptr<SQLite3_result> get_SQLite3_resulset(MYSQL_RES* resultset);
 
 std::vector<std::string> split_string(const std::string& str, char delimiter);
 
-#endif /* __GEN_FUNCTIONS */
+inline constexpr bool fast_isspace(unsigned char c) noexcept
+{
+	// Matches: '\t' (0x09) through '\r' (0x0D), and ' ' (0x20)
+	// That is: '\t', '\n', '\v', '\f', '\r', ' '
+	//
+	// (c - '\t') < 5   -> true for 0x09-0x0D inclusive
+	// (c == ' ')       -> true for space
+	//
+	// Use bitwise OR `|` (not logical `||`) to keep it branchless.
+	return (c == ' ') | (static_cast<unsigned char>(c - '\t') < 5);
+}
+
+inline constexpr char* fast_uint32toa(uint32_t value, char* out) noexcept {
+	char* p = out;
+	do {
+		*p++ = '0' + (value % 10);
+		value /= 10;
+	} while (value);
+	*p = '\0';
+	char* start = out;
+	char* end = p - 1;
+	while (start < end) {
+		char t = *start;
+		*start++ = *end;
+		*end-- = t;
+	}
+	return p;
+}
+
+#endif /* PROXYSQL_GEN_FUNCTIONS */

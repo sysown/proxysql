@@ -4,8 +4,8 @@
  */
 
 #ifdef CLASS_BASE_SESSION_H
-#ifndef __CLASS_MYSQL_SESSION_H
-#define __CLASS_MYSQL_SESSION_H
+#ifndef PROXYSQL_MYSQL_SESSION_H
+#define PROXYSQL_MYSQL_SESSION_H
 
 #include <functional>
 #include <vector>
@@ -49,6 +49,22 @@ enum ps_type : uint8_t {
 	ps_type_execute_stmt = 0x2
 };
 
+/**
+ * @enum SelectVersionForwardingMode
+ * @brief Defines modes for handling SELECT VERSION() queries in ProxySQL.
+ *
+ * These modes control how ProxySQL responds to SELECT VERSION() queries:
+ * - NEVER: Always return ProxySQL's own version
+ * - ALWAYS: Always proxy the query to a backend server
+ * - SMART_FALLBACK_INTERNAL: Try to get version from backend connection, fallback to ProxySQL version
+ * - SMART_FALLBACK_PROXY: Try to get version from backend connection, fallback to proxying the query
+ */
+enum SelectVersionForwardingMode : uint8_t {
+	SELECT_VERSION_NEVER = 0,
+	SELECT_VERSION_ALWAYS = 1,
+	SELECT_VERSION_SMART_FALLBACK_INTERNAL = 2,
+	SELECT_VERSION_SMART_FALLBACK_PROXY = 3
+};
 
 
 //std::string proxysql_session_type_str(enum proxysql_session_type session_type);
@@ -88,9 +104,9 @@ class Query_Info {
 	Query_Info();
 	~Query_Info();
 	void init(unsigned char *_p, int len, bool mysql_header=false);
-	void query_parser_init(); 
-	enum MYSQL_COM_QUERY_command query_parser_command_type(); 
-	void query_parser_free(); 
+	void query_parser_init();
+	enum MYSQL_COM_QUERY_command query_parser_command_type();
+	void query_parser_free();
 	unsigned long long query_parser_update_counters();
 	void begin(unsigned char *_p, int len, bool mysql_header=false);
 	void end();
@@ -122,6 +138,8 @@ inline void Query_Info::set_end_time(unsigned long long time) {
 	end_time = start_time;
 #endif // CLOCK_MONOTONIC_RAW
 }
+
+class TrafficObserver;
 
 /**
  * @class MySQL_Session
@@ -177,7 +195,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(PtrSize_t *);
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *, bool *lock_hostgroup, ps_type prepare_stmt_type=ps_type_not_set);
 
-	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();	
+	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();
 
 	//void return_proxysql_internal(PtrSize_t *);
 	bool handler_special_queries(PtrSize_t *);
@@ -225,6 +243,36 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	bool handler_again___verify_ldap_user_variable();
 	bool handler_again___verify_backend_autocommit();
 	bool handler_again___verify_backend_session_track_gtids();
+	/**
+	 * @brief Verify and configure session variable tracking on backend connections.
+	 *
+	 * === PR 5166: Backend Configuration Entry Point ===
+	 *
+	 * This function is the main orchestrator for setting up session tracking on backend
+	 * connections. It's called during connection initialization to ensure tracking is
+	 * properly configured before query processing begins.
+	 *
+	 * CONFIGURATION LOGIC:
+	 * 1. Check if global mysql-session_track_variables is enabled
+	 * 2. For each tracking flag that's not yet set on the connection:
+	 *    - Mark the flag as sent (prevents duplicate configuration)
+	 *    - Transition session to appropriate configuration state
+	 *    - Return true to indicate state machine needs re-processing
+	 *
+	 * STATE MACHINE INTEGRATION:
+	 * - SETTING_SESSION_TRACK_VARIABLES: Sets session_track_system_variables="*"
+	 * - SETTING_SESSION_TRACK_STATE: Sets session_track_state_change=ON
+	 * - Returns true to continue state machine processing until both are configured
+	 *
+	 * WHY THIS APPROACH:
+	 * - Ensures tracking is configured exactly once per backend connection
+	 * - Integrates cleanly with existing ProxySQL session state machine
+	 * - Handles both tracking capabilities independently for flexibility
+	 * - Prevents redundant SET commands on already configured connections
+	 *
+	 * @return true if session state needs to be re-processed (configuration pending), false otherwise
+	 */
+	bool handler_again___verify_backend_session_track_variables();
 	bool handler_again___verify_backend_multi_statement();
 	bool handler_again___verify_backend_user_schema();
 	bool handler_again___verify_multiple_variables(MySQL_Connection *);
@@ -232,6 +280,28 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	bool handler_again___status_SETTING_LDAP_USER_VARIABLE(int *);
 	bool handler_again___status_SETTING_SQL_MODE(int *);
 	bool handler_again___status_SETTING_SESSION_TRACK_GTIDS(int *);
+	/**
+	 * @brief Handle the SETTING_SESSION_TRACK_VARIABLES state.
+	 *
+	 * This method executes the SET command to configure session_track_system_variables="*"
+	 * on the backend connection, enabling the server to track changes to all system
+	 * variables and report them back to ProxySQL.
+	 *
+	 * @param _rc Pointer to return code that will be set with the operation result
+	 * @return true if session state needs to be re-processed, false otherwise
+	 */
+	bool handler_again___status_SETTING_SESSION_TRACK_VARIABLES(int *);
+	/**
+	 * @brief Handle the SETTING_SESSION_TRACK_STATE state.
+	 *
+	 * This method executes the SET command to configure session_track_state_change=ON
+	 * on the backend connection, enabling the server to report when session state
+	 * changes occur (including system variable changes).
+	 *
+	 * @param _rc Pointer to return code that will be set with the operation result
+	 * @return true if session state needs to be re-processed, false otherwise
+	 */
+	bool handler_again___status_SETTING_SESSION_TRACK_STATE(int *);
 	bool handler_again___status_CHANGING_CHARSET(int *_rc);
 	bool handler_again___status_CHANGING_SCHEMA(int *);
 	bool handler_again___status_CONNECTING_SERVER(int *);
@@ -256,6 +326,9 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	// GPFC_ functions are subfunctions of get_pkts_from_client()
 	int GPFC_Statuses2(bool&, PtrSize_t&);
 	void GPFC_DetectedMultiPacket_SetDDS();
+#ifdef PROXYSQLFFTO
+	void observe_ffto_client_packet(const PtrSize_t& pkt);
+#endif
 	int GPFC_WaitingClientData_FastForwardSession(PtrSize_t&);
 	void GPFC_PreparedStatements(PtrSize_t&, unsigned char);
 	int GPFC_Replication_SwitchToFastForward(PtrSize_t&, unsigned char);
@@ -280,9 +353,47 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	int RunQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn);
 	void handler___status_WAITING_CLIENT_DATA();
 	void handler_rc0_Process_GTID(MySQL_Connection *myconn);
+	/**
+	 * @brief Process session variable changes from backend connection response.
+	 *
+	 * === PR 5166: Variable Processing Workflow ===
+	 *
+	 * This function is the core of the variable tracking system and is called after
+	 * every successful query execution when SERVER_SESSION_STATE_CHANGED flag is set.
+	 *
+	 * DETAILED WORKFLOW:
+	 * 1. Extract variable changes from MySQL's session tracking data via get_variables()
+	 * 2. Iterate through all tracked variables in mysql_tracked_variables array
+	 * 3. For each variable that changed in the backend:
+	 *    - Update both client and server variable maps for state consistency
+	 *    - Handle character set variables specially (convert names to internal IDs)
+	 * 4. This ensures ProxySQL's internal state matches the actual backend state
+	 *
+	 * WHY THIS IS NEEDED:
+	 * - SQL statement parsing cannot detect all variable changes (e.g., stored procedures)
+	 * - Some variables are changed implicitly by MySQL server operations
+	 * - Without this tracking, client and backend states can diverge
+	 *
+	 * PERFORMANCE CONSIDERATIONS:
+	 * - Only called when SERVER_SESSION_STATE_CHANGED flag is set
+	 * - Processes all tracked variables but only updates those that actually changed
+	 * - Character set conversions are done only for relevant variables
+	 *
+	 * @param myconn Pointer to the MySQL connection from which to extract variable changes
+	 */
+	void handler_rc0_Process_Variables(MySQL_Connection *myconn);
 	void handler_rc0_RefreshActiveTransactions(MySQL_Connection* myconn);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB_replace_CLICKHOUSE(PtrSize_t& pkt);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(PtrSize_t& pkt);
+	// MYSQL_COM_QUERY___genai / MYSQL_COM_QUERY___llm and the entire
+	// async-genai socketpair infrastructure (handle_genai_response,
+	// genai_send_async, genai_cleanup_request, check_genai_events) were
+	// removed in Step 4 of the GenAI plugin carve-out (decision Q2 in
+	// the design doc).  GenAI now reaches clients through MCP / admin
+	// SQL / REST -- the in-line MySQL-protocol "GENAI:" / "LLM:"
+	// prefix escape hatches were a debug/POC convenience that bypassed
+	// routing, ACLs, and the query processor.
+
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_detect_SQLi();
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP_MULTI_PACKET(PtrSize_t& pkt);
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM__various(PtrSize_t* pkt, bool* wrong_pass);
@@ -400,9 +511,19 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	StmtLongDataHandler *SLDH;
 
 	Session_Regex **match_regexes;
+#ifdef PROXYSQLFFTO
+	std::unique_ptr<TrafficObserver> m_ffto;
+	bool ffto_bypassed { false };
+#endif
 
-	ProxySQL_Node_Address * proxysql_node_address; // this is used ONLY for Admin, and only if the other party is another proxysql instance part of a cluster
+	ProxySQL_Node_Address * proxysql_node_address;
+
+	 // this is used ONLY for Admin, and only if the other party is another proxysql instance part of a cluster
 	bool use_ldap_auth;
+	// Fast forward grace close flags: track backend closure during fast forward mode
+	// to allow pending client data to drain before closing the session.
+	bool backend_closed_in_fast_forward;
+	unsigned long long fast_forward_grace_start_time;
 
 	// this variable is relevant only if status == SETTING_VARIABLE
 	enum mysql_variable_name changing_variable_idx;
@@ -411,7 +532,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	~MySQL_Session();
 
 	//void set_unhealthy();
-	
+
 	void set_status(enum session_status e);
 	int handler();
 
@@ -419,9 +540,9 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	//MySQL_Backend * find_backend(int);
 	//MySQL_Backend * create_backend(int, MySQL_Data_Stream *_myds=NULL);
 	//MySQL_Backend * find_or_create_backend(int, MySQL_Data_Stream *_myds=NULL);
-	
+
 	void SQLite3_to_MySQL(SQLite3_result *, char *, int , MySQL_Protocol *, bool in_transaction=false, bool deprecate_eof_active=false) override;
-	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, unsigned int warning_count, MySQL_Data_Stream *_myds=NULL);
+	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, unsigned int warning_count, MySQL_Data_Stream *_myds=nullptr);
 	void MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Connection *myconn);
 	//unsigned int NumActiveTransactions(bool check_savpoint=false);
 	//bool HasOfflineBackends();
@@ -469,8 +590,24 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	void reset_warning_hostgroup_flag_and_release_connection();
 	void set_previous_status_mode3(bool allow_execute=true);
 	char* get_current_query(int max_length = -1);
+	bool handle_session_track_capabilities();
+	/**
+	 * @brief Attempts to get the server version string from a backend connection in the specified hostgroup.
+	 * @details This function iterates through servers in the hostgroup and checks for any available
+	 *   free connections to extract the server version string. It does NOT remove the connection
+	 *   from the pool - it only peeks at the version information.
+	 *
+	 * @param hostgroup_id The hostgroup ID to search for backend connections.
+	 * @return Pointer to the server version string if found, NULL otherwise.
+	 *         Note: The returned pointer points to the connection's internal data and should
+	 *         not be freed or modified. The pointer is only valid while the connection exists.
+	 */
+	char * get_backend_version_for_hostgroup(int hostgroup_id);
 
 	friend void SQLite3_Server_session_handler(MySQL_Session*, void *_pa, PtrSize_t *pkt);
+
+	MySQL_Session(const MySQL_Session&) = delete;
+	MySQL_Session& operator=(const MySQL_Session&) = delete;
 
 #if defined(__clang__)
 	template<typename SESS, typename DS, typename BE, typename THD>
@@ -499,6 +636,8 @@ public:
 	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned int _hid, unsigned long i, int kt, int _use_ssl, MySQL_Thread* _mt, char *ip);
 	~KillArgs();
 	const char* get_host_address() const;
+	KillArgs(const KillArgs&) = delete;
+	KillArgs& operator=(const KillArgs&) = delete;
 
 private:
 	char* ip_addr;
@@ -506,5 +645,5 @@ private:
 
 void * kill_query_thread(void *arg);
 
-#endif /* __CLASS_MYSQL_SESSION_ H */
+#endif /* PROXYSQL_MYSQL_SESSION_H */
 #endif // CLASS_BASE_SESSION_H

@@ -35,7 +35,8 @@ using std::string;
 using std::vector;
 
 const int SIGNAL_NUM = 5;
-const string base_address { "http://localhost:6070/sync/" };
+// base_address is constructed at runtime using the ProxySQL host from the environment.
+static string base_address { "http://proxysql:6070/sync/" };
 
 using params = std::string;
 using signal_t = int;
@@ -56,11 +57,36 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
+	// Build the RESTAPI base address using the actual ProxySQL host from the environment.
+	base_address = string("http://") + string(cl.host) + ":6070/sync/";
+
+	diag("=== Regression Test #3838: RESTAPI Script Execution & Signals ===");
+	diag("This test verifies that scripts executed via ProxySQL RESTAPI");
+	diag("are not improperly interrupted by signals.");
+	diag("The test strategy is:");
+	diag("1. Register scripts in ProxySQL RESTAPI routes.");
+	diag("2. Issue multiple POST requests to these endpoints.");
+	diag("3. Issue various signals (SIGCONT, SIGSTOP, SIGTERM) to the child processes.");
+	diag("4. Verify that ProxySQL correctly reports exit statuses and handles timeouts.");
+	diag("==================================================================");
+
+	const char* tap_host_env = getenv("TAP_HOST");
+	string target_host = (tap_host_env ? tap_host_env : "127.0.0.1");
+	bool is_remote = (target_host != "127.0.0.1" && target_host != "localhost" && target_host != "0.0.0.0");
+
+	if (is_remote) {
+		plan(0);
+		diag("Skipping test: ProxySQL is running on a remote host or different container (%s).", target_host.c_str());
+		diag("This test requires a shared PID namespace to signal child processes.");
+		return exit_status();
+	}
+
 	plan(endpoint_requests.size());
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
 
 	// Initialize connections
+	diag("Connecting to ProxySQL Admin at %s:%d as %s", cl.host, cl.admin_port, cl.admin_username);
 	if (!proxysql_admin) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return EXIT_FAILURE;
@@ -71,16 +97,18 @@ int main(int argc, char** argv) {
 	}
 
 	// Enable 'RESTAPI'
+	diag("Enabling RESTAPI on port 6070");
 	MYSQL_QUERY(proxysql_admin, "SET admin-restapi_enabled='true'");
 	MYSQL_QUERY(proxysql_admin, "SET admin-restapi_port=6070");
 
 	MYSQL_QUERY(proxysql_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
 
 	// Clean current 'restapi_routes' if any
+	diag("Configuring RESTAPI routes...");
 	MYSQL_QUERY(proxysql_admin, "DELETE FROM restapi_routes");
 
 	// Configure restapi_routes to be used
-	string test_script_base_path { string { cl.workdir  } + "reg_test_3838_scripts" };
+	const char* d_env = getenv("REGULAR_INFRA_DATADIR"); string test_script_base_path = (d_env ? string(d_env) + "/reg_test_3838_scripts" : string(cl.workdir) + "reg_test_3838_scripts");
 
 	vector<string> t_valid_scripts_inserts {
 		"INSERT INTO restapi_routes (active, timeout_ms, method, uri, script, comment)"
@@ -102,6 +130,7 @@ int main(int argc, char** argv) {
 	}
 
 	// Load RESTAPI
+	diag("Loading RESTAPI to runtime");
 	MYSQL_QUERY(proxysql_admin, "LOAD RESTAPI TO RUNTIME");
 
 	// Sensible wait until the new configured enpoints are ready. Use the first enpoint for the check
@@ -109,6 +138,7 @@ int main(int argc, char** argv) {
 	const string full_endpoint {
 		base_address + std::get<0>(first_request_tuple) + "/"
 	};
+	diag("Waiting for endpoint %s to be ready...", full_endpoint.c_str());
 	int endpoint_timeout = wait_post_enpoint_ready(full_endpoint, std::get<1>(first_request_tuple), 10, 500);
 
 	if (endpoint_timeout) {
@@ -125,12 +155,15 @@ int main(int argc, char** argv) {
 		const int signal = std::get<3>(request);
 		const int exp_child_exit_st = std::get<4>(request);
 
+		diag("Processing request: endpoint=%s params=%s exp_rc=%ld signal=%d", endpoint.c_str(), params.c_str(), exp_rc, signal);
+
 		string post_out_err { "" };
 		uint64_t curl_res_code = 0;
 
 		CURLcode post_err = CURLE_HTTP_POST_ERROR;
 
 		// 1. Perform the POST operation
+		diag("  Starting POST request in separate thread...");
 		std::thread post_op_th([&] () -> void {
 			post_err = perform_simple_post(endpoint, params, curl_res_code, post_out_err);
 		});
@@ -138,16 +171,25 @@ int main(int argc, char** argv) {
 		// 2. Find the child process
 		string s_pid {};
 
-		int timeout = 1000;
+		int timeout = 2000;
 		int waited = 0;
 		int e_res= 0;
 
+		diag("  Waiting for child process to spawn (searching for simple_sleep.sh)...");
 		while (waited < timeout) {
-			e_res = exec("ps aux | grep -e \"[/]bin/sh.*.simple_sleep.sh\" | awk '{print $2}'", s_pid);
+			e_res = exec("ps aux | grep \"simple_sleep.sh\" | grep -v grep | awk '{print $2}'", s_pid);
 
 			if (e_res == 0 && s_pid.empty()) {
-				usleep(200 * 1000);
-				waited += 200;
+				usleep(100 * 1000);
+				waited += 100;
+			} else if (e_res == 0 && !s_pid.empty()) {
+				// Sometimes multiple PIDs are returned if multiple threads/tests are running
+				std::stringstream ss(s_pid);
+				string first_pid;
+				if (ss >> first_pid) {
+					s_pid = first_pid;
+					break;
+				}
 			} else {
 				break;
 			}
@@ -157,36 +199,43 @@ int main(int argc, char** argv) {
 			if (e_res != EXIT_SUCCESS) {
 				fprintf(stderr, "File %s, line %d, 'exec' failed with error: '%d'\n", __FILE__, __LINE__, e_res);
 			} else {
-				const string err_msg {"Invalid command executed or faulty test logic" };
-				fprintf(stderr, "File %s, line %d, Error: '%s'\n", __FILE__, __LINE__, err_msg.c_str());
+				diag("  Warning: Could not find child process simple_sleep.sh after %dms. Signaling might fail.", waited);
 			}
 		} else {
 			// 3. Send multiple signals to the child process
 			int pid = std::stol(s_pid);
 			int k_res = 0;
 
+			diag("  Found child PID: %d. Sending %d signals (signal type: %d)...", pid, SIGNAL_NUM, signal);
 			if (signal == SIGCONT) {
 				for (int i = 0; i < SIGNAL_NUM; i++) {
 					k_res = kill(pid, SIGSTOP);
-					if (k_res != 0) { break; }
+					if (k_res != 0) { 
+						diag("  kill(SIGSTOP) failed: %s", strerror(errno));
+						break; 
+					}
 
-					usleep(100*1000);
+					usleep(50*1000);
 
 					k_res = kill(pid, SIGCONT);
-					if (k_res != 0) { break; }
+					if (k_res != 0) { 
+						diag("  kill(SIGCONT) failed: %s", strerror(errno));
+						break; 
+					}
 				}
 			} else {
 				for (int i = 0; i < SIGNAL_NUM; i++) {
 					k_res = kill(pid, signal);
+					if (k_res != 0) {
+						diag("  kill(%d) failed: %s", signal, strerror(errno));
+					}
 				}
-			}
-
-			if (k_res != 0) {
-				fprintf(stderr, "File %s, line %d, 'kill' failed with error: '%d'\n", __FILE__, __LINE__, errno);
 			}
 		}
 
+		diag("  Waiting for POST request to complete...");
 		post_op_th.join();
+		diag("  Request completed with curl_res_code=%ld and post_err=%d", curl_res_code, post_err);
 
 		try {
 			int child_exit_st = 0;
@@ -197,6 +246,7 @@ int main(int argc, char** argv) {
 			if (j_curl_err.contains("error_code")) {
 				child_exit_st = std::stol(j_curl_err["error_code"].get<string>());
 			}
+			diag("  Parsed response: child_exit_st=%d", child_exit_st);
 
 			// NOTE: This is pointless because the value doesn't change, but it's a demonstration on how to
 			// recover child process exit statuses for debugging purposes.

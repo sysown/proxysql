@@ -25,6 +25,11 @@ using json = nlohmann::json;
 #include "proxysql.h"
 #include "proxysql_config.h"
 #include "proxysql_restapi.h"
+// MCP_Thread.h / ProxySQL_MCP_Server.hpp moved to the genai plugin in
+// Step 4.C; GenAI_Thread.h moved in Step 5.  flush_mcp_variables___*()
+// are stubbed below; flush_genai_variables___*() were already
+// stubbed since Step 4.C (and remain so — Step 5 just removes the
+// extern decls).
 #include "proxysql_utils.h"
 #include "prometheus_helpers.h"
 #include "cpp.h"
@@ -42,6 +47,7 @@ using json = nlohmann::json;
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
+// GenAI_Thread.h moved to plugins/genai/include/ in Step 5.
 #include "SQLite3_Server.h"
 #include "Web_Interface.hpp"
 
@@ -139,6 +145,10 @@ extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern MySQL_Monitor *GloMyMon;
 extern PgSQL_Threads_Handler* GloPTH;
 
+// MCP_Threads_Handler ownership moved to the genai plugin in Step 4.C.
+// GenAI_Threads_Handler / AI_Features_Manager moved in Step 5 — core
+// no longer references those globals.
+
 extern void (*flush_logs_function)();
 
 extern Web_Interface *GloWebInterface;
@@ -165,7 +175,6 @@ bool ProxySQL_Admin::flush_GENERIC_variables__retrieve__database_to_runtime(cons
 	}
 	return true;
 }
-
 void ProxySQL_Admin::flush_GENERIC_variables__process__database_to_runtime(
 	const string& modname, SQLite3DB *db, SQLite3_result* resultset,
 	const bool& lock, const bool& replace,
@@ -190,6 +199,10 @@ void ProxySQL_Admin::flush_GENERIC_variables__process__database_to_runtime(
 #endif // PROXYSQLCLICKHOUSE
 		} else if (modname == "ldap") {
 			rc = GloMyLdapAuth->set_variable(r->fields[0],r->fields[1]);
+#ifdef PROXYSQLTSDB
+		} else if (modname == "tsdb") {
+			rc = GloProxyStats->set_variable(r->fields[0],r->fields[1]);
+#endif
 		}
 		const string v = string(r->fields[0]);
 		if (rc==false) {
@@ -208,32 +221,36 @@ void ProxySQL_Admin::flush_GENERIC_variables__process__database_to_runtime(
 #endif // PROXYSQLCLICKHOUSE
 				} else if (modname == "ldap") {
 					val = GloMyLdapAuth->get_variable(r->fields[0]);
+#ifdef PROXYSQLTSDB
+				} else if (modname == "tsdb") {
+					val = GloProxyStats->get_variable(r->fields[0]);
+#endif
 				}
 				char q[1000];
-				if (val) {
-					if (variables_read_only.count(v) > 0) {
-						proxy_warning("Impossible to set read-only variable %s with value \"%s\". Resetting to current \"%s\".\n", r->fields[0],r->fields[1], val);
-					} else {
-						proxy_warning("Impossible to set variable %s with value \"%s\". Resetting to current \"%s\".\n", r->fields[0],r->fields[1], val);
-					}
-					sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"%s-%s\",\"%s\")", modname.c_str(), r->fields[0],val);
-					db->execute(q);
-					free(val);
-				} else {
-					if (variables_to_delete_silently.count(v) > 0) {
-						sprintf(q,"DELETE FROM disk.global_variables WHERE variable_name=\"%s-%s\"", modname.c_str(), r->fields[0]);
+					if (val) {
+						if (variables_read_only.count(v) > 0) {
+							proxy_warning("Impossible to set read-only variable %s with value \"%s\". Resetting to current \"%s\".\n", r->fields[0],r->fields[1], val);
+						} else {
+							proxy_warning("Impossible to set variable %s with value \"%s\". Resetting to current \"%s\".\n", r->fields[0],r->fields[1], val);
+						}
+						snprintf(q, sizeof(q), "INSERT OR REPLACE INTO global_variables VALUES(\"%s-%s\",\"%s\")", modname.c_str(), r->fields[0], val);
 						db->execute(q);
-					} else if (variables_deprecated.count(v) > 0) {
-						proxy_error("Global variable %s-%s is deprecated.\n", modname.c_str(), r->fields[0]);
-						sprintf(q,"DELETE FROM disk.global_variables WHERE variable_name=\"%s-%s\"", modname.c_str(), r->fields[0]);
-						db->execute(q);
+						free(val);
 					} else {
-						proxy_warning("Impossible to set not existing variable %s with value \"%s\". Deleting. If the variable name is correct, this version doesn't support it\n", r->fields[0],r->fields[1]);
+						if (variables_to_delete_silently.count(v) > 0) {
+							snprintf(q, sizeof(q), "DELETE FROM disk.global_variables WHERE variable_name=\"%s-%s\"", modname.c_str(), r->fields[0]);
+							db->execute(q);
+						} else if (variables_deprecated.count(v) > 0) {
+							proxy_error("Global variable %s-%s is deprecated.\n", modname.c_str(), r->fields[0]);
+							snprintf(q, sizeof(q), "DELETE FROM disk.global_variables WHERE variable_name=\"%s-%s\"", modname.c_str(), r->fields[0]);
+							db->execute(q);
+						} else {
+							proxy_warning("Impossible to set not existing variable %s with value \"%s\". Deleting. If the variable name is correct, this version doesn't support it\n", r->fields[0],r->fields[1]);
+						}
+						snprintf(q, sizeof(q), "DELETE FROM global_variables WHERE variable_name=\"%s-%s\"", modname.c_str(), r->fields[0]);
+						db->execute(q);
 					}
-					sprintf(q,"DELETE FROM global_variables WHERE variable_name=\"%s-%s\"", modname.c_str(), r->fields[0]);
-					db->execute(q);
 				}
-			}
 		} else {
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
 			if (variables_special_values.count(v) > 0) {
@@ -319,15 +336,18 @@ void ProxySQL_Admin::flush_pgsql_variables___runtime_to_database(SQLite3DB* db, 
 	int rc;
 	sqlite3_stmt* statement1 = NULL;
 	sqlite3_stmt* statement2 = NULL;
-	//sqlite3 *mydb3=db->get_db();
-	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, a, -1, &statement1, 0);
-	rc = db->prepare_v2(a, &statement1);
+	auto [rc1, statement1_unique] = db->prepare_v2(a);
+	rc = rc1;
+	statement1 = statement1_unique.get();
 	ASSERT_SQLITE_OK(rc, db);
+	stmt_unique_ptr statement2_unique {};
 	if (runtime) {
 		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'pgsql-%'");
 		b = (char*)"INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(?1, ?2)";
-		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, b, -1, &statement2, 0);
-		rc = db->prepare_v2(b, &statement2);
+		auto [rc2, prepared_statement2] = db->prepare_v2(b);
+		rc = rc2;
+		statement2_unique = std::move(prepared_statement2);
+		statement2 = statement2_unique.get();
 		ASSERT_SQLITE_OK(rc, db);
 	}
 	if (use_lock) {
@@ -337,8 +357,9 @@ void ProxySQL_Admin::flush_pgsql_variables___runtime_to_database(SQLite3DB* db, 
 	char** varnames = GloPTH->get_variables_list();
 	for (int i = 0; varnames[i]; i++) {
 		char* val = GloPTH->get_variable(varnames[i]);
-		char* qualified_name = (char*)malloc(strlen(varnames[i]) + 12);
-		sprintf(qualified_name, "pgsql-%s", varnames[i]);
+		size_t qualified_name_len = strlen(varnames[i]) + sizeof("pgsql-");
+		char* qualified_name = (char*)malloc(qualified_name_len);
+		snprintf(qualified_name, qualified_name_len, "pgsql-%s", varnames[i]);
 		rc = (*proxy_sqlite3_bind_text)(statement1, 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 		rc = (*proxy_sqlite3_bind_text)(statement1, 2, (val ? val : (char*)""), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 		SAFE_SQLITE3_STEP2(statement1);
@@ -359,9 +380,6 @@ void ProxySQL_Admin::flush_pgsql_variables___runtime_to_database(SQLite3DB* db, 
 		db->execute("COMMIT");
 		GloPTH->wrunlock();
 	}
-	(*proxy_sqlite3_finalize)(statement1);
-	if (runtime)
-		(*proxy_sqlite3_finalize)(statement2);
 	for (int i = 0; varnames[i]; i++) {
 		free(varnames[i]);
 	}
@@ -384,14 +402,23 @@ void ProxySQL_Admin::flush_GENERIC_variables__checksum__database_to_runtime(cons
 		if (GloVars.cluster_sync_interfaces == false) {
 			q += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_ADMIN);
 		}
+	} else if (modname == "pgsql") {
+		if (GloVars.cluster_sync_interfaces == false) {
+			q += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_PGSQL);
+		}
 	}
 	q += " ORDER BY variable_name";
 	admindb->execute_statement(q.c_str(), &error , &cols , &affected_rows , &resultset);
+	if (error || resultset == NULL) {
+		proxy_error("flush_GENERIC_variables__checksum__database_to_runtime failed for %s: %s\n",
+			modname.c_str(), error ? error : "NULL resultset");
+		return;
+	}
 	uint64_t hash1 = resultset->raw_checksum();
 	uint32_t d32[2];
 	char buf[20];
 	memcpy(&d32, &hash1, sizeof(hash1));
-	sprintf(buf,"0x%0X%0X", d32[0], d32[1]);
+	snprintf(buf, sizeof(buf), "0x%0X%0X", d32[0], d32[1]);
 	ProxySQL_Checksum_Value *checkvar = NULL;
 	if (modname == "admin") {
 		checkvar = &GloVars.checksums_values.admin_variables;
@@ -399,6 +426,8 @@ void ProxySQL_Admin::flush_GENERIC_variables__checksum__database_to_runtime(cons
 		checkvar = &GloVars.checksums_values.mysql_variables;
 	} else if (modname == "ldap") {
 		checkvar = &GloVars.checksums_values.ldap_variables;
+	} else if (modname == "pgsql") {
+		checkvar = &GloVars.checksums_values.pgsql_variables;
 	}
 	assert(checkvar != NULL);
 	checkvar->set_checksum(buf);
@@ -447,12 +476,12 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 				if (varname == "default_collation_connection" || varname == "default_charset") {
 					char *val=GloMTH->get_variable((char *)varname.c_str());
 					if (val) {
-						if (strcmp(val,varvalue)) {
-							char q[1000];
-							proxy_warning("Variable %s with value \"%s\" is being replaced with value \"%s\".\n", varname.c_str(), varvalue, val);
-							sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-%s\",\"%s\")", varname.c_str() ,val);
-							db->execute(q);
-						}
+							if (strcmp(val,varvalue)) {
+								char q[1000];
+								proxy_warning("Variable %s with value \"%s\" is being replaced with value \"%s\".\n", varname.c_str(), varvalue, val);
+								snprintf(q, sizeof(q), "INSERT OR REPLACE INTO global_variables VALUES(\"mysql-%s\",\"%s\")", varname.c_str(), val);
+								db->execute(q);
+							}
 						free(val);
 					}
 				} else if (varname == "show_processlist_extended") {
@@ -480,33 +509,33 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 			ci = proxysql_find_charset_collate(default_collation_connection);
 			if (ci == NULL) {
 				proxy_error("Found an incorrect value for mysql-default_collation_connection: %s\n", default_collation_connection);
-				const char *p = mysql_tracked_variables[SQL_CHARACTER_SET].default_value;
-				ci = proxysql_find_charset_name(p);
-				assert(ci);
-				proxy_info("Resetting mysql-default_charset to hardcoded default value: %s\n", ci->csname);
-				sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_charset\",\"%s\")", ci->csname);
-				db->execute(q);
-				GloMTH->set_variable((char *)"default_charset",ci->csname);
-				proxy_info("Resetting mysql-default_collation_connection to hardcoded default value: %s\n", ci->name);
-				sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_collation_connection\",\"%s\")", ci->name);
-				db->execute(q);
-				GloMTH->set_variable((char *)"default_collation_connection",ci->name);
-			} else {
-				proxy_info("Changing mysql-default_charset to %s using configured mysql-default_collation_connection %s\n", ci->csname, ci->name);
-				sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_charset\",\"%s\")", ci->csname);
-				db->execute(q);
-				GloMTH->set_variable((char *)"default_charset",ci->csname);
-			}
+					const char *p = mysql_tracked_variables[SQL_CHARACTER_SET].default_value;
+					ci = proxysql_find_charset_name(p);
+					assert(ci);
+					proxy_info("Resetting mysql-default_charset to hardcoded default value: %s\n", ci->csname);
+					snprintf(q, sizeof(q), "INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_charset\",\"%s\")", ci->csname);
+					db->execute(q);
+					GloMTH->set_variable((char *)"default_charset",ci->csname);
+					proxy_info("Resetting mysql-default_collation_connection to hardcoded default value: %s\n", ci->name);
+					snprintf(q, sizeof(q), "INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_collation_connection\",\"%s\")", ci->name);
+					db->execute(q);
+					GloMTH->set_variable((char *)"default_collation_connection",ci->name);
+				} else {
+					proxy_info("Changing mysql-default_charset to %s using configured mysql-default_collation_connection %s\n", ci->csname, ci->name);
+					snprintf(q, sizeof(q), "INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_charset\",\"%s\")", ci->csname);
+					db->execute(q);
+					GloMTH->set_variable((char *)"default_charset",ci->csname);
+				}
 		} else {
 			MARIADB_CHARSET_INFO * cic = NULL;
 			cic = proxysql_find_charset_collate(default_collation_connection);
-			if (cic == NULL) {
-				proxy_error("Found an incorrect value for mysql-default_collation_connection: %s\n", default_collation_connection);
-				proxy_info("Changing mysql-default_collation_connection to %s using configured mysql-default_charset: %s\n", ci->name, ci->csname);
-				sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_collation_connection\",\"%s\")", ci->name);
-				db->execute(q);
-				GloMTH->set_variable((char *)"default_collation_connection",ci->name);
-			} else {
+				if (cic == NULL) {
+					proxy_error("Found an incorrect value for mysql-default_collation_connection: %s\n", default_collation_connection);
+					proxy_info("Changing mysql-default_collation_connection to %s using configured mysql-default_charset: %s\n", ci->name, ci->csname);
+					snprintf(q, sizeof(q), "INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_collation_connection\",\"%s\")", ci->name);
+					db->execute(q);
+					GloMTH->set_variable((char *)"default_collation_connection",ci->name);
+				} else {
 				if (strcmp(cic->csname,ci->csname)==0) {
 					// mysql-default_collation_connection and mysql-default_charset are compatible
 				} else {
@@ -518,18 +547,18 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 							// we use charset as source of truth
 							use_collation = false;
 						}
-					}
-					if (use_collation) {
-						proxy_info("Changing mysql-default_charset to %s using configured mysql-default_collation_connection %s\n", cic->csname, cic->name);
-						sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_charset\",\"%s\")", cic->csname);
-						db->execute(q);
-						GloMTH->set_variable((char *)"default_charset",cic->csname);
-					} else {
-						proxy_info("Changing mysql-default_collation_connection to %s using configured mysql-default_charset: %s\n", ci->name, ci->csname);
-						sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_collation_connection\",\"%s\")", ci->name);
-						db->execute(q);
-						GloMTH->set_variable((char *)"default_collation_connection",ci->name);
-					}
+						}
+						if (use_collation) {
+							proxy_info("Changing mysql-default_charset to %s using configured mysql-default_collation_connection %s\n", cic->csname, cic->name);
+							snprintf(q, sizeof(q), "INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_charset\",\"%s\")", cic->csname);
+							db->execute(q);
+							GloMTH->set_variable((char *)"default_charset",cic->csname);
+						} else {
+							proxy_info("Changing mysql-default_collation_connection to %s using configured mysql-default_charset: %s\n", ci->name, ci->csname);
+							snprintf(q, sizeof(q), "INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_collation_connection\",\"%s\")", ci->name);
+							db->execute(q);
+							GloMTH->set_variable((char *)"default_collation_connection",ci->name);
+						}
 				}
 			}
 		}
@@ -548,6 +577,84 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 			flush_mysql_variables___runtime_to_database(admindb, false, false, false, true, true);
 			flush_GENERIC_variables__checksum__database_to_runtime("mysql", checksum, epoch);
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
+		}
+
+		/**
+		 * @brief Check and warn if TCP keepalive is disabled for MySQL connections.
+		 *
+		 * This safety check warns users when mysql-use_tcp_keepalive is set to false,
+		 * which can cause connection instability in certain deployment scenarios.
+		 *
+		 * @warning Disabling TCP keepalive is unsafe when ProxySQL is deployed behind:
+		 *   - Network load balancers with idle connection timeouts
+		 *   - NAT firewalls with connection state timeout
+		 *   - Cloud environments with connection pooling
+		 *   - Any intermediate network device that drops idle connections
+		 *
+		 * @why_unsafe TCP keepalive sends periodic keep-alive packets on idle connections.
+		 * When disabled:
+		 *   - Load balancers may drop connections from their connection pools
+		 *   - NAT devices may remove connection state from their tables
+		 *   - Cloud load balancers (AWS ELB, GCP Load Balancer, etc.) may terminate
+		 *     connections during idle periods
+		 *   - Results in sudden connection failures and "connection reset" errors
+		 *   - Can cause application downtime and poor user experience
+		 *
+		 * @recommendation Always set mysql-use_tcp_keepalive=true when deploying
+		 * behind load balancers or in cloud environments.
+		 */
+		// Check for TCP keepalive setting and warn if disabled
+		int mysql_use_tcp_keepalive = GloMTH->get_variable_int((char *)"use_tcp_keepalive");
+		if (mysql_use_tcp_keepalive == 0) {
+			proxy_warning("mysql-use_tcp_keepalive is set to false. This may cause connection drops when ProxySQL is behind a network load balancer. Consider setting this to true.\n");
+		}
+
+		// Cross-variable validation for 'mysql-session_track_variables'.
+		//
+		// Session variable tracking depends on two other MySQL capability toggles and
+		// the interaction is non-obvious: an operator who sets only 'session_track_variables'
+		// can end up with the feature silently doing nothing (OPTIONAL) or with client
+		// behavior changing unexpectedly (ENFORCED). We emit warnings once per
+		// 'LOAD MYSQL VARIABLES TO RUNTIME' so a misconfiguration is visible in the
+		// normal operator workflow rather than having to be debugged later.
+		//
+		// The checks are only relevant when the feature is actually requested: when
+		// 'session_track_variables=DISABLED' (the default) none of these interactions
+		// matter and we emit nothing. We deliberately do not name specific backends
+		// here - this is a global configuration warning; per-backend capability
+		// mismatches are logged separately at the point where they are detected in
+		// 'MySQL_Session::handle_session_track_capabilities()'.
+		int session_track_variables_mode = GloMTH->get_variable_int((char *)"session_track_variables");
+		if (session_track_variables_mode != session_track_variables::DISABLED) {
+			int enable_client_deprecate_eof = GloMTH->get_variable_int((char *)"enable_client_deprecate_eof");
+			int enable_server_deprecate_eof = GloMTH->get_variable_int((char *)"enable_server_deprecate_eof");
+
+			if (session_track_variables_mode == session_track_variables::ENFORCED) {
+				// ENFORCED mode guarantees that session tracking is set up on every
+				// eligible backend connection, and to do that it must force
+				// CLIENT_DEPRECATE_EOF on both the client- and server-facing halves of
+				// the protocol even when the operator asked for the opposite. Warn
+				// explicitly so the behavior change is never silent: clients that do
+				// not negotiate CLIENT_DEPRECATE_EOF will see OK packets where they
+				// previously saw EOF packets, which can break older connectors.
+				if (enable_client_deprecate_eof == 0) {
+					proxy_warning("mysql-session_track_variables=ENFORCED overrides mysql-enable_client_deprecate_eof=false and forces CLIENT_DEPRECATE_EOF on frontend connections. Older clients that do not negotiate CLIENT_DEPRECATE_EOF may be affected.\n");
+				}
+				if (enable_server_deprecate_eof == 0) {
+					proxy_warning("mysql-session_track_variables=ENFORCED overrides mysql-enable_server_deprecate_eof=false and forces CLIENT_DEPRECATE_EOF on backend connections.\n");
+				}
+			} else if (session_track_variables_mode == session_track_variables::OPTIONAL) {
+				// OPTIONAL mode gracefully skips tracking on any backend that lacks the
+				// required capabilities - including when ProxySQL itself is configured
+				// not to negotiate CLIENT_DEPRECATE_EOF upstream. In that configuration
+				// tracking is a no-op: the feature appears enabled in the admin tables
+				// but nothing is ever tracked. Make the dependency explicit so the
+				// operator is not left wondering why 'PROXYSQL INTERNAL SESSION' shows
+				// no tracked variables.
+				if (enable_server_deprecate_eof == 0) {
+					proxy_warning("mysql-session_track_variables=OPTIONAL has no effect while mysql-enable_server_deprecate_eof=false; backend session tracking will be skipped. Set mysql-enable_server_deprecate_eof=true or use ENFORCED mode to activate tracking.\n");
+				}
+			}
 		}
 	}
 	if (resultset) delete resultset;
@@ -574,6 +681,27 @@ void ProxySQL_Admin::flush_sqliteserver_variables___database_to_runtime(SQLite3D
 	}
 	if (resultset) delete resultset;
 }
+
+#ifdef PROXYSQLTSDB
+void ProxySQL_Admin::flush_tsdb_variables___database_to_runtime(SQLite3DB *db, bool replace) {
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing TSDB variables. Replace:%d\n", replace);
+	if (GloProxyStats == NULL) {
+		return;
+	}
+
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+
+	if (flush_GENERIC_variables__retrieve__database_to_runtime("tsdb", error, cols, affected_rows, resultset) == true) {
+		flush_GENERIC_variables__process__database_to_runtime("tsdb", db, resultset, false, replace, {}, {}, {}, {});
+		flush_tsdb_variables___runtime_to_database(admindb, false, false, false, true);
+	}
+
+	if (resultset) delete resultset;
+}
+#endif
 
 void ProxySQL_Admin::flush_sqliteserver_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing ClickHouse variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
@@ -617,18 +745,19 @@ void ProxySQL_Admin::flush_sqliteserver_variables___runtime_to_database(SQLite3D
   } else {
     a=(char *)"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(\"sqliteserver-%s\",\"%s\")";
   }
-  int l=strlen(a)+200;
 	GloSQLite3Server->wrlock();
 	char **varnames=GloSQLite3Server->get_variables_list();
 	for (int i=0; varnames[i]; i++) {
 		char *val=GloSQLite3Server->get_variable(varnames[i]);
-		l+=( varnames[i] ? strlen(varnames[i]) : 6);
-		l+=( val ? strlen(val) : 6);
+		const char* safe_val = (val ? val : "(null)");
+		size_t l = strlen(a) + 200;
+		l += (varnames[i] ? strlen(varnames[i]) : 6);
+		l += strlen(safe_val);
 		char *query=(char *)malloc(l);
-		sprintf(query, a, varnames[i], val);
+		snprintf(query, l, a, varnames[i], safe_val);
 		if (runtime) {
 			db->execute(query);
-			sprintf(query, b, varnames[i], val);
+			snprintf(query, l, b, varnames[i], safe_val);
 		}
 		db->execute(query);
 		if (val)
@@ -720,10 +849,10 @@ void ProxySQL_Admin::flush_clickhouse_variables___runtime_to_database(SQLite3DB 
 		l+=( varnames[i] ? strlen(varnames[i]) : 6);
 		l+=( val ? strlen(val) : 6);
 		char *query=(char *)malloc(l);
-		sprintf(query, a, varnames[i], val);
+		snprintf(query, l, a, varnames[i], val);
 		if (runtime) {
 			db->execute(query);
-			sprintf(query, b, varnames[i], val);
+			snprintf(query, l, b, varnames[i], val);
 		}
 		db->execute(query);
 		if (val)
@@ -761,35 +890,35 @@ void ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(SQLite3DB* db, 
 				if (replace) {
 					char* val = GloPTH->get_variable(r->fields[0]);
 					char q[1000];
-					if (val) {
-						if (strcmp(val, value)) {
-							proxy_warning("Impossible to set variable %s with value \"%s\". Resetting to current \"%s\".\n", r->fields[0], value, val);
-							sprintf(q, "INSERT OR REPLACE INTO global_variables VALUES(\"pgsql-%s\",\"%s\")", r->fields[0], val);
-							db->execute(q);
-						}
-						free(val);
+						if (val) {
+							if (strcmp(val, value)) {
+								proxy_warning("Impossible to set variable %s with value \"%s\". Resetting to current \"%s\".\n", r->fields[0], value, val);
+								snprintf(q, sizeof(q), "INSERT OR REPLACE INTO global_variables VALUES(\"pgsql-%s\",\"%s\")", r->fields[0], val);
+								db->execute(q);
+							}
+							free(val);
 					}
-					else {
-						if (strcmp(r->fields[0], (char*)"session_debug") == 0) {
-							sprintf(q, "DELETE FROM disk.global_variables WHERE variable_name=\"pgsql-%s\"", r->fields[0]);
-							db->execute(q);
-						}
 						else {
-							if (strcmp(r->fields[0], (char*)"forward_autocommit") == 0) {
-								if (strcasecmp(value, "true") == 0 || strcasecmp(value, "1") == 0) {
-									proxy_error("Global variable pgsql-forward_autocommit is deprecated. See issue #3253\n");
-								}
-								sprintf(q, "DELETE FROM disk.global_variables WHERE variable_name=\"pgsql-%s\"", r->fields[0]);
+							if (strcmp(r->fields[0], (char*)"session_debug") == 0) {
+								snprintf(q, sizeof(q), "DELETE FROM disk.global_variables WHERE variable_name=\"pgsql-%s\"", r->fields[0]);
 								db->execute(q);
 							}
 							else {
+								if (strcmp(r->fields[0], (char*)"forward_autocommit") == 0) {
+									if (strcasecmp(value, "true") == 0 || strcasecmp(value, "1") == 0) {
+										proxy_error("Global variable pgsql-forward_autocommit is deprecated. See issue #3253\n");
+									}
+									snprintf(q, sizeof(q), "DELETE FROM disk.global_variables WHERE variable_name=\"pgsql-%s\"", r->fields[0]);
+									db->execute(q);
+								}
+							else {
 								proxy_warning("Impossible to set not existing variable %s with value \"%s\". Deleting. If the variable name is correct, this version doesn't support it\n", r->fields[0], r->fields[1]);
+								}
 							}
+							snprintf(q, sizeof(q), "DELETE FROM global_variables WHERE variable_name=\"pgsql-%s\"", r->fields[0]);
+							db->execute(q);
 						}
-						sprintf(q, "DELETE FROM global_variables WHERE variable_name=\"pgsql-%s\"", r->fields[0]);
-						db->execute(q);
 					}
-				}
 			}
 			else {
 				if (
@@ -798,13 +927,13 @@ void ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(SQLite3DB* db, 
 					) {
 					char* val = GloPTH->get_variable(r->fields[0]);
 					char q[1000];
-					if (val) {
-						if (strcmp(val, value)) {
-							proxy_warning("Variable %s with value \"%s\" is being replaced with value \"%s\".\n", r->fields[0], value, val);
-							sprintf(q, "INSERT OR REPLACE INTO global_variables VALUES(\"pgsql-%s\",\"%s\")", r->fields[0], val);
-							db->execute(q);
-						}
-						free(val);
+						if (val) {
+							if (strcmp(val, value)) {
+								proxy_warning("Variable %s with value \"%s\" is being replaced with value \"%s\".\n", r->fields[0], value, val);
+								snprintf(q, sizeof(q), "INSERT OR REPLACE INTO global_variables VALUES(\"pgsql-%s\",\"%s\")", r->fields[0], val);
+								db->execute(q);
+							}
+							free(val);
 					}
 				}
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Set variable %s with value \"%s\"\n", r->fields[0], value);
@@ -830,64 +959,64 @@ void ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(SQLite3DB* db, 
 		if (charset_encoding == -1) {
 			// invalid charset_encoding
 			proxy_error("Found an incorrect value for pgsql-default_client_encoding: %s\n", default_client_encoding);
-			const char* p = pgsql_tracked_variables[PGSQL_CLIENT_ENCODING].default_value;
-			charset_encoding = PgSQL_Connection::char_to_encoding(p);
-			assert(charset_encoding != -1);
-			proxy_info("Resetting pgsql-default_client_encoding to hardcoded default value: %s\n", p);
-			sprintf(q, "INSERT OR REPLACE INTO global_variables VALUES(\"pgsql-default_client_encoding\",\"%s\")", p);
-			db->execute(q);
-			GloPTH->set_variable((char*)"default_client_encoding", p);
+				const char* p = pgsql_tracked_variables[PGSQL_CLIENT_ENCODING].default_value;
+				charset_encoding = PgSQL_Connection::char_to_encoding(p);
+				assert(charset_encoding != -1);
+				proxy_info("Resetting pgsql-default_client_encoding to hardcoded default value: %s\n", p);
+				snprintf(q, sizeof(q), "INSERT OR REPLACE INTO global_variables VALUES(\"pgsql-default_client_encoding\",\"%s\")", p);
+				db->execute(q);
+				GloPTH->set_variable((char*)"default_client_encoding", p);
 		}
 		free(default_client_encoding);
 		GloPTH->commit();
 		GloPTH->wrunlock();
 
-		/* Checksums are always generated - 'admin-checksum_*' deprecated
-		{
-			// NOTE: 'GloPTH->wrunlock()' should have been called before this point to avoid possible
-			// deadlocks. See issue #3847.
-			pthread_mutex_lock(&GloVars.checksum_mutex);
-			// generate checksum for cluster
-			flush_mysql_variables___runtime_to_database(admindb, false, false, false, true, true);
-			char* error = NULL;
-			int cols = 0;
-			int affected_rows = 0;
-			SQLite3_result* resultset = NULL;
-			std::string q;
-			q = "SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'mysql-\%' AND variable_name NOT IN ('mysql-threads')";
-			if (GloVars.cluster_sync_interfaces == false) {
-				q += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_MYSQL);
+			{
+				// NOTE: 'GloPTH->wrunlock()' should have been called before this point to avoid possible
+				// deadlocks. See issue #3847.
+				pthread_mutex_lock(&GloVars.checksum_mutex);
+				flush_pgsql_variables___runtime_to_database(admindb, false, false, false, true, true);
+				flush_GENERIC_variables__checksum__database_to_runtime("pgsql", checksum, epoch);
+				pthread_mutex_unlock(&GloVars.checksum_mutex);
 			}
-			q += " ORDER BY variable_name";
-			admindb->execute_statement(q.c_str(), &error, &cols, &affected_rows, &resultset);
-			uint64_t hash1 = resultset->raw_checksum();
-			uint32_t d32[2];
-			char buf[20];
-			memcpy(&d32, &hash1, sizeof(hash1));
-			sprintf(buf, "0x%0X%0X", d32[0], d32[1]);
-			GloVars.checksums_values.mysql_variables.set_checksum(buf);
-			GloVars.checksums_values.mysql_variables.version++;
-			time_t t = time(NULL);
-			if (epoch != 0 && checksum != "" && GloVars.checksums_values.mysql_variables.checksum == checksum) {
-				GloVars.checksums_values.mysql_variables.epoch = epoch;
-			}
-			else {
-				GloVars.checksums_values.mysql_variables.epoch = t;
-			}
-			GloVars.epoch_version = t;
-			GloVars.generate_global_checksum();
-			GloVars.checksums_values.updates_cnt++;
-			pthread_mutex_unlock(&GloVars.checksum_mutex);
-			delete resultset;
+	
+		/**
+		 * @brief Check and warn if TCP keepalive is disabled for PostgreSQL connections.
+		 *
+		 * This safety check warns users when pgsql-use_tcp_keepalive is set to false,
+		 * which can cause connection instability in certain deployment scenarios.
+		 *
+		 * @warning Disabling TCP keepalive is unsafe when ProxySQL is deployed behind:
+		 *   - Network load balancers with idle connection timeouts
+		 *   - NAT firewalls with connection state timeout
+		 *   - Cloud environments with connection pooling
+		 *   - Any intermediate network device that drops idle connections
+		 *
+		 * @why_unsafe TCP keepalive sends periodic keep-alive packets on idle connections.
+		 * When disabled for PostgreSQL:
+		 *   - Load balancers may drop connections from their connection pools
+		 *   - NAT devices may remove connection state from their tables
+		 *   - Cloud load balancers (AWS ELB, GCP Load Balancer, etc.) may terminate
+		 *     connections during idle periods
+		 *   - PostgreSQL connections may appear "stale" to the database server
+		 *   - Results in sudden connection failures and "connection reset" errors
+		 *   - Can cause application downtime and poor user experience
+		 *
+		 * @note PostgreSQL connections are often long-lived and benefit greatly from
+		 * TCP keepalive, especially in connection-pooled environments.
+		 *
+		 * @recommendation Always set pgsql-use_tcp_keepalive=true when deploying
+		 * behind load balancers or in cloud environments.
+		 */
+		// Check for TCP keepalive setting and warn if disabled
+		int pgsql_use_tcp_keepalive = GloPTH->get_variable_int((char *)"use_tcp_keepalive");
+		if (pgsql_use_tcp_keepalive == 0) {
+			proxy_warning("pgsql-use_tcp_keepalive is set to false. This may cause connection drops when ProxySQL is behind a network load balancer. Consider setting this to true.\n");
 		}
-		proxy_info(
-			"Computed checksum for 'LOAD MYSQL VARIABLES TO RUNTIME' was '%s', with epoch '%llu'\n",
-			GloVars.checksums_values.mysql_variables.checksum, GloVars.checksums_values.mysql_variables.epoch
-		);
-		*/
 	}
 	if (resultset) delete resultset;
 }
+
 
 void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime, bool use_lock) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MySQL variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
@@ -926,16 +1055,21 @@ void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, 
 		a=(char *)"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)";
 	}
 	int rc;
-	sqlite3_stmt *statement1=NULL;
-	sqlite3_stmt *statement2=NULL;
-
-	rc=db->prepare_v2(a, &statement1);
+	sqlite3_stmt *statement1 = NULL;
+	sqlite3_stmt *statement2 = NULL;
+	auto [rc1, statement1_unique] = db->prepare_v2(a);
+	rc = rc1;
+	statement1 = statement1_unique.get();
 	ASSERT_SQLITE_OK(rc, db);
+	stmt_unique_ptr statement2_unique {};
 	if (runtime)  {
 		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'mysql-%'");
 		b=(char *)"INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(?1, ?2)";
 
-		rc=db->prepare_v2(b, &statement2);
+		auto [rc2, prepared_statement2] = db->prepare_v2(b);
+		rc = rc2;
+		statement2_unique = std::move(prepared_statement2);
+		statement2 = statement2_unique.get();
 		ASSERT_SQLITE_OK(rc, db);
 	}
 	if (use_lock) {
@@ -945,8 +1079,9 @@ void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, 
 	char **varnames=GloMTH->get_variables_list();
 	for (int i=0; varnames[i]; i++) {
 		char *val=GloMTH->get_variable(varnames[i]);
-		char *qualified_name=(char *)malloc(strlen(varnames[i])+7);
-		sprintf(qualified_name, "mysql-%s", varnames[i]);
+		size_t qualified_name_len = strlen(varnames[i]) + sizeof("mysql-");
+		char *qualified_name=(char *)malloc(qualified_name_len);
+		snprintf(qualified_name, qualified_name_len, "mysql-%s", varnames[i]);
 		rc=(*proxy_sqlite3_bind_text)(statement1, 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 		rc=(*proxy_sqlite3_bind_text)(statement1, 2, (val ? val : (char *)""), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 		SAFE_SQLITE3_STEP2(statement1);
@@ -967,9 +1102,6 @@ void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, 
 		db->execute("COMMIT");
 		GloMTH->wrunlock();
 	}
-	(*proxy_sqlite3_finalize)(statement1);
-	if (runtime)
-		(*proxy_sqlite3_finalize)(statement2);
 	for (int i=0; varnames[i]; i++) {
 		free(varnames[i]);
 	}
@@ -1044,18 +1176,19 @@ void ProxySQL_Admin::flush_ldap_variables___runtime_to_database(SQLite3DB *db, b
   } else {
     a=(char *)"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(\"ldap-%s\",\"%s\")";
   }
-  int l=strlen(a)+200;
 	GloMyLdapAuth->wrlock();
 	char **varnames=GloMyLdapAuth->get_variables_list();
 	for (int i=0; varnames[i]; i++) {
 		char *val=GloMyLdapAuth->get_variable(varnames[i]);
-		l+=( varnames[i] ? strlen(varnames[i]) : 6);
-		l+=( val ? strlen(val) : 6);
+		const char* safe_val = (val ? val : "(null)");
+		size_t l = strlen(a) + 200;
+		l += (varnames[i] ? strlen(varnames[i]) : 6);
+		l += strlen(safe_val);
 		char *query=(char *)malloc(l);
-		sprintf(query, a, varnames[i], val);
+		snprintf(query, l, a, varnames[i], safe_val);
 		if (runtime) {
 			db->execute(query);
-			sprintf(query, b, varnames[i], val);
+			snprintf(query, l, b, varnames[i], safe_val);
 		}
 		db->execute(query);
 		if (val)
@@ -1108,18 +1241,18 @@ void ProxySQL_Admin::flush_admin_variables___runtime_to_database(SQLite3DB *db, 
   } else {
     a=(char *)"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(\"admin-%s\",\"%s\")";
   }
-  int l=strlen(a)+200;
-
 	char **varnames=get_variables_list();
 	for (int i=0; varnames[i]; i++) {
 		char *val=get_variable(varnames[i]);
-		l+=( varnames[i] ? strlen(varnames[i]) : 6);
-		l+=( val ? strlen(val) : 6);
+		const char* safe_val = (val ? val : "(null)");
+		size_t l = strlen(a) + 200;
+		l += (varnames[i] ? strlen(varnames[i]) : 6);
+		l += strlen(safe_val);
 		char *query=(char *)malloc(l);
-		sprintf(query, a, varnames[i], val);
+		snprintf(query, l, a, varnames[i], safe_val);
 		db->execute(query);
 		if (runtime) {
-			sprintf(query, b, varnames[i], val);
+			snprintf(query, l, b, varnames[i], safe_val);
 			db->execute(query);
 		}
 		if (val)
@@ -1130,5 +1263,4 @@ void ProxySQL_Admin::flush_admin_variables___runtime_to_database(SQLite3DB *db, 
 		free(varnames[i]);
 	}
 	free(varnames);
-
 }
