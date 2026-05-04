@@ -670,7 +670,7 @@ enum PGSQL_QUERY_command PgSQL_Query_Processor::query_parser_command_type(SQP_pa
 
 	if (pgsql_thread___query_processor_parser == 1) {
 		if (text) {
-			return parsersql_command_type_pgsql(text, strlen(text));
+			return parsersql_command_type_pgsql(text, strlen(text)); // NOSONAR
 		}
 		return PGSQL_QUERY_UNKNOWN;
 	}

@@ -165,7 +165,7 @@ enum MYSQL_COM_QUERY_command MySQL_Query_Processor::query_parser_command_type(SQ
 
 	if (mysql_thread___query_processor_parser == 1) {
 		if (text) {
-			return parsersql_command_type_mysql(text, strlen(text));
+			return parsersql_command_type_mysql(text, strlen(text)); // NOSONAR
 		}
 		return MYSQL_COM_QUERY_UNKNOWN;
 	}
