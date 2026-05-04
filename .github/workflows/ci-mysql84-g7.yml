@@ -1,0 +1,131 @@
+name: CI-mysql84-g7
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      trigger:
+        type: string
+
+env:
+  SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+
+jobs:
+  tests:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        infradb: [ 'mysql84' ]
+    env:
+      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu22-tap_src
+      MATRIX: '(${{ matrix.infradb }})'
+
+    steps:
+
+    - uses: LouisBrunner/checks-action@v2.0.0
+      id: checks
+      if: always()
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        name: '${{ github.workflow }} / ${{ github.job }} ${{ env.MATRIX }}'
+        repo: ${{ github.repository }}
+        sha: ${{ env.SHA }}
+        status: 'in_progress'
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ env.SHA }}
+        path: 'proxysql'
+        sparse-checkout: |
+          test/infra
+          test/tap/groups
+          test/scripts
+
+    - name: Cache restore src
+      id: cache-src
+      uses: actions/cache/restore@v4
+      with:
+        key: ${{ env.BLDCACHE }}
+        fail-on-cache-miss: true
+        path: |
+          proxysql/src/
+
+    - name: Cache restore test
+      id: cache-test
+      uses: actions/cache/restore@v4
+      with:
+        key: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu22-tap_test
+        fail-on-cache-miss: true
+        path: |
+          proxysql/test/
+
+    - name: Verify binary
+      run: |
+        chmod +x proxysql/src/proxysql
+        file proxysql/src/proxysql
+
+    - name: Build CI base image
+      run: |
+        cd proxysql/test/infra/docker-base
+        docker build -t proxysql-ci-base:latest .
+
+    - name: Start infrastructure
+      run: |
+        cd proxysql
+        export INFRA_ID="ci-mysql84-g7"
+        export TAP_GROUP="mysql84-g7"
+        export SKIP_CLUSTER_START=1
+        test/infra/control/ensure-infras.bash
+
+    - name: Run mysql84-g7 tests
+      run: |
+        cd proxysql
+        export INFRA_ID="ci-mysql84-g7"
+        export TAP_GROUP="mysql84-g7"
+        export SKIP_CLUSTER_START=1
+        test/infra/control/run-tests-isolated.bash
+
+    - name: Cleanup
+      if: always()
+      run: |
+        set +e
+        cd proxysql
+        export INFRA_ID="ci-mysql84-g7"
+        export TAP_GROUP="mysql84-g7"
+        docker logs proxysql.ci-mysql84-g7 2>&1 | tail -50 || true
+        test/infra/control/stop-proxysql-isolated.bash
+        test/infra/control/destroy-infras.bash
+
+    - name: Fix artifact permissions
+      if: ${{ failure() && !cancelled() }}
+      run: |
+        # actions/upload-artifact dies with EACCES when it scandirs into
+        # directories under ci_*_logs/ that were created inside docker
+        # build containers (root-owned). Make everything readable by the
+        # runner user before upload. sudo required because files are
+        # root-owned; 2>/dev/null + || true because the path may not
+        # exist on all failure paths (e.g. a cache-restore failure before
+        # any test even runs).
+        sudo chmod -R a+rX proxysql/ci_*_logs/ 2>/dev/null || true
+
+    - name: Archive artifacts logs
+      if: ${{ failure() && !cancelled() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ github.workflow }}-${{ env.SHA }}-logs-run#${{ github.run_number }}
+        path: |
+          proxysql/ci_*_logs/
+
+    - uses: LouisBrunner/checks-action@v2.0.0
+      if: always()
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        check_id: ${{ steps.checks.outputs.check_id }}
+        repo: ${{ github.repository }}
+        sha: ${{ env.SHA }}
+        conclusion: ${{ job.status }}
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
