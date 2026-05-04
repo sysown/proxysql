@@ -74,10 +74,10 @@ jobs:
         chmod +x proxysql/src/proxysql
         file proxysql/src/proxysql
 
-    - name: Build CI base image
+    - name: Pull CI base image
       run: |
-        cd proxysql/test/infra/docker-base
-        docker build -t proxysql-ci-base:latest .
+        docker pull ghcr.io/sysown/proxysql-ci-base:latest
+        docker tag ghcr.io/sysown/proxysql-ci-base:latest proxysql-ci-base:latest
 
     - name: Start infrastructure
       run: |
