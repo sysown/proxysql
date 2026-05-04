@@ -379,6 +379,7 @@
   "test_mysqlx_soak_stress-t" : [ "mysqlx-soak-g1","@proxysql_min_version:4.0" ],
   "test_noise_injection-t" : [ "legacy-g3","mysql84-g3","mysql90-g3","mysql95-g3" ],
   "test_pgsql_replication_lag-t" : [ "pgsql-repl" ],
+  "test_plugin_auth_lenenc_client_data-t" : [ "legacy-g3","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3","mysql84-g3","mysql90-g3","mysql95-g3" ],
   "test_prepare_statement_memory_usage-t" : [ "legacy-g3","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3","mysql84-g3","mysql90-g3","mysql95-g3" ],
   "test_prometheus_metrics-t" : [ "legacy-g3","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3","mysql84-g3","mysql90-g3","mysql95-g3" ],
   "test_ps_async-t" : [ "legacy-g3","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3","mysql84-g3","mysql90-g3","mysql95-g3" ],
