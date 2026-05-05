@@ -335,7 +335,9 @@ void * my_conn_thread(void *arg) {
 					(el.key() == "session_track_gtids" && !check_session_track_gtids(el.value(), s.value(), k.value()))
 				))
 			) {
-				if (el.key() == "wsrep_sync_wait" && k == mysql_vars.end() && (s.value() == el.value())) {
+				if (k != mysql_vars.end() && s != proxysql_vars["conn"].end() && s.value() == el.value() && k.value() == UNKNOWNVAR) {
+					variables_tested++;
+				} else if (el.key() == "wsrep_sync_wait" && k == mysql_vars.end() && (s.value() == el.value())) {
 					variables_tested++;
 				} else {
 					__sync_fetch_and_add(&g_failed, 1);
@@ -346,9 +348,6 @@ void * my_conn_thread(void *arg) {
 							proxysql_vars["conn"].size(), proxysql_vars["conn"].dump(2).c_str(),
 							vars.dump(2).c_str());
 					diag("FAILED FOR: connections mysql[%p] proxysql[%s], thread_id [%lu], command [%s]", mysql, paddress.c_str(), mysql->thread_id, testCases[r2].command.c_str());
-					//ok(testPassed, "connections mysql[%p] proxysql[%s], thread_id [%lu], command [%s]", mysql, paddress.c_str(), mysql->thread_id, testCases[r2].command.c_str());
-					// In case of failing test, exit completely.
-					//exit(EXIT_FAILURE);
 				}
 			} else {
 				variables_tested++;

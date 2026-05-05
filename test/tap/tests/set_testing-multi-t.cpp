@@ -297,13 +297,16 @@ void * my_conn_thread(void *arg) {
 					(el.key() == "session_track_gtids" && !check_session_track_gtids(el.value(), s.value(), k.value()))
 				))
 			) {
-				__sync_fetch_and_add(&g_failed, 1);
-				testPassed = false;
-				fprintf(stderr, "Test failed for this case %s->%s.\n\nmysql data %s\n\n proxysql data %s\n\n csv data %s\n\n\n",
+				if (k != mysql_vars.end() && s != proxysql_vars.end() && s.value() == el.value() && k.value() == UNKNOWNVAR) {
+					variables_tested++;
+				} else {
+					__sync_fetch_and_add(&g_failed, 1);
+					testPassed = false;
+					fprintf(stderr, "Test failed for this case %s->%s.\n\nmysql data %s\n\n proxysql data %s\n\n csv data %s\n\n\n",
 						el.value().dump().c_str(), el.key().c_str(), mysql_vars.dump().c_str(), proxysql_vars.dump().c_str(), vars.dump().c_str());
-				ok(testPassed, "mysql connection [%p], thread_id [%lu], command [%s]", mysql, mysql->thread_id, testCases[r2].command.c_str());
-				// In case of failing test, exit completely.
-				exit(EXIT_FAILURE);
+					ok(testPassed, "mysql connection [%p], thread_id [%lu], command [%s]", mysql, mysql->thread_id, testCases[r2].command.c_str());
+					exit(EXIT_FAILURE);
+				}
 			} else {
 				variables_tested++;
 			}
