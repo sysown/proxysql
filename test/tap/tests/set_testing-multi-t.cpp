@@ -165,6 +165,16 @@ void * my_conn_thread(void *arg) {
 					vars[el.key()] = el.value();
 				}
 			}
+			else if (el.key() == "wsrep_trx_fragment_size") {
+				if (is_cluster) {
+					vars[el.key()] = el.value();
+				}
+			}
+			else if (el.key() == "wsrep_trx_fragment_unit") {
+				if (is_cluster) {
+					vars[el.key()] = el.value();
+				}
+			}
 			else if (el.key() == "transaction_read_only") {
 				if (is_mariadb) {
 					vars["tx_read_only"] = el.value();
@@ -287,17 +297,13 @@ void * my_conn_thread(void *arg) {
 					(el.key() == "session_track_gtids" && !check_session_track_gtids(el.value(), s.value(), k.value()))
 				))
 			) {
-				if (k == mysql_vars.end() && s != proxysql_vars["conn"].end() && s.value() == el.value()
-					&& std::find(possible_unknown_variables.begin(), possible_unknown_variables.end(), el.key()) != possible_unknown_variables.end()) {
-					variables_tested++;
-				} else {
-					__sync_fetch_and_add(&g_failed, 1);
-					testPassed = false;
-					fprintf(stderr, "Test failed for this case %s->%s.\n\nmysql data %s\n\n proxysql data %s\n\n csv data %s\n\n\n",
-							el.value().dump().c_str(), el.key().c_str(), mysql_vars.dump().c_str(), proxysql_vars.dump().c_str(), vars.dump().c_str());
-					ok(testPassed, "mysql connection [%p], thread_id [%lu], command [%s]", mysql, mysql->thread_id, testCases[r2].command.c_str());
-					exit(EXIT_FAILURE);
-				}
+				__sync_fetch_and_add(&g_failed, 1);
+				testPassed = false;
+				fprintf(stderr, "Test failed for this case %s->%s.\n\nmysql data %s\n\n proxysql data %s\n\n csv data %s\n\n\n",
+						el.value().dump().c_str(), el.key().c_str(), mysql_vars.dump().c_str(), proxysql_vars.dump().c_str(), vars.dump().c_str());
+				ok(testPassed, "mysql connection [%p], thread_id [%lu], command [%s]", mysql, mysql->thread_id, testCases[r2].command.c_str());
+				// In case of failing test, exit completely.
+				exit(EXIT_FAILURE);
 			} else {
 				variables_tested++;
 			}

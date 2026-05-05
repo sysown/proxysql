@@ -172,6 +172,16 @@ void * my_conn_thread(void *arg) {
 					vars[el.key()] = el.value();
 				}
 			}
+			else if (el.key() == "wsrep_trx_fragment_size") {
+				if (is_cluster) {
+					vars[el.key()] = el.value();
+				}
+			}
+			else if (el.key() == "wsrep_trx_fragment_unit") {
+				if (is_cluster) {
+					vars[el.key()] = el.value();
+				}
+			}
 			else if (el.key() == "transaction_read_only") {
 				if (is_mariadb) {
 					vars["tx_read_only"] = el.value();
@@ -326,9 +336,6 @@ void * my_conn_thread(void *arg) {
 				))
 			) {
 				if (el.key() == "wsrep_sync_wait" && k == mysql_vars.end() && (s.value() == el.value())) {
-					variables_tested++;
-				} else if (k == mysql_vars.end() && s != proxysql_vars["conn"].end() && s.value() == el.value()
-					&& std::find(possible_unknown_variables.begin(), possible_unknown_variables.end(), el.key()) != possible_unknown_variables.end()) {
 					variables_tested++;
 				} else {
 					__sync_fetch_and_add(&g_failed, 1);
