@@ -132,7 +132,8 @@ static const std::set<std::string> mysql_variables_numeric = {
 	"sql_select_limit",
 	"timestamp",
 	"tmp_table_size",
-	"wsrep_sync_wait"
+	"wsrep_sync_wait",
+	"wsrep_trx_fragment_size"
 };
 static const std::set<std::string> mysql_variables_strings = {
 	"default_storage_engine",
@@ -143,6 +144,7 @@ static const std::set<std::string> mysql_variables_strings = {
 	"log_slow_filter",
 	"optimizer_switch",
 	"wsrep_osu_method",
+	"wsrep_trx_fragment_unit",
 };
 
 #include "proxysql_find_charset.h"
@@ -2685,6 +2687,10 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 					(myerr == 1064) // You have an error in your SQL syntax
 					||
 					(myerr == 1193) // variable is not found
+					||
+					(myerr == 1210) // Incorrect arguments to SET
+					||
+					(myerr == 1231) // Variable can't be set to the value
 					||
 					(myerr == 1651) // Query cache is disabled
 					||
@@ -6514,6 +6520,11 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			size_t pos = nq.find_last_not_of(" ;");
 			if (pos != nq.npos) {
 				nq.erase(pos + 1); // remove trailing spaces and semicolumns
+			}
+			// detect MariaDB SET STATEMENT ... FOR syntax
+			// pass through to backend without hostgroup locking
+			if (strncasecmp(nq.c_str(), (char *)"SET STATEMENT ", 14) == 0 && strcasestr(nq.c_str(), (char *)" FOR ")) {
+				return false;
 			}
 			if (
 				(
