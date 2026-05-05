@@ -54,16 +54,24 @@ Common test groups (defined in `tap/groups/groups.json`):
 
 ## Prerequisites
 
-1. Build the CI base image (one-time setup):
+1. Obtain the CI base image (one-time setup):
+
+   Pull from GHCR if available:
+   ```bash
+   docker pull ghcr.io/sysown/proxysql-ci-base:latest
+   docker tag ghcr.io/sysown/proxysql-ci-base:latest proxysql-ci-base:latest
+   ```
+
+   Or build locally:
    ```bash
    cd test/infra/docker-base
    docker build --network host -t proxysql-ci-base:latest .
    cd ../../../
    ```
 
-2. Build ProxySQL and TAP tests:
+2. Build ProxySQL and TAP tests in debug mode:
    ```bash
-   make -j$(nproc) && make -j$(nproc) build_tap_test
+   make debug -j$(nproc) && make -j$(nproc) build_tap_test_debug
    ```
 
 ## Where logs actually live after a run
