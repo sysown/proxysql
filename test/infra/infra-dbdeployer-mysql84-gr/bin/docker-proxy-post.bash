@@ -34,19 +34,11 @@ UPDATE global_variables SET variable_value='monitor' WHERE variable_name='mysql-
 LOAD MYSQL USERS TO RUNTIME;
 SAVE MYSQL USERS TO DISK;
 LOAD MYSQL VARIABLES TO RUNTIME;
--- Ensure hostgroup 0 and 1 exist if not already present
-INSERT INTO mysql_servers (hostgroup_id, hostname, port, max_replication_lag, max_connections, comment)
-SELECT 0, hostname, port, max_replication_lag, max_connections, 'fallback-hg0'
-FROM mysql_servers WHERE hostgroup_id = ${WHG} AND NOT EXISTS (SELECT 1 FROM mysql_servers WHERE hostgroup_id = 0);
-
-INSERT INTO mysql_servers (hostgroup_id, hostname, port, max_replication_lag, max_connections, comment)
-SELECT 1, hostname, port, max_replication_lag, max_connections, 'fallback-hg1'
-FROM mysql_servers WHERE hostgroup_id = ${RHG} AND NOT EXISTS (SELECT 1 FROM mysql_servers WHERE hostgroup_id = 1);
-
--- Ensure group replication hostgroup 0/1 mapping exists
-INSERT INTO mysql_group_replication_hostgroups (writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, comment)
-SELECT 0, 2, 1, 3, 1, 1, 1, 0, 'fallback-gr-hg'
-WHERE NOT EXISTS (SELECT 1 FROM mysql_group_replication_hostgroups WHERE writer_hostgroup = 0);
+-- NOTE: No fallback HG 0/1 needed. pre-proxysql.bash configures HG 3000/3001
+-- (from WHG/RHG in .env) and infra-config.sql creates the GR hostgroup entry.
+-- A second mysql_group_replication_hostgroups for HG 0/1 would cause the GR
+-- monitor to manage two hostgroup sets simultaneously, resulting in duplicate
+-- auto-discovered servers, perpetual checksum churn, and cluster sync failures.
 
 LOAD MYSQL SERVERS TO RUNTIME;
 SAVE MYSQL SERVERS TO DISK;
