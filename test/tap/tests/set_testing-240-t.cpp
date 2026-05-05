@@ -49,6 +49,7 @@ int uniquequeries=0;
 int histograms=-1;
 
 bool is_mariadb = false;
+bool is_cluster = false;
 unsigned int g_connect_OK=0;
 unsigned int g_connect_ERR=0;
 unsigned int g_select_OK=0;
@@ -253,6 +254,21 @@ void * my_conn_thread(void *arg) {
 				if (is_mariadb) {
 					vars["tx_read_only"] = el.value();
 				} else {
+					vars[el.key()] = el.value();
+				}
+			}
+			else if (el.key() == "wsrep_sync_wait") {
+				if (is_cluster) {
+					vars[el.key()] = el.value();
+				}
+			}
+			else if (el.key() == "wsrep_trx_fragment_size") {
+				if (is_cluster) {
+					vars[el.key()] = el.value();
+				}
+			}
+			else if (el.key() == "wsrep_trx_fragment_unit") {
+				if (is_cluster) {
 					vars[el.key()] = el.value();
 				}
 			}
@@ -558,7 +574,7 @@ int main(int argc, char *argv[]) {
 		MYSQL_QUERY(proxysql_admin, update.c_str());
 		MYSQL_QUERY(proxysql_admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
-		if (detect_version(cl, is_mariadb) != 0) {
+		if (detect_version(cl, is_mariadb, is_cluster) != 0) {
 			diag("Cannot detect MySQL version");
 			return exit_status();
 		}
