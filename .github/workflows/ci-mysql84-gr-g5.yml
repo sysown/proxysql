@@ -85,7 +85,6 @@ jobs:
         cd proxysql
         export INFRA_ID="ci-mysql84-gr-g5"
         export TAP_GROUP="mysql84-gr-g5"
-        export SKIP_CLUSTER_START=1
         test/infra/control/ensure-infras.bash
 
     - name: Run mysql84-gr-g5 tests
@@ -93,7 +92,6 @@ jobs:
         cd proxysql
         export INFRA_ID="ci-mysql84-gr-g5"
         export TAP_GROUP="mysql84-gr-g5"
-        export SKIP_CLUSTER_START=1
         test/infra/control/run-tests-isolated.bash
 
     - name: Cleanup
