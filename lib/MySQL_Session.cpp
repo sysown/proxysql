@@ -2688,6 +2688,8 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 					||
 					(myerr == 1193) // variable is not found
 					||
+					(myerr == 1231) // Variable can't be set to the value
+					||
 					(myerr == 1651) // Query cache is disabled
 					||
 					(is_perm_track_err(myerr, var_name)) // Special permitted tracking errors (~= '1193')
