@@ -141,6 +141,7 @@ deps/postgresql/postgresql-*/
 deps/postgresql/postgres-*/
 deps/libusual/libusual-*/
 deps/zstd/zstd-*/
+deps/parsersql/parsersql-*/
 
 test/.vagrant
 .DS_Store
@@ -219,3 +220,5 @@ test/tap/tests/unit/*-t
 # test-scripts runtime dependencies (created by run-tests-isolated.bash)
 test-scripts/deps/
 .worktrees/
+test/tap/tests/parsersql_digest_test
+test/tap/tests/setparser_parsersql_test

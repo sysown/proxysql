@@ -21,6 +21,8 @@ const std::vector<std::string> possible_unknown_variables = {
 	"group_replication_consistency",
 	"query_cache_type",
 	"wsrep_osu_method",
+	"wsrep_trx_fragment_size",
+	"wsrep_trx_fragment_unit",
 	"log_slow_filter",
 	"sql_quote_show_create",
 	};

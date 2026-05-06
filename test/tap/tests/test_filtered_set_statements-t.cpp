@@ -41,6 +41,8 @@ std::vector<std::pair<std::string, std::string>> filtered_set_queries {
 	{ "net_write_timeout", "25" },
 	{ "max_join_size", "18446744073709551615" },
 	{ "wsrep_sync_wait", "12" },
+	{ "wsrep_trx_fragment_size", "1000" },
+	{ "wsrep_trx_fragment_unit", "'ROWS'" },
 	{ "group_concat_max_len", "4294967295" },
 	{ "sql_safe_updates", "true" },
 	{ "session_track_gtids", "OWN_GTID" },

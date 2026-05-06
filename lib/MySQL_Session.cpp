@@ -14,6 +14,7 @@ using json = nlohmann::json;
 
 #include "MySQL_Data_Stream.h"
 #include "MySQL_Query_Processor.h"
+#include "Query_Processor_ParserSQL.h"
 #include "MySQL_PreparedStatement.h"
 // GenAI_Thread.h, AI_Features_Manager.h, LLM_Bridge.h moved to
 // plugins/genai/include/ in Step 5.  Step 4.A removed all session-side
@@ -131,7 +132,8 @@ static const std::set<std::string> mysql_variables_numeric = {
 	"sql_select_limit",
 	"timestamp",
 	"tmp_table_size",
-	"wsrep_sync_wait"
+	"wsrep_sync_wait",
+	"wsrep_trx_fragment_size"
 };
 static const std::set<std::string> mysql_variables_strings = {
 	"default_storage_engine",
@@ -142,6 +144,7 @@ static const std::set<std::string> mysql_variables_strings = {
 	"log_slow_filter",
 	"optimizer_switch",
 	"wsrep_osu_method",
+	"wsrep_trx_fragment_unit",
 };
 
 #include "proxysql_find_charset.h"
@@ -2684,6 +2687,10 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 					(myerr == 1064) // You have an error in your SQL syntax
 					||
 					(myerr == 1193) // variable is not found
+					||
+					(myerr == 1210) // Incorrect arguments to SET
+					||
+					(myerr == 1231) // Variable can't be set to the value
 					||
 					(myerr == 1651) // Query cache is disabled
 					||
@@ -6514,6 +6521,11 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			if (pos != nq.npos) {
 				nq.erase(pos + 1); // remove trailing spaces and semicolumns
 			}
+			// detect MariaDB SET STATEMENT ... FOR syntax
+			// pass through to backend without hostgroup locking
+			if (strncasecmp(nq.c_str(), (char *)"SET STATEMENT ", 14) == 0 && strcasestr(nq.c_str(), (char *)" FOR ")) {
+				return false;
+			}
 			if (
 				(
 					match_regexes && (match_regexes[1]->match(dig))
@@ -6532,6 +6544,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				} else if (mysql_thread___set_parser_algorithm == 2) { // we use a single SetParser per thread
 					thread->thr_SetParser->set_query(nq); // replace the query
 					set = thread->thr_SetParser->parse1v2(); // use algorithm v2
+				} else if (mysql_thread___set_parser_algorithm == 3
+				|| mysql_thread___query_processor_parser == 1) {
+					set = parsersql_parse_set_mysql(nq);
 				} else {
 					assert(0);
 				}

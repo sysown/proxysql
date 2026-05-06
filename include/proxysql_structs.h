@@ -250,6 +250,8 @@ enum mysql_variable_name {
 	SQL_UNIQUE_CHECKS,
 	SQL_WSREP_OSU_METHOD,
 	SQL_WSREP_SYNC_WAIT,
+	SQL_WSREP_TRX_FRAGMENT_SIZE,
+	SQL_WSREP_TRX_FRAGMENT_UNIT,
 	SQL_NAME_LAST_HIGH_WM,
 };
 
@@ -1197,6 +1199,7 @@ __thread bool pgsql_thread___firewall_whitelist_enabled;
 __thread int pgsql_thread___query_processor_iterations;
 __thread int pgsql_thread___query_processor_first_comment_parsing;
 __thread int pgsql_thread___query_processor_regex;
+__thread int pgsql_thread___query_processor_parser;
 
 __thread bool pgsql_thread___monitor_enabled;
 __thread int pgsql_thread___monitor_history;
@@ -1289,6 +1292,7 @@ __thread int mysql_thread___query_processor_first_comment_parsing;
 __thread int mysql_thread___query_processor_regex;
 __thread int mysql_thread___set_query_lock_on_hostgroup;
 __thread int mysql_thread___set_parser_algorithm;
+__thread int mysql_thread___query_processor_parser;
 __thread int mysql_thread___reset_connection_algorithm;
 __thread uint32_t mysql_thread___server_capabilities;
 __thread int mysql_thread___auto_increment_delay_multiplex;
@@ -1533,6 +1537,7 @@ extern __thread bool pgsql_thread___firewall_whitelist_enabled;
 extern __thread int pgsql_thread___query_processor_iterations;
 extern __thread int pgsql_thread___query_processor_first_comment_parsing;
 extern __thread int pgsql_thread___query_processor_regex;
+extern __thread int pgsql_thread___query_processor_parser;
 
 extern __thread bool pgsql_thread___monitor_enabled;
 extern __thread int pgsql_thread___monitor_history;
@@ -1625,6 +1630,7 @@ extern __thread int mysql_thread___query_processor_first_comment_parsing;
 extern __thread int mysql_thread___query_processor_regex;
 extern __thread int mysql_thread___set_query_lock_on_hostgroup;
 extern __thread int mysql_thread___set_parser_algorithm;
+extern __thread int mysql_thread___query_processor_parser;
 extern __thread int mysql_thread___reset_connection_algorithm;
 extern __thread uint32_t mysql_thread___server_capabilities;
 extern __thread int mysql_thread___auto_increment_delay_multiplex;
@@ -1850,6 +1856,8 @@ mysql_variable_st mysql_tracked_variables[] {
 	{ SQL_UNIQUE_CHECKS,              SETTING_VARIABLE, true,  false, false, true,  (char *)"unique_checks",              NULL, (char *)"" , false} ,
 	{ SQL_WSREP_OSU_METHOD,           SETTING_VARIABLE, true,  false, false, false, (char *)"wsrep_osu_method",           NULL, (char *)"" , false} ,
 	{ SQL_WSREP_SYNC_WAIT,			  SETTING_VARIABLE, false, false, true,  false, (char *)"wsrep_sync_wait",			  (char *)"wsrep_sync_wait", (char *)"0" , false} ,
+	{ SQL_WSREP_TRX_FRAGMENT_SIZE,   SETTING_VARIABLE, false, false, true,  false, (char *)"wsrep_trx_fragment_size",    NULL, (char *)"0" , false} ,
+	{ SQL_WSREP_TRX_FRAGMENT_UNIT,   SETTING_VARIABLE, true,  false, false, false, (char *)"wsrep_trx_fragment_unit",    NULL, (char *)"" , false} ,
 	/*
 	variables that will need input validation:
 	binlog_row_image

@@ -1909,4 +1909,13 @@ std::string GenAI_Threads_Handler::process_json_query(const std::string& json_qu
 	}
 }
 
+std::vector<std::pair<std::string, std::string>> GenAI_Threads_Handler::collect_status_variables() {
+	std::vector<std::pair<std::string, std::string>> vars;
+	vars.push_back({"genai_threads_initialized", std::to_string(status_variables.threads_initialized)});
+	vars.push_back({"genai_active_requests", std::to_string(status_variables.active_requests)});
+	vars.push_back({"genai_completed_requests", std::to_string(status_variables.completed_requests)});
+	vars.push_back({"genai_failed_requests", std::to_string(status_variables.failed_requests)});
+	return vars;
+}
+
 #endif /* PROXYSQL40 */

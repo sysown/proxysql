@@ -833,6 +833,10 @@ public:
 	 */
 	SQLite3DB* get_db() { return db; }
 
+	void create_digest_persist_table();
+	void flush_digest_to_sqlite();
+	void load_persisted_digests();
+
 	/**
 	 * @brief Get the database file path
 	 * @return Database file path
