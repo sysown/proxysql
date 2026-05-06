@@ -46,8 +46,9 @@ std::string replace(const std::string& s, const std::string& from, const std::st
 	std::string res { s };
 
 	if(!from.empty()) {
-		for(size_t pos = 0; (pos = res.find(from, pos)) != std::string::npos; pos += to.size())
-		res.replace(pos, from.size(), to);
+		for(size_t pos = 0; (pos = res.find(from, pos)) != std::string::npos; pos += to.size()) {
+			res.replace(pos, from.size(), to);
+		}
 	}
 
 	return res;
