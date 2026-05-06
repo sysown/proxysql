@@ -457,12 +457,39 @@ int main(int, char**) {
 		if (rc) { break; }
 	}
 
+	// Reset server status to ONLINE to clear any shunned state accumulated during
+	// the retries phase. Shunning is triggered by MySQL_Thread's internal logic
+	// (MySrvC::connect_error) when enough connection errors occur within the same
+	// second, independent of the monitor. Reloading from the config table (where
+	// status is 'ONLINE') clears the in-memory SHUNNED state.
+	diag("Resetting server status to ONLINE to clear shunned state from previous retries phase");
+	MYSQL_QUERY_T(admin, string {"DELETE FROM mysql_servers WHERE hostgroup_id=" + std::to_string(hg)}.c_str());
+	MYSQL_QUERY_T(admin, INSERT_SERVER_QUERY.c_str());
+	MYSQL_QUERY_T(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
 	// Check several connect errors in the same connection behave in a consistent way
 	check_connect_error_consistency(cl, admin, hg, 0, ERR_QUERIES);
+
+	diag("Resetting server status to ONLINE to clear shunned state from consistency check");
+	MYSQL_QUERY_T(admin, string {"DELETE FROM mysql_servers WHERE hostgroup_id=" + std::to_string(hg)}.c_str());
+	MYSQL_QUERY_T(admin, INSERT_SERVER_QUERY.c_str());
+	MYSQL_QUERY_T(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
 	check_connect_error_consistency(cl, admin, hg, 1, ERR_QUERIES);
+
+	diag("Resetting server status to ONLINE to clear shunned state before timeout precedence check");
+	MYSQL_QUERY_T(admin, string {"DELETE FROM mysql_servers WHERE hostgroup_id=" + std::to_string(hg)}.c_str());
+	MYSQL_QUERY_T(admin, INSERT_SERVER_QUERY.c_str());
+	MYSQL_QUERY_T(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
 	// Check that retries never takes precedence over the 'connect_timeout'
 	check_connect_timeout_precedence(cl, admin, hg, 0);
+
+	diag("Resetting server status to ONLINE to clear shunned state before timeout precedence check");
+	MYSQL_QUERY_T(admin, string {"DELETE FROM mysql_servers WHERE hostgroup_id=" + std::to_string(hg)}.c_str());
+	MYSQL_QUERY_T(admin, INSERT_SERVER_QUERY.c_str());
+	MYSQL_QUERY_T(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
 	check_connect_timeout_precedence(cl, admin, hg, 1);
 
 	mysql_close(admin);

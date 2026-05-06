@@ -10,10 +10,12 @@ set -o pipefail
 
 PROXY_CONTAINER="proxysql.${INFRA_ID}"
 INFRA="${DEFAULT_MYSQL_INFRA:-infra-dbdeployer-mariadb10-galera}"
-MYSQL_HOST="${MYSQL_PRIMARY_HOST:-dbdeployer1}.${INFRA}"
+MYSQL_HOST="${MYSQL_PRIMARY_HOST:-dbdeployer1.${INFRA}}"
+ADMIN_USER="${PROXYSQL_ADMIN_USER:-admin}"
+ADMIN_PASS="${PROXYSQL_ADMIN_PASS:-admin}"
 
 run_admin() {
-    docker exec "${PROXY_CONTAINER}" mysql -uadmin -padmin -h127.0.0.1 -P6032 -e "$1" 2>&1 | grep -vP 'mysql: .?Warning' || true
+    docker exec "${PROXY_CONTAINER}" mysql -u"${ADMIN_USER}" -p"${ADMIN_PASS}" -h127.0.0.1 -P6032 -e "$1" 2>&1 | grep -vP 'mysql: .?Warning' || true
 }
 
 echo ">>> Pre-proxysql: configuring Galera group (INFRA=${INFRA}, host=${MYSQL_HOST})"
@@ -21,7 +23,7 @@ echo ">>> Pre-proxysql: configuring Galera group (INFRA=${INFRA}, host=${MYSQL_H
 # Wait for ProxySQL admin to be reachable
 echo -n ">>> Pre-proxysql: waiting for ProxySQL admin..."
 for i in $(seq 1 30); do
-    if docker exec "${PROXY_CONTAINER}" mysql -uadmin -padmin -h127.0.0.1 -P6032 -e "SELECT 1" >/dev/null 2>&1; then
+    if docker exec "${PROXY_CONTAINER}" mysql -u"${ADMIN_USER}" -p"${ADMIN_PASS}" -h127.0.0.1 -P6032 -e "SELECT 1" >/dev/null 2>&1; then
         echo " OK"
         break
     fi
