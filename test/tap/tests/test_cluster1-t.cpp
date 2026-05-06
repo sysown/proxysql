@@ -325,26 +325,9 @@ int main(int argc, char** argv) {
                 diag("Running changes on server node %d", i);
                 trigger_sync_and_check(conns[i], "mysql_users", update_mysql_users_1, "LOAD MYSQL USERS TO RUNTIME");
         }
-        // Disable the monitor before testing mysql_servers sync. The monitor
-        // actively modifies mysql_servers on each node (discovering servers,
-        // updating statuses) which prevents checksum convergence across the
-        // cluster during the sync check.
-        diag("Disabling monitor to prevent mysql_servers changes during sync test");
-        MYSQL_QUERY(proxysql_admin, "SET mysql-monitor_enabled=0");
-        for (int i = 0; i < 4; i++) {
-                // Propagate the monitor disable to all core nodes
-                MYSQL_QUERY(conns[i], "SET mysql-monitor_enabled=0");
-        }
-
         for (int i = 0; i < 4; i++) {
                 diag("Running changes on server node %d", i);
                 trigger_sync_and_check(conns[i], "mysql_servers", update_mysql_servers_1, "LOAD MYSQL SERVERS TO RUNTIME");
-        }
-
-        diag("Re-enabling monitor after mysql_servers sync test");
-        MYSQL_QUERY(proxysql_admin, "SET mysql-monitor_enabled=1");
-        for (int i = 0; i < 4; i++) {
-                MYSQL_QUERY(conns[i], "SET mysql-monitor_enabled=1");
         }
 
         close_all_connections();
