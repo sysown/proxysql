@@ -15,7 +15,8 @@ fi
 echo "Using MariaDB version: ${MYSQL_VERSION}"
 
 # Deploy 3-node Galera cluster
-# --base-port=3305 because dbdeployer assigns base+1 to the first node (node1=3306, node2=3307, node3=3308)
+# --base-port=3305: dbdeployer assigns base+1 to first node (node1=3306, node2=3307, node3=3308)
+# -c wsrep_sst_method=mariabackup: rsync SST fails on fresh clusters where no binlogs exist yet
 dbdeployer deploy replication "${MYSQL_VERSION}" \
     --topology=galera \
     --nodes=3 \
@@ -23,7 +24,7 @@ dbdeployer deploy replication "${MYSQL_VERSION}" \
     --base-port=3305 \
     -c max_connections=500 \
     -c max_binlog_size=100M \
-    -c wsrep_sst_method=rsync
+    -c wsrep_sst_method=mariabackup
 
 echo "Galera deployed. Waiting for all nodes to be ready..."
 

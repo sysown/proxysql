@@ -13,7 +13,7 @@ INFRA="${DEFAULT_MYSQL_INFRA:-infra-dbdeployer-mariadb10-galera}"
 MYSQL_HOST="${MYSQL_PRIMARY_HOST:-dbdeployer1}.${INFRA}"
 
 run_admin() {
-    docker exec "${PROXY_CONTAINER}" mysql -uadmin -padmin -h127.0.0.1 -P6032 -e "$1" 2>&1 | grep -vP 'mysql: .?Warning'
+    docker exec "${PROXY_CONTAINER}" mysql -uadmin -padmin -h127.0.0.1 -P6032 -e "$1" 2>&1 | grep -vP 'mysql: .?Warning' || true
 }
 
 echo ">>> Pre-proxysql: configuring Galera group (INFRA=${INFRA}, host=${MYSQL_HOST})"
@@ -21,7 +21,10 @@ echo ">>> Pre-proxysql: configuring Galera group (INFRA=${INFRA}, host=${MYSQL_H
 # Wait for ProxySQL admin to be reachable
 echo -n ">>> Pre-proxysql: waiting for ProxySQL admin..."
 for i in $(seq 1 30); do
-    if run_admin "SELECT 1" >/dev/null 2>&1; then echo " OK"; break; fi
+    if docker exec "${PROXY_CONTAINER}" mysql -uadmin -padmin -h127.0.0.1 -P6032 -e "SELECT 1" >/dev/null 2>&1; then
+        echo " OK"
+        break
+    fi
     if [ $i -eq 30 ]; then echo " TIMEOUT"; exit 1; fi
     echo -n "."; sleep 1
 done
@@ -35,16 +38,16 @@ INSERT INTO mysql_servers (hostgroup_id,hostname,port,max_replication_lag,commen
 INSERT INTO mysql_servers (hostgroup_id,hostname,port,max_replication_lag,comment) VALUES (1,'${MYSQL_HOST}',3308,1,'${MYSQL_HOST}');
 LOAD MYSQL SERVERS TO RUNTIME;
 SAVE MYSQL SERVERS TO DISK;
-"
+" || true
 
 # Create default users with HG 0 as default
 for MYUSER in root user testuser sbtest1 sbtest2 sbtest3 sbtest4 mariadbuser mariadbuserff ssluser; do
     run_admin "
     INSERT OR IGNORE INTO mysql_users (username,password,active,default_hostgroup,comment) VALUES ('${MYUSER}','${MYUSER}',1,0,'${INFRA}');
     UPDATE mysql_users SET default_hostgroup=0,comment='${INFRA}' WHERE username='${MYUSER}';
-    "
+    " || true
 done
-run_admin "LOAD MYSQL USERS TO RUNTIME; SAVE MYSQL USERS TO DISK;"
+run_admin "LOAD MYSQL USERS TO RUNTIME; SAVE MYSQL USERS TO DISK;" || true
 
 # Create basic read/write routing
 run_admin "
@@ -55,7 +58,7 @@ INSERT INTO mysql_query_rules (rule_id,active,username,match_digest,destination_
 INSERT INTO mysql_query_rules (rule_id,active,username,match_digest,destination_hostgroup,apply) VALUES (5,1,'testuser','^SELECT',1,1);
 LOAD MYSQL QUERY RULES TO RUNTIME;
 SAVE MYSQL QUERY RULES TO DISK;
-"
+" || true
 
 echo ">>> Pre-proxysql: waiting for cluster to stabilize..."
 sleep 5
