@@ -330,21 +330,21 @@ void ProxySQL_Statistics::init() {
 
 void ProxySQL_Statistics::disk_upgrade_mysql_connections() {
 	int rci;
-	rci=statsdb_disk->check_table_structure((char *)"mysql_connections",(char *)STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_V1_4);
+	rci=statsdb_disk->check_table_structure("mysql_connections", STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_V1_4);
 	if (rci) {
 		proxy_warning("Detected version v1.4 of table mysql_connections\n");
 		proxy_warning("ONLINE UPGRADE of table mysql_connections in progress\n");
 		statsdb_disk->execute("ALTER TABLE mysql_connections ADD COLUMN GTID_consistent_queries INT NOT NULL DEFAULT 0");
 		proxy_warning("ONLINE UPGRADE of table mysql_connections completed\n");
 	}
-	rci=statsdb_disk->check_table_structure((char *)"mysql_connections_hour",(char *)STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_HOUR_V1_4);
+	rci=statsdb_disk->check_table_structure("mysql_connections_hour", STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_HOUR_V1_4);
 	if (rci) {
 		proxy_warning("Detected version v1.4 of table mysql_connections_hour\n");
 		proxy_warning("ONLINE UPGRADE of table mysql_connections_hour in progress\n");
 		statsdb_disk->execute("ALTER TABLE mysql_connections_hour ADD COLUMN GTID_consistent_queries INT NOT NULL DEFAULT 0");
 		proxy_warning("ONLINE UPGRADE of table mysql_connections_hour completed\n");
 	}
-	rci=statsdb_disk->check_table_structure((char *)"mysql_connections_day",(char *)STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_DAY_V1_4);
+	rci=statsdb_disk->check_table_structure("mysql_connections_day", STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_DAY_V1_4);
 	if (rci) {
 		proxy_warning("Detected version v1.4 of table mysql_connections_day\n");
 		proxy_warning("ONLINE UPGRADE of table mysql_connections_day in progress\n");
@@ -355,7 +355,7 @@ void ProxySQL_Statistics::disk_upgrade_mysql_connections() {
 	#ifdef PROXYSQLTSDB
 		const char* tsdb_metrics_old =
 				"CREATE TABLE tsdb_metrics (timestamp INT NOT NULL, metric_name TEXT NOT NULL, labels TEXT, value REAL, PRIMARY KEY (timestamp, metric_name)) WITHOUT ROWID";
-		rci = statsdb_disk->check_table_structure((char*)"tsdb_metrics", (char*)tsdb_metrics_old);
+		rci = statsdb_disk->check_table_structure("tsdb_metrics", tsdb_metrics_old);
 		if (rci) {
 				proxy_warning("Detected legacy schema for tsdb_metrics\n");
 				if (!statsdb_disk->execute("BEGIN IMMEDIATE")) return;
@@ -379,7 +379,7 @@ void ProxySQL_Statistics::disk_upgrade_mysql_connections() {
 
 		const char* tsdb_metrics_hour_old =
 				"CREATE TABLE tsdb_metrics_hour (bucket INT NOT NULL, metric_name TEXT NOT NULL, labels TEXT, avg_value REAL, max_value REAL, min_value REAL, count INT, PRIMARY KEY (bucket, metric_name)) WITHOUT ROWID";
-		rci = statsdb_disk->check_table_structure((char*)"tsdb_metrics_hour", (char*)tsdb_metrics_hour_old);
+		rci = statsdb_disk->check_table_structure("tsdb_metrics_hour", tsdb_metrics_hour_old);
 		if (rci) {
 				proxy_warning("Detected legacy schema for tsdb_metrics_hour\n");
 				if (!statsdb_disk->execute("BEGIN IMMEDIATE")) return;

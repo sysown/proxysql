@@ -542,7 +542,7 @@ int SQLite3DB::return_one_int(const char *str) {
  * @param table_def The definition of the table.
  * @return The number of tables matching the structure.
  */
-int SQLite3DB::check_table_structure(char *table_name, char *table_def) {
+int SQLite3DB::check_table_structure(const char *table_name, const char *table_def) {
 	const char *q1="SELECT COUNT(*) FROM sqlite_master WHERE type=\"table\" AND name=\"%s\" AND sql=\"%s\"";
 	int count=0;
 	int l=strlen(q1)+strlen(table_name)+strlen(table_def)+1;
@@ -572,7 +572,7 @@ int SQLite3DB::check_table_structure(char *table_name, char *table_def) {
  * @param dropit Flag to indicate whether to drop existing table before creating.
  * @return True if the table creation was successful, false otherwise.
  */
-bool SQLite3DB::build_table(char *table_name, char *table_def, bool dropit) {
+bool SQLite3DB::build_table(const char *table_name, const char *table_def, bool dropit) {
 	bool rc;
 	if (dropit) {
 		const char *q2="DROP TABLE IF EXISTS %s";
@@ -599,7 +599,7 @@ bool SQLite3DB::build_table(char *table_name, char *table_def, bool dropit) {
  * @param table_def The definition of the table.
  * @return True if the table already exists or was successfully created, false otherwise.
  */
-bool SQLite3DB::check_and_build_table(char *table_name, char *table_def) {
+bool SQLite3DB::check_and_build_table(const char *table_name, const char *table_def) {
 	int rci;
 	bool rcb;
 	rci=check_table_structure(table_name,table_def);
