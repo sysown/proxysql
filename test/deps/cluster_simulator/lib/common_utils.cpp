@@ -780,7 +780,6 @@ std::pair<int,std::string> extract_mysql_servers(
 				comment = m_mysql_server.at("comment");
 			}
 		} catch(const std::exception& e) {
-			// TODO: Improve error message here
 			return { EXIT_FAILURE, e.what() };
 		}
 
@@ -849,7 +848,6 @@ std::pair<int,std::string> extract_mysql_hostgroup_attributes(
 			monitor_slave_lag_when_null = found_monitor_slave_lag_when_null ? 
 										  static_cast<int32_t>(j_hg_attrs.at("monitor_slave_lag_when_null")) : -1;
 		} catch(const std::exception& e) {
-			// TODO: Improve error message here
 			return { EXIT_FAILURE, e.what() };
 		}
 
@@ -1012,7 +1010,6 @@ std::pair<int, std::string> extract_cluster_status(
 				comment = m_mysql_server.at("comment");
 			}
 		} catch(const std::exception& e) {
-			// TODO: Improve error message here
 			return { EXIT_FAILURE, e.what() };
 		}
 

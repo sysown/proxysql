@@ -56,7 +56,6 @@ std::pair<int,std::string> extract_group_replication_hostgroup_config(
 	// result
 	std::vector<group_replication_hostgroup_config> res_hostgroup_configs {};
 
-	// TODO: Improve basic payload checks
 	if (!replication_test_def.is_object()) {
 		return {
 			EXIT_FAILURE,
@@ -123,7 +122,6 @@ std::pair<int,std::string> extract_group_replication_hostgroup_config(
 			j_comment =
 				j_replication_hostgroup.at("comment");
 		} catch (const std::exception& e) {
-			// TODO: Improve error message here
 			return { EXIT_FAILURE, e.what() };
 		}
 
@@ -133,7 +131,6 @@ std::pair<int,std::string> extract_group_replication_hostgroup_config(
 			try {
 				comment = j_replication_hostgroup.at("comment");
 			} catch (const std::exception& e) {
-				// TODO: Improve error message here
 				return { EXIT_FAILURE, e.what() };
 			}
 		}
@@ -255,14 +252,12 @@ std::pair<int,std::string> extract_grouprep_servers_state(
 		try {
 			j_servers_state = grouprep_test_def.at("grouprep_servers_init_state");
 		} catch (const std::exception& e) {
-			// TODO: Improve error message here
 			return { EXIT_FAILURE, e.what() };
 		}
 	} else {
 		try {
 			j_servers_state = grouprep_test_def.at("grouprep_servers_new_state");
 		} catch (const std::exception& e) {
-			// TODO: Improve error message here
 			return { EXIT_FAILURE, e.what() };
 		}
 	}
@@ -323,7 +318,6 @@ std::pair<int,std::string> extract_grouprep_servers_state(
 				transactions_behind = server_state.at("transactions_behind");
 				members = server_state.find("members") != server_state.end() ? server_state["members"] : "";
 			} catch (const std::exception& e) {
-				// TODO: Improve error message here
 				return { EXIT_FAILURE, e.what() };
 			}
 		} else {
@@ -383,7 +377,6 @@ std::pair<int,std::string> extract_grouprep_servers_state(
 					}
 				}
 			} catch (const std::exception& e) {
-				// TODO: Improve
 				return { EXIT_FAILURE, e.what() };
 			}
 		}
@@ -724,7 +717,6 @@ grouprep_server_state grouprep_update_state(
 ) {
 	grouprep_server_state result {};
 
-	// TODO: Make this proper doc.
 	// hostname and port **can't** be changed,
 	// because the are part of the server 'id'. Only the
 	// other fields are allowed to change, otherwise, the

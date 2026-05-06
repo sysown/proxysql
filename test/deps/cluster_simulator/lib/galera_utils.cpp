@@ -45,7 +45,6 @@ std::pair<int,std::string> extract_galera_hostgroup_config(
 	std::vector<galera_hostgroup_config> res_hostgroup_configs {};
 
 	// perform basic payload checks
-	// TODO: Improve checks
 	if (!galera_test_def.is_object()) {
 		return { EXIT_FAILURE, "Invalid input. Expected 'test_definition' should be a JSON object." };
 	}
@@ -92,7 +91,6 @@ std::pair<int,std::string> extract_galera_hostgroup_config(
 			max_transactions_behind = j_galera_hostgroup.at("max_transactions_behind");
 			j_comment = j_galera_hostgroup.at("comment");
 		} catch (const std::exception& e) {
-			// TODO: Improve error message here
 			return { EXIT_FAILURE, e.what() };
 		}
 
@@ -102,7 +100,6 @@ std::pair<int,std::string> extract_galera_hostgroup_config(
 			try {
 				comment = j_galera_hostgroup.at("comment");
 			} catch (const std::exception& e) {
-				// TODO: Improve error message here
 				return { EXIT_FAILURE, e.what() };
 			}
 		}
@@ -405,14 +402,12 @@ std::pair<int,std::string> extract_galera_servers_state(
 		try {
 			j_servers_state = galera_test_def.at("galera_servers_init_state");
 		} catch (const std::exception& e) {
-			// TODO: Improve error message here
 			return { EXIT_FAILURE, e.what() };
 		}
 	} else {
 		try {
 			j_servers_state = galera_test_def.at("galera_servers_new_state");
 		} catch (const std::exception& e) {
-			// TODO: Improve error message here
 			return { EXIT_FAILURE, e.what() };
 		}
 	}
@@ -483,7 +478,6 @@ std::pair<int,std::string> extract_galera_servers_state(
 				wsrep_cluster_status = server_state.at("wsrep_cluster_status");
 				pxc_maint_mode = server_state.at("pxc_maint_mode");
 			} catch (const std::exception& e) {
-				// TODO: Improve error message here
 				return { EXIT_FAILURE, e.what() };
 			}
 		} else {
@@ -600,7 +594,6 @@ std::pair<int,std::string> extract_galera_servers_state(
 					}
 				}
 			} catch (const std::exception& e) {
-				// TODO: Improve
 				return { EXIT_FAILURE, e.what() };
 			}
 		}
@@ -727,8 +720,6 @@ bool compare_galera_servers_state(
 
 // *********************************************************************
 
-// TODO: Should be a clever way to extract logic from these two functions,
-// but we could think about it later.
 // NOTE: Some template magic for access the indexes with a common
 // check based, and perform a random supplied operation.
 

@@ -46,7 +46,7 @@ std::pair<int, std::string> prepare_readonly_cluster_state(
  *   'mysql-monitor_read_only_timeout' for the simulation to be
  *   performed.
  *
- *   TODO: This values shouldn't be hardcoded and should be configurable.
+ *   Note: these values are hardcoded; making them configurable is a future enhancement.
  *
  * @param proxysql_admin An already opened connection to ProxySQL admin.
  * @return A `std::pair` of kind `{ err_code, "err_msg" }`.

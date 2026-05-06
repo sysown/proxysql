@@ -49,14 +49,12 @@ std::pair<int,std::string> extract_replicationlag_servers_state(
 		try {
 			j_servers_state = replicationlag_test_def.at("replicationlag_servers_init_state");
 		} catch (const std::exception& e) {
-			// TODO: Improve error message here
 			return { EXIT_FAILURE, e.what() };
 		}
 	} else {
 		try {
 			j_servers_state = replicationlag_test_def.at("replicationlag_servers_new_state");
 		} catch (const std::exception& e) {
-			// TODO: Improve error message here
 			return { EXIT_FAILURE, e.what() };
 		}
 	}
@@ -117,7 +115,6 @@ std::pair<int,std::string> extract_replicationlag_servers_state(
 					seconds_behind_master = std::unique_ptr<int>(repl_lag);
 				}
 			} catch (const std::exception& e) {
-				// TODO: Improve error message here
 				return { EXIT_FAILURE, e.what() };
 			}
 		} else {
@@ -156,7 +153,6 @@ std::pair<int,std::string> extract_replicationlag_servers_state(
 				}
 
 			} catch (const std::exception& e) {
-				// TODO: Improve
 				return { EXIT_FAILURE, e.what() };
 			}
 		}
@@ -448,7 +444,6 @@ replicationlag_server_state replicationlag_update_state(
 ) {
 	replicationlag_server_state result {};
 
-	// TODO: Make this proper doc.
 	// hostname and port **can't** be changed,
 	// because the are part of the server 'id'. Only the
 	// other fields are allowed to change, otherwise, the

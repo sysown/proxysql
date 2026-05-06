@@ -46,7 +46,6 @@ std::pair<int,std::string> extract_replication_hostgroup_config(
 	// result
 	std::vector<replication_hostgroup_config> res_hostgroup_configs {};
 
-	// TODO: Improve basic payload checks
 	if (!replication_test_def.is_object()) {
 		return {
 			EXIT_FAILURE,
@@ -98,7 +97,6 @@ std::pair<int,std::string> extract_replication_hostgroup_config(
 			j_comment =
 				j_replication_hostgroup.at("comment");
 		} catch (const std::exception& e) {
-			// TODO: Improve error message here
 			return { EXIT_FAILURE, e.what() };
 		}
 
@@ -108,7 +106,6 @@ std::pair<int,std::string> extract_replication_hostgroup_config(
 			try {
 				comment = j_replication_hostgroup.at("comment");
 			} catch (const std::exception& e) {
-				// TODO: Improve error message here
 				return { EXIT_FAILURE, e.what() };
 			}
 		}
@@ -206,14 +203,12 @@ std::pair<int,std::string> extract_readonly_servers_state(
 		try {
 			j_servers_state = readonly_test_def.at("readonly_servers_init_state");
 		} catch (const std::exception& e) {
-			// TODO: Improve error message here
 			return { EXIT_FAILURE, e.what() };
 		}
 	} else {
 		try {
 			j_servers_state = readonly_test_def.at("readonly_servers_new_state");
 		} catch (const std::exception& e) {
-			// TODO: Improve error message here
 			return { EXIT_FAILURE, e.what() };
 		}
 	}
@@ -268,7 +263,6 @@ std::pair<int,std::string> extract_readonly_servers_state(
 				port = server_state.at("port");
 				read_only = server_state.at("read_only");
 			} catch (const std::exception& e) {
-				// TODO: Improve error message here
 				return { EXIT_FAILURE, e.what() };
 			}
 		} else {
@@ -306,7 +300,6 @@ std::pair<int,std::string> extract_readonly_servers_state(
 				}
 
 			} catch (const std::exception& e) {
-				// TODO: Improve
 				return { EXIT_FAILURE, e.what() };
 			}
 		}
@@ -619,7 +612,6 @@ readonly_server_state readonly_update_state(
 ) {
 	readonly_server_state result {};
 
-	// TODO: Make this proper doc.
 	// hostname and port **can't** be changed,
 	// because the are part of the server 'id'. Only the
 	// other fields are allowed to change, otherwise, the

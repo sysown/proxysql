@@ -54,13 +54,12 @@ using galera_server_state =
 
 /**
  * @brief Receive a table which should be populated, and the values to be inserted in that table.
- *  TODO: Complete.
  *
  * @param proxysql_admin
  * @param table
  * @param servers
  *
- * @return 
+ * @return
  */
 std::pair<int,std::string> prepare_galera_cluster_state(
 	MYSQL* proxysql_sqlite,
@@ -114,21 +113,26 @@ cluster_state_changes galera_servers_state_diff(
 );
 
 /**
- * @brief TODO
+ * @brief Set 'mysql-monitor_galera_healthcheck_interval' to 200 and
+ *  'mysql-monitor_galera_healthcheck_timeout' to 100, then 'LOAD MYSQL
+ *  VARIABLES TO RUNTIME'.
  *
- * @param proxysql_admin
+ *   Note: these values are hardcoded; making them configurable is a future enhancement.
  *
- * @return 
+ * @param proxysql_admin An already opened connection to ProxySQL admin.
+ *
+ * @return A 'std::pair' of '{ err_code, "err_msg" }'.
  */
 std::pair<int, std::string> set_galera_monitor_check_times(MYSQL* proxysql_admin);
 /**
- * @brief TODO
+ * @brief Read the current 'mysql-monitor_galera_healthcheck_interval' and
+ *  'mysql-monitor_galera_healthcheck_timeout' from 'global_variables'.
  *
- * @param proxysql_admin
- * @param out_healthcheck_interval
- * @param out_healthcheck_timeout
+ * @param proxysql_admin An already opened connection to ProxySQL admin.
+ * @param out_healthcheck_interval Output parameter receiving the current interval (ms).
+ * @param out_healthcheck_timeout Output parameter receiving the current timeout (ms).
  *
- * @return 
+ * @return A 'std::pair' of '{ err_code, "err_msg" }'.
  */
 std::pair<int, std::string> get_galera_monitor_check_times(
 	MYSQL* proxysql_admin,

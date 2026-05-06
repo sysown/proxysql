@@ -32,14 +32,15 @@
 using std::string;
 
 /**
- * @brief TODO
+ * @brief Top-level mode of the simulator: drive the cluster state ('simulate')
+ *  or verify the current state against the expected one ('verify').
  */
 enum class operation_mode {
 	simulate,
 	verify
 };
 /**
- * @brief TODO
+ * @brief Command-line options parsed in 'main()' and passed to the simulator drivers.
  */
 struct simulator_options {
 	// command line options variables

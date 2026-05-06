@@ -56,23 +56,22 @@ using cluster_state_changes =
 ////////////////////////////////////////////////////////////////////////////////
 //
 /**
+ * @brief Split 's' into tokens using 'delimiter'.
  *
- * @brief TODO
+ * @param s The string to split.
+ * @param delimiter Character used as a separator.
  *
- * @param s
- * @param delimiter
- *
- * @return
+ * @return Vector of tokens, in source order.
  */
 std::vector<std::string> str_split(const std::string& s, char delimiter);
 /**
- * @brief TODO
+ * @brief Return a copy of 's' with every non-overlapping occurrence of 'from' replaced by 'to'.
  *
- * @param s
- * @param from
- * @param to
+ * @param s The source string.
+ * @param from The substring to search for. Empty 'from' returns 's' unchanged.
+ * @param to The replacement substring.
  *
- * @return
+ * @return The transformed string.
  */
 std::string replace(const std::string& s, const std::string& from, const std::string& to);
 /**
@@ -113,13 +112,13 @@ std::pair<int, std::string> create_query_error(
 	const int line
 );
 /**
- * @brief TODO
+ * @brief Build an EXIT_FAILURE pair carrying an 'invalid_input' error JSON with location prefix.
  *
- * @param err_msg
- * @param file
- * @param line
+ * @param err_msg The human-readable error description.
+ * @param file Source file in which the failure was detected (typically '__FILE__').
+ * @param line Source line in which the failure was detected (typically '__LINE__').
  *
- * @return
+ * @return A pair of '{ EXIT_FAILURE, { err_type: "invalid_input", err_msg: "..." } }'.
  */
 std::pair<int, nlohmann::ordered_json> invalid_input_error(
 	const std::string& err_msg,
@@ -127,13 +126,13 @@ std::pair<int, nlohmann::ordered_json> invalid_input_error(
 	const int line
 );
 /**
- * @brief TODO
+ * @brief Build an EXIT_FAILURE pair carrying an 'internal_error' error JSON with location prefix.
  *
- * @param err_msg
- * @param file
- * @param line
+ * @param err_msg The human-readable error description.
+ * @param file Source file in which the failure was detected (typically '__FILE__').
+ * @param line Source line in which the failure was detected (typically '__LINE__').
  *
- * @return
+ * @return A pair of '{ EXIT_FAILURE, { err_type: "internal_error", err_msg: "..." } }'.
  */
 std::pair<int, nlohmann::ordered_json> internal_error(
 	const std::string& err_msg,
@@ -141,13 +140,13 @@ std::pair<int, nlohmann::ordered_json> internal_error(
 	const int line
 );
 /**
- * @brief TODO
+ * @brief Build an EXIT_FAILURE pair carrying an 'invalid_config' error JSON with location prefix.
  *
- * @param err_msg
- * @param file
- * @param line
+ * @param err_msg The human-readable error description.
+ * @param file Source file in which the failure was detected (typically '__FILE__').
+ * @param line Source line in which the failure was detected (typically '__LINE__').
  *
- * @return
+ * @return A pair of '{ EXIT_FAILURE, { err_type: "invalid_config", err_msg: "..." } }'.
  */
 std::pair<int, nlohmann::ordered_json> invalid_config_error(
 	const std::string& err_msg,
@@ -155,13 +154,13 @@ std::pair<int, nlohmann::ordered_json> invalid_config_error(
 	const int line
 );
 /**
- * @brief TODO
+ * @brief Build an EXIT_FAILURE pair carrying an 'invalid_payload' error JSON with location prefix.
  *
- * @param err_msg
- * @param file
- * @param line
+ * @param err_msg The human-readable error description.
+ * @param file Source file in which the failure was detected (typically '__FILE__').
+ * @param line Source line in which the failure was detected (typically '__LINE__').
  *
- * @return
+ * @return A pair of '{ EXIT_FAILURE, { err_type: "invalid_payload", err_msg: "..." } }'.
  */
 std::pair<int, nlohmann::ordered_json> invalid_json_error(
 	const std::string& err_msg,
@@ -169,14 +168,18 @@ std::pair<int, nlohmann::ordered_json> invalid_json_error(
 	const int line
 );
 /**
- * @brief TODO
+ * @brief Build a 'verification_error' JSON describing a mismatch between the
+ *  expected and actual cluster states.
  *
- * @param err_msg
- * @param exp_cluster_state
- * @param act_cluster_state
- * @param cluster_st_diff
+ * @param err_msg Human-readable summary of the mismatch.
+ * @param exp_cluster_state The cluster state that was expected.
+ * @param act_cluster_state The cluster state that was actually observed.
+ * @param cluster_st_diff Per-server column diff between the two states.
+ * @param exp_state_timestamp Optional capture timestamp for 'exp_cluster_state'.
+ * @param act_state_timestamp Optional capture timestamp for 'act_cluster_state'.
  *
- * @return
+ * @return A pair of '{ EXIT_FAILURE, json }' with both states, their checksums,
+ *  the diff, and the timestamps.
  */
 std::pair<int, nlohmann::ordered_json> verification_error(
 	const std::string& err_msg,
@@ -187,12 +190,15 @@ std::pair<int, nlohmann::ordered_json> verification_error(
 	const std::string& act_state_timestamp = {}
 );
 /**
- * @brief TODO
+ * @brief Pretty-print a 'verification_error' JSON for human-readable display,
+ *  sorting the expected/actual server arrays by (hostgroup_id, hostname, port)
+ *  so that diffs line up.
  *
- * @param j_verification_err
- * @param out_error_str
+ * @param j_verification_err A JSON produced by 'verification_error()'.
+ * @param out_error_str Output parameter receiving the formatted string.
  *
- * @return
+ * @return A pair of '{ err_code, "err_msg" }'. EXIT_SUCCESS on success;
+ *  EXIT_FAILURE with a parser error message if the input is malformed.
  */
 std::pair<int, std::string> serialize_verification_error(
 	const nlohmann::ordered_json& j_verification_err,
@@ -214,23 +220,29 @@ std::pair<int, std::string> serialize_verification_error(
  */
 std::vector<std::string> get_invalid_keys(std::vector<std::string> valid_keys, json elem);
 /**
- * @brief TODO
- * @param invalid_keys
- * @param elem_with_inv_keys
- * @return
+ * @brief Build an error pair listing the unrecognized keys found in a JSON object.
+ *
+ * @param invalid_keys The keys to report. Empty list yields a no-error result.
+ * @param name The JSON object name to include in the message (e.g. "mysql_servers").
+ *
+ * @return EXIT_FAILURE with a formatted message when 'invalid_keys' is
+ *  non-empty; EXIT_SUCCESS with an empty message otherwise.
  */
 std::pair<int,std::string> gen_invalid_keys_err(
 	const std::vector<std::string>& invalid_keys,
 	const std::string name
 );
 /**
- * @brief TODO
+ * @brief Walk 'path' through nested JSON objects in 'j' and check whether the
+ *  leaf exists and matches the supplied 'type'.
  *
- * @param j
- * @param path
- * @param type
+ * @param j The root JSON to traverse.
+ * @param path Sequence of object keys to follow; the last element is the leaf
+ *  to type-check.
+ * @param type The expected type of the leaf value.
  *
- * @return
+ * @return 'true' if every step in 'path' resolves AND the leaf has type 'type';
+ *  'false' otherwise.
  */
 bool check_present_and_type(const json& j, const std::vector<std::string>& path, const json::value_t& type);
 /**
@@ -251,25 +263,6 @@ bool matching_server_status(const server_status& srv_st1, const server_status& s
  * @return True if both are equal, false otherwise.
  */
 bool check_cluster_status(const cluster_status& exp_status, const cluster_status& act_status);
-/**
- * @brief TODO
- *
- * @param j
- * @param path
- * @param type
- *
- * @return
- */
-bool check_present_and_type(const json& j, const std::vector<std::string>& path, const json::value_t& type);
-/**
- * @brief TODO
- *
- * @param srv_st1
- * @param srv_st2
- *
- * @return
- */
-bool matching_server_status(const server_status& srv_st1, const server_status& srv_st2);
 /**
  * @brief
  *
@@ -341,56 +334,64 @@ std::vector<monitor_variable> set_monitor_variables_defaults(
 	const std::vector<monitor_variable>& def_vars_values
 );
 /**
- * @brief TODO
+ * @brief Parse the 'mysql_servers' array from a test definition into typed tuples.
  *
- * @param galera_test_def
- * @param out_mysql_servers
+ * @param galera_test_def The test definition object.
+ * @param out_mysql_servers Output parameter filled with one tuple per parsed server.
  *
- * @return
+ * @return EXIT_SUCCESS on success; EXIT_FAILURE with a descriptive message
+ *  if the field is missing, has the wrong shape, or contains invalid keys.
  */
 std::pair<int,std::string> extract_mysql_servers(
 	const json& galera_test_def,
 	std::vector<mysql_server_def>& out_mysql_servers
 );
 /**
- * @brief TODO
+ * @brief Parse the optional 'mysql_hostgroup_attributes' array from a test
+ *  definition into typed tuples. A missing field is not an error.
  *
- * @param galera_test_def
- * @param out_mysql_servers
+ * @param galera_test_def The test definition object.
+ * @param out_hostgroup_attributes Output parameter filled with one tuple per
+ *  parsed hostgroup. Left empty when the field is absent.
  *
- * @return
+ * @return EXIT_SUCCESS on success or when the field is absent; EXIT_FAILURE
+ *  with a descriptive message on shape errors or invalid keys.
  */
 std::pair<int,std::string> extract_mysql_hostgroup_attributes(
 	const json& galera_test_def,
 	std::vector<hostgroup_attributes_def>& out_hostgroup_attributes
 );
 /**
- * @brief TODO
+ * @brief Query 'mysql_servers' from ProxySQL admin and parse the result into
+ *  typed tuples.
  *
- * @param proxysql_admin
- * @param out_cur_mysql_servers
+ * @param proxysql_admin An already opened connection to ProxySQL admin.
+ * @param out_cur_mysql_servers Output parameter filled with the current servers.
  *
- * @return
+ * @return EXIT_SUCCESS on success; EXIT_FAILURE with a descriptive message
+ *  on query or parse failure.
  */
 std::pair<int, std::string> get_current_mysql_servers(
 	MYSQL* proxysql_admin,
 	std::vector<mysql_server_def>& out_cur_mysql_servers
 );
 /**
- * @brief TODO
+ * @brief Selector for which cluster-state snapshot to read from a test definition.
  */
 enum class cluster_state {
 	init_state,
 	final_state
 };
 /**
- * @brief TODO
+ * @brief Parse a cluster-state snapshot ('proxysql_init_state' or
+ *  'proxysql_final_state') from a test definition into typed tuples.
  *
- * @param state
- * @param galera_test_def
- * @param out_cluster_status
+ * @param state Selects which snapshot to read.
+ * @param galera_test_def The test definition object.
+ * @param out_cluster_status Output parameter filled with one tuple per server.
  *
- * @return
+ * @return EXIT_SUCCESS on success; EXIT_FAILURE with a descriptive message
+ *  if the snapshot is missing, has the wrong shape, or contains invalid keys.
  */
 std::pair<int, std::string> extract_cluster_status(
 	cluster_state state,
@@ -398,12 +399,14 @@ std::pair<int, std::string> extract_cluster_status(
 	std::vector<server_status>& out_cluster_status
 );
 /**
- * @brief TODO
+ * @brief Query 'runtime_mysql_servers' from ProxySQL admin and return it as
+ *  the current cluster status.
  *
- * @param proxysql_admin
- * @param out_cluster_status
+ * @param proxysql_admin An already opened connection to ProxySQL admin.
+ * @param out_cluster_status Output parameter filled with one tuple per server.
  *
- * @return
+ * @return EXIT_SUCCESS on success; EXIT_FAILURE with a descriptive message
+ *  on query or parse failure.
  */
 std::pair<int, std::string> get_current_cluster_status(
 	MYSQL* proxysql_admin,
@@ -417,7 +420,7 @@ std::pair<int, std::string> get_current_cluster_status(
  */
 nlohmann::ordered_json cluster_status_to_json(const std::vector<server_status>& cluster_status);
 /**
- * @brief TODO POC of a pretty serializer.
+ * @brief POC of a pretty serializer.
  *
  * @param j_res
  * @param out_str_res
@@ -426,11 +429,12 @@ nlohmann::ordered_json cluster_status_to_json(const std::vector<server_status>& 
  */
 std::pair<int, std::string> serialize_result(const nlohmann::ordered_json& j_res, std::string& out_str_res);
 /**
- * @brief TODO
+ * @brief Pretty-print a top-level simulation/verification result, recursively
+ *  serializing each per-test entry under 'results' (success or 'verification_error').
  *
- * @param j_result
+ * @param j_result The aggregate result JSON.
  *
- * @return 
+ * @return The formatted string.
  */
 std::string serialize_result(const nlohmann::ordered_json& j_result);
 /**

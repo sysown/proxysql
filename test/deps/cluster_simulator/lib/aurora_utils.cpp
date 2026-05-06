@@ -65,7 +65,6 @@ std::pair<int,string> extract_aurora_hostgroup_config(
 	// result
 	vector<aurora_hostgroup_config_t> res_hostgroup_configs {};
 
-	// TODO: Improve basic payload checks
 	if (!aurora_test_def.is_object()) {
 		return {
 			EXIT_FAILURE,
@@ -137,7 +136,6 @@ std::pair<int,string> extract_aurora_hostgroup_config(
 				autopurge_missing_checks = j_aurora_hg.at("autopurge_missing_checks");
 			}
 		} catch (const std::exception& e) {
-			// TODO: Improve error message here
 			return { EXIT_FAILURE, e.what() };
 		}
 
@@ -147,7 +145,6 @@ std::pair<int,string> extract_aurora_hostgroup_config(
 			try {
 				comment = j_aurora_hg.at("comment");
 			} catch (const std::exception& e) {
-				// TODO: Improve error message here
 				return { EXIT_FAILURE, e.what() };
 			}
 		}
@@ -205,14 +202,12 @@ std::pair<int,string> extract_aurora_servers_state(
 		try {
 			j_clusters_statuses = aurora_test_def.at("aurora_servers_init_state");
 		} catch (const std::exception& e) {
-			// TODO: Improve error message here
 			return { EXIT_FAILURE, e.what() };
 		}
 	} else {
 		try {
 			j_clusters_statuses = aurora_test_def.at("aurora_servers_new_state");
 		} catch (const std::exception& e) {
-			// TODO: Improve error message here
 			return { EXIT_FAILURE, e.what() };
 		}
 	}
@@ -258,7 +253,6 @@ std::pair<int,string> extract_aurora_servers_state(
 					session_id = server_state.at("SESSION_ID");
 					replica_lag_in_ms = server_state.at("REPLICA_LAG_IN_MILLISECONDS");
 				} catch (const std::exception& e) {
-					// TODO: Improve error message here
 					return { EXIT_FAILURE, e.what() };
 				}
 			} else {
@@ -295,7 +289,6 @@ std::pair<int,string> extract_aurora_servers_state(
 						}
 					}
 				} catch (const std::exception& e) {
-					// TODO: Improve
 					return { EXIT_FAILURE, e.what() };
 				}
 			}
@@ -562,7 +555,6 @@ aurora_server_state_t aurora_update_state(
 ) {
 	aurora_server_state_t result {};
 
-	// TODO: Make this proper doc.
 	// SERVER_ID and DOMAIN_NAME **can't** be changed, because the are part of the server 'id'. Only the other
 	// fields are allowed to change, otherwise, the verification step should have failed.
 
