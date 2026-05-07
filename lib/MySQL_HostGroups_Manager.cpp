@@ -3634,8 +3634,7 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_ser
 						// that statically lands the server in both hostgroups
 						// leaves the reader-hg entry in MyHostGroups
 						// permanently and the monitor never reconciles it.
-						const std::vector<HostGroup_Server_Mapping::Node>& cur_reader_map = host_server_mapping->get(HostGroup_Server_Mapping::Type::READER);
-						if (mysql_thread___monitor_writer_is_also_reader == false && cur_reader_map.empty() == false) {
+						if (mysql_thread___monitor_writer_is_also_reader == false && reader_map.empty() == false) {
 							proxy_info("read_only_action_v2(): clearing reader-hg entries for writer '%s:%d' (mysql-monitor_writer_is_also_reader=0)\n", hostname.c_str(), port);
 							host_server_mapping->clear(HostGroup_Server_Mapping::Type::READER);
 							update_mysql_servers_table = true;
