@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "mysql.h"
@@ -90,6 +91,19 @@ int run_test(MYSQL* admin, const CommandLine& cl) {
     int writer_count = -1;
     int reader_count = -1;
 
+    // Capture the monitor variables we'll modify, so cleanup can
+    // restore them and not contaminate later tests sharing this
+    // ProxySQL instance.
+    std::vector<std::pair<std::string, std::string>> saved_vars = {
+        {"mysql-monitor_writer_is_also_reader", ""},
+        {"mysql-monitor_read_only_interval",    ""},
+        {"mysql-monitor_read_only_timeout",     ""},
+        {"mysql-monitor_enabled",               ""},
+    };
+    for (auto& v : saved_vars) {
+        show_admin_global_variable(admin, v.first, v.second);
+    }
+
     // Make sure the backend reports as a writer.
     if (set_read_only_value(cl.mysql_host, cl.mysql_port,
                             cl.mysql_username, cl.mysql_password, 0)
@@ -139,13 +153,18 @@ int run_test(MYSQL* admin, const CommandLine& cl) {
 
     ADMIN_QUERY(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
-    // ~10 monitor intervals.
-    usleep(2000 * 1000);
-
-    writer_count = count_runtime_servers(admin, cl.mysql_host,
-                                         cl.mysql_port, WRITER_HG);
-    reader_count = count_runtime_servers(admin, cl.mysql_host,
-                                         cl.mysql_port, READER_HG);
+    // Poll up to ~3 s (15 monitor intervals at 200 ms each) for the
+    // monitor to reconcile. Exit early on the expected state.
+    for (int i = 0; i < 15; ++i) {
+        usleep(200 * 1000);
+        writer_count = count_runtime_servers(admin, cl.mysql_host,
+                                             cl.mysql_port, WRITER_HG);
+        reader_count = count_runtime_servers(admin, cl.mysql_host,
+                                             cl.mysql_port, READER_HG);
+        if (writer_count == 1 && reader_count == 0) {
+            break;
+        }
+    }
 
     diag("After LOAD + monitor reconciliation: "
          "writer_hg(%d) count=%d, reader_hg(%d) count=%d",
@@ -164,6 +183,16 @@ cleanup:
     mysql_query(admin, "DELETE FROM mysql_servers");
     mysql_query(admin, "DELETE FROM mysql_replication_hostgroups");
     mysql_query(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
+    // Restore monitor variables to their original values.
+    for (const auto& v : saved_vars) {
+        if (v.second.empty()) {
+            continue;
+        }
+        set_admin_global_variable(admin, v.first, v.second);
+    }
+    mysql_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+
     return ret;
 }
 
