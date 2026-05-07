@@ -71,9 +71,7 @@ bool wait_for_server_status(MYSQL* admin, const string& expected_status) {
 }
 
 void cleanup(MYSQL* admin) {
-	const string delete_query =
-		"DELETE FROM mysql_servers WHERE hostgroup_id=" + std::to_string(kHostgroup) +
-		" AND hostname='" + kBackendHost + "' AND port=" + std::to_string(kBackendPort);
+	const string delete_query = "DELETE FROM mysql_servers WHERE hostgroup_id=" + std::to_string(kHostgroup);
 	run_q(admin, delete_query.c_str());
 	run_q(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 	run_q(admin, "SET mysql-monitor_enabled='true'");
@@ -83,19 +81,31 @@ void cleanup(MYSQL* admin) {
 	run_q(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 }
 
-void setup(MYSQL* admin) {
-	cleanup(admin);
+void setup(MYSQL* admin, const CommandLine& cl) {
 	run_q(admin, "SET mysql-monitor_enabled='true'");
 	run_q(admin, ("SET mysql-monitor_ping_interval='" + std::to_string(kMonitorPingIntervalMs) + "'").c_str());
 	run_q(admin, "SET mysql-monitor_ping_max_failures='1'");
 	run_q(admin, ("SET mysql-shun_recovery_time_sec='" + std::to_string(kShunRecoverySec) + "'").c_str());
 	run_q(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
-	const string insert_query =
+	// We add two servers to HG 5546,
+	// - cl.mysql_host                              - VALID
+	// - kBackendHost:kBackendPort (127.0.0.1:3305) - INVALID (unreachable)
+	// 
+	// While the test is based on server 127.0.0.1:3305, we add cl.mysql_host to the test HG
+	// so that ProxySQL will not trigger the "desperate" unshun logic at lib/MyHGC.cpp:L186-L242
+	// - https://github.com/sysown/proxysql/blob/9cc20a8775f6c194335a940ed0ca12001166522a/lib/MyHGC.cpp#L186-L242 
+	const string insert_srv1 =
 		"INSERT INTO mysql_servers (hostgroup_id, hostname, port, status, max_connections, comment) VALUES (" +
 		std::to_string(kHostgroup) + ", '" + kBackendHost + "', " + std::to_string(kBackendPort) +
 		", 'ONLINE', 100, 'reg_test_5546')";
-	run_q(admin, insert_query.c_str());
+	const string insert_srv2 =
+		"INSERT INTO mysql_servers (hostgroup_id, hostname, port, status, max_connections, comment) VALUES (" +
+		std::to_string(kHostgroup) + ", '" + cl.mysql_host + "', " + std::to_string(cl.mysql_port) +
+		", 'ONLINE', 100, 'reg_test_5546')";
+
+	run_q(admin, insert_srv1.c_str());
+	run_q(admin, insert_srv2.c_str());
 	run_q(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 }
 
@@ -122,7 +132,7 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	setup(admin);
+	setup(admin, cl);
 
 	const bool shunned = wait_for_server_status(admin, "SHUNNED");
 	ok(shunned, "Unreachable backend is SHUNNED after one monitor ping failure");
