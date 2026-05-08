@@ -325,9 +325,16 @@ int main(int argc, char** argv) {
                 diag("Running changes on server node %d", i);
                 trigger_sync_and_check(conns[i], "mysql_users", update_mysql_users_1, "LOAD MYSQL USERS TO RUNTIME");
         }
+        // Check mysql_servers_v2 (config) instead of mysql_servers (runtime).
+        // The cluster sync properly syncs mysql_servers_v2 (the config table)
+        // between nodes. The runtime mysql_servers checksum is modified
+        // independently on each node by the monitor (GR discovery, read-only
+        // detection, etc.), so runtime checksums legitimately differ and
+        // will never converge. Checking the config checksum is the correct
+        // way to verify cluster sync with an active monitor.
         for (int i = 0; i < 4; i++) {
                 diag("Running changes on server node %d", i);
-                trigger_sync_and_check(conns[i], "mysql_servers", update_mysql_servers_1, "LOAD MYSQL SERVERS TO RUNTIME");
+                trigger_sync_and_check(conns[i], "mysql_servers_v2", update_mysql_servers_1, "LOAD MYSQL SERVERS TO RUNTIME");
         }
 
         close_all_connections();
