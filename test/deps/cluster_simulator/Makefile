@@ -125,5 +125,8 @@ UTILS_OBJS := $(UTILSLDIR)/common_utils.o \
 $(UTILSLDIR)/cluster_simulator_lib.a: $(UTILS_OBJS)
 	ar rcs $@ $(UTILS_OBJS)
 
+$(TAP_LDIR)/libtap.so:
+	cd $(PROXYSQL_PATH)/test/tap && CC=$(CC) CXX=$(CXX) $(MAKE) tap
+
 cluster_simulator: cluster_simulator.cpp $(UTILSLDIR)/cluster_simulator_lib.a $(TAP_LDIR)/libtap.so
 	$(CXX) -o $@ $(OBJ) cluster_simulator.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) $(UTILSLDIR)/cluster_simulator_lib.a
