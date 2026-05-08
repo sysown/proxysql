@@ -55,7 +55,13 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 				}
 
 				if (mysrvc->myhgc->num_online_servers.load(std::memory_order_relaxed) <= mysrvc->myhgc->attributes.max_num_online_servers) { // number of online servers in HG is within configured range
-					if (mysrvc->ConnectionsUsed->conns_length() < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
+					// Cap is on alive connections (Used + Free). Allow when there is
+					// room, or when Free > 0 (a free conn can be reused or swapped in
+					// case-1, keeping the alive total bounded).
+					if (
+						(mysrvc->ConnectionsUsed->conns_length() + mysrvc->ConnectionsFree->conns_length()) < mysrvc->max_connections
+						|| mysrvc->ConnectionsFree->conns_length() > 0
+					) { // consider this server only if didn't reach max_connections
 						if (mysrvc->current_latency_us < (mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000)) { // consider the host only if not too far
 							if (gtid_trxid) {
 								if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
