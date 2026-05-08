@@ -253,9 +253,7 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 						// later client may match it perfectly and reuse it.
 						// When alive >= max_connections we MUST delete the
 						// misfit first to keep alive bounded by max.
-						unsigned int alive =
-							mysrvc->ConnectionsUsed->conns_length() +
-							mysrvc->ConnectionsFree->conns_length();
+						unsigned int alive = conns_used + conns_free;
 						if (alive >= (unsigned int)mysrvc->max_connections) {
 							MySQL_Connection* stale = (MySQL_Connection *)conns->remove_index_fast(conn_found_idx);
 							delete stale;
