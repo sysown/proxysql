@@ -1955,7 +1955,13 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 		for (j=0; j<l; j++) {
 			mysrvc=mysrvs->idx(j);
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
-				if (mysrvc->ConnectionsUsed->conns_length() < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
+				// Cap is on alive connections (Used + Free). Allow when there is
+				// room, or when Free > 0 (a free conn can be reused or swapped in
+				// case-1, keeping the alive total bounded).
+				if (
+					(mysrvc->ConnectionsUsed->conns_length() + mysrvc->ConnectionsFree->conns_length()) < mysrvc->max_connections
+					|| mysrvc->ConnectionsFree->conns_length() > 0
+				) { // consider this server only if didn't reach max_connections
 					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : pgsql_thread___default_max_latency_ms *1000 ) ) { // consider the host only if not too far
 						if (gtid_trxid) {
 #if 0
@@ -2413,6 +2419,19 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 					// we may consider creating a new connection
 					{
 					if (decision.create_new_connection) {
+						// Only swap when we'd otherwise exceed the cap.
+						// When alive < max_connections there is room for the
+						// new conn, so keep the misfit free conn around — a
+						// later client may match it perfectly and reuse it.
+						// When alive >= max_connections we MUST delete the
+						// misfit first to keep alive bounded by max.
+						unsigned int alive =
+							mysrvc->ConnectionsUsed->conns_length() +
+							mysrvc->ConnectionsFree->conns_length();
+						if (alive >= (unsigned int)mysrvc->max_connections) {
+							PgSQL_Connection* stale = (PgSQL_Connection *)conns->remove_index_fast(conn_found_idx);
+							delete stale;
+						}
 						conn = new PgSQL_Connection(false);
 						conn->parent=mysrvc;
 						// if attributes.multiplex == true , STATUS_PGSQL_CONNECTION_NO_MULTIPLEX_HG is set to false. And vice-versa
