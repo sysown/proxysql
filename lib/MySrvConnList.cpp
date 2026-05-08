@@ -247,6 +247,19 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 					// we may consider creating a new connection
 					{
 					if (decision.create_new_connection) {
+						// Only swap when we'd otherwise exceed the cap.
+						// When alive < max_connections there is room for the
+						// new conn, so keep the misfit free conn around — a
+						// later client may match it perfectly and reuse it.
+						// When alive >= max_connections we MUST delete the
+						// misfit first to keep alive bounded by max.
+						unsigned int alive =
+							mysrvc->ConnectionsUsed->conns_length() +
+							mysrvc->ConnectionsFree->conns_length();
+						if (alive >= (unsigned int)mysrvc->max_connections) {
+							MySQL_Connection* stale = (MySQL_Connection *)conns->remove_index_fast(conn_found_idx);
+							delete stale;
+						}
 						conn = new MySQL_Connection();
 						conn->parent=mysrvc;
 						// if attributes.multiplex == true , STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG is set to false. And vice-versa
