@@ -65,7 +65,7 @@ private:
 	template<typename T>
 	void check_for_invalid_fd(unsigned int n);
 	template<typename S>
-	void ProcessAllSessions_SortingSessions();
+	void ProcessAllSessions_Partition();
 	template<typename T>
 	void ProcessAllMyDS_AfterPoll();
 	template<typename T>

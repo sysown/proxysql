@@ -3833,7 +3833,7 @@ void PgSQL_Thread::process_all_sessions() {
 	}
 #endif // IDLE_THREADS
 	if (sess_sort && mysql_sessions->len > 3) {
-		ProcessAllSessions_SortingSessions<PgSQL_Session>();
+		ProcessAllSessions_Partition<PgSQL_Session>();
 	}
 	for (n = 0; n < mysql_sessions->len; n++) {
 		PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(n);
