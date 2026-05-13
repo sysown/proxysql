@@ -296,6 +296,7 @@ sqlite-vec: sqlite3/sqlite3/vec.o
 libconfig/libconfig/out/libconfig++.a:
 	cd libconfig && rm -rf libconfig-*/ || true
 	cd libconfig && tar -zxf libconfig-*.tar.gz
+	cd libconfig/libconfig && patch -p1 < ../restore_unknown_escape_passthrough.patch
 	cd libconfig/libconfig && cmake -DBUILD_SHARED_LIBS=0 -DBUILD_EXAMPLES=0 -DBUILD_TESTS=0 -DBUILD_FUZZERS=0 .
 	cd libconfig/libconfig && CC=${CC} CXX=${CXX} ${MAKE}
 
