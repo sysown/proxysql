@@ -258,6 +258,7 @@
   "reg_test_5233_set_warning-t" : [ "legacy-g6","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1","mysql84-g6","mysql90-g1","mysql95-g1","set_parser_algorithm_3-g1" ],
   "reg_test_5306-show_warnings_with_comment-t" : [ "legacy-g2","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql84-g2","mysql90-g2","mysql95-g2" ],
   "reg_test_5389-flush_logs_no_drop-t" : [ "legacy-g4","mysql84-g4","mysql90-g4","mysql95-g4" ],
+  "reg_test_5620_fast_routing_qr_leak-t" : [ "legacy-g6" ],
   "reg_test_5766_libconfig_escape_passthrough-t" : [ "mysql95-g4" ],
   "reg_test__ssl_client_busy_wait-t" : [ "legacy-g2","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2","mysql84-g2","mysql90-g2","mysql95-g2" ],
   "reg_test_com_change_user_malformed_packet-t" : [ "mysql84-g6","mysql95-g1" ],
