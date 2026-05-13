@@ -4,10 +4,6 @@ run-name: '${{ github.ref_name }} ${{ github.workflow }} ${{ github.sha }}'
 on:
   workflow_dispatch:
 
-permissions:
-  contents: write
-  checks: write
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
   cancel-in-progress: true
@@ -15,6 +11,9 @@ concurrency:
 jobs:
   init_release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      checks: write
     # No concurrency group: GitHub's "1 running + 1 pending" rule causes
     # mass cancellations when many workflows share a group. Instead we
     # run all init jobs in parallel and converge via a race-tolerant
@@ -78,6 +77,9 @@ jobs:
   build:
     needs: init_release
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      checks: write
     env:
       ARCH: amd64
       DIST: fedora44

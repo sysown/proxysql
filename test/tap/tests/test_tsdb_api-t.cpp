@@ -80,8 +80,17 @@ static http_result http_get(const string& url, const string& userpwd) {
     curl_easy_setopt(c, CURLOPT_WRITEDATA, &r.body);
     curl_easy_setopt(c, CURLOPT_HEADERFUNCTION, header_cb);
     curl_easy_setopt(c, CURLOPT_HEADERDATA, &hdrs);
-    curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 0L);
-    curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, 0L);
+    // Pin to TLS 1.2+ for the test client (rest of options are test-only;
+    // see NOSONAR comments below).
+    curl_easy_setopt(c, CURLOPT_SSLVERSION, (long)CURL_SSLVERSION_TLSv1_2);
+    // Cert verification is disabled: this test connects to a localhost
+    // proxysql instance that serves an auto-generated self-signed
+    // certificate. Verifying the chain or hostname requires installing
+    // the per-run cert into the system CA store, which is out of scope
+    // for a TAP test. SonarCloud rules S4423 / S5527 / S4830 do not apply
+    // to a localhost test client. (SonarCloud)
+    curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 0L); // NOSONAR
+    curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, 0L); // NOSONAR
     curl_easy_setopt(c, CURLOPT_TIMEOUT, 10L);
     if (!userpwd.empty()) {
         curl_easy_setopt(c, CURLOPT_USERPWD, userpwd.c_str());
