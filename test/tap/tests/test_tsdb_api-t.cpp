@@ -193,7 +193,9 @@ int main() {
     diag("waiting 8s for HTTP servers to come up and for tsdb samples to land");
     sleep(8);
 
-    const string restapi_origin = string("http://") + cl.admin_host + ":" + std::to_string(restapi_port);
+    // ProxySQL REST API listens on plain HTTP by design; this test
+    // must hit the real endpoint, not a TLS variant. (SonarCloud S5332)
+    const string restapi_origin = string("http://") + cl.admin_host + ":" + std::to_string(restapi_port); // NOSONAR
     const string web_origin     = string("https://") + cl.admin_host + ":" + std::to_string(web_port);
     const string admin_creds    = string(cl.admin_username) + ":" + cl.admin_password;
     const string stats_creds    = "stats:stats";
