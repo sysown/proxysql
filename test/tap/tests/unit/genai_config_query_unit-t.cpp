@@ -71,7 +71,7 @@ static void expect_query_value(const json& resp, int expected) {
 } // namespace
 
 int main() {
-	plan(30);
+	plan(31);
 
 	test_init_minimal();
 
