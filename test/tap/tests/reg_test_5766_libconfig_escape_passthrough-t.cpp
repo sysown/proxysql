@@ -17,9 +17,14 @@
  * It also verifies that `\n` and `\xHH` (hex escapes) -- which were
  * already interpreted by libconfig 1.7.3 -- still work as expected.
  */
+#include <cerrno>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <string>
+#include <string_view>
+#include <sys/stat.h>
 #include <unistd.h>
 #include "mysql.h"
 
@@ -28,14 +33,17 @@
 #include "command_line.h"
 
 using std::string;
+using std::string_view;
 
 /* Probe values exercised below.  Every literal `\` in C++ source maps to
  * a single backslash byte in the rendered config; libconfig should then
- * leave it untouched (for \a \b \v) or interpret it (for \n \x). */
+ * leave it untouched (for \a \b \v) or interpret it (for \n \x).
+ * `expected_value` is a string_view so the comparison length is the
+ * compile-time literal size and we do not call strlen at runtime. */
 struct Probe {
     const char* var_name;
-    const char* config_literal; /* what we write between the quotes in the .cnf */
-    const char* expected_value; /* bytes we expect to read back via admin */
+    string_view config_literal; /* what we write between the quotes in the .cnf */
+    string_view expected_value; /* bytes we expect to read back via admin */
     const char* description;
 };
 
@@ -50,16 +58,16 @@ static const Probe probes[] = {
 };
 static const size_t n_probes = sizeof(probes) / sizeof(probes[0]);
 
-static void write_config(const string& path) {
+static void write_config(const string& path, const string& datadir) {
     std::ofstream cfg(path);
-    cfg << "datadir=\"/tmp\"\n";
-    cfg << "errorlog=\"/tmp/proxysql.log\"\n";
+    cfg << "datadir=\"" << datadir << "\"\n";
+    cfg << "errorlog=\"" << datadir << "/proxysql.log\"\n";
     cfg << "mysql_variables=\n{\n";
     for (size_t i = 0; i < n_probes; ++i) {
         /* Strip the "mysql-" prefix when writing into the mysql_variables
          * group; libconfig stores it as `mysql-<name>` after loading. */
-        const char* var = probes[i].var_name;
-        if (strncmp(var, "mysql-", 6) == 0) var += 6;
+        string_view var{probes[i].var_name};
+        if (var.substr(0, 6) == "mysql-") var.remove_prefix(6);
         cfg << "    " << var << "=\"" << probes[i].config_literal << "\"\n";
     }
     cfg << "}\n";
@@ -87,11 +95,23 @@ int main(int argc, char** argv) {
         return exit_status();
     }
 
-    const char* datadir = getenv("REGULAR_INFRA_DATADIR");
-    string cfg_path = (datadir ? string(datadir) : "/tmp");
-    if (cfg_path.back() != '/') cfg_path += '/';
-    cfg_path += "reg_test_5766.cfg";
-    write_config(cfg_path);
+    /* Write the cnf into the test infra's private datadir when it is
+     * provided; otherwise create a fresh 0700 directory via mkdtemp so we
+     * never touch a publicly-writable path like /tmp directly. */
+    string cfg_dir;
+    if (const char* datadir = getenv("REGULAR_INFRA_DATADIR")) {
+        cfg_dir = datadir;
+    } else {
+        char tmpl[] = "/tmp/reg_test_5766_XXXXXX";
+        if (!mkdtemp(tmpl)) {
+            fprintf(stderr, "mkdtemp failed: %s\n", strerror(errno));
+            return exit_status();
+        }
+        cfg_dir = tmpl;
+    }
+    while (cfg_dir.size() > 1 && cfg_dir.back() == '/') cfg_dir.pop_back();
+    string cfg_path = cfg_dir + "/reg_test_5766.cfg";
+    write_config(cfg_path, cfg_dir);
 
     string set_cfg = "PROXYSQL SET CONFIG FILE '" + cfg_path + "'";
     MYSQL_QUERY_T(admin, set_cfg.c_str());
@@ -112,16 +132,16 @@ int main(int argc, char** argv) {
         unsigned long* lens = res ? mysql_fetch_lengths(res) : NULL;
 
         bool match = false;
+        const string_view& exp = probes[i].expected_value;
         if (row && row[0] && lens) {
-            size_t expected_len = strlen(probes[i].expected_value);
-            if (lens[0] == expected_len && memcmp(row[0], probes[i].expected_value, expected_len) == 0) {
+            if (lens[0] == exp.size() && string_view(row[0], lens[0]) == exp) {
                 match = true;
             } else {
-                diag("Mismatch for %s: expected %zu bytes (%s), got %lu bytes",
-                     probes[i].var_name, expected_len, probes[i].expected_value, lens[0]);
+                diag("Mismatch for %s: expected %zu bytes, got %lu bytes",
+                     probes[i].var_name, exp.size(), lens[0]);
                 /* Hex-dump both for easier triage. */
                 fprintf(stderr, "  expected hex: ");
-                for (size_t k = 0; k < expected_len; ++k) fprintf(stderr, "%02x ", (unsigned char)probes[i].expected_value[k]);
+                for (size_t k = 0; k < exp.size(); ++k) fprintf(stderr, "%02x ", (unsigned char)exp[k]);
                 fprintf(stderr, "\n  actual hex:   ");
                 for (size_t k = 0; k < lens[0]; ++k) fprintf(stderr, "%02x ", (unsigned char)row[0][k]);
                 fprintf(stderr, "\n");
