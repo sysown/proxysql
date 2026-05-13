@@ -17,14 +17,11 @@
  * It also verifies that `\n` and `\xHH` (hex escapes) -- which were
  * already interpreted by libconfig 1.7.3 -- still work as expected.
  */
-#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <fstream>
 #include <string>
 #include <string_view>
-#include <sys/stat.h>
 #include <unistd.h>
 #include "mysql.h"
 
@@ -95,19 +92,18 @@ int main(int argc, char** argv) {
         return exit_status();
     }
 
-    /* Write the cnf into the test infra's private datadir when it is
-     * provided; otherwise create a fresh 0700 directory via mkdtemp so we
-     * never touch a publicly-writable path like /tmp directly. */
+    /* Prefer the TAP-managed workdir (TAP_WORKDIR / cl.workdir, defaults
+     * to "./"). REGULAR_INFRA_DATADIR is honoured first when set by the
+     * infra so the cnf lands in the same private datadir the proxysql
+     * instance uses, matching test_load_from_config_*-t. No hardcoded
+     * /tmp path. */
     string cfg_dir;
     if (const char* datadir = getenv("REGULAR_INFRA_DATADIR")) {
         cfg_dir = datadir;
+    } else if (cl.workdir && *cl.workdir) {
+        cfg_dir = cl.workdir;
     } else {
-        char tmpl[] = "/tmp/reg_test_5766_XXXXXX";
-        if (!mkdtemp(tmpl)) {
-            fprintf(stderr, "mkdtemp failed: %s\n", strerror(errno));
-            return exit_status();
-        }
-        cfg_dir = tmpl;
+        cfg_dir = ".";
     }
     while (cfg_dir.size() > 1 && cfg_dir.back() == '/') cfg_dir.pop_back();
     string cfg_path = cfg_dir + "/reg_test_5766.cfg";
