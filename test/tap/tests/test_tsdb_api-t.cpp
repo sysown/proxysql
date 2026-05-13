@@ -80,9 +80,11 @@ static http_result http_get(const string& url, const string& userpwd) {
     curl_easy_setopt(c, CURLOPT_WRITEDATA, &r.body);
     curl_easy_setopt(c, CURLOPT_HEADERFUNCTION, header_cb);
     curl_easy_setopt(c, CURLOPT_HEADERDATA, &hdrs);
-    // Pin to TLS 1.3 minimum for the test client (rest of options are
-    // test-only; see NOSONAR comments below).
-    curl_easy_setopt(c, CURLOPT_SSLVERSION, (long)CURL_SSLVERSION_TLSv1_3);
+    // Pin to TLS 1.3 minimum for the test client. The NOSONAR is needed
+    // because SonarCloud's S4423 matcher flags any CURLOPT_SSLVERSION
+    // line regardless of the value set (TLS 1.3 is the strongest
+    // available).
+    curl_easy_setopt(c, CURLOPT_SSLVERSION, (long)CURL_SSLVERSION_TLSv1_3); // NOSONAR
     // Cert verification is disabled: this test connects to a localhost
     // proxysql instance that serves an auto-generated self-signed
     // certificate. Verifying the chain or hostname requires installing
