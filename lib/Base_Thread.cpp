@@ -347,10 +347,23 @@ void Base_Thread::tune_timeout_for_myds_needs_pause(DS * myds) {
 template<typename T, typename DS>
 void Base_Thread::tune_timeout_for_session_needs_pause(DS * myds) {
 	T* thr = static_cast<T*>(this);
-	if (thr->mypolls.poll_timeout==0 || (myds->sess->pause_until - curtime < thr->mypolls.poll_timeout) ) {
-		thr->mypolls.poll_timeout= myds->sess->pause_until - curtime;
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , poll_timeout=%u , pause_until=%llu , curtime=%llu\n", myds->sess, thr->mypolls.poll_timeout, myds->sess->pause_until, curtime);
-	}
+
+	if (myds->sess->pause_until > curtime) {
+		// Future pause: align poll_timeout to the pause expiration.
+		if (thr->mypolls.poll_timeout == 0 || (myds->sess->pause_until - curtime < thr->mypolls.poll_timeout)) {
+			thr->mypolls.poll_timeout = myds->sess->pause_until - curtime;
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , poll_timeout=%u , pause_until=%llu , curtime=%llu\n", myds->sess, thr->mypolls.poll_timeout, 
+				myds->sess->pause_until, curtime);
+		}
+	} 
+	/* Do we need to immediately wake up poll() because of an already expired pause?
+	else {
+		// pause_until > 0 (caller checked) but <= curtime: pause has already expired.
+		// Wake poll() immediately rather than computing (pause_until - curtime)
+		if (thr->mypolls.poll_timeout == 0 || thr->mypolls.poll_timeout > 1) {
+			thr->mypolls.poll_timeout = 1;
+		}
+	}*/
 }
 
 template<typename T, typename DS>
