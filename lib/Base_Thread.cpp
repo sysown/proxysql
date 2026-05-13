@@ -232,27 +232,41 @@ void Base_Thread::check_for_invalid_fd(unsigned int n) {
 
 
 /**
- * @brief Partition all sessions into three contiguous blocks
+ * @brief Partition all sessions into three blocks, then FIFO-bump
+ * the long-waiters within block B.
  *
- * Layout produced in mysql_sessions->pdata:
- *   [0, running_end)         block A: running a query against the backend
- *   [running_end, idle_begin) block B: acquiring a backend (max_connect_time != 0)
- *   [idle_begin, len)        block C: idle (no backend, or holds-conn-but-WAITING_CLIENT_DATA)
+ * Block layout produced in mysql_sessions->pdata:
+ *   [0, running_end)         block A - running a query against the backend
+ *                            (myconn != NULL, mct == 0, status != WAITING_CLIENT_DATA)
+ *   [running_end, idle_begin) block B - acquiring/awaiting a backend
+ *                            (mct != 0)
+ *   [idle_begin, len)        block C - idle, or holds-conn-but-WAITING_CLIENT_DATA
  *
- * Block A is "session is currently driving the backend" — these sessions have a chance
- * of releasing the connection at end-of-query (depending on multiplexing eligibility,
- * transaction state, etc.), giving block B sessions a fairness chance to acquire it.
- * Sessions parked in WAITING_CLIENT_DATA (e.g., idle in a transaction after BEGIN) hold
- * the conn but cannot release it until the client sends the next packet, so they live in C.
+ * Block A drives the backend and may release its conn at end-of-query, giving
+ * block B sessions a fairness chance to acquire it. Sessions parked in
+ * WAITING_CLIENT_DATA (idle in a transaction after BEGIN) hold the conn but
+ * cannot release it until the client sends the next packet, so they live in C.
  *
- * Classification tests max_connect_time first: it must win over A even when myconn != NULL,
- * to catch CHANGING_USER_SERVER on pooled connections and the post-error retry path where
- * the old conn hasn't been destroyed yet.
+ * Classification tests max_connect_time first: it must win over A even when
+ * myconn != NULL, to catch CHANGING_USER_SERVER on pooled connections and the
+ * post-error retry path where the old conn hasn't been destroyed yet.
  *
- * Single O(n) pass, in place. idx walks up, idle_begin walks down, they meet and terminate.
+ * Loop 1 (partition + stats): single O(n) pass, in place. idx walks up,
+ * idle_begin walks down, they meet and terminate. While partitioning, we
+ * also accumulate sum_wait and b_count over block B, where
+ *   wt = curtime - CurrentQuery.start_time  (microseconds)
+ *
+ * Loop 2 (O(b_count)): promote sessions in B with
+ *   wt > K_WAIT * avg(wt)
+ * to the front of the B band, preserving their relative pdata order. This
+ * ensures the longer-waiting sessions in B get a chance at the next released
+ * backend conn before the newer arrivals do.
+ *
  */
 template<typename S>
 void Base_Thread::ProcessAllSessions_Partition() {
+	unsigned long long sum_wait = 0;
+	size_t b_count = 0;
 	size_t running_end = 0;
 	size_t idle_begin = mysql_sessions->len;
 	size_t idx = 0;
@@ -273,6 +287,10 @@ void Base_Thread::ProcessAllSessions_Partition() {
 			++running_end;
 			++idx;
 		} else if (is_B) {
+			const unsigned long long st = s->CurrentQuery.start_time;
+			const unsigned long long wt = (st && curtime > st) ? (curtime - st) : 0;
+			sum_wait += wt;
+			++b_count;
 			++idx;
 		} else {
 			--idle_begin;
@@ -282,6 +300,28 @@ void Base_Thread::ProcessAllSessions_Partition() {
 				mysql_sessions->pdata[idle_begin] = p;
 			}
 			// do NOT advance idx - re-examine the swapped-in element test
+		}
+	}
+
+	// promote sessions with wait_time > K * avg(wait_time)
+	// to the front of B
+	constexpr double K_WAIT = 1.1;
+	if (b_count > 1) {
+		const unsigned long long avg_wait = sum_wait / b_count;
+		const unsigned long long threshold = static_cast<unsigned long long>(static_cast<double>(avg_wait) * K_WAIT);
+		size_t a = running_end;
+		for (size_t n = running_end; n < idle_begin; ++n) {
+			S * sn = static_cast<S*>(mysql_sessions->pdata[n]);
+			const unsigned long long st = sn->CurrentQuery.start_time;
+			const unsigned long long wt = (st && curtime > st) ? (curtime - st) : 0;
+			if (wt > threshold) {
+				if (a != n) {
+					void* p = mysql_sessions->pdata[a];
+					mysql_sessions->pdata[a] = mysql_sessions->pdata[n];
+					mysql_sessions->pdata[n] = p;
+				}
+				++a;
+			}
 		}
 	}
 }
