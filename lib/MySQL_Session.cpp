@@ -4762,6 +4762,19 @@ void MySQL_Session::SetQueryTimeout() {
 			mybe->server_myds->wait_until+=qr_timeout*1000;
 		}
 	}
+	// Per-hostgroup override from mysql_hostgroup_attributes.hostgroup_settings.default_query_timeout.
+	// Beats mysql-default_query_timeout but loses to a query rule timeout set above. Single load
+	// so the value tested is the value applied; admin reload may write the field concurrently.
+	// The chain is guarded defensively even though SetQueryTimeout's call site keeps it populated.
+	MySQL_Connection* const myconn = mybe->server_myds->myconn;
+	const int32_t hg_default_query_timeout_ms =
+		(myconn && myconn->parent && myconn->parent->myhgc)
+			? myconn->parent->myhgc->attributes.default_query_timeout
+			: -1;
+	if (mybe->server_myds->wait_until == 0 && hg_default_query_timeout_ms > 0) {
+		mybe->server_myds->wait_until =
+			thread->curtime + static_cast<unsigned long long>(hg_default_query_timeout_ms) * 1000;
+	}
 	if (mysql_thread___default_query_timeout) {
 		if (mybe->server_myds->wait_until==0) {
 			mybe->server_myds->wait_until=thread->curtime;
