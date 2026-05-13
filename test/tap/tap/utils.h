@@ -567,6 +567,54 @@ struct conn_opts_t {
 MYSQL* wait_for_proxysql(const conn_opts_t& opts, int timeout);
 
 /**
+ * @brief Probe a set of ProxySQL admin endpoints and wait until every one of
+ *  them accepts a plain (no SSL, no compression) admin login.
+ *
+ * @details Useful for cluster-style tests where multiple ProxySQL instances are
+ *  expected to be up before the test starts issuing real queries. The probe
+ *  is intentionally cheap — it opens a connection, observes that login
+ *  succeeds, closes the connection. It does not exercise SSL, compression,
+ *  or any query path; those are left to the real test connections.
+ *
+ *  Endpoints are probed round-robin. Each attempt uses a short connect
+ *  timeout (2s). Endpoints that respond are removed from the pending set;
+ *  endpoints that fail keep their last 'mysql_error' for diagnostics. The
+ *  loop sleeps 'poll_interval_s' between rounds until either every
+ *  endpoint has responded or the overall 'timeout_s' deadline expires.
+ *
+ *  On deadline expiry the function emits a single diag() line per still-
+ *  unresponsive endpoint with its last observed error, so the test fails
+ *  with an actionable message rather than a cryptic EINPROGRESS later.
+ *
+ * @param nodes Vector of (host, admin_port) pairs to probe.
+ * @param admin_user Admin username for login.
+ * @param admin_password Admin password for login.
+ * @param timeout_s Overall wall-clock budget in seconds. Default 60.
+ * @param poll_interval_s Sleep between rounds, in seconds. Default 2.
+ * @return 0 if every endpoint responded within the deadline; 1 otherwise.
+ */
+int wait_for_proxysql_cluster(
+	const std::vector<std::pair<std::string,int>>& nodes,
+	const std::string& admin_user,
+	const std::string& admin_password,
+	int timeout_s = 60,
+	int poll_interval_s = 2);
+
+/**
+ * @brief Convenience overload: probe a list of ports on a single host.
+ *
+ * @details Builds the {host, port} vector internally and delegates to the
+ *  pair-based overload. Default values for timeout_s / poll_interval_s match.
+ */
+int wait_for_proxysql_cluster(
+	const std::string& host,
+	const std::vector<int>& ports,
+	const std::string& admin_user,
+	const std::string& admin_password,
+	int timeout_s = 60,
+	int poll_interval_s = 2);
+
+/**
  * @brief Extract the current value for a given 'variable_name' from
  *   ProxySQL current configuration, either MEMORY or RUNTIME.
  * @param proxysql_admin An already opened connection to ProxySQL Admin.
