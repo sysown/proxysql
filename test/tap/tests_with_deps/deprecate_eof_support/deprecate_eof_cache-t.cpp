@@ -46,7 +46,11 @@ int create_testing_tables(MYSQL* mysql_server) {
 
 std::vector<std::string> queries {
 	"SELECT * FROM test.ok_packet_cache_test WHERE id=%d",
-	"INSERT INTO test.ok_packet_cache_test (c, pad) VALUES ('%s', '%s')",
+	// Insert with an explicit id (first %d) so the value the SELECT loop
+	// looks up below matches deterministically on every backend, including
+	// multi-master ones (Galera, Group Replication) where
+	// auto_increment_increment != 1. See issue #5781.
+	"INSERT INTO test.ok_packet_cache_test (id, c, pad) VALUES (%d, '%s', '%s')",
 	"UPDATE test.ok_packet_cache_test SET c='%s', pad='%s' WHERE id=%d"
 };
 
@@ -109,8 +113,9 @@ int main(int argc, char** argv) {
 		// Store the random generated strings
 		stored_pairs.push_back(pair<string, string>{rnd_c, rnd_pad});
 
-		// Execute the INSERT queries
-		string_format(t_insert_query, insert_query, rnd_c.c_str(), rnd_pad.c_str());
+		// Execute the INSERT queries with an explicit id of i+1 so the
+		// downstream SELECT WHERE id=i+1 always matches (see issue #5781).
+		string_format(t_insert_query, insert_query, i + 1, rnd_c.c_str(), rnd_pad.c_str());
 		int i_res = mysql_query(proxy_mysql, insert_query.c_str());
 		uint64_t i_err = mysql_errno(proxy_mysql);
 
