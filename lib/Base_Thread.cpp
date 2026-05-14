@@ -232,8 +232,8 @@ void Base_Thread::check_for_invalid_fd(unsigned int n) {
 
 
 /**
- * @brief Partition all sessions into three blocks, then FIFO-bump
- * the long-waiters within block B.
+ * @brief Partition all sessions into three blocks and sort the B band by
+ * max_connect_time.
  *
  * Block layout produced in mysql_sessions->pdata:
  *   [0, running_end)         block A - running a query against the backend
@@ -251,22 +251,16 @@ void Base_Thread::check_for_invalid_fd(unsigned int n) {
  * myconn != NULL, to catch CHANGING_USER_SERVER on pooled connections and the
  * post-error retry path where the old conn hasn't been destroyed yet.
  *
- * Loop 1 (partition + stats): single O(n) pass, in place. idx walks up,
- * idle_begin walks down, they meet and terminate. While partitioning, we
- * also accumulate sum_wait and b_count over block B, where
- *   wt = curtime - CurrentQuery.start_time  (microseconds)
+ * Pass 1 (partition): single O(n) pass, in place. idx walks up, idle_begin
+ * walks down, they meet and terminate.
  *
- * Loop 2 (O(b_count)): promote sessions in B with
- *   wt > K_WAIT * avg(wt)
- * to the front of the B band, preserving their relative pdata order. This
- * ensures the longer-waiting sessions in B get a chance at the next released
- * backend conn before the newer arrivals do.
- *
+ * Pass 2 (sort): single Lomuto-style sweep over the B band [running_end,
+ * idle_begin) using max_connect_time as the ordering key. Same algorithm
+ * as the pre-PR ProcessAllSessions_SortingSessions, scoped to the band
+ * Pass 1 already isolated.
  */
 template<typename S>
 void Base_Thread::ProcessAllSessions_Partition() {
-	unsigned long long sum_wait = 0;
-	size_t b_count = 0;
 	size_t running_end = 0;
 	size_t idle_begin = mysql_sessions->len;
 	size_t idx = 0;
@@ -287,10 +281,6 @@ void Base_Thread::ProcessAllSessions_Partition() {
 			++running_end;
 			++idx;
 		} else if (is_B) {
-			const unsigned long long st = s->CurrentQuery.start_time;
-			const unsigned long long wt = (st && curtime > st) ? (curtime - st) : 0;
-			sum_wait += wt;
-			++b_count;
 			++idx;
 		} else {
 			--idle_begin;
@@ -303,23 +293,28 @@ void Base_Thread::ProcessAllSessions_Partition() {
 		}
 	}
 
-	// promote sessions with wait_time > K * avg(wait_time)
-	// to the front of B
-	constexpr double K_WAIT = 1.1;
-	if (b_count > 1) {
-		const unsigned long long avg_wait = sum_wait / b_count;
-		const unsigned long long threshold = static_cast<unsigned long long>(static_cast<double>(avg_wait) * K_WAIT);
+	// Single-pass sweep across the B band [running_end, idle_begin) ordering
+	// by max_connect_time. Same Lomuto-style sweep as the pre-PR
+	// ProcessAllSessions_SortingSessions, scoped to the B band Pass 1 just
+	// isolated.
+	//
+	// Invariant: every session in [running_end, idle_begin) is a B session,
+	// so s->mybe->server_myds->max_connect_time is non-zero and no nullptr
+	// guards are needed.
+	if (idle_begin > running_end + 1) {
 		size_t a = running_end;
 		for (size_t n = running_end; n < idle_begin; ++n) {
-			S * sn = static_cast<S*>(mysql_sessions->pdata[n]);
-			const unsigned long long st = sn->CurrentQuery.start_time;
-			const unsigned long long wt = (st && curtime > st) ? (curtime - st) : 0;
-			if (wt > threshold) {
-				if (a != n) {
-					void* p = mysql_sessions->pdata[a];
-					mysql_sessions->pdata[a] = mysql_sessions->pdata[n];
-					mysql_sessions->pdata[n] = p;
-				}
+			S* sess = static_cast<S*>(mysql_sessions->pdata[n]);
+			S* sess2 = static_cast<S*>(mysql_sessions->pdata[a]);
+			const unsigned long long mct_n = sess->mybe->server_myds->max_connect_time;
+			const unsigned long long mct_a = sess2->mybe->server_myds->max_connect_time;
+			if (mct_a <= mct_n) {
+				// session at 'a' already has earlier-or-equal mct - leave it
+			}
+			else {
+				void* p = mysql_sessions->pdata[a];
+				mysql_sessions->pdata[a] = mysql_sessions->pdata[n];
+				mysql_sessions->pdata[n] = p;
 				++a;
 			}
 		}
