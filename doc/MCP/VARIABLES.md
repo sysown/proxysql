@@ -76,7 +76,9 @@ The following variables control authentication (Bearer tokens) for specific MCP 
 #### `mcp-query_endpoint_auth`
 - **Type:** String
 - **Default:** `""` (empty)
-- **Description:** Bearer token for `/mcp/query` endpoint
+- **Description:** Bearer token for `/mcp/query` endpoint. **Required:**
+  the `/mcp/query` endpoint refuses all requests when this variable is
+  empty.  Set it to an explicit non-empty token before enabling MCP.
 - **Runtime:** Yes
 - **Example:**
   ```sql

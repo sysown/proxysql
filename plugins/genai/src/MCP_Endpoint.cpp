@@ -83,6 +83,20 @@ bool MCP_JSONRPC_Resource::authenticate_request(const httpserver::http_request& 
 		return false;
 	}
 
+	// GHSA-7wh6-2vcc-gcm4: the /mcp/query endpoint can execute SQL on
+	// configured MCP target backends.  Even after the run_sql_readonly
+	// multi-statement bypass is closed, exposing the endpoint without
+	// authentication is unsafe: an unauthenticated attacker reaching the
+	// MCP listener can still read arbitrary data from any configured
+	// target using the documented read-only tools.  Require an explicit
+	// non-empty token for the query endpoint; an operator who needs the
+	// pre-fix permissive behavior must set mcp-query_endpoint_auth
+	// explicitly to a chosen value.
+	if (endpoint_name == "query" && (!expected_token || strlen(expected_token) == 0)) {
+		proxy_error("MCP authentication on query: mcp-query_endpoint_auth is empty; refusing request. Set mcp-query_endpoint_auth to a non-empty bearer token to enable the /mcp/query endpoint.\n");
+		return false;
+	}
+
 	// If no auth token is configured, allow the request (no authentication required)
 	if (!expected_token || strlen(expected_token) == 0) {
 		proxy_debug(PROXY_DEBUG_GENERIC, 4, "MCP authentication on %s: no auth configured, allowing request\n", endpoint_name.c_str());
