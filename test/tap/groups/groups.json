@@ -70,6 +70,7 @@
   "mcp_pgsql_concurrency_stress-t" : [ "ai-g1","@proxysql_min_version:4.0" ],
   "mcp_query_rules-t" : [ "ai-g1","@proxysql_min_version:4.0" ],
   "mcp_query_run_sql_readonly-t" : [ "ai-g1","@proxysql_min_version:4.0" ],
+  "mcp_query_run_sql_readonly_bypass-t" : [ "ai-g1","@proxysql_min_version:4.0" ],
   "mcp_runtime_variables-t" : [ "ai-g1","@proxysql_min_version:4.0" ],
   "mcp_semantic_lifecycle-t" : [ "ai-g1","@proxysql_min_version:4.0" ],
   "mcp_show_connections_commands_inmemory-t" : [ "ai-g1","@proxysql_min_version:4.0" ],
