@@ -446,7 +446,7 @@ amd64-packages: amd64-centos amd64-ubuntu amd64-debian amd64-fedora amd64-opensu
 amd64-almalinux: almalinux8 almalinux8-clang almalinux8-dbg almalinux9 almalinux9-clang almalinux9-dbg almalinux10 almalinux10-clang almalinux10-dbg
 amd64-centos: centos9 centos9-clang centos9-dbg centos10 centos10-clang centos10-dbg
 amd64-debian: debian12 debian12-clang debian12-dbg debian13 debian13-clang debian13-dbg
-amd64-fedora: fedora42 fedora42-clang fedora42-dbg fedora43 fedora43-clang fedora43-dbg
+amd64-fedora: fedora42 fedora42-clang fedora42-dbg fedora43 fedora43-clang fedora43-dbg fedora44 fedora44-clang fedora44-dbg
 amd64-opensuse: opensuse15 opensuse15-clang opensuse15-dbg opensuse16 opensuse16-clang opensuse16-dbg
 amd64-ubuntu: ubuntu22 ubuntu22-clang ubuntu22-dbg ubuntu24 ubuntu24-clang ubuntu24-dbg
 amd64-pkglist:
@@ -457,7 +457,7 @@ arm64-packages: arm64-centos arm64-debian arm64-ubuntu arm64-fedora arm64-opensu
 arm64-almalinux: almalinux8 almalinux9 almalinux10
 arm64-centos: centos9 centos10
 arm64-debian: debian12 debian13
-arm64-fedora: fedora42 fedora43
+arm64-fedora: fedora42 fedora43 fedora44
 arm64-opensuse: opensuse15 opensuse16
 arm64-ubuntu: ubuntu22 ubuntu24
 arm64-pkglist:

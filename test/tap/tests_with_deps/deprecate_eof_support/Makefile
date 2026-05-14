@@ -90,8 +90,16 @@ fwd_eof_query: fwd_eof_query.cpp
 	$(CXX) -DNON_EOF_SUPPORT $< -I$(TEST_MARIADB_IDIR) $(IDIRS) -L$(TEST_MARIADB_LDIR) $(LDIRS) -lmariadbclient $(COMMONARGS) -o $@
 
 # NOTE: Compilation with 'libmysql' instead of 'libmariadb' client to confirm packet sequence id isn't check by 'libmariadb'
+#
+# fwd_eof_ok_query is linked against libmysqlclient (Oracle MySQL connector),
+# so we must compile against libmysqlclient's mysql.h to avoid an ABI mismatch
+# in the MYSQL struct layout. With MariaDB headers in front, sizeof(MYSQL) and
+# offsetof(MYSQL,server_status) differ from what libmysqlclient's mysql_init()
+# allocates, and proxy->server_status reads past the end of the allocation
+# (returning heap-adjacent garbage that looked like the proxysql port number).
+# See issue #5781 for the analysis.
 fwd_eof_ok_query: fwd_eof_query.cpp
-	$(CXX) $< -I$(TEST_MARIADB_IDIR) -I$(TEST_MYSQL_IDIR) -I$(TEST_MYSQL_EDIR) $(IDIRS) -L$(TEST_MYSQL_LDIR) $(LDIRS) -lmysqlclient $(COMMONARGS) -o $@
+	$(CXX) $< -I$(TEST_MYSQL_IDIR) -I$(TEST_MYSQL_EDIR) -I$(TEST_MARIADB_IDIR) $(IDIRS) -L$(TEST_MYSQL_LDIR) $(LDIRS) -lmysqlclient $(COMMONARGS) -o $@
 # NOTE end
 
 deprecate_eof_cache-t: deprecate_eof_cache-t.cpp
