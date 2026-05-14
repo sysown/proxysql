@@ -202,23 +202,23 @@ debug: build_src_debug
 testaurora_random: build_src_testaurora_random
 
 .PHONY: testaurora
-testaurora: build_src_testaurora
+testaurora: build_src_testaurora build_cluster_simulator
 	# cd test/tap && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE}
 	# cd test/tap/tests && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
 
 .PHONY: testgalera
-testgalera: build_src_testgalera
+testgalera: build_src_testgalera build_cluster_simulator
 	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG -DTEST_GALERA" CC=${CC} CXX=${CXX} ${MAKE}
 	cd test/tap/tests && OPTZ="${O0} -ggdb -DDEBUG -DTEST_GALERA" CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
 
 .PHONY: testgrouprep
-testgrouprep: build_src_testgrouprep
+testgrouprep: build_src_testgrouprep build_cluster_simulator
 
 .PHONY: testreadonly
-testreadonly: build_src_testreadonly
+testreadonly: build_src_testreadonly build_cluster_simulator
 
 .PHONY: testreplicationlag
-testreplicationlag: build_src_testreplicationlag
+testreplicationlag: build_src_testreplicationlag build_cluster_simulator
 
 .PHONY: testall
 testall: build_src_testall
@@ -356,6 +356,19 @@ build_tap_test_debug: build_tap_tests_debug
 .PHONY: build_tap_tests_debug
 build_tap_tests_debug: build_src_debug
 	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE} debug
+
+# The simulator links against libproxysql.a from the PREVIOUS lib build in this
+# invocation (release for `make build_cluster_simulator`, debug for the _debug
+# variant, or a TEST_<FAMILY>-flavored debug build when pulled in as a prereq
+# of the `test<family>` targets). Keep this rule dependency-free so it does not
+# clobber the caller's lib/src flavor by recursing into a conflicting build.
+.PHONY: build_cluster_simulator
+build_cluster_simulator:
+	cd test/deps/cluster_simulator && CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_cluster_simulator_debug
+build_cluster_simulator_debug:
+	cd test/deps/cluster_simulator && CC=${CC} CXX=${CXX} ${MAKE} debug
 
 # ClickHouse build targets are now default build targets. 
 # To maintain backward compatibility, ClickHouse targets are still available.

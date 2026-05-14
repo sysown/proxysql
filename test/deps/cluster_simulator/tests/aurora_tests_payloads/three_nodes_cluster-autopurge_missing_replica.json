@@ -1,0 +1,101 @@
+[
+    {
+        "__comment__": "Three Nodes Aurora Cluster - Autopurge missing replica (issue #5547)",
+        "__details__": "Reader stops appearing in REPLICA_HOST_STATUS; after autopurge_missing_checks consecutive missed checks, ProxySQL removes it from mysql_servers.",
+        "cluster_type": "AURORA",
+        "mysql_servers": [
+            { "hostgroup_id": 1271, "hostname": "host.1.11.aws-test.com", "port": 3306 },
+            { "hostgroup_id": 1272, "hostname": "host.1.12.aws-test.com", "port": 3306 },
+            { "hostgroup_id": 1272, "hostname": "host.1.13.aws-test.com", "port": 3306 }
+        ],
+        "mysql_aws_aurora_hostgroups": [
+            {
+                "writer_hostgroup": 1271,
+                "reader_hostgroup": 1272,
+                "active": 1,
+                "domain_name": ".aws-test.com",
+                "max_lag_ms": 50,
+                "check_interval_ms": 200,
+                "writer_is_also_reader": 0,
+                "new_reader_weight": 1,
+                "add_lag_ms": 10,
+                "min_lag_ms": 15,
+                "autopurge_missing_checks": 2,
+                "comment": ""
+            }
+        ],
+        "mysql_monitor_config": [],
+        "aurora_servers_init_state": {
+            ".aws-test.com": [
+                { "SERVER_ID": "host.1.11", "SESSION_ID": "MASTER_SESSION_ID", "REPLICA_LAG_IN_MILLISECONDS": 0 },
+                { "SERVER_ID": "host.1.12", "SESSION_ID": "", "REPLICA_LAG_IN_MILLISECONDS": 4 },
+                { "SERVER_ID": "host.1.13", "SESSION_ID": "", "REPLICA_LAG_IN_MILLISECONDS": 4 }
+            ]
+        },
+        "aurora_servers_new_state": {
+            ".aws-test.com": [
+                { "SERVER_ID": "host.1.11", "SESSION_ID": "MASTER_SESSION_ID", "REPLICA_LAG_IN_MILLISECONDS": 0 },
+                { "SERVER_ID": "host.1.12", "SESSION_ID": "", "REPLICA_LAG_IN_MILLISECONDS": 4 }
+            ]
+        },
+        "proxysql_init_state": [
+            { "hostgroup_id": 1271, "hostname": "host.1.11.aws-test.com", "port": 3306, "status": "ONLINE" },
+            { "hostgroup_id": 1272, "hostname": "host.1.12.aws-test.com", "port": 3306, "status": "ONLINE" },
+            { "hostgroup_id": 1272, "hostname": "host.1.13.aws-test.com", "port": 3306, "status": "ONLINE" }
+        ],
+        "proxysql_final_state": [
+            { "hostgroup_id": 1271, "hostname": "host.1.11.aws-test.com", "port": 3306, "status": "ONLINE" },
+            { "hostgroup_id": 1272, "hostname": "host.1.12.aws-test.com", "port": 3306, "status": "ONLINE" }
+        ]
+    },
+    {
+        "__comment__": "Three Nodes Aurora Cluster - Autopurge disabled (default)",
+        "__details__": "Without autopurge_missing_checks, missing reader stays in mysql_servers (just OFFLINE). Verifies autopurge=0 keeps backwards-compatible behavior.",
+        "cluster_type": "AURORA",
+        "mysql_servers": [
+            { "hostgroup_id": 1281, "hostname": "host.2.11.aws-test.com", "port": 3306 },
+            { "hostgroup_id": 1282, "hostname": "host.2.12.aws-test.com", "port": 3306 },
+            { "hostgroup_id": 1282, "hostname": "host.2.13.aws-test.com", "port": 3306 }
+        ],
+        "mysql_aws_aurora_hostgroups": [
+            {
+                "writer_hostgroup": 1281,
+                "reader_hostgroup": 1282,
+                "active": 1,
+                "domain_name": ".aws-test.com",
+                "max_lag_ms": 50,
+                "check_interval_ms": 200,
+                "writer_is_also_reader": 0,
+                "new_reader_weight": 1,
+                "add_lag_ms": 10,
+                "min_lag_ms": 15,
+                "autopurge_missing_checks": 0,
+                "comment": ""
+            }
+        ],
+        "mysql_monitor_config": [],
+        "aurora_servers_init_state": {
+            ".aws-test.com": [
+                { "SERVER_ID": "host.2.11", "SESSION_ID": "MASTER_SESSION_ID", "REPLICA_LAG_IN_MILLISECONDS": 0 },
+                { "SERVER_ID": "host.2.12", "SESSION_ID": "", "REPLICA_LAG_IN_MILLISECONDS": 4 },
+                { "SERVER_ID": "host.2.13", "SESSION_ID": "", "REPLICA_LAG_IN_MILLISECONDS": 4 }
+            ]
+        },
+        "aurora_servers_new_state": {
+            ".aws-test.com": [
+                { "SERVER_ID": "host.2.11", "SESSION_ID": "MASTER_SESSION_ID", "REPLICA_LAG_IN_MILLISECONDS": 0 },
+                { "SERVER_ID": "host.2.12", "SESSION_ID": "", "REPLICA_LAG_IN_MILLISECONDS": 4 }
+            ]
+        },
+        "proxysql_init_state": [
+            { "hostgroup_id": 1281, "hostname": "host.2.11.aws-test.com", "port": 3306, "status": "ONLINE" },
+            { "hostgroup_id": 1282, "hostname": "host.2.12.aws-test.com", "port": 3306, "status": "ONLINE" },
+            { "hostgroup_id": 1282, "hostname": "host.2.13.aws-test.com", "port": 3306, "status": "ONLINE" }
+        ],
+        "proxysql_final_state": [
+            { "hostgroup_id": 1281, "hostname": "host.2.11.aws-test.com", "port": 3306, "status": "ONLINE" },
+            { "hostgroup_id": 1282, "hostname": "host.2.12.aws-test.com", "port": 3306, "status": "ONLINE" },
+            { "hostgroup_id": 1282, "hostname": "host.2.13.aws-test.com", "port": 3306, "status": "ONLINE" }
+        ]
+    }
+]

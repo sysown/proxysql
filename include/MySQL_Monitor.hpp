@@ -550,6 +550,7 @@ class MySQL_Monitor {
 	// FIXME : add AWS Aurora actions
 	void evaluate_aws_aurora_results(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry **lasts_ase, unsigned int ase_idx, unsigned int max_latency_ms, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks);
 	unsigned int estimate_lag(char* server_id, AWS_Aurora_status_entry** ase, unsigned int idx, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks);
+	void aws_aurora_autopurge_servers(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry *ase, unsigned int threshold, std::map<std::string, int>& autopurge_counter, const std::string& domain_name);
 //	void gdb_dump___monitor_mysql_server_aws_aurora_log(char *hostname);
 	/**
 	 * @brief Encapsulates the async fetching, and later monitoring actions for a group replication cluster.

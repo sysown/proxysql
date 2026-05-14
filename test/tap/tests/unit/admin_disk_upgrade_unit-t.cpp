@@ -110,7 +110,7 @@ static std::string query_string(SQLite3DB *db, const char *sql) {
 // Helper: check that a table matches the current (latest) schema
 // ---------------------------------------------------------------------------
 static bool table_matches_current(SQLite3DB *db, const char *tbl, const char *def) {
-	return db->check_table_structure((char *)tbl, (char *)def) == 1;
+	return db->check_table_structure(tbl, def) == 1;
 }
 
 // ============================================================================
@@ -185,7 +185,7 @@ static void test_scheduler_no_upgrade_needed() {
 	TestDiskUpgrade t;
 	SQLite3DB *db = t.db();
 
-	db->build_table((char *)"scheduler", (char *)ADMIN_SQLITE_TABLE_SCHEDULER, false);
+	db->build_table("scheduler", ADMIN_SQLITE_TABLE_SCHEDULER, false);
 	db->execute("INSERT INTO scheduler (id, active, interval_ms, filename, comment) VALUES (1, 1, 1000, '/usr/bin/ok.sh', 'current')");
 
 	t.upgrade_scheduler();
@@ -271,7 +271,7 @@ static void test_mysql_users_no_upgrade_needed() {
 	TestDiskUpgrade t;
 	SQLite3DB *db = t.db();
 
-	db->build_table((char *)"mysql_users", (char *)ADMIN_SQLITE_TABLE_MYSQL_USERS, false);
+	db->build_table("mysql_users", ADMIN_SQLITE_TABLE_MYSQL_USERS, false);
 	db->execute("INSERT INTO mysql_users (username, password, backend, frontend) VALUES ('current', 'pw', 1, 1)");
 
 	t.upgrade_mysql_users();
@@ -320,7 +320,7 @@ static void test_restapi_routes_no_upgrade_needed() {
 	TestDiskUpgrade t;
 	SQLite3DB *db = t.db();
 
-	db->build_table((char *)"restapi_routes", (char *)ADMIN_SQLITE_TABLE_RESTAPI_ROUTES, false);
+	db->build_table("restapi_routes", ADMIN_SQLITE_TABLE_RESTAPI_ROUTES, false);
 	db->execute("INSERT INTO restapi_routes (id, active, timeout_ms, method, uri, script) "
 		"VALUES (1, 1, 3000, 'POST', '/v1/action', '/usr/bin/action.sh')");
 
@@ -370,7 +370,7 @@ static void test_mysql_servers_no_upgrade_needed() {
 	TestDiskUpgrade t;
 	SQLite3DB *db = t.db();
 
-	db->build_table((char *)"mysql_servers", (char *)ADMIN_SQLITE_TABLE_MYSQL_SERVERS, false);
+	db->build_table("mysql_servers", ADMIN_SQLITE_TABLE_MYSQL_SERVERS, false);
 	db->execute("INSERT INTO mysql_servers (hostgroup_id, hostname, port) VALUES (0, '10.0.0.1', 3306)");
 
 	t.upgrade_mysql_servers();
@@ -419,7 +419,7 @@ static void test_pgsql_repl_hg_no_upgrade_needed() {
 	TestDiskUpgrade t;
 	SQLite3DB *db = t.db();
 
-	db->build_table((char *)"pgsql_replication_hostgroups", (char *)ADMIN_SQLITE_TABLE_PGSQL_REPLICATION_HOSTGROUPS, false);
+	db->build_table("pgsql_replication_hostgroups", ADMIN_SQLITE_TABLE_PGSQL_REPLICATION_HOSTGROUPS, false);
 	db->execute("INSERT INTO pgsql_replication_hostgroups (writer_hostgroup, reader_hostgroup, check_type, comment) "
 		"VALUES (30, 40, 'read_only', 'already current')");
 
@@ -473,7 +473,7 @@ static void test_mysql_query_rules_no_upgrade_needed() {
 	TestDiskUpgrade t;
 	SQLite3DB *db = t.db();
 
-	db->build_table((char *)"mysql_query_rules", (char *)ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES, false);
+	db->build_table("mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES, false);
 	db->execute("INSERT INTO mysql_query_rules (rule_id, active, apply) VALUES (1, 1, 1)");
 
 	t.upgrade_mysql_query_rules();

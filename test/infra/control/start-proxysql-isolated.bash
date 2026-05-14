@@ -2,14 +2,12 @@
 set -e
 set -o pipefail
 
-# SUDO helper: empty if root
-SUDO=""
-if [ "$(id -u)" != "0" ]; then SUDO="sudo"; fi
-
 # Derive Workspace relative to script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 export WORKSPACE="${REPO_ROOT}"
+
+source "${SCRIPT_DIR}/docker-fs-helper.bash"
 
 if [ -z "${INFRA_ID}" ]; then echo "Error: INFRA_ID is not set."; exit 1; fi
 
@@ -44,9 +42,9 @@ echo ">>> Setting up isolated network: ${NETWORK_NAME}"
 docker network inspect ${NETWORK_NAME} >/dev/null 2>&1 || docker network create ${NETWORK_NAME}
 
 echo ">>> Preparing ProxySQL data directory: ${PROXY_DATA_DIR}"
-$SUDO mkdir -p "${PROXY_DATA_DIR}"
-$SUDO chmod -R 777 "${INFRA_LOGS_PATH}/${INFRA_ID}"
-$SUDO rm -f "${PROXY_DATA_DIR}/proxysql.db" "${PROXY_DATA_DIR}"/*.pem
+mkdir -p "${PROXY_DATA_DIR}"
+docker_fs_exec "chmod -R 777 ." "${INFRA_LOGS_PATH}/${INFRA_ID}"
+docker_fs_exec "rm -f proxysql/proxysql.db proxysql/*.pem" "${INFRA_LOGS_PATH}/${INFRA_ID}"
 
 docker rm -f "${PROXY_CONTAINER}" >/dev/null 2>&1 || true
 
@@ -153,12 +151,26 @@ if [ "${PROXYSQL_LOAD_GENAI_PLUGIN:-0}" = "1" ]; then
     echo ">>> Mounting genai plugin .so into ProxySQL container"
 fi
 
+# Simulator-backed TAP groups (aurora-sim, galera-sim, ...) export a
+# CLUSTER_SIM_HOST_FILE pointing at a plain "hostname ip" list. Inject each
+# entry as --add-host so ProxySQL's container /etc/hosts resolves the simulated
+# cluster aliases without bind-mounting /etc/hosts (bind-mount silently drops
+# --add-host; restart-in-hook is fragile because ProxySQL is PID 1).
+ADD_HOST_ARGS=()
+if [ -n "${CLUSTER_SIM_HOST_FILE:-}" ] && [ -f "${CLUSTER_SIM_HOST_FILE}" ]; then
+    while read -r host ip; do
+        [[ -z "${host}" || "${host}" =~ ^# ]] && continue
+        ADD_HOST_ARGS+=(--add-host="${host}:${ip}")
+    done < "${CLUSTER_SIM_HOST_FILE}"
+fi
+
 echo ">>> Starting ProxySQL container: ${PROXY_CONTAINER} (cluster nodes: ${NUM_NODES})"
 docker run -d \
     --name "${PROXY_CONTAINER}" \
     --hostname "proxysql" \
     --network "${NETWORK_NAME}" \
     --network-alias "proxysql" \
+    "${ADD_HOST_ARGS[@]}" \
     -v "${WORKSPACE}/src/proxysql:/usr/bin/proxysql" \
     -v "${GENERIC_CONFIG}:/etc/proxysql.cnf" \
     -v "${PROXY_DATA_DIR}:/var/lib/proxysql" \
