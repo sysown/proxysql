@@ -140,13 +140,28 @@ if grep -q '^PKG_PLUGIN_FILES_PLACEHOLDER$' ./proxysql.ctl; then
     exit 1
 fi
 DEB_BUILD_OPTIONS=nostrip equivs-build proxysql.ctl
-cp ./proxysql_${CURVER}_${ARCH}.deb ../binaries/proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}.deb
-# get SHA1 of the packaged executable
-if [[ -x $(command -v unzstd) ]]; then
-	ar -p proxysql_${CURVER}_${ARCH}.deb $(ar t proxysql_${CURVER}_${ARCH}.deb | grep data.tar) | unzstd -c - | tar xvf - ./usr/bin/proxysql -O > tmp/proxysql
-else
-	ar -p proxysql_${CURVER}_${ARCH}.deb $(ar t proxysql_${CURVER}_${ARCH}.deb | grep data.tar) | unxz -c - | tar xvf - ./usr/bin/proxysql -O > tmp/proxysql
+
+# Force xz compression for the data tarball.  Ubuntu 22/24's dpkg-deb
+# defaults to zstd, while Debian 12/13 still defaults to xz.  The
+# release server signs with dpkg-sig 0.13 on dpkg 1.21.1, which
+# accepts the signature but then reports BADSIG on `dpkg-sig --verify`
+# for the zstd-compressed Ubuntu DEBs.  Repacking to xz makes the
+# format consistent across all distros and unblocks signing.  The
+# check on data.tar.xz also covers any future dpkg-deb default change
+# (e.g. lzma, gzip) by triggering the repack whenever the format
+# isn't already xz.  See issue #5580.
+PKG="proxysql_${CURVER}_${ARCH}.deb"
+if ! ar t "${PKG}" | grep -q '^data\.tar\.xz$'; then
+	echo "==> Repacking ${PKG} with xz compression (was: $(ar t "${PKG}" | grep '^data\.tar'))"
+	REPACK_DIR=$(mktemp -d)
+	dpkg-deb -R "${PKG}" "${REPACK_DIR}"
+	dpkg-deb -Zxz -b "${REPACK_DIR}" "${PKG}"
+	rm -rf "${REPACK_DIR}"
 fi
+
+cp "./${PKG}" "../binaries/proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}.deb"
+# get SHA1 of the packaged executable (always xz after the repack above)
+ar -p "${PKG}" $(ar t "${PKG}" | grep '^data\.tar') | unxz -c - | tar xvf - ./usr/bin/proxysql -O > tmp/proxysql
 sha1sum tmp/proxysql | sed 's|tmp/||' | tee tmp/proxysql.sha1
 cp tmp/proxysql.sha1 ../binaries/proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}.id-hash
 popd

@@ -223,6 +223,7 @@ jemalloc/jemalloc/lib/libjemalloc.a:
 	cd jemalloc/jemalloc && patch src/jemalloc.c < ../issue823.520.patch
 	cd jemalloc/jemalloc && patch src/jemalloc.c < ../issue2358.patch
 	cd jemalloc/jemalloc && patch -p0 < ../nothrow.patch
+	cd jemalloc/jemalloc && patch src/jemalloc_cpp.cpp < ../throw-bad-alloc.patch
 	cd jemalloc/jemalloc && ./configure ${MYJEOPT}
 #	cd jemalloc/jemalloc && sed -i -e 's/-O3 /-O3 -fPIC /' Makefile
 	cd jemalloc/jemalloc && CC=${CC} CXX=${CXX} ${MAKE}
@@ -323,6 +324,7 @@ sqlite-vec: sqlite3/sqlite3/vec.o
 libconfig/libconfig/out/libconfig++.a:
 	cd libconfig && rm -rf libconfig-*/ || true
 	cd libconfig && tar -zxf libconfig-*.tar.gz
+	cd libconfig/libconfig && patch -p1 < ../restore_unknown_escape_passthrough.patch
 	cd libconfig/libconfig && cmake -DBUILD_SHARED_LIBS=0 -DBUILD_EXAMPLES=0 -DBUILD_TESTS=0 -DBUILD_FUZZERS=0 .
 	cd libconfig/libconfig && CC=${CC} CXX=${CXX} ${MAKE}
 

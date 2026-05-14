@@ -52,9 +52,6 @@ extern ClickHouse_Server *GloClickHouseServer;
 #endif
 
 extern char * Chart_bundle_js_c;
-#ifdef PROXYSQLTSDB
-extern const char * TSDB_Dashboard_html_c;
-#endif
 extern char * font_awesome;
 extern char * main_bundle_min_css_c;
 #define RATE_LIMIT_PAGE "<html><head><title>Rate Limit Page</title></head><body>Rate Limit Reached</body></html>"
@@ -440,14 +437,10 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 	if (0 != strcmp (method, "GET"))
 		return MHD_NO;              /* unexpected method */
 
-#ifdef PROXYSQLTSDB
-	if (strcmp(url,"/tsdb")==0) {
-		response = MHD_create_response_from_buffer (strlen(TSDB_Dashboard_html_c), (void *) TSDB_Dashboard_html_c, MHD_RESPMEM_PERSISTENT);
-		ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
-		MHD_destroy_response (response);
-		return ret;
-	}
-#endif
+	/* The TSDB dashboard previously served here is now served by the
+	 * REST API server (admin-restapi_port). Serving it here resulted in
+	 * a cross-origin mismatch between the dashboard's port and the
+	 * /api/tsdb/* endpoints, which broke the metric fetch (#5684). */
 
 	if (strcmp(url,"/stats")==0) {
 		valmetric = (char *)MHD_lookup_connection_value (connection, MHD_GET_ARGUMENT_KIND, (char *)"metric");

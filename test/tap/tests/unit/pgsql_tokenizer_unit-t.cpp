@@ -261,6 +261,47 @@ static void test_digest_typecast_quoted() {
 		"digest: typecast with quoted type name handled");
 }
 
+// Regression test for issue #5755: a typecast in the middle of a query
+// must not swallow the rest of the query.  The bug was in
+// process_pg_typecast() which, after consuming `::TYPENAME`, sometimes
+// returned `st_pg_typecast` (instead of `st_no_mark_found`) when the
+// next character wasn't in an enumerated delimiter list.  The
+// dispatcher would then advance one extra char per iteration AND keep
+// re-entering the typecast handler, eating subsequent tokens until end
+// of input.
+static void test_digest_typecast_followed_by_clause() {
+	// Pre-fix output: "select count(*)" — everything after `::INT` was
+	// silently dropped.  Post-fix the FROM/WHERE clause must survive.
+	std::string d = digest_query(
+		"SELECT COUNT(*)::INT FROM \"Inventory\" AS i WHERE i.\"TenantId\"=$1");
+	ok(d.find("from") != std::string::npos &&
+	   d.find("where") != std::string::npos,
+		"digest #5755: typecast does not swallow following FROM/WHERE clause");
+	ok(d.find("inventory") != std::string::npos ||
+	   d.find("Inventory") != std::string::npos,
+		"digest #5755: quoted identifier after typecast is preserved");
+}
+
+static void test_digest_typecast_then_identifier() {
+	// Bisected minimal repro: identifier directly after `::TYPENAME `.
+	std::string d = digest_query("SELECT a::int FROM t");
+	ok(d.find("from") != std::string::npos && d.find("t") != std::string::npos,
+		"digest #5755: bare identifier after typecast survives");
+}
+
+// Regression test for the per-call `tc->started` reset: multiple casts
+// in the same query must each re-enter the typecast handler cleanly.
+// Without the reset, the second `::cast` would skip the `::`-skip
+// branch and start parsing the type name from the wrong offset.
+static void test_digest_typecast_multiple_in_same_query() {
+	std::string d = digest_query("SELECT 1::int, 2::text FROM t");
+	ok(d.find("from") != std::string::npos && d.find("t") != std::string::npos,
+		"digest #5755: query with multiple typecasts preserves trailing FROM");
+	// Both literals must be replaced with `?`.
+	ok(d.find("?") != std::string::npos,
+		"digest #5755: literal replacement still happens before each typecast");
+}
+
 // ============================================================================
 // 4. PgSQL-specific: Double-quoted identifiers (preserved, NOT replaced)
 // ============================================================================
@@ -609,7 +650,7 @@ static void test_digest_only_comment() {
 // ============================================================================
 
 int main() {
-	plan(65);
+	plan(70);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -633,13 +674,16 @@ int main() {
 	test_digest_dollar_quote_in_function();      // 1
 	test_digest_dollar_quote_with_special_chars(); // 1
 
-	// 3. Type casts (6 tests)
+	// 3. Type casts (11 tests)
 	test_digest_typecast_simple();       // 1
 	test_digest_typecast_varchar();      // 1
 	test_digest_typecast_with_modifier(); // 1
 	test_digest_typecast_array();        // 1
 	test_digest_typecast_in_where();     // 1
 	test_digest_typecast_quoted();       // 1
+	test_digest_typecast_followed_by_clause();      // 2 (issue #5755)
+	test_digest_typecast_then_identifier();         // 1 (issue #5755)
+	test_digest_typecast_multiple_in_same_query();  // 2 (issue #5755)
 
 	// 4. Double-quoted identifiers (3 tests)
 	test_digest_double_quoted_identifier();     // 2
