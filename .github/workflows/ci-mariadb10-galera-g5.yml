@@ -85,7 +85,6 @@ jobs:
         cd proxysql
         export INFRA_ID="ci-mariadb10-galera-g5"
         export TAP_GROUP="mariadb10-galera-g5"
-        export SKIP_CLUSTER_START=1
         test/infra/control/ensure-infras.bash
 
     - name: Run mariadb10-galera-g5 tests
@@ -93,7 +92,6 @@ jobs:
         cd proxysql
         export INFRA_ID="ci-mariadb10-galera-g5"
         export TAP_GROUP="mariadb10-galera-g5"
-        export SKIP_CLUSTER_START=1
         test/infra/control/run-tests-isolated.bash
 
     - name: Cleanup
