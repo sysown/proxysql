@@ -1,0 +1,102 @@
+[
+    {
+        "__comment__": "Multiple Aurora Cluster - Failovers - Replicas with Lag #1",
+        "__details__": [
+            "- Cluster 1: One primary failover",
+            "  + Using 'writer_is_also_reader'",
+            "  + One SHUNNED replica POST failover",
+            "- Cluster 2: One primary failover",
+            "  + Using 'writer_is_also_reader'",
+            "  + Using 'add_lag_ms' and 'min_lag_ms' with '0' values",
+            "  + One SHUNNED replica POST failover"
+        ],
+        "cluster_type": "AURORA",
+        "mysql_servers": [
+            { "hostgroup_id": 1271, "hostname": "host.1.11.aws-test.com", "port": 3306 },
+            { "hostgroup_id": 1272, "hostname": "host.1.12.aws-test.com", "port": 3306 },
+            { "hostgroup_id": 1272, "hostname": "host.1.13.aws-test.com", "port": 3306 },
+
+            { "hostgroup_id": 1273, "hostname": "host.2.11.cluster2.aws.test", "port": 3306 },
+            { "hostgroup_id": 1274, "hostname": "host.2.12.cluster2.aws.test", "port": 3306 },
+            { "hostgroup_id": 1274, "hostname": "host.2.13.cluster2.aws.test", "port": 3306 }
+        ],
+        "mysql_aws_aurora_hostgroups": [
+            {
+                "writer_hostgroup": 1271,
+                "reader_hostgroup": 1272,
+                "active": 1,
+                "domain_name": ".aws-test.com",
+                "max_lag_ms": 50,
+                "writer_is_also_reader": 0,
+                "new_reader_weight": 10,
+                "comment": ""
+            },
+            {
+                "writer_hostgroup": 1273,
+                "reader_hostgroup": 1274,
+                "active": 1,
+                "domain_name": ".cluster2.aws.test",
+                "max_lag_ms": 10,
+                "writer_is_also_reader": 1,
+                "new_reader_weight": 10,
+                "add_lag_ms": 0,
+                "min_lag_ms": 0,
+                "comment": ""
+            }
+        ],
+        "mysql_monitor_config": [],
+        "aurora_servers_init_state": {
+            ".aws-test.com": [
+                { "SERVER_ID": "host.1.11", "SESSION_ID": "MASTER_SESSION_ID", "REPLICA_LAG_IN_MILLISECONDS": 0 },
+                { "SERVER_ID": "host.1.12", "SESSION_ID": "", "REPLICA_LAG_IN_MILLISECONDS": 4 },
+                { "SERVER_ID": "host.1.13", "SESSION_ID": "", "REPLICA_LAG_IN_MILLISECONDS": 4 }
+            ],
+            ".cluster2.aws.test": [
+                { "SERVER_ID": "host.2.11", "SESSION_ID": "", "REPLICA_LAG_IN_MILLISECONDS": 4 },
+                { "SERVER_ID": "host.2.12", "SESSION_ID": "MASTER_SESSION_ID", "REPLICA_LAG_IN_MILLISECONDS": 0 },
+                { "SERVER_ID": "host.2.13", "SESSION_ID": "", "REPLICA_LAG_IN_MILLISECONDS": 4 }
+            ]
+        },
+        "aurora_servers_new_state": {
+            ".aws-test.com": [
+                { "SERVER_ID": "host.1.11", "SESSION_ID": "", "REPLICA_LAG_IN_MILLISECONDS": 4 },
+                { "SERVER_ID": "host.1.12", "SESSION_ID": "MASTER_SESSION_ID", "REPLICA_LAG_IN_MILLISECONDS": 0 },
+                { "SERVER_ID": "host.1.13", "SESSION_ID": "", "REPLICA_LAG_IN_MILLISECONDS": 100 }
+            ],
+            ".cluster2.aws.test": [
+                { "SERVER_ID": "host.2.11", "SESSION_ID": "MASTER_SESSION_ID", "REPLICA_LAG_IN_MILLISECONDS": 0 },
+                { "SERVER_ID": "host.2.12", "SESSION_ID": "", "REPLICA_LAG_IN_MILLISECONDS": 50 },
+                { "SERVER_ID": "host.2.13", "SESSION_ID": "", "REPLICA_LAG_IN_MILLISECONDS": 4 }
+            ]
+        },
+        "proxysql_init_state": [
+            { "hostgroup_id":1271,"hostname":"host.1.11.aws-test.com","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":1272,"hostname":"host.1.12.aws-test.com","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":1272,"hostname":"host.1.13.aws-test.com","port":3306,"status":"ONLINE" },
+
+            { "hostgroup_id":1273,"hostname":"host.2.12.cluster2.aws.test","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":1274,"hostname":"host.2.11.cluster2.aws.test","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":1274,"hostname":"host.2.12.cluster2.aws.test","port":3306,"status":"ONLINE","weight":10 },
+            { "hostgroup_id":1274,"hostname":"host.2.13.cluster2.aws.test","port":3306,"status":"ONLINE" }
+        ],
+        "proxysql_final_state": [
+            { "hostgroup_id":1271,"hostname":"host.1.12.aws-test.com","port":3306,"status":"ONLINE","weight":1 },
+            { "hostgroup_id":1272,"hostname":"host.1.11.aws-test.com","port":3306,"status":"ONLINE","weight":10 },
+            { "hostgroup_id":1272,"hostname":"host.1.13.aws-test.com","port":3306,"status":"ONLINE|SHUNNED","weight":1 },
+
+            { "hostgroup_id":1273,"hostname":"host.2.11.cluster2.aws.test","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":1274,"hostname":"host.2.11.cluster2.aws.test","port":3306,"status":"ONLINE","weight":10 },
+            { "hostgroup_id":1274,"hostname":"host.2.12.cluster2.aws.test","port":3306,"status":"ONLINE|SHUNNED","weight":10 },
+            { "hostgroup_id":1274,"hostname":"host.2.13.cluster2.aws.test","port":3306,"status":"ONLINE" }
+        ],
+        "__proxysql_final_state_details__": [
+            "Servers 'host.2.12.cluster2.aws.test' and 'host.1.13.aws-test.com' can appear as both 'ONLINE' as 'SHUNNED'.",
+            "This is a known issue, result of the interaction between 'aws_aurora_replication_lag_action' SHUNNING a",
+            "server, while 'update_aws_aurora_set_writer' is called for a server in **OTHER** monitored cluster.  Since",
+            "'SHUNNED' is a transitory state, and in particular for Aurora, this state shouldn't last, we assume that",
+            "losing this transitory state is a possibility. A potential fix would be to regenerate 'myhgm.mysql_servers'",
+            "after a 'replication_lag' action, this would involve promoting a temporary state into the table, thing that we",
+            "typically don't do."
+        ]
+    }
+]

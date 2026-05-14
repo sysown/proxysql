@@ -1,0 +1,723 @@
+[
+    {
+        "__comment__": "All readers moved to writers, and writers to readers",
+        "cluster_type": "READ_ONLY",
+        "mysql_servers": [
+            { "hostgroup_id": 2272, "hostname": "127.1.1.10", "port": 3306 },
+            { "hostgroup_id": 2272, "hostname": "127.1.1.11", "port": 3306 },
+            { "hostgroup_id": 2272, "hostname": "127.1.1.12", "port": 3306 },
+            { "hostgroup_id": 2272, "hostname": "127.1.1.13", "port": 3306 },
+
+            { "hostgroup_id": 2274, "hostname": "127.1.1.14", "port": 3306 },
+            { "hostgroup_id": 2274, "hostname": "127.1.1.15", "port": 3306 },
+            { "hostgroup_id": 2274, "hostname": "127.1.1.16", "port": 3306 },
+            { "hostgroup_id": 2274, "hostname": "127.1.1.17", "port": 3306 },
+
+            { "hostgroup_id": 2276, "hostname": "127.1.1.18", "port": 3306 },
+            { "hostgroup_id": 2276, "hostname": "127.1.1.19", "port": 3306 },
+            { "hostgroup_id": 2276, "hostname": "127.1.1.20", "port": 3306 },
+            { "hostgroup_id": 2276, "hostname": "127.1.1.21", "port": 3306 },
+
+            { "hostgroup_id": 2278, "hostname": "127.1.1.22", "port": 3306 },
+            { "hostgroup_id": 2278, "hostname": "127.1.1.23", "port": 3306 },
+            { "hostgroup_id": 2278, "hostname": "127.1.1.24", "port": 3306 },
+            { "hostgroup_id": 2278, "hostname": "127.1.1.25", "port": 3306 },
+
+            { "hostgroup_id": 2280, "hostname": "127.1.1.26", "port": 3306 },
+            { "hostgroup_id": 2280, "hostname": "127.1.1.27", "port": 3306 },
+            { "hostgroup_id": 2280, "hostname": "127.1.1.28", "port": 3306 },
+            { "hostgroup_id": 2280, "hostname": "127.1.1.29", "port": 3306 },
+
+            { "hostgroup_id": 2282, "hostname": "127.1.1.30", "port": 3306 },
+            { "hostgroup_id": 2282, "hostname": "127.1.1.31", "port": 3306 },
+            { "hostgroup_id": 2282, "hostname": "127.1.1.32", "port": 3306 },
+            { "hostgroup_id": 2282, "hostname": "127.1.1.33", "port": 3306 },
+
+            { "hostgroup_id": 2284, "hostname": "127.1.1.34", "port": 3306 },
+            { "hostgroup_id": 2284, "hostname": "127.1.1.35", "port": 3306 },
+            { "hostgroup_id": 2284, "hostname": "127.1.1.36", "port": 3306 },
+            { "hostgroup_id": 2284, "hostname": "127.1.1.37", "port": 3306 },
+
+            { "hostgroup_id": 2286, "hostname": "127.1.1.38", "port": 3306 },
+            { "hostgroup_id": 2286, "hostname": "127.1.1.39", "port": 3306 },
+            { "hostgroup_id": 2286, "hostname": "127.1.1.40", "port": 3306 },
+            { "hostgroup_id": 2286, "hostname": "127.1.1.41", "port": 3306 },
+
+            { "hostgroup_id": 2288, "hostname": "127.1.1.42", "port": 3306 },
+            { "hostgroup_id": 2288, "hostname": "127.1.1.43", "port": 3306 },
+            { "hostgroup_id": 2288, "hostname": "127.1.1.44", "port": 3306 },
+            { "hostgroup_id": 2288, "hostname": "127.1.1.45", "port": 3306 },
+
+            { "hostgroup_id": 2290, "hostname": "127.1.1.46", "port": 3306 },
+            { "hostgroup_id": 2290, "hostname": "127.1.1.47", "port": 3306 },
+            { "hostgroup_id": 2290, "hostname": "127.1.1.48", "port": 3306 },
+            { "hostgroup_id": 2290, "hostname": "127.1.1.49", "port": 3306 }
+        ],
+        "mysql_replication_hostgroups": [
+            {
+                "writer_hostgroup": 2271,
+                "reader_hostgroup": 2272,
+                "check_type": "read_only",
+                "comment": ""
+            },
+            {
+                "writer_hostgroup": 2273,
+                "reader_hostgroup": 2274,
+                "check_type": "read_only",
+                "comment": ""
+            },
+            {
+                "writer_hostgroup": 2275,
+                "reader_hostgroup": 2276,
+                "check_type": "read_only",
+                "comment": ""
+            },
+            {
+                "writer_hostgroup": 2277,
+                "reader_hostgroup": 2278,
+                "check_type": "read_only",
+                "comment": ""
+            },
+            {
+                "writer_hostgroup": 2279,
+                "reader_hostgroup": 2280,
+                "check_type": "read_only",
+                "comment": ""
+            },
+            {
+                "writer_hostgroup": 2281,
+                "reader_hostgroup": 2282,
+                "check_type": "read_only",
+                "comment": ""
+            },
+            {
+                "writer_hostgroup": 2283,
+                "reader_hostgroup": 2284,
+                "check_type": "read_only",
+                "comment": ""
+            },
+            {
+                "writer_hostgroup": 2285,
+                "reader_hostgroup": 2286,
+                "check_type": "read_only",
+                "comment": ""
+            },
+            {
+                "writer_hostgroup": 2287,
+                "reader_hostgroup": 2288,
+                "check_type": "read_only",
+                "comment": ""
+            },
+            {
+                "writer_hostgroup": 2289,
+                "reader_hostgroup": 2290,
+                "check_type": "read_only",
+                "comment": ""
+            }
+        ],
+	    "mysql_monitor_config": [
+            { "monitor_writer_is_also_reader": 1 }
+        ],
+        "readonly_servers_init_state": [
+            { "hostname": "127.1.1.10", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.11", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.12", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.13", "port": 3306, "read_only": 1 },
+
+            { "hostname": "127.1.1.14", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.15", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.16", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.17", "port": 3306, "read_only": 1 },
+
+            { "hostname": "127.1.1.18", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.19", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.20", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.21", "port": 3306, "read_only": 1 },
+
+            { "hostname": "127.1.1.22", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.23", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.24", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.25", "port": 3306, "read_only": 1 },
+
+            { "hostname": "127.1.1.26", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.27", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.28", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.29", "port": 3306, "read_only": 0 },
+
+            { "hostname": "127.1.1.30", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.31", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.32", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.33", "port": 3306, "read_only": 1 },
+
+            { "hostname": "127.1.1.34", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.35", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.36", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.37", "port": 3306, "read_only": 0 },
+
+            { "hostname": "127.1.1.38", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.39", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.40", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.41", "port": 3306, "read_only": 1 },
+
+            { "hostname": "127.1.1.42", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.43", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.44", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.45", "port": 3306, "read_only": 0 },
+
+            { "hostname": "127.1.1.46", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.47", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.48", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.49", "port": 3306, "read_only": 1 }
+        ],
+        "readonly_servers_new_state": [
+            { "hostname": "127.1.1.10", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.11", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.12", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.13", "port": 3306, "read_only": 0 },
+
+            { "hostname": "127.1.1.14", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.15", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.16", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.17", "port": 3306, "read_only": 0 },
+
+            { "hostname": "127.1.1.18", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.19", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.20", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.21", "port": 3306, "read_only": 0 },
+
+            { "hostname": "127.1.1.22", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.23", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.24", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.25", "port": 3306, "read_only": 0 },
+
+            { "hostname": "127.1.1.26", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.27", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.28", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.29", "port": 3306, "read_only": 1 },
+
+            { "hostname": "127.1.1.30", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.31", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.32", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.33", "port": 3306, "read_only": 0 },
+
+            { "hostname": "127.1.1.34", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.35", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.36", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.37", "port": 3306, "read_only": 1 },
+
+            { "hostname": "127.1.1.38", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.39", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.40", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.41", "port": 3306, "read_only": 0 },
+
+            { "hostname": "127.1.1.42", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.43", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.44", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.45", "port": 3306, "read_only": 1 },
+
+            { "hostname": "127.1.1.46", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.47", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.48", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.49", "port": 3306, "read_only": 0 }
+        ],
+        "proxysql_init_state": [
+            { "hostgroup_id": 2271,"hostname": "127.1.1.10","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2272,"hostname": "127.1.1.10","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2272,"hostname": "127.1.1.11","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2272,"hostname": "127.1.1.12","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2272,"hostname": "127.1.1.13","port": 3306,"status": "ONLINE" },
+
+            { "hostgroup_id": 2274,"hostname": "127.1.1.14","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2274,"hostname": "127.1.1.15","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2273,"hostname": "127.1.1.16","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2274,"hostname": "127.1.1.16","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2274,"hostname": "127.1.1.17","port": 3306,"status": "ONLINE" },
+
+            { "hostgroup_id": 2276,"hostname": "127.1.1.18","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2275,"hostname": "127.1.1.19","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2276,"hostname": "127.1.1.19","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2276,"hostname": "127.1.1.20","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2276,"hostname": "127.1.1.21","port": 3306,"status": "ONLINE" },
+
+            { "hostgroup_id": 2278,"hostname": "127.1.1.22","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2278,"hostname": "127.1.1.23","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2277,"hostname": "127.1.1.24","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2278,"hostname": "127.1.1.24","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2278,"hostname": "127.1.1.25","port": 3306,"status": "ONLINE" },
+
+            { "hostgroup_id": 2280,"hostname": "127.1.1.26","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2280,"hostname": "127.1.1.27","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2280,"hostname": "127.1.1.28","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2279,"hostname": "127.1.1.29","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2280,"hostname": "127.1.1.29","port": 3306,"status": "ONLINE" },
+
+            { "hostgroup_id": 2281,"hostname": "127.1.1.30","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2282,"hostname": "127.1.1.30","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2282,"hostname": "127.1.1.31","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2282,"hostname": "127.1.1.32","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2282,"hostname": "127.1.1.33","port": 3306,"status": "ONLINE" },
+
+            { "hostgroup_id": 2284,"hostname": "127.1.1.34","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2283,"hostname": "127.1.1.35","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2284,"hostname": "127.1.1.35","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2284,"hostname": "127.1.1.36","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2283,"hostname": "127.1.1.37","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2284,"hostname": "127.1.1.37","port": 3306,"status": "ONLINE" },
+
+            { "hostgroup_id": 2285,"hostname": "127.1.1.38","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2286,"hostname": "127.1.1.38","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2285,"hostname": "127.1.1.39","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2286,"hostname": "127.1.1.39","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2285,"hostname": "127.1.1.40","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2286,"hostname": "127.1.1.40","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2286,"hostname": "127.1.1.41","port": 3306,"status": "ONLINE" },
+
+            { "hostgroup_id": 2288,"hostname": "127.1.1.42","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2288,"hostname": "127.1.1.43","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2288,"hostname": "127.1.1.44","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2287,"hostname": "127.1.1.45","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2288,"hostname": "127.1.1.45","port": 3306,"status": "ONLINE" },
+
+            { "hostgroup_id": 2290,"hostname": "127.1.1.46","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2289,"hostname": "127.1.1.47","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2290,"hostname": "127.1.1.47","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2289,"hostname": "127.1.1.48","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2290,"hostname": "127.1.1.48","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2290,"hostname": "127.1.1.49","port": 3306,"status": "ONLINE" }
+        ],
+        "proxysql_final_state": [
+            { "hostgroup_id":2271,"hostname":"127.1.1.11","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2271,"hostname":"127.1.1.12","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2271,"hostname":"127.1.1.13","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2272,"hostname":"127.1.1.10","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2272,"hostname":"127.1.1.11","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2272,"hostname":"127.1.1.12","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2272,"hostname":"127.1.1.13","port":3306,"status":"ONLINE" },
+
+            { "hostgroup_id":2273,"hostname":"127.1.1.14","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.1.1.15","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.1.1.17","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.1.1.14","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.1.1.15","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.1.1.16","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.1.1.17","port":3306,"status":"ONLINE" },
+
+            { "hostgroup_id":2275,"hostname":"127.1.1.18","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2275,"hostname":"127.1.1.20","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2275,"hostname":"127.1.1.21","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2276,"hostname":"127.1.1.18","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2276,"hostname":"127.1.1.19","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2276,"hostname":"127.1.1.20","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2276,"hostname":"127.1.1.21","port":3306,"status":"ONLINE" },
+
+            { "hostgroup_id":2277,"hostname":"127.1.1.22","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2277,"hostname":"127.1.1.23","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2277,"hostname":"127.1.1.25","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2278,"hostname":"127.1.1.22","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2278,"hostname":"127.1.1.23","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2278,"hostname":"127.1.1.24","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2278,"hostname":"127.1.1.25","port":3306,"status":"ONLINE" },
+
+            { "hostgroup_id":2279,"hostname":"127.1.1.26","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2279,"hostname":"127.1.1.27","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2279,"hostname":"127.1.1.28","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2280,"hostname":"127.1.1.26","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2280,"hostname":"127.1.1.27","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2280,"hostname":"127.1.1.28","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2280,"hostname":"127.1.1.29","port":3306,"status":"ONLINE" },
+
+            { "hostgroup_id":2281,"hostname":"127.1.1.31","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2281,"hostname":"127.1.1.32","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2281,"hostname":"127.1.1.33","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2282,"hostname":"127.1.1.30","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2282,"hostname":"127.1.1.31","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2282,"hostname":"127.1.1.32","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2282,"hostname":"127.1.1.33","port":3306,"status":"ONLINE" },
+
+            { "hostgroup_id":2283,"hostname":"127.1.1.34","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2283,"hostname":"127.1.1.36","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2284,"hostname":"127.1.1.34","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2284,"hostname":"127.1.1.35","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2284,"hostname":"127.1.1.36","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2284,"hostname":"127.1.1.37","port":3306,"status":"ONLINE" },
+
+            { "hostgroup_id":2285,"hostname":"127.1.1.41","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2286,"hostname":"127.1.1.38","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2286,"hostname":"127.1.1.39","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2286,"hostname":"127.1.1.40","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2286,"hostname":"127.1.1.41","port":3306,"status":"ONLINE" },
+
+            { "hostgroup_id":2287,"hostname":"127.1.1.42","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2287,"hostname":"127.1.1.43","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2287,"hostname":"127.1.1.44","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2288,"hostname":"127.1.1.42","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2288,"hostname":"127.1.1.43","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2288,"hostname":"127.1.1.44","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2288,"hostname":"127.1.1.45","port":3306,"status":"ONLINE" },
+
+            { "hostgroup_id":2289,"hostname":"127.1.1.46","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2289,"hostname":"127.1.1.49","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2290,"hostname":"127.1.1.46","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2290,"hostname":"127.1.1.47","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2290,"hostname":"127.1.1.48","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2290,"hostname":"127.1.1.49","port":3306,"status":"ONLINE" }
+        ]
+    },
+    {
+        "__comment__": "All possible transitions for multiple 'mysql_replication_hostgroups'",
+        "cluster_type": "READ_ONLY",
+        "mysql_servers": [
+            { "hostgroup_id": 2272, "hostname": "127.1.1.10", "port": 3306 },
+            { "hostgroup_id": 2272, "hostname": "127.1.1.11", "port": 3306 },
+            { "hostgroup_id": 2272, "hostname": "127.1.1.12", "port": 3306 },
+            { "hostgroup_id": 2272, "hostname": "127.1.1.13", "port": 3306 },
+
+            { "hostgroup_id": 2274, "hostname": "127.1.1.14", "port": 3306 },
+            { "hostgroup_id": 2274, "hostname": "127.1.1.15", "port": 3306 },
+            { "hostgroup_id": 2273, "hostname": "127.1.1.16", "port": 3306 },
+            { "hostgroup_id": 2274, "hostname": "127.1.1.17", "port": 3306 },
+
+            { "hostgroup_id": 2276, "hostname": "127.1.1.18", "port": 3306 },
+            { "hostgroup_id": 2276, "hostname": "127.1.1.19", "port": 3306 },
+            { "hostgroup_id": 2275, "hostname": "127.1.1.20", "port": 3306 },
+            { "hostgroup_id": 2276, "hostname": "127.1.1.21", "port": 3306 },
+
+            { "hostgroup_id": 2278, "hostname": "127.1.1.22", "port": 3306 },
+            { "hostgroup_id": 2278, "hostname": "127.1.1.23", "port": 3306 },
+            { "hostgroup_id": 2278, "hostname": "127.1.1.24", "port": 3306 },
+            { "hostgroup_id": 2278, "hostname": "127.1.1.25", "port": 3306 },
+
+            { "hostgroup_id": 2280, "hostname": "127.1.1.26", "port": 3306 },
+            { "hostgroup_id": 2280, "hostname": "127.1.1.27", "port": 3306 },
+            { "hostgroup_id": 2280, "hostname": "127.1.1.28", "port": 3306 },
+            { "hostgroup_id": 2280, "hostname": "127.1.1.29", "port": 3306 },
+
+            { "hostgroup_id": 2282, "hostname": "127.1.1.30", "port": 3306 },
+            { "hostgroup_id": 2282, "hostname": "127.1.1.31", "port": 3306 },
+            { "hostgroup_id": 2282, "hostname": "127.1.1.32", "port": 3306 },
+            { "hostgroup_id": 2282, "hostname": "127.1.1.33", "port": 3306 },
+
+            { "hostgroup_id": 2284, "hostname": "127.1.1.34", "port": 3306 },
+            { "hostgroup_id": 2284, "hostname": "127.1.1.35", "port": 3306 },
+            { "hostgroup_id": 2284, "hostname": "127.1.1.36", "port": 3306 },
+            { "hostgroup_id": 2284, "hostname": "127.1.1.37", "port": 3306 },
+
+            { "hostgroup_id": 2286, "hostname": "127.1.1.38", "port": 3306 },
+            { "hostgroup_id": 2285, "hostname": "127.1.1.39", "port": 3306 },
+            { "hostgroup_id": 2286, "hostname": "127.1.1.40", "port": 3306 },
+            { "hostgroup_id": 2286, "hostname": "127.1.1.41", "port": 3306 },
+
+            { "hostgroup_id": 2288, "hostname": "127.1.1.42", "port": 3306 },
+            { "hostgroup_id": 2288, "hostname": "127.1.1.43", "port": 3306 },
+            { "hostgroup_id": 2288, "hostname": "127.1.1.44", "port": 3306 },
+            { "hostgroup_id": 2288, "hostname": "127.1.1.45", "port": 3306 },
+
+            { "hostgroup_id": 2290, "hostname": "127.1.1.46", "port": 3306 },
+            { "hostgroup_id": 2289, "hostname": "127.1.1.47", "port": 3306 },
+            { "hostgroup_id": 2290, "hostname": "127.1.1.48", "port": 3306 },
+            { "hostgroup_id": 2290, "hostname": "127.1.1.49", "port": 3306 }
+        ],
+        "mysql_replication_hostgroups": [
+            {
+                "writer_hostgroup": 2271,
+                "reader_hostgroup": 2272,
+                "check_type": "read_only",
+                "comment": ""
+            },
+            {
+                "writer_hostgroup": 2273,
+                "reader_hostgroup": 2274,
+                "check_type": "read_only",
+                "comment": ""
+            },
+            {
+                "writer_hostgroup": 2275,
+                "reader_hostgroup": 2276,
+                "check_type": "read_only",
+                "comment": ""
+            },
+            {
+                "writer_hostgroup": 2277,
+                "reader_hostgroup": 2278,
+                "check_type": "read_only",
+                "comment": ""
+            },
+            {
+                "writer_hostgroup": 2279,
+                "reader_hostgroup": 2280,
+                "check_type": "read_only",
+                "comment": ""
+            },
+            {
+                "writer_hostgroup": 2281,
+                "reader_hostgroup": 2282,
+                "check_type": "read_only",
+                "comment": ""
+            },
+            {
+                "writer_hostgroup": 2283,
+                "reader_hostgroup": 2284,
+                "check_type": "read_only",
+                "comment": ""
+            },
+            {
+                "writer_hostgroup": 2285,
+                "reader_hostgroup": 2286,
+                "check_type": "read_only",
+                "comment": ""
+            },
+            {
+                "writer_hostgroup": 2287,
+                "reader_hostgroup": 2288,
+                "check_type": "read_only",
+                "comment": ""
+            },
+            {
+                "writer_hostgroup": 2289,
+                "reader_hostgroup": 2290,
+                "check_type": "read_only",
+                "comment": ""
+            }
+        ],
+	    "mysql_monitor_config": [
+            { "monitor_writer_is_also_reader": 1 }
+        ],
+        "readonly_servers_init_state": [
+            { "hostname": "127.1.1.10", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.11", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.12", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.13", "port": 3306, "read_only": 1 },
+
+            { "hostname": "127.1.1.14", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.15", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.16", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.17", "port": 3306, "read_only": 1 },
+
+            { "hostname": "127.1.1.18", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.19", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.20", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.21", "port": 3306, "read_only": 1 },
+
+            { "hostname": "127.1.1.22", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.23", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.24", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.25", "port": 3306, "read_only": 1 },
+
+            { "hostname": "127.1.1.26", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.27", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.28", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.29", "port": 3306, "read_only": 0 },
+
+            { "hostname": "127.1.1.30", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.31", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.32", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.33", "port": 3306, "read_only": 1 },
+
+            { "hostname": "127.1.1.34", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.35", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.36", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.37", "port": 3306, "read_only": 0 },
+
+            { "hostname": "127.1.1.38", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.39", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.40", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.41", "port": 3306, "read_only": 1 },
+
+            { "hostname": "127.1.1.42", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.43", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.44", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.45", "port": 3306, "read_only": 0 },
+
+            { "hostname": "127.1.1.46", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.47", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.48", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.49", "port": 3306, "read_only": 1 }
+        ],
+        "readonly_servers_new_state": [
+            { "hostname": "127.1.1.10", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.11", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.12", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.13", "port": 3306, "read_only": 1 },
+
+            { "hostname": "127.1.1.14", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.15", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.16", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.17", "port": 3306, "read_only": 1 },
+
+            { "hostname": "127.1.1.18", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.19", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.20", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.21", "port": 3306, "read_only": 0 },
+
+            { "hostname": "127.1.1.22", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.23", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.24", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.25", "port": 3306, "read_only": 1 },
+
+            { "hostname": "127.1.1.26", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.27", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.28", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.29", "port": 3306, "read_only": 1 },
+
+            { "hostname": "127.1.1.30", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.31", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.32", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.33", "port": 3306, "read_only": 1 },
+
+            { "hostname": "127.1.1.34", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.35", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.36", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.37", "port": 3306, "read_only": 1 },
+
+            { "hostname": "127.1.1.38", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.39", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.40", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.41", "port": 3306, "read_only": 0 },
+
+            { "hostname": "127.1.1.42", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.43", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.44", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.45", "port": 3306, "read_only": 1 },
+
+            { "hostname": "127.1.1.46", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.47", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.48", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.49", "port": 3306, "read_only": 0 }
+        ],
+        "proxysql_init_state": [
+            { "hostgroup_id": 2271,"hostname": "127.1.1.10","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2272,"hostname": "127.1.1.10","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2272,"hostname": "127.1.1.11","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2272,"hostname": "127.1.1.12","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2272,"hostname": "127.1.1.13","port": 3306,"status": "ONLINE" },
+
+            { "hostgroup_id": 2274,"hostname": "127.1.1.14","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2274,"hostname": "127.1.1.15","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2273,"hostname": "127.1.1.16","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2274,"hostname": "127.1.1.17","port": 3306,"status": "ONLINE" },
+
+            { "hostgroup_id": 2276,"hostname": "127.1.1.18","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2275,"hostname": "127.1.1.19","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2276,"hostname": "127.1.1.19","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2276,"hostname": "127.1.1.20","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2276,"hostname": "127.1.1.21","port": 3306,"status": "ONLINE" },
+
+            { "hostgroup_id": 2278,"hostname": "127.1.1.22","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2278,"hostname": "127.1.1.23","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2277,"hostname": "127.1.1.24","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2278,"hostname": "127.1.1.24","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2278,"hostname": "127.1.1.25","port": 3306,"status": "ONLINE" },
+
+            { "hostgroup_id": 2280,"hostname": "127.1.1.26","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2280,"hostname": "127.1.1.27","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2280,"hostname": "127.1.1.28","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2279,"hostname": "127.1.1.29","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2280,"hostname": "127.1.1.29","port": 3306,"status": "ONLINE" },
+
+            { "hostgroup_id": 2281,"hostname": "127.1.1.30","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2282,"hostname": "127.1.1.30","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2282,"hostname": "127.1.1.31","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2282,"hostname": "127.1.1.32","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2282,"hostname": "127.1.1.33","port": 3306,"status": "ONLINE" },
+
+            { "hostgroup_id": 2284,"hostname": "127.1.1.34","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2283,"hostname": "127.1.1.35","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2284,"hostname": "127.1.1.35","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2284,"hostname": "127.1.1.36","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2283,"hostname": "127.1.1.37","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2284,"hostname": "127.1.1.37","port": 3306,"status": "ONLINE" },
+
+            { "hostgroup_id": 2285,"hostname": "127.1.1.38","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2286,"hostname": "127.1.1.38","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2285,"hostname": "127.1.1.39","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2285,"hostname": "127.1.1.40","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2286,"hostname": "127.1.1.40","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2286,"hostname": "127.1.1.41","port": 3306,"status": "ONLINE" },
+
+            { "hostgroup_id": 2288,"hostname": "127.1.1.42","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2288,"hostname": "127.1.1.43","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2288,"hostname": "127.1.1.44","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2287,"hostname": "127.1.1.45","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2288,"hostname": "127.1.1.45","port": 3306,"status": "ONLINE" },
+
+            { "hostgroup_id": 2290,"hostname": "127.1.1.46","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2289,"hostname": "127.1.1.47","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2289,"hostname": "127.1.1.48","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2290,"hostname": "127.1.1.48","port": 3306,"status": "ONLINE" },
+            { "hostgroup_id": 2290,"hostname": "127.1.1.49","port": 3306,"status": "ONLINE" }
+        ],
+        "proxysql_final_state": [
+            { "hostgroup_id":2271,"hostname":"127.1.1.11","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2271,"hostname":"127.1.1.12","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2272,"hostname":"127.1.1.10","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2272,"hostname":"127.1.1.11","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2272,"hostname":"127.1.1.12","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2272,"hostname":"127.1.1.13","port":3306,"status":"ONLINE" },
+
+            { "hostgroup_id":2273,"hostname":"127.1.1.14","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.1.1.15","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.1.1.16","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.1.1.14","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.1.1.15","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.1.1.17","port":3306,"status":"ONLINE" },
+
+            { "hostgroup_id":2275,"hostname":"127.1.1.18","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2275,"hostname":"127.1.1.20","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2275,"hostname":"127.1.1.21","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2275,"hostname":"127.1.1.19","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2276,"hostname":"127.1.1.19","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2276,"hostname":"127.1.1.18","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2276,"hostname":"127.1.1.20","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2276,"hostname":"127.1.1.21","port":3306,"status":"ONLINE" },
+
+            { "hostgroup_id":2277,"hostname":"127.1.1.22","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2277,"hostname":"127.1.1.23","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2278,"hostname":"127.1.1.22","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2278,"hostname":"127.1.1.23","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2278,"hostname":"127.1.1.24","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2278,"hostname":"127.1.1.25","port":3306,"status":"ONLINE" },
+
+            { "hostgroup_id":2279,"hostname":"127.1.1.26","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2279,"hostname":"127.1.1.27","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2279,"hostname":"127.1.1.28","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2280,"hostname":"127.1.1.26","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2280,"hostname":"127.1.1.27","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2280,"hostname":"127.1.1.28","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2280,"hostname":"127.1.1.29","port":3306,"status":"ONLINE" },
+
+            { "hostgroup_id":2281,"hostname":"127.1.1.31","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2281,"hostname":"127.1.1.32","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2282,"hostname":"127.1.1.30","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2282,"hostname":"127.1.1.31","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2282,"hostname":"127.1.1.32","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2282,"hostname":"127.1.1.33","port":3306,"status":"ONLINE" },
+
+            { "hostgroup_id":2283,"hostname":"127.1.1.34","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2283,"hostname":"127.1.1.36","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2284,"hostname":"127.1.1.34","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2284,"hostname":"127.1.1.35","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2284,"hostname":"127.1.1.36","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2284,"hostname":"127.1.1.37","port":3306,"status":"ONLINE" },
+
+            { "hostgroup_id":2285,"hostname":"127.1.1.41","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2286,"hostname":"127.1.1.38","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2285,"hostname":"127.1.1.39","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2286,"hostname":"127.1.1.40","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2286,"hostname":"127.1.1.41","port":3306,"status":"ONLINE" },
+
+            { "hostgroup_id":2287,"hostname":"127.1.1.43","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2287,"hostname":"127.1.1.44","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2288,"hostname":"127.1.1.42","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2288,"hostname":"127.1.1.43","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2288,"hostname":"127.1.1.44","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2288,"hostname":"127.1.1.45","port":3306,"status":"ONLINE" },
+
+            { "hostgroup_id":2289,"hostname":"127.1.1.46","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2289,"hostname":"127.1.1.49","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2289,"hostname":"127.1.1.47","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2290,"hostname":"127.1.1.46","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2290,"hostname":"127.1.1.48","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2290,"hostname":"127.1.1.49","port":3306,"status":"ONLINE" }
+        ]
+    }
+]

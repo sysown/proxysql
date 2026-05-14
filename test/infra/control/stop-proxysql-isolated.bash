@@ -7,6 +7,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 export WORKSPACE="${REPO_ROOT}"
 
+source "${SCRIPT_DIR}/docker-fs-helper.bash"
+
 # Default INFRA_ID if not provided
 export INFRA_ID="${INFRA_ID:-dev-$USER}"
 
@@ -34,5 +36,6 @@ done
 echo ">>> Log permissions cleanup"
 INFRA_LOGS_PATH="${WORKSPACE}/ci_infra_logs"
 if [ -d "${INFRA_LOGS_PATH}/${INFRA_ID}" ]; then
-    sudo chmod -R 777 "${INFRA_LOGS_PATH}/${INFRA_ID}" 2>/dev/null || true
+    chmod -R 777 "${INFRA_LOGS_PATH}/${INFRA_ID}" 2>/dev/null || \
+    docker_fs_exec "chmod -R 777 ." "${INFRA_LOGS_PATH}/${INFRA_ID}" >/dev/null 2>&1 || true
 fi
