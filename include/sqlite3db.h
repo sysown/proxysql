@@ -233,9 +233,9 @@ class SQLite3DB {
 	bool execute_prepared(sqlite3_stmt* statement, char** error, int* cols, int* affected_rows, SQLite3_result** resultset);
 	SQLite3_result* execute_prepared(sqlite3_stmt* statement, char** _error, int* cols, int* affected_rows);
 	int return_one_int(const char *);
-	int check_table_structure(char *table_name, char *table_def);
-	bool build_table(char *table_name, char *table_def, bool dropit);
-	bool check_and_build_table(char *table_name, char *table_def);
+	int check_table_structure(const char *table_name, const char *table_def);
+	bool build_table(const char *table_name, const char *table_def, bool dropit);
+	bool check_and_build_table(const char *table_name, const char *table_def);
 	[[deprecated("Use safer alternative 'prepare_v2(const char *)'")]]
 	int prepare_v2(const char *, sqlite3_stmt **);
 	/**

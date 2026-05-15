@@ -290,6 +290,23 @@ int main(int argc, char** argv) {
 
 
 
+        // Probe every cluster admin port before opening the real SSL+COMPRESS
+        // connections used by the test. Without this, a slow-to-start
+        // secondary proxysql triggers a cryptic 'Can't connect to server
+        // (115)' deep inside create_connections() — see issue #5782.
+        int probe_rc;
+        if (cluster_nodes.empty()) {
+                probe_rc = wait_for_proxysql_cluster(
+                        cl.host, cluster_ports, cl.admin_username, cl.admin_password);
+        } else {
+                probe_rc = wait_for_proxysql_cluster(
+                        cluster_nodes, cl.admin_username, cl.admin_password);
+        }
+        if (probe_rc != 0) {
+                diag("Cluster readiness probe failed; aborting before create_connections()");
+                return exit_status();
+        }
+
         int rc = create_connections(cl);
         if (rc != 0) {
                 close_all_connections();

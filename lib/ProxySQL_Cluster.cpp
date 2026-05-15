@@ -2370,31 +2370,31 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 						GloAdmin->admindb->execute(SQLQueries::DELETE_MYSQL_AWS_AURORA_HOSTGROUPS);
 						q = (char*)"INSERT INTO mysql_aws_aurora_hostgroups ( "
 							"writer_hostgroup, reader_hostgroup, active, aurora_port, domain_name, max_lag_ms, check_interval_ms, "
-							"check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment) ";
+							"check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, autopurge_missing_checks, comment) ";
 						while ((row = mysql_fetch_row(results[4]))) {
 							int l = 0;
-							for (int i = 0; i < 13; i++) {
+							for (int i = 0; i < 14; i++) {
 								l += strlen(row[i]);
 							}
 							char* o = nullptr;
 							char* query = nullptr;
 							std::string fqs = q;
 
-							if (row[13] != nullptr) {
-								fqs += "VALUES (%s, %s, %s, %s, '%s', %s, %s, %s, %s, %s, %s, %s, %s, '%s')";
-								o = escape_string_single_quotes(row[13], false);
+							if (row[14] != nullptr) {
+								fqs += "VALUES (%s, %s, %s, %s, '%s', %s, %s, %s, %s, %s, %s, %s, %s, %s, '%s')";
+								o = escape_string_single_quotes(row[14], false);
 								query = (char*)malloc(strlen(fqs.c_str()) + l + strlen(o) + 64);
-								sprintf(query, fqs.c_str(), row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9], row[10], row[11], row[12], o);
+								sprintf(query, fqs.c_str(), row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9], row[10], row[11], row[12], row[13], o);
 								// free in case of 'o' being a copy
-								if (o != row[13]) {
+								if (o != row[14]) {
 									free(o);
 								}
 							} else {
 								// In case of comment being null, placeholder must not have ''
-								fqs += "VALUES (%s, %s, %s, %s, '%s', %s, %s, %s, %s, %s, %s, %s, %s, %s)";
+								fqs += "VALUES (%s, %s, %s, %s, '%s', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
 								o = const_cast<char*>("NULL");
 								query = (char*)malloc(strlen(fqs.c_str()) + l + strlen("NULL") + 64);
-								sprintf(query, fqs.c_str(), row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9], row[10], row[11], row[12], o);
+								sprintf(query, fqs.c_str(), row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9], row[10], row[11], row[12], row[13], o);
 							}
 
 							GloAdmin->admindb->execute(query);

@@ -1,0 +1,73 @@
+Restore libconfig 1.7.3 passthrough behavior for the escape sequences
+that were newly introduced in 1.8.1 (\a, \b, \v).
+
+Background
+----------
+libconfig 1.7.3 only recognized \n, \r, \t, \f, \\, \" and \xHH inside
+quoted strings.  Any other backslash sequence (\a, \b, \v, \z, ...)
+fell through to the catch-all `<STRING>\\.` rule and the backslash
+was preserved.
+
+libconfig 1.8.1 added explicit rules for \a, \b and \v that collapse
+the two-character sequence into a single control byte (0x07, 0x08,
+0x0B respectively).  This silently corrupts ProxySQL configuration
+values that happen to contain those literal sequences -- most visibly
+passwords -- because the operator-supplied two-character sequence is
+not what the lexer ends up storing.  See sysown/proxysql#5766.
+
+Fix
+---
+Patch the (still-matched) \a / \b / \v rules so they emit the
+backslash and the letter as two literal characters, restoring the
+1.7.3 wire-for-wire result.  The regex itself is unchanged so the
+generated state machine in scanner.c keeps working with the surgical
+edits applied to scanner.c below.
+
+\f, \n, \r, \t are intentionally left as escape sequences: they were
+already interpreted by libconfig 1.7.3 and changing them would be a
+behavioural regression for users who rely on them.
+
+--- a/lib/scanner.c
++++ b/lib/scanner.c
+@@ -1330,12 +1330,12 @@
+ case 10:
+ YY_RULE_SETUP
+ #line 85 "scanner.l"
+-{ libconfig_scanctx_append_char(yyextra, '\a'); }
++{ libconfig_scanctx_append_char(yyextra, '\\'); libconfig_scanctx_append_char(yyextra, 'a'); }
+ 	YY_BREAK
+ case 11:
+ YY_RULE_SETUP
+ #line 86 "scanner.l"
+-{ libconfig_scanctx_append_char(yyextra, '\b'); }
++{ libconfig_scanctx_append_char(yyextra, '\\'); libconfig_scanctx_append_char(yyextra, 'b'); }
+ 	YY_BREAK
+ case 12:
+ YY_RULE_SETUP
+@@ -1355,7 +1355,7 @@
+ case 15:
+ YY_RULE_SETUP
+ #line 90 "scanner.l"
+-{ libconfig_scanctx_append_char(yyextra, '\v'); }
++{ libconfig_scanctx_append_char(yyextra, '\\'); libconfig_scanctx_append_char(yyextra, 'v'); }
+ 	YY_BREAK
+ case 16:
+ YY_RULE_SETUP
+--- a/lib/scanner.l
++++ b/lib/scanner.l
+@@ -82,12 +82,12 @@
+
+ \"                { BEGIN STRING; }
+ <STRING>[^\"\\]+  { libconfig_scanctx_append_string(yyextra, yytext); }
+-<STRING>\\a       { libconfig_scanctx_append_char(yyextra, '\a'); }
+-<STRING>\\b       { libconfig_scanctx_append_char(yyextra, '\b'); }
++<STRING>\\a       { libconfig_scanctx_append_char(yyextra, '\\'); libconfig_scanctx_append_char(yyextra, 'a'); }
++<STRING>\\b       { libconfig_scanctx_append_char(yyextra, '\\'); libconfig_scanctx_append_char(yyextra, 'b'); }
+ <STRING>\\n       { libconfig_scanctx_append_char(yyextra, '\n'); }
+ <STRING>\\r       { libconfig_scanctx_append_char(yyextra, '\r'); }
+ <STRING>\\t       { libconfig_scanctx_append_char(yyextra, '\t'); }
+-<STRING>\\v       { libconfig_scanctx_append_char(yyextra, '\v'); }
++<STRING>\\v       { libconfig_scanctx_append_char(yyextra, '\\'); libconfig_scanctx_append_char(yyextra, 'v'); }
+ <STRING>\\f       { libconfig_scanctx_append_char(yyextra, '\f'); }
+ <STRING>\\\\      { libconfig_scanctx_append_char(yyextra, '\\'); }
+ <STRING>\\\"      { libconfig_scanctx_append_char(yyextra, '\"'); }

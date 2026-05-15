@@ -1245,8 +1245,6 @@ enum p_st process_replace_null(shared_st* shared_st, const options* opts) {
 static __attribute__((always_inline)) inline
 enum p_st process_pg_typecast(shared_st* s, pg_typecast_st* tc)
 {
-	enum p_st next = st_pg_typecast;
-
 	// On entering state
 	if (!tc->started) {
 		tc->started = true;
@@ -1307,11 +1305,27 @@ enum p_st process_pg_typecast(shared_st* s, pg_typecast_st* tc)
 		c = (s->q_cur_pos < s->q_len) ? *s->q : '\0';
 	}
 
-	// Skip any whitespace
-	while (s->q_cur_pos < s->q_len && is_space_char(c)) {
-		s->q++;
-		s->q_cur_pos++;
-		c = (s->q_cur_pos < s->q_len) ? *s->q : '\0';
+	// Skip whitespace, but only if it's followed by a modifier or
+	// array bracket (e.g. `::int (10)`, `::int []`).  If the
+	// whitespace is just a separator before the next token (e.g.
+	// `::int FROM ...`), preserve it so the dispatcher sees the
+	// space and emits it between the typecast and the following
+	// token in the output.  Without this lookahead the typecast
+	// handler used to consume the trailing space and produced
+	// digests like `count(*)from x` (issue #5755).
+	if (s->q_cur_pos < s->q_len && is_space_char(c)) {
+		int saved_pos = s->q_cur_pos;
+		const char* saved_q = s->q;
+		while (s->q_cur_pos < s->q_len && is_space_char(c)) {
+			s->q++;
+			s->q_cur_pos++;
+			c = (s->q_cur_pos < s->q_len) ? *s->q : '\0';
+		}
+		if (c != '(' && c != '[') {
+			s->q = saved_q;
+			s->q_cur_pos = saved_pos;
+			c = (s->q_cur_pos < s->q_len) ? *s->q : '\0';
+		}
 	}
 
 	// Handle type modifiers (parentheses with parameters)
@@ -1375,18 +1389,21 @@ enum p_st process_pg_typecast(shared_st* s, pg_typecast_st* tc)
 		}
 	}
 
-	// End of type name? Now check if we're at a delimiter
-	if (s->q_cur_pos >= s->q_len ||
-		is_space_char(c) ||
-		c == ')' || c == '(' || c == ';' || c == ',' ||
-		c == '+' || c == '-' ||	c == '*' || c == '/' ||
-		c == '=' || c == '<' ||	c == '>' || c == '@' ||
-		c == ']' || c == '[') {
-		// Exit state
-		return st_no_mark_found;
-	}
-
-	return next;
+	// All typecast consumption (type name + optional whitespace +
+	// modifiers + array brackets) is complete by this point, so the
+	// state must always exit.  The previous attempt to detect "end of
+	// typecast" via an enumerated delimiter list dropped through to
+	// `return next` for any character not in that list (e.g. the 'F'
+	// of `FROM` after `::INT FROM "Inventory"`), which kept the
+	// dispatcher in `st_pg_typecast`, advanced the cursor by one extra
+	// char per outer-loop iteration, and silently swallowed the rest
+	// of the query.  See issue #5755.
+	//
+	// Also reset `started` so a subsequent `::cast` later in the same
+	// query (e.g. `SELECT 1::INT, 2::TEXT`) re-enters cleanly via the
+	// entry block at the top of this function.
+	tc->started = false;
+	return st_no_mark_found;
 }
 
 /**
