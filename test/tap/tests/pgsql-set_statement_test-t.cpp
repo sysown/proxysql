@@ -76,8 +76,16 @@ struct TestCase {
 std::fstream f_proxysql_log{};
 
 bool check_logs_for_command(const std::string& command_regex) {
-    const auto& [_, cmd_lines] { get_matching_lines(f_proxysql_log, command_regex) };
-    return !cmd_lines.empty();
+    // ProxySQL writes the "Unable to parse unknown SET query from client"
+    // warning asynchronously relative to the SQL that triggers it, so a single
+    // scan right after PQexec completes is racy. wait_for_log_match() retries
+    // with a short timeout, clearing EOF between scans; on hit it returns
+    // immediately, so assertions against a warning that is already present pay
+    // no extra latency. Negative assertions (check_logs_for_command(...) == false)
+    // also benefit: they now wait up to the timeout to confirm absence, avoiding
+    // a false pass when the warning would have arrived a few hundred ms later
+    // and contaminated the next iteration's read (see issue #5788).
+    return wait_for_log_match(f_proxysql_log, command_regex);
 }
 
 bool run_set_statement(const std::string& stmt, ConnType type = BACKEND) {
