@@ -407,7 +407,7 @@
   "test_session_status_flags-t" : [ "legacy-g9","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g9","mysql90-g4","mysql95-g4" ],
   "test_set_character_results-t" : [ "legacy-g9","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g9","mysql90-g4","mysql95-g4","set_parser_algorithm_3-g1" ],
   "test_set_collation-t" : [ "legacy-g9","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g9","mysql90-g4","mysql95-g4","set_parser_algorithm_3-g1" ],
-  "test_set_statement_for-t" : [ "legacy-g2","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2","mysql84-g2","mysql90-g2","mysql95-g2" ],
+  "test_set_statement_for-t" : [ "mariadb10-galera-g2" ],
   "test_simple_embedded_HTTP_server-t" : [ "legacy-g9","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g9","mysql90-g4","mysql95-g4" ],
   "test_sqlite3_from_unixtime-t" : [ "legacy-g9","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g9","mysql90-g4","mysql95-g4" ],
   "test_sqlite3_pass_exts-t" : [ "legacy-g9","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g9","mysql90-g4","mysql95-g4" ],
