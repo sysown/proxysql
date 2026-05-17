@@ -11,8 +11,8 @@
 // Explicitly instantiate the required template class and member functions
 template MySQL_Session* Base_Thread::create_new_session_and_client_data_stream<MySQL_Thread, MySQL_Session*>(int);
 template PgSQL_Session* Base_Thread::create_new_session_and_client_data_stream<PgSQL_Thread, PgSQL_Session*>(int);
-template void Base_Thread::ProcessAllSessions_Partition<MySQL_Session>();
-template void Base_Thread::ProcessAllSessions_Partition<PgSQL_Session>();
+template unsigned int Base_Thread::ProcessAllSessions_PartitionAndCountWaitingOnBackend<MySQL_Session>();
+template unsigned int Base_Thread::ProcessAllSessions_PartitionAndCountWaitingOnBackend<PgSQL_Session>();
 template void Base_Thread::ProcessAllMyDS_AfterPoll<MySQL_Thread>();
 template void Base_Thread::ProcessAllMyDS_AfterPoll<PgSQL_Thread>();
 template void Base_Thread::ProcessAllMyDS_BeforePoll<MySQL_Thread>();
@@ -260,7 +260,7 @@ void Base_Thread::check_for_invalid_fd(unsigned int n) {
  * Pass 1 already isolated.
  */
 template<typename S>
-void Base_Thread::ProcessAllSessions_Partition() {
+unsigned int Base_Thread::ProcessAllSessions_PartitionAndCountWaitingOnBackend() {
 	size_t running_end = 0;
 	size_t idle_begin = mysql_sessions->len;
 	size_t idx = 0;
@@ -293,6 +293,11 @@ void Base_Thread::ProcessAllSessions_Partition() {
 		}
 	}
 
+	// Pass-1 done: [running_end, idle_begin) is the B band. Capture its size
+	// now so the caller's gate hysteresis doesn't have to re-classify. Pass-2
+	// reorders within the band but leaves its size unchanged.
+	const unsigned int b_count = static_cast<unsigned int>(idle_begin - running_end);
+
 	// Single-pass sweep across the B band [running_end, idle_begin) ordering
 	// by max_connect_time. Same Lomuto-style sweep as the pre-PR
 	// ProcessAllSessions_SortingSessions, scoped to the B band Pass 1 just
@@ -319,6 +324,7 @@ void Base_Thread::ProcessAllSessions_Partition() {
 			}
 		}
 	}
+	return b_count;
 }
 
 // this function was inline in MySQL_Thread::run()

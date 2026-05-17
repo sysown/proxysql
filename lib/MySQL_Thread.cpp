@@ -4452,8 +4452,13 @@ void MySQL_Thread::process_all_sessions() {
 		sess_sort=false;
 	}
 #endif // IDLE_THREADS
-	if (sess_sort && mysql_sessions->len > 3) {
-		ProcessAllSessions_Partition<MySQL_Session>();
+	const unsigned int total_at_start = mysql_sessions->len;
+	unsigned int sessions_waiting_on_backend = 0;
+	bool partition_ran = false;
+	if (sess_sort && total_at_start > SESSION_PARTITION_SKIP_BELOW
+			&& partition_streak >= SESSION_PARTITION_HYSTERESIS) {
+		sessions_waiting_on_backend = ProcessAllSessions_PartitionAndCountWaitingOnBackend<MySQL_Session>();
+		partition_ran = true;
 	}
 	for (n=0; n<mysql_sessions->len; n++) {
 		MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
@@ -4462,6 +4467,14 @@ void MySQL_Thread::process_all_sessions() {
 			sess_stopat=sess;
 		}
 #endif
+		// Start-of-tick B-band classification; matches the partition's own
+		// pre-loop snapshot semantics, so a session whose handler succeeds
+		// at acquiring a backend this tick is still counted as B here.
+		if (sess_sort && !partition_ran
+				&& sess->mybe && sess->mybe->server_myds
+				&& sess->mybe->server_myds->max_connect_time != 0) {
+			++sessions_waiting_on_backend;
+		}
 		if (sess->mirror==true) { // this is a mirror session
 			if (sess->status==WAITING_CLIENT_DATA) { // the mirror session has completed
 				ProcessAllSessions_CompletedMirrorSession(n, sess);
@@ -4541,6 +4554,16 @@ void MySQL_Thread::process_all_sessions() {
 				}
 			}
 		}
+	}
+	// Cross-multiplied form of (sessions_waiting_on_backend / total_at_start) >= (WAIT_PCT / 100).
+	// Keeps the percentage tunable via WAIT_PCT alone, no divisor to update.
+	if (sess_sort && total_at_start > SESSION_PARTITION_SKIP_BELOW
+			&& sessions_waiting_on_backend * 100 >= total_at_start * SESSION_PARTITION_WAIT_PCT) {
+		if (partition_streak < SESSION_PARTITION_HYSTERESIS) {
+			++partition_streak;
+		}
+	} else {
+		partition_streak = 0;
 	}
 	if (maintenance_loop) {
 		unsigned int total_active_transactions_tmp;

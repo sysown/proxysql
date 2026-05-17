@@ -54,6 +54,18 @@ private:
 	int shutdown;
 	PtrArray *mysql_sessions;
 	Session_Regex **match_regexes;
+
+	// Counts consecutive ticks where >= WAIT_PCT % of sessions are waiting
+	// on a backend connection. Reaches HYSTERESIS -> partition turns on.
+	// First below-threshold tick -> resets to 0.
+	unsigned int partition_streak = 0;
+
+	static constexpr unsigned int SESSION_PARTITION_WAIT_PCT     = 3;
+	static constexpr unsigned int SESSION_PARTITION_HYSTERESIS   = 3;
+	// Threads with at most this many sessions skip the partition call
+	// entirely and keep partition_streak at 0. Too few sessions to
+	// produce a stable contention signal.
+	static constexpr unsigned int SESSION_PARTITION_SKIP_BELOW   = 3;
 	Base_Thread();
 	~Base_Thread();
 	template<typename T, typename S>
@@ -64,8 +76,11 @@ private:
 	void check_timing_out_session(unsigned int n);
 	template<typename T>
 	void check_for_invalid_fd(unsigned int n);
+	// Partition the thread's sessions into A/B/C bands and sort the B
+	// band by max_connect_time. Returns the size of the B band -
+	// sessions waiting on a backend connection acquisition.
 	template<typename S>
-	void ProcessAllSessions_Partition();
+	unsigned int ProcessAllSessions_PartitionAndCountWaitingOnBackend();
 	template<typename T>
 	void ProcessAllMyDS_AfterPoll();
 	template<typename T>
