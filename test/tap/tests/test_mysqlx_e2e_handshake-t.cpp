@@ -223,8 +223,12 @@ int main() {
 	E2EConfig cfg;
 	const char* host_env = std::getenv("MYSQLX_E2E_HOST");
 	if (!host_env) {
-		skip_all("MYSQLX_E2E_HOST not set; skipping E2E handshake test");
-		return exit_status();
+		// Group setup bug: test/tap/groups/mysqlx-e2e/env.sh defines
+		// MYSQLX_E2E_HOST=127.0.0.1 and CI-mysqlx.yml's e2e-tests job
+		// sources it. If the var is missing at runtime the harness did
+		// not source the env file — fail loud so the gap is fixed, not
+		// silently hide the regression as the previous skip_all did.
+		BAIL_OUT("MYSQLX_E2E_HOST not set — group env (test/tap/groups/mysqlx-e2e/env.sh) was not sourced before invoking this test");
 	}
 	cfg.host = host_env;
 	cfg.port = static_cast<uint16_t>(

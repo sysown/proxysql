@@ -275,17 +275,7 @@ plan(int count)
 }
 
 
-void
-skip_all(char const *reason, ...)
-{
-  va_list ap;
-  va_start(ap, reason);
-  fprintf(tapout, "1..0 # skip ");
-  vfprintf(tapout, reason, ap);
-  fflush(tapout);
-  va_end(ap);
-  exit(0);
-}
+// skip_all() removed — see comment in tap.h. Use BAIL_OUT() instead.
 
 void
 ok(int pass, char const *fmt, ...)
@@ -771,11 +761,5 @@ int tests_last() {
    to use anything than a block.
 */
 
-/**
-   @example skip_all.t.c
-
-   Sometimes, you skip an entire test because it's testing a feature
-   that doesn't exist on the system that you're testing. To skip an
-   entire test, use the <code>skip_all()</code> function according to
-   this example.
- */
+// (The @example skip_all.t.c doc reference was removed alongside the
+// skip_all() function itself — see comment in tap.h.)
