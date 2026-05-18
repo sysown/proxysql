@@ -116,6 +116,12 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 	PtrArray *cached_connections;
 	unsigned int push_local_counter;	// round-robin counter for bounded local caching: cache 1-in-N where N = mysql_threads
 
+	// State for the ratio-based partition gate. See PgSQL_Thread for the equivalent.
+	unsigned int partition_pool_attempts;
+	unsigned int partition_pool_nulls;
+	unsigned int partition_streak;
+	bool partition_active;
+
 #ifdef IDLE_THREADS
 	struct epoll_event events[MY_EPOLL_THREAD_MAXEVENTS];
 	int efd;
@@ -159,6 +165,14 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 	int nfds;
 
 	public:
+
+	// Recorded at the get_MyConn_from_pool() call site by sessions inside this
+	// worker. Consumed and reset at the top of each process_all_sessions outer
+	// iteration to compute the ratio-based partition gate.
+	inline void note_pool_attempt(bool was_null) {
+		++partition_pool_attempts;
+		if (was_null) ++partition_pool_nulls;
+	}
 
 	void *gen_args;	// this is a generic pointer to create any sort of structure
 

@@ -4453,7 +4453,29 @@ void MySQL_Thread::process_all_sessions() {
 	}
 #endif // IDLE_THREADS
 	if (sess_sort && mysql_sessions->len > 3) {
-		ProcessAllSessions_Partition<MySQL_Session>();
+		// Activate partition only when the pool acquire NULL-ratio
+		// (computed from get_MyConn_from_pool calls within the previous
+		// iteration) has been above HI_NUM/HI_DEN for STREAK consecutive
+		// iterations. Disable symmetrically once the ratio has been below
+		// HI_NUM/HI_DEN for STREAK consecutive iterations.
+		const unsigned int HI_NUM = 1, HI_DEN = 20;     // 5%
+		const unsigned int STREAK = 3;
+		bool stressed = (partition_pool_attempts > 0)
+		             && (partition_pool_nulls * HI_DEN >= partition_pool_attempts * HI_NUM);
+		if (stressed == partition_active) {
+			partition_streak = 0;
+		} else {
+			if (++partition_streak >= STREAK) {
+				partition_active = stressed;
+				partition_streak = 0;
+			}
+		}
+		partition_pool_attempts = 0;
+		partition_pool_nulls    = 0;
+
+		if (partition_active) {
+			ProcessAllSessions_Partition<MySQL_Session>();
+		}
 	}
 	for (n=0; n<mysql_sessions->len; n++) {
 		MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
@@ -4785,6 +4807,10 @@ MySQL_Thread::MySQL_Thread() {
 	my_idle_conns=NULL;
 	cached_connections=NULL;
 	push_local_counter=0;
+	partition_pool_attempts=0;
+	partition_pool_nulls=0;
+	partition_streak=0;
+	partition_active=false;
 	mysql_sessions=NULL;
 	mirror_queue_mysql_sessions=NULL;
 	mirror_queue_mysql_sessions_cache=NULL;
@@ -6473,7 +6499,8 @@ void MySQL_Thread::push_MyConn_local(MySQL_Connection *c) {
 	// Rationale: avoids the connection-hoarding behavior that starved sibling
 	// workers at high client count, while preserving most of the lock-amortization
 	// benefit at lower client counts.
-	MySrvC *mysrvc=(MySrvC *)c->parent;
+	MySrvC *mysrvc=NULL;
+	mysrvc=(MySrvC *)c->parent;
 	// reset insert_id #1093
 	c->mysql->insert_id = 0;
 	if (mysrvc->get_status() == MYSQL_SERVER_STATUS_ONLINE) {
