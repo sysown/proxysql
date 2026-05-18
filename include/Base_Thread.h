@@ -56,8 +56,9 @@ private:
 	Session_Regex **match_regexes;
 
 	// Counts consecutive ticks where >= WAIT_PCT % of sessions are waiting
-	// on a backend connection. Reaches HYSTERESIS -> partition turns on.
-	// First below-threshold tick -> resets to 0.
+	// on a backend connection. Reaches HYSTERESIS -> Pass 2 (B-band sort)
+	// turns on; Pass 1 (the partition itself) always runs when the function
+	// is called. First below-threshold tick -> resets to 0.
 	unsigned int partition_streak = 0;
 
 	static constexpr unsigned int SESSION_PARTITION_WAIT_PCT     = 3;

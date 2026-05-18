@@ -298,15 +298,15 @@ unsigned int Base_Thread::ProcessAllSessions_PartitionAndCountWaitingOnBackend()
 	// reorders within the band but leaves its size unchanged.
 	const unsigned int b_count = static_cast<unsigned int>(idle_begin - running_end);
 
-	// Single-pass sweep across the B band [running_end, idle_begin) ordering
-	// by max_connect_time. Same Lomuto-style sweep as the pre-PR
-	// ProcessAllSessions_SortingSessions, scoped to the B band Pass 1 just
-	// isolated.
-	//
-	// Invariant: every session in [running_end, idle_begin) is a B session,
-	// so s->mybe->server_myds->max_connect_time is non-zero and no nullptr
-	// guards are needed.
-	if (idle_begin > running_end + 1) {
+	// Single-pass Lomuto sweep across the B band [running_end, idle_begin)
+	// ordering by max_connect_time. Gated on partition_streak - Pass 1's
+	// block layout is always worth running, but the sort is only worth its
+	// CPU cost under sustained contention (see issue 5791 comment
+	// 4473710920). Invariant: every session in [running_end, idle_begin)
+	// is a B session, so s->mybe->server_myds->max_connect_time is non-zero
+	// and no nullptr guards are needed.
+	if (partition_streak >= SESSION_PARTITION_HYSTERESIS
+			&& idle_begin > running_end + 1) {
 		size_t a = running_end;
 		for (size_t n = running_end; n < idle_begin; ++n) {
 			S* sess = static_cast<S*>(mysql_sessions->pdata[n]);

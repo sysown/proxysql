@@ -3835,8 +3835,7 @@ void PgSQL_Thread::process_all_sessions() {
 	const unsigned int total_at_start = mysql_sessions->len;
 	unsigned int sessions_waiting_on_backend = 0;
 	bool partition_ran = false;
-	if (sess_sort && total_at_start > SESSION_PARTITION_SKIP_BELOW
-			&& partition_streak >= SESSION_PARTITION_HYSTERESIS) {
+	if (sess_sort && total_at_start > SESSION_PARTITION_SKIP_BELOW) {
 		sessions_waiting_on_backend = ProcessAllSessions_PartitionAndCountWaitingOnBackend<PgSQL_Session>();
 		partition_ran = true;
 	}
