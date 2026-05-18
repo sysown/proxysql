@@ -4784,6 +4784,7 @@ MySQL_Thread::MySQL_Thread() {
 	pthread_mutex_init(&thread_mutex,NULL);
 	my_idle_conns=NULL;
 	cached_connections=NULL;
+	push_local_counter=0;
 	mysql_sessions=NULL;
 	mirror_queue_mysql_sessions=NULL;
 	mirror_queue_mysql_sessions_cache=NULL;
@@ -6466,14 +6467,22 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
  * @param c Pointer to the MySQL_Connection object to be pushed to the local connection pool.
  */
 void MySQL_Thread::push_MyConn_local(MySQL_Connection *c) {
-	MySrvC *mysrvc=NULL;
-	mysrvc=(MySrvC *)c->parent;
+	// Bounded local cache: cache 1-in-N releases (N = mysql_threads), push the
+	// rest to the shared HGM pool so peer workers can pick them up.
+	// At N=1 always cache (no sibling to share with).
+	// Rationale: avoids the connection-hoarding behavior that starved sibling
+	// workers at high client count, while preserving most of the lock-amortization
+	// benefit at lower client counts.
+	MySrvC *mysrvc=(MySrvC *)c->parent;
 	// reset insert_id #1093
 	c->mysql->insert_id = 0;
 	if (mysrvc->get_status() == MYSQL_SERVER_STATUS_ONLINE) {
 		if (c->async_state_machine==ASYNC_IDLE) {
-			cached_connections->add(c);
-			return; // all went well
+			unsigned int n = (GloMTH && GloMTH->num_threads > 0) ? GloMTH->num_threads : 1;
+			if ((push_local_counter++ % n) == 0) {
+				cached_connections->add(c);
+				return;
+			}
 		}
 	}
 	MyHGM->push_MyConn_to_pool(c);
