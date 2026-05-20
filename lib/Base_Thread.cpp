@@ -41,6 +41,11 @@ bool Base_Thread::update_partition_gate() {
 	partition_pool_attempts = 0;
 	partition_pool_nulls    = 0;
 
+	// Low-volume ticks carry no signal; leave gate and streak unchanged.
+	if (attempts < PARTITION_GATE_MIN_ATTEMPTS) {
+		return partition_active;
+	}
+
 	const bool stressed = (nulls * PARTITION_GATE_NULL_RATIO_DEN
 	                       >= attempts * PARTITION_GATE_NULL_RATIO_NUM);
 	if (stressed == partition_active) {

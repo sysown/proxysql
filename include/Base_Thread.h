@@ -63,6 +63,9 @@ public:
 	static constexpr unsigned int PARTITION_GATE_NULL_RATIO_NUM = 1;
 	static constexpr unsigned int PARTITION_GATE_NULL_RATIO_DEN = 20;	// 5%
 	static constexpr unsigned int PARTITION_GATE_STREAK         = 3;
+	// Below this attempt count a tick carries no signal: gate state and
+	// streak are left untouched. Avoids "2/2 NULL = 100% stressed" noise.
+	static constexpr unsigned int PARTITION_GATE_MIN_ATTEMPTS   = 4;
 
 	// Called by sessions inside this worker at the get_MyConn_from_pool()
 	// call site to feed the gate.
