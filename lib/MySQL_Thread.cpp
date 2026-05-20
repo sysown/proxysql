@@ -6499,8 +6499,7 @@ void MySQL_Thread::push_MyConn_local(MySQL_Connection *c) {
 	// Rationale: avoids the connection-hoarding behavior that starved sibling
 	// workers at high client count, while preserving most of the lock-amortization
 	// benefit at lower client counts.
-	MySrvC *mysrvc=NULL;
-	mysrvc=(MySrvC *)c->parent;
+	MySrvC *mysrvc=(MySrvC *)c->parent;
 	// reset insert_id #1093
 	c->mysql->insert_id = 0;
 	if (mysrvc->get_status() == MYSQL_SERVER_STATUS_ONLINE) {
