@@ -4452,30 +4452,9 @@ void MySQL_Thread::process_all_sessions() {
 		sess_sort=false;
 	}
 #endif // IDLE_THREADS
-	if (sess_sort && mysql_sessions->len > 3) {
-		// Activate partition only when the pool acquire NULL-ratio
-		// (computed from get_MyConn_from_pool calls within the previous
-		// iteration) has been above HI_NUM/HI_DEN for STREAK consecutive
-		// iterations. Disable symmetrically once the ratio has been below
-		// HI_NUM/HI_DEN for STREAK consecutive iterations.
-		const unsigned int HI_NUM = 1, HI_DEN = 20;     // 5%
-		const unsigned int STREAK = 3;
-		bool stressed = (partition_pool_attempts > 0)
-		             && (partition_pool_nulls * HI_DEN >= partition_pool_attempts * HI_NUM);
-		if (stressed == partition_active) {
-			partition_streak = 0;
-		} else {
-			if (++partition_streak >= STREAK) {
-				partition_active = stressed;
-				partition_streak = 0;
-			}
-		}
-		partition_pool_attempts = 0;
-		partition_pool_nulls    = 0;
-
-		if (partition_active) {
-			ProcessAllSessions_Partition<MySQL_Session>();
-		}
+	const bool partition_wanted = update_partition_gate();
+	if (sess_sort && mysql_sessions->len > 3 && partition_wanted) {
+		ProcessAllSessions_Partition<MySQL_Session>();
 	}
 	for (n=0; n<mysql_sessions->len; n++) {
 		MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
@@ -4807,10 +4786,6 @@ MySQL_Thread::MySQL_Thread() {
 	my_idle_conns=NULL;
 	cached_connections=NULL;
 	push_local_counter=0;
-	partition_pool_attempts=0;
-	partition_pool_nulls=0;
-	partition_streak=0;
-	partition_active=false;
 	mysql_sessions=NULL;
 	mirror_queue_mysql_sessions=NULL;
 	mirror_queue_mysql_sessions_cache=NULL;

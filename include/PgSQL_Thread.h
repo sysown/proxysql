@@ -162,14 +162,6 @@ private:
 	PtrArray* cached_connections;
 	unsigned int push_local_counter;	// round-robin counter for bounded local caching: cache 1-in-N where N = pgsql_threads
 
-	// State for the ratio-based partition gate. Counters are incremented at the
-	// get_MyConn_from_pool() call site within process_all_sessions; consumed and
-	// reset at the top of the next outer iteration.
-	unsigned int partition_pool_attempts;
-	unsigned int partition_pool_nulls;
-	unsigned int partition_streak;
-	bool partition_active;
-
 #ifdef IDLE_THREADS
 	struct epoll_event events[MY_EPOLL_THREAD_MAXEVENTS];
 	int efd;
@@ -221,14 +213,6 @@ protected:
 	int nfds;
 
 public:
-
-	// Recorded at the get_MyConn_from_pool() call site by sessions inside this
-	// worker. Consumed and reset at the top of each process_all_sessions outer
-	// iteration to compute the ratio-based partition gate.
-	inline void note_pool_attempt(bool was_null) {
-		++partition_pool_attempts;
-		if (was_null) ++partition_pool_nulls;
-	}
 
 	void* gen_args;	// this is a generic pointer to create any sort of structure
 

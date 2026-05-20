@@ -34,6 +34,24 @@ Base_Thread::Base_Thread() :
 Base_Thread::~Base_Thread() {
 };
 
+bool Base_Thread::update_partition_gate() {
+	// 64-bit so the multiplications below cannot overflow unsigned int.
+	const uint64_t attempts = partition_pool_attempts;
+	const uint64_t nulls    = partition_pool_nulls;
+	partition_pool_attempts = 0;
+	partition_pool_nulls    = 0;
+
+	const bool stressed = (nulls * PARTITION_GATE_NULL_RATIO_DEN
+	                       >= attempts * PARTITION_GATE_NULL_RATIO_NUM);
+	if (stressed == partition_active) {
+		partition_streak = 0;
+	} else if (++partition_streak >= PARTITION_GATE_STREAK) {
+		partition_active = stressed;
+		partition_streak = 0;
+	}
+	return partition_active;
+}
+
 template<typename T, typename S>
 void Base_Thread::register_session(T thr, S _sess, bool up_start) {
 	if (mysql_sessions==NULL) {
