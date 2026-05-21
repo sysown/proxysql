@@ -313,6 +313,25 @@ void Base_Thread::ProcessAllSessions_Partition() {
 			// do NOT advance idx - re-examine the swapped-in element test
 		}
 	}
+
+	// Promote longest-waiting B session to running_end.
+	if (idle_begin > running_end + PARTITION_FAIRNESS_MIN_B) {
+		size_t oldest_idx = SIZE_MAX;
+		unsigned long long oldest_st = UINT64_MAX;
+		for (size_t i = running_end; i < idle_begin; i++) {
+			S* s = static_cast<S*>(mysql_sessions->index(i));
+			const unsigned long long st = s->CurrentQuery.start_time;
+			if (st != 0 && st < oldest_st) {
+				oldest_st = st;
+				oldest_idx = i;
+			}
+		}
+		if (oldest_idx != SIZE_MAX && oldest_idx != running_end) {
+			void* p = mysql_sessions->pdata[running_end];
+			mysql_sessions->pdata[running_end] = mysql_sessions->pdata[oldest_idx];
+			mysql_sessions->pdata[oldest_idx] = p;
+		}
+	}
 }
 
 // this function was inline in MySQL_Thread::run()
