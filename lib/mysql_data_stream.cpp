@@ -1297,6 +1297,18 @@ int MySQL_Data_Stream::buffer2array() {
 							// we override old address/port
 							addr.addr = strdup(PROXY_info->source_address);
 							addr.port = PROXY_info->source_port;
+						} else if (ppi.header_was_unknown) {
+							// GHSA-gw94-85m2-x8v2: PP1 UNKNOWN frame.
+							// Per HAProxy spec the receiver MUST ignore
+							// any address fields that follow UNKNOWN, so
+							// addr.addr stays pointing at the real TCP
+							// peer. We still record that we observed a
+							// PROXY header so audit/log code can see the
+							// frame was present.
+							PROXY_info = new ProxyProtocolInfo(ppi);
+							if (addr.addr) {
+								proxy_info("Ignoring PROXY UNKNOWN header from IP %s; using real TCP peer as client address\n", addr.addr);
+							}
 						} else {
 							if (addr.addr) {
 								proxy_warning("Unable to parse PROXY header from IP %s . Skipping PROXY header\n", addr.addr);

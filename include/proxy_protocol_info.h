@@ -15,6 +15,12 @@ public:
 	uint16_t source_port;
 	uint16_t destination_port;
 	uint16_t proxy_port;
+	// GHSA-gw94-85m2-x8v2: set by parseProxyProtocolHeader() when the
+	// PP1 frame uses the UNKNOWN protocol token. Per the HAProxy PP1
+	// spec the receiver MUST ignore any address fields after UNKNOWN,
+	// so the parser returns false and callers must NOT override the
+	// real TCP peer's address from this frame.
+	bool header_was_unknown;
 
 	// Constructor (initializes to zeros)
 	ProxyProtocolInfo() {
