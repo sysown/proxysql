@@ -1867,6 +1867,16 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				GloMyMon->populate_monitor_mysql_server_aws_aurora_check_status();
 			}
 		}
+		if (monitor_mysql_server_aws_rds_log) {
+			if (GloMyMon) {
+				GloMyMon->populate_monitor_mysql_server_aws_rds_log();
+			}
+		}
+		if (monitor_mysql_server_aws_rds_check_status) {
+			if (GloMyMon) {
+				GloMyMon->populate_monitor_mysql_server_aws_rds_check_status();
+			}
+		}
 		//pthread_mutex_unlock(&admin_mutex);
 	}
 

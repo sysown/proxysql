@@ -914,6 +914,13 @@ void * monitor_aws_aurora_pthread(void *arg) {
 	return NULL;
 }
 
+void * monitor_aws_rds_pthread(void *arg) {
+	set_thread_name("MonitorRDS", GloVars.set_thread_name);
+	if (!wait_for_glo_mth()) return NULL;
+	GloMyMon->monitor_aws_rds();
+	return NULL;
+}
+
 void * monitor_replication_lag_pthread(void *arg) {
 #ifndef NOJEM
 	bool cache=false;
@@ -5220,6 +5227,13 @@ __monitor_run:
 		assert(0);
 		// LCOV_EXCL_STOP
 	}
+	pthread_t monitor_aws_rds_thread;
+	if (pthread_create(&monitor_aws_rds_thread, &attr, &monitor_aws_rds_pthread,NULL) != 0) {
+		// LCOV_EXCL_START
+		proxy_error("Thread creation\n");
+		assert(0);
+		// LCOV_EXCL_STOP
+	}
 	pthread_t monitor_replication_lag_thread;
 	if (pthread_create(&monitor_replication_lag_thread, &attr, &monitor_replication_lag_pthread,NULL) != 0) {
 		// LCOV_EXCL_START
@@ -5319,6 +5333,7 @@ __monitor_run:
 	pthread_join(monitor_group_replication_thread,NULL);
 	pthread_join(monitor_galera_thread,NULL);
 	pthread_join(monitor_aws_aurora_thread,NULL);
+	pthread_join(monitor_aws_rds_thread,NULL);
 	pthread_join(monitor_replication_lag_thread,NULL);
 	
 	My_Conn_Pool->purge_all_connections();
@@ -6678,6 +6693,117 @@ void * MySQL_Monitor::monitor_aws_aurora() {
 	for (unsigned int i=0;i<num_threads; i++) {
 		WorkItem<MySQL_Monitor_State_Data> *item=NULL;
 		GloMyMon->queue->add(item);
+	}
+	return NULL;
+}
+
+void * MySQL_Monitor::monitor_aws_rds() {
+	if (!wait_for_glo_mth()) return NULL;
+	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
+	MySQL_Thread * mysql_thr = new MySQL_Thread();
+	mysql_thr->curtime = monotonic_time();
+	MySQL_Monitor__thread_MySQL_Thread_Variables_version = GloMTH->get_global_version();
+	mysql_thr->refresh_variables();
+
+	uint64_t last_raw_checksum = 0;
+
+	struct rds_worker_t {
+		uintptr_t wHG;
+		uintptr_t rHG;
+		pthread_t pth;
+		uintptr_t* running;
+	};
+	std::vector<rds_worker_t> workers;
+
+	while (GloMyMon->shutdown == false && mysql_thread___monitor_enabled == true) {
+		if (!GloMTH) break;
+
+		unsigned int glover = GloMTH->get_global_version();
+		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover) {
+			MySQL_Monitor__thread_MySQL_Thread_Variables_version = glover;
+			mysql_thr->refresh_variables();
+		}
+
+		pthread_mutex_lock(&aws_rds_mutex);
+		uint64_t new_raw_checksum =
+			AWS_RDS_Hosts_resultset ? AWS_RDS_Hosts_resultset->raw_checksum() : 0;
+		std::vector<std::pair<uintptr_t,uintptr_t>> desired_pairs;
+		if (AWS_RDS_Hosts_resultset) {
+			for (SQLite3_row* r : AWS_RDS_Hosts_resultset->rows) {
+				uintptr_t wHG = static_cast<uintptr_t>(atoi(r->fields[0]));
+				uintptr_t rHG = static_cast<uintptr_t>(atoi(r->fields[1]));
+				bool found = false;
+				for (const auto& p : desired_pairs) {
+					if (p.first == wHG && p.second == rHG) { found = true; break; }
+				}
+				if (!found) desired_pairs.emplace_back(wHG, rHG);
+			}
+		}
+		pthread_mutex_unlock(&aws_rds_mutex);
+
+		if (new_raw_checksum != last_raw_checksum) {
+			proxy_info("Detected new/changed definition for AWS RDS monitoring\n");
+			last_raw_checksum = new_raw_checksum;
+
+			// Spawn a worker for every desired pair that is not already running.
+			for (const auto& dp : desired_pairs) {
+				bool already_running = false;
+				for (const auto& w : workers) {
+					if (w.wHG == dp.first && w.rHG == dp.second) {
+						already_running = true;
+						break;
+					}
+				}
+				if (already_running) continue;
+
+				uintptr_t* running = new uintptr_t(1);
+				uintptr_t* args = new uintptr_t[3];
+				args[0] = dp.first;
+				args[1] = dp.second;
+				args[2] = reinterpret_cast<uintptr_t>(running);
+
+				pthread_t pth;
+				proxy_info(
+					"Starting Monitor thread for AWS RDS replication HG writer=%lu, reader=%lu\n",
+					(unsigned long)dp.first, (unsigned long)dp.second
+				);
+				if (pthread_create(&pth, NULL, monitor_AWS_RDS_thread_HG, args) != 0) {
+					// LCOV_EXCL_START
+					proxy_error("Thread creation\n");
+					delete[] args;
+					delete running;
+					assert(0);
+					// LCOV_EXCL_STOP
+				} else {
+					workers.push_back({dp.first, dp.second, pth, running});
+				}
+			}
+		}
+
+		// Reap any worker that has signalled completion (pair removed, etc.)
+		for (auto it = workers.begin(); it != workers.end();) {
+			if (*(it->running) == 0) {
+				pthread_join(it->pth, NULL);
+				delete it->running;
+				it = workers.erase(it);
+			} else {
+				++it;
+			}
+		}
+
+		usleep(10000);
+	}
+
+	// Shutdown path: wait for all workers (they self-exit on GloMyMon->shutdown)
+	for (auto& w : workers) {
+		pthread_join(w.pth, NULL);
+		delete w.running;
+	}
+	workers.clear();
+
+	if (mysql_thr) {
+		delete mysql_thr;
+		mysql_thr = NULL;
 	}
 	return NULL;
 }

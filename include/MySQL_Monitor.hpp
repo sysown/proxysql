@@ -683,6 +683,7 @@ class MySQL_Monitor {
 	void * monitor_group_replication_2();
 	void * monitor_galera();
 	void * monitor_aws_aurora();
+	void * monitor_aws_rds();
 	void * monitor_replication_lag();
 	void * monitor_dns_cache();
 	void * run();

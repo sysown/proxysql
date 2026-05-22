@@ -4639,6 +4639,11 @@ void MySQL_HostGroups_Manager::update_aws_rds_add_autodiscovered(
 			pthread_mutex_lock(&GloVars.checksum_mutex);
 			update_glovars_mysql_servers_checksum(mysrvs_checksum);
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
+
+			// Sync the HGM-internal checksum so update_hostgroup_manager_mappings()
+			// actually rebuilds hostgroup_server_mapping with the discovered peers.
+			table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS] =
+				this->runtime_mysql_servers ? this->runtime_mysql_servers->raw_checksum() : 0;
 		}
 
 		// Because 'commit' isn't called, we are required to update 'mysql_servers_for_monitor'.
