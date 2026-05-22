@@ -108,6 +108,7 @@ cleanall:
 	cd mariadb-connector-c && rm -rf mariadb-connector-c-*/ || true
 	cd mysql-connector-c && rm -rf mysql-5.7.*/ || true
 	cd mysql-connector-c-8.4.0 && rm -rf mysql-8.4.*/ || true
+	cd cluster_simulator && ${MAKE} clean
 
 .PHONY: clean
 .SILENT: clean

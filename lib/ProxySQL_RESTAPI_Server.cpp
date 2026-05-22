@@ -456,6 +456,30 @@ public:
         return response;
     }
 };
+
+/* The TSDB dashboard HTML and its Chart.bundle.js asset are served from
+ * the REST API port so the dashboard's fetch('/api/tsdb/...') calls are
+ * same-origin and resolve to the real handlers above. See issue #5684. */
+extern const char* TSDB_Dashboard_html_c;
+extern char* Chart_bundle_js_c;
+
+class tsdb_dashboard_resource : public http_resource {
+public:
+    const std::shared_ptr<http_response> render_GET(const http_request& /*req*/) override {
+        auto response = std::shared_ptr<http_response>(new string_response(TSDB_Dashboard_html_c, http::http_utils::http_ok));
+        response->with_header("Content-Type", "text/html; charset=utf-8");
+        return response;
+    }
+};
+
+class tsdb_chart_js_resource : public http_resource {
+public:
+    const std::shared_ptr<http_response> render_GET(const http_request& /*req*/) override {
+        auto response = std::shared_ptr<http_response>(new string_response(Chart_bundle_js_c, http::http_utils::http_ok));
+        response->with_header("Content-Type", "application/javascript; charset=utf-8");
+        return response;
+    }
+};
 #endif
 
 class gen_get_endpoint : public http_resource {
@@ -515,6 +539,14 @@ ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(
 	ws->register_resource("/api/tsdb/metrics", tsdb_endpoint.get(), true);
 	ws->register_resource("/api/tsdb/query", tsdb_endpoint.get(), true);
 	ws->register_resource("/api/tsdb/status", tsdb_endpoint.get(), true);
+
+	/* Serve the dashboard HTML and its Chart.bundle.js asset on the
+	 * same port as the API, so the dashboard's relative fetch() calls
+	 * are same-origin. See issue #5684. */
+	tsdb_dashboard_endpoint = std::unique_ptr<httpserver::http_resource>(new tsdb_dashboard_resource());
+	tsdb_chart_js_endpoint = std::unique_ptr<httpserver::http_resource>(new tsdb_chart_js_resource());
+	ws->register_resource("/tsdb", tsdb_dashboard_endpoint.get(), true);
+	ws->register_resource("/Chart.bundle.js", tsdb_chart_js_endpoint.get(), true);
 #endif
 	if (pthread_create(&thread_id, NULL, restapi_server_thread, ws.get()) !=0 ) {
 		perror("Thread creation");
