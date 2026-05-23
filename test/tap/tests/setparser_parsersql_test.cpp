@@ -27,6 +27,47 @@ static Test parsersql_syntax_errors[] = {
     { Expected("sql_mode", { "SELCT" } ) } },
 };
 
+// Byte-exact regression tests for the walker's function-call source preservation
+// (pairs of input -> expected verbatim value). The shared `TestParse` strips
+// whitespace and quote-style differences via normalize_value(), which hid an
+// earlier round-trip bug where emit_function_call injected ", " between
+// arguments: `concat(@@sql_mode,'X')` → `concat(@@sql_mode, 'X')`. The version
+// drift carried via session tracking and broke set_testing-t. These cases must
+// compare byte-for-byte to catch any future regression in the same area.
+struct StrictCase {
+  const char* query;
+  const char* var;
+  const char* expected;
+};
+static StrictCase parsersql_function_call_strict[] = {
+  { "SET sql_mode = concat(@@sql_mode,',STRICT_TRANS_TABLES')",
+    "sql_mode", "concat(@@sql_mode,',STRICT_TRANS_TABLES')" },
+  { "SET sql_mode = CONCAT(@@sql_mode, ',STRICT_TRANS_TABLES')",
+    "sql_mode", "CONCAT(@@sql_mode, ',STRICT_TRANS_TABLES')" },
+  { "SET sql_mode = concat( @@sql_mode ,  'X' )",
+    "sql_mode", "concat( @@sql_mode ,  'X' )" },
+};
+
+// Byte-exact regression tests for PG delimited identifier preservation in SET RHS.
+// The AST stores value_ptr inside the quotes and value_len covering only the
+// identifier content, so the walker has to splice the quote chars back in when
+// FLAG_IDENT_DELIMITED is set. Drives the search_path-specific failures in
+// pgsql-set_parameter_validation_test-t where `"MixedCase"` was being lowercased
+// to `mixedcase` and `"$user"` was being mistaken for the current-user substitution.
+struct StrictPgsqlCase {
+  const char* query;
+  const char* var;
+  std::vector<std::string> expected_values;
+};
+static StrictPgsqlCase parsersql_pgsql_ident_strict[] = {
+  { "SET search_path = \"MixedCase\"",        "search_path", { "\"MixedCase\"" } },
+  { "SET search_path = \"MixedCase\", public", "search_path", { "\"MixedCase\"", "public" } },
+  { "SET search_path = \"$user\"",            "search_path", { "\"$user\"" } },
+  { "SET search_path TO \"$user\", public",   "search_path", { "\"$user\"", "public" } },
+  { "SET search_path = \"sch-1\", \"sch 2\"",  "search_path", { "\"sch-1\"", "\"sch 2\"" } },
+  { "SET search_path = pg_catalog, \"$user\"", "search_path", { "pg_catalog", "\"$user\"" } },
+};
+
 // ----------------------------------------------------------------------------
 // MySQL queries from test_filtered_set_statements-t (variables that ProxySQL
 // is supposed to filter out — should still parse cleanly via ParserSQL).
@@ -242,6 +283,54 @@ void TestParsePgsql(const Test* tests, int ntests, const std::string& title) {
 }
 
 
+void TestStrictFunctionCall(const StrictCase* cases, int n) {
+	for (int i = 0; i < n; i++) {
+		auto result = parsersql_parse_set_mysql(cases[i].query);
+		auto it = result.find(cases[i].var);
+		bool found = (it != result.end() && it->second.size() == 1);
+		ok(found, "[strict_function_call %d] var '%s' present with single value for query: %s",
+			i, cases[i].var, cases[i].query);
+		if (found) {
+			bool eq = (it->second[0] == cases[i].expected);
+			ok(eq, "[strict_function_call %d] byte-exact match for: %s", i, cases[i].query);
+			if (!eq) {
+				diag("  expected: [%s]", cases[i].expected);
+				diag("  got     : [%s]", it->second[0].c_str());
+			}
+		} else {
+			ok(false, "[strict_function_call %d] cannot byte-compare (var missing or multi-value)", i);
+		}
+	}
+}
+
+void TestStrictPgsqlIdent(const StrictPgsqlCase* cases, int n) {
+	for (int i = 0; i < n; i++) {
+		auto result = parsersql_parse_set_pgsql(cases[i].query);
+		auto it = result.find(cases[i].var);
+		bool found = (it != result.end()
+			&& it->second.size() == cases[i].expected_values.size());
+		ok(found, "[strict_pgsql_ident %d] var '%s' present with %zu value(s) for query: %s",
+			i, cases[i].var, cases[i].expected_values.size(), cases[i].query);
+		if (found) {
+			bool eq = true;
+			for (size_t j = 0; j < cases[i].expected_values.size(); ++j) {
+				if (it->second[j] != cases[i].expected_values[j]) { eq = false; break; }
+			}
+			ok(eq, "[strict_pgsql_ident %d] byte-exact match for: %s", i, cases[i].query);
+			if (!eq) {
+				for (size_t j = 0; j < cases[i].expected_values.size(); ++j) {
+					diag("  expected[%zu]: [%s]", j, cases[i].expected_values[j].c_str());
+				}
+				for (size_t j = 0; j < it->second.size(); ++j) {
+					diag("  got[%zu]     : [%s]", j, it->second[j].c_str());
+				}
+			}
+		} else {
+			ok(false, "[strict_pgsql_ident %d] cannot byte-compare (var missing or count mismatch)", i);
+		}
+	}
+}
+
 int main(int argc, char** argv) {
 	unsigned int p = 0;
 	p += arraysize(sql_mode);
@@ -258,6 +347,8 @@ int main(int argc, char** argv) {
 	p += arraysize(parsersql_pgsql_search_path);
 	p += arraysize(parsersql_pgsql_time_zone);
 	p *= 2;
+	p += arraysize(parsersql_function_call_strict) * 2;
+	p += arraysize(parsersql_pgsql_ident_strict) * 2;
 	plan(p);
 	TestParse(sql_mode, arraysize(sql_mode), "sql_mode");
 	TestParse(time_zone, arraysize(time_zone), "time_zone");
@@ -272,6 +363,8 @@ int main(int argc, char** argv) {
 	TestParse(parsersql_mysql_set_testing, arraysize(parsersql_mysql_set_testing), "mysql_set_testing");
 	TestParsePgsql(parsersql_pgsql_search_path, arraysize(parsersql_pgsql_search_path), "pgsql_search_path");
 	TestParsePgsql(parsersql_pgsql_time_zone, arraysize(parsersql_pgsql_time_zone), "pgsql_time_zone");
+	TestStrictFunctionCall(parsersql_function_call_strict, arraysize(parsersql_function_call_strict));
+	TestStrictPgsqlIdent(parsersql_pgsql_ident_strict, arraysize(parsersql_pgsql_ident_strict));
 
 	return exit_status();
 }

@@ -170,6 +170,55 @@ static std::string extract_paren_expr(const char* query, int query_len,
     return std::string(start, p);
 }
 
+// Extract the verbatim source text of a function-call AST node by paren-matching
+// from the function name in the original input. Used to avoid emit_function_call's
+// "name(arg, arg)" normalisation (which adds a space after every comma) so that the
+// SET walker preserves the exact source the user wrote, matching the regex-based
+// SET parsers (algorithms 0-2) byte-for-byte. Returns empty string if value_ptr is
+// not inside [query, query+query_len) or no balanced paren is found.
+static std::string extract_function_call_source(
+    const AstNode* node, const char* query, int query_len)
+{
+    if (!node || !node->value_ptr || node->value_len == 0) return "";
+    const char* qstart = query;
+    const char* qend = query + query_len;
+    if (node->value_ptr < qstart || node->value_ptr >= qend) return "";
+    const char* start = node->value_ptr;
+    const char* p = start + node->value_len;
+    while (p < qend && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
+    if (p >= qend || *p != '(') return "";
+    int depth = 0;
+    while (p < qend) {
+        if (*p == '\'' || *p == '"' || *p == '`') { skip_quoted_char(p, qend); }
+        else if (*p == '(') depth++;
+        else if (*p == ')') { depth--; if (depth == 0) { p++; break; } }
+        p++;
+    }
+    if (depth != 0) return "";
+    return std::string(start, p);
+}
+
+// Re-emit a delimited identifier ("name" in PG, `name` in MySQL) with its outer
+// quote chars restored. The AST stores value_ptr pointing inside the quotes and
+// value_len covering only the identifier content, so the surrounding quote chars
+// live at value_ptr-1 and value_ptr+value_len in the original query buffer.
+// Returns empty string if the node is not in-buffer or the surrounding chars
+// don't look like recognised quote chars.
+static std::string emit_delimited_ident_raw(
+    const AstNode* node, const char* query, int query_len)
+{
+    if (!node || !node->value_ptr || node->value_len == 0) return "";
+    const char* qstart = query;
+    const char* qend = query + query_len;
+    if (node->value_ptr <= qstart) return "";
+    if (node->value_ptr + node->value_len >= qend) return "";
+    char open_q = *(node->value_ptr - 1);
+    char close_q = *(node->value_ptr + node->value_len);
+    if (open_q != '"' && open_q != '`') return "";
+    if (open_q != close_q) return "";
+    return std::string(node->value_ptr - 1, node->value_ptr + node->value_len + 1);
+}
+
 // ---------------------------------------------------------------------------
 // Section 1: Digest adapter
 // ---------------------------------------------------------------------------
@@ -378,6 +427,27 @@ static std::string resolve_var_value(
             return extract_paren_expr(query, query_len, after);
         }
         return "";
+    }
+    // Function calls round-trip lossily through emit_function_call (it injects
+    // ", " between arguments regardless of the input). Reach back into the
+    // original query and copy the source verbatim instead. Matches the
+    // behaviour of the regex-based SET parsers used in algorithms 0-2.
+    if (rhs->type == NodeType::NODE_FUNCTION_CALL) {
+        std::string raw = extract_function_call_source(rhs, query, query_len);
+        if (!raw.empty()) return raw;
+    }
+    // Delimited identifiers (`"$user"`, `"MixedCase"`, `"sch-1"`) carry
+    // FLAG_IDENT_DELIMITED but value_ptr/value_len cover only the content
+    // between the quotes -- the emitter would re-emit the bare identifier,
+    // losing the delimiters that downstream validators need (e.g. the PG
+    // search_path validator distinguishes literal "$user" from the $user
+    // current-user substitution token, "MixedCase" from case-folded
+    // mixedcase, etc.). Splice the quotes back in from the original buffer.
+    if ((rhs->type == NodeType::NODE_IDENTIFIER ||
+         rhs->type == NodeType::NODE_COLUMN_REF) &&
+        (rhs->flags & FLAG_IDENT_DELIMITED)) {
+        std::string raw = emit_delimited_ident_raw(rhs, query, query_len);
+        if (!raw.empty()) return raw;
     }
     return emit_node_text<D>(rhs, arena);
 }
