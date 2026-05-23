@@ -345,7 +345,11 @@ bool validate_charset(MySQL_Session* session, int idx, int &_rc) {
 		//     major version (10.x, 11.x would otherwise pass an atoi() < 8 check).
 		const char *sv = myconn->mysql->server_version;
 		bool is_mariadb = (sv != NULL && strstr(sv, "MariaDB") != NULL);
-		if (charset >= 255 && (is_mariadb || atoi(sv) < 8)) {
+		// `atoi(NULL)` is undefined behavior; in practice `sv` should not be
+		// NULL here (validate_charset runs after a backend handshake has
+		// populated server_version), but the guard is essentially free.
+		int sv_major = (sv != NULL) ? atoi(sv) : 0;
+		if (charset >= 255 && (is_mariadb || sv_major < 8)) {
 			switch(mysql_thread___handle_unknown_charset) {
 				case HANDLE_UNKNOWN_CHARSET__DISCONNECT_CLIENT:
 					snprintf(msg,sizeof(msg),"Can't initialize character set %s", mysql_variables.client_get_value(session, idx));
