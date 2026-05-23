@@ -22,6 +22,7 @@ class MCP_Threads_Handler;
  * - reload_config: Reload configuration from disk/memory
  * - list_variables: List all available variables
  * - get_status: Get server status information
+ * - query: Execute constrained SQL against the admin/config database
  */
 class Config_Tool_Handler : public MCP_Tool_Handler {
 private:
@@ -49,6 +50,13 @@ private:
 	 * @return JSON with success status
 	 */
 	json handle_reload_config(const std::string& scope);
+
+	/**
+	 * @brief Execute constrained SQL against the ProxySQL admin/config DB
+	 * @param sql SQL statement
+	 * @return JSON with query result or error
+	 */
+	json handle_query(const std::string& sql);
 
 	/**
 	 * @brief List all configuration variables
