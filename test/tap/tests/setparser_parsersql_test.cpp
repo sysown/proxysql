@@ -85,14 +85,18 @@ static Test parsersql_pgsql_search_path[] = {
 // Pre-ParserSQL-1.0.3 these were parsed as `time = ZONE` and the rest of the
 // statement was dropped. The v1.0.3 fix recognizes "TIME ZONE" as the PG
 // alias for `SET TimeZone = ...` and walks the trailing expression.
-// NOTE: `INTERVAL '7' HOUR` is captured as `INTERVAL` only — the expression
-// parser does not yet consume the full interval modifier chain. The test
-// reflects the *current* observable behaviour.
+//
+// NOTE: `SET TIME ZONE INTERVAL '7' HOUR` is intentionally *not* covered
+// here. ParserSQL's expression parser does not yet consume the full
+// INTERVAL ... <unit> modifier chain — it currently captures just the
+// `INTERVAL` token. Asserting that as the expected output would lock in
+// incomplete-but-current behaviour and would flip the test red when the
+// parser is later fixed to capture the full interval expression. Add a
+// case here once ParserSQL grows full INTERVAL modifier support.
 static Test parsersql_pgsql_time_zone[] = {
   { "SET TIME ZONE 'UTC'",                 { Expected("timezone", {"UTC"}) } },
   { "SET TIME ZONE DEFAULT",               { Expected("timezone", {"DEFAULT"}) } },
   { "SET TIME ZONE '+05:30'",              { Expected("timezone", {"+05:30"}) } },
-  { "SET TIME ZONE INTERVAL '7' HOUR",     { Expected("timezone", {"INTERVAL"}) } },
 };
 
 static std::string normalize_value(const std::string& s) {
@@ -128,6 +132,17 @@ static bool maps_match(
 	return true;
 }
 
+// Join a vector of values into a single " | "-separated string for diag output.
+// Used by TestParse / TestParsePgsql when reporting expected-vs-actual mismatches.
+static std::string join_values_for_diag(const std::vector<std::string>& vals) {
+	std::string joined;
+	for (size_t j = 0; j < vals.size(); ++j) {
+		if (j) joined += " | ";
+		joined += vals[j];
+	}
+	return joined;
+}
+
 void TestParse(const Test* tests, int ntests, const std::string& title) {
 	for (int i = 0; i < ntests; i++) {
 		std::map<std::string, std::vector<std::string>> data;
@@ -138,7 +153,7 @@ void TestParse(const Test* tests, int ntests, const std::string& title) {
 		std::map<std::string, std::vector<std::string>> result = parsersql_parse_set_mysql(tests[i].query);
 
 		bool size_ok = (result.size() == data.size());
-		ok(size_ok, "[%s %d] Sizes match: %lu, %lu", title.c_str(), i, result.size(), data.size());
+		ok(size_ok, "[%s %d] Sizes match: %zu, %zu", title.c_str(), i, result.size(), data.size());
 		if (!size_ok) {
 			diag("  FAIL: sizes differ for query: %s", tests[i].query);
 		}
@@ -148,10 +163,10 @@ void TestParse(const Test* tests, int ntests, const std::string& title) {
 		if (!elem_ok) {
 			diag("  FAIL: elements differ for query: %s", tests[i].query);
 			for (auto& kv : result) {
-				diag("    result[%s] = %s", kv.first.c_str(), normalize_value(kv.second.empty() ? "" : kv.second[0]).c_str());
+				diag("    result[%s] = [%s]", kv.first.c_str(), join_values_for_diag(kv.second).c_str());
 			}
 			for (auto& kv : data) {
-				diag("    expected[%s] = %s", kv.first.c_str(), normalize_value(kv.second.empty() ? "" : kv.second[0]).c_str());
+				diag("    expected[%s] = [%s]", kv.first.c_str(), join_values_for_diag(kv.second).c_str());
 			}
 		}
 	}
@@ -169,7 +184,7 @@ void TestParsePgsql(const Test* tests, int ntests, const std::string& title) {
 		std::map<std::string, std::vector<std::string>> result = parsersql_parse_set_pgsql(tests[i].query);
 
 		bool size_ok = (result.size() == data.size());
-		ok(size_ok, "[%s %d] Sizes match: %lu, %lu", title.c_str(), i, result.size(), data.size());
+		ok(size_ok, "[%s %d] Sizes match: %zu, %zu", title.c_str(), i, result.size(), data.size());
 		if (!size_ok) {
 			diag("  FAIL: sizes differ for query: %s", tests[i].query);
 		}
@@ -179,20 +194,10 @@ void TestParsePgsql(const Test* tests, int ntests, const std::string& title) {
 		if (!elem_ok) {
 			diag("  FAIL: elements differ for query: %s", tests[i].query);
 			for (auto& kv : result) {
-				std::string joined;
-				for (size_t j = 0; j < kv.second.size(); j++) {
-					if (j) joined += " | ";
-					joined += kv.second[j];
-				}
-				diag("    result[%s] = [%s]", kv.first.c_str(), joined.c_str());
+				diag("    result[%s] = [%s]", kv.first.c_str(), join_values_for_diag(kv.second).c_str());
 			}
 			for (auto& kv : data) {
-				std::string joined;
-				for (size_t j = 0; j < kv.second.size(); j++) {
-					if (j) joined += " | ";
-					joined += kv.second[j];
-				}
-				diag("    expected[%s] = [%s]", kv.first.c_str(), joined.c_str());
+				diag("    expected[%s] = [%s]", kv.first.c_str(), join_values_for_diag(kv.second).c_str());
 			}
 		}
 	}

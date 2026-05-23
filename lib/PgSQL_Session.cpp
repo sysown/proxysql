@@ -4513,7 +4513,7 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 		for (auto it = std::begin(set); it != std::end(set); ++it) {
 			std::string var = it->first;
 			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET variable %s\n", var.c_str());
-			if (it->second.size() < 1 || it->second.size() > 2) {
+			if (it->second.size() < 1) {
 				// error not enough arguments
 				string query_str = string((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
 				string digest_str = string(CurrentQuery.get_digest_text());
@@ -4532,7 +4532,18 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 				return false;
 			}
 
+			// PostgreSQL allows multi-value lists for some variables, notably
+			// search_path and datestyle (e.g. `SET search_path TO "$user", public`).
+			// ParserSQL v1.0.3 captures every value as a separate sibling; here
+			// we collapse them into the comma-separated form PG itself uses for
+			// these parameters before handing to the per-variable validator and
+			// tracker. Single-value SETs hit this loop with size()==1 and take
+			// just it->second.front() (unchanged behaviour).
 			std::string value1 = it->second.front();
+			for (size_t vi = 1; vi < it->second.size(); ++vi) {
+				value1 += ", ";
+				value1 += it->second[vi];
+			}
 			if (std::find(pgsql_critical_variables.begin(), pgsql_critical_variables.end(), var) != pgsql_critical_variables.end() ||
 				pgsql_other_variables.find(var) != pgsql_other_variables.end()) {
 
