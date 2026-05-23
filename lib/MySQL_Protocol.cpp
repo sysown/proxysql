@@ -2295,6 +2295,50 @@ void MySQL_Protocol::PPHR_sha2full(
 	}
 }
 
+void MySQL_Protocol::PPHR_passthrough_init(MyProt_tmp_auth_vars& vars1) {
+	// Stage 0: first call — client just sent the HandshakeResponse with a
+	// scrambled password. Reply with AuthMoreData{0x04} so the client
+	// follows up with its cleartext (under TLS or RSA-encrypted per the
+	// caching_sha2_password protocol).
+	if ((*myds)->switching_auth_stage == 0) {
+		const unsigned char perform_full_authentication = '\4';
+		generate_one_byte_pkt(perform_full_authentication);
+		(*myds)->pkt_sid++;
+		(*myds)->switching_auth_type = AUTH_MYSQL_CACHING_SHA2_PASSWORD;
+		(*myds)->switching_auth_stage = 4;
+		(*myds)->auth_in_progress = 1;
+		return;
+	}
+
+	// Stage 5: client has replied with the cleartext password (now in
+	// vars1.pass). Stash it on the data stream so the backend-probe
+	// session handler can use it, and transition the session into
+	// AUTHENTICATING_BACKEND_FOR_CLIENT. The verifier (caller) returns
+	// false; the session loop will pick up the new state and drive the
+	// probe to completion (or generic-ERR teardown on failure).
+	if ((*myds)->switching_auth_stage == 5) {
+		if ((*myds)->passthrough_cleartext) {
+			memset((*myds)->passthrough_cleartext, 0, strlen((*myds)->passthrough_cleartext));
+			free((*myds)->passthrough_cleartext);
+			(*myds)->passthrough_cleartext = NULL;
+		}
+		if (vars1.pass && vars1.pass_len > 0) {
+			(*myds)->passthrough_cleartext = strdup(reinterpret_cast<const char*>(vars1.pass));
+		} else {
+			// Client sent an empty cleartext — pass-through cannot succeed
+			// (the backend would reject); leave cleartext NULL and let the
+			// session handler fail the auth with a generic ERR.
+			(*myds)->passthrough_cleartext = strdup("");
+		}
+		(*myds)->auth_in_progress = 1;
+		(*myds)->sess->set_status(AUTHENTICATING_BACKEND_FOR_CLIENT);
+		return;
+	}
+
+	// Any other stage is a protocol bug; assert in debug builds.
+	assert(0);
+}
+
 void MySQL_Protocol::PPHR_SetConnAttrs(MyProt_tmp_auth_vars& vars1, account_details_t& attr1) {
 	MySQL_Connection *myconn = NULL;
 	myconn=sess->client_myds->myconn;
@@ -2403,11 +2447,13 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 	// opt-in), look up the in-memory cache. On hit, replace vars1.password
 	// with the learned cleartext so the existing verification path below
 	// runs against it as if mysql_users had stored a cleartext password.
+	// On miss, dispatch to PPHR_passthrough_init which drives the
+	// caching_sha2_password full-auth exchange and ultimately schedules a
+	// backend probe.
 	//
-	// Unknown-user fallback (no row in mysql_users) is dispatched in a
-	// separate commit that introduces the AUTHENTICATING_BACKEND_FOR_CLIENT
-	// state and the protocol helpers; until then the cache stays empty so
-	// the hit branch below is effectively dead code.
+	// Unknown-user fallback (no row in mysql_users) is wired in a later
+	// commit that synthesizes routing/schema defaults from globals; until
+	// then this only covers the empty-password row case.
 	if (mysql_thread___passthrough_auth_enabled
 		&& mysql_thread___passthrough_auth_empty_password
 		&& auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD
@@ -2424,6 +2470,12 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 		if (GloMyPTAuthCache->lookup(std::string((const char*)vars1.user), cleartext, ttl_s)) {
 			free(vars1.password);
 			vars1.password = strdup(cleartext.c_str());
+		} else {
+			// Cache miss → drive the caching_sha2_password full-auth
+			// exchange so the client emits its cleartext, which we will
+			// then probe against the backend.
+			PPHR_passthrough_init(vars1);
+			return ret; // not done yet; protocol state machine continues
 		}
 	}
 
