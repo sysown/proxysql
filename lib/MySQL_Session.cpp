@@ -6522,8 +6522,19 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				nq.erase(pos + 1); // remove trailing spaces and semicolumns
 			}
 			// detect MariaDB SET STATEMENT ... FOR syntax
-			// pass through to backend without hostgroup locking
-			if (strncasecmp(nq.c_str(), (char *)"SET STATEMENT ", 14) == 0 && strcasestr(nq.c_str(), (char *)" FOR ")) {
+			// pass through to backend without hostgroup locking.
+			//
+			// Use 'dig' (the digest text) for the keyword check rather than
+			// 'nq' (the raw query). 'nq' preserves the client's original
+			// whitespace, so a multi-line "SET STATEMENT max_statement_time
+			// = 300 FOR\n   SELECT ..." has '\n' immediately after 'FOR' and
+			// strcasestr(nq, " FOR ") never matches — falling through to
+			// unable_to_parse_set_statement() and locking the hostgroup.
+			// 'dig' is already whitespace-normalised by the digest builder,
+			// so " FOR " always has a space on both sides regardless of how
+			// the client formatted the query. See issue #5686 follow-up and
+			// the customer report on PR #5708.
+			if (strncasecmp(dig, (char *)"SET STATEMENT ", 14) == 0 && strcasestr(dig, (char *)" FOR ")) {
 				return false;
 			}
 			if (
