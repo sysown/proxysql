@@ -1717,7 +1717,7 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 		}
 	};
 
-	auto fail_session = [&]() -> int {
+	auto fail_session = [&](const char* reason) -> int {
 		scrub_cleartext();
 		const uint8_t _pid = (client_myds ? client_myds->pkt_sid : 0) + 1;
 		if (client_myds) {
@@ -1726,13 +1726,20 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 				(char*)"Access denied for user", true);
 			client_myds->DSS = STATE_QUERY_SENT_NET;
 		}
+		// Audit log — failure (spec §7.4). Generic client-facing ERR;
+		// the precise reason is captured in the audit entry only.
+		if (GloMyLogger) {
+			GloMyLogger->log_audit_entry(
+				PROXYSQL_MYSQL_AUTH_PASSTHROUGH_FAIL, this, NULL,
+				const_cast<char*>(reason ? reason : "passthrough auth failed"));
+		}
 		return -1;
 	};
 
 	if (username == NULL || username[0] == '\0'
 		|| cleartext == NULL || cleartext[0] == '\0'
 		|| GloMyPTAuthCache == NULL) {
-		return fail_session();
+		return fail_session("missing username or cleartext");
 	}
 
 	// Global in-flight probe cap (spec §7.3). Sessions that lose the race
@@ -1742,7 +1749,7 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 	// every return path below (success and failure).
 	if (!GloMyPTAuthCache->try_acquire_inflight(
 			mysql_thread___passthrough_auth_max_inflight_probes)) {
-		return fail_session();
+		return fail_session("inflight probe cap reached");
 	}
 	struct InflightGuard {
 		MySQL_Passthrough_Auth_Cache* cache;
@@ -1758,16 +1765,16 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 
 	MyHGC *myhgc = MyHGM->MyHGC_lookup(target_hg);
 	if (myhgc == NULL) {
-		return fail_session();
+		return fail_session("no hostgroup");
 	}
 	MySrvC *mysrvc = myhgc->get_random_MySrvC(NULL, 0, -1, this);
 	if (mysrvc == NULL || mysrvc->address == NULL) {
-		return fail_session();
+		return fail_session("no healthy backend");
 	}
 
 	MYSQL *probe = mysql_init(NULL);
 	if (probe == NULL) {
-		return fail_session();
+		return fail_session("mysql_init failed");
 	}
 	unsigned int timeout_s = mysql_thread___connect_timeout_server_max / 1000;
 	if (timeout_s == 0) timeout_s = 1;
@@ -1780,7 +1787,7 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 	mysql_close(probe);
 
 	if (!probe_ok) {
-		return fail_session();
+		return fail_session("backend rejected probe");
 	}
 
 	// Probe succeeded — cache the learned credential.
@@ -1802,6 +1809,12 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 	client_myds->DSS = STATE_CLIENT_HANDSHAKE;
 	client_myds->myprot.generate_pkt_OK(true, NULL, NULL, _pid, 0, 0, 2, 0, NULL);
 	client_myds->DSS = STATE_CLIENT_AUTH_OK;
+
+	// Audit log — success (spec §7.4).
+	if (GloMyLogger) {
+		GloMyLogger->log_audit_entry(
+			PROXYSQL_MYSQL_AUTH_PASSTHROUGH_OK, this, NULL);
+	}
 
 	set_status(WAITING_CLIENT_DATA);
 	return 0;

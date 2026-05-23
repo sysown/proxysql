@@ -553,6 +553,8 @@ uint64_t MySQL_Event::write(LogBuffer *f, MySQL_Session *sess) {
 		case PROXYSQL_MYSQL_AUTH_ERR:
 		case PROXYSQL_MYSQL_AUTH_CLOSE:
 		case PROXYSQL_MYSQL_AUTH_QUIT:
+		case PROXYSQL_MYSQL_AUTH_PASSTHROUGH_OK:
+		case PROXYSQL_MYSQL_AUTH_PASSTHROUGH_FAIL:
 		case PROXYSQL_MYSQL_INITDB:
 		case PROXYSQL_ADMIN_AUTH_OK:
 		case PROXYSQL_ADMIN_AUTH_ERR:
@@ -625,6 +627,12 @@ void MySQL_Event::write_auth(LogBuffer *f, MySQL_Session *sess) {
 			break;
 		case PROXYSQL_MYSQL_AUTH_QUIT:
 			j["event"]="MySQL_Client_Quit";
+			break;
+		case PROXYSQL_MYSQL_AUTH_PASSTHROUGH_OK:
+			j["event"]="MySQL_Client_Connect_Passthrough_OK";
+			break;
+		case PROXYSQL_MYSQL_AUTH_PASSTHROUGH_FAIL:
+			j["event"]="MySQL_Client_Connect_Passthrough_FAIL";
 			break;
 		case PROXYSQL_MYSQL_INITDB:
 			j["event"]="MySQL_Client_Init_DB";
