@@ -105,11 +105,15 @@ static int probe_pgsql_oversize(const char* host, int port, uint32_t declared_le
 		diag("PgSQL probe: connect to %s:%d failed: %s", host, port, strerror(errno));
 		return -1;
 	}
-	// PgSQL_Data_Stream::read_from_net consumes 5 bytes on the first read:
-	//   byte 0     : message type (0 selects the startup-style length layout)
-	//   bytes 1..4 : big-endian 32-bit declared length
+	// PgSQL_Data_Stream::read_from_net consumes 5 bytes on the first read.
+	// The parser uses byte 0 as a message type: when type8 != 0 it reads
+	// bytes 1..4 as the big-endian length; when type8 == 0 (startup-style)
+	// it reads bytes 0..3 as the length, which makes the high byte always
+	// zero and silently caps the declared length at 0x00FFFFFF. We need
+	// the parser to read OUR full declared length, so we set type8 to a
+	// non-zero byte and place the 32-bit length in bytes 1..4.
 	unsigned char hdr[5];
-	hdr[0] = 0;
+	hdr[0] = 'X';
 	hdr[1] = (declared_len >> 24) & 0xff;
 	hdr[2] = (declared_len >> 16) & 0xff;
 	hdr[3] = (declared_len >> 8) & 0xff;
