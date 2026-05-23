@@ -182,10 +182,10 @@ if [[ "${PROXYSQL40:-}" == "1" ]]; then
         if [[ -f "${plugin_path}" ]]; then
             if file "${plugin_path}" | grep -q 'ELF 64-bit.*shared object'; then
                 echo "  OK   ${plugin} (valid ELF shared library)"
-                if nm -D "${plugin_path}" 2>/dev/null | grep -q 'proxysql_plugin_descriptor_v1'; then
+                if nm -D --defined-only "${plugin_path}" 2>/dev/null | grep -q 'proxysql_plugin_descriptor_v1'; then
                     echo "  OK   ${plugin} (exports proxysql_plugin_descriptor_v1)"
                 else
-                    echo "  WARN ${plugin} (no proxysql_plugin_descriptor_v1 symbol)" >&2
+                    echo "  FAIL ${plugin} (no proxysql_plugin_descriptor_v1 symbol)" >&2
                     ALL_OK=1
                 fi
             else

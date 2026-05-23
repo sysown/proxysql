@@ -48,7 +48,7 @@ fi
 # images.  PROXYSQL40=1 builds and packages all v4.0 plugins — there
 # is no separate PROXYSQLGENAI flag.
 if [[ "${PROXYSQL40:-}" == "1" ]]; then
-    if ! pkg-config --exists protobuf 2>/dev/null; then
+    if ! pkg-config --exists protobuf 2>/dev/null && ! pkg-config --exists libprotobuf-c 2>/dev/null; then
         echo "==> Installing protobuf-devel (required for PROXYSQL40=1 mysqlx plugin build)"
         if command -v zypper >/dev/null 2>&1; then
             zypper install -y libprotobuf-c-devel || zypper install -y protobuf-devel
@@ -153,10 +153,10 @@ if [[ "${PROXYSQL40:-}" == "1" ]]; then
         if [[ -f "${plugin}" ]]; then
             if file "${plugin}" | grep -q 'ELF 64-bit.*shared object'; then
                 echo "  OK   ${plugin} (valid ELF shared library)"
-                if nm -D "${plugin}" 2>/dev/null | grep -q 'proxysql_plugin_descriptor_v1'; then
+                if nm -D --defined-only "${plugin}" 2>/dev/null | grep -q 'proxysql_plugin_descriptor_v1'; then
                     echo "  OK   ${plugin} (exports proxysql_plugin_descriptor_v1)"
                 else
-                    echo "  WARN ${plugin} (no proxysql_plugin_descriptor_v1 symbol)" >&2
+                    echo "  FAIL ${plugin} (no proxysql_plugin_descriptor_v1 symbol)" >&2
                     ALL_OK=1
                 fi
             else
