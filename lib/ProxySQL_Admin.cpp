@@ -1286,6 +1286,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_mysql_gtid_executed=false;
 	bool stats_mysql_client_host_cache=false;
 	bool stats_mysql_client_host_cache_reset=false;
+	bool stats_mysql_passthrough_auth_cache=false;
 	bool stats_pgsql_client_host_cache = false;
 	bool stats_pgsql_client_host_cache_reset = false;
 	bool stats_tls_certificates=false;
@@ -1466,6 +1467,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_mysql_client_host_cache=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_client_host_cache_reset"))
 		{ stats_mysql_client_host_cache_reset=true; refresh=true; }
+	if (strstr(query_no_space,"stats_mysql_passthrough_auth_cache"))
+		{ stats_mysql_passthrough_auth_cache=true; refresh=true; }
 	if (strstr(query_no_space, "stats_pgsql_client_host_cache"))
 		{ stats_pgsql_client_host_cache = true; refresh = true; }
 	if (strstr(query_no_space, "stats_pgsql_client_host_cache_reset"))
@@ -1730,6 +1733,9 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		}
 		if (stats_mysql_client_host_cache_reset) {
 			stats___mysql_client_host_cache(true);
+		}
+		if (stats_mysql_passthrough_auth_cache) {
+			stats___mysql_passthrough_auth_cache();
 		}
 		if (stats_pgsql_client_host_cache) {
 			stats___pgsql_client_host_cache(false);
