@@ -66,6 +66,11 @@ static StrictPgsqlCase parsersql_pgsql_ident_strict[] = {
   { "SET search_path TO \"$user\", public",   "search_path", { "\"$user\"", "public" } },
   { "SET search_path = \"sch-1\", \"sch 2\"",  "search_path", { "\"sch-1\"", "\"sch 2\"" } },
   { "SET search_path = pg_catalog, \"$user\"", "search_path", { "pg_catalog", "\"$user\"" } },
+  // PG allows $ as an identifier continuation char (per PG lexical-syntax docs).
+  // ParserSQL 1.0.7 fixed the tokenizer; before, schema$1 truncated to "schema"
+  // and the trailing $1 fell through as a placeholder.
+  { "SET search_path = schema$1",             "search_path", { "schema$1" } },
+  { "SET search_path = my$schema$2_name",     "search_path", { "my$schema$2_name" } },
 };
 
 // ----------------------------------------------------------------------------

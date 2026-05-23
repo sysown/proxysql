@@ -116,10 +116,11 @@ int main(int argc, char** argv) {
 	// original #4072 crash is *not* recurring -- proxysql stays up -- but
 	// the `add_row_count == fetched_row_count` assertion below fails.
 	//
-	// 9us instead of 10us shaves ~10% off the minimum-sleep floor (~20s of
-	// usleep at 10us -> ~18s at 9us) to buy throughput margin without
-	// abandoning the slow-consumer reproducer. If this starts flaking again,
-	// the real fix space is:
+	// 8us instead of 10us shaves ~20% off the minimum-sleep floor (~20s of
+	// usleep at 10us -> ~16s at 8us) to buy throughput margin without
+	// abandoning the slow-consumer reproducer. (Earlier attempt at 9us was
+	// not enough headroom and re-flaked on slow CI runners.) If this starts
+	// flaking again, the real fix space is:
 	//   1. Bump backend net_write_timeout in test/infra/infra-dbdeployer-mysql57/
 	//      conf (decouples the test from the backend default).
 	//   2. Investigate whether proxysql's warning-logging path has regressed
@@ -130,7 +131,7 @@ int main(int argc, char** argv) {
 	//      docstring's stated intent of "does not crash".
 	while ((row = mysql_fetch_row(mysql_result))) {
 		fetched_row_count++;
-		usleep(9);
+		usleep(8);
 	}
 	
 	int _errorno = mysql_errno(proxysql);

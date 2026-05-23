@@ -107,6 +107,14 @@ Reasons:
 
 Significant audits / bumps:
 
+- **v1.0.7 (2026-05-23)** — Tokenizer: allow `$` as PG identifier
+  continuation char (per PG lexical-syntax docs). Before, `SET
+  search_path = schema$1` truncated to `schema` and `$1` fell through
+  as a placeholder, breaking ProxySQL's `set_parser_algorithm=3` path
+  in `pgsql-set_parameter_validation_test-t` (case 169). First-char
+  constraint preserved (`$<word>` at token start still emits
+  `TK_ERROR`); MySQL behaviour unchanged.
+  ([PR #43](https://github.com/ProxySQL/ParserSQL/pull/43))
 - **v1.0.6 (2026-05-23)** — Hot-fix on top of v1.0.5: `parse_set()`'s
   PARTIAL → ERROR downgrade was too aggressive for multi-assignment
   SETs where one element is malformed alongside well-formed ones
