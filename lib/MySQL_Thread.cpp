@@ -488,6 +488,18 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"select_version_forwarding",
 	(char *)"keep_multiplexing_variables",
 	(char *)"default_authentication_plugin",
+	(char *)"passthrough_auth_enabled",
+	(char *)"passthrough_auth_empty_password",
+	(char *)"passthrough_auth_unknown_users",
+	(char *)"passthrough_auth_require_tls",
+	(char *)"passthrough_default_hg",
+	(char *)"passthrough_default_schema",
+	(char *)"passthrough_auth_cache_ttl_s",
+	(char *)"passthrough_auth_max_inflight_probes",
+	(char *)"passthrough_auth_username_pattern",
+	(char *)"passthrough_auth_max_failures_per_user",
+	(char *)"passthrough_auth_max_failures_per_ip",
+	(char *)"passthrough_auth_failure_window_s",
 	(char *)"kill_backend_connection_when_disconnect",
 	(char *)"client_session_track_gtid",
 	(char *)"sessions_sort",
@@ -1435,6 +1447,18 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.proxy_protocol_networks = strdup((char *)"");
 	variables.default_authentication_plugin=strdup((char *)"mysql_native_password");
 	variables.default_authentication_plugin_int = 0; // mysql_native_password
+	variables.passthrough_auth_enabled = false;
+	variables.passthrough_auth_empty_password = true;
+	variables.passthrough_auth_unknown_users = false;
+	variables.passthrough_auth_require_tls = true;
+	variables.passthrough_default_hg = 0;
+	variables.passthrough_default_schema = strdup((char *)"");
+	variables.passthrough_auth_cache_ttl_s = 0;
+	variables.passthrough_auth_max_inflight_probes = 100;
+	variables.passthrough_auth_username_pattern = strdup((char *)"");
+	variables.passthrough_auth_max_failures_per_user = 3;
+	variables.passthrough_auth_max_failures_per_ip = 10;
+	variables.passthrough_auth_failure_window_s = 60;
 #ifdef DEBUG
 	variables.session_debug=true;
 #endif /*debug */
@@ -1674,6 +1698,8 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 	if (!strcmp(name,"resolution_family")) return strdup(variables.resolution_family);
 	if (!strcmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
 	if (!strcmp(name,"default_authentication_plugin")) return strdup(variables.default_authentication_plugin);
+	if (!strcmp(name,"passthrough_default_schema")) return strdup(variables.passthrough_default_schema ? variables.passthrough_default_schema : "");
+	if (!strcmp(name,"passthrough_auth_username_pattern")) return strdup(variables.passthrough_auth_username_pattern ? variables.passthrough_auth_username_pattern : "");
 	if (!strcmp(name,"proxy_protocol_networks")) return strdup(variables.proxy_protocol_networks);
 
 	// LCOV_EXCL_START
@@ -1832,6 +1858,8 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	if (!strcasecmp(name,"resolution_family")) return strdup(variables.resolution_family);
 	if (!strcasecmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
 	if (!strcasecmp(name,"default_authentication_plugin")) return strdup(variables.default_authentication_plugin);
+	if (!strcasecmp(name,"passthrough_default_schema")) return strdup(variables.passthrough_default_schema ? variables.passthrough_default_schema : "");
+	if (!strcasecmp(name,"passthrough_auth_username_pattern")) return strdup(variables.passthrough_auth_username_pattern ? variables.passthrough_auth_username_pattern : "");
 	if (!strcasecmp(name,"proxy_protocol_networks")) return strdup(variables.proxy_protocol_networks);
 	if (!strcasecmp(name, "interfaces")) {
 		return strdup((strlen(variables.interfaces) == 0) ? "0.0.0.0:6033" : variables.interfaces);
@@ -2266,6 +2294,16 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 			return false;
 		}
 	}
+	if (!strcasecmp(name,"passthrough_default_schema")) {
+		if (variables.passthrough_default_schema) free(variables.passthrough_default_schema);
+		variables.passthrough_default_schema = strdup(vallen ? value : "");
+		return true;
+	}
+	if (!strcasecmp(name,"passthrough_auth_username_pattern")) {
+		if (variables.passthrough_auth_username_pattern) free(variables.passthrough_auth_username_pattern);
+		variables.passthrough_auth_username_pattern = strdup(vallen ? value : "");
+		return true;
+	}
 	if (!strcasecmp(name,"resolution_family")) {
 		if (mysql_resolution_family_is_valid(value)) {
 			free(variables.resolution_family);
@@ -2556,6 +2594,11 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 #ifdef DEBUG
 		VariablesPointers_bool["session_debug"] = make_tuple(&variables.session_debug, false);
 #endif /* DEBUG */
+		// pass-through authentication
+		VariablesPointers_bool["passthrough_auth_enabled"]        = make_tuple(&variables.passthrough_auth_enabled,        false);
+		VariablesPointers_bool["passthrough_auth_empty_password"] = make_tuple(&variables.passthrough_auth_empty_password, false);
+		VariablesPointers_bool["passthrough_auth_unknown_users"]  = make_tuple(&variables.passthrough_auth_unknown_users,  false);
+		VariablesPointers_bool["passthrough_auth_require_tls"]    = make_tuple(&variables.passthrough_auth_require_tls,    false);
 		// variables with special variable == true
 		// the input validation for these variables MUST be EXPLICIT
 		VariablesPointers_bool["have_compress"]      = make_tuple(&variables.have_compress,      true);
@@ -2632,6 +2675,13 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["throttle_connections_per_sec_to_hostgroup"] = make_tuple(&variables.throttle_connections_per_sec_to_hostgroup, 1, 100*1000*1000, false);
 		VariablesPointers_int["throttle_max_bytes_per_second_to_client"]   = make_tuple(&variables.throttle_max_bytes_per_second_to_client,   0,    2147483647, false);
 		VariablesPointers_int["throttle_ratio_server_to_client"]           = make_tuple(&variables.throttle_ratio_server_to_client,           0,           100, false);
+		// pass-through authentication
+		VariablesPointers_int["passthrough_default_hg"]                    = make_tuple(&variables.passthrough_default_hg,                    0,    1024*1024, false);
+		VariablesPointers_int["passthrough_auth_cache_ttl_s"]              = make_tuple(&variables.passthrough_auth_cache_ttl_s,              0, 7*24*3600,    false);
+		VariablesPointers_int["passthrough_auth_max_inflight_probes"]      = make_tuple(&variables.passthrough_auth_max_inflight_probes,      1,      10000, false);
+		VariablesPointers_int["passthrough_auth_max_failures_per_user"]    = make_tuple(&variables.passthrough_auth_max_failures_per_user,    1,    1000000, false);
+		VariablesPointers_int["passthrough_auth_max_failures_per_ip"]      = make_tuple(&variables.passthrough_auth_max_failures_per_ip,      1,    1000000, false);
+		VariablesPointers_int["passthrough_auth_failure_window_s"]         = make_tuple(&variables.passthrough_auth_failure_window_s,         1,    7*24*3600, false);
 		// backend management
 		VariablesPointers_int["connpoll_reset_queue_length"] = make_tuple(&variables.connpoll_reset_queue_length, 0,           10000, false);
 		VariablesPointers_int["default_max_latency_ms"]      = make_tuple(&variables.default_max_latency_ms,      0, 20*24*3600*1000, false);
@@ -3130,6 +3180,8 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.server_version) free(variables.server_version);
 	if (variables.keep_multiplexing_variables) free(variables.keep_multiplexing_variables);
 	if (variables.default_authentication_plugin) free(variables.default_authentication_plugin);
+	if (variables.passthrough_default_schema) free(variables.passthrough_default_schema);
+	if (variables.passthrough_auth_username_pattern) free(variables.passthrough_auth_username_pattern);
 	if (variables.proxy_protocol_networks) free(variables.proxy_protocol_networks);
 	if (variables.firewall_whitelist_errormsg) free(variables.firewall_whitelist_errormsg);
 	if (variables.init_connect) free(variables.init_connect);
@@ -3263,6 +3315,8 @@ MySQL_Thread::~MySQL_Thread() {
 	if (mysql_thread___server_version) { free(mysql_thread___server_version); mysql_thread___server_version=NULL; }
 	if (mysql_thread___keep_multiplexing_variables) { free(mysql_thread___keep_multiplexing_variables); mysql_thread___keep_multiplexing_variables=NULL; }
 	if (mysql_thread___default_authentication_plugin) { free(mysql_thread___default_authentication_plugin); mysql_thread___default_authentication_plugin=NULL; }
+	if (mysql_thread___passthrough_default_schema) { free(mysql_thread___passthrough_default_schema); mysql_thread___passthrough_default_schema=NULL; }
+	if (mysql_thread___passthrough_auth_username_pattern) { free(mysql_thread___passthrough_auth_username_pattern); mysql_thread___passthrough_auth_username_pattern=NULL; }
 	if (mysql_thread___proxy_protocol_networks) { free(mysql_thread___proxy_protocol_networks); mysql_thread___proxy_protocol_networks=NULL; }
 	if (mysql_thread___firewall_whitelist_errormsg) { free(mysql_thread___firewall_whitelist_errormsg); mysql_thread___firewall_whitelist_errormsg=NULL; }
 	if (mysql_thread___init_connect) { free(mysql_thread___init_connect); mysql_thread___init_connect=NULL; }
@@ -4726,6 +4780,18 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_CHAR(proxy_protocol_networks);
 	REFRESH_VARIABLE_CHAR(default_authentication_plugin);
 	mysql_thread___default_authentication_plugin_int = GloMTH->variables.default_authentication_plugin_int;
+	REFRESH_VARIABLE_BOOL(passthrough_auth_enabled);
+	REFRESH_VARIABLE_BOOL(passthrough_auth_empty_password);
+	REFRESH_VARIABLE_BOOL(passthrough_auth_unknown_users);
+	REFRESH_VARIABLE_BOOL(passthrough_auth_require_tls);
+	REFRESH_VARIABLE_INT(passthrough_default_hg);
+	REFRESH_VARIABLE_INT(passthrough_auth_cache_ttl_s);
+	REFRESH_VARIABLE_INT(passthrough_auth_max_inflight_probes);
+	REFRESH_VARIABLE_INT(passthrough_auth_max_failures_per_user);
+	REFRESH_VARIABLE_INT(passthrough_auth_max_failures_per_ip);
+	REFRESH_VARIABLE_INT(passthrough_auth_failure_window_s);
+	REFRESH_VARIABLE_CHAR(passthrough_default_schema);
+	REFRESH_VARIABLE_CHAR(passthrough_auth_username_pattern);
 	mysql_thread___server_capabilities=GloMTH->get_variable_uint32((char *)"server_capabilities");
 	REFRESH_VARIABLE_INT(handle_unknown_charset);
 	REFRESH_VARIABLE_INT(poll_timeout);
