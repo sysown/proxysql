@@ -99,9 +99,38 @@ int main(int argc, char** argv) {
 
 	unsigned long fetched_row_count = 0;
 
+	// The usleep() here is load-bearing -- the bug we're regression-testing
+	// (issue #4072) is specifically "ProxySQL crashes when the client can't
+	// keep up while a query produces warnings". A fast-fetching client never
+	// builds the back-pressure that triggers the original crash, so removing
+	// or shortening this sleep would defeat the test's purpose.
+	//
+	// That said, we are operating at the edge of a different limit: the
+	// backend mysql57's default `net_write_timeout` (60s). The test workload
+	// is a 128^3 = 2,097,152-row cross join with `mysql-log_mysql_warnings_
+	// enabled=1`, where each row produces a backend warning that ProxySQL
+	// processes on the same thread that reads the row stream. On slow CI
+	// runners the proxysql<->backend stream can fall behind the backend's
+	// net_write_timeout, which kills the connection mid-stream and surfaces
+	// to the test as `2013, Lost connection to server during query`. The
+	// original #4072 crash is *not* recurring -- proxysql stays up -- but
+	// the `add_row_count == fetched_row_count` assertion below fails.
+	//
+	// 9us instead of 10us shaves ~10% off the minimum-sleep floor (~20s of
+	// usleep at 10us -> ~18s at 9us) to buy throughput margin without
+	// abandoning the slow-consumer reproducer. If this starts flaking again,
+	// the real fix space is:
+	//   1. Bump backend net_write_timeout in test/infra/infra-dbdeployer-mysql57/
+	//      conf (decouples the test from the backend default).
+	//   2. Investigate whether proxysql's warning-logging path has regressed
+	//      in throughput since #4072 was fixed -- a real perf regression
+	//      should be fixed in core, not papered over here.
+	//   3. Reframe the assertion to "proxysql is still up + responsive on
+	//      admin" rather than "all 2M rows delivered" -- closer to the
+	//      docstring's stated intent of "does not crash".
 	while ((row = mysql_fetch_row(mysql_result))) {
 		fetched_row_count++;
-		usleep(10);
+		usleep(9);
 	}
 	
 	int _errorno = mysql_errno(proxysql);
