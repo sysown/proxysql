@@ -175,8 +175,11 @@ int main(int /*argc*/, char** /*argv*/) {
 		BAIL_OUT("Could not set pgsql-monitor_local_dns_cache_refresh_interval");
 		return exit_status();
 	}
-	admin_exec(admin, "SET pgsql-monitor_local_dns_cache_ttl=5000");
-	admin_exec(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
+	if (!admin_exec(admin, "SET pgsql-monitor_local_dns_cache_ttl=5000") ||
+	    !admin_exec(admin, "LOAD PGSQL VARIABLES TO RUNTIME")) {
+		BAIL_OUT("Could not apply pgsql DNS cache runtime settings");
+		return exit_status();
+	}
 
 	// Confirm the new values actually landed in runtime (regression for the
 	// "names commented out in pgsql_thread_variables_names" bug fixed during
@@ -203,10 +206,17 @@ int main(int /*argc*/, char** /*argv*/) {
 	// a broken connect-path.  Rule id 99999 is well outside ranges used
 	// by the test infra; we delete it on the way out.
 	admin_exec(admin, "DELETE FROM pgsql_query_rules WHERE rule_id=99999");
-	admin_exec(admin,
-		"INSERT INTO pgsql_query_rules "
-		"(rule_id,active,username,destination_hostgroup,apply) "
-		"VALUES (99999,1,'testuser',999,1)");
+	{
+		// Use the runtime test username so the rule actually matches the
+		// connections from backend_connect() / hammer_proxy(); a hardcoded
+		// 'testuser' would silently bypass hostgroup 999 whenever the infra
+		// uses a different user.
+		std::stringstream q;
+		q << "INSERT INTO pgsql_query_rules "
+		  << "(rule_id,active,username,destination_hostgroup,apply) "
+		  << "VALUES (99999,1,'" << cl.pgsql_username << "',999,1)";
+		admin_exec(admin, q.str());
+	}
 	admin_exec(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
 	// Give the resolver loop time to drop any orphaned bookkeeping entry.
 	sleep_seconds(2);
