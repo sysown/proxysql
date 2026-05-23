@@ -439,15 +439,24 @@ static std::map<std::string, std::vector<std::string>> walk_set_stmt(
             }
             case NodeType::NODE_VAR_ASSIGNMENT: {
                 const AstNode* target = child->first_child;
-                const AstNode* rhs = target ? target->next_sibling : nullptr;
                 if (!target || target->type != NodeType::NODE_VAR_TARGET) break;
 
                 std::string var_name = normalize_set_var_name(
                     emit_node_text<D>(target, arena));
-                std::string val = finalize_var_value(
-                    resolve_var_value<D>(target, rhs, query, query_len, arena));
 
-                result[var_name] = {val};
+                // Collect every RHS sibling of the target. For MySQL there is
+                // always exactly one. For PostgreSQL, multi-value lists such
+                // as `SET search_path TO 'a', 'b', 'c'` produce one VAR_TARGET
+                // followed by N value-expression siblings (see set_parser.h).
+                std::vector<std::string> vals;
+                for (const AstNode* rhs = target->next_sibling;
+                     rhs; rhs = rhs->next_sibling) {
+                    vals.push_back(finalize_var_value(
+                        resolve_var_value<D>(target, rhs, query, query_len, arena)));
+                }
+                if (vals.empty()) vals.push_back("");
+
+                result[var_name] = std::move(vals);
                 break;
             }
             // SET TRANSACTION is handled separately by MySQL_Session::parse2()
