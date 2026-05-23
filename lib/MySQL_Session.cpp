@@ -3284,6 +3284,21 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 						case 1226: // ER_USER_LIMIT_REACHED , User '%s' has exceeded the '%s' resource (current value: %ld)
 							goto __exit_handler_again___status_CONNECTING_SERVER_with_err;
 							break;
+						case ER_ACCESS_DENIED_ERROR: // 1045
+							// Pass-through cache invalidation (spec §8.4).
+							// If a backend rejected a connection using a
+							// password that came from the pass-through cache,
+							// the cached cleartext is stale. Evict it so the
+							// next connect from this user re-probes.
+							if (GloMyPTAuthCache != NULL
+								&& mysql_thread___passthrough_auth_enabled
+								&& client_myds && client_myds->myconn
+								&& client_myds->myconn->userinfo
+								&& client_myds->myconn->userinfo->username) {
+								GloMyPTAuthCache->evict(std::string(
+									(const char*)client_myds->myconn->userinfo->username));
+							}
+							break;
 						default:
 							break;
 					}
