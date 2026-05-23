@@ -2442,50 +2442,88 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 	bool ret = false;
 	char reply[SHA_DIGEST_LENGTH + 1] = { 0 };
 
-	// Pass-through cache lookup (spec §8.2). When pass-through is enabled
-	// and the mysql_users row has an empty password (admin-provisioned
-	// opt-in), look up the in-memory cache. On hit, replace vars1.password
-	// with the learned cleartext so the existing verification path below
-	// runs against it as if mysql_users had stored a cleartext password.
-	// On miss, dispatch to PPHR_passthrough_init which drives the
-	// caching_sha2_password full-auth exchange and ultimately schedules a
-	// backend probe.
+	// Pass-through cache lookup and dispatch (spec §3.1, §8.2). Two
+	// eligibility cases share the same lookup-and-dispatch logic:
 	//
-	// Unknown-user fallback (no row in mysql_users) is wired in a later
-	// commit that synthesizes routing/schema defaults from globals; until
-	// then this only covers the empty-password row case.
-	if (mysql_thread___passthrough_auth_enabled
-		&& mysql_thread___passthrough_auth_empty_password
-		&& auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD
-		&& (*myds)->sess->session_type == PROXYSQL_SESSION_MYSQL
-		&& GloMyPTAuthCache != NULL
-		&& vars1.user != NULL
-		&& vars1.password != NULL
-		&& strlen(vars1.password) == 0) {
-		std::string cleartext;
-		const uint32_t ttl_s =
-			mysql_thread___passthrough_auth_cache_ttl_s > 0
-				? static_cast<uint32_t>(mysql_thread___passthrough_auth_cache_ttl_s)
-				: 0;
-		if (GloMyPTAuthCache->lookup(std::string((const char*)vars1.user), cleartext, ttl_s)) {
-			free(vars1.password);
-			vars1.password = strdup(cleartext.c_str());
-		} else if (mysql_thread___passthrough_auth_require_tls && !(*myds)->encrypted) {
-			// Spec §7.1/§7.4: refuse to ask the client for cleartext over a
-			// non-TLS connection. Falls through to the normal verification
-			// path, which will reject the connection (empty password +
-			// non-empty client password = auth failure). No backend probe
-			// is dispatched and no AuthMoreData{0x04} is sent.
-			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
-				"pass-through auth refused: client connection is not TLS and "
-				"mysql-passthrough_auth_require_tls=true (user='%s')\n",
-				vars1.user ? (const char*)vars1.user : "(null)");
-		} else {
-			// Cache miss → drive the caching_sha2_password full-auth
-			// exchange so the client emits its cleartext, which we will
-			// then probe against the backend.
-			PPHR_passthrough_init(vars1);
-			return ret; // not done yet; protocol state machine continues
+	//   - empty_pw_case:    mysql_users row exists with password=''
+	//                       (admin opt-in via passthrough_auth_empty_password)
+	//   - unknown_user_case: user not in mysql_users at all
+	//                       (gated by passthrough_auth_unknown_users; routing
+	//                        and schema synthesized from globals each connect)
+	//
+	// On cache hit, replace vars1.password with the learned cleartext so
+	// the existing verification path below runs as if mysql_users had
+	// stored a cleartext password. On miss (and TLS gate satisfied),
+	// dispatch to PPHR_passthrough_init which drives the
+	// caching_sha2_password full-auth exchange and ultimately schedules a
+	// backend probe via AUTHENTICATING_BACKEND_FOR_CLIENT.
+	{
+		const bool empty_pw_case =
+			mysql_thread___passthrough_auth_empty_password
+			&& vars1.password != NULL
+			&& strlen(vars1.password) == 0;
+		const bool unknown_user_case =
+			mysql_thread___passthrough_auth_unknown_users
+			&& vars1.password == NULL;
+		if (mysql_thread___passthrough_auth_enabled
+			&& auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD
+			&& (*myds)->sess->session_type == PROXYSQL_SESSION_MYSQL
+			&& GloMyPTAuthCache != NULL
+			&& vars1.user != NULL
+			&& (empty_pw_case || unknown_user_case)) {
+
+			// Unknown-user case: synthesize routing/schema defaults from
+			// globals (spec §3.5) directly onto the session, since there's
+			// no mysql_users row to drive PPHR_5passwordTrue.
+			if (unknown_user_case) {
+				(*myds)->sess->default_hostgroup = mysql_thread___passthrough_default_hg;
+				if ((*myds)->sess->default_schema == NULL) {
+					const char *ds =
+						(mysql_thread___passthrough_default_schema
+							&& mysql_thread___passthrough_default_schema[0] != '\0')
+							? mysql_thread___passthrough_default_schema
+							: mysql_thread___default_schema;
+					if (ds != NULL && ds[0] != '\0') {
+						(*myds)->sess->default_schema = strdup(ds);
+					}
+				}
+				(*myds)->sess->schema_locked = false;
+				(*myds)->sess->transaction_persistent = true;
+				(*myds)->sess->session_fast_forward = SESSION_FORWARD_TYPE_NONE;
+				(*myds)->sess->user_max_connections = 0;
+			}
+
+			std::string cleartext;
+			const uint32_t ttl_s =
+				mysql_thread___passthrough_auth_cache_ttl_s > 0
+					? static_cast<uint32_t>(mysql_thread___passthrough_auth_cache_ttl_s)
+					: 0;
+			if (GloMyPTAuthCache->lookup(
+					std::string((const char*)vars1.user), cleartext, ttl_s)) {
+				if (vars1.password) { free(vars1.password); }
+				vars1.password = strdup(cleartext.c_str());
+				// For unknown-user case, also need to populate
+				// account_details so the post-verification path in
+				// process_pkt_handshake_response sees consistent values.
+				if (unknown_user_case) {
+					account_details.default_hostgroup =
+						mysql_thread___passthrough_default_hg;
+				}
+			} else if (mysql_thread___passthrough_auth_require_tls && !(*myds)->encrypted) {
+				// Spec §7.1/§7.4: refuse to ask the client for cleartext
+				// over a non-TLS connection. Fall through to the normal
+				// rejection path.
+				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
+					"pass-through auth refused: client connection is not TLS and "
+					"mysql-passthrough_auth_require_tls=true (user='%s')\n",
+					vars1.user ? (const char*)vars1.user : "(null)");
+			} else {
+				// Cache miss → drive the caching_sha2_password full-auth
+				// exchange so the client emits its cleartext, which we will
+				// then probe against the backend.
+				PPHR_passthrough_init(vars1);
+				return ret; // not done yet; protocol state machine continues
+			}
 		}
 	}
 
