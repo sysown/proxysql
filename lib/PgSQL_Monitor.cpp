@@ -2898,7 +2898,13 @@ void* PgSQL_Monitor::monitor_dns_cache() {
 					if (hostname_col >= 0) {
 						for (const auto row : rs->rows) {
 							if (!row || !row->fields[hostname_col]) continue;
-							const std::string hostname { row->fields[hostname_col] };
+							// Trim before validate_ip / insert so the lookup
+							// path (which also trims) and the bookkeeper
+							// agree on the hostname key.  Matches the
+							// SELECT trim(hostname) the MySQL resolver does
+							// in SQL.
+							const std::string hostname { trim(row->fields[hostname_col]) };
+							if (hostname.empty()) continue;
 							if (!validate_ip(hostname))
 								hostnames.insert(hostname);
 						}
