@@ -222,3 +222,4 @@ test-scripts/deps/
 .worktrees/
 test/tap/tests/parsersql_digest_test
 test/tap/tests/setparser_parsersql_test
+deps/protobuf/protobuf-*/
