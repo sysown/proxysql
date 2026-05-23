@@ -9,6 +9,7 @@
 
 #include <cstdio>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -82,8 +83,15 @@ void MysqlxConnection::reset() {
 int MysqlxConnection::start_connect(const char* host, int port) {
 	connect_start_time_ = std::chrono::duration_cast<std::chrono::milliseconds>(
 		std::chrono::steady_clock::now().time_since_epoch()).count();
-	fd_ = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+	fd_ = socket(AF_INET, SOCK_STREAM, 0);
 	if (fd_ < 0) { state_ = ERROR_STATE; return -1; }
+	int flags = fcntl(fd_, F_GETFL, 0);
+	if (flags < 0 || fcntl(fd_, F_SETFL, flags | O_NONBLOCK) < 0) {
+		close(fd_);
+		fd_ = -1;
+		state_ = ERROR_STATE;
+		return -1;
+	}
 	int flag = 1;
 	setsockopt(fd_, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 	struct sockaddr_in addr;
