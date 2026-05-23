@@ -448,11 +448,25 @@ static std::map<std::string, std::vector<std::string>> walk_set_stmt(
                 // always exactly one. For PostgreSQL, multi-value lists such
                 // as `SET search_path TO 'a', 'b', 'c'` produce one VAR_TARGET
                 // followed by N value-expression siblings (see set_parser.h).
+                //
+                // For PostgreSQL we preserve outer quotes on each value: the
+                // session handler honors NO_STRIP_VALUE flags per-variable
+                // (e.g. search_path, where `"$user"` vs `$user` is
+                // semantically distinct), and falls back to its own
+                // unquote_if_quoted() for variables that want stripping.
+                // Pre-stripping in the walker breaks the NO_STRIP_VALUE
+                // contract.  MySQL keeps the historical strip-quotes
+                // behavior (single-value, simpler semantics).
                 std::vector<std::string> vals;
                 for (const AstNode* rhs = target->next_sibling;
                      rhs; rhs = rhs->next_sibling) {
-                    vals.push_back(finalize_var_value(
-                        resolve_var_value<D>(target, rhs, query, query_len, arena)));
+                    std::string raw = resolve_var_value<D>(
+                        target, rhs, query, query_len, arena);
+                    if constexpr (D == Dialect::PostgreSQL) {
+                        vals.push_back(std::move(raw));
+                    } else {
+                        vals.push_back(finalize_var_value(std::move(raw)));
+                    }
                 }
                 if (vals.empty()) vals.push_back("");
 
