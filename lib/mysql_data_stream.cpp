@@ -1304,8 +1304,16 @@ int MySQL_Data_Stream::buffer2array() {
 							// addr.addr stays pointing at the real TCP
 							// peer. We still record that we observed a
 							// PROXY header so audit/log code can see the
-							// frame was present.
+							// frame was present, and we populate
+							// proxy_address/proxy_port from the real TCP
+							// peer (mirroring what the TCP4/TCP6 branch
+							// does) so JSON serialization reports the
+							// upstream LB consistently across all branches.
 							PROXY_info = new ProxyProtocolInfo(ppi);
+							if (addr.addr) {
+								strncpy(PROXY_info->proxy_address, addr.addr, INET6_ADDRSTRLEN);
+							}
+							PROXY_info->proxy_port = addr.port;
 							if (addr.addr) {
 								proxy_info("Ignoring PROXY UNKNOWN header from IP %s; using real TCP peer as client address\n", addr.addr);
 							}
@@ -1836,6 +1844,11 @@ void MySQL_Data_Stream::get_client_myds_info_json(json& j) {
 		jc1["PROXY_V1"]["source_port"] = PROXY_info->source_port;
 		jc1["PROXY_V1"]["destination_port"] = PROXY_info->destination_port;
 		jc1["PROXY_V1"]["proxy_port"] = PROXY_info->proxy_port;
+		// GHSA-gw94-85m2-x8v2: expose the UNKNOWN-frame signal so audit
+		// consumers can distinguish a spec-compliant UNKNOWN observation
+		// (source_address/destination_address intentionally empty) from
+		// any other state where the address fields happen to be empty.
+		jc1["PROXY_V1"]["header_was_unknown"] = PROXY_info->header_was_unknown;
 	}
 	jc1["encrypted"] = encrypted;
 	if (encrypted) {

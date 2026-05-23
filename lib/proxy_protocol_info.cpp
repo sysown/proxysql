@@ -16,6 +16,14 @@ static bool DEBUG_ProxyProtocolInfo = false;
 
 // Function to parse the PROXY protocol header
 bool ProxyProtocolInfo::parseProxyProtocolHeader(const char* packet, size_t packet_length) {
+	// GHSA-gw94-85m2-x8v2: defensively clear the UNKNOWN signal at the
+	// start of every parse. The default constructor zero-inits it, but
+	// callers may reuse a ProxyProtocolInfo instance and a stale `true`
+	// would cause the caller to take the UNKNOWN branch on a later
+	// malformed parse, suppressing the legitimate warning and creating
+	// an empty PROXY_info.
+	header_was_unknown = false;
+
 	// Check for minimum header length (including CRLF)
 	if (packet_length < 15) {
 		return false; // Not a valid PROXY protocol header

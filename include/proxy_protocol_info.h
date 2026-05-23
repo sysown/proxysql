@@ -32,7 +32,27 @@ public:
 		memcpy(this, &other, sizeof(ProxyProtocolInfo));
 	}
 
-	// Function to parse the PROXY protocol header (declared)
+	// Parse a PROXY-Protocol v1 header into this object.
+	//
+	// Return-value contract (relied upon by callers in lib/mysql_data_stream.cpp):
+	//   - true  : the frame was a well-formed TCP4 or TCP6 line and the
+	//             source/destination address+port fields are populated.
+	//             The caller MAY override its session's client_addr from
+	//             source_address/source_port.
+	//   - false AND header_was_unknown == true :
+	//             the frame was a well-formed PROXY UNKNOWN line.  Per
+	//             the HAProxy PP1 spec, address fields MUST be ignored
+	//             and the real TCP peer remains authoritative.  The
+	//             caller MUST NOT override client_addr from this frame.
+	//   - false AND header_was_unknown == false :
+	//             the frame was malformed.  The caller treats it as a
+	//             skip with a warning and does not override client_addr.
+	//
+	// Changing this contract requires updating the matching branch in
+	// MySQL_Data_Stream::buffer2array() — the new UNKNOWN handling there
+	// depends on the return-false + header_was_unknown=true signal to
+	// avoid strdup-ing an empty source_address into client_addr
+	// (GHSA-gw94-85m2-x8v2).
 	bool parseProxyProtocolHeader(const char* packet, size_t packet_length);
 
 	bool is_in_network(const struct sockaddr* client_addr, const std::string& subnet_mask);
