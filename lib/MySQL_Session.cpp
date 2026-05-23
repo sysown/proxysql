@@ -6373,8 +6373,18 @@ void MySQL_Session::handler_WCD_SS_MCQ_qpo_LargePacket(PtrSize_t *pkt) {
 	string errmsg = "Got a packet bigger than 'max_allowed_packet' bytes";
 	client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,1153,(char *)"08S01", errmsg.c_str(), true);
 	MyHGM->add_mysql_errors(current_hostgroup, (char *)"", 0, client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char *)"unknown" ), client_myds->myconn->userinfo->schemaname, 1153, (char *)errmsg.c_str());
+	// Issue #5639: when called from the COM_STMT_EXECUTE path,
+	// MySQL_Protocol::get_binds_from_pkt() has set stmt_meta->pkt to alias
+	// pkt->ptr. RequestEnd() -> Query_Info::end() then free()s stmt_meta->pkt
+	// (the fix for bug #796), so the l_free() below would be a double-free of
+	// the same buffer. Capture the alias before RequestEnd() (which may reset
+	// stmt_meta) and skip the second free when the alias was present.
+	const bool stmt_meta_owns_pkt =
+		(CurrentQuery.stmt_meta != NULL && CurrentQuery.stmt_meta->pkt == pkt->ptr);
 	RequestEnd(NULL, 1153, errmsg.c_str());
-	l_free(pkt->size,pkt->ptr);
+	if (!stmt_meta_owns_pkt) {
+		l_free(pkt->size,pkt->ptr);
+	}
 }
 
 bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *pkt, bool *lock_hostgroup, ps_type prepare_stmt_type) {
