@@ -41,14 +41,15 @@ else
 	build_target="$PROXYSQL_BUILD_TYPE"
 fi
 
-# See deb-compliant entrypoint for the rationale: PROXYSQLGENAI=1
-# triggers a build of plugins/mysqlx/ which dynamically links against
-# the system libprotobuf (3.x). Some of the v4.0.0 packaging images
-# were built before plugins/mysqlx existed and do not yet ship
-# protobuf-devel. Install it on demand for RHEL-family images.
-if [[ "${PROXYSQLGENAI:-}" == "1" ]]; then
+# The v4.0 chassis tier (PROXYSQL40=1) builds plugins/mysqlx/ which
+# dynamically links against the system libprotobuf (3.x). Some of the
+# v4.0.0 packaging images were built before plugins/mysqlx existed and
+# do not yet ship protobuf-devel. Install it on demand for RHEL-family
+# images.  PROXYSQL40=1 builds and packages all v4.0 plugins — there
+# is no separate PROXYSQLGENAI flag.
+if [[ "${PROXYSQL40:-}" == "1" ]]; then
     if ! pkg-config --exists protobuf 2>/dev/null; then
-        echo "==> Installing protobuf-devel (required for PROXYSQLGENAI=1 mysqlx plugin build)"
+        echo "==> Installing protobuf-devel (required for PROXYSQL40=1 mysqlx plugin build)"
         if command -v dnf >/dev/null 2>&1; then
             dnf install -y protobuf-devel
         elif command -v yum >/dev/null 2>&1; then
@@ -62,13 +63,13 @@ fi
 
 # clean is expensive, do it before, outside of container
 #${MAKE} cleanbuild
-if [[ "${PROXYSQLGENAI:-}" == "1" ]]; then
-    ${MAKE} ${MAKEOPT} PROXYSQLGENAI=1 ${deps_target}
-    ${MAKE} ${MAKEOPT} PROXYSQLGENAI=1 ${build_target}
-else
-    ${MAKE} ${MAKEOPT} ${deps_target}
-    ${MAKE} ${MAKEOPT} ${build_target}
-fi
+# PROXYSQL40=1 enables the plugin chassis tier; all v4.0 plugins
+# (mysqlx, genai, etc.) are built and packaged automatically.
+# PROXYSQLGENAI is no longer a separate flag.
+EXTRA=""
+[[ "${PROXYSQL40:-}" == "1" ]] && EXTRA="$EXTRA PROXYSQL40=1"
+${MAKE} ${MAKEOPT} ${EXTRA} ${deps_target}
+${MAKE} ${MAKEOPT} ${EXTRA} ${build_target}
 
 touch /opt/proxysql/src/proxysql
 
@@ -83,20 +84,19 @@ mkdir -p proxysql/usr/share/proxysql/tools
 cp -a tools/proxysql_galera_checker.sh tools/proxysql_galera_writer.pl proxysql/usr/share/proxysql/tools
 
 # Plugin .so artefacts (v4.0+ chassis): proxysql becomes the loader;
-# runtime features (mysqlx, genai/MCP) ship as separate .so files
+# runtime features (mysqlx, genai/MCP, etc.) ship as separate .so files
 # installed to /usr/lib/proxysql/ and named in proxysql.cnf
-# `plugins=("...")` to be loaded.  Conditional on the same flags that
-# gated the build above so v3.x rpm packaging stays unchanged.  The
-# proxysql.spec %files section already lists /usr/lib/proxysql/* so
-# anything dropped in this directory ends up packaged automatically.
-if [[ "${PROXYSQL40:-}" == "1" || "${PROXYSQLGENAI:-}" == "1" ]]; then
+# `plugins=("...")` to be loaded.  Conditional on PROXYSQL40=1 so
+# v3.x rpm packaging stays unchanged.  The proxysql.spec %files section
+# already lists /usr/lib/proxysql/* so anything dropped in this
+# directory ends up packaged automatically.
+if [[ "${PROXYSQL40:-}" == "1" ]]; then
     mkdir -p proxysql/usr/lib/proxysql
+    # mysqlx protocol plugin
     if [[ -f plugins/mysqlx/ProxySQL_MySQLX_Plugin.so ]]; then
         cp plugins/mysqlx/ProxySQL_MySQLX_Plugin.so proxysql/usr/lib/proxysql/
     fi
-fi
-if [[ "${PROXYSQLGENAI:-}" == "1" ]]; then
-    mkdir -p proxysql/usr/lib/proxysql
+    # genai/MCP plugin
     if [[ -f plugins/genai/ProxySQL_GenAI_Plugin.so ]]; then
         cp plugins/genai/ProxySQL_GenAI_Plugin.so proxysql/usr/lib/proxysql/
     fi
@@ -133,5 +133,54 @@ rpm2cpio /root/rpmbuild/RPMS/${ARCH}/proxysql-${CURVER}-1.${ARCH}.rpm | cpio -iu
 sha1sum tmp/proxysql | sed 's|tmp/||' | tee tmp/proxysql.sha1
 cp tmp/proxysql.sha1 ../binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.${ARCH}.id-hash
 popd
+# Verify plugin .so files are present in the package
+if [[ "${PROXYSQL40:-}" == "1" ]]; then
+    echo "==> Verifying plugin .so files in package"
+    PKG_PATH="/root/rpmbuild/RPMS/${ARCH}/proxysql-${CURVER}-1.${ARCH}.rpm"
+    for plugin in ProxySQL_MySQLX_Plugin.so ProxySQL_GenAI_Plugin.so; do
+        if rpm -qpl "${PKG_PATH}" 2>/dev/null | grep -q "/usr/lib/proxysql/${plugin}"; then
+            echo "  OK   ${plugin}"
+        else
+            echo "  FAIL ${plugin} not found in package" >&2
+            exit 1
+        fi
+    done
+    echo "==> Plugin packaging verification PASSED"
+fi
+# Plugin smoke test: verify .so files are valid and export the expected
+# descriptor symbol, then attempt a quick start to confirm plugin loading.
+if [[ "${PROXYSQL40:-}" == "1" ]]; then
+    echo "==> Running plugin smoke test"
+    SMOKE_DIR=$(mktemp -d)
+    pushd "${SMOKE_DIR}" >/dev/null
+    rpm2cpio /root/rpmbuild/RPMS/${ARCH}/proxysql-${CURVER}-1.${ARCH}.rpm | cpio -idm 2>/dev/null
+    ALL_OK=0
+    for plugin in usr/lib/proxysql/ProxySQL_MySQLX_Plugin.so usr/lib/proxysql/ProxySQL_GenAI_Plugin.so; do
+        if [[ -f "${plugin}" ]]; then
+            if file "${plugin}" | grep -q 'ELF 64-bit.*shared object'; then
+                echo "  OK   ${plugin} (valid ELF shared library)"
+                if nm -D "${plugin}" 2>/dev/null | grep -q 'proxysql_plugin_descriptor_v1'; then
+                    echo "  OK   ${plugin} (exports proxysql_plugin_descriptor_v1)"
+                else
+                    echo "  WARN ${plugin} (no proxysql_plugin_descriptor_v1 symbol)" >&2
+                    ALL_OK=1
+                fi
+            else
+                echo "  FAIL ${plugin} (not a valid ELF shared object)" >&2
+                ALL_OK=1
+            fi
+        else
+            echo "  FAIL ${plugin} (not found in package)" >&2
+            ALL_OK=1
+        fi
+    done
+    popd >/dev/null
+    rm -rf "${SMOKE_DIR}"
+    if [[ "${ALL_OK}" != "0" ]]; then
+        echo "==> Plugin smoke test FAILED" >&2
+        exit 1
+    fi
+    echo "==> Plugin smoke test PASSED"
+fi
 # cleanup
 rm -fr /root/.pki /root/rpmbuild/{BUILDROOT,RPMS,SRPMS,BUILD,SOURCES,tmp} /opt/proxysql/proxysql /opt/proxysql/proxysql-${CURVER} ./pkgroot

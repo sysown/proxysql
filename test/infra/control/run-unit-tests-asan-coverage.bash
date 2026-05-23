@@ -19,7 +19,7 @@
 # Preconditions:
 #   * cwd is the repository root (the script cd's there from $0 if not).
 #   * lib/, src/, and test/tap/tests/unit/ have been built with
-#     WITHASAN=1 WITHGCOV=1 NOJEMALLOC=1 PROXYSQLGENAI=1 (the make
+#     WITHASAN=1 WITHGCOV=1 NOJEMALLOC=1 PROXYSQL40=1 (the make
 #     target `ubuntu24-tap` does this when invoked with those flags).
 #   * The container has apt — we install lcov + libprotobuf-dev on
 #     demand if missing (the build image is package-build-focused

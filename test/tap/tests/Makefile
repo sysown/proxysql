@@ -415,14 +415,14 @@ setparser_parsersql_test-t: setparser_parsersql_test
 	ln -fs setparser_parsersql_test setparser_parsersql_test-t
 
 setparser_parsersql_test: setparser_parsersql_test.cpp $(TAP_LDIR)/libtap.so setparser_test_common.h $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR) $(PARSERSQL_LDIR)/libsqlparser.a
-ifeq ($(PROXYSQLGENAI),1)
+ifeq ($(PROXYSQL40),1)
 	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) $(SQLITE3_LDIR)/vec.o $(PARSERSQL_LDIR)/libsqlparser.a -o $@
 else
 	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) $(PARSERSQL_LDIR)/libsqlparser.a -o $@
 endif
 
 parsersql_digest_test: parsersql_digest_test.cpp $(TAP_LDIR)/libtap.so $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR) $(PARSERSQL_LDIR)/libsqlparser.a
-ifeq ($(PROXYSQLGENAI),1)
+ifeq ($(PROXYSQL40),1)
 	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) $(SQLITE3_LDIR)/vec.o $(PARSERSQL_LDIR)/libsqlparser.a -o $@
 else
 	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) $(PARSERSQL_LDIR)/libsqlparser.a -o $@
