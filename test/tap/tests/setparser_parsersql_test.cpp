@@ -1,14 +1,18 @@
 /**
  * @file setparser_parsersql_test.cpp
- * @brief Validates that parsersql_parse_set_mysql() produces the same output
- *   as the existing MySQL_Set_Stmt_Parser for all SET statement test cases
- *   defined in setparser_test_common.h.
+ * @brief Validates that parsersql_parse_set_{mysql,pgsql}() produces the same
+ *   output as the existing MySQL_Set_Stmt_Parser for all SET statement test
+ *   cases defined in setparser_test_common.h.
  *
- * Controlled by: mysql-set_parser_algorithm = 3
+ * Controlled by: mysql-set_parser_algorithm = 3 / pgsql-set_parser_algorithm = 3
  *
  * Note: The AST-based parser normalizes quoting (double quotes to single quotes)
  * and whitespace, while the regex parser preserves raw text. The comparison
  * normalizes these cosmetic differences before checking equality.
+ *
+ * The PostgreSQL test groups (search_path multi-value, TIME ZONE alias) are
+ * the regression net for ParserSQL v1.0.3's PG SET fixes — they exercise the
+ * library + adapter end-to-end without needing a live backend.
  */
 
 #include "setparser_test_common.h"
@@ -21,6 +25,78 @@ static Test parsersql_syntax_errors[] = {
     { Expected("sql_mode", { "(SELECT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))" } ) } },
   { "SET sql_mode=(SELCT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))",
     { Expected("sql_mode", { "SELCT" } ) } },
+};
+
+// ----------------------------------------------------------------------------
+// MySQL queries from test_filtered_set_statements-t (variables that ProxySQL
+// is supposed to filter out — should still parse cleanly via ParserSQL).
+// ----------------------------------------------------------------------------
+static Test parsersql_mysql_filtered_set[] = {
+  { "SET wait_timeout=28801",                  { Expected("wait_timeout",          {"28801"}) } },
+  { "SET @@wait_timeout = 28801",              { Expected("wait_timeout",          {"28801"}) } },
+  { "SET SESSION wait_timeout = 28801",        { Expected("wait_timeout",          {"28801"}) } },
+  { "SET `wait_timeout` = 28801",              { Expected("wait_timeout",          {"28801"}) } },
+  { "SET character_set_results=latin1",        { Expected("character_set_results", {"latin1"}) } },
+  { "SET autocommit=1",                        { Expected("autocommit",            {"1"}) } },
+  { "SET max_join_size=18446744073709551615",  { Expected("max_join_size",         {"18446744073709551615"}) } },
+};
+
+// MySQL multi-variable SET cases sampled from set_testing-240.csv (the fixture
+// driving set_testing-t). Exercises comma-separated multi-variable parsing.
+static Test parsersql_mysql_set_testing[] = {
+  { "SET aurora_read_replica_read_committed=Off, auto_increment_increment=320, sql_select_limit=3656, sql_quote_show_create=\"OFF\"",
+    { Expected("aurora_read_replica_read_committed", {"Off"}),
+      Expected("auto_increment_increment",           {"320"}),
+      Expected("sql_quote_show_create",              {"OFF"}),
+      Expected("sql_select_limit",                   {"3656"}) } },
+  { "SET max_heap_table_size=19456, log_slow_filter=`not_using_index`",
+    { Expected("log_slow_filter",     {"not_using_index"}),
+      Expected("max_heap_table_size", {"19456"}) } },
+  { "SET lock_wait_timeout=431, sql_safe_updates=1, aurora_read_replica_read_committed=\"ON\", max_execution_time=13940",
+    { Expected("aurora_read_replica_read_committed", {"ON"}),
+      Expected("lock_wait_timeout",                  {"431"}),
+      Expected("max_execution_time",                 {"13940"}),
+      Expected("sql_safe_updates",                   {"1"}) } },
+  { "SET session_track_gtids=OWN_GTID, optimizer_switch=\"index_merge_union=off\", foreign_key_checks=`OFF`, aurora_read_replica_read_committed=OFF",
+    { Expected("aurora_read_replica_read_committed", {"OFF"}),
+      Expected("foreign_key_checks",                 {"OFF"}),
+      Expected("optimizer_switch",                   {"index_merge_union=off"}),
+      Expected("session_track_gtids",                {"OWN_GTID"}) } },
+};
+
+// ----------------------------------------------------------------------------
+// PostgreSQL search_path tests — pgsql-set_parameter_validation_test-t shapes.
+// Pre-ParserSQL-1.0.3 the multi-value cases silently dropped every value past
+// the first; the v1.0.3 fix retains them under the same VAR_ASSIGNMENT node
+// and the ProxySQL adapter walks every RHS sibling.
+// ----------------------------------------------------------------------------
+static Test parsersql_pgsql_search_path[] = {
+  { "SET search_path TO \"$user\", public",       { Expected("search_path", {"$user", "public"}) } },
+  { "SET search_path TO \"$user\",public",        { Expected("search_path", {"$user", "public"}) } },
+  { "SET search_path = '\"$user\"   ,    public'", { Expected("search_path", {"\"$user\"   ,    public"}) } },
+  { "SET search_path = 'public '",                { Expected("search_path", {"public "}) } },
+  { "SET search_path = \"$user\"",                { Expected("search_path", {"$user"}) } },
+  { "SET search_path = '$user'",                  { Expected("search_path", {"$user"}) } },
+  { "SET search_path = ''",                       { Expected("search_path", {""}) } },
+  { "SET search_path = public",                   { Expected("search_path", {"public"}) } },
+};
+
+// PostgreSQL TIME ZONE tests — pgsql-set_statement_test-t shapes.
+// Pre-ParserSQL-1.0.3 these were parsed as `time = ZONE` and the rest of the
+// statement was dropped. The v1.0.3 fix recognizes "TIME ZONE" as the PG
+// alias for `SET TimeZone = ...` and walks the trailing expression.
+//
+// NOTE: `SET TIME ZONE INTERVAL '7' HOUR` is intentionally *not* covered
+// here. ParserSQL's expression parser does not yet consume the full
+// INTERVAL ... <unit> modifier chain — it currently captures just the
+// `INTERVAL` token. Asserting that as the expected output would lock in
+// incomplete-but-current behaviour and would flip the test red when the
+// parser is later fixed to capture the full interval expression. Add a
+// case here once ParserSQL grows full INTERVAL modifier support.
+static Test parsersql_pgsql_time_zone[] = {
+  { "SET TIME ZONE 'UTC'",                 { Expected("timezone", {"UTC"}) } },
+  { "SET TIME ZONE DEFAULT",               { Expected("timezone", {"DEFAULT"}) } },
+  { "SET TIME ZONE '+05:30'",              { Expected("timezone", {"+05:30"}) } },
 };
 
 static std::string normalize_value(const std::string& s) {
@@ -56,6 +132,17 @@ static bool maps_match(
 	return true;
 }
 
+// Join a vector of values into a single " | "-separated string for diag output.
+// Used by TestParse / TestParsePgsql when reporting expected-vs-actual mismatches.
+static std::string join_values_for_diag(const std::vector<std::string>& vals) {
+	std::string joined;
+	for (size_t j = 0; j < vals.size(); ++j) {
+		if (j) joined += " | ";
+		joined += vals[j];
+	}
+	return joined;
+}
+
 void TestParse(const Test* tests, int ntests, const std::string& title) {
 	for (int i = 0; i < ntests; i++) {
 		std::map<std::string, std::vector<std::string>> data;
@@ -66,7 +153,7 @@ void TestParse(const Test* tests, int ntests, const std::string& title) {
 		std::map<std::string, std::vector<std::string>> result = parsersql_parse_set_mysql(tests[i].query);
 
 		bool size_ok = (result.size() == data.size());
-		ok(size_ok, "[%s %d] Sizes match: %lu, %lu", title.c_str(), i, result.size(), data.size());
+		ok(size_ok, "[%s %d] Sizes match: %zu, %zu", title.c_str(), i, result.size(), data.size());
 		if (!size_ok) {
 			diag("  FAIL: sizes differ for query: %s", tests[i].query);
 		}
@@ -76,10 +163,41 @@ void TestParse(const Test* tests, int ntests, const std::string& title) {
 		if (!elem_ok) {
 			diag("  FAIL: elements differ for query: %s", tests[i].query);
 			for (auto& kv : result) {
-				diag("    result[%s] = %s", kv.first.c_str(), normalize_value(kv.second.empty() ? "" : kv.second[0]).c_str());
+				diag("    result[%s] = [%s]", kv.first.c_str(), join_values_for_diag(kv.second).c_str());
 			}
 			for (auto& kv : data) {
-				diag("    expected[%s] = %s", kv.first.c_str(), normalize_value(kv.second.empty() ? "" : kv.second[0]).c_str());
+				diag("    expected[%s] = [%s]", kv.first.c_str(), join_values_for_diag(kv.second).c_str());
+			}
+		}
+	}
+}
+
+
+// Parallel TestParse for PostgreSQL — same shape, dispatches to parsersql_parse_set_pgsql.
+void TestParsePgsql(const Test* tests, int ntests, const std::string& title) {
+	for (int i = 0; i < ntests; i++) {
+		std::map<std::string, std::vector<std::string>> data;
+		for (auto it = std::begin(tests[i].results); it != std::end(tests[i].results); ++it) {
+			data[it->var] = it->values;
+		}
+
+		std::map<std::string, std::vector<std::string>> result = parsersql_parse_set_pgsql(tests[i].query);
+
+		bool size_ok = (result.size() == data.size());
+		ok(size_ok, "[%s %d] Sizes match: %zu, %zu", title.c_str(), i, result.size(), data.size());
+		if (!size_ok) {
+			diag("  FAIL: sizes differ for query: %s", tests[i].query);
+		}
+
+		bool elem_ok = maps_match(result, data);
+		ok(elem_ok, "[%s %d] Elements match", title.c_str(), i);
+		if (!elem_ok) {
+			diag("  FAIL: elements differ for query: %s", tests[i].query);
+			for (auto& kv : result) {
+				diag("    result[%s] = [%s]", kv.first.c_str(), join_values_for_diag(kv.second).c_str());
+			}
+			for (auto& kv : data) {
+				diag("    expected[%s] = [%s]", kv.first.c_str(), join_values_for_diag(kv.second).c_str());
 			}
 		}
 	}
@@ -97,6 +215,10 @@ int main(int argc, char** argv) {
 	p += arraysize(multiple);
 	p += arraysize(Set1_v2);
 	p += arraysize(parsersql_syntax_errors);
+	p += arraysize(parsersql_mysql_filtered_set);
+	p += arraysize(parsersql_mysql_set_testing);
+	p += arraysize(parsersql_pgsql_search_path);
+	p += arraysize(parsersql_pgsql_time_zone);
 	p *= 2;
 	plan(p);
 	TestParse(sql_mode, arraysize(sql_mode), "sql_mode");
@@ -108,5 +230,10 @@ int main(int argc, char** argv) {
 	TestParse(multiple, arraysize(multiple), "multiple");
 	TestParse(Set1_v2, arraysize(Set1_v2), "Set1_v2");
 	TestParse(parsersql_syntax_errors, arraysize(parsersql_syntax_errors), "parsersql_syntax_errors");
+	TestParse(parsersql_mysql_filtered_set, arraysize(parsersql_mysql_filtered_set), "mysql_filtered_set");
+	TestParse(parsersql_mysql_set_testing, arraysize(parsersql_mysql_set_testing), "mysql_set_testing");
+	TestParsePgsql(parsersql_pgsql_search_path, arraysize(parsersql_pgsql_search_path), "pgsql_search_path");
+	TestParsePgsql(parsersql_pgsql_time_zone, arraysize(parsersql_pgsql_time_zone), "pgsql_time_zone");
+
 	return exit_status();
 }

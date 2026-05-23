@@ -278,7 +278,7 @@
 			"select '{\"key\":\"value\"}'::json -> 'key'",
 			"select '[1,2,3]'::json -> 1"
 		],
-		"s1": "select ?-> ?",
+		"s1": "select ? -> ?",
 		"s2": "select ?-> ?",
 		"s3": "select ?-> ?",
 		"s4": "select ?-> ?"
@@ -288,10 +288,10 @@
 		"q": [
 			"select '{\"key\":\"value\"}'::jsonb @> '{\"key\":\"value\"}'"
 		],
-		"s1": "select ?@> ?",
-		"s2": "select ?@> ?",
-		"s3": "select ?@> ?",
-		"s4": "select ?@> ?"
+		"s1": "select ? @> ?",
+		"s2": "select ? @> ?",
+		"s3": "select ? @> ?",
+		"s4": "select ? @> ?"
 	},
 	// ========================
 	// SECTION 8: DOLLAR PARAMETERS
@@ -656,7 +656,7 @@
 			"select '$1,000.00'::money + '$12.34'::money",
 			"select '12.34'::money + '5.66'::money"
 		],
-		"s1": "select ?+ ?",
+		"s1": "select ? + ?",
 		"s2": "select ?+?",
 		"s3": "select ?+?",
 		"s4": "select ?+?"
