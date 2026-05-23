@@ -1045,6 +1045,7 @@ mon_metrics_map = std::make_tuple(
 
 MySQL_Monitor::MySQL_Monitor() {
 	dns_cache = std::make_shared<DNS_Cache>();
+	dns_cache->set_counters(&dns_cache_queried, &dns_cache_lookup_success, &dns_cache_record_updated);
 	GloMyMon = this;
 
 	My_Conn_Pool=new MySQL_Monitor_Connection_Pool();
@@ -4622,169 +4623,9 @@ __sleep_monitor_replication_lag:
 	return NULL;
 }
 
-bool validate_ip(const std::string& ip) {
-
-	// check if ip is vaild IPV4 ip address
-	struct sockaddr_in sa4;
-	if (inet_pton(AF_INET, ip.c_str(), &(sa4.sin_addr)) != 0)
-		return true;
-
-	// check if ip is vaild IPV6 ip address
-	struct sockaddr_in6 sa6;
-	if (inet_pton(AF_INET6, ip.c_str(), &(sa6.sin6_addr)) != 0)
-		return true;
-
-	return false;
-}
-
-std::string get_connected_peer_ip_from_socket(int socket_fd) {
-	std::string result;
-	char ip_addr[INET6_ADDRSTRLEN];
-
-	union {
-		struct sockaddr_in in;
-		struct sockaddr_in6 in6;
-	} custom_sockaddr;
-
-	struct sockaddr* addr = (struct sockaddr*)malloc(sizeof(custom_sockaddr));
-	socklen_t addrlen = sizeof(custom_sockaddr);
-	memset(addr, 0, sizeof(custom_sockaddr));
-
-	int rc = getpeername(socket_fd, addr, &addrlen);
-
-	if (rc == 0) {
-		if (addr->sa_family == AF_INET) {
-			struct sockaddr_in* ipv4 = (struct sockaddr_in*)addr;
-			inet_ntop(addr->sa_family, &ipv4->sin_addr, ip_addr, INET_ADDRSTRLEN);
-		}
-		else if (addr->sa_family == AF_INET6) {
-			struct sockaddr_in6* ipv6 = (struct sockaddr_in6*)addr;
-			inet_ntop(addr->sa_family, &ipv6->sin6_addr, ip_addr, INET6_ADDRSTRLEN);
-		}
-
-		result = ip_addr;
-	}
-
-	free(addr);
-
-	return result;
-}
-
-template<class T>
-std::string debug_iplisttostring(const T& ips) {
-	std::stringstream sstr;
-
-	for (const std::string& ip : ips)
-		sstr << ip << " ";
-
-	return sstr.str();
-}
-
-void* monitor_dns_resolver_thread(const std::vector<DNS_Resolve_Data*>& dns_resolve_data_list) {
-	assert(!dns_resolve_data_list.empty());
-	DNS_Resolve_Data* dns_resolve_data = dns_resolve_data_list.front();
-
-	struct addrinfo hints, *res = NULL;
-
-	/* set hints for getaddrinfo */
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_protocol = IPPROTO_TCP; 
-	hints.ai_socktype = SOCK_STREAM;
-	/* AI_ADDRCONFIG: IPv4 addresses are returned in the list pointed to by res only if the
-       local system has at least one IPv4 address configured, and IPv6
-       addresses are returned only if the local system has at least one
-       IPv6 address configured.  The loopback address is not considered
-       for this case as valid as a configured address.  This flag is
-	        useful on, for example, IPv4-only systems, to ensure that
-	        getaddrinfo() does not return IPv6 socket addresses that would
-	        always fail in connect or bind. */
-	hints.ai_flags = AI_ADDRCONFIG;
-	hints.ai_family = mysql_resolution_family_to_ai_family(mysql_thread___resolution_family);
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Resolving hostname:[%s] to its mapped IP address.\n", dns_resolve_data->hostname.c_str());
-	int gai_rc = getaddrinfo(dns_resolve_data->hostname.c_str(), NULL, &hints, &res);
-	
-	if (gai_rc != 0 || !res)
-	{
-		proxy_error("An error occurred while resolving hostname: %s [%d]\n", dns_resolve_data->hostname.c_str(), gai_rc);
-		goto __error;
-	}
-
-	try {
-		std::vector<std::string> ips;
-		ips.reserve(64); 
-
-		char ip_addr[INET6_ADDRSTRLEN];
-
-		for (auto p = res; p != NULL; p = p->ai_next) {
-			
-			if (p->ai_family == AF_INET) {
-				struct sockaddr_in* ipv4 = (struct sockaddr_in*)p->ai_addr;
-				inet_ntop(p->ai_addr->sa_family, &ipv4->sin_addr, ip_addr, INET_ADDRSTRLEN);
-				ips.push_back(ip_addr);
-			}
-			else {
-				struct sockaddr_in6* ipv6 = (struct sockaddr_in6*)p->ai_addr;
-				inet_ntop(p->ai_addr->sa_family, &ipv6->sin6_addr, ip_addr, INET6_ADDRSTRLEN);
-				ips.push_back(ip_addr);
-			}
-		}
-
-		freeaddrinfo(res);
-
-		if (!ips.empty()) {
-
-			bool to_update_cache = false;
-			int cache_ttl = dns_resolve_data->ttl;
-			if (dns_resolve_data->ttl > dns_resolve_data->refresh_intv) {
-				thread_local std::mt19937 gen(std::random_device{}());
-				const int jitter = static_cast<int>(dns_resolve_data->ttl * 0.025);
-				std::uniform_int_distribution<int> dis(-jitter, jitter);
-				cache_ttl += dis(gen);
-			}
-
-			if (!dns_resolve_data->cached_ips.empty()) {
-
-				if (dns_resolve_data->cached_ips.size() == ips.size()) {
-					for (const std::string& ip : ips) {
-
-						if (dns_resolve_data->cached_ips.find(ip) == dns_resolve_data->cached_ips.end()) {
-							to_update_cache = true;
-							break;
-						}
-					}
-				}
-				else
-					to_update_cache = true;
-
-				// only update dns_records_bookkeeping
-				if (!to_update_cache) {
-					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "DNS cache record already up-to-date. (Hostname:[%s] IP:[%s])\n", dns_resolve_data->hostname.c_str(), debug_iplisttostring(ips).c_str());
-					dns_resolve_data->result.set_value(std::make_tuple<>(true, DNS_Cache_Record(dns_resolve_data->hostname, std::move(dns_resolve_data->cached_ips), monotonic_time() + (1000 * cache_ttl))));
-				}
-			}
-			else
-				to_update_cache = true;
-
-			if (to_update_cache) {
-				dns_resolve_data->result.set_value(std::make_tuple<>(true, DNS_Cache_Record(dns_resolve_data->hostname, ips, monotonic_time() + (1000 * cache_ttl))));
-				dns_resolve_data->dns_cache->add(dns_resolve_data->hostname, std::move(ips));
-			}
-
-			return NULL;
-		}
-	}
-	catch (std::exception& ex) {
-		proxy_error("An exception occurred while resolving hostname: %s [%s]\n", dns_resolve_data->hostname.c_str(), ex.what());
-	}
-	catch (...) {
-		proxy_error("An unknown exception has occurred while resolving hostname: %s\n", dns_resolve_data->hostname.c_str());
-	}
-
-__error:	
-	dns_resolve_data->result.set_value(std::make_tuple<>(false, DNS_Cache_Record()));
-
-	return NULL;
-}
+// validate_ip(), get_connected_peer_ip_from_socket(), debug_iplisttostring()
+// and monitor_dns_resolver_thread() moved to lib/DNS_Cache.cpp so they can
+// back both MySQL_Monitor and PgSQL_Monitor.
 
 void* MySQL_Monitor::monitor_dns_cache() {
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
@@ -4946,6 +4787,7 @@ void* MySQL_Monitor::monitor_dns_cache() {
 							dns_resolve_data->ttl = mysql_thread___monitor_local_dns_cache_ttl;
 							dns_resolve_data->refresh_intv = mysql_thread___monitor_local_dns_cache_refresh_interval;
 							dns_resolve_data->dns_cache = dns_cache;
+							dns_resolve_data->ai_family = mysql_resolution_family_to_ai_family(mysql_thread___resolution_family);
 							dns_resolve_result.emplace_back(dns_resolve_data->result.get_future());
 
 							proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Removing expired DNS record from bookkeeper. (Hostname:[%s] IP:[%s])\n", itr->hostname_.c_str(), debug_iplisttostring(dns_resolve_data->cached_ips).c_str());
@@ -4998,6 +4840,7 @@ void* MySQL_Monitor::monitor_dns_cache() {
 					dns_resolve_data->ttl = mysql_thread___monitor_local_dns_cache_ttl;
 					dns_resolve_data->refresh_intv = mysql_thread___monitor_local_dns_cache_refresh_interval;
 					dns_resolve_data->dns_cache = dns_cache;
+					dns_resolve_data->ai_family = mysql_resolution_family_to_ai_family(mysql_thread___resolution_family);
 					dns_resolve_result.emplace_back(dns_resolve_data->result.get_future());
 					dns_resolver_queue.add(new WorkItem<DNS_Resolve_Data>(dns_resolve_data.release(), monitor_dns_resolver_thread));
 					usleep(delay_us);
@@ -6832,8 +6675,12 @@ bool MySQL_Monitor::_dns_cache_update(const std::string &hostname, std::vector<s
 		dns_cache_thread = GloMyMon->dns_cache;
 
 	if (dns_cache_thread) {
+		// Render the IP list for the debug log BEFORE moving the vector
+		// into add_if_not_exist; reading the moved-from vector would yield
+		// "valid but unspecified" content (typically empty).
+		const std::string ip_list_for_log = debug_iplisttostring(ip_address);
 		if (dns_cache_thread->add_if_not_exist(trim(hostname), std::move(ip_address))) {
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Direct DNS cache update. (Hostname:[%s] IP:[%s])\n", hostname.c_str(), debug_iplisttostring(ip_address).c_str());
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Direct DNS cache update. (Hostname:[%s] IP:[%s])\n", hostname.c_str(), ip_list_for_log.c_str());
 			return true;
 		}
 	}
@@ -6848,133 +6695,8 @@ void MySQL_Monitor::trigger_dns_cache_update() {
 	}
 }
 
-bool DNS_Cache::add(const std::string& hostname, std::vector<std::string>&& ips) {
-
-	if (!enabled) return false;
-
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Updating DNS cache. (Hostname:[%s] IP:[%s])\n", hostname.c_str(), debug_iplisttostring(ips).c_str());
-	int rc = pthread_rwlock_wrlock(&rwlock_);
-	assert(rc == 0);
-	auto& ip_addr = records[hostname];
-	ip_addr.ips = std::move(ips);
-	__sync_fetch_and_and(&ip_addr.counter, 0);
-	rc = pthread_rwlock_unlock(&rwlock_);
-	assert(rc == 0);
-
-	if (GloMyMon)
-		__sync_fetch_and_add(&GloMyMon->dns_cache_record_updated, 1);
-
-	return true;
-}
-
-bool DNS_Cache::add_if_not_exist(const std::string& hostname, std::vector<std::string>&& ips) {
-	if (!enabled) return false;
-
-	int rc = pthread_rwlock_wrlock(&rwlock_);
-	assert(rc == 0);
-	if (records.find(hostname) == records.end()) {
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Updating DNS cache. (Hostname:[%s] IP:[%s])\n", hostname.c_str(), debug_iplisttostring(ips).c_str());
-		auto& ip_addr = records[hostname];
-		ip_addr.ips = std::move(ips);
-		__sync_fetch_and_and(&ip_addr.counter, 0);
-	}
-	rc = pthread_rwlock_unlock(&rwlock_);
-	assert(rc == 0);
-
-	if (GloMyMon)
-		__sync_fetch_and_add(&GloMyMon->dns_cache_record_updated, 1);
-
-	return true;
-}
-
-std::string DNS_Cache::get_next_ip(const IP_ADDR& ip_addr) const {
-
-	if (ip_addr.ips.empty())
-		return "";
-
-	const auto counter_val = __sync_fetch_and_add(const_cast<unsigned long*>(&ip_addr.counter), 1);
-
-	return ip_addr.ips[counter_val%ip_addr.ips.size()];
-}
-
-std::string DNS_Cache::lookup(const std::string& hostname, size_t* ip_count) const {
-	if (!enabled) return "";
-
-	std::string ip;
-	
-	__sync_fetch_and_add(&GloMyMon->dns_cache_queried, 1);
-
-	int rc = pthread_rwlock_rdlock(&rwlock_);
-	assert(rc == 0);
-	auto itr = records.find(hostname);
-
-	if (itr != records.end()) {
-		ip = get_next_ip(itr->second);
-
-		if (ip_count)
-			*ip_count = itr->second.ips.size();
-
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "DNS cache lookup success. (Hostname:[%s] IP returned:[%s])\n", hostname.c_str(), ip.c_str());
-	}
-	else {
-		if (ip_count) 
-			*ip_count = 0;
-	}
-	rc = pthread_rwlock_unlock(&rwlock_);
-	assert(rc == 0);
-
-	if (!ip.empty() && GloMyMon) {
-		__sync_fetch_and_add(&GloMyMon->dns_cache_lookup_success, 1);
-	}
-
-	return ip;
-}
-
-void DNS_Cache::remove(const std::string& hostname) {
-	bool item_removed = false;
-
-	int rc = pthread_rwlock_wrlock(&rwlock_);
-	assert(rc == 0);
-	auto itr = records.find(hostname);
-	if (itr != records.end()) {
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Removing DNS cache record. (Hostname:[%s] IP:[%s])\n", hostname.c_str(), debug_iplisttostring(itr->second.ips).c_str());
-		records.erase(itr);
-		item_removed = true;
-	}
-	rc = pthread_rwlock_unlock(&rwlock_);
-
-	if (item_removed && GloMyMon)
-		__sync_fetch_and_add(&GloMyMon->dns_cache_record_updated, 1);
-
-	assert(rc == 0);
-
-	
-}
-
-void DNS_Cache::clear() {
-	size_t records_removed = 0;
-	int rc = pthread_rwlock_wrlock(&rwlock_);
-	assert(rc == 0);
-	records_removed = records.size();
-	records.clear();
-	rc = pthread_rwlock_unlock(&rwlock_);
-	assert(rc == 0);
-	if (records_removed)
-		__sync_fetch_and_add(&GloMyMon->dns_cache_record_updated, records_removed);
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "DNS cache was cleared.\n");
-}
-
-bool DNS_Cache::empty() const {
-	bool result = true;
-
-	int rc = pthread_rwlock_rdlock(&rwlock_);
-	assert(rc == 0);
-	result = records.empty();
-	rc = pthread_rwlock_unlock(&rwlock_);
-	assert(rc == 0);
-
-	return result;
-}
+// DNS_Cache::add(), add_if_not_exist(), get_next_ip(), lookup(), remove(),
+// clear(), and empty() moved to lib/DNS_Cache.cpp.
 
 #define NEXT_IMMEDIATE(new_st) do { async_state_machine_=new_st; goto __again; } while (0)
 
