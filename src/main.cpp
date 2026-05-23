@@ -1128,7 +1128,7 @@ void ProxySQL_Main_join_all_threads() {
 		GloMyMon->shutdown=true;
 	}
 	if (GloPgMon) {
-		GloPgMon->shutdown=true;
+		GloPgMon->shutdown.store(true, std::memory_order_release);
 	}
 	// join GloMyMon thread
 	if (GloMyMon && MyMon_thread) {

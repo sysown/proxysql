@@ -2508,7 +2508,7 @@ void* PgSQL_monitor_scheduler_thread() {
 	tasks_intvs_t next_intvs {};
 	vector<task_batch_t> tasks_batches {};
 
-	while (GloPgMon->shutdown == false && pgsql_thread___monitor_enabled == true) {
+	while (GloPgMon->shutdown.load(std::memory_order_acquire) == false && pgsql_thread___monitor_enabled == true) {
 		cur_intv_start = monotonic_time();
 
 		uint64_t closest_intv {
@@ -2753,12 +2753,15 @@ std::string PgSQL_Monitor::dns_lookup(const std::string& hostname,
 
 	if (dns_cache_thread) {
 		ip = dns_cache_thread->lookup(trim(hostname), ip_count);
+	}
 
-		if (ip.empty() && return_hostname_if_lookup_fails) {
-			ip = hostname;
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
-				"DNS cache lookup was a miss. (Hostname:[%s])\n", hostname.c_str());
-		}
+	// Apply the hostname fallback even when the cache facade is unavailable
+	// (e.g. early startup or shutdown), so callers consistently get the
+	// hostname back as documented when return_hostname_if_lookup_fails=true.
+	if (ip.empty() && return_hostname_if_lookup_fails) {
+		ip = hostname;
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+			"DNS cache lookup was a miss. (Hostname:[%s])\n", hostname.c_str());
 	}
 
 	return ip;
@@ -2856,7 +2859,7 @@ void* PgSQL_Monitor::monitor_dns_cache() {
 	std::list<DNS_Cache_Record> dns_records_bookkeeping;
 	wqueue<DNS_Resolve_Data*> dns_resolver_queue;
 
-	while (GloPgMon->shutdown == false) {
+	while (GloPgMon->shutdown.load(std::memory_order_acquire) == false) {
 		if (!GloPTH) return nullptr;
 
 		const unsigned int glover = GloPTH->get_global_version();
@@ -3059,7 +3062,7 @@ void* PgSQL_Monitor::monitor_dns_cache() {
 					delete w;
 				}
 
-				if (GloPgMon->shutdown) return nullptr;
+				if (GloPgMon->shutdown.load(std::memory_order_acquire)) return nullptr;
 			}
 		}
 

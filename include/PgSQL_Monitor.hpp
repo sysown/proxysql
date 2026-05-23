@@ -26,8 +26,10 @@
 #define MONITOR_SQLITE_TABLE_PROXYSQL_SERVERS "CREATE TABLE proxysql_servers (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 6032 , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostname, port) )"
 
 struct PgSQL_Monitor {
-	// @brief Flags if monitoring threads should be shutdown.
-	bool shutdown = false;
+	// @brief Flags if monitoring threads should be shutdown.  Atomic because
+	// the resolver / monitor loops read it from worker threads while
+	// lifecycle code writes it from the main thread.
+	std::atomic<bool> shutdown { false };
 	// @brief Mutex to hold to update `monitor_internal.pgsql_servers`
 	std::mutex pgsql_srvs_mutex {};
 	// @brief Mutex to hold to update/read `pgsql_servers` to monitor
