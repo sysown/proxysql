@@ -5325,6 +5325,13 @@ handler_again:
 			//fprintf(stderr,"CONNECTING_CLIENT\n");
 			// FIXME: to implement
 			break;
+		case AUTHENTICATING_BACKEND_FOR_CLIENT:
+			// Pass-through authentication probe state.
+			// Handler is added in a later commit; for now the state is
+			// declared but unreachable from the auth path. Defensive
+			// teardown if we somehow land here.
+			handler_ret = -1;
+			return handler_ret;
 		case PINGING_SERVER:
 			{
 				int rc=handler_again___status_PINGING_SERVER();
