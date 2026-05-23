@@ -4,7 +4,8 @@
 
 #include <cstdio>
 
-MySQL_Passthrough_Auth_Cache::MySQL_Passthrough_Auth_Cache() {
+MySQL_Passthrough_Auth_Cache::MySQL_Passthrough_Auth_Cache()
+	: inflight_probes(0) {
 	pthread_rwlock_init(&lock, NULL);
 }
 
@@ -82,6 +83,30 @@ std::vector<passthrough_entry_view> MySQL_Passthrough_Auth_Cache::snapshot() con
 	}
 	pthread_rwlock_unlock(&lock);
 	return out;
+}
+
+bool MySQL_Passthrough_Auth_Cache::try_acquire_inflight(int max_inflight) {
+	if (max_inflight <= 0) {
+		// 0 or negative means "no cap"; succeed without bookkeeping.
+		// Practically the variable is bounded to [1, 10000] by the
+		// VariablesPointers_int registration, but be defensive.
+		inflight_probes.fetch_add(1, std::memory_order_relaxed);
+		return true;
+	}
+	int prev = inflight_probes.fetch_add(1, std::memory_order_relaxed);
+	if (prev >= max_inflight) {
+		inflight_probes.fetch_sub(1, std::memory_order_relaxed);
+		return false;
+	}
+	return true;
+}
+
+void MySQL_Passthrough_Auth_Cache::release_inflight() {
+	inflight_probes.fetch_sub(1, std::memory_order_relaxed);
+}
+
+int MySQL_Passthrough_Auth_Cache::inflight() const {
+	return inflight_probes.load(std::memory_order_relaxed);
 }
 
 void MySQL_Passthrough_Auth_Cache::print_version() {

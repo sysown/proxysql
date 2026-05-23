@@ -2,6 +2,7 @@
 #define PROXYSQL_MYSQL_PASSTHROUGH_AUTH_CACHE_H
 
 #include <pthread.h>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -30,6 +31,7 @@ class MySQL_Passthrough_Auth_Cache {
 		};
 		mutable pthread_rwlock_t lock;
 		std::unordered_map<std::string, entry_t> entries;
+		std::atomic<int> inflight_probes;
 
 	public:
 		MySQL_Passthrough_Auth_Cache();
@@ -54,6 +56,15 @@ class MySQL_Passthrough_Auth_Cache {
 
 		// Snapshot of entries (without password) for stats / observability.
 		std::vector<passthrough_entry_view> snapshot() const;
+
+		// Global in-flight probe counter (spec §7.3). Sessions wishing to
+		// start a backend probe call try_acquire_inflight with the current
+		// configured cap; on true they MUST pair with release_inflight when
+		// the probe completes (success or failure). On false the session
+		// must reject the auth with a generic ERR.
+		bool try_acquire_inflight(int max_inflight);
+		void release_inflight();
+		int  inflight() const;
 
 		void print_version();
 };

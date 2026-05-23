@@ -1735,9 +1735,25 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 		return fail_session();
 	}
 
+	// Global in-flight probe cap (spec §7.3). Sessions that lose the race
+	// here get a generic ERR instead of a probe; this bounds concurrent
+	// probe load on the backend and protects against thundering-herd after
+	// a password rotation. RAII guard ensures the slot is released on
+	// every return path below (success and failure).
+	if (!GloMyPTAuthCache->try_acquire_inflight(
+			mysql_thread___passthrough_auth_max_inflight_probes)) {
+		return fail_session();
+	}
+	struct InflightGuard {
+		MySQL_Passthrough_Auth_Cache* cache;
+		~InflightGuard() { if (cache) cache->release_inflight(); }
+	};
+	InflightGuard inflight_guard { GloMyPTAuthCache };
+
 	// Empty-password row case: default_hostgroup was populated by
-	// PPHR_5passwordTrue from the row. Unknown-user case (when added
-	// in task #10) will fall back to mysql-passthrough_default_hg.
+	// PPHR_5passwordTrue from the row. Unknown-user case uses the
+	// session's default_hostgroup which was set from
+	// mysql-passthrough_default_hg in PPHR_verify_password.
 	const int target_hg = default_hostgroup;
 
 	MyHGC *myhgc = MyHGM->MyHGC_lookup(target_hg);
