@@ -89,6 +89,21 @@ static const query_test single_statement_rejected[] = {
 	{ "Leading USE",      "USE test" },
 	{ "Leading XA",       "XA START 'tx1'" },
 	{ "EXPLAIN ANALYZE",  "EXPLAIN ANALYZE SELECT * FROM test.canary" },
+	// GHSA-7wh6-2vcc-gcm4: EXPLAIN ANALYZE bypass variants. The literal
+	// "EXPLAIN ANALYZE" substring check missed these; adding ANALYZE to
+	// the substring blacklist covers all of them.
+	{ "EXPLAIN/**/ANALYZE (block comment)",
+	  "EXPLAIN/**/ANALYZE SELECT * FROM test.canary" },
+	{ "EXPLAIN  ANALYZE (double space)",
+	  "EXPLAIN  ANALYZE SELECT * FROM test.canary" },
+	{ "EXPLAIN\\nANALYZE (newline)",
+	  "EXPLAIN\nANALYZE SELECT * FROM test.canary" },
+	{ "EXPLAIN (ANALYZE) — PostgreSQL parenthesized option",
+	  "EXPLAIN (ANALYZE) SELECT * FROM test.canary" },
+	{ "EXPLAIN (VERBOSE, ANALYZE) — PostgreSQL with extra options",
+	  "EXPLAIN (VERBOSE, ANALYZE) SELECT * FROM test.canary" },
+	{ "Standalone ANALYZE TABLE",
+	  "ANALYZE TABLE test.canary" },
 	{ "Subquery RENAME via comment",
 	  "SELECT * FROM test.canary -- ;\nRENAME TABLE test.canary TO test.canary_renamed" },
 };

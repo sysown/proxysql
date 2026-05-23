@@ -1271,7 +1271,19 @@ bool Query_Tool_Handler::validate_readonly_query(const std::string& query) {
 		"UNLOCK", "KILL", "OPTIMIZE", "REPAIR", "HANDLER",
 		"INSTALL", "UNINSTALL", "CHANGE", "PURGE", "SAVEPOINT",
 		"RELEASE", "ROLLBACK", "COMMIT", "BEGIN", "START", "XA",
-		"SHUTDOWN", "INTO OUTFILE", "INTO DUMPFILE"
+		"SHUTDOWN", "INTO OUTFILE", "INTO DUMPFILE",
+		// GHSA-7wh6-2vcc-gcm4: ANALYZE has two side-effecting forms that
+		// the prior literal "EXPLAIN ANALYZE" check below cannot cover:
+		//   * standalone "ANALYZE TABLE x" (MySQL) / "ANALYZE foo" (PG)
+		//     — collects stats, is a write-side-effect on system tables.
+		//   * "EXPLAIN ANALYZE ..." with any obfuscation in between,
+		//     including comments, multiple whitespace, newlines, and the
+		//     PostgreSQL parenthesized option form "EXPLAIN (ANALYZE)" or
+		//     "EXPLAIN (VERBOSE, ANALYZE)" — these execute the wrapped
+		//     statement on PG.
+		// Putting ANALYZE in the substring blacklist catches all of these
+		// regardless of whitespace/comment shape.
+		"ANALYZE"
 	};
 
 	for (const auto& word : dangerous) {
@@ -1290,13 +1302,6 @@ bool Query_Tool_Handler::validate_readonly_query(const std::string& query) {
 	// `USE` changes the current schema as a side effect and must not be
 	// reachable through a read-only tool.
 	if (upper.substr(0, 4) == "USE ") {
-		return false;
-	}
-
-	// GHSA-7wh6-2vcc-gcm4: EXPLAIN ANALYZE actually executes the wrapped
-	// statement on PostgreSQL (and in some MySQL configurations).  The
-	// read-only path must not allow it.
-	if (upper.find("EXPLAIN ANALYZE") != std::string::npos) {
 		return false;
 	}
 
