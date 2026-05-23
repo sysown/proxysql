@@ -11,6 +11,7 @@ using json = nlohmann::json;
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
 #include "MySQL_Authentication.hpp"
+#include "MySQL_Passthrough_Auth_Cache.h"
 #include "MySQL_LDAP_Authentication.hpp"
 #include "MySQL_Variables.h"
 
@@ -20,6 +21,7 @@ using json = nlohmann::json;
 //#include <ma_global.h>
 
 extern MySQL_Authentication *GloMyAuth;
+extern MySQL_Passthrough_Auth_Cache *GloMyPTAuthCache;
 extern MySQL_LDAP_Authentication *GloMyLdapAuth;
 extern MySQL_Threads_Handler *GloMTH;
 
@@ -2395,6 +2397,35 @@ void MySQL_Protocol::PPHR_next_auth_stage(MyProt_tmp_auth_vars& vars1, PASSWORD_
 bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_details_t& account_details) {
 	bool ret = false;
 	char reply[SHA_DIGEST_LENGTH + 1] = { 0 };
+
+	// Pass-through cache lookup (spec §8.2). When pass-through is enabled
+	// and the mysql_users row has an empty password (admin-provisioned
+	// opt-in), look up the in-memory cache. On hit, replace vars1.password
+	// with the learned cleartext so the existing verification path below
+	// runs against it as if mysql_users had stored a cleartext password.
+	//
+	// Unknown-user fallback (no row in mysql_users) is dispatched in a
+	// separate commit that introduces the AUTHENTICATING_BACKEND_FOR_CLIENT
+	// state and the protocol helpers; until then the cache stays empty so
+	// the hit branch below is effectively dead code.
+	if (mysql_thread___passthrough_auth_enabled
+		&& mysql_thread___passthrough_auth_empty_password
+		&& auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD
+		&& (*myds)->sess->session_type == PROXYSQL_SESSION_MYSQL
+		&& GloMyPTAuthCache != NULL
+		&& vars1.user != NULL
+		&& vars1.password != NULL
+		&& strlen(vars1.password) == 0) {
+		std::string cleartext;
+		const uint32_t ttl_s =
+			mysql_thread___passthrough_auth_cache_ttl_s > 0
+				? static_cast<uint32_t>(mysql_thread___passthrough_auth_cache_ttl_s)
+				: 0;
+		if (GloMyPTAuthCache->lookup(std::string((const char*)vars1.user), cleartext, ttl_s)) {
+			free(vars1.password);
+			vars1.password = strdup(cleartext.c_str());
+		}
+	}
 
 	if (vars1.password == NULL) {
 		// this is a workaround for bug #603
