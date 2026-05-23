@@ -356,13 +356,13 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"monitor_slave_lag_when_null",
 */
 	(char*)"monitor_threads",
+	(char*)"monitor_local_dns_cache_ttl",
+	(char*)"monitor_local_dns_cache_refresh_interval",
+	(char*)"monitor_local_dns_resolver_queue_maxsize",
 /*
 	(char*)"monitor_threads_min",
 	(char*)"monitor_threads_max",
 	(char*)"monitor_threads_queue_maxsize",
-	(char*)"monitor_local_dns_cache_ttl",
-	(char*)"monitor_local_dns_cache_refresh_interval",
-	(char*)"monitor_local_dns_resolver_queue_maxsize",
 	(char*)"monitor_wait_timeout",
 */
 	(char*)"monitor_writer_is_also_reader",
