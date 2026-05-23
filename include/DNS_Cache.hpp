@@ -1,0 +1,132 @@
+#ifndef __CLASS_DNS_CACHE_H
+#define __CLASS_DNS_CACHE_H
+
+// Shared DNS cache infrastructure used by both MySQL_Monitor and PgSQL_Monitor.
+// The cache itself is just a hostname -> [IP] map with TTL; the resolver thread
+// does getaddrinfo and feeds the cache.  Each monitor instantiates its own
+// DNS_Cache and supplies its own counters, so the two protocols share code but
+// have independent cache state.
+
+#include <pthread.h>
+#include <sys/socket.h>
+
+#include <algorithm>
+#include <atomic>
+#include <cassert>
+#include <future>
+#include <iterator>
+#include <memory>
+#include <set>
+#include <sstream>
+#include <string>
+#include <tuple>
+#include <unordered_map>
+#include <vector>
+
+struct DNS_Cache_Record {
+	DNS_Cache_Record() = default;
+	DNS_Cache_Record(DNS_Cache_Record&&) = default;
+	DNS_Cache_Record(const DNS_Cache_Record&) = default;
+	DNS_Cache_Record& operator=(DNS_Cache_Record&&) = default;
+	DNS_Cache_Record& operator=(const DNS_Cache_Record&) = default;
+	DNS_Cache_Record(const std::string& hostname, const std::vector<std::string>& ips, unsigned long long ttl = 0)
+		: hostname_(hostname), ttl_(ttl) {
+		std::copy(ips.begin(), ips.end(), std::inserter(ips_, ips_.end()));
+	}
+	DNS_Cache_Record(const std::string& hostname, std::set<std::string>&& ips, unsigned long long ttl = 0)
+		: hostname_(hostname), ips_(std::move(ips)), ttl_(ttl) { }
+
+	~DNS_Cache_Record() = default;
+
+	std::string hostname_;
+	std::set<std::string> ips_;
+	unsigned long long ttl_ = 0;
+};
+
+class DNS_Cache {
+
+public:
+	DNS_Cache() : enabled(true) {
+		int rc = pthread_rwlock_init(&rwlock_, nullptr);
+		assert(rc == 0);
+	}
+
+	~DNS_Cache() {
+		pthread_rwlock_destroy(&rwlock_);
+	}
+
+	inline
+	void set_enabled_flag(bool value) {
+		enabled = value;
+	}
+
+	// Wire the cache up to per-instance counters maintained by the owning
+	// monitor.  Pass nullptr to leave any counter unincremented; this is what
+	// keeps MySQL_Monitor and PgSQL_Monitor cache state independent.
+	inline
+	void set_counters(unsigned long long* queried,
+		unsigned long long* lookup_success,
+		unsigned long long* record_updated) {
+		counter_queried_ = queried;
+		counter_lookup_success_ = lookup_success;
+		counter_record_updated_ = record_updated;
+	}
+
+	bool add(const std::string& hostname, std::vector<std::string>&& ips);
+	bool add_if_not_exist(const std::string& hostname, std::vector<std::string>&& ips);
+	void remove(const std::string& hostname);
+	void clear();
+	bool empty() const;
+	std::string lookup(const std::string& hostname, size_t* ip_count) const;
+
+private:
+	struct IP_ADDR {
+		std::vector<std::string> ips;
+		unsigned long counter = 0;
+	};
+
+	std::string get_next_ip(const IP_ADDR& ip_addr) const;
+	std::unordered_map<std::string, IP_ADDR> records;
+	std::atomic_bool enabled;
+	mutable pthread_rwlock_t rwlock_;
+
+	unsigned long long* counter_queried_ { nullptr };
+	unsigned long long* counter_lookup_success_ { nullptr };
+	unsigned long long* counter_record_updated_ { nullptr };
+};
+
+struct DNS_Resolve_Data {
+	std::promise<std::tuple<bool, DNS_Cache_Record>> result;
+	std::shared_ptr<DNS_Cache> dns_cache;
+	std::string hostname;
+	std::set<std::string> cached_ips;
+	unsigned int ttl = 0;
+	unsigned int refresh_intv = 0;
+	// Address family for getaddrinfo, set by the caller from its protocol's
+	// resolution_family setting.  AF_UNSPEC keeps the OS default behavior.
+	int ai_family = AF_UNSPEC;
+};
+
+// Worker function for the DNS resolver thread pool.  Performs getaddrinfo
+// on dns_resolve_data->hostname, populates the cache, and fulfils the
+// future on dns_resolve_data->result.
+void* monitor_dns_resolver_thread(const std::vector<DNS_Resolve_Data*>& dns_resolve_data_list);
+
+// Return true if 'ip' is a valid IPv4 or IPv6 address string.
+bool validate_ip(const std::string& ip);
+
+// Return the IP address of the peer connected to 'socket_fd', or "" on
+// failure / non-IP families.
+std::string get_connected_peer_ip_from_socket(int socket_fd);
+
+// Helper: stringify a list of IPs for debug logging.  Defined inline because
+// it's templated over the iterable type used by the various call sites.
+template<class T>
+std::string debug_iplisttostring(const T& ips) {
+	std::stringstream sstr;
+	for (const std::string& ip : ips)
+		sstr << ip << " ";
+	return sstr.str();
+}
+
+#endif // __CLASS_DNS_CACHE_H
