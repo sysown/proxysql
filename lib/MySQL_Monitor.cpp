@@ -6675,8 +6675,12 @@ bool MySQL_Monitor::_dns_cache_update(const std::string &hostname, std::vector<s
 		dns_cache_thread = GloMyMon->dns_cache;
 
 	if (dns_cache_thread) {
+		// Render the IP list for the debug log BEFORE moving the vector
+		// into add_if_not_exist; reading the moved-from vector would yield
+		// "valid but unspecified" content (typically empty).
+		const std::string ip_list_for_log = debug_iplisttostring(ip_address);
 		if (dns_cache_thread->add_if_not_exist(trim(hostname), std::move(ip_address))) {
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Direct DNS cache update. (Hostname:[%s] IP:[%s])\n", hostname.c_str(), debug_iplisttostring(ip_address).c_str());
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Direct DNS cache update. (Hostname:[%s] IP:[%s])\n", hostname.c_str(), ip_list_for_log.c_str());
 			return true;
 		}
 	}

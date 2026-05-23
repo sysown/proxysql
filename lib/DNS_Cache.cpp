@@ -182,7 +182,21 @@ void* DNSResolverWorker::run() {
 			break;
 		}
 		std::vector<DNS_Resolve_Data*> list { item };
-		monitor_dns_resolver_thread(list);
+		try {
+			monitor_dns_resolver_thread(list);
+		} catch (...) {
+			// monitor_dns_resolver_thread() can in principle throw
+			// (allocations inside the try/catch in there are guarded, but
+			// other paths — set_thread_name, vector growth, etc. — aren't).
+			// If it did and the promise was not satisfied, future::get() on
+			// the producer side would block forever and hang shutdown.
+			// Forcibly satisfy the promise with a failure result.  set_value
+			// throws if the promise is already satisfied, which we also
+			// swallow here.
+			try {
+				item->result.set_value(std::make_tuple<>(false, DNS_Cache_Record()));
+			} catch (...) { }
+		}
 		delete item;
 	}
 	return nullptr;

@@ -190,6 +190,24 @@ int main(int /*argc*/, char** /*argv*/) {
 	// servers in a high hostgroup that real test infra doesn't use.
 	admin_exec(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=999");
 	admin_exec(admin, "LOAD PGSQL SERVERS TO RUNTIME");
+
+	// Install a routing rule so client queries hitting the proxy land on
+	// hostgroup 999 (the test's own hostgroup) instead of whatever the
+	// infra's default backend is.  Without this, hammer_proxy() routes
+	// through the default hostgroup — typically configured with an IP
+	// literal in the test infrastructure (see e.g.
+	// test/infra/docker-pgsql16-single/conf/proxysql/config.sql) which
+	// bypasses DNS entirely via validate_ip() and never exercises
+	// PgSQL_Connection::connect_start_DNS_lookup.  Step 3 below would
+	// then assert on counters bumped by the resolver loop alone, masking
+	// a broken connect-path.  Rule id 99999 is well outside ranges used
+	// by the test infra; we delete it on the way out.
+	admin_exec(admin, "DELETE FROM pgsql_query_rules WHERE rule_id=99999");
+	admin_exec(admin,
+		"INSERT INTO pgsql_query_rules "
+		"(rule_id,active,username,destination_hostgroup,apply) "
+		"VALUES (99999,1,'testuser',999,1)");
+	admin_exec(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
 	// Give the resolver loop time to drop any orphaned bookkeeping entry.
 	sleep_seconds(2);
 
@@ -385,6 +403,8 @@ int main(int /*argc*/, char** /*argv*/) {
 	// =====================================================================
 	admin_exec(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=999");
 	admin_exec(admin, "LOAD PGSQL SERVERS TO RUNTIME");
+	admin_exec(admin, "DELETE FROM pgsql_query_rules WHERE rule_id=99999");
+	admin_exec(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
 	{
 		std::stringstream q;
 		q << "SET pgsql-monitor_local_dns_cache_refresh_interval=" << (orig_refresh > 0 ? orig_refresh : 60000);

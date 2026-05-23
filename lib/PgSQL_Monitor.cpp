@@ -2936,120 +2936,123 @@ void* PgSQL_Monitor::monitor_dns_cache() {
 				}
 			} else {
 				std::vector<DNSResolverWorker*> dns_resolver_threads(num_dns_resolver_threads);
-			for (unsigned int i = 0; i < num_dns_resolver_threads; i++) {
-				dns_resolver_threads[i] = new DNSResolverWorker(dns_resolver_queue, "pgDnsResolver");
-				dns_resolver_threads[i]->start(2048, false);
-			}
+				for (unsigned int i = 0; i < num_dns_resolver_threads; i++) {
+					dns_resolver_threads[i] = new DNSResolverWorker(dns_resolver_queue, "pgDnsResolver");
+					dns_resolver_threads[i]->start(2048, false);
+				}
 
-			std::list<std::future<std::tuple<bool, DNS_Cache_Record>>> dns_resolve_result;
+				std::list<std::future<std::tuple<bool, DNS_Cache_Record>>> dns_resolve_result;
 
-			// Stagger enqueueing so the resolver pool doesn't see a burst.
-			int delay_us = 100;
-			if (!hostnames.empty()) {
-				delay_us = pgsql_thread___monitor_local_dns_cache_refresh_interval / 2 / hostnames.size();
-				delay_us *= 40;
-				if (delay_us > 1000000 || delay_us <= 0)
-					delay_us = 10000;
-				delay_us = delay_us + rand() % delay_us;
-			}
+				// Stagger enqueueing so the resolver pool doesn't see a burst.
+				int delay_us = 100;
+				if (!hostnames.empty()) {
+					delay_us = pgsql_thread___monitor_local_dns_cache_refresh_interval / 2 / hostnames.size();
+					delay_us *= 40;
+					if (delay_us > 1000000 || delay_us <= 0)
+						delay_us = 10000;
+					delay_us = delay_us + rand() % delay_us;
+				}
 
-			// Walk the bookkeeper: drop orphans, requeue expired ones, keep
-			// the rest.  Items that survive are also removed from the
-			// "hostnames" set so we don't enqueue them twice below.
-			if (!dns_records_bookkeeping.empty()) {
-				const unsigned long long current_time = monotonic_time();
-				for (auto itr = dns_records_bookkeeping.begin();
-					 itr != dns_records_bookkeeping.end(); ) {
-					if (hostnames.find(itr->hostname_) == hostnames.end()) {
-						dns_cache->remove(itr->hostname_);
-						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
-							"Removing orphaned PgSQL DNS record from bookkeeper. (Hostname:[%s] IP:[%s])\n",
-							itr->hostname_.c_str(), debug_iplisttostring(itr->ips_).c_str());
-						itr = dns_records_bookkeeping.erase(itr);
-					} else {
-						hostnames.erase(itr->hostname_);
-						if (current_time > itr->ttl_) {
-							std::unique_ptr<DNS_Resolve_Data> dns_resolve_data(new DNS_Resolve_Data());
-							dns_resolve_data->hostname = std::move(itr->hostname_);
-							dns_resolve_data->cached_ips = std::move(itr->ips_);
-							dns_resolve_data->ttl = pgsql_thread___monitor_local_dns_cache_ttl;
-							dns_resolve_data->refresh_intv = pgsql_thread___monitor_local_dns_cache_refresh_interval;
-							dns_resolve_data->dns_cache = dns_cache;
-							// PgSQL has no separate resolution-family setting yet;
-							// default to AF_UNSPEC so we honor the OS resolver.
-							dns_resolve_data->ai_family = AF_UNSPEC;
-							dns_resolve_result.emplace_back(dns_resolve_data->result.get_future());
-
+				// Walk the bookkeeper: drop orphans, requeue expired ones, keep
+				// the rest.  Items that survive are also removed from the
+				// "hostnames" set so we don't enqueue them twice below.
+				if (!dns_records_bookkeeping.empty()) {
+					const unsigned long long current_time = monotonic_time();
+					for (auto itr = dns_records_bookkeeping.begin();
+						 itr != dns_records_bookkeeping.end(); ) {
+						if (hostnames.find(itr->hostname_) == hostnames.end()) {
+							dns_cache->remove(itr->hostname_);
 							proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
-								"Removing expired PgSQL DNS record from bookkeeper. (Hostname:[%s] IP:[%s])\n",
-								dns_resolve_data->hostname.c_str(),
-								debug_iplisttostring(dns_resolve_data->cached_ips).c_str());
-							dns_resolver_queue.add(dns_resolve_data.release());
+								"Removing orphaned PgSQL DNS record from bookkeeper. (Hostname:[%s] IP:[%s])\n",
+								itr->hostname_.c_str(), debug_iplisttostring(itr->ips_).c_str());
 							itr = dns_records_bookkeeping.erase(itr);
-							usleep(delay_us);
-							continue;
+						} else {
+							hostnames.erase(itr->hostname_);
+							if (current_time > itr->ttl_) {
+								std::unique_ptr<DNS_Resolve_Data> dns_resolve_data(new DNS_Resolve_Data());
+								dns_resolve_data->hostname = std::move(itr->hostname_);
+								dns_resolve_data->cached_ips = std::move(itr->ips_);
+								dns_resolve_data->ttl = pgsql_thread___monitor_local_dns_cache_ttl;
+								dns_resolve_data->refresh_intv = pgsql_thread___monitor_local_dns_cache_refresh_interval;
+								dns_resolve_data->dns_cache = dns_cache;
+								// PgSQL has no separate resolution-family setting yet;
+								// default to AF_UNSPEC so we honor the OS resolver.
+								dns_resolve_data->ai_family = AF_UNSPEC;
+								dns_resolve_result.emplace_back(dns_resolve_data->result.get_future());
+
+								// Capture the IP list for the debug log
+								// BEFORE std::move'ing dns_resolve_data away.
+								const std::string ip_log = debug_iplisttostring(dns_resolve_data->cached_ips);
+								proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+									"Removing expired PgSQL DNS record from bookkeeper. (Hostname:[%s] IP:[%s])\n",
+									dns_resolve_data->hostname.c_str(),
+									ip_log.c_str());
+								dns_resolver_queue.add(dns_resolve_data.release());
+								itr = dns_records_bookkeeping.erase(itr);
+								usleep(delay_us);
+								continue;
+							}
+							itr++;
 						}
-						itr++;
 					}
 				}
-			}
 
-			// Scale the resolver pool up if the queue is filling.
-			auto maybe_scale_pool = [&](unsigned int divisor) {
-				unsigned int qsize = dns_resolver_queue.size();
-				unsigned int num_threads = dns_resolver_threads.size();
-				if (qsize > (static_cast<unsigned int>(pgsql_thread___monitor_local_dns_resolver_queue_maxsize) / divisor)) {
-					proxy_warning("PgSQL DNS resolver queue too big: %d.\n", qsize);
-					unsigned int threads_max = num_dns_resolver_max_threads;
-					if (threads_max > num_threads) {
-						unsigned int new_threads = threads_max - num_threads;
-						if ((qsize / divisor) < new_threads)
-							new_threads = qsize / divisor;
-						if (new_threads) {
-							unsigned int old_num_threads = num_threads;
-							num_threads += new_threads;
-							dns_resolver_threads.resize(num_threads);
-							for (unsigned int i = old_num_threads; i < num_threads; i++) {
-								dns_resolver_threads[i] = new DNSResolverWorker(dns_resolver_queue, "pgDnsResolver");
-								dns_resolver_threads[i]->start(2048, false);
+				// Scale the resolver pool up if the queue is filling.
+				auto maybe_scale_pool = [&](unsigned int divisor) {
+					unsigned int qsize = dns_resolver_queue.size();
+					unsigned int num_threads = dns_resolver_threads.size();
+					if (qsize > (static_cast<unsigned int>(pgsql_thread___monitor_local_dns_resolver_queue_maxsize) / divisor)) {
+						proxy_warning("PgSQL DNS resolver queue too big: %d.\n", qsize);
+						unsigned int threads_max = num_dns_resolver_max_threads;
+						if (threads_max > num_threads) {
+							unsigned int new_threads = threads_max - num_threads;
+							if ((qsize / divisor) < new_threads)
+								new_threads = qsize / divisor;
+							if (new_threads) {
+								unsigned int old_num_threads = num_threads;
+								num_threads += new_threads;
+								dns_resolver_threads.resize(num_threads);
+								for (unsigned int i = old_num_threads; i < num_threads; i++) {
+									dns_resolver_threads[i] = new DNSResolverWorker(dns_resolver_queue, "pgDnsResolver");
+									dns_resolver_threads[i]->start(2048, false);
+								}
 							}
 						}
 					}
+				};
+				maybe_scale_pool(8);
+
+				// Enqueue the remaining (new) hostnames.
+				for (const std::string& hostname : hostnames) {
+					std::unique_ptr<DNS_Resolve_Data> dns_resolve_data(new DNS_Resolve_Data());
+					dns_resolve_data->hostname = hostname;
+					dns_resolve_data->ttl = pgsql_thread___monitor_local_dns_cache_ttl;
+					dns_resolve_data->refresh_intv = pgsql_thread___monitor_local_dns_cache_refresh_interval;
+					dns_resolve_data->dns_cache = dns_cache;
+					dns_resolve_data->ai_family = AF_UNSPEC;
+					dns_resolve_result.emplace_back(dns_resolve_data->result.get_future());
+					dns_resolver_queue.add(dns_resolve_data.release());
+					usleep(delay_us);
 				}
-			};
-			maybe_scale_pool(8);
 
-			// Enqueue the remaining (new) hostnames.
-			for (const std::string& hostname : hostnames) {
-				std::unique_ptr<DNS_Resolve_Data> dns_resolve_data(new DNS_Resolve_Data());
-				dns_resolve_data->hostname = hostname;
-				dns_resolve_data->ttl = pgsql_thread___monitor_local_dns_cache_ttl;
-				dns_resolve_data->refresh_intv = pgsql_thread___monitor_local_dns_cache_refresh_interval;
-				dns_resolve_data->dns_cache = dns_cache;
-				dns_resolve_data->ai_family = AF_UNSPEC;
-				dns_resolve_result.emplace_back(dns_resolve_data->result.get_future());
-				dns_resolver_queue.add(dns_resolve_data.release());
-				usleep(delay_us);
-			}
+				maybe_scale_pool(4);
 
-			maybe_scale_pool(4);
+				// Push one NULL per worker so each loop's `remove()` returns
+				// the sentinel and the worker exits cleanly.
+				for (size_t i = 0; i < dns_resolver_threads.size(); i++)
+					dns_resolver_queue.add(nullptr);
 
-			// Push one NULL per worker so each loop's `remove()` returns
-			// the sentinel and the worker exits cleanly.
-			for (size_t i = 0; i < dns_resolver_threads.size(); i++)
-				dns_resolver_queue.add(nullptr);
-
-			// Collect results.  Successful resolutions feed the bookkeeper.
-			for (auto& dns_result : dns_resolve_result) {
-				auto ret_value = dns_result.get();
-				if (std::get<0>(ret_value)) {
-					DNS_Cache_Record dns_record = std::get<1>(ret_value);
-					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
-						"Adding PgSQL DNS record to bookkeeper. (Hostname:[%s] IP:[%s])\n",
-						dns_record.hostname_.c_str(), debug_iplisttostring(dns_record.ips_).c_str());
-					dns_records_bookkeeping.emplace_back(std::move(dns_record));
+				// Collect results.  Successful resolutions feed the bookkeeper.
+				for (auto& dns_result : dns_resolve_result) {
+					auto ret_value = dns_result.get();
+					if (std::get<0>(ret_value)) {
+						DNS_Cache_Record dns_record = std::get<1>(ret_value);
+						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+							"Adding PgSQL DNS record to bookkeeper. (Hostname:[%s] IP:[%s])\n",
+							dns_record.hostname_.c_str(), debug_iplisttostring(dns_record.ips_).c_str());
+						dns_records_bookkeeping.emplace_back(std::move(dns_record));
+					}
 				}
-			}
 
 				for (DNSResolverWorker* const w : dns_resolver_threads) {
 					w->join();
