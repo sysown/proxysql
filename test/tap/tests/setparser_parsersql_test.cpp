@@ -336,6 +336,44 @@ void TestStrictPgsqlIdent(const StrictPgsqlCase* cases, int n) {
 	}
 }
 
+// Strict-mode regression for ParserSQL 1.0.8's unclosed-delimited-ident fix.
+// Before the fix, scan_double_quoted_identifier silently swallowed the rest
+// of the input as one giant TK_IDENTIFIER, so unclosed `"` in `SET search_path
+// = "unclosed_quote, public` parsed as identifier `unclosed_quote, public`
+// (commas, spaces and all), passed downstream validation, and corrupted the
+// stored value. The walker now returns an empty map (parse failed) so the
+// session can fall through to unable_to_parse_set_statement().
+struct EmptyOnParseFailCase {
+  const char* query;
+  enum { MYSQL, PGSQL } dialect;
+};
+static EmptyOnParseFailCase parsersql_parse_fail_strict[] = {
+  { "SET search_path = \"unclosed_quote, public",  EmptyOnParseFailCase::PGSQL },
+  { "SET `unclosed_ident = 1",                      EmptyOnParseFailCase::MYSQL },
+};
+
+void TestEmptyOnParseFail(const EmptyOnParseFailCase* cases, int n) {
+	for (int i = 0; i < n; i++) {
+		auto m = (cases[i].dialect == EmptyOnParseFailCase::PGSQL)
+			? parsersql_parse_set_pgsql(cases[i].query)
+			: parsersql_parse_set_mysql(cases[i].query);
+		bool empty = m.empty();
+		ok(empty, "[parse_fail_strict %d] empty result for malformed: %s",
+			i, cases[i].query);
+		if (!empty) {
+			for (auto& kv : m) {
+				std::string joined;
+				for (size_t j = 0; j < kv.second.size(); ++j) {
+					if (j) joined += " || ";
+					joined += "[" + kv.second[j] + "]";
+				}
+				diag("  unexpected parse result: %s = %s",
+					kv.first.c_str(), joined.c_str());
+			}
+		}
+	}
+}
+
 int main(int argc, char** argv) {
 	unsigned int p = 0;
 	p += arraysize(sql_mode);
@@ -354,6 +392,7 @@ int main(int argc, char** argv) {
 	p *= 2;
 	p += arraysize(parsersql_function_call_strict) * 2;
 	p += arraysize(parsersql_pgsql_ident_strict) * 2;
+	p += arraysize(parsersql_parse_fail_strict);
 	plan(p);
 	TestParse(sql_mode, arraysize(sql_mode), "sql_mode");
 	TestParse(time_zone, arraysize(time_zone), "time_zone");
@@ -370,6 +409,7 @@ int main(int argc, char** argv) {
 	TestParsePgsql(parsersql_pgsql_time_zone, arraysize(parsersql_pgsql_time_zone), "pgsql_time_zone");
 	TestStrictFunctionCall(parsersql_function_call_strict, arraysize(parsersql_function_call_strict));
 	TestStrictPgsqlIdent(parsersql_pgsql_ident_strict, arraysize(parsersql_pgsql_ident_strict));
+	TestEmptyOnParseFail(parsersql_parse_fail_strict, arraysize(parsersql_parse_fail_strict));
 
 	return exit_status();
 }

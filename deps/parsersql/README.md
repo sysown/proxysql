@@ -107,6 +107,16 @@ Reasons:
 
 Significant audits / bumps:
 
+- **v1.0.8 (2026-05-23)** — Tokenizer: unclosed delimited identifier
+  (`"name` in PG, `` `name `` in MySQL) now emits `TK_ERROR` instead
+  of silently consuming everything to EOF as one giant identifier.
+  Closes the case-#172 cascade in ProxySQL's
+  `pgsql-set_parameter_validation_test-t` under `set_parser_algorithm=3`,
+  where `SET search_path = "unclosed_quote, public` was being parsed
+  as identifier `unclosed_quote, public` and then accepted by the
+  search_path validator — corrupting the stored value with what PG
+  itself would have rejected outright.
+  ([PR #44](https://github.com/ProxySQL/ParserSQL/pull/44))
 - **v1.0.7 (2026-05-23)** — Tokenizer: allow `$` as PG identifier
   continuation char (per PG lexical-syntax docs). Before, `SET
   search_path = schema$1` truncated to `schema` and `$1` fell through
