@@ -17,7 +17,7 @@
  * - merge() — merge multiple entries into a domain summary
  * - Schema isolation — entries scoped by schema name
  *
- * @note Requires PROXYSQLGENAI=1 build (auto-detected from libproxysql.a).
+ * @note Requires PROXYSQL40=1 build (includes genai plugin; auto-detected from libproxysql.a).
  */
 
 #include "tap.h"
