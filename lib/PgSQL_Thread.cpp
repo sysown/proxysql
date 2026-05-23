@@ -4760,19 +4760,19 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		}
 		{
 			pta[0] = (char*)"PgSQL_Monitor_dns_cache_queried";
-			sprintf(buf, "%llu", GloPgMon->dns_cache_queried);
+			sprintf(buf, "%llu", GloPgMon->dns_cache_queried.load());
 			pta[1] = buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0] = (char*)"PgSQL_Monitor_dns_cache_lookup_success";
-			sprintf(buf, "%llu", GloPgMon->dns_cache_lookup_success);
+			sprintf(buf, "%llu", GloPgMon->dns_cache_lookup_success.load());
 			pta[1] = buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0] = (char*)"PgSQL_Monitor_dns_cache_record_updated";
-			sprintf(buf, "%llu", GloPgMon->dns_cache_record_updated);
+			sprintf(buf, "%llu", GloPgMon->dns_cache_record_updated.load());
 			pta[1] = buf;
 			result->add_row(pta);
 		}

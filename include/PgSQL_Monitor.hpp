@@ -50,10 +50,12 @@ struct PgSQL_Monitor {
 	uint64_t repl_lag_check_OK { 0 };
 	uint64_t ssl_connections_OK { 0 };
 	uint64_t non_ssl_connections_OK { 0 };
-	// DNS cache counters (independent of MySQL_Monitor's counters)
-	unsigned long long dns_cache_queried { 0 };
-	unsigned long long dns_cache_lookup_success { 0 };
-	unsigned long long dns_cache_record_updated { 0 };
+	// DNS cache counters (independent of MySQL_Monitor's counters).  Atomic
+	// because the resolver workers increment them while readers (stats,
+	// p_update_metrics) load them from other threads.
+	std::atomic<unsigned long long> dns_cache_queried { 0 };
+	std::atomic<unsigned long long> dns_cache_lookup_success { 0 };
+	std::atomic<unsigned long long> dns_cache_record_updated { 0 };
 	///////////////////////////////////////////////////////////////////////////
 
 	// PgSQL-side DNS cache, independent of MySQL_Monitor's cache.  Lifetime is

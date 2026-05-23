@@ -1204,9 +1204,9 @@ void MySQL_Monitor::p_update_metrics() {
 		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_read_only_check_err], GloMyMon->read_only_check_ERR);
 		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_replication_lag_check_ok], GloMyMon->replication_lag_check_OK);
 		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_replication_lag_check_err], GloMyMon->replication_lag_check_ERR);
-		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_dns_cache_queried], GloMyMon->dns_cache_queried);
-		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_dns_cache_lookup_success], GloMyMon->dns_cache_lookup_success);
-		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_dns_cache_record_updated], GloMyMon->dns_cache_record_updated);
+		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_dns_cache_queried], GloMyMon->dns_cache_queried.load());
+		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_dns_cache_lookup_success], GloMyMon->dns_cache_lookup_success.load());
+		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_dns_cache_record_updated], GloMyMon->dns_cache_record_updated.load());
 	}
 }
 
