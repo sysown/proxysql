@@ -2470,6 +2470,16 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 		if (GloMyPTAuthCache->lookup(std::string((const char*)vars1.user), cleartext, ttl_s)) {
 			free(vars1.password);
 			vars1.password = strdup(cleartext.c_str());
+		} else if (mysql_thread___passthrough_auth_require_tls && !(*myds)->encrypted) {
+			// Spec §7.1/§7.4: refuse to ask the client for cleartext over a
+			// non-TLS connection. Falls through to the normal verification
+			// path, which will reject the connection (empty password +
+			// non-empty client password = auth failure). No backend probe
+			// is dispatched and no AuthMoreData{0x04} is sent.
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
+				"pass-through auth refused: client connection is not TLS and "
+				"mysql-passthrough_auth_require_tls=true (user='%s')\n",
+				vars1.user ? (const char*)vars1.user : "(null)");
 		} else {
 			// Cache miss → drive the caching_sha2_password full-auth
 			// exchange so the client emits its cleartext, which we will
