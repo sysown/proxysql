@@ -33,6 +33,7 @@ using json = nlohmann::json;
 #include "MySQL_Query_Processor.h"
 #include "PgSQL_Query_Processor.h"
 #include "MySQL_Authentication.hpp"
+#include "MySQL_Passthrough_Auth_Cache.h"
 #include "PgSQL_Authentication.h"
 #include "MySQL_LDAP_Authentication.hpp"
 #include "MySQL_Query_Cache.h"
@@ -482,6 +483,7 @@ MySQL_Query_Cache *GloMyQC;
 PgSQL_Query_Cache* GloPgQC;
 MySQL_Authentication *GloMyAuth;
 PgSQL_Authentication* GloPgAuth;
+MySQL_Passthrough_Auth_Cache *GloMyPTAuthCache;
 MySQL_LDAP_Authentication *GloMyLdapAuth;
 #ifdef PROXYSQLCLICKHOUSE
 ClickHouse_Authentication *GloClickHouseAuth;
@@ -922,6 +924,7 @@ void ProxySQL_Main_init_main_modules() {
 	GloMTH=NULL;
 	GloMyAuth=NULL;
 	GloPgAuth=NULL;
+	GloMyPTAuthCache=NULL;
 	GloPTH=NULL;
 // MCP_Threads_Handler / GenAI_Threads_Handler / AI_Features_Manager
 // are all constructed by the genai plugin's init() callback now
@@ -983,6 +986,8 @@ void ProxySQL_Main_init_Auth_module() {
 	GloMyAuth->print_version();
 	GloPgAuth = new PgSQL_Authentication();
 	GloPgAuth->print_version();
+	GloMyPTAuthCache = new MySQL_Passthrough_Auth_Cache();
+	GloMyPTAuthCache->print_version();
 	GloAdmin->init_users();
 	GloAdmin->init_pgsql_users();
 	//GloMyLdapAuth = create_MySQL_LDAP_Authentication();
@@ -1268,6 +1273,14 @@ void ProxySQL_Main_shutdown_all_modules() {
 		GloPgAuth = NULL;
 #ifdef DEBUG
 		std::cerr << "GloPgAuth shutdown in ";
+#endif
+	}
+	if (GloMyPTAuthCache) {
+		cpu_timer t;
+		delete GloMyPTAuthCache;
+		GloMyPTAuthCache = NULL;
+#ifdef DEBUG
+		std::cerr << "GloMyPTAuthCache shutdown in ";
 #endif
 	}
 	if (GloMTH) {
