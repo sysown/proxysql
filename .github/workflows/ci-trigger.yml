@@ -40,6 +40,18 @@ jobs:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         echo "Cleanup skipped ..."
-        gh -R ${{ github.repository }} run list -s skipped -L 100 --json databaseId  -q '.[].databaseId' | xargs -r -n1 gh -R ${{ github.repository }} run delete
+        # Housekeeping only: opportunistically delete skipped runs. Per-call
+        # failures (typically HTTP 401 "Bad credentials" on runs that the
+        # PR-scoped GITHUB_TOKEN does not have rights to delete -- e.g. runs
+        # from forked PRs or other branches) MUST NOT fail this step,
+        # because failing this step marks the CI-trigger job as 'failure',
+        # which prevents every downstream test workflow from firing (they
+        # gate on workflow_run.conclusion == 'success'). See issue #5811.
+        gh -R ${{ github.repository }} run list -s skipped -L 100 --json databaseId -q '.[].databaseId' \
+            | while read -r id; do
+                if ! gh -R ${{ github.repository }} run delete "$id" 2>&1; then
+                    echo "  skip run $id (no rights / already gone)"
+                fi
+            done
         echo "Triggered workflow_run[completed]: '${{ github.ref_name }} ${{ github.workflow }} ${{ github.sha }}'"
         
