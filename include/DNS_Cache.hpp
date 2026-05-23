@@ -23,6 +23,9 @@
 #include <unordered_map>
 #include <vector>
 
+#include "thread.h"
+#include "wqueue.h"
+
 struct DNS_Cache_Record {
 	DNS_Cache_Record() = default;
 	DNS_Cache_Record(DNS_Cache_Record&&) = default;
@@ -111,6 +114,32 @@ struct DNS_Resolve_Data {
 // on dns_resolve_data->hostname, populates the cache, and fulfils the
 // future on dns_resolve_data->result.
 void* monitor_dns_resolver_thread(const std::vector<DNS_Resolve_Data*>& dns_resolve_data_list);
+
+// Minimal worker thread that drains a wqueue<DNS_Resolve_Data*> and calls
+// monitor_dns_resolver_thread() on each item.  Independent of any monitor
+// singleton so it can back PgSQL_Monitor's DNS cache loop alongside (or
+// instead of) MySQL_Monitor's existing ConsumerThread-based pool.
+//
+// Each item ownership is transferred to this worker: the worker frees it
+// after running monitor_dns_resolver_thread.  A NULL dequeue is the exit
+// signal — the loop terminates cleanly so callers can shut the pool down by
+// pushing one NULL per worker.
+class DNSResolverWorker : public Thread {
+public:
+	DNSResolverWorker(wqueue<DNS_Resolve_Data*>& q, const char* name = nullptr)
+		: queue_(q) {
+		if (name && name[0])
+			snprintf(thr_name_, sizeof(thr_name_), "%.15s", name);
+		else
+			snprintf(thr_name_, sizeof(thr_name_), "DNSResolver");
+	}
+
+	void* run() override;
+
+private:
+	wqueue<DNS_Resolve_Data*>& queue_;
+	char thr_name_[16] {};
+};
 
 // Return true if 'ip' is a valid IPv4 or IPv6 address string.
 bool validate_ip(const std::string& ip);

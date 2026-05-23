@@ -118,6 +118,9 @@ void check_and_build_standard_tables(SQLite3DB& db, const vector<table_def_t>& t
 }
 
 PgSQL_Monitor::PgSQL_Monitor() {
+	dns_cache = std::make_shared<DNS_Cache>();
+	dns_cache->set_counters(&dns_cache_queried, &dns_cache_lookup_success, &dns_cache_record_updated);
+
 	int rc = monitordb.open(
 		const_cast<char*>("file:mem_monitordb?mode=memory&cache=shared"),
 		SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
@@ -2716,5 +2719,343 @@ void* PgSQL_monitor_scheduler_thread() {
 		mon_conn_pool.conn_map.clear();
 	}
 
+	return nullptr;
+}
+
+
+// ============================================================================
+// PgSQL_Monitor DNS cache
+// ----------------------------------------------------------------------------
+// Mirrors MySQL_Monitor's DNS cache: a hostname -> [IP] map populated by a
+// background resolver loop and consulted on the PgSQL connect path so the
+// worker thread doesn't block on getaddrinfo inside libpq's PQconnectStart.
+//
+// Cache state is INDEPENDENT of MySQL_Monitor's cache.  The two share only
+// the DNS_Cache class itself (see DNS_Cache.hpp); each monitor owns its own
+// DNS_Cache instance, its own counters, and its own resolver loop.  This way
+// pgsql-monitor_local_dns_cache_* settings on one side don't affect the
+// other.
+// ============================================================================
+
+std::string PgSQL_Monitor::dns_lookup(const std::string& hostname,
+	bool return_hostname_if_lookup_fails, size_t* ip_count) {
+
+	static thread_local std::shared_ptr<DNS_Cache> dns_cache_thread;
+
+	// If hostname is already an IP, return as-is (cache miss avoided).
+	if (hostname.empty() || validate_ip(hostname))
+		return hostname;
+
+	if (!dns_cache_thread && GloPgMon)
+		dns_cache_thread = GloPgMon->dns_cache;
+
+	std::string ip;
+
+	if (dns_cache_thread) {
+		ip = dns_cache_thread->lookup(trim(hostname), ip_count);
+
+		if (ip.empty() && return_hostname_if_lookup_fails) {
+			ip = hostname;
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+				"DNS cache lookup was a miss. (Hostname:[%s])\n", hostname.c_str());
+		}
+	}
+
+	return ip;
+}
+
+std::string PgSQL_Monitor::dns_lookup(const char* hostname,
+	bool return_hostname_if_lookup_fails, size_t* ip_count) {
+	return PgSQL_Monitor::dns_lookup(std::string(hostname),
+		return_hostname_if_lookup_fails, ip_count);
+}
+
+bool PgSQL_Monitor::update_dns_cache_from_pgsql_conn(PGconn* pgsql_conn) {
+	if (!pgsql_conn) return false;
+
+	// PQhost returns "host" parameter value (hostname or IP); PQsocket gives
+	// the actual fd we can call getpeername on.
+	const char* host_param = PQhost(pgsql_conn);
+	if (!host_param || !host_param[0])
+		return false;
+
+	const std::string hostname { host_param };
+
+	// If user configured an IP directly, no cache update needed.
+	if (validate_ip(hostname))
+		return false;
+
+	const int sock = PQsocket(pgsql_conn);
+	if (sock < 0)
+		return false;
+
+	const std::string& ip_addr = get_connected_peer_ip_from_socket(sock);
+	if (ip_addr.empty())
+		return false;
+
+	return _dns_cache_update(hostname, { ip_addr });
+}
+
+bool PgSQL_Monitor::_dns_cache_update(const std::string& hostname,
+	std::vector<std::string>&& ip_address) {
+
+	static thread_local std::shared_ptr<DNS_Cache> dns_cache_thread;
+
+	if (!dns_cache_thread && GloPgMon)
+		dns_cache_thread = GloPgMon->dns_cache;
+
+	if (dns_cache_thread) {
+		if (dns_cache_thread->add_if_not_exist(trim(hostname), std::move(ip_address))) {
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+				"Direct DNS cache update. (Hostname:[%s] IP:[%s])\n",
+				hostname.c_str(), debug_iplisttostring(ip_address).c_str());
+			return true;
+		}
+	}
+
+	return false;
+}
+
+void PgSQL_Monitor::trigger_dns_cache_update() {
+	if (GloPgMon) {
+		GloPgMon->force_dns_cache_update = true;
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+			"Triggering PgSQL DNS cache update sequence.\n");
+	}
+}
+
+// Background loop that drives the pgsql DNS cache.  Mirrors
+// MySQL_Monitor::monitor_dns_cache structurally but pulls hostnames from
+// PgHGM->pgsql_servers_to_monitor instead of MyHGM, and reads the
+// pgsql-monitor_local_dns_* settings.
+void* PgSQL_Monitor::monitor_dns_cache() {
+	constexpr unsigned int num_dns_resolver_threads = 1;
+	constexpr unsigned int num_dns_resolver_max_threads = 32;
+	unsigned long long t1 = 0;
+	unsigned long long t2 = 0;
+	unsigned long long next_loop_at = 0;
+	bool dns_cache_enable = true;
+
+	// Per-instance Thread variable refresher.  Without this the pgsql_thread___
+	// globals stay at their startup defaults inside this worker.
+	unsigned int local_thread_vars_version = 0;
+	std::unique_ptr<PgSQL_Thread> pgsql_thr { new PgSQL_Thread() };
+	pgsql_thr->curtime = monotonic_time();
+
+	std::list<DNS_Cache_Record> dns_records_bookkeeping;
+	wqueue<DNS_Resolve_Data*> dns_resolver_queue;
+
+	while (GloPgMon->shutdown == false) {
+		if (!GloPTH) return nullptr;
+
+		const unsigned int glover = GloPTH->get_global_version();
+		if (local_thread_vars_version < glover) {
+			local_thread_vars_version = glover;
+			pgsql_thr->refresh_variables();
+			next_loop_at = 0;
+
+			if (pgsql_thread___monitor_local_dns_cache_ttl == 0 ||
+				pgsql_thread___monitor_local_dns_cache_refresh_interval == 0) {
+				dns_cache_enable = false;
+				dns_cache->set_enabled_flag(false);
+				dns_cache->clear();
+				dns_records_bookkeeping.clear();
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "PgSQL DNS cache is disabled.\n");
+			} else {
+				dns_cache_enable = true;
+				dns_cache->set_enabled_flag(true);
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "PgSQL DNS cache is enabled.\n");
+			}
+		}
+
+		if (!dns_cache_enable) {
+			usleep(200000);
+			continue;
+		}
+
+		t1 = monotonic_time();
+		if (t1 >= next_loop_at || force_dns_cache_update) {
+			force_dns_cache_update = false;
+			next_loop_at = t1 + (1000ULL * pgsql_thread___monitor_local_dns_cache_refresh_interval);
+
+			// Collect the set of distinct hostnames currently configured.  Done
+			// under the pgsql_servers_to_monitor mutex because the resultset
+			// pointer can be swapped by an admin LOAD.
+			std::set<std::string> hostnames;
+			{
+				std::lock_guard<std::mutex> guard(PgHGM->pgsql_servers_to_monitor_mutex);
+				SQLite3_result* rs = PgHGM->pgsql_servers_to_monitor;
+				if (rs != nullptr) {
+					int hostname_col = -1;
+					for (int i = 0; i < rs->columns; i++) {
+						if (rs->column_definition[i] &&
+							rs->column_definition[i]->name &&
+							strcmp(rs->column_definition[i]->name, "hostname") == 0) {
+							hostname_col = static_cast<int>(i);
+							break;
+						}
+					}
+					if (hostname_col >= 0) {
+						for (const auto row : rs->rows) {
+							if (!row || !row->fields[hostname_col]) continue;
+							const std::string hostname { row->fields[hostname_col] };
+							if (!validate_ip(hostname))
+								hostnames.insert(hostname);
+						}
+					}
+				}
+			}
+
+			if (hostnames.empty()) {
+				if (!dns_cache->empty()) {
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+						"Clearing all orphaned PgSQL DNS records from cache.\n");
+					dns_cache->clear();
+				}
+				if (!dns_records_bookkeeping.empty()) {
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+						"Clearing all orphaned PgSQL DNS records from bookkeeper.\n");
+					dns_records_bookkeeping.clear();
+				}
+			} else {
+				std::vector<DNSResolverWorker*> dns_resolver_threads(num_dns_resolver_threads);
+			for (unsigned int i = 0; i < num_dns_resolver_threads; i++) {
+				dns_resolver_threads[i] = new DNSResolverWorker(dns_resolver_queue, "pgDnsResolver");
+				dns_resolver_threads[i]->start(2048, false);
+			}
+
+			std::list<std::future<std::tuple<bool, DNS_Cache_Record>>> dns_resolve_result;
+
+			// Stagger enqueueing so the resolver pool doesn't see a burst.
+			int delay_us = 100;
+			if (!hostnames.empty()) {
+				delay_us = pgsql_thread___monitor_local_dns_cache_refresh_interval / 2 / hostnames.size();
+				delay_us *= 40;
+				if (delay_us > 1000000 || delay_us <= 0)
+					delay_us = 10000;
+				delay_us = delay_us + rand() % delay_us;
+			}
+
+			// Walk the bookkeeper: drop orphans, requeue expired ones, keep
+			// the rest.  Items that survive are also removed from the
+			// "hostnames" set so we don't enqueue them twice below.
+			if (!dns_records_bookkeeping.empty()) {
+				const unsigned long long current_time = monotonic_time();
+				for (auto itr = dns_records_bookkeeping.begin();
+					 itr != dns_records_bookkeeping.end(); ) {
+					if (hostnames.find(itr->hostname_) == hostnames.end()) {
+						dns_cache->remove(itr->hostname_);
+						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+							"Removing orphaned PgSQL DNS record from bookkeeper. (Hostname:[%s] IP:[%s])\n",
+							itr->hostname_.c_str(), debug_iplisttostring(itr->ips_).c_str());
+						itr = dns_records_bookkeeping.erase(itr);
+					} else {
+						hostnames.erase(itr->hostname_);
+						if (current_time > itr->ttl_) {
+							std::unique_ptr<DNS_Resolve_Data> dns_resolve_data(new DNS_Resolve_Data());
+							dns_resolve_data->hostname = std::move(itr->hostname_);
+							dns_resolve_data->cached_ips = std::move(itr->ips_);
+							dns_resolve_data->ttl = pgsql_thread___monitor_local_dns_cache_ttl;
+							dns_resolve_data->refresh_intv = pgsql_thread___monitor_local_dns_cache_refresh_interval;
+							dns_resolve_data->dns_cache = dns_cache;
+							// PgSQL has no separate resolution-family setting yet;
+							// default to AF_UNSPEC so we honor the OS resolver.
+							dns_resolve_data->ai_family = AF_UNSPEC;
+							dns_resolve_result.emplace_back(dns_resolve_data->result.get_future());
+
+							proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+								"Removing expired PgSQL DNS record from bookkeeper. (Hostname:[%s] IP:[%s])\n",
+								dns_resolve_data->hostname.c_str(),
+								debug_iplisttostring(dns_resolve_data->cached_ips).c_str());
+							dns_resolver_queue.add(dns_resolve_data.release());
+							itr = dns_records_bookkeeping.erase(itr);
+							usleep(delay_us);
+							continue;
+						}
+						itr++;
+					}
+				}
+			}
+
+			// Scale the resolver pool up if the queue is filling.
+			auto maybe_scale_pool = [&](unsigned int divisor) {
+				unsigned int qsize = dns_resolver_queue.size();
+				unsigned int num_threads = dns_resolver_threads.size();
+				if (qsize > (static_cast<unsigned int>(pgsql_thread___monitor_local_dns_resolver_queue_maxsize) / divisor)) {
+					proxy_warning("PgSQL DNS resolver queue too big: %d.\n", qsize);
+					unsigned int threads_max = num_dns_resolver_max_threads;
+					if (threads_max > num_threads) {
+						unsigned int new_threads = threads_max - num_threads;
+						if ((qsize / divisor) < new_threads)
+							new_threads = qsize / divisor;
+						if (new_threads) {
+							unsigned int old_num_threads = num_threads;
+							num_threads += new_threads;
+							dns_resolver_threads.resize(num_threads);
+							for (unsigned int i = old_num_threads; i < num_threads; i++) {
+								dns_resolver_threads[i] = new DNSResolverWorker(dns_resolver_queue, "pgDnsResolver");
+								dns_resolver_threads[i]->start(2048, false);
+							}
+						}
+					}
+				}
+			};
+			maybe_scale_pool(8);
+
+			// Enqueue the remaining (new) hostnames.
+			for (const std::string& hostname : hostnames) {
+				std::unique_ptr<DNS_Resolve_Data> dns_resolve_data(new DNS_Resolve_Data());
+				dns_resolve_data->hostname = hostname;
+				dns_resolve_data->ttl = pgsql_thread___monitor_local_dns_cache_ttl;
+				dns_resolve_data->refresh_intv = pgsql_thread___monitor_local_dns_cache_refresh_interval;
+				dns_resolve_data->dns_cache = dns_cache;
+				dns_resolve_data->ai_family = AF_UNSPEC;
+				dns_resolve_result.emplace_back(dns_resolve_data->result.get_future());
+				dns_resolver_queue.add(dns_resolve_data.release());
+				usleep(delay_us);
+			}
+
+			maybe_scale_pool(4);
+
+			// Push one NULL per worker so each loop's `remove()` returns
+			// the sentinel and the worker exits cleanly.
+			for (size_t i = 0; i < dns_resolver_threads.size(); i++)
+				dns_resolver_queue.add(nullptr);
+
+			// Collect results.  Successful resolutions feed the bookkeeper.
+			for (auto& dns_result : dns_resolve_result) {
+				auto ret_value = dns_result.get();
+				if (std::get<0>(ret_value)) {
+					DNS_Cache_Record dns_record = std::get<1>(ret_value);
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+						"Adding PgSQL DNS record to bookkeeper. (Hostname:[%s] IP:[%s])\n",
+						dns_record.hostname_.c_str(), debug_iplisttostring(dns_record.ips_).c_str());
+					dns_records_bookkeeping.emplace_back(std::move(dns_record));
+				}
+			}
+
+				for (DNSResolverWorker* const w : dns_resolver_threads) {
+					w->join();
+					delete w;
+				}
+
+				if (GloPgMon->shutdown) return nullptr;
+			}
+		}
+
+		t2 = monotonic_time();
+		if (t2 < next_loop_at) {
+			unsigned long long st = next_loop_at - t2;
+			if (st > 500000) st = 500000;
+			usleep(st);
+		}
+	}
+
+	return nullptr;
+}
+
+void* PgSQL_monitor_dns_cache_pthread(void* /*arg*/) {
+	if (GloPgMon)
+		GloPgMon->monitor_dns_cache();
 	return nullptr;
 }

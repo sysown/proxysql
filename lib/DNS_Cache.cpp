@@ -10,6 +10,8 @@
 
 #include "proxysql.h"
 #include "proxysql_debug.h"
+#include "proxysql_utils.h"
+#include "proxysql_glovars.hpp"
 #include "gen_utils.h"
 
 #include <random>
@@ -171,6 +173,23 @@ __error:
 	dns_resolve_data->result.set_value(std::make_tuple<>(false, DNS_Cache_Record()));
 
 	return NULL;
+}
+
+
+void* DNSResolverWorker::run() {
+	set_thread_name(thr_name_, GloVars.set_thread_name);
+
+	while (true) {
+		DNS_Resolve_Data* item = static_cast<DNS_Resolve_Data*>(queue_.remove());
+		if (item == nullptr) {
+			// Sentinel: caller pushed NULL to ask the worker to exit.
+			break;
+		}
+		std::vector<DNS_Resolve_Data*> list { item };
+		monitor_dns_resolver_thread(list);
+		delete item;
+	}
+	return nullptr;
 }
 
 
