@@ -71,7 +71,7 @@ int main(int argc, char** argv) {
 	// ---- 2. Configure ProxySQL ------------------------------------------
 	MYSQL* admin = mysql_init(NULL);
 	if (!admin) return exit_status();
-	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password,
+	if (!mysql_real_connect(admin, cl.admin_host, cl.admin_username, cl.admin_password,
 	                        NULL, cl.admin_port, NULL, 0)) {
 		diag("Admin connect failed: %s", mysql_error(admin));
 		return exit_status();
