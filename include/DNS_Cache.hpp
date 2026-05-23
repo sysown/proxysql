@@ -65,11 +65,13 @@ public:
 
 	// Wire the cache up to per-instance counters maintained by the owning
 	// monitor.  Pass nullptr to leave any counter unincremented; this is what
-	// keeps MySQL_Monitor and PgSQL_Monitor cache state independent.
+	// keeps MySQL_Monitor and PgSQL_Monitor cache state independent.  The
+	// counters are atomic because resolver workers increment them while
+	// p_update_metrics() reads them from another thread.
 	inline
-	void set_counters(unsigned long long* queried,
-		unsigned long long* lookup_success,
-		unsigned long long* record_updated) {
+	void set_counters(std::atomic<unsigned long long>* queried,
+		std::atomic<unsigned long long>* lookup_success,
+		std::atomic<unsigned long long>* record_updated) {
 		counter_queried_ = queried;
 		counter_lookup_success_ = lookup_success;
 		counter_record_updated_ = record_updated;
@@ -97,9 +99,9 @@ private:
 	std::atomic_bool enabled;
 	mutable pthread_rwlock_t rwlock_;
 
-	unsigned long long* counter_queried_ { nullptr };
-	unsigned long long* counter_lookup_success_ { nullptr };
-	unsigned long long* counter_record_updated_ { nullptr };
+	std::atomic<unsigned long long>* counter_queried_ { nullptr };
+	std::atomic<unsigned long long>* counter_lookup_success_ { nullptr };
+	std::atomic<unsigned long long>* counter_record_updated_ { nullptr };
 };
 
 struct DNS_Resolve_Data {

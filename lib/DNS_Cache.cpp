@@ -18,14 +18,15 @@
 
 
 bool validate_ip(const std::string& ip) {
-	// check if ip is a valid IPv4 address
+	// inet_pton returns 1 on success, 0 if input is not a valid address for
+	// the family, -1 on error (e.g. unsupported family).  Treating != 0 as
+	// success would misclassify -1 errors as valid IPs.
 	struct sockaddr_in sa4;
-	if (inet_pton(AF_INET, ip.c_str(), &(sa4.sin_addr)) != 0)
+	if (inet_pton(AF_INET, ip.c_str(), &(sa4.sin_addr)) == 1)
 		return true;
 
-	// check if ip is a valid IPv6 address
 	struct sockaddr_in6 sa6;
-	if (inet_pton(AF_INET6, ip.c_str(), &(sa6.sin6_addr)) != 0)
+	if (inet_pton(AF_INET6, ip.c_str(), &(sa6.sin6_addr)) == 1)
 		return true;
 
 	return false;
@@ -219,7 +220,7 @@ bool DNS_Cache::add(const std::string& hostname, std::vector<std::string>&& ips)
 	assert(rc == 0);
 
 	if (counter_record_updated_)
-		__sync_fetch_and_add(counter_record_updated_, 1);
+		counter_record_updated_->fetch_add(1, std::memory_order_relaxed);
 
 	return true;
 }
@@ -243,7 +244,7 @@ bool DNS_Cache::add_if_not_exist(const std::string& hostname, std::vector<std::s
 	assert(rc == 0);
 
 	if (inserted && counter_record_updated_)
-		__sync_fetch_and_add(counter_record_updated_, 1);
+		counter_record_updated_->fetch_add(1, std::memory_order_relaxed);
 
 	return inserted;
 }
@@ -268,7 +269,7 @@ std::string DNS_Cache::lookup(const std::string& hostname, size_t* ip_count) con
 	std::string ip;
 
 	if (counter_queried_)
-		__sync_fetch_and_add(counter_queried_, 1);
+		counter_queried_->fetch_add(1, std::memory_order_relaxed);
 
 	int rc = pthread_rwlock_rdlock(&rwlock_);
 	assert(rc == 0);
@@ -292,7 +293,7 @@ std::string DNS_Cache::lookup(const std::string& hostname, size_t* ip_count) con
 	assert(rc == 0);
 
 	if (!ip.empty() && counter_lookup_success_)
-		__sync_fetch_and_add(counter_lookup_success_, 1);
+		counter_lookup_success_->fetch_add(1, std::memory_order_relaxed);
 
 	return ip;
 }
@@ -313,7 +314,7 @@ void DNS_Cache::remove(const std::string& hostname) {
 	rc = pthread_rwlock_unlock(&rwlock_);
 
 	if (item_removed && counter_record_updated_)
-		__sync_fetch_and_add(counter_record_updated_, 1);
+		counter_record_updated_->fetch_add(1, std::memory_order_relaxed);
 
 	assert(rc == 0);
 }
@@ -327,7 +328,7 @@ void DNS_Cache::clear() {
 	rc = pthread_rwlock_unlock(&rwlock_);
 	assert(rc == 0);
 	if (records_removed && counter_record_updated_)
-		__sync_fetch_and_add(counter_record_updated_, records_removed);
+		counter_record_updated_->fetch_add(records_removed, std::memory_order_relaxed);
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "DNS cache was cleared.\n");
 }
 

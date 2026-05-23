@@ -434,9 +434,11 @@ class MySQL_Monitor {
 	unsigned long long read_only_check_ERR;
 	unsigned long long replication_lag_check_OK;
 	unsigned long long replication_lag_check_ERR;
-	unsigned long long dns_cache_queried;
-	unsigned long long dns_cache_lookup_success; //cache hit
-	unsigned long long dns_cache_record_updated;
+	// DNS cache counters are incremented by resolver workers and read by
+	// p_update_metrics() from another thread; atomic to avoid the race.
+	std::atomic<unsigned long long> dns_cache_queried;
+	std::atomic<unsigned long long> dns_cache_lookup_success; //cache hit
+	std::atomic<unsigned long long> dns_cache_record_updated;
 	std::atomic_bool force_dns_cache_update;
 	struct {
 		/// Prometheus metrics arrays
