@@ -2604,15 +2604,25 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 		}
 		query=(char *)malloc(strlen(q)+strlen(var_name)+strlen(var_value));
 		if (strncasecmp("tx_isolation", var_name, 12) == 0) {
-			char *sv = mybe->server_myds->myconn->mysql->server_version;
-			if (strncmp(sv,(char *)"8",1)==0) {
+			// MySQL 8.0+ uses `transaction_isolation`; `tx_isolation` was
+			// deprecated in 8.0 and removed in 8.4 (so MySQL 9.x also
+			// requires the modern name). MariaDB (any version, including
+			// 11.x where atoi(server_version) >= 11) keeps `tx_isolation`,
+			// so the major-version check must exclude MariaDB explicitly.
+			const char *sv = mybe->server_myds->myconn->mysql->server_version;
+			bool is_mariadb = (sv != NULL && strstr(sv, "MariaDB") != NULL);
+			int sv_major = (sv != NULL) ? atoi(sv) : 0;
+			if (!is_mariadb && sv_major >= 8) {
 				sprintf(query,q,"transaction_isolation", var_value);
 			} else {
 				sprintf(query,q,"tx_isolation", var_value);
 			}
 		} else if (strncasecmp("tx_read_only", var_name, 12) == 0) {
-			char* sv = mybe->server_myds->myconn->mysql->server_version;
-			if (strncmp(sv, (char *)"8", 1) == 0) {
+			// Same MariaDB / MySQL 9.x consideration as `tx_isolation` above.
+			const char *sv = mybe->server_myds->myconn->mysql->server_version;
+			bool is_mariadb = (sv != NULL && strstr(sv, "MariaDB") != NULL);
+			int sv_major = (sv != NULL) ? atoi(sv) : 0;
+			if (!is_mariadb && sv_major >= 8) {
 				sprintf(query,q,"transaction_read_only", var_value);
 			} else {
 				sprintf(query,q,"tx_read_only", var_value);
