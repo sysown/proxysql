@@ -23,6 +23,7 @@ using json = nlohmann::json;
 #include "MySQL_Logger.hpp"
 #include "StatCounters.h"
 #include "MySQL_Authentication.hpp"
+#include "MySQL_Passthrough_Auth_Cache.h"
 #include "MySQL_LDAP_Authentication.hpp"
 #include "MySQL_Protocol.h"
 #include "SQLite3_Server.h"
@@ -150,6 +151,7 @@ static const std::set<std::string> mysql_variables_strings = {
 #include "proxysql_find_charset.h"
 
 extern MySQL_Authentication *GloMyAuth;
+extern MySQL_Passthrough_Auth_Cache *GloMyPTAuthCache;
 extern MySQL_LDAP_Authentication *GloMyLdapAuth;
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Logger *GloMyLogger;
@@ -1680,6 +1682,115 @@ int MySQL_Session::handler_again___status_PINGING_SERVER() {
  * @see MySQL_Session::set_status()
  * @see ProxySQL_MySQL_Error_Counter::p_update_mysql_error_counter()
  */
+// Pass-through authentication backend probe (spec §6).
+//
+// Phase 1 implementation uses a *synchronous* mysql_real_connect to the
+// chosen backend, mirroring the pattern used by MySQL_Monitor's
+// create_new_connection. This briefly blocks the session thread for the
+// duration of one backend handshake. Pass-through is opt-in and targets
+// local backends, so the impact is bounded; a future Phase 2 commit may
+// convert this to an async probe driven by the session event loop.
+//
+// On success the credential is inserted into GloMyPTAuthCache, the
+// session's userinfo is updated with the learned cleartext, the
+// post-handshake OK packet is sent to the client, and the session moves
+// to WAITING_CLIENT_DATA. On any failure (no healthy backend, init
+// failure, backend rejection, timeout) the client receives a generic
+// "Access denied for user" ERR (no backend leakage) and the session
+// tears down.
+int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
+	const char *username =
+		(client_myds && client_myds->myconn && client_myds->myconn->userinfo)
+			? (const char*)client_myds->myconn->userinfo->username
+			: NULL;
+	const char *cleartext =
+		(client_myds) ? client_myds->passthrough_cleartext : NULL;
+
+	auto scrub_cleartext = [&]() {
+		if (client_myds && client_myds->passthrough_cleartext) {
+			memset(client_myds->passthrough_cleartext, 0, strlen(client_myds->passthrough_cleartext));
+			free(client_myds->passthrough_cleartext);
+			client_myds->passthrough_cleartext = NULL;
+		}
+		if (client_myds) {
+			client_myds->auth_in_progress = 0;
+		}
+	};
+
+	auto fail_session = [&]() -> int {
+		scrub_cleartext();
+		const uint8_t _pid = (client_myds ? client_myds->pkt_sid : 0) + 1;
+		if (client_myds) {
+			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, _pid, 1045,
+				(char*)"28000",
+				(char*)"Access denied for user", true);
+			client_myds->DSS = STATE_QUERY_SENT_NET;
+		}
+		return -1;
+	};
+
+	if (username == NULL || username[0] == '\0'
+		|| cleartext == NULL || cleartext[0] == '\0'
+		|| GloMyPTAuthCache == NULL) {
+		return fail_session();
+	}
+
+	// Empty-password row case: default_hostgroup was populated by
+	// PPHR_5passwordTrue from the row. Unknown-user case (when added
+	// in task #10) will fall back to mysql-passthrough_default_hg.
+	const int target_hg = default_hostgroup;
+
+	MyHGC *myhgc = MyHGM->MyHGC_lookup(target_hg);
+	if (myhgc == NULL) {
+		return fail_session();
+	}
+	MySrvC *mysrvc = myhgc->get_random_MySrvC(NULL, 0, -1, this);
+	if (mysrvc == NULL || mysrvc->address == NULL) {
+		return fail_session();
+	}
+
+	MYSQL *probe = mysql_init(NULL);
+	if (probe == NULL) {
+		return fail_session();
+	}
+	unsigned int timeout_s = mysql_thread___connect_timeout_server_max / 1000;
+	if (timeout_s == 0) timeout_s = 1;
+	mysql_options(probe, MYSQL_OPT_CONNECT_TIMEOUT, &timeout_s);
+	mysql_options4(probe, MYSQL_OPT_CONNECT_ATTR_ADD, "program_name", "proxysql_passthrough_probe");
+
+	MYSQL *result = mysql_real_connect(probe, mysrvc->address, username, cleartext,
+	                                   NULL, mysrvc->port, NULL, 0);
+	const bool probe_ok = (result != NULL);
+	mysql_close(probe);
+
+	if (!probe_ok) {
+		return fail_session();
+	}
+
+	// Probe succeeded — cache the learned credential.
+	GloMyPTAuthCache->insert(std::string(username), std::string(cleartext), target_hg);
+
+	// Update userinfo with the learned cleartext. process_pkt_handshake_response
+	// stored "" for userinfo->password since PPHR_verify_password returned
+	// false (auth_in_progress was still set). Overwrite and recompute the
+	// userinfo hash.
+	if (client_myds->myconn->userinfo->password) {
+		free(client_myds->myconn->userinfo->password);
+	}
+	client_myds->myconn->userinfo->password = strdup(cleartext);
+	client_myds->myconn->userinfo->set(NULL, NULL, NULL, NULL);
+
+	scrub_cleartext();
+
+	const uint8_t _pid = client_myds->pkt_sid + 1;
+	client_myds->DSS = STATE_CLIENT_HANDSHAKE;
+	client_myds->myprot.generate_pkt_OK(true, NULL, NULL, _pid, 0, 0, 2, 0, NULL);
+	client_myds->DSS = STATE_CLIENT_AUTH_OK;
+
+	set_status(WAITING_CLIENT_DATA);
+	return 0;
+}
+
 int MySQL_Session::handler_again___status_RESETTING_CONNECTION() {
 	assert(mybe->server_myds->myconn);
 	MySQL_Data_Stream *myds=mybe->server_myds;
@@ -5326,12 +5437,14 @@ handler_again:
 			// FIXME: to implement
 			break;
 		case AUTHENTICATING_BACKEND_FOR_CLIENT:
-			// Pass-through authentication probe state.
-			// Handler is added in a later commit; for now the state is
-			// declared but unreachable from the auth path. Defensive
-			// teardown if we somehow land here.
-			handler_ret = -1;
-			return handler_ret;
+			{
+				const int rc = handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT();
+				if (rc == -1) {
+					handler_ret = -1;
+					return handler_ret;
+				}
+			}
+			break;
 		case PINGING_SERVER:
 			{
 				int rc=handler_again___status_PINGING_SERVER();

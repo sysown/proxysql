@@ -235,6 +235,12 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___create_mirror_session();
 	int handler_again___status_PINGING_SERVER();
 	int handler_again___status_RESETTING_CONNECTION();
+	// Pass-through authentication backend probe. Borrows the cleartext
+	// password captured by PPHR_passthrough_init from client_myds and
+	// validates it against a backend in the target hostgroup; on success
+	// caches the credential and completes the client handshake, on
+	// failure sends a generic ERR and tears down the session.
+	int handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT();
 	bool handler_again___status_SHOW_WARNINGS(MySQL_Data_Stream *, bool);
 	void handler_again___new_thread_to_kill_connection();
 	void handler_KillConnectionIfNeeded();
