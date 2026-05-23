@@ -2837,10 +2837,21 @@ void* PgSQL_Monitor::monitor_dns_cache() {
 	bool dns_cache_enable = true;
 
 	// Per-instance Thread variable refresher.  Without this the pgsql_thread___
-	// globals stay at their startup defaults inside this worker.
-	unsigned int local_thread_vars_version = 0;
+	// globals stay at their startup defaults inside this worker.  Refresh
+	// once up-front so the first loop iteration sees the configured TTL /
+	// refresh interval rather than zero-initialized values — the
+	// version-bump check below then only fires on later config changes.
 	std::unique_ptr<PgSQL_Thread> pgsql_thr { new PgSQL_Thread() };
 	pgsql_thr->curtime = monotonic_time();
+	pgsql_thr->refresh_variables();
+	unsigned int local_thread_vars_version = GloPTH ? GloPTH->get_global_version() : 0;
+	if (pgsql_thread___monitor_local_dns_cache_ttl == 0 ||
+		pgsql_thread___monitor_local_dns_cache_refresh_interval == 0) {
+		dns_cache_enable = false;
+		dns_cache->set_enabled_flag(false);
+	} else {
+		dns_cache->set_enabled_flag(true);
+	}
 
 	std::list<DNS_Cache_Record> dns_records_bookkeeping;
 	wqueue<DNS_Resolve_Data*> dns_resolver_queue;

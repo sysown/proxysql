@@ -85,7 +85,11 @@ public:
 private:
 	struct IP_ADDR {
 		std::vector<std::string> ips;
-		unsigned long counter = 0;
+		// 'counter' is bumped by get_next_ip() (a const method) for
+		// round-robin selection; the logical state of the cache record is
+		// unchanged, so mutable is the right tool here and lets us drop a
+		// const_cast at the call site.
+		mutable unsigned long counter = 0;
 	};
 
 	std::string get_next_ip(const IP_ADDR& ip_addr) const;

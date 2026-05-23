@@ -156,7 +156,7 @@ int main(int /*argc*/, char** /*argv*/) {
 		return -1;
 	}
 
-	plan(16);
+	plan(17);
 
 	PGConnPtr admin = admin_connect();
 	if (!admin) {
@@ -324,23 +324,31 @@ int main(int /*argc*/, char** /*argv*/) {
 	// Step 7: Disabled cache (refresh_interval=0) flatlines counters
 	// =====================================================================
 	diag("---- Step 7: Cache disabled by refresh_interval=0");
+	admin_exec(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=999");
+	admin_exec(admin, "LOAD PGSQL SERVERS TO RUNTIME");
+	sleep_seconds(1);
 	admin_exec(admin, "SET pgsql-monitor_local_dns_cache_refresh_interval=0");
 	admin_exec(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
-	// Use an IP literal so any client connect attempt does not invoke
-	// DNS code at all — keeps the assertion clean.
-	admin_exec(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=999");
+	// Use a resolvable hostname so the assertion exercises the actual cache
+	// path — if disabling the cache regressed (resolver still ran, or the
+	// connect path still called into the cache), record_updated and queried
+	// would move and the test would fail.  An IP literal would bypass DNS
+	// regardless of refresh_interval and miss that regression.
 	admin_exec(admin,
 		"INSERT INTO pgsql_servers (hostgroup_id,hostname,port,max_connections,comment) "
-		"VALUES (999,'0.0.0.0',7861,10,'pgsql-dns-test cache-off')");
+		"VALUES (999,'example.com',7861,10,'pgsql-dns-test cache-off')");
 	admin_exec(admin, "LOAD PGSQL SERVERS TO RUNTIME");
-	sleep_seconds(2);
+	sleep_seconds(3);
 	before = read_pg_counters(admin);
 	hammer_proxy(3);
-	sleep_seconds(1);
+	sleep_seconds(2);
 	after = read_pg_counters(admin);
 	ok(after.queried == before.queried,
 		"cache off: dns_cache_queried unchanged (%ld -> %ld)",
 		before.queried, after.queried);
+	ok(after.lookup_success == before.lookup_success,
+		"cache off: dns_cache_lookup_success unchanged (%ld -> %ld)",
+		before.lookup_success, after.lookup_success);
 	ok(after.record_updated == before.record_updated,
 		"cache off: dns_cache_record_updated unchanged (%ld -> %ld)",
 		before.record_updated, after.record_updated);

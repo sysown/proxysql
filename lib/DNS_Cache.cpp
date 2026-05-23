@@ -35,31 +35,27 @@ std::string get_connected_peer_ip_from_socket(int socket_fd) {
 	std::string result;
 	char ip_addr[INET6_ADDRSTRLEN];
 
-	union {
-		struct sockaddr_in in;
-		struct sockaddr_in6 in6;
-	} custom_sockaddr;
-
-	struct sockaddr* addr = (struct sockaddr*)malloc(sizeof(custom_sockaddr));
+	struct sockaddr_storage custom_sockaddr;
 	socklen_t addrlen = sizeof(custom_sockaddr);
-	memset(addr, 0, sizeof(custom_sockaddr));
+	memset(&custom_sockaddr, 0, sizeof(custom_sockaddr));
 
-	int rc = getpeername(socket_fd, addr, &addrlen);
+	if (getpeername(socket_fd, (struct sockaddr*)&custom_sockaddr, &addrlen) != 0)
+		return result;
 
-	if (rc == 0) {
-		if (addr->sa_family == AF_INET) {
-			struct sockaddr_in* ipv4 = (struct sockaddr_in*)addr;
-			inet_ntop(addr->sa_family, &ipv4->sin_addr, ip_addr, INET_ADDRSTRLEN);
-		}
-		else if (addr->sa_family == AF_INET6) {
-			struct sockaddr_in6* ipv6 = (struct sockaddr_in6*)addr;
-			inet_ntop(addr->sa_family, &ipv6->sin6_addr, ip_addr, INET6_ADDRSTRLEN);
-		}
-
-		result = ip_addr;
+	// Only assign to result when sa_family is one we know how to format.
+	// Other families (AF_UNIX, AF_NETLINK, ...) shouldn't happen for a TCP
+	// peer fd, but if they ever do we'd previously emit uninitialized memory
+	// from ip_addr.
+	if (custom_sockaddr.ss_family == AF_INET) {
+		const struct sockaddr_in* ipv4 = (const struct sockaddr_in*)&custom_sockaddr;
+		if (inet_ntop(AF_INET, &ipv4->sin_addr, ip_addr, INET_ADDRSTRLEN))
+			result = ip_addr;
 	}
-
-	free(addr);
+	else if (custom_sockaddr.ss_family == AF_INET6) {
+		const struct sockaddr_in6* ipv6 = (const struct sockaddr_in6*)&custom_sockaddr;
+		if (inet_ntop(AF_INET6, &ipv6->sin6_addr, ip_addr, INET6_ADDRSTRLEN))
+			result = ip_addr;
+	}
 
 	return result;
 }
@@ -144,7 +140,7 @@ void* monitor_dns_resolver_thread(const std::vector<DNS_Resolve_Data*>& dns_reso
 					dns_resolve_data->result.set_value(std::make_tuple<>(true,
 						DNS_Cache_Record(dns_resolve_data->hostname,
 							std::move(dns_resolve_data->cached_ips),
-							monotonic_time() + (1000 * cache_ttl))));
+							monotonic_time() + (1000ULL * static_cast<unsigned long long>(cache_ttl)))));
 				}
 			}
 			else
@@ -153,7 +149,7 @@ void* monitor_dns_resolver_thread(const std::vector<DNS_Resolve_Data*>& dns_reso
 			if (to_update_cache) {
 				dns_resolve_data->result.set_value(std::make_tuple<>(true,
 					DNS_Cache_Record(dns_resolve_data->hostname, ips,
-						monotonic_time() + (1000 * cache_ttl))));
+						monotonic_time() + (1000ULL * static_cast<unsigned long long>(cache_ttl)))));
 				dns_resolve_data->dns_cache->add(dns_resolve_data->hostname, std::move(ips));
 			}
 
@@ -217,6 +213,7 @@ bool DNS_Cache::add(const std::string& hostname, std::vector<std::string>&& ips)
 bool DNS_Cache::add_if_not_exist(const std::string& hostname, std::vector<std::string>&& ips) {
 	if (!enabled) return false;
 
+	bool inserted = false;
 	int rc = pthread_rwlock_wrlock(&rwlock_);
 	assert(rc == 0);
 	if (records.find(hostname) == records.end()) {
@@ -226,14 +223,15 @@ bool DNS_Cache::add_if_not_exist(const std::string& hostname, std::vector<std::s
 		auto& ip_addr = records[hostname];
 		ip_addr.ips = std::move(ips);
 		__sync_fetch_and_and(&ip_addr.counter, 0);
+		inserted = true;
 	}
 	rc = pthread_rwlock_unlock(&rwlock_);
 	assert(rc == 0);
 
-	if (counter_record_updated_)
+	if (inserted && counter_record_updated_)
 		__sync_fetch_and_add(counter_record_updated_, 1);
 
-	return true;
+	return inserted;
 }
 
 std::string DNS_Cache::get_next_ip(const IP_ADDR& ip_addr) const {
@@ -241,13 +239,17 @@ std::string DNS_Cache::get_next_ip(const IP_ADDR& ip_addr) const {
 	if (ip_addr.ips.empty())
 		return "";
 
-	const auto counter_val = __sync_fetch_and_add(const_cast<unsigned long*>(&ip_addr.counter), 1);
+	const auto counter_val = __sync_fetch_and_add(&ip_addr.counter, 1);
 
 	return ip_addr.ips[counter_val % ip_addr.ips.size()];
 }
 
 std::string DNS_Cache::lookup(const std::string& hostname, size_t* ip_count) const {
-	if (!enabled) return "";
+	if (!enabled) {
+		if (ip_count)
+			*ip_count = 0;
+		return "";
+	}
 
 	std::string ip;
 
