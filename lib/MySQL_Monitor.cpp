@@ -746,31 +746,37 @@ void MySQL_Monitor_State_Data::init_async() {
 			" wsrep_cluster_status, pxc_maint_mode FROM HOST_STATUS_GALERA WHERE hostgroup_id=";
 		query_ += std::to_string(writer_hostgroup) + " AND hostname='" + std::string(hostname) + "' AND port=" + std::to_string(port);
 #else
-		// performance_schema.global_status is a MySQL-only table (added in 5.7).
-		// INFORMATION_SCHEMA.GLOBAL_STATUS was deprecated in MySQL 8.0 and
-		// removed in MySQL 8.4, so MySQL >= 5.7 must use performance_schema
-		// (otherwise the monitor query fails on MySQL 8.4+/9.x). MariaDB never
-		// implemented the performance_schema status tables and keeps
-		// GLOBAL_STATUS in information_schema across all versions, so it must
-		// be excluded explicitly (atoi("10.x-MariaDB") >= 8 would otherwise
-		// route it to the performance_schema branch).
-		const char *sv = mysql->server_version;
-		bool is_mariadb = (sv != NULL && strstr(sv, "MariaDB") != NULL);
-		int sv_major = (sv != NULL) ? atoi(sv) : 0;
-		bool use_perf_schema = !is_mariadb &&
-			(sv_major >= 8 || (sv_major == 5 && sv != NULL && strncmp(sv, "5.7", 3) == 0));
-		if (use_perf_schema) {
-			query_ = "SELECT (SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME='WSREP_LOCAL_STATE') "
-				"wsrep_local_state, @@read_only read_only, (SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME='WSREP_LOCAL_RECV_QUEUE') wsrep_local_recv_queue , "
-				"@@wsrep_desync wsrep_desync, @@wsrep_reject_queries wsrep_reject_queries, @@wsrep_sst_donor_rejects_queries wsrep_sst_donor_rejects_queries, "
-				"(SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME='WSREP_CLUSTER_STATUS') wsrep_cluster_status , "
-				"(SELECT COALESCE(MAX(VARIABLE_VALUE),'DISABLED') FROM performance_schema.global_variables WHERE variable_name='pxc_maint_mode') pxc_maint_mode ";
-		} else {
-			// MariaDB Galera (any version) and legacy MySQL/PXC < 5.7
-			query_ = "SELECT (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_STATE') "
-				"wsrep_local_state, @@read_only read_only, (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_RECV_QUEUE') wsrep_local_recv_queue , "
-				"@@wsrep_desync wsrep_desync, @@wsrep_reject_queries wsrep_reject_queries, @@wsrep_sst_donor_rejects_queries wsrep_sst_donor_rejects_queries, "
-				"(SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_CLUSTER_STATUS') wsrep_cluster_status , (SELECT 'DISABLED') pxc_maint_mode";
+		{
+			// performance_schema.global_status is a MySQL-only table (added in 5.7).
+			// INFORMATION_SCHEMA.GLOBAL_STATUS was deprecated in MySQL 8.0 and
+			// removed in MySQL 8.4, so MySQL >= 5.7 must use performance_schema
+			// (otherwise the monitor query fails on MySQL 8.4+/9.x). MariaDB never
+			// implemented the performance_schema status tables and keeps
+			// GLOBAL_STATUS in information_schema across all versions, so it must
+			// be excluded explicitly (atoi("10.x-MariaDB") >= 8 would otherwise
+			// route it to the performance_schema branch).
+			// (The enclosing braces are required: this is a `switch` case body
+			// and the variable declarations below are jumped over by sibling
+			// `case` labels — without a scope, GCC errors with "jump to case
+			// label" / "crosses initialization".)
+			const char *sv = mysql->server_version;
+			bool is_mariadb = (sv != NULL && strstr(sv, "MariaDB") != NULL);
+			int sv_major = (sv != NULL) ? atoi(sv) : 0;
+			bool use_perf_schema = !is_mariadb &&
+				(sv_major >= 8 || (sv_major == 5 && sv != NULL && strncmp(sv, "5.7", 3) == 0));
+			if (use_perf_schema) {
+				query_ = "SELECT (SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME='WSREP_LOCAL_STATE') "
+					"wsrep_local_state, @@read_only read_only, (SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME='WSREP_LOCAL_RECV_QUEUE') wsrep_local_recv_queue , "
+					"@@wsrep_desync wsrep_desync, @@wsrep_reject_queries wsrep_reject_queries, @@wsrep_sst_donor_rejects_queries wsrep_sst_donor_rejects_queries, "
+					"(SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME='WSREP_CLUSTER_STATUS') wsrep_cluster_status , "
+					"(SELECT COALESCE(MAX(VARIABLE_VALUE),'DISABLED') FROM performance_schema.global_variables WHERE variable_name='pxc_maint_mode') pxc_maint_mode ";
+			} else {
+				// MariaDB Galera (any version) and legacy MySQL/PXC < 5.7
+				query_ = "SELECT (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_STATE') "
+					"wsrep_local_state, @@read_only read_only, (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_RECV_QUEUE') wsrep_local_recv_queue , "
+					"@@wsrep_desync wsrep_desync, @@wsrep_reject_queries wsrep_reject_queries, @@wsrep_sst_donor_rejects_queries wsrep_sst_donor_rejects_queries, "
+					"(SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_CLUSTER_STATUS') wsrep_cluster_status , (SELECT 'DISABLED') pxc_maint_mode";
+			}
 		}
 #endif // TEST_GALERA
 		task_timeout_ = mysql_thread___monitor_galera_healthcheck_timeout;
