@@ -1742,6 +1742,24 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 		return fail_session("missing username or cleartext");
 	}
 
+	// Per-user / per-IP rate limiting (spec §7.2). Reject immediately if
+	// either counter exceeds its sliding-window threshold; the probe is
+	// not attempted and no failure is recorded (we don't extend a
+	// lockout indefinitely).
+	const std::string user_key(username);
+	const std::string ip_key(
+		(client_myds && client_myds->addr.addr) ? client_myds->addr.addr : "");
+	if (GloMyPTAuthCache->would_lockout_user(user_key,
+			mysql_thread___passthrough_auth_max_failures_per_user,
+			mysql_thread___passthrough_auth_failure_window_s)) {
+		return fail_session("per-user lockout");
+	}
+	if (GloMyPTAuthCache->would_lockout_ip(ip_key,
+			mysql_thread___passthrough_auth_max_failures_per_ip,
+			mysql_thread___passthrough_auth_failure_window_s)) {
+		return fail_session("per-ip lockout");
+	}
+
 	// Global in-flight probe cap (spec §7.3). Sessions that lose the race
 	// here get a generic ERR instead of a probe; this bounds concurrent
 	// probe load on the backend and protects against thundering-herd after
@@ -1787,6 +1805,8 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 	mysql_close(probe);
 
 	if (!probe_ok) {
+		// Record failure for rate limiting (per-user + per-IP).
+		GloMyPTAuthCache->record_failure(user_key, ip_key);
 		return fail_session("backend rejected probe");
 	}
 

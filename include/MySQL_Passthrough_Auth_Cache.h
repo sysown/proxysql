@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -32,6 +33,13 @@ class MySQL_Passthrough_Auth_Cache {
 		mutable pthread_rwlock_t lock;
 		std::unordered_map<std::string, entry_t> entries;
 		std::atomic<int> inflight_probes;
+		// Sliding-window failure counters (spec §7.2). Per-username and
+		// per-source-IP. Mutated only behind failure_lock — a separate
+		// mutex from `lock` since these are write-mostly and accessed on
+		// every probe.
+		mutable pthread_mutex_t failure_lock;
+		mutable std::unordered_map<std::string, std::deque<uint64_t>> failures_by_user;
+		mutable std::unordered_map<std::string, std::deque<uint64_t>> failures_by_ip;
 
 	public:
 		MySQL_Passthrough_Auth_Cache();
@@ -65,6 +73,14 @@ class MySQL_Passthrough_Auth_Cache {
 		bool try_acquire_inflight(int max_inflight);
 		void release_inflight();
 		int  inflight() const;
+
+		// Sliding-window failure counters (spec §7.2). Sessions check
+		// would_lockout before probing; on probe failure, record a
+		// failure. window_s defines the sliding window in seconds; older
+		// timestamps are dropped lazily on check.
+		bool would_lockout_user(const std::string& username, int max_failures, uint32_t window_s) const;
+		bool would_lockout_ip(const std::string& ip, int max_failures, uint32_t window_s) const;
+		void record_failure(const std::string& username, const std::string& ip);
 
 		void print_version();
 };
