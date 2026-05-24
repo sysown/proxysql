@@ -4584,26 +4584,11 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 						value1 = value;
 					}
 
-					// TEMP DEBUG (delete after diagnosing case #184 of pgsql-set_parameter_validation_test-t):
-					// log every entry to the validator block so the CI proxysql.log
-					// shows what value the validator actually receives for search_path
-					// and what it returns. Set_parser_algorithm_3 is leaking through
-					// some path that bypasses the validator-reject error packet and we
-					// don't yet know why.
-					proxy_info("SET-VALIDATE pre var=%s idx=%d value1_len=%zu value1=[%s]\n",
-						var.c_str(), idx, value1.length(), value1.c_str());
 					char* transformed_value = nullptr;
-					bool _validator_ok = true;
-					if (pgsql_tracked_variables[idx].validator && pgsql_tracked_variables[idx].validator->validate) {
-						_validator_ok = (*pgsql_tracked_variables[idx].validator->validate)(
-							value1.c_str(), &pgsql_tracked_variables[idx].validator->params, this, &transformed_value);
-					}
-					proxy_info("SET-VALIDATE post var=%s validator_ok=%s transformed=[%s]\n",
-						var.c_str(),
-						_validator_ok ? "true" : "false",
-						transformed_value ? transformed_value : "(null)");
 					if (pgsql_tracked_variables[idx].validator && pgsql_tracked_variables[idx].validator->validate &&
-						_validator_ok == false
+						(
+							*pgsql_tracked_variables[idx].validator->validate)(
+								value1.c_str(), &pgsql_tracked_variables[idx].validator->params, this, &transformed_value) == false
 						) {
 						char* m = NULL;
 						char* errmsg = NULL;
@@ -4680,7 +4665,22 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 		}
 
 		if (failed_to_parse_var) {
-			unable_to_parse_set_statement(lock_hostgroup);
+			// Reached here means match_regexes[1] matched (the outer `if` at
+			// line 4492 above) so the SET targets a variable proxysql tracks
+			// (search_path, datestyle, etc.), but the SET parser couldn't
+			// build a usable map (malformed value, unclosed delimiter,
+			// trailing comma, etc.). Forward to the backend without locking
+			// the hostgroup: PG itself will reject the bad SET (or for
+			// silently-accepted edge cases like a 64-char delimited ident,
+			// the subsequent tracked-variable SETs need to still flow
+			// through proxysql's validator -- locking here would short-circuit
+			// every later SET on this connection past PgSQL_Session's
+			// handle_SET_command and let invalid SETs slip through to PG
+			// uncriticized. See pgsql-set_parameter_validation_test-t
+			// case #184 cascade for the concrete failure mode.
+			string query_str = string((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
+			proxy_warning("Unable to parse SET query for tracked variable; forwarding to backend without hostgroup lock: %s\n",
+				query_str.c_str());
 			return false;
 		}
 
