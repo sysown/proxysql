@@ -1795,25 +1795,35 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 		return fail_session("missing username or cleartext");
 	}
 
-	// Per-user / per-IP rate limiting (spec §7.2). Reject immediately if
-	// either counter exceeds its sliding-window threshold; the probe is
-	// not attempted and no failure is recorded (we don't extend a
-	// lockout indefinitely).
+	/*
+	 * Per-user / per-IP rate limiting (spec §7.2).
+	 *
+	 * Evaluate BOTH gates before any return so the lockouts_user and
+	 * lockouts_ip metrics each fire whenever their gate would have
+	 * tripped -- not just whichever happens to be evaluated first.
+	 * Operators expect to see independent visibility into both
+	 * counters; if an attacker hits the per-user cap from one IP and
+	 * the per-IP cap from a different username at the same time, both
+	 * counters should reflect that. Returning on the first reject was
+	 * a small step performance-wise but lost that signal.
+	 *
+	 * No failure is recorded against the failure deques here (we don't
+	 * extend a lockout indefinitely); only an actual backend probe
+	 * rejection bumps record_failure.
+	 */
 	const std::string user_key(username);
 	const std::string ip_key(
 		(client_myds && client_myds->addr.addr) ? client_myds->addr.addr : "");
-	if (GloMyPTAuthCache->would_lockout_user(user_key,
+	const bool user_locked = GloMyPTAuthCache->would_lockout_user(user_key,
 			mysql_thread___passthrough_auth_max_failures_per_user,
-			mysql_thread___passthrough_auth_failure_window_s)) {
-		GloMyPTAuthCache->bump_lockouts_user();
-		return fail_session("per-user lockout");
-	}
-	if (GloMyPTAuthCache->would_lockout_ip(ip_key,
+			mysql_thread___passthrough_auth_failure_window_s);
+	const bool ip_locked = GloMyPTAuthCache->would_lockout_ip(ip_key,
 			mysql_thread___passthrough_auth_max_failures_per_ip,
-			mysql_thread___passthrough_auth_failure_window_s)) {
-		GloMyPTAuthCache->bump_lockouts_ip();
-		return fail_session("per-ip lockout");
-	}
+			mysql_thread___passthrough_auth_failure_window_s);
+	if (user_locked) GloMyPTAuthCache->bump_lockouts_user();
+	if (ip_locked)   GloMyPTAuthCache->bump_lockouts_ip();
+	if (user_locked) return fail_session("per-user lockout");
+	if (ip_locked)   return fail_session("per-ip lockout");
 
 	// Global in-flight probe cap (spec §7.3). Sessions that lose the race
 	// here get a generic ERR instead of a probe; this bounds concurrent
@@ -1825,9 +1835,6 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 		GloMyPTAuthCache->bump_inflight_cap_rejects();
 		return fail_session("inflight probe cap reached");
 	}
-	/* Past the gates; this attempt will run a real probe. Bump
-	 * probes_attempted exactly once per actual probe. */
-	GloMyPTAuthCache->bump_probes_attempted();
 	struct InflightGuard {
 		MySQL_Passthrough_Auth_Cache* cache;
 		~InflightGuard() { if (cache) cache->release_inflight(); }
@@ -1853,6 +1860,25 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 	if (probe == NULL) {
 		return fail_session("mysql_init failed");
 	}
+	/*
+	 * Bump probes_attempted ONLY after every local gate has passed and
+	 * we're about to make a real network call to the backend. Counting
+	 * earlier would over-report attempts whenever
+	 *   - no MyHGC exists for the target hostgroup,
+	 *   - no healthy MySrvC could be selected,
+	 *   - mysql_init failed (OOM),
+	 * because those exit paths return via fail_session() without bumping
+	 * any probes_failed_* counter. The documented invariant
+	 *   probes_attempted ≈ probes_ok + probes_failed_credentials + probes_failed_transport
+	 * (modulo concurrent in-flight) only holds if this bump fires at the
+	 * same gate as the credential/transport classification below.
+	 *
+	 * Inflight-cap rejection still has its own counter
+	 * (inflight_cap_rejects) and intentionally does NOT count toward
+	 * probes_attempted -- those sessions never reach the probe path at
+	 * all.
+	 */
+	GloMyPTAuthCache->bump_probes_attempted();
 	unsigned int timeout_s = mysql_thread___connect_timeout_server_max / 1000;
 	if (timeout_s == 0) timeout_s = 1;
 	mysql_options(probe, MYSQL_OPT_CONNECT_TIMEOUT, &timeout_s);
