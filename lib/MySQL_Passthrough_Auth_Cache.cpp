@@ -268,12 +268,34 @@ void evict_oldest(
 	for (auto& it : empties) {
 		m.erase(it);
 	}
-	/* Phase 2: if after sweeping zombies we're still above the cap,
-	 * drop the oldest real entry. The just-inserted entry by definition
-	 * has the LATEST timestamp at its front(), so this never picks it
-	 * up unless every other entry has been swept (in which case the
-	 * cap was never really exceeded by genuine activity -- only by
-	 * accumulated zombies). */
+	/* Phase 2: drop the oldest real (non-empty) entry.
+	 *
+	 * Caller invokes evict_oldest only after observing size() > cap,
+	 * so an unconditional eviction here is defensible: we were
+	 * already over the limit AT the call site. We do NOT re-check
+	 * @c m.size() vs the cap here -- evict_oldest doesn't know the
+	 * cap (the cap is a per-call parameter at the record_failure
+	 * site) -- so this eviction may sometimes be one entry more
+	 * aggressive than strictly necessary if the zombie sweep alone
+	 * brought us under the cap.
+	 *
+	 * The trade-off:
+	 *   - leave-as-is: every cap-trigger reclaims one real entry
+	 *     even if zombies covered it. Bias toward freshness; slight
+	 *     over-eviction under attack workloads that happen to leave
+	 *     lots of zombies relative to live entries.
+	 *   - re-check vs cap: would need to thread the cap into
+	 *     evict_oldest. Avoids the over-eviction but adds API
+	 *     surface and a second size() call.
+	 * Picked leave-as-is for Phase 1 simplicity. A Phase-2 follow-up
+	 * could thread the cap through if real-world attack telemetry
+	 * shows the over-eviction matters.
+	 *
+	 * The just-inserted entry by definition has the LATEST timestamp
+	 * at its front(), so this never picks it up unless every other
+	 * entry has been swept (the degenerate case where the cap was
+	 * exceeded only by accumulated zombies).
+	 */
 	if (oldest != m.end()) {
 		m.erase(oldest);
 	}
