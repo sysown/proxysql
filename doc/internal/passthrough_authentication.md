@@ -172,6 +172,8 @@ PR #4221 piggy-backed on `CONNECTING_SERVER` with a marker on the `previous_stat
 
 For Phase 1, `COM_CHANGE_USER` targeting a user that would require pass-through (empty-password row, or no row with `unknown_users` enabled) is **rejected**. Same generic ERR as any other pass-through failure. Rationale: keeps the state machine simple, avoids the subtleties of probing a fresh backend while a bound backend connection has in-flight session state.
 
+Implementation: `process_pkt_COM_CHANGE_USER` in `lib/MySQL_Protocol.cpp` returns early with `ret=false` when the target's stored password is empty and the master gate is on. The check runs BEFORE the function's unconditional session-state mutations (`sess->default_hostgroup`, `transaction_persistent`, `user_attributes`) so a rejected attempt has no observable side effects on the already-authenticated session.
+
 May be revisited in a later phase if there's demand.
 
 ## 6. Probe details
@@ -266,7 +268,7 @@ A new in-memory singleton, `MySQL_Passthrough_Auth_Cache` (or sibling of `GloMyA
 ```cpp
 struct passthrough_entry {
     std::string cleartext_password;
-    uint64_t    learned_at_ms;        // monotonic timestamp
+    uint64_t    learned_at_us;        // monotonic_time() microseconds
 };
 
 // keyed by frontend username
@@ -337,7 +339,7 @@ Password column is **not** exposed. Useful for "is alice's password cached?" deb
 ```cpp
 bool   lookup(const std::string& user, std::string& out_cleartext);
 void   insert(const std::string& user, const std::string& cleartext);
-void   evict(const std::string& user);
+bool   evict(const std::string& user);   // true if the entry was present
 void   clear();
 size_t size() const;
 std::vector<entry_view> snapshot() const;  // for stats_*
