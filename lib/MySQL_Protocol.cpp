@@ -2465,6 +2465,48 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 		const bool unknown_user_case =
 			mysql_thread___passthrough_auth_unknown_users
 			&& vars1.password == NULL;
+
+		/**
+		 * @brief Hard-reject when the row state is pass-through eligible but
+		 * the client plugin cannot drive pass-through.
+		 *
+		 * When @c mysql-passthrough_auth_enabled is on, an empty stored
+		 * password in @c mysql_users semantically means "learn this via the
+		 * caching_sha2_password full-auth exchange" -- it is NO LONGER a
+		 * marker for passwordless login (spec §3.2). However the rest of
+		 * PPHR_verify_password retains the legacy
+		 *   if (pass_len == 0 && strlen(password) == 0) ret = true;
+		 * branch a few dozen lines below, which would otherwise grant
+		 * passwordless login to e.g. a mysql_native_password client sending
+		 * an empty password against the same row -- silently bypassing the
+		 * documented behavior change of §3.2.
+		 *
+		 * Block that fallthrough explicitly here: if pass-through is enabled
+		 * AND the row signals eligibility (empty password) AND the client
+		 * isn't using caching_sha2_password (the only plugin we can actually
+		 * probe for cleartext), set ret=false and exit before any other
+		 * branch can accept the connection. Same disposition as a
+		 * legitimately failed pass-through: generic auth failure, no
+		 * information leak about whether the user exists.
+		 *
+		 * This applies only to @c empty_pw_case (admin-provisioned opt-in
+		 * row). The @c unknown_user_case already cannot reach the
+		 * passwordless-OK branch because @c vars1.password==NULL takes a
+		 * different code path that already fails.
+		 */
+		if (mysql_thread___passthrough_auth_enabled
+			&& empty_pw_case
+			&& auth_plugin_id != AUTH_MYSQL_CACHING_SHA2_PASSWORD
+			&& (*myds)->sess->session_type == PROXYSQL_SESSION_MYSQL) {
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
+				"pass-through eligible row but client plugin is not "
+				"caching_sha2_password (id=%d), rejecting auth for user='%s'\n",
+				auth_plugin_id,
+				vars1.user ? (const char*)vars1.user : "(null)");
+			ret = false;
+			return ret;
+		}
+
 		if (mysql_thread___passthrough_auth_enabled
 			&& auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD
 			&& (*myds)->sess->session_type == PROXYSQL_SESSION_MYSQL
