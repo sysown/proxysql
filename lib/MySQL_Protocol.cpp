@@ -2595,12 +2595,65 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 					std::string((const char*)vars1.user), cleartext, ttl_s)) {
 				if (vars1.password) { free(vars1.password); }
 				vars1.password = strdup(cleartext.c_str());
-				// For unknown-user case, also need to populate
-				// account_details so the post-verification path in
-				// process_pkt_handshake_response sees consistent values.
+				/**
+				 * @brief Mirror the synthesized session defaults into
+				 * @c account_details for the unknown-user cache-hit path.
+				 *
+				 * After this `if (cache hit)` branch returns, execution
+				 * falls through to the rest of PPHR_verify_password which
+				 * (for a non-NULL @c vars1.password) calls
+				 * @ref PPHR_5passwordTrue. That helper UNCONDITIONALLY
+				 * copies every routing/schema/connection field from
+				 * @c account_details onto the session:
+				 *
+				 *   sess->default_hostgroup      <- attr1.default_hostgroup
+				 *   sess->default_schema         <- attr1.default_schema
+				 *   sess->schema_locked          <- attr1.schema_locked
+				 *   sess->transaction_persistent <- attr1.transaction_persistent
+				 *   sess->session_fast_forward   <- attr1.fast_forward ? ...
+				 *   sess->user_max_connections   <- attr1.max_connections
+				 *
+				 * For unknown users, @c GloMyAuth->lookup returns a value-
+				 * initialized @c account_details_t (all scalars zero, all
+				 * pointers null). Without explicitly populating these
+				 * fields with the synthesized defaults from globals
+				 * (which were applied to the session above), the call to
+				 * PPHR_5passwordTrue silently CLOBBERS them with zeros --
+				 * the session ends up with default_hostgroup=0 (back to
+				 * HG 0, not @c mysql-passthrough_default_hg),
+				 * default_schema=NULL, transaction_persistent=false, etc.
+				 * Worse, any non-zero scalar in the value-init struct
+				 * could surface as a stale @c fast_forward bit and bypass
+				 * query rules.
+				 *
+				 * Spec §3.5 says "Routing/defaults for unknown users are
+				 * re-derived from globals each connect" -- this block is
+				 * what makes that hold across the PPHR_5passwordTrue
+				 * fallthrough.
+				 *
+				 * Discovered by the auth-correctness, security, and
+				 * integration subagents during the PR #5810 deep review.
+				 */
 				if (unknown_user_case) {
 					account_details.default_hostgroup =
 						mysql_thread___passthrough_default_hg;
+					if (account_details.default_schema) {
+						free(account_details.default_schema);
+						account_details.default_schema = NULL;
+					}
+					const char *ds =
+						(mysql_thread___passthrough_default_schema
+							&& mysql_thread___passthrough_default_schema[0] != '\0')
+							? mysql_thread___passthrough_default_schema
+							: mysql_thread___default_schema;
+					if (ds != NULL && ds[0] != '\0') {
+						account_details.default_schema = strdup(ds);
+					}
+					account_details.schema_locked = false;
+					account_details.transaction_persistent = true;
+					account_details.fast_forward = false;
+					account_details.max_connections = 0;
+					account_details.use_ssl = false;
 				}
 			} else if (mysql_thread___passthrough_auth_require_tls && !(*myds)->encrypted) {
 				// Spec §7.1/§7.4: refuse to ask the client for cleartext
