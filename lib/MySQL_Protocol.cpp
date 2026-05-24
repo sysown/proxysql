@@ -2709,7 +2709,17 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 					account_details.transaction_persistent = true;
 					account_details.fast_forward = false;
 					account_details.max_connections = 0;
-					account_details.use_ssl = false;
+					/*
+					 * NOTE: account_details.use_ssl is intentionally NOT
+					 * touched here. It controls the row-driven "this user
+					 * requires SSL frontend connection" semantic; for an
+					 * unknown user we have no row-level intent. The
+					 * default-constructed value (false) is what we want,
+					 * but explicitly assigning it would be a dead store --
+					 * PPHR_5passwordTrue reads attr1.use_ssl only via
+					 * PPHR_SetConnAttrs later, and the value-init already
+					 * gives the right default.
+					 */
 				}
 			} else if (mysql_thread___passthrough_auth_require_tls && !(*myds)->encrypted) {
 				// Spec §7.1/§7.4: refuse to ask the client for cleartext

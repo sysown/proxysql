@@ -1890,9 +1890,17 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 	 * carries the probed hostgroup id (spec §7.4). For all non-
 	 * pass-through callers the override is -1, leaving @c hid at its
 	 * default UINT64_MAX (which write_auth omits from the JSON).
+	 *
+	 * Pass NULL/0 for the server-address arguments so @c write_auth's
+	 *   if (server) j["server_addr"] = server;
+	 * branch (lib/MySQL_Logger.cpp:610-612) does NOT emit an empty
+	 * @c server_addr field for pass-through audit entries -- the
+	 * probe connection is one-shot and has no meaningful server
+	 * address to record (and emitting an empty string would pollute
+	 * the on-wire JSON schema).
 	 */
 	if (passthrough_audit_hostgroup_override >= 0) {
-		me.set_server(passthrough_audit_hostgroup_override, (char*)"", 0);
+		me.set_server(passthrough_audit_hostgroup_override, NULL, 0);
 	}
 
 	// for performance reason, we are moving the write lock
