@@ -150,8 +150,20 @@ int main() {
 	cfg_ok &= (do_query(admin, "SET mysql-passthrough_auth_require_tls='false'") == EXIT_SUCCESS);
 	cfg_ok &= (do_query(admin, "SET mysql-passthrough_auth_empty_password='true'") == EXIT_SUCCESS);
 	cfg_ok &= (do_query(admin, "SET mysql-passthrough_auth_unknown_users='false'") == EXIT_SUCCESS);
-	cfg_ok &= (do_query(admin, "SET mysql-passthrough_auth_max_failures_per_user='1000'") == EXIT_SUCCESS);
-	cfg_ok &= (do_query(admin, "SET mysql-passthrough_auth_max_failures_per_ip='1000'") == EXIT_SUCCESS);
+	/*
+	 * Raise failure caps very high for the duration of this test
+	 * (cleanup restores defaults). mysql84-g4 also runs ratelimit-t,
+	 * security-t, and unknown_user-t, each of which can drive failed
+	 * probes from the same client IP. On default caps (3/user, 10/IP)
+	 * any cross-test pollution of the per-IP deque would lock us out
+	 * before scenario [3] (wrong-pw) gets to bump
+	 * probes_failed_credentials, turning the assertion into a
+	 * spurious lockout error. Caps at 10000 make that impossible.
+	 * Mirrors the pattern in invalidation-t / security-t /
+	 * unknown_user-t.
+	 */
+	cfg_ok &= (do_query(admin, "SET mysql-passthrough_auth_max_failures_per_user='10000'") == EXIT_SUCCESS);
+	cfg_ok &= (do_query(admin, "SET mysql-passthrough_auth_max_failures_per_ip='10000'") == EXIT_SUCCESS);
 	cfg_ok &= (do_query(admin, "SET mysql-default_authentication_plugin='caching_sha2_password'") == EXIT_SUCCESS);
 	cfg_ok &= (do_query(admin, "PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE") == EXIT_SUCCESS);
 	cfg_ok &= (do_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME") == EXIT_SUCCESS);

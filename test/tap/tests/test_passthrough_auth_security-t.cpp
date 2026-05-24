@@ -164,11 +164,29 @@ int main() {
 	 * state. */
 	bool cfg_ok = true;
 	{
+		/*
+		 * Raise failure caps very high for the duration of this test
+		 * (cleanup restores defaults). Several scenarios below
+		 * deliberately drive failed connect attempts -- TLS-gate
+		 * rejects, username_pattern denies, wrong-password probes,
+		 * COM_CHANGE_USER rejects. Each of those increments the
+		 * per-user and per-IP failure counters for the test client.
+		 * On default caps (3/user, 10/IP) we'd lock ourselves out
+		 * mid-test, turning later scenarios into spurious
+		 * "lockout" errors that have nothing to do with the gate
+		 * under test. Even more so when this test shares mysql84-g4
+		 * with ratelimit-t and metrics-t, both of which also drive
+		 * failed probes from the same client IP. Raising the cap
+		 * means the test's own failures + cross-test pollution
+		 * can't lock us out. Mirrors the pattern in invalidation-t.
+		 */
 		const vector<string> base_cfg {
 			"SET mysql-passthrough_auth_enabled='true'",
 			"SET mysql-passthrough_auth_empty_password='true'",
 			"SET mysql-passthrough_auth_unknown_users='false'",
 			"SET mysql-passthrough_auth_username_pattern=''",
+			"SET mysql-passthrough_auth_max_failures_per_user='10000'",
+			"SET mysql-passthrough_auth_max_failures_per_ip='10000'",
 			"SET mysql-default_authentication_plugin='caching_sha2_password'",
 			"PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE",
 			"LOAD MYSQL VARIABLES TO RUNTIME",
@@ -322,6 +340,8 @@ int main() {
 		rc |= do_query(admin, "SET mysql-passthrough_auth_enabled='false'");
 		rc |= do_query(admin, "SET mysql-passthrough_auth_require_tls='true'");
 		rc |= do_query(admin, "SET mysql-passthrough_auth_username_pattern=''");
+		rc |= do_query(admin, "SET mysql-passthrough_auth_max_failures_per_user='3'");
+		rc |= do_query(admin, "SET mysql-passthrough_auth_max_failures_per_ip='10'");
 		rc |= do_query(admin, "SET mysql-default_authentication_plugin='mysql_native_password'");
 		rc |= do_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 		ok(rc == EXIT_SUCCESS, "Cleanup: mysql_users + globals restored");

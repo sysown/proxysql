@@ -258,12 +258,26 @@ int main() {
 			"HG 0 fenced OFFLINE_HARD (catches clobber-to-HG-0 regressions)");
 	}
 
+	/*
+	 * Raise failure caps very high for the duration of this test
+	 * (cleanup restores defaults). This test shares mysql84-g4 with
+	 * ratelimit-t (which intentionally drives MANY failures from the
+	 * same client IP to trigger lockout) and metrics-t / security-t
+	 * (which also drive failed probes). On default caps (3/user, 10/IP)
+	 * the per-IP counter spills over from a sibling test and locks out
+	 * our first unknown-user probe before it ever reaches the cache,
+	 * causing spurious "lockout" errors unrelated to the unknown-user
+	 * flow under test. Raising caps to 10000 makes cross-test pollution
+	 * non-issue. Mirrors the pattern in invalidation-t.
+	 */
 	/* -------- enable unknown_users pass-through -------- */
 	const vector<string> enable_queries {
 		"SET mysql-passthrough_auth_enabled='true'",
 		"SET mysql-passthrough_auth_require_tls='false'",
 		"SET mysql-passthrough_auth_unknown_users='true'",
 		"SET mysql-passthrough_auth_empty_password='false'",
+		"SET mysql-passthrough_auth_max_failures_per_user='10000'",
+		"SET mysql-passthrough_auth_max_failures_per_ip='10000'",
 		string("SET mysql-passthrough_default_hg='") + std::to_string(MYSQL8_HG) + "'",
 		"SET mysql-default_authentication_plugin='caching_sha2_password'",
 		"PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE",
@@ -403,6 +417,8 @@ int main() {
 		rc |= do_query(admin, "SET mysql-passthrough_auth_unknown_users='false'");
 		rc |= do_query(admin, "SET mysql-passthrough_auth_empty_password='true'");
 		rc |= do_query(admin, "SET mysql-passthrough_auth_require_tls='true'");
+		rc |= do_query(admin, "SET mysql-passthrough_auth_max_failures_per_user='3'");
+		rc |= do_query(admin, "SET mysql-passthrough_auth_max_failures_per_ip='10'");
 		rc |= do_query(admin, "SET mysql-passthrough_default_hg='0'");
 		rc |= do_query(admin, "SET mysql-default_authentication_plugin='mysql_native_password'");
 		rc |= do_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
