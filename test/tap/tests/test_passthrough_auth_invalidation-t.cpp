@@ -126,10 +126,20 @@ int main() {
 	CommandLine cl;
 
 	/*
-	 * Plan: 4 setup + 1 probe-success + 1 ALTER + 1 baseline read +
-	 *       1 invalidation observation + 2 cleanup = 10.
+	 * Plan = total ok() calls:
+	 *   Setup (4):
+	 *     backend connect, admin connect, user provisioned,
+	 *     passthrough configured
+	 *   [1] First connect (1)
+	 *   [2] ALTER USER on backend (1)
+	 *   [3] Triple assertion -- frontend handshake / SELECT 1 1045 /
+	 *       cache_invalidations + cache empty (3 ok() lines: [3a],
+	 *       [3b], [3c])
+	 *   Cleanup (2): DROP USER, restore globals
+	 *
+	 *   4 + 1 + 1 + 3 + 2 = 11.
 	 */
-	plan(10);
+	plan(11);
 
 	if (cl.getEnv()) {
 		return exit_status();
@@ -167,9 +177,19 @@ int main() {
 	cfg_ok &= (do_query(admin, "SET mysql-passthrough_auth_require_tls='false'") == EXIT_SUCCESS);
 	cfg_ok &= (do_query(admin, "SET mysql-passthrough_auth_empty_password='true'") == EXIT_SUCCESS);
 	cfg_ok &= (do_query(admin, "SET mysql-default_authentication_plugin='caching_sha2_password'") == EXIT_SUCCESS);
+	/*
+	 * Isolate this test from the per-IP failure counter pollution
+	 * that may carry over from the rate-limit test (R4-B5). The two
+	 * tests share TAP group mysql84-g4 and the same client IP from
+	 * which ratelimit-t intentionally drives many failures. Setting
+	 * the caps very high here means cross-test pollution can't
+	 * lock out our first probe in step 1. Cleanup restores defaults.
+	 */
+	cfg_ok &= (do_query(admin, "SET mysql-passthrough_auth_max_failures_per_user='10000'") == EXIT_SUCCESS);
+	cfg_ok &= (do_query(admin, "SET mysql-passthrough_auth_max_failures_per_ip='10000'") == EXIT_SUCCESS);
 	cfg_ok &= (do_query(admin, "PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE") == EXIT_SUCCESS);
 	cfg_ok &= (do_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME") == EXIT_SUCCESS);
-	ok(cfg_ok, "Pass-through configured");
+	ok(cfg_ok, "Pass-through configured (failure caps raised for test isolation)");
 
 	/* ============================================================
 	 * Step 1 -- first connect probes & caches OLD password.
@@ -182,14 +202,45 @@ int main() {
 	}
 
 	/* ============================================================
-	 * Step 2 -- ALTER USER on backend rotates to NEW password.
+	 * Step 2 -- ALTER USER on backend rotates to NEW password,
+	 *           AND force the proxy's pool to drop any cached backend
+	 *           connection auth'd with OLD_PW.
+	 *
+	 * The previous version of this test omitted the pool drain. Step 1's
+	 * connect_and_query() ran a SELECT 1 which acquired a backend
+	 * connection from the pool, used it, and returned it to the pool.
+	 * That pooled connection is auth'd with OLD_PW and remains usable
+	 * even after the backend rotates the password (the backend doesn't
+	 * tear down already-authenticated connections on ALTER USER). When
+	 * step 3 then runs SELECT 1, the proxy may serve the still-valid
+	 * pooled connection and NEVER attempt a fresh handshake -- which
+	 * means the ER 1045 eviction hook never fires and the test would
+	 * yield a false negative on healthy code (the R4-B3 finding from
+	 * the round-4 test-quality subagent).
+	 *
+	 * The reliable way to force pool drain in ProxySQL is to mark every
+	 * server in the target hostgroup OFFLINE_HARD, LOAD MYSQL SERVERS
+	 * TO RUNTIME (which destroys pool connections to those servers),
+	 * then flip back to ONLINE + LOAD. After this dance, step 3's
+	 * SELECT 1 is guaranteed to require a fresh backend handshake
+	 * because the pool is empty.
 	 * ============================================================ */
 	{
 		const string alter =
 			string("ALTER USER '") + TEST_USER + "'@'%' "
 			"IDENTIFIED WITH 'caching_sha2_password' BY '" + NEW_PW + "'";
-		ok(do_query(backend, alter) == EXIT_SUCCESS,
-			"[2] Backend ALTER USER to NEW password");
+		const string drain_seq =
+			string("UPDATE mysql_servers SET status='OFFLINE_HARD' WHERE hostgroup_id=") + std::to_string(MYSQL8_HG);
+		const string undrain_seq =
+			string("UPDATE mysql_servers SET status='ONLINE' WHERE hostgroup_id=") + std::to_string(MYSQL8_HG);
+		int rc = EXIT_SUCCESS;
+		rc |= do_query(backend, alter);
+		rc |= do_query(admin, drain_seq);
+		rc |= do_query(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+		rc |= do_query(admin, undrain_seq);
+		rc |= do_query(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+		ok(rc == EXIT_SUCCESS,
+			"[2] ALTER USER + pool drain (OFFLINE_HARD/LOAD/ONLINE/LOAD)");
 	}
 
 	/*
@@ -269,7 +320,12 @@ int main() {
 		rc |= do_query(admin, "PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE");
 		rc |= do_query(admin, "LOAD MYSQL USERS TO RUNTIME");
 		rc |= do_query(admin, "SET mysql-passthrough_auth_enabled='false'");
+		rc |= do_query(admin, "SET mysql-passthrough_auth_empty_password='true'");
 		rc |= do_query(admin, "SET mysql-passthrough_auth_require_tls='true'");
+		/* Restore the failure caps we raised in setup so the next test
+		 * inherits the documented defaults. */
+		rc |= do_query(admin, "SET mysql-passthrough_auth_max_failures_per_user='3'");
+		rc |= do_query(admin, "SET mysql-passthrough_auth_max_failures_per_ip='10'");
 		rc |= do_query(admin, "SET mysql-default_authentication_plugin='mysql_native_password'");
 		rc |= do_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 		ok(rc == EXIT_SUCCESS, "Cleanup: globals restored");
