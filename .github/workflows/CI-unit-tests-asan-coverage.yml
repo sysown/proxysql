@@ -141,6 +141,32 @@ jobs:
         path: coverage/lcov.info
         if-no-files-found: warn
 
+    - name: Upload coverage to Codecov
+      # Send the same lcov.info we already archive as a workflow artifact
+      # to Codecov so PRs get the "this PR changes coverage of touched
+      # files from N% to M%" comment and main accumulates a historical
+      # graph at https://app.codecov.io/gh/sysown/proxysql.
+      #
+      # Tokenless upload via the Codecov GitHub App (installed at the org
+      # level). For public repos this works without CODECOV_TOKEN, but if
+      # a token has been added as a repo secret it will be used too --
+      # either path works.
+      #
+      # `if: always()` so coverage uploads regardless of whether the unit
+      # tests themselves passed; partial coverage is still useful for
+      # diagnosing why a PR went red. `fail_ci_if_error: false` so a
+      # transient Codecov outage never gates a green CI run on a
+      # third-party SaaS.
+      if: always()
+      uses: codecov/codecov-action@v4
+      with:
+        files: coverage/lcov.info
+        flags: unit-tests
+        name: unit-tests-asan-coverage
+        token: ${{ secrets.CODECOV_TOKEN }}
+        fail_ci_if_error: false
+        verbose: true
+
     - name: Upload coverage HTML report
       if: always()
       uses: actions/upload-artifact@v4
