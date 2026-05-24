@@ -74,18 +74,24 @@ struct TestCase {
 };
 
 std::fstream f_proxysql_log{};
+PGConnPtr admin_conn{nullptr, &PQfinish};
 
 bool check_logs_for_command(const std::string& command_regex) {
-    // ProxySQL writes the "Unable to parse unknown SET query from client"
-    // warning asynchronously relative to the SQL that triggers it, so a single
-    // scan right after PQexec completes is racy. wait_for_log_match() retries
-    // with a short timeout, clearing EOF between scans; on hit it returns
-    // immediately, so assertions against a warning that is already present pay
-    // no extra latency. Negative assertions (check_logs_for_command(...) == false)
-    // also benefit: they now wait up to the timeout to confirm absence, avoiding
-    // a false pass when the warning would have arrived a few hundred ms later
-    // and contaminated the next iteration's read (see issue #5788).
-    return wait_for_log_match(f_proxysql_log, command_regex);
+    // Issue #5788: log-scrape race. PROXYSQL FLUSH LOGS over a persistent
+    // Admin connection fences in-flight log writes before we scan, and
+    // clearing eofbit lets getline() read bytes appended since the last
+    // scan (sticky eofbit was the root cause). Single scan, no polling.
+    if (!admin_conn || PQstatus(admin_conn.get()) != CONNECTION_OK) {
+        admin_conn = createNewConnection(ADMIN);
+    }
+    if (admin_conn) {
+        PGresult* res = PQexec(admin_conn.get(), "PROXYSQL FLUSH LOGS");
+        if (res) PQclear(res);
+    }
+
+    f_proxysql_log.clear(f_proxysql_log.rdstate() & ~std::ios_base::eofbit & ~std::ios_base::failbit);
+    const auto& [_, cmd_lines] = get_matching_lines(f_proxysql_log, command_regex);
+    return !cmd_lines.empty();
 }
 
 bool run_set_statement(const std::string& stmt, ConnType type = BACKEND) {
