@@ -745,6 +745,24 @@ void MySQL_Session::reset() {
 	mybe=NULL;
 
 	with_gtid = false;
+	/*
+	 * Clear the pass-through credential flag so a session that authed
+	 * via the cache or a probe does NOT carry the flag across
+	 * COM_RESET_CONNECTION / COM_CHANGE_USER. Both COM_RESET_CONNECTION
+	 * (lib/MySQL_Session.cpp `handler___status_WAITING_CLIENT_DATA___-
+	 * STATE_SLEEP___MYSQL_COM_RESET_CONNECTION`) and COM_CHANGE_USER
+	 * call this reset(); without clearing the flag, the eviction hook
+	 * in handler_again___status_CONNECTING_SERVER's ER_ACCESS_DENIED
+	 * branch would mis-attribute a future 1045 from the *new* user back
+	 * to the original passthrough cache entry -- exactly the
+	 * over-eviction class of bug commit a050d0d43 was meant to close.
+	 *
+	 * The flag is RE-SET to true in PPHR_verify_password (on cache hit)
+	 * and in handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT
+	 * (on probe success), so a re-authenticated passthrough session
+	 * still ends up with it true via the natural code path.
+	 */
+	passthrough_credential = false;
 	backend_closed_in_fast_forward = false;
 	fast_forward_grace_start_time = 0;
 #ifdef PROXYSQLFFTO
