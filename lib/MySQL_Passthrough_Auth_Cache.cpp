@@ -46,9 +46,54 @@ MySQL_Passthrough_Auth_Cache::~MySQL_Passthrough_Auth_Cache() {
 bool MySQL_Passthrough_Auth_Cache::lookup(
 	const std::string& username, std::string& out_cleartext, uint32_t ttl_s
 ) {
+	/*
+	 * Reader fast-path: cache HIT and entry not expired.
+	 *
+	 * The cache is read on every passthrough-eligible client connect,
+	 * so this is the dominant code path on a busy proxy. Take the
+	 * read lock, observe the entry, copy out the cleartext, drop the
+	 * lock. Multiple concurrent connects share the read lock and
+	 * don't serialize.
+	 *
+	 * If the entry is missing, we still hold only the read lock --
+	 * just return miss. If the entry IS present but expired under
+	 * the TTL, we need to evict it (mutates the map) which requires
+	 * the write lock; release the read lock and fall through to the
+	 * slow path below.
+	 */
+	{
+		pthread_rwlock_rdlock(&lock);
+		auto it = entries.find(username);
+		if (it == entries.end()) {
+			pthread_rwlock_unlock(&lock);
+			return false;
+		}
+		bool expired = false;
+		if (ttl_s > 0) {
+			const uint64_t now_us = monotonic_time();
+			const uint64_t age_us = now_us - it->second.learned_at_us;
+			if (age_us > static_cast<uint64_t>(ttl_s) * 1000000ULL) {
+				expired = true;
+			}
+		}
+		if (!expired) {
+			out_cleartext = it->second.cleartext_password;
+			pthread_rwlock_unlock(&lock);
+			return true;
+		}
+		pthread_rwlock_unlock(&lock);
+	}
+
+	/*
+	 * Writer slow-path: the entry was expired. Re-check under the
+	 * write lock (between releasing rdlock and acquiring wrlock,
+	 * another thread might have already evicted it, or even inserted
+	 * a fresh one). Standard double-checked-locking pattern.
+	 */
 	pthread_rwlock_wrlock(&lock);
 	auto it = entries.find(username);
 	if (it == entries.end()) {
+		/* Another thread evicted it; treat as miss. */
 		pthread_rwlock_unlock(&lock);
 		return false;
 	}
@@ -61,6 +106,8 @@ bool MySQL_Passthrough_Auth_Cache::lookup(
 			return false;
 		}
 	}
+	/* The entry got refreshed by another thread while we were upgrading;
+	 * return its cleartext as a hit. */
 	out_cleartext = it->second.cleartext_password;
 	pthread_rwlock_unlock(&lock);
 	return true;
