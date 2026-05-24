@@ -1275,14 +1275,6 @@ void ProxySQL_Main_shutdown_all_modules() {
 		std::cerr << "GloPgAuth shutdown in ";
 #endif
 	}
-	if (GloMyPTAuthCache) {
-		cpu_timer t;
-		delete GloMyPTAuthCache;
-		GloMyPTAuthCache = NULL;
-#ifdef DEBUG
-		std::cerr << "GloMyPTAuthCache shutdown in ";
-#endif
-	}
 	if (GloMTH) {
 		cpu_timer t;
 		pthread_mutex_lock(&GloVars.global.ext_glomth_mutex);
@@ -1291,6 +1283,20 @@ void ProxySQL_Main_shutdown_all_modules() {
 		pthread_mutex_unlock(&GloVars.global.ext_glomth_mutex);
 #ifdef DEBUG
 		std::cerr << "GloMTH shutdown in ";
+#endif
+	}
+	// NOTE: GloMyPTAuthCache MUST be destroyed AFTER GloMTH. MySQL worker
+	// threads owned by GloMTH can be inside
+	// handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT when shutdown
+	// starts; that path dereferences GloMyPTAuthCache. The `delete GloMTH`
+	// above joins those worker threads, so by the time we get here no
+	// session is mid-probe and freeing the cache singleton is safe.
+	if (GloMyPTAuthCache) {
+		cpu_timer t;
+		delete GloMyPTAuthCache;
+		GloMyPTAuthCache = NULL;
+#ifdef DEBUG
+		std::cerr << "GloMyPTAuthCache shutdown in ";
 #endif
 	}
 	if (GloPTH) {
