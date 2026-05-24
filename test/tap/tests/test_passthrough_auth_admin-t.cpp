@@ -65,6 +65,7 @@ static const vector<pair<string, string>> EXPECTED_VAR_DEFAULTS {
 	{ "mysql-passthrough_auth_max_failures_per_user",   "3"     },
 	{ "mysql-passthrough_auth_max_failures_per_ip",     "10"    },
 	{ "mysql-passthrough_auth_failure_window_s",        "60"    },
+	{ "mysql-passthrough_auth_failure_map_cap",         "100000" },
 };
 
 /**
@@ -120,16 +121,21 @@ int main() {
 	/*
 	 * Test plan (count must match the number of ok() calls below):
 	 *   1 admin connection
-	 *   12 default-value checks  (one per variable)
-	 *   12 round-trip SET/SELECT (one per variable, non-default value)
-	 *   12 restore-default       (one per variable)
+	 *   13 default-value checks  (one per variable)
+	 *   13 round-trip SET/SELECT (one per variable, non-default value)
+	 *   13 restore-default       (one per variable)
 	 *   1  stats virtual table queryable
 	 *   1  stats virtual table empty by default
 	 *   1  PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE (no arg)
 	 *   3  PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE FOR USER quoted forms
 	 *   1  username_pattern accepts a valid regex
+	 *
+	 * Variable count tracks the registration in lib/MySQL_Thread.cpp's
+	 * variables struct AND the EXPECTED_VAR_DEFAULTS table at the top of
+	 * this file. When a passthrough variable is added/removed, update
+	 * all three sites together.
 	 */
-	plan(1 + 12 + 12 + 12 + 1 + 1 + 1 + 3 + 1);
+	plan(1 + 13 + 13 + 13 + 1 + 1 + 1 + 3 + 1);
 
 	if (cl.getEnv()) {
 		diag("CommandLine getEnv() failed");
@@ -173,6 +179,7 @@ int main() {
 		{ "mysql-passthrough_auth_max_failures_per_user",   "5"     },
 		{ "mysql-passthrough_auth_max_failures_per_ip",     "20"    },
 		{ "mysql-passthrough_auth_failure_window_s",        "120"   },
+		{ "mysql-passthrough_auth_failure_map_cap",         "50000" },
 	};
 	for (const auto &kv : test_values) {
 		const bool set_ok = set_var(admin, kv.first, kv.second);
