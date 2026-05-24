@@ -155,6 +155,25 @@ int main() {
 			NULL, cl.admin_port, NULL, 0) != NULL,
 		"Connected to ProxySQL admin");
 
+	/*
+	 * Defensive: bring all servers in MYSQL8_HG back to ONLINE before
+	 * we begin. This test (and several siblings in mysql84-g4) toggles
+	 * status='OFFLINE_HARD' on the hostgroup during scenario [3] to
+	 * force a backend rotation. If a prior run of this test crashed,
+	 * was killed, or aborted mid-scenario before reaching its cleanup
+	 * block, the hostgroup may already be OFFLINE_HARD in
+	 * mysql_servers -- in which case step [1] below would fail with
+	 * "ProxySQL Error: Max connect timeout" before we even reach the
+	 * intended assertion. Re-applying ONLINE is idempotent and only
+	 * affects state we ourselves own (the test's TEST_USER + this
+	 * dedicated HG). LOAD MYSQL SERVERS TO RUNTIME publishes the
+	 * change to the data plane so subsequent probes see live backends.
+	 */
+	do_query(admin,
+		string("UPDATE mysql_servers SET status='ONLINE' WHERE hostgroup_id=")
+		+ std::to_string(MYSQL8_HG));
+	do_query(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
 	/* -------- backend user with old password -------- */
 	do_query(backend, string("DROP USER IF EXISTS '") + TEST_USER + "'@'%'");
 	const bool user_ok =

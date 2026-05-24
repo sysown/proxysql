@@ -179,6 +179,32 @@ int main() {
 	ok(acr != NULL, "Connected to ProxySQL admin at %s:%d", cl.admin_host, cl.admin_port);
 	if (!acr) { mysql_close(backend); return exit_status(); }
 
+	/*
+	 * Defensive: restore HG 0 and MYSQL8_HG to ONLINE before this test
+	 * begins. The mysql84-g4 group runs this test alongside
+	 * invalidation-t (which toggles MYSQL8_HG to OFFLINE_HARD) and the
+	 * unknown_user-t fence block below (which toggles HG 0 to
+	 * OFFLINE_HARD). If a prior sibling test crashed or was killed
+	 * before its cleanup ran, mysql_servers may already have
+	 * status='OFFLINE_HARD' on one or both of those hostgroups,
+	 * leaving every backend in this group unreachable and turning
+	 * later ok() probes into spurious connect-timeout failures with no
+	 * relationship to the regression we're actually trying to catch.
+	 *
+	 * Re-applying ONLINE is idempotent for the healthy case and only
+	 * mutates state we own (HG 0 is the fallback seeded by the infra
+	 * and exclusively toggled by this test; MYSQL8_HG is the writer
+	 * group exclusively toggled by invalidation-t). The fence block
+	 * below immediately re-sets HG 0 back to OFFLINE_HARD -- this
+	 * restore-then-fence pattern guarantees a known starting state
+	 * regardless of how the prior run terminated.
+	 */
+	do_query(admin, "UPDATE mysql_servers SET status='ONLINE' WHERE hostgroup_id=0");
+	do_query(admin,
+		string("UPDATE mysql_servers SET status='ONLINE' WHERE hostgroup_id=")
+		+ std::to_string(MYSQL8_HG));
+	do_query(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
 	/* -------- backend user with caching_sha2_password -------- */
 	do_query(backend, string("DROP USER IF EXISTS '") + TEST_USER + "'@'%'");
 	bool user_ok =
