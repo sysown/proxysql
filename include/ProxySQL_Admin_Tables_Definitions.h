@@ -197,6 +197,8 @@
 
 #define STATS_SQLITE_TABLE_MYSQL_PASSTHROUGH_AUTH_CACHE "CREATE TABLE stats_mysql_passthrough_auth_cache (username VARCHAR NOT NULL PRIMARY KEY , learned_at BIGINT NOT NULL , age_s INT NOT NULL , hostgroup_probed INT NOT NULL)"
 
+#define STATS_SQLITE_TABLE_MYSQL_PASSTHROUGH_AUTH_METRICS "CREATE TABLE stats_mysql_passthrough_auth_metrics (metric_name VARCHAR NOT NULL PRIMARY KEY , metric_value BIGINT NOT NULL)"
+
 #define STATS_SQLITE_TABLE_TLS_CERTIFICATES "CREATE TABLE stats_tls_certificates (cert_type VARCHAR NOT NULL PRIMARY KEY , file_path VARCHAR NOT NULL , subject_cn VARCHAR , issuer_cn VARCHAR , serial_number VARCHAR , not_before VARCHAR , not_after VARCHAR , days_until_expiry INT , sha256_fingerprint VARCHAR , loaded_at INT NOT NULL DEFAULT 0)"
 
 #ifdef DEBUG

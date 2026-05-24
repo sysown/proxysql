@@ -7,7 +7,17 @@
 #include <cstdio>
 
 MySQL_Passthrough_Auth_Cache::MySQL_Passthrough_Auth_Cache()
-	: inflight_probes(0), compiled_pattern(NULL) {
+	: inflight_probes(0),
+	  stat_probes_attempted(0),
+	  stat_probes_ok(0),
+	  stat_probes_failed_credentials(0),
+	  stat_probes_failed_transport(0),
+	  stat_lockouts_user(0),
+	  stat_lockouts_ip(0),
+	  stat_inflight_cap_rejects(0),
+	  stat_cache_hits(0),
+	  stat_cache_invalidations(0),
+	  compiled_pattern(NULL) {
 	pthread_rwlock_init(&lock, NULL);
 	pthread_mutex_init(&failure_lock, NULL);
 	pthread_rwlock_init(&pattern_lock, NULL);
@@ -328,6 +338,62 @@ bool MySQL_Passthrough_Auth_Cache::username_allowed(
 
 	pthread_rwlock_unlock(&pattern_lock);
 	return ok;
+}
+
+void MySQL_Passthrough_Auth_Cache::bump_probes_attempted() {
+	stat_probes_attempted.fetch_add(1, std::memory_order_relaxed);
+}
+void MySQL_Passthrough_Auth_Cache::bump_probes_ok() {
+	stat_probes_ok.fetch_add(1, std::memory_order_relaxed);
+}
+void MySQL_Passthrough_Auth_Cache::bump_probes_failed_credentials() {
+	stat_probes_failed_credentials.fetch_add(1, std::memory_order_relaxed);
+}
+void MySQL_Passthrough_Auth_Cache::bump_probes_failed_transport() {
+	stat_probes_failed_transport.fetch_add(1, std::memory_order_relaxed);
+}
+void MySQL_Passthrough_Auth_Cache::bump_lockouts_user() {
+	stat_lockouts_user.fetch_add(1, std::memory_order_relaxed);
+}
+void MySQL_Passthrough_Auth_Cache::bump_lockouts_ip() {
+	stat_lockouts_ip.fetch_add(1, std::memory_order_relaxed);
+}
+void MySQL_Passthrough_Auth_Cache::bump_inflight_cap_rejects() {
+	stat_inflight_cap_rejects.fetch_add(1, std::memory_order_relaxed);
+}
+void MySQL_Passthrough_Auth_Cache::bump_cache_hits() {
+	stat_cache_hits.fetch_add(1, std::memory_order_relaxed);
+}
+void MySQL_Passthrough_Auth_Cache::bump_cache_invalidations() {
+	stat_cache_invalidations.fetch_add(1, std::memory_order_relaxed);
+}
+
+std::vector<MySQL_Passthrough_Auth_Cache::metric_kv>
+MySQL_Passthrough_Auth_Cache::metrics_snapshot() const {
+	/**
+	 * @brief Order matters here: this is the order @c
+	 * stats_mysql_passthrough_auth_metrics returns to admin clients.
+	 * Counters first (monotonic-since-startup), gauges last
+	 * (current-state). All values are read with relaxed memory
+	 * ordering -- stats are advisory and don't need to synchronize
+	 * with the increments.
+	 */
+	std::vector<metric_kv> out;
+	out.reserve(11);
+	out.push_back({ "probes_attempted",          stat_probes_attempted.load(std::memory_order_relaxed) });
+	out.push_back({ "probes_ok",                 stat_probes_ok.load(std::memory_order_relaxed) });
+	out.push_back({ "probes_failed_credentials", stat_probes_failed_credentials.load(std::memory_order_relaxed) });
+	out.push_back({ "probes_failed_transport",   stat_probes_failed_transport.load(std::memory_order_relaxed) });
+	out.push_back({ "lockouts_user",             stat_lockouts_user.load(std::memory_order_relaxed) });
+	out.push_back({ "lockouts_ip",               stat_lockouts_ip.load(std::memory_order_relaxed) });
+	out.push_back({ "inflight_cap_rejects",      stat_inflight_cap_rejects.load(std::memory_order_relaxed) });
+	out.push_back({ "cache_hits",                stat_cache_hits.load(std::memory_order_relaxed) });
+	out.push_back({ "cache_invalidations",       stat_cache_invalidations.load(std::memory_order_relaxed) });
+	/* Current-state gauges. Use the public accessors so the locking
+	 * lives in one place. */
+	out.push_back({ "inflight_probes",           static_cast<uint64_t>(inflight()) });
+	out.push_back({ "cache_entries",             static_cast<uint64_t>(size()) });
+	return out;
 }
 
 void MySQL_Passthrough_Auth_Cache::print_version() {

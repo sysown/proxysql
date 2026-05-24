@@ -43,6 +43,28 @@ class MySQL_Passthrough_Auth_Cache {
 		mutable pthread_rwlock_t lock;
 		std::unordered_map<std::string, entry_t> entries;
 		std::atomic<int> inflight_probes;
+
+		/**
+		 * @brief Atomic counters for operational observability (spec §7.4 follow-up).
+		 *
+		 * Exposed via @c stats_mysql_passthrough_auth_metrics. Each
+		 * counter increments at exactly one well-defined point in
+		 * @c handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT
+		 * (see the corresponding @c bump_* methods below). Monotonic
+		 * since process start; reset only by process restart.
+		 *
+		 * Naming mirrors the existing @c stats_mysql_global pattern of
+		 * "what happened" snake-case-counters; no special suffixes.
+		 */
+		std::atomic<uint64_t> stat_probes_attempted;
+		std::atomic<uint64_t> stat_probes_ok;
+		std::atomic<uint64_t> stat_probes_failed_credentials;
+		std::atomic<uint64_t> stat_probes_failed_transport;
+		std::atomic<uint64_t> stat_lockouts_user;
+		std::atomic<uint64_t> stat_lockouts_ip;
+		std::atomic<uint64_t> stat_inflight_cap_rejects;
+		std::atomic<uint64_t> stat_cache_hits;
+		std::atomic<uint64_t> stat_cache_invalidations;
 		// Sliding-window failure counters (spec §7.2). Per-username and
 		// per-source-IP. Mutated only behind failure_lock — a separate
 		// mutex from `lock` since these are write-mostly and accessed on
@@ -117,6 +139,37 @@ class MySQL_Passthrough_Auth_Cache {
 		bool would_lockout_user(const std::string& username, int max_failures, uint32_t window_s) const;
 		bool would_lockout_ip(const std::string& ip, int max_failures, uint32_t window_s) const;
 		void record_failure(const std::string& username, const std::string& ip);
+
+		/**
+		 * @brief Observability counters (B7 follow-up).
+		 *
+		 * Each @c bump_* method increments the corresponding atomic at
+		 * the single call site documented in @c MySQL_Session.cpp. The
+		 * @c metrics_snapshot helper returns the current values for the
+		 * @c stats_mysql_passthrough_auth_metrics virtual table.
+		 */
+		void bump_probes_attempted();
+		void bump_probes_ok();
+		void bump_probes_failed_credentials();
+		void bump_probes_failed_transport();
+		void bump_lockouts_user();
+		void bump_lockouts_ip();
+		void bump_inflight_cap_rejects();
+		void bump_cache_hits();
+		void bump_cache_invalidations();
+
+		/**
+		 * @brief Snapshot of metric counters + current-state gauges.
+		 *
+		 * Returns a vector of (name, value) pairs ordered for stable JSON /
+		 * stats-table output. Values are read with relaxed memory ordering
+		 * since stats are advisory, not synchronizing.
+		 */
+		struct metric_kv {
+			std::string name;
+			uint64_t value;
+		};
+		std::vector<metric_kv> metrics_snapshot() const;
 
 		/**
 		 * @brief Check whether @p username matches the configured allowlist

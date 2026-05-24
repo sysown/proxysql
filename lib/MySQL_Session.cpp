@@ -1805,11 +1805,13 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 	if (GloMyPTAuthCache->would_lockout_user(user_key,
 			mysql_thread___passthrough_auth_max_failures_per_user,
 			mysql_thread___passthrough_auth_failure_window_s)) {
+		GloMyPTAuthCache->bump_lockouts_user();
 		return fail_session("per-user lockout");
 	}
 	if (GloMyPTAuthCache->would_lockout_ip(ip_key,
 			mysql_thread___passthrough_auth_max_failures_per_ip,
 			mysql_thread___passthrough_auth_failure_window_s)) {
+		GloMyPTAuthCache->bump_lockouts_ip();
 		return fail_session("per-ip lockout");
 	}
 
@@ -1820,8 +1822,12 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 	// every return path below (success and failure).
 	if (!GloMyPTAuthCache->try_acquire_inflight(
 			mysql_thread___passthrough_auth_max_inflight_probes)) {
+		GloMyPTAuthCache->bump_inflight_cap_rejects();
 		return fail_session("inflight probe cap reached");
 	}
+	/* Past the gates; this attempt will run a real probe. Bump
+	 * probes_attempted exactly once per actual probe. */
+	GloMyPTAuthCache->bump_probes_attempted();
 	struct InflightGuard {
 		MySQL_Passthrough_Auth_Cache* cache;
 		~InflightGuard() { if (cache) cache->release_inflight(); }
@@ -1935,8 +1941,10 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 			 || probe_errno == ER_HOST_NOT_PRIVILEGED);          /* 1130 */
 		if (credential_failure) {
 			GloMyPTAuthCache->record_failure(user_key, ip_key);
+			GloMyPTAuthCache->bump_probes_failed_credentials();
 			return fail_session("backend rejected probe (credentials)");
 		}
+		GloMyPTAuthCache->bump_probes_failed_transport();
 		return fail_session("backend probe transport failure");
 	}
 
@@ -1959,6 +1967,8 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 	client_myds->DSS = STATE_CLIENT_HANDSHAKE;
 	client_myds->myprot.generate_pkt_OK(true, NULL, NULL, _pid, 0, 0, 2, 0, NULL);
 	client_myds->DSS = STATE_CLIENT_AUTH_OK;
+
+	GloMyPTAuthCache->bump_probes_ok();
 
 	/**
 	 * @brief Audit log -- success path.
@@ -3441,8 +3451,11 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 								&& client_myds && client_myds->myconn
 								&& client_myds->myconn->userinfo
 								&& client_myds->myconn->userinfo->username) {
-								GloMyPTAuthCache->evict(std::string(
+								const bool was_present = GloMyPTAuthCache->evict(std::string(
 									(const char*)client_myds->myconn->userinfo->username));
+								if (was_present) {
+									GloMyPTAuthCache->bump_cache_invalidations();
+								}
 							}
 							break;
 						default:

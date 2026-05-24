@@ -2022,6 +2022,41 @@ void ProxySQL_Admin::stats___mysql_passthrough_auth_cache() {
 	statsdb->execute("COMMIT");
 }
 
+/**
+ * @brief Populate stats_mysql_passthrough_auth_metrics from
+ *        @c GloMyPTAuthCache->metrics_snapshot().
+ *
+ * The snapshot returns a vector of (name, value) pairs in stable order
+ * (counters first, gauges last). Each pair becomes one row. The
+ * counters are monotonic-since-startup; gauges (inflight_probes,
+ * cache_entries) reflect the current state at query time.
+ */
+void ProxySQL_Admin::stats___mysql_passthrough_auth_metrics() {
+	if (!GloMyPTAuthCache) return;
+
+	const auto snap = GloMyPTAuthCache->metrics_snapshot();
+
+	statsdb->execute("BEGIN");
+	statsdb->execute("DELETE FROM stats_mysql_passthrough_auth_metrics");
+
+	const char *query = (char*)"INSERT INTO stats_mysql_passthrough_auth_metrics VALUES (?1, ?2)";
+	auto [rc1, statement_unique] = statsdb->prepare_v2(query);
+	int rc = rc1;
+	sqlite3_stmt *statement = statement_unique.get();
+	ASSERT_SQLITE_OK(rc, statsdb);
+
+	for (const auto &m : snap) {
+		rc=(*proxy_sqlite3_bind_text)(statement, 1, m.name.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 2, static_cast<int64_t>(m.value)); ASSERT_SQLITE_OK(rc, statsdb);
+
+		SAFE_SQLITE3_STEP2(statement);
+		rc=(*proxy_sqlite3_clear_bindings)(statement);
+		rc=(*proxy_sqlite3_reset)(statement);
+	}
+
+	statsdb->execute("COMMIT");
+}
+
 void ProxySQL_Admin::stats___pgsql_client_host_cache(bool reset) {
 	if (!GloPTH) return;
 

@@ -2649,6 +2649,7 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 					: 0;
 			if (GloMyPTAuthCache->lookup(
 					std::string((const char*)vars1.user), cleartext, ttl_s)) {
+				GloMyPTAuthCache->bump_cache_hits();
 				if (vars1.password) { free(vars1.password); }
 				vars1.password = strdup(cleartext.c_str());
 				/**

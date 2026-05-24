@@ -880,6 +880,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_client_host_cache", STATS_SQLITE_TABLE_MYSQL_CLIENT_HOST_CACHE);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_client_host_cache_reset", STATS_SQLITE_TABLE_MYSQL_CLIENT_HOST_CACHE_RESET);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_passthrough_auth_cache", STATS_SQLITE_TABLE_MYSQL_PASSTHROUGH_AUTH_CACHE);
+	insert_into_tables_defs(tables_defs_stats,"stats_mysql_passthrough_auth_metrics", STATS_SQLITE_TABLE_MYSQL_PASSTHROUGH_AUTH_METRICS);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_query_events", ADMIN_SQLITE_TABLE_STATS_MYSQL_QUERY_EVENTS);
 	insert_into_tables_defs(tables_defs_stats,"stats_tls_certificates", STATS_SQLITE_TABLE_TLS_CERTIFICATES);
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_global", STATS_SQLITE_TABLE_GLOBAL);
