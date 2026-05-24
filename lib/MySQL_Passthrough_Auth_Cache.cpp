@@ -10,7 +10,7 @@ MySQL_Passthrough_Auth_Cache::MySQL_Passthrough_Auth_Cache()
 	: inflight_probes(0), compiled_pattern(NULL) {
 	pthread_rwlock_init(&lock, NULL);
 	pthread_mutex_init(&failure_lock, NULL);
-	pthread_mutex_init(&pattern_lock, NULL);
+	pthread_rwlock_init(&pattern_lock, NULL);
 }
 
 MySQL_Passthrough_Auth_Cache::~MySQL_Passthrough_Auth_Cache() {
@@ -23,14 +23,14 @@ MySQL_Passthrough_Auth_Cache::~MySQL_Passthrough_Auth_Cache() {
 	failures_by_ip.clear();
 	pthread_mutex_unlock(&failure_lock);
 	pthread_mutex_destroy(&failure_lock);
-	pthread_mutex_lock(&pattern_lock);
+	pthread_rwlock_wrlock(&pattern_lock);
 	if (compiled_pattern) {
 		delete compiled_pattern;
 		compiled_pattern = NULL;
 	}
 	compiled_pattern_str.clear();
-	pthread_mutex_unlock(&pattern_lock);
-	pthread_mutex_destroy(&pattern_lock);
+	pthread_rwlock_unlock(&pattern_lock);
+	pthread_rwlock_destroy(&pattern_lock);
 }
 
 bool MySQL_Passthrough_Auth_Cache::lookup(
@@ -269,18 +269,40 @@ bool MySQL_Passthrough_Auth_Cache::username_allowed(
 	 */
 	if (pattern.empty()) return true;
 
-	pthread_mutex_lock(&pattern_lock);
+	/**
+	 * @brief Reader fast-path.
+	 *
+	 * Steady state: the pattern hasn't changed since the last call. Take
+	 * the read lock, observe the cached compiled regex, run FullMatch
+	 * (which is documented thread-safe on a const RE2), drop the lock.
+	 * Concurrent probes don't serialize through a mutex -- they share
+	 * the read lock. This is the dominant path because operators set
+	 * the pattern infrequently relative to connect rate.
+	 */
+	{
+		pthread_rwlock_rdlock(&pattern_lock);
+		if (compiled_pattern != NULL && pattern == compiled_pattern_str) {
+			const bool ok = compiled_pattern->ok()
+				&& re2::RE2::FullMatch(username, *compiled_pattern);
+			pthread_rwlock_unlock(&pattern_lock);
+			return ok;
+		}
+		pthread_rwlock_unlock(&pattern_lock);
+	}
 
 	/**
-	 * @brief Recompile when the pattern string has changed since the last
-	 * call, or when no compiled form is held yet.
+	 * @brief Writer slow-path -- compile (or recompile) under the write lock.
 	 *
-	 * The compiled-regex cache is keyed on the exact pattern string so an
-	 * admin SET mysql-passthrough_auth_username_pattern='...' picks up
-	 * immediately on the next probe attempt without a restart or flush.
-	 * Compilation is done with RE2::Quiet to avoid log spam on operator-
-	 * supplied bad regexes.
+	 * The pattern string didn't match the cached one, so we need a new
+	 * compiled RE2. Acquire the write lock. Re-check under the write lock
+	 * (between the rdlock drop and wrlock acquire another thread may
+	 * have already done the compile we want), and only do the alloc /
+	 * destroy / assign work if we're still the one who needs to.
+	 *
+	 * RE2::Quiet suppresses log spam on operator-supplied bad regexes;
+	 * we discover the bad-ness via ok() below and fail-safe deny.
 	 */
+	pthread_rwlock_wrlock(&pattern_lock);
 	if (compiled_pattern == NULL || pattern != compiled_pattern_str) {
 		if (compiled_pattern) {
 			delete compiled_pattern;
@@ -301,12 +323,10 @@ bool MySQL_Passthrough_Auth_Cache::username_allowed(
 	 * every username (which would re-open the unknown-user surface that the
 	 * pattern exists to gate).
 	 */
-	bool ok = false;
-	if (compiled_pattern->ok()) {
-		ok = re2::RE2::FullMatch(username, *compiled_pattern);
-	}
+	const bool ok = compiled_pattern->ok()
+		&& re2::RE2::FullMatch(username, *compiled_pattern);
 
-	pthread_mutex_unlock(&pattern_lock);
+	pthread_rwlock_unlock(&pattern_lock);
 	return ok;
 }
 

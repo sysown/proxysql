@@ -59,12 +59,21 @@ class MySQL_Passthrough_Auth_Cache {
 		 * last-seen pattern string alongside its compiled form so that as
 		 * long as @c mysql-passthrough_auth_username_pattern is unchanged
 		 * we hit the compiled form. A pattern change (admin SET, reload)
-		 * triggers a re-compile under @c pattern_lock.
+		 * triggers a re-compile under the write lock.
+		 *
+		 * @c pattern_lock is a pthread_rwlock so the COMMON case
+		 * (steady-state pattern, every probe takes the read lock for
+		 * FullMatch) doesn't serialize through a single mutex. The write
+		 * lock is taken only when the pattern STRING changes, which
+		 * happens on admin SET / LOAD MYSQL VARIABLES TO RUNTIME and is
+		 * effectively rare. re2::RE2::FullMatch is documented as
+		 * thread-safe on a const RE2 instance, so concurrent readers
+		 * are fine.
 		 *
 		 * Holds a raw pointer (forward-declared above) rather than
 		 * unique_ptr so we don't need to drag re2/re2.h into this header.
 		 */
-		mutable pthread_mutex_t pattern_lock;
+		mutable pthread_rwlock_t pattern_lock;
 		mutable std::string compiled_pattern_str;
 		mutable re2::RE2 *compiled_pattern;
 
