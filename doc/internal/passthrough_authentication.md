@@ -56,6 +56,7 @@ mysql-passthrough_auth_username_pattern         str    default ''      (regex; '
 mysql-passthrough_auth_max_failures_per_user    int    default 3
 mysql-passthrough_auth_max_failures_per_ip      int    default 10
 mysql-passthrough_auth_failure_window_s         int    default 60
+mysql-passthrough_auth_failure_map_cap          int    default 100000  (max distinct keys retained in failure deques)
 ```
 
 `mysql-passthrough_auth_empty_password` and `mysql-passthrough_auth_unknown_users` are only honored when `mysql-passthrough_auth_enabled=true`.
@@ -318,17 +319,45 @@ Modeled on existing `PROXYSQL FLUSH LOGS` / `PROXYSQL FLUSH CONFIGDB`. The no-ar
 
 ### 8.6 Observability
 
-A read-only stats view for ops (not authoritative, snapshots in-memory state):
+Two read-only stats views for ops (not authoritative, snapshots in-memory state):
+
+**Cache contents:**
 
 ```
 stats_mysql_passthrough_auth_cache:
   username          TEXT
-  learned_at        TEXT  (ISO8601)
+  learned_at        BIGINT   (monotonic_time microseconds since process start)
   age_s             INTEGER
   hostgroup_probed  INTEGER
 ```
 
 Password column is **not** exposed. Useful for "is alice's password cached?" debugging.
+
+**Counters / gauges** (`stats_mysql_passthrough_auth_metrics`):
+
+```
+metric_name                   metric_value
+----------------------------  ------------
+probes_attempted              uint64   probes that actually attempted a backend
+                                       connection (past all eligibility gates)
+probes_ok                     uint64   probes that succeeded; cache populated
+probes_failed_credentials     uint64   probes rejected by backend with a
+                                       credential-class errno (1045/1698/1130)
+probes_failed_transport       uint64   probes that failed at transport (errno
+                                       2xxx, timeouts, infrastructure problems)
+lockouts_user                 uint64   per-user sliding-window cap fired
+lockouts_ip                   uint64   per-source-IP sliding-window cap fired
+inflight_cap_rejects          uint64   max_inflight_probes saturated
+cache_hits                    uint64   PPHR_verify_password served a cleartext
+                                       from the cache (no probe needed)
+cache_invalidations           uint64   ER_ACCESS_DENIED_ERROR (1045) during query
+                                       traffic evicted a cached entry that came
+                                       from pass-through (see N4 gate)
+inflight_probes               uint64   current in-flight probe count (gauge)
+cache_entries                 uint64   current cache size (gauge)
+```
+
+All counter values are monotonic since process start; reset only by restart. The two gauges read live state. None of the counters expose passwords or any cleartext credential material. Operator tooling that watches `probes_ok / probes_attempted` ratio gets a good "is pass-through healthy?" signal; `lockouts_user + lockouts_ip` spiking signals attack pressure; `cache_invalidations` spiking signals backend password rotation activity.
 
 ## 9. Code layout
 
@@ -355,10 +384,18 @@ int    inflight() const;
 // Sliding-window rate limit (spec §7.2)
 bool   would_lockout_user(const std::string& username, int max_failures, uint32_t window_s) const;
 bool   would_lockout_ip(const std::string& ip, int max_failures, uint32_t window_s) const;
-void   record_failure(const std::string& username, const std::string& ip);
+void   record_failure(const std::string& username, const std::string& ip, int max_keys);
 
-// Observability counters (B7 follow-up)
-void   bump_*();                                    // one per counter
+// Observability counters (spec §8.6)
+void   bump_probes_attempted();
+void   bump_probes_ok();
+void   bump_probes_failed_credentials();
+void   bump_probes_failed_transport();
+void   bump_lockouts_user();
+void   bump_lockouts_ip();
+void   bump_inflight_cap_rejects();
+void   bump_cache_hits();
+void   bump_cache_invalidations();
 std::vector<metric_kv> metrics_snapshot() const;    // for stats_mysql_passthrough_auth_metrics
 ```
 
