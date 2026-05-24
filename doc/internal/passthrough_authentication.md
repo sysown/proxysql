@@ -191,14 +191,22 @@ Apply `mysql-connect_timeout_server_max` to the probe. On timeout, treat as fail
 
 On `OK`:
 1. Insert `(U, cleartext, now)` into the in-memory `passthrough_auth_cache`. Also record the in-memory `last_refreshed_ts` used by TTL.
-2. Return the probe connection to the pool (counts against `mysql_servers.max_connections` like any normal connection).
+2. Close the probe connection (see "probe lifecycle" below).
 3. Send `OK` to the client; session → `WAITING_CLIENT_DATA`.
 
 No pre-computation of hashes is performed. The existing verification code already handles `stored=cleartext, client=any-supported-plugin`:
 - `mysql_native_password` client → `proxy_scramble(reply, scramble_buff, cleartext)` and memcmp.
 - `caching_sha2_password` client (fast-auth path) → `PPHR_6auth2` derives the expected scrambled response from the cached cleartext.
 
-The probe connection is a real connection counted against `mysql_servers.max_connections`. It is short-lived and returned to the pool immediately, so impact is minor.
+#### Probe lifecycle (Phase 1)
+
+The Phase 1 implementation opens the probe as a **one-shot raw libmariadbclient connection** (`mysql_init` → `mysql_real_connect` → `mysql_close`) directly from `handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT`. The probe **does NOT** go through `MyHGM->get_MyConn_from_pool`, and consequently:
+
+- The probe connection is **not** counted against `mysql_servers.max_connections`. Pass-through under high concurrent unknown-user load can briefly exceed that cap; the global `mysql-passthrough_auth_max_inflight_probes` is the only effective ceiling.
+- The probe connection is **destroyed**, not returned to the pool. The client's subsequent query traffic acquires a fresh pooled connection through the normal `CONNECTING_SERVER` path with the now-cached credential.
+- The probe connection's handshake/setup is **not** subject to `mysql_thread___connect_retries_on_failure` retry logic (single attempt).
+
+Why one-shot rather than pooled: a probe needs to use credentials that are borrowed from the client and may not exist in `mysql_users` at all (unknown-user case). The pool's selection and accounting machinery assumes the user is already provisioned; introducing pool entries keyed by ephemeral borrowed credentials adds significant coupling and accounting subtleties that are not justified for an opt-in bootstrap feature. A Phase 2 improvement may convert to a pooled async probe; the trade-off is documented inline in the handler.
 
 ### 6.4 Probe failure
 
@@ -390,7 +398,7 @@ Register `stats_mysql_passthrough_auth_cache` alongside the other `stats_mysql_*
 
 ## 11. Resolved decisions (formerly open questions)
 
-1. **Probes count against `mysql_servers.max_connections`** — yes, they're real connections, short-lived, minor impact.
+1. **Probes count against `mysql_servers.max_connections`** — **no**, not in Phase 1. The probe is a one-shot raw libmariadbclient connection opened directly by the probe handler and immediately closed; it bypasses `MyHGM` entirely (see §6.3 "Probe lifecycle"). The effective ceiling on concurrent probes is `mysql-passthrough_auth_max_inflight_probes`, not `max_connections`. Phase 2 may convert to a pooled async probe and re-open this decision.
 2. **Global in-flight probe cap** — yes, added as `mysql-passthrough_auth_max_inflight_probes` (default 100).
 3. **Pre-compute hashes after successful learn** — no. Storing cleartext is sufficient; existing verification paths handle `stored=cleartext, client=any-supported-plugin` on the fly.
 4. **Concurrent probes for the same username** — not serialized in Phase 1. The global in-flight cap implicitly bounds them; minor duplicate probing accepted.
