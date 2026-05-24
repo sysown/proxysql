@@ -138,7 +138,18 @@ class MySQL_Passthrough_Auth_Cache {
 		// timestamps are dropped lazily on check.
 		bool would_lockout_user(const std::string& username, int max_failures, uint32_t window_s) const;
 		bool would_lockout_ip(const std::string& ip, int max_failures, uint32_t window_s) const;
-		void record_failure(const std::string& username, const std::string& ip);
+		/**
+		 * @brief Record a probe failure against (username, ip) deques.
+		 *
+		 * @param max_keys Operator-tunable cap on the size of each
+		 *                 failure map (failures_by_user, failures_by_ip).
+		 *                 Driven by @c mysql-passthrough_auth_failure_map_cap.
+		 *                 When the map exceeds the cap, evict_oldest
+		 *                 reclaims an entry (defense-in-depth against
+		 *                 username/IP churn that would otherwise grow
+		 *                 the maps unbounded).
+		 */
+		void record_failure(const std::string& username, const std::string& ip, int max_keys);
 
 		/**
 		 * @brief Observability counters (B7 follow-up).

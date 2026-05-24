@@ -500,6 +500,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"passthrough_auth_max_failures_per_user",
 	(char *)"passthrough_auth_max_failures_per_ip",
 	(char *)"passthrough_auth_failure_window_s",
+	(char *)"passthrough_auth_failure_map_cap",
 	(char *)"kill_backend_connection_when_disconnect",
 	(char *)"client_session_track_gtid",
 	(char *)"sessions_sort",
@@ -1459,6 +1460,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.passthrough_auth_max_failures_per_user = 3;
 	variables.passthrough_auth_max_failures_per_ip = 10;
 	variables.passthrough_auth_failure_window_s = 60;
+	variables.passthrough_auth_failure_map_cap = 100000;
 #ifdef DEBUG
 	variables.session_debug=true;
 #endif /*debug */
@@ -2717,6 +2719,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["passthrough_auth_max_failures_per_user"]    = make_tuple(&variables.passthrough_auth_max_failures_per_user,    1,    1000000, false);
 		VariablesPointers_int["passthrough_auth_max_failures_per_ip"]      = make_tuple(&variables.passthrough_auth_max_failures_per_ip,      1,    1000000, false);
 		VariablesPointers_int["passthrough_auth_failure_window_s"]         = make_tuple(&variables.passthrough_auth_failure_window_s,         1,    7*24*3600, false);
+		VariablesPointers_int["passthrough_auth_failure_map_cap"]          = make_tuple(&variables.passthrough_auth_failure_map_cap,        1000, 100000000, false);
 		// backend management
 		VariablesPointers_int["connpoll_reset_queue_length"] = make_tuple(&variables.connpoll_reset_queue_length, 0,           10000, false);
 		VariablesPointers_int["default_max_latency_ms"]      = make_tuple(&variables.default_max_latency_ms,      0, 20*24*3600*1000, false);
@@ -4825,6 +4828,7 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(passthrough_auth_max_failures_per_user);
 	REFRESH_VARIABLE_INT(passthrough_auth_max_failures_per_ip);
 	REFRESH_VARIABLE_INT(passthrough_auth_failure_window_s);
+	REFRESH_VARIABLE_INT(passthrough_auth_failure_map_cap);
 	REFRESH_VARIABLE_CHAR(passthrough_default_schema);
 	REFRESH_VARIABLE_CHAR(passthrough_auth_username_pattern);
 	mysql_thread___server_capabilities=GloMTH->get_variable_uint32((char *)"server_capabilities");

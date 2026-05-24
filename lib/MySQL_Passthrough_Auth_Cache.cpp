@@ -214,20 +214,9 @@ void erase_if_empty(
 	}
 }
 
-/**
- * @brief Hard cap on the size of the failure maps.
- *
- * A defense-in-depth bound for the case where erase_if_empty
- * isn't fast enough to keep up with a high-burst attacker (every
- * unique key is in its window so erase_if_empty cannot evict).
- * When the map grows beyond this threshold we drop the oldest
- * entry (smallest front()-timestamp deque) -- losing rate-limit
- * state for one historical user/IP to protect the process from
- * runaway memory growth. Picked an order of magnitude above
- * what's plausible for legitimate active workloads but well
- * below memory pressure on typical proxy hosts.
- */
-constexpr size_t FAILURE_MAP_HARD_CAP = 100000;
+// Hard cap on the failure-map size is operator-tunable; see the
+// max_keys parameter to record_failure and the global variable
+// mysql-passthrough_auth_failure_map_cap (default 100000).
 
 /**
  * @brief Evict the oldest entry in @p m to bring size under the cap.
@@ -330,23 +319,26 @@ bool MySQL_Passthrough_Auth_Cache::would_lockout_ip(
 }
 
 void MySQL_Passthrough_Auth_Cache::record_failure(
-	const std::string& username, const std::string& ip
+	const std::string& username, const std::string& ip, int max_keys
 ) {
 	const uint64_t now_us = monotonic_time();
+	const size_t cap =
+		max_keys > 0 ? static_cast<size_t>(max_keys) : SIZE_MAX;
 	pthread_mutex_lock(&failure_lock);
 	if (!username.empty()) {
 		failures_by_user[username].push_back(now_us);
 		/* Defense-in-depth: if attacker is churning usernames faster than
 		 * the window expires, evict the oldest entry to keep memory
 		 * bounded. We lose lockout state for one historical user; the
-		 * alternative is unbounded growth. */
-		if (failures_by_user.size() > FAILURE_MAP_HARD_CAP) {
+		 * alternative is unbounded growth. The cap is operator-tunable
+		 * via mysql-passthrough_auth_failure_map_cap. */
+		if (failures_by_user.size() > cap) {
 			evict_oldest(failures_by_user);
 		}
 	}
 	if (!ip.empty()) {
 		failures_by_ip[ip].push_back(now_us);
-		if (failures_by_ip.size() > FAILURE_MAP_HARD_CAP) {
+		if (failures_by_ip.size() > cap) {
 			evict_oldest(failures_by_ip);
 		}
 	}

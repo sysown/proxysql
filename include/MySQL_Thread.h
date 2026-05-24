@@ -531,6 +531,7 @@ class MySQL_Threads_Handler
 		int passthrough_auth_max_failures_per_user;
 		int passthrough_auth_max_failures_per_ip;
 		int passthrough_auth_failure_window_s;
+		int passthrough_auth_failure_map_cap;
 		char *passthrough_default_schema;
 		char *passthrough_auth_username_pattern;
 		bool servers_stats;

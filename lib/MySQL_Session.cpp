@@ -1999,7 +1999,8 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 			 || probe_errno == ER_ACCESS_DENIED_NO_PASSWORD_ERROR /* 1698 */
 			 || probe_errno == ER_HOST_NOT_PRIVILEGED);          /* 1130 */
 		if (credential_failure) {
-			GloMyPTAuthCache->record_failure(user_key, ip_key);
+			GloMyPTAuthCache->record_failure(user_key, ip_key,
+				mysql_thread___passthrough_auth_failure_map_cap);
 			GloMyPTAuthCache->bump_probes_failed_credentials();
 			return fail_session("backend rejected probe (credentials)");
 		}
