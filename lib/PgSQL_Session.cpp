@@ -4501,6 +4501,17 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 
 		if (pgsql_thread___set_parser_algorithm == 3
 			|| pgsql_thread___query_processor_parser == 1) {
+			// Walker takes the query as-is. Note this diverges from
+			// algorithms 0/1/2 (PgSQL_Set_Stmt_Parser::set_query() runs
+			// remove_spaces() to collapse all whitespace to single spaces,
+			// even inside string literals -- a destructive behaviour that
+			// silently mutates user-visible SET values like `SET app.note =
+			// 'a   b'` to `'a b'`). The walker preserves the original input
+			// and is the more correct behaviour; the regex-parser quirk is
+			// preserved on the algo 0/1/2 path for backward compatibility.
+			// pgsql-set_parameter_validation_test-t case #150 is aware of
+			// this divergence and asserts the appropriate expected value
+			// per algorithm.
 			set = parsersql_parse_set_pgsql(nq);
 		} else {
 			thread->thr_SetParser->set_query(nq); // replace the query
