@@ -39,7 +39,7 @@ New globals (13):
 - `mysql-passthrough_default_schema` (str, default `""`)
 - `mysql-passthrough_auth_cache_ttl_s` (int, default `0` = no expiry)
 - `mysql-passthrough_auth_max_inflight_probes` (int, default `100`)
-- `mysql-passthrough_auth_username_pattern` (re2 regex; allowlist)
+- `mysql-passthrough_auth_username_pattern` (str, default `""` = allow all; re2 regex allowlist)
 - `mysql-passthrough_auth_max_failures_per_user` (int, default `3`)
 - `mysql-passthrough_auth_max_failures_per_ip` (int, default `10`)
 - `mysql-passthrough_auth_failure_window_s` (int, default `60`)
