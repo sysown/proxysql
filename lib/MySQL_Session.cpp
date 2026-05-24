@@ -1802,12 +1802,49 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 	MYSQL *result = mysql_real_connect(probe, mysrvc->address, username, cleartext,
 	                                   NULL, mysrvc->port, NULL, 0);
 	const bool probe_ok = (result != NULL);
+	/**
+	 * @brief Capture mysql_errno BEFORE mysql_close.
+	 *
+	 * mysql_close releases the MYSQL handle; mysql_errno on a freed handle
+	 * is UB. We need the errno to decide whether this failure should count
+	 * toward the rate-limit counters (credential rejection) or not
+	 * (transport-level failure -- a slow or unreachable backend must not
+	 * silently lock out legitimate users; spec §6.2).
+	 */
+	const unsigned int probe_errno = probe_ok ? 0 : mysql_errno(probe);
 	mysql_close(probe);
 
 	if (!probe_ok) {
-		// Record failure for rate limiting (per-user + per-IP).
-		GloMyPTAuthCache->record_failure(user_key, ip_key);
-		return fail_session("backend rejected probe");
+		/**
+		 * @brief Only credential-rejection errors increment lockout counters.
+		 *
+		 * libmariadbclient/libmysqlclient use errno ranges to distinguish:
+		 *   - 1xxx : server-side errors (the backend received our packets
+		 *            and replied). 1045 (ER_ACCESS_DENIED_ERROR), 1698
+		 *            (ER_ACCESS_DENIED_NO_PASSWORD_ERROR), and 1130
+		 *            (ER_HOST_NOT_PRIVILEGED) are the credential-related
+		 *            ones that should count toward the per-user / per-IP
+		 *            sliding window.
+		 *   - 2xxx : client-side errors (CR_*). 2002 (CR_CONNECTION_ERROR),
+		 *            2003 (CR_CONN_HOST_ERROR), 2013 (CR_SERVER_LOST), 2026
+		 *            (CR_SSL_CONNECTION_ERROR) and friends are transport-
+		 *            level failures. The spec explicitly excludes these
+		 *            ("admins shouldn't get locked out because a backend
+		 *            is slow", §6.2).
+		 *
+		 * The audit log still emits PROXYSQL_MYSQL_AUTH_PASSTHROUGH_FAIL
+		 * for every probe failure so operators can see transport issues;
+		 * only the lockout counter is gated.
+		 */
+		const bool credential_failure =
+			(probe_errno == ER_ACCESS_DENIED_ERROR
+			 || probe_errno == 1698 // ER_ACCESS_DENIED_NO_PASSWORD_ERROR (no symbolic name in old mysqld_error.h)
+			 || probe_errno == 1130); // ER_HOST_NOT_PRIVILEGED
+		if (credential_failure) {
+			GloMyPTAuthCache->record_failure(user_key, ip_key);
+			return fail_session("backend rejected probe (credentials)");
+		}
+		return fail_session("backend probe transport failure");
 	}
 
 	// Probe succeeded — cache the learned credential.
