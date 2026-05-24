@@ -241,6 +241,8 @@ When either exceeds its threshold, subsequent probe requests are rejected immedi
 
 Implementation hint: reuse the existing `client_addr` parsing in `MySQL_Session`; counters live next to existing auth-failure tracking.
 
+**Defense against churn:** the two failure maps are bounded by `mysql-passthrough_auth_failure_map_cap` (default 100000). An attacker who churns unique usernames/IPs would otherwise grow the maps line-rate (each unique key persists for at least one window). On record_failure, if a map exceeds the cap, `evict_oldest` opportunistically sweeps empty-deque entries left over from expired windows and, if still above the cap, drops the deque with the smallest front()-timestamp. Costs O(N) under the failure_lock at-cap, but in steady-state under hostile traffic the bound holds.
+
 ### 7.3 In-flight probe cap
 
 A global counter tracks probes currently in `AUTHENTICATING_BACKEND_FOR_CLIENT`. When `mysql-passthrough_auth_max_inflight_probes` is reached, new pass-through attempts are rejected with the generic ERR until a slot frees up. Protects against thundering-herd after a large backend password rotation.
@@ -251,8 +253,10 @@ This also bounds concurrent same-username races: even without an explicit per-us
 
 Every probe attempt (success and failure) emits an entry via `GloMyLogger->log_audit_entry`. New event types:
 
-- `PROXYSQL_MYSQL_AUTH_PASSTHROUGH_OK`
-- `PROXYSQL_MYSQL_AUTH_PASSTHROUGH_FAIL`
+| C++ enum (`log_event_type`)              | JSON `event` string an operator sees in the audit log |
+|------------------------------------------|-------------------------------------------------------|
+| `PROXYSQL_MYSQL_AUTH_PASSTHROUGH_OK`     | `MySQL_Client_Connect_Passthrough_OK`                 |
+| `PROXYSQL_MYSQL_AUTH_PASSTHROUGH_FAIL`   | `MySQL_Client_Connect_Passthrough_FAIL`               |
 
 Entry includes username, source IP, hostgroup probed, outcome. Useful for forensics and ops dashboards.
 
@@ -267,13 +271,15 @@ MySQL's `caching_sha2_password` allows non-TLS clients to encrypt the cleartext 
 A new in-memory singleton, `MySQL_Passthrough_Auth_Cache` (or sibling of `GloMyAuth`):
 
 ```cpp
-struct passthrough_entry {
+struct entry_t {                       // named entry_t in the implementation
     std::string cleartext_password;
-    uint64_t    learned_at_us;        // monotonic_time() microseconds
+    uint64_t    learned_at_us;         // monotonic_time() microseconds
+    int         hostgroup_probed;      // hostgroup the probe targeted; surfaced
+                                       // via stats_mysql_passthrough_auth_cache
 };
 
 // keyed by frontend username
-std::unordered_map<std::string, passthrough_entry> cache;
+std::unordered_map<std::string, entry_t> entries;
 pthread_rwlock_t lock;
 ```
 
@@ -414,17 +420,24 @@ Does not modify or depend on `GloMyAuth` internals.
 
 `MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT()` — drives the probe connection lifecycle. Modeled on `handler_again___status_CONNECTING_SERVER` but with the probe-specific success/failure handling and without touching `previous_status`.
 
-### 9.5 Probe pool ownership
+### 9.5 Probe lifecycle (one-shot, not pooled)
 
-The probe connection is *not* the connection that will serve client queries. It is allocated, used for one handshake, and returned to pool on success (or destroyed on failure). The session then takes its query-path backend connection through the normal `CONNECTING_SERVER` path on first query.
+The probe connection is *not* the connection that will serve client queries. It is allocated as a raw libmariadbclient handle (`mysql_init` → `mysql_real_connect` → `mysql_close`), used for exactly one handshake, and **destroyed on both success and failure**. The probe does NOT go through `MyHGM` and does NOT count against `mysql_servers.max_connections`; see §6.3 "Probe lifecycle" for the rationale.
+
+The session then takes its query-path backend connection through the normal `CONNECTING_SERVER` path on first query.
 
 ### 9.6 Admin command
 
 `Admin_Handler.cpp` — register `PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE [FOR USER '<name>']`, calling `GloMyPTAuthCache->clear()` / `->evict(name)`.
 
-### 9.7 Stats table
+### 9.7 Stats tables
 
-Register `stats_mysql_passthrough_auth_cache` alongside the other `stats_mysql_*` virtual tables. Snapshot from `GloMyPTAuthCache->snapshot()` on query.
+Register two `stats_mysql_*` virtual tables in `lib/Admin_Bootstrap.cpp` and `lib/ProxySQL_Admin.cpp`:
+
+- `stats_mysql_passthrough_auth_cache` — snapshot of cache entries (no passwords); populated from `GloMyPTAuthCache->snapshot()` on query. Schema in §8.6.
+- `stats_mysql_passthrough_auth_metrics` — 9 monotonic counters + 2 current-state gauges; populated from `GloMyPTAuthCache->metrics_snapshot()` on query. Schema and per-metric semantics in §8.6.
+
+Both are read-only and refresh from `GloMyPTAuthCache` on every SELECT.
 
 ## 10. Phasing
 
