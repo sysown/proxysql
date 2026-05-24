@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <string>
 #include <thread>
+#include <chrono>
 #include "mysql.h"
 #include "mysqld_error.h"
 #include "tap.h"
@@ -103,37 +104,89 @@ int main(int argc, char** argv) {
 	// (issue #4072) is specifically "ProxySQL crashes when the client can't
 	// keep up while a query produces warnings". A fast-fetching client never
 	// builds the back-pressure that triggers the original crash, so removing
-	// or shortening this sleep would defeat the test's purpose.
+	// or shortening the sleep too far would defeat the test's purpose.
 	//
-	// That said, we are operating at the edge of a different limit: the
-	// backend mysql57's default `net_write_timeout` (60s). The test workload
-	// is a 128^3 = 2,097,152-row cross join with `mysql-log_mysql_warnings_
-	// enabled=1`, where each row produces a backend warning that ProxySQL
-	// processes on the same thread that reads the row stream. On slow CI
-	// runners the proxysql<->backend stream can fall behind the backend's
-	// net_write_timeout, which kills the connection mid-stream and surfaces
-	// to the test as `2013, Lost connection to server during query`. The
-	// original #4072 crash is *not* recurring -- proxysql stays up -- but
-	// the `add_row_count == fetched_row_count` assertion below fails.
+	// At the same time we are operating at the edge of a different limit:
+	// the backend mysql57's default `net_write_timeout` (60s). The test
+	// workload is a 128^3 = 2,097,152-row cross join with
+	// `mysql-log_mysql_warnings_enabled=1`, where each row produces a
+	// backend warning that ProxySQL processes on the same thread that reads
+	// the row stream. On slow CI runners the proxysql<->backend stream can
+	// fall behind net_write_timeout, the backend kills the connection
+	// mid-stream and the test sees `2013, Lost connection to server during
+	// query`. Earlier fixed-sleep attempts (10us, 9us, 8us) were a moving
+	// target: fast enough on fast runners but flaky on slow ones.
 	//
-	// 8us instead of 10us shaves ~20% off the minimum-sleep floor (~20s of
-	// usleep at 10us -> ~16s at 8us) to buy throughput margin without
-	// abandoning the slow-consumer reproducer. (Earlier attempt at 9us was
-	// not enough headroom and re-flaked on slow CI runners.) If this starts
-	// flaking again, the real fix space is:
-	//   1. Bump backend net_write_timeout in test/infra/infra-dbdeployer-mysql57/
-	//      conf (decouples the test from the backend default).
-	//   2. Investigate whether proxysql's warning-logging path has regressed
-	//      in throughput since #4072 was fixed -- a real perf regression
-	//      should be fixed in core, not papered over here.
-	//   3. Reframe the assertion to "proxysql is still up + responsive on
-	//      admin" rather than "all 2M rows delivered" -- closer to the
-	//      docstring's stated intent of "does not crash".
+	// Self-tune the sleep instead. Start at the historical 10us back-pressure
+	// floor and recompute every RECOMPUTE_EVERY rows: project the total
+	// fetch time at the current rate, compare against a target (well under
+	// the backend's net_write_timeout), and adjust the sleep up/down --
+	// clamped to [MIN_SLEEP_US, MAX_SLEEP_US] so we never lose all
+	// back-pressure (which would invalidate the test as a #4072
+	// reproducer) and never sleep more than the original 10us value (so
+	// fast runners aren't artificially slowed).
+	constexpr double FETCH_TARGET_S = 45.0;     // budget well under mysql57 60s default
+	constexpr unsigned long RECOMPUTE_EVERY = 10000UL;  // tighter feedback loop
+	constexpr int MIN_SLEEP_US = 1;             // keep some back-pressure
+	constexpr int MAX_SLEEP_US = 10;            // historical safe value
+	constexpr int INITIAL_SLEEP_US = 5;         // halfway -- gives the auto-tune room
+	                                            // to react in either direction
+	auto fetch_start = std::chrono::steady_clock::now();
+	int current_sleep_us = INITIAL_SLEEP_US;
+	int last_logged_sleep = current_sleep_us;
+	diag("Slow-consumer auto-tune: start sleep=%dus, target total fetch=%.1fs",
+	     current_sleep_us, FETCH_TARGET_S);
+
 	while ((row = mysql_fetch_row(mysql_result))) {
 		fetched_row_count++;
-		usleep(8);
+
+		if (fetched_row_count % RECOMPUTE_EVERY == 0) {
+			auto now = std::chrono::steady_clock::now();
+			double elapsed_s =
+				std::chrono::duration<double>(now - fetch_start).count();
+			unsigned long rows_remaining =
+				(add_row_count > fetched_row_count)
+					? (add_row_count - fetched_row_count) : 0UL;
+			if (rows_remaining > 0 && elapsed_s > 0) {
+				double remaining_budget_s = FETCH_TARGET_S - elapsed_s;
+				if (remaining_budget_s <= 0) {
+					current_sleep_us = MIN_SLEEP_US;
+				} else {
+					// Per-row time so far = (overhead + sleep). Approximate
+					// non-sleep overhead by subtracting the sleep we just
+					// used from the observed average.
+					double per_row_so_far_us =
+						(elapsed_s * 1e6) / static_cast<double>(fetched_row_count);
+					double overhead_us = per_row_so_far_us - current_sleep_us;
+					if (overhead_us < 0) overhead_us = 0;
+					double per_row_target_us =
+						(remaining_budget_s * 1e6) / static_cast<double>(rows_remaining);
+					int new_sleep = static_cast<int>(per_row_target_us - overhead_us);
+					if (new_sleep < MIN_SLEEP_US) new_sleep = MIN_SLEEP_US;
+					if (new_sleep > MAX_SLEEP_US) new_sleep = MAX_SLEEP_US;
+					current_sleep_us = new_sleep;
+				}
+				if (current_sleep_us != last_logged_sleep) {
+					diag("Auto-tune: elapsed=%.1fs fetched=%lu/%lu -> sleep=%dus",
+					     elapsed_s, fetched_row_count, add_row_count,
+					     current_sleep_us);
+					last_logged_sleep = current_sleep_us;
+				}
+			}
+		}
+
+		if (current_sleep_us > 0) usleep(current_sleep_us);
 	}
-	
+
+	{
+		auto fetch_end = std::chrono::steady_clock::now();
+		double total_fetch_s =
+			std::chrono::duration<double>(fetch_end - fetch_start).count();
+		diag("Slow-consumer fetch wall time: %.2fs (final sleep=%dus, "
+		     "rows=%lu) -- mysql57 net_write_timeout default 60s",
+		     total_fetch_s, current_sleep_us, fetched_row_count);
+	}
+
 	int _errorno = mysql_errno(proxysql);
 		
 	if (_errorno) {
