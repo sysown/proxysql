@@ -280,8 +280,12 @@ int main() {
 	E2EConfig cfg;
 	const char* proxysql_port_env = std::getenv("MYSQLX_E2E_PROXYSQL_PORT");
 	if (!proxysql_port_env) {
-		skip_all("MYSQLX_E2E_PROXYSQL_PORT not set; skipping E2E routing test");
-		return exit_status();
+		// Group setup bug: test/tap/groups/mysqlx-e2e/env.sh defines
+		// MYSQLX_E2E_PROXYSQL_PORT and CI-mysqlx.yml's e2e-tests job
+		// sources it. If the var is missing at runtime, the harness
+		// didn't source the env file — fail loud so the gap is fixed,
+		// not silently hide the regression as the previous skip_all did.
+		BAIL_OUT("MYSQLX_E2E_PROXYSQL_PORT not set — group env (test/tap/groups/mysqlx-e2e/env.sh) was not sourced before invoking this test");
 	}
 	cfg.host = env_or("MYSQLX_E2E_HOST", "127.0.0.1");
 	cfg.port = static_cast<uint16_t>(std::atoi(proxysql_port_env));

@@ -253,6 +253,11 @@ public:
 	PG_ASYNC_ST handler(short event);
 	void connect_start();
 	void connect_cont(short event);
+	// Consults PgSQL_Monitor::dns_lookup; returns the cached IP on a hit,
+	// empty std::string on a miss.  Used by connect_start() to set
+	// `hostaddr=<ip>` in the libpq conninfo so PQconnectStart skips
+	// getaddrinfo and doesn't block the worker thread on DNS.
+	std::string connect_start_DNS_lookup();
 	void query_start();
 	void query_cont(short event);
 	void fetch_result_start();

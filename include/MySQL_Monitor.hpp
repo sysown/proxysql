@@ -4,6 +4,7 @@
 #include "prometheus/counter.h"
 #include "prometheus/gauge.h"
 
+#include "DNS_Cache.hpp"
 #include "MySQL_HostGroups_Manager.h"
 #include "proxysql.h"
 #include "cpp.h"
@@ -385,71 +386,9 @@ struct mon_metrics_map_idx {
 	};
 };
 
-struct DNS_Cache_Record {
-	DNS_Cache_Record() = default;
-	DNS_Cache_Record(DNS_Cache_Record&&) = default;
-	DNS_Cache_Record(const DNS_Cache_Record&) = default;
-	DNS_Cache_Record& operator=(DNS_Cache_Record&&) = default;
-	DNS_Cache_Record& operator=(const DNS_Cache_Record&) = default;
-	DNS_Cache_Record(const std::string& hostname, const std::vector<std::string>& ips, unsigned long long ttl = 0) : hostname_(hostname), 
-	 ttl_(ttl) { 
-		std::copy(ips.begin(), ips.end(), std::inserter(ips_, ips_.end()));
-	}
-	DNS_Cache_Record(const std::string& hostname, std::set<std::string>&& ips, unsigned long long ttl = 0) : hostname_(hostname),
-		ips_(std::move(ips)), ttl_(ttl)
-	{ }
-
-	~DNS_Cache_Record() = default;
-
-	std::string hostname_;
-	std::set<std::string> ips_;
-	unsigned long long ttl_ = 0;
-};
-
-class DNS_Cache {
-
-public:
-	DNS_Cache() : enabled(true) {
-		int rc = pthread_rwlock_init(&rwlock_, nullptr);
-		assert(rc == 0);
-	}
-
-	~DNS_Cache() {
-		pthread_rwlock_destroy(&rwlock_);
-	}
-
-	inline 
-	void set_enabled_flag(bool value) {
-		enabled = value;
-	}
-
-	bool add(const std::string& hostname, std::vector<std::string>&& ips);
-	bool add_if_not_exist(const std::string& hostname, std::vector<std::string>&& ips);
-	void remove(const std::string& hostname);
-	void clear();
-	bool empty() const;
-	std::string lookup(const std::string& hostname, size_t* ip_count) const;
-
-private:
-	struct IP_ADDR {
-		std::vector<std::string> ips;
-		unsigned long counter = 0;
-	};
-
-	std::string get_next_ip(const IP_ADDR& ip_addr) const;
-	std::unordered_map<std::string, IP_ADDR> records;
-	std::atomic_bool enabled;
-	mutable pthread_rwlock_t rwlock_;
-};
-
-struct DNS_Resolve_Data {
-	std::promise<std::tuple<bool, DNS_Cache_Record>> result;
-	std::shared_ptr<DNS_Cache> dns_cache;
-	std::string hostname;
-	std::set<std::string> cached_ips;
-	unsigned int ttl = 0;
-	unsigned int refresh_intv = 0;
-};
+// DNS_Cache, DNS_Cache_Record, DNS_Resolve_Data and the resolver helpers now
+// live in DNS_Cache.hpp (included above) so the same machinery can back the
+// independent PgSQL_Monitor DNS cache.
 
 
 class MySQL_Monitor {
@@ -495,9 +434,11 @@ class MySQL_Monitor {
 	unsigned long long read_only_check_ERR;
 	unsigned long long replication_lag_check_OK;
 	unsigned long long replication_lag_check_ERR;
-	unsigned long long dns_cache_queried;
-	unsigned long long dns_cache_lookup_success; //cache hit
-	unsigned long long dns_cache_record_updated;
+	// DNS cache counters are incremented by resolver workers and read by
+	// p_update_metrics() from another thread; atomic to avoid the race.
+	std::atomic<unsigned long long> dns_cache_queried;
+	std::atomic<unsigned long long> dns_cache_lookup_success; //cache hit
+	std::atomic<unsigned long long> dns_cache_record_updated;
 	std::atomic_bool force_dns_cache_update;
 	struct {
 		/// Prometheus metrics arrays
