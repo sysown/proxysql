@@ -150,10 +150,16 @@ int main(int, char**) {
 		// pooled connection whose options another session populated.
 		// PROXYSQL INTERNAL SESSION reports backends attached to this session
 		// (PgSQL_Session::mybes), not the global connection pool.
-		exec_ok(conn.get(), "BEGIN");
-		exec_ok(conn.get(), "/* create_new_connection=1 */ SELECT 1");
+		if (!exec_ok(conn.get(), "BEGIN") ||
+			!exec_ok(conn.get(), "/* create_new_connection=1 */ SELECT 1")) {
+			BAIL_OUT("tracked-only: setup queries failed in file %s, line %d", __FILE__, __LINE__);
+			return exit_status();
+		}
 		json j;
-		fetch_internal_session(conn.get(), j);
+		if (!fetch_internal_session(conn.get(), j)) {
+			BAIL_OUT("tracked-only: PROXYSQL INTERNAL SESSION fetch failed in file %s, line %d", __FILE__, __LINE__);
+			return exit_status();
+		}
 		const std::string opts = backend_options(j);
 		diag("tracked-only options: '%s'", opts.c_str());
 		check_well_formed(opts, "tracked-only");
@@ -177,9 +183,15 @@ int main(int, char**) {
 		// Untracked options set lock_hostgroup + create_new_conn, so ProxySQL
 		// builds a dedicated backend connection (fresh connect_start) and keeps
 		// it attached to this session — exactly the connection we want to read.
-		exec_ok(conn.get(), "SELECT 1");
+		if (!exec_ok(conn.get(), "SELECT 1")) {
+			BAIL_OUT("untracked: setup query failed in file %s, line %d", __FILE__, __LINE__);
+			return exit_status();
+		}
 		json j;
-		fetch_internal_session(conn.get(), j);
+		if (!fetch_internal_session(conn.get(), j)) {
+			BAIL_OUT("untracked: PROXYSQL INTERNAL SESSION fetch failed in file %s, line %d", __FILE__, __LINE__);
+			return exit_status();
+		}
 
 		// Guard: prove these parameters actually went through the *untracked*
 		// accumulation path. The untracked path sets lock_hostgroup, so the
