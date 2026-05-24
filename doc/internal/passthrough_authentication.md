@@ -337,12 +337,29 @@ Password column is **not** exposed. Useful for "is alice's password cached?" deb
 `include/MySQL_Passthrough_Auth_Cache.h` + `lib/MySQL_Passthrough_Auth_Cache.cpp`. Singleton `GloMyPTAuthCache`. Methods:
 
 ```cpp
-bool   lookup(const std::string& user, std::string& out_cleartext);
-void   insert(const std::string& user, const std::string& cleartext);
+bool   lookup(const std::string& user, std::string& out_cleartext, uint32_t ttl_s);
+void   insert(const std::string& user, const std::string& cleartext, int hostgroup_probed);
 bool   evict(const std::string& user);   // true if the entry was present
 void   clear();
 size_t size() const;
-std::vector<entry_view> snapshot() const;  // for stats_*
+std::vector<passthrough_entry_view> snapshot() const;  // for stats_mysql_passthrough_auth_cache
+
+// Allowlist (spec §7.1)
+bool   username_allowed(const std::string& username, const std::string& pattern);
+
+// In-flight probe cap (spec §7.3)
+bool   try_acquire_inflight(int max_inflight);
+void   release_inflight();
+int    inflight() const;
+
+// Sliding-window rate limit (spec §7.2)
+bool   would_lockout_user(const std::string& username, int max_failures, uint32_t window_s) const;
+bool   would_lockout_ip(const std::string& ip, int max_failures, uint32_t window_s) const;
+void   record_failure(const std::string& username, const std::string& ip);
+
+// Observability counters (B7 follow-up)
+void   bump_*();                                    // one per counter
+std::vector<metric_kv> metrics_snapshot() const;    // for stats_mysql_passthrough_auth_metrics
 ```
 
 Does not modify or depend on `GloMyAuth` internals.
