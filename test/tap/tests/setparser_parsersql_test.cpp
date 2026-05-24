@@ -450,6 +450,44 @@ static ValidatorCase parsersql_search_path_validator_cases[] = {
 // Run walker -> session-join -> validator chain to mimic production end-to-end.
 // If the validator under #184's effective input still rejects, the bug isn't
 // here -- it's somewhere between session-code-validator-reject and the wire.
+// Regression for the "PARTIAL parse + trailing junk" gate added in
+// parsersql_parse_set_pgsql(). Without ast_covers_full_input(), ParserSQL
+// returns OK with a partial AST for these malformed inputs (e.g. it parses
+// `SET search_path = public` and silently drops the trailing `,,schema1`),
+// which the validator then accepts and proxysql tracks as a successful SET
+// against the backend's wishes. The gate forces these to return an empty map
+// so the session forwards the SET to PG which actually rejects them.
+struct PartialAstCase {
+	const char* query;
+	bool expect_nonempty;  // true if walker should produce a usable map
+};
+static PartialAstCase parsersql_partial_ast_strict[] = {
+	// Legitimate cases that must continue to produce non-empty maps
+	{ "SET client_encoding TO 'UTF8'",                          true },
+	{ "SET client_encoding = 'LATIN1'",                         true },
+	{ "SET synchronous_commit = 1",                             true },
+	{ "SET search_path TO \"$user\" ,",                         true },  // trailing comma OK
+	// Malformed cases that must return empty (PG will reject)
+	{ "SET search_path = public,,schema1",                      false },
+	{ "SET search_path = \"$user\", \"$invalid\"@schema",       false },
+	{ "SET search_path = \"schema1\" \"schema2\"",              false },
+	{ "SET search_path = \"valid\",, \"invalid\"",              false },
+};
+
+void TestPartialAstGate() {
+	for (size_t i = 0; i < arraysize(parsersql_partial_ast_strict); i++) {
+		const auto& c = parsersql_partial_ast_strict[i];
+		auto m = parsersql_parse_set_pgsql(c.query);
+		bool got_nonempty = !m.empty();
+		bool ok_res = (got_nonempty == c.expect_nonempty);
+		ok(ok_res, "[partial_ast_gate %zu] %s (expected %s, got %s) for query: %s",
+			i, c.expect_nonempty ? "should-parse" : "should-reject",
+			c.expect_nonempty ? "nonempty" : "empty",
+			got_nonempty ? "nonempty" : "empty",
+			c.query);
+	}
+}
+
 void TestWalkerToValidatorChain184() {
 	const char* set_query = "SET search_path TO \"1234567890123456789012345678901234567890123456789012345678901234\"";
 	auto m = parsersql_parse_set_pgsql(set_query);
@@ -544,6 +582,7 @@ int main(int argc, char** argv) {
 	p += arraysize(parsersql_parse_fail_strict);
 	p += arraysize(parsersql_search_path_validator_cases) * 2;
 	p += 2;  // TestWalkerToValidatorChain184
+	p += arraysize(parsersql_partial_ast_strict);  // TestPartialAstGate
 	plan(p);
 	TestParse(sql_mode, arraysize(sql_mode), "sql_mode");
 	TestParse(time_zone, arraysize(time_zone), "time_zone");
@@ -563,6 +602,7 @@ int main(int argc, char** argv) {
 	TestEmptyOnParseFail(parsersql_parse_fail_strict, arraysize(parsersql_parse_fail_strict));
 	TestSearchPathValidator();
 	TestWalkerToValidatorChain184();
+	TestPartialAstGate();
 
 	return exit_status();
 }

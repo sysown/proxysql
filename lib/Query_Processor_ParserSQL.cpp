@@ -198,6 +198,80 @@ static std::string extract_function_call_source(
     return std::string(start, p);
 }
 
+// Find the rightmost byte covered by any descendant of `node` whose value_ptr
+// lies inside [qstart, qend). Used to detect "trailing junk after a valid
+// statement" cases where ParserSQL accepts a partial AST (status OK) but
+// stopped before consuming all the input. E.g. `SET search_path = public,,schema1`
+// produces an OK status with an AST covering only `SET search_path = public`;
+// the `,,schema1` tail is silently ignored, which would otherwise let proxysql
+// track a malformed SET as successful. Returns nullptr if no descendant lies
+// inside the buffer.
+static const char* find_rightmost_ast_byte(
+    const AstNode* node, const char* qstart, const char* qend)
+{
+    if (!node) return nullptr;
+    const char* best = nullptr;
+    if (node->value_ptr && node->value_ptr >= qstart &&
+        (node->value_ptr + node->value_len) <= qend) {
+        const char* end = node->value_ptr + node->value_len;
+        // Delimited identifier / string-literal nodes store value_ptr inside
+        // the quotes and value_len covering only the content, so the closing
+        // quote/backtick byte lives at end. Advance past it so the full-input
+        // check at the call site doesn't mistake the closing delimiter for
+        // unconsumed trailing junk.
+        if (end < qend && (*end == '"' || *end == '`' || *end == '\'')) {
+            // Only treat as a delimiter close if there's a matching opener
+            // immediately before value_ptr (cheap sanity check; avoids
+            // accidentally consuming an unrelated quote that follows).
+            if (node->value_ptr > qstart && *(node->value_ptr - 1) == *end) {
+                end++;
+            }
+        }
+        best = end;
+    }
+    for (const AstNode* c = node->first_child; c; c = c->next_sibling) {
+        const char* cb = find_rightmost_ast_byte(c, qstart, qend);
+        if (cb && (!best || cb > best)) best = cb;
+    }
+    return best;
+}
+
+// True iff the AST consumed every meaningful byte of `query` (ignoring trailing
+// whitespace and a single trailing semicolon). Used as a stricter gate than
+// just checking parse status: ParserSQL can return status OK while the parser
+// only matched a prefix of the input, leaving the rest as unconsumed trailing
+// junk. For SET-statement walking we treat such cases as parse failures so
+// the session can fall through to the backend (which will reject the
+// malformed SQL) instead of tracking a misleadingly-partial assignment.
+static bool ast_covers_full_input(
+    const AstNode* root, const char* query, int query_len)
+{
+    if (!root) return false;
+    const char* qstart = query;
+    const char* qend = query + query_len;
+    const char* rightmost = find_rightmost_ast_byte(root, qstart, qend);
+    if (!rightmost) return false;
+    // Anything past the AST's coverage must be cosmetic: trailing whitespace,
+    // a single trailing comma (which the regex SET parser strips and many
+    // existing tests rely on, e.g. `SET search_path TO "$user" ,`),
+    // a single trailing semicolon, and embedded null bytes (QueryPointer
+    // buffers occasionally include a trailing \0 byte we shouldn't bounce on).
+    auto is_skippable = [](char c) {
+        return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\0';
+    };
+    const char* p = rightmost;
+    while (p < qend && is_skippable(*p)) p++;
+    if (p < qend && *p == ',') {
+        p++;
+        while (p < qend && is_skippable(*p)) p++;
+    }
+    if (p < qend && *p == ';') {
+        p++;
+        while (p < qend && is_skippable(*p)) p++;
+    }
+    return p == qend;
+}
+
 // Re-emit a delimited identifier ("name" in PG, `name` in MySQL) with its outer
 // quote chars restored. The AST stores value_ptr pointing inside the quotes and
 // value_len covering only the identifier content, so the surrounding quote chars
@@ -576,8 +650,27 @@ std::map<std::string, std::vector<std::string>> parsersql_parse_set_pgsql(
     const std::string& query)
 {
     auto result = tl_pgsql_parser.parse(query.c_str(), query.size());
-    if (result.status == ParseResult::OK || result.status == ParseResult::PARTIAL) {
-        if (result.ast && result.ast->type == NodeType::NODE_SET_STMT) {
+    // PG walker: only act on a clean OK parse. PARTIAL means the parser hit
+    // unexpected syntax mid-statement (e.g. `public,,schema1` -> the empty
+    // element after the first comma) and produced an AST that captures only
+    // part of the input. If we walked that, we'd hand a misleadingly-partial
+    // map to the session (e.g. `[public]` for the example above), the
+    // validator would accept the partial value, proxysql would track it as
+    // a successful SET, and the backend would receive a different command
+    // than the client sent. Returning an empty map drops us into the
+    // "Unable to parse SET query" path which forwards the original SET to
+    // PG without locking the hostgroup, letting PG be the source of truth
+    // for malformed-input rejection (which is what algorithms 0/1/2 do for
+    // these cases too).
+    //
+    // The MySQL walker keeps accepting PARTIAL: MySQL SET frequently uses
+    // PARTIAL legitimately for un-parseable RHS expressions (e.g.
+    // `SET x = (SELECT ...)`), where the walker falls back to
+    // `extract_paren_expr` on a NODE_SUBQUERY placeholder. PG search_path
+    // tracked variables don't have analogous shapes.
+    if (result.status == ParseResult::OK) {
+        if (result.ast && result.ast->type == NodeType::NODE_SET_STMT &&
+            ast_covers_full_input(result.ast, query.c_str(), (int)query.size())) {
             auto parsed = walk_set_stmt<Dialect::PostgreSQL>(
                 result.ast, tl_pgsql_parser.arena(), query.c_str(), query.size());
             tl_pgsql_parser.reset();
