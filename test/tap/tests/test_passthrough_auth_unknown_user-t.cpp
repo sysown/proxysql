@@ -141,21 +141,22 @@ int main() {
 	/*
 	 * Plan = total ok() calls below.
 	 *
-	 *   Setup (7):
+	 *   Setup (8):
 	 *     backend connect, admin connect, backend user created,
-	 *     mysql_users row absent (verified), passthrough enabled,
-	 *     passthrough_default_hg verified, cache empty
+	 *     mysql_users row absent (verified), HG 0 fenced OFFLINE_HARD,
+	 *     passthrough enabled, passthrough_default_hg verified,
+	 *     cache empty
 	 *
 	 *   [1] First connect probes + caches (2): connect/query ok, n=1
 	 *   [2] Cache entry's hostgroup_probed matches default_hg (1)
 	 *   [3] Reconnect: cache hit AND query still routes correctly (1)
 	 *   [4] With unknown_users=false the same user is rejected (1)
 	 *
-	 *   Cleanup (2): DROP USER, restore globals
+	 *   Cleanup (3): DROP USER, restore HG 0, restore globals
 	 *
-	 *   7 + 2 + 1 + 1 + 1 + 2 = 14.
+	 *   8 + 2 + 1 + 1 + 1 + 3 = 16.
 	 */
-	plan(14);
+	plan(16);
 
 	if (cl.getEnv()) {
 		diag("CommandLine getEnv() failed");
@@ -203,6 +204,32 @@ int main() {
 		}
 		ok(count_after_delete == 0,
 			"mysql_users has NO row for '%s' (count=%d)", TEST_USER, count_after_delete);
+	}
+
+	/*
+	 * Fence hostgroup 0 OFFLINE_HARD before the test runs.
+	 *
+	 * The mysql84 test infra (test/infra/infra-mysql84/bin/
+	 * docker-proxy-post.bash) seeds a fallback mysql_servers row into
+	 * HG 0 that points at the same backend as the writer HG. Without
+	 * fencing it, a clobber-to-HG-0 regression in
+	 * PPHR_5passwordTrue (the very bug we're guarding against in
+	 * scenarios [1] and [3]) would route SELECT 1 to HG 0 and SUCCEED
+	 * -- the test would pass while the regression is live.
+	 *
+	 * By marking every HG-0 server OFFLINE_HARD just for the duration
+	 * of this test, any routing to HG 0 deterministically fails: the
+	 * connect pool can't acquire a server, and the query returns an
+	 * error. So a clobber regression will now surface as a query
+	 * failure on the next ok() rather than silently passing. Cleanup
+	 * at the end restores HG 0 to its prior state.
+	 */
+	{
+		const int fence_rc =
+			do_query(admin, "UPDATE mysql_servers SET status='OFFLINE_HARD' WHERE hostgroup_id=0") |
+			do_query(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+		ok(fence_rc == EXIT_SUCCESS,
+			"HG 0 fenced OFFLINE_HARD (catches clobber-to-HG-0 regressions)");
 	}
 
 	/* -------- enable unknown_users pass-through -------- */
@@ -331,6 +358,17 @@ int main() {
 	{
 		const int rc = do_query(backend, string("DROP USER IF EXISTS '") + TEST_USER + "'@'%'");
 		ok(rc == EXIT_SUCCESS, "Cleanup: DROP USER on backend");
+	}
+	{
+		/*
+		 * Restore HG 0 to ONLINE so any other test that shares this
+		 * fixture and depends on the infra-seeded HG-0 fallback row
+		 * isn't poisoned by our fencing.
+		 */
+		int rc = EXIT_SUCCESS;
+		rc |= do_query(admin, "UPDATE mysql_servers SET status='ONLINE' WHERE hostgroup_id=0");
+		rc |= do_query(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+		ok(rc == EXIT_SUCCESS, "Cleanup: HG 0 restored to ONLINE");
 	}
 	{
 		int rc = EXIT_SUCCESS;
