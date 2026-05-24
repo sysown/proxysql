@@ -14,19 +14,26 @@
  *
  * Counters exercised (one per phase):
  *
- *   [1] probes_attempted + probes_ok + cache_entries  -- successful probe
+ *   [1] probes_attempted + probes_ok                   -- successful probe
  *   [2] cache_hits                                     -- reconnect cache hit
  *   [3] probes_failed_credentials                      -- wrong-pw probe
- *   [4] inflight_cap_rejects                           -- saturate cap of 0
- *   [5] cache_invalidations                            -- FLUSH + reconnect-fail
- *                                                          (covered indirectly:
- *                                                           verified via flush
- *                                                           command + entry count)
  *
- * Phases [4] and [5] are abbreviated -- the focus of THIS test is
- * counter-semantics, not the full feature (which is covered by the
- * other e2e tests). We assert deltas, not absolute values, so the
- * test is robust to other tests sharing the proxy.
+ * Counters NOT exercised by this test (each is covered elsewhere or
+ * requires infrastructure this test deliberately avoids):
+ *
+ *   - inflight_cap_rejects: requires concurrent probes that exceed
+ *     max_inflight_probes. A single-threaded TAP test that just sets
+ *     max_inflight_probes=1 and runs a serial probe doesn't trigger
+ *     the cap rejection -- the previous version of this test had a
+ *     scenario [4] that asserted "counter is monotonic", which holds
+ *     trivially even if bump_inflight_cap_rejects were deleted. We
+ *     removed that scenario rather than ship a tautology.
+ *   - lockouts_user / lockouts_ip: exercised by ratelimit-t.
+ *   - cache_invalidations: exercised by invalidation-t.
+ *
+ * We assert deltas, not absolute values, so the test is robust to
+ * other tests sharing the proxy bumping the same counters
+ * concurrently.
  */
 #include <cstring>
 #include <string>
@@ -94,20 +101,19 @@ int main() {
 	CommandLine cl;
 
 	/*
-	 * Plan: 4 setup + 4 deltas + 2 cleanup = 10.
+	 * Plan: 4 setup + 3 deltas + 2 cleanup = 9.
 	 *
 	 *   Setup (4):
 	 *     backend connect, admin connect, user provisioned,
 	 *     passthrough enabled
 	 *
 	 *   [1] probes_attempted++ and probes_ok++ on first probe
-	 *   [2] cache_hits++ on reconnect
+	 *   [2] cache_hits++ on reconnect (and probes_attempted UNCHANGED)
 	 *   [3] probes_failed_credentials++ on wrong pw
-	 *   [4] inflight_cap_rejects++ when cap=0 forces all rejects
 	 *
 	 *   Cleanup (2): DROP USER, restore globals
 	 */
-	plan(10);
+	plan(9);
 
 	if (cl.getEnv()) {
 		return exit_status();
@@ -212,45 +218,6 @@ int main() {
 			"[3] probes_failed_credentials++ on wrong-pw "
 			"(%lld -> %lld)",
 			(long long)pfc_before, (long long)pfc_after);
-	}
-
-	/* ============================================================
-	 * Scenario 4: saturate the inflight cap and observe the reject
-	 *             counter.
-	 *
-	 * Setting the cap to zero (effectively disabling probes) forces
-	 * every subsequent passthrough attempt to fail with the cap-
-	 * reject reason. inflight_cap_rejects increments per attempt.
-	 *
-	 * After this scenario, restore the cap so cleanup attempts that
-	 * may need passthrough still work.
-	 * ============================================================ */
-	{
-		do_query(admin, "PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE");
-		do_query(admin, "SET mysql-passthrough_auth_max_inflight_probes='1'");
-		do_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
-
-		/* The variable bound is [1, 10000] -- can't be 0 -- so we
-		 * use 1 and observe that a single probe acquires the slot,
-		 * but the cap rejection counter increments for any second
-		 * concurrent attempt. To avoid testing concurrency
-		 * (out of scope), we instead read the counter twice and
-		 * assert NO inflight_cap_rejects happened during the
-		 * single-probe attempt below (negative-test: counter
-		 * unchanged is also a signal). */
-		const int64_t icr_before = read_metric(admin, "inflight_cap_rejects");
-
-		const unsigned int err = try_connect(cl, TEST_USER, TEST_BACKEND_PW);
-		(void)err;
-
-		const int64_t icr_after = read_metric(admin, "inflight_cap_rejects");
-		ok(icr_after >= icr_before,
-			"[4] inflight_cap_rejects monotonic (no reject expected "
-			"for serial single-probe attempt; %lld -> %lld)",
-			(long long)icr_before, (long long)icr_after);
-
-		do_query(admin, "SET mysql-passthrough_auth_max_inflight_probes='100'");
-		do_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 	}
 
 	/* -------- cleanup -------- */
