@@ -526,6 +526,31 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 
 	 // this is used ONLY for Admin, and only if the other party is another proxysql instance part of a cluster
 	bool use_ldap_auth;
+
+	/**
+	 * @brief Set to @c true when this session's credential came from the
+	 * pass-through cache or a fresh pass-through probe (spec §8.4).
+	 *
+	 * Read by the @c ER_ACCESS_DENIED_ERROR eviction hook in
+	 * @c handler_again___status_CONNECTING_SERVER: only sessions whose
+	 * credential was supplied by the pass-through machinery are allowed
+	 * to invalidate the cache entry on a backend 1045. Without this
+	 * flag, a regular @c mysql_users user with the same name but a
+	 * stale stored hash would evict an unrelated pass-through cache
+	 * entry -- needless churn for users who aren't even using
+	 * pass-through.
+	 *
+	 * Set in two places:
+	 *   - @c PPHR_verify_password on a cache hit
+	 *     (the cached cleartext IS what we're authenticating with).
+	 *   - @c handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT
+	 *     on probe success (we just inserted the cleartext into the
+	 *     cache and immediately put it on the session's userinfo).
+	 *
+	 * Cleared on session reset / re-init alongside the other auth
+	 * state. Stays @c false for regular @c mysql_users authentications.
+	 */
+	bool passthrough_credential;
 	// Fast forward grace close flags: track backend closure during fast forward mode
 	// to allow pending client data to drain before closing the session.
 	bool backend_closed_in_fast_forward;

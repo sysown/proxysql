@@ -710,6 +710,7 @@ MySQL_Session::MySQL_Session() {
 	last_HG_affected_rows = -1; // #1421 : advanced support for LAST_INSERT_ID()
 	proxysql_node_address = NULL;
 	use_ldap_auth = false;
+	passthrough_credential = false;
 	this->wait_timeout = mysql_thread___wait_timeout;
 	backend_closed_in_fast_forward = false;
 	fast_forward_grace_start_time = 0;
@@ -1976,6 +1977,15 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 
 	// Probe succeeded — cache the learned credential.
 	GloMyPTAuthCache->insert(std::string(username), std::string(cleartext), target_hg);
+	/*
+	 * Mark the session: the cleartext we're about to assign onto
+	 * userinfo->password came from the probe (i.e. is now in the
+	 * pass-through cache). Authorize the backend-rejection eviction
+	 * hook to invalidate it on a future ER_ACCESS_DENIED for this
+	 * session, distinct from same-username sessions that authenticated
+	 * via a regular mysql_users row.
+	 */
+	passthrough_credential = true;
 
 	// Update userinfo with the learned cleartext. process_pkt_handshake_response
 	// stored "" for userinfo->password since PPHR_verify_password returned
@@ -3467,13 +3477,31 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 							goto __exit_handler_again___status_CONNECTING_SERVER_with_err;
 							break;
 						case ER_ACCESS_DENIED_ERROR: // 1045
-							// Pass-through cache invalidation (spec §8.4).
-							// If a backend rejected a connection using a
-							// password that came from the pass-through cache,
-							// the cached cleartext is stale. Evict it so the
-							// next connect from this user re-probes.
+							/*
+							 * Pass-through cache invalidation (spec §8.4).
+							 *
+							 * Gated on @c sess->passthrough_credential so
+							 * the eviction fires only for sessions whose
+							 * credential actually came from the cache (or a
+							 * fresh probe that just populated the cache).
+							 *
+							 * Without the gate, a backend 1045 against a
+							 * regular @c mysql_users user with the SAME
+							 * username as a separately-cached pass-through
+							 * entry would evict that unrelated entry --
+							 * harmless functionally (next connect re-probes),
+							 * but causes needless churn on rotation events
+							 * for users who aren't even using pass-through.
+							 *
+							 * The flag is set by:
+							 *   - PPHR_verify_password on cache hit
+							 *   - the AUTHENTICATING_BACKEND_FOR_CLIENT
+							 *     handler on probe success
+							 * and stays @c false for normal authentications.
+							 */
 							if (GloMyPTAuthCache != NULL
 								&& mysql_thread___passthrough_auth_enabled
+								&& passthrough_credential
 								&& client_myds && client_myds->myconn
 								&& client_myds->myconn->userinfo
 								&& client_myds->myconn->userinfo->username) {

@@ -2682,6 +2682,16 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 			if (GloMyPTAuthCache->lookup(
 					std::string((const char*)vars1.user), cleartext, ttl_s)) {
 				GloMyPTAuthCache->bump_cache_hits();
+				/*
+				 * Mark the session: the credential being used to verify
+				 * this client connection came from the pass-through
+				 * cache, so the backend-rejection eviction hook in
+				 * handler_again___status_CONNECTING_SERVER is permitted
+				 * to invalidate the entry on a future ER_ACCESS_DENIED.
+				 */
+				if ((*myds) && (*myds)->sess) {
+					(*myds)->sess->passthrough_credential = true;
+				}
 				if (vars1.password) { free(vars1.password); }
 				vars1.password = strdup(cleartext.c_str());
 				/**
