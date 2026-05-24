@@ -1741,6 +1741,33 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 			client_myds->DSS = STATE_QUERY_SENT_NET;
 		}
 		/**
+		 * @brief Operator-visible warning on every probe failure.
+		 *
+		 * Without this, the only server-side trace of a pass-through
+		 * failure is in the audit log -- which is OPTIONAL and may not
+		 * be enabled. An operator diagnosing "users can't connect"
+		 * would otherwise see only the client's generic "Access denied"
+		 * with no proxysql.log signal. proxy_warning ensures the
+		 * triage-relevant reason hits the main log at WARNING level
+		 * regardless of audit settings, with enough context (username,
+		 * source IP, hostgroup) to correlate against client reports.
+		 *
+		 * The client-facing ERR remains the generic "Access denied for
+		 * user" -- this added visibility is server-side only.
+		 */
+		const char* p_user =
+			(client_myds && client_myds->myconn && client_myds->myconn->userinfo
+				&& client_myds->myconn->userinfo->username)
+				? (const char*)client_myds->myconn->userinfo->username : "?";
+		const char* p_addr =
+			(client_myds && client_myds->addr.addr)
+				? client_myds->addr.addr : "?";
+		proxy_warning(
+			"pass-through auth FAILED for user='%s' from client='%s' "
+			"hg=%d: %s\n",
+			p_user, p_addr, audit_hg, reason ? reason : "unspecified");
+
+		/**
 		 * @brief Audit log -- failure path.
 		 *
 		 * Spec §7.4: emit username, source IP, hostgroup probed,
