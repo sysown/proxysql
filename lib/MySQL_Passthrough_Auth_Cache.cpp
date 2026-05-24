@@ -135,7 +135,65 @@ size_t prune_and_count(std::deque<uint64_t>& dq, uint64_t now_us, uint64_t windo
 	}
 	return dq.size();
 }
+
+/**
+ * @brief Erase the map entry when the corresponding deque is empty.
+ *
+ * Without this, every distinct (username, source-IP) pair that ever
+ * triggered a failure stays in the map as an entry with an empty
+ * deque after its timestamps expire. An attacker churning random
+ * usernames/IPs grows the map at line-rate until the process runs
+ * out of memory. Erase on empty so the map size is bounded by the
+ * currently-active failure population, not the cumulative history.
+ *
+ * Caller holds failure_lock.
+ */
+void erase_if_empty(
+	std::unordered_map<std::string, std::deque<uint64_t>>& m,
+	std::unordered_map<std::string, std::deque<uint64_t>>::iterator it
+) {
+	if (it != m.end() && it->second.empty()) {
+		m.erase(it);
+	}
 }
+
+/**
+ * @brief Hard cap on the size of the failure maps.
+ *
+ * A defense-in-depth bound for the case where erase_if_empty
+ * isn't fast enough to keep up with a high-burst attacker (every
+ * unique key is in its window so erase_if_empty cannot evict).
+ * When the map grows beyond this threshold we drop the oldest
+ * entry (smallest front()-timestamp deque) -- losing rate-limit
+ * state for one historical user/IP to protect the process from
+ * runaway memory growth. Picked an order of magnitude above
+ * what's plausible for legitimate active workloads but well
+ * below memory pressure on typical proxy hosts.
+ */
+constexpr size_t FAILURE_MAP_HARD_CAP = 100000;
+
+/**
+ * @brief Evict the oldest entry in @p m to bring size under the cap.
+ *
+ * Linear scan; OK because eviction is rare (only fires when the
+ * cap is hit). Caller holds failure_lock.
+ */
+void evict_oldest(
+	std::unordered_map<std::string, std::deque<uint64_t>>& m
+) {
+	auto oldest = m.end();
+	uint64_t oldest_ts = UINT64_MAX;
+	for (auto it = m.begin(); it != m.end(); ++it) {
+		if (!it->second.empty() && it->second.front() < oldest_ts) {
+			oldest_ts = it->second.front();
+			oldest = it;
+		}
+	}
+	if (oldest != m.end()) {
+		m.erase(oldest);
+	}
+}
+} // anonymous namespace
 
 bool MySQL_Passthrough_Auth_Cache::would_lockout_user(
 	const std::string& username, int max_failures, uint32_t window_s
@@ -145,8 +203,14 @@ bool MySQL_Passthrough_Auth_Cache::would_lockout_user(
 	const uint64_t window_us = static_cast<uint64_t>(window_s) * 1000000ULL;
 	pthread_mutex_lock(&failure_lock);
 	auto it = failures_by_user.find(username);
-	const bool lockout = (it != failures_by_user.end())
-		&& (prune_and_count(it->second, now_us, window_us) >= static_cast<size_t>(max_failures));
+	bool lockout = false;
+	if (it != failures_by_user.end()) {
+		lockout = prune_and_count(it->second, now_us, window_us)
+			>= static_cast<size_t>(max_failures);
+		/* Reclaim the map entry if the prune left an empty deque -- bounds
+		 * unconditional map growth from churn (spec §7.2 / B8 follow-up). */
+		erase_if_empty(failures_by_user, it);
+	}
 	pthread_mutex_unlock(&failure_lock);
 	return lockout;
 }
@@ -159,8 +223,12 @@ bool MySQL_Passthrough_Auth_Cache::would_lockout_ip(
 	const uint64_t window_us = static_cast<uint64_t>(window_s) * 1000000ULL;
 	pthread_mutex_lock(&failure_lock);
 	auto it = failures_by_ip.find(ip);
-	const bool lockout = (it != failures_by_ip.end())
-		&& (prune_and_count(it->second, now_us, window_us) >= static_cast<size_t>(max_failures));
+	bool lockout = false;
+	if (it != failures_by_ip.end()) {
+		lockout = prune_and_count(it->second, now_us, window_us)
+			>= static_cast<size_t>(max_failures);
+		erase_if_empty(failures_by_ip, it);
+	}
 	pthread_mutex_unlock(&failure_lock);
 	return lockout;
 }
@@ -172,9 +240,19 @@ void MySQL_Passthrough_Auth_Cache::record_failure(
 	pthread_mutex_lock(&failure_lock);
 	if (!username.empty()) {
 		failures_by_user[username].push_back(now_us);
+		/* Defense-in-depth: if attacker is churning usernames faster than
+		 * the window expires, evict the oldest entry to keep memory
+		 * bounded. We lose lockout state for one historical user; the
+		 * alternative is unbounded growth. */
+		if (failures_by_user.size() > FAILURE_MAP_HARD_CAP) {
+			evict_oldest(failures_by_user);
+		}
 	}
 	if (!ip.empty()) {
 		failures_by_ip[ip].push_back(now_us);
+		if (failures_by_ip.size() > FAILURE_MAP_HARD_CAP) {
+			evict_oldest(failures_by_ip);
+		}
 	}
 	pthread_mutex_unlock(&failure_lock);
 }
