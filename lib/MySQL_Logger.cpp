@@ -612,6 +612,19 @@ void MySQL_Event::write_auth(LogBuffer *f, MySQL_Session *sess) {
 	if (server) {
 		j["server_addr"] = server;
 	}
+	/**
+	 * @brief Emit hostgroup id when set.
+	 *
+	 * Default value of @c hid is @c UINT64_MAX (see MySQL_Event ctor).
+	 * Pass-through audit entries override it via @c set_server so the
+	 * @c hostgroup JSON field is present per spec §7.4. Non-passthrough
+	 * audit events leave @c hid at its sentinel and the field is
+	 * omitted -- preserving the existing on-wire schema for those
+	 * consumers.
+	 */
+	if (hid != UINT64_MAX) {
+		j["hostgroup"] = static_cast<int64_t>(hid);
+	}
 	if (extra_info) {
 		j["extra_info"] = extra_info;
 	}
@@ -1684,6 +1697,36 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds, con
 	}
 }
 
+/**
+ * @brief Hostgroup-aware overload of @c log_audit_entry (spec §7.4).
+ *
+ * Used by the pass-through auth path to attach the probed hostgroup id
+ * to the audit entry. Implemented by forwarding to the single-pass-through
+ * site that knows how to mutate the local @c MySQL_Event before
+ * writing -- duplicating the entire 100-line audit-entry helper would
+ * be brittle. We use a thread-local "extra hostgroup" channel: the
+ * main implementation reads it, applies it onto the event, and clears
+ * it. This keeps the diff localized and avoids changing the ABI of
+ * the standard overload.
+ *
+ * The channel is in thread-local storage so concurrent sessions on
+ * different worker threads can't race; the same thread cannot reenter
+ * log_audit_entry while one call is in progress (audit logging is
+ * single-shot from each call site).
+ */
+namespace {
+__thread int passthrough_audit_hostgroup_override = -1;
+}
+
+void MySQL_Logger::log_audit_entry(
+	log_event_type _et, MySQL_Session *sess, MySQL_Data_Stream *myds,
+	char *xi, int hostgroup
+) {
+	passthrough_audit_hostgroup_override = hostgroup;
+	log_audit_entry(_et, sess, myds, xi);
+	passthrough_audit_hostgroup_override = -1;
+}
+
 void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQL_Data_Stream *myds, char *xi) {
 	if (audit.enabled==false) return;
 
@@ -1807,6 +1850,19 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 
 	if (xi) {
 		me.set_extra_info(xi);
+	}
+
+	/**
+	 * @brief Apply hostgroup override from the thread-local channel.
+	 *
+	 * The hostgroup-aware overload of @c log_audit_entry sets a TLS
+	 * value before calling us; pick it up here so the audit JSON
+	 * carries the probed hostgroup id (spec §7.4). For all non-
+	 * pass-through callers the override is -1, leaving @c hid at its
+	 * default UINT64_MAX (which write_auth omits from the JSON).
+	 */
+	if (passthrough_audit_hostgroup_override >= 0) {
+		me.set_server(passthrough_audit_hostgroup_override, (char*)"", 0);
 	}
 
 	// for performance reason, we are moving the write lock

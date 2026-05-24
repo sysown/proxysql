@@ -1717,6 +1717,20 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 		}
 	};
 
+	/**
+	 * @brief Audit-log hostgroup snapshot at handler entry.
+	 *
+	 * Captured early so failure paths that abort BEFORE the target
+	 * hostgroup is fully resolved (missing username/cleartext,
+	 * lockout, inflight cap) still emit a stable @c hostgroup field
+	 * in the audit entry. For those early aborts the value is the
+	 * session's @c default_hostgroup (which was synthesized for the
+	 * unknown-user case in PPHR_verify_password and is the empty-pw
+	 * row's HG otherwise). Spec §7.4 wants this field to always be
+	 * present.
+	 */
+	const int audit_hg = default_hostgroup;
+
 	auto fail_session = [&](const char* reason) -> int {
 		scrub_cleartext();
 		const uint8_t _pid = (client_myds ? client_myds->pkt_sid : 0) + 1;
@@ -1726,12 +1740,24 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 				(char*)"Access denied for user", true);
 			client_myds->DSS = STATE_QUERY_SENT_NET;
 		}
-		// Audit log — failure (spec §7.4). Generic client-facing ERR;
-		// the precise reason is captured in the audit entry only.
+		/**
+		 * @brief Audit log -- failure path.
+		 *
+		 * Spec §7.4: emit username, source IP, hostgroup probed,
+		 * outcome. Username + IP come from the session automatically;
+		 * hostgroup is threaded via the hostgroup-aware overload of
+		 * @c log_audit_entry. @c extra_info carries the internal
+		 * failure reason for operator triage -- note that this leaks
+		 * a small amount of internal state to whoever can read the
+		 * audit log (audit logs are operator-confidential by design,
+		 * but documenting the trade-off in case Phase 2 wants to
+		 * sanitize to a stable enum).
+		 */
 		if (GloMyLogger) {
 			GloMyLogger->log_audit_entry(
 				PROXYSQL_MYSQL_AUTH_PASSTHROUGH_FAIL, this, NULL,
-				const_cast<char*>(reason ? reason : "passthrough auth failed"));
+				const_cast<char*>(reason ? reason : "passthrough auth failed"),
+				audit_hg);
 		}
 		return -1;
 	};
@@ -1907,10 +1933,16 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 	client_myds->myprot.generate_pkt_OK(true, NULL, NULL, _pid, 0, 0, 2, 0, NULL);
 	client_myds->DSS = STATE_CLIENT_AUTH_OK;
 
-	// Audit log — success (spec §7.4).
+	/**
+	 * @brief Audit log -- success path.
+	 *
+	 * Same shape as the failure path's audit entry but no
+	 * @c extra_info: success carries no operator-meaningful detail
+	 * beyond the username/IP/hostgroup tuple. Spec §7.4.
+	 */
 	if (GloMyLogger) {
 		GloMyLogger->log_audit_entry(
-			PROXYSQL_MYSQL_AUTH_PASSTHROUGH_OK, this, NULL);
+			PROXYSQL_MYSQL_AUTH_PASSTHROUGH_OK, this, NULL, NULL, target_hg);
 	}
 
 	set_status(WAITING_CLIENT_DATA);
