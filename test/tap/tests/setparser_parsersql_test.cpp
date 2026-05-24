@@ -31,7 +31,7 @@ static inline bool _fast_isspace(int c) { return c==' '||c=='\t'||c=='\n'||c=='\
 static bool inline_validate_search_path(const char* value, char** transformed_value) {
 	if (transformed_value) *transformed_value = nullptr;
 	if (value == nullptr) return false;
-	size_t value_len = strlen(value);
+	size_t value_len = strlen(value); // NOSONAR cpp:S5813 — test code over a caller-supplied C string; the SIZE_MAX guard below bounds the result.
 	if (value_len > SIZE_MAX - 1) return false;
 	char* normalized = (char*)malloc(value_len + 1);
 	if (!normalized) return false;

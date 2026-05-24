@@ -114,9 +114,11 @@ void* monitor_dns_resolver_thread(const std::vector<DNS_Resolve_Data*>& dns_reso
 			bool to_update_cache = false;
 			int cache_ttl = dns_resolve_data->ttl;
 			if (dns_resolve_data->ttl > dns_resolve_data->refresh_intv) {
-				// NOSONAR cpp:S2245 — mt19937 used for DNS-cache TTL jitter,
-				// a non-cryptographic timing tweak. No security boundary.
-				thread_local std::mt19937 gen(std::random_device{}());
+				// NOSONAR cpp:S2245 — mt19937 used here only as a DNS-cache
+				// TTL jitter source (non-cryptographic timing tweak); no
+				// security boundary. Inline annotation on the construction
+				// line because Sonar attributes the hotspot to it.
+				thread_local std::mt19937 gen(std::random_device{}()); // NOSONAR cpp:S2245
 				const int jitter = static_cast<int>(dns_resolve_data->ttl * 0.025);
 				std::uniform_int_distribution<int> dis(-jitter, jitter);
 				cache_ttl += dis(gen);
