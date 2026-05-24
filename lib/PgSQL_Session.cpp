@@ -4584,11 +4584,26 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 						value1 = value;
 					}
 
+					// TEMP DEBUG (delete after diagnosing case #184 of pgsql-set_parameter_validation_test-t):
+					// log every entry to the validator block so the CI proxysql.log
+					// shows what value the validator actually receives for search_path
+					// and what it returns. Set_parser_algorithm_3 is leaking through
+					// some path that bypasses the validator-reject error packet and we
+					// don't yet know why.
+					proxy_info("SET-VALIDATE pre var=%s idx=%d value1_len=%zu value1=[%s]\n",
+						var.c_str(), idx, value1.length(), value1.c_str());
 					char* transformed_value = nullptr;
+					bool _validator_ok = true;
+					if (pgsql_tracked_variables[idx].validator && pgsql_tracked_variables[idx].validator->validate) {
+						_validator_ok = (*pgsql_tracked_variables[idx].validator->validate)(
+							value1.c_str(), &pgsql_tracked_variables[idx].validator->params, this, &transformed_value);
+					}
+					proxy_info("SET-VALIDATE post var=%s validator_ok=%s transformed=[%s]\n",
+						var.c_str(),
+						_validator_ok ? "true" : "false",
+						transformed_value ? transformed_value : "(null)");
 					if (pgsql_tracked_variables[idx].validator && pgsql_tracked_variables[idx].validator->validate &&
-						(
-							*pgsql_tracked_variables[idx].validator->validate)(
-								value1.c_str(), &pgsql_tracked_variables[idx].validator->params, this, &transformed_value) == false
+						_validator_ok == false
 						) {
 						char* m = NULL;
 						char* errmsg = NULL;

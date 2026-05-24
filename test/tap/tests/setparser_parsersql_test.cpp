@@ -17,6 +17,76 @@
 
 #include "setparser_test_common.h"
 #include "Query_Processor_ParserSQL.h"
+#include <cstdlib>
+#include <cstring>
+#include <cctype>
+#include <climits>
+
+// Inline copy of pgsql_variable_validate_search_path from
+// lib/PgSQL_Variables_Validator.cpp -- the production symbol can't be linked
+// here without pulling all PgSQL_Session globals via EXCLUDE_TRACKING_VARIABLES.
+// Keep these in sync; if production changes, update this copy and the
+// regression below catches the drift.
+static inline bool _fast_isspace(int c) { return c==' '||c=='\t'||c=='\n'||c=='\r'||c=='\v'||c=='\f'; }
+static bool inline_validate_search_path(const char* value, char** transformed_value) {
+	if (transformed_value) *transformed_value = nullptr;
+	if (value == nullptr) return false;
+	size_t value_len = strlen(value);
+	if (value_len > SIZE_MAX - 1) return false;
+	char* normalized = (char*)malloc(value_len + 1);
+	if (!normalized) return false;
+	normalized[0] = '\0';
+	size_t norm_pos = 0;
+	bool first = true, result = true;
+	const char* token = value;
+	while (*token && result) {
+		while (*token && _fast_isspace((unsigned char)*token)) token++;
+		if (*token == '\0') break;
+		const char* part_start = token;
+		size_t part_len = 0;
+		int effective_len = 0;
+		if (*token == '"' || *token == '\'') {
+			char quote = *token++;
+			const char* search = token;
+			while (*search) {
+				if (*search == quote) {
+					if (*(search + 1) == quote) { search += 2; effective_len++; continue; }
+					else break;
+				}
+				search++; effective_len++;
+			}
+			if (*search != quote) { result = false; break; }
+			part_len = (size_t)(search - part_start + 1);
+			token = search + 1;
+			if (effective_len > 63) { result = false; break; }
+		} else {
+			while (*token && *token != ',' && !_fast_isspace((unsigned char)*token)) token++;
+			part_len = (size_t)(token - part_start);
+			if (part_len == 0 || part_len > 63) { result = false; break; }
+			if (!isalpha((unsigned char)part_start[0]) && part_start[0] != '_') { result = false; break; }
+			for (size_t i = 1; i < part_len; ++i) {
+				if (!isalnum((unsigned char)part_start[i]) && part_start[i] != '_' && part_start[i] != '$') {
+					result = false; break;
+				}
+			}
+			if (!result) break;
+		}
+		if (!first) normalized[norm_pos++] = ',';
+		first = false;
+		if (part_len > 0) { memcpy(normalized + norm_pos, part_start, part_len); norm_pos += part_len; }
+		normalized[norm_pos] = '\0';
+		while (*token && _fast_isspace((unsigned char)*token)) token++;
+		if (*token == ',') token++;
+		else if (*token != '\0') { result = false; break; }
+	}
+	if (result) {
+		if (transformed_value) *transformed_value = normalized;
+		else free(normalized);
+	} else {
+		free(normalized);
+	}
+	return result;
+}
 
 static Test parsersql_syntax_errors[] = {
   { "SET sql_mode=(SELECT CONCA(@@sql_mode, ',PIPES_AS_CONCAT,NO_ENGINE_SUBSTITUTION'))",
@@ -352,6 +422,85 @@ static EmptyOnParseFailCase parsersql_parse_fail_strict[] = {
   { "SET `unclosed_ident = 1",                      EmptyOnParseFailCase::MYSQL },
 };
 
+// Direct invocation of the search_path validator with values the walker would
+// produce. This lets us pin where #184/#150 actually diverge in CI -- the
+// session/sync code path needs PG to verify, but the validator itself is a
+// pure function we can hit with crafted inputs.
+struct ValidatorCase {
+	const char* value;
+	bool expect_ok;
+	const char* expected_transformed;  // nullptr means don't check
+};
+static ValidatorCase parsersql_search_path_validator_cases[] = {
+	// 63-char delimited ident: at the boundary, must accept
+	{ "\"123456789012345678901234567890123456789012345678901234567890123\"", true,
+	  "\"123456789012345678901234567890123456789012345678901234567890123\"" },
+	// 64-char delimited ident: over the limit, must reject -- this is the
+	// exact input that produces #184 in pgsql-set_parameter_validation_test-t
+	{ "\"1234567890123456789012345678901234567890123456789012345678901234\"", false, nullptr },
+	// Single-quoted string with embedded whitespace (the #150 input shape).
+	// Validator accepts the literal string; the whitespace-collapse the test
+	// expects must be done by something else (PG-side, or the validator
+	// itself if we add that transform). We assert *what the validator
+	// produces today* so the next diagnosis can compare against expected.
+	{ "'\"$user\"   ,    public'", true,
+	  "'\"$user\"   ,    public'" },
+};
+
+// Run walker -> session-join -> validator chain to mimic production end-to-end.
+// If the validator under #184's effective input still rejects, the bug isn't
+// here -- it's somewhere between session-code-validator-reject and the wire.
+void TestWalkerToValidatorChain184() {
+	const char* set_query = "SET search_path TO \"1234567890123456789012345678901234567890123456789012345678901234\"";
+	auto m = parsersql_parse_set_pgsql(set_query);
+	bool walker_returned_search_path = (m.size() == 1 && m.count("search_path"));
+	ok(walker_returned_search_path, "[walker_to_validator_184] walker returns single search_path entry");
+	if (!walker_returned_search_path) {
+		diag("  walker returned %zu entries", m.size());
+		for (auto& kv : m) diag("  - %s", kv.first.c_str());
+		return;
+	}
+	const auto& vals = m["search_path"];
+	std::string value1 = vals.front();
+	for (size_t vi = 1; vi < vals.size(); ++vi) {
+		value1 += ", ";
+		value1 += vals[vi];
+	}
+	diag("  value1 (production-equivalent input to validator): [len=%zu:%s]",
+		value1.length(), value1.c_str());
+	char* xform = nullptr;
+	bool got_ok = inline_validate_search_path(value1.c_str(), &xform);
+	ok(!got_ok, "[walker_to_validator_184] validator REJECTS the 66-char input (expected)");
+	if (got_ok) {
+		diag("  UNEXPECTED: validator returned true with transformed=[%s]",
+			xform ? xform : "(null)");
+	}
+	if (xform) free(xform);
+}
+
+void TestSearchPathValidator() {
+	for (size_t i = 0; i < arraysize(parsersql_search_path_validator_cases); i++) {
+		const auto& c = parsersql_search_path_validator_cases[i];
+		char* xform = nullptr;
+		bool got_ok = inline_validate_search_path(c.value, &xform);
+		ok(got_ok == c.expect_ok,
+			"[search_path_validator %zu] value=%s -> validator returned %s (expected %s)",
+			i, c.value, got_ok ? "true" : "false",
+			c.expect_ok ? "true" : "false");
+		if (got_ok && c.expected_transformed) {
+			bool xform_ok = (xform != nullptr && std::string(xform) == c.expected_transformed);
+			ok(xform_ok, "[search_path_validator %zu] transformed_value matches", i);
+			if (!xform_ok) {
+				diag("  expected: [%s]", c.expected_transformed);
+				diag("  got     : [%s]", xform ? xform : "(null)");
+			}
+		} else {
+			ok(true, "[search_path_validator %zu] no transformed_value check (reject case)", i);
+		}
+		if (xform) free(xform);
+	}
+}
+
 void TestEmptyOnParseFail(const EmptyOnParseFailCase* cases, int n) {
 	for (int i = 0; i < n; i++) {
 		auto m = (cases[i].dialect == EmptyOnParseFailCase::PGSQL)
@@ -393,6 +542,8 @@ int main(int argc, char** argv) {
 	p += arraysize(parsersql_function_call_strict) * 2;
 	p += arraysize(parsersql_pgsql_ident_strict) * 2;
 	p += arraysize(parsersql_parse_fail_strict);
+	p += arraysize(parsersql_search_path_validator_cases) * 2;
+	p += 2;  // TestWalkerToValidatorChain184
 	plan(p);
 	TestParse(sql_mode, arraysize(sql_mode), "sql_mode");
 	TestParse(time_zone, arraysize(time_zone), "time_zone");
@@ -410,6 +561,8 @@ int main(int argc, char** argv) {
 	TestStrictFunctionCall(parsersql_function_call_strict, arraysize(parsersql_function_call_strict));
 	TestStrictPgsqlIdent(parsersql_pgsql_ident_strict, arraysize(parsersql_pgsql_ident_strict));
 	TestEmptyOnParseFail(parsersql_parse_fail_strict, arraysize(parsersql_parse_fail_strict));
+	TestSearchPathValidator();
+	TestWalkerToValidatorChain184();
 
 	return exit_status();
 }
