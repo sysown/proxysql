@@ -1462,17 +1462,6 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	} else {
 		account_details = GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, dup_details);
 	}
-	// FIXME: add support for default schema and fast forward, see issue #255 and #256
-	(*myds)->sess->default_hostgroup=account_details.default_hostgroup;
-	(*myds)->sess->transaction_persistent=account_details.transaction_persistent;
-	// Could be reached several times before auth completion; allocating attributes should be reset
-	if ((*myds)->sess->user_attributes) {
-		free((*myds)->sess->user_attributes);
-		(*myds)->sess->user_attributes = nullptr;
-	}
-	(*myds)->sess->user_attributes=account_details.attributes;
-	account_details.attributes = nullptr;
-	char* password = get_password(account_details, PASSWORD_TYPE::PRIMARY);
 
 	/**
 	 * @brief Reject COM_CHANGE_USER for pass-through-eligible users (spec §5.4).
@@ -1484,6 +1473,17 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	 * mid-session, the spec says to reject and let the client fall back
 	 * to opening a new connection (which goes through the normal
 	 * PPHR_verify_password / pass-through path).
+	 *
+	 * This check MUST run BEFORE the unconditional session-state mutations
+	 * below (sess->default_hostgroup, sess->transaction_persistent,
+	 * sess->user_attributes get overwritten from @c account_details for
+	 * EVERY CHANGE_USER, success or not). If we deferred this check to
+	 * after those mutations, a rejected CHANGE_USER would leave the
+	 * already-authenticated session with the pass-through target row's
+	 * routing/attrs grafted on top of the previous user's state -- the
+	 * rejected attempt would have observable side-effects. Doing the
+	 * check here, before the lookup result touches the session, gives a
+	 * clean failure with the session state untouched.
 	 *
 	 * Two cases need explicit rejection here when mysql-passthrough_auth_enabled
 	 * is on:
@@ -1504,26 +1504,44 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	 * leaks no information about whether the user exists or whether
 	 * pass-through is enabled.
 	 */
-	if (mysql_thread___passthrough_auth_enabled
-		&& mysql_thread___passthrough_auth_empty_password
-		&& password != NULL
-		&& password[0] == '\0'
-		&& (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE)) {
-		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
-			"COM_CHANGE_USER to pass-through-eligible user '%s' rejected "
-			"(Phase 1 does not support pass-through via CHANGE_USER, spec §5.4)\n",
-			user ? (const char*)user : "(null)");
-		ret = false;
-		if (pass) { free(pass); pass = NULL; }
-		if (userinfo->username) free(userinfo->username);
-		if (userinfo->password) free(userinfo->password);
-		userinfo->username = strdup((const char *)user);
-		userinfo->password = strdup((const char *)"");
-		if (password) { free(password); password = NULL; }
-		free_account_details(account_details);
-		userinfo->set(NULL, NULL, NULL, NULL);
-		return ret;
+	{
+		char* early_password = get_password(account_details, PASSWORD_TYPE::PRIMARY);
+		const bool reject_passthrough =
+			mysql_thread___passthrough_auth_enabled
+			&& mysql_thread___passthrough_auth_empty_password
+			&& early_password != NULL
+			&& early_password[0] == '\0'
+			&& (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE);
+		if (reject_passthrough) {
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
+				"COM_CHANGE_USER to pass-through-eligible user '%s' rejected "
+				"(Phase 1 does not support pass-through via CHANGE_USER, spec §5.4)\n",
+				user ? (const char*)user : "(null)");
+			ret = false;
+			if (pass) { free(pass); pass = NULL; }
+			if (userinfo->username) free(userinfo->username);
+			if (userinfo->password) free(userinfo->password);
+			userinfo->username = strdup((const char *)user);
+			userinfo->password = strdup((const char *)"");
+			free(early_password);
+			free_account_details(account_details);
+			userinfo->set(NULL, NULL, NULL, NULL);
+			return ret;
+		}
+		free(early_password);
 	}
+
+	// FIXME: add support for default schema and fast forward, see issue #255 and #256
+	(*myds)->sess->default_hostgroup=account_details.default_hostgroup;
+	(*myds)->sess->transaction_persistent=account_details.transaction_persistent;
+	// Could be reached several times before auth completion; allocating attributes should be reset
+	if ((*myds)->sess->user_attributes) {
+		free((*myds)->sess->user_attributes);
+		(*myds)->sess->user_attributes = nullptr;
+	}
+	(*myds)->sess->user_attributes=account_details.attributes;
+	account_details.attributes = nullptr;
+	char* password = get_password(account_details, PASSWORD_TYPE::PRIMARY);
 
 	if (password==NULL) {
 		ret=false;
