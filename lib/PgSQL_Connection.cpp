@@ -8,6 +8,7 @@
 using json = nlohmann::json;
 #define PROXYJSON
 #include "PgSQL_HostGroups_Manager.h"
+#include "PgSQL_Monitor.hpp"
 #include "proxysql.h"
 #include "cpp.h"
 #include "PgSQL_PreparedStatement.h"
@@ -373,7 +374,10 @@ handler_again:
 		}
 		__sync_fetch_and_add(&PgHGM->status.server_connections_connected, 1);
 		__sync_fetch_and_add(&parent->connect_OK, 1);
-		//MySQL_Monitor::update_dns_cache_from_mysql_conn(pgsql);
+		// Seed the PgSQL DNS cache from the just-established connection so
+		// the next connect for this hostname can skip getaddrinfo even if
+		// the background resolver loop hasn't visited it yet.
+		PgSQL_Monitor::update_dns_cache_from_pgsql_conn(pgsql_conn);
 		break;
 	case ASYNC_CONNECT_FAILED:
 		//PQfinish(pgsql_conn);//release connection even on error
@@ -948,6 +952,16 @@ static void append_conninfo_param(std::ostringstream& conninfo, const char* key,
 	}
 }
 
+std::string PgSQL_Connection::connect_start_DNS_lookup() {
+	// PgSQL_Monitor::dns_lookup() returns an IP on cache hit, or empty
+	// on miss / when 'parent->address' is itself an IP / when the cache is
+	// disabled.  Empty result means "don't pass hostaddr to libpq" so the
+	// existing behavior (libpq does getaddrinfo) is preserved.
+	const std::string ip = PgSQL_Monitor::dns_lookup(parent->address,
+		/*return_hostname_if_lookup_fails=*/false);
+	return ip;
+}
+
 void PgSQL_Connection::connect_start() {
 	PROXY_TRACE();
 	assert(pgsql_conn == NULL); // already there is a connection
@@ -959,6 +973,16 @@ void PgSQL_Connection::connect_start() {
 	append_conninfo_param(conninfo, "password", userinfo->password); // password
 	append_conninfo_param(conninfo, "dbname", userinfo->dbname); // dbname
 	append_conninfo_param(conninfo, "host", parent->address); // backend address
+	// If the DNS cache has resolved this hostname already, also pass
+	// hostaddr=<ip>.  libpq documents this combo specifically to skip name
+	// resolution while keeping the hostname for TLS verification and error
+	// messages.  Empty IP -> cache miss / IP literal / disabled, leave as-is.
+	{
+		const std::string ip = connect_start_DNS_lookup();
+		if (!ip.empty() && ip != std::string(parent->address)) {
+			append_conninfo_param(conninfo, "hostaddr", const_cast<char*>(ip.c_str()));
+		}
+	}
 	conninfo << "port=" << parent->port << " "; // backend port
 	conninfo << "application_name=proxysql "; // application name
 	//conninfo << "require_auth=" << AUTHENTICATION_METHOD_STR[pgsql_thread___authentication_method]; // authentication method
