@@ -1903,9 +1903,9 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 		 * only the lockout counter is gated.
 		 */
 		const bool credential_failure =
-			(probe_errno == ER_ACCESS_DENIED_ERROR
-			 || probe_errno == 1698 // ER_ACCESS_DENIED_NO_PASSWORD_ERROR (no symbolic name in old mysqld_error.h)
-			 || probe_errno == 1130); // ER_HOST_NOT_PRIVILEGED
+			(probe_errno == ER_ACCESS_DENIED_ERROR             /* 1045 */
+			 || probe_errno == ER_ACCESS_DENIED_NO_PASSWORD_ERROR /* 1698 */
+			 || probe_errno == ER_HOST_NOT_PRIVILEGED);          /* 1130 */
 		if (credential_failure) {
 			GloMyPTAuthCache->record_failure(user_key, ip_key);
 			return fail_session("backend rejected probe (credentials)");
