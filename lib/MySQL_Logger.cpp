@@ -1716,15 +1716,45 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds, con
  */
 namespace {
 __thread int passthrough_audit_hostgroup_override = -1;
-}
+
+/**
+ * @brief RAII scope guard for the thread-local hostgroup override channel.
+ *
+ * Sets @c passthrough_audit_hostgroup_override on construction and
+ * restores it (to -1) on destruction, even when the protected call
+ * unwinds via an exception. The previous implementation cleared the
+ * TLS value only on the normal return path; a throwing
+ * @c nlohmann::json operation inside @c MySQL_Event::write or a
+ * @c flush_and_rotate failure would leave the TLS set, and the NEXT
+ * unrelated audit event on the same worker thread would silently
+ * inherit the stale hostgroup -- mis-tagging e.g. a
+ * @c PROXYSQL_MYSQL_AUTH_QUIT with the previous probe's HG.
+ *
+ * Saving the prior value (instead of unconditionally clearing) also
+ * handles the (currently unused) re-entrant case: if a future hook
+ * recursively triggers a hostgroup-tagged audit emission, the inner
+ * call's override is undone on inner-scope exit and the outer call
+ * sees its own value intact.
+ */
+struct PassthroughAuditHostgroupScope {
+	int saved;
+	explicit PassthroughAuditHostgroupScope(int hg) : saved(passthrough_audit_hostgroup_override) {
+		passthrough_audit_hostgroup_override = hg;
+	}
+	~PassthroughAuditHostgroupScope() {
+		passthrough_audit_hostgroup_override = saved;
+	}
+	PassthroughAuditHostgroupScope(const PassthroughAuditHostgroupScope&) = delete;
+	PassthroughAuditHostgroupScope& operator=(const PassthroughAuditHostgroupScope&) = delete;
+};
+} // anonymous namespace
 
 void MySQL_Logger::log_audit_entry(
 	log_event_type _et, MySQL_Session *sess, MySQL_Data_Stream *myds,
 	char *xi, int hostgroup
 ) {
-	passthrough_audit_hostgroup_override = hostgroup;
+	PassthroughAuditHostgroupScope guard { hostgroup };
 	log_audit_entry(_et, sess, myds, xi);
-	passthrough_audit_hostgroup_override = -1;
 }
 
 void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQL_Data_Stream *myds, char *xi) {
