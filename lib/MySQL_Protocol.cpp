@@ -1504,31 +1504,64 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	 * leaks no information about whether the user exists or whether
 	 * pass-through is enabled.
 	 */
-	{
-		char* early_password = get_password(account_details, PASSWORD_TYPE::PRIMARY);
-		const bool reject_passthrough =
-			mysql_thread___passthrough_auth_enabled
-			&& mysql_thread___passthrough_auth_empty_password
-			&& early_password != NULL
-			&& early_password[0] == '\0'
-			&& (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE);
-		if (reject_passthrough) {
-			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
-				"COM_CHANGE_USER to pass-through-eligible user '%s' rejected "
-				"(Phase 1 does not support pass-through via CHANGE_USER, spec §5.4)\n",
-				user ? (const char*)user : "(null)");
-			ret = false;
-			if (pass) { free(pass); pass = NULL; }
-			if (userinfo->username) free(userinfo->username);
-			if (userinfo->password) free(userinfo->password);
-			userinfo->username = strdup((const char *)user);
-			userinfo->password = strdup((const char *)"");
-			free(early_password);
-			free_account_details(account_details);
-			userinfo->set(NULL, NULL, NULL, NULL);
-			return ret;
-		}
-		free(early_password);
+	/*
+	 * Compute the row's stored password ONCE before the rejection gate.
+	 *
+	 * get_password() bumps MyHGM->status.client_connections_sha2cached
+	 * when @c clear_text_password[PRIMARY] is the value being returned
+	 * (see the in-source comment "Only count one attempt using the cache
+	 * per connection"). An earlier version of this commit called
+	 * get_password() once for the rejection check and a second time for
+	 * the legacy block below, double-bumping that counter on every
+	 * non-rejected CHANGE_USER. Compute once and share.
+	 */
+	char* password = get_password(account_details, PASSWORD_TYPE::PRIMARY);
+
+	if (mysql_thread___passthrough_auth_enabled
+		&& mysql_thread___passthrough_auth_empty_password
+		&& password != NULL
+		&& password[0] == '\0'
+		&& (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE)) {
+		/*
+		 * Reject COM_CHANGE_USER for pass-through-eligible users (spec §5.4).
+		 *
+		 * This check MUST run BEFORE the unconditional session-state
+		 * mutations below (sess->default_hostgroup,
+		 * sess->transaction_persistent, sess->user_attributes get
+		 * overwritten from account_details for EVERY CHANGE_USER, success
+		 * or not). If we deferred this check to after those mutations, a
+		 * rejected CHANGE_USER would leave the already-authenticated
+		 * session with the pass-through target row's routing/attrs
+		 * grafted on top of the previous user's state -- observable
+		 * side-effects from a rejected attempt.
+		 *
+		 * Two cases need explicit rejection here when
+		 * passthrough_auth_enabled && passthrough_auth_empty_password is
+		 * on:
+		 *   - Empty-password row: silently violating §3.2 behavior change
+		 *     by granting passwordless CHANGE_USER access via the legacy
+		 *     branch below.
+		 *   - Unknown user (password == NULL): legacy code already
+		 *     returns ret=false a few lines down; no new guard needed.
+		 *
+		 * The rejection is silent (ret=false, generic auth failure) and
+		 * leaks no information about whether the user exists or whether
+		 * pass-through is enabled.
+		 */
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
+			"COM_CHANGE_USER to pass-through-eligible user '%s' rejected "
+			"(Phase 1 does not support pass-through via CHANGE_USER, spec §5.4)\n",
+			user ? (const char*)user : "(null)");
+		ret = false;
+		if (pass) { free(pass); pass = NULL; }
+		if (userinfo->username) free(userinfo->username);
+		if (userinfo->password) free(userinfo->password);
+		userinfo->username = strdup((const char *)user);
+		userinfo->password = strdup((const char *)"");
+		if (password) { free(password); password = NULL; }
+		free_account_details(account_details);
+		userinfo->set(NULL, NULL, NULL, NULL);
+		return ret;
 	}
 
 	// FIXME: add support for default schema and fast forward, see issue #255 and #256
@@ -1541,7 +1574,6 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	}
 	(*myds)->sess->user_attributes=account_details.attributes;
 	account_details.attributes = nullptr;
-	char* password = get_password(account_details, PASSWORD_TYPE::PRIMARY);
 
 	if (password==NULL) {
 		ret=false;
