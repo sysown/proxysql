@@ -185,20 +185,59 @@ constexpr size_t FAILURE_MAP_HARD_CAP = 100000;
 /**
  * @brief Evict the oldest entry in @p m to bring size under the cap.
  *
- * Linear scan; OK because eviction is rare (only fires when the
- * cap is hit). Caller holds failure_lock.
+ * Linear scan; OK because eviction is rare (only fires when the cap
+ * is hit). Caller holds failure_lock.
+ *
+ * Opportunistic empty-deque sweep: as we walk the map looking for the
+ * oldest non-empty deque, we also reclaim every empty-deque "zombie"
+ * we encounter. This protects against the failure mode where empty
+ * deques accumulate (because would_lockout_* only calls
+ * erase_if_empty on the specific key being checked, NOT a global
+ * sweep): under sustained-churn workload where each unique
+ * username/IP appears exactly once, no would_lockout_* call ever
+ * re-touches a given key, so prune_and_count's eviction never gets a
+ * chance to run on those zombies. The map fills with empty deques
+ * until the hard cap fires, and without this sweep evict_oldest would
+ * be forced to choose between the only remaining non-empty deque
+ * (i.e. the entry we JUST inserted) -- silently dropping the lockout
+ * signal that triggered the cap.
+ *
+ * The sweep is bounded by the current map size, and we also use a
+ * second iterator-safe pass to actually erase: collecting empty
+ * iterators during the find pass and erasing them after, so we don't
+ * invalidate @c oldest mid-iteration. The "find oldest non-empty +
+ * collect empties" is one pass; the erase loop is the second.
+ *
+ * Worst case stays O(N); attack-time cost unchanged. Best case is
+ * better because empties get removed as we go, so subsequent
+ * evict_oldest calls walk a smaller map.
  */
 void evict_oldest(
 	std::unordered_map<std::string, std::deque<uint64_t>>& m
 ) {
 	auto oldest = m.end();
 	uint64_t oldest_ts = UINT64_MAX;
+	std::vector<std::unordered_map<std::string, std::deque<uint64_t>>::iterator> empties;
 	for (auto it = m.begin(); it != m.end(); ++it) {
-		if (!it->second.empty() && it->second.front() < oldest_ts) {
+		if (it->second.empty()) {
+			empties.push_back(it);
+		} else if (it->second.front() < oldest_ts) {
 			oldest_ts = it->second.front();
 			oldest = it;
 		}
 	}
+	/* Phase 1: reclaim every empty-deque zombie. This is the work
+	 * erase_if_empty would have done lazily on a would_lockout_* call
+	 * that never came. */
+	for (auto& it : empties) {
+		m.erase(it);
+	}
+	/* Phase 2: if after sweeping zombies we're still above the cap,
+	 * drop the oldest real entry. The just-inserted entry by definition
+	 * has the LATEST timestamp at its front(), so this never picks it
+	 * up unless every other entry has been swept (in which case the
+	 * cap was never really exceeded by genuine activity -- only by
+	 * accumulated zombies). */
 	if (oldest != m.end()) {
 		m.erase(oldest);
 	}
