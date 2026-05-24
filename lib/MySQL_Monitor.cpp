@@ -746,19 +746,37 @@ void MySQL_Monitor_State_Data::init_async() {
 			" wsrep_cluster_status, pxc_maint_mode FROM HOST_STATUS_GALERA WHERE hostgroup_id=";
 		query_ += std::to_string(writer_hostgroup) + " AND hostname='" + std::string(hostname) + "' AND port=" + std::to_string(port);
 #else
-		if (strncmp(mysql->server_version, (char*)"5.7", 3) == 0 || strncmp(mysql->server_version, (char*)"8", 1) == 0) {
-			// the backend is either MySQL 5.7 or MySQL 8 : INFORMATION_SCHEMA.GLOBAL_STATUS is deprecated
-			query_ = "SELECT (SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME='WSREP_LOCAL_STATE') "
-				"wsrep_local_state, @@read_only read_only, (SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME='WSREP_LOCAL_RECV_QUEUE') wsrep_local_recv_queue , "
-				"@@wsrep_desync wsrep_desync, @@wsrep_reject_queries wsrep_reject_queries, @@wsrep_sst_donor_rejects_queries wsrep_sst_donor_rejects_queries, "
-				"(SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME='WSREP_CLUSTER_STATUS') wsrep_cluster_status , "
-				"(SELECT COALESCE(MAX(VARIABLE_VALUE),'DISABLED') FROM performance_schema.global_variables WHERE variable_name='pxc_maint_mode') pxc_maint_mode ";
-		} else {
-			// any other version
-			query_ = "SELECT (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_STATE') "
-				"wsrep_local_state, @@read_only read_only, (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_RECV_QUEUE') wsrep_local_recv_queue , "
-				"@@wsrep_desync wsrep_desync, @@wsrep_reject_queries wsrep_reject_queries, @@wsrep_sst_donor_rejects_queries wsrep_sst_donor_rejects_queries, "
-				"(SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_CLUSTER_STATUS') wsrep_cluster_status , (SELECT 'DISABLED') pxc_maint_mode";
+		{
+			// performance_schema.global_status is a MySQL-only table (added in 5.7).
+			// INFORMATION_SCHEMA.GLOBAL_STATUS was deprecated in MySQL 8.0 and
+			// removed in MySQL 8.4, so MySQL >= 5.7 must use performance_schema
+			// (otherwise the monitor query fails on MySQL 8.4+/9.x). MariaDB never
+			// implemented the performance_schema status tables and keeps
+			// GLOBAL_STATUS in information_schema across all versions, so it must
+			// be excluded explicitly (atoi("10.x-MariaDB") >= 8 would otherwise
+			// route it to the performance_schema branch).
+			// (The enclosing braces are required: this is a `switch` case body
+			// and the variable declarations below are jumped over by sibling
+			// `case` labels — without a scope, GCC errors with "jump to case
+			// label" / "crosses initialization".)
+			const char *sv = mysql->server_version;
+			bool is_mariadb = (sv != NULL && strstr(sv, "MariaDB") != NULL);
+			int sv_major = (sv != NULL) ? atoi(sv) : 0;
+			bool use_perf_schema = !is_mariadb &&
+				(sv_major >= 8 || (sv_major == 5 && sv != NULL && strncmp(sv, "5.7", 3) == 0));
+			if (use_perf_schema) {
+				query_ = "SELECT (SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME='WSREP_LOCAL_STATE') "
+					"wsrep_local_state, @@read_only read_only, (SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME='WSREP_LOCAL_RECV_QUEUE') wsrep_local_recv_queue , "
+					"@@wsrep_desync wsrep_desync, @@wsrep_reject_queries wsrep_reject_queries, @@wsrep_sst_donor_rejects_queries wsrep_sst_donor_rejects_queries, "
+					"(SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME='WSREP_CLUSTER_STATUS') wsrep_cluster_status , "
+					"(SELECT COALESCE(MAX(VARIABLE_VALUE),'DISABLED') FROM performance_schema.global_variables WHERE variable_name='pxc_maint_mode') pxc_maint_mode ";
+			} else {
+				// MariaDB Galera (any version) and legacy MySQL/PXC < 5.7
+				query_ = "SELECT (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_STATE') "
+					"wsrep_local_state, @@read_only read_only, (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_RECV_QUEUE') wsrep_local_recv_queue , "
+					"@@wsrep_desync wsrep_desync, @@wsrep_reject_queries wsrep_reject_queries, @@wsrep_sst_donor_rejects_queries wsrep_sst_donor_rejects_queries, "
+					"(SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_CLUSTER_STATUS') wsrep_cluster_status , (SELECT 'DISABLED') pxc_maint_mode";
+			}
 		}
 #endif // TEST_GALERA
 		task_timeout_ = mysql_thread___monitor_galera_healthcheck_timeout;
@@ -1045,6 +1063,7 @@ mon_metrics_map = std::make_tuple(
 
 MySQL_Monitor::MySQL_Monitor() {
 	dns_cache = std::make_shared<DNS_Cache>();
+	dns_cache->set_counters(&dns_cache_queried, &dns_cache_lookup_success, &dns_cache_record_updated);
 	GloMyMon = this;
 
 	My_Conn_Pool=new MySQL_Monitor_Connection_Pool();
@@ -1185,9 +1204,9 @@ void MySQL_Monitor::p_update_metrics() {
 		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_read_only_check_err], GloMyMon->read_only_check_ERR);
 		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_replication_lag_check_ok], GloMyMon->replication_lag_check_OK);
 		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_replication_lag_check_err], GloMyMon->replication_lag_check_ERR);
-		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_dns_cache_queried], GloMyMon->dns_cache_queried);
-		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_dns_cache_lookup_success], GloMyMon->dns_cache_lookup_success);
-		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_dns_cache_record_updated], GloMyMon->dns_cache_record_updated);
+		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_dns_cache_queried], GloMyMon->dns_cache_queried.load());
+		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_dns_cache_lookup_success], GloMyMon->dns_cache_lookup_success.load());
+		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_dns_cache_record_updated], GloMyMon->dns_cache_record_updated.load());
 	}
 }
 
@@ -2293,16 +2312,23 @@ void * monitor_galera_thread(const std::vector<MySQL_Monitor_State_Data*>& data)
 		mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, q2);
 		free(q2);
 #else
-		char *sv = mmsd->mysql->server_version;
-		if (strncmp(sv,(char *)"5.7",3)==0 || strncmp(sv,(char *)"8",1)==0) {
-			// the backend is either MySQL 5.7 or MySQL 8 : INFORMATION_SCHEMA.GLOBAL_STATUS is deprecated
+		// Same MariaDB / MySQL 8.4+ consideration as the synchronous Galera
+		// healthcheck above (lib/MySQL_Monitor.cpp:749): MariaDB always uses
+		// INFORMATION_SCHEMA; non-MariaDB MySQL >= 5.7 must use
+		// performance_schema (INFORMATION_SCHEMA.GLOBAL_STATUS removed in 8.4).
+		const char *sv = mmsd->mysql->server_version;
+		bool is_mariadb = (sv != NULL && strstr(sv, "MariaDB") != NULL);
+		int sv_major = (sv != NULL) ? atoi(sv) : 0;
+		bool use_perf_schema = !is_mariadb &&
+			(sv_major >= 8 || (sv_major == 5 && sv != NULL && strncmp(sv, "5.7", 3) == 0));
+		if (use_perf_schema) {
 			mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT (SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME='WSREP_LOCAL_STATE') "
 			"wsrep_local_state, @@read_only read_only, (SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME='WSREP_LOCAL_RECV_QUEUE') wsrep_local_recv_queue , "
 			"@@wsrep_desync wsrep_desync, @@wsrep_reject_queries wsrep_reject_queries, @@wsrep_sst_donor_rejects_queries wsrep_sst_donor_rejects_queries, "
 			"(SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME='WSREP_CLUSTER_STATUS') wsrep_cluster_status , "
 			"(SELECT COALESCE(MAX(VARIABLE_VALUE),'DISABLED') FROM performance_schema.global_variables WHERE variable_name='pxc_maint_mode') pxc_maint_mode ");
 		} else {
-			// any other version
+			// MariaDB Galera (any version) and legacy MySQL/PXC < 5.7
 			mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_STATE') "
 			"wsrep_local_state, @@read_only read_only, (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_RECV_QUEUE') wsrep_local_recv_queue , "
 			"@@wsrep_desync wsrep_desync, @@wsrep_reject_queries wsrep_reject_queries, @@wsrep_sst_donor_rejects_queries wsrep_sst_donor_rejects_queries, "
@@ -4622,169 +4648,9 @@ __sleep_monitor_replication_lag:
 	return NULL;
 }
 
-bool validate_ip(const std::string& ip) {
-
-	// check if ip is vaild IPV4 ip address
-	struct sockaddr_in sa4;
-	if (inet_pton(AF_INET, ip.c_str(), &(sa4.sin_addr)) != 0)
-		return true;
-
-	// check if ip is vaild IPV6 ip address
-	struct sockaddr_in6 sa6;
-	if (inet_pton(AF_INET6, ip.c_str(), &(sa6.sin6_addr)) != 0)
-		return true;
-
-	return false;
-}
-
-std::string get_connected_peer_ip_from_socket(int socket_fd) {
-	std::string result;
-	char ip_addr[INET6_ADDRSTRLEN];
-
-	union {
-		struct sockaddr_in in;
-		struct sockaddr_in6 in6;
-	} custom_sockaddr;
-
-	struct sockaddr* addr = (struct sockaddr*)malloc(sizeof(custom_sockaddr));
-	socklen_t addrlen = sizeof(custom_sockaddr);
-	memset(addr, 0, sizeof(custom_sockaddr));
-
-	int rc = getpeername(socket_fd, addr, &addrlen);
-
-	if (rc == 0) {
-		if (addr->sa_family == AF_INET) {
-			struct sockaddr_in* ipv4 = (struct sockaddr_in*)addr;
-			inet_ntop(addr->sa_family, &ipv4->sin_addr, ip_addr, INET_ADDRSTRLEN);
-		}
-		else if (addr->sa_family == AF_INET6) {
-			struct sockaddr_in6* ipv6 = (struct sockaddr_in6*)addr;
-			inet_ntop(addr->sa_family, &ipv6->sin6_addr, ip_addr, INET6_ADDRSTRLEN);
-		}
-
-		result = ip_addr;
-	}
-
-	free(addr);
-
-	return result;
-}
-
-template<class T>
-std::string debug_iplisttostring(const T& ips) {
-	std::stringstream sstr;
-
-	for (const std::string& ip : ips)
-		sstr << ip << " ";
-
-	return sstr.str();
-}
-
-void* monitor_dns_resolver_thread(const std::vector<DNS_Resolve_Data*>& dns_resolve_data_list) {
-	assert(!dns_resolve_data_list.empty());
-	DNS_Resolve_Data* dns_resolve_data = dns_resolve_data_list.front();
-
-	struct addrinfo hints, *res = NULL;
-
-	/* set hints for getaddrinfo */
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_protocol = IPPROTO_TCP; 
-	hints.ai_socktype = SOCK_STREAM;
-	/* AI_ADDRCONFIG: IPv4 addresses are returned in the list pointed to by res only if the
-       local system has at least one IPv4 address configured, and IPv6
-       addresses are returned only if the local system has at least one
-       IPv6 address configured.  The loopback address is not considered
-       for this case as valid as a configured address.  This flag is
-	        useful on, for example, IPv4-only systems, to ensure that
-	        getaddrinfo() does not return IPv6 socket addresses that would
-	        always fail in connect or bind. */
-	hints.ai_flags = AI_ADDRCONFIG;
-	hints.ai_family = mysql_resolution_family_to_ai_family(mysql_thread___resolution_family);
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Resolving hostname:[%s] to its mapped IP address.\n", dns_resolve_data->hostname.c_str());
-	int gai_rc = getaddrinfo(dns_resolve_data->hostname.c_str(), NULL, &hints, &res);
-	
-	if (gai_rc != 0 || !res)
-	{
-		proxy_error("An error occurred while resolving hostname: %s [%d]\n", dns_resolve_data->hostname.c_str(), gai_rc);
-		goto __error;
-	}
-
-	try {
-		std::vector<std::string> ips;
-		ips.reserve(64); 
-
-		char ip_addr[INET6_ADDRSTRLEN];
-
-		for (auto p = res; p != NULL; p = p->ai_next) {
-			
-			if (p->ai_family == AF_INET) {
-				struct sockaddr_in* ipv4 = (struct sockaddr_in*)p->ai_addr;
-				inet_ntop(p->ai_addr->sa_family, &ipv4->sin_addr, ip_addr, INET_ADDRSTRLEN);
-				ips.push_back(ip_addr);
-			}
-			else {
-				struct sockaddr_in6* ipv6 = (struct sockaddr_in6*)p->ai_addr;
-				inet_ntop(p->ai_addr->sa_family, &ipv6->sin6_addr, ip_addr, INET6_ADDRSTRLEN);
-				ips.push_back(ip_addr);
-			}
-		}
-
-		freeaddrinfo(res);
-
-		if (!ips.empty()) {
-
-			bool to_update_cache = false;
-			int cache_ttl = dns_resolve_data->ttl;
-			if (dns_resolve_data->ttl > dns_resolve_data->refresh_intv) {
-				thread_local std::mt19937 gen(std::random_device{}());
-				const int jitter = static_cast<int>(dns_resolve_data->ttl * 0.025);
-				std::uniform_int_distribution<int> dis(-jitter, jitter);
-				cache_ttl += dis(gen);
-			}
-
-			if (!dns_resolve_data->cached_ips.empty()) {
-
-				if (dns_resolve_data->cached_ips.size() == ips.size()) {
-					for (const std::string& ip : ips) {
-
-						if (dns_resolve_data->cached_ips.find(ip) == dns_resolve_data->cached_ips.end()) {
-							to_update_cache = true;
-							break;
-						}
-					}
-				}
-				else
-					to_update_cache = true;
-
-				// only update dns_records_bookkeeping
-				if (!to_update_cache) {
-					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "DNS cache record already up-to-date. (Hostname:[%s] IP:[%s])\n", dns_resolve_data->hostname.c_str(), debug_iplisttostring(ips).c_str());
-					dns_resolve_data->result.set_value(std::make_tuple<>(true, DNS_Cache_Record(dns_resolve_data->hostname, std::move(dns_resolve_data->cached_ips), monotonic_time() + (1000 * cache_ttl))));
-				}
-			}
-			else
-				to_update_cache = true;
-
-			if (to_update_cache) {
-				dns_resolve_data->result.set_value(std::make_tuple<>(true, DNS_Cache_Record(dns_resolve_data->hostname, ips, monotonic_time() + (1000 * cache_ttl))));
-				dns_resolve_data->dns_cache->add(dns_resolve_data->hostname, std::move(ips));
-			}
-
-			return NULL;
-		}
-	}
-	catch (std::exception& ex) {
-		proxy_error("An exception occurred while resolving hostname: %s [%s]\n", dns_resolve_data->hostname.c_str(), ex.what());
-	}
-	catch (...) {
-		proxy_error("An unknown exception has occurred while resolving hostname: %s\n", dns_resolve_data->hostname.c_str());
-	}
-
-__error:	
-	dns_resolve_data->result.set_value(std::make_tuple<>(false, DNS_Cache_Record()));
-
-	return NULL;
-}
+// validate_ip(), get_connected_peer_ip_from_socket(), debug_iplisttostring()
+// and monitor_dns_resolver_thread() moved to lib/DNS_Cache.cpp so they can
+// back both MySQL_Monitor and PgSQL_Monitor.
 
 void* MySQL_Monitor::monitor_dns_cache() {
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
@@ -4946,6 +4812,7 @@ void* MySQL_Monitor::monitor_dns_cache() {
 							dns_resolve_data->ttl = mysql_thread___monitor_local_dns_cache_ttl;
 							dns_resolve_data->refresh_intv = mysql_thread___monitor_local_dns_cache_refresh_interval;
 							dns_resolve_data->dns_cache = dns_cache;
+							dns_resolve_data->ai_family = mysql_resolution_family_to_ai_family(mysql_thread___resolution_family);
 							dns_resolve_result.emplace_back(dns_resolve_data->result.get_future());
 
 							proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Removing expired DNS record from bookkeeper. (Hostname:[%s] IP:[%s])\n", itr->hostname_.c_str(), debug_iplisttostring(dns_resolve_data->cached_ips).c_str());
@@ -4998,6 +4865,7 @@ void* MySQL_Monitor::monitor_dns_cache() {
 					dns_resolve_data->ttl = mysql_thread___monitor_local_dns_cache_ttl;
 					dns_resolve_data->refresh_intv = mysql_thread___monitor_local_dns_cache_refresh_interval;
 					dns_resolve_data->dns_cache = dns_cache;
+					dns_resolve_data->ai_family = mysql_resolution_family_to_ai_family(mysql_thread___resolution_family);
 					dns_resolve_result.emplace_back(dns_resolve_data->result.get_future());
 					dns_resolver_queue.add(new WorkItem<DNS_Resolve_Data>(dns_resolve_data.release(), monitor_dns_resolver_thread));
 					usleep(delay_us);
@@ -6832,8 +6700,12 @@ bool MySQL_Monitor::_dns_cache_update(const std::string &hostname, std::vector<s
 		dns_cache_thread = GloMyMon->dns_cache;
 
 	if (dns_cache_thread) {
+		// Render the IP list for the debug log BEFORE moving the vector
+		// into add_if_not_exist; reading the moved-from vector would yield
+		// "valid but unspecified" content (typically empty).
+		const std::string ip_list_for_log = debug_iplisttostring(ip_address);
 		if (dns_cache_thread->add_if_not_exist(trim(hostname), std::move(ip_address))) {
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Direct DNS cache update. (Hostname:[%s] IP:[%s])\n", hostname.c_str(), debug_iplisttostring(ip_address).c_str());
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Direct DNS cache update. (Hostname:[%s] IP:[%s])\n", hostname.c_str(), ip_list_for_log.c_str());
 			return true;
 		}
 	}
@@ -6848,133 +6720,8 @@ void MySQL_Monitor::trigger_dns_cache_update() {
 	}
 }
 
-bool DNS_Cache::add(const std::string& hostname, std::vector<std::string>&& ips) {
-
-	if (!enabled) return false;
-
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Updating DNS cache. (Hostname:[%s] IP:[%s])\n", hostname.c_str(), debug_iplisttostring(ips).c_str());
-	int rc = pthread_rwlock_wrlock(&rwlock_);
-	assert(rc == 0);
-	auto& ip_addr = records[hostname];
-	ip_addr.ips = std::move(ips);
-	__sync_fetch_and_and(&ip_addr.counter, 0);
-	rc = pthread_rwlock_unlock(&rwlock_);
-	assert(rc == 0);
-
-	if (GloMyMon)
-		__sync_fetch_and_add(&GloMyMon->dns_cache_record_updated, 1);
-
-	return true;
-}
-
-bool DNS_Cache::add_if_not_exist(const std::string& hostname, std::vector<std::string>&& ips) {
-	if (!enabled) return false;
-
-	int rc = pthread_rwlock_wrlock(&rwlock_);
-	assert(rc == 0);
-	if (records.find(hostname) == records.end()) {
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Updating DNS cache. (Hostname:[%s] IP:[%s])\n", hostname.c_str(), debug_iplisttostring(ips).c_str());
-		auto& ip_addr = records[hostname];
-		ip_addr.ips = std::move(ips);
-		__sync_fetch_and_and(&ip_addr.counter, 0);
-	}
-	rc = pthread_rwlock_unlock(&rwlock_);
-	assert(rc == 0);
-
-	if (GloMyMon)
-		__sync_fetch_and_add(&GloMyMon->dns_cache_record_updated, 1);
-
-	return true;
-}
-
-std::string DNS_Cache::get_next_ip(const IP_ADDR& ip_addr) const {
-
-	if (ip_addr.ips.empty())
-		return "";
-
-	const auto counter_val = __sync_fetch_and_add(const_cast<unsigned long*>(&ip_addr.counter), 1);
-
-	return ip_addr.ips[counter_val%ip_addr.ips.size()];
-}
-
-std::string DNS_Cache::lookup(const std::string& hostname, size_t* ip_count) const {
-	if (!enabled) return "";
-
-	std::string ip;
-	
-	__sync_fetch_and_add(&GloMyMon->dns_cache_queried, 1);
-
-	int rc = pthread_rwlock_rdlock(&rwlock_);
-	assert(rc == 0);
-	auto itr = records.find(hostname);
-
-	if (itr != records.end()) {
-		ip = get_next_ip(itr->second);
-
-		if (ip_count)
-			*ip_count = itr->second.ips.size();
-
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "DNS cache lookup success. (Hostname:[%s] IP returned:[%s])\n", hostname.c_str(), ip.c_str());
-	}
-	else {
-		if (ip_count) 
-			*ip_count = 0;
-	}
-	rc = pthread_rwlock_unlock(&rwlock_);
-	assert(rc == 0);
-
-	if (!ip.empty() && GloMyMon) {
-		__sync_fetch_and_add(&GloMyMon->dns_cache_lookup_success, 1);
-	}
-
-	return ip;
-}
-
-void DNS_Cache::remove(const std::string& hostname) {
-	bool item_removed = false;
-
-	int rc = pthread_rwlock_wrlock(&rwlock_);
-	assert(rc == 0);
-	auto itr = records.find(hostname);
-	if (itr != records.end()) {
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Removing DNS cache record. (Hostname:[%s] IP:[%s])\n", hostname.c_str(), debug_iplisttostring(itr->second.ips).c_str());
-		records.erase(itr);
-		item_removed = true;
-	}
-	rc = pthread_rwlock_unlock(&rwlock_);
-
-	if (item_removed && GloMyMon)
-		__sync_fetch_and_add(&GloMyMon->dns_cache_record_updated, 1);
-
-	assert(rc == 0);
-
-	
-}
-
-void DNS_Cache::clear() {
-	size_t records_removed = 0;
-	int rc = pthread_rwlock_wrlock(&rwlock_);
-	assert(rc == 0);
-	records_removed = records.size();
-	records.clear();
-	rc = pthread_rwlock_unlock(&rwlock_);
-	assert(rc == 0);
-	if (records_removed)
-		__sync_fetch_and_add(&GloMyMon->dns_cache_record_updated, records_removed);
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "DNS cache was cleared.\n");
-}
-
-bool DNS_Cache::empty() const {
-	bool result = true;
-
-	int rc = pthread_rwlock_rdlock(&rwlock_);
-	assert(rc == 0);
-	result = records.empty();
-	rc = pthread_rwlock_unlock(&rwlock_);
-	assert(rc == 0);
-
-	return result;
-}
+// DNS_Cache::add(), add_if_not_exist(), get_next_ip(), lookup(), remove(),
+// clear(), and empty() moved to lib/DNS_Cache.cpp.
 
 #define NEXT_IMMEDIATE(new_st) do { async_state_machine_=new_st; goto __again; } while (0)
 

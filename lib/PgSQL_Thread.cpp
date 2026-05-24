@@ -356,13 +356,13 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"monitor_slave_lag_when_null",
 */
 	(char*)"monitor_threads",
+	(char*)"monitor_local_dns_cache_ttl",
+	(char*)"monitor_local_dns_cache_refresh_interval",
+	(char*)"monitor_local_dns_resolver_queue_maxsize",
 /*
 	(char*)"monitor_threads_min",
 	(char*)"monitor_threads_max",
 	(char*)"monitor_threads_queue_maxsize",
-	(char*)"monitor_local_dns_cache_ttl",
-	(char*)"monitor_local_dns_cache_refresh_interval",
-	(char*)"monitor_local_dns_resolver_queue_maxsize",
 	(char*)"monitor_wait_timeout",
 */
 	(char*)"monitor_writer_is_also_reader",
@@ -4056,6 +4056,9 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___monitor_read_only_timeout = GloPTH->get_variable_int((char*)"monitor_read_only_timeout");
 	pgsql_thread___monitor_read_only_max_timeout_count = GloPTH->get_variable_int((char*)"monitor_read_only_max_timeout_count");
 	pgsql_thread___monitor_threads = GloPTH->get_variable_int((char*)"monitor_threads");
+	pgsql_thread___monitor_local_dns_cache_ttl = GloPTH->get_variable_int((char*)"monitor_local_dns_cache_ttl");
+	pgsql_thread___monitor_local_dns_cache_refresh_interval = GloPTH->get_variable_int((char*)"monitor_local_dns_cache_refresh_interval");
+	pgsql_thread___monitor_local_dns_resolver_queue_maxsize = GloPTH->get_variable_int((char*)"monitor_local_dns_resolver_queue_maxsize");
 	/* NOTE: Disabled until 'pt-heartbeat' supports PostgreSQL is fixed: https://perconadev.atlassian.net/browse/PT-2030
 	if (pgsql_thread___monitor_replication_lag_use_percona_heartbeat) free(pgsql_thread___monitor_replication_lag_use_percona_heartbeat);
 	pgsql_thread___monitor_replication_lag_use_percona_heartbeat = GloPTH->get_variable_string((char*)"monitor_replication_lag_use_percona_heartbeat");
@@ -4752,6 +4755,24 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		{
 			pta[0] = (char*)"PgSQL_Monitor_non_ssl_connections_OK";
 			sprintf(buf, "%lu", GloPgMon->non_ssl_connections_OK);
+			pta[1] = buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0] = (char*)"PgSQL_Monitor_dns_cache_queried";
+			snprintf(buf, sizeof(buf), "%llu", GloPgMon->dns_cache_queried.load());
+			pta[1] = buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0] = (char*)"PgSQL_Monitor_dns_cache_lookup_success";
+			snprintf(buf, sizeof(buf), "%llu", GloPgMon->dns_cache_lookup_success.load());
+			pta[1] = buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0] = (char*)"PgSQL_Monitor_dns_cache_record_updated";
+			snprintf(buf, sizeof(buf), "%llu", GloPgMon->dns_cache_record_updated.load());
 			pta[1] = buf;
 			result->add_row(pta);
 		}

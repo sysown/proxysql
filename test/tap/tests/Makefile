@@ -390,16 +390,14 @@ test_mysqlx_route_drop_inflight-t: test_mysqlx_route_drop_inflight-t.cpp $(PROXY
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) -lprotobuf -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
 
-# Behavioural validation TAP scaffolding for issue #5678 part (a): runtime
-# is skip_all() unless MYSQLX_SIGTERM_INFLIGHT_OPT_IN=1 is set. The body
-# would mirror behavioral_validation.py --scenario sigterm; today it
-# refuses to run automated and points operators at that script. Link
-# line keeps -lssl/-lcrypto and -lmariadbclient because libtap.so pulls
-# in those symbols (admin connection helpers); we don't use protobuf
-# here so we omit -lprotobuf and the .pb.o objects.
-test_mysqlx_sigterm_inflight-t: test_mysqlx_sigterm_inflight-t.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) $< \
-		$(IDIRS) $(LDIRS) $(OPT) -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
+# test_mysqlx_sigterm_inflight-t (the C++ stub binary) was deleted in the
+# same PR that removed skip_all() from the framework. The stub had never
+# been more than a skip_all() guard pointing operators at the real
+# implementation, which lives in
+# test/scripts/mysqlx/behavioral_validation.py --scenario sigterm. Once
+# skip_all was removed, the stub had no purpose other than to BAIL_OUT
+# on invocation, so the source and this Makefile target were removed
+# together. The python scenario is the canonical sigterm-inflight test.
 
 
 ### clean targets

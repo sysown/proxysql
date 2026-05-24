@@ -101,6 +101,8 @@ static std::unique_ptr<ProxySQL_PluginManager> GloPluginManager;
 #endif /* PROXYSQL40 */
 
 std::thread* pgsql_monitor_thread = nullptr;
+pthread_t pgsql_monitor_dns_cache_thread {};
+bool pgsql_monitor_dns_cache_thread_started = false;
 
 extern int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg);
 
@@ -1126,7 +1128,7 @@ void ProxySQL_Main_join_all_threads() {
 		GloMyMon->shutdown=true;
 	}
 	if (GloPgMon) {
-		GloPgMon->shutdown=true;
+		GloPgMon->shutdown.store(true, std::memory_order_release);
 	}
 	// join GloMyMon thread
 	if (GloMyMon && MyMon_thread) {
@@ -1146,6 +1148,10 @@ void ProxySQL_Main_join_all_threads() {
 #ifdef DEBUG
 		std::cerr << "GloPgMon joined in ";
 #endif
+	}
+	if (pgsql_monitor_dns_cache_thread_started) {
+		pthread_join(pgsql_monitor_dns_cache_thread, NULL);
+		pgsql_monitor_dns_cache_thread_started = false;
 	}
 	/* Unified QC Purge Thread for both MySQL and PgSQL query cache
 	// join GloMyQC thread
@@ -1723,6 +1729,17 @@ bool ProxySQL_Main_init_phase3___start_all() {
 		{
 			cpu_timer t;
 			pgsql_monitor_thread = new std::thread(&PgSQL_monitor_scheduler_thread);
+			// DNS cache lives independently of the monitor scheduler so it
+			// stays warm even when pgsql-monitor_enabled is later toggled off.
+			pthread_attr_t attr;
+			pthread_attr_init(&attr);
+			pthread_attr_setstacksize(&attr, 2048 * 1024);
+			if (pthread_create(&pgsql_monitor_dns_cache_thread, &attr, &PgSQL_monitor_dns_cache_pthread, NULL) == 0) {
+				pgsql_monitor_dns_cache_thread_started = true;
+			} else {
+				proxy_error("Thread creation: PgSQL DNS cache\n");
+			}
+			pthread_attr_destroy(&attr);
 #ifdef DEBUG
 			std::cerr << "Main phase3 : PgSQL Monitor initialized in ";
 #endif
