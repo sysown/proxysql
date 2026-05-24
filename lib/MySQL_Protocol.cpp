@@ -2565,6 +2565,44 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 			&& vars1.user != NULL
 			&& (empty_pw_case || unknown_user_case)) {
 
+			/**
+			 * @brief Username allowlist gate (spec §7.1).
+			 *
+			 * When @c mysql-passthrough_auth_username_pattern is set,
+			 * only usernames that FullMatch the regex may drive a probe.
+			 * Defaults to "" which allows every username (back-compat),
+			 * but the spec lists this as the primary mitigation against
+			 * unknown-user enumeration: an admin enabling
+			 * @c passthrough_auth_unknown_users=true SHOULD set a pattern
+			 * to constrain which usernames may even reach the probe path.
+			 *
+			 * Failure mode: not in allowlist -> generic auth failure with
+			 * no further information leak. The pattern check happens
+			 * BEFORE cache lookup so a denied username never even gets a
+			 * cache-hit response (preventing trivial enumeration via
+			 * timing of "user was in cache" vs "user wasn't").
+			 *
+			 * Applies to BOTH empty_pw_case and unknown_user_case --
+			 * operators may want to constrain which admin-provisioned
+			 * empty-password rows can pass-through too.
+			 */
+			const char *pattern_raw =
+				mysql_thread___passthrough_auth_username_pattern;
+			if (pattern_raw != NULL && pattern_raw[0] != '\0') {
+				const bool allowed =
+					GloMyPTAuthCache->username_allowed(
+						std::string((const char*)vars1.user),
+						std::string(pattern_raw));
+				if (!allowed) {
+					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
+						"pass-through auth refused: user='%s' does not match "
+						"mysql-passthrough_auth_username_pattern\n",
+						(const char*)vars1.user);
+					ret = false;
+					return ret;
+				}
+			}
+
 			// Unknown-user case: synthesize routing/schema defaults from
 			// globals (spec §3.5) directly onto the session, since there's
 			// no mysql_users row to drive PPHR_5passwordTrue.

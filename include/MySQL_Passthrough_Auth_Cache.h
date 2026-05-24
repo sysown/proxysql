@@ -10,6 +10,16 @@
 #include <unordered_map>
 #include <vector>
 
+/**
+ * @brief Forward declaration of re2::RE2 to keep this header light.
+ *
+ * The full re2/re2.h pulls in a large set of headers and dependencies; we
+ * only need a pointer to RE2 in the class state, so a forward declaration
+ * suffices. The translation unit that owns the compiled regex
+ * (lib/MySQL_Passthrough_Auth_Cache.cpp) includes the full header.
+ */
+namespace re2 { class RE2; }
+
 #ifdef DEBUG
 #define MYSQL_PASSTHROUGH_AUTH_CACHE_DEB "_DEBUG"
 #else
@@ -40,6 +50,23 @@ class MySQL_Passthrough_Auth_Cache {
 		mutable pthread_mutex_t failure_lock;
 		mutable std::unordered_map<std::string, std::deque<uint64_t>> failures_by_user;
 		mutable std::unordered_map<std::string, std::deque<uint64_t>> failures_by_ip;
+
+		/**
+		 * @brief Compiled-regex cache for the username allowlist (spec §7.1).
+		 *
+		 * Compiling an re2::RE2 is cheap (single-digit microseconds) but
+		 * is paid every time a candidate connect is checked. Cache the
+		 * last-seen pattern string alongside its compiled form so that as
+		 * long as @c mysql-passthrough_auth_username_pattern is unchanged
+		 * we hit the compiled form. A pattern change (admin SET, reload)
+		 * triggers a re-compile under @c pattern_lock.
+		 *
+		 * Holds a raw pointer (forward-declared above) rather than
+		 * unique_ptr so we don't need to drag re2/re2.h into this header.
+		 */
+		mutable pthread_mutex_t pattern_lock;
+		mutable std::string compiled_pattern_str;
+		mutable re2::RE2 *compiled_pattern;
 
 	public:
 		MySQL_Passthrough_Auth_Cache();
@@ -81,6 +108,26 @@ class MySQL_Passthrough_Auth_Cache {
 		bool would_lockout_user(const std::string& username, int max_failures, uint32_t window_s) const;
 		bool would_lockout_ip(const std::string& ip, int max_failures, uint32_t window_s) const;
 		void record_failure(const std::string& username, const std::string& ip);
+
+		/**
+		 * @brief Check whether @p username matches the configured allowlist
+		 * regex (spec §7.1, mysql-passthrough_auth_username_pattern).
+		 *
+		 * @param username Frontend user attempting pass-through.
+		 * @param pattern  Regex string from the global variable. Empty means
+		 *                 "allow every username" (back-compat default).
+		 * @return @c true when the pattern is empty or @p username FullMatches
+		 *         the compiled regex; @c false when the regex is set and
+		 *         either fails to compile or the username doesn't match.
+		 *
+		 * The compiled regex is cached on the class behind @c pattern_lock;
+		 * a pattern-string change triggers a re-compile on the next call.
+		 * Match semantics are RE2 FullMatch (the entire username must
+		 * match), matching how query rules use re2 elsewhere in ProxySQL.
+		 * A regex that fails to compile is treated as a deny-all -- the
+		 * fail-safe direction for a security gate.
+		 */
+		bool username_allowed(const std::string& username, const std::string& pattern);
 
 		void print_version();
 };

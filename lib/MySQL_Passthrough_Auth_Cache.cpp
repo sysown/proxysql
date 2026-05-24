@@ -2,12 +2,15 @@
 
 #include "gen_utils.h"
 
+#include "re2/re2.h"
+
 #include <cstdio>
 
 MySQL_Passthrough_Auth_Cache::MySQL_Passthrough_Auth_Cache()
-	: inflight_probes(0) {
+	: inflight_probes(0), compiled_pattern(NULL) {
 	pthread_rwlock_init(&lock, NULL);
 	pthread_mutex_init(&failure_lock, NULL);
+	pthread_mutex_init(&pattern_lock, NULL);
 }
 
 MySQL_Passthrough_Auth_Cache::~MySQL_Passthrough_Auth_Cache() {
@@ -20,6 +23,14 @@ MySQL_Passthrough_Auth_Cache::~MySQL_Passthrough_Auth_Cache() {
 	failures_by_ip.clear();
 	pthread_mutex_unlock(&failure_lock);
 	pthread_mutex_destroy(&failure_lock);
+	pthread_mutex_lock(&pattern_lock);
+	if (compiled_pattern) {
+		delete compiled_pattern;
+		compiled_pattern = NULL;
+	}
+	compiled_pattern_str.clear();
+	pthread_mutex_unlock(&pattern_lock);
+	pthread_mutex_destroy(&pattern_lock);
 }
 
 bool MySQL_Passthrough_Auth_Cache::lookup(
@@ -166,6 +177,59 @@ void MySQL_Passthrough_Auth_Cache::record_failure(
 		failures_by_ip[ip].push_back(now_us);
 	}
 	pthread_mutex_unlock(&failure_lock);
+}
+
+bool MySQL_Passthrough_Auth_Cache::username_allowed(
+	const std::string& username, const std::string& pattern
+) {
+	/**
+	 * @brief Spec §7.1 username allowlist (re2 FullMatch).
+	 *
+	 * An empty pattern means "allow every username" -- this matches the
+	 * variable's default (mysql-passthrough_auth_username_pattern="") and
+	 * preserves the pre-fix behavior for operators who haven't opted in.
+	 */
+	if (pattern.empty()) return true;
+
+	pthread_mutex_lock(&pattern_lock);
+
+	/**
+	 * @brief Recompile when the pattern string has changed since the last
+	 * call, or when no compiled form is held yet.
+	 *
+	 * The compiled-regex cache is keyed on the exact pattern string so an
+	 * admin SET mysql-passthrough_auth_username_pattern='...' picks up
+	 * immediately on the next probe attempt without a restart or flush.
+	 * Compilation is done with RE2::Quiet to avoid log spam on operator-
+	 * supplied bad regexes.
+	 */
+	if (compiled_pattern == NULL || pattern != compiled_pattern_str) {
+		if (compiled_pattern) {
+			delete compiled_pattern;
+			compiled_pattern = NULL;
+		}
+		re2::RE2::Options opts(re2::RE2::Quiet);
+		opts.set_case_sensitive(true);
+		compiled_pattern = new re2::RE2(pattern, opts);
+		compiled_pattern_str = pattern;
+	}
+
+	/**
+	 * @brief Fail safe on bad regex.
+	 *
+	 * If the operator supplies a regex that doesn't compile (typo, unsupported
+	 * syntax, ...), RE2::ok() returns false. Treat that as a deny-all rather
+	 * than allow-all: a misconfigured allowlist must NOT default to permitting
+	 * every username (which would re-open the unknown-user surface that the
+	 * pattern exists to gate).
+	 */
+	bool ok = false;
+	if (compiled_pattern->ok()) {
+		ok = re2::RE2::FullMatch(username, *compiled_pattern);
+	}
+
+	pthread_mutex_unlock(&pattern_lock);
+	return ok;
 }
 
 void MySQL_Passthrough_Auth_Cache::print_version() {
