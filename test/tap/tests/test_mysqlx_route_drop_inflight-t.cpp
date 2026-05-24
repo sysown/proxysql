@@ -317,15 +317,18 @@ int main() {
 
 	const int N_CLIENTS = 5;
 
-	// Pre-flight: skip if we cannot reach the X-Protocol listener at all.
-	// This keeps the test inert in groups (e.g. mysqlx-e2e) where the
-	// soak setup hasn't provisioned route r1 inside ProxySQL.
+	// Pre-flight: confirm the X-Protocol listener at cfg.host:cfg.port is
+	// reachable. This test is registered in groups.json under mysqlx-soak-g1,
+	// whose harness (test/tap/groups/mysqlx-soak/setup-infras.bash and
+	// CI-mysqlx.yml's soak-tests job) starts ProxySQL with the mysqlx plugin
+	// loaded and provisions the route. If the listener is missing at the
+	// expected port, the group setup is broken — fail loud so it gets
+	// fixed, not silently hide the regression as the previous skip_all did.
 	{
 		int probe = tcp_connect(cfg.host, cfg.port);
 		if (probe < 0) {
-			skip_all("X-Protocol listener %s:%u not reachable; skipping (route-drop test requires mysqlx-soak setup)",
+			BAIL_OUT("X-Protocol listener %s:%u not reachable — mysqlx-soak group setup did not provision the route, or the test was run outside that group",
 			         cfg.host.c_str(), cfg.port);
-			return exit_status();
 		}
 		close(probe);
 	}
