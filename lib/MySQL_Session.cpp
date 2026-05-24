@@ -1742,19 +1742,38 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 			client_myds->DSS = STATE_QUERY_SENT_NET;
 		}
 		/**
-		 * @brief Operator-visible warning on every probe failure.
+		 * @brief Operator-visible signal on every probe failure, with
+		 * severity matched to the failure class.
 		 *
-		 * Without this, the only server-side trace of a pass-through
-		 * failure is in the audit log -- which is OPTIONAL and may not
-		 * be enabled. An operator diagnosing "users can't connect"
-		 * would otherwise see only the client's generic "Access denied"
-		 * with no proxysql.log signal. proxy_warning ensures the
-		 * triage-relevant reason hits the main log at WARNING level
-		 * regardless of audit settings, with enough context (username,
-		 * source IP, hostgroup) to correlate against client reports.
+		 * The default behavior emits one log line per failure, but the
+		 * level varies: under credential-stuffing or scanning traffic an
+		 * attacker can churn unique usernames at line rate, and every
+		 * one of those attempts would otherwise produce a WARNING. We
+		 * keep that signal but drop the LEVEL for the "expected under
+		 * attack" categories so they don't dominate the warning log:
+		 *
+		 *   WARNING -- proxy-side / infrastructure problems an operator
+		 *              actually needs to look at:
+		 *                no hostgroup, no healthy backend,
+		 *                mysql_init failed,
+		 *                backend probe transport failure
+		 *
+		 *   INFO    -- access-control rejections that are normal under
+		 *              hostile traffic and are already accounted for in
+		 *              the metric counters; logging at INFO keeps them
+		 *              visible without dominating the warning log:
+		 *                per-user lockout, per-ip lockout,
+		 *                inflight probe cap reached,
+		 *                missing username or cleartext,
+		 *                backend rejected probe (credentials)
+		 *
+		 * Both levels go through proxy_error_func and remain readable
+		 * regardless of audit-log settings; the difference is what
+		 * shows up under "WARNING and above" filters that operators
+		 * commonly run in production.
 		 *
 		 * The client-facing ERR remains the generic "Access denied for
-		 * user" -- this added visibility is server-side only.
+		 * user" regardless of which log level fired.
 		 */
 		const char* p_user =
 			(client_myds && client_myds->myconn && client_myds->myconn->userinfo
@@ -1763,10 +1782,23 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 		const char* p_addr =
 			(client_myds && client_myds->addr.addr)
 				? client_myds->addr.addr : "?";
-		proxy_warning(
-			"pass-through auth FAILED for user='%s' from client='%s' "
-			"hg=%d: %s\n",
-			p_user, p_addr, audit_hg, reason ? reason : "unspecified");
+		const bool infra_failure =
+			reason != NULL
+			&& (strstr(reason, "no hostgroup") != NULL
+				|| strstr(reason, "no healthy backend") != NULL
+				|| strstr(reason, "mysql_init failed") != NULL
+				|| strstr(reason, "transport") != NULL);
+		if (infra_failure) {
+			proxy_warning(
+				"pass-through auth FAILED for user='%s' from client='%s' "
+				"hg=%d: %s\n",
+				p_user, p_addr, audit_hg, reason ? reason : "unspecified");
+		} else {
+			proxy_info(
+				"pass-through auth denied for user='%s' from client='%s' "
+				"hg=%d: %s\n",
+				p_user, p_addr, audit_hg, reason ? reason : "unspecified");
+		}
 
 		/**
 		 * @brief Audit log -- failure path.
