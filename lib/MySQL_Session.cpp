@@ -1799,6 +1799,42 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 	mysql_options(probe, MYSQL_OPT_CONNECT_TIMEOUT, &timeout_s);
 	mysql_options4(probe, MYSQL_OPT_CONNECT_ATTR_ADD, "program_name", "proxysql_passthrough_probe");
 
+	/**
+	 * @brief Configure TLS for the probe→backend leg.
+	 *
+	 * Without this, the probe sends the borrowed cleartext password to the
+	 * backend over an unencrypted TCP connection. Any MITM on the
+	 * proxy↔backend network observes every probed credential -- a
+	 * material credential-exposure vector that completely undermines the
+	 * client-side TLS requirement enforced by
+	 * mysql-passthrough_auth_require_tls.
+	 *
+	 * The decision to enable TLS follows the same rule used for all
+	 * normal backend connections: respect the per-backend @c use_ssl flag
+	 * recorded on @c MySrvC. SSL parameters (ca, cert, key, etc.) are
+	 * resolved through @c MyHGM->get_Server_SSL_Params using the borrowed
+	 * username so per-user SSL configuration applies if set. The
+	 * resulting raw pointer is owned by the caller -- delete on every
+	 * exit path below.
+	 *
+	 * NOTE: the probe inherits the same fail-open behavior as the rest
+	 * of the codebase (set_ssl_params configures SSL but does not force
+	 * @c SSL_MODE_REQUIRED). If the backend is misconfigured to permit
+	 * non-SSL connections on an SSL-marked port, the probe will fall
+	 * back to cleartext. Hardening that to STRICT-mode is a project-wide
+	 * decision out of scope for this commit; document the residual risk.
+	 */
+	MySQLServers_SslParams *probe_ssl_params = NULL;
+	if (mysrvc->use_ssl && mysrvc->port) {
+		probe_ssl_params =
+			MyHGM->get_Server_SSL_Params(mysrvc->address, mysrvc->port, (char*)username);
+		if (probe_ssl_params != NULL) {
+			MySQL_Connection::set_ssl_params(probe, probe_ssl_params);
+			mysql_options(probe, MARIADB_OPT_SSL_KEYLOG_CALLBACK,
+				(void*)proxysql_keylog_write_line_callback);
+		}
+	}
+
 	MYSQL *result = mysql_real_connect(probe, mysrvc->address, username, cleartext,
 	                                   NULL, mysrvc->port, NULL, 0);
 	const bool probe_ok = (result != NULL);
@@ -1813,6 +1849,10 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 	 */
 	const unsigned int probe_errno = probe_ok ? 0 : mysql_errno(probe);
 	mysql_close(probe);
+	if (probe_ssl_params != NULL) {
+		delete probe_ssl_params;
+		probe_ssl_params = NULL;
+	}
 
 	if (!probe_ok) {
 		/**
