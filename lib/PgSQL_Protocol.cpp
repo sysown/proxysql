@@ -1304,7 +1304,9 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 				const char* val_cstr = param_val.c_str();
 				proxy_warning("Unrecognized connection parameter. Please report this as a bug for future enhancements:%s:%s\n", param_key.c_str(), val_cstr);
 				const char* escaped_str = escape_string_backslash_spaces(val_cstr);
-				sess->untracked_option_parameters = "-c " + param_key + "=" + escaped_str;
+				if (!sess->untracked_option_parameters.empty())
+					sess->untracked_option_parameters += " ";
+				sess->untracked_option_parameters += "-c " + param_key + "=" + escaped_str;
 				if (escaped_str != val_cstr)
 					free((char*)escaped_str);
 			}
