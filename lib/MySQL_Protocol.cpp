@@ -1474,6 +1474,57 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	account_details.attributes = nullptr;
 	char* password = get_password(account_details, PASSWORD_TYPE::PRIMARY);
 
+	/**
+	 * @brief Reject COM_CHANGE_USER for pass-through-eligible users (spec §5.4).
+	 *
+	 * Phase 1 explicitly does not support pass-through for COM_CHANGE_USER:
+	 * the protocol-level state machine in PPHR_passthrough_init assumes a
+	 * fresh client handshake and would corrupt a session that already has
+	 * a bound backend connection. Rather than try to drive the probe
+	 * mid-session, the spec says to reject and let the client fall back
+	 * to opening a new connection (which goes through the normal
+	 * PPHR_verify_password / pass-through path).
+	 *
+	 * Two cases need explicit rejection here when mysql-passthrough_auth_enabled
+	 * is on:
+	 *
+	 *   - Empty-password row (password != NULL, strlen == 0): without this
+	 *     guard the existing
+	 *         if (pass_len==0 && strlen(password)==0) { ret = true; }
+	 *     branch below grants passwordless CHANGE_USER access to an
+	 *     admin-provisioned pass-through row -- silently violating the
+	 *     §3.2 behavior change.
+	 *
+	 *   - Unknown user (password == NULL): already falls through to
+	 *     ret=false a few lines down (the legacy behavior), so it does NOT
+	 *     need a new guard. We could mirror the explicit form for clarity
+	 *     but it would be a no-op.
+	 *
+	 * The rejection here is silent (ret=false, generic auth failure) and
+	 * leaks no information about whether the user exists or whether
+	 * pass-through is enabled.
+	 */
+	if (mysql_thread___passthrough_auth_enabled
+		&& mysql_thread___passthrough_auth_empty_password
+		&& password != NULL
+		&& password[0] == '\0'
+		&& (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE)) {
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
+			"COM_CHANGE_USER to pass-through-eligible user '%s' rejected "
+			"(Phase 1 does not support pass-through via CHANGE_USER, spec §5.4)\n",
+			user ? (const char*)user : "(null)");
+		ret = false;
+		if (pass) { free(pass); pass = NULL; }
+		if (userinfo->username) free(userinfo->username);
+		if (userinfo->password) free(userinfo->password);
+		userinfo->username = strdup((const char *)user);
+		userinfo->password = strdup((const char *)"");
+		if (password) { free(password); password = NULL; }
+		free_account_details(account_details);
+		userinfo->set(NULL, NULL, NULL, NULL);
+		return ret;
+	}
+
 	if (password==NULL) {
 		ret=false;
 	} else {
