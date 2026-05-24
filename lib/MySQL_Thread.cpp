@@ -1570,6 +1570,41 @@ void MySQL_Threads_Handler::wrunlock() {
 void MySQL_Threads_Handler::commit() {
 	__sync_add_and_fetch(&__global_MySQL_Thread_Variables_version,1);
 	proxy_debug(PROXY_DEBUG_MYSQL_SERVER, 1, "Increasing version number to %d - all threads will notice this and refresh their variables\n", __global_MySQL_Thread_Variables_version);
+
+	/**
+	 * @brief Operator warning on dangerous pass-through configuration.
+	 *
+	 * Fires when LOAD MYSQL VARIABLES TO RUNTIME publishes a state where:
+	 *   passthrough_auth_enabled=true
+	 *   && passthrough_auth_unknown_users=true
+	 *   && passthrough_auth_username_pattern=''
+	 *
+	 * That combination turns ProxySQL into a credential-stuffing oracle
+	 * for every username an attacker can guess against the backend in
+	 * @c passthrough_default_hg: there's no allowlist constraining which
+	 * usernames may even reach the probe, and any pre-existing backend
+	 * user can be tested with the per-IP rate-limit budget. Spec §7.1
+	 * lists the @c username_pattern allowlist as the primary mitigation
+	 * and assumes operators enabling @c unknown_users will set it.
+	 *
+	 * We emit a single proxy_warning at commit time so the warning lands
+	 * exactly once per LOAD MYSQL VARIABLES TO RUNTIME -- not per worker-
+	 * thread refresh -- and is visible in the main proxysql.log
+	 * regardless of audit-log settings. If the operator subsequently
+	 * sets a pattern, the next LOAD will not re-fire the warning.
+	 */
+	if (variables.passthrough_auth_enabled
+		&& variables.passthrough_auth_unknown_users
+		&& (variables.passthrough_auth_username_pattern == NULL
+			|| variables.passthrough_auth_username_pattern[0] == '\0')) {
+		proxy_warning(
+			"pass-through auth: unknown_users=true with empty "
+			"username_pattern (hg=%d). This permits ANY username at "
+			"the probe stage; constrain with "
+			"mysql-passthrough_auth_username_pattern. See "
+			"doc/internal/passthrough_authentication.md §7.1.\n",
+			variables.passthrough_default_hg);
+	}
 }
 
 
