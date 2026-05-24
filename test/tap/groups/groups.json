@@ -391,6 +391,7 @@
   "test_passthrough_auth_admin-t" : [ "no-infra-g1" ],
   "test_passthrough_auth_e2e-t" : [ "mysql84-g4","mysql90-g4","mysql95-g4" ],
   "test_passthrough_auth_ratelimit-t" : [ "mysql84-g4","mysql90-g4","mysql95-g4" ],
+  "test_passthrough_auth_security-t" : [ "mysql84-g4","mysql90-g4","mysql95-g4" ],
   "test_passthrough_auth_unknown_user-t" : [ "mysql84-g4","mysql90-g4","mysql95-g4" ],
   "test_pgsql_replication_lag-t" : [ "pgsql-repl" ],
   "test_plugin_auth_lenenc_client_data-t" : [ "legacy-g8","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3","mysql84-g8","mysql90-g3","mysql95-g3" ],
