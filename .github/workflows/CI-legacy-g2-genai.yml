@@ -14,6 +14,15 @@ concurrency:
 jobs:
   run:
     if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
+    # `id-token: write` propagates to the reusable workflow, which uses
+    # it to mint a GitHub OIDC token for codecov-action@v4 (the only
+    # working Codecov auth path -- no static token secret exists).
+    # Permissions in reusable-workflow calls are the intersection of
+    # caller and callee, so the callee's `permissions: id-token: write`
+    # on the `tests` job is no-op without this grant here.
+    permissions:
+      contents: read
+      id-token: write
     uses: sysown/proxysql/.github/workflows/ci-legacy-g2-genai.yml@GH-Actions
     secrets: inherit
     with:
