@@ -33,13 +33,16 @@ jobs:
     #                        GHCR API returns "denied" and all 5 retry
     #                        attempts fail, again cascading the test step
     #                        to "skipped".
-    # - actions: read        actions/cache/restore@v4 reads cached build
-    #                        artifacts via the actions cache API. Without
-    #                        this the restore fails with "Failed to
-    #                        restore cache entry. Exiting as
-    #                        fail-on-cache-miss is set" even when the
-    #                        cache plainly exists, because the read API
-    #                        is permission-gated.
+    # - actions: write       actions/cache/restore@v4 reads cached build
+    #                        artifacts via the actions cache API. `read`
+    #                        is the documented minimum but is empirically
+    #                        insufficient -- the restore still fails with
+    #                        "Failed to restore cache entry" even though
+    #                        the cache exists (verified via gh api
+    #                        repos/.../actions/caches). `write` is what
+    #                        the default token grants and what the
+    #                        successful cascade runs use, so we mirror
+    #                        that here.
     #
     # Caller workflow CI-legacy-g2-genai.yml on v3.0 mirrors this list;
     # reusable-workflow permissions are the intersection of caller + callee.
@@ -48,7 +51,7 @@ jobs:
       id-token: write
       checks: write
       packages: read
-      actions: read
+      actions: write
     strategy:
       fail-fast: false
       matrix:
