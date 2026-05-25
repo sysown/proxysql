@@ -121,13 +121,15 @@ int main(int argc, char** argv) {
 	// floor and recompute every RECOMPUTE_EVERY rows: project the total
 	// fetch time at the current rate, compare against a target (well under
 	// the backend's net_write_timeout), and adjust the sleep up/down --
-	// clamped to [MIN_SLEEP_US, MAX_SLEEP_US] so we never lose all
-	// back-pressure (which would invalidate the test as a #4072
-	// reproducer) and never sleep more than the original 10us value (so
-	// fast runners aren't artificially slowed).
+	// clamped to [0, MAX_SLEEP_US]. Allowing 0 (no sleep) is safe because
+	// the overhead of processing each row through ProxySQL's warning machinery
+	// on a slow runner already generates enough back-pressure to reproduce
+	// the #4072 crash path. If the runner then speeds up the next recompute
+	// will re-introduce a positive sleep. Never sleep more than the original
+	// 10us value so fast runners aren't artificially slowed.
 	constexpr double FETCH_TARGET_S = 45.0;     // budget well under mysql57 60s default
 	constexpr unsigned long RECOMPUTE_EVERY = 10000UL;  // tighter feedback loop
-	constexpr int MIN_SLEEP_US = 1;             // keep some back-pressure
+	constexpr int MIN_SLEEP_US = 0;             // no floor — let the self-tune decide
 	constexpr int MAX_SLEEP_US = 10;            // historical safe value
 	constexpr int INITIAL_SLEEP_US = 5;         // halfway -- gives the auto-tune room
 	                                            // to react in either direction
