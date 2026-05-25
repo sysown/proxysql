@@ -2773,6 +2773,58 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 					"mysql-passthrough_auth_require_tls=true (user='%s')\n",
 					vars1.user ? (const char*)vars1.user : "(null)");
 			} else {
+				/**
+				 * @brief Push routing/schema defaults onto the session
+				 *        BEFORE driving the AuthMoreData{0x04} round-trip.
+				 *
+				 * The cache-miss + empty-pw row case never reaches the
+				 * PPHR_5passwordTrue call site further down in this
+				 * function (control returns from PPHR_passthrough_init
+				 * for the round-trip, then the second pass through
+				 * PPHR_verify_password lands at this same else-branch
+				 * and returns again from stage 5). That means the
+				 * session never gets its default_hostgroup populated
+				 * from the mysql_users row -- it stays at the
+				 * MySQL_Session::reset() sentinel (-1).
+				 *
+				 * @ref MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT
+				 * reads @c default_hostgroup to route the probe; with
+				 * the unset sentinel, @c MyHGM->MyHGC_lookup gets the
+				 * value cast to @c UINT32_MAX (4294967295), no hostgroup
+				 * exists for that id, and the handler calls
+				 * @c fail_session("no hostgroup") which generates an
+				 * ERR packet. The generate_pkt_ERR path then trips its
+				 * @c assert(0) on an unexpected DSS state, crashing
+				 * ProxySQL with a SIGABRT signal-6 backtrace.
+				 *
+				 * The cache-hit path doesn't hit this because after the
+				 * lookup hit, control falls through to PPHR_5passwordTrue
+				 * which unconditionally pushes account_details onto the
+				 * session. The unknown_user case has its own dedicated
+				 * population block above (line ~2660) that synthesizes
+				 * defaults from @c mysql-passthrough_default_hg /
+				 * @c mysql-passthrough_default_schema globals.
+				 *
+				 * Calling PPHR_5passwordTrue here mirrors what the
+				 * cache-hit fallthrough would do. The helper is
+				 * idempotent (only field-sets, no side effects) and
+				 * the call is gated on @c !unknown_user_case because
+				 * unknown_user_case's @c account_details is a
+				 * value-initialized struct (all zeros) and would
+				 * silently clobber the synthesized session defaults.
+				 *
+				 * This bug was latent until TLS was enabled on the
+				 * frontend leg: the only way to exercise the
+				 * cache-miss + empty-pw path end-to-end is to make
+				 * caching_sha2 full-auth complete, which requires
+				 * TLS on the client. The non-TLS test fixtures
+				 * failed earlier in the protocol (errno 2061,
+				 * "Couldn't read RSA public key from server") and
+				 * never reached the probe handler.
+				 */
+				if (!unknown_user_case) {
+					PPHR_5passwordTrue(ret, vars1, reply, account_details);
+				}
 				// Cache miss → drive the caching_sha2_password full-auth
 				// exchange so the client emits its cleartext, which we will
 				// then probe against the backend.
