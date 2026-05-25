@@ -158,11 +158,6 @@ jobs:
       # files from N% to M%" comment and main accumulates a historical
       # graph at https://app.codecov.io/gh/sysown/proxysql.
       #
-      # Tokenless upload via the Codecov GitHub App (installed at the org
-      # level). For public repos this works without CODECOV_TOKEN, but if
-      # a token has been added as a repo secret it will be used too --
-      # either path works.
-      #
       # `if: always()` so coverage uploads regardless of whether the unit
       # tests themselves passed; partial coverage is still useful for
       # diagnosing why a PR went red. `fail_ci_if_error: false` so a
@@ -174,14 +169,17 @@ jobs:
         files: coverage/lcov.info
         flags: unit-tests
         name: unit-tests-asan-coverage
-        # No `token:` — for public repos with the Codecov GitHub App
-        # installed at the org level, the action authenticates via the
-        # GitHub OIDC token (granted by the `permissions: id-token: write`
-        # block on this job). Passing an empty `token` value would force
-        # the action into legacy token-mode and fail on protected target
-        # branches with "Token required because branch is protected" even
-        # when the app is present. If we ever revert to private-repo
-        # workflow we'd add `token: ${{ secrets.CODECOV_TOKEN }}` back.
+        # Tokenless upload via GitHub OIDC. Codecov treats every branch
+        # as "protected" by default and rejects unauthenticated uploads
+        # with HTTP 400 "Token required because branch is protected" --
+        # this is Codecov's own branch-protection concept, unrelated to
+        # GitHub's. The fix is `use_oidc: true`, which makes the action
+        # mint a GitHub OIDC token (granted by `permissions:
+        # id-token: write` on this job) and present it to Codecov in
+        # place of a static upload token. Without `use_oidc: true` the
+        # action silently falls back to legacy tokenless mode and the
+        # upload fails.
+        use_oidc: true
         fail_ci_if_error: false
         verbose: true
 
