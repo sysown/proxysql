@@ -86,8 +86,14 @@ static unsigned int try_connect(
 	MYSQL* m = mysql_init(NULL);
 	if (!m) return UINT_MAX;
 	mysql_options(m, MYSQL_DEFAULT_AUTH, "caching_sha2_password");
+	/*
+	 * CLIENT_SSL is required on the frontend leg for caching_sha2_password
+	 * full-auth. See e2e-t for the protocol details and why ProxySQL's
+	 * PPHR_passthrough_init dispatch only supports cleartext-over-TLS.
+	 */
+	mysql_ssl_set(m, NULL, NULL, NULL, NULL, NULL);
 	const MYSQL* res = mysql_real_connect(
-		m, cl.host, user, pass, NULL, cl.port, NULL, 0
+		m, cl.host, user, pass, NULL, cl.port, NULL, CLIENT_SSL
 	);
 	const unsigned int err = res ? 0 : mysql_errno(m);
 	mysql_close(m);
@@ -162,7 +168,8 @@ int main() {
 	{
 		const vector<string> cfg {
 			"SET mysql-passthrough_auth_enabled='true'",
-			"SET mysql-passthrough_auth_require_tls='false'",
+			/* require_tls left at default 'true'; client wires CLIENT_SSL. See e2e-t for rationale. */
+			"SET mysql-passthrough_auth_require_tls='true'",
 			"SET mysql-passthrough_auth_empty_password='true'",
 			"SET mysql-passthrough_auth_unknown_users='false'",
 			string("SET mysql-passthrough_auth_max_failures_per_user='")
