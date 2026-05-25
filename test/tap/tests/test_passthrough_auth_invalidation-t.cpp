@@ -106,7 +106,15 @@ static std::pair<unsigned int, unsigned int> connect_and_query(
 ) {
 	MYSQL* m = mysql_init(NULL);
 	mysql_options(m, MYSQL_DEFAULT_AUTH, "caching_sha2_password");
-	const MYSQL* res = mysql_real_connect(m, cl.host, user, pw, NULL, cl.port, NULL, 0);
+	/*
+	 * CLIENT_SSL is required on the frontend leg for caching_sha2_password
+	 * full-auth: ProxySQL's PPHR_passthrough_init dispatches via the
+	 * cleartext-over-TLS path only (see e2e-t comment for the protocol
+	 * details). Pattern mirrors the other passthrough tests in
+	 * mysql84-g4.
+	 */
+	mysql_ssl_set(m, NULL, NULL, NULL, NULL, NULL);
+	const MYSQL* res = mysql_real_connect(m, cl.host, user, pw, NULL, cl.port, NULL, CLIENT_SSL);
 	if (!res) {
 		const unsigned int err = mysql_errno(m);
 		mysql_close(m);
@@ -193,7 +201,8 @@ int main() {
 
 	bool cfg_ok = true;
 	cfg_ok &= (do_query(admin, "SET mysql-passthrough_auth_enabled='true'") == EXIT_SUCCESS);
-	cfg_ok &= (do_query(admin, "SET mysql-passthrough_auth_require_tls='false'") == EXIT_SUCCESS);
+	/* require_tls left at default 'true'; test's connect_and_query wires CLIENT_SSL. See e2e-t for the protocol rationale. */
+	cfg_ok &= (do_query(admin, "SET mysql-passthrough_auth_require_tls='true'") == EXIT_SUCCESS);
 	cfg_ok &= (do_query(admin, "SET mysql-passthrough_auth_empty_password='true'") == EXIT_SUCCESS);
 	cfg_ok &= (do_query(admin, "SET mysql-default_authentication_plugin='caching_sha2_password'") == EXIT_SUCCESS);
 	/*
