@@ -42,7 +42,15 @@ on:
     types: [ completed ]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }}
+  # Include `github.event_name` so a workflow_run-triggered run never
+  # falls into the same group as a workflow_dispatch run on the same
+  # branch. Without this, dispatching on a feature branch while a
+  # workflow_run for v3.0 is also active cancels the dispatch even
+  # though the branches differ -- GitHub's concurrency comparison
+  # appears to ignore the head_branch suffix in practice. Two
+  # workflow_runs for the same branch still serialize via this group;
+  # so do two dispatches for the same branch.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }}
   cancel-in-progress: true
 
 env:
