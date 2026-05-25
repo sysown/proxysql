@@ -9,9 +9,16 @@
  *
  *   TLS gate (mysql-passthrough_auth_require_tls, default true):
  *     - require_tls=true + non-TLS client connect -> rejected
- *     - require_tls=false + same client connect   -> success
- *     If the gate were a no-op (always allow), the first attempt would
- *     also succeed and the differential disappears.
+ *     - require_tls=true + TLS     client connect -> success
+ *     We hold require_tls fixed and toggle only the CLIENT-side TLS
+ *     posture: that isolates the gate from any other state and the
+ *     differential proves the gate is wired (a stuck-deny gate would
+ *     reject both; a no-op gate would accept both). The original
+ *     fixture flipped the gate against a fixed non-TLS client, but
+ *     "non-TLS + gate-off" cannot complete the caching_sha2 full-auth
+ *     through pass-through dispatch (see test_passthrough_auth_e2e-t.cpp
+ *     for the protocol-level explanation), so that differential never
+ *     actually worked.
  *
  *   username_pattern (mysql-passthrough_auth_username_pattern, default ""):
  *     - pattern that does NOT match the test user      -> rejected
@@ -67,16 +74,37 @@ static int do_query(MYSQL* m, const string& q) {
  * @param req_auth_plugin Defaults to caching_sha2_password. Pass another
  *                        plugin name to exercise the non-caching_sha2
  *                        rejection in the security gates.
+ * @param use_tls         When true, wires mysql_ssl_set + CLIENT_SSL.
+ *                        Defaults to false because most scenarios in
+ *                        this test exercise EARLY rejection paths (gate
+ *                        denies / pattern denies / fail-safe denies)
+ *                        that fire BEFORE the AuthMoreData{0x04} step
+ *                        of caching_sha2_password full-auth, so they
+ *                        complete correctly on a non-TLS channel. The
+ *                        positive-path scenarios that NEED to drive
+ *                        full-auth to completion ([T2] gate=true + TLS,
+ *                        [P2] pattern matches) pass use_tls=true
+ *                        explicitly.
+ *                        See test_passthrough_auth_e2e-t.cpp for the
+ *                        full protocol-level explanation of why
+ *                        caching_sha2 full-auth requires TLS through
+ *                        ProxySQL's pass-through dispatch.
  */
 static unsigned int try_connect(
 	const CommandLine& cl, const char* user, const char* pass,
-	const char* req_auth_plugin = "caching_sha2_password"
+	const char* req_auth_plugin = "caching_sha2_password",
+	bool use_tls = false
 ) {
 	MYSQL* m = mysql_init(NULL);
 	if (!m) return UINT_MAX;
 	mysql_options(m, MYSQL_DEFAULT_AUTH, req_auth_plugin);
+	unsigned long client_flags = 0;
+	if (use_tls) {
+		mysql_ssl_set(m, NULL, NULL, NULL, NULL, NULL);
+		client_flags |= CLIENT_SSL;
+	}
 	const MYSQL* res = mysql_real_connect(
-		m, cl.host, user, pass, NULL, cl.port, NULL, 0
+		m, cl.host, user, pass, NULL, cl.port, NULL, client_flags
 	);
 	const unsigned int err = res ? 0 : mysql_errno(m);
 	mysql_close(m);
@@ -198,31 +226,40 @@ int main() {
 	ok(cfg_ok, "Base passthrough configuration applied");
 
 	/* ============================================================
-	 * TLS gate: require_tls=true blocks non-TLS, require_tls=false
-	 * allows it.
+	 * TLS gate: with require_tls=true, the gate must reject a non-TLS
+	 * client AND accept a TLS one. The differential is what proves the
+	 * gate is actually wired -- a no-op gate would accept BOTH; a
+	 * stuck-deny gate would reject BOTH. Keeping require_tls fixed at
+	 * 'true' and toggling only the client-side TLS posture isolates
+	 * the gate from any other state.
 	 *
-	 * We don't set up client-side TLS in this test (the SSL fixture
-	 * is non-trivial); instead we measure the DIFFERENTIAL. The
-	 * client is configured identically in both attempts; only the
-	 * server-side gate flips. If the gate is wired correctly, the
-	 * connect must fail under require_tls=true and succeed under
-	 * require_tls=false. A no-op gate would show both attempts
-	 * succeed (regression in PPHR_verify_password's TLS check).
+	 * (The original differential here was require_tls=true vs
+	 * require_tls=false against the SAME non-TLS client. That doesn't
+	 * actually work because the caching_sha2_password full-auth
+	 * exchange cannot complete on a non-TLS channel through ProxySQL's
+	 * pass-through dispatch -- the second attempt was always going to
+	 * fail with mysql client errno 2061, not with errno 0 as the
+	 * fixture expected. See test_passthrough_auth_e2e-t.cpp for the
+	 * protocol details. This version tests the gate symmetrically by
+	 * varying the TLS posture rather than the gate setting.)
 	 * ============================================================ */
 	{
 		set_and_load(admin, "SET mysql-passthrough_auth_require_tls='true'");
 		do_query(admin, "PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE");
-		const unsigned int err = try_connect(cl, TEST_USER, TEST_BACKEND_PW);
+		const unsigned int err = try_connect(cl, TEST_USER, TEST_BACKEND_PW,
+			"caching_sha2_password", /* use_tls */ false);
 		ok(err == ER_ACCESS_DENIED_ERROR,
 			"[T1] TLS gate active + non-TLS client -> rejected "
 			"(errno=%u, expected %u)", err, (unsigned)ER_ACCESS_DENIED_ERROR);
 	}
 	{
-		set_and_load(admin, "SET mysql-passthrough_auth_require_tls='false'");
+		/* require_tls stays 'true' (set above); only the client TLS
+		 * posture changes. */
 		do_query(admin, "PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE");
-		const unsigned int err = try_connect(cl, TEST_USER, TEST_BACKEND_PW);
+		const unsigned int err = try_connect(cl, TEST_USER, TEST_BACKEND_PW,
+			"caching_sha2_password", /* use_tls */ true);
 		ok(err == 0,
-			"[T2] TLS gate off + same non-TLS client -> success "
+			"[T2] TLS gate active + TLS client -> success "
 			"(errno=%u)", err);
 	}
 
@@ -256,7 +293,10 @@ int main() {
 	{
 		do_query(admin, "PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE");
 		set_and_load(admin, "SET mysql-passthrough_auth_username_pattern='^tap_pt_security_.*$'");
-		const unsigned int err = try_connect(cl, TEST_USER, TEST_BACKEND_PW);
+		/* TLS required: this is the positive path that must complete
+		 * the caching_sha2 full-auth exchange. See e2e-t. */
+		const unsigned int err = try_connect(cl, TEST_USER, TEST_BACKEND_PW,
+			"caching_sha2_password", /* use_tls */ true);
 		ok(err == 0,
 			"[P2] matching pattern '^tap_pt_security_.*$' allows '%s' "
 			"(errno=%u)",
@@ -300,9 +340,13 @@ int main() {
 	 *     for the reject (we want process_pkt_COM_CHANGE_USER's
 	 *     own rejection, not the eligibility short-circuit)
 	 *   - cache flushed
-	 *   - require_tls left at false (set above) -- CHANGE_USER
-	 *     doesn't drive an AuthMoreData{0x04} exchange in Phase 1
-	 *     either way; the rejection happens before any plugin work
+	 *   - require_tls is 'true' here (set in the [T*] scenarios) but
+	 *     that gate only fires inside the pass-through dispatch when
+	 *     a passthrough-eligible user reaches the AuthSwitchRequest
+	 *     path. The fixture connection below uses cl.username (a
+	 *     pre-provisioned regular user), so the gate doesn't apply to
+	 *     the pre-CHANGE_USER connect; the CHANGE_USER rejection itself
+	 *     happens in process_pkt_COM_CHANGE_USER before any plugin work.
 	 *
 	 * Assertion: mysql_change_user returns non-zero (failure).
 	 * ============================================================ */
