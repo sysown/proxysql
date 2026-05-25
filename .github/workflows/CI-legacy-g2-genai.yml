@@ -14,15 +14,22 @@ concurrency:
 jobs:
   run:
     if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
-    # `id-token: write` propagates to the reusable workflow, which uses
-    # it to mint a GitHub OIDC token for codecov-action@v4 (the only
-    # working Codecov auth path -- no static token secret exists).
-    # Permissions in reusable-workflow calls are the intersection of
-    # caller and callee, so the callee's `permissions: id-token: write`
-    # on the `tests` job is no-op without this grant here.
+    # Permissions: declaring this block switches GITHUB_TOKEN from "all
+    # default scopes" to "exactly what is listed here", and the reusable
+    # workflow only gets the intersection of caller + callee. Each entry
+    # is load-bearing:
+    #
+    # - contents: read     checkout
+    # - id-token: write    codecov-action@v4 OIDC upload (no static
+    #                      CODECOV_TOKEN secret; OIDC is the only path)
+    # - checks: write      LouisBrunner/checks-action /check-runs POST.
+    #                      Without this the first checks-action step
+    #                      fails and every subsequent test step skips,
+    #                      including the actual test run.
     permissions:
       contents: read
       id-token: write
+      checks: write
     uses: sysown/proxysql/.github/workflows/ci-legacy-g2-genai.yml@GH-Actions
     secrets: inherit
     with:
