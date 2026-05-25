@@ -24,15 +24,17 @@ jobs:
     #                      CODECOV_TOKEN secret; OIDC is the only path)
     # - checks: write      LouisBrunner/checks-action /check-runs POST.
     # - packages: read     docker pull from ghcr.io for the CI base image.
+    # - actions: read      actions/cache/restore@v4 cache reads.
     #
-    # Without checks:write the first LouisBrunner step fails and skips
-    # every test step. Without packages:read the GHCR pull returns
-    # "denied" and skips every test step. Both have been observed.
+    # All four were dropped one-by-one in successive failed runs because
+    # declaring `permissions:` makes the list exhaustive (every default
+    # scope not listed is revoked).
     permissions:
       contents: read
       id-token: write
       checks: write
       packages: read
+      actions: read
     uses: sysown/proxysql/.github/workflows/ci-legacy-g2-genai.yml@GH-Actions
     secrets: inherit
     with:
