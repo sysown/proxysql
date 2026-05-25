@@ -13,17 +13,27 @@ env:
 jobs:
   tests:
     runs-on: ubuntu-22.04
-    # `id-token: write` lets codecov/codecov-action@v4 mint a GitHub
-    # OIDC token (use_oidc: true) and present it as the Codecov upload
-    # credential. The repo has no static CODECOV_TOKEN secret -- the
-    # Codecov UI hides per-repo tokens for public repos with the
-    # GitHub App installed, so OIDC is the only working auth path.
-    # Caller workflow CI-legacy-g2-genai.yml on v3.0 also grants
-    # id-token: write; reusable-workflow permissions are the
-    # intersection of caller + callee.
+    # Permissions: declaring this block at all switches the GITHUB_TOKEN
+    # from "all default scopes" to "exactly what is listed here", so each
+    # entry below is load-bearing.
+    #
+    # - contents: read       checkout
+    # - id-token: write      lets codecov/codecov-action@v4 mint a GitHub
+    #                        OIDC token (use_oidc: true) -- the repo has
+    #                        no CODECOV_TOKEN secret, OIDC is the only
+    #                        working Codecov auth path
+    # - checks: write        LouisBrunner/checks-action posts an
+    #                        in_progress -> completed check run via the
+    #                        /check-runs API. Without this the first
+    #                        LouisBrunner step fails on permission error
+    #                        and cascades every test step to "skipped".
+    #
+    # Caller workflow CI-legacy-g2-genai.yml on v3.0 mirrors this list;
+    # reusable-workflow permissions are the intersection of caller + callee.
     permissions:
       contents: read
       id-token: write
+      checks: write
     strategy:
       fail-fast: false
       matrix:
