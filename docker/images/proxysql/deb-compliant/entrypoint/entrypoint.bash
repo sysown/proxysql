@@ -41,19 +41,17 @@ else
 	build_target="$PROXYSQL_BUILD_TYPE"
 fi
 
-# When the chassis tier is enabled (PROXYSQL40=1, or PROXYSQLGENAI=1
-# which implies PROXYSQL40 via the cascade in include/makefiles_vars.mk),
-# the build recurses into plugins/mysqlx/ which dynamically links
-# against the system libprotobuf (3.x). Some of the v4.0.0 packaging
-# images were built before plugins/mysqlx existed and do not yet ship
-# libprotobuf-dev. Install it on demand here so the plugin's pkg-config
-# check at plugins/mysqlx/Makefile:47 succeeds. The install is
-# idempotent — apt-get returns 0 if the package is already present.
-# Skip silently for v3.x builds where neither flag is set and the plugin
-# path is not exercised.
-if [[ "${PROXYSQLGENAI:-}" == "1" || "${PROXYSQL40:-}" == "1" ]]; then
+# The v4.0 chassis tier (PROXYSQL40=1) builds plugins/mysqlx/ which
+# dynamically links against the system libprotobuf (3.x). Some of the
+# v4.0.0 packaging images were built before plugins/mysqlx existed and
+# do not yet ship libprotobuf-dev. Install it on demand here so the
+# plugin's pkg-config check succeeds.  The install is idempotent —
+# apt-get returns 0 if the package is already present.  PROXYSQL40=1
+# builds and packages all v4.0 plugins — there is no separate
+# PROXYSQLGENAI flag.
+if [[ "${PROXYSQL40:-}" == "1" ]]; then
     if ! pkg-config --exists protobuf 2>/dev/null; then
-        echo "==> Installing libprotobuf-dev (required for the mysqlx plugin build under PROXYSQL40 / PROXYSQLGENAI)"
+        echo "==> Installing libprotobuf-dev (required for the mysqlx plugin build under PROXYSQL40)"
         apt-get update -qq
         apt-get install -y --no-install-recommends libprotobuf-dev
     fi
@@ -65,13 +63,10 @@ fi
 # Pass through the chassis tier flag explicitly to make. WITHTSAN /
 # WITHASAN / WITHGCOV come through via the docker-compose.yml env
 # passthrough (the Makefile reads them via $(WITHTSAN) etc.), so they
-# don't need to be replicated here. PROXYSQLGENAI=1 implies
-# PROXYSQL40=1 via the Makefile cascade, so passing one is sufficient
-# in either case — but we mirror whichever the operator set so the
-# matrix stays explicit for downstream commands that match on env.
+# don't need to be replicated here.  PROXYSQL40=1 builds and packages
+# all v4.0 plugins — PROXYSQLGENAI is no longer a separate flag.
 EXTRA=""
 [[ "${PROXYSQL40:-}" == "1" ]] && EXTRA="$EXTRA PROXYSQL40=1"
-[[ "${PROXYSQLGENAI:-}" == "1" ]] && EXTRA="$EXTRA PROXYSQLGENAI=1"
 ${MAKE} ${MAKEOPT} ${EXTRA} ${deps_target}
 ${MAKE} ${MAKEOPT} ${EXTRA} ${build_target}
 
@@ -92,10 +87,10 @@ cp -r ../tools ./tools
 cp -r ../systemd ./systemd
 
 # Plugin .so artefacts (v4.0+ chassis): the proxysql binary is the
-# loader; runtime features (mysqlx, genai/MCP) ship as separate .so
-# files installed to /usr/lib/proxysql/ and named in proxysql.cnf
-# `plugins=("...")` to be loaded.  Conditional on the same flags that
-# gated the build above so v3.x deb packaging stays unchanged.
+# loader; runtime features (mysqlx, genai/MCP, etc.) ship as separate
+# .so files installed to /usr/lib/proxysql/ and named in proxysql.cnf
+# `plugins=("...")` to be loaded.  Conditional on PROXYSQL40=1 so
+# v3.x deb packaging stays unchanged.
 mkdir -p ./plugins
 PLUGIN_FILES_BLOCK=""
 add_plugin_to_pkg() {
@@ -111,10 +106,8 @@ add_plugin_to_pkg() {
         PLUGIN_FILES_BLOCK+=$' plugins/'"${basename}"$' /usr/lib/proxysql/\n'
     fi
 }
-if [[ "${PROXYSQL40:-}" == "1" || "${PROXYSQLGENAI:-}" == "1" ]]; then
+if [[ "${PROXYSQL40:-}" == "1" ]]; then
     add_plugin_to_pkg "../plugins/mysqlx/ProxySQL_MySQLX_Plugin.so" "ProxySQL_MySQLX_Plugin.so"
-fi
-if [[ "${PROXYSQLGENAI:-}" == "1" ]]; then
     add_plugin_to_pkg "../plugins/genai/ProxySQL_GenAI_Plugin.so" "ProxySQL_GenAI_Plugin.so"
 fi
 
@@ -164,6 +157,53 @@ cp "./${PKG}" "../binaries/proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}.deb"
 ar -p "${PKG}" $(ar t "${PKG}" | grep '^data\.tar') | unxz -c - | tar xvf - ./usr/bin/proxysql -O > tmp/proxysql
 sha1sum tmp/proxysql | sed 's|tmp/||' | tee tmp/proxysql.sha1
 cp tmp/proxysql.sha1 ../binaries/proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}.id-hash
+# Verify plugin .so files are present in the package
+if [[ "${PROXYSQL40:-}" == "1" ]]; then
+    echo "==> Verifying plugin .so files in package"
+    for plugin in ProxySQL_MySQLX_Plugin.so ProxySQL_GenAI_Plugin.so; do
+        if dpkg -c "${PKG}" 2>/dev/null | grep -q "/usr/lib/proxysql/${plugin}"; then
+            echo "  OK   ${plugin}"
+        else
+            echo "  FAIL ${plugin} not found in package" >&2
+            exit 1
+        fi
+    done
+    echo "==> Plugin packaging verification PASSED"
+fi
+# Plugin smoke test: verify .so files are valid and export the expected
+# descriptor symbol.
+if [[ "${PROXYSQL40:-}" == "1" ]]; then
+    echo "==> Running plugin smoke test"
+    SMOKE_DIR=$(mktemp -d)
+    dpkg-deb -R "${PKG}" "${SMOKE_DIR}"
+    ALL_OK=0
+    for plugin in ProxySQL_MySQLX_Plugin.so ProxySQL_GenAI_Plugin.so; do
+        plugin_path="${SMOKE_DIR}/usr/lib/proxysql/${plugin}"
+        if [[ -f "${plugin_path}" ]]; then
+            if file "${plugin_path}" | grep -q 'ELF 64-bit.*shared object'; then
+                echo "  OK   ${plugin} (valid ELF shared library)"
+                if nm -D --defined-only "${plugin_path}" 2>/dev/null | grep -q 'proxysql_plugin_descriptor_v1'; then
+                    echo "  OK   ${plugin} (exports proxysql_plugin_descriptor_v1)"
+                else
+                    echo "  FAIL ${plugin} (no proxysql_plugin_descriptor_v1 symbol)" >&2
+                    ALL_OK=1
+                fi
+            else
+                echo "  FAIL ${plugin} (not a valid ELF shared object)" >&2
+                ALL_OK=1
+            fi
+        else
+            echo "  FAIL ${plugin} (not found in package)" >&2
+            ALL_OK=1
+        fi
+    done
+    rm -rf "${SMOKE_DIR}"
+    if [[ "${ALL_OK}" != "0" ]]; then
+        echo "==> Plugin smoke test FAILED" >&2
+        exit 1
+    fi
+    echo "==> Plugin smoke test PASSED"
+fi
 popd
 # Cleanup current build
 rm -rf /opt/proxysql/pkgroot

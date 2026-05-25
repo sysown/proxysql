@@ -40,22 +40,10 @@ The same codebase produces three product tiers via feature flags:
 |------|------|---------|------|
 | Stable | (default) | v3.0.x | Core proxy |
 | Innovative | `PROXYSQL31=1` | v3.1.x | FFTO, TSDB |
-| Plugin Chassis | `PROXYSQL40=1` | v4.0.x | Plugin loader + ABI (4-phase lifecycle, query-hook, shared Prometheus) |
-| AI/MCP | `PROXYSQLGENAI=1` | v4.0.x | Builds the genai plugin (`plugins/genai/`) — GenAI, MCP, Anomaly Detection |
+| Plugin Chassis | `PROXYSQL40=1` | v4.0.x | Plugin loader + ABI (4-phase lifecycle, query-hook, shared Prometheus); builds and packages all v4.0 plugins including mysqlx and genai/MCP |
 
-`PROXYSQLGENAI=1` implies `PROXYSQL40=1` implies `PROXYSQL31=1`, which
-implies `PROXYSQLFFTO=1` and `PROXYSQLTSDB=1`.
-
-**As of the GenAI plugin carve-out (Step 7), `PROXYSQLGENAI` no longer
-gates any code in core with the exception of the sqlite-vec hook
-(`proxy_sqlite3_vec_init` in `lib/proxy_sqlite3_symbols.cpp` and the
-`vec.o` link in `lib/Makefile` / `src/Makefile`), which is only needed
-when the genai plugin is loaded.**  All other AI/MCP/RAG/LLM features
-live in `plugins/genai/` and load as a `.so` at runtime.  The
-user-facing `PROXYSQLGENAI=1` flag still exists, and now means "build
-the genai plugin alongside core proxysql" — it propagates through the
-plugin chassis (`PROXYSQL40=1`) and the sqlite-vec link, but core
-compiles identically with or without it otherwise.
+**`PROXYSQL40=1` implies `PROXYSQL31=1` which implies `PROXYSQLFFTO=1` and `PROXYSQLTSDB=1`.**
+There is no separate `PROXYSQLGENAI` flag — `PROXYSQL40=1` builds and packages all v4.0 plugins (mysqlx, genai/MCP, anomaly detection). All AI/MCP/RAG/LLM features live in `plugins/genai/` and load as a `.so` at runtime.
 
 ### Build Flags
 

@@ -68,7 +68,7 @@ ifeq ($(UNAME_S),Linux)
 	STATIC_LIBS += $(COREDUMPER_LDIR)/libcoredumper.a
 endif
 
-ifeq ($(PROXYSQLGENAI),1)
+ifeq ($(PROXYSQL40),1)
 	STATIC_LIBS += $(SQLITE3_LDIR)/vec.o
 endif
 
