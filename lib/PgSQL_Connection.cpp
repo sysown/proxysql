@@ -1037,12 +1037,17 @@ void PgSQL_Connection::connect_start() {
 		pgsql_variables.server_set_hash_and_value(myds->sess, PGSQL_CLIENT_ENCODING, client_charset, client_charset_hash);
 
 		// optimized way to set client parameters on backend connection when creating a new connection
+		// Join the "-c key=value" tokens with a leading separator so the options value has
+		// no trailing space before the closing quote. PgBouncer rejects a startup packet
+		// whose options value ends in whitespace (#5801).
 		conninfo << "options='";
+		const char* separator = "";
 		// excluding client_encoding, which is already set above
 		for (int idx = 1; idx < PGSQL_NAME_LAST_LOW_WM; idx++) {
 			const char* value = pgsql_variables.client_get_value(myds->sess, idx);
 			const char* escaped_str = escape_string_backslash_spaces(value);
-			conninfo << "-c " << pgsql_tracked_variables[idx].set_variable_name << "=" << escaped_str << " ";
+			conninfo << separator << "-c " << pgsql_tracked_variables[idx].set_variable_name << "=" << escaped_str;
+			separator = " ";
 			if (escaped_str != value)
 				free((char*)escaped_str);
 
@@ -1054,7 +1059,7 @@ void PgSQL_Connection::connect_start() {
 
 		// if there are untracked parameters, the session should lock on the host group
 		if (myds->sess->untracked_option_parameters.empty() == false) {
-			conninfo << myds->sess->untracked_option_parameters;
+			conninfo << separator << myds->sess->untracked_option_parameters;
 		}
 		conninfo << "'";
 		
