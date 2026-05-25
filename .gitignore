@@ -82,6 +82,7 @@ test/tap/tests/test_cluster_sync_config/proxysql*.pem
 #binary
 src/proxysql
 src/*.pem
+test/deps/cluster_simulator/cluster_simulator
 binaries/*deb
 binaries/*rpm
 tools/eventslog_reader_sample
@@ -221,3 +222,4 @@ test-scripts/deps/
 .worktrees/
 test/tap/tests/parsersql_digest_test
 test/tap/tests/setparser_parsersql_test
+deps/protobuf/protobuf-*/

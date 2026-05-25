@@ -12,9 +12,54 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # PROXYSQL40 build of proxysql + TAP tests. The cache write at the end of
+  # this job is what the downstream jobs (unit-tests, e2e-tests, soak-tests)
+  # restore. Before this job existed (see issue #5796), the downstream jobs
+  # all aborted immediately at "Restore build cache" with
+  # `fail-on-cache-miss: true` because no upstream workflow ever wrote the
+  # `build-<SHA>` key — CI-trigger doesn't write any cache, and CI-builds
+  # uses a completely different naming scheme (`<SHA>_<dist><type>_*`). The
+  # net effect was that CI-mysqlx had not executed a single test in the
+  # entire workflow run history (500+ runs, 100% red at the same step).
+  #
+  # This job builds with the matching chassis flags so the cached
+  # `src/proxysql` has the same plugin-services struct layout the downstream
+  # `plugins/mysqlx` build will see — keeping the ABI contract intact.
+  build:
+    if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Cache build artifacts (restore + save)
+        uses: actions/cache@v4
+        id: build-cache
+        with:
+          path: |
+            src/proxysql
+            test/
+          key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Build proxysql (PROXYSQL40 chassis) + TAP tests
+        if: steps.build-cache.outputs.cache-hit != 'true'
+        # The same tier flags the downstream `Build mysqlx plugin` step uses
+        # — see the comment on that step. Mismatch here would let the link
+        # succeed but corrupt memory on the first plugin virtual dispatch.
+        run: |
+          export PROXYSQL40=1
+          export PROXYSQL31=1
+          export PROXYSQLFFTO=1
+          export PROXYSQLTSDB=1
+          make -j$(nproc) debug
+          make -j$(nproc) build_tap_test_debug
+
   unit-tests:
     if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
     runs-on: ubuntu-22.04
+    needs: build
     steps:
       - name: Checkout (sparse — test/tap)
         uses: actions/checkout@v4
@@ -33,10 +78,12 @@ jobs:
             src/proxysql
             test/
           key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
-          # Strict cache dependency when CI-trigger populated the cache
-          # upstream; lenient on manual workflow_dispatch so a missing cache
-          # doesn't block an ad-hoc run.
-          fail-on-cache-miss: ${{ github.event_name == 'workflow_run' }}
+          # Strict cache dependency: the `build` job above writes this key
+          # before this job starts (via `needs: build`). A miss here means
+          # the build job failed or the cache was evicted between save and
+          # restore — either way we should fail loudly, not silently
+          # proceed without a binary. See issue #5796.
+          fail-on-cache-miss: true
 
       - name: Build mysqlx plugin
         # PROXYSQL40=1 (and the implied tier flags) MUST match what the
@@ -82,10 +129,13 @@ jobs:
             src/proxysql
             test/
           key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
-          # Strict cache dependency when CI-trigger populated the cache
-          # upstream; lenient on manual workflow_dispatch so a missing cache
-          # doesn't block an ad-hoc run.
-          fail-on-cache-miss: ${{ github.event_name == 'workflow_run' }}
+          # Strict cache dependency: the `build` job at the top of this
+          # workflow writes this key before this job starts (via the
+          # `needs:` chain). A miss means the build job failed or the
+          # cache was evicted between save and restore — either way fail
+          # loudly instead of silently proceeding without a binary. See
+          # issue #5796.
+          fail-on-cache-miss: true
 
       - name: Build mysqlx plugin
         # PROXYSQL40=1 (and the implied tier flags) MUST match what the

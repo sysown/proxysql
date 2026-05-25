@@ -46,6 +46,10 @@ ifeq ($(UNAME_S),Linux)
 	targets += coredumper
 endif
 
+ifeq ($(PROXYSQL40),1)
+	targets += protobuf
+endif
+
 ifeq ($(PROXYSQLCLICKHOUSE),1)
 	targets += clickhouse-cpp
 endif
@@ -170,6 +174,30 @@ zstd/zstd/lib/libzstd.a:
 zstd: zstd/zstd/lib/libzstd.a
 
 
+PROTOBUF_VERSION := 3.21.12
+PROTOBUF_SRC_DIR := $(PROXYSQL_PATH)/deps/protobuf/protobuf-$(PROTOBUF_VERSION)
+PROTOBUF_INSTALL_DIR := $(PROTOBUF_SRC_DIR)/install
+PROTOBUF_LIB := $(PROTOBUF_INSTALL_DIR)/lib/libprotobuf.a
+
+$(PROTOBUF_LIB):
+	cd protobuf && rm -rf protobuf-*/ || true
+	cd protobuf && tar -zxf protobuf-$(PROTOBUF_VERSION).tar.gz
+	cd protobuf/protobuf-$(PROTOBUF_VERSION) && CC=${CC} CXX=${CXX} cmake -S . -B build \
+		-DCMAKE_BUILD_TYPE=RelWithDebInfo \
+		-DCMAKE_INSTALL_PREFIX=$(PROTOBUF_INSTALL_DIR) \
+		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+		-Dprotobuf_BUILD_TESTS=OFF \
+		-Dprotobuf_BUILD_CONFORMANCE=OFF \
+		-Dprotobuf_BUILD_EXAMPLES=OFF \
+		-Dprotobuf_BUILD_PROTOC_BINARIES=OFF \
+		-Dprotobuf_BUILD_LIBPROTOC=OFF \
+		-Dprotobuf_BUILD_SHARED_LIBS=OFF \
+		-Dprotobuf_WITH_ZLIB=OFF
+	cd protobuf/protobuf-$(PROTOBUF_VERSION) && CC=${CC} CXX=${CXX} ${MAKE} -C build install
+
+protobuf: $(PROTOBUF_LIB)
+
+
 clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:
 	cd clickhouse-cpp && rm -rf clickhouse-cpp-*/ || true
 	cd clickhouse-cpp && tar -zxf clickhouse-cpp-*.tar.gz
@@ -195,6 +223,7 @@ jemalloc/jemalloc/lib/libjemalloc.a:
 	cd jemalloc/jemalloc && patch src/jemalloc.c < ../issue823.520.patch
 	cd jemalloc/jemalloc && patch src/jemalloc.c < ../issue2358.patch
 	cd jemalloc/jemalloc && patch -p0 < ../nothrow.patch
+	cd jemalloc/jemalloc && patch src/jemalloc_cpp.cpp < ../throw-bad-alloc.patch
 	cd jemalloc/jemalloc && ./configure ${MYJEOPT}
 #	cd jemalloc/jemalloc && sed -i -e 's/-O3 /-O3 -fPIC /' Makefile
 	cd jemalloc/jemalloc && CC=${CC} CXX=${CXX} ${MAKE}
@@ -295,6 +324,7 @@ sqlite-vec: sqlite3/sqlite3/vec.o
 libconfig/libconfig/out/libconfig++.a:
 	cd libconfig && rm -rf libconfig-*/ || true
 	cd libconfig && tar -zxf libconfig-*.tar.gz
+	cd libconfig/libconfig && patch -p1 < ../restore_unknown_escape_passthrough.patch
 	cd libconfig/libconfig && cmake -DBUILD_SHARED_LIBS=0 -DBUILD_EXAMPLES=0 -DBUILD_TESTS=0 -DBUILD_FUZZERS=0 .
 	cd libconfig/libconfig && CC=${CC} CXX=${CXX} ${MAKE}
 
@@ -397,6 +427,7 @@ cleanpart:
 	cd sqlite3 && rm -rf sqlite-amalgamation-*/ || true
 	cd postgresql && rm -rf postgresql-*/ || true
 	cd postgresql && rm -rf postgres-*/ || true
+	cd protobuf && rm -rf protobuf-*/ || true
 .PHONY: cleanpart
 
 cleanall:
@@ -423,7 +454,7 @@ cleanall:
 	cd libusual && rm -rf libusual-*/ || true
 	cd libscram && rm -rf lib/* obj/* || true
 	cd json && rm -rf json-*/ || true
+	cd protobuf && rm -rf protobuf-*/ || true
 	cd zstd && rm -rf zstd-*/ || true
 	cd parsersql && rm -rf parsersql-*/ ParserSQL-*/ || true
 .PHONY: cleanall
-

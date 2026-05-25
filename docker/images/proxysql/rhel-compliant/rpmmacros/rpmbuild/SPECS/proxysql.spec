@@ -78,9 +78,10 @@ rm -rf %{buildroot}
 /usr/share/proxysql/tools/proxysql_galera_writer.pl
 # Plugin .so artefacts for v4.0+ chassis builds (mysqlx, genai/MCP).
 # Gated on the `with_plugins` define passed by the rhel-compliant
-# entrypoint when PROXYSQL40=1 or PROXYSQLGENAI=1.  Without the gate
-# the wildcard match would fail on v3.x release builds where the
-# directory is empty and rpmbuild aborts on no-files-match.
+# entrypoint when PROXYSQL40=1.  Without the gate the wildcard match
+# would fail on v3.x release builds where the directory is empty and
+# rpmbuild aborts on no-files-match.  PROXYSQL40=1 builds and packages
+# all v4.0 plugins; PROXYSQLGENAI is no longer a separate flag.
 %if 0%{?with_plugins}
 %dir /usr/lib/proxysql
 /usr/lib/proxysql/*.so

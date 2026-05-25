@@ -2246,7 +2246,7 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) 
 	char * query = (char *)"";
 	if (name == "mysql_aws_aurora_hostgroups") {
 		query=(char *)"SELECT writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,"
-					    "check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,comment FROM mysql_aws_aurora_hostgroups";
+					    "check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,autopurge_missing_checks,comment FROM mysql_aws_aurora_hostgroups";
 	} else if (name == "mysql_galera_hostgroups") {
 		query=(char *)"SELECT writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment FROM mysql_galera_hostgroups";
 	} else if (name == "mysql_group_replication_hostgroups") {
@@ -3741,7 +3741,12 @@ bool MySQL_HostGroups_Manager::shun_and_killall(char *hostname, int port) {
 					// be tuned in the future
 					if (mysql_thread___monitor_enabled) {
 						int a = mysql_thread___shun_recovery_time_sec;
-						int b = mysql_thread___monitor_ping_interval;
+
+						// Issue #5546: Add safety margin to prevent race condition
+						// where server can be unshunned before next ping arrives.
+						// Using 2 * ping_interval provides buffer for scheduling delays.
+						int b = 2 * mysql_thread___monitor_ping_interval;
+
 						b = b/1000;
 						if (b > a) {
 							t = t + (b - a);
@@ -5787,7 +5792,7 @@ SQLite3_result * MySQL_HostGroups_Manager::get_mysql_errors(bool reset) {
 	return result;
 }
 
-AWS_Aurora_Info::AWS_Aurora_Info(int w, int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c) {
+AWS_Aurora_Info::AWS_Aurora_Info(int w, int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, int amc, char *c) {
 	comment=NULL;
 	if (c) {
 		comment=strdup(c);
@@ -5802,6 +5807,7 @@ AWS_Aurora_Info::AWS_Aurora_Info(int w, int r, int _port, char *_end_addr, int m
 	check_timeout_ms=ct;
 	writer_is_also_reader=wiar;
 	new_reader_weight=nrw;
+	autopurge_missing_checks=amc;
 	active=_a;
 	active_=true;
 	//need_converge=true;
@@ -5820,7 +5826,7 @@ AWS_Aurora_Info::~AWS_Aurora_Info() {
 	}
 }
 
-bool AWS_Aurora_Info::update(int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c) {
+bool AWS_Aurora_Info::update(int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, int amc, char *c) {
 	bool ret=false;
 	active_=true;
 	if (reader_hostgroup!=r) {
@@ -5857,6 +5863,10 @@ bool AWS_Aurora_Info::update(int r, int _port, char *_end_addr, int maxl, int al
 	}
 	if (new_reader_weight != nrw) {
 		new_reader_weight = nrw;
+		ret = true;
+	}
+	if (autopurge_missing_checks != amc) {
+		autopurge_missing_checks = amc;
 		ret = true;
 	}
 	if (active!=_a) {
@@ -6167,8 +6177,8 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 	int rc;
 	//sqlite3 *mydb3=mydb->get_db();
 	char *query=(char *)"INSERT INTO mysql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,"
-					    "check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,comment) VALUES "
-					    "(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
+					    "check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,autopurge_missing_checks,comment) VALUES "
+					    "(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)";
 	auto [rc1, statement_unique] = mydb->prepare_v2(query);
 	ASSERT_SQLITE_OK(rc1, mydb);
 	sqlite3_stmt *statement = statement_unique.get();
@@ -6193,8 +6203,9 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 		int add_lag_ms = atoi(r->fields[10]);
 		int min_lag_ms = atoi(r->fields[11]);
 		int lag_num_checks = atoi(r->fields[12]);
-		proxy_info("Loading AWS Aurora info for (%d,%d,%s,%d,\"%s\",%d,%d,%d,%d,%d,%d,\"%s\")\n", writer_hostgroup,reader_hostgroup,(active ? "on" : "off"),aurora_port,
-				   r->fields[4],max_lag_ms,add_lag_ms,min_lag_ms,lag_num_checks,check_interval_ms,check_timeout_ms,r->fields[13]);
+		int autopurge_missing_checks = atoi(r->fields[13]);
+		proxy_info("Loading AWS Aurora info for (%d,%d,%s,%d,\"%s\",%d,%d,%d,%d,%d,%d,%d,\"%s\")\n", writer_hostgroup,reader_hostgroup,(active ? "on" : "off"),aurora_port,
+				   r->fields[4],max_lag_ms,add_lag_ms,min_lag_ms,lag_num_checks,check_interval_ms,check_timeout_ms,autopurge_missing_checks,r->fields[14]);
 		rc=(*proxy_sqlite3_bind_int64)(statement, 1, writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_bind_int64)(statement, 2, reader_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_bind_int64)(statement, 3, active); ASSERT_SQLITE_OK(rc, mydb);
@@ -6208,7 +6219,8 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 		rc=(*proxy_sqlite3_bind_int64)(statement, 11, add_lag_ms); ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_bind_int64)(statement, 12, min_lag_ms); ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_bind_int64)(statement, 13, lag_num_checks); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_text)(statement, 14, r->fields[13], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 14, autopurge_missing_checks); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_text)(statement, 15, r->fields[14], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
 
 		SAFE_SQLITE3_STEP2(statement);
 		rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mydb);
@@ -6219,12 +6231,12 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 		if (it2!=AWS_Aurora_Info_Map.end()) {
 			info=it2->second;
 			bool changed=false;
-			changed=info->update(reader_hostgroup, aurora_port, r->fields[4], max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks, check_interval_ms, check_timeout_ms,  (bool)active, writer_is_also_reader, new_reader_weight, r->fields[10]);
+			changed=info->update(reader_hostgroup, aurora_port, r->fields[4], max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks, check_interval_ms, check_timeout_ms,  (bool)active, writer_is_also_reader, new_reader_weight, autopurge_missing_checks, r->fields[14]);
 			if (changed) {
 				//info->need_converge=true;
 			}
 		} else {
-			info=new AWS_Aurora_Info(writer_hostgroup, reader_hostgroup, aurora_port, r->fields[4], max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks, check_interval_ms, check_timeout_ms,  (bool)active, writer_is_also_reader, new_reader_weight, r->fields[10]);
+			info=new AWS_Aurora_Info(writer_hostgroup, reader_hostgroup, aurora_port, r->fields[4], max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks, check_interval_ms, check_timeout_ms,  (bool)active, writer_is_also_reader, new_reader_weight, autopurge_missing_checks, r->fields[14]);
 			//info->need_converge=true;
 			AWS_Aurora_Info_Map.insert(AWS_Aurora_Info_Map.begin(), std::pair<int, AWS_Aurora_Info *>(writer_hostgroup,info));
 		}
@@ -6795,7 +6807,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 
 const char SELECT_AWS_AURORA_SERVERS_FOR_MONITOR[] {
 	"SELECT writer_hostgroup, reader_hostgroup, hostname, port, MAX(use_ssl) use_ssl, max_lag_ms, check_interval_ms,"
-		" check_timeout_ms, add_lag_ms, min_lag_ms, lag_num_checks FROM mysql_servers"
+		" check_timeout_ms, add_lag_ms, min_lag_ms, lag_num_checks, autopurge_missing_checks, domain_name FROM mysql_servers"
 	" JOIN mysql_aws_aurora_hostgroups ON"
 		" hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE active=1 AND status NOT IN (2,3)"
 	" GROUP BY writer_hostgroup, hostname, port"

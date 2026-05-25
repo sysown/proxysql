@@ -74,9 +74,23 @@ struct TestCase {
 };
 
 std::fstream f_proxysql_log{};
+PGConnPtr admin_conn{nullptr, &PQfinish};
 
 bool check_logs_for_command(const std::string& command_regex) {
-    const auto& [_, cmd_lines] { get_matching_lines(f_proxysql_log, command_regex) };
+    // Issue #5788: log-scrape race. PROXYSQL FLUSH LOGS over a persistent
+    // Admin connection fences in-flight log writes before we scan, and
+    // clearing eofbit lets getline() read bytes appended since the last
+    // scan (sticky eofbit was the root cause). Single scan, no polling.
+    if (!admin_conn || PQstatus(admin_conn.get()) != CONNECTION_OK) {
+        admin_conn = createNewConnection(ADMIN);
+    }
+    if (admin_conn) {
+        PGresult* res = PQexec(admin_conn.get(), "PROXYSQL FLUSH LOGS");
+        if (res) PQclear(res);
+    }
+
+    f_proxysql_log.clear(f_proxysql_log.rdstate() & ~std::ios_base::eofbit & ~std::ios_base::failbit);
+    const auto& [_, cmd_lines] = get_matching_lines(f_proxysql_log, command_regex);
     return !cmd_lines.empty();
 }
 
