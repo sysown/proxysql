@@ -40,7 +40,9 @@
 //             AI_Features_Manager, AI_Tool_Handler, RAG_Tool_Handler
 //   Step 6:   AI_Vector_Storage, MySQL_Catalog, Discovery_Schema,
 //             Static_Harvester, PgSQL_Static_Harvester
-// Step 7 deletes the PROXYSQLGENAI macro (and this comment block).
+// PROXYSQLGENAI is no longer a build flag — PROXYSQL40=1 builds and
+// packages all v4.0 plugins (mysqlx, genai/MCP, ...).  All
+// genai/MCP/AI/RAG code lives in plugins/genai/.
 
 #include "MySQL_HostGroups_Manager.h"
 #include "PgSQL_HostGroups_Manager.h"
