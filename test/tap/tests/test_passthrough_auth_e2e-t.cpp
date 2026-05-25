@@ -138,20 +138,36 @@ static unsigned int try_connect(
 	MYSQL* m = mysql_init(NULL);
 	if (!m) return UINT_MAX;
 	mysql_options(m, MYSQL_DEFAULT_AUTH, req_auth_plugin);
-	/*
-	 * Enable cleartext-plugin for non-TLS connects so caching_sha2's
-	 * fast-auth-fail path can still emit the cleartext exchange the
-	 * pass-through dispatch is listening for. With
-	 * mysql-passthrough_auth_require_tls=false (set in the fixture
-	 * below) this is enough; otherwise the test would need to wire
-	 * mysql_ssl_set + a configured CA.
-	 */
 	if (string(req_auth_plugin) == "mysql_clear_password") {
 		bool enable_cleartext = true;
 		mysql_options(m, MYSQL_ENABLE_CLEARTEXT_PLUGIN, &enable_cleartext);
 	}
+	/*
+	 * TLS is REQUIRED on the frontend leg for the caching_sha2_password
+	 * full-auth exchange to complete. After ProxySQL replies with the
+	 * AuthMoreData{0x04} ("perform_full_authentication") byte, the client
+	 * must send its cleartext password. Per the caching_sha2_password
+	 * protocol, this cleartext can flow over the wire in one of two
+	 * forms:
+	 *   1. Plaintext over a TLS-secured channel (what we do here).
+	 *   2. RSA-encrypted under the server's public key, fetched via
+	 *      the "request public key" subcommand (0x02). ProxySQL's
+	 *      pass-through dispatch (PPHR_passthrough_init in
+	 *      lib/MySQL_Protocol.cpp) does NOT implement this branch --
+	 *      it only handles stages 0 (send 0x04) and 5 (cleartext
+	 *      received), so a non-TLS client with no pre-cached entry
+	 *      disconnects with errno 2061 ("Couldn't read RSA public key
+	 *      from server").
+	 *
+	 * The mysql_ssl_set call with all-NULL CA/cert paths leaves
+	 * verification disabled -- we trust the local test infra cert
+	 * chain. CLIENT_SSL in the connect flags triggers the TLS upgrade
+	 * during the handshake. Pattern mirrors test_auth_methods-t.cpp
+	 * and reg_test_4935-caching_sha2-t.cpp.
+	 */
+	mysql_ssl_set(m, NULL, NULL, NULL, NULL, NULL);
 	const MYSQL* res = mysql_real_connect(
-		m, cl.host, user, pass, NULL, cl.port, NULL, 0
+		m, cl.host, user, pass, NULL, cl.port, NULL, CLIENT_SSL
 	);
 	const unsigned int err = res ? 0 : mysql_errno(m);
 	if (!res) {
@@ -249,13 +265,15 @@ int main() {
 	const vector<string> enable_queries {
 		"SET mysql-passthrough_auth_enabled='true'",
 		/*
-		 * Disable the TLS gate for the test. The probe→backend leg's TLS
-		 * is independent (driven by mysql_servers.use_ssl on the backend
-		 * row) and is exercised by the SSL-specific test groups in CI.
-		 * Here we want to focus on the auth dispatch / cache mechanics
-		 * without bringing up TLS certs.
+		 * Leave mysql-passthrough_auth_require_tls at its default ('true').
+		 * The test's try_connect() now wires CLIENT_SSL on every probe (see
+		 * the comment block in that helper), so the frontend leg is
+		 * TLS-protected and the gate is satisfied. Setting require_tls='true'
+		 * explicitly here doubles as a regression check: a future code
+		 * change that breaks the TLS plumbing would surface as a failed
+		 * probe at scenario [1] rather than silently bypassing the gate.
 		 */
-		"SET mysql-passthrough_auth_require_tls='false'",
+		"SET mysql-passthrough_auth_require_tls='true'",
 		"SET mysql-passthrough_auth_empty_password='true'",
 		/*
 		 * Ensure the unknown_users path stays off so this test only
@@ -276,7 +294,7 @@ int main() {
 	for (const string& q : enable_queries) {
 		if (do_query(admin, q) != EXIT_SUCCESS) { cfg_ok = false; break; }
 	}
-	ok(cfg_ok, "Pass-through enabled, TLS gate off, default_auth=caching_sha2_password");
+	ok(cfg_ok, "Pass-through enabled, TLS gate on (client connects with CLIENT_SSL), default_auth=caching_sha2_password");
 
 	/* -------- verify gate state -------- */
 	{
