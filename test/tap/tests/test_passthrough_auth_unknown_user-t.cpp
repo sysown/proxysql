@@ -115,7 +115,16 @@ static std::pair<unsigned int, unsigned int> connect_and_select_1(
 	MYSQL* m = mysql_init(NULL);
 	if (!m) return { UINT_MAX, 0 };
 	mysql_options(m, MYSQL_DEFAULT_AUTH, "caching_sha2_password");
-	if (!mysql_real_connect(m, cl.host, user, pass, NULL, cl.port, NULL, 0)) {
+	/*
+	 * TLS is mandatory on the frontend leg for caching_sha2_password
+	 * full-auth -- ProxySQL's AuthMoreData{0x04} reply forces the client
+	 * to send its cleartext, and PPHR_passthrough_init does not implement
+	 * the RSA-encrypted (0x02 public-key-request) branch. See
+	 * test_passthrough_auth_e2e-t.cpp for the full explanation; this
+	 * comment block intentionally mirrors that test's posture.
+	 */
+	mysql_ssl_set(m, NULL, NULL, NULL, NULL, NULL);
+	if (!mysql_real_connect(m, cl.host, user, pass, NULL, cl.port, NULL, CLIENT_SSL)) {
 		const unsigned int err = mysql_errno(m);
 		diag("Frontend connect for user='%s' failed: errno=%u msg='%s'",
 			user, err, mysql_error(m));
@@ -273,7 +282,12 @@ int main() {
 	/* -------- enable unknown_users pass-through -------- */
 	const vector<string> enable_queries {
 		"SET mysql-passthrough_auth_enabled='true'",
-		"SET mysql-passthrough_auth_require_tls='false'",
+		/*
+		 * Leave require_tls at the default 'true'; the test's frontend
+		 * connect helper (connect_and_select_1) now wires CLIENT_SSL so
+		 * the gate is satisfied. See e2e-t for the full TLS rationale.
+		 */
+		"SET mysql-passthrough_auth_require_tls='true'",
 		"SET mysql-passthrough_auth_unknown_users='true'",
 		"SET mysql-passthrough_auth_empty_password='false'",
 		"SET mysql-passthrough_auth_max_failures_per_user='10000'",
