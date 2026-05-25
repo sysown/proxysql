@@ -13,6 +13,17 @@ env:
 jobs:
   tests:
     runs-on: ubuntu-22.04
+    # `id-token: write` lets codecov/codecov-action@v4 mint a GitHub
+    # OIDC token (use_oidc: true) and present it as the Codecov upload
+    # credential. The repo has no static CODECOV_TOKEN secret -- the
+    # Codecov UI hides per-repo tokens for public repos with the
+    # GitHub App installed, so OIDC is the only working auth path.
+    # Caller workflow CI-legacy-g2-genai.yml on v3.0 also grants
+    # id-token: write; reusable-workflow permissions are the
+    # intersection of caller + callee.
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -158,6 +169,35 @@ jobs:
         path: |
           proxysql/ci_infra_logs/ci-legacy-g2-genai/coverage-report/
         if-no-files-found: ignore
+
+    - name: Upload coverage to Codecov
+      # Send the LCOV .info file fastcov produces in run-tests-isolated.bash
+      # (under proxysql/ci_infra_logs/ci-legacy-g2-genai/coverage-report/)
+      # to Codecov. This is REAL ProxySQL coverage -- the proxysql binary
+      # was built WITHGCOV=1 (-tap-genai-gcov build cache) and was the live
+      # daemon answering the legacy-g2 TAP suite, so the report reflects
+      # production code paths exercised by integration tests, not just the
+      # lib-only unit-test slice that CI-unit-tests-asan-coverage uploads.
+      #
+      # `flags: tap-legacy-g2` lets Codecov merge per-group uploads and
+      # later show per-flag coverage trends. `use_oidc: true` is mandatory
+      # -- the repo has no CODECOV_TOKEN secret and Codecov rejects
+      # tokenless legacy uploads with "branch is protected" HTTP 400 (see
+      # the Phase 1 commit history on CI-unit-tests-asan-coverage.yml).
+      #
+      # `fail_ci_if_error: false` so a Codecov outage never fails the
+      # whole TAP group; `!cancelled()` so coverage uploads even when
+      # the test step itself reported a failure (partial coverage is
+      # still useful diagnostically).
+      if: ${{ !cancelled() }}
+      uses: codecov/codecov-action@v4
+      with:
+        files: proxysql/ci_infra_logs/ci-legacy-g2-genai/coverage-report/ci-legacy-g2-genai.info
+        flags: tap-legacy-g2
+        name: tap-legacy-g2-genai-coverage
+        use_oidc: true
+        fail_ci_if_error: false
+        verbose: true
 
     - uses: LouisBrunner/checks-action@v2.0.0
       if: always()
