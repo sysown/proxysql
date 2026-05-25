@@ -289,8 +289,20 @@ jobs:
       with:
         key: ${{ env.BLDCACHE }}_src
         enableCrossOsArchive: true
+        # For -gcov variants, include lib/obj/*.gcno so the test
+        # workflow's coverage collector can match .gcda (runtime data
+        # written by the proxysql daemon under /gcov) to .gcno
+        # (compile-time data). Without this, fastcov sees .gcda files
+        # with no associated source-file mapping
+        # (`Missing 'current_working_directory'`, `files: []`) and
+        # produces a 0-byte .info report -- the bug that hid coverage
+        # for as long as COVERAGE=1 has existed in run-tests-isolated.bash.
+        # src/obj/*.gcno is already captured by `proxysql/src/`. The
+        # extra entry is a no-op for non-gcov builds (lib/obj/*.gcno
+        # won't exist) and adds only a few MB to the gcov cache.
         path: |
           proxysql/src/
+          proxysql/lib/obj/*.gcno
 
     - name: Cache save test
       id: cache-save-test
