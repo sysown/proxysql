@@ -63,10 +63,22 @@ echo "==> Capturing baseline coverage snapshot (--initial)"
 # coverage for every instrumented source line, so unrun code paths
 # show as 0% in the merged report (rather than being absent
 # entirely).
+#
+# Capture from lib/ only. src/ contains the proxysql binary's
+# main.cpp and a small number of helpers; unit tests link only
+# against libproxysql.a (from lib/) so there is never a .gcda in
+# src/ from this workflow. Keeping `--directory src` here makes
+# lcov 2.x abort with "no .gcda files found in src" (an `empty`-
+# class error, not covered by --ignore-errors gcov,source), which
+# wipes the output file and breaks the whole capture chain.
+#
+# `empty` is added to --ignore-errors as belt-and-suspenders so a
+# future test reorganisation that produces a partially-empty
+# directory tree doesn't recur the same silent failure.
 lcov --quiet --capture --initial \
-     --directory lib --directory src \
+     --directory lib \
      --output-file coverage/lcov-base.info \
-     --ignore-errors gcov,source || true
+     --ignore-errors gcov,source,empty || true
 
 echo "==> Running unit tests under ASAN"
 # Iterate every executable under test/tap/tests/unit/. We
@@ -107,10 +119,13 @@ if [ ${#FAILED[@]} -gt 0 ]; then
 fi
 
 echo "==> Capturing post-test coverage"
+# Mirror the baseline-capture scope above: lib/ only, empty added to
+# --ignore-errors. See the baseline-capture comment for the full
+# rationale.
 lcov --quiet --capture \
-     --directory lib --directory src \
+     --directory lib \
      --output-file coverage/lcov-tests.info \
-     --ignore-errors gcov,source,mismatch || true
+     --ignore-errors gcov,source,mismatch,empty || true
 
 if [ -s coverage/lcov-base.info ] && [ -s coverage/lcov-tests.info ]; then
     lcov --quiet \
