@@ -14,7 +14,7 @@
  *   - get_target_auth_context() with empty map
  *   - get_all_target_auth_contexts() with empty map
  *
- * Compiled only when PROXYSQLGENAI=1 (auto-detected from libproxysql.a).
+ * Built with all v4.0 plugins under PROXYSQL40=1 (auto-detected from libproxysql.a).
  */
 
 #include "tap.h"

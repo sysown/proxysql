@@ -7,7 +7,7 @@
  *   - create_jsonrpc_response() -- JSON-RPC 2.0 success response formatting
  *   - create_jsonrpc_error()    -- JSON-RPC 2.0 error response formatting
  *
- * Compiled only when PROXYSQLGENAI=1 (auto-detected from libproxysql.a).
+ * Built with all v4.0 plugins under PROXYSQL40=1 (auto-detected from libproxysql.a).
  */
 
 #include "tap.h"

@@ -6378,9 +6378,15 @@ bool PgSQL_Session::is_in_transaction() const {
  * status values.
  * @note This method is primarily used to maintain a history of the session's previous states for later reference or
  * recovery purposes.
- * @note The LCOV_EXCL_START and LCOV_EXCL_STOP directives are used to exclude the assert statement from code coverage
- * analysis because the condition should not occur during normal execution and is included as a safeguard against
- * programming errors.
+ * @note The lcov exclude-block directives wrapping the `assert(0)` below
+ * remove that line from coverage analysis -- the condition should never
+ * occur during normal execution and is only there as a safeguard against
+ * programming errors. (The literal directive strings are deliberately not
+ * spelled out in this comment because lcov's geninfo scans every source
+ * line for them and treats the doc occurrence as a real exclude marker,
+ * which double-opens the exclude block at line 6399 and breaks coverage
+ * capture for the whole file with a "overlapping exclude directives"
+ * error.)
  */
 void PgSQL_Session::set_previous_status_mode3(bool allow_execute) {
 	switch (status) {
