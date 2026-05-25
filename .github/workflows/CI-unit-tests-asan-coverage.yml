@@ -61,6 +61,17 @@ jobs:
     if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    # codecov/codecov-action@v4 needs `id-token: write` to mint a
+    # GitHub OIDC token for tokenless uploads against the Codecov
+    # GitHub App. Without this, the upload falls back to legacy
+    # token-based auth and fails on protected target branches with
+    # `HTTP 400: Token required because branch is protected` even
+    # though the app is installed. We keep `contents: read` (the
+    # GitHub default) explicit so granting id-token: write here
+    # doesn't implicitly widen any other scope.
+    permissions:
+      contents: read
+      id-token: write
 
     steps:
 
@@ -163,7 +174,14 @@ jobs:
         files: coverage/lcov.info
         flags: unit-tests
         name: unit-tests-asan-coverage
-        token: ${{ secrets.CODECOV_TOKEN }}
+        # No `token:` — for public repos with the Codecov GitHub App
+        # installed at the org level, the action authenticates via the
+        # GitHub OIDC token (granted by the `permissions: id-token: write`
+        # block on this job). Passing an empty `token` value would force
+        # the action into legacy token-mode and fail on protected target
+        # branches with "Token required because branch is protected" even
+        # when the app is present. If we ever revert to private-repo
+        # workflow we'd add `token: ${{ secrets.CODECOV_TOKEN }}` back.
         fail_ci_if_error: false
         verbose: true
 
