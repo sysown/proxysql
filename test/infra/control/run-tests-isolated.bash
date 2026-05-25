@@ -319,27 +319,51 @@ docker run \
                 echo \">>> Collecting code coverage data (exit code was: \${exit_code})...\"
 
                 if [ -d \"/gcov\" ] && [ \"\$(ls -A /gcov 2>/dev/null)\" ]; then
-                    # Copy .gcno files adjacent to each .gcda file.
-                    # .gcda paths have a GCOV_PREFIX_STRIP offset (e.g. proxysql/lib/obj/X.gcda)
-                    # while .gcno files are at \${WORKSPACE}/lib/obj/X.gcno. We strip leading
-                    # components from the .gcda relative path until we find the matching .gcno.
+                    # Match .gcno files to .gcda files by basename and copy
+                    # adjacent so fastcov can find them.
+                    #
+                    # The previous algorithm tried to find a matching .gcno
+                    # by stripping leading path components off the .gcda
+                    # relative path and looking up \${WORKSPACE}/<stripped>.gcno
+                    # -- which only works when the .gcda relative path is a
+                    # path-suffix of the .gcno absolute path. For the
+                    # ProxySQL daemon, GCOV_PREFIX_STRIP=3 eats
+                    # /opt/proxysql/lib/ from /opt/proxysql/lib/obj/X.gcda,
+                    # so the .gcda lands at /gcov/obj/X.gcda. The matching
+                    # .gcno is at \${WORKSPACE}/lib/obj/X.gcno -- not a
+                    # suffix of any strip of obj/X, so the lookup always
+                    # missed and fastcov reported every .gcda as
+                    # \"Missing 'current_working_directory'\" with an empty
+                    # files list, producing a 0-byte .info report.
+                    #
+                    # Basename matching is robust to GCOV_PREFIX_STRIP and
+                    # build CWD. ProxySQL doesn't reuse .cpp basenames
+                    # across directories (verified by inspection of lib/
+                    # and src/), so basename collision is not a concern.
+                    echo \">>> Indexing .gcno files in \${WORKSPACE}...\"
+                    GCNO_INDEX=\$(mktemp)
+                    find \"\${WORKSPACE}\" -name '*.gcno' -type f -printf '%f %p\\n' 2>/dev/null \\
+                        | sed 's/\\.gcno / /' > \"\${GCNO_INDEX}\"
+                    echo \">>> Found \$(wc -l < \"\${GCNO_INDEX}\") .gcno files\"
                     echo \">>> Copying .gcno files adjacent to .gcda files in /gcov...\"
+                    matched=0
+                    unmatched=0
                     cd /gcov && find . -name '*.gcda' -type f | while read gcda; do
                         relpath=\"\${gcda#./}\"
                         base=\"\${relpath%.gcda}\"
-                        remaining=\"\${base}\"
-                        while [ -n \"\${remaining}\" ]; do
-                            if [ -f \"\${WORKSPACE}/\${remaining}.gcno\" ]; then
-                                target=\"/gcov/\${base}.gcno\"
-                                mkdir -p \"\$(dirname \"\${target}\")\"
-                                cp -f \"\${WORKSPACE}/\${remaining}.gcno\" \"\${target}\"
-                                break
-                            fi
-                            next=\"\${remaining#*/}\"
-                            [ \"\${next}\" = \"\${remaining}\" ] && break
-                            remaining=\"\${next}\"
-                        done
+                        bname=\$(basename \"\${base}\")
+                        gcno_src=\$(awk -v k=\"\${bname}\" '\$1==k {print \$2; exit}' \"\${GCNO_INDEX}\")
+                        if [ -n \"\${gcno_src}\" ]; then
+                            target=\"/gcov/\${base}.gcno\"
+                            mkdir -p \"\$(dirname \"\${target}\")\"
+                            cp -f \"\${gcno_src}\" \"\${target}\"
+                            matched=\$((matched + 1))
+                        else
+                            unmatched=\$((unmatched + 1))
+                        fi
                     done
+                    rm -f \"\${GCNO_INDEX}\"
+                    echo \">>> .gcno copy: matched=\${matched} unmatched=\${unmatched}\"
 
                     if [ \"\${MULTI_GROUP}\" = \"1\" ]; then
                         # Multi-group mode: data is ready in /gcov for centralized collection
