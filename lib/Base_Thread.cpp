@@ -285,16 +285,22 @@ void Base_Thread::ProcessAllSessions_Partition() {
 	size_t running_end = 0;
 	size_t idle_begin = mysql_sessions->len;
 	size_t idx = 0;
+	size_t oldest_idx = SIZE_MAX;
+	unsigned long long oldest_mct = UINT64_MAX;
 
 	while (idx < idle_begin) {
 		S* s = static_cast<S*>(mysql_sessions->index(idx));
 
 		const bool has_be = (s->mybe && s->mybe->server_myds);
-		const bool is_B = has_be && (s->mybe->server_myds->max_connect_time != 0);
+		const unsigned long long mct = has_be ? s->mybe->server_myds->max_connect_time : 0ULL;
+		const bool is_B = (mct != 0);
 		const bool is_A = !is_B && has_be && (s->mybe->server_myds->myconn != nullptr) && (s->status != WAITING_CLIENT_DATA);
 
 		if (is_A) {
 			if (idx != running_end) {
+				// Keep the tracked oldest valid: the B session at running_end is
+				// about to be swapped to idx.
+				if (oldest_idx == running_end) oldest_idx = idx;
 				void* p = mysql_sessions->pdata[idx];
 				mysql_sessions->pdata[idx] = mysql_sessions->pdata[running_end];
 				mysql_sessions->pdata[running_end] = p;
@@ -302,6 +308,14 @@ void Base_Thread::ProcessAllSessions_Partition() {
 			++running_end;
 			++idx;
 		} else if (is_B) {
+			// Key on max_connect_time: it was already loaded for the is_B test
+			// above, so this is a register compare with no extra memory access.
+			// Smallest max_connect_time == earliest connect start == the session
+			// closest to the connect_timeout_server_max abort.
+			if (mct < oldest_mct) {
+				oldest_mct = mct;
+				oldest_idx = idx;
+			}
 			++idx;
 		} else {
 			--idle_begin;
@@ -314,23 +328,14 @@ void Base_Thread::ProcessAllSessions_Partition() {
 		}
 	}
 
-	// Promote longest-waiting B session to running_end.
-	if (idle_begin > running_end + PARTITION_FAIRNESS_MIN_B) {
-		size_t oldest_idx = SIZE_MAX;
-		unsigned long long oldest_st = UINT64_MAX;
-		for (size_t i = running_end; i < idle_begin; i++) {
-			S* s = static_cast<S*>(mysql_sessions->index(i));
-			const unsigned long long st = s->CurrentQuery.start_time;
-			if (st != 0 && st < oldest_st) {
-				oldest_st = st;
-				oldest_idx = i;
-			}
-		}
-		if (oldest_idx != SIZE_MAX && oldest_idx != running_end) {
-			void* p = mysql_sessions->pdata[running_end];
-			mysql_sessions->pdata[running_end] = mysql_sessions->pdata[oldest_idx];
-			mysql_sessions->pdata[oldest_idx] = p;
-		}
+	// Promote the longest-waiting B session (smallest max_connect_time) to
+	// running_end so the CONNECTING_SERVER pass serves it first. Gated by a
+	// minimum B-band size to avoid churn on tiny bands.
+	if (idle_begin > running_end + PARTITION_FAIRNESS_MIN_B
+	    && oldest_idx != SIZE_MAX && oldest_idx != running_end) {
+		void* p = mysql_sessions->pdata[running_end];
+		mysql_sessions->pdata[running_end] = mysql_sessions->pdata[oldest_idx];
+		mysql_sessions->pdata[oldest_idx] = p;
 	}
 }
 
