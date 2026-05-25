@@ -27,6 +27,12 @@ jobs:
     #                        /check-runs API. Without this the first
     #                        LouisBrunner step fails on permission error
     #                        and cascades every test step to "skipped".
+    # - packages: read       `docker pull ghcr.io/sysown/proxysql-ci-base`
+    #                        in the "Log in to GHCR" step authenticates
+    #                        with GITHUB_TOKEN. Without packages:read the
+    #                        GHCR API returns "denied" and all 5 retry
+    #                        attempts fail, again cascading the test step
+    #                        to "skipped".
     #
     # Caller workflow CI-legacy-g2-genai.yml on v3.0 mirrors this list;
     # reusable-workflow permissions are the intersection of caller + callee.
@@ -34,6 +40,7 @@ jobs:
       contents: read
       id-token: write
       checks: write
+      packages: read
     strategy:
       fail-fast: false
       matrix:
