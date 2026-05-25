@@ -927,7 +927,7 @@ void ProxySQL_Main_init_main_modules() {
 	GloPTH=NULL;
 // MCP_Threads_Handler / GenAI_Threads_Handler / AI_Features_Manager
 // are all constructed by the genai plugin's init() callback now
-// (Steps 4.C and 5).  Core has no PROXYSQLGENAI initializers here.
+// (Steps 4.C and 5).  Core has no PROXYSQL40 plugin-dedicated initializers here.
 #ifdef PROXYSQLCLICKHOUSE
 	GloClickHouseAuth=NULL;
 #endif /* PROXYSQLCLICKHOUSE */
@@ -1297,7 +1297,7 @@ void ProxySQL_Main_shutdown_all_modules() {
 #endif
 	}
 // MCP / GenAI / AI shutdown is performed entirely by the genai plugin's
-// stop() callback (Steps 4.C and 5).  Core has no PROXYSQLGENAI
+// stop() callback (Steps 4.C and 5).  Core has no PROXYSQL40 plugin-dedicated
 // teardown here.
 	if (GloMyLogger) {
 		cpu_timer t;
@@ -1524,7 +1524,7 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 
 	ProxySQL_Main_init_main_modules();
 
-// PROXYSQLGENAI init moved entirely to the genai plugin's init/start
+// GenAI init moved entirely to the genai plugin's init/start
 // callbacks (Steps 4.C and 5).  No core invocation needed.
 
 #ifdef PROXYSQL40
