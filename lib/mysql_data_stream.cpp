@@ -670,6 +670,16 @@ int MySQL_Data_Stream::read_from_net() {
 						// let's try to read a whole packet
 						mysql_hdr Hdr;
 						memcpy(&Hdr,queueIN.buffer,sizeof(mysql_hdr));
+						// GHSA-58ww-865x-grpr: bound the declared packet length by the
+						// remaining capacity of queueIN. Without this check an unauthenticated
+						// client can drive a heap out-of-bounds write into the fixed-size
+						// 32KB input queue by sending an oversized first MySQL packet.
+						if (Hdr.pkt_length > (unsigned int)(s - 4)) {
+							proxy_error("Oversized first packet from client: pkt_length=%u exceeds queue capacity (%d). Closing fd=%d\n",
+								Hdr.pkt_length, s - 4, fd);
+							shut_soft();
+							return -1;
+						}
 						r += recv(fd, queue_w_ptr(queueIN)+4, Hdr.pkt_length, 0);
 					}
 				}
@@ -1305,6 +1315,26 @@ int MySQL_Data_Stream::buffer2array() {
 							// we override old address/port
 							addr.addr = strdup(PROXY_info->source_address);
 							addr.port = PROXY_info->source_port;
+						} else if (ppi.header_was_unknown) {
+							// GHSA-gw94-85m2-x8v2: PP1 UNKNOWN frame.
+							// Per HAProxy spec the receiver MUST ignore
+							// any address fields that follow UNKNOWN, so
+							// addr.addr stays pointing at the real TCP
+							// peer. We still record that we observed a
+							// PROXY header so audit/log code can see the
+							// frame was present, and we populate
+							// proxy_address/proxy_port from the real TCP
+							// peer (mirroring what the TCP4/TCP6 branch
+							// does) so JSON serialization reports the
+							// upstream LB consistently across all branches.
+							PROXY_info = new ProxyProtocolInfo(ppi);
+							if (addr.addr) {
+								strncpy(PROXY_info->proxy_address, addr.addr, INET6_ADDRSTRLEN);
+							}
+							PROXY_info->proxy_port = addr.port;
+							if (addr.addr) {
+								proxy_info("Ignoring PROXY UNKNOWN header from IP %s; using real TCP peer as client address\n", addr.addr);
+							}
 						} else {
 							if (addr.addr) {
 								proxy_warning("Unable to parse PROXY header from IP %s . Skipping PROXY header\n", addr.addr);
@@ -1832,6 +1862,11 @@ void MySQL_Data_Stream::get_client_myds_info_json(json& j) {
 		jc1["PROXY_V1"]["source_port"] = PROXY_info->source_port;
 		jc1["PROXY_V1"]["destination_port"] = PROXY_info->destination_port;
 		jc1["PROXY_V1"]["proxy_port"] = PROXY_info->proxy_port;
+		// GHSA-gw94-85m2-x8v2: expose the UNKNOWN-frame signal so audit
+		// consumers can distinguish a spec-compliant UNKNOWN observation
+		// (source_address/destination_address intentionally empty) from
+		// any other state where the address fields happen to be empty.
+		jc1["PROXY_V1"]["header_was_unknown"] = PROXY_info->header_was_unknown;
 	}
 	jc1["encrypted"] = encrypted;
 	if (encrypted) {

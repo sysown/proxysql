@@ -15,7 +15,7 @@
  * The constructor calls curl_global_init() but does NOT start threads
  * or epoll, so it is safe to instantiate in a unit test.
  *
- * @note Requires PROXYSQLGENAI=1 build (auto-detected from libproxysql.a).
+ * @note Requires PROXYSQL40=1 build (includes genai plugin; auto-detected from libproxysql.a).
  */
 
 #include "tap.h"

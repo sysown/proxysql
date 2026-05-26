@@ -31,7 +31,7 @@
  * - MCP_Query_Digest_Stats::add_timing()
  * - MCP_Query_Processor_Output init/destroy
  *
- * @note Requires PROXYSQLGENAI=1 build (auto-detected from libproxysql.a).
+ * @note Requires PROXYSQL40=1 build (includes genai plugin; auto-detected from libproxysql.a).
  */
 
 #include "tap.h"

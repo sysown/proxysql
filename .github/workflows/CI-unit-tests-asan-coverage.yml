@@ -42,7 +42,15 @@ on:
     types: [ completed ]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }}
+  # Include `github.event_name` so a workflow_run-triggered run never
+  # falls into the same group as a workflow_dispatch run on the same
+  # branch. Without this, dispatching on a feature branch while a
+  # workflow_run for v3.0 is also active cancels the dispatch even
+  # though the branches differ -- GitHub's concurrency comparison
+  # appears to ignore the head_branch suffix in practice. Two
+  # workflow_runs for the same branch still serialize via this group;
+  # so do two dispatches for the same branch.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }}
   cancel-in-progress: true
 
 env:
@@ -61,19 +69,19 @@ jobs:
     if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    # codecov/codecov-action@v4 needs `id-token: write` to mint a
+    # GitHub OIDC token for tokenless uploads against the Codecov
+    # GitHub App. Without this, the upload falls back to legacy
+    # token-based auth and fails on protected target branches with
+    # `HTTP 400: Token required because branch is protected` even
+    # though the app is installed. We keep `contents: read` (the
+    # GitHub default) explicit so granting id-token: write here
+    # doesn't implicitly widen any other scope.
+    permissions:
+      contents: read
+      id-token: write
 
     steps:
-
-    - uses: LouisBrunner/checks-action@v2.0.0
-      id: checks
-      if: always()
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        name: '${{ github.workflow }} / ${{ github.job }}'
-        repo: ${{ github.repository }}
-        sha: ${{ env.SHA }}
-        status: 'in_progress'
-        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
 
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -152,6 +160,37 @@ jobs:
         path: coverage/lcov.info
         if-no-files-found: warn
 
+    - name: Upload coverage to Codecov
+      # Send the same lcov.info we already archive as a workflow artifact
+      # to Codecov so PRs get the "this PR changes coverage of touched
+      # files from N% to M%" comment and main accumulates a historical
+      # graph at https://app.codecov.io/gh/sysown/proxysql.
+      #
+      # `if: always()` so coverage uploads regardless of whether the unit
+      # tests themselves passed; partial coverage is still useful for
+      # diagnosing why a PR went red. `fail_ci_if_error: false` so a
+      # transient Codecov outage never gates a green CI run on a
+      # third-party SaaS.
+      if: always()
+      uses: codecov/codecov-action@v4
+      with:
+        files: coverage/lcov.info
+        flags: unit-tests
+        name: unit-tests-asan-coverage
+        # Tokenless upload via GitHub OIDC. Codecov treats every branch
+        # as "protected" by default and rejects unauthenticated uploads
+        # with HTTP 400 "Token required because branch is protected" --
+        # this is Codecov's own branch-protection concept, unrelated to
+        # GitHub's. The fix is `use_oidc: true`, which makes the action
+        # mint a GitHub OIDC token (granted by `permissions:
+        # id-token: write` on this job) and present it to Codecov in
+        # place of a static upload token. Without `use_oidc: true` the
+        # action silently falls back to legacy tokenless mode and the
+        # upload fails.
+        use_oidc: true
+        fail_ci_if_error: false
+        verbose: true
+
     - name: Upload coverage HTML report
       if: always()
       uses: actions/upload-artifact@v4
@@ -172,7 +211,7 @@ jobs:
       if: always()
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
-        check_id: ${{ steps.checks.outputs.check_id }}
+        name: '${{ github.workflow }} / ${{ github.job }}'
         repo: ${{ github.repository }}
         sha: ${{ env.SHA }}
         conclusion: ${{ job.status }}

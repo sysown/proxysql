@@ -538,7 +538,18 @@ int PgSQL_Data_Stream::read_from_net() {
 					c = buff[read_pos++];
 					d = buff[read_pos++];
 					length = (a << 24) | (b << 16) | (c << 8) | d;
-					
+
+					// GHSA-58ww-865x-grpr: bound the declared packet length by the
+					// remaining capacity of queueIN. Without this check an unauthenticated
+					// client can drive a heap out-of-bounds write into the fixed-size
+					// 32KB input queue by sending an oversized first PostgreSQL packet.
+					if (length > (uint32_t)(s - 5)) {
+						proxy_error("Oversized first packet from PgSQL client: length=%u exceeds queue capacity (%d). Closing fd=%d\n",
+							length, s - 5, fd);
+						shut_soft();
+						return -1;
+					}
+
 					r += recv(fd, queue_w_ptr(queueIN) + 5, length, 0);
 				}
 			}

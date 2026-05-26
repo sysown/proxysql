@@ -139,6 +139,13 @@ Each MCP endpoint has its own dedicated tool handler with specific tools designe
 - `reload_config` - Reload configuration from disk/memory
 - `list_variables` - List all available variables
 - `get_status` - Get server status information
+- `query` - Execute constrained SQL against the admin/config database
+
+**Query policy**:
+- Allows read/write SQL that starts with `SELECT`, `WITH`, `INSERT`, `UPDATE`, `DELETE`, `REPLACE`, or `VALUES`
+- Rejects DDL and dangerous control statements, including `PRAGMA`, `ATTACH`, `DETACH`, `LOAD_EXTENSION`, transaction control, and schema-altering statements
+- Rejects multi-statement input
+- Returns structured JSON with the SQL text, `rows_affected`, `row_count`, `columns`, and `rows`
 
 **Use Cases**:
 - LLM assistants that need to configure ProxySQL
@@ -249,6 +256,33 @@ The runtime and stats views expose these fields:
 - `stats_mcp_query_rules`: includes `rule_id`, `username`, `target_id`, `hits`
 
 This allows policy verification and hit analysis per logical route without exposing backend host/protocol details to MCP clients.
+
+#### `/mcp/rag` - Retrieval Endpoint
+
+**Purpose**: RAG search, retrieval, and source re-fetch operations
+
+**Tools**:
+- `rag.search_fts` - Keyword search over chunked content
+- `rag.search_vector` - Semantic search over embeddings
+- `rag.search_hybrid` - Combined FTS + vector search
+- `rag.get_chunks` - Fetch chunk content by `chunk_id`
+- `rag.get_docs` - Fetch document content by `doc_id`
+- `rag.fetch_from_source` - Re-fetch authoritative rows from the configured source backend
+- `rag.admin.stats` - Operational statistics for the RAG subsystem
+
+**Fetch policy**:
+- Looks up each requested `doc_id` from the vector database metadata tables
+- Uses the source row's `backend_type` to connect to MySQL or PostgreSQL backends
+- Reconstructs the source `SELECT` from the stored `table_name`, primary-key metadata, and optional `where_sql`
+- Returns one result row per requested document, with per-row errors when a document is missing or the backend cannot be reached
+- Rejects unsupported backend types instead of guessing a connection path
+
+**Use Cases**:
+- LLM assistants that need indexed retrieval over documents
+- Semantic search and chunk inspection
+- Operational recovery by re-reading source-of-truth rows
+
+**Authentication**: `mcp-rag_endpoint_auth` (Bearer token)
 
 ---
 
