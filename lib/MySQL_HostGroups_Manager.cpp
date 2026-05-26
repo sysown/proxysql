@@ -2012,7 +2012,7 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_rds_hostgroups_monitor_results
 			"SELECT writer_hostgroup, reader_hostgroup, hostname, port, MAX(use_ssl) use_ssl"
 			" FROM mysql_servers JOIN mysql_replication_hostgroups"
 				" ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup"
-			" WHERE status NOT IN (2,3) AND hostname LIKE '%rds.amazonaws.com'"
+			" WHERE status NOT IN (2,3) AND hostname LIKE '%rds.amazonaws.%'"
 			" GROUP BY hostname, port ORDER BY RANDOM()"
 		};
 		char* error { nullptr };
