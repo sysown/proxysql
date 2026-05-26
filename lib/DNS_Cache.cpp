@@ -347,3 +347,33 @@ bool DNS_Cache::empty() const {
 
 	return result;
 }
+
+/**
+ * @brief Check if a hostname's cached IPs include the given IP.
+ * @param hostname The hostname to look up in the cache.
+ * @param ip The IP address to search for.
+ * @return true if found, cache disabled, or hostname not cached. false only
+ *         when hostname IS cached and ip is NOT among its resolved addresses.
+ */
+bool DNS_Cache::contains_ip(const std::string& hostname, const std::string& ip) const {
+	if (!enabled) return true;
+
+	int rc = pthread_rwlock_rdlock(&rwlock_);
+	assert(rc == 0);
+
+	bool found = true;
+	auto itr = records.find(hostname);
+	if (itr != records.end()) {
+		found = false;
+		for (const auto& cached_ip : itr->second.ips) {
+			if (cached_ip == ip) {
+				found = true;
+				break;
+			}
+		}
+	}
+
+	rc = pthread_rwlock_unlock(&rwlock_);
+	assert(rc == 0);
+	return found;
+}

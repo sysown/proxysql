@@ -265,6 +265,12 @@ public:
 	 */
 	uint64_t init_time = 0;
 	/**
+	 * @brief Monotonic time when a pooled connection was checked out via get_connection().
+	 * @details Used by blue/green switchover detection to reject pre-switchover connections.
+	 *          Set once at checkout, never modified. 0 if connection was newly created.
+	 */
+	unsigned long long pool_checkout_time = 0;
+	/**
 	 * @brief Used by GroupReplication to determine if servers reported by cluster 'members' are already monitored.
 	 * @details This way we avoid non-needed locking on 'MySQL_HostGroups_Manager' for server search.
 	 */
