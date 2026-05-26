@@ -156,7 +156,7 @@ int main(int /*argc*/, char** /*argv*/) {
 		return -1;
 	}
 
-	plan(17);
+	plan(16);
 
 	PGConnPtr admin = admin_connect();
 	if (!admin) {
@@ -386,10 +386,26 @@ int main(int /*argc*/, char** /*argv*/) {
 	// =====================================================================
 	diag("---- Step 8: PgSQL cache state independent of MySQL cache");
 	// Re-enable the cache so the next inserts populate it, then make sure
-	// the MySQL counters don't budge in response to pgsql-side activity.
+	// PgSQL activity does not leak into the MySQL DNS cache.
+	//
+	// The substantive isolation guarantee is that PgSQL-side activity must
+	// not add or mutate records in the MySQL DNS cache --
+	// MySQL_Monitor_dns_cache_record_updated stays at its baseline. That is
+	// the assertion we keep.
+	//
+	// We do NOT assert on MySQL_Monitor_dns_cache_queried here because that
+	// counter is bumped by the MySQL Monitor's own DNS resolver loop on its
+	// own schedule (mysql-monitor_local_dns_cache_refresh_interval, default
+	// 60s) for every hostname in mysql_servers UNION proxysql_servers,
+	// independently of any PgSQL activity. A 4-5s test window can either
+	// catch zero ticks of that loop (counter stays flat) or one tick
+	// (counter bumps by N hostnames) -- the assertion is timing-dependent
+	// rather than logic-dependent, which made it ~40% flaky on legacy-g4
+	// without telling us anything new about isolation. record_updated
+	// staying flat is sufficient: it proves no cache mutation came from
+	// PgSQL.
 	admin_exec(admin, "SET pgsql-monitor_local_dns_cache_refresh_interval=500");
 	admin_exec(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
-	const long my_before_q = admin_counter(admin, "stats_mysql_global", "MySQL_Monitor_dns_cache_queried");
 	const long my_before_u = admin_counter(admin, "stats_mysql_global", "MySQL_Monitor_dns_cache_record_updated");
 	admin_exec(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=999");
 	admin_exec(admin,
@@ -399,11 +415,7 @@ int main(int /*argc*/, char** /*argv*/) {
 	sleep_seconds(3);
 	hammer_proxy(2);
 	sleep_seconds(1);
-	const long my_after_q = admin_counter(admin, "stats_mysql_global", "MySQL_Monitor_dns_cache_queried");
 	const long my_after_u = admin_counter(admin, "stats_mysql_global", "MySQL_Monitor_dns_cache_record_updated");
-	ok(my_after_q == my_before_q,
-		"pgsql activity did not bump MySQL_Monitor_dns_cache_queried (%ld -> %ld)",
-		my_before_q, my_after_q);
 	ok(my_after_u == my_before_u,
 		"pgsql activity did not bump MySQL_Monitor_dns_cache_record_updated (%ld -> %ld)",
 		my_before_u, my_after_u);
