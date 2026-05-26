@@ -32,7 +32,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          # fetch-depth: 0 (full clone, including tags) is required because
+          # the Makefile's GIT_VERSION_BASE comes from `git describe --long
+          # --abbrev=7`, which needs tags. With fetch-depth: 1 there are no
+          # tags, the describe falls back to --always returning a short
+          # SHA like "46ab989", and with PROXYSQL40=1 the Makefile's
+          # major-version-increment awk treats that as integer 46 → 47,
+          # producing GIT_VERSION="47." and the build aborts at
+          # Makefile:101 with "CURVER \"\" derived from GIT_VERSION
+          # \"47.\" does not have 3 numbers separated by dots."
+          #
+          # The reusable ci-builds.yml on the GH-Actions branch uses
+          # fetch-depth: 0 for the same reason.
+          fetch-depth: 0
 
       - name: Cache build artifacts (restore + save)
         uses: actions/cache@v4
