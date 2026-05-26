@@ -49,6 +49,7 @@ jobs:
         fail-on-cache-miss: true
         path: |
           proxysql/src/
+          proxysql/lib/obj/*.gcno
 
     - name: Cache restore test
       id: cache-test

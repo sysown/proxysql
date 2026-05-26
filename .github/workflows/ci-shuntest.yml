@@ -67,6 +67,7 @@ jobs:
         fail-on-cache-miss: true
         path: |
           proxysql/src/
+          proxysql/lib/obj/*.gcno
 
     - name: Checkout jenkins_build_scripts
       uses: actions/checkout@v4
