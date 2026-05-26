@@ -382,6 +382,27 @@ docker run \
 
                             if [ -f \"\${coverage_file}\" ]; then
                                 echo \">>> Coverage report generated: \${coverage_file}\"
+
+                                # Normalize SF: source-file paths in the LCOV report
+                                # so Codecov can resolve them against the runner workspace.
+                                # fastcov emits a mix of:
+                                #   SF:/opt/proxysql/include/X.h    (absolute container path
+                                #                                     embedded in .gcno files)
+                                #   SF:lib/Y.cpp                    (relative to fastcov cwd
+                                #                                     = /opt/proxysql)
+                                #   SF:proxysql/src/Z.cpp           (already correct)
+                                # codecov-cli's network_root_folder is the runner's
+                                # /home/runner/work/proxysql/proxysql and the repo content
+                                # lives at <network_root>/proxysql/, so only paths shaped
+                                # as `SF:proxysql/...` get resolved -- the other two forms
+                                # are silently dropped server-side. On the previous green
+                                # run that meant Codecov stored 27 files / 5694 lines out
+                                # of the 84621 lines fastcov actually measured.
+                                sed -i \
+                                    -e 's|^SF:/opt/proxysql/|SF:proxysql/|' \
+                                    -e '/^SF:proxysql\\//!s|^SF:|SF:proxysql/|' \
+                                    \"\${coverage_file}\"
+
                                 if command -v genhtml >/dev/null 2>&1; then
                                     local html_dir=\"\${COVERAGE_REPORT_DIR}/html\"
                                     mkdir -p \"\${html_dir}\"
