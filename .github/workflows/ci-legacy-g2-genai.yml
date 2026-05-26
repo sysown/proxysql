@@ -70,8 +70,17 @@ jobs:
       with:
         key: ${{ env.BLDCACHE }}
         fail-on-cache-miss: true
+        # MUST exactly match the path list in CI-builds' "Cache save src"
+        # step. actions/cache hashes the path list into the cache
+        # "version" alongside the key -- different path lists = different
+        # version = lookup miss, even if the key is identical and the
+        # cache plainly exists in the repo (verified via gh api).
+        # CI-builds added proxysql/lib/obj/*.gcno for the -gcov variants
+        # so this restore needs the same entry; otherwise the restore
+        # silently misses with "Failed to restore cache entry".
         path: |
           proxysql/src/
+          proxysql/lib/obj/*.gcno
 
     - name: Cache restore test
       id: cache-test
