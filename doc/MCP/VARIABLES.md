@@ -49,12 +49,19 @@ All variables are stored in the `global_variables` table with the `mcp-` prefix 
 
 ### Endpoint Authentication
 
-The following variables control authentication (Bearer tokens) for specific MCP endpoints. If left empty, no authentication is required for that endpoint.
+The following variables control authentication (Bearer tokens) for
+specific MCP endpoints.  **As of GHSA-7wh6-2vcc-gcm4 / CVE-2026-48774,
+every MCP endpoint refuses all requests when its `*_endpoint_auth`
+variable is empty.**  Each endpoint must be configured with an explicit
+non-empty bearer token before it will accept requests; the prior "empty
+= no authentication" behaviour has been removed because every endpoint
+can either execute SQL on backends or read/mutate sensitive proxy state.
 
 #### `mcp-config_endpoint_auth`
 - **Type:** String
 - **Default:** `""` (empty)
-- **Description:** Bearer token for `/mcp/config` endpoint
+- **Description:** Bearer token for `/mcp/config` endpoint. **Required:**
+  refuses all requests when empty.
 - **Runtime:** Yes
 - **Example:**
   ```sql
@@ -65,7 +72,8 @@ The following variables control authentication (Bearer tokens) for specific MCP 
 #### `mcp-stats_endpoint_auth`
 - **Type:** String
 - **Default:** `""` (empty)
-- **Description:** Bearer token for `/mcp/stats` endpoint
+- **Description:** Bearer token for `/mcp/stats` endpoint. **Required:**
+  refuses all requests when empty.
 - **Runtime:** Yes
 - **Example:**
   ```sql
@@ -76,7 +84,10 @@ The following variables control authentication (Bearer tokens) for specific MCP 
 #### `mcp-query_endpoint_auth`
 - **Type:** String
 - **Default:** `""` (empty)
-- **Description:** Bearer token for `/mcp/query` endpoint
+- **Description:** Bearer token for `/mcp/query` endpoint. **Required:**
+  refuses all requests when empty.  The `/mcp/query` endpoint executes
+  SQL on configured MCP target backends; the token must be set before
+  the endpoint will respond.
 - **Runtime:** Yes
 - **Example:**
   ```sql
@@ -87,7 +98,10 @@ The following variables control authentication (Bearer tokens) for specific MCP 
 #### `mcp-admin_endpoint_auth`
 - **Type:** String
 - **Default:** `""` (empty)
-- **Description:** Bearer token for `/mcp/admin` endpoint
+- **Description:** Bearer token for `/mcp/admin` endpoint. **Required:**
+  refuses all requests when empty.  Admin tools (`admin_kill_query`,
+  `admin_flush_cache`, `admin_reload`) are powerful operations and the
+  endpoint must not be exposed unauthenticated.
 - **Runtime:** Yes
 - **Example:**
   ```sql
@@ -98,7 +112,8 @@ The following variables control authentication (Bearer tokens) for specific MCP 
 #### `mcp-cache_endpoint_auth`
 - **Type:** String
 - **Default:** `""` (empty)
-- **Description:** Bearer token for `/mcp/cache` endpoint
+- **Description:** Bearer token for `/mcp/cache` endpoint. **Required:**
+  refuses all requests when empty.
 - **Runtime:** Yes
 - **Example:**
   ```sql
@@ -109,7 +124,9 @@ The following variables control authentication (Bearer tokens) for specific MCP 
 #### `mcp-ai_endpoint_auth`
 - **Type:** String
 - **Default:** `""` (empty)
-- **Description:** Bearer token for `/mcp/ai` endpoint
+- **Description:** Bearer token for `/mcp/ai` endpoint. **Required:**
+  refuses all requests when empty.  AI tools can dispatch backend SQL
+  via LLM-driven tool calls.
 - **Runtime:** Yes
 - **Example:**
   ```sql
