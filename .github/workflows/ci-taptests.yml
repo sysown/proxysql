@@ -147,8 +147,14 @@ jobs:
       with:
         key: ${{ env.BLDCACHE }}_test
         fail-on-cache-miss: true
-        path: |
-          proxysql/test/
+        path: cache_test.tar.zst
+
+    - name: Unpack test cache
+      run: |
+        command -v zstd >/dev/null || sudo apt-get install -y zstd
+        cd proxysql/
+        zstd -d < ../cache_test.tar.zst | tar -xf -
+        rm ../cache_test.tar.zst
 
     - name: Checkout jenkins_build_scripts
       uses: actions/checkout@v4

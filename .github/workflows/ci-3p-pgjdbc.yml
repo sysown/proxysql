@@ -82,9 +82,14 @@ jobs:
       with:
         key: ${{ env.BLDCACHE }}
         fail-on-cache-miss: true
-        path: |
-          proxysql/.git/
-          proxysql/binaries/
+        path: cache_bin.tar.zst
+
+    - name: Unpack bin cache
+      run: |
+        command -v zstd >/dev/null || sudo apt-get install -y zstd
+        cd proxysql/
+        zstd -d < ../cache_bin.tar.zst | tar -xf -
+        rm ../cache_bin.tar.zst
         
     - name: Prepare
       run: |

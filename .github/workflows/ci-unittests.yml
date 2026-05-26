@@ -57,8 +57,14 @@ jobs:
       with:
         key: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu22-tap_test
         fail-on-cache-miss: true
-        path: |
-          proxysql/test/
+        path: cache_test.tar.zst
+
+    - name: Unpack test cache
+      run: |
+        command -v zstd >/dev/null || sudo apt-get install -y zstd
+        cd proxysql/
+        zstd -d < ../cache_test.tar.zst | tar -xf -
+        rm ../cache_test.tar.zst
 
     - name: Verify binary
       run: |
