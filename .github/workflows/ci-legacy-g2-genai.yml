@@ -213,6 +213,18 @@ jobs:
         flags: tap-legacy-g2
         name: tap-legacy-g2-genai-coverage
         use_oidc: true
+        # codecov-cli's _get_file_fixes step reads every source file
+        # referenced in the LCOV report to compute line-offset
+        # adjustments, and crashes with FileNotFoundError if any path
+        # is missing. fastcov runs inside the test container with
+        # cwd=/opt/proxysql and embeds paths like
+        # `proxysql/test/afl_digest_test/c_tokenizer.cpp` -- not all of
+        # those subdirs are restored on the runner (the _test cache
+        # prunes test deps to fit GitHub's 10 GB repo cache quota).
+        # disable_file_fixes:true skips the problematic step entirely.
+        # Trade-off: Codecov line-offset annotations on PR diffs may be
+        # less precise, but aggregate coverage numbers are unaffected.
+        disable_file_fixes: true
         fail_ci_if_error: false
         verbose: true
 
