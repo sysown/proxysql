@@ -174,8 +174,13 @@ static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) 
 
 static enum sslstatus get_sslstatus(SSL* ssl, int n)
 {
+	// See issue #5792.
+	// SSL_get_error() classifies based on the return code + SSL_want() state, not on the
+	// thread-local OpenSSL error queue. For SSL_ERROR_NONE / WANT_READ / WANT_WRITE no error is
+	// pushed onto the queue, so there is nothing to clear. Only the actual error classifications
+	// (ZERO_RETURN / SYSCALL / SSL / default) need the queue drained so the next SSL op on this
+	// thread starts clean.
 	int err = SSL_get_error(ssl, n);
-	ERR_clear_error();
 	switch (err) {
 	case SSL_ERROR_NONE:
 		return SSLSTATUS_OK;
@@ -185,6 +190,9 @@ static enum sslstatus get_sslstatus(SSL* ssl, int n)
 	case SSL_ERROR_ZERO_RETURN:
 	case SSL_ERROR_SYSCALL:
 	default:
+		// drain the queue; any consumer that wanted the details should have read them
+		// before returning to this point
+		while (ERR_get_error()) { /* discard */ }
 		return SSLSTATUS_FAIL;
 	}
 }
