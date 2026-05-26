@@ -28,8 +28,10 @@
 #include <arpa/inet.h>
 #include <cerrno>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <sys/socket.h>
@@ -44,20 +46,36 @@
 #include "utils.h"
 
 static int tcp_connect(const char* host, int port) {
-	int fd = socket(AF_INET, SOCK_STREAM, 0);
-	if (fd < 0) return -1;
-	struct sockaddr_in sa;
-	memset(&sa, 0, sizeof(sa));
-	sa.sin_family = AF_INET;
-	sa.sin_port = htons(port);
-	if (inet_pton(AF_INET, host, &sa.sin_addr) != 1) {
-		close(fd);
+	// `host` is whatever cl.host / cl.pgsql_host resolves to. In CI it is
+	// the Docker DNS hostname ("proxysql") of the proxy container, not a
+	// numeric IP, so inet_pton(AF_INET, host, ...) returned 0 and made
+	// every probe in this test fail before any byte was sent. getaddrinfo
+	// handles both hostnames and numeric IPs, which is what we actually
+	// want.
+	char port_str[16];
+	snprintf(port_str, sizeof(port_str), "%d", port);
+	struct addrinfo hints;
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_INET;
+	hints.ai_socktype = SOCK_STREAM;
+	struct addrinfo* res = nullptr;
+	int rc = getaddrinfo(host, port_str, &hints, &res);
+	if (rc != 0 || res == nullptr) {
+		diag("tcp_connect: getaddrinfo(%s:%d) failed: %s",
+		     host, port, gai_strerror(rc));
 		return -1;
 	}
-	if (connect(fd, reinterpret_cast<struct sockaddr*>(&sa), sizeof(sa)) != 0) {
-		close(fd);
+	int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+	if (fd < 0) {
+		freeaddrinfo(res);
 		return -1;
 	}
+	if (connect(fd, res->ai_addr, res->ai_addrlen) != 0) {
+		close(fd);
+		freeaddrinfo(res);
+		return -1;
+	}
+	freeaddrinfo(res);
 	return fd;
 }
 
