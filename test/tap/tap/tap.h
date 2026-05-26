@@ -275,16 +275,12 @@ void BAIL_OUT(char const *fmt, ...)
 int exit_status(void);
 
 
-/**
-   Skip entire test suite.
-
-   To skip the entire test suite, use this function. It will
-   automatically call exit(), so there is no need to have checks
-   around it.
- */
-
-void skip_all(char const *reason, ...)
-  __attribute__((noreturn, format(printf, 1, 2)));
+// skip_all() was removed: silently skipping a whole test suite when a
+// runtime precondition is missing hides setup bugs and erodes coverage.
+// Use BAIL_OUT() to fail loudly instead, and fix the misregistration in
+// test/tap/groups/groups.json or the missing env in the group's env.sh.
+// See the PR that removed skip_all for the rationale and the conversion
+// pattern for the four former callers.
 
 
 /**

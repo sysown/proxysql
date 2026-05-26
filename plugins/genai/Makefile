@@ -72,6 +72,11 @@ CXXFLAGS := $(STDCPP) -fPIC $(OPTZ) $(WGCOV) $(WASAN) -pthread \
 	-fstack-protector-strong \
 	$(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLGA)
 
+PLUGIN_LDFLAGS :=
+ifeq ($(UNAME_S),Darwin)
+PLUGIN_LDFLAGS += -Wl,-undefined,dynamic_lookup
+endif
+
 .DEFAULT_GOAL := all
 
 SRCS := $(PLUGIN_DIR)/src/plugin_main.cpp \
@@ -117,7 +122,7 @@ $(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) | $(ODIR)
 	$(CXX) -c -o $@ $< $(CXXFLAGS) $(IDIRS)
 
 $(PLUGIN_SO): $(OBJS)
-	$(CXX) -shared -o $@ $^ $(CXXFLAGS)
+	$(CXX) -shared -o $@ $^ $(CXXFLAGS) $(PLUGIN_LDFLAGS)
 
 .PHONY: all
 all: $(PLUGIN_SO)

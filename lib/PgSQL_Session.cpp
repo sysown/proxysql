@@ -4501,6 +4501,17 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 
 		if (pgsql_thread___set_parser_algorithm == 3
 			|| pgsql_thread___query_processor_parser == 1) {
+			// Walker takes the query as-is. Note this diverges from
+			// algorithms 0/1/2 (PgSQL_Set_Stmt_Parser::set_query() runs
+			// remove_spaces() to collapse all whitespace to single spaces,
+			// even inside string literals -- a destructive behaviour that
+			// silently mutates user-visible SET values like `SET app.note =
+			// 'a   b'` to `'a b'`). The walker preserves the original input
+			// and is the more correct behaviour; the regex-parser quirk is
+			// preserved on the algo 0/1/2 path for backward compatibility.
+			// pgsql-set_parameter_validation_test-t case #150 is aware of
+			// this divergence and asserts the appropriate expected value
+			// per algorithm.
 			set = parsersql_parse_set_pgsql(nq);
 		} else {
 			thread->thr_SetParser->set_query(nq); // replace the query
@@ -4513,7 +4524,7 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 		for (auto it = std::begin(set); it != std::end(set); ++it) {
 			std::string var = it->first;
 			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET variable %s\n", var.c_str());
-			if (it->second.size() < 1 || it->second.size() > 2) {
+			if (it->second.size() < 1) {
 				// error not enough arguments
 				string query_str = string((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
 				string digest_str = string(CurrentQuery.get_digest_text());
@@ -4532,7 +4543,18 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 				return false;
 			}
 
+			// PostgreSQL allows multi-value lists for some variables, notably
+			// search_path and datestyle (e.g. `SET search_path TO "$user", public`).
+			// ParserSQL v1.0.3 captures every value as a separate sibling; here
+			// we collapse them into the comma-separated form PG itself uses for
+			// these parameters before handing to the per-variable validator and
+			// tracker. Single-value SETs hit this loop with size()==1 and take
+			// just it->second.front() (unchanged behaviour).
 			std::string value1 = it->second.front();
+			for (size_t vi = 1; vi < it->second.size(); ++vi) {
+				value1 += ", ";
+				value1 += it->second[vi];
+			}
 			if (std::find(pgsql_critical_variables.begin(), pgsql_critical_variables.end(), var) != pgsql_critical_variables.end() ||
 				pgsql_other_variables.find(var) != pgsql_other_variables.end()) {
 
@@ -4654,7 +4676,22 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 		}
 
 		if (failed_to_parse_var) {
-			unable_to_parse_set_statement(lock_hostgroup);
+			// Reached here means match_regexes[1] matched (the outer `if` at
+			// line 4492 above) so the SET targets a variable proxysql tracks
+			// (search_path, datestyle, etc.), but the SET parser couldn't
+			// build a usable map (malformed value, unclosed delimiter,
+			// trailing comma, etc.). Forward to the backend without locking
+			// the hostgroup: PG itself will reject the bad SET (or for
+			// silently-accepted edge cases like a 64-char delimited ident,
+			// the subsequent tracked-variable SETs need to still flow
+			// through proxysql's validator -- locking here would short-circuit
+			// every later SET on this connection past PgSQL_Session's
+			// handle_SET_command and let invalid SETs slip through to PG
+			// uncriticized. See pgsql-set_parameter_validation_test-t
+			// case #184 cascade for the concrete failure mode.
+			string query_str = string((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
+			proxy_warning("Unable to parse SET query for tracked variable; forwarding to backend without hostgroup lock: %s\n",
+				query_str.c_str());
 			return false;
 		}
 
@@ -6342,9 +6379,15 @@ bool PgSQL_Session::is_in_transaction() const {
  * status values.
  * @note This method is primarily used to maintain a history of the session's previous states for later reference or
  * recovery purposes.
- * @note The LCOV_EXCL_START and LCOV_EXCL_STOP directives are used to exclude the assert statement from code coverage
- * analysis because the condition should not occur during normal execution and is included as a safeguard against
- * programming errors.
+ * @note The lcov exclude-block directives wrapping the `assert(0)` below
+ * remove that line from coverage analysis -- the condition should never
+ * occur during normal execution and is only there as a safeguard against
+ * programming errors. (The literal directive strings are deliberately not
+ * spelled out in this comment because lcov's geninfo scans every source
+ * line for them and treats the doc occurrence as a real exclude marker,
+ * which double-opens the exclude block at line 6399 and breaks coverage
+ * capture for the whole file with a "overlapping exclude directives"
+ * error.)
  */
 void PgSQL_Session::set_previous_status_mode3(bool allow_execute) {
 	switch (status) {

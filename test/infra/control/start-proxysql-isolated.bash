@@ -144,7 +144,7 @@ GENAI_PLUGIN_MOUNT=""
 if [ "${PROXYSQL_LOAD_GENAI_PLUGIN:-0}" = "1" ]; then
     if [ ! -f "${GENAI_PLUGIN_SRC}" ]; then
         echo "ERROR: PROXYSQL_LOAD_GENAI_PLUGIN=1 but plugin .so missing at ${GENAI_PLUGIN_SRC}" >&2
-        echo "       Build it first: PROXYSQLGENAI=1 make (or cd plugins/genai && make with the right flags)" >&2
+        echo "       Build it first: PROXYSQL40=1 make (or cd plugins/genai && make with the right flags)" >&2
         exit 1
     fi
     GENAI_PLUGIN_MOUNT="-v ${GENAI_PLUGIN_SRC}:/usr/lib/proxysql/ProxySQL_GenAI_Plugin.so:ro"

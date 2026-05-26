@@ -10,7 +10,7 @@
  *   - get_interval_config()  -- interval string->seconds mapping
  *   - calculate_percentile() -- histogram percentile estimation
  *
- * Compiled only when PROXYSQLGENAI=1 (auto-detected from libproxysql.a).
+ * Built with all v4.0 plugins under PROXYSQL40=1 (auto-detected from libproxysql.a).
  */
 
 #include "tap.h"
