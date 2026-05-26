@@ -13,45 +13,25 @@ env:
 jobs:
   tests:
     runs-on: ubuntu-22.04
-    # Permissions: declaring this block at all switches the GITHUB_TOKEN
-    # from "all default scopes" to "exactly what is listed here", so each
-    # entry below is load-bearing.
-    #
-    # - contents: read       checkout
-    # - id-token: write      lets codecov/codecov-action@v4 mint a GitHub
-    #                        OIDC token (use_oidc: true) -- the repo has
-    #                        no CODECOV_TOKEN secret, OIDC is the only
-    #                        working Codecov auth path
-    # - checks: write        LouisBrunner/checks-action posts an
-    #                        in_progress -> completed check run via the
-    #                        /check-runs API. Without this the first
-    #                        LouisBrunner step fails on permission error
-    #                        and cascades every test step to "skipped".
-    # - packages: read       `docker pull ghcr.io/sysown/proxysql-ci-base`
-    #                        in the "Log in to GHCR" step authenticates
-    #                        with GITHUB_TOKEN. Without packages:read the
-    #                        GHCR API returns "denied" and all 5 retry
-    #                        attempts fail, again cascading the test step
-    #                        to "skipped".
-    # - actions: write       actions/cache/restore@v4 reads cached build
-    #                        artifacts via the actions cache API. `read`
-    #                        is the documented minimum but is empirically
-    #                        insufficient -- the restore still fails with
-    #                        "Failed to restore cache entry" even though
-    #                        the cache exists (verified via gh api
-    #                        repos/.../actions/caches). `write` is what
-    #                        the default token grants and what the
-    #                        successful cascade runs use, so we mirror
-    #                        that here.
-    #
-    # Caller workflow CI-legacy-g2-genai.yml on v3.0 mirrors this list;
-    # reusable-workflow permissions are the intersection of caller + callee.
-    permissions:
-      contents: read
-      id-token: write
-      checks: write
-      packages: read
-      actions: write
+    # `write-all` grants every default GITHUB_TOKEN scope plus the
+    # id-token:write scope codecov-action@v4 needs to mint a GitHub OIDC
+    # token for `use_oidc: true`. We arrived at this after a tight
+    # ratchet of "add one specific scope, find the next missing one":
+    # an explicit `permissions:` block makes the list exhaustive (every
+    # scope not listed is revoked from GITHUB_TOKEN), and Phase 2 needs
+    # contents, checks, packages, actions, AND id-token -- five
+    # successive failed runs added each one in turn, and even with all
+    # five listed the cache restore step still failed. Falling back to
+    # `write-all` matches what the cascading workflow_run runs have
+    # implicitly and is what the rest of the TAP group workflows in the
+    # repo use (none of them declare `permissions:` at all). The only
+    # ProxySQL-specific need we add over their defaults is OIDC, and
+    # write-all includes id-token. Trade-off: broader scope than ideal,
+    # but provably works and matches the rest of the repo's posture.
+    # Caller workflow CI-legacy-g2-genai.yml on v3.0 must also declare
+    # write-all for the permissions to propagate through the reusable
+    # call (permissions are intersected caller-callee).
+    permissions: write-all
     strategy:
       fail-fast: false
       matrix:
