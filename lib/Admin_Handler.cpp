@@ -429,6 +429,56 @@ static void convert_regex_to_like(char* dst, const char* src, size_t dst_size) {
 	*dst = '\0';
 }
 
+// Return a pointer into `q` past leading whitespace and /* ... */ block
+// comments. `len` bounds the scan; the returned pointer is within
+// [q, q+len]. The buffer is not mutated; an unterminated /* consumes
+// the rest.
+//
+// Used so the connect-setup matchers below recognise queries prefixed
+// by SQL tracing comments emitted by SQLCommenter, Datadog Agent's
+// mysql integration CommenterCursor, Sequelize, Hibernate, etc. — all
+// of which use the /* ... */ form. See sysown/proxysql#5786.
+//
+// Only block comments are handled here on purpose: by the time this
+// helper runs, remove_spaces() above has already collapsed runs of
+// whitespace (including '\n' and '\r') to a single space, so MySQL
+// `-- ` / `#` line-comment terminators no longer exist in the buffer
+// and cannot be parsed unambiguously. Block-comment recognition is
+// unaffected by remove_spaces because `*/` survives intact.
+static const char* skip_leading_sql_comments(const char* q, size_t len) {
+	// SQL whitespace is a fixed ASCII set; using an inline check rather
+	// than <cctype> isspace() avoids any C-locale dependency.
+	auto is_sql_ws = [](char c) -> bool {
+		return c == ' ' || c == '\t' || c == '\n'
+			|| c == '\r' || c == '\v' || c == '\f';
+	};
+	const char* p = q;
+	size_t      n = len;
+	while (n > 0) {
+		while (n > 0 && is_sql_ws(*p)) {
+			p++; n--;
+		}
+		if (n == 0) break;
+
+		// /* ... */ block comment (SQL: no nesting)
+		if (n >= 2 && p[0] == '/' && p[1] == '*') {
+			p += 2; n -= 2;
+			while (n >= 2 && !(p[0] == '*' && p[1] == '/')) {
+				p++; n--;
+			}
+			if (n >= 2) {
+				p += 2; n -= 2;   // consume closing */
+			} else {
+				p += n; n = 0;    // unterminated /* — consume rest
+			}
+			continue;
+		}
+
+		break;
+	}
+	return p;
+}
+
 // Unified handler for \dt, \di, \dv commands
 // sqlite_type: "table", "index", or "view"
 // columns: columns to SELECT (e.g., "name" or "name, tbl_name")
@@ -3854,34 +3904,48 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
-	// fix bug #442
-	if (!strncmp("SET SQL_SAFE_UPDATES=1", query_no_space, strlen("SET SQL_SAFE_UPDATES=1"))) {
-		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
-		run_query=false;
-		goto __run_query;
-	}
+	// Strip leading SQL comments once for the two connect-setup accept
+	// blocks below, so clients that prepend SQL tracing comments
+	// (SQLCommenter, Datadog Agent's mysql integration CommenterCursor,
+	// Sequelize, Hibernate, …) are recognised. The original
+	// `query_no_space` is unchanged and is what gets passed to
+	// `send_ok_msg_to_client` for audit/digest fidelity. The local
+	// `mb` is wrapped in its own block scope so the existing `goto
+	// __run_query` statements earlier in this function do not jump
+	// past its initialiser (cpp:S1036).
+	// See sysown/proxysql#5786.
+	{
+		const char *mb = skip_leading_sql_comments(query_no_space, query_no_space_length);
 
-	// fix bug #1047
-	if (
-		(!strncasecmp("BEGIN", query_no_space, strlen("BEGIN")))
-		||
-		(!strncasecmp("START TRANSACTION", query_no_space, strlen("START TRANSACTION")))
-		||
-		(!strncasecmp("COMMIT", query_no_space, strlen("COMMIT")))
-		||
-		(!strncasecmp("ROLLBACK", query_no_space, strlen("ROLLBACK")))
-		||
-		(!strncasecmp("SET character_set_results", query_no_space, strlen("SET character_set_results")))
-		||
-		(!strncasecmp("SET SQL_AUTO_IS_NULL", query_no_space, strlen("SET SQL_AUTO_IS_NULL")))
-		||
-		(!strncasecmp("SET NAMES", query_no_space, strlen("SET NAMES")))
-		||
-		(!strncasecmp("SET AUTOCOMMIT", query_no_space, strlen("SET AUTOCOMMIT")))
-	) {
-		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
-		run_query=false;
-		goto __run_query;
+		// fix bug #442
+		if (!strncmp("SET SQL_SAFE_UPDATES=1", mb, strlen("SET SQL_SAFE_UPDATES=1"))) {
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			run_query=false;
+			goto __run_query;
+		}
+
+		// fix bug #1047
+		if (
+			(!strncasecmp("BEGIN", mb, strlen("BEGIN")))
+			||
+			(!strncasecmp("START TRANSACTION", mb, strlen("START TRANSACTION")))
+			||
+			(!strncasecmp("COMMIT", mb, strlen("COMMIT")))
+			||
+			(!strncasecmp("ROLLBACK", mb, strlen("ROLLBACK")))
+			||
+			(!strncasecmp("SET character_set_results", mb, strlen("SET character_set_results")))
+			||
+			(!strncasecmp("SET SQL_AUTO_IS_NULL", mb, strlen("SET SQL_AUTO_IS_NULL")))
+			||
+			(!strncasecmp("SET NAMES", mb, strlen("SET NAMES")))
+			||
+			(!strncasecmp("SET AUTOCOMMIT", mb, strlen("SET AUTOCOMMIT")))
+		) {
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			run_query=false;
+			goto __run_query;
+		}
 	}
 
 	// MySQL client check command for dollars quote support, starting at version '8.1.0'. See #4300.
