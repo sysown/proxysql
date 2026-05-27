@@ -394,7 +394,17 @@ docker run \
                                 # codecov-cli's network_root_folder is the runner's
                                 # /home/runner/work/proxysql/proxysql and the repo content
                                 # lives at <network_root>/proxysql/, so only paths shaped
-                                # as `SF:proxysql/...` get resolved -- the other two forms
+                                # as 'SF:proxysql/...' get resolved -- the other two forms
+                                # NB to future editors: this whole script body is the
+                                # argument to an outer bash -c that is wrapped in
+                                # DOUBLE QUOTES. Inside those outer double quotes,
+                                # backticks still trigger command substitution and bare
+                                # double-quote characters terminate the argument early.
+                                # That means comments here must avoid backticks (use
+                                # apostrophes for inline code) and avoid any literal
+                                # double-quote character (use apostrophes, or escape
+                                # as backslash-double-quote like the script body does
+                                # for genuine strings).
                                 # are silently dropped server-side. On the previous green
                                 # run that meant Codecov stored 27 files / 5694 lines out
                                 # of the 84621 lines fastcov actually measured.
