@@ -13,13 +13,19 @@ env:
 jobs:
   tests:
     runs-on: ubuntu-22.04
+    # `write-all` grants every default GITHUB_TOKEN scope plus the
+    # id-token:write scope codecov-action@v4 needs to mint a GitHub OIDC
+    # token for `use_oidc: true`. Caller workflow on v3.0 must also
+    # declare write-all for the permissions to propagate through the
+    # reusable call (permissions are intersected caller-callee).
+    permissions: write-all
     strategy:
       fail-fast: false
       matrix:
         infradb: [ 'mysql84' ]
     env:
-      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu22-tap_src
-      MATRIX: '(${{ matrix.infradb }})'
+      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu24-tap-genai-gcov_src
+      MATRIX: '(${{ matrix.infradb }},genai-gcov)'
 
     steps:
 
@@ -51,6 +57,14 @@ jobs:
       with:
         key: ${{ env.BLDCACHE }}
         fail-on-cache-miss: true
+        # MUST exactly match the path list in CI-builds' "Cache save src"
+        # step. actions/cache hashes the path list into the cache
+        # "version" alongside the key -- different path lists = different
+        # version = lookup miss, even if the key is identical and the
+        # cache plainly exists in the repo (verified via gh api).
+        # CI-builds added proxysql/lib/obj/*.gcno for the -gcov variants
+        # so this restore needs the same entry; otherwise the restore
+        # silently misses with "Failed to restore cache entry".
         path: |
           proxysql/src/
           proxysql/lib/obj/*.gcno
@@ -59,7 +73,7 @@ jobs:
       id: cache-test
       uses: actions/cache/restore@v4
       with:
-        key: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu22-tap_test
+        key: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu24-tap-genai-gcov_test
         fail-on-cache-miss: true
         path: cache_test.tar.zst
 
@@ -120,6 +134,7 @@ jobs:
         cd proxysql
         export INFRA_ID="ci-mysql84-g5"
         export TAP_GROUP="mysql84-g5"
+        export COVERAGE=1
         test/infra/control/run-tests-isolated.bash
 
     - name: Cleanup
@@ -152,6 +167,50 @@ jobs:
         name: ${{ github.workflow }}-${{ env.SHA }}-logs-run#${{ github.run_number }}
         path: |
           proxysql/ci_*_logs/
+
+    - name: Archive coverage report
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ github.workflow }}-${{ env.SHA }}-coverage-run#${{ github.run_number }}
+        path: |
+          proxysql/ci_infra_logs/ci-mysql84-g5/coverage-report/
+        if-no-files-found: ignore
+
+    - name: Upload coverage to Codecov
+      # Send the LCOV .info file fastcov produces in run-tests-isolated.bash
+      # (under proxysql/ci_infra_logs/ci-mysql84-g5/coverage-report/) to
+      # Codecov. The proxysql binary was built WITHGCOV=1 (-tap-genai-gcov
+      # build cache) and was the live daemon answering the mysql84-g5 TAP
+      # suite, so the report reflects production code paths exercised by
+      # integration tests, not just the lib-only unit-test slice.
+      #
+      # `flags: tap-mysql84-g5` lets Codecov merge per-group uploads and show
+      # per-flag coverage trends. `use_oidc: true` is mandatory -- the
+      # repo has no CODECOV_TOKEN secret and Codecov rejects tokenless
+      # legacy uploads with "branch is protected" HTTP 400.
+      #
+      # `fail_ci_if_error: false` so a Codecov outage never fails the
+      # whole TAP group; `!cancelled()` so coverage uploads even when
+      # the test step itself reported a failure (partial coverage is
+      # still useful diagnostically).
+      if: ${{ !cancelled() }}
+      uses: codecov/codecov-action@v4
+      with:
+        files: proxysql/ci_infra_logs/ci-mysql84-g5/coverage-report/ci-mysql84-g5.info
+        flags: tap-mysql84-g5
+        name: tap-mysql84-g5-coverage
+        use_oidc: true
+        # codecov-cli's _get_file_fixes step reads every source file
+        # referenced in the LCOV report and crashes with FileNotFoundError
+        # if any path is missing (the _test cache prunes test deps to fit
+        # GitHub's 10 GB repo cache quota, so not all subdirs are restored
+        # on the runner). disable_file_fixes:true skips that step. Trade-
+        # off: Codecov line-offset annotations on PR diffs may be less
+        # precise, but aggregate coverage numbers are unaffected.
+        disable_file_fixes: true
+        fail_ci_if_error: false
+        verbose: true
 
     - uses: LouisBrunner/checks-action@v2.0.0
       if: always()
