@@ -271,17 +271,23 @@ jobs:
           grep 'exited with code 0' ${LOG} || exit 1
         done
 
-    - name: Pack bin cache with zstd-22
+    - name: Pack bin cache with zstd-15
       id: cache-pack-bin
       if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' }}
       # `actions/cache@v4` compresses with zstd level ~3; we pre-compress
-      # with zstd --ultra -22 to fit more under the 10 GB repo quota.
-      # Re-compression by actions/cache on the already-compressed .tar.zst
-      # is a near-no-op. Symbols are preserved bit-for-bit.
+      # with zstd -15 to fit more under the 10 GB repo quota. Level 15
+      # captures most of the size win (~80% of what --ultra -22 gives
+      # over default -3) at roughly 1/10 the time on this codebase --
+      # `--ultra -22` measured 14-16 min just on the test cache step per
+      # ubuntu build job (vs ~17 min for the build itself), pushing
+      # CI-builds wall clock to ~38 min and gating every downstream TAP
+      # workflow on it. Re-compression by actions/cache on the already-
+      # compressed .tar.zst is a near-no-op. Symbols are preserved
+      # bit-for-bit.
       run: |
         command -v zstd >/dev/null || sudo apt-get install -y zstd
         cd proxysql/
-        tar -cf - .git/ binaries/ | zstd --ultra -22 -T0 -o ../cache_bin.tar.zst
+        tar -cf - .git/ binaries/ | zstd -15 -T0 -o ../cache_bin.tar.zst
 
     - name: Cache save bin
       id: cache-save-bin
@@ -314,17 +320,21 @@ jobs:
           proxysql/src/
           proxysql/lib/obj/*.gcno
 
-    - name: Pack test cache with zstd-22
+    - name: Pack test cache with zstd-15
       id: cache-pack-test
       if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
       # `actions/cache@v4` compresses with zstd level ~3; we pre-compress
-      # with zstd --ultra -22 to fit more under the 10 GB repo quota.
-      # Re-compression by actions/cache on the already-compressed .tar.zst
-      # is a near-no-op. Symbols are preserved bit-for-bit.
+      # with zstd -15 to fit more under the 10 GB repo quota. See the
+      # bin-cache pack step above for the rationale on dropping from
+      # `--ultra -22` to -15: this step alone was taking 14-16 min per
+      # ubuntu build job at --ultra -22, doubling CI-builds wall clock
+      # and blocking every downstream TAP workflow on it. Re-compression
+      # by actions/cache on the already-compressed .tar.zst is a near-
+      # no-op. Symbols are preserved bit-for-bit.
       run: |
         command -v zstd >/dev/null || sudo apt-get install -y zstd
         cd proxysql/
-        tar -cf - test/ | zstd --ultra -22 -T0 -o ../cache_test.tar.zst
+        tar -cf - test/ | zstd -15 -T0 -o ../cache_test.tar.zst
 
     - name: Cache save test
       id: cache-save-test
