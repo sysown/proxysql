@@ -395,15 +395,16 @@ docker run \
                                 # /home/runner/work/proxysql/proxysql and the repo content
                                 # lives at <network_root>/proxysql/, so only paths shaped
                                 # as 'SF:proxysql/...' get resolved -- the other two forms
-                                # (NB: single quotes throughout this comment, never
-                                # backticks. The whole script body is the argument to
-                                # an outer "bash -c" wrapped in double quotes; inside
-                                # double quotes backticks trigger command substitution,
-                                # so a backtick-quoted token like SF:proxysql/... would
-                                # make the OUTER shell try to execute it as a command,
-                                # log "No such file or directory", and trip set -e at
-                                # the docker-run line before the inner script ever
-                                # starts).
+                                # NB to future editors: this whole script body is the
+                                # argument to an outer bash -c that is wrapped in
+                                # DOUBLE QUOTES. Inside those outer double quotes,
+                                # backticks still trigger command substitution and bare
+                                # double-quote characters terminate the argument early.
+                                # That means comments here must avoid backticks (use
+                                # apostrophes for inline code) and avoid any literal
+                                # double-quote character (use apostrophes, or escape
+                                # as backslash-double-quote like the script body does
+                                # for genuine strings).
                                 # are silently dropped server-side. On the previous green
                                 # run that meant Codecov stored 27 files / 5694 lines out
                                 # of the 84621 lines fastcov actually measured.
