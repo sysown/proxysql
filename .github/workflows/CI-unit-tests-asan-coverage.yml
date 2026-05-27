@@ -80,6 +80,14 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      # `LouisBrunner/checks-action@v2.0.0` (last step) needs to POST
+      # check-runs to update the workflow's check status; without
+      # checks:write it fails with "Resource not accessible by
+      # integration" on every run, which made the workflow show red
+      # even when build, tests, coverage capture, and Codecov upload
+      # all succeeded. Pre-dates this PR but found while investigating
+      # the #5828 cascade's red lines.
+      checks: write
 
     steps:
 
