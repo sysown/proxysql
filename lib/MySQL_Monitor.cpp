@@ -9409,7 +9409,7 @@ rds_mon_st_t rds_mon_action_over_resp_srv(
  * @return A bool indicating if it was a precheck scenario.
  */
 bool handle_rds_topology_precheck_cases(MySQL_Monitor_State_Data* mmsd, rds_mon_st_t& next_mon_st) {
-	MySQL_Monitor_Aws_Metadata_Check check_type = mmsd->get_task_type();
+	MySQL_Monitor_State_Data_Task_Type check_type = mmsd->get_task_type();
 	if (check_type != MON_READ_ONLY__AND__AWS_RDS_TABLE_EXISTS && check_type != MON_READ_ONLY__AND__AWS_RDS_VERSION_CHECK)	 {
 		return false;
 	}
