@@ -9235,7 +9235,7 @@ pair<rds_mon_st_t,vector<rds_srv_st_t>> process_discovered_topology(
 			if (!peer.version.empty()) { all_version_empty = false; break; }
 		}
 		if (all_version_empty) {
-			proxy_info("AWS RDS BGD check returned Multi-AZ topology (version=NULL), treating as MULTIAZ\n");
+			proxy_info("AWS RDS BGD check returned Multi-AZ topology (version=NULL), treating as Multi-AZ\n");
 			next_mon_st.check_type = AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_CHECK;
 			// Fall through to validation below
 		}
@@ -9399,83 +9399,59 @@ rds_mon_st_t rds_mon_action_over_resp_srv(
 	return next_mon_st;
 }
 
+/**
+ * @brief Allows quick handling of rds_topology table checks that don't return table contents
+ *
+ * @param mmsd The 'mmsd' holding info about the query run on the server.
+ * @param next_mon_st A reference to the next rds monitoring task. Is modified according to mmsd.
+ * @param check_type Information about which check was performed.
+ * 
+ * @return A bool indicating if it was a precheck scenario.
+ */
+bool handle_rds_topology_precheck_cases(MySQL_Monitor_State_Data* mmsd, rds_mon_st_t& next_mon_st) {
+	MySQL_Monitor_Aws_Metadata_Check check_type = mmsd->get_task_type();
+	if (check_type != MON_READ_ONLY__AND__AWS_RDS_TABLE_EXISTS && check_type != MON_READ_ONLY__AND__AWS_RDS_VERSION_CHECK)	 {
+		return false;
+	}
+
+	if (mmsd->interr == 0 && mmsd->result) {
+		MYSQL_ROW row = mysql_fetch_row(mmsd->result);
+		if (row) {
+			bool read_only = !(row[0] && !strcasecmp(row[0], "0"));
+			bool check_result = (row[1] && !strcasecmp(row[1], "1"));
+
+			// TODO: remove this call once monitor_read_only is configured to also check RDS servers again
+			MyHGM->read_only_action_v2({
+				{ string(mmsd->hostname), static_cast<uint32_t>(mmsd->port), static_cast<int>(read_only) }
+			});
+
+			if (check_result && check_type == MON_READ_ONLY__AND__AWS_RDS_TABLE_EXISTS) {
+				// Transition to VERSION_CHECK with 1s delay
+				next_mon_st.check_type = AWS_RDS_VERSION_CHECK;
+				next_mon_st.next_check_delay = 1000;
+			} else if (check_result && check_type == MON_READ_ONLY__AND__AWS_RDS_VERSION_CHECK) {
+				next_mon_st.check_type = AWS_RDS_BLUE_GREEN_DEPLOYMENT_STATE_CHECK;
+			} else {
+				next_mon_st.check_type = AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_CHECK;
+			}
+		}
+		mysql_free_result(mmsd->result);
+		mmsd->result = NULL;
+	} else {
+		rds_report_fetching_errs(mmsd);
+	}
+
+	handle_mmsd_mysql_conn(mmsd);
+	return true;
+}
+
 rds_mon_st_t async_rds_mon_actions_handler(
 	MySQL_Monitor_State_Data* mmsd, const rds_mon_st_t& cur_mon_st
 ) {
+	rds_mon_st_t next_mon_st { cur_mon_st };
+
 	// Handle TABLE_EXISTS check — result format: (read_only, has_rds_topology)
-	if ( mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_TABLE_EXISTS ) {
-		rds_mon_st_t next_mon_st { cur_mon_st };
-
-		if (mmsd->interr == 0 && mmsd->result) {
-			MYSQL_ROW row = mysql_fetch_row(mmsd->result);
-			if (row) {
-				bool read_only = !(row[0] && !strcasecmp(row[0], "0"));
-				bool has_table = (row[1] && !strcasecmp(row[1], "1"));
-
-				MyHGM->read_only_action_v2({
-					{ string(mmsd->hostname), static_cast<uint32_t>(mmsd->port), static_cast<int>(read_only) }
-				});
-
-				if (has_table) {
-					proxy_info(
-						"AWS RDS host %s:%d has mysql.rds_topology, proceeding to version check\n",
-						mmsd->hostname, mmsd->port
-					);
-					// Transition to VERSION_CHECK with 1s delay
-					next_mon_st.check_type = AWS_RDS_VERSION_CHECK;
-					next_mon_st.next_check_delay = 1000;
-				} else {
-					proxy_info(
-						"AWS RDS host %s:%d does not have mysql.rds_topology\n",
-						mmsd->hostname, mmsd->port
-					);
-				}
-			}
-			mysql_free_result(mmsd->result);
-			mmsd->result = NULL;
-		} else {
-			rds_report_fetching_errs(mmsd);
-		}
-
-		handle_mmsd_mysql_conn(mmsd);
-		return next_mon_st;
-	}
-
-	// Handle VERSION_CHECK — result format: (read_only, has_version_col)
-	if (mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_VERSION_CHECK) {
-		rds_mon_st_t next_mon_st { cur_mon_st };
-
-		if (mmsd->interr == 0 && mmsd->result) {
-			MYSQL_ROW row = mysql_fetch_row(mmsd->result);
-			if (row) {
-				bool read_only = !(row[0] && !strcasecmp(row[0], "0"));
-				bool has_version_col = (row[1] && !strcasecmp(row[1], "1"));
-
-				MyHGM->read_only_action_v2({
-					{ string(mmsd->hostname), static_cast<uint32_t>(mmsd->port), static_cast<int>(read_only) }
-				});
-
-				if (has_version_col) {
-					proxy_info(
-						"AWS RDS host %s:%d has BGD table schema (version column present)\n",
-						mmsd->hostname, mmsd->port
-					);
-					next_mon_st.check_type = AWS_RDS_BLUE_GREEN_DEPLOYMENT_STATE_CHECK;
-				} else {
-					proxy_info(
-						"AWS RDS host %s:%d has Multi-AZ cluster table schema (no version column)\n",
-						mmsd->hostname, mmsd->port
-					);
-					next_mon_st.check_type = AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_CHECK;
-				}
-			}
-			mysql_free_result(mmsd->result);
-			mmsd->result = NULL;
-		} else {
-			rds_report_fetching_errs(mmsd);
-		}
-
-		handle_mmsd_mysql_conn(mmsd);
+	if (handle_rds_topology_precheck_cases(mmsd, next_mon_st)) {
 		return next_mon_st;
 	}
 
@@ -9500,7 +9476,7 @@ rds_mon_st_t async_rds_mon_actions_handler(
 
 	// Perform monitoring actions; tables updates and server placement operations
 	const auto nodes_info { rds_update_hosts_map(start_time, p_node_peers_t, mmsd) };
-	rds_mon_st_t next_mon_st { rds_mon_action_over_resp_srv(mmsd, nodes_info, cur_mon_st) };
+	next_mon_st = rds_mon_action_over_resp_srv(mmsd, nodes_info, cur_mon_st);
 
 	proxy_info("AWS RDS topology action for %s:%d: next_check_type=%d\n",
 		mmsd->hostname, mmsd->port, (int)next_mon_st.check_type);
