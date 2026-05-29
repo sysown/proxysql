@@ -68,13 +68,9 @@ struct cmp_str {
 
 #define AWS_ENDPOINT_SUFFIX_STRING "rds.amazonaws."
 #define QUERY_READ_ONLY_AND_AWS_RDS_TABLE_EXISTS "SELECT @@global.read_only AS read_only, EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema='mysql' AND table_name='rds_topology') AS has_rds_topology"
-#define QUERY_INNODB_READ_ONLY_AND_AWS_RDS_TABLE_EXISTS "SELECT @@global.innodb_read_only AS read_only, EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema='mysql' AND table_name='rds_topology') AS has_rds_topology"
 #define QUERY_READ_ONLY_AND_AWS_RDS_VERSION_CHECK "SELECT @@global.read_only AS read_only, COUNT(*) AS has_version_col FROM information_schema.columns WHERE table_schema='mysql' AND table_name='rds_topology' AND column_name='version'"
-#define QUERY_INNODB_READ_ONLY_AND_AWS_RDS_VERSION_CHECK "SELECT @@global.innodb_read_only AS read_only, COUNT(*) AS has_version_col FROM information_schema.columns WHERE table_schema='mysql' AND table_name='rds_topology' AND column_name='version'"
 #define QUERY_READ_ONLY_AND_AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_DISCOVERY "SELECT @@global.read_only read_only, id, endpoint, port from mysql.rds_topology"
-#define QUERY_INNODB_READ_ONLY_AND_AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_DISCOVERY "SELECT @@global.innodb_read_only read_only, id, endpoint, port from mysql.rds_topology"
 #define QUERY_READ_ONLY_AND_AWS_BLUE_GREEN_TOPOLOGY_DISCOVERY "SELECT @@global.read_only AS read_only, id, endpoint, port, role, status, version FROM mysql.rds_topology"
-#define QUERY_INNODB_READ_ONLY_AND_AWS_BLUE_GREEN_TOPOLOGY_DISCOVERY "SELECT @@global.innodb_read_only AS read_only, id, endpoint, port, role, status, version FROM mysql.rds_topology"
 
 #define SUPPORTED_AWS_RDS_TOPOLOGY_VERSION "1.0"
 
@@ -104,14 +100,10 @@ A single AWS_Aurora_monitor_node will have a AWS_Aurora_status_entry per check.
 
 #define TEST_QUERY___READ_ONLY "SELECT @@global.read_only read_only "
 #define TEST_QUERY___READ_ONLY_AND_AWS_RDS_TABLE_EXISTS "SELECT @@global.read_only AS read_only, 1 AS has_rds_topology "
-#define TEST_QUERY___INNODB_READ_ONLY_AND_AWS_RDS_TABLE_EXISTS "SELECT @@global.innodb_read_only AS read_only, 1 AS has_rds_topology "
 #define TEST_QUERY___READ_ONLY_AND_AWS_RDS_VERSION_CHECK "SELECT @@global.read_only AS read_only, 1 AS has_version_col "
-#define TEST_QUERY___INNODB_READ_ONLY_AND_AWS_RDS_VERSION_CHECK "SELECT @@global.innodb_read_only AS read_only, 1 AS has_version_col "
 #define TEST_QUERY___READ_ONLY_AND_AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_DISCOVERY "SELECT @@global.read_only read_only, id, endpoint, port "
-#define TEST_QUERY___INNODB_READ_ONLY_AND_AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_DISCOVERY "SELECT @@global.innodb_read_only read_only, id, endpoint, port "
 
 #define TEST_QUERY___READ_ONLY_AND_AWS_BLUE_GREEN_TOPOLOGY_DISCOVERY "SELECT @@global.read_only AS read_only, id, endpoint, port, role, status, version "
-#define TEST_QUERY___INNODB_READ_ONLY_AND_AWS_BLUE_GREEN_TOPOLOGY_DISCOVERY "SELECT @@global.innodb_read_only AS read_only, id, endpoint, port, role, status, version "
 
 #define TEST_QUERY___SQLITE3_AWS_RDS_TOPOLOGY "SELECT read_only read_only, id, endpoint, port "
 
@@ -310,13 +302,9 @@ enum MySQL_Monitor_State_Data_Task_Type {
 	MON_GALERA,
 	MON_AWS_AURORA,
 	MON_READ_ONLY__AND__AWS_RDS_TABLE_EXISTS,
-	MON_INNODB_READ_ONLY__AND__AWS_RDS_TABLE_EXISTS,
 	MON_READ_ONLY__AND__AWS_RDS_VERSION_CHECK,
-	MON_INNODB_READ_ONLY__AND__AWS_RDS_VERSION_CHECK,
 	MON_READ_ONLY__AND__AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_DISCOVERY,
-	MON_INNODB_READ_ONLY__AND__AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_DISCOVERY,
 	MON_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY,
-	MON_INNODB_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY,
 };
 
 enum MySQL_Monitor_Aws_Metadata_Check {
