@@ -9470,16 +9470,9 @@ rds_mon_st_t async_rds_mon_actions_handler(
 	// Report fetch errors; logs should report 'cause -> effect'
 	rds_report_fetching_errs(mmsd);
 
-	proxy_info("AWS RDS topology check for %s:%d: peers=%zu, error=%s\n",
-		mmsd->hostname, mmsd->port, p_node_peers_t.second.size(),
-		mmsd->mysql_error_msg ? mmsd->mysql_error_msg : "none");
-
 	// Perform monitoring actions; tables updates and server placement operations
 	const auto nodes_info { rds_update_hosts_map(start_time, p_node_peers_t, mmsd) };
 	next_mon_st = rds_mon_action_over_resp_srv(mmsd, nodes_info, cur_mon_st);
-
-	proxy_info("AWS RDS topology action for %s:%d: next_check_type=%d\n",
-		mmsd->hostname, mmsd->port, (int)next_mon_st.check_type);
 
 	// Handle 'mmsd' MySQL conn return to 'ConnectionPool'
 	handle_mmsd_mysql_conn(mmsd);
@@ -9641,7 +9634,6 @@ void* monitor_AWS_RDS_thread_HG(void* th_args) {
 				// Reset per-host table state — all hosts need re-checking
 				host_check_map = build_host_check_map(hosts_defs);
 				initial_raw_checksum = current_raw_checksum;
-				proxy_info("AWS RDS config changed for HG writer=%lu, resetting table state map\n", wHG);
 			}
 		}
 
@@ -9673,8 +9665,6 @@ void* monitor_AWS_RDS_thread_HG(void* th_args) {
 		// Get the current 'pingable' status for the servers.
 		const vector<rds_host_def_t>& resp_srvs { find_resp_srvs_rds(hosts_defs) };
 		if (resp_srvs.empty()) {
-			proxy_info("AWS RDS HG %lu: no pingable nodes, skipping iteration\n", wHG);
-
 			if (next_mon_st.next_check_delay) {
 				next_check_time = curtime + next_mon_st.next_check_delay * 1000;
 			} else {
@@ -9705,9 +9695,6 @@ void* monitor_AWS_RDS_thread_HG(void* th_args) {
 			} else {
 				host_mon_st.check_type = AWS_RDS_TABLE_EXISTS_CHECK;
 			}
-
-			proxy_info("AWS RDS HG %lu: host %s check_type=%d\n",
-				wHG, host_key.c_str(), (int)host_mon_st.check_type);
 
 			unique_ptr<MySQL_Monitor_State_Data> mmsd {
 				init_mmsd_with_conn_rds(host_def, wHG, rHG, curtime, host_mon_st)
@@ -9815,9 +9802,6 @@ void* monitor_AWS_RDS_thread_HG(void* th_args) {
 		} else {
 			next_check_time = curtime + mysql_thread___monitor_read_only_interval * 1000;
 		}
-		proxy_info("AWS RDS HG %lu: iteration complete, next_check_delay=%lums\n",
-			wHG, (unsigned long)(next_mon_st.next_check_delay ? next_mon_st.next_check_delay
-				: mysql_thread___monitor_read_only_interval));
 	}
 
 	proxy_info("Stopping Monitor thread for AWS RDS replication HG writer=%lu\n", wHG);
