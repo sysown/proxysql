@@ -9409,8 +9409,8 @@ rds_mon_st_t rds_mon_action_over_resp_srv(
  * @return A bool indicating if it was a precheck scenario.
  */
 bool handle_rds_topology_precheck_cases(MySQL_Monitor_State_Data* mmsd, rds_mon_st_t& next_mon_st) {
-	MySQL_Monitor_State_Data_Task_Type check_type = mmsd->get_task_type();
-	if (check_type != MON_READ_ONLY__AND__AWS_RDS_TABLE_EXISTS && check_type != MON_READ_ONLY__AND__AWS_RDS_VERSION_CHECK)	 {
+	MySQL_Monitor_State_Data_Task_Type check_task = mmsd->get_task_type();
+	if (check_task != MON_READ_ONLY__AND__AWS_RDS_TABLE_EXISTS && check_task != MON_READ_ONLY__AND__AWS_RDS_VERSION_CHECK)	 {
 		return false;
 	}
 
@@ -9425,11 +9425,11 @@ bool handle_rds_topology_precheck_cases(MySQL_Monitor_State_Data* mmsd, rds_mon_
 				{ string(mmsd->hostname), static_cast<uint32_t>(mmsd->port), static_cast<int>(read_only) }
 			});
 
-			if (check_result && check_type == MON_READ_ONLY__AND__AWS_RDS_TABLE_EXISTS) {
+			if (check_result && check_task == MON_READ_ONLY__AND__AWS_RDS_TABLE_EXISTS) {
 				// Transition to VERSION_CHECK with 1s delay
 				next_mon_st.check_type = AWS_RDS_VERSION_CHECK;
 				next_mon_st.next_check_delay = 1000;
-			} else if (check_result && check_type == MON_READ_ONLY__AND__AWS_RDS_VERSION_CHECK) {
+			} else if (check_result && check_task == MON_READ_ONLY__AND__AWS_RDS_VERSION_CHECK) {
 				next_mon_st.check_type = AWS_RDS_BLUE_GREEN_DEPLOYMENT_STATE_CHECK;
 			} else {
 				next_mon_st.check_type = AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_CHECK;
@@ -9711,6 +9711,8 @@ void* monitor_AWS_RDS_thread_HG(void* th_args) {
 		// selected for discovery and topology check (of discovered instances). This might not be the desired
 		// behavior, for instance, multi-instance topology check might be desired, and only auto-discovery
 		// actions for one instance.
+		// Yes, there are situations where we would want to discover the topology either through a specific
+		// server in the HG or even multiple. Especially relevant for switchover (-> Step 3)
 		int rnd_discoverer = conn_mmsds.size() == 0 ? -1 : rand() % conn_mmsds.size();
 		if (rnd_discoverer != -1) {
 			conn_mmsds[rnd_discoverer]->cur_monitored_rds_srvs = &hosts_defs;
@@ -9740,6 +9742,7 @@ void* monitor_AWS_RDS_thread_HG(void* th_args) {
 		// 3. Perform the async fetch + actions over the 'MySQL_Monitor_State_Data'
 		if (conn_mmsds.empty() == false) {
 			GloMyMon->monitor_rds_async_actions_handler(conn_mmsds);
+			// Once a result is acquired, the mmsds in conn_mmsds contain updated cur_rds_mon_st data.
 		}
 		///////////////////////////////////////////////////////////////////////////////////////
 
@@ -9780,6 +9783,7 @@ void* monitor_AWS_RDS_thread_HG(void* th_args) {
 			}
 
 			// Topology check results — propagate next_mon_st for topology-aware hosts
+			// TODO: Check if this isn't redundant now with the new host_check_map
 			if (mmsd->cur_rds_mon_st.check_type != MySQL_Monitor_Aws_Metadata_Check::NONE) {
 				next_mon_st.check_type = mmsd->cur_rds_mon_st.check_type;
 			}
@@ -9799,6 +9803,7 @@ void* monitor_AWS_RDS_thread_HG(void* th_args) {
 		// Set the time for the next iteration
 		if (next_mon_st.next_check_delay) {
 			next_check_time = curtime + next_mon_st.next_check_delay * 1000;
+			next_mon_st.next_check_delay = mysql_thread___monitor_read_only_interval;
 		} else {
 			next_check_time = curtime + mysql_thread___monitor_read_only_interval * 1000;
 		}
