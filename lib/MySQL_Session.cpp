@@ -2091,6 +2091,79 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 
 	scrub_cleartext();
 
+	/**
+	 * @brief Frontend per-user connection accounting + max_connections
+	 * enforcement on the fresh-probe success path (PR #5810 finding SLM-1).
+	 *
+	 * The normal handshake-completion path (see the @c free_users /
+	 * @c increase_frontend_user_connections block around the
+	 * "max_connections_reached" handling in
+	 * handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE) sets
+	 * @c client_authenticated and reserves a frontend user-connection slot,
+	 * honoring @c mysql-max_connections and per-user
+	 * @c max_user_connections. The fresh-probe success tail originally did
+	 * NEITHER: it sent the OK packet and went to WAITING_CLIENT_DATA without
+	 * counting the session. The SAME user authenticating via a cache HIT
+	 * completes the normal path and IS counted, so fresh-probe sessions
+	 * could open unlimited concurrent connections, ignoring the limit --
+	 * an enforcement asymmetry, distinct from the documented "one-shot probe
+	 * bypasses the backend pool" limitation (which is about backend, not
+	 * frontend, connection limits).
+	 *
+	 * Two pass-through sub-cases need different handling:
+	 *
+	 *   - empty-pw row: a real @c mysql_users row exists, so the user lives
+	 *     in @c creds_frontends and @c increase_frontend_user_connections
+	 *     enforces its per-user limit (returns remaining slots, increments
+	 *     only when there is room, and writes the user's max into @c mc_max).
+	 *
+	 *   - unknown user: NO row exists (@c user_max_connections was synthesized
+	 *     to 0 in PPHR_verify_password). The user is absent from
+	 *     @c creds_frontends, so increase returns 0 and leaves @c mc_max
+	 *     untouched. We MUST NOT treat that 0 as "limit exhausted" or every
+	 *     unknown-user pass-through would be spuriously rejected. The
+	 *     @c mc_max sentinel (-1 means "user not found in creds") tells the
+	 *     two apart, while the global @c mysql-max_connections gate
+	 *     (@c max_connections_reached) still applies to both.
+	 *
+	 * @c client_authenticated is set true only after the gate passes, so the
+	 * destructor's decrease_frontend_user_connections / client_connections_*
+	 * decrement (both gated on @c client_authenticated) stay symmetric with
+	 * the increment + counter bump performed here. A capacity rejection rolls
+	 * back the only case that actually reserved a slot (row-backed with room)
+	 * and tears down via fail_session, which (post the PROTO-1 fix) emits a
+	 * clean ERR. (A probe that succeeded but is capacity-rejected is not
+	 * counted in stat_probes_ok; the credential is still cached, since it is
+	 * valid and a later reconnect may find room.)
+	 */
+	{
+		int mc_max = -1;
+		const int free_users = GloMyAuth->increase_frontend_user_connections(
+			client_myds->myconn->userinfo->username,
+			client_myds->myconn->userinfo->passtype,
+			&mc_max);
+		const bool row_backed = (mc_max >= 0); // present in creds_frontends
+		const bool per_user_ok = (!row_backed) || (free_users > 0);
+		if (max_connections_reached == true || !per_user_ok) {
+			if (row_backed && free_users > 0) {
+				// increase reserved a slot (room existed); roll it back.
+				GloMyAuth->decrease_frontend_user_connections(
+					client_myds->myconn->userinfo->username,
+					client_myds->myconn->userinfo->passtype);
+			}
+			return fail_session(
+				max_connections_reached
+					? "frontend mysql-max_connections reached"
+					: "frontend max_user_connections reached");
+		}
+		client_authenticated = true;
+		__sync_fetch_and_add(
+			client_myds->myconn->userinfo->passtype == PASSWORD_TYPE::PRIMARY
+				? &MyHGM->status.client_connections_prim_pass
+				: &MyHGM->status.client_connections_addl_pass,
+			1);
+	}
+
 	const uint8_t _pid = client_myds->pkt_sid + 1;
 	client_myds->DSS = STATE_CLIENT_HANDSHAKE;
 	client_myds->myprot.generate_pkt_OK(true, NULL, NULL, _pid, 0, 0, 2, 0, NULL);
