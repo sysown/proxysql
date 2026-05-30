@@ -2089,6 +2089,39 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 	client_myds->myconn->userinfo->password = strdup(cleartext);
 	client_myds->myconn->userinfo->set(NULL, NULL, NULL, NULL);
 
+	/**
+	 * @brief Ensure userinfo->schemaname is non-NULL on the probe-success
+	 * path, mirroring the normal handshake-completion path (PR #5810).
+	 *
+	 * The normal completion path guards this explicitly: "if
+	 * (userinfo->schemaname == NULL) set_schemaname(default_schema, ...)".
+	 * The fresh-probe success tail never did, so a pass-through client that
+	 * connected WITHOUT selecting a database (the common case) reaches
+	 * WAITING_CLIENT_DATA with userinfo->schemaname == NULL.
+	 *
+	 * That is latent until the session's backend connection identity
+	 * changes and @ref handler_again___verify_backend_user_schema runs its
+	 *   strcmp(client_myds->myconn->userinfo->schemaname,
+	 *          server_myds->myconn->userinfo->schemaname)
+	 * on the CHANGING_SCHEMA / CHANGING_USER branch -- strcmp(NULL, ...)
+	 * SIGSEGVs the worker thread. test_passthrough_auth_invalidation-t
+	 * triggers exactly this: it rotates the backend password so the next
+	 * backend acquisition sees a different userinfo hash, forcing the
+	 * compare path with a NULL client schemaname (observed signal 11 in
+	 * handler_again___verify_backend_user_schema, PR #5810 CI run).
+	 *
+	 * set_schemaname(_new, l) is NULL-safe here: when l == 0 it ignores
+	 * @c _new entirely and falls back to mysql_thread___default_schema, so
+	 * a NULL/empty session @c default_schema (possible for an empty-pw row
+	 * with no schema, or an unknown user with no configured default) still
+	 * yields a non-NULL schemaname. This matches what every non-pass-through
+	 * session already gets.
+	 */
+	if (client_myds->myconn->userinfo->schemaname == NULL) {
+		client_myds->myconn->userinfo->set_schemaname(
+			default_schema, default_schema ? strlen(default_schema) : 0);
+	}
+
 	scrub_cleartext();
 
 	/**
