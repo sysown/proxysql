@@ -1754,10 +1754,51 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 		scrub_cleartext();
 		const uint8_t _pid = (client_myds ? client_myds->pkt_sid : 0) + 1;
 		if (client_myds) {
+			/**
+			 * @brief Move the client data stream into a DSS state that
+			 * @c generate_pkt_ERR accepts BEFORE generating the packet.
+			 *
+			 * @c generate_pkt_ERR(send=true) switches on
+			 * @c client_myds->DSS and calls @c assert(0) (SIGABRT) for any
+			 * state outside { STATE_CLIENT_HANDSHAKE, STATE_QUERY_SENT_DS,
+			 * STATE_QUERY_SENT_NET, STATE_ERR, STATE_OK, STATE_SLEEP }
+			 * (see MySQL_Protocol::generate_pkt_ERR). At this point in the
+			 * pass-through probe handler the client DS is still in the
+			 * state left by the caching_sha2 full-auth exchange:
+			 * @c STATE_SSL_INIT on the (default) require_tls=true path, or
+			 * @c STATE_SERVER_HANDSHAKE on a non-TLS connection.
+			 * @c process_pkt_handshake_response returned early WITHOUT
+			 * advancing DSS while @c auth_in_progress != 0 (the
+			 * `auth_in_progress != 0` return in
+			 * handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE),
+			 * so neither AuthMoreData stage 0 nor cleartext stage 5 ever
+			 * left DSS in an accepted state. Generating the ERR here trips
+			 * @c assert(0) and crashes the whole process.
+			 *
+			 * The original code set @c DSS = STATE_QUERY_SENT_NET *after*
+			 * generate_pkt_ERR -- too late; the assert had already fired.
+			 * This is the same crash signature (generate_pkt_ERR's
+			 * @c assert(0)) that commit 58b26edba closed for the single
+			 * "no hostgroup" trigger by populating @c default_hostgroup --
+			 * but EVERY other failure category routed through this lambda
+			 * (wrong-password / backend-rejected-probe, per-user and
+			 * per-ip lockout, inflight cap, no healthy backend, transport
+			 * failure, missing cleartext) reaches generate_pkt_ERR with
+			 * the same invalid ambient DSS and would still crash. A wrong
+			 * password for any pass-through-eligible user is an
+			 * unauthenticated, remotely-reachable trigger, so this was a
+			 * remote denial-of-service.
+			 *
+			 * The fix mirrors the normal wrong-credentials handshake path
+			 * (handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE_WrongCredentials),
+			 * which calls setDSS_STATE_QUERY_SENT_NET() BEFORE
+			 * generate_pkt_ERR, and the pass-through SUCCESS path, which
+			 * sets DSS = STATE_CLIENT_HANDSHAKE before generate_pkt_OK.
+			 */
+			client_myds->setDSS_STATE_QUERY_SENT_NET();
 			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, _pid, 1045,
 				(char*)"28000",
 				(char*)"Access denied for user", true);
-			client_myds->DSS = STATE_QUERY_SENT_NET;
 		}
 		/**
 		 * @brief Operator-visible signal on every probe failure, with
