@@ -1799,6 +1799,35 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, _pid, 1045,
 				(char*)"28000",
 				(char*)"Access denied for user", true);
+			/**
+			 * @brief Flush the ERR over the (possibly TLS) client connection
+			 * BEFORE the -1 teardown.
+			 *
+			 * fail_session returns -1 directly from the
+			 * AUTHENTICATING_BACKEND_FOR_CLIENT dispatch in handler_again
+			 * (the `if (rc == -1) { handler_ret = -1; return handler_ret; }`
+			 * branch), which bypasses handler()'s end-of-loop epilogue that
+			 * flushes an auth-failure ERR for the normal wrong-password path:
+			 *
+			 *     if (wrong_pass==true) {
+			 *         client_myds->array2buffer_full();
+			 *         client_myds->write_to_net();
+			 *         handler_ret = -1; return handler_ret;
+			 *     }
+			 *
+			 * generate_pkt_ERR only queues the packet onto PSarrayOUT; without
+			 * an explicit flush here, the queued ERR is discarded when the
+			 * session tears down. A plaintext client may still scrape the
+			 * bytes, but a TLS client's SSL_read sees the socket close mid-
+			 * stream and reports errno 2026 (CR_SSL_CONNECTION_ERROR) instead
+			 * of the 1045 we generated -- observed for every probe-failure /
+			 * lockout rejection in test_passthrough_auth_ratelimit-t once the
+			 * PROTO-1 assert crash was fixed. Mirror the wrong_pass epilogue
+			 * explicitly so the ERR reaches the client over the encrypted
+			 * channel before close.
+			 */
+			client_myds->array2buffer_full();
+			client_myds->write_to_net();
 		}
 		/**
 		 * @brief Operator-visible signal on every probe failure, with
