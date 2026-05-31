@@ -6581,7 +6581,11 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				client_myds->myconn->userinfo->set_schemaname(default_schema,strlen(default_schema));
 			}
 			int free_users=0;
-			int used_users=0;
+			// -1 sentinel: increase_frontend_user_connections writes *mc only
+			// when the user is found in creds_frontends, so a value left at -1
+			// after the call means "no mysql_users row for this user" -- used
+			// below for the pass-through unknown-user exemption (PR #5810).
+			int used_users=-1;
 			if (
 				( max_connections_reached == false )
 				&&
@@ -6620,6 +6624,34 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				}
 			} else {
 				free_users=1;
+			}
+			/**
+			 * @brief Pass-through unknown-user exemption from per-user
+			 * max_connections (PR #5810 finding SLM-1, cache-hit path).
+			 *
+			 * A cache-hit reconnect for an unknown pass-through user (no
+			 * mysql_users row; gated by mysql-passthrough_auth_unknown_users)
+			 * completes auth through this normal path just like any other
+			 * client. But the user is absent from creds_frontends, so
+			 * increase_frontend_user_connections returned 0 free slots and
+			 * left used_users at the -1 sentinel. Unknown users have no
+			 * per-user limit by design (user_max_connections is synthesized to
+			 * 0 = unlimited in PPHR_verify_password), so the `free_users<=0`
+			 * "no slots" check below must NOT reject them -- otherwise every
+			 * unknown-user cache-hit fails with 1226 ("max_user_connections,
+			 * current value: 0"), as seen in
+			 * test_passthrough_auth_unknown_user-t [3].
+			 *
+			 * This mirrors the fresh-probe success path's row_backed /
+			 * per_user_ok handling in
+			 * handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT. The
+			 * exemption is scoped tightly: only a pass-through-credentialed
+			 * session whose user is genuinely absent from creds_frontends
+			 * (used_users == -1). The global mysql-max_connections gate
+			 * (max_connections_reached) is left untouched and still applies.
+			 */
+			if (passthrough_credential && used_users == -1) {
+				free_users = 1;
 			}
 			if (max_connections_reached==true || free_users<=0) {
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p , max_connections_reached=%d , free_users=%d\n", this, client_myds, max_connections_reached, free_users);
