@@ -160,6 +160,7 @@ private:
 	//bool maintenance_loop;
 
 	PtrArray* cached_connections;
+	unsigned int push_local_counter;	// round-robin counter for bounded local caching: cache 1-in-N where N = pgsql_threads
 
 #ifdef IDLE_THREADS
 	struct epoll_event events[MY_EPOLL_THREAD_MAXEVENTS];

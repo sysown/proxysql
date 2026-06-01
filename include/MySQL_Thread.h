@@ -114,6 +114,7 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 	bool retrieve_gtids_required; // if any of the servers has gtid_port enabled, this needs to be turned on too
 
 	PtrArray *cached_connections;
+	unsigned int push_local_counter;	// round-robin counter for bounded local caching: cache 1-in-N where N = mysql_threads
 
 #ifdef IDLE_THREADS
 	struct epoll_event events[MY_EPOLL_THREAD_MAXEVENTS];

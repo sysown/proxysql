@@ -47,7 +47,40 @@ public:
 
 private:
 	bool maintenance_loop;
-	public:
+
+	// Partition-gate state. note_pool_attempt() bumps the counters from the
+	// get_MyConn_from_pool() call site; update_partition_gate() consumes them
+	// once per outer process_all_sessions iteration. Single-threaded per worker.
+	unsigned int partition_pool_attempts = 0;
+	unsigned int partition_pool_nulls = 0;
+	unsigned int partition_streak = 0;
+	bool partition_active = false;
+
+public:
+	// Gate thresholds: NULL-ratio (NUM/DEN) classifies a tick as "stressed";
+	// STREAK is the number of consecutive disagreeing ticks required to flip
+	// the gate state (hysteresis filter against transient bursts).
+	static constexpr unsigned int PARTITION_GATE_NULL_RATIO_NUM = 1;
+	static constexpr unsigned int PARTITION_GATE_NULL_RATIO_DEN = 20;	// 5%
+	static constexpr unsigned int PARTITION_GATE_STREAK         = 3;
+	// Below this attempt count a tick carries no signal: gate state and
+	// streak are left untouched. Avoids "2/2 NULL = 100% stressed" noise.
+	static constexpr unsigned int PARTITION_GATE_MIN_ATTEMPTS   = 4;
+	static constexpr unsigned int PARTITION_FAIRNESS_MIN_B      = 4;
+
+	// Called by sessions inside this worker at the get_MyConn_from_pool()
+	// call site to feed the gate.
+	inline void note_pool_attempt(bool was_null) {
+		++partition_pool_attempts;
+		if (was_null) ++partition_pool_nulls;
+	}
+
+	// Runs the hysteresis state machine from per-tick counters, resets them,
+	// and returns whether the partition pass should run. MUST be called every
+	// outer iteration of process_all_sessions (even when the partition path
+	// is otherwise skipped) so the counters don't accumulate stale.
+	bool update_partition_gate();
+
 	unsigned long long curtime;
 	unsigned long long last_move_to_idle_thread_time;
 	bool epoll_thread;
@@ -65,7 +98,7 @@ private:
 	template<typename T>
 	void check_for_invalid_fd(unsigned int n);
 	template<typename S>
-	void ProcessAllSessions_SortingSessions();
+	void ProcessAllSessions_Partition();
 	template<typename T>
 	void ProcessAllMyDS_AfterPoll();
 	template<typename T>
