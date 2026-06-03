@@ -3019,8 +3019,11 @@ void MySQL_Connection::close_mysql() {
 #else
 		send(fd, buff, 5, MSG_NOSIGNAL);
 #endif
+	} else if (mysql->net.fd != -1 && !mysql->net.pvio) {
+		// pvio already cleared; close fd directly to avoid CLOSE_WAIT leak.
+		close(mysql->net.fd);
+		mysql->net.fd = -1;
 	}
-//	int rc=0;
 	mysql_close_no_command(mysql);
 }
 

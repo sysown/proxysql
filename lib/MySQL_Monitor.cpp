@@ -187,6 +187,8 @@ static int wait_for_mysql(MYSQL *mysql, int status) {
 
 static void close_mysql(MYSQL *my) {
 	if (my->net.pvio && !my->options.use_ssl) {
+		// pvio is valid: send COM_QUIT so the server can cleanly close its side,
+		// then mysql_close_no_command() will call end_server() -> close(fd).
 		char buff[5];
 		mysql_hdr myhdr;
 		myhdr.pkt_id=0;
@@ -203,6 +205,10 @@ static void close_mysql(MYSQL *my) {
 #endif
 		fd+=wb; // dummy, to make compiler happy
 		fd-=wb; // dummy, to make compiler happy
+	} else if (my->net.fd != -1) {
+		// pvio already cleared; close fd directly to avoid CLOSE_WAIT leak.
+		close(my->net.fd);
+		my->net.fd = -1;
 	}
 	mysql_close_no_command(my);
 }
