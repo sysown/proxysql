@@ -55,6 +55,46 @@ jobs:
             test/
           key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
 
+      - name: Install build dependencies
+        if: steps.build-cache.outputs.cache-hit != 'true'
+        # Unlike the other v3.0 CI workflows that build inside the
+        # proxysql/packaging:build-ubuntu22-v4.0.0 image (which has every
+        # ProxySQL build dep pre-installed), this workflow builds directly
+        # on the GitHub-hosted ubuntu-22.04 runner. That runner is rich
+        # with general build tooling but does not include the deps the
+        # vendored libraries under deps/ need at compile time.
+        #
+        # The package list below is the union of:
+        #   - the canonical install list in INSTALL.md (Ubuntu/Debian
+        #     section), and
+        #   - `valgrind`, which is required by the bundled
+        #     mariadb-client-library: deps/.../libmariadb/ma_context.c
+        #     unconditionally `#include <valgrind/valgrind.h>` for its
+        #     coroutine annotations, so the build aborts with
+        #     "fatal error: valgrind/valgrind.h: No such file or
+        #     directory" when the header is absent (it is, on the
+        #     ubuntu-22.04 runner -- this is what PR #5823's first run
+        #     surfaced once the fetch-depth fix unblocked the Makefile
+        #     version check).
+        #
+        # `--no-install-recommends` keeps the install fast (~30s) by
+        # skipping unrelated suggested packages.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            valgrind \
+            libssl-dev \
+            libgnutls28-dev \
+            libmysqlclient-dev \
+            libunwind-dev \
+            uuid-dev \
+            libncurses-dev \
+            libicu-dev \
+            libevent-dev \
+            libtirpc-dev \
+            libcurl4-openssl-dev \
+            libxml2-dev
+
       - name: Build proxysql (PROXYSQL40 chassis) + TAP tests
         if: steps.build-cache.outputs.cache-hit != 'true'
         # The same tier flags the downstream `Build mysqlx plugin` step uses
