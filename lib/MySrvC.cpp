@@ -27,6 +27,9 @@ MySrvC::MySrvC(
 	connect_OK=0;
 	connect_ERR=0;
 	queries_sent=0;
+	queries_ok=0;
+	queries_err=0;
+	queries_warnings=0;
 	bytes_sent=0;
 	bytes_recv=0;
 	max_connections_used=0;

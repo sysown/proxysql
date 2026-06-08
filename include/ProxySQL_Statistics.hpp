@@ -25,7 +25,9 @@
 
 #define STATSDB_SQLITE_TABLE_HISTORY_STATS_MYSQL_CONNECTION_POOL_V2_0_10 "CREATE TABLE history_stats_mysql_connection_pool (timestamp INT NOT NULL , hostgroup INT , srv_host VARCHAR , srv_port INT , status VARCHAR , ConnUsed INT , ConnFree INT , ConnOK INT , ConnERR INT , MaxConnUsed INT , Queries INT , Queries_GTID_sync INT , Bytes_data_sent INT , Bytes_data_recv INT , Latency_us INT, PRIMARY KEY (timestamp, hostgroup , srv_host , srv_port))"
 
-#define STATSDB_SQLITE_TABLE_HISTORY_STATS_MYSQL_CONNECTION_POOL STATSDB_SQLITE_TABLE_HISTORY_STATS_MYSQL_CONNECTION_POOL_V2_0_10
+#define STATSDB_SQLITE_TABLE_HISTORY_STATS_MYSQL_CONNECTION_POOL_V3_0_10 "CREATE TABLE history_stats_mysql_connection_pool (timestamp INT NOT NULL , hostgroup INT , srv_host VARCHAR , srv_port INT , status VARCHAR , ConnUsed INT , ConnFree INT , ConnOK INT , ConnERR INT , MaxConnUsed INT , Queries INT , Queries_GTID_sync INT , Bytes_data_sent INT , Bytes_data_recv INT , Latency_us INT , Queries_OK INT , Queries_ERR INT , Queries_warnings INT, PRIMARY KEY (timestamp, hostgroup , srv_host , srv_port))"
+
+#define STATSDB_SQLITE_TABLE_HISTORY_STATS_MYSQL_CONNECTION_POOL STATSDB_SQLITE_TABLE_HISTORY_STATS_MYSQL_CONNECTION_POOL_V3_0_10
 
 #define STATSDB_SQLITE_TABLE_MYHGM_CONNECTIONS_V2_0  "CREATE TABLE myhgm_connections (timestamp INT NOT NULL, MyHGM_myconnpoll_destroy INT NOT NULL, MyHGM_myconnpoll_get INT NOT NULL, MyHGM_myconnpoll_get_ok INT NOT NULL, MyHGM_myconnpoll_push INT NOT NULL, MyHGM_myconnpoll_reset INT NOT NULL, PRIMARY KEY (timestamp))"
 
