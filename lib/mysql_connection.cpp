@@ -2287,7 +2287,7 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length,
 		query.stmt_meta=NULL;
 		compute_unknown_transaction_status();
 		if (async_state_machine==ASYNC_STMT_PREPARE_FAILED) {
-			unsigned int _prep_errno = mysql_stmt_errno(query.stmt);
+			unsigned int _prep_errno = query.stmt ? mysql_stmt_errno(query.stmt) : mysql_errno(mysql);
 			if (_prep_errno < 2000) __sync_fetch_and_add(&parent->queries_err, 1);
 			return -1;
 		} else {
