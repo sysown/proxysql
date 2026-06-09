@@ -103,6 +103,10 @@ set -euo pipefail
 PKG_TYPE="$1"
 HAS_PLUGINS="$2"
 
+# Portable ELF check — minimal base images (debian-slim, etc.) may not ship
+# `file` or `which`, so validate the ELF magic bytes (7f 45 4c 46) directly.
+is_elf() { [ "$(head -c4 "$1" 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "7f454c46" ]; }
+
 echo "==> Installing package: /tmp/pkg.$PKG_TYPE"
 case "$PKG_TYPE" in
     deb)
@@ -135,7 +139,7 @@ if [[ "$HAS_PLUGINS" == "true" ]]; then
         path="/usr/lib/proxysql/${plugin}"
         if [[ -f "$path" ]]; then
             echo "  OK   ${plugin} (exists)"
-            if file "$path" | grep -q 'ELF 64-bit'; then
+            if is_elf "$path"; then
                 echo "  OK   ${plugin} (valid ELF)"
             else
                 echo "  FAIL ${plugin} (not a valid ELF file)" >&2
@@ -151,7 +155,7 @@ else
 fi
 
 # Binary sanity check
-if file "$(which proxysql)" | grep -q 'ELF 64-bit'; then
+if is_elf "$(command -v proxysql)"; then
     echo "  OK   proxysql binary (valid ELF)"
 else
     echo "  FAIL proxysql binary (not a valid ELF file)" >&2
