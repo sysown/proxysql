@@ -303,6 +303,11 @@ int main() {
 	vars["wsrep_osu_method"] = std::make_unique<variable>("wsrep_osu_method", true, false, false);
 	add_values_and_quotes("wsrep_osu_method", {"TOI","RSU"});
 
+	vars["wsrep_trx_fragment_size"] = std::make_unique<variable>("wsrep_trx_fragment_size", false, true, false);
+	vars["wsrep_trx_fragment_size"]->add(int_values_small, 100);
+	vars["wsrep_trx_fragment_unit"] = std::make_unique<variable>("wsrep_trx_fragment_unit", false, false, false);
+	add_values_and_quotes("wsrep_trx_fragment_unit", {"BYTES", "ROWS", "STATEMENTS"});
+
 	vars["sql_quote_show_create"] = std::make_unique<variable>("sql_quote_show_create", true, false, true);
 	vars["sql_quote_show_create"]->add(bool_values);
 

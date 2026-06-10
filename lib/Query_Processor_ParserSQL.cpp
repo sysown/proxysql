@@ -170,6 +170,129 @@ static std::string extract_paren_expr(const char* query, int query_len,
     return std::string(start, p);
 }
 
+// Extract the verbatim source text of a function-call AST node by paren-matching
+// from the function name in the original input. Used to avoid emit_function_call's
+// "name(arg, arg)" normalisation (which adds a space after every comma) so that the
+// SET walker preserves the exact source the user wrote, matching the regex-based
+// SET parsers (algorithms 0-2) byte-for-byte. Returns empty string if value_ptr is
+// not inside [query, query+query_len) or no balanced paren is found.
+static std::string extract_function_call_source(
+    const AstNode* node, const char* query, int query_len)
+{
+    if (!node || !node->value_ptr || node->value_len == 0) return "";
+    const char* qstart = query;
+    const char* qend = query + query_len;
+    if (node->value_ptr < qstart || node->value_ptr >= qend) return "";
+    const char* start = node->value_ptr;
+    const char* p = start + node->value_len;
+    while (p < qend && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
+    if (p >= qend || *p != '(') return "";
+    int depth = 0;
+    while (p < qend) {
+        if (*p == '\'' || *p == '"' || *p == '`') { skip_quoted_char(p, qend); }
+        else if (*p == '(') depth++;
+        else if (*p == ')') { depth--; if (depth == 0) { p++; break; } }
+        p++;
+    }
+    if (depth != 0) return "";
+    return std::string(start, p);
+}
+
+// Find the rightmost byte covered by any descendant of `node` whose value_ptr
+// lies inside [qstart, qend). Used to detect "trailing junk after a valid
+// statement" cases where ParserSQL accepts a partial AST (status OK) but
+// stopped before consuming all the input. E.g. `SET search_path = public,,schema1`
+// produces an OK status with an AST covering only `SET search_path = public`;
+// the `,,schema1` tail is silently ignored, which would otherwise let proxysql
+// track a malformed SET as successful. Returns nullptr if no descendant lies
+// inside the buffer.
+static const char* find_rightmost_ast_byte(
+    const AstNode* node, const char* qstart, const char* qend)
+{
+    if (!node) return nullptr;
+    const char* best = nullptr;
+    if (node->value_ptr && node->value_ptr >= qstart &&
+        (node->value_ptr + node->value_len) <= qend) {
+        const char* end = node->value_ptr + node->value_len;
+        // Delimited identifier / string-literal nodes store value_ptr inside
+        // the quotes and value_len covering only the content, so the closing
+        // quote/backtick byte lives at end. Advance past it so the full-input
+        // check at the call site doesn't mistake the closing delimiter for
+        // unconsumed trailing junk.
+        if (end < qend && (*end == '"' || *end == '`' || *end == '\'')) {
+            // Only treat as a delimiter close if there's a matching opener
+            // immediately before value_ptr (cheap sanity check; avoids
+            // accidentally consuming an unrelated quote that follows).
+            if (node->value_ptr > qstart && *(node->value_ptr - 1) == *end) {
+                end++;
+            }
+        }
+        best = end;
+    }
+    for (const AstNode* c = node->first_child; c; c = c->next_sibling) {
+        const char* cb = find_rightmost_ast_byte(c, qstart, qend);
+        if (cb && (!best || cb > best)) best = cb;
+    }
+    return best;
+}
+
+// True iff the AST consumed every meaningful byte of `query` (ignoring trailing
+// whitespace and a single trailing semicolon). Used as a stricter gate than
+// just checking parse status: ParserSQL can return status OK while the parser
+// only matched a prefix of the input, leaving the rest as unconsumed trailing
+// junk. For SET-statement walking we treat such cases as parse failures so
+// the session can fall through to the backend (which will reject the
+// malformed SQL) instead of tracking a misleadingly-partial assignment.
+static bool ast_covers_full_input(
+    const AstNode* root, const char* query, int query_len)
+{
+    if (!root) return false;
+    const char* qstart = query;
+    const char* qend = query + query_len;
+    const char* rightmost = find_rightmost_ast_byte(root, qstart, qend);
+    if (!rightmost) return false;
+    // Anything past the AST's coverage must be cosmetic: trailing whitespace,
+    // a single trailing comma (which the regex SET parser strips and many
+    // existing tests rely on, e.g. `SET search_path TO "$user" ,`),
+    // a single trailing semicolon, and embedded null bytes (QueryPointer
+    // buffers occasionally include a trailing \0 byte we shouldn't bounce on).
+    auto is_skippable = [](char c) {
+        return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\0';
+    };
+    const char* p = rightmost;
+    while (p < qend && is_skippable(*p)) p++;
+    if (p < qend && *p == ',') {
+        p++;
+        while (p < qend && is_skippable(*p)) p++;
+    }
+    if (p < qend && *p == ';') {
+        p++;
+        while (p < qend && is_skippable(*p)) p++;
+    }
+    return p == qend;
+}
+
+// Re-emit a delimited identifier ("name" in PG, `name` in MySQL) with its outer
+// quote chars restored. The AST stores value_ptr pointing inside the quotes and
+// value_len covering only the identifier content, so the surrounding quote chars
+// live at value_ptr-1 and value_ptr+value_len in the original query buffer.
+// Returns empty string if the node is not in-buffer or the surrounding chars
+// don't look like recognised quote chars.
+static std::string emit_delimited_ident_raw(
+    const AstNode* node, const char* query, int query_len)
+{
+    if (!node || !node->value_ptr || node->value_len == 0) return "";
+    const char* qstart = query;
+    const char* qend = query + query_len;
+    if (node->value_ptr <= qstart) return "";
+    if (node->value_ptr + node->value_len >= qend) return "";
+    char open_q = *(node->value_ptr - 1);
+    char close_q = *(node->value_ptr + node->value_len);
+    if (open_q != '"' && open_q != '`') return "";
+    if (open_q != close_q) return "";
+    return std::string(node->value_ptr - 1, node->value_ptr + node->value_len + 1);
+}
+
 // ---------------------------------------------------------------------------
 // Section 1: Digest adapter
 // ---------------------------------------------------------------------------
@@ -379,6 +502,27 @@ static std::string resolve_var_value(
         }
         return "";
     }
+    // Function calls round-trip lossily through emit_function_call (it injects
+    // ", " between arguments regardless of the input). Reach back into the
+    // original query and copy the source verbatim instead. Matches the
+    // behaviour of the regex-based SET parsers used in algorithms 0-2.
+    if (rhs->type == NodeType::NODE_FUNCTION_CALL) {
+        std::string raw = extract_function_call_source(rhs, query, query_len);
+        if (!raw.empty()) return raw;
+    }
+    // Delimited identifiers (`"$user"`, `"MixedCase"`, `"sch-1"`) carry
+    // FLAG_IDENT_DELIMITED but value_ptr/value_len cover only the content
+    // between the quotes -- the emitter would re-emit the bare identifier,
+    // losing the delimiters that downstream validators need (e.g. the PG
+    // search_path validator distinguishes literal "$user" from the $user
+    // current-user substitution token, "MixedCase" from case-folded
+    // mixedcase, etc.). Splice the quotes back in from the original buffer.
+    if ((rhs->type == NodeType::NODE_IDENTIFIER ||
+         rhs->type == NodeType::NODE_COLUMN_REF) &&
+        (rhs->flags & FLAG_IDENT_DELIMITED)) {
+        std::string raw = emit_delimited_ident_raw(rhs, query, query_len);
+        if (!raw.empty()) return raw;
+    }
     return emit_node_text<D>(rhs, arena);
 }
 
@@ -439,15 +583,38 @@ static std::map<std::string, std::vector<std::string>> walk_set_stmt(
             }
             case NodeType::NODE_VAR_ASSIGNMENT: {
                 const AstNode* target = child->first_child;
-                const AstNode* rhs = target ? target->next_sibling : nullptr;
                 if (!target || target->type != NodeType::NODE_VAR_TARGET) break;
 
                 std::string var_name = normalize_set_var_name(
                     emit_node_text<D>(target, arena));
-                std::string val = finalize_var_value(
-                    resolve_var_value<D>(target, rhs, query, query_len, arena));
 
-                result[var_name] = {val};
+                // Collect every RHS sibling of the target. For MySQL there is
+                // always exactly one. For PostgreSQL, multi-value lists such
+                // as `SET search_path TO 'a', 'b', 'c'` produce one VAR_TARGET
+                // followed by N value-expression siblings (see set_parser.h).
+                //
+                // For PostgreSQL we preserve outer quotes on each value: the
+                // session handler honors NO_STRIP_VALUE flags per-variable
+                // (e.g. search_path, where `"$user"` vs `$user` is
+                // semantically distinct), and falls back to its own
+                // unquote_if_quoted() for variables that want stripping.
+                // Pre-stripping in the walker breaks the NO_STRIP_VALUE
+                // contract.  MySQL keeps the historical strip-quotes
+                // behavior (single-value, simpler semantics).
+                std::vector<std::string> vals;
+                for (const AstNode* rhs = target->next_sibling;
+                     rhs; rhs = rhs->next_sibling) {
+                    std::string raw = resolve_var_value<D>(
+                        target, rhs, query, query_len, arena);
+                    if constexpr (D == Dialect::PostgreSQL) {
+                        vals.push_back(std::move(raw));
+                    } else {
+                        vals.push_back(finalize_var_value(std::move(raw)));
+                    }
+                }
+                if (vals.empty()) vals.push_back("");
+
+                result[var_name] = std::move(vals);
                 break;
             }
             // SET TRANSACTION is handled separately by MySQL_Session::parse2()
@@ -483,8 +650,27 @@ std::map<std::string, std::vector<std::string>> parsersql_parse_set_pgsql(
     const std::string& query)
 {
     auto result = tl_pgsql_parser.parse(query.c_str(), query.size());
-    if (result.status == ParseResult::OK || result.status == ParseResult::PARTIAL) {
-        if (result.ast && result.ast->type == NodeType::NODE_SET_STMT) {
+    // PG walker: only act on a clean OK parse. PARTIAL means the parser hit
+    // unexpected syntax mid-statement (e.g. `public,,schema1` -> the empty
+    // element after the first comma) and produced an AST that captures only
+    // part of the input. If we walked that, we'd hand a misleadingly-partial
+    // map to the session (e.g. `[public]` for the example above), the
+    // validator would accept the partial value, proxysql would track it as
+    // a successful SET, and the backend would receive a different command
+    // than the client sent. Returning an empty map drops us into the
+    // "Unable to parse SET query" path which forwards the original SET to
+    // PG without locking the hostgroup, letting PG be the source of truth
+    // for malformed-input rejection (which is what algorithms 0/1/2 do for
+    // these cases too).
+    //
+    // The MySQL walker keeps accepting PARTIAL: MySQL SET frequently uses
+    // PARTIAL legitimately for un-parseable RHS expressions (e.g.
+    // `SET x = (SELECT ...)`), where the walker falls back to
+    // `extract_paren_expr` on a NODE_SUBQUERY placeholder. PG search_path
+    // tracked variables don't have analogous shapes.
+    if (result.status == ParseResult::OK) {
+        if (result.ast && result.ast->type == NodeType::NODE_SET_STMT &&
+            ast_covers_full_input(result.ast, query.c_str(), (int)query.size())) {
             auto parsed = walk_set_stmt<Dialect::PostgreSQL>(
                 result.ast, tl_pgsql_parser.arena(), query.c_str(), query.size());
             tl_pgsql_parser.reset();

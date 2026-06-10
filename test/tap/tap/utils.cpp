@@ -1246,6 +1246,91 @@ MYSQL* wait_for_proxysql(const conn_opts_t& opts, int timeout) {
 	}
 }
 
+int wait_for_proxysql_cluster(
+	const std::vector<std::pair<std::string,int>>& nodes,
+	const std::string& admin_user,
+	const std::string& admin_password,
+	int timeout_s,
+	int poll_interval_s
+) {
+	if (nodes.empty()) return 0;
+
+	struct pending_t {
+		std::string host;
+		int port;
+		std::string last_error;
+	};
+	std::vector<pending_t> pending;
+	pending.reserve(nodes.size());
+	for (const auto& n : nodes) {
+		pending.push_back({n.first, n.second, "(no attempt yet)"});
+	}
+
+	const unsigned long long start_us = monotonic_time();
+	const unsigned long long deadline_us =
+		start_us + static_cast<unsigned long long>(timeout_s) * 1000000ULL;
+
+	const unsigned int connect_timeout_per_attempt = 2;
+	while (!pending.empty() && monotonic_time() < deadline_us) {
+		auto it = pending.begin();
+		while (it != pending.end()) {
+			MYSQL* probe = mysql_init(NULL);
+			if (!probe) {
+				it->last_error = "mysql_init returned NULL";
+				++it;
+				continue;
+			}
+			mysql_options(probe, MYSQL_OPT_CONNECT_TIMEOUT, &connect_timeout_per_attempt);
+
+			MYSQL* rc = mysql_real_connect(
+				probe, it->host.c_str(), admin_user.c_str(), admin_password.c_str(),
+				NULL, it->port, NULL, 0
+			);
+			if (rc) {
+				mysql_close(probe);
+				it = pending.erase(it);
+			} else {
+				it->last_error = mysql_error(probe);
+				mysql_close(probe);
+				++it;
+			}
+		}
+		if (!pending.empty() && monotonic_time() < deadline_us) {
+			sleep(poll_interval_s);
+		}
+	}
+
+	if (pending.empty()) {
+		const unsigned long long elapsed_us = monotonic_time() - start_us;
+		diag("wait_for_proxysql_cluster: all %zu endpoint(s) ready in %.2fs",
+			nodes.size(), elapsed_us / 1000000.0);
+		return 0;
+	}
+
+	diag("wait_for_proxysql_cluster: %zu/%zu endpoint(s) did not respond within %ds",
+		pending.size(), nodes.size(), timeout_s);
+	for (const auto& p : pending) {
+		diag("  not ready: %s:%d  last error: %s",
+			p.host.c_str(), p.port, p.last_error.c_str());
+	}
+	return 1;
+}
+
+int wait_for_proxysql_cluster(
+	const std::string& host,
+	const std::vector<int>& ports,
+	const std::string& admin_user,
+	const std::string& admin_password,
+	int timeout_s,
+	int poll_interval_s
+) {
+	std::vector<std::pair<std::string,int>> nodes;
+	nodes.reserve(ports.size());
+	for (int p : ports) nodes.emplace_back(host, p);
+	return wait_for_proxysql_cluster(
+		nodes, admin_user, admin_password, timeout_s, poll_interval_s);
+}
+
 int get_variable_value(
 	MYSQL* proxysql_admin, const string& variable_name, string& variable_value, bool runtime
 ) {

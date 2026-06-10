@@ -16,6 +16,14 @@ static bool DEBUG_ProxyProtocolInfo = false;
 
 // Function to parse the PROXY protocol header
 bool ProxyProtocolInfo::parseProxyProtocolHeader(const char* packet, size_t packet_length) {
+	// GHSA-gw94-85m2-x8v2: defensively clear the UNKNOWN signal at the
+	// start of every parse. The default constructor zero-inits it, but
+	// callers may reuse a ProxyProtocolInfo instance and a stale `true`
+	// would cause the caller to take the UNKNOWN branch on a later
+	// malformed parse, suppressing the legitimate warning and creating
+	// an empty PROXY_info.
+	header_was_unknown = false;
+
 	// Check for minimum header length (including CRLF)
 	if (packet_length < 15) {
 		return false; // Not a valid PROXY protocol header
@@ -39,29 +47,66 @@ bool ProxyProtocolInfo::parseProxyProtocolHeader(const char* packet, size_t pack
 		return false; // Invalid header format
 	}
 
-	// Check for the protocol type
-	if (memcmp(temp_buffer.data() + 6, "TCP4", 4) == 0 ||
-		memcmp(temp_buffer.data() + 6, "TCP6", 4) == 0 ||
-		memcmp(temp_buffer.data() + 6, "UNKNOWN", 7) == 0) {
+	// Check for the protocol type. The HAProxy PROXY-protocol v1 spec
+	// distinguishes two cases here:
+	//   - "TCP4" / "TCP6": the proxy knows the L3 endpoints and the
+	//     remainder of the line carries them. A single space MUST follow
+	//     the protocol token before the source address.
+	//   - "UNKNOWN": the proxy does NOT know the client identity, and
+	//     the receiver MUST ignore any address fields that follow. The
+	//     token may be followed immediately by CRLF, or by a space and
+	//     trailing fields the receiver must discard.
+	//
+	// GHSA-gw94-85m2-x8v2: previously this branch OR'd UNKNOWN into the
+	// same sscanf as TCP4/TCP6, which let a TCP peer write
+	// "PROXY UNKNOWN <forged-ip> <addr> <port> <port>\r\n" and have the
+	// forged source address propagate into addr.addr / client_addr rules
+	// / event_log. The same code path also accepted "TCP4xyz ..." as
+	// TCP4 because the 4-byte memcmp was a prefix match with no
+	// delimiter check.
+	const char* protocol = temp_buffer.data() + 6;
+	const size_t protocol_offset = 6;
 
-		// Parse the header using sscanf
-		int result = sscanf(
-			temp_buffer.data(),
-			"PROXY %*s " PROXY_PROTOCOL_ADDR_SCAN_FMT " " PROXY_PROTOCOL_ADDR_SCAN_FMT " %hu %hu\r\n",
-						   source_address, destination_address, 
-						   &source_port, &destination_port
-		);
-
-		// Check if sscanf successfully parsed all fields
-		if (result == 4) {
-			return true; // Successful parsing
-		} else {
-			// Handle partial parsing or invalid format
-			return false; // Indicate an error
+	if (memcmp(protocol, "UNKNOWN", 7) == 0) {
+		// The byte after "UNKNOWN" must be either ' ' (with trailing
+		// fields we must ignore) or '\r' (the line ends here). Anything
+		// else is a bogus token like "UNKNOWNFOO" and we reject it.
+		if (packet_length <= protocol_offset + 7) {
+			return false;
 		}
+		const char next = protocol[7];
+		if (next != ' ' && next != '\r') {
+			return false;
+		}
+		// Valid PP1 UNKNOWN frame. Signal to the caller that we saw a
+		// well-formed header but addresses must be ignored per spec.
+		// Returning false ensures the caller does NOT override addr.addr
+		// with parsed values; the header_was_unknown flag lets the
+		// caller log/track that this was an intentional skip rather
+		// than a malformed frame.
+		header_was_unknown = true;
+		return false;
 	}
 
-	return false; // Invalid header format
+	// TCP4 / TCP6 must be followed by a single space delimiter — not by
+	// arbitrary garbage. We need at least one byte beyond the 4-byte
+	// protocol token to read that delimiter.
+	if (packet_length <= protocol_offset + 4) {
+		return false;
+	}
+	const bool is_tcp4 = (memcmp(protocol, "TCP4", 4) == 0 && protocol[4] == ' ');
+	const bool is_tcp6 = (memcmp(protocol, "TCP6", 4) == 0 && protocol[4] == ' ');
+	if (!is_tcp4 && !is_tcp6) {
+		return false;
+	}
+
+	int result = sscanf(
+		temp_buffer.data(),
+		"PROXY %*s " PROXY_PROTOCOL_ADDR_SCAN_FMT " " PROXY_PROTOCOL_ADDR_SCAN_FMT " %hu %hu\r\n",
+		source_address, destination_address,
+		&source_port, &destination_port
+	);
+	return (result == 4);
 }
 
 /**

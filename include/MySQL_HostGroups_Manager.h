@@ -60,8 +60,9 @@
 										  "new_reader_weight INT CHECK (new_reader_weight >= 0 AND new_reader_weight <=10000000) NOT NULL DEFAULT 1 , " \
 										  "add_lag_ms INT NOT NULL CHECK (add_lag_ms >= 0 AND add_lag_ms <= 600000) DEFAULT 30 , " \
 										  "min_lag_ms INT NOT NULL CHECK (min_lag_ms >= 0 AND min_lag_ms <= 600000) DEFAULT 30 , " \
-										  "lag_num_checks INT NOT NULL CHECK (lag_num_checks >= 1 AND lag_num_checks <= 16) DEFAULT 1 , comment VARCHAR ," \
-										  "UNIQUE (reader_hostgroup))"
+										  "lag_num_checks INT NOT NULL CHECK (lag_num_checks >= 1 AND lag_num_checks <= 16) DEFAULT 1 , " \
+										  "autopurge_missing_checks INT NOT NULL CHECK (autopurge_missing_checks >= 0 AND autopurge_missing_checks <= 100) DEFAULT 0 , " \
+										  "comment VARCHAR , UNIQUE (reader_hostgroup))"
 
 #define MYHGM_GEN_ADMIN_RUNTIME_SERVERS "SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"SHUNNED\" END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers ORDER BY hostgroup_id, hostname, port"
 
@@ -344,14 +345,15 @@ class AWS_Aurora_Info {
 	int check_timeout_ms;
 	int writer_is_also_reader;
 	int new_reader_weight;
+	int autopurge_missing_checks;
 	// TODO
 	// add intermediary status value, for example the last check time
 	char * domain_name;
 	char * comment;
 	bool active;
 	bool active_;
-	AWS_Aurora_Info(int w, int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c);
-	bool update(int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c);
+	AWS_Aurora_Info(int w, int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, int amc, char *c);
+	bool update(int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, int amc, char *c);
 	~AWS_Aurora_Info();
 	AWS_Aurora_Info(const AWS_Aurora_Info&) = delete;
 	AWS_Aurora_Info& operator=(const AWS_Aurora_Info&) = delete;

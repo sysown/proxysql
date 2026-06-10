@@ -1,0 +1,111 @@
+[
+    {
+        "__comment__": "SST example - 1 DONOR, 1 Receiver",
+        "cluster_type": "GALERA",
+        "mysql_servers": [
+            { "hostgroup_id": 2271, "hostname": "127.1.1.11", "port": 3306 },
+            { "hostgroup_id": 2273, "hostname": "127.1.1.12", "port": 3306 },
+            { "hostgroup_id": 2274, "hostname": "127.1.1.13", "port": 3306 }
+        ],
+        "mysql_galera_hostgroups": [
+            {
+                "writer_hostgroup": 2271,
+                "backup_writer_hostgroup": 2272,
+                "reader_hostgroup": 2273,
+                "offline_hostgroup": 2274,
+                "active": 1,
+                "max_writers": 1,
+                "writer_is_also_reader": 1,
+                "max_transactions_behind": 100,
+                "comment": null
+            }
+        ],
+        "galera_servers_init_state": [
+            {
+                "hostgroup_id": 2271,
+                "hostname": "127.1.1.11",
+                "port": 3306,
+                "wsrep_local_state": 4,
+                "read_only": 0,
+                "wsrep_local_recv_queue": 0,
+                "wsrep_desync": 0,
+                "wsrep_reject_queries": "NONE",
+                "wsrep_sst_donor_rejects_queries": 0,
+                "wsrep_cluster_status": "Primary",
+                "pxc_maint_mode": "DISABLED"
+            },
+            {
+                "hostgroup_id": 2271,
+                "hostname": "127.1.1.12",
+                "port": 3306,
+                "wsrep_local_state": 4,
+                "read_only": 0,
+                "wsrep_local_recv_queue": 0,
+                "wsrep_desync": 0,
+                "wsrep_reject_queries": "NONE",
+                "wsrep_sst_donor_rejects_queries": 0,
+                "wsrep_cluster_status": "Primary",
+                "pxc_maint_mode": "DISABLED"
+            },
+            {
+                "hostgroup_id": 2271,
+                "hostname": "127.1.1.13",
+                "port": 3306,
+                "wsrep_local_state": 4,
+                "read_only": 0,
+                "wsrep_local_recv_queue": 0,
+                "wsrep_desync": 0,
+                "wsrep_reject_queries": "NONE",
+                "wsrep_sst_donor_rejects_queries": 0,
+                "wsrep_cluster_status": "Primary",
+                "pxc_maint_mode": "DISABLED"
+            }
+        ],
+        "galera_servers_new_state": [
+            {
+                "hostgroup_id": 2271,
+                "hostname": "127.1.1.11",
+                "port": 3306,
+                "wsrep_local_state": 2,
+                "read_only": 0,
+                "wsrep_local_recv_queue": 0,
+                "wsrep_desync": 0,
+                "wsrep_reject_queries": "NONE",
+                "wsrep_sst_donor_rejects_queries": 0,
+                "wsrep_cluster_status": "Primary",
+                "pxc_maint_mode": "DISABLED"
+            },
+            {
+                "hostgroup_id": 2271,
+                "hostname": "127.1.1.12",
+                "port": 3306,
+                "wsrep_local_state": 3,
+                "read_only": 0,
+                "wsrep_local_recv_queue": 0,
+                "wsrep_desync": 0,
+                "wsrep_reject_queries": "NONE",
+                "wsrep_sst_donor_rejects_queries": 0,
+                "wsrep_cluster_status": "Primary",
+                "pxc_maint_mode": "DISABLED"
+            }
+        ],
+        "proxysql_init_state": [
+            { "hostgroup_id":2271,"hostname":"127.1.1.11","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":2271,"hostname":"127.1.1.12","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":2271,"hostname":"127.1.1.13","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2272,"hostname":"127.1.1.11","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2272,"hostname":"127.1.1.12","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.1.1.11","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.1.1.12","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.1.1.13","port":3306,"status":"ONLINE" }
+        ],
+        "proxysql_final_state": [
+            { "hostgroup_id":2271,"hostname":"127.1.1.11","port":3306,"status":"SHUNNED","weight":1 },
+            { "hostgroup_id":2271,"hostname":"127.1.1.13","port":3306,"status":"ONLINE","weight":1 },
+            { "hostgroup_id":2272,"hostname":"127.1.1.11","port":3306,"status":"ONLINE","weight":1 },
+            { "hostgroup_id":2273,"hostname":"127.1.1.11","port":3306,"status":"ONLINE","weight":1 },
+            { "hostgroup_id":2273,"hostname":"127.1.1.13","port":3306,"status":"ONLINE","weight":1 },
+            { "hostgroup_id":2274,"hostname":"127.1.1.12","port":3306,"status":"ONLINE","weight":1 }
+        ]
+    }
+]

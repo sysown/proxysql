@@ -250,6 +250,8 @@ enum mysql_variable_name {
 	SQL_UNIQUE_CHECKS,
 	SQL_WSREP_OSU_METHOD,
 	SQL_WSREP_SYNC_WAIT,
+	SQL_WSREP_TRX_FRAGMENT_SIZE,
+	SQL_WSREP_TRX_FRAGMENT_UNIT,
 	SQL_NAME_LAST_HIGH_WM,
 };
 
@@ -1222,6 +1224,9 @@ __thread int pgsql_thread___monitor_replication_lag_count;
 __thread char* pgsql_thread___monitor_replication_lag_use_percona_heartbeat;
 __thread bool pgsql_thread___monitor_writer_is_also_reader;
 __thread int pgsql_thread___monitor_threads;
+__thread int pgsql_thread___monitor_local_dns_cache_ttl;
+__thread int pgsql_thread___monitor_local_dns_cache_refresh_interval;
+__thread int pgsql_thread___monitor_local_dns_resolver_queue_maxsize;
 __thread char* pgsql_thread___monitor_username;
 __thread char* pgsql_thread___monitor_password;
 __thread char* pgsql_thread___monitor_dbname;
@@ -1560,6 +1565,9 @@ extern __thread char* pgsql_thread___monitor_replication_lag_use_percona_heartbe
 extern __thread int pgsql_thread___monitor_read_only_max_timeout_count;
 extern __thread bool pgsql_thread___monitor_writer_is_also_reader;
 extern __thread int pgsql_thread___monitor_threads;
+extern __thread int pgsql_thread___monitor_local_dns_cache_ttl;
+extern __thread int pgsql_thread___monitor_local_dns_cache_refresh_interval;
+extern __thread int pgsql_thread___monitor_local_dns_resolver_queue_maxsize;
 extern __thread char* pgsql_thread___monitor_username;
 extern __thread char* pgsql_thread___monitor_password;
 extern __thread char* pgsql_thread___monitor_dbname;
@@ -1857,6 +1865,8 @@ mysql_variable_st mysql_tracked_variables[] {
 	{ SQL_UNIQUE_CHECKS,              SETTING_VARIABLE, true,  false, false, true,  (char *)"unique_checks",              NULL, (char *)"" , false} ,
 	{ SQL_WSREP_OSU_METHOD,           SETTING_VARIABLE, true,  false, false, false, (char *)"wsrep_osu_method",           NULL, (char *)"" , false} ,
 	{ SQL_WSREP_SYNC_WAIT,			  SETTING_VARIABLE, false, false, true,  false, (char *)"wsrep_sync_wait",			  (char *)"wsrep_sync_wait", (char *)"0" , false} ,
+	{ SQL_WSREP_TRX_FRAGMENT_SIZE,   SETTING_VARIABLE, false, false, true,  false, (char *)"wsrep_trx_fragment_size",    NULL, (char *)"0" , false} ,
+	{ SQL_WSREP_TRX_FRAGMENT_UNIT,   SETTING_VARIABLE, true,  false, false, false, (char *)"wsrep_trx_fragment_unit",    NULL, (char *)"" , false} ,
 	/*
 	variables that will need input validation:
 	binlog_row_image

@@ -40,22 +40,10 @@ The same codebase produces three product tiers via feature flags:
 |------|------|---------|------|
 | Stable | (default) | v3.0.x | Core proxy |
 | Innovative | `PROXYSQL31=1` | v3.1.x | FFTO, TSDB |
-| Plugin Chassis | `PROXYSQL40=1` | v4.0.x | Plugin loader + ABI (4-phase lifecycle, query-hook, shared Prometheus) |
-| AI/MCP | `PROXYSQLGENAI=1` | v4.0.x | Builds the genai plugin (`plugins/genai/`) — GenAI, MCP, Anomaly Detection |
+| Plugin Chassis | `PROXYSQL40=1` | v4.0.x | Plugin loader + ABI (4-phase lifecycle, query-hook, shared Prometheus); builds and packages all v4.0 plugins including mysqlx and genai/MCP |
 
-`PROXYSQLGENAI=1` implies `PROXYSQL40=1` implies `PROXYSQL31=1`, which
-implies `PROXYSQLFFTO=1` and `PROXYSQLTSDB=1`.
-
-**As of the GenAI plugin carve-out (Step 7), `PROXYSQLGENAI` no longer
-gates any code in core with the exception of the sqlite-vec hook
-(`proxy_sqlite3_vec_init` in `lib/proxy_sqlite3_symbols.cpp` and the
-`vec.o` link in `lib/Makefile` / `src/Makefile`), which is only needed
-when the genai plugin is loaded.**  All other AI/MCP/RAG/LLM features
-live in `plugins/genai/` and load as a `.so` at runtime.  The
-user-facing `PROXYSQLGENAI=1` flag still exists, and now means "build
-the genai plugin alongside core proxysql" — it propagates through the
-plugin chassis (`PROXYSQL40=1`) and the sqlite-vec link, but core
-compiles identically with or without it otherwise.
+**`PROXYSQL40=1` implies `PROXYSQL31=1` which implies `PROXYSQLFFTO=1` and `PROXYSQLTSDB=1`.**
+There is no separate `PROXYSQLGENAI` flag — `PROXYSQL40=1` builds and packages all v4.0 plugins (mysqlx, genai/MCP, anomaly detection). All AI/MCP/RAG/LLM features live in `plugins/genai/` and load as a `.so` at runtime.
 
 ### Build Flags
 
@@ -100,6 +88,20 @@ Available TAP groups are defined in `test/tap/groups/groups.json`. Group names f
 Test files follow the naming pattern `test_*.cpp` or `*-t.cpp` in `test/tap/tests/`.
 
 Test binaries are built via a pattern rule in `test/tap/tests/Makefile`: `make <testname>-t` compiles `<testname>-t.cpp` into `<testname>-t`. No special Makefile target is needed for new tests — just add the `.cpp` file and register it in `groups.json`.
+
+### Reporting CI/test failures
+
+**Test quality is paramount on this project. Never dismiss a CI failure as "pre-existing" or "flaky".** Those words are observations, not analyses, and using them as a conclusion lets real bugs survive.
+
+When CI fails on a branch or PR:
+
+1. **Read the actual failure.** Open the failing test log, the proxysql server log it produced, and the test source. Identify the specific assertion, timeout, crash, or non-zero exit. Quote the relevant lines in your report.
+2. **State the root cause, not the symptom.** "Test X failed" is a symptom. The root cause is *why* — a race condition, a stale fixture, a resource leak, a protocol regression, an env mismatch, etc.
+3. **Separate two distinct questions** and answer both with evidence:
+   - *Did the current change cause this failure?* — answer via commit-by-commit reasoning and code-path analysis, not just by comparing baseline pass/fail rates.
+   - *Is this test broken regardless of the current change?* — independent question. A failure that pre-dates the change is still a problem to fix or file, not a reason to merge over.
+4. **If the root cause cannot be determined within the session**, say so explicitly and recommend the next investigation step (re-run with logs, instrument the test, file a tracking issue). Do not paper over uncertainty with "flaky".
+5. **A repeatedly failing test is a higher-priority bug, not a lower one.** Recurrence is evidence that the failure mode is reproducible — that is exactly what makes it fixable.
 
 ## Architecture
 

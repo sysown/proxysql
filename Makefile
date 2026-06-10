@@ -132,7 +132,7 @@ export SOURCE_DATE_EPOCH
 ### rebuild SQLite with -USQLITE_ENABLE_MEMORY_MANAGEMENT in deps/Makefile
 
 O0 := -O0
-O2 := -O2
+O2 := -O2 -fno-omit-frame-pointer
 O1 := -O1
 O3 := -O3 -mtune=native
 
@@ -202,7 +202,7 @@ debug: build_src_debug
 testaurora_random: build_src_testaurora_random
 
 .PHONY: testaurora
-testaurora: build_src_testaurora
+testaurora: build_src_testaurora build_cluster_simulator
 	# cd test/tap && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE}
 	# cd test/tap/tests && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
 
@@ -210,18 +210,18 @@ testaurora: build_src_testaurora
 testawsrds: build_src_testawsrds
 
 .PHONY: testgalera
-testgalera: build_src_testgalera
-	# cd test/tap && OPTZ="${O0} -ggdb -DDEBUG -DTEST_GALERA" CC=${CC} CXX=${CXX} ${MAKE}
-	# cd test/tap/tests && OPTZ="${O0} -ggdb -DDEBUG -DTEST_GALERA" CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
+testgalera: build_src_testgalera build_cluster_simulator
+	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG -DTEST_GALERA" CC=${CC} CXX=${CXX} ${MAKE}
+	cd test/tap/tests && OPTZ="${O0} -ggdb -DDEBUG -DTEST_GALERA" CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
 
 .PHONY: testgrouprep
-testgrouprep: build_src_testgrouprep
+testgrouprep: build_src_testgrouprep build_cluster_simulator
 
 .PHONY: testreadonly
-testreadonly: build_src_testreadonly
+testreadonly: build_src_testreadonly build_cluster_simulator
 
 .PHONY: testreplicationlag
-testreplicationlag: build_src_testreplicationlag
+testreplicationlag: build_src_testreplicationlag build_cluster_simulator
 
 .PHONY: testall
 testall: build_src_testall
@@ -368,6 +368,19 @@ build_tap_test_debug: build_tap_tests_debug
 build_tap_tests_debug: build_src_debug
 	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE} debug
 
+# The simulator links against libproxysql.a from the PREVIOUS lib build in this
+# invocation (release for `make build_cluster_simulator`, debug for the _debug
+# variant, or a TEST_<FAMILY>-flavored debug build when pulled in as a prereq
+# of the `test<family>` targets). Keep this rule dependency-free so it does not
+# clobber the caller's lib/src flavor by recursing into a conflicting build.
+.PHONY: build_cluster_simulator
+build_cluster_simulator:
+	cd test/deps/cluster_simulator && CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_cluster_simulator_debug
+build_cluster_simulator_debug:
+	cd test/deps/cluster_simulator && CC=${CC} CXX=${CXX} ${MAKE} debug
+
 # ClickHouse build targets are now default build targets. 
 # To maintain backward compatibility, ClickHouse targets are still available.
 .PHONY: build_deps_clickhouse
@@ -444,7 +457,7 @@ amd64-packages: amd64-centos amd64-ubuntu amd64-debian amd64-fedora amd64-opensu
 amd64-almalinux: almalinux8 almalinux8-clang almalinux8-dbg almalinux9 almalinux9-clang almalinux9-dbg almalinux10 almalinux10-clang almalinux10-dbg
 amd64-centos: centos9 centos9-clang centos9-dbg centos10 centos10-clang centos10-dbg
 amd64-debian: debian12 debian12-clang debian12-dbg debian13 debian13-clang debian13-dbg
-amd64-fedora: fedora42 fedora42-clang fedora42-dbg fedora43 fedora43-clang fedora43-dbg
+amd64-fedora: fedora42 fedora42-clang fedora42-dbg fedora43 fedora43-clang fedora43-dbg fedora44 fedora44-clang fedora44-dbg
 amd64-opensuse: opensuse15 opensuse15-clang opensuse15-dbg opensuse16 opensuse16-clang opensuse16-dbg
 amd64-ubuntu: ubuntu22 ubuntu22-clang ubuntu22-dbg ubuntu24 ubuntu24-clang ubuntu24-dbg
 amd64-pkglist:
@@ -455,7 +468,7 @@ arm64-packages: arm64-centos arm64-debian arm64-ubuntu arm64-fedora arm64-opensu
 arm64-almalinux: almalinux8 almalinux9 almalinux10
 arm64-centos: centos9 centos10
 arm64-debian: debian12 debian13
-arm64-fedora: fedora42 fedora43
+arm64-fedora: fedora42 fedora43 fedora44
 arm64-opensuse: opensuse15 opensuse16
 arm64-ubuntu: ubuntu22 ubuntu24
 arm64-pkglist:

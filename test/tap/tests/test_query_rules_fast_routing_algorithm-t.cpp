@@ -517,7 +517,7 @@ int main(int argc, char** argv) {
 	}
 
 	pair<string,int> host_port {};
-	int host_port_err = extract_module_host_port(admin, "sqliteserver-mysql_ifaces", host_port);
+	int host_port_err = extract_module_host_port(admin, "sqliteserver-mysql_ifaces", host_port, true);
 
 	if (host_port_err) {
 		goto cleanup;

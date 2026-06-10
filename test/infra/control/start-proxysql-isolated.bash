@@ -2,14 +2,12 @@
 set -e
 set -o pipefail
 
-# SUDO helper: empty if root
-SUDO=""
-if [ "$(id -u)" != "0" ]; then SUDO="sudo"; fi
-
 # Derive Workspace relative to script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 export WORKSPACE="${REPO_ROOT}"
+
+source "${SCRIPT_DIR}/docker-fs-helper.bash"
 
 if [ -z "${INFRA_ID}" ]; then echo "Error: INFRA_ID is not set."; exit 1; fi
 
@@ -44,9 +42,9 @@ echo ">>> Setting up isolated network: ${NETWORK_NAME}"
 docker network inspect ${NETWORK_NAME} >/dev/null 2>&1 || docker network create ${NETWORK_NAME}
 
 echo ">>> Preparing ProxySQL data directory: ${PROXY_DATA_DIR}"
-$SUDO mkdir -p "${PROXY_DATA_DIR}"
-$SUDO chmod -R 777 "${INFRA_LOGS_PATH}/${INFRA_ID}"
-$SUDO rm -f "${PROXY_DATA_DIR}/proxysql.db" "${PROXY_DATA_DIR}"/*.pem
+mkdir -p "${PROXY_DATA_DIR}"
+docker_fs_exec "chmod -R 777 ." "${INFRA_LOGS_PATH}/${INFRA_ID}"
+docker_fs_exec "rm -f proxysql/proxysql.db proxysql/*.pem" "${INFRA_LOGS_PATH}/${INFRA_ID}"
 
 docker rm -f "${PROXY_CONTAINER}" >/dev/null 2>&1 || true
 
@@ -146,11 +144,52 @@ GENAI_PLUGIN_MOUNT=""
 if [ "${PROXYSQL_LOAD_GENAI_PLUGIN:-0}" = "1" ]; then
     if [ ! -f "${GENAI_PLUGIN_SRC}" ]; then
         echo "ERROR: PROXYSQL_LOAD_GENAI_PLUGIN=1 but plugin .so missing at ${GENAI_PLUGIN_SRC}" >&2
-        echo "       Build it first: PROXYSQLGENAI=1 make (or cd plugins/genai && make with the right flags)" >&2
+        echo "       Build it first: PROXYSQL40=1 make (or cd plugins/genai && make with the right flags)" >&2
         exit 1
     fi
     GENAI_PLUGIN_MOUNT="-v ${GENAI_PLUGIN_SRC}:/usr/lib/proxysql/ProxySQL_GenAI_Plugin.so:ro"
     echo ">>> Mounting genai plugin .so into ProxySQL container"
+fi
+
+# Mount .gcno files into the proxysql container at the compile-time path
+# so gcov's runtime (invoked via the `PROXYSQL GCOV DUMP` admin command
+# from the tester) can resolve the .gcda files it writes.
+#
+# The proxysql binary was compiled inside the build container with the
+# source tree bind-mounted at /opt/proxysql/ (docker-compose.yml line:
+# `- ./:/opt/proxysql/`), so .gcno paths embedded in the binary point to
+# /opt/proxysql/{lib,src}/obj/X.gcno. Without these mounts the runtime
+# .gcda files come out with an empty `current_working_directory` field
+# and fastcov reports `files: []` for every one of them -- the bug that
+# silently zeroed out daemon-side coverage for PR #5818 (only ~5,694
+# lines / 27 files from `tap-legacy-g2` were ever real; everything else
+# was missing).
+#
+# Always-on: harmless when the .gcno files aren't present (e.g.
+# non-coverage builds) -- the conditional below just doesn't add
+# anything to GCOV_MOUNTS.
+GCOV_MOUNTS=""
+if compgen -G "${WORKSPACE}/lib/obj/*.gcno" >/dev/null; then
+    GCOV_MOUNTS="${GCOV_MOUNTS} -v ${WORKSPACE}/lib/obj:/opt/proxysql/lib/obj:ro"
+fi
+if compgen -G "${WORKSPACE}/src/obj/*.gcno" >/dev/null; then
+    GCOV_MOUNTS="${GCOV_MOUNTS} -v ${WORKSPACE}/src/obj:/opt/proxysql/src/obj:ro"
+fi
+if [ -n "${GCOV_MOUNTS}" ]; then
+    echo ">>> Mounting .gcno files into ProxySQL container for gcov runtime resolution"
+fi
+
+# Simulator-backed TAP groups (aurora-sim, galera-sim, ...) export a
+# CLUSTER_SIM_HOST_FILE pointing at a plain "hostname ip" list. Inject each
+# entry as --add-host so ProxySQL's container /etc/hosts resolves the simulated
+# cluster aliases without bind-mounting /etc/hosts (bind-mount silently drops
+# --add-host; restart-in-hook is fragile because ProxySQL is PID 1).
+ADD_HOST_ARGS=()
+if [ -n "${CLUSTER_SIM_HOST_FILE:-}" ] && [ -f "${CLUSTER_SIM_HOST_FILE}" ]; then
+    while read -r host ip; do
+        [[ -z "${host}" || "${host}" =~ ^# ]] && continue
+        ADD_HOST_ARGS+=(--add-host="${host}:${ip}")
+    done < "${CLUSTER_SIM_HOST_FILE}"
 fi
 
 echo ">>> Starting ProxySQL container: ${PROXY_CONTAINER} (cluster nodes: ${NUM_NODES})"
@@ -159,12 +198,14 @@ docker run -d \
     --hostname "proxysql" \
     --network "${NETWORK_NAME}" \
     --network-alias "proxysql" \
+    "${ADD_HOST_ARGS[@]}" \
     -v "${WORKSPACE}/src/proxysql:/usr/bin/proxysql" \
     -v "${GENERIC_CONFIG}:/etc/proxysql.cnf" \
     -v "${PROXY_DATA_DIR}:/var/lib/proxysql" \
     -v "${COVERAGE_DATA_DIR}:/gcov" \
     ${MYSQLX_PLUGIN_MOUNT} \
     ${GENAI_PLUGIN_MOUNT} \
+    ${GCOV_MOUNTS} \
     -e GCOV_PREFIX="/gcov" \
     -e GCOV_PREFIX_STRIP="3" \
     proxysql-ci-base:latest \

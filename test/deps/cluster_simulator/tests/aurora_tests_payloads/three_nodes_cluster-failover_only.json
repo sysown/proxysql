@@ -1,0 +1,95 @@
+[
+    {
+        "__comment__": "Three Nodes Aurora Cluster - Primary Failover, 'writer_is_also_reader'",
+        "cluster_type": "AURORA",
+        "mysql_servers": [
+            { "hostgroup_id": 1271, "hostname": "host.1.11.aws-test.com", "port": 3306 },
+            { "hostgroup_id": 1272, "hostname": "host.1.12.aws-test.com", "port": 3306 },
+            { "hostgroup_id": 1272, "hostname": "host.1.13.aws-test.com", "port": 3306 }
+        ],
+        "mysql_aws_aurora_hostgroups": [
+            {
+                "writer_hostgroup": 1271,
+                "reader_hostgroup": 1272,
+                "active": 1,
+                "domain_name": ".aws-test.com",
+                "max_lag_ms": 200,
+                "writer_is_also_reader": 1,
+                "new_reader_weight": 10,
+                "comment": ""
+            }
+        ],
+        "mysql_monitor_config": [],
+        "aurora_servers_init_state": {
+            ".aws-test.com": [
+                { "SERVER_ID": "host.1.11", "SESSION_ID": "MASTER_SESSION_ID", "REPLICA_LAG_IN_MILLISECONDS": 0 },
+                { "SERVER_ID": "host.1.12", "SESSION_ID": "", "REPLICA_LAG_IN_MILLISECONDS": 4 },
+                { "SERVER_ID": "host.1.13", "SESSION_ID": "", "REPLICA_LAG_IN_MILLISECONDS": 4 }
+            ]
+        },
+        "aurora_servers_new_state": {
+            ".aws-test.com": [
+                { "SERVER_ID": "host.1.11", "SESSION_ID": "", "REPLICA_LAG_IN_MILLISECONDS": 4 },
+                { "SERVER_ID": "host.1.12", "SESSION_ID": "MASTER_SESSION_ID", "REPLICA_LAG_IN_MILLISECONDS": 0 },
+                { "SERVER_ID": "host.1.13", "SESSION_ID": "", "REPLICA_LAG_IN_MILLISECONDS": 4 }
+            ]
+        },
+        "proxysql_init_state": [
+            { "hostgroup_id":1271,"hostname":"host.1.11.aws-test.com","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":1272,"hostname":"host.1.12.aws-test.com","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":1272,"hostname":"host.1.13.aws-test.com","port":3306,"status":"ONLINE" }
+        ],
+        "proxysql_final_state": [
+            { "hostgroup_id":1271,"hostname":"host.1.12.aws-test.com","port":3306,"status":"ONLINE","weight":1,"max_connections":1000,"use_ssl":0 },
+            { "hostgroup_id":1272,"hostname":"host.1.11.aws-test.com","port":3306,"status":"ONLINE","weight":10,"max_connections":1000,"use_ssl":0 },
+            { "hostgroup_id":1272,"hostname":"host.1.12.aws-test.com","port":3306,"status":"ONLINE","weight":10,"max_connections":1000,"use_ssl":0 },
+            { "hostgroup_id":1272,"hostname":"host.1.13.aws-test.com","port":3306,"status":"ONLINE","weight":1,"max_connections":1000,"use_ssl":0 }
+        ]
+    },
+    {
+        "__comment__": "Three Nodes Aurora Cluster - Primary Failover, no 'writer_is_also_reader'",
+        "cluster_type": "AURORA",
+        "mysql_servers": [
+            { "hostgroup_id": 1271, "hostname": "host.1.11.aws-test.com", "port": 3306 },
+            { "hostgroup_id": 1272, "hostname": "host.1.12.aws-test.com", "port": 3306 },
+            { "hostgroup_id": 1272, "hostname": "host.1.13.aws-test.com", "port": 3306 }
+        ],
+        "mysql_aws_aurora_hostgroups": [
+            {
+                "writer_hostgroup": 1271,
+                "reader_hostgroup": 1272,
+                "active": 1,
+                "domain_name": ".aws-test.com",
+                "max_lag_ms": 200,
+                "writer_is_also_reader": 0,
+                "new_reader_weight": 10,
+                "comment": ""
+            }
+        ],
+        "mysql_monitor_config": [],
+        "aurora_servers_init_state": {
+            ".aws-test.com": [
+                { "SERVER_ID": "host.1.11", "SESSION_ID": "MASTER_SESSION_ID", "REPLICA_LAG_IN_MILLISECONDS": 0 },
+                { "SERVER_ID": "host.1.12", "SESSION_ID": "", "REPLICA_LAG_IN_MILLISECONDS": 4 },
+                { "SERVER_ID": "host.1.13", "SESSION_ID": "", "REPLICA_LAG_IN_MILLISECONDS": 4 }
+            ]
+        },
+        "aurora_servers_new_state": {
+            ".aws-test.com": [
+                { "SERVER_ID": "host.1.11", "SESSION_ID": "", "REPLICA_LAG_IN_MILLISECONDS": 4 },
+                { "SERVER_ID": "host.1.12", "SESSION_ID": "MASTER_SESSION_ID", "REPLICA_LAG_IN_MILLISECONDS": 0 },
+                { "SERVER_ID": "host.1.13", "SESSION_ID": "", "REPLICA_LAG_IN_MILLISECONDS": 4 }
+            ]
+        },
+        "proxysql_init_state": [
+            { "hostgroup_id":1271,"hostname":"host.1.11.aws-test.com","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":1272,"hostname":"host.1.12.aws-test.com","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":1272,"hostname":"host.1.13.aws-test.com","port":3306,"status":"ONLINE" }
+        ],
+        "proxysql_final_state": [
+            { "hostgroup_id":1271,"hostname":"host.1.12.aws-test.com","port":3306,"status":"ONLINE","weight":1,"max_connections":1000,"use_ssl":0 },
+            { "hostgroup_id":1272,"hostname":"host.1.11.aws-test.com","port":3306,"status":"ONLINE","weight":10,"max_connections":1000,"use_ssl":0 },
+            { "hostgroup_id":1272,"hostname":"host.1.13.aws-test.com","port":3306,"status":"ONLINE","weight":1,"max_connections":1000,"use_ssl":0 }
+        ]
+    }
+]

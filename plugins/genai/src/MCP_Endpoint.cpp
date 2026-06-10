@@ -83,10 +83,24 @@ bool MCP_JSONRPC_Resource::authenticate_request(const httpserver::http_request& 
 		return false;
 	}
 
-	// If no auth token is configured, allow the request (no authentication required)
+	// GHSA-7wh6-2vcc-gcm4: every MCP endpoint can read or mutate
+	// non-trivial proxy state.  /mcp/query executes SQL on configured
+	// target backends; /mcp/admin exposes kill_query, flush_cache,
+	// reload; /mcp/cache, /mcp/config, /mcp/stats expose internal
+	// runtime state and (for config) credentials; /mcp/ai and /mcp/rag
+	// can dispatch backend SQL via LLM-driven tool calls.  Allowing any
+	// of these unauthenticated when reachable on the network is unsafe.
+	//
+	// Require an explicit non-empty bearer token on every endpoint.
+	// Operators must set the corresponding `mcp-<endpoint>_endpoint_auth`
+	// variable to a non-empty value before that endpoint will accept
+	// requests.  The pre-fix permissive "empty token = allow anyone"
+	// behaviour is removed.
 	if (!expected_token || strlen(expected_token) == 0) {
-		proxy_debug(PROXY_DEBUG_GENERIC, 4, "MCP authentication on %s: no auth configured, allowing request\n", endpoint_name.c_str());
-		return true;
+		proxy_error("MCP authentication on %s: mcp-%s_endpoint_auth is empty; refusing request. Set mcp-%s_endpoint_auth to a non-empty bearer token to enable the /mcp/%s endpoint.\n",
+			endpoint_name.c_str(), endpoint_name.c_str(),
+			endpoint_name.c_str(), endpoint_name.c_str());
+		return false;
 	}
 
 	// Try to get Bearer token from Authorization header
