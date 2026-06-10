@@ -105,13 +105,6 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
-	// Speed up monitor cycles so the test finishes quickly.
-	long orig_interval = readGlobalVar(admin,
-		"pgsql-monitor_connect_interval", 2000);
-	if (!execSql(admin, "SET pgsql-monitor_connect_interval=1000; LOAD PGSQL VARIABLES TO RUNTIME;")) {
-		diag("Failed to lower monitor interval, continuing with current value");
-	}
-
 	// -----------------------------------------------------------------
 	// 1. Confirm pgsql_servers is set up the way the group expects:
 	//    hostname='/var/run/postgresql-shared', port=0
@@ -156,38 +149,29 @@ int main(int argc, char** argv) {
 	}
 
 	// -----------------------------------------------------------------
-	// 3. Monitor path: the pgsql monitor's "Connections_OK" counter
-	//    must increase. Before the fix every monitor attempt logged
+	// 3. Monitor path: pgsql monitor's "connect_check_OK" must
+	//    increase. Before the fix every monitor attempt logged
 	//    "Monitor connect failed ... invalid port number: \"0\"" and
-	//    "Connections_ERR" increased instead.
+	//    "connect_check_ERR" increased instead.
+	//
+	//    The monitor runs at its configured connect_interval (default
+	//    2000ms in this test infra). We sample twice with a 3-second
+	//    gap so the test always sees at least one cycle.
 	// -----------------------------------------------------------------
-	long before_ok = readMonitorCounter(admin, "PgSQL_Monitor_Connections_OK");
-	long before_err = readMonitorCounter(admin, "PgSQL_Monitor_Connections_ERR");
-	diag("Baseline: Connections_OK=%ld Connections_ERR=%ld", before_ok, before_err);
+	long before_ok  = readMonitorCounter(admin, "PgSQL_Monitor_connect_check_OK");
+	long before_err = readMonitorCounter(admin, "PgSQL_Monitor_connect_check_ERR");
+	diag("Baseline: connect_check_OK=%ld connect_check_ERR=%ld", before_ok, before_err);
 
-	// Wait for at least one full monitor cycle. With
-	// pgsql-monitor_connect_interval=1000 this is ~2.5s.
-	usleep(2500 * 1000);
+	usleep(3000 * 1000);
 
-	long after_ok = readMonitorCounter(admin, "PgSQL_Monitor_Connections_OK");
-	long after_err = readMonitorCounter(admin, "PgSQL_Monitor_Connections_ERR");
-	diag("After wait: Connections_OK=%ld Connections_ERR=%ld", after_ok, after_err);
+	long after_ok  = readMonitorCounter(admin, "PgSQL_Monitor_connect_check_OK");
+	long after_err = readMonitorCounter(admin, "PgSQL_Monitor_connect_check_ERR");
+	diag("After wait: connect_check_OK=%ld connect_check_ERR=%ld", after_ok, after_err);
 
 	ok(after_ok > before_ok,
-		"PgSQL_Monitor_Connections_OK increases when port=0 socket path is configured");
+		"PgSQL_Monitor_connect_check_OK increases when port=0 socket path is configured");
 	ok(after_err == before_err,
-		"PgSQL_Monitor_Connections_ERR stays at baseline (no 'invalid port number' errors)");
-
-	// -----------------------------------------------------------------
-	// 4. Restore monitor interval so the next test group in the same
-	//    INFRA_ID starts from a sane state.
-	// -----------------------------------------------------------------
-	{
-		std::stringstream q;
-		q << "SET pgsql-monitor_connect_interval=" << orig_interval << ";";
-		execSql(admin, q.str());
-		execSql(admin, "LOAD PGSQL VARIABLES TO RUNTIME;");
-	}
+		"PgSQL_Monitor_connect_check_ERR stays at baseline (no 'invalid port number' errors)");
 
 	return exit_status();
 }
