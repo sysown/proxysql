@@ -528,8 +528,23 @@ MYSQLX_PROTO_DIR := $(PROXYSQL_PATH)/plugins/mysqlx/proto
 MYSQLX_PROTO_SRCS := $(wildcard $(MYSQLX_PROTO_DIR)/*.pb.cc)
 MYSQLX_PROTO_OBJS := $(patsubst $(MYSQLX_PROTO_DIR)/%.pb.cc,$(ODIR)/mysqlx_proto_%.pb.o,$(MYSQLX_PROTO_SRCS))
 
-$(ODIR)/mysqlx_proto_%.pb.o: $(MYSQLX_PROTO_DIR)/%.pb.cc | $(ODIR)
-	$(CXX) -c -o $@ $< $(STDCPP) -fPIC -O0 -ggdb -I$(MYSQLX_PROTO_DIR) -w
+# Vendored protobuf paths -- mirror the definitions in plugins/mysqlx/Makefile.
+# ProxySQL builds and links statically against protobuf 3.21.12 under
+# deps/protobuf/. The committed plugins/mysqlx/proto/*.pb.h files are
+# generated against that exact version and #include <google/protobuf/...>
+# headers (e.g. generated_message_bases.h) that only exist in 3.21+. The
+# vendored install path therefore MUST be on this rule's -I path; without
+# it gcc silently falls through to /usr/include/google/protobuf/ and uses
+# whichever (if any) system protobuf is installed, leading to subtle
+# version-skew failures depending on the host distro.
+PROTOBUF_VERSION := 3.21.12
+PROTOBUF_INSTALL_DIR := $(PROXYSQL_PATH)/deps/protobuf/protobuf-$(PROTOBUF_VERSION)/install
+PROTOBUF_INCLUDE_DIR := $(PROTOBUF_INSTALL_DIR)/include
+PROTOBUF_LIB := $(PROTOBUF_INSTALL_DIR)/lib/libprotobuf.a
+
+$(ODIR)/mysqlx_proto_%.pb.o: $(MYSQLX_PROTO_DIR)/%.pb.cc $(PROTOBUF_LIB) | $(ODIR)
+	$(CXX) -c -o $@ $< $(STDCPP) -fPIC -O0 -ggdb \
+		-I$(MYSQLX_PROTO_DIR) -I$(PROTOBUF_INCLUDE_DIR) -w
 
 mysqlx_stats_unit-t: mysqlx_stats_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
