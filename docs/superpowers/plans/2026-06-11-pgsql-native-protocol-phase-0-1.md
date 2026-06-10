@@ -87,7 +87,7 @@ In `get_variable` (~1430) and the second accessor (~1547), follow the existing b
 
 - [ ] **Step 5: Build**
 
-Run: `make -j build_lib` (or `make` if no sub-target; confirm in `Makefile`)
+Run: `make` (plain `make` auto-detects a sane `-j` from nproc/hw.ncpu per CLAUDE.md — never use a bare unbounded `make -j`)
 Expected: clean compile of `lib/PgSQL_Thread.cpp`.
 
 - [ ] **Step 6: Manual round-trip check**
@@ -136,7 +136,7 @@ If a `pgsql_thread___use_native_backend_protocol` accessor global does not yet e
 
 - [ ] **Step 3: Build**
 
-Run: `make -j`
+Run: `make`
 Expected: clean compile; `native_mode` defaults false, no behavior change.
 
 - [ ] **Step 4: Commit**
@@ -173,7 +173,7 @@ Confirm `parent->myhgc->hid`, `parent->address`, `parent->port` are the correct 
 
 - [ ] **Step 2: Build and smoke test**
 
-Run: `make -j`
+Run: `make`
 Then start proxysql with `pgsql-use_native_backend_protocol='true'`, connect a psql client, run `SELECT 1;`.
 Expected: works (fell back to libpq), and the proxysql log shows the one-time native fallback warning.
 
@@ -673,7 +673,7 @@ Add methods to parse `ParameterStatus` (two C-strings: name, value), `BackendKey
 
 - [ ] **Step 4: Build**
 
-Run: `make -j`
+Run: `make`
 Expected: clean compile. (Behavioral verification is Task 1.8 — there is no cheap unit test for live socket I/O; that is deliberately covered by the differential harness.)
 
 - [ ] **Step 5: Commit**
