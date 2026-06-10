@@ -45,6 +45,29 @@ IDIRS :=	-I$(TAP_IDIR) \
 
 ifdef PROXYSQL40
 IDIRS += -I$(PROXYSQL_PATH)/plugins/genai/include
+
+# ProxySQL vendors protobuf 3.21.12 under deps/protobuf/ and builds it
+# into deps/protobuf/protobuf-3.21.12/install/. The committed
+# plugins/mysqlx/proto/*.pb.h files are generated against that exact
+# version and include headers (e.g. <google/protobuf/generated_message_bases.h>)
+# that only exist in protobuf 3.16+. Every unit-test rule below that
+# transitively pulls in mysqlx.pb.h through plugins/mysqlx/src/*.cpp
+# must see those headers, otherwise gcc silently falls through to its
+# default /usr/include/ search path and either fails to find protobuf
+# at all (clean GH-hosted ubuntu-22.04) or picks up the system 3.12.4
+# headers (Ubuntu 22.04 / Debian 11 libprotobuf-dev) which are missing
+# the newer includes -- both modes seen on PR #5823.
+#
+# Add to the shared IDIRS so every rule using $(IDIRS) inherits the
+# include path, instead of patching each ~22 mysqlx unit-test rule
+# individually. Only meaningful when PROXYSQL40=1 because that's the
+# only build configuration that vendors / builds protobuf
+# (deps/Makefile gates `targets += protobuf` on PROXYSQL40=1).
+PROTOBUF_VERSION := 3.21.12
+PROTOBUF_INSTALL_DIR := $(PROXYSQL_PATH)/deps/protobuf/protobuf-$(PROTOBUF_VERSION)/install
+PROTOBUF_INCLUDE_DIR := $(PROTOBUF_INSTALL_DIR)/include
+PROTOBUF_LIB := $(PROTOBUF_INSTALL_DIR)/lib/libprotobuf.a
+IDIRS += -I$(PROTOBUF_INCLUDE_DIR)
 endif
 
 
@@ -528,23 +551,16 @@ MYSQLX_PROTO_DIR := $(PROXYSQL_PATH)/plugins/mysqlx/proto
 MYSQLX_PROTO_SRCS := $(wildcard $(MYSQLX_PROTO_DIR)/*.pb.cc)
 MYSQLX_PROTO_OBJS := $(patsubst $(MYSQLX_PROTO_DIR)/%.pb.cc,$(ODIR)/mysqlx_proto_%.pb.o,$(MYSQLX_PROTO_SRCS))
 
-# Vendored protobuf paths -- mirror the definitions in plugins/mysqlx/Makefile.
-# ProxySQL builds and links statically against protobuf 3.21.12 under
-# deps/protobuf/. The committed plugins/mysqlx/proto/*.pb.h files are
-# generated against that exact version and #include <google/protobuf/...>
-# headers (e.g. generated_message_bases.h) that only exist in 3.21+. The
-# vendored install path therefore MUST be on this rule's -I path; without
-# it gcc silently falls through to /usr/include/google/protobuf/ and uses
-# whichever (if any) system protobuf is installed, leading to subtle
-# version-skew failures depending on the host distro.
-PROTOBUF_VERSION := 3.21.12
-PROTOBUF_INSTALL_DIR := $(PROXYSQL_PATH)/deps/protobuf/protobuf-$(PROTOBUF_VERSION)/install
-PROTOBUF_INCLUDE_DIR := $(PROTOBUF_INSTALL_DIR)/include
-PROTOBUF_LIB := $(PROTOBUF_INSTALL_DIR)/lib/libprotobuf.a
-
+# Compiles plugins/mysqlx/proto/*.pb.cc into mysqlx_proto_*.pb.o.
+# PROTOBUF_LIB / PROTOBUF_INCLUDE_DIR are defined at the top of this
+# Makefile under `ifdef PROXYSQL40` -- the same place where IDIRS gets
+# `-I$(PROTOBUF_INCLUDE_DIR)` appended, so $(IDIRS) here already covers
+# the vendored protobuf headers. PROTOBUF_LIB as a prerequisite chains
+# the deps protobuf build for anyone running this target standalone
+# (the top-level `make debug` chain already builds it via build_deps_*).
 $(ODIR)/mysqlx_proto_%.pb.o: $(MYSQLX_PROTO_DIR)/%.pb.cc $(PROTOBUF_LIB) | $(ODIR)
 	$(CXX) -c -o $@ $< $(STDCPP) -fPIC -O0 -ggdb \
-		-I$(MYSQLX_PROTO_DIR) -I$(PROTOBUF_INCLUDE_DIR) -w
+		-I$(MYSQLX_PROTO_DIR) $(IDIRS) -w
 
 mysqlx_stats_unit-t: mysqlx_stats_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
