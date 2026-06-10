@@ -15,6 +15,7 @@ class PgSQL_Query_Result;
 class PgSQL_STMT_Local;
 //class PgSQL_Describe_Prepared_Info;
 class PgSQL_Bind_Info;
+class PgSQL_Backend_Protocol;
 //#define STATUS_PGSQL_CONNECTION_SEQUENCE			 0x00000001
 #define STATUS_PGSQL_CONNECTION_COMPRESSION          0x00000002
 #define STATUS_PGSQL_CONNECTION_USER_VARIABLE        0x00000004
@@ -622,6 +623,8 @@ public:
 	PgSQL_Conn_Param conn_params;
 	PgSQL_ErrorInfo error_info;
 	PGconn* pgsql_conn;
+	bool native_mode = false;          // true → native wire protocol, false → libpq
+	class PgSQL_Backend_Protocol* bp = NULL;  // owned in native mode only; NULL in libpq mode
 	uint8_t result_type;
 	PGresult* pgsql_result;
 	PSresult  ps_result;

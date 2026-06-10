@@ -3995,6 +3995,7 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___unshun_algorithm = GloPTH->get_variable_int((char*)"unshun_algorithm");
 	pgsql_thread___free_connections_pct = GloPTH->get_variable_int((char*)"free_connections_pct");
 	pgsql_thread___kill_backend_connection_when_disconnect = (bool)GloPTH->get_variable_int((char*)"kill_backend_connection_when_disconnect");
+	pgsql_thread___use_native_backend_protocol = (bool)GloPTH->get_variable_int((char*)"use_native_backend_protocol");
 	pgsql_thread___max_allowed_packet = GloPTH->get_variable_int((char*)"max_allowed_packet");
 	pgsql_thread___set_query_lock_on_hostgroup = GloPTH->get_variable_int((char*)"set_query_lock_on_hostgroup");
 	pgsql_thread___verbose_query_error = (bool)GloPTH->get_variable_int((char*)"verbose_query_error");

@@ -294,6 +294,7 @@ PG_ASYNC_ST PgSQL_Connection::handler(short event) {
 	if (pgsql_conn == NULL) {
 		// it is the first time handler() is being called
 		async_state_machine = ASYNC_CONNECT_START;
+		native_mode = pgsql_thread___use_native_backend_protocol;
 		myds->wait_until = myds->sess->thread->curtime + pgsql_thread___connect_timeout_server * 1000;
 		if (myds->max_connect_time) {
 			if (myds->wait_until > myds->max_connect_time) {
