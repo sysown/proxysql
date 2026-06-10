@@ -8,6 +8,7 @@
 using json = nlohmann::json;
 #define PROXYJSON
 #include "PgSQL_HostGroups_Manager.h"
+#include "PgSQL_Conninfo_Helper.h"
 #include "PgSQL_Monitor.hpp"
 #include "proxysql.h"
 #include "cpp.h"
@@ -983,7 +984,7 @@ void PgSQL_Connection::connect_start() {
 			append_conninfo_param(conninfo, "hostaddr", const_cast<char*>(ip.c_str()));
 		}
 	}
-	conninfo << "port=" << parent->port << " "; // backend port
+	append_pg_conninfo_port(conninfo, parent->port); // backend port
 	conninfo << "application_name=proxysql "; // application name
 	//conninfo << "require_auth=" << AUTHENTICATION_METHOD_STR[pgsql_thread___authentication_method]; // authentication method
 	if (parent->use_ssl) {
@@ -3078,7 +3079,7 @@ void* PgSQL_backend_kill_thread(void* arg) {
 		append_conninfo_param(conninfo, "password", backend_kill_args->password); // password
 		append_conninfo_param(conninfo, "dbname", backend_kill_args->dbname); // dbname
 		append_conninfo_param(conninfo, "host", backend_kill_args->hostname); // backend address
-		conninfo << "port=" << backend_kill_args->port << " "; // backend port
+		append_pg_conninfo_port(conninfo, backend_kill_args->port); // backend port
 		conninfo << "application_name=proxysql "; // application name
 		
 		if (backend_kill_args->ssl_config.use_ssl) {

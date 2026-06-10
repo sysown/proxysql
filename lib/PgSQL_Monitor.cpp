@@ -1,4 +1,5 @@
 #include "PgSQL_HostGroups_Manager.h"
+#include "PgSQL_Conninfo_Helper.h"
 #include "PgSQL_Monitor.hpp"
 #include "PgSQL_Thread.h"
 
@@ -1104,7 +1105,7 @@ string build_conn_str(const task_st_t& task_st) {
 	append_conninfo_param(conninfo, "password", user_info.pass); // password
 	append_conninfo_param(conninfo, "dbname", user_info.dbname); // dbname
 	append_conninfo_param(conninfo, "host", srv_info.addr); // backend address
-	conninfo << "port=" << srv_info.port << " "; // backend port
+	append_pg_conninfo_port(conninfo, srv_info.port); // backend port
 	conninfo << "application_name=ProxySQL-Monitor "; // application name
 	if (srv_info.ssl) {
 		conninfo << "sslmode='require' "; // SSL required
