@@ -76,12 +76,6 @@ jobs:
         #     ubuntu-22.04 runner -- this is what PR #5823's first run
         #     surfaced once the fetch-depth fix unblocked the Makefile
         #     version check).
-        #   - `libprotobuf-dev`, which the mysqlx plugin's generated
-        #     `proto/mysqlx.pb.h` needs at compile time -- it does
-        #     `#include <google/protobuf/port_def.inc>`, which lives
-        #     in the libprotobuf headers package. Same package is
-        #     installed on-the-fly by CI-unit-tests-tsan.yml for the
-        #     same reason.
         #
         # `--no-install-recommends` keeps the install fast (~30s) by
         # skipping unrelated suggested packages.
@@ -99,8 +93,7 @@ jobs:
             libevent-dev \
             libtirpc-dev \
             libcurl4-openssl-dev \
-            libxml2-dev \
-            libprotobuf-dev
+            libxml2-dev
 
       - name: Build proxysql (PROXYSQL40 chassis) + TAP tests
         if: steps.build-cache.outputs.cache-hit != 'true'
