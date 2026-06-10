@@ -706,7 +706,7 @@ class ProxySQL_Admin {
 	/**
 	 * @brief Creates RDS monitoring threads.
 	 * @details It uses the provided 'mysql_replication_hostgroups' and the promoted 'mysql_servers'
-	 *  resultset to filter the hostnames ending with '.rds.amazonaws.com'. Hostgroups containing at
+	 *  resultset to filter the hostnames containing '.rds.amazonaws.'. Hostgroups containing at
 	 *  least one of the previous instances are candidates for RDS monitoring, and a thread will be
 	 *  spawned to monitor that particular 'mysql_replication_hostgroups' entry. If config changes,
 	 *  threads are expected signal its exit, if config changes back, threads will be recreated.

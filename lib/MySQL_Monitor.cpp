@@ -672,29 +672,29 @@ void MySQL_Monitor_State_Data::init_async() {
 		task_timeout_ = mysql_thread___monitor_read_only_timeout;
 		task_handler_ = &MySQL_Monitor_State_Data::read_only_handler;
 		break;
-	// NOTE: Reusing 'MySQL_Monitor_State_Data::read_only_handler' is intentional. For now there
-	// aren't enough differences in the fetching logic to justify a custom handler.
-	///////////////////////////////////////////////////////////////////////////
-	case MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY:
-		query_ = QUERY_READ_ONLY_AND_AWS_RDS_TOPOLOGY_DISCOVERY;
+	case MON_READ_ONLY__AND__AWS_RDS_TABLE_EXISTS:
+		query_ = QUERY_READ_ONLY_AND_AWS_RDS_TABLE_EXISTS;
 		async_state_machine_ = ASYNC_QUERY_START;
 		task_timeout_ = mysql_thread___monitor_read_only_timeout;
 		task_handler_ = &MySQL_Monitor_State_Data::read_only_handler;
 		break;
-	case MON_INNODB_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY:
-		query_ = QUERY_INNODB_READ_ONLY_AND_AWS_RDS_TOPOLOGY_DISCOVERY;
+	case MON_READ_ONLY__AND__AWS_RDS_VERSION_CHECK:
+		query_ = QUERY_READ_ONLY_AND_AWS_RDS_VERSION_CHECK;
+		async_state_machine_ = ASYNC_QUERY_START;
+		task_timeout_ = mysql_thread___monitor_read_only_timeout;
+		task_handler_ = &MySQL_Monitor_State_Data::read_only_handler;
+		break;
+	// NOTE: Reusing 'MySQL_Monitor_State_Data::read_only_handler' is intentional. For now there
+	// aren't enough differences in the fetching logic to justify a custom handler.
+	///////////////////////////////////////////////////////////////////////////
+	case MON_READ_ONLY__AND__AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_DISCOVERY:
+		query_ = QUERY_READ_ONLY_AND_AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_DISCOVERY;
 		async_state_machine_ = ASYNC_QUERY_START;
 		task_timeout_ = mysql_thread___monitor_read_only_timeout;
 		task_handler_ = &MySQL_Monitor_State_Data::read_only_handler;
 		break;
 	case MON_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY:
 		query_ = QUERY_READ_ONLY_AND_AWS_BLUE_GREEN_TOPOLOGY_DISCOVERY;
-		async_state_machine_ = ASYNC_QUERY_START;
-		task_timeout_ = mysql_thread___monitor_read_only_timeout;
-		task_handler_ = &MySQL_Monitor_State_Data::read_only_handler;
-		break;
-	case MON_INNODB_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY:
-		query_ = QUERY_INNODB_READ_ONLY_AND_AWS_BLUE_GREEN_TOPOLOGY_DISCOVERY;
 		async_state_machine_ = ASYNC_QUERY_START;
 		task_timeout_ = mysql_thread___monitor_read_only_timeout;
 		task_handler_ = &MySQL_Monitor_State_Data::read_only_handler;
@@ -712,26 +712,26 @@ void MySQL_Monitor_State_Data::init_async() {
 		task_timeout_ = mysql_thread___monitor_read_only_timeout;
 		task_handler_ = &MySQL_Monitor_State_Data::read_only_handler;
 		break;
-	case MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY:
-		query_ = string { TEST_QUERY___READ_ONLY_AND_AWS_RDS_TOPOLOGY_DISCOVERY } + " " + hostname;
+	case MON_READ_ONLY__AND__AWS_RDS_TABLE_EXISTS:
+		query_ = string { TEST_QUERY___READ_ONLY_AND_AWS_RDS_TABLE_EXISTS } + " " + hostname;
 		async_state_machine_ = ASYNC_QUERY_START;
 		task_timeout_ = mysql_thread___monitor_read_only_timeout;
 		task_handler_ = &MySQL_Monitor_State_Data::read_only_handler;
 		break;
-	case MON_INNODB_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY:
-		query_ = string { TEST_QUERY___INNODB_READ_ONLY_AND_AWS_RDS_TOPOLOGY_DISCOVERY } + " " + hostname;
+	case MON_READ_ONLY__AND__AWS_RDS_VERSION_CHECK:
+		query_ = string { TEST_QUERY___READ_ONLY_AND_AWS_RDS_VERSION_CHECK } + " " + hostname;
+		async_state_machine_ = ASYNC_QUERY_START;
+		task_timeout_ = mysql_thread___monitor_read_only_timeout;
+		task_handler_ = &MySQL_Monitor_State_Data::read_only_handler;
+		break;
+	case MON_READ_ONLY__AND__AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_DISCOVERY:
+		query_ = string { TEST_QUERY___READ_ONLY_AND_AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_DISCOVERY } + " " + hostname;
 		async_state_machine_ = ASYNC_QUERY_START;
 		task_timeout_ = mysql_thread___monitor_read_only_timeout;
 		task_handler_ = &MySQL_Monitor_State_Data::read_only_handler;
 		break;
 	case MON_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY:
 		query_ = string { TEST_QUERY___READ_ONLY_AND_AWS_BLUE_GREEN_TOPOLOGY_DISCOVERY } + " " + hostname;
-		async_state_machine_ = ASYNC_QUERY_START;
-		task_timeout_ = mysql_thread___monitor_read_only_timeout;
-		task_handler_ = &MySQL_Monitor_State_Data::read_only_handler;
-		break;
-	case MON_INNODB_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY:
-		query_ = string { TEST_QUERY___INNODB_READ_ONLY_AND_AWS_BLUE_GREEN_TOPOLOGY_DISCOVERY } + " " + hostname;
 		async_state_machine_ = ASYNC_QUERY_START;
 		task_timeout_ = mysql_thread___monitor_read_only_timeout;
 		task_handler_ = &MySQL_Monitor_State_Data::read_only_handler;
@@ -1795,28 +1795,28 @@ void * monitor_read_only_thread(const std::vector<MySQL_Monitor_State_Data*>& da
 		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT @@global.read_only&@@global.innodb_read_only read_only");
 	} else if (mmsd->get_task_type() == MON_READ_ONLY__OR__INNODB_READ_ONLY) {
 		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT @@global.read_only|@@global.innodb_read_only read_only");
-	} else if (mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY) {
-		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql, QUERY_READ_ONLY_AND_AWS_RDS_TOPOLOGY_DISCOVERY);
-	} else if (mmsd->get_task_type() == MON_INNODB_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY) {
-		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql, QUERY_INNODB_READ_ONLY_AND_AWS_RDS_TOPOLOGY_DISCOVERY);
+	} else if (mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_TABLE_EXISTS) {
+		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql, QUERY_READ_ONLY_AND_AWS_RDS_TABLE_EXISTS);
+	} else if (mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_VERSION_CHECK) {
+		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql, QUERY_READ_ONLY_AND_AWS_RDS_VERSION_CHECK);
+	} else if (mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_DISCOVERY) {
+		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql, QUERY_READ_ONLY_AND_AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_DISCOVERY);
 	} else if (mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY) {
 		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql, QUERY_READ_ONLY_AND_AWS_BLUE_GREEN_TOPOLOGY_DISCOVERY);
-	} else if (mmsd->get_task_type() == MON_INNODB_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY) {
-		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql, QUERY_INNODB_READ_ONLY_AND_AWS_BLUE_GREEN_TOPOLOGY_DISCOVERY);
 	} else { // default
 		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT @@global.read_only read_only");
 	}
 #else // TEST_READONLY || TEST_AWS_RDS
 	{
 		auto get_task_query = [] (MySQL_Monitor_State_Data_Task_Type task_type) -> std::string {
-			if (task_type == MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY) {
-				return TEST_QUERY___READ_ONLY_AND_AWS_RDS_TOPOLOGY_DISCOVERY;
-			} else if (task_type == MON_INNODB_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY) {
-				return TEST_QUERY___INNODB_READ_ONLY_AND_AWS_RDS_TOPOLOGY_DISCOVERY;
+			if (task_type == MON_READ_ONLY__AND__AWS_RDS_TABLE_EXISTS) {
+				return TEST_QUERY___READ_ONLY_AND_AWS_RDS_TABLE_EXISTS;
+			} else if (task_type == MON_READ_ONLY__AND__AWS_RDS_VERSION_CHECK) {
+				return TEST_QUERY___READ_ONLY_AND_AWS_RDS_VERSION_CHECK;
+			} else if (task_type == MON_READ_ONLY__AND__AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_DISCOVERY) {
+				return TEST_QUERY___READ_ONLY_AND_AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_DISCOVERY;
 			} else if (task_type == MON_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY) {
 				return TEST_QUERY___READ_ONLY_AND_AWS_BLUE_GREEN_TOPOLOGY_DISCOVERY;
-			} else if (task_type == MON_INNODB_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY) {
-				return TEST_QUERY___INNODB_READ_ONLY_AND_AWS_BLUE_GREEN_TOPOLOGY_DISCOVERY;
 			} else {
 				assert(0);
 			}
@@ -1825,8 +1825,12 @@ void * monitor_read_only_thread(const std::vector<MySQL_Monitor_State_Data*>& da
 		string task_query {};
 
 		if (
-			mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY
-			|| mmsd->get_task_type() == MON_INNODB_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY
+			mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_TABLE_EXISTS
+			|| mmsd->get_task_type() == MON_INNODB_READ_ONLY__AND__AWS_RDS_TABLE_EXISTS
+			|| mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_VERSION_CHECK
+			|| mmsd->get_task_type() == MON_INNODB_READ_ONLY__AND__AWS_RDS_VERSION_CHECK
+			|| mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_DISCOVERY
+			|| mmsd->get_task_type() == MON_INNODB_READ_ONLY__AND__AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_DISCOVERY
 			|| mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY
 			|| mmsd->get_task_type() == MON_INNODB_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY
 		) {
@@ -3533,7 +3537,7 @@ void * MySQL_Monitor::monitor_read_only() {
 			"SELECT hostname, port, MAX(use_ssl) use_ssl, check_type, reader_hostgroup"
 			" FROM mysql_servers JOIN mysql_replication_hostgroups ON"
 			" hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup"
-			" WHERE status NOT IN (2,3) AND hostname NOT LIKE '%" AWS_ENDPOINT_SUFFIX_STRING "'"
+			" WHERE status NOT IN (2,3) AND hostname NOT LIKE '%" AWS_ENDPOINT_SUFFIX_STRING "%'"
 			" GROUP BY hostname, port ORDER BY RANDOM()"
 		};
 		t1=monotonic_time();
@@ -8910,10 +8914,17 @@ unique_ptr<MySQL_Monitor_State_Data> init_mmsd_with_conn_rds(
 	const rds_mon_st_t& cur_mon_st
 ) {
 	MySQL_Monitor_State_Data_Task_Type task_type {};
+	
 
 	switch (cur_mon_st.check_type) {
-		case AWS_RDS_TOPOLOGY_CHECK:
-			task_type = MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY;
+		case AWS_RDS_TABLE_EXISTS_CHECK:
+			task_type = MON_READ_ONLY__AND__AWS_RDS_TABLE_EXISTS;
+			break;
+		case AWS_RDS_VERSION_CHECK:
+			task_type = MON_READ_ONLY__AND__AWS_RDS_VERSION_CHECK;
+			break;
+		case AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_CHECK:
+			task_type = MON_READ_ONLY__AND__AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_DISCOVERY;
 			break;
 		case AWS_RDS_BLUE_GREEN_DEPLOYMENT_STATE_CHECK:
 			task_type = MON_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY;
@@ -9015,14 +9026,12 @@ pair<rds_srv_st_t,vector<rds_srv_st_t>> extract_rds_srv_st(MySQL_Monitor_State_D
 
 		bool check_task_fields =
 			(
-				(mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY
-				|| mmsd->get_task_type() == MON_INNODB_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY)
+				mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_DISCOVERY
 				 && num_fields == 4
 			)
 			||
 			(
-				(mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY
-				|| mmsd->get_task_type() == MON_INNODB_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY)
+				mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY
 				&& num_fields == 7
 			);
 
@@ -9058,10 +9067,7 @@ pair<rds_srv_st_t,vector<rds_srv_st_t>> extract_rds_srv_st(MySQL_Monitor_State_D
 				rds_srv_st.endpoint = row[2] ? row[2] : "";
 				rds_srv_st.port = row[3] ? atol(row[3]) : -1;
 
-				if (
-					mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY
-					|| mmsd->get_task_type() == MON_INNODB_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY
-				) {
+				if (mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY) {
 					rds_srv_st.role = row[4] ? row[4] : "";
 					rds_srv_st.status = row[5] ? row[5] : "";
 					rds_srv_st.version = row[6] ? row[6] : "";
@@ -9204,7 +9210,7 @@ bool is_aws_rds_multi_az_db_cluster_topology(const string& host, const vector<rd
 pair<rds_mon_st_t,vector<rds_srv_st_t>> process_discovered_topology(
 	const rds_mon_st_t& cur_mon_st, const pair<rds_node_info_t,vector<rds_srv_st_t>>& p_node_peers
 ) {
-	rds_mon_st_t next_mon_st {};
+	rds_mon_st_t next_mon_st { cur_mon_st.check_type };
 	std::vector<rds_srv_st_t> validated_peers {};
 
 	const std::string& host { p_node_peers.first.srv_st.endpoint };
@@ -9212,26 +9218,43 @@ pair<rds_mon_st_t,vector<rds_srv_st_t>> process_discovered_topology(
 
 	// Check if the query needs to be changed because it matches a blue/green deployment:
 	// exactly 3 entries for Multi-AZ DB Clusters, even number for blue/green deployment
-	if (cur_mon_st.check_type == AWS_RDS_TOPOLOGY_CHECK && (node_peers.size() + 1) % 2 == 0) {
-		// With the AWS_RDS_TOPOLOGY_CHECK, we didn't get the role and status data,
+	if (cur_mon_st.check_type == AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_CHECK && (node_peers.size() + 1) % 2 == 0) {
+		// With the AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_CHECK, we didn't get the role and status data,
 		// so we retry with the correct query on the next read_only check
 		next_mon_st.check_type = AWS_RDS_BLUE_GREEN_DEPLOYMENT_STATE_CHECK;
 		next_mon_st.next_check_delay = mysql_thread___monitor_aws_rds_topology_discovery_interval;
 
 		return { next_mon_st, {} };
 	} else if (
-		(cur_mon_st.check_type == AWS_RDS_TOPOLOGY_CHECK && (node_peers.size() + 1) != 3)
+		cur_mon_st.check_type == AWS_RDS_BLUE_GREEN_DEPLOYMENT_STATE_CHECK
+		&& (node_peers.size() + 1) == 3
+	) {
+		// BGD query returned 3 entries — check if version is NULL (Multi-AZ cluster with 7-col table)
+		bool all_version_empty = p_node_peers.first.srv_st.version.empty();
+		for (const auto& peer : node_peers) {
+			if (!peer.version.empty()) { all_version_empty = false; break; }
+		}
+		if (all_version_empty) {
+			proxy_info("AWS RDS BGD check returned Multi-AZ topology (version=NULL), treating as Multi-AZ\n");
+			next_mon_st.check_type = AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_CHECK;
+			// Fall through to validation below
+		}
+		// If version is populated, it's a 3-node BGD (odd count) — fall through to validation
+	} else if (
+		(cur_mon_st.check_type == AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_CHECK && (node_peers.size() + 1) != 3)
 		||
 		(
-			next_mon_st.check_type == AWS_RDS_BLUE_GREEN_DEPLOYMENT_STATE_CHECK
+			cur_mon_st.check_type == AWS_RDS_BLUE_GREEN_DEPLOYMENT_STATE_CHECK
 			&&
 			(node_peers.size() + 1) % 2 != 0
+			&&
+			(node_peers.size() + 1) != 3
 		)
 	) {
 		// Query result matches neither a Multi-AZ DB Cluster nor a Blue/Green deployment
 		// TODO: Account for topology metadata towards the end of a blue/green deployment switchover (possibly
 		// odd number of entries)
-		next_mon_st.check_type = AWS_RDS_TOPOLOGY_CHECK; // Set back to default rds_topology check
+		next_mon_st.check_type = AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_CHECK; // Set back to default rds_topology check
 		// TODO: This needs to be notified to the user; potential cluster misconfiguration, for now,
 		// this message will be promoted to WARNING. If this is expected behavior it should be
 		// reverted to DEBUG.
@@ -9275,13 +9298,13 @@ pair<rds_mon_st_t,vector<rds_srv_st_t>> process_discovered_topology(
 		validated_peers.push_back(server_info);
 	}
 
-	// Return the peers ONLY IF topology passed validation. AWS_RDS_TOPOLOGY_CHECK is currently meant to only
+	// Return the peers ONLY IF topology passed validation. AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_CHECK is currently meant to only
 	// be used with RDS Multi-AZ DB clusters
 	if (
 		!validated_peers.empty()
 		&&
 		(
-			next_mon_st.check_type != AWS_RDS_TOPOLOGY_CHECK
+			next_mon_st.check_type != AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_CHECK
 			||
 			is_aws_rds_multi_az_db_cluster_topology(host, validated_peers)
 		)
@@ -9376,9 +9399,62 @@ rds_mon_st_t rds_mon_action_over_resp_srv(
 	return next_mon_st;
 }
 
+/**
+ * @brief Allows quick handling of rds_topology table checks that don't return table contents
+ *
+ * @param mmsd The 'mmsd' holding info about the query run on the server.
+ * @param next_mon_st A reference to the next rds monitoring task. Is modified according to mmsd.
+ * @param check_type Information about which check was performed.
+ * 
+ * @return A bool indicating if it was a precheck scenario.
+ */
+bool handle_rds_topology_precheck_cases(MySQL_Monitor_State_Data* mmsd, rds_mon_st_t& next_mon_st) {
+	MySQL_Monitor_State_Data_Task_Type check_task = mmsd->get_task_type();
+	if (check_task != MON_READ_ONLY__AND__AWS_RDS_TABLE_EXISTS && check_task != MON_READ_ONLY__AND__AWS_RDS_VERSION_CHECK)	 {
+		return false;
+	}
+
+	if (mmsd->interr == 0 && mmsd->result) {
+		MYSQL_ROW row = mysql_fetch_row(mmsd->result);
+		if (row) {
+			bool read_only = !(row[0] && !strcasecmp(row[0], "0"));
+			bool check_result = (row[1] && !strcasecmp(row[1], "1"));
+
+			// TODO: remove this call once monitor_read_only is configured to also check RDS servers again
+			MyHGM->read_only_action_v2({
+				{ string(mmsd->hostname), static_cast<uint32_t>(mmsd->port), static_cast<int>(read_only) }
+			});
+
+			if (check_result && check_task == MON_READ_ONLY__AND__AWS_RDS_TABLE_EXISTS) {
+				// Transition to VERSION_CHECK with 1s delay
+				next_mon_st.check_type = AWS_RDS_VERSION_CHECK;
+				next_mon_st.next_check_delay = 1000;
+			} else if (check_result && check_task == MON_READ_ONLY__AND__AWS_RDS_VERSION_CHECK) {
+				next_mon_st.check_type = AWS_RDS_BLUE_GREEN_DEPLOYMENT_STATE_CHECK;
+			} else {
+				next_mon_st.check_type = AWS_RDS_MULTIAZ_CLUSTER_TOPOLOGY_CHECK;
+			}
+		}
+		mysql_free_result(mmsd->result);
+		mmsd->result = NULL;
+	} else {
+		rds_report_fetching_errs(mmsd);
+	}
+
+	handle_mmsd_mysql_conn(mmsd);
+	return true;
+}
+
 rds_mon_st_t async_rds_mon_actions_handler(
 	MySQL_Monitor_State_Data* mmsd, const rds_mon_st_t& cur_mon_st
 ) {
+	rds_mon_st_t next_mon_st { cur_mon_st };
+
+	// Handle TABLE_EXISTS check — result format: (read_only, has_rds_topology)
+	if (handle_rds_topology_precheck_cases(mmsd, next_mon_st)) {
+		return next_mon_st;
+	}
+
 	// We base 'start_time' on the conn init for 'MySQL_Monitor_State_Data'. If a conn creation was
 	// required, we take into account this time into account, otherwise we assume that 'start_time=t1'.
 	uint64_t start_time = 0;
@@ -9396,7 +9472,7 @@ rds_mon_st_t async_rds_mon_actions_handler(
 
 	// Perform monitoring actions; tables updates and server placement operations
 	const auto nodes_info { rds_update_hosts_map(start_time, p_node_peers_t, mmsd) };
-	rds_mon_st_t next_mon_st { rds_mon_action_over_resp_srv(mmsd, nodes_info, cur_mon_st) };
+	next_mon_st = rds_mon_action_over_resp_srv(mmsd, nodes_info, cur_mon_st);
 
 	// Handle 'mmsd' MySQL conn return to 'ConnectionPool'
 	handle_mmsd_mysql_conn(mmsd);
@@ -9516,9 +9592,20 @@ void* monitor_AWS_RDS_thread_HG(void* th_args) {
 	vector<rds_host_def_t> hosts_defs { extract_rds_host_defs(wHG, rHG, GloMyMon->AWS_RDS_Hosts_resultset) };
 	pthread_mutex_unlock(&GloMyMon->aws_rds_mutex);
 
+	// Per-host check state map: tracks what check each host should run next
+	// Key: "host:port", Value: the check type to execute for this host
+	auto build_host_check_map = [](const vector<rds_host_def_t>& defs) {
+		std::map<string, MySQL_Monitor_Aws_Metadata_Check> m;
+		for (const auto& d : defs) {
+			m[d.host + ":" + to_string(d.port)] = AWS_RDS_TABLE_EXISTS_CHECK;
+		}
+		return m;
+	};
+	std::map<string, MySQL_Monitor_Aws_Metadata_Check> host_check_map { build_host_check_map(hosts_defs) };
+
 	uint64_t next_check_time { 0 };
 	uint64_t MAX_CHECK_DELAY_US { 500000 };
-	rds_mon_st_t next_mon_st { AWS_RDS_TOPOLOGY_CHECK };
+	rds_mon_st_t next_mon_st { AWS_RDS_TABLE_EXISTS_CHECK };
 
 	while (GloMyMon->shutdown == false && mysql_thread___monitor_enabled == true) {
 		if (!GloMTH) { break; } // quick exit during shutdown/restart
@@ -9543,6 +9630,10 @@ void* monitor_AWS_RDS_thread_HG(void* th_args) {
 				if (hosts_defs.empty()) {
 					break;
 				}
+
+				// Reset per-host table state — all hosts need re-checking
+				host_check_map = build_host_check_map(hosts_defs);
+				initial_raw_checksum = current_raw_checksum;
 			}
 		}
 
@@ -9574,8 +9665,6 @@ void* monitor_AWS_RDS_thread_HG(void* th_args) {
 		// Get the current 'pingable' status for the servers.
 		const vector<rds_host_def_t>& resp_srvs { find_resp_srvs_rds(hosts_defs) };
 		if (resp_srvs.empty()) {
-			proxy_error("No node is pingable for AWS RDS cluster with writer HG %lu\n", wHG);
-
 			if (next_mon_st.next_check_delay) {
 				next_check_time = curtime + next_mon_st.next_check_delay * 1000;
 			} else {
@@ -9597,8 +9686,18 @@ void* monitor_AWS_RDS_thread_HG(void* th_args) {
 
 		// 1. Separate the 'mmsds' based on success of obtaining a conn
 		for (const rds_host_def_t& host_def : resp_srvs) {
+			// Determine per-host check type from the host check map
+			const string host_key { host_def.host + ":" + to_string(host_def.port) };
+			rds_mon_st_t host_mon_st { next_mon_st };
+			auto it = host_check_map.find(host_key);
+			if (it != host_check_map.end()) {
+				host_mon_st.check_type = it->second;
+			} else {
+				host_mon_st.check_type = AWS_RDS_TABLE_EXISTS_CHECK;
+			}
+
 			unique_ptr<MySQL_Monitor_State_Data> mmsd {
-				init_mmsd_with_conn_rds(host_def, wHG, rHG, curtime, next_mon_st)
+				init_mmsd_with_conn_rds(host_def, wHG, rHG, curtime, host_mon_st)
 			};
 
 			if (mmsd->mysql_error_msg) {
@@ -9612,6 +9711,8 @@ void* monitor_AWS_RDS_thread_HG(void* th_args) {
 		// selected for discovery and topology check (of discovered instances). This might not be the desired
 		// behavior, for instance, multi-instance topology check might be desired, and only auto-discovery
 		// actions for one instance.
+		// Yes, there are situations where we would want to discover the topology either through a specific
+		// server in the HG or even multiple. Especially relevant for switchover (-> Step 3)
 		int rnd_discoverer = conn_mmsds.size() == 0 ? -1 : rand() % conn_mmsds.size();
 		if (rnd_discoverer != -1) {
 			conn_mmsds[rnd_discoverer]->cur_monitored_rds_srvs = &hosts_defs;
@@ -9641,6 +9742,7 @@ void* monitor_AWS_RDS_thread_HG(void* th_args) {
 		// 3. Perform the async fetch + actions over the 'MySQL_Monitor_State_Data'
 		if (conn_mmsds.empty() == false) {
 			GloMyMon->monitor_rds_async_actions_handler(conn_mmsds);
+			// Once a result is acquired, the mmsds in conn_mmsds contain updated cur_rds_mon_st data.
 		}
 		///////////////////////////////////////////////////////////////////////////////////////
 
@@ -9658,18 +9760,36 @@ void* monitor_AWS_RDS_thread_HG(void* th_args) {
 		// re-attempted.
 
 		for (const unique_ptr<MySQL_Monitor_State_Data>& mmsd : conn_mmsds) {
-			next_mon_st.check_type = MySQL_Monitor_Aws_Metadata_Check::NONE;
+			const string host_key { string(mmsd->hostname) + ":" + to_string(mmsd->port) };
 
-			// TODO: This is an assumption; for now, we consider that if there is any failure during
-			// topology processing we default to 'AWS_RDS_TOPOLOGY_CHECK' as the next check. Due to
-			// this, once this state is returned by any 'mmsd' is preserved over the rest.
-			if (next_mon_st.check_type != AWS_RDS_TOPOLOGY_CHECK) {
-				next_mon_st.check_type = AWS_RDS_BLUE_GREEN_DEPLOYMENT_STATE_CHECK;
+			// Update per-host check map based on results
+			if (mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_TABLE_EXISTS) {
+				if (mmsd->cur_rds_mon_st.check_type == AWS_RDS_VERSION_CHECK) {
+					// Table found — transition to VERSION_CHECK on next iteration
+					host_check_map[host_key] = AWS_RDS_VERSION_CHECK;
+					if (mmsd->cur_rds_mon_st.next_check_delay
+						&& mmsd->cur_rds_mon_st.next_check_delay < next_mon_st.next_check_delay) {
+						next_mon_st.next_check_delay = mmsd->cur_rds_mon_st.next_check_delay;
+					}
+				}
+				// If still TABLE_EXISTS_CHECK, table not found — stays as is
+				continue;
 			}
 
-			// TODO: This is an assumption; for now, we consider than the smallest computed
-			// 'next_check_delay' during topology processing should be honored.
-			if (next_mon_st.next_check_delay > mmsd->cur_rds_mon_st.check_type) {
+			if (mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_VERSION_CHECK) {
+				// VERSION_CHECK completed — classify the host permanently
+				host_check_map[host_key] = mmsd->cur_rds_mon_st.check_type;
+				continue;
+			}
+
+			// Topology check results — propagate next_mon_st for topology-aware hosts
+			// TODO: Check if this isn't redundant now with the new host_check_map
+			if (mmsd->cur_rds_mon_st.check_type != MySQL_Monitor_Aws_Metadata_Check::NONE) {
+				next_mon_st.check_type = mmsd->cur_rds_mon_st.check_type;
+			}
+
+			if (mmsd->cur_rds_mon_st.next_check_delay
+				&& mmsd->cur_rds_mon_st.next_check_delay < next_mon_st.next_check_delay) {
 				next_mon_st.next_check_delay = mmsd->cur_rds_mon_st.next_check_delay;
 			}
 		}
@@ -9683,6 +9803,7 @@ void* monitor_AWS_RDS_thread_HG(void* th_args) {
 		// Set the time for the next iteration
 		if (next_mon_st.next_check_delay) {
 			next_check_time = curtime + next_mon_st.next_check_delay * 1000;
+			next_mon_st.next_check_delay = mysql_thread___monitor_read_only_interval;
 		} else {
 			next_check_time = curtime + mysql_thread___monitor_read_only_interval * 1000;
 		}
