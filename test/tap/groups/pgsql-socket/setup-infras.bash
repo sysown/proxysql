@@ -26,7 +26,7 @@ PROXY_ADMIN_PASS="radmin"
 # Wait for ProxySQL admin to be reachable; the previous infra start
 # (legacy-g1 or pgsql-socket-g1) just brought it up but DNS may not have
 # settled in the host network namespace yet.
-for i in $(seq 1 30); do
+for _ in $(seq 1 30); do
     if docker exec -e PGPASSWORD="${PROXY_ADMIN_PASS}" \
         "$(docker ps --filter "name=proxysql.${INFRA_ID}" --format '{{.Names}}' | head -1)" \
         psql -X -h"${PROXY_HOST}" -p"${PROXY_ADMIN_PORT}" -U"${PROXY_ADMIN_USER}" -c "select 1;" >/dev/null 2>&1; then

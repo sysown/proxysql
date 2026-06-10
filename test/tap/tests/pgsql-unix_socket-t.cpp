@@ -93,7 +93,7 @@ static bool execSql(PGConnPtr& admin, const std::string& sql) {
 }
 
 int main(int argc, char** argv) {
-	plan(7);
+	plan(6);
 
 	if (cl.getEnv()) return exit_status();
 
