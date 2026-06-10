@@ -198,6 +198,7 @@
   "pgsql_tokenizer_unit-t" : [ "unit-tests-g1" ],
   "pgsql_txn_state_unit-t" : [ "unit-tests-g1" ],
   "pgsql_variables_validator_unit-t" : [ "unit-tests-g1" ],
+  "pgsql-conninfo-port-zero-unit-t" : [ "unit-tests-g1" ],
   "plugin_config_unit-t" : [ "mysqlx-tsan-g1","unit-tests-g1","@proxysql_min_version:4.0" ],
   "plugin_dispatch_unit-t" : [ "mysqlx-tsan-g1","unit-tests-g1","@proxysql_min_version:4.0" ],
   "plugin_lifecycle_unit-t" : [ "mysqlx-tsan-g1","unit-tests-g1","@proxysql_min_version:4.0" ],
