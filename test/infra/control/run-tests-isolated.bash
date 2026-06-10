@@ -279,6 +279,7 @@ docker run \
     --cap-add=NET_ADMIN \
     --cap-add=SYS_ADMIN \
     -v "${WORKSPACE}:${WORKSPACE}" \
+    -v "${WORKSPACE}:/opt/proxysql:ro" \
     -v "${PROXY_DATA_DIR_HOST}:/var/lib/proxysql" \
     -v "${COVERAGE_DATA_DIR_HOST}:/gcov" \
     -e WORKSPACE="${WORKSPACE}" \
@@ -299,7 +300,7 @@ docker run \
     -e TAP_PGSQL_SYNC_REPLICA_PORT="${TAP_PGSQL_SYNC_REPLICA_PORT:-}" \
     -e MULTI_GROUP="${MULTI_GROUP:-0}" \
     -e GCOV_PREFIX="/gcov/tap" \
-    -e GCOV_PREFIX_STRIP="3" \
+    -e GCOV_PREFIX_STRIP="2" \
     proxysql-ci-base:latest \
     /bin/bash -c "
         set -e
@@ -307,8 +308,15 @@ docker run \
         # Coverage collection trap - runs on exit regardless of success/failure/timeout
         #
         # Data layout in /gcov (per-INFRA_ID mount):
-        #   /gcov/proxysql/{lib,src}/obj/*.gcda  — ProxySQL daemon (GCOV_PREFIX=/gcov, STRIP=3)
-        #   /gcov/tap/proxysql/{lib,src}/obj/*.gcda — TAP tests (GCOV_PREFIX=/gcov/tap, STRIP=3)
+        #   /gcov/{lib,src}/obj/*.gcda            — ProxySQL daemon (GCOV_PREFIX=/gcov,     STRIP=2)
+        #   /gcov/tap/{lib,src,test}/.../obj/*.gcda — TAP tests      (GCOV_PREFIX=/gcov/tap, STRIP=2)
+        #
+        # STRIP=2 strips opt/proxysql from the absolute path the .gcno embeds
+        # (/opt/proxysql/{lib,src,test}/obj/X.gcno; the workspace is mounted at
+        # /opt/proxysql in both the build and run containers per docker-compose
+        # and the -v rule on the test-runner below). The remaining
+        # {lib,src,test}/.../obj/ component is what the .gcno copy loop below
+        # uses to copy the matching .gcno next to its .gcda before fastcov runs.
         #
         # This trap always copies .gcno files adjacent to .gcda so the data is
         # ready for fastcov. When MULTI_GROUP=1, fastcov runs centrally later;
