@@ -119,11 +119,10 @@ ifeq ($(UNAME_S),Linux)
 	STATIC_LIBS += $(COREDUMPER_LDIR)/libcoredumper.a
 endif
 
-ifneq ($(PROXYSQL40),)
-ifneq ($(wildcard $(SQLITE3_LDIR)/vec.o),)
-	STATIC_LIBS += $(SQLITE3_LDIR)/vec.o
-endif
-endif
+# NOTE: vec.o is appended to STATIC_LIBS once, after the PROXYSQL40
+# autodetection block below (search for "vec.o"). It must NOT be added here
+# too — listing the same object twice on the link line produces ~98
+# duplicate-symbol errors and breaks every unit test under PROXYSQL40.
 
 
 # ===========================================================================
