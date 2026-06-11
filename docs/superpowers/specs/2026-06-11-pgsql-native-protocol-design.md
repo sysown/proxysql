@@ -55,7 +55,7 @@ streaming can be.
 |----------|--------|
 | Migration strategy | **Runtime flag + libpq fallback.** `pgsql-use_native_backend_protocol`, global with per-hostgroup override. libpq path stays compiled in as fallback and as the differential-test oracle. |
 | Scope of paths | **Data path only.** Monitor (`PgSQL_Monitor.cpp`) and the genai plugin keep using libpq indefinitely; libpq stays vendored, off the data plane. |
-| Auth methods (v1) | **SCRAM-SHA-256, SCRAM-SHA-256-PLUS (channel binding), md5, cleartext/trust.** GSSAPI/SSPI deferred → libpq fallback. |
+| Auth methods (v1) | **SCRAM-SHA-256, md5, cleartext/trust.** SCRAM-SHA-256-PLUS (channel binding) **deferred** — the vendored `libscram` (pgbouncer-derived) hardcodes `c=biws` and has no client channel-binding support; adding it means patching vendored code or a custom cbind layer, so it moves to a focused follow-up. GSSAPI/SSPI also deferred. A server that *requires* channel binding (offers only `SCRAM-SHA-256-PLUS`) triggers the capability-gap libpq fallback. |
 | TLS | **Reuse ProxySQL's existing OpenSSL backend-TLS stack** (same as MySQL backend / client side). `SSLRequest` + handshake on the fd we own. |
 | Result handling | **Hybrid: stream-through by default, materialize-on-feature.** memcpy raw backend messages into the outbound `PgSQL_Query_Result`; additionally parse rows only when cache/rewrite/firewall/stats need them for that query. |
 | Extended protocol / named portals | **Phase 3**, after simple-protocol parity. |
@@ -120,13 +120,18 @@ Driven non-blocking by `connect_cont` on libev readiness:
    - `AuthenticationOk (0)` → done.
    - `AuthenticationCleartextPassword (3)` → `PasswordMessage`.
    - `AuthenticationMD5Password (5)` → md5 hash with 4-byte salt → `PasswordMessage`.
-   - `AuthenticationSASL (10)` → SCRAM via `libscram`: `SASLInitialResponse`
-     (advertise `SCRAM-SHA-256` or `-PLUS` if channel binding + TLS), process
+   - `AuthenticationSASL (10)` → SCRAM-SHA-256 via `libscram`: send `SASLInitialResponse`
+     selecting the `SCRAM-SHA-256` mechanism (gs2 cbind flag `n`), process
      `AuthenticationSASLContinue (11)`, send `SASLResponse`, verify
-     `AuthenticationSASLFinal (12)`. Channel binding pulls the `tls-server-end-point`
-     hash from the OpenSSL session.
+     `AuthenticationSASLFinal (12)`. **Mechanism selection:** if the server's mechanism
+     list offers both `SCRAM-SHA-256` and `SCRAM-SHA-256-PLUS`, choose plain
+     `SCRAM-SHA-256` (channel binding is deferred — see §2). If the server offers **only**
+     `SCRAM-SHA-256-PLUS`, treat it as a capability gap → tear down, fall back to libpq,
+     log once.
    - `7/8` (GSSAPI), `9` (SSPI) → unsupported in v1 → tear down, fall back to libpq,
      log once.
+   - SCRAM-SHA-256-PLUS / channel binding is a deferred follow-up (libscram has no client
+     channel-binding support; `tls-server-end-point` digest + cbind construction land then).
 5. **Post-auth steady state** — consume `ParameterStatus (S)` (cache `server_version`,
    `client_encoding`, `standard_conforming_strings`, … — values today read via
    `PQparameterStatus`), `BackendKeyData (K)` (store pid/secret for cancellation —
@@ -225,10 +230,14 @@ message, one routing decision:
 - **Phase 0 — Scaffolding.** Backend `PgSQL_Data_Stream` instantiation, the flag, the
   `if (native_mode)` dispatch skeleton in the `*_cont` handlers (native branch returns
   "not implemented" → falls back). Lands inert.
-- **Phase 1 — Connect + auth + TLS.** §4 in full: TCP, SSLRequest/TLS via existing
-  OpenSSL stack, startup, md5/cleartext/SCRAM(+channel binding),
+- **Phase 1 — Connect + auth + TLS.** §4: TCP, SSLRequest/TLS via existing
+  OpenSSL stack, startup, md5/cleartext/SCRAM-SHA-256 (plain; channel binding deferred),
   ParameterStatus/BackendKeyData/ReadyForQuery. **Milestone:** native connections reach
   the pool, idle correctly, and pass auth differential tests.
+- **Phase 1b (deferred follow-up) — SCRAM-SHA-256-PLUS / channel binding.** Add
+  `tls-server-end-point` digest + cbind client-final construction (libscram lacks client
+  channel binding, so either patch vendored libscram or add a custom cbind layer). Until
+  then, `-PLUS`-only servers use the libpq fallback.
 - **Phase 2 — Simple query + result decoder + hybrid.** §5 and §6 (minus extended
   protocol): `Query`, stream-through fast path, parse-on-feature overlay,
   error/notice/COPY/NOTIFY, `ReadyForQuery` loop. **Milestone:** full simple-protocol

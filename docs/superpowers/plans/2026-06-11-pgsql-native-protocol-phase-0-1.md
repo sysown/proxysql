@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Land a native PostgreSQL backend connection that performs TCP connect, optional TLS, and authentication (cleartext/trust, md5, SCRAM-SHA-256, SCRAM-SHA-256-PLUS), then idles correctly in the connection pool — all behind a runtime flag with libpq fallback, verified by a differential auth test against the libpq path.
+**Goal:** Land a native PostgreSQL backend connection that performs TCP connect, optional TLS, and authentication (cleartext/trust, md5, SCRAM-SHA-256; channel binding `-PLUS` deferred — see Task 1.5), then idles correctly in the connection pool — all behind a runtime flag with libpq fallback, verified by a differential auth test against the libpq path.
 
 **Architecture:** Approach A from the design spec (`docs/superpowers/specs/2026-06-11-pgsql-native-protocol-design.md`). A single `PgSQL_Connection` class dispatches each async handler (`connect_cont`, `query_cont`, `fetch_result_cont`) on a runtime `native_mode` flag. Native mode owns the fd through the existing backend-side `PgSQL_Data_Stream` and drives a new `PgSQL_Backend_Protocol` decoder + auth state machine. The outbound encoder reuses the existing `PG_pkt`/`PgSQL_Protocol` machinery. The libpq branch is untouched and serves as both fallback and differential-test oracle.
 
@@ -11,6 +11,12 @@
 **Phase boundary:** This plan covers Phase 0 (scaffolding) and Phase 1 (connect/auth/TLS) only. Phase 2 (simple query + result decoder) and Phase 3 (extended protocol + named portals) are separate plans written after this one lands and its differential tests are green.
 
 ---
+
+## Build environment (this workspace)
+
+- This working tree is standardized on the **`PROXYSQL40=1`** feature tier for this effort (per user decision). Build with `PROXYSQL40=1 make` and run unit tests with `PROXYSQL40=1 make -C test/tap/tests/unit <name>-t`. The native-protocol code is tier-agnostic (no `#ifdef` guards), so it compiles identically at any tier; standardizing avoids relink churn from a mixed-tier object tree.
+- `pkg-config` lives at `/opt/homebrew/bin` and is not on the default shell PATH; prefix builds with `PATH=/opt/homebrew/bin:$PATH` if the top-level `make` aborts entering `deps`.
+- Always use plain `make` (auto-detects a sane `-j`) — **never** a bare unbounded `make -j`.
 
 ## Pre-flight (read before Task 1)
 
@@ -578,7 +584,16 @@ git add include/PgSQL_Backend_Protocol.h lib/PgSQL_Backend_Auth.cpp test/tap/tes
 git commit -m "feat(pgsql): native SCRAM-SHA-256 client exchange over libscram, RFC 7677 vector test"
 ```
 
-### Task 1.5: SCRAM channel binding (-PLUS) (pure)
+### Task 1.5: SCRAM channel binding (-PLUS) (pure) — **DEFERRED (out of this plan's scope, per user decision 2026-06-11)**
+
+> **Status: deferred to a follow-up phase (Phase 1b).** The vendored `libscram`
+> (pgbouncer-derived) has no client channel-binding support — `build_client_final_message`
+> hardcodes `c=biws` (`deps/libscram/src/scram.c:535`) and only handles cbind flags `n`/`y`.
+> Implementing `-PLUS` therefore requires either patching vendored libscram or adding a
+> custom cbind layer, which the user chose to defer. v1 ships `trust`/`md5`/plain
+> `SCRAM-SHA-256`. A server that offers **only** `SCRAM-SHA-256-PLUS` is a capability gap →
+> libpq fallback (handled in Task 1.6's mechanism selection). The original Task 1.5 steps
+> below are retained for the follow-up phase but are NOT executed now.
 
 Channel binding adds `gs2-cbind-flag = "p=tls-server-end-point"` and binds `cbind-input = gs2-header || tls-server-end-point-hash`. The hash is the server certificate's signature-hash digest (per RFC 5929 `tls-server-end-point`).
 
@@ -718,7 +733,7 @@ End-to-end proof: for each auth method and TLS setting, a connection through nat
 
 - [ ] **Step 1: Write the test**
 
-Follow an existing `pgsql*` TAP test in `test/tap/tests/` for the connect/config boilerplate (admin connection, setting `pgsql-*` variables, connecting through ProxySQL). The test, for each scenario in {`trust`, `md5`, `scram-sha-256`, `scram-sha-256` over TLS (→ channel binding)}:
+Follow an existing `pgsql*` TAP test in `test/tap/tests/` for the connect/config boilerplate (admin connection, setting `pgsql-*` variables, connecting through ProxySQL). The test, for each scenario in {`trust`, `md5`, `scram-sha-256`, `scram-sha-256` over **TLS without channel binding** (the client selects plain `SCRAM-SHA-256` even if the server also offers `-PLUS`)}. (Channel binding `-PLUS` is deferred — see Task 1.5; a separate scenario where the server requires `-PLUS` and the native path must fall back to libpq can be added when convenient.)
 
 ```cpp
 // Pseudocode of the assertion structure — fill with the project's PgSQL TAP helpers.
@@ -771,8 +786,8 @@ git commit -m "test(pgsql): differential native-vs-libpq auth test (trust/md5/sc
 **Spec coverage (against the design spec §2 decisions and §4/§8 Phase 0–1 content):**
 - Runtime flag + libpq fallback → Tasks 0.1–0.3. ✓
 - Data-path-only scope → nothing here touches Monitor/genai. ✓
-- Auth: cleartext/trust, md5, SCRAM-SHA-256, SCRAM-SHA-256-PLUS → Tasks 1.2–1.5, exercised in 1.8. ✓ GSSAPI/SSPI deferred → capability-gap fallback in Task 1.6 Step 1. ✓
-- TLS via existing OpenSSL stack → Task 1.6 Step 1 (SSL reply + handshake), channel-binding digest in 1.5. ✓
+- Auth: cleartext/trust, md5, SCRAM-SHA-256 → Tasks 1.2–1.4, exercised in 1.8. ✓ SCRAM-SHA-256-PLUS (channel binding, Task 1.5) **deferred** to Phase 1b; `-PLUS`-only servers → capability-gap libpq fallback (Task 1.6 mechanism selection). GSSAPI/SSPI deferred → capability-gap fallback in Task 1.6 Step 1. ✓
+- TLS via existing OpenSSL stack → Task 1.6 Step 1 (SSL reply + handshake). Channel-binding digest deferred with Task 1.5. ✓
 - Own the fd via backend `PgSQL_Data_Stream` → Task 1.6. ✓
 - Cached `ParameterStatus`/`BackendKeyData`/txn-state replacing `PQ*` accessors → Task 1.6 Steps 2–3. ✓
 - Differential, byte-level correctness bar → Task 1.8 (Phase 1 scope is auth/connect; the result-byte comparison corpus from spec §7 lands with Phase 2's query path). ✓ for Phase 1's surface.
