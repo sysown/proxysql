@@ -36,4 +36,18 @@ class PgSQL_Backend_Msg_Framer {
     size_t len = 0, cap = 0, pos = 0;
     bool failed = false;   // sticky error state set on feed() failure (overflow/realloc); cleared only by reset()
 };
+
+// --- Pure startup/SSL request encoders (no I/O, no connection state) ---
+
+// Writes the fixed 8-byte SSLRequest packet: length=8, code=80877103 (0x04d2162f).
+void pg_build_ssl_request(unsigned char out[8]);
+
+// Encodes a protocol-3.0 StartupMessage into out[0..*out_len).
+// Layout: int32 length (incl. itself), int32 protocol (196608 = 0x00030000),
+// then "user\0<user>\0database\0<database>\0" and a terminating empty key (\0).
+// Bounds: writes nothing past out_cap. If the encoded message would exceed
+// out_cap, sets *out_len = 0 and returns false (no partial/oversized write).
+// Returns true on success with *out_len set to the number of bytes written.
+bool pg_build_startup(unsigned char* out, size_t* out_len, size_t out_cap,
+                      const char* user, const char* database);
 #endif
