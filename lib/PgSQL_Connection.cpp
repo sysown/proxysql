@@ -3,6 +3,14 @@
 #include <sstream>
 #include <atomic>
 #include <memory>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <unistd.h>
+#include <errno.h>
 
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
@@ -211,11 +219,27 @@ PgSQL_Connection::~PgSQL_Connection() {
 		local_stmts = NULL;
 	}
 	if (pgsql_conn) {
-		if (is_connected())  
+		if (is_connected())
 			__sync_fetch_and_sub(&PgHGM->status.server_connections_connected, 1);
 		async_free_result();
 		PQfinish(pgsql_conn);
 		pgsql_conn = NULL;
+	}
+	// Native (non-libpq) connection cleanup. In native mode pgsql_conn stays NULL,
+	// so the block above is skipped: mirror its connected-counter decrement and
+	// free the native socket + SCRAM state here.
+	if (native_mode) {
+		if (native_connected) {
+			__sync_fetch_and_sub(&PgHGM->status.server_connections_connected, 1);
+		}
+		if (native_scram) {
+			pg_scram_free(native_scram);
+			native_scram = nullptr;
+		}
+		if (fd >= 0) {
+			::close(fd);
+			fd = -1;
+		}
 	}
 	if (query_result) {
 		delete query_result;
@@ -338,10 +362,12 @@ handler_again:
 		}
 		if (is_error_present()) {
 			// always increase the counter
-			proxy_error("Failed to PQconnectStart() on %u:%s:%d , FD (Conn:%d , MyDS:%d) , %s.\n", parent->myhgc->hid, parent->address, parent->port, PQsocket(pgsql_conn), myds->fd, get_error_code_with_message().c_str());
+			proxy_error("Failed to PQconnectStart() on %u:%s:%d , FD (Conn:%d , MyDS:%d) , %s.\n", parent->myhgc->hid, parent->address, parent->port, (native_mode ? fd : PQsocket(pgsql_conn)), myds->fd, get_error_code_with_message().c_str());
 			NEXT_IMMEDIATE(ASYNC_CONNECT_FAILED);
 		} else {
-			if (PQisnonblocking(pgsql_conn) == false) {
+			// Native sockets are created O_NONBLOCK already; only the libpq path
+			// needs the PQsetnonblocking() handshake (pgsql_conn is NULL in native mode).
+			if (!native_mode && PQisnonblocking(pgsql_conn) == false) {
 				// Set non-blocking mode
 				if (PQsetnonblocking(pgsql_conn, 1) != 0) {
 					set_error_from_PQerrorMessage();
@@ -377,8 +403,11 @@ handler_again:
 		__sync_fetch_and_add(&parent->connect_OK, 1);
 		// Seed the PgSQL DNS cache from the just-established connection so
 		// the next connect for this hostname can skip getaddrinfo even if
-		// the background resolver loop hasn't visited it yet.
-		PgSQL_Monitor::update_dns_cache_from_pgsql_conn(pgsql_conn);
+		// the background resolver loop hasn't visited it yet. libpq-only:
+		// the native path resolves via the DNS cache itself in native_connect_start().
+		if (!native_mode) {
+			PgSQL_Monitor::update_dns_cache_from_pgsql_conn(pgsql_conn);
+		}
 		break;
 	case ASYNC_CONNECT_FAILED:
 		//PQfinish(pgsql_conn);//release connection even on error
@@ -969,6 +998,11 @@ void PgSQL_Connection::connect_start() {
 	reset_error();
 	async_exit_status = PG_EVENT_NONE;
 
+	if (native_mode) {
+		native_connect_start();
+		return;
+	}
+
 	std::ostringstream conninfo;
 	append_conninfo_param(conninfo, "user", userinfo->username); // username
 	append_conninfo_param(conninfo, "password", userinfo->password); // password
@@ -1105,15 +1139,12 @@ void PgSQL_Connection::connect_start() {
 void PgSQL_Connection::connect_cont(short event) {
 	PROXY_TRACE();
 	if (native_mode) {
-		// Phase 0: native path not implemented yet → log once, disable, fall back to libpq.
-		static thread_local bool warned = false;
-		if (!warned) {
-			proxy_warning("native_mode requested but unimplemented at this stage; falling back to libpq for hg %u %s:%d\n",
-				parent->myhgc->hid, parent->address, parent->port);
-			warned = true;
-		}
-		native_mode = false;
-		// fall through to existing libpq path below
+		// Native (non-libpq) backend connect + auth driver. Drives the
+		// native_st sub-state machine and returns to the event loop; it never
+		// falls through to the libpq path below (unless a capability gap forces
+		// a libpq restart, which is handled inside native_connect_cont()).
+		native_connect_cont(event);
+		return;
 	}
 	assert(pgsql_conn);
 	reset_error();
@@ -1178,6 +1209,570 @@ void PgSQL_Connection::connect_cont(short event) {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "PgSQL Connection FD has been changed by PQconnectPoll()"
 			"Session=%p, Conn=%p, myds=%p, oldFD=%d, newFD=%d\n", myds->sess, this, myds, fd, current_fd);
 		fd = current_fd;
+	}
+}
+
+// ===========================================================================
+// Native (non-libpq) backend connect + authentication (Task 1.6a, PLAINTEXT)
+// ===========================================================================
+//
+// These routines drive a small sub-state machine (native_st) that performs the
+// PostgreSQL frontend handshake by hand: a non-blocking TCP connect, a
+// StartupMessage, the AuthenticationRequest exchange (trust / cleartext / md5 /
+// SCRAM-SHA-256), and then consumes the post-auth messages (ParameterStatus,
+// BackendKeyData, ReadyForQuery) so the connection becomes usable in the pool.
+//
+// Event-loop contract (see handler()/next_event()):
+//   - async_exit_status = PG_EVENT_WRITE -> we have bytes to send / want writable
+//   - async_exit_status = PG_EVENT_READ  -> waiting for backend bytes
+//   - async_exit_status = PG_EVENT_NONE  -> the connect/auth phase is COMPLETE
+//
+// TLS is NOT handled here (sub-task 1.6b). Backends requiring SSL are assumed
+// non-SSL for now; a backend that rejects plaintext will surface as an error.
+
+// Build a one-byte-typed frontend message ('p' PasswordMessage / SASL response)
+// into native_outbuf: type byte, int32 big-endian length (= 4 + bodylen), body.
+static void pg_append_typed_msg(std::string& out, char type, const unsigned char* body, size_t bodylen) {
+	uint32_t len = (uint32_t)(4 + bodylen);
+	unsigned char hdr[5];
+	hdr[0] = (unsigned char)type;
+	hdr[1] = (len >> 24) & 0xff;
+	hdr[2] = (len >> 16) & 0xff;
+	hdr[3] = (len >> 8) & 0xff;
+	hdr[4] = len & 0xff;
+	out.append((const char*)hdr, 5);
+	if (bodylen) out.append((const char*)body, bodylen);
+}
+
+static inline uint32_t pg_read_be32(const unsigned char* p) {
+	return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+}
+
+// Flush native_outbuf via non-blocking send(). Consumes the bytes that were
+// written; on EAGAIN leaves the remainder buffered and returns true (caller must
+// keep waiting for writable). Returns false on a fatal socket error.
+bool PgSQL_Connection::native_flush_outbuf() {
+	while (!native_outbuf.empty()) {
+		ssize_t n = ::send(fd, native_outbuf.data(), native_outbuf.size(), 0);
+		if (n > 0) {
+			native_outbuf.erase(0, (size_t)n);
+			continue;
+		}
+		if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+			return true; // partial send: keep the rest buffered, wait for writable
+		}
+		if (n < 0 && errno == EINTR) {
+			continue;
+		}
+		// fatal
+		return false;
+	}
+	return true;
+}
+
+void PgSQL_Connection::native_teardown() {
+	if (native_scram) {
+		pg_scram_free(native_scram);
+		native_scram = nullptr;
+	}
+	if (fd >= 0) {
+		::close(fd);
+		fd = -1;
+	}
+	native_framer.reset();
+	native_outbuf.clear();
+}
+
+// Capability gap (GSSAPI/SSPI/SCRAM-SHA-256-PLUS-only/unhandled auth): we cannot
+// complete this handshake natively. Tear down the native socket, disable
+// native_mode, log once per backend, and restart the connect via libpq by
+// re-entering connect_start() (now that native_mode==false it takes the libpq
+// branch and builds a fresh pgsql_conn). We then advance the connect/auth state
+// machine as if libpq's connect_start() had just run.
+void PgSQL_Connection::native_capability_gap(const char* mechanism) {
+	static thread_local bool warned = false;
+	if (!warned) {
+		proxy_warning("native backend auth capability gap (%s) for hg %u %s:%d; falling back to libpq\n",
+			mechanism ? mechanism : "unknown", parent->myhgc->hid, parent->address, parent->port);
+		warned = true;
+	}
+	native_teardown();
+	native_mode = false;
+	// Re-initiate the libpq connect. connect_start() asserts pgsql_conn==NULL,
+	// which still holds (native mode never created one). It sets async_exit_status
+	// for the libpq path; we mirror handler()'s ASYNC_CONNECT_START dispatch so
+	// the next event continues the libpq handshake.
+	connect_start();
+	if (async_exit_status) {
+		async_state_machine = ASYNC_CONNECT_CONT;
+	} else {
+		async_state_machine = ASYNC_CONNECT_END;
+	}
+}
+
+void PgSQL_Connection::native_connect_start() {
+	// Resolve the backend address. Prefer the DNS cache (non-blocking); fall back
+	// to the literal parent->address (which may itself be an IP literal).
+	std::string ip = connect_start_DNS_lookup();
+	const char* host = (!ip.empty()) ? ip.c_str() : parent->address;
+
+	// getaddrinfo on a numeric host with AI_NUMERICHOST does not block. The DNS
+	// cache returns numeric IPs; if it missed and parent->address is a hostname,
+	// fall back to a (potentially blocking) resolve — acceptable as the pool
+	// connect path already tolerates this and 1.8 validates against real backends.
+	struct addrinfo hints;
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_protocol = IPPROTO_TCP;
+	if (!ip.empty()) {
+		hints.ai_flags = AI_NUMERICHOST;
+	}
+	char portstr[16];
+	snprintf(portstr, sizeof(portstr), "%u", (unsigned)parent->port);
+
+	struct addrinfo* res = nullptr;
+	int gai = getaddrinfo(host, portstr, &hints, &res);
+	if (gai != 0 || res == nullptr) {
+		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE),
+			gai_strerror(gai), false);
+		proxy_error("Native connect: getaddrinfo(%s:%s) failed: %s\n", host, portstr, gai_strerror(gai));
+		if (res) freeaddrinfo(res);
+		async_exit_status = PG_EVENT_NONE; // error present -> handler moves to FAILED
+		return;
+	}
+
+	int sock = -1;
+	for (struct addrinfo* ai = res; ai != nullptr; ai = ai->ai_next) {
+		sock = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+		if (sock < 0) continue;
+		// non-blocking
+		int fl = fcntl(sock, F_GETFL, 0);
+		if (fl < 0 || fcntl(sock, F_SETFL, fl | O_NONBLOCK) < 0) {
+			::close(sock); sock = -1; continue;
+		}
+		{ int one = 1; setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one)); }
+		int rc = ::connect(sock, ai->ai_addr, ai->ai_addrlen);
+		if (rc == 0 || errno == EINPROGRESS || errno == EWOULDBLOCK || errno == EINTR) {
+			break; // connect in progress (or immediately done)
+		}
+		::close(sock); sock = -1;
+	}
+	freeaddrinfo(res);
+
+	if (sock < 0) {
+		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE),
+			"native connect() failed", false);
+		proxy_error("Native connect: socket/connect to %s:%s failed: %s\n", host, portstr, strerror(errno));
+		async_exit_status = PG_EVENT_NONE;
+		return;
+	}
+
+	this->fd = sock;
+	native_host = parent->address ? parent->address : "";
+	native_st = PG_Native_Conn_St::TCP_CONNECTING;
+	native_framer.reset();
+	native_outbuf.clear();
+	native_connected = false;
+	// wait for writable = TCP connect completion
+	async_exit_status = PG_EVENT_WRITE;
+}
+
+void PgSQL_Connection::native_connect_cont(short event) {
+	reset_error();
+	async_exit_status = PG_EVENT_NONE;
+
+	switch (native_st) {
+	case PG_Native_Conn_St::TCP_CONNECTING: {
+		// Verify the non-blocking connect() completed successfully.
+		int soerr = 0;
+		socklen_t slen = sizeof(soerr);
+		if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &slen) < 0 || soerr != 0) {
+			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE),
+				soerr ? strerror(soerr) : "connect failed", false);
+			proxy_error("Native connect: TCP connect to %s:%d failed: %s\n",
+				parent->address, parent->port, strerror(soerr));
+			native_teardown();
+			return; // error present -> handler -> ASYNC_CONNECT_FAILED
+		}
+		// Build the StartupMessage.
+		unsigned char startup[2048];
+		size_t slen2 = 0;
+		const char* user = userinfo->username ? userinfo->username : "";
+		const char* db = (userinfo->dbname && userinfo->dbname[0]) ? userinfo->dbname : user;
+		if (!pg_build_startup(startup, &slen2, sizeof(startup), user, db)) {
+			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE),
+				"startup message too large", false);
+			native_teardown();
+			return;
+		}
+		native_outbuf.assign((const char*)startup, slen2);
+		// After the StartupMessage flushes, wait for the AuthenticationRequest.
+		if (!native_send_or_buffer(PG_Native_Conn_St::AUTH)) {
+			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(startup) failed", false);
+			native_teardown();
+			return;
+		}
+		// native_send_or_buffer already set native_st and async_exit_status.
+		return;
+	}
+
+	case PG_Native_Conn_St::SEND_STARTUP: {
+		// Flushing a previously partial outbound buffer (startup or a password msg).
+		if (!native_flush_outbuf()) {
+			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send() failed", false);
+			native_teardown();
+			return;
+		}
+		if (!native_outbuf.empty()) { async_exit_status = PG_EVENT_WRITE; return; }
+		// Drained: resume where the partial send left off (always a READ wait).
+		native_st = native_st_after_send;
+		async_exit_status = PG_EVENT_READ;
+		return;
+	}
+
+	case PG_Native_Conn_St::AUTH:
+		native_drive_auth(event);
+		return;
+
+	case PG_Native_Conn_St::STARTUP_TAIL:
+		native_drive_startup_tail(event);
+		return;
+
+	case PG_Native_Conn_St::DONE:
+		native_connected = true;
+		async_exit_status = PG_EVENT_NONE;
+		return;
+
+	case PG_Native_Conn_St::FAILED:
+	default:
+		if (!is_error_present()) {
+			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "native handshake failed", false);
+		}
+		async_exit_status = PG_EVENT_NONE;
+		return;
+	}
+}
+
+bool PgSQL_Connection::native_send_or_buffer(PG_Native_Conn_St resume_st) {
+	if (!native_flush_outbuf()) {
+		return false;
+	}
+	if (!native_outbuf.empty()) {
+		// Couldn't flush it all: park in SEND_STARTUP, resume in resume_st later.
+		native_st_after_send = resume_st;
+		native_st = PG_Native_Conn_St::SEND_STARTUP;
+		async_exit_status = PG_EVENT_WRITE;
+		return true;
+	}
+	// Fully sent: move straight to the resume state and wait for the reply.
+	native_st = resume_st;
+	async_exit_status = PG_EVENT_READ;
+	return true;
+}
+
+int PgSQL_Connection::native_recv_into_framer() {
+	unsigned char tmp[16384];
+	bool got = false;
+	for (;;) {
+		ssize_t n = ::recv(fd, tmp, sizeof(tmp), 0);
+		if (n > 0) {
+			native_framer.feed(tmp, (size_t)n);
+			got = true;
+			if ((size_t)n < sizeof(tmp)) break; // likely drained the socket buffer
+			continue;
+		}
+		if (n == 0) {
+			return -1; // peer closed
+		}
+		// n < 0
+		if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+		if (errno == EINTR) continue;
+		return -1; // fatal
+	}
+	return got ? 1 : 0;
+}
+
+void PgSQL_Connection::native_fill_error_from_E(const unsigned char* payload, uint32_t len) {
+	// ErrorResponse: series of (field-type-byte, NUL-terminated value), terminated
+	// by a zero field-type byte. Extract Severity('S'), SQLSTATE('C'), Message('M').
+	std::string severity = "ERROR";
+	std::string sqlstate = "08000"; // connection_exception default
+	std::string message  = "native handshake error";
+	uint32_t i = 0;
+	while (i < len && payload[i] != 0) {
+		char ftype = (char)payload[i++];
+		const unsigned char* vstart = payload + i;
+		while (i < len && payload[i] != 0) i++;
+		std::string val((const char*)vstart, (const char*)(payload + i));
+		if (i < len) i++; // skip the NUL
+		switch (ftype) {
+			case 'S': // Severity (localized)
+			case 'V': // Severity (non-localized) — prefer if present
+				if (ftype == 'V' || severity == "ERROR") severity = val;
+				break;
+			case 'C': sqlstate = val; break;
+			case 'M': message = val; break;
+			default: break;
+		}
+	}
+	PgSQL_Error_Helper::fill_error_info(error_info, sqlstate.c_str(), message.c_str(), severity.c_str());
+}
+
+void PgSQL_Connection::native_drive_auth(short /*event*/) {
+	int r = native_recv_into_framer();
+	if (r == 0) { async_exit_status = PG_EVENT_READ; return; }       // EAGAIN, wait
+	if (r < 0) {
+		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "backend closed during auth", false);
+		native_teardown();
+		return;
+	}
+
+	for (;;) {
+		PgSQL_Backend_Msg msg;
+		PgSQL_Frame_Result fr = native_framer.next(msg);
+		if (fr == FRAME_NEED_MORE) {
+			async_exit_status = PG_EVENT_READ;
+			return;
+		}
+		if (fr == FRAME_ERROR) {
+			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_PROTOCOL_VIOLATION), "malformed backend message during auth", false);
+			native_teardown();
+			return;
+		}
+		// FRAME_OK: msg.payload points INTO the framer buffer and is valid only
+		// until the next feed(). We do not feed() again inside this loop, so it
+		// stays valid; anything retained past a recv() is copied first.
+		if (msg.type == 'E') {
+			native_fill_error_from_E(msg.payload, msg.payload_len);
+			proxy_error("Native auth: backend ErrorResponse: %s\n", get_error_code_with_message().c_str());
+			native_teardown();
+			return;
+		}
+		if (msg.type == 'N') {
+			continue; // NoticeResponse: ignore during auth
+		}
+		if (msg.type != 'R') {
+			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_PROTOCOL_VIOLATION), "unexpected message during auth", false);
+			native_teardown();
+			return;
+		}
+		if (msg.payload_len < 4) {
+			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_PROTOCOL_VIOLATION), "short Authentication message", false);
+			native_teardown();
+			return;
+		}
+		uint32_t auth_type = pg_read_be32(msg.payload);
+		const unsigned char* rest = msg.payload + 4;
+		uint32_t rest_len = msg.payload_len - 4;
+
+		switch (auth_type) {
+		case 0: // AuthenticationOk
+			native_st = PG_Native_Conn_St::STARTUP_TAIL;
+			// Fall through to consuming any already-buffered tail messages.
+			native_drive_startup_tail(0);
+			return;
+
+		case 3: { // AuthenticationCleartextPassword
+			const char* pw = userinfo->password ? userinfo->password : "";
+			size_t pwlen = strlen(pw);
+			native_outbuf.clear();
+			pg_append_typed_msg(native_outbuf, 'p', (const unsigned char*)pw, pwlen + 1); // include NUL
+			if (!native_send_or_buffer(PG_Native_Conn_St::AUTH)) {
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(cleartext pw) failed", false);
+				native_teardown();
+			}
+			return;
+		}
+
+		case 5: { // AuthenticationMD5Password (4 salt bytes follow)
+			if (rest_len < 4) {
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_PROTOCOL_VIOLATION), "short MD5 salt", false);
+				native_teardown();
+				return;
+			}
+			unsigned char salt[4];
+			memcpy(salt, rest, 4);
+			char md5buf[36];
+			const char* user = userinfo->username ? userinfo->username : "";
+			const char* pw = userinfo->password ? userinfo->password : "";
+			pg_build_md5(md5buf, user, pw, salt); // "md5"+32hex+NUL (35 chars + NUL)
+			native_outbuf.clear();
+			pg_append_typed_msg(native_outbuf, 'p', (const unsigned char*)md5buf, strlen(md5buf) + 1);
+			if (!native_send_or_buffer(PG_Native_Conn_St::AUTH)) {
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(md5 pw) failed", false);
+				native_teardown();
+			}
+			return;
+		}
+
+		case 10: { // AuthenticationSASL: list of NUL-terminated mechanism names
+			bool has_scram = false, has_scram_plus = false;
+			uint32_t i = 0;
+			while (i < rest_len && rest[i] != 0) {
+				const char* mech = (const char*)(rest + i);
+				size_t mlen = strnlen(mech, rest_len - i);
+				if (mlen == strlen("SCRAM-SHA-256") && memcmp(mech, "SCRAM-SHA-256", mlen) == 0) has_scram = true;
+				else if (mlen == strlen("SCRAM-SHA-256-PLUS") && memcmp(mech, "SCRAM-SHA-256-PLUS", mlen) == 0) has_scram_plus = true;
+				i += mlen + 1;
+			}
+			if (!has_scram) {
+				// Only -PLUS (channel binding) offered, or unknown mechanisms.
+				native_capability_gap(has_scram_plus ? "SCRAM-SHA-256-PLUS only" : "no supported SASL mechanism");
+				return;
+			}
+			if (native_scram) { pg_scram_free(native_scram); native_scram = nullptr; }
+			native_scram = pg_scram_new();
+			const char* client_first = native_scram ? pg_scram_client_first(native_scram, false) : nullptr;
+			if (client_first == nullptr) {
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "SCRAM client-first failed", false);
+				native_teardown();
+				return;
+			}
+			// SASLInitialResponse body: mechname\0 + int32(initial-resp-len) + initial-resp
+			const char* mechname = "SCRAM-SHA-256";
+			uint32_t cflen = (uint32_t)strlen(client_first);
+			std::string body;
+			body.append(mechname, strlen(mechname) + 1); // include NUL
+			unsigned char lenbe[4] = {
+				(unsigned char)((cflen >> 24) & 0xff), (unsigned char)((cflen >> 16) & 0xff),
+				(unsigned char)((cflen >> 8) & 0xff),  (unsigned char)(cflen & 0xff) };
+			body.append((const char*)lenbe, 4);
+			body.append(client_first, cflen);
+			native_outbuf.clear();
+			pg_append_typed_msg(native_outbuf, 'p', (const unsigned char*)body.data(), body.size());
+			if (!native_send_or_buffer(PG_Native_Conn_St::AUTH)) {
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(SASLInitialResponse) failed", false);
+				native_teardown();
+			}
+			return;
+		}
+
+		case 11: { // AuthenticationSASLContinue: server-first message
+			if (native_scram == nullptr) {
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_PROTOCOL_VIOLATION), "unexpected SASLContinue", false);
+				native_teardown();
+				return;
+			}
+			// Copy server-first BEFORE building (client_final reads it; no further feed here,
+			// but copying keeps us robust against the dangling-pointer rule).
+			std::string server_first((const char*)rest, rest_len);
+			const char* pw = userinfo->password ? userinfo->password : "";
+			const char* client_final = pg_scram_client_final(native_scram, pw, server_first.data(), server_first.size());
+			if (client_final == nullptr) {
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "SCRAM client-final failed", false);
+				native_teardown();
+				return;
+			}
+			native_outbuf.clear();
+			pg_append_typed_msg(native_outbuf, 'p', (const unsigned char*)client_final, strlen(client_final));
+			if (!native_send_or_buffer(PG_Native_Conn_St::AUTH)) {
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(SASLResponse) failed", false);
+				native_teardown();
+			}
+			return;
+		}
+
+		case 12: { // AuthenticationSASLFinal: server-final message
+			if (native_scram == nullptr) {
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_PROTOCOL_VIOLATION), "unexpected SASLFinal", false);
+				native_teardown();
+				return;
+			}
+			std::string server_final((const char*)rest, rest_len);
+			if (!pg_scram_verify_server_final(native_scram, server_final.data(), server_final.size())) {
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_INVALID_PASSWORD), "SCRAM server signature verification failed", false);
+				native_teardown();
+				return;
+			}
+			// Server verified; an AuthenticationOk ('R',0) normally follows. Keep
+			// looping to consume it (it may already be framed).
+			break;
+		}
+
+		case 2:  // GSSAPI continue
+		case 7:  // GSSAPI
+		case 8:  // GSSAPI continue
+		case 9:  // SSPI
+			native_capability_gap("GSSAPI/SSPI");
+			return;
+
+		default:
+			native_capability_gap("unhandled AuthenticationRequest");
+			return;
+		}
+		// Loop to process further already-buffered messages (e.g. AuthenticationOk
+		// after SASLFinal). msg.payload references stay valid until next feed().
+	}
+}
+
+void PgSQL_Connection::native_drive_startup_tail(short /*event*/) {
+	// Consume ParameterStatus(S)/BackendKeyData(K)/NoticeResponse(N) until
+	// ReadyForQuery(Z). This may be called immediately after AuthenticationOk
+	// (tail messages possibly already buffered) or on a fresh READ event.
+	for (;;) {
+		PgSQL_Backend_Msg msg;
+		PgSQL_Frame_Result fr = native_framer.next(msg);
+		if (fr == FRAME_NEED_MORE) {
+			int r = native_recv_into_framer();
+			if (r == 0) { async_exit_status = PG_EVENT_READ; return; } // EAGAIN
+			if (r < 0) {
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "backend closed during startup", false);
+				native_teardown();
+				return;
+			}
+			continue; // got bytes, retry next()
+		}
+		if (fr == FRAME_ERROR) {
+			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_PROTOCOL_VIOLATION), "malformed backend message during startup", false);
+			native_teardown();
+			return;
+		}
+		// FRAME_OK. Copy any payload we retain before a subsequent recv()/feed().
+		switch (msg.type) {
+		case 'S': { // ParameterStatus: two C-strings name, value
+			const unsigned char* p = msg.payload;
+			uint32_t len = msg.payload_len;
+			uint32_t i = 0;
+			const char* name = (const char*)p;
+			while (i < len && p[i] != 0) i++;
+			if (i >= len) break; // malformed; ignore
+			std::string nm(name, (const char*)(p + i));
+			i++; // skip NUL
+			const char* val = (const char*)(p + i);
+			uint32_t vstart = i;
+			while (i < len && p[i] != 0) i++;
+			std::string vl(val, (const char*)(p + i));
+			(void)vstart;
+			native_params[nm] = vl;
+			break;
+		}
+		case 'K': { // BackendKeyData: int32 pid, int32 secret
+			if (msg.payload_len >= 8) {
+				native_backend_pid = (int)pg_read_be32(msg.payload);
+				native_backend_secret = (int)pg_read_be32(msg.payload + 4);
+			}
+			break;
+		}
+		case 'N': // NoticeResponse: ignore
+			break;
+		case 'E': // ErrorResponse mid-startup
+			native_fill_error_from_E(msg.payload, msg.payload_len);
+			proxy_error("Native startup: backend ErrorResponse: %s\n", get_error_code_with_message().c_str());
+			native_teardown();
+			return;
+		case 'Z': { // ReadyForQuery: 1 status byte
+			if (msg.payload_len >= 1) native_txn_status = (char)msg.payload[0];
+			native_connected = true;
+			native_st = PG_Native_Conn_St::DONE;
+			async_exit_status = PG_EVENT_NONE; // connect/auth phase COMPLETE
+			return;
+		}
+		default:
+			// Other messages (e.g. 'R' AuthenticationOk that arrived here) are
+			// benign at this stage; skip them.
+			break;
+		}
 	}
 }
 
@@ -1356,6 +1951,10 @@ int PgSQL_Connection::async_connect(short event) {
 }
 
 bool PgSQL_Connection::is_connected() const {
+	if (native_mode) {
+		// Native handshake completed (ReadyForQuery received) => usable in the pool.
+		return native_connected;
+	}
 	if (pgsql_conn == nullptr || PQstatus(pgsql_conn) != CONNECTION_OK) {
 		return false;
 	}
