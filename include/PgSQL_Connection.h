@@ -682,6 +682,7 @@ public:
 	PgSQL_Scram_State* native_scram = nullptr;       // owned; freed in destructor / teardown
 	std::string native_outbuf;                       // pending outbound bytes (partial send buffer)
 	bool native_connected = false;                   // true once ReadyForQuery received
+	bool handler_first_call = true;                  // one-shot first-call detector for handler() (both libpq and native paths)
 	std::map<std::string, std::string> native_params; // ParameterStatus name->value
 	std::string native_host;                         // backend host (parent->address, captured at connect)
 	int native_backend_pid = 0;                      // BackendKeyData PID

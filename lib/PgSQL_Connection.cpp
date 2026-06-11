@@ -315,8 +315,13 @@ PG_ASYNC_ST PgSQL_Connection::handler(short event) {
 	Timer timer(myds->sess->thread->Timers.Connections_Handlers);
 #endif // ENABLE_TIMER
 	uint64_t processed_bytes = 0;	// issue #527 : this variable will store the amount of bytes processed during this event
-	if (pgsql_conn == NULL) {
-		// it is the first time handler() is being called
+	if (handler_first_call) {
+		// it is the first time handler() is being called.
+		// Use an explicit one-shot flag rather than (pgsql_conn == NULL): in
+		// native_mode pgsql_conn stays NULL for the whole connect/auth cycle,
+		// so the old condition would re-run this init (and re-open the socket)
+		// on every event. The flag works identically for both paths.
+		handler_first_call = false;
 		async_state_machine = ASYNC_CONNECT_START;
 		native_mode = pgsql_thread___use_native_backend_protocol;
 		myds->wait_until = myds->sess->thread->curtime + pgsql_thread___connect_timeout_server * 1000;
@@ -412,6 +417,12 @@ handler_again:
 	case ASYNC_CONNECT_FAILED:
 		//PQfinish(pgsql_conn);//release connection even on error
 		//pgsql_conn = NULL;
+		// Native mode: release the native socket/SCRAM state promptly. Some failure
+		// sub-paths already teardown, but generic failures may reach here with the
+		// fd still open; native_teardown() sets fd=-1 so this is double-close safe.
+		if (native_mode && fd >= 0) {
+			native_teardown();
+		}
 		PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, parent->myhgc->hid, parent->address, parent->port, 9999 /* TODO: fix this mysql_errno(pgsql) */);
 		parent->connect_error(9999 /* TODO: fix this mysql_errno(pgsql)*/);
 		break;
@@ -419,6 +430,12 @@ handler_again:
 		// to fix
 		//PQfinish(pgsql_conn);//release connection
 		//pgsql_conn = NULL;
+		// Native mode: a connect timeout leaves the native socket open; release it
+		// now instead of waiting for the destructor. native_teardown() sets fd=-1,
+		// so the destructor's fd>=0 guard prevents any double-close.
+		if (native_mode && fd >= 0) {
+			native_teardown();
+		}
 		proxy_error("Connect timeout on %s:%d : exceeded by %lluus\n", parent->address, parent->port, myds->sess->thread->curtime - myds->wait_until);
 		PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, parent->myhgc->hid, parent->address, parent->port, 9999/* TODO: fix this mysql_errno(pgsql)*/);
 		parent->connect_error(9999 /* TODO: fix this mysql_errno(pgsql)*/);
@@ -1917,7 +1934,9 @@ void PgSQL_Connection::flush(bool is_resync) {
 
 int PgSQL_Connection::async_connect(short event) {
 	PROXY_TRACE();
-	if (pgsql_conn == NULL && async_state_machine != ASYNC_CONNECT_START) {
+	if (!native_mode && pgsql_conn == NULL && async_state_machine != ASYNC_CONNECT_START) {
+		// In native_mode pgsql_conn is permanently NULL (the native sub-state
+		// machine uses its own fd), so this libpq-only invariant must be skipped.
 		// LCOV_EXCL_START
 		assert(0);
 		// LCOV_EXCL_STOP
