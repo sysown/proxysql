@@ -50,4 +50,9 @@ void pg_build_ssl_request(unsigned char out[8]);
 // Returns true on success with *out_len set to the number of bytes written.
 bool pg_build_startup(unsigned char* out, size_t* out_len, size_t out_cap,
                       const char* user, const char* database);
+
+// Builds the PostgreSQL AuthenticationMD5Password response into out[36]:
+//   "md5" + hex(md5( hex(md5(password+user)) + salt[4] ))
+// Result is the 35-char "md5..." string plus a terminating NUL (36 bytes total).
+void pg_build_md5(char out[36], const char* user, const char* password, const unsigned char salt[4]);
 #endif

@@ -5,7 +5,7 @@
 #include "tap.h"
 
 int main(int, char**) {
-    plan(2);
+    plan(3);
 
     // SSLRequest is a fixed 8 bytes: length=8, code=80877103 (0x04d2162f).
     unsigned char ssl[8];
@@ -18,6 +18,13 @@ int main(int, char**) {
     pg_build_startup(sm, &smlen, sizeof(sm), "alice", "shop");
     // protocol version at offset 4 must be 0x00030000
     ok(sm[4]==0x00 && sm[5]==0x03 && sm[6]==0x00 && sm[7]==0x00, "startup protocol 3.0");
+
+    // AuthenticationMD5Password response: "md5" + hex(md5(hex(md5(pass+user))+salt)).
+    // Known vector: user=postgres, password=postgres, salt={1,2,3,4} (independent python ref).
+    char md5buf[36];
+    unsigned char salt[4] = {0x01,0x02,0x03,0x04};
+    pg_build_md5(md5buf, "postgres", "postgres", salt);
+    ok(strcmp(md5buf, "md568be9ed08db75f318087ab337aaea044") == 0, "md5 response matches reference vector");
 
     return exit_status();
 }
