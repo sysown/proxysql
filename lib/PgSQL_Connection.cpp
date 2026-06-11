@@ -1104,6 +1104,17 @@ void PgSQL_Connection::connect_start() {
 
 void PgSQL_Connection::connect_cont(short event) {
 	PROXY_TRACE();
+	if (native_mode) {
+		// Phase 0: native path not implemented yet → log once, disable, fall back to libpq.
+		static thread_local bool warned = false;
+		if (!warned) {
+			proxy_warning("native_mode requested but unimplemented at this stage; falling back to libpq for hg %u %s:%d\n",
+				parent->myhgc->hid, parent->address, parent->port);
+			warned = true;
+		}
+		native_mode = false;
+		// fall through to existing libpq path below
+	}
 	assert(pgsql_conn);
 	reset_error();
 	async_exit_status = PG_EVENT_NONE;
@@ -1187,6 +1198,17 @@ void PgSQL_Connection::query_start() {
 
 void PgSQL_Connection::query_cont(short event) {
 	PROXY_TRACE();
+	if (native_mode) {
+		// Phase 0: native path not implemented yet → log once, disable, fall back to libpq.
+		static thread_local bool warned = false;
+		if (!warned) {
+			proxy_warning("native_mode requested but unimplemented at this stage; falling back to libpq for hg %u %s:%d\n",
+				parent->myhgc->hid, parent->address, parent->port);
+			warned = true;
+		}
+		native_mode = false;
+		// fall through to existing libpq path below
+	}
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6, "event=%d\n", event);
 	async_exit_status = PG_EVENT_NONE;
 	if (event & POLLOUT) {
@@ -1202,9 +1224,20 @@ void PgSQL_Connection::fetch_result_start() {
 
 void PgSQL_Connection::fetch_result_cont(short event) {
 	PROXY_TRACE();
+	if (native_mode) {
+		// Phase 0: native path not implemented yet → log once, disable, fall back to libpq.
+		static thread_local bool warned = false;
+		if (!warned) {
+			proxy_warning("native_mode requested but unimplemented at this stage; falling back to libpq for hg %u %s:%d\n",
+				parent->myhgc->hid, parent->address, parent->port);
+			warned = true;
+		}
+		native_mode = false;
+		// fall through to existing libpq path below
+	}
 	async_exit_status = PG_EVENT_NONE;
 
-	// Avoid fetching a new result if one is already available. 
+	// Avoid fetching a new result if one is already available.
 	// This situation can happen when a multi-statement query has been executed.
 	if (pgsql_result)
 		return;
