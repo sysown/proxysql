@@ -15,7 +15,7 @@ static size_t put_msg(unsigned char* buf, char type, const char* payload, uint32
 }
 
 int main(int, char**) {
-    plan(6);
+    plan(7);
     PgSQL_Backend_Msg_Framer f;
     unsigned char buf[64];
 
@@ -32,6 +32,12 @@ int main(int, char**) {
     ok(f2.next(m) == FRAME_NEED_MORE, "partial message -> need more");
     f2.feed(buf + 3, n - 3);                // rest arrives
     ok(f2.next(m) == FRAME_OK && m.type == 'Z', "completes after remaining bytes");
+
+    // Oversized declared length is rejected as FRAME_ERROR (DoS guard), even with few bytes fed.
+    PgSQL_Backend_Msg_Framer f3;
+    unsigned char big[5] = { 'D', 0xff, 0xff, 0xff, 0xff };  // type 'D', length ~4GiB
+    f3.feed(big, 5);
+    ok(f3.next(m) == FRAME_ERROR, "oversized message length rejected");
 
     return exit_status();
 }
