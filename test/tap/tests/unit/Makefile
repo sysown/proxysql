@@ -66,8 +66,16 @@ IDIRS += -I$(PROXYSQL_PATH)/plugins/genai/include
 PROTOBUF_VERSION := 3.21.12
 PROTOBUF_INSTALL_DIR := $(PROXYSQL_PATH)/deps/protobuf/protobuf-$(PROTOBUF_VERSION)/install
 PROTOBUF_INCLUDE_DIR := $(PROTOBUF_INSTALL_DIR)/include
-PROTOBUF_LIB := $(PROTOBUF_INSTALL_DIR)/lib/libprotobuf.a
+PROTOBUF_LDIR := $(PROTOBUF_INSTALL_DIR)/lib
+PROTOBUF_LIB := $(PROTOBUF_LDIR)/libprotobuf.a
 IDIRS += -I$(PROTOBUF_INCLUDE_DIR)
+# Several mysqlx_*_unit-t rules below link with `-lprotobuf` to pull in
+# the vendored protobuf runtime. LDIRS must therefore expose the
+# vendored install's lib dir, otherwise ld falls through to the system
+# library search path and fails with `cannot find -lprotobuf` on hosts
+# without libprotobuf-dev installed (or links the wrong version when
+# it is).
+LDIRS += -L$(PROTOBUF_LDIR)
 endif
 
 

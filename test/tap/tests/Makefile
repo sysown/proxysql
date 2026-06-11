@@ -51,6 +51,24 @@ ifeq ($(UNAME_S),Linux)
 	LDIRS += -L$(COREDUMPER_LDIR)
 endif
 
+# Vendored protobuf 3.21.12 -- mirrors the definitions/usage in
+# test/tap/tests/unit/Makefile. ProxySQL builds protobuf locally under
+# deps/protobuf/ when PROXYSQL40=1 and the committed plugins/mysqlx/proto
+# /*.pb.h files require headers (e.g. <google/protobuf/generated_message
+# _bases.h>) that only exist in 3.16+. The vendored install path must be
+# on IDIRS/LDIRS so every test_mysqlx_e2e_*-t rule below resolves the
+# right headers and the `-lprotobuf` link arg they pass, regardless of
+# what (if anything) the host distro ships as system libprotobuf-dev.
+ifeq ($(PROXYSQL40),1)
+PROTOBUF_VERSION := 3.21.12
+PROTOBUF_INSTALL_DIR := $(PROXYSQL_PATH)/deps/protobuf/protobuf-$(PROTOBUF_VERSION)/install
+PROTOBUF_INCLUDE_DIR := $(PROTOBUF_INSTALL_DIR)/include
+PROTOBUF_LDIR := $(PROTOBUF_INSTALL_DIR)/lib
+PROTOBUF_LIB := $(PROTOBUF_LDIR)/libprotobuf.a
+IDIRS += -I$(PROTOBUF_INCLUDE_DIR)
+LDIRS += -L$(PROTOBUF_LDIR)
+endif
+
 
 LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
 
@@ -367,8 +385,12 @@ MYSQLX_PROTO_OBJS := $(patsubst $(MYSQLX_PROTO_DIR)/%.pb.cc,$(ODIR)/mysqlx_proto
 $(ODIR):
 	@mkdir -p $(ODIR)
 
-$(ODIR)/mysqlx_proto_%.pb.o: $(MYSQLX_PROTO_DIR)/%.pb.cc | $(ODIR)
-	$(CXX) -c -o $@ $< $(STDCPP) -O2 -ggdb -I$(MYSQLX_PROTO_DIR) -w
+# PROTOBUF_INCLUDE_DIR comes through $(IDIRS) -- added above under the
+# ifeq ($(PROXYSQL40),1) block. PROTOBUF_LIB as a prerequisite chains
+# the deps protobuf build for anyone running this target standalone.
+$(ODIR)/mysqlx_proto_%.pb.o: $(MYSQLX_PROTO_DIR)/%.pb.cc $(PROTOBUF_LIB) | $(ODIR)
+	$(CXX) -c -o $@ $< $(STDCPP) -O2 -ggdb \
+		-I$(MYSQLX_PROTO_DIR) $(IDIRS) -w
 
 test_mysqlx_e2e_handshake-t: test_mysqlx_e2e_handshake-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TAP_LDIR)/libtap.so
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) \
