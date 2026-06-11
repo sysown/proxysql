@@ -2,10 +2,12 @@
 #include "test_init.h"
 #include "PgSQL_Backend_Protocol.h"
 #include <cstring>
+#include <string>
+#include "scram.h"   // libscram: used to pin the RFC vector and to act as an independent SCRAM verifier
 #include "tap.h"
 
 int main(int, char**) {
-    plan(3);
+    plan(7);
 
     // SSLRequest is a fixed 8 bytes: length=8, code=80877103 (0x04d2162f).
     unsigned char ssl[8];
@@ -25,6 +27,142 @@ int main(int, char**) {
     unsigned char salt[4] = {0x01,0x02,0x03,0x04};
     pg_build_md5(md5buf, "postgres", "postgres", salt);
     ok(strcmp(md5buf, "md568be9ed08db75f318087ab337aaea044") == 0, "md5 response matches reference vector");
+
+    // --- SCRAM-SHA-256 ---
+
+    // (4) Wrapper shape: client-first must carry the gs2 'n' header ("n,,") and a nonce
+    // ("r="), with an empty SCRAM username field ("n=") per the PostgreSQL convention.
+    {
+        PgSQL_Scram_State* s = pg_scram_new();
+        const char* cf = pg_scram_client_first(s, /*channel_binding=*/false);
+        bool shape_ok = cf != nullptr
+            && strncmp(cf, "n,,", 3) == 0          // gs2 header: no channel binding
+            && strstr(cf, "n=,") != nullptr        // empty username field
+            && strstr(cf, ",r=") != nullptr;       // client nonce present
+        ok(shape_ok, "pg_scram_client_first: gs2 'n,,' header, empty n=, and r= nonce (got: %s)",
+           cf ? cf : "(null)");
+        pg_scram_free(s);
+    }
+
+    // (5) Proof correctness, RFC 7677 Section 5 SCRAM-SHA-256 test vector.
+    //   username "user", password "pencil", client nonce "rOprNGfwEbeRWgbNEkqO".
+    //   Expected client-final proof: p=dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ=
+    //
+    // The RFC vector uses client-first-bare "n=user,r=..." (a non-empty username), so we
+    // pin it by driving libscram directly with the RFC ScramState fields rather than via
+    // build_client_first_message (which would generate a random nonce and an EMPTY n=).
+    // build_client_final_message consumes client_nonce, client_first_message_bare,
+    // server_first_message and cbind_flag to recompute the proof.
+    {
+        ScramState* st = scram_state_init();
+        st->client_nonce = strdup("rOprNGfwEbeRWgbNEkqO");
+        st->client_first_message_bare = strdup("n=user,r=rOprNGfwEbeRWgbNEkqO");
+        st->server_first_message = strdup(
+            "r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096");
+        st->cbind_flag = 'n';
+
+        PgCredentials creds{};
+        snprintf(creds.passwd, sizeof(creds.passwd), "%s", "pencil");
+        creds.has_scram_keys = false;
+
+        const char* server_nonce = "rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0";
+        const char* salt_b64 = "W22ZaJ0SNY7soEsUEjb6gQ==";
+        // RFC salt decodes from base64; libscram's read path decodes it, but here we call
+        // build_client_final_message directly which takes the RAW (decoded) salt.
+        unsigned char salt_raw[64];
+        // Decode "W22ZaJ0SNY7soEsUEjb6gQ==" -> 16 bytes (standard base64, no helper here).
+        // Hand-decode via libscram is not exposed; use a tiny inline base64 decoder.
+        auto b64val = [](char c) -> int {
+            if (c >= 'A' && c <= 'Z') return c - 'A';
+            if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+            if (c >= '0' && c <= '9') return c - '0' + 52;
+            if (c == '+') return 62;
+            if (c == '/') return 63;
+            return -1; // '=' padding or invalid
+        };
+        int saltlen = 0;
+        {
+            int bits = 0, acc = 0;
+            for (const char* p = salt_b64; *p; ++p) {
+                int v = b64val(*p);
+                if (v < 0) break; // padding terminates
+                acc = (acc << 6) | v; bits += 6;
+                if (bits >= 8) { bits -= 8; salt_raw[saltlen++] = (acc >> bits) & 0xff; }
+            }
+        }
+
+        char* final_msg = build_client_final_message(
+            st, &creds, server_nonce, (const char*)salt_raw, saltlen, 4096);
+
+        bool proof_ok = final_msg != nullptr
+            && strstr(final_msg, "p=dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ=") != nullptr;
+        ok(proof_ok, "client-final proof matches RFC 7677 Section 5 vector (got: %s)",
+           final_msg ? final_msg : "(null)");
+
+        free(final_msg);
+        free_scram_state(st);
+    }
+
+    // (6) Full client<->server round trip exercising the WRAPPERS under the PostgreSQL
+    // empty-username convention (n=,...). The client side is driven entirely through the
+    // pg_scram_* wrappers; the server side is libscram's independent SCRAM verifier. This
+    // proves the proof our wrapper computes is ACCEPTED by an independent implementation,
+    // which the RFC pin (which uses n=user and bypasses the wrappers) cannot show.
+    {
+        const char* password = "s3cr3t-passw0rd";
+
+        // --- client: build client-first via the wrapper ---
+        PgSQL_Scram_State* client = pg_scram_new();
+        const char* client_first = pg_scram_client_first(client, /*channel_binding=*/false);
+
+        // --- server: parse client-first and build server-first (libscram, independent) ---
+        ScramState* server = scram_state_init();
+        std::string cf_copy(client_first);   // read_client_first_message mutates its input
+        char cbind_flag = 0;
+        char* cfmb = nullptr;
+        char* cnonce = nullptr;
+        bool parsed = read_client_first_message(&cf_copy[0], &cbind_flag, &cfmb, &cnonce);
+        server->cbind_flag = cbind_flag;
+        server->client_first_message_bare = cfmb;   // ownership transferred to server state
+        server->client_nonce = cnonce;
+        // Plaintext password as the "stored secret" -> libscram derives an ad-hoc verifier.
+        char* server_first = parsed ? build_server_first_message(server, "", password) : nullptr;
+
+        // --- client: build client-final (WITH proof) via the wrapper ---
+        const char* client_final = server_first
+            ? pg_scram_client_final(client, password, server_first, strlen(server_first))
+            : nullptr;
+
+        // --- server: verify nonce + client proof (independent verifier) ---
+        bool accepted = false;
+        if (client_final) {
+            // read_client_final_message takes a pristine raw_input (for the without-proof
+            // reconstruction) AND a separate mutable input buffer it overwrites with NULs;
+            // they must be distinct copies (mirrors PgSQL_Protocol::scram_handle_client_final).
+            std::string raw(client_final);
+            std::string finbuf(client_final);
+            const char* final_nonce = nullptr;
+            char* proof = nullptr;
+            bool rf = read_client_final_message(server, (const uint8_t*)raw.c_str(), &finbuf[0],
+                                          &final_nonce, &proof);
+            if (rf) {
+                accepted = verify_final_nonce(server, final_nonce)
+                    && verify_client_proof(server, proof);
+            }
+            free(proof);
+        }
+        ok(accepted, "wrapper client proof accepted by independent libscram server verifier");
+
+        // --- bonus: client verifies the server's final signature via the wrapper ---
+        char* server_final = accepted ? build_server_final_message(server) : nullptr;
+        bool server_verified = server_final
+            && pg_scram_verify_server_final(client, server_final, strlen(server_final));
+        ok(server_verified, "wrapper verifies server-final signature (mutual auth round trip)");
+
+        free(server_final);
+        free_scram_state(server);
+        pg_scram_free(client);
+    }
 
     return exit_status();
 }

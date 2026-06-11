@@ -1,6 +1,11 @@
 #include "PgSQL_Backend_Protocol.h"
 #include <cstring>
+#include <cstdlib>
+#include <cstdio>
+#include <new>
+#include <string>
 #include <openssl/md5.h>   // project-existing one-shot MD5(); also pulls MD5_DIGEST_LENGTH
+#include "scram.h"         // vendored libscram (same include used by PgSQL_Data_Stream.h)
 
 static void put_be32(unsigned char* p, uint32_t v) {
     p[0] = (v >> 24) & 0xff;
@@ -79,4 +84,91 @@ void pg_build_md5(char out[36], const char* user, const char* password, const un
         memcpy(out, "md5", 3);
         memcpy(out + 3, outer_hex, 33);   // 32 hex chars + NUL -> out[3..35]
     }
+}
+
+// --- SCRAM-SHA-256 client exchange (thin wrappers over libscram) ---
+
+// Owns the libscram ScramState plus a cached PgCredentials and the message strings
+// libscram hands back as malloc'd C-strings. Holding the latest message of each kind
+// keeps the returned pointers valid for the caller (the libscram functions otherwise
+// leak the strings to their caller) and lets the destructor free them.
+struct PgSQL_Scram_State {
+    ScramState* st = nullptr;
+    PgCredentials creds{};   // value-initialized -> all fields zeroed, has_scram_keys=false
+    char* client_first = nullptr;
+    char* client_final = nullptr;
+};
+
+PgSQL_Scram_State* pg_scram_new() {
+    PgSQL_Scram_State* s = new (std::nothrow) PgSQL_Scram_State();
+    if (s == nullptr) return nullptr;
+    s->st = scram_state_init();
+    if (s->st == nullptr) { delete s; return nullptr; }
+    return s;
+}
+
+void pg_scram_free(PgSQL_Scram_State* s) {
+    if (s == nullptr) return;
+    if (s->st) free_scram_state(s->st);   // frees ScramState's owned buffers + the struct
+    free(s->client_first);
+    free(s->client_final);
+    delete s;
+}
+
+const char* pg_scram_client_first(PgSQL_Scram_State* s, bool channel_binding) {
+    if (s == nullptr || s->st == nullptr) return nullptr;
+    // Channel binding ('p'/'y' gs2 flag) is a separate task; this wrapper only does
+    // plain SCRAM-SHA-256 with gs2 flag 'n' ("n,," header).
+    if (channel_binding) return nullptr;
+    scram_reset_error();
+    // libscram emits "n,,n=,r=<nonce>" and stashes client_nonce / client_first_message_bare
+    // ("n=,r=<nonce>") into the ScramState for the later proof computation.
+    char* msg = build_client_first_message(s->st);
+    if (msg == nullptr) return nullptr;
+    free(s->client_first);
+    s->client_first = msg;
+    return s->client_first;
+}
+
+const char* pg_scram_client_final(PgSQL_Scram_State* s, const char* password,
+                                  const char* server_first, size_t server_first_len) {
+    if (s == nullptr || s->st == nullptr || password == nullptr || server_first == nullptr)
+        return nullptr;
+    scram_reset_error();
+
+    // read_server_first_message() mutates its input (read_attr_value writes NULs and
+    // advances), so feed it a private, NUL-terminated, mutable copy.
+    std::string sf(server_first, server_first_len);
+
+    char* server_nonce = nullptr;
+    char* salt = nullptr;
+    int saltlen = 0;
+    int iterations = 0;
+    if (!read_server_first_message(s->st, &sf[0], &server_nonce, &salt, &saltlen, &iterations)) {
+        free(salt);
+        return nullptr;
+    }
+
+    // The password is the SCRAM plaintext secret; libscram derives keys ad-hoc.
+    // has_scram_keys stays false (value-initialized) so the plaintext path is used.
+    snprintf(s->creds.passwd, sizeof(s->creds.passwd), "%s", password);
+
+    char* msg = build_client_final_message(s->st, &s->creds, server_nonce, salt, saltlen, iterations);
+    // server_nonce / salt point into the parsed buffers: server_nonce into the local
+    // `sf` copy (no free), salt is malloc'd by read_server_first_message (must free).
+    free(salt);
+    if (msg == nullptr) return nullptr;
+    free(s->client_final);
+    s->client_final = msg;
+    return s->client_final;
+}
+
+bool pg_scram_verify_server_final(PgSQL_Scram_State* s, const char* server_final, size_t len) {
+    if (s == nullptr || s->st == nullptr || server_final == nullptr) return false;
+    scram_reset_error();
+    // read_server_final_message() mutates its input; use a private NUL-terminated copy.
+    std::string sf(server_final, len);
+    char ServerSignature[32];   // SCRAM_KEY_LEN
+    if (!read_server_final_message(&sf[0], ServerSignature)) return false;
+    return verify_server_signature(s->st, &s->creds, ServerSignature);
 }
