@@ -12,6 +12,8 @@
 #include <unistd.h>
 #include <errno.h>
 
+#include "openssl/x509v3.h" // X509_VERIFY_PARAM_set1_host / set_hostflags (native backend TLS)
+
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
@@ -239,6 +241,13 @@ PgSQL_Connection::~PgSQL_Connection() {
 		if (fd >= 0) {
 			::close(fd);
 			fd = -1;
+		}
+		// native_ssl_ctx is normally freed at SSL_new() time (the SSL holds a ref) or
+		// in native_teardown(); free here as a safety net if a connection is destroyed
+		// before either ran. The SSL* itself lives on myds and is freed by ~PgSQL_Data_Stream().
+		if (native_ssl_ctx) {
+			SSL_CTX_free(native_ssl_ctx);
+			native_ssl_ctx = nullptr;
 		}
 	}
 	if (query_result) {
@@ -1268,7 +1277,83 @@ static inline uint32_t pg_read_be32(const unsigned char* p) {
 // Flush native_outbuf via non-blocking send(). Consumes the bytes that were
 // written; on EAGAIN leaves the remainder buffered and returns true (caller must
 // keep waiting for writable). Returns false on a fatal socket error.
+// Drain native_ssl_outbuf (pending raw ciphertext) to the fd. On EAGAIN leaves the
+// remainder buffered and sets would_block=true. Returns false only on a fatal error.
+bool PgSQL_Connection::native_ssl_pump_wbio_to_fd(bool& would_block) {
+	would_block = false;
+	// First, pull any freshly produced ciphertext out of wbio into native_ssl_outbuf.
+	char buf[MY_SSL_BUFFER];
+	for (;;) {
+		int n = BIO_read(myds->wbio_ssl, buf, sizeof(buf));
+		if (n > 0) {
+			native_ssl_outbuf.append(buf, (size_t)n);
+			continue;
+		}
+		// No more bytes pending; BIO_should_retry distinguishes empty from error.
+		if (!BIO_should_retry(myds->wbio_ssl)) {
+			// For a mem BIO an "empty" read also returns !should_retry; that is normal.
+		}
+		break;
+	}
+	// Now flush native_ssl_outbuf to the socket.
+	while (!native_ssl_outbuf.empty()) {
+		ssize_t n = ::send(fd, native_ssl_outbuf.data(), native_ssl_outbuf.size(), 0);
+		if (n > 0) {
+			native_ssl_outbuf.erase(0, (size_t)n);
+			continue;
+		}
+		if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+			would_block = true;
+			return true; // partial: keep the rest buffered, wait for writable
+		}
+		if (n < 0 && errno == EINTR) {
+			continue;
+		}
+		return false; // fatal
+	}
+	return true;
+}
+
 bool PgSQL_Connection::native_flush_outbuf() {
+	// Encrypted path: native_outbuf holds *plaintext* protocol bytes. Feed them to
+	// SSL_write, which produces ciphertext into wbio_ssl, then drain wbio to the fd.
+	if (myds && myds->encrypted && myds->ssl) {
+		// If there is leftover ciphertext from a previous partial socket write, flush
+		// it first before producing more (preserves ordering).
+		if (!native_ssl_outbuf.empty()) {
+			bool wb = false;
+			if (!native_ssl_pump_wbio_to_fd(wb)) return false;
+			if (wb) return true; // still can't drain; wait for writable
+		}
+		while (!native_outbuf.empty()) {
+			ERR_clear_error();
+			int w = SSL_write(myds->ssl, native_outbuf.data(), (int)native_outbuf.size());
+			if (w > 0) {
+				native_outbuf.erase(0, (size_t)w);
+				bool wb = false;
+				if (!native_ssl_pump_wbio_to_fd(wb)) return false;
+				if (wb) return true; // socket full; remaining plaintext stays buffered
+				continue;
+			}
+			int err = SSL_get_error(myds->ssl, w);
+			if (err == SSL_ERROR_WANT_WRITE || err == SSL_ERROR_WANT_READ) {
+				// SSL needs to do I/O before it can accept more plaintext. Drain
+				// whatever ciphertext it produced and wait for the socket.
+				bool wb = false;
+				if (!native_ssl_pump_wbio_to_fd(wb)) return false;
+				return true; // not fatal; resume on next event
+			}
+			// SSL_ERROR_SYSCALL / SSL / ZERO_RETURN -> fatal
+			while (ERR_get_error()) { /* drain */ }
+			return false;
+		}
+		// All plaintext consumed; make sure any trailing ciphertext is flushed.
+		bool wb = false;
+		if (!native_ssl_pump_wbio_to_fd(wb)) return false;
+		return true;
+	}
+
+	// Plaintext path (1.6a): native_outbuf holds raw bytes for the socket.
 	while (!native_outbuf.empty()) {
 		ssize_t n = ::send(fd, native_outbuf.data(), native_outbuf.size(), 0);
 		if (n > 0) {
@@ -1298,6 +1383,27 @@ void PgSQL_Connection::native_teardown() {
 	}
 	native_framer.reset();
 	native_outbuf.clear();
+	native_ssl_outbuf.clear();
+	// The SSL object (if any) lives on myds and is freed by ~PgSQL_Data_Stream();
+	// it uses mem BIOs so SSL_free()'s shutdown writes harmlessly into a mem buffer
+	// even though the fd is now closed. We only own the per-connection SSL_CTX here.
+	if (native_ssl_ctx) {
+		SSL_CTX_free(native_ssl_ctx);
+		native_ssl_ctx = nullptr;
+	}
+}
+
+// Defined out-of-line (not in the header) because PgSQL_Data_Stream is an incomplete
+// type at the header's accessor declarations. Native TLS reports SSL-in-use once the
+// handshake handed the SSL* to myds; the libpq path defers to PQsslInUse().
+int PgSQL_Connection::get_pg_ssl_in_use() {
+	if (native_mode) return (myds && myds->encrypted && myds->ssl) ? 1 : 0;
+	return PQsslInUse(pgsql_conn);
+}
+
+SSL* PgSQL_Connection::get_pg_ssl_object() {
+	if (native_mode) return (myds && myds->encrypted) ? myds->ssl : nullptr;
+	return (SSL*)PQsslStruct(pgsql_conn, "OpenSSL");
 }
 
 // Capability gap (GSSAPI/SSPI/SCRAM-SHA-256-PLUS-only/unhandled auth): we cannot
@@ -1390,7 +1496,23 @@ void PgSQL_Connection::native_connect_start() {
 	native_st = PG_Native_Conn_St::TCP_CONNECTING;
 	native_framer.reset();
 	native_outbuf.clear();
+	native_ssl_outbuf.clear();
 	native_connected = false;
+
+	// Decide whether this backend wants TLS, and with which verification policy.
+	// The SSL param source is the SAME as the libpq path (get_Server_SSL_Params /
+	// the pgsql_thread___ssl_p2s_* fallbacks). There is currently no per-server
+	// `sslmode` column: the libpq path uses sslmode='require' whenever use_ssl is
+	// set (encryption WITHOUT certificate verification), so to MATCH libpq exactly
+	// the native default is REQUIRE (SSL_VERIFY_NONE). VERIFY_CA / VERIFY_FULL are
+	// implemented and wired through native_create_client_ssl_ctx(); they are not
+	// selectable until a config knob is added (flagged for Task 1.8). We never
+	// default to a *weaker* policy than the config asks for.
+	native_ssl_requested = (parent->use_ssl != 0);
+	native_ssl_mode = native_ssl_requested
+		? PG_Native_SSL_Mode::REQUIRE
+		: PG_Native_SSL_Mode::DISABLE;
+
 	// wait for writable = TCP connect completion
 	async_exit_status = PG_EVENT_WRITE;
 }
@@ -1412,25 +1534,135 @@ void PgSQL_Connection::native_connect_cont(short event) {
 			native_teardown();
 			return; // error present -> handler -> ASYNC_CONNECT_FAILED
 		}
-		// Build the StartupMessage.
-		unsigned char startup[2048];
-		size_t slen2 = 0;
-		const char* user = userinfo->username ? userinfo->username : "";
-		const char* db = (userinfo->dbname && userinfo->dbname[0]) ? userinfo->dbname : user;
-		if (!pg_build_startup(startup, &slen2, sizeof(startup), user, db)) {
+		if (native_ssl_requested) {
+			// TLS path: negotiate SSLRequest BEFORE the StartupMessage. Send the
+			// 8-byte SSLRequest, then read the single-byte 'S'/'N' reply.
+			unsigned char req[8];
+			pg_build_ssl_request(req);
+			native_outbuf.assign((const char*)req, sizeof(req));
+			if (!native_send_or_buffer(PG_Native_Conn_St::SSL_READ_REPLY)) {
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(SSLRequest) failed", false);
+				native_teardown();
+				return;
+			}
+			// native_send_or_buffer set native_st (SSL_READ_REPLY or SEND_STARTUP
+			// to flush the rest) and async_exit_status. Note: the SSLRequest is sent
+			// in the clear; encryption begins only after the handshake completes.
+			return;
+		}
+		// Plaintext path (1.6a): send the StartupMessage immediately.
+		if (!native_send_startup()) {
+			native_teardown();
+			return;
+		}
+		return;
+	}
+
+	case PG_Native_Conn_St::SSL_READ_REPLY: {
+		// The SSLRequest reply is exactly one byte, sent in the clear: 'S' = server
+		// accepts SSL, 'N' = server refuses. Read it raw from the fd.
+		unsigned char reply = 0;
+		ssize_t n = ::recv(fd, &reply, 1, 0);
+		if (n == 0) {
+			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "backend closed during SSLRequest", false);
+			native_teardown();
+			return;
+		}
+		if (n < 0) {
+			if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+				async_exit_status = PG_EVENT_READ;
+				return;
+			}
+			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "recv(SSLRequest reply) failed", false);
+			native_teardown();
+			return;
+		}
+		if (reply == 'S') {
+			// Server accepts SSL: set up the client SSL object and begin the handshake.
+			if (!native_create_client_ssl_ctx()) {
+				// error_info already set; ctx creation failure is a real error.
+				native_teardown();
+				return;
+			}
+			myds->ssl = SSL_new(native_ssl_ctx);
+			if (myds->ssl == nullptr) {
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "SSL_new() failed", false);
+				native_teardown();
+				return;
+			}
+			// The SSL holds a reference to the ctx now; drop our ctx reference so we
+			// never leak it (teardown's SSL_CTX_free becomes a no-op after this).
+			SSL_CTX_free(native_ssl_ctx);
+			native_ssl_ctx = nullptr;
+
+			SSL_set_connect_state(myds->ssl); // client role
+			// verify-full: enforce hostname verification at the TLS layer.
+			if (native_ssl_mode == PG_Native_SSL_Mode::VERIFY_FULL) {
+				const char* host = (parent->address && parent->address[0]) ? parent->address : native_host.c_str();
+				X509_VERIFY_PARAM* vp = SSL_get0_param(myds->ssl);
+				X509_VERIFY_PARAM_set_hostflags(vp, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+				if (X509_VERIFY_PARAM_set1_host(vp, host, 0) != 1) {
+					set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "failed to set TLS verify host", false);
+					native_teardown();
+					return;
+				}
+			}
+			// SNI: present the backend hostname (best-effort; ignored for IP literals).
+			if (parent->address && parent->address[0]) {
+				SSL_set_tlsext_host_name(myds->ssl, parent->address);
+			}
+			myds->encrypted = true;
+			myds->rbio_ssl = BIO_new(BIO_s_mem());
+			myds->wbio_ssl = BIO_new(BIO_s_mem());
+			if (myds->rbio_ssl == nullptr || myds->wbio_ssl == nullptr) {
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_OUT_OF_MEMORY), "BIO_new() failed", false);
+				native_teardown();
+				return;
+			}
+			SSL_set_bio(myds->ssl, myds->rbio_ssl, myds->wbio_ssl);
+			native_st = PG_Native_Conn_St::SSL_HANDSHAKE;
+			// Kick the handshake immediately (it will emit ClientHello into wbio).
+			native_connect_cont(event);
+			return;
+		}
+		if (reply == 'N') {
+			// Server refuses SSL. Honor the configured policy:
+			//  - REQUIRE / VERIFY_CA / VERIFY_FULL: SSL is mandatory -> hard error.
+			//    (We never silently downgrade to plaintext when SSL was required.)
+			//  - (allow/prefer would fall back to plaintext here, but those modes are
+			//    not currently selectable; use_ssl=1 always maps to REQUIRE.)
 			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE),
-				"startup message too large", false);
+				"server does not support SSL, but SSL was required", false);
+			proxy_error("Native connect: backend %s:%d refused SSL (SSLRequest -> 'N'); SSL is required\n",
+				parent->address, parent->port);
 			native_teardown();
 			return;
 		}
-		native_outbuf.assign((const char*)startup, slen2);
-		// After the StartupMessage flushes, wait for the AuthenticationRequest.
-		if (!native_send_or_buffer(PG_Native_Conn_St::AUTH)) {
-			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(startup) failed", false);
+		// Any other byte is a protocol violation (or a pre-auth ErrorResponse 'E',
+		// which a server emits e.g. when it cannot fork a backend). Treat as fatal.
+		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_PROTOCOL_VIOLATION),
+			"unexpected SSLRequest reply byte", false);
+		proxy_error("Native connect: backend %s:%d returned unexpected SSLRequest reply 0x%02x\n",
+			parent->address, parent->port, reply);
+		native_teardown();
+		return;
+	}
+
+	case PG_Native_Conn_St::SSL_HANDSHAKE: {
+		int hs = native_drive_ssl_handshake();
+		if (hs < 0) {
+			// error_info + teardown already done inside the helper.
+			return;
+		}
+		if (hs == 0) {
+			// async_exit_status already set (WANT_READ/WANT_WRITE). Wait.
+			return;
+		}
+		// Handshake complete -> send the StartupMessage, now over TLS.
+		if (!native_send_startup()) {
 			native_teardown();
 			return;
 		}
-		// native_send_or_buffer already set native_st and async_exit_status.
 		return;
 	}
 
@@ -1441,7 +1673,7 @@ void PgSQL_Connection::native_connect_cont(short event) {
 			native_teardown();
 			return;
 		}
-		if (!native_outbuf.empty()) { async_exit_status = PG_EVENT_WRITE; return; }
+		if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) { async_exit_status = PG_EVENT_WRITE; return; }
 		// Drained: resume where the partial send left off (always a READ wait).
 		native_st = native_st_after_send;
 		async_exit_status = PG_EVENT_READ;
@@ -1471,11 +1703,282 @@ void PgSQL_Connection::native_connect_cont(short event) {
 	}
 }
 
+bool PgSQL_Connection::native_send_startup() {
+	unsigned char startup[2048];
+	size_t slen2 = 0;
+	const char* user = userinfo->username ? userinfo->username : "";
+	const char* db = (userinfo->dbname && userinfo->dbname[0]) ? userinfo->dbname : user;
+	if (!pg_build_startup(startup, &slen2, sizeof(startup), user, db)) {
+		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE),
+			"startup message too large", false);
+		return false;
+	}
+	native_outbuf.assign((const char*)startup, slen2);
+	// After the StartupMessage flushes, wait for the AuthenticationRequest. On the
+	// TLS path native_send_or_buffer routes the plaintext through SSL_write.
+	if (!native_send_or_buffer(PG_Native_Conn_St::AUTH)) {
+		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(startup) failed", false);
+		return false;
+	}
+	return true;
+}
+
+// Create a per-connection client SSL_CTX (TLS_client_method()) configured from the
+// SAME backend SSL param source as the libpq conninfo path: per-server params from
+// PgHGM->get_Server_SSL_Params(), with the pgsql_thread___ssl_p2s_* globals as the
+// fallback. Sets the verify mode from native_ssl_mode. Stores the ctx in
+// native_ssl_ctx and returns it; returns nullptr (with error_info set) on failure.
+//
+// SECURITY NOTE: ProxySQL's global GloVars.global.ssl_ctx is a TLS_server_method()
+// context (src/main.cpp) and MUST NOT be used for the backend client handshake.
+SSL_CTX* PgSQL_Connection::native_create_client_ssl_ctx() {
+	SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
+	if (ctx == nullptr) {
+		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_OUT_OF_MEMORY), "SSL_CTX_new(client) failed", false);
+		return nullptr;
+	}
+	// TLS 1.2 floor (match-or-exceed the server ctx; never negotiate legacy TLS).
+	if (!SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION)) {
+		SSL_CTX_free(ctx);
+		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "SSL_CTX_set_min_proto_version failed", false);
+		return nullptr;
+	}
+
+	// Resolve backend SSL params (same source/order as the libpq path ~990-1024).
+	std::string ca, cert, key, crl, crldir;
+	std::unique_ptr<PgSQLServers_SslParams> ssl_params {
+		PgHGM->get_Server_SSL_Params(parent->address, parent->port, userinfo->username)
+	};
+	if (ssl_params != nullptr) {
+		ca     = ssl_params->ssl_ca;
+		cert   = ssl_params->ssl_cert;
+		key    = ssl_params->ssl_key;
+		crl    = ssl_params->ssl_crl;
+		crldir = ssl_params->ssl_crlpath;
+	} else {
+		if (pgsql_thread___ssl_p2s_ca)      ca     = pgsql_thread___ssl_p2s_ca;
+		if (pgsql_thread___ssl_p2s_cert)    cert   = pgsql_thread___ssl_p2s_cert;
+		if (pgsql_thread___ssl_p2s_key)     key    = pgsql_thread___ssl_p2s_key;
+		if (pgsql_thread___ssl_p2s_crl)     crl    = pgsql_thread___ssl_p2s_crl;
+		if (pgsql_thread___ssl_p2s_crlpath) crldir = pgsql_thread___ssl_p2s_crlpath;
+	}
+
+	// Trust store (CA): needed for VERIFY_CA / VERIFY_FULL. Loaded whenever present
+	// so a future mode switch does not require reconnect logic changes.
+	if (!ca.empty()) {
+		if (SSL_CTX_load_verify_locations(ctx, ca.c_str(), nullptr) != 1) {
+			SSL_CTX_free(ctx);
+			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "failed to load sslrootcert (CA)", false);
+			proxy_error("Native TLS: SSL_CTX_load_verify_locations(%s) failed for %s:%d\n",
+				ca.c_str(), parent->address, parent->port);
+			return nullptr;
+		}
+	} else if (native_ssl_mode == PG_Native_SSL_Mode::VERIFY_CA ||
+	           native_ssl_mode == PG_Native_SSL_Mode::VERIFY_FULL) {
+		// Verification requested but no CA available: fail closed rather than
+		// silently downgrading to no verification.
+		SSL_CTX_free(ctx);
+		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE),
+			"sslmode requires verification but no CA (sslrootcert) configured", false);
+		return nullptr;
+	}
+
+	// Client certificate + key (mutual TLS), if configured.
+	if (!cert.empty()) {
+		if (SSL_CTX_use_certificate_chain_file(ctx, cert.c_str()) != 1) {
+			SSL_CTX_free(ctx);
+			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "failed to load sslcert (client cert)", false);
+			proxy_error("Native TLS: failed to load client certificate %s for %s:%d\n",
+				cert.c_str(), parent->address, parent->port);
+			return nullptr;
+		}
+	}
+	if (!key.empty()) {
+		if (SSL_CTX_use_PrivateKey_file(ctx, key.c_str(), SSL_FILETYPE_PEM) != 1) {
+			SSL_CTX_free(ctx);
+			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "failed to load sslkey (client key)", false);
+			proxy_error("Native TLS: failed to load client private key %s for %s:%d\n",
+				key.c_str(), parent->address, parent->port);
+			return nullptr;
+		}
+		if (SSL_CTX_check_private_key(ctx) != 1) {
+			SSL_CTX_free(ctx);
+			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "client cert/key mismatch", false);
+			return nullptr;
+		}
+	}
+
+	// CRL (revocation), if configured. Enable CRL checking on the store.
+	if (!crl.empty() || !crldir.empty()) {
+		X509_STORE* store = SSL_CTX_get_cert_store(ctx);
+		if (store) {
+			if (X509_STORE_load_locations(store,
+					crl.empty() ? nullptr : crl.c_str(),
+					crldir.empty() ? nullptr : crldir.c_str()) != 1) {
+				SSL_CTX_free(ctx);
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "failed to load sslcrl", false);
+				proxy_error("Native TLS: failed to load CRL for %s:%d\n", parent->address, parent->port);
+				return nullptr;
+			}
+			X509_STORE_set_flags(store, X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL);
+		}
+	}
+
+	// Verification mode -> SSL_VERIFY_*. We mirror libpq sslmode semantics:
+	//   REQUIRE      -> SSL_VERIFY_NONE (encrypt, do NOT verify)  [current default]
+	//   VERIFY_CA    -> SSL_VERIFY_PEER (verify chain to CA)
+	//   VERIFY_FULL  -> SSL_VERIFY_PEER (+ hostname, set on the SSL object)
+	// Note: SSL_VERIFY_NONE on a client still completes the handshake; the cert is
+	// received but not checked. This matches libpq's `require`. Hostname enforcement
+	// for VERIFY_FULL is applied via X509_VERIFY_PARAM_set1_host on the SSL object.
+	switch (native_ssl_mode) {
+		case PG_Native_SSL_Mode::VERIFY_CA:
+		case PG_Native_SSL_Mode::VERIFY_FULL:
+			SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
+			break;
+		case PG_Native_SSL_Mode::REQUIRE:
+		case PG_Native_SSL_Mode::DISABLE:
+		default:
+			SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, nullptr);
+			break;
+	}
+
+	native_ssl_ctx = ctx;
+	return ctx;
+}
+
+// Drive the TLS client handshake over the raw fd using the mem-BIO model. Returns
+// 1 = complete, 0 = need more I/O (async_exit_status set, caller returns), -1 = fatal
+// (error_info set + teardown done). Non-blocking: WANT_READ/WANT_WRITE map to
+// PG_EVENT_READ / PG_EVENT_WRITE. We own the raw recv()/send() here (the data
+// stream's read_from_net/write_to_net assume the steady state, not connect).
+int PgSQL_Connection::native_drive_ssl_handshake() {
+	// 1) Flush any ciphertext we already produced (e.g. ClientHello) to the socket.
+	{
+		bool wb = false;
+		if (!native_ssl_pump_wbio_to_fd(wb)) {
+			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send() during TLS handshake failed", false);
+			native_teardown();
+			return -1;
+		}
+		if (wb) { async_exit_status = PG_EVENT_WRITE; return 0; }
+	}
+
+	for (;;) {
+		ERR_clear_error();
+		int ret = SSL_do_handshake(myds->ssl);
+		if (ret == 1) {
+			// Handshake complete. For VERIFY_CA / VERIFY_FULL, confirm the result.
+			// (For VERIFY_FULL the hostname check is folded into SSL_get_verify_result
+			// because we set the verify host on the SSL object before the handshake.)
+			if (native_ssl_mode == PG_Native_SSL_Mode::VERIFY_CA ||
+			    native_ssl_mode == PG_Native_SSL_Mode::VERIFY_FULL) {
+				X509* peer = SSL_get_peer_certificate(myds->ssl);
+				if (peer == nullptr) {
+					set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE),
+						"TLS verification required but server presented no certificate", false);
+					native_teardown();
+					return -1;
+				}
+				X509_free(peer);
+				long vr = SSL_get_verify_result(myds->ssl);
+				if (vr != X509_V_OK) {
+					char msg[256];
+					snprintf(msg, sizeof(msg), "TLS certificate verification failed: %s",
+						X509_verify_cert_error_string(vr));
+					set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), msg, false);
+					proxy_error("Native TLS: %s for %s:%d\n", msg, parent->address, parent->port);
+					native_teardown();
+					return -1;
+				}
+			}
+			// Drain any final handshake bytes to the socket.
+			bool wb = false;
+			if (!native_ssl_pump_wbio_to_fd(wb)) {
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send() finishing TLS handshake failed", false);
+				native_teardown();
+				return -1;
+			}
+			if (wb) { async_exit_status = PG_EVENT_WRITE; return 0; }
+			return 1;
+		}
+
+		int err = SSL_get_error(myds->ssl, ret);
+		if (err == SSL_ERROR_WANT_WRITE) {
+			bool wb = false;
+			if (!native_ssl_pump_wbio_to_fd(wb)) {
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send() during TLS handshake failed", false);
+				native_teardown();
+				return -1;
+			}
+			async_exit_status = PG_EVENT_WRITE;
+			return 0;
+		}
+		if (err == SSL_ERROR_WANT_READ) {
+			// First, push out whatever we produced, then read more ciphertext from fd.
+			bool wb = false;
+			if (!native_ssl_pump_wbio_to_fd(wb)) {
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send() during TLS handshake failed", false);
+				native_teardown();
+				return -1;
+			}
+			if (wb) { async_exit_status = PG_EVENT_WRITE; return 0; }
+			unsigned char cipher[MY_SSL_BUFFER];
+			ssize_t n = ::recv(fd, cipher, sizeof(cipher), 0);
+			if (n == 0) {
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "backend closed during TLS handshake", false);
+				native_teardown();
+				return -1;
+			}
+			if (n < 0) {
+				if (errno == EAGAIN || errno == EWOULDBLOCK) { async_exit_status = PG_EVENT_READ; return 0; }
+				if (errno == EINTR) { async_exit_status = PG_EVENT_READ; return 0; }
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "recv() during TLS handshake failed", false);
+				native_teardown();
+				return -1;
+			}
+			unsigned char* src = cipher;
+			int len = (int)n;
+			while (len > 0) {
+				int w = BIO_write(myds->rbio_ssl, src, len);
+				if (w <= 0) {
+					if (!BIO_should_retry(myds->rbio_ssl)) {
+						set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "BIO_write during TLS handshake failed", false);
+						native_teardown();
+						return -1;
+					}
+					continue;
+				}
+				src += w;
+				len -= w;
+			}
+			// Loop and retry SSL_do_handshake with the new ciphertext.
+			continue;
+		}
+		// SSL_ERROR_SSL / SSL_ERROR_SYSCALL / ZERO_RETURN -> fatal handshake error.
+		{
+			unsigned long e = ERR_peek_last_error();
+			char ebuf[256] = {0};
+			if (e) ERR_error_string_n(e, ebuf, sizeof(ebuf));
+			char msg[320];
+			snprintf(msg, sizeof(msg), "TLS handshake failed%s%s", e ? ": " : "", e ? ebuf : "");
+			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), msg, false);
+			proxy_error("Native TLS: handshake to %s:%d failed (SSL_get_error=%d): %s\n",
+				parent->address, parent->port, err, ebuf[0] ? ebuf : "(no detail)");
+			while (ERR_get_error()) { /* drain */ }
+			native_teardown();
+			return -1;
+		}
+	}
+}
+
 bool PgSQL_Connection::native_send_or_buffer(PG_Native_Conn_St resume_st) {
 	if (!native_flush_outbuf()) {
 		return false;
 	}
-	if (!native_outbuf.empty()) {
+	// "Not fully sent" means either plaintext protocol bytes remain (native_outbuf)
+	// or, on the encrypted path, ciphertext is still pending the socket (native_ssl_outbuf).
+	if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) {
 		// Couldn't flush it all: park in SEND_STARTUP, resume in resume_st later.
 		native_st_after_send = resume_st;
 		native_st = PG_Native_Conn_St::SEND_STARTUP;
@@ -1489,6 +1992,71 @@ bool PgSQL_Connection::native_send_or_buffer(PG_Native_Conn_St resume_st) {
 }
 
 int PgSQL_Connection::native_recv_into_framer() {
+	// Encrypted path: read ciphertext from fd into rbio, then SSL_read plaintext
+	// protocol bytes out and feed them to the framer. Mirrors the BIO-mem decrypt
+	// loop of PgSQL_Data_Stream::read_from_net(), but drives the raw fd directly.
+	if (myds && myds->encrypted && myds->ssl) {
+		bool got = false;
+		unsigned char cipher[MY_SSL_BUFFER];
+		// Pull whatever ciphertext is available from the socket into rbio. A single
+		// recv() per call is sufficient: SSL_read below decrypts everything buffered,
+		// and the caller re-enters on the next READ event for more.
+		ssize_t n = ::recv(fd, cipher, sizeof(cipher), 0);
+		if (n == 0) {
+			return -1; // peer closed
+		}
+		if (n < 0) {
+			if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				// Nothing new from the socket. There may still be buffered plaintext
+				// inside the SSL record layer; fall through to drain it.
+			} else if (errno == EINTR) {
+				return 0; // retry on next event
+			} else {
+				return -1; // fatal
+			}
+		} else {
+			// Feed all received ciphertext into rbio (BIO_write of a mem BIO accepts
+			// the whole buffer, but loop defensively in case of a short write).
+			unsigned char* src = cipher;
+			int len = (int)n;
+			while (len > 0) {
+				int w = BIO_write(myds->rbio_ssl, src, len);
+				if (w <= 0) {
+					if (!BIO_should_retry(myds->rbio_ssl)) return -1;
+					continue;
+				}
+				src += w;
+				len -= w;
+			}
+		}
+		// Decrypt as much as is available into the framer.
+		for (;;) {
+			unsigned char plain[MY_SSL_BUFFER];
+			ERR_clear_error();
+			int r = SSL_read(myds->ssl, plain, sizeof(plain));
+			if (r > 0) {
+				native_framer.feed(plain, (size_t)r);
+				got = true;
+				continue;
+			}
+			int err = SSL_get_error(myds->ssl, r);
+			if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+				break; // need more ciphertext from the socket; wait for next event
+			}
+			if (err == SSL_ERROR_ZERO_RETURN) {
+				// Clean TLS close. If we got nothing this call it's an EOF; otherwise
+				// surface the data we did read and let the next call see the close.
+				while (ERR_get_error()) { /* drain */ }
+				return got ? 1 : -1;
+			}
+			// SSL_ERROR_SYSCALL / SSL -> fatal
+			while (ERR_get_error()) { /* drain */ }
+			return -1;
+		}
+		return got ? 1 : 0;
+	}
+
+	// Plaintext path (1.6a).
 	unsigned char tmp[16384];
 	bool got = false;
 	for (;;) {

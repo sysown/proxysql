@@ -514,8 +514,9 @@ public:
 	inline int get_pg_connection_used_password() { return PQconnectionUsedPassword(pgsql_conn); }
 	inline int get_pg_connection_used_gssapi() { return PQconnectionUsedGSSAPI(pgsql_conn); }
 	inline int get_pg_client_encoding() { return PQclientEncoding(pgsql_conn); }
-	// No-TLS sub-task (1.6a): native connections are always plaintext.
-	inline int get_pg_ssl_in_use() { return native_mode ? 0 : PQsslInUse(pgsql_conn); }
+	// Native TLS (1.6b): SSL is in use once the handshake handed the SSL* to myds.
+	// Out-of-line in PgSQL_Connection.cpp because PgSQL_Data_Stream is incomplete here.
+	int get_pg_ssl_in_use();
 	inline ConnStatusType get_pg_connection_status() {
 		if (native_mode) return native_connected ? CONNECTION_OK : CONNECTION_BAD;
 		return PQstatus(pgsql_conn);
@@ -536,7 +537,8 @@ public:
 	inline const char* get_pg_error_message() {
 		return native_mode ? (error_info.message.empty() ? "" : error_info.message.c_str()) : PQerrorMessage(pgsql_conn);
 	}
-	inline SSL* get_pg_ssl_object() { return native_mode ? nullptr : (SSL*)PQsslStruct(pgsql_conn, "OpenSSL"); }
+	// Out-of-line in PgSQL_Connection.cpp (PgSQL_Data_Stream incomplete here).
+	SSL* get_pg_ssl_object();
 	inline const char* get_pg_parameter_status(const char* param) {
 		if (native_mode) {
 			if (param == nullptr) return nullptr;
@@ -667,6 +669,9 @@ public:
 	// All of the following members are only meaningful when native_mode == true.
 	enum class PG_Native_Conn_St {
 		TCP_CONNECTING,   // non-blocking connect() in flight, waiting for writable
+		SSL_SEND_REQUEST, // socket connected, SSLRequest (8 bytes) to flush (TLS only)
+		SSL_READ_REPLY,   // waiting for the single-byte 'S'/'N' SSLRequest reply
+		SSL_HANDSHAKE,    // driving the OpenSSL client handshake over the raw fd
 		SEND_STARTUP,     // socket connected, StartupMessage (and pending bytes) to flush
 		AUTH,             // exchanging Authentication* / Password / SASL messages
 		STARTUP_TAIL,     // consuming ParameterStatus/BackendKeyData until ReadyForQuery
@@ -689,6 +694,32 @@ public:
 	int native_backend_secret = 0;                   // BackendKeyData secret key
 	char native_txn_status = 'I';                    // ReadyForQuery status byte ('I'/'T'/'E')
 
+	// --- Native backend TLS (Task 1.6b) ---
+	// native_ssl_requested is set in native_connect_start() when SSL is wanted for
+	// this backend (parent->use_ssl). When true the handshake takes the
+	// SSL_SEND_REQUEST -> SSL_READ_REPLY -> SSL_HANDSHAKE path before SEND_STARTUP,
+	// and all subsequent native I/O is funneled through SSL_read/SSL_write against
+	// myds->ssl (BIO-mem model, pumped to/from `fd` by native_send_or_buffer /
+	// native_recv_into_framer). When false the plaintext 1.6a path is used verbatim.
+	bool native_ssl_requested = false;
+	// SSL verification mode derived from the backend config. Mirrors the libpq
+	// sslmode semantics so native TLS honors the same policy as the libpq path.
+	enum class PG_Native_SSL_Mode {
+		DISABLE,      // no SSL at all (native_ssl_requested == false)
+		REQUIRE,      // encrypt, do NOT verify (matches libpq sslmode=require)
+		VERIFY_CA,    // encrypt + verify chain to CA, no hostname check
+		VERIFY_FULL   // encrypt + verify chain + hostname (X509 host check)
+	};
+	PG_Native_SSL_Mode native_ssl_mode = PG_Native_SSL_Mode::DISABLE;
+	// Pending raw ciphertext awaiting send() to the fd (connect phase only). When
+	// SSL_write/SSL_do_handshake produces bytes into wbio_ssl faster than the socket
+	// drains, the remainder parks here so the next writable event flushes it. Kept
+	// distinct from native_outbuf (which holds *plaintext* protocol bytes).
+	std::string native_ssl_outbuf;
+	// Owned per-connection client SSL_CTX (TLS_client_method()). Freed in
+	// native_teardown() and the destructor. nullptr in plaintext mode.
+	SSL_CTX* native_ssl_ctx = nullptr;
+
 	// Native handshake helpers (implemented in PgSQL_Connection.cpp). They drive the
 	// sub-state machine above and never block: every recv()/send() handles EAGAIN by
 	// setting async_exit_status and returning to the event loop.
@@ -708,6 +739,26 @@ public:
 	void native_capability_gap(const char* mechanism); // tear down native, restart via libpq
 	// Parse an ErrorResponse ('E') payload into error_info.
 	void native_fill_error_from_E(const unsigned char* payload, uint32_t len);
+
+	// --- Native backend TLS helpers (Task 1.6b). All non-blocking. ---
+	// Drive the SSL_HANDSHAKE sub-state: pump bytes between the mem BIOs and the raw
+	// fd, calling SSL_do_handshake(). Returns: 1 = handshake complete, 0 = need more
+	// I/O (async_exit_status already set, caller returns), -1 = fatal (error_info set,
+	// teardown done). On success the connection moves on to SEND_STARTUP over TLS.
+	int native_drive_ssl_handshake();
+	// Build/obtain a TLS_client_method() SSL_CTX configured from the backend SSL
+	// params for this server (CA, client cert/key, CRL, min proto version, verify
+	// mode). Returns a per-connection SSL_CTX the caller owns, or nullptr on error.
+	SSL_CTX* native_create_client_ssl_ctx();
+	// Pump any plaintext bytes SSL has buffered in wbio_ssl out to the raw fd.
+	// Returns true on success (all flushed, or EAGAIN with bytes still buffered),
+	// false on a fatal write error. Used by the encrypted native_flush_outbuf path.
+	bool native_ssl_pump_wbio_to_fd(bool& would_block);
+	// Build + queue the StartupMessage and advance toward AUTH. Works for both the
+	// plaintext path and the post-handshake TLS path (native_send_or_buffer routes
+	// through SSL_write when myds->encrypted). On a fatal error it sets error_info
+	// and returns false (caller does the teardown). Returns true otherwise.
+	bool native_send_startup();
 	uint8_t result_type;
 	PGresult* pgsql_result;
 	PSresult  ps_result;

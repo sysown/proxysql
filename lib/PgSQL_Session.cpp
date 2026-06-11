@@ -6450,7 +6450,14 @@ bool PgSQL_Session::switch_normal_to_fast_forward_mode(PtrSize_t& pkt, std::stri
 	// if backend connection uses SSL we will set
 	// encrypted = true and we will start using the SSL structure
 	// directly from PGconn SSL structure.
-	if (myconn->is_connected() && myconn->get_pg_ssl_in_use()) {
+	//
+	// Native backend TLS (Task 1.6b): the native handshake already attached the SSL
+	// object and its mem BIOs to THIS server_myds (get_pg_ssl_object() returns
+	// myds->ssl). Re-running SSL_set_bio() here would leak the existing BIOs and
+	// reset the transport mid-stream, so skip the handoff when myds->ssl is already
+	// set (i.e. native mode). The libpq path arrives here with myds->ssl == NULL and
+	// performs the one-time handoff from libpq's internal SSL.
+	if (myconn->is_connected() && myconn->get_pg_ssl_in_use() && myds->ssl == NULL) {
 		SSL* ssl_obj = myconn->get_pg_ssl_object();
 		if (ssl_obj != NULL) {
 			myds->encrypted = true;
@@ -6460,7 +6467,7 @@ bool PgSQL_Session::switch_normal_to_fast_forward_mode(PtrSize_t& pkt, std::stri
 			SSL_set_bio(myds->ssl, myds->rbio_ssl, myds->wbio_ssl);
 		} else {
 			// it means that ProxySQL tried to use SSL to connect to the backend
-			// but the backend didn't support SSL		
+			// but the backend didn't support SSL
 		}
 	}
 	set_status(FAST_FORWARD); // we can set status to FAST_FORWARD
