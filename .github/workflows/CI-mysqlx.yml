@@ -119,6 +119,7 @@ jobs:
           sparse-checkout: |
             include
             common_mk
+            deps
             src/proxysql_global.cpp
             test/tap
             plugins/mysqlx
@@ -171,6 +172,7 @@ jobs:
           sparse-checkout: |
             include
             common_mk
+            deps
             src/proxysql_global.cpp
             test/tap
             plugins/mysqlx
