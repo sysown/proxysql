@@ -209,6 +209,18 @@ if [ "${PROXYSQL_NEEDS_PGSQL_SOCKET:-0}" = "1" ]; then
     echo ">>> Mounting PostgreSQL Unix-socket directory: ${PGSQL_SOCKET_HOST_DIR} -> /var/run/postgresql-shared"
 fi
 
+# GCOV_PREFIX_STRIP=2 strips "opt/proxysql" from the absolute path the
+# .gcno embeds — the workspace is mounted at /opt/proxysql in the build
+# container (see docker-compose.yml), so .gcno files record paths like
+# /opt/proxysql/{lib,src}/obj/X.gcno. With STRIP=2 the daemon writes
+# .gcda files to /gcov/{lib,src}/obj/X.gcda, preserving the {lib,src}
+# directory that the collect_coverage trap in run-tests-isolated.bash
+# uses to find each matching .gcno under ${WORKSPACE} and copy it next
+# to its .gcda before fastcov runs. STRIP=3 (the prior value) over-
+# stripped one extra component and dropped .gcda files at
+# /gcov/obj/X.gcda with no {lib,src} directory; the .gcno copy loop
+# couldn't find matches, fastcov produced "files: []" for every entry,
+# and zero daemon-side coverage made it into Codecov.
 echo ">>> Starting ProxySQL container: ${PROXY_CONTAINER} (cluster nodes: ${NUM_NODES})"
 docker run -d \
     --name "${PROXY_CONTAINER}" \
@@ -225,7 +237,7 @@ docker run -d \
     ${GCOV_MOUNTS} \
     ${PGSQL_SOCKET_MOUNT} \
     -e GCOV_PREFIX="/gcov" \
-    -e GCOV_PREFIX_STRIP="3" \
+    -e GCOV_PREFIX_STRIP="2" \
     proxysql-ci-base:latest \
     /bin/bash -c "${STARTUP_CMD}"
 
