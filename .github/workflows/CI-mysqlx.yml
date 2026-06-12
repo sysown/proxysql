@@ -53,6 +53,7 @@ jobs:
           path: |
             src/proxysql
             test/
+            plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
           key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Install build dependencies
@@ -97,9 +98,15 @@ jobs:
 
       - name: Build proxysql (PROXYSQL40 chassis) + TAP tests
         if: steps.build-cache.outputs.cache-hit != 'true'
-        # The same tier flags the downstream `Build mysqlx plugin` step uses
-        # — see the comment on that step. Mismatch here would let the link
-        # succeed but corrupt memory on the first plugin virtual dispatch.
+        # `make debug` descends into plugins/mysqlx/ and builds the plugin
+        # .so as a side effect using these tier flags, so the downstream
+        # unit-tests / e2e-tests / soak-tests jobs can just restore the
+        # already-built .so from the build cache. No plugin rebuild needed
+        # downstream as long as the cached .so and src/proxysql binary were
+        # produced by the same flag set (ABI must match -- different flags
+        # change ProxySQL_PluginDescriptor / ProxySQL_PluginServices struct
+        # layouts, the loader accepts the link silently, and the first
+        # virtual dispatch into a plugin callback corrupts memory).
         run: |
           export PROXYSQL40=1
           export PROXYSQL31=1
@@ -131,6 +138,7 @@ jobs:
           path: |
             src/proxysql
             test/
+            plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
           key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
           # Strict cache dependency: the `build` job above writes this key
           # before this job starts (via `needs: build`). A miss here means
@@ -139,16 +147,24 @@ jobs:
           # proceed without a binary. See issue #5796.
           fail-on-cache-miss: true
 
-      - name: Build mysqlx plugin
-        # PROXYSQL40=1 (and the implied tier flags) MUST match what the
-        # cached src/proxysql was built with — otherwise the plugin .so
-        # is compiled with a different ProxySQL_PluginDescriptor /
-        # ProxySQL_PluginServices struct layout than the loader sees, the
-        # link succeeds, and the first virtual dispatch into a plugin
-        # callback corrupts memory. See plugins/mysqlx/Makefile:56-61.
+      - name: Verify build artefacts restored from cache
+        # The plugin .so was already built by the `build` job (as a side
+        # effect of `make debug` which descends into plugins/mysqlx/) and
+        # saved to the build cache alongside src/proxysql + test/. No need
+        # to rebuild it here -- the build job builds with PROXYSQL40=1
+        # PROXYSQL31=1 PROXYSQLFFTO=1 PROXYSQLTSDB=1 already, so the cached
+        # .so has the matching ProxySQL_PluginDescriptor /
+        # ProxySQL_PluginServices struct layout the cached src/proxysql
+        # loader expects.
+        # If the .so is missing here, the build job either failed or the
+        # cache was evicted between save and restore -- fail loudly
+        # rather than silently skip the plugin tests.
+        # The chmod restores src/proxysql's executable bit (actions/cache
+        # restore does not always preserve it on Linux).
         run: |
           chmod +x src/proxysql 2>/dev/null || true
-          cd plugins/mysqlx && PROXYSQL40=1 PROXYSQL31=1 PROXYSQLFFTO=1 PROXYSQLTSDB=1 make
+          test -f plugins/mysqlx/ProxySQL_MySQLX_Plugin.so \
+            || { echo "ERROR: plugins/mysqlx/ProxySQL_MySQLX_Plugin.so missing from build cache"; exit 1; }
 
       - name: Run mysqlx unit tests
         run: |
@@ -184,6 +200,7 @@ jobs:
           path: |
             src/proxysql
             test/
+            plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
           key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
           # Strict cache dependency: the `build` job at the top of this
           # workflow writes this key before this job starts (via the
@@ -193,16 +210,24 @@ jobs:
           # issue #5796.
           fail-on-cache-miss: true
 
-      - name: Build mysqlx plugin
-        # PROXYSQL40=1 (and the implied tier flags) MUST match what the
-        # cached src/proxysql was built with — otherwise the plugin .so
-        # is compiled with a different ProxySQL_PluginDescriptor /
-        # ProxySQL_PluginServices struct layout than the loader sees, the
-        # link succeeds, and the first virtual dispatch into a plugin
-        # callback corrupts memory. See plugins/mysqlx/Makefile:56-61.
+      - name: Verify build artefacts restored from cache
+        # The plugin .so was already built by the `build` job (as a side
+        # effect of `make debug` which descends into plugins/mysqlx/) and
+        # saved to the build cache alongside src/proxysql + test/. No need
+        # to rebuild it here -- the build job builds with PROXYSQL40=1
+        # PROXYSQL31=1 PROXYSQLFFTO=1 PROXYSQLTSDB=1 already, so the cached
+        # .so has the matching ProxySQL_PluginDescriptor /
+        # ProxySQL_PluginServices struct layout the cached src/proxysql
+        # loader expects.
+        # If the .so is missing here, the build job either failed or the
+        # cache was evicted between save and restore -- fail loudly
+        # rather than silently skip the plugin tests.
+        # The chmod restores src/proxysql's executable bit (actions/cache
+        # restore does not always preserve it on Linux).
         run: |
           chmod +x src/proxysql 2>/dev/null || true
-          cd plugins/mysqlx && PROXYSQL40=1 PROXYSQL31=1 PROXYSQLFFTO=1 PROXYSQLTSDB=1 make
+          test -f plugins/mysqlx/ProxySQL_MySQLX_Plugin.so \
+            || { echo "ERROR: plugins/mysqlx/ProxySQL_MySQLX_Plugin.so missing from build cache"; exit 1; }
 
       - name: Install dbdeployer
         run: |
@@ -304,15 +329,19 @@ jobs:
           path: |
             src/proxysql
             test/
+            plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
           key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
           fail-on-cache-miss: ${{ github.event_name == 'workflow_run' }}
 
-      - name: Build mysqlx plugin
-        # Same flags as the unit-tests / e2e-tests jobs — the plugin .so
-        # MUST be ABI-compatible with the cached src/proxysql binary.
+      - name: Verify build artefacts restored from cache
+        # See the same step in unit-tests / e2e-tests jobs for the full
+        # rationale. The plugin .so was built by the `build` job and
+        # cached; here we just restore src/proxysql's executable bit and
+        # sanity-check that the cached .so is on disk.
         run: |
           chmod +x src/proxysql 2>/dev/null || true
-          cd plugins/mysqlx && PROXYSQL40=1 PROXYSQL31=1 PROXYSQLFFTO=1 PROXYSQLTSDB=1 make
+          test -f plugins/mysqlx/ProxySQL_MySQLX_Plugin.so \
+            || { echo "ERROR: plugins/mysqlx/ProxySQL_MySQLX_Plugin.so missing from build cache"; exit 1; }
 
       - name: Build proxysql-ci-base image
         # The image now includes mysql-connector-python so the harness
