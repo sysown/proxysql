@@ -50,9 +50,23 @@ jobs:
         uses: actions/cache@v4
         id: build-cache
         with:
+          # In addition to src/proxysql + test/, also cache:
+          #   - deps/ (built source tree -- many .a archives, install
+          #     prefixes, and symlinks like deps/prometheus-cpp/prometheus-cpp
+          #     that don't exist until the dep is built);
+          #   - lib/libproxysql.a (linked into test binaries and plugin);
+          #   - plugins/mysqlx/ProxySQL_MySQLX_Plugin.so + obj/ (the plugin
+          #     the downstream unit-tests / e2e-tests / soak-tests jobs run
+          #     against -- build job already built this via make debug;
+          #     caching it lets the "Build mysqlx plugin" step downstream
+          #     no-op instead of trying to rebuild against incomplete deps).
           path: |
             src/proxysql
             test/
+            deps
+            lib
+            plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
+            plugins/mysqlx/obj
           key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Install build dependencies
@@ -128,9 +142,16 @@ jobs:
       - name: Restore build cache
         uses: actions/cache@v4
         with:
+          # Must match the build job's "Cache build artifacts" path list
+          # exactly -- actions/cache hashes the path list into the cache
+          # "version" alongside the key, so any mismatch silently misses.
           path: |
             src/proxysql
             test/
+            deps
+            lib
+            plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
+            plugins/mysqlx/obj
           key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
           # Strict cache dependency: the `build` job above writes this key
           # before this job starts (via `needs: build`). A miss here means
@@ -181,9 +202,16 @@ jobs:
       - name: Restore build cache
         uses: actions/cache@v4
         with:
+          # Must match the build job's "Cache build artifacts" path list
+          # exactly -- actions/cache hashes the path list into the cache
+          # "version" alongside the key, so any mismatch silently misses.
           path: |
             src/proxysql
             test/
+            deps
+            lib
+            plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
+            plugins/mysqlx/obj
           key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
           # Strict cache dependency: the `build` job at the top of this
           # workflow writes this key before this job starts (via the
@@ -301,9 +329,16 @@ jobs:
       - name: Restore build cache
         uses: actions/cache@v4
         with:
+          # Must match the build job's "Cache build artifacts" path list
+          # exactly -- actions/cache hashes the path list into the cache
+          # "version" alongside the key, so any mismatch silently misses.
           path: |
             src/proxysql
             test/
+            deps
+            lib
+            plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
+            plugins/mysqlx/obj
           key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
           fail-on-cache-miss: ${{ github.event_name == 'workflow_run' }}
 
