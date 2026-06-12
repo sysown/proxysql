@@ -3,10 +3,10 @@
 
 ### NOTES:
 ### version string is fetched from git history
-### when not available, specify GIT_VERSION on commnad line:
+### when not available, specify GIT_VERSION_BASE during make:
 ###
 ### ```
-### export GIT_VERSION=3.x.y-dev
+### make GIT_VERSION_BASE="v3.x.y"
 ### ```
 
 GIT_VERSION_BASE := $(shell git describe --long --abbrev=7 2>/dev/null || git describe --long --abbrev=7 --always)
