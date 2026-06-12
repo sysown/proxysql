@@ -69,13 +69,10 @@ PROTOBUF_INCLUDE_DIR := $(PROTOBUF_INSTALL_DIR)/include
 PROTOBUF_LDIR := $(PROTOBUF_INSTALL_DIR)/lib
 PROTOBUF_LIB := $(PROTOBUF_LDIR)/libprotobuf.a
 IDIRS += -I$(PROTOBUF_INCLUDE_DIR)
-# Several mysqlx_*_unit-t rules below link with `-lprotobuf` to pull in
-# the vendored protobuf runtime. LDIRS must therefore expose the
-# vendored install's lib dir, otherwise ld falls through to the system
-# library search path and fails with `cannot find -lprotobuf` on hosts
-# without libprotobuf-dev installed (or links the wrong version when
-# it is).
-LDIRS += -L$(PROTOBUF_LDIR)
+# NOTE: the matching `LDIRS += -L$(PROTOBUF_LDIR)` lives further down,
+# after the LDIRS := initial assignment (~line 86). Appending here
+# would be silently wiped by that later := redefinition. See the
+# duplicate ifdef PROXYSQL40 block below.
 endif
 
 
@@ -109,6 +106,18 @@ endif
 ifeq ($(UNAME_S),Darwin)
 	IDIRS += -I/usr/local/include -I/opt/homebrew/include
 	LDIRS += -L/usr/local/lib -L/opt/homebrew/lib
+endif
+
+# Several mysqlx_*_unit-t rules below link with `-lprotobuf` to pull in
+# the vendored protobuf runtime. LDIRS must therefore expose the
+# vendored install's lib dir, otherwise ld falls through to the system
+# library search path and fails with `cannot find -lprotobuf` on hosts
+# without libprotobuf-dev installed (or links the wrong version when
+# it is). PROTOBUF_LDIR is defined in the earlier `ifdef PROXYSQL40`
+# block; this append MUST live below the LDIRS := initial assignment
+# (line ~86) or the := redefinition silently wipes it.
+ifdef PROXYSQL40
+LDIRS += -L$(PROTOBUF_LDIR)
 endif
 
 
