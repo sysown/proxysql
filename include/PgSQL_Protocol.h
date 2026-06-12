@@ -449,6 +449,27 @@ public:
 	 */
 	unsigned int add_ready_status(PGTransactionStatusType txn_status);
 
+	/**
+	 * @brief Stream a raw native backend message into the query result.
+	 *
+	 * Native backend protocol path (Task 1.6c / Phase 2). The backend→frontend
+	 * messages 'T'/'D'/'C'/'I'/'E'/'N'/'S'/'Z'/'A' (and COPY) are byte-for-byte
+	 * the same wire messages ProxySQL forwards to the client, so this method
+	 * reconstructs the raw message (type byte + big-endian int32 length + payload)
+	 * and appends it directly to the result buffer — no intermediate PGresult.
+	 *
+	 * It also updates the result flags/counters and the owning connection's
+	 * side-effect state (error_info, native_txn_status, native_params) per the
+	 * message type, mirroring the libpq add_* helpers.
+	 *
+	 * @param type        The backend message type byte.
+	 * @param payload     The message body (everything AFTER the 4-byte length).
+	 * @param payload_len The length of @p payload in bytes.
+	 *
+	 * @return The number of bytes appended to the query result.
+	 */
+	unsigned int add_native_backend_message(char type, const unsigned char* payload, uint32_t payload_len);
+
     /**
      * @brief Adds the start of a COPY OUT response to the packet.
      *

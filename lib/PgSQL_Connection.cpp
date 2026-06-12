@@ -470,8 +470,11 @@ handler_again:
 		if (async_exit_status) {
 			next_event(ASYNC_QUERY_CONT);
 		} else {
-			if (is_error_present() || 
-				!set_single_row_mode()) {
+			// set_single_row_mode() is a libpq concept (PQsetSingleRowMode) and
+			// asserts pgsql_conn; the native path streams raw DataRow messages
+			// individually, so skip it entirely in native mode.
+			if (is_error_present() ||
+				(!native_mode && !set_single_row_mode())) {
 				NEXT_IMMEDIATE(ASYNC_QUERY_END);
 			}
 			set_fetch_result_end_state(ASYNC_QUERY_END);
@@ -498,6 +501,27 @@ handler_again:
 				next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause . See #1232
 				break;
 			}
+		}
+
+		// --- Native simple-query / simple-command result fetch (Task 1.6c) ---
+		// Stream raw backend messages directly into query_result. This fully
+		// handles the native path and must NOT fall through to any libpq
+		// PGresult dispatch below.
+		if (native_mode) {
+			native_fetch_result_cont(event);
+			if (async_exit_status) {
+				// Need more bytes from the socket → wait for READ.
+				next_event(ASYNC_USE_RESULT_CONT);
+				break;
+			}
+			if (native_result_complete || is_error_present()) {
+				// ReadyForQuery consumed (result complete) or a fatal recv/frame
+				// error: hand off to the end state (ASYNC_QUERY_END for queries,
+				// or the configured fetch_result_end_st).
+				NEXT_IMMEDIATE(fetch_result_end_st);
+			}
+			// Neither complete nor error nor waiting: loop to drain/recv more.
+			NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
 		}
 
 		fetch_result_cont(event);
@@ -866,16 +890,20 @@ handler_again:
 			unknown_transaction_status = false;
 		}
 
-		PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::unhandled_notice_cb, this);
+		// Native mode keeps pgsql_conn permanently NULL and never uses libpq's
+		// notice receiver or pipeline mode, so skip all of the libpq finalization.
+		if (!native_mode) {
+			PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::unhandled_notice_cb, this);
 
-		// we check exit_pipeline_mode to ensure it is safe to exit pipeline mode
-		if (exit_pipeline_mode &&
-			PQpipelineStatus(pgsql_conn) == PQ_PIPELINE_ON) {
-			if (PQexitPipelineMode(pgsql_conn) == 0) {
-				set_error_from_PQerrorMessage();
-				proxy_error("Failed to exit pipeline mode. %s\n", get_error_code_with_message().c_str());
+			// we check exit_pipeline_mode to ensure it is safe to exit pipeline mode
+			if (exit_pipeline_mode &&
+				PQpipelineStatus(pgsql_conn) == PQ_PIPELINE_ON) {
+				if (PQexitPipelineMode(pgsql_conn) == 0) {
+					set_error_from_PQerrorMessage();
+					proxy_error("Failed to exit pipeline mode. %s\n", get_error_code_with_message().c_str());
+				}
+				exit_pipeline_mode = false;
 			}
-			exit_pipeline_mode = false;
 		}
 		// should be NULL
 		assert(!pgsql_result);
@@ -2366,6 +2394,43 @@ void PgSQL_Connection::query_start() {
 	reset_error();
 	processing_multi_statement = false;
 	async_exit_status = PG_EVENT_NONE;
+
+	if (native_mode) {
+		// Native simple-query path (Task 1.6c). Build a 'Q' (Query) message and
+		// flush it non-blocking. The Query body is the SQL string INCLUDING a
+		// trailing NUL terminator. The libpq path relies on query.ptr being
+		// NUL-terminated (PQsendQuery reads to NUL); we build the body
+		// defensively from query.length bytes + an explicit NUL so we never
+		// depend on / read past the caller's terminator.
+		native_result_complete = false;
+		// Reset the framer so any stray connect-phase bytes (there should be none
+		// after a clean ReadyForQuery) cannot leak into this query's result parse.
+		native_framer.reset();
+		native_outbuf.clear();
+		// Body = SQL bytes + NUL. pg_append_typed_msg copies `bodylen` bytes from
+		// `body`, so assemble the NUL-terminated body explicitly first.
+		std::string qbody;
+		if (query.ptr && query.length) qbody.assign(query.ptr, query.length);
+		qbody.push_back('\0');
+		pg_append_typed_msg(native_outbuf, 'Q', (const unsigned char*)qbody.data(), qbody.size());
+		if (!native_send_or_buffer(PG_Native_Conn_St::DONE)) {
+			// native_send_or_buffer drives native_st for the connect handshake; in
+			// the query path we only care about the flush result. A false return
+			// means a fatal send error.
+			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(Query) failed", false);
+			async_exit_status = PG_EVENT_NONE;
+			return;
+		}
+		// If bytes remain buffered (plaintext native_outbuf or pending ciphertext),
+		// we must wait for the socket to become writable before fetching the result.
+		if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) {
+			async_exit_status = PG_EVENT_WRITE;
+		} else {
+			async_exit_status = PG_EVENT_NONE;
+		}
+		return;
+	}
+
 	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::notice_handler_cb, this);
 
 	if (PQsendQuery(pgsql_conn, query.ptr) == 0) {
@@ -2379,15 +2444,21 @@ void PgSQL_Connection::query_start() {
 void PgSQL_Connection::query_cont(short event) {
 	PROXY_TRACE();
 	if (native_mode) {
-		// Phase 0: native path not implemented yet → log once, disable, fall back to libpq.
-		static thread_local bool warned = false;
-		if (!warned) {
-			proxy_warning("native_mode requested but unimplemented at this stage; falling back to libpq for hg %u %s:%d\n",
-				parent->myhgc->hid, parent->address, parent->port);
-			warned = true;
+		// Native simple-query path (Task 1.6c): finish flushing the Query message.
+		async_exit_status = PG_EVENT_NONE;
+		if (!native_flush_outbuf()) {
+			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(Query) failed", false);
+			return;
 		}
-		native_mode = false;
-		// fall through to existing libpq path below
+		if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) {
+			// Still bytes pending → keep waiting for writable.
+			async_exit_status = PG_EVENT_WRITE;
+		} else {
+			// Fully sent → proceed to fetch the result (handler advances to
+			// ASYNC_USE_RESULT_START with async_exit_status == PG_EVENT_NONE).
+			async_exit_status = PG_EVENT_NONE;
+		}
+		return;
 	}
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6, "event=%d\n", event);
 	async_exit_status = PG_EVENT_NONE;
@@ -2405,15 +2476,12 @@ void PgSQL_Connection::fetch_result_start() {
 void PgSQL_Connection::fetch_result_cont(short event) {
 	PROXY_TRACE();
 	if (native_mode) {
-		// Phase 0: native path not implemented yet → log once, disable, fall back to libpq.
-		static thread_local bool warned = false;
-		if (!warned) {
-			proxy_warning("native_mode requested but unimplemented at this stage; falling back to libpq for hg %u %s:%d\n",
-				parent->myhgc->hid, parent->address, parent->port);
-			warned = true;
-		}
-		native_mode = false;
-		// fall through to existing libpq path below
+		// Native result fetch is handled directly in the handler()
+		// ASYNC_USE_RESULT_CONT case (via native_fetch_result_cont), which never
+		// falls through to this libpq routine. Route here defensively so no
+		// PQ*/PGresult code ever runs in native mode.
+		native_fetch_result_cont(event);
+		return;
 	}
 	async_exit_status = PG_EVENT_NONE;
 
@@ -2477,6 +2545,57 @@ void PgSQL_Connection::fetch_result_cont(short event) {
 		query.extended_query_info &&
 		(query.extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_SYNC) != 0) {
 		pgsql_result = PQgetResult(pgsql_conn);
+	}
+}
+
+void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
+	// Native result fetch (Task 1.6c / Phase 2). Pull backend bytes into the
+	// framer, then drain every complete message into query_result as raw
+	// client-wire bytes. Non-blocking throughout.
+	async_exit_status = PG_EVENT_NONE;
+
+	// query_result must have been allocated in ASYNC_USE_RESULT_START via
+	// init_query_result(). Guard defensively so we never deref a null result.
+	if (query_result == nullptr) {
+		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_INTERNAL_ERROR), "native result fetch with no query_result", false);
+		return;
+	}
+
+	int r = native_recv_into_framer();
+	if (r < 0) {
+		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "backend closed during result fetch", false);
+		return;
+	}
+	if (r == 0) {
+		// EAGAIN: no bytes available yet → wait for the socket to become readable.
+		async_exit_status = PG_EVENT_READ;
+		return;
+	}
+
+	// Drain all complete messages. msg.payload points INTO the framer buffer and
+	// is invalidated by the next feed(); we copy each message out (into the result
+	// buffer) before looping, and we never feed() again inside this loop, so the
+	// dangling-pointer rule is respected.
+	for (;;) {
+		PgSQL_Backend_Msg msg;
+		PgSQL_Frame_Result fr = native_framer.next(msg);
+		if (fr == FRAME_OK) {
+			query_result->add_native_backend_message(msg.type, msg.payload, msg.payload_len);
+			if (msg.type == 'Z') {
+				// ReadyForQuery: the result stream for this query is complete.
+				native_result_complete = true;
+				return;
+			}
+			continue;
+		}
+		if (fr == FRAME_NEED_MORE) {
+			// Incomplete trailing message → need more bytes from the socket.
+			async_exit_status = PG_EVENT_READ;
+			return;
+		}
+		// FRAME_ERROR: malformed backend message length.
+		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_PROTOCOL_VIOLATION), "malformed backend message during result fetch", false);
+		return;
 	}
 }
 
@@ -2637,7 +2756,9 @@ int PgSQL_Connection::async_query(short event, const char* stmt, unsigned long l
 	PgSQL_Extended_Query_Type type, const PgSQL_Extended_Query_Info* extended_query_info) {
 	PROXY_TRACE();
 	PROXY_TRACE2();
-	assert(pgsql_conn);
+	// In native_mode pgsql_conn is permanently NULL; simple queries are driven by
+	// the native state machine. (Extended/prepared queries are not native yet.)
+	assert(native_mode || pgsql_conn);
 
 	server_status = parent->status; // we copy it here to avoid race condition. The caller will see this
 	if (IsServerOffline())
@@ -3648,7 +3769,9 @@ void PgSQL_Connection::ProcessQueryAndSetStatusFlags(const char* query_digest_te
 int PgSQL_Connection::async_send_simple_command(short event, char* stmt, unsigned long length) {
 	PROXY_TRACE();
 	PROXY_TRACE2();
-	assert(pgsql_conn);
+	// In native_mode pgsql_conn is permanently NULL; the native query state
+	// machine drives the same QUERY_START → USE_RESULT_CONT → QUERY_END flow.
+	assert(native_mode || pgsql_conn);
 
 	server_status = parent->status; // we copy it here to avoid race condition. The caller will see this
 	if (IsServerOffline())

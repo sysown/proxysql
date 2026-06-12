@@ -2678,6 +2678,130 @@ unsigned int PgSQL_Query_Result::add_ready_status(PGTransactionStatusType txn_st
 	return bytes;
 }
 
+unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const unsigned char* payload, uint32_t payload_len) {
+	// Reconstruct the raw client-wire message: type(1) + be32 length(4) + payload.
+	// The length field is (payload_len + 4) per the PostgreSQL wire protocol (it
+	// counts itself but not the type byte).
+	const unsigned int size = 1 + 4 + payload_len;
+	const uint32_t wire_len = (uint32_t)(payload_len + 4);
+
+	bool alloced_new_buffer = false;
+	unsigned char* _ptr = buffer_reserve_space(size);
+	if (_ptr == NULL) {
+		// buffer too small for this message (already flushed to PSarrayOUT inside
+		// buffer_reserve_space); allocate a standalone packet, same as the libpq
+		// copy_* helpers do.
+		_ptr = (unsigned char*)l_alloc(size);
+		alloced_new_buffer = true;
+	}
+
+	// Write header (type + big-endian length) then the payload bytes verbatim.
+	_ptr[0] = (unsigned char)type;
+	_ptr[1] = (unsigned char)((wire_len >> 24) & 0xff);
+	_ptr[2] = (unsigned char)((wire_len >> 16) & 0xff);
+	_ptr[3] = (unsigned char)((wire_len >> 8) & 0xff);
+	_ptr[4] = (unsigned char)(wire_len & 0xff);
+	if (payload_len) {
+		memcpy(_ptr + 5, payload, payload_len);
+	}
+
+	resultset_size += size;
+	if (alloced_new_buffer) {
+		PSarrayOUT.add(_ptr, size);
+	}
+	pkt_count++;
+
+	// Per-message-type side effects / flags. These mirror what the libpq add_*
+	// helpers set, but derive everything from the raw payload instead of a PGresult.
+	switch (type) {
+	case 'T': // RowDescription
+		result_packet_type |= PGSQL_QUERY_RESULT_TUPLE;
+		if (payload_len >= 2) {
+			num_fields = ((unsigned int)payload[0] << 8) | (unsigned int)payload[1];
+		}
+		break;
+	case 'D': // DataRow
+		result_packet_type |= PGSQL_QUERY_RESULT_TUPLE;
+		num_rows++;
+		break;
+	case 'C': { // CommandComplete: payload is a NUL-terminated command tag.
+		// Only extract affected rows for a pure command (no tuple data). This
+		// mirrors the libpq path, which calls add_command_completion(result, false)
+		// — i.e. extract_affected_rows=false — for row-returning results (SELECT,
+		// or any query that already emitted RowDescription/DataRow). For those, the
+		// trailing number in "SELECT <rows>" is a returned-row count, not affected
+		// rows, so we leave affected_rows at its sentinel (-1).
+		const bool had_tuple = (result_packet_type & PGSQL_QUERY_RESULT_TUPLE) != 0;
+		result_packet_type |= PGSQL_QUERY_RESULT_COMMAND;
+		// Parse the trailing integer of the tag for affected rows. For INSERT the
+		// tag is "INSERT <oid> <rows>" (rows is the 2nd/last number); for UPDATE/
+		// DELETE/MOVE/FETCH/COPY it is "<verb> <rows>" (rows is the last number).
+		if (!had_tuple && payload_len > 0) {
+			// Find tag length up to the NUL terminator (defensive: bound by payload_len).
+			uint32_t taglen = 0;
+			while (taglen < payload_len && payload[taglen] != '\0') taglen++;
+			if (taglen > 0) {
+				// Scan back over the trailing run of digits.
+				uint32_t end = taglen;
+				uint32_t start = end;
+				while (start > 0 && payload[start - 1] >= '0' && payload[start - 1] <= '9') start--;
+				if (start < end) {
+					// We have a trailing number; this is the affected-rows count.
+					affected_rows = strtoull((const char*)(payload + start), NULL, 10);
+				}
+			}
+		}
+		break;
+	}
+	case 'I': // EmptyQueryResponse
+		result_packet_type |= PGSQL_QUERY_RESULT_EMPTY;
+		break;
+	case 'E': // ErrorResponse
+		result_packet_type |= PGSQL_QUERY_RESULT_ERROR;
+		if (conn) {
+			conn->native_fill_error_from_E(payload, payload_len);
+			PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::proxysql,
+				conn->parent->myhgc->hid, conn->parent->address, conn->parent->port, 1907);
+		}
+		break;
+	case 'N': // NoticeResponse
+		result_packet_type |= PGSQL_QUERY_RESULT_NOTICE;
+		break;
+	case 'S': { // ParameterStatus: two C-strings (name\0value\0). Track it.
+		if (conn && payload_len > 0) {
+			uint32_t i = 0;
+			const unsigned char* name = payload;
+			while (i < payload_len && payload[i] != '\0') i++;
+			if (i < payload_len) {
+				std::string pname((const char*)name, (size_t)i);
+				i++; // skip NUL
+				const unsigned char* value = payload + i;
+				uint32_t vstart = i;
+				while (i < payload_len && payload[i] != '\0') i++;
+				std::string pvalue((const char*)value, (size_t)(i - vstart));
+				conn->native_params[pname] = pvalue;
+			}
+		}
+		break;
+	}
+	case 'Z': // ReadyForQuery: final message; records txn status and finalizes buffer.
+		if (conn && payload_len >= 1) {
+			conn->native_txn_status = (char)payload[0];
+		}
+		result_packet_type |= PGSQL_QUERY_RESULT_READY;
+		// Mirror add_ready_status(): flush the in-line buffer into PSarrayOUT so the
+		// completed result is wholly in PSarrayOUT (get_resultset asserts buffer_used==0).
+		buffer_to_PSarrayOut();
+		break;
+	default:
+		// 'A' NotificationResponse and COPY ('G'/'H'/'d'/'c') are streamed through
+		// verbatim with no extra side effects (not exercised by simple query/SET).
+		break;
+	}
+
+	return size;
+}
+
 bool PgSQL_Query_Result::get_resultset(PtrSizeArray* PSarrayFinal) {
 	transfer_started = true;
 	// Ready packet confirms that the result is complete

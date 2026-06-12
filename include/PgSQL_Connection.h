@@ -694,6 +694,17 @@ public:
 	int native_backend_secret = 0;                   // BackendKeyData secret key
 	char native_txn_status = 'I';                    // ReadyForQuery status byte ('I'/'T'/'E')
 
+	// --- Native simple-query / simple-command execution (Task 1.6c / Phase 2 core) ---
+	// Set true once a ReadyForQuery ('Z') has been consumed for the in-flight query,
+	// signalling the result stream is complete. Reset at query_start().
+	bool native_result_complete = false;
+	// Drive the native result fetch: recv backend bytes, frame them, and stream each
+	// raw message into query_result via add_native_backend_message(). Non-blocking:
+	// EAGAIN/incomplete frame → async_exit_status = PG_EVENT_READ and return; a fatal
+	// recv/frame error sets error_info and marks the fetch done. Sets
+	// native_result_complete when ReadyForQuery is reached.
+	void native_fetch_result_cont(short event);
+
 	// --- Native backend TLS (Task 1.6b) ---
 	// native_ssl_requested is set in native_connect_start() when SSL is wanted for
 	// this backend (parent->use_ssl). When true the handshake takes the
