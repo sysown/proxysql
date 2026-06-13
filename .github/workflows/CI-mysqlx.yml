@@ -54,7 +54,16 @@ jobs:
             src/proxysql
             test/
             plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
-          key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
+          # The `runtime-libs-v1` prefix is a manual cache-bust: the build
+          # step below now stages libre2.so.10 + libpq.so.5 into
+          # test/tap/tap/_runtime_libs/ alongside the binaries that need
+          # them at runtime (see the `Build` step). Pre-existing caches
+          # under the old `build-${SHA}` key were written WITHOUT that
+          # directory, so a cache hit on the legacy key would skip the
+          # build step and leave downstream LD_LIBRARY_PATH pointing at
+          # nothing. Bump this suffix again if the staging layout under
+          # _runtime_libs/ changes incompatibly.
+          key: build-runtime-libs-v1-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Install build dependencies
         if: steps.build-cache.outputs.cache-hit != 'true'
@@ -159,7 +168,7 @@ jobs:
             src/proxysql
             test/
             plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
-          key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
+          key: build-runtime-libs-v1-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
           # Strict cache dependency: the `build` job above writes this key
           # before this job starts (via `needs: build`). A miss here means
           # the build job failed or the cache was evicted between save and
@@ -228,7 +237,7 @@ jobs:
             src/proxysql
             test/
             plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
-          key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
+          key: build-runtime-libs-v1-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
           # Strict cache dependency: the `build` job at the top of this
           # workflow writes this key before this job starts (via the
           # `needs:` chain). A miss means the build job failed or the
@@ -444,7 +453,7 @@ jobs:
             src/proxysql
             test/
             plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
-          key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
+          key: build-runtime-libs-v1-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
           fail-on-cache-miss: ${{ github.event_name == 'workflow_run' }}
 
       - name: Verify build artefacts restored from cache
