@@ -3022,7 +3022,22 @@ void PgSQL_Connection::set_is_client() {
 }
 
 bool PgSQL_Connection::is_connection_in_reusable_state() const {
-	PGTransactionStatusType txn_status = PQtransactionStatus(pgsql_conn);
+	// In native mode pgsql_conn is NULL, so PQtransactionStatus() would return
+	// PQTRANS_UNKNOWN and wrongly classify a normal query error (backend sent
+	// ErrorResponse then ReadyForQuery — connection still idle and reusable) as a
+	// broken connection. Derive the transaction status from the last ReadyForQuery
+	// byte tracked natively.
+	PGTransactionStatusType txn_status;
+	if (native_mode) {
+		switch (native_txn_status) {
+			case 'I': txn_status = PQTRANS_IDLE; break;
+			case 'T': txn_status = PQTRANS_INTRANS; break;
+			case 'E': txn_status = PQTRANS_INERROR; break;
+			default:  txn_status = PQTRANS_UNKNOWN; break;
+		}
+	} else {
+		txn_status = PQtransactionStatus(pgsql_conn);
+	}
 	bool conn_usable = !(txn_status == PQTRANS_UNKNOWN || txn_status == PQTRANS_ACTIVE);
 	assert(!(conn_usable == false && is_error_present() == false));
 	return conn_usable;
