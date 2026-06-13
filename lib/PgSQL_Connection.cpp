@@ -2407,10 +2407,20 @@ void PgSQL_Connection::query_start() {
 		// after a clean ReadyForQuery) cannot leak into this query's result parse.
 		native_framer.reset();
 		native_outbuf.clear();
-		// Body = SQL bytes + NUL. pg_append_typed_msg copies `bodylen` bytes from
-		// `body`, so assemble the NUL-terminated body explicitly first.
+		// Body for the 'Q' (Query) message is the SQL text followed by EXACTLY ONE
+		// NUL terminator, matching PQsendQuery() semantics. Callers are inconsistent
+		// about whether query.length includes the terminator: the extended/simple
+		// client-query path (async_query with pgsql_real_query.QuerySize) passes a
+		// length that INCLUDES the trailing NUL, while async_send_simple_command
+		// (e.g. init_connect via strlen()) does NOT. Emitting query.length bytes and
+		// then appending a NUL therefore produces a malformed double-NUL body for
+		// client queries, which the backend rejects with 08P01 "invalid message
+		// format". Normalize by taking the SQL up to the first NUL (bounded by
+		// query.length) and appending a single terminator.
+		size_t sql_len = 0;
+		if (query.ptr) { while (sql_len < query.length && query.ptr[sql_len] != '\0') sql_len++; }
 		std::string qbody;
-		if (query.ptr && query.length) qbody.assign(query.ptr, query.length);
+		if (sql_len) qbody.assign(query.ptr, sql_len);
 		qbody.push_back('\0');
 		pg_append_typed_msg(native_outbuf, 'Q', (const unsigned char*)qbody.data(), qbody.size());
 		if (!native_send_or_buffer(PG_Native_Conn_St::DONE)) {
