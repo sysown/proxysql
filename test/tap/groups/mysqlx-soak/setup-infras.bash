@@ -59,7 +59,10 @@ fi
 # what the X-protocol client authenticates against; the X-specific
 # overrides (allowed_auth_methods, default_route, backend_auth_mode)
 # live in mysqlx_users.
-docker exec -i "${PROXY_CONTAINER}" mysql -u${ADMIN_USER} -p${ADMIN_PASS} -h127.0.0.1 -P6032 <<SQL
+# --table forces boxed output even on stdin so the SELECT COUNT(*) and
+# any error from LOAD MYSQLX ... TO RUNTIME end up in the CI log.
+# Without it mysql's stdin-driven default suppresses non-error output.
+docker exec -i "${PROXY_CONTAINER}" mysql --table -u${ADMIN_USER} -p${ADMIN_PASS} -h127.0.0.1 -P6032 <<SQL
 DELETE FROM mysql_users WHERE username='${TEST_USER}';
 INSERT INTO mysql_users (username, password, active, default_hostgroup, frontend, backend)
     VALUES ('${TEST_USER}', '${TEST_PASS}', 1, 10, 1, 1);
@@ -96,6 +99,14 @@ SELECT COUNT(*) FROM runtime_mysql_servers;
 LOAD MYSQLX USERS TO RUNTIME;
 LOAD MYSQLX BACKEND ENDPOINTS TO RUNTIME;
 LOAD MYSQLX ROUTES TO RUNTIME;
+
+-- Post-LOAD probes: surface what the plugin actually installed so a
+-- failure to bind the listener can be diagnosed from the CI log
+-- (counts of zero here mean install_*_from_admin saw empty source
+-- rows despite the SELECT-COUNT(*) nudge above).
+SELECT 'runtime_mysqlx_users' AS table_name, COUNT(*) AS rows FROM runtime_mysqlx_users
+UNION ALL SELECT 'runtime_mysqlx_routes', COUNT(*) FROM runtime_mysqlx_routes
+UNION ALL SELECT 'runtime_mysqlx_backend_endpoints', COUNT(*) FROM runtime_mysqlx_backend_endpoints;
 SQL
 
 # Wait for the listener to bind.
