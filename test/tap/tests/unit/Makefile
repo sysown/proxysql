@@ -45,6 +45,34 @@ IDIRS :=	-I$(TAP_IDIR) \
 
 ifdef PROXYSQL40
 IDIRS += -I$(PROXYSQL_PATH)/plugins/genai/include
+
+# ProxySQL vendors protobuf 3.21.12 under deps/protobuf/ and builds it
+# into deps/protobuf/protobuf-3.21.12/install/. The committed
+# plugins/mysqlx/proto/*.pb.h files are generated against that exact
+# version and include headers (e.g. <google/protobuf/generated_message_bases.h>)
+# that only exist in protobuf 3.16+. Every unit-test rule below that
+# transitively pulls in mysqlx.pb.h through plugins/mysqlx/src/*.cpp
+# must see those headers, otherwise gcc silently falls through to its
+# default /usr/include/ search path and either fails to find protobuf
+# at all (clean GH-hosted ubuntu-22.04) or picks up the system 3.12.4
+# headers (Ubuntu 22.04 / Debian 11 libprotobuf-dev) which are missing
+# the newer includes -- both modes seen on PR #5823.
+#
+# Add to the shared IDIRS so every rule using $(IDIRS) inherits the
+# include path, instead of patching each ~22 mysqlx unit-test rule
+# individually. Only meaningful when PROXYSQL40=1 because that's the
+# only build configuration that vendors / builds protobuf
+# (deps/Makefile gates `targets += protobuf` on PROXYSQL40=1).
+PROTOBUF_VERSION := 3.21.12
+PROTOBUF_INSTALL_DIR := $(PROXYSQL_PATH)/deps/protobuf/protobuf-$(PROTOBUF_VERSION)/install
+PROTOBUF_INCLUDE_DIR := $(PROTOBUF_INSTALL_DIR)/include
+PROTOBUF_LDIR := $(PROTOBUF_INSTALL_DIR)/lib
+PROTOBUF_LIB := $(PROTOBUF_LDIR)/libprotobuf.a
+IDIRS += -I$(PROTOBUF_INCLUDE_DIR)
+# NOTE: the matching `LDIRS += -L$(PROTOBUF_LDIR)` lives further down,
+# after the LDIRS := initial assignment (~line 86). Appending here
+# would be silently wiped by that later := redefinition. See the
+# duplicate ifdef PROXYSQL40 block below.
 endif
 
 
@@ -78,6 +106,18 @@ endif
 ifeq ($(UNAME_S),Darwin)
 	IDIRS += -I/usr/local/include -I/opt/homebrew/include
 	LDIRS += -L/usr/local/lib -L/opt/homebrew/lib
+endif
+
+# Several mysqlx_*_unit-t rules below link with `-lprotobuf` to pull in
+# the vendored protobuf runtime. LDIRS must therefore expose the
+# vendored install's lib dir, otherwise ld falls through to the system
+# library search path and fails with `cannot find -lprotobuf` on hosts
+# without libprotobuf-dev installed (or links the wrong version when
+# it is). PROTOBUF_LDIR is defined in the earlier `ifdef PROXYSQL40`
+# block; this append MUST live below the LDIRS := initial assignment
+# (line ~86) or the := redefinition silently wipes it.
+ifdef PROXYSQL40
+LDIRS += -L$(PROTOBUF_LDIR)
 endif
 
 
@@ -528,8 +568,16 @@ MYSQLX_PROTO_DIR := $(PROXYSQL_PATH)/plugins/mysqlx/proto
 MYSQLX_PROTO_SRCS := $(wildcard $(MYSQLX_PROTO_DIR)/*.pb.cc)
 MYSQLX_PROTO_OBJS := $(patsubst $(MYSQLX_PROTO_DIR)/%.pb.cc,$(ODIR)/mysqlx_proto_%.pb.o,$(MYSQLX_PROTO_SRCS))
 
-$(ODIR)/mysqlx_proto_%.pb.o: $(MYSQLX_PROTO_DIR)/%.pb.cc | $(ODIR)
-	$(CXX) -c -o $@ $< $(STDCPP) -fPIC -O0 -ggdb -I$(MYSQLX_PROTO_DIR) -w
+# Compiles plugins/mysqlx/proto/*.pb.cc into mysqlx_proto_*.pb.o.
+# PROTOBUF_LIB / PROTOBUF_INCLUDE_DIR are defined at the top of this
+# Makefile under `ifdef PROXYSQL40` -- the same place where IDIRS gets
+# `-I$(PROTOBUF_INCLUDE_DIR)` appended, so $(IDIRS) here already covers
+# the vendored protobuf headers. PROTOBUF_LIB as a prerequisite chains
+# the deps protobuf build for anyone running this target standalone
+# (the top-level `make debug` chain already builds it via build_deps_*).
+$(ODIR)/mysqlx_proto_%.pb.o: $(MYSQLX_PROTO_DIR)/%.pb.cc $(PROTOBUF_LIB) | $(ODIR)
+	$(CXX) -c -o $@ $< $(STDCPP) -fPIC -O0 -ggdb \
+		-I$(MYSQLX_PROTO_DIR) $(IDIRS) -w
 
 mysqlx_stats_unit-t: mysqlx_stats_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
