@@ -24,7 +24,7 @@ jobs:
       matrix:
         infradb: [ 'pgsql16socket' ]
     env:
-      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu24-tap_src
+      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu24-tap-genai-gcov_src
       MATRIX: '(${{ matrix.infradb }},tap)'
 
     steps:
@@ -73,7 +73,7 @@ jobs:
       id: cache-test
       uses: actions/cache/restore@v4
       with:
-        key: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu24-tap_test
+        key: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu24-tap-genai-gcov_test
         fail-on-cache-miss: true
         path: cache_test.tar.zst
 
