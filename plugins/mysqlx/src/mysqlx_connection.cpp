@@ -344,9 +344,18 @@ int MysqlxConnection::step_auth_capabilities_get_sent() {
 	// supported for the authentication.mechanisms capability". The auth
 	// mechanism is chosen via AuthenticateStart.mech_name, not by
 	// setting a capability. Only send CapabilitiesSet when we actually
-	// need to negotiate TLS upgrade; otherwise jump straight to
+	// need to negotiate a TLS upgrade; otherwise jump straight to
 	// AuthenticateStart.
-	if (!backend_tls_required_ || !backend_ssl_ctx_) {
+	//
+	// Note: the gate is backend_tls_required_, NOT (required && ssl_ctx).
+	// `preferred` mode (tls_required=true, fallback_allowed=true) on a
+	// worker with no SSL_CTX still emits the CapabilitiesSet(tls=true)
+	// frame so the backend's Error response can drive the plaintext
+	// fallback in step_auth_capabilities_set_sent. With ssl_ctx absent
+	// the post-OK TLS handshake branch below silently downgrades, which
+	// preserves the prior preferred-mode contract exercised by
+	// mysqlx_backend_auth_unit-t.
+	if (!backend_tls_required_) {
 		return send_authenticate_start();
 	}
 
