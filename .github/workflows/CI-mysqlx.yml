@@ -54,8 +54,6 @@ jobs:
             src/proxysql
             test/
             plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
-            deps/re2/re2/obj/so/
-            deps/postgresql/postgresql/src/interfaces/libpq/libpq.so*
           key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Install build dependencies
@@ -123,6 +121,20 @@ jobs:
           make -j$(nproc) debug
           make -j$(nproc) build_tap_test_debug
 
+          # Stage libtap.so's DT_NEEDED siblings (libre2.so.10, libpq.so.5)
+          # next to libtap.so itself so downstream jobs find them at
+          # runtime. The original location is under deps/re2/re2/obj/so/
+          # and deps/postgresql/.../libpq/ — both reachable through
+          # symlinks (deps/re2/re2 → re2-2022-12-01) whose targets are
+          # build artefacts and aren't recreated by sparse checkout, so
+          # caching those paths directly fails at tar-extract time. Copy
+          # the actual files into test/tap/tap/ (which IS in the cache),
+          # then the e2e-tests / soak-tests jobs only need to set
+          # LD_LIBRARY_PATH to that directory when running the binaries.
+          mkdir -p test/tap/tap/_runtime_libs
+          cp -L deps/re2/re2/obj/so/libre2.so.10 test/tap/tap/_runtime_libs/
+          cp -L deps/postgresql/postgresql/src/interfaces/libpq/libpq.so.5 test/tap/tap/_runtime_libs/
+
   unit-tests:
     if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
     runs-on: ubuntu-22.04
@@ -147,8 +159,6 @@ jobs:
             src/proxysql
             test/
             plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
-            deps/re2/re2/obj/so/
-            deps/postgresql/postgresql/src/interfaces/libpq/libpq.so*
           key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
           # Strict cache dependency: the `build` job above writes this key
           # before this job starts (via `needs: build`). A miss here means
@@ -179,6 +189,13 @@ jobs:
       - name: Run mysqlx unit tests
         run: |
           export SKIP_PROXYSQL=1
+          # libtap.so DT_NEEDEDs libre2.so.10 + libpq.so.5 from deps/.
+          # The build step staged copies under test/tap/tap/_runtime_libs/
+          # (cached alongside the binaries) — point the dynamic loader at
+          # that directory so the unit binaries (which link libtap.so)
+          # find the right SONAMEs without depending on the deps/ tree
+          # that sparse checkout doesn't materialise.
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/test/tap/tap/_runtime_libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           cd test/tap/tests/unit
           for test_bin in mysqlx_*_unit-t plugin_*_unit-t; do
             if [ -x "$test_bin" ]; then
@@ -211,8 +228,6 @@ jobs:
             src/proxysql
             test/
             plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
-            deps/re2/re2/obj/so/
-            deps/postgresql/postgresql/src/interfaces/libpq/libpq.so*
           key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
           # Strict cache dependency: the `build` job at the top of this
           # workflow writes this key before this job starts (via the
@@ -368,6 +383,10 @@ jobs:
         run: |
           source test/tap/groups/mysqlx-e2e/env.sh
           : "${MYSQLX_E2E_PORT:?missing -- previous Verify step did not export it}"
+          # See the LD_LIBRARY_PATH comment in unit-tests above: libtap.so
+          # pulls libre2.so.10 / libpq.so.5, staged under
+          # test/tap/tap/_runtime_libs/ by the build step.
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/test/tap/tap/_runtime_libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           cd test/tap/tests
           ran_any=0
           for test_bin in test_mysqlx_admin_tables-t test_mysqlx_plugin_load-t test_mysqlx_e2e_handshake-t; do
@@ -425,8 +444,6 @@ jobs:
             src/proxysql
             test/
             plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
-            deps/re2/re2/obj/so/
-            deps/postgresql/postgresql/src/interfaces/libpq/libpq.so*
           key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
           fail-on-cache-miss: ${{ github.event_name == 'workflow_run' }}
 
