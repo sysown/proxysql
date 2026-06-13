@@ -151,6 +151,9 @@ ProxySQL_PluginCommandResult load_routes_to_runtime(const ProxySQL_PluginCommand
 	// routes, close listeners for removed or deactivated routes. The symbol
 	// is weak so unit tests that don't link plugin.cpp can resolve cleanly;
 	// in that case it's nullptr and reconciliation is skipped.
+	fprintf(stderr, "mysqlx: load_routes_to_runtime: mysqlx_routes active row_count=%lu, reconcile_listeners=%s\n",
+	        (unsigned long)row_count,
+	        mysqlx_reconcile_listeners ? "resolved" : "NULL (weak symbol unresolved)");
 	if (mysqlx_reconcile_listeners) {
 		mysqlx_reconcile_listeners(*ctx.admindb);
 	}
