@@ -54,6 +54,8 @@ jobs:
             src/proxysql
             test/
             plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
+            deps/re2/re2/obj/so/
+            deps/postgresql/postgresql/src/interfaces/libpq/libpq.so*
           key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Install build dependencies
@@ -145,6 +147,8 @@ jobs:
             src/proxysql
             test/
             plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
+            deps/re2/re2/obj/so/
+            deps/postgresql/postgresql/src/interfaces/libpq/libpq.so*
           key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
           # Strict cache dependency: the `build` job above writes this key
           # before this job starts (via `needs: build`). A miss here means
@@ -207,6 +211,8 @@ jobs:
             src/proxysql
             test/
             plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
+            deps/re2/re2/obj/so/
+            deps/postgresql/postgresql/src/interfaces/libpq/libpq.so*
           key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
           # Strict cache dependency: the `build` job at the top of this
           # workflow writes this key before this job starts (via the
@@ -419,6 +425,8 @@ jobs:
             src/proxysql
             test/
             plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
+            deps/re2/re2/obj/so/
+            deps/postgresql/postgresql/src/interfaces/libpq/libpq.so*
           key: build-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
           fail-on-cache-miss: ${{ github.event_name == 'workflow_run' }}
 

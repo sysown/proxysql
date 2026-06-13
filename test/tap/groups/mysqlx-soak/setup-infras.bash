@@ -82,6 +82,17 @@ INSERT INTO mysqlx_routes (name, bind, destination_hostgroup, fallback_hostgroup
 
 LOAD MYSQL USERS TO RUNTIME;
 LOAD MYSQL SERVERS TO RUNTIME;
+
+-- The mysqlx plugin's install_users_from_admin / install_endpoints_from_
+-- admin SELECT runtime_mysql_users and runtime_mysql_servers directly
+-- via SQLite, but those tables are only populated by admin's lazy-
+-- refresh hook on SELECT — not by LOAD MYSQL {USERS,SERVERS} TO RUNTIME
+-- itself. Without a SELECT here the next three LOAD MYSQLX statements
+-- see empty source rows and the listener never gets a valid route to
+-- bind. The COUNT(*) probes force admin to refresh both tables.
+SELECT COUNT(*) FROM runtime_mysql_users;
+SELECT COUNT(*) FROM runtime_mysql_servers;
+
 LOAD MYSQLX USERS TO RUNTIME;
 LOAD MYSQLX BACKEND ENDPOINTS TO RUNTIME;
 LOAD MYSQLX ROUTES TO RUNTIME;
