@@ -54,16 +54,23 @@ jobs:
             src/proxysql
             test/
             plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
-          # The `runtime-libs-v1` prefix is a manual cache-bust: the build
-          # step below now stages libre2.so.10 + libpq.so.5 into
+          # The `runtime-libs-vN` prefix is a manual cache-bust: the build
+          # step below stages libre2.so.10 + libpq.so.5 into
           # test/tap/tap/_runtime_libs/ alongside the binaries that need
           # them at runtime (see the `Build` step). Pre-existing caches
           # under the old `build-${SHA}` key were written WITHOUT that
           # directory, so a cache hit on the legacy key would skip the
           # build step and leave downstream LD_LIBRARY_PATH pointing at
-          # nothing. Bump this suffix again if the staging layout under
-          # _runtime_libs/ changes incompatibly.
-          key: build-runtime-libs-v1-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
+          # nothing.
+          #
+          # Bump the suffix again when:
+          #  - the _runtime_libs/ staging layout changes incompatibly, or
+          #  - the plugin .so source changes meaningfully and you want to
+          #    force a rebuild on existing SHAs (otherwise a SHA whose
+          #    cache was written before the change wins on cache-hit and
+          #    serves a stale .so).
+          # Last bump: v2 (mysqlx_thread.cpp add_listener error logging).
+          key: build-runtime-libs-v2-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Install build dependencies
         if: steps.build-cache.outputs.cache-hit != 'true'
@@ -168,7 +175,7 @@ jobs:
             src/proxysql
             test/
             plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
-          key: build-runtime-libs-v1-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
+          key: build-runtime-libs-v2-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
           # Strict cache dependency: the `build` job above writes this key
           # before this job starts (via `needs: build`). A miss here means
           # the build job failed or the cache was evicted between save and
@@ -237,7 +244,7 @@ jobs:
             src/proxysql
             test/
             plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
-          key: build-runtime-libs-v1-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
+          key: build-runtime-libs-v2-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
           # Strict cache dependency: the `build` job at the top of this
           # workflow writes this key before this job starts (via the
           # `needs:` chain). A miss means the build job failed or the
@@ -390,8 +397,16 @@ jobs:
         # block further down) and the soak/route_drop tests (their own
         # job).
         run: |
+          # IMPORTANT: capture MYSQLX_E2E_PORT before sourcing env.sh.
+          # The Verify X Protocol step writes the dynamically discovered
+          # sandbox X port (e.g. 18408 for MySQL 8.4.8) to $GITHUB_ENV,
+          # but env.sh below unconditionally `export MYSQLX_E2E_PORT=
+          # 33060` — sourcing it after the GitHub env injection
+          # overrides the real port and the test connects to nothing.
+          # Save first, source, then restore.
+          DISCOVERED_MYSQLX_E2E_PORT="${MYSQLX_E2E_PORT:?missing -- previous Verify step did not export it}"
           source test/tap/groups/mysqlx-e2e/env.sh
-          : "${MYSQLX_E2E_PORT:?missing -- previous Verify step did not export it}"
+          export MYSQLX_E2E_PORT="$DISCOVERED_MYSQLX_E2E_PORT"
           # See the LD_LIBRARY_PATH comment in unit-tests above: libtap.so
           # pulls libre2.so.10 / libpq.so.5, staged under
           # test/tap/tap/_runtime_libs/ by the build step.
@@ -453,7 +468,7 @@ jobs:
             src/proxysql
             test/
             plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
-          key: build-runtime-libs-v1-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
+          key: build-runtime-libs-v2-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
           fail-on-cache-miss: ${{ github.event_name == 'workflow_run' }}
 
       - name: Verify build artefacts restored from cache
