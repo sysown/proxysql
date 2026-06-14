@@ -468,5 +468,37 @@ int main(int, char**) {
         free_scram_state(client);
     }
 
+    // ------------------------------------------------------------------
+    // (14) pg_scram_build_cbind_input_tls_server_end_point: 32-byte
+    // (SHA-256) digest composes to a 56-byte cbind input with the
+    // "p=tls-server-end-point,," (24-byte) header pinned at the start.
+    // ------------------------------------------------------------------
+    {
+        unsigned char digest[32];
+        for (int i = 0; i < 32; i++) digest[i] = (unsigned char)i;
+        unsigned char out[88];
+        int len = pg_scram_build_cbind_input_tls_server_end_point(digest, 32, out, sizeof(out));
+        bool ok_c14 = (len == 56)
+            && memcmp(out, "p=tls-server-end-point,,", 24) == 0
+            && memcmp(out + 24, digest, 32) == 0;
+        ok(ok_c14, "pg_scram_build_cbind_input_tls_server_end_point composes 24-byte header + 32-byte digest (got len=%d)",
+           len);
+    }
+
+    // ------------------------------------------------------------------
+    // (15) Same for a 64-byte (SHA-512) digest: 88-byte cbind input.
+    // ------------------------------------------------------------------
+    {
+        unsigned char digest[64];
+        for (int i = 0; i < 64; i++) digest[i] = (unsigned char)(0xff - i);
+        unsigned char out[88];
+        int len = pg_scram_build_cbind_input_tls_server_end_point(digest, 64, out, sizeof(out));
+        bool ok_c15 = (len == 88)
+            && memcmp(out, "p=tls-server-end-point,,", 24) == 0
+            && memcmp(out + 24, digest, 64) == 0;
+        ok(ok_c15, "pg_scram_build_cbind_input_tls_server_end_point composes 24-byte header + 64-byte digest (got len=%d)",
+           len);
+    }
+
     return exit_status();
 }
