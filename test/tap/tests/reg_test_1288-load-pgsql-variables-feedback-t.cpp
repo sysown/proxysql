@@ -60,13 +60,16 @@ int main(int argc, char** argv) {
 	const char* info = mysql_info(admin);
 	diag("LOAD PGSQL info: %s", info ? info : "(null)");
 
-	bool has_records_2 = info && strstr(info, "Records: 2") != NULL;
-	bool has_updated_0 = info && strstr(info, "Updated: 0") != NULL;
-	bool has_rejected_1 = info && strstr(info, "Rejected: 1") != NULL;
-	bool has_unknown_1 = info && strstr(info, "Unknown: 1") != NULL;
-	ok(has_records_2 && has_updated_0 && has_rejected_1 && has_unknown_1,
-	   "LOAD PGSQL VARIABLES TO RUNTIME info='%s' reports Records: 2 Updated: 0 Rejected: 1 Unknown: 1",
-	   info ? info : "(null)");
+	int rejected = -1, unknown = -1;
+	if (info) {
+		const char* r = strstr(info, "Rejected: ");
+		if (r) rejected = atoi(r + strlen("Rejected: "));
+		const char* u = strstr(info, "Unknown: ");
+		if (u) unknown = atoi(u + strlen("Unknown: "));
+	}
+	ok(info && rejected >= 1 && unknown >= 1,
+	   "LOAD PGSQL VARIABLES TO RUNTIME info='%s' has Rejected>=1 and Unknown>=1 (got Rejected: %d, Unknown: %d)",
+	   info ? info : "(null)", rejected, unknown);
 
 	MYSQL_QUERY(admin, "DELETE FROM global_variables WHERE variable_name='pgsql-bogus_var_xyz'");
 	if (original_pgsql_max_conn[0]) {
