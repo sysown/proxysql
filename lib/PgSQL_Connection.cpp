@@ -980,10 +980,14 @@ void PgSQL_Connection::connect_start() {
 	{
 		const std::string ip = connect_start_DNS_lookup();
 		if (!ip.empty() && ip != std::string(parent->address)) {
-			append_conninfo_param(conninfo, "hostaddr", const_cast<char*>(ip.c_str()));
+		append_conninfo_param(conninfo, "hostaddr", const_cast<char*>(ip.c_str()));
 		}
 	}
-	conninfo << "port=" << parent->port << " "; // backend port
+	// port=0 means hostname is a Unix-domain socket path; libpq rejects
+	// "port=0" with "invalid port number: \"0\"".
+	if (parent->port != 0) {
+		conninfo << "port=" << parent->port << " ";
+	}
 	conninfo << "application_name=proxysql "; // application name
 	//conninfo << "require_auth=" << AUTHENTICATION_METHOD_STR[pgsql_thread___authentication_method]; // authentication method
 	if (parent->use_ssl) {
@@ -3078,7 +3082,11 @@ void* PgSQL_backend_kill_thread(void* arg) {
 		append_conninfo_param(conninfo, "password", backend_kill_args->password); // password
 		append_conninfo_param(conninfo, "dbname", backend_kill_args->dbname); // dbname
 		append_conninfo_param(conninfo, "host", backend_kill_args->hostname); // backend address
-		conninfo << "port=" << backend_kill_args->port << " "; // backend port
+		// port=0 means hostname is a Unix-domain socket path; libpq rejects
+		// "port=0" with "invalid port number: \"0\"".
+		if (backend_kill_args->port != 0) {
+			conninfo << "port=" << backend_kill_args->port << " ";
+		}
 		conninfo << "application_name=proxysql "; // application name
 		
 		if (backend_kill_args->ssl_config.use_ssl) {
