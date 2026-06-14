@@ -42,6 +42,12 @@ struct ScramState {
 	uint8_t ClientKey[32];	/* SHA256_DIGEST_LENGTH */
 	uint8_t StoredKey[32];
 	uint8_t ServerKey[32];
+	/* Channel-binding input (SCRAM-SHA-256-PLUS). NULL = plain SCRAM; non-NULL
+	 * means the client-final's c= field is base64(cbind_input) and the gs2
+	 * header in the client-first is "p=tls-server-end-point,,". The state
+	 * takes ownership of a copy allocated in scram_state_set_cbind_input. */
+	char* client_cbind_input;
+	int client_cbind_input_len;
 };
 
 struct PgCredentials {
@@ -98,6 +104,16 @@ extern "C" {
 	bool read_server_final_message(char *input, char *ServerSignature);
 
 	bool verify_server_signature(ScramState *scram_state, const PgCredentials *credentials, const char *ServerSignature);
+
+	/*
+	 * Sets the channel-binding input that will be used by build_client_first_message
+	 * (gs2 header) and build_client_final_message (c= field). cbind_input must be
+	 * the full "gs2-header || cbind-data" (e.g. "p=tls-server-end-point,," || digest).
+	 * Passing NULL/0 reverts to plain SCRAM (cbind_flag='n', cbind_input freed).
+	 * The state takes ownership of a copy of the input.
+	 */
+	void scram_state_set_cbind_input(ScramState* state,
+					 const char* cbind_input, int cbind_input_len);
 
 
 	/*

@@ -215,13 +215,15 @@ ScramState* scram_state_init() {
         scram_state->server_nonce = NULL;
         scram_state->server_first_message = NULL;
         scram_state->SaltedPassword = NULL;
-        scram_state->cbind_flag = '\0';
+        scram_state->cbind_flag = 'n';
         scram_state->adhoc = false;
         scram_state->iterations = 0;
         scram_state->salt = NULL;
         memset(scram_state->ClientKey, 0, sizeof(scram_state->ClientKey));
         memset(scram_state->StoredKey, 0, sizeof(scram_state->StoredKey));
         memset(scram_state->ServerKey, 0, sizeof(scram_state->ServerKey));
+        scram_state->client_cbind_input = NULL;
+        scram_state->client_cbind_input_len = 0;
     }
     return scram_state;
 }
@@ -237,6 +239,7 @@ void free_scram_state(ScramState *scram_state)
 		free(scram_state->client_final_message_without_proof);
 		free(scram_state->server_nonce);
 		free(scram_state->server_first_message);
+		free(scram_state->client_cbind_input);
 		free(scram_state->SaltedPassword);
 		free(scram_state->salt);
 		memset(scram_state, 0, sizeof(*scram_state));
@@ -1417,4 +1420,30 @@ failed:
 	free(salt);
 	free(prep_password);
 	return false;
+}
+
+/*
+ * Set the channel-binding input that will be used by build_client_first_message
+ * (gs2 header selection) and build_client_final_message (c= field composition).
+ * cbind_input must be the full "gs2-header || cbind-data" blob, e.g.
+ * "p=tls-server-end-point,," || digest. Passing NULL/0 reverts to plain SCRAM
+ * (the existing gs2 header "n,," / c="biws" path) and frees any prior input.
+ * The state owns a private copy allocated with malloc; the caller may free its
+ * own buffer after the call returns.
+ */
+void scram_state_set_cbind_input(ScramState *state,
+				 const char *cbind_input, int cbind_input_len)
+{
+	if (state == NULL) return;
+	free(state->client_cbind_input);
+	state->client_cbind_input = NULL;
+	state->client_cbind_input_len = 0;
+	state->cbind_flag = 'n';
+	if (cbind_input == NULL || cbind_input_len <= 0) return;
+	state->client_cbind_input = (char *)malloc((size_t)cbind_input_len + 1);
+	if (state->client_cbind_input == NULL) return;
+	memcpy(state->client_cbind_input, cbind_input, (size_t)cbind_input_len);
+	state->client_cbind_input[cbind_input_len] = '\0';
+	state->client_cbind_input_len = cbind_input_len;
+	state->cbind_flag = 'p';
 }
