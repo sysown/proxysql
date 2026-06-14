@@ -45,6 +45,15 @@ jobs:
           # The reusable ci-builds.yml on the GH-Actions branch uses
           # fetch-depth: 0 for the same reason.
           fetch-depth: 0
+          # workflow_run triggers default to the workflow file's branch
+          # (v3.0), NOT the PR commit that fired CI-trigger. Without an
+          # explicit ref, every workflow_run-driven CI-mysqlx run silently
+          # built and tested v3.0 mainline while the run-name and cache key
+          # advertised the PR's head_sha — fixes pushed to a PR appeared
+          # to fail CI even though the workflow never compiled the PR's
+          # code. Use head_sha when present so the build, plugin .so, and
+          # every downstream job's checkout all match the PR being tested.
+          ref: ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Cache build artifacts (restore + save)
         uses: actions/cache@v4
@@ -69,12 +78,14 @@ jobs:
           #    force a rebuild on existing SHAs (otherwise a SHA whose
           #    cache was written before the change wins on cache-hit and
           #    serves a stale .so).
-          # Last bump: v5 — mysqlx plugin: converted all 22
-          # fprintf(stderr,...) calls to proxy_info/proxy_error/
-          # proxy_warning (links proxy_error_func from main binary via
-          # --export-dynamic); stripped step3 verbose debug traces from
-          # the listener reconciler.
-          key: build-runtime-libs-v5-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
+          # Last bump: v6 — added explicit `ref: head_sha` to all
+          # checkout steps so workflow_run-driven runs actually build the
+          # PR commit instead of v3.0 mainline. Pre-fix every PR's
+          # CI-mysqlx result was meaningless (built v3.0 code, stored under
+          # the PR's cache key) and the v5 entries cached under PR SHAs
+          # are wrong-source and must not be served to the corrected
+          # workflow.
+          key: build-runtime-libs-v6-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Install build dependencies
         if: steps.build-cache.outputs.cache-hit != 'true'
@@ -163,6 +174,11 @@ jobs:
       - name: Checkout (sparse — test/tap)
         uses: actions/checkout@v4
         with:
+          # See the `build` job's checkout for why ref: is needed under
+          # workflow_run — without it the downstream job pulls v3.0's
+          # test files instead of the PR's, and any test that the PR
+          # modified runs against the wrong source.
+          ref: ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
           sparse-checkout: |
             include
             common_mk
@@ -179,7 +195,7 @@ jobs:
             src/proxysql
             test/
             plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
-          key: build-runtime-libs-v5-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
+          key: build-runtime-libs-v6-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
           # Strict cache dependency: the `build` job above writes this key
           # before this job starts (via `needs: build`). A miss here means
           # the build job failed or the cache was evicted between save and
@@ -232,6 +248,9 @@ jobs:
       - name: Checkout (sparse)
         uses: actions/checkout@v4
         with:
+          # See the `build` job's checkout for why ref: is needed under
+          # workflow_run.
+          ref: ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
           sparse-checkout: |
             include
             common_mk
@@ -248,7 +267,7 @@ jobs:
             src/proxysql
             test/
             plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
-          key: build-runtime-libs-v5-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
+          key: build-runtime-libs-v6-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
           # Strict cache dependency: the `build` job at the top of this
           # workflow writes this key before this job starts (via the
           # `needs:` chain). A miss means the build job failed or the
@@ -464,6 +483,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # See the `build` job's checkout for why ref: is needed under
+          # workflow_run.
+          ref: ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Restore build cache
         uses: actions/cache@v4
@@ -472,7 +495,7 @@ jobs:
             src/proxysql
             test/
             plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
-          key: build-runtime-libs-v5-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
+          key: build-runtime-libs-v6-${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
           fail-on-cache-miss: ${{ github.event_name == 'workflow_run' }}
 
       - name: Verify build artefacts restored from cache
