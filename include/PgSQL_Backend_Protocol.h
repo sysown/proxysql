@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <cstdlib>
+#include <openssl/ssl.h>
 
 enum PgSQL_Frame_Result { FRAME_OK, FRAME_NEED_MORE, FRAME_ERROR };
 
@@ -55,6 +56,23 @@ bool pg_build_startup(unsigned char* out, size_t* out_len, size_t out_cap,
 //   "md5" + hex(md5( hex(md5(password+user)) + salt[4] ))
 // Result is the 35-char "md5..." string plus a terminating NUL (36 bytes total).
 void pg_build_md5(char out[36], const char* user, const char* password, const unsigned char salt[4]);
+
+// Computes the tls-server-end-point channel-binding data for a finished TLS
+// session: the digest of the peer cert's DER encoding, using the cert's own
+// signature hash algorithm, upgraded to SHA-256 if it would otherwise be
+// MD5 or SHA-1 (RFC 5929 §4.1). Returns the digest length on success, -1
+// on failure (no peer cert, unknown signature hash, NULL ssl, etc.).
+// out must have room for at least EVP_MAX_MD_SIZE (64) bytes.
+int pg_tls_server_end_point(SSL* ssl, unsigned char* out, size_t* out_len);
+
+// Composes the channel-binding input buffer for SCRAM-SHA-256-PLUS with
+// tls-server-end-point. Writes "p=tls-server-end-point,," (24 bytes) || digest
+// into out. The caller sizes out_cap >= 24 + 64 = 88 to cover the largest
+// digest we accept (SHA-512). Returns the total bytes written, or -1 if
+// out_cap is too small or any pointer is NULL.
+int pg_scram_build_cbind_input_tls_server_end_point(
+    const unsigned char* digest, size_t digest_len,
+    unsigned char* out, size_t out_cap);
 
 // --- SCRAM-SHA-256 client exchange (thin wrappers over vendored libscram) ---
 //

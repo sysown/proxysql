@@ -3,6 +3,10 @@
 #include "PgSQL_Backend_Protocol.h"
 #include <cstring>
 #include <string>
+#include <cstdlib>
+#include <openssl/evp.h>
+#include <openssl/x509.h>
+#include <openssl/ssl.h>
 #include "scram.h"   // libscram: used to pin the RFC vector and to act as an independent SCRAM verifier
 #include "tap.h"
 
@@ -162,6 +166,169 @@ int main(int, char**) {
         free(server_final);
         free_scram_state(server);
         pg_scram_free(client);
+    }
+
+    // ------------------------------------------------------------------
+    // (11) pg_tls_server_end_point: SHA-256 digest of a self-signed
+    // SHA-256-signed cert. The expected digest is computed in-test from
+    // the same DER, so this is self-validating; the pin is the actual
+    // SHA-256 of the test cert's DER. Runs a loopback TLS handshake so
+    // SSL_get_peer_certificate actually returns the cert.
+    // ------------------------------------------------------------------
+    {
+        EVP_PKEY* pkey = EVP_PKEY_new();
+        EVP_PKEY_CTX* pctx = EVP_PKEY_CTX_new_from_name(nullptr, "RSA", nullptr);
+        EVP_PKEY_keygen_init(pctx);
+        EVP_PKEY_CTX_set_rsa_keygen_bits(pctx, 2048);
+        EVP_PKEY_generate(pctx, &pkey);
+        EVP_PKEY_CTX_free(pctx);
+
+        X509* cert = X509_new();
+        X509_set_version(cert, X509_VERSION_3);
+        ASN1_INTEGER_set(X509_get_serialNumber(cert), 1);
+        X509_gmtime_adj(X509_getm_notBefore(cert), 0);
+        X509_gmtime_adj(X509_getm_notAfter(cert), 60 * 60 * 24);
+        X509_set_pubkey(cert, pkey);
+        X509_NAME* name = X509_get_subject_name(cert);
+        X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
+            (const unsigned char*)"test", -1, -1, 0);
+        X509_set_issuer_name(cert, name);
+        X509_sign(cert, pkey, EVP_sha256());
+
+        // Expected digest: SHA-256(DER(cert)).
+        unsigned char* der = nullptr;
+        int der_len = i2d_X509(cert, &der);
+        unsigned char expected[32];
+        unsigned int expected_len = 0;
+        EVP_MD_CTX* mctx = EVP_MD_CTX_new();
+        EVP_DigestInit_ex(mctx, EVP_sha256(), nullptr);
+        EVP_DigestUpdate(mctx, der, der_len);
+        EVP_DigestFinal_ex(mctx, expected, &expected_len);
+        EVP_MD_CTX_free(mctx);
+        OPENSSL_free(der);
+
+        // Loopback TLS handshake: server presents the cert, client calls
+        // pg_tls_server_end_point. Both sides use a memory BIO pair.
+        const SSL_METHOD* server_method = TLS_server_method();
+        SSL_CTX* sctx = SSL_CTX_new(server_method);
+        SSL_CTX_use_certificate(sctx, cert);
+        SSL_CTX_use_PrivateKey(sctx, pkey);
+        SSL* server_ssl = SSL_new(sctx);
+        const SSL_METHOD* client_method = TLS_client_method();
+        SSL_CTX* cctx = SSL_CTX_new(client_method);
+        SSL* client_ssl = SSL_new(cctx);
+        BIO* sbio = BIO_new(BIO_s_mem());
+        BIO* cbio = BIO_new(BIO_s_mem());
+        SSL_set_bio(server_ssl, sbio, cbio);
+        SSL_set_bio(client_ssl, cbio, sbio);
+        SSL_set_accept_state(server_ssl);
+        SSL_set_connect_state(client_ssl);
+        // Drive handshake to completion (non-blocking; loop until both sides done).
+        int rc_h = 0;
+        for (int i = 0; i < 20; ++i) {
+            int r1 = SSL_do_handshake(server_ssl);
+            int r2 = SSL_do_handshake(client_ssl);
+            if (r1 == 1 && r2 == 1) { rc_h = 1; break; }
+        }
+
+        unsigned char out[EVP_MAX_MD_SIZE];
+        size_t out_len = 0;
+        int rc = pg_tls_server_end_point(client_ssl, out, &out_len);
+        bool digest_ok = rc_h == 1
+            && rc >= 0
+            && out_len == expected_len
+            && memcmp(out, expected, expected_len) == 0;
+        ok(digest_ok, "pg_tls_server_end_point returns SHA-256 digest for a SHA-256-signed cert (handshake=%d)", rc_h);
+
+        SSL_free(server_ssl);
+        SSL_free(client_ssl);
+        SSL_CTX_free(sctx);
+        SSL_CTX_free(cctx);
+        X509_free(cert);
+        EVP_PKEY_free(pkey);
+    }
+
+    // ------------------------------------------------------------------
+    // (12) pg_tls_server_end_point: MD5-signed cert is upgraded to
+    // SHA-256 per RFC 5929 §4.1. Loopback handshake as in (11).
+    // ------------------------------------------------------------------
+    {
+        EVP_PKEY* pkey = EVP_PKEY_new();
+        EVP_PKEY_CTX* pctx = EVP_PKEY_CTX_new_from_name(nullptr, "RSA", nullptr);
+        EVP_PKEY_keygen_init(pctx);
+        EVP_PKEY_CTX_set_rsa_keygen_bits(pctx, 2048);
+        EVP_PKEY_generate(pctx, &pkey);
+        EVP_PKEY_CTX_free(pctx);
+
+        X509* cert = X509_new();
+        X509_set_version(cert, X509_VERSION_3);
+        ASN1_INTEGER_set(X509_get_serialNumber(cert), 2);
+        X509_gmtime_adj(X509_getm_notBefore(cert), 0);
+        X509_gmtime_adj(X509_getm_notAfter(cert), 60 * 60 * 24);
+        X509_set_pubkey(cert, pkey);
+        X509_NAME* name = X509_get_subject_name(cert);
+        X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
+            (const unsigned char*)"test-md5", -1, -1, 0);
+        X509_set_issuer_name(cert, name);
+        X509_sign(cert, pkey, EVP_md5());
+
+        unsigned char* der = nullptr;
+        int der_len = i2d_X509(cert, &der);
+        unsigned char expected[32];
+        unsigned int expected_len = 0;
+        EVP_MD_CTX* mctx = EVP_MD_CTX_new();
+        EVP_DigestInit_ex(mctx, EVP_sha256(), nullptr);  // upgrade target
+        EVP_DigestUpdate(mctx, der, der_len);
+        EVP_DigestFinal_ex(mctx, expected, &expected_len);
+        EVP_MD_CTX_free(mctx);
+        OPENSSL_free(der);
+
+        const SSL_METHOD* server_method = TLS_server_method();
+        SSL_CTX* sctx = SSL_CTX_new(server_method);
+        SSL_CTX_use_certificate(sctx, cert);
+        SSL_CTX_use_PrivateKey(sctx, pkey);
+        SSL* server_ssl = SSL_new(sctx);
+        const SSL_METHOD* client_method = TLS_client_method();
+        SSL_CTX* cctx = SSL_CTX_new(client_method);
+        SSL* client_ssl = SSL_new(cctx);
+        BIO* sbio = BIO_new(BIO_s_mem());
+        BIO* cbio = BIO_new(BIO_s_mem());
+        SSL_set_bio(server_ssl, sbio, cbio);
+        SSL_set_bio(client_ssl, cbio, sbio);
+        SSL_set_accept_state(server_ssl);
+        SSL_set_connect_state(client_ssl);
+        int rc_h = 0;
+        for (int i = 0; i < 20; ++i) {
+            int r1 = SSL_do_handshake(server_ssl);
+            int r2 = SSL_do_handshake(client_ssl);
+            if (r1 == 1 && r2 == 1) { rc_h = 1; break; }
+        }
+
+        unsigned char out[EVP_MAX_MD_SIZE];
+        size_t out_len = 0;
+        int rc = pg_tls_server_end_point(client_ssl, out, &out_len);
+        bool digest_ok = rc_h == 1
+            && rc >= 0
+            && out_len == expected_len
+            && memcmp(out, expected, expected_len) == 0;
+        ok(digest_ok, "pg_tls_server_end_point upgrades MD5-signed cert to SHA-256 (RFC 5929 §4.1) (handshake=%d)", rc_h);
+
+        SSL_free(server_ssl);
+        SSL_free(client_ssl);
+        SSL_CTX_free(sctx);
+        SSL_CTX_free(cctx);
+        X509_free(cert);
+        EVP_PKEY_free(pkey);
+    }
+
+    // ------------------------------------------------------------------
+    // (13) pg_tls_server_end_point: NULL ssl returns -1.
+    // ------------------------------------------------------------------
+    {
+        unsigned char out[EVP_MAX_MD_SIZE];
+        size_t out_len = 0;
+        int rc = pg_tls_server_end_point(nullptr, out, &out_len);
+        ok(rc == -1, "pg_tls_server_end_point with NULL ssl returns -1");
     }
 
     // ------------------------------------------------------------------

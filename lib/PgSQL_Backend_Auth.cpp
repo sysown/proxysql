@@ -5,6 +5,9 @@
 #include <new>
 #include <string>
 #include <openssl/md5.h>   // project-existing one-shot MD5(); also pulls MD5_DIGEST_LENGTH
+#include <openssl/evp.h>
+#include <openssl/x509.h>
+#include <openssl/ssl.h>
 #include "scram.h"         // vendored libscram (same include used by PgSQL_Data_Stream.h)
 
 static void put_be32(unsigned char* p, uint32_t v) {
@@ -171,4 +174,48 @@ bool pg_scram_verify_server_final(PgSQL_Scram_State* s, const char* server_final
     char ServerSignature[32];   // SCRAM_KEY_LEN
     if (!read_server_final_message(&sf[0], ServerSignature)) return false;
     return verify_server_signature(s->st, &s->creds, ServerSignature);
+}
+
+int pg_tls_server_end_point(SSL* ssl, unsigned char* out, size_t* out_len) {
+    if (ssl == nullptr || out == nullptr || out_len == nullptr) return -1;
+    X509* cert = SSL_get_peer_certificate(ssl);
+    if (cert == nullptr) return -1;
+    int mdnid = NID_undef, pknid = NID_undef, secbits = 0;
+    uint32_t flags = 0;
+    if (X509_get_signature_info(cert, &mdnid, &pknid, &secbits, &flags) == 0) {
+        X509_free(cert);
+        return -1;
+    }
+    // RFC 5929 §4.1: upgrade MD5 / SHA-1 to SHA-256.
+    if (mdnid == NID_md5 || mdnid == NID_sha1) {
+        mdnid = NID_sha256;
+    }
+    const EVP_MD* md = EVP_get_digestbynid(mdnid);
+    if (md == nullptr) {
+        X509_free(cert);
+        return -1;
+    }
+    unsigned int len = 0;
+    if (X509_digest(cert, md, out, &len) == 0 || len == 0) {
+        X509_free(cert);
+        return -1;
+    }
+    *out_len = (size_t)len;
+    X509_free(cert);
+    return (int)len;
+}
+
+int pg_scram_build_cbind_input_tls_server_end_point(
+    const unsigned char* digest, size_t digest_len,
+    unsigned char* out, size_t out_cap) {
+    if (digest == nullptr || out == nullptr) return -1;
+    // gs2 header per RFC 5802 §6: "p=" cbind-type "," [authzid] ","
+    // For tls-server-end-point: "p=tls-server-end-point,," = 24 bytes.
+    static const char header[] = "p=tls-server-end-point,,";
+    static const size_t header_len = sizeof(header) - 1;  // 24
+    size_t total = header_len + digest_len;
+    if (out_cap < total) return -1;
+    memcpy(out, header, header_len);
+    if (digest_len > 0) memcpy(out + header_len, digest, digest_len);
+    return (int)total;
 }
