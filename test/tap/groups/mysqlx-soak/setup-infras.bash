@@ -110,10 +110,15 @@ UNION ALL SELECT 'runtime_mysqlx_backend_endpoints', COUNT(*) FROM runtime_mysql
 SQL
 
 # Wait for the listener to bind.
+# IMPORTANT: use `bash -c`, not `sh -c`. /dev/tcp/<host>/<port> is a
+# bash builtin; the proxysql container's /bin/sh is dash (Ubuntu
+# default) and silently fails the redirection regardless of whether
+# the listener is up — making the probe report "not listening" even
+# right after add_listener returns bind+listen OK in the plugin log.
 echo ">>> Waiting for mysqlx listener on port ${MYSQLX_PROXYSQL_PORT} ..."
 WAIT=10
 while [ $WAIT -gt 0 ]; do
-    if docker exec "${PROXY_CONTAINER}" sh -c "exec 3<>/dev/tcp/127.0.0.1/${MYSQLX_PROXYSQL_PORT} && echo open" 2>/dev/null | grep -q open; then
+    if docker exec "${PROXY_CONTAINER}" bash -c "exec 3<>/dev/tcp/127.0.0.1/${MYSQLX_PROXYSQL_PORT} && echo open" 2>/dev/null | grep -q open; then
         echo ">>> mysqlx listener is up on port ${MYSQLX_PROXYSQL_PORT}"
         break
     fi
