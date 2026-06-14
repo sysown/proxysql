@@ -119,4 +119,12 @@ const char* pg_scram_client_final(PgSQL_Scram_State* s, const char* password,
 // matches the one expected from this exchange. Must be called after a successful
 // pg_scram_client_final().
 bool pg_scram_verify_server_final(PgSQL_Scram_State* s, const char* server_final, size_t len);
+
+// Sets the channel-binding input for the upcoming SCRAM client-final.
+// cbind_input must be the full "p=tls-server-end-point,," (24 bytes) || digest
+// blob produced by pg_scram_build_cbind_input_tls_server_end_point. Pass
+// nullptr/0 to revert to plain SCRAM. Must be called BEFORE pg_scram_client_final
+// so the gs2 header in pg_scram_client_first is also updated to
+// "p=tls-server-end-point,,". The state takes its own copy of the input.
+void pg_scram_set_cbind(PgSQL_Scram_State* s, const char* cbind_input, int cbind_input_len);
 #endif

@@ -219,3 +219,8 @@ int pg_scram_build_cbind_input_tls_server_end_point(
     if (digest_len > 0) memcpy(out + header_len, digest, digest_len);
     return (int)total;
 }
+
+void pg_scram_set_cbind(PgSQL_Scram_State* s, const char* cbind_input, int cbind_input_len) {
+    if (s == nullptr) return;
+    scram_state_set_cbind_input(s->st, cbind_input, cbind_input_len);
+}
