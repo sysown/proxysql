@@ -34,6 +34,28 @@ ADMIN_PASS="admin"
 TEST_USER="alice"
 TEST_PASS="alicepass"
 
+echo ">>> Provisioning ${TEST_USER} on backend MySQL nodes"
+# The mysqlx plugin uses backend_auth_mode='mapped' which makes the
+# backend connection authenticate as the frontend user. The X-Protocol
+# auth at the backend (MySQL 8.4 X plugin on port 33060) needs to find
+# 'alice' in mysql.user with mysql_native_password. Without this step
+# every backend session fails with "Access denied for user 'alice'",
+# so every SQL forwarded from ProxySQL's mysqlx listener errors out —
+# surfaced in soak as 100% error rate in the stress harness and as
+# 'pre-drop SELECT 1 succeeded on 0/N sessions' in route_drop_inflight.
+BACKEND_INFRA_PROJECT="infra-dbdeployer-mysql84-${INFRA_ID}"
+BACKEND_CONTAINER="${BACKEND_INFRA_PROJECT}-dbdeployer1-1"
+for SANDBOX in master node1 node2; do
+    if ! docker exec "${BACKEND_CONTAINER}" \
+        bash -lc "/root/sandboxes/rsandbox_8_4_8/${SANDBOX}/use <<SQL
+CREATE USER IF NOT EXISTS '${TEST_USER}'@'%' IDENTIFIED WITH mysql_native_password BY '${TEST_PASS}';
+GRANT ALL PRIVILEGES ON *.* TO '${TEST_USER}'@'%';
+FLUSH PRIVILEGES;
+SQL" >/dev/null 2>&1; then
+        echo ">>> WARNING: failed to provision ${TEST_USER} on ${SANDBOX} (may already exist or sandbox not present)"
+    fi
+done
+
 echo ">>> Configuring mysqlx plugin in ${PROXY_CONTAINER}"
 
 # Wait for the plugin's admin tables to exist (they are created by
