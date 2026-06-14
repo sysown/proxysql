@@ -175,7 +175,7 @@ bool ProxySQL_Admin::flush_GENERIC_variables__retrieve__database_to_runtime(cons
 	}
 	return true;
 }
-void ProxySQL_Admin::flush_GENERIC_variables__process__database_to_runtime(
+FlushVariableStats ProxySQL_Admin::flush_GENERIC_variables__process__database_to_runtime(
 	const string& modname, SQLite3DB *db, SQLite3_result* resultset,
 	const bool& lock, const bool& replace,
 	const std::unordered_set<std::string>& variables_read_only,
@@ -184,8 +184,10 @@ void ProxySQL_Admin::flush_GENERIC_variables__process__database_to_runtime(
 	const std::unordered_set<std::string>& variables_special_values,
 	std::function<void(const std::string&, const char *, SQLite3DB *)> special_variable_action
 ) {
+	FlushVariableStats stats;
 	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 		SQLite3_row *r=*it;
+		stats.records++;
 		bool rc = false;
 		if (modname == "admin") {
 			rc = set_variable(r->fields[0],r->fields[1], lock);
@@ -233,25 +235,30 @@ void ProxySQL_Admin::flush_GENERIC_variables__process__database_to_runtime(
 						} else {
 							proxy_warning("Impossible to set variable %s with value \"%s\". Resetting to current \"%s\".\n", r->fields[0],r->fields[1], val);
 						}
+						stats.rejected++;
 						snprintf(q, sizeof(q), "INSERT OR REPLACE INTO global_variables VALUES(\"%s-%s\",\"%s\")", modname.c_str(), r->fields[0], val);
 						db->execute(q);
 						free(val);
 					} else {
 						if (variables_to_delete_silently.count(v) > 0) {
+							stats.rejected++;
 							snprintf(q, sizeof(q), "DELETE FROM disk.global_variables WHERE variable_name=\"%s-%s\"", modname.c_str(), r->fields[0]);
 							db->execute(q);
 						} else if (variables_deprecated.count(v) > 0) {
 							proxy_error("Global variable %s-%s is deprecated.\n", modname.c_str(), r->fields[0]);
+							stats.rejected++;
 							snprintf(q, sizeof(q), "DELETE FROM disk.global_variables WHERE variable_name=\"%s-%s\"", modname.c_str(), r->fields[0]);
 							db->execute(q);
 						} else {
 							proxy_warning("Impossible to set not existing variable %s with value \"%s\". Deleting. If the variable name is correct, this version doesn't support it\n", r->fields[0],r->fields[1]);
+							stats.unknown++;
 						}
 						snprintf(q, sizeof(q), "DELETE FROM global_variables WHERE variable_name=\"%s-%s\"", modname.c_str(), r->fields[0]);
 						db->execute(q);
 					}
 				}
 		} else {
+			stats.updated++;
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
 			if (variables_special_values.count(v) > 0) {
 				if (special_variable_action != nullptr) {
@@ -260,9 +267,10 @@ void ProxySQL_Admin::flush_GENERIC_variables__process__database_to_runtime(
 			}
 		}
 	}
+	return stats;
 }
 
-void ProxySQL_Admin::flush_admin_variables___database_to_runtime(
+FlushVariableStats ProxySQL_Admin::flush_admin_variables___database_to_runtime(
 	SQLite3DB *db, bool replace, const string& checksum, const time_t epoch, bool lock
 ) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing ADMIN variables. Replace:%d\n", replace);
@@ -272,7 +280,7 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(
 	SQLite3_result *resultset=NULL;
 	if (flush_GENERIC_variables__retrieve__database_to_runtime("admin", error, cols, affected_rows, resultset) == true) {
 		wrlock();
-		flush_GENERIC_variables__process__database_to_runtime("admin", db, resultset, lock, replace, {"version"}, {"debug"}, {}, {});
+		FlushVariableStats stats = flush_GENERIC_variables__process__database_to_runtime("admin", db, resultset, lock, replace, {"version"}, {"debug"}, {}, {});
 		//commit(); NOT IMPLEMENTED
 
 		// Checksums are always generated - 'admin-checksum_*' deprecated
@@ -291,8 +299,11 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(
 			// Update the admin variable for 'web_verbosity'
 			admin___web_verbosity = variables.web_verbosity;
 		}
+		if (resultset) delete resultset;
+		return stats;
 	}
 	if (resultset) delete resultset;
+	return FlushVariableStats{};
 }
 
 void ProxySQL_Admin::flush_pgsql_variables___runtime_to_database(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime, bool use_lock) {
@@ -450,7 +461,7 @@ void ProxySQL_Admin::flush_GENERIC_variables__checksum__database_to_runtime(cons
 	delete resultset;
 }
 
-void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum, const time_t epoch) {
+FlushVariableStats ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum, const time_t epoch) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MySQL variables. Replace:%d\n", replace);
 	char *error=NULL;
 	int cols=0;
@@ -462,7 +473,7 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 		char * previous_default_collation_connection = GloMTH->get_variable_string((char *)"default_collation_connection");
 		assert(previous_default_charset);
 		assert(previous_default_collation_connection);
-		flush_GENERIC_variables__process__database_to_runtime("mysql", db, resultset, false, replace, {}, {"session_debug"}, {"forward_autocommit"},
+		FlushVariableStats stats = flush_GENERIC_variables__process__database_to_runtime("mysql", db, resultset, false, replace, {}, {"session_debug"}, {"forward_autocommit"},
 			{
 				"default_collation_connection",
 				"default_charset",
@@ -656,18 +667,21 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 				}
 			}
 		}
+		if (resultset) delete resultset;
+		return stats;
 	}
 	if (resultset) delete resultset;
+	return FlushVariableStats{};
 }
 
-void ProxySQL_Admin::flush_sqliteserver_variables___database_to_runtime(SQLite3DB *db, bool replace) {
+FlushVariableStats ProxySQL_Admin::flush_sqliteserver_variables___database_to_runtime(SQLite3DB *db, bool replace) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing SQLiteServer variables. Replace:%d\n", replace);
 	if (
 		(GloVars.global.sqlite3_server == false)
 		||
 		( GloSQLite3Server == NULL )
 	) {
-		return;
+		return FlushVariableStats{};
 	}
 	char *error=NULL;
 	int cols=0;
@@ -675,18 +689,21 @@ void ProxySQL_Admin::flush_sqliteserver_variables___database_to_runtime(SQLite3D
 	SQLite3_result *resultset=NULL;
 	if (flush_GENERIC_variables__retrieve__database_to_runtime("sqliteserver", error, cols, affected_rows, resultset) == true) {
 		GloSQLite3Server->wrlock();
-		flush_GENERIC_variables__process__database_to_runtime("sqliteserver", db, resultset, false, replace, {}, {"session_debug"}, {}, {});
+		FlushVariableStats stats = flush_GENERIC_variables__process__database_to_runtime("sqliteserver", db, resultset, false, replace, {}, {"session_debug"}, {}, {});
 		//GloClickHouse->commit();
 		GloSQLite3Server->wrunlock();
+		if (resultset) delete resultset;
+		return stats;
 	}
 	if (resultset) delete resultset;
+	return FlushVariableStats{};
 }
 
 #ifdef PROXYSQLTSDB
-void ProxySQL_Admin::flush_tsdb_variables___database_to_runtime(SQLite3DB *db, bool replace) {
+FlushVariableStats ProxySQL_Admin::flush_tsdb_variables___database_to_runtime(SQLite3DB *db, bool replace) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing TSDB variables. Replace:%d\n", replace);
 	if (GloProxyStats == NULL) {
-		return;
+		return FlushVariableStats{};
 	}
 
 	char *error=NULL;
@@ -695,11 +712,14 @@ void ProxySQL_Admin::flush_tsdb_variables___database_to_runtime(SQLite3DB *db, b
 	SQLite3_result *resultset=NULL;
 
 	if (flush_GENERIC_variables__retrieve__database_to_runtime("tsdb", error, cols, affected_rows, resultset) == true) {
-		flush_GENERIC_variables__process__database_to_runtime("tsdb", db, resultset, false, replace, {}, {}, {}, {});
+		FlushVariableStats stats = flush_GENERIC_variables__process__database_to_runtime("tsdb", db, resultset, false, replace, {}, {}, {}, {});
 		flush_tsdb_variables___runtime_to_database(admindb, false, false, false, true);
+		if (resultset) delete resultset;
+		return stats;
 	}
 
 	if (resultset) delete resultset;
+	return FlushVariableStats{};
 }
 #endif
 
@@ -773,14 +793,14 @@ void ProxySQL_Admin::flush_sqliteserver_variables___runtime_to_database(SQLite3D
 
 
 #ifdef PROXYSQLCLICKHOUSE
-void ProxySQL_Admin::flush_clickhouse_variables___database_to_runtime(SQLite3DB *db, bool replace) {
+FlushVariableStats ProxySQL_Admin::flush_clickhouse_variables___database_to_runtime(SQLite3DB *db, bool replace) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing ClickHouse variables. Replace:%d\n", replace);
 	if (
 		(GloVars.global.clickhouse_server == false)
 		||
 		( GloClickHouseServer == NULL )
 	) {
-		return;
+		return FlushVariableStats{};
 	}
 	char *error=NULL;
 	int cols=0;
@@ -788,11 +808,14 @@ void ProxySQL_Admin::flush_clickhouse_variables___database_to_runtime(SQLite3DB 
 	SQLite3_result *resultset=NULL;
 	if (flush_GENERIC_variables__retrieve__database_to_runtime("clickhouse", error, cols, affected_rows, resultset) == true) {
 		GloClickHouseServer->wrlock();
-		flush_GENERIC_variables__process__database_to_runtime("clickhouse", db, resultset, false, replace, {}, {"session_debug"}, {}, {});
+		FlushVariableStats stats = flush_GENERIC_variables__process__database_to_runtime("clickhouse", db, resultset, false, replace, {}, {"session_debug"}, {}, {});
 		//GloClickHouse->commit();
 		GloClickHouseServer->wrunlock();
+		if (resultset) delete resultset;
+		return stats;
 	}
 	if (resultset) delete resultset;
+	return FlushVariableStats{};
 }
 
 void ProxySQL_Admin::flush_clickhouse_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime) {
@@ -1108,10 +1131,10 @@ void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, 
 	free(varnames);
 }
 
-void ProxySQL_Admin::flush_ldap_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum, const time_t epoch) {
+FlushVariableStats ProxySQL_Admin::flush_ldap_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum, const time_t epoch) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing LDAP variables. Replace:%d\n", replace);
 	if (GloMyLdapAuth == NULL) {
-		return;
+		return FlushVariableStats{};
 	}
 	char *error=NULL;
 	int cols=0;
@@ -1119,7 +1142,7 @@ void ProxySQL_Admin::flush_ldap_variables___database_to_runtime(SQLite3DB *db, b
 	SQLite3_result *resultset=NULL;
 	if (flush_GENERIC_variables__retrieve__database_to_runtime("ldap", error, cols, affected_rows, resultset) == true) {
 		GloMyLdapAuth->wrlock();
-		flush_GENERIC_variables__process__database_to_runtime("admin", db, resultset, false, replace, {}, {}, {}, {});
+		FlushVariableStats stats = flush_GENERIC_variables__process__database_to_runtime("admin", db, resultset, false, replace, {}, {}, {}, {});
 		GloMyLdapAuth->wrunlock();
 
 		// Checksums are always generated - 'admin-checksum_*' deprecated
@@ -1130,8 +1153,11 @@ void ProxySQL_Admin::flush_ldap_variables___database_to_runtime(SQLite3DB *db, b
 			flush_GENERIC_variables__checksum__database_to_runtime("ldap", checksum, epoch);
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
 		}
+		if (resultset) delete resultset;
+		return stats;
 	}
 	if (resultset) delete resultset;
+	return FlushVariableStats{};
 }
 
 void ProxySQL_Admin::flush_ldap_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime) {
