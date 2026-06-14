@@ -7,7 +7,7 @@
 #include "tap.h"
 
 int main(int, char**) {
-    plan(7);
+    plan(15);
 
     // SSLRequest is a fixed 8 bytes: length=8, code=80877103 (0x04d2162f).
     unsigned char ssl[8];
@@ -162,6 +162,134 @@ int main(int, char**) {
         free(server_final);
         free_scram_state(server);
         pg_scram_free(client);
+    }
+
+    // ------------------------------------------------------------------
+    // (13) libscram cbind patch: build_client_first_message emits the
+    // p=tls-server-end-point gs2 header when cbind is set.
+    //
+    // We drive libscram directly (no wrapper) so the assertion is
+    // independent of any ProxySQL-side state machine changes.
+    // ------------------------------------------------------------------
+    {
+        ScramState* st = scram_state_init();
+        const char* cbind = "p=tls-server-end-point,,0123456789abcdef";
+        scram_state_set_cbind_input(st, cbind, 38);
+
+        char* first = build_client_first_message(st);
+        bool header_ok = first != nullptr
+            && strncmp(first, "p=tls-server-end-point,,", 24) == 0
+            && strncmp(first + 24, "n=,r=", 5) == 0;
+        ok(header_ok, "build_client_first_message with cbind emits p=tls-server-end-point,, header (got: %s)",
+           first ? first : "(null)");
+
+        free(first);
+        free_scram_state(st);
+    }
+
+    // ------------------------------------------------------------------
+    // (14) libscram cbind patch: build_client_final_message emits
+    // c=base64(cbind_input) for the c= field when cbind is set.
+    //
+    // The cbind input is "p=tls-server-end-point,," || 32*NUL (54 bytes for
+    // SHA-256). The expected c= literal is base64 of those 54 bytes.
+    // ------------------------------------------------------------------
+    {
+        ScramState* st = scram_state_init();
+        unsigned char zero_digest[32] = {0};
+        char cbind[54] = "p=tls-server-end-point,,";
+        memcpy(cbind + 22, zero_digest, 32);
+        scram_state_set_cbind_input(st, cbind, 54);
+
+        st->client_nonce = strdup("rOprNGfwEbeRWgbNEkqO");
+        st->client_first_message_bare = strdup("n=user,r=rOprNGfwEbeRWgbNEkqO");
+        st->server_first_message = strdup(
+            "r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096");
+        st->cbind_flag = 'p';
+
+        PgCredentials creds{};
+        snprintf(creds.passwd, sizeof(creds.passwd), "%s", "pencil");
+        creds.has_scram_keys = false;
+
+        const char* server_nonce = "rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0";
+        unsigned char salt_raw[16] = {0};
+        auto b64val = [](char c) -> int {
+            if (c >= 'A' && c <= 'Z') return c - 'A';
+            if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+            if (c >= '0' && c <= '9') return c - '0' + 52;
+            if (c == '+') return 62;
+            if (c == '/') return 63;
+            return -1;
+        };
+        const char* salt_b64 = "W22ZaJ0SNY7soEsUEjb6gQ==";
+        int saltlen = 0;
+        {
+            int bits = 0, acc = 0;
+            for (const char* p = salt_b64; *p; ++p) {
+                int v = b64val(*p);
+                if (v < 0) break;
+                acc = (acc << 6) | v; bits += 6;
+                if (bits >= 8) { bits -= 8; salt_raw[saltlen++] = (acc >> bits) & 0xff; }
+            }
+        }
+
+        char* final_msg = build_client_final_message(
+            st, &creds, server_nonce, (const char*)salt_raw, saltlen, 4096);
+
+        // base64("p=tls-server-end-point,," + 32*NUL) computed once and pinned.
+        const char* expected_c_b64 =
+            "cEBlcy1zZXJ2ZXItZW5kLXBvaW50LCAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        bool c_ok = final_msg != nullptr
+            && strncmp(final_msg, "c=", 2) == 0
+            && strncmp(final_msg + 2, expected_c_b64, strlen(expected_c_b64)) == 0
+            && final_msg[2 + strlen(expected_c_b64)] == ',';
+        if (c_ok) {
+            ok(true, "build_client_final_message with cbind emits c=base64(cbind_input)");
+        } else {
+            char preview[96] = {0};
+            if (final_msg) {
+                size_t cp = strlen(final_msg);
+                if (cp > 90) cp = 90;
+                memcpy(preview, final_msg, cp);
+            }
+            ok(false, "build_client_final_message with cbind emits c=base64(cbind_input) (got: %s)",
+               final_msg ? preview : "(null)");
+        }
+
+        free(final_msg);
+        free_scram_state(st);
+    }
+
+    // ------------------------------------------------------------------
+    // (15) libscram cbind patch: read_client_first_message on the server
+    // side parses the cbind gs2 flag 'p' when cbind is set. This is the
+    // structural check that the gs2 header round-trips through the
+    // server-side parser.
+    // ------------------------------------------------------------------
+    {
+        ScramState* client = scram_state_init();
+        const char* cbind = "p=tls-server-end-point,,0123456789abcdef";
+        scram_state_set_cbind_input(client, cbind, 38);
+        char* first = build_client_first_message(client);
+
+        ScramState* server = scram_state_init();
+        std::string cf_copy(first ? first : "");
+        char cbind_flag = 0;
+        char* cfmb = nullptr;
+        char* cnonce = nullptr;
+        bool parsed = read_client_first_message(&cf_copy[0], &cbind_flag, &cfmb, &cnonce);
+        bool ok_cbind = parsed && cbind_flag == 'p';
+        ok(ok_cbind,
+           "server reads cbind gs2 flag 'p' from client-first when cbind is set (got: %c)",
+           parsed ? cbind_flag : '?');
+
+        free(first);
+        if (parsed) {
+            free(cfmb);
+            free(cnonce);
+        }
+        free_scram_state(server);
+        free_scram_state(client);
     }
 
     return exit_status();
