@@ -197,9 +197,10 @@ int main(int, char**) {
     {
         ScramState* st = scram_state_init();
         unsigned char zero_digest[32] = {0};
-        char cbind[54] = "p=tls-server-end-point,,";
-        memcpy(cbind + 22, zero_digest, 32);
-        scram_state_set_cbind_input(st, cbind, 54);
+        unsigned char cbind[56];
+        memcpy(cbind, "p=tls-server-end-point,,", 24);
+        memcpy(cbind + 24, zero_digest, 32);
+        scram_state_set_cbind_input(st, (const char*)cbind, 56);
 
         st->client_nonce = strdup("rOprNGfwEbeRWgbNEkqO");
         st->client_first_message_bare = strdup("n=user,r=rOprNGfwEbeRWgbNEkqO");
@@ -236,9 +237,10 @@ int main(int, char**) {
         char* final_msg = build_client_final_message(
             st, &creds, server_nonce, (const char*)salt_raw, saltlen, 4096);
 
-        // base64("p=tls-server-end-point,," + 32*NUL) computed once and pinned.
+        // base64("p=tls-server-end-point,," + 32*NUL) = 76 chars.
+        // Pinned; recomputed once with: python3 -c "import base64; print(base64.b64encode(b'p=tls-server-end-point,,' + b'\0'*32).decode())"
         const char* expected_c_b64 =
-            "cEBlcy1zZXJ2ZXItZW5kLXBvaW50LCAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+            "cD10bHMtc2VydmVyLWVuZC1wb2ludCwsAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
         bool c_ok = final_msg != nullptr
             && strncmp(final_msg, "c=", 2) == 0
             && strncmp(final_msg + 2, expected_c_b64, strlen(expected_c_b64)) == 0

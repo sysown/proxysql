@@ -543,7 +543,22 @@ char *build_client_final_message(ScramState *scram_state,
 	uint8_t client_proof[SCRAM_KEY_LEN];
 	int enclen;
 
-	snprintf(buf, sizeof(buf), "c=biws,r=%s", server_nonce);
+	if (scram_state->client_cbind_input != NULL) {
+		/* Channel-bound client: c=base64(gs2-header || cbind-data).
+		 * 86 bytes buffer = 22 (header) + 64 (max digest we accept) = 86;
+		 * base64-encoded = 116 chars max. The full prefix
+		 * "c=<b64>,r=<server_nonce>" easily fits in 512. */
+		char b64[128];
+		int blen = pg_b64_encode(scram_state->client_cbind_input,
+					 scram_state->client_cbind_input_len,
+					 b64, sizeof(b64));
+		if (blen < 0)
+			goto failed;
+		b64[blen] = '\0';
+		snprintf(buf, sizeof(buf), "c=%s,r=%s", b64, server_nonce);
+	} else {
+		snprintf(buf, sizeof(buf), "c=biws,r=%s", server_nonce);
+	}
 
 	scram_state->client_final_message_without_proof = strdup(buf);
 	if (scram_state->client_final_message_without_proof == NULL)
