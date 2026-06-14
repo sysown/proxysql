@@ -890,8 +890,9 @@ void ProxySQL_Admin::flush_clickhouse_variables___runtime_to_database(SQLite3DB 
 }
 #endif /* PROXYSQLCLICKHOUSE */
 
-void ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum, const time_t epoch) {
+FlushVariableStats ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum, const time_t epoch) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing PgSQL variables. Replace:%d\n", replace);
+	FlushVariableStats stats;
 	char* error = NULL;
 	int cols = 0;
 	int affected_rows = 0;
@@ -900,13 +901,16 @@ void ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(SQLite3DB* db, 
 	admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 	if (error) {
 		proxy_error("Error on %s : %s\n", q, error);
-		return;
+		free(error);
+		if (resultset) delete resultset;
+		return FlushVariableStats{};
 	}
 	else {
-		GloPTH->wrlock();	
+		GloPTH->wrlock();
 		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
 			SQLite3_row* r = *it;
 			const char* value = r->fields[1];
+			stats.records++;
 			bool rc = GloPTH->set_variable(r->fields[0], value);
 			if (rc == false) {
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Impossible to set variable %s with value \"%s\"\n", r->fields[0], value);
@@ -920,11 +924,13 @@ void ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(SQLite3DB* db, 
 								db->execute(q);
 							}
 							free(val);
+							stats.rejected++;
 					}
 						else {
 							if (strcmp(r->fields[0], (char*)"session_debug") == 0) {
 								snprintf(q, sizeof(q), "DELETE FROM disk.global_variables WHERE variable_name=\"pgsql-%s\"", r->fields[0]);
 								db->execute(q);
+								stats.rejected++;
 							}
 							else {
 								if (strcmp(r->fields[0], (char*)"forward_autocommit") == 0) {
@@ -933,9 +939,11 @@ void ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(SQLite3DB* db, 
 									}
 									snprintf(q, sizeof(q), "DELETE FROM disk.global_variables WHERE variable_name=\"pgsql-%s\"", r->fields[0]);
 									db->execute(q);
+									stats.rejected++;
 								}
 							else {
 								proxy_warning("Impossible to set not existing variable %s with value \"%s\". Deleting. If the variable name is correct, this version doesn't support it\n", r->fields[0], r->fields[1]);
+								stats.unknown++;
 								}
 							}
 							snprintf(q, sizeof(q), "DELETE FROM global_variables WHERE variable_name=\"pgsql-%s\"", r->fields[0]);
@@ -944,6 +952,7 @@ void ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(SQLite3DB* db, 
 					}
 			}
 			else {
+				stats.updated++;
 				if (
 					(strcmp(r->fields[0], "default_collation_connection") == 0)
 					|| (strcmp(r->fields[0], "default_charset") == 0)
@@ -1038,6 +1047,7 @@ void ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(SQLite3DB* db, 
 		}
 	}
 	if (resultset) delete resultset;
+	return stats;
 }
 
 
