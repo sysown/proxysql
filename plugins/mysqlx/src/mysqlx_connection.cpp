@@ -14,6 +14,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 #include <cerrno>
 #include <cstring>
 #include <chrono>
@@ -98,20 +99,32 @@ int MysqlxConnection::start_connect(const char* host, int port) {
 	memset(&addr, 0, sizeof(addr));
 	addr.sin_family = AF_INET;
 	addr.sin_port = htons(port);
-	// Reject anything that isn't an IPv4 dotted-quad. Previously the
-	// return value was discarded and inet_pton on a hostname (or empty
-	// string, or "::1", or anything else) silently left sin_addr at
-	// 0.0.0.0, producing a connect to localhost-or-INADDR_ANY-equivalent
-	// — a real footgun because mysqlx_backend_endpoints.hostname accepts
-	// arbitrary strings. Hostnames are not supported here; the upstream
-	// path is expected to have already resolved them. Failing fast with
-	// ERROR_STATE surfaces the misconfig instead of silently routing
-	// traffic to the wrong target.
-	if (inet_pton(AF_INET, host ? host : "", &addr.sin_addr) != 1) {
-		close(fd_);
-		fd_ = -1;
-		state_ = ERROR_STATE;
-		return -1;
+	// Resolve `host` to an IPv4 address. Operators routinely populate
+	// mysqlx_backend_endpoints.hostname with DNS names (the standard
+	// docker-compose / Kubernetes pattern), so an IPv4-only inet_pton
+	// rejected every realistic backend and the session emitted 2003 for
+	// every first query — that is the failure mode behind the soak
+	// harness "Can't connect to backend" reports against the bind-mounted
+	// mysqlx plugin. inet_pton is still tried first so an already-resolved
+	// dotted-quad short-circuits the DNS roundtrip; only on miss do we
+	// fall back to getaddrinfo. Anything unresolvable still fails
+	// ERROR_STATE rather than silently routing to 0.0.0.0.
+	const char* host_in = host ? host : "";
+	if (inet_pton(AF_INET, host_in, &addr.sin_addr) != 1) {
+		struct addrinfo hints {};
+		hints.ai_family = AF_INET;
+		hints.ai_socktype = SOCK_STREAM;
+		struct addrinfo* res = nullptr;
+		int gai = getaddrinfo(host_in, nullptr, &hints, &res);
+		if (gai != 0 || res == nullptr) {
+			if (res) freeaddrinfo(res);
+			close(fd_);
+			fd_ = -1;
+			state_ = ERROR_STATE;
+			return -1;
+		}
+		addr.sin_addr = reinterpret_cast<struct sockaddr_in*>(res->ai_addr)->sin_addr;
+		freeaddrinfo(res);
 	}
 	int rc = ::connect(fd_, (struct sockaddr*)&addr, sizeof(addr));
 	if (rc == 0) { state_ = AUTHENTICATING; return 0; }
