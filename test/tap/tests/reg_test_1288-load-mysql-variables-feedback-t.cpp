@@ -60,11 +60,17 @@ int main(int argc, char** argv) {
 
 	MYSQL_QUERY(admin, "SELECT variable_value FROM runtime_global_variables WHERE variable_name='mysql-max_connections'");
 	MYSQL_RES* res = mysql_store_result(admin);
-	ok(res != NULL && mysql_fetch_row(res) != NULL,
-	   "runtime_global_variables query returned a result set with at least one row");
+	bool runtime_value_reset = false;
 	if (res) {
+		MYSQL_ROW row = mysql_fetch_row(res);
+		if (row && row[0]) {
+			// The rejected value '0' should NOT be in runtime; the row should reflect the previous valid value ('10000' from setup)
+			runtime_value_reset = (strcmp(row[0], "0") != 0);
+		}
 		mysql_free_result(res);
 	}
+	ok(runtime_value_reset,
+	   "runtime mysql-max_connections was reset away from rejected '0' value");
 
 	MYSQL_QUERY(admin, "DELETE FROM global_variables WHERE variable_name='mysql-bogus_var_xyz'");
 	MYSQL_QUERY(admin, "UPDATE global_variables SET variable_value='10000' WHERE variable_name='mysql-max_connections'");

@@ -34,10 +34,23 @@ int main(int argc, char** argv) {
 		return -1;
 	}
 
+	// Snapshot the original pgsql-max_connections value (may not exist)
+	char original_pgsql_max_conn[64] = {0};
+	if (mysql_query(admin, "SELECT variable_value FROM global_variables WHERE variable_name='pgsql-max_connections'") == 0) {
+		MYSQL_RES* snap = mysql_store_result(admin);
+		if (snap) {
+			MYSQL_ROW row = mysql_fetch_row(snap);
+			if (row && row[0]) {
+				strncpy(original_pgsql_max_conn, row[0], sizeof(original_pgsql_max_conn) - 1);
+			}
+			mysql_free_result(snap);
+		}
+	}
+
 	MYSQL_QUERY(admin,
 		"INSERT OR REPLACE INTO global_variables(variable_name, variable_value) "
 		"VALUES "
-		"('pgsql-max_connections', '1000'), "
+		"('pgsql-max_connections', '0'), "
 		"('pgsql-bogus_var_xyz', 'something')");
 
 	if (mysql_query(admin, "LOAD PGSQL VARIABLES TO RUNTIME")) {
@@ -48,13 +61,21 @@ int main(int argc, char** argv) {
 	diag("LOAD PGSQL info: %s", info ? info : "(null)");
 
 	bool has_records_2 = info && strstr(info, "Records: 2") != NULL;
-	bool has_updated_1 = info && strstr(info, "Updated: 1") != NULL;
+	bool has_updated_0 = info && strstr(info, "Updated: 0") != NULL;
+	bool has_rejected_1 = info && strstr(info, "Rejected: 1") != NULL;
 	bool has_unknown_1 = info && strstr(info, "Unknown: 1") != NULL;
-	ok(has_records_2 && has_updated_1 && has_unknown_1,
-	   "LOAD PGSQL VARIABLES TO RUNTIME info='%s' reports Records: 2 Updated: 1 Unknown: 1",
+	ok(has_records_2 && has_updated_0 && has_rejected_1 && has_unknown_1,
+	   "LOAD PGSQL VARIABLES TO RUNTIME info='%s' reports Records: 2 Updated: 0 Rejected: 1 Unknown: 1",
 	   info ? info : "(null)");
 
 	MYSQL_QUERY(admin, "DELETE FROM global_variables WHERE variable_name='pgsql-bogus_var_xyz'");
+	if (original_pgsql_max_conn[0]) {
+		char q[256];
+		snprintf(q, sizeof(q), "UPDATE global_variables SET variable_value='%s' WHERE variable_name='pgsql-max_connections'", original_pgsql_max_conn);
+		MYSQL_QUERY(admin, q);
+	} else {
+		MYSQL_QUERY(admin, "DELETE FROM global_variables WHERE variable_name='pgsql-max_connections'");
+	}
 	MYSQL_QUERY(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
 
 	mysql_close(admin);
