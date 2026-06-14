@@ -1,13 +1,13 @@
 #include "mysqlx_connection.h"
 #include "mysqlx_protocol.h"
+#include "proxysql.h"
+#include "proxysql_debug.h"
 
 #include "mysqlx.pb.h"
 #include "mysqlx_connection.pb.h"
 #include "mysqlx_session.pb.h"
 #include "mysqlx_datatypes.pb.h"
 #include "mysqlx_notice.pb.h"
-
-#include <cstdio>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/socket.h>
@@ -214,20 +214,19 @@ int MysqlxConnection::send_client_frame(uint8_t msg_type, const std::string& pay
 bool MysqlxConnection::auth_phase_notice_is_drainable(const uint8_t* body, size_t body_len) {
 	if (body == nullptr || body_len == 0) {
 		// Empty NOTICE during auth is malformed; treat as auth failure.
-		fprintf(stderr, "mysqlx: empty NOTICE during backend auth — failing auth\n");
+		proxy_error("mysqlx: empty NOTICE during backend auth — failing auth\n");
 		auth_state_ = BACKEND_AUTH_ERROR;
 		return false;
 	}
 	Mysqlx::Notice::Frame nframe;
 	if (!nframe.ParseFromArray(body, static_cast<int>(body_len))) {
-		fprintf(stderr, "mysqlx: malformed NOTICE during backend auth — failing auth\n");
+		proxy_error("mysqlx: malformed NOTICE during backend auth — failing auth\n");
 		auth_state_ = BACKEND_AUTH_ERROR;
 		return false;
 	}
 	if (!nframe.has_type() || !Mysqlx::Notice::Frame_Type_IsValid(nframe.type())) {
-		fprintf(stderr,
-			"mysqlx: unknown-type NOTICE (type=%d) during backend auth — failing auth\n",
-			nframe.has_type() ? nframe.type() : -1);
+		proxy_error("mysqlx: unknown-type NOTICE (type=%d) during backend auth — failing auth\n",
+		            nframe.has_type() ? nframe.type() : -1);
 		auth_state_ = BACKEND_AUTH_ERROR;
 		return false;
 	}
@@ -240,17 +239,15 @@ bool MysqlxConnection::auth_phase_notice_is_drainable(const uint8_t* body, size_
 		case Mysqlx::Notice::Frame_Type_WARNING:
 			// Operationally suspect during auth (deprecated auth method
 			// notices, etc.). Drain but log so operators can see them.
-			fprintf(stderr,
-				"mysqlx: backend emitted WARNING NOTICE during auth (drained)\n");
+			proxy_warning("mysqlx: backend emitted WARNING NOTICE during auth (drained)\n");
 			return true;
 		case Mysqlx::Notice::Frame_Type_GROUP_REPLICATION_STATE_CHANGED:
 			// Cluster-membership notices during auth are out-of-place;
 			// they belong on data-plane connections after auth is done.
 			// Drain but log — don't fail the connection over what is
 			// likely an over-eager server, but make it visible.
-			fprintf(stderr,
-				"mysqlx: backend emitted GROUP_REPLICATION_STATE_CHANGED "
-				"NOTICE during auth (drained — unexpected on auth path)\n");
+			proxy_warning("mysqlx: backend emitted GROUP_REPLICATION_STATE_CHANGED "
+			              "NOTICE during auth (drained — unexpected on auth path)\n");
 			return true;
 	}
 	// Defensive default: known-but-not-enumerated-here type. Treat as

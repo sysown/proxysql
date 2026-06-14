@@ -1,6 +1,8 @@
 #include "mysqlx_thread.h"
 #include "mysqlx_config_store.h"
 #include "mysqlx_protocol.h"
+#include "proxysql.h"
+#include "proxysql_debug.h"
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -320,14 +322,14 @@ void Mysqlx_Thread::process_all_sessions() {
 }
 
 int Mysqlx_Thread::add_listener(const char* bind_addr, int port, const char* route_name) {
-	fprintf(stderr, "mysqlx: add_listener entered: bind=%s port=%d route=%s\n",
-	        bind_addr ? bind_addr : "(null)", port,
-	        route_name ? route_name : "(null)");
+	proxy_info("mysqlx: add_listener entered: bind=%s port=%d route=%s\n",
+	           bind_addr ? bind_addr : "(null)", port,
+	           route_name ? route_name : "(null)");
 	int fd = socket(AF_INET, SOCK_STREAM, 0);
 	if (fd < 0) {
-		fprintf(stderr, "mysqlx: add_listener(%s:%d, route=%s): socket() failed: %s\n",
-		        bind_addr ? bind_addr : "(null)", port,
-		        route_name ? route_name : "(null)", strerror(errno));
+		proxy_error("mysqlx: add_listener(%s:%d, route=%s): socket() failed: %s\n",
+		            bind_addr ? bind_addr : "(null)", port,
+		            route_name ? route_name : "(null)", strerror(errno));
 		return -1;
 	}
 
@@ -345,16 +347,16 @@ int Mysqlx_Thread::add_listener(const char* bind_addr, int port, const char* rou
 	}
 
 	if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-		fprintf(stderr, "mysqlx: add_listener(%s:%d, route=%s): bind() failed: %s\n",
-		        bind_addr ? bind_addr : "(null)", port,
-		        route_name ? route_name : "(null)", strerror(errno));
+		proxy_error("mysqlx: add_listener(%s:%d, route=%s): bind() failed: %s\n",
+		            bind_addr ? bind_addr : "(null)", port,
+		            route_name ? route_name : "(null)", strerror(errno));
 		close(fd);
 		return -1;
 	}
 	if (listen(fd, 128) < 0) {
-		fprintf(stderr, "mysqlx: add_listener(%s:%d, route=%s): listen() failed: %s\n",
-		        bind_addr ? bind_addr : "(null)", port,
-		        route_name ? route_name : "(null)", strerror(errno));
+		proxy_error("mysqlx: add_listener(%s:%d, route=%s): listen() failed: %s\n",
+		            bind_addr ? bind_addr : "(null)", port,
+		            route_name ? route_name : "(null)", strerror(errno));
 		close(fd);
 		return -1;
 	}
@@ -372,9 +374,9 @@ int Mysqlx_Thread::add_listener(const char* bind_addr, int port, const char* rou
 		listener_ports_.push_back(port);
 		listener_route_names_.push_back(route_name != nullptr ? route_name : "");
 	}
-	fprintf(stderr, "mysqlx: add_listener(%s:%d, route=%s): bind+listen OK, fd=%d\n",
-	        bind_addr ? bind_addr : "(null)", port,
-	        route_name ? route_name : "(null)", fd);
+	proxy_info("mysqlx: add_listener(%s:%d, route=%s): bind+listen OK, fd=%d\n",
+	           bind_addr ? bind_addr : "(null)", port,
+	           route_name ? route_name : "(null)", fd);
 	return 0;
 }
 

@@ -2,6 +2,8 @@
 #include "mysqlx_thread.h"
 #include "mysqlx_protocol.h"
 #include "mysqlx_stats.h"
+#include "proxysql.h"
+#include "proxysql_debug.h"
 
 #include "mysqlx.pb.h"
 #include "mysqlx_connection.pb.h"
@@ -1390,10 +1392,9 @@ void MysqlxSession::handler_waiting_server_msg() {
 			const uint8_t* body = (frame.size() > 5) ? (frame.data() + 5) : nullptr;
 			size_t body_len = (frame.size() > 5) ? (frame.size() - 5) : 0;
 			if (!is_notice_frame_valid(body, body_len)) {
-				fprintf(stderr,
-					"mysqlx: dropping malformed/unknown-type NOTICE frame from backend "
-					"(route=%s, hostgroup=%d, body_len=%zu)\n",
-					route_name_.c_str(), target_hostgroup_, body_len);
+				proxy_error("mysqlx: dropping malformed/unknown-type NOTICE frame from backend "
+				            "(route=%s, hostgroup=%d, body_len=%zu)\n",
+				            route_name_.c_str(), target_hostgroup_, body_len);
 				server_ds().pop_frame();
 				continue;
 			}
@@ -1483,10 +1484,9 @@ void MysqlxSession::handler_session_reset_waiting() {
 			const uint8_t* body = (frame.size() > 5) ? (frame.data() + 5) : nullptr;
 			size_t body_len = (frame.size() > 5) ? (frame.size() - 5) : 0;
 			if (!is_notice_frame_valid(body, body_len)) {
-				fprintf(stderr,
-					"mysqlx: dropping malformed/unknown-type NOTICE frame "
-					"during SESS_RESET (route=%s, hostgroup=%d, body_len=%zu)\n",
-					route_name_.c_str(), target_hostgroup_, body_len);
+				proxy_error("mysqlx: dropping malformed/unknown-type NOTICE frame "
+				            "during SESS_RESET (route=%s, hostgroup=%d, body_len=%zu)\n",
+				            route_name_.c_str(), target_hostgroup_, body_len);
 				server_ds().pop_frame();
 				continue;
 			}
@@ -1961,13 +1961,11 @@ void MysqlxSession::handler_tls_accept_init() {
 			unsigned long ssl_err = ERR_get_error();
 			if (ssl_err != 0) {
 				ERR_error_string_n(ssl_err, err_buf, sizeof(err_buf));
-				fprintf(stderr,
-					"mysqlx: frontend TLS handshake failed (class=%d): %s\n",
-					static_cast<int>(cls), err_buf);
+				proxy_error("mysqlx: frontend TLS handshake failed (class=%d): %s\n",
+				            static_cast<int>(cls), err_buf);
 			} else {
-				fprintf(stderr,
-					"mysqlx: frontend TLS handshake failed (class=%d, no OpenSSL detail)\n",
-					static_cast<int>(cls));
+				proxy_error("mysqlx: frontend TLS handshake failed (class=%d, no OpenSSL detail)\n",
+				            static_cast<int>(cls));
 			}
 			send_error(mysqlx_frontend_tls_error_code(cls),
 			           mysqlx_frontend_tls_error_message(cls));
