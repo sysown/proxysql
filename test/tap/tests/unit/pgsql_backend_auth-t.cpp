@@ -262,9 +262,11 @@ int main(int, char**) {
 
     // ------------------------------------------------------------------
     // (15) libscram cbind patch: read_client_first_message on the server
-    // side parses the cbind gs2 flag 'p' when cbind is set. This is the
-    // structural check that the gs2 header round-trips through the
-    // server-side parser.
+    // side rejects the 'p' gs2 flag (libscram server-side does not
+    // support SCRAM-PLUS; a real backend that accepts -PLUS is the
+    // e2e test, deferred to 1b-B). This test confirms the client
+    // produces a message the server CORRECTLY RECOGNIZES as 'p' (not 'n'
+    // or 'y') and rejects with the expected error.
     // ------------------------------------------------------------------
     {
         ScramState* client = scram_state_init();
@@ -272,22 +274,27 @@ int main(int, char**) {
         scram_state_set_cbind_input(client, cbind, 38);
         char* first = build_client_first_message(client);
 
+        scram_reset_error();
         ScramState* server = scram_state_init();
         std::string cf_copy(first ? first : "");
         char cbind_flag = 0;
         char* cfmb = nullptr;
         char* cnonce = nullptr;
         bool parsed = read_client_first_message(&cf_copy[0], &cbind_flag, &cfmb, &cnonce);
-        bool ok_cbind = parsed && cbind_flag == 'p';
-        ok(ok_cbind,
-           "server reads cbind gs2 flag 'p' from client-first when cbind is set (got: %c)",
-           parsed ? cbind_flag : '?');
+        const char* err = scram_error();
+        bool recognized_as_p = !parsed
+            && err != nullptr
+            && strstr(err, "client requires SCRAM channel binding") != nullptr
+            && first != nullptr
+            && strncmp(first, "p=tls-server-end-point,,", 24) == 0;
+        ok(recognized_as_p,
+           "server recognizes cbind client-first as 'p' gs2 flag (rejects as expected)");
 
-        free(first);
         if (parsed) {
             free(cfmb);
             free(cnonce);
         }
+        free(first);
         free_scram_state(server);
         free_scram_state(client);
     }

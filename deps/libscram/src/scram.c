@@ -506,7 +506,15 @@ char *build_client_first_message(ScramState *scram_state)
 	result = malloc(len);
 	if (result == NULL)
 		goto failed;
-	snprintf(result, len, "n,,n=,r=%s", scram_state->client_nonce);
+	if (scram_state->client_cbind_input != NULL) {
+		/* Channel-bound client: gs2 cbind flag 'p' with tls-server-end-point
+		 * type. The PostgreSQL convention is an empty SCRAM username (the
+		 * real username travels in the StartupMessage), so the header is
+		 * "p=tls-server-end-point,,". */
+		snprintf(result, len, "p=tls-server-end-point,,n=,r=%s", scram_state->client_nonce);
+	} else {
+		snprintf(result, len, "n,,n=,r=%s", scram_state->client_nonce);
+	}
 
 	scram_state->client_first_message_bare = strdup(result + 3);
 	if (scram_state->client_first_message_bare == NULL)
