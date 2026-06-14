@@ -132,16 +132,23 @@ void mysqlx_reconcile_listeners_impl(
 
 	// 3. Add listeners for routes that are desired but not yet mapped.
 	int pool = static_cast<int>(threads.size());
+	fprintf(stderr, "mysqlx: reconcile_listeners step3: pool=%d desired_count=%zu route_to_thread_count=%zu\n",
+	        pool, desired.size(), route_to_thread.size());
 	for (const auto& dr : desired) {
 		if (route_to_thread.find(dr.name) != route_to_thread.end()) {
+			fprintf(stderr, "mysqlx: reconcile_listeners step3: route '%s' already mapped, skipping\n",
+			        dr.name.c_str());
 			continue; // already mapped; leave untouched
 		}
 		int tidx = ((next_rr_index % pool) + pool) % pool;
 		next_rr_index = (next_rr_index + 1) % pool;
+		fprintf(stderr, "mysqlx: reconcile_listeners step3: route '%s' -> tidx=%d threads[tidx]=%s\n",
+		        dr.name.c_str(), tidx, threads[tidx] ? "non-null" : "NULL");
 		if (threads[tidx]) {
 			int rc = threads[tidx]->add_listener(
 				dr.host.c_str(), dr.port, dr.name.c_str()
 			);
+			fprintf(stderr, "mysqlx: reconcile_listeners step3: add_listener rc=%d\n", rc);
 			if (rc == 0) {
 				route_to_thread[dr.name] = tidx;
 			}

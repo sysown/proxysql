@@ -320,6 +320,9 @@ void Mysqlx_Thread::process_all_sessions() {
 }
 
 int Mysqlx_Thread::add_listener(const char* bind_addr, int port, const char* route_name) {
+	fprintf(stderr, "mysqlx: add_listener entered: bind=%s port=%d route=%s\n",
+	        bind_addr ? bind_addr : "(null)", port,
+	        route_name ? route_name : "(null)");
 	int fd = socket(AF_INET, SOCK_STREAM, 0);
 	if (fd < 0) {
 		fprintf(stderr, "mysqlx: add_listener(%s:%d, route=%s): socket() failed: %s\n",
@@ -369,6 +372,9 @@ int Mysqlx_Thread::add_listener(const char* bind_addr, int port, const char* rou
 		listener_ports_.push_back(port);
 		listener_route_names_.push_back(route_name != nullptr ? route_name : "");
 	}
+	fprintf(stderr, "mysqlx: add_listener(%s:%d, route=%s): bind+listen OK, fd=%d\n",
+	        bind_addr ? bind_addr : "(null)", port,
+	        route_name ? route_name : "(null)", fd);
 	return 0;
 }
 
