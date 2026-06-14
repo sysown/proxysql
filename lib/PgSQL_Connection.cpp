@@ -13,6 +13,8 @@
 #include <errno.h>
 
 #include "openssl/x509v3.h" // X509_VERIFY_PARAM_set1_host / set_hostflags (native backend TLS)
+#include "openssl/evp.h"     // EVP_MAX_MD_SIZE for cbind digest buffer (SCRAM-PLUS)
+#include "PgSQL_Backend_Protocol.h"  // pg_tls_server_end_point / pg_scram_build_cbind_input_* / pg_scram_set_cbind (SCRAM-PLUS)
 
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
@@ -2229,21 +2231,72 @@ void PgSQL_Connection::native_drive_auth(short /*event*/) {
 				else if (mlen == strlen("SCRAM-SHA-256-PLUS") && memcmp(mech, "SCRAM-SHA-256-PLUS", mlen) == 0) has_scram_plus = true;
 				i += mlen + 1;
 			}
-			if (!has_scram) {
-				// Only -PLUS (channel binding) offered, or unknown mechanisms.
-				native_capability_gap(has_scram_plus ? "SCRAM-SHA-256-PLUS only" : "no supported SASL mechanism");
+
+			// Mechanism selection (mirror of design §4):
+			//   plain-only     -> plain
+			//   plus-only, TLS -> PLUS  (set cbind below)
+			//   plus-only, !TLS-> capability gap (cbind makes no sense over plaintext)
+			//   both,    TLS   -> PLUS  (set cbind below)   <-- the upgrade
+			//   both,    !TLS  -> plain
+			//   neither        -> capability gap
+			const bool tls_in_use = (myds && myds->encrypted && myds->ssl);
+			bool use_scram_plus = false;
+			if (has_scram_plus && tls_in_use) {
+				use_scram_plus = true;
+			} else if (has_scram_plus && !tls_in_use && !has_scram) {
+				native_capability_gap("SCRAM-SHA-256-PLUS only, no TLS");
+				return;
+			} else if (!has_scram && !has_scram_plus) {
+				native_capability_gap("no supported SASL mechanism");
 				return;
 			}
+			// Remaining cases (has_scram && !use_scram_plus) -> plain.
+
 			if (native_scram) { pg_scram_free(native_scram); native_scram = nullptr; }
 			native_scram = pg_scram_new();
-			const char* client_first = native_scram ? pg_scram_client_first(native_scram, false) : nullptr;
+			if (native_scram == nullptr) {
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_OUT_OF_MEMORY), "scram state alloc failed", false);
+				native_teardown();
+				return;
+			}
+
+			// If using -PLUS, set the cbind input BEFORE building client-first
+			// so the gs2 header in client-first is "p=tls-server-end-point,,".
+			if (use_scram_plus) {
+				unsigned char digest[EVP_MAX_MD_SIZE];
+				size_t digest_len = 0;
+				if (pg_tls_server_end_point(myds->ssl, digest, &digest_len) < 0) {
+					// Digest failed: degrade to plain if also offered, else
+					// capability gap. Log once via the capability-gap path.
+					if (has_scram) {
+						use_scram_plus = false;
+					} else {
+						native_capability_gap("SCRAM-SHA-256-PLUS cert digest failed");
+						return;
+					}
+				} else {
+					// 24-byte header + max 64-byte digest = 88 bytes.
+					unsigned char cbind_input[88];
+					int cbind_len = pg_scram_build_cbind_input_tls_server_end_point(
+						digest, digest_len, cbind_input, sizeof(cbind_input));
+					if (cbind_len < 0) {
+						// Buffer math error — by construction impossible.
+						assert(0);
+						native_teardown();
+						return;
+					}
+					pg_scram_set_cbind(native_scram, (const char*)cbind_input, cbind_len);
+				}
+			}
+
+			const char* client_first = pg_scram_client_first(native_scram, /*channel_binding=*/use_scram_plus);
 			if (client_first == nullptr) {
 				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "SCRAM client-first failed", false);
 				native_teardown();
 				return;
 			}
 			// SASLInitialResponse body: mechname\0 + int32(initial-resp-len) + initial-resp
-			const char* mechname = "SCRAM-SHA-256";
+			const char* mechname = use_scram_plus ? "SCRAM-SHA-256-PLUS" : "SCRAM-SHA-256";
 			uint32_t cflen = (uint32_t)strlen(client_first);
 			std::string body;
 			body.append(mechname, strlen(mechname) + 1); // include NUL
