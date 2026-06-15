@@ -338,25 +338,34 @@ int MysqlxConnection::step_auth_capabilities_get_sent() {
 	}
 	auth_state_ = BACKEND_AUTH_CAPABILITIES_RECV;
 
-	Mysqlx::Connection::CapabilitiesSet cap_set;
-	auto* cap = cap_set.mutable_capabilities()->add_capabilities();
-	cap->set_name("authentication.mechanisms");
-	auto* val = cap->mutable_value();
-	val->set_type(Mysqlx::Datatypes::Any::ARRAY);
-	auto* arr = val->mutable_array();
-	auto* v = arr->add_value();
-	v->set_type(Mysqlx::Datatypes::Any::SCALAR);
-	v->mutable_scalar()->set_type(Mysqlx::Datatypes::Scalar::V_STRING);
-	v->mutable_scalar()->mutable_v_string()->set_value("MYSQL41");
-
-	if (backend_tls_required_ && backend_ssl_ctx_) {
-		auto* tls_cap = cap_set.mutable_capabilities()->add_capabilities();
-		tls_cap->set_name("tls");
-		auto* tls_val = tls_cap->mutable_value();
-		tls_val->set_type(Mysqlx::Datatypes::Any::SCALAR);
-		tls_val->mutable_scalar()->set_type(Mysqlx::Datatypes::Scalar::V_BOOL);
-		tls_val->mutable_scalar()->set_v_bool(true);
+	// `authentication.mechanisms` is a read-only capability on the
+	// upstream X plugin — CapabilitiesSet for it returns
+	// `ER_X_CAPABILITIES_PREPARE_FAILED` (5001) "CapabilitiesSet not
+	// supported for the authentication.mechanisms capability". The auth
+	// mechanism is chosen via AuthenticateStart.mech_name, not by
+	// setting a capability. Only send CapabilitiesSet when we actually
+	// need to negotiate a TLS upgrade; otherwise jump straight to
+	// AuthenticateStart.
+	//
+	// Note: the gate is backend_tls_required_, NOT (required && ssl_ctx).
+	// `preferred` mode (tls_required=true, fallback_allowed=true) on a
+	// worker with no SSL_CTX still emits the CapabilitiesSet(tls=true)
+	// frame so the backend's Error response can drive the plaintext
+	// fallback in step_auth_capabilities_set_sent. With ssl_ctx absent
+	// the post-OK TLS handshake branch below silently downgrades, which
+	// preserves the prior preferred-mode contract exercised by
+	// mysqlx_backend_auth_unit-t.
+	if (!backend_tls_required_) {
+		return send_authenticate_start();
 	}
+
+	Mysqlx::Connection::CapabilitiesSet cap_set;
+	auto* tls_cap = cap_set.mutable_capabilities()->add_capabilities();
+	tls_cap->set_name("tls");
+	auto* tls_val = tls_cap->mutable_value();
+	tls_val->set_type(Mysqlx::Datatypes::Any::SCALAR);
+	tls_val->mutable_scalar()->set_type(Mysqlx::Datatypes::Scalar::V_BOOL);
+	tls_val->mutable_scalar()->set_v_bool(true);
 
 	std::string s;
 	cap_set.SerializeToString(&s);
@@ -512,7 +521,16 @@ int MysqlxConnection::step_auth_authenticate_start_sent() {
 	std::vector<uint8_t> scramble_vec = mysqlx_mysql41_scramble(
 		std::vector<uint8_t>(challenge.begin(), challenge.end()), backend_password_);
 	std::string hex_scramble = mysqlx_hex_encode(scramble_vec);
-	std::string response = std::string("*") + hex_scramble;
+	// MYSQL41 AuthenticateContinue payload format expected by the upstream
+	// MySQL X server: `schema\0user\0*hex_scramble`. Sending just
+	// `*hex_scramble` (the prior form) is the format ProxySQL accepts on
+	// the FRONTEND side — but the X plugin on a real MySQL server treats
+	// the leading byte as the schema field and yields 1045 "Access
+	// denied". Pass the full triple so backend auth lines up with the
+	// upstream protocol.
+	std::string response = backend_schema_ + std::string("\0", 1) +
+	                       backend_user_ + std::string("\0", 1) +
+	                       std::string("*") + hex_scramble;
 
 	Mysqlx::Session::AuthenticateContinue resp;
 	resp.set_auth_data(response);

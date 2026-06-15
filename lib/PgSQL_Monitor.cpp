@@ -1104,7 +1104,11 @@ string build_conn_str(const task_st_t& task_st) {
 	append_conninfo_param(conninfo, "password", user_info.pass); // password
 	append_conninfo_param(conninfo, "dbname", user_info.dbname); // dbname
 	append_conninfo_param(conninfo, "host", srv_info.addr); // backend address
-	conninfo << "port=" << srv_info.port << " "; // backend port
+	// port=0 means address is a Unix-domain socket path; libpq rejects
+	// "port=0" with "invalid port number: \"0\"".
+	if (srv_info.port != 0) {
+		conninfo << "port=" << srv_info.port << " ";
+	}
 	conninfo << "application_name=ProxySQL-Monitor "; // application name
 	if (srv_info.ssl) {
 		conninfo << "sslmode='require' "; // SSL required
