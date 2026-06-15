@@ -6345,6 +6345,13 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_rds_hostgroups_table() {
 	}
 	delete incoming_aws_rds_hostgroups;
 	incoming_aws_rds_hostgroups=NULL;
+
+	// publish the refreshed host list to the RDS monitor thread
+	if (GloMyMon) {
+		pthread_mutex_lock(&GloMyMon->aws_rds_mutex);
+		update_aws_rds_hosts_monitor_resultset(false);
+		pthread_mutex_unlock(&GloMyMon->aws_rds_mutex);
+	}
 }
 
 
@@ -6920,6 +6927,40 @@ void MySQL_HostGroups_Manager::update_aws_aurora_hosts_monitor_resultset(bool lo
 	if (lock) {
 		pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
 		pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
+	}
+}
+
+const char SELECT_AWS_RDS_SERVERS_FOR_MONITOR[] {
+	"SELECT writer_hostgroup, reader_hostgroup, hostname, port, MAX(use_ssl) use_ssl, green_writer_hostgroup,"
+		" green_reader_hostgroup, check_interval_ms, check_timeout_ms, autopurge_missing_checks, domain_name FROM mysql_servers"
+	" JOIN mysql_aws_rds_hostgroups ON"
+		" hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE active=1 AND status NOT IN (2,3)"
+	" GROUP BY writer_hostgroup, hostname, port"
+};
+
+void MySQL_HostGroups_Manager::update_aws_rds_hosts_monitor_resultset(bool lock) {
+	if (lock) {
+		pthread_mutex_lock(&GloMyMon->aws_rds_mutex);
+	}
+
+	SQLite3_result* resultset = nullptr;
+	{
+		char* error = nullptr;
+		int cols = 0;
+		int affected_rows = 0;
+		mydb->execute_statement(SELECT_AWS_RDS_SERVERS_FOR_MONITOR, &error, &cols, &affected_rows, &resultset);
+	}
+
+	if (resultset) {
+		if (GloMyMon->AWS_RDS_Hosts_resultset) {
+			delete GloMyMon->AWS_RDS_Hosts_resultset;
+		}
+		GloMyMon->AWS_RDS_Hosts_resultset=resultset;
+		GloMyMon->AWS_RDS_Hosts_resultset_checksum=resultset->raw_checksum();
+	}
+
+	if (lock) {
+		pthread_mutex_unlock(&GloMyMon->aws_rds_mutex);
 	}
 }
 

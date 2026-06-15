@@ -1122,6 +1122,12 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 *   be taken or not.
 	 */
 	void update_aws_aurora_hosts_monitor_resultset(bool lock=false);
+	/**
+	 * @brief Rebuilds `GloMyMon->AWS_RDS_Hosts_resultset` (and its checksum) from the
+	 *   `mysql_servers` x `mysql_aws_rds_hostgroups` join used by the RDS monitor thread.
+	 * @param lock when true, the monitor's `aws_rds_mutex` is taken internally.
+	 */
+	void update_aws_rds_hosts_monitor_resultset(bool lock=false);
 
 	SQLite3_result * get_stats_mysql_gtid_executed();
 	void generate_mysql_gtid_executed_tables();

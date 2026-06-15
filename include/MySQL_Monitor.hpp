@@ -204,6 +204,7 @@ enum MySQL_Monitor_State_Data_Task_Type {
 	MON_REPLICATION_LAG,
 	MON_GALERA,
 	MON_AWS_AURORA,
+	MON_AWS_RDS,
 	MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY
 };
 
@@ -413,6 +414,7 @@ class MySQL_Monitor {
 	pthread_mutex_t group_replication_mutex; // for simplicity, a mutex instead of a rwlock
 	pthread_mutex_t galera_mutex; // for simplicity, a mutex instead of a rwlock
 	pthread_mutex_t aws_aurora_mutex; // for simplicity, a mutex instead of a rwlock
+	pthread_mutex_t aws_rds_mutex; // for simplicity, a mutex instead of a rwlock
 	pthread_mutex_t mysql_servers_mutex; // for simplicity, a mutex instead of a rwlock
 	pthread_mutex_t proxysql_servers_mutex; 
 	//std::map<char *, MyGR_monitor_node *, cmp_str> Group_Replication_Hosts_Map;
@@ -423,6 +425,9 @@ class MySQL_Monitor {
 	std::map<std::string, AWS_Aurora_monitor_node *> AWS_Aurora_Hosts_Map;
 	SQLite3_result *AWS_Aurora_Hosts_resultset;
 	uint64_t AWS_Aurora_Hosts_resultset_checksum;
+	// host list consumed by the AWS RDS monitor thread (join of mysql_servers x mysql_aws_rds_hostgroups)
+	SQLite3_result *AWS_RDS_Hosts_resultset;
+	uint64_t AWS_RDS_Hosts_resultset_checksum;
 	unsigned int num_threads;
 	unsigned int aux_threads;
 	unsigned int started_threads;
@@ -470,6 +475,11 @@ class MySQL_Monitor {
 	void * monitor_group_replication_2();
 	void * monitor_galera();
 	void * monitor_aws_aurora();
+	void * monitor_aws_rds();
+	// Invoked once the topology shape is detected on mysql.rds_topology.
+	// 'result' holds the fetched rows.
+	void rds_monitor_handle_instance_topology(unsigned int writer_hostgroup, unsigned int reader_hostgroup, int green_writer_hostgroup, int green_reader_hostgroup, MYSQL_RES* result);
+	void rds_monitor_handle_cluster_topology(unsigned int writer_hostgroup, unsigned int reader_hostgroup, MYSQL_RES* result);
 	void * monitor_replication_lag();
 	void * monitor_dns_cache();
 	void * run();
