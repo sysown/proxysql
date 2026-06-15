@@ -2900,6 +2900,14 @@ int PgSQL_Connection::async_query(short event, const char* stmt, unsigned long l
 int PgSQL_Connection::async_reset_session(short event) {
 	PROXY_TRACE();
 	PROXY_TRACE2();
+	// In native_mode pgsql_conn is permanently NULL (the native state machine
+	// owns the socket and is reset on a different code path). The libpq-only
+	// invariant asserted below does not hold for native connections; bail out
+	// early with a successful reset rather than crashing the process.
+	if (native_mode) {
+		async_state_machine = ASYNC_RESET_SESSION_SUCCESSFUL;
+		return 0;
+	}
 	assert(pgsql_conn);
 
 	server_status = parent->status; // we copy it here to avoid race condition. The caller will see this
@@ -2981,6 +2989,13 @@ int PgSQL_Connection::async_reset_session(short event) {
 // the calling function should check pgsql error in pgsql struct
 int PgSQL_Connection::async_ping(short event) {
 	PROXY_TRACE();
+	// In native_mode pgsql_conn is permanently NULL; the libpq ping path is
+	// not applicable. Pretend the ping succeeded; the native path keeps its
+	// own liveness state via the socket readiness callback.
+	if (native_mode) {
+		async_state_machine = ASYNC_PING_SUCCESSFUL;
+		return 0;
+	}
 	assert(pgsql_conn);
 	switch (async_state_machine) {
 	case ASYNC_PING_SUCCESSFUL:
@@ -4352,6 +4367,11 @@ void PgSQL_Connection::copy_pgsql_variables_to_startup_parameters(bool copy_only
 }
 
 void PgSQL_Connection::copy_startup_parameters_to_pgsql_variables(bool copy_only_critical_param) {
+	// In native_mode the libpq-allocated startup_parameters / hash arrays are
+	// not populated (native state machine keeps the ParameterStatus values
+	// directly in native_params). The libpq-only invariant asserted below
+	// does not hold; skip the copy.
+	if (native_mode) return;
 
 	//memcpy(var_hash, startup_parameters_hash, sizeof(uint32_t) * PGSQL_NAME_LAST_LOW_WM);
 	for (int i = 0; i < PGSQL_NAME_LAST_LOW_WM; i++) {
