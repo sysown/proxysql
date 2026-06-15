@@ -64,6 +64,19 @@ jobs:
           # ubuntu24 GenAI build with code coverage
           - dist: 'ubuntu24'
             type: '-tap-genai-gcov'
+
+          # ubuntu22 chassis build for the mysqlx plugin. Injects
+          # PROXYSQL40=1 into docker-compose (see the Build step). The
+          # chassis cascade in Makefile sets PROXYSQL31 / PROXYSQLFFTO /
+          # PROXYSQLTSDB automatically, and entrypoint.bash descends into
+          # plugins/mysqlx so the .so lands at
+          # proxysql/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so. CI-mysqlx's
+          # callee on this branch (ci-mysqlx.yml) restores this matrix's
+          # _src and _test caches and runs the tests without compiling
+          # anything on the bare runner -- mirroring how every other
+          # CI-* test workflow consumes the CI-builds caches.
+          - dist: 'ubuntu22'
+            type: '-tap-mysqlx'
           # ubuntu22 is needed for ASAN TAP testing
           # disabled to save cache space
           #- dist: 'ubuntu22'
@@ -139,6 +152,15 @@ jobs:
         if [[ "${{ matrix.type }}" =~ "-genai" ]]; then
           sed -i "/command/i \      - PROXYSQLGENAI=1" docker-compose.yml
         fi
+        if [[ "${{ matrix.type }}" =~ "-mysqlx" ]]; then
+          # Chassis tier flag for plugins/mysqlx build. _build.environment
+          # in docker-compose.yml already lists PROXYSQL40 as a pass-through
+          # var, and entrypoint.bash routes on it (install libprotobuf-dev,
+          # add PROXYSQL40=1 to make EXTRA, build plugins/mysqlx + plugins/
+          # genai). Setting PROXYSQL40=1 alone is enough -- Makefile cascades
+          # it into PROXYSQL31/PROXYSQLFFTO/PROXYSQLTSDB automatically.
+          sed -i "/command/i \      - PROXYSQL40=1" docker-compose.yml
+        fi
         if [[ "${{ matrix.type }}" =~ "-gcov" ]]; then
           sed -i "/command/i \      - WITHGCOV=1" docker-compose.yml
         fi
@@ -207,8 +229,21 @@ jobs:
           # and the host-side runner user can't always remove root-owned
           # files under root-owned subdirectories (unlink needs write access
           # to the parent directory, which the runner doesn't always have).
-          sudo find test/tap/tests/unit -type f -name '*-t' -delete
-          echo ">>> Deleted ${UNIT_COUNT} unit test binaries from the cache payload"
+          #
+          # On the -tap-mysqlx matrix variant, CI-mysqlx (downstream) runs
+          # the mysqlx_*_unit-t and plugin_*_unit-t binaries directly against
+          # this cache, so preserve those and delete only the rest. Spot-
+          # checks (readelf) confirm the kept binaries do not dyn-link to
+          # test/deps -- the test/deps deletion below still applies.
+          if [[ "${{ matrix.type }}" =~ "-mysqlx" ]]; then
+            sudo find test/tap/tests/unit -type f -name '*-t' \
+              ! -name 'mysqlx_*_unit-t' ! -name 'plugin_*_unit-t' -delete
+            KEPT=$(find test/tap/tests/unit -type f -name '*-t' 2>/dev/null | wc -l)
+            echo ">>> Deleted $((UNIT_COUNT - KEPT)) unit test binaries, kept ${KEPT} mysqlx_*/plugin_* binaries"
+          else
+            sudo find test/tap/tests/unit -type f -name '*-t' -delete
+            echo ">>> Deleted ${UNIT_COUNT} unit test binaries from the cache payload"
+          fi
 
           # Delete test/deps (~2.8 GB on disk). These are the test-framework
           # dependencies (mariadb-connector-c, mysql-connector-c 5.7,
@@ -316,9 +351,17 @@ jobs:
         # src/obj/*.gcno is already captured by `proxysql/src/`. The
         # extra entry is a no-op for non-gcov builds (lib/obj/*.gcno
         # won't exist) and adds only a few MB to the gcov cache.
+        #
+        # The plugins/mysqlx and plugins/genai .so paths are no-ops on
+        # builds without PROXYSQL40=1 (the files don't exist). For the
+        # -tap-mysqlx matrix variant they're the whole point: CI-mysqlx
+        # restores this cache and bind-mounts the .so into the ProxySQL
+        # container at /usr/lib/proxysql/ProxySQL_MySQLX_Plugin.so.
         path: |
           proxysql/src/
           proxysql/lib/obj/*.gcno
+          proxysql/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
+          proxysql/plugins/genai/ProxySQL_GenAI_Plugin.so
 
     - name: Pack test cache with zstd-15
       id: cache-pack-test
