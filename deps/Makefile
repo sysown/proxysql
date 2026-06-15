@@ -15,8 +15,24 @@ else
 	MYCFLAGS := -O2
 	MYJEOPT := --enable-xmalloc --enable-prof
 endif
-ifeq ($(and $(IS_ARM),$(IS_CENTOS)),true)
-	MYJEOPT += --with-lg-page=16
+# jemalloc page size must match the runtime system page size.
+# Auto-detect from the build system. Override with JE_LG_PAGE env
+# var when cross-compiling (e.g. JE_LG_PAGE=16 for 64KB targets).
+ifdef JE_LG_PAGE
+	MYJEOPT += --with-lg-page=$(JE_LG_PAGE)
+else
+	JE_PAGE_SIZE := $(shell getconf PAGESIZE 2>/dev/null)
+	ifneq ($(JE_PAGE_SIZE),)
+		ifeq ($(JE_PAGE_SIZE),8192)
+			MYJEOPT += --with-lg-page=13
+		else ifeq ($(JE_PAGE_SIZE),16384)
+			MYJEOPT += --with-lg-page=14
+		else ifeq ($(JE_PAGE_SIZE),32768)
+			MYJEOPT += --with-lg-page=15
+		else ifeq ($(JE_PAGE_SIZE),65536)
+			MYJEOPT += --with-lg-page=16
+		endif
+	endif
 endif
 
 
