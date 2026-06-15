@@ -1097,6 +1097,42 @@ int ProxySQL_Config::Write_MySQL_Servers_to_configfile(std::string& data) {
 	if (sqlite_resultset)
 		delete sqlite_resultset;
 
+	query=(char *)"SELECT * FROM mysql_aws_rds_hostgroups";
+	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
+	if (error) {
+		proxy_error("Error on read from mysql_aws_rds_hostgroups: %s\n", error);
+		return -1;
+	} else {
+		if (sqlite_resultset) {
+			data += "mysql_aws_rds_hostgroups:\n(\n";
+			bool isNext = false;
+			for (auto r : sqlite_resultset->rows) {
+				if (isNext)
+					data += ",\n";
+				data += "\t{\n";
+				addField(data, "writer_hostgroup", r->fields[0], "");
+				addField(data, "reader_hostgroup", r->fields[1], "");
+				// green_writer_hostgroup / green_reader_hostgroup are nullable; addField skips NULLs
+				addField(data, "green_writer_hostgroup", r->fields[2], "");
+				addField(data, "green_reader_hostgroup", r->fields[3], "");
+				addField(data, "active", r->fields[4], "");
+				addField(data, "writer_is_also_reader", r->fields[5], "");
+				addField(data, "domain_name", r->fields[6]);
+				addField(data, "check_interval_ms", r->fields[7], "");
+				addField(data, "check_timeout_ms", r->fields[8], "");
+				addField(data, "autopurge_missing_checks", r->fields[9], "");
+				addField(data, "comment", r->fields[10]);
+
+				data += "\t}";
+				isNext = true;
+			}
+			data += "\n)\n";
+		}
+	}
+
+	if (sqlite_resultset)
+		delete sqlite_resultset;
+
 	query = (char *)"SELECT * FROM mysql_hostgroup_attributes";
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
 	if (error) {
@@ -1451,6 +1487,68 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
                     rows++;
             }
     }
+
+    if (root.exists("mysql_aws_rds_hostgroups")==true) {
+            const Setting &mysql_aws_rds_hostgroups = root["mysql_aws_rds_hostgroups"];
+            int count = mysql_aws_rds_hostgroups.getLength();
+            // green_writer_hostgroup / green_reader_hostgroup are nullable -> passed as %s ("NULL" or an integer)
+            char *q=(char *)"INSERT OR REPLACE INTO mysql_aws_rds_hostgroups (writer_hostgroup, reader_hostgroup, green_writer_hostgroup, green_reader_hostgroup, active, writer_is_also_reader, domain_name, check_interval_ms, check_timeout_ms, autopurge_missing_checks, comment ) VALUES (%d, %d, %s, %s, %d, %d, '%s', %d, %d, %d, '%s')";
+            for (i=0; i< count; i++) {
+                    const Setting &line = mysql_aws_rds_hostgroups[i];
+                    int writer_hostgroup;
+                    int reader_hostgroup;
+                    int green_writer_hostgroup;
+                    int green_reader_hostgroup;
+                    int active=1; // default
+                    int writer_is_also_reader;
+                    int check_interval_ms;
+                    int check_timeout_ms;
+                    int autopurge_missing_checks;
+                    std::string comment="";
+                    std::string domain_name="";
+                    if (line.lookupValue("writer_hostgroup", writer_hostgroup)==false) {
+                        proxy_error("Admin: detected a mysql_aws_rds_hostgroups in config file without a mandatory writer_hostgroup\n");
+                        continue;
+                    }
+                    if (line.lookupValue("reader_hostgroup", reader_hostgroup)==false) {
+                        proxy_error("Admin: detected a mysql_aws_rds_hostgroups in config file without a mandatory reader_hostgroup\n");
+                        continue;
+                    }
+                    char green_writer_str[24];
+                    char green_reader_str[24];
+                    if (line.lookupValue("green_writer_hostgroup", green_writer_hostgroup)==false) {
+                        strcpy(green_writer_str, "NULL");
+                    } else {
+                        snprintf(green_writer_str, sizeof(green_writer_str), "%d", green_writer_hostgroup);
+                    }
+                    if (line.lookupValue("green_reader_hostgroup", green_reader_hostgroup)==false) {
+                        strcpy(green_reader_str, "NULL");
+                    } else {
+                        snprintf(green_reader_str, sizeof(green_reader_str), "%d", green_reader_hostgroup);
+                    }
+                    if (line.lookupValue("active", active)==false) active=1;
+                    if (line.lookupValue("writer_is_also_reader", writer_is_also_reader)==false) writer_is_also_reader=0;
+                    if (line.lookupValue("check_interval_ms", check_interval_ms)==false) check_interval_ms=1000;
+                    if (line.lookupValue("check_timeout_ms", check_timeout_ms)==false) check_timeout_ms=800;
+                    if (line.lookupValue("autopurge_missing_checks", autopurge_missing_checks)==false) autopurge_missing_checks=0;
+                    line.lookupValue("comment", comment);
+                    line.lookupValue("domain_name", domain_name);
+                    char *o1=strdup(comment.c_str());
+                    char *o=escape_string_single_quotes(o1, false);
+                    char *p1=strdup(domain_name.c_str());
+                    char *p=escape_string_single_quotes(p1, false);
+                    char *query=(char *)malloc(strlen(q)+strlen(o)+strlen(p)+256); // 128 vs sizeof(int)*8
+                    sprintf(query,q, writer_hostgroup, reader_hostgroup, green_writer_str, green_reader_str, active, writer_is_also_reader, p, check_interval_ms, check_timeout_ms, autopurge_missing_checks, o);
+                    admindb->execute(query);
+                    if (o!=o1) free(o);
+                    free(o1);
+                    if (p!=p1) free(p);
+                    free(p1);
+                    free(query);
+                    rows++;
+            }
+    }
+
 	if (root.exists("mysql_hostgroup_attributes") == true) {
 		const Setting &mysql_hostgroup_attributes = root["mysql_hostgroup_attributes"];
 		int count = mysql_hostgroup_attributes.getLength();

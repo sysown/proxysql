@@ -147,6 +147,7 @@ static const vector<string> mysql_servers_tablenames = {
 	"mysql_group_replication_hostgroups",
 	"mysql_galera_hostgroups",
 	"mysql_aws_aurora_hostgroups",
+	"mysql_aws_rds_hostgroups",
 	"mysql_hostgroup_attributes",
 	"mysql_servers_ssl_params",
 };
@@ -1508,6 +1509,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				strstr(query_no_space,"runtime_mysql_galera_hostgroups")
 				||
 				strstr(query_no_space,"runtime_mysql_aws_aurora_hostgroups")
+				||
+				strstr(query_no_space,"runtime_mysql_aws_rds_hostgroups")
 				||
 				strstr(query_no_space,"runtime_mysql_hostgroup_attributes")
 				||
@@ -7547,6 +7550,77 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 	if(resultset) delete resultset;
 	resultset=NULL;
 
+	// dump mysql_aws_rds_hostgroups
+	// The runtime table carries the extra runtime-only 'auto_generated' column; the config table
+	// does not. 'dump_table_mysql' always returns 12 columns (last is 'auto_generated'); we bind
+	// 12 for the runtime table and only the first 11 for the config table. 'green_writer_hostgroup'
+	// and 'green_reader_hostgroup' (fields 2,3) are nullable and bound as NULL when absent.
+
+	if (_runtime) {
+		query=(char *)"DELETE FROM main.runtime_mysql_aws_rds_hostgroups";
+	} else {
+		query=(char *)"DELETE FROM main.mysql_aws_rds_hostgroups";
+	}
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	admindb->execute(query);
+	resultset=MyHGM->dump_table_mysql("mysql_aws_rds_hostgroups");
+	if (resultset) {
+		int rc;
+		sqlite3_stmt *statement=NULL;
+
+		char *query=NULL;
+		if (_runtime) {
+			query=(char *)"INSERT INTO runtime_mysql_aws_rds_hostgroups(writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,writer_is_also_reader,domain_name,check_interval_ms,check_timeout_ms,autopurge_missing_checks,comment,auto_generated) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+		} else {
+			query=(char *)"INSERT INTO mysql_aws_rds_hostgroups(writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,writer_is_also_reader,domain_name,check_interval_ms,check_timeout_ms,autopurge_missing_checks,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+		}
+
+		auto [rc1, statement_unique] = admindb->prepare_v2(query);
+		rc = rc1;
+		statement = statement_unique.get();
+		ASSERT_SQLITE_OK(rc, admindb);
+
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			// auto_generated (field 11) entries are created at runtime by the monitor; they are NOT
+			// user configuration, so they must not be persisted to the memory config table. They are
+			// still written to the runtime table.
+			if (!_runtime && r->fields[11] && atoi(r->fields[11]) != 0) {
+				continue;
+			}
+			rc=(*proxy_sqlite3_bind_int64)(statement, 1, atoi(r->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=(*proxy_sqlite3_bind_int64)(statement, 2, atoi(r->fields[1])); ASSERT_SQLITE_OK(rc, admindb);
+			if (r->fields[2] && r->fields[2][0]) {
+				rc=(*proxy_sqlite3_bind_int64)(statement, 3, atoi(r->fields[2]));
+			} else {
+				rc=(*proxy_sqlite3_bind_null)(statement, 3);
+			}
+			ASSERT_SQLITE_OK(rc, admindb);
+			if (r->fields[3] && r->fields[3][0]) {
+				rc=(*proxy_sqlite3_bind_int64)(statement, 4, atoi(r->fields[3]));
+			} else {
+				rc=(*proxy_sqlite3_bind_null)(statement, 4);
+			}
+			ASSERT_SQLITE_OK(rc, admindb);
+			rc=(*proxy_sqlite3_bind_int64)(statement, 5, atoi(r->fields[4])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=(*proxy_sqlite3_bind_int64)(statement, 6, atoi(r->fields[5])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=(*proxy_sqlite3_bind_text)(statement, 7, r->fields[6], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+			rc=(*proxy_sqlite3_bind_int64)(statement, 8, atoi(r->fields[7])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=(*proxy_sqlite3_bind_int64)(statement, 9, atoi(r->fields[8])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=(*proxy_sqlite3_bind_int64)(statement, 10, atoi(r->fields[9])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=(*proxy_sqlite3_bind_text)(statement, 11, r->fields[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+			if (_runtime) {
+				rc=(*proxy_sqlite3_bind_int64)(statement, 12, atoi(r->fields[11])); ASSERT_SQLITE_OK(rc, admindb);
+			}
+
+			SAFE_SQLITE3_STEP2(statement);
+			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);
+			rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, admindb);
+		}
+	}
+	if(resultset) delete resultset;
+	resultset=NULL;
+
 	// dump mysql_hostgroup_attributes
 
 	StrQuery = "DELETE FROM main.";
@@ -7878,6 +7952,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	SQLite3_result *resultset_group_replication=NULL;
 	SQLite3_result *resultset_galera=NULL;
 	SQLite3_result *resultset_aws_aurora=NULL;
+	SQLite3_result *resultset_aws_rds=NULL;
 	SQLite3_result *resultset_hostgroup_attributes=NULL;
 	SQLite3_result *resultset_mysql_servers_ssl_params=NULL;
 
@@ -8041,6 +8116,17 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 		MyHGM->save_incoming_mysql_table(resultset_aws_aurora,"mysql_aws_aurora_hostgroups");
 	}
 
+	// support for AWS RDS, table mysql_aws_rds_hostgroups
+	query=(char *)"SELECT a.* FROM mysql_aws_rds_hostgroups a LEFT JOIN mysql_aws_rds_hostgroups b ON (a.writer_hostgroup=b.reader_hostgroup) WHERE b.reader_hostgroup IS NULL ORDER BY writer_hostgroup";
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset_aws_rds);
+	if (error) {
+		proxy_error("Error on %s : %s\n", query, error);
+	} else {
+		// Pass the resultset to MyHGM
+		MyHGM->save_incoming_mysql_table(resultset_aws_rds,"mysql_aws_rds_hostgroups");
+	}
+
 	// support for hostgroup attributes, table mysql_hostgroup_attributes
 	query = (char *)"SELECT * FROM mysql_hostgroup_attributes ORDER BY hostgroup_id";
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
@@ -8099,6 +8185,10 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	if (resultset_aws_aurora) {
 		//delete resultset_aws_aurora; // do not delete, resultset is stored in MyHGM
 		resultset_aws_aurora=NULL;
+	}
+	if (resultset_aws_rds) {
+		//delete resultset_aws_rds; // do not delete, resultset is stored in MyHGM
+		resultset_aws_rds=NULL;
 	}
 	if (resultset_hostgroup_attributes) {
 		resultset_hostgroup_attributes = NULL;

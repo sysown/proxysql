@@ -753,6 +753,8 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_galera_hostgroups", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_GALERA_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_admin,"mysql_aws_aurora_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_aws_aurora_hostgroups", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_AWS_AURORA_HOSTGROUPS);
+	insert_into_tables_defs(tables_defs_admin,"mysql_aws_rds_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_AWS_RDS_HOSTGROUPS);
+	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_aws_rds_hostgroups", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_AWS_RDS_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_admin,"mysql_hostgroup_attributes", ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES);
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_hostgroup_attributes", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_HOSTGROUP_ATTRIBUTES);
 	insert_into_tables_defs(tables_defs_admin,"mysql_servers_ssl_params", ADMIN_SQLITE_TABLE_MYSQL_SERVERS_SSL_PARAMS);
@@ -837,6 +839,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_config,"mysql_group_replication_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_GROUP_REPLICATION_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_config,"mysql_galera_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_GALERA_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_config,"mysql_aws_aurora_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS);
+	insert_into_tables_defs(tables_defs_config,"mysql_aws_rds_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_AWS_RDS_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_config,"mysql_hostgroup_attributes", ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES);
 	insert_into_tables_defs(tables_defs_config,"mysql_servers_ssl_params", ADMIN_SQLITE_TABLE_MYSQL_SERVERS_SSL_PARAMS);
 	insert_into_tables_defs(tables_defs_config,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);

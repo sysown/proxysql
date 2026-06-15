@@ -727,6 +727,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	mydb->execute(MYHGM_MYSQL_GROUP_REPLICATION_HOSTGROUPS);
 	mydb->execute(MYHGM_MYSQL_GALERA_HOSTGROUPS);
 	mydb->execute(MYHGM_MYSQL_AWS_AURORA_HOSTGROUPS);
+	mydb->execute(MYHGM_MYSQL_AWS_RDS_HOSTGROUPS);
 	mydb->execute(MYHGM_MYSQL_HOSTGROUP_ATTRIBUTES);
 	mydb->execute(MYHGM_MYSQL_SERVERS_SSL_PARAMS);
 	mydb->execute("CREATE INDEX IF NOT EXISTS idx_mysql_servers_hostname_port ON mysql_servers (hostname,port)");
@@ -736,6 +737,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	incoming_group_replication_hostgroups=NULL;
 	incoming_galera_hostgroups=NULL;
 	incoming_aws_aurora_hostgroups = NULL;
+	incoming_aws_rds_hostgroups = NULL;
 	incoming_hostgroup_attributes = NULL;
 	incoming_mysql_servers_ssl_params = NULL;
 	incoming_mysql_servers_v2 = NULL;
@@ -1546,6 +1548,13 @@ bool MySQL_HostGroups_Manager::commit(
 			generate_mysql_aws_aurora_hostgroups_table();
 		}
 
+		// AWS RDS
+		if (incoming_aws_rds_hostgroups) {
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_aws_rds_hostgroups\n");
+			mydb->execute("DELETE FROM mysql_aws_rds_hostgroups");
+			generate_mysql_aws_rds_hostgroups_table();
+		}
+
 		// hostgroup attributes
 		if (incoming_hostgroup_attributes) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_hostgroup_attributes\n");
@@ -2247,6 +2256,9 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) 
 	if (name == "mysql_aws_aurora_hostgroups") {
 		query=(char *)"SELECT writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,"
 					    "check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,autopurge_missing_checks,comment FROM mysql_aws_aurora_hostgroups";
+	} else if (name == "mysql_aws_rds_hostgroups") {
+		query=(char *)"SELECT writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,writer_is_also_reader,"
+					    "domain_name,check_interval_ms,check_timeout_ms,autopurge_missing_checks,comment,auto_generated FROM mysql_aws_rds_hostgroups";
 	} else if (name == "mysql_galera_hostgroups") {
 		query=(char *)"SELECT writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment FROM mysql_galera_hostgroups";
 	} else if (name == "mysql_group_replication_hostgroups") {
@@ -3077,6 +3089,8 @@ void MySQL_HostGroups_Manager::save_incoming_mysql_table(SQLite3_result *s, cons
 	SQLite3_result ** inc = NULL;
 	if (name == "mysql_aws_aurora_hostgroups") {
 		inc = &incoming_aws_aurora_hostgroups;
+	} else if (name == "mysql_aws_rds_hostgroups") {
+		inc = &incoming_aws_rds_hostgroups;
 	} else if (name == "mysql_galera_hostgroups") {
 		inc = &incoming_galera_hostgroups;
 	} else if (name == "mysql_group_replication_hostgroups") {
@@ -6263,6 +6277,74 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 	pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
 
 	pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
+}
+
+/**
+ * @brief Regenerates the runtime in-memory `mysql_aws_rds_hostgroups` table from `incoming_aws_rds_hostgroups`.
+ *
+ * The incoming resultset comes from the admin config table (11 columns, no `auto_generated`); config-loaded
+ * entries are user-defined, so `auto_generated` is stored as 0. `green_writer_hostgroup` and
+ * `green_reader_hostgroup` are optional and bound as SQL NULL when absent.
+ */
+void MySQL_HostGroups_Manager::generate_mysql_aws_rds_hostgroups_table() {
+	if (incoming_aws_rds_hostgroups==NULL) {
+		return;
+	}
+	int rc;
+	char *query=(char *)"INSERT INTO mysql_aws_rds_hostgroups(writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,"
+						"writer_is_also_reader,domain_name,check_interval_ms,check_timeout_ms,autopurge_missing_checks,comment,auto_generated) VALUES "
+						"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+	auto [rc1, statement_unique] = mydb->prepare_v2(query);
+	ASSERT_SQLITE_OK(rc1, mydb);
+	sqlite3_stmt *statement = statement_unique.get();
+	proxy_info("New mysql_aws_rds_hostgroups table\n");
+	for (std::vector<SQLite3_row *>::iterator it = incoming_aws_rds_hostgroups->rows.begin() ; it != incoming_aws_rds_hostgroups->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		int writer_hostgroup=atoi(r->fields[0]);
+		int reader_hostgroup=atoi(r->fields[1]);
+		const char *gw_str = r->fields[2];
+		const char *gr_str = r->fields[3];
+		int green_writer_hostgroup = (gw_str && gw_str[0]) ? atoi(gw_str) : -1;
+		int green_reader_hostgroup = (gr_str && gr_str[0]) ? atoi(gr_str) : -1;
+		int active=atoi(r->fields[4]);
+		int writer_is_also_reader = atoi(r->fields[5]);
+		int check_interval_ms = atoi(r->fields[7]);
+		int check_timeout_ms = atoi(r->fields[8]);
+		int autopurge_missing_checks = atoi(r->fields[9]);
+		// entries loaded from the admin config table are always user-defined
+		int auto_generated = 0;
+		proxy_info("Loading AWS RDS info for (%d,%d,%d,%d,%s,%d,\"%s\",%d,%d,%d,%d,\"%s\")\n", writer_hostgroup,reader_hostgroup,
+				   green_writer_hostgroup,green_reader_hostgroup,(active ? "on" : "off"),writer_is_also_reader,r->fields[6],
+				   check_interval_ms,check_timeout_ms,autopurge_missing_checks,auto_generated,r->fields[10]);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 1, writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 2, reader_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+		if (green_writer_hostgroup >= 0) {
+			rc=(*proxy_sqlite3_bind_int64)(statement, 3, green_writer_hostgroup);
+		} else {
+			rc=(*proxy_sqlite3_bind_null)(statement, 3);
+		}
+		ASSERT_SQLITE_OK(rc, mydb);
+		if (green_reader_hostgroup >= 0) {
+			rc=(*proxy_sqlite3_bind_int64)(statement, 4, green_reader_hostgroup);
+		} else {
+			rc=(*proxy_sqlite3_bind_null)(statement, 4);
+		}
+		ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 5, active); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 6, writer_is_also_reader); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_text)(statement, 7, r->fields[6], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 8, check_interval_ms); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 9, check_timeout_ms); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 10, autopurge_missing_checks); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_text)(statement, 11, r->fields[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 12, auto_generated); ASSERT_SQLITE_OK(rc, mydb);
+
+		SAFE_SQLITE3_STEP2(statement);
+		rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mydb);
+	}
+	delete incoming_aws_rds_hostgroups;
+	incoming_aws_rds_hostgroups=NULL;
 }
 
 
