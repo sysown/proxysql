@@ -238,27 +238,31 @@ Same as the existing auth/query/streaming tests:
 
 ## 7. Phasing
 
-This work is split into two distinct phases:
+This work is split into three PRs:
 
-**Phase 1 (test work, this PR):**
+**PR 1 (test work, this PR — no production code change):**
+- Write the shared `pgsql-native_tracking.h` helper (`CoverageRecorder`).
 - Write all three new tests.
+- Register them in `test/tap/groups/groups.json` under `legacy-g1`.
 - Run them via `run-tests-isolated.bash`.
-- The coverage summary lines in each test show the current native protocol coverage.
-- For native-covered operations: tests pass with `native_path_used = true`.
-- For native-fallback operations: tests pass with `native_path_used = false` (the result is still byte-equal because the libpq fallback gives the right answer). The summary line shows the gap.
-- No production code changes in this phase.
+- The coverage summary lines in each test show the current native protocol coverage. Expected from the audit:
+  - `pgsql-native_transactions-t`: `TXN_*` 100% native (simple Query).
+  - `pgsql-native_copy-t`: `COPY_IN` and `COPY_OUT` 0% native (they go through fast_forward / libpq). The differential test still passes because the libpq fallback produces byte-equal results.
+  - `pgsql-native_prepared-t`: `PREPARE_SQL`/`EXECUTE_SQL`/`DEALLOCATE_SQL` 100% native; `EXT_PARSE`/`EXT_BIND`/`EXT_EXECUTE`/`EXT_SYNC`/etc. 0% native (libpq path; the comment at `lib/PgSQL_Connection.cpp:2823` confirms).
+- The summary lines are the deliverable. They give the user a per-feature native coverage report.
 
-**Phase 2 (implementation work, follow-up PRs):**
-- Implement native COPY (state machine in `lib/PgSQL_Backend_Copy.cpp`).
-- Re-run `pgsql-native_copy-t`; coverage summary for `COPY_IN` and `COPY_OUT` goes from `0/N` to `N/N`.
-- Implement native extended query (state machine in `lib/PgSQL_Connection.cpp`).
-- Re-run `pgsql-native_prepared-t`; coverage summary for `EXT_*` goes from `0/M` to `M/M`.
-- Final state: all 3 tests report `100% native` for their respective operations.
+**PR 2 (native COPY implementation, follow-up):**
+- Implement the native COPY state machine in `lib/PgSQL_Backend_Copy.cpp` + the connection-level driver in `lib/PgSQL_Connection.cpp`.
+- Re-run `pgsql-native_copy-t`. The `COPY_IN` and `COPY_OUT` coverage lines go from `0/N` to `N/N`.
 
-## 8. Open Questions
+**PR 3 (native extended-query implementation, follow-up):**
+- Implement the native extended-query state machine in `lib/PgSQL_Connection.cpp`.
+- Re-run `pgsql-native_prepared-t`. The `EXT_*` coverage lines go from `0/M` to `M/M`.
+- Final state: all 3 tests report 100% native coverage for their respective operations.
 
-1. **For the extended-query test, when native falls back to libpq, do we still want to assert byte-equal?** I think yes: the libpq fallback is the same code path as the libpq control, so byte-equality is automatic. The interesting question is whether the native path *also* produces the right answer (we want both to be correct), and that's what byte-equality tests. If you prefer to skip the byte-equality assertion when native falls back (because it's not exercising the native path), we can add a "skip byte-equal when fell back" branch.
+## 8. Decisions (locked)
 
-2. **For COPY IN with quoted/escaped values**, do we want to also exercise `\r\n` line endings (Postgres accepts `\n` only by default, but `psql` rewrites `\r\n` to `\n` before sending)? The differential test sends raw bytes — what the wire protocol sees. So this is really a "raw wire" test; we don't apply psql's transformation. Confirm this is what you want.
-
-3. **For the 10-MB COPY OUT** case, should we assert anything about memory or timing? Or just byte-equal content? My recommendation: just byte-equal + record the elapsed time in the TAP diagnostic. If the test runs in <2s, that's a useful proxy for "we didn't buffer the whole thing." If you want a hard memory ceiling, we'd need to instrument the proxy.
+1. **Byte-equal assertion when native falls back**: always assert byte-equal. The libpq fallback is the same code path as the libpq control, so byte-equality is automatic. Asserting it doesn't exercise the native path, but it doesn't lie either. Simpler code, simpler diagnostics.
+2. **COPY IN with quoted/escaped values**: raw wire format. No `\r\n` rewriting. Matches what a real libpq client would send on the wire.
+3. **10-MB COPY OUT**: byte-equal + record elapsed time in the TAP diagnostic. No hard memory ceiling.
+4. **PR staging**: two PRs. PR 1 = the 3 tests + `CoverageRecorder` helper + no production code change. PR 2 = implement native COPY + native extended query.
