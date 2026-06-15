@@ -285,6 +285,18 @@ static CaseResult run_case(PGconn* admin, const TxnCase& tc,
 		std::stringstream ss;
 		ss << "lp_ok=" << lp_run.all_ok << " nt_ok=" << nt_run.all_ok
 		   << " lp_count=" << lp_count << " nt_count=" << nt_count;
+		// If states mismatched, show the per-query state diffs.
+		if (!states_match) {
+			for (size_t i = 0; i < tc.expected_states.size(); i++) {
+				if (i < lp_run.states.size() && i < nt_run.states.size() &&
+				    (lp_run.states[i] != nt_run.states[i] ||
+				     lp_run.states[i] != tc.expected_states[i])) {
+					ss << " Q" << i << "[exp=" << tc.expected_states[i]
+					   << " lp=" << lp_run.states[i]
+					   << " nt=" << nt_run.states[i] << "]";
+				}
+			}
+		}
 		detail = ss.str();
 	}
 	// Restore to libpq for the next case.
@@ -346,7 +358,7 @@ static std::vector<RawCase> build_cases() {
 		{"T7: BEGIN; SELECT; INSERT; UPDATE; SELECT; COMMIT", "TXN_MIXED",
 		 "CREATE TABLE {T} (id int, name text)",
 		 {"BEGIN", "SELECT 1", "INSERT INTO {T} VALUES (1, 'x')", "UPDATE {T} SET name='y' WHERE id=1", "SELECT 2", "COMMIT"},
-		 {'T','T','T','T','T','T','I'}, "SELECT count(*) FROM {T}"},
+		 {'T','T','T','T','T','I'}, "SELECT count(*) FROM {T}"},
 		// T8: isolation level
 		{"T8: BEGIN ISOLATION LEVEL SERIALIZABLE; SELECT; COMMIT", "TXN_ISOLATION", "",
 		 {"BEGIN ISOLATION LEVEL SERIALIZABLE", "SELECT 1", "COMMIT"},

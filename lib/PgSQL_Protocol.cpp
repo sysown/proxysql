@@ -2792,6 +2792,14 @@ unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const uns
 		// Mirror add_ready_status(): flush the in-line buffer into PSarrayOUT so the
 		// completed result is wholly in PSarrayOUT (get_resultset asserts buffer_used==0).
 		buffer_to_PSarrayOut();
+		// Feed the session's PgSQL_ExplicitTxnStateMgr with the digest text of the
+		// just-completed query, so BEGIN / COMMIT / ROLLBACK / SAVEPOINT state is
+		// kept in sync on the native path. The libpq path does this in
+		// PgSQL_Session::handler() after a successful RunQuery; for the native
+		// path the connection owns the result-completion event, so we do it here.
+		if (conn && conn->myds && conn->myds->sess) {
+			conn->myds->sess->handle_transaction_state();
+		}
 		break;
 	default:
 		// 'A' NotificationResponse and COPY ('G'/'H'/'d'/'c') are streamed through

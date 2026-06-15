@@ -3038,6 +3038,12 @@ int PgSQL_Connection::async_ping(short event) {
 }
 
 bool PgSQL_Connection::IsKnownActiveTransaction() {
+	if (native_mode) {
+		// Native state machine tracks txn status in `native_txn_status` ('I'/'T'/'E'),
+		// the same byte the backend emits in ReadyForQuery. pgsql_conn is null for
+		// native connections, so the libpq path below does not apply.
+		return native_txn_status == 'T' || native_txn_status == 'E';
+	}
 	if (!pgsql_conn) return false;
 
 	PGTransactionStatusType status = PQtransactionStatus(pgsql_conn);
