@@ -8,303 +8,33 @@ on:
         type: string
 
 env:
-  # The caller (CI-mysqlx.yml@v3.0) passes `trigger: ${{ toJson(github) }}`
-  # so we can pull out the SHA the workflow_run fired on (the PR commit).
-  # Falling back to github.sha covers the workflow_dispatch case where
-  # there's no trigger payload.
+  # SHA the caller's workflow_run fired on (i.e. the PR commit), or
+  # github.sha for the workflow_dispatch path. All cache keys, checkouts,
+  # and check_run posts use this so the entire pipeline operates on one
+  # SHA consistently.
   SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+  # CI-builds writes this matrix's caches as <SHA>_ubuntu22-tap-mysqlx_*.
+  # The full chassis tier (PROXYSQL40=1 and the cascaded PROXYSQL31/
+  # PROXYSQLFFTO/PROXYSQLTSDB) is built inside the proxysql/packaging:
+  # build-ubuntu22-v4.0.0 image; this file just restores artefacts and
+  # runs tests. Pre-rewrite, CI-mysqlx was the only test workflow that
+  # compiled proxysql on the bare GitHub runner, which made every failure
+  # mode an infra symptom (OOM, disk-full, missing gnutls, mysql.h
+  # roulette) — see the audit trail on PR #5852.
+  BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu22-tap-mysqlx
 
 jobs:
-  # PROXYSQL40 build of proxysql + TAP tests. The cache write at the end of
-  # this job is what the downstream jobs (unit-tests, e2e-tests, soak-tests)
-  # restore. Before this job existed (see issue #5796), the downstream jobs
-  # all aborted immediately at "Restore build cache" with
-  # `fail-on-cache-miss: true` because no upstream workflow ever wrote the
-  # `build-<SHA>` key — CI-trigger doesn't write any cache, and CI-builds
-  # uses a completely different naming scheme (`<SHA>_<dist><type>_*`). The
-  # net effect was that CI-mysqlx had not executed a single test in the
-  # entire workflow run history (500+ runs, 100% red at the same step).
-  #
-  # This job builds with the matching chassis flags so the cached
-  # `src/proxysql` has the same plugin-services struct layout the downstream
-  # `plugins/mysqlx` build will see — keeping the ABI contract intact.
-  build:
-    runs-on: ubuntu-22.04
-    # write-all is required for LouisBrunner/checks-action to POST a
-    # check_run to the PR commit, which is the whole reason this workflow
-    # is being migrated to the dedicated-reusable pattern (see #5852
-    # discussion). The caller on v3.0 also declares write-all so the
-    # permission intersection lets the callee actually write.
-    permissions: write-all
-    steps:
-      # Post an in-progress check on the PR commit so the run is visible
-      # in the PR's status rollup from the moment it starts. Without this,
-      # workflow_run-triggered jobs only show up under /actions and the PR
-      # silently shows green even on failures — exactly the bug that hid
-      # every CI-mysqlx failure for this PR's entire iteration history.
-      - uses: LouisBrunner/checks-action@v2.0.0
-        id: checks
-        if: always()
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          name: '${{ github.workflow }} / ${{ github.job }}'
-          repo: ${{ github.repository }}
-          sha: ${{ env.SHA }}
-          status: 'in_progress'
-          details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
-
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          # fetch-depth: 0 (full clone, including tags) is required because
-          # the Makefile's GIT_VERSION_BASE comes from `git describe --long
-          # --abbrev=7`, which needs tags. With fetch-depth: 1 there are no
-          # tags, the describe falls back to --always returning a short
-          # SHA like "46ab989", and with PROXYSQL40=1 the Makefile's
-          # major-version-increment awk treats that as integer 46 → 47,
-          # producing GIT_VERSION="47." and the build aborts at
-          # Makefile:101 with "CURVER \"\" derived from GIT_VERSION
-          # \"47.\" does not have 3 numbers separated by dots."
-          #
-          # The reusable ci-builds.yml on the GH-Actions branch uses
-          # fetch-depth: 0 for the same reason.
-          fetch-depth: 0
-          # Without an explicit ref, a workflow_run-triggered run checks out
-          # the workflow file's branch (v3.0) instead of the PR commit. Use
-          # the SHA derived from the trigger payload so build, plugin .so,
-          # and every downstream job's checkout all match the PR being
-          # tested.
-          ref: ${{ env.SHA }}
-
-      - name: Cache build artifacts (restore + save)
-        uses: actions/cache@v4
-        id: build-cache
-        with:
-          path: |
-            src/proxysql
-            test/
-            plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
-          # The `runtime-libs-vN` prefix is a manual cache-bust: the build
-          # step below stages libre2.so.10 + libpq.so.5 into
-          # test/tap/tap/_runtime_libs/ alongside the binaries that need
-          # them at runtime (see the `Build` step). Pre-existing caches
-          # under the old `build-${SHA}` key were written WITHOUT that
-          # directory, so a cache hit on the legacy key would skip the
-          # build step and leave downstream LD_LIBRARY_PATH pointing at
-          # nothing.
-          #
-          # Bump the suffix again when:
-          #  - the _runtime_libs/ staging layout changes incompatibly, or
-          #  - the plugin .so source changes meaningfully and you want to
-          #    force a rebuild on existing SHAs (otherwise a SHA whose
-          #    cache was written before the change wins on cache-hit and
-          #    serves a stale .so).
-          # Last bump: v7 — migrated CI-mysqlx to the dedicated-reusable
-          # pattern (caller on v3.0 → callee here on GH-Actions). The v6
-          # entries on PR SHAs were written by the old inline workflow on
-          # v3.0; the new reusable's job/cache identity differs subtly
-          # enough that we bump to be safe and to force a fresh build that
-          # exercises the new check_run posting end-to-end.
-          key: build-runtime-libs-v7-${{ env.SHA }}
-
-      - name: Install build dependencies
-        if: steps.build-cache.outputs.cache-hit != 'true'
-        # Unlike the other v3.0 CI workflows that build inside the
-        # proxysql/packaging:build-ubuntu22-v4.0.0 image (which has every
-        # ProxySQL build dep pre-installed), this workflow builds directly
-        # on the GitHub-hosted ubuntu-22.04 runner. That runner is rich
-        # with general build tooling but does not include the deps the
-        # vendored libraries under deps/ need at compile time.
-        #
-        # The package list below is the union of:
-        #   - the canonical install list in INSTALL.md (Ubuntu/Debian
-        #     section), and
-        #   - `valgrind`, which is required by the bundled
-        #     mariadb-client-library: deps/.../libmariadb/ma_context.c
-        #     unconditionally `#include <valgrind/valgrind.h>` for its
-        #     coroutine annotations, so the build aborts with
-        #     "fatal error: valgrind/valgrind.h: No such file or
-        #     directory" when the header is absent (it is, on the
-        #     ubuntu-22.04 runner -- this is what PR #5823's first run
-        #     surfaced once the fetch-depth fix unblocked the Makefile
-        #     version check).
-        #
-        # `--no-install-recommends` keeps the install fast (~30s) by
-        # skipping unrelated suggested packages.
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends \
-            valgrind \
-            libssl-dev \
-            libgnutls28-dev \
-            libmysqlclient-dev \
-            libunwind-dev \
-            uuid-dev \
-            libncurses-dev \
-            libicu-dev \
-            libevent-dev \
-            libtirpc-dev \
-            libcurl4-openssl-dev \
-            libxml2-dev \
-            pkg-config \
-            bison \
-            flex \
-            libtool \
-            automake \
-            autoconf
-
-      - name: Build proxysql (PROXYSQL40 chassis) + targeted TAP tests
-        if: steps.build-cache.outputs.cache-hit != 'true'
-        # `make debug` descends into plugins/mysqlx/ and builds the plugin
-        # .so as a side effect using these tier flags, so the downstream
-        # unit-tests / e2e-tests / soak-tests jobs can just restore the
-        # already-built .so from the build cache. No plugin rebuild needed
-        # downstream as long as the cached .so and src/proxysql binary were
-        # produced by the same flag set (ABI must match -- different flags
-        # change ProxySQL_PluginDescriptor / ProxySQL_PluginServices struct
-        # layouts, the loader accepts the link silently, and the first
-        # virtual dispatch into a plugin callback corrupts memory).
-        #
-        # Why NOT `make build_tap_test_debug`: that target cascades into
-        # test/tap/Makefile's `debug` which builds the full TAP suite -
-        # 353 e2e *-t binaries plus 88 *_unit-t binaries, ~14 GB on disk
-        # in debug mode (each unit-test statically links libproxysql.a;
-        # the genai_*_unit-t ones land at ~160 MB apiece). The ubuntu-22.04
-        # runner ships with ~14 GB free disk, so the build either ran out
-        # of space mid-link or OOMed during cpp-dotenv / antlr4-cpp-runtime
-        # template instantiation (different failure modes, same root
-        # cause: building things we never run).
-        #
-        # CI-mysqlx only runs a known, closed list of TAP binaries (see
-        # the unit-tests, e2e-tests, soak-tests jobs below). Enumerate
-        # them and invoke the per-binary targets in the existing per-
-        # directory Makefiles directly. Both test/tap/tests/Makefile and
-        # test/tap/tests/unit/Makefile already provide explicit per-
-        # binary rules + a `%-t: %-t.cpp ...` pattern rule, so no
-        # Makefile changes are needed - just a more selective top-level
-        # invocation.
-        #
-        # Net effect: TAP-test artifact size on disk drops from ~14 GB to
-        # ~4 GB, cold-build wall-clock drops correspondingly (~40 % fewer
-        # compile units), and the build can safely go back to full
-        # `-j$(nproc)` parallelism (RAM headroom was never actually the
-        # problem; disk + linker peak memory were).
-        run: |
-          export PROXYSQL40=1
-          export PROXYSQL31=1
-          export PROXYSQLFFTO=1
-          export PROXYSQLTSDB=1
-          JOBS=$(nproc)
-          # Stage 1: deps + lib + src + plugins/mysqlx. Produces
-          # libproxysql.a, src/proxysql, plugins/mysqlx/*.so.
-          make -j"$JOBS" debug
-          # Stage 2: libtap.so + cpp-dotenv (vendored antlr4 runtime),
-          # AND the per-flavor test client libraries the tap library
-          # links against. The right entrypoint is test/tap/Makefile's
-          # `tap` target, NOT a direct `make -C test/tap/tap` — the
-          # higher-level Makefile carries `tap: test_deps` which builds
-          # test/deps/{mariadb-connector-c, mysql-connector-c,
-          # mysql-connector-c-8.4.0} (the test client libraries
-          # libtap_mysql57.a / libtap_mysql8.a / libtap_mariadb.a link
-          # in via utils_*.o). Skipping that dep step is what made the
-          # first targeted-build attempt fail with
-          # "fatal error: mysql.h: No such file or directory" at
-          # utils_mysql57.o — libmysqlclient-dev (Ubuntu) and
-          # test/deps/mysql-connector-c (vendored 5.7 source) are not
-          # interchangeable; the latter is what the IDIRS in
-          # test/tap/tap/Makefile resolve to.
-          make -j"$JOBS" -C test/tap tap
-          # Stage 3: the e2e + soak binaries that CI-mysqlx's e2e-tests
-          # and soak-tests jobs invoke. Three categories, each handled by
-          # a different rule in test/tap/tests/Makefile:
-          #
-          #   - test_mysqlx_admin_tables-t and test_mysqlx_plugin_load-t
-          #     have explicit rules that recurse into test/tap/tests/unit
-          #     and symlink the produced binary back up. They are NOT
-          #     matched by the `%-t: %-t.cpp` pattern rule because they
-          #     have no companion .cpp at this level.
-          #
-          #   - test_mysqlx_e2e_handshake-t and test_mysqlx_route_drop_-
-          #     inflight-t do have a .cpp and ride the standard `%-t`
-          #     pattern rule (compile + link against libtap.so).
-          #
-          #   - test_mysqlx_soak_{behavioral,stress}-t are shell wrappers
-          #     around the Python harnesses (test/scripts/mysqlx/*.py).
-          #     Only the .sh source ships in the tree; the Makefile's
-          #     `sh-%: %-t.sh` rule copies + chmods them into `<name>-t`.
-          #     Hence the `sh-...sh` target form below.
-          #
-          # OPTZ matches what `make build_tap_test_debug` would have set.
-          make -j"$JOBS" -C test/tap/tests OPTZ="-O0 -ggdb -DDEBUG" \
-            test_mysqlx_admin_tables-t \
-            test_mysqlx_plugin_load-t \
-            test_mysqlx_e2e_handshake-t \
-            test_mysqlx_route_drop_inflight-t \
-            sh-test_mysqlx_soak_behavioral-t.sh \
-            sh-test_mysqlx_soak_stress-t.sh
-          # Stage 4: the mysqlx_* and plugin_* unit-test binaries that
-          # CI-mysqlx's unit-tests job invokes (the `for test_bin in
-          # mysqlx_*_unit-t plugin_*_unit-t` glob). OPT="-DDEBUG"
-          # matches what the `debug` target in tests/unit/Makefile sets
-          # via `debug: OPT += -DDEBUG`.
-          make -j"$JOBS" -C test/tap/tests/unit OPT="-DDEBUG" \
-            mysqlx_admin_commands_unit-t \
-            mysqlx_admin_disk_commands_unit-t \
-            mysqlx_admin_schema_unit-t \
-            mysqlx_backend_auth_unit-t \
-            mysqlx_compression_unit-t \
-            mysqlx_concurrent_unit-t \
-            mysqlx_config_store_concurrent_unit-t \
-            mysqlx_config_store_pure_unit-t \
-            mysqlx_config_store_unit-t \
-            mysqlx_connection_unit-t \
-            mysqlx_credential_verify_unit-t \
-            mysqlx_data_stream_unit-t \
-            mysqlx_message_dispatch_unit-t \
-            mysqlx_protocol_socket_unit-t \
-            mysqlx_protocol_unit-t \
-            mysqlx_robustness_unit-t \
-            mysqlx_route_store_unit-t \
-            mysqlx_session_unit-t \
-            mysqlx_stats_unit-t \
-            mysqlx_thread_unit-t \
-            mysqlx_tls_unit-t \
-            plugin_config_unit-t \
-            plugin_dispatch_unit-t \
-            plugin_lifecycle_unit-t \
-            plugin_manager_unit-t \
-            plugin_prometheus_unit-t \
-            plugin_query_hook_unit-t \
-            plugin_registry_unit-t \
-            plugin_runtime_views_unit-t
-
-          # Stage libtap.so's DT_NEEDED siblings (libre2.so.10, libpq.so.5)
-          # next to libtap.so itself so downstream jobs find them at
-          # runtime. The original location is under deps/re2/re2/obj/so/
-          # and deps/postgresql/.../libpq/ — both reachable through
-          # symlinks (deps/re2/re2 → re2-2022-12-01) whose targets are
-          # build artefacts and aren't recreated by sparse checkout, so
-          # caching those paths directly fails at tar-extract time. Copy
-          # the actual files into test/tap/tap/ (which IS in the cache),
-          # then the e2e-tests / soak-tests jobs only need to set
-          # LD_LIBRARY_PATH to that directory when running the binaries.
-          mkdir -p test/tap/tap/_runtime_libs
-          cp -L deps/re2/re2/obj/so/libre2.so.10 test/tap/tap/_runtime_libs/
-          cp -L deps/postgresql/postgresql/src/interfaces/libpq/libpq.so.5 test/tap/tap/_runtime_libs/
-
-      - uses: LouisBrunner/checks-action@v2.0.0
-        if: always()
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          check_id: ${{ steps.checks.outputs.check_id }}
-          repo: ${{ github.repository }}
-          sha: ${{ env.SHA }}
-          conclusion: ${{ job.status }}
-          details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
-
+  # Run the mysqlx + plugin chassis unit-test binaries that CI-builds
+  # preserved in the test cache (see the matrix-conditional deletion in
+  # ci-builds.yml). The binaries have RUNPATH baked in pointing at
+  # /opt/proxysql/test/tap/tap (the build container's path), so they MUST
+  # execute inside the same image mounted at /opt/proxysql -- otherwise
+  # libtap.so and the bundled libcpp_dotenv.so cannot be located at
+  # runtime. Trying to run them directly on the ubuntu-22.04 runner with
+  # an LD_LIBRARY_PATH override also misses libprotobuf.so.32 (the build
+  # image ships protobuf 5.x; ubuntu-22.04 packages only protobuf 3.x).
   unit-tests:
     runs-on: ubuntu-22.04
-    needs: build
     permissions: write-all
     steps:
       - uses: LouisBrunner/checks-action@v2.0.0
@@ -318,74 +48,116 @@ jobs:
           status: 'in_progress'
           details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
 
-      - name: Checkout (sparse — test/tap)
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          # Same SHA derivation as the build job: without an explicit ref
-          # under workflow_run, the downstream job pulls v3.0's test files
-          # instead of the PR's, and any test that the PR modified runs
-          # against the wrong source.
+          repository: ${{ github.repository }}
           ref: ${{ env.SHA }}
-          sparse-checkout: |
-            include
-            common_mk
-            deps
-            src/proxysql_global.cpp
-            test/tap
-            plugins/mysqlx
-            test/scripts
+          path: 'proxysql'
+          # We only need the working tree to mount under /opt/proxysql so
+          # the unit tests can find their data files (test fixtures,
+          # cert bundles, etc.) at the paths their RUNPATH expects. No
+          # sparse-checkout: a few extra MB is much cheaper than
+          # debugging a missing-file failure inside the container.
 
-      - name: Restore build cache
-        uses: actions/cache@v4
+      - name: Cache restore src
+        uses: actions/cache/restore@v4
         with:
-          path: |
-            src/proxysql
-            test/
-            plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
-          key: build-runtime-libs-v7-${{ env.SHA }}
-          # Strict cache dependency: the `build` job above writes this key
-          # before this job starts (via `needs: build`). A miss here means
-          # the build job failed or the cache was evicted between save and
-          # restore — either way we should fail loudly, not silently
-          # proceed without a binary. See issue #5796.
+          # CI-builds save-src path now includes
+          # proxysql/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so as well
+          # as proxysql/src/, gated on -tap-mysqlx via PROXYSQL40=1 in
+          # the build env. See the analogous block in ci-builds.yml.
+          key: ${{ env.BLDCACHE }}_src
           fail-on-cache-miss: true
+          path: |
+            proxysql/src/
+            proxysql/lib/obj/*.gcno
+            proxysql/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
+            proxysql/plugins/genai/ProxySQL_GenAI_Plugin.so
 
-      - name: Verify build artefacts restored from cache
-        # The plugin .so was already built by the `build` job (as a side
-        # effect of `make debug` which descends into plugins/mysqlx/) and
-        # saved to the build cache alongside src/proxysql + test/. No need
-        # to rebuild it here -- the build job builds with PROXYSQL40=1
-        # PROXYSQL31=1 PROXYSQLFFTO=1 PROXYSQLTSDB=1 already, so the cached
-        # .so has the matching ProxySQL_PluginDescriptor /
-        # ProxySQL_PluginServices struct layout the cached src/proxysql
-        # loader expects.
-        # If the .so is missing here, the build job either failed or the
-        # cache was evicted between save and restore -- fail loudly
-        # rather than silently skip the plugin tests.
-        # The chmod restores src/proxysql's executable bit (actions/cache
-        # restore does not always preserve it on Linux).
-        run: |
-          chmod +x src/proxysql 2>/dev/null || true
-          test -f plugins/mysqlx/ProxySQL_MySQLX_Plugin.so \
-            || { echo "ERROR: plugins/mysqlx/ProxySQL_MySQLX_Plugin.so missing from build cache"; exit 1; }
+      - name: Cache restore test
+        uses: actions/cache/restore@v4
+        with:
+          key: ${{ env.BLDCACHE }}_test
+          fail-on-cache-miss: true
+          path: cache_test.tar.zst
 
-      - name: Run mysqlx unit tests
+      - name: Unpack test cache
         run: |
-          export SKIP_PROXYSQL=1
-          # libtap.so DT_NEEDEDs libre2.so.10 + libpq.so.5 from deps/.
-          # The build step staged copies under test/tap/tap/_runtime_libs/
-          # (cached alongside the binaries) — point the dynamic loader at
-          # that directory so the unit binaries (which link libtap.so)
-          # find the right SONAMEs without depending on the deps/ tree
-          # that sparse checkout doesn't materialise.
-          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/test/tap/tap/_runtime_libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-          cd test/tap/tests/unit
-          for test_bin in mysqlx_*_unit-t plugin_*_unit-t; do
-            if [ -x "$test_bin" ]; then
-              echo "Running $test_bin..."
-              ./"$test_bin" || exit 1
+          command -v zstd >/dev/null || sudo apt-get install -y zstd
+          cd proxysql/
+          zstd -d < ../cache_test.tar.zst | tar -xf -
+          rm ../cache_test.tar.zst
+
+      - name: Log in to GHCR and pull build image
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Pull the same image CI-builds compiled the unit tests in. Mirrors
+        # ci-legacy-g4's GHCR pull pattern (login + pull retry loop). The
+        # image is large (~1 GB) but it's already cached on most runners
+        # because every CI-builds run touches it.
+        run: |
+          set +e
+          attempt=0
+          max_attempts=5
+          while [ $attempt -lt $max_attempts ]; do
+            attempt=$((attempt + 1))
+            echo ">>> GHCR login+pull attempt ${attempt}/${max_attempts}"
+            if echo "$GHCR_TOKEN" | docker login ghcr.io \
+                -u "$GHCR_USER" --password-stdin \
+                && docker pull proxysql/packaging:build-ubuntu22-v4.0.0; then
+              echo ">>> pull OK on attempt ${attempt}"
+              exit 0
+            fi
+            if [ $attempt -lt $max_attempts ]; then
+              sleep_for=$((attempt * 10))
+              echo ">>> attempt ${attempt} failed; sleeping ${sleep_for}s"
+              sleep $sleep_for
             fi
           done
+          echo ">>> all ${max_attempts} pull attempts failed"
+          exit 1
+
+      - name: Run mysqlx + plugin unit tests inside build image
+        # Mount the workspace at /opt/proxysql so the binaries' baked-in
+        # RUNPATH resolves. Each binary exits 0 on success / non-zero on
+        # TAP failure; loop exits at the first failure with the
+        # offending binary name in the log. --network none so the unit
+        # tests stay isolated from anything that might be running on the
+        # runner (these are unit tests, not integration tests; nothing
+        # legitimately needs network).
+        run: |
+          docker run --rm \
+            --network none \
+            -v "$(pwd)/proxysql:/opt/proxysql" \
+            -w /opt/proxysql/test/tap/tests/unit \
+            proxysql/packaging:build-ubuntu22-v4.0.0 \
+            bash -c '
+              set -e
+              fails=""
+              for t in mysqlx_*_unit-t plugin_*_unit-t; do
+                [ -x "$t" ] || continue
+                echo ">>> ./$t"
+                if ! ./"$t"; then
+                  fails="${fails}${t} "
+                fi
+              done
+              if [ -n "$fails" ]; then
+                echo ">>> FAILED: ${fails}"
+                exit 1
+              fi
+              echo ">>> all unit tests passed"
+            '
+
+      - name: Archive logs on failure
+        if: ${{ failure() && !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.workflow }}-${{ env.SHA }}-${{ github.job }}-run#${{ github.run_number }}
+          path: |
+            proxysql/test/tap/tests/unit/*.log
+          if-no-files-found: ignore
 
       - uses: LouisBrunner/checks-action@v2.0.0
         if: always()
@@ -397,6 +169,13 @@ jobs:
           conclusion: ${{ job.status }}
           details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
 
+  # The handshake-only e2e tests talk to a MySQL 8.4 X-protocol sandbox
+  # directly (SKIP_PROXYSQL=1 — they validate that the in-tree client
+  # wire code is compatible with upstream, not that ProxySQL proxies
+  # correctly). dbdeployer spins up the sandbox on the host; the test
+  # binaries run inside the build image with --network host so they
+  # reach 127.0.0.1:$mysqlx_port. mysqlx-e2e/env.sh documents this
+  # arrangement.
   e2e-tests:
     runs-on: ubuntu-22.04
     needs: unit-tests
@@ -413,61 +192,53 @@ jobs:
           status: 'in_progress'
           details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
 
-      - name: Checkout (sparse)
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          repository: ${{ github.repository }}
           ref: ${{ env.SHA }}
-          sparse-checkout: |
-            include
-            common_mk
-            deps
-            src/proxysql_global.cpp
-            test/tap
-            plugins/mysqlx
-            test/scripts
+          path: 'proxysql'
 
-      - name: Restore build cache
-        uses: actions/cache@v4
+      - name: Cache restore src
+        uses: actions/cache/restore@v4
         with:
-          path: |
-            src/proxysql
-            test/
-            plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
-          key: build-runtime-libs-v7-${{ env.SHA }}
-          # Strict cache dependency: the `build` job at the top of this
-          # workflow writes this key before this job starts (via the
-          # `needs:` chain). A miss means the build job failed or the
-          # cache was evicted between save and restore — either way fail
-          # loudly instead of silently proceeding without a binary. See
-          # issue #5796.
+          key: ${{ env.BLDCACHE }}_src
           fail-on-cache-miss: true
+          path: |
+            proxysql/src/
+            proxysql/lib/obj/*.gcno
+            proxysql/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
+            proxysql/plugins/genai/ProxySQL_GenAI_Plugin.so
 
-      - name: Verify build artefacts restored from cache
+      - name: Cache restore test
+        uses: actions/cache/restore@v4
+        with:
+          key: ${{ env.BLDCACHE }}_test
+          fail-on-cache-miss: true
+          path: cache_test.tar.zst
+
+      - name: Unpack test cache
         run: |
-          chmod +x src/proxysql 2>/dev/null || true
-          test -f plugins/mysqlx/ProxySQL_MySQLX_Plugin.so \
-            || { echo "ERROR: plugins/mysqlx/ProxySQL_MySQLX_Plugin.so missing from build cache"; exit 1; }
+          command -v zstd >/dev/null || sudo apt-get install -y zstd
+          cd proxysql/
+          zstd -d < ../cache_test.tar.zst | tar -xf -
+          rm ../cache_test.tar.zst
 
       - name: Install MySQL 8.4 runtime libs
-        # dbdeployer downloads a pre-built MySQL binary distribution; the
-        # GitHub-hosted ubuntu-22.04 runner image happens to have most of
-        # these pre-installed, but a stock ubuntu:22.04 does not. Without
-        # libaio1 + libnuma1, mysqld won't link at deploy time; without
-        # libncurses5 + libtinfo5, the `mysql` client errors out at
-        # invocation time. Install them explicitly so the workflow is
-        # not silently dependent on whatever the runner happens to ship.
+        # dbdeployer ships pre-built mysqld binaries that DT_NEEDED
+        # libaio1/libnuma1 (server) and libncurses5/libtinfo5 (client).
+        # ubuntu-22.04 runner image includes most but not all of these
+        # by default; install explicitly so we never silently depend on
+        # whatever the runner happens to ship.
         run: |
           sudo apt-get install -y -qq --no-install-recommends \
             libaio1 libnuma1 libncurses5 libtinfo5
 
       - name: Install dbdeployer
-        # The dbdeployer-install.sh script downloads + extracts the binary
-        # into the current directory and, when running as root, copies it
-        # to /usr/local/bin. As an unprivileged user (the GitHub runner
-        # case) it prints a "ready to move" hint and leaves the binary in
-        # cwd, then `dbdeployer --version` immediately fails with "command
-        # not found". Move it into PATH ourselves before the version
-        # check.
+        # Same install flow the OLD bare-runner CI-mysqlx used (the only
+        # thing about the old workflow that wasn't broken). The script
+        # leaves the binary in cwd when run as non-root, so move it
+        # into PATH ourselves before the version check.
         run: |
           curl -s https://raw.githubusercontent.com/ProxySQL/dbdeployer/master/scripts/dbdeployer-install.sh | bash
           if [ -f dbdeployer ] && ! command -v dbdeployer >/dev/null 2>&1; then
@@ -477,10 +248,6 @@ jobs:
           dbdeployer --version
 
       - name: Download and unpack MySQL 8.4
-        # `dbdeployer unpack` defaults its --sandbox-binary target to
-        # $HOME/opt/mysql, which it does not create itself. Without the
-        # mkdir, the step aborts with "directory '/home/runner/opt/mysql'
-        # not found".
         run: |
           mkdir -p "$HOME/opt/mysql"
           dbdeployer downloads get-by-version 8.4 --newest --minimal
@@ -488,34 +255,18 @@ jobs:
           dbdeployer unpack "$TARBALL"
 
       - name: Deploy MySQL 8.4 sandbox
-        # Three pieces of MySQL 8.4 + dbdeployer reality the original step
-        # missed:
-        #
-        #   1. MySQL 8.4 does not load the `mysql_native_password` auth
-        #      plugin by default (the deprecation cycle that started in
-        #      8.0). Passing `--my-cnf-options "mysql_native_password=ON"`
-        #      to `dbdeployer deploy single` enables it so the CREATE USER
-        #      ... IDENTIFIED WITH mysql_native_password below works.
-        #
-        #   2. dbdeployer assigns msandbox the role R_DO_IT_ALL by default,
-        #      which has every privilege but NOT WITH GRANT OPTION (see
-        #      $SANDBOX/grants.mysql). The companion role R_CUSTOM does
-        #      have GRANT OPTION. Without granting R_CUSTOM to msandbox,
-        #      every subsequent GRANT statement -- even GRANT USAGE -- is
-        #      rejected with ERROR 1045 "Access denied for user
-        #      'msandbox'@'localhost'". Grant R_CUSTOM + set it as default
-        #      so the next session has GRANT OPTION active.
-        #
-        #   3. The CREATE/GRANT/FLUSH multi-statement string used to be
-        #      passed via `mysql -e "..."` which silently masked failures
-        #      mid-script. Drive it via stdin so any individual statement
-        #      failing kills the step.
+        # The three behaviours preserved from the old workflow:
+        # (1) MySQL 8.4 needs --my-cnf-options "mysql_native_password=ON"
+        #     because the auth plugin is no longer loaded by default;
+        # (2) msandbox needs R_CUSTOM granted (default R_DO_IT_ALL lacks
+        #     GRANT OPTION);
+        # (3) Statements run on separate connections so default-role
+        #     activation lands between GRANT R_CUSTOM and the CREATE
+        #     USER statement.
         run: |
           VERSION=$(ls $HOME/opt/mysql/ | grep '^8\.4' | head -1)
           dbdeployer deploy single "$VERSION" --my-cnf-options "mysql_native_password=ON"
           SANDBOX="$HOME/sandboxes/msb_${VERSION//./_}"
-
-          # Wait for MySQL to be ready
           for i in $(seq 1 30); do
             if "$SANDBOX/use" -e "SELECT 1" &>/dev/null; then
               echo "MySQL $VERSION is ready"
@@ -523,16 +274,10 @@ jobs:
             fi
             sleep 2
           done
-
-          # Give msandbox the R_CUSTOM role (the one with GRANT OPTION).
           "$SANDBOX/use" <<SQL
           GRANT R_CUSTOM TO 'msandbox'@'localhost';
           SET DEFAULT ROLE R_CUSTOM, R_DO_IT_ALL TO 'msandbox'@'localhost';
           SQL
-
-          # Now the test user setup goes through. Issue each statement on
-          # its own connection so a default-role activation lands between
-          # GRANT R_CUSTOM and the user-creating GRANT below.
           "$SANDBOX/use" <<SQL
           CREATE USER IF NOT EXISTS 'mysqlx_test'@'%' IDENTIFIED WITH mysql_native_password BY 'mysqlx_test';
           SQL
@@ -543,84 +288,83 @@ jobs:
           FLUSH PRIVILEGES;
           SQL
 
-      - name: Verify X Protocol
-        # The previous step hardcoded port 33060. dbdeployer's sandbox
-        # port scheme is <major><minor><patch> (e.g. 8408 for MySQL 8.4.8)
-        # and the X Protocol port is that + 10000 (so 18408 here). Read
-        # the actual mysqlx-port from the sandbox config and verify it +
-        # export to $GITHUB_ENV so the next step's test binaries read
-        # MYSQLX_E2E_PORT from the right place (see env.sh).
+      - name: Resolve mysqlx port
+        # dbdeployer's port scheme is <major><minor><patch> for classic
+        # and that + 10000 for X (8408 -> 18408). Read it from the
+        # sandbox's my.sandbox.cnf so we don't hard-code an off-by-one
+        # if dbdeployer's convention shifts.
         run: |
           VERSION=$(ls $HOME/opt/mysql/ | grep '^8\.4' | head -1)
           SANDBOX="$HOME/sandboxes/msb_${VERSION//./_}"
           MYSQLX_PORT=$(grep '^mysqlx-port' "$SANDBOX/my.sandbox.cnf" | tail -1 | sed 's/^mysqlx-port=//')
           for i in $(seq 1 30); do
             if timeout 2 bash -c "echo > /dev/tcp/127.0.0.1/$MYSQLX_PORT" 2>/dev/null; then
-              echo "X Protocol is listening on port $MYSQLX_PORT"
               echo "MYSQLX_E2E_PORT=$MYSQLX_PORT" >> "$GITHUB_ENV"
               exit 0
             fi
             sleep 2
           done
-          echo "ERROR: X Protocol not available on port $MYSQLX_PORT"
+          echo "ERROR: X Protocol not reachable on port $MYSQLX_PORT" >&2
           exit 1
 
-      - name: Run mysqlx integration tests (no ProxySQL)
-        # Integration + handshake-only e2e tests talk directly to the
-        # MySQL 8.4 sandbox; they don't need a running ProxySQL. The
-        # list explicitly excludes test_mysqlx_e2e_routing-t (needs a
-        # running ProxySQL + SQL-forwarding fixes — see the comment
-        # block further down) and the soak/route_drop tests (their own
-        # job).
+      - name: Log in to GHCR and pull build image
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # IMPORTANT: capture MYSQLX_E2E_PORT before sourcing env.sh.
-          # The Verify X Protocol step writes the dynamically discovered
-          # sandbox X port (e.g. 18408 for MySQL 8.4.8) to $GITHUB_ENV,
-          # but env.sh below unconditionally `export MYSQLX_E2E_PORT=
-          # 33060` — sourcing it after the GitHub env injection
-          # overrides the real port and the test connects to nothing.
-          # Save first, source, then restore.
-          DISCOVERED_MYSQLX_E2E_PORT="${MYSQLX_E2E_PORT:?missing -- previous Verify step did not export it}"
-          source test/tap/groups/mysqlx-e2e/env.sh
-          export MYSQLX_E2E_PORT="$DISCOVERED_MYSQLX_E2E_PORT"
-          # See the LD_LIBRARY_PATH comment in unit-tests above: libtap.so
-          # pulls libre2.so.10 / libpq.so.5, staged under
-          # test/tap/tap/_runtime_libs/ by the build step.
-          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/test/tap/tap/_runtime_libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-          cd test/tap/tests
-          ran_any=0
-          for test_bin in test_mysqlx_admin_tables-t test_mysqlx_plugin_load-t test_mysqlx_e2e_handshake-t; do
-            if [ -x "$test_bin" ]; then
-              echo "Running $test_bin..."
-              ./"$test_bin" || exit 1
-              ran_any=1
+          set +e
+          attempt=0
+          max_attempts=5
+          while [ $attempt -lt $max_attempts ]; do
+            attempt=$((attempt + 1))
+            if echo "$GHCR_TOKEN" | docker login ghcr.io \
+                -u "$GHCR_USER" --password-stdin \
+                && docker pull proxysql/packaging:build-ubuntu22-v4.0.0; then
+              exit 0
             fi
+            sleep $((attempt * 10))
           done
-          if [ "$ran_any" = "0" ]; then
-            echo "ERROR: no test_mysqlx_*-t binaries were found"
-            exit 1
-          fi
+          exit 1
 
-      # test_mysqlx_e2e_routing-t is intentionally NOT run here yet.
-      # The handshake stage of routing succeeds against ProxySQL after
-      # the plugin fixes in this PR (backend MYSQL41 AuthContinue
-      # format, skip CapabilitiesSet(authentication.mechanisms)), but
-      # the SQL-forwarding stage after auth still hangs. That requires
-      # follow-up plugin work in:
-      #   - plugins/mysqlx/src/mysqlx_session.cpp:forward_to_backend
-      #     (server_ds() never reaches XDS_READY so reinit churns)
-      #   - the lazy population of runtime_mysql_users/servers — the
-      #     plugin reads them directly via SQLite, but admin only
-      #     populates them on SELECT-triggered refresh.
-      # Tracked separately so the rest of the mysqlx-e2e job stays green.
+      - name: Run mysqlx e2e tests inside build image (--network host -> dbdeployer mysqlx)
+        # The three e2e binaries (test_mysqlx_admin_tables-t,
+        # test_mysqlx_plugin_load-t, test_mysqlx_e2e_handshake-t) talk
+        # directly to the dbdeployer MySQL 8.4 instance on 127.0.0.1:
+        # $MYSQLX_E2E_PORT. mysqlx-e2e/env.sh sets a hard-coded default
+        # of 33060 which is wrong for this dbdeployer arrangement; we
+        # save the discovered port, source env.sh, then restore the
+        # discovered port so the test connects to the right place.
+        run: |
+          docker run --rm \
+            --network host \
+            -v "$(pwd)/proxysql:/opt/proxysql" \
+            -e "MYSQLX_E2E_PORT=${MYSQLX_E2E_PORT}" \
+            -w /opt/proxysql/test/tap/tests \
+            proxysql/packaging:build-ubuntu22-v4.0.0 \
+            bash -c '
+              set -e
+              DISCOVERED="${MYSQLX_E2E_PORT:?missing}"
+              source /opt/proxysql/test/tap/groups/mysqlx-e2e/env.sh
+              export MYSQLX_E2E_PORT="$DISCOVERED"
+              ran=0
+              for t in test_mysqlx_admin_tables-t test_mysqlx_plugin_load-t test_mysqlx_e2e_handshake-t; do
+                if [ -x "$t" ]; then
+                  echo ">>> ./$t"
+                  ./"$t" || exit 1
+                  ran=1
+                fi
+              done
+              if [ "$ran" = "0" ]; then
+                echo "ERROR: no test_mysqlx_*-t binaries found" >&2
+                exit 1
+              fi
+            '
 
       - name: Cleanup sandbox
         if: always()
         run: |
           VERSION=$(ls $HOME/opt/mysql/ | grep '^8\.4' | head -1 || echo "")
-          if [ -n "$VERSION" ]; then
-            dbdeployer delete single "$VERSION" 2>/dev/null || true
-          fi
+          [ -n "$VERSION" ] && dbdeployer delete single "$VERSION" 2>/dev/null || true
 
       - uses: LouisBrunner/checks-action@v2.0.0
         if: always()
@@ -632,14 +376,14 @@ jobs:
           conclusion: ${{ job.status }}
           details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
 
+  # mysqlx-soak-g1 runs the operational harness scripts inside the
+  # standard docker-isolated TAP infra. Mirrors ci-legacy-g4 exactly:
+  # restore caches, pull the test-runner image, ensure-infras + run-
+  # tests-isolated. The plugin .so came from the chassis build in
+  # CI-builds; start-proxysql-isolated.bash bind-mounts it into the
+  # ProxySQL container per PROXYSQL_LOAD_MYSQLX_PLUGIN=1 in
+  # mysqlx-soak/env.sh.
   soak-tests:
-    # mysqlx-soak group: runs the harness scripts (behavioural validation
-    # + short stress) inside the docker-isolated TAP harness. Distinct
-    # from e2e-tests which uses dbdeployer locally and SKIP_PROXYSQL=1;
-    # this job stands up a real ProxySQL container with the chassis
-    # loaded and exercises the plugin end-to-end. See
-    # test/tap/groups/mysqlx-soak/README.md for the design and the
-    # remaining work items beyond what this job covers.
     runs-on: ubuntu-22.04
     needs: unit-tests
     permissions: write-all
@@ -655,75 +399,102 @@ jobs:
           status: 'in_progress'
           details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
 
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          repository: ${{ github.repository }}
           ref: ${{ env.SHA }}
+          path: 'proxysql'
+          sparse-checkout: |
+            test/infra
+            test/tap/groups
+            test/scripts
 
-      - name: Restore build cache
-        uses: actions/cache@v4
+      - name: Cache restore src
+        uses: actions/cache/restore@v4
         with:
+          key: ${{ env.BLDCACHE }}_src
+          fail-on-cache-miss: true
           path: |
-            src/proxysql
-            test/
-            plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
-          key: build-runtime-libs-v7-${{ env.SHA }}
-          fail-on-cache-miss: ${{ inputs.trigger != '' }}
+            proxysql/src/
+            proxysql/lib/obj/*.gcno
+            proxysql/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
+            proxysql/plugins/genai/ProxySQL_GenAI_Plugin.so
 
-      - name: Verify build artefacts restored from cache
-        # See the same step in unit-tests / e2e-tests jobs for the full
-        # rationale. The plugin .so was built by the `build` job and
-        # cached; here we just restore src/proxysql's executable bit and
-        # sanity-check that the cached .so is on disk.
-        run: |
-          chmod +x src/proxysql 2>/dev/null || true
-          test -f plugins/mysqlx/ProxySQL_MySQLX_Plugin.so \
-            || { echo "ERROR: plugins/mysqlx/ProxySQL_MySQLX_Plugin.so missing from build cache"; exit 1; }
+      - name: Cache restore test
+        uses: actions/cache/restore@v4
+        with:
+          key: ${{ env.BLDCACHE }}_test
+          fail-on-cache-miss: true
+          path: cache_test.tar.zst
 
-      - name: Build proxysql-ci-base image
-        # The image now includes mysql-connector-python so the harness
-        # scripts (Python X DevAPI) can run in the test-runner container.
+      - name: Unpack test cache
         run: |
-          cd test/infra/docker-base
-          docker build --network host -t proxysql-ci-base:latest .
+          command -v zstd >/dev/null || sudo apt-get install -y zstd
+          cd proxysql/
+          zstd -d < ../cache_test.tar.zst | tar -xf -
+          rm ../cache_test.tar.zst
 
-      - name: Bring up infrastructure (dbdeployer-mysql84 + ProxySQL with mysqlx plugin)
+      - name: Verify binary + plugin .so
         run: |
-          export WORKSPACE="${GITHUB_WORKSPACE}"
-          export INFRA_ID="mysqlx-soak-${GITHUB_RUN_ID}"
+          chmod +x proxysql/src/proxysql
+          file proxysql/src/proxysql
+          test -f proxysql/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so \
+            || { echo "ERROR: ProxySQL_MySQLX_Plugin.so missing from src cache"; exit 1; }
+
+      - name: Build CI base image
+        # Same pattern ci-legacy-g4 uses: build the test-runner image
+        # from test/infra/docker-base. Includes mysqlx-connector-python
+        # so the soak harness scripts (behavioral_validation.py,
+        # stress.py) can run inside the test-runner container.
+        run: |
+          cd proxysql/test/infra/docker-base
+          docker build -t proxysql-ci-base:latest .
+
+      - name: Start infrastructure
+        run: |
+          cd proxysql
+          export INFRA_ID="ci-mysqlx-soak-${GITHUB_RUN_ID}"
           export TAP_GROUP="mysqlx-soak"
           [ -f test/infra/common/env.sh ] && source test/infra/common/env.sh
-          ./test/infra/control/ensure-infras.bash
+          test/infra/control/ensure-infras.bash
 
-      - name: Run mysqlx-soak TAP tests (behavioural + short stress)
+      - name: Run mysqlx-soak-g1 tests
         run: |
-          export WORKSPACE="${GITHUB_WORKSPACE}"
-          export INFRA_ID="mysqlx-soak-${GITHUB_RUN_ID}"
+          cd proxysql
+          export INFRA_ID="ci-mysqlx-soak-${GITHUB_RUN_ID}"
           export TAP_GROUP="mysqlx-soak-g1"
-          # Keep stress short for CI; long soaks invoke stress.py
-          # directly with --duration 24h on staging (issue #5677).
+          # Short stress so the CI run completes inside a reasonable
+          # window; long soaks invoke stress.py directly with --duration
+          # 24h on staging (issue #5677).
           export MYSQLX_SOAK_DURATION="60s"
           export MYSQLX_SOAK_CONCURRENT="20"
           [ -f test/infra/common/env.sh ] && source test/infra/common/env.sh
-          ./test/infra/control/run-tests-isolated.bash
+          test/infra/control/run-tests-isolated.bash
 
       - name: Cleanup
         if: always()
         run: |
-          export WORKSPACE="${GITHUB_WORKSPACE}"
-          export INFRA_ID="mysqlx-soak-${GITHUB_RUN_ID}"
+          set +e
+          cd proxysql
+          export INFRA_ID="ci-mysqlx-soak-${GITHUB_RUN_ID}"
           export TAP_GROUP="mysqlx-soak"
-          [ -f test/infra/common/env.sh ] && source test/infra/common/env.sh
-          ./test/infra/control/stop-proxysql-isolated.bash || true
-          ./test/infra/control/destroy-infras.bash || true
+          docker logs proxysql.ci-mysqlx-soak-${GITHUB_RUN_ID} 2>&1 | tail -50 || true
+          test/infra/control/stop-proxysql-isolated.bash || true
+          test/infra/control/destroy-infras.bash || true
+
+      - name: Fix artifact permissions
+        if: ${{ failure() && !cancelled() }}
+        run: |
+          sudo chmod -R a+rX proxysql/ci_*_logs/ 2>/dev/null || true
 
       - name: Archive logs
         if: ${{ failure() && !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: mysqlx-soak-logs-${{ github.run_number }}
+          name: ${{ github.workflow }}-${{ env.SHA }}-${{ github.job }}-run#${{ github.run_number }}
           path: |
-            ci_infra_logs/
+            proxysql/ci_*_logs/
 
       - uses: LouisBrunner/checks-action@v2.0.0
         if: always()
