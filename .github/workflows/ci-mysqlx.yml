@@ -198,9 +198,22 @@ jobs:
           # Stage 1: deps + lib + src + plugins/mysqlx. Produces
           # libproxysql.a, src/proxysql, plugins/mysqlx/*.so.
           make -j"$JOBS" debug
-          # Stage 2: libtap.so + cpp-dotenv (vendored antlr4 runtime).
-          # Required transitively by every -t binary's link.
-          make -j"$JOBS" -C test/tap/tap
+          # Stage 2: libtap.so + cpp-dotenv (vendored antlr4 runtime),
+          # AND the per-flavor test client libraries the tap library
+          # links against. The right entrypoint is test/tap/Makefile's
+          # `tap` target, NOT a direct `make -C test/tap/tap` — the
+          # higher-level Makefile carries `tap: test_deps` which builds
+          # test/deps/{mariadb-connector-c, mysql-connector-c,
+          # mysql-connector-c-8.4.0} (the test client libraries
+          # libtap_mysql57.a / libtap_mysql8.a / libtap_mariadb.a link
+          # in via utils_*.o). Skipping that dep step is what made the
+          # first targeted-build attempt fail with
+          # "fatal error: mysql.h: No such file or directory" at
+          # utils_mysql57.o — libmysqlclient-dev (Ubuntu) and
+          # test/deps/mysql-connector-c (vendored 5.7 source) are not
+          # interchangeable; the latter is what the IDIRS in
+          # test/tap/tap/Makefile resolve to.
+          make -j"$JOBS" -C test/tap tap
           # Stage 3: the e2e + soak binaries that CI-mysqlx's e2e-tests
           # and soak-tests jobs invoke. Three categories, each handled by
           # a different rule in test/tap/tests/Makefile:
