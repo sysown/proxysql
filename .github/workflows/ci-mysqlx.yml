@@ -153,7 +153,7 @@ jobs:
             automake \
             autoconf
 
-      - name: Build proxysql (PROXYSQL40 chassis) + TAP tests
+      - name: Build proxysql (PROXYSQL40 chassis) + targeted TAP tests
         if: steps.build-cache.outputs.cache-hit != 'true'
         # `make debug` descends into plugins/mysqlx/ and builds the plugin
         # .so as a side effect using these tier flags, so the downstream
@@ -164,25 +164,89 @@ jobs:
         # change ProxySQL_PluginDescriptor / ProxySQL_PluginServices struct
         # layouts, the loader accepts the link silently, and the first
         # virtual dispatch into a plugin callback corrupts memory).
+        #
+        # Why NOT `make build_tap_test_debug`: that target cascades into
+        # test/tap/Makefile's `debug` which builds the full TAP suite -
+        # 353 e2e *-t binaries plus 88 *_unit-t binaries, ~14 GB on disk
+        # in debug mode (each unit-test statically links libproxysql.a;
+        # the genai_*_unit-t ones land at ~160 MB apiece). The ubuntu-22.04
+        # runner ships with ~14 GB free disk, so the build either ran out
+        # of space mid-link or OOMed during cpp-dotenv / antlr4-cpp-runtime
+        # template instantiation (different failure modes, same root
+        # cause: building things we never run).
+        #
+        # CI-mysqlx only runs a known, closed list of TAP binaries (see
+        # the unit-tests, e2e-tests, soak-tests jobs below). Enumerate
+        # them and invoke the per-binary targets in the existing per-
+        # directory Makefiles directly. Both test/tap/tests/Makefile and
+        # test/tap/tests/unit/Makefile already provide explicit per-
+        # binary rules + a `%-t: %-t.cpp ...` pattern rule, so no
+        # Makefile changes are needed - just a more selective top-level
+        # invocation.
+        #
+        # Net effect: TAP-test artifact size on disk drops from ~14 GB to
+        # ~4 GB, cold-build wall-clock drops correspondingly (~40 % fewer
+        # compile units), and the build can safely go back to full
+        # `-j$(nproc)` parallelism (RAM headroom was never actually the
+        # problem; disk + linker peak memory were).
         run: |
           export PROXYSQL40=1
           export PROXYSQL31=1
           export PROXYSQLFFTO=1
           export PROXYSQLTSDB=1
-          # nproc/2 instead of nproc: ubuntu-22.04 GitHub runners are
-          # 4-core / 7GB-RAM, and the cpp-dotenv (antlr4-cpp-runtime)
-          # compilation in `make build_tap_test_debug` is template-heavy
-          # enough that 4 concurrent g++ instances exhaust RAM and the
-          # OOM killer reaps the runner mid-compile with no error in the
-          # job log (just a silent runner crash and a `failure` job
-          # status). Half-nproc keeps memory headroom while still
-          # parallelising the build; cold-build wall-clock goes from
-          # ~28 min to ~35 min, well inside the 6h job cap. Floor at 1
-          # so any future single-core runner image still works.
-          JOBS=$(( $(nproc) / 2 ))
-          [ "$JOBS" -lt 1 ] && JOBS=1
+          JOBS=$(nproc)
+          # Stage 1: deps + lib + src + plugins/mysqlx. Produces
+          # libproxysql.a, src/proxysql, plugins/mysqlx/*.so.
           make -j"$JOBS" debug
-          make -j"$JOBS" build_tap_test_debug
+          # Stage 2: libtap.so + cpp-dotenv (vendored antlr4 runtime).
+          # Required transitively by every -t binary's link.
+          make -j"$JOBS" -C test/tap/tap
+          # Stage 3: the three e2e + three soak -t binaries that
+          # CI-mysqlx's e2e-tests and soak-tests jobs invoke. Pattern
+          # rule `%-t: %-t.cpp libtap.so` handles the link; OPTZ matches
+          # what `make build_tap_test_debug` would have set.
+          make -j"$JOBS" -C test/tap/tests OPTZ="-O0 -ggdb -DDEBUG" \
+            test_mysqlx_admin_tables-t \
+            test_mysqlx_plugin_load-t \
+            test_mysqlx_e2e_handshake-t \
+            test_mysqlx_route_drop_inflight-t \
+            test_mysqlx_soak_behavioral-t \
+            test_mysqlx_soak_stress-t
+          # Stage 4: the mysqlx_* and plugin_* unit-test binaries that
+          # CI-mysqlx's unit-tests job invokes (the `for test_bin in
+          # mysqlx_*_unit-t plugin_*_unit-t` glob). OPT="-DDEBUG"
+          # matches what the `debug` target in tests/unit/Makefile sets
+          # via `debug: OPT += -DDEBUG`.
+          make -j"$JOBS" -C test/tap/tests/unit OPT="-DDEBUG" \
+            mysqlx_admin_commands_unit-t \
+            mysqlx_admin_disk_commands_unit-t \
+            mysqlx_admin_schema_unit-t \
+            mysqlx_backend_auth_unit-t \
+            mysqlx_compression_unit-t \
+            mysqlx_concurrent_unit-t \
+            mysqlx_config_store_concurrent_unit-t \
+            mysqlx_config_store_pure_unit-t \
+            mysqlx_config_store_unit-t \
+            mysqlx_connection_unit-t \
+            mysqlx_credential_verify_unit-t \
+            mysqlx_data_stream_unit-t \
+            mysqlx_message_dispatch_unit-t \
+            mysqlx_protocol_socket_unit-t \
+            mysqlx_protocol_unit-t \
+            mysqlx_robustness_unit-t \
+            mysqlx_route_store_unit-t \
+            mysqlx_session_unit-t \
+            mysqlx_stats_unit-t \
+            mysqlx_thread_unit-t \
+            mysqlx_tls_unit-t \
+            plugin_config_unit-t \
+            plugin_dispatch_unit-t \
+            plugin_lifecycle_unit-t \
+            plugin_manager_unit-t \
+            plugin_prometheus_unit-t \
+            plugin_query_hook_unit-t \
+            plugin_registry_unit-t \
+            plugin_runtime_views_unit-t
 
           # Stage libtap.so's DT_NEEDED siblings (libre2.so.10, libpq.so.5)
           # next to libtap.so itself so downstream jobs find them at
