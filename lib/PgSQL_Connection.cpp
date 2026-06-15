@@ -2815,13 +2815,33 @@ void PgSQL_Connection::async_free_result() {
 // 0 when the query is completed
 // 1 when the query is not completed
 // the calling function should check pgsql error in pgsql struct
-int PgSQL_Connection::async_query(short event, const char* stmt, unsigned long length, const char* backend_stmt_name, 
+int PgSQL_Connection::async_query(short event, const char* stmt, unsigned long length, const char* backend_stmt_name,
 	PgSQL_Extended_Query_Type type, const PgSQL_Extended_Query_Info* extended_query_info) {
 	PROXY_TRACE();
 	PROXY_TRACE2();
 	// In native_mode pgsql_conn is permanently NULL; simple queries are driven by
 	// the native state machine. (Extended/prepared queries are not native yet.)
 	assert(native_mode || pgsql_conn);
+
+	// Native mode does not yet implement the extended-query cycle (Parse/Bind/
+	// Describe/Execute/Close/Sync). For extended queries on a native connection,
+	// fall back to the libpq path on the same connection: if a libpq
+	// pgsql_conn is not available, surface a clean FEATURE_NOT_SUPPORTED error
+	// to the client instead of letting the libpq-only code path dereference
+	// a null pgsql_conn and crash the proxy.
+	if (native_mode && extended_query_info != nullptr && !pgsql_conn) {
+		if (myds && myds->sess) {
+			proxy_warning("Native backend protocol does not yet support extended "
+			              "queries (Parse/Bind/Execute); returning error to client %s:%d\n",
+			              myds->sess->client_myds ? myds->sess->client_myds->addr.addr : "",
+			              myds->sess->client_myds ? myds->sess->client_myds->addr.port : 0);
+		}
+		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_FEATURE_NOT_SUPPORTED),
+			"native backend protocol does not support extended queries (Parse/Bind/Execute); "
+			"disable pgsql-use_native_backend_protocol to use libpq for this query",
+			true);
+		return -1;
+	}
 
 	server_status = parent->status; // we copy it here to avoid race condition. The caller will see this
 	if (IsServerOffline())
