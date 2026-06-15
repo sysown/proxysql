@@ -201,17 +201,34 @@ jobs:
           # Stage 2: libtap.so + cpp-dotenv (vendored antlr4 runtime).
           # Required transitively by every -t binary's link.
           make -j"$JOBS" -C test/tap/tap
-          # Stage 3: the three e2e + three soak -t binaries that
-          # CI-mysqlx's e2e-tests and soak-tests jobs invoke. Pattern
-          # rule `%-t: %-t.cpp libtap.so` handles the link; OPTZ matches
-          # what `make build_tap_test_debug` would have set.
+          # Stage 3: the e2e + soak binaries that CI-mysqlx's e2e-tests
+          # and soak-tests jobs invoke. Three categories, each handled by
+          # a different rule in test/tap/tests/Makefile:
+          #
+          #   - test_mysqlx_admin_tables-t and test_mysqlx_plugin_load-t
+          #     have explicit rules that recurse into test/tap/tests/unit
+          #     and symlink the produced binary back up. They are NOT
+          #     matched by the `%-t: %-t.cpp` pattern rule because they
+          #     have no companion .cpp at this level.
+          #
+          #   - test_mysqlx_e2e_handshake-t and test_mysqlx_route_drop_-
+          #     inflight-t do have a .cpp and ride the standard `%-t`
+          #     pattern rule (compile + link against libtap.so).
+          #
+          #   - test_mysqlx_soak_{behavioral,stress}-t are shell wrappers
+          #     around the Python harnesses (test/scripts/mysqlx/*.py).
+          #     Only the .sh source ships in the tree; the Makefile's
+          #     `sh-%: %-t.sh` rule copies + chmods them into `<name>-t`.
+          #     Hence the `sh-...sh` target form below.
+          #
+          # OPTZ matches what `make build_tap_test_debug` would have set.
           make -j"$JOBS" -C test/tap/tests OPTZ="-O0 -ggdb -DDEBUG" \
             test_mysqlx_admin_tables-t \
             test_mysqlx_plugin_load-t \
             test_mysqlx_e2e_handshake-t \
             test_mysqlx_route_drop_inflight-t \
-            test_mysqlx_soak_behavioral-t \
-            test_mysqlx_soak_stress-t
+            sh-test_mysqlx_soak_behavioral-t.sh \
+            sh-test_mysqlx_soak_stress-t.sh
           # Stage 4: the mysqlx_* and plugin_* unit-test binaries that
           # CI-mysqlx's unit-tests job invokes (the `for test_bin in
           # mysqlx_*_unit-t plugin_*_unit-t` glob). OPT="-DDEBUG"
