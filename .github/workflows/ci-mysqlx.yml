@@ -169,8 +169,20 @@ jobs:
           export PROXYSQL31=1
           export PROXYSQLFFTO=1
           export PROXYSQLTSDB=1
-          make -j$(nproc) debug
-          make -j$(nproc) build_tap_test_debug
+          # nproc/2 instead of nproc: ubuntu-22.04 GitHub runners are
+          # 4-core / 7GB-RAM, and the cpp-dotenv (antlr4-cpp-runtime)
+          # compilation in `make build_tap_test_debug` is template-heavy
+          # enough that 4 concurrent g++ instances exhaust RAM and the
+          # OOM killer reaps the runner mid-compile with no error in the
+          # job log (just a silent runner crash and a `failure` job
+          # status). Half-nproc keeps memory headroom while still
+          # parallelising the build; cold-build wall-clock goes from
+          # ~28 min to ~35 min, well inside the 6h job cap. Floor at 1
+          # so any future single-core runner image still works.
+          JOBS=$(( $(nproc) / 2 ))
+          [ "$JOBS" -lt 1 ] && JOBS=1
+          make -j"$JOBS" debug
+          make -j"$JOBS" build_tap_test_debug
 
           # Stage libtap.so's DT_NEEDED siblings (libre2.so.10, libpq.so.5)
           # next to libtap.so itself so downstream jobs find them at
