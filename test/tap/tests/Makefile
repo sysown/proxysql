@@ -57,8 +57,13 @@ endif
 # /*.pb.h files require headers (e.g. <google/protobuf/generated_message
 # _bases.h>) that only exist in 3.16+. The vendored install path must be
 # on IDIRS/LDIRS so every test_mysqlx_e2e_*-t rule below resolves the
-# right headers and the `-lprotobuf` link arg they pass, regardless of
-# what (if anything) the host distro ships as system libprotobuf-dev.
+# right headers and the link rules below reference the vendored
+# libprotobuf.a explicitly via $(PROTOBUF_LIB) (full path) instead of
+# `-lprotobuf`. Going through -lprotobuf races the system v3.12 .so
+# that the deb-compliant entrypoint apt-installs for PROXYSQL40 builds
+# -- `-Bdynamic -lprotobuf` resolves to the system .so first and the
+# .pb.o (built against vendored 3.21 headers) fails to link. Same fix
+# as test/tap/tests/unit/Makefile.
 ifeq ($(PROXYSQL40),1)
 PROTOBUF_VERSION := 3.21.12
 PROTOBUF_INSTALL_DIR := $(PROXYSQL_PATH)/deps/protobuf/protobuf-$(PROTOBUF_VERSION)/install
@@ -395,12 +400,12 @@ $(ODIR)/mysqlx_proto_%.pb.o: $(MYSQLX_PROTO_DIR)/%.pb.cc $(PROTOBUF_LIB) | $(ODI
 test_mysqlx_e2e_handshake-t: test_mysqlx_e2e_handshake-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TAP_LDIR)/libtap.so
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
-		$(IDIRS) $(LDIRS) $(OPT) -lprotobuf -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
+		$(IDIRS) $(LDIRS) $(OPT) $(PROTOBUF_LIB) -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
 
 test_mysqlx_e2e_routing-t: test_mysqlx_e2e_routing-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TAP_LDIR)/libtap.so
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
-		$(IDIRS) $(LDIRS) $(OPT) -lprotobuf -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
+		$(IDIRS) $(LDIRS) $(OPT) $(PROTOBUF_LIB) -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
 
 # Behavioural validation TAP test for issue #5678 part (b): the X-Protocol
 # clients are driven directly via the protocol helpers (same set used by
@@ -410,7 +415,7 @@ test_mysqlx_e2e_routing-t: test_mysqlx_e2e_routing-t.cpp $(PROXYSQL_PATH)/plugin
 test_mysqlx_route_drop_inflight-t: test_mysqlx_route_drop_inflight-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TAP_LDIR)/libtap.so
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
-		$(IDIRS) $(LDIRS) $(OPT) -lprotobuf -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
+		$(IDIRS) $(LDIRS) $(OPT) $(PROTOBUF_LIB) -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
 
 # test_mysqlx_sigterm_inflight-t (the C++ stub binary) was deleted in the
 # same PR that removed skip_all() from the framework. The stub had never
