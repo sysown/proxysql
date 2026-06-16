@@ -230,6 +230,17 @@ jobs:
             mkdir -p test/tap/tap/_runtime_libs
             cp -L deps/postgresql/postgresql/src/interfaces/libpq/libpq.so.5 test/tap/tap/_runtime_libs/
             cp -L deps/re2/re2/obj/so/libre2.so.10 test/tap/tap/_runtime_libs/
+            # Stage the chassis plugin .so files into the same dir for
+            # the same reason: the _src cache path list is shared
+            # infrastructure that we MUST NOT extend (changing it
+            # invalidates every downstream workflow's cache restore).
+            # The _test cache covers anything under test/, so anything
+            # we stash here travels along with the test/ tree from
+            # CI-builds to CI-mysqlx. CI-mysqlx's restore step copies
+            # them back to plugins/mysqlx/ before the soak harness
+            # bind-mounts the .so into the ProxySQL container.
+            cp -L plugins/mysqlx/ProxySQL_MySQLX_Plugin.so test/tap/tap/_runtime_libs/
+            cp -L plugins/genai/ProxySQL_GenAI_Plugin.so test/tap/tap/_runtime_libs/ 2>/dev/null || true
             ls -la test/tap/tap/_runtime_libs/
           fi
           # ------------------------------------------------------------
@@ -386,11 +397,20 @@ jobs:
         # restores this cache and bind-mounts the .so into the ProxySQL
         # container at /usr/lib/proxysql/ProxySQL_MySQLX_Plugin.so.
         #
+        # IMPORTANT: this path list determines the actions/cache "version"
+        # hash. Every downstream test workflow's `Cache restore src`
+        # step on GH-Actions (ci-legacy-g1.yml, ci-mysql84-g3.yml,
+        # every ci-mariadb10-galera-*.yml, etc.) uses exactly the two
+        # paths below. DO NOT add or remove entries here without updating
+        # every downstream callee in lockstep -- adding entries here
+        # changed the cache version hash and broke ~40 downstream
+        # workflows with "Failed to restore cache entry" even though
+        # the cache existed. Plugin .so artefacts and other matrix-
+        # specific extras must ride along inside the test/ tree (where
+        # the _test cache catches them) rather than be added here.
         path: |
           proxysql/src/
           proxysql/lib/obj/*.gcno
-          proxysql/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
-          proxysql/plugins/genai/ProxySQL_GenAI_Plugin.so
 
     - name: Pack test cache with zstd-15
       id: cache-pack-test

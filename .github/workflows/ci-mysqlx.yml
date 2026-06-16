@@ -72,8 +72,6 @@ jobs:
           path: |
             proxysql/src/
             proxysql/lib/obj/*.gcno
-            proxysql/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
-            proxysql/plugins/genai/ProxySQL_GenAI_Plugin.so
 
       - name: Cache restore test
         uses: actions/cache/restore@v4
@@ -88,6 +86,24 @@ jobs:
           cd proxysql/
           zstd -d < ../cache_test.tar.zst | tar -xf -
           rm ../cache_test.tar.zst
+
+      - name: Restore plugin .so files from _runtime_libs
+        # CI-builds stages plugins/mysqlx + plugins/genai .so files
+        # into test/tap/tap/_runtime_libs/ alongside libpq.so.5 +
+        # libre2.so.10. The _src cache path list is shared
+        # infrastructure that CANNOT be extended without invalidating
+        # every other CI workflow's cache restore, so the plugin .so
+        # files ride along inside the _test cache instead. Copy them
+        # back to plugins/mysqlx/ and plugins/genai/ (the paths the
+        # soak harness's setup-infras.bash bind-mounts from).
+        run: |
+          cd proxysql/
+          mkdir -p plugins/mysqlx plugins/genai
+          [ -f test/tap/tap/_runtime_libs/ProxySQL_MySQLX_Plugin.so ] && \
+            cp test/tap/tap/_runtime_libs/ProxySQL_MySQLX_Plugin.so plugins/mysqlx/
+          [ -f test/tap/tap/_runtime_libs/ProxySQL_GenAI_Plugin.so ] && \
+            cp test/tap/tap/_runtime_libs/ProxySQL_GenAI_Plugin.so plugins/genai/
+          ls -la plugins/mysqlx/ plugins/genai/ 2>/dev/null || true
 
       - name: Log in to GHCR and pull build image
         env:
@@ -208,8 +224,6 @@ jobs:
           path: |
             proxysql/src/
             proxysql/lib/obj/*.gcno
-            proxysql/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
-            proxysql/plugins/genai/ProxySQL_GenAI_Plugin.so
 
       - name: Cache restore test
         uses: actions/cache/restore@v4
@@ -224,6 +238,24 @@ jobs:
           cd proxysql/
           zstd -d < ../cache_test.tar.zst | tar -xf -
           rm ../cache_test.tar.zst
+
+      - name: Restore plugin .so files from _runtime_libs
+        # CI-builds stages plugins/mysqlx + plugins/genai .so files
+        # into test/tap/tap/_runtime_libs/ alongside libpq.so.5 +
+        # libre2.so.10. The _src cache path list is shared
+        # infrastructure that CANNOT be extended without invalidating
+        # every other CI workflow's cache restore, so the plugin .so
+        # files ride along inside the _test cache instead. Copy them
+        # back to plugins/mysqlx/ and plugins/genai/ (the paths the
+        # soak harness's setup-infras.bash bind-mounts from).
+        run: |
+          cd proxysql/
+          mkdir -p plugins/mysqlx plugins/genai
+          [ -f test/tap/tap/_runtime_libs/ProxySQL_MySQLX_Plugin.so ] && \
+            cp test/tap/tap/_runtime_libs/ProxySQL_MySQLX_Plugin.so plugins/mysqlx/
+          [ -f test/tap/tap/_runtime_libs/ProxySQL_GenAI_Plugin.so ] && \
+            cp test/tap/tap/_runtime_libs/ProxySQL_GenAI_Plugin.so plugins/genai/
+          ls -la plugins/mysqlx/ plugins/genai/ 2>/dev/null || true
 
       - name: Install MySQL 8.4 runtime libs
         # dbdeployer ships pre-built mysqld binaries that DT_NEEDED
@@ -420,8 +452,6 @@ jobs:
           path: |
             proxysql/src/
             proxysql/lib/obj/*.gcno
-            proxysql/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
-            proxysql/plugins/genai/ProxySQL_GenAI_Plugin.so
 
       - name: Cache restore test
         uses: actions/cache/restore@v4
@@ -436,6 +466,24 @@ jobs:
           cd proxysql/
           zstd -d < ../cache_test.tar.zst | tar -xf -
           rm ../cache_test.tar.zst
+
+      - name: Restore plugin .so files from _runtime_libs
+        # CI-builds stages plugins/mysqlx + plugins/genai .so files
+        # into test/tap/tap/_runtime_libs/ alongside libpq.so.5 +
+        # libre2.so.10. The _src cache path list is shared
+        # infrastructure that CANNOT be extended without invalidating
+        # every other CI workflow's cache restore, so the plugin .so
+        # files ride along inside the _test cache instead. Copy them
+        # back to plugins/mysqlx/ and plugins/genai/ (the paths the
+        # soak harness's setup-infras.bash bind-mounts from).
+        run: |
+          cd proxysql/
+          mkdir -p plugins/mysqlx plugins/genai
+          [ -f test/tap/tap/_runtime_libs/ProxySQL_MySQLX_Plugin.so ] && \
+            cp test/tap/tap/_runtime_libs/ProxySQL_MySQLX_Plugin.so plugins/mysqlx/
+          [ -f test/tap/tap/_runtime_libs/ProxySQL_GenAI_Plugin.so ] && \
+            cp test/tap/tap/_runtime_libs/ProxySQL_GenAI_Plugin.so plugins/genai/
+          ls -la plugins/mysqlx/ plugins/genai/ 2>/dev/null || true
 
       - name: Verify binary + plugin .so
         run: |
