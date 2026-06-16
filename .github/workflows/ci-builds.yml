@@ -160,6 +160,13 @@ jobs:
           # genai). Setting PROXYSQL40=1 alone is enough -- Makefile cascades
           # it into PROXYSQL31/PROXYSQLFFTO/PROXYSQLTSDB automatically.
           sed -i "/command/i \      - PROXYSQL40=1" docker-compose.yml
+          # Skip the ~14 genai_*_unit-t binaries. With PROXYSQL40=1 the
+          # unit Makefile's `ifeq ($(PROXYSQL40),1)` block would otherwise
+          # add them to UNIT_TESTS, and they statically link 30+
+          # plugins/genai/.cpp at -O0 -ggdb (~160 MB each, ~2 GB total).
+          # That blew the runner's ~14 GB free disk on the first attempt
+          # at this matrix entry. CI-mysqlx never runs genai_*_unit-t.
+          sed -i "/command/i \      - SKIP_GENAI_UNIT_TESTS=1" docker-compose.yml
         fi
         if [[ "${{ matrix.type }}" =~ "-gcov" ]]; then
           sed -i "/command/i \      - WITHGCOV=1" docker-compose.yml
