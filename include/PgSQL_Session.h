@@ -292,6 +292,9 @@ private:
 	// FIXME: unused. Remove in next iteration
 	//void handler___rc0_PROCESSING_STMT_DESCRIBE_PREPARE(PgSQL_Data_Stream* myds);
 	int handler___status_PROCESSING_EXTENDED_QUERY_SYNC();
+	// Native pass-through: forward all buffered raw extended-query messages
+	// verbatim and drain the backend response. See design spec §3.3.
+	int handler_native_extended_query_sync();
 	int handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg);
 	int handle_post_sync_describe_message(PgSQL_Describe_Message* describe_msg);
 	int handle_post_sync_close_message(PgSQL_Close_Message* close_msg);

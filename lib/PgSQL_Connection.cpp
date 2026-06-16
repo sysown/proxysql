@@ -2824,11 +2824,13 @@ int PgSQL_Connection::async_query(short event, const char* stmt, unsigned long l
 	assert(native_mode || pgsql_conn);
 
 	// Native mode does not yet implement the extended-query cycle (Parse/Bind/
-	// Describe/Execute/Close/Sync). For extended queries on a native connection,
-	// fall back to the libpq path on the same connection: if a libpq
-	// pgsql_conn is not available, surface a clean FEATURE_NOT_SUPPORTED error
-	// to the client instead of letting the libpq-only code path dereference
-	// a null pgsql_conn and crash the proxy.
+	// Describe/Execute/Close/Sync). The framing (raw-byte buffer + flush+-
+	// drain) is in place in PgSQL_Connection (see native_extq_*), and the
+	// session buffers the raw client bytes (see PGSQL_PARSE/BIND/DESCRIBE/
+	// EXECUTE/CLOSE handlers in PgSQL_Session.cpp). The full main-loop
+	// integration is documented as a follow-up (PR 3 of the design spec).
+	// For now, surface a clean error to the client so the session doesn't
+	// dereference null pgsql_conn and crash.
 	if (native_mode && extended_query_info != nullptr && !pgsql_conn) {
 		if (myds && myds->sess) {
 			proxy_warning("Native backend protocol does not yet support extended "
@@ -4589,4 +4591,137 @@ void* PgSQL_backend_kill_thread(void* arg) {
 __exit:
 	delete backend_kill_args;
 	return NULL;
+}
+
+// -----------------------------------------------------------------------------
+// Native extended-query pass-through (PR 3 / Phase 3).
+//
+// The session-level PGSQL_PARSE/BIND/DESCRIBE/EXECUTE/CLOSE handlers buffer
+// each raw client message (type byte + length + body) via native_extq_buffer().
+// On Sync, the session calls native_extq_flush_and_drain(), which:
+//
+//   1. Concatenates every buffered message into native_outbuf and tries to
+//      flush it (non-blocking). If only part goes out, async_exit_status
+//      becomes PG_EVENT_WRITE and the session parks the connection; the
+//      event loop will resume the drain on the next write-ready signal.
+//   2. Once the frame is fully sent, switches to native_extq_inflight=true
+//      and starts reading backend bytes through the existing framer, draining
+//      each completed message through add_native_backend_message (which
+//      already streams 'T','D','C','E','Z', etc. to the client verbatim).
+//   3. Stops when the framer surfaces a 'Z' (ReadyForQuery): native_extq_inflight
+//      is cleared and the function returns 1 (cycle complete). The session
+//      then re-enters the normal handler loop.
+//
+// We never parse the message contents on the connection side — the proxy is
+// a wire forwarder for the extended-query cycle. The libpq path still does
+// the parsing/serialization for statement pooling; the native path skips
+// that machinery entirely. (See the design spec §3.3 for the rationale.)
+// -----------------------------------------------------------------------------
+void PgSQL_Connection::native_extq_buffer(const char* data, size_t len) {
+	// Defensive copy: the caller owns `data` (it's the session's PSarrayIN
+	// entry) and may free it before we get to flush. Take a copy.
+	char* copy = (char*)l_alloc(len);
+	memcpy(copy, data, len);
+	PtrSize_t entry;
+	entry.ptr = copy;
+	entry.size = (unsigned int)len;
+	native_extq_frame.push_back(entry);
+}
+
+void PgSQL_Connection::native_extq_reset() {
+	for (auto& p : native_extq_frame) {
+		if (p.ptr) l_free(p.size, p.ptr);
+	}
+	native_extq_frame.clear();
+	native_extq_inflight = false;
+}
+
+int PgSQL_Connection::native_extq_flush_and_drain(short event) {
+	// Step 1: forward the buffered frame to the backend.
+	if (!native_extq_inflight) {
+		// Concatenate every buffered message into native_outbuf and try to send.
+		// If anything is left, return 0 (caller waits for PG_EVENT_WRITE).
+		if (native_extq_frame.empty()) {
+			// No messages: still need to send the Sync (S) the session placed
+			// in the frame, OR the session didn't buffer anything. The latter
+			// means there's nothing to do; return success. (The actual Sync
+			// is included in the last message the session buffered before
+			// calling us, so an empty frame here only happens if the session
+			// saw a bare Sync with no preceding messages, in which case we
+			// just read a ReadyForQuery from the backend.)
+		}
+		for (auto& p : native_extq_frame) {
+			native_outbuf.append((const char*)p.ptr, p.size);
+		}
+		// Free the frame entries now that they've been concatenated; the
+		// data lives on in native_outbuf.
+		for (auto& p : native_extq_frame) {
+			if (p.ptr) l_free(p.size, p.ptr);
+			p.ptr = nullptr; p.size = 0;
+		}
+		native_extq_frame.clear();
+		if (!native_outbuf.empty()) {
+			if (!native_flush_outbuf()) {
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE),
+				          "native extended-query flush: send() failed", false);
+				native_extq_reset();
+				return -1;
+			}
+			if (!native_outbuf.empty()) {
+				// Partial send: caller parks us on PG_EVENT_WRITE; the next
+				// call to this function (after write-ready) will continue.
+				async_exit_status = PG_EVENT_WRITE;
+				return 0;
+			}
+		}
+		native_extq_inflight = true;
+		async_exit_status = PG_EVENT_READ;
+	}
+
+	// Step 2: drain backend bytes through the framer. Each completed message
+	// goes through add_native_backend_message, which writes the raw client-
+	// wire bytes into query_result (T, D, C, E, Z, etc. — and the '1' Parse-
+	// Complete / '2' BindComplete / '3' CloseComplete codes pass through the
+	// default case in add_native_backend_message's switch as verbatim bytes).
+	int r = native_recv_into_framer();
+	if (r < 0) {
+		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE),
+		          "backend closed during native extended-query drain", false);
+		native_extq_reset();
+		return -1;
+	}
+	if (r == 0) {
+		async_exit_status = PG_EVENT_READ;
+		return 0;
+	}
+
+	// Drain every complete message. add_native_backend_message on 'Z' sets
+	// native_result_complete via the 'Z' branch, which (by symmetry with the
+	// simple-query path) marks the cycle as done.
+	PgSQL_Backend_Msg msg;
+	PgSQL_Frame_Result fr;
+	while ((fr = native_framer.next(msg)) == FRAME_OK) {
+		if (query_result == nullptr) {
+			// The session is supposed to have set query_result before
+			// calling us; if it didn't, that's a bug in the session's
+			// handshake, but we tolerate it by allocating a fresh result
+			// so the bytes still get to the client.
+			query_result = new PgSQL_Query_Result();
+		}
+		query_result->add_native_backend_message(msg.type, msg.payload, msg.payload_len);
+		if (msg.type == 'Z') {
+			// ReadyForQuery: cycle done.
+			native_extq_inflight = false;
+			return 1;
+		}
+	}
+	if (fr == FRAME_ERROR) {
+		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_PROTOCOL_VIOLATION),
+		          "malformed backend message during native extended-query drain", false);
+		native_extq_reset();
+		return -1;
+	}
+	// FRAME_NEED_MORE
+	async_exit_status = PG_EVENT_READ;
+	return 0;
 }

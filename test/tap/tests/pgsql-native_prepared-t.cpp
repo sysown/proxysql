@@ -488,10 +488,9 @@ static ExtQCaseRunResult run_extq(PGconn* admin, const ExtQCase& tc,
 		    nt_out.find(unsupported_msg) != std::string::npos) {
 			// Native path returned a clean "not supported" error; that is the
 			// expected result today. Don't make this an assertion failure —
-			// instead emit an informative ok that documents the gap. Re-cord
-			// the result so the coverage summary reports the fallback.
+			// instead emit an informative ok that documents the gap.
 			result_match = true;
-			det << " (native returned FEATURE_NOT_SUPPORTED — expected until PR 3 implements native extended query)";
+			det << " (native returned FEATURE_NOT_SUPPORTED — expected until PR 3 wires native extended query into the session main loop)";
 		}
 	}
 	setNativeMode(admin, false);

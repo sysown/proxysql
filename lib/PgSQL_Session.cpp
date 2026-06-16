@@ -3050,6 +3050,15 @@ inline void build_backend_stmt_name(char* buf, unsigned int stmt_backend_id) {
 int PgSQL_Session::RunQuery(PgSQL_Data_Stream* myds, PgSQL_Connection* myconn) {
 	PROXY_TRACE2();
 	int rc = 0;
+	// Native pass-through for extended query: stub. The full implementation
+	// needs careful integration with the session's main loop state machine
+	// (status transitions, I/O scheduling, response forwarding) and is
+	// documented as the next step in PR 3 of the design spec. For now the
+	// connection's async_query detects native+extended_query and returns
+	// ERRCODE_INTERNAL_ERROR (visible as a P0001 on the wire), which the
+	// pgsql-native_prepared-t test correctly identifies as a gap.
+	// See handler___status_PROCESSING_EXTENDED_QUERY_SYNC for the dispatch
+	// point that needs the wiring.
 	switch (status) {
 	case PROCESSING_QUERY:
 		rc = myconn->async_query(myds->revents, myds->pgsql_real_query.QueryPtr, myds->pgsql_real_query.QuerySize);
@@ -7234,11 +7243,32 @@ int  PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_S
 		return 0;
 	}
 
+	// Native pass-through dispatch happens in
+	// handler___status_PROCESSING_EXTENDED_QUERY_SYNC below, after the
+	// session has bound a backend connection. At Sync-receipt time the
+	// backend is not yet associated (mybe->server_myds->myconn may be
+	// null), so we cannot decide here.
+
 	return handler___status_PROCESSING_EXTENDED_QUERY_SYNC();
 }
 
 int PgSQL_Session::handler___status_PROCESSING_EXTENDED_QUERY_SYNC() {
 	PROXY_TRACE();
+	// Native pass-through dispatch. When the session has a backend connection
+	// bound and that connection is in native mode, forward all buffered raw
+	// extended-query messages (Parse/Bind/Describe/Execute/Close) to the
+	// backend verbatim via PgSQL_Connection::native_extq_flush_and_drain, then
+	// hand the response back to the client. See design spec §3.3.
+	// NOTE: the full integration with the session's main loop state machine
+	// is documented as a follow-up (PR 3). For now the connection's
+	// async_query detects native+extended_query and returns
+	// ERRCODE_INTERNAL_ERROR (visible as XX000 on the wire), which the
+	// pgsql-native_prepared-t test correctly identifies as a gap.
+	if (mybe && mybe->server_myds && mybe->server_myds->myconn &&
+	    mybe->server_myds->myconn->native_mode) {
+		return handler_native_extended_query_sync();
+	}
+
 	// we have pending packets, so we will process them now
 	auto packet = std::move(extended_query_frame.front()); // get the packet from the queue
 	extended_query_frame.pop(); // remove the packet from the queue
@@ -7288,6 +7318,68 @@ int PgSQL_Session::handler___status_PROCESSING_EXTENDED_QUERY_SYNC() {
 	return rc;
 }
 
+// Native pass-through: the client sent one or more Parse/Bind/Describe/
+// Execute/Close messages, terminated by Sync. The session's PGSQL_PARSE /
+// PGSQL_BIND / ... handlers already buffered the raw client bytes into the
+// connection's native_extq_frame. Here we flush them verbatim to the
+// backend, then drain the backend's response (ParseComplete, BindComplete,
+// RowDescription, DataRow, CommandComplete, ErrorResponse, ReadyForQuery).
+// On ReadyForQuery we hand control back to the normal handler loop.
+//
+// We discard the parsed extended_query_frame entries as we go: the
+// connection owns the wire bytes; the parsed structures are no longer
+// needed for the native path. (The libpq path still uses them via
+// handler___status_PROCESSING_EXTENDED_QUERY_SYNC above.)
+int PgSQL_Session::handler_native_extended_query_sync() {
+	PROXY_TRACE();
+	PgSQL_Connection* myconn = mybe->server_myds->myconn;
+
+	// Allocate / reuse query_result for the backend response. The libpq path
+	// allocates it in ASYNC_USE_RESULT_START via PgSQL_Connection::init_query_result
+	// (which is private to PgSQL_Connection). We allocate directly here because
+	// we never go through that state machine on the native path.
+	if (myconn->query_result == nullptr) {
+		myconn->query_result = new PgSQL_Query_Result();
+	}
+
+	short event = 0; // The session main loop will set this from myds->revents
+	int rc = myconn->native_extq_flush_and_drain(event);
+	if (rc < 0) {
+		// Fatal: connection broken. Clear the parsed frame (we no longer need
+		// anything from it) and let the session fall through to error handling.
+		reset_extended_query_frame();
+		myconn->native_extq_reset();
+		return -1;
+	}
+	if (rc == 0) {
+		// Need more I/O. The connection set async_exit_status to PG_EVENT_READ
+		// or PG_EVENT_WRITE. The session main loop will resume us on the
+		// appropriate signal by re-entering this handler.
+		return 1;
+	}
+	// rc == 1: cycle complete. The backend sent ReadyForQuery. The framer
+	// drained every message into query_result, which now has the entire
+	// backend response ready. Forward it to the client, then reset state.
+	reset_extended_query_frame();   // parsed structs no longer needed
+	myconn->native_extq_reset();     // connection's wire-bytes are drained
+
+	// Mirror what the libpq path does at the end of a query: hand the
+	// resultset to the client data stream via the session's helper.
+	PgSQL_Result_to_PgSQL_wire(myconn, myconn->myds);
+
+	// Update the session's transaction state and other counters, mirroring
+	// the libpq path's handler() epilogue for completed queries.
+	handle_transaction_state();
+
+	// Hand control back to the main loop; the client will see a complete
+	// response and may send the next query.
+	client_myds->setDSS_STATE_QUERY_SENT_NET();
+	client_myds->DSS = STATE_SLEEP;
+	status = WAITING_CLIENT_DATA;
+	extended_query_phase = EXTQ_PHASE_IDLE;
+	return 0;
+}
+
 bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_PARSE(PtrSize_t& pkt) {
 	if (session_type != PROXYSQL_SESSION_PGSQL) { // only PgSQL module supports prepared statement!!
 		l_free(pkt.size, pkt.ptr);
@@ -7308,6 +7400,12 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_P
 			true, true);
 		writeout();
 		return false;
+	}
+	// Native pass-through: also keep the raw client bytes so the connection
+	// can forward them verbatim to the backend on Sync (see design spec §3.3).
+	if (mybe && mybe->server_myds && mybe->server_myds->myconn &&
+	    mybe->server_myds->myconn->native_mode) {
+		mybe->server_myds->myconn->native_extq_buffer((const char*)pkt.ptr, pkt.size);
 	}
 	extended_query_frame.push(std::move(parse_msg)); // we will process it later, after sync packet
 	return true;
@@ -7334,6 +7432,10 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_D
 		writeout();
 		return false;
 	}
+	if (mybe && mybe->server_myds && mybe->server_myds->myconn &&
+	    mybe->server_myds->myconn->native_mode) {
+		mybe->server_myds->myconn->native_extq_buffer((const char*)pkt.ptr, pkt.size);
+	}
 	extended_query_frame.push(std::move(describe_msg)); // we will process it later, after sync packet
 	return true;
 }
@@ -7357,6 +7459,10 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_C
 			true, true);
 		writeout();
 		return false;
+	}
+	if (mybe && mybe->server_myds && mybe->server_myds->myconn &&
+	    mybe->server_myds->myconn->native_mode) {
+		mybe->server_myds->myconn->native_extq_buffer((const char*)pkt.ptr, pkt.size);
 	}
 	extended_query_frame.push(std::move(close_msg)); // we will process it later, after sync packet
 	return true;
@@ -7382,6 +7488,10 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_B
 		writeout();
 		return false;
 	}
+	if (mybe && mybe->server_myds && mybe->server_myds->myconn &&
+	    mybe->server_myds->myconn->native_mode) {
+		mybe->server_myds->myconn->native_extq_buffer((const char*)pkt.ptr, pkt.size);
+	}
 	extended_query_frame.push(std::move(bind_msg)); // we will process it later, after sync packet
 	return true;
 
@@ -7406,6 +7516,10 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_E
 			true, true);
 		writeout();
 		return false;
+	}
+	if (mybe && mybe->server_myds && mybe->server_myds->myconn &&
+	    mybe->server_myds->myconn->native_mode) {
+		mybe->server_myds->myconn->native_extq_buffer((const char*)pkt.ptr, pkt.size);
 	}
 	extended_query_frame.push(std::move(execute_msg)); // we will process it later, after sync packet
 	return true;

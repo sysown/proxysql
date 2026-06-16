@@ -694,6 +694,17 @@ public:
 	int native_backend_secret = 0;                   // BackendKeyData secret key
 	char native_txn_status = 'I';                    // ReadyForQuery status byte ('I'/'T'/'E')
 
+	// --- Native extended-query pass-through (PR 3) ---
+	// Raw client bytes (type + length + body) for Parse/Bind/Describe/Execute/Close
+	// messages queued by the session's PGSQL_PARSE/BIND/... handlers. On Sync
+	// (S) the entire frame is forwarded verbatim to the backend via the
+	// native send buffer; the backend's response is then drained through the
+	// existing framer into query_result and forwarded to the client. No
+	// parsing of message contents in the connection — the proxy is a wire
+	// forwarder for the extended-query cycle.
+	std::vector<PtrSize_t> native_extq_frame;         // raw client bytes, one entry per message
+	bool native_extq_inflight = false;                // true between flush_and_drain start and end
+
 	// --- Native simple-query / simple-command execution (Task 1.6c / Phase 2 core) ---
 	// Set true once a ReadyForQuery ('Z') has been consumed for the in-flight query,
 	// signalling the result stream is complete. Reset at query_start().
@@ -750,6 +761,21 @@ public:
 	void native_capability_gap(const char* mechanism); // tear down native, restart via libpq
 	// Parse an ErrorResponse ('E') payload into error_info.
 	void native_fill_error_from_E(const unsigned char* payload, uint32_t len);
+
+	// --- Native extended-query pass-through (PR 3) ---
+	// Buffer one raw client message (type + length + body, as received) for the
+	// in-flight extended-query cycle. On Sync the connection flushes the whole
+	// frame verbatim to the backend. The session's PGSQL_PARSE/BIND/DESCRIBE/
+	// EXECUTE/CLOSE handlers call this; the session's PGSQL_SYNC handler calls
+	// native_extq_flush_and_drain().
+	void native_extq_buffer(const char* data, size_t len);
+	// Forward every buffered message to the backend, then drain the backend's
+	// response (ParseComplete/BindComplete/RowDescription/DataRow/CommandComplete/
+	// ReadyForQuery, etc.) into the existing framer path. Returns: 1 = cycle
+	// complete (ReadyForQuery seen), 0 = need more I/O, -1 = fatal.
+	int native_extq_flush_and_drain(short event);
+	// Discard any buffered extended-query messages (e.g. on error/reset).
+	void native_extq_reset();
 
 	// --- Native backend TLS helpers (Task 1.6b). All non-blocking. ---
 	// Drive the SSL_HANDSHAKE sub-state: pump bytes between the mem BIOs and the raw
