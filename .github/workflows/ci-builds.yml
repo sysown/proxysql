@@ -213,6 +213,27 @@ jobs:
           # to fail and the entire TAP pipeline to break.
           # ------------------------------------------------------------
 
+          # Stage runtime .so files needed by the e2e test binaries
+          # into a path that's both already part of the _test cache
+          # (test/tap/tap/ is in `tar -cf - test/`) AND has its parent
+          # git-tracked (so post-checkout `mkdir -p` works on restore
+          # at the consumer side). The e2e -t binaries DT_NEEDED
+          # libpq.so.5 + libre2.so.10, and their baked RUNPATH points
+          # at /opt/proxysql/deps/postgresql/.../libpq + /opt/proxysql/
+          # deps/re2/.../obj/so -- but those paths involve symlinks
+          # to tarball-unpacked dirs that don't exist post-checkout,
+          # so caching the deps/ subtree directly doesn't survive
+          # tar restore. CI-mysqlx exports LD_LIBRARY_PATH pointing at
+          # this directory when running the e2e binaries inside the
+          # build image, which overrides RUNPATH lookup.
+          if [[ "${{ matrix.type }}" =~ "-mysqlx" ]]; then
+            mkdir -p test/tap/tap/_runtime_libs
+            cp -L deps/postgresql/postgresql/src/interfaces/libpq/libpq.so.5 test/tap/tap/_runtime_libs/
+            cp -L deps/re2/re2/obj/so/libre2.so.10 test/tap/tap/_runtime_libs/
+            ls -la test/tap/tap/_runtime_libs/
+          fi
+          # ------------------------------------------------------------
+
           # Compile-time safety check: make sure unit tests actually got
           # built. If they didn't, the build step above silently ignored
           # a compile error and the delete below would "succeed" on an
@@ -365,42 +386,11 @@ jobs:
         # restores this cache and bind-mounts the .so into the ProxySQL
         # container at /usr/lib/proxysql/ProxySQL_MySQLX_Plugin.so.
         #
-        # test/tap/tap/libtap.so (which the e2e -t binaries dynamically
-        # link against) DT_NEEDEDs libpq.so.5 + libre2.so.10. The
-        # binary's RUNPATH is baked at build time pointing at
-        # /opt/proxysql/deps/postgresql/.../libpq and
-        # /opt/proxysql/deps/re2/.../obj/so -- so when ci-mysqlx mounts
-        # the restored workspace at /opt/proxysql inside the docker
-        # image, those exact paths must be populated. Without them the
-        # e2e-tests job fails with
-        # "libpq.so.5: cannot open shared object file".
-        #
-        # We cache the PARENT DIRECTORIES (not just the .so files) for
-        # two reasons:
-        #   1. libpq.so.5 is a symlink to libpq.so.5.16 (the real file);
-        #      caching the symlink alone leaves the symlink target out
-        #      of the cache and ld errors with "cannot open shared
-        #      object file" on the symlink itself.
-        #   2. tar fails to restore a single deep path when the parent
-        #      directories don't exist in the workspace at restore time
-        #      (deps/postgresql/postgresql/ is unpacked from a tarball
-        #      during build -- it does not ship in git, so post-checkout
-        #      the deep path doesn't exist either). Caching the
-        #      directory entries makes tar re-create them on restore.
-        #
-        # Total added: ~8 MB uncompressed (libre2.so.10 is the bulk at
-        # 7.6 MB; the libpq dir is ~1 MB). Negligible against the
-        # existing ~70 MB _src cache.
-        #
-        # On non-PROXYSQL40 builds the deps tree isn't populated and
-        # actions/cache silently skips missing paths.
         path: |
           proxysql/src/
           proxysql/lib/obj/*.gcno
           proxysql/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
           proxysql/plugins/genai/ProxySQL_GenAI_Plugin.so
-          proxysql/deps/postgresql/postgresql/src/interfaces/libpq/
-          proxysql/deps/re2/re2/obj/so/
 
     - name: Pack test cache with zstd-15
       id: cache-pack-test

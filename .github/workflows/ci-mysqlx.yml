@@ -74,8 +74,6 @@ jobs:
             proxysql/lib/obj/*.gcno
             proxysql/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
             proxysql/plugins/genai/ProxySQL_GenAI_Plugin.so
-            proxysql/deps/postgresql/postgresql/src/interfaces/libpq/
-            proxysql/deps/re2/re2/obj/so/
 
       - name: Cache restore test
         uses: actions/cache/restore@v4
@@ -134,6 +132,7 @@ jobs:
             --network none \
             -v "$(pwd)/proxysql:/opt/proxysql" \
             -w /opt/proxysql/test/tap/tests/unit \
+            -e LD_LIBRARY_PATH=/opt/proxysql/test/tap/tap/_runtime_libs \
             proxysql/packaging:build-ubuntu22-v4.0.0 \
             bash -c '
               set -e
@@ -211,8 +210,6 @@ jobs:
             proxysql/lib/obj/*.gcno
             proxysql/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
             proxysql/plugins/genai/ProxySQL_GenAI_Plugin.so
-            proxysql/deps/postgresql/postgresql/src/interfaces/libpq/
-            proxysql/deps/re2/re2/obj/so/
 
       - name: Cache restore test
         uses: actions/cache/restore@v4
@@ -343,6 +340,7 @@ jobs:
             --network host \
             -v "$(pwd)/proxysql:/opt/proxysql" \
             -e "MYSQLX_E2E_PORT=${MYSQLX_E2E_PORT}" \
+            -e LD_LIBRARY_PATH=/opt/proxysql/test/tap/tap/_runtime_libs \
             -w /opt/proxysql/test/tap/tests \
             proxysql/packaging:build-ubuntu22-v4.0.0 \
             bash -c '
@@ -424,8 +422,6 @@ jobs:
             proxysql/lib/obj/*.gcno
             proxysql/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
             proxysql/plugins/genai/ProxySQL_GenAI_Plugin.so
-            proxysql/deps/postgresql/postgresql/src/interfaces/libpq/
-            proxysql/deps/re2/re2/obj/so/
 
       - name: Cache restore test
         uses: actions/cache/restore@v4
