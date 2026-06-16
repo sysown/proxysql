@@ -21,6 +21,7 @@ services:
       - PROXYSQL31
       - PROXYSQLFFTO
       - PROXYSQLTSDB
+      - SKIP_GENAI_UNIT_TESTS
       - GIT_VERSION
     command: bash -l -c /opt/entrypoint/entrypoint.bash
 

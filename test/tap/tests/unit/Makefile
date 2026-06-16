@@ -420,9 +420,8 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 # mysqlx plugin source references chassis types, so none of these are
 # compilable under !PROXYSQL40.
 ifeq ($(PROXYSQL40),1)
+# mysqlx + plugin + test_mysqlx unit tests: always built under PROXYSQL40=1.
 UNIT_TESTS += \
-	genai_fts_string_unit-t \
-	genai_llm_clients_unit-t \
 	plugin_config_unit-t \
 	plugin_dispatch_unit-t \
 	plugin_manager_unit-t \
@@ -431,18 +430,6 @@ UNIT_TESTS += \
 	plugin_prometheus_unit-t \
 	plugin_lifecycle_unit-t \
 	plugin_runtime_views_unit-t \
-	genai_plugin_load_unit-t \
-	genai_plugin_anomaly_unit-t \
-	genai_plugin_backend_client_unit-t \
-	genai_stats_parsing_unit-t \
-	genai_query_handler_unit-t \
-	genai_config_query_unit-t \
-	genai_rag_fetch_from_source_unit-t \
-	genai_mcp_endpoint_unit-t \
-	genai_mcp_thread_unit-t \
-	genai_thread_unit-t \
-	genai_discovery_schema_unit-t \
-	genai_mysql_catalog_unit-t \
 	test_mysqlx_plugin_load-t \
 	test_mysqlx_admin_tables-t \
 	mysqlx_config_store_unit-t \
@@ -466,6 +453,34 @@ UNIT_TESTS += \
 	mysqlx_robustness_unit-t \
 	mysqlx_tls_unit-t \
 	mysqlx_compression_unit-t
+
+# genai_*_unit-t binaries: each statically links 30+
+# plugins/genai/src/*.cpp files. At debug -O0 -ggdb each lands at
+# ~160 MB; the full 14-binary set is ~2 GB compiled and bloats the
+# in-build working set on disk-constrained CI runners. CI-mysqlx
+# (the only consumer of the -tap-mysqlx CI-builds matrix variant)
+# does not run any of these. Set SKIP_GENAI_UNIT_TESTS=1 (injected
+# via docker-compose env from ci-builds.yml's matrix-conditional
+# block) to skip building them. Leave it unset on every other CI
+# variant so the full unit-test suite still compiles when
+# CI-unittests is re-enabled.
+ifneq ($(SKIP_GENAI_UNIT_TESTS),1)
+UNIT_TESTS += \
+	genai_fts_string_unit-t \
+	genai_llm_clients_unit-t \
+	genai_plugin_load_unit-t \
+	genai_plugin_anomaly_unit-t \
+	genai_plugin_backend_client_unit-t \
+	genai_stats_parsing_unit-t \
+	genai_query_handler_unit-t \
+	genai_config_query_unit-t \
+	genai_rag_fetch_from_source_unit-t \
+	genai_mcp_endpoint_unit-t \
+	genai_mcp_thread_unit-t \
+	genai_thread_unit-t \
+	genai_discovery_schema_unit-t \
+	genai_mysql_catalog_unit-t
+endif
 endif
 
 .PHONY: all
