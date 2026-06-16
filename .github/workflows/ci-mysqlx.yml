@@ -74,6 +74,8 @@ jobs:
             proxysql/lib/obj/*.gcno
             proxysql/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
             proxysql/plugins/genai/ProxySQL_GenAI_Plugin.so
+            proxysql/deps/postgresql/postgresql/src/interfaces/libpq/libpq.so.5
+            proxysql/deps/re2/re2/obj/so/libre2.so.10
 
       - name: Cache restore test
         uses: actions/cache/restore@v4
@@ -209,6 +211,8 @@ jobs:
             proxysql/lib/obj/*.gcno
             proxysql/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
             proxysql/plugins/genai/ProxySQL_GenAI_Plugin.so
+            proxysql/deps/postgresql/postgresql/src/interfaces/libpq/libpq.so.5
+            proxysql/deps/re2/re2/obj/so/libre2.so.10
 
       - name: Cache restore test
         uses: actions/cache/restore@v4
@@ -420,6 +424,8 @@ jobs:
             proxysql/lib/obj/*.gcno
             proxysql/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
             proxysql/plugins/genai/ProxySQL_GenAI_Plugin.so
+            proxysql/deps/postgresql/postgresql/src/interfaces/libpq/libpq.so.5
+            proxysql/deps/re2/re2/obj/so/libre2.so.10
 
       - name: Cache restore test
         uses: actions/cache/restore@v4

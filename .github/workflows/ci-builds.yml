@@ -364,11 +364,25 @@ jobs:
         # -tap-mysqlx matrix variant they're the whole point: CI-mysqlx
         # restores this cache and bind-mounts the .so into the ProxySQL
         # container at /usr/lib/proxysql/ProxySQL_MySQLX_Plugin.so.
+        #
+        # libpq.so.5 + libre2.so.10 are DT_NEEDED by test/tap/tap/libtap.so
+        # (which the e2e -t binaries dynamically link against), with the
+        # binary's RUNPATH baked at build time pointing inside the
+        # container's /opt/proxysql/deps/. Without these two .so files
+        # in the cache, the e2e job's `docker run ... ./test_mysqlx_*-t`
+        # fails with "libpq.so.5: cannot open shared object file" when
+        # the workspace is mounted at /opt/proxysql. These are tiny
+        # (~few hundred KB each) so adding them to the src cache has
+        # near-zero size impact and avoids caching the entire deps/
+        # tree. Files-not-paths entries are silently skipped on non-
+        # PROXYSQL40 builds where the deps tree isn't populated.
         path: |
           proxysql/src/
           proxysql/lib/obj/*.gcno
           proxysql/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
           proxysql/plugins/genai/ProxySQL_GenAI_Plugin.so
+          proxysql/deps/postgresql/postgresql/src/interfaces/libpq/libpq.so.5
+          proxysql/deps/re2/re2/obj/so/libre2.so.10
 
     - name: Pack test cache with zstd-15
       id: cache-pack-test
