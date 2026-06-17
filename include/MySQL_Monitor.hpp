@@ -60,7 +60,7 @@ struct cmp_str {
 #define N_L_ASE 16
 
 #define AWS_ENDPOINT_SUFFIX_STRING "rds.amazonaws.com"
-#define QUERY_READ_ONLY_AND_AWS_TOPOLOGY_DISCOVERY "SELECT @@global.read_only read_only, id, endpoint, port from mysql.rds_topology"
+#define QUERY_AWS_RDS_TOPOLOGY_DISCOVERY "SELECT * FROM mysql.rds_topology"
 
 /*
 
@@ -204,8 +204,8 @@ enum MySQL_Monitor_State_Data_Task_Type {
 	MON_REPLICATION_LAG,
 	MON_GALERA,
 	MON_AWS_AURORA,
-	MON_AWS_RDS,
-	MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY
+	MON_AWS_RDS_BGD,
+	MON_AWS_RDS_TOPOLOGY_DISCOVERY
 };
 
 enum class MySQL_Monitor_State_Data_Task_Result {
@@ -387,9 +387,26 @@ struct mon_metrics_map_idx {
 	};
 };
 
-// DNS_Cache, DNS_Cache_Record, DNS_Resolve_Data and the resolver helpers now
-// live in DNS_Cache.hpp (included above) so the same machinery can back the
-// independent PgSQL_Monitor DNS cache.
+/**
+ * @brief A single node (row) of a 'SELECT * FROM mysql.rds_topology' result.
+ */
+struct AWS_RDS_Topology_Node {
+	std::string id;
+	std::string endpoint;
+	int port = 0;
+	std::string role;    ///< empty when the column is absent or NULL
+	std::string status;  ///< empty when the column is absent or NULL
+};
+
+/**
+ * @brief Parsed representation of a 'SELECT * FROM mysql.rds_topology' result,
+ *        shared by the read_only monitor's discovery path and the AWS RDS BGD
+ *        monitor thread.
+ */
+struct AWS_RDS_Topology_Result {
+	bool blue_green = false;  ///< 'role' and 'status' present AND non-NULL
+	std::vector<AWS_RDS_Topology_Node> nodes;
+};
 
 
 class MySQL_Monitor {
@@ -399,8 +416,33 @@ class MySQL_Monitor {
 	static bool update_dns_cache_from_mysql_conn(const MYSQL* mysql);
 	static void trigger_dns_cache_update();
 
-	void process_discovered_topology(const std::string& originating_server_hostname, const vector<MYSQL_ROW>& discovered_servers, int reader_hostgroup);
-	bool is_aws_rds_multi_az_db_cluster_topology(const std::vector<MYSQL_ROW>& discovered_servers);
+	/**
+	* @brief Classify the parsed mysql.rds_topology result and dispatch.
+	*
+	* @details A blue/green deployment optionally auto-generates a runtime aws_rds_bgd_hostgroups
+	*   entry (when 'mysql-aws_blue_green_deployment_auto_discovery' is enabled); otherwise the rows
+	*   are treated as a Multi-AZ Cluster and handed to the existing auto-discovery path.
+	*/
+	void process_aws_rds_topology(MySQL_Monitor_State_Data* mmsd);
+	/**
+	* @brief Parse a 'SELECT * FROM mysql.rds_topology' result into an AWS_RDS_Topology_Result.
+	*
+	* @details Columns are resolved by name (they may be absent or differently ordered by RDS type).
+	*   'blue_green' is set when the 'role'/'status' columns are present and non-NULL on the first row.
+	*
+	* @return The parsed topology; empty 'nodes' if 'result' is NULL or has no rows. The result cursor is rewound before returning.
+	*/
+	AWS_RDS_Topology_Result parse_aws_rds_topology(MYSQL_RES* result);
+	/**
+	* @brief Processes the discovered servers to eventually add them to 'runtime_mysql_servers'.
+	*
+	* @details This method takes a vector of discovered servers, compares them against the existing servers, and adds the new servers to 'runtime_mysql_servers'.
+	*
+	* @param origin_server      A string which denotes the hostname of the originating server, from which the discovered servers were queried and found.
+	* @param discovered_servers A vector of servers discovered when querying the cluster's topology.
+	* @param reader_hostgroup   Reader hostgroup to which we will add the discovered servers.
+	*/
+	void handle_aws_rds_multi_az_cluster(const std::string& origin_server, const std::vector<AWS_RDS_Topology_Node>& discovered_servers, int reader_hostgroup);
 
 	private:
 	std::vector<table_def_t *> *tables_defs_monitor;
@@ -414,7 +456,7 @@ class MySQL_Monitor {
 	pthread_mutex_t group_replication_mutex; // for simplicity, a mutex instead of a rwlock
 	pthread_mutex_t galera_mutex; // for simplicity, a mutex instead of a rwlock
 	pthread_mutex_t aws_aurora_mutex; // for simplicity, a mutex instead of a rwlock
-	pthread_mutex_t aws_rds_mutex; // for simplicity, a mutex instead of a rwlock
+	pthread_mutex_t aws_rds_bgd_mutex;
 	pthread_mutex_t mysql_servers_mutex; // for simplicity, a mutex instead of a rwlock
 	pthread_mutex_t proxysql_servers_mutex; 
 	//std::map<char *, MyGR_monitor_node *, cmp_str> Group_Replication_Hosts_Map;
@@ -425,9 +467,8 @@ class MySQL_Monitor {
 	std::map<std::string, AWS_Aurora_monitor_node *> AWS_Aurora_Hosts_Map;
 	SQLite3_result *AWS_Aurora_Hosts_resultset;
 	uint64_t AWS_Aurora_Hosts_resultset_checksum;
-	// host list consumed by the AWS RDS monitor thread (join of mysql_servers x mysql_aws_rds_hostgroups)
-	SQLite3_result *AWS_RDS_Hosts_resultset;
-	uint64_t AWS_RDS_Hosts_resultset_checksum;
+	SQLite3_result *AWS_RDS_BGD_Hosts_resultset;
+	uint64_t AWS_RDS_BGD_Hosts_resultset_checksum;
 	unsigned int num_threads;
 	unsigned int aux_threads;
 	unsigned int started_threads;
@@ -475,11 +516,27 @@ class MySQL_Monitor {
 	void * monitor_group_replication_2();
 	void * monitor_galera();
 	void * monitor_aws_aurora();
-	void * monitor_aws_rds();
-	// Invoked once the topology shape is detected on mysql.rds_topology.
-	// 'result' holds the fetched rows.
-	void rds_monitor_handle_instance_topology(unsigned int writer_hostgroup, unsigned int reader_hostgroup, int green_writer_hostgroup, int green_reader_hostgroup, MYSQL_RES* result);
-	void rds_monitor_handle_cluster_topology(unsigned int writer_hostgroup, unsigned int reader_hostgroup, MYSQL_RES* result);
+	/**
+	* @brief AWS RDS BGD monitor thread entry point.
+	*
+	* @details Spawns one worker (monitor_RDS_BGD_thread_HG) per writer hostgroup; each worker picks a pingable host,
+	*   probes 'mysql.rds_topology' and dispatches to a handler based on the detected topology shape.
+	*   Workers are (re)spawned whenever the AWS_RDS_BGD_Hosts_resultset checksum changes.
+	*/
+	void * monitor_aws_rds_bgd();
+	/**
+	* @brief Handle a blue/green deployment topology fetched by the BGD thread.
+	*
+	* @details Invoked when the BGD thread fetches a blue/green deployment topology from
+	*   mysql.rds_topology; performs the blue/green switchover.
+	*
+	* @param whg       Writer hostgroup (blue/current writer).
+	* @param rhg       Reader hostgroup (blue/current readers).
+	* @param green_whg Configured green writer hostgroup, or -1 if unset.
+	* @param green_rhg Configured green reader hostgroup, or -1 if unset.
+	* @param topology  Parsed mysql.rds_topology result.
+	*/
+	void handle_aws_rds_bgd(unsigned int whg, unsigned int rhg, int green_whg, int green_rhg, const AWS_RDS_Topology_Result& topology);
 	void * monitor_replication_lag();
 	void * monitor_dns_cache();
 	void * run();

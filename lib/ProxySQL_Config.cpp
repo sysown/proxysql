@@ -1097,14 +1097,14 @@ int ProxySQL_Config::Write_MySQL_Servers_to_configfile(std::string& data) {
 	if (sqlite_resultset)
 		delete sqlite_resultset;
 
-	query=(char *)"SELECT * FROM mysql_aws_rds_hostgroups";
+	query=(char *)"SELECT * FROM mysql_aws_rds_bgd_hostgroups";
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
 	if (error) {
-		proxy_error("Error on read from mysql_aws_rds_hostgroups: %s\n", error);
+		proxy_error("Error on read from mysql_aws_rds_bgd_hostgroups: %s\n", error);
 		return -1;
 	} else {
 		if (sqlite_resultset) {
-			data += "mysql_aws_rds_hostgroups:\n(\n";
+			data += "mysql_aws_rds_bgd_hostgroups:\n(\n";
 			bool isNext = false;
 			for (auto r : sqlite_resultset->rows) {
 				if (isNext)
@@ -1488,13 +1488,13 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
             }
     }
 
-    if (root.exists("mysql_aws_rds_hostgroups")==true) {
-            const Setting &mysql_aws_rds_hostgroups = root["mysql_aws_rds_hostgroups"];
-            int count = mysql_aws_rds_hostgroups.getLength();
+    if (root.exists("mysql_aws_rds_bgd_hostgroups")==true) {
+            const Setting &mysql_aws_rds_bgd_hostgroups = root["mysql_aws_rds_bgd_hostgroups"];
+            int count = mysql_aws_rds_bgd_hostgroups.getLength();
             // green_writer_hostgroup / green_reader_hostgroup are nullable -> passed as %s ("NULL" or an integer)
-            char *q=(char *)"INSERT OR REPLACE INTO mysql_aws_rds_hostgroups (writer_hostgroup, reader_hostgroup, green_writer_hostgroup, green_reader_hostgroup, active, writer_is_also_reader, domain_name, check_interval_ms, check_timeout_ms, autopurge_missing_checks, comment ) VALUES (%d, %d, %s, %s, %d, %d, '%s', %d, %d, %d, '%s')";
+            char *q=(char *)"INSERT OR REPLACE INTO mysql_aws_rds_bgd_hostgroups (writer_hostgroup, reader_hostgroup, green_writer_hostgroup, green_reader_hostgroup, active, writer_is_also_reader, domain_name, check_interval_ms, check_timeout_ms, autopurge_missing_checks, comment ) VALUES (%d, %d, %s, %s, %d, %d, '%s', %d, %d, %d, '%s')";
             for (i=0; i< count; i++) {
-                    const Setting &line = mysql_aws_rds_hostgroups[i];
+                    const Setting &line = mysql_aws_rds_bgd_hostgroups[i];
                     int writer_hostgroup;
                     int reader_hostgroup;
                     int green_writer_hostgroup;
@@ -1507,11 +1507,11 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
                     std::string comment="";
                     std::string domain_name="";
                     if (line.lookupValue("writer_hostgroup", writer_hostgroup)==false) {
-                        proxy_error("Admin: detected a mysql_aws_rds_hostgroups in config file without a mandatory writer_hostgroup\n");
+                        proxy_error("Admin: detected a mysql_aws_rds_bgd_hostgroups in config file without a mandatory writer_hostgroup\n");
                         continue;
                     }
                     if (line.lookupValue("reader_hostgroup", reader_hostgroup)==false) {
-                        proxy_error("Admin: detected a mysql_aws_rds_hostgroups in config file without a mandatory reader_hostgroup\n");
+                        proxy_error("Admin: detected a mysql_aws_rds_bgd_hostgroups in config file without a mandatory reader_hostgroup\n");
                         continue;
                     }
                     char green_writer_str[24];

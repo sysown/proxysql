@@ -147,7 +147,7 @@ static const vector<string> mysql_servers_tablenames = {
 	"mysql_group_replication_hostgroups",
 	"mysql_galera_hostgroups",
 	"mysql_aws_aurora_hostgroups",
-	"mysql_aws_rds_hostgroups",
+	"mysql_aws_rds_bgd_hostgroups",
 	"mysql_hostgroup_attributes",
 	"mysql_servers_ssl_params",
 };
@@ -1510,7 +1510,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				||
 				strstr(query_no_space,"runtime_mysql_aws_aurora_hostgroups")
 				||
-				strstr(query_no_space,"runtime_mysql_aws_rds_hostgroups")
+				strstr(query_no_space,"runtime_mysql_aws_rds_bgd_hostgroups")
 				||
 				strstr(query_no_space,"runtime_mysql_hostgroup_attributes")
 				||
@@ -7550,29 +7550,29 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 	if(resultset) delete resultset;
 	resultset=NULL;
 
-	// dump mysql_aws_rds_hostgroups
+	// dump mysql_aws_rds_bgd_hostgroups
 	// The runtime table carries the extra runtime-only 'auto_generated' column; the config table
 	// does not. 'dump_table_mysql' always returns 12 columns (last is 'auto_generated'); we bind
 	// 12 for the runtime table and only the first 11 for the config table. 'green_writer_hostgroup'
 	// and 'green_reader_hostgroup' (fields 2,3) are nullable and bound as NULL when absent.
 
 	if (_runtime) {
-		query=(char *)"DELETE FROM main.runtime_mysql_aws_rds_hostgroups";
+		query=(char *)"DELETE FROM main.runtime_mysql_aws_rds_bgd_hostgroups";
 	} else {
-		query=(char *)"DELETE FROM main.mysql_aws_rds_hostgroups";
+		query=(char *)"DELETE FROM main.mysql_aws_rds_bgd_hostgroups";
 	}
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute(query);
-	resultset=MyHGM->dump_table_mysql("mysql_aws_rds_hostgroups");
+	resultset=MyHGM->dump_table_mysql("mysql_aws_rds_bgd_hostgroups");
 	if (resultset) {
 		int rc;
 		sqlite3_stmt *statement=NULL;
 
 		char *query=NULL;
 		if (_runtime) {
-			query=(char *)"INSERT INTO runtime_mysql_aws_rds_hostgroups(writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,writer_is_also_reader,domain_name,check_interval_ms,check_timeout_ms,autopurge_missing_checks,comment,auto_generated) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+			query=(char *)"INSERT INTO runtime_mysql_aws_rds_bgd_hostgroups(writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,writer_is_also_reader,domain_name,check_interval_ms,check_timeout_ms,autopurge_missing_checks,comment,auto_generated) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
 		} else {
-			query=(char *)"INSERT INTO mysql_aws_rds_hostgroups(writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,writer_is_also_reader,domain_name,check_interval_ms,check_timeout_ms,autopurge_missing_checks,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+			query=(char *)"INSERT INTO mysql_aws_rds_bgd_hostgroups(writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,writer_is_also_reader,domain_name,check_interval_ms,check_timeout_ms,autopurge_missing_checks,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
 		}
 
 		auto [rc1, statement_unique] = admindb->prepare_v2(query);
@@ -7952,7 +7952,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	SQLite3_result *resultset_group_replication=NULL;
 	SQLite3_result *resultset_galera=NULL;
 	SQLite3_result *resultset_aws_aurora=NULL;
-	SQLite3_result *resultset_aws_rds=NULL;
+	SQLite3_result *resultset_aws_rds_bgd=NULL;
 	SQLite3_result *resultset_hostgroup_attributes=NULL;
 	SQLite3_result *resultset_mysql_servers_ssl_params=NULL;
 
@@ -8116,15 +8116,15 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 		MyHGM->save_incoming_mysql_table(resultset_aws_aurora,"mysql_aws_aurora_hostgroups");
 	}
 
-	// support for AWS RDS, table mysql_aws_rds_hostgroups
-	query=(char *)"SELECT a.* FROM mysql_aws_rds_hostgroups a LEFT JOIN mysql_aws_rds_hostgroups b ON (a.writer_hostgroup=b.reader_hostgroup) WHERE b.reader_hostgroup IS NULL ORDER BY writer_hostgroup";
+	// support for AWS RDS, table mysql_aws_rds_bgd_hostgroups
+	query=(char *)"SELECT a.* FROM mysql_aws_rds_bgd_hostgroups a LEFT JOIN mysql_aws_rds_bgd_hostgroups b ON (a.writer_hostgroup=b.reader_hostgroup) WHERE b.reader_hostgroup IS NULL ORDER BY writer_hostgroup";
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset_aws_rds);
+	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset_aws_rds_bgd);
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 		// Pass the resultset to MyHGM
-		MyHGM->save_incoming_mysql_table(resultset_aws_rds,"mysql_aws_rds_hostgroups");
+		MyHGM->save_incoming_mysql_table(resultset_aws_rds_bgd,"mysql_aws_rds_bgd_hostgroups");
 	}
 
 	// support for hostgroup attributes, table mysql_hostgroup_attributes
@@ -8186,9 +8186,9 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 		//delete resultset_aws_aurora; // do not delete, resultset is stored in MyHGM
 		resultset_aws_aurora=NULL;
 	}
-	if (resultset_aws_rds) {
-		//delete resultset_aws_rds; // do not delete, resultset is stored in MyHGM
-		resultset_aws_rds=NULL;
+	if (resultset_aws_rds_bgd) {
+		//delete resultset_aws_rds_bgd; // do not delete, resultset is stored in MyHGM
+		resultset_aws_rds_bgd=NULL;
 	}
 	if (resultset_hostgroup_attributes) {
 		resultset_hostgroup_attributes = NULL;

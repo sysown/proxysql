@@ -727,7 +727,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	mydb->execute(MYHGM_MYSQL_GROUP_REPLICATION_HOSTGROUPS);
 	mydb->execute(MYHGM_MYSQL_GALERA_HOSTGROUPS);
 	mydb->execute(MYHGM_MYSQL_AWS_AURORA_HOSTGROUPS);
-	mydb->execute(MYHGM_MYSQL_AWS_RDS_HOSTGROUPS);
+	mydb->execute(MYHGM_MYSQL_AWS_RDS_BGD_HOSTGROUPS);
 	mydb->execute(MYHGM_MYSQL_HOSTGROUP_ATTRIBUTES);
 	mydb->execute(MYHGM_MYSQL_SERVERS_SSL_PARAMS);
 	mydb->execute("CREATE INDEX IF NOT EXISTS idx_mysql_servers_hostname_port ON mysql_servers (hostname,port)");
@@ -737,7 +737,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	incoming_group_replication_hostgroups=NULL;
 	incoming_galera_hostgroups=NULL;
 	incoming_aws_aurora_hostgroups = NULL;
-	incoming_aws_rds_hostgroups = NULL;
+	incoming_aws_rds_bgd_hostgroups = NULL;
 	incoming_hostgroup_attributes = NULL;
 	incoming_mysql_servers_ssl_params = NULL;
 	incoming_mysql_servers_v2 = NULL;
@@ -1549,10 +1549,10 @@ bool MySQL_HostGroups_Manager::commit(
 		}
 
 		// AWS RDS
-		if (incoming_aws_rds_hostgroups) {
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_aws_rds_hostgroups\n");
-			mydb->execute("DELETE FROM mysql_aws_rds_hostgroups");
-			generate_mysql_aws_rds_hostgroups_table();
+		if (incoming_aws_rds_bgd_hostgroups) {
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_aws_rds_bgd_hostgroups\n");
+			mydb->execute("DELETE FROM mysql_aws_rds_bgd_hostgroups");
+			generate_mysql_aws_rds_bgd_hostgroups_table();
 		}
 
 		// hostgroup attributes
@@ -2256,9 +2256,9 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) 
 	if (name == "mysql_aws_aurora_hostgroups") {
 		query=(char *)"SELECT writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,"
 					    "check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,autopurge_missing_checks,comment FROM mysql_aws_aurora_hostgroups";
-	} else if (name == "mysql_aws_rds_hostgroups") {
+	} else if (name == "mysql_aws_rds_bgd_hostgroups") {
 		query=(char *)"SELECT writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,writer_is_also_reader,"
-					    "domain_name,check_interval_ms,check_timeout_ms,autopurge_missing_checks,comment,auto_generated FROM mysql_aws_rds_hostgroups";
+					    "domain_name,check_interval_ms,check_timeout_ms,autopurge_missing_checks,comment,auto_generated FROM mysql_aws_rds_bgd_hostgroups";
 	} else if (name == "mysql_galera_hostgroups") {
 		query=(char *)"SELECT writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment FROM mysql_galera_hostgroups";
 	} else if (name == "mysql_group_replication_hostgroups") {
@@ -3089,8 +3089,8 @@ void MySQL_HostGroups_Manager::save_incoming_mysql_table(SQLite3_result *s, cons
 	SQLite3_result ** inc = NULL;
 	if (name == "mysql_aws_aurora_hostgroups") {
 		inc = &incoming_aws_aurora_hostgroups;
-	} else if (name == "mysql_aws_rds_hostgroups") {
-		inc = &incoming_aws_rds_hostgroups;
+	} else if (name == "mysql_aws_rds_bgd_hostgroups") {
+		inc = &incoming_aws_rds_bgd_hostgroups;
 	} else if (name == "mysql_galera_hostgroups") {
 		inc = &incoming_galera_hostgroups;
 	} else if (name == "mysql_group_replication_hostgroups") {
@@ -6280,25 +6280,28 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 }
 
 /**
- * @brief Regenerates the runtime in-memory `mysql_aws_rds_hostgroups` table from `incoming_aws_rds_hostgroups`.
+ * @brief Regenerates the runtime in-memory `mysql_aws_rds_bgd_hostgroups` table from `incoming_aws_rds_bgd_hostgroups`.
  *
- * The incoming resultset comes from the admin config table (11 columns, no `auto_generated`); config-loaded
+ * @details The incoming resultset comes from the admin config table (11 columns, no `auto_generated`); config-loaded
  * entries are user-defined, so `auto_generated` is stored as 0. `green_writer_hostgroup` and
  * `green_reader_hostgroup` are optional and bound as SQL NULL when absent.
  */
-void MySQL_HostGroups_Manager::generate_mysql_aws_rds_hostgroups_table() {
-	if (incoming_aws_rds_hostgroups==NULL) {
+void MySQL_HostGroups_Manager::generate_mysql_aws_rds_bgd_hostgroups_table() {
+	if (incoming_aws_rds_bgd_hostgroups==NULL) {
 		return;
 	}
+
 	int rc;
-	char *query=(char *)"INSERT INTO mysql_aws_rds_hostgroups(writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,"
+	char *query=(char *)"INSERT INTO mysql_aws_rds_bgd_hostgroups(writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,"
 						"writer_is_also_reader,domain_name,check_interval_ms,check_timeout_ms,autopurge_missing_checks,comment,auto_generated) VALUES "
 						"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+
 	auto [rc1, statement_unique] = mydb->prepare_v2(query);
 	ASSERT_SQLITE_OK(rc1, mydb);
 	sqlite3_stmt *statement = statement_unique.get();
-	proxy_info("New mysql_aws_rds_hostgroups table\n");
-	for (std::vector<SQLite3_row *>::iterator it = incoming_aws_rds_hostgroups->rows.begin() ; it != incoming_aws_rds_hostgroups->rows.end(); ++it) {
+	proxy_info("New mysql_aws_rds_bgd_hostgroups table\n");
+
+	for (std::vector<SQLite3_row *>::iterator it = incoming_aws_rds_bgd_hostgroups->rows.begin() ; it != incoming_aws_rds_bgd_hostgroups->rows.end(); ++it) {
 		SQLite3_row *r=*it;
 		int writer_hostgroup=atoi(r->fields[0]);
 		int reader_hostgroup=atoi(r->fields[1]);
@@ -6343,14 +6346,15 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_rds_hostgroups_table() {
 		rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mydb);
 	}
-	delete incoming_aws_rds_hostgroups;
-	incoming_aws_rds_hostgroups=NULL;
+
+	delete incoming_aws_rds_bgd_hostgroups;
+	incoming_aws_rds_bgd_hostgroups=NULL;
 
 	// publish the refreshed host list to the RDS monitor thread
 	if (GloMyMon) {
-		pthread_mutex_lock(&GloMyMon->aws_rds_mutex);
-		update_aws_rds_hosts_monitor_resultset(false);
-		pthread_mutex_unlock(&GloMyMon->aws_rds_mutex);
+		pthread_mutex_lock(&GloMyMon->aws_rds_bgd_mutex);
+		update_aws_rds_bgd_hosts_monitor_resultset(false);
+		pthread_mutex_unlock(&GloMyMon->aws_rds_bgd_mutex);
 	}
 }
 
@@ -6930,17 +6934,25 @@ void MySQL_HostGroups_Manager::update_aws_aurora_hosts_monitor_resultset(bool lo
 	}
 }
 
-const char SELECT_AWS_RDS_SERVERS_FOR_MONITOR[] {
+const char SELECT_AWS_RDS_BGD_SERVERS_FOR_MONITOR[] {
 	"SELECT writer_hostgroup, reader_hostgroup, hostname, port, MAX(use_ssl) use_ssl, green_writer_hostgroup,"
 		" green_reader_hostgroup, check_interval_ms, check_timeout_ms, autopurge_missing_checks, domain_name FROM mysql_servers"
-	" JOIN mysql_aws_rds_hostgroups ON"
+	" JOIN mysql_aws_rds_bgd_hostgroups ON"
 		" hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE active=1 AND status NOT IN (2,3)"
 	" GROUP BY writer_hostgroup, hostname, port"
 };
 
-void MySQL_HostGroups_Manager::update_aws_rds_hosts_monitor_resultset(bool lock) {
+/**
+ * @brief Rebuilds the AWS RDS BGD monitor's host resultset.
+ *
+ * @details Rebuilds `GloMyMon->AWS_RDS_BGD_Hosts_resultset` (and its checksum) from the
+ *   `mysql_servers` x `mysql_aws_rds_bgd_hostgroups` join used by the RDS BGD monitor thread.
+ *
+ * @param lock When true, the monitor's `aws_rds_bgd_mutex` is taken internally.
+ */
+void MySQL_HostGroups_Manager::update_aws_rds_bgd_hosts_monitor_resultset(bool lock) {
 	if (lock) {
-		pthread_mutex_lock(&GloMyMon->aws_rds_mutex);
+		pthread_mutex_lock(&GloMyMon->aws_rds_bgd_mutex);
 	}
 
 	SQLite3_result* resultset = nullptr;
@@ -6948,20 +6960,93 @@ void MySQL_HostGroups_Manager::update_aws_rds_hosts_monitor_resultset(bool lock)
 		char* error = nullptr;
 		int cols = 0;
 		int affected_rows = 0;
-		mydb->execute_statement(SELECT_AWS_RDS_SERVERS_FOR_MONITOR, &error, &cols, &affected_rows, &resultset);
+		mydb->execute_statement(SELECT_AWS_RDS_BGD_SERVERS_FOR_MONITOR, &error, &cols, &affected_rows, &resultset);
 	}
 
 	if (resultset) {
-		if (GloMyMon->AWS_RDS_Hosts_resultset) {
-			delete GloMyMon->AWS_RDS_Hosts_resultset;
+		if (GloMyMon->AWS_RDS_BGD_Hosts_resultset) {
+			delete GloMyMon->AWS_RDS_BGD_Hosts_resultset;
 		}
-		GloMyMon->AWS_RDS_Hosts_resultset=resultset;
-		GloMyMon->AWS_RDS_Hosts_resultset_checksum=resultset->raw_checksum();
+		GloMyMon->AWS_RDS_BGD_Hosts_resultset=resultset;
+		GloMyMon->AWS_RDS_BGD_Hosts_resultset_checksum=resultset->raw_checksum();
 	}
 
 	if (lock) {
-		pthread_mutex_unlock(&GloMyMon->aws_rds_mutex);
+		pthread_mutex_unlock(&GloMyMon->aws_rds_bgd_mutex);
 	}
+}
+
+/**
+ * @brief Auto-generate a runtime `mysql_aws_rds_bgd_hostgroups` entry for a server's writer hostgroup.
+ *
+ * @details Called when the read_only monitor detects a blue/green deployment. The writer/reader
+ *   hostgroups are derived from the server's `hostgroup_server_mapping`. Green hostgroups are
+ *   stored NULL with `auto_generated=1`. Idempotent.
+ *
+ * @param hostname Hostname of the server that exposed the blue/green topology.
+ * @param port     Port of the server.
+ *
+ * @return true if a new entry was added; false otherwise.
+ */
+bool MySQL_HostGroups_Manager::add_aws_rds_bgd_hostgroup_entry(const std::string& hostname, int port) {
+	bool added = false;
+	const std::string srv_id = hostname + ":::" + std::to_string(port);
+
+	wrlock();
+
+	auto itr = hostgroup_server_mapping.find(srv_id);
+	if (itr != hostgroup_server_mapping.end() && itr->second) {
+		int writer_hg = -1, reader_hg = -1;
+		const auto& wmap = itr->second->get(HostGroup_Server_Mapping::Type::WRITER);
+		const auto& rmap = itr->second->get(HostGroup_Server_Mapping::Type::READER);
+		if (!wmap.empty()) {
+			writer_hg = (int)wmap[0].writer_hostgroup_id;
+			reader_hg = (int)wmap[0].reader_hostgroup_id;
+		} else if (!rmap.empty()) {
+			writer_hg = (int)rmap[0].writer_hostgroup_id;
+			reader_hg = (int)rmap[0].reader_hostgroup_id;
+		}
+		if (writer_hg >= 0 && reader_hg >= 0 && writer_hg != reader_hg) {
+			// only add when no runtime entry exists yet for this writer hostgroup
+			bool exists = false;	
+			char* error = nullptr;
+			int cols = 0;
+			int affected_rows = 0;
+			SQLite3_result* res = nullptr;
+
+			std::string sel = "SELECT 1 FROM mysql_aws_rds_bgd_hostgroups WHERE writer_hostgroup=" + std::to_string(writer_hg);
+			mydb->execute_statement(sel.c_str(), &error, &cols, &affected_rows, &res);
+			if (res) {
+				exists = (res->rows_count > 0);
+				delete res;
+			}
+
+			if (!exists) {
+				std::string ins =
+					"INSERT INTO mysql_aws_rds_bgd_hostgroups ("
+						"writer_hostgroup, reader_hostgroup, green_writer_hostgroup, green_reader_hostgroup, "
+						"active, writer_is_also_reader, domain_name, check_interval_ms, check_timeout_ms, "
+						"autopurge_missing_checks, comment, auto_generated"
+					") VALUES ("
+					+ std::to_string(writer_hg) + ", " + std::to_string(reader_hg)
+					+ ", NULL, NULL, 1, 0, '', 1000, 800, 0, '', 1)";
+				mydb->execute(ins.c_str());
+				added = true;
+				proxy_info(
+					"AWS RDS: auto-generated blue/green hostgroup entry (writer HG %d, reader HG %d) from server %s:%d\n",
+					writer_hg, reader_hg, hostname.c_str(), port
+				);
+			}
+		}
+	}
+
+	if (added) {
+		// publish the refreshed host list to the BGD monitor thread
+		update_aws_rds_bgd_hosts_monitor_resultset(true);
+	}
+
+	wrunlock();
+	return added;
 }
 
 MySrvC* MySQL_HostGroups_Manager::find_server_in_hg(unsigned int _hid, const std::string& addr, int port) {
@@ -7159,9 +7244,11 @@ MySQLServers_SslParams * MySQL_HostGroups_Manager::get_Server_SSL_Params(char *h
 
 /**
 * @brief Updates replication hostgroups by adding autodiscovered mysql servers.
+*
 * @details Adds each server from 'new_servers' to the 'runtime_mysql_servers' table.
 * We then rebuild the 'mysql_servers' table as well as the internal 'hostname_hostgroup_mapping'.
-* @param new_servers A vector of tuples where each tuple contains the values needed to add each new server.
+*
+* @param new_servers    A vector of tuples where each tuple contains the values needed to add each new server.
 */
 void MySQL_HostGroups_Manager::add_discovered_servers_to_mysql_servers_and_replication_hostgroups(
 	const vector<tuple<string, int, int>>& new_servers

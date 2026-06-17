@@ -400,6 +400,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_ping_max_failures",
 	(char *)"monitor_ping_timeout",
 	(char *)"monitor_aws_rds_topology_discovery_interval",
+	(char *)"aws_blue_green_deployment_auto_discovery",
 	(char *)"monitor_read_only_interval",
 	(char *)"monitor_read_only_timeout",
 	(char *)"monitor_read_only_max_timeout_count",
@@ -1274,6 +1275,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_ping_max_failures=3;
 	variables.monitor_ping_timeout=1000;
 	variables.monitor_aws_rds_topology_discovery_interval=0;
+	variables.aws_blue_green_deployment_auto_discovery=true;
 	variables.monitor_read_only_interval=1000;
 	variables.monitor_read_only_timeout=800;
 	variables.monitor_read_only_max_timeout_count=3;
@@ -2530,6 +2532,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["log_mysql_warnings_enabled"]      = make_tuple(&variables.log_mysql_warnings_enabled,      false);
 		VariablesPointers_bool["log_unhealthy_connections"]       = make_tuple(&variables.log_unhealthy_connections,       false);
 		VariablesPointers_bool["monitor_enabled"]                 = make_tuple(&variables.monitor_enabled,                 false);
+		VariablesPointers_bool["aws_blue_green_deployment_auto_discovery"] = make_tuple(&variables.aws_blue_green_deployment_auto_discovery, false);
 		VariablesPointers_bool["monitor_replication_lag_group_by_host"] = make_tuple(&variables.monitor_replication_lag_group_by_host, false);
 		VariablesPointers_bool["monitor_wait_timeout"]            = make_tuple(&variables.monitor_wait_timeout,            false);
 		VariablesPointers_bool["monitor_writer_is_also_reader"]   = make_tuple(&variables.monitor_writer_is_also_reader,   false);
@@ -4654,6 +4657,7 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(monitor_ping_max_failures);
 	REFRESH_VARIABLE_INT(monitor_ping_timeout);
 	REFRESH_VARIABLE_INT(monitor_aws_rds_topology_discovery_interval);
+	REFRESH_VARIABLE_BOOL(aws_blue_green_deployment_auto_discovery);
 	REFRESH_VARIABLE_INT(monitor_read_only_interval);
 	REFRESH_VARIABLE_INT(monitor_read_only_timeout);
 	REFRESH_VARIABLE_INT(monitor_read_only_max_timeout_count);

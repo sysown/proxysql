@@ -64,7 +64,7 @@
 										  "autopurge_missing_checks INT NOT NULL CHECK (autopurge_missing_checks >= 0 AND autopurge_missing_checks <= 100) DEFAULT 0 , " \
 										  "comment VARCHAR , UNIQUE (reader_hostgroup))"
 
-#define MYHGM_MYSQL_AWS_RDS_HOSTGROUPS "CREATE TABLE mysql_aws_rds_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0), " \
+#define MYHGM_MYSQL_AWS_RDS_BGD_HOSTGROUPS "CREATE TABLE mysql_aws_rds_bgd_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0), " \
 										  "green_writer_hostgroup INT DEFAULT NULL CHECK (green_writer_hostgroup IS NULL OR green_writer_hostgroup>=0), " \
 										  "green_reader_hostgroup INT DEFAULT NULL CHECK (green_reader_hostgroup IS NULL OR green_reader_hostgroup>=0), " \
 										  "active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , " \
@@ -709,8 +709,17 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	pthread_mutex_t AWS_Aurora_Info_mutex;
 	std::map<int , AWS_Aurora_Info *> AWS_Aurora_Info_Map;
 
-	void generate_mysql_aws_rds_hostgroups_table();
-	SQLite3_result *incoming_aws_rds_hostgroups;
+	/**
+	 * @brief Materializes the runtime `mysql_aws_rds_bgd_hostgroups` table from the staged
+	 *   `incoming_aws_rds_bgd_hostgroups` resultset.
+	 *
+	 * @details Inserts each staged row with `auto_generated=0` (config-loaded entries are
+	 *   user-defined) and NULL green hostgroups preserved, clears the staging resultset, then
+	 *   republishes the host list to the RDS BGD monitor thread via
+	 *   `update_aws_rds_bgd_hosts_monitor_resultset()`. No-op when nothing is staged.
+	 */
+	void generate_mysql_aws_rds_bgd_hostgroups_table();
+	SQLite3_result *incoming_aws_rds_bgd_hostgroups;
 
 	void generate_mysql_hostgroup_attributes_table();
 	SQLite3_result *incoming_hostgroup_attributes;
@@ -1123,11 +1132,27 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 */
 	void update_aws_aurora_hosts_monitor_resultset(bool lock=false);
 	/**
-	 * @brief Rebuilds `GloMyMon->AWS_RDS_Hosts_resultset` (and its checksum) from the
-	 *   `mysql_servers` x `mysql_aws_rds_hostgroups` join used by the RDS monitor thread.
-	 * @param lock when true, the monitor's `aws_rds_mutex` is taken internally.
+	 * @brief Rebuilds the AWS RDS BGD monitor's host resultset.
+	 *
+	 * @details Rebuilds `GloMyMon->AWS_RDS_BGD_Hosts_resultset` (and its checksum) from the
+	 *   `mysql_servers` x `mysql_aws_rds_bgd_hostgroups` join used by the RDS BGD monitor thread.
+	 *
+	 * @param lock    When true, the monitor's `aws_rds_bgd_mutex` is taken internally.
 	 */
-	void update_aws_rds_hosts_monitor_resultset(bool lock=false);
+	void update_aws_rds_bgd_hosts_monitor_resultset(bool lock=false);
+	/**
+	 * @brief Auto-generate a runtime `mysql_aws_rds_bgd_hostgroups` entry for a server's writer hostgroup.
+	 *
+	 * @details Called when the read_only monitor detects a blue/green deployment. The writer/reader
+	 *   hostgroups are derived from the server's `hostgroup_server_mapping`. Green hostgroups are
+	 *   stored NULL with `auto_generated=1`. Idempotent.
+	 *
+	 * @param hostname    Hostname of the server that exposed the blue/green topology.
+	 * @param port        Port of the server.
+	 *
+	 * @return true if a new entry was added; false otherwise.
+	 */
+	bool add_aws_rds_bgd_hostgroup_entry(const std::string& hostname, int port);
 
 	SQLite3_result * get_stats_mysql_gtid_executed();
 	void generate_mysql_gtid_executed_tables();

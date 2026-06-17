@@ -453,6 +453,8 @@ class MySQL_Threads_Handler
 		int monitor_ping_timeout;
 		//! Monitor aws rds topology discovery interval. Unit: 'one discovery check per X monitor_read_only checks'.
 		int monitor_aws_rds_topology_discovery_interval;
+		//! Auto-generate runtime aws_rds_bgd_hostgroups entries when the read_only monitor detects a blue/green deployment.
+		bool aws_blue_green_deployment_auto_discovery;
 		//! Monitor read only timeout. Unit: 'ms'.
 		int monitor_read_only_interval;
 		//! Monitor read only timeout. Unit: 'ms'.

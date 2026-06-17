@@ -671,8 +671,8 @@ void MySQL_Monitor_State_Data::init_async() {
 		task_timeout_ = mysql_thread___monitor_read_only_timeout;
 		task_handler_ = &MySQL_Monitor_State_Data::read_only_handler;
 		break;
-	case MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY:
-		query_ = QUERY_READ_ONLY_AND_AWS_TOPOLOGY_DISCOVERY;
+	case MON_AWS_RDS_TOPOLOGY_DISCOVERY:
+		query_ = QUERY_AWS_RDS_TOPOLOGY_DISCOVERY;
 		async_state_machine_ = ASYNC_QUERY_START;
 		task_timeout_ = mysql_thread___monitor_read_only_timeout;
 		task_handler_ = &MySQL_Monitor_State_Data::read_only_handler;
@@ -788,7 +788,7 @@ void MySQL_Monitor_State_Data::init_async() {
 		break;
 	case MON_AWS_AURORA:
 		break;
-	case MON_AWS_RDS:
+	case MON_AWS_RDS_BGD:
 		break;
 	}
 }
@@ -883,11 +883,14 @@ void * monitor_aws_aurora_pthread(void *arg) {
 	return NULL;
 }
 
-void * monitor_aws_rds_pthread(void *arg) {
-	set_thread_name("MonitorRDS", GloVars.set_thread_name);
+void * monitor_aws_rds_bgd_pthread(void *arg) {
+	set_thread_name("MonitorRdsBgd", GloVars.set_thread_name);
+
 	// Wait for GloMTH to be initialized
-	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
-	GloMyMon->monitor_aws_rds();
+	if (!wait_for_glo_mth())
+		return NULL;
+
+	GloMyMon->monitor_aws_rds_bgd();
 	return NULL;
 }
 
@@ -1087,13 +1090,13 @@ MySQL_Monitor::MySQL_Monitor() {
 	Galera_Hosts_resultset=NULL;
 
 	pthread_mutex_init(&aws_aurora_mutex,NULL);
-	pthread_mutex_init(&aws_rds_mutex,NULL);
+	pthread_mutex_init(&aws_rds_bgd_mutex,NULL);
 	pthread_mutex_init(&mysql_servers_mutex,NULL);
 	pthread_mutex_init(&proxysql_servers_mutex, NULL);
 	AWS_Aurora_Hosts_resultset=NULL;
 	AWS_Aurora_Hosts_resultset_checksum = 0;
-	AWS_RDS_Hosts_resultset=NULL;
-	AWS_RDS_Hosts_resultset_checksum = 0;
+	AWS_RDS_BGD_Hosts_resultset=NULL;
+	AWS_RDS_BGD_Hosts_resultset_checksum = 0;
 	shutdown=false;
 	monitor_enabled=true;	// default
 	// create new SQLite datatabase
@@ -1194,9 +1197,9 @@ MySQL_Monitor::~MySQL_Monitor() {
 		delete AWS_Aurora_Hosts_resultset;
 		AWS_Aurora_Hosts_resultset=NULL;
 	}
-	if (AWS_RDS_Hosts_resultset) {
-		delete AWS_RDS_Hosts_resultset;
-		AWS_RDS_Hosts_resultset=NULL;
+	if (AWS_RDS_BGD_Hosts_resultset) {
+		delete AWS_RDS_BGD_Hosts_resultset;
+		AWS_RDS_BGD_Hosts_resultset=NULL;
 	}
 	std::map<std::string, AWS_Aurora_monitor_node *>::iterator it2;
 	AWS_Aurora_monitor_node *node=NULL;
@@ -1712,8 +1715,8 @@ void * monitor_read_only_thread(const std::vector<MySQL_Monitor_State_Data*>& da
 		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT @@global.read_only&@@global.innodb_read_only read_only");
 	} else if (mmsd->get_task_type() == MON_READ_ONLY__OR__INNODB_READ_ONLY) {
 		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT @@global.read_only|@@global.innodb_read_only read_only");
-	} else if (mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY) {
-		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql, QUERY_READ_ONLY_AND_AWS_TOPOLOGY_DISCOVERY);
+	} else if (mmsd->get_task_type() == MON_AWS_RDS_TOPOLOGY_DISCOVERY) {
+		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql, QUERY_AWS_RDS_TOPOLOGY_DISCOVERY);
 	} else { // default
 		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT @@global.read_only read_only");
 	}
@@ -3399,13 +3402,13 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 }
 
 /**
-* @brief Processes the discovered servers to eventually add them to 'runtime_mysql_servers'.
-* @details This method takes a vector of discovered servers, compares them against the existing servers, and adds the new servers to 'runtime_mysql_servers'.
-* @param originating_server_hostname A string which denotes the hostname of the originating server, from which the discovered servers were queried and found.
+* @brief Add discovered servers to 'runtime_mysql_servers' and reader hostgroup.
+*
+* @param origin_server      A string which denotes the hostname of the originating server, from which the discovered servers were queried and found.
 * @param discovered_servers A vector of servers discovered when querying the cluster's topology.
-* @param reader_hostgroup Reader hostgroup to which we will add the discovered servers.
+* @param reader_hostgroup   Reader hostgroup to which we will add the discovered servers.
 */
-void MySQL_Monitor::process_discovered_topology(const std::string& originating_server_hostname, const vector<MYSQL_ROW>& discovered_servers, int reader_hostgroup) {
+void MySQL_Monitor::handle_aws_rds_multi_az_cluster(const std::string& origin_server, const std::vector<AWS_RDS_Topology_Node>& discovered_servers, int reader_hostgroup) {
 	char *error = NULL;
 	int cols = 0;
 	int affected_rows = 0;
@@ -3420,7 +3423,7 @@ void MySQL_Monitor::process_discovered_topology(const std::string& originating_s
 	} else {
 		vector<tuple<string, int, int>> new_servers;
 		vector<string> saved_hostnames;
-		saved_hostnames.push_back(originating_server_hostname);
+		saved_hostnames.push_back(origin_server);
 
 		// Do an initial loop through the query results to save existing runtime server hostnames
 		for (std::vector<SQLite3_row *>::iterator it = runtime_mysql_servers->rows.begin(); it != runtime_mysql_servers->rows.end(); it++) {
@@ -3431,20 +3434,12 @@ void MySQL_Monitor::process_discovered_topology(const std::string& originating_s
 		}
 
 		// Loop through discovered servers and process the ones we haven't saved yet
-		for (MYSQL_ROW s : discovered_servers) {
-			string current_discovered_hostname = s[2];
-			string current_discovered_port_string = s[3];
-			int current_discovered_port_int;
-
-			try {
-				current_discovered_port_int = stoi(s[3]);
-			} catch (...) {
-				proxy_error(
-					"Unable to parse port value coming from '%s' during topology discovery ('%s':%s). Terminating discovery early.\n",
-					originating_server_hostname.c_str(), current_discovered_hostname.c_str(), current_discovered_port_string.c_str()
-				);
-				return;
+		for (const AWS_RDS_Topology_Node& s : discovered_servers) {
+			if (s.endpoint.empty()) {
+				continue;
 			}
+			const string& current_discovered_hostname = s.endpoint;
+			int current_discovered_port_int = s.port;
 
 			if (find(saved_hostnames.begin(), saved_hostnames.end(), current_discovered_hostname) == saved_hostnames.end()) {
 				tuple<string, int, int> new_server(current_discovered_hostname, current_discovered_port_int, reader_hostgroup);
@@ -3461,32 +3456,98 @@ void MySQL_Monitor::process_discovered_topology(const std::string& originating_s
 }
 
 /**
-* @brief Check if a list of servers is matching the description of an AWS RDS Multi-AZ DB Cluster.
-* @details This method takes a vector of discovered servers and checks that there are exactly three which are named "instance-[1|2|3]" respectively, as expected on an AWS RDS Multi-AZ DB Cluster.
-* @param discovered_servers A vector of servers discovered when querying the cluster's topology.
-* @return Returns 'true' if all conditions are met and 'false' otherwise.
+* @brief Parse a 'SELECT * FROM mysql.rds_topology' result into an AWS_RDS_Topology_Result.
+*
+* @details Columns are resolved by name (they may be absent or differently ordered by RDS type).
+*   'blue_green' is set when the 'role'/'status' columns are present and non-NULL on the first row.
+*
+* @return The parsed topology; empty 'nodes' if 'result' is NULL or has no rows. The result cursor is rewound before returning.
 */
-bool MySQL_Monitor::is_aws_rds_multi_az_db_cluster_topology(const std::vector<MYSQL_ROW>& discovered_servers) {
-	if (discovered_servers.size() != 3) {
-		return false;
+AWS_RDS_Topology_Result MySQL_Monitor::parse_aws_rds_topology(MYSQL_RES* result) {
+	AWS_RDS_Topology_Result out;
+	if (result == NULL) {
+		return out;
 	}
 
-	const std::vector<std::string> instance_names = {"-instance-1", "-instance-2", "-instance-3"};
-	int identified_hosts = 0;
-	for (const std::string& instance_str : instance_names) {
-		for (MYSQL_ROW server : discovered_servers) {
-			if (server[2] == NULL || (server[2][0] == '\0')) {
-				continue;
-			}
-
-			std::string current_discovered_hostname = server[2];
-			if (current_discovered_hostname.find(instance_str) != std::string::npos) {
-				++identified_hosts;
-				break;
-			}
+	unsigned int num_fields = mysql_num_fields(result);
+	MYSQL_FIELD *fields = mysql_fetch_fields(result);
+	int id_idx = -1, endpoint_idx = -1, port_idx = -1, role_idx = -1, status_idx = -1;
+	for (unsigned int i = 0; i < num_fields; i++) {
+		if (fields[i].name == NULL) {
+			continue;
+		}
+		if (strcasecmp(fields[i].name, "id") == 0) {
+			id_idx = (int)i;
+		} else if (strcasecmp(fields[i].name, "endpoint") == 0) {
+			endpoint_idx = (int)i;
+		} else if (strcasecmp(fields[i].name, "port") == 0) {
+			port_idx = (int)i;
+		} else if (strcasecmp(fields[i].name, "role") == 0) {
+			role_idx = (int)i;
+		} else if (strcasecmp(fields[i].name, "status") == 0) {
+			status_idx = (int)i;
 		}
 	}
-	return (identified_hosts == 3);
+
+	bool first = true;
+	MYSQL_ROW row;
+	while ((row = mysql_fetch_row(result))) {
+		AWS_RDS_Topology_Node node;
+		if (id_idx >= 0 && row[id_idx]) {
+			node.id = row[id_idx];
+		}
+		if (endpoint_idx >= 0 && row[endpoint_idx]) {
+			node.endpoint = row[endpoint_idx];
+		}
+		if (port_idx >= 0 && row[port_idx]) {
+			try {
+				node.port = std::stoi(row[port_idx]);
+			} catch (...) {
+				node.port = 0;
+			}
+		}
+		if (role_idx >= 0 && row[role_idx]) {
+			node.role = row[role_idx];
+		}
+		if (status_idx >= 0 && row[status_idx]) {
+			node.status = row[status_idx];
+		}
+		if (first) {
+			// blue/green deployment exposes non-NULL role/status; absent or NULL => Multi-AZ Cluster
+			out.blue_green = (role_idx >= 0 && status_idx >= 0
+				&& row[role_idx] != NULL && row[status_idx] != NULL);
+			first = false;
+		}
+		out.nodes.push_back(std::move(node));
+	}
+	mysql_data_seek(result, 0); // rewind for any subsequent reader
+	return out;
+}
+
+/**
+* @brief Classify the parsed mysql.rds_topology result and dispatch.
+*
+* @details A blue/green deployment optionally auto-generates a runtime aws_rds_bgd_hostgroups
+*   entry (when 'mysql-aws_blue_green_deployment_auto_discovery' is enabled); otherwise the rows
+*   are treated as a Multi-AZ Cluster and handed to the existing auto-discovery path.
+*/
+void MySQL_Monitor::process_aws_rds_topology(MySQL_Monitor_State_Data* mmsd) {
+	if (mmsd->result == NULL) {
+		return;
+	}
+
+	AWS_RDS_Topology_Result topology = parse_aws_rds_topology(mmsd->result);
+	if (topology.nodes.empty()) {
+		return;
+	}
+
+	if (topology.blue_green) {
+		if (mysql_thread___aws_blue_green_deployment_auto_discovery) {
+			MyHGM->add_aws_rds_bgd_hostgroup_entry(mmsd->hostname, mmsd->port);
+		}
+	} else {
+		handle_aws_rds_multi_az_cluster(mmsd->hostname, topology.nodes, mmsd->reader_hostgroup);
+	}
 }
 
 void * MySQL_Monitor::monitor_read_only() {
@@ -5051,8 +5112,8 @@ __monitor_run:
 		assert(0);
 		// LCOV_EXCL_STOP
 	}
-	pthread_t monitor_aws_rds_thread;
-	if (pthread_create(&monitor_aws_rds_thread, &attr, &monitor_aws_rds_pthread,NULL) != 0) {
+	pthread_t monitor_aws_rds_bgd_thread;
+	if (pthread_create(&monitor_aws_rds_bgd_thread, &attr, &monitor_aws_rds_bgd_pthread,NULL) != 0) {
 		// LCOV_EXCL_START
 		proxy_error("Thread creation\n");
 		assert(0);
@@ -5157,7 +5218,7 @@ __monitor_run:
 	pthread_join(monitor_group_replication_thread,NULL);
 	pthread_join(monitor_galera_thread,NULL);
 	pthread_join(monitor_aws_aurora_thread,NULL);
-	pthread_join(monitor_aws_rds_thread,NULL);
+	pthread_join(monitor_aws_rds_bgd_thread,NULL);
 	pthread_join(monitor_replication_lag_thread,NULL);
 	
 	My_Conn_Pool->purge_all_connections();
@@ -6431,10 +6492,15 @@ void * MySQL_Monitor::monitor_aws_aurora() {
 	return NULL;
 }
 
-// Runs an async query + store_result on the monitor connection, honoring the
-// per-check timeout and the global shutdown flag.
-// Returns: 0 success, 1 timeout/query-error, 2 shutdown requested.
-static int aws_rds_async_query(MySQL_Monitor_State_Data *mmsd, const char *query) {
+/**
+* @brief Runs an async query + store_result on the monitor connection.
+*
+* @param mmsd  Monitor state data holding the connection, timing, and result.
+* @param query SQL text to execute.
+*
+* @return 0 on success, 1 on timeout/query-error, 2 if shutdown was requested.
+*/
+static int aws_rds_bgd_async_query(MySQL_Monitor_State_Data *mmsd, const char *query) {
 	mmsd->t1 = monotonic_time();
 	mmsd->interr = 0;
 	mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, query);
@@ -6445,7 +6511,9 @@ static int aws_rds_async_query(MySQL_Monitor_State_Data *mmsd, const char *query
 			mmsd->mysql_error_msg = strdup("timeout check");
 			return 1;
 		}
-		if (GloMyMon->shutdown == true) return 2;
+		if (GloMyMon->shutdown == true) {
+			return 2;
+		}
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
 			mmsd->async_exit_status = mysql_query_cont(&mmsd->interr, mmsd->mysql, mmsd->async_exit_status);
 		}
@@ -6458,7 +6526,9 @@ static int aws_rds_async_query(MySQL_Monitor_State_Data *mmsd, const char *query
 			mmsd->mysql_error_msg = strdup("timeout check");
 			return 1;
 		}
-		if (GloMyMon->shutdown == true) return 2;
+		if (GloMyMon->shutdown == true) {
+			return 2;
+		}
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
 			mmsd->async_exit_status = mysql_store_result_cont(&mmsd->result, mmsd->mysql, mmsd->async_exit_status);
 		}
@@ -6470,13 +6540,15 @@ static int aws_rds_async_query(MySQL_Monitor_State_Data *mmsd, const char *query
 	return 0;
 }
 
-// State of the per-host RDS topology probe.
-enum RDS_Topology_Monitor_State {
-	TOPOLOGY_TABLE_CHECK,    // verify mysql.rds_topology exists
-	TOPOLOGY_METADATA_FETCH  // table confirmed present; fetch and branch on its metadata
+/**
+* @brief State of the per-host RDS topology probe.
+*/
+enum RDS_BGD_Topology_Monitor_State {
+	TOPOLOGY_TABLE_CHECK,    ///< verify mysql.rds_topology exists
+	TOPOLOGY_METADATA_FETCH  ///< table confirmed present; fetch and branch on its metadata
 };
 
-void * monitor_RDS_thread_HG(void *arg) {
+void * monitor_RDS_BGD_thread_HG(void *arg) {
 	unsigned int wHG = *(unsigned int *)arg;
 	unsigned int rHG = 0;
 	unsigned int num_hosts = 0;
@@ -6485,11 +6557,13 @@ void * monitor_RDS_thread_HG(void *arg) {
 	unsigned int check_timeout_ms = 0;
 	int green_writer_hostgroup = -1;
 	int green_reader_hostgroup = -1;
-	set_thread_name("MonitorRDSHG", GloVars.set_thread_name);
+	set_thread_name("MonitorRdsBgdHG", GloVars.set_thread_name);
 	proxy_info("Started Monitor thread for AWS RDS writer HG %u\n", wHG);
 
 	// Wait for GloMTH to be initialized
-	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
+	if (!wait_for_glo_mth())
+		return NULL;
+
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime = monotonic_time();
@@ -6498,26 +6572,35 @@ void * monitor_RDS_thread_HG(void *arg) {
 
 	uint64_t initial_raw_checksum = 0;
 
-	// initial data load from the monitor resultset (columns: 0 writer_hostgroup,
-	// 1 reader_hostgroup, 2 hostname, 3 port, 4 use_ssl, 5 green_writer_hostgroup,
-	// 6 green_reader_hostgroup, 7 check_interval_ms, 8 check_timeout_ms,
-	// 9 autopurge_missing_checks, 10 domain_name)
-	pthread_mutex_lock(&GloMyMon->aws_rds_mutex);
-	initial_raw_checksum = GloMyMon->AWS_RDS_Hosts_resultset_checksum;
-	for (std::vector<SQLite3_row *>::iterator it = GloMyMon->AWS_RDS_Hosts_resultset->rows.begin() ; it != GloMyMon->AWS_RDS_Hosts_resultset->rows.end(); ++it) {
-		SQLite3_row *r=*it;
+	// initial data load from the monitor resultset
+	// Columns:
+	// 0 writer_hostgroup, 1 reader_hostgroup, 2 hostname, 3 port, 4 use_ssl,
+	// 5 green_writer_hostgroup, 6 green_reader_hostgroup, 7 check_interval_ms,
+	// 8 check_timeout_ms, 9 autopurge_missing_checks, 10 domain_name
+	pthread_mutex_lock(&GloMyMon->aws_rds_bgd_mutex);
+	initial_raw_checksum = GloMyMon->AWS_RDS_BGD_Hosts_resultset_checksum;
+	for (SQLite3_row *r : GloMyMon->AWS_RDS_BGD_Hosts_resultset->rows) {
 		if (atoi(r->fields[0]) == (int)wHG) {
 			num_hosts++;
-			if (rHG == 0) rHG = atoi(r->fields[1]);
-			if (green_writer_hostgroup < 0 && r->fields[5] && r->fields[5][0]) green_writer_hostgroup = atoi(r->fields[5]);
-			if (green_reader_hostgroup < 0 && r->fields[6] && r->fields[6][0]) green_reader_hostgroup = atoi(r->fields[6]);
-			if (check_interval_ms == 0) check_interval_ms = atoi(r->fields[7]);
-			if (check_timeout_ms == 0) check_timeout_ms = atoi(r->fields[8]);
+			if (rHG == 0) {
+				rHG = atoi(r->fields[1]);
+			}
+			if (green_writer_hostgroup < 0 && r->fields[5] && r->fields[5][0]) {
+				green_writer_hostgroup = atoi(r->fields[5]);
+			}
+			if (green_reader_hostgroup < 0 && r->fields[6] && r->fields[6][0]) {
+				green_reader_hostgroup = atoi(r->fields[6]);
+			}
+			if (check_interval_ms == 0) {
+				check_interval_ms = atoi(r->fields[7]);
+			}
+			if (check_timeout_ms == 0) {
+				check_timeout_ms = atoi(r->fields[8]);
+			}
 		}
 	}
 	host_def_t *hpa = (host_def_t *)malloc(sizeof(host_def_t)*(num_hosts ? num_hosts : 1));
-	for (std::vector<SQLite3_row *>::iterator it = GloMyMon->AWS_RDS_Hosts_resultset->rows.begin() ; it != GloMyMon->AWS_RDS_Hosts_resultset->rows.end(); ++it) {
-		SQLite3_row *r=*it;
+	for (SQLite3_row *r : GloMyMon->AWS_RDS_BGD_Hosts_resultset->rows) {
 		if (atoi(r->fields[0]) == (int)wHG) {
 			hpa[cur_host_idx].host = strdup(r->fields[2]);
 			hpa[cur_host_idx].port = atoi(r->fields[3]);
@@ -6525,8 +6608,10 @@ void * monitor_RDS_thread_HG(void *arg) {
 			cur_host_idx++;
 		}
 	}
-	if (num_hosts && cur_host_idx >= num_hosts) cur_host_idx = num_hosts - 1;
-	pthread_mutex_unlock(&GloMyMon->aws_rds_mutex);
+	if (num_hosts && cur_host_idx >= num_hosts) {
+		cur_host_idx = num_hosts - 1;
+	}
+	pthread_mutex_unlock(&GloMyMon->aws_rds_bgd_mutex);
 
 	bool exit_now = false;
 	unsigned long long t1 = 0;
@@ -6537,7 +6622,7 @@ void * monitor_RDS_thread_HG(void *arg) {
 	bool found_pingable_host = false;
 	bool rc_ping = false;
 	MySQL_Monitor_State_Data *mmsd = NULL;
-	RDS_Topology_Monitor_State topology_state = TOPOLOGY_TABLE_CHECK;
+	RDS_BGD_Topology_Monitor_State topology_state = TOPOLOGY_TABLE_CHECK;
 
 	t1 = monotonic_time();
 
@@ -6545,7 +6630,8 @@ void * monitor_RDS_thread_HG(void *arg) {
 		unsigned int glover;
 		t1 = monotonic_time();
 
-		if (!GloMTH) goto __exit_monitor_RDS_thread_HG_now;	// quick exit during shutdown/restart
+		if (!GloMTH)
+			goto __exit_monitor_RDS_BGD_thread_HG_now;
 
 		// if variables changed, refresh and force a new check
 		glover = GloMTH->get_global_version();
@@ -6556,9 +6642,9 @@ void * monitor_RDS_thread_HG(void *arg) {
 		}
 
 		// if the host list/definition changed, terminate so the dispatcher respawns
-		pthread_mutex_lock(&GloMyMon->aws_rds_mutex);
-		current_raw_checksum = GloMyMon->AWS_RDS_Hosts_resultset_checksum;
-		pthread_mutex_unlock(&GloMyMon->aws_rds_mutex);
+		pthread_mutex_lock(&GloMyMon->aws_rds_bgd_mutex);
+		current_raw_checksum = GloMyMon->AWS_RDS_BGD_Hosts_resultset_checksum;
+		pthread_mutex_unlock(&GloMyMon->aws_rds_bgd_mutex);
 		if (current_raw_checksum != initial_raw_checksum) {
 			exit_now = true;
 			break;
@@ -6572,7 +6658,9 @@ void * monitor_RDS_thread_HG(void *arg) {
 
 		if (t1 < next_loop_at) {
 			unsigned long long st = next_loop_at - t1;
-			if (st > 50000) st = 50000;
+			if (st > 50000) {
+				st = 50000;
+			}
 			usleep(st);
 			continue;
 		}
@@ -6586,7 +6674,9 @@ void * monitor_RDS_thread_HG(void *arg) {
 			found_pingable_host = true;
 			cur_host_idx = rnd;
 		} else {
-			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, wHG, hpa[rnd].host, hpa[rnd].port, ER_PROXYSQL_AWS_NO_PINGABLE_SRV);
+			MyHGM->p_update_mysql_error_counter(
+				p_mysql_error_type::proxysql, wHG, hpa[rnd].host, hpa[rnd].port, ER_PROXYSQL_AWS_NO_PINGABLE_SRV
+			);
 			shuffle_hosts(hpa, num_hosts);
 			for (unsigned int i=0; (found_pingable_host == false && i<num_hosts); i++) {
 				rc_ping = GloMyMon->server_responds_to_ping(hpa[i].host, hpa[i].port);
@@ -6594,7 +6684,9 @@ void * monitor_RDS_thread_HG(void *arg) {
 					found_pingable_host = true;
 					cur_host_idx = i;
 				} else {
-					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, wHG, hpa[i].host, hpa[i].port, ER_PROXYSQL_AWS_NO_PINGABLE_SRV);
+					MyHGM->p_update_mysql_error_counter(
+						p_mysql_error_type::proxysql, wHG, hpa[i].host, hpa[i].port, ER_PROXYSQL_AWS_NO_PINGABLE_SRV
+					);
 				}
 			}
 		}
@@ -6604,20 +6696,27 @@ void * monitor_RDS_thread_HG(void *arg) {
 			continue;
 		}
 
-		mmsd = new MySQL_Monitor_State_Data(MON_AWS_RDS, hpa[cur_host_idx].host, hpa[cur_host_idx].port, hpa[cur_host_idx].use_ssl);
+		mmsd = new MySQL_Monitor_State_Data(
+			MON_AWS_RDS_BGD, hpa[cur_host_idx].host, hpa[cur_host_idx].port, hpa[cur_host_idx].use_ssl
+		);
 		mmsd->writer_hostgroup = wHG;
-		mmsd->aws_aurora_check_timeout_ms = check_timeout_ms; // reuse the generic per-check timeout field
+		mmsd->aws_aurora_check_timeout_ms = check_timeout_ms;
 		mmsd->mysql = GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port, mmsd);
 		mmsd->t1 = t1;
 
 		crc = false;
 		if (mmsd->mysql == NULL) { // need a new connection
 			bool rc = mmsd->create_new_connection();
-			if (mmsd->mysql) GloMyMon->My_Conn_Pool->conn_register(mmsd);
+			if (mmsd->mysql) {
+				GloMyMon->My_Conn_Pool->conn_register(mmsd);
+			}
 			crc = true;
 			if (rc == false) {
 				proxy_error("Error on AWS RDS check for %s:%d. Unable to create a connection.\n", mmsd->hostname, mmsd->port);
-				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_AWS_HEALTH_CHECK_CONN_TIMEOUT);
+				MyHGM->p_update_mysql_error_counter(
+					p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port,
+					ER_PROXYSQL_AWS_HEALTH_CHECK_CONN_TIMEOUT
+				);
 				goto __end_of_loop;
 			}
 		}
@@ -6627,17 +6726,31 @@ void * monitor_RDS_thread_HG(void *arg) {
 			// we advance to TOPOLOGY_METADATA_FETCH and skip this check on subsequent
 			// iterations, until a fetch reports the table is gone.
 
-			int qrc = aws_rds_async_query(mmsd, "SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA='mysql' AND TABLE_NAME='rds_topology'");
-			if (qrc == 2) goto __exit_monitor_RDS_thread_HG_now;
+			int qrc = aws_rds_bgd_async_query(
+				mmsd,
+				"SELECT 1 FROM information_schema.TABLES"
+				" WHERE TABLE_SCHEMA='mysql' AND TABLE_NAME='rds_topology'"
+			);
+			if (qrc == 2) {
+				goto __exit_monitor_RDS_BGD_thread_HG_now;
+			}
 			if (qrc != 0) {
-				proxy_error("AWS RDS topology availability check failed for %s:%d : %s\n", mmsd->hostname, mmsd->port, mmsd->mysql_error_msg ? mmsd->mysql_error_msg : "unknown");
+				proxy_error(
+					"AWS RDS topology availability check failed for %s:%d : %s\n",
+					mmsd->hostname, mmsd->port, mmsd->mysql_error_msg ? mmsd->mysql_error_msg : "unknown"
+				);
 				goto __end_of_loop;
 			}
 			bool table_available = (mmsd->result && mysql_num_rows(mmsd->result) > 0);
-			if (mmsd->result) { mysql_free_result(mmsd->result); mmsd->result = NULL; }
+			if (mmsd->result) {
+				mysql_free_result(mmsd->result);
+				mmsd->result = NULL;
+			}
 			if (!table_available) {
 				// no blue/green deployment or multi-az cluster discovery in progress; nothing to do
-				proxy_debug(PROXY_DEBUG_MONITOR, 5, "mysql.rds_topology not present on %s:%d (RDS writer HG %u); skipping\n", mmsd->hostname, mmsd->port, wHG);
+				proxy_debug(PROXY_DEBUG_MONITOR, 5,
+					"mysql.rds_topology not present on %s:%d (RDS writer HG %u); skipping\n",
+					mmsd->hostname, mmsd->port, wHG);
 				goto __end_of_loop;
 			}
 			topology_state = TOPOLOGY_METADATA_FETCH;
@@ -6646,61 +6759,55 @@ void * monitor_RDS_thread_HG(void *arg) {
 			// differs by RDS type (the Multi-AZ Cluster topology table may not expose
 			// 'role'/'status' at all), so dump all columns and detect what is present.
 
-			int qrc = aws_rds_async_query(mmsd, "SELECT * FROM mysql.rds_topology");
-			if (qrc == 2) goto __exit_monitor_RDS_thread_HG_now;
+			int qrc = aws_rds_bgd_async_query(mmsd, QUERY_AWS_RDS_TOPOLOGY_DISCOVERY);
+			if (qrc == 2) {
+				goto __exit_monitor_RDS_BGD_thread_HG_now;
+			}
 			if (qrc != 0) {
 				unsigned int err = mmsd->mysql ? mysql_errno(mmsd->mysql) : 0;
 				if (err == 1146) {
 					// the table vanished (ER_NO_SUCH_TABLE), e.g. a blue/green deployment
 					// was cancelled: re-check its existence on the next iteration.
 					topology_state = TOPOLOGY_TABLE_CHECK;
-					proxy_debug(PROXY_DEBUG_MONITOR, 5, "mysql.rds_topology vanished on %s:%d (RDS writer HG %u); rechecking availability\n", mmsd->hostname, mmsd->port, wHG);
+					proxy_debug(PROXY_DEBUG_MONITOR, 5,
+						"mysql.rds_topology vanished on %s:%d (RDS writer HG %u); rechecking availability\n",
+						mmsd->hostname, mmsd->port, wHG);
 				} else {
-					proxy_error("AWS RDS topology fetch failed for %s:%d : %s\n", mmsd->hostname, mmsd->port, mmsd->mysql_error_msg ? mmsd->mysql_error_msg : "unknown");
+					proxy_error(
+						"AWS RDS topology fetch failed for %s:%d : %s\n",
+						mmsd->hostname, mmsd->port, mmsd->mysql_error_msg ? mmsd->mysql_error_msg : "unknown"
+					);
 				}
 				goto __end_of_loop;
 			}
 
-			// locate the 'role' and 'status' columns by name; they may be absent
-			unsigned int num_rows = mmsd->result ? (unsigned int)mysql_num_rows(mmsd->result) : 0;
-			int role_idx = -1, status_idx = -1;
+			// the BGD thread only monitors blue/green hostgroups; parse the topology
+			// (shared with the read_only path) and hand the struct to the handler.
+			if (mmsd->result && mysql_num_rows(mmsd->result) > 0) {
+				AWS_RDS_Topology_Result topo = GloMyMon->parse_aws_rds_topology(mmsd->result);
+				GloMyMon->handle_aws_rds_bgd(wHG, rHG, green_writer_hostgroup, green_reader_hostgroup, topo);
+			}
 			if (mmsd->result) {
-				unsigned int num_fields = mysql_num_fields(mmsd->result);
-				MYSQL_FIELD *fields = mysql_fetch_fields(mmsd->result);
-				for (unsigned int i=0; i<num_fields; i++) {
-					if (fields[i].name == NULL) continue;
-					if (strcasecmp(fields[i].name, "role") == 0) role_idx = (int)i;
-					else if (strcasecmp(fields[i].name, "status") == 0) status_idx = (int)i;
-				}
+				mysql_free_result(mmsd->result);
+				mmsd->result = NULL;
 			}
-
-			// branch by topology shape:
-			//  - Single-AZ / Multi-AZ Instance: 'role'/'status' present and non-NULL
-			//  - Multi-AZ Cluster: 'role'/'status' absent (or present but NULL)
-			bool instance_topology = false;
-			if (num_rows && role_idx >= 0 && status_idx >= 0) {
-				MYSQL_ROW row = mysql_fetch_row(mmsd->result);
-				if (row && row[role_idx] != NULL && row[status_idx] != NULL) instance_topology = true;
-				mysql_data_seek(mmsd->result, 0); // rewind for the handlers
-			}
-			if (num_rows > 0 && instance_topology) {
-				GloMyMon->rds_monitor_handle_instance_topology(wHG, rHG, green_writer_hostgroup, green_reader_hostgroup, mmsd->result);
-			} else if (num_rows > 0) {
-				GloMyMon->rds_monitor_handle_cluster_topology(wHG, rHG, mmsd->result);
-			}
-			if (mmsd->result) { mysql_free_result(mmsd->result); mmsd->result = NULL; }
 		}
 
 __end_of_loop:
 		mmsd->t2 = monotonic_time();
 		next_loop_at = t1 + (check_interval_ms * 1000);
-		if (mmsd->t2 > t1) next_loop_at -= (mmsd->t2 - t1);
+		if (mmsd->t2 > t1) {
+			next_loop_at -= (mmsd->t2 - t1);
+		}
 		if (mmsd->mysql) {
 			if (mmsd->mysql_error_msg) {
 				GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 			} else if (crc) {
-				if (mmsd->set_wait_timeout()) GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
-				else GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
+				if (mmsd->set_wait_timeout()) {
+					GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
+				} else {
+					GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
+				}
 			} else {
 				GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
 			}
@@ -6709,45 +6816,53 @@ __end_of_loop:
 		mmsd = NULL;
 	}
 
-__exit_monitor_RDS_thread_HG_now:
-	if (mmsd) { delete mmsd; mmsd = NULL; }
+__exit_monitor_RDS_BGD_thread_HG_now:
+	if (mmsd) {
+		delete mmsd;
+		mmsd = NULL;
+	}
 	for (unsigned int i=0; i<num_hosts; i++) {
 		free(hpa[i].host);
 	}
 	free(hpa);
-	if (mysql_thr) { delete mysql_thr; mysql_thr = NULL; }
+	if (mysql_thr) {
+		delete mysql_thr;
+		mysql_thr = NULL;
+	}
 	proxy_info("Stopping Monitor thread for AWS RDS writer HG %u\n", wHG);
 	return NULL;
 }
 
-// Invoked when a Single-AZ / Multi-AZ Instance topology is detected on mysql.rds_topology.
-// Handles blue-green deployment switch over
-void MySQL_Monitor::rds_monitor_handle_instance_topology(unsigned int writer_hostgroup, unsigned int reader_hostgroup, int green_writer_hostgroup, int green_reader_hostgroup, MYSQL_RES* result) {
-	(void)result;
-	proxy_debug(PROXY_DEBUG_MONITOR, 5, "AWS RDS: Single/Multi-AZ Instance topology detected for writer HG %u (reader HG %u, green w/r HG %d/%d); no action taken\n",
-		writer_hostgroup, reader_hostgroup, green_writer_hostgroup, green_reader_hostgroup);
+/**
+* @brief Handle a blue/green deployment topology fetched by the BGD thread.
+*
+* @param whg       Writer hostgroup (blue/current writer).
+* @param rhg       Reader hostgroup (blue/current readers).
+* @param green_whg Configured green writer hostgroup, or -1 if unset.
+* @param green_rhg Configured green reader hostgroup, or -1 if unset.
+* @param topology  Parsed mysql.rds_topology result.
+*/
+void MySQL_Monitor::handle_aws_rds_bgd(unsigned int whg, unsigned int rhg, int green_whg, int green_rhg, const AWS_RDS_Topology_Result& topology) {
+	proxy_debug(PROXY_DEBUG_MONITOR, 5,
+		"AWS RDS BGD: blue/green topology fetched for writer HG %u (reader HG %u, green w/r HG %d/%d),"
+		" %zu nodes; no action taken\n",
+		whg, rhg, green_whg, green_rhg, topology.nodes.size());
 
 	// TODO: Complete this
 }
 
-// Invoked when a Multi-AZ Cluster topology is detected on mysql.rds_topology.
-// Handles auto-discovery and failover
-void MySQL_Monitor::rds_monitor_handle_cluster_topology(unsigned int writer_hostgroup, unsigned int reader_hostgroup, MYSQL_RES* result) {
-	(void)result;
-	proxy_debug(PROXY_DEBUG_MONITOR, 5, "AWS RDS: Multi-AZ Cluster topology detected for writer HG %u (reader HG %u); no action taken\n",
-		writer_hostgroup, reader_hostgroup);
-
-	// TODO: Complete this
-}
-
-// AWS RDS monitor thread entry point.
-// Spawns one worker (monitor_RDS_thread_HG) per writer hostgroup; each worker
-// picks a pingable host, probes 'mysql.rds_topology' (existence, then metadata)
-// and dispatches to a handler based on the detected topology shape. Workers are
-// (re)spawned whenever the AWS_RDS_Hosts_resultset checksum changes.
-void * MySQL_Monitor::monitor_aws_rds() {
+/**
+* @brief AWS RDS BGD monitor thread entry point.
+*
+* @details Spawns one worker (monitor_RDS_BGD_thread_HG) per writer hostgroup; each worker picks a pingable host,
+*   probes 'mysql.rds_topology' and dispatches to a handler based on the detected topology shape.
+*   Workers are (re)spawned whenever the AWS_RDS_BGD_Hosts_resultset checksum changes.
+*/
+void * MySQL_Monitor::monitor_aws_rds_bgd() {
 	// Wait for GloMTH to be initialized
-	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
+	if (!wait_for_glo_mth())
+		return NULL;
+
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime = monotonic_time();
@@ -6761,7 +6876,8 @@ void * MySQL_Monitor::monitor_aws_rds() {
 
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
 		unsigned int glover;
-		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+		if (!GloMTH)
+			return NULL;
 
 		glover = GloMTH->get_global_version();
 		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover) {
@@ -6770,9 +6886,9 @@ void * MySQL_Monitor::monitor_aws_rds() {
 		}
 
 		// respawn the per-writer-HG workers when the host list/definition changes
-		pthread_mutex_lock(&aws_rds_mutex);
-		uint64_t new_raw_checksum = AWS_RDS_Hosts_resultset->raw_checksum();
-		pthread_mutex_unlock(&aws_rds_mutex);
+		pthread_mutex_lock(&aws_rds_bgd_mutex);
+		uint64_t new_raw_checksum = AWS_RDS_BGD_Hosts_resultset->raw_checksum();
+		pthread_mutex_unlock(&aws_rds_bgd_mutex);
 		if (new_raw_checksum != last_raw_checksum) {
 			proxy_info("Detected new/changed definition for AWS RDS monitoring\n");
 			last_raw_checksum = new_raw_checksum;
@@ -6786,17 +6902,19 @@ void * MySQL_Monitor::monitor_aws_rds() {
 				pthreads_array = NULL;
 				hgs_array = NULL;
 			}
+
 			hgs_num = 0;
-			pthread_mutex_lock(&aws_rds_mutex);
-			unsigned int num_rows = AWS_RDS_Hosts_resultset->rows_count;
+			pthread_mutex_lock(&aws_rds_bgd_mutex);
+			unsigned int num_rows = AWS_RDS_BGD_Hosts_resultset->rows_count;
 			if (num_rows) {
 				unsigned int *tmp_hgs_array = (unsigned int *)malloc(sizeof(unsigned int)*num_rows);
-				for (std::vector<SQLite3_row *>::iterator it = AWS_RDS_Hosts_resultset->rows.begin() ; it != AWS_RDS_Hosts_resultset->rows.end(); ++it) {
-					SQLite3_row *r=*it;
+				for (SQLite3_row *r : AWS_RDS_BGD_Hosts_resultset->rows) {
 					int wHG = atoi(r->fields[0]);
 					bool found = false;
 					for (unsigned int i=0; i < hgs_num; i++) {
-						if (tmp_hgs_array[i] == (unsigned int)wHG) found = true;
+						if (tmp_hgs_array[i] == (unsigned int)wHG) {
+							found = true;
+						}
 					}
 					if (found == false) {
 						tmp_hgs_array[hgs_num] = wHG;
@@ -6809,7 +6927,7 @@ void * MySQL_Monitor::monitor_aws_rds() {
 				for (unsigned int i=0; i < hgs_num; i++) {
 					hgs_array[i] = tmp_hgs_array[i];
 					proxy_info("Starting Monitor thread for AWS RDS writer HG %u\n", hgs_array[i]);
-					if (pthread_create(&pthreads_array[i], NULL, monitor_RDS_thread_HG, &hgs_array[i]) != 0) {
+					if (pthread_create(&pthreads_array[i], NULL, monitor_RDS_BGD_thread_HG, &hgs_array[i]) != 0) {
 						// LCOV_EXCL_START
 						proxy_error("Thread creation\n");
 						assert(0);
@@ -6818,7 +6936,7 @@ void * MySQL_Monitor::monitor_aws_rds() {
 				}
 				free(tmp_hgs_array);
 			}
-			pthread_mutex_unlock(&aws_rds_mutex);
+			pthread_mutex_unlock(&aws_rds_bgd_mutex);
 		}
 
 		usleep(10000);
@@ -7790,6 +7908,42 @@ bool MySQL_Monitor::monitor_read_only_process_ready_tasks(const std::vector<MySQ
 
 		assert(task_result != MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_PENDING);
 
+		// AWS RDS blue/green topology discovery is a standalone task: it does not
+		// write a read_only log entry. Classify the result and move on.
+		if (mmsd->get_task_type() == MON_AWS_RDS_TOPOLOGY_DISCOVERY) {
+			if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS) {
+				__sync_fetch_and_add(&read_only_check_OK, 1);
+				if (mmsd->interr == 0 && mmsd->result) {
+					process_aws_rds_topology(mmsd);
+				}
+				if (mmsd->result) {
+					mysql_free_result(mmsd->result);
+					mmsd->result = NULL;
+				}
+				My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
+			} else {
+				__sync_fetch_and_add(&read_only_check_ERR, 1);
+				unsigned int err = mmsd->mysql ? mysql_errno(mmsd->mysql) : 0;
+				if (err == 1146) {
+					// mysql.rds_topology absent (no active blue/green deployment); expected, skip quietly
+					proxy_debug(PROXY_DEBUG_MONITOR, 5,
+						"mysql.rds_topology not present on %s:%d; skipping blue/green discovery\n",
+						mmsd->hostname, mmsd->port);
+				} else {
+					MyHGM->p_update_mysql_error_counter(
+						p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port,
+						err ? err : ER_PROXYSQL_READ_ONLY_CHECK_TIMEOUT
+					);
+					proxy_error(
+						"Error on AWS RDS blue/green topology discovery for %s:%d : %s\n",
+						mmsd->hostname, mmsd->port, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : "")
+					);
+				}
+				My_Conn_Pool->destroy_mysql_connection(mmsd);
+			}
+			continue;
+		}
+
 		if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS) {
 			__sync_fetch_and_add(&read_only_check_OK, 1);
 			My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
@@ -7852,38 +8006,6 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 				}
 
 				rc = (*proxy_sqlite3_bind_int64)(statement, 5, read_only); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-			} else if (fields && mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY) {
-				// Process the read_only field as above and store the first server
-				vector<MYSQL_ROW> discovered_servers;
-				for (k = 0; k < num_fields; k++) {
-					if (strcmp((char*)"read_only", (char*)fields[k].name) == 0) {
-						j = k;
-					}
-				}
-				if (j > -1) {
-					MYSQL_ROW row = mysql_fetch_row(mmsd->result);
-					if (row) {
-						discovered_servers.push_back(row);
-VALGRIND_DISABLE_ERROR_REPORTING;
-						if (row[j]) {
-							if (!strcmp(row[j], "0") || !strcasecmp(row[j], "OFF"))
-								read_only = 0;
-						}
-VALGRIND_ENABLE_ERROR_REPORTING;
-					}
-				}
-
-				// Store the remaining servers
-				int num_rows = mysql_num_rows(mmsd->result);
-				for (int i = 1; i < num_rows; i++) {
-					MYSQL_ROW row = mysql_fetch_row(mmsd->result);
-					discovered_servers.push_back(row);
-				}
-
-				// Process the discovered servers and add them to 'runtime_mysql_servers' (process only for AWS RDS Multi-AZ DB Clusters)
-				if (!discovered_servers.empty() && is_aws_rds_multi_az_db_cluster_topology(discovered_servers)) {
-					process_discovered_topology(originating_server_hostname, discovered_servers, mmsd->reader_hostgroup);
-				}
 			} else {
 				proxy_error("mysql_fetch_fields returns NULL, or mysql_num_fields is incorrect. Server %s:%d . See bug #1994\n", mmsd->hostname, mmsd->port);
 				rc = (*proxy_sqlite3_bind_null)(statement, 5); ASSERT_SQLITE_OK(rc, mmsd->mondb);
@@ -7967,11 +8089,6 @@ void MySQL_Monitor::monitor_read_only_async(SQLite3_result* resultset, bool do_d
 					task_type = MON_READ_ONLY__OR__INNODB_READ_ONLY;
 				}
 
-				// Change task type if it's time to do discovery check. Only for aws rds endpoints
-				string hostname = r->fields[0];
-				if (do_discovery_check && hostname.find(AWS_ENDPOINT_SUFFIX_STRING) != std::string::npos) {
-					task_type = MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY;
-				}
 			}
 
 			std::unique_ptr<MySQL_Monitor_State_Data> mmsd(
@@ -7986,9 +8103,28 @@ void MySQL_Monitor::monitor_read_only_async(SQLite3_result* resultset, bool do_d
 				monitor_poll.add((POLLIN|POLLOUT|POLLPRI), mmsd.get());
 				mmsds.push_back(std::move(mmsd));
 			} else {
-				WorkItem<MySQL_Monitor_State_Data>* item = 
+				WorkItem<MySQL_Monitor_State_Data>* item =
 					new WorkItem<MySQL_Monitor_State_Data>(mmsd.release(), monitor_read_only_thread);
 				queue->add(item);
+			}
+
+			// On discovery cycles, enqueue an additional standalone topology-discovery
+			// task for AWS RDS endpoints. The read_only check above is unaffected.
+			string hostname = r->fields[0];
+			if (do_discovery_check && hostname.find(AWS_ENDPOINT_SUFFIX_STRING) != std::string::npos) {
+				std::unique_ptr<MySQL_Monitor_State_Data> tmmsd(
+					new MySQL_Monitor_State_Data(MON_AWS_RDS_TOPOLOGY_DISCOVERY, r->fields[0], atoi(r->fields[1]), atoi(r->fields[2])));
+				tmmsd->reader_hostgroup = atoi(r->fields[4]);
+				tmmsd->mondb = monitordb;
+				tmmsd->mysql = My_Conn_Pool->get_connection(tmmsd->hostname, tmmsd->port, tmmsd.get());
+				if (tmmsd->mysql) {
+					monitor_poll.add((POLLIN|POLLOUT|POLLPRI), tmmsd.get());
+					mmsds.push_back(std::move(tmmsd));
+				} else {
+					WorkItem<MySQL_Monitor_State_Data>* item =
+						new WorkItem<MySQL_Monitor_State_Data>(tmmsd.release(), monitor_read_only_thread);
+					queue->add(item);
+				}
 			}
 		}
 
