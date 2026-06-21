@@ -21,6 +21,7 @@
 #include <string>
 #include <tuple>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "thread.h"
@@ -84,9 +85,28 @@ public:
 	bool empty() const;
 	std::string lookup(const std::string& hostname, size_t* ip_count) const;
 
+	/**
+	* @brief Pin a hostname to a fixed set of IPs that override resolution until unpin().
+	*
+	* @param hostname Hostname whose resolution is overridden.
+	* @param ips      IP addresses to serve for 'hostname' (moved into the cache).
+	*/
+	void pin(const std::string& hostname, std::vector<std::string>&& ips);
+
+	/**
+	* @brief Remove a pin set by pin(), restoring normal resolution (no-op if not pinned).
+	*
+	* @param hostname Hostname to unpin.
+	*/
+	void unpin(const std::string& hostname);
+
 private:
 	struct IP_ADDR {
 		std::vector<std::string> ips;
+		// Pinned override: when non-empty, get_next_ip()/lookup() serve these
+		// instead of 'ips'. Set by pin(), cleared by unpin(); untouched by add(),
+		// so it is preserved across resolver-thread TTL refreshes.
+		std::vector<std::string> pinned_ips;
 		// 'counter' is bumped by get_next_ip() (a const method) for
 		// round-robin selection; the logical state of the cache record is
 		// unchanged, so mutable is the right tool here and lets us drop a
@@ -94,7 +114,15 @@ private:
 		mutable unsigned long counter = 0;
 	};
 
-	std::string get_next_ip(const IP_ADDR& ip_addr) const;
+	/**
+	* @brief Next round-robin IP for 'ip_addr' and the size of the served set.
+	*
+	* @param ip_addr Cache record to select from.
+	*
+	* @return { ip, set_size }, or { "", 0 } when the set is empty.
+	*/
+	std::pair<std::string, size_t> get_next_ip(const IP_ADDR& ip_addr) const;
+
 	std::unordered_map<std::string, IP_ADDR> records;
 	std::atomic_bool enabled;
 	mutable pthread_rwlock_t rwlock_;
@@ -153,6 +181,16 @@ bool validate_ip(const std::string& ip);
 // Return the IP address of the peer connected to 'socket_fd', or "" on
 // failure / non-IP families.
 std::string get_connected_peer_ip_from_socket(int socket_fd);
+
+/**
+* @brief Resolve a hostname to its IP(s) via getaddrinfo.
+*
+* @param hostname  Hostname to resolve.
+* @param ai_family Address family for getaddrinfo (an AF_* value; AF_UNSPEC for OS default).
+*
+* @return The resolved IPs, or an empty vector on failure.
+*/
+std::vector<std::string> dns_resolve(const std::string& hostname, int ai_family);
 
 // Helper: stringify a list of IPs for debug logging.  Defined inline because
 // it's templated over the iterable type used by the various call sites.
