@@ -3834,7 +3834,7 @@ void MySQL_HostGroups_Manager::set_Readyset_status(char *hostname, int port, enu
 	wrunlock();
 }
 
-void MySQL_HostGroups_Manager::set_server_shun(char *hostname, int port, bool shun, bool auto_recover) {
+void MySQL_HostGroups_Manager::set_server_shun(const char *hostname, int port, bool shun, bool auto_recover) {
 	wrlock();
 
 	MySrvC *mysrvc = NULL;

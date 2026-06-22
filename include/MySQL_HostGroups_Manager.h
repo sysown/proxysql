@@ -1062,7 +1062,7 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	* @param shun         true to shun the server, false to release it.
 	* @param auto_recover When shunning, whether the server is eligible for auto-recovery; ignored on release.
 	*/
-	void set_server_shun(char *hostname, int port, bool shun, bool auto_recover);
+	void set_server_shun(const char *hostname, int port, bool shun, bool auto_recover);
 	unsigned long long Get_Memory_Stats();
 
 	void add_discovered_servers_to_mysql_servers_and_replication_hostgroups(const vector<tuple<string, int, int>>& new_servers);

@@ -408,6 +408,60 @@ struct AWS_RDS_Topology_Result {
 	std::vector<AWS_RDS_Topology_Node> nodes;
 };
 
+/**
+ * @brief Per-deployment switchover state carried by one RDS BGD worker thread.
+ *
+ * @details One worker (monitor_RDS_BGD_thread_HG) owns one writer hostgroup ==
+ *   one blue/green deployment, so this struct lives on the worker's stack and is
+ *   single-owner (no locking on the struct itself). It is passed by reference to
+ *   handle_aws_rds_bgd, which runs the status-driven switchover FSM and mutates it
+ *   across poll cycles. Config-derived fields are loaded once from the resultset;
+ *   the rest carries topology, resolved IPs, and one-shot enforcement bookkeeping.
+ */
+struct AWS_RDS_BGD_State {
+	unsigned int writer_hg = 0;               ///< blue/current writer hostgroup
+	unsigned int reader_hg = 0;               ///< blue/current reader hostgroup
+	int green_writer_hg = -1;                 ///< -1 when NULL (auto-discovery path)
+	int green_reader_hg = -1;                 ///< -1 when NULL
+
+	/// One blue host and its name-matched green counterpart.
+	struct BlueGreenPair {
+		std::string blue_host;                ///< blue host (from writer/reader HG)
+		std::string green_host;               ///< matched green host (-green-<random>)
+		int port = 0;                         ///< shared blue/green port (HGM keys on host+port)
+		int64_t blue_weight = 1;              ///< blue server's connection settings, mirrored onto green when added
+		int64_t blue_max_conns = 1000;
+		int32_t blue_use_ssl = 0;
+		std::string green_ip;                 ///< green host IP, resolved at SWITCHOVER_INITIATED and held warm
+		unsigned long long green_ip_ttl = 0;  ///< expiry of a green_ip if it is resolved by BGD thread; 0 => DNS_Cache-sourced
+		bool is_writer = false;               ///< true => maps the blue writer
+	};
+	std::vector<BlueGreenPair> bg_map;        ///< [writer] always; [readers] only when green_reader_hg is configured
+	std::vector<std::pair<std::string, int>> shunned_readers;  ///< (host,port) we shunned
+	std::string last_status;                  ///< status from the previous poll, to act only when it changes
+
+	bool writer_is_also_reader_enforced = false;  ///< whether POST_PROCESSING added the writer to the reader HG
+
+	unsigned int next_check_interval_ms = 0;    ///< FSM-controlled interval; 0 => baseline
+};
+
+/**
+* @brief State of the per-host RDS topology probe.
+*/
+enum RDS_BGD_Topology_Monitor_State {
+	TOPOLOGY_TABLE_CHECK,    ///< verify mysql.rds_topology exists
+	TOPOLOGY_METADATA_FETCH  ///< table confirmed present; fetch and branch on its metadata
+};
+
+// AWS RDS blue/green role and switchover-status column values (mysql.rds_topology).
+inline const char* const BGD_ROLE_SOURCE         = "BLUE_GREEN_DEPLOYMENT_SOURCE";  // blue
+inline const char* const BGD_ROLE_TARGET         = "BLUE_GREEN_DEPLOYMENT_TARGET";  // green
+inline const char* const BGD_STATUS_AVAILABLE    = "AVAILABLE";
+inline const char* const BGD_STATUS_INITIATED    = "SWITCHOVER_INITIATED";
+inline const char* const BGD_STATUS_IN_PROGRESS  = "SWITCHOVER_IN_PROGRESS";
+inline const char* const BGD_STATUS_POST_PROC    = "SWITCHOVER_IN_POST_PROCESSING";
+inline const char* const BGD_STATUS_COMPLETED    = "SWITCHOVER_COMPLETED";
+
 
 class MySQL_Monitor {
 	public:
@@ -525,18 +579,20 @@ class MySQL_Monitor {
 	*/
 	void * monitor_aws_rds_bgd();
 	/**
-	* @brief Handle a blue/green deployment topology fetched by the BGD thread.
+	* @brief Run the status-driven blue/green switchover FSM for one deployment.
 	*
-	* @details Invoked when the BGD thread fetches a blue/green deployment topology from
-	*   mysql.rds_topology; performs the blue/green switchover.
+	* @details Invoked each poll cycle by the BGD worker after it fetches the
+	*   mysql.rds_topology result. Dispatches on the deployment's switchover status
+	*   (AVAILABLE -> SWITCHOVER_INITIATED -> IN_PROGRESS -> IN_POST_PROCESSING ->
+	*   COMPLETED): builds the blue<->green map, pre-resolves green IPs, repoints the
+	*   blue hostnames onto the green IPs in the DNS cache, drains blue free
+	*   connections, and shuns/enforces reader handling. State carried across cycles
+	*   lives in @p st.
 	*
-	* @param whg       Writer hostgroup (blue/current writer).
-	* @param rhg       Reader hostgroup (blue/current readers).
-	* @param green_whg Configured green writer hostgroup, or -1 if unset.
-	* @param green_rhg Configured green reader hostgroup, or -1 if unset.
-	* @param topology  Parsed mysql.rds_topology result.
+	* @param st        Per-deployment switchover state (worker-owned, mutated here).
+	* @param topology  Parsed mysql.rds_topology result for this cycle.
 	*/
-	void handle_aws_rds_bgd(unsigned int whg, unsigned int rhg, int green_whg, int green_rhg, const AWS_RDS_Topology_Result& topology);
+	void handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topology_Result& topology);
 	void * monitor_replication_lag();
 	void * monitor_dns_cache();
 	void * run();
