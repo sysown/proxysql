@@ -1892,8 +1892,17 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 	}
 	if (mmsd->interr || mmsd->mysql_error_msg) { // check failed
 		if (mmsd->mysql) {
-			proxy_error("Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
-			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
+			// AWS RDS topology discovery probes every replication-hostgroup member, but
+			// mysql.rds_topology exists only where a blue/green deployment is active.
+			// Treat ER_NO_SUCH_TABLE (1146) as "no topology here" and skip quietly.
+			if (mmsd->get_task_type() == MON_AWS_RDS_TOPOLOGY_DISCOVERY && mysql_errno(mmsd->mysql) == 1146) {
+				proxy_debug(PROXY_DEBUG_MONITOR, 5,
+					"mysql.rds_topology not present on %s:%d; skipping blue/green discovery\n",
+					mmsd->hostname, mmsd->port);
+			} else {
+				proxy_error("Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
+			}
 			GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 		}
 	} else {
