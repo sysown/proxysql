@@ -2167,7 +2167,7 @@ bool MySQL_Connection::IsServerOffline() {
 	if (
 		(server_status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the server is OFFLINE as specific by the user
 		||
-		(server_status==MYSQL_SERVER_STATUS_SHUNNED && parent->shunned_automatic==true && parent->shunned_and_kill_all_connections==true) // the server is SHUNNED due to a serious issue
+		(server_status==MYSQL_SERVER_STATUS_SHUNNED && parent->shunned_and_kill_all_connections==true) // the server is SHUNNED due to a serious issue
 		||
 		(server_status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG)  // slave is lagging! see #774
 		||
@@ -3034,7 +3034,7 @@ int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigne
 	if (
 		(parent->get_status()==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the server is OFFLINE as specific by the user
 		||
-		(parent->get_status()==MYSQL_SERVER_STATUS_SHUNNED && parent->shunned_automatic==true && parent->shunned_and_kill_all_connections==true) // the server is SHUNNED due to a serious issue
+		(parent->get_status()==MYSQL_SERVER_STATUS_SHUNNED && parent->shunned_and_kill_all_connections==true) // the server is SHUNNED due to a serious issue
 	) {
 		return -1;
 	}

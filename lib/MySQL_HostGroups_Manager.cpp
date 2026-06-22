@@ -3834,6 +3834,49 @@ void MySQL_HostGroups_Manager::set_Readyset_status(char *hostname, int port, enu
 	wrunlock();
 }
 
+void MySQL_HostGroups_Manager::set_server_shun(char *hostname, int port, bool shun, bool auto_recover) {
+	wrlock();
+
+	MySrvC *mysrvc = NULL;
+
+	for (unsigned int i = 0; i < MyHostGroups->len; i++) {
+		MyHGC *myhgc = (MyHGC *)MyHostGroups->index(i);
+		unsigned int l = myhgc->mysrvs->cnt();
+
+		for (unsigned int j = 0; j < l; j++) {
+			mysrvc = myhgc->mysrvs->idx(j);
+
+			if (mysrvc->port == port && strcmp(mysrvc->address,hostname) == 0) {
+				if (shun) {
+					if (mysrvc->get_status() == MYSQL_SERVER_STATUS_ONLINE) {
+						mysrvc->set_status(MYSQL_SERVER_STATUS_SHUNNED);
+					}
+					// 'shunned_automatic' is the auto-recovery guard: the shun recovery path
+					// (MyHGC::get_random_MySrvC) only brings back servers that have it set.
+					// Passing auto_recover=false holds the shun until an explicit unshun.
+					mysrvc->shunned_automatic = auto_recover;
+					mysrvc->shunned_and_kill_all_connections = true;
+					// TODO: Check if last_detected_error should be set to a time in future,
+					//       similar to MySQL_HostGroups_Manager::shun_and_killall()
+					mysrvc->time_last_detected_error = time(NULL);
+					mysrvc->ConnectionsFree->drop_all_connections();
+					proxy_warning("Shunning server %s:%d in HG %u with auto-recovery %s\n",
+						hostname, port, myhgc->hid, (auto_recover) ? "enabled" : "disabled");
+				} else {
+					// We don't unshun directly. Keep the server SHUNNED (with kill_all_connections set)
+					// and only enable auto-recovery; the shun recovery path (MyHGC::get_random_MySrvC)
+					// then brings it back online once all its old connections have drained.
+					// The actual unshunning work is done by MySQL_HostGroups_Manager::unshun_server_all_hostgroups
+					mysrvc->shunned_automatic = true;
+					proxy_warning("Enabling shun recovery for server %s:%d in HG %u\n", hostname, port, myhgc->hid);
+				}
+			}
+		}
+	}
+
+	wrunlock();
+}
+
 void MySQL_HostGroups_Manager::p_update_metrics() {
 	p_update_counter(status.p_counter_array[p_hg_counter::servers_table_version], status.servers_table_version);
 	// Update *server_connections* related metrics

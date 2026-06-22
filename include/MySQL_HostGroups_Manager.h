@@ -214,6 +214,9 @@ class MySrvC {	// MySQL Server Container
 	unsigned long long queries_gtid_sync;
 	unsigned long long bytes_sent;
 	unsigned long long bytes_recv;
+	// shunned_automatic acts as a guard for server auto-recovery. When true, the shun recovery path
+	// (MyHGC::get_random_MySrvC) brings the server back online after shun_recovery_time; when false,
+	// the shun is held until an explicit unshun.
 	bool shunned_automatic;
 	bool shunned_and_kill_all_connections; // if a serious failure is detected, this will cause all connections to die even if the server is just shunned
 	int32_t use_ssl;
@@ -1046,6 +1049,20 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	bool shun_and_killall(char *hostname, int port);
 	void set_server_current_latency_us(char *hostname, int port, unsigned int _current_latency_us);
 	void set_Readyset_status(char *hostname, int port, enum MySerStatus status);
+	/**
+	* @brief Shun or release a server across all hostgroups.
+	*
+	* @details Shunning sets shunned_and_kill_all_connections and takes 'shunned_automatic' from
+	*   auto_recover (false = held until released; true = enables shun recovery). Releasing does
+	*   NOT unshun directly: it only enables shun recovery (shunned_automatic=true) and leaves the
+	*   actual unshun to the shun recovery path (MyHGC::get_random_MySrvC).
+	*
+	* @param hostname     Address of the server to match.
+	* @param port         Port of the server to match.
+	* @param shun         true to shun the server, false to release it.
+	* @param auto_recover When shunning, whether the server is eligible for auto-recovery; ignored on release.
+	*/
+	void set_server_shun(char *hostname, int port, bool shun, bool auto_recover);
 	unsigned long long Get_Memory_Stats();
 
 	void add_discovered_servers_to_mysql_servers_and_replication_hostgroups(const vector<tuple<string, int, int>>& new_servers);
