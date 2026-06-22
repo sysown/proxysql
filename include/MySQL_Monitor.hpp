@@ -440,9 +440,12 @@ struct AWS_RDS_BGD_State {
 	std::vector<std::pair<std::string, int>> shunned_readers;  ///< (host,port) we shunned
 	std::string last_status;                  ///< status from the previous poll, to act only when it changes
 
+	bool green_writer_added_in_hg = false;        ///< whether green writer added to green_writer_hg
 	bool writer_is_also_reader_enforced = false;  ///< whether POST_PROCESSING added the writer to the reader HG
 
 	unsigned int next_check_interval_ms = 0;    ///< FSM-controlled interval; 0 => baseline
+	std::string next_check_host;                ///< FSM-pinned probe host; when set (the green IP), the worker
+	                                            ///< polls it directly instead of selecting among the blue hosts
 };
 
 /**

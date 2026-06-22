@@ -6667,39 +6667,53 @@ void * monitor_RDS_BGD_thread_HG(void *arg) {
 			continue;
 		}
 
-		// pick a pingable host: random first, then shuffle and scan
-		found_pingable_host = false;
-		rnd = (size_t) rand();
-		rnd %= num_hosts;
-		rc_ping = GloMyMon->server_responds_to_ping(hpa[rnd].host, hpa[rnd].port);
-		if (rc_ping) {
-			found_pingable_host = true;
-			cur_host_idx = rnd;
+		// Determine the host to probe. If the FSM pinned a host (the green IP, during a
+		// switchover), poll it directly and skip ping/random selection; otherwise pick a
+		// pingable host (random first, then shuffle and scan).
+		const char* poll_host;
+		int poll_port;
+		bool poll_use_ssl;
+		if (!st.next_check_host.empty()) {
+			poll_host = st.next_check_host.c_str();
+			poll_port = hpa[0].port;          // port/use_ssl are uniform across the deployment
+			poll_use_ssl = hpa[0].use_ssl;
 		} else {
-			MyHGM->p_update_mysql_error_counter(
-				p_mysql_error_type::proxysql, wHG, hpa[rnd].host, hpa[rnd].port, ER_PROXYSQL_AWS_NO_PINGABLE_SRV
-			);
-			shuffle_hosts(hpa, num_hosts);
-			for (unsigned int i=0; (found_pingable_host == false && i<num_hosts); i++) {
-				rc_ping = GloMyMon->server_responds_to_ping(hpa[i].host, hpa[i].port);
-				if (rc_ping) {
-					found_pingable_host = true;
-					cur_host_idx = i;
-				} else {
-					MyHGM->p_update_mysql_error_counter(
-						p_mysql_error_type::proxysql, wHG, hpa[i].host, hpa[i].port, ER_PROXYSQL_AWS_NO_PINGABLE_SRV
-					);
+			found_pingable_host = false;
+			rnd = (size_t) rand();
+			rnd %= num_hosts;
+			rc_ping = GloMyMon->server_responds_to_ping(hpa[rnd].host, hpa[rnd].port);
+			if (rc_ping) {
+				found_pingable_host = true;
+				cur_host_idx = rnd;
+			} else {
+				MyHGM->p_update_mysql_error_counter(
+					p_mysql_error_type::proxysql, wHG, hpa[rnd].host, hpa[rnd].port, ER_PROXYSQL_AWS_NO_PINGABLE_SRV
+				);
+				shuffle_hosts(hpa, num_hosts);
+				for (unsigned int i=0; (found_pingable_host == false && i<num_hosts); i++) {
+					rc_ping = GloMyMon->server_responds_to_ping(hpa[i].host, hpa[i].port);
+					if (rc_ping) {
+						found_pingable_host = true;
+						cur_host_idx = i;
+					} else {
+						MyHGM->p_update_mysql_error_counter(
+							p_mysql_error_type::proxysql, wHG, hpa[i].host, hpa[i].port, ER_PROXYSQL_AWS_NO_PINGABLE_SRV
+						);
+					}
 				}
 			}
-		}
-		if (found_pingable_host == false) {
-			proxy_error("No node is pingable for AWS RDS cluster with writer HG %u\n", wHG);
-			next_loop_at = t1 + check_interval_ms * 1000;
-			continue;
+			if (found_pingable_host == false) {
+				proxy_error("No node is pingable for AWS RDS cluster with writer HG %u\n", wHG);
+				next_loop_at = t1 + check_interval_ms * 1000;
+				continue;
+			}
+			poll_host = hpa[cur_host_idx].host;
+			poll_port = hpa[cur_host_idx].port;
+			poll_use_ssl = hpa[cur_host_idx].use_ssl;
 		}
 
 		mmsd = new MySQL_Monitor_State_Data(
-			MON_AWS_RDS_BGD, hpa[cur_host_idx].host, hpa[cur_host_idx].port, hpa[cur_host_idx].use_ssl
+			MON_AWS_RDS_BGD, (char*)poll_host, poll_port, poll_use_ssl
 		);
 		mmsd->writer_hostgroup = wHG;
 		mmsd->aws_aurora_check_timeout_ms = check_timeout_ms;
@@ -6973,12 +6987,89 @@ static void aws_rds_bgd_build_map(AWS_RDS_BGD_State& st, const AWS_RDS_Topology_
 }
 
 /**
+* @brief Resolve the green IPs and pin the worker's probe to the green writer's IP.
+*
+* @details Resolves each pair's green host (DNS_Cache first, then a live lookup tracking TTL),
+*   then sets 'st.next_check_host' to the green writer's IP. From then on the worker polls the
+*   green primary BY IP: green stays reachable through the entire cutover (blue has a connectivity
+*   gap), and the green IP survives the post-COMPLETED name swap (it becomes the promoted primary),
+*   whereas the green DNS name is retired. 'next_check_host' is cleared at COMPLETED.
+*/
+static void aws_rds_bgd_resolve_green_ips(AWS_RDS_BGD_State& st) {
+	int ai_family = mysql_resolution_family_to_ai_family(mysql_thread___resolution_family);
+	for (auto &p : st.bg_map) {
+		// Always check the cache first: a green host that is a monitored server may be there.
+		size_t n = 0;
+		std::string ip = MySQL_Monitor::dns_lookup(p.green_host, false, &n);
+		if (!ip.empty()) {
+			p.green_ip = ip;
+			p.green_ip_ttl = 0;
+			proxy_debug(PROXY_DEBUG_MONITOR, 7,
+				"AWS RDS BGD [wHG=%u]: green '%s' IP %s (DNS_Cache)\n",
+				st.writer_hg, p.green_host.c_str(), p.green_ip.c_str());
+			continue;
+		}
+		// Cache miss (green is not a monitored server): resolve DNS now and track its TTL.
+		if (p.green_ip.empty() || (p.green_ip_ttl != 0 && monotonic_time() > p.green_ip_ttl)) {
+			std::vector<std::string> ips = dns_resolve(p.green_host, ai_family);
+			if (!ips.empty()) {
+				p.green_ip = ips.front();
+				p.green_ip_ttl = monotonic_time()
+					+ (1000ULL * (unsigned long long)mysql_thread___monitor_local_dns_cache_ttl);
+				proxy_debug(PROXY_DEBUG_MONITOR, 7,
+					"AWS RDS BGD [wHG=%u]: green '%s' IP %s (resolved, ttl=%lus)\n",
+					st.writer_hg, p.green_host.c_str(), p.green_ip.c_str(),
+					(unsigned long)mysql_thread___monitor_local_dns_cache_ttl);
+			}
+		}
+	}
+
+	// Pin the worker's next probe to the green writer's IP (observe the switchover from green).
+	for (const AWS_RDS_BGD_State::BlueGreenPair& p : st.bg_map) {
+		if (p.is_writer && !p.green_ip.empty()) {
+			if (st.next_check_host != p.green_ip) {
+				st.next_check_host = p.green_ip;
+				proxy_debug(PROXY_DEBUG_MONITOR, 5,
+					"AWS RDS BGD [wHG=%u]: pinning topology probe to green IP %s\n",
+					st.writer_hg, p.green_ip.c_str());
+			}
+			break;
+		}
+	}
+}
+
+/**
+* @brief Add the green writer to green_writer_hostgroup, when that hostgroup is configured.
+*
+* @details Mirrors the blue writer's connection settings (weight/max_connections/use_ssl) onto
+*   the green writer. No-op when green_writer_hostgroup is NULL (the auto-discovery path) or when
+*   the green writer was already added on a prior poll.
+*/
+static void aws_rds_bgd_add_green_writer_in_hg(AWS_RDS_BGD_State& st) {
+	if (st.green_writer_hg < 0 || st.green_writer_added_in_hg) {
+		return;
+	}
+	for (const AWS_RDS_BGD_State::BlueGreenPair& p : st.bg_map) {
+		if (p.is_writer) {
+			srv_info_t srv_info { p.green_host, (uint16_t)p.port, "AWS RDS BGD green writer" };
+			srv_opts_t srv_opts { p.blue_weight, p.blue_max_conns, p.blue_use_ssl };
+			MyHGM->wrlock();
+			MyHGM->create_new_server_in_hg((uint32_t)st.green_writer_hg, srv_info, srv_opts);
+			MyHGM->wrunlock();
+			st.green_writer_added_in_hg = true;
+			break;
+		}
+	}
+}
+
+/**
 * @brief Run the status-driven blue/green switchover FSM for one deployment.
 *
-* @details Dispatches on the deployment switchover status read from the SOURCE row
-*   of mysql.rds_topology. State carried across poll cycles (the blue<->green map,
-*   resolved green IPs, enforcement bookkeeping, and the next poll interval) lives in
-*   'st', owned by the calling worker thread.
+* @details Dispatches on the deployment switchover status read from the TARGET (green) row
+*   of mysql.rds_topology (the TARGET row carries the status in every phase, including
+*   COMPLETED where the SOURCE row is absent). State carried across poll cycles (the
+*   blue<->green map, resolved green IPs, the pinned probe host, enforcement bookkeeping,
+*   and the next poll interval) lives in 'st', owned by the calling worker thread.
 *
 * @param st        Per-deployment switchover state (worker-owned, mutated here).
 * @param topology  Parsed mysql.rds_topology result for this cycle.
@@ -6989,10 +7080,9 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 		return;
 	}
 
-	// deployment switchover status comes from the SOURCE (blue) row
 	std::string status;
 	for (const AWS_RDS_Topology_Node& n : topology.nodes) {
-		if (strcasecmp(n.role.c_str(), BGD_ROLE_SOURCE) == 0) {
+		if (strcasecmp(n.role.c_str(), BGD_ROLE_TARGET) == 0) {
 			status = n.status;
 			break;
 		}
@@ -7002,80 +7092,40 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 		return;
 	}
 
-	if (strcasecmp(status.c_str(), st.last_status.c_str()) != 0) {
-		proxy_info(
-			"AWS RDS BGD [wHG=%u rHG=%u]: switchover status '%s' -> '%s'\n",
-			st.writer_hg, st.reader_hg,
-			st.last_status.empty() ? "(none)" : st.last_status.c_str(), status.c_str());
+	if (strcasecmp(status.c_str(), st.last_status.c_str()) == 0) {
+		// no state change
+		return;
 	}
 
+	proxy_info(
+		"AWS RDS BGD [wHG=%u rHG=%u]: switchover status '%s' -> '%s'\n",
+		st.writer_hg, st.reader_hg,
+		st.last_status.empty() ? "(none)" : st.last_status.c_str(), status.c_str());
+
 	if (strcasecmp(status.c_str(), BGD_STATUS_AVAILABLE) == 0) {
+		st.next_check_interval_ms = 250;
+
 		aws_rds_bgd_build_map(st, topology);
-
-		// Add the green writer to green_writer_hostgroup when configured, mirroring the blue
-		// writer's connection settings (weight/max_connections/use_ssl) onto it.
-		if (st.green_writer_hg >= 0) {
-			for (const AWS_RDS_BGD_State::BlueGreenPair& p : st.bg_map) {
-				if (p.is_writer) {
-					srv_info_t srv_info { p.green_host, (uint16_t)p.port, "AWS RDS BGD green writer" };
-					srv_opts_t srv_opts { p.blue_weight, p.blue_max_conns, p.blue_use_ssl };
-					MyHGM->wrlock();
-					MyHGM->create_new_server_in_hg((uint32_t)st.green_writer_hg, srv_info, srv_opts);
-					MyHGM->wrunlock();
-					break;
-				}
-			}
-		}
-
-		st.next_check_interval_ms = 0;
+		aws_rds_bgd_resolve_green_ips(st);
+		aws_rds_bgd_add_green_writer_in_hg(st);
 	}
 	else if (strcasecmp(status.c_str(), BGD_STATUS_INITIATED) == 0
 		|| strcasecmp(status.c_str(), BGD_STATUS_IN_PROGRESS) == 0) {
-		aws_rds_bgd_build_map(st, topology);
-
-		// Resolve the green IPs and keep them warm for an instant POST_PROCESSING repoint.
-		int ai_family = mysql_resolution_family_to_ai_family(mysql_thread___resolution_family);
-		for (auto &p : st.bg_map) {
-			// Always check the cache first: a green host that is a monitored server may be there.
-			size_t n = 0;
-			std::string ip = MySQL_Monitor::dns_lookup(p.green_host, false, &n);
-			if (!ip.empty()) {
-				p.green_ip = ip;
-				p.green_ip_ttl = 0;
-				proxy_debug(PROXY_DEBUG_MONITOR, 7,
-					"AWS RDS BGD [wHG=%u]: green '%s' IP %s (DNS_Cache)\n",
-					st.writer_hg, p.green_host.c_str(), p.green_ip.c_str());
-				continue;
-			}
-			// Cache miss (green is not a monitored server): resolve DNS now and track its TTL.
-			if (p.green_ip.empty() || __builtin_expect(p.green_ip_ttl != 0 && monotonic_time() > p.green_ip_ttl, 0)) {
-				std::vector<std::string> ips = dns_resolve(p.green_host, ai_family);
-				if (!ips.empty()) {
-					p.green_ip = ips.front();
-					p.green_ip_ttl = monotonic_time()
-						+ (1000ULL * (unsigned long long)mysql_thread___monitor_local_dns_cache_ttl);
-					proxy_debug(PROXY_DEBUG_MONITOR, 7,
-						"AWS RDS BGD [wHG=%u]: green '%s' IP %s (resolved, ttl=%lus)\n",
-						st.writer_hg, p.green_host.c_str(), p.green_ip.c_str(),
-						(unsigned long)mysql_thread___monitor_local_dns_cache_ttl);
-				}
-			}
-		}
 		st.next_check_interval_ms = 100;
+
+		aws_rds_bgd_build_map(st, topology);
+		aws_rds_bgd_resolve_green_ips(st);
+		aws_rds_bgd_add_green_writer_in_hg(st);
 	}
 	else if (strcasecmp(status.c_str(), BGD_STATUS_POST_PROC) == 0) {
 		st.next_check_interval_ms = 100;
 
-		// Run the steps below only on the first poll after entering POST_PROCESSING;
-		// later polls see the same status, so there is nothing to redo.
-		if (strcasecmp(status.c_str(), st.last_status.c_str()) == 0) {
-			return;
-		}
-
+		// Run setup here too: the thread may observe POST_PROCESSING directly, without having
+		// seen AVAILABLE/INITIATED first. All three are idempotent, so the repoint/shun logic
+		// below always runs against a built map, resolved green IPs, and an added green writer.
 		aws_rds_bgd_build_map(st, topology);
-
-		// TODO: Handle the case where thread observes POST_PROCESSING status directly,
-		//       without observing SWITCHOVER_INITIATED first (resolve green IPs).
+		aws_rds_bgd_resolve_green_ips(st);
+		aws_rds_bgd_add_green_writer_in_hg(st);
 
 		// Repoint each mapped blue host onto its green IP and drain the blue free
 		// pool so new connections resolve to green.
@@ -7152,11 +7202,6 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 	}
 	else if (strcasecmp(status.c_str(), BGD_STATUS_COMPLETED) == 0) {
 		st.next_check_interval_ms = 0;
-		// Undo everything only on the first poll after entering COMPLETED;
-		// later polls see the same status, so there is nothing to redo.
-		if (strcasecmp(status.c_str(), st.last_status.c_str()) == 0) {
-			return;
-		}
 
 		if (st.writer_is_also_reader_enforced) {
 			for (const AWS_RDS_BGD_State::BlueGreenPair& p : st.bg_map) {
@@ -7189,6 +7234,8 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 			"AWS RDS BGD [wHG=%u rHG=%u]: switchover complete; state cleared\n",
 			st.writer_hg, st.reader_hg);
 		st.bg_map.clear();
+		// Stop polling green by IP; revert to the configured (blue) name, now the promoted primary.
+		st.next_check_host.clear();
 	}
 	else {
 		// unknown status: take no action, stay at baseline interval
