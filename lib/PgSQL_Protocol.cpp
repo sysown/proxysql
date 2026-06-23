@@ -378,6 +378,26 @@ void PG_pkt::to_PtrSizeArray(PtrSizeArray *psa, unsigned c) {
 	}
 }
 
+// Auth-method selection: given the configured minimum-strength floor and the connecting user's
+// stored secret type, return the AUTHENTICATION_METHOD to challenge with. A SCRAM verifier always
+// uses SCRAM; an md5 hash uses md5 unless the floor demands SCRAM (then *reject=true and the caller
+// runs the generic mock-fail); plaintext follows the floor.
+int pgsql_reconcile_auth_method(int floor, int stored, bool* reject) {
+	*reject = false;
+	switch (stored) {
+		case PASSWORD_TYPE_SCRAM_SHA_256:               // a SCRAM verifier meets/exceeds any floor
+			return (int)AUTHENTICATION_METHOD::SASL_SCRAM_SHA_256;
+		case PASSWORD_TYPE_MD5:                          // md5 only; reject if the floor demands SCRAM
+			if (floor >= (int)AUTHENTICATION_METHOD::SASL_SCRAM_SHA_256) {
+				*reject = true;
+				return (int)AUTHENTICATION_METHOD::SASL_SCRAM_SHA_256; // mock under the floor's method
+			}
+			return (int)AUTHENTICATION_METHOD::MD5_PASSWORD;
+		default:                                         // PASSWORD_TYPE_PLAINTEXT — satisfies any floor
+			return floor;                                // the floor's own method
+	}
+}
+
 bool PgSQL_Protocol::generate_pkt_initial_handshake(bool send, void** _ptr, unsigned int* len, uint32_t* _thread_id, bool deprecate_eof_active) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Generating handshake pkt\n");
 
@@ -391,7 +411,33 @@ bool PgSQL_Protocol::generate_pkt_initial_handshake(bool send, void** _ptr, unsi
 	}
 	*_thread_id = thread_id;
 
-	switch ((AUTHENTICATION_METHOD)pgsql_thread___authentication_method) {
+	// --- Choose the auth method from the connecting user's stored secret.
+	// The username is already parsed (process_startup_packet ran first). For a known user, the stored
+	// secret's type decides the method (a SCRAM verifier -> SCRAM even under a lower floor; an md5 hash
+	// too weak for a SCRAM floor -> still challenged with the floor method, then mocked at response time).
+	// For an unknown user we keep the floor's method so the handshake is indistinguishable, and the
+	// response handler runs the mock to a generic failure (anti-enumeration).
+	int floor = pgsql_thread___authentication_method;
+	AUTHENTICATION_METHOD selected = (AUTHENTICATION_METHOD)floor;
+	{
+		const char* user = (const char*)(*myds)->myconn->conn_params.get_value(PG_USER);
+		if (user && *user) {
+			bool _ssl = false, _tp = true, _ff = false; int _hg = -1, _mc = 0; void* _sha = NULL; char* _attr = NULL;
+			char* stored = GloPgAuth->lookup((char*)user, USERNAME_FRONTEND,
+							&_ssl, &_hg, &_tp, &_ff, &_mc, &_sha, &_attr);
+			if (stored) {
+				bool reject = false; // on reject we still challenge with the floor method; the response handler mocks
+				selected = (AUTHENTICATION_METHOD) pgsql_reconcile_auth_method(
+						floor, (int)get_password_type(stored), &reject);
+				free(stored);
+				if (_sha) free(_sha);
+				if (_attr) free(_attr);
+			}
+			// unknown user: `selected` stays = floor; the response handler detects the miss and mocks.
+		}
+	}
+
+	switch (selected) {
 
 	case AUTHENTICATION_METHOD::NO_PASSWORD:
 		pgpkt.write_generic(type, "i", PG_PKT_AUTH_OK);
@@ -420,7 +466,7 @@ bool PgSQL_Protocol::generate_pkt_initial_handshake(bool send, void** _ptr, unsi
 		assert(0);
 	}
 
-	(*myds)->auth_method = (AUTHENTICATION_METHOD)pgsql_thread___authentication_method;
+	(*myds)->auth_method = selected;
 	(*myds)->auth_next_pkt_type = 'p';
 
 	if (send == true) {
@@ -882,6 +928,8 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 	bool fast_forward = false;
 	bool _ret_use_ssl = false;
 	EXECUTION_STATE ret = EXECUTION_STATE::FAILED;
+	bool mock = false; // assigned after the credential lookup below; declared here, before the
+	                   // function's gotos, so a `goto __exit` can't cross its initialization.
 
 	pgsql_hdr hdr{};
 	if (!get_header(pkt, len, &hdr)) {
@@ -951,14 +999,28 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 		if (attributes) free(attributes);
 	}
 
-	if (password) {
-		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' , auth_method=%s\n", (*myds)->sess, (*myds), user, AUTHENTICATION_METHOD_STR[(int)(*myds)->auth_method]);
+	// Anti-enumeration: an unknown user, or a known user whose stored secret is too weak for the
+	// floor (e.g. an md5 hash under a SCRAM floor), runs the SAME handshake against a mock secret and
+	// fails identically to a wrong password — so the client cannot tell them apart. The challenge
+	// method was already chosen in generate_pkt_initial_handshake; here we only decide real-verify vs mock.
+	if (!password) {
+		mock = true; // unknown frontend user
+	} else {
+		bool rj = false;
+		(void) pgsql_reconcile_auth_method(pgsql_thread___authentication_method,
+				(int)get_password_type(password), &rj);
+		mock = rj; // e.g. md5 secret under a SCRAM floor
+	}
+
+	if (password || mock) {
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' , auth_method=%s , mock=%d\n", (*myds)->sess, (*myds), user, AUTHENTICATION_METHOD_STR[(int)(*myds)->auth_method], mock ? 1 : 0);
 		switch ((*myds)->auth_method) {
 		case AUTHENTICATION_METHOD::MD5_PASSWORD:
 		{
 			uint32_t pass_len = 0;
 			pass = extract_password(&hdr, &pass_len);
 			using_password = (pass_len > 0);
+			if (mock) break; // anti-enum: unknown/too-weak user — consume the response, fail generically
 
 			if (pass_len) {
 				if (pass[pass_len - 1] == 0) {
@@ -975,13 +1037,19 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 			unsigned char md5_digest[MD5_DIGEST_LENGTH];
 			char md5_string[MD5_DIGEST_LENGTH * 2 + sizeof((*myds)->tmp_login_salt)];
 			EVP_MD_CTX* md5_context = EVP_MD_CTX_new();
-			EVP_DigestInit_ex(md5_context, EVP_md5(), NULL);
-			EVP_DigestUpdate(md5_context, password, strlen(password));
-			EVP_DigestUpdate(md5_context, user, strlen(user));
 			unsigned int md5_len = 0;
-			EVP_DigestFinal_ex(md5_context, md5_digest, &md5_len);
-			for (int i = 0; i < MD5_DIGEST_LENGTH; i++) {
-				sprintf(&md5_string[i * 2], "%02x", (unsigned int)md5_digest[i]);
+			// Fill md5_string[0..31] with the hex of md5(password+username). If the stored secret is
+			// already an md5 hash ("md5"+32hex), reuse those 32 hex chars directly — no plaintext needed.
+			if (get_password_type(password) == PASSWORD_TYPE_MD5) {
+				memcpy(md5_string, password + 3, MD5_DIGEST_LENGTH * 2);
+			} else {
+				EVP_DigestInit_ex(md5_context, EVP_md5(), NULL);
+				EVP_DigestUpdate(md5_context, password, strlen(password));
+				EVP_DigestUpdate(md5_context, user, strlen(user));
+				EVP_DigestFinal_ex(md5_context, md5_digest, &md5_len);
+				for (int i = 0; i < MD5_DIGEST_LENGTH; i++) {
+					sprintf(&md5_string[i * 2], "%02x", (unsigned int)md5_digest[i]);
+				}
 			}
 			//
 			memcpy(md5_string+(MD5_DIGEST_LENGTH*2), (*myds)->tmp_login_salt, sizeof((*myds)->tmp_login_salt));
@@ -1004,6 +1072,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 			uint32_t pass_len = 0;
 			pass = extract_password(&hdr, &pass_len);
 			using_password = (pass_len > 0);
+			if (mock) break; // anti-enum: unknown/too-weak user — consume the response, fail generically
 
 			if (!pass || *pass == '\0') {
 				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Empty password returned by client.\n", (*myds)->sess, (*myds), user);
@@ -1030,7 +1099,8 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 
 			PgCredentials stored_user_info{ '\0' };
 			strncpy(stored_user_info.name, user, MAX_USERNAME);
-			strncpy(stored_user_info.passwd, password, MAX_PASSWORD);
+			if (password) strncpy(stored_user_info.passwd, password, MAX_PASSWORD);
+			stored_user_info.mock_auth = mock; // unknown/too-weak -> mock SCRAM (deterministic fake salt), fails like a wrong password
 
 			if (!(*myds)->scram_state->server_nonce) {
 				/* process as SASLInitialResponse */
@@ -1114,8 +1184,10 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 			break;
 		}
 	} else {
-		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. User not found in the database.\n", (*myds)->sess, (*myds), user);
-		generate_error_packet(true, false, "User not found", PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, true);
+		// Unreachable in normal flow: an unknown user now has mock==true and enters the branch above
+		// (anti-enumeration). Kept as defense-in-depth with a generic, non-revealing failure.
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Authentication failed (no credential, no mock).\n", (*myds)->sess, (*myds), user);
+		generate_error_packet(true, false, "password authentication failed", PGSQL_ERROR_CODES::ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION, true);
 	}
 
 	if (ret == EXECUTION_STATE::SUCCESSFUL) {
