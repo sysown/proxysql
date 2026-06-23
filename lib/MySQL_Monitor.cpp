@@ -6839,6 +6839,8 @@ __end_of_loop:
 		}
 		delete mmsd;
 		mmsd = NULL;
+
+		// TODO: call aws_rds_bgd_clear_bgd_in_progress() 
 	}
 
 __exit_monitor_RDS_BGD_thread_HG_now:
@@ -7063,6 +7065,34 @@ static void aws_rds_bgd_add_green_writer_in_hg(AWS_RDS_BGD_State& st) {
 }
 
 /**
+* @brief Flag the deployment's servers as switchover-in-progress so the read_only monitor leaves them alone.
+*
+* @details During a switchover AWS makes the blue writer read-only; without this, read_only_action_v2 would
+*   demote/relocate it and fight the BGD FSM. Set once (guarded by st.bgd_in_progress_set) when status reaches
+*   INITIATED and held through POST_PROCESSING; cleared at COMPLETED by aws_rds_bgd_clear_bgd_in_progress.
+*/
+static void aws_rds_bgd_set_bgd_in_progress(AWS_RDS_BGD_State& st) {
+	if (st.bgd_in_progress_set) {
+		return;
+	}
+	MyHGM->set_aws_rds_bgd_in_progress(st.writer_hg, st.reader_hg, true);
+	st.bgd_in_progress_set = true;
+	proxy_info("AWS RDS BGD [wHG=%u rHG=%u]: switchover in progress, suspending read_only monitor actions on these hostgroups until SWITCHOVER_COMPLETED\n",
+		st.writer_hg, st.reader_hg);
+}
+
+/**
+* @brief Re-enable read_only monitor action on the deployment's servers (undo aws_rds_bgd_set_bgd_in_progress).
+*/
+static void aws_rds_bgd_clear_bgd_in_progress(AWS_RDS_BGD_State& st) {
+	if (!st.bgd_in_progress_set) {
+		return;
+	}
+	MyHGM->set_aws_rds_bgd_in_progress(st.writer_hg, st.reader_hg, false);
+	st.bgd_in_progress_set = false;
+}
+
+/**
 * @brief Run the status-driven blue/green switchover FSM for one deployment.
 *
 * @details Dispatches on the deployment switchover status read from the TARGET (green) row
@@ -7116,6 +7146,7 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 		aws_rds_bgd_build_map(st, topology);
 		aws_rds_bgd_resolve_green_ips(st);
 		aws_rds_bgd_add_green_writer_in_hg(st);
+		aws_rds_bgd_set_bgd_in_progress(st);
 	}
 	else if (strcasecmp(status.c_str(), BGD_STATUS_POST_PROC) == 0) {
 		st.next_check_interval_ms = 100;
@@ -7126,6 +7157,7 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 		aws_rds_bgd_build_map(st, topology);
 		aws_rds_bgd_resolve_green_ips(st);
 		aws_rds_bgd_add_green_writer_in_hg(st);
+		aws_rds_bgd_set_bgd_in_progress(st);
 
 		// Repoint each mapped blue host onto its green IP and drain the blue free
 		// pool so new connections resolve to green.
@@ -7225,7 +7257,9 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 		}
 
 		for (const AWS_RDS_BGD_State::BlueGreenPair& p : st.bg_map) {
-			dns_cache->unpin(p.blue_host);
+			// remove the cache record (pin + resolved IPs) so the blue name
+			// re-resolves to the promoted (green) instance
+			dns_cache->remove(p.blue_host);
 		}
 
 		// TODO: Drain Green HGs
@@ -7236,6 +7270,8 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 		st.bg_map.clear();
 		// Stop polling green by IP; revert to the configured (blue) name, now the promoted primary.
 		st.next_check_host.clear();
+		// Re-enable the read_only monitor on these servers now that the switchover is done.
+		aws_rds_bgd_clear_bgd_in_progress(st);
 	}
 	else {
 		// unknown status: take no action, stay at baseline interval

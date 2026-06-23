@@ -3591,7 +3591,7 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_ser
 
 		HostGroup_Server_Mapping* host_server_mapping = itr->second.get();
 
-		if (!host_server_mapping) {
+		if (!host_server_mapping || host_server_mapping->is_aws_rds_bgd_in_progress()) {
 			continue;
 		}
 
@@ -3869,6 +3869,33 @@ void MySQL_HostGroups_Manager::set_server_shun(const char *hostname, int port, b
 					// The actual unshunning work is done by MySQL_HostGroups_Manager::unshun_server_all_hostgroups
 					mysrvc->shunned_automatic = true;
 					proxy_warning("Enabling shun recovery for server %s:%d in HG %u\n", hostname, port, myhgc->hid);
+				}
+			}
+		}
+	}
+
+	wrunlock();
+}
+
+void MySQL_HostGroups_Manager::set_aws_rds_bgd_in_progress(unsigned int writer_hg, unsigned int reader_hg, bool in_progress) {
+	wrlock();
+
+	unsigned int hgs[2] = { writer_hg, reader_hg };
+	for (unsigned int i = 0; i < 2; i++) {
+		// MyHGC_find (not MyHGC_lookup, which creates on miss) so we never materialize an empty HG.
+		MyHGC* myhgc = MyHGC_find(hgs[i]);
+		if (myhgc == nullptr || myhgc->mysrvs == nullptr) {
+			continue;
+		}
+		for (unsigned int j = 0; j < myhgc->mysrvs->cnt(); j++) {
+			MySrvC* s = myhgc->mysrvs->idx(j);
+			const std::string srv_id = std::string(s->address) + ":::" + std::to_string(s->port);
+			auto itr = hostgroup_server_mapping.find(srv_id);
+			if (itr != hostgroup_server_mapping.end() && itr->second) {
+				if (in_progress) {
+					itr->second->set_aws_rds_bgd_in_progress();
+				} else {
+					itr->second->clear_aws_rds_bgd_in_progress();
 				}
 			}
 		}

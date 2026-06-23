@@ -442,6 +442,7 @@ struct AWS_RDS_BGD_State {
 
 	bool green_writer_added_in_hg = false;        ///< whether green writer added to green_writer_hg
 	bool writer_is_also_reader_enforced = false;  ///< whether POST_PROCESSING added the writer to the reader HG
+	bool bgd_in_progress_set = false;             ///< whether we flagged the deployment's servers as switchover-in-progress (set once at INITIATED+, cleared at COMPLETED) so read_only_action_v2 leaves them alone
 
 	unsigned int next_check_interval_ms = 0;    ///< FSM-controlled interval; 0 => baseline
 	std::string next_check_host;                ///< FSM-pinned probe host; when set (the green IP), the worker
