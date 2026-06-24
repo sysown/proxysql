@@ -190,6 +190,48 @@ int main() {
 	ok(cfg_ok, "Pass-through configured (per-user cap=%d, window=%ds)",
 		TEST_MAX_FAILURES_PER_USER, TEST_FAILURE_WINDOW_S);
 
+	/*
+	 * Ensure the target hostgroup's servers have use_ssl=1 so the
+	 * passthrough probe (backend leg) negotiates TLS.
+	 *
+	 * The pass-through probe path lives in:
+	 *   MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT
+	 *
+	 * Right before the actual backend connect it does:
+	 *
+	 *     MySrvC *mysrvc = myhgc->get_random_MySrvC(...);
+	 *     ...
+	 *     if (mysrvc->use_ssl && mysrvc->port) {
+	 *         probe_ssl_params = MyHGM->get_Server_SSL_Params(...);
+	 *         MySQL_Connection::set_ssl_params(probe, probe_ssl_params);
+	 *         ...
+	 *     }
+	 *     MYSQL *result = mysql_real_connect(probe, mysrvc->address, ...);
+	 *
+	 * If MySrvC->use_ssl is false, the probe is a plaintext TCP connection.
+	 * On the mysql84+ dbdeployer infras used by the mysql84-g4 group
+	 * (WHG comes from TAP_MYSQL8_BACKEND_HG, default 2900 in
+	 * test/infra/infra-dbdeployer-mysql84/.env), the servers are seeded
+	 * by docker-proxy-post.bash + infra-config.sql without use_ssl=1.
+	 *
+	 * Without this UPDATE+LOAD, every passthrough probe is plaintext.
+	 * MySQL 8.4+ backends (and the caching_sha2_password full-auth
+	 * exchange the probe depends on) typically reject or fail the
+	 * handshake, so all "success" scenarios in this test (baseline,
+	 * Phase C after window expiry) return errno != 0 (usually 1045)
+	 * instead of 0, and the TAP assertions fail.
+	 *
+	 * We apply this right after the test's passthrough configuration
+	 * block (variables + LOAD VARIABLES) and before the first
+	 * try_connect, so it is live for the baseline and all subsequent
+	 * probes. This only affects the probe->backend leg; the frontend
+	 * TLS requirement is handled separately by CLIENT_SSL in try_connect.
+	 */
+	do_query(admin,
+		string("UPDATE mysql_servers SET use_ssl=1 WHERE hostgroup_id=")
+		+ std::to_string(MYSQL8_HG));
+	do_query(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
 	/* -------- baseline: a correct connect succeeds before priming -------- */
 	{
 		const unsigned int err = try_connect(cl, TEST_USER, TEST_BACKEND_PW);

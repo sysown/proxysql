@@ -177,6 +177,35 @@ int main() {
 	cfg_ok &= (do_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME") == EXIT_SUCCESS);
 	ok(cfg_ok, "Pass-through configured with tight lockout bypassed (caps set high)");
 
+	/*
+	 * Ensure the target hostgroup has use_ssl=1 so the passthrough probe
+	 * negotiates TLS to the backend.
+	 *
+	 * The pass-through probe path (handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT)
+	 * only enables TLS for the backend leg if the selected MySrvC has use_ssl set:
+	 *
+	 *     if (mysrvc->use_ssl && mysrvc->port) {
+	 *         probe_ssl_params = MyHGM->get_Server_SSL_Params(...);
+	 *         MySQL_Connection::set_ssl_params(probe, probe_ssl_params);
+	 *     }
+	 *     MYSQL *result = mysql_real_connect(probe, ...);
+	 *
+	 * The dbdeployer-mysql84 (and mysql90/mysql95) infras used by the
+	 * mysql84-g4 group (via TAP_MYSQL8_BACKEND_HG) seed mysql_servers rows
+	 * without use_ssl=1. Without this UPDATE+LOAD, every probe is plaintext.
+	 * MySQL 8.4+ backends (and the caching_sha2_password full-auth exchange
+	 * that the probe relies on) typically fail or reject in that case, so
+	 * "success" scenarios see errno != 0 and the TAP assertions fail.
+	 *
+	 * We do this once, right after the test's passthrough configuration
+	 * block and before the first probe, so the setting is live for the
+	 * entire test (including the observability counter scenarios).
+	 */
+	do_query(admin,
+		string("UPDATE mysql_servers SET use_ssl=1 WHERE hostgroup_id=")
+		+ std::to_string(MYSQL8_HG));
+	do_query(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
 	/* ============================================================
 	 * Scenario 1: successful probe bumps probes_attempted and
 	 *             probes_ok.

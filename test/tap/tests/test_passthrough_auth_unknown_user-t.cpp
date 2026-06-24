@@ -303,6 +303,25 @@ int main() {
 	}
 	ok(cfg_ok, "unknown_users=true, default_hg=%u, TLS gate off", MYSQL8_HG);
 
+	/*
+	 * Ensure the target hostgroup (passthrough_default_hg) has use_ssl=1
+	 * so the passthrough probe negotiates TLS to the backend.
+	 *
+	 * Same root cause as the other mysql84-g4 passthrough tests:
+	 * the probe path only does TLS if MySrvC->use_ssl is true. The
+	 * dbdeployer mysql84+ infras used by this group do not set it by
+	 * default. Without this, the "first connect for unknown user" and
+	 * the cache-hit SELECT 1 scenarios would see probe failures instead
+	 * of success.
+	 *
+	 * We apply this right after setting passthrough_default_hg and
+	 * before the first probe.
+	 */
+	do_query(admin,
+		string("UPDATE mysql_servers SET use_ssl=1 WHERE hostgroup_id=")
+		+ std::to_string(MYSQL8_HG));
+	do_query(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
 	/* Confirm the routing default we just set is what we expect to see in
 	 * stats_mysql_passthrough_auth_cache.hostgroup_probed below. */
 	{

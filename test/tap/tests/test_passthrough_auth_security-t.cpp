@@ -225,6 +225,28 @@ int main() {
 	}
 	ok(cfg_ok, "Base passthrough configuration applied");
 
+	/*
+	 * Ensure the target hostgroup has use_ssl=1 so the passthrough probe
+	 * (backend leg) negotiates TLS.
+	 *
+	 * See the long-form comment in test_passthrough_auth_e2e-t.cpp for the
+	 * full rationale. In short:
+	 *
+	 *   handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT only
+	 *   does TLS for the probe if MySrvC->use_ssl is set. The dbdeployer
+	 *   mysql84+ infras used by mysql84-g4 seed servers with use_ssl=0,
+	 *   so without this UPDATE+LOAD every probe is plaintext and the
+	 *   positive-path scenarios (matching username_pattern, TLS-positive,
+	 *   etc.) would all fail.
+	 *
+	 * We apply this right after the base passthrough configuration block
+	 * and before any of the gate-specific scenarios.
+	 */
+	do_query(admin,
+		string("UPDATE mysql_servers SET use_ssl=1 WHERE hostgroup_id=")
+		+ std::to_string(MYSQL8_HG));
+	do_query(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
 	/* ============================================================
 	 * TLS gate: with require_tls=true, the gate must reject a non-TLS
 	 * client AND accept a TLS one. The differential is what proves the

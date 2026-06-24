@@ -296,6 +296,46 @@ int main() {
 	}
 	ok(cfg_ok, "Pass-through enabled, TLS gate on (client connects with CLIENT_SSL), default_auth=caching_sha2_password");
 
+	/*
+	 * Ensure the target hostgroup's servers are marked use_ssl=1 so the
+	 * passthrough backend probe (mysql_real_connect inside
+	 * handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT) will
+	 * establish a TLS connection to the backend.
+	 *
+	 * The probe path is:
+	 *   handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT
+	 *     ...
+	 *     if (mysrvc->use_ssl && mysrvc->port) {
+	 *         probe_ssl_params = MyHGM->get_Server_SSL_Params(...);
+	 *         MySQL_Connection::set_ssl_params(probe, probe_ssl_params);
+	 *         ...
+	 *     }
+	 *     MYSQL *result = mysql_real_connect(probe, mysrvc->address, ...);
+	 *
+	 * If MySrvC->use_ssl is false, the probe is plaintext. The mysql84+
+	 * (and mysql90+/mysql95+) dbdeployer infras used by the mysql84-g4
+	 * group (see test/infra/infra-dbdeployer-mysql84/.env exporting
+	 * TAP_MYSQL8_BACKEND_HG=${WHG}, and the post hook in
+	 * test/infra/infra-dbdeployer-mysql84/bin/docker-proxy-post.bash)
+	 * seed mysql_servers rows without use_ssl=1.
+	 *
+	 * Without this UPDATE+LOAD, every probe in this test is plaintext.
+	 * MySQL 8.4+ backends commonly reject plaintext connections or the
+	 * caching_sha2_password full-auth exchange fails, so all success
+	 * scenarios (first connect, reconnect, re-probe after flush) see
+	 * errno != 0 instead of 0, and the TAP plan fails.
+	 *
+	 * We do the UPDATE+LOAD right after the test's passthrough
+	 * configuration block and before the first try_connect, so it is
+	 * live for the entire test. This only affects the probe->backend
+	 * leg; the frontend TLS requirement (spec §7.1) is enforced by
+	 * CLIENT_SSL + mysql_ssl_set in try_connect().
+	 */
+	do_query(admin,
+		string("UPDATE mysql_servers SET use_ssl=1 WHERE hostgroup_id=")
+		+ std::to_string(MYSQL8_HG));
+	do_query(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
 	/* -------- verify gate state -------- */
 	{
 		const int set_ok = mysql_query(admin,
