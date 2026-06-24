@@ -291,7 +291,8 @@ std::string DNS_Cache::lookup(const std::string& hostname, size_t* ip_count) con
 	auto itr = records.find(hostname);
 
 	if (itr != records.end()) {
-		auto [ip, count] = get_next_ip(itr->second);
+		auto [next_ip, count] = get_next_ip(itr->second);
+		ip = next_ip;
 
 		if (ip_count)
 			*ip_count = count;
