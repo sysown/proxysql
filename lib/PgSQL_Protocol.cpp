@@ -1153,15 +1153,21 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 				length = hdr.data.size;
 
 				if (scram_handle_client_final((*myds)->scram_state, &stored_user_info, data, length)) {
-					/* save SCRAM keys for user */
-					if (!(*myds)->scram_state->adhoc) {
-						memcpy(stored_user_info.scram_ClientKey,
+					/* Persist the harvested ClientKey + the verifier's ServerKey onto the long-lived
+					 * client userinfo so the backend connection can hand them to libpq. Harvest ONLY
+					 * when the stored secret IS a SCRAM verifier: for a plaintext-stored user the SCRAM
+					 * exchange runs against an ad-hoc verifier whose random salt will not match the
+					 * backend's rolpassword, so those keys must never be reused on the backend leg.
+					 * (Gating on scram_state->adhoc is insufficient — it stays false on a plaintext
+					 * user's 2nd+ login when the verifier cache hits.) */
+					if (password && get_password_type(password) == PASSWORD_TYPE_SCRAM_SHA_256) {
+						memcpy(userinfo->scram_ClientKey,
 							(*myds)->scram_state->ClientKey,
-							sizeof((*myds)->scram_state->ClientKey));
-						memcpy(stored_user_info.scram_ServerKey,
+							sizeof(userinfo->scram_ClientKey));
+						memcpy(userinfo->scram_ServerKey,
 							(*myds)->scram_state->ServerKey,
-							sizeof((*myds)->scram_state->ServerKey));
-						stored_user_info.has_scram_keys = true;
+							sizeof(userinfo->scram_ServerKey));
+						userinfo->has_scram_keys = true;
 					}
 
 					free_scram_state((*myds)->scram_state);

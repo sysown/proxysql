@@ -36,6 +36,9 @@ PgSQL_Connection_userinfo::PgSQL_Connection_userinfo() {
 	dbname=NULL;
 	fe_username=NULL;
 	hash=0;
+	has_scram_keys=false;
+	memset(scram_ClientKey, 0, sizeof(scram_ClientKey));
+	memset(scram_ServerKey, 0, sizeof(scram_ServerKey));
 }
 
 PgSQL_Connection_userinfo::~PgSQL_Connection_userinfo() {
@@ -124,6 +127,10 @@ void PgSQL_Connection_userinfo::set(char *user, char *pass, char *db, char *sh1)
 
 void PgSQL_Connection_userinfo::set(PgSQL_Connection_userinfo *ui) {
 	set(ui->username, ui->password, ui->dbname, ui->sha1_pass);
+	// Carry the harvested SCRAM keys frontend->backend (not part of the hash).
+	memcpy(scram_ClientKey, ui->scram_ClientKey, sizeof(scram_ClientKey));
+	memcpy(scram_ServerKey, ui->scram_ServerKey, sizeof(scram_ServerKey));
+	has_scram_keys = ui->has_scram_keys;
 }
 
 bool PgSQL_Connection_userinfo::set_dbname(const char* db) {
@@ -943,6 +950,10 @@ handler_again:
 	return async_state_machine;
 }
 
+// libpq/pgcommon base64 (linked via libpgcommon.a) — used to encode the 32-byte SCRAM
+// keys into the conninfo string. Does not NUL-terminate; returns the encoded length.
+extern "C" int pg_b64_encode(const char *src, int len, char *dst, int dstlen);
+
 static void append_conninfo_param(std::ostringstream& conninfo, const char* key, char* val) {
 	if (!val) return;
 	char* escaped_str = escape_string_single_quotes_and_backslashes(val, false);
@@ -970,7 +981,34 @@ void PgSQL_Connection::connect_start() {
 
 	std::ostringstream conninfo;
 	append_conninfo_param(conninfo, "user", userinfo->username); // username
-	append_conninfo_param(conninfo, "password", userinfo->password); // password
+	if (userinfo->has_scram_keys) {
+		// Hand libpq the harvested ClientKey + the verifier's ServerKey (base64) and send NO
+		// password — the stored secret is a verifier, which libpq would otherwise wrongly run
+		// PBKDF2 over.
+		char ck_b64[64] = { 0 };
+		char sk_b64[64] = { 0 };
+		int n1 = pg_b64_encode((const char*)userinfo->scram_ClientKey,
+			(int)sizeof(userinfo->scram_ClientKey), ck_b64, (int)sizeof(ck_b64) - 1);
+		int n2 = pg_b64_encode((const char*)userinfo->scram_ServerKey,
+			(int)sizeof(userinfo->scram_ServerKey), sk_b64, (int)sizeof(sk_b64) - 1);
+		if (n1 > 0) ck_b64[n1] = '\0';
+		if (n2 > 0) sk_b64[n2] = '\0';
+		append_conninfo_param(conninfo, "scram_client_key", ck_b64);
+		append_conninfo_param(conninfo, "scram_server_key", sk_b64);
+	} else if (userinfo->password && get_password_type(userinfo->password) == PASSWORD_TYPE_MD5) {
+		// md5-stored user: reuse the stored "md5…" hash directly; no plaintext.
+		append_conninfo_param(conninfo, "md5_secret", userinfo->password);
+	} else if (userinfo->password && get_password_type(userinfo->password) == PASSWORD_TYPE_SCRAM_SHA_256) {
+		// A SCRAM verifier reached the backend connect with no harvested keys (has_scram_keys==false).
+		// Do NOT ship it as a plaintext password — libpq would run PBKDF2 over the verifier text and
+		// fail. Not reachable from a normal frontend SCRAM login (which always harvests the ClientKey);
+		// reaching here means an internal/monitor connection or a logic error. Emit no password so the
+		// backend rejects cleanly, and log it.
+		proxy_error("PgSQL backend connect for user '%s': SCRAM verifier stored but no harvested ClientKey; cannot authenticate to backend without a frontend SCRAM login\n",
+			userinfo->username ? userinfo->username : "(null)");
+	} else {
+		append_conninfo_param(conninfo, "password", userinfo->password); // password
+	}
 	append_conninfo_param(conninfo, "dbname", userinfo->dbname); // dbname
 	append_conninfo_param(conninfo, "host", parent->address); // backend address
 	// If the DNS cache has resolved this hostname already, also pass
