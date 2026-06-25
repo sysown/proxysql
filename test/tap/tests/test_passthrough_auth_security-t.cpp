@@ -165,24 +165,6 @@ int main() {
 			NULL, cl.admin_port, NULL, 0) != NULL,
 		"Connected to ProxySQL admin at %s:%d", cl.admin_host, cl.admin_port);
 
-	/*
-	 * Snapshot original use_ssl for MYSQL8_HG (see e2e-t.cpp).
-	 */
-	int saved_use_ssl = 0;
-	{
-		char q[256];
-		snprintf(q, sizeof(q),
-			"SELECT COALESCE(use_ssl,0) FROM mysql_servers "
-			"WHERE hostgroup_id=%u LIMIT 1",
-			MYSQL8_HG);
-		if (mysql_query(admin, q) == 0) {
-			MYSQL_RES* res = mysql_store_result(admin);
-			MYSQL_ROW row = res ? mysql_fetch_row(res) : NULL;
-			if (row && row[0]) saved_use_ssl = atoi(row[0]);
-			if (res) mysql_free_result(res);
-		}
-	}
-
 	/* -------- backend user with caching_sha2_password -------- */
 	do_query(backend, string("DROP USER IF EXISTS '") + TEST_USER + "'@'%'");
 	const bool user_ok =
@@ -429,17 +411,6 @@ int main() {
 		rc |= do_query(admin, "SET mysql-default_authentication_plugin='mysql_native_password'");
 		rc |= do_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 		ok(rc == EXIT_SUCCESS, "Cleanup: mysql_users + globals restored");
-	}
-
-	/* Restore use_ssl for MYSQL8_HG (see e2e-t.cpp). */
-	{
-		char q[256];
-		snprintf(q, sizeof(q),
-			"UPDATE mysql_servers SET use_ssl=%d WHERE hostgroup_id=%u",
-			saved_use_ssl, MYSQL8_HG);
-		int rc = do_query(admin, q);
-		rc |= do_query(admin, "LOAD MYSQL SERVERS TO RUNTIME");
-		ok(rc == EXIT_SUCCESS, "Cleanup: use_ssl restored for HG %u", MYSQL8_HG);
 	}
 
 	mysql_close(backend);
