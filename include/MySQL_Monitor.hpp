@@ -297,6 +297,11 @@ public:
 		return task_result_;
 	}
 
+	inline
+	const char* get_query() const {
+		return query_.c_str();
+	}
+
 private:
 	std::string query_;
 	unsigned long long task_expiry_time_; // task expiry time (t1 + task_timeout_ * 1000)

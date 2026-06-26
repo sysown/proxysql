@@ -1670,6 +1670,7 @@ void * monitor_read_only_thread(const std::vector<MySQL_Monitor_State_Data*>& da
 	mysql_close(mysql_init(NULL));
 	bool timeout_reached = false;
 	MySQL_Monitor_State_Data *mmsd = data.front();
+	std::string monitor_query;
 	// Wait for GloMTH to be initialized
 	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
@@ -1708,23 +1709,24 @@ void * monitor_read_only_thread(const std::vector<MySQL_Monitor_State_Data*>& da
 	mmsd->interr=0; // reset the value
 #ifndef TEST_READONLY
 	if (mmsd->get_task_type() == MON_INNODB_READ_ONLY) {
-		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT @@global.innodb_read_only read_only");
+		monitor_query = "SELECT @@global.innodb_read_only read_only";
 	} else if (mmsd->get_task_type() == MON_SUPER_READ_ONLY) {
-		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT @@global.super_read_only read_only");
+		monitor_query = "SELECT @@global.super_read_only read_only";
 	} else if (mmsd->get_task_type() == MON_READ_ONLY__AND__INNODB_READ_ONLY) {
-		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT @@global.read_only&@@global.innodb_read_only read_only");
+		monitor_query = "SELECT @@global.read_only&@@global.innodb_read_only read_only";
 	} else if (mmsd->get_task_type() == MON_READ_ONLY__OR__INNODB_READ_ONLY) {
-		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT @@global.read_only|@@global.innodb_read_only read_only");
+		monitor_query = "SELECT @@global.read_only|@@global.innodb_read_only read_only";
 	} else if (mmsd->get_task_type() == MON_AWS_RDS_TOPOLOGY_DISCOVERY) {
-		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql, QUERY_AWS_RDS_TOPOLOGY_DISCOVERY);
+		monitor_query = QUERY_AWS_RDS_TOPOLOGY_DISCOVERY;
 	} else { // default
-		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT @@global.read_only read_only");
+		monitor_query = "SELECT @@global.read_only read_only";
 	}
+	mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql, monitor_query.c_str());
 #else // TEST_READONLY
 	{
-		std::string s = "SELECT @@global.read_only read_only";
-		s += " " + std::string(mmsd->hostname) + ":" + std::to_string(mmsd->port);
-		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,s.c_str());
+		monitor_query = "SELECT @@global.read_only read_only";
+		monitor_query += " " + std::string(mmsd->hostname) + ":" + std::to_string(mmsd->port);
+		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,monitor_query.c_str());
 	}
 #endif // TEST_READONLY
 	while (mmsd->async_exit_status) {
@@ -1789,7 +1791,14 @@ void * monitor_read_only_thread(const std::vector<MySQL_Monitor_State_Data*>& da
 
 __exit_monitor_read_only_thread:
 	mmsd->t2=monotonic_time();
-	{
+	if (mmsd->get_task_type() == MON_AWS_RDS_TOPOLOGY_DISCOVERY) {
+		if (mmsd->interr == 0 && mmsd->result) {
+			GloMyMon->process_aws_rds_topology(mmsd);
+			mysql_free_result(mmsd->result);
+			mmsd->result = NULL;
+			read_only_success = true;
+		}
+	} else {  /* handle read_only checks */
 		char *query=NULL;
 		query=(char *)"INSERT OR REPLACE INTO mysql_server_read_only_log VALUES (?1 , ?2 , ?3 , ?4 , ?5 , ?6)";
 		auto [rc1, statement_unique] = mmsd->mondb->prepare_v2(query);
@@ -1797,6 +1806,7 @@ __exit_monitor_read_only_thread:
 		sqlite3_stmt *statement = statement_unique.get();
 		int rc;
 		int read_only=1; // as a safety mechanism , read_only=1 is the default
+		bool valid_result = true;
 		rc=(*proxy_sqlite3_bind_text)(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		rc=(*proxy_sqlite3_bind_int)(statement, 2, mmsd->port); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		unsigned long long time_now=realtime_time();
@@ -1833,8 +1843,11 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 //						rc=(*proxy_sqlite3_bind_null)(statement, 5); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 //					}
 			} else {
-				proxy_error("mysql_fetch_fields returns NULL, or mysql_num_fields is incorrect. Server %s:%d . See bug #1994\n", mmsd->hostname, mmsd->port);
+				valid_result = false;
 				rc=(*proxy_sqlite3_bind_null)(statement, 5); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+				proxy_error("mysql_fetch_fields returns NULL, or mysql_num_fields is incorrect. Server %s:%d . See bug #1994\n", mmsd->hostname, mmsd->port);
+				proxy_info("Dumping read_only result for server %s:%d, query: %s\n", mmsd->hostname, mmsd->port, monitor_query.c_str());
+				dump_mysql_result(stderr, mmsd->result);
 			}
 			mysql_free_result(mmsd->result);
 			mmsd->result=NULL;
@@ -1851,11 +1864,13 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 		rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 
-		if (mmsd->mysql_error_msg == NULL) {
+		if (valid_result && mmsd->mysql_error_msg == NULL) {
 			read_only_success = true;
 		}
 
-		if (timeout_reached == false && mmsd->interr == 0) {
+		if (!valid_result) {
+			// Ignore malformed read_only resultsets: do not infer backend state.
+		} else if (timeout_reached == false && mmsd->interr == 0) {
 			MyHGM->read_only_action_v2( std::list<read_only_server_t> {
 										read_only_server_t { mmsd->hostname, mmsd->port, read_only }
 										} ); // default behavior
@@ -1890,6 +1905,8 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 			free(buff);
 		}
 	}
+
+	/* error handling for both read_only and rds_topology checks */
 	if (mmsd->interr || mmsd->mysql_error_msg) { // check failed
 		if (mmsd->mysql) {
 			// AWS RDS topology discovery probes every replication-hostgroup member, but
@@ -1912,6 +1929,7 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 			}
 		}
 	}
+
 __fast_exit_monitor_read_only_thread:
 	if (mmsd->mysql) {
 		// if we reached here we didn't put the connection back
@@ -1936,11 +1954,13 @@ __fast_exit_monitor_read_only_thread:
 			}
 		}
 	}
+
 	if (read_only_success) {
 		__sync_fetch_and_add(&GloMyMon->read_only_check_OK,1);
 	} else {
 		__sync_fetch_and_add(&GloMyMon->read_only_check_ERR,1);
 	}
+
 	delete mysql_thr;
 	return NULL;
 }
@@ -8404,6 +8424,7 @@ bool MySQL_Monitor::monitor_read_only_process_ready_tasks(const std::vector<MySQ
 		sqlite3_stmt* statement = statement_unique.get();
 		int rc;
 		int read_only = 1; // as a safety mechanism , read_only=1 is the default
+		bool valid_result = true;
 		rc = (*proxy_sqlite3_bind_text)(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		rc = (*proxy_sqlite3_bind_int)(statement, 2, mmsd->port); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		unsigned long long time_now = realtime_time();
@@ -8437,8 +8458,11 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 
 				rc = (*proxy_sqlite3_bind_int64)(statement, 5, read_only); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 			} else {
-				proxy_error("mysql_fetch_fields returns NULL, or mysql_num_fields is incorrect. Server %s:%d . See bug #1994\n", mmsd->hostname, mmsd->port);
+				valid_result = false;
 				rc = (*proxy_sqlite3_bind_null)(statement, 5); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+				proxy_error("mysql_fetch_fields returns NULL, or mysql_num_fields is incorrect. Server %s:%d . See bug #1994\n", mmsd->hostname, mmsd->port);
+				proxy_info("Dumping read_only result for server %s:%d, query: %s\n", mmsd->hostname, mmsd->port, mmsd->get_query());
+				dump_mysql_result(stderr, mmsd->result);
 			}
 			mysql_free_result(mmsd->result);
 			mmsd->result = NULL;
@@ -8455,7 +8479,9 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 		rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 
-		if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS) {
+		if (!valid_result) {
+			// Ignore malformed read_only resultsets: do not infer backend state.
+		} else if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS) {
 			//MyHGM->read_only_action_v2(mmsd->hostname, mmsd->port, read_only); // default behavior
 			mysql_servers.push_back( std::tuple<std::string,int,int> { mmsd->hostname, mmsd->port, read_only });
 		} else {
