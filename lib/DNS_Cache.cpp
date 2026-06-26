@@ -205,6 +205,27 @@ void* DNSResolverWorker::run() {
 	return nullptr;
 }
 
+bool DNS_Cache::is_ip_valid(const std::string& hostname, const std::string& ip) const {
+	if (!enabled || hostname.empty() || ip.empty()) {
+		return false;
+	}
+
+	int rc = pthread_rwlock_rdlock(&rwlock_);
+	assert(rc == 0);
+
+	bool valid = false;
+	auto itr = records.find(hostname);
+	if (itr != records.end()) {
+		const std::vector<std::string>& src =
+			itr->second.pinned_ips.empty() ? itr->second.ips : itr->second.pinned_ips;
+		valid = std::find(src.begin(), src.end(), ip) != src.end();
+	}
+
+	rc = pthread_rwlock_unlock(&rwlock_);
+	assert(rc == 0);
+
+	return valid;
+}
 
 bool DNS_Cache::add(const std::string& hostname, std::vector<std::string>&& ips) {
 

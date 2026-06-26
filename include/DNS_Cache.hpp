@@ -83,6 +83,7 @@ public:
 	void remove(const std::string& hostname);
 	void clear();
 	bool empty() const;
+	bool is_ip_valid(const std::string& hostname, const std::string& ip) const;
 	std::string lookup(const std::string& hostname, size_t* ip_count) const;
 
 	/**

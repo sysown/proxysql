@@ -211,6 +211,7 @@ enum MySQL_Monitor_State_Data_Task_Type {
 enum class MySQL_Monitor_State_Data_Task_Result {
 	TASK_RESULT_UNKNOWN,
 	TASK_RESULT_TIMEOUT,
+	TASK_RESULT_TIMEOUT_STALE_IP,
 	TASK_RESULT_FAILED,
 	TASK_RESULT_SUCCESS,
 	TASK_RESULT_PENDING
@@ -478,6 +479,7 @@ class MySQL_Monitor {
 	static std::string dns_lookup(const char* hostname, bool return_hostname_if_lookup_fails = true, size_t* ip_count = nullptr);
 	static bool update_dns_cache_from_mysql_conn(const MYSQL* mysql);
 	static void trigger_dns_cache_update();
+	bool timeout_validate_ip_change(const MySQL_Monitor_State_Data* mmsd) const;
 
 	/**
 	* @brief Classify the parsed mysql.rds_topology result and dispatch.

@@ -795,7 +795,10 @@ void MySQL_Monitor_State_Data::init_async() {
 
 void MySQL_Monitor_State_Data::mark_task_as_timeout(unsigned long long time) {
 	
-	task_result_ = MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT;
+	const bool stale_ip_timeout = GloMyMon && GloMyMon->timeout_validate_ip_change(this);
+	task_result_ = stale_ip_timeout
+		? MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT_STALE_IP
+		: MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT;
 	t2 = time;
 	
 	if (mysql_error_msg)
@@ -803,10 +806,15 @@ void MySQL_Monitor_State_Data::mark_task_as_timeout(unsigned long long time) {
 
 	if (task_id_ == MON_PING) {
 		async_state_machine_ = ASYNC_PING_TIMEOUT;
-		mysql_error_msg = strdup("timeout during ping");
+		mysql_error_msg = strdup(stale_ip_timeout ? "resolved IP no longer valid" : "timeout during ping");
 	} else {
 		async_state_machine_ = (async_state_machine_ == ASYNC_QUERY_CONT) ? ASYNC_QUERY_TIMEOUT : ASYNC_STORE_RESULT_TIMEOUT;
-		mysql_error_msg = strdup("timeout check");
+		mysql_error_msg = strdup(stale_ip_timeout ? "resolved IP no longer valid" : "timeout check");
+	}
+	if (stale_ip_timeout) {
+		proxy_debug(PROXY_DEBUG_MONITOR, 5,
+			"Ignoring monitor timeout for %s:%d because resolved IP is no longer valid\n",
+			hostname, port);
 	}
 }
 
@@ -1671,6 +1679,7 @@ void * monitor_read_only_thread(const std::vector<MySQL_Monitor_State_Data*>& da
 	bool timeout_reached = false;
 	MySQL_Monitor_State_Data *mmsd = data.front();
 	std::string monitor_query;
+	bool stale_ip_timeout = false;
 	// Wait for GloMTH to be initialized
 	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
@@ -1737,9 +1746,16 @@ void * monitor_read_only_thread(const std::vector<MySQL_Monitor_State_Data*>& da
 		const unsigned long long now = monotonic_time();
 #endif
 		if (now > mmsd->t1 + mysql_thread___monitor_read_only_timeout * 1000) {
-			mmsd->mysql_error_msg=strdup("timeout check");
-			proxy_error("Timeout on read_only check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_read_only_timeout.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
-			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_READ_ONLY_CHECK_TIMEOUT);
+			stale_ip_timeout = GloMyMon->timeout_validate_ip_change(mmsd);
+			mmsd->mysql_error_msg=strdup(stale_ip_timeout ? "resolved IP no longer valid" : "timeout check");
+			if (stale_ip_timeout) {
+				proxy_debug(PROXY_DEBUG_MONITOR, 5,
+					"Ignoring read_only timeout for %s:%d because resolved IP is no longer valid\n",
+					mmsd->hostname, mmsd->port);
+			} else {
+				proxy_error("Timeout on read_only check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_read_only_timeout.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_READ_ONLY_CHECK_TIMEOUT);
+			}
 			timeout_reached = true;
 			goto __exit_monitor_read_only_thread;
 		}
@@ -1771,9 +1787,16 @@ void * monitor_read_only_thread(const std::vector<MySQL_Monitor_State_Data*>& da
 		const unsigned long long now = monotonic_time();
 #endif
 		if (now > mmsd->t1 + mysql_thread___monitor_read_only_timeout * 1000) {
-			mmsd->mysql_error_msg=strdup("timeout check");
-			proxy_error("Timeout on read_only check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_read_only_timeout.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
-			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_READ_ONLY_CHECK_TIMEOUT);
+			stale_ip_timeout = GloMyMon->timeout_validate_ip_change(mmsd);
+			mmsd->mysql_error_msg=strdup(stale_ip_timeout ? "resolved IP no longer valid" : "timeout check");
+			if (stale_ip_timeout) {
+				proxy_debug(PROXY_DEBUG_MONITOR, 5,
+					"Ignoring read_only timeout for %s:%d because resolved IP is no longer valid\n",
+					mmsd->hostname, mmsd->port);
+			} else {
+				proxy_error("Timeout on read_only check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_read_only_timeout.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_READ_ONLY_CHECK_TIMEOUT);
+			}
 			timeout_reached = true;
 			goto __exit_monitor_read_only_thread;
 		}
@@ -1868,8 +1891,8 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 			read_only_success = true;
 		}
 
-		if (!valid_result) {
-			// Ignore malformed read_only resultsets: do not infer backend state.
+		if (!valid_result || stale_ip_timeout) {
+			// Ignore; do not infer backend state.
 		} else if (timeout_reached == false && mmsd->interr == 0) {
 			MyHGM->read_only_action_v2( std::list<read_only_server_t> {
 										read_only_server_t { mmsd->hostname, mmsd->port, read_only }
@@ -1969,6 +1992,7 @@ void * monitor_group_replication_thread(const std::vector<MySQL_Monitor_State_Da
 	assert(!data.empty());
 	mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd = data.front();
+	bool stale_ip_timeout = false;
 	// Wait for GloMTH to be initialized
 	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
@@ -2015,9 +2039,16 @@ void * monitor_group_replication_thread(const std::vector<MySQL_Monitor_State_Da
 		const unsigned long long now = monotonic_time();
 #endif
 		if (now > mmsd->t1 + mysql_thread___monitor_groupreplication_healthcheck_timeout * 1000) {
-			mmsd->mysql_error_msg=strdup("timeout check");
-			proxy_error("Timeout on group replication health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_groupreplication_healthcheck_timeout. Assuming viable_candidate=NO and read_only=YES\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
-			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_GR_HEALTH_CHECK_TIMEOUT);
+			stale_ip_timeout = GloMyMon->timeout_validate_ip_change(mmsd);
+			mmsd->mysql_error_msg=strdup(stale_ip_timeout ? "resolved IP no longer valid" : "timeout check");
+			if (stale_ip_timeout) {
+				proxy_debug(PROXY_DEBUG_MONITOR, 5,
+					"Ignoring group replication timeout for %s:%d because resolved IP is no longer valid\n",
+					mmsd->hostname, mmsd->port);
+			} else {
+				proxy_error("Timeout on group replication health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_groupreplication_healthcheck_timeout. Assuming viable_candidate=NO and read_only=YES\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_GR_HEALTH_CHECK_TIMEOUT);
+			}
 			goto __exit_monitor_group_replication_thread;
 		}
 		if (mmsd->interr) {
@@ -2049,9 +2080,16 @@ void * monitor_group_replication_thread(const std::vector<MySQL_Monitor_State_Da
 		const unsigned long long now = monotonic_time();
 #endif
 		if (now > mmsd->t1 + mysql_thread___monitor_groupreplication_healthcheck_timeout * 1000) {
-			mmsd->mysql_error_msg=strdup("timeout check");
-			proxy_error("Timeout on group replication health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_groupreplication_healthcheck_timeout. Assuming viable_candidate=NO and read_only=YES\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
-			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_GR_HEALTH_CHECK_TIMEOUT);
+			stale_ip_timeout = GloMyMon->timeout_validate_ip_change(mmsd);
+			mmsd->mysql_error_msg=strdup(stale_ip_timeout ? "resolved IP no longer valid" : "timeout check");
+			if (stale_ip_timeout) {
+				proxy_debug(PROXY_DEBUG_MONITOR, 5,
+					"Ignoring group replication timeout for %s:%d because resolved IP is no longer valid\n",
+					mmsd->hostname, mmsd->port);
+			} else {
+				proxy_error("Timeout on group replication health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_groupreplication_healthcheck_timeout. Assuming viable_candidate=NO and read_only=YES\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_GR_HEALTH_CHECK_TIMEOUT);
+			}
 			goto __exit_monitor_group_replication_thread;
 		}
 		if (GloMyMon->shutdown==true) {
@@ -2158,7 +2196,9 @@ __exit_monitor_group_replication_thread:
 		pthread_mutex_unlock(&GloMyMon->group_replication_mutex);
 
 		// NOTE: we update MyHGM outside the mutex group_replication_mutex
-		if (mmsd->mysql_error_msg) { // there was an error checking the status of the server, surely we need to reconfigure GR
+		if (stale_ip_timeout) {
+			// Logged/counted; do not change GR state for stale DNS targets.
+		} else if (mmsd->mysql_error_msg) { // there was an error checking the status of the server, surely we need to reconfigure GR
 			if (num_timeouts == 0) {
 				// it wasn't a timeout, reconfigure immediately
 				MyHGM->update_group_replication_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, mmsd->mysql_error_msg);
@@ -2310,6 +2350,7 @@ void * monitor_galera_thread(const std::vector<MySQL_Monitor_State_Data*>& data)
 	assert(!data.empty());
 	mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd = data.front();
+	bool stale_ip_timeout = false;
 	// Wait for GloMTH to be initialized
 	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
@@ -2393,9 +2434,16 @@ void * monitor_galera_thread(const std::vector<MySQL_Monitor_State_Data*>& data)
 		const unsigned long long now = monotonic_time();
 #endif
 		 if (now > mmsd->t1 + mysql_thread___monitor_galera_healthcheck_timeout * 1000) {
-			mmsd->mysql_error_msg=strdup("timeout check");
-			proxy_error("Timeout on Galera health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_galera_healthcheck_timeout.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
-			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_GALERA_HEALTH_CHECK_TIMEOUT);
+			stale_ip_timeout = GloMyMon->timeout_validate_ip_change(mmsd);
+			mmsd->mysql_error_msg=strdup(stale_ip_timeout ? "resolved IP no longer valid" : "timeout check");
+			if (stale_ip_timeout) {
+				proxy_debug(PROXY_DEBUG_MONITOR, 5,
+					"Ignoring Galera timeout for %s:%d because resolved IP is no longer valid\n",
+					mmsd->hostname, mmsd->port);
+			} else {
+				proxy_error("Timeout on Galera health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_galera_healthcheck_timeout.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_GALERA_HEALTH_CHECK_TIMEOUT);
+			}
 			goto __exit_monitor_galera_thread;
 		}
 		if (GloMyMon->shutdown==true) {
@@ -2414,9 +2462,16 @@ void * monitor_galera_thread(const std::vector<MySQL_Monitor_State_Data*>& data)
 		const unsigned long long now = monotonic_time();
 #endif
 		if (now > mmsd->t1 + mysql_thread___monitor_galera_healthcheck_timeout * 1000) {
-			mmsd->mysql_error_msg=strdup("timeout check");
-			proxy_error("Timeout on Galera health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_galera_healthcheck_timeout.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
-			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_GALERA_HEALTH_CHECK_TIMEOUT);
+			stale_ip_timeout = GloMyMon->timeout_validate_ip_change(mmsd);
+			mmsd->mysql_error_msg=strdup(stale_ip_timeout ? "resolved IP no longer valid" : "timeout check");
+			if (stale_ip_timeout) {
+				proxy_debug(PROXY_DEBUG_MONITOR, 5,
+					"Ignoring Galera timeout for %s:%d because resolved IP is no longer valid\n",
+					mmsd->hostname, mmsd->port);
+			} else {
+				proxy_error("Timeout on Galera health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_galera_healthcheck_timeout.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_GALERA_HEALTH_CHECK_TIMEOUT);
+			}
 			goto __exit_monitor_galera_thread;
 		}
 		if (GloMyMon->shutdown==true) {
@@ -2593,7 +2648,9 @@ __exit_monitor_galera_thread:
 		pthread_mutex_unlock(&GloMyMon->galera_mutex);
 
 		// NOTE: we update MyHGM outside the mutex galera_mutex
-		if (mmsd->mysql_error_msg) { // there was an error checking the status of the server, surely we need to reconfigure Galera
+		if (stale_ip_timeout) {
+			// Logged/counted; do not change Galera state for stale DNS targets.
+		} else if (mmsd->mysql_error_msg) { // there was an error checking the status of the server, surely we need to reconfigure Galera
 			if (num_timeouts == 0) {
 				// it wasn't a timeout, reconfigure immediately
 				MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, mmsd->mysql_error_msg);
@@ -7668,6 +7725,23 @@ std::string MySQL_Monitor::dns_lookup(const char* hostname, bool return_hostname
 	return MySQL_Monitor::dns_lookup(std::string(hostname), return_hostname_if_lookup_fails, ip_count);
 }
 
+bool MySQL_Monitor::timeout_validate_ip_change(const MySQL_Monitor_State_Data* mmsd) const {
+	if (!mmsd || !mmsd->mysql || !mmsd->hostname || !dns_cache) {
+		return false;
+	}
+
+	if (mmsd->port == 0 || validate_ip(mmsd->hostname)) {
+		return false;
+	}
+
+	const std::string connected_ip = get_connected_peer_ip_from_socket(mmsd->mysql->net.fd);
+	if (connected_ip.empty()) {
+		return false;
+	}
+
+	return !dns_cache->is_ip_valid(mmsd->hostname, connected_ip);
+}
+
 bool MySQL_Monitor::update_dns_cache_from_mysql_conn(const MYSQL* mysql)
 {
 	assert(mysql);
@@ -8018,9 +8092,10 @@ MySQL_Monitor_State_Data_Task_Result MySQL_Monitor_State_Data::task_handler(shor
 	assert(task_handler_);
 
 	if (event_ != -1) {
-
-		if (task_result_ == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT)
-			return MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT;
+		if (task_result_ == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT ||
+			task_result_ == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT_STALE_IP) {
+			return task_result_;
+		}
 #ifdef DEBUG
 		const unsigned long long now = (GloMyMon->proxytest_forced_timeout == false) ? monotonic_time() : ULLONG_MAX;
 #else
@@ -8349,12 +8424,12 @@ __again:
 }
 
 bool MySQL_Monitor::monitor_read_only_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds) {
-
 	std::list<read_only_server_t> mysql_servers;
 
 	for (auto& mmsd : mmsds) {
 		string originating_server_hostname = mmsd->hostname;
 		const auto task_result = mmsd->get_task_result();
+		const bool stale_ip_timeout = task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT_STALE_IP;
 
 		assert(task_result != MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_PENDING);
 
@@ -8479,8 +8554,8 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 		rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 
-		if (!valid_result) {
-			// Ignore malformed read_only resultsets: do not infer backend state.
+		if (!valid_result || stale_ip_timeout) {
+			// Ignore; do not infer backend state.
 		} else if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS) {
 			//MyHGM->read_only_action_v2(mmsd->hostname, mmsd->port, read_only); // default behavior
 			mysql_servers.push_back( std::tuple<std::string,int,int> { mmsd->hostname, mmsd->port, read_only });
@@ -8605,11 +8680,10 @@ void MySQL_Monitor::monitor_read_only_async(SQLite3_result* resultset, bool do_d
 }
 
 bool MySQL_Monitor::monitor_group_replication_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds) {
-
 	for (auto& mmsd : mmsds) {
-
 		const auto task_result = mmsd->get_task_result();
-		
+		const bool stale_ip_timeout = task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT_STALE_IP;
+
 		assert(task_result != MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_PENDING);
 
 		if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS) {
@@ -8710,7 +8784,9 @@ bool MySQL_Monitor::monitor_group_replication_process_ready_tasks(const std::vec
 		pthread_mutex_unlock(&group_replication_mutex);
 
 		// NOTE: we update MyHGM outside the mutex group_replication_mutex
-		if (mmsd->mysql_error_msg) { // there was an error checking the status of the server, surely we need to reconfigure GR
+		if (stale_ip_timeout) {
+			// Logged/counted; do not change GR state for stale DNS targets.
+		} else if (mmsd->mysql_error_msg) { // there was an error checking the status of the server, surely we need to reconfigure GR
 			if (num_timeouts == 0) {
 				// it wasn't a timeout, reconfigure immediately
 				MyHGM->update_group_replication_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, mmsd->mysql_error_msg);
@@ -9090,10 +9166,9 @@ void MySQL_Monitor::monitor_replication_lag_async(SQLite3_result* resultset) {
 }
 
 bool MySQL_Monitor::monitor_galera_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds) {
-
 	for (auto& mmsd : mmsds) {
-
 		const auto task_result = mmsd->get_task_result();
+		const bool stale_ip_timeout = task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT_STALE_IP;
 
 		assert(task_result != MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_PENDING);
 
@@ -9271,7 +9346,9 @@ bool MySQL_Monitor::monitor_galera_process_ready_tasks(const std::vector<MySQL_M
 		pthread_mutex_unlock(&galera_mutex);
 
 		// NOTE: we update MyHGM outside the mutex galera_mutex
-		if (mmsd->mysql_error_msg) { // there was an error checking the status of the server, surely we need to reconfigure Galera
+		if (stale_ip_timeout) {
+			// Logged/counted; do not change Galera state for stale DNS targets.
+		} else if (mmsd->mysql_error_msg) { // there was an error checking the status of the server, surely we need to reconfigure Galera
 			if (num_timeouts == 0) {
 				// it wasn't a timeout, reconfigure immediately
 				MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, mmsd->mysql_error_msg);
