@@ -7249,7 +7249,7 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 					st.writer_hg, st.reader_hg, p.blue_host.c_str(), p.port);
 				continue;
 			}
-			dns_cache->pin(p.blue_host, { p.green_ip });
+			dns_cache->pin(p.blue_host, p.green_ip);
 			proxy_info(
 				"AWS RDS BGD [wHG=%u rHG=%u]: repointed blue '%s' to green IP %s\n",
 				st.writer_hg, st.reader_hg, p.blue_host.c_str(), p.green_ip.c_str());

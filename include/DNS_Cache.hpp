@@ -87,12 +87,25 @@ public:
 	std::string lookup(const std::string& hostname, size_t* ip_count) const;
 
 	/**
-	* @brief Pin a hostname to a fixed set of IPs that override resolution until unpin().
+	* @brief Pin a hostname to a fixed IP until it is explicitly unpinned.
 	*
-	* @param hostname Hostname whose resolution is overridden.
-	* @param ips      IP addresses to serve for 'hostname' (moved into the cache).
+	* @param hostname Hostname whose cached resolution is overridden.
+	* @param ip       IP address to serve for 'hostname' while pinned.
 	*/
-	void pin(const std::string& hostname, std::vector<std::string>&& ips);
+	void pin(const std::string& hostname, const std::string& ip);
+
+	/**
+	* @brief Pin a hostname to a fixed IP for a bounded time.
+	*
+	* @details While the pin is active, lookup() serves 'ip' instead of the resolved
+	*   address set. Once ttl_ms expires, lookup() serves the resolved address and
+	*   clears the expired pin before returning.
+	*
+	* @param hostname Hostname whose cached resolution is overridden.
+	* @param ip       IP address to serve for 'hostname' while pinned.
+	* @param ttl_ms   Pin lifetime in milliseconds; 0 means no expiry.
+	*/
+	void pin(const std::string& hostname, const std::string& ip, unsigned long long ttl_ms);
 
 	/**
 	* @brief Remove a pin set by pin(), restoring normal resolution (no-op if not pinned).
@@ -104,10 +117,10 @@ public:
 private:
 	struct IP_ADDR {
 		std::vector<std::string> ips;
-		// Pinned override: when non-empty, get_next_ip()/lookup() serve these
-		// instead of 'ips'. Set by pin(), cleared by unpin(); untouched by add(),
-		// so it is preserved across resolver-thread TTL refreshes.
-		std::vector<std::string> pinned_ips;
+		// Pinned override: when non-empty, lookup() serves it instead of 'ips'
+		// while pinned_until is not expired.
+		std::string pinned_ip;
+		unsigned long long pinned_until = 0;
 		// 'counter' is bumped by get_next_ip() (a const method) for
 		// round-robin selection; the logical state of the cache record is
 		// unchanged, so mutable is the right tool here and lets us drop a
@@ -115,16 +128,23 @@ private:
 		mutable unsigned long counter = 0;
 	};
 
+	struct lookup_result_t {
+		std::string resolved_ip;
+		size_t ip_count = 0;
+		std::string pinned_ip;
+		unsigned long long pinned_until = 0;
+	};
+
 	/**
 	* @brief Next round-robin IP for 'ip_addr' and the size of the served set.
 	*
 	* @param ip_addr Cache record to select from.
 	*
-	* @return { ip, set_size }, or { "", 0 } when the set is empty.
+	* @return Selected resolved IP details plus current pin metadata.
 	*/
-	std::pair<std::string, size_t> get_next_ip(const IP_ADDR& ip_addr) const;
+	lookup_result_t get_next_ip(const IP_ADDR& ip_addr) const;
 
-	std::unordered_map<std::string, IP_ADDR> records;
+	mutable std::unordered_map<std::string, IP_ADDR> records;
 	std::atomic_bool enabled;
 	mutable pthread_rwlock_t rwlock_;
 
