@@ -48,6 +48,14 @@ void MySrvConnList::drop_all_connections() {
 	}
 }
 
+void MySrvConnList::mark_connections_unhealthy() {
+	for (unsigned int i = 0; i < conns_length(); i++) {
+		MySQL_Connection *conn = index(i);
+		conn->healthy=false;
+		conn->reusable=false;
+	}
+}
+
 unsigned int calculate_eviction_count(unsigned int conns_free, unsigned int conns_used, unsigned int max_connections) {
 	if (conns_free < 1) return 0;
 	unsigned int pct_max_connections = (3 * max_connections) / 4;
@@ -303,4 +311,3 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 	}
 	return NULL; // never reach here
 }
-

@@ -6398,6 +6398,11 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 	for (i=0; i<cached_connections->len; i++) {
 		c = (MySQL_Connection *) cached_connections->index(i);
 
+		// Skip unhealthy or non-reusable connections
+		if (!c->healthy || !c->reusable) {
+			continue;
+		}
+
 		// Skip cached connections whose parent server is inside the session-tracking
 		// capability backoff window. See 'MySrvC::session_track_backoff_until' for the
 		// full rationale; reads are relaxed because the deadline is compared against

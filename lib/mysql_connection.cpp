@@ -428,6 +428,7 @@ MySQL_Connection::MySQL_Connection() {
 	async_state_machine=ASYNC_CONNECT_START;
 	ret_mysql=NULL;
 	send_quit=true;
+	healthy=true;
 	myds=NULL;
 	inserted_into_pool=0;
 	reusable=false;
@@ -2164,6 +2165,9 @@ bool MySQL_Connection::IsServerOffline() {
 	if (parent == NULL)
 		return ret;
 
+	if (healthy == false)
+		return true;
+
 	server_status = parent->get_status(); // we copy it here to avoid race condition. The caller will see this
 	bool server_shunned = (server_status == MYSQL_SERVER_STATUS_SHUNNED) || (server_status == MYSQL_SERVER_STATUS_SHUNNED_AWS_BGD);
 
@@ -3037,6 +3041,8 @@ int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigne
 	server_status=parent->get_status(); // we copy it here to avoid race condition. The caller will see this
 	bool server_shunned = (server_status == MYSQL_SERVER_STATUS_SHUNNED) || (server_status == MYSQL_SERVER_STATUS_SHUNNED_AWS_BGD);
 	if (
+		(healthy == false)
+		||
 		(server_status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the server is OFFLINE as specific by the user
 		||
 		(server_shunned && parent->shunned_automatic == true && parent->shunned_and_kill_all_connections==true) // the server is SHUNNED due to a serious issue
@@ -3092,6 +3098,7 @@ void MySQL_Connection::reset() {
 	bool old_no_multiplex_hg = get_status(STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG);
 	bool old_compress = get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
 	status_flags=0;
+	healthy=true;
 	// reconfigure STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG
 	set_status(old_no_multiplex_hg,STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG);
 	// reconfigure STATUS_MYSQL_CONNECTION_COMPRESSION

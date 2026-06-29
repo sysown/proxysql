@@ -186,6 +186,7 @@ class MySrvConnList {
 	void get_random_MyConn_inner_search(unsigned int start, unsigned int end, unsigned int& conn_found_idx, unsigned int& connection_quality_level, unsigned int& number_of_matching_session_variables, const MySQL_Connection * client_conn);
 	unsigned int conns_length() { return conns->len; }
 	void drop_all_connections();
+	void mark_connections_unhealthy();
 	MySQL_Connection *index(unsigned int);
 };
 
@@ -1081,6 +1082,18 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	* @return true if this call changed a server's status.
 	*/
 	bool aws_rds_bgd_set_shun_server(unsigned int hostgroup_id, const char *hostname, int port, bool shun);
+	/**
+	 * @brief Drain existing backend connections for a server.
+	 *
+	 * @details Drops free connections immediately and marks used connections as unhealthy and non-reusable,
+	 *   so in-flight operations fail on their next backend step and the connection is never pooled again.
+	 *
+	 * @param hostgroup_id Hostgroup to search.
+	 * @param hostname     Address of the server to match.
+	 * @param port         Port of the server to match.
+	 * @return true if a matching server was found.
+	 */
+	bool drain_server_connections(unsigned int hostgroup_id, const char *hostname, int port);
 	/**
 	 * @brief Flag/unflag every server in the writer and reader hostgroups of an AWS RDS blue/green
 	 *   deployment as "switchover in progress", so the read_only monitor (read_only_action_v2) takes

@@ -244,6 +244,16 @@ public:
 	MYSQL * get_connection(char *hostname, int port, MySQL_Monitor_State_Data *mmsd);
 	void put_connection(char *hostname, MySQL_Monitor_State_Data* mmsd);
 	void purge_some_connections();
+	/**
+	 * @brief Purge idle monitor connections for a server.
+	 *
+	 * @details Removes the idle monitor connection pool entry matching the supplied hostname and port.
+	 *   Active monitor tasks are not affected.
+	 *
+	 * @param hostname Server hostname to match.
+	 * @param port Server port to match.
+	 */
+	void purge_connections(const char* hostname, int port);
 	void purge_all_connections();
 	void destroy_mysql_connection(MySQL_Monitor_State_Data* mmsd);
 	MySQL_Monitor_Connection_Pool() {
@@ -333,6 +343,38 @@ void MySQL_Monitor_Connection_Pool::purge_all_connections() {
 	}
 #ifdef DEBUG
 	conns->reset();
+	pthread_mutex_unlock(&m2);
+#endif
+}
+
+/**
+ * @brief Purge idle monitor connections for a server.
+ *
+ * @details Removes the idle monitor connection pool entry matching the supplied hostname and port.
+ *   Active monitor tasks are not affected.
+ *
+ * @param hostname Server hostname to match.
+ * @param port Server port to match.
+ */
+void MySQL_Monitor_Connection_Pool::purge_connections(const char* hostname, int port) {
+	std::lock_guard<std::mutex> lock(mutex);
+#ifdef DEBUG
+	pthread_mutex_lock(&m2);
+#endif
+	if (servers) {
+		for (unsigned int i = 0; i < servers->len; i++) {
+			MonMySrvC* srv = static_cast<MonMySrvC*>(servers->index(i));
+			if (srv && srv->port == port && strcmp(hostname, srv->address) == 0) {
+				proxy_debug(PROXY_DEBUG_MONITOR, 7,
+					"Purging %u idle monitor connections for server %s:%d\n",
+					srv->conns->len, hostname, port);
+				delete srv;
+				servers->remove_index_fast(i);
+				break;
+			}
+		}
+	}
+#ifdef DEBUG
 	pthread_mutex_unlock(&m2);
 #endif
 }
@@ -7236,8 +7278,8 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 		aws_rds_bgd_add_green_writer_in_hg(st);
 		aws_rds_bgd_set_bgd_in_progress(st);
 
-		// Repoint each mapped blue host onto its green IP and drain the blue free
-		// pool so new connections resolve to green.
+		// Repoint each mapped blue host onto its green IP and drain existing
+		// connections so new backend work resolves to green.
 		bool any_reader_mapped = false;
 		for (AWS_RDS_BGD_State::BlueGreenPair& p : st.bg_map) {
 			if (!p.is_writer) {
@@ -7254,15 +7296,9 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 				"AWS RDS BGD [wHG=%u rHG=%u]: repointed blue '%s' to green IP %s\n",
 				st.writer_hg, st.reader_hg, p.blue_host.c_str(), p.green_ip.c_str());
 
-			// TODO: Draining blue free connection pool is not enough
-			//       Kill used connection without SHUNNING the server
 			unsigned int hid = p.is_writer ? st.writer_hg : st.reader_hg;
-			MyHGM->wrlock();
-			MySrvC* s = MyHGM->find_server_in_hg(hid, p.blue_host, p.port);
-			if (s) {
-				s->ConnectionsFree->drop_all_connections();
-			}
-			MyHGM->wrunlock();
+			MyHGM->drain_server_connections(hid, p.blue_host.c_str(), p.port);
+			My_Conn_Pool->purge_connections(p.blue_host.c_str(), p.port);
 		}
 
 		// Blue readers without a green counterpart must stop serving reads.
@@ -7330,6 +7366,7 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 				MyHGM->aws_rds_bgd_set_shun_server(st.reader_hg, br.first.c_str(), br.second, false);
 				// purge so the blue reader hostname re-resolves to the promoted instance
 				dns_cache->remove(br.first);
+				My_Conn_Pool->purge_connections(br.first.c_str(), br.second);
 			}
 			st.shunned_readers.clear();
 		}
@@ -7338,6 +7375,7 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 			// remove the cache record (pin + resolved IPs) so the blue name
 			// re-resolves to the promoted (green) instance
 			dns_cache->remove(p.blue_host);
+			My_Conn_Pool->purge_connections(p.blue_host.c_str(), p.port);
 		}
 
 		// TODO: Drain Green HGs

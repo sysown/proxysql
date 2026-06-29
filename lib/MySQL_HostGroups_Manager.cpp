@@ -2408,9 +2408,14 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool_array(MySQL_Connection **ca, 
 	wrlock();
 
 	// Iterate through the array of connections
-	while (i<cnt) {
-		// Push the current connection back to the pool without acquiring a lock for each individual push
-		push_MyConn_to_pool(c,false);
+	while (i < cnt) {
+		if (!c->reusable) {
+			c->send_quit = false;
+			destroy_MyConn_from_pool(c, false);
+		} else {
+			// Push the current connection back to the pool without acquiring a lock for each individual push
+			push_MyConn_to_pool(c, false);
+		}
 		i++;
 		if (i<cnt)
 			c=ca[i];
@@ -2544,7 +2549,7 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 
 	bool to_del=true; // the default, legacy behavior
 	MySrvC *mysrvc=(MySrvC *)c->parent;
-	if (mysrvc->get_status() == MYSQL_SERVER_STATUS_ONLINE && c->send_quit && queue.size() < __sync_fetch_and_add(&GloMTH->variables.connpoll_reset_queue_length, 0)) {
+	if (c->healthy && mysrvc->get_status() == MYSQL_SERVER_STATUS_ONLINE && c->send_quit && queue.size() < __sync_fetch_and_add(&GloMTH->variables.connpoll_reset_queue_length, 0)) {
 		if (c->async_state_machine==ASYNC_IDLE) {
 			// overall, the backend seems healthy and so it is the connection. Try to reset it
 			int myerr=mysql_errno(c->mysql);
@@ -3843,10 +3848,9 @@ void MySQL_HostGroups_Manager::set_Readyset_status(char *hostname, int port, enu
 /**
 * @brief Set or clear AWS BGD shun state for a matching server.
 *
-* @details When shunning, transitions an ONLINE server to SHUNNED_AWS_BGD,
-*   enables shun metadata, and drops free connections. When unshunning,
-*   transitions only SHUNNED_AWS_BGD back to ONLINE and clears shun metadata.
-*   Servers in other statuses are left unchanged.
+* @details When shunning, transitions an ONLINE server to SHUNNED_AWS_BGD, enables shun metadata,
+*   drops free connections, and marks used connections unhealthy. When unshunning, transitions only
+*   SHUNNED_AWS_BGD back to ONLINE and clears shun metadata. Servers in other statuses are left unchanged.
 *
 * @param hostgroup_id Hostgroup to search.
 * @param hostname     Address of the server to match.
@@ -3874,6 +3878,7 @@ bool MySQL_HostGroups_Manager::aws_rds_bgd_set_shun_server(unsigned int hostgrou
 					mysrvc->shunned_and_kill_all_connections = true;
 					mysrvc->time_last_detected_error = time(NULL);
 					mysrvc->ConnectionsFree->drop_all_connections();
+					mysrvc->ConnectionsUsed->mark_connections_unhealthy();
 					proxy_warning("AWS RDS BGD shunning server %s:%d in HG %u\n",
 						hostname, port, myhgc->hid);
 					changed = true;
@@ -3895,6 +3900,42 @@ bool MySQL_HostGroups_Manager::aws_rds_bgd_set_shun_server(unsigned int hostgrou
 
 	wrunlock();
 	return changed;
+}
+
+/**
+ * @brief Drain existing backend connections for a server.
+ *
+ * @details Drops free connections immediately and marks used connections as unhealthy and non-reusable,
+ *   so in-flight operations fail on their next backend step and the connection is never pooled again.
+ *
+ * @param hostgroup_id Hostgroup to search.
+ * @param hostname     Address of the server to match.
+ * @param port         Port of the server to match.
+ * @return true if a matching server was found.
+ */
+bool MySQL_HostGroups_Manager::drain_server_connections(unsigned int hostgroup_id, const char *hostname, int port) {
+	bool found = false;
+
+	wrlock();
+
+	MyHGC *myhgc = MyHGC_find(hostgroup_id);
+	if (myhgc && myhgc->mysrvs) {
+		for (unsigned int j = 0; j < myhgc->mysrvs->cnt(); j++) {
+			MySrvC *mysrvc = myhgc->mysrvs->idx(j);
+			if (mysrvc->port != port || strcmp(mysrvc->address, hostname) != 0) {
+				continue;
+			}
+
+			mysrvc->ConnectionsFree->drop_all_connections();
+			mysrvc->ConnectionsUsed->mark_connections_unhealthy();
+			proxy_warning("Draining existing connections for server %s:%d in HG %u\n",
+				hostname, port, myhgc->hid);
+			found = true;
+		}
+	}
+
+	wrunlock();
+	return found;
 }
 
 void MySQL_HostGroups_Manager::set_aws_rds_bgd_in_progress(unsigned int writer_hg, unsigned int reader_hg, bool in_progress) {
