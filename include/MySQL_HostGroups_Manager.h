@@ -76,7 +76,7 @@
 										  "auto_generated INT CHECK (auto_generated IN (0,1)) NOT NULL DEFAULT 0," \
 										  "UNIQUE (reader_hostgroup))"
 
-#define MYHGM_GEN_ADMIN_RUNTIME_SERVERS "SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"SHUNNED\" END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers ORDER BY hostgroup_id, hostname, port"
+#define MYHGM_GEN_ADMIN_RUNTIME_SERVERS "SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"SHUNNED\" WHEN 5 THEN \"SHUNNED_AWS_BGD\" END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers ORDER BY hostgroup_id, hostname, port"
 
 #define MYHGM_MYSQL_HOSTGROUP_ATTRIBUTES "CREATE TABLE mysql_hostgroup_attributes (hostgroup_id INT NOT NULL PRIMARY KEY , max_num_online_servers INT CHECK (max_num_online_servers>=0 AND max_num_online_servers <= 1000000) NOT NULL DEFAULT 1000000 , autocommit INT CHECK (autocommit IN (-1, 0, 1)) NOT NULL DEFAULT -1 , free_connections_pct INT CHECK (free_connections_pct >= 0 AND free_connections_pct <= 100) NOT NULL DEFAULT 10 , init_connect VARCHAR NOT NULL DEFAULT '' , multiplex INT CHECK (multiplex IN (0, 1)) NOT NULL DEFAULT 1 , connection_warming INT CHECK (connection_warming IN (0, 1)) NOT NULL DEFAULT 0 , throttle_connections_per_sec INT CHECK (throttle_connections_per_sec >= 1 AND throttle_connections_per_sec <= 1000000) NOT NULL DEFAULT 1000000 , ignore_session_variables VARCHAR CHECK (JSON_VALID(ignore_session_variables) OR ignore_session_variables = '') NOT NULL DEFAULT '' , hostgroup_settings VARCHAR CHECK (JSON_VALID(hostgroup_settings) OR hostgroup_settings = '') NOT NULL DEFAULT '' , servers_defaults VARCHAR CHECK (JSON_VALID(servers_defaults) OR servers_defaults = '') NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '')"
 
@@ -85,7 +85,7 @@
 
 /*
  * @brief Generates the 'runtime_mysql_servers' resultset exposed to other ProxySQL cluster members.
- * @details Makes 'SHUNNED' and 'SHUNNED_REPLICATION_LAG' statuses equivalent to 'ONLINE'. 'SHUNNED' states
+ * @details Makes 'SHUNNED', 'SHUNNED_REPLICATION_LAG' and 'SHUNNED_AWS_BGD' statuses equivalent to 'ONLINE'. 'SHUNNED' states
  *  are by definition local transitory states, this is why a 'mysql_servers' table reconfiguration isn't
  *  normally performed when servers are internally imposed with these statuses. This means, that propagating
  *  this state to other cluster members is undesired behavior, and so it's generating a different checksum,
@@ -107,6 +107,7 @@
 		" WHEN 2 THEN \"OFFLINE_SOFT\"" \
 		" WHEN 3 THEN \"OFFLINE_HARD\"" \
 		" WHEN 4 THEN \"ONLINE\" " \
+		" WHEN 5 THEN \"ONLINE\" " \
 		"END status," \
 		"weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment " \
 	"FROM mysql_servers " \
@@ -1066,19 +1067,20 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	void set_server_current_latency_us(char *hostname, int port, unsigned int _current_latency_us);
 	void set_Readyset_status(char *hostname, int port, enum MySerStatus status);
 	/**
-	* @brief Shun or release a server across all hostgroups.
+	* @brief Set or clear AWS BGD shun state for a matching server.
 	*
-	* @details Shunning sets shunned_and_kill_all_connections and takes 'shunned_automatic' from
-	*   auto_recover (false = held until released; true = enables shun recovery). Releasing does
-	*   NOT unshun directly: it only enables shun recovery (shunned_automatic=true) and leaves the
-	*   actual unshun to the shun recovery path (MyHGC::get_random_MySrvC).
+	* @details When shunning, transitions an ONLINE server to SHUNNED_AWS_BGD,
+	*   enables shun metadata, and drops free connections. When unshunning,
+	*   transitions only SHUNNED_AWS_BGD back to ONLINE and clears shun metadata.
+	*   Servers in other statuses are left unchanged.
 	*
+	* @param hostgroup_id Hostgroup to search.
 	* @param hostname     Address of the server to match.
 	* @param port         Port of the server to match.
-	* @param shun         true to shun the server, false to release it.
-	* @param auto_recover When shunning, whether the server is eligible for auto-recovery; ignored on release.
+	* @param shun         true to shun the server, false to unshun it.
+	* @return true if this call changed a server's status.
 	*/
-	void set_server_shun(const char *hostname, int port, bool shun, bool auto_recover);
+	bool aws_rds_bgd_set_shun_server(unsigned int hostgroup_id, const char *hostname, int port, bool shun);
 	/**
 	 * @brief Flag/unflag every server in the writer and reader hostgroups of an AWS RDS blue/green
 	 *   deployment as "switchover in progress", so the read_only monitor (read_only_action_v2) takes

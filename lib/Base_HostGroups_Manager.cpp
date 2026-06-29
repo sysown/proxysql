@@ -1778,6 +1778,9 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 					case 4:
 						st=(char *)"SHUNNED";
 						break;
+					case 5:
+						st=(char *)"SHUNNED_AWS_BGD";
+						break;
 				}
 				fprintf(stderr,"HID: %d , address: %s , port: %d , gtid_port: %d , weight: %ld , status: %s , max_connections: %ld , max_replication_lag: %u , use_ssl: %u , max_latency_ms: %u , comment: %s\n", mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->gtid_port, mysrvc->weight, st, mysrvc->max_connections, mysrvc->max_replication_lag, mysrvc->use_ssl, mysrvc->max_latency_us*1000, mysrvc->comment);
 			}
@@ -3139,6 +3142,9 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int
 					break;
 				case 4:
 					pta[3]=strdup("SHUNNED_REPLICATION_LAG");
+					break;
+				case 5:
+					pta[3]=strdup("SHUNNED_AWS_BGD");
 					break;
 				default:
 					// LCOV_EXCL_START

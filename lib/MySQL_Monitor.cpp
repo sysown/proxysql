@@ -7282,14 +7282,15 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 		for (const std::pair<std::string, int>& br : blue_readers) {
 			bool mapped = false;
 			for (const AWS_RDS_BGD_State::BlueGreenPair& p : st.bg_map) {
-				if (!p.is_writer && p.blue_host == br.first && p.port == br.second) {
+				if (p.blue_host == br.first && p.port == br.second) {
 					mapped = true;
 					break;
 				}
 			}
 			if (!mapped) {
-				MyHGM->set_server_shun(br.first.c_str(), br.second, true, false);
-				st.shunned_readers.push_back(br);
+				if (MyHGM->aws_rds_bgd_set_shun_server(st.reader_hg, br.first.c_str(), br.second, true)) {
+					st.shunned_readers.push_back(br);
+				}
 			}
 		}
 
@@ -7326,7 +7327,7 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 
 		if (!st.shunned_readers.empty()) {
 			for (const std::pair<std::string, int>& br : st.shunned_readers) {
-				MyHGM->set_server_shun(br.first.c_str(), br.second, false, false);
+				MyHGM->aws_rds_bgd_set_shun_server(st.reader_hg, br.first.c_str(), br.second, false);
 				// purge so the blue reader hostname re-resolves to the promoted instance
 				dns_cache->remove(br.first);
 			}

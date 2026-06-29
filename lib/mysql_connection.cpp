@@ -2160,21 +2160,25 @@ int MySQL_Connection::async_connect(short event) {
 
 
 bool MySQL_Connection::IsServerOffline() {
-	bool ret=false;
-	if (parent==NULL)
+	bool ret = false;
+	if (parent == NULL)
 		return ret;
-	server_status=parent->get_status(); // we copy it here to avoid race condition. The caller will see this
+
+	server_status = parent->get_status(); // we copy it here to avoid race condition. The caller will see this
+	bool server_shunned = (server_status == MYSQL_SERVER_STATUS_SHUNNED) || (server_status == MYSQL_SERVER_STATUS_SHUNNED_AWS_BGD);
+
 	if (
-		(server_status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the server is OFFLINE as specific by the user
+		(server_status == MYSQL_SERVER_STATUS_OFFLINE_HARD) // the server is OFFLINE as specific by the user
 		||
-		(server_status==MYSQL_SERVER_STATUS_SHUNNED && parent->shunned_and_kill_all_connections==true) // the server is SHUNNED due to a serious issue
+		(server_shunned && parent->shunned_automatic == true && parent->shunned_and_kill_all_connections == true) // the server is SHUNNED due to a serious issue
 		||
-		(server_status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG)  // slave is lagging! see #774
+		(server_status == MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG)  // slave is lagging! see #774
 		||
 		(parent->myhgc->online_servers_within_threshold() == false) // number of online servers in a hostgroup exceeds the configured maximum servers
 	) {
-		ret=true;
+		ret = true;
 	}
+
 	return ret;
 }
 
@@ -3031,10 +3035,11 @@ int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigne
 	assert(mysql);
 	assert(ret_mysql);
 	server_status=parent->get_status(); // we copy it here to avoid race condition. The caller will see this
+	bool server_shunned = (server_status == MYSQL_SERVER_STATUS_SHUNNED) || (server_status == MYSQL_SERVER_STATUS_SHUNNED_AWS_BGD);
 	if (
-		(parent->get_status()==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the server is OFFLINE as specific by the user
+		(server_status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the server is OFFLINE as specific by the user
 		||
-		(parent->get_status()==MYSQL_SERVER_STATUS_SHUNNED && parent->shunned_and_kill_all_connections==true) // the server is SHUNNED due to a serious issue
+		(server_shunned && parent->shunned_automatic == true && parent->shunned_and_kill_all_connections==true) // the server is SHUNNED due to a serious issue
 	) {
 		return -1;
 	}

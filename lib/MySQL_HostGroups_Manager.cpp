@@ -660,7 +660,7 @@ hg_metrics_map = std::make_tuple(
 		std::make_tuple (
 			p_hg_dyn_gauge::connection_pool_status,
 			"proxysql_connpool_conns_status",
-			"The status of the backend server (1 - ONLINE, 2 - SHUNNED, 3 - OFFLINE_SOFT, 4 - OFFLINE_HARD, 5 - SHUNNED_REPLICATION_LAG).",
+			"The status of the backend server (1 - ONLINE, 2 - SHUNNED, 3 - OFFLINE_SOFT, 4 - OFFLINE_HARD, 5 - SHUNNED_REPLICATION_LAG, 6 - SHUNNED_AWS_BGD).",
 			metric_tags {
 				{ "protocol", "mysql" }
 			}
@@ -1883,6 +1883,9 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 					case 1:
 					case 4:
 						st=(char *)"SHUNNED";
+						break;
+					case 5:
+						st=(char *)"SHUNNED_AWS_BGD";
 						break;
 				}
 				fprintf(stderr,"HID: %u , address: %s , port: %d , gtid_port: %d , weight: %ld , status: %s , max_connections: %ld , max_replication_lag: %u , use_ssl: %d , max_latency_ms: %u , comment: %s\n", mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->gtid_port, mysrvc->weight, st, mysrvc->max_connections, mysrvc->max_replication_lag, mysrvc->use_ssl, mysrvc->max_latency_us*1000, mysrvc->comment);
@@ -3502,6 +3505,9 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int
 				case 4:
 					pta[3]=strdup("SHUNNED_REPLICATION_LAG");
 					break;
+				case 5:
+					pta[3]=strdup("SHUNNED_AWS_BGD");
+					break;
 				default:
 					// LCOV_EXCL_START
 					assert(0);
@@ -3834,47 +3840,61 @@ void MySQL_HostGroups_Manager::set_Readyset_status(char *hostname, int port, enu
 	wrunlock();
 }
 
-void MySQL_HostGroups_Manager::set_server_shun(const char *hostname, int port, bool shun, bool auto_recover) {
+/**
+* @brief Set or clear AWS BGD shun state for a matching server.
+*
+* @details When shunning, transitions an ONLINE server to SHUNNED_AWS_BGD,
+*   enables shun metadata, and drops free connections. When unshunning,
+*   transitions only SHUNNED_AWS_BGD back to ONLINE and clears shun metadata.
+*   Servers in other statuses are left unchanged.
+*
+* @param hostgroup_id Hostgroup to search.
+* @param hostname     Address of the server to match.
+* @param port         Port of the server to match.
+* @param shun         true to shun the server, false to unshun it.
+* @return true if this call changed a server's status.
+*/
+bool MySQL_HostGroups_Manager::aws_rds_bgd_set_shun_server(unsigned int hostgroup_id, const char *hostname, int port, bool shun) {
+	bool changed = false;
+
 	wrlock();
 
-	MySrvC *mysrvc = NULL;
+	MyHGC *myhgc = MyHGC_find(hostgroup_id);
+	if (myhgc && myhgc->mysrvs) {
+		for (unsigned int j = 0; j < myhgc->mysrvs->cnt(); j++) {
+			MySrvC *mysrvc = myhgc->mysrvs->idx(j);
+			if (mysrvc->port != port || strcmp(mysrvc->address, hostname) != 0) {
+				continue;
+			}
 
-	for (unsigned int i = 0; i < MyHostGroups->len; i++) {
-		MyHGC *myhgc = (MyHGC *)MyHostGroups->index(i);
-		unsigned int l = myhgc->mysrvs->cnt();
-
-		for (unsigned int j = 0; j < l; j++) {
-			mysrvc = myhgc->mysrvs->idx(j);
-
-			if (mysrvc->port == port && strcmp(mysrvc->address,hostname) == 0) {
-				if (shun) {
-					if (mysrvc->get_status() == MYSQL_SERVER_STATUS_ONLINE) {
-						mysrvc->set_status(MYSQL_SERVER_STATUS_SHUNNED);
-					}
-					// 'shunned_automatic' is the auto-recovery guard: the shun recovery path
-					// (MyHGC::get_random_MySrvC) only brings back servers that have it set.
-					// Passing auto_recover=false holds the shun until an explicit unshun.
-					mysrvc->shunned_automatic = auto_recover;
+			if (shun) {
+				if (mysrvc->get_status() == MYSQL_SERVER_STATUS_ONLINE) {
+					mysrvc->set_status(MYSQL_SERVER_STATUS_SHUNNED_AWS_BGD);
+					mysrvc->shunned_automatic = true;
 					mysrvc->shunned_and_kill_all_connections = true;
-					// TODO: Check if last_detected_error should be set to a time in future,
-					//       similar to MySQL_HostGroups_Manager::shun_and_killall()
 					mysrvc->time_last_detected_error = time(NULL);
 					mysrvc->ConnectionsFree->drop_all_connections();
-					proxy_warning("Shunning server %s:%d in HG %u with auto-recovery %s\n",
-						hostname, port, myhgc->hid, (auto_recover) ? "enabled" : "disabled");
-				} else {
-					// We don't unshun directly. Keep the server SHUNNED (with kill_all_connections set)
-					// and only enable auto-recovery; the shun recovery path (MyHGC::get_random_MySrvC)
-					// then brings it back online once all its old connections have drained.
-					// The actual unshunning work is done by MySQL_HostGroups_Manager::unshun_server_all_hostgroups
-					mysrvc->shunned_automatic = true;
-					proxy_warning("Enabling shun recovery for server %s:%d in HG %u\n", hostname, port, myhgc->hid);
+					proxy_warning("AWS RDS BGD shunning server %s:%d in HG %u\n",
+						hostname, port, myhgc->hid);
+					changed = true;
+				}
+			} else {
+				if (mysrvc->get_status() == MYSQL_SERVER_STATUS_SHUNNED_AWS_BGD) {
+					mysrvc->set_status(MYSQL_SERVER_STATUS_ONLINE);
+					mysrvc->shunned_automatic = false;
+					mysrvc->shunned_and_kill_all_connections = false;
+					mysrvc->connect_ERR_at_time_last_detected_error = 0;
+					mysrvc->time_last_detected_error = 0;
+					proxy_warning("AWS RDS BGD unshunning server %s:%d in HG %u\n",
+						hostname, port, myhgc->hid);
+					changed = true;
 				}
 			}
 		}
 	}
 
 	wrunlock();
+	return changed;
 }
 
 void MySQL_HostGroups_Manager::set_aws_rds_bgd_in_progress(unsigned int writer_hg, unsigned int reader_hg, bool in_progress) {
