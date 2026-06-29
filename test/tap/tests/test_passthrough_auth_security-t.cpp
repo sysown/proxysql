@@ -141,14 +141,14 @@ int main() {
 	 *     [P2] matching pattern     -> success
 	 *     [P3] invalid regex        -> rejected (fail-safe deny)
 	 *
-	 *   COM_CHANGE_USER (1):
-	 *     [C1] CHANGE_USER to passthrough user -> rejected
-	 *
-	 *   Cleanup (2): DROP USER, restore globals
-	 *
-	 *   5 + 2 + 3 + 1 + 2 = 13.
-	 */
-	plan(13);
+ 	 *   COM_CHANGE_USER (2):
+ 	 *     [C1] (skipped path or success path) CHANGE_USER to passthrough user -> rejected
+ 	 *
+ 	 *   Cleanup (2): DROP USER, restore globals
+ 	 *
+ 	 *   5 + 2 + 3 + 2 + 2 = 14.
+ 	 */
+ 	plan(14);
 
 	if (cl.getEnv()) {
 		diag("CommandLine getEnv() failed");

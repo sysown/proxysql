@@ -125,9 +125,9 @@ int main() {
 	 *
 	 *   Cleanup (2): DROP USER, restore globals
 	 *
-	 *   6 + 3 + 1 + 1 + 2 = 13.
-	 */
-	plan(13);
+ 	 *   6 + 3 + 1 + 1 = 11.
+ 	 */
+ 	plan(11);
 
 	if (cl.getEnv()) {
 		diag("CommandLine getEnv() failed");
