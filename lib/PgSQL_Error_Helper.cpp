@@ -367,6 +367,7 @@ void PgSQL_Error_Helper::fill_extended_error_info(PgSQL_ErrorInfo& err_info, con
 
 	if (ext_fields & PGSQL_ERROR_FIELD_TEXT) {
 		val = PQresultErrorField(result, PG_DIAG_SEVERITY_NONLOCALIZED);
+		if (val == nullptr) val = PQresultErrorField(result, PG_DIAG_SEVERITY);
 		err_info.ext_info->text = identify_error_severity(val ? val : "");
 	}
 
