@@ -84,7 +84,7 @@ public:
 	void clear();
 	bool empty() const;
 	bool is_ip_valid(const std::string& hostname, const std::string& ip) const;
-	std::string lookup(const std::string& hostname, size_t* ip_count) const;
+	std::string lookup(const std::string& hostname, size_t* ip_count);
 
 	/**
 	* @brief Pin a hostname to a fixed IP until it is explicitly unpinned.

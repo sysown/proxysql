@@ -217,7 +217,8 @@ bool DNS_Cache::is_ip_valid(const std::string& hostname, const std::string& ip) 
 	auto itr = records.find(hostname);
 	if (itr != records.end()) {
 		const unsigned long long now = monotonic_time();
-		const bool pin_active = itr->second.pinned_until != 0 && now <= itr->second.pinned_until;
+		const bool pin_active = !itr->second.pinned_ip.empty()
+								&& (itr->second.pinned_until == 0 || now <= itr->second.pinned_until);
 		if (pin_active) {
 			valid = ip == itr->second.pinned_ip;
 		} else {
@@ -325,7 +326,7 @@ DNS_Cache::lookup_result_t DNS_Cache::get_next_ip(const IP_ADDR& ip_addr) const 
 	return result;
 }
 
-std::string DNS_Cache::lookup(const std::string& hostname, size_t* ip_count) const {
+std::string DNS_Cache::lookup(const std::string& hostname, size_t* ip_count) {
 	if (!enabled) {
 		if (ip_count)
 			*ip_count = 0;
@@ -346,8 +347,10 @@ std::string DNS_Cache::lookup(const std::string& hostname, size_t* ip_count) con
 		lookup_result_t result = get_next_ip(itr->second);
 
 		const unsigned long long now = monotonic_time();
-		const bool pin_active = result.pinned_until != 0 && now <= result.pinned_until;
-		clear_expired_pin = result.pinned_until != 0 && now > result.pinned_until;
+		const bool pin_active = !result.pinned_ip.empty()
+								&& (result.pinned_until == 0 || now <= result.pinned_until);
+		clear_expired_pin = !result.pinned_ip.empty()
+							&& result.pinned_until != 0 && now > result.pinned_until;
 
 		if (pin_active) {
 			ip = result.pinned_ip;
@@ -375,25 +378,9 @@ std::string DNS_Cache::lookup(const std::string& hostname, size_t* ip_count) con
 
 	// cleanup expired pinned IP
 	if (clear_expired_pin) {
-		rc = pthread_rwlock_wrlock(&rwlock_);
-		assert(rc == 0);
-		auto itr2 = records.find(hostname);
-		if (itr2 != records.end() && itr2->second.pinned_until != 0 &&
-			monotonic_time() > itr2->second.pinned_until) {
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
-				"Unpinning expired DNS cache record. (Hostname:[%s] IP:[%s])\n",
-				hostname.c_str(), itr2->second.pinned_ip.c_str());
-			itr2->second.pinned_ip.clear();
-			itr2->second.pinned_until = 0;
-			__sync_fetch_and_and(&itr2->second.counter, 0);
-			if (itr2->second.ips.empty()) {
-				records.erase(itr2);
-			}
-			if (counter_record_updated_)
-				counter_record_updated_->fetch_add(1, std::memory_order_relaxed);
-		}
-		rc = pthread_rwlock_unlock(&rwlock_);
-		assert(rc == 0);
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+			"Removing expired DNS cache pin. (Hostname:[%s])\n", hostname.c_str());
+		unpin(hostname);
 	}
 
 	return ip;
