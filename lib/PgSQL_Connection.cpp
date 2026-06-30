@@ -47,6 +47,9 @@ PgSQL_Connection_userinfo::~PgSQL_Connection_userinfo() {
 	if (password) free(password);
 	if (sha1_pass) free(sha1_pass);
 	if (dbname) free(dbname);
+	// Clear the harvested SCRAM key material (the ClientKey is password-equivalent) on destruction.
+	memset(scram_ClientKey, 0, sizeof(scram_ClientKey));
+	memset(scram_ServerKey, 0, sizeof(scram_ServerKey));
 }
 
 uint64_t PgSQL_Connection_userinfo::compute_hash() {
