@@ -1764,16 +1764,19 @@ void MySQL_Data_Stream::setDSS_STATE_QUERY_SENT_NET() {
 void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 	MySQL_Connection *mc=myconn;
 	mc->last_time_used=sess->thread->curtime;
-	if (!mc->reusable) {
-		destroy_MySQL_Connection_From_Pool(true);
-		return;
-	}
+
 	// before detaching, check if last_HG_affected_rows matches . if yes, set it back to -1
 	if (mybe) {
 		if (mybe->hostgroup_id == sess->last_HG_affected_rows) {
 			sess->last_HG_affected_rows = -1;
 		}
 	}
+
+	if (!mc->reusable) {
+		destroy_MySQL_Connection_From_Pool(true);
+		return;
+	}
+
 	unsigned long long intv = mysql_thread___connection_max_age_ms;
 	intv *= 1000;
 	if (
