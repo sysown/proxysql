@@ -3602,7 +3602,7 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_ser
 
 		HostGroup_Server_Mapping* host_server_mapping = itr->second.get();
 
-		if (!host_server_mapping || host_server_mapping->is_aws_rds_bgd_in_progress()) {
+		if (!host_server_mapping) {
 			continue;
 		}
 
@@ -3861,8 +3861,6 @@ void MySQL_HostGroups_Manager::set_Readyset_status(char *hostname, int port, enu
 bool MySQL_HostGroups_Manager::aws_rds_bgd_set_shun_server(unsigned int hostgroup_id, const char *hostname, int port, bool shun) {
 	bool changed = false;
 
-	wrlock();
-
 	MyHGC *myhgc = MyHGC_find(hostgroup_id);
 	if (myhgc && myhgc->mysrvs) {
 		for (unsigned int j = 0; j < myhgc->mysrvs->cnt(); j++) {
@@ -3898,8 +3896,45 @@ bool MySQL_HostGroups_Manager::aws_rds_bgd_set_shun_server(unsigned int hostgrou
 		}
 	}
 
-	wrunlock();
 	return changed;
+}
+
+void MySQL_HostGroups_Manager::aws_rds_bgd_shun_servers(
+	unsigned int hostgroup_id, const std::vector<std::pair<std::string, int>>& servers, bool shun
+) {
+	bool changed = false;
+
+	wrlock();
+
+	for (const std::pair<std::string, int>& s : servers) {
+		if (aws_rds_bgd_set_shun_server(hostgroup_id, s.first.c_str(), s.second, shun)) {
+			changed = true;
+		}
+	}
+
+	if (!changed) {
+		wrunlock();
+		return;
+	}
+
+	// Publish the new in-memory statuses into the runtime mysql_servers table
+	purge_mysql_servers_table();
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
+	mydb->execute("DELETE FROM mysql_servers");
+	generate_mysql_servers_table();
+
+	// Update the global checksums after 'mysql_servers' regeneration
+	unique_ptr<SQLite3_result> resultset { get_admin_runtime_mysql_servers(mydb) };
+	uint64_t raw_checksum = resultset ? resultset->raw_checksum() : 0;
+	hgsm_mysql_servers_checksum = raw_checksum;
+	string mysrvs_checksum { get_checksum_from_hash(raw_checksum) };
+	save_runtime_mysql_servers(resultset.release());
+	proxy_info("Checksum for table %s is %s\n", "mysql_servers", mysrvs_checksum.c_str());
+	pthread_mutex_lock(&GloVars.checksum_mutex);
+	update_glovars_mysql_servers_checksum(mysrvs_checksum);
+	pthread_mutex_unlock(&GloVars.checksum_mutex);
+
+	wrunlock();
 }
 
 /**
@@ -3936,33 +3971,6 @@ bool MySQL_HostGroups_Manager::drain_server_connections(unsigned int hostgroup_i
 
 	wrunlock();
 	return found;
-}
-
-void MySQL_HostGroups_Manager::set_aws_rds_bgd_in_progress(unsigned int writer_hg, unsigned int reader_hg, bool in_progress) {
-	wrlock();
-
-	unsigned int hgs[2] = { writer_hg, reader_hg };
-	for (unsigned int i = 0; i < 2; i++) {
-		// MyHGC_find (not MyHGC_lookup, which creates on miss) so we never materialize an empty HG.
-		MyHGC* myhgc = MyHGC_find(hgs[i]);
-		if (myhgc == nullptr || myhgc->mysrvs == nullptr) {
-			continue;
-		}
-		for (unsigned int j = 0; j < myhgc->mysrvs->cnt(); j++) {
-			MySrvC* s = myhgc->mysrvs->idx(j);
-			const std::string srv_id = std::string(s->address) + ":::" + std::to_string(s->port);
-			auto itr = hostgroup_server_mapping.find(srv_id);
-			if (itr != hostgroup_server_mapping.end() && itr->second) {
-				if (in_progress) {
-					itr->second->set_aws_rds_bgd_in_progress();
-				} else {
-					itr->second->clear_aws_rds_bgd_in_progress();
-				}
-			}
-		}
-	}
-
-	wrunlock();
 }
 
 void MySQL_HostGroups_Manager::p_update_metrics() {

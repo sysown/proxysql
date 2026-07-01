@@ -603,21 +603,6 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 			return readonly_flag;
 		}
 
-		inline
-		void set_aws_rds_bgd_in_progress() {
-			aws_rds_bgd_in_progress = true;
-		}
-
-		inline
-		bool is_aws_rds_bgd_in_progress() {
-			return aws_rds_bgd_in_progress;
-		}
-
-		inline
-		void clear_aws_rds_bgd_in_progress() {
-			aws_rds_bgd_in_progress = false;
-		}
-
 	private:
 		unsigned int get_hostgroup_id(Type type, const Node& node) const;
 		MySrvC* insert_HGM(unsigned int hostgroup_id, const MySrvC* srv);
@@ -626,7 +611,6 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 		std::array<std::vector<Node>, TYPE_SIZE_> mapping; // index 0 contains reader and 1 contains writer hostgroups
 		int readonly_flag;
 		MySQL_HostGroups_Manager* myHGM;
-		bool aws_rds_bgd_in_progress = false;
 	};
 
 	/**
@@ -1079,9 +1063,20 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	* @param hostname     Address of the server to match.
 	* @param port         Port of the server to match.
 	* @param shun         true to shun the server, false to unshun it.
+	*
 	* @return true if this call changed a server's status.
+	*
+	* @note Caller must hold wrlock().
 	*/
 	bool aws_rds_bgd_set_shun_server(unsigned int hostgroup_id, const char *hostname, int port, bool shun);
+	/**
+	* @brief Shun or unshun multiple servers in a hostgroup, then publish the change to the runtime tables.
+	*
+	* @param hostgroup_id Hostgroup to search.
+	* @param servers      (hostname, port) pairs to act on.
+	* @param shun         true to shun, false to unshun.
+	*/
+	void aws_rds_bgd_shun_servers(unsigned int hostgroup_id, const std::vector<std::pair<std::string, int>>& servers, bool shun);
 	/**
 	 * @brief Drain existing backend connections for a server.
 	 *
@@ -1095,11 +1090,26 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 */
 	bool drain_server_connections(unsigned int hostgroup_id, const char *hostname, int port);
 	/**
-	 * @brief Flag/unflag every server in the writer and reader hostgroups of an AWS RDS blue/green
-	 *   deployment as "switchover in progress", so the read_only monitor (read_only_action_v2) takes
-	 *   no action on them while the BGD FSM is driving the switchover.
+	 * @brief Number of AWS RDS blue/green deployments currently mid-switchover.
+	 *
+	 * @details Each BGD worker increments the count while its deployment is switching over and
+	 *   decrements it once the deployment leaves the switchover states. While the count is non-zero
+	 *   the read_only monitor fast-polls the BGD servers; it resumes the full-fleet cadence at zero.
 	 */
-	void set_aws_rds_bgd_in_progress(unsigned int writer_hg, unsigned int reader_hg, bool in_progress);
+	std::atomic<int> aws_rds_bgd_in_progress_count{0};
+
+	void set_aws_rds_bgd_in_progress(bool in_progress) {
+		if (in_progress) {
+			aws_rds_bgd_in_progress_count.fetch_add(1, std::memory_order_relaxed);
+		} else {
+			aws_rds_bgd_in_progress_count.fetch_sub(1, std::memory_order_relaxed);
+		}
+	}
+
+	bool is_aws_rds_bgd_in_progress() const {
+		return aws_rds_bgd_in_progress_count.load(std::memory_order_relaxed) > 0;
+	}
+
 	unsigned long long Get_Memory_Stats();
 
 	void add_discovered_servers_to_mysql_servers_and_replication_hostgroups(const vector<tuple<string, int, int>>& new_servers);

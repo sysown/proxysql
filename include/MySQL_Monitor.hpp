@@ -61,6 +61,7 @@ struct cmp_str {
 
 #define AWS_ENDPOINT_SUFFIX_STRING "rds.amazonaws.com"
 #define QUERY_AWS_RDS_TOPOLOGY_DISCOVERY "SELECT * FROM mysql.rds_topology"
+#define QUERY_AWS_RDS_TOPOLOGY_TABLE_CHECK "SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA='mysql' AND TABLE_NAME='rds_topology'"
 
 /*
 
@@ -446,9 +447,9 @@ struct AWS_RDS_BGD_State {
 	std::vector<std::pair<std::string, int>> shunned_readers;  ///< (host,port) we shunned
 	std::string last_status;                  ///< status from the previous poll, to act only when it changes
 
-	bool green_writer_added_in_hg = false;        ///< whether green writer added to green_writer_hg
-	bool writer_is_also_reader_enforced = false;  ///< whether POST_PROCESSING added the writer to the reader HG
-	bool bgd_in_progress_set = false;             ///< whether we flagged the deployment's servers as switchover-in-progress (set once at INITIATED+, cleared at COMPLETED) so read_only_action_v2 leaves them alone
+	bool green_writer_added_in_hg = false;        ///< green writer added to green_writer_hg
+	bool writer_is_also_reader_enforced = false;  ///< POST_PROCESSING added the writer to the reader HG
+	bool bgd_in_progress_set = false;             ///< MyHGM's in-progress switchover count is incremented
 
 	unsigned int next_check_interval_ms = 0;    ///< FSM-controlled interval; 0 => baseline
 	std::string next_check_host;                ///< FSM-pinned probe host; when set (the green IP), the worker
@@ -471,6 +472,19 @@ inline const char* const BGD_STATUS_INITIATED    = "SWITCHOVER_INITIATED";
 inline const char* const BGD_STATUS_IN_PROGRESS  = "SWITCHOVER_IN_PROGRESS";
 inline const char* const BGD_STATUS_POST_PROC    = "SWITCHOVER_IN_POST_PROCESSING";
 inline const char* const BGD_STATUS_COMPLETED    = "SWITCHOVER_COMPLETED";
+
+// While any AWS RDS blue/green deployment is mid-switchover, the read_only monitor polls just that
+// deployment's servers at this tightened interval (250ms) so it detects the writer's read_only flips
+// quickly; matches the BGD FSM's own fast poll tiers. The full-fleet pass stays at
+// mysql-monitor_read_only_interval.
+#define READ_ONLY_BGD_LOOP_INTERVAL_US 250000
+#define READ_ONLY_NEXT_LOOP_INTERVAL_US 500000
+
+// read_only monitor server-enumeration queries.
+// Every server that belongs to a replication hostgroup and status NOT IN (2,3,5)
+#define SELECT_SERVERS_FOR_READ_ONLY "SELECT hostname, port, MAX(use_ssl) use_ssl, check_type, reader_hostgroup FROM mysql_servers JOIN mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE status NOT IN (2,3,5) GROUP BY hostname, port ORDER BY RANDOM()"
+// Fast pass: only servers in an AWS RDS blue/green deployment
+#define SELECT_RDS_BGD_SERVERS_FOR_READ_ONLY "SELECT hostname, port, MAX(use_ssl) use_ssl, 'read_only' check_type, reader_hostgroup FROM mysql_servers JOIN mysql_aws_rds_bgd_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE active=1 AND status NOT IN (2,3,5) GROUP BY hostname, port ORDER BY RANDOM()"
 
 
 class MySQL_Monitor {
