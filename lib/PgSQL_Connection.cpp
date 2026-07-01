@@ -3,6 +3,7 @@
 #include <sstream>
 #include <atomic>
 #include <memory>
+#include <openssl/crypto.h>   // OPENSSL_cleanse — non-elidable wipe of harvested SCRAM key material
 
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
@@ -37,8 +38,8 @@ PgSQL_Connection_userinfo::PgSQL_Connection_userinfo() {
 	fe_username=NULL;
 	hash=0;
 	has_scram_keys=false;
-	memset(scram_ClientKey, 0, sizeof(scram_ClientKey));
-	memset(scram_ServerKey, 0, sizeof(scram_ServerKey));
+	memset(scram_client_key, 0, sizeof(scram_client_key));
+	memset(scram_server_key, 0, sizeof(scram_server_key));
 }
 
 PgSQL_Connection_userinfo::~PgSQL_Connection_userinfo() {
@@ -47,9 +48,10 @@ PgSQL_Connection_userinfo::~PgSQL_Connection_userinfo() {
 	if (password) free(password);
 	if (sha1_pass) free(sha1_pass);
 	if (dbname) free(dbname);
-	// Clear the harvested SCRAM key material (the ClientKey is password-equivalent) on destruction.
-	memset(scram_ClientKey, 0, sizeof(scram_ClientKey));
-	memset(scram_ServerKey, 0, sizeof(scram_ServerKey));
+	// Scrub the harvested SCRAM key material (the ClientKey is password-equivalent) on destruction,
+	// with a non-elidable wipe (OPENSSL_cleanse) so the compiler can't optimize the clear away.
+	OPENSSL_cleanse(scram_client_key, sizeof(scram_client_key));
+	OPENSSL_cleanse(scram_server_key, sizeof(scram_server_key));
 }
 
 uint64_t PgSQL_Connection_userinfo::compute_hash() {
@@ -131,8 +133,8 @@ void PgSQL_Connection_userinfo::set(char *user, char *pass, char *db, char *sh1)
 void PgSQL_Connection_userinfo::set(PgSQL_Connection_userinfo *ui) {
 	set(ui->username, ui->password, ui->dbname, ui->sha1_pass);
 	// Carry the harvested SCRAM keys frontend->backend (not part of the hash).
-	memcpy(scram_ClientKey, ui->scram_ClientKey, sizeof(scram_ClientKey));
-	memcpy(scram_ServerKey, ui->scram_ServerKey, sizeof(scram_ServerKey));
+	memcpy(scram_client_key, ui->scram_client_key, sizeof(scram_client_key));
+	memcpy(scram_server_key, ui->scram_server_key, sizeof(scram_server_key));
 	has_scram_keys = ui->has_scram_keys;
 }
 
@@ -990,14 +992,17 @@ void PgSQL_Connection::connect_start() {
 		// PBKDF2 over.
 		char ck_b64[64] = { 0 };
 		char sk_b64[64] = { 0 };
-		int n1 = pg_b64_encode((const char*)userinfo->scram_ClientKey,
-			(int)sizeof(userinfo->scram_ClientKey), ck_b64, (int)sizeof(ck_b64) - 1);
-		int n2 = pg_b64_encode((const char*)userinfo->scram_ServerKey,
-			(int)sizeof(userinfo->scram_ServerKey), sk_b64, (int)sizeof(sk_b64) - 1);
+		int n1 = pg_b64_encode((const char*)userinfo->scram_client_key,
+			(int)sizeof(userinfo->scram_client_key), ck_b64, (int)sizeof(ck_b64) - 1);
+		int n2 = pg_b64_encode((const char*)userinfo->scram_server_key,
+			(int)sizeof(userinfo->scram_server_key), sk_b64, (int)sizeof(sk_b64) - 1);
 		if (n1 > 0) ck_b64[n1] = '\0';
 		if (n2 > 0) sk_b64[n2] = '\0';
 		append_conninfo_param(conninfo, "scram_client_key", ck_b64);
 		append_conninfo_param(conninfo, "scram_server_key", sk_b64);
+		// Scrub the base64 key material from the stack buffers once handed to libpq (non-elidable).
+		OPENSSL_cleanse(ck_b64, sizeof(ck_b64));
+		OPENSSL_cleanse(sk_b64, sizeof(sk_b64));
 	} else if (userinfo->password && get_password_type(userinfo->password) == PASSWORD_TYPE_MD5) {
 		// md5-stored user: reuse the stored "md5…" hash directly; no plaintext.
 		append_conninfo_param(conninfo, "md5_secret", userinfo->password);

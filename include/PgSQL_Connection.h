@@ -240,8 +240,8 @@ class PgSQL_Connection_userinfo {
 	// ClientKey harvested from the client's frontend login + the stored verifier's ServerKey,
 	// carried to the backend connection. Deliberately NOT part of compute_hash() so connection-pool
 	// reuse semantics are unchanged.
-	uint8_t scram_ClientKey[32];
-	uint8_t scram_ServerKey[32];
+	uint8_t scram_client_key[32];
+	uint8_t scram_server_key[32];
 	bool has_scram_keys;
 	PgSQL_Connection_userinfo();
 	~PgSQL_Connection_userinfo();

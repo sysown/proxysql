@@ -1006,10 +1006,10 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 	if (!password) {
 		mock = true; // unknown frontend user
 	} else {
-		bool rj = false;
-		(void) pgsql_reconcile_auth_method(pgsql_thread___authentication_method,
-				(int)get_password_type(password), &rj);
-		mock = rj; // e.g. md5 secret under a SCRAM floor
+		// Derive mock from the method already committed in generate_pkt_initial_handshake, a floor change between the 		     	     // challenge and this password packet must not flip a valid in-flight login into the mock-fail path. 
+		// The sole reject case is an md5 secret challenged under SCRAM (md5 too weak for a SCRAM floor).
+		mock = (*myds)->auth_method == AUTHENTICATION_METHOD::SASL_SCRAM_SHA_256 &&
+			get_password_type(password) == PASSWORD_TYPE_MD5;
 	}
 
 	if (password || mock) {
@@ -1161,12 +1161,12 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 					 * (Gating on scram_state->adhoc is insufficient — it stays false on a plaintext
 					 * user's 2nd+ login when the verifier cache hits.) */
 					if (password && get_password_type(password) == PASSWORD_TYPE_SCRAM_SHA_256) {
-						memcpy(userinfo->scram_ClientKey,
+						memcpy(userinfo->scram_client_key,
 							(*myds)->scram_state->ClientKey,
-							sizeof(userinfo->scram_ClientKey));
-						memcpy(userinfo->scram_ServerKey,
+							sizeof(userinfo->scram_client_key));
+						memcpy(userinfo->scram_server_key,
 							(*myds)->scram_state->ServerKey,
-							sizeof(userinfo->scram_ServerKey));
+							sizeof(userinfo->scram_server_key));
 						userinfo->has_scram_keys = true;
 					}
 
