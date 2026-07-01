@@ -2166,7 +2166,7 @@ bool ProxySQL_daemonize_phase2() {
 
 	/* Send OK to parent process */
 	daemon_retval_send(0);
-	GloAdmin->flush_error_log();
+	ProxySQL_Admin::flush_error_log();
 	//daemon_log(LOG_INFO, "Starting ProxySQL\n");
 	//daemon_log(LOG_INFO, "Sucessfully started");
 	proxy_info("Starting ProxySQL\n");
@@ -3453,7 +3453,7 @@ int main(int argc, const char * argv[]) {
 		}
 
 	} else {
-		GloAdmin->flush_error_log();
+		ProxySQL_Admin::flush_error_log();
 		GloVars.install_signal_handler();
 	}
 
