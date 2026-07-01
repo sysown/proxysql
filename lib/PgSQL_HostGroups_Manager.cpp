@@ -4312,7 +4312,7 @@ void PgSQL_HostGroups_Manager::generate_pgsql_hostgroup_attributes_table() {
 	ASSERT_SQLITE_OK(rc1, mydb);
 	sqlite3_stmt *statement = statement_unique.get();
 	proxy_info("New pgsql_hostgroup_attributes table\n");
-	bool current_configured[MyHostGroups->len];
+	bool current_configured[MyHostGroups->len + 1];
 	// set configured = false to all
 	// in this way later we can known which HG were updated
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
