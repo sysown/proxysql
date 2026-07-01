@@ -28,8 +28,7 @@ int main() {
 	// md5 hash -> md5 when floor<=md5; reject when floor=scram
 	ok(pgsql_reconcile_auth_method(1, PT_MD5, &rj) == AM_MD5 && !rj, "md5 secret, cleartext floor -> MD5");
 	ok(pgsql_reconcile_auth_method(2, PT_MD5, &rj) == AM_MD5 && !rj, "md5 secret, md5 floor -> MD5");
-	pgsql_reconcile_auth_method(3, PT_MD5, &rj);
-	ok(rj, "md5 secret, scram floor -> REJECT");
+	ok(pgsql_reconcile_auth_method(3, PT_MD5, &rj) == AM_SCRAM && rj, "md5 secret, scram floor -> REJECT (mock under SCRAM)");
 
 	// plaintext -> the floor's method, never reject
 	ok(pgsql_reconcile_auth_method(1, PT_PLAINTEXT, &rj) == AM_CLEARTEXT && !rj, "plaintext, cleartext floor -> CLEAR_TEXT");

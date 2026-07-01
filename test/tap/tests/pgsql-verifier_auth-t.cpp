@@ -44,15 +44,34 @@ static bool addUser(PGconn* a, const char* user, const char* secret) {
 	std::stringstream q;
 	q << "INSERT INTO pgsql_users (username,password,active,default_hostgroup) VALUES ('"
 	  << user << "','" << secret << "',1,0)";
-	return execAdmin(a, q.str()) && execAdmin(a, "LOAD PGSQL USERS TO RUNTIME");
+	// BAIL_OUT on setup failure: a swallowed INSERT/LOAD would make a later auth assertion fail for the
+	// wrong reason and stop the test being diagnostic.
+	if (!execAdmin(a, q.str()) || !execAdmin(a, "LOAD PGSQL USERS TO RUNTIME"))
+		BAIL_OUT("addUser('%s') failed", user);
+	return true;
 }
 static void delUser(PGconn* a, const char* user) {
 	std::stringstream q; q << "DELETE FROM pgsql_users WHERE username='" << user << "'";
-	execAdmin(a, q.str()); execAdmin(a, "LOAD PGSQL USERS TO RUNTIME");
+	if (!execAdmin(a, q.str()) || !execAdmin(a, "LOAD PGSQL USERS TO RUNTIME"))
+		BAIL_OUT("delUser('%s') failed", user);
 }
 static void setFloor(PGconn* a, const char* v) { // 1=cleartext,2=md5,3=scram
 	std::stringstream q; q << "SET pgsql-authentication_method='" << v << "'";
-	execAdmin(a, q.str()); execAdmin(a, "LOAD PGSQL VARIABLES TO RUNTIME");
+	if (!execAdmin(a, q.str()) || !execAdmin(a, "LOAD PGSQL VARIABLES TO RUNTIME"))
+		BAIL_OUT("setFloor('%s') failed", v);
+}
+// Mask the echoed username in a denial error so only the invariant template remains. The
+// client-visible error is "…Access denied for user '<name>'@'<ip>' (using password: YES)"; <name> is
+// the username the client sent, so it legitimately varies. The anti-enumeration property is that
+// everything ELSE is identical whether or not the user exists — so we compare with <name> masked out.
+static std::string maskUser(std::string s) {
+	const std::string a = "for user '";
+	size_t i = s.find(a);
+	if (i != std::string::npos) {
+		size_t j = s.find("'@", i + a.size());
+		if (j != std::string::npos) s.replace(i + a.size(), j - (i + a.size()), "*");
+	}
+	return s;
 }
 
 int main(int, char**) {
@@ -76,9 +95,14 @@ int main(int, char**) {
 		auto c = frontendConn("scram_user", P);
 		ok(c && PQstatus(c.get()) == CONNECTION_OK, "verifier-stored user authenticates via SCRAM");
 	}
-	// (2) Wrong password rejected.
+	// (2) Wrong password rejected. Capture the client-visible failure as the anti-enumeration baseline:
+	// the unknown-user and too-weak-secret rejections below (all under the SCRAM floor) must match this
+	// error's template (identical except the echoed username), so a client can't tell "wrong password" /
+	// "no such user" / "secret too weak" apart.
+	std::string deniedBaseline;
 	{
 		auto c = frontendConn("scram_user", "totally-wrong");
+		deniedBaseline = (c ? PQerrorMessage(c.get()) : "");
 		ok(c && PQstatus(c.get()) != CONNECTION_OK, "verifier-stored user rejects wrong password");
 	}
 	// (3) A SCRAM verifier is NOT downgraded under a lower floor: with the floor at cleartext the
@@ -91,14 +115,15 @@ int main(int, char**) {
 	setFloor(admin.get(), "3"); // restore scram-sha-256
 	delUser(admin.get(), "scram_user");
 
-	// (4) Anti-enumeration: an unknown user must fail WITHOUT a revealing error.
+	// (4) Anti-enumeration: an unknown user must fail with the SAME client-visible error TEMPLATE as a
+	// wrong password. The error echoes the client-supplied username (which legitimately differs), so we
+	// compare with that username masked out — everything else must be byte-identical.
 	{
 		auto c = frontendConn("user_does_not_exist_xyz", P);
 		std::string e = (c ? PQerrorMessage(c.get()) : "");
-		ok(c && PQstatus(c.get()) != CONNECTION_OK &&
-		   e.find("not found") == std::string::npos &&
-		   e.find("does not exist") == std::string::npos,
-		   "unknown user fails generically (no enumeration leak): %s", e.c_str());
+		ok(c && PQstatus(c.get()) != CONNECTION_OK && maskUser(e) == maskUser(deniedBaseline),
+		   "unknown user fails identically to a wrong password (no enumeration leak): got '%s' vs baseline '%s'",
+		   maskUser(e).c_str(), maskUser(deniedBaseline).c_str());
 	}
 
 	// (5) md5-hash user under an md5 floor authenticates via md5.
@@ -115,10 +140,9 @@ int main(int, char**) {
 	{
 		auto c = frontendConn("md5_user", P); // correct password, but the md5 secret is below the SCRAM floor
 		std::string e = (c ? PQerrorMessage(c.get()) : "");
-		ok(c && PQstatus(c.get()) != CONNECTION_OK &&
-		   e.find("not found") == std::string::npos &&
-		   e.find("does not exist") == std::string::npos,
-		   "md5 secret under SCRAM floor rejected with correct password (no enumeration leak): %s", e.c_str());
+		ok(c && PQstatus(c.get()) != CONNECTION_OK && maskUser(e) == maskUser(deniedBaseline),
+		   "md5 secret under SCRAM floor rejected identically to a wrong password (no enumeration leak): got '%s' vs baseline '%s'",
+		   maskUser(e).c_str(), maskUser(deniedBaseline).c_str());
 	}
 	delUser(admin.get(), "md5_user");
 

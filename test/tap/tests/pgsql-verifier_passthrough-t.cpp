@@ -66,6 +66,17 @@ static bool select1ThroughProxySQL(const char* user, const char* pass) {
 	}
 	return execScalar(c.get(), "SELECT 1") == "1";
 }
+// Negative pass-through case: the FRONTEND leg must authenticate (CONNECTION_OK), then `SELECT 1`
+// must FAIL on the backend leg — so a frontend-SCRAM regression can't masquerade as a (correct)
+// backend rejection. Returns true iff frontend connected AND `SELECT 1` did NOT return "1".
+static bool frontendOkButSelect1Fails(const char* user, const char* pass) {
+	auto c = openConn(cl.pgsql_host, cl.pgsql_port, user, pass, "postgres");
+	if (!c || PQstatus(c.get()) != CONNECTION_OK) {
+		diag("frontend connect failed for '%s' (expected OK): %s", user, c ? PQerrorMessage(c.get()) : "(null)");
+		return false;
+	}
+	return execScalar(c.get(), "SELECT 1") != "1";
+}
 
 int main(int, char**) {
 	plan(3);
@@ -98,10 +109,15 @@ int main(int, char**) {
 	execOk(be.get(), "DROP ROLE IF EXISTS pt_bad");
 	execOk(be.get(), std::string("CREATE ROLE pt_bad LOGIN PASSWORD '") + P + "'");
 	char* mismatch = PQencryptPasswordConn(be.get(), P, "pt_bad", "scram-sha-256"); // fresh random salt
-	storeUser(admin.get(), "pt_bad", mismatch ? mismatch : "");
-	ok(!select1ThroughProxySQL("pt_bad", P),
-	   "salt-mismatch verifier: backend rejects the wrong ClientKey (pass-through needs the exact verifier)");
-	if (mismatch) PQfreemem(mismatch);
+	// Fail closed: if the mismatched verifier can't be generated, storing "" would let the negative
+	// assertion pass for the wrong reason (frontend auth failing on an empty secret), never exercising
+	// the salt-mismatch backend path.
+	if (!mismatch || std::string(mismatch).rfind("SCRAM-SHA-256$", 0) != 0)
+		BAIL_OUT("failed to generate mismatched SCRAM verifier");
+	storeUser(admin.get(), "pt_bad", mismatch);
+	ok(frontendOkButSelect1Fails("pt_bad", P),
+	   "salt-mismatch verifier: frontend SCRAM ok but backend rejects the wrong ClientKey (pass-through needs the exact verifier)");
+	PQfreemem(mismatch);
 
 	// --- restore runtime + drop backend roles ---
 	execOk(admin.get(), "DELETE FROM pgsql_users WHERE username IN ('pt_scram','pt_bad')");
