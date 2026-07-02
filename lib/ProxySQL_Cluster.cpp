@@ -2248,7 +2248,11 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 							char* o = escape_string_single_quotes(row[11], false);
 							char* query = (char*)malloc(strlen(q) + l + strlen(o) + 64);
 
-							sprintf(query, q, row[0], row[1], row[2], row[3], (strcmp(row[4], "SHUNNED") == 0 ? "ONLINE" : row[4]), row[5], row[6], row[7], row[8], row[9], row[10], o);
+							const char *status = row[4];
+							if (strcmp(status, "SHUNNED") == 0 || strcmp(status, "SHUNNED_AWS_BGD") == 0) {
+								status = "ONLINE";
+							}
+							sprintf(query, q, row[0], row[1], row[2], row[3], status, row[5], row[6], row[7], row[8], row[9], row[10], o);
 							if (o != row[11]) { // there was a copy
 								free(o);
 							}

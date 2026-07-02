@@ -7316,11 +7316,7 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 
 		// Repoint each mapped blue host onto its green IP and drain existing
 		// connections so new backend work resolves to green.
-		bool any_reader_mapped = false;
 		for (AWS_RDS_BGD_State::BlueGreenPair& p : st.bg_map) {
-			if (!p.is_writer) {
-				any_reader_mapped = true;
-			}
 			if (p.green_ip.empty()) {
 				proxy_warning(
 					"AWS RDS BGD [wHG=%u rHG=%u]: no green IP for blue '%s:%d'; cannot repoint\n",
@@ -7366,36 +7362,18 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 		}
 		MyHGM->aws_rds_bgd_shun_servers(st.reader_hg, unmapped_readers, true);
 		st.shunned_readers.insert(st.shunned_readers.end(), unmapped_readers.begin(), unmapped_readers.end());
-
-		// If no reader is mapped, funnel reads to the (now green) writer by
-		// enforcing writer_is_also_reader for the duration of the switchover.
-		if (!any_reader_mapped) {
-			for (const AWS_RDS_BGD_State::BlueGreenPair& p : st.bg_map) {
-				if (p.is_writer) {
-					srv_info_t srv_info { p.blue_host, (uint16_t)p.port, "AWS RDS BGD writer_is_also_reader" };
-					srv_opts_t srv_opts { p.blue_weight, p.blue_max_conns, p.blue_use_ssl };
-					MyHGM->wrlock();
-					MyHGM->create_new_server_in_hg(st.reader_hg, srv_info, srv_opts);
-					MyHGM->wrunlock();
-					st.writer_is_also_reader_enforced = true;
-					break;
-				}
-			}
-		}
 	}
 	else if (strcasecmp(status.c_str(), BGD_STATUS_COMPLETED) == 0) {
 		st.next_check_interval_ms = 0;
 
-		if (st.writer_is_also_reader_enforced) {
-			for (const AWS_RDS_BGD_State::BlueGreenPair& p : st.bg_map) {
-				if (p.is_writer) {
-					MyHGM->wrlock();
-					MyHGM->remove_server_in_hg(st.reader_hg, p.blue_host, (uint16_t)p.port);
-					MyHGM->wrunlock();
-					break;
-				}
+		// if writer is in reader_hg, remove it
+		for (const AWS_RDS_BGD_State::BlueGreenPair& p : st.bg_map) {
+			if (p.is_writer) {
+				MyHGM->wrlock();
+				MyHGM->remove_server_in_hg(st.reader_hg, p.blue_host, (uint16_t)p.port);
+				MyHGM->wrunlock();
+				break;
 			}
-			st.writer_is_also_reader_enforced = false;
 		}
 
 		if (!st.shunned_readers.empty()) {
