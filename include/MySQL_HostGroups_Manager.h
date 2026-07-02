@@ -72,10 +72,8 @@
 										  "green_writer_hostgroup INT DEFAULT NULL CHECK (green_writer_hostgroup IS NULL OR green_writer_hostgroup>=0), " \
 										  "green_reader_hostgroup INT DEFAULT NULL CHECK (green_reader_hostgroup IS NULL OR green_reader_hostgroup>=0), " \
 										  "active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , " \
-										  "domain_name VARCHAR NOT NULL DEFAULT '', " \
 										  "check_interval_ms INT NOT NULL CHECK (check_interval_ms >= 100 AND check_interval_ms <= 600000) DEFAULT 1000, " \
 										  "check_timeout_ms INT NOT NULL CHECK (check_timeout_ms >= 80 AND check_timeout_ms <= 3000) DEFAULT 800, " \
-										  "autopurge_missing_checks INT NOT NULL CHECK (autopurge_missing_checks >= 0 AND autopurge_missing_checks <= 100) DEFAULT 0, " \
 										  "comment VARCHAR NOT NULL DEFAULT '', " \
 										  "auto_generated INT CHECK (auto_generated IN (0,1)) NOT NULL DEFAULT 0," \
 										  "UNIQUE (reader_hostgroup))"

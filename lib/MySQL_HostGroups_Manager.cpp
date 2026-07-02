@@ -2261,7 +2261,7 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) 
 					    "check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,autopurge_missing_checks,comment FROM mysql_aws_aurora_hostgroups";
 	} else if (name == "mysql_aws_rds_bgd_hostgroups") {
 		query=(char *)"SELECT writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,writer_is_also_reader,"
-					    "domain_name,check_interval_ms,check_timeout_ms,autopurge_missing_checks,comment,auto_generated FROM mysql_aws_rds_bgd_hostgroups";
+					    "check_interval_ms,check_timeout_ms,comment,auto_generated FROM mysql_aws_rds_bgd_hostgroups";
 	} else if (name == "mysql_galera_hostgroups") {
 		query=(char *)"SELECT writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment FROM mysql_galera_hostgroups";
 	} else if (name == "mysql_group_replication_hostgroups") {
@@ -6435,8 +6435,8 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_rds_bgd_hostgroups_table() {
 
 	int rc;
 	char *query=(char *)"INSERT INTO mysql_aws_rds_bgd_hostgroups(writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,"
-						"writer_is_also_reader,domain_name,check_interval_ms,check_timeout_ms,autopurge_missing_checks,comment,auto_generated) VALUES "
-						"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+						"writer_is_also_reader,check_interval_ms,check_timeout_ms,comment,auto_generated) VALUES "
+						"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
 
 	auto [rc1, statement_unique] = mydb->prepare_v2(query);
 	ASSERT_SQLITE_OK(rc1, mydb);
@@ -6453,14 +6453,13 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_rds_bgd_hostgroups_table() {
 		int green_reader_hostgroup = (gr_str && gr_str[0]) ? atoi(gr_str) : -1;
 		int active=atoi(r->fields[4]);
 		int writer_is_also_reader = atoi(r->fields[5]);
-		int check_interval_ms = atoi(r->fields[7]);
-		int check_timeout_ms = atoi(r->fields[8]);
-		int autopurge_missing_checks = atoi(r->fields[9]);
+		int check_interval_ms = atoi(r->fields[6]);
+		int check_timeout_ms = atoi(r->fields[7]);
 		// entries loaded from the admin config table are always user-defined
 		int auto_generated = 0;
-		proxy_info("Loading AWS RDS info for (%d,%d,%d,%d,%s,%d,\"%s\",%d,%d,%d,%d,\"%s\")\n", writer_hostgroup,reader_hostgroup,
-				   green_writer_hostgroup,green_reader_hostgroup,(active ? "on" : "off"),writer_is_also_reader,r->fields[6],
-				   check_interval_ms,check_timeout_ms,autopurge_missing_checks,auto_generated,r->fields[10]);
+		proxy_info("Loading AWS RDS info for (%d,%d,%d,%d,%s,%d,%d,%d,%d,\"%s\")\n", writer_hostgroup,reader_hostgroup,
+				   green_writer_hostgroup,green_reader_hostgroup,(active ? "on" : "off"),writer_is_also_reader,
+				   check_interval_ms,check_timeout_ms,auto_generated,r->fields[8]);
 		rc=(*proxy_sqlite3_bind_int64)(statement, 1, writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_bind_int64)(statement, 2, reader_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
 		if (green_writer_hostgroup >= 0) {
@@ -6477,12 +6476,10 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_rds_bgd_hostgroups_table() {
 		ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_bind_int64)(statement, 5, active); ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_bind_int64)(statement, 6, writer_is_also_reader); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_text)(statement, 7, r->fields[6], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 8, check_interval_ms); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 9, check_timeout_ms); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 10, autopurge_missing_checks); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_text)(statement, 11, r->fields[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 12, auto_generated); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 7, check_interval_ms); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 8, check_timeout_ms); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_text)(statement, 9, r->fields[8], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 10, auto_generated); ASSERT_SQLITE_OK(rc, mydb);
 
 		SAFE_SQLITE3_STEP2(statement);
 		rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mydb);
@@ -7078,10 +7075,10 @@ void MySQL_HostGroups_Manager::update_aws_aurora_hosts_monitor_resultset(bool lo
 
 const char SELECT_AWS_RDS_BGD_SERVERS_FOR_MONITOR[] {
 	"SELECT writer_hostgroup, reader_hostgroup, hostname, port, MAX(use_ssl) use_ssl, green_writer_hostgroup,"
-		" green_reader_hostgroup, check_interval_ms, check_timeout_ms, autopurge_missing_checks, domain_name FROM mysql_servers"
-	" JOIN mysql_aws_rds_bgd_hostgroups ON"
+		" green_reader_hostgroup, check_interval_ms, check_timeout_ms FROM mysql_servers"
+		" JOIN mysql_aws_rds_bgd_hostgroups ON"
 		" hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE active=1 AND status NOT IN (2,3)"
-	" GROUP BY writer_hostgroup, hostname, port"
+		" GROUP BY writer_hostgroup, hostname, port"
 };
 
 /**
@@ -7167,11 +7164,11 @@ bool MySQL_HostGroups_Manager::add_aws_rds_bgd_hostgroup_entry(const std::string
 				std::string ins =
 					"INSERT INTO mysql_aws_rds_bgd_hostgroups ("
 						"writer_hostgroup, reader_hostgroup, green_writer_hostgroup, green_reader_hostgroup, "
-						"active, writer_is_also_reader, domain_name, check_interval_ms, check_timeout_ms, "
-						"autopurge_missing_checks, comment, auto_generated"
+						"active, writer_is_also_reader, check_interval_ms, check_timeout_ms, "
+						"comment, auto_generated"
 					") VALUES ("
 					+ std::to_string(writer_hg) + ", " + std::to_string(reader_hg)
-					+ ", NULL, NULL, 1, 0, '', 1000, 800, 0, '', 1)";
+					+ ", NULL, NULL, 1, 0, 1000, 800, '', 1)";
 				mydb->execute(ins.c_str());
 				added = true;
 				proxy_info(

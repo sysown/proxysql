@@ -6757,7 +6757,7 @@ void * monitor_RDS_BGD_thread_HG(void *arg) {
 	// Columns:
 	// 0 writer_hostgroup, 1 reader_hostgroup, 2 hostname, 3 port, 4 use_ssl,
 	// 5 green_writer_hostgroup, 6 green_reader_hostgroup, 7 check_interval_ms,
-	// 8 check_timeout_ms, 9 autopurge_missing_checks, 10 domain_name
+	// 8 check_timeout_ms
 	pthread_mutex_lock(&GloMyMon->aws_rds_bgd_mutex);
 	initial_raw_checksum = GloMyMon->AWS_RDS_BGD_Hosts_resultset_checksum;
 	for (SQLite3_row *r : GloMyMon->AWS_RDS_BGD_Hosts_resultset->rows) {

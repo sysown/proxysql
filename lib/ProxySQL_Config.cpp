@@ -1117,11 +1117,9 @@ int ProxySQL_Config::Write_MySQL_Servers_to_configfile(std::string& data) {
 				addField(data, "green_reader_hostgroup", r->fields[3], "");
 				addField(data, "active", r->fields[4], "");
 				addField(data, "writer_is_also_reader", r->fields[5], "");
-				addField(data, "domain_name", r->fields[6]);
-				addField(data, "check_interval_ms", r->fields[7], "");
-				addField(data, "check_timeout_ms", r->fields[8], "");
-				addField(data, "autopurge_missing_checks", r->fields[9], "");
-				addField(data, "comment", r->fields[10]);
+				addField(data, "check_interval_ms", r->fields[6], "");
+				addField(data, "check_timeout_ms", r->fields[7], "");
+				addField(data, "comment", r->fields[8]);
 
 				data += "\t}";
 				isNext = true;
@@ -1492,7 +1490,7 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
             const Setting &mysql_aws_rds_bgd_hostgroups = root["mysql_aws_rds_bgd_hostgroups"];
             int count = mysql_aws_rds_bgd_hostgroups.getLength();
             // green_writer_hostgroup / green_reader_hostgroup are nullable -> passed as %s ("NULL" or an integer)
-            char *q=(char *)"INSERT OR REPLACE INTO mysql_aws_rds_bgd_hostgroups (writer_hostgroup, reader_hostgroup, green_writer_hostgroup, green_reader_hostgroup, active, writer_is_also_reader, domain_name, check_interval_ms, check_timeout_ms, autopurge_missing_checks, comment ) VALUES (%d, %d, %s, %s, %d, %d, '%s', %d, %d, %d, '%s')";
+            char *q=(char *)"INSERT OR REPLACE INTO mysql_aws_rds_bgd_hostgroups (writer_hostgroup, reader_hostgroup, green_writer_hostgroup, green_reader_hostgroup, active, writer_is_also_reader, check_interval_ms, check_timeout_ms, comment ) VALUES (%d, %d, %s, %s, %d, %d, %d, %d, '%s')";
             for (i=0; i< count; i++) {
                     const Setting &line = mysql_aws_rds_bgd_hostgroups[i];
                     int writer_hostgroup;
@@ -1503,9 +1501,7 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
                     int writer_is_also_reader;
                     int check_interval_ms;
                     int check_timeout_ms;
-                    int autopurge_missing_checks;
                     std::string comment="";
-                    std::string domain_name="";
                     if (line.lookupValue("writer_hostgroup", writer_hostgroup)==false) {
                         proxy_error("Admin: detected a mysql_aws_rds_bgd_hostgroups in config file without a mandatory writer_hostgroup\n");
                         continue;
@@ -1530,20 +1526,14 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
                     if (line.lookupValue("writer_is_also_reader", writer_is_also_reader)==false) writer_is_also_reader=0;
                     if (line.lookupValue("check_interval_ms", check_interval_ms)==false) check_interval_ms=1000;
                     if (line.lookupValue("check_timeout_ms", check_timeout_ms)==false) check_timeout_ms=800;
-                    if (line.lookupValue("autopurge_missing_checks", autopurge_missing_checks)==false) autopurge_missing_checks=0;
                     line.lookupValue("comment", comment);
-                    line.lookupValue("domain_name", domain_name);
                     char *o1=strdup(comment.c_str());
                     char *o=escape_string_single_quotes(o1, false);
-                    char *p1=strdup(domain_name.c_str());
-                    char *p=escape_string_single_quotes(p1, false);
-                    char *query=(char *)malloc(strlen(q)+strlen(o)+strlen(p)+256); // 128 vs sizeof(int)*8
-                    sprintf(query,q, writer_hostgroup, reader_hostgroup, green_writer_str, green_reader_str, active, writer_is_also_reader, p, check_interval_ms, check_timeout_ms, autopurge_missing_checks, o);
+                    char *query=(char *)malloc(strlen(q)+strlen(o)+256); // 128 vs sizeof(int)*8
+                    sprintf(query,q, writer_hostgroup, reader_hostgroup, green_writer_str, green_reader_str, active, writer_is_also_reader, check_interval_ms, check_timeout_ms, o);
                     admindb->execute(query);
                     if (o!=o1) free(o);
                     free(o1);
-                    if (p!=p1) free(p);
-                    free(p1);
                     free(query);
                     rows++;
             }
