@@ -7107,7 +7107,7 @@ static void aws_rds_bgd_build_map(AWS_RDS_BGD_State& st, const AWS_RDS_Topology_
 				continue;
 			}
 			if (aws_rds_bgd_match_host(s->address, green_writer_host)) {
-				AWS_RDS_BGD_State::BlueGreenPair p;
+				AWS_RDS_BlueGreenPair p;
 				p.blue_host = s->address;
 				p.port = s->port;
 				p.green_host = green_writer_host;
@@ -7147,7 +7147,7 @@ static void aws_rds_bgd_build_map(AWS_RDS_BGD_State& st, const AWS_RDS_Topology_
 				}
 				for (const std::string& green_reader_host : green_reader_hosts) {
 					if (aws_rds_bgd_match_host(s->address, green_reader_host)) {
-						AWS_RDS_BGD_State::BlueGreenPair p;
+						AWS_RDS_BlueGreenPair p;
 						p.blue_host = s->address;
 						p.port = s->port;
 						p.green_host = green_reader_host;
@@ -7208,7 +7208,7 @@ static void aws_rds_bgd_resolve_green_ips(AWS_RDS_BGD_State& st) {
 	}
 
 	// Pin the worker's next probe to the green writer's IP (observe the switchover from green).
-	for (const AWS_RDS_BGD_State::BlueGreenPair& p : st.bg_map) {
+	for (const AWS_RDS_BlueGreenPair& p : st.bg_map) {
 		if (p.is_writer && !p.green_ip.empty()) {
 			if (st.next_check_host != p.green_ip) {
 				st.next_check_host = p.green_ip;
@@ -7232,7 +7232,7 @@ static void aws_rds_bgd_add_green_writer_in_hg(AWS_RDS_BGD_State& st) {
 	if (st.green_writer_hg < 0 || st.green_writer_added_in_hg) {
 		return;
 	}
-	for (const AWS_RDS_BGD_State::BlueGreenPair& p : st.bg_map) {
+	for (const AWS_RDS_BlueGreenPair& p : st.bg_map) {
 		if (p.is_writer) {
 			srv_info_t srv_info { p.green_host, (uint16_t)p.port, "AWS RDS BGD green writer" };
 			srv_opts_t srv_opts { p.blue_weight, p.blue_max_conns, p.blue_use_ssl };
@@ -7316,7 +7316,7 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 
 		// Repoint each mapped blue host onto its green IP and drain existing
 		// connections so new backend work resolves to green.
-		for (AWS_RDS_BGD_State::BlueGreenPair& p : st.bg_map) {
+		for (AWS_RDS_BlueGreenPair& p : st.bg_map) {
 			if (p.green_ip.empty()) {
 				proxy_warning(
 					"AWS RDS BGD [wHG=%u rHG=%u]: no green IP for blue '%s:%d'; cannot repoint\n",
@@ -7350,7 +7350,7 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 		std::vector<std::pair<std::string, int>> unmapped_readers;
 		for (const std::pair<std::string, int>& br : blue_readers) {
 			bool mapped = false;
-			for (const AWS_RDS_BGD_State::BlueGreenPair& p : st.bg_map) {
+			for (const AWS_RDS_BlueGreenPair& p : st.bg_map) {
 				if (p.blue_host == br.first && p.port == br.second) {
 					mapped = true;
 					break;
@@ -7367,7 +7367,7 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 		st.next_check_interval_ms = 0;
 
 		// if writer is in reader_hg, remove it
-		for (const AWS_RDS_BGD_State::BlueGreenPair& p : st.bg_map) {
+		for (const AWS_RDS_BlueGreenPair& p : st.bg_map) {
 			if (p.is_writer) {
 				MyHGM->wrlock();
 				MyHGM->remove_server_in_hg(st.reader_hg, p.blue_host, (uint16_t)p.port);
@@ -7386,7 +7386,7 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 			st.shunned_readers.clear();
 		}
 
-		for (const AWS_RDS_BGD_State::BlueGreenPair& p : st.bg_map) {
+		for (const AWS_RDS_BlueGreenPair& p : st.bg_map) {
 			// remove the cache record (pin + resolved IPs) so the blue name
 			// re-resolves to the promoted (green) instance
 			dns_cache->remove(p.blue_host);

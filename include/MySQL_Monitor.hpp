@@ -416,6 +416,26 @@ struct AWS_RDS_Topology_Result {
 };
 
 /**
+ * @brief Mapping between one blue host and its name-matched green counterpart.
+ *
+ * @details The RDS BGD worker builds these pairs from the current blue
+ *   writer/reader hostgroups and the discovered green topology. Each entry
+ *   carries the blue server attributes needed to move the matching green
+ *   server during switchover handling.
+ */
+struct AWS_RDS_BlueGreenPair {
+	std::string blue_host;                ///< Blue hostname from the writer or reader hostgroup.
+	std::string green_host;               ///< Matched green hostname using the RDS "-green-<random>" naming pattern.
+	int port = 0;                         ///< Shared blue/green port; hostgroup manager keys servers by host and port.
+	int64_t blue_weight = 1;              ///< Blue server weight mirrored onto the green server when it is added.
+	int64_t blue_max_conns = 1000;        ///< Blue server max_connections mirrored onto the green server when it is added.
+	int32_t blue_use_ssl = 0;             ///< Blue server SSL setting mirrored onto the green server when it is added.
+	std::string green_ip;                 ///< Green host IP resolved at SWITCHOVER_INITIATED and held warm.
+	unsigned long long green_ip_ttl = 0;  ///< Expiry for green_ip when resolved by the BGD thread; 0 means DNS_Cache-sourced.
+	bool is_writer = false;               ///< True when this pair maps the blue writer.
+};
+
+/**
  * @brief Per-deployment switchover state carried by one RDS BGD worker thread.
  *
  * @details One worker (monitor_RDS_BGD_thread_HG) owns one writer hostgroup ==
@@ -431,19 +451,7 @@ struct AWS_RDS_BGD_State {
 	int green_writer_hg = -1;                 ///< -1 when NULL (auto-discovery path)
 	int green_reader_hg = -1;                 ///< -1 when NULL
 
-	/// One blue host and its name-matched green counterpart.
-	struct BlueGreenPair {
-		std::string blue_host;                ///< blue host (from writer/reader HG)
-		std::string green_host;               ///< matched green host (-green-<random>)
-		int port = 0;                         ///< shared blue/green port (HGM keys on host+port)
-		int64_t blue_weight = 1;              ///< blue server's connection settings, mirrored onto green when added
-		int64_t blue_max_conns = 1000;
-		int32_t blue_use_ssl = 0;
-		std::string green_ip;                 ///< green host IP, resolved at SWITCHOVER_INITIATED and held warm
-		unsigned long long green_ip_ttl = 0;  ///< expiry of a green_ip if it is resolved by BGD thread; 0 => DNS_Cache-sourced
-		bool is_writer = false;               ///< true => maps the blue writer
-	};
-	std::vector<BlueGreenPair> bg_map;        ///< [writer] always; [readers] only when green_reader_hg is configured
+	std::vector<AWS_RDS_BlueGreenPair> bg_map;        ///< [writer] always; [readers] only when green_reader_hg is configured
 	std::vector<std::pair<std::string, int>> shunned_readers;  ///< (host,port) we shunned
 	std::string last_status;                  ///< status from the previous poll, to act only when it changes
 
