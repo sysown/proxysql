@@ -436,6 +436,35 @@ struct AWS_RDS_BlueGreenPair {
 };
 
 /**
+ * @brief Switchover phase for an RDS blue/green deployment.
+ *
+ * @details AWS's mysql.rds_topology status only captures the writer switchover. As of 2026/07/03
+ *   the table exposes no read-replica switchover status; ProxySQL infers that the replicas have
+ *   switched over from the table draining to empty (or disappearing) after it last reported
+ *   SWITCHOVER_COMPLETED.
+ *
+ *   Observed table lifecycle across one switchover:
+ *   - Steady state: two rows (SOURCE = blue, TARGET = green), both AVAILABLE.
+ *   - Switching:    both rows step through SWITCHOVER_INITIATED -> _IN_PROGRESS -> _IN_POST_PROCESSING.
+ *   - Writer done:  the SOURCE row drops; a lone TARGET row reports SWITCHOVER_COMPLETED.
+ *   - Replicas done: the table drains to empty (blue-reader DNS has propagated).
+ *
+ *   The WRITER_SWITCHOVER_* values map 1:1 onto the mysql.rds_topology status strings.
+ *   READER_SWITCHOVER_IN_PROGRESS is a ProxySQL inferred status with no topology-string mapping: we
+ *   enter it after WRITER_SWITCHOVER_COMPLETED, deferring reader/DNS cleanup until the table drains
+ *   to empty.
+ */
+enum class AWS_RDS_BGD_Status {
+	NONE,                                ///< no BGD topology / baseline
+	AVAILABLE,                           ///< "AVAILABLE"
+	WRITER_SWITCHOVER_INITIATED,         ///< "SWITCHOVER_INITIATED"
+	WRITER_SWITCHOVER_IN_PROGRESS,       ///< "SWITCHOVER_IN_PROGRESS"
+	WRITER_SWITCHOVER_POST_PROCESSING,   ///< "SWITCHOVER_IN_POST_PROCESSING"
+	WRITER_SWITCHOVER_COMPLETED,         ///< "SWITCHOVER_COMPLETED"
+	READER_SWITCHOVER_IN_PROGRESS,       ///< ProxySQL inferred reader status; awaiting topology drain + deferred cleanup
+};
+
+/**
  * @brief Per-deployment switchover state carried by one RDS BGD worker thread.
  *
  * @details One worker (monitor_RDS_BGD_thread_HG) owns one writer hostgroup ==
@@ -451,9 +480,10 @@ struct AWS_RDS_BGD_State {
 	int green_writer_hg = -1;                 ///< -1 when NULL (auto-discovery path)
 	int green_reader_hg = -1;                 ///< -1 when NULL
 
+	std::string last_topology_status;                 ///< raw mysql.rds_topology TARGET status from the previous poll (verbatim)
 	std::vector<AWS_RDS_BlueGreenPair> bg_map;        ///< [writer] always; [readers] only when green_reader_hg is configured
 	std::vector<std::pair<std::string, int>> shunned_readers;  ///< (host,port) we shunned
-	std::string last_status;                  ///< status from the previous poll, to act only when it changes
+	AWS_RDS_BGD_Status bgd_status = AWS_RDS_BGD_Status::NONE;  ///< drives the FSM and the deferred cleanup
 
 	bool green_writer_added_in_hg = false;        ///< green writer added to green_writer_hg
 	bool writer_is_also_reader_enforced = false;  ///< POST_PROCESSING added the writer to the reader HG
@@ -626,6 +656,11 @@ class MySQL_Monitor {
 	* @param topology  Parsed mysql.rds_topology result for this cycle.
 	*/
 	void handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topology_Result& topology);
+	// Deferred teardown: runs once mysql.rds_topology drains after SWITCHOVER_COMPLETED.
+	void handle_aws_rds_bgd_post_switchover(AWS_RDS_BGD_State& st);
+	// Called by the BGD worker when the topology table is absent/empty/vanished; routes to the
+	// deferred cleanup when bgd_status is READER_SWITCHOVER_IN_PROGRESS, else preserves the baseline release.
+	void aws_rds_bgd_handle_topology_absent(AWS_RDS_BGD_State& st);
 	void * monitor_replication_lag();
 	void * monitor_dns_cache();
 	void * run();

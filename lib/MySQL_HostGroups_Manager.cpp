@@ -3849,8 +3849,8 @@ void MySQL_HostGroups_Manager::set_Readyset_status(char *hostname, int port, enu
 * @brief Set or clear AWS BGD shun state for a matching server.
 *
 * @details When shunning, transitions an ONLINE server to SHUNNED_AWS_BGD, enables shun metadata,
-*   drops free connections, and marks used connections unhealthy. When unshunning, transitions only
-*   SHUNNED_AWS_BGD back to ONLINE and clears shun metadata. Servers in other statuses are left unchanged.
+*   drops free connections, and marks used connections unhealthy. When unshunning, transitions
+*   back to ONLINE and clears shun metadata. Servers in other statuses are left unchanged.
 *
 * @param hostgroup_id Hostgroup to search.
 * @param hostname     Address of the server to match.
@@ -3885,13 +3885,11 @@ bool MySQL_HostGroups_Manager::aws_rds_bgd_set_shun_server(unsigned int hostgrou
 				}
 			} else {
 				if (mysrvc->get_status() == MYSQL_SERVER_STATUS_SHUNNED_AWS_BGD) {
-					// Don't move back to ONLINE immediately. Move SHUNNED_AWS_BGD -> SHUNNED,
-					// set time_last_detected_error to a future time and let the server-selection
-					// logic auto-recover this server.
-					mysrvc->set_status(MYSQL_SERVER_STATUS_SHUNNED);
+					mysrvc->set_status(MYSQL_SERVER_STATUS_ONLINE);
+					mysrvc->shunned_automatic = false;
 					mysrvc->shunned_and_kill_all_connections = false;
-					mysrvc->time_last_detected_error = now + AWS_RDS_BGD_UNSHUN_DELAY_SEC;
-					proxy_warning("AWS RDS BGD changing server status from SHUNNED_AWS_BGD to SHUNNED for %s:%d in HG %u\n",
+					mysrvc->time_last_detected_error = 0;
+					proxy_info("AWS RDS BGD unshunning server %s:%d in HG %u\n",
 						hostname, port, myhgc->hid);
 					changed = true;
 				}

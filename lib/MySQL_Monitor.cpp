@@ -6939,8 +6939,9 @@ void * monitor_RDS_BGD_thread_HG(void *arg) {
 				mmsd->result = NULL;
 			}
 			if (!table_available) {
-				// no blue/green deployment or multi-az cluster discovery in progress; nothing to do
-				aws_rds_bgd_clear_bgd_in_progress(st);
+				// no blue/green deployment or multi-az cluster discovery in progress, or the
+				// post-switchover topology has fully drained; run any pending deferred cleanup.
+				GloMyMon->aws_rds_bgd_handle_topology_absent(st);
 				proxy_debug(PROXY_DEBUG_MONITOR, 5,
 					"mysql.rds_topology not present on %s:%d (RDS writer HG %u); skipping\n",
 					mmsd->hostname, mmsd->port, wHG);
@@ -6960,11 +6961,11 @@ void * monitor_RDS_BGD_thread_HG(void *arg) {
 				unsigned int err = mmsd->mysql ? mysql_errno(mmsd->mysql) : 0;
 				if (err == 1146) {
 					// the table vanished (ER_NO_SUCH_TABLE), e.g. a blue/green deployment
-					// was cancelled: re-check its existence on the next iteration and
-					// return to the baseline poll interval.
+					// was cancelled or a post-switchover topology fully drained: re-check its
+					// existence on the next iteration and return to the baseline poll interval.
 					topology_state = TOPOLOGY_TABLE_CHECK;
 					st.next_check_interval_ms = 0;
-					aws_rds_bgd_clear_bgd_in_progress(st);
+					GloMyMon->aws_rds_bgd_handle_topology_absent(st);
 					proxy_debug(PROXY_DEBUG_MONITOR, 5,
 						"mysql.rds_topology vanished on %s:%d (RDS writer HG %u); rechecking availability\n",
 						mmsd->hostname, mmsd->port, wHG);
@@ -6985,6 +6986,10 @@ void * monitor_RDS_BGD_thread_HG(void *arg) {
 					"AWS RDS BGD [wHG=%u]: topology probe on %s:%d (blue_green=%d, nodes=%zu)\n",
 					wHG, mmsd->hostname, mmsd->port, topo.blue_green ? 1 : 0, topo.nodes.size());
 				GloMyMon->handle_aws_rds_bgd(st, topo);
+			} else {
+				// Query succeeded with no rows: mysql.rds_topology has drained (blue-reader
+				// DNS fully propagated). Run post-switchover cleanup.
+				GloMyMon->aws_rds_bgd_handle_topology_absent(st);
 			}
 
 			if (mmsd->result) {
@@ -7245,6 +7250,44 @@ static void aws_rds_bgd_add_green_writer_in_hg(AWS_RDS_BGD_State& st) {
 	}
 }
 
+// Map a raw mysql.rds_topology TARGET status string onto BGD phase enum.
+static AWS_RDS_BGD_Status aws_rds_bgd_status_from_topology(const std::string& status) {
+	if (strcasecmp(status.c_str(), BGD_STATUS_AVAILABLE) == 0) {
+		return AWS_RDS_BGD_Status::AVAILABLE;
+	} else if (strcasecmp(status.c_str(), BGD_STATUS_INITIATED) == 0) {
+		return AWS_RDS_BGD_Status::WRITER_SWITCHOVER_INITIATED;
+	} else if (strcasecmp(status.c_str(), BGD_STATUS_IN_PROGRESS) == 0) {
+		return AWS_RDS_BGD_Status::WRITER_SWITCHOVER_IN_PROGRESS;
+	} else if (strcasecmp(status.c_str(), BGD_STATUS_POST_PROC) == 0) {
+		return AWS_RDS_BGD_Status::WRITER_SWITCHOVER_POST_PROCESSING;
+	} else if (strcasecmp(status.c_str(), BGD_STATUS_COMPLETED) == 0) {
+		return AWS_RDS_BGD_Status::WRITER_SWITCHOVER_COMPLETED;
+	} else {
+		return AWS_RDS_BGD_Status::NONE;
+	}
+}
+
+// Human-readable name for a phase enum, for logging and (later) the runtime status column.
+static const char* aws_rds_bgd_status_str(AWS_RDS_BGD_Status s) {
+	switch (s) {
+		case AWS_RDS_BGD_Status::NONE:
+			return "NONE";
+		case AWS_RDS_BGD_Status::AVAILABLE:
+			return "AVAILABLE";
+		case AWS_RDS_BGD_Status::WRITER_SWITCHOVER_INITIATED:
+			return "WRITER_SWITCHOVER_INITIATED";
+		case AWS_RDS_BGD_Status::WRITER_SWITCHOVER_IN_PROGRESS:
+			return "WRITER_SWITCHOVER_IN_PROGRESS";
+		case AWS_RDS_BGD_Status::WRITER_SWITCHOVER_POST_PROCESSING:
+			return "WRITER_SWITCHOVER_POST_PROCESSING";
+		case AWS_RDS_BGD_Status::WRITER_SWITCHOVER_COMPLETED:
+			return "WRITER_SWITCHOVER_COMPLETED";
+		case AWS_RDS_BGD_Status::READER_SWITCHOVER_IN_PROGRESS:
+			return "READER_SWITCHOVER_IN_PROGRESS";
+	}
+	return "UNKNOWN";
+}
+
 /**
 * @brief Run the status-driven blue/green switchover FSM for one deployment.
 *
@@ -7276,26 +7319,40 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 		aws_rds_bgd_clear_bgd_in_progress(st);
 		return;
 	}
+	st.last_topology_status = status;
 
-	if (strcasecmp(status.c_str(), st.last_status.c_str()) == 0) {
-		// no state change
+	AWS_RDS_BGD_Status topology_status = aws_rds_bgd_status_from_topology(status);
+
+	// Once we advance to READER_SWITCHOVER_IN_PROGRESS phase, AWS keeps reporting
+	// WRITER_SWITCHOVER_COMPLETED (a single green row) until mysql.rds_topology drains. Ignore
+	// those repeats: the deferred cleanup fires from aws_rds_bgd_handle_topology_absent() when
+	// the table empties/vanishes, not from a status change here.
+	if (topology_status == AWS_RDS_BGD_Status::WRITER_SWITCHOVER_COMPLETED
+		&& st.bgd_status == AWS_RDS_BGD_Status::READER_SWITCHOVER_IN_PROGRESS) {
 		return;
 	}
 
-	proxy_info(
-		"AWS RDS BGD [wHG=%u rHG=%u]: switchover status '%s' -> '%s'\n",
-		st.writer_hg, st.reader_hg,
-		st.last_status.empty() ? "(none)" : st.last_status.c_str(), status.c_str());
+	if (topology_status == st.bgd_status) {
+		// no phase change
+		return;
+	}
 
-	if (strcasecmp(status.c_str(), BGD_STATUS_AVAILABLE) == 0) {
+	proxy_info("AWS RDS BGD [wHG=%u rHG=%u]: switchover status '%s' -> '%s'\n",
+		st.writer_hg, st.reader_hg,
+		aws_rds_bgd_status_str(st.bgd_status),
+		aws_rds_bgd_status_str(topology_status));
+
+	st.bgd_status = topology_status;
+
+	if (st.bgd_status == AWS_RDS_BGD_Status::AVAILABLE) {
 		st.next_check_interval_ms = 250;
 
 		aws_rds_bgd_build_map(st, topology);
 		aws_rds_bgd_resolve_green_ips(st);
 		aws_rds_bgd_add_green_writer_in_hg(st);
 	}
-	else if (strcasecmp(status.c_str(), BGD_STATUS_INITIATED) == 0
-		|| strcasecmp(status.c_str(), BGD_STATUS_IN_PROGRESS) == 0) {
+	else if (st.bgd_status == AWS_RDS_BGD_Status::WRITER_SWITCHOVER_INITIATED
+		|| st.bgd_status == AWS_RDS_BGD_Status::WRITER_SWITCHOVER_IN_PROGRESS) {
 		st.next_check_interval_ms = 100;
 
 		aws_rds_bgd_build_map(st, topology);
@@ -7303,7 +7360,7 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 		aws_rds_bgd_add_green_writer_in_hg(st);
 		aws_rds_bgd_set_bgd_in_progress(st);
 	}
-	else if (strcasecmp(status.c_str(), BGD_STATUS_POST_PROC) == 0) {
+	else if (st.bgd_status == AWS_RDS_BGD_Status::WRITER_SWITCHOVER_POST_PROCESSING) {
 		st.next_check_interval_ms = 100;
 
 		// Run setup here too: the thread may observe POST_PROCESSING directly, without having
@@ -7363,53 +7420,121 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 		MyHGM->aws_rds_bgd_shun_servers(st.reader_hg, unmapped_readers, true);
 		st.shunned_readers.insert(st.shunned_readers.end(), unmapped_readers.begin(), unmapped_readers.end());
 	}
-	else if (strcasecmp(status.c_str(), BGD_STATUS_COMPLETED) == 0) {
-		st.next_check_interval_ms = 0;
+	else if (st.bgd_status == AWS_RDS_BGD_Status::WRITER_SWITCHOVER_COMPLETED) {
+		// Writer switchover done, but the topology table lingers with a single green row until the blue
+		// readers' DNS propagates and it drains. Defer reader teardown: advance to READER_SWITCHOVER phase
+		// and let the drain (aws_rds_bgd_handle_topology_absent) trigger it.
+		st.bgd_status = AWS_RDS_BGD_Status::READER_SWITCHOVER_IN_PROGRESS;
 
-		// if writer is in reader_hg, remove it
+		// Drop the writer's DNS_Cache entry: this clears the IP pin and lets regular DNS
+		// resolution take over from here. Readers stay pinned until their DNS propagates.
 		for (const AWS_RDS_BlueGreenPair& p : st.bg_map) {
 			if (p.is_writer) {
-				MyHGM->wrlock();
-				MyHGM->remove_server_in_hg(st.reader_hg, p.blue_host, (uint16_t)p.port);
-				MyHGM->wrunlock();
+				dns_cache->remove(p.blue_host);
 				break;
 			}
 		}
 
-		if (!st.shunned_readers.empty()) {
-			MyHGM->aws_rds_bgd_shun_servers(st.reader_hg, st.shunned_readers, false);
-			for (const std::pair<std::string, int>& br : st.shunned_readers) {
-				// purge so the blue reader hostname re-resolves to the promoted instance
-				dns_cache->remove(br.first);
-				My_Conn_Pool->purge_connections(br.first.c_str(), br.second);
-			}
-			st.shunned_readers.clear();
-		}
+		// release BGD monitor worker from fast-polling
+		st.next_check_interval_ms = 0;
 
-		for (const AWS_RDS_BlueGreenPair& p : st.bg_map) {
-			// remove the cache record (pin + resolved IPs) so the blue name
-			// re-resolves to the promoted (green) instance
-			dns_cache->remove(p.blue_host);
-			My_Conn_Pool->purge_connections(p.blue_host.c_str(), p.port);
-		}
-
-		// TODO: Drain Green HGs
-
-		proxy_info(
-			"AWS RDS BGD [wHG=%u rHG=%u]: switchover complete; state cleared\n",
-			st.writer_hg, st.reader_hg);
-		st.bg_map.clear();
-		// Stop polling green by IP; revert to the configured (blue) name, now the promoted primary.
-		st.next_check_host.clear();
-		// Re-enable the read_only monitor on these servers now that the switchover is done.
+		// release read_only monitor from fast-polling
 		aws_rds_bgd_clear_bgd_in_progress(st);
+
+		proxy_info("AWS RDS BGD [wHG=%u rHG=%u]: switchover status '%s' -> '%s'\n",
+			st.writer_hg, st.reader_hg,
+			aws_rds_bgd_status_str(AWS_RDS_BGD_Status::WRITER_SWITCHOVER_COMPLETED),
+			aws_rds_bgd_status_str(AWS_RDS_BGD_Status::READER_SWITCHOVER_IN_PROGRESS));
 	}
 	else {
-		// unknown status: take no action, stay at baseline interval
+		// NONE / unrecognized status: take no action, stay at baseline interval
 		st.next_check_interval_ms = 0;
 	}
+}
 
-	st.last_status = status;
+/**
+* @brief Deferred switchover teardown: run once mysql.rds_topology has drained after COMPLETED.
+*
+* @details Blue-reader DNS has propagated to the promoted instances by the time the topology
+*   table goes empty, so this: returns the writer to a writer-only role, restores the shunned
+*   blue readers to ONLINE immediately (no recovery delay), drops the blue->green DNS pins, and
+*   clears the per-worker switchover state so a future switchover starts from a clean FSM.
+*/
+void MySQL_Monitor::handle_aws_rds_bgd_post_switchover(AWS_RDS_BGD_State& st) {
+	if (st.bgd_status != AWS_RDS_BGD_Status::READER_SWITCHOVER_IN_PROGRESS) {
+		return;
+	}
+
+	proxy_info(
+		"AWS RDS BGD [wHG=%u rHG=%u]: switchover status '%s' -> '%s'; running post-switchover cleanup\n",
+		st.writer_hg, st.reader_hg, aws_rds_bgd_status_str(st.bgd_status), "SWITCHOVER_COMPLETED"
+	);
+
+	// Return the writer to a writer-only role by removing it from the reader HG.
+	// TODO: make this conditional on the replication_hostgroups writer_is_also_reader
+	// flag for this writer/reader pair.
+	for (const AWS_RDS_BlueGreenPair& p : st.bg_map) {
+		if (p.is_writer) {
+			MyHGM->wrlock();
+			MyHGM->remove_server_in_hg(st.reader_hg, p.blue_host, (uint16_t)p.port);
+			MyHGM->wrunlock();
+			break;
+		}
+	}
+
+	// unshun blue readers which are previously shunned
+	if (!st.shunned_readers.empty()) {
+		MyHGM->aws_rds_bgd_shun_servers(st.reader_hg, st.shunned_readers, false);
+		for (const std::pair<std::string, int>& br : st.shunned_readers) {
+			// Drop DNS cache for the unmapped readers so their blue names re-resolve
+			// to the promoted (green) instances.
+			dns_cache->remove(br.first);
+			My_Conn_Pool->purge_connections(br.first.c_str(), br.second);
+		}
+		st.shunned_readers.clear();
+	}
+
+	// Drop DNS pins for the mapped readers so their blue names resolve natively
+	// to the promoted (green) instances. The writer pin was already cleared at
+	// WRITER_SWITCHOVER_COMPLETED, so skip it here.
+	for (const AWS_RDS_BlueGreenPair& p : st.bg_map) {
+		if (p.is_writer) {
+			continue;
+		}
+		dns_cache->remove(p.blue_host);
+		My_Conn_Pool->purge_connections(p.blue_host.c_str(), p.port);
+	}
+
+	// TODO: Drain Green HGs
+
+	// state cleanup
+	st.bg_map.clear();
+	st.last_topology_status.clear();
+	st.bgd_status = AWS_RDS_BGD_Status::NONE;
+	st.next_check_host.clear();
+	st.next_check_interval_ms = 0;
+	st.green_writer_added_in_hg = false;
+	st.writer_is_also_reader_enforced = false;
+	aws_rds_bgd_clear_bgd_in_progress(st);
+
+	proxy_info(
+		"AWS RDS BGD [wHG=%u rHG=%u]: post-switchover cleanup complete; state cleared\n",
+		st.writer_hg, st.reader_hg);
+}
+
+/**
+* @brief Invoked by the BGD worker whenever mysql.rds_topology is absent/empty/vanished.
+*
+* @details When a post-switchover teardown is pending, an empty topology table means blue-reader
+*   DNS has propagated, so run the deferred cleanup. Otherwise keep the pre-existing behavior of
+*   releasing the read_only fast-poll engagement for this deployment.
+*/
+void MySQL_Monitor::aws_rds_bgd_handle_topology_absent(AWS_RDS_BGD_State& st) {
+	if (st.bgd_status == AWS_RDS_BGD_Status::READER_SWITCHOVER_IN_PROGRESS) {
+		handle_aws_rds_bgd_post_switchover(st);
+	} else {
+		aws_rds_bgd_clear_bgd_in_progress(st);
+	}
 }
 
 /**
