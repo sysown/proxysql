@@ -1,19 +1,20 @@
 #include "mysqlx_connection.h"
 #include "mysqlx_protocol.h"
+#include "proxysql.h"
+#include "proxysql_debug.h"
 
 #include "mysqlx.pb.h"
 #include "mysqlx_connection.pb.h"
 #include "mysqlx_session.pb.h"
 #include "mysqlx_datatypes.pb.h"
 #include "mysqlx_notice.pb.h"
-
-#include <cstdio>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 #include <cerrno>
 #include <cstring>
 #include <chrono>
@@ -98,20 +99,32 @@ int MysqlxConnection::start_connect(const char* host, int port) {
 	memset(&addr, 0, sizeof(addr));
 	addr.sin_family = AF_INET;
 	addr.sin_port = htons(port);
-	// Reject anything that isn't an IPv4 dotted-quad. Previously the
-	// return value was discarded and inet_pton on a hostname (or empty
-	// string, or "::1", or anything else) silently left sin_addr at
-	// 0.0.0.0, producing a connect to localhost-or-INADDR_ANY-equivalent
-	// — a real footgun because mysqlx_backend_endpoints.hostname accepts
-	// arbitrary strings. Hostnames are not supported here; the upstream
-	// path is expected to have already resolved them. Failing fast with
-	// ERROR_STATE surfaces the misconfig instead of silently routing
-	// traffic to the wrong target.
-	if (inet_pton(AF_INET, host ? host : "", &addr.sin_addr) != 1) {
-		close(fd_);
-		fd_ = -1;
-		state_ = ERROR_STATE;
-		return -1;
+	// Resolve `host` to an IPv4 address. Operators routinely populate
+	// mysqlx_backend_endpoints.hostname with DNS names (the standard
+	// docker-compose / Kubernetes pattern), so an IPv4-only inet_pton
+	// rejected every realistic backend and the session emitted 2003 for
+	// every first query — that is the failure mode behind the soak
+	// harness "Can't connect to backend" reports against the bind-mounted
+	// mysqlx plugin. inet_pton is still tried first so an already-resolved
+	// dotted-quad short-circuits the DNS roundtrip; only on miss do we
+	// fall back to getaddrinfo. Anything unresolvable still fails
+	// ERROR_STATE rather than silently routing to 0.0.0.0.
+	const char* host_in = host ? host : "";
+	if (inet_pton(AF_INET, host_in, &addr.sin_addr) != 1) {
+		struct addrinfo hints {};
+		hints.ai_family = AF_INET;
+		hints.ai_socktype = SOCK_STREAM;
+		struct addrinfo* res = nullptr;
+		int gai = getaddrinfo(host_in, nullptr, &hints, &res);
+		if (gai != 0 || res == nullptr) {
+			if (res) freeaddrinfo(res);
+			close(fd_);
+			fd_ = -1;
+			state_ = ERROR_STATE;
+			return -1;
+		}
+		addr.sin_addr = reinterpret_cast<struct sockaddr_in*>(res->ai_addr)->sin_addr;
+		freeaddrinfo(res);
 	}
 	int rc = ::connect(fd_, (struct sockaddr*)&addr, sizeof(addr));
 	if (rc == 0) { state_ = AUTHENTICATING; return 0; }
@@ -214,20 +227,19 @@ int MysqlxConnection::send_client_frame(uint8_t msg_type, const std::string& pay
 bool MysqlxConnection::auth_phase_notice_is_drainable(const uint8_t* body, size_t body_len) {
 	if (body == nullptr || body_len == 0) {
 		// Empty NOTICE during auth is malformed; treat as auth failure.
-		fprintf(stderr, "mysqlx: empty NOTICE during backend auth — failing auth\n");
+		proxy_error("mysqlx: empty NOTICE during backend auth — failing auth\n");
 		auth_state_ = BACKEND_AUTH_ERROR;
 		return false;
 	}
 	Mysqlx::Notice::Frame nframe;
 	if (!nframe.ParseFromArray(body, static_cast<int>(body_len))) {
-		fprintf(stderr, "mysqlx: malformed NOTICE during backend auth — failing auth\n");
+		proxy_error("mysqlx: malformed NOTICE during backend auth — failing auth\n");
 		auth_state_ = BACKEND_AUTH_ERROR;
 		return false;
 	}
 	if (!nframe.has_type() || !Mysqlx::Notice::Frame_Type_IsValid(nframe.type())) {
-		fprintf(stderr,
-			"mysqlx: unknown-type NOTICE (type=%d) during backend auth — failing auth\n",
-			nframe.has_type() ? nframe.type() : -1);
+		proxy_error("mysqlx: unknown-type NOTICE (type=%d) during backend auth — failing auth\n",
+		            nframe.has_type() ? nframe.type() : -1);
 		auth_state_ = BACKEND_AUTH_ERROR;
 		return false;
 	}
@@ -240,17 +252,15 @@ bool MysqlxConnection::auth_phase_notice_is_drainable(const uint8_t* body, size_
 		case Mysqlx::Notice::Frame_Type_WARNING:
 			// Operationally suspect during auth (deprecated auth method
 			// notices, etc.). Drain but log so operators can see them.
-			fprintf(stderr,
-				"mysqlx: backend emitted WARNING NOTICE during auth (drained)\n");
+			proxy_warning("mysqlx: backend emitted WARNING NOTICE during auth (drained)\n");
 			return true;
 		case Mysqlx::Notice::Frame_Type_GROUP_REPLICATION_STATE_CHANGED:
 			// Cluster-membership notices during auth are out-of-place;
 			// they belong on data-plane connections after auth is done.
 			// Drain but log — don't fail the connection over what is
 			// likely an over-eager server, but make it visible.
-			fprintf(stderr,
-				"mysqlx: backend emitted GROUP_REPLICATION_STATE_CHANGED "
-				"NOTICE during auth (drained — unexpected on auth path)\n");
+			proxy_warning("mysqlx: backend emitted GROUP_REPLICATION_STATE_CHANGED "
+			              "NOTICE during auth (drained — unexpected on auth path)\n");
 			return true;
 	}
 	// Defensive default: known-but-not-enumerated-here type. Treat as

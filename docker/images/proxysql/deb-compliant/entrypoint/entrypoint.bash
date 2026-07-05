@@ -67,6 +67,12 @@ fi
 # all v4.0 plugins — PROXYSQLGENAI is no longer a separate flag.
 EXTRA=""
 [[ "${PROXYSQL40:-}" == "1" ]] && EXTRA="$EXTRA PROXYSQL40=1"
+# SKIP_GENAI_UNIT_TESTS=1 lets ci-builds.yml's -tap-mysqlx matrix
+# variant skip the ~14 genai_*_unit-t binaries (each links 30+
+# plugins/genai/src/*.cpp at -O0 -ggdb, ~160 MB apiece) so the
+# in-build working set fits the runner's ~14 GB free disk.
+# CI-mysqlx, the only consumer of -tap-mysqlx, never runs them.
+[[ "${SKIP_GENAI_UNIT_TESTS:-}" == "1" ]] && EXTRA="$EXTRA SKIP_GENAI_UNIT_TESTS=1"
 ${MAKE} ${MAKEOPT} ${EXTRA} ${deps_target}
 ${MAKE} ${MAKEOPT} ${EXTRA} ${build_target}
 
