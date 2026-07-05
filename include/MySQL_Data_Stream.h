@@ -170,12 +170,6 @@ class MySQL_Data_Stream
 	// Updated **only** when an 'auth_switch' has been sent to client
 	enum proxysql_auth_plugins switching_auth_sent;
 	int auth_in_progress; // if 0 , no authentication is in progress. Any value greater than 0 depends from the implementation
-	// Pass-through authentication: cleartext password received from the
-	// client during the caching_sha2_password full-auth exchange (spec
-	// §4.1). Captured by PPHR_passthrough_init at stage 5 and consumed
-	// by the AUTHENTICATING_BACKEND_FOR_CLIENT session handler when it
-	// probes the backend. NULL when no pass-through probe is in flight.
-	char *passthrough_cleartext;
 	unsigned int tmp_charset;
 
 	short revents;

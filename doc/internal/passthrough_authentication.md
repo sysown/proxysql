@@ -188,35 +188,52 @@ ProxySQL does not care about backend topology (single, master-slave, GR, Aurora)
 
 ### 6.2 Connect timeout
 
-Apply `mysql-connect_timeout_server_max` to the probe. On timeout, treat as failure (does not count against rate-limit failure counters, since timeout != bad credentials — admins shouldn't get locked out because a backend is slow).
+The backend connect is driven by the existing non-blocking `CONNECTING_SERVER` path, so timeout handling is inherited from it: `mysql_servers.max_connect_time` / `mysql-connect_timeout_server_max` apply as for any backend acquisition. On timeout (a transport-class failure), the connect is treated as failure and does **not** count against rate-limit failure counters (§6.4) — admins shouldn't get locked out because a backend is slow.
 
-### 6.3 Probe success → cache
+### 6.3 Backend connect → cache
 
-On `OK`:
-1. Insert `(U, cleartext, now)` into the in-memory `passthrough_auth_cache`. Also record the in-memory `last_refreshed_ts` used by TTL.
-2. Close the probe connection (see "probe lifecycle" below).
+There is no separate "probe." The client's captured cleartext is treated as *potentially right*: it is placed on `userinfo->password`, a backend connection is acquired, and the normal non-blocking connect authenticates to the backend with it. The backend's `OK`/`ERR` **is** the credential verdict.
+
+On `OK` (the `CONNECTING_SERVER` connect succeeds and the session resumes in `AUTHENTICATING_BACKEND_FOR_CLIENT` Phase B):
+1. Insert `(U, cleartext, now)` into the in-memory `passthrough_auth_cache`.
+2. Return the now-authenticated backend connection to the pool (it is valid and reusable; the client's first query re-acquires through the normal lazy `CONNECTING_SERVER` path with the now-cached credential).
 3. Send `OK` to the client; session → `WAITING_CLIENT_DATA`.
 
 No pre-computation of hashes is performed. The existing verification code already handles `stored=cleartext, client=any-supported-plugin`:
 - `mysql_native_password` client → `proxy_scramble(reply, scramble_buff, cleartext)` and memcmp.
 - `caching_sha2_password` client (fast-auth path) → `PPHR_6auth2` derives the expected scrambled response from the cached cleartext.
 
-#### Probe lifecycle (Phase 1)
+#### Connection lifecycle (non-blocking, pooled)
 
-The Phase 1 implementation opens the probe as a **one-shot raw libmariadbclient connection** (`mysql_init` → `mysql_real_connect` → `mysql_close`) directly from `handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT`. The probe **does NOT** go through `MyHGM->get_MyConn_from_pool`, and consequently:
+The pass-through backend connect reuses the **existing** `CONNECTING_SERVER` machinery — the same non-blocking `async_connect` → `mysql_real_connect_start`/`connect_cont` path every other backend connection uses. The handler `AUTHENTICATING_BACKEND_FOR_CLIENT` is a thin two-phase wrapper:
 
-- The probe connection is **not** counted against `mysql_servers.max_connections`. Pass-through under high concurrent unknown-user load can briefly exceed that cap; the global `mysql-passthrough_auth_max_inflight_probes` is the only effective ceiling.
-- The probe connection is **destroyed**, not returned to the pool. The client's subsequent query traffic acquires a fresh pooled connection through the normal `CONNECTING_SERVER` path with the now-cached credential.
-- The probe connection's handshake/setup is **not** subject to `mysql_thread___connect_retries_on_failure` retry logic (single attempt).
+- **Phase A** (first entry): run the pre-checks (rate limiting, in-flight cap), acquire a **fresh** pooled connection via `MyHGM->get_MyConn_from_pool(..., ff=true)`, copy the client userinfo (credential included) onto it, kick off `async_connect`, push the resume target onto `previous_status`, and transition to `CONNECTING_SERVER`.
+- **Phase B** (resumed after `CONNECTING_SERVER` success): cache the verified credential, enforce the frontend connection caps, return the authed connection to the pool, send the client `OK`, and go to `WAITING_CLIENT_DATA`.
 
-Why one-shot rather than pooled: a probe needs to use credentials that are borrowed from the client and may not exist in `mysql_users` at all (unknown-user case). The pool's selection and accounting machinery assumes the user is already provisioned; introducing pool entries keyed by ephemeral borrowed credentials adds significant coupling and accounting subtleties that are not justified for an opt-in bootstrap feature. A Phase 2 improvement may convert to a pooled async probe; the trade-off is documented inline in the handler.
+The connection is acquired with `ff=true` (force-new). This is **load-bearing for correctness**: the connection pool reuses connections by username only (`requires_CHANGE_USER` compares username, `match_tracked_options` compares client flags — neither checks the password). A reused connection authenticated for `alice` with password X would silently satisfy a pass-through request for `alice` with a *wrong* password Y, never validating Y — defeating the entire credential verdict. `ff=true` skips the reuse arms and forces the create-new path (a connection with `fd == -1`), so `connect_start` runs `mysql_real_connect_start` with the borrowed credential.
 
-### 6.4 Probe failure
+Consequences of using the pool:
 
-- Send a generic ERR (`Access denied for user 'U'@'host'`) to the client. Do not forward the backend's ERR verbatim — it could leak backend topology or message variations.
-- Increment per-user and per-IP failure counters (§7.2).
-- Tear down session.
-- Do **not** insert any negative-cache entry. Failed probes are not cached.
+- The pass-through connect **is** counted against `mysql_servers.max_connections` and the pool's throttle, exactly like any backend acquisition. This is correct backpressure (the earlier "bypasses `max_connections`" one-shot design was a hole, not a feature). The global `mysql-passthrough_auth_max_inflight_probes` remains as an additional pass-through-specific ceiling.
+- The connect **is** non-blocking: it never blocks the worker event-loop thread. Credential-stuffing load cannot pin worker threads the way the former synchronous `mysql_real_connect` did.
+- `mysql_thread___connect_retries_on_failure` does not apply: a credential verdict is a single-attempt outcome, and the pass-through divert in `CONNECTING_SERVER` (§6.4) intercepts the failure before the retry loop.
+
+### 6.4 Backend-connect failure (credential or transport)
+
+When `CONNECTING_SERVER` fails while servicing a pass-through auth (detected via the session's `passthrough_connect_in_flight` marker), it **diverts** instead of taking its default failure path. The default path is wrong for pass-through on three counts: it forwards the backend's actual error message (leaking topology — §6.4 forbids this), it transitions to `WAITING_CLIENT_DATA` without tearing the session down, and it retries a credential verdict to other backends (pointless — same bad password).
+
+The divert classifies the `mysql_errno` and:
+
+- **Credential-class** (1045 `ER_ACCESS_DENIED_ERROR`, 1698, 1130): records a failure against the per-user/per-IP sliding windows (§7.2), bumps `probes_failed_credentials`.
+- **Transport-class** (everything else, including timeouts and 2xxx client errors): bumps `probes_failed_transport` and does **not** record a failure (timeouts must not lock out — §6.2).
+
+It then hands the disposition back to the pass-through handler via the `passthrough_connect_failed` channel, which drives a single, shared teardown:
+
+- Sends a generic ERR (`Access denied for user 'U'`) to the client. The backend's message is never forwarded — no topology leak.
+- Tears down the session.
+- Does **not** insert any negative-cache entry. Failed connects are not cached.
+
+The §8.4 invalidation eviction (a *later* 1045 during real query traffic against a previously-learned credential) is a separate, gated mechanism that remains in `CONNECTING_SERVER`'s 1045 case, scoped by the `passthrough_credential` flag.
 
 ## 7. Security model
 
@@ -339,6 +356,20 @@ stats_mysql_passthrough_auth_cache:
 
 Password column is **not** exposed. Useful for "is alice's password cached?" debugging.
 
+> **Security note (username enumeration):** the `username` column of
+> `stats_mysql_passthrough_auth_cache` lists every account that has
+> successfully authenticated via pass-through. When
+> `mysql-passthrough_auth_unknown_users=true`, this set is exactly the
+> set of usernames an attacker has *confirmed* are valid backend
+> accounts in `mysql-passthrough_default_hg`. Any holder of admin
+> console access can therefore enumerate valid backend users. Admin
+> console access is already privileged, but operators who enable
+> `unknown_users` (which expands the credential-stuffing surface) MUST
+> treat this view as sensitive: restrict who can reach the admin port,
+> and prefer setting `mysql-passthrough_auth_username_pattern` so the
+> probed-user population is bounded by policy rather than discovered by
+> attacker traffic.
+
 **Counters / gauges** (`stats_mysql_passthrough_auth_metrics`):
 
 ```
@@ -420,11 +451,11 @@ Does not modify or depend on `GloMyAuth` internals.
 
 `MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT()` — drives the probe connection lifecycle. Modeled on `handler_again___status_CONNECTING_SERVER` but with the probe-specific success/failure handling and without touching `previous_status`.
 
-### 9.5 Probe lifecycle (one-shot, not pooled)
+### 9.5 Connection lifecycle (non-blocking, pooled)
 
-The probe connection is *not* the connection that will serve client queries. It is allocated as a raw libmariadbclient handle (`mysql_init` → `mysql_real_connect` → `mysql_close`), used for exactly one handshake, and **destroyed on both success and failure**. The probe does NOT go through `MyHGM` and does NOT count against `mysql_servers.max_connections`; see §6.3 "Probe lifecycle" for the rationale.
+There is no dedicated probe handle. The backend connect that validates the borrowed credential goes through the **normal** `CONNECTING_SERVER` non-blocking path, exactly like any backend acquisition. See §6.3 "Connection lifecycle (non-blocking, pooled)" for the two-phase `AUTHENTICATING_BACKEND_FOR_CLIENT` wrapper, the `ff=true` force-new rationale, and why the connect is pooled and counted against `mysql_servers.max_connections`.
 
-The session then takes its query-path backend connection through the normal `CONNECTING_SERVER` path on first query.
+The connection that authenticates the credential is returned to the pool on success; the client's first query then acquires its query-path backend connection through the normal lazy `CONNECTING_SERVER` path (it may even reuse the one just returned).
 
 ### 9.6 Admin command
 
@@ -467,7 +498,7 @@ Both are read-only and refresh from `GloMyPTAuthCache` on every SELECT.
 
 ## 11. Resolved decisions (formerly open questions)
 
-1. **Probes count against `mysql_servers.max_connections`** — **no**, not in Phase 1. The probe is a one-shot raw libmariadbclient connection opened directly by the probe handler and immediately closed; it bypasses `MyHGM` entirely (see §6.3 "Probe lifecycle"). The effective ceiling on concurrent probes is `mysql-passthrough_auth_max_inflight_probes`, not `max_connections`. Phase 2 may convert to a pooled async probe and re-open this decision.
+1. **Probes count against `mysql_servers.max_connections`** — **yes**. The backend connect that validates the borrowed credential goes through the normal pooled, non-blocking `CONNECTING_SERVER` path and is counted against `mysql_servers.max_connections` and the pool's throttle, exactly like any backend acquisition. There is no separate one-shot probe handle (the earlier design bypassed the pool and was both a self-DoS vector — it blocked the worker thread — and a `max_connections` hole; it was removed). The pass-through-specific `mysql-passthrough_auth_max_inflight_probes` remains as an additional ceiling.
 2. **Global in-flight probe cap** — yes, added as `mysql-passthrough_auth_max_inflight_probes` (default 100).
 3. **Pre-compute hashes after successful learn** — no. Storing cleartext is sufficient; existing verification paths handle `stored=cleartext, client=any-supported-plugin` on the fly.
 4. **Concurrent probes for the same username** — not serialized in Phase 1. The global in-flight cap implicitly bounds them; minor duplicate probing accepted.

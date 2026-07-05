@@ -551,6 +551,56 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	 * state. Stays @c false for regular @c mysql_users authentications.
 	 */
 	bool passthrough_credential;
+	/**
+	 * @brief Phase marker / divert signal for non-blocking pass-through auth.
+	 *
+	 * Pass-through delegates the backend connect to the existing
+	 * non-blocking @c CONNECTING_SERVER path (spec §6.3). This bool serves
+	 * two roles while a pass-through auth is in flight:
+	 *
+	 *   1. Phase tracking inside
+	 *      @c handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT:
+	 *      @c false on the first entry means "launch the backend connect"
+	 *      (Phase A); the handler then sets it @c true, pushes itself onto
+	 *      @c previous_status, and transitions to @c CONNECTING_SERVER.
+	 *      When @c CONNECTING_SERVER succeeds it pops back to
+	 *      @c AUTHENTICATING_BACKEND_FOR_CLIENT; the now-@c true value means
+	 *      "complete the client handshake" (Phase B).
+	 *
+	 *   2. Divert signal inside @c handler_again___status_CONNECTING_SERVER:
+	 *      when the backend connect fails while this is @c true, the failure
+	 *      is a pass-through credential verdict (not a normal query-time
+	 *      connect failure). The 1045/transport-failure path must NOT use
+	 *      CONNECTING_SERVER's default ERR (which forwards the backend's
+	 *      message and keeps the session alive); it must divert to the
+	 *      pass-through generic-ERR + teardown instead.
+	 *
+	 * Set in Phase A; cleared on every Phase B exit (success and
+	 * @c fail_session). Stays @c false for all non-pass-through sessions,
+	 * so the divert is inert on the normal query path.
+	 */
+	bool passthrough_connect_in_flight;
+	/**
+	 * @brief Failure channel from CONNECTING_SERVER back to the pass-through
+	 * Phase B handler.
+	 *
+	 * CONNECTING_SERVER cannot itself produce the pass-through generic-ERR +
+	 * teardown (its failure path forwards the backend's message and transitions
+	 * to WAITING_CLIENT_DATA without tearing down). So when a backend connect
+	 * fails while @c passthrough_connect_in_flight is true, CONNECTING_SERVER
+	 * sets this flag (with @c passthrough_connect_fail_reason carrying the
+	 * internal classification) and resumes the pass-through handler instead of
+	 * taking its own ERR path. The pass-through Phase B handler checks this
+	 * flag first: if set, it drives @c fail_session (generic "Access denied"
+	 * ERR + audit + return -1 teardown), reusing the single source of truth
+	 * for the client-facing failure disposition.
+	 *
+	 * Valid only while @c passthrough_connect_in_flight is true. Set in
+	 * exactly one place (the CONNECTING_SERVER divert); consumed and cleared
+	 * in the pass-through Phase B entry.
+	 */
+	bool passthrough_connect_failed;
+	const char *passthrough_connect_fail_reason;
 	// Fast forward grace close flags: track backend closure during fast forward mode
 	// to allow pending client data to drain before closing the session.
 	bool backend_closed_in_fast_forward;

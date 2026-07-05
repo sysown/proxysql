@@ -1522,32 +1522,8 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		&& password != NULL
 		&& password[0] == '\0'
 		&& (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE)) {
-		/*
-		 * Reject COM_CHANGE_USER for pass-through-eligible users (spec §5.4).
-		 *
-		 * This check MUST run BEFORE the unconditional session-state
-		 * mutations below (sess->default_hostgroup,
-		 * sess->transaction_persistent, sess->user_attributes get
-		 * overwritten from account_details for EVERY CHANGE_USER, success
-		 * or not). If we deferred this check to after those mutations, a
-		 * rejected CHANGE_USER would leave the already-authenticated
-		 * session with the pass-through target row's routing/attrs
-		 * grafted on top of the previous user's state -- observable
-		 * side-effects from a rejected attempt.
-		 *
-		 * Two cases need explicit rejection here when
-		 * passthrough_auth_enabled && passthrough_auth_empty_password is
-		 * on:
-		 *   - Empty-password row: silently violating §3.2 behavior change
-		 *     by granting passwordless CHANGE_USER access via the legacy
-		 *     branch below.
-		 *   - Unknown user (password == NULL): legacy code already
-		 *     returns ret=false a few lines down; no new guard needed.
-		 *
-		 * The rejection is silent (ret=false, generic auth failure) and
-		 * leaks no information about whether the user exists or whether
-		 * pass-through is enabled.
-		 */
+		// Rationale for the pre-mutation ordering and the two eligible
+		// cases is documented on the doxygen block above this gate.
 		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
 			"COM_CHANGE_USER to pass-through-eligible user '%s' rejected "
 			"(Phase 1 does not support pass-through via CHANGE_USER, spec §5.4)\n",
@@ -2412,24 +2388,41 @@ void MySQL_Protocol::PPHR_passthrough_init(MyProt_tmp_auth_vars& vars1) {
 	}
 
 	// Stage 5: client has replied with the cleartext password (now in
-	// vars1.pass). Stash it on the data stream so the backend-probe
-	// session handler can use it, and transition the session into
-	// AUTHENTICATING_BACKEND_FOR_CLIENT. The verifier (caller) returns
-	// false; the session loop will pick up the new state and drive the
-	// probe to completion (or generic-ERR teardown on failure).
+	// vars1.pass). Treat it as "potentially right" and put it directly on
+	// userinfo->password -- the same field the normal backend connect path
+	// uses as the auth password in mysql_real_connect_start (see
+	// MySQL_Connection::connect_start). The non-blocking pass-through
+	// handler then acquires a pooled backend connection that authenticates
+	// with this credential; the backend's OK/ERR is the verdict, replacing
+	// the old one-shot synchronous probe.
+	//
+	// We previously stashed the cleartext on a dedicated
+	// client_myds->passthrough_cleartext field; that field is gone now that
+	// the credential rides userinfo->password like any other auth.
 	if ((*myds)->switching_auth_stage == 5) {
-		if ((*myds)->passthrough_cleartext) {
-			memset((*myds)->passthrough_cleartext, 0, strlen((*myds)->passthrough_cleartext));
-			free((*myds)->passthrough_cleartext);
-			(*myds)->passthrough_cleartext = NULL;
+		MySQL_Connection_userinfo *userinfo =
+			(*myds)->sess->client_myds->myconn->userinfo;
+		if (userinfo && userinfo->password) {
+			// process_pkt_handshake_response left password "" because the
+			// verifier returned false with auth_in_progress set; free that
+			// empty string before overwriting.
+			free(userinfo->password);
+			userinfo->password = NULL;
 		}
 		if (vars1.pass && vars1.pass_len > 0) {
-			(*myds)->passthrough_cleartext = strdup(reinterpret_cast<const char*>(vars1.pass));
+			userinfo->password =
+				strdup(reinterpret_cast<const char*>(vars1.pass));
 		} else {
-			// Client sent an empty cleartext — pass-through cannot succeed
-			// (the backend would reject); leave cleartext NULL and let the
-			// session handler fail the auth with a generic ERR.
-			(*myds)->passthrough_cleartext = strdup("");
+			// Client sent an empty cleartext. Leave userinfo->password NULL;
+			// handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT fails
+			// fast on the empty/NULL password with a generic ERR. An empty
+			// password can never authenticate against a real backend account.
+			userinfo->password = NULL;
+		}
+		if (userinfo) {
+			// Recompute the userinfo hash so backend connection identity
+			// checks (which compare hashes) see the borrowed credential.
+			userinfo->set(NULL, NULL, NULL, NULL);
 		}
 		(*myds)->auth_in_progress = 1;
 		(*myds)->sess->set_status(AUTHENTICATING_BACKEND_FOR_CLIENT);
