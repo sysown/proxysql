@@ -17,6 +17,11 @@ NETWORK_NAME="${INFRA_ID}_backend"
 PROXY_CONTAINER="proxysql.${INFRA_ID}"
 INFRA_LOGS_PATH="${WORKSPACE}/ci_infra_logs"
 PROXY_DATA_DIR="${INFRA_LOGS_PATH}/${INFRA_ID}/proxysql"
+PGSQL_SOCKET_HOST_DIR="${INFRA_LOGS_PATH}/${INFRA_ID}/pgsql-sockets"
+
+# SUDO helper: empty when already root (the CI runner container runs as root).
+SUDO=""
+if [ "$(id -u)" != "0" ]; then SUDO="sudo"; fi
 GENERIC_CONFIG="${SCRIPT_DIR}/proxysql-ci.cnf"
 
 # Per-group override: a TAP group may need a config that differs from
@@ -192,6 +197,30 @@ if [ -n "${CLUSTER_SIM_HOST_FILE:-}" ] && [ -f "${CLUSTER_SIM_HOST_FILE}" ]; the
     done < "${CLUSTER_SIM_HOST_FILE}"
 fi
 
+# Mount the host directory that holds the PostgreSQL Unix-domain socket
+# (created by docker-pgsql16-single's pgdb1 container) into ProxySQL at the
+# same path the PostgreSQL container exposes it, so a pgsql_servers row with
+# hostname='/var/run/postgresql-shared' and port=0 resolves correctly.
+PGSQL_SOCKET_MOUNT=""
+if [ "${PROXYSQL_NEEDS_PGSQL_SOCKET:-0}" = "1" ]; then
+    $SUDO mkdir -p "${PGSQL_SOCKET_HOST_DIR}"
+    $SUDO chmod 777 "${PGSQL_SOCKET_HOST_DIR}"
+    PGSQL_SOCKET_MOUNT="-v ${PGSQL_SOCKET_HOST_DIR}:/var/run/postgresql-shared:rw"
+    echo ">>> Mounting PostgreSQL Unix-socket directory: ${PGSQL_SOCKET_HOST_DIR} -> /var/run/postgresql-shared"
+fi
+
+# GCOV_PREFIX_STRIP=2 strips "opt/proxysql" from the absolute path the
+# .gcno embeds — the workspace is mounted at /opt/proxysql in the build
+# container (see docker-compose.yml), so .gcno files record paths like
+# /opt/proxysql/{lib,src}/obj/X.gcno. With STRIP=2 the daemon writes
+# .gcda files to /gcov/{lib,src}/obj/X.gcda, preserving the {lib,src}
+# directory that the collect_coverage trap in run-tests-isolated.bash
+# uses to find each matching .gcno under ${WORKSPACE} and copy it next
+# to its .gcda before fastcov runs. STRIP=3 (the prior value) over-
+# stripped one extra component and dropped .gcda files at
+# /gcov/obj/X.gcda with no {lib,src} directory; the .gcno copy loop
+# couldn't find matches, fastcov produced "files: []" for every entry,
+# and zero daemon-side coverage made it into Codecov.
 echo ">>> Starting ProxySQL container: ${PROXY_CONTAINER} (cluster nodes: ${NUM_NODES})"
 docker run -d \
     --name "${PROXY_CONTAINER}" \
@@ -206,8 +235,9 @@ docker run -d \
     ${MYSQLX_PLUGIN_MOUNT} \
     ${GENAI_PLUGIN_MOUNT} \
     ${GCOV_MOUNTS} \
+    ${PGSQL_SOCKET_MOUNT} \
     -e GCOV_PREFIX="/gcov" \
-    -e GCOV_PREFIX_STRIP="3" \
+    -e GCOV_PREFIX_STRIP="2" \
     proxysql-ci-base:latest \
     /bin/bash -c "${STARTUP_CMD}"
 
