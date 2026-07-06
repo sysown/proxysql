@@ -1068,13 +1068,14 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	*/
 	bool aws_rds_bgd_set_shun_server(unsigned int hostgroup_id, const char *hostname, int port, bool shun);
 	/**
-	* @brief Shun or unshun multiple servers in a hostgroup, then publish the change to the runtime tables.
-	*
-	* @param hostgroup_id Hostgroup to search.
-	* @param servers      (hostname, port) pairs to act on.
-	* @param shun         true to shun, false to unshun.
-	*/
-	void aws_rds_bgd_shun_servers(unsigned int hostgroup_id, const std::vector<std::pair<std::string, int>>& servers, bool shun);
+	 * @brief Aligns the runtime 'mysql_servers' table + checksums with the server state in MyHGM.
+	 *
+	 * @details One-way alignment (in-memory -> runtime): regenerates the runtime 'mysql_servers' table
+	 *   from the current in-memory MyHGM state and recomputes/republishes the global checksum.
+	 *
+	 * @note Caller must hold wrlock().
+	 */
+	void publish_mysql_servers_to_runtime();
 	/**
 	 * @brief Drain existing backend connections for a server.
 	 *

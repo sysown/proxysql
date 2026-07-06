@@ -479,6 +479,7 @@ struct AWS_RDS_BGD_State {
 	unsigned int reader_hg = 0;               ///< blue/current reader hostgroup
 	int green_writer_hg = -1;                 ///< -1 when NULL (auto-discovery path)
 	int green_reader_hg = -1;                 ///< -1 when NULL
+	int writer_is_also_reader = 0;            ///< drives post-switchover writer cleanup
 
 	std::string last_topology_status;                 ///< raw mysql.rds_topology TARGET status from the previous poll (verbatim)
 	std::vector<AWS_RDS_BlueGreenPair> bg_map;        ///< [writer] always; [readers] only when green_reader_hg is configured
@@ -486,7 +487,6 @@ struct AWS_RDS_BGD_State {
 	AWS_RDS_BGD_Status bgd_status = AWS_RDS_BGD_Status::NONE;  ///< drives the FSM and the deferred cleanup
 
 	bool green_writer_added_in_hg = false;        ///< green writer added to green_writer_hg
-	bool writer_is_also_reader_enforced = false;  ///< POST_PROCESSING added the writer to the reader HG
 	bool bgd_in_progress_set = false;             ///< MyHGM's in-progress switchover count is incremented
 
 	unsigned int next_check_interval_ms = 0;    ///< FSM-controlled interval; 0 => baseline
@@ -524,6 +524,11 @@ inline const char* const BGD_STATUS_COMPLETED    = "SWITCHOVER_COMPLETED";
 // Fast pass: only servers in an AWS RDS blue/green deployment
 #define SELECT_RDS_BGD_SERVERS_FOR_READ_ONLY "SELECT hostname, port, MAX(use_ssl) use_ssl, 'read_only' check_type, reader_hostgroup FROM mysql_servers JOIN mysql_aws_rds_bgd_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE active=1 AND status NOT IN (2,3,5) GROUP BY hostname, port ORDER BY RANDOM()"
 
+// Defined in MySQL_HostGroups_Manager.h; forward-declared here because the include cycle
+// (Monitor.hpp -> HGM.h -> cpp.h -> Monitor.hpp) can leave them undefined at this point. Only
+// used below via pointer, so a forward declaration is sufficient.
+struct srv_info_t;
+struct srv_opts_t;
 
 class MySQL_Monitor {
 	public:
@@ -661,6 +666,14 @@ class MySQL_Monitor {
 	// Called by the BGD worker when the topology table is absent/empty/vanished; routes to the
 	// deferred cleanup when bgd_status is READER_SWITCHOVER_IN_PROGRESS, else preserves the baseline release.
 	void aws_rds_bgd_handle_topology_absent(AWS_RDS_BGD_State& st);
+	// Apply one switchover step's reader-HG mutations, with the action derived from bgd_status:
+	// POST_PROCESSING shuns the readers and (when writer_info is set) adds the writer as a reader;
+	// READER_SWITCHOVER_IN_PROGRESS unshuns the readers and (when writer_info is set) removes the writer.
+	void aws_rds_bgd_reconfigure_reader_hg(
+		AWS_RDS_BGD_Status bgd_status, unsigned int reader_hg,
+		std::vector<std::pair<std::string, int>>& unmapped_readers,
+		srv_info_t* writer_info, srv_opts_t* writer_opts);
+
 	void * monitor_replication_lag();
 	void * monitor_dns_cache();
 	void * run();

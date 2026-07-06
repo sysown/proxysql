@@ -3900,25 +3900,16 @@ bool MySQL_HostGroups_Manager::aws_rds_bgd_set_shun_server(unsigned int hostgrou
 	return changed;
 }
 
-void MySQL_HostGroups_Manager::aws_rds_bgd_shun_servers(
-	unsigned int hostgroup_id, const std::vector<std::pair<std::string, int>>& servers, bool shun
-) {
-	bool changed = false;
-
-	wrlock();
-
-	for (const std::pair<std::string, int>& s : servers) {
-		if (aws_rds_bgd_set_shun_server(hostgroup_id, s.first.c_str(), s.second, shun)) {
-			changed = true;
-		}
-	}
-
-	if (!changed) {
-		wrunlock();
-		return;
-	}
-
-	// Publish the new in-memory statuses into the runtime mysql_servers table
+/**
+ * @brief Aligns the runtime 'mysql_servers' table + checksums with the server state in MyHGM.
+ *
+ * @details One-way alignment (in-memory -> runtime): regenerates the runtime 'mysql_servers' table
+ *   from the current in-memory 'MyHGC'/'MySrvC' structures and recomputes/republishes the global
+ *   'mysql_servers' checksum for cluster sync.
+ *
+ * @note the caller MUST already hold 'wrlock()'.
+ */
+void MySQL_HostGroups_Manager::publish_mysql_servers_to_runtime() {
 	purge_mysql_servers_table();
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
 	mydb->execute("DELETE FROM mysql_servers");
@@ -3934,8 +3925,6 @@ void MySQL_HostGroups_Manager::aws_rds_bgd_shun_servers(
 	pthread_mutex_lock(&GloVars.checksum_mutex);
 	update_glovars_mysql_servers_checksum(mysrvs_checksum);
 	pthread_mutex_unlock(&GloVars.checksum_mutex);
-
-	wrunlock();
 }
 
 /**
@@ -7073,7 +7062,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_hosts_monitor_resultset(bool lo
 
 const char SELECT_AWS_RDS_BGD_SERVERS_FOR_MONITOR[] {
 	"SELECT writer_hostgroup, reader_hostgroup, hostname, port, MAX(use_ssl) use_ssl, green_writer_hostgroup,"
-		" green_reader_hostgroup, check_interval_ms, check_timeout_ms FROM mysql_servers"
+		" green_reader_hostgroup, check_interval_ms, check_timeout_ms, writer_is_also_reader FROM mysql_servers"
 		" JOIN mysql_aws_rds_bgd_hostgroups ON"
 		" hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE active=1 AND status NOT IN (2,3)"
 		" GROUP BY writer_hostgroup, hostname, port"

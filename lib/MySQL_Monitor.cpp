@@ -6757,7 +6757,7 @@ void * monitor_RDS_BGD_thread_HG(void *arg) {
 	// Columns:
 	// 0 writer_hostgroup, 1 reader_hostgroup, 2 hostname, 3 port, 4 use_ssl,
 	// 5 green_writer_hostgroup, 6 green_reader_hostgroup, 7 check_interval_ms,
-	// 8 check_timeout_ms
+	// 8 check_timeout_ms, 9 writer_is_also_reader
 	pthread_mutex_lock(&GloMyMon->aws_rds_bgd_mutex);
 	initial_raw_checksum = GloMyMon->AWS_RDS_BGD_Hosts_resultset_checksum;
 	for (SQLite3_row *r : GloMyMon->AWS_RDS_BGD_Hosts_resultset->rows) {
@@ -6777,6 +6777,9 @@ void * monitor_RDS_BGD_thread_HG(void *arg) {
 			}
 			if (check_timeout_ms == 0) {
 				check_timeout_ms = atoi(r->fields[8]);
+			}
+			if (r->fields[9] && r->fields[9][0]) {
+				st.writer_is_also_reader = atoi(r->fields[9]);
 			}
 		}
 	}
@@ -7417,7 +7420,28 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 				unmapped_readers.push_back(br);
 			}
 		}
-		MyHGM->aws_rds_bgd_shun_servers(st.reader_hg, unmapped_readers, true);
+
+		// If shunning the unmapped readers would leave the reader HG with no serving readers,
+		// add the writer into the reader HG so reads keep flowing during the switchover.
+		// This a no-ops when read_only monitor has added the writer to reader HG already. 
+		std::unique_ptr<srv_info_t> writer_info;
+		std::unique_ptr<srv_opts_t> writer_opts;
+		if (!unmapped_readers.empty() && unmapped_readers.size() == blue_readers.size()) {
+			for (AWS_RDS_BlueGreenPair& p : st.bg_map) {
+				if (p.is_writer) {
+					writer_info = std::make_unique<srv_info_t>(srv_info_t{ p.blue_host, (uint16_t)p.port, "AWS RDS BGD writer as reader" });
+					writer_opts = std::make_unique<srv_opts_t>(srv_opts_t{ p.blue_weight, p.blue_max_conns, p.blue_use_ssl });
+					proxy_info(
+						"AWS RDS BGD [wHG=%u rHG=%u]: reader HG would be emptied by shun; adding writer '%s:%d' to reader HG\n",
+						st.writer_hg, st.reader_hg, p.blue_host.c_str(), p.port);
+					break;
+				}
+			}
+		}
+
+		// Shun the unmapped blue readers.
+		aws_rds_bgd_reconfigure_reader_hg(
+			st.bgd_status, st.reader_hg, unmapped_readers, writer_info.get(), writer_opts.get());
 		st.shunned_readers.insert(st.shunned_readers.end(), unmapped_readers.begin(), unmapped_readers.end());
 	}
 	else if (st.bgd_status == AWS_RDS_BGD_Status::WRITER_SWITCHOVER_COMPLETED) {
@@ -7453,6 +7477,51 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 }
 
 /**
+* @brief Apply one switchover step's reader-HG mutations, with the action derived from bgd_status.
+*
+* @details POST_PROCESSING shuns the unmapped readers and, when writer_info is set, adds the writer as
+*   a reader (using writer_opts). READER_SWITCHOVER_IN_PROGRESS unshuns the readers and, when writer_info
+*   is set, removes the writer.
+*/
+void MySQL_Monitor::aws_rds_bgd_reconfigure_reader_hg(
+	AWS_RDS_BGD_Status bgd_status, unsigned int reader_hg,
+	std::vector<std::pair<std::string, int>>& unmapped_readers,
+	srv_info_t* writer_info, srv_opts_t* writer_opts)
+{
+	bool post_proc = (bgd_status == AWS_RDS_BGD_Status::WRITER_SWITCHOVER_POST_PROCESSING);
+	// WRITER_SWITCHOVER_POST_PROCESSING => shun;
+	// READER_SWITCHOVER_IN_PROGRESS => unshun
+	bool shun = post_proc;
+	bool changed = false;
+
+	MyHGM->wrlock();
+
+	if (writer_info) {
+		if (post_proc && writer_info && writer_opts) {
+			if (MyHGM->create_new_server_in_hg(reader_hg, *writer_info, *writer_opts) == 0) {
+				changed = true;
+			}
+		} else {
+			if (MyHGM->remove_server_in_hg(reader_hg, writer_info->addr, writer_info->port) == 0) {
+				changed = true;
+			}
+		}
+	}
+
+	for (std::pair<std::string, int>& s : unmapped_readers) {
+		if (MyHGM->aws_rds_bgd_set_shun_server(reader_hg, s.first.c_str(), s.second, shun)) {
+			changed = true;
+		}
+	}
+
+	if (changed) {
+		MyHGM->publish_mysql_servers_to_runtime();
+	}
+
+	MyHGM->wrunlock();
+}
+
+/**
 * @brief Deferred switchover teardown: run once mysql.rds_topology has drained after COMPLETED.
 *
 * @details Blue-reader DNS has propagated to the promoted instances by the time the topology
@@ -7470,24 +7539,24 @@ void MySQL_Monitor::handle_aws_rds_bgd_post_switchover(AWS_RDS_BGD_State& st) {
 		st.writer_hg, st.reader_hg, aws_rds_bgd_status_str(st.bgd_status), "SWITCHOVER_COMPLETED"
 	);
 
-	// Return the writer to a writer-only role by removing it from the reader HG.
-	// TODO: make this conditional on the replication_hostgroups writer_is_also_reader
-	// flag for this writer/reader pair.
-	for (const AWS_RDS_BlueGreenPair& p : st.bg_map) {
-		if (p.is_writer) {
-			MyHGM->wrlock();
-			MyHGM->remove_server_in_hg(st.reader_hg, p.blue_host, (uint16_t)p.port);
-			MyHGM->wrunlock();
-			break;
+	// Restore the writer's original role in the reader HG based on writer_is_also_reader config and
+	// unshun the previously shunned blue readers.
+	std::unique_ptr<srv_info_t> writer_info;
+	if (st.writer_is_also_reader == 0) {
+		for (AWS_RDS_BlueGreenPair& p : st.bg_map) {
+			if (p.is_writer) {
+				writer_info = std::make_unique<srv_info_t>(srv_info_t{ p.blue_host, (uint16_t)p.port, "AWS RDS BGD writer" });
+				break;
+			}
 		}
 	}
 
-	// unshun blue readers which are previously shunned
+	aws_rds_bgd_reconfigure_reader_hg(st.bgd_status, st.reader_hg, st.shunned_readers, writer_info.get(), NULL);
+
+	// Drop DNS cache + purge connections for the previously shunned readers
+	// so their blue names re-resolve to the promoted (green) instances.
 	if (!st.shunned_readers.empty()) {
-		MyHGM->aws_rds_bgd_shun_servers(st.reader_hg, st.shunned_readers, false);
 		for (const std::pair<std::string, int>& br : st.shunned_readers) {
-			// Drop DNS cache for the unmapped readers so their blue names re-resolve
-			// to the promoted (green) instances.
 			dns_cache->remove(br.first);
 			My_Conn_Pool->purge_connections(br.first.c_str(), br.second);
 		}
@@ -7514,7 +7583,6 @@ void MySQL_Monitor::handle_aws_rds_bgd_post_switchover(AWS_RDS_BGD_State& st) {
 	st.next_check_host.clear();
 	st.next_check_interval_ms = 0;
 	st.green_writer_added_in_hg = false;
-	st.writer_is_also_reader_enforced = false;
 	aws_rds_bgd_clear_bgd_in_progress(st);
 
 	proxy_info(
