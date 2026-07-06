@@ -6699,34 +6699,19 @@ static int aws_rds_bgd_async_query(MySQL_Monitor_State_Data *mmsd, const char *q
 }
 
 /**
-* @brief Mark a switchover in progress so the read_only monitor fast-polls this deployment's servers.
+* @brief Set the deployment's switchover status and persist it in runtime table.
 */
-static void aws_rds_bgd_set_bgd_in_progress(AWS_RDS_BGD_State& st) {
-	if (st.bgd_in_progress_set) {
+static void aws_rds_bgd_set_status(AWS_RDS_BGD_State& st, AWS_RDS_BGD_Status status) {
+	if (st.bgd_status == status) {
 		return;
 	}
 
-	MyHGM->set_aws_rds_bgd_in_progress(true);
-	st.bgd_in_progress_set = true;
+	proxy_info("AWS RDS BGD [wHG=%u rHG=%u]: switchover status '%s' -> '%s'\n",
+		st.writer_hg, st.reader_hg,
+		aws_rds_bgd_status_str(st.bgd_status), aws_rds_bgd_status_str(status));
 
-	proxy_info("AWS RDS BGD [wHG=%u rHG=%u]: Enabling fast-poll of BGD servers on read_only monitor.\n",
-		st.writer_hg, st.reader_hg);
-}
-
-/**
-* @brief Drop this deployment's in-progress count so the read_only monitor can return to baseline
-*   polling cadence (undo aws_rds_bgd_set_bgd_in_progress).
-*/
-static void aws_rds_bgd_clear_bgd_in_progress(AWS_RDS_BGD_State& st) {
-	if (!st.bgd_in_progress_set) {
-		return;
-	}
-
-	MyHGM->set_aws_rds_bgd_in_progress(false);
-	st.bgd_in_progress_set = false;
-
-	proxy_info("AWS RDS BGD [wHG=%u rHG=%u]: Disabling fast-poll of BGD servers on read_only monitor.\n",
-		st.writer_hg, st.reader_hg);
+	st.bgd_status = status;
+	MyHGM->aws_rds_bgd_set_switchover_status(st.writer_hg, static_cast<int>(status));
 }
 
 void * monitor_RDS_BGD_thread_HG(void *arg) {
@@ -6744,6 +6729,8 @@ void * monitor_RDS_BGD_thread_HG(void *arg) {
 
 	AWS_RDS_BGD_State st;
 	st.writer_hg = wHG;
+
+	MyHGM->aws_rds_bgd_set_switchover_status(wHG, static_cast<int>(AWS_RDS_BGD_Status::NONE));
 
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
@@ -7028,8 +7015,6 @@ __end_of_loop:
 	}
 
 __exit_monitor_RDS_BGD_thread_HG_now:
-	aws_rds_bgd_clear_bgd_in_progress(st);
-
 	if (mmsd) {
 		delete mmsd;
 		mmsd = NULL;
@@ -7271,7 +7256,7 @@ static AWS_RDS_BGD_Status aws_rds_bgd_status_from_topology(const std::string& st
 }
 
 // Human-readable name for a phase enum, for logging and (later) the runtime status column.
-static const char* aws_rds_bgd_status_str(AWS_RDS_BGD_Status s) {
+const char* aws_rds_bgd_status_str(AWS_RDS_BGD_Status s) {
 	switch (s) {
 		case AWS_RDS_BGD_Status::NONE:
 			return "NONE";
@@ -7306,7 +7291,7 @@ static const char* aws_rds_bgd_status_str(AWS_RDS_BGD_Status s) {
 void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topology_Result& topology) {
 	if (!topology.blue_green) {
 		st.next_check_interval_ms = 0;
-		aws_rds_bgd_clear_bgd_in_progress(st);
+		aws_rds_bgd_set_status(st, AWS_RDS_BGD_Status::NONE);
 		return;
 	}
 
@@ -7319,7 +7304,7 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 	}
 	if (status.empty()) {
 		st.next_check_interval_ms = 0;
-		aws_rds_bgd_clear_bgd_in_progress(st);
+		aws_rds_bgd_set_status(st, AWS_RDS_BGD_Status::NONE);
 		return;
 	}
 	st.last_topology_status = status;
@@ -7340,12 +7325,7 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 		return;
 	}
 
-	proxy_info("AWS RDS BGD [wHG=%u rHG=%u]: switchover status '%s' -> '%s'\n",
-		st.writer_hg, st.reader_hg,
-		aws_rds_bgd_status_str(st.bgd_status),
-		aws_rds_bgd_status_str(topology_status));
-
-	st.bgd_status = topology_status;
+	aws_rds_bgd_set_status(st, topology_status);
 
 	if (st.bgd_status == AWS_RDS_BGD_Status::AVAILABLE) {
 		st.next_check_interval_ms = 250;
@@ -7361,7 +7341,6 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 		aws_rds_bgd_build_map(st, topology);
 		aws_rds_bgd_resolve_green_ips(st);
 		aws_rds_bgd_add_green_writer_in_hg(st);
-		aws_rds_bgd_set_bgd_in_progress(st);
 	}
 	else if (st.bgd_status == AWS_RDS_BGD_Status::WRITER_SWITCHOVER_POST_PROCESSING) {
 		st.next_check_interval_ms = 100;
@@ -7372,7 +7351,6 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 		aws_rds_bgd_build_map(st, topology);
 		aws_rds_bgd_resolve_green_ips(st);
 		aws_rds_bgd_add_green_writer_in_hg(st);
-		aws_rds_bgd_set_bgd_in_progress(st);
 
 		// Repoint each mapped blue host onto its green IP and drain existing
 		// connections so new backend work resolves to green.
@@ -7448,7 +7426,7 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 		// Writer switchover done, but the topology table lingers with a single green row until the blue
 		// readers' DNS propagates and it drains. Defer reader teardown: advance to READER_SWITCHOVER phase
 		// and let the drain (aws_rds_bgd_handle_topology_absent) trigger it.
-		st.bgd_status = AWS_RDS_BGD_Status::READER_SWITCHOVER_IN_PROGRESS;
+		aws_rds_bgd_set_status(st, AWS_RDS_BGD_Status::READER_SWITCHOVER_IN_PROGRESS);
 
 		// Drop the writer's DNS_Cache entry: this clears the IP pin and lets regular DNS
 		// resolution take over from here. Readers stay pinned until their DNS propagates.
@@ -7461,14 +7439,6 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 
 		// release BGD monitor worker from fast-polling
 		st.next_check_interval_ms = 0;
-
-		// release read_only monitor from fast-polling
-		aws_rds_bgd_clear_bgd_in_progress(st);
-
-		proxy_info("AWS RDS BGD [wHG=%u rHG=%u]: switchover status '%s' -> '%s'\n",
-			st.writer_hg, st.reader_hg,
-			aws_rds_bgd_status_str(AWS_RDS_BGD_Status::WRITER_SWITCHOVER_COMPLETED),
-			aws_rds_bgd_status_str(AWS_RDS_BGD_Status::READER_SWITCHOVER_IN_PROGRESS));
 	}
 	else {
 		// NONE / unrecognized status: take no action, stay at baseline interval
@@ -7579,11 +7549,10 @@ void MySQL_Monitor::handle_aws_rds_bgd_post_switchover(AWS_RDS_BGD_State& st) {
 	// state cleanup
 	st.bg_map.clear();
 	st.last_topology_status.clear();
-	st.bgd_status = AWS_RDS_BGD_Status::NONE;
 	st.next_check_host.clear();
 	st.next_check_interval_ms = 0;
 	st.green_writer_added_in_hg = false;
-	aws_rds_bgd_clear_bgd_in_progress(st);
+	aws_rds_bgd_set_status(st, AWS_RDS_BGD_Status::NONE);
 
 	proxy_info(
 		"AWS RDS BGD [wHG=%u rHG=%u]: post-switchover cleanup complete; state cleared\n",
@@ -7601,7 +7570,7 @@ void MySQL_Monitor::aws_rds_bgd_handle_topology_absent(AWS_RDS_BGD_State& st) {
 	if (st.bgd_status == AWS_RDS_BGD_Status::READER_SWITCHOVER_IN_PROGRESS) {
 		handle_aws_rds_bgd_post_switchover(st);
 	} else {
-		aws_rds_bgd_clear_bgd_in_progress(st);
+		aws_rds_bgd_set_status(st, AWS_RDS_BGD_Status::NONE);
 	}
 }
 

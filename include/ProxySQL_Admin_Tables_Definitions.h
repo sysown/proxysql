@@ -237,22 +237,30 @@
 
 // AWS RDS hostgroups; adds blue/green (green_*_hostgroup) over aurora.
 // The runtime table carries one extra runtime-only column: auto_generated.
-#define ADMIN_SQLITE_TABLE_MYSQL_AWS_RDS_BGD_HOSTGROUPS "CREATE TABLE mysql_aws_rds_bgd_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , " \
+#define ADMIN_SQLITE_TABLE_MYSQL_AWS_RDS_BGD_HOSTGROUPS "CREATE TABLE mysql_aws_rds_bgd_hostgroups ("\
+									"writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , "\
+									"reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , " \
 									"green_writer_hostgroup INT NOT NULL CHECK (green_writer_hostgroup>=0) , " \
 									"green_reader_hostgroup INT NOT NULL CHECK (green_reader_hostgroup>=0) , " \
-									"active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , " \
+									"active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , " \
+									"writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , " \
 									"check_interval_ms INT NOT NULL CHECK (check_interval_ms >= 100 AND check_interval_ms <= 600000) DEFAULT 1000 , " \
 									"check_timeout_ms INT NOT NULL CHECK (check_timeout_ms >= 80 AND check_timeout_ms <= 3000) DEFAULT 800 , " \
 									"comment VARCHAR NOT NULL DEFAULT '' , UNIQUE (reader_hostgroup))"
 
-#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_AWS_RDS_BGD_HOSTGROUPS "CREATE TABLE runtime_mysql_aws_rds_bgd_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , " \
+#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_AWS_RDS_BGD_HOSTGROUPS "CREATE TABLE runtime_mysql_aws_rds_bgd_hostgroups ("\
+									"writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , "\
+									"reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , " \
 									"green_writer_hostgroup INT DEFAULT NULL CHECK (green_writer_hostgroup IS NULL OR green_writer_hostgroup>=0) , " \
 									"green_reader_hostgroup INT DEFAULT NULL CHECK (green_reader_hostgroup IS NULL OR green_reader_hostgroup>=0) , " \
-									"active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , " \
+									"active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , "\
+									"writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , " \
 									"check_interval_ms INT NOT NULL CHECK (check_interval_ms >= 100 AND check_interval_ms <= 600000) DEFAULT 1000 , " \
 									"check_timeout_ms INT NOT NULL CHECK (check_timeout_ms >= 80 AND check_timeout_ms <= 3000) DEFAULT 800 , " \
 									"comment VARCHAR NOT NULL DEFAULT '' , " \
-									"auto_generated INT CHECK (auto_generated IN (0,1)) NOT NULL DEFAULT 0 , UNIQUE (reader_hostgroup))"
+									"auto_generated INT CHECK (auto_generated IN (0,1)) NOT NULL DEFAULT 0 , " \
+									"status VARCHAR NOT NULL DEFAULT 'NONE' , "\
+									"UNIQUE (reader_hostgroup))"
 
 #define ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES_V2_5_0 "CREATE TABLE mysql_hostgroup_attributes (hostgroup_id INT NOT NULL PRIMARY KEY , max_num_online_servers INT CHECK (max_num_online_servers>=0 AND max_num_online_servers <= 1000000) NOT NULL DEFAULT 1000000 , autocommit INT CHECK (autocommit IN (-1, 0, 1)) NOT NULL DEFAULT -1 , free_connections_pct INT CHECK (free_connections_pct >= 0 AND free_connections_pct <= 100) NOT NULL DEFAULT 10 , init_connect VARCHAR NOT NULL DEFAULT '' , multiplex INT CHECK (multiplex IN (0, 1)) NOT NULL DEFAULT 1 , connection_warming INT CHECK (connection_warming IN (0, 1)) NOT NULL DEFAULT 0 , throttle_connections_per_sec INT CHECK (throttle_connections_per_sec >= 1 AND throttle_connections_per_sec <= 1000000) NOT NULL DEFAULT 1000000 , ignore_session_variables VARCHAR CHECK (JSON_VALID(ignore_session_variables) OR ignore_session_variables = '') NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '')"
 

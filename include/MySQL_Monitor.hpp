@@ -455,14 +455,17 @@ struct AWS_RDS_BlueGreenPair {
  *   to empty.
  */
 enum class AWS_RDS_BGD_Status {
-	NONE,                                ///< no BGD topology / baseline
-	AVAILABLE,                           ///< "AVAILABLE"
-	WRITER_SWITCHOVER_INITIATED,         ///< "SWITCHOVER_INITIATED"
-	WRITER_SWITCHOVER_IN_PROGRESS,       ///< "SWITCHOVER_IN_PROGRESS"
-	WRITER_SWITCHOVER_POST_PROCESSING,   ///< "SWITCHOVER_IN_POST_PROCESSING"
-	WRITER_SWITCHOVER_COMPLETED,         ///< "SWITCHOVER_COMPLETED"
-	READER_SWITCHOVER_IN_PROGRESS,       ///< ProxySQL inferred reader status; awaiting topology drain + deferred cleanup
+	NONE                              = 0,   ///< no BGD topology / baseline
+	AVAILABLE                         = 1,   ///< "AVAILABLE"
+	WRITER_SWITCHOVER_INITIATED       = 2,   ///< "SWITCHOVER_INITIATED"
+	WRITER_SWITCHOVER_IN_PROGRESS     = 3,   ///< "SWITCHOVER_IN_PROGRESS"
+	WRITER_SWITCHOVER_POST_PROCESSING = 4,   ///< "SWITCHOVER_IN_POST_PROCESSING"
+	WRITER_SWITCHOVER_COMPLETED       = 5,   ///< "SWITCHOVER_COMPLETED"
+	READER_SWITCHOVER_IN_PROGRESS     = 6,   ///< ProxySQL inferred reader status; awaiting topology drain + deferred cleanup
 };
+
+// Maps a switchover status enum to its stored/display string.
+const char* aws_rds_bgd_status_str(AWS_RDS_BGD_Status s);
 
 /**
  * @brief Per-deployment switchover state carried by one RDS BGD worker thread.
@@ -487,7 +490,6 @@ struct AWS_RDS_BGD_State {
 	AWS_RDS_BGD_Status bgd_status = AWS_RDS_BGD_Status::NONE;  ///< drives the FSM and the deferred cleanup
 
 	bool green_writer_added_in_hg = false;        ///< green writer added to green_writer_hg
-	bool bgd_in_progress_set = false;             ///< MyHGM's in-progress switchover count is incremented
 
 	unsigned int next_check_interval_ms = 0;    ///< FSM-controlled interval; 0 => baseline
 	std::string next_check_host;                ///< FSM-pinned probe host; when set (the green IP), the worker

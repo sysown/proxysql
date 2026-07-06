@@ -2261,7 +2261,7 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) 
 					    "check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,autopurge_missing_checks,comment FROM mysql_aws_aurora_hostgroups";
 	} else if (name == "mysql_aws_rds_bgd_hostgroups") {
 		query=(char *)"SELECT writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,writer_is_also_reader,"
-					    "check_interval_ms,check_timeout_ms,comment,auto_generated FROM mysql_aws_rds_bgd_hostgroups";
+					    "check_interval_ms,check_timeout_ms,comment,auto_generated,status FROM mysql_aws_rds_bgd_hostgroups";
 	} else if (name == "mysql_galera_hostgroups") {
 		query=(char *)"SELECT writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment FROM mysql_galera_hostgroups";
 	} else if (name == "mysql_group_replication_hostgroups") {
@@ -3898,6 +3898,35 @@ bool MySQL_HostGroups_Manager::aws_rds_bgd_set_shun_server(unsigned int hostgrou
 	}
 
 	return changed;
+}
+
+void MySQL_HostGroups_Manager::aws_rds_bgd_set_switchover_status(unsigned int writer_hg, int status) {
+	char query[128];
+	snprintf(query, sizeof(query),
+		"UPDATE mysql_aws_rds_bgd_hostgroups SET status=%d WHERE writer_hostgroup=%u", status, writer_hg);
+	wrlock();
+	mydb->execute(query);
+	wrunlock();
+}
+
+bool MySQL_HostGroups_Manager::is_aws_rds_bgd_in_progress() {
+	bool in_progress = false;
+	char *error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result *resultset = NULL;
+	wrlock();
+	mydb->execute_statement(
+		(char *)"SELECT EXISTS(SELECT 1 FROM mysql_aws_rds_bgd_hostgroups WHERE status!=0)",
+		&error, &cols, &affected_rows, &resultset);
+	wrunlock();
+	if (resultset) {
+		if (resultset->rows_count && resultset->rows[0]->fields[0]) {
+			in_progress = (atoi(resultset->rows[0]->fields[0]) != 0);
+		}
+		delete resultset;
+	}
+	return in_progress;
 }
 
 /**
@@ -7063,8 +7092,8 @@ void MySQL_HostGroups_Manager::update_aws_aurora_hosts_monitor_resultset(bool lo
 const char SELECT_AWS_RDS_BGD_SERVERS_FOR_MONITOR[] {
 	"SELECT writer_hostgroup, reader_hostgroup, hostname, port, MAX(use_ssl) use_ssl, green_writer_hostgroup,"
 		" green_reader_hostgroup, check_interval_ms, check_timeout_ms, writer_is_also_reader FROM mysql_servers"
-		" JOIN mysql_aws_rds_bgd_hostgroups ON"
-		" hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE active=1 AND status NOT IN (2,3)"
+		" JOIN mysql_aws_rds_bgd_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup"
+		" WHERE active=1 AND mysql_servers.status NOT IN (2,3)"
 		" GROUP BY writer_hostgroup, hostname, port"
 };
 

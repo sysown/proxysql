@@ -7574,7 +7574,7 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 
 		char *query=NULL;
 		if (_runtime) {
-			query=(char *)"INSERT INTO runtime_mysql_aws_rds_bgd_hostgroups(writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,writer_is_also_reader,check_interval_ms,check_timeout_ms,comment,auto_generated) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
+			query=(char *)"INSERT INTO runtime_mysql_aws_rds_bgd_hostgroups(writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,writer_is_also_reader,check_interval_ms,check_timeout_ms,comment,auto_generated,status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
 		} else {
 			query=(char *)"INSERT INTO mysql_aws_rds_bgd_hostgroups(writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,writer_is_also_reader,check_interval_ms,check_timeout_ms,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
 		}
@@ -7613,6 +7613,10 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 			rc=(*proxy_sqlite3_bind_text)(statement, 9, r->fields[8], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 			if (_runtime) {
 				rc=(*proxy_sqlite3_bind_int64)(statement, 10, atoi(r->fields[9])); ASSERT_SQLITE_OK(rc, admindb);
+				// 'status' (field 10) is the AWS_RDS_BGD_Status underlying int; we store it as text in the runtime table.
+				const char *bgd_status_str =
+					aws_rds_bgd_status_str(static_cast<AWS_RDS_BGD_Status>(r->fields[10] ? atoi(r->fields[10]) : 0));
+				rc=(*proxy_sqlite3_bind_text)(statement, 11, bgd_status_str, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 			}
 
 			SAFE_SQLITE3_STEP2(statement);

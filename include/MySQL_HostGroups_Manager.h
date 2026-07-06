@@ -64,14 +64,18 @@
 										  "autopurge_missing_checks INT NOT NULL CHECK (autopurge_missing_checks >= 0 AND autopurge_missing_checks <= 100) DEFAULT 0 , " \
 										  "comment VARCHAR , UNIQUE (reader_hostgroup))"
 
-#define MYHGM_MYSQL_AWS_RDS_BGD_HOSTGROUPS "CREATE TABLE mysql_aws_rds_bgd_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0), " \
+#define MYHGM_MYSQL_AWS_RDS_BGD_HOSTGROUPS "CREATE TABLE mysql_aws_rds_bgd_hostgroups ("\
+										  "writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , "\
+										  "reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0), " \
 										  "green_writer_hostgroup INT DEFAULT NULL CHECK (green_writer_hostgroup IS NULL OR green_writer_hostgroup>=0), " \
 										  "green_reader_hostgroup INT DEFAULT NULL CHECK (green_reader_hostgroup IS NULL OR green_reader_hostgroup>=0), " \
-										  "active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , " \
+										  "active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , " \
+										  "writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , " \
 										  "check_interval_ms INT NOT NULL CHECK (check_interval_ms >= 100 AND check_interval_ms <= 600000) DEFAULT 1000, " \
 										  "check_timeout_ms INT NOT NULL CHECK (check_timeout_ms >= 80 AND check_timeout_ms <= 3000) DEFAULT 800, " \
 										  "comment VARCHAR NOT NULL DEFAULT '', " \
-										  "auto_generated INT CHECK (auto_generated IN (0,1)) NOT NULL DEFAULT 0," \
+										  "auto_generated INT CHECK (auto_generated IN (0,1)) NOT NULL DEFAULT 0, " \
+										  "status INT NOT NULL DEFAULT 0, " \
 										  "UNIQUE (reader_hostgroup))"
 
 #define MYHGM_GEN_ADMIN_RUNTIME_SERVERS "SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"SHUNNED\" WHEN 5 THEN \"SHUNNED_AWS_BGD\" END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers ORDER BY hostgroup_id, hostname, port"
@@ -1068,6 +1072,17 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	*/
 	bool aws_rds_bgd_set_shun_server(unsigned int hostgroup_id, const char *hostname, int port, bool shun);
 	/**
+	 * @brief Persist BGD switchover status into the runtime mysql_aws_rds_bgd_hostgroups table.
+	 *
+	 * @details Called by the BGD worker on every FSM status transition. For the read_only monitor,
+	 *   it both gates the fast-poll cadence (is_aws_rds_bgd_in_progress) and filters which servers the
+	 *   fast poll selects.
+	 *
+	 * @param writer_hg Writer hostgroup identifying the deployment.
+	 * @param status    AWS_RDS_BGD_Status underlying value.
+	 */
+	void aws_rds_bgd_set_switchover_status(unsigned int writer_hg, int status);
+	/**
 	 * @brief Aligns the runtime 'mysql_servers' table + checksums with the server state in MyHGM.
 	 *
 	 * @details One-way alignment (in-memory -> runtime): regenerates the runtime 'mysql_servers' table
@@ -1089,25 +1104,11 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 */
 	bool drain_server_connections(unsigned int hostgroup_id, const char *hostname, int port);
 	/**
-	 * @brief Number of AWS RDS blue/green deployments currently mid-switchover.
+	 * @brief Whether any AWS RDS blue/green deployment is currently in a active switchover status.
 	 *
-	 * @details Each BGD worker increments the count while its deployment is switching over and
-	 *   decrements it once the deployment leaves the switchover states. While the count is non-zero
-	 *   the read_only monitor fast-polls the BGD servers; it resumes the full-fleet cadence at zero.
+	 * @details Derived from the runtime mysql_aws_rds_bgd_hostgroups 'status' column.
 	 */
-	std::atomic<int> aws_rds_bgd_in_progress_count{0};
-
-	void set_aws_rds_bgd_in_progress(bool in_progress) {
-		if (in_progress) {
-			aws_rds_bgd_in_progress_count.fetch_add(1, std::memory_order_relaxed);
-		} else {
-			aws_rds_bgd_in_progress_count.fetch_sub(1, std::memory_order_relaxed);
-		}
-	}
-
-	bool is_aws_rds_bgd_in_progress() const {
-		return aws_rds_bgd_in_progress_count.load(std::memory_order_relaxed) > 0;
-	}
+	bool is_aws_rds_bgd_in_progress();
 
 	unsigned long long Get_Memory_Stats();
 
