@@ -290,6 +290,12 @@ jobs:
         # by default; install explicitly so we never silently depend on
         # whatever the runner happens to ship.
         run: |
+          # The runner image ships a pre-baked apt index that pins point-
+          # releases which get superseded and pulled from the mirror, so a
+          # bare install 404s (e.g. libtinfo5/libncurses5 6.3-2ubuntu0.1 ->
+          # "404 Not Found"). Refresh the index first so we resolve to the
+          # currently-published version.
+          sudo apt-get update -y
           sudo apt-get install -y -qq --no-install-recommends \
             libaio1 libnuma1 libncurses5 libtinfo5
 
