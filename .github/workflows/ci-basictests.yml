@@ -48,15 +48,44 @@ jobs:
           test/tap/groups
           test/scripts
 
-    - name: Cache restore src
-      id: cache-src
-      uses: actions/cache/restore@v4
-      with:
-        key: ${{ env.BLDCACHE }}
-        fail-on-cache-miss: true
-        path: |
-          proxysql/src/
-          proxysql/lib/obj/*.gcno
+    - name: Download build handoff
+      # Build payload arrives as workflow artifacts, not an Actions cache:
+      # GitHub made cache writes read-only for workflow_run/untrusted triggers
+      # (changelog 2026-06-26). CI-builds uploads per-type artifacts named
+      # ci-builds-handoff-<sha>-<variant>-<type>; download the types this job
+      # used to restore and unpack them into proxysql/. SHA is the real head
+      # SHA (identical to CI-builds' SHA), so the artifact names line up.
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        REPO: ${{ github.repository }}
+        SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+        HANDOFF_VARIANT: ${{ matrix.testdist }}
+        HANDOFF_TYPES: src
+      run: |
+        set -uo pipefail
+        command -v zstd >/dev/null || sudo apt-get install -y zstd
+        for t in $HANDOFF_TYPES; do
+          name="ci-builds-handoff-${SHA}-${HANDOFF_VARIANT}-${t}"
+          aid=""
+          for attempt in 1 2 3 4 5 6; do
+            aid=$(gh api "repos/${REPO}/actions/artifacts?name=${name}&per_page=100" \
+                    --jq '[.artifacts[]|select(.expired==false)]|sort_by(.created_at)|last|.id // empty' 2>/dev/null || true)
+            [ -n "$aid" ] && break
+            echo ">>> ${name} not visible yet (${attempt}/6); sleeping 10s"; sleep 10
+          done
+          if [ -z "$aid" ]; then echo "ERROR: handoff artifact ${name} not found -- did CI-builds succeed for ${SHA}?" >&2; exit 1; fi
+          echo ">>> downloading ${name} (id=${aid})"
+          gh api "repos/${REPO}/actions/artifacts/${aid}/zip" > "handoff-${t}.zip" || { echo "ERROR: download ${name} failed" >&2; exit 1; }
+          unzip -o "handoff-${t}.zip" || { echo "ERROR: unzip ${name} failed" >&2; exit 1; }
+        done
+        mkdir -p proxysql
+        cd proxysql/
+        for tb in ../cache_*.tar.zst; do
+          [ -e "$tb" ] || continue
+          echo ">>> unpacking $(basename "$tb")"
+          zstd -d < "$tb" | tar -xf - || { echo "ERROR: unpack $tb failed" >&2; exit 1; }
+        done
+        rm -f ../cache_*.tar.zst ../handoff-*.zip
 
     - name: Verify binary
       run: |
