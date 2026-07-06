@@ -16,6 +16,13 @@ fi
 
 echo -n "Configuring connection: mysql1(source) => proxysql => debezium(replication stream) ..."
 
+echo -n "Waiting for kafka_connect to be ready ..."
+for _i in $(seq 1 60); do
+    curl -s -f http://kafka_connect.${INFRA}:8083/connectors >/dev/null 2>&1 && break
+    echo -n "."; sleep 2
+done
+echo " ready."
+
 conn_mysql=`envsubst < conf/debezium/register-proxysql.json`
 curl -S -s -o /dev/null -i -X POST -H "Accept:application/json" -H "Content-Type:application/json" kafka_connect.${INFRA}:8083/connectors/ -d "${conn_mysql}"
 echo ' done.'

@@ -13,7 +13,7 @@ fi
 set -a
 . .env
 
-if [[ -z ${WORKSPACE} || ! -f ${WORKPACE}/src/proxysql ]]; then
+if [[ -z ${WORKSPACE} || ! -f ${WORKSPACE}/src/proxysql ]]; then
   export WORKSPACE=/var/lib/jenkins/scripts/infra-proxysql/proxysql/
 fi
 

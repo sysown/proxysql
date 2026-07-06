@@ -125,7 +125,7 @@ fn_monitoring_issue_check () {
   SELECT hostgroup_id, hostname, port, status, use_ssl FROM runtime_mysql_servers;
   " 2>&1 | grep -v "Using a password"
   echo "mysql_server_ping_log errors grouped by mysql server and error:"
-  mysql ${SSLOPT} -h${PROXYSQL_HOST} -P${PROXYADM_PORT} -u${PROXYADM_USER} -p${PROXYADM_PWD} - -e " \
+  mysql ${SSLOPT} -h${PROXYSQL_HOST} -P${PROXYADM_PORT} -u${PROXYADM_USER} -p${PROXYADM_PWD} -t -e " \
   SELECT hostname, port, ping_error, FROM_UNIXTIME(MIN(time_start_us)/1000000) min_ts, FROM_UNIXTIME(MAX(time_start_us)/1000000) max_ts, COUNT(*) cnt \
   FROM mysql_server_ping_log \
   WHERE ping_error IS NOT NULL \

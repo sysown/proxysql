@@ -35,11 +35,12 @@ CHECKSUM TABLE sbtest1, sbtest2, sbtest3, sbtest4, sbtest5; \
 " 2>&1 | grep -v "Using a password"
 
 echo "Comparing sysbench data between primary and replicas ..."
-chk1=$(mysql ${SSLOPT} -h${MYSQL1_HOST}${INFRA} -P${MYSQL1_PORT} -uroot -proot sysbench --skip-column-names -e "CHECKSUM TABLE sbtest1, sbtest2, sbtest3, sbtest4, sbtest5;" 2>&1 | grep -v "Using a password" | md5sum)
-chk2=$(mysql ${SSLOPT} -h${MYSQL2_HOST}${INFRA} -P${MYSQL2_PORT}  -uroot -proot sysbench --skip-column-names -e "CHECKSUM TABLE sbtest1, sbtest2, sbtest3, sbtest4, sbtest5;" 2>&1 | grep -v "Using a password" | md5sum)
-chk3=$(mysql ${SSLOPT} -h${MYSQL3_HOST}${INFRA} -P${MYSQL3_PORT}  -uroot -proot sysbench --skip-column-names -e "CHECKSUM TABLE sbtest1, sbtest2, sbtest3, sbtest4, sbtest5;" 2>&1 | grep -v "Using a password" | md5sum)
-
-
+chk1_raw=$(mysql ${SSLOPT} -h${MYSQL1_HOST}${INFRA} -P${MYSQL1_PORT} -uroot -proot sysbench --skip-column-names -e "CHECKSUM TABLE sbtest1, sbtest2, sbtest3, sbtest4, sbtest5;" 2>/dev/null) || { echo "ERROR: mysql1 checksum failed" >&2; exit 1; }
+chk1=$(echo "$chk1_raw" | md5sum)
+chk2_raw=$(mysql ${SSLOPT} -h${MYSQL2_HOST}${INFRA} -P${MYSQL2_PORT}  -uroot -proot sysbench --skip-column-names -e "CHECKSUM TABLE sbtest1, sbtest2, sbtest3, sbtest4, sbtest5;" 2>/dev/null) || { echo "ERROR: mysql2 checksum failed" >&2; exit 1; }
+chk2=$(echo "$chk2_raw" | md5sum)
+chk3_raw=$(mysql ${SSLOPT} -h${MYSQL3_HOST}${INFRA} -P${MYSQL3_PORT}  -uroot -proot sysbench --skip-column-names -e "CHECKSUM TABLE sbtest1, sbtest2, sbtest3, sbtest4, sbtest5;" 2>/dev/null) || { echo "ERROR: mysql3 checksum failed" >&2; exit 1; }
+chk3=$(echo "$chk3_raw" | md5sum)
 echo "================================================================================"
 echo "[`date '+%Y-%m-%d %H:%M:%S'`]"
 if [[ "${chk1}" == "${chk2}" ]] && [[ "${chk1}" == "${chk3}" ]]; then
