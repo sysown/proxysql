@@ -60,6 +60,11 @@ env:
 jobs:
   unit-tests-tsan:
     if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
+    # `write-all` is required so the workflow_run event's GITHUB_TOKEN has
+    # the cache-writable scope (GitHub started enforcing this for workflow_run
+    # in early July 2026). Without it actions/cache/save@v4 fails with
+    # 'cache write denied: token has no writable scopes'.
+    permissions: write-all
     runs-on: ubuntu-24.04
     timeout-minutes: 90
 

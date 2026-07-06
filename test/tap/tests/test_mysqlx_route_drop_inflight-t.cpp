@@ -177,10 +177,21 @@ static bool send_capabilities_set_mysql41(int fd) {
 	return mysqlx_write_all(fd, frame.data(), frame.size());
 }
 
+// ProxySQL's mysqlx plugin parses the username from
+// AuthenticateStart.auth_data as `\0schema\0user` (see
+// mysqlx_session.cpp::handle_auth_mysql41), then expects
+// AuthenticateContinue.auth_data to be `*hex_scramble` (no schema/user
+// prefix). This differs from the upstream MySQL X server which accepts
+// empty AuthStart and `schema\0user\0*hex` on AuthContinue. Match
+// ProxySQL's format here since this test talks to ProxySQL's listener.
 static bool send_auth_start(int fd, const std::string& user) {
 	Mysqlx::Session::AuthenticateStart auth;
 	auth.set_mech_name("MYSQL41");
-	auth.set_auth_data(user);
+	std::string payload;
+	payload.push_back('\0');               // empty schema
+	payload.push_back('\0');
+	payload.append(user);
+	auth.set_auth_data(payload);
 	std::string s;
 	if (!auth.SerializeToString(&s)) return false;
 	auto frame = mysqlx_build_frame(MSG_SESS_AUTH_START, s);
@@ -188,8 +199,12 @@ static bool send_auth_start(int fd, const std::string& user) {
 }
 
 static bool send_auth_continue(int fd, const std::string& hex_scramble) {
+	std::string payload;
+	payload.push_back('*');
+	payload.append(hex_scramble);
+
 	Mysqlx::Session::AuthenticateContinue cont;
-	cont.set_auth_data(hex_scramble);
+	cont.set_auth_data(payload);
 	std::string s;
 	if (!cont.SerializeToString(&s)) return false;
 	auto frame = mysqlx_build_frame(MSG_SESS_AUTH_CONTINUE, s);
@@ -213,12 +228,9 @@ struct E2EConfig {
 };
 
 static bool full_handshake(int fd, const E2EConfig& cfg) {
-	{
-		MysqlxFrameHeader hdr {};
-		std::vector<uint8_t> payload;
-		if (!mysqlx_read_frame(fd, hdr, payload)) return false;
-	}
-
+	// X Protocol does not send an unsolicited Capabilities frame on TCP
+	// connect; the client drives every exchange. The first server frame
+	// arrives only after we send CapabilitiesGet.
 	if (!send_capabilities_get(fd)) return false;
 	{
 		MysqlxFrameHeader hdr {};
@@ -226,14 +238,10 @@ static bool full_handshake(int fd, const E2EConfig& cfg) {
 		if (!read_frame_skip_notices(fd, hdr, payload)) return false;
 	}
 
-	if (!send_capabilities_set_mysql41(fd)) return false;
-	{
-		MysqlxFrameHeader hdr {};
-		std::vector<uint8_t> payload;
-		if (!read_frame_skip_notices(fd, hdr, payload)) return false;
-		if (hdr.message_type == MSG_SRV_ERROR) return false;
-	}
-
+	// `authentication.mechanisms` is a READ-ONLY capability; the upstream
+	// X plugin (and ProxySQL's mysqlx plugin) reject CapabilitiesSet for
+	// it (error 5001). The auth method is selected via
+	// AuthenticateStart.mech_name, so the CapabilitiesSet step is skipped.
 	if (!send_auth_start(fd, cfg.user)) return false;
 
 	std::vector<uint8_t> challenge;
@@ -247,8 +255,9 @@ static bool full_handshake(int fd, const E2EConfig& cfg) {
 		if (!cont.ParseFromArray(payload.data(), static_cast<int>(payload.size())))
 			return false;
 		if (!cont.has_auth_data()) return false;
-		std::string challenge_hex = cont.auth_data();
-		if (!mysqlx_hex_decode(challenge_hex, challenge)) return false;
+		// auth_data is the raw 20-byte challenge -- not hex-encoded.
+		const std::string& raw = cont.auth_data();
+		challenge.assign(raw.begin(), raw.end());
 	}
 
 	auto scramble = mysqlx_mysql41_scramble(challenge, cfg.pass);

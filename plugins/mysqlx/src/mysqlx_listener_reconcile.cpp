@@ -1,6 +1,8 @@
 #include "mysqlx_plugin.h"
 #include "mysqlx_config_store.h"
 #include "sqlite3db.h"
+#include "proxysql.h"
+#include "proxysql_debug.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -57,7 +59,10 @@ void mysqlx_reconcile_listeners_impl(
 	std::mutex& route_to_thread_mutex,
 	int& next_rr_index
 ) {
+	proxy_info("mysqlx: reconcile_listeners entered: threads=%zu route_to_thread=%zu\n",
+	           threads.size(), route_to_thread.size());
 	if (threads.empty()) {
+		proxy_error("mysqlx: reconcile_listeners: threads empty — bailing out without binding\n");
 		return;
 	}
 
@@ -78,12 +83,15 @@ void mysqlx_reconcile_listeners_impl(
 	std::map<std::string, const DesiredRoute*> desired_by_name;
 	{
 		auto routes = store.snapshot_active_routes();
+		proxy_info("mysqlx: reconcile_listeners: store has %zu active routes\n", routes.size());
 		desired.reserve(routes.size());
 		for (auto& r : routes) {
 			DesiredRoute dr;
 			dr.name = std::move(r.first);
 			dr.port = 33060;
 			parse_bind_addr(r.second, dr.host, dr.port);
+			proxy_info("mysqlx: reconcile_listeners: desired route name='%s' host='%s' port=%d (raw bind='%s')\n",
+			           dr.name.c_str(), dr.host.c_str(), dr.port, r.second.c_str());
 			desired.push_back(std::move(dr));
 		}
 		for (const auto& dr : desired) {
@@ -137,7 +145,13 @@ void mysqlx_reconcile_listeners_impl(
 			);
 			if (rc == 0) {
 				route_to_thread[dr.name] = tidx;
+			} else {
+				proxy_error("mysqlx: reconcile_listeners: add_listener failed for route '%s' on thread %d\n",
+				            dr.name.c_str(), tidx);
 			}
+		} else {
+			proxy_error("mysqlx: reconcile_listeners: thread %d is null, cannot add listener for route '%s'\n",
+			            tidx, dr.name.c_str());
 		}
 	}
 }
