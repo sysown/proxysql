@@ -7544,7 +7544,7 @@ void MySQL_Monitor::handle_aws_rds_bgd_post_switchover(AWS_RDS_BGD_State& st) {
 		My_Conn_Pool->purge_connections(p.blue_host.c_str(), p.port);
 	}
 
-	// TODO: Drain Green HGs
+	aws_rds_bgd_drain_green_hg(st);
 
 	// state cleanup
 	st.bg_map.clear();
@@ -7557,6 +7557,59 @@ void MySQL_Monitor::handle_aws_rds_bgd_post_switchover(AWS_RDS_BGD_State& st) {
 	proxy_info(
 		"AWS RDS BGD [wHG=%u rHG=%u]: post-switchover cleanup complete; state cleared\n",
 		st.writer_hg, st.reader_hg);
+}
+
+/**
+* @brief Evict stale DNS and drain connections for the deployment's green hostgroups after switchover.
+*
+* @details No-op unless the green writer/reader hostgroups are configured (the explicit green-HG path).
+*   For every non-OFFLINE_HARD member of each green hostgroup this drops the DNS cache entry, drains the
+*   server's backend connections and purges the monitor connection pool.
+*
+*   The servers are left in place; the monitor shuns them on ping/connect errors once the retired green
+*   DNS names stop resolving to an IP.
+*
+* @param st Switchover state.
+*/
+void MySQL_Monitor::aws_rds_bgd_drain_green_hg(AWS_RDS_BGD_State& st) {
+	std::vector<unsigned int> green_hgs;
+	if (st.green_writer_hg >= 0) {
+		green_hgs.push_back((unsigned int)st.green_writer_hg);
+	}
+	if (st.green_reader_hg >= 0) {
+		green_hgs.push_back((unsigned int)st.green_reader_hg);
+	}
+	if (green_hgs.empty()) {
+		return;
+	}
+
+	for (unsigned int hg : green_hgs) {
+		std::vector<std::pair<std::string, int>> servers;
+
+		MyHGM->wrlock();
+		MyHGC* hgc = MyHGM->MyHGC_lookup(hg);
+		if (hgc && hgc->mysrvs) {
+			for (unsigned int j = 0; j < hgc->mysrvs->cnt(); j++) {
+				MySrvC* s = hgc->mysrvs->idx(j);
+				if (s->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+					continue;
+				}
+				servers.push_back({ std::string(s->address), s->port });
+			}
+		}
+		MyHGM->wrunlock();
+
+		for (std::pair<std::string, int>& srv : servers) {
+			std::string& host = srv.first;
+			int port = srv.second;
+			dns_cache->remove(host);
+			MyHGM->drain_server_connections(hg, host.c_str(), port);
+			My_Conn_Pool->purge_connections(host.c_str(), port);
+			proxy_info(
+				"AWS RDS BGD [wHG=%u rHG=%u]: connections drained from green HG %u server '%s:%d'\n",
+				st.writer_hg, st.reader_hg, hg, host.c_str(), port);
+		}
+	}
 }
 
 /**

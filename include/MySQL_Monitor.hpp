@@ -665,6 +665,19 @@ class MySQL_Monitor {
 	void handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topology_Result& topology);
 	// Deferred teardown: runs once mysql.rds_topology drains after SWITCHOVER_COMPLETED.
 	void handle_aws_rds_bgd_post_switchover(AWS_RDS_BGD_State& st);
+	/**
+	* @brief Evict stale DNS and drain connections for the deployment's green hostgroups after switchover.
+	*
+	* @details No-op unless the green writer/reader hostgroups are configured (the explicit green-HG path).
+	*   For every non-OFFLINE_HARD member of each green hostgroup this drops the DNS cache entry, drains the
+	*   server's backend connections and purges the monitor connection pool.
+	*
+	*   The servers are left in place; the monitor shuns them on ping/connect errors once the retired green
+	*   DNS names stop resolving to an IP.
+	*
+	* @param st Switchover state.
+	*/
+	void aws_rds_bgd_drain_green_hg(AWS_RDS_BGD_State& st);
 	// Called by the BGD worker when the topology table is absent/empty/vanished; routes to the
 	// deferred cleanup when bgd_status is READER_SWITCHOVER_IN_PROGRESS, else preserves the baseline release.
 	void aws_rds_bgd_handle_topology_absent(AWS_RDS_BGD_State& st);
