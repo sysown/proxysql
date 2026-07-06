@@ -31,10 +31,10 @@ jobs:
     # POSTs to attach check_runs to the PR commit. Reusable-workflow
     # permissions are the intersection of caller and callee, so the
     # caller must grant the scope for the callee's declaration to take
-    # effect. The callee at ci-mysqlx.yml@prototype/ci-artifact-handoff also declares
+    # effect. The callee at ci-mysqlx.yml@ci/taptests-artifact-handoff also declares
     # write-all.
     permissions: write-all
-    uses: sysown/proxysql/.github/workflows/ci-mysqlx.yml@prototype/ci-artifact-handoff
+    uses: sysown/proxysql/.github/workflows/ci-mysqlx.yml@ci/taptests-artifact-handoff
     secrets: inherit
     with:
       trigger: ${{ toJson(github) }}
