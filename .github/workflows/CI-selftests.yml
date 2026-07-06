@@ -22,7 +22,7 @@ jobs:
     # early July 2026 alongside the Node.js 20 -> 24 actions deprecation).
     # The callee at ci-<group>.yml@GH-Actions also declares write-all.
     permissions: write-all
-    uses: sysown/proxysql/.github/workflows/ci-selftests.yml@GH-Actions
+    uses: sysown/proxysql/.github/workflows/ci-selftests.yml@prototype/ci-artifact-handoff
     secrets: inherit
     with:
       trigger: ${{ toJson(github) }}
