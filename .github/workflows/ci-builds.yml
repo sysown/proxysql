@@ -447,6 +447,86 @@ jobs:
         path: |
           proxysql/tap-matrix*
 
+    # === Build → test handoff via workflow artifacts ===
+    # GitHub made Actions cache WRITES read-only for untrusted / workflow_run
+    # triggers operating in default-branch context (changelog 2026-06-26): the
+    # `Cache save *` steps above get "cache write denied: token has no writable
+    # scopes" on PR/workflow_run runs even with permissions: write-all, so every
+    # downstream test workflow fails at `fail-on-cache-miss`. Workflow ARTIFACTS
+    # are not subject to that policy, so we publish the same payloads the caches
+    # carried as per-type artifacts named `ci-builds-handoff-<sha>-<variant>-<t>`
+    # (t = src|test|matrix|bin). Each test workflow downloads only the types it
+    # used to restore -- a faithful 1:1 replacement of its cache keys. The
+    # `Cache save *` steps above are now dead weight (they warn-and-noop on PRs);
+    # kept for one release to preserve the fast path on trusted `push` builds,
+    # and slated for removal once every consumer is on artifacts.
+    #
+    # env.SHA is the real head SHA (identical to the value each consumer
+    # computes), NOT the workflow_run default-branch SHA, so names line up
+    # without any run-id correlation.
+    - name: Pack src + matrix for handoff (zstd-15)
+      if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
+      run: |
+        command -v zstd >/dev/null || sudo apt-get install -y zstd
+        cd proxysql/
+        shopt -s nullglob
+        # _src payload: src/ (proxysql binary + src gcno) plus the lib gcno the
+        # gcov coverage collector matches against .gcda (gcov build only; the
+        # nullglob array is empty and harmless on non-gcov -tap variants).
+        gcno=(lib/obj/*.gcno)
+        tar -cf - src/ "${gcno[@]}" | zstd -15 -T0 -o ../cache_src.tar.zst
+        # _matrix payload (tap-matrix* json) -- only the taptests* groups consume
+        # it, and only ubuntu22-tap generates it; skip when absent.
+        mtx=(tap-matrix*)
+        if [ ${#mtx[@]} -gt 0 ]; then
+          tar -cf - "${mtx[@]}" | zstd -15 -T0 -o ../cache_matrix.tar.zst
+        fi
+
+    - name: Upload handoff (src)
+      if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ci-builds-handoff-${{ env.SHA }}-${{ matrix.dist }}${{ matrix.type }}-src
+        retention-days: 1
+        compression-level: 0
+        if-no-files-found: error
+        path: cache_src.tar.zst
+
+    - name: Upload handoff (test)
+      if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ci-builds-handoff-${{ env.SHA }}-${{ matrix.dist }}${{ matrix.type }}-test
+        retention-days: 1
+        compression-level: 0
+        if-no-files-found: error
+        # cache_test.tar.zst is produced by the "Pack test cache" step above.
+        path: cache_test.tar.zst
+
+    - name: Upload handoff (matrix)
+      if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ci-builds-handoff-${{ env.SHA }}-${{ matrix.dist }}${{ matrix.type }}-matrix
+        retention-days: 1
+        compression-level: 0
+        # Only ubuntu22-tap generates tap-matrix*; ignore on variants without it.
+        if-no-files-found: ignore
+        path: cache_matrix.tar.zst
+
+    - name: Upload handoff (bin)
+      # Only the debian12-dbg build feeds the 3p suites, and they consume bin
+      # only. bin is large (.git/ + binaries/), so don't ship it for -tap.
+      if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-dbg') }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ci-builds-handoff-${{ env.SHA }}-${{ matrix.dist }}${{ matrix.type }}-bin
+        retention-days: 1
+        compression-level: 0
+        if-no-files-found: error
+        # cache_bin.tar.zst is produced by the "Pack bin cache" step above.
+        path: cache_bin.tar.zst
+
     - name: Archive artifacts
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
