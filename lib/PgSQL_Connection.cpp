@@ -2796,9 +2796,20 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 			if (native_stmt_step != PG_Native_Stmt_Step::NONE) {
 				const char t = msg.type;
 
-				// BindComplete: ALWAYS suppress — the session synthesized it at Bind
-				// intake, so the client already saw it. No completion effect.
+				// BindComplete: for the unnamed portal the session synthesized it at
+				// Bind intake, so suppress the backend copy. For a named-portal Bind
+				// (BIND step) NO synthesis happened — forward the REAL BindComplete.
+				// A Flush-terminated BIND step completes here; a Sync-terminated one
+				// waits for its 'Z' below.
 				if (t == '2') {
+					if (native_stmt_step == PG_Native_Stmt_Step::BIND) {
+						query_result->add_native_backend_message(t, msg.payload, msg.payload_len);
+						if (!native_stmt_sync_terminated) {
+							native_result_complete = true;
+							return;
+						}
+						continue;
+					}
 					continue;
 				}
 
@@ -3135,12 +3146,19 @@ int PgSQL_Connection::async_query(short event, const char* stmt, unsigned long l
 		if (!extended_query_info) {
 			async_state_machine = ASYNC_QUERY_START;
 		} else {
+			native_bind_only = false;
 			if (type == PGSQL_EXTENDED_QUERY_TYPE_PARSE) {
 				async_state_machine = ASYNC_STMT_PREPARE_START;
 			} else if (type == PGSQL_EXTENDED_QUERY_TYPE_DESCRIBE) {
 				async_state_machine = ASYNC_STMT_DESCRIBE_START;
 			} else if (type == PGSQL_EXTENDED_QUERY_TYPE_EXECUTE) {
 				async_state_machine = ASYNC_STMT_EXECUTE_START;
+			} else if (type == PGSQL_EXTENDED_QUERY_TYPE_BIND) {
+				// Named-portal Bind reuses the EXECUTE state chain (CONT/END/return
+				// path all handle it unchanged); native_bind_only + native_stmt_step
+				// BIND distinguish the wire drive and the drain terminator. Task P1.
+				async_state_machine = ASYNC_STMT_EXECUTE_START;
+				native_bind_only = true;
 			} else {
 				assert(0); // should never reach here
 			}
@@ -3645,6 +3663,95 @@ void PgSQL_Connection::stmt_execute_start() {
 	processing_multi_statement = false;
 	async_exit_status = PG_EVENT_NONE;
 
+	if (native_mode && native_bind_only) {
+		// Native named-portal Bind drive (Task P1): emit ONLY a Bind on the CLIENT'S
+		// named portal, terminated by Flush or Sync per the frame's SYNC flag. No
+		// Execute and no Describe are folded in — Execute/Describe of a named portal
+		// are separate client messages (routed by Task P2). The backend's real
+		// BindComplete '2' is forwarded to the client (the session did NOT synthesize
+		// one for named portals — see the BIND drain step). Params are decoded from the
+		// registry-owned Bind message exactly as the unnamed Execute path below reads
+		// them, preserving the client's per-param/per-result formats verbatim.
+		native_stmt_reset_step();
+		const PgSQL_Extended_Query_Info* extended_query_info = query.extended_query_info;
+		const PgSQL_Bind_Message* bind_msg = extended_query_info->bind_msg;
+		assert(bind_msg); // registry entry always carries the bind message
+		const PgSQL_Bind_Data& bind_data = bind_msg->data();
+
+		std::vector<const char*> param_values;
+		std::vector<int32_t> param_lengths;
+		std::vector<uint16_t> param_formats;
+		std::vector<uint16_t> result_formats;
+
+		if (bind_data.num_param_values > 0) {
+			auto param_value_reader = bind_msg->get_param_value_reader();
+			param_values.resize(bind_data.num_param_values);
+			param_lengths.resize(bind_data.num_param_values);
+			for (uint16_t i = 0; i < bind_data.num_param_values; ++i) {
+				PgSQL_Param_Value param_val;
+				if (!param_value_reader.next(&param_val)) {
+					proxy_error("Failed to read param value at index %u\n", i);
+					set_error(PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE,
+						"Failed to read param value", false);
+					return;
+				}
+				param_values[i] = (param_val.len == -1) ? nullptr : reinterpret_cast<const char*>(param_val.value);
+				param_lengths[i] = param_val.len;
+			}
+		}
+
+		if (bind_data.num_param_formats > 0) {
+			auto param_fmt_reader = bind_msg->get_param_format_reader();
+			param_formats.resize(bind_data.num_param_formats);
+			for (uint16_t i = 0; i < bind_data.num_param_formats; ++i) {
+				uint16_t format;
+				if (!param_fmt_reader.next(&format)) {
+					proxy_error("Failed to read param format at index %u\n", i);
+					set_error(PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE,
+						"Failed to read param format", false);
+					return;
+				}
+				param_formats[i] = format; // 0 = text, 1 = binary
+			}
+		}
+
+		if (bind_data.num_result_formats > 0) {
+			auto result_fmt_reader = bind_msg->get_result_format_reader();
+			result_formats.resize(bind_data.num_result_formats);
+			for (uint16_t i = 0; i < bind_data.num_result_formats; ++i) {
+				uint16_t format;
+				if (!result_fmt_reader.next(&format)) {
+					proxy_error("Failed to read result format at index %u\n", i);
+					set_error(PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE,
+						"Failed to read result format", false);
+					return;
+				}
+				result_formats[i] = format;
+			}
+		}
+
+		pg_build_bind(native_outbuf, extended_query_info->stmt_client_portal_name, query.backend_stmt_name,
+			param_formats.empty() ? nullptr : param_formats.data(),
+			static_cast<uint16_t>(param_formats.size()),
+			param_values.empty() ? nullptr : param_values.data(),
+			param_lengths.empty() ? nullptr : param_lengths.data(),
+			static_cast<uint16_t>(param_values.size()),
+			result_formats.empty() ? nullptr : result_formats.data(),
+			static_cast<uint16_t>(result_formats.size()));
+
+		const bool use_flush =
+			(extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_SYNC) == 0;
+		if (use_flush) {
+			pg_build_flush(native_outbuf);
+		} else {
+			pg_build_sync(native_outbuf);
+		}
+		native_stmt_sync_terminated = !use_flush;
+		native_stmt_step = PG_Native_Stmt_Step::BIND;
+		native_stmt_send_or_wait();
+		return;
+	}
+
 	if (native_mode) {
 		// Native Execute drive (Task C): Bind [+ Describe('P')] + Execute + Flush/Sync
 		// on the unnamed portal. Decodes the client's Bind params from the SAME parsed
@@ -3745,6 +3852,22 @@ void PgSQL_Connection::stmt_execute_start() {
 		native_stmt_sync_terminated = !use_flush;
 		native_stmt_step = PG_Native_Stmt_Step::EXECUTE;
 		native_stmt_send_or_wait();
+		return;
+	}
+
+	// Named-portal Bind is a native-mode-only capability. The session gate keys on the
+	// thread flag, but the backend connection assigned by find_or_create_backend may
+	// have been established earlier in libpq mode (the flag was flipped with a warm
+	// pool) — native_mode is fixed per-connection at creation. The libpq drive cannot
+	// express named portals, so surface a clean FEATURE_NOT_SUPPORTED rather than
+	// aborting. In a stable native-only deployment every backend conn is native and
+	// this branch is never taken; it is a reachable operational edge, NOT a programming
+	// error, so it must NOT assert.
+	if (native_bind_only) {
+		set_error(PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
+			"named portals require the native backend protocol", false);
+		proxy_warning("native named-portal Bind dispatched onto a libpq-mode backend connection "
+			"(use_native_backend_protocol flipped with a warm pool); rejecting on fd=%d\n", fd);
 		return;
 	}
 

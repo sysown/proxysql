@@ -319,6 +319,13 @@ enum session_status {
 	RESYNCHRONIZING_CONNECTION,
 	SETTING_SESSION_TRACK_VARIABLES,
 	SETTING_SESSION_TRACK_STATE,
+	// NOTE: append-only. PROCESSING_STMT_BIND (Task P1) is placed at the END of the
+	// enum on purpose: inserting it mid-list would renumber every following value, and
+	// the build does not track header→object dependencies, so any translation unit not
+	// recompiled would silently disagree on the numeric values (observed: a stale
+	// pgsql_tracked_variables[] holding the old SETTING_VARIABLE value crashed
+	// verify_server_variable with "Wrong status"). Keep new statuses here.
+	PROCESSING_STMT_BIND,
 	session_status___NONE // special marker
 };
 

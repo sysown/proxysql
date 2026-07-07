@@ -123,6 +123,14 @@ public:
 	const PgSQL_STMT_Global_info* find_stmt_info_from_stmt_name(const std::string& client_stmt_name) const;
 
 	/**
+	 * Like find_stmt_info_from_stmt_name, but returns a shared_ptr so the caller can
+	 * keep the global statement alive beyond the client mapping's lifetime (used by
+	 * the named-portal registry, whose entries outlive the extended-query frame).
+	 * Returns nullptr shared_ptr if not present.
+	 */
+	std::shared_ptr<const PgSQL_STMT_Global_info> find_shared_stmt_info_from_stmt_name(const std::string& client_stmt_name) const;
+
+	/**
 	 * Close a client-side prepared statement mapping by its name.
 	 *
 	 *  - If the name exists: decrement the global statement's client refcount,

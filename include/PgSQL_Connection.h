@@ -708,8 +708,13 @@ public:
 	// stmt_prepare_start / stmt_describe_start / stmt_execute_start, consumed by
 	// native_fetch_result_cont() to apply the per-step terminator + ack-filtering
 	// rules. Reset to NONE alongside native_result_complete at each stmt start.
-	enum class PG_Native_Stmt_Step { NONE, PARSE, DESCRIBE_S, DESCRIBE_P, EXECUTE };
+	enum class PG_Native_Stmt_Step { NONE, PARSE, DESCRIBE_S, DESCRIBE_P, EXECUTE, BIND };
 	PG_Native_Stmt_Step native_stmt_step = PG_Native_Stmt_Step::NONE;
+	// True when the current ASYNC_STMT_EXECUTE_* dispatch is actually a named-portal
+	// Bind (PGSQL_EXTENDED_QUERY_TYPE_BIND), so stmt_execute_start() emits a Bind-only
+	// frame (no Execute) and the drain forwards the real BindComplete. Set per-dispatch
+	// in async_query(); read once at stmt_execute_start(). Task P1.
+	bool native_bind_only = false;
 	// True when the step was terminated on the wire with Sync (so it completes on the
 	// backend's ReadyForQuery 'Z'); false when terminated with Flush (completes on the
 	// step's own terminator: '1' for PARSE, 'T'|'n' for DESCRIBE, 'C'|'I'|'s' for

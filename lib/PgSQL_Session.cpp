@@ -383,6 +383,13 @@ void PgSQL_Session::reset() {
 		transaction_state_manager->reset_state();
 	}
 	extended_query_phase = EXTQ_PHASE_IDLE;
+	// Drop any named portals + in-flight named Bind (Task P1): a session reset is
+	// well past the scope of any open portal.
+	clear_named_portals();
+	pending_named_bind.bind_msg.reset();
+	pending_named_bind.stmt_info.reset();
+	pending_named_bind.portal_name.clear();
+	pending_named_bind.active = false;
 	// Clear any poisoned-transaction state — if the session is being reset we're
 	// past the scope of the poison.
 	tx_poisoned = false;
@@ -3004,6 +3011,7 @@ void PgSQL_Session::handler_minus1_GenerateErrorMessage(PgSQL_Data_Stream* myds,
 		// fall through
 	case PROCESSING_STMT_DESCRIBE:
 	case PROCESSING_STMT_EXECUTE:
+	case PROCESSING_STMT_BIND:
 	case PROCESSING_QUERY:
 		PgSQL_Result_to_PgSQL_wire(myconn, myds);
 		break;
@@ -3079,6 +3087,17 @@ int PgSQL_Session::RunQuery(PgSQL_Data_Stream* myds, PgSQL_Connection* myconn) {
 			char backend_stmt_name[32];
 			build_backend_stmt_name(backend_stmt_name, CurrentQuery.extended_query_info.stmt_backend_id);
 			rc = myconn->async_query(myds->revents, nullptr, 0, backend_stmt_name, type, &CurrentQuery.extended_query_info);
+		}
+		break;
+	case PROCESSING_STMT_BIND:
+		// Named-portal Bind (Task P1): the backend statement name is built the same way
+		// as DESCRIBE/EXECUTE; the native drive emits a Bind on the client's named portal.
+		assert(CurrentQuery.extended_query_info.stmt_backend_id);
+		{
+			char backend_stmt_name[32];
+			build_backend_stmt_name(backend_stmt_name, CurrentQuery.extended_query_info.stmt_backend_id);
+			rc = myconn->async_query(myds->revents, nullptr, 0, backend_stmt_name,
+				PGSQL_EXTENDED_QUERY_TYPE_BIND, &CurrentQuery.extended_query_info);
 		}
 		break;
 /*	case PROCESSING_STMT_EXECUTE:
@@ -3275,6 +3294,7 @@ handler_again:
 	case PROCESSING_STMT_PREPARE:
 	case PROCESSING_STMT_EXECUTE:
 	case PROCESSING_STMT_DESCRIBE:
+	case PROCESSING_STMT_BIND:
 	case PROCESSING_QUERY: {
 		//fprintf(stderr,"PROCESSING_QUERY\n");
 		if (pause_until > thread->curtime) {
@@ -3338,9 +3358,10 @@ handler_again:
 		} else {
 			PgSQL_Data_Stream* myds = mybe->server_myds;
 			PgSQL_Connection* myconn = myds->myconn;
-			bool processing_extended_query = (status == PROCESSING_STMT_PREPARE || 
-											  status == PROCESSING_STMT_EXECUTE || 
-											  status == PROCESSING_STMT_DESCRIBE);
+			bool processing_extended_query = (status == PROCESSING_STMT_PREPARE ||
+											  status == PROCESSING_STMT_EXECUTE ||
+											  status == PROCESSING_STMT_DESCRIBE ||
+											  status == PROCESSING_STMT_BIND);
 			mybe->server_myds->max_connect_time = 0;
 			// we insert it in mypolls only if not already there
 			if (myds->mypolls == NULL) {
@@ -3432,7 +3453,8 @@ handler_again:
 							}
 						}
 					}
-					if (status == PROCESSING_STMT_DESCRIBE || status == PROCESSING_STMT_EXECUTE) {
+					if (status == PROCESSING_STMT_DESCRIBE || status == PROCESSING_STMT_EXECUTE ||
+						status == PROCESSING_STMT_BIND) {
 						uint32_t backend_stmt_id = myconn->local_stmts->find_backend_stmt_id_from_global_id(CurrentQuery.extended_query_info.stmt_global_id);
 						if (backend_stmt_id == 0) {
 							// the connection doesn't have the prepared statements prepared
@@ -3442,7 +3464,10 @@ handler_again:
 								proxy_error("Session %p, status %d, CurrentQuery.stmt_info is NULL\n", this, status);
 								assert(0);
 							}
-							if (status == PROCESSING_STMT_DESCRIBE) {
+							// DESCRIBE and BIND carry no query text of their own; the implicit
+							// Parse needs it copied from the resolved global statement (EXECUTE
+							// already set QueryPointer/QueryLength in its post-sync handler).
+							if (status == PROCESSING_STMT_DESCRIBE || status == PROCESSING_STMT_BIND) {
 								CurrentQuery.QueryLength = CurrentQuery.extended_query_info.stmt_info->query_length;
 								CurrentQuery.QueryPointer = (unsigned char*)CurrentQuery.extended_query_info.stmt_info->query;
 								// NOTE: Update 'first_comment' with the 'first_comment' from the retrieved
@@ -3567,6 +3592,16 @@ handler_again:
 
 					handle_transaction_state();
 					break;
+				case PROCESSING_STMT_BIND:
+					// Named-portal Bind succeeded on the backend (rc==0 => no ErrorResponse):
+					// stream the real BindComplete (+ 'Z' if Sync-terminated) to the client,
+					// then commit the in-flight bind into named_portals (replacing any prior
+					// entry only now, on success — a rejected Bind takes the rc==-1 path and
+					// leaves the registry untouched).
+					PgSQL_Result_to_PgSQL_wire(myconn, myconn->myds);
+					commit_pending_named_bind();
+					handle_transaction_state();
+					break;
 				// Handled above
 				//case PROCESSING_STMT_DESCRIBE:
 				//	handler___rc0_PROCESSING_STMT_DESCRIBE_PREPARE(myds);
@@ -3601,8 +3636,26 @@ handler_again:
 
 				enum session_status old_status = status;
 
+				// --- Named-portal lifetime + pinning (Task P1) ---
+				// At a true cycle boundary (frame fully drained), if the drained
+				// ReadyForQuery reported txn-state 'I' the backend destroyed all
+				// portals (transaction end, or the implicit txn of an autocommit
+				// Sync) — drop the registry to match. Mid-frame (has_pending_messages)
+				// the 'Z' has not arrived, so native_txn_status is stale: skip.
+				if (processing_extended_query && !has_pending_messages &&
+					myconn->native_txn_status == 'I') {
+					clear_named_portals();
+				}
+				// Pin the backend while named portals are open (same intent as the
+				// active-transaction sticky pin) so a later Execute/Describe/Close of a
+				// named portal routes to the connection that holds it. Kept SEPARATE from
+				// has_pending_messages: the latter still gates the frame-drain
+				// NEXT_IMMEDIATE(PROCESSING_EXTENDED_QUERY_SYNC) below, which must not fire
+				// on an empty frame just because a portal is open.
+				bool sticky_backend_connection = has_pending_messages || (named_portals.empty() == false);
+
 				RequestEnd(myds, false);
-				finishQuery(myds, myconn, has_pending_messages);
+				finishQuery(myds, myconn, sticky_backend_connection);
 
 				if (processing_extended_query) {
 					if (!has_pending_messages) {
@@ -6394,6 +6447,9 @@ void PgSQL_Session::set_previous_status_mode3(bool allow_execute) {
 	case PROCESSING_QUERY:
 	case PROCESSING_STMT_PREPARE:
 	case PROCESSING_STMT_DESCRIBE:
+	// PROCESSING_STMT_BIND (named-portal Bind, Task P1) is restored after CONNECTING_SERVER
+	// exactly like DESCRIBE — always push it (there is no allow_execute suppression for Bind).
+	case PROCESSING_STMT_BIND:
 		previous_status.push(status);
 		break;
 	case PROCESSING_STMT_EXECUTE:
@@ -6770,9 +6826,19 @@ int PgSQL_Session::handle_post_sync_describe_message(PgSQL_Describe_Message* des
 	switch (stmt_type) {
 	case 'P': // Portal
 		if (describe_data.stmt_name[0] != '\0') {
-			// we don't support named portals yet
+			// Gate keys on the THREAD VARIABLE (the mode this session's backend conns use),
+			// not on any bound backend conn (none exists at message-intake time). libpq mode
+			// keeps rejecting named portals byte-identically (invariant 1).
+			if (!pgsql_thread___use_native_backend_protocol) {
+				handle_post_sync_error(PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
+					"only unnamed portals are supported", false);
+				return 2;
+			}
+			// Native mode: named-portal Describe routing is Task P2. A named Bind already
+			// works end-to-end (registered in named_portals), but Describe of that portal
+			// is not yet wired — return a clear temporary error rather than mishandle it.
 			handle_post_sync_error(PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
-				"only unnamed portals are supported", false);
+				"named portal execution lands in the next commit", false);
 			return 2;
 		}
 
@@ -6950,8 +7016,15 @@ int PgSQL_Session::handle_post_sync_close_message(PgSQL_Close_Message* close_msg
 	switch (stmt_type) {
 	case 'P': // Portal
 		if (close_data.stmt_name[0] != '\0') {
-			// we don't support unnamed portals yet
-			handle_post_sync_error(PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, "only unnamed portals are supported", false);
+			// libpq mode keeps rejecting named portals byte-identically (invariant 1);
+			// gate on the thread variable, not on a backend conn (none bound here).
+			if (!pgsql_thread___use_native_backend_protocol) {
+				handle_post_sync_error(PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, "only unnamed portals are supported", false);
+				return 2;
+			}
+			// Native mode: named-portal Close routing (forward Close('P') + CloseComplete,
+			// drop the registry entry) is Task P2. Temporary clear error for now.
+			handle_post_sync_error(PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, "named portal execution lands in the next commit", false);
 			return 2;
 		}
 		bind_waiting_for_execute.reset(nullptr); // release the ownership of the bind message
@@ -6983,14 +7056,28 @@ int PgSQL_Session::handle_post_sync_bind_message(PgSQL_Bind_Message* bind_msg) {
 	const char* portal_name = bind_data.portal_name;
 	const char* stmt_client_name = bind_data.stmt_name;
 
-	if (portal_name[0] != '\0') {
-		// we don't support portals yet
+	// A named portal takes the native immediate-dispatch path (registered in
+	// named_portals, real BindComplete forwarded). The unnamed portal keeps the
+	// deferred single-slot stash + synthesized BindComplete, byte-identical in both
+	// modes (invariant 2). libpq mode rejects named portals byte-identically (invariant 1).
+	const bool is_named_portal = (portal_name[0] != '\0');
+	if (is_named_portal && !pgsql_thread___use_native_backend_protocol) {
 		handle_post_sync_error(PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, "only unnamed portals are supported", false);
 		return 2;
 	}
-	
-	// Look up an existing local statement info for client-provided statement name
-	const PgSQL_STMT_Global_info* stmt_info = client_myds->myconn->local_stmts->find_stmt_info_from_stmt_name(stmt_client_name);
+
+	// Look up an existing local statement info for client-provided statement name.
+	// For a named portal we keep a shared_ptr so the global statement outlives the
+	// extended-query frame (portals persist across frames within a txn); the
+	// unknown-statement error bytes are identical to the unnamed path either way.
+	std::shared_ptr<const PgSQL_STMT_Global_info> stmt_info_sp;
+	const PgSQL_STMT_Global_info* stmt_info;
+	if (is_named_portal) {
+		stmt_info_sp = client_myds->myconn->local_stmts->find_shared_stmt_info_from_stmt_name(stmt_client_name);
+		stmt_info = stmt_info_sp.get();
+	} else {
+		stmt_info = client_myds->myconn->local_stmts->find_stmt_info_from_stmt_name(stmt_client_name);
+	}
 	if (!stmt_info) {
 		const std::string& errmsg = stmt_client_name[0] != '\0' ? ("prepared statement \"" + std::string(stmt_client_name) + "\" does not exist") :
 			"unnamed prepared statement does not exist";
@@ -7057,6 +7144,45 @@ int PgSQL_Session::handle_post_sync_bind_message(PgSQL_Bind_Message* bind_msg) {
 		}
 	}
 
+	if (is_named_portal) {
+		// --- Named-portal Bind: dispatch to the backend immediately (Task P1) ---
+		// Sync-terminate iff this Bind is the last message in its client frame, matching
+		// the unnamed Execute/Describe drives.
+		if (extended_query_frame.empty() == true) {
+			extended_query_info.flags |= PGSQL_EXTENDED_QUERY_FLAG_SYNC;
+		}
+		// Stash the in-flight bind: released message (owns the raw bytes the native drive
+		// re-reads for params) + resolved global stmt. Committed into named_portals only
+		// on a successful BindComplete (rc0), so a backend-rejected Bind (e.g. 42P03
+		// duplicate portal) leaves any existing registry entry intact.
+		pending_named_bind.portal_name = portal_name;
+		pending_named_bind.bind_msg.reset(bind_msg->release());
+		pending_named_bind.stmt_info = stmt_info_sp;
+		pending_named_bind.active = true;
+		extended_query_info.stmt_client_portal_name = pending_named_bind.portal_name.c_str();
+		extended_query_info.bind_msg = pending_named_bind.bind_msg.get();
+
+		// Mirror the tail of handle_post_sync_execute_message (backend dispatch), minus
+		// the pgsql_real_query transfer: BIND carries no query text and the native drive
+		// reads the Bind bytes straight from extended_query_info.bind_msg (RunQuery's BIND
+		// case passes nullptr/0 for the query, like DESCRIBE/EXECUTE).
+		mybe = find_or_create_backend(current_hostgroup);
+		mybe->server_myds->query_retries_on_failure = pgsql_thread___query_retries_on_failure;
+		if (qpo && qpo->retries >= 0) {
+			mybe->server_myds->query_retries_on_failure = qpo->retries;
+		}
+		status = PROCESSING_STMT_BIND;
+		mybe->server_myds->connect_retries_on_failure = pgsql_thread___connect_retries_on_failure;
+		pause_until = 0;
+		mybe->server_myds->wait_until = 0;
+		mybe->server_myds->killed_at = 0;
+		mybe->server_myds->kill_type = 0;
+		mybe->server_myds->cancel_query = false;
+		mybe->server_myds->statuses.questions++;
+		client_myds->setDSS_STATE_QUERY_SENT_NET();
+		return 1;
+	}
+
 	bind_waiting_for_execute.reset(bind_msg->release()); // release the ownership of the bind message
 	client_myds->setDSS_STATE_QUERY_SENT_NET();
 	unsigned int nTxn = NumActiveTransactions();
@@ -7077,8 +7203,16 @@ int PgSQL_Session::handle_post_sync_execute_message(PgSQL_Execute_Message* execu
 	const PgSQL_Execute_Data& execute_data = execute_msg->data();
 
 	if (execute_data.portal_name[0] != '\0') {
-		// we don't support named portals yet
-		handle_post_sync_error(PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, "only unnamed portals are supported", false);
+		// libpq mode keeps rejecting named portals byte-identically (invariant 1);
+		// gate on the thread variable, not on a backend conn (none bound here).
+		if (!pgsql_thread___use_native_backend_protocol) {
+			handle_post_sync_error(PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, "only unnamed portals are supported", false);
+			return 2;
+		}
+		// Native mode: named-portal Execute routing (dispatch Execute on the registered
+		// portal, resume PortalSuspended, etc.) is Task P2. A named Bind already registers
+		// the portal, but executing it is not yet wired — clear temporary error for now.
+		handle_post_sync_error(PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, "named portal execution lands in the next commit", false);
 		return 2;
 	}
 
@@ -7236,6 +7370,34 @@ void PgSQL_Session::reset_extended_query_frame() {
 	}
 	bind_waiting_for_execute.reset(nullptr);
 	extended_query_phase = EXTQ_PHASE_IDLE;
+	// NOTE: named_portals are deliberately NOT cleared here — portals outlive an
+	// extended-query frame within a transaction. They are dropped only at txn end
+	// (native_txn_status=='I' after a completed cycle) and in reset()/destructor.
+}
+
+// Discard the named-portal registry. Called when a completed cycle's ReadyForQuery
+// reported txn-state 'I' (backend destroyed all portals at txn end / autocommit Sync)
+// and from reset(). The unique_ptr<PgSQL_Bind_Message> entries free their raw bytes.
+void PgSQL_Session::clear_named_portals() {
+	if (named_portals.empty()) return;
+	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Session=%p client_myds=%p. Clearing %lu named portal(s)\n",
+		this, client_myds, (unsigned long)named_portals.size());
+	named_portals.clear();
+}
+
+// Commit the in-flight named Bind into the registry after a successful BindComplete.
+// Replaces any prior entry for the same portal name only now (on success), so a
+// backend-rejected Bind leaves the existing entry intact.
+void PgSQL_Session::commit_pending_named_bind() {
+	if (!pending_named_bind.active) return;
+	PgSQL_Portal_Entry entry;
+	entry.bind_msg = std::move(pending_named_bind.bind_msg);
+	entry.stmt_info = std::move(pending_named_bind.stmt_info);
+	entry.bound_on_backend = true;
+	entry.suspended = false;
+	named_portals[pending_named_bind.portal_name] = std::move(entry);
+	pending_named_bind.portal_name.clear();
+	pending_named_bind.active = false;
 }
 
 int  PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_SYNC() {

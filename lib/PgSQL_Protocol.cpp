@@ -2777,6 +2777,12 @@ unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const uns
 	// helpers set, but derive everything from the raw payload instead of a PGresult.
 	switch (type) {
 	case '1': // ParseComplete: bare ack, no payload. See PGSQL_QUERY_RESULT_ACK.
+	case '2': // BindComplete: bare ack, no payload. Only reaches here (i.e. is not
+	          // suppressed) for a named-portal Bind (native BIND step), whose real
+	          // BindComplete is forwarded to the client rather than synthesized. For
+	          // every other step the drain suppresses '2' before this call. Marking it
+	          // ACK keeps a Flush-terminated named Bind's sole message a non-empty
+	          // result so PgSQL_Result_to_PgSQL_wire streams it (mirrors '1'/'n'/'s').
 	case 'n': // NoData (Describe response when the statement returns no rows/columns)
 	case 's': // PortalSuspended (Execute response when max_rows cut the result short)
 		result_packet_type |= PGSQL_QUERY_RESULT_ACK;

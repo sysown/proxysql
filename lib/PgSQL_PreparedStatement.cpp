@@ -176,6 +176,13 @@ const PgSQL_STMT_Global_info* PgSQL_STMT_Local::find_stmt_info_from_stmt_name(co
 	return ret;
 }
 
+std::shared_ptr<const PgSQL_STMT_Global_info> PgSQL_STMT_Local::find_shared_stmt_info_from_stmt_name(const std::string& client_stmt_name) const {
+	if (auto s = stmt_name_to_global_info.find(client_stmt_name); s != stmt_name_to_global_info.end()) {
+		return s->second;
+	}
+	return nullptr;
+}
+
 bool PgSQL_STMT_Local::client_close(const std::string& client_stmt_name) {
 	if (auto s = stmt_name_to_global_info.find(client_stmt_name); s != stmt_name_to_global_info.end()) {  // found
 		const PgSQL_STMT_Global_info* stmt_info = s->second.get();
