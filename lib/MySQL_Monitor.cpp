@@ -205,8 +205,16 @@ static void close_mysql(MYSQL *my) {
 #endif
 		fd+=wb; // dummy, to make compiler happy
 		fd-=wb; // dummy, to make compiler happy
-	} else if (my->net.fd != -1) {
-		// pvio already cleared; close fd directly to avoid CLOSE_WAIT leak.
+	} else if (my->net.pvio == NULL && my->net.fd > 0 && fcntl(my->net.fd, F_GETFD) != -1) {
+		// pvio already cleared but the socket fd is still open (e.g. the connector
+		// processed a peer FIN and dropped pvio without closing the fd): close it
+		// directly to avoid a CLOSE_WAIT leak.
+		// The guard is deliberately strict:
+		//   - net.fd is zero-initialized by mysql_init() and only set to a real
+		//     socket on a successful connect, so 'fd > 0' avoids close(0) (which
+		//     would hit stdin) on a connection that never established.
+		//   - fcntl(F_GETFD) rejects an already-closed/stale fd (EBADF), avoiding
+		//     a double close after the connector's own end_server() ran.
 		close(my->net.fd);
 		my->net.fd = -1;
 	}

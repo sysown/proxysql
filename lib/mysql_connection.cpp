@@ -3019,8 +3019,12 @@ void MySQL_Connection::close_mysql() {
 #else
 		send(fd, buff, 5, MSG_NOSIGNAL);
 #endif
-	} else if (mysql->net.fd != -1 && !mysql->net.pvio) {
-		// pvio already cleared; close fd directly to avoid CLOSE_WAIT leak.
+	} else if (mysql->net.pvio == NULL && mysql->net.fd > 0 && fcntl(mysql->net.fd, F_GETFD) != -1) {
+		// pvio already cleared but the socket fd is still open: close it directly
+		// to avoid a CLOSE_WAIT leak. The guard mirrors the monitor's close_mysql():
+		// 'fd > 0' avoids close(0) on a connection that never established (net.fd is
+		// zero-initialized), and fcntl(F_GETFD) skips an already-closed/stale fd
+		// (EBADF), avoiding a double close after the connector's own end_server().
 		close(mysql->net.fd);
 		mysql->net.fd = -1;
 	}

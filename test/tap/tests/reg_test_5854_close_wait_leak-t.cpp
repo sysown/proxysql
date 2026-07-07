@@ -1,12 +1,18 @@
 /**
  * @file reg_test_5854_close_wait_leak-t.cpp
  * @brief Regression test for CLOSE_WAIT socket leak when net.pvio is NULL.
- * @details Verifies two things:
+ * @details Verifies four things:
  *   1. Without the fix (just mysql_close_no_command when pvio=NULL), the
  *      socket fd is not released — confirming the bug is real.
- *   2. With the fix (explicit close(fd) before mysql_close_no_command), the
- *      fd is released back — confirming the fix works.
+ *   2. With the fix (close_mysql()'s guarded close(fd) before
+ *      mysql_close_no_command), the fd is released back — confirming it works.
  *   3. (Linux only) Repeated fixed closes do not accumulate CLOSE_WAIT sockets.
+ *   4. The guard does NOT close a never-established connection (pvio=NULL,
+ *      net.fd=0), so it never tears down fd 0 (stdin).
+ *
+ *   Tests 2-4 exercise close_mysql_fixed_fixup(), a verbatim copy of the guard
+ *   added to close_mysql() by PR #5854, so the assertions track the real
+ *   predicate rather than an ad-hoc reimplementation.
  *
  *   The pvio=NULL / net.fd>0 state is reproduced by directly zeroing net.pvio
  *   on a live connection, mirroring what the MariaDB connector does when it
@@ -26,6 +32,7 @@
 #include <sys/socket.h>
 #include <dirent.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <cstdio>
 #include <cstring>
 
@@ -100,6 +107,21 @@ static MYSQL* make_pvio_null_conn(const CommandLine& cl) {
 	return my;
 }
 
+// Mirror of the production guard added to close_mysql() by PR #5854.
+// Kept in one place so the tests exercise the exact predicate the fix uses:
+//   - only act when pvio is already NULL,
+//   - fd > 0 so we never close(0) (stdin) on a never-established connection,
+//   - fcntl(F_GETFD) so we skip an already-closed/stale fd (EBADF).
+// Returns true if it actually closed the fd.
+static bool close_mysql_fixed_fixup(MYSQL* my) {
+	if (my->net.pvio == nullptr && my->net.fd > 0 && fcntl(my->net.fd, F_GETFD) != -1) {
+		close(my->net.fd);
+		my->net.fd = -1;
+		return true;
+	}
+	return false;
+}
+
 // Test 1: the unfixed path does not release the fd.
 // mysql_close_no_command() skips end_server() when pvio=NULL, so net.fd is
 // never passed to close(2).  We verify this by measuring the open-fd count
@@ -160,11 +182,8 @@ static void test_fixed_path_closes_fd(const CommandLine& cl) {
 
 	diag("fds after connect: %d", count_open_fds());
 
-	// Fixed path: mirrors the else-if branch in close_mysql() (PR #5854).
-	if (my->net.pvio == nullptr && my->net.fd > 0) {
-		close(my->net.fd);
-		my->net.fd = -1;
-	}
+	// Fixed path: exercises the exact guard added to close_mysql() (PR #5854).
+	close_mysql_fixed_fixup(my);
 	mysql_close_no_command(my);
 
 	int after = count_open_fds();
@@ -194,11 +213,8 @@ static void test_no_close_wait_growth(const CommandLine& cl) {
 			diag("iteration %d: could not create pvio=NULL conn", i);
 			continue;
 		}
-		// Fixed path (same as test 2)
-		if (my->net.pvio == nullptr && my->net.fd > 0) {
-			close(my->net.fd);
-			my->net.fd = -1;
-		}
+		// Fixed path (same guard as test 2)
+		close_mysql_fixed_fixup(my);
 		mysql_close_no_command(my);
 		usleep(100000); // 100 ms — let kernel reclaim
 	}
@@ -213,9 +229,46 @@ static void test_no_close_wait_growth(const CommandLine& cl) {
 #endif
 }
 
+// Test 4: the guard must NOT close a never-established connection.
+// A MYSQL that failed to connect (or was never connected) has pvio==NULL and
+// net.fd==0 (zero-initialized by mysql_init).  A naive 'fd != -1' guard would
+// call close(0), tearing down the process's stdin.  This test verifies the
+// production guard leaves fd 0 untouched: stdin must still be a valid fd after
+// running the fixup against a pvio==NULL / fd==0 connection.
+static void test_guard_protects_fd0(const CommandLine&) {
+	diag("--- test_guard_protects_fd0 ---");
+
+	// stdin must be open before we start (it is, under the TAP harness).
+	bool stdin_ok_before = (fcntl(STDIN_FILENO, F_GETFD) != -1);
+	if (!stdin_ok_before) {
+		skip(1, "stdin (fd 0) not open in this environment; cannot test guard");
+		return;
+	}
+
+	MYSQL* my = mysql_init(nullptr);
+	if (!my) {
+		skip(1, "mysql_init failed");
+		return;
+	}
+	// Reproduce the failed-connect field state the monitor hands to close_mysql()
+	// on a connection error >= 2000: pvio never set, fd still zero-initialized.
+	my->net.pvio = nullptr;
+	my->net.fd = 0;
+
+	bool closed = close_mysql_fixed_fixup(my);
+	mysql_close(my);
+
+	bool stdin_ok_after = (fcntl(STDIN_FILENO, F_GETFD) != -1);
+
+	ok(!closed && stdin_ok_after,
+		"guard leaves fd 0 alone on a never-established (pvio=NULL, fd=0) conn "
+		"— stdin still valid (closed=%d stdin_ok=%d)",
+		closed ? 1 : 0, stdin_ok_after ? 1 : 0);
+}
+
 // ---------------------------------------------------------------------------
 int main(int argc, const char* argv[]) {
-	plan(3);
+	plan(4);
 
 	CommandLine cl;
 	if (cl.getEnv()) {
@@ -226,6 +279,7 @@ int main(int argc, const char* argv[]) {
 	test_unfixed_path_leaks_fd(cl);
 	test_fixed_path_closes_fd(cl);
 	test_no_close_wait_growth(cl);
+	test_guard_protects_fd0(cl);
 
 	return exit_status();
 }
