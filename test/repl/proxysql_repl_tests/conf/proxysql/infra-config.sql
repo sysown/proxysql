@@ -1,4 +1,3 @@
-SET admin-hash_passwords='false';
 LOAD ADMIN VARIABLES TO RUNTIME;
 SAVE ADMIN VARIABLES TO DISK;
 
