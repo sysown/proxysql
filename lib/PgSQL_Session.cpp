@@ -675,6 +675,7 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 	char buff[32];
 	sprintf(buff, "%p", this);
 	j["address"] = buff;
+	j["version"] = PROXYSQL_VERSION;
 	if (thread) {
 		sprintf(buff, "%p", thread);
 		j["thread"] = buff;
