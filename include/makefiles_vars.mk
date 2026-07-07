@@ -16,8 +16,9 @@ ifneq (,$(wildcard /etc/system-release))
 	CENTOSVER := $(shell rpm --eval %rhel)
 endif
 
-IS_ARM := $(if $(findstring aarch64, $(UNAME_M)),true,false)
-IS_CENTOS := $(if $(findstring Unknown, $(CENTOSVER)),false,true)
+# NOTE: CENTOSVER is still used in deps/Makefile for CentOS 6 workarounds.
+# IS_ARM and IS_CENTOS were removed when jemalloc page-size detection
+# switched from arch-specific to auto-detection (see deps/Makefile).
 
 
 ### detect compiler support for c++11/17
