@@ -6852,10 +6852,13 @@ int PgSQL_Session::handle_post_sync_describe_message(PgSQL_Describe_Message* des
 		if (dc) {
 			// Evidence mechanism for the cache hit (the PgSQL status-variable enum is
 			// currently a stub, so a visible counter is not yet wireable — see report).
-			// proxy_info is always emitted (no debug-level dependency), matching the
-			// observability approach used for the native injected-Sync recovery path.
-			proxy_info("PgSQL statement-level Describe served from metadata cache (stmt_id=%llu)\n",
-				(unsigned long long)stmt_info->statement_id);
+			// Debug-level ONLY: this is the common path by design (every repeat
+			// Describe of a cached statement lands here), so an always-on line would
+			// be per-query log flood. Tests scrape it by raising admin-debug_output
+			// to include stderr (3) with debug_mysql_com verbosity >= 5.
+			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5,
+				"Session=%p client_myds=%p. PgSQL statement-level Describe served from metadata cache (stmt_id=%llu)\n",
+				this, client_myds, (unsigned long long)stmt_info->statement_id);
 			client_myds->setDSS_STATE_QUERY_SENT_NET();
 			char txn_state = NumActiveTransactions() > 0 ? 'T' : 'I';
 			bool send_ready_packet = is_extended_query_ready_for_query();

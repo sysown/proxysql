@@ -692,9 +692,13 @@ static ExtQCaseRunResult run_midframe_err(PGconn* admin, const std::string& bad_
 // served from the set-once cache on PgSQL_STMT_Global_info — no backend round
 // trip — in BOTH backend modes. What the cache serves MUST be byte-identical to
 // a round-trip (the differential is the cross-oracle). Evidence that the second
-// Describe actually hit the cache: the proxy_info marker line emitted by
-// handle_post_sync_describe_message on a hit (durable in-test evidence via the
-// scanNativePhaseLog / wait_for_log_match pattern, like P24's injected-Sync).
+// Describe actually hit the cache: the proxy_debug(PROXY_DEBUG_MYSQL_COM, 5)
+// marker line emitted by handle_post_sync_describe_message on a hit — debug
+// level because the hit is the COMMON path by design (an always-on line would
+// be per-query log flood). The cases below raise the debug routing through the
+// admin connection for the duration of the phase (see enableDescribeDebugLog)
+// so the line lands in the proxysql.log this test scrapes, then restore it —
+// same durable-in-test-evidence idea as P24's injected-Sync log assertion.
 //
 // serialize_describe() captures the FULL Describe metadata (param OIDs + every
 // RowDescription column field), unlike serialize_result()'s COMMAND_OK branch —
@@ -738,20 +742,80 @@ static std::string run_describe_twice(PGconn* c, const std::string& stmt_name,
 	return out;
 }
 
-// Count "Describe served from metadata cache" marker lines appended to the log
-// since the last drain (durable evidence a Describe was served from cache).
-static int countDescribeCacheHits(uint32_t wait_ms) {
-	const std::regex re(".*Describe served from metadata cache.*");
-	int hits = 0;
+// --- Debug-log routing for the cache-hit evidence line -----------------------
+// The cache-hit marker is emitted via proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, ...).
+// For it to land in the proxysql.log this test scrapes (the infra runs proxysql
+// in the foreground with stderr teed into that file), two admin knobs must hold
+// during the phase:
+//   - admin-debug_output must include stderr → 3 (stderr + debug DB). The infra
+//     default is 2 (debug DB only), which never reaches the log file;
+//   - debug_levels verbosity for module 'debug_mysql_com' must be >= 5 (infra
+//     default is 7; set explicitly anyway for robustness).
+// DebugLogScope captures both, applies them, and restores on destruction (so
+// early returns in the case runner cannot leak the raised debug routing).
+static std::string adminScalar(PGconn* admin, const std::string& q) {
+	PGresult* res = PQexec(admin, q.c_str());
+	std::string v;
+	if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0 && !PQgetisnull(res, 0, 0)) {
+		v = PQgetvalue(res, 0, 0);
+	}
+	PQclear(res);
+	return v;
+}
+
+struct DebugLogScope {
+	PGconn* admin;
+	std::string saved_output, saved_verbosity;
+	bool enabled = false;
+
+	explicit DebugLogScope(PGconn* a) : admin(a) {
+		saved_output = adminScalar(admin,
+			"SELECT variable_value FROM global_variables WHERE variable_name='admin-debug_output'");
+		saved_verbosity = adminScalar(admin,
+			"SELECT verbosity FROM debug_levels WHERE module='debug_mysql_com'");
+		if (saved_output.empty() || saved_verbosity.empty()) {
+			diag("DebugLogScope: cannot read current debug conf (debug build required)");
+			return;
+		}
+		enabled = execAdmin(admin, "SET admin-debug_output='3'") &&
+		          execAdmin(admin, "LOAD ADMIN VARIABLES TO RUNTIME") &&
+		          execAdmin(admin, "UPDATE debug_levels SET verbosity=7 WHERE module='debug_mysql_com'") &&
+		          execAdmin(admin, "LOAD DEBUG TO RUNTIME");
+	}
+	~DebugLogScope() {
+		if (saved_output.empty() || saved_verbosity.empty()) return;
+		execAdmin(admin, "SET admin-debug_output='" + saved_output + "'");
+		execAdmin(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+		execAdmin(admin, "UPDATE debug_levels SET verbosity=" + saved_verbosity +
+		                 " WHERE module='debug_mysql_com'");
+		execAdmin(admin, "LOAD DEBUG TO RUNTIME");
+	}
+	DebugLogScope(const DebugLogScope&) = delete;
+	DebugLogScope& operator=(const DebugLogScope&) = delete;
+};
+
+// Single-pass scan for BOTH the libpq-fallback tripwire and the (debug-level)
+// "Describe served from metadata cache" marker, counting the latter. One
+// combined scan is mandatory — wait_for_log_match / get_matching_lines consume
+// the stream forward, so two sequential scans for two regexes would each miss
+// lines the other already read past (same reasoning as scanNativePhaseLog).
+// Polls until `want_hits` markers are seen or `wait_ms` elapses.
+static void scanDescribeCachePhaseLog(bool& fell_back, int& cache_hits,
+                                      int want_hits, uint32_t wait_ms) {
+	const std::regex re_fallback(".*falling back to libpq.*");
+	const std::regex re_hit(".*Describe served from metadata cache.*");
+	fell_back = false;
+	cache_hits = 0;
 	uint32_t elapsed = 0;
 	while (true) {
 		f_proxysql_log.clear(f_proxysql_log.rdstate() &
 		                     ~std::ios_base::eofbit & ~std::ios_base::failbit);
 		std::string line;
 		while (std::getline(f_proxysql_log, line)) {
-			if (std::regex_match(line, re)) hits++;
+			if (!fell_back && std::regex_match(line, re_fallback)) fell_back = true;
+			if (std::regex_match(line, re_hit)) cache_hits++;
 		}
-		if (hits > 0 || elapsed >= wait_ms) return hits;
+		if (cache_hits >= want_hits || elapsed >= wait_ms) return;
 		usleep(100000);
 		elapsed += 100;
 	}
@@ -768,6 +832,13 @@ static ExtQCaseRunResult run_describe_cached(PGconn* admin, bool first_native,
                                              const std::string& stmt_name,
                                              const std::string& query,
                                              const std::vector<ServerRow>& saved) {
+	// Route the debug-level cache-hit marker into proxysql.log for the whole
+	// case; restored automatically on every exit path (RAII).
+	DebugLogScope debug_scope(admin);
+	if (!debug_scope.enabled) {
+		return {false, false, "admin: enabling debug-log routing failed"};
+	}
+
 	// ---- first mode (takes the miss; populates via its capture path) ----
 	if (!setNativeMode(admin, first_native) || !flushBackendPool(admin, BACKEND_HG, saved)) {
 		return {false, false, "admin: set first mode failed"};
@@ -784,8 +855,9 @@ static ExtQCaseRunResult run_describe_cached(PGconn* admin, bool first_native,
 	PGConnPtr c2 = open_client_conn();
 	if (!c2 || PQstatus(c2.get()) != CONNECTION_OK) return {false, false, "second conn failed"};
 	std::string out2 = run_describe_twice(c2.get(), stmt_name, query);
-	bool fell_back = nativeFallbackObserved();
-	int cache_hits = countDescribeCacheHits(2000);
+	bool fell_back = false;
+	int cache_hits = 0;
+	scanDescribeCachePhaseLog(fell_back, cache_hits, /*want_hits=*/2, 3000);
 
 	// Within-mode miss==hit byte-parity (first mode): D1 and D2 serials must match.
 	auto d1 = out1.find("D1:"), d2 = out1.find(";D2:");
