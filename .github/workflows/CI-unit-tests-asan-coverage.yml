@@ -77,9 +77,17 @@ jobs:
     # though the app is installed. We keep `contents: read` (the
     # GitHub default) explicit so granting id-token: write here
     # doesn't implicitly widen any other scope.
-    permissions:
-      contents: read
-      id-token: write
+    # `write-all` mirrors what every TAP-group reusable workflow on
+    # GH-Actions declares. The narrower
+    #   contents: read / id-token: write / checks: write
+    # set was insufficient: the final `LouisBrunner/checks-action@v2.0.0`
+    # step kept failing with "Resource not accessible by integration"
+    # because this workflow runs via `workflow_run` from CI-trigger and
+    # the GITHUB_TOKEN it gets is the default-branch context, which
+    # can't act on a PR-branch SHA without broader scopes (matches the
+    # exact same reason the legacy-g2-genai pipeline ratcheted up to
+    # write-all in PR #5818). id-token:write is included automatically.
+    permissions: write-all
 
     steps:
 

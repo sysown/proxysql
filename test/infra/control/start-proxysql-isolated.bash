@@ -17,6 +17,11 @@ NETWORK_NAME="${INFRA_ID}_backend"
 PROXY_CONTAINER="proxysql.${INFRA_ID}"
 INFRA_LOGS_PATH="${WORKSPACE}/ci_infra_logs"
 PROXY_DATA_DIR="${INFRA_LOGS_PATH}/${INFRA_ID}/proxysql"
+PGSQL_SOCKET_HOST_DIR="${INFRA_LOGS_PATH}/${INFRA_ID}/pgsql-sockets"
+
+# SUDO helper: empty when already root (the CI runner container runs as root).
+SUDO=""
+if [ "$(id -u)" != "0" ]; then SUDO="sudo"; fi
 GENERIC_CONFIG="${SCRIPT_DIR}/proxysql-ci.cnf"
 
 # Per-group override: a TAP group may need a config that differs from
@@ -151,6 +156,34 @@ if [ "${PROXYSQL_LOAD_GENAI_PLUGIN:-0}" = "1" ]; then
     echo ">>> Mounting genai plugin .so into ProxySQL container"
 fi
 
+# Mount .gcno files into the proxysql container at the compile-time path
+# so gcov's runtime (invoked via the `PROXYSQL GCOV DUMP` admin command
+# from the tester) can resolve the .gcda files it writes.
+#
+# The proxysql binary was compiled inside the build container with the
+# source tree bind-mounted at /opt/proxysql/ (docker-compose.yml line:
+# `- ./:/opt/proxysql/`), so .gcno paths embedded in the binary point to
+# /opt/proxysql/{lib,src}/obj/X.gcno. Without these mounts the runtime
+# .gcda files come out with an empty `current_working_directory` field
+# and fastcov reports `files: []` for every one of them -- the bug that
+# silently zeroed out daemon-side coverage for PR #5818 (only ~5,694
+# lines / 27 files from `tap-legacy-g2` were ever real; everything else
+# was missing).
+#
+# Always-on: harmless when the .gcno files aren't present (e.g.
+# non-coverage builds) -- the conditional below just doesn't add
+# anything to GCOV_MOUNTS.
+GCOV_MOUNTS=""
+if compgen -G "${WORKSPACE}/lib/obj/*.gcno" >/dev/null; then
+    GCOV_MOUNTS="${GCOV_MOUNTS} -v ${WORKSPACE}/lib/obj:/opt/proxysql/lib/obj:ro"
+fi
+if compgen -G "${WORKSPACE}/src/obj/*.gcno" >/dev/null; then
+    GCOV_MOUNTS="${GCOV_MOUNTS} -v ${WORKSPACE}/src/obj:/opt/proxysql/src/obj:ro"
+fi
+if [ -n "${GCOV_MOUNTS}" ]; then
+    echo ">>> Mounting .gcno files into ProxySQL container for gcov runtime resolution"
+fi
+
 # Simulator-backed TAP groups (aurora-sim, galera-sim, ...) export a
 # CLUSTER_SIM_HOST_FILE pointing at a plain "hostname ip" list. Inject each
 # entry as --add-host so ProxySQL's container /etc/hosts resolves the simulated
@@ -164,6 +197,30 @@ if [ -n "${CLUSTER_SIM_HOST_FILE:-}" ] && [ -f "${CLUSTER_SIM_HOST_FILE}" ]; the
     done < "${CLUSTER_SIM_HOST_FILE}"
 fi
 
+# Mount the host directory that holds the PostgreSQL Unix-domain socket
+# (created by docker-pgsql16-single's pgdb1 container) into ProxySQL at the
+# same path the PostgreSQL container exposes it, so a pgsql_servers row with
+# hostname='/var/run/postgresql-shared' and port=0 resolves correctly.
+PGSQL_SOCKET_MOUNT=""
+if [ "${PROXYSQL_NEEDS_PGSQL_SOCKET:-0}" = "1" ]; then
+    $SUDO mkdir -p "${PGSQL_SOCKET_HOST_DIR}"
+    $SUDO chmod 777 "${PGSQL_SOCKET_HOST_DIR}"
+    PGSQL_SOCKET_MOUNT="-v ${PGSQL_SOCKET_HOST_DIR}:/var/run/postgresql-shared:rw"
+    echo ">>> Mounting PostgreSQL Unix-socket directory: ${PGSQL_SOCKET_HOST_DIR} -> /var/run/postgresql-shared"
+fi
+
+# GCOV_PREFIX_STRIP=2 strips "opt/proxysql" from the absolute path the
+# .gcno embeds — the workspace is mounted at /opt/proxysql in the build
+# container (see docker-compose.yml), so .gcno files record paths like
+# /opt/proxysql/{lib,src}/obj/X.gcno. With STRIP=2 the daemon writes
+# .gcda files to /gcov/{lib,src}/obj/X.gcda, preserving the {lib,src}
+# directory that the collect_coverage trap in run-tests-isolated.bash
+# uses to find each matching .gcno under ${WORKSPACE} and copy it next
+# to its .gcda before fastcov runs. STRIP=3 (the prior value) over-
+# stripped one extra component and dropped .gcda files at
+# /gcov/obj/X.gcda with no {lib,src} directory; the .gcno copy loop
+# couldn't find matches, fastcov produced "files: []" for every entry,
+# and zero daemon-side coverage made it into Codecov.
 echo ">>> Starting ProxySQL container: ${PROXY_CONTAINER} (cluster nodes: ${NUM_NODES})"
 docker run -d \
     --name "${PROXY_CONTAINER}" \
@@ -177,8 +234,10 @@ docker run -d \
     -v "${COVERAGE_DATA_DIR}:/gcov" \
     ${MYSQLX_PLUGIN_MOUNT} \
     ${GENAI_PLUGIN_MOUNT} \
+    ${GCOV_MOUNTS} \
+    ${PGSQL_SOCKET_MOUNT} \
     -e GCOV_PREFIX="/gcov" \
-    -e GCOV_PREFIX_STRIP="3" \
+    -e GCOV_PREFIX_STRIP="2" \
     proxysql-ci-base:latest \
     /bin/bash -c "${STARTUP_CMD}"
 

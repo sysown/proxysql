@@ -17,9 +17,19 @@
 # diagnostic # comments visible in the TAP output.
 
 set -u
+# pipefail so the python3 ... | sed pipeline below propagates the
+# Python exit code rather than always returning the (always 0) sed
+# exit. Without it a missing harness file or a Python exception
+# silently produces ok TAP output.
+set -o pipefail
 
+# Walk up from THIS SCRIPT'S directory (not $PWD), which the test
+# runner sets to /var/lib/proxysql inside the test-runner container.
+# $0 is mounted from the host worktree at its real path, so its
+# parent chain reaches src/proxysql_global.cpp regardless of $PWD.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROXYSQL_PATH=$(
-    d="$PWD"
+    d="$SCRIPT_DIR"
     for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
         if [ -f "$d/src/proxysql_global.cpp" ]; then echo "$d"; exit 0; fi
         if [ "$d" = "/" ]; then break; fi
@@ -64,7 +74,7 @@ sigterm_scenario() {
         --proxysql-host "${PROXYSQL_HOST}" --proxysql-port "${PROXYSQL_PORT}" \
         --user "${TEST_USER}" --password "${TEST_PASS}" \
         --clients 5 --scenario sigterm \
-        --proxysql-pid-file /dev/null \
+        --external-kill \
         2>&1 | sed 's/^/# /'
     then
         echo "ok 1 - SIGTERM mid-traffic: every client received clean Mysqlx::Error 1053"

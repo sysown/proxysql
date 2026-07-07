@@ -74,25 +74,13 @@ static void test_backend_auth_state_transitions() {
 	write_x_frame(fds[1], Mysqlx::ServerMessages_Type_CONN_CAPABILITIES,
 		reinterpret_cast<const uint8_t*>(caps_str.data()), caps_str.size());
 
-	rc = conn.step_auth();
-	ok(rc == 1, "step_auth returns 1 after CapSet sent");
-	ok(conn.get_auth_state() == MysqlxConnection::BACKEND_AUTH_CAPABILITIES_SET_SENT,
-	   "state is CAPABILITIES_SET_SENT");
-
-	usleep(10000);
-	r = read(fds[1], buf, sizeof(buf));
-	ok(r >= 5, "read CapabilitiesSet from wire");
-	if (r >= 5) {
-		ok(buf[4] == Mysqlx::ClientMessages_Type_CON_CAPABILITIES_SET,
-		   "sent CapabilitiesSet message type");
-	}
-
-	write_x_frame(fds[1], Mysqlx::ServerMessages_Type_OK, nullptr, 0);
-
+	// step_auth_capabilities_get_sent skips CapabilitiesSet when no TLS
+	// is required — authentication.mechanisms is a read-only capability
+	// upstream — and goes straight to AuthenticateStart.
 	rc = conn.step_auth();
 	ok(rc == 1, "step_auth returns 1 after AuthStart sent");
 	ok(conn.get_auth_state() == MysqlxConnection::BACKEND_AUTH_AUTHENTICATE_START_SENT,
-	   "state is AUTHENTICATE_START_SENT");
+	   "state is AUTHENTICATE_START_SENT (CapSet step skipped, plaintext path)");
 
 	usleep(10000);
 	r = read(fds[1], buf, sizeof(buf));
@@ -130,11 +118,22 @@ static void test_backend_auth_state_transitions() {
 		   "sent AuthenticateContinue response type");
 		Mysqlx::Session::AuthenticateContinue resp;
 		if (resp.ParseFromArray(buf + 5, r - 5)) {
-			ok(!resp.auth_data().empty(), "auth response has data");
-			ok(resp.auth_data()[0] == '*', "auth response starts with *");
+			// MYSQL41 AuthenticateContinue payload to the upstream X
+			// server is `schema\0user\0*hex_scramble`. Verify the prefix
+			// + the leading '*' of the scramble section so we catch a
+			// regression to the old bare `*hex_scramble` form.
+			const std::string& ad = resp.auth_data();
+			ok(!ad.empty(), "auth response has data");
+			const std::string expected_prefix =
+				std::string("testdb") + std::string("\0", 1) +
+				std::string("testuser") + std::string("\0", 1) +
+				std::string("*");
+			ok(ad.size() >= expected_prefix.size() &&
+			   ad.compare(0, expected_prefix.size(), expected_prefix) == 0,
+			   "auth response is schema\\0user\\0*hex_scramble");
 		} else {
 			ok(false, "parsed auth response");
-			ok(false, "auth response starts with *");
+			ok(false, "auth response is schema\\0user\\0*hex_scramble");
 		}
 	}
 

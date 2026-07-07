@@ -120,7 +120,7 @@ mysql> INSERT INTO mysql_users (username, password) VALUES ('user1', '123456');
 
 #
 # Because of the multi-layered configuration system, this user is right now only
-# in memory (so not comitted to runtime).
+# in memory (so not committed to runtime).
 # 
 ```
 

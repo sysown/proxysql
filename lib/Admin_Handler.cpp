@@ -1979,9 +1979,13 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			) {
 				proxy_info("Received %s command\n", query_no_space);
 				ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-				SPA->load_ldap_variables_to_runtime();
+				FlushVariableStats stats = SPA->load_ldap_variables_to_runtime();
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded ldap variables to RUNTIME\n");
-				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+				char info[160];
+				snprintf(info, sizeof(info),
+					"Records: %d Updated: %d Rejected: %d Unknown: %d",
+					stats.records, stats.updated, stats.rejected, stats.unknown);
+				SPA->send_ok_msg_to_client(sess, info, 0, query_no_space);
 				return false;
 			}
 	
@@ -2078,19 +2082,27 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			if (is_pgsql) {
 				if (is_admin_command_or_alias(LOAD_PGSQL_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length)) {
 					ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
-					SPA->load_pgsql_variables_to_runtime();
+					FlushVariableStats stats = SPA->load_pgsql_variables_to_runtime();
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql variables to RUNTIME\n");
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql variables to RUNTIME\n");
-					SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+					char info[160];
+					snprintf(info, sizeof(info),
+						"Records: %d Updated: %d Rejected: %d Unknown: %d",
+						stats.records, stats.updated, stats.rejected, stats.unknown);
+					SPA->send_ok_msg_to_client(sess, info, 0, query_no_space);
 					return false;
 				}
 			}
 			else {
 				if (is_admin_command_or_alias(LOAD_MYSQL_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length)) {
 					ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
-					SPA->load_mysql_variables_to_runtime();
+					FlushVariableStats stats = SPA->load_mysql_variables_to_runtime();
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql variables to RUNTIME\n");
-					SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+					char info[160];
+					snprintf(info, sizeof(info),
+						"Records: %d Updated: %d Rejected: %d Unknown: %d",
+						stats.records, stats.updated, stats.rejected, stats.unknown);
+					SPA->send_ok_msg_to_client(sess, info, 0, query_no_space);
 					return false;
 			}
 		}

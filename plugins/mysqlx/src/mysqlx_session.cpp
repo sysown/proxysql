@@ -2,6 +2,8 @@
 #include "mysqlx_thread.h"
 #include "mysqlx_protocol.h"
 #include "mysqlx_stats.h"
+#include "proxysql.h"
+#include "proxysql_debug.h"
 
 #include "mysqlx.pb.h"
 #include "mysqlx_connection.pb.h"
@@ -917,14 +919,67 @@ void MysqlxSession::handler_auth_challenge_response() {
 	client_ds_.pop_frame();
 
 	const std::string& auth_data = auth_cont.auth_data();
-	if (auth_data.size() > 1 && auth_data[0] == '*') {
-		std::string hex_scramble = auth_data.substr(1);
-		std::vector<uint8_t> scramble;
-		if (!mysqlx_hex_decode(hex_scramble, scramble) || scramble.size() != 20) {
-			send_error(1045, "Invalid scramble format", true);
-			healthy = false;
-			return;
+	// AuthenticateContinue.auth_data carries the MYSQL41 client response.
+	// Three on-the-wire shapes are accepted here:
+	//   1. Standard MySQL X protocol, raw scramble:
+	//        `<authzid>\0<authcid>\0<20 raw bytes>`
+	//      (mysql-connector-python, MySQL Shell, libmysqlxclient — what
+	//      every off-the-shelf X-Protocol client sends; matches what the
+	//      upstream MySQL X plugin expects on the backend side.)
+	//   2. Standard MySQL X protocol, hex-encoded scramble:
+	//        `<authzid>\0<authcid>\0*<40 hex chars>`
+	//      (older mysql-shell and some Java drivers prefer this form.)
+	//   3. Legacy ProxySQL bare hex form: `*<40 hex chars>`
+	//      (emitted by our older TAP tests and in-tree unit tests that
+	//      drove the original wire protocol — kept for back-compat.)
+	// Pre-fix, shape #1 was treated as "missing `*hex` marker" and any
+	// stock client got 1045 even with valid credentials; that is the
+	// root cause behind the Python soak harness failure.
+	std::vector<uint8_t> scramble;
+	bool scramble_ok = false;
+	{
+		// Find the response body — for shapes #1 and #2 it lives after the
+		// second NUL; for shape #3 the whole buffer is the body.
+		// While we're at it, harvest the authcid (username) from the
+		// prefix and adopt it if the AuthStart leg left username_ empty.
+		// Stock X-protocol clients (the ones that send shape #1) put no
+		// credentials at all in AuthStart and only carry the user in
+		// AuthContinue; without this step identity_lookup_("") fails and
+		// reports a misleading 1045 even when the scramble checks out.
+		size_t body_start = 0;
+		size_t first_nul = auth_data.find('\0');
+		if (first_nul != std::string::npos) {
+			size_t second_nul = auth_data.find('\0', first_nul + 1);
+			if (second_nul != std::string::npos) {
+				body_start = second_nul + 1;
+				if (username_.empty()) {
+					username_ = auth_data.substr(first_nul + 1, second_nul - first_nul - 1);
+				}
+				if (schema_.empty()) {
+					schema_ = auth_data.substr(0, first_nul);
+				}
+			}
 		}
+		std::string body = auth_data.substr(body_start);
+		// Stock X-Protocol clients pad the MYSQL41 AuthContinue payload
+		// with a trailing NUL (the empty third field of `<authzid>\0<authcid>\0<response>\0`).
+		// Strip a single trailing NUL so the hex-decode path doesn't trip
+		// over the padding byte and misclassify a valid response as
+		// "Invalid scramble format".
+		while (!body.empty() && body.back() == '\0') body.pop_back();
+		if (!body.empty() && body[0] == '*') {
+			// Shapes #2 and #3: hex-encoded scramble after `*`.
+			std::string hex_scramble = body.substr(1);
+			if (mysqlx_hex_decode(hex_scramble, scramble) && scramble.size() == 20) {
+				scramble_ok = true;
+			}
+		} else if (body.size() == 20) {
+			// Shape #1: raw 20-byte SHA1 response.
+			scramble.assign(body.begin(), body.end());
+			scramble_ok = true;
+		}
+	}
+	if (scramble_ok) {
 
 		if (!identity_lookup_) {
 			// See handle_auth_plain — refuse auth when no identity source is
@@ -1390,10 +1445,9 @@ void MysqlxSession::handler_waiting_server_msg() {
 			const uint8_t* body = (frame.size() > 5) ? (frame.data() + 5) : nullptr;
 			size_t body_len = (frame.size() > 5) ? (frame.size() - 5) : 0;
 			if (!is_notice_frame_valid(body, body_len)) {
-				fprintf(stderr,
-					"mysqlx: dropping malformed/unknown-type NOTICE frame from backend "
-					"(route=%s, hostgroup=%d, body_len=%zu)\n",
-					route_name_.c_str(), target_hostgroup_, body_len);
+				proxy_error("mysqlx: dropping malformed/unknown-type NOTICE frame from backend "
+				            "(route=%s, hostgroup=%d, body_len=%zu)\n",
+				            route_name_.c_str(), target_hostgroup_, body_len);
 				server_ds().pop_frame();
 				continue;
 			}
@@ -1483,10 +1537,9 @@ void MysqlxSession::handler_session_reset_waiting() {
 			const uint8_t* body = (frame.size() > 5) ? (frame.data() + 5) : nullptr;
 			size_t body_len = (frame.size() > 5) ? (frame.size() - 5) : 0;
 			if (!is_notice_frame_valid(body, body_len)) {
-				fprintf(stderr,
-					"mysqlx: dropping malformed/unknown-type NOTICE frame "
-					"during SESS_RESET (route=%s, hostgroup=%d, body_len=%zu)\n",
-					route_name_.c_str(), target_hostgroup_, body_len);
+				proxy_error("mysqlx: dropping malformed/unknown-type NOTICE frame "
+				            "during SESS_RESET (route=%s, hostgroup=%d, body_len=%zu)\n",
+				            route_name_.c_str(), target_hostgroup_, body_len);
 				server_ds().pop_frame();
 				continue;
 			}
@@ -1961,13 +2014,11 @@ void MysqlxSession::handler_tls_accept_init() {
 			unsigned long ssl_err = ERR_get_error();
 			if (ssl_err != 0) {
 				ERR_error_string_n(ssl_err, err_buf, sizeof(err_buf));
-				fprintf(stderr,
-					"mysqlx: frontend TLS handshake failed (class=%d): %s\n",
-					static_cast<int>(cls), err_buf);
+				proxy_error("mysqlx: frontend TLS handshake failed (class=%d): %s\n",
+				            static_cast<int>(cls), err_buf);
 			} else {
-				fprintf(stderr,
-					"mysqlx: frontend TLS handshake failed (class=%d, no OpenSSL detail)\n",
-					static_cast<int>(cls));
+				proxy_error("mysqlx: frontend TLS handshake failed (class=%d, no OpenSSL detail)\n",
+				            static_cast<int>(cls));
 			}
 			send_error(mysqlx_frontend_tls_error_code(cls),
 			           mysqlx_frontend_tls_error_message(cls));
@@ -2240,7 +2291,18 @@ void MysqlxSession::handler_connecting_server() {
 		}
 
 		if (identity_) {
-			backend_conn_->set_backend_password(identity_->backend_password.c_str());
+			// Pair the backend password with the backend username pick above:
+			// service_account rows carry both backend_username and backend_password
+			// explicitly; mapped rows leave both empty and reuse the frontend
+			// credentials (username_ above, identity_->password here). Without
+			// this fallback, `mapped` mode sends an empty password to the
+			// backend X plugin and every backend auth fails with 1045
+			// regardless of how the frontend was provisioned.
+			const std::string& backend_password =
+				(identity_ && !identity_->backend_password.empty())
+					? identity_->backend_password
+					: identity_->password;
+			backend_conn_->set_backend_password(backend_password.c_str());
 		}
 	}
 
