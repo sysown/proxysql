@@ -3050,15 +3050,6 @@ inline void build_backend_stmt_name(char* buf, unsigned int stmt_backend_id) {
 int PgSQL_Session::RunQuery(PgSQL_Data_Stream* myds, PgSQL_Connection* myconn) {
 	PROXY_TRACE2();
 	int rc = 0;
-	// Native pass-through for extended query: stub. The full implementation
-	// needs careful integration with the session's main loop state machine
-	// (status transitions, I/O scheduling, response forwarding) and is
-	// documented as the next step in PR 3 of the design spec. For now the
-	// connection's async_query detects native+extended_query and returns
-	// ERRCODE_INTERNAL_ERROR (visible as a P0001 on the wire), which the
-	// pgsql-native_prepared-t test correctly identifies as a gap.
-	// See handler___status_PROCESSING_EXTENDED_QUERY_SYNC for the dispatch
-	// point that needs the wiring.
 	switch (status) {
 	case PROCESSING_QUERY:
 		rc = myconn->async_query(myds->revents, myds->pgsql_real_query.QueryPtr, myds->pgsql_real_query.QuerySize);

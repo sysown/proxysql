@@ -1,6 +1,11 @@
 # PgSQL Native Protocol: Transactions, COPY, and Prepared Statements Coverage
 
-**Status:** Design — awaiting sign-off
+**Status:** Superseded in part (2026-07-07). PR 1 (tests) implemented as designed. PR 2 re-scoped by
+user decision: COPY hardening + truthful coverage tracking, session fast_forward KEPT for COPY IN
+(see `2026-07-07-pgsql-native-copy-harden-extq-wiring` plan). PR 3's §3.3 raw pass-through was
+implemented, then REPLACED by user decision with the prepared-statement-pipeline design — see
+`2026-07-07-pgsql-native-extq-stmt-pipeline-design.md` (native extq now retains GloPgStmt /
+local_stmts / backend-id reuse with only the wire layer swapped, plus Describe metadata caching).
 **Date:** 2026-06-14
 **Branch:** `feature/pgsql-native-backend-protocol`
 **Author:** Claude (designed with René Cannaò)

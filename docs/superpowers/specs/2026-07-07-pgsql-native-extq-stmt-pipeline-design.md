@@ -1,7 +1,9 @@
 # PgSQL Native Extended Query via the Prepared-Statement Pipeline — Design
 
 **Date:** 2026-07-07
-**Status:** Approved in-session by René Cannaò (4 decisions recorded below)
+**Status:** Parity + Describe cache IMPLEMENTED (Tasks A-E of the companion plan, 2026-07-07);
+named portals (§4) = next phase, plan to follow. Approved in-session by René Cannaò (4 decisions
+recorded below)
 **Branch:** `feature/pgsql-native-backend-protocol`
 **Supersedes:** §3.3 of `2026-06-14-pgsql-native-txn-copy-prepared-design.md` (raw pass-through, "no pooling") — that approach was implemented (commits `051dd25ec`..`a254976dd`) and is REMOVED by this design.
 
