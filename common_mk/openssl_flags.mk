@@ -37,11 +37,20 @@ ifeq ($(UNAME_S),Darwin)
             LIB_CRYPTO_PATH := $(shell find $(SSL_LDIR) -maxdepth 1 -name "libcrypto.a" 2>/dev/null | head -n 1)
         endif
 else
-        LIB_SSL_PATH := $(shell find $(SSL_LDIR) -maxdepth 1 -name "libssl.so*" 2>/dev/null | head -n 1)
+        # Prefer OpenSSL 3.x when multiple versions coexist in SSL_LDIR
+        # (a bare libssl.so* first-match can pick a stale 1.1 library);
+        # fall back to any shared lib, then static.
+        LIB_SSL_PATH := $(shell find $(SSL_LDIR) -maxdepth 1 -name "libssl.so*3*" 2>/dev/null | head -n 1)
+        ifeq ($(LIB_SSL_PATH),)
+            LIB_SSL_PATH := $(shell find $(SSL_LDIR) -maxdepth 1 -name "libssl.so*" 2>/dev/null | head -n 1)
+        endif
         ifeq ($(LIB_SSL_PATH),)
             LIB_SSL_PATH := $(shell find $(SSL_LDIR) -maxdepth 1 -name "libssl.a" 2>/dev/null | head -n 1)
         endif
-        LIB_CRYPTO_PATH := $(shell find $(SSL_LDIR) -maxdepth 1 -name "libcrypto.so*" 2>/dev/null | head -n 1)
+        LIB_CRYPTO_PATH := $(shell find $(SSL_LDIR) -maxdepth 1 -name "libcrypto.so*3*" 2>/dev/null | head -n 1)
+        ifeq ($(LIB_CRYPTO_PATH),)
+            LIB_CRYPTO_PATH := $(shell find $(SSL_LDIR) -maxdepth 1 -name "libcrypto.so*" 2>/dev/null | head -n 1)
+        endif
         ifeq ($(LIB_CRYPTO_PATH),)
             LIB_CRYPTO_PATH := $(shell find $(SSL_LDIR) -maxdepth 1 -name "libcrypto.a" 2>/dev/null | head -n 1)
         endif
