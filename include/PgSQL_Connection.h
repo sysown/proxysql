@@ -768,16 +768,15 @@ public:
 
 	// --- Native extended-query pass-through (PR 3) ---
 	// Buffer one raw client message (type + length + body, as received) for the
-	// in-flight extended-query cycle. On Sync the connection flushes the whole
-	// frame verbatim to the backend. The session's PGSQL_PARSE/BIND/DESCRIBE/
-	// EXECUTE/CLOSE handlers call this; the session's PGSQL_SYNC handler calls
-	// native_extq_flush_and_drain().
+	// in-flight extended-query cycle. On Sync the session transfers the captured
+	// raw client frame into native_extq_frame and calls async_native_extq().
 	void native_extq_buffer(const char* data, size_t len);
-	// Forward every buffered message to the backend, then drain the backend's
-	// response (ParseComplete/BindComplete/RowDescription/DataRow/CommandComplete/
-	// ReadyForQuery, etc.) into the existing framer path. Returns: 1 = cycle
-	// complete (ReadyForQuery seen), 0 = need more I/O, -1 = fatal.
-	int native_extq_flush_and_drain(short event);
+	// Drive one native extended-query cycle (frame flush + drain to
+	// ReadyForQuery) through the standard ASYNC_QUERY_* state machine.
+	// Returns 0 = cycle complete (including backend SQL errors — the
+	// ErrorResponse was forwarded verbatim), -1 = transport/protocol
+	// failure, 1 = pending I/O (async_exit_status/wait_events set).
+	int async_native_extq(short event);
 	// Discard any buffered extended-query messages (e.g. on error/reset).
 	void native_extq_reset();
 

@@ -2606,6 +2606,19 @@ __implicit_sync:
 							bind_waiting_for_execute.reset(nullptr);
 							extended_query_exec_qp = true;
 
+							// Native extended-query pass-through: raw client bytes were
+							// captured at intake (pgsql-use_native_backend_protocol on and
+							// no gated statement). Drive it entirely from the main handler
+							// loop's PROCESSING_EXTENDED_QUERY_SYNC case, which owns backend
+							// acquisition (CONNECTING_SERVER), poll re-arm, and finishQuery
+							// on completion. We can't NEXT_IMMEDIATE from inside
+							// get_pkts_from_client, so set the status and return 0 (same
+							// pattern as the fast_forward CONNECTING_SERVER hand-off above).
+							if (native_extq_client_frame.empty() == false) {
+								set_status(PROCESSING_EXTENDED_QUERY_SYNC);
+								return 0;
+							}
+
 						__run_sync_again:
 							int rc = handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_SYNC();
 
@@ -3176,9 +3189,24 @@ handler_again:
 	case PROCESSING_EXTENDED_QUERY_SYNC:
 	{
 		int rc = handler___status_PROCESSING_EXTENDED_QUERY_SYNC();
-		if (rc == -1) { 
+		if (rc == -1) {
 			handler_ret = -1;
 			return handler_ret;
+		}
+		if (rc == 3) {
+			// Native pass-through needs a backend connection first.
+			previous_status.push(PROCESSING_EXTENDED_QUERY_SYNC);
+			NEXT_IMMEDIATE(CONNECTING_SERVER);
+		}
+		if (rc == 1 && status == PROCESSING_EXTENDED_QUERY_SYNC) {
+			// Native pass-through waiting on backend I/O. Break to the poll loop:
+			// control reaches __exit_DSS__STATE_NOT_INITIALIZED (writeout + poll
+			// re-arm), and set_pollout() picks up myconn->wait_events (DSS is
+			// STATE_MARIADB_QUERY) so the thread re-enters this case on the next
+			// event. (The libpq per-message path changes status to
+			// PROCESSING_STMT_* before returning 1, so it is excluded by the
+			// status check above and continues via goto handler_again below.)
+			break;
 		}
 
 		// Extended query synchronization complete; clean up and prepare for next command
@@ -7226,6 +7254,11 @@ void PgSQL_Session::free_native_extq_client_frame() {
 		if (p.ptr) l_free(p.size, p.ptr);
 	}
 	native_extq_client_frame.clear();
+	// Clear the COPY/LISTEN gate on every frame-free (all cycle-end paths call
+	// this) so it can never leak into the next batch and suppress its capture.
+	// The Parse-intake gate sets native_extq_gated AFTER its free call, so this
+	// reset does not interfere with in-batch gating.
+	native_extq_gated = false;
 }
 
 int  PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_SYNC() {
@@ -7255,30 +7288,45 @@ int  PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_S
 		return 0;
 	}
 
-	// Native pass-through dispatch happens in
-	// handler___status_PROCESSING_EXTENDED_QUERY_SYNC below, after the
-	// session has bound a backend connection. At Sync-receipt time the
-	// backend is not yet associated (mybe->server_myds->myconn may be
-	// null), so we cannot decide here.
+	// Native pass-through dispatch and backend acquisition both happen in
+	// handler___status_PROCESSING_EXTENDED_QUERY_SYNC below: if raw client
+	// bytes were captured at intake and no backend is bound yet, that function
+	// returns 3 so the main loop connects a backend (CONNECTING_SERVER) and
+	// re-enters, at which point the native/libpq decision is made.
 
 	return handler___status_PROCESSING_EXTENDED_QUERY_SYNC();
 }
 
 int PgSQL_Session::handler___status_PROCESSING_EXTENDED_QUERY_SYNC() {
 	PROXY_TRACE();
-	// Native pass-through dispatch. When the session has a backend connection
-	// bound and that connection is in native mode, forward all buffered raw
-	// extended-query messages (Parse/Bind/Describe/Execute/Close) to the
-	// backend verbatim via PgSQL_Connection::native_extq_flush_and_drain, then
-	// hand the response back to the client. See design spec §3.3.
-	// NOTE: the full integration with the session's main loop state machine
-	// is documented as a follow-up (PR 3). For now the connection's
-	// async_query detects native+extended_query and returns
-	// ERRCODE_INTERNAL_ERROR (visible as XX000 on the wire), which the
-	// pgsql-native_prepared-t test correctly identifies as a gap.
-	if (mybe && mybe->server_myds && mybe->server_myds->myconn &&
-	    mybe->server_myds->myconn->native_mode) {
-		return handler_native_extended_query_sync();
+	// Native pass-through dispatch. Eligible when raw client bytes were captured
+	// at intake (pgsql-use_native_backend_protocol was on), or when a native
+	// pass-through drive is already in flight on the bound connection. See
+	// design spec §3.3 and handler_native_extended_query_sync.
+	if (native_extq_client_frame.empty() == false ||
+	    (mybe && mybe->server_myds && mybe->server_myds->myconn &&
+	     mybe->server_myds->myconn->native_mode &&
+	     mybe->server_myds->myconn->async_state_machine != ASYNC_IDLE)) {
+		// The second disjunct covers re-entry mid-cycle: the frame was already
+		// transferred to the connection and the drive is in flight.
+		if (mybe == NULL || mybe->server_myds == NULL ||
+		    mybe->server_myds->myconn == NULL ||
+		    mybe->server_myds->DSS == STATE_NOT_INITIALIZED) {
+			// No backend yet: connect first. The caller pushes previous_status
+			// and NEXT_IMMEDIATE(CONNECTING_SERVER), which re-enters this status
+			// once the connection is established.
+			mybe = find_or_create_backend(current_hostgroup);
+			if (mybe->server_myds->DSS == STATE_NOT_INITIALIZED) {
+				return 3;   // caller: push status, NEXT_IMMEDIATE(CONNECTING_SERVER)
+			}
+		}
+		PgSQL_Connection* myconn = mybe->server_myds->myconn;
+		if (myconn->native_mode) {
+			return handler_native_extended_query_sync();
+		}
+		// Pooled libpq-mode connection: the raw frame is useless — free it and
+		// let the parsed-struct path below handle the cycle normally.
+		free_native_extq_client_frame();
 	}
 
 	// we have pending packets, so we will process them now
@@ -7330,61 +7378,73 @@ int PgSQL_Session::handler___status_PROCESSING_EXTENDED_QUERY_SYNC() {
 	return rc;
 }
 
-// Native pass-through: the client sent one or more Parse/Bind/Describe/
-// Execute/Close messages, terminated by Sync. The session's PGSQL_PARSE /
-// PGSQL_BIND / ... handlers already buffered the raw client bytes into the
-// connection's native_extq_frame. Here we flush them verbatim to the
-// backend, then drain the backend's response (ParseComplete, BindComplete,
-// RowDescription, DataRow, CommandComplete, ErrorResponse, ReadyForQuery).
-// On ReadyForQuery we hand control back to the normal handler loop.
+// Native extended-query pass-through (see design spec §3.3 and the comment
+// block above async_native_extq in PgSQL_Connection.cpp). Called from
+// handler___status_PROCESSING_EXTENDED_QUERY_SYNC once a NATIVE backend
+// connection is bound. Return codes: 0 = cycle complete (client response
+// queued), 1 = pending backend I/O (main loop must break to poll), -1 = fatal.
 //
-// We discard the parsed extended_query_frame entries as we go: the
-// connection owns the wire bytes; the parsed structures are no longer
-// needed for the native path. (The libpq path still uses them via
-// handler___status_PROCESSING_EXTENDED_QUERY_SYNC above.)
+// The connection owns the raw wire bytes for the cycle; the parsed
+// extended_query_frame structures are not used on the native path.
 int PgSQL_Session::handler_native_extended_query_sync() {
 	PROXY_TRACE();
-	PgSQL_Connection* myconn = mybe->server_myds->myconn;
+	PgSQL_Data_Stream* myds = mybe->server_myds;
+	PgSQL_Connection* myconn = myds->myconn;
 
-	// Allocate / reuse query_result for the backend response. The libpq path
-	// allocates it in ASYNC_USE_RESULT_START via PgSQL_Connection::init_query_result
-	// (which is private to PgSQL_Connection). We allocate directly here because
-	// we never go through that state machine on the native path.
-	if (myconn->query_result == nullptr) {
-		myconn->query_result = new PgSQL_Query_Result();
+	if (myconn->async_state_machine == ASYNC_IDLE) {
+		// First entry for this cycle: hand the raw client frame to the
+		// connection (ownership moves; no copy — the session vector is cleared
+		// WITHOUT freeing so the free sites in Task 4's cycle-end paths do not
+		// double-free) and pin the connection — named statements/portals created
+		// by the pass-through live only on this backend connection, so it must
+		// not be multiplexed away.
+		for (auto& p : native_extq_client_frame) {
+			myconn->native_extq_frame.push_back(p);
+		}
+		native_extq_client_frame.clear();
+		myconn->set_status(true, STATUS_PGSQL_CONNECTION_NO_MULTIPLEX);
+#ifdef DEBUG
+		dbg_extended_query_backend_conn = myconn;
+#endif
+		// query_result is allocated AND wired (proto/conn) by the connection's
+		// own state machine in ASYNC_USE_RESULT_START (init_query_result), which
+		// runs before any add_native_backend_message drains a message. Do NOT
+		// pre-allocate here: init_query_result() asserts(!query_result) under
+		// DEBUG, so a manual `new` would crash the debug build.
 	}
 
-	short event = 0; // The session main loop will set this from myds->revents
-	int rc = myconn->native_extq_flush_and_drain(event);
+	int rc = myconn->async_native_extq(myds->revents);
+	if (rc == 1) {
+		return 1;   // pending: main loop breaks; poll re-armed via DSS/wait_events
+	}
+
+	// Cycle over (complete or transport failure): parsed structs are no longer
+	// needed either way, and the connection's wire-byte frame is drained.
+	reset_extended_query_frame();   // also frees native_extq_client_frame (Task 4)
+	myconn->native_extq_reset();
+
 	if (rc < 0) {
-		// Fatal: connection broken. Clear the parsed frame (we no longer need
-		// anything from it) and let the session fall through to error handling.
-		reset_extended_query_frame();
-		myconn->native_extq_reset();
+		// Transport/protocol failure: no ReadyForQuery. Surface the connection
+		// error to the client and let the session error path destroy the
+		// backend connection.
+		if (myconn->is_error_present()) {
+			client_myds->myprot.generate_error_packet(true, true,
+				myconn->error_info.message.c_str(), myconn->error_info.code, false, true);
+		}
 		return -1;
 	}
-	if (rc == 0) {
-		// Need more I/O. The connection set async_exit_status to PG_EVENT_READ
-		// or PG_EVENT_WRITE. The session main loop will resume us on the
-		// appropriate signal by re-entering this handler.
-		return 1;
-	}
-	// rc == 1: cycle complete. The backend sent ReadyForQuery. The framer
-	// drained every message into query_result, which now has the entire
-	// backend response ready. Forward it to the client, then reset state.
-	reset_extended_query_frame();   // parsed structs no longer needed
-	myconn->native_extq_reset();     // connection's wire-bytes are drained
 
-	// Mirror what the libpq path does at the end of a query: hand the
-	// resultset to the client data stream via the session's helper.
+	// rc == 0: the full backend response (through ReadyForQuery, including any
+	// ErrorResponse, verbatim) is in query_result. Queue it to the client,
+	// then mirror the simple-query epilogue.
 	PgSQL_Result_to_PgSQL_wire(myconn, myconn->myds);
-
-	// Update the session's transaction state and other counters, mirroring
-	// the libpq path's handler() epilogue for completed queries.
 	handle_transaction_state();
-
-	// Hand control back to the main loop; the client will see a complete
-	// response and may send the next query.
+	// Release query_result (move to query_result_reuse) and reset the async
+	// state machine to ASYNC_IDLE — RequestEnd() does this for the simple-query
+	// and libpq extended-query paths, but the native pass-through never routes
+	// through RequestEnd, so without this the next cycle's init_query_result()
+	// would assert(!query_result) on the still-populated result.
+	myconn->async_free_result();
 	client_myds->setDSS_STATE_QUERY_SENT_NET();
 	client_myds->DSS = STATE_SLEEP;
 	status = WAITING_CLIENT_DATA;
@@ -7421,12 +7481,34 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_P
 	// Native pass-through: capture the raw client bytes now — a backend
 	// connection is usually NOT bound yet at intake, so the decision to use
 	// them (or free them) is made at Sync. See design spec §3.3.
+	//
+	// Gate statements the pass-through must not drive (COPY ... FROM
+	// STDIN|STDOUT in extended protocol, LISTEN): discard the captured frame so
+	// Sync falls into the libpq per-message path, whose existing gates produce
+	// the exact same error bytes as libpq mode. Match the SAME copy_cmd_matcher
+	// the libpq path uses (PROCESSING_STMT_PREPARE) for byte-parity.
 	if (pgsql_thread___use_native_backend_protocol) {
-		PtrSize_t raw;
-		raw.ptr = l_alloc(raw_size);
-		memcpy(raw.ptr, raw_ptr, raw_size);
-		raw.size = raw_size;
-		native_extq_client_frame.push_back(raw);
+		const PgSQL_Parse_Data& pd = parse_msg->data();
+		bool gated = false;
+		if (pd.query_string) {
+			if (strncasecmp("LISTEN ", pd.query_string, 7) == 0) gated = true;
+			re2::StringPiece m;
+			if (!gated && copy_cmd_matcher &&
+			    strcasestr(pd.query_string, "COPY ") != NULL &&
+			    copy_cmd_matcher->match(pd.query_string, &m)) gated = true;
+		}
+		if (gated) {
+			// Non-gated statements in the same batch then hit the async_query
+			// FEATURE_NOT_SUPPORTED safety net — a documented mixed-batch limit.
+			free_native_extq_client_frame();
+			native_extq_gated = true;
+		} else if (!native_extq_gated) {
+			PtrSize_t raw;
+			raw.ptr = l_alloc(raw_size);
+			memcpy(raw.ptr, raw_ptr, raw_size);
+			raw.size = raw_size;
+			native_extq_client_frame.push_back(raw);
+		}
 	}
 	extended_query_frame.push(std::move(parse_msg)); // we will process it later, after sync packet
 	return true;
@@ -7461,7 +7543,7 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_D
 	// Native pass-through: capture the raw client bytes now — a backend
 	// connection is usually NOT bound yet at intake, so the decision to use
 	// them (or free them) is made at Sync. See design spec §3.3.
-	if (pgsql_thread___use_native_backend_protocol) {
+	if (pgsql_thread___use_native_backend_protocol && !native_extq_gated) {
 		PtrSize_t raw;
 		raw.ptr = l_alloc(raw_size);
 		memcpy(raw.ptr, raw_ptr, raw_size);
@@ -7500,7 +7582,7 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_C
 	// Native pass-through: capture the raw client bytes now — a backend
 	// connection is usually NOT bound yet at intake, so the decision to use
 	// them (or free them) is made at Sync. See design spec §3.3.
-	if (pgsql_thread___use_native_backend_protocol) {
+	if (pgsql_thread___use_native_backend_protocol && !native_extq_gated) {
 		PtrSize_t raw;
 		raw.ptr = l_alloc(raw_size);
 		memcpy(raw.ptr, raw_ptr, raw_size);
@@ -7539,7 +7621,7 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_B
 	// Native pass-through: capture the raw client bytes now — a backend
 	// connection is usually NOT bound yet at intake, so the decision to use
 	// them (or free them) is made at Sync. See design spec §3.3.
-	if (pgsql_thread___use_native_backend_protocol) {
+	if (pgsql_thread___use_native_backend_protocol && !native_extq_gated) {
 		PtrSize_t raw;
 		raw.ptr = l_alloc(raw_size);
 		memcpy(raw.ptr, raw_ptr, raw_size);
@@ -7579,7 +7661,7 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_E
 	// Native pass-through: capture the raw client bytes now — a backend
 	// connection is usually NOT bound yet at intake, so the decision to use
 	// them (or free them) is made at Sync. See design spec §3.3.
-	if (pgsql_thread___use_native_backend_protocol) {
+	if (pgsql_thread___use_native_backend_protocol && !native_extq_gated) {
 		PtrSize_t raw;
 		raw.ptr = l_alloc(raw_size);
 		memcpy(raw.ptr, raw_ptr, raw_size);

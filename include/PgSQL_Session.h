@@ -233,6 +233,13 @@ private:
 	// Ownership moves to the connection's native_extq_frame at Sync when a
 	// native backend connection is bound; freed otherwise.
 	std::vector<PtrSize_t> native_extq_client_frame;
+	// Set true at Parse intake when the statement text matches a gate (COPY
+	// ... FROM STDIN|STDOUT in extended protocol, or LISTEN) that the native
+	// pass-through must NOT drive: the captured raw frame is discarded and the
+	// remaining intake handlers skip capture, so Sync falls into the libpq
+	// per-message path whose existing gates produce the exact same error bytes.
+	// Reset in reset_extended_query_frame().
+	bool native_extq_gated = false;
 
 	//int handler_ret;
 	void handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t*, bool*);
