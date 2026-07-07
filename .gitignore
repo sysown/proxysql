@@ -104,6 +104,8 @@ core
 
 #config
 proxysql.cnf*
+# ...but keep the vendored repl-suite config (global rule above would drop it):
+!test/repl/proxysql_repl_tests/conf/proxysql/proxysql.cnf
 proxysql.db*
 
 jeprof*heap
