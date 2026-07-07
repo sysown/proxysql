@@ -141,14 +141,15 @@ int main() {
 	 *     [P2] matching pattern     -> success
 	 *     [P3] invalid regex        -> rejected (fail-safe deny)
 	 *
- 	 *   COM_CHANGE_USER (2):
- 	 *     [C1] (skipped path or success path) CHANGE_USER to passthrough user -> rejected
- 	 *
- 	 *   Cleanup (2): DROP USER, restore globals
- 	 *
- 	 *   5 + 2 + 3 + 2 + 2 = 14.
- 	 */
- 	plan(14);
+	 *   COM_CHANGE_USER (2):
+	 *     [C1] fixture connection as regular user succeeds
+	 *     [C2] CHANGE_USER to passthrough user -> rejected
+	 *
+	 *   Cleanup (2): DROP USER, restore globals
+	 *
+	 *   5 + 2 + 3 + 2 + 2 = 14.
+	 */
+	plan(14);
 
 	if (cl.getEnv()) {
 		diag("CommandLine getEnv() failed");
@@ -370,7 +371,8 @@ int main() {
 	 *     the pre-CHANGE_USER connect; the CHANGE_USER rejection itself
 	 *     happens in process_pkt_COM_CHANGE_USER before any plugin work.
 	 *
-	 * Assertion: mysql_change_user returns non-zero (failure).
+	 * Assertions: fixture connection succeeds, then mysql_change_user
+	 * returns non-zero (failure).
 	 * ============================================================ */
 	{
 		set_and_load(admin, "SET mysql-passthrough_auth_username_pattern=''");
@@ -379,14 +381,16 @@ int main() {
 		const MYSQL* res = mysql_real_connect(
 			m, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0
 		);
+		ok(res != NULL, "[C1] Pre-CHANGE_USER fixture connection as '%s' succeeds", cl.username);
 		if (!res) {
 			diag("Pre-CHANGE_USER connect as '%s' failed: %s", cl.username, mysql_error(m));
-			ok(false, "[C1] Pre-CHANGE_USER fixture connection (skipped: connect failed)");
+			ok(false, "[C2] CHANGE_USER to passthrough user '%s' rejected (skipped: fixture connect failed)",
+				TEST_USER);
 		} else {
 			const int rc = mysql_change_user(m, TEST_USER, TEST_BACKEND_PW, NULL);
 			const unsigned int err = mysql_errno(m);
 			ok(rc != 0 && err == ER_ACCESS_DENIED_ERROR,
-				"[C1] CHANGE_USER to passthrough user '%s' rejected "
+				"[C2] CHANGE_USER to passthrough user '%s' rejected "
 				"(rc=%d, errno=%u, expected %u)",
 				TEST_USER, rc, err, (unsigned)ER_ACCESS_DENIED_ERROR);
 		}

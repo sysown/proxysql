@@ -27,20 +27,18 @@
  *      @c old_password. The pass-through cache HITS (frontend
  *      verification succeeds against the cached cleartext) and the
  *      session is marked @c passthrough_credential.
- *   6. Issue SELECT 1 over that session. ProxySQL needs a backend
- *      connection; the probe connection from step 2 was closed (one-
- *      shot, not pooled), so the pool is empty and a fresh backend
- *      conn is required. The connection attempt uses @c old_password
- *      and the backend now rejects with 1045.
+ *   6. Issue SELECT 1 with create_new_connection=1 over that session.
+ *      ProxySQL must create a fresh backend connection for the query.
+ *      The connection attempt uses @c old_password and the backend now
+ *      rejects with 1045.
  *   7. Re-read @c cache_invalidations and the cache row:
  *      cache_invalidations must have incremented AND the cache entry
  *      for the user must be gone.
  *
- * Step 6 is the load-bearing path. If the pool happens to have a
- * usable connection (e.g. parallel test load), the query won't trigger
- * the eviction hook and the test would yield a false negative -- the
- * counter delta assertion catches that case explicitly (delta == 0
- * → fail).
+ * Step 6 is the load-bearing path. The query annotation is intentional:
+ * relying on a pool-drain side effect is not robust enough because
+ * already-authenticated backend connections can remain valid after
+ * ALTER USER and can mask the stale-password connect path entirely.
  */
 #include <cstring>
 #include <string>
@@ -102,7 +100,8 @@ static int cache_entry_count_for(MYSQL* admin, const string& user) {
  * during query execution will produce @c { 0, 1045 }.
  */
 static std::pair<unsigned int, unsigned int> connect_and_query(
-	const CommandLine& cl, const char* user, const char* pw
+	const CommandLine& cl, const char* user, const char* pw,
+	const char* query = "SELECT 1"
 ) {
 	MYSQL* m = mysql_init(NULL);
 	mysql_options(m, MYSQL_DEFAULT_AUTH, "caching_sha2_password");
@@ -120,7 +119,7 @@ static std::pair<unsigned int, unsigned int> connect_and_query(
 		mysql_close(m);
 		return { err, 0 };
 	}
-	const int qrc = mysql_query(m, "SELECT 1");
+	const int qrc = mysql_query(m, query);
 	const unsigned int qerr = qrc ? mysql_errno(m) : 0;
 	if (!qrc) {
 		MYSQL_RES* r = mysql_store_result(m);
@@ -260,11 +259,10 @@ int main() {
 	}
 
 	/* ============================================================
-	 * Step 2 -- ALTER USER on backend rotates to NEW password,
-	 *           AND force the proxy's pool to drop any cached backend
-	 *           connection auth'd with OLD_PW.
+	 * Step 2 -- ALTER USER on backend rotates to NEW password.
 	 *
-	 * The previous version of this test omitted the pool drain. Step 1's
+	 * An earlier version of this test omitted the fresh-connection query
+	 * annotation in step 3. Step 1's
 	 * connect_and_query() ran a SELECT 1 which acquired a backend
 	 * connection from the pool, used it, and returned it to the pool.
 	 * That pooled connection is auth'd with OLD_PW and remains usable
@@ -272,16 +270,12 @@ int main() {
 	 * tear down already-authenticated connections on ALTER USER). When
 	 * step 3 then runs SELECT 1, the proxy may serve the still-valid
 	 * pooled connection and NEVER attempt a fresh handshake -- which
-	 * means the ER 1045 eviction hook never fires and the test would
-	 * yield a false negative on healthy code (the R4-B3 finding from
-	 * the round-4 test-quality subagent).
+	 * means the ER 1045 eviction hook never fires.
 	 *
-	 * The reliable way to force pool drain in ProxySQL is to mark every
-	 * server in the target hostgroup OFFLINE_HARD, LOAD MYSQL SERVERS
-	 * TO RUNTIME (which destroys pool connections to those servers),
-	 * then flip back to ONLINE + LOAD. After this dance, step 3's
-	 * SELECT 1 is guaranteed to require a fresh backend handshake
-	 * because the pool is empty.
+	 * Step 3 uses create_new_connection=1 to force the fresh backend
+	 * handshake directly. The OFFLINE_HARD/ONLINE cycle remains here as
+	 * extra isolation for free pooled connections, but it is no longer
+	 * the only thing making the assertion meaningful.
 	 * ============================================================ */
 	{
 		const string alter =
@@ -298,7 +292,7 @@ int main() {
 		rc |= do_query(admin, undrain_seq);
 		rc |= do_query(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 		ok(rc == EXIT_SUCCESS,
-			"[2] ALTER USER + pool drain (OFFLINE_HARD/LOAD/ONLINE/LOAD)");
+			"[2] ALTER USER + pool isolation (OFFLINE_HARD/LOAD/ONLINE/LOAD)");
 	}
 
 	/*
@@ -316,12 +310,10 @@ int main() {
 	 * cached cleartext and accepts). Session is marked
 	 * @c passthrough_credential = true.
 	 *
-	 * Backend: connection pool has no entries for this user (the
-	 * probe in step 1 was a one-shot mysql_real_connect, closed
-	 * immediately, never pooled). So the SELECT 1 triggers a fresh
-	 * backend connection attempt using @c userinfo->password (OLD_PW
-	 * from the cache). The backend rejects with 1045 because it now
-	 * expects NEW_PW.
+	 * Backend: the query uses create_new_connection=1, so ProxySQL
+	 * must open a fresh backend connection using
+	 * @c userinfo->password (OLD_PW from the cache). The backend
+	 * rejects with 1045 because it now expects NEW_PW.
 	 *
 	 * The 1045 hook in handler_again___status_CONNECTING_SERVER:
 	 *   - sees @c sess->passthrough_credential == true,
@@ -332,7 +324,9 @@ int main() {
 	 * The client gets a 1045 errno on SELECT 1. That's expected.
 	 * ============================================================ */
 	{
-		const auto [cerr, qerr] = connect_and_query(cl, TEST_USER, OLD_PW);
+		const auto [cerr, qerr] = connect_and_query(
+			cl, TEST_USER, OLD_PW,
+			"SELECT /* ;create_new_connection=1 */ 1");
 		/* cerr should be 0: frontend handshake succeeds because the
 		 * cache hit lets PPHR_6auth2 verify the scramble against the
 		 * cached cleartext (no backend involvement at handshake).

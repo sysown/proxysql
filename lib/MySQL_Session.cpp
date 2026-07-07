@@ -3606,6 +3606,7 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 				break;
 			case -1:
 			case -2:
+			{
 				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, mysql_errno(myconn->mysql));
 				/*
 				 * Pass-through divert (spec §6.4).
@@ -3688,48 +3689,35 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 					GloMyPTAuthCache->release_inflight();
 					NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
 				}
+				int myerr=mysql_errno(myconn->mysql);
+				/*
+				 * Pass-through cache invalidation (spec §8.4).
+				 *
+				 * This must be tied to the backend 1045 verdict itself, not to
+				 * whether CONNECTING_SERVER has retry budget left. With
+				 * retries disabled or exhausted, stale pass-through cache
+				 * entries still need to be evicted so the next client connect
+				 * re-probes instead of continuing to fast-auth against the old
+				 * cleartext.
+				 */
+				if (myerr == ER_ACCESS_DENIED_ERROR
+					&& GloMyPTAuthCache != NULL
+					&& mysql_thread___passthrough_auth_enabled
+					&& passthrough_credential
+					&& client_myds && client_myds->myconn
+					&& client_myds->myconn->userinfo
+					&& client_myds->myconn->userinfo->username) {
+					const bool was_present = GloMyPTAuthCache->evict(std::string(
+						(const char*)client_myds->myconn->userinfo->username));
+					if (was_present) {
+						GloMyPTAuthCache->bump_cache_invalidations();
+					}
+				}
 				if (myds->connect_retries_on_failure >0 ) {
 					myds->connect_retries_on_failure--;
-					int myerr=mysql_errno(myconn->mysql);
 					switch (myerr) {
 						case 1226: // ER_USER_LIMIT_REACHED , User '%s' has exceeded the '%s' resource (current value: %ld)
 							goto __exit_handler_again___status_CONNECTING_SERVER_with_err;
-							break;
-						case ER_ACCESS_DENIED_ERROR: // 1045
-							/*
-							 * Pass-through cache invalidation (spec §8.4).
-							 *
-							 * Gated on @c sess->passthrough_credential so
-							 * the eviction fires only for sessions whose
-							 * credential actually came from the cache (or a
-							 * fresh probe that just populated the cache).
-							 *
-							 * Without the gate, a backend 1045 against a
-							 * regular @c mysql_users user with the SAME
-							 * username as a separately-cached pass-through
-							 * entry would evict that unrelated entry --
-							 * harmless functionally (next connect re-probes),
-							 * but causes needless churn on rotation events
-							 * for users who aren't even using pass-through.
-							 *
-							 * The flag is set by:
-							 *   - PPHR_verify_password on cache hit
-							 *   - the AUTHENTICATING_BACKEND_FOR_CLIENT
-							 *     handler on probe success
-							 * and stays @c false for normal authentications.
-							 */
-							if (GloMyPTAuthCache != NULL
-								&& mysql_thread___passthrough_auth_enabled
-								&& passthrough_credential
-								&& client_myds && client_myds->myconn
-								&& client_myds->myconn->userinfo
-								&& client_myds->myconn->userinfo->username) {
-								const bool was_present = GloMyPTAuthCache->evict(std::string(
-									(const char*)client_myds->myconn->userinfo->username));
-								if (was_present) {
-									GloMyPTAuthCache->bump_cache_invalidations();
-								}
-							}
 							break;
 						default:
 							break;
@@ -3780,6 +3768,7 @@ __exit_handler_again___status_CONNECTING_SERVER_with_err:
 					NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
 				}
 				break;
+			}
 			case 1: // continue on next loop
 			default:
 				break;
