@@ -7,7 +7,7 @@ It answers two questions for every group referenced in groups.json:
 
   A. Does the group's infras.lst reference an infra that does not exist?
      (a "phantom" group that cannot start any backend, e.g. the old
-     mysql91-gr / mysql92-gr stubs)
+     mysql91 / mysql92 stubs, gr and non-gr)
 
   B. Does a group that DOES have a real dbdeployer infra lack a GitHub
      Actions caller workflow (.github/workflows/CI-<group>.yml), i.e. it
