@@ -557,7 +557,10 @@ handler_again:
 							bytes_recv = query_result->add_parse_completion();
 							break;
 						case ASYNC_STMT_DESCRIBE_END:
-							bytes_recv = query_result->add_describe_completion(result.get(), query.extended_query_info->stmt_type);
+							// Pass the global stmt_info so a statement-level Describe ('S')
+							// populates the set-once metadata cache (libpq-mode capture).
+							bytes_recv = query_result->add_describe_completion(result.get(), query.extended_query_info->stmt_type,
+								query.extended_query_info->stmt_info);
 							break;
 						case ASYNC_STMT_EXECUTE_END:
 							// PQsendQueryPrepared sends the sequence BIND -> DESCRIBE(PORTAL) -> EXECUTE -> SYNC
@@ -2680,6 +2683,29 @@ void PgSQL_Connection::native_stmt_flush_cont() {
 	}
 }
 
+void PgSQL_Connection::native_publish_describe_cache() {
+	// Publish the statement-level Describe metadata captured during this DESCRIBE_S
+	// step to the global statement's set-once cache. Guards:
+	//  - a global stmt_info must be attached to the current query;
+	//  - a ParameterDescription 't' must have been seen (empty param → the step
+	//    errored before metadata, or this isn't a real statement Describe) AND a
+	//    RowDescription/NoData must have terminated it;
+	//  - skip the allocation entirely if the cache is already populated.
+	// Ownership: publish_describe_cache() frees the candidate if it loses the race.
+	const PgSQL_Extended_Query_Info* eqi = query.extended_query_info;
+	if (eqi == nullptr || eqi->stmt_info == nullptr) return;
+	if (native_describe_param_payload.empty() || !native_describe_have_row) return;
+	if (eqi->stmt_info->get_describe_cache() != nullptr) return;
+
+	auto* cand = new PgSQL_Describe_Cache();
+	cand->param_desc_payload = native_describe_param_payload;
+	cand->no_data = native_describe_no_data;
+	if (!native_describe_no_data) {
+		cand->row_desc_payload = native_describe_row_payload;
+	}
+	eqi->stmt_info->publish_describe_cache(cand);
+}
+
 void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 	// Native result fetch (Task 1.6c / Phase 2). Pull backend bytes into the
 	// framer, then drain every complete message into query_result as raw
@@ -2842,6 +2868,12 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 				// Sync error recovery above).
 				if (t == 'Z') {
 					query_result->add_native_backend_message(t, msg.payload, msg.payload_len);
+					// A Sync-terminated statement-level Describe streamed its 't'+'T'|'n'
+					// through the generic case below and completes here — publish the
+					// captured metadata now (no-op if nothing valid was captured).
+					if (native_stmt_step == PG_Native_Stmt_Step::DESCRIBE_S) {
+						native_publish_describe_cache();
+					}
 					native_result_complete = true;
 					return;
 				}
@@ -2851,6 +2883,23 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 				// ParameterStatus 'S', NoticeResponse 'N', etc.) streams through.
 				query_result->add_native_backend_message(t, msg.payload, msg.payload_len);
 
+				// Statement-level Describe metadata capture (set-once cache): copy the
+				// backend's raw 't' body and 'T'/'n' state as they stream past, for
+				// publication on step completion. Portal Describes ('P') are never cached.
+				if (native_stmt_step == PG_Native_Stmt_Step::DESCRIBE_S) {
+					if (t == 't') {
+						native_describe_param_payload.assign((const char*)msg.payload, msg.payload_len);
+					} else if (t == 'T') {
+						native_describe_row_payload.assign((const char*)msg.payload, msg.payload_len);
+						native_describe_have_row = true;
+						native_describe_no_data = false;
+					} else if (t == 'n') {
+						native_describe_row_payload.clear();
+						native_describe_have_row = true;
+						native_describe_no_data = true;
+					}
+				}
+
 				// Flush-terminated per-step terminators (no 'Z' until a later Sync):
 				if (!native_stmt_sync_terminated) {
 					if ((native_stmt_step == PG_Native_Stmt_Step::DESCRIBE_S ||
@@ -2858,6 +2907,9 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 						(t == 'T' || t == 'n')) {
 						// DESCRIBE('S'): 't' precedes, then 'T'|'n' terminates.
 						// DESCRIBE('P'): 'T'|'n' terminates.
+						if (native_stmt_step == PG_Native_Stmt_Step::DESCRIBE_S) {
+							native_publish_describe_cache();
+						}
 						native_result_complete = true;
 						return;
 					}

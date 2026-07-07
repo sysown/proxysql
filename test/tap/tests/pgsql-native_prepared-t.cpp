@@ -685,10 +685,129 @@ static ExtQCaseRunResult run_midframe_err(PGconn* admin, const std::string& bad_
 	return {result_match, fell_back, det.str()};
 }
 
+// ===========================================================================
+// EXT_DESCRIBE_CACHED (Task E): statement-level Describe metadata cache.
+//
+// A statement-level Describe ('S') of an already-described global statement is
+// served from the set-once cache on PgSQL_STMT_Global_info — no backend round
+// trip — in BOTH backend modes. What the cache serves MUST be byte-identical to
+// a round-trip (the differential is the cross-oracle). Evidence that the second
+// Describe actually hit the cache: the proxy_info marker line emitted by
+// handle_post_sync_describe_message on a hit (durable in-test evidence via the
+// scanNativePhaseLog / wait_for_log_match pattern, like P24's injected-Sync).
+//
+// serialize_describe() captures the FULL Describe metadata (param OIDs + every
+// RowDescription column field), unlike serialize_result()'s COMMAND_OK branch —
+// so any byte difference in the 't'/'T' payload surfaces as a serial mismatch.
+// ===========================================================================
+static std::string serialize_describe(PGresult* r) {
+	if (!r) return "<null>";
+	std::stringstream ss;
+	ss << "st=" << (int)PQresultStatus(r) << " ";
+	int np = PQnparams(r);
+	ss << "np=" << np << " ";
+	for (int i = 0; i < np; i++) ss << "p" << i << "=" << PQparamtype(r, i) << ";";
+	int nf = PQnfields(r);
+	ss << "nf=" << nf << " ";
+	for (int c = 0; c < nf; c++) {
+		ss << "f" << c << "=" << (PQfname(r, c) ? PQfname(r, c) : "")
+		   << ":tbl=" << PQftable(r, c) << ":col=" << PQftablecol(r, c)
+		   << ":oid=" << PQftype(r, c) << ":sz=" << PQfsize(r, c)
+		   << ":mod=" << PQfmod(r, c) << ":fmt=" << PQfformat(r, c) << ";";
+	}
+	return ss.str();
+}
+
+// Prepare `stmt` then Describe it TWICE (first = miss→populate, second = hit),
+// returning "D1:<serial>;D2:<serial>;" for byte-comparison across modes/orders.
+static std::string run_describe_twice(PGconn* c, const std::string& stmt_name,
+                                      const std::string& query) {
+	std::string out;
+	if (PQsendPrepare(c, stmt_name.c_str(), query.c_str(), 0, NULL) == 0) {
+		out += "PQsendPrepare:fail:" + std::string(PQerrorMessage(c)) + ";";
+		return out;
+	}
+	PGresult* res;
+	while ((res = PQgetResult(c)) != NULL) PQclear(res);
+	PGresult* d1 = PQdescribePrepared(c, stmt_name.c_str()); // miss → populate
+	out += "D1:" + serialize_describe(d1) + ";";
+	PQclear(d1);
+	PGresult* d2 = PQdescribePrepared(c, stmt_name.c_str()); // hit → served from cache
+	out += "D2:" + serialize_describe(d2) + ";";
+	PQclear(d2);
+	return out;
+}
+
+// Count "Describe served from metadata cache" marker lines appended to the log
+// since the last drain (durable evidence a Describe was served from cache).
+static int countDescribeCacheHits(uint32_t wait_ms) {
+	const std::regex re(".*Describe served from metadata cache.*");
+	int hits = 0;
+	uint32_t elapsed = 0;
+	while (true) {
+		f_proxysql_log.clear(f_proxysql_log.rdstate() &
+		                     ~std::ios_base::eofbit & ~std::ios_base::failbit);
+		std::string line;
+		while (std::getline(f_proxysql_log, line)) {
+			if (std::regex_match(line, re)) hits++;
+		}
+		if (hits > 0 || elapsed >= wait_ms) return hits;
+		usleep(100000);
+		elapsed += 100;
+	}
+}
+
+// Run Describe-x2 in `first_native` mode first (fresh, unique query → that mode
+// takes the miss and POPULATES the cache: exercises that mode's CAPTURE path),
+// then in the other mode (both Describes are cache HITS served from the
+// first-mode-captured bytes: exercises the other mode's SERVE path). Asserts:
+//   - byte-equality across the two modes (cross-oracle: served bytes == round-trip);
+//   - within each mode D1 == D2 (miss and hit are byte-identical);
+//   - the second (cache-serving) mode logged >= 2 Describe cache hits.
+static ExtQCaseRunResult run_describe_cached(PGconn* admin, bool first_native,
+                                             const std::string& stmt_name,
+                                             const std::string& query,
+                                             const std::vector<ServerRow>& saved) {
+	// ---- first mode (takes the miss; populates via its capture path) ----
+	if (!setNativeMode(admin, first_native) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		return {false, false, "admin: set first mode failed"};
+	}
+	PGConnPtr c1 = open_client_conn();
+	if (!c1 || PQstatus(c1.get()) != CONNECTION_OK) return {false, false, "first conn failed"};
+	std::string out1 = run_describe_twice(c1.get(), stmt_name, query);
+
+	// ---- second mode (both Describes are cache hits, served from mode-1 bytes) ----
+	if (!setNativeMode(admin, !first_native) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		return {false, false, "admin: set second mode failed"};
+	}
+	drainLogToNow();
+	PGConnPtr c2 = open_client_conn();
+	if (!c2 || PQstatus(c2.get()) != CONNECTION_OK) return {false, false, "second conn failed"};
+	std::string out2 = run_describe_twice(c2.get(), stmt_name, query);
+	bool fell_back = nativeFallbackObserved();
+	int cache_hits = countDescribeCacheHits(2000);
+
+	// Within-mode miss==hit byte-parity (first mode): D1 and D2 serials must match.
+	auto d1 = out1.find("D1:"), d2 = out1.find(";D2:");
+	bool within_mode_equal = (d1 != std::string::npos && d2 != std::string::npos &&
+		out1.substr(d1 + 3, d2 - (d1 + 3)) == out1.substr(d2 + 4, out1.size() - (d2 + 4) - 1));
+
+	bool result_match = (out1 == out2) && within_mode_equal && (cache_hits >= 2);
+	std::stringstream det;
+	det << (first_native ? "native-first (native capture, libpq serve)"
+	                     : "libpq-first (libpq capture, native serve)")
+	    << "; within_mode_miss_eq_hit=" << (within_mode_equal ? "yes" : "no")
+	    << "; cache_hits_2nd_mode=" << cache_hits;
+	if (out1 != out2) det << " (cross-mode mismatch; m1='" << out1 << "' m2='" << out2 << "')";
+	setNativeMode(admin, false);
+	flushBackendPool(admin, BACKEND_HG, saved);
+	return {result_match, fell_back, det.str()};
+}
+
 int main(int /*argc*/, char** /*argv*/) {
 	auto sql_cases = build_sql_cases();
 	auto extq_cases = build_extq_cases();
-	const int n_extra_cases = 4; // EXT_MULTI_CYCLE, EXT_REUSE, EXT_GLOBAL_DEDUP, EXT_PARSE_ERR_MIDFRAME
+	const int n_extra_cases = 6; // EXT_MULTI_CYCLE, EXT_REUSE, EXT_GLOBAL_DEDUP, EXT_PARSE_ERR_MIDFRAME, 2x EXT_DESCRIBE_CACHED
 	int n_cases = (int)(sql_cases.size() + extq_cases.size()) + n_extra_cases;
 	plan(n_cases + 1);
 	if (cl.getEnv()) return exit_status();
@@ -770,6 +889,28 @@ int main(int /*argc*/, char** /*argv*/) {
 		ExtQCaseRunResult cr = run_midframe_err(admin.get(), "NOT VALID SQL AT ALL", saved);
 		cov.record({"P24: EXT_PARSE_ERR_MIDFRAME (mid-frame Parse error, connection reused after)",
 			"EXT_PARSE_ERR_MIDFRAME", cr.result_match, !cr.fell_back, cr.detail});
+	}
+
+	// Unique query text per sub-case keeps each global statement fresh: the FIRST
+	// Describe in the first-run mode is a genuine cache MISS (round-trip → populate),
+	// so that mode's capture path runs; the second run mode then serves both
+	// Describes from the freshly-populated cache.
+	const std::string uniq = std::to_string(getpid()) + "_" + std::to_string(time(nullptr));
+
+	diag("=== EXT_DESCRIBE_CACHED (libpq capture → native serve): Describe x2, byte-equal, 2nd from cache ===");
+	{
+		std::string q = "SELECT " + uniq + "025::bigint AS u, $1::int AS a, $2::text AS b";
+		ExtQCaseRunResult cr = run_describe_cached(admin.get(), /*first_native=*/false, "dc25", q, saved);
+		cov.record({"P25: EXT_DESCRIBE_CACHED (libpq-capture, native-serve; Describe x2 byte-equal, 2nd=cache hit)",
+			"EXT_DESCRIBE_CACHED", cr.result_match, !cr.fell_back, cr.detail});
+	}
+
+	diag("=== EXT_DESCRIBE_CACHED (native capture → libpq serve): Describe x2, byte-equal, 2nd from cache ===");
+	{
+		std::string q = "SELECT " + uniq + "026::bigint AS u, $1::int AS a, $2::text AS b";
+		ExtQCaseRunResult cr = run_describe_cached(admin.get(), /*first_native=*/true, "dc26", q, saved);
+		cov.record({"P26: EXT_DESCRIBE_CACHED (native-capture, libpq-serve; Describe x2 byte-equal, 2nd=cache hit)",
+			"EXT_DESCRIBE_CACHED", cr.result_match, !cr.fell_back, cr.detail});
 	}
 
 	cov.emit_tap();

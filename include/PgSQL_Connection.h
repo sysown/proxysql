@@ -732,6 +732,20 @@ public:
 	// same event). The recovery itself (native_stmt_error_resync) still runs on
 	// every errored step; only the log line is deduplicated.
 	bool native_stmt_resync_logged = false;
+	// --- Statement-level Describe metadata capture (set-once, native mode) ---
+	// During a DESCRIBE_S step the drain copies the ParameterDescription 't' body and
+	// the RowDescription 'T' / NoData 'n' state here; on step completion (its 'T'|'n'
+	// terminator for a Flush-terminated Describe, or the 'Z' for a Sync-terminated one)
+	// native_publish_describe_cache() publishes them to the global statement's set-once
+	// cache. Backend-origin bytes, byte-identical to the libpq-mode rebuild. Cleared at
+	// each stmt start; a step that errors before 't' leaves param empty → no publish.
+	std::string native_describe_param_payload;
+	std::string native_describe_row_payload;
+	bool native_describe_have_row = false;
+	bool native_describe_no_data = false;
+	// Publish the captured statement-level Describe metadata to the global statement's
+	// set-once cache, iff a complete 't' + ('T'|'n') was captured on this DESCRIBE_S step.
+	void native_publish_describe_cache();
 	// Reset all per-step native stmt drive state. Called at each native stmt start.
 	// (native_stmt_resync_logged is intentionally absent: per-connection, not per-step.)
 	inline void native_stmt_reset_step() {
@@ -741,6 +755,10 @@ public:
 		native_stmt_sync_terminated = false;
 		native_suppress_parse_complete = false;
 		native_stmt_error_resync = false;
+		native_describe_param_payload.clear();
+		native_describe_row_payload.clear();
+		native_describe_have_row = false;
+		native_describe_no_data = false;
 		native_framer.reset();
 		native_outbuf.clear();
 	}

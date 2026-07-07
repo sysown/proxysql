@@ -98,6 +98,21 @@ PgSQL_STMT_Global_info::~PgSQL_STMT_Global_info() {
 	if (digest_text)
 		free(digest_text);
 	parse_param_types.clear(); // clear the parameter types vector
+	// Free the set-once Describe metadata cache (if any was ever published).
+	delete describe_cache.load(std::memory_order_acquire);
+}
+
+bool PgSQL_STMT_Global_info::publish_describe_cache(const PgSQL_Describe_Cache* candidate) const noexcept {
+	const PgSQL_Describe_Cache* expected = nullptr;
+	// Set-once: install only while the slot is still empty. On success the slot now
+	// owns `candidate`. On failure another publish already won, so free our copy —
+	// the caller must not touch `candidate` after this returns either way.
+	if (describe_cache.compare_exchange_strong(expected, candidate,
+			std::memory_order_acq_rel, std::memory_order_acquire)) {
+		return true;
+	}
+	delete candidate;
+	return false;
 }
 
 void PgSQL_STMT_Global_info::calculate_mem_usage() {

@@ -52,6 +52,8 @@
 class ProxySQL_Admin;
 struct PgCredentials;
 struct ScramState;
+class PgSQL_STMT_Global_info;
+struct PgSQL_Describe_Cache;
 
 enum class EXECUTION_STATE {
 	FAILED = 0,
@@ -561,7 +563,8 @@ public:
     * @return The number of bytes added to the query result.
     *
     */
-    unsigned int add_describe_completion(const PGresult* result, uint8_t stmt_type);
+    unsigned int add_describe_completion(const PGresult* result, uint8_t stmt_type,
+        const PgSQL_STMT_Global_info* stmt_info_for_cache = nullptr);
 
 	/**
 	 * @brief Retrieves the query result set and copies it to a PtrSizeArray.
@@ -845,6 +848,14 @@ public:
 	bool generate_bind_completion_packet(bool send, bool ready, char trx_state, PtrSize_t* _ptr = NULL);
 	bool generate_no_data_packet(bool send, PtrSize_t* _ptr = NULL);
 
+	// Serve a statement-level Describe response from the set-once metadata cache,
+	// byte-identical to a backend round-trip: ParameterDescription 't' followed by
+	// RowDescription 'T' (or NoData 'n'), then — when `ready` — a ReadyForQuery 'Z'.
+	// Payloads are the raw wire bodies stored in `cache`; each is re-framed as
+	// type-byte + be32(len+4) + payload. No backend dispatch is involved.
+	bool generate_describe_from_cache(bool send, bool ready, char trx_state,
+		const PgSQL_Describe_Cache* cache, PtrSize_t* _ptr = NULL);
+
 	// temporary overriding generate_pkt_OK to avoid crash. FIXME remove this
 	bool generate_pkt_OK(bool send, void** ptr, unsigned int* len, uint8_t sequence_id, unsigned int affected_rows, 
 		uint64_t last_insert_id, uint16_t status, uint16_t warnings, char* msg, bool eof_identifier = false) {
@@ -1113,8 +1124,8 @@ public:
 	 * @return The number of bytes copied to the `PgSQL_Query_Result` object.
 	 *
 	 */
-	unsigned int copy_describe_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, 
-		const PGresult* result, uint8_t stmt_type);
+	unsigned int copy_describe_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result,
+		const PGresult* result, uint8_t stmt_type, const PgSQL_STMT_Global_info* stmt_info_for_cache = nullptr);
 
 private:
 
