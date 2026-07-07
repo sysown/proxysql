@@ -3627,11 +3627,12 @@ handler_again:
 						bind_waiting_for_execute.reset(nullptr);
 					}
 					if (has_pending_messages) {
-						// check if there are messages remaining in extended_query_frame, 
+						// check if there are messages remaining in extended_query_frame,
 						// if yes, process pending messages
 						NEXT_IMMEDIATE(PROCESSING_EXTENDED_QUERY_SYNC);
 					}
 					extended_query_phase = EXTQ_PHASE_IDLE;
+					free_native_extq_client_frame();
 				}
 			} else {
 				if (rc == -1) {
