@@ -127,4 +127,19 @@ bool pg_scram_verify_server_final(PgSQL_Scram_State* s, const char* server_final
 // so the gs2 header in pg_scram_client_first is also updated to
 // "p=tls-server-end-point,,". The state takes its own copy of the input.
 void pg_scram_set_cbind(PgSQL_Scram_State* s, const char* cbind_input, int cbind_input_len);
+
+#include <string>
+#include <vector>
+#include "proxysql_structs.h"
+
+// Build a frontend CopyFail ('f') message: used as a safety net when a
+// CopyInResponse reaches the native drive (which cannot supply CopyData).
+void pg_native_build_copyfail(std::string& out, const char* reason);
+
+// Concatenate the raw client extended-query frame (Parse/Bind/Describe/
+// Execute/Close messages captured verbatim) into `out`, freeing and
+// clearing the frame, then append the 5-byte Sync message the backend
+// needs to answer with ReadyForQuery. (The session never buffers the
+// client's own Sync packet — see get_pkts_from_client 'S' handling.)
+void pg_native_build_extq_outbuf(std::vector<PtrSize_t>& frame, std::string& out);
 #endif
