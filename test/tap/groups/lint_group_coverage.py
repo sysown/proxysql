@@ -66,58 +66,89 @@ def read_infra_names(group):
     """Return the list of concrete infra names for a group, or None if the
     group declares no infras.lst (legitimate for admin-only groups)."""
     base = base_group(group)
-    for cand in (
+    candidates = [
         os.path.join(REPO_ROOT, "test", "tap", "groups", group, "infras.lst"),
         os.path.join(REPO_ROOT, "test", "tap", "groups", base, "infras.lst"),
-    ):
-        if os.path.isfile(cand):
-            names = []
-            with open(cand) as f:
-                for line in f:
-                    line = line.split("#", 1)[0].strip()
-                    if not line or "$" in line:  # blank/comment or env placeholder
-                        continue
-                    names.append(line)
-            return names
+    ]
+    for cand in dict.fromkeys(candidates):  # dedupe when group == base
+        if not os.path.isfile(cand):
+            continue
+        names = []
+        with open(cand, encoding="utf-8") as f:
+            for line in f:
+                line = line.split("#", 1)[0].strip()
+                if not line:
+                    continue
+                # ensure-infras reads line-by-line; splitting on whitespace
+                # is a harmless superset for the one-name-per-line files we
+                # have. Skip env placeholders (${INFRA}/${INFRA_TYPE}) -- they
+                # cannot be resolved statically.
+                for token in line.split():
+                    if "$" not in token:
+                        names.append(token)
+        return names
     return None
 
 
 def workflow_exists(group):
-    return os.path.isfile(
-        os.path.join(REPO_ROOT, ".github", "workflows", f"CI-{group}.yml")
-    )
+    for ext in ("yml", "yaml"):
+        path = os.path.join(REPO_ROOT, ".github", "workflows", f"CI-{group}.{ext}")
+        if os.path.isfile(path):
+            return True
+    return False
+
+
+def classify_group(group):
+    """Return (missing_infras, workflow_state) for one group.
+
+    missing_infras: list of infra names referenced but absent on disk.
+    workflow_state: None if not infra-backed or a workflow exists;
+                    "new" / "known" when a real infra has no workflow.
+    """
+    concrete = read_infra_names(group) or []
+    missing = [
+        n for n in concrete
+        if not os.path.isdir(os.path.join(REPO_ROOT, "test", "infra", n))
+    ]
+    workflow_state = None
+    if concrete and not missing and not workflow_exists(group):
+        workflow_state = "known" if base_group(group) in ALLOWLIST_NO_WORKFLOW else "new"
+    return missing, workflow_state
+
+
+def collect_groups(data):
+    groups = set()
+    for group_list in data.values():
+        for g in group_list:
+            if not g.startswith("@"):
+                groups.add(g)
+    return groups
+
+
+def resolve_groups_path(groups_path):
+    """Resolve to a real path inside the repo. Guards against a path
+    argument escaping the repository tree (pythonsecurity:S8707)."""
+    resolved = os.path.realpath(groups_path)
+    if os.path.commonpath([resolved, REPO_ROOT]) != REPO_ROOT:
+        raise ValueError(f"refusing to read groups.json outside repo: {resolved}")
+    return resolved
 
 
 def lint_coverage(groups_path, strict=False):
-    with open(groups_path) as f:
+    groups_path = resolve_groups_path(groups_path)
+    with open(groups_path, encoding="utf-8") as f:
         data = json.load(f)
 
-    groups = set()
-    for v in data.values():
-        for g in v:
-            if not g.startswith("@"):
-                groups.add(g)
-
     phantom = []          # (group, missing_infra)
-    missing_wf_new = []   # infra-backed, no workflow, NOT allowlisted
-    missing_wf_known = [] # infra-backed, no workflow, allowlisted
-
-    for group in sorted(groups):
-        infra_names = read_infra_names(group)
-        concrete = infra_names or []
-        missing = [
-            n for n in concrete
-            if not os.path.isdir(os.path.join(REPO_ROOT, "test", "infra", n))
-        ]
-        for n in missing:
-            phantom.append((group, n))
-
-        has_real_infra = bool(concrete) and not missing
-        if has_real_infra and not workflow_exists(group):
-            if base_group(group) in ALLOWLIST_NO_WORKFLOW:
-                missing_wf_known.append(group)
-            else:
-                missing_wf_new.append(group)
+    missing_wf_new = []
+    missing_wf_known = []
+    for group in sorted(collect_groups(data)):
+        missing, wf_state = classify_group(group)
+        phantom.extend((group, infra) for infra in missing)
+        if wf_state == "new":
+            missing_wf_new.append(group)
+        elif wf_state == "known":
+            missing_wf_known.append(group)
 
     for group, infra in phantom:
         print(f"WARN [phantom-infra]  group '{group}': infras.lst references "
@@ -133,13 +164,12 @@ def lint_coverage(groups_path, strict=False):
               f"workflow (allowlisted family '{base_group(group)}')")
 
     print(
-        f"\ngroup coverage lint: {len(groups)} groups | "
+        f"\ngroup coverage lint: {len(collect_groups(data))} groups | "
         f"phantom-infra={len(phantom)} | "
         f"missing-workflow NEW={len(missing_wf_new)} known={len(missing_wf_known)}"
     )
 
-    fail = strict and (phantom or missing_wf_new)
-    if fail:
+    if strict and (phantom or missing_wf_new):
         print("group coverage lint: FAIL (--strict)", file=sys.stderr)
         return 1
     return 0
