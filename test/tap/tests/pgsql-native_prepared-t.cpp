@@ -8,20 +8,48 @@
  *   1. with `pgsql-use_native_backend_protocol='false'`  -> the libpq ORACLE
  *   2. with `pgsql-use_native_backend_protocol='true'`   -> the NATIVE path
  *
+ * Byte-equality between the two runs is required for EVERY case in both
+ * sub-suites below — there is no "expected gap" escape hatch left. The
+ * libpq run is the oracle; any divergence is a hard failure.
+ *
  * Two sub-suites:
  *
  * SQL-SIDE (cases P0-P9): `PREPARE` / `EXECUTE` / `DEALLOCATE` issued as
  * simple Query messages. These are simple queries on the wire, so the native
  * path handles them. We expect 100% native coverage here.
  *
- * EXTENDED-QUERY (cases P10-P29): client-driven Parse / Bind / Describe /
- * Execute / Close / Sync cycle using libpq's `PQsendPrepare` and
- * `PQsendQueryPrepared`. Per the audit at lib/PgSQL_Connection.cpp:2823
- * ("Extended/prepared queries are not native yet."), the native path
- * does NOT yet implement this cycle. The client connection itself is
- * unaffected, but the proxy internally routes the request through the
- * libpq extended-query path. We expect the libpq fallback in this
- * sub-suite; the coverage summary reports the per-kind rate.
+ * EXTENDED-QUERY (cases P10 onward): client-driven Parse / Bind / Describe /
+ * Execute / Close / Sync cycle using libpq's `PQsendPrepare`,
+ * `PQsendQueryPrepared`, and `PQsendQueryParams`. As of the native-drive
+ * stmt-pipeline work (see
+ * docs/superpowers/specs/2026-07-07-pgsql-native-extq-stmt-pipeline-design.md
+ * and lib/PgSQL_Connection.cpp:3032-3043), the native path drives the full
+ * extended-query cycle itself — ProxySQL's prepared-statement bookkeeping
+ * (GloPgStmt global cache, per-connection local_stmts, backend-id reuse, ack
+ * synthesis) is shared between the native and libpq wire layers, so both
+ * paths are expected to be byte-identical AND fully native (no libpq
+ * fallback) for every case here. The coverage summary reports the per-kind
+ * native rate as a regression signal.
+ *
+ * Beyond the single Parse+Bind+Execute cycle, this file also covers:
+ *   - EXT_MULTI_CYCLE: two independent extended-query cycles on one session.
+ *   - EXT_REUSE: the same client-visible statement name re-prepared (with a
+ *     different query) after an explicit DEALLOCATE, exercising the
+ *     backend-stmt-id reuse decision (lib/PgSQL_Session.cpp:~3444-3477).
+ *   - EXT_GLOBAL_DEDUP: two distinct sessions preparing byte-identical query
+ *     text under different local names, exercising the global prepared-
+ *     statement cache dedup path (lib/PgSQL_PreparedStatement.cpp
+ *     `add_prepared_statement`).
+ *   - EXT_PARSE_ERR_MIDFRAME: `PQsendQueryParams` sends Parse/Bind/Describe/
+ *     Execute/Sync as ONE client frame (unlike `PQsendPrepare` +
+ *     `PQsendQueryPrepared`, which are each their own Sync-terminated
+ *     frame). With invalid SQL, the backend's Parse fails while
+ *     Bind/Describe/Execute are already queued behind it in the same
+ *     received frame, so ProxySQL dispatches the Parse as Flush- (not
+ *     Sync-) terminated and must inject its own Sync to resynchronize the
+ *     backend (lib/PgSQL_Connection.cpp:~2803-2825). This is the only
+ *     flagship native-drive recovery mechanism not otherwise exercised by
+ *     this file.
  *
  * KNOWN ISSUES (discovered by this test)
  * --------------------------------------
@@ -29,13 +57,6 @@
  *    identified by `pgsql-native_transactions-t` also affects SQL-side
  *    prepared statements that run inside a BEGIN/COMMIT block. The same
  *    fix will repair both.
- * 2. P11, P14 (named-statement extended-query cycles): the native path
- *    produces a different serialized response than libpq (output sizes
- *    255 vs 91, 306 vs 184). The native path appears to attempt the
- *    extended-query cycle (no fallback warning), but does so
- *    incorrectly. The fix is to detect extended-query in the native
- *    path and route to the existing libpq extended-query machinery
- *    (lib/PgSQL_Session.cpp:2559-2622) rather than attempt it natively.
  *
  * INFRA: legacy-g1 (docker-pgsql16-single, scram-sha-256, no TLS).
  */
@@ -136,9 +157,14 @@ static bool flushBackendPool(PGconn* admin, int hg, const std::vector<ServerRow>
 }
 
 static bool nativeFallbackObserved() {
-	const std::string re =
-		".*(native_mode requested but unimplemented at this stage; falling back to libpq"
-		"|native backend auth capability gap .* falling back to libpq).*";
+	// Deliberately broad: matches the connection-level auth-capability-gap
+	// fallback (lib/PgSQL_Connection.cpp:1475) AND any future
+	// extended-query-specific "falling back to libpq" warning, without
+	// hardcoding today's exact wording. Now that the native path drives the
+	// full extended-query cycle itself (stmt-pipeline work), any case in
+	// this file matching this regex is a regression tripwire — every
+	// EXT_*/PREPARE_SQL case here is expected to be fully native.
+	const std::string re = ".*falling back to libpq.*";
 	return wait_for_log_match(f_proxysql_log, re, 1000, 100);
 }
 
@@ -308,11 +334,11 @@ static SqlCaseRunResult run_sql(PGconn* admin, const SqlCase& tc,
 }
 
 // ===========================================================================
-// Extended-query (cases P10-P29). We use libpq's PQsendPrepare +
+// Extended-query (cases P10 onward). We use libpq's PQsendPrepare +
 // PQsendQueryPrepared + PQdescribePrepared + PQclosePrepared to drive the
-// extended-query cycle. The proxy handles it via its libpq extended-query
-// state machine; today (per audit), the native path falls back. The result
-// is byte-equal regardless.
+// extended-query cycle. Both the libpq path and the native path drive this
+// cycle to completion themselves now (native-drive stmt-pipeline work); the
+// result is required to be byte-equal.
 // ===========================================================================
 struct ExtQCase {
 	std::string label, kind;
@@ -434,11 +460,10 @@ static std::vector<ExtQCase> build_extq_cases() {
 	// P18: EmptyStatement (empty query string)
 	v.push_back({"P18: Parse with empty query (EmptyQueryResponse)", "EXT_PARSE",
 		"", "", {}, {}, false, false, false, false, false, ""});
-	// P19: multiple Parse + Execute in one cycle (same connection)
-	v.push_back({"P19: multiple Parse+Execute (s1, s2 in one cycle)", "EXT_PARSE",
-		"", "", // placeholder; not used
-		{}, {},
-		false, false, false, false, false, ""});
+	// (P19 used to be a dead "multiple Parse+Execute" placeholder — real
+	// coverage for that now lives in the EXT_MULTI_CYCLE case run separately
+	// in main(), since it needs two independent cycles on one connection,
+	// which doesn't fit the single-cycle-per-case shape of run_extq().)
 	// P20: Parse with type OIDs
 	v.push_back({"P20: Parse with explicit type OIDs {23, 25}", "EXT_PARSE",
 		"", "SELECT $1::int, $2::text",
@@ -469,29 +494,145 @@ static ExtQCaseRunResult run_extq(PGconn* admin, const ExtQCase& tc,
 	std::string nt_out = run_extq_cycle(nt.get(), tc);
 	bool fell_back = nativeFallbackObserved();
 
-	// For P19 (multi-Parse), we need a custom sequence (parse s1, parse s2,
-	// bind/exec s2, close both). Detect by label and run a custom variant.
-	// For now the differential is on the standard cycle.
+	// Byte-equality is required for every case — no escape hatch. The native
+	// path drives the full extended-query cycle itself now, so a mismatch is
+	// a real regression, not an expected/documented gap.
 	bool result_match = (lp_out == nt_out);
 	std::stringstream det;
 	det << "n_steps=" << tc.bind_steps.size();
 	if (!result_match) {
 		// Truncate the diff for readability.
 		det << " (mismatch; lp_out_size=" << lp_out.size() << " nt_out_size=" << nt_out.size() << ")";
-		// Detect the "feature not supported" error path on native — this is the
-		// expected outcome today (the native protocol does not yet implement
-		// the extended-query cycle) and a successful test of the gap-detection
-		// is more useful than a raw byte diff.
-		const std::string feature_marker = "ERRCODE_FEATURE_NOT_SUPPORTED";
-		const std::string unsupported_msg = "native backend protocol does not support extended queries";
-		if (nt_out.find(feature_marker) != std::string::npos ||
-		    nt_out.find(unsupported_msg) != std::string::npos) {
-			// Native path returned a clean "not supported" error; that is the
-			// expected result today. Don't make this an assertion failure —
-			// instead emit an informative ok that documents the gap.
-			result_match = true;
-			det << " (native returned FEATURE_NOT_SUPPORTED — expected until PR 3 wires native extended query into the session main loop)";
+	}
+	setNativeMode(admin, false);
+	flushBackendPool(admin, BACKEND_HG, saved);
+	return {result_match, fell_back, det.str()};
+}
+
+// ===========================================================================
+// EXT_MULTI_CYCLE / EXT_REUSE / EXT_GLOBAL_DEDUP: cases that need more than
+// the single-cycle-per-connection shape of run_extq() above. `seq` is a list
+// of independent extended-query cycles, run either all on ONE connection
+// (same_connection=true — multi-cycle / re-prepare-after-DEALLOCATE) or each
+// on its OWN connection (same_connection=false — global-cache dedup across
+// distinct sessions). Outputs from every cycle are concatenated in order and
+// compared byte-for-byte between libpq and native, exactly like run_extq().
+// ===========================================================================
+static ExtQCaseRunResult run_extq_sequence(PGconn* admin, const std::vector<ExtQCase>& seq,
+                                           bool same_connection,
+                                           const std::vector<ServerRow>& saved) {
+	// ---- libpq control ----
+	if (!setNativeMode(admin, false) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		return {false, false, "admin: set libpq mode failed"};
+	}
+	std::string lp_out;
+	if (same_connection) {
+		PGConnPtr c = open_client_conn();
+		if (!c || PQstatus(c.get()) != CONNECTION_OK) return {false, false, "libpq conn failed"};
+		for (const auto& tc : seq) lp_out += run_extq_cycle(c.get(), tc);
+	} else {
+		for (const auto& tc : seq) {
+			PGConnPtr c = open_client_conn();
+			if (!c || PQstatus(c.get()) != CONNECTION_OK) return {false, false, "libpq conn failed"};
+			lp_out += run_extq_cycle(c.get(), tc);
 		}
+	}
+
+	// ---- native candidate ----
+	if (!setNativeMode(admin, true) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		return {false, false, "admin: set native mode failed"};
+	}
+	drainLogToNow();
+	std::string nt_out;
+	if (same_connection) {
+		PGConnPtr c = open_client_conn();
+		if (!c || PQstatus(c.get()) != CONNECTION_OK) return {false, false, "native conn failed"};
+		for (const auto& tc : seq) nt_out += run_extq_cycle(c.get(), tc);
+	} else {
+		for (const auto& tc : seq) {
+			PGConnPtr c = open_client_conn();
+			if (!c || PQstatus(c.get()) != CONNECTION_OK) return {false, false, "native conn failed"};
+			nt_out += run_extq_cycle(c.get(), tc);
+		}
+	}
+	bool fell_back = nativeFallbackObserved();
+
+	bool result_match = (lp_out == nt_out);
+	std::stringstream det;
+	det << "n_cycles=" << seq.size() << (same_connection ? " (same conn)" : " (per-conn)");
+	if (!result_match) {
+		det << " (mismatch; lp_out_size=" << lp_out.size() << " nt_out_size=" << nt_out.size() << ")";
+	}
+	setNativeMode(admin, false);
+	flushBackendPool(admin, BACKEND_HG, saved);
+	return {result_match, fell_back, det.str()};
+}
+
+// ===========================================================================
+// ADDITION 1 (Task C review): the injected-Sync error-recovery path.
+// `PQsendQueryParams` sends Parse/Bind/Describe/Execute/Sync as ONE client
+// frame/flush (unlike `PQsendPrepare` + `PQsendQueryPrepared`, which are two
+// independently Sync-terminated frames — each drains to 'Z' before the next
+// is sent). With syntactically invalid SQL, the backend's Parse fails while
+// Bind/Describe/Execute are already queued behind it in the SAME received
+// frame; ProxySQL's native drive therefore dispatches the Parse as
+// Flush-terminated (more stmt-step messages are already pending in the
+// frame), and the backend sends no 'Z' after the 'E' until it receives a
+// Sync. The native path must inject that Sync itself to resynchronize
+// (lib/PgSQL_Connection.cpp:~2803-2825, `native_stmt_error_resync`). This is
+// the only flagship native-drive recovery mechanism not otherwise exercised
+// by this file (see taskD-report.md for the log evidence that this case
+// actually reaches that branch).
+// ===========================================================================
+static std::string run_midframe_err_case(PGconn* c, const std::string& bad_sql) {
+	std::string out;
+	if (PQsendQueryParams(c, bad_sql.c_str(), 0, NULL, NULL, NULL, NULL, 0) == 0) {
+		out += "PQsendQueryParams:fail:" + std::string(PQerrorMessage(c)) + ";";
+		return out;
+	}
+	PGresult* res;
+	while ((res = PQgetResult(c)) != NULL) {
+		out += "Ext:" + serialize_result(res) + ";";
+		PQclear(res);
+	}
+	// The connection must be usable afterwards: run a follow-up query in the
+	// same phase and fold its result into the comparable output.
+	PGresult* fr = PQexec(c, "SELECT 1");
+	out += "Follow:" + serialize_result(fr) + ";";
+	PQclear(fr);
+	return out;
+}
+
+static ExtQCaseRunResult run_midframe_err(PGconn* admin, const std::string& bad_sql,
+                                          const std::vector<ServerRow>& saved) {
+	// ---- libpq control ----
+	if (!setNativeMode(admin, false) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		return {false, false, "admin: set libpq mode failed"};
+	}
+	PGConnPtr lp = open_client_conn();
+	if (!lp || PQstatus(lp.get()) != CONNECTION_OK) return {false, false, "libpq conn failed"};
+	std::string lp_out = run_midframe_err_case(lp.get(), bad_sql);
+
+	// ---- native candidate ----
+	if (!setNativeMode(admin, true) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		return {false, false, "admin: set native mode failed"};
+	}
+	drainLogToNow();
+	PGConnPtr nt = open_client_conn();
+	if (!nt || PQstatus(nt.get()) != CONNECTION_OK) return {false, false, "native conn failed"};
+	std::string nt_out = run_midframe_err_case(nt.get(), bad_sql);
+	bool fell_back = nativeFallbackObserved();
+
+	// Explicit SQLSTATE assertion (42601 = syntax_error), in addition to the
+	// full byte-equality check below — guards against both sides agreeing on
+	// the WRONG code.
+	bool sqlstate_ok = (nt_out.find("sqlstate=42601") != std::string::npos);
+
+	bool result_match = (lp_out == nt_out) && sqlstate_ok;
+	std::stringstream det;
+	det << "midframe error-recovery; sqlstate_ok=" << (sqlstate_ok ? "yes" : "no");
+	if (!result_match) {
+		det << " (mismatch; lp_out='" << lp_out << "' nt_out='" << nt_out << "')";
 	}
 	setNativeMode(admin, false);
 	flushBackendPool(admin, BACKEND_HG, saved);
@@ -501,7 +642,8 @@ static ExtQCaseRunResult run_extq(PGconn* admin, const ExtQCase& tc,
 int main(int /*argc*/, char** /*argv*/) {
 	auto sql_cases = build_sql_cases();
 	auto extq_cases = build_extq_cases();
-	int n_cases = (int)(sql_cases.size() + extq_cases.size());
+	const int n_extra_cases = 4; // EXT_MULTI_CYCLE, EXT_REUSE, EXT_GLOBAL_DEDUP, EXT_PARSE_ERR_MIDFRAME
+	int n_cases = (int)(sql_cases.size() + extq_cases.size()) + n_extra_cases;
 	plan(n_cases + 1);
 	if (cl.getEnv()) return exit_status();
 
@@ -534,6 +676,56 @@ int main(int /*argc*/, char** /*argv*/) {
 		ExtQCaseRunResult cr = run_extq(admin.get(), tc, saved);
 		cov.record({tc.label, tc.kind, cr.result_match, !cr.fell_back, cr.detail});
 	}
+
+	diag("=== EXT_MULTI_CYCLE: two independent extended-query cycles, one session ===");
+	{
+		std::vector<ExtQCase> seq;
+		seq.push_back({"mc1", "EXT_MULTI_CYCLE",
+			"mc1", "SELECT $1::int + 1",
+			{}, {{"", {"10"}, {}, {}, 0}}, false, false, true, false, false, ""});
+		seq.push_back({"mc2", "EXT_MULTI_CYCLE",
+			"mc2", "SELECT $1::text || '!'",
+			{}, {{"", {"hi"}, {}, {}, 0}}, false, false, true, false, false, ""});
+		ExtQCaseRunResult cr = run_extq_sequence(admin.get(), seq, /*same_connection=*/true, saved);
+		cov.record({"P21: EXT_MULTI_CYCLE (mc1, mc2 in one session)", "EXT_MULTI_CYCLE",
+			cr.result_match, !cr.fell_back, cr.detail});
+	}
+
+	diag("=== EXT_REUSE: same statement name re-prepared after DEALLOCATE ===");
+	{
+		std::vector<ExtQCase> seq;
+		seq.push_back({"ru1-first", "EXT_REUSE",
+			"ru1", "SELECT $1::int + 1",
+			{}, {{"", {"1"}, {}, {}, 0}}, false, false, true, false, false, ""});
+		seq.push_back({"ru1-reprepared", "EXT_REUSE",
+			"ru1", "SELECT $1::int + 100", // different query text, same client name
+			{}, {{"", {"2"}, {}, {}, 0}}, false, false, true, false, false, ""});
+		ExtQCaseRunResult cr = run_extq_sequence(admin.get(), seq, /*same_connection=*/true, saved);
+		cov.record({"P22: EXT_REUSE ('ru1' re-prepared after DEALLOCATE)", "EXT_REUSE",
+			cr.result_match, !cr.fell_back, cr.detail});
+	}
+
+	diag("=== EXT_GLOBAL_DEDUP: two sessions, identical query text ===");
+	{
+		std::vector<ExtQCase> seq;
+		seq.push_back({"gd1", "EXT_GLOBAL_DEDUP",
+			"gd1", "SELECT $1::int * 2",
+			{}, {{"", {"21"}, {}, {}, 0}}, false, false, true, false, false, ""});
+		seq.push_back({"gd2", "EXT_GLOBAL_DEDUP",
+			"gd2", "SELECT $1::int * 2", // identical text, different session+name
+			{}, {{"", {"5"}, {}, {}, 0}}, false, false, true, false, false, ""});
+		ExtQCaseRunResult cr = run_extq_sequence(admin.get(), seq, /*same_connection=*/false, saved);
+		cov.record({"P23: EXT_GLOBAL_DEDUP (gd1, gd2 identical query, distinct sessions)", "EXT_GLOBAL_DEDUP",
+			cr.result_match, !cr.fell_back, cr.detail});
+	}
+
+	diag("=== EXT_PARSE_ERR_MIDFRAME: injected-Sync error-recovery (PQsendQueryParams) ===");
+	{
+		ExtQCaseRunResult cr = run_midframe_err(admin.get(), "NOT VALID SQL AT ALL", saved);
+		cov.record({"P24: EXT_PARSE_ERR_MIDFRAME (mid-frame Parse error, connection reused after)",
+			"EXT_PARSE_ERR_MIDFRAME", cr.result_match, !cr.fell_back, cr.detail});
+	}
+
 	cov.emit_tap();
 	return exit_status();
 }

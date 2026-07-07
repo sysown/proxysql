@@ -17,7 +17,7 @@ static uint16_t be16_at(const std::string& s, size_t off) {
 }
 
 int main(int, char**) {
-    plan(55);
+    plan(65);
 
     // --- pg_native_build_copyfail ---
     std::string out;
@@ -94,6 +94,13 @@ int main(int, char**) {
         const int32_t plens[2] = { 3, -1 };
         const uint16_t rfmts[1] = { 1 };
         pg_build_bind(b, "myportal", "mystmt", pfmts, 2, pvals, plens, 2, rfmts, 1);
+        size_t expect_len = 4 + strlen("myportal") + 1 + strlen("mystmt") + 1
+            + 2 /*n_param_formats*/ + 2 * 2 /*format values*/
+            + 2 /*n_params*/ + (4 + 3) /*param0 len+data*/ + (4 + 0) /*param1 (NULL) len only*/
+            + 2 /*n_result_formats*/ + 1 * 2 /*result format values*/;
+        ok(b.size() == 1 + expect_len, "bind(2 params): total size");
+        ok(b[0] == 'B', "bind(2 params): type byte");
+        ok(be32_at(b, 1) == expect_len, "bind(2 params): length field");
         size_t off = 5 + strlen("myportal") + 1 + strlen("mystmt") + 1;
         ok(be16_at(b, off) == 2, "bind(2 params): n_param_formats == 2");
         off += 2;
@@ -120,6 +127,13 @@ int main(int, char**) {
         const char* pvals[2] = { "x", "y" };
         const int32_t plens[2] = { 1, 1 };
         pg_build_bind(b, "p", "s", pfmts, 1, pvals, plens, 2, nullptr, 0);
+        size_t expect_len = 4 + 1 + 1 /*portal\0*/ + 1 + 1 /*stmt\0*/
+            + 2 /*n_param_formats*/ + 1 * 2 /*single broadcast format value*/
+            + 2 /*n_params*/ + (4 + 1) * 2 /*param0+param1 len+data*/
+            + 2 /*n_result_formats*/ + 0 * 2 /*no result formats*/;
+        ok(b.size() == 1 + expect_len, "bind(broadcast fmt): total size");
+        ok(b[0] == 'B', "bind(broadcast fmt): type byte");
+        ok(be32_at(b, 1) == expect_len, "bind(broadcast fmt): length field");
         size_t off = 5 + 2 + 2; // portal\0 + stmt\0
         ok(be16_at(b, off) == 1, "bind(broadcast fmt): n_param_formats == 1");
         off += 2;
@@ -175,6 +189,17 @@ int main(int, char**) {
         ok(c[0] == 'C', "close(S): type byte");
         ok(be32_at(c, 1) == expect_len, "close(S): length field");
         ok(c[5] == 'S' && memcmp(c.data() + 6, "mystmt\0", 7) == 0, "close(S): kind + NUL-terminated name");
+    }
+    {
+        // Empty-name case (unnamed portal/statement), mirroring the
+        // describe(P, empty name) coverage above.
+        std::string c;
+        pg_build_close(c, 'P', "");
+        size_t expect_len = 4 + 1 + 1;
+        ok(c.size() == 1 + expect_len, "close(P, empty name): total size");
+        ok(be32_at(c, 1) == expect_len, "close(P, empty name): length field");
+        ok(c[5] == 'P', "close(P, empty name): kind byte");
+        ok(c[6] == '\0', "close(P, empty name): empty name terminator");
     }
 
     // --- pg_build_flush / pg_build_sync ---
