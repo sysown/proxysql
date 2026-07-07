@@ -53,6 +53,12 @@ def parse_args():
                    help="Concurrent client count")
     p.add_argument("--proxysql-pid-file", default="/var/run/proxysql.pid",
                    help="Where to find the proxysql pid (for kill -TERM)")
+    p.add_argument("--external-kill", action="store_true",
+                   help="Don't try to send SIGTERM ourselves; expect an "
+                        "external actor (e.g. `docker kill -s TERM ...`) to "
+                        "deliver the signal while we observe disconnects. "
+                        "Required when ProxySQL runs in a separate container "
+                        "or host than this harness.")
     p.add_argument("--scenario", choices=["sigterm", "reload", "all"],
                    default="all")
     p.add_argument("--route-name", default="r1",
@@ -121,9 +127,16 @@ def scenario_sigterm(args):
         t.start()
     time.sleep(2)  # let clients establish steady traffic
 
-    pid = find_proxysql_pid(args)
-    print(f"Sending SIGTERM to proxysql (pid {pid})...")
-    os.kill(pid, signal.SIGTERM)
+    if args.external_kill:
+        print("--external-kill set; waiting for the external actor to send SIGTERM ...")
+        # Hold for the same ~few seconds the in-process path would take
+        # so steady-traffic threads accumulate observations to the
+        # disconnect.
+        time.sleep(5)
+    else:
+        pid = find_proxysql_pid(args)
+        print(f"Sending SIGTERM to proxysql (pid {pid})...")
+        os.kill(pid, signal.SIGTERM)
 
     for t in threads:
         t.join(timeout=10)

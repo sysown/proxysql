@@ -112,7 +112,21 @@ $(ODIR):
 $(PROTOBUF_LIB):
 	$(MAKE) -C $(PROXYSQL_PATH)/deps PROXYSQL40=1 protobuf
 
-$(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) | $(ODIR)
+# Several plugin sources transitively include <google/protobuf/...> via
+# the .pb.h files under plugins/mysqlx/proto/ (e.g. mysqlx_protocol.cpp,
+# mysqlx_connection.cpp, mysqlx_session.cpp -- all #include "mysqlx.pb.h"
+# which #includes <google/protobuf/port_def.inc> and <google/protobuf/
+# generated_message_bases.h>). Those headers only exist after the
+# vendored protobuf 3.21.12 install is populated. Without listing
+# $(PROTOBUF_LIB) as a prereq here, parallel make can schedule these
+# .o compiles before the deps protobuf build fires -- the .pb.o rule
+# (below) has the prereq, but it isn't enough on its own.
+#
+# The bug stayed hidden on hosts with a matching system libprotobuf-dev
+# 3.21.x (e.g. Ubuntu 24.04 or 22.04 with backports) because the
+# compile resolved everything from /usr/include/. CI runs on a clean
+# ubuntu-22.04 with no system libprotobuf installed and exposes it.
+$(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) $(PROTOBUF_LIB) | $(ODIR)
 	$(CXX) -c -o $@ $< $(CXXFLAGS) $(IDIRS)
 
 $(ODIR)/%.pb.o: $(PROTO_DIR)/%.pb.cc $(PROTOBUF_LIB) | $(ODIR)

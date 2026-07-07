@@ -312,6 +312,13 @@ struct processlist_config_t {
  */
 void update_modules_metrics();
 
+struct FlushVariableStats {
+	int records  = 0;
+	int updated  = 0;
+	int rejected = 0;
+	int unknown  = 0;
+};
+
 class ProxySQL_Admin {
 	friend class TestDiskUpgrade;
 	private:
@@ -511,11 +518,11 @@ class ProxySQL_Admin {
 	void __add_active_users_ldap();
 
 	void flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false, bool use_lock=true);
-	void flush_mysql_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
+	FlushVariableStats flush_mysql_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
 
 	void flush_GENERIC_variables__checksum__database_to_runtime(const std::string& modname, const std::string& checksum, const time_t epoch);
 	bool flush_GENERIC_variables__retrieve__database_to_runtime(const std::string& modname, char* &error, int& cols, int& affected_rows, SQLite3_result* &resultset);
-	void flush_GENERIC_variables__process__database_to_runtime(
+	FlushVariableStats flush_GENERIC_variables__process__database_to_runtime(
 		const std::string& modname, SQLite3DB *db, SQLite3_result* resultset,
 		const bool& lock, const bool& replace,
 		const std::unordered_set<std::string>& variables_read_only,
@@ -527,7 +534,7 @@ class ProxySQL_Admin {
 
 	char **get_variables_list();
 	bool set_variable(char *name, char *value, bool lock = true);
-	void flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0, bool lock = true);
+	FlushVariableStats flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0, bool lock = true);
 	void flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void disk_upgrade_mysql_query_rules();
 	void disk_upgrade_mysql_servers();
@@ -554,7 +561,7 @@ class ProxySQL_Admin {
 	void __add_active_clickhouse_users(char *user=NULL);
 	void __delete_inactive_clickhouse_users();
 	void flush_clickhouse_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
-	void flush_clickhouse_variables___database_to_runtime(SQLite3DB *db, bool replace);
+	FlushVariableStats flush_clickhouse_variables___database_to_runtime(SQLite3DB *db, bool replace);
 #endif /* PROXYSQLCLICKHOUSE */
 
 	// PostgreSQL
@@ -562,15 +569,15 @@ class ProxySQL_Admin {
 	//void __add_active_pgsql_users(char* user = NULL);
 	//void __delete_inactive_pgsql_users();
 	void flush_pgsql_variables___runtime_to_database(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime = false, bool use_lock = true);
-	void flush_pgsql_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
+	FlushVariableStats flush_pgsql_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
 	//
 
 	void flush_sqliteserver_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
-	void flush_sqliteserver_variables___database_to_runtime(SQLite3DB *db, bool replace);
+	FlushVariableStats flush_sqliteserver_variables___database_to_runtime(SQLite3DB *db, bool replace);
 
 	// LDAP
 	void flush_ldap_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
-	void flush_ldap_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
+	FlushVariableStats flush_ldap_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
 
 	public:
 	/**
@@ -748,13 +755,13 @@ class ProxySQL_Admin {
 	// TSDB
 	void init_tsdb_variables();
 	void flush_tsdb_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
-	void flush_tsdb_variables___database_to_runtime(SQLite3DB *db, bool replace);
+	FlushVariableStats flush_tsdb_variables___database_to_runtime(SQLite3DB *db, bool replace);
 	void load_tsdb_variables_to_runtime() { flush_tsdb_variables___database_to_runtime(admindb, true); }
 	void save_tsdb_variables_from_runtime() { flush_tsdb_variables___runtime_to_database(admindb, true, true, false); }
 #endif
 	void load_or_update_global_settings(SQLite3DB *);
 
-	void load_mysql_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_mysql_variables___database_to_runtime(admindb, true, checksum, epoch); }
+	FlushVariableStats load_mysql_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { return flush_mysql_variables___database_to_runtime(admindb, true, checksum, epoch); }
 	void save_mysql_variables_from_runtime() { flush_mysql_variables___runtime_to_database(admindb, true, true, false); }
 	
 	// Coredump filters
@@ -838,7 +845,7 @@ class ProxySQL_Admin {
 
 	// LDAP
 	void init_ldap_variables();
-	void load_ldap_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_ldap_variables___database_to_runtime(admindb, true, checksum, epoch); }
+	FlushVariableStats load_ldap_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { return flush_ldap_variables___database_to_runtime(admindb, true, checksum, epoch); }
 	void save_ldap_variables_from_runtime() { flush_ldap_variables___runtime_to_database(admindb, true, true, false); }
 	void save_mysql_ldap_mapping_runtime_to_database(bool);
 
@@ -867,7 +874,7 @@ class ProxySQL_Admin {
 	void init_pgsql_firewall();
 
 	void init_pgsql_variables();
-	void load_pgsql_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_pgsql_variables___database_to_runtime(admindb, true, checksum, epoch); }
+	FlushVariableStats load_pgsql_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { return flush_pgsql_variables___database_to_runtime(admindb, true, checksum, epoch); }
 	void save_pgsql_variables_from_runtime() { flush_pgsql_variables___runtime_to_database(admindb, true, true, false); }
 
 	void init_pgsql_users(std::unique_ptr<SQLite3_result>&& pgsql_users_resultset = nullptr, const std::string& checksum = "", const time_t epoch = 0);
