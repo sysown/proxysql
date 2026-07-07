@@ -702,12 +702,52 @@ public:
 	// answered with a CopyFail by the native_fetch_result_cont() safety net
 	// (see there). Reset at query_start() alongside native_result_complete.
 	bool native_copy_intercepted = false;
+
+	// --- Native extended-query (prepared-statement) drive (Task C) ---
+	// Which extended-query wire step the native drive is currently executing. Set by
+	// stmt_prepare_start / stmt_describe_start / stmt_execute_start, consumed by
+	// native_fetch_result_cont() to apply the per-step terminator + ack-filtering
+	// rules. Reset to NONE alongside native_result_complete at each stmt start.
+	enum class PG_Native_Stmt_Step { NONE, PARSE, DESCRIBE_S, DESCRIBE_P, EXECUTE };
+	PG_Native_Stmt_Step native_stmt_step = PG_Native_Stmt_Step::NONE;
+	// True when the step was terminated on the wire with Sync (so it completes on the
+	// backend's ReadyForQuery 'Z'); false when terminated with Flush (completes on the
+	// step's own terminator: '1' for PARSE, 'T'|'n' for DESCRIBE, 'C'|'I'|'s' for
+	// EXECUTE — the backend sends no 'Z' until a later Sync).
+	bool native_stmt_sync_terminated = false;
+	// True for an implicit Parse (IMPLICIT_PREPARE detour): the client never issued a
+	// Parse, so the backend's ParseComplete '1' must be suppressed (never forwarded).
+	bool native_suppress_parse_complete = false;
+	// Set true once native_fetch_result_cont() has injected a Sync to recover from an
+	// ErrorResponse mid-frame on a Flush-terminated step. After 'E' the backend is in
+	// the aborted-until-Sync state and emits no 'Z' on its own; the injected Sync
+	// brings it back to ReadyForQuery so the drain can complete and the session's
+	// error path can run. Guards against injecting a second Sync while draining to 'Z'.
+	bool native_stmt_error_resync = false;
+	// Reset all per-step native stmt drive state. Called at each native stmt start.
+	inline void native_stmt_reset_step() {
+		native_result_complete = false;
+		native_copy_intercepted = false;
+		native_stmt_step = PG_Native_Stmt_Step::NONE;
+		native_stmt_sync_terminated = false;
+		native_suppress_parse_complete = false;
+		native_stmt_error_resync = false;
+		native_framer.reset();
+		native_outbuf.clear();
+	}
 	// Drive the native result fetch: recv backend bytes, frame them, and stream each
 	// raw message into query_result via add_native_backend_message(). Non-blocking:
 	// EAGAIN/incomplete frame → async_exit_status = PG_EVENT_READ and return; a fatal
 	// recv/frame error sets error_info and marks the fetch done. Sets
 	// native_result_complete when ReadyForQuery is reached.
 	void native_fetch_result_cont(short event);
+	// Flush the just-built extended-query step in native_outbuf and set
+	// async_exit_status the way the stmt_*_start callers expect: PG_EVENT_WRITE while
+	// bytes remain buffered (caller waits for POLLOUT), PG_EVENT_NONE once fully sent
+	// (caller proceeds straight to the result fetch). Sets error_info on a fatal send.
+	void native_stmt_send_or_wait();
+	// Finish flushing a partially-sent extended-query step on a POLLOUT re-entry.
+	void native_stmt_flush_cont();
 
 	// --- Native backend TLS (Task 1.6b) ---
 	// native_ssl_requested is set in native_connect_start() when SSL is wanted for
