@@ -2714,6 +2714,11 @@ unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const uns
 	// Per-message-type side effects / flags. These mirror what the libpq add_*
 	// helpers set, but derive everything from the raw payload instead of a PGresult.
 	switch (type) {
+	case '1': // ParseComplete: bare ack, no payload. See PGSQL_QUERY_RESULT_ACK.
+	case 'n': // NoData (Describe response when the statement returns no rows/columns)
+	case 's': // PortalSuspended (Execute response when max_rows cut the result short)
+		result_packet_type |= PGSQL_QUERY_RESULT_ACK;
+		break;
 	case 'T': // RowDescription
 		result_packet_type |= PGSQL_QUERY_RESULT_TUPLE;
 		if (payload_len >= 2) {

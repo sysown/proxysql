@@ -304,6 +304,15 @@ struct ColumnMetadata {
 #define PGSQL_QUERY_RESULT_EMPTY	0x10
 #define PGSQL_QUERY_RESULT_COPY_OUT	0x20
 #define PGSQL_QUERY_RESULT_NOTICE	0x40
+// Set for a bare per-step acknowledgement that carries no other content:
+// ParseComplete ('1'), NoData ('n'), PortalSuspended ('s'). These terminate a
+// Flush-terminated native stmt-step (mid-frame extended query, e.g. a single
+// PQsendQueryParams round trip) on their own, with no 'T'/'D'/'C'/'Z' message
+// alongside them to otherwise mark the result non-empty. Without this flag,
+// PgSQL_Result_to_PgSQL_wire() sees result_packet_type == PGSQL_QUERY_RESULT_NO_DATA
+// and mistakes a successful bare-ack step for "no result, must be a connection
+// error", tripping its assert.
+#define PGSQL_QUERY_RESULT_ACK	0x80
 
 class PgSQL_Query_Result {
 public:

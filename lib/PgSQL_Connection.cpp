@@ -2807,6 +2807,13 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 					// the libpq pipeline path routing to ASYNC_RESYNC_START on error).
 					if (!native_stmt_error_resync) {
 						native_stmt_error_resync = true;
+						// Unconditional (not gated behind a runtime debug level) so this
+						// flagship recovery path stays observable in production logs and
+						// in tests grepping proxysql.log — mirrors the CopyFail safety-net
+						// proxy_warning() above for the same reason.
+						proxy_warning("native extq: mid-frame stmt-step error ('E') on fd=%d (step=%d); "
+							"injecting Sync to resynchronize backend for ReadyForQuery\n",
+							fd, (int)native_stmt_step);
 						pg_build_sync(native_outbuf);
 						if (!native_send_or_buffer(PG_Native_Conn_St::DONE)) {
 							set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(Sync) failed", false);
