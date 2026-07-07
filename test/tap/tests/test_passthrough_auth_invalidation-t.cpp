@@ -34,11 +34,17 @@
  *   7. Re-read @c cache_invalidations and the cache row:
  *      cache_invalidations must have incremented AND the cache entry
  *      for the user must be gone.
+ *   8. Reconnect with @c new_password; this must re-probe the backend,
+ *      succeed, and repopulate the cache.
+ *   9. Reconnect with @c old_password; the refreshed cache must reject
+ *      the stale password during frontend authentication.
  *
  * Step 6 is the load-bearing path. The query annotation is intentional:
  * relying on a pool-drain side effect is not robust enough because
  * already-authenticated backend connections can remain valid after
  * ALTER USER and can mask the stale-password connect path entirely.
+ * The test also sets @c mysql-connect_retries_on_failure=0 so the
+ * invalidation assertion specifically covers the no-retry path.
  */
 #include <cstring>
 #include <string>
@@ -142,11 +148,13 @@ int main() {
 	 *   [3] Triple assertion -- frontend handshake / SELECT 1 1045 /
 	 *       cache_invalidations + cache empty (3 ok() lines: [3a],
 	 *       [3b], [3c])
+	 *   [4] Reconnect with NEW password after eviction (1)
+	 *   [5] Reconnect with OLD password after cache refresh (1)
 	 *   Cleanup (2): DROP USER, restore globals
 	 *
-	 *   4 + 1 + 1 + 3 + 2 = 11.
+	 *   4 + 1 + 1 + 3 + 1 + 1 + 2 = 13.
 	 */
-	plan(11);
+	plan(13);
 
 	if (cl.getEnv()) {
 		return exit_status();
@@ -214,9 +222,15 @@ int main() {
 	 */
 	cfg_ok &= (do_query(admin, "SET mysql-passthrough_auth_max_failures_per_user='10000'") == EXIT_SUCCESS);
 	cfg_ok &= (do_query(admin, "SET mysql-passthrough_auth_max_failures_per_ip='10000'") == EXIT_SUCCESS);
+	/*
+	 * Regression guard for the implementation bug fixed in
+	 * handler_again___status_CONNECTING_SERVER: cache invalidation must
+	 * not depend on having retry budget left.
+	 */
+	cfg_ok &= (do_query(admin, "SET mysql-connect_retries_on_failure='0'") == EXIT_SUCCESS);
 	cfg_ok &= (do_query(admin, "PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE") == EXIT_SUCCESS);
 	cfg_ok &= (do_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME") == EXIT_SUCCESS);
-	ok(cfg_ok, "Pass-through configured (failure caps raised for test isolation)");
+	ok(cfg_ok, "Pass-through configured (failure caps raised, connect retries disabled)");
 
 	/*
 	 * Ensure the target hostgroup has use_ssl=1 so the passthrough probe
@@ -361,6 +375,36 @@ int main() {
 		(long long)inv_before, (long long)inv_after,
 		cache_before, cache_after);
 
+	/* ============================================================
+	 * Step 4 -- the next correct password must re-probe successfully.
+	 *
+	 * This validates the functional effect of eviction: the stale OLD_PW
+	 * cleartext is gone, so a client using NEW_PW reaches the backend
+	 * probe path, succeeds, and repopulates the pass-through cache.
+	 * ============================================================ */
+	{
+		const auto [cerr, qerr] = connect_and_query(cl, TEST_USER, NEW_PW);
+		const int cache_rows = cache_entry_count_for(admin, TEST_USER);
+		ok(cerr == 0 && qerr == 0 && cache_rows == 1,
+			"[4] NEW password re-probes successfully and repopulates cache "
+			"(connect_errno=%u, query_errno=%u, cache_rows=%d)",
+			cerr, qerr, cache_rows);
+	}
+
+	/* ============================================================
+	 * Step 5 -- the stale OLD password must not pass after refresh.
+	 *
+	 * With the cache now holding NEW_PW, frontend authentication should
+	 * reject OLD_PW before a query can run.
+	 * ============================================================ */
+	{
+		const auto [cerr, qerr] = connect_and_query(cl, TEST_USER, OLD_PW);
+		ok(cerr == ER_ACCESS_DENIED_ERROR && qerr == 0,
+			"[5] OLD password rejected after cache refresh "
+			"(connect_errno=%u, query_errno=%u, expected connect_errno=%u)",
+			cerr, qerr, (unsigned)ER_ACCESS_DENIED_ERROR);
+	}
+
 	/* -------- cleanup -------- */
 	{
 		const int rc = do_query(backend, string("DROP USER IF EXISTS '") + TEST_USER + "'@'%'");
@@ -378,6 +422,7 @@ int main() {
 		 * inherits the documented defaults. */
 		rc |= do_query(admin, "SET mysql-passthrough_auth_max_failures_per_user='3'");
 		rc |= do_query(admin, "SET mysql-passthrough_auth_max_failures_per_ip='10'");
+		rc |= do_query(admin, "SET mysql-connect_retries_on_failure='10'");
 		rc |= do_query(admin, "SET mysql-default_authentication_plugin='mysql_native_password'");
 		rc |= do_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 		ok(rc == EXIT_SUCCESS, "Cleanup: globals restored");
