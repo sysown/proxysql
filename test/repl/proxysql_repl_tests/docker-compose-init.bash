@@ -4,16 +4,18 @@
 pushd $(dirname $0) &>/dev/null
 trap 'popd &>/dev/null' EXIT
 
-if [ -z "${MYSQL_VERSION}" ]; then
- 	set -a
-	. .env
-  export MYSQL_VERSION=5.7
-fi
+#if [ -z "${MYSQL_VERSION}" ]; then
+	set -a
+	source .env
+	export MYSQL_VERSION
+	export USE_SSL
+	export HAVE_SSL
+#fi
 
 export DOCKER_MODE=compose
 
 if [ -z "${INFRA}" ]; then
-    export INFRA=${PWD##*/}
+	export INFRA=${PWD##*/}
 fi
 export INFRA_LOGS_PATH=${INFRA_LOGS_PATH:-${PWD}/logs}
 
@@ -31,18 +33,18 @@ echo "==========================================================================
 
 for CONTAINER in $( envsubst < docker-compose.yml | grep "hostname" | grep -v '#' | tr '.' ' ' | awk '{ print $2 }'); do
 
-  # re-create directories
-  dir_path="${INFRA_LOGS_PATH}/${INFRA}/${CONTAINER}/${MYSQL_VERSION}_${SSL}"
-  rm -rf "$dir_path"
-  mkdir -p "$dir_path"
-  chmod 777 "$dir_path"
+	# re-create directories
+	dir_path="${INFRA_LOGS_PATH}/${INFRA}/${CONTAINER}/${MYSQL_VERSION}_${SSL}"
+	rm -rf "$dir_path"
+	mkdir -p "$dir_path"
+	chmod 777 "$dir_path"
 
 done
 
 if [[ ${DEBEZIUM} = "debezium" ]]; then
 	docker-compose --profile mysql --profile debezium up -d
 else
-  docker-compose --profile mysql up -d
+	docker-compose --profile mysql up -d
 fi
 
 # pass 'no_binlog_checksum' if it's required

@@ -1,5 +1,7 @@
 #!/usr/bin/bash
 
+res=0
+
 if [ -z "${SCRIPTPATH}" ]; then
   export SCRIPTPATH=${PWD}
   source ../env.sh
@@ -12,14 +14,6 @@ fi
 # export env vars from .env to the environment of subsequent commands
 set -a
 . .env
-
-if [[ -z ${WORKSPACE} || ! -f ${WORKSPACE}/src/proxysql ]]; then
-  export WORKSPACE=/var/lib/jenkins/scripts/infra-proxysql/proxysql/
-fi
-
-[[ $(mysql --skip-ssl-verify-server-cert -h 2>&1) =~ skip-ssl-verify-server-cert ]] || export SSLOPT=--skip-ssl-verify-server-cert
-
-res=0
 
 if [ -z "${WORKSPACE}" ]; then
     echo "WORKSPACE is empty, please check ../env.sh"
@@ -45,7 +39,7 @@ fn_stop () {
   # shutdown proxysql
   # ensure ProxySQL is stopped
   echo "[`date '+%Y-%m-%d %H:%M:%S'`] >>> Ensure ProxySQL is stopped..."
-  mysql ${SSLOPT} -h${PROXYSQL_HOST} -P${PROXYADM_PORT} -u${PROXYADM_USER} -p${PROXYADM_PWD} -e "PROXYSQL SHUTDOWN SLOW" 2>&1 | grep -v 'Using a password' | grep -v 'Lost connection to MySQL' || true
+  mysql -h${PROXYSQL_HOST} -P${PROXYADM_PORT} -u${PROXYADM_USER} -p${PROXYADM_PWD} -e "PROXYSQL SHUTDOWN SLOW" 2>&1 | grep -vP "mysql: .?Warning" | grep -v 'Lost connection to MySQL' || true
   sleep 5
 
 }
@@ -57,15 +51,15 @@ results=()
 debezium="debezium"
 
 # run stress_repl_test.sh for each mysql version with/without ssl, pass $2 which might be 'no_binlog_checksum'
-for mysql_ver in "5.6" "5.7" "8"
+for mysql_ver in "5.6" "5.7" "8.0"
 do
   for ssl_par in "no-ssl" "ssl"
   do
 
     if [ "$mysql_ver" == "5.6" ] && [ "$ssl_par" == "ssl" ]; then
       : # skip 5.6 ssl
-    elif [ "$mysql_ver" == "5.6" ] || [ "$mysql_ver" == "8" ] ; then
-      # run  5.6/8 without debezium for now
+    elif [ "$mysql_ver" == "5.6" ] || [ "$mysql_ver" == "8.0" ] ; then
+      # run  5.6/8.0 without debezium for now
       ./stress_repl_test.sh "$mysql_ver" "$ssl_par" "" "$2"
 
       if [ $? -ne 0 ]; then

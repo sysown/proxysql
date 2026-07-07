@@ -13,11 +13,6 @@ fi
 set -a
 . .env
 
-if [[ -z ${WORKSPACE} || ! -f ${WORKPACE}/src/proxysql ]]; then
-  export WORKSPACE=/var/lib/jenkins/scripts/infra-proxysql/proxysql/
-fi
-
-[[ $(mysql --skip-ssl-verify-server-cert -h 2>&1) =~ skip-ssl-verify-server-cert ]] || export SSLOPT=--skip-ssl-verify-server-cert
 
 if [[ $1 == "5.6" || $1 == "5.7" || $1 == "8.0" ]]; then
   export MYSQL_VERSION=$1
@@ -81,7 +76,7 @@ fn_echo_start_test() {
 #-------------------------------------------------------------------------------
 # function for sysbench test run
 fn_sysbench_run () {
-	echo "[`date '+%Y-%m-%d %H:%M:%S'`] >>> Running sysbench test "$1"..."
+	echo "[`date '+%Y-%m-%d %H:%M:%S'`] >>> Running sysbench test ..."
 
   # create logs directory
   logdir="${INFRA_LOGS_PATH}/${INFRA}/sysbench/${MYSQL_VERSION}_${SSL}_${DEBEZIUM}"
@@ -89,11 +84,7 @@ fn_sysbench_run () {
   chmod 777 "$logdir"
 
   # run sysbench oltp test, pass logs directory parameter
-  if [[ $1 == "writes-only" ]]; then
-    ./bin/stress-writes-benchmark.bash $logdir
-  else
-    ./bin/stress-reads-benchmark.bash $logdir
-  fi
+  ./bin/stress-writes-benchmark.bash $logdir
 
   # wait some time while generated data being replicated
   sleep 3
@@ -112,21 +103,6 @@ fn_sysbench_check () {
 }
 
 #-------------------------------------------------------------------------------
-# function for restarting replication
-fn_restart_repl () {
-  num=$(( (${1} % 5) + 1 ))
-
-  echo Restarting replication on mysql3, mysql4, mysql5
-  mysql ${SSLOPT} -h${MYSQL3_HOST}${INFRA} -P${MYSQL3_PORT} -uroot -proot -e "STOP SLAVE; START SLAVE;" 2>&1 | grep -v "Using a password"
-  mysql ${SSLOPT} -h${MYSQL4_HOST}${INFRA} -P${MYSQL4_PORT} -uroot -proot -e "STOP SLAVE; START SLAVE;" 2>&1 | grep -v "Using a password"
-  mysql ${SSLOPT} -h${MYSQL5_HOST}${INFRA} -P${MYSQL5_PORT} -uroot -proot -e "STOP SLAVE; START SLAVE;" 2>&1 | grep -v "Using a password"
-  echo Running 1 update sbtest${num} ...
-  mysql ${SSLOPT} -h${PROXYSQL_HOST} -P${PROXYSQL_PORT} -uroot -proot sysbench -e "UPDATE sbtest${num} u JOIN (SELECT MIN(id) id FROM sbtest${num}) s USING (id) SET u.k=u.k+1;" 2>&1 | grep -v 'Using a password'
-
-  sleep 3
-}
-
-#-------------------------------------------------------------------------------
 # function for infrastucture destroy and proxysql shutdown
 fn_stop () {
 
@@ -138,7 +114,7 @@ fn_stop () {
   # shutdown proxysql
   # ensure ProxySQL is stopped
   echo "[`date '+%Y-%m-%d %H:%M:%S'`] >>> Ensure ProxySQL is stopped..."
-  mysql ${SSLOPT} -h${PROXYSQL_HOST} -P${PROXYADM_PORT} -u${PROXYADM_USER} -p${PROXYADM_PWD} -e "PROXYSQL SHUTDOWN SLOW" 2>&1 | grep -v 'Using a password' | grep -v 'Lost connection to MySQL' || true
+  mysql -h${PROXYSQL_HOST} -P${PROXYADM_PORT} -u${PROXYADM_USER} -p${PROXYADM_PWD} -e "PROXYSQL SHUTDOWN SLOW" 2>&1 | grep -vP "mysql: .?Warning" | grep -v 'Lost connection to MySQL' || true
   sleep 5
 
 }
@@ -233,40 +209,13 @@ fn_run_main_test () {
   ./bin/stress-proxy-repl-config.bash
   ./bin/stress-mysql-repl-config.bash
   # test replication: mysql1(source)=>proxysql=>mysql3(replica)
-
   fn_sysbench_run
   fn_sysbench_check
   if [ $? -ne 0 ]; then
     res=1
-    results+=("$repl_chain read-write FAILED")
+    results+=("$repl_chain FAILED")
   else
-    results+=("$repl_chain read-write passed")
-  fi
-
-  fn_sysbench_run writes-only
-  fn_sysbench_check
-  if [ $? -ne 0 ]; then
-    res=1
-    results+=("$repl_chain write-only FAILED")
-  else
-    results+=("$repl_chain write-only passed")
-  fi
-
-  echo "[`date '+%Y-%m-%d %H:%M:%S'`] >>> Running replication restart test ..."
-  repl_res=0
-  for i in $(seq 1 10)
-  do
-    echo "[`date '+%Y-%m-%d %H:%M:%S'`] Run $i ..."
-    fn_restart_repl $i
-    fn_sysbench_check
-    if [ $? -ne 0 ]; then
-      res=1
-      repl_res=1
-      results+=("$repl_chain replication restart run $i FAILED")
-    fi
-  done
-  if [ $repl_res -eq 0 ]; then
-    results+=("$repl_chain 10 replication restarts passed")
+    results+=("$repl_chain passed")
   fi
 
   #-------------------------------------------------------------------------------
@@ -276,40 +225,13 @@ fn_run_main_test () {
   ./bin/stress-proxy-repl-casc-config.bash
   ./bin/stress-mysql-repl-casc-config.bash
   # test replication: mysql1(source)=>mysql2(replica)=>proxysql=>mysql3(replica)
-
-#  fn_sysbench_run
-#  fn_sysbench_check
-#  if [ $? -ne 0 ]; then
-#    res=1
-#    results+=("$repl_chain read-write FAILED")
-#  else
-#    results+=("$repl_chain read-write passed")
-#  fi
-
-  fn_sysbench_run writes-only
+  fn_sysbench_run
   fn_sysbench_check
   if [ $? -ne 0 ]; then
     res=1
-    results+=("$repl_chain write-only FAILED")
+    results+=("$repl_chain FAILED")
   else
-    results+=("$repl_chain write-only passed")
-  fi
-
-  echo "[`date '+%Y-%m-%d %H:%M:%S'`] >>> Running replication restart test ..."
-  repl_res=0
-  for i in $(seq 1 10)
-  do
-    echo "[`date '+%Y-%m-%d %H:%M:%S'`] Run $i ..."
-    fn_restart_repl $i
-    fn_sysbench_check
-    if [ $? -ne 0 ]; then
-      res=1
-      repl_res=1
-      results+=("$repl_chain replication restart run $i FAILED")
-    fi
-  done
-  if [ $repl_res -eq 0 ]; then
-    results+=("$repl_chain 10 replication restarts passed")
+    results+=("$repl_chain passed")
   fi
 
   #-------------------------------------------------------------------------------

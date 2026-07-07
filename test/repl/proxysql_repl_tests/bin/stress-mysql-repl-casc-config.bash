@@ -15,24 +15,24 @@ elif [ -z "${USE_SSL}" ]; then
 fi
 
 echo "[$(date)] Configuring replication: mysql1(source)=>mysql2(replica)=>proxysql=>mysql3/4/5(replicas) ..."
-mysql ${SSLOPT} -h${MYSQL3_HOST}${INFRA} -P${MYSQL3_PORT} -uroot -proot -e " \
+mysql -h${MYSQL3_HOST}${INFRA} -P${MYSQL3_PORT} -uroot -proot -e " \
 STOP SLAVE; \
 RESET SLAVE ALL;  \
 CHANGE MASTER TO MASTER_HOST='${HOST_IP}', MASTER_PORT=6033, MASTER_USER='repl_casc',MASTER_PASSWORD='repl_casc',MASTER_AUTO_POSITION=1,MASTER_SSL=${USE_SSL}; \
 START SLAVE; \
-" 2>&1 | grep -v "Using a password"
-mysql ${SSLOPT} -h${MYSQL4_HOST}${INFRA} -P${MYSQL4_PORT} -uroot -proot -e " \
+" 2>&1 | grep -vP "mysql: .?Warning"
+mysql -h${MYSQL4_HOST}${INFRA} -P${MYSQL4_PORT} -uroot -proot -e " \
 STOP SLAVE; \
 RESET SLAVE ALL;  \
 CHANGE MASTER TO MASTER_HOST='${HOST_IP}', MASTER_PORT=6033, MASTER_USER='repl_casc',MASTER_PASSWORD='repl_casc',MASTER_AUTO_POSITION=1,MASTER_SSL=${USE_SSL}; \
 START SLAVE; \
-" 2>&1 | grep -v "Using a password"
-mysql ${SSLOPT} -h${MYSQL5_HOST}${INFRA} -P${MYSQL5_PORT} -uroot -proot -e " \
+" 2>&1 | grep -vP "mysql: .?Warning"
+mysql -h${MYSQL5_HOST}${INFRA} -P${MYSQL5_PORT} -uroot -proot -e " \
 STOP SLAVE; \
 RESET SLAVE ALL;  \
 CHANGE MASTER TO MASTER_HOST='${HOST_IP}', MASTER_PORT=6033, MASTER_USER='repl_casc',MASTER_PASSWORD='repl_casc',MASTER_AUTO_POSITION=1,MASTER_SSL=${USE_SSL}; \
 START SLAVE; \
-" 2>&1 | grep -v "Using a password"
+" 2>&1 | grep -vP "mysql: .?Warning"
 
 RC=1
 
@@ -49,13 +49,13 @@ do
   fi
   sleep 1
   printf "."
-  if [[ $(mysql ${SSLOPT} -h${MYSQL3_HOST}${INFRA} -P${MYSQL3_PORT} -uroot -proot -e 'SHOW SLAVE STATUS\G' 2>&1 | grep -v 'Using a password' | grep 'Running: Yes' | wc -l) -eq 2 ]]; then
+  if [[ $(mysql -h${MYSQL3_HOST}${INFRA} -P${MYSQL3_PORT} -uroot -proot -e 'SHOW SLAVE STATUS\G' 2>&1 | grep -vP "mysql: .?Warning" | grep 'Running: Yes' | wc -l) -eq 2 ]]; then
     RC=0
   fi
   WAITED=$((WAITED+1))
 done
 
-echo " "${MYSQL3_HOST}${INFRA}:" got $(mysql ${SSLOPT} -h${MYSQL3_HOST}${INFRA} -P${MYSQL3_PORT} -uroot -proot -e 'SHOW SLAVE STATUS\G' 2>/dev/null | grep 'Slave_IO_State' | awk '{ $1=$1; print }')"
+echo " "${MYSQL3_HOST}${INFRA}:" got $(mysql -h${MYSQL3_HOST}${INFRA} -P${MYSQL3_PORT} -uroot -proot -e 'SHOW SLAVE STATUS\G' 2>/dev/null | grep 'Slave_IO_State' | awk '{ $1=$1; print }')"
 
 RC=1
 
@@ -72,13 +72,13 @@ do
   fi
   sleep 1
   printf "."
-  if [[ $(mysql ${SSLOPT} -h${MYSQL4_HOST}${INFRA} -P${MYSQL4_PORT} -uroot -proot -e 'SHOW SLAVE STATUS\G' 2>&1 | grep -v 'Using a password' | grep 'Running: Yes' | wc -l) -eq 2 ]]; then
+  if [[ $(mysql -h${MYSQL4_HOST}${INFRA} -P${MYSQL4_PORT} -uroot -proot -e 'SHOW SLAVE STATUS\G' 2>&1 | grep -vP "mysql: .?Warning" | grep 'Running: Yes' | wc -l) -eq 2 ]]; then
     RC=0
   fi
   WAITED=$((WAITED+1))
 done
 
-echo " "${MYSQL4_HOST}${INFRA}:" got $(mysql ${SSLOPT} -h${MYSQL4_HOST}${INFRA} -P${MYSQL4_PORT} -uroot -proot -e 'SHOW SLAVE STATUS\G' 2>/dev/null | grep 'Slave_IO_State' | awk '{ $1=$1; print }')"
+echo " "${MYSQL4_HOST}${INFRA}:" got $(mysql -h${MYSQL4_HOST}${INFRA} -P${MYSQL4_PORT} -uroot -proot -e 'SHOW SLAVE STATUS\G' 2>/dev/null | grep 'Slave_IO_State' | awk '{ $1=$1; print }')"
 
 RC=1
 
@@ -95,13 +95,13 @@ do
   fi
   sleep 1
   printf "."
-  if [[ $(mysql ${SSLOPT} -h${MYSQL5_HOST}${INFRA} -P${MYSQL5_PORT} -uroot -proot -e 'SHOW SLAVE STATUS\G' 2>&1 | grep -v 'Using a password' | grep 'Running: Yes' | wc -l) -eq 2 ]]; then
+  if [[ $(mysql -h${MYSQL5_HOST}${INFRA} -P${MYSQL5_PORT} -uroot -proot -e 'SHOW SLAVE STATUS\G' 2>&1 | grep -vP "mysql: .?Warning" | grep 'Running: Yes' | wc -l) -eq 2 ]]; then
     RC=0
   fi
   WAITED=$((WAITED+1))
 done
 
-echo " "${MYSQL5_HOST}${INFRA}:" got $(mysql ${SSLOPT} -h${MYSQL5_HOST}${INFRA} -P${MYSQL5_PORT} -uroot -proot -e 'SHOW SLAVE STATUS\G' 2>/dev/null | grep 'Slave_IO_State' | awk '{ $1=$1; print }')"
+echo " "${MYSQL5_HOST}${INFRA}:" got $(mysql -h${MYSQL5_HOST}${INFRA} -P${MYSQL5_PORT} -uroot -proot -e 'SHOW SLAVE STATUS\G' 2>/dev/null | grep 'Slave_IO_State' | awk '{ $1=$1; print }')"
 
 
 
