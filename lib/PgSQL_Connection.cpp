@@ -2625,6 +2625,24 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 		return;
 	}
 
+	// Self-heal any pending outbound bytes before reading more frames. The only
+	// writer during the fetch phase is the 'G'/'W' CopyFail interception below:
+	// if its send was partial we returned with PG_EVENT_WRITE, and this re-entry
+	// (on POLLOUT) must finish flushing the CopyFail or the backend — which is
+	// blocked mid-COPY waiting for it — will never produce the ErrorResponse +
+	// ReadyForQuery that complete the cycle. Mirrors query_cont()'s native branch.
+	if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) {
+		if (!native_flush_outbuf()) {
+			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send failed during result fetch", false);
+			return;
+		}
+		if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) {
+			// Still bytes pending → keep waiting for writable.
+			async_exit_status = PG_EVENT_WRITE;
+			return;
+		}
+	}
+
 	int r = native_recv_into_framer();
 	if (r < 0) {
 		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "backend closed during result fetch", false);
@@ -2655,10 +2673,22 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 				// handling below.
 				if (!native_copy_intercepted) {
 					native_copy_intercepted = true;
-					proxy_warning("native backend protocol: unexpected CopyInResponse ('%c'); sending CopyFail\n", msg.type);
+					proxy_warning("native backend protocol: unexpected CopyInResponse/CopyBothResponse ('%c'); sending CopyFail\n", msg.type);
 					pg_native_build_copyfail(native_outbuf, "ProxySQL native backend protocol cannot drive COPY FROM STDIN on this path");
+					// native_send_or_buffer's native_st side effect only matters
+					// during the connect handshake; it is dead here (post-connect,
+					// mid-fetch) — only the flush result and async_exit_status count.
 					if (!native_send_or_buffer(PG_Native_Conn_St::DONE)) {
 						set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(CopyFail) failed", false);
+						return;
+					}
+					if (async_exit_status == PG_EVENT_WRITE || !native_outbuf.empty() || !native_ssl_outbuf.empty()) {
+						// Partial send: return so the poll loop arms POLLOUT and
+						// re-enters us; the preamble above finishes the flush.
+						// Continuing the loop here would let the FRAME_NEED_MORE
+						// branch overwrite async_exit_status with PG_EVENT_READ,
+						// leaving the CopyFail forever unflushed while the backend
+						// waits for it — a mutual-wait hang.
 						return;
 					}
 				}

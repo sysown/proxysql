@@ -2787,8 +2787,8 @@ unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const uns
 	case 'H': // CopyOutResponse: bytes forwarded verbatim (stream-through)
 		result_packet_type |= PGSQL_QUERY_RESULT_COPY_OUT;
 		break;
-	case 'd': // CopyData: count as a row for stats parity with the libpq
-		num_rows++;   // path (add_copy_out_row also increments num_rows)
+	case 'd': // CopyData: count as a row for stats parity with the libpq path (add_copy_out_row also increments num_rows)
+		num_rows++;
 		break;
 	case 'c': // CopyDone: no side effect; CommandComplete follows
 		break;
