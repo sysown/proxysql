@@ -13,13 +13,8 @@ fi
 set -a
 . .env
 
-if [[ -z ${WORKSPACE} || ! -f ${WORKSPACE}/src/proxysql ]]; then
-  export WORKSPACE=/var/lib/jenkins/scripts/infra-proxysql/proxysql/
-fi
 
-[[ $(mysql --skip-ssl-verify-server-cert -h 2>&1) =~ skip-ssl-verify-server-cert ]] || export SSLOPT=--skip-ssl-verify-server-cert
-
-if [[ $1 == "5.6" || $1 == "5.7" || $1 =~ "8.0" ]]; then
+if [[ $1 == "5.6" || $1 == "5.7" || $1 == "8.0" ]]; then
   export MYSQL_VERSION=$1
 elif [ -z "$1" ]; then
   export MYSQL_VERSION="5.7"
@@ -118,8 +113,8 @@ fn_stop () {
 
   # shutdown proxysql
   # ensure ProxySQL is stopped
-  echo "[`date '+%Y-%m-%d %H:%M:%S'`] >>> Ensure ProxySQL is stopped ..."
-  mysql ${SSLOPT} -h${PROXYSQL_HOST} -P${PROXYADM_PORT} -u${PROXYADM_USER} -p${PROXYADM_PWD} -e "PROXYSQL SHUTDOWN SLOW" 2>&1 | grep -v 'Using a password' | grep -v 'Lost connection to MySQL' || true
+  echo "[`date '+%Y-%m-%d %H:%M:%S'`] >>> Ensure ProxySQL is stopped..."
+  mysql -h${PROXYSQL_HOST} -P${PROXYADM_PORT} -u${PROXYADM_USER} -p${PROXYADM_PWD} -e "PROXYSQL SHUTDOWN SLOW" 2>&1 | grep -vP 'mysql: .?Warning' | grep -v 'Lost connection to MySQL' || true
   sleep 5
 
 }
@@ -130,19 +125,12 @@ fn_start () {
 
   # Start ProxySQL
   SECONDS=0
-  echo "[`date '+%Y-%m-%d %H:%M:%S'`] >>> Starting ProxySQL ..."
-  echo "[`date '+%Y-%m-%d %H:%M:%S'`] >>> ProxySQL binary '$WORKSPACE/src/proxysql'"
-  echo "[`date '+%Y-%m-%d %H:%M:%S'`] >>> ProxySQL config '$REPL_TESTS_PATH/conf/proxysql/proxysql.cnf'"
-  echo "[`date '+%Y-%m-%d %H:%M:%S'`] >>> ProxySQL datadir '$REPL_TESTS_PATH/conf/proxysql'"
-  echo "[`date '+%Y-%m-%d %H:%M:%S'`] >>> ProxySQL logging '$REPL_INFRA_DATADIR/proxysql/proxysql.log'"
+  echo "[`date '+%Y-%m-%d %H:%M:%S'`] >>> Starting ProxySQL..."
   cd "$WORKSPACE/src"
-  mkdir -p $REPL_INFRA_DATADIR/proxysql/ && chmod -R 777 $REPL_INFRA_DATADIR
-  (./proxysql --idle-threads --initial -f -c "$REPL_TESTS_PATH/conf/proxysql/proxysql.cnf" -D $REPL_INFRA_DATADIR/proxysql >> $REPL_INFRA_DATADIR/proxysql/proxysql.log 2>&1 ) &
-  echo -n "[`date '+%Y-%m-%d %H:%M:%S'`] >>> Waiting for 'proxysql' ..."
-  while [[ ! $(mysql ${SSLOPT} -h${PROXYSQL_HOST} -P${PROXYADM_PORT} -u${PROXYADM_USER} -p${PROXYADM_PWD} -e 'SELECT version()\G' 2>/dev/null) =~ version ]]; do echo -n '.'; sleep 1; done;
-  VERS=$(mysql ${SSLOPT} -h${PROXYSQL_HOST} -P${PROXYADM_PORT} -u${PROXYADM_USER} -p${PROXYADM_PWD} -NB -e "SELECT version();" 2>&1 | grep -vP 'mysql: .?Warning')
-  echo "[`date '+%Y-%m-%d %H:%M:%S'`] >>> ProxySQL version '${VERS}'"
+  echo "[`date '+%Y-%m-%d %H:%M:%S'`] >>> ProxySQL at '${PWD}'"
+  (./proxysql --idle-threads -f -c "$REPL_TESTS_PATH/conf/proxysql/proxysql.cnf" -D $REPL_INFRA_DATADIR/proxysql >> $REPL_INFRA_DATADIR/proxysql/proxysql.log 2>&1 ) &
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] >>> ProxySQL start DONE in ${SECONDS}s"
+  sleep 3 # give proxysql some time to start
 
   cd $REPL_TESTS_PATH
 

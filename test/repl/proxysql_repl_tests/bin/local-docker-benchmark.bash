@@ -16,7 +16,7 @@ MYSQL_PWD=root
 
 
 echo "[`date '+%Y-%m-%d %H:%M:%S'`] Dropping 'sysbench' schema if present and preparing test dataset"
-mysql ${SSLOPT} -h$MYSQL_HOST -P$MYSQL_PORT -uroot -p$MYSQL_PWD -e "DROP DATABASE IF EXISTS sysbench; CREATE DATABASE IF NOT EXISTS sysbench;" 2>&1 | grep -v 'Using a password'
+mysql -h$MYSQL_HOST -P$MYSQL_PORT -uroot -p$MYSQL_PWD -e "DROP DATABASE IF EXISTS sysbench; CREATE DATABASE IF NOT EXISTS sysbench;" 2>&1 | grep -vP "mysql: .?Warning"
 
 sysbench_prepare="sysbench /usr/share/sysbench/$SCRIPT --table-size=$SIZE_TABLES --tables=$NUM_TABLES --threads=$PREP_THREADS \
  --mysql-db=sysbench --mysql-user=sbtest1 --mysql-password=sbtest1 --mysql-host=$MYSQL_HOST --mysql-port=$MYSQL_PORT --db-driver=mysql prepare"

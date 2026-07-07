@@ -35,8 +35,8 @@ Currently all tests run includes the following:
 - mysql 5.6 no-ssl
 - mysql 5.7 no-ssl with debezium
 - mysql 5.7 ssl with debezium
-- mysql 8 no-ssl
-- mysql 8 ssl
+- mysql 8.0 no-ssl
+- mysql 8.0 ssl
 
 ### Launching single ProxySQL Replication test
 
@@ -57,12 +57,12 @@ for either failure or success.
 
 Single test can be executed with the following options:
 
-- mysql version option, $1: `5.6` or `5.7` or `8`
+- mysql version option, $1: `5.6` or `5.7` or `8.0`
 - SSL option, $2: `ssl` or `no-ssl`
 - Debezium option, $3: `debezium`
 
 Example:
 
 ```
-./exec_repl_test.sh 8 no-ssl debezium
+./exec_repl_test.sh 8.0 no-ssl debezium
 ```

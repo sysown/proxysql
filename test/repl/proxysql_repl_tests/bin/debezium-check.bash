@@ -60,8 +60,8 @@ do
 done
 
 # extract the last number from gtid_executed
-gtid_executed=$(mysql ${SSLOPT} -h${MYSQL1_HOST}${INFRA} -P${MYSQL1_PORT} -uroot -proot -s -N -e "SHOW GLOBAL VARIABLES LIKE 'gtid_executed';" 2>/dev/null | cut -d ':' -f 2- | cut -d '-' -f 2)
-gtid_uuid=$(mysql ${SSLOPT} -h${MYSQL1_HOST}${INFRA} -P${MYSQL1_PORT} -uroot -proot -s -N -e "SHOW GLOBAL VARIABLES LIKE 'server_uuid';" 2>/dev/null | cut -f 2-)
+gtid_executed=$(mysql -h${MYSQL1_HOST}${INFRA} -P${MYSQL1_PORT} -uroot -proot -s -N -e "SHOW GLOBAL VARIABLES LIKE 'gtid_executed';" 2>/dev/null | cut -d ':' -f 2- | cut -d '-' -f 2)
+gtid_uuid=$(mysql -h${MYSQL1_HOST}${INFRA} -P${MYSQL1_PORT} -uroot -proot -s -N -e "SHOW GLOBAL VARIABLES LIKE 'server_uuid';" 2>/dev/null | cut -f 2-)
 
 # compare the last number from max_gtid with the last number from gtid_executed
 if (( ${max_gtid#*:} == $gtid_executed )); then
