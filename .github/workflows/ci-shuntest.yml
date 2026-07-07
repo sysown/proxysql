@@ -13,6 +13,7 @@ env:
 jobs:
   tests:
     runs-on: ubuntu-22.04
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -59,6 +60,19 @@ jobs:
 #        done
 #        echo "Cache available '${BLDCACHE}'"
 
+    - name: Checkout repl test suite
+      # The replication/shunning suite is vendored in-repo at test/repl/ (moved
+      # off the private jenkins-build-scripts repo, so no GH_TOKEN_PROXYSQL PAT).
+      # Sparse-checkout just that dir into proxysql/; the proxysql binary arrives
+      # separately via the build handoff below (unpacked into the same proxysql/).
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ env.SHA }}
+        path: 'proxysql'
+        sparse-checkout: |
+          test/repl
+
     - name: Download build handoff
       # Build payload arrives as workflow artifacts, not an Actions cache:
       # GitHub made cache writes read-only for workflow_run/untrusted triggers
@@ -98,18 +112,9 @@ jobs:
         done
         rm -f ../cache_*.tar.zst ../handoff-*.zip
 
-    - name: Checkout jenkins_build_scripts
-      uses: actions/checkout@v4
-      with:
-        repository: 'proxysql/jenkins-build-scripts'
-        ref: 'proxysql_repl_tests'
-        fetch-depth: 0
-        path: 'jenkins-build-scripts'
-        token: ${{ secrets.GH_TOKEN_PROXYSQL }}
-
     - name: Docker-hoster
       run: |
-        cd jenkins-build-scripts/infra-docker-hoster
+        cd proxysql/test/repl/infra-docker-hoster
         sed -i 's|image: .*|image: ghcr.io/mrmohebi/docker-hoster|' docker-compose.yml
         docker compose up -d
 
@@ -117,11 +122,12 @@ jobs:
       run: |
         set +e
         
-        cd jenkins-build-scripts
+        # Vendored suite lives at proxysql/test/repl (was jenkins-build-scripts).
+        cd proxysql/test/repl
         grep -rl 'docker-compose ' | xargs -r -n1 sed -i 's/docker-compose /docker compose /g'
         sed -i "s|#!/usr/bin/bash|#!/usr/bin/bash +e|" proxysql_repl_tests/bin/debezium-check.bash
         sed -i "s|#!/usr/bin/bash|#!/usr/bin/bash +e|" proxysql_repl_tests/exec_shun_test.sh
-        sed -i "s|JENKINS_SCRIPTS_PATH=.*|JENKINS_SCRIPTS_PATH=${{ github.workspace }}/jenkins-build-scripts|" env.sh
+        sed -i "s|JENKINS_SCRIPTS_PATH=.*|JENKINS_SCRIPTS_PATH=${{ github.workspace }}/proxysql/test/repl|" env.sh
         sed -i "s|WORKSPACE=.*|WORKSPACE=${{ github.workspace }}/proxysql|" env.sh
         cat env.sh
         ls -l ${{ github.workspace }}/proxysql/src
