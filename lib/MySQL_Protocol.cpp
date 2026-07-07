@@ -2400,30 +2400,29 @@ void MySQL_Protocol::PPHR_passthrough_init(MyProt_tmp_auth_vars& vars1) {
 	// client_myds->passthrough_cleartext field; that field is gone now that
 	// the credential rides userinfo->password like any other auth.
 	if ((*myds)->switching_auth_stage == 5) {
-		MySQL_Connection_userinfo *userinfo =
-			(*myds)->sess->client_myds->myconn->userinfo;
-		if (userinfo && userinfo->password) {
-			// process_pkt_handshake_response left password "" because the
-			// verifier returned false with auth_in_progress set; free that
-			// empty string before overwriting.
-			free(userinfo->password);
-			userinfo->password = NULL;
+		// Stash the captured cleartext on client_myds->passthrough_cleartext.
+		// It MUST live on a dedicated field, NOT userinfo->password: the
+		// do_auth epilogue in process_pkt_handshake_response overwrites
+		// userinfo->password with "" when auth is still in progress
+		// (the `else` branch with `if (vars1.pass_len)`), which would clobber
+		// the borrowed cleartext before the session handler runs. The
+		// dedicated field is left untouched by that epilogue. The session
+		// handler copies this cleartext onto the backend connection's
+		// userinfo->password at probe-acquire time (after the epilogue has
+		// run), so it becomes the auth password for mysql_real_connect_start.
+		if ((*myds)->passthrough_cleartext) {
+			memset((*myds)->passthrough_cleartext, 0, strlen((*myds)->passthrough_cleartext));
+			free((*myds)->passthrough_cleartext);
+			(*myds)->passthrough_cleartext = NULL;
 		}
 		if (vars1.pass && vars1.pass_len > 0) {
-			userinfo->password =
+			(*myds)->passthrough_cleartext =
 				strdup(reinterpret_cast<const char*>(vars1.pass));
-		} else {
-			// Client sent an empty cleartext. Leave userinfo->password NULL;
-			// handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT fails
-			// fast on the empty/NULL password with a generic ERR. An empty
-			// password can never authenticate against a real backend account.
-			userinfo->password = NULL;
 		}
-		if (userinfo) {
-			// Recompute the userinfo hash so backend connection identity
-			// checks (which compare hashes) see the borrowed credential.
-			userinfo->set(NULL, NULL, NULL, NULL);
-		}
+		// else: client sent an empty cleartext. Leave passthrough_cleartext
+		// NULL and let handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT
+		// fail the auth with a generic ERR. An empty password can never
+		// authenticate against a real backend account.
 		(*myds)->auth_in_progress = 1;
 		(*myds)->sess->set_status(AUTHENTICATING_BACKEND_FOR_CLIENT);
 		return;

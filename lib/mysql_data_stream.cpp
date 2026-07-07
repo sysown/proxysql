@@ -332,6 +332,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	switching_auth_type = AUTH_UNKNOWN_PLUGIN;
 	switching_auth_sent = AUTH_UNKNOWN_PLUGIN;
 	auth_in_progress = 0;
+	passthrough_cleartext = NULL;
 	tmp_charset = 0;
 	x509_subject_alt_name=NULL;
 	ssl=NULL;
@@ -383,6 +384,14 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 	if (com_field_wild) {
 		free(com_field_wild);
 		com_field_wild=NULL;
+	}
+
+	if (passthrough_cleartext) {
+		// Best-effort scrub before free; the cleartext password should
+		// not linger in freed heap memory.
+		memset(passthrough_cleartext, 0, strlen(passthrough_cleartext));
+		free(passthrough_cleartext);
+		passthrough_cleartext = NULL;
 	}
 
 	proxy_debug(PROXY_DEBUG_NET,1, "Shutdown Data Stream. Session=%p, DataStream=%p\n" , sess, this);

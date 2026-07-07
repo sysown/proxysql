@@ -1750,6 +1750,19 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 		(client_myds && client_myds->myconn && client_myds->myconn->userinfo)
 			? (const char*)client_myds->myconn->userinfo->username
 			: NULL;
+	// The borrowed cleartext lives on the dedicated passthrough_cleartext
+	// field (captured by PPHR_passthrough_init at stage 5). It MUST NOT be
+	// read from userinfo->password: process_pkt_handshake_response's epilogue
+	// overwrites userinfo->password with "" while auth is in progress, so by
+	// the time this handler runs userinfo->password is empty even though the
+	// cleartext is valid. Phase A copies this cleartext onto the backend
+	// connection's userinfo->password at probe-acquire time (after that
+	// epilogue has run), where it becomes the auth password for
+	// mysql_real_connect_start. On probe success, Phase B also writes it back
+	// onto the client userinfo->password so the rest of the session (query
+	// routing, multiplexing) authenticates consistently.
+	const char *cleartext =
+		(client_myds) ? client_myds->passthrough_cleartext : NULL;
 
 	/**
 	 * @brief Audit-log hostgroup snapshot at handler entry.
@@ -1764,6 +1777,21 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 	 */
 	const int audit_hg = default_hostgroup;
 
+	// Scrub + free the borrowed cleartext. Called on every exit path (success
+	// and failure) so the cleartext never lingers in heap memory after the
+	// probe resolves. Also clears auth_in_progress.
+	auto scrub_cleartext = [&]() {
+		if (client_myds && client_myds->passthrough_cleartext) {
+			memset(client_myds->passthrough_cleartext, 0,
+				strlen(client_myds->passthrough_cleartext));
+			free(client_myds->passthrough_cleartext);
+			client_myds->passthrough_cleartext = NULL;
+		}
+		if (client_myds) {
+			client_myds->auth_in_progress = 0;
+		}
+	};
+
 	auto fail_session = [&](const char* reason) -> int {
 		// Clear the in-flight marker so a later CONNECTING_SERVER on this
 		// (about-to-be-destroyed) session doesn't divert. Also release the
@@ -1771,10 +1799,8 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 		// idempotent-safe: it's only called here on Phase-A failures, before
 		// the slot is implicitly released by the divert on Phase-B failures).
 		passthrough_connect_in_flight = false;
-		if (client_myds) {
-			client_myds->auth_in_progress = 0;
-		}
-		const uint8_t _pid = (client_myds ? client_myds->pkt_sid : 0) + 1;
+		scrub_cleartext();
+	const uint8_t _pid = (client_myds ? client_myds->pkt_sid : 0) + 1;
 		if (client_myds) {
 			// Move the client data stream into a DSS state that
 			// generate_pkt_ERR accepts BEFORE generating the packet.
@@ -1874,11 +1900,8 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 			return fail_session(reason);
 		}
 		if (username == NULL || username[0] == '\0'
-			|| GloMyPTAuthCache == NULL
-			|| client_myds == NULL || client_myds->myconn == NULL
-			|| client_myds->myconn->userinfo == NULL
-			|| client_myds->myconn->userinfo->password == NULL
-			|| client_myds->myconn->userinfo->password[0] == '\0') {
+			|| cleartext == NULL || cleartext[0] == '\0'
+			|| GloMyPTAuthCache == NULL) {
 			// Defensive: CONNECTING_SERVER should not resume us without a
 			// verified credential, but if it did, fail cleanly rather than
 			// cache an empty secret.
@@ -1888,15 +1911,27 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 
 		const std::string user_key(username);
 
-		// Cache the verified credential. userinfo->password holds the
-		// cleartext captured at stage 5 (and just used to auth the backend).
-		GloMyPTAuthCache->insert(user_key,
-			std::string(client_myds->myconn->userinfo->password), audit_hg);
+		// Cache the verified credential. The cleartext (from
+		// passthrough_cleartext) was just used to auth the backend and is now
+		// proven valid.
+		GloMyPTAuthCache->insert(user_key, std::string(cleartext), audit_hg);
 
 		// Mark the session: the credential on userinfo came from pass-through
 		// (now in the cache). Authorizes the §8.4 eviction hook to invalidate
 		// it on a future backend 1045 during real query traffic.
 		passthrough_credential = true;
+
+		// Restore the verified cleartext onto the client userinfo->password.
+		// process_pkt_handshake_response's epilogue set this to "" (because the
+		// verifier returned false while auth_in_progress was set); now that the
+		// backend authenticated successfully we overwrite it with the real
+		// cleartext and recompute the hash, so the rest of the session (query
+		// routing, multiplexing, change-user checks) authenticates consistently.
+		if (client_myds->myconn->userinfo->password) {
+			free(client_myds->myconn->userinfo->password);
+		}
+		client_myds->myconn->userinfo->password = strdup(cleartext);
+		client_myds->myconn->userinfo->set(NULL, NULL, NULL, NULL);
 
 		// Ensure userinfo->schemaname is non-NULL, mirroring the normal
 		// handshake-completion path. A pass-through client that connected
@@ -1966,9 +2001,11 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 		client_myds->DSS = STATE_CLIENT_HANDSHAKE;
 		client_myds->myprot.generate_pkt_OK(true, NULL, NULL, _pid, 0, 0, 2, 0, NULL);
 		client_myds->DSS = STATE_CLIENT_AUTH_OK;
-		client_myds->auth_in_progress = 0;
 		passthrough_connect_in_flight = false;
 		GloMyPTAuthCache->release_inflight();
+		// Scrub the borrowed cleartext now that it's been written onto
+		// userinfo->password and the probe is fully resolved.
+		scrub_cleartext();
 
 		GloMyPTAuthCache->bump_probes_ok();
 
@@ -1988,11 +2025,8 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 	// ─────────────────────────────────────────────────────────────────────
 
 	if (username == NULL || username[0] == '\0'
-		|| GloMyPTAuthCache == NULL
-		|| client_myds == NULL || client_myds->myconn == NULL
-		|| client_myds->myconn->userinfo == NULL
-		|| client_myds->myconn->userinfo->password == NULL
-		|| client_myds->myconn->userinfo->password[0] == '\0') {
+		|| cleartext == NULL || cleartext[0] == '\0'
+		|| GloMyPTAuthCache == NULL) {
 		return fail_session("missing username or cleartext");
 	}
 
@@ -2066,14 +2100,23 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 	// gate as the credential/transport classification in the divert.
 	GloMyPTAuthCache->bump_probes_attempted();
 
-	// Seed the backend connection with the client userinfo. This copies
-	// userinfo->password (the borrowed cleartext) onto the backend conn, so
-	// connect_start() uses it as the auth password in mysql_real_connect_start
-	// (see MySQL_Connection::connect_start, the auth_password block). This is
-	// the line that makes the backend authenticate with the borrowed
-	// credential -- it mirrors the normal acquire path at
-	// handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection.
+	// Seed the backend connection with the client userinfo (username/schema),
+	// then OVERWRITE the backend conn's password with the borrowed cleartext.
+	// We cannot simply copy client userinfo->password because the
+	// process_pkt_handshake_response epilogue left it "" (auth still in
+	// progress); the real credential lives in passthrough_cleartext. Setting
+	// it on the backend conn's userinfo->password makes connect_start() use it
+	// as the auth password in mysql_real_connect_start (see
+	// MySQL_Connection::connect_start, the auth_password block). This mirrors
+	// the normal acquire path at
+	// handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection,
+	// which copies userinfo (including a real password) before connect.
 	mc->userinfo->set(client_myds->myconn->userinfo);
+	if (mc->userinfo->password) {
+		free(mc->userinfo->password);
+	}
+	mc->userinfo->password = strdup(cleartext);
+	mc->userinfo->set(NULL, NULL, NULL, NULL); // recompute hash
 
 	// Kick off the async state machine. The fd is registered with the poll
 	// set by CONNECTING_SERVER itself (see handler_again___status_CONNECTING_SERVER,
