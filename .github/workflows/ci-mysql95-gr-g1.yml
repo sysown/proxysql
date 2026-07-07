@@ -1,0 +1,224 @@
+name: CI-mysql95-gr-g1
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      trigger:
+        type: string
+
+env:
+  SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+
+jobs:
+  tests:
+    runs-on: ubuntu-22.04
+    # `write-all` grants every default GITHUB_TOKEN scope plus the
+    # id-token:write scope codecov-action@v4 needs to mint a GitHub OIDC
+    # token for `use_oidc: true`. Caller workflow on v3.0 must also
+    # declare write-all for the permissions to propagate through the
+    # reusable call (permissions are intersected caller-callee).
+    permissions: write-all
+    strategy:
+      fail-fast: false
+      matrix:
+        infradb: [ 'mysql95' ]
+    env:
+      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu24-tap-genai-gcov_src
+      MATRIX: '(${{ matrix.infradb }},genai-gcov)'
+
+    steps:
+
+    - uses: LouisBrunner/checks-action@v2.0.0
+      id: checks
+      if: always()
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        name: '${{ github.workflow }} / ${{ github.job }} ${{ env.MATRIX }}'
+        repo: ${{ github.repository }}
+        sha: ${{ env.SHA }}
+        status: 'in_progress'
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ env.SHA }}
+        path: 'proxysql'
+        sparse-checkout: |
+          test/infra
+          test/tap/groups
+          test/scripts
+
+    - name: Download build handoff
+      # Build payload arrives as workflow artifacts, not an Actions cache:
+      # GitHub made cache writes read-only for workflow_run/untrusted triggers
+      # (changelog 2026-06-26). CI-builds uploads per-type artifacts named
+      # ci-builds-handoff-<sha>-<variant>-<type>; download the types this job
+      # used to restore and unpack them into proxysql/. SHA is the real head
+      # SHA (identical to CI-builds' SHA), so the artifact names line up.
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        REPO: ${{ github.repository }}
+        SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+        HANDOFF_VARIANT: ubuntu24-tap-genai-gcov
+        HANDOFF_TYPES: src test
+      run: |
+        set -uo pipefail
+        command -v zstd >/dev/null || sudo apt-get install -y zstd
+        for t in $HANDOFF_TYPES; do
+          name="ci-builds-handoff-${SHA}-${HANDOFF_VARIANT}-${t}"
+          aid=""
+          for attempt in 1 2 3 4 5 6; do
+            aid=$(gh api "repos/${REPO}/actions/artifacts?name=${name}&per_page=100" \
+                    --jq '[.artifacts[]|select(.expired==false)]|sort_by(.created_at)|last|.id // empty' 2>/dev/null || true)
+            [ -n "$aid" ] && break
+            echo ">>> ${name} not visible yet (${attempt}/6); sleeping 10s"; sleep 10
+          done
+          if [ -z "$aid" ]; then echo "ERROR: handoff artifact ${name} not found -- did CI-builds succeed for ${SHA}?" >&2; exit 1; fi
+          echo ">>> downloading ${name} (id=${aid})"
+          gh api "repos/${REPO}/actions/artifacts/${aid}/zip" > "handoff-${t}.zip" || { echo "ERROR: download ${name} failed" >&2; exit 1; }
+          unzip -o "handoff-${t}.zip" || { echo "ERROR: unzip ${name} failed" >&2; exit 1; }
+        done
+        mkdir -p proxysql
+        cd proxysql/
+        for tb in ../cache_*.tar.zst; do
+          [ -e "$tb" ] || continue
+          echo ">>> unpacking $(basename "$tb")"
+          zstd -d < "$tb" | tar -xf - || { echo "ERROR: unpack $tb failed" >&2; exit 1; }
+        done
+        rm -f ../cache_*.tar.zst ../handoff-*.zip
+
+    - name: Verify binary
+      run: |
+        chmod +x proxysql/src/proxysql
+        file proxysql/src/proxysql
+
+    - name: Log in to GHCR and pull CI base image
+      # Both `docker login` and `docker pull` against ghcr.io have been
+      # observed to fail transiently with `net/http: request canceled
+      # (Client.Timeout exceeded while awaiting headers)`. Wrap both in
+      # a short retry loop with linear backoff so a single network blip
+      # does not red the whole TAP group.
+      env:
+        GHCR_USER: ${{ github.actor }}
+        GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set +e
+        attempt=0
+        max_attempts=5
+        while [ $attempt -lt $max_attempts ]; do
+          attempt=$((attempt + 1))
+          echo ">>> GHCR login+pull attempt ${attempt}/${max_attempts}"
+          if echo "$GHCR_TOKEN" | docker login ghcr.io \
+              -u "$GHCR_USER" --password-stdin \
+              && docker pull ghcr.io/sysown/proxysql-ci-base:latest; then
+            echo ">>> GHCR login+pull OK on attempt ${attempt}"
+            docker tag ghcr.io/sysown/proxysql-ci-base:latest \
+                proxysql-ci-base:latest
+            exit 0
+          fi
+          if [ $attempt -lt $max_attempts ]; then
+            sleep_for=$((attempt * 10))
+            echo ">>> attempt ${attempt} failed; sleeping ${sleep_for}s"
+            sleep $sleep_for
+          fi
+        done
+        echo ">>> all ${max_attempts} GHCR attempts failed"
+        exit 1
+
+    - name: Start infrastructure
+      run: |
+        cd proxysql
+        export INFRA_ID="ci-mysql95-gr-g1"
+        export TAP_GROUP="mysql95-gr-g1"
+        export SKIP_CLUSTER_START=1
+        test/infra/control/ensure-infras.bash
+
+    - name: Run mysql95-gr-g1 tests
+      run: |
+        cd proxysql
+        export INFRA_ID="ci-mysql95-gr-g1"
+        export TAP_GROUP="mysql95-gr-g1"
+        export SKIP_CLUSTER_START=1
+        export COVERAGE=1
+        test/infra/control/run-tests-isolated.bash
+
+    - name: Cleanup
+      if: always()
+      run: |
+        set +e
+        cd proxysql
+        export INFRA_ID="ci-mysql95-gr-g1"
+        export TAP_GROUP="mysql95-gr-g1"
+        docker logs proxysql.ci-mysql95-gr-g1 2>&1 | tail -50 || true
+        test/infra/control/stop-proxysql-isolated.bash
+        test/infra/control/destroy-infras.bash
+
+    - name: Fix artifact permissions
+      if: ${{ failure() && !cancelled() }}
+      run: |
+        sudo chmod -R a+rX proxysql/ci_*_logs/ 2>/dev/null || true
+
+    - name: Archive artifacts logs
+      if: ${{ failure() && !cancelled() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ github.workflow }}-${{ env.SHA }}-logs-run#${{ github.run_number }}
+        path: |
+          proxysql/ci_*_logs/
+
+    - name: Archive coverage report
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ github.workflow }}-${{ env.SHA }}-coverage-run#${{ github.run_number }}
+        path: |
+          proxysql/ci_infra_logs/ci-mysql95-gr-g1/coverage-report/
+        if-no-files-found: ignore
+
+    - name: Upload coverage to Codecov
+      # Send the LCOV .info file fastcov produces in run-tests-isolated.bash
+      # (under proxysql/ci_infra_logs/ci-mysql95-gr-g1/coverage-report/) to
+      # Codecov. The proxysql binary was built WITHGCOV=1 (-tap-genai-gcov
+      # build cache) and was the live daemon answering the mysql95-gr-g1 TAP
+      # suite, so the report reflects production code paths exercised by
+      # integration tests, not just the lib-only unit-test slice.
+      #
+      # `flags: tap-mysql95-gr-g1` lets Codecov merge per-group uploads and show
+      # per-flag coverage trends. `use_oidc: true` is mandatory -- the
+      # repo has no CODECOV_TOKEN secret and Codecov rejects tokenless
+      # legacy uploads with "branch is protected" HTTP 400.
+      #
+      # `fail_ci_if_error: false` so a Codecov outage never fails the
+      # whole TAP group; `!cancelled()` so coverage uploads even when
+      # the test step itself reported a failure (partial coverage is
+      # still useful diagnostically).
+      if: ${{ !cancelled() }}
+      uses: codecov/codecov-action@v4
+      with:
+        files: proxysql/ci_infra_logs/ci-mysql95-gr-g1/coverage-report/ci-mysql95-gr-g1.info
+        flags: tap-mysql95-gr-g1
+        name: tap-mysql95-gr-g1-coverage
+        use_oidc: true
+        # codecov-cli's _get_file_fixes step reads every source file
+        # referenced in the LCOV report and crashes with FileNotFoundError
+        # if any path is missing (the _test cache prunes test deps to fit
+        # GitHub's 10 GB repo cache quota, so not all subdirs are restored
+        # on the runner). disable_file_fixes:true skips that step. Trade-
+        # off: Codecov line-offset annotations on PR diffs may be less
+        # precise, but aggregate coverage numbers are unaffected.
+        disable_file_fixes: true
+        fail_ci_if_error: false
+        verbose: true
+
+    - uses: LouisBrunner/checks-action@v2.0.0
+      if: always()
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        check_id: ${{ steps.checks.outputs.check_id }}
+        repo: ${{ github.repository }}
+        sha: ${{ env.SHA }}
+        conclusion: ${{ job.status }}
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
