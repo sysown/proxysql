@@ -7,10 +7,10 @@ if [ -z "${INFRA}" ]; then
     echo "INFRA is empty, please check env vars passed to: " ${0}
     exit 1
 elif [ -z "${RHG2}" ]; then
-    echo "RHG1 is empty, please check env vars passed to: " ${0}
+    echo "RHG2 is empty, please check env vars passed to: " ${0}
     exit 1
 elif [ -z "${MYSQL2_PORT}" ]; then
-    echo "MYSQL1_PORT is empty, please check env vars passed to: " ${0}
+    echo "MYSQL2_PORT is empty, please check env vars passed to: " ${0}
     exit 1
 fi
 

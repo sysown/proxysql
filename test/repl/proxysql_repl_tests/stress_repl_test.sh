@@ -243,7 +243,7 @@ fn_run_main_test () {
     results+=("$repl_chain read-write passed")
   fi
 
-  fn_sysbench_run write-only
+  fn_sysbench_run writes-only
   fn_sysbench_check
   if [ $? -ne 0 ]; then
     res=1
@@ -286,7 +286,7 @@ fn_run_main_test () {
 #    results+=("$repl_chain read-write passed")
 #  fi
 
-  fn_sysbench_run write-only
+  fn_sysbench_run writes-only
   fn_sysbench_check
   if [ $? -ne 0 ]; then
     res=1
