@@ -17,16 +17,14 @@
  * The client is always libpq; the toggle determines which path the proxy
  * uses internally. The result MUST be byte-equal between the two phases.
  *
- * EXPECTED CURRENT STATE (per audit, 2026-06-15)
- * ----------------------------------------------
- * The native protocol's query path is not implemented for COPY. The proxy
- * routes COPY traffic through fast_forward (lib/PgSQL_Session.cpp:3233
- * `SESSION_FORWARD_TYPE_COPY_FROM_STDIN_STDOUT`) which is itself a libpq
- * path. Both libpq and native "phases" of this test therefore use libpq on
- * the proxy side, so the result is byte-equal; the per-case `native_path_used`
- * flag will be false. The coverage summary line in `emit_tap()` records
- * this as `COPY_IN 0/N native (N fell back)`, `COPY_OUT 0/M native (M fell
- * back)`.
+ * ROUTING (as of the 2026-07 COPY-hardening decision):
+ *  - COPY t TO STDOUT (no FROM token)      -> native stream-through (native drive)
+ *  - COPY ... FROM STDIN                   -> session fast_forward (raw byte forwarding, by design)
+ *  - COPY (SELECT ... FROM ...) TO STDOUT  -> session fast_forward (regex over-match; still byte-equal)
+ * Both routes must produce byte-equal results vs the libpq oracle. The
+ * coverage summary reports which route each case took; fast_forward cases
+ * are native_path_used=false with an explanatory detail. A CopyInResponse
+ * reaching the native drive is answered with CopyFail (clean error, no hang).
  *
  * INFRA: legacy-g1 (docker-pgsql16-single, scram-sha-256, no TLS).
  */
@@ -37,6 +35,7 @@
 #include <memory>
 #include <fstream>
 #include <chrono>
+#include <regex>
 #include <unistd.h>
 #include "libpq-fe.h"
 #include "command_line.h"
@@ -132,6 +131,19 @@ static bool nativeFallbackObserved() {
 		".*(native_mode requested but unimplemented at this stage; falling back to libpq"
 		"|native backend auth capability gap .* falling back to libpq).*";
 	return wait_for_log_match(f_proxysql_log, re, 1000, 100);
+}
+
+// Mirrors CopyCmdMatcher (include/PgSQL_Thread.h:142): queries matching this
+// are intercepted by the session and routed through fast_forward BEFORE the
+// native connection drive ever sees them. That is the intended design after
+// the 2026-07-07 decision (harden + keep fast_forward): fast_forward is raw
+// byte forwarding, already zero-copy and byte-equal. We record such cases as
+// native_path_used=false so the coverage summary is truthful.
+static bool routed_via_fast_forward(const std::string& sql) {
+	static const std::regex re(
+		R"(\bCOPY\b[^;]*?\bFROM\b[^;]*?\b(?:STDIN|STDOUT)\b)",
+		std::regex::icase);
+	return std::regex_search(sql, re);
 }
 
 static void drainLogToNow() {
@@ -568,11 +580,17 @@ int main(int /*argc*/, char** /*argv*/) {
 	CoverageRecorder cov;
 	for (const auto& tc : outs) {
 		CaseRunResult cr = run_out_case(admin.get(), tc, saved);
-		cov.record({tc.label, tc.kind, cr.result_match, !cr.fell_back, cr.detail});
+		bool ff = routed_via_fast_forward(tc.cmd);
+		std::string detail = cr.detail;
+		if (ff) detail += " [routed via session fast_forward (by design)]";
+		cov.record({tc.label, tc.kind, cr.result_match, ff ? false : !cr.fell_back, detail});
 	}
 	for (const auto& tc : ins) {
 		CaseRunResult cr = run_in_case(admin.get(), tc, saved);
-		cov.record({tc.label, tc.kind, cr.result_match, !cr.fell_back, cr.detail});
+		bool ff = routed_via_fast_forward(tc.cmd);
+		std::string detail = cr.detail;
+		if (ff) detail += " [routed via session fast_forward (by design)]";
+		cov.record({tc.label, tc.kind, cr.result_match, ff ? false : !cr.fell_back, detail});
 	}
 	cov.emit_tap();
 	return exit_status();
