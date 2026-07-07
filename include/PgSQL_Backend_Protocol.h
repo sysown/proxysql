@@ -133,4 +133,44 @@ void pg_scram_set_cbind(PgSQL_Scram_State* s, const char* cbind_input, int cbind
 // Build a frontend CopyFail ('f') message: used as a safety net when a
 // CopyInResponse reaches the native drive (which cannot supply CopyData).
 void pg_native_build_copyfail(std::string& out, const char* reason);
+
+// --- Native frontend-message builders for the extended-query sub-protocol ---
+// These are the native replacements for what libpq's PQsendPrepare /
+// PQsendQueryPrepared / etc. emit on the wire. All length fields include
+// themselves and exclude the leading type byte; strings are NUL-terminated;
+// all integers are big-endian.
+
+// Build a frontend Parse ('P') message.
+// Layout: len(4) | dest_stmt_name\0 | query\0 | int16 n_oids | int32 oid * n_oids.
+void pg_build_parse(std::string& out, const char* stmt_name, const char* query,
+                    const uint32_t* param_oids, uint16_t n_oids);
+
+// Build a frontend Bind ('B') message.
+// Layout: len(4) | portal\0 | stmt_name\0 | int16 n_param_formats | int16 fmt * n_param_formats |
+//         int16 n_params | (int32 value_len | bytes) * n_params | int16 n_result_formats | int16 fmt * n_result_formats.
+// param_values[i]==nullptr means SQL NULL (encoded as length -1, no bytes).
+// n_param_formats/n_result_formats follow protocol semantics: 0 = all default (text),
+// 1 = all params/results use the single given format, n = per-param/per-result format.
+void pg_build_bind(std::string& out, const char* portal, const char* stmt_name,
+                   const uint16_t* param_formats, uint16_t n_param_formats,
+                   const char* const* param_values, const int32_t* param_lengths, uint16_t n_params,
+                   const uint16_t* result_formats, uint16_t n_result_formats);
+
+// Build a frontend Describe ('D') message. kind is 'S' (statement) or 'P' (portal).
+// Layout: len(4) | kind(1) | name\0.
+void pg_build_describe(std::string& out, char kind, const char* name);
+
+// Build a frontend Execute ('E') message.
+// Layout: len(4) | portal\0 | int32 max_rows (0 = no limit).
+void pg_build_execute(std::string& out, const char* portal, uint32_t max_rows);
+
+// Build a frontend Close ('C') message. kind is 'S' (statement) or 'P' (portal).
+// Layout: len(4) | kind(1) | name\0.
+void pg_build_close(std::string& out, char kind, const char* name);
+
+// Build a frontend Flush ('H') message. Layout: len(4)==4, no body.
+void pg_build_flush(std::string& out);
+
+// Build a frontend Sync ('S') message. Layout: len(4)==4, no body.
+void pg_build_sync(std::string& out);
 #endif
