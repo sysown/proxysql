@@ -1,10 +1,17 @@
 #!/bin/bash
 set -eu
 
+# CURVER, MAKE, MAKEOPT, PROXYSQL31/PROXYSQL40 are passed in from the outer
+# `make` via the docker-compose `_build` environment passthrough. CURVER
+# already reflects the tier (Stable 3.0.x, PROXYSQL31 -> 3.1.x, PROXYSQL40
+# -> 4.0.x), so the three tier tarballs get distinct, self-describing names.
 ARCH=$(uname -m)
 REL_ARCH=$(echo "${ARCH}" | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
 DIR_NAME="proxysql-${CURVER}-linux-${REL_ARCH}"
 TARBALL_FILE="proxysql-${CURVER}-linux-${REL_ARCH}.tar.gz"
+
+echo "==> Build environment (tier-relevant):"
+env | grep -E '^(CURVER|PROXYSQL(31|40|FFTO|TSDB|_BUILD_TYPE)|MAKE|MAKEOPT)=' || true
 
 echo "==> Cleaning staging directories"
 rm -rf "/opt/proxysql/binaries/${TARBALL_FILE}" "/opt/proxysql/pkgroot" || true
@@ -12,13 +19,36 @@ rm -rf "/opt/proxysql/binaries/${TARBALL_FILE}" "/opt/proxysql/pkgroot" || true
 echo "==> Building ProxySQL"
 cd /opt/proxysql
 git config --system --add safe.directory '/opt/proxysql'
+echo "==> ProxySQL '$(git describe --long --abbrev=7 --tags)'  (tier CURVER=${CURVER})"
+export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
 
-# Determine targets
+# Pass the chassis tier flag explicitly on the make command line (matches
+# the deb/rpm entrypoints and is override-safe). CURVER above is computed
+# by the outer make with the same flag, so the artifact name stays in sync.
+EXTRA=""
+[[ "${PROXYSQL40:-}" == "1" ]] && EXTRA="${EXTRA} PROXYSQL40=1"
+[[ "${PROXYSQL31:-}" == "1" ]] && EXTRA="${EXTRA} PROXYSQL31=1"
+
+# The v4.0 chassis tier builds plugins/mysqlx/ which dynamically links the
+# system libprotobuf (3.x). Some v4.0.0 packaging images predate the plugin
+# and do not ship protobuf-devel; install it on demand for RHEL-family.
+if [[ "${PROXYSQL40:-}" == "1" ]] && ! pkg-config --exists protobuf 2>/dev/null; then
+    echo "==> Installing protobuf-devel (required for PROXYSQL40=1 mysqlx plugin build)"
+    if command -v dnf >/dev/null 2>&1; then
+        dnf install -y protobuf-devel
+    elif command -v yum >/dev/null 2>&1; then
+        yum install -y protobuf-devel
+    else
+        echo "ERROR: cannot install protobuf-devel (neither dnf nor yum present)" >&2
+        exit 1
+    fi
+fi
+
 deps_target="build_deps_clickhouse"
 build_target="clickhouse"
 
-${MAKE} ${MAKEOPT} ${deps_target}
-${MAKE} ${MAKEOPT} ${build_target}
+${MAKE} ${MAKEOPT} ${EXTRA} ${deps_target}
+${MAKE} ${MAKEOPT} ${EXTRA} ${build_target}
 
 echo "==> Staging Tarball Files"
 mkdir -p "pkgroot/${DIR_NAME}/bin"
@@ -33,14 +63,23 @@ cp tools/proxysql_galera_checker.sh tools/proxysql_galera_writer.pl "pkgroot/${D
 cp systemd/system/proxysql.service systemd/system/proxysql-initial.service "pkgroot/${DIR_NAME}/systemd/system/"
 cp LICENSE README.md "pkgroot/${DIR_NAME}/"
 
-# Add plugins for v4.0+
+# v4.0 chassis: bundle the plugin .so artefacts. The proxysql binary is the
+# loader; runtime features (mysqlx, genai/MCP) ship as separate .so files.
+# Under PROXYSQL40=1 the Makefile builds them, so fail-fast if any is missing
+# rather than ship an incomplete tarball.
 if [[ "${PROXYSQL40:-}" == "1" ]]; then
     mkdir -p "pkgroot/${DIR_NAME}/lib/proxysql"
-    [[ -f plugins/mysqlx/ProxySQL_MySQLX_Plugin.so ]] && cp plugins/mysqlx/ProxySQL_MySQLX_Plugin.so "pkgroot/${DIR_NAME}/lib/proxysql/"
-    [[ -f plugins/genai/ProxySQL_GenAI_Plugin.so ]] && cp plugins/genai/ProxySQL_GenAI_Plugin.so "pkgroot/${DIR_NAME}/lib/proxysql/"
+    for plugin in plugins/mysqlx/ProxySQL_MySQLX_Plugin.so plugins/genai/ProxySQL_GenAI_Plugin.so; do
+        if [[ ! -f "${plugin}" ]]; then
+            echo "ERROR: PROXYSQL40=1 build but '${plugin}' is missing" >&2
+            exit 1
+        fi
+        cp "${plugin}" "pkgroot/${DIR_NAME}/lib/proxysql/"
+    done
 fi
 
 echo "==> Compressing Tarball"
+mkdir -p /opt/proxysql/binaries
 cd pkgroot
 tar -czf "../binaries/${TARBALL_FILE}" "${DIR_NAME}"
 
@@ -48,4 +87,8 @@ tar -czf "../binaries/${TARBALL_FILE}" "${DIR_NAME}"
 cd ../binaries
 sha256sum "${TARBALL_FILE}" > "${TARBALL_FILE}.sha256"
 
-echo "==> Tarball build successfully completed!"
+# Clean up staging (the repo root is bind-mounted, so leftover root-owned
+# pkgroot/ would pollute the host git working tree).
+rm -rf /opt/proxysql/pkgroot || true
+
+echo "==> Tarball build successfully completed: ${TARBALL_FILE}"

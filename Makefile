@@ -484,7 +484,7 @@ build-%: PKG_NAME=$(firstword $(subst -, ,$(BLD_NAME)))
 build-%: PKG_COMP=$(if $(filter $(shell echo $(BLD_NAME) | grep -Eo '\-clang'),-clang),-clang,)
 build-%: PKG_ARCH=$(if $(filter $(shell echo ${BLD_NAME} | grep -Eo '[a-z]+'),debian ubuntu),$(DEB_ARCH),$(if $(filter tarball,$(shell echo ${BLD_NAME} | grep -o 'tarball')),-$(REL_ARCH),$(RPM_ARCH)))
 build-%: PKG_KIND=$(if $(filter $(shell echo ${BLD_NAME} | grep -Eo '[a-z]+'),debian ubuntu),deb,$(if $(filter tarball,$(shell echo ${BLD_NAME} | grep -o 'tarball')),tar.gz,rpm))
-build-%: PKG_FILE=$(if $(filter tarball,$(shell echo ${BLD_NAME} | grep -o 'tarball')),binaries/proxysql-$(REL_VERS)$(PKG_TYPE)-linux$(PKG_ARCH).$(PKG_KIND),binaries/proxysql$(PKG_VERS)$(PKG_TYPE)-$(PKG_NAME)$(PKG_COMP)$(PKG_ARCH).$(PKG_KIND))
+build-%: PKG_FILE=$(if $(filter tarball,$(shell echo ${BLD_NAME} | grep -o 'tarball')),binaries/proxysql-$(CURVER)$(PKG_TYPE)-linux$(PKG_ARCH).$(PKG_KIND),binaries/proxysql$(PKG_VERS)$(PKG_TYPE)-$(PKG_NAME)$(PKG_COMP)$(PKG_ARCH).$(PKG_KIND))
 build-%:
 	@echo 'building $@'
 	@IMG_NAME=$(PKG_NAME) IMG_TYPE=$(subst -,_,$(PKG_TYPE)) IMG_COMP=$(subst -,_,$(PKG_COMP)) BLD_NAME=$(BLD_NAME) $(MAKE) $(PKG_FILE)

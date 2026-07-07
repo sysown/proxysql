@@ -4,10 +4,6 @@ run-name: '${{ github.ref_name }} ${{ github.workflow }} ${{ github.sha }}'
 on:
   workflow_dispatch:
 
-permissions:
-  contents: write
-  checks: write
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
   cancel-in-progress: true
@@ -15,6 +11,8 @@ concurrency:
 jobs:
   init_release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       release_id: ${{ steps.release.outputs.release_id }}
       release_name: ${{ steps.release.outputs.release_name }}
@@ -25,6 +23,7 @@ jobs:
         repository: ${{ github.repository }}
         ref: ${{ github.sha }}
         fetch-depth: 0
+        persist-credentials: false
 
     - name: Find or create draft release
       id: release
@@ -73,11 +72,24 @@ jobs:
   build:
     needs: init_release
     runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: write
+      checks: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tier: v3.0
+            flags: ''
+          - tier: v3.1
+            flags: 'PROXYSQL31=1'
+          - tier: v4.0
+            flags: 'PROXYSQL40=1'
     env:
       ARCH: arm64
       DIST: tarball
       MAKE_TARGET: tarball-almalinux9
-      MATRIX: '(arm64,tarball)'
+      MATRIX: '(arm64,tarball,${{ matrix.tier }})'
       BRANCH: ${{ github.ref_name }}
       RELEASE_ID: ${{ needs.init_release.outputs.release_id }}
 
@@ -99,10 +111,11 @@ jobs:
         repository: ${{ github.repository }}
         ref: ${{ github.sha }}
         fetch-depth: 0
+        persist-credentials: false
 
-    - name: Build package
+    - name: Build package (${{ matrix.tier }})
       run: |
-        make ${{ env.MAKE_TARGET }}
+        make ${{ env.MAKE_TARGET }} ${{ matrix.flags }}
 
     - name: Upload to release
       env:
