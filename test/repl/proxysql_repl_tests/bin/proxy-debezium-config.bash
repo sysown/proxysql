@@ -15,7 +15,7 @@ elif [ -z "${MYSQL1_PORT}" ]; then
 fi
 
 echo -n "Checking proxysql ..."
-while [[ ! $(mysql -h127.0.0.1 -P6032 -uadmin -padmin -e 'SELECT version()\G' 2>/dev/null) =~ version ]]; do echo -n '.'; sleep 1; done; echo -n " got "
+_w=0; while [[ ! $(mysql -h127.0.0.1 -P6032 -uadmin -padmin -e 'SELECT version()\G' 2>/dev/null) =~ version ]]; do echo -n '.'; sleep 1; _w=$((_w+1)); [ $_w -ge ${REPL_WAIT_TIMEOUT:-60} ] && { echo " [ERROR: timeout after ${REPL_WAIT_TIMEOUT:-60}s waiting for readiness in proxy-debezium-config.bash]" >&2; exit 1; }; done; echo -n " got "
 mysql -h127.0.0.1 -P6032 -uadmin -padmin -e 'SELECT version()\G' 2>/dev/null | grep version
 
 echo "Configuring proxysql ... "

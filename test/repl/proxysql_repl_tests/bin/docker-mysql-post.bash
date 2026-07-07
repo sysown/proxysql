@@ -24,7 +24,7 @@ else
 fi
 
 echo -n "Waiting for 'mysql1' ..."
-while [[ ! $(mysql -h${MYSQL1_HOST}${INFRA} -P${MYSQL1_PORT} -uroot -proot -e 'SELECT version()\G' 2>/dev/null) =~ version ]]; do echo -n '.'; sleep 1; done;
+_w=0; while [[ ! $(mysql -h${MYSQL1_HOST}${INFRA} -P${MYSQL1_PORT} -uroot -proot -e 'SELECT version()\G' 2>/dev/null) =~ version ]]; do echo -n '.'; sleep 1; _w=$((_w+1)); [ $_w -ge ${REPL_WAIT_TIMEOUT:-60} ] && { echo " [ERROR: timeout after ${REPL_WAIT_TIMEOUT:-60}s waiting for readiness in docker-mysql-post.bash]" >&2; exit 1; }; done;
 echo " got $(mysql -h${MYSQL1_HOST}${INFRA} -P${MYSQL1_PORT} -uroot -proot -e 'SELECT version()\G' 2>/dev/null | grep version)"
 echo -n "Configuring 'mysql1' ..."
 mysql -h${MYSQL1_HOST}${INFRA} -P${MYSQL1_PORT} -uroot -proot -e " \
@@ -33,7 +33,7 @@ ${set_bl_chk} SET GLOBAL READ_ONLY=0; \
 echo ' done.'
 
 echo -n "Waiting for 'mysql2' ..."
-while [[ ! $(mysql -h${MYSQL2_HOST}${INFRA} -P${MYSQL2_PORT} -uroot -proot -e 'SELECT version()\G' 2>/dev/null) =~ version ]]; do echo -n '.'; sleep 1; done;
+_w=0; while [[ ! $(mysql -h${MYSQL2_HOST}${INFRA} -P${MYSQL2_PORT} -uroot -proot -e 'SELECT version()\G' 2>/dev/null) =~ version ]]; do echo -n '.'; sleep 1; _w=$((_w+1)); [ $_w -ge ${REPL_WAIT_TIMEOUT:-60} ] && { echo " [ERROR: timeout after ${REPL_WAIT_TIMEOUT:-60}s waiting for readiness in docker-mysql-post.bash]" >&2; exit 1; }; done;
 echo " got $(mysql -h${MYSQL2_HOST}${INFRA} -P${MYSQL2_PORT} -uroot -proot -e 'SELECT version()\G' 2>/dev/null | grep version)"
 echo -n "Configuring 'mysql2' ..."
 mysql -h${MYSQL2_HOST}${INFRA} -P${MYSQL2_PORT} -uroot -proot -e " \
@@ -46,7 +46,7 @@ START SLAVE; \
 echo ' done.'
 
 echo -n "Waiting for 'mysql3' ..."
-while [[ ! $(mysql -h${MYSQL3_HOST}${INFRA} -P${MYSQL3_PORT} -uroot -proot -e 'SELECT version()\G' 2>/dev/null) =~ version ]]; do echo -n '.'; sleep 1; done;
+_w=0; while [[ ! $(mysql -h${MYSQL3_HOST}${INFRA} -P${MYSQL3_PORT} -uroot -proot -e 'SELECT version()\G' 2>/dev/null) =~ version ]]; do echo -n '.'; sleep 1; _w=$((_w+1)); [ $_w -ge ${REPL_WAIT_TIMEOUT:-60} ] && { echo " [ERROR: timeout after ${REPL_WAIT_TIMEOUT:-60}s waiting for readiness in docker-mysql-post.bash]" >&2; exit 1; }; done;
 echo " got $(mysql -h${MYSQL3_HOST}${INFRA} -P${MYSQL3_PORT} -uroot -proot -e 'SELECT version()\G' 2>/dev/null | grep version)"
 echo -n "Configuring 'mysql3' ..."
 mysql -h${MYSQL3_HOST}${INFRA} -P${MYSQL3_PORT} -uroot -proot -e " \
@@ -60,8 +60,8 @@ echo ' done.'
 
 
 echo -n "Waiting for 'mysql' cluster ..."
-while [[ ! $(mysql -h${MYSQL1_HOST}${INFRA} -P${MYSQL1_PORT} -uroot -proot -e 'SHOW MASTER STATUS;' 2>&1 | grep -vP "mysql: .?Warning" | wc -l) -eq 2 ]]; do echo -n '.'; sleep 1; done;
-while [[ ! $(mysql -h${MYSQL1_HOST}${INFRA} -P${MYSQL1_PORT} -uroot -proot -e 'SHOW SLAVE HOSTS;' 2>&1 | grep -vP "mysql: .?Warning" | wc -l) -eq 3 ]]; do echo -n '.'; sleep 1; done;
+_w=0; while [[ ! $(mysql -h${MYSQL1_HOST}${INFRA} -P${MYSQL1_PORT} -uroot -proot -e 'SHOW MASTER STATUS;' 2>&1 | grep -vP "mysql: .?Warning" | wc -l) -eq 2 ]]; do echo -n '.'; sleep 1; _w=$((_w+1)); [ $_w -ge ${REPL_WAIT_TIMEOUT:-60} ] && { echo " [ERROR: timeout after ${REPL_WAIT_TIMEOUT:-60}s waiting for readiness in docker-mysql-post.bash]" >&2; exit 1; }; done;
+_w=0; while [[ ! $(mysql -h${MYSQL1_HOST}${INFRA} -P${MYSQL1_PORT} -uroot -proot -e 'SHOW SLAVE HOSTS;' 2>&1 | grep -vP "mysql: .?Warning" | wc -l) -eq 3 ]]; do echo -n '.'; sleep 1; _w=$((_w+1)); [ $_w -ge ${REPL_WAIT_TIMEOUT:-60} ] && { echo " [ERROR: timeout after ${REPL_WAIT_TIMEOUT:-60}s waiting for readiness in docker-mysql-post.bash]" >&2; exit 1; }; done;
 echo " got $(mysql -h${MYSQL2_HOST}${INFRA} -P${MYSQL2_PORT} -uroot -proot -e 'SHOW SLAVE STATUS\G' 2>/dev/null | grep 'Slave_IO_State' | awk '{ $1=$1; print }')"
 
 echo -n "Configuring 'mysql' cluster users and schemas ..."
