@@ -5925,6 +5925,18 @@ handler_again:
 					handler_ret = -1;
 					return handler_ret;
 				}
+				// Phase A hands off to CONNECTING_SERVER by changing status, and
+				// Phase B exits to WAITING_CLIENT_DATA. In both cases the status
+				// is no longer AUTHENTICATING_BACKEND_FOR_CLIENT, so we must loop
+				// back immediately (goto handler_again) instead of falling
+				// through to the writeout() epilogue. The epilogue would flush a
+				// backend data stream whose fd/poll registration is not yet wired
+				// (CONNECTING_SERVER does that on its next iteration), crashing in
+				// set_pollout() -- observed SIGSEGV in CI mysql84-g4. The
+				// CONNECTING_SERVER dispatch arm below uses the same pattern.
+				if (status != AUTHENTICATING_BACKEND_FOR_CLIENT) {
+					goto handler_again;
+				}
 			}
 			break;
 		case PINGING_SERVER:
