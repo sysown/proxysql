@@ -3191,6 +3191,7 @@ handler_again:
 			// we are done with extended query sync
 			bind_waiting_for_execute.reset(nullptr);
 			extended_query_phase = EXTQ_PHASE_IDLE;
+			free_native_extq_client_frame();
 
 			if (PgSQL_Backend* _mybe = find_backend(current_hostgroup)) {
 				if (PgSQL_Data_Stream* myds = _mybe->server_myds) {
@@ -7249,6 +7250,7 @@ int  PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_S
 		client_myds->DSS = STATE_SLEEP;
 		status = WAITING_CLIENT_DATA;
 		extended_query_phase = EXTQ_PHASE_IDLE;
+		free_native_extq_client_frame();
 		return 0;
 	}
 
@@ -7400,6 +7402,11 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_P
 		return true;
 	}
 	
+	// pkt is consumed (zeroed) by msg->parse() on success via move_pkt; the
+	// buffer itself stays alive owned by the message struct, so snapshot the
+	// view before parsing and copy from it only on the success path.
+	const char* raw_ptr = (const char*)pkt.ptr;
+	unsigned int raw_size = pkt.size;
 	std::unique_ptr<PgSQL_Parse_Message> parse_msg(new PgSQL_Parse_Message());
 	bool rc = parse_msg->parse(pkt);
 	if (rc == false) {
@@ -7415,9 +7422,9 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_P
 	// them (or free them) is made at Sync. See design spec §3.3.
 	if (pgsql_thread___use_native_backend_protocol) {
 		PtrSize_t raw;
-		raw.ptr = l_alloc(pkt.size);
-		memcpy(raw.ptr, pkt.ptr, pkt.size);
-		raw.size = pkt.size;
+		raw.ptr = l_alloc(raw_size);
+		memcpy(raw.ptr, raw_ptr, raw_size);
+		raw.size = raw_size;
 		native_extq_client_frame.push_back(raw);
 	}
 	extended_query_frame.push(std::move(parse_msg)); // we will process it later, after sync packet
@@ -7435,6 +7442,11 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_D
 		return true;
 	}
 
+	// pkt is consumed (zeroed) by msg->parse() on success via move_pkt; the
+	// buffer itself stays alive owned by the message struct, so snapshot the
+	// view before parsing and copy from it only on the success path.
+	const char* raw_ptr = (const char*)pkt.ptr;
+	unsigned int raw_size = pkt.size;
 	std::unique_ptr<PgSQL_Describe_Message> describe_msg(new PgSQL_Describe_Message());
 	bool rc = describe_msg->parse(pkt);
 	if (rc == false) {
@@ -7450,9 +7462,9 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_D
 	// them (or free them) is made at Sync. See design spec §3.3.
 	if (pgsql_thread___use_native_backend_protocol) {
 		PtrSize_t raw;
-		raw.ptr = l_alloc(pkt.size);
-		memcpy(raw.ptr, pkt.ptr, pkt.size);
-		raw.size = pkt.size;
+		raw.ptr = l_alloc(raw_size);
+		memcpy(raw.ptr, raw_ptr, raw_size);
+		raw.size = raw_size;
 		native_extq_client_frame.push_back(raw);
 	}
 	extended_query_frame.push(std::move(describe_msg)); // we will process it later, after sync packet
@@ -7469,6 +7481,11 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_C
 		status = WAITING_CLIENT_DATA;
 		return true;
 	}
+	// pkt is consumed (zeroed) by msg->parse() on success via move_pkt; the
+	// buffer itself stays alive owned by the message struct, so snapshot the
+	// view before parsing and copy from it only on the success path.
+	const char* raw_ptr = (const char*)pkt.ptr;
+	unsigned int raw_size = pkt.size;
 	std::unique_ptr<PgSQL_Close_Message> close_msg(new PgSQL_Close_Message());
 	bool rc = close_msg->parse(pkt);
 	if (rc == false) {
@@ -7484,9 +7501,9 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_C
 	// them (or free them) is made at Sync. See design spec §3.3.
 	if (pgsql_thread___use_native_backend_protocol) {
 		PtrSize_t raw;
-		raw.ptr = l_alloc(pkt.size);
-		memcpy(raw.ptr, pkt.ptr, pkt.size);
-		raw.size = pkt.size;
+		raw.ptr = l_alloc(raw_size);
+		memcpy(raw.ptr, raw_ptr, raw_size);
+		raw.size = raw_size;
 		native_extq_client_frame.push_back(raw);
 	}
 	extended_query_frame.push(std::move(close_msg)); // we will process it later, after sync packet
@@ -7503,6 +7520,11 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_B
 		status = WAITING_CLIENT_DATA;
 		return true;
 	}
+	// pkt is consumed (zeroed) by msg->parse() on success via move_pkt; the
+	// buffer itself stays alive owned by the message struct, so snapshot the
+	// view before parsing and copy from it only on the success path.
+	const char* raw_ptr = (const char*)pkt.ptr;
+	unsigned int raw_size = pkt.size;
 	std::unique_ptr<PgSQL_Bind_Message> bind_msg(new PgSQL_Bind_Message());
 	bool rc = bind_msg->parse(pkt);
 	if (rc == false) {
@@ -7518,9 +7540,9 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_B
 	// them (or free them) is made at Sync. See design spec §3.3.
 	if (pgsql_thread___use_native_backend_protocol) {
 		PtrSize_t raw;
-		raw.ptr = l_alloc(pkt.size);
-		memcpy(raw.ptr, pkt.ptr, pkt.size);
-		raw.size = pkt.size;
+		raw.ptr = l_alloc(raw_size);
+		memcpy(raw.ptr, raw_ptr, raw_size);
+		raw.size = raw_size;
 		native_extq_client_frame.push_back(raw);
 	}
 	extended_query_frame.push(std::move(bind_msg)); // we will process it later, after sync packet
@@ -7538,6 +7560,11 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_E
 		status = WAITING_CLIENT_DATA;
 		return true;
 	}
+	// pkt is consumed (zeroed) by msg->parse() on success via move_pkt; the
+	// buffer itself stays alive owned by the message struct, so snapshot the
+	// view before parsing and copy from it only on the success path.
+	const char* raw_ptr = (const char*)pkt.ptr;
+	unsigned int raw_size = pkt.size;
 	std::unique_ptr<PgSQL_Execute_Message> execute_msg(new PgSQL_Execute_Message());
 	bool rc = execute_msg->parse(pkt);
 	if (rc == false) {
@@ -7553,9 +7580,9 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_E
 	// them (or free them) is made at Sync. See design spec §3.3.
 	if (pgsql_thread___use_native_backend_protocol) {
 		PtrSize_t raw;
-		raw.ptr = l_alloc(pkt.size);
-		memcpy(raw.ptr, pkt.ptr, pkt.size);
-		raw.size = pkt.size;
+		raw.ptr = l_alloc(raw_size);
+		memcpy(raw.ptr, raw_ptr, raw_size);
+		raw.size = raw_size;
 		native_extq_client_frame.push_back(raw);
 	}
 	extended_query_frame.push(std::move(execute_msg)); // we will process it later, after sync packet
