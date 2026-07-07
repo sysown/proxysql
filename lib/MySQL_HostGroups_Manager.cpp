@@ -3957,23 +3957,26 @@ void MySQL_HostGroups_Manager::publish_mysql_servers_to_runtime() {
 }
 
 /**
- * @brief Drain existing backend connections for a server.
+ * @brief Drain existing backend connections for a server in all hostgroups.
  *
  * @details Drops free connections immediately and marks used connections as unhealthy and non-reusable,
  *   so in-flight operations fail on their next backend step and the connection is never pooled again.
  *
- * @param hostgroup_id Hostgroup to search.
  * @param hostname     Address of the server to match.
  * @param port         Port of the server to match.
  * @return true if a matching server was found.
  */
-bool MySQL_HostGroups_Manager::drain_server_connections(unsigned int hostgroup_id, const char *hostname, int port) {
+bool MySQL_HostGroups_Manager::drain_server_connections(const char *hostname, int port) {
 	bool found = false;
 
 	wrlock();
 
-	MyHGC *myhgc = MyHGC_find(hostgroup_id);
-	if (myhgc && myhgc->mysrvs) {
+	for (unsigned int i = 0; i < MyHostGroups->len; i++) {
+		MyHGC *myhgc = (MyHGC *)MyHostGroups->index(i);
+		if (!myhgc || !myhgc->mysrvs) {
+			continue;
+		}
+
 		for (unsigned int j = 0; j < myhgc->mysrvs->cnt(); j++) {
 			MySrvC *mysrvc = myhgc->mysrvs->idx(j);
 			if (mysrvc->port != port || strcmp(mysrvc->address, hostname) != 0) {

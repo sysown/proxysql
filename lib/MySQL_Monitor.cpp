@@ -7366,8 +7366,7 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 				"AWS RDS BGD [wHG=%u rHG=%u]: repointed blue '%s' to green IP %s\n",
 				st.writer_hg, st.reader_hg, p.blue_host.c_str(), p.green_ip.c_str());
 
-			unsigned int hid = p.is_writer ? st.writer_hg : st.reader_hg;
-			MyHGM->drain_server_connections(hid, p.blue_host.c_str(), p.port);
+			MyHGM->drain_server_connections(p.blue_host.c_str(), p.port);
 			My_Conn_Pool->purge_connections(p.blue_host.c_str(), p.port);
 		}
 
@@ -7603,7 +7602,7 @@ void MySQL_Monitor::aws_rds_bgd_drain_green_hg(AWS_RDS_BGD_State& st) {
 			std::string& host = srv.first;
 			int port = srv.second;
 			dns_cache->remove(host);
-			MyHGM->drain_server_connections(hg, host.c_str(), port);
+			MyHGM->drain_server_connections(host.c_str(), port);
 			My_Conn_Pool->purge_connections(host.c_str(), port);
 			proxy_info(
 				"AWS RDS BGD [wHG=%u rHG=%u]: connections drained from green HG %u server '%s:%d'\n",

@@ -1092,17 +1092,16 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 */
 	void publish_mysql_servers_to_runtime();
 	/**
-	 * @brief Drain existing backend connections for a server.
+	 * @brief Drain existing backend connections for a server in all hostgroups.
 	 *
 	 * @details Drops free connections immediately and marks used connections as unhealthy and non-reusable,
 	 *   so in-flight operations fail on their next backend step and the connection is never pooled again.
 	 *
-	 * @param hostgroup_id Hostgroup to search.
 	 * @param hostname     Address of the server to match.
 	 * @param port         Port of the server to match.
 	 * @return true if a matching server was found.
 	 */
-	bool drain_server_connections(unsigned int hostgroup_id, const char *hostname, int port);
+	bool drain_server_connections(const char *hostname, int port);
 	/**
 	 * @brief Whether any AWS RDS blue/green deployment is currently in a active switchover status.
 	 *
