@@ -1,10 +1,7 @@
 #include "PgSQL_Backend_Protocol.h"
 #include <cstdlib>
 #include <cstring>
-#include "proxysql_mem.h"
-#include "proxysql_structs.h"
 #include <string>
-#include <vector>
 
 static inline uint32_t be32(const unsigned char* p) {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
@@ -58,18 +55,4 @@ void pg_native_build_copyfail(std::string& out, const char* reason) {
 	out.push_back('f');
 	pg_native_append_be32(out, (uint32_t)(4 + rlen));
 	out.append(reason, rlen);
-}
-
-void pg_native_build_extq_outbuf(std::vector<PtrSize_t>& frame, std::string& out) {
-	for (auto& p : frame) {
-		if (p.ptr) {
-			out.append((const char*)p.ptr, p.size);
-			l_free(p.size, p.ptr);
-			p.ptr = nullptr;
-			p.size = 0;
-		}
-	}
-	frame.clear();
-	out.push_back('S');
-	pg_native_append_be32(out, 4);
 }

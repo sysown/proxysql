@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Build with plain `make` (auto-parallel) — NEVER bare `make -j`. Debug: `make debug`.
+- Build with `make -j$(nproc)` / `make debug -j$(nproc)` (the top-level Makefile's own documented form — lib/src sub-makes do NOT inherit parallelism from plain `make`). Never unbounded `-j` (no number).
 - TAP tests: `make -C test/tap/tests <name>-t` per test; infra via `test/infra/control/ensure-infras.bash` + `run-tests-isolated.bash` with `WORKSPACE=$(pwd) INFRA_ID=dev-$USER TAP_GROUP=legacy-g1`. Never hand-roll Docker.
 - Unit tests: `test/tap/tests/unit/`, pattern `#include "test_globals.h"` + `#include "test_init.h"`, registered in `UNIT_TESTS` in `test/tap/tests/unit/Makefile`, built with `make -C test/tap/tests/unit <name>-t`.
 - Commit style (from branch history): `feat(pgsql): ...`, `fix(pgsql): ...`, `test(pgsql): ...`, `fix+feat(pgsql): ...`. Append trailer `Claude-Session: https://claude.ai/code/session_015yDEBKWSWyDYq9MFxS69p7`.

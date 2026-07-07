@@ -227,19 +227,6 @@ private:
 	uint8_t extended_query_phase { EXTQ_PHASE_IDLE };
 	std::queue<PktType> extended_query_frame;
 	std::unique_ptr<const PgSQL_Bind_Message> bind_waiting_for_execute;
-	// Native extended-query pass-through: raw client message bytes
-	// (Parse/Bind/Describe/Execute/Close), one PtrSize_t per message,
-	// captured at intake when pgsql-use_native_backend_protocol is on.
-	// Ownership moves to the connection's native_extq_frame at Sync when a
-	// native backend connection is bound; freed otherwise.
-	std::vector<PtrSize_t> native_extq_client_frame;
-	// Set true at Parse intake when the statement text matches a gate (COPY
-	// ... FROM STDIN|STDOUT in extended protocol, or LISTEN) that the native
-	// pass-through must NOT drive: the captured raw frame is discarded and the
-	// remaining intake handlers skip capture, so Sync falls into the libpq
-	// per-message path whose existing gates produce the exact same error bytes.
-	// Reset in reset_extended_query_frame().
-	bool native_extq_gated = false;
 
 	//int handler_ret;
 	void handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t*, bool*);
@@ -305,9 +292,6 @@ private:
 	// FIXME: unused. Remove in next iteration
 	//void handler___rc0_PROCESSING_STMT_DESCRIBE_PREPARE(PgSQL_Data_Stream* myds);
 	int handler___status_PROCESSING_EXTENDED_QUERY_SYNC();
-	// Native pass-through: forward all buffered raw extended-query messages
-	// verbatim and drain the backend response. See design spec §3.3.
-	int handler_native_extended_query_sync();
 	int handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg);
 	int handle_post_sync_describe_message(PgSQL_Describe_Message* describe_msg);
 	int handle_post_sync_close_message(PgSQL_Close_Message* close_msg);
@@ -316,7 +300,6 @@ private:
 	void handle_post_sync_error(PGSQL_ERROR_CODES errcode, const char* errmsg, bool fatal);
 	void handle_post_sync_locked_on_hostgroup_error(const char* query, int query_len);
 	void reset_extended_query_frame();
-	void free_native_extq_client_frame();
 
 
 	//void return_proxysql_internal(PtrSize_t*);
