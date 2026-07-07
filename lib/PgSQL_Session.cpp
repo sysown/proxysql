@@ -423,7 +423,8 @@ PgSQL_Session::~PgSQL_Session() {
 	}
 	// Important: Keep the reset order as-is
 	reset();
-	
+	free_native_extq_client_frame();
+
 	if (default_schema) {
 		free(default_schema);
 	}
@@ -7215,6 +7216,14 @@ void PgSQL_Session::reset_extended_query_frame() {
 	}
 	bind_waiting_for_execute.reset(nullptr);
 	extended_query_phase = EXTQ_PHASE_IDLE;
+	free_native_extq_client_frame();
+}
+
+void PgSQL_Session::free_native_extq_client_frame() {
+	for (auto& p : native_extq_client_frame) {
+		if (p.ptr) l_free(p.size, p.ptr);
+	}
+	native_extq_client_frame.clear();
 }
 
 int  PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_SYNC() {
@@ -7401,11 +7410,15 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_P
 		writeout();
 		return false;
 	}
-	// Native pass-through: also keep the raw client bytes so the connection
-	// can forward them verbatim to the backend on Sync (see design spec §3.3).
-	if (mybe && mybe->server_myds && mybe->server_myds->myconn &&
-	    mybe->server_myds->myconn->native_mode) {
-		mybe->server_myds->myconn->native_extq_buffer((const char*)pkt.ptr, pkt.size);
+	// Native pass-through: capture the raw client bytes now — a backend
+	// connection is usually NOT bound yet at intake, so the decision to use
+	// them (or free them) is made at Sync. See design spec §3.3.
+	if (pgsql_thread___use_native_backend_protocol) {
+		PtrSize_t raw;
+		raw.ptr = l_alloc(pkt.size);
+		memcpy(raw.ptr, pkt.ptr, pkt.size);
+		raw.size = pkt.size;
+		native_extq_client_frame.push_back(raw);
 	}
 	extended_query_frame.push(std::move(parse_msg)); // we will process it later, after sync packet
 	return true;
@@ -7432,9 +7445,15 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_D
 		writeout();
 		return false;
 	}
-	if (mybe && mybe->server_myds && mybe->server_myds->myconn &&
-	    mybe->server_myds->myconn->native_mode) {
-		mybe->server_myds->myconn->native_extq_buffer((const char*)pkt.ptr, pkt.size);
+	// Native pass-through: capture the raw client bytes now — a backend
+	// connection is usually NOT bound yet at intake, so the decision to use
+	// them (or free them) is made at Sync. See design spec §3.3.
+	if (pgsql_thread___use_native_backend_protocol) {
+		PtrSize_t raw;
+		raw.ptr = l_alloc(pkt.size);
+		memcpy(raw.ptr, pkt.ptr, pkt.size);
+		raw.size = pkt.size;
+		native_extq_client_frame.push_back(raw);
 	}
 	extended_query_frame.push(std::move(describe_msg)); // we will process it later, after sync packet
 	return true;
@@ -7460,9 +7479,15 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_C
 		writeout();
 		return false;
 	}
-	if (mybe && mybe->server_myds && mybe->server_myds->myconn &&
-	    mybe->server_myds->myconn->native_mode) {
-		mybe->server_myds->myconn->native_extq_buffer((const char*)pkt.ptr, pkt.size);
+	// Native pass-through: capture the raw client bytes now — a backend
+	// connection is usually NOT bound yet at intake, so the decision to use
+	// them (or free them) is made at Sync. See design spec §3.3.
+	if (pgsql_thread___use_native_backend_protocol) {
+		PtrSize_t raw;
+		raw.ptr = l_alloc(pkt.size);
+		memcpy(raw.ptr, pkt.ptr, pkt.size);
+		raw.size = pkt.size;
+		native_extq_client_frame.push_back(raw);
 	}
 	extended_query_frame.push(std::move(close_msg)); // we will process it later, after sync packet
 	return true;
@@ -7488,9 +7513,15 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_B
 		writeout();
 		return false;
 	}
-	if (mybe && mybe->server_myds && mybe->server_myds->myconn &&
-	    mybe->server_myds->myconn->native_mode) {
-		mybe->server_myds->myconn->native_extq_buffer((const char*)pkt.ptr, pkt.size);
+	// Native pass-through: capture the raw client bytes now — a backend
+	// connection is usually NOT bound yet at intake, so the decision to use
+	// them (or free them) is made at Sync. See design spec §3.3.
+	if (pgsql_thread___use_native_backend_protocol) {
+		PtrSize_t raw;
+		raw.ptr = l_alloc(pkt.size);
+		memcpy(raw.ptr, pkt.ptr, pkt.size);
+		raw.size = pkt.size;
+		native_extq_client_frame.push_back(raw);
 	}
 	extended_query_frame.push(std::move(bind_msg)); // we will process it later, after sync packet
 	return true;
@@ -7517,9 +7548,15 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_E
 		writeout();
 		return false;
 	}
-	if (mybe && mybe->server_myds && mybe->server_myds->myconn &&
-	    mybe->server_myds->myconn->native_mode) {
-		mybe->server_myds->myconn->native_extq_buffer((const char*)pkt.ptr, pkt.size);
+	// Native pass-through: capture the raw client bytes now — a backend
+	// connection is usually NOT bound yet at intake, so the decision to use
+	// them (or free them) is made at Sync. See design spec §3.3.
+	if (pgsql_thread___use_native_backend_protocol) {
+		PtrSize_t raw;
+		raw.ptr = l_alloc(pkt.size);
+		memcpy(raw.ptr, pkt.ptr, pkt.size);
+		raw.size = pkt.size;
+		native_extq_client_frame.push_back(raw);
 	}
 	extended_query_frame.push(std::move(execute_msg)); // we will process it later, after sync packet
 	return true;

@@ -227,6 +227,12 @@ private:
 	uint8_t extended_query_phase { EXTQ_PHASE_IDLE };
 	std::queue<PktType> extended_query_frame;
 	std::unique_ptr<const PgSQL_Bind_Message> bind_waiting_for_execute;
+	// Native extended-query pass-through: raw client message bytes
+	// (Parse/Bind/Describe/Execute/Close), one PtrSize_t per message,
+	// captured at intake when pgsql-use_native_backend_protocol is on.
+	// Ownership moves to the connection's native_extq_frame at Sync when a
+	// native backend connection is bound; freed otherwise.
+	std::vector<PtrSize_t> native_extq_client_frame;
 
 	//int handler_ret;
 	void handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t*, bool*);
@@ -303,6 +309,7 @@ private:
 	void handle_post_sync_error(PGSQL_ERROR_CODES errcode, const char* errmsg, bool fatal);
 	void handle_post_sync_locked_on_hostgroup_error(const char* query, int query_len);
 	void reset_extended_query_frame();
+	void free_native_extq_client_frame();
 
 
 	//void return_proxysql_internal(PtrSize_t*);
