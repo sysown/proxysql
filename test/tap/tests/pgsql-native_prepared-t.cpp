@@ -66,6 +66,7 @@
 #include <vector>
 #include <memory>
 #include <fstream>
+#include <regex>
 #include <unistd.h>
 #include <cstring>
 #include "libpq-fe.h"
@@ -170,6 +171,34 @@ static bool nativeFallbackObserved() {
 
 static void drainLogToNow() {
 	get_matching_lines(f_proxysql_log, "__no_such_marker_line__");
+}
+
+// Single-pass scan of the proxysql log for BOTH the libpq-fallback tripwire
+// and the injected-Sync recovery warning. Needed because wait_for_log_match /
+// get_matching_lines consume the stream forward: two sequential scans for two
+// different regexes would each miss lines the other already read past. Polls
+// until the injected-Sync line is seen or `wait_ms` elapses; the fallback
+// flag reflects everything read either way.
+static void scanNativePhaseLog(bool& fell_back, bool& resync_logged, uint32_t wait_ms) {
+	const std::regex re_fallback(".*falling back to libpq.*");
+	const std::regex re_resync(".*native extq: mid-frame stmt-step error.*");
+	fell_back = false;
+	resync_logged = false;
+	uint32_t elapsed = 0;
+	while (true) {
+		// Clear eof/fail so getline() can read bytes appended since the last scan
+		// (same trick as wait_for_log_match).
+		f_proxysql_log.clear(f_proxysql_log.rdstate() &
+		                     ~std::ios_base::eofbit & ~std::ios_base::failbit);
+		std::string line;
+		while (std::getline(f_proxysql_log, line)) {
+			if (!fell_back && std::regex_match(line, re_fallback)) fell_back = true;
+			if (!resync_logged && std::regex_match(line, re_resync)) resync_logged = true;
+		}
+		if (resync_logged || elapsed >= wait_ms) return;
+		usleep(100000);
+		elapsed += 100;
+	}
 }
 
 static std::string substitute_table(const std::string& q, const std::string& tbl) {
@@ -581,8 +610,10 @@ static ExtQCaseRunResult run_extq_sequence(PGconn* admin, const std::vector<ExtQ
 // Sync. The native path must inject that Sync itself to resynchronize
 // (lib/PgSQL_Connection.cpp:~2803-2825, `native_stmt_error_resync`). This is
 // the only flagship native-drive recovery mechanism not otherwise exercised
-// by this file (see taskD-report.md for the log evidence that this case
-// actually reaches that branch).
+// by this file. The case POSITIVELY asserts the branch ran by scraping the
+// proxysql log for its once-per-connection proxy_warning (the native phase
+// always runs on a fresh backend connection — see the comment in
+// run_midframe_err — so the once-per-connection dedup cannot hide the line).
 // ===========================================================================
 static std::string run_midframe_err_case(PGconn* c, const std::string& bad_sql) {
 	std::string out;
@@ -614,6 +645,12 @@ static ExtQCaseRunResult run_midframe_err(PGconn* admin, const std::string& bad_
 	std::string lp_out = run_midframe_err_case(lp.get(), bad_sql);
 
 	// ---- native candidate ----
+	// flushBackendPool() drops every pooled backend connection (servers are
+	// removed with OFFLINE_HARD, then re-added), so this phase runs on a FRESH
+	// backend connection: the once-per-connection guard on the injected-Sync
+	// warning (PgSQL_Connection::native_stmt_resync_logged) cannot have been
+	// consumed by an earlier case, and the positive log assertion below is
+	// guaranteed to see the line if (and only if) the branch runs.
 	if (!setNativeMode(admin, true) || !flushBackendPool(admin, BACKEND_HG, saved)) {
 		return {false, false, "admin: set native mode failed"};
 	}
@@ -621,17 +658,26 @@ static ExtQCaseRunResult run_midframe_err(PGconn* admin, const std::string& bad_
 	PGConnPtr nt = open_client_conn();
 	if (!nt || PQstatus(nt.get()) != CONNECTION_OK) return {false, false, "native conn failed"};
 	std::string nt_out = run_midframe_err_case(nt.get(), bad_sql);
-	bool fell_back = nativeFallbackObserved();
+	// Single combined scan: the fallback tripwire AND a POSITIVE assertion that
+	// the injected-Sync error-recovery branch actually ran in the native phase
+	// (lib/PgSQL_Connection.cpp native_fetch_result_cont, native_stmt_error_resync).
+	bool fell_back = false;
+	bool resync_logged = false;
+	scanNativePhaseLog(fell_back, resync_logged, 2000);
 
 	// Explicit SQLSTATE assertion (42601 = syntax_error), in addition to the
 	// full byte-equality check below — guards against both sides agreeing on
 	// the WRONG code.
 	bool sqlstate_ok = (nt_out.find("sqlstate=42601") != std::string::npos);
 
-	bool result_match = (lp_out == nt_out) && sqlstate_ok;
+	bool result_match = (lp_out == nt_out) && sqlstate_ok && resync_logged;
 	std::stringstream det;
-	det << "midframe error-recovery; sqlstate_ok=" << (sqlstate_ok ? "yes" : "no");
-	if (!result_match) {
+	det << "midframe error-recovery; sqlstate_ok=" << (sqlstate_ok ? "yes" : "no")
+	    << "; injected_sync_observed=" << (resync_logged ? "yes" : "no");
+	if (!resync_logged) {
+		det << " (injected-Sync branch not observed in proxysql.log)";
+	}
+	if (lp_out != nt_out) {
 		det << " (mismatch; lp_out='" << lp_out << "' nt_out='" << nt_out << "')";
 	}
 	setNativeMode(admin, false);

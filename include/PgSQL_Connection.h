@@ -724,7 +724,16 @@ public:
 	// brings it back to ReadyForQuery so the drain can complete and the session's
 	// error path can run. Guards against injecting a second Sync while draining to 'Z'.
 	bool native_stmt_error_resync = false;
+	// True once the injected-Sync recovery proxy_warning has been emitted on this
+	// connection. Deliberately NOT reset in native_stmt_reset_step() — the warning
+	// fires at most once per backend-connection lifetime, so a client habitually
+	// sending Parse-time-invalid SQL (PQexecParams in a loop) cannot flood the
+	// production log at WARNING level (the libpq oracle path logs nothing for the
+	// same event). The recovery itself (native_stmt_error_resync) still runs on
+	// every errored step; only the log line is deduplicated.
+	bool native_stmt_resync_logged = false;
 	// Reset all per-step native stmt drive state. Called at each native stmt start.
+	// (native_stmt_resync_logged is intentionally absent: per-connection, not per-step.)
 	inline void native_stmt_reset_step() {
 		native_result_complete = false;
 		native_copy_intercepted = false;
