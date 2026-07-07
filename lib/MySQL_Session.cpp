@@ -1950,7 +1950,21 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 		// reusable; the client's first query re-acquires through the normal
 		// lazy CONNECTING_SERVER path with the now-cached credential. Keeping
 		// it bound would hold a backend connection for an idle session.
+		//
+		// The backend connection's userinfo was seeded in Phase A from the
+		// client userinfo at a moment when the client schemaname could still be
+		// NULL (the handshake epilogue that sets it may not have run yet for
+		// the empty-pw / no-DB cases). A NULL schemaname on a pooled connection
+		// crashes SQL3_Free_Connections / stats_mysql_free_connections, which
+		// strdup userinfo->schemaname unconditionally. Ensure it is non-NULL on
+		// the backend conn before returning it, mirroring the client-side guard
+		// above (NULL-safe: len==0 falls back to mysql_thread___default_schema).
 		if (mybe && mybe->server_myds && mybe->server_myds->myconn) {
+			MySQL_Connection_userinfo *bui = mybe->server_myds->myconn->userinfo;
+			if (bui && bui->schemaname == NULL) {
+				bui->set_schemaname(
+					default_schema, default_schema ? strlen(default_schema) : 0);
+			}
 			mybe->server_myds->return_MySQL_Connection_To_Pool();
 		}
 
