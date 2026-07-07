@@ -44,6 +44,8 @@ static const char* ACCEPT_CASES[] = {
 	"/*svc=dd*/ SET NAMES utf8",
 	"/*svc=dd*/ SET character_set_results=utf8",
 	"/*svc=dd*/ SET SQL_AUTO_IS_NULL=0",
+	"SET LOCK_WAIT_TIMEOUT=5",                                       // baseline (no comment)
+	"/*service='datadog-agent'*/ SET LOCK_WAIT_TIMEOUT=5",           // exact DD Agent payload (2nd setup stmt)
 	"/*svc=dd*/ SET SQL_SAFE_UPDATES=1",                             // covers fix bug #442
 	"/*svc=dd*/ BEGIN",
 	"/*svc=dd*/ START TRANSACTION",

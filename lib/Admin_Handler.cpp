@@ -3941,6 +3941,8 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			(!strncasecmp("SET NAMES", mb, strlen("SET NAMES")))
 			||
 			(!strncasecmp("SET AUTOCOMMIT", mb, strlen("SET AUTOCOMMIT")))
+			||
+			(!strncasecmp("SET LOCK_WAIT_TIMEOUT", mb, strlen("SET LOCK_WAIT_TIMEOUT")))
 		) {
 			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 			run_query=false;
