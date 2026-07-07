@@ -2784,6 +2784,14 @@ unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const uns
 		}
 		break;
 	}
+	case 'H': // CopyOutResponse: bytes forwarded verbatim (stream-through)
+		result_packet_type |= PGSQL_QUERY_RESULT_COPY_OUT;
+		break;
+	case 'd': // CopyData: count as a row for stats parity with the libpq
+		num_rows++;   // path (add_copy_out_row also increments num_rows)
+		break;
+	case 'c': // CopyDone: no side effect; CommandComplete follows
+		break;
 	case 'Z': // ReadyForQuery: final message; records txn status and finalizes buffer.
 		if (conn && payload_len >= 1) {
 			conn->native_txn_status = (char)payload[0];
@@ -2802,8 +2810,11 @@ unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const uns
 		}
 		break;
 	default:
-		// 'A' NotificationResponse and COPY ('G'/'H'/'d'/'c') are streamed through
-		// verbatim with no extra side effects (not exercised by simple query/SET).
+		// 'A' NotificationResponse and any other unrecognized message type are
+		// streamed through verbatim with no extra side effects. 'G'/'W'
+		// (CopyInResponse/CopyBothResponse) never reach this function — they are
+		// intercepted and answered with CopyFail by native_fetch_result_cont()'s
+		// safety net before add_native_backend_message() is called.
 		break;
 	}
 

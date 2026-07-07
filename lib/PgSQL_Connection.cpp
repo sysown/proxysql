@@ -2456,6 +2456,7 @@ void PgSQL_Connection::query_start() {
 		// defensively from query.length bytes + an explicit NUL so we never
 		// depend on / read past the caller's terminator.
 		native_result_complete = false;
+		native_copy_intercepted = false;
 		// Reset the framer so any stray connect-phase bytes (there should be none
 		// after a clean ReadyForQuery) cannot leak into this query's result parse.
 		native_framer.reset();
@@ -2643,6 +2644,26 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 		PgSQL_Backend_Msg msg;
 		PgSQL_Frame_Result fr = native_framer.next(msg);
 		if (fr == FRAME_OK) {
+			if (msg.type == 'G' || msg.type == 'W') {
+				// CopyInResponse / CopyBothResponse: the native drive cannot supply
+				// client CopyData (COPY ... FROM STDIN is routed to the session
+				// fast_forward path before it reaches us — see copy_cmd_matcher).
+				// If one slips through, abort the COPY cleanly: suppress the
+				// message (the client must not enter COPY mode) and send
+				// CopyFail; the backend responds with ErrorResponse +
+				// ReadyForQuery, which complete the cycle via the existing 'Z'
+				// handling below.
+				if (!native_copy_intercepted) {
+					native_copy_intercepted = true;
+					proxy_warning("native backend protocol: unexpected CopyInResponse ('%c'); sending CopyFail\n", msg.type);
+					pg_native_build_copyfail(native_outbuf, "ProxySQL native backend protocol cannot drive COPY FROM STDIN on this path");
+					if (!native_send_or_buffer(PG_Native_Conn_St::DONE)) {
+						set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(CopyFail) failed", false);
+						return;
+					}
+				}
+				continue;   // do NOT forward 'G'/'W' to the client
+			}
 			query_result->add_native_backend_message(msg.type, msg.payload, msg.payload_len);
 			if (msg.type == 'Z') {
 				// ReadyForQuery: the result stream for this query is complete.

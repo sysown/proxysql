@@ -709,6 +709,10 @@ public:
 	// Set true once a ReadyForQuery ('Z') has been consumed for the in-flight query,
 	// signalling the result stream is complete. Reset at query_start().
 	bool native_result_complete = false;
+	// Set true once a CopyInResponse ('G') or CopyBothResponse ('W') has been
+	// answered with a CopyFail by the native_fetch_result_cont() safety net
+	// (see there). Reset at query_start() alongside native_result_complete.
+	bool native_copy_intercepted = false;
 	// Drive the native result fetch: recv backend bytes, frame them, and stream each
 	// raw message into query_result via add_native_backend_message(). Non-blocking:
 	// EAGAIN/incomplete frame → async_exit_status = PG_EVENT_READ and return; a fatal
