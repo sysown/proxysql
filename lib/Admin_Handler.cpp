@@ -591,6 +591,11 @@ std::tuple<bool, enum SERVER_TYPE, time_t> parse_command_purge_query_digests(cha
 		// ts_str should only contain digits and respresent a valid timestamp
 		if ((*ts_end == 0) && (ts > 0)) {
 			last_seen = realtime_to_monotonic_time(ts);
+			if (last_seen <= 0) {
+				// valid timestamp, but older than the monotonic clock epoch (system
+				// boot): no entry can match, make the command a successful no-op
+				last_seen = 1;
+			}
 		}
 	}
 

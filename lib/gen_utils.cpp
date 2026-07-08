@@ -1,5 +1,6 @@
 #include <vector>
 #include <memory>
+#include <limits>
 #include <sstream>
 #include "gen_utils.h"
 
@@ -387,7 +388,16 @@ time_t realtime_to_monotonic_time(time_t rt) {
 	time_t rt_now;
 	time(&rt_now);
 
-	return ((mt_now - rt_now + rt) * 1000000);
+	time_t mt = mt_now - rt_now + rt;
+	// a realtime value earlier than the monotonic clock epoch (i.e. system boot)
+	// has no monotonic representation: any monotonic timestamp is more recent
+	if (mt < 0) {
+		return 0;
+	}
+	if (mt > std::numeric_limits<time_t>::max() / 1000000) {
+		return std::numeric_limits<time_t>::max();
+	}
+	return (mt * 1000000);
 }
 
 /**
