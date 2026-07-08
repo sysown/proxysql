@@ -174,7 +174,7 @@ cityhash: cityhash/cityhash/src/.libs/libcityhash.a
 lz4/lz4/lib/liblz4.a:
 	cd lz4 && rm -rf lz4-*/ || true
 	cd lz4 && tar -zxf lz4-*.tar.gz
-	cd lz4/lz4 && CC=${CC} CXX=${CXX} ${MAKE}
+	cd lz4/lz4 && CC=${CC} CXX=${CXX} ${MAKE} MOREFLAGS=-fPIC
 
 lz4: lz4/lz4/lib/liblz4.a
 
@@ -185,7 +185,7 @@ lz4: lz4/lz4/lib/liblz4.a
 zstd/zstd/lib/libzstd.a:
 	cd zstd && rm -rf zstd-*/ || true
 	cd zstd && tar -zxf zstd-*.tar.gz
-	cd zstd/zstd/lib && CC=${CC} CXX=${CXX} ${MAKE} libzstd.a
+	cd zstd/zstd/lib && CC=${CC} CXX=${CXX} ${MAKE} MOREFLAGS=-fPIC libzstd.a
 
 zstd: zstd/zstd/lib/libzstd.a
 
