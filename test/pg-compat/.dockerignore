@@ -4,5 +4,4 @@
 # copy in via `COPY . .` would bloat the image and risk a wrong-platform
 # query-engine binary. Report output is host-only too.
 **/node_modules
-drivers/prisma/.prisma
 pg-compat-reports

@@ -64,8 +64,29 @@ const TX_TABLE = 'behavior_tx_t_prisma';
 // docstring). TimeZone is a tracked/forwarded/reset variable, a valid probe.
 const DISTINCTIVE_TZ = 'Antarctica/Troll';
 
-function newClient() {
-  return new PrismaClient();
+// newClient: the shared client-factory every behavior uses. Besides
+// constructing the PrismaClient it applies the client_encoding=UTF8 pin the
+// Global Constraints mark MUST-reproduce for every port.
+//
+// Encoding-pin mechanism (empirical answer, Task 5 review; evidence in the
+// SP3-Task 5 report): Prisma's PostgreSQL connector does NOT propagate a
+// `client_encoding` URL param -- it is accepted but IGNORED. Probed direct
+// against the SQL_ASCII primary (so ProxySQL's own UTF8-forcing could not
+// confound the answer): with NO param `SHOW client_encoding` already
+// returns UTF8 (the Rust query engine unconditionally sets UTF8 on its
+// connections), and even `client_encoding=LATIN1` in the URL still yields
+// UTF8 -- proof the param is discarded, while psycopg direct with no pin
+// sees the true backend default SQL_ASCII. So the engine structurally
+// guarantees UTF8 today; the explicit SET below is the pgjdbc-precedent
+// fallback (URL param doesn't propagate -> SET right after construction),
+// keeping this port's pin EXPLICIT like the other four instead of relying
+// on an undocumented engine default. connection_limit=1 (module header)
+// guarantees the SET lands on the same single connection every subsequent
+// statement of this client uses.
+async function newClient() {
+  const prisma = new PrismaClient();
+  await prisma.$executeRawUnsafe("SET client_encoding TO 'UTF8'");
+  return prisma;
 }
 
 // firstVal: pull the single scalar out of a one-row/one-column raw result,
@@ -80,7 +101,7 @@ function firstVal(rows) {
 // UTF8 assertion the node port also carries (recorded SP-2 finding: the
 // SQL_ASCII backend reports UTF8 through ProxySQL).
 async function connect() {
-  const prisma = newClient();
+  const prisma = await newClient();
   try {
     // int4 literal -> Prisma returns a JS number for `one`; coerce with
     // Number() defensively and compare to 1.
@@ -124,7 +145,7 @@ async function verifyCount(prisma) {
 // deliberately throws "force-rollback", which we catch; the committing leg
 // simply returns normally from the callback, so Prisma COMMITs.
 async function transactions() {
-  const prisma = newClient();
+  const prisma = await newClient();
   try {
     await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS ${TX_TABLE}`);
     await prisma.$executeRawUnsafe(`CREATE TABLE ${TX_TABLE} (id int)`);
@@ -189,7 +210,7 @@ async function transactions() {
 // splicing -- which is exactly the prepared-statement path this port exists
 // to probe through the proxy.
 async function prepared() {
-  const prisma = newClient();
+  const prisma = await newClient();
   try {
     for (let i = 0; i < 50; i++) {
       // ::int (int4) result -> Prisma returns a JS number for `sum`
@@ -216,7 +237,7 @@ async function prepared() {
 // connection within A -- otherwise Prisma's internal pool could scatter them
 // and produce a false negative unrelated to ProxySQL.
 async function sessionIsolation() {
-  const a = newClient();
+  const a = await newClient();
   let b = null;
   let aClosed = false;
   try {
@@ -229,7 +250,7 @@ async function sessionIsolation() {
     await a.$disconnect();
     aClosed = true;
 
-    b = newClient();
+    b = await newClient();
     const tzB = firstVal(await b.$queryRawUnsafe('SHOW TimeZone'));
     if (tzB === DISTINCTIVE_TZ) {
       throw new Error(`session state leaked across connections: B's TimeZone is ${JSON.stringify(tzB)}`);

@@ -63,6 +63,11 @@ COPY --from=javabuild /pgjdbc.jar /pg-compat/bin/pgjdbc.jar
 COPY --from=nodebuild /app /pg-compat/node-app
 # Prisma app: node_modules (with the generated @prisma/client + .prisma
 # client + query-engine binary), schema.prisma, behaviors.mjs.
+# Known size trade-off: this copies the whole prismabuild dev tree,
+# including the prisma CLI devDependency and its non-query engines
+# (schema/format engines), not just what behaviors.mjs needs at runtime --
+# simple and correct over minimal. Task 6's image-size measurement accounts
+# for it; prune here if the numbers demand it.
 COPY --from=prismabuild /app /pg-compat/prisma-app
 RUN printf '#!/bin/sh\nexec java -cp /pg-compat/bin/java-classes:/pg-compat/bin/pgjdbc.jar Behaviors "$@"\n' > /pg-compat/bin/behaviors-java \
  && printf '#!/bin/sh\nexec node /pg-compat/node-app/behaviors.js "$@"\n' > /pg-compat/bin/behaviors-node \
