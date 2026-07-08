@@ -2,7 +2,12 @@
 
 **Date:** 2026-07-07
 **Status:** Parity + Describe cache IMPLEMENTED (Tasks A-E of the companion plan, 2026-07-07);
-named portals (§4) = next phase, plan to follow. Approved in-session by René Cannaò (4 decisions
+named portals (§4) IMPLEMENTED (Tasks P1-P3 of `2026-07-07-pgsql-native-named-portals-plan.md`,
+2026-07-08): registry + immediate native Bind dispatch (BIND stmt phase), Execute/Describe/Close
+routing with max_rows + PortalSuspended resume, txn-scoped lifetime + sticky pinning, raw-wire
+differential vs direct PostgreSQL (SCRAM-capable pg_lite_client) — zero divergences. Known
+follow-up: cross-hostgroup registry-clear edge under transaction_persistent=0 (pre-existing
+shape; tie clearing to the portal-holding conn). Approved in-session by René Cannaò (4 decisions
 recorded below)
 **Branch:** `feature/pgsql-native-backend-protocol`
 **Supersedes:** §3.3 of `2026-06-14-pgsql-native-txn-copy-prepared-design.md` (raw pass-through, "no pooling") — that approach was implemented (commits `051dd25ec`..`a254976dd`) and is REMOVED by this design.

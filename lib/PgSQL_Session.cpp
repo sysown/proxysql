@@ -391,6 +391,7 @@ void PgSQL_Session::reset() {
 	pending_named_bind.stmt_info.reset();
 	pending_named_bind.portal_name.clear();
 	pending_named_bind.active = false;
+	closing_portal_name.clear();
 	// Clear any poisoned-transaction state — if the session is being reset we're
 	// past the scope of the poison.
 	tx_poisoned = false;
