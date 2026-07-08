@@ -2,7 +2,7 @@
 /**
  * behaviors-node: node-postgres (pg) behavior CLI stub.
  *
- * CLI contract (see docs/superpowers/plans/2026-07-08-pgsql-driver-matrix.md,
+ * CLI contract (see docs/superpowers/plans/2026-07-08-pgsql-sp3-driver-matrix.md,
  * Global Constraints): `behaviors-node <behavior>` where <behavior> is one
  * of connect, transactions, prepared, session_isolation.
  *   exit 0 -> behavior passed

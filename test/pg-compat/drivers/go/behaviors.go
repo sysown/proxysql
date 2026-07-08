@@ -1,6 +1,6 @@
 // behaviors-go: Go/pgx behavior CLI stub.
 //
-// CLI contract (see docs/superpowers/plans/2026-07-08-pgsql-driver-matrix.md,
+// CLI contract (see docs/superpowers/plans/2026-07-08-pgsql-sp3-driver-matrix.md,
 // Global Constraints): `behaviors-go <behavior>` where <behavior> is one of
 // connect, transactions, prepared, session_isolation.
 //
