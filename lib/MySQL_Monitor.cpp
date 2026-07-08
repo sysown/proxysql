@@ -3691,25 +3691,18 @@ void * MySQL_Monitor::monitor_read_only() {
 
 	unsigned long long t1;
 	unsigned long long t2;
-	// next loop iteration time for regular read_only checks
 	unsigned long long next_loop_at=0;
-	// next loop iteration time for read_only checks on RDS blue/green deployment servers
-	unsigned long long next_bgd_loop_at = 0;
-	int rds_topology_check_counter = 0;
+	int topology_loop = 0;
 
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
-		// whether to run read_only checks on RDS blue/green deployment servers only
-		bool rds_bgd_only_loop = false;
-
-		// whether to run mysql.rds_topology check for RDS servers
-		// in addition to regular read_only checks for all servers
-		bool rds_topology_check = false;
-		int rds_topology_check_interval = mysql_thread___monitor_aws_rds_topology_discovery_interval;
+		int topology_loop_max = mysql_thread___monitor_aws_rds_topology_discovery_interval;
+		bool do_discovery_check = false;
 
 		unsigned int glover;
 		char *error=NULL;
 		SQLite3_result *resultset=NULL;
-		const char *query = NULL;
+		// add support for SSL
+		char *query=(char *)SELECT_SERVERS_FOR_READ_ONLY;
 		t1=monotonic_time();
 
 		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
@@ -3720,52 +3713,36 @@ void * MySQL_Monitor::monitor_read_only() {
 			next_loop_at=0;
 		}
 
-		bool bgd_active = MyHGM->is_aws_rds_bgd_in_progress();
-		if (bgd_active) {
-			if (t1 < next_loop_at && t1 >= next_bgd_loop_at) {
-				rds_bgd_only_loop = true;
-			}
-			next_bgd_loop_at = t1 + READ_ONLY_BGD_LOOP_INTERVAL_US;
-		} else {
-			// BGD is not active && regular read_only interval time has not elapsed
-			if (t1 < next_loop_at) {
-				goto __sleep_monitor_read_only;
-			}
+		if (t1 < next_loop_at) {
+			goto __sleep_monitor_read_only;
 		}
-
-		if (rds_bgd_only_loop) {
-			query = SELECT_RDS_BGD_SERVERS_FOR_READ_ONLY;
-		} else {
-			query = SELECT_SERVERS_FOR_READ_ONLY;
-			next_loop_at = t1 + 1000ULL * (unsigned int) mysql_thread___monitor_read_only_interval;
-		}
-
+		next_loop_at=t1+1000*mysql_thread___monitor_read_only_interval;
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-		resultset = MyHGM->execute_query((char*) query, &error);
+		resultset = MyHGM->execute_query(query, &error);
 		assert(resultset);
 		if (error) {
 			proxy_error("Error on %s : %s\n", query, error);
 			goto __end_monitor_read_only_loop;
 		}
-		
+
 		if (resultset->rows_count == 0) {
 			goto __end_monitor_read_only_loop;
 		}
 
-		if (!rds_bgd_only_loop && rds_topology_check_interval > 0) {
-			if (rds_topology_check_counter >= rds_topology_check_interval) {
-				rds_topology_check = true;
-				rds_topology_check_counter = 0;
-			} 
-			rds_topology_check_counter += 1;
+		if (topology_loop_max > 0) { // if the discovery interval is set to zero, do not query for the topology
+			if (topology_loop >= topology_loop_max) {
+				do_discovery_check = true;
+				topology_loop = 0;
+			}
+			topology_loop += 1;
 		}
 
 		// resultset must be initialized before calling monitor_read_only_async
-		monitor_read_only_async(resultset, rds_topology_check);
+		monitor_read_only_async(resultset, do_discovery_check);
 		if (shutdown) return NULL;
 
 __end_monitor_read_only_loop:
-		if (!rds_bgd_only_loop && mysql_thread___monitor_enabled) {
+		if (mysql_thread___monitor_enabled==true) {
 			char *query=NULL;
 			query=(char *)"DELETE FROM mysql_server_read_only_log WHERE time_start_us < ?1";
 			auto [rc1, statement_unique] = monitordb->prepare_v2(query);
@@ -3787,21 +3764,14 @@ __end_monitor_read_only_loop:
 			delete resultset;
 
 __sleep_monitor_read_only:
-		t2 = monotonic_time();
-		unsigned long long st = 0;
-		if (bgd_active) {
-			if (t2 < next_bgd_loop_at) {
-				st = next_bgd_loop_at - t2;
-				usleep(st);
+		t2=monotonic_time();
+		if (t2<next_loop_at) {
+			unsigned long long st=0;
+			st=next_loop_at-t2;
+			if (st > 500000) {
+				st = 500000;
 			}
-		} else {
-			if (t2 < next_loop_at) {
-				st = next_loop_at - t2;
-				if (st > READ_ONLY_NEXT_LOOP_INTERVAL_US) {
-					st = READ_ONLY_NEXT_LOOP_INTERVAL_US;
-				}
-				usleep(st);
-			}
+			usleep(st);
 		}
 	}
 
@@ -6699,6 +6669,36 @@ static int aws_rds_bgd_async_query(MySQL_Monitor_State_Data *mmsd, const char *q
 }
 
 /**
+* @brief Flag the servers as switchover-in-progress so the read_only monitor leaves them alone.
+*
+* @details During a switchover AWS makes the blue writer read-only; without this, read_only_action_v2 would
+*   demote/relocate it and fight the BGD FSM. Set once when status reaches INITIATED+ and held through
+*   SWITCHOVER_COMPLETED; cleared at NONE by aws_rds_bgd_clear_bgd_in_progress
+*/
+static void aws_rds_bgd_set_bgd_in_progress(AWS_RDS_BGD_State& st) {
+	if (st.bgd_in_progress_set) {
+		return;
+	}
+
+	MyHGM->set_aws_rds_bgd_in_progress(st.writer_hg, st.reader_hg, true);
+	st.bgd_in_progress_set = true;
+	proxy_info("AWS RDS BGD [wHG=%u rHG=%u]: switchover in progress, suspending read_only monitor actions on these hostgroups until SWITCHOVER_COMPLETED\n",
+		st.writer_hg, st.reader_hg);
+}
+
+/**
+* @brief Re-enable read_only monitor action on the deployment's servers (undo aws_rds_bgd_set_bgd_in_progress).
+*/
+static void aws_rds_bgd_clear_bgd_in_progress(AWS_RDS_BGD_State& st) {
+	if (!st.bgd_in_progress_set) {
+		return;
+	}
+
+	MyHGM->set_aws_rds_bgd_in_progress(st.writer_hg, st.reader_hg, false);
+	st.bgd_in_progress_set = false;
+}
+
+/**
 * @brief Set the deployment's switchover status and persist it in runtime table.
 */
 static void aws_rds_bgd_set_status(AWS_RDS_BGD_State& st, AWS_RDS_BGD_Status status) {
@@ -6711,7 +6711,11 @@ static void aws_rds_bgd_set_status(AWS_RDS_BGD_State& st, AWS_RDS_BGD_Status sta
 		aws_rds_bgd_status_str(st.bgd_status), aws_rds_bgd_status_str(status));
 
 	st.bgd_status = status;
-	MyHGM->aws_rds_bgd_set_switchover_status(st.writer_hg, static_cast<int>(status));
+	MyHGM->aws_rds_bgd_set_runtime_status(st.writer_hg, static_cast<int>(status));
+
+	if (status == AWS_RDS_BGD_Status::NONE) {
+		aws_rds_bgd_clear_bgd_in_progress(st);
+	}
 }
 
 void * monitor_RDS_BGD_thread_HG(void *arg) {
@@ -6730,7 +6734,7 @@ void * monitor_RDS_BGD_thread_HG(void *arg) {
 	AWS_RDS_BGD_State st;
 	st.writer_hg = wHG;
 
-	MyHGM->aws_rds_bgd_set_switchover_status(wHG, static_cast<int>(AWS_RDS_BGD_Status::NONE));
+	MyHGM->aws_rds_bgd_set_runtime_status(wHG, static_cast<int>(AWS_RDS_BGD_Status::NONE));
 
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
@@ -7015,6 +7019,8 @@ __end_of_loop:
 	}
 
 __exit_monitor_RDS_BGD_thread_HG_now:
+	aws_rds_bgd_clear_bgd_in_progress(st);
+
 	if (mmsd) {
 		delete mmsd;
 		mmsd = NULL;
@@ -7272,6 +7278,8 @@ const char* aws_rds_bgd_status_str(AWS_RDS_BGD_Status s) {
 			return "WRITER_SWITCHOVER_COMPLETED";
 		case AWS_RDS_BGD_Status::READER_SWITCHOVER_IN_PROGRESS:
 			return "READER_SWITCHOVER_IN_PROGRESS";
+		case AWS_RDS_BGD_Status::SWITCHOVER_COMPLETED:
+			return "SWITCHOVER_COMPLETED";
 	}
 	return "UNKNOWN";
 }
@@ -7279,13 +7287,15 @@ const char* aws_rds_bgd_status_str(AWS_RDS_BGD_Status s) {
 /**
 * @brief Run the status-driven blue/green switchover FSM for one deployment.
 *
-* @details Dispatches on the deployment switchover status read from the TARGET (green) row
-*   of mysql.rds_topology (the TARGET row carries the status in every phase, including
-*   COMPLETED where the SOURCE row is absent). State carried across poll cycles (the
-*   blue<->green map, resolved green IPs, the pinned probe host, enforcement bookkeeping,
-*   and the next poll interval) lives in 'st', owned by the calling worker thread.
+* @details Invoked each poll cycle by the BGD worker after it fetches the
+*   mysql.rds_topology result. Dispatches on the deployment's switchover status
+*   (AVAILABLE -> SWITCHOVER_INITIATED -> IN_PROGRESS -> IN_POST_PROCESSING ->
+*   COMPLETED): builds the blue<->green map, pre-resolves green IPs, repoints the
+*   blue hostnames onto the green IPs in the DNS cache, drains blue free
+*   connections, and shuns/enforces reader handling. State carried across cycles
+*   lives in @p st.
 *
-* @param st        Per-deployment switchover state (worker-owned, mutated here).
+* @param st        BGD switchover state (worker-owned, mutated here).
 * @param topology  Parsed mysql.rds_topology result for this cycle.
 */
 void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topology_Result& topology) {
@@ -7341,6 +7351,18 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 		aws_rds_bgd_build_map(st, topology);
 		aws_rds_bgd_resolve_green_ips(st);
 		aws_rds_bgd_add_green_writer_in_hg(st);
+		aws_rds_bgd_set_bgd_in_progress(st);
+
+		if (st.bgd_status == AWS_RDS_BGD_Status::WRITER_SWITCHOVER_IN_PROGRESS) {
+			// Demote the blue writer (RO=1)
+			for (const AWS_RDS_BlueGreenPair& p : st.bg_map) {
+				if (p.is_writer) {
+					auto srv = read_only_server_t{ p.blue_host, (port_t)p.port, 1 };
+					MyHGM->read_only_action_v2(std::list<read_only_server_t>{srv}, true);
+					break;
+				}
+			}
+		}
 	}
 	else if (st.bgd_status == AWS_RDS_BGD_Status::WRITER_SWITCHOVER_POST_PROCESSING) {
 		st.next_check_interval_ms = 100;
@@ -7351,6 +7373,15 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 		aws_rds_bgd_build_map(st, topology);
 		aws_rds_bgd_resolve_green_ips(st);
 		aws_rds_bgd_add_green_writer_in_hg(st);
+		aws_rds_bgd_set_bgd_in_progress(st);
+
+		srv_addr_t writer;
+		for (const AWS_RDS_BlueGreenPair& p : st.bg_map) {
+			if (p.is_writer) {
+				writer = srv_addr_t{ p.blue_host, p.port };
+				break;
+			}
+		}
 
 		// Repoint each mapped blue host onto its green IP and drain existing
 		// connections so new backend work resolves to green.
@@ -7371,7 +7402,8 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 		}
 
 		// Blue readers without a green counterpart must stop serving reads.
-		std::vector<std::pair<std::string, int>> blue_readers;
+
+		std::vector<srv_addr_t> blue_readers;
 		MyHGM->wrlock();
 		MyHGC* rhgc = MyHGM->MyHGC_lookup(st.reader_hg);
 		if (rhgc && rhgc->mysrvs) {
@@ -7380,15 +7412,19 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 				if (s->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
 					continue;
 				}
-				blue_readers.push_back({ std::string(s->address), s->port });
+				if (writer.host == s->address && writer.port == s->port) {
+					continue;
+				}
+				blue_readers.push_back(srv_addr_t{ std::string(s->address), s->port });
 			}
 		}
 		MyHGM->wrunlock();
-		std::vector<std::pair<std::string, int>> unmapped_readers;
-		for (const std::pair<std::string, int>& br : blue_readers) {
+
+		std::vector<srv_addr_t> unmapped_readers;
+		for (const srv_addr_t& br : blue_readers) {
 			bool mapped = false;
 			for (const AWS_RDS_BlueGreenPair& p : st.bg_map) {
-				if (p.blue_host == br.first && p.port == br.second) {
+				if (p.blue_host == br.host && p.port == br.port) {
 					mapped = true;
 					break;
 				}
@@ -7398,27 +7434,15 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 			}
 		}
 
-		// If shunning the unmapped readers would leave the reader HG with no serving readers,
-		// add the writer into the reader HG so reads keep flowing during the switchover.
-		// This a no-ops when read_only monitor has added the writer to reader HG already. 
-		std::unique_ptr<srv_info_t> writer_info;
-		std::unique_ptr<srv_opts_t> writer_opts;
+		bool writer_is_also_reader = (st.writer_is_also_reader != 0);
 		if (!unmapped_readers.empty() && unmapped_readers.size() == blue_readers.size()) {
-			for (AWS_RDS_BlueGreenPair& p : st.bg_map) {
-				if (p.is_writer) {
-					writer_info = std::make_unique<srv_info_t>(srv_info_t{ p.blue_host, (uint16_t)p.port, "AWS RDS BGD writer as reader" });
-					writer_opts = std::make_unique<srv_opts_t>(srv_opts_t{ p.blue_weight, p.blue_max_conns, p.blue_use_ssl });
-					proxy_info(
-						"AWS RDS BGD [wHG=%u rHG=%u]: reader HG would be emptied by shun; adding writer '%s:%d' to reader HG\n",
-						st.writer_hg, st.reader_hg, p.blue_host.c_str(), p.port);
-					break;
-				}
-			}
+			// All blue readers would be transitioned to SHUNNED_AWS_BGD, leaving the reader HG empty.
+			// Temporarily enforce writer_is_also_reader until the reader switchover completes.
+			writer_is_also_reader = true;
 		}
 
-		// Shun the unmapped blue readers.
-		aws_rds_bgd_reconfigure_reader_hg(
-			st.bgd_status, st.reader_hg, unmapped_readers, writer_info.get(), writer_opts.get());
+		aws_rds_bgd_hostgroup_action(st.bgd_status, writer, writer_is_also_reader, st.reader_hg, unmapped_readers);
+
 		st.shunned_readers.insert(st.shunned_readers.end(), unmapped_readers.begin(), unmapped_readers.end());
 	}
 	else if (st.bgd_status == AWS_RDS_BGD_Status::WRITER_SWITCHOVER_COMPLETED) {
@@ -7440,47 +7464,49 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 		st.next_check_interval_ms = 0;
 	}
 	else {
-		// NONE / unrecognized status: take no action, stay at baseline interval
+		// unrecognized status: take no action, stay at baseline interval
 		st.next_check_interval_ms = 0;
 	}
 }
 
 /**
-* @brief Apply one switchover step's reader-HG mutations, with the action derived from bgd_status.
+* @brief Apply BGD hostgroup changes for the current switchover status.
 *
-* @details POST_PROCESSING shuns the unmapped readers and, when writer_info is set, adds the writer as
-*   a reader (using writer_opts). READER_SWITCHOVER_IN_PROGRESS unshuns the readers and, when writer_info
-*   is set, removes the writer.
+* @details POST_PROCESSING configures the writer placement and shuns unmapped readers.
+*   SWITCHOVER_COMPLETED unshuns readers and removes the writer from reader HG when
+*   writer_is_also_reader is false. Runtime mysql_servers and checksum are re-generated
+*   when server hostgroup membership changes.
+*
+* @param bgd_status Current BGD FSM status driving the action.
+* @param writer Writer server to configure.
+* @param writer_is_also_reader Whether the writer should also remain in reader_hg.
+* @param reader_hg Reader hostgroup for reader shun/unshun and optional writer membership.
+* @param readers Reader servers to shun or unshun.
 */
-void MySQL_Monitor::aws_rds_bgd_reconfigure_reader_hg(
-	AWS_RDS_BGD_Status bgd_status, unsigned int reader_hg,
-	std::vector<std::pair<std::string, int>>& unmapped_readers,
-	srv_info_t* writer_info, srv_opts_t* writer_opts)
+void MySQL_Monitor::aws_rds_bgd_hostgroup_action(
+	AWS_RDS_BGD_Status bgd_status,
+	srv_addr_t& writer, bool writer_is_also_reader,
+	unsigned int reader_hg, std::vector<srv_addr_t>& readers)
 {
-	bool post_proc = (bgd_status == AWS_RDS_BGD_Status::WRITER_SWITCHOVER_POST_PROCESSING);
-	// WRITER_SWITCHOVER_POST_PROCESSING => shun;
-	// READER_SWITCHOVER_IN_PROGRESS => unshun
-	bool shun = post_proc;
 	bool changed = false;
+	bool shun_readers = false;
 
 	MyHGM->wrlock();
 
-	if (writer_info) {
-		if (post_proc && writer_info && writer_opts) {
-			if (MyHGM->create_new_server_in_hg(reader_hg, *writer_info, *writer_opts) == 0) {
-				changed = true;
-			}
-		} else {
-			if (MyHGM->remove_server_in_hg(reader_hg, writer_info->addr, writer_info->port) == 0) {
-				changed = true;
-			}
+	if (bgd_status == AWS_RDS_BGD_Status::WRITER_SWITCHOVER_POST_PROCESSING) {
+		changed |= MyHGM->aws_rds_bgd_configure_writer(writer.host.c_str(), writer.port, writer_is_also_reader);
+		shun_readers = true;
+	} else if (bgd_status == AWS_RDS_BGD_Status::SWITCHOVER_COMPLETED) {
+		if (!writer_is_also_reader) {
+			changed |= (MyHGM->remove_server_in_hg(reader_hg, writer.host, writer.port) == 0);
 		}
+	} else {
+		MyHGM->wrunlock();
+		return;
 	}
 
-	for (std::pair<std::string, int>& s : unmapped_readers) {
-		if (MyHGM->aws_rds_bgd_set_shun_server(reader_hg, s.first.c_str(), s.second, shun)) {
-			changed = true;
-		}
+	for (srv_addr_t& s : readers) {
+		MyHGM->aws_rds_bgd_set_shun_server(reader_hg, s.host.c_str(), s.port, shun_readers);
 	}
 
 	if (changed) {
@@ -7491,43 +7517,39 @@ void MySQL_Monitor::aws_rds_bgd_reconfigure_reader_hg(
 }
 
 /**
-* @brief Deferred switchover teardown: run once mysql.rds_topology has drained after COMPLETED.
+* @brief Run deferred switchover teardown after mysql.rds_topology drains.
 *
-* @details Blue-reader DNS has propagated to the promoted instances by the time the topology
-*   table goes empty, so this: returns the writer to a writer-only role, restores the shunned
-*   blue readers to ONLINE immediately (no recovery delay), drops the blue->green DNS pins, and
-*   clears the per-worker switchover state so a future switchover starts from a clean FSM.
+* @details Restores post-switchover reader handling, unshuns readers, drops DNS pins,
+*   drains green hostgroups, and clears BGD switchover state.
+*
+* @param st BGD switchover state.
 */
 void MySQL_Monitor::handle_aws_rds_bgd_post_switchover(AWS_RDS_BGD_State& st) {
 	if (st.bgd_status != AWS_RDS_BGD_Status::READER_SWITCHOVER_IN_PROGRESS) {
 		return;
 	}
 
-	proxy_info(
-		"AWS RDS BGD [wHG=%u rHG=%u]: switchover status '%s' -> '%s'; running post-switchover cleanup\n",
-		st.writer_hg, st.reader_hg, aws_rds_bgd_status_str(st.bgd_status), "SWITCHOVER_COMPLETED"
-	);
+	aws_rds_bgd_set_status(st, AWS_RDS_BGD_Status::SWITCHOVER_COMPLETED);
+	proxy_info("AWS RDS BGD [wHG=%u rHG=%u]: running post-switchover cleanup\n", st.writer_hg, st.reader_hg);
 
-	// Restore the writer's original role in the reader HG based on writer_is_also_reader config and
+	// Restore the writer's original reader role based on writer_is_also_reader config and
 	// unshun the previously shunned blue readers.
-	std::unique_ptr<srv_info_t> writer_info;
-	if (st.writer_is_also_reader == 0) {
-		for (AWS_RDS_BlueGreenPair& p : st.bg_map) {
-			if (p.is_writer) {
-				writer_info = std::make_unique<srv_info_t>(srv_info_t{ p.blue_host, (uint16_t)p.port, "AWS RDS BGD writer" });
-				break;
-			}
+	srv_addr_t writer;
+	for (const AWS_RDS_BlueGreenPair& p : st.bg_map) {
+		if (p.is_writer) {
+			writer = srv_addr_t{ p.blue_host, p.port };
+			break;
 		}
 	}
-
-	aws_rds_bgd_reconfigure_reader_hg(st.bgd_status, st.reader_hg, st.shunned_readers, writer_info.get(), NULL);
+	bool writer_is_also_reader = (st.writer_is_also_reader != 0);
+	aws_rds_bgd_hostgroup_action(st.bgd_status, writer, writer_is_also_reader, st.reader_hg, st.shunned_readers);
 
 	// Drop DNS cache + purge connections for the previously shunned readers
 	// so their blue names re-resolve to the promoted (green) instances.
 	if (!st.shunned_readers.empty()) {
-		for (const std::pair<std::string, int>& br : st.shunned_readers) {
-			dns_cache->remove(br.first);
-			My_Conn_Pool->purge_connections(br.first.c_str(), br.second);
+		for (const srv_addr_t& br : st.shunned_readers) {
+			dns_cache->remove(br.host);
+			My_Conn_Pool->purge_connections(br.host.c_str(), br.port);
 		}
 		st.shunned_readers.clear();
 	}
@@ -7583,7 +7605,7 @@ void MySQL_Monitor::aws_rds_bgd_drain_green_hg(AWS_RDS_BGD_State& st) {
 	}
 
 	for (unsigned int hg : green_hgs) {
-		std::vector<std::pair<std::string, int>> servers;
+		std::vector<srv_addr_t> servers;
 
 		MyHGM->wrlock();
 		MyHGC* hgc = MyHGM->MyHGC_lookup(hg);
@@ -7593,14 +7615,14 @@ void MySQL_Monitor::aws_rds_bgd_drain_green_hg(AWS_RDS_BGD_State& st) {
 				if (s->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
 					continue;
 				}
-				servers.push_back({ std::string(s->address), s->port });
+				servers.push_back(srv_addr_t{ std::string(s->address), s->port });
 			}
 		}
 		MyHGM->wrunlock();
 
-		for (std::pair<std::string, int>& srv : servers) {
-			std::string& host = srv.first;
-			int port = srv.second;
+		for (srv_addr_t& srv : servers) {
+			std::string& host = srv.host;
+			int port = srv.port;
 			dns_cache->remove(host);
 			MyHGM->drain_server_connections(host.c_str(), port);
 			My_Conn_Pool->purge_connections(host.c_str(), port);
@@ -7612,11 +7634,12 @@ void MySQL_Monitor::aws_rds_bgd_drain_green_hg(AWS_RDS_BGD_State& st) {
 }
 
 /**
-* @brief Invoked by the BGD worker whenever mysql.rds_topology is absent/empty/vanished.
+* @brief Handle an absent, empty, or vanished mysql.rds_topology table.
 *
-* @details When a post-switchover teardown is pending, an empty topology table means blue-reader
-*   DNS has propagated, so run the deferred cleanup. Otherwise keep the pre-existing behavior of
-*   releasing the read_only fast-poll engagement for this deployment.
+* @details Routes to deferred cleanup when bgd_status is READER_SWITCHOVER_IN_PROGRESS;
+*   otherwise clears any in-progress switchover state for this deployment.
+*
+* @param st BGD switchover state.
 */
 void MySQL_Monitor::aws_rds_bgd_handle_topology_absent(AWS_RDS_BGD_State& st) {
 	if (st.bgd_status == AWS_RDS_BGD_Status::READER_SWITCHOVER_IN_PROGRESS) {

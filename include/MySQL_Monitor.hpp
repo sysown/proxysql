@@ -395,6 +395,14 @@ struct mon_metrics_map_idx {
 };
 
 /**
+ * @brief Server hostname and port.
+ */
+struct srv_addr_t {
+	std::string host;
+	int port = 0;
+};
+
+/**
  * @brief A single node (row) of a 'SELECT * FROM mysql.rds_topology' result.
  */
 struct AWS_RDS_Topology_Node {
@@ -450,9 +458,10 @@ struct AWS_RDS_BlueGreenPair {
  *   - Replicas done: the table drains to empty (blue-reader DNS has propagated).
  *
  *   The WRITER_SWITCHOVER_* values map 1:1 onto the mysql.rds_topology status strings.
- *   READER_SWITCHOVER_IN_PROGRESS is a ProxySQL inferred status with no topology-string mapping: we
- *   enter it after WRITER_SWITCHOVER_COMPLETED, deferring reader/DNS cleanup until the table drains
- *   to empty.
+ *   READER_SWITCHOVER_IN_PROGRESS is a ProxySQL inferred status entered after
+ *   WRITER_SWITCHOVER_COMPLETED; it defers reader/DNS cleanup until the topology table drains
+ *   to empty. SWITCHOVER_COMPLETED is a short-lived status used for final cleanup before
+ *   returning to NONE.
  */
 enum class AWS_RDS_BGD_Status {
 	NONE                              = 0,   ///< no BGD topology / baseline
@@ -461,14 +470,15 @@ enum class AWS_RDS_BGD_Status {
 	WRITER_SWITCHOVER_IN_PROGRESS     = 3,   ///< "SWITCHOVER_IN_PROGRESS"
 	WRITER_SWITCHOVER_POST_PROCESSING = 4,   ///< "SWITCHOVER_IN_POST_PROCESSING"
 	WRITER_SWITCHOVER_COMPLETED       = 5,   ///< "SWITCHOVER_COMPLETED"
-	READER_SWITCHOVER_IN_PROGRESS     = 6,   ///< ProxySQL inferred reader status; awaiting topology drain + deferred cleanup
+	READER_SWITCHOVER_IN_PROGRESS     = 6,   ///< ProxySQL inferred status; awaiting topology drain + deferred cleanup
+	SWITCHOVER_COMPLETED              = 7,   ///< short-lived status used for final cleanup before returning to NONE
 };
 
 // Maps a switchover status enum to its stored/display string.
 const char* aws_rds_bgd_status_str(AWS_RDS_BGD_Status s);
 
 /**
- * @brief Per-deployment switchover state carried by one RDS BGD worker thread.
+ * @brief Switchover state carried by RDS BGD worker thread.
  *
  * @details One worker (monitor_RDS_BGD_thread_HG) owns one writer hostgroup ==
  *   one blue/green deployment, so this struct lives on the worker's stack and is
@@ -486,10 +496,11 @@ struct AWS_RDS_BGD_State {
 
 	std::string last_topology_status;                 ///< raw mysql.rds_topology TARGET status from the previous poll (verbatim)
 	std::vector<AWS_RDS_BlueGreenPair> bg_map;        ///< [writer] always; [readers] only when green_reader_hg is configured
-	std::vector<std::pair<std::string, int>> shunned_readers;  ///< (host,port) we shunned
+	std::vector<srv_addr_t> shunned_readers;                  ///< readers we shunned
 	AWS_RDS_BGD_Status bgd_status = AWS_RDS_BGD_Status::NONE;  ///< drives the FSM and the deferred cleanup
 
 	bool green_writer_added_in_hg = false;        ///< green writer added to green_writer_hg
+	bool bgd_in_progress_set = false;             ///< servers flagged as switchover-in-progress
 
 	unsigned int next_check_interval_ms = 0;    ///< FSM-controlled interval; 0 => baseline
 	std::string next_check_host;                ///< FSM-pinned probe host; when set (the green IP), the worker
@@ -513,18 +524,9 @@ inline const char* const BGD_STATUS_IN_PROGRESS  = "SWITCHOVER_IN_PROGRESS";
 inline const char* const BGD_STATUS_POST_PROC    = "SWITCHOVER_IN_POST_PROCESSING";
 inline const char* const BGD_STATUS_COMPLETED    = "SWITCHOVER_COMPLETED";
 
-// While any AWS RDS blue/green deployment is mid-switchover, the read_only monitor polls just that
-// deployment's servers at this tightened interval (250ms) so it detects the writer's read_only flips
-// quickly; matches the BGD FSM's own fast poll tiers. The full-fleet pass stays at
-// mysql-monitor_read_only_interval.
-#define READ_ONLY_BGD_LOOP_INTERVAL_US 250000
-#define READ_ONLY_NEXT_LOOP_INTERVAL_US 500000
-
-// read_only monitor server-enumeration queries.
-// Every server that belongs to a replication hostgroup and status NOT IN (2,3,5)
+// read_only monitor server-enumeration query.
+// Every server that belongs to a replication hostgroup and status NOT IN (OFFLINE_SOFT, OFFLINE_HARD, SHUNNED_AWS_BGD)
 #define SELECT_SERVERS_FOR_READ_ONLY "SELECT hostname, port, MAX(use_ssl) use_ssl, check_type, reader_hostgroup FROM mysql_servers JOIN mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE status NOT IN (2,3,5) GROUP BY hostname, port ORDER BY RANDOM()"
-// Fast pass: only servers in an AWS RDS blue/green deployment
-#define SELECT_RDS_BGD_SERVERS_FOR_READ_ONLY "SELECT hostname, port, MAX(use_ssl) use_ssl, 'read_only' check_type, reader_hostgroup FROM mysql_servers JOIN mysql_aws_rds_bgd_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE active=1 AND status NOT IN (2,3,5) GROUP BY hostname, port ORDER BY RANDOM()"
 
 // Defined in MySQL_HostGroups_Manager.h; forward-declared here because the include cycle
 // (Monitor.hpp -> HGM.h -> cpp.h -> Monitor.hpp) can leave them undefined at this point. Only
@@ -659,11 +661,18 @@ class MySQL_Monitor {
 	*   connections, and shuns/enforces reader handling. State carried across cycles
 	*   lives in @p st.
 	*
-	* @param st        Per-deployment switchover state (worker-owned, mutated here).
+	* @param st        BGD switchover state.
 	* @param topology  Parsed mysql.rds_topology result for this cycle.
 	*/
 	void handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topology_Result& topology);
-	// Deferred teardown: runs once mysql.rds_topology drains after SWITCHOVER_COMPLETED.
+	/**
+	* @brief Run deferred switchover teardown after mysql.rds_topology drains.
+	*
+	* @details Restores post-switchover reader handling, unshuns readers, drops DNS pins,
+	*   drains green hostgroups, and clears BGD switchover state.
+	*
+	* @param st BGD switchover state.
+	*/
 	void handle_aws_rds_bgd_post_switchover(AWS_RDS_BGD_State& st);
 	/**
 	* @brief Evict stale DNS and drain connections for the deployment's green hostgroups after switchover.
@@ -678,16 +687,33 @@ class MySQL_Monitor {
 	* @param st Switchover state.
 	*/
 	void aws_rds_bgd_drain_green_hg(AWS_RDS_BGD_State& st);
-	// Called by the BGD worker when the topology table is absent/empty/vanished; routes to the
-	// deferred cleanup when bgd_status is READER_SWITCHOVER_IN_PROGRESS, else preserves the baseline release.
+	/**
+	* @brief Handle an absent, empty, or vanished mysql.rds_topology table.
+	*
+	* @details Routes to deferred cleanup when bgd_status is READER_SWITCHOVER_IN_PROGRESS;
+	*   otherwise clears any in-progress switchover state for this deployment.
+	*
+	* @param st BGD switchover state.
+	*/
 	void aws_rds_bgd_handle_topology_absent(AWS_RDS_BGD_State& st);
-	// Apply one switchover step's reader-HG mutations, with the action derived from bgd_status:
-	// POST_PROCESSING shuns the readers and (when writer_info is set) adds the writer as a reader;
-	// READER_SWITCHOVER_IN_PROGRESS unshuns the readers and (when writer_info is set) removes the writer.
-	void aws_rds_bgd_reconfigure_reader_hg(
-		AWS_RDS_BGD_Status bgd_status, unsigned int reader_hg,
-		std::vector<std::pair<std::string, int>>& unmapped_readers,
-		srv_info_t* writer_info, srv_opts_t* writer_opts);
+	/**
+	* @brief Apply BGD hostgroup changes for the current switchover status.
+	*
+	* @details POST_PROCESSING configures the writer placement and shuns unmapped readers.
+	*   SWITCHOVER_COMPLETED unshuns readers and removes the writer from reader HG when
+	*   writer_is_also_reader is false. Runtime mysql_servers and checksum are re-generated
+	*   when server hostgroup membership changes.
+	*
+	* @param bgd_status Current BGD FSM status driving the action.
+	* @param writer Writer server to configure.
+	* @param writer_is_also_reader Whether the writer should also remain in reader_hg.
+	* @param reader_hg Reader hostgroup for reader shun/unshun and optional writer membership.
+	* @param readers Reader servers to shun or unshun.
+	*/
+	void aws_rds_bgd_hostgroup_action(
+		AWS_RDS_BGD_Status bgd_status,
+		srv_addr_t& writer, bool writer_is_also_reader,
+		unsigned int reader_hg, std::vector<srv_addr_t>& readers);
 
 	void * monitor_replication_lag();
 	void * monitor_dns_cache();

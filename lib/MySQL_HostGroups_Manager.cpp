@@ -3573,14 +3573,19 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int
 }
 
 /**
- * @brief New implementation of the read_only_action method that does not depend on the admin table.
- *   The method checks each server in the provided list and adjusts the servers according to their corresponding read_only value.
- *   If any change has occured, checksum is calculated.
+ * @brief Reconcile writer/reader hostgroup placement from read_only monitor results.
  *
- * @param mysql_servers List of servers having hostname, port and read only value.
- * 
+ * @details New implementation of the read_only_action that does not depend on the admin table.
+ *   Checks each server in the provided list and adjusts writer/reader hostgroup placement
+ *   according to the corresponding read_only value. If any change occurs, the runtime
+ *   mysql_servers table and checksum are regenerated. When `force` is false,
+ *   servers flagged as AWS RDS BGD switchover-in-progress are skipped; when true, the supplied
+ *   state is applied even for those servers.
+ *
+ * @param mysql_servers Servers and their observed/read-only state.
+ * @param force Force state changes regardless of AWS RDS BGD switchover state.
  */
-void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_server_t>& mysql_servers) {
+void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_server_t>& mysql_servers, bool force) {
 
 	bool update_mysql_servers_table = false;
 
@@ -3603,6 +3608,13 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_ser
 		HostGroup_Server_Mapping* host_server_mapping = itr->second.get();
 
 		if (!host_server_mapping) {
+			continue;
+		}
+
+		if (host_server_mapping->is_aws_rds_bgd_in_progress() && !force) {
+			proxy_debug(PROXY_DEBUG_MONITOR, 5,
+				"Skipping read_only_action_v2() for server '%s:%d' because AWS RDS BGD switchover is in progress\n",
+				hostname.c_str(), port);
 			continue;
 		}
 
@@ -3900,7 +3912,59 @@ bool MySQL_HostGroups_Manager::aws_rds_bgd_set_shun_server(unsigned int hostgrou
 	return changed;
 }
 
-void MySQL_HostGroups_Manager::aws_rds_bgd_set_switchover_status(unsigned int writer_hg, int status) {
+/**
+ * @brief Configure the AWS RDS BGD writer's writer/reader hostgroup membership.
+ *
+ * @details Ensures the writer is present in its writer hostgroup, with optional reader
+ *   hostgroup membership controlled by writer_is_also_reader.
+ *
+ * @param hostname Server hostname to configure.
+ * @param port Server port to configure.
+ * @param writer_is_also_reader Whether the writer should also be present in reader hostgroup.
+ *
+ * @return true if hostgroup membership changed.
+ *
+ * @note Caller must hold wrlock().
+ */
+bool MySQL_HostGroups_Manager::aws_rds_bgd_configure_writer(const char *hostname, int port, bool writer_is_also_reader) {
+	const std::string srv_id = std::string(hostname) + ":::" + std::to_string(port);
+	auto itr = hostgroup_server_mapping.find(srv_id);
+
+	if (itr == hostgroup_server_mapping.end() || !itr->second) {
+		proxy_warning("AWS RDS BGD: server %s:%d not found in hostgroup_server_mapping\n", hostname, port);
+		return false;
+	}
+
+	HostGroup_Server_Mapping* srv_map = itr->second.get();
+	bool changed = false;
+
+	if (srv_map->get(HostGroup_Server_Mapping::Type::WRITER).empty()) {
+		if (srv_map->get(HostGroup_Server_Mapping::Type::READER).empty()) {
+			proxy_warning("AWS RDS BGD: server %s:%d has no writer or reader hostgroup mapping\n", hostname, port);
+			return false;
+		}
+
+		srv_map->copy_if_not_exists(HostGroup_Server_Mapping::Type::WRITER, HostGroup_Server_Mapping::Type::READER);
+		proxy_info("AWS RDS BGD: adding server %s:%d to writer hostgroup\n", hostname, port);
+		changed = true;
+	}
+
+	if (writer_is_also_reader) {
+		if (srv_map->get(HostGroup_Server_Mapping::Type::READER).empty()) {
+			srv_map->copy_if_not_exists(HostGroup_Server_Mapping::Type::READER, HostGroup_Server_Mapping::Type::WRITER);
+			proxy_info("AWS RDS BGD: adding server %s:%d to reader hostgroup\n", hostname, port);
+			changed = true;
+		}
+	} else if (!srv_map->get(HostGroup_Server_Mapping::Type::READER).empty()) {
+		srv_map->clear(HostGroup_Server_Mapping::Type::READER);
+		proxy_info("AWS RDS BGD: removing server %s:%d from reader hostgroup\n", hostname, port);
+		changed = true;
+	}
+
+	return changed;
+}
+
+void MySQL_HostGroups_Manager::aws_rds_bgd_set_runtime_status(unsigned int writer_hg, int status) {
 	char query[128];
 	snprintf(query, sizeof(query),
 		"UPDATE mysql_aws_rds_bgd_hostgroups SET status=%d WHERE writer_hostgroup=%u", status, writer_hg);
@@ -3909,24 +3973,30 @@ void MySQL_HostGroups_Manager::aws_rds_bgd_set_switchover_status(unsigned int wr
 	wrunlock();
 }
 
-bool MySQL_HostGroups_Manager::is_aws_rds_bgd_in_progress() {
-	bool in_progress = false;
-	char *error = NULL;
-	int cols = 0;
-	int affected_rows = 0;
-	SQLite3_result *resultset = NULL;
+void MySQL_HostGroups_Manager::set_aws_rds_bgd_in_progress(unsigned int writer_hg, unsigned int reader_hg, bool in_progress) {
 	wrlock();
-	mydb->execute_statement(
-		(char *)"SELECT EXISTS(SELECT 1 FROM mysql_aws_rds_bgd_hostgroups WHERE status!=0)",
-		&error, &cols, &affected_rows, &resultset);
-	wrunlock();
-	if (resultset) {
-		if (resultset->rows_count && resultset->rows[0]->fields[0]) {
-			in_progress = (atoi(resultset->rows[0]->fields[0]) != 0);
+
+	unsigned int hgs[2] = { writer_hg, reader_hg };
+	for (unsigned int i = 0; i < 2; i++) {
+		MyHGC* myhgc = MyHGC_find(hgs[i]);
+		if (myhgc == nullptr || myhgc->mysrvs == nullptr) {
+			continue;
 		}
-		delete resultset;
+		for (unsigned int j = 0; j < myhgc->mysrvs->cnt(); j++) {
+			MySrvC* s = myhgc->mysrvs->idx(j);
+			const std::string srv_id = std::string(s->address) + ":::" + std::to_string(s->port);
+			auto itr = hostgroup_server_mapping.find(srv_id);
+			if (itr != hostgroup_server_mapping.end() && itr->second) {
+				if (in_progress) {
+					itr->second->set_aws_rds_bgd_in_progress();
+				} else {
+					itr->second->clear_aws_rds_bgd_in_progress();
+				}
+			}
+		}
 	}
-	return in_progress;
+
+	wrunlock();
 }
 
 /**

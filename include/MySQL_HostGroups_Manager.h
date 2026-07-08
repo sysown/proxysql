@@ -605,6 +605,21 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 			return readonly_flag;
 		}
 
+		inline
+		void set_aws_rds_bgd_in_progress() {
+			aws_rds_bgd_in_progress = true;
+		}
+
+		inline
+		bool is_aws_rds_bgd_in_progress() {
+			return aws_rds_bgd_in_progress;
+		}
+
+		inline
+		void clear_aws_rds_bgd_in_progress() {
+			aws_rds_bgd_in_progress = false;
+		}
+
 	private:
 		unsigned int get_hostgroup_id(Type type, const Node& node) const;
 		MySrvC* insert_HGM(unsigned int hostgroup_id, const MySrvC* srv);
@@ -613,6 +628,7 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 		std::array<std::vector<Node>, TYPE_SIZE_> mapping; // index 0 contains reader and 1 contains writer hostgroups
 		int readonly_flag;
 		MySQL_HostGroups_Manager* myHGM;
+		bool aws_rds_bgd_in_progress = false;
 	};
 
 	/**
@@ -1046,15 +1062,27 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 
 	void replication_lag_action_inner(MyHGC *, const char*, unsigned int, int, bool);
 	void replication_lag_action(const std::list<replication_lag_server_t>& mysql_servers);
-//	void read_only_action(char *hostname, int port, int read_only);
-	void read_only_action_v2(const std::list<read_only_server_t>& mysql_servers);
+	/**
+	 * @brief Reconcile writer/reader hostgroup placement from read_only monitor results.
+	 *
+	 * @details New implementation of the read_only_action that does not depend on the admin table.
+	 *   Checks each server in the provided list and adjusts writer/reader hostgroup placement
+	 *   according to the corresponding read_only value. If any change occurs, the runtime
+	 *   mysql_servers table and checksum are regenerated. When `force` is false,
+	 *   servers flagged as AWS RDS BGD switchover-in-progress are skipped; when true, the supplied
+	 *   state is applied even for those servers.
+	 *
+	 * @param mysql_servers Servers and their observed/read-only state.
+	 * @param force Force state changes regardless of AWS RDS BGD switchover state.
+	 */
+	void read_only_action_v2(const std::list<read_only_server_t>& mysql_servers, bool force = false);
 	unsigned int get_servers_table_version();
 	void wait_servers_table_version(unsigned, unsigned);
 	bool shun_and_killall(char *hostname, int port);
 	void set_server_current_latency_us(char *hostname, int port, unsigned int _current_latency_us);
 	void set_Readyset_status(char *hostname, int port, enum MySerStatus status);
 	/**
-	* @brief Set or clear AWS BGD shun state for a matching server.
+	* @brief Set or clear AWS RDS BGD shun state for a matching server.
 	*
 	* @details When shunning, transitions an ONLINE server to SHUNNED_AWS_BGD,
 	*   enables shun metadata, and drops free connections. When unshunning,
@@ -1072,16 +1100,27 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	*/
 	bool aws_rds_bgd_set_shun_server(unsigned int hostgroup_id, const char *hostname, int port, bool shun);
 	/**
-	 * @brief Persist BGD switchover status into the runtime mysql_aws_rds_bgd_hostgroups table.
+	 * @brief Configure the AWS RDS BGD writer's writer/reader hostgroup membership.
 	 *
-	 * @details Called by the BGD worker on every FSM status transition. For the read_only monitor,
-	 *   it both gates the fast-poll cadence (is_aws_rds_bgd_in_progress) and filters which servers the
-	 *   fast poll selects.
+	 * @details Ensures the writer is present in its writer hostgroup, with optional reader
+	 *   hostgroup membership controlled by writer_is_also_reader.
+	 *
+	 * @param hostname Server hostname to configure.
+	 * @param port Server port to configure.
+	 * @param writer_is_also_reader Whether the writer should also be present in reader hostgroup.
+	 *
+	 * @return true if hostgroup membership changed.
+	 *
+	 * @note Caller must hold wrlock().
+	 */
+	bool aws_rds_bgd_configure_writer(const char *hostname, int port, bool writer_is_also_reader);
+	/**
+	 * @brief Set AWS RDS BGD switchover status in runtime mysql_aws_rds_bgd_hostgroups table
 	 *
 	 * @param writer_hg Writer hostgroup identifying the deployment.
 	 * @param status    AWS_RDS_BGD_Status underlying value.
 	 */
-	void aws_rds_bgd_set_switchover_status(unsigned int writer_hg, int status);
+	void aws_rds_bgd_set_runtime_status(unsigned int writer_hg, int status);
 	/**
 	 * @brief Aligns the runtime 'mysql_servers' table + checksums with the server state in MyHGM.
 	 *
@@ -1103,11 +1142,11 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 */
 	bool drain_server_connections(const char *hostname, int port);
 	/**
-	 * @brief Whether any AWS RDS blue/green deployment is currently in a active switchover status.
-	 *
-	 * @details Derived from the runtime mysql_aws_rds_bgd_hostgroups 'status' column.
+	 * @brief Flag/unflag every server in the writer and reader hostgroups of an AWS RDS blue/green
+	 *   deployment as "switchover in progress", so the read_only monitor (read_only_action_v2) takes
+	 *   no action on them while the BGD FSM is driving the switchover.
 	 */
-	bool is_aws_rds_bgd_in_progress();
+	void set_aws_rds_bgd_in_progress(unsigned int writer_hg, unsigned int reader_hg, bool in_progress);
 
 	unsigned long long Get_Memory_Stats();
 
