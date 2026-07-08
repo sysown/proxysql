@@ -94,7 +94,7 @@ static Test parsersql_syntax_errors[] = {
   { "SET sql_mode=(SELECT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))",
     { Expected("sql_mode", { "(SELECT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))" } ) } },
   { "SET sql_mode=(SELCT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))",
-    { Expected("sql_mode", { "SELCT" } ) } },
+    { Expected("sql_mode", { "(SELCT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))" } ) } },
 };
 
 // Byte-exact regression tests for the walker's function-call source preservation
@@ -340,6 +340,66 @@ static Test parsersql_pr5088_mysql_expr_syntax[] = {
     { Expected("@generic_var", {"100 / 4"}) } },
   { "SET @generic_var = 10 % 3;",
     { Expected("@generic_var", {"10 % 3"}) } },
+};
+
+static Test parsersql_pr5088_mysql_missing_syntax[] = {
+  { "SET persist character_set_server = 'utf8mb4';",
+    { Expected("character_set_server", {"utf8mb4"}) } },
+  { "SET persist_only innodb_buffer_pool_size = '1G';",
+    { Expected("innodb_buffer_pool_size", {"1G"}) } },
+  { "SET PERSIST max_allowed_packet = 1073741824;",
+    { Expected("max_allowed_packet", {"1073741824"}) } },
+  { "SET @@PERSIST.max_allowed_packet = 1073741824;",
+    { Expected("max_allowed_packet", {"1073741824"}) } },
+  { "SET PERSIST_ONLY sql_mode = 'STRICT_TRANS_TABLES';",
+    { Expected("sql_mode", {"STRICT_TRANS_TABLES"}) } },
+  { "SET @@PERSIST_ONLY.sql_mode = 'STRICT_TRANS_TABLES';",
+    { Expected("sql_mode", {"STRICT_TRANS_TABLES"}) } },
+  { "SET LOCAL wait_timeout = 10;",
+    { Expected("wait_timeout", {"10"}) } },
+  { "SET LOCAL sql_mode := CONCAT(@@sql_mode, ',STRICT_TRANS_TABLES');",
+    { Expected("sql_mode", {"CONCAT(@@sql_mode, ',STRICT_TRANS_TABLES')"}) } },
+  { "SET @'mix' := 1, LOCAL wait_timeout := 20;",
+    { Expected("@mix", {"1"}),
+      Expected("wait_timeout", {"20"}) } },
+  { "SET @user.var := 7;",
+    { Expected("@user.var", {"7"}) } },
+  { "SET @generic_var = TRUE XOR FALSE;",
+    { Expected("@generic_var", {"TRUE XOR FALSE"}) } },
+  { "SET @generic_var = 5 | 2;",
+    { Expected("@generic_var", {"5 | 2"}) } },
+  { "SET @generic_var = 5 & 2;",
+    { Expected("@generic_var", {"5 & 2"}) } },
+  { "SET @generic_var = 5 << 1;",
+    { Expected("@generic_var", {"5 << 1"}) } },
+  { "SET @generic_var = 10 >> 1;",
+    { Expected("@generic_var", {"10 >> 1"}) } },
+  { "SET @generic_var = 5 ^ 2;",
+    { Expected("@generic_var", {"5 ^ 2"}) } },
+  { "SET @generic_var = 10 DIV 3;",
+    { Expected("@generic_var", {"10 DIV 3"}) } },
+  { "SET @generic_var = 10 MOD 3;",
+    { Expected("@generic_var", {"10 MOD 3"}) } },
+  { "SET @generic_var = 'abcde' REGEXP '^a.c';",
+    { Expected("@generic_var", {"'abcde' REGEXP '^a.c'"}) } },
+  { "SET @generic_var = 'xyz123' NOT REGEXP '[0-9]$';",
+    { Expected("@generic_var", {"'xyz123' NOT REGEXP '[0-9]$'"}) } },
+  { "SET @generic_var = 'b' MEMBER OF ('[\"a\", \"b\", \"c\"]');",
+    { Expected("@generic_var", {"'b' MEMBER OF ('[\"a\", \"b\", \"c\"]')"}) } },
+  { "SET @generic_var = 'knight' SOUNDS LIKE 'night';",
+    { Expected("@generic_var", {"'knight' SOUNDS LIKE 'night'"}) } },
+  { "SET @generic_var = NOW() + INTERVAL 1 DAY;",
+    { Expected("@generic_var", {"NOW() + INTERVAL 1 DAY"}) } },
+  { "SET @generic_var = '2025-12-25' - INTERVAL 2 MONTH;",
+    { Expected("@generic_var", {"'2025-12-25' - INTERVAL 2 MONTH"}) } },
+  { "SET @generic_var = current_user_id IN (SELECT user_id FROM course_enrollments WHERE course_id = 789);",
+    { Expected("@generic_var", {"current_user_id IN (SELECT user_id FROM course_enrollments WHERE course_id = 789)"}) } },
+  { "SET @generic_var = my_value > ALL (SELECT limit_value FROM active_limits WHERE group_id = 'A');",
+    { Expected("@generic_var", {"my_value > ALL (SELECT limit_value FROM active_limits WHERE group_id = 'A')"}) } },
+  { "SET @generic_var = 'PROD123' NOT IN (SELECT product_sku FROM discontinued_products WHERE reason_code = 'OBSOLETE');",
+    { Expected("@generic_var", {"'PROD123' NOT IN (SELECT product_sku FROM discontinued_products WHERE reason_code = 'OBSOLETE')"}) } },
+  { "SET @generic_var = (SELECT SUM(amount) FROM sales WHERE sale_date = CURDATE());",
+    { Expected("@generic_var", {"(SELECT SUM(amount) FROM sales WHERE sale_date = CURDATE())"}) } },
 };
 
 // ----------------------------------------------------------------------------
@@ -740,6 +800,7 @@ int main(int argc, char** argv) {
 	p += arraysize(parsersql_pr5088_mysql_dataset_syntax);
 	p += arraysize(parsersql_pr5088_mysql_sql_mode_expr);
 	p += arraysize(parsersql_pr5088_mysql_expr_syntax);
+	p += arraysize(parsersql_pr5088_mysql_missing_syntax);
 	p += arraysize(parsersql_pgsql_search_path);
 	p += arraysize(parsersql_pgsql_time_zone);
 	p *= 2;
@@ -765,6 +826,7 @@ int main(int argc, char** argv) {
 	TestParse(parsersql_pr5088_mysql_dataset_syntax, arraysize(parsersql_pr5088_mysql_dataset_syntax), "pr5088_mysql_dataset_syntax");
 	TestParse(parsersql_pr5088_mysql_sql_mode_expr, arraysize(parsersql_pr5088_mysql_sql_mode_expr), "pr5088_mysql_sql_mode_expr");
 	TestParse(parsersql_pr5088_mysql_expr_syntax, arraysize(parsersql_pr5088_mysql_expr_syntax), "pr5088_mysql_expr_syntax");
+	TestParse(parsersql_pr5088_mysql_missing_syntax, arraysize(parsersql_pr5088_mysql_missing_syntax), "pr5088_mysql_missing_syntax");
 	TestParsePgsql(parsersql_pgsql_search_path, arraysize(parsersql_pgsql_search_path), "pgsql_search_path");
 	TestParsePgsql(parsersql_pgsql_time_zone, arraysize(parsersql_pgsql_time_zone), "pgsql_time_zone");
 	TestStrictFunctionCall(parsersql_function_call_strict, arraysize(parsersql_function_call_strict));

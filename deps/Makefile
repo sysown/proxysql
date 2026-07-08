@@ -430,6 +430,7 @@ parsersql/parsersql/libsqlparser.a:
 	cd parsersql && rm -rf parsersql-*/ ParserSQL-*/ || true
 	cd parsersql && tar -zxf parsersql-*.tar.gz
 	cd parsersql && for d in ParserSQL-*/; do [ -d "$$d" ] && mv "$$d" "parsersql-$${d#ParserSQL-}"; done || true
+	cd parsersql/parsersql && patch -p1 < ../mysql-set-scope-and-user-vars.patch
 	cd parsersql/parsersql && CC=${CC} CXX=${CXX} ${MAKE} lib
 
 parsersql: parsersql/parsersql/libsqlparser.a

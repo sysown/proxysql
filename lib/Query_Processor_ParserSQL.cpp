@@ -77,8 +77,8 @@ static std::string strip_quotes(const std::string& s) {
 static std::string strip_scope_prefix(std::string var_name) {
     if (var_name.size() > 2 && var_name[0] == '@' && var_name[1] == '@') {
         var_name = var_name.substr(2);
-    for (const char* prefix : {"session.", "local.", "global."}) {
-        size_t plen = strlen(prefix); // NOSONAR: prefix is a string literal, strlen is evaluated at compile-time
+        for (const char* prefix : {"session.", "local.", "global.", "persist.", "persist_only."}) {
+            size_t plen = strlen(prefix); // NOSONAR: prefix is a string literal, strlen is evaluated at compile-time
             if (var_name.size() > plen &&
                 strncasecmp(var_name.c_str(), prefix, plen) == 0) {
                 var_name = var_name.substr(plen);
@@ -103,7 +103,7 @@ static std::string strip_scope_prefix(std::string var_name) {
  * wrote the SET statement, matching the behaviour of the regex-based parser.
  */
 static std::string normalize_set_var_name(std::string var_name) {
-    for (const char* prefix : {"SESSION ", "GLOBAL ", "LOCAL "}) {
+    for (const char* prefix : {"SESSION ", "GLOBAL ", "LOCAL ", "PERSIST ", "PERSIST_ONLY "}) {
         size_t plen = strlen(prefix); // NOSONAR: prefix is a string literal, strlen is evaluated at compile-time
         if (var_name.size() > plen &&
             strncasecmp(var_name.c_str(), prefix, plen) == 0) {
@@ -148,6 +148,102 @@ static void skip_quoted_char(const char*& p, const char* end) {
         if (*p == '\\' && p + 1 < end) p++;
         p++;
     }
+}
+
+static bool is_sql_space(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
+
+static std::string trim_copy(const char* start, const char* end) {
+    while (start < end && is_sql_space(*start)) start++;
+    while (end > start && is_sql_space(*(end - 1))) end--;
+    return std::string(start, end);
+}
+
+static bool is_single_sql_token_value(const std::string& s) {
+    if (s.size() < 2) return false;
+    char q = s.front();
+    if (q != '\'' && q != '"' && q != '`') return false;
+    const char* p = s.data() + 1;
+    const char* end = s.data() + s.size();
+    while (p < end) {
+        if (*p == '\\' && p + 1 < end) {
+            p += 2;
+            continue;
+        }
+        if (*p == q) {
+            p++;
+            while (p < end && is_sql_space(*p)) p++;
+            return p == end;
+        }
+        p++;
+    }
+    return false;
+}
+
+static std::string strip_single_sql_token_quotes(const std::string& s) {
+    if (!is_single_sql_token_value(s)) return s;
+    size_t start = 1;
+    size_t end = s.size() - 1;
+    while (end > start && is_sql_space(s[end - 1])) end--;
+    return s.substr(start, end - start);
+}
+
+static bool is_assignment_operator_at(const char* p, const char* end) {
+    if (p >= end) return false;
+    if (*p == '=') return true;
+    return *p == ':' && p + 1 < end && *(p + 1) == '=';
+}
+
+static const char* skip_assignment_operator(const char* p, const char* end) {
+    if (p < end && *p == ':' && p + 1 < end && *(p + 1) == '=') return p + 2;
+    if (p < end && *p == '=') return p + 1;
+    return p;
+}
+
+static std::string extract_mysql_assignment_value(
+    const char*& scan, const char* query, int query_len)
+{
+    const char* qstart = query;
+    const char* qend = query + query_len;
+    if (!scan || scan < qstart || scan > qend) scan = qstart;
+
+    const char* p = scan;
+    int depth = 0;
+    while (p < qend) {
+        if (*p == '\'' || *p == '"' || *p == '`') {
+            skip_quoted_char(p, qend);
+        } else if (*p == '(' || *p == '[') {
+            depth++;
+        } else if ((*p == ')' || *p == ']') && depth > 0) {
+            depth--;
+        } else if (depth == 0 && is_assignment_operator_at(p, qend)) {
+            break;
+        }
+        p++;
+    }
+    if (p >= qend) return "";
+
+    const char* value_start = skip_assignment_operator(p, qend);
+    while (value_start < qend && is_sql_space(*value_start)) value_start++;
+
+    p = value_start;
+    depth = 0;
+    while (p < qend) {
+        if (*p == '\'' || *p == '"' || *p == '`') {
+            skip_quoted_char(p, qend);
+        } else if (*p == '(' || *p == '[') {
+            depth++;
+        } else if ((*p == ')' || *p == ']') && depth > 0) {
+            depth--;
+        } else if (depth == 0 && (*p == ',' || *p == ';')) {
+            break;
+        }
+        p++;
+    }
+
+    scan = (p < qend && *p == ',') ? p + 1 : p;
+    return trim_copy(value_start, p);
 }
 
 static std::string extract_paren_expr(const char* query, int query_len,
@@ -528,7 +624,7 @@ static std::string resolve_var_value(
 
 static std::string finalize_var_value(std::string val) {
     if (val == "''" || val == "\"\"") return "";
-    return strip_quotes(val);
+    return strip_single_sql_token_quotes(val);
 }
 
 template <Dialect D>
@@ -569,6 +665,8 @@ static std::map<std::string, std::vector<std::string>> walk_set_stmt(
     std::map<std::string, std::vector<std::string>> result;
     if (!set_stmt) return result;
 
+    const char* mysql_assignment_scan = query;
+
     for (const AstNode* child = set_stmt->first_child;
          child; child = child->next_sibling)
     {
@@ -604,11 +702,17 @@ static std::map<std::string, std::vector<std::string>> walk_set_stmt(
                 std::vector<std::string> vals;
                 for (const AstNode* rhs = target->next_sibling;
                      rhs; rhs = rhs->next_sibling) {
-                    std::string raw = resolve_var_value<D>(
-                        target, rhs, query, query_len, arena);
                     if constexpr (D == Dialect::PostgreSQL) {
+                        std::string raw = resolve_var_value<D>(
+                            target, rhs, query, query_len, arena);
                         vals.push_back(std::move(raw));
                     } else {
+                        std::string raw = extract_mysql_assignment_value(
+                            mysql_assignment_scan, query, query_len);
+                        if (raw.empty()) {
+                            raw = resolve_var_value<D>(
+                                target, rhs, query, query_len, arena);
+                        }
                         vals.push_back(finalize_var_value(std::move(raw)));
                     }
                 }

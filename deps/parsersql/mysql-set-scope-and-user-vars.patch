@@ -1,0 +1,64 @@
+--- a/include/sql_parser/set_parser.h
++++ b/include/sql_parser/set_parser.h
+@@ -79,7 +79,7 @@ public:
+             return root;
+         }
+ 
+-        if (next.type == TokenType::TK_GLOBAL || next.type == TokenType::TK_SESSION) {
++        if (is_set_scope_(next)) {
+             Token scope_tok = tok_.next_token();
+             if (tok_.peek().type == TokenType::TK_TRANSACTION) {
+                 tok_.skip();
+@@ -454,6 +454,10 @@ private:
+             || peek.type == TokenType::TK_RPAREN || peek.type == TokenType::TK_EOF) {
+             return nullptr;
+         }
++        if (is_set_scope_(peek)) {
++            Token scope_tok = tok_.next_token();
++            return parse_variable_assignment(&scope_tok);
++        }
+         return parse_variable_assignment(nullptr);
+     }
+ 
+@@ -552,8 +556,15 @@ private:
+             // `@name` form in the arena instead, dropping the delimiters.
+             tok_.skip();
+             Token name = tok_.next_token();
+-            target->add_child(make_node(arena_, NodeType::NODE_IDENTIFIER,
+-                build_scoped_identifier_("@", name)));
++            if (tok_.peek().type == TokenType::TK_DOT) {
++                tok_.skip();
++                Token actual_name = tok_.next_token();
++                target->add_child(make_node(arena_, NodeType::NODE_IDENTIFIER,
++                    build_scoped_dotted_identifier_("@", name, actual_name)));
++            } else {
++                target->add_child(make_node(arena_, NodeType::NODE_IDENTIFIER,
++                    build_scoped_identifier_("@", name)));
++            }
+         } else if (var.type == TokenType::TK_DOUBLE_AT) {
+             // System variable @@[scope.]name -- same delimiter handling
+             // concern as the @name branch above. Allocate `@@name` (or
+@@ -632,6 +643,23 @@ private:
+ 
+         return assignment;
+     }
++
++    static bool is_persist_only_(const Token& tok) {
++        return tok.type == TokenType::TK_IDENTIFIER &&
++            tok.text.equals_ci("PERSIST_ONLY", 12);
++    }
++
++    static bool is_set_scope_(const Token& tok) {
++        if (tok.type == TokenType::TK_GLOBAL || tok.type == TokenType::TK_SESSION) {
++            return true;
++        }
++        if constexpr (D == Dialect::MySQL) {
++            return tok.type == TokenType::TK_LOCAL ||
++                tok.type == TokenType::TK_PERSIST ||
++                is_persist_only_(tok);
++        }
++        return false;
++    }
+ };
+ 
+ } // namespace sql_parser
