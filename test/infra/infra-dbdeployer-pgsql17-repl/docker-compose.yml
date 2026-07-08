@@ -1,0 +1,22 @@
+services:
+
+  dbdeployer1:
+    hostname: dbdeployer1.${INFRA}
+    image: proxysql/ci-infra:dbdeployer-pgsql17-repl
+    container_name: ${COMPOSE_PROJECT}-dbdeployer1-1
+    environment:
+      - ROOT_PASSWORD=${ROOT_PASSWORD}
+      - INFRA=${INFRA}
+    networks:
+      backend:
+        aliases:
+          - dbdeployer1.${INFRA}
+          - dbdeployer1.infra-dbdeployer-pgsql17-repl
+          # env.sh publishes PGCOMPAT_*_HOST=dbdeployer1.${INFRA_ID}; expose that
+          # name so downstream SP-2 tasks (harness/ProxySQL) resolve the backend.
+          - dbdeployer1.${INFRA_ID}
+
+networks:
+  backend:
+    name: "${INFRA_ID}_backend"
+    external: true
