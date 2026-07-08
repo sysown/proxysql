@@ -32,10 +32,27 @@ The two highest-leverage borrowed ideas are the **differential harness** (proxy 
 - Close the SP-1 behavioral gaps within the existing TAP/C++ harness, gating on every PR.
 - Stand up a reusable polyglot test foundation (SP-2) proving the differential + routing-oracle + chaos-ready techniques end-to-end with one reference driver (Python).
 - Design SP-2 so SP-3 (more drivers) and SP-4 (chaos suite) are additive, not rewrites.
+- Produce, from the first runs, a **catalogue of what ProxySQL currently fails** — the initial phase is diagnostic (see §2.1).
+
+### 2.1 Operating assumption — the initial phase is discovery, not green CI
+
+The first runs of these suites (especially SP-2's differential + cross-driver matrix, and anything on the new native backend path — §2.2) are expected to **surface failures**, not pass. There is **no expectation of 100% success** in the initial phase. Concretely:
+
+- The deliverable of the initial phase is a **failure inventory** — a catalogue of divergences (transparency violations, driver-specific protocol breakage, routing surprises), each triaged per `CLAUDE.md`'s "never dismiss as flaky" policy into: real ProxySQL bug / test-harness bug / known-and-accepted limitation.
+- Failing cases are recorded as **expected-failures (xfail) with a reason and a tracking reference**, not deleted or skipped silently. An xfail that starts passing (xpass) is itself reported, so fixes are noticed.
+- CI (SP-2) is therefore **non-gating** by construction in this phase; its job is reporting, not blocking. Promotion of individual behaviors to gating happens only once they are green and stable.
+
+### 2.2 Cross-cutting axis — backend protocol mode (libpq vs native)
+
+PR #5882 (`feature/pgsql-native-backend-protocol`, open against `v3.0` as of 2026-07-07) introduces an **opt-in native PostgreSQL wire-protocol implementation on the ProxySQL→backend data path**, behind runtime flag `pgsql-use_native_backend_protocol` (default **off**; libpq remains as fallback and for monitor/plugins). The native path already implements native auth (trust/cleartext/MD5/SCRAM-SHA-256, plus SCRAM-SHA-256-PLUS channel binding), the extended-query pipeline, native `COPY ... TO STDOUT`, and **native NOTIFY** — and ships its own differential tests (e.g. `pgsql-native_notify-t`, "27/27 strict prepared-statement cases, byte-equal").
+
+Consequences for this design:
+- **Backend protocol mode is a first-class test parameter.** Where feasible, SP-1 and SP-2 behaviors run under **both** `pgsql-use_native_backend_protocol = off` and `= on`, and the two are diffed against each other and against direct-PG. This is the single highest-value new axis, because the native path is young and evolving.
+- The feature-gap analysis in this document is **path-dependent and will change quickly** as #5882 lands and progresses. Claims below that reference libpq behavior (notably LISTEN/NOTIFY, §3.5) are explicitly scoped to the *libpq* path and are expected to shift; the native path is closing several of them.
 
 ### Non-goals / explicit scope exclusions
 - **No single-table sharding / cross-shard tests.** Confirmed from code: ProxySQL PG routing maps one query to exactly one `destination_hostgroup` (`PgSQL_Query_Processor.cpp:356,491`); there is no shard-key, shard-map, scatter/gather, or cross-shard aggregation. All pgdog/pgcat sharding-style tests are out of scope. (This reduces the differential harness from pgdog's 6 targets to 4.)
-- **No LISTEN/NOTIFY *delivery* test.** LISTEN is explicitly rejected with `0A000 feature_not_supported` (`PgSQL_Session.cpp:865`, `:6547`) and there is no `NotificationResponse`/`PQnotifies` forwarding path (backends are consumed via libpq). We test the current rejection contract only and capture forwarding as a future feature (see §3.6 and Appendix A).
+- **LISTEN/NOTIFY delivery is path-dependent, not a flat exclusion.** On the **libpq** path LISTEN is explicitly rejected (`0A000`, `PgSQL_Session.cpp:865`, `:6547`) with no `NotificationResponse`/`PQnotifies` forwarding; on the **native** path (#5882) NOTIFY support is being added. SP-1 §3.5 therefore pins the *current per-mode contract* rather than assuming a single behavior; forwarding design lives in the native PR, not here (Appendix A updated accordingly).
 - **No two-phase-commit crash-safety / logical-replication-resharding tests** (pgdog features ProxySQL doesn't have).
 - SP-3 and SP-4 are **not** implemented under this spec; only stubbed as roadmap (§6).
 
@@ -44,6 +61,8 @@ The two highest-leverage borrowed ideas are the **differential harness** (proxy 
 ## 3. SP-1 — TAP coverage gaps
 
 **Harness:** existing `test/tap/tests/` (`-t.cpp`), registered in `test/tap/groups/groups.json`. **CI:** per-PR, gating. **Backends:** existing `test/infra/docker-pgsql16-single` (and `infra-pgsql17-repl` where multi-node is needed). Debug build required (per `CLAUDE.md`).
+
+**Backend-mode note:** where a behavior touches the backend data path (auth, prepared statements, COPY, NOTIFY), the test parameterizes over `pgsql-use_native_backend_protocol` off/on (§2.2) so both paths are covered as the native path matures. Cases that are known-broken on the young native path are marked xfail (§2.1), not skipped. Note SP-1's frontend-facing tests (e.g. `pg_lite_client` auth, §3.0) are independent of backend mode.
 
 ### 3.0 Shared harness enabler — extend `pg_lite_client`
 
@@ -82,15 +101,14 @@ Systematic round-trips, **each type in both text and binary result format**, ass
 - Connection storm exceeding `pgsql-max_connections` per hostgroup; assert queuing / clean rejection, no leak (`SHOW ... pool` counters via admin).
 - **Session-state isolation across multiplexing:** set a session GUC / prepared statement / temp state on connection A, force backend reuse, assert connection B does not observe A's state. This is the classic pooler-correctness risk and is currently only indirectly covered.
 
-### 3.5 LISTEN/NOTIFY negative test — `pgsql-listen_notify_rejection-t.cpp`
+### 3.5 LISTEN/NOTIFY contract test — `pgsql-listen_notify_contract-t.cpp`
 
-Pins the **current contract** (chosen option: negative test + feature note):
-- `LISTEN chan` over **simple** protocol → asserts `0A000` with message "LISTEN is not supported".
-- `LISTEN chan` over **extended** protocol (Parse/Bind/Execute) → same rejection (`PgSQL_Session.cpp:6547` path).
-- `NOTIFY chan, 'payload'` as a plain query → completes cleanly (routed as ordinary query), no hang, no crash; connection remains usable afterward.
-- `UNLISTEN` behavior asserted consistently.
+Pins the **current per-mode contract** (chosen option: contract test + feature note). Because behavior differs by backend protocol mode (§2.2), the test parameterizes over `pgsql-use_native_backend_protocol`:
 
-Appendix A sketches what real NOTIFY forwarding would require (captured, not built).
+- **libpq path (`off`):** `LISTEN chan` over **simple** protocol → asserts `0A000` "LISTEN is not supported"; over **extended** protocol → same rejection (`PgSQL_Session.cpp:6547`). `NOTIFY chan,'payload'` as a plain query → completes cleanly, no hang/crash, connection reusable. `UNLISTEN` asserted consistently.
+- **native path (`on`):** asserts whatever contract #5882 lands (its `pgsql-native_notify-t` already covers NOTIFY differentially). This portion is expected to move and is marked xfail where the native path is incomplete, rather than hard-coding today's snapshot.
+
+This intentionally avoids baking one behavior into the assertion set, since the native path is actively changing what LISTEN/NOTIFY does. Appendix A tracks the forwarding design as owned by the native PR, not this spec.
 
 ### 3.6 SP-1 grouping & CI
 
@@ -103,13 +121,15 @@ Appendix A sketches what real NOTIFY forwarding would require (captured, not bui
 
 **Harness:** new top-level directory `test/pg-compat/` (Python/pytest). **CI:** nightly cron + opt-in `pg-compat` PR label; non-gating relative to normal PRs. **Reference driver:** Python (psycopg3 + asyncpg). SP-2 proves the whole machine with Python only; SP-3 adds the other languages.
 
-### 4.1 New backend topology — `test/infra/infra-pgsql-lb/`
+### 4.1 New backend topology — `test/infra/infra-dbdeployer-pgsql17-repl/` (dbdeployer)
 
-No primary+2-replica topology exists today; SP-2 needs one.
-- **Nodes:** `pgdb1` (primary) + `pgdb2`, `pgdb3` (2 streaming replicas), PG 17 (align with `infra-pgsql17-repl`).
-- **Fault-injection layer:** one **Toxiproxy** instance exposing one proxy endpoint per backend; ProxySQL's `pgsql_servers` point at the Toxiproxy ports, not the real PG ports. This makes every backend individually degradable (latency, `limit_data` slow-loris, reset-peer) without touching containers — the mechanism SP-4 will lean on.
-- **Routing config:** use the **automatic** monitor-driven path — populate `pgsql_replication_hostgroups (writer_hostgroup, reader_hostgroup, check_type='read_only')` and let the monitor's `pg_is_in_recovery()` check (`PgSQL_Monitor.cpp:824,1859`) place primary→writer HG and replicas→reader HG. This is deliberately *different* from the static placement in `infra-pgsql17-repl`, because the automatic machinery is what read/write split and SP-4 failover actually depend on.
-- Follows existing infra conventions (docker-compose + `.env` with `WHG`/`RHG`, `bin/` wait/post scripts, `conf/` layout). Reuses `test/infra/control/` runners; introduces no new manual Docker steps.
+No primary+2-replica PG topology exists today; SP-2 needs one. **New infras use dbdeployer** — matching the established `test/infra/infra-dbdeployer-*` convention (currently MySQL/MariaDB only; this is the first dbdeployer PG infra). dbdeployer supports PostgreSQL replication sandboxes, so a single container runs dbdeployer to deploy the whole topology internally and expose its ports, exactly like `infra-dbdeployer-mysql84-gr`.
+
+- **Provisioning:** dbdeployer inside one container image (`proxysql/ci-infra:dbdeployer-pgsql17-repl`), following the sibling layout — `docker/{Dockerfile,build.sh,entrypoint.sh}`, `bin/docker-*-post.bash`, `docker-compose{,-init,-destroy}.bash`, `.env`. dbdeployer deploys **1 primary + 2 replicas** (PG 17) as a replication sandbox.
+- **`.env`:** defines `WHG`/`RHG` (and `PREFIX`) hostgroups and the dbdeployer host/port block, per the `infra-dbdeployer-*` pattern.
+- **Fault-injection layer:** one **Toxiproxy** endpoint per backend port; ProxySQL's `pgsql_servers` point at the Toxiproxy ports, not the real PG ports, so every backend is individually degradable (latency, `limit_data` slow-loris, reset-peer) without touching the sandbox — the mechanism SP-4 leans on. (Toxiproxy sits between ProxySQL and dbdeployer's exposed PG ports.)
+- **Routing config:** use the **automatic** monitor-driven path — populate `pgsql_replication_hostgroups (writer_hostgroup, reader_hostgroup, check_type='read_only')` and let the monitor's `pg_is_in_recovery()` check (`PgSQL_Monitor.cpp:824,1859`) place primary→writer HG and replicas→reader HG. Deliberately *different* from the static placement in `infra-pgsql17-repl`, because that automatic machinery is what read/write split and SP-4 failover actually depend on.
+- Reuses `test/infra/control/` runners; introduces no new manual Docker/dbdeployer steps (all wrapped by the standard `ensure-infras.bash` flow).
 
 ### 4.2 Directory layout — `test/pg-compat/`
 
@@ -151,18 +171,22 @@ Behavior modules for SP-2:
 
 ### 4.4 Differential engine (golden-master transparency)
 
-Adapted from pgdog's harness, reduced to **4 targets** (no sharding):
+Adapted from pgdog's harness. No sharding, but the **backend-mode axis (§2.2) splits the proxy target in two**, giving **6 targets**:
 
 | Target | Connection | Result format |
 |---|---|---|
-| `proxy_text` | via ProxySQL | text |
-| `proxy_binary` | via ProxySQL | binary |
+| `proxy_libpq_text` | via ProxySQL, `use_native_backend_protocol=off` | text |
+| `proxy_libpq_binary` | via ProxySQL, `use_native_backend_protocol=off` | binary |
+| `proxy_native_text` | via ProxySQL, `use_native_backend_protocol=on` | text |
+| `proxy_native_binary` | via ProxySQL, `use_native_backend_protocol=on` | binary |
 | `direct_text` | direct to primary | text |
 | `direct_binary` | direct to primary | binary |
 
-- Each case in `cases/NNN_slug.sql` is run against all 4 targets. The engine asserts **identical**: command status tag, column names, **column type OIDs**, row count, and row payloads. `proxy_*` must be indistinguishable from `direct_*`.
-- Case metadata in SQL comments (pgdog convention): `-- transactional:`, `-- skip-targets:`, `-- only-targets:`.
-- **Adding a test = dropping in one SQL file.** Initial cases cover the SP-1 data-type matrix expressed as differential cases (bytea, numeric, jsonb, arrays, network, temporal), giving us the same coverage through a *second, independent* mechanism (real driver + direct-backend diff) that catches transparency bugs the TAP self-asserting tests can't.
+- Each case in `cases/NNN_slug.sql` runs against all targets; the engine asserts **identical** command status tag, column names, **column type OIDs**, row count, and row payloads. Every `proxy_*` must be indistinguishable from `direct_*` — and, valuably, `proxy_libpq_*` vs `proxy_native_*` diffs pinpoint native-path regressions directly.
+- This **complements the native PR's own differential tests** (e.g. `pgsql-native_notify-t`, its strict byte-equal prepared-statement cases): those live in TAP and gate the native work; this harness is the broader, driver-driven, case-drop-in golden master across both modes.
+- Case metadata in SQL comments (pgdog convention): `-- transactional:`, `-- skip-targets:`, `-- only-targets:` (e.g. `only-targets: proxy_native_*`).
+- Per §2.1, divergences in the discovery phase become **xfail entries with a reason**, feeding the failure inventory rather than blocking.
+- **Adding a test = dropping in one SQL file.** Initial cases cover the SP-1 data-type matrix expressed as differential cases (bytea, numeric, jsonb, arrays, network, temporal), giving the same coverage through a *second, independent* mechanism (real driver + direct-backend diff) that catches transparency bugs the TAP self-asserting tests can't.
 
 ### 4.5 Routing oracle
 
@@ -181,8 +205,8 @@ Adapted from pgcat. `harness/oracle.py`:
 
 - **New workflow** (e.g. `.github/workflows/CI-pg-compat.yml` caller on `v3.0`, reusable on `GH-Actions` per the two-branch split in `doc/GH-Actions/README.md`).
 - **Triggers:** nightly `schedule` + `pull_request` gated on the `pg-compat` label.
-- **Shape:** build proxysql (debug, `PROXYSQL31=1`) once → cache → job spins up `infra-pgsql-lb` (+ Toxiproxy) via the standard `test/infra/control/` runners → runs `pytest test/pg-compat`. SP-3 will fan out per-language matrix jobs from the same cached binary.
-- **Not gating** on normal PRs (heavy, multi-toolchain); nightly failures triaged per `CLAUDE.md`'s "never dismiss as flaky" policy.
+- **Shape:** build proxysql (debug, `PROXYSQL31=1`) once → cache → job spins up `infra-dbdeployer-pgsql17-repl` (+ Toxiproxy) via the standard `test/infra/control/` runners → runs `pytest test/pg-compat` across both backend modes (§2.2). SP-3 will fan out per-language matrix jobs from the same cached binary.
+- **Not gating** on normal PRs (heavy, multi-toolchain) — and, per §2.1, **reporting-oriented** in the discovery phase: the job publishes the failure inventory / xfail summary rather than going red on expected divergences. Nightly failures triaged per `CLAUDE.md`'s "never dismiss as flaky" policy.
 
 ---
 
@@ -191,6 +215,7 @@ Adapted from pgcat. `harness/oracle.py`:
 - **Differential engine self-check:** a deliberately non-transparent config (e.g. a query rewrite rule) must make a differential case *fail* — proves the engine detects divergence, not just passes.
 - **Routing oracle self-check:** a case pinned to the writer HG must show zero calls on replicas — proves the oracle actually discriminates.
 - **Toxiproxy wiring self-check (SP-2 scope):** applying a full-block toxic to a replica must make the monitor shun it and reads reroute — proves the fault layer + monitor path are correctly wired, even though the *chaos suite* itself is SP-4.
+- **Expected-failure catalogue (discovery phase, §2.1):** a single source-of-truth file (e.g. `test/pg-compat/xfail.toml`) lists each known-failing case with `reason`, `mode` (libpq/native/both), and a tracking reference. The harness treats listed cases as xfail and **reports xpass** (a listed case that now passes) so fixes are caught. This file *is* the living failure inventory.
 - SP-1 tests follow existing TAP conventions and run under the isolated harness (`run-tests-isolated.bash`, debug binary).
 
 ---
@@ -202,9 +227,9 @@ Adapted from pgcat. `harness/oracle.py`:
 
 ---
 
-## Appendix A — Future feature note: NOTIFY forwarding (not built)
+## Appendix A — NOTIFY forwarding: owned by the native-backend PR (#5882)
 
-Real LISTEN/NOTIFY support would require, at minimum: (1) removing the `LISTEN` rejection in both `PgSQL_Session.cpp` paths; (2) pinning a LISTEN-ing frontend to a dedicated backend (incompatible with transaction-level multiplexing — likely a session-mode-only feature); (3) a backend `NotificationResponse`/`PQnotifies` consumption path (ProxySQL currently consumes results via libpq's result API, which swallows async 'A' messages) and forwarding them to the pinned frontend; (4) lifecycle handling for `UNLISTEN` and connection teardown. This is a feature, tracked separately; SP-1 §3.5 only pins the current rejection contract so it can't silently regress.
+This is **not** a feature this test spec proposes; it is being addressed by the native-backend work. As of 2026-07-07 the native path already ships NOTIFY support and a `pgsql-native_notify-t` differential test. For reference, full LISTEN/NOTIFY support entails: (1) lifting the `LISTEN` rejection in both `PgSQL_Session.cpp` paths; (2) pinning a LISTEN-ing frontend to a dedicated backend (incompatible with transaction-level multiplexing — likely session-mode-only); (3) a backend `NotificationResponse` (async 'A') consumption+forwarding path — the native wire layer makes this reachable in a way the libpq result API did not; (4) `UNLISTEN`/teardown lifecycle. SP-1 §3.5 pins the *current per-mode contract* so neither path silently regresses while #5882 evolves; it does not gate the feature.
 
 ---
 
@@ -217,7 +242,10 @@ Real LISTEN/NOTIFY support would require, at minimum: (1) removing the `LISTEN` 
 | Driver ecosystems | Python (psycopg3+asyncpg+SQLAlchemy), Java (pgjdbc), Go (pgx), Node (node-pg+Prisma) |
 | First spec | **SP-1 + SP-2 combined** (this document) |
 | CI cadence | SP-1 per-PR gating; **SP-2 nightly + `pg-compat` label**, non-gating |
-| LISTEN/NOTIFY | **Negative test now + feature appendix** |
+| Initial-phase expectation | **Discovery, not 100% green** — deliverable is a failure inventory; failing cases = xfail w/ reason (§2.1) |
+| Backend-protocol axis | Parameterize over `pgsql-use_native_backend_protocol` off/on (§2.2, tracks PR #5882) |
+| LISTEN/NOTIFY | **Per-mode contract test** + note; NOTIFY forwarding owned by #5882 (Appendix A) |
 | Sharding tests | **Excluded** (no PG sharding in ProxySQL) |
-| Differential targets | **4** (proxy/direct × text/binary) |
-| Replica routing | **Automatic** `pgsql_replication_hostgroups` + `pg_is_in_recovery()` (new 3-node infra) |
+| Differential targets | **6** (proxy-libpq / proxy-native / direct × text/binary) |
+| New infra tooling | **dbdeployer** (`infra-dbdeployer-pgsql17-repl`), per existing `infra-dbdeployer-*` convention |
+| Replica routing | **Automatic** `pgsql_replication_hostgroups` + `pg_is_in_recovery()` (primary + 2 replicas) |
