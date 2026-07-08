@@ -465,6 +465,8 @@ void PgConnection::doSASLAuth(const std::string& password,
 
     // 3) SASLResponse ('p'): client-final-message (with proof derived from plaintext passwd).
     client_final = build_client_final_message(st, &cred, server_nonce, salt, saltlen, iterations);
+    free(salt);       // read_server_first_message malloc'd salt and handed us ownership;
+    salt = nullptr;   // build_client_final_message is its only consumer (just read above).
     if (!client_final) { free(client_first); free_scram_state(st); throw PgException(std::string("scram client-final: ") + scram_error()); }
     {
         std::vector<uint8_t> pkt(client_final, client_final + strlen(client_final));
