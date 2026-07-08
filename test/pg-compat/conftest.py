@@ -15,7 +15,14 @@ def admin():
 def _proxy_dsn(dbname="testuser"):
     h = os.environ["PGCOMPAT_PROXY_HOST"]
     p = os.environ["PGCOMPAT_PROXY_PORT"]
-    return f"host={h} port={p} user=testuser password=testuser dbname={dbname} sslmode=disable"
+    # client_encoding pinned to UTF8 for the same reason harness/targets.py
+    # and drivers/python/adapter.py pin it: the dbdeployer backend databases
+    # default to SQL_ASCII, which psycopg maps to Python's restrictive
+    # 'ascii' codec.
+    return (
+        f"host={h} port={p} user=testuser password=testuser dbname={dbname} "
+        f"sslmode=disable client_encoding=UTF8"
+    )
 
 
 @pytest.fixture

@@ -27,7 +27,9 @@ translation is exactly what the driver is for.
 
 def run(Adapter):
     a = Adapter()
-    for i in range(50):
-        r = a.exec_params("SELECT %s::int + %s::int", (i, 1))
-        assert r[0][0] == i + 1
-    a.close()
+    try:
+        for i in range(50):
+            r = a.exec_params("SELECT %s::int + %s::int", (i, 1))
+            assert r[0][0] == i + 1
+    finally:
+        a.close()

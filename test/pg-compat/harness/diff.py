@@ -19,10 +19,13 @@ Case metadata (parsed from ``-- key: value`` comment lines):
                                     not acted on here.
 
 Native backend axis: for AVAILABLE native targets the backend mode is set via
-the admin (``pgsql-use_native_backend_protocol``) before running. Unavailable
-targets (the norm today -- PR #5882 unmerged) are simply not run; the test
-layer surfaces them as skips. ``compare`` therefore gracefully handles absent
-targets -- only the proxy targets actually present in ``results`` are checked.
+the admin (``pgsql-use_native_backend_protocol``) before running, and the
+GLOBAL variable's prior value is snapshotted/restored around the target loop
+(see ``_run``) so one case's native-mode toggle never leaks into the next.
+Unavailable targets (the norm today -- PR #5882 unmerged) are simply not run;
+the test layer surfaces them as skips. ``compare`` therefore gracefully
+handles absent targets -- only the proxy targets actually present in
+``results`` are checked.
 """
 import re
 
@@ -88,16 +91,31 @@ def _run_on(target, stmts, admin, native_present):
 
 def _run(stmts, targets, admin, skip, only):
     native_present = native_var_present(admin) if admin is not None else False
-    results = {}
-    for t in targets:
-        if not t.available:
-            continue
-        if t.name in skip:
-            continue
-        if only and t.name not in only:
-            continue
-        results[t.name] = _run_on(t, stmts, admin, native_present)
-    return results
+    # Snapshot/restore NATIVE_VAR around the target loop. Dormant today (the
+    # variable is absent -- PR #5882 unmerged -- so native_present is False,
+    # snapshot() is never called, and this is a pure no-op: zero admin
+    # round-trips beyond the native_var_present() probe already required
+    # above). The day #5882 merges, native_present flips True and every
+    # _run_on() call that toggles a native target's backend-protocol mode
+    # (see _run_on) leaves the GLOBAL runtime variable at whatever it last
+    # set it to; without restoring it here that value would leak into every
+    # subsequent case run in the same process. Restoring in a ``finally``
+    # guarantees the global is put back even if a target raises mid-loop.
+    saved = admin.snapshot([NATIVE_VAR]) if native_present else None
+    try:
+        results = {}
+        for t in targets:
+            if not t.available:
+                continue
+            if t.name in skip:
+                continue
+            if only and t.name not in only:
+                continue
+            results[t.name] = _run_on(t, stmts, admin, native_present)
+        return results
+    finally:
+        if saved is not None:
+            admin.restore(saved)
 
 
 def run_case(case_file, targets, admin=None):

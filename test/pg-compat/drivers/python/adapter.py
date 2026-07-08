@@ -60,4 +60,11 @@ class PsycopgAdapter:
         self.conn.autocommit = True
 
     def close(self):
-        self.conn.close()
+        # Idempotent: behaviors/session_isolation.py closes its first
+        # connection explicitly before opening the second (deliberately, so
+        # the second connection can land on the same freed backend), then
+        # closes it again from a `finally` guarding the whole behavior body.
+        # Guard on psycopg's `closed` property so the repeat call is a safe
+        # no-op instead of erroring on an already-closed connection.
+        if not self.conn.closed:
+            self.conn.close()

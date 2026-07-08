@@ -36,11 +36,21 @@ DISTINCTIVE_TZ = "Antarctica/Troll"
 
 def run(Adapter):
     a = Adapter()
-    a.exec_simple(f"SET TimeZone = '{DISTINCTIVE_TZ}'")
-    assert a.exec_simple("SHOW TimeZone")[0][0] == DISTINCTIVE_TZ
-    a.close()
+    b = None
+    try:
+        a.exec_simple(f"SET TimeZone = '{DISTINCTIVE_TZ}'")
+        assert a.exec_simple("SHOW TimeZone")[0][0] == DISTINCTIVE_TZ
+        # Close A before B opens (deliberate -- see module docstring): this
+        # keeps A's backend connection possibly free by the time B asks for
+        # one. The `finally` below closes A again as a resource-hygiene
+        # backstop on an assert failure above; the adapter's close() is
+        # idempotent so that repeat call is a safe no-op.
+        a.close()
 
-    b = Adapter()
-    val = b.exec_simple("SHOW TimeZone")[0][0]
-    b.close()
-    assert val != DISTINCTIVE_TZ, "session state leaked across connections"
+        b = Adapter()
+        val = b.exec_simple("SHOW TimeZone")[0][0]
+        assert val != DISTINCTIVE_TZ, "session state leaked across connections"
+    finally:
+        a.close()
+        if b is not None:
+            b.close()

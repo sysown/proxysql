@@ -50,7 +50,7 @@ def run(Adapter):
     finally:
         # Leave no state behind, whether or not the assertions above passed,
         # and use a table name distinct from other behaviors/tests
-        # (harness/oracle.py's own probe table is "oracle_w") so runs never
-        # collide.
+        # (tests/test_routing_oracle.py's own probe table is "oracle_w") so
+        # runs never collide.
         a.exec_simple(f"DROP TABLE IF EXISTS {TABLE}")
         a.close()
