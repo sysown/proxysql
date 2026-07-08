@@ -68,12 +68,22 @@ apt-get install -y -qq --download-only --reinstall -o Dir::Cache::archives=/root
 #   postgresql-17_17.10-1.pgdg22.04+1_amd64.deb
 #   postgresql-client-17_17.10-1.pgdg22.04+1_amd64.deb
 
-# Unpack via dbdeployer (as a NON-ROOT user — see §4)
-cd /root/pgdebs
-dbdeployer unpack --provider=postgresql \
+# IMPORTANT: the unpack must run as a NON-ROOT user (see §4), and /root is mode 700 —
+# pguser cannot traverse into /root/pgdebs at all ("Permission denied"). Copy the debs
+# to a pguser-owned location first. Exact commands used in this spike (run as root):
+useradd -m -s /bin/bash pguser          # the non-root user from §4 (create it first)
+mkdir -p /home/pguser/pgdebs
+cp /root/pgdebs/*.deb /home/pguser/pgdebs/
+chown -R pguser:pguser /home/pguser/pgdebs
+# (Alternative: download straight to a world-readable dir, e.g.
+#  -o Dir::Cache::archives=/tmp/pgdebs above, and chown that — either way the .debs
+#  must end up readable at a path pguser can reach.)
+
+# Unpack via dbdeployer, as pguser (see §4)
+su - pguser -c 'cd /home/pguser/pgdebs && dbdeployer unpack --provider=postgresql \
   postgresql-17_17.10-1.pgdg22.04+1_amd64.deb \
-  postgresql-client-17_17.10-1.pgdg22.04+1_amd64.deb
-# => "PostgreSQL 17.10 unpacked to $HOME/opt/postgresql/17.10"
+  postgresql-client-17_17.10-1.pgdg22.04+1_amd64.deb'
+# => "PostgreSQL 17.10 unpacked to /home/pguser/opt/postgresql/17.10"
 ```
 
 PG version deployed: **17.10** (PGDG's latest 17.x for jammy at spike time 2026-07-08; 17.8/17.9
@@ -136,8 +146,13 @@ for PG (`unpack`, `deploy postgresql`, `deploy replication --provider=postgresql
 
 ```bash
 useradd -m -s /bin/bash pguser
-# copy/own the downloaded .deb files, then, as pguser:
-su - pguser -c 'dbdeployer unpack --provider=postgresql postgresql-17_17.10-1.pgdg22.04+1_amd64.deb postgresql-client-17_17.10-1.pgdg22.04+1_amd64.deb'
+# Copy + chown the downloaded .deb files into pguser's home first — /root is mode 700,
+# so pguser cannot read /root/pgdebs (exact commands in §2):
+mkdir -p /home/pguser/pgdebs
+cp /root/pgdebs/*.deb /home/pguser/pgdebs/
+chown -R pguser:pguser /home/pguser/pgdebs
+# then, as pguser:
+su - pguser -c 'cd /home/pguser/pgdebs && dbdeployer unpack --provider=postgresql postgresql-17_17.10-1.pgdg22.04+1_amd64.deb postgresql-client-17_17.10-1.pgdg22.04+1_amd64.deb'
 ```
 
 Task 2's entrypoint/Dockerfile should either run the whole container as this user (`USER pguser`
@@ -146,20 +161,45 @@ commands only, similar to how official `postgres` images drop privileges.
 
 ## 5. The exact WORKING `dbdeployer deploy replication` command
 
-Run as `pguser` (see §4), after `dbdeployer defaults update reserved-ports '0'` (same
-reserved-ports-clearing step as the MySQL GR image; **relevant for PG too since dbdeployer
-reserves 5432 by default**):
+### FINAL RECOMMENDED COMMAND (Task 2: copy this)
+
+Run as `pguser` (see §4). This is the minimal form with the no-op flags removed (see
+"silently-ignored flags" below for why `--bind-address`/`--base-port`/`-c` are omitted —
+they do nothing for the postgresql provider):
+
+```bash
+dbdeployer deploy replication 17.10 \
+  --provider=postgresql \
+  --topology=master-slave \
+  --nodes=3
+```
+
+Config injection (`listen_addresses`, `shared_preload_libraries`, `max_connections`,
+`pg_hba.conf`) happens **post-deploy** — see the two confirmed workaround blocks below; Task 2's
+entrypoint must include both.
+
+On reserved-ports: the spike ran `dbdeployer defaults update reserved-ports '0'` before
+deploying, carried over defensively from the MySQL GR recipe (dbdeployer's default reserved list
+includes 5432). It was **NOT confirmed necessary for the postgresql provider** — PG ports are
+auto-derived to 16710+ regardless of any port flags (see below), nowhere near the reserved list,
+and a run without the step was not tested. Keep it or drop it in Task 2; do not treat it as a
+proven requirement.
+
+### The command as actually run in the spike (annotated history)
+
+The spike's original invocation included the flags below; it succeeded, but the highlighted flags
+were proven no-ops afterwards:
 
 ```bash
 dbdeployer deploy replication 17.10 \
   --provider=postgresql \
   --topology=master-slave \
   --nodes=3 \
-  --bind-address=0.0.0.0 \
-  --base-port=5432 \
-  -c listen_addresses=0.0.0.0 \
-  -c max_connections=500 \
-  -c shared_preload_libraries=pg_stat_statements
+  --bind-address=0.0.0.0 \            # IGNORED for postgresql provider
+  --base-port=5432 \                  # IGNORED — ports land at 16710/16711/16712
+  -c listen_addresses=0.0.0.0 \       # IGNORED
+  -c max_connections=500 \            # IGNORED
+  -c shared_preload_libraries=pg_stat_statements   # IGNORED
 ```
 
 Output:
@@ -335,17 +375,21 @@ psql -h <container-real-ip> -p 16710 -U postgres -c "SELECT 1 AS remote_ok;"  --
    relocatable `sharedir`).
 3. `initdb`/`postgres` refuse to run as root — the container must run PG-related dbdeployer
    commands as a non-root user (unlike the MySQL GR image, which runs entirely as root).
-4. `--base-port`, `--bind-address`, `-c my-cnf-options`, and `--db-user`/`--db-password` are all
+4. Because of (3), the downloaded `.deb`s must be readable by that non-root user before
+   `dbdeployer unpack` — `/root` is mode 700, so debs fetched under `/root/pgdebs` hit
+   "Permission denied". Copy + `chown` them into the user's home (exact commands in §2/§4), or
+   download them to a world-readable path in the first place.
+5. `--base-port`, `--bind-address`, `-c my-cnf-options`, and `--db-user`/`--db-password` are all
    silently ignored for `--provider=postgresql`; config must be injected by editing
    `postgresql.conf`/`pg_hba.conf` directly and restarting/reloading. Ports are fixed at
    `15000 + major*100 + minor` (16710/16711/16712 for 17.10) — do not fight this, standardize on
    it.
-5. `pg_hba.conf` defaults to loopback-only `trust` rules — must append a wider `host ... 0.0.0.0/0`
+6. `pg_hba.conf` defaults to loopback-only `trust` rules — must append a wider `host ... 0.0.0.0/0`
    (or the actual Docker subnet) entry for cross-container reachability; `pg_reload_conf()` (no
    restart) is sufficient.
-6. `dbdeployer sandboxes` does not reliably enumerate PG sandboxes — use the sandbox directory
+7. `dbdeployer sandboxes` does not reliably enumerate PG sandboxes — use the sandbox directory
    tree directly.
-7. No dedicated replication role/slots — replicas stream as `postgres` itself with no password
+8. No dedicated replication role/slots — replicas stream as `postgres` itself with no password
    (`trust`); no password is set for `postgres` by dbdeployer at all.
 
 None of the above break the dbdeployer path — every one has a confirmed, tested workaround above.
