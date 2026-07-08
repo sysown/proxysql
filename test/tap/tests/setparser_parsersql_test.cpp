@@ -180,6 +180,83 @@ static Test parsersql_mysql_set_testing[] = {
       Expected("session_track_gtids",                {"OWN_GTID"}) } },
 };
 
+// MySQL SET parser cases ported from PR #5088's obsolete Bison parser tests.
+// These exercise ParserSQL through ProxySQL's public adapter instead of the
+// removed PR-specific AST helpers.
+static Test parsersql_pr5088_mysql_set_syntax[] = {
+  { "SET @my_user_var = 'hello world';",
+    { Expected("@my_user_var", {"hello world"}) } },
+  { "SET @anotherVar = 12345;",
+    { Expected("@anothervar", {"12345"}) } },
+  { "SET @thirdVar = `ident_value`;",
+    { Expected("@thirdvar", {"ident_value"}) } },
+  { "SET @complex_var = @@global.max_connections;",
+    { Expected("@complex_var", {"@@global.max_connections"}) } },
+  { "SET global max_connections = 1000;",
+    { Expected("max_connections", {"1000"}) } },
+  { "SET session sort_buffer_size = 200000;",
+    { Expected("sort_buffer_size", {"200000"}) } },
+  { "SET GLOBAL sort_buffer_size = 400000;",
+    { Expected("sort_buffer_size", {"400000"}) } },
+  { "SET @@global.tmp_table_size = 32000000;",
+    { Expected("tmp_table_size", {"32000000"}) } },
+  { "SET @@session.net_write_timeout = 120;",
+    { Expected("net_write_timeout", {"120"}) } },
+  { "SET @@net_read_timeout = 60;",
+    { Expected("net_read_timeout", {"60"}) } },
+  { "SET max_allowed_packet = 64000000;",
+    { Expected("max_allowed_packet", {"64000000"}) } },
+  { "SET NAMES `latin1`;",
+    { Expected("names", {"latin1"}) } },
+  { "SET NAMES DEFAULT;",
+    { Expected("names", {"DEFAULT"}) } },
+  { "SET CHARACTER SET 'utf8';",
+    { Expected("character_set_results", {"utf8"}) } },
+  { "SET CHARACTER SET DEFAULT;",
+    { Expected("character_set_results", {"DEFAULT"}) } },
+  { "SET @a = 1, @b = 'two', @c = @@session.time_zone;",
+    { Expected("@a", {"1"}),
+      Expected("@b", {"two"}),
+      Expected("@c", {"@@session.time_zone"}) } },
+  { "SET @no_semicolon = 'works'",
+    { Expected("@no_semicolon", {"works"}) } },
+  { "SET @@SESSION.wait_timeout := 42;",
+    { Expected("wait_timeout", {"42"}) } },
+  { "SET @'quoted-user' := 1;",
+    { Expected("@quoted-user", {"1"}) } },
+  { "SET @\"quoted.user\" := 2;",
+    { Expected("@quoted.user", {"2"}) } },
+  { "SET @`quoted var` := 3;",
+    { Expected("@quoted var", {"3"}) } },
+};
+
+static Test parsersql_pr5088_mysql_expr_syntax[] = {
+  { "SET @generic_var = TRUE OR FALSE;",
+    { Expected("@generic_var", {"TRUE OR FALSE"}) } },
+  { "SET @generic_var = 1 AND 0;",
+    { Expected("@generic_var", {"1 AND 0"}) } },
+  { "SET @generic_var = NOT TRUE;",
+    { Expected("@generic_var", {"NOT TRUE"}) } },
+  { "SET @generic_var = 'hello' IS NOT NULL;",
+    { Expected("@generic_var", {"'hello' IS NOT NULL"}) } },
+  { "SET @generic_var = 5 IN (5);",
+    { Expected("@generic_var", {"5 IN (5)"}) } },
+  { "SET @generic_var = 'apple' IN ('orange', 'apple', 'banana');",
+    { Expected("@generic_var", {"'apple' IN ('orange', 'apple', 'banana')"}) } },
+  { "SET @generic_var = 'banana' LIKE 'ba%';",
+    { Expected("@generic_var", {"'banana' LIKE 'ba%'"}) } },
+  { "SET @generic_var = 10.5 + 2;",
+    { Expected("@generic_var", {"10.5 + 2"}) } },
+  { "SET @generic_var = 100 - 33;",
+    { Expected("@generic_var", {"100 - 33"}) } },
+  { "SET @generic_var = 7 * 6;",
+    { Expected("@generic_var", {"7 * 6"}) } },
+  { "SET @generic_var = 100 / 4;",
+    { Expected("@generic_var", {"100 / 4"}) } },
+  { "SET @generic_var = 10 % 3;",
+    { Expected("@generic_var", {"10 % 3"}) } },
+};
+
 // ----------------------------------------------------------------------------
 // PostgreSQL search_path tests — pgsql-set_parameter_validation_test-t shapes.
 // Pre-ParserSQL-1.0.3 the multi-value cases silently dropped every value past
@@ -574,6 +651,8 @@ int main(int argc, char** argv) {
 	p += arraysize(parsersql_syntax_errors);
 	p += arraysize(parsersql_mysql_filtered_set);
 	p += arraysize(parsersql_mysql_set_testing);
+	p += arraysize(parsersql_pr5088_mysql_set_syntax);
+	p += arraysize(parsersql_pr5088_mysql_expr_syntax);
 	p += arraysize(parsersql_pgsql_search_path);
 	p += arraysize(parsersql_pgsql_time_zone);
 	p *= 2;
@@ -595,6 +674,8 @@ int main(int argc, char** argv) {
 	TestParse(parsersql_syntax_errors, arraysize(parsersql_syntax_errors), "parsersql_syntax_errors");
 	TestParse(parsersql_mysql_filtered_set, arraysize(parsersql_mysql_filtered_set), "mysql_filtered_set");
 	TestParse(parsersql_mysql_set_testing, arraysize(parsersql_mysql_set_testing), "mysql_set_testing");
+	TestParse(parsersql_pr5088_mysql_set_syntax, arraysize(parsersql_pr5088_mysql_set_syntax), "pr5088_mysql_set_syntax");
+	TestParse(parsersql_pr5088_mysql_expr_syntax, arraysize(parsersql_pr5088_mysql_expr_syntax), "pr5088_mysql_expr_syntax");
 	TestParsePgsql(parsersql_pgsql_search_path, arraysize(parsersql_pgsql_search_path), "pgsql_search_path");
 	TestParsePgsql(parsersql_pgsql_time_zone, arraysize(parsersql_pgsql_time_zone), "pgsql_time_zone");
 	TestStrictFunctionCall(parsersql_function_call_strict, arraysize(parsersql_function_call_strict));
