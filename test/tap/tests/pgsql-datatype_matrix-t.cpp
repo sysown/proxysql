@@ -110,8 +110,8 @@ static bool run_case(const Case& c, int16_t fmt, Observed& obs) {
         // NOTE: these queries take no bind parameters, so the param-format array must be
         // empty. bindStatementSingleFormat() would unconditionally send a 1-element
         // param-format array even for a 0-param Bind, which trips a real ProxySQL bug
-        // (PgSQL_Connection.cpp stmt_execute_start() rejects num_param_formats==1 with
-        // num_params==0, though the PG protocol spec allows it). bindStatementEx() with
+        // (issue #5899: PgSQL_Connection.cpp stmt_execute_start() rejects num_param_formats==1
+        // with num_params==0, though the PG protocol spec allows it). bindStatementEx() with
         // an explicit empty paramFormats array is the protocol-correct 0-param bind and
         // is orthogonal to the result-format/OID transparency under test here.
         conn.prepareStatement("", c.select_expr, false, {});

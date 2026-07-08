@@ -23,7 +23,7 @@ static PGConnPtr backend_conn() {
 // NOTE: the statement bound here has 0 parameters. A naive
 // bindStatementSingleFormat("", "", {}, 0, {0}, false) would send a Bind message
 // with num_param_formats=1, num_params=0, which trips a real ProxySQL bug
-// (Task 4 finding: PgSQL_Connection.cpp's stmt_execute_start() rejects this with
+// (issue #5899: PgSQL_Connection.cpp's stmt_execute_start() rejects this with
 // "Invalid param format count", even though the PG protocol spec and real
 // PostgreSQL both accept num_param_formats==1 unconditionally). We avoid the bug
 // here (rather than re-proving it) by using bindStatementEx with an EMPTY
@@ -86,8 +86,8 @@ int main(int argc, char** argv) {
     // increment `failed` (test/tap/tap/tap.cpp:286), so exit_status() stays 0 while
     // the TAP output still records `not ok N # todo <reason>`. When portal suspension
     // is implemented the assertion passes inside the todo (still RC:0) -> remove wrapper.
-    todo_start("ProxySQL extended-protocol portal suspension unimplemented: Execute max_rows ignored, "
-               "no PortalSuspended emitted (lib/PgSQL_Extended_Query_Message.cpp:490). Remove this todo "
+    todo_start("issue #5900: ProxySQL extended-protocol portal suspension unimplemented: Execute max_rows "
+               "ignored, no PortalSuspended emitted (lib/PgSQL_Extended_Query_Message.cpp:490). Remove this todo "
                "wrapper when portal suspension is implemented.");
     ok(portal_suspends_at_2(), "extended-protocol portal suspends at maxRows=2");
     todo_end();
