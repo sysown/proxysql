@@ -2879,14 +2879,20 @@ unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const uns
 		// Mirror add_ready_status(): flush the in-line buffer into PSarrayOUT so the
 		// completed result is wholly in PSarrayOUT (get_resultset asserts buffer_used==0).
 		buffer_to_PSarrayOut();
-		// Feed the session's PgSQL_ExplicitTxnStateMgr with the digest text of the
-		// just-completed query, so BEGIN / COMMIT / ROLLBACK / SAVEPOINT state is
-		// kept in sync on the native path. The libpq path does this in
-		// PgSQL_Session::handler() after a successful RunQuery; for the native
-		// path the connection owns the result-completion event, so we do it here.
-		if (conn && conn->myds && conn->myds->sess) {
-			conn->myds->sess->handle_transaction_state();
-		}
+		// NOTE: the session's PgSQL_ExplicitTxnStateMgr (BEGIN/COMMIT/ROLLBACK/
+		// SAVEPOINT state) is fed EXACTLY ONCE per query by PgSQL_Session::handler()'s
+		// post-RunQuery epilogue (the shared PROCESSING_QUERY / PROCESSING_STMT_EXECUTE
+		// rc0 case calls handle_transaction_state()) — for BOTH the libpq and the native
+		// path, since native result completion returns through that same handler switch.
+		// A call was previously made HERE too (commit e9428cbda, when native completion
+		// bypassed the shared handler epilogue). After the native extended-query
+		// stmt-pipeline refactor routed native completion back through handler(), this
+		// call became a SECOND invocation: the first correctly registered/cleared the
+		// txn, the second re-ran start_transaction()/commit() on the now-updated state
+		// and tripped its "already/no transaction in progress" warning branch — once per
+		// transaction, for simple AND extended-protocol BEGIN/COMMIT alike (the
+		// extended case surfaced as pgbench -M prepared's per-COMMIT warning storm).
+		// Do NOT call handle_transaction_state() here; handler() owns it.
 		break;
 	default:
 		// 'A' NotificationResponse and any other unrecognized message type are
