@@ -139,13 +139,6 @@ static bool flushBackendPool(PGconn* admin, int hg, const std::vector<ServerRow>
 	return true;
 }
 
-static bool nativeFallbackObserved() {
-	const std::string re =
-		".*(native_mode requested but unimplemented at this stage; falling back to libpq"
-		"|native backend auth capability gap .* falling back to libpq).*";
-	return wait_for_log_match(f_proxysql_log, re, 1000, 100);
-}
-
 static void drainLogToNow() {
 	get_matching_lines(f_proxysql_log, "__no_such_marker_line__");
 }
@@ -176,22 +169,72 @@ static std::string substitute_table(const std::string& q, const std::string& tbl
 	return out;
 }
 
+// How each query in a case is sent on the wire.
+//   EXEC_SIMPLE       : PQexec()          -> simple Query message (one 'Q' packet).
+//   EXEC_EXT_PARAMS   : PQexecParams()    -> extended protocol on the UNNAMED portal
+//                                            (Parse/Bind/Describe/Execute/Sync).
+//   EXEC_EXT_PREPARED : PQprepare()+PQexecPrepared() -> extended protocol via a NAMED
+//                                            prepared statement. This is exactly what
+//                                            `pgbench -M prepared` does for BEGIN/END,
+//                                            i.e. the shape that produced the native
+//                                            per-COMMIT "no transaction in progress"
+//                                            warning storm.
+enum ExecMode { EXEC_SIMPLE, EXEC_EXT_PARAMS, EXEC_EXT_PREPARED };
+
+static const char* exec_mode_name(ExecMode m) {
+	switch (m) {
+		case EXEC_EXT_PARAMS:   return "ext-params";
+		case EXEC_EXT_PREPARED: return "ext-prepared";
+		default:                return "simple";
+	}
+}
+
 // Run a sequence of queries; return per-query txn-status bytes and an
 // "all_ok" flag indicating no query returned PGRES_FATAL_ERROR.
 struct TxnRun {
 	std::vector<char> states;
 	bool all_ok = true;
 };
-static TxnRun run_txn_sequence(PGconn* c, const std::vector<std::string>& qs) {
+static TxnRun run_txn_sequence(PGconn* c, const std::vector<std::string>& qs, ExecMode mode = EXEC_SIMPLE) {
 	TxnRun r;
+	int idx = 0;
 	for (const auto& q : qs) {
-		PGresult* res = PQexec(c, q.c_str());
+		PGresult* res = nullptr;
+		switch (mode) {
+			case EXEC_EXT_PARAMS:
+				// 0 params still forces the extended protocol (Parse/Bind/Execute/Sync).
+				res = PQexecParams(c, q.c_str(), 0, nullptr, nullptr, nullptr, nullptr, 0);
+				break;
+			case EXEC_EXT_PREPARED: {
+				// pgbench-style: prepare each statement under a unique name, then execute
+				// it. A fresh name per query keeps this independent of DEALLOCATE support.
+				std::string sname = "txn_ext_" + std::to_string(getpid()) + "_" + std::to_string(idx);
+				PGresult* pr = PQprepare(c, sname.c_str(), q.c_str(), 0, nullptr);
+				ExecStatusType pst = PQresultStatus(pr);
+				PQclear(pr);
+				if (pst != PGRES_COMMAND_OK) {
+					// Parse failed (e.g. intentional error case): record the failure and
+					// keep the per-query txn-status so the differential still lines up.
+					r.all_ok = false;
+					r.states.push_back(txn_status_byte(c));
+					idx++;
+					continue;
+				}
+				res = PQexecPrepared(c, sname.c_str(), 0, nullptr, nullptr, nullptr, 0);
+				break;
+			}
+			case EXEC_SIMPLE:
+			default:
+				res = PQexec(c, q.c_str());
+				break;
+		}
 		ExecStatusType st = PQresultStatus(res);
 		if (st != PGRES_COMMAND_OK && st != PGRES_TUPLES_OK) {
 			r.all_ok = false;
 		}
 		PQclear(res);
 		r.states.push_back(txn_status_byte(c));
+		idx++;
 	}
 	return r;
 }
@@ -215,7 +258,41 @@ struct TxnCase {
 	std::vector<std::string> queries;     // {T} substituted
 	std::vector<char> expected_states;    // size 0 = don't check
 	std::string verify;                   // count(*) query, {T} substituted; "" = skip
+	ExecMode mode = EXEC_SIMPLE;          // how the queries are sent on the wire
 };
+
+// Count native-window explicit-txn-tracker warnings and detect libpq fallback in a
+// SINGLE forward pass over the log (the stream is consumed forward, so we must scan
+// once). Both "no transaction in progress" (COMMIT/ROLLBACK on empty state) and
+// "already a transaction in progress" (duplicate BEGIN) are the exact symptoms of the
+// native-mode double-registration bug; a correct native path emits ZERO of them for a
+// well-formed BEGIN/.../COMMIT sequence — the same as the libpq oracle.
+struct NativeLogScan { int txn_warnings = 0; bool fell_back = false; };
+static NativeLogScan scan_native_window(std::fstream& log) {
+	// ProxySQL log writes are async wrt the SQL that triggers them; give the producer
+	// a moment to flush before the single-shot scan (absence assertions can't poll).
+	usleep(400000);
+	NativeLogScan s;
+	// drainLogToNow()'s prior get_matching_lines() left the stream at EOF. It clears
+	// failbit but NOT eofbit, so a fresh getline() would short-circuit and read none of
+	// the lines appended since. Clear both bits first (same fix wait_for_log_match uses).
+	log.clear(log.rdstate() & ~std::ios_base::eofbit & ~std::ios_base::failbit);
+	// Match case-stable substrings of the actual log lines. The full messages are
+	// "... There is no transaction in progress" / "... There is already a transaction
+	// in progress" — note the capital 'T', so an "^there is" pattern would silently
+	// never match (RE2 is case-sensitive). The lowercase tails below appear verbatim.
+	auto [n, lines] = get_matching_lines(log,
+		"(no transaction in progress"
+		"|already a transaction in progress"
+		"|falling back to libpq)");
+	(void)n;
+	for (const auto& l : lines) {
+		const std::string& text = std::get<LINE_MATCH_T::LINE>(l);
+		if (text.find("transaction in progress") != std::string::npos) s.txn_warnings++;
+		if (text.find("falling back to libpq") != std::string::npos)   s.fell_back = true;
+	}
+	return s;
+}
 
 // Compare two TxnRun results + count verification; return true if all match.
 struct CaseResult { bool result_match; bool fell_back; std::string detail; };
@@ -248,7 +325,7 @@ static CaseResult run_case(PGconn* admin, const TxnCase& tc,
 		PGresult* sr = PQexec(lp.get(), lp_tc.setup.c_str());
 		PQclear(sr);
 	}
-	TxnRun lp_run = run_txn_sequence(lp.get(), lp_tc.queries);
+	TxnRun lp_run = run_txn_sequence(lp.get(), lp_tc.queries, tc.mode);
 	int lp_count = lp_tc.verify.empty() ? 0 : run_count_query(lp.get(), lp_tc.verify);
 
 	// ---- native candidate ----
@@ -264,9 +341,14 @@ static CaseResult run_case(PGconn* admin, const TxnCase& tc,
 		PGresult* sr = PQexec(nt.get(), nt_tc.setup.c_str());
 		PQclear(sr);
 	}
-	TxnRun nt_run = run_txn_sequence(nt.get(), nt_tc.queries);
+	TxnRun nt_run = run_txn_sequence(nt.get(), nt_tc.queries, tc.mode);
 	int nt_count = nt_tc.verify.empty() ? 0 : run_count_query(nt.get(), nt_tc.verify);
-	bool fell_back = nativeFallbackObserved();
+	// Single forward pass over the native-run log window: captures libpq fallback AND
+	// any explicit-txn-tracker warning ("no/already transaction in progress"). The
+	// latter must be ZERO on the native path for a well-formed BEGIN/.../COMMIT — this
+	// is the positive-absence assertion for the double-registration bug.
+	NativeLogScan scan = scan_native_window(f_proxysql_log);
+	bool fell_back = scan.fell_back;
 
 	// Compare.
 	bool states_match = true;
@@ -278,13 +360,16 @@ static CaseResult run_case(PGconn* admin, const TxnCase& tc,
 			}
 		}
 	}
+	bool no_txn_warnings = (scan.txn_warnings == 0);
 	bool result_match = (lp_run.all_ok == nt_run.all_ok) && states_match &&
-	                    (lp_count == nt_count);
+	                    (lp_count == nt_count) && no_txn_warnings;
 	std::string detail;
 	if (!result_match) {
 		std::stringstream ss;
-		ss << "lp_ok=" << lp_run.all_ok << " nt_ok=" << nt_run.all_ok
-		   << " lp_count=" << lp_count << " nt_count=" << nt_count;
+		ss << "mode=" << exec_mode_name(tc.mode)
+		   << " lp_ok=" << lp_run.all_ok << " nt_ok=" << nt_run.all_ok
+		   << " lp_count=" << lp_count << " nt_count=" << nt_count
+		   << " native_txn_warnings=" << scan.txn_warnings;
 		// If states mismatched, show the per-query state diffs.
 		if (!states_match) {
 			for (size_t i = 0; i < tc.expected_states.size(); i++) {
@@ -311,7 +396,8 @@ static CaseResult run_case(PGconn* admin, const TxnCase& tc,
 struct RawCase { std::string label, kind, setup;
                  std::vector<std::string> queries;
                  std::vector<char> exp_states;
-                 std::string verify; };
+                 std::string verify;
+                 ExecMode mode = EXEC_SIMPLE; };
 
 static std::vector<RawCase> build_cases() {
 	return {
@@ -398,6 +484,45 @@ static std::vector<RawCase> build_cases() {
 		{"T14: Long tx (pg_sleep 1.2)", "TXN_LONG", "",
 		 {"BEGIN", "SELECT pg_sleep(1.2)"},
 		 {'T','T'}, ""},
+
+		// -------------------------------------------------------------------
+		// EXTENDED-PROTOCOL transaction cases (regression for the native-mode
+		// double-registration of the explicit-txn tracker). BEGIN/work/COMMIT
+		// sent via the extended protocol — the shape `pgbench -M prepared`
+		// uses and the exact trigger of the per-COMMIT "no transaction in
+		// progress" warning storm. Every case asserts, in addition to txn-
+		// status ('T' between BEGIN and COMMIT) and DML parity: ZERO native
+		// explicit-txn-tracker warnings in the native window (folded into
+		// result_match via scan_native_window()).
+		// -------------------------------------------------------------------
+
+		// E0: extended (PQexecParams) BEGIN; SELECT; COMMIT.
+		{"E0: [ext-params] BEGIN; SELECT 1; COMMIT", "TXN_EXT_CYCLE", "",
+		 {"BEGIN", "SELECT 1", "COMMIT"},
+		 {'T','T','I'}, "", EXEC_EXT_PARAMS},
+		// E1: extended (PQexecParams) BEGIN; INSERT; COMMIT (row persists).
+		{"E1: [ext-params] BEGIN; INSERT; COMMIT", "TXN_EXT_COMMIT",
+		 "CREATE TABLE {T} (id int, name text)",
+		 {"BEGIN", "INSERT INTO {T} VALUES (1, 'a')", "COMMIT"},
+		 {'T','T','I'}, "SELECT count(*) FROM {T}", EXEC_EXT_PARAMS},
+		// E2: extended (PQexecParams) empty tx: BEGIN; COMMIT.
+		{"E2: [ext-params] Empty tx: BEGIN; COMMIT", "TXN_EXT_EMPTY", "",
+		 {"BEGIN", "COMMIT"},
+		 {'T','I'}, "", EXEC_EXT_PARAMS},
+		// E3: PREPARED (PQprepare + PQexecPrepared) BEGIN/work/END — the exact
+		// pgbench -M prepared shape (END is a COMMIT synonym).
+		{"E3: [ext-prepared] BEGIN; INSERT; END", "TXN_EXT_PREPARED",
+		 "CREATE TABLE {T} (id int, name text)",
+		 {"BEGIN", "INSERT INTO {T} VALUES (7, 'g')", "END"},
+		 {'T','T','I'}, "SELECT count(*) FROM {T}", EXEC_EXT_PREPARED},
+		// E4: PREPARED three cycles on one connection — stresses per-cycle
+		// register/clear so a single stray double-fire is caught.
+		{"E4: [ext-prepared] 3 cycles BEGIN/INSERT/COMMIT", "TXN_EXT_REUSE",
+		 "CREATE TABLE {T} (id int, name text)",
+		 {"BEGIN", "INSERT INTO {T} VALUES (1,'a')", "COMMIT",
+		  "BEGIN", "INSERT INTO {T} VALUES (2,'b')", "COMMIT",
+		  "BEGIN", "INSERT INTO {T} VALUES (3,'c')", "COMMIT"},
+		 {'T','T','I','T','T','I','T','T','I'}, "SELECT count(*) FROM {T}", EXEC_EXT_PREPARED},
 	};
 }
 
@@ -437,6 +562,7 @@ int main(int /*argc*/, char** /*argv*/) {
 		tc.queries = raw.queries;  // run_case substitutes {T}
 		tc.expected_states = raw.exp_states;
 		tc.verify = raw.verify;     // run_case substitutes {T}
+		tc.mode = raw.mode;
 		CaseResult cr = run_case(admin.get(), tc, saved);
 		cov.record({tc.label, tc.kind, cr.result_match, !cr.fell_back, cr.detail});
 	}
