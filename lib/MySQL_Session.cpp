@@ -4883,10 +4883,18 @@ void MySQL_Session::handler_rc0_PROCESSING_STMT_EXECUTE(MySQL_Data_Stream *myds)
 				(buffer_type == MYSQL_TYPE_DATETIME)
 			) {
 				free(CurrentQuery.stmt_meta->binds[i].buffer);
-				// NOTE: This memory should be zeroed during initialization,
-				// but we also nullify it here for extra safety. See #3546.
-				CurrentQuery.stmt_meta->binds[i].buffer = NULL;
 			}
+			// The stmt_execute_metadata_t is cached in sess_STMTs_meta and reused
+			// across executes. For every non-TIME parameter, binds[i].buffer does
+			// NOT own memory: it aliases either the STMT_EXECUTE packet just freed
+			// above (stmt_meta->pkt) or an SLDH long-data buffer just reset via
+			// SLDH->reset(). Leaving those pointers set makes them dangle until the
+			// next get_binds_from_pkt() re-points them. That re-point normally
+			// happens before use, but when a session spans multiple hostgroups the
+			// STMT_EXECUTE takes the lazy-prepare re-entrant path, opening a window
+			// where the cached, dangling binds can be consumed against freed memory
+			// (issue #5883). Null every buffer here so no dangling alias survives.
+			CurrentQuery.stmt_meta->binds[i].buffer = NULL;
 		}
 	}
 	CurrentQuery.mysql_stmt=NULL;
