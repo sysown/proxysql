@@ -12,10 +12,10 @@
  * No stdout output is required on pass.
  *
  * This is the SP3-Task-1 scaffold: only `connect` is implemented end to
- * end (open -> SELECT 1 -> assert first col == 1 -> close). The other
- * three behaviors are stubbed to reject with "not implemented: <name>" so
- * Task 4 can fill in the function bodies below without restructuring
- * dispatch().
+ * end (open -> SELECT 1 -> assert first col == 1 -> assert client_encoding
+ * is UTF8 -> close). The other three behaviors throw NotImplementedError
+ * (exit 2) so Task 4 can fill in the function bodies below without
+ * restructuring dispatch().
  *
  * Env contract (read, never invent): PGCOMPAT_PROXY_HOST (default
  * "proxysql"), PGCOMPAT_PROXY_PORT (default "6133"); user/pass/db is
@@ -26,13 +26,21 @@
  * node-postgres's ConnectionParameters reads a `client_encoding` key
  * straight off the config object (lib/connection-parameters.js) and, if
  * set, sends it as a startup-packet parameter -- confirmed by inspecting
- * pg@8.13.1's source AND by running `SHOW client_encoding` through this
- * exact stub against the ProxySQL PG frontend, which returned `UTF8`.
- * No post-connect `SET client_encoding` is needed for this driver.
+ * pg@8.13.1's source AND by `SHOW client_encoding` returning `UTF8`
+ * through this exact stub against the ProxySQL PG frontend (the connect
+ * behavior below asserts this on every run). No post-connect
+ * `SET client_encoding` is needed for this driver.
  */
 'use strict';
 
 const { Client } = require('pg');
+
+// Sentinel distinguishing "behavior not yet wired up" (exit 2, infra/usage
+// error) from a genuine assertion failure (exit 1). Stub bodies throw it;
+// dispatch()'s catch checks `instanceof`, so Task 4 replaces a stub body
+// with a real implementation throwing ordinary Errors and gets exit-1
+// semantics automatically -- a pure body-fill, no dispatch changes.
+class NotImplementedError extends Error {}
 
 function clientConfig() {
   return {
@@ -48,7 +56,10 @@ function clientConfig() {
 
 // connect: a fresh connection can run a trivial query. The simplest
 // possible contract -- if this fails, nothing else is meaningful for this
-// driver/target. Mirrors behaviors/connect.py exactly.
+// driver/target. Mirrors behaviors/connect.py, plus an explicit assertion
+// that the client_encoding=UTF8 pin actually took effect (recorded SP-2
+// finding; asserting it here keeps any encoding-pin regression visible in
+// every run).
 async function connect() {
   const client = new Client(clientConfig());
   await client.connect();
@@ -58,6 +69,11 @@ async function connect() {
     if (one !== 1) {
       throw new Error(`SELECT 1 returned ${one}, want 1`);
     }
+    const encRes = await client.query('SHOW client_encoding');
+    const enc = encRes.rows[0].client_encoding;
+    if (enc !== 'UTF8') {
+      throw new Error(`client_encoding is ${JSON.stringify(enc)}, want "UTF8" (config pin did not take effect)`);
+    }
   } finally {
     await client.end();
   }
@@ -65,46 +81,46 @@ async function connect() {
 
 // transactions: filled in by Task 4. Mirrors behaviors/transactions.py.
 async function transactions() {
-  throw new Error('not implemented: transactions');
+  throw new NotImplementedError('not implemented: transactions');
 }
 
 // prepared: filled in by Task 4. Mirrors behaviors/prepared.py.
 async function prepared() {
-  throw new Error('not implemented: prepared');
+  throw new NotImplementedError('not implemented: prepared');
 }
 
 // sessionIsolation: filled in by Task 4. Mirrors behaviors/session_isolation.py.
 async function sessionIsolation() {
-  throw new Error('not implemented: session_isolation');
+  throw new NotImplementedError('not implemented: session_isolation');
 }
 
-const NOT_IMPLEMENTED = new Set(['transactions', 'prepared', 'session_isolation']);
+const BEHAVIOR_FNS = {
+  connect,
+  transactions,
+  prepared,
+  session_isolation: sessionIsolation,
+};
 
 async function dispatch(behavior) {
-  switch (behavior) {
-    case 'connect':
-      await connect();
-      return 0;
-    case 'transactions':
-    case 'prepared':
-    case 'session_isolation': {
-      const fn = { transactions, prepared, session_isolation: sessionIsolation }[behavior];
-      try {
-        await fn();
-      } catch (err) {
-        if (NOT_IMPLEMENTED.has(behavior)) {
-          process.stderr.write(`not implemented: ${behavior}\n`);
-          return 2;
-        }
-        throw err;
-      }
-      // Once Task 4 lands, resolving without throwing means pass.
-      return 0;
-    }
-    default:
-      process.stderr.write(`unknown behavior: ${behavior}\n`);
-      return 2;
+  // hasOwnProperty guard: a prototype-chain key ("constructor", "toString")
+  // must be an unknown behavior, not a callable.
+  const fn = Object.prototype.hasOwnProperty.call(BEHAVIOR_FNS, behavior)
+    ? BEHAVIOR_FNS[behavior] : undefined;
+  if (!fn) {
+    process.stderr.write(`unknown behavior: ${behavior}\n`);
+    return 2;
   }
+  try {
+    await fn();
+  } catch (err) {
+    if (err instanceof NotImplementedError) {
+      process.stderr.write(`${err.message}\n`);
+      return 2;
+    }
+    process.stderr.write(`${err && err.stack ? err.stack : err}\n`);
+    return 1;
+  }
+  return 0;
 }
 
 async function main() {
@@ -113,14 +129,7 @@ async function main() {
     process.stderr.write('usage: behaviors-node <behavior>\n');
     process.exit(2);
   }
-  let code;
-  try {
-    code = await dispatch(args[0]);
-  } catch (err) {
-    process.stderr.write(`${err && err.stack ? err.stack : err}\n`);
-    code = 1;
-  }
-  process.exit(code);
+  process.exit(await dispatch(args[0]));
 }
 
 main();

@@ -17,6 +17,9 @@ RUN javac -cp /pgjdbc.jar Behaviors.java -d /out
 FROM node:22-bookworm-slim AS nodebuild
 WORKDIR /app
 COPY drivers/node/package.json drivers/node/package-lock.json* ./
+# The `npm install` fallback must never be reached in normal operation
+# (package-lock.json is committed, so `npm ci` succeeds); it exists only
+# for first-bootstrap before a lockfile exists.
 RUN npm ci --omit=dev || npm install --omit=dev
 COPY drivers/node/behaviors.js .
 

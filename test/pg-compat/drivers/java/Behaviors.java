@@ -20,7 +20,8 @@ import java.util.Properties;
  * No stdout output is required on pass.
  *
  * This is the SP3-Task-1 scaffold: only {@code connect} is implemented end
- * to end (open -&gt; SELECT 1 -&gt; assert first col == 1 -&gt; close). The
+ * to end (open -&gt; SELECT 1 -&gt; assert first col == 1 -&gt; assert
+ * client_encoding is UTF8 -&gt; close). The
  * other three behaviors are stubbed to exit 2 with "not implemented:
  * &lt;name&gt;" on stderr so Task 3 can fill in the method bodies below
  * without restructuring {@code dispatch()}.
@@ -64,17 +65,31 @@ public class Behaviors {
 
     // connect: a fresh connection can run a trivial query. The simplest
     // possible contract -- if this fails, nothing else is meaningful for
-    // this driver/target. Mirrors behaviors/connect.py exactly.
+    // this driver/target. Mirrors behaviors/connect.py, plus an explicit
+    // assertion that the options=-c client_encoding=UTF8 pin actually took
+    // effect (recorded SP-2 finding; asserting it here keeps any
+    // encoding-pin regression visible in every run).
     private static void connect() throws Exception {
         try (Connection conn = openConnection();
-             Statement st = conn.createStatement();
-             ResultSet rs = st.executeQuery("SELECT 1")) {
-            if (!rs.next()) {
-                throw new AssertionError("SELECT 1 returned no rows");
+             Statement st = conn.createStatement()) {
+            try (ResultSet rs = st.executeQuery("SELECT 1")) {
+                if (!rs.next()) {
+                    throw new AssertionError("SELECT 1 returned no rows");
+                }
+                int one = rs.getInt(1);
+                if (one != 1) {
+                    throw new AssertionError("SELECT 1 returned " + one + ", want 1");
+                }
             }
-            int one = rs.getInt(1);
-            if (one != 1) {
-                throw new AssertionError("SELECT 1 returned " + one + ", want 1");
+            try (ResultSet rs = st.executeQuery("SHOW client_encoding")) {
+                if (!rs.next()) {
+                    throw new AssertionError("SHOW client_encoding returned no rows");
+                }
+                String enc = rs.getString(1);
+                if (!"UTF8".equals(enc)) {
+                    throw new AssertionError("client_encoding is \"" + enc
+                            + "\", want \"UTF8\" (options pin did not take effect)");
+                }
             }
         }
     }
