@@ -2783,6 +2783,12 @@ unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const uns
 	          // every other step the drain suppresses '2' before this call. Marking it
 	          // ACK keeps a Flush-terminated named Bind's sole message a non-empty
 	          // result so PgSQL_Result_to_PgSQL_wire streams it (mirrors '1'/'n'/'s').
+	case '3': // CloseComplete: bare ack, no payload. Only reaches here for a named-
+	          // portal Close (native CLOSE_P step), whose real CloseComplete is forwarded
+	          // to the client rather than synthesized (unnamed Close is synthesized in the
+	          // session and never reaches the backend). Marking it ACK keeps a Flush-
+	          // terminated named Close's sole message a non-empty result so
+	          // PgSQL_Result_to_PgSQL_wire streams it (mirrors '1'/'2'/'n'/'s'). Task P2.
 	case 'n': // NoData (Describe response when the statement returns no rows/columns)
 	case 's': // PortalSuspended (Execute response when max_rows cut the result short)
 		result_packet_type |= PGSQL_QUERY_RESULT_ACK;

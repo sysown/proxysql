@@ -870,7 +870,12 @@ handler_again:
 	case ASYNC_STMT_EXECUTE_START:
 		stmt_execute_start();
 		__sync_fetch_and_add(&parent->queries_sent, 1);
-		update_bytes_sent(query.extended_query_info->bind_msg->get_raw_pkt().size + 5);
+		// bind_msg is NULL for a named-portal Close (native_close_only) — it carries no
+		// Bind bytes — so guard the bytes-sent accounting (Task P2). EXECUTE and BIND
+		// always carry a bind_msg.
+		if (query.extended_query_info->bind_msg) {
+			update_bytes_sent(query.extended_query_info->bind_msg->get_raw_pkt().size + 5);
+		}
 		statuses.questions++;
 		if (async_exit_status) {
 			next_event(ASYNC_STMT_EXECUTE_CONT);
@@ -2813,6 +2818,23 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 					continue;
 				}
 
+				// CloseComplete: forwarded during a named-portal Close (CLOSE_P step).
+				// PostgreSQL emits '3' even when the portal did not exist (Close is
+				// idempotent), so the session evicts the registry entry unconditionally
+				// on success. A Flush-terminated CLOSE_P completes here; a Sync-
+				// terminated one waits for its 'Z' below. Outside a CLOSE_P step '3' is
+				// unexpected in native extq (unnamed Close is synthesized) - forward it
+				// defensively rather than drop it.
+				if (t == '3') {
+					query_result->add_native_backend_message(t, msg.payload, msg.payload_len);
+					if (native_stmt_step == PG_Native_Stmt_Step::CLOSE_P &&
+						!native_stmt_sync_terminated) {
+						native_result_complete = true;
+						return;
+					}
+					continue;
+				}
+
 				// ParseComplete: suppress for implicit prepares (client issued no
 				// Parse), forward for a real client Parse (cache miss). A Flush-
 				// terminated PARSE step completes here; a Sync-terminated one waits
@@ -2908,6 +2930,22 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 						native_describe_row_payload.clear();
 						native_describe_have_row = true;
 						native_describe_no_data = true;
+					}
+				}
+
+				// Named-portal suspend/resume bookkeeping (Task P2): record whether the
+				// EXECUTE step's terminator was 's' (PortalSuspended — max_rows cut the
+				// result short, the portal stays open for a resume Execute) or 'C'/'I'
+				// (the portal ran to completion). Recorded on BOTH flush- and sync-
+				// terminated EXECUTE steps: the terminator byte streams through this
+				// generic section before either completion path (flush completes just
+				// below on 's'/'C'/'I'; sync completes later on 'Z'). Read once by the
+				// session epilogue to mark/clear a NAMED portal's entry.suspended.
+				if (native_stmt_step == PG_Native_Stmt_Step::EXECUTE) {
+					if (t == 's') {
+						native_last_execute_suspended = true;
+					} else if (t == 'C' || t == 'I') {
+						native_last_execute_suspended = false;
 					}
 				}
 
@@ -3147,6 +3185,7 @@ int PgSQL_Connection::async_query(short event, const char* stmt, unsigned long l
 			async_state_machine = ASYNC_QUERY_START;
 		} else {
 			native_bind_only = false;
+			native_close_only = false;
 			if (type == PGSQL_EXTENDED_QUERY_TYPE_PARSE) {
 				async_state_machine = ASYNC_STMT_PREPARE_START;
 			} else if (type == PGSQL_EXTENDED_QUERY_TYPE_DESCRIBE) {
@@ -3159,6 +3198,13 @@ int PgSQL_Connection::async_query(short event, const char* stmt, unsigned long l
 				// BIND distinguish the wire drive and the drain terminator. Task P1.
 				async_state_machine = ASYNC_STMT_EXECUTE_START;
 				native_bind_only = true;
+			} else if (type == PGSQL_EXTENDED_QUERY_TYPE_CLOSE) {
+				// Named-portal Close reuses the EXECUTE state chain the same way BIND
+				// does; native_close_only + native_stmt_step CLOSE_P distinguish the
+				// wire drive (Close('P', portal) only) and the drain terminator '3'
+				// (CloseComplete). Task P2.
+				async_state_machine = ASYNC_STMT_EXECUTE_START;
+				native_close_only = true;
 			} else {
 				assert(0); // should never reach here
 			}
@@ -3752,6 +3798,58 @@ void PgSQL_Connection::stmt_execute_start() {
 		return;
 	}
 
+	if (native_mode && native_close_only) {
+		// Native named-portal Close drive (Task P2): emit ONLY a Close('P', portal) on
+		// the client's named portal, terminated by Flush or Sync per the frame's SYNC
+		// flag. No Bind/Execute. The backend's real CloseComplete '3' is forwarded to
+		// the client (unnamed Close is synthesized locally in the session; only named
+		// Close round-trips). PostgreSQL emits CloseComplete even when the portal does
+		// not exist (Close is idempotent), so the session evicts unconditionally on rc0.
+		native_stmt_reset_step();
+		const PgSQL_Extended_Query_Info* eqi = query.extended_query_info;
+		pg_build_close(native_outbuf, 'P', eqi->stmt_client_portal_name);
+		const bool use_flush =
+			(eqi->flags & PGSQL_EXTENDED_QUERY_FLAG_SYNC) == 0;
+		if (use_flush) {
+			pg_build_flush(native_outbuf);
+		} else {
+			pg_build_sync(native_outbuf);
+		}
+		native_stmt_sync_terminated = !use_flush;
+		native_stmt_step = PG_Native_Stmt_Step::CLOSE_P;
+		native_stmt_send_or_wait();
+		return;
+	}
+
+	if (native_mode &&
+		(query.extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_PORTAL_ALREADY_BOUND) != 0) {
+		// Native named-portal Execute / resume drive (Task P2): the portal is ALREADY
+		// bound on the backend (a prior named Bind registered it), so emit ONLY
+		// Execute(portal, max_rows) — NO Bind. A Describe('P', portal) is folded in
+		// first exactly when the client asked for the portal's RowDescription
+		// (PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL, set by the Describe->Execute peek).
+		// max_rows is honored on the wire for NAMED portals only (the unnamed path below
+		// always emits 0 — invariant 2). A resume Execute after PortalSuspended is just
+		// another Execute on the same portal and takes this same path.
+		native_stmt_reset_step();
+		const PgSQL_Extended_Query_Info* eqi = query.extended_query_info;
+		if ((eqi->flags & PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL) != 0) {
+			pg_build_describe(native_outbuf, 'P', eqi->stmt_client_portal_name);
+		}
+		pg_build_execute(native_outbuf, eqi->stmt_client_portal_name, eqi->max_rows);
+		const bool use_flush =
+			(eqi->flags & PGSQL_EXTENDED_QUERY_FLAG_SYNC) == 0;
+		if (use_flush) {
+			pg_build_flush(native_outbuf);
+		} else {
+			pg_build_sync(native_outbuf);
+		}
+		native_stmt_sync_terminated = !use_flush;
+		native_stmt_step = PG_Native_Stmt_Step::EXECUTE;
+		native_stmt_send_or_wait();
+		return;
+	}
+
 	if (native_mode) {
 		// Native Execute drive (Task C): Bind [+ Describe('P')] + Execute + Flush/Sync
 		// on the unnamed portal. Decodes the client's Bind params from the SAME parsed
@@ -3863,11 +3961,12 @@ void PgSQL_Connection::stmt_execute_start() {
 	// aborting. In a stable native-only deployment every backend conn is native and
 	// this branch is never taken; it is a reachable operational edge, NOT a programming
 	// error, so it must NOT assert.
-	if (native_bind_only) {
+	if (native_bind_only || native_close_only) {
 		set_error(PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
 			"named portals require the native backend protocol", false);
-		proxy_warning("native named-portal Bind dispatched onto a libpq-mode backend connection "
-			"(use_native_backend_protocol flipped with a warm pool); rejecting on fd=%d\n", fd);
+		proxy_warning("native named-portal %s dispatched onto a libpq-mode backend connection "
+			"(use_native_backend_protocol flipped with a warm pool); rejecting on fd=%d\n",
+			native_close_only ? "Close" : "Bind", fd);
 		return;
 	}
 

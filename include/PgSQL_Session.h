@@ -130,6 +130,11 @@ enum PgSQL_Extended_Query_Flags : uint8_t {
 	PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL	= 0x01,
 	PGSQL_EXTENDED_QUERY_FLAG_SYNC				= 0x02,
 	PGSQL_EXTENDED_QUERY_FLAG_IMPLICIT_PREPARE  = 0x04,
+	// Named-portal Execute/resume (Task P2): the portal is ALREADY bound on the
+	// backend (a prior named Bind registered it), so the native Execute drive emits
+	// ONLY Execute(portal, max_rows) (+ a folded Describe('P', portal) iff requested),
+	// NOT a fresh Bind. Native-mode + named-portal only.
+	PGSQL_EXTENDED_QUERY_FLAG_PORTAL_ALREADY_BOUND = 0x08,
 };
 
 enum ExtendedQueryPhase : uint8_t {
@@ -156,6 +161,10 @@ struct PgSQL_Extended_Query_Info {
 	const PgSQL_STMT_Global_info* stmt_info;
 	uint64_t stmt_global_id;
 	uint32_t stmt_backend_id;
+	// Row limit for an Execute. Honored on the wire ONLY for NAMED portals
+	// (PGSQL_EXTENDED_QUERY_FLAG_PORTAL_ALREADY_BOUND); the unnamed portal always
+	// emits max_rows 0 (invariant 2 — inherited libpq-parity behavior). Task P2.
+	uint32_t max_rows;
 	uint8_t stmt_type;
 	uint8_t flags;
 	Parse_Param_Types parse_param_types;
@@ -261,6 +270,10 @@ private:
 		std::shared_ptr<const PgSQL_STMT_Global_info> stmt_info;
 		bool active = false;
 	} pending_named_bind;
+	// Portal name of an in-flight named Close('P') round-trip (PROCESSING_STMT_CLOSE):
+	// set before dispatch, consumed by the rc0 epilogue to evict the registry entry
+	// once the backend's CloseComplete '3' is forwarded. Task P2.
+	std::string closing_portal_name;
 	// Discard all named portals (backend already destroyed them at txn end).
 	void clear_named_portals();
 	// Move the in-flight named Bind into named_portals, marked bound_on_backend.

@@ -708,13 +708,28 @@ public:
 	// stmt_prepare_start / stmt_describe_start / stmt_execute_start, consumed by
 	// native_fetch_result_cont() to apply the per-step terminator + ack-filtering
 	// rules. Reset to NONE alongside native_result_complete at each stmt start.
-	enum class PG_Native_Stmt_Step { NONE, PARSE, DESCRIBE_S, DESCRIBE_P, EXECUTE, BIND };
+	// APPEND-ONLY (values are compared by the drain/ack-filter; a mid-list insert
+	// would silently reclassify steps in any translation unit not recompiled). CLOSE_P
+	// (Task P2) drives a real backend Close('P', name) round-trip whose CloseComplete
+	// '3' is forwarded to the client.
+	enum class PG_Native_Stmt_Step { NONE, PARSE, DESCRIBE_S, DESCRIBE_P, EXECUTE, BIND, CLOSE_P };
 	PG_Native_Stmt_Step native_stmt_step = PG_Native_Stmt_Step::NONE;
 	// True when the current ASYNC_STMT_EXECUTE_* dispatch is actually a named-portal
 	// Bind (PGSQL_EXTENDED_QUERY_TYPE_BIND), so stmt_execute_start() emits a Bind-only
 	// frame (no Execute) and the drain forwards the real BindComplete. Set per-dispatch
 	// in async_query(); read once at stmt_execute_start(). Task P1.
 	bool native_bind_only = false;
+	// True when the current ASYNC_STMT_EXECUTE_* dispatch is actually a named-portal
+	// Close (PGSQL_EXTENDED_QUERY_TYPE_CLOSE), so stmt_execute_start() emits a
+	// Close('P', portal)-only frame (no Bind/Execute) and the drain forwards the real
+	// CloseComplete '3'. Set per-dispatch in async_query(); read once at
+	// stmt_execute_start(). Task P2.
+	bool native_close_only = false;
+	// Set by the drain when a native EXECUTE step's terminator was 's' (PortalSuspended
+	// — max_rows cut the result short); cleared when it was 'C'/'I' (the portal ran to
+	// completion). Read once by the session epilogue to mark/clear a NAMED portal's
+	// entry.suspended for resume. Reset at each native stmt start. Task P2.
+	bool native_last_execute_suspended = false;
 	// True when the step was terminated on the wire with Sync (so it completes on the
 	// backend's ReadyForQuery 'Z'); false when terminated with Flush (completes on the
 	// step's own terminator: '1' for PARSE, 'T'|'n' for DESCRIBE, 'C'|'I'|'s' for
@@ -757,6 +772,7 @@ public:
 		native_result_complete = false;
 		native_copy_intercepted = false;
 		native_stmt_step = PG_Native_Stmt_Step::NONE;
+		native_last_execute_suspended = false;
 		native_stmt_sync_terminated = false;
 		native_suppress_parse_complete = false;
 		native_stmt_error_resync = false;
