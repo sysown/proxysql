@@ -385,6 +385,7 @@ test_ffto_pgsql_pipeline-t: test_ffto_pgsql_pipeline-t.cpp pg_lite_client.cpp $(
 test_ffto_pgsql_stmt_portal-t: test_ffto_pgsql_stmt_portal-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 
+# -lscram/-lusual: pg_lite_client.cpp uses libscram client SCRAM; --allow-multiple-definition resolves duplicate symbols between libscram/libusual and other vendored static libs (test binaries only).
 pgsql-auth_method_matrix-t: pgsql-auth_method_matrix-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual -Wl,--allow-multiple-definition -o $@
 

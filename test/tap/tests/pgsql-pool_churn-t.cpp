@@ -2,6 +2,7 @@
 #include <sstream>
 #include <vector>
 #include <memory>
+#include <utility>
 #include <unistd.h>
 #include "libpq-fe.h"
 #include <mysql.h>          // admin interface is reached via the MySQL client
@@ -57,6 +58,21 @@ static std::string admin_scalar(MYSQL* a, const char* q) {
 	return v;
 }
 
+// Fetch the first two columns of every row (used to snapshot per-hostgroup config).
+static std::vector<std::pair<std::string, std::string>> admin_rows2(MYSQL* a, const char* q) {
+	std::vector<std::pair<std::string, std::string>> out;
+	if (mysql_query(a, q)) { diag("admin query failed: '%s' : %s", q, mysql_error(a)); return out; }
+	MYSQL_RES* r = mysql_store_result(a);
+	if (r) {
+		MYSQL_ROW row;
+		while ((row = mysql_fetch_row(r))) {
+			out.emplace_back(row[0] ? row[0] : "", row[1] ? row[1] : "");
+		}
+		mysql_free_result(r);
+	}
+	return out;
+}
+
 int main(int argc, char** argv) {
 	if (cl.getEnv()) return exit_status();
 	plan(3);
@@ -93,11 +109,15 @@ int main(int argc, char** argv) {
 	// ---------------------------------------------------------------------------
 
 	// Snapshot originals so we can restore regardless of assertion outcome.
-	std::string orig_maxconn = admin_scalar(admin,
-		"SELECT max_connections FROM pgsql_servers ORDER BY hostgroup_id LIMIT 1");
+	// Snapshot max_connections PER-HOSTGROUP so the restore is correct regardless
+	// of the infra seed: a blanket single-value restore would silently flatten
+	// distinct per-hostgroup values and corrupt the shared CI infra for later
+	// tests. free_connections_pct is a single global variable, so a scalar
+	// snapshot/restore is correct for it.
+	std::vector<std::pair<std::string, std::string>> orig_maxconn = admin_rows2(admin,
+		"SELECT hostgroup_id, max_connections FROM pgsql_servers ORDER BY hostgroup_id");
 	std::string orig_free_pct = admin_scalar(admin,
 		"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-free_connections_pct'");
-	if (orig_maxconn.empty())  orig_maxconn  = "50"; // fall back to the infra default
 	if (orig_free_pct.empty()) orig_free_pct = "10"; // documented default
 
 	// Cap the pool to a single backend and keep no clean spares.
@@ -131,8 +151,20 @@ int main(int argc, char** argv) {
 	}
 
 	// Restore pool config BEFORE the storm and before returning, so the infra is
-	// left at its originals even if an assertion above failed.
-	admin_exec(admin, (std::string("UPDATE pgsql_servers SET max_connections=") + orig_maxconn).c_str());
+	// left at its originals even if an assertion above failed. Restore EACH
+	// hostgroup to its own snapshotted value (never a blanket single-value
+	// UPDATE) so distinct per-hostgroup seeds are preserved.
+	if (orig_maxconn.empty()) {
+		// Snapshot failed for some reason: fall back to the infra default rather
+		// than leaving the cap in place.
+		admin_exec(admin, "UPDATE pgsql_servers SET max_connections=50");
+	} else {
+		for (const auto& row : orig_maxconn) {
+			std::string q = "UPDATE pgsql_servers SET max_connections=" + row.second +
+			                " WHERE hostgroup_id=" + row.first;
+			admin_exec(admin, q.c_str());
+		}
+	}
 	admin_exec(admin, "LOAD PGSQL SERVERS TO RUNTIME");
 	admin_exec(admin, (std::string("SET pgsql-free_connections_pct=") + orig_free_pct).c_str());
 	admin_exec(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
