@@ -3961,12 +3961,21 @@ void PgSQL_Connection::stmt_execute_start() {
 	// aborting. In a stable native-only deployment every backend conn is native and
 	// this branch is never taken; it is a reachable operational edge, NOT a programming
 	// error, so it must NOT assert.
-	if (native_bind_only || native_close_only) {
+	// A named Execute / resume (PORTAL_ALREADY_BOUND) is likewise native-only: its
+	// native drive branch above is gated on native_mode, so on a libpq-mode backend
+	// connection (flag flipped with a warm pool) it would otherwise fall through to
+	// the libpq Bind+Execute path below and silently re-Bind the unnamed portal with
+	// the registry's stashed params — wrong semantics. Reject symmetrically with the
+	// Bind/Close paths (defensive; unreachable in a stable native-only deployment).
+	const bool named_execute_only =
+		query.extended_query_info != nullptr &&
+		(query.extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_PORTAL_ALREADY_BOUND) != 0;
+	if (native_bind_only || native_close_only || named_execute_only) {
 		set_error(PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
 			"named portals require the native backend protocol", false);
 		proxy_warning("native named-portal %s dispatched onto a libpq-mode backend connection "
 			"(use_native_backend_protocol flipped with a warm pool); rejecting on fd=%d\n",
-			native_close_only ? "Close" : "Bind", fd);
+			native_close_only ? "Close" : (named_execute_only ? "Execute" : "Bind"), fd);
 		return;
 	}
 

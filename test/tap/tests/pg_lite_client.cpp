@@ -6,6 +6,14 @@
 #include "pg_lite_client.h"
 #include <netdb.h>
 #include <fcntl.h>
+#ifdef PG_LITE_CLIENT_SCRAM
+// SCRAM-SHA-256 client support for direct-to-backend connections (pg_hba
+// scram-sha-256). Enabled only by test rules that pass -DPG_LITE_CLIENT_SCRAM
+// and link -lscram -lusual; other tests that share pg_lite_client.cpp compile
+// this file without the flag and never pull the pg_scram_* symbols from
+// libproxysql.a, so their link lines need no scram libraries.
+#include "PgSQL_Backend_Protocol.h"
+#endif
 #include <sstream>
 #include <iomanip>
 #include <stdexcept>
@@ -297,6 +305,17 @@ void PgConnection::handleAuthentication(const std::string& password) {
     char type;
     std::vector<uint8_t> buffer;
 
+#ifdef PG_LITE_CLIENT_SCRAM
+    // The SCRAM state persists across the multi-round SASL handshake (10 -> 11 ->
+    // 12 -> 0). RAII-freed on every exit path (throw or return) so a mid-handshake
+    // failure cannot leak the libscram state.
+    PgSQL_Scram_State* scram = nullptr;
+    struct ScramGuard {
+        PgSQL_Scram_State** s;
+        ~ScramGuard() { if (*s) pg_scram_free(*s); }
+    } scram_guard{&scram};
+#endif
+
     while (true) {
         readMessage(type, buffer);
 
@@ -315,6 +334,61 @@ void PgConnection::handleAuthentication(const std::string& password) {
                     if (authType == 0) return;
                 }
             }
+#ifdef PG_LITE_CLIENT_SCRAM
+            else if (authType == 10) {  // AuthenticationSASL: NUL-terminated mechanism list
+                // Body after the int32 auth code: "SCRAM-SHA-256\0[SCRAM-SHA-256-PLUS\0]\0".
+                // This client only does plain SCRAM-SHA-256 (no channel binding), matching
+                // pg_scram_client_first(..., channel_binding=false)'s "n,," gs2 header.
+                bool has_scram = false;
+                size_t i = 4;
+                while (i < buffer.size() && buffer[i] != 0) {
+                    const char* mech = reinterpret_cast<const char*>(buffer.data() + i);
+                    size_t mlen = strnlen(mech, buffer.size() - i);
+                    if (mlen == strlen("SCRAM-SHA-256") &&
+                        memcmp(mech, "SCRAM-SHA-256", mlen) == 0) has_scram = true;
+                    i += mlen + 1;
+                }
+                if (!has_scram) throw PgException("Server did not offer plain SCRAM-SHA-256");
+                if (scram) { pg_scram_free(scram); scram = nullptr; }
+                scram = pg_scram_new();
+                if (scram == nullptr) throw PgException("pg_scram_new failed");
+                const char* client_first = pg_scram_client_first(scram, /*channel_binding=*/false);
+                if (client_first == nullptr) throw PgException("pg_scram_client_first failed");
+                // SASLInitialResponse body: mechname\0 + int32(client-first length) + client-first.
+                const char* mechname = "SCRAM-SHA-256";
+                uint32_t cflen = static_cast<uint32_t>(strlen(client_first));
+                std::vector<uint8_t> body;
+                body.insert(body.end(),
+                    reinterpret_cast<const uint8_t*>(mechname),
+                    reinterpret_cast<const uint8_t*>(mechname) + strlen(mechname) + 1);  // include NUL
+                writeInt32ToBuffer(body, static_cast<int32_t>(cflen));  // big-endian
+                body.insert(body.end(),
+                    reinterpret_cast<const uint8_t*>(client_first),
+                    reinterpret_cast<const uint8_t*>(client_first) + cflen);
+                sendMessage('p', body);
+            }
+            else if (authType == 11) {  // AuthenticationSASLContinue: server-first message
+                if (scram == nullptr) throw PgException("unexpected AuthenticationSASLContinue");
+                std::string server_first(reinterpret_cast<const char*>(buffer.data() + 4),
+                                         buffer.size() - 4);
+                const char* client_final = pg_scram_client_final(
+                    scram, password.c_str(), server_first.data(), server_first.size());
+                if (client_final == nullptr) throw PgException("pg_scram_client_final failed");
+                // SASLResponse body: the raw client-final message (with proof).
+                std::vector<uint8_t> body(
+                    reinterpret_cast<const uint8_t*>(client_final),
+                    reinterpret_cast<const uint8_t*>(client_final) + strlen(client_final));
+                sendMessage('p', body);
+            }
+            else if (authType == 12) {  // AuthenticationSASLFinal: server-final message
+                if (scram == nullptr) throw PgException("unexpected AuthenticationSASLFinal");
+                std::string server_final(reinterpret_cast<const char*>(buffer.data() + 4),
+                                         buffer.size() - 4);
+                if (!pg_scram_verify_server_final(scram, server_final.data(), server_final.size()))
+                    throw PgException("SCRAM server signature verification failed");
+                // AuthenticationOk (R,0) follows; keep looping to consume it.
+            }
+#endif
             else {
                 throw PgException("Unsupported authentication method: " + std::to_string(authType));
             }

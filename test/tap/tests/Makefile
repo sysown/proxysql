@@ -359,6 +359,14 @@ test_ffto_pgsql_pipeline-t: test_ffto_pgsql_pipeline-t.cpp pg_lite_client.cpp $(
 test_ffto_pgsql_stmt_portal-t: test_ffto_pgsql_stmt_portal-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 
+# Named-portal raw-wire differential test. pg_lite_client is compiled with
+# -DPG_LITE_CLIENT_SCRAM so the client can SCRAM-SHA-256 authenticate directly
+# to the backend (pg_hba scram-sha-256) using the in-tree pg_scram_* wrappers
+# from libproxysql.a — which pull vendored libscram/libusual, hence -lscram
+# -lusual (galera-rule precedent at :204/:207).
+pgsql-native_portals-t: pgsql-native_portals-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
+	$(CXX) -DPG_LITE_CLIENT_SCRAM $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual -o $@
+
 
 MYSQLX_PROTO_DIR := $(PROXYSQL_PATH)/plugins/mysqlx/proto
 MYSQLX_PROTO_SRCS := $(wildcard $(MYSQLX_PROTO_DIR)/*.pb.cc)
