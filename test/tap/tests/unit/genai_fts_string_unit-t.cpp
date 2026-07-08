@@ -12,7 +12,7 @@
  * These are private instance methods but do not access the database,
  * so we use the private-to-public trick to test them directly.
  *
- * Requires: PROXYSQLGENAI=1 build
+ * Requires: PROXYSQL40=1 build (includes genai plugin)
  */
 
 #ifdef PROXYSQL40

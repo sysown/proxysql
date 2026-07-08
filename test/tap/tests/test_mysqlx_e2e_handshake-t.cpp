@@ -127,21 +127,33 @@ static bool send_capabilities_set_mysql41(int fd) {
 	return mysqlx_write_all(fd, frame.data(), frame.size());
 }
 
-static bool send_auth_start(int fd, const std::string& user) {
+static bool send_auth_start(int fd, const std::string& /*user*/) {
 	Mysqlx::Session::AuthenticateStart auth;
 	auth.set_mech_name("MYSQL41");
-	// auth_data is `bytes` (std::string) in the current protobuf; pass the
-	// user name raw.
-	auth.set_auth_data(user);
+	// MYSQL41 AuthenticateStart carries an empty auth_data; the user
+	// identity arrives later inside AuthenticateContinue's response
+	// payload (schema\0user\0*hex_scramble).
 	std::string s;
 	if (!auth.SerializeToString(&s)) return false;
 	auto frame = mysqlx_build_frame(MSG_SESS_AUTH_START, s);
 	return mysqlx_write_all(fd, frame.data(), frame.size());
 }
 
-static bool send_auth_continue(int fd, const std::string& hex_scramble) {
+// MYSQL41 response format on AuthenticateContinue:
+//   schema NUL user NUL '*' hex(scramble)
+// (matches xpl::Sasl_mysql41_auth::handle_continue in the X Plugin).
+// An empty schema is fine.
+static bool send_auth_continue(int fd, const std::string& user,
+                               const std::string& hex_scramble) {
+	std::string payload;
+	payload.push_back('\0');                  // empty schema
+	payload.append(user);
+	payload.push_back('\0');
+	payload.push_back('*');
+	payload.append(hex_scramble);
+
 	Mysqlx::Session::AuthenticateContinue cont;
-	cont.set_auth_data(hex_scramble);
+	cont.set_auth_data(payload);
 	std::string s;
 	if (!cont.SerializeToString(&s)) return false;
 	auto frame = mysqlx_build_frame(MSG_SESS_AUTH_CONTINUE, s);
@@ -165,12 +177,9 @@ struct E2EConfig {
 };
 
 static bool full_handshake(int fd, const E2EConfig& cfg) {
-	{
-		MysqlxFrameHeader hdr {};
-		std::vector<uint8_t> payload;
-		if (!mysqlx_read_frame(fd, hdr, payload)) return false;
-	}
-
+	// X Protocol does not send an unsolicited Capabilities frame on TCP
+	// connect; the client drives every exchange. The first server frame
+	// arrives only after we send CapabilitiesGet.
 	if (!send_capabilities_get(fd)) return false;
 	{
 		MysqlxFrameHeader hdr {};
@@ -178,14 +187,10 @@ static bool full_handshake(int fd, const E2EConfig& cfg) {
 		if (!read_frame_skip_notices(fd, hdr, payload)) return false;
 	}
 
-	if (!send_capabilities_set_mysql41(fd)) return false;
-	{
-		MysqlxFrameHeader hdr {};
-		std::vector<uint8_t> payload;
-		if (!read_frame_skip_notices(fd, hdr, payload)) return false;
-		if (hdr.message_type == MSG_SRV_ERROR) return false;
-	}
-
+	// NOTE: authentication.mechanisms is a READ-ONLY capability — the
+	// server rejects CapabilitiesSet for it (error 5001). The auth
+	// method is chosen via AuthenticateStart.mech_name, not Capabilities,
+	// so we skip the CapabilitiesSet step here.
 	if (!send_auth_start(fd, cfg.user)) return false;
 
 	std::vector<uint8_t> challenge;
@@ -199,13 +204,14 @@ static bool full_handshake(int fd, const E2EConfig& cfg) {
 		if (!cont.ParseFromArray(payload.data(), static_cast<int>(payload.size())))
 			return false;
 		if (!cont.has_auth_data()) return false;
-		std::string challenge_hex = cont.auth_data();
-		if (!mysqlx_hex_decode(challenge_hex, challenge)) return false;
+		// auth_data here is the raw 20-byte challenge -- not hex-encoded.
+		const std::string& raw = cont.auth_data();
+		challenge.assign(raw.begin(), raw.end());
 	}
 
 	auto scramble = mysqlx_mysql41_scramble(challenge, cfg.pass);
 	std::string hex_scramble = mysqlx_hex_encode(scramble);
-	if (!send_auth_continue(fd, hex_scramble)) return false;
+	if (!send_auth_continue(fd, cfg.user, hex_scramble)) return false;
 	{
 		MysqlxFrameHeader hdr {};
 		std::vector<uint8_t> payload;
@@ -223,8 +229,12 @@ int main() {
 	E2EConfig cfg;
 	const char* host_env = std::getenv("MYSQLX_E2E_HOST");
 	if (!host_env) {
-		skip_all("MYSQLX_E2E_HOST not set; skipping E2E handshake test");
-		return exit_status();
+		// Group setup bug: test/tap/groups/mysqlx-e2e/env.sh defines
+		// MYSQLX_E2E_HOST=127.0.0.1 and CI-mysqlx.yml's e2e-tests job
+		// sources it. If the var is missing at runtime the harness did
+		// not source the env file — fail loud so the gap is fixed, not
+		// silently hide the regression as the previous skip_all did.
+		BAIL_OUT("MYSQLX_E2E_HOST not set — group env (test/tap/groups/mysqlx-e2e/env.sh) was not sourced before invoking this test");
 	}
 	cfg.host = host_env;
 	cfg.port = static_cast<uint16_t>(
@@ -241,22 +251,26 @@ int main() {
 		if (fd >= 0) close(fd);
 	}
 
-	// Test 2: Read server Capabilities frame succeeds
+	// Test 2: Send CapabilitiesGet -- server replies with Capabilities frame
 	{
 		int fd = tcp_connect(cfg.host, cfg.port);
 		if (fd < 0) {
 			ok(false, "connect failed for capabilities test");
 		} else {
+			bool sent = send_capabilities_get(fd);
 			MysqlxFrameHeader hdr {};
 			std::vector<uint8_t> payload;
-			bool rc = mysqlx_read_frame(fd, hdr, payload);
+			bool rc = sent && read_frame_skip_notices(fd, hdr, payload);
 			ok(rc && hdr.message_type == MSG_SRV_CAPABILITIES,
-			   "Read server Capabilities frame succeeds");
+			   "Send CapabilitiesGet -- read Capabilities frame");
 			close(fd);
 		}
 	}
 
-	// Test 3: Send CapabilitiesSet with MYSQL41 -- read Ok response
+	// Test 3: CapabilitiesSet on authentication.mechanisms is rejected
+	// (it's a read-only capability; the server returns an Error). This
+	// documents real server behavior: the auth method is chosen via
+	// AuthenticateStart.mech_name, never via CapabilitiesSet.
 	{
 		int fd = tcp_connect(cfg.host, cfg.port);
 		if (fd < 0) {
@@ -264,15 +278,14 @@ int main() {
 		} else {
 			MysqlxFrameHeader hdr {};
 			std::vector<uint8_t> payload;
-			mysqlx_read_frame(fd, hdr, payload);
 
 			send_capabilities_get(fd);
 			read_frame_skip_notices(fd, hdr, payload);
 
 			send_capabilities_set_mysql41(fd);
 			bool rc = read_frame_skip_notices(fd, hdr, payload);
-			ok(rc && hdr.message_type == MSG_SRV_OK,
-			   "Send CapabilitiesSet with MYSQL41 -- read Ok response");
+			ok(rc && hdr.message_type == MSG_SRV_ERROR,
+			   "Send CapabilitiesSet(authentication.mechanisms) -- server returns Error (read-only cap)");
 			close(fd);
 		}
 	}
@@ -285,10 +298,7 @@ int main() {
 		} else {
 			MysqlxFrameHeader hdr {};
 			std::vector<uint8_t> payload;
-			mysqlx_read_frame(fd, hdr, payload);
 			send_capabilities_get(fd);
-			read_frame_skip_notices(fd, hdr, payload);
-			send_capabilities_set_mysql41(fd);
 			read_frame_skip_notices(fd, hdr, payload);
 			send_auth_start(fd, cfg.user);
 			bool rc = read_frame_skip_notices(fd, hdr, payload);
@@ -306,10 +316,7 @@ int main() {
 		} else {
 			MysqlxFrameHeader hdr {};
 			std::vector<uint8_t> payload;
-			mysqlx_read_frame(fd, hdr, payload);
 			send_capabilities_get(fd);
-			read_frame_skip_notices(fd, hdr, payload);
-			send_capabilities_set_mysql41(fd);
 			read_frame_skip_notices(fd, hdr, payload);
 			send_auth_start(fd, cfg.user);
 
@@ -317,12 +324,12 @@ int main() {
 			read_frame_skip_notices(fd, hdr, payload);
 			Mysqlx::Session::AuthenticateContinue cont;
 			cont.ParseFromArray(payload.data(), static_cast<int>(payload.size()));
-			std::string chex = cont.auth_data();
-			mysqlx_hex_decode(chex, challenge);
+			const std::string& raw = cont.auth_data();
+			challenge.assign(raw.begin(), raw.end());
 
 			auto scramble = mysqlx_mysql41_scramble(challenge, cfg.pass);
 			std::string hex_scramble = mysqlx_hex_encode(scramble);
-			send_auth_continue(fd, hex_scramble);
+			send_auth_continue(fd, cfg.user, hex_scramble);
 			bool rc = read_frame_skip_notices(fd, hdr, payload);
 			ok(rc && hdr.message_type == MSG_SRV_AUTH_OK,
 			   "Send AuthContinue with correct scramble -- read AuthenticateOk");
@@ -377,17 +384,14 @@ int main() {
 		} else {
 			MysqlxFrameHeader hdr {};
 			std::vector<uint8_t> payload;
-			mysqlx_read_frame(fd, hdr, payload);
 			send_capabilities_get(fd);
-			read_frame_skip_notices(fd, hdr, payload);
-			send_capabilities_set_mysql41(fd);
 			read_frame_skip_notices(fd, hdr, payload);
 			send_auth_start(fd, cfg.user);
 			read_frame_skip_notices(fd, hdr, payload);
 
 			std::vector<uint8_t> zero_scramble(20, 0);
 			std::string hex_zero = mysqlx_hex_encode(zero_scramble);
-			send_auth_continue(fd, hex_zero);
+			send_auth_continue(fd, cfg.user, hex_zero);
 			bool rc = read_frame_skip_notices(fd, hdr, payload);
 			ok(!rc || hdr.message_type == MSG_SRV_ERROR,
 			   "Empty scramble (20 zero bytes) -- handshake fails");

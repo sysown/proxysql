@@ -1,18 +1,20 @@
 #include "mysqlx_connection.h"
 #include "mysqlx_protocol.h"
+#include "proxysql.h"
+#include "proxysql_debug.h"
 
 #include "mysqlx.pb.h"
 #include "mysqlx_connection.pb.h"
 #include "mysqlx_session.pb.h"
 #include "mysqlx_datatypes.pb.h"
 #include "mysqlx_notice.pb.h"
-
-#include <cstdio>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 #include <cerrno>
 #include <cstring>
 #include <chrono>
@@ -82,28 +84,47 @@ void MysqlxConnection::reset() {
 int MysqlxConnection::start_connect(const char* host, int port) {
 	connect_start_time_ = std::chrono::duration_cast<std::chrono::milliseconds>(
 		std::chrono::steady_clock::now().time_since_epoch()).count();
-	fd_ = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+	fd_ = socket(AF_INET, SOCK_STREAM, 0);
 	if (fd_ < 0) { state_ = ERROR_STATE; return -1; }
+	int flags = fcntl(fd_, F_GETFL, 0);
+	if (flags < 0 || fcntl(fd_, F_SETFL, flags | O_NONBLOCK) < 0) {
+		close(fd_);
+		fd_ = -1;
+		state_ = ERROR_STATE;
+		return -1;
+	}
 	int flag = 1;
 	setsockopt(fd_, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 	struct sockaddr_in addr;
 	memset(&addr, 0, sizeof(addr));
 	addr.sin_family = AF_INET;
 	addr.sin_port = htons(port);
-	// Reject anything that isn't an IPv4 dotted-quad. Previously the
-	// return value was discarded and inet_pton on a hostname (or empty
-	// string, or "::1", or anything else) silently left sin_addr at
-	// 0.0.0.0, producing a connect to localhost-or-INADDR_ANY-equivalent
-	// — a real footgun because mysqlx_backend_endpoints.hostname accepts
-	// arbitrary strings. Hostnames are not supported here; the upstream
-	// path is expected to have already resolved them. Failing fast with
-	// ERROR_STATE surfaces the misconfig instead of silently routing
-	// traffic to the wrong target.
-	if (inet_pton(AF_INET, host ? host : "", &addr.sin_addr) != 1) {
-		close(fd_);
-		fd_ = -1;
-		state_ = ERROR_STATE;
-		return -1;
+	// Resolve `host` to an IPv4 address. Operators routinely populate
+	// mysqlx_backend_endpoints.hostname with DNS names (the standard
+	// docker-compose / Kubernetes pattern), so an IPv4-only inet_pton
+	// rejected every realistic backend and the session emitted 2003 for
+	// every first query — that is the failure mode behind the soak
+	// harness "Can't connect to backend" reports against the bind-mounted
+	// mysqlx plugin. inet_pton is still tried first so an already-resolved
+	// dotted-quad short-circuits the DNS roundtrip; only on miss do we
+	// fall back to getaddrinfo. Anything unresolvable still fails
+	// ERROR_STATE rather than silently routing to 0.0.0.0.
+	const char* host_in = host ? host : "";
+	if (inet_pton(AF_INET, host_in, &addr.sin_addr) != 1) {
+		struct addrinfo hints {};
+		hints.ai_family = AF_INET;
+		hints.ai_socktype = SOCK_STREAM;
+		struct addrinfo* res = nullptr;
+		int gai = getaddrinfo(host_in, nullptr, &hints, &res);
+		if (gai != 0 || res == nullptr) {
+			if (res) freeaddrinfo(res);
+			close(fd_);
+			fd_ = -1;
+			state_ = ERROR_STATE;
+			return -1;
+		}
+		addr.sin_addr = reinterpret_cast<struct sockaddr_in*>(res->ai_addr)->sin_addr;
+		freeaddrinfo(res);
 	}
 	int rc = ::connect(fd_, (struct sockaddr*)&addr, sizeof(addr));
 	if (rc == 0) { state_ = AUTHENTICATING; return 0; }
@@ -206,20 +227,19 @@ int MysqlxConnection::send_client_frame(uint8_t msg_type, const std::string& pay
 bool MysqlxConnection::auth_phase_notice_is_drainable(const uint8_t* body, size_t body_len) {
 	if (body == nullptr || body_len == 0) {
 		// Empty NOTICE during auth is malformed; treat as auth failure.
-		fprintf(stderr, "mysqlx: empty NOTICE during backend auth — failing auth\n");
+		proxy_error("mysqlx: empty NOTICE during backend auth — failing auth\n");
 		auth_state_ = BACKEND_AUTH_ERROR;
 		return false;
 	}
 	Mysqlx::Notice::Frame nframe;
 	if (!nframe.ParseFromArray(body, static_cast<int>(body_len))) {
-		fprintf(stderr, "mysqlx: malformed NOTICE during backend auth — failing auth\n");
+		proxy_error("mysqlx: malformed NOTICE during backend auth — failing auth\n");
 		auth_state_ = BACKEND_AUTH_ERROR;
 		return false;
 	}
 	if (!nframe.has_type() || !Mysqlx::Notice::Frame_Type_IsValid(nframe.type())) {
-		fprintf(stderr,
-			"mysqlx: unknown-type NOTICE (type=%d) during backend auth — failing auth\n",
-			nframe.has_type() ? nframe.type() : -1);
+		proxy_error("mysqlx: unknown-type NOTICE (type=%d) during backend auth — failing auth\n",
+		            nframe.has_type() ? nframe.type() : -1);
 		auth_state_ = BACKEND_AUTH_ERROR;
 		return false;
 	}
@@ -232,17 +252,15 @@ bool MysqlxConnection::auth_phase_notice_is_drainable(const uint8_t* body, size_
 		case Mysqlx::Notice::Frame_Type_WARNING:
 			// Operationally suspect during auth (deprecated auth method
 			// notices, etc.). Drain but log so operators can see them.
-			fprintf(stderr,
-				"mysqlx: backend emitted WARNING NOTICE during auth (drained)\n");
+			proxy_warning("mysqlx: backend emitted WARNING NOTICE during auth (drained)\n");
 			return true;
 		case Mysqlx::Notice::Frame_Type_GROUP_REPLICATION_STATE_CHANGED:
 			// Cluster-membership notices during auth are out-of-place;
 			// they belong on data-plane connections after auth is done.
 			// Drain but log — don't fail the connection over what is
 			// likely an over-eager server, but make it visible.
-			fprintf(stderr,
-				"mysqlx: backend emitted GROUP_REPLICATION_STATE_CHANGED "
-				"NOTICE during auth (drained — unexpected on auth path)\n");
+			proxy_warning("mysqlx: backend emitted GROUP_REPLICATION_STATE_CHANGED "
+			              "NOTICE during auth (drained — unexpected on auth path)\n");
 			return true;
 	}
 	// Defensive default: known-but-not-enumerated-here type. Treat as
@@ -330,25 +348,34 @@ int MysqlxConnection::step_auth_capabilities_get_sent() {
 	}
 	auth_state_ = BACKEND_AUTH_CAPABILITIES_RECV;
 
-	Mysqlx::Connection::CapabilitiesSet cap_set;
-	auto* cap = cap_set.mutable_capabilities()->add_capabilities();
-	cap->set_name("authentication.mechanisms");
-	auto* val = cap->mutable_value();
-	val->set_type(Mysqlx::Datatypes::Any::ARRAY);
-	auto* arr = val->mutable_array();
-	auto* v = arr->add_value();
-	v->set_type(Mysqlx::Datatypes::Any::SCALAR);
-	v->mutable_scalar()->set_type(Mysqlx::Datatypes::Scalar::V_STRING);
-	v->mutable_scalar()->mutable_v_string()->set_value("MYSQL41");
-
-	if (backend_tls_required_ && backend_ssl_ctx_) {
-		auto* tls_cap = cap_set.mutable_capabilities()->add_capabilities();
-		tls_cap->set_name("tls");
-		auto* tls_val = tls_cap->mutable_value();
-		tls_val->set_type(Mysqlx::Datatypes::Any::SCALAR);
-		tls_val->mutable_scalar()->set_type(Mysqlx::Datatypes::Scalar::V_BOOL);
-		tls_val->mutable_scalar()->set_v_bool(true);
+	// `authentication.mechanisms` is a read-only capability on the
+	// upstream X plugin — CapabilitiesSet for it returns
+	// `ER_X_CAPABILITIES_PREPARE_FAILED` (5001) "CapabilitiesSet not
+	// supported for the authentication.mechanisms capability". The auth
+	// mechanism is chosen via AuthenticateStart.mech_name, not by
+	// setting a capability. Only send CapabilitiesSet when we actually
+	// need to negotiate a TLS upgrade; otherwise jump straight to
+	// AuthenticateStart.
+	//
+	// Note: the gate is backend_tls_required_, NOT (required && ssl_ctx).
+	// `preferred` mode (tls_required=true, fallback_allowed=true) on a
+	// worker with no SSL_CTX still emits the CapabilitiesSet(tls=true)
+	// frame so the backend's Error response can drive the plaintext
+	// fallback in step_auth_capabilities_set_sent. With ssl_ctx absent
+	// the post-OK TLS handshake branch below silently downgrades, which
+	// preserves the prior preferred-mode contract exercised by
+	// mysqlx_backend_auth_unit-t.
+	if (!backend_tls_required_) {
+		return send_authenticate_start();
 	}
+
+	Mysqlx::Connection::CapabilitiesSet cap_set;
+	auto* tls_cap = cap_set.mutable_capabilities()->add_capabilities();
+	tls_cap->set_name("tls");
+	auto* tls_val = tls_cap->mutable_value();
+	tls_val->set_type(Mysqlx::Datatypes::Any::SCALAR);
+	tls_val->mutable_scalar()->set_type(Mysqlx::Datatypes::Scalar::V_BOOL);
+	tls_val->mutable_scalar()->set_v_bool(true);
 
 	std::string s;
 	cap_set.SerializeToString(&s);
@@ -504,7 +531,16 @@ int MysqlxConnection::step_auth_authenticate_start_sent() {
 	std::vector<uint8_t> scramble_vec = mysqlx_mysql41_scramble(
 		std::vector<uint8_t>(challenge.begin(), challenge.end()), backend_password_);
 	std::string hex_scramble = mysqlx_hex_encode(scramble_vec);
-	std::string response = std::string("*") + hex_scramble;
+	// MYSQL41 AuthenticateContinue payload format expected by the upstream
+	// MySQL X server: `schema\0user\0*hex_scramble`. Sending just
+	// `*hex_scramble` (the prior form) is the format ProxySQL accepts on
+	// the FRONTEND side — but the X plugin on a real MySQL server treats
+	// the leading byte as the schema field and yields 1045 "Access
+	// denied". Pass the full triple so backend auth lines up with the
+	// upstream protocol.
+	std::string response = backend_schema_ + std::string("\0", 1) +
+	                       backend_user_ + std::string("\0", 1) +
+	                       std::string("*") + hex_scramble;
 
 	Mysqlx::Session::AuthenticateContinue resp;
 	resp.set_auth_data(response);

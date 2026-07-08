@@ -6,7 +6,7 @@
  *   - is_retryable_error()  -- HTTP status code / curl error classification
  *   - LLM_WriteCallback()   -- libcurl write callback
  *
- * Compiled only when PROXYSQLGENAI=1 (auto-detected from libproxysql.a).
+ * Built with all v4.0 plugins under PROXYSQL40=1 (auto-detected from libproxysql.a).
  */
 
 #include "tap.h"

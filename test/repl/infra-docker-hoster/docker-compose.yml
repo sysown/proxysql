@@ -1,0 +1,11 @@
+version: '3.0'
+
+services:
+
+  docker-hoster:
+    image: dvdarias/docker-hoster
+    hostname: docker-hoster
+    volumes:
+    - /var/run/docker.sock:/tmp/docker.sock
+    - /etc/hosts:/tmp/hosts
+    restart: always

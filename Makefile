@@ -3,10 +3,10 @@
 
 ### NOTES:
 ### version string is fetched from git history
-### when not available, specify GIT_VERSION on commnad line:
+### when not available, specify GIT_VERSION_BASE during make:
 ###
 ### ```
-### export GIT_VERSION=3.x.y-dev
+### make GIT_VERSION_BASE="v3.x.y"
 ### ```
 
 GIT_VERSION_BASE := $(shell git describe --long --abbrev=7 2>/dev/null || git describe --long --abbrev=7 --always)
@@ -132,7 +132,7 @@ export SOURCE_DATE_EPOCH
 ### rebuild SQLite with -USQLITE_ENABLE_MEMORY_MANAGEMENT in deps/Makefile
 
 O0 := -O0
-O2 := -O2
+O2 := -O2 -fno-omit-frame-pointer
 O1 := -O1
 O3 := -O3 -mtune=native
 
@@ -202,23 +202,23 @@ debug: build_src_debug
 testaurora_random: build_src_testaurora_random
 
 .PHONY: testaurora
-testaurora: build_src_testaurora
+testaurora: build_src_testaurora build_cluster_simulator
 	# cd test/tap && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE}
 	# cd test/tap/tests && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
 
 .PHONY: testgalera
-testgalera: build_src_testgalera
+testgalera: build_src_testgalera build_cluster_simulator
 	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG -DTEST_GALERA" CC=${CC} CXX=${CXX} ${MAKE}
 	cd test/tap/tests && OPTZ="${O0} -ggdb -DDEBUG -DTEST_GALERA" CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
 
 .PHONY: testgrouprep
-testgrouprep: build_src_testgrouprep
+testgrouprep: build_src_testgrouprep build_cluster_simulator
 
 .PHONY: testreadonly
-testreadonly: build_src_testreadonly
+testreadonly: build_src_testreadonly build_cluster_simulator
 
 .PHONY: testreplicationlag
-testreplicationlag: build_src_testreplicationlag
+testreplicationlag: build_src_testreplicationlag build_cluster_simulator
 
 .PHONY: testall
 testall: build_src_testall
@@ -357,6 +357,19 @@ build_tap_test_debug: build_tap_tests_debug
 build_tap_tests_debug: build_src_debug
 	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE} debug
 
+# The simulator links against libproxysql.a from the PREVIOUS lib build in this
+# invocation (release for `make build_cluster_simulator`, debug for the _debug
+# variant, or a TEST_<FAMILY>-flavored debug build when pulled in as a prereq
+# of the `test<family>` targets). Keep this rule dependency-free so it does not
+# clobber the caller's lib/src flavor by recursing into a conflicting build.
+.PHONY: build_cluster_simulator
+build_cluster_simulator:
+	cd test/deps/cluster_simulator && CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_cluster_simulator_debug
+build_cluster_simulator_debug:
+	cd test/deps/cluster_simulator && CC=${CC} CXX=${CXX} ${MAKE} debug
+
 # ClickHouse build targets are now default build targets. 
 # To maintain backward compatibility, ClickHouse targets are still available.
 .PHONY: build_deps_clickhouse
@@ -426,27 +439,30 @@ debian: $(REL_ARCH)-debian ;
 fedora: $(REL_ARCH)-fedora ;
 opensuse: $(REL_ARCH)-opensuse ;
 ubuntu: $(REL_ARCH)-ubuntu ;
+tarball: $(REL_ARCH)-tarball ;
 pkglist: $(REL_ARCH)-pkglist
 
 amd64-%: SYS_ARCH := x86_64
-amd64-packages: amd64-centos amd64-ubuntu amd64-debian amd64-fedora amd64-opensuse amd64-almalinux
+amd64-packages: amd64-centos amd64-ubuntu amd64-debian amd64-fedora amd64-opensuse amd64-almalinux amd64-tarball
 amd64-almalinux: almalinux8 almalinux8-clang almalinux8-dbg almalinux9 almalinux9-clang almalinux9-dbg almalinux10 almalinux10-clang almalinux10-dbg
 amd64-centos: centos9 centos9-clang centos9-dbg centos10 centos10-clang centos10-dbg
 amd64-debian: debian12 debian12-clang debian12-dbg debian13 debian13-clang debian13-dbg
-amd64-fedora: fedora42 fedora42-clang fedora42-dbg fedora43 fedora43-clang fedora43-dbg
+amd64-fedora: fedora42 fedora42-clang fedora42-dbg fedora43 fedora43-clang fedora43-dbg fedora44 fedora44-clang fedora44-dbg
 amd64-opensuse: opensuse15 opensuse15-clang opensuse15-dbg opensuse16 opensuse16-clang opensuse16-dbg
 amd64-ubuntu: ubuntu22 ubuntu22-clang ubuntu22-dbg ubuntu24 ubuntu24-clang ubuntu24-dbg
+amd64-tarball: tarball-almalinux9
 amd64-pkglist:
 	@${MAKE} -nk amd64-packages 2>/dev/null | grep -Eo 'binaries/proxysql[^ ]*' | sed 's,^binaries/,,'
 
 arm64-%: SYS_ARCH := aarch64
-arm64-packages: arm64-centos arm64-debian arm64-ubuntu arm64-fedora arm64-opensuse arm64-almalinux
+arm64-packages: arm64-centos arm64-debian arm64-ubuntu arm64-fedora arm64-opensuse arm64-almalinux arm64-tarball
 arm64-almalinux: almalinux8 almalinux9 almalinux10
 arm64-centos: centos9 centos10
 arm64-debian: debian12 debian13
-arm64-fedora: fedora42 fedora43
+arm64-fedora: fedora42 fedora43 fedora44
 arm64-opensuse: opensuse15 opensuse16
 arm64-ubuntu: ubuntu22 ubuntu24
+arm64-tarball: tarball-almalinux9
 arm64-pkglist:
 	@${MAKE} -nk arm64-packages 2>/dev/null | grep -Eo 'binaries/proxysql[^ ]*' | sed 's,^binaries/,,'
 
@@ -456,6 +472,7 @@ debian%: build-debian% ;
 fedora%: build-fedora% ;
 opensuse%: build-opensuse% ;
 ubuntu%: build-ubuntu% ;
+tarball%: build-tarball% ;
 
 
 .PHONY: build-%
@@ -465,9 +482,9 @@ build-%: PKG_VERS=$(if $(filter $(shell echo ${BLD_NAME} | grep -Eo '[a-z]+'),de
 build-%: PKG_TYPE=$(if $(filter $(shell echo $(BLD_NAME) | grep -Eo '\-de?bu?g|\-test|\-tap'),-dbg -debug -test -tap),-dbg,)
 build-%: PKG_NAME=$(firstword $(subst -, ,$(BLD_NAME)))
 build-%: PKG_COMP=$(if $(filter $(shell echo $(BLD_NAME) | grep -Eo '\-clang'),-clang),-clang,)
-build-%: PKG_ARCH=$(if $(filter $(shell echo ${BLD_NAME} | grep -Eo '[a-z]+'),debian ubuntu),$(DEB_ARCH),$(RPM_ARCH))
-build-%: PKG_KIND=$(if $(filter $(shell echo ${BLD_NAME} | grep -Eo '[a-z]+'),debian ubuntu),deb,rpm)
-build-%: PKG_FILE=binaries/proxysql$(PKG_VERS)$(PKG_TYPE)-$(PKG_NAME)$(PKG_COMP)$(PKG_ARCH).$(PKG_KIND)
+build-%: PKG_ARCH=$(if $(filter $(shell echo ${BLD_NAME} | grep -Eo '[a-z]+'),debian ubuntu),$(DEB_ARCH),$(if $(filter tarball,$(shell echo ${BLD_NAME} | grep -o 'tarball')),-$(REL_ARCH),$(RPM_ARCH)))
+build-%: PKG_KIND=$(if $(filter $(shell echo ${BLD_NAME} | grep -Eo '[a-z]+'),debian ubuntu),deb,$(if $(filter tarball,$(shell echo ${BLD_NAME} | grep -o 'tarball')),tar.gz,rpm))
+build-%: PKG_FILE=$(if $(filter tarball,$(shell echo ${BLD_NAME} | grep -o 'tarball')),binaries/proxysql-$(CURVER)$(PKG_TYPE)-linux$(PKG_ARCH).$(PKG_KIND),binaries/proxysql$(PKG_VERS)$(PKG_TYPE)-$(PKG_NAME)$(PKG_COMP)$(PKG_ARCH).$(PKG_KIND))
 build-%:
 	@echo 'building $@'
 	@IMG_NAME=$(PKG_NAME) IMG_TYPE=$(subst -,_,$(PKG_TYPE)) IMG_COMP=$(subst -,_,$(PKG_COMP)) BLD_NAME=$(BLD_NAME) $(MAKE) $(PKG_FILE)

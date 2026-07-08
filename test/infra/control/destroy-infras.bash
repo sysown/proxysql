@@ -31,15 +31,12 @@ INFRAS=""
 if [ -n "${LST_PATH}" ]; then
     INFRAS=$(cat "${LST_PATH}")
     echo ">>> Found infrastructure requirements for group '${TAP_GROUP}' in '${LST_PATH}'"
+elif [ -n "${INFRA_TYPE}" ]; then
+    echo ">>> No infras.lst found. Using fallback INFRA_TYPE: ${INFRA_TYPE}"
+    INFRAS="${INFRA_TYPE}"
 else
-    if [ -n "${INFRA_TYPE}" ]; then
-        echo ">>> No infras.lst found. Using fallback INFRA_TYPE: ${INFRA_TYPE}"
-        INFRAS="${INFRA_TYPE}"
-    else
-        echo "ERROR: Could not find infrastructure requirements (infras.lst) for group '${TAP_GROUP}' or '${BASE_GROUP}'."
-        echo "Please ensure test/tap/groups/${BASE_GROUP}/infras.lst exists."
-        exit 1
-    fi
+    # Simulator-backed groups legitimately omit both; nothing to tear down besides ProxySQL.
+    echo ">>> No infras.lst or INFRA_TYPE for group '${TAP_GROUP}'; only stopping ProxySQL."
 fi
 
 # 2. Ensure Docker Compose helper is available

@@ -356,13 +356,13 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"monitor_slave_lag_when_null",
 */
 	(char*)"monitor_threads",
+	(char*)"monitor_local_dns_cache_ttl",
+	(char*)"monitor_local_dns_cache_refresh_interval",
+	(char*)"monitor_local_dns_resolver_queue_maxsize",
 /*
 	(char*)"monitor_threads_min",
 	(char*)"monitor_threads_max",
 	(char*)"monitor_threads_queue_maxsize",
-	(char*)"monitor_local_dns_cache_ttl",
-	(char*)"monitor_local_dns_cache_refresh_interval",
-	(char*)"monitor_local_dns_resolver_queue_maxsize",
 	(char*)"monitor_wait_timeout",
 */
 	(char*)"monitor_writer_is_also_reader",
@@ -3832,8 +3832,9 @@ void PgSQL_Thread::process_all_sessions() {
 		sess_sort = false;
 	}
 #endif // IDLE_THREADS
-	if (sess_sort && mysql_sessions->len > 3) {
-		ProcessAllSessions_SortingSessions<PgSQL_Session>();
+	const bool partition_wanted = update_partition_gate();
+	if (sess_sort && mysql_sessions->len > 3 && partition_wanted) {
+		ProcessAllSessions_Partition<PgSQL_Session>();
 	}
 	for (n = 0; n < mysql_sessions->len; n++) {
 		PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(n);
@@ -4056,6 +4057,9 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___monitor_read_only_timeout = GloPTH->get_variable_int((char*)"monitor_read_only_timeout");
 	pgsql_thread___monitor_read_only_max_timeout_count = GloPTH->get_variable_int((char*)"monitor_read_only_max_timeout_count");
 	pgsql_thread___monitor_threads = GloPTH->get_variable_int((char*)"monitor_threads");
+	pgsql_thread___monitor_local_dns_cache_ttl = GloPTH->get_variable_int((char*)"monitor_local_dns_cache_ttl");
+	pgsql_thread___monitor_local_dns_cache_refresh_interval = GloPTH->get_variable_int((char*)"monitor_local_dns_cache_refresh_interval");
+	pgsql_thread___monitor_local_dns_resolver_queue_maxsize = GloPTH->get_variable_int((char*)"monitor_local_dns_resolver_queue_maxsize");
 	/* NOTE: Disabled until 'pt-heartbeat' supports PostgreSQL is fixed: https://perconadev.atlassian.net/browse/PT-2030
 	if (pgsql_thread___monitor_replication_lag_use_percona_heartbeat) free(pgsql_thread___monitor_replication_lag_use_percona_heartbeat);
 	pgsql_thread___monitor_replication_lag_use_percona_heartbeat = GloPTH->get_variable_string((char*)"monitor_replication_lag_use_percona_heartbeat");
@@ -4206,6 +4210,7 @@ PgSQL_Thread::PgSQL_Thread() {
 	pthread_mutex_init(&thread_mutex, NULL);
 	my_idle_conns = NULL;
 	cached_connections = NULL;
+	push_local_counter = 0;
 	mysql_sessions = NULL;
 	mirror_queue_mysql_sessions = NULL;
 	mirror_queue_mysql_sessions_cache = NULL;
@@ -4752,6 +4757,24 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		{
 			pta[0] = (char*)"PgSQL_Monitor_non_ssl_connections_OK";
 			sprintf(buf, "%lu", GloPgMon->non_ssl_connections_OK);
+			pta[1] = buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0] = (char*)"PgSQL_Monitor_dns_cache_queried";
+			snprintf(buf, sizeof(buf), "%llu", GloPgMon->dns_cache_queried.load());
+			pta[1] = buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0] = (char*)"PgSQL_Monitor_dns_cache_lookup_success";
+			snprintf(buf, sizeof(buf), "%llu", GloPgMon->dns_cache_lookup_success.load());
+			pta[1] = buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0] = (char*)"PgSQL_Monitor_dns_cache_record_updated";
+			snprintf(buf, sizeof(buf), "%llu", GloPgMon->dns_cache_record_updated.load());
 			pta[1] = buf;
 			result->add_row(pta);
 		}
@@ -5819,14 +5842,20 @@ PgSQL_Connection* PgSQL_Thread::get_MyConn_local(unsigned int _hid, PgSQL_Sessio
 }
 
 void PgSQL_Thread::push_MyConn_local(PgSQL_Connection * c) {
-	PgSQL_SrvC* mysrvc = NULL;
-	mysrvc = (PgSQL_SrvC*)c->parent;
-	// reset insert_id #1093
-	//c->pgsql->insert_id = 0;
+	// Bounded local cache: cache 1-in-N releases (N = pgsql_threads), push the
+	// rest to the shared HGM pool so peer workers can pick them up.
+	// At N=1 always cache (no sibling to share with).
+	// Rationale: avoids the connection-hoarding behavior that starved sibling
+	// workers at high client count, while preserving most of the lock-amortization
+	// benefit at lower client counts.
+	PgSQL_SrvC* mysrvc = (PgSQL_SrvC*)c->parent;
 	if (mysrvc->status == MYSQL_SERVER_STATUS_ONLINE) {
 		if (c->async_state_machine == ASYNC_IDLE) {
-			cached_connections->add(c);
-			return; // all went well
+			unsigned int n = (GloPTH && GloPTH->num_threads > 0) ? GloPTH->num_threads : 1;
+			if ((push_local_counter++ % n) == 0) {
+				cached_connections->add(c);
+				return;
+			}
 		}
 	}
 	PgHGM->push_MyConn_to_pool(c);

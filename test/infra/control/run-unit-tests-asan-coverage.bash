@@ -19,7 +19,7 @@
 # Preconditions:
 #   * cwd is the repository root (the script cd's there from $0 if not).
 #   * lib/, src/, and test/tap/tests/unit/ have been built with
-#     WITHASAN=1 WITHGCOV=1 NOJEMALLOC=1 PROXYSQLGENAI=1 (the make
+#     WITHASAN=1 WITHGCOV=1 NOJEMALLOC=1 PROXYSQL40=1 (the make
 #     target `ubuntu24-tap` does this when invoked with those flags).
 #   * The container has apt — we install lcov + libprotobuf-dev on
 #     demand if missing (the build image is package-build-focused
@@ -63,10 +63,22 @@ echo "==> Capturing baseline coverage snapshot (--initial)"
 # coverage for every instrumented source line, so unrun code paths
 # show as 0% in the merged report (rather than being absent
 # entirely).
+#
+# Capture from lib/ only. src/ contains the proxysql binary's
+# main.cpp and a small number of helpers; unit tests link only
+# against libproxysql.a (from lib/) so there is never a .gcda in
+# src/ from this workflow. Keeping `--directory src` here makes
+# lcov 2.x abort with "no .gcda files found in src" (an `empty`-
+# class error, not covered by --ignore-errors gcov,source), which
+# wipes the output file and breaks the whole capture chain.
+#
+# `empty` is added to --ignore-errors as belt-and-suspenders so a
+# future test reorganisation that produces a partially-empty
+# directory tree doesn't recur the same silent failure.
 lcov --quiet --capture --initial \
-     --directory lib --directory src \
+     --directory lib \
      --output-file coverage/lcov-base.info \
-     --ignore-errors gcov,source || true
+     --ignore-errors gcov,source,empty || true
 
 echo "==> Running unit tests under ASAN"
 # Iterate every executable under test/tap/tests/unit/. We
@@ -107,10 +119,13 @@ if [ ${#FAILED[@]} -gt 0 ]; then
 fi
 
 echo "==> Capturing post-test coverage"
+# Mirror the baseline-capture scope above: lib/ only, empty added to
+# --ignore-errors. See the baseline-capture comment for the full
+# rationale.
 lcov --quiet --capture \
-     --directory lib --directory src \
+     --directory lib \
      --output-file coverage/lcov-tests.info \
-     --ignore-errors gcov,source,mismatch || true
+     --ignore-errors gcov,source,mismatch,empty || true
 
 if [ -s coverage/lcov-base.info ] && [ -s coverage/lcov-tests.info ]; then
     lcov --quiet \

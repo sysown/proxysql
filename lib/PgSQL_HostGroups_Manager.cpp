@@ -1834,7 +1834,11 @@ void PgSQL_HostGroups_Manager::update_table_pgsql_servers_for_monitor(bool lock)
 		wrunlock();
 	}
 
-	MySQL_Monitor::trigger_dns_cache_update();
+	// Wake the *PgSQL* resolver loop, not MySQL's.  Pre-#5806 this was a
+	// MySQL_Monitor:: call inherited from a copy of the MySQL HGM; that
+	// kicked the wrong cache and pgsql hostnames had to wait for the next
+	// refresh_interval (default 60 s) before becoming resolvable.
+	PgSQL_Monitor::trigger_dns_cache_update();
 }
 
 SQLite3_result * PgSQL_HostGroups_Manager::dump_table_pgsql(const string& name) {

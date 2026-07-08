@@ -675,6 +675,7 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 	char buff[32];
 	sprintf(buff, "%p", this);
 	j["address"] = buff;
+	j["version"] = PROXYSQL_VERSION;
 	if (thread) {
 		sprintf(buff, "%p", thread);
 		j["thread"] = buff;
@@ -4501,6 +4502,17 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 
 		if (pgsql_thread___set_parser_algorithm == 3
 			|| pgsql_thread___query_processor_parser == 1) {
+			// Walker takes the query as-is. Note this diverges from
+			// algorithms 0/1/2 (PgSQL_Set_Stmt_Parser::set_query() runs
+			// remove_spaces() to collapse all whitespace to single spaces,
+			// even inside string literals -- a destructive behaviour that
+			// silently mutates user-visible SET values like `SET app.note =
+			// 'a   b'` to `'a b'`). The walker preserves the original input
+			// and is the more correct behaviour; the regex-parser quirk is
+			// preserved on the algo 0/1/2 path for backward compatibility.
+			// pgsql-set_parameter_validation_test-t case #150 is aware of
+			// this divergence and asserts the appropriate expected value
+			// per algorithm.
 			set = parsersql_parse_set_pgsql(nq);
 		} else {
 			thread->thr_SetParser->set_query(nq); // replace the query
@@ -4513,7 +4525,7 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 		for (auto it = std::begin(set); it != std::end(set); ++it) {
 			std::string var = it->first;
 			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET variable %s\n", var.c_str());
-			if (it->second.size() < 1 || it->second.size() > 2) {
+			if (it->second.size() < 1) {
 				// error not enough arguments
 				string query_str = string((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
 				string digest_str = string(CurrentQuery.get_digest_text());
@@ -4532,7 +4544,18 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 				return false;
 			}
 
+			// PostgreSQL allows multi-value lists for some variables, notably
+			// search_path and datestyle (e.g. `SET search_path TO "$user", public`).
+			// ParserSQL v1.0.3 captures every value as a separate sibling; here
+			// we collapse them into the comma-separated form PG itself uses for
+			// these parameters before handing to the per-variable validator and
+			// tracker. Single-value SETs hit this loop with size()==1 and take
+			// just it->second.front() (unchanged behaviour).
 			std::string value1 = it->second.front();
+			for (size_t vi = 1; vi < it->second.size(); ++vi) {
+				value1 += ", ";
+				value1 += it->second[vi];
+			}
 			if (std::find(pgsql_critical_variables.begin(), pgsql_critical_variables.end(), var) != pgsql_critical_variables.end() ||
 				pgsql_other_variables.find(var) != pgsql_other_variables.end()) {
 
@@ -4654,7 +4677,22 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 		}
 
 		if (failed_to_parse_var) {
-			unable_to_parse_set_statement(lock_hostgroup);
+			// Reached here means match_regexes[1] matched (the outer `if` at
+			// line 4492 above) so the SET targets a variable proxysql tracks
+			// (search_path, datestyle, etc.), but the SET parser couldn't
+			// build a usable map (malformed value, unclosed delimiter,
+			// trailing comma, etc.). Forward to the backend without locking
+			// the hostgroup: PG itself will reject the bad SET (or for
+			// silently-accepted edge cases like a 64-char delimited ident,
+			// the subsequent tracked-variable SETs need to still flow
+			// through proxysql's validator -- locking here would short-circuit
+			// every later SET on this connection past PgSQL_Session's
+			// handle_SET_command and let invalid SETs slip through to PG
+			// uncriticized. See pgsql-set_parameter_validation_test-t
+			// case #184 cascade for the concrete failure mode.
+			string query_str = string((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
+			proxy_warning("Unable to parse SET query for tracked variable; forwarding to backend without hostgroup lock: %s\n",
+				query_str.c_str());
 			return false;
 		}
 
@@ -5383,6 +5421,7 @@ void PgSQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 			else {
 				mc = PgHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), NULL, 0, (int)qpo->max_lag_ms);
 			}
+			thread->note_pool_attempt(mc == NULL);
 #ifdef STRESSTEST_POOL
 			if (mc && (loops < NUM_SLOW_LOOPS - 1)) {
 				if (mc->pgsql) {
@@ -6341,9 +6380,15 @@ bool PgSQL_Session::is_in_transaction() const {
  * status values.
  * @note This method is primarily used to maintain a history of the session's previous states for later reference or
  * recovery purposes.
- * @note The LCOV_EXCL_START and LCOV_EXCL_STOP directives are used to exclude the assert statement from code coverage
- * analysis because the condition should not occur during normal execution and is included as a safeguard against
- * programming errors.
+ * @note The lcov exclude-block directives wrapping the `assert(0)` below
+ * remove that line from coverage analysis -- the condition should never
+ * occur during normal execution and is only there as a safeguard against
+ * programming errors. (The literal directive strings are deliberately not
+ * spelled out in this comment because lcov's geninfo scans every source
+ * line for them and treats the doc occurrence as a real exclude marker,
+ * which double-opens the exclude block at line 6399 and breaks coverage
+ * capture for the whole file with a "overlapping exclude directives"
+ * error.)
  */
 void PgSQL_Session::set_previous_status_mode3(bool allow_execute) {
 	switch (status) {
@@ -6906,6 +6951,42 @@ int PgSQL_Session::handle_post_sync_bind_message(PgSQL_Bind_Message* bind_msg) {
 		// we don't support portals yet
 		handle_post_sync_error(PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, "only unnamed portals are supported", false);
 		return 2;
+	}
+
+	// Issue #5866: prepared statements are executed on the backend through libpq's
+	// PQsendQueryPrepared(), whose API accepts only a single result-column format
+	// code that applies to every column. A Bind that requests HETEROGENEOUS
+	// per-column result formats (e.g. text for one column and binary for another,
+	// as PostgreSQL drivers such as Go's pgx do for a bytea column) cannot be
+	// honored: the array would be collapsed to its first element and the remaining
+	// columns returned in the wrong format, silently corrupting data. Until the
+	// backend path no longer depends on libpq, reject such a Bind with a clean
+	// error instead of returning corrupted results. Uniform arrays are honored as
+	// before: 0 codes means "all text", 1 code means "applies to all columns", and
+	// an N-code array whose values are all identical is equivalent to a single
+	// code (which libpq can represent).
+	if (bind_data.num_result_formats > 1) {
+		auto result_fmt_reader = bind_msg->get_result_format_reader();
+		uint16_t first_format = 0;
+		bool heterogeneous = false;
+		for (uint16_t i = 0; i < bind_data.num_result_formats; ++i) {
+			uint16_t format = 0;
+			if (!result_fmt_reader.next(&format)) {
+				break; // malformed array; let the normal path surface the protocol error
+			}
+			if (i == 0) {
+				first_format = format;
+			} else if (format != first_format) {
+				heterogeneous = true;
+				break;
+			}
+		}
+		if (heterogeneous) {
+			handle_post_sync_error(PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
+				"per-column result formats are not supported: all result columns must request the same format code",
+				false);
+			return 2;
+		}
 	}
 	
 	// Look up an existing local statement info for client-provided statement name

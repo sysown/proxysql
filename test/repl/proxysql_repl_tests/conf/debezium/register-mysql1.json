@@ -1,0 +1,16 @@
+{
+    "name": "sysbench-connector",
+    "config": {
+      "connector.class": "io.debezium.connector.mysql.MySqlConnector",
+      "tasks.max": "1",
+      "database.hostname": "${MYSQL1_HOST}${INFRA}",
+      "database.port": "${MYSQL1_PORT}",
+      "database.user": "debezium",
+      "database.password": "debezium",
+      "database.server.id": "111",
+      "topic.prefix": "dbserver1",
+      "database.include.list": "sysbench",
+      "schema.history.internal.kafka.bootstrap.servers": "kafka:9092",
+      "schema.history.internal.kafka.topic": "schemahistory.sysbench"
+    }
+}

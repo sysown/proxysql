@@ -82,6 +82,7 @@ test/tap/tests/test_cluster_sync_config/proxysql*.pem
 #binary
 src/proxysql
 src/*.pem
+test/deps/cluster_simulator/cluster_simulator
 binaries/*deb
 binaries/*rpm
 tools/eventslog_reader_sample
@@ -103,6 +104,8 @@ core
 
 #config
 proxysql.cnf*
+# ...but keep the vendored repl-suite config (global rule above would drop it):
+!test/repl/proxysql_repl_tests/conf/proxysql/proxysql.cnf
 proxysql.db*
 
 jeprof*heap
@@ -168,9 +171,12 @@ test/deps/mysql-connector-c-8.4.0/mysql-8.4.*/
 test/deps/mysql-connector-c-8.4.0/mysql-8.4.*.tar.gz
 
 #tap tests
-test/tap/tap/cpp-dotenv/cpp-dotenv-*
-test/tap/tap/cpp-dotenv/static/cpp-dotenv-*
-test/tap/tap/cpp-dotenv/dynamic/cpp-dotenv-*
+# cpp-dotenv vendored release tarball must be tracked
+!test/tap/tap/cpp-dotenv/cpp-dotenv-*.tar.gz
+# but ignore the extracted source trees
+test/tap/tap/cpp-dotenv/cpp-dotenv-*/
+test/tap/tap/cpp-dotenv/static/cpp-dotenv-*/
+test/tap/tap/cpp-dotenv/dynamic/cpp-dotenv-*/
 *-t
 test/tap/tests/galera_1_timeout_count
 test/tap/tests/galera_2_timeout_no_count
@@ -221,3 +227,4 @@ test-scripts/deps/
 .worktrees/
 test/tap/tests/parsersql_digest_test
 test/tap/tests/setparser_parsersql_test
+deps/protobuf/protobuf-*/

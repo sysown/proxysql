@@ -28,13 +28,17 @@
 #include "Discovery_Schema.h"
 #include "GenAI_Thread.h"
 #include "LLM_Bridge.h"
+#include "backend_client.h"
 #include "proxysql_debug.h"
 #include "cpp.h"
 #include <sstream>
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <vector>
 #include <utility>
+#include <mysql.h>
+#include <libpq-fe.h>
 
 // Forward declaration for GloGATH
 extern GenAI_Threads_Handler *GloGATH;
@@ -64,6 +68,252 @@ void track_tool_invocation(
 	pthread_mutex_lock(&handler->counters_lock);
 	handler->tool_usage_stats[endpoint][tool_name][schema_name].add_timing(duration_us, monotonic_time());
 	pthread_mutex_unlock(&handler->counters_lock);
+}
+
+bool is_valid_sql_identifier(const std::string& identifier) {
+	if (identifier.empty()) {
+		return false;
+	}
+	if (!(std::isalpha(static_cast<unsigned char>(identifier[0])) || identifier[0] == '_')) {
+		return false;
+	}
+	for (size_t i = 1; i < identifier.size(); ++i) {
+		const unsigned char c = static_cast<unsigned char>(identifier[i]);
+		if (!(std::isalnum(c) || identifier[i] == '_' || identifier[i] == '$')) {
+			return false;
+		}
+	}
+	return true;
+}
+
+std::string quote_mysql_identifier(const std::string& identifier) {
+	std::string out = "`";
+	for (char c : identifier) {
+		if (c == '`') {
+			out += "``";
+		} else {
+			out.push_back(c);
+		}
+	}
+	out += "`";
+	return out;
+}
+
+std::string quote_pgsql_identifier(const std::string& identifier) {
+	std::string out = "\"";
+	for (char c : identifier) {
+		if (c == '"') {
+			out += "\"\"";
+		} else {
+			out.push_back(c);
+		}
+	}
+	out += "\"";
+	return out;
+}
+
+std::string escape_mysql_literal(MYSQL* conn, const std::string& value) {
+	std::string escaped;
+	escaped.resize(value.size() * 2 + 1);
+	unsigned long len = mysql_real_escape_string(conn, &escaped[0], value.c_str(), static_cast<unsigned long>(value.size()));
+	escaped.resize(len);
+	return "'" + escaped + "'";
+}
+
+std::string escape_pgsql_literal(PGconn* conn, const std::string& value, std::string& error) {
+	char* escaped = PQescapeLiteral(conn, value.c_str(), value.size());
+	if (!escaped) {
+		error = "Failed to escape PostgreSQL literal";
+		return "";
+	}
+	std::string out(escaped);
+	PQfreemem(escaped);
+	return out;
+}
+
+std::string json_scalar_to_sql_literal_mysql(MYSQL* conn, const json& value, std::string& error) {
+	if (value.is_null()) {
+		return "NULL";
+	}
+	if (value.is_string()) {
+		return escape_mysql_literal(conn, value.get<std::string>());
+	}
+	if (value.is_boolean()) {
+		return value.get<bool>() ? "1" : "0";
+	}
+	if (value.is_number()) {
+		return value.dump();
+	}
+	error = "Primary key value must be a scalar";
+	return "";
+}
+
+std::string json_scalar_to_sql_literal_pgsql(PGconn* conn, const json& value, std::string& error) {
+	if (value.is_null()) {
+		return "NULL";
+	}
+	if (value.is_string()) {
+		std::string escaped = escape_pgsql_literal(conn, value.get<std::string>(), error);
+		if (!error.empty()) {
+			return "";
+		}
+		return escaped;
+	}
+	if (value.is_boolean()) {
+		return value.get<bool>() ? "TRUE" : "FALSE";
+	}
+	if (value.is_number()) {
+		return value.dump();
+	}
+	error = "Primary key value must be a scalar";
+	return "";
+}
+
+bool append_source_pk_predicates_mysql(
+	MYSQL* conn,
+	const json& pk_json,
+	const std::string& pk_column,
+	std::string& where_clause,
+	std::string& error
+) {
+	where_clause.clear();
+	if (pk_json.is_object()) {
+		if (pk_json.empty()) {
+			error = "Source primary key JSON is empty";
+			return false;
+		}
+		for (auto it = pk_json.begin(); it != pk_json.end(); ++it) {
+			const std::string& key = it.key();
+			if (!is_valid_sql_identifier(key)) {
+				error = "Primary key column contains unsafe characters: " + key;
+				return false;
+			}
+			std::string literal = json_scalar_to_sql_literal_mysql(conn, it.value(), error);
+			if (!error.empty()) {
+				return false;
+			}
+			if (!where_clause.empty()) {
+				where_clause += " AND ";
+			}
+			where_clause += quote_mysql_identifier(key) + " = " + literal;
+		}
+		return true;
+	}
+
+	if (!is_valid_sql_identifier(pk_column)) {
+		error = "Primary key column contains unsafe characters: " + pk_column;
+		return false;
+	}
+	std::string literal = json_scalar_to_sql_literal_mysql(conn, pk_json, error);
+	if (!error.empty()) {
+		return false;
+	}
+	where_clause = quote_mysql_identifier(pk_column) + " = " + literal;
+	return true;
+}
+
+bool append_source_pk_predicates_pgsql(
+	PGconn* conn,
+	const json& pk_json,
+	const std::string& pk_column,
+	std::string& where_clause,
+	std::string& error
+) {
+	where_clause.clear();
+	if (pk_json.is_object()) {
+		if (pk_json.empty()) {
+			error = "Source primary key JSON is empty";
+			return false;
+		}
+		for (auto it = pk_json.begin(); it != pk_json.end(); ++it) {
+			const std::string& key = it.key();
+			if (!is_valid_sql_identifier(key)) {
+				error = "Primary key column contains unsafe characters: " + key;
+				return false;
+			}
+			std::string literal = json_scalar_to_sql_literal_pgsql(conn, it.value(), error);
+			if (!error.empty()) {
+				return false;
+			}
+			if (!where_clause.empty()) {
+				where_clause += " AND ";
+			}
+			where_clause += quote_pgsql_identifier(key) + " = " + literal;
+		}
+		return true;
+	}
+
+	if (!is_valid_sql_identifier(pk_column)) {
+		error = "Primary key column contains unsafe characters: " + pk_column;
+		return false;
+	}
+	std::string literal = json_scalar_to_sql_literal_pgsql(conn, pk_json, error);
+	if (!error.empty()) {
+		return false;
+	}
+	where_clause = quote_pgsql_identifier(pk_column) + " = " + literal;
+	return true;
+}
+
+json mysql_result_to_json(MYSQL_RES* res) {
+	json out;
+	out["columns"] = json::array();
+	out["rows"] = json::array();
+
+	if (!res) {
+		return out;
+	}
+
+	MYSQL_FIELD* fields = mysql_fetch_fields(res);
+	const unsigned int num_fields = mysql_num_fields(res);
+	std::vector<std::string> column_names;
+	column_names.reserve(num_fields);
+	for (unsigned int i = 0; i < num_fields; ++i) {
+		const char* name = fields && fields[i].name ? fields[i].name : "unknown_field";
+		column_names.emplace_back(name);
+		out["columns"].push_back(name);
+	}
+
+	MYSQL_ROW row;
+	while ((row = mysql_fetch_row(res))) {
+		json row_obj = json::object();
+		for (unsigned int i = 0; i < num_fields; ++i) {
+			row_obj[column_names[i]] = row[i] ? row[i] : "";
+		}
+		out["rows"].push_back(row_obj);
+	}
+
+	return out;
+}
+
+json pgsql_result_to_json(PGresult* res) {
+	json out;
+	out["columns"] = json::array();
+	out["rows"] = json::array();
+
+	if (!res) {
+		return out;
+	}
+
+	const int num_fields = PQnfields(res);
+	const int num_rows = PQntuples(res);
+	std::vector<std::string> column_names;
+	column_names.reserve(num_fields);
+	for (int i = 0; i < num_fields; ++i) {
+		const char* name = PQfname(res, i);
+		column_names.emplace_back(name ? name : "unknown_field");
+		out["columns"].push_back(name ? name : "unknown_field");
+	}
+
+	for (int r = 0; r < num_rows; ++r) {
+		json row_obj = json::object();
+		for (int c = 0; c < num_fields; ++c) {
+			row_obj[column_names[c]] = PQgetisnull(res, r, c) ? "" : PQgetvalue(res, r, c);
+		}
+		out["rows"].push_back(row_obj);
+	}
+
+	return out;
 }
 
 // ============================================================================
@@ -734,6 +984,252 @@ double RAG_Tool_Handler::normalize_score(double score, const std::string& score_
 	// In the future, we might want to normalize different score types differently
 	return score;
 }
+
+namespace {
+
+struct RagSourceConfig {
+	int source_id { 0 };
+	std::string source_name;
+	std::string backend_type;
+	std::string backend_host;
+	int backend_port { 0 };
+	std::string backend_user;
+	std::string backend_pass;
+	std::string backend_db;
+	std::string table_name;
+	std::string pk_column;
+	std::string where_sql;
+	json pk_json;
+};
+
+bool fetch_rag_source_config(SQLite3DB* db, const std::string& doc_id, RagSourceConfig& cfg, std::string& error) {
+	if (!db) {
+		error = "Vector database not available";
+		return false;
+	}
+
+	std::string escaped_doc_id = doc_id;
+	size_t pos = 0;
+	while ((pos = escaped_doc_id.find("'", pos)) != std::string::npos) {
+		escaped_doc_id.replace(pos, 1, "''");
+		pos += 2;
+	}
+
+	std::string sql =
+		"SELECT d.source_id, s.name, s.backend_type, s.backend_host, s.backend_port, "
+		"s.backend_user, s.backend_pass, s.backend_db, s.table_name, s.pk_column, s.where_sql, d.pk_json "
+		"FROM rag_documents d "
+		"JOIN rag_sources s ON s.source_id = d.source_id "
+		"WHERE d.doc_id = '" + escaped_doc_id + "' AND d.deleted = 0 AND s.enabled = 1";
+
+	char* sqlite_error = nullptr;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result* result = db->execute_statement(sql.c_str(), &sqlite_error, &cols, &affected_rows);
+	if (!result || result->rows.empty()) {
+		if (sqlite_error) {
+			error = sqlite_error;
+			free(sqlite_error);
+		} else {
+			error = "Document not found or source disabled: " + doc_id;
+		}
+		if (result) {
+			delete result;
+		}
+		return false;
+	}
+
+	const auto* row = result->rows.front();
+	if (!row || row->cnt < 12) {
+		error = "Invalid RAG source metadata for doc_id: " + doc_id;
+		delete result;
+		return false;
+	}
+
+	cfg.source_id = row->fields[0] ? std::atoi(row->fields[0]) : 0;
+	cfg.source_name = row->fields[1] ? row->fields[1] : "";
+	cfg.backend_type = row->fields[2] ? row->fields[2] : "";
+	std::transform(cfg.backend_type.begin(), cfg.backend_type.end(), cfg.backend_type.begin(),
+	               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+	cfg.backend_host = row->fields[3] ? row->fields[3] : "";
+	cfg.backend_port = row->fields[4] ? std::atoi(row->fields[4]) : 0;
+	cfg.backend_user = row->fields[5] ? row->fields[5] : "";
+	cfg.backend_pass = row->fields[6] ? row->fields[6] : "";
+	cfg.backend_db = row->fields[7] ? row->fields[7] : "";
+	cfg.table_name = row->fields[8] ? row->fields[8] : "";
+	cfg.pk_column = row->fields[9] ? row->fields[9] : "";
+	cfg.where_sql = row->fields[10] ? row->fields[10] : "";
+	if (row->fields[11]) {
+		try {
+			cfg.pk_json = json::parse(row->fields[11]);
+		} catch (const std::exception& e) {
+			error = std::string("Failed to parse pk_json for doc_id ") + doc_id + ": " + e.what();
+			delete result;
+			return false;
+		}
+	} else {
+		cfg.pk_json = json::object();
+	}
+
+	delete result;
+	return true;
+}
+
+bool fetch_rag_rows_mysql(const RagSourceConfig& cfg, const std::string& doc_id, const std::vector<std::string>& columns, json& rows, std::string& error) {
+	BackendTarget target;
+	target.user = cfg.backend_user;
+	target.password = cfg.backend_pass;
+	target.default_schema = cfg.backend_db;
+
+	MySQLDialResult dial = dial_mysql(cfg.backend_host, cfg.backend_port, target);
+	if (!dial.conn) {
+		error = dial.error;
+		return false;
+	}
+
+	MYSQL* conn = dial.conn;
+	if (!is_valid_sql_identifier(cfg.table_name)) {
+		error = "Invalid source table name: " + cfg.table_name;
+		mysql_close(conn);
+		return false;
+	}
+	std::string where_clause;
+	if (!append_source_pk_predicates_mysql(conn, cfg.pk_json, cfg.pk_column, where_clause, error)) {
+		mysql_close(conn);
+		return false;
+	}
+
+	std::string select_list = "*";
+	if (!columns.empty()) {
+		select_list.clear();
+		for (size_t i = 0; i < columns.size(); ++i) {
+			if (!is_valid_sql_identifier(columns[i])) {
+				error = "Invalid source column name: " + columns[i];
+				mysql_close(conn);
+				return false;
+			}
+			if (i > 0) {
+				select_list += ", ";
+			}
+			select_list += quote_mysql_identifier(columns[i]);
+		}
+	}
+
+	std::string sql = "SELECT " + select_list + " FROM " + quote_mysql_identifier(cfg.table_name) + " WHERE " + where_clause;
+	if (!cfg.where_sql.empty()) {
+		sql += " AND (" + cfg.where_sql + ")";
+	}
+	sql += " LIMIT 2";
+
+	if (mysql_query(conn, sql.c_str()) != 0) {
+		error = mysql_error(conn);
+		mysql_close(conn);
+		return false;
+	}
+
+	MYSQL_RES* res = mysql_store_result(conn);
+	if (!res) {
+		error = "Source query returned no result set";
+		mysql_close(conn);
+		return false;
+	}
+
+	json converted = mysql_result_to_json(res);
+	mysql_free_result(res);
+	mysql_close(conn);
+
+	if (converted["rows"].size() == 0) {
+		error = "No source rows found for doc_id " + doc_id;
+		return false;
+	}
+	if (converted["rows"].size() > 1) {
+		error = "Source query returned multiple rows for doc_id " + doc_id;
+		return false;
+	}
+
+	rows = converted["rows"];
+	return true;
+}
+
+bool fetch_rag_rows_pgsql(const RagSourceConfig& cfg, const std::string& doc_id, const std::vector<std::string>& columns, json& rows, std::string& error) {
+	BackendTarget target;
+	target.user = cfg.backend_user;
+	target.password = cfg.backend_pass;
+	target.default_schema = cfg.backend_db;
+
+	PgSQLDialResult dial = dial_pgsql(cfg.backend_host, cfg.backend_port, target);
+	if (!dial.conn) {
+		error = dial.error;
+		return false;
+	}
+
+	PGconn* conn = dial.conn;
+	if (!is_valid_sql_identifier(cfg.table_name)) {
+		error = "Invalid source table name: " + cfg.table_name;
+		PQfinish(conn);
+		return false;
+	}
+	std::string where_clause;
+	if (!append_source_pk_predicates_pgsql(conn, cfg.pk_json, cfg.pk_column, where_clause, error)) {
+		PQfinish(conn);
+		return false;
+	}
+
+	std::string select_list = "*";
+	if (!columns.empty()) {
+		select_list.clear();
+		for (size_t i = 0; i < columns.size(); ++i) {
+			if (!is_valid_sql_identifier(columns[i])) {
+				error = "Invalid source column name: " + columns[i];
+				PQfinish(conn);
+				return false;
+			}
+			if (i > 0) {
+				select_list += ", ";
+			}
+			select_list += quote_pgsql_identifier(columns[i]);
+		}
+	}
+
+	std::string sql = "SELECT " + select_list + " FROM " + quote_pgsql_identifier(cfg.table_name) + " WHERE " + where_clause;
+	if (!cfg.where_sql.empty()) {
+		sql += " AND (" + cfg.where_sql + ")";
+	}
+	sql += " LIMIT 2";
+
+	PGresult* res = PQexec(conn, sql.c_str());
+	if (!res) {
+		error = "Source query returned null result";
+		PQfinish(conn);
+		return false;
+	}
+
+	ExecStatusType status = PQresultStatus(res);
+	if (status != PGRES_TUPLES_OK) {
+		error = PQresultErrorMessage(res);
+		PQclear(res);
+		PQfinish(conn);
+		return false;
+	}
+
+	json converted = pgsql_result_to_json(res);
+	PQclear(res);
+	PQfinish(conn);
+
+	if (converted["rows"].size() == 0) {
+		error = "No source rows found for doc_id " + doc_id;
+		return false;
+	}
+	if (converted["rows"].size() > 1) {
+		error = "Source query returned multiple rows for doc_id " + doc_id;
+		return false;
+	}
+
+	rows = converted["rows"];
+	return true;
+}
+
+} // namespace
 
 // ============================================================================
 // Tool List
@@ -2342,101 +2838,66 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 			if (max_rows > 100) max_rows = 100;
 			if (max_bytes > 1000000) max_bytes = 1000000;
 
-			// Build doc ID list for SQL
-			std::string doc_list = "'";
-			for (size_t i = 0; i < doc_ids.size(); ++i) {
-				if (i > 0) doc_list += "','";
-				doc_list += doc_ids[i];
-			}
-			doc_list += "'";
-
-			// Look up documents to get source connection info
-			std::string doc_sql = "SELECT d.doc_id, d.source_id, d.pk_json, d.source_name, "
-				"s.backend_type, s.backend_host, s.backend_port, s.backend_user, s.backend_pass, s.backend_db, "
-				"s.table_name, s.pk_column "
-				"FROM rag_documents d "
-				"JOIN rag_sources s ON s.source_id = d.source_id "
-				"WHERE d.doc_id IN (" + doc_list + ")";
-
-			SQLite3_result* doc_result = execute_query(doc_sql.c_str());
-			if (!doc_result) {
-				return create_error_response("Database query failed");
-			}
-
 			// Build rows array
 			json rows = json::array();
 			int total_bytes = 0;
 			bool truncated = false;
 
-			// Process each document
-			for (const auto& row : doc_result->rows) {
-				if (row->fields && rows.size() < static_cast<size_t>(max_rows) && total_bytes < max_bytes) {
-					std::string doc_id = row->fields[0] ? row->fields[0] : "";
-					// int source_id = row->fields[1] ? std::stoi(row->fields[1]) : 0;
-					std::string pk_json = row->fields[2] ? row->fields[2] : "{}";
-					std::string source_name = row->fields[3] ? row->fields[3] : "";
-					// std::string backend_type = row->fields[4] ? row->fields[4] : "";
-					// std::string backend_host = row->fields[5] ? row->fields[5] : "";
-					// int backend_port = row->fields[6] ? std::stoi(row->fields[6]) : 0;
-					// std::string backend_user = row->fields[7] ? row->fields[7] : "";
-					// std::string backend_pass = row->fields[8] ? row->fields[8] : "";
-					// std::string backend_db = row->fields[9] ? row->fields[9] : "";
-					// std::string table_name = row->fields[10] ? row->fields[10] : "";
-					std::string pk_column = row->fields[11] ? row->fields[11] : "";
-
-					// For now, we'll return a simplified response since we can't actually connect to external databases
-					// In a full implementation, this would connect to the source database and fetch the data
-					json result_row;
-					result_row["doc_id"] = doc_id;
-					result_row["source_name"] = source_name;
-
-					// Parse pk_json to get the primary key value
-					try {
-						json pk_data = json::parse(pk_json);
-						json row_data = json::object();
-
-						// If specific columns are requested, only include those
-						if (!columns.empty()) {
-							for (const std::string& col : columns) {
-								// For demo purposes, we'll just echo back some mock data
-								if (col == "Id" && pk_data.contains("Id")) {
-									row_data["Id"] = pk_data["Id"];
-								} else if (col == pk_column) {
-									// This would be the actual primary key value
-									row_data[col] = "mock_value";
-								} else {
-									// For other columns, provide mock data
-									row_data[col] = "mock_" + col + "_value";
-								}
-							}
-						} else {
-							// If no columns specified, include basic info
-							row_data["Id"] = pk_data.contains("Id") ? pk_data["Id"] : json(0);
-							row_data[pk_column] = "mock_pk_value";
-						}
-
-						result_row["row"] = row_data;
-
-						// Check size limits
-						std::string row_str = result_row.dump();
-						if (total_bytes + static_cast<int>(row_str.length()) > max_bytes) {
-							truncated = true;
-							break;
-						}
-
-						total_bytes += static_cast<int>(row_str.length());
-						rows.push_back(result_row);
-					} catch (...) {
-						// Skip malformed pk_json
-						continue;
-					}
-				} else if (rows.size() >= static_cast<size_t>(max_rows) || total_bytes >= max_bytes) {
+			// Process each requested document in order
+			for (const auto& doc_id : doc_ids) {
+				if (rows.size() >= static_cast<size_t>(max_rows) || total_bytes >= max_bytes) {
 					truncated = true;
 					break;
 				}
-			}
 
-			delete doc_result;
+				RagSourceConfig cfg;
+				std::string error;
+				if (!fetch_rag_source_config(vector_db, doc_id, cfg, error)) {
+					json result_row;
+					result_row["doc_id"] = doc_id;
+					result_row["error"] = error;
+					result_row["source_name"] = "";
+					std::string row_str = result_row.dump();
+					if (total_bytes + static_cast<int>(row_str.length()) > max_bytes) {
+						truncated = true;
+						break;
+					}
+					total_bytes += static_cast<int>(row_str.length());
+					rows.push_back(result_row);
+					continue;
+				}
+
+				json fetched_rows = json::array();
+				bool ok = false;
+				if (cfg.backend_type == "mysql") {
+					ok = fetch_rag_rows_mysql(cfg, doc_id, columns, fetched_rows, error);
+				} else if (cfg.backend_type == "pgsql" || cfg.backend_type == "postgres" || cfg.backend_type == "postgresql") {
+					ok = fetch_rag_rows_pgsql(cfg, doc_id, columns, fetched_rows, error);
+				} else {
+					error = "Unsupported backend type: " + cfg.backend_type;
+				}
+
+				json result_row;
+				result_row["doc_id"] = doc_id;
+				result_row["source_id"] = cfg.source_id;
+				result_row["source_name"] = cfg.source_name;
+				result_row["backend_type"] = cfg.backend_type;
+
+				if (!ok) {
+					result_row["error"] = error;
+				} else {
+					result_row["row"] = fetched_rows[0];
+				}
+
+				std::string row_str = result_row.dump();
+				if (total_bytes + static_cast<int>(row_str.length()) > max_bytes) {
+					truncated = true;
+					break;
+				}
+
+				total_bytes += static_cast<int>(row_str.length());
+				rows.push_back(result_row);
+			}
 
 			result["rows"] = rows;
 			result["truncated"] = truncated;

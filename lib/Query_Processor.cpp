@@ -1789,6 +1789,13 @@ __internal_loop:
 			((ret && ret->new_query) ? ret->new_query->c_str() : NULL),
 			GET_THREAD_VARIABLE(query_processor_regex)
 		) == false) {
+			// Reset qr so a non-matching rule does not leak into the
+			// fast-routing check at __exit_process_mysql_query. That
+			// check reads qr->apply to decide whether a rule was
+			// already applied; if the loop ends without ever matching
+			// but the last iterated rule had apply=1, fast-routing
+			// would otherwise be silently skipped (issue #5620).
+			qr = NULL;
 			continue;
 		}
 

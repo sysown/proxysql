@@ -25,39 +25,18 @@ PLUGIN_SO := $(PLUGIN_DIR)/ProxySQL_MySQLX_Plugin.so
 #     mysqlx.proto mysqlx_connection.proto mysqlx_session.proto \
 #     mysqlx_datatypes.proto mysqlx_notice.proto mysqlx_sql.proto \
 #     mysqlx_resultset.proto mysqlx_expect.proto
+# Protobuf 3.21.12 is vendored under deps/protobuf and installed into a local
+# prefix so the plugin does not depend on system/Homebrew protobuf packages.
+PROTOBUF_VERSION := 3.21.12
+PROTOBUF_SRC_DIR := $(PROXYSQL_PATH)/deps/protobuf/protobuf-$(PROTOBUF_VERSION)
+PROTOBUF_INSTALL_DIR := $(PROTOBUF_SRC_DIR)/install
+PROTOBUF_INCLUDE_DIR := $(PROTOBUF_INSTALL_DIR)/include
+PROTOBUF_LIB := $(PROTOBUF_INSTALL_DIR)/lib/libprotobuf.a
 PROTO_DIR := $(PLUGIN_DIR)/proto
 PROTO_SRCS := $(wildcard $(PROTO_DIR)/*.pb.cc)
 PROTO_OBJS := $(patsubst $(PROTO_DIR)/%.pb.cc,$(ODIR)/%.pb.o,$(PROTO_SRCS))
 
-# Generated .pb.cc files were produced with protoc 3.21.12. The plugin links
-# dynamically against the system libprotobuf, which is ABI-compatible only
-# within the protobuf 3.x major version (the 4.x release cycle introduced an
-# incompatible ABI — libprotobuf.so SONAME changed). Detect the installed
-# version up front and fail fast so we never produce a .so that links cleanly
-# but crashes the first time a virtual is dispatched into the proto runtime.
-#
-# Skip the version check for `clean` and `cleanall` so a v3.0/v3.1 box without
-# libprotobuf-dev installed can still run `make clean` from the top-level
-# Makefile (which recurses here unconditionally). The check still fires for
-# any goal that actually compiles or links objects.
-PROTOBUF_GENERATED_VERSION := 3.21.12
-ifeq ($(filter clean cleanall,$(MAKECMDGOALS)),)
-PROTOBUF_VERSION := $(shell pkg-config --modversion protobuf 2>/dev/null)
-ifeq ($(PROTOBUF_VERSION),)
-    $(error libprotobuf not found via pkg-config. Install libprotobuf-dev (3.x). \
-        The mysqlx plugin's vendored .pb.cc/.pb.h were generated with protoc \
-        $(PROTOBUF_GENERATED_VERSION) and require an ABI-compatible 3.x runtime)
-endif
-PROTOBUF_MAJOR := $(firstword $(subst ., ,$(PROTOBUF_VERSION)))
-ifneq ($(PROTOBUF_MAJOR),3)
-    $(error libprotobuf $(PROTOBUF_VERSION) is not ABI-compatible with the \
-        vendored .pb.cc generated for protoc $(PROTOBUF_GENERATED_VERSION). \
-        Install libprotobuf 3.x (e.g. 3.21.12) or regenerate the proto sources \
-        against the installed version. See the regeneration recipe above)
-endif
-endif
-
-IDIRS := -I$(PROXYSQL_IDIR) -I$(PLUGIN_DIR)/include -I$(SQLITE3_IDIR) -I$(PROTO_DIR) -I$(SSL_IDIR) -I$(PROMETHEUS_IDIR) -I$(LIBCONFIG_IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) -I$(RE2_IDIR) -I$(ZSTD_IDIR) -I$(PROXYSQL_PATH)/deps/lz4/lz4/lib
+IDIRS := -I$(PROXYSQL_IDIR) -I$(PLUGIN_DIR)/include -I$(SQLITE3_IDIR) -I$(PROTO_DIR) -I$(PROTOBUF_INCLUDE_DIR) -I$(SSL_IDIR) -I$(PROMETHEUS_IDIR) -I$(LIBCONFIG_IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) -I$(RE2_IDIR) -I$(ZSTD_IDIR) -I$(PROXYSQL_PATH)/deps/lz4/lz4/lib
 
 OPTZ ?= -O2 -ggdb
 # Propagate feature-tier flags from the top-level build.  These MUST match
@@ -130,11 +109,28 @@ OBJS := $(patsubst $(PLUGIN_DIR)/src/%.cpp,$(ODIR)/%.o,$(SRCS))
 $(ODIR):
 	mkdir -p $(ODIR)
 
-$(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) | $(ODIR)
+$(PROTOBUF_LIB):
+	$(MAKE) -C $(PROXYSQL_PATH)/deps PROXYSQL40=1 protobuf
+
+# Several plugin sources transitively include <google/protobuf/...> via
+# the .pb.h files under plugins/mysqlx/proto/ (e.g. mysqlx_protocol.cpp,
+# mysqlx_connection.cpp, mysqlx_session.cpp -- all #include "mysqlx.pb.h"
+# which #includes <google/protobuf/port_def.inc> and <google/protobuf/
+# generated_message_bases.h>). Those headers only exist after the
+# vendored protobuf 3.21.12 install is populated. Without listing
+# $(PROTOBUF_LIB) as a prereq here, parallel make can schedule these
+# .o compiles before the deps protobuf build fires -- the .pb.o rule
+# (below) has the prereq, but it isn't enough on its own.
+#
+# The bug stayed hidden on hosts with a matching system libprotobuf-dev
+# 3.21.x (e.g. Ubuntu 24.04 or 22.04 with backports) because the
+# compile resolved everything from /usr/include/. CI runs on a clean
+# ubuntu-22.04 with no system libprotobuf installed and exposes it.
+$(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) $(PROTOBUF_LIB) | $(ODIR)
 	$(CXX) -c -o $@ $< $(CXXFLAGS) $(IDIRS)
 
-$(ODIR)/%.pb.o: $(PROTO_DIR)/%.pb.cc | $(ODIR)
-	$(CXX) -c -o $@ $< $(CXXFLAGS) -I$(PROTO_DIR) -w
+$(ODIR)/%.pb.o: $(PROTO_DIR)/%.pb.cc $(PROTOBUF_LIB) | $(ODIR)
+	$(CXX) -c -o $@ $< $(CXXFLAGS) $(IDIRS) -w
 
 # X Protocol compression (zstd_stream / lz4_message) needs the static
 # libzstd + liblz4 archives from deps/. We link them statically into the .so
@@ -144,8 +140,13 @@ $(ODIR)/%.pb.o: $(PROTO_DIR)/%.pb.cc | $(ODIR)
 ZSTD_AR := $(PROXYSQL_PATH)/deps/zstd/zstd/lib/libzstd.a
 LZ4_AR  := $(PROXYSQL_PATH)/deps/lz4/lz4/lib/liblz4.a
 
-$(PLUGIN_SO): $(OBJS) $(PROTO_OBJS)
-	$(CXX) -shared -o $@ $^ $(CXXFLAGS) -pthread -lprotobuf -lssl -lcrypto \
+PLUGIN_LDFLAGS :=
+ifeq ($(UNAME_S),Darwin)
+PLUGIN_LDFLAGS += -Wl,-undefined,dynamic_lookup
+endif
+
+$(PLUGIN_SO): $(OBJS) $(PROTO_OBJS) $(PROTOBUF_LIB)
+	$(CXX) -shared -o $@ $^ $(CXXFLAGS) -pthread -L$(SSL_LDIR) -lssl -lcrypto $(PLUGIN_LDFLAGS) \
 		$(ZSTD_AR) $(LZ4_AR)
 
 .PHONY: all

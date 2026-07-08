@@ -129,19 +129,34 @@ static bool send_capabilities_set_mysql41(int fd) {
 	return mysqlx_write_all(fd, frame.data(), frame.size());
 }
 
+// ProxySQL's mysqlx plugin parses the username from AuthenticateStart
+// as `\0schema\0user`, then expects AuthenticateContinue.auth_data to
+// be just `*hex_scramble`. This differs from upstream MySQL X server
+// (which accepts empty AuthStart and `schema\0user\0*hex` on
+// AuthContinue) — see mysqlx_session.cpp::handle_auth_mysql41 and the
+// `auth_data[0] == '*'` branch in MysqlxSession::handle_auth_continue.
 static bool send_auth_start(int fd, const std::string& user) {
 	Mysqlx::Session::AuthenticateStart auth;
 	auth.set_mech_name("MYSQL41");
-	auth.set_auth_data(user);
+	std::string payload;
+	payload.push_back('\0');               // empty schema
+	payload.push_back('\0');
+	payload.append(user);
+	auth.set_auth_data(payload);
 	std::string s;
 	if (!auth.SerializeToString(&s)) return false;
 	auto frame = mysqlx_build_frame(MSG_SESS_AUTH_START, s);
 	return mysqlx_write_all(fd, frame.data(), frame.size());
 }
 
-static bool send_auth_continue(int fd, const std::string& hex_scramble) {
+static bool send_auth_continue(int fd, const std::string& /*user*/,
+                               const std::string& hex_scramble) {
+	std::string payload;
+	payload.push_back('*');
+	payload.append(hex_scramble);
+
 	Mysqlx::Session::AuthenticateContinue cont;
-	cont.set_auth_data(hex_scramble);
+	cont.set_auth_data(payload);
 	std::string s;
 	if (!cont.SerializeToString(&s)) return false;
 	auto frame = mysqlx_build_frame(MSG_SESS_AUTH_CONTINUE, s);
@@ -165,12 +180,8 @@ struct E2EConfig {
 };
 
 static bool full_handshake(int fd, const E2EConfig& cfg) {
-	{
-		MysqlxFrameHeader hdr {};
-		std::vector<uint8_t> payload;
-		if (!mysqlx_read_frame(fd, hdr, payload)) return false;
-	}
-
+	// X Protocol does not send an unsolicited Capabilities frame on TCP
+	// connect; the client drives every exchange.
 	if (!send_capabilities_get(fd)) return false;
 	{
 		MysqlxFrameHeader hdr {};
@@ -178,14 +189,8 @@ static bool full_handshake(int fd, const E2EConfig& cfg) {
 		if (!read_frame_skip_notices(fd, hdr, payload)) return false;
 	}
 
-	if (!send_capabilities_set_mysql41(fd)) return false;
-	{
-		MysqlxFrameHeader hdr {};
-		std::vector<uint8_t> payload;
-		if (!read_frame_skip_notices(fd, hdr, payload)) return false;
-		if (hdr.message_type == MSG_SRV_ERROR) return false;
-	}
-
+	// authentication.mechanisms is read-only; the auth method is picked
+	// via AuthenticateStart.mech_name, not CapabilitiesSet.
 	if (!send_auth_start(fd, cfg.user)) return false;
 
 	std::vector<uint8_t> challenge;
@@ -199,13 +204,14 @@ static bool full_handshake(int fd, const E2EConfig& cfg) {
 		if (!cont.ParseFromArray(payload.data(), static_cast<int>(payload.size())))
 			return false;
 		if (!cont.has_auth_data()) return false;
-		std::string challenge_hex = cont.auth_data();
-		if (!mysqlx_hex_decode(challenge_hex, challenge)) return false;
+		// auth_data is the raw 20-byte challenge -- not hex-encoded.
+		const std::string& raw = cont.auth_data();
+		challenge.assign(raw.begin(), raw.end());
 	}
 
 	auto scramble = mysqlx_mysql41_scramble(challenge, cfg.pass);
 	std::string hex_scramble = mysqlx_hex_encode(scramble);
-	if (!send_auth_continue(fd, hex_scramble)) return false;
+	if (!send_auth_continue(fd, cfg.user, hex_scramble)) return false;
 	{
 		MysqlxFrameHeader hdr {};
 		std::vector<uint8_t> payload;
@@ -280,8 +286,12 @@ int main() {
 	E2EConfig cfg;
 	const char* proxysql_port_env = std::getenv("MYSQLX_E2E_PROXYSQL_PORT");
 	if (!proxysql_port_env) {
-		skip_all("MYSQLX_E2E_PROXYSQL_PORT not set; skipping E2E routing test");
-		return exit_status();
+		// Group setup bug: test/tap/groups/mysqlx-e2e/env.sh defines
+		// MYSQLX_E2E_PROXYSQL_PORT and CI-mysqlx.yml's e2e-tests job
+		// sources it. If the var is missing at runtime, the harness
+		// didn't source the env file — fail loud so the gap is fixed,
+		// not silently hide the regression as the previous skip_all did.
+		BAIL_OUT("MYSQLX_E2E_PROXYSQL_PORT not set — group env (test/tap/groups/mysqlx-e2e/env.sh) was not sourced before invoking this test");
 	}
 	cfg.host = env_or("MYSQLX_E2E_HOST", "127.0.0.1");
 	cfg.port = static_cast<uint16_t>(std::atoi(proxysql_port_env));
