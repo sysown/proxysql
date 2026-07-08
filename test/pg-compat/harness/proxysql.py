@@ -51,7 +51,16 @@ def _sql_quote(value):
 
 class Admin:
     def __init__(self):
-        self.conn = psycopg.connect(_admin_dsn(), autocommit=True)
+        # prepare_threshold=None disables psycopg's automatic server-side
+        # prepared statements. ProxySQL's PG-protocol admin interface does NOT
+        # support the extended-query Parse/Bind path, so once psycopg silently
+        # promoted a repeated statement to a prepared one (default threshold =
+        # 5 executions) the admin returned "Feature not supported". Admin
+        # queries are cheap and infrequent, so plain simple-protocol execution
+        # is both correct and sufficient here.
+        self.conn = psycopg.connect(
+            _admin_dsn(), autocommit=True, prepare_threshold=None
+        )
 
     def query(self, sql):
         with self.conn.cursor() as cur:
