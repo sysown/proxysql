@@ -303,6 +303,7 @@ void PgConnection::handleAuthentication(const std::string& password) {
         if (type == AUTH_TYPE) {
             if (buffer.size() < 4) throw PgException("Invalid authentication message");
             int32_t authType = ntohl(*reinterpret_cast<int32_t*>(buffer.data()));
+            if (last_auth_type_ == 0 && authType != 0) last_auth_type_ = authType;
             if (authType == 0) {  // AuthenticationOK
                 return;
             }
