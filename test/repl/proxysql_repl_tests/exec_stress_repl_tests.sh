@@ -21,8 +21,7 @@ export SCRIPTPATH=${PWD}
 for i in $(seq 1 ${iterations})
 do
    echo "Stress test run $i"
-#   ./stress_all_repl_tests.sh
-   ./stress_repl_test.sh 5.7 ssl
+   ./stress_all_repl_tests.sh
    if [ $? -ne 0 ]; then
      echo "Stress test run $i FAILED"
      res=1

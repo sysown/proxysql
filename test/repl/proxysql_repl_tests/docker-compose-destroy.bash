@@ -4,11 +4,13 @@
 pushd $(dirname $0) &>/dev/null
 trap 'popd &>/dev/null' EXIT
 
-if [ -z "${MYSQL_VERSION}" ]; then
- 	set -a
-	. .env
-  export MYSQL_VERSION=5.7
-fi
+#if [ -z "${MYSQL_VERSION}" ]; then
+	set -a
+	source .env
+	export MYSQL_VERSION
+	export USE_SSL
+	export REQUIRE_SSL
+#fi
 
 export DOCKER_MODE=compose
 
@@ -23,7 +25,7 @@ echo "[`date '+%Y-%m-%d %H:%M:%S'`]"
 echo "Destroying CI Infra '${INFRA}' mode '${DOCKER_MODE}' ..."
 echo "================================================================================="
 
-docker-compose --profile "*" down -v --remove-orphans
+docker-compose --profile mysql --profile debezium down -v
 
 
 echo "================================================================================="
