@@ -966,6 +966,15 @@ public:
 	unsigned int hostgroup_id;
 	TYPE type;
 
+	// Native-mode cancellation. When native_mode is true the backend connection
+	// has no libpq handle (cancel_conn is NULL), so CANCEL_QUERY is served by
+	// opening a fresh blocking TCP connection to hostname:port and sending a raw
+	// 16-byte CancelRequest carrying (backend_pid, native_secret_key). For
+	// TERMINATE_CONNECTION, backend_pid is set to the real backend PID captured
+	// from BackendKeyData so the libpq pg_terminate_backend() path works too.
+	bool native_mode = false;
+	int native_secret_key = 0;
+
 	// SSL options
 	struct SSLConfig {
 		bool use_ssl = false;

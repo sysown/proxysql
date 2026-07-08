@@ -5188,15 +5188,95 @@ PgSQL_Backend_Kill_Args::~PgSQL_Backend_Kill_Args() {
 		PQfreeCancel(cancel_conn);
 }
 
+// Native-mode query cancellation primitive. Opens a fresh BLOCKING TCP
+// connection to host:port and sends the 16-byte CancelRequest carrying
+// (pid, secret). This runs inside the detached kill thread, which already
+// tolerates blocking (PQcancel blocks too), so a blocking connect/send is
+// fine here. Per the protocol the server sends no reply — it acts on the
+// request and closes — so we only need a successful send.
+//
+// LIMITATION: the CancelRequest is sent over a PLAIN connection. This mirrors
+// the protocol itself (a CancelRequest is a bare startup-style packet), but a
+// backend whose pg_hba requires TLS (hostssl-only) will refuse the plaintext
+// connection. libpq's own PQcancel has the same constraint set: it negotiates
+// SSL only if the ORIGINAL connection used it, and here the native drive owns
+// the TLS session so we cannot cheaply reuse it from a detached thread. We
+// accept plain + documented limitation for this round (a TLS-required backend
+// that also drives native mode would need an SSLRequest handshake here first).
+static bool pg_native_send_cancel_request(const char* host, unsigned int port,
+	int pid, int secret, char* errbuf, size_t errlen) {
+	struct addrinfo hints;
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_protocol = IPPROTO_TCP;
+	char portstr[16];
+	snprintf(portstr, sizeof(portstr), "%u", port);
+
+	struct addrinfo* res = nullptr;
+	int gai = getaddrinfo(host, portstr, &hints, &res);
+	if (gai != 0 || res == nullptr) {
+		snprintf(errbuf, errlen, "getaddrinfo(%s:%s) failed: %s", host, portstr, gai_strerror(gai));
+		if (res) freeaddrinfo(res);
+		return false;
+	}
+
+	int sock = -1;
+	for (struct addrinfo* ai = res; ai != nullptr; ai = ai->ai_next) {
+		sock = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+		if (sock < 0) continue;
+		if (::connect(sock, ai->ai_addr, ai->ai_addrlen) == 0) break; // blocking connect
+		::close(sock); sock = -1;
+	}
+	freeaddrinfo(res);
+	if (sock < 0) {
+		snprintf(errbuf, errlen, "connect(%s:%s) failed: %s", host, portstr, strerror(errno));
+		return false;
+	}
+
+	unsigned char pkt[16];
+	pg_build_cancel_request(pkt, pid, secret);
+	size_t off = 0;
+	bool ok = true;
+	while (off < sizeof(pkt)) {
+		ssize_t n = ::send(sock, pkt + off, sizeof(pkt) - off, MSG_NOSIGNAL);
+		if (n > 0) { off += (size_t)n; continue; }
+		if (n < 0 && (errno == EINTR)) continue;
+		snprintf(errbuf, errlen, "send(CancelRequest) failed: %s", strerror(errno));
+		ok = false;
+		break;
+	}
+	::close(sock);
+	return ok;
+}
+
 void* PgSQL_backend_kill_thread(void* arg) {
 	assert(arg);
 	PgSQL_Backend_Kill_Args* backend_kill_args = static_cast<PgSQL_Backend_Kill_Args*>(arg);
 
 	if (backend_kill_args->type == PgSQL_Backend_Kill_Args::TYPE::CANCEL_QUERY) {
+		// Native connections have no libpq handle (cancel_conn == NULL). Serve
+		// the cancel with a raw CancelRequest over a fresh TCP connection using
+		// the pid/secret captured from the backend's BackendKeyData.
+		if (backend_kill_args->native_mode) {
+			if (backend_kill_args->pgsql_thd) backend_kill_args->pgsql_thd->status_variables.stvar[st_var_killed_queries]++;
+			char nerrbuf[256];
+			if (!pg_native_send_cancel_request(backend_kill_args->hostname, backend_kill_args->port,
+				backend_kill_args->backend_pid, backend_kill_args->native_secret_key, nerrbuf, sizeof(nerrbuf))) {
+				proxy_error("Failed to cancel query (native) on %s:%d with backend PID %d: %s\n",
+					backend_kill_args->hostname, backend_kill_args->port, backend_kill_args->backend_pid, nerrbuf);
+				PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, backend_kill_args->hostgroup_id,
+					backend_kill_args->hostname, backend_kill_args->port, 999);
+			} else {
+				proxy_warning("Canceled query (native) on %s:%d with backend PID %d successfully\n",
+					backend_kill_args->hostname, backend_kill_args->port, backend_kill_args->backend_pid);
+			}
+			goto __exit;
+		}
 		if (!backend_kill_args->cancel_conn) {
-			proxy_error("Failed to cancel query on %s:%d with backend PID %d\n", backend_kill_args->hostname, 
+			proxy_error("Failed to cancel query on %s:%d with backend PID %d\n", backend_kill_args->hostname,
 				backend_kill_args->port, backend_kill_args->backend_pid);
-			PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, backend_kill_args->hostgroup_id, 
+			PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, backend_kill_args->hostgroup_id,
 				backend_kill_args->hostname, backend_kill_args->port, 999);
 			goto __exit;
 		}

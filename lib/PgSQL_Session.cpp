@@ -1273,9 +1273,18 @@ void PgSQL_Session::handler_again___new_thread_to_cancel_query() {
 			const PgSQL_Connection_userinfo* ui = client_myds->myconn->userinfo;
 			std::unique_ptr<PgSQL_Backend_Kill_Args> backend_kill_args = std::make_unique<PgSQL_Backend_Kill_Args>(
 				(PGconn*)myds->myconn->get_pg_connection(), ui->username, ui->password, ui->dbname, myds->myconn->parent->address,
-				myds->myconn->parent->port, myds->myconn->parent->myhgc->hid, myds->myconn->parent->use_ssl, 
+				myds->myconn->parent->port, myds->myconn->parent->myhgc->hid, myds->myconn->parent->use_ssl,
 				PgSQL_Backend_Kill_Args::TYPE::CANCEL_QUERY, thread
 			);
+			// Native connections have no libpq handle; the constructor's
+			// PQgetCancel/PQbackendPID(NULL) yield nothing usable. Supply the
+			// pid/secret captured from the backend's BackendKeyData so the kill
+			// thread can send a raw CancelRequest instead of calling PQcancel.
+			if (myds->myconn->native_mode) {
+				backend_kill_args->native_mode = true;
+				backend_kill_args->backend_pid = myds->myconn->native_backend_pid;
+				backend_kill_args->native_secret_key = myds->myconn->native_backend_secret;
+			}
 
 			pthread_attr_t attr;
 			pthread_attr_init(&attr);

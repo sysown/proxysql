@@ -151,3 +151,30 @@ void pg_build_sync(std::string& out) {
 	out.push_back('S');
 	pg_native_append_be32(out, 4);
 }
+
+// Build the fixed 16-byte CancelRequest packet used by native-mode query
+// cancellation. Unlike normal frontend messages there is NO leading type byte:
+// the packet is a startup-style message identified solely by its request code.
+// Layout (all big-endian): int32 length(16) | int32 code(80877102) |
+// int32 backend pid | int32 secret key. The server sends no reply; it acts on
+// the request and closes the connection.
+void pg_build_cancel_request(unsigned char out[16], int32_t pid, int32_t secret) {
+	const uint32_t len = 16;
+	const uint32_t code = 80877102u; // 1234<<16 | 5678 — the CancelRequest code
+	out[0]  = (unsigned char)((len  >> 24) & 0xff);
+	out[1]  = (unsigned char)((len  >> 16) & 0xff);
+	out[2]  = (unsigned char)((len  >>  8) & 0xff);
+	out[3]  = (unsigned char)( len         & 0xff);
+	out[4]  = (unsigned char)((code >> 24) & 0xff);
+	out[5]  = (unsigned char)((code >> 16) & 0xff);
+	out[6]  = (unsigned char)((code >>  8) & 0xff);
+	out[7]  = (unsigned char)( code        & 0xff);
+	out[8]  = (unsigned char)(((uint32_t)pid    >> 24) & 0xff);
+	out[9]  = (unsigned char)(((uint32_t)pid    >> 16) & 0xff);
+	out[10] = (unsigned char)(((uint32_t)pid    >>  8) & 0xff);
+	out[11] = (unsigned char)(( (uint32_t)pid          ) & 0xff);
+	out[12] = (unsigned char)(((uint32_t)secret >> 24) & 0xff);
+	out[13] = (unsigned char)(((uint32_t)secret >> 16) & 0xff);
+	out[14] = (unsigned char)(((uint32_t)secret >>  8) & 0xff);
+	out[15] = (unsigned char)(( (uint32_t)secret       ) & 0xff);
+}

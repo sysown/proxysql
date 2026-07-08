@@ -2568,6 +2568,14 @@ void PgSQL_HostGroups_Manager::destroy_MyConn_from_pool(PgSQL_Connection *c, boo
 						c->parent->port, c->parent->myhgc->hid, c->parent->use_ssl,
 						PgSQL_Backend_Kill_Args::TYPE::TERMINATE_CONNECTION, nullptr
 					);
+					// For native connections PQbackendPID(NULL)==0 in the ctor; use
+					// the real backend PID captured from BackendKeyData so the libpq
+					// pg_terminate_backend() path targets the correct backend.
+					if (c->native_mode) {
+						backend_kill_args->native_mode = true;
+						backend_kill_args->backend_pid = c->native_backend_pid;
+						backend_kill_args->native_secret_key = c->native_backend_secret;
+					}
 
 					pthread_attr_t attr;
 					pthread_attr_init(&attr);

@@ -173,4 +173,8 @@ void pg_build_flush(std::string& out);
 
 // Build a frontend Sync ('S') message. Layout: len(4)==4, no body.
 void pg_build_sync(std::string& out);
+
+// Build the fixed 16-byte CancelRequest packet (native-mode query cancel).
+// No leading type byte: all big-endian: len(16) | code(80877102) | pid | secret.
+void pg_build_cancel_request(unsigned char out[16], int32_t pid, int32_t secret);
 #endif
