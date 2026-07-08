@@ -219,6 +219,13 @@ int main(int, char**) {
         SSL* client_ssl = SSL_new(cctx);
         BIO* sbio = BIO_new(BIO_s_mem());
         BIO* cbio = BIO_new(BIO_s_mem());
+        // SSL_set_bio consumes one reference per BIO role; the same two BIOs
+        // are installed into BOTH SSL objects, so take an extra reference on
+        // each before the second SSL_set_bio -- otherwise both SSL_free calls
+        // free the same BIOs (double-free, caught by ASAN as SEGV in
+        // BUF_MEM_free during teardown).
+        BIO_up_ref(sbio);
+        BIO_up_ref(cbio);
         SSL_set_bio(server_ssl, sbio, cbio);
         SSL_set_bio(client_ssl, cbio, sbio);
         SSL_set_accept_state(server_ssl);
@@ -293,6 +300,13 @@ int main(int, char**) {
         SSL* client_ssl = SSL_new(cctx);
         BIO* sbio = BIO_new(BIO_s_mem());
         BIO* cbio = BIO_new(BIO_s_mem());
+        // SSL_set_bio consumes one reference per BIO role; the same two BIOs
+        // are installed into BOTH SSL objects, so take an extra reference on
+        // each before the second SSL_set_bio -- otherwise both SSL_free calls
+        // free the same BIOs (double-free, caught by ASAN as SEGV in
+        // BUF_MEM_free during teardown).
+        BIO_up_ref(sbio);
+        BIO_up_ref(cbio);
         SSL_set_bio(server_ssl, sbio, cbio);
         SSL_set_bio(client_ssl, cbio, sbio);
         SSL_set_accept_state(server_ssl);

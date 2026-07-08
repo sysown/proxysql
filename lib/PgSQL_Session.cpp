@@ -3721,18 +3721,35 @@ handler_again:
 				// (named Bind is native-only) and clear_named_portals() is a no-op
 				// when empty, so a libpq conn's unmaintained native_txn_status is
 				// never acted upon.
-				if (!has_pending_messages && myconn->native_txn_status == 'I') {
-					clear_named_portals();
-				}
+				//
+				// IMPORTANT (ASAN finding A1 — heap-use-after-free): the actual
+				// clear_named_portals() call is DEFERRED until after RequestEnd() below,
+				// instead of running here. For a named-portal Execute/Describe,
+				// CurrentQuery.extended_query_info.stmt_client_name points INTO the raw
+				// Bind packet owned by the named_portals entry (set at ~6958/7168/7428).
+				// RequestEnd() -> LogQuery() -> PgSQL_Event::write_query_format_2_json
+				// (PgSQL_Logger.cpp:~702) reads that pointer to log client_stmt_name, and
+				// only RequestEnd()'s tail call to CurrentQuery.end() nulls it out
+				// afterwards. Freeing the registry entry (and therefore the packet) here,
+				// before RequestEnd()/LogQuery() runs, was a use-after-free feeding the
+				// event log. We still decide HERE whether this cycle will clear the
+				// registry (clear_portals_at_boundary), so sticky_backend_connection below
+				// is computed exactly as before (as if the clear had already happened);
+				// only the destructive free is moved past the logging read.
+				bool clear_portals_at_boundary = (!has_pending_messages && myconn->native_txn_status == 'I');
 				// Pin the backend while named portals are open (same intent as the
 				// active-transaction sticky pin) so a later Execute/Describe/Close of a
 				// named portal routes to the connection that holds it. Kept SEPARATE from
 				// has_pending_messages: the latter still gates the frame-drain
 				// NEXT_IMMEDIATE(PROCESSING_EXTENDED_QUERY_SYNC) below, which must not fire
 				// on an empty frame just because a portal is open.
-				bool sticky_backend_connection = has_pending_messages || (named_portals.empty() == false);
+				bool sticky_backend_connection = has_pending_messages ||
+					(!clear_portals_at_boundary && named_portals.empty() == false);
 
 				RequestEnd(myds, false);
+				if (clear_portals_at_boundary) {
+					clear_named_portals();
+				}
 				finishQuery(myds, myconn, sticky_backend_connection);
 
 				if (processing_extended_query) {
