@@ -36,6 +36,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <fstream>
+#include <regex>
 #include <atomic>
 #include "libpq-fe.h"
 #include "command_line.h"
@@ -140,11 +141,36 @@ static bool flushBackendPool(PGconn* admin, int hg, const std::vector<ServerRow>
 	return true;
 }
 
-// Tripwire: has the connection-level "falling back to libpq" warning appeared?
-// In the native phase any match is a regression — the whole point is that the
-// cancel exercised the native path, not a fallback libpq handle.
-static bool nativeFallbackObserved() {
-	return wait_for_log_match(f_proxysql_log, ".*falling back to libpq.*", 800, 100);
+// Single-pass scan of the proxysql log for BOTH the libpq-fallback tripwire
+// (any match in the native phase is a regression) AND the positive evidence
+// that the native cancel branch actually ran: the
+// "Canceled query (native) on ... successfully" warning that
+// PgSQL_backend_kill_thread emits only from the raw-CancelRequest path.
+// A single combined scan is required because wait_for_log_match /
+// get_matching_lines consume the stream forward — two sequential scans for two
+// different regexes would each miss lines the other already read past (same
+// reasoning as scanNativePhaseLog in pgsql-native_prepared-t). Polls until the
+// native-cancel line is seen or wait_ms elapses; the fallback flag reflects
+// everything read either way.
+static void scanNativePhaseLog(bool& fell_back, bool& native_cancel_logged, uint32_t wait_ms) {
+	const std::regex re_fallback(".*falling back to libpq.*");
+	const std::regex re_native_cancel(".*Canceled query \\(native\\) on .* successfully.*");
+	fell_back = false;
+	native_cancel_logged = false;
+	uint32_t elapsed = 0;
+	while (true) {
+		// Clear eof/fail so getline() can read bytes appended since the last scan.
+		f_proxysql_log.clear(f_proxysql_log.rdstate() &
+		                     ~std::ios_base::eofbit & ~std::ios_base::failbit);
+		std::string line;
+		while (std::getline(f_proxysql_log, line)) {
+			if (!fell_back && std::regex_match(line, re_fallback)) fell_back = true;
+			if (!native_cancel_logged && std::regex_match(line, re_native_cancel)) native_cancel_logged = true;
+		}
+		if (native_cancel_logged || elapsed >= wait_ms) return;
+		usleep(100000);
+		elapsed += 100;
+	}
 }
 
 static void drainLogToNow() {
@@ -175,6 +201,7 @@ struct PhaseResult {
 	bool conn_usable_after = false;// SELECT 1 works on the same conn afterwards
 	int backend_active_after = -1; // active marked sleeps on the direct backend
 	bool fell_back = false;        // native phase only: libpq fallback observed
+	bool native_cancel_logged = false; // native phase only: positive "Canceled query (native)" log evidence
 };
 
 // Threaded long-query state.
@@ -213,7 +240,7 @@ static PhaseResult runPhase(PGconn* admin, bool native,
 
 	setNativeMode(admin, native);
 	flushBackendPool(admin, BACKEND_HG, saved);
-	drainLogToNow(); // so nativeFallbackObserved() only sees this phase
+	drainLogToNow(); // so scanNativePhaseLog() only sees this phase
 
 	PGConnPtr conn = open_client_conn();
 	if (!conn || PQstatus(conn.get()) != CONNECTION_OK) {
@@ -262,6 +289,10 @@ static PhaseResult runPhase(PGconn* admin, bool native,
 	PQclear(r2);
 
 	// Backend must have released the query. Poll the DIRECT backend briefly.
+	// NOTE: this infra (docker-pgsql16-single) has a single backend server —
+	// hostgroup 0 and 1 both point at the same host:port — so checking
+	// saved[0] covers the only backend the query could have landed on. If the
+	// infra ever grows additional distinct backends, loop over `saved` here.
 	PGConnPtr direct = open_direct_backend_conn(saved[0].hostname, saved[0].port);
 	int active = -1;
 	for (int i = 0; i < 20; i++) { // up to ~2s
@@ -271,7 +302,7 @@ static PhaseResult runPhase(PGconn* admin, bool native,
 	}
 	pr.backend_active_after = active;
 
-	if (native) pr.fell_back = nativeFallbackObserved();
+	if (native) scanNativePhaseLog(pr.fell_back, pr.native_cancel_logged, 2000);
 
 	return pr;
 }
@@ -319,9 +350,10 @@ int main(int, char**) {
 	// ---- Phase 2: native mode (must MATCH the bar) ----
 	diag("=== Phase 2: native backend mode ===");
 	PhaseResult nat = runPhase(admin.get(), /*native=*/true, saved);
-	diag("native: started=%d sqlstate=%s elapsed=%.2fs usable=%d backend_active=%d fell_back=%d",
+	diag("native: started=%d sqlstate=%s elapsed=%.2fs usable=%d backend_active=%d fell_back=%d native_cancel_logged=%d",
 	     nat.started_ok, nat.sqlstate.c_str(), nat.elapsed_s,
-	     nat.conn_usable_after, nat.backend_active_after, nat.fell_back);
+	     nat.conn_usable_after, nat.backend_active_after, nat.fell_back,
+	     nat.native_cancel_logged);
 
 	ok(nat.canceled_57014,
 	   "[native] query canceled with SQLSTATE 57014 — got '%s'", nat.sqlstate.c_str());
@@ -331,8 +363,12 @@ int main(int, char**) {
 	   "[native] client session usable after cancel (SELECT 1)");
 	ok(nat.backend_active_after == 0,
 	   "[native] backend query gone from pg_stat_activity (active=%d)", nat.backend_active_after);
-	ok(!nat.fell_back,
-	   "[native] cancel exercised the NATIVE path (no libpq fallback observed)");
+	// Folded case result: absence of the libpq-fallback tripwire AND positive
+	// evidence that the raw-CancelRequest branch ran ("Canceled query (native)"
+	// is logged only from that branch in PgSQL_backend_kill_thread).
+	ok(!nat.fell_back && nat.native_cancel_logged,
+	   "[native] cancel exercised the NATIVE path (no libpq fallback%s; 'Canceled query (native)' logged=%s)",
+	   nat.fell_back ? " VIOLATED" : "", nat.native_cancel_logged ? "yes" : "no");
 
 	// ---- Differential: native must produce the identical client-visible outcome ----
 	ok(lib.canceled_57014 && nat.canceled_57014 && lib.sqlstate == nat.sqlstate,

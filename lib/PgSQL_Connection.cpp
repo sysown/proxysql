@@ -11,6 +11,7 @@
 #include <netdb.h>
 #include <unistd.h>
 #include <errno.h>
+#include <poll.h>
 
 #include "openssl/x509v3.h" // X509_VERIFY_PARAM_set1_host / set_hostflags (native backend TLS)
 #include "openssl/evp.h"     // EVP_MAX_MD_SIZE for cbind digest buffer (SCRAM-PLUS)
@@ -5188,23 +5189,25 @@ PgSQL_Backend_Kill_Args::~PgSQL_Backend_Kill_Args() {
 		PQfreeCancel(cancel_conn);
 }
 
-// Native-mode query cancellation primitive. Opens a fresh BLOCKING TCP
-// connection to host:port and sends the 16-byte CancelRequest carrying
-// (pid, secret). This runs inside the detached kill thread, which already
-// tolerates blocking (PQcancel blocks too), so a blocking connect/send is
-// fine here. Per the protocol the server sends no reply — it acts on the
-// request and closes — so we only need a successful send.
+// Native-mode query cancellation primitive. Opens a fresh TCP connection to
+// host:port with a BOUNDED connect (non-blocking connect + poll, 5s) and sends
+// the 16-byte CancelRequest carrying (pid, secret) with a bounded blocking send
+// (SO_SNDTIMEO). This runs inside the detached kill thread, which tolerates
+// blocking (PQcancel blocks too), but the bound keeps a black-holed backend
+// from parking the thread for the kernel's full connect timeout (~2min).
+// Per the protocol the server sends no reply — it acts on the request and
+// closes — so we only need a successful send.
 //
-// LIMITATION: the CancelRequest is sent over a PLAIN connection. This mirrors
-// the protocol itself (a CancelRequest is a bare startup-style packet), but a
-// backend whose pg_hba requires TLS (hostssl-only) will refuse the plaintext
-// connection. libpq's own PQcancel has the same constraint set: it negotiates
-// SSL only if the ORIGINAL connection used it, and here the native drive owns
-// the TLS session so we cannot cheaply reuse it from a detached thread. We
-// accept plain + documented limitation for this round (a TLS-required backend
-// that also drives native mode would need an SSLRequest handshake here first).
+// NOTE on TLS: the CancelRequest is sent over a PLAIN connection. This is what
+// the protocol prescribes — PostgreSQL processes CancelRequest at the
+// startup-packet layer, BEFORE SSL negotiation and pg_hba rule matching, so a
+// plaintext cancel commonly succeeds even against hostssl-only backends. If a
+// backend or middlebox nonetheless refuses the plaintext connection, the
+// failure is reported gracefully (proxy_error + error counter) and the query
+// simply runs to completion, mirroring a lost PQcancel.
 static bool pg_native_send_cancel_request(const char* host, unsigned int port,
 	int pid, int secret, char* errbuf, size_t errlen) {
+	const int CONNECT_TIMEOUT_MS = 5000;
 	struct addrinfo hints;
 	memset(&hints, 0, sizeof(hints));
 	hints.ai_family = AF_UNSPEC;
@@ -5225,12 +5228,48 @@ static bool pg_native_send_cancel_request(const char* host, unsigned int port,
 	for (struct addrinfo* ai = res; ai != nullptr; ai = ai->ai_next) {
 		sock = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
 		if (sock < 0) continue;
-		if (::connect(sock, ai->ai_addr, ai->ai_addrlen) == 0) break; // blocking connect
-		::close(sock); sock = -1;
+		// Bounded connect: non-blocking connect + poll(POLLOUT) with timeout,
+		// then verify SO_ERROR. Falls through to the next addrinfo on failure.
+		int fl = fcntl(sock, F_GETFL, 0);
+		if (fl < 0 || fcntl(sock, F_SETFL, fl | O_NONBLOCK) < 0) {
+			::close(sock); sock = -1; continue;
+		}
+		int rc = ::connect(sock, ai->ai_addr, ai->ai_addrlen);
+		if (rc != 0 && errno != EINPROGRESS) {
+			::close(sock); sock = -1; continue;
+		}
+		if (rc != 0) { // in progress: wait bounded for writability
+			struct pollfd pfd;
+			pfd.fd = sock;
+			pfd.events = POLLOUT;
+			pfd.revents = 0;
+			int prc;
+			do {
+				prc = ::poll(&pfd, 1, CONNECT_TIMEOUT_MS);
+			} while (prc < 0 && errno == EINTR);
+			if (prc <= 0) { // timeout or poll error
+				::close(sock); sock = -1; continue;
+			}
+			int soerr = 0;
+			socklen_t slen = sizeof(soerr);
+			if (getsockopt(sock, SOL_SOCKET, SO_ERROR, &soerr, &slen) < 0 || soerr != 0) {
+				::close(sock); sock = -1; continue;
+			}
+		}
+		// Connected: restore blocking mode and bound the send with SO_SNDTIMEO.
+		if (fcntl(sock, F_SETFL, fl) < 0) {
+			::close(sock); sock = -1; continue;
+		}
+		struct timeval tv;
+		tv.tv_sec = CONNECT_TIMEOUT_MS / 1000;
+		tv.tv_usec = (CONNECT_TIMEOUT_MS % 1000) * 1000;
+		setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)); // best-effort
+		break;
 	}
 	freeaddrinfo(res);
 	if (sock < 0) {
-		snprintf(errbuf, errlen, "connect(%s:%s) failed: %s", host, portstr, strerror(errno));
+		snprintf(errbuf, errlen, "connect(%s:%s) failed or timed out (%dms): %s",
+			host, portstr, CONNECT_TIMEOUT_MS, strerror(errno));
 		return false;
 	}
 
