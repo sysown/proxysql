@@ -1,6 +1,6 @@
-#ifndef __CLASS_PGSQL_THREAD_H
-#define __CLASS_PGSQL_THREAD_H
-#define ____CLASS_STANDARD_PGSQL_THREAD_H
+#ifndef PROXYSQL_PGSQL_THREAD_H
+#define PROXYSQL_PGSQL_THREAD_H
+#define PROXYSQL_STANDARD_PGSQL_THREAD_H
 #include <prometheus/counter.h>
 #include <prometheus/gauge.h>
 
@@ -41,9 +41,9 @@ constexpr const char* AUTHENTICATION_METHOD_STR[] = {
 #define MY_EPOLL_THREAD_MAXEVENTS 128
 */
 
-#define ADMIN_HOSTGROUP	-2
-#define STATS_HOSTGROUP	-3
-#define SQLITE_HOSTGROUP -4
+#define ADMIN_HOSTGROUP	(-2)
+#define STATS_HOSTGROUP	(-3)
+#define SQLITE_HOSTGROUP (-4)
 
 
 #define MYSQL_DEFAULT_COLLATION_CONNECTION	""
@@ -139,9 +139,8 @@ struct CopyCmdMatcher {
 	CopyCmdMatcher() : 
 		options(RE2::Quiet), 
 		pattern(
-			R"(((?is)(?:--.*?$|/\*[\s\S]*?\*/|\s)*\bCOPY\b\s+[^;]*?\bFROM\b\s+(?:STDIN|STDOUT)\b(?:\s+WITH\s*\([^)]*\))?))",
+			R"(((?is)\bCOPY\b[^;]*?\bFROM\b[^;]*?\b(?:STDIN|STDOUT)\b))",
 			options) {
-		//((?is)(?:--.*?$|/\*[\s\S]*?\*/|\s)*\bCOPY\b\s+[^;]*?\bFROM\b\s+STDIN\b(?:\s+WITH\s*\([^)]*\))?)
 	}
 
 	inline
@@ -161,6 +160,7 @@ private:
 	//bool maintenance_loop;
 
 	PtrArray* cached_connections;
+	unsigned int push_local_counter;	// round-robin counter for bounded local caching: cache 1-in-N where N = pgsql_threads
 
 #ifdef IDLE_THREADS
 	struct epoll_event events[MY_EPOLL_THREAD_MAXEVENTS];
@@ -228,9 +228,9 @@ public:
 #ifdef IDLE_THREADS
 	PtrArray* idle_mysql_sessions;
 	PtrArray* resume_mysql_sessions;
-	CopyCmdMatcher *copy_cmd_matcher;
 	pgsql_conn_exchange_t myexchange;
 #endif // IDLE_THREADS
+	CopyCmdMatcher *copy_cmd_matcher;
 
 	int pipefd[2];
 	PgSQL_Session_Interrupt_Queue_t sess_intrpt_queue;
@@ -244,6 +244,12 @@ public:
 	struct {
 		unsigned long long stvar[PG_st_var_END];
 		unsigned int active_transactions;
+		// tx-poisoned feature counters. Each PgSQL thread maintains its own
+		// (lock-free) and PgSQL_Threads_Handler aggregates across threads for
+		// stats_pgsql_global exposure. See preserve_client_on_broken_backend_in_tx.
+		unsigned long long tx_poisoned_total;
+		unsigned long long tx_poisoned_recovered_total;
+		unsigned long long tx_poisoned_rejected_statements_total;
 	} status_variables;
 
 	struct {
@@ -904,6 +910,7 @@ public:
 		bool monitor_replication_lag_group_by_host;
 		//! How frequently a replication lag check is performed. Unit: 'ms'.
 		int monitor_replication_lag_interval;
+		int monitor_replication_lag_interval_window;
 		//! Read only check timeout. Unit: 'ms'.
 		int monitor_replication_lag_timeout;
 		int monitor_replication_lag_count;
@@ -976,6 +983,7 @@ public:
 		bool have_ssl;
 		bool multiplexing;
 		//		bool stmt_multiplexing;
+		bool preserve_client_on_broken_backend_in_tx;
 		bool log_unhealthy_connections;
 		bool enforce_autocommit_on_reads;
 		bool autocommit_false_not_reusable;
@@ -1006,7 +1014,16 @@ public:
 		int default_query_delay;
 		int default_query_timeout;
 		int query_processor_iterations;
+		/**
+		 * @brief Defines when the first comment of a query needs to be processed.
+		 * 0 : comment ignored
+		 * 1 : comment processed before the query rules
+		 * 2 : comment processed after the query rules (default behavior)
+		 * 3 : comment processed before and after the query rules
+		 */
+		int query_processor_first_comment_parsing;
 		int query_processor_regex;
+		int query_processor_parser;
 		int set_query_lock_on_hostgroup;
 		int set_parser_algorithm;
 		int auto_increment_delay_multiplex;
@@ -1026,10 +1043,21 @@ public:
 		int poll_timeout_on_failure;
 		char* eventslog_filename;
 		int eventslog_filesize;
+		/** @brief Circular buffer size for PostgreSQL advanced events logging. */
+		int eventslog_buffer_history_size;
+		/** @brief Maximum rows retained in stats_pgsql_query_events in-memory table. */
+		int eventslog_table_memory_size;
+		/** @brief Maximum query length copied into PostgreSQL eventslog circular buffer. */
+		int eventslog_buffer_max_query_length;
 		int eventslog_default_log;
 		int eventslog_format;
+		int eventslog_flush_timeout;
+ 		int eventslog_flush_size;
+ 		int eventslog_rate_limit;
 		char* auditlog_filename;
 		int auditlog_filesize;
+		int auditlog_flush_timeout;
+ 		int auditlog_flush_size;
 		// SSL related, proxy to server
 		char* ssl_p2s_ca;
 		char* ssl_p2s_capath;
@@ -1066,6 +1094,10 @@ public:
 #endif
 		int show_processlist_extended;
 		int processlist_max_query_length;
+#ifdef PROXYSQLFFTO
+		bool ffto_enabled;
+		int ffto_max_buffer_size;
+#endif
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;
@@ -1515,7 +1547,10 @@ public:
 	/**
 	 * @brief Retrieves a process list for all threads in the thread pool.
 	 *
-	 * @param args Processlist configuration of PgSQL.
+	 * @param args
+	 *   Processlist rendering options and optional typed query controls.
+	 *   When `args.query_options.enabled=true`, filtering/sorting/pagination is
+	 *   applied in memory after the live snapshot is collected.
 	 *
 	 * @return A `SQLite3_result` object containing the process list, or `NULL` if an error
 	 * occurred.
@@ -1600,6 +1635,13 @@ public:
 	 *
 	 */
 	unsigned int get_active_transations();
+
+	// Aggregated tx-poisoned counters across all PgSQL threads. These back the
+	// pgsql_tx_poisoned_total / pgsql_tx_poisoned_recovered_total /
+	// pgsql_tx_poisoned_rejected_statements_total rows in stats_pgsql_global.
+	unsigned long long get_tx_poisoned_total();
+	unsigned long long get_tx_poisoned_recovered_total();
+	unsigned long long get_tx_poisoned_rejected_statements_total();
 
 #ifdef IDLE_THREADS
 	/**
@@ -1704,4 +1746,4 @@ public:
 };
 	
 	
-#endif /* __CLASS_PGSQL_THREAD_H */
+#endif /* PROXYSQL_PGSQL_THREAD_H */

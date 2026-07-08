@@ -59,7 +59,7 @@ public:
     PgSQL_TxnCmdParser() noexcept { tokens.reserve(16); }
     ~PgSQL_TxnCmdParser() noexcept = default;
 
-    TxnCmd parse(std::string_view input, bool in_transaction_mode) noexcept;
+    TxnCmd parse(std::string_view input) noexcept;
 
 private:
     std::vector<std::string_view> tokens;
@@ -102,6 +102,8 @@ public:
 
     bool handle_transaction(std::string_view input);
 	int get_savepoint_count() const { return savepoint.size(); }
+    bool is_in_transaction() const { return !transaction_state.empty(); }
+    void reset_state();
     void fill_internal_session(nlohmann::json& j);
 
 private:

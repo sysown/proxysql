@@ -54,6 +54,11 @@ CITYHASH_LDIR := $(CITYHASH_PATH)/src/.libs
 LZ4_PATH := $(DEPS_PATH)/lz4/lz4
 LZ4_LDIR := $(LZ4_PATH)/lib
 
+# Zstandard compression library for protocol compression support
+ZSTD_PATH := $(DEPS_PATH)/zstd/zstd
+ZSTD_IDIR := $(ZSTD_PATH)/lib
+ZSTD_LDIR := $(ZSTD_PATH)/lib
+
 CLICKHOUSE_CPP_PATH := $(DEPS_PATH)/clickhouse-cpp/clickhouse-cpp
 CLICKHOUSE_CPP_IDIR := $(CLICKHOUSE_CPP_PATH) -I$(CLICKHOUSE_CPP_PATH)/contrib/absl
 CLICKHOUSE_CPP_LDIR := $(CLICKHOUSE_CPP_PATH)/clickhouse
@@ -93,6 +98,10 @@ LIBUSUAL_LDIR := $(LIBUSUAL_PATH)/.libs
 LIBSCRAM_PATH := $(DEPS_PATH)/libscram
 LIBSCRAM_IDIR := $(LIBSCRAM_PATH)/include
 LIBSCRAM_LDIR := $(LIBSCRAM_PATH)/lib
+
+PARSERSQL_PATH := $(DEPS_PATH)/parsersql/parsersql
+PARSERSQL_IDIR := $(PARSERSQL_PATH)/include
+PARSERSQL_LDIR := $(PARSERSQL_PATH)
 
 
 TAP_PATH := $(PROXYSQL_PATH)/test/tap/tap

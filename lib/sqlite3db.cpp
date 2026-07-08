@@ -103,6 +103,8 @@ void SQLite3_row::add_fields(sqlite3_stmt *stmt) {
 	}
 	if (data_size) {
 		data=(char *)malloc(data_size);
+	} else {
+		data=NULL;
 	}
 	for (i=0;i<cnt;i++) {
 		t=(*proxy_sqlite3_column_type)(stmt,i);
@@ -110,17 +112,18 @@ void SQLite3_row::add_fields(sqlite3_stmt *stmt) {
 		if (t==SQLITE_NULL) {
 			//sizes[i]=0;
 			fields[i]=NULL;
-		} else {
+		} else if (data) {
 			memcpy(data+data_ptr,c,sizes[i]);
 			fields[i]=data+data_ptr;
 			data_ptr+=sizes[i];
-			data[data_ptr]='\0';
+			data[data_ptr]=0;
 			data_ptr++; // leading 0
+		} else {
+			fields[i]=NULL;
 		}
 	}
 	ds=data_size;
 }
-
 /**
  * @brief Adds fields to the SQLite3_row object based on provided field data.
  * 
@@ -141,9 +144,11 @@ void SQLite3_row::add_fields(char **_fields) {
 		}
 		if (data_size) {
 			data=(char *)malloc(data_size);
+		} else {
+			data=NULL;
 		}
 		for (i=0;i<cnt;i++) {
-			if (_fields[i]) {
+			if (_fields[i] && data) {
 				memcpy(data+data_ptr,_fields[i],sizes[i]);
 				fields[i]=data+data_ptr;
 				data_ptr+=sizes[i];
@@ -537,7 +542,7 @@ int SQLite3DB::return_one_int(const char *str) {
  * @param table_def The definition of the table.
  * @return The number of tables matching the structure.
  */
-int SQLite3DB::check_table_structure(char *table_name, char *table_def) {
+int SQLite3DB::check_table_structure(const char *table_name, const char *table_def) {
 	const char *q1="SELECT COUNT(*) FROM sqlite_master WHERE type=\"table\" AND name=\"%s\" AND sql=\"%s\"";
 	int count=0;
 	int l=strlen(q1)+strlen(table_name)+strlen(table_def)+1;
@@ -567,7 +572,7 @@ int SQLite3DB::check_table_structure(char *table_name, char *table_def) {
  * @param dropit Flag to indicate whether to drop existing table before creating.
  * @return True if the table creation was successful, false otherwise.
  */
-bool SQLite3DB::build_table(char *table_name, char *table_def, bool dropit) {
+bool SQLite3DB::build_table(const char *table_name, const char *table_def, bool dropit) {
 	bool rc;
 	if (dropit) {
 		const char *q2="DROP TABLE IF EXISTS %s";
@@ -594,7 +599,7 @@ bool SQLite3DB::build_table(char *table_name, char *table_def, bool dropit) {
  * @param table_def The definition of the table.
  * @return True if the table already exists or was successfully created, false otherwise.
  */
-bool SQLite3DB::check_and_build_table(char *table_name, char *table_def) {
+bool SQLite3DB::check_and_build_table(const char *table_name, const char *table_def) {
 	int rci;
 	bool rcb;
 	rci=check_table_structure(table_name,table_def);
@@ -705,8 +710,8 @@ void SQLite3_result::dump_to_stderr() {
 		size_t len = strlen(r->name);
 		if (len > columns_lengths[i]) {
 			columns_lengths[i] = len;
-			i++;
 		}
+		i++;
 	}
 	for (std::vector<SQLite3_row *>::iterator it=rows.begin() ; it!=rows.end(); ++it) {
 		SQLite3_row *r=*it;

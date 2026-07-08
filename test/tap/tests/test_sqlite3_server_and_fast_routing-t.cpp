@@ -31,7 +31,7 @@ int benchmark_query_rules_fast_routing(CommandLine& cl, MYSQL* proxysql_admin, M
 	double nofr = 0;
 	double fr = 0;
 
-	int host_port_err = extract_module_host_port(proxysql_admin, "sqliteserver-mysql_ifaces", host_port);
+	int host_port_err = extract_module_host_port(proxysql_admin, "sqliteserver-mysql_ifaces", host_port, true);
 	if (host_port_err) {
 		diag("Failed to get and parse 'sqliteserver-mysql_ifaces' at line '%d'", __LINE__);
 		return EXIT_FAILURE;

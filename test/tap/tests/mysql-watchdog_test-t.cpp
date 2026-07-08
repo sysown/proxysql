@@ -10,6 +10,7 @@
 #include "mysql.h"
 #include "tap.h"
 #include "command_line.h"
+#include "noise_utils.h"
 
 using std::string;
 
@@ -41,7 +42,15 @@ int main() {
 		return -1;
 	}
 
-	plan(1);  // One test for MySQL
+	spawn_internal_noise(cl, internal_noise_random_stats_poller);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
+	spawn_internal_noise(cl, internal_noise_pgsql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}, {"avg_delay_ms", "300"}});
+
+	if (cl.use_noise) {
+		plan(1 + 3);
+	} else {
+		plan(1);
+	}
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
 	if (!proxysql_admin) {

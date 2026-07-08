@@ -86,13 +86,10 @@ class stmt_execute_metadata_t {
 	my_bool *is_nulls;
 	unsigned long *lengths;
 	void *pkt;
-	stmt_execute_metadata_t() {
-		size = 0;
-		stmt_id = 0;
-		binds=NULL;
-		is_nulls=NULL;
-		lengths=NULL;
-		pkt=NULL;
+	stmt_execute_metadata_t()
+	  : size(0), stmt_id(0), flags(0), num_params(0),
+	    binds(nullptr), is_nulls(nullptr), lengths(nullptr), pkt(nullptr)
+	{
 	}
 	~stmt_execute_metadata_t() {
 		if (binds)
@@ -189,6 +186,8 @@ class MySQL_STMTs_local_v14 {
 	public:
 	// this map associate client_stmt_id to global_stmt_id : this is used only for client connections
 	std::map<uint32_t, uint64_t> client_stmt_to_global_ids;
+	// this map associates client_stmt_id to prepare-time min_gtid annotations
+	std::map<uint32_t, std::string> client_stmt_to_min_gtid;
 	// this multimap associate global_stmt_id to client_stmt_id : this is used only for client connections
 	std::multimap<uint64_t, uint32_t> global_stmt_to_client_ids;
 
@@ -205,6 +204,7 @@ class MySQL_STMTs_local_v14 {
 		sess = NULL;
 		is_client_ = _ic;
 		client_stmt_to_global_ids = std::map<uint32_t, uint64_t>();
+		client_stmt_to_min_gtid = std::map<uint32_t, std::string>();
 		global_stmt_to_client_ids = std::multimap<uint64_t, uint32_t>();
 		backend_stmt_to_global_ids = std::map<uint32_t, uint64_t>();
 		global_stmt_to_backend_ids = std::map<uint64_t, uint32_t>();
@@ -224,6 +224,9 @@ class MySQL_STMTs_local_v14 {
 	unsigned int get_num_backend_stmts() { return backend_stmt_to_global_ids.size(); }
 	uint32_t generate_new_client_stmt_id(uint64_t global_statement_id);
 	uint64_t find_global_stmt_id_from_client(uint32_t client_stmt_id);
+	void set_client_min_gtid(uint32_t client_stmt_id, const char* min_gtid);
+	const char* find_client_min_gtid(uint32_t client_stmt_id) const;
+	void erase_client_min_gtid(uint32_t client_stmt_id);
 	bool client_close(uint32_t client_statement_id);
 	MYSQL_STMT * find_backend_stmt_by_global_id(uint32_t global_statement_id) {
 		auto s=global_stmt_to_backend_stmt.find(global_statement_id);

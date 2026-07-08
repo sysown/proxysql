@@ -11,6 +11,7 @@
 #include <thread>
 #include "libpq-fe.h"
 #include "command_line.h"
+#include "noise_utils.h"
 #include "tap.h"
 #include "utils.h"
 
@@ -48,21 +49,25 @@ PGConnPtr createNewConnection(ConnType conn_type, bool with_ssl) {
 
 bool executeQueries(PGconn* conn, const std::vector<std::string>& queries) {
     auto fnResultType = [](const char* query) -> int {
-        const char* fs = strchr(query, ' ');
-        size_t qtlen = strlen(query);
-        if (fs != NULL) {
-            qtlen = (fs - query) + 1;
+        // Skip leading whitespace and /* ... */ comments to find the first keyword
+        const char* p = query;
+        while (*p) {
+            if (isspace(static_cast<unsigned char>(*p))) { p++; continue; }
+            if (p[0] == '/' && p[1] == '*') {
+                p += 2;
+                while (*p && !(p[0] == '*' && p[1] == '/')) p++;
+                if (*p) p += 2;
+                continue;
+            }
+            break;
         }
-        char buf[qtlen];
-        memcpy(buf, query, qtlen - 1);
-        buf[qtlen - 1] = 0;
 
-        if (strncasecmp(buf, "SELECT", sizeof("SELECT") - 1) == 0) {
+        if (strncasecmp(p, "SELECT", 6) == 0) {
             return PGRES_TUPLES_OK;
         }
-        else if (strncasecmp(buf, "COPY", sizeof("COPY") - 1) == 0) {
-			if (strstr(query, "FROM") && (strstr(query, "STDIN") || strstr(query, "STDOUT"))) {
-				return PGRES_COPY_IN;
+        else if (strncasecmp(p, "COPY", 4) == 0) {
+            if (strstr(query, "FROM") && (strstr(query, "STDIN") || strstr(query, "STDOUT"))) {
+                return PGRES_COPY_IN;
             }
         }
 
@@ -169,11 +174,11 @@ bool encodeNumericBinary(uint8_t* out, const char* numStr) {
     for (size_t i = 0; i < paddedLen; i += 4) {
         char group[5] = { 0 }; // Temporary buffer for a group of up to 4 digits
         strncpy(group, combined + i, 4);
-        digits[digitCount++] = htons((int16_t)atoi(group)); // Convert group to 16-bit integer
+        digits[digitCount++] = static_cast<int16_t>(htons(static_cast<uint16_t>(atoi(group)))); // Convert group to 16-bit integer
     }
 
 
-    numDigits = (int16_t)(digitCount == 1 && combined[0] == '0') ? 0 : digitCount;
+    numDigits = static_cast<int16_t>((digitCount == 1 && combined[0] == '0') ? 0 : digitCount);
 
     // Calculate weight
     weight = (int16_t)((intPartLen + 3) / 4 - 1);
@@ -186,7 +191,7 @@ bool encodeNumericBinary(uint8_t* out, const char* numStr) {
     out += sizeof(int16_t);
     write_int16(out, weight);             // weight
     out += sizeof(int16_t);
-    write_int16(out, htons(sign));        // sign (converted to network byte order)
+    write_int16(out, static_cast<int16_t>(htons(sign)));        // sign (converted to network byte order)
     out += sizeof(int16_t);
     write_int16(out, scale);              // scale
     out += sizeof(int16_t);
@@ -281,8 +286,15 @@ int is_string_in_result(PGresult* result, const char* target_str) {
 }
 
 bool check_logs_for_command(std::fstream& f_proxysql_log, const std::string& command_regex) {
-    const auto& [_, cmd_lines] { get_matching_lines(f_proxysql_log, command_regex) };
-	return cmd_lines.empty() ? false : true;
+    // ProxySQL's log writes for 'Switching {to Fast Forward,back to Normal} mode'
+    // happen asynchronously relative to the SQL that triggers them, so a single
+    // scan right after the SQL completes is racy. wait_for_log_match() retries
+    // with a short timeout, clearing EOF between scans; on hit it returns
+    // immediately, so assertions against a line that is already present pay no
+    // extra latency. Negative assertions (check_logs_for_command(...) == false)
+    // also benefit: they now wait up to the timeout to confirm absence, avoiding
+    // a false pass when the line would have arrived a few hundred ms later.
+    return wait_for_log_match(f_proxysql_log, command_regex);
 }
 
 bool setupTestTable(PGconn* conn) {
@@ -819,7 +831,79 @@ void testSTDOUT_TEXT_FORMAT(PGconn* admin_conn, PGconn* conn, std::fstream& f_pr
     ok(check_logs_for_command(f_proxysql_log, ".*\\[INFO\\] Switching back to Normal mode \\(Session Type:0x06\\).*"), "Switching back to Normal mode");
 }
 
+/**
+ * @brief Tests that COPY commands with leading SQL comments still trigger fast-forward mode.
+ *
+ * When digest is available, leading comments are stripped, so the strncasecmp
+ * prefix check sees "COPY ..." and allows the RE2 match to proceed. This test
+ * verifies that comment-prefixed COPY commands are not incorrectly rejected by
+ * the fast-reject optimization.
+ *
+ * @param admin_conn A pointer to the admin PGconn connection.
+ * @param conn A pointer to the PGconn connection.
+ * @param f_proxysql_log A reference to the fstream object for ProxySQL logs.
+ */
+void testCopyWithLeadingComments(PGconn* admin_conn, PGconn* conn, std::fstream& f_proxysql_log) {
+    if (!executeQueries(conn, {"/* leading comment */ COPY copy_in_test(column1,column2,column3,column4,column5) FROM STDIN (FORMAT TEXT)"}))
+        return;
+
+    ok(check_logs_for_command(f_proxysql_log, ".*\\[INFO\\].* Switching to Fast Forward mode \\(Session Type:0x06\\)"),
+        "COPY with leading comments should trigger fast forward mode");
+
+    bool success = true;
+    for (unsigned int i = 0; i < test_data.size(); i++) {
+        const char* data = test_data[i];
+        bool last = (i == (test_data.size() - 1));
+        if (!sendCopyData(conn, data, strlen(data), last)) {
+            success = false;
+            break;
+        }
+    }
+
+    ok(success, "Copy data transmission should be successful");
+
+    PGresult* res = PQgetResult(conn);
+    ok((PQresultStatus(res) == PGRES_COMMAND_OK), "Rows successfully inserted. %s", PQerrorMessage(conn));
+
+    const char* row_count_str = PQcmdTuples(res);
+    const int row_count = atoi(row_count_str);
+    ok(row_count == test_data.size(), "Total rows inserted: %d. Expected: %ld", row_count, test_data.size());
+    PQclear(res);
+
+    ok(check_logs_for_command(f_proxysql_log, ".*\\[INFO\\] Switching back to Normal mode \\(Session Type:0x06\\).*"),
+        "Switching back to Normal mode");
+}
+
+/**
+ * @brief Tests that SELECT containing COPY keywords in a string literal works correctly.
+ *
+ * With digest ON, string literals are normalized to '?', so the regex never sees
+ * COPY keywords. With digest OFF, the regex may match COPY inside a string literal.
+ * This test verifies that the query still executes correctly in either case.
+ *
+ * @param admin_conn A pointer to the admin PGconn connection.
+ * @param conn A pointer to the PGconn connection.
+ * @param f_proxysql_log A reference to the fstream object for ProxySQL logs.
+ */
+void testSelectWithCopyInStringLiteral(PGconn* admin_conn, PGconn* conn, std::fstream& f_proxysql_log) {
+    PGresult* res = PQexec(conn, "SELECT 'COPY x FROM STDIN'");
+    ok(PQresultStatus(res) == PGRES_TUPLES_OK, "SELECT with COPY in string literal should return TUPLES_OK. %s", PQerrorMessage(conn));
+
+    if (PQresultStatus(res) == PGRES_TUPLES_OK) {
+        int rows = PQntuples(res);
+        ok(rows == 1, "Expected 1 row. Actual: %d", rows);
+        char* value = PQgetvalue(res, 0, 0);
+        ok(strcmp(value, "COPY x FROM STDIN") == 0, "Expected 'COPY x FROM STDIN'. Actual: '%s'", value);
+    } else {
+        ok(0, "Skipped row count check - query failed");
+        ok(0, "Skipped value check - query failed");
+    }
+    PQclear(res);
+}
+
 std::vector<std::pair<std::string, void (*)(PGconn*, PGconn*, std::fstream& f_proxysql_log)>> tests = {
+    { "SELECT with COPY in string literal", testSelectWithCopyInStringLiteral },
+    { "COPY with leading comments", testCopyWithLeadingComments },
     { "COPY ... FROM STDIN Text Format", testSTDIN_TEXT_FORMAT },
     { "COPY ... FROM STDIN Binary Format", testSTDIN_TEXT_BINARY },
     { "COPY ... FROM STDIN Error", testSTDIN_ERROR },
@@ -831,7 +915,7 @@ std::vector<std::pair<std::string, void (*)(PGconn*, PGconn*, std::fstream& f_pr
 	{ "COPY ... FROM STDIN Permanent Fast Forward", testSTDIN_PERMANENT_FAST_FORWARD }
 };
 
-void execute_tests(bool with_ssl, bool diff_conn) {
+void execute_tests(bool with_ssl, bool diff_conn, bool query_digests = true) {
 
     PGConnPtr admin_conn_1 = createNewConnection(ConnType::ADMIN, with_ssl);
 
@@ -839,9 +923,13 @@ void execute_tests(bool with_ssl, bool diff_conn) {
            "DELETE FROM pgsql_query_rules",
            "LOAD PGSQL QUERY RULES TO RUNTIME",
            "UPDATE pgsql_users SET fast_forward=0" ,
-           "LOAD PGSQL USERS TO RUNTIME"
+           "LOAD PGSQL USERS TO RUNTIME",
+           query_digests ? "SET pgsql-query_digests='true'" : "SET pgsql-query_digests='false'",
+           "LOAD PGSQL VARIABLES TO RUNTIME"
         }))
         return;
+
+    diag(">>>> query_digests=%s <<<<", query_digests ? "true" : "false");
 
     std::string f_path{ get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log" };
     std::fstream f_proxysql_log{};
@@ -897,14 +985,25 @@ void execute_tests(bool with_ssl, bool diff_conn) {
 }
 
 int main(int argc, char** argv) {
-
-    plan(51 * 2); // Total number of tests planned
-
     if (cl.getEnv())
         return exit_status();
 
-    execute_tests(true, false);
-    execute_tests(false, false);
+	spawn_internal_noise(cl, internal_noise_mysql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}, {"avg_delay_ms", "300"}});
+	spawn_internal_noise(cl, internal_noise_prometheus_poller);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
+
+	if (cl.use_noise) {
+		plan(59 * 4 + 3);
+	} else {
+		plan(59 * 4);
+	}
+
+    // query_digests ON: strncasecmp fast-reject path active
+    execute_tests(true, false, true);
+    execute_tests(false, false, true);
+    // query_digests OFF: falls back to full RE2 match
+    execute_tests(true, false, false);
+    execute_tests(false, false, false);
 
     return exit_status();
 }

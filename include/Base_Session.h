@@ -99,20 +99,10 @@ class Base_Session {
 	//MySQL_STMTs_meta *sess_STMTs_meta;
 	//StmtLongDataHandler *SLDH;
 
-	// GenAI async support
-#ifdef epoll_create1
-	struct GenAI_PendingRequest {
-		uint64_t request_id;
-		int client_fd;  // MySQL side of socketpair
-		std::string json_query;
-		std::chrono::steady_clock::time_point start_time;
-		PtrSize_t *original_pkt;  // Original packet to complete
-	};
-
-	std::unordered_map<uint64_t, GenAI_PendingRequest> pending_genai_requests_;
-	uint64_t next_genai_request_id_;
-	int genai_epoll_fd_;  // For monitoring GenAI response fds
-#endif
+	// GenAI async support (per-session epoll fd + pending-request map)
+	// removed in Step 4 of the GenAI plugin carve-out -- the
+	// GENAI:/LLM: prefix handlers that owned this state are gone.
+	// See decision Q2 in the design doc.
 
 
 

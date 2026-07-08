@@ -5,6 +5,7 @@ using json = nlohmann::json;
 #include "proxysql.h"
 #include "cpp.h"
 #include <zlib.h>
+#include <zstd.h>
 #ifndef UNIX_PATH_MAX
 #define UNIX_PATH_MAX    108
 #endif 
@@ -18,6 +19,68 @@ using json = nlohmann::json;
 #define RESULTSET_BUFLEN_DS_1M 1000*1024
 
 extern MySQL_Threads_Handler *GloMTH;
+
+static inline bool use_zstd_compression(const MySQL_Connection* myconn) {
+	return myconn && myconn->options.compression_zstd;
+}
+
+static int get_zstd_compression_level(const MySQL_Connection* myconn) {
+	const int zstd_level = myconn ? myconn->options.zstd_compression_level : 0;
+	if (zstd_level > 0 && zstd_level <= ZSTD_maxCLevel()) {
+		return zstd_level;
+	}
+	if (mysql_thread___zstd_compression_level > 0 && mysql_thread___zstd_compression_level <= ZSTD_maxCLevel()) {
+		return mysql_thread___zstd_compression_level;
+	}
+	return ZSTD_CLEVEL_DEFAULT;
+}
+
+static bool decompress_mysql_payload(
+	const MySQL_Connection* myconn, Bytef* dest, uLongf destLen, const unsigned char* source, size_t sourceLen
+) {
+	if (use_zstd_compression(myconn)) {
+		const size_t rc = ZSTD_decompress(dest, destLen, source, sourceLen);
+		return !ZSTD_isError(rc) && rc == destLen;
+	}
+
+	const int rc = uncompress(dest, &destLen, source, sourceLen);
+	return rc == Z_OK;
+}
+
+static bool fallback_to_uncompressed_mysql_payload(
+	Bytef* dest, uLongf destLen, unsigned int& datalength, const unsigned char* source, size_t sourceLen,
+	const unsigned char* packet
+) {
+	if (sourceLen > destLen || sourceLen < 3) {
+		return false;
+	}
+
+	memcpy(dest, source, sourceLen);
+	datalength = sourceLen;
+
+	return packet[9] == 0 && packet[8] == 0 && packet[7] == sourceLen;
+}
+
+static bool compress_mysql_payload(
+	const MySQL_Connection* myconn, Bytef* dest, size_t& destLen, const unsigned char* source, size_t sourceLen
+) {
+	if (use_zstd_compression(myconn)) {
+		const size_t rc = ZSTD_compress(dest, destLen, source, sourceLen, get_zstd_compression_level(myconn));
+		if (ZSTD_isError(rc)) {
+			return false;
+		}
+		destLen = rc;
+		return true;
+	}
+
+	uLongf zlib_dest_len = destLen;
+	const int rc = compress2(dest, &zlib_dest_len, source, sourceLen, mysql_thread___protocol_compression_level);
+	if (rc != Z_OK) {
+		return false;
+	}
+	destLen = zlib_dest_len;
+	return true;
+}
 
 #ifdef DEBUG
 static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) {
@@ -111,8 +174,13 @@ static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) 
 
 static enum sslstatus get_sslstatus(SSL* ssl, int n)
 {
+	// See issue #5792.
+	// SSL_get_error() classifies based on the return code + SSL_want() state, not on the
+	// thread-local OpenSSL error queue. For SSL_ERROR_NONE / WANT_READ / WANT_WRITE no error is
+	// pushed onto the queue, so there is nothing to clear. Only the actual error classifications
+	// (ZERO_RETURN / SYSCALL / SSL / default) need the queue drained so the next SSL op on this
+	// thread starts clean.
 	int err = SSL_get_error(ssl, n);
-	ERR_clear_error();
 	switch (err) {
 	case SSL_ERROR_NONE:
 		return SSLSTATUS_OK;
@@ -122,6 +190,9 @@ static enum sslstatus get_sslstatus(SSL* ssl, int n)
 	case SSL_ERROR_ZERO_RETURN:
 	case SSL_ERROR_SYSCALL:
 	default:
+		// drain the queue; any consumer that wanted the details should have read them
+		// before returning to this point
+		while (ERR_get_error()) { /* discard */ }
 		return SSLSTATUS_FAIL;
 	}
 }
@@ -241,6 +312,8 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	connect_tries=0;
 	poll_fds_idx=-1;
 	resultset_length=0;
+	status=0;
+	fd=-1;
 
 	revents = 0;
 
@@ -259,6 +332,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	switching_auth_type = AUTH_UNKNOWN_PLUGIN;
 	switching_auth_sent = AUTH_UNKNOWN_PLUGIN;
 	auth_in_progress = 0;
+	tmp_charset = 0;
 	x509_subject_alt_name=NULL;
 	ssl=NULL;
 	rbio_ssl = NULL;
@@ -586,10 +660,28 @@ int MySQL_Data_Stream::read_from_net() {
 				// to avoid issue with SSL, we will only read the header and eventually the first packet
 				r = recv(fd, queue_w_ptr(queueIN), 4, 0);
 				if (r == 4) {
-					// let's try to read a whole packet
-					mysql_hdr Hdr;
-					memcpy(&Hdr,queueIN.buffer,sizeof(mysql_hdr));
-					r += recv(fd, queue_w_ptr(queueIN)+4, Hdr.pkt_length, 0);
+					// Check for PROXY protocol before treating as MySQL header
+					// PROXY protocol starts with "PROXY " (6 bytes), but we only have 4 bytes here
+					// If first 4 bytes are "PROX", don't interpret as MySQL header
+					if (strncmp((char *)queueIN.buffer, "PROX", 4) == 0) {
+						// PROXY protocol detected - read more data without MySQL header parsing
+						r += recv(fd, queue_w_ptr(queueIN)+4, s-4, 0);
+					} else {
+						// let's try to read a whole packet
+						mysql_hdr Hdr;
+						memcpy(&Hdr,queueIN.buffer,sizeof(mysql_hdr));
+						// GHSA-58ww-865x-grpr: bound the declared packet length by the
+						// remaining capacity of queueIN. Without this check an unauthenticated
+						// client can drive a heap out-of-bounds write into the fixed-size
+						// 32KB input queue by sending an oversized first MySQL packet.
+						if (Hdr.pkt_length > (unsigned int)(s - 4)) {
+							proxy_error("Oversized first packet from client: pkt_length=%u exceeds queue capacity (%d). Closing fd=%d\n",
+								Hdr.pkt_length, s - 4, fd);
+							shut_soft();
+							return -1;
+						}
+						r += recv(fd, queue_w_ptr(queueIN)+4, Hdr.pkt_length, 0);
+					}
 				}
 			} else {
 				r = recv(fd, queue_w_ptr(queueIN), s, 0);
@@ -1223,6 +1315,26 @@ int MySQL_Data_Stream::buffer2array() {
 							// we override old address/port
 							addr.addr = strdup(PROXY_info->source_address);
 							addr.port = PROXY_info->source_port;
+						} else if (ppi.header_was_unknown) {
+							// GHSA-gw94-85m2-x8v2: PP1 UNKNOWN frame.
+							// Per HAProxy spec the receiver MUST ignore
+							// any address fields that follow UNKNOWN, so
+							// addr.addr stays pointing at the real TCP
+							// peer. We still record that we observed a
+							// PROXY header so audit/log code can see the
+							// frame was present, and we populate
+							// proxy_address/proxy_port from the real TCP
+							// peer (mirroring what the TCP4/TCP6 branch
+							// does) so JSON serialization reports the
+							// upstream LB consistently across all branches.
+							PROXY_info = new ProxyProtocolInfo(ppi);
+							if (addr.addr) {
+								strncpy(PROXY_info->proxy_address, addr.addr, INET6_ADDRSTRLEN);
+							}
+							PROXY_info->proxy_port = addr.port;
+							if (addr.addr) {
+								proxy_info("Ignoring PROXY UNKNOWN header from IP %s; using real TCP peer as client address\n", addr.addr);
+							}
 						} else {
 							if (addr.addr) {
 								proxy_warning("Unable to parse PROXY header from IP %s . Skipping PROXY header\n", addr.addr);
@@ -1289,36 +1401,19 @@ int MySQL_Data_Stream::buffer2array() {
 				destLen=payload_length;
 				//dest=(Bytef *)l_alloc(destLen);
 				dest=(Bytef *)malloc(destLen);
-				int rc=uncompress(dest, &destLen, _ptr, queueIN.pkt.size-7);
-				if (rc!=Z_OK) {
+				const bool decompressed = decompress_mysql_payload(myconn, dest, destLen, _ptr, queueIN.pkt.size-7);
+				if (!decompressed) {
 					// for some reason, uncompress failed
 					// accoding to debugging on #1410 , it seems some library may send uncompress data claiming it is compressed
 					// we try to assume it is not compressed, and we do some sanity check
-					memcpy(dest, _ptr, queueIN.pkt.size-7);
-					datalength=queueIN.pkt.size-7;
-					// some sanity check now
-					unsigned char _u;
-					bool sanity_check = false;
-					_u = *(u+9);
-					// 2nd and 3rd bytes are 0
-					if (_u == 0) {
-						_u = *(u+8);
-						if (_u == 0) {
-							_u = *(u+7);
-							// 1st byte = size - 7
-							unsigned int _size = _u ;
-							if (queueIN.pkt.size-7 == _size) {
-								sanity_check = true;
-							}
-						}
-					}
-					if (sanity_check == false) {
+					if (!fallback_to_uncompressed_mysql_payload(dest, destLen, datalength, _ptr, queueIN.pkt.size-7, u)) {
 						proxy_error("Unable to uncompress a compressed packet\n");
 						shut_soft();
 						return ret;
 					}
+				} else {
+					datalength=payload_length;
 				}
-				datalength=payload_length;
 				// change _ptr to the new buffer
 				_ptr=dest;
 			} else {
@@ -1406,7 +1501,7 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 		// this worked in the past . it applies for small packets
 		uLong sourceLen=total_size;
 		Bytef *source=(Bytef *)l_alloc(total_size);
-		uLongf destLen=total_size*120/100+12;
+		size_t destLen=use_zstd_compression(myconn) ? ZSTD_compressBound(total_size) : total_size*120/100+12;
 		Bytef *dest=(Bytef *)malloc(destLen);
 		i=0;
 		total_size=0;
@@ -1417,8 +1512,8 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 			total_size+=p2.size;
 			l_free(p2.size,p2.ptr);
 		}
-		int rc=compress2(dest, &destLen, source, sourceLen, mysql_thread___protocol_compression_level);
-		assert(rc==Z_OK);
+		const bool compressed = compress_mysql_payload(myconn, dest, destLen, source, sourceLen);
+		assert(compressed);
 		l_free(total_size, source);
 		queueOUT.pkt.size=destLen+7;
 		queueOUT.pkt.ptr=l_alloc(queueOUT.pkt.size);
@@ -1437,22 +1532,21 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 
 		unsigned int len1=MAX_COMPRESSED_PACKET_SIZE/2;
 		unsigned int len2=p2.size-len1;
-		uLongf destLen1;
-		uLongf destLen2;
+		size_t destLen1;
+		size_t destLen2;
 		Bytef *dest1;
 		Bytef *dest2;
-		int rc;
 
 		mysql_hdr hdr;
 
-		destLen1=len1*120/100+12;
+		destLen1=use_zstd_compression(myconn) ? ZSTD_compressBound(len1) : len1*120/100+12;
 		dest1=(Bytef *)malloc(destLen1+7);
-		destLen2=len2*120/100+12;
+		destLen2=use_zstd_compression(myconn) ? ZSTD_compressBound(len2) : len2*120/100+12;
 		dest2=(Bytef *)malloc(destLen2+7);
-		rc=compress2(dest1+7, &destLen1, (const unsigned char *)p2.ptr, len1, mysql_thread___protocol_compression_level);
-		assert(rc==Z_OK);
-		rc=compress2(dest2+7, &destLen2, (const unsigned char *)p2.ptr+len1, len2, mysql_thread___protocol_compression_level);
-		assert(rc==Z_OK);
+		const bool compressed1 = compress_mysql_payload(myconn, dest1+7, destLen1, (const unsigned char *)p2.ptr, len1);
+		assert(compressed1);
+		const bool compressed2 = compress_mysql_payload(myconn, dest2+7, destLen2, (const unsigned char *)p2.ptr+len1, len2);
+		assert(compressed2);
 
 		hdr.pkt_length=destLen1;
 		hdr.pkt_id=++myconn->compression_pkt_id;
@@ -1521,13 +1615,15 @@ int MySQL_Data_Stream::array2buffer() {
 					if (DSS==STATE_CLIENT_AUTH_OK && idx == PSarrayOUT->len) {
 						DSS=STATE_SLEEP;
 						// enable compression
-						if (myconn->options.server_capabilities & CLIENT_COMPRESS) {
+						if (myconn->options.server_capabilities & (CLIENT_COMPRESS | CLIENT_ZSTD_COMPRESSION_ALGORITHM)) {
 							if (myconn->options.compression_min_length) {
 								myconn->set_status(true, STATUS_MYSQL_CONNECTION_COMPRESSION);
 							}
 						} else {
 							//explicitly disable compression
 							myconn->options.compression_min_length=0;
+							myconn->options.compression_zstd=false;
+							myconn->options.zstd_compression_level=0;
 							myconn->set_status(false, STATUS_MYSQL_CONNECTION_COMPRESSION);
 						}
 					}
@@ -1766,6 +1862,11 @@ void MySQL_Data_Stream::get_client_myds_info_json(json& j) {
 		jc1["PROXY_V1"]["source_port"] = PROXY_info->source_port;
 		jc1["PROXY_V1"]["destination_port"] = PROXY_info->destination_port;
 		jc1["PROXY_V1"]["proxy_port"] = PROXY_info->proxy_port;
+		// GHSA-gw94-85m2-x8v2: expose the UNKNOWN-frame signal so audit
+		// consumers can distinguish a spec-compliant UNKNOWN observation
+		// (source_address/destination_address intentionally empty) from
+		// any other state where the address fields happen to be empty.
+		jc1["PROXY_V1"]["header_was_unknown"] = PROXY_info->header_was_unknown;
 	}
 	jc1["encrypted"] = encrypted;
 	if (encrypted) {

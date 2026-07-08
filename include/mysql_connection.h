@@ -1,5 +1,5 @@
-#ifndef __CLASS_MYSQL_CONNECTION_H
-#define __CLASS_MYSQL_CONNECTION_H
+#ifndef PROXYSQL_MYSQL_CONNECTION_H
+#define PROXYSQL_MYSQL_CONNECTION_H
 
 #include "proxysql.h"
 #include "cpp.h"
@@ -26,7 +26,7 @@
 #define STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT        0x00000800
 #define STATUS_MYSQL_CONNECTION_HAS_WARNINGS         0x00001000
 
-class MySQLServers_SslParams;
+#include "Servers_SslParams.h"
 
 class Variable {
 public:
@@ -83,16 +83,20 @@ class MySQL_Connection {
 		uint32_t server_capabilities;
 		uint32_t client_flag;
 		unsigned int compression_min_length;
+		uint8_t zstd_compression_level;
 		char *init_connect;
 		bool init_connect_sent;
 		char * session_track_gtids;
 		char *ldap_user_variable;
 		char *ldap_user_variable_value;
-		bool session_track_gtids_sent;
+		bool session_track_gtids_sent;		///< Flag indicating if GTID session tracking has been configured on this connection
+		bool session_track_variables_sent;	///< Flag indicating if session_track_system_variables has been configured on this connection
+		bool session_track_state_sent;		///< Flag indicating if session_track_state_change has been configured on this connection
 		bool ldap_user_variable_sent;
 		uint8_t protocol_version;
 		int8_t last_set_autocommit;
 		bool autocommit;
+		bool compression_zstd;
 		bool no_backslash_escapes;
 	} options;
 
@@ -262,6 +266,36 @@ class MySQL_Connection {
 	void reset();
 
 	bool get_gtid(char *buff, uint64_t *trx_id);
+	/**
+	 * @brief Extract session variable changes from MySQL's session tracking system.
+	 *
+	 * === PR 5166: Backend Variable Extraction ===
+	 *
+	 * This method is the interface to MySQL's native session tracking protocol and
+	 * extracts system variable changes that occurred during the last query execution.
+	 *
+	 * TECHNICAL DETAILS:
+	 * - Uses mysql_session_track_get_first/next() to iterate through SESSION_TRACK_SYSTEM_VARIABLES
+	 * - Only processes when SERVER_SESSION_STATE_CHANGED flag is set and no errors occurred
+	 * - Handles the variable/value pairing protocol where variables and values are returned alternately
+	 * - Populates a map with variable names as keys and their new values as values
+	 *
+	 * PROTOCOL FLOW:
+	 * 1. Check if session state changed and no errors occurred
+	 * 2. Get first tracked system variable (name)
+	 * 3. Iterate to get corresponding value, next variable name, etc.
+	 * 4. Build variable_name → value mappings in the provided map
+	 *
+	 * INTEGRATION POINT:
+	 * This is called by handler_rc0_Process_Variables() which then processes the
+	 * extracted changes to update ProxySQL's internal state. The separation allows
+	 * for testing and potential future extensions of the tracking protocol.
+	 *
+	 * @param variables Reference to unordered_map that will be populated with
+	 *                 variable names as keys and their new values as values
+	 * @return true if session variable changes were found and extracted, false otherwise
+	 */
+	bool get_variables(std::unordered_map<std::string, std::string>&);
 	void reduce_auto_increment_delay_token() { if (auto_increment_delay_token) auto_increment_delay_token--; };
 
 	bool match_ff_req_options(const MySQL_Connection *c);
@@ -274,4 +308,4 @@ class MySQL_Connection {
 	void get_mysql_info_json(nlohmann::json&);
 	void get_backend_conn_info_json(nlohmann::json&);
 };
-#endif /* __CLASS_MYSQL_CONNECTION_H */
+#endif /* PROXYSQL_MYSQL_CONNECTION_H */

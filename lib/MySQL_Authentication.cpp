@@ -23,10 +23,6 @@ void free_account_details(account_details_t& ad) {
 		free(ad.sha1_pass);
 		ad.sha1_pass=NULL;
 	}
-	if (ad.password) {
-		free(ad.password);
-		ad.password = nullptr;
-	}
 	if (ad.clear_text_password[PASSWORD_TYPE::PRIMARY]) {
 		free(ad.clear_text_password[PASSWORD_TYPE::PRIMARY]);
 		ad.clear_text_password[PASSWORD_TYPE::PRIMARY] = nullptr;
@@ -89,7 +85,7 @@ void MySQL_Authentication::set_all_inactive(enum cred_username_type usertype) {
 	unsigned int i;
 	for (i=0; i<cg.cred_array->len; i++) {
 		account_details_t *ado=(account_details_t *)cg.cred_array->index(i);
-		ado->__active=false;
+		ado->active_=false;
 	}
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&cg.lock);
@@ -109,7 +105,7 @@ void MySQL_Authentication::remove_inactives(enum cred_username_type usertype) {
 __loop_remove_inactives:
 	for (i=0; i<cg.cred_array->len; i++) {
 		account_details_t *ado=(account_details_t *)cg.cred_array->index(i);
-		if (ado->__active==false) {
+		if (ado->active_==false) {
 			del(ado->username,usertype,false);
 			goto __loop_remove_inactives; // we aren't sure how the underlying structure changes, so we jump back to 0
 		}
@@ -255,7 +251,7 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 	ad->transaction_persistent=transaction_persistent;
 	ad->fast_forward=fast_forward;
 	ad->max_connections=max_connections;
-	ad->__active=true;
+	ad->active_=true;
 	if (new_ad) {
 		cg.bt_map.insert(std::make_pair(hash1,ad));
 		cg.cred_array->add(ad);
@@ -310,11 +306,11 @@ unsigned int MySQL_Authentication::memory_usage() {
 	ret += sizeof(PtrArray);
 	ret += (creds_backends.cred_array->size * sizeof(void *));
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
-	pthread_rwlock_unlock(&creds_frontends.lock);
 	pthread_rwlock_unlock(&creds_backends.lock);
+	pthread_rwlock_unlock(&creds_frontends.lock);
 #else
-	spin_rdunlock(&creds_frontends.lock);
 	spin_rdunlock(&creds_backends.lock);
+	spin_rdunlock(&creds_frontends.lock);
 #endif
 	return ret;
 }
@@ -362,8 +358,8 @@ int MySQL_Authentication::dump_all_users(account_details_t ***ads, bool _complet
 			ad->schema_locked=ado->schema_locked;
 			ad->transaction_persistent=ado->transaction_persistent;
 			ad->fast_forward=ado->fast_forward;
-			ad->__frontend=1;
-			ad->__backend=0;
+			ad->frontend_=1;
+			ad->backend_=0;
 		}
 		_ads[idx_]=ad;
 		idx_++;
@@ -387,8 +383,8 @@ int MySQL_Authentication::dump_all_users(account_details_t ***ads, bool _complet
 		ad->transaction_persistent=ado->transaction_persistent;
 		ad->fast_forward=ado->fast_forward;
 		ad->max_connections=ado->max_connections;
-		ad->__frontend=0;
-		ad->__backend=1;
+		ad->frontend_=0;
+		ad->backend_=1;
 		_ads[idx_]=ad;
 		idx_++;
 	}
@@ -396,11 +392,11 @@ int MySQL_Authentication::dump_all_users(account_details_t ***ads, bool _complet
 	*ads=_ads;
 __exit_dump_all_users:
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
-	pthread_rwlock_unlock(&creds_frontends.lock);
 	pthread_rwlock_unlock(&creds_backends.lock);
+	pthread_rwlock_unlock(&creds_frontends.lock);
 #else
-	spin_rdunlock(&creds_frontends.lock);
 	spin_rdunlock(&creds_backends.lock);
+	spin_rdunlock(&creds_frontends.lock);
 #endif
 	return total_size;
 }
@@ -820,15 +816,15 @@ static pair<umap_auth, umap_auth> extract_accounts_details(MYSQL_RES* resultset,
 
 		acc_details->username = row[0];
 		acc_details->password = row[1] ? row[1] : const_cast<char*>("");
-		acc_details->__active = true;
+		acc_details->active_ = true;
 		acc_details->use_ssl = strcmp(row[2], "1") == 0 ? true : false;
 		acc_details->default_hostgroup = atoi(row[3]);
 		acc_details->default_schema = row[4] ? row[4] : const_cast<char*>("");
 		acc_details->schema_locked = strcmp(row[5], "1") == 0 ? true : false;
 		acc_details->transaction_persistent = strcmp(row[6], "1") == 0 ? true : false;
 		acc_details->fast_forward = strcmp(row[7], "1") == 0 ? true : false;
-		acc_details->__backend = strcmp(row[8], "1") == 0 ? true : false;
-		acc_details->__frontend = strcmp(row[9], "1") == 0 ? true : false;
+		acc_details->backend_ = strcmp(row[8], "1") == 0 ? true : false;
+		acc_details->frontend_ = strcmp(row[9], "1") == 0 ? true : false;
 		acc_details->max_connections = atoi(row[10]);
 		acc_details->attributes = row[11] ? row[11] : const_cast<char*>("");
 		acc_details->comment = row[12] ? row[12] : const_cast<char*>("");

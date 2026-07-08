@@ -1,0 +1,38 @@
+{
+  "Debug": true,
+  "ListenAddress": ":3000",
+  "MySQLTopologySSLSkipVerify": true,
+  "MySQLTopologyUser": "root",
+  "MySQLTopologyPassword": "3ac1210574",
+  "BackendDB": "sqlite",
+  "SQLite3DataFile": "/var/lib/orchestrator/orchestrator.db",
+  "RaftEnabled": true,
+  "RaftDataDir": "/var/lib/orchestrator/",
+  "RaftBind": "orc2.infra-mysql57",
+  "DefaultRaftPort": 10008,
+  "RaftNodes": [
+    "orc1.infra-mysql57",
+    "orc2.infra-mysql57",
+    "orc3.infra-mysql57"
+  ],
+  "ApplyMySQLPromotionAfterMasterFailover": true,
+  "HostnameResolveMethod": "default",
+  "MySQLHostnameResolveMethod": "default",
+  "RecoverMasterClusterFilters": [
+    "*"
+  ],
+  "RecoverIntermediateMasterClusterFilters": [
+    "*"
+  ],
+  "PreFailoverProcesses": [
+  "echo 'Will recover from {failureType} on {failureCluster}' >> /tmp/recovery.log"
+  ],
+  "PostFailoverProcesses": [
+    "echo '(for all types) Recovered from {failureType} on {failureCluster}. Failed: {failedHost}:{failedPort}; Successor: {successorHost}:{successorPort}' >> /tmp/recovery.log"
+  ],
+  "PostUnsuccessfulFailoverProcesses": [],
+  "PostMasterFailoverProcesses": [
+    "echo 'Recovered from {failureType} on {failureCluster}. Failed: {failedHost}:{failedPort}; Promoted: {successorHost}:{successorPort}' >> /tmp/recovery.log"
+  ],
+  "PostIntermediateMasterFailoverProcesses": []
+}

@@ -1,6 +1,6 @@
-#ifndef __CLASS_MYSQL_THREAD_H
-#define __CLASS_MYSQL_THREAD_H
-#define ____CLASS_STANDARD_MYSQL_THREAD_H
+#ifndef PROXYSQL_MYSQL_THREAD_H
+#define PROXYSQL_MYSQL_THREAD_H
+#define PROXYSQL_STANDARD_MYSQL_THREAD_H
 #include "prometheus/counter.h"
 #include "prometheus/gauge.h"
 
@@ -24,9 +24,9 @@
 #define MY_EPOLL_THREAD_MAXEVENTS 128
 */
 
-#define ADMIN_HOSTGROUP	-2
-#define STATS_HOSTGROUP	-3
-#define SQLITE_HOSTGROUP -4
+#define ADMIN_HOSTGROUP	(-2)
+#define STATS_HOSTGROUP	(-3)
+#define SQLITE_HOSTGROUP (-4)
 
 
 #define MYSQL_DEFAULT_SESSION_TRACK_GTIDS      "OFF"
@@ -90,8 +90,11 @@ enum MySQL_Thread_status_variable {
 	st_var_aws_aurora_replicas_skipped_during_query,
 	st_var_automatic_detected_sqli,
 	st_var_mysql_whitelisted_sqli_fingerprint,
-	st_var_ai_detected_anomalies,
-	st_var_ai_blocked_queries,
+	// st_var_ai_detected_anomalies / st_var_ai_blocked_queries removed
+	// in Step 3 of the GenAI plugin carve-out -- the genai plugin now
+	// owns the equivalent counters as Prometheus metrics
+	// (proxysql_genai_detected_anomalies_total /
+	//  proxysql_genai_blocked_queries_total).
 	st_var_client_host_error_killed_connections,
 	st_var_set_wait_timeout_commands,
 	st_var_timeout_terminated_connections,
@@ -111,6 +114,7 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 	bool retrieve_gtids_required; // if any of the servers has gtid_port enabled, this needs to be turned on too
 
 	PtrArray *cached_connections;
+	unsigned int push_local_counter;	// round-robin counter for bounded local caching: cache 1-in-N where N = mysql_threads
 
 #ifdef IDLE_THREADS
 	struct epoll_event events[MY_EPOLL_THREAD_MAXEVENTS];
@@ -292,12 +296,13 @@ struct p_th_counter {
 		aws_aurora_replicas_skipped_during_query,
 		automatic_detected_sql_injection,
 		mysql_whitelisted_sqli_fingerprint,
-		ai_detected_anomalies,
-		ai_blocked_queries,
+		// ai_detected_anomalies / ai_blocked_queries removed in
+		// Step 3 of the GenAI plugin carve-out (see comment near
+		// st_var_ai_detected_anomalies above for details).
 		mysql_killed_backend_connections,
 		mysql_killed_backend_queries,
 		client_host_error_killed_connections,
-		__size
+		SIZE_
 	};
 };
 
@@ -327,7 +332,7 @@ struct p_th_gauge {
 		mysql_monitor_replication_lag_interval,
 		mysql_monitor_replication_lag_timeout,
 		mysql_monitor_history,
-		__size
+		SIZE_
 
 	};
 };
@@ -337,6 +342,49 @@ struct th_metrics_map_idx {
 	enum index {
 		counters = 0,
 		gauges
+	};
+};
+
+/**
+ * @brief Configuration structure for session variable tracking functionality.
+ *
+ * === PR 5166: Session Variable Tracking Architecture ===
+ *
+ * This PR introduces comprehensive tracking of session-specific system variables
+ * by leveraging MySQL's native session tracking capabilities. The overall workflow
+ * consists of three main phases:
+ *
+ * 1. CONFIGURATION PHASE:
+ *    - Global enable/disable via mysql-session_track_variables variable
+ *    - Per-connection tracking state managed via flags in MySQL_Connection
+ *    - New session states handle configuration of tracking on backends
+ *
+ * 2. BACKEND SETUP PHASE:
+ *    - When enabled, configure session_track_system_variables="*"
+ *    - Configure session_track_state_change=ON
+ *    - MySQL server then automatically tracks all system variable changes
+ *
+ * 3. PROCESSING PHASE:
+ *    - After each query, check SERVER_SESSION_STATE_CHANGED flag
+ *    - Extract variable changes via MySQL's session tracking protocol
+ *    - Update both client and server variable maps for state consistency
+ *    - Special handling for character set variables (name → ID conversion)
+ *
+ * BENEFITS:
+ * - Captures changes that SQL parsing alone cannot detect (stored procedures, etc.)
+ * - Redundant tracking ensures accurate client/backend state synchronization
+ * - Leverages MySQL server's native capabilities for reliability
+ * - Performance optimized: only processes when session state actually changes
+ */
+struct session_track_variables {
+	enum mode {
+		// Disabled; default mode
+		DISABLED = 0,
+		// Enable session tracking if backend supports it
+		OPTIONAL,
+		// Enforce session tracking; connection fails if backend does
+		// not support CLIENT_DEPRECATE_EOF and CLIENT_SESSION_TRACKING
+		ENFORCED
 	};
 };
 
@@ -437,6 +485,7 @@ class MySQL_Threads_Handler
 		int monitor_local_dns_cache_ttl;
 		int monitor_local_dns_cache_refresh_interval;
 		int monitor_local_dns_resolver_queue_maxsize;
+		char *resolution_family;
 		char *monitor_username;
 		char *monitor_password;
 		char * monitor_replication_lag_use_percona_heartbeat;
@@ -487,6 +536,7 @@ class MySQL_Threads_Handler
 		bool default_reconnect;
 		bool have_compress;
 		int protocol_compression_level;
+		int zstd_compression_level;
 		bool have_ssl;
 		bool multiplexing;
 //		bool stmt_multiplexing;
@@ -520,7 +570,16 @@ class MySQL_Threads_Handler
 		int default_query_delay;
 		int default_query_timeout;
 		int query_processor_iterations;
+		/**
+		 * @brief Defines when the first comment of a query needs to be processed.
+		 * 0 : comment ignored
+		 * 1 : comment processed before the query rules
+		 * 2 : comment processed after the query rules (default behavior)
+		 * 3 : comment processed before and after the query rules
+		 */
+		int query_processor_first_comment_parsing;
 		int query_processor_regex;
+		int query_processor_parser;
 		int set_query_lock_on_hostgroup;
 		int set_parser_algorithm;
 		int reset_connection_algorithm;
@@ -550,8 +609,13 @@ class MySQL_Threads_Handler
 		int eventslog_default_log;
 		int eventslog_format;
 		int eventslog_stmt_parameters;
+		int eventslog_flush_timeout;
+ 		int eventslog_flush_size;
+ 		int eventslog_rate_limit;
 		char *auditlog_filename;
 		int auditlog_filesize;
+		int auditlog_flush_timeout;
+ 		int auditlog_flush_size;
 		// SSL related, proxy to server
 		char * ssl_p2s_ca;
 		char * ssl_p2s_capath;
@@ -595,13 +659,32 @@ class MySQL_Threads_Handler
 		int processlist_max_query_length;
 
 		bool ignore_min_gtid_annotations;
+		/**
+		 * @brief Controls session variable tracking behavior.
+		 *
+		 * Enum variants (see session_track_variables enum):
+		 * - DISABLED (0): Do not request session tracking from backends. Default.
+		 * - OPTIONAL (1): Enable session tracking if backend supports it;
+		 *   connection is used even if backend does not support tracking.
+		 * - ENFORCED (2): Enforce session tracking; connection fails if backend
+		 *   does not support CLIENT_DEPRECATE_EOF and CLIENT_SESSION_TRACKING.
+		 *
+		 * When enabled, ProxySQL configures backends to track system variable
+		 * changes using MySQL's session_track_system_variables and
+		 * session_track_state_change capabilities.
+		 */
+		int session_track_variables;
+#ifdef PROXYSQLFFTO
+		bool ffto_enabled;
+		int ffto_max_buffer_size;
+#endif
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;
 		int threads_initialized = 0;
 		/// Prometheus metrics arrays
-		std::array<prometheus::Counter*, p_th_counter::__size> p_counter_array {};
-		std::array<prometheus::Gauge*, p_th_gauge::__size> p_gauge_array {};
+		std::array<prometheus::Counter*, p_th_counter::SIZE_> p_counter_array {};
+		std::array<prometheus::Gauge*, p_th_gauge::SIZE_> p_gauge_array {};
 	} status_variables;
 
 	std::atomic<bool> bootstrapping_listeners;
@@ -699,7 +782,7 @@ class MySQL_Threads_Handler
 	~MySQL_Threads_Handler();
 	
 	char *get_variable_string(char *name);
-	uint16_t get_variable_uint16(char *name);
+	uint32_t get_variable_uint32(char *name);
 	int get_variable_int(const char *name);
 	void print_version();
 	void init(unsigned int num=0, size_t stack=0);
@@ -712,6 +795,17 @@ class MySQL_Threads_Handler
 	void start_listeners();
 	void stop_listeners();
 	void signal_all_threads(unsigned char _c=0);
+	/**
+	 * @brief Build an in-memory processlist snapshot for MySQL sessions.
+	 *
+	 * The returned resultset always uses the canonical `stats_mysql_processlist`
+	 * column layout. When `args.query_options.enabled=true`, the snapshot is
+	 * post-processed in memory using typed filters, deterministic sorting, and
+	 * pagination controls from `processlist_query_options_t`.
+	 *
+	 * @param args Processlist rendering options and optional query options.
+	 * @return Newly allocated resultset owned by the caller.
+	 */
 	SQLite3_result * SQL3_Processlist(processlist_config_t args);
 	SQLite3_result * SQL3_GlobalStatus(bool _memory);
 	bool kill_session(uint32_t _thread_session_id);
@@ -733,4 +827,4 @@ class MySQL_Threads_Handler
 };
 
 
-#endif /* __CLASS_MYSQL_THREAD_H */
+#endif /* PROXYSQL_MYSQL_THREAD_H */

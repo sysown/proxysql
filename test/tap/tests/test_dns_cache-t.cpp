@@ -260,6 +260,11 @@ int main(int argc, char** argv) {
 			//disable dns cache
 			EXECUTE_QUERY("SET mysql-monitor_local_dns_cache_refresh_interval=0", proxysql_admin, false),
 			EXECUTE_QUERY("LOAD MYSQL VARIABLES TO RUNTIME", proxysql_admin, false),
+			// Replace INVALID_DOMAIN with an IP address so that routing
+			// lookups don't trigger DNS queries during the measurement window
+			EXECUTE_QUERY("DELETE FROM mysql_servers WHERE hostname='INVALID_DOMAIN'", proxysql_admin, false),
+			EXECUTE_QUERY("INSERT INTO mysql_servers (hostgroup_id,hostname,port,max_replication_lag,max_connections,comment) VALUES (999,'0.0.0.0',7861,0,1000,'dummy mysql server')", proxysql_admin, false),
+			EXECUTE_QUERY("LOAD MYSQL SERVERS TO RUNTIME", proxysql_admin, false),
 			DELAY_SEC(2),
 			UPDATE_PREV_METRICS(proxysql_admin),
 			LOOP_FUNC(EXECUTE_QUERY("DO 1", proxysql, true), 2),

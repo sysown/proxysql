@@ -110,6 +110,7 @@ const string opts_to_string(const test_opts& opts) {
 
 void perform_helper_test(
 	MYSQL* admin,
+	const CommandLine& cl,
 	const std::string& helper_path,
 	const test_opts& opts
 ) {
@@ -142,7 +143,8 @@ void perform_helper_test(
 	input_json["ch_pass"] = opts.inv_pass ? gen_inv_pass(SECD_USER) : SECD_USER;
 	input_json["auth"] = opts.auth;
 	input_json["charset"] = "";
-	input_json["port"] = 6033;
+	input_json["host"] = cl.host;
+	input_json["port"] = cl.port;
 	input_json["SSL"] = opts.use_ssl;
 	input_json["CHANGE_USER"] = opts.change_user;
 
@@ -244,7 +246,7 @@ int main(int argc, char** argv) {
 
 	if (
 		!mysql_real_connect(
-			admin, "127.0.0.1", cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0
+			admin, cl.admin_host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0
 		)
 	) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
@@ -260,13 +262,39 @@ int main(int argc, char** argv) {
 	const vector<test_opts> tests_defs { gen_tests_defs() };
 	plan(tests_defs.size() * 2);
 
+	// Verbose test header
+	diag("================================================================================");
+	diag("Test: reg_test_3504-change_user");
+	diag("================================================================================");
+	diag("This test checks the COM_CHANGE_USER implementation introduced in issue #3504.");
+	diag("It verifies that ProxySQL correctly handles user switching during a connection.");
+	diag("%s", "");
+	diag("Test scenarios:");
+	diag("  - Multiple authentication methods: mysql_clear_password, mysql_native_password,");
+	diag("    caching_sha2_password");
+	diag("  - With and without SSL connections");
+	diag("  - Same user and different user switching");
+	diag("  - Hashed and non-hashed user passwords");
+	diag("  - Invalid password handling");
+	diag("%s", "");
+	diag("Configuration:");
+	diag("  - ProxySQL admin host: %s", cl.admin_host);
+	diag("  - ProxySQL admin port: %d", cl.admin_port);
+	diag("  - ProxySQL data host: %s", cl.host);
+	diag("  - ProxySQL data port: %d", cl.port);
+	diag("  - Primary user: %s", PRIM_USER.c_str());
+	diag("  - Secondary user: %s", SECD_USER.c_str());
+	diag("  - Total test cases: %zu (per helper)", tests_defs.size());
+	diag("================================================================================");
+	diag("%s", "");
+
 	diag("Starting tests for helper 'reg_test_3504-change_user_libmysql_helper'\n");
 
 	std::string libmysql_helper_path {
 		std::string { cl.workdir } + "reg_test_3504-change_user_libmysql_helper"
 	};
 	for (const auto& test_opts : tests_defs) {
-		perform_helper_test(admin, libmysql_helper_path, test_opts);
+		perform_helper_test(admin, cl, libmysql_helper_path, test_opts);
 	}
 
 	std::cout << "\n";
@@ -276,7 +304,7 @@ int main(int argc, char** argv) {
 		std::string { cl.workdir } + "reg_test_3504-change_user_libmariadb_helper"
 	};
 	for (const auto& test_opts : tests_defs) {
-		perform_helper_test(admin, libmariadb_helper_path, test_opts);
+		perform_helper_test(admin, cl, libmariadb_helper_path, test_opts);
 	}
 
 	mysql_close(admin);

@@ -437,6 +437,11 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 	if (0 != strcmp (method, "GET"))
 		return MHD_NO;              /* unexpected method */
 
+	/* The TSDB dashboard previously served here is now served by the
+	 * REST API server (admin-restapi_port). Serving it here resulted in
+	 * a cross-origin mismatch between the dashboard's port and the
+	 * /api/tsdb/* endpoints, which broke the metric fetch (#5684). */
+
 	if (strcmp(url,"/stats")==0) {
 		valmetric = (char *)MHD_lookup_connection_value (connection, MHD_GET_ARGUMENT_KIND, (char *)"metric");
 		interval_s = (char *)MHD_lookup_connection_value (connection, MHD_GET_ARGUMENT_KIND, (char *)"interval");

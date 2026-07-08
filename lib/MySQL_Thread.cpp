@@ -1,10 +1,14 @@
 #include "../deps/json/json.hpp"
+#include <atomic>
 using json = nlohmann::json;
 #define PROXYJSON
 
 //#define __CLASS_STANDARD_MYSQL_THREAD_H
 
 #include <functional>
+#include <algorithm>
+#include <cerrno>
+#include <cctype>
 #include <vector>
 
 #include "proxysql_utils.h"
@@ -24,8 +28,10 @@ using json = nlohmann::json;
 #include "StatCounters.h"
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Logger.hpp"
+#include "MySQL_Resolution.h"
 
 #include <fcntl.h>
+#include <zstd.h>
 
 using std::vector;
 using std::function;
@@ -164,8 +170,11 @@ mythr_st_vars_t MySQL_Thread_status_variables_counter_array[] {
 	{ st_var_aws_aurora_replicas_skipped_during_query , p_th_counter::aws_aurora_replicas_skipped_during_query,  (char *)"get_aws_aurora_replicas_skipped_during_query" },
 	{ st_var_automatic_detected_sqli,     p_th_counter::automatic_detected_sql_injection,  (char *)"automatic_detected_sql_injection" },
 	{ st_var_mysql_whitelisted_sqli_fingerprint,p_th_counter::mysql_whitelisted_sqli_fingerprint,     (char *)"mysql_whitelisted_sqli_fingerprint" },
-	{ st_var_ai_detected_anomalies,       p_th_counter::ai_detected_anomalies,                (char *)"ai_detected_anomalies" },
-	{ st_var_ai_blocked_queries,          p_th_counter::ai_blocked_queries,                   (char *)"ai_blocked_queries" },
+	// st_var_ai_detected_anomalies / st_var_ai_blocked_queries entries
+	// removed in Step 3 of the GenAI plugin carve-out; the equivalent
+	// counters are exposed by the genai plugin as Prometheus metrics
+	// (proxysql_genai_detected_anomalies_total /
+	//  proxysql_genai_blocked_queries_total).
 	{ st_var_max_connect_timeout_err,     p_th_counter::max_connect_timeouts,             (char *)"max_connect_timeouts" },
 	{ st_var_generated_pkt_err,           p_th_counter::generated_error_packets,          (char *)"generated_error_packets" },
 	{ st_var_client_host_error_killed_connections, p_th_counter::client_host_error_killed_connections, (char *)"client_host_error_killed_connections" },
@@ -365,8 +374,13 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"eventslog_default_log",
 	(char *)"eventslog_format",
 	(char *)"eventslog_stmt_parameters",
+	(char *)"eventslog_flush_timeout",
+ 	(char *)"eventslog_flush_size",
+ 	(char *)"eventslog_rate_limit",
 	(char *)"auditlog_filename",
 	(char *)"auditlog_filesize",
+	(char *)"auditlog_flush_timeout",
+ 	(char *)"auditlog_flush_size",
 	//(char *)"default_charset", // removed in 2.0.13 . Obsoleted previously using MySQL_Variables instead
 	(char *)"handle_unknown_charset",
 	(char *)"free_connections_pct",
@@ -413,6 +427,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_local_dns_cache_ttl",
 	(char *)"monitor_local_dns_cache_refresh_interval",
 	(char *)"monitor_local_dns_resolver_queue_maxsize",
+	(char *)"resolution_family",
 	(char *)"monitor_wait_timeout",
 	(char *)"monitor_writer_is_also_reader",
 	(char *)"max_allowed_packet",
@@ -451,7 +466,9 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"default_query_delay",
 	(char *)"default_query_timeout",
 	(char *)"query_processor_iterations",
+	(char *)"query_processor_first_comment_parsing",
 	(char *)"query_processor_regex",
+	(char *)"query_processor_parser", // NOSONAR: matches array pattern
 	(char *)"set_query_lock_on_hostgroup",
 	(char *)"set_parser_algorithm",
 	(char *)"reset_connection_algorithm",
@@ -517,8 +534,14 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"evaluate_replication_lag_on_servers_load",
 	(char *)"proxy_protocol_networks",
 	(char *)"protocol_compression_level",
+	(char *)"zstd_compression_level",
 	(char *)"ignore_min_gtid_annotations",
 	(char *)"fast_forward_grace_close_ms",
+	(char *)"session_track_variables",
+#ifdef PROXYSQLFFTO
+	(char *)"ffto_enabled",
+	(char *)"ffto_max_buffer_size",
+#endif
 	NULL
 };
 
@@ -562,6 +585,7 @@ th_metrics_map = std::make_tuple(
 			"proxysql_queries_backends_bytes_total",
 			"Total number of bytes (sent|received) in backend connections.",
 			metric_tags {
+				{ "protocol", "mysql" },
 				{ "traffic_flow", "sent" }
 			}
 		),
@@ -570,6 +594,7 @@ th_metrics_map = std::make_tuple(
 			"proxysql_queries_backends_bytes_total",
 			"Total number of bytes (sent|received) in backend connections.",
 			metric_tags {
+				{ "protocol", "mysql" },
 				{ "traffic_flow", "received" }
 			}
 		),
@@ -581,6 +606,7 @@ th_metrics_map = std::make_tuple(
 			"proxysql_queries_frontends_bytes_total",
 			"Total number of bytes (sent|received) in frontend connections.",
 			metric_tags {
+				{ "protocol", "mysql" },
 				{ "traffic_flow", "sent" }
 			}
 		),
@@ -589,6 +615,7 @@ th_metrics_map = std::make_tuple(
 			"proxysql_queries_frontends_bytes_total",
 			"Total number of bytes (sent|received) in frontend connections.",
 			metric_tags {
+				{ "protocol", "mysql" },
 				{ "traffic_flow", "received" }
 			}
 		),
@@ -598,13 +625,21 @@ th_metrics_map = std::make_tuple(
 			p_th_counter::query_processor_time_nsec,
 			"proxysql_query_processor_time_seconds_total",
 			"The time spent inside the \"Query Processor\" to determine what action needs to be taken with the query (internal module).",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_counter::backend_query_time_nsec,
 			"proxysql_backend_query_time_seconds_total",
 			"Time spent making network calls to communicate with the backends.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 
 		// ====================================================================
@@ -613,6 +648,7 @@ th_metrics_map = std::make_tuple(
 			"proxysql_com_backend_stmt_total",
 			"Represents the number of statements (PREPARE|EXECUTE|CLOSE) executed by ProxySQL against the backends.",
 			metric_tags {
+				{ "protocol", "mysql" },
 				{ "op", "prepare" }
 			}
 		),
@@ -621,6 +657,7 @@ th_metrics_map = std::make_tuple(
 			"proxysql_com_backend_stmt_total",
 			"Represents the number of statements (PREPARE|EXECUTE|CLOSE) executed by ProxySQL against the backends.",
 			metric_tags {
+				{ "protocol", "mysql" },
 				{ "op", "execute" }
 			}
 		),
@@ -629,6 +666,7 @@ th_metrics_map = std::make_tuple(
 			"proxysql_com_backend_stmt_total",
 			"Represents the number of statements (PREPARE|EXECUTE|CLOSE) executed by ProxySQL against the backends.",
 			metric_tags {
+				{ "protocol", "mysql" },
 				{ "op", "close" }
 			}
 		),
@@ -640,6 +678,7 @@ th_metrics_map = std::make_tuple(
 			"proxysql_com_frontend_stmt_total",
 			"Represents the number of statements (PREPARE|EXECUTE|CLOSE) executed by clients.",
 			metric_tags {
+				{ "protocol", "mysql" },
 				{ "op", "prepare" }
 			}
 		),
@@ -648,6 +687,7 @@ th_metrics_map = std::make_tuple(
 			"proxysql_com_frontend_stmt_total",
 			"Represents the number of statements (PREPARE|EXECUTE|CLOSE) executed by clients.",
 			metric_tags {
+				{ "protocol", "mysql" },
 				{ "op", "execute" }
 			}
 		),
@@ -656,6 +696,7 @@ th_metrics_map = std::make_tuple(
 			"proxysql_com_frontend_stmt_total",
 			"Represents the number of statements (PREPARE|EXECUTE|CLOSE) executed by clients.",
 			metric_tags {
+				{ "protocol", "mysql" },
 				{ "op", "close" }
 			}
 		),
@@ -665,25 +706,41 @@ th_metrics_map = std::make_tuple(
 			p_th_counter::questions,
 			"proxysql_questions_total",
 			"The total number of client requests / statements executed.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_counter::slow_queries,
 			"proxysql_slow_queries_total",
 			"The total number of queries with an execution time greater than \"mysql-long_query_time\" milliseconds.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_counter::gtid_consistent_queries,
 			"proxysql_gtid_consistent_queries_total",
 			"Total queries with GTID consistent read.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_counter::gtid_session_collected,
 			"proxysql_gtid_session_collected_total",
 			"Total queries with GTID session state.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 
 		// ====================================================================
@@ -691,25 +748,41 @@ th_metrics_map = std::make_tuple(
 			p_th_counter::connpool_get_conn_latency_awareness,
 			"proxysql_connpool_get_conn_success_latency_awareness_total",
 			"The connection was picked using the latency awareness algorithm.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_counter::connpool_get_conn_immediate,
 			"proxysql_connpool_get_conn_success_immediate_total",
 			"The connection is provided from per-thread cache.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_counter::connpool_get_conn_success,
 			"proxysql_connpool_get_conn_success_total",
 			"The session is able to get a connection, either from per-thread cache or connection pool.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_counter::connpool_get_conn_failure,
 			"proxysql_connpool_get_conn_failure_total",
 			"The connection pool cannot provide any connection.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		// ====================================================================
 
@@ -717,133 +790,206 @@ th_metrics_map = std::make_tuple(
 			p_th_counter::generated_error_packets,
 			"proxysql_generated_error_packets_total",
 			"Total generated error packets.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_counter::max_connect_timeouts,
 			"proxysql_max_connect_timeouts_total",
 			"Maximum connection timeout reached when trying to connect to backend sever.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_counter::backend_lagging_during_query,
 			"proxysql_backend_lagging_during_query_total",
 			"Query failed because server was shunned due to lag.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_counter::backend_offline_during_query,
 			"proxysql_backend_offline_during_query_total",
 			"Query failed because server was offline.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_counter::queries_with_max_lag_ms,
 			"proxysql_queries_with_max_lag_total",
 			"Received queries that have a 'max_lag' attribute.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_counter::queries_with_max_lag_ms__delayed,
 			"proxysql_queries_with_max_lag__delayed_total",
 			"Query delayed because no connection was selected due to 'max_lag' annotation.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_counter::queries_with_max_lag_ms__total_wait_time_us,
 			"proxysql_queries_with_max_lag__total_wait_time_total",
 			"Total waited time due to connection selection because of 'max_lag' annotation.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_counter::mysql_unexpected_frontend_com_ping,
 			"proxysql_mysql_unexpected_frontend_com_ping_total",
 			"Unexpected 'COM_PING' received from the client.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_counter::mysql_unexpected_frontend_com_quit,
 			"proxysql_mysql_unexpected_frontend_com_quit_total",
 			"Unexpected 'COM_QUIT' received from the client.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_counter::hostgroup_locked_set_cmds,
 			"proxysql_hostgroup_locked_set_cmds_total",
 			"Total number of connections that have been locked in a hostgroup.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_counter::hostgroup_locked_queries,
 			"proxysql_hostgroup_locked_queries_total",
 			"Query blocked because connection is locked into some hostgroup but is trying to reach other.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_counter::mysql_unexpected_frontend_packets,
 			"proxysql_mysql_unexpected_frontend_packets_total",
 			"Unexpected packet received from client.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_counter::aws_aurora_replicas_skipped_during_query,
 			"proxysql_aws_aurora_replicas_skipped_during_query_total",
 			"Replicas skipped due to current lag being higher than 'max_lag' annotation.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_counter::automatic_detected_sql_injection,
 			"proxysql_automatic_detected_sql_injection_total",
 			"Blocked a detected 'sql injection' attempt.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_counter::mysql_whitelisted_sqli_fingerprint,
 			"proxysql_mysql_whitelisted_sqli_fingerprint_total",
 			"Detected a whitelisted 'sql injection' fingerprint.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
-		std::make_tuple (
-			p_th_counter::ai_detected_anomalies,
-			"proxysql_ai_detected_anomalies_total",
-			"AI Anomaly Detection detected anomalous query behavior.",
-			metric_tags {}
-		),
-		std::make_tuple (
-			p_th_counter::ai_blocked_queries,
-			"proxysql_ai_blocked_queries_total",
-			"AI Anomaly Detection blocked a query.",
-			metric_tags {}
-		),
+		// proxysql_ai_detected_anomalies_total /
+		// proxysql_ai_blocked_queries_total were removed in Step 3 of
+		// the GenAI plugin carve-out -- the genai plugin owns the
+		// equivalent metrics now (proxysql_genai_detected_anomalies_total /
+		// proxysql_genai_blocked_queries_total).
 		std::make_tuple (
 			p_th_counter::mysql_killed_backend_connections,
 			"proxysql_mysql_killed_backend_connections_total",
 			"Number of backend connection killed.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_counter::mysql_killed_backend_queries,
 			"proxysql_mysql_killed_backend_queries_total",
 			"Killed backend queries.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_counter::client_host_error_killed_connections,
 			"proxysql_client_host_error_killed_connections",
 			"Killed client connections because address exceeded 'client_host_error_counts'.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_counter::mysql_set_wait_timeout_commands,
 			"proxysql_mysql_set_wait_timeout_commands_total",
 			"Number of SET wait_timeout commands received from clients.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_counter::mysql_timeout_terminated_connections,
 			"proxysql_mysql_timeout_terminated_connections_total",
 			"Number of client connections terminated due to wait_timeout.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		)
 	},
 	th_gauge_vector {
@@ -851,140 +997,232 @@ th_metrics_map = std::make_tuple(
 			p_th_gauge::active_transactions,
 			"proxysql_active_transactions",
 			"Provides a count of how many client connection are currently processing a transaction.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_gauge::client_connections_non_idle,
 			"proxysql_client_connections_non_idle",
 			"Number of client connections that are currently handled by the main worker threads.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_gauge::client_connections_hostgroup_locked,
 			"proxysql_client_connections_hostgroup_locked",
 			"Number of client connection locked to a specific hostgroup.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_gauge::mysql_backend_buffers_bytes,
 			"proxysql_mysql_backend_buffers_bytes",
 			"Buffers related to backend connections if \"fast_forward\" is used (0 means fast_forward is not used).",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_gauge::mysql_frontend_buffers_bytes,
 			"proxysql_mysql_frontend_buffers_bytes",
 			"Buffers related to frontend connections (read/write buffers and other queues).",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_gauge::mysql_session_internal_bytes,
 			"proxysql_mysql_session_internal_bytes",
 			"Other memory used by ProxySQL to handle MySQL Sessions.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_gauge::mirror_concurrency,
 			"proxysql_mirror_concurrency",
 			"Mirror current concurrency",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_gauge::mirror_queue_lengths,
 			"proxysql_mirror_queue_lengths",
 			"Mirror queue length",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_gauge::mysql_thread_workers,
 			"proxysql_mysql_thread_workers",
 			"Number of MySQL Thread workers i.e. 'mysql-threads'",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		// global_variables
 		std::make_tuple (
 			p_th_gauge::mysql_wait_timeout,
 			"proxysql_mysql_wait_timeout",
 			"If a proxy session has been idle for more than this threshold, the proxy will kill the session.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_gauge::mysql_max_connections,
 			"proxysql_mysql_max_connections",
 			"The maximum number of client connections that the proxy can handle.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_gauge::mysql_monitor_enabled,
 			"proxysql_mysql_monitor_enabled",
 			"Enables or disables MySQL Monitor.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_gauge::mysql_monitor_ping_interval,
 			"proxysql_mysql_monitor_ping_interval",
 			"How frequently a ping check is performed, in seconds.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_gauge::mysql_monitor_ping_timeout,
 			"proxysql_mysql_monitor_ping_timeout_seconds",
 			"Ping timeout in seconds.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_gauge::mysql_monitor_ping_max_failures,
 			"proxysql_mysql_monitor_ping_max_failures",
 			"Reached maximum ping attempts from monitor.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_gauge::mysql_monitor_aws_rds_topology_discovery_interval,
 			"proxysql_mysql_monitor_aws_rds_topology_discovery_interval",
 			"How frequently a topology discovery is performed, e.g. a value of 500 means one topology discovery every 500 read-only checks ",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_gauge::mysql_monitor_read_only_interval,
 			"proxysql_mysql_monitor_read_only_interval_seconds",
 			"How frequently a read only check is performed, in seconds.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_gauge::mysql_monitor_read_only_timeout,
 			"proxysql_mysql_monitor_read_only_timeout_seconds",
 			"Read only check timeout in seconds.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_gauge::mysql_monitor_writer_is_also_reader,
 			"proxysql_mysql_monitor_writer_is_also_reader",
 			"Encodes different behaviors for nodes depending on their 'READ_ONLY' flag value.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_gauge::mysql_monitor_replication_lag_group_by_host,
 			"proxysql_monitor_replication_lag_group_by_host",
 			"Encodes different replication lag check if the same server is in multiple hostgroups.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_gauge::mysql_monitor_replication_lag_interval,
 			"proxysql_mysql_monitor_replication_lag_interval_seconds",
 			"How frequently a replication lag check is performed, in seconds.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_gauge::mysql_monitor_replication_lag_timeout,
 			"proxysql_mysql_monitor_replication_lag_timeout_seconds",
 			"Replication lag check timeout in seconds.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		),
 		std::make_tuple (
 			p_th_gauge::mysql_monitor_history,
 			"proxysql_mysql_monitor_history_timeout_seconds",
 			"The duration for which the events for the checks made by the Monitor module are kept, in seconds.",
-			metric_tags {}
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		)
 	}
 );
@@ -1060,6 +1298,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_local_dns_cache_ttl = 300000;
 	variables.monitor_local_dns_cache_refresh_interval = 60000;
 	variables.monitor_local_dns_resolver_queue_maxsize = 128;
+	variables.resolution_family = strdup((char *)"system");
 	variables.monitor_username=strdup((char *)"monitor");
 	variables.monitor_password=strdup((char *)"monitor");
 	variables.monitor_replication_lag_use_percona_heartbeat=strdup((char *)"");
@@ -1094,7 +1333,9 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.default_query_delay=0;
 	variables.default_query_timeout=24*3600*1000;
 	variables.query_processor_iterations=0;
+	variables.query_processor_first_comment_parsing=2;
 	variables.query_processor_regex=1;
+	variables.query_processor_parser=0;
 	variables.set_query_lock_on_hostgroup=1;
 	variables.set_parser_algorithm=2; // before 2.6.0 this was 1
 	variables.reset_connection_algorithm=2;
@@ -1117,6 +1358,13 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.ping_interval_server_msec=10000;
 	variables.ping_timeout_server=200;
 	variables.fast_forward_grace_close_ms=5000;
+#ifdef PROXYSQLFFTO
+	// Step 7 of the GenAI plugin carve-out: PROXYSQLGENAI used to
+	// flip this default to true.  With the macro gone, ffto_enabled
+	// defaults to false; operators can opt in via admin SQL.
+	variables.ffto_enabled=false;
+	variables.ffto_max_buffer_size=1048576;
+#endif
 	variables.default_schema=strdup((char *)"information_schema");
 	variables.handle_unknown_charset=1;
 	variables.interfaces=strdup((char *)"");
@@ -1130,8 +1378,13 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.eventslog_default_log=0;
 	variables.eventslog_format=1;
 	variables.eventslog_stmt_parameters=0;
+	variables.eventslog_flush_timeout=1000;
+ 	variables.eventslog_flush_size=4096;
+ 	variables.eventslog_rate_limit=1;
 	variables.auditlog_filename=strdup((char *)"");
 	variables.auditlog_filesize=100*1024*1024;
+	variables.auditlog_flush_timeout=1000;
+ 	variables.auditlog_flush_size=4096;
 	//variables.server_capabilities=CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB;
 	// major upgrade in 2.0.0
 	variables.server_capabilities = CLIENT_MYSQL | CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB | CLIENT_PLUGIN_AUTH;;
@@ -1193,7 +1446,10 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.log_mysql_warnings_enabled=false;
 	variables.data_packets_history_size=0;
 	variables.protocol_compression_level=3;
+	variables.zstd_compression_level=3;
 	variables.ignore_min_gtid_annotations=false;
+	variables.session_track_variables=session_track_variables::DISABLED;
+
 	// status variables
 	status_variables.mirror_sessions_current=0;
 	__global_MySQL_Thread_Variables_version=1;
@@ -1415,6 +1671,7 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 	if (!strcmp(name,"eventslog_filename")) return strdup(variables.eventslog_filename);
 	if (!strcmp(name,"auditlog_filename")) return strdup(variables.auditlog_filename);
 	if (!strcmp(name,"interfaces")) return strdup(variables.interfaces);
+	if (!strcmp(name,"resolution_family")) return strdup(variables.resolution_family);
 	if (!strcmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
 	if (!strcmp(name,"default_authentication_plugin")) return strdup(variables.default_authentication_plugin);
 	if (!strcmp(name,"proxy_protocol_networks")) return strdup(variables.proxy_protocol_networks);
@@ -1425,7 +1682,7 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 	// LCOV_EXCL_STOP
 }
 
-uint16_t MySQL_Threads_Handler::get_variable_uint16(char *name) {
+uint32_t MySQL_Threads_Handler::get_variable_uint32(char *name) {
 	if (!strcasecmp(name,"server_capabilities")) return variables.server_capabilities;
 	// LCOV_EXCL_START
 	proxy_error("Not existing variable: %s\n", name); assert(0);
@@ -1572,6 +1829,7 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	if (!strcasecmp(name,"auditlog_filename")) return strdup(variables.auditlog_filename);
 	if (!strcasecmp(name,"eventslog_filename")) return strdup(variables.eventslog_filename);
 	if (!strcasecmp(name,"default_schema")) return strdup(variables.default_schema);
+	if (!strcasecmp(name,"resolution_family")) return strdup(variables.resolution_family);
 	if (!strcasecmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
 	if (!strcasecmp(name,"default_authentication_plugin")) return strdup(variables.default_authentication_plugin);
 	if (!strcasecmp(name,"proxy_protocol_networks")) return strdup(variables.proxy_protocol_networks);
@@ -1811,6 +2069,63 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 			return false;
 		}
 	}
+	if (!strcasecmp(name,"eventslog_flush_timeout")) {
+ 		int intv=atoi(value);
+ 		if (intv >= 0) {
+ 			variables.eventslog_flush_timeout=intv;
+			if (intv > 5 * 60 * 1000) {
+ 				proxy_warning("mysql-eventslog_flush_timeout is set to a high value: %dms\n", intv);
+ 			}
+ 			return true;
+ 		} else {
+ 			return false;
+ 		}
+ 	}
+ 	if (!strcasecmp(name,"eventslog_flush_size")) {
+ 		int intv=atoi(value);
+ 		if (intv >= 0) {
+ 			variables.eventslog_flush_size=intv;
+ 			if (intv > 10 * 1024 * 1024) {
+ 				proxy_warning("mysql-eventslog_flush_size is set to a high value: %d\n", intv);
+ 			}
+ 			return true;
+ 		} else {
+ 			return false;
+ 		}
+ 	}
+ 	if (!strcasecmp(name,"eventslog_rate_limit")) {
+ 		int intv=atoi(value);
+ 		if (intv >= 1) {
+ 			variables.eventslog_rate_limit=intv;
+ 			return true;
+ 		} else {
+ 			return false;
+ 		}
+ 	}
+ 	if (!strcasecmp(name,"auditlog_flush_timeout")) {
+ 		int intv=atoi(value);
+ 		if (intv >= 0) {
+ 			variables.auditlog_flush_timeout=intv;
+			if (intv > 5 * 60 * 1000) {
+ 				proxy_warning("mysql-auditlog_flush_timeout is set to a high value: %dms\n", intv);
+ 			}
+ 			return true;
+ 		} else {
+ 			return false;
+ 		}
+ 	}
+	if (!strcasecmp(name,"auditlog_flush_size")) {
+ 		int intv=atoi(value);
+ 		if (intv >= 0) {
+ 			variables.auditlog_flush_size=intv;
+ 			if (intv > 10 * 1024 * 1024) {
+ 				proxy_warning("mysql-auditlog_flush_size is set to a high value: %d\n", intv);
+ 			}
+ 			return true;
+ 		} else {
+ 			return false;
+ 		}
+ 	}
 	if (!strcasecmp(name,"default_schema")) {
 		if (vallen) {
 			free(variables.default_schema);
@@ -1950,6 +2265,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		} else {
 			return false;
 		}
+	}
+	if (!strcasecmp(name,"resolution_family")) {
+		if (mysql_resolution_family_is_valid(value)) {
+			free(variables.resolution_family);
+			variables.resolution_family=strdup(mysql_resolution_family_normalize(value));
+			return true;
+		}
+		proxy_error("%s is an invalid value for %s. Supported values are system, ipv4, ipv6\n", value, name);
+		return false;
 	}
 	if (!strcasecmp(name,"proxy_protocol_networks")) {
 		bool ret = false;
@@ -2124,11 +2448,13 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.have_compress=true;
 			variables.server_capabilities |= CLIENT_COMPRESS;
+			variables.server_capabilities |= CLIENT_ZSTD_COMPRESSION_ALGORITHM;
 			return true;
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.have_compress=false;
 			variables.server_capabilities &= ~CLIENT_COMPRESS;
+			variables.server_capabilities &= ~CLIENT_ZSTD_COMPRESSION_ALGORITHM;
 			return true;
 		}
 		return false;
@@ -2194,6 +2520,9 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["default_reconnect"]               = make_tuple(&variables.default_reconnect,               false);
 		VariablesPointers_bool["enable_client_deprecate_eof"]     = make_tuple(&variables.enable_client_deprecate_eof,     false);
 		VariablesPointers_bool["enable_server_deprecate_eof"]     = make_tuple(&variables.enable_server_deprecate_eof,     false);
+#ifdef PROXYSQLFFTO
+		VariablesPointers_bool["ffto_enabled"]                    = make_tuple(&variables.ffto_enabled,                    false);
+#endif
 		VariablesPointers_bool["enable_load_data_local_infile"]   = make_tuple(&variables.enable_load_data_local_infile,   false);
 		VariablesPointers_bool["enforce_autocommit_on_reads"]     = make_tuple(&variables.enforce_autocommit_on_reads,     false);
 		VariablesPointers_bool["firewall_whitelist_enabled"]      = make_tuple(&variables.firewall_whitelist_enabled,      false);
@@ -2292,10 +2621,12 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["query_digests_max_query_length"]  = make_tuple(&variables.query_digests_max_query_length,  16, 1*1024*1024, false);
 		VariablesPointers_int["query_rules_fast_routing_algorithm"]  = make_tuple(&variables.query_rules_fast_routing_algorithm,  1, 2, false);
 		VariablesPointers_int["query_processor_iterations"]      = make_tuple(&variables.query_processor_iterations,       0,   1000*1000, false);
+		VariablesPointers_int["query_processor_first_comment_parsing"] = make_tuple(&variables.query_processor_first_comment_parsing, 0, 3, false);
 		VariablesPointers_int["query_processor_regex"]           = make_tuple(&variables.query_processor_regex,            1,           2, false);
+		VariablesPointers_int["query_processor_parser"]           = make_tuple(&variables.query_processor_parser,            0,           1, false);
 		VariablesPointers_int["query_retries_on_failure"]        = make_tuple(&variables.query_retries_on_failure,         0,        1000, false);
 		VariablesPointers_int["set_query_lock_on_hostgroup"]     = make_tuple(&variables.set_query_lock_on_hostgroup,      0,           1, false);
-		VariablesPointers_int["set_parser_algorithm"]            = make_tuple(&variables.set_parser_algorithm,             1,           2, false);
+		VariablesPointers_int["set_parser_algorithm"]            = make_tuple(&variables.set_parser_algorithm,             1,           3, false);
 
 		// throttle
 		VariablesPointers_int["throttle_connections_per_sec_to_hostgroup"] = make_tuple(&variables.throttle_connections_per_sec_to_hostgroup, 1, 100*1000*1000, false);
@@ -2327,11 +2658,15 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["ping_interval_server_msec"]     = make_tuple(&variables.ping_interval_server_msec,  1000, 7*24*3600*1000, false);
 		VariablesPointers_int["ping_timeout_server"]           = make_tuple(&variables.ping_timeout_server,          10,       600*1000, false);
 		VariablesPointers_int["fast_forward_grace_close_ms"]   = make_tuple(&variables.fast_forward_grace_close_ms,   0,      3600*1000, false);
+#ifdef PROXYSQLFFTO
+		VariablesPointers_int["ffto_max_buffer_size"]          = make_tuple(&variables.ffto_max_buffer_size,          1, 1024*1024*1024, false);
+#endif
 		VariablesPointers_int["client_host_cache_size"]        = make_tuple(&variables.client_host_cache_size,        0,      1024*1024, false);
 		VariablesPointers_int["client_host_error_counts"]      = make_tuple(&variables.client_host_error_counts,      0,      1024*1024, false);
 		VariablesPointers_int["handle_warnings"]			   = make_tuple(&variables.handle_warnings,				  0,			  1, false);
 		VariablesPointers_int["evaluate_replication_lag_on_servers_load"] = make_tuple(&variables.evaluate_replication_lag_on_servers_load, 0, 1, false);
 		VariablesPointers_int["protocol_compression_level"]    = make_tuple(&variables.protocol_compression_level,   -1,              9, false);
+		VariablesPointers_int["zstd_compression_level"]       = make_tuple(&variables.zstd_compression_level,       1,              ZSTD_maxCLevel(), false);
 
 		// logs
 		VariablesPointers_int["auditlog_filesize"]     = make_tuple(&variables.auditlog_filesize,    1024*1024, 1*1024*1024*1024, false);
@@ -2372,10 +2707,15 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		// the input validation for these variables MUST be EXPLICIT
 		VariablesPointers_int["binlog_reader_connect_retry_msec"] = make_tuple(&variables.binlog_reader_connect_retry_msec, 0, 0, true);
 		VariablesPointers_int["eventslog_format"] = make_tuple(&variables.eventslog_format, 0, 0, true);
+		VariablesPointers_int["eventslog_flush_timeout"] = make_tuple(&variables.eventslog_flush_timeout, 0, 0, true);
+ 		VariablesPointers_int["eventslog_flush_size"] = make_tuple(&variables.eventslog_flush_size, 0, 0, true);
+ 		VariablesPointers_int["eventslog_rate_limit"] = make_tuple(&variables.eventslog_rate_limit, 0, 0, true);
+ 		VariablesPointers_int["auditlog_flush_timeout"] = make_tuple(&variables.auditlog_flush_timeout, 0, 0, true);
+ 		VariablesPointers_int["auditlog_flush_size"] = make_tuple(&variables.auditlog_flush_size, 0, 0, true);
 		VariablesPointers_int["wait_timeout"]     = make_tuple(&variables.wait_timeout,     0, 0, true);
 		VariablesPointers_int["select_version_forwarding"] = make_tuple(&variables.select_version_forwarding, 0, 3, false);
 		VariablesPointers_int["data_packets_history_size"] = make_tuple(&variables.data_packets_history_size, 0, 0, true);
-
+		VariablesPointers_int["session_track_variables"]   = make_tuple(&variables.session_track_variables,   0, 2, false);
 	}
 
 
@@ -2784,6 +3124,7 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 		free(variables.monitor_replication_lag_use_percona_heartbeat);
 		variables.monitor_replication_lag_use_percona_heartbeat=NULL;
 	}
+	if (variables.resolution_family) { free(variables.resolution_family); variables.resolution_family=NULL; }
 	if (variables.default_schema) free(variables.default_schema);
 	if (variables.interfaces) free(variables.interfaces);
 	if (variables.server_version) free(variables.server_version);
@@ -2911,6 +3252,7 @@ MySQL_Thread::~MySQL_Thread() {
 	if (my_idle_conns)
 		free(my_idle_conns);
 
+	if (mysql_thread___resolution_family) { free(mysql_thread___resolution_family); mysql_thread___resolution_family=NULL; }
 	if (mysql_thread___monitor_username) { free(mysql_thread___monitor_username); mysql_thread___monitor_username=NULL; }
 	if (mysql_thread___monitor_password) { free(mysql_thread___monitor_password); mysql_thread___monitor_password=NULL; }
 	if (mysql_thread___monitor_replication_lag_use_percona_heartbeat) {
@@ -4110,8 +4452,9 @@ void MySQL_Thread::process_all_sessions() {
 		sess_sort=false;
 	}
 #endif // IDLE_THREADS
-	if (sess_sort && mysql_sessions->len > 3) {
-		ProcessAllSessions_SortingSessions<MySQL_Session>();
+	const bool partition_wanted = update_partition_gate();
+	if (sess_sort && mysql_sessions->len > 3 && partition_wanted) {
+		ProcessAllSessions_Partition<MySQL_Session>();
 	}
 	for (n=0; n<mysql_sessions->len; n++) {
 		MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
@@ -4251,7 +4594,9 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(default_query_delay);
 	REFRESH_VARIABLE_INT(default_query_timeout);
 	REFRESH_VARIABLE_INT(query_processor_iterations);
+	REFRESH_VARIABLE_INT(query_processor_first_comment_parsing);
 	REFRESH_VARIABLE_INT(query_processor_regex);
+	REFRESH_VARIABLE_INT(query_processor_parser);
 	REFRESH_VARIABLE_INT(set_query_lock_on_hostgroup);
 	REFRESH_VARIABLE_INT(set_parser_algorithm);
 	REFRESH_VARIABLE_INT(reset_connection_algorithm);
@@ -4276,6 +4621,10 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(connect_timeout_server_max);
 	REFRESH_VARIABLE_INT(free_connections_pct);
 	REFRESH_VARIABLE_INT(fast_forward_grace_close_ms);
+#ifdef PROXYSQLFFTO
+	REFRESH_VARIABLE_BOOL(ffto_enabled);
+	REFRESH_VARIABLE_INT(ffto_max_buffer_size);
+#endif
 	REFRESH_VARIABLE_INT(select_version_forwarding);
 #ifdef IDLE_THREADS
 	REFRESH_VARIABLE_INT(session_idle_ms);
@@ -4329,6 +4678,7 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(monitor_local_dns_cache_ttl);
 	REFRESH_VARIABLE_INT(monitor_local_dns_cache_refresh_interval);
 	REFRESH_VARIABLE_INT(monitor_local_dns_resolver_queue_maxsize);
+	REFRESH_VARIABLE_CHAR(resolution_family);
 
 	REFRESH_VARIABLE_CHAR(firewall_whitelist_errormsg);
 	REFRESH_VARIABLE_CHAR(init_connect);
@@ -4354,7 +4704,7 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(eventslog_buffer_history_size);
 	{
 		int elmhs = mysql_thread___eventslog_buffer_history_size;
-		if (GloMyLogger->MyLogCB->getBufferSize() != elmhs) {
+		if (GloMyLogger->MyLogCB->getBufferSize() != static_cast<size_t>(elmhs)) {
 			GloMyLogger->MyLogCB->setBufferSize(elmhs);
 		}
 	}
@@ -4362,9 +4712,14 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(eventslog_default_log);
 	REFRESH_VARIABLE_INT(eventslog_format);
 	REFRESH_VARIABLE_INT(eventslog_stmt_parameters);
+	REFRESH_VARIABLE_INT(eventslog_flush_timeout);
+ 	REFRESH_VARIABLE_INT(eventslog_flush_size);
+ 	REFRESH_VARIABLE_INT(eventslog_rate_limit);
 	REFRESH_VARIABLE_CHAR(eventslog_filename);
 	REFRESH_VARIABLE_INT(auditlog_filesize);
 	REFRESH_VARIABLE_CHAR(auditlog_filename);
+	REFRESH_VARIABLE_INT(auditlog_flush_timeout);
+ 	REFRESH_VARIABLE_INT(auditlog_flush_size);
 	GloMyLogger->events_set_base_filename(); // both filename and filesize are set here
 	GloMyLogger->audit_set_base_filename(); // both filename and filesize are set here
 	REFRESH_VARIABLE_CHAR(default_schema);
@@ -4372,12 +4727,13 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_CHAR(proxy_protocol_networks);
 	REFRESH_VARIABLE_CHAR(default_authentication_plugin);
 	mysql_thread___default_authentication_plugin_int = GloMTH->variables.default_authentication_plugin_int;
-	mysql_thread___server_capabilities=GloMTH->get_variable_uint16((char *)"server_capabilities");
+	mysql_thread___server_capabilities=GloMTH->get_variable_uint32((char *)"server_capabilities");
 	REFRESH_VARIABLE_INT(handle_unknown_charset);
 	REFRESH_VARIABLE_INT(poll_timeout);
 	REFRESH_VARIABLE_INT(poll_timeout_on_failure);
 	REFRESH_VARIABLE_BOOL(have_compress);
 	REFRESH_VARIABLE_INT(protocol_compression_level);
+	REFRESH_VARIABLE_INT(zstd_compression_level);
 	REFRESH_VARIABLE_BOOL(have_ssl);
 	REFRESH_VARIABLE_BOOL(multiplexing);
 	REFRESH_VARIABLE_BOOL(log_unhealthy_connections);
@@ -4417,6 +4773,7 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(handle_warnings);
 	REFRESH_VARIABLE_INT(evaluate_replication_lag_on_servers_load);
 	REFRESH_VARIABLE_BOOL(ignore_min_gtid_annotations);
+	REFRESH_VARIABLE_INT(session_track_variables);
 #ifdef DEBUG
 	REFRESH_VARIABLE_BOOL(session_debug);
 #endif /* DEBUG */
@@ -4428,6 +4785,7 @@ MySQL_Thread::MySQL_Thread() {
 	pthread_mutex_init(&thread_mutex,NULL);
 	my_idle_conns=NULL;
 	cached_connections=NULL;
+	push_local_counter=0;
 	mysql_sessions=NULL;
 	mirror_queue_mysql_sessions=NULL;
 	mirror_queue_mysql_sessions_cache=NULL;
@@ -4450,6 +4808,7 @@ MySQL_Thread::MySQL_Thread() {
 	mysql_thread___add_ldap_user_comment=NULL;
 	mysql_thread___eventslog_filename=NULL;
 	mysql_thread___auditlog_filename=NULL;
+	mysql_thread___resolution_family=strdup("system");  // default: system (AF_UNSPEC)
 
 	// SSL proxy to server
 	mysql_thread___ssl_p2s_ca=NULL;
@@ -4461,6 +4820,7 @@ MySQL_Thread::MySQL_Thread() {
 	mysql_thread___ssl_p2s_crlpath=NULL;
 
 	mysql_thread___protocol_compression_level=3;
+	mysql_thread___zstd_compression_level=3;
 
 	last_maintenance_time=0;
 	last_move_to_idle_thread_time=0;
@@ -4978,19 +5338,19 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		}
 		{
 			pta[0] = (char*)"MySQL_Monitor_dns_cache_queried";
-			sprintf(buf, "%llu", GloMyMon->dns_cache_queried);
+			sprintf(buf, "%llu", GloMyMon->dns_cache_queried.load());
 			pta[1] = buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0] = (char*)"MySQL_Monitor_dns_cache_lookup_success";
-			sprintf(buf, "%llu", GloMyMon->dns_cache_lookup_success);
+			sprintf(buf, "%llu", GloMyMon->dns_cache_lookup_success.load());
 			pta[1] = buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0] = (char*)"MySQL_Monitor_dns_cache_record_updated";
-			sprintf(buf, "%llu", GloMyMon->dns_cache_record_updated);
+			sprintf(buf, "%llu", GloMyMon->dns_cache_record_updated.load());
 			pta[1] = buf;
 			result->add_row(pta);
 		}
@@ -5046,6 +5406,268 @@ void MySQL_Threads_Handler::Get_Memory_Stats() {
 		pthread_mutex_unlock(&thr->thread_mutex);
 	}
 }
+
+namespace {
+
+/**
+ * @brief Column indexes used by MySQL processlist filtering and sorting helpers.
+ */
+struct mysql_processlist_columns_t {
+	static constexpr int session_id = 1;
+	static constexpr int username = 2;
+	static constexpr int database = 3;
+	static constexpr int hostgroup = 6;
+	static constexpr int command = 11;
+	static constexpr int time_ms = 12;
+	static constexpr int info = 13;
+};
+
+/**
+ * @brief Safely return a row field or an empty string when missing.
+ *
+ * @param row Source processlist row.
+ * @param idx Field index in the processlist result.
+ * @return Pointer to the requested field or an empty-string literal.
+ */
+static const char* mysql_pl_field(const SQLite3_row* row, int idx) {
+	if (!row || idx < 0 || idx >= row->cnt || !row->fields[idx]) {
+		return "";
+	}
+	return row->fields[idx];
+}
+
+/**
+ * @brief Parse a processlist numeric field as unsigned integer.
+ *
+ * Invalid or empty values are normalized to zero so sorting and filtering remain
+ * deterministic for partial rows.
+ *
+ * @param value Text field containing an integer representation.
+ * @return Parsed unsigned value, or `0` on parse failure.
+ */
+static uint64_t mysql_pl_to_u64(const char* value) {
+	if (!value || !value[0]) {
+		return 0;
+	}
+
+	char* end = nullptr;
+	errno = 0;
+	unsigned long long parsed = strtoull(value, &end, 10);
+	if (end == value || *end != '\0' || errno != 0) {
+		return 0;
+	}
+
+	return static_cast<uint64_t>(parsed);
+}
+
+/**
+ * @brief Case-(in)sensitive substring matcher used by `match_info`.
+ *
+ * @param haystack Candidate text.
+ * @param needle Substring to search for.
+ * @param case_sensitive Whether matching should be case-sensitive.
+ * @return true when @p needle is found in @p haystack.
+ */
+static bool mysql_pl_contains(const std::string& haystack, const std::string& needle, bool case_sensitive) {
+	if (needle.empty()) {
+		return true;
+	}
+
+	if (case_sensitive) {
+		return haystack.find(needle) != std::string::npos;
+	}
+
+	auto it = std::search(
+		haystack.begin(),
+		haystack.end(),
+		needle.begin(),
+		needle.end(),
+		[](char lhs, char rhs) {
+			return std::tolower(static_cast<unsigned char>(lhs)) ==
+			       std::tolower(static_cast<unsigned char>(rhs));
+		}
+	);
+	return it != haystack.end();
+}
+
+/**
+ * @brief Evaluate whether a MySQL processlist row matches caller filters.
+ *
+ * @param row Processlist row from `SQL3_Processlist`.
+ * @param opts Typed query options supplied by the caller.
+ * @return true when the row satisfies all active filters.
+ */
+static bool mysql_pl_row_matches(const SQLite3_row* row, const processlist_query_options_t& opts) {
+	if (!opts.username.empty() && opts.username != mysql_pl_field(row, mysql_processlist_columns_t::username)) {
+		return false;
+	}
+	if (!opts.database.empty() && opts.database != mysql_pl_field(row, mysql_processlist_columns_t::database)) {
+		return false;
+	}
+	if (opts.hostgroup >= 0) {
+		const int row_hostgroup = static_cast<int>(mysql_pl_to_u64(mysql_pl_field(row, mysql_processlist_columns_t::hostgroup)));
+		if (row_hostgroup != opts.hostgroup) {
+			return false;
+		}
+	}
+	if (!opts.command.empty() && opts.command != mysql_pl_field(row, mysql_processlist_columns_t::command)) {
+		return false;
+	}
+	if (opts.min_time_ms >= 0) {
+		const uint64_t row_time_ms = mysql_pl_to_u64(mysql_pl_field(row, mysql_processlist_columns_t::time_ms));
+		if (row_time_ms < static_cast<uint64_t>(opts.min_time_ms)) {
+			return false;
+		}
+	}
+	if (opts.has_session_id) {
+		const uint64_t row_session_id = mysql_pl_to_u64(mysql_pl_field(row, mysql_processlist_columns_t::session_id));
+		if (row_session_id != opts.session_id) {
+			return false;
+		}
+	}
+	if (!opts.match_info.empty()) {
+		const std::string info = mysql_pl_field(row, mysql_processlist_columns_t::info);
+		if (!mysql_pl_contains(info, opts.match_info, opts.info_case_sensitive)) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+/**
+ * @brief Compare two MySQL processlist rows according to typed sort options.
+ *
+ * The comparison applies a deterministic tie-breaker on `SessionID` so paging
+ * remains stable across repeated calls with identical data.
+ *
+ * @param lhs Left-hand row.
+ * @param rhs Right-hand row.
+ * @param opts Query options carrying sort key and direction.
+ * @return true when @p lhs should be ordered before @p rhs.
+ */
+static bool mysql_pl_row_less(const SQLite3_row* lhs, const SQLite3_row* rhs, const processlist_query_options_t& opts) {
+	const uint64_t lhs_session_id = mysql_pl_to_u64(mysql_pl_field(lhs, mysql_processlist_columns_t::session_id));
+	const uint64_t rhs_session_id = mysql_pl_to_u64(mysql_pl_field(rhs, mysql_processlist_columns_t::session_id));
+
+	auto string_compare = [&](int idx) -> int {
+		const std::string lhs_value = mysql_pl_field(lhs, idx);
+		const std::string rhs_value = mysql_pl_field(rhs, idx);
+		if (lhs_value < rhs_value) {
+			return -1;
+		}
+		if (lhs_value > rhs_value) {
+			return 1;
+		}
+		return 0;
+	};
+
+	auto numeric_compare = [&](int idx) -> int {
+		const uint64_t lhs_value = mysql_pl_to_u64(mysql_pl_field(lhs, idx));
+		const uint64_t rhs_value = mysql_pl_to_u64(mysql_pl_field(rhs, idx));
+		if (lhs_value < rhs_value) {
+			return -1;
+		}
+		if (lhs_value > rhs_value) {
+			return 1;
+		}
+		return 0;
+	};
+
+	int cmp = 0;
+	switch (opts.sort_by) {
+		case processlist_sort_by_t::time_ms:
+			cmp = numeric_compare(mysql_processlist_columns_t::time_ms);
+			break;
+		case processlist_sort_by_t::session_id:
+			cmp = numeric_compare(mysql_processlist_columns_t::session_id);
+			break;
+		case processlist_sort_by_t::username:
+			cmp = string_compare(mysql_processlist_columns_t::username);
+			break;
+		case processlist_sort_by_t::hostgroup:
+			cmp = numeric_compare(mysql_processlist_columns_t::hostgroup);
+			break;
+		case processlist_sort_by_t::command:
+			cmp = string_compare(mysql_processlist_columns_t::command);
+			break;
+		case processlist_sort_by_t::none:
+		default:
+			cmp = 0;
+			break;
+	}
+
+	if (cmp != 0) {
+		return opts.sort_desc ? (cmp > 0) : (cmp < 0);
+	}
+
+	return lhs_session_id < rhs_session_id;
+}
+
+/**
+ * @brief Apply typed filtering, sorting, and pagination to MySQL processlist rows.
+ *
+ * This post-processing stage is intentionally local to `SQL3_Processlist()` so
+ * the same API can serve:
+ * - legacy Admin stats refreshes (options disabled, full result)
+ * - MCP live queries (options enabled with filters and page controls)
+ *
+ * @param result Mutable resultset generated by `SQL3_Processlist()`.
+ * @param opts Query options controlling filtering/sorting/pagination.
+ */
+static void apply_mysql_processlist_query_options(SQLite3_result* result, const processlist_query_options_t& opts) {
+	if (!result || !opts.enabled) {
+		return;
+	}
+
+	std::vector<SQLite3_row*> filtered_rows;
+	filtered_rows.reserve(result->rows.size());
+
+	for (SQLite3_row* row : result->rows) {
+		if (mysql_pl_row_matches(row, opts)) {
+			filtered_rows.push_back(row);
+		} else {
+			delete row;
+		}
+	}
+
+	if (opts.sort_by != processlist_sort_by_t::none && filtered_rows.size() > 1) {
+		std::stable_sort(
+			filtered_rows.begin(),
+			filtered_rows.end(),
+			[&opts](const SQLite3_row* lhs, const SQLite3_row* rhs) {
+				return mysql_pl_row_less(lhs, rhs, opts);
+			}
+		);
+	}
+
+	size_t begin = std::min<size_t>(opts.offset, filtered_rows.size());
+	size_t end = begin;
+	if (opts.disable_pagination) {
+		begin = 0;
+		end = filtered_rows.size();
+	} else {
+		const uint64_t requested_end = static_cast<uint64_t>(begin) + static_cast<uint64_t>(opts.limit);
+		end = std::min<size_t>(filtered_rows.size(), static_cast<size_t>(requested_end));
+	}
+
+	std::vector<SQLite3_row*> paged_rows;
+	paged_rows.reserve(end > begin ? (end - begin) : 0);
+
+	for (size_t idx = 0; idx < filtered_rows.size(); ++idx) {
+		SQLite3_row* row = filtered_rows[idx];
+		if (idx >= begin && idx < end) {
+			paged_rows.push_back(row);
+		} else {
+			delete row;
+		}
+	}
+
+	result->rows.swap(paged_rows);
+	result->rows_count = static_cast<int>(result->rows.size());
+}
+
+} // namespace
 
 SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist(processlist_config_t args) {
 	const int colnum=16;
@@ -5328,6 +5950,14 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist(processlist_config_t ar
 		}
 		pthread_mutex_unlock(&thr->thread_mutex);
 	}
+
+	/**
+	 * Apply optional in-memory query options used by MCP and other internal
+	 * consumers. Legacy callers keep `query_options.enabled=false`, so their
+	 * behavior remains unchanged and they still receive the full processlist.
+	 */
+	apply_mysql_processlist_query_options(result, args.query_options);
+
 	return result;
 }
 
@@ -5491,7 +6121,7 @@ unsigned long long MySQL_Threads_Handler::get_status_variable(
 		}
 	}
 #endif // IDLE_THREADS
-	if (m_idx != p_th_counter::__size) {
+	if (m_idx != p_th_counter::SIZE_) {
 		const auto& cur_val = status_variables.p_counter_array[m_idx]->Value();
 		double final_val = 0;
 
@@ -5532,7 +6162,7 @@ unsigned long long MySQL_Threads_Handler::get_status_variable(
 		}
 	}
 #endif // IDLE_THREADS
-	if (m_idx != p_th_gauge::__size) {
+	if (m_idx != p_th_gauge::SIZE_) {
 		double final_val = 0;
 
 		if (conv != 0) {
@@ -5752,10 +6382,29 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 	if (sess->client_myds->myconn == NULL) return NULL;
 	if (sess->client_myds->myconn->userinfo == NULL) return NULL;
 	unsigned int i;
+	unsigned long long session_track_backoff_until;
+	// Mirror of the hot-path optimization in 'MyHGC::get_random_MySrvC()': only ENFORCED
+	// mode ever writes 'MySrvC::session_track_backoff_until', so in DISABLED/OPTIONAL we
+	// can skip the per-iteration atomic load entirely. The common case stays allocation-
+	// and atomic-free; the branch is well-predicted because the mode changes rarely.
+	const bool check_session_track_backoff =
+		(mysql_thread___session_track_variables == session_track_variables::ENFORCED);
 	std::vector<MySrvC *> parents; // this is a vector of srvers that needs to be excluded in case gtid_uuid is used
 	MySQL_Connection *c=NULL;
 	for (i=0; i<cached_connections->len; i++) {
-		c=(MySQL_Connection *)cached_connections->index(i);
+		c = (MySQL_Connection *) cached_connections->index(i);
+
+		// Skip cached connections whose parent server is inside the session-tracking
+		// capability backoff window. See 'MySrvC::session_track_backoff_until' for the
+		// full rationale; reads are relaxed because the deadline is compared against
+		// 'curtime' and small reordering is harmless.
+		if (check_session_track_backoff) {
+			session_track_backoff_until = c->parent->session_track_backoff_until.load(std::memory_order_relaxed);
+			if (session_track_backoff_until > curtime) {
+				continue;
+			}
+		}
+
 		if (c->parent->myhgc->hid==_hid && sess->client_myds->myconn->match_tracked_options(c)) { // options are all identical
 			if (
 				(gtid_uuid == NULL) || // gtid_uuid is not used
@@ -5819,14 +6468,22 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
  * @param c Pointer to the MySQL_Connection object to be pushed to the local connection pool.
  */
 void MySQL_Thread::push_MyConn_local(MySQL_Connection *c) {
-	MySrvC *mysrvc=NULL;
-	mysrvc=(MySrvC *)c->parent;
+	// Bounded local cache: cache 1-in-N releases (N = mysql_threads), push the
+	// rest to the shared HGM pool so peer workers can pick them up.
+	// At N=1 always cache (no sibling to share with).
+	// Rationale: avoids the connection-hoarding behavior that starved sibling
+	// workers at high client count, while preserving most of the lock-amortization
+	// benefit at lower client counts.
+	MySrvC *mysrvc=(MySrvC *)c->parent;
 	// reset insert_id #1093
 	c->mysql->insert_id = 0;
 	if (mysrvc->get_status() == MYSQL_SERVER_STATUS_ONLINE) {
 		if (c->async_state_machine==ASYNC_IDLE) {
-			cached_connections->add(c);
-			return; // all went well
+			unsigned int n = (GloMTH && GloMTH->num_threads > 0) ? GloMTH->num_threads : 1;
+			if ((push_local_counter++ % n) == 0) {
+				cached_connections->add(c);
+				return;
+			}
 		}
 	}
 	MyHGM->push_MyConn_to_pool(c);

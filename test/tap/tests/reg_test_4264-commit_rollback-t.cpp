@@ -63,6 +63,37 @@ const uint32_t TG_HG_1 = 1047;
 const uint32_t TG_HG_2 = 1048;
 const string TG_HG_STR { to_string(TG_HG_1) };
 
+void dump_relevant_users(MYSQL* admin) {
+	if (!admin) return;
+	diag("Relevant users in runtime_mysql_users:");
+	std::string user_query = "SELECT username, default_hostgroup, transaction_persistent FROM runtime_mysql_users WHERE username='testuser' OR username LIKE 'sbtest%'";
+	if (mysql_query(admin, user_query.c_str()) == 0) {
+		MYSQL_RES* res = mysql_store_result(admin);
+		if (res) {
+			MYSQL_ROW row;
+			while ((row = mysql_fetch_row(res))) {
+				diag("  - username=%s, default_hostgroup=%s, transaction_persistent=%s", row[0], row[1], row[2]);
+			}
+			mysql_free_result(res);
+		}
+	}
+}
+
+void dump_query_rules(MYSQL* admin) {
+	if (!admin) return;
+	diag("Query rules in runtime_mysql_query_rules:");
+	if (mysql_query(admin, "SELECT rule_id, destination_hostgroup, match_pattern FROM runtime_mysql_query_rules") == 0) {
+		MYSQL_RES* res = mysql_store_result(admin);
+		if (res) {
+			MYSQL_ROW row;
+			while ((row = mysql_fetch_row(res))) {
+				diag("  - rule_id=%s, dest_hg=%s, pattern=%s", row[0], row[1], row[2]);
+			}
+			mysql_free_result(res);
+		}
+	}
+}
+
 /**
  * @details Flow for explicit and persistent trxs:
  *  - BEGIN -> Starts a trx, in default hostgroup.
@@ -82,7 +113,13 @@ int explicit_trx_persist(CommandLine& cl, MYSQL* admin, MYSQL* proxy, const stri
 	const pool_state_t& pre_pool_state { pre_pool_state_res.second };
 	const uint32_t df_hg_qs = std::stol(pre_pool_state.at(DF_HG)[POOL_STATS_IDX::QUERIES]);
 
+	diag("Pre-test state: DF_HG=%d has Queries=%d", DF_HG, df_hg_qs);
 	MYSQL_QUERY_T(proxy, "BEGIN");
+
+	// Debug: Show connection pool state immediately after BEGIN
+	diag("Connection pool state immediately after BEGIN:");
+	dump_conn_stats(admin, {});
+
 	diag("Only connection should be in use for any hg");
 	check_conn_count(admin, "ConnUsed", 1);
 	diag("Only connection should be in use for hg '%d'", DF_HG);
@@ -1100,19 +1137,7 @@ const vector<test_case_t> test_cases {
 	create_test_case(implicit_trx_and_savepoints_no_persist_no_def_hg_r),
 };
 
-int prepare_tables_and_config(MYSQL* admin, MYSQL* proxy) {
-	MYSQL_QUERY_T(proxy, "CREATE DATABASE IF NOT EXISTS test");
-	MYSQL_QUERY_T(proxy, "DROP TABLE IF EXISTS test.commit_rollback");
-	MYSQL_QUERY_T(proxy,
-		"CREATE TABLE test.commit_rollback ("
-			" id INTEGER NOT NULL AUTO_INCREMENT, "
-			" k INTEGER DEFAULT 0 NOT NULL,"
-			" c CHAR(120) DEFAULT '' NOT NULL,"
-			" p CHAR(60) DEFAULT '' NOT NULL,"
-			" PRIMARY KEY (id)"
-		")"
-	);
-
+int prepare_tables_and_config(MYSQL* admin, const string& username) {
 	const auto build_server_copy_query = [] (uint32_t tg_hg, uint32_t og_hg) {
 		return cstr_format(
 			"INSERT INTO mysql_servers (hostgroup_id,hostname,port)"
@@ -1129,9 +1154,13 @@ int prepare_tables_and_config(MYSQL* admin, MYSQL* proxy) {
 	MYSQL_QUERY_T(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
 	MYSQL_QUERY_T(admin, "SET mysql-auto_increment_delay_multiplex=0");
+	MYSQL_QUERY_T(admin, "SET mysql-default_session_track_gtids='OFF'");
+	MYSQL_QUERY_T(admin, "SET mysql-session_track_variables=0");
+
 	MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
-	MYSQL_QUERY_T(admin, "LOAD MYSQL QUERY RULES FROM DISK");
+	// Clear any existing query rules to avoid interference from global CI rules
+	MYSQL_QUERY_T(admin, "DELETE FROM mysql_query_rules");
 	MYSQL_QUERY_T(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 	MYSQL_QUERY_T(
 		admin,
@@ -1149,7 +1178,17 @@ int prepare_tables_and_config(MYSQL* admin, MYSQL* proxy) {
 	);
 	MYSQL_QUERY_T(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
-	MYSQL_QUERY_T(admin, "UPDATE mysql_users SET transaction_persistent=0 WHERE username='sbtest1'");
+	// Configure the test user: set default_hostgroup=0 and transaction_persistent=1
+	// transaction_persistent=1 ensures queries during a transaction stay in the same hostgroup
+	// (will be changed to 0 for no_persist tests later)
+	MYSQL_QUERY_T(
+		admin,
+		("UPDATE mysql_users SET default_hostgroup=0, transaction_persistent=1 WHERE username='" + username + "'").c_str()
+	);
+	MYSQL_QUERY_T(
+		admin,
+		"UPDATE mysql_users SET default_hostgroup=0, transaction_persistent=1 WHERE username LIKE 'sbtest%'"
+	);
 	MYSQL_QUERY_T(admin, "LOAD MYSQL USERS TO RUNTIME");
 
 	return EXIT_SUCCESS;
@@ -1165,26 +1204,110 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	MYSQL* proxy = mysql_init(NULL);
-	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
-		return EXIT_FAILURE;
-	}
+	// Verbose test header
+	diag("================================================================================");
+	diag("Test: reg_test_4264-commit_rollback-t");
+	diag("================================================================================");
+	diag("Verifies COMMIT/ROLLBACK are executed in correct backend connections");
+	diag("when multiple connections are held by a session.");
+	diag(" ");
+	diag("Connection parameters:");
+	diag("  - Host: %s", cl.host);
+	diag("  - Port: %d", cl.port);
+	diag("  - Admin Port: %d", cl.admin_port);
+	diag("  - Username: %s", cl.username);
+	diag("  - Workdir: %s", cl.workdir);
+	diag(" ");
+	diag("Test hostgroups: DF_HG=%d, TG_HG_1=%d, TG_HG_2=%d", DF_HG, TG_HG_1, TG_HG_2);
+	diag("================================================================================");
+	diag(" ");
 
+	// Connect to admin first to configure user settings before proxy connection
 	MYSQL* admin = mysql_init(NULL);
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
 	}
 
-	int prep_res = prepare_tables_and_config(admin, proxy);
-	if (prep_res) {
-		goto cleanup;
+	// Debug: Show user's default hostgroup configuration BEFORE changes
+	{
+		MYSQL_RES* res = NULL;
+		MYSQL_ROW row = NULL;
+		diag("User configuration for '%s' (before config changes):", cl.username);
+		std::string user_query = "SELECT username, default_hostgroup, transaction_persistent FROM mysql_users WHERE username='" + std::string(cl.username) + "'";
+		if (mysql_query(admin, user_query.c_str()) == 0) {
+			res = mysql_store_result(admin);
+			if (res) {
+				while ((row = mysql_fetch_row(res))) {
+					diag("  - username=%s, default_hostgroup=%s, transaction_persistent=%s", row[0], row[1], row[2]);
+				}
+				mysql_free_result(res);
+			}
+		}
 	}
+
+	// Update user configuration BEFORE creating proxy connection
+	// This ensures the proxy connection inherits the correct default_hostgroup=0
+	int prep_res = prepare_tables_and_config(admin, cl.username);
+	if (prep_res) {
+		mysql_close(admin);
+		return EXIT_FAILURE;
+	}
+
+	// Debug: Show user configuration AFTER changes
+	dump_relevant_users(admin);
+	dump_query_rules(admin);
+
+	// NOW create the proxy connection - it will inherit default_hostgroup=0
+	MYSQL* proxy = mysql_init(NULL);
+	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
+		mysql_close(admin);
+		return EXIT_FAILURE;
+	}
+
+	// Create the test table using the proxy connection (now with correct hostgroup)
+	MYSQL_QUERY_T(proxy, "CREATE DATABASE IF NOT EXISTS test");
+	MYSQL_QUERY_T(proxy, "DROP TABLE IF EXISTS test.commit_rollback");
+	MYSQL_QUERY_T(proxy,
+		"CREATE TABLE test.commit_rollback ("
+			" id INTEGER NOT NULL AUTO_INCREMENT, "
+			" k INTEGER DEFAULT 0 NOT NULL,"
+			" c CHAR(120) DEFAULT '' NOT NULL,"
+			" p CHAR(60) DEFAULT '' NOT NULL,"
+			" PRIMARY KEY (id)"
+		")"
+	);
+
+	// Debug: Show initial connection pool state
+	diag("Initial connection pool state:");
+	dump_conn_stats(admin, {});
 
 	for (const auto test : test_cases) {
 		fprintf(stderr, "\n");
 		diag("Starting test '%s'", test.name.c_str());
+
+		// Set transaction_persistent based on test name
+		// Tests with '_no_persist_' need transaction_persistent=0
+		// Tests with '_persist_' need transaction_persistent=1
+		bool needs_no_persist = (test.name.find("_no_persist_") != string::npos);
+		int tp_value = needs_no_persist ? 0 : 1;
+		MYSQL_QUERY_T(
+			admin,
+			("UPDATE mysql_users SET transaction_persistent=" + to_string(tp_value) + " WHERE username='" + string(cl.username) + "'").c_str()
+		);
+		MYSQL_QUERY_T(
+			admin,
+			("UPDATE mysql_users SET transaction_persistent=" + to_string(tp_value) + " WHERE username LIKE 'sbtest%'").c_str()
+		);
+		MYSQL_QUERY_T(admin, "LOAD MYSQL USERS TO RUNTIME");
+		diag("Set transaction_persistent=%d for test '%s'", tp_value, test.name.c_str());
+
+		// Additional debugging for each test case
+		dump_relevant_users(admin);
+		diag("Initial connection pool state for test '%s':", test.name.c_str());
+		dump_conn_stats(admin, {});
+
 		test.fn(cl, admin, proxy);
 	}
 

@@ -1,5 +1,5 @@
-#ifndef __CLASS_MYSQL_PROTOCOL_H
-#define __CLASS_MYSQL_PROTOCOL_H
+#ifndef PROXYSQL_MYSQL_PROTOCOL_H
+#define PROXYSQL_MYSQL_PROTOCOL_H
 
 #include "proxysql.h"
 #include "cpp.h"
@@ -109,7 +109,9 @@ class MyProt_tmp_auth_vars {
 	uint32_t  capabilities = 0;
 	uint32_t  max_pkt;
 	uint32_t  pass_len;
+	uint8_t zstd_compression_level = 0;
 	bool use_ssl = false;
+	bool use_zstd_compression = false;
 	enum proxysql_session_type session_type;
 };
 
@@ -140,7 +142,9 @@ class MySQL_Protocol {
 	uint16_t prot_status;
 	bool more_data_needed;
 	MySQL_Data_Stream *get_myds() { return *myds; }
-	MySQL_Protocol() {
+	MySQL_Protocol()
+	  : userinfo(nullptr), sess(nullptr), myds(nullptr), current_PreStmt(nullptr)
+	{
 		sent_auth_plugin_id = AUTH_MYSQL_NATIVE_PASSWORD;
 		auth_plugin_id = AUTH_UNKNOWN_PLUGIN;
 		prot_status=0;
@@ -242,4 +246,4 @@ class MySQL_Protocol {
 	bool verify_user_attributes(int calling_line, const char *calling_func, const unsigned char *user);
 	bool user_attributes_has_spiffe(int calling_line, const char *calling_func, const unsigned char *user);
 };
-#endif /* __CLASS_MYSQL_PROTOCOL_H */
+#endif /* PROXYSQL_MYSQL_PROTOCOL_H */

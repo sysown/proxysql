@@ -111,7 +111,7 @@ QP_query_digest_stats::~QP_query_digest_stats() {
 // Funtion to get the digest text associated to a QP_query_digest_stats.
 // QP_query_digest_stats member type "char *digest_text" may by NULL, so we
 // have to get the digest text from "digest_text_umap".
-char *QP_query_digest_stats::get_digest_text(const umap_query_digest_text *digest_text_umap) {
+char *QP_query_digest_stats::get_digest_text(const umap_query_digest_text *digest_text_umap) const {
 	char *digest_text_str = NULL;
 
 	if (digest_text) {

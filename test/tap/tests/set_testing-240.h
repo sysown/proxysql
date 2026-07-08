@@ -21,6 +21,8 @@ const std::vector<std::string> possible_unknown_variables = {
 	"group_replication_consistency",
 	"query_cache_type",
 	"wsrep_osu_method",
+	"wsrep_trx_fragment_size",
+	"wsrep_trx_fragment_unit",
 	"wsrep_sync_wait",
 	"max_execution_time",
 	"optimizer_use_condition_selectivity",
@@ -151,9 +153,9 @@ void parseResult(MYSQL_RES *result, json& j) {
 	assert(nr > 16);
 	while ((row = mysql_fetch_row(result))) {
 		if (j.find(row[0]) == j.end()) {
-			j[row[0]] = row[1];
+			j[row[0]] = row[1] ? row[1] : "";
 		} else {
-			if (strcmp(row[1],UNKNOWNVAR)!=0) {
+			if (row[1] && strcmp(row[1],UNKNOWNVAR)!=0) {
 				j[row[0]] = row[1]; // we override only if the new value it is not UNKNOWNVAR
 			}
 		}
@@ -464,7 +466,7 @@ bool check_session_track_gtids(const std::string& expVal, const std::string& sVa
 	return res;
 }
 
-int detect_version(CommandLine& cl, bool& is_mariadb) {
+int detect_version(CommandLine& cl, bool& is_mariadb, bool& is_cluster) {
 	MYSQL* mysql = mysql_init(NULL);
 	if (!mysql)
 		return 1;
@@ -485,6 +487,15 @@ int detect_version(CommandLine& cl, bool& is_mariadb) {
 		else {
 			is_mariadb = false;
 		}
+	}
+	mysql_free_result(result);
+	MYSQL_QUERY(mysql, "SHOW VARIABLES LIKE 'wsrep_sync_wait'");
+	result = mysql_store_result(mysql);
+	unsigned long long nr = mysql_num_rows(result);
+	if (nr == 0) {
+		is_cluster = false;
+	} else {
+		is_cluster = true;
 	}
 	mysql_free_result(result);
 	mysql_close(mysql);

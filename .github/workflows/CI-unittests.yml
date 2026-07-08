@@ -1,0 +1,57 @@
+name: CI-unittests
+run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
+
+# DISABLED FOR NOW (2026-04-11)
+#
+# The automatic workflow_run trigger is intentionally removed. CI-unittests
+# cannot be run as part of the normal CI cascade right now because the
+# ci-builds.yml _test cache no longer includes the compiled unit test
+# binaries — they're stripped in CI-builds (after compilation, which still
+# catches compile errors) to keep the cache under GitHub's 10 GB per-repo
+# quota. See sysown/proxysql#5603 for the cache-shrink story.
+#
+# Unit tests are still being compiled in every CI-builds run (the
+# `UNIT_COUNT > 0` check in ci-builds.yml ensures this). Only their
+# binaries are pruned before the cache save.
+#
+# To re-enable CI-unittests:
+#   1. Decide how it will obtain the unit test binaries. Options:
+#        a) docker compose up ubuntu22_dbg_build inside ci-unittests.yml
+#           (self-contained, ~15 min overhead per run)
+#        b) Expand _src cache to include lib/libproxysql.a + deps/*/lib/*.a
+#           + test/tap/tap/ and run an incremental `make` in ci-unittests
+#           (faster, more complex)
+#        c) Use upload-artifact / download-artifact for the unit binaries
+#           (different quota, requires run-id plumbing)
+#   2. Update .github/workflows/ci-unittests.yml on GH-Actions accordingly
+#   3. Restore the workflow_run trigger below (uncomment the block)
+#
+# The workflow_dispatch trigger is kept so the workflow can still be
+# invoked manually from the Actions tab (e.g. to test a re-enablement
+# branch), but no automatic runs will fire.
+
+on:
+  workflow_dispatch:
+  # workflow_run:
+  #   workflows: [ CI-trigger ]
+  #   types: [ completed ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  run:
+    if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
+    # `write-all` is required because reusable-workflow permissions are the
+    # intersection of caller + callee. Without it the workflow_run event's
+    # GITHUB_TOKEN has no cache-writable scope, so the callee's
+    # actions/cache/save@v4 fails with 'cache write denied: token has no
+    # writable scopes' (GitHub started enforcing this for workflow_run in
+    # early July 2026 alongside the Node.js 20 -> 24 actions deprecation).
+    # The callee at ci-<group>.yml@GH-Actions also declares write-all.
+    permissions: write-all
+    uses: sysown/proxysql/.github/workflows/ci-unittests.yml@GH-Actions
+    secrets: inherit
+    with:
+      trigger: ${{ toJson(github) }}

@@ -31,6 +31,7 @@ MySrvC::MySrvC(
 	bytes_recv=0;
 	max_connections_used=0;
 	queries_gtid_sync=0;
+	session_track_backoff_until.store(0);
 	time_last_detected_error=0;
 	connect_ERR_at_time_last_detected_error=0;
 	shunned_automatic=false;
@@ -76,6 +77,7 @@ void MySrvC::connect_error(int err_num, bool get_mutex) {
 		case 1120:
 		case 1203: // User %s already has more than 'max_user_connections' active connections
 		case 1226: // User '%s' has exceeded the '%s' resource (current value: %ld)
+		case 1862: // Your password has expired. To log in you must change it using a client that supports expired passwords.
 		case 3118: // Access denied for user '%s'. Account is locked..
 			return;
 			break;

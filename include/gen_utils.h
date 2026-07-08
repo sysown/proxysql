@@ -1,5 +1,5 @@
-#ifndef __CLASS_PTR_ARRAY_H
-#define __CLASS_PTR_ARRAY_H
+#ifndef PROXYSQL_PTR_ARRAY_H
+#define PROXYSQL_PTR_ARRAY_H
 
 #include <memory>
 #include <queue>
@@ -146,21 +146,24 @@ class PtrArray {
 	}
 	void shrink() {
 		unsigned int new_size=l_near_pow_2(len+1);
-		pdata=(void **)realloc(pdata,new_size*sizeof(void *));
-		size=new_size;
+		void *new_pdata = realloc(pdata, new_size * sizeof(void *));
+		if (new_pdata) {
+			pdata = (void **)new_pdata;
+			size = new_size;
+		}
 	}
 	public:
 	unsigned int len;
 	unsigned int size;
 	void **pdata;
-	PtrArray(unsigned int __size=0) {
+	explicit PtrArray(unsigned int sz=0) {
 		len=0;
 		pdata=NULL;
 		size=0;
-		if (__size) {
-			expand(__size);
+		if (sz) {
+			expand(sz);
 		}
-		size=__size;
+		size=sz;
 	}
 	~PtrArray() {
 		if (pdata) ( free(pdata) );
@@ -240,7 +243,7 @@ class PtrSizeArray {
 	unsigned int len;
 	unsigned int size;
 	PtrSize_t *pdata;
-	PtrSizeArray(unsigned int __size=0);
+	explicit PtrSizeArray(unsigned int sz=0);
 	~PtrSizeArray();
 
 	void add(void *p, unsigned int s) {
@@ -374,7 +377,7 @@ public:
 	}
 };
 
-#endif /* __CLASS_PTR_ARRAY_H */
+#endif /* PROXYSQL_PTR_ARRAY_H */
 
 
 #ifdef CLOCK_MONOTONIC_RAW
@@ -383,8 +386,8 @@ public:
 #define PROXYSQL_CLOCK_MONOTONIC CLOCK_MONOTONIC
 #endif
 
-#ifndef __GEN_FUNCTIONS
-#define __GEN_FUNCTIONS
+#ifndef PROXYSQL_GEN_FUNCTIONS
+#define PROXYSQL_GEN_FUNCTIONS
 
 #ifdef __APPLE__
 #include <sys/types.h>
@@ -556,4 +559,4 @@ inline constexpr char* fast_uint32toa(uint32_t value, char* out) noexcept {
 	return p;
 }
 
-#endif /* __GEN_FUNCTIONS */
+#endif /* PROXYSQL_GEN_FUNCTIONS */

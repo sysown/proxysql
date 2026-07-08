@@ -454,9 +454,7 @@ tail -f proxysql.log | grep GenAI
 
 ## Related Documentation
 
-- [Posts Table Embeddings Setup](./posts-embeddings-setup.md) - Using sqlite-rembed with GenAI
 - [SQLite3 Server Documentation](./SQLite3-Server.md) - SQLite3 backend integration
-- [sqlite-rembed Integration](./sqlite-rembed-integration.md) - Embedding generation
 
 ## Source Files
 

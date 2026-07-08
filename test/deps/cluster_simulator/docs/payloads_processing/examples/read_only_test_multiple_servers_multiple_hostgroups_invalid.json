@@ -1,0 +1,81 @@
+[
+    {
+        "__comment__": "Multiple servers in multiple 'mysql_replication_hostgroup' - writer_is_also_reader: 1, RO: 0 -> 1",
+        "cluster_type": "READ_ONLY",
+        "mysql_servers": [
+            { "hostgroup_id": 2271, "hostname": "127.1.1.11", "port": 3306, "comment": "mysql01" },
+            { "hostgroup_id": 2274, "hostname": "127.1.1.11", "port": 3306, "comment": "mysql01" },
+            { "hostgroup_id": 2275, "hostname": "127.1.1.11", "port": 3306, "comment": "mysql01" },
+            { "hostgroup_id": 2278, "hostname": "127.1.1.11", "port": 3306, "comment": "mysql01" },
+
+            { "hostgroup_id": 2271, "hostname": "127.1.1.12", "port": 3306, "comment": "mysql02" },
+            { "hostgroup_id": 2273, "hostname": "127.1.1.12", "port": 3306, "comment": "mysql02" },
+            { "hostgroup_id": 2275, "hostname": "127.1.1.12", "port": 3306, "comment": "mysql02" },
+            { "hostgroup_id": 2277, "hostname": "127.1.1.12", "port": 3306, "comment": "mysql02" },
+            { "hostgroup_id": 2279, "hostname": "127.1.1.12", "port": 3306, "comment": "mysql02" },
+
+            { "hostgroup_id": 2271, "hostname": "127.1.1.13", "port": 3306, "comment": "mysql03" },
+            { "hostgroup_id": 2274, "hostname": "127.1.1.13", "port": 3306, "comment": "mysql03" },
+            { "hostgroup_id": 2275, "hostname": "127.1.1.13", "port": 3306, "comment": "mysql03" },
+            { "hostgroup_id": 2279, "hostname": "127.1.1.13", "port": 3306, "comment": "mysql03" }
+        ],
+        "mysql_replication_hostgroups": [
+            { "writer_hostgroup": 2271, "reader_hostgroup": 2272, "check_type": "read_only", "comment": "" },
+            { "writer_hostgroup": 2273, "reader_hostgroup": 2274, "check_type": "read_only", "comment": "" },
+            { "writer_hostgroup": 2275, "reader_hostgroup": 2276, "check_type": "read_only", "comment": "" },
+            { "writer_hostgroup": 2277, "reader_hostgroup": 2278, "check_type": "read_only", "comment": "" },
+            { "writer_hostgroup": 2279, "reader_hostgroup": 2280, "check_type": "read_only", "comment": "" }
+        ],
+        "mysql_monitor_config": [
+            { "monitor_writer_is_also_reader": 1 }
+        ],
+        "readonly_servers_init_state": [
+            { "hostname": "127.1.1.11", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.12", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.13", "port": 3306, "read_only": 0 }
+        ],
+        "readonly_servers_new_state": [
+            { "hostname": "127.1.1.11", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.12", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.13", "port": 3306, "read_only": 1 }
+        ],
+        "proxysql_init_state": [
+            {"hostgroup_id":2271,"hostname":"127.1.1.11","port":3306,"status":"ONLINE","comment":"mysql01"},
+            {"hostgroup_id":2271,"hostname":"127.1.1.12","port":3306,"status":"ONLINE","comment":"mysql02"},
+            {"hostgroup_id":2271,"hostname":"127.1.1.13","port":3306,"status":"ONLINE","comment":"mysql03"},
+            {"hostgroup_id":2272,"hostname":"127.1.1.11","port":3306,"status":"ONLINE","comment":"mysql01"},
+            {"hostgroup_id":2272,"hostname":"127.1.1.13","port":3306,"status":"ONLINE","comment":"mysql03"},
+            {"hostgroup_id":2273,"hostname":"127.1.1.11","port":3306,"status":"ONLINE","comment":"mysql01"},
+            {"hostgroup_id":2273,"hostname":"127.1.1.12","port":3306,"status":"ONLINE","comment":"mysql02"},
+            {"hostgroup_id":2273,"hostname":"127.1.1.13","port":3306,"status":"ONLINE","comment":"mysql03"},
+            {"hostgroup_id":2274,"hostname":"127.1.1.11","port":3306,"status":"ONLINE","comment":"mysql01"},
+            {"hostgroup_id":2274,"hostname":"127.1.1.13","port":3306,"status":"ONLINE","comment":"mysql03"},
+            {"hostgroup_id":2275,"hostname":"127.1.1.11","port":3306,"status":"ONLINE","comment":"mysql01"},
+            {"hostgroup_id":2275,"hostname":"127.1.1.12","port":3306,"status":"ONLINE","comment":"mysql02"},
+            {"hostgroup_id":2275,"hostname":"127.1.1.13","port":3306,"status":"ONLINE","comment":"mysql03"},
+            {"hostgroup_id":2276,"hostname":"127.1.1.11","port":3306,"status":"ONLINE","comment":"mysql01"},
+            {"hostgroup_id":2276,"hostname":"127.1.1.13","port":3306,"status":"ONLINE","comment":"mysql03"},
+            {"hostgroup_id":2277,"hostname":"127.1.1.11","port":3306,"status":"ONLINE","comment":"mysql01"},
+            {"hostgroup_id":2277,"hostname":"127.1.1.12","port":3306,"status":"ONLINE","comment":"mysql02"},
+            {"hostgroup_id":2278,"hostname":"127.1.1.11","port":3306,"status":"ONLINE","comment":"mysql01"},
+            {"hostgroup_id":2279,"hostname":"127.1.1.12","port":3306,"status":"ONLINE","comment":"mysql02"},
+            {"hostgroup_id":2279,"hostname":"127.1.1.13","port":3306,"status":"ONLINE","comment":"mysql03"},
+            {"hostgroup_id":2280,"hostname":"127.1.1.13","port":3306,"status":"ONLINE","comment":"mysql03"}
+        ],
+        "proxysql_final_state": [
+            {"hostgroup_id":2272,"hostname":"127.1.1.11","port":3306,"status":"ONLINE","comment":"mysql01"},
+            {"hostgroup_id":2272,"hostname":"127.1.1.12","port":3306,"status":"ONLINE","comment":"mysql02"},
+            {"hostgroup_id":2272,"hostname":"127.1.1.13","port":3306,"status":"ONLINE","comment":"mysql03"},
+            {"hostgroup_id":2274,"hostname":"127.1.1.11","port":3306,"status":"ONLINE","comment":"mysql01"},
+            {"hostgroup_id":2274,"hostname":"127.1.1.12","port":3306,"status":"ONLINE","comment":"mysql02"},
+            {"hostgroup_id":2274,"hostname":"127.1.1.13","port":3306,"status":"ONLINE","comment":"mysql03"},
+            {"hostgroup_id":2276,"hostname":"127.1.1.11","port":3306,"status":"ONLINE","comment":"mysql01"},
+            {"hostgroup_id":2276,"hostname":"127.1.1.12","port":3306,"status":"ONLINE","comment":"mysql02"},
+            {"hostgroup_id":2276,"hostname":"127.1.1.13","port":3306,"status":"ONLINE","comment":"mysql03"},
+            {"hostgroup_id":2278,"hostname":"127.1.1.11","port":3306,"status":"ONLINE","comment":"mysql01"},
+            {"hostgroup_id":2278,"hostname":"127.1.1.12","port":3306,"status":"ONLINE","comment":"mysql02"},
+            {"hostgroup_id":2280,"hostname":"127.1.1.12","port":3306,"status":"ONLINE","comment":"mysql02"},
+            {"hostgroup_id":2280,"hostname":"127.1.1.13","port":3306,"status":"ONLINE","comment":"mysql03"}
+        ]
+    }
+]

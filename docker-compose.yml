@@ -4,7 +4,7 @@ services:
 ####################################################################################################
   _build:
     image: none
-    network_mode: bridge
+    network_mode: host
     privileged: true
     environment:
       - MAKE
@@ -15,8 +15,13 @@ services:
       - WITHGCOV
       - NOJEMALLOC
       - WITHASAN
+      - WITHTSAN
       - BLD_NAME
-      - PROXYSQLGENAI
+      - PROXYSQL40
+      - PROXYSQL31
+      - PROXYSQLFFTO
+      - PROXYSQLTSDB
+      - SKIP_GENAI_UNIT_TESTS
       - GIT_VERSION
     command: bash -l -c /opt/entrypoint/entrypoint.bash
 
@@ -82,7 +87,7 @@ services:
   fedora42_build:
     extends:
       service: _build
-    image: proxysql/packaging:build-fedora42-v3.0.3
+    image: proxysql/packaging:build-fedora42-v4.0.0
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
@@ -95,7 +100,7 @@ services:
   fedora42_clang_build:
     extends:
       service: fedora42_build
-    image: proxysql/packaging:build-clang-fedora42-v3.0.3
+    image: proxysql/packaging:build-clang-fedora42-v4.0.0
     environment:
       - PKG_RELEASE=fedora42-clang
 
@@ -110,7 +115,7 @@ services:
   fedora43_build:
     extends:
       service: _build
-    image: proxysql/packaging:build-fedora43-v3.0.6
+    image: proxysql/packaging:build-fedora43-v4.0.0
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
@@ -123,7 +128,7 @@ services:
   fedora43_clang_build:
     extends:
       service: fedora43_build
-    image: proxysql/packaging:build-clang-fedora43-v3.0.6
+    image: proxysql/packaging:build-clang-fedora43-v4.0.0
     environment:
       - PKG_RELEASE=fedora43-clang
 
@@ -132,6 +137,34 @@ services:
       service: fedora43_build
     environment:
       - PKG_RELEASE=dbg-fedora43
+      - PROXYSQL_BUILD_TYPE=debug
+
+####################################################################################################
+  fedora44_build:
+    extends:
+      service: _build
+    image: proxysql/packaging:build-fedora44-v4.0.0
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - PKG_RELEASE=fedora44
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  fedora44_clang_build:
+    extends:
+      service: fedora44_build
+    image: proxysql/packaging:build-clang-fedora44-v4.0.0
+    environment:
+      - PKG_RELEASE=fedora44-clang
+
+  fedora44_dbg_build:
+    extends:
+      service: fedora44_build
+    environment:
+      - PKG_RELEASE=dbg-fedora44
       - PROXYSQL_BUILD_TYPE=debug
 
 ####################################################################################################
@@ -387,4 +420,17 @@ services:
       - PROXYSQL_BUILD_TYPE=debug
 
 ####################################################################################################
+  tarball_build:
+    extends:
+      service: _build
+    image: proxysql/packaging:build-almalinux9-v4.0.0
+    volumes:
+      - ./docker/images/proxysql/tarball-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - PKG_RELEASE=tarball
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
 ####################################################################################################
+####################################################################################################
+

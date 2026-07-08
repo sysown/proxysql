@@ -1,0 +1,63 @@
+[
+    {
+        "__comment__": "",
+        "cluster_type": "REPLICATION_LAG",
+        "mysql_servers": [
+            { "hostgroup_id": 5272, "hostname": "127.1.1.11", "port": 3306, "max_replication_lag": 50 },
+            { "hostgroup_id": 5272, "hostname": "127.1.1.12", "port": 3306, "max_replication_lag": 25 },
+            { "hostgroup_id": 5272, "hostname": "127.1.1.13", "port": 3306 }
+        ],
+	  "mysql_monitor_config": [
+            { "monitor_replication_lag_count": 1 },
+            { "monitor_replication_lag_group_by_host": 0 },
+	    { "monitor_slave_lag_when_null": 25 }
+        ],
+	  "mysql_hostgroup_attributes": [
+	    { "hostgroup_id": 5272, "monitor_slave_lag_when_null": 0 }
+        ],
+        "replicationlag_servers_init_state": [
+            {
+                "hostname": "127.1.1.11",
+                "port": 3306,
+                "seconds_behind_master": 10
+            },
+            {
+                "hostname": "127.1.1.12",
+                "port": 3306,
+                "seconds_behind_master": 30
+            },
+            {
+                "hostname": "127.1.1.13",
+                "port": 3306,
+                "seconds_behind_master": null
+            }
+        ],
+        "replicationlag_servers_new_state": [
+            {
+                "hostname": "127.1.1.11",
+                "port": 3306,
+                "seconds_behind_master": 60
+            },
+            {
+                "hostname": "127.1.1.12",
+                "port": 3306,
+                "seconds_behind_master": 15
+            },
+            {
+                "hostname": "127.1.1.13",
+                "port": 3306,
+                "seconds_behind_master": 5
+            }
+        ],
+        "proxysql_init_state": [
+		    { "hostgroup_id":5272, "hostname":"127.1.1.11","port":3306, "status":"ONLINE" },
+                { "hostgroup_id":5272, "hostname":"127.1.1.12","port":3306, "status":"SHUNNED" },
+                { "hostgroup_id":5272, "hostname":"127.1.1.13","port":3306, "status":"ONLINE" }
+        ],
+        "proxysql_final_state": [
+		    { "hostgroup_id":5272, "hostname":"127.1.1.11","port":3306, "status":"SHUNNED" },
+                { "hostgroup_id":5272, "hostname":"127.1.1.12","port":3306, "status":"ONLINE" },
+                { "hostgroup_id":5272, "hostname":"127.1.1.13","port":3306, "status":"ONLINE" }
+        ]
+    }
+]

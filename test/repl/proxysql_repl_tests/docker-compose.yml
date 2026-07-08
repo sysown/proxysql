@@ -1,0 +1,171 @@
+version: "3.3"
+services:
+
+  mysql1:
+    hostname: ${MYSQL1_HOST}${INFRA}
+    container_name: ${INFRA}_mysql1
+    image: mysql:${MYSQL_VERSION}
+#    ports:
+#      - "${MYSQL1_PORT}:3306"
+    volumes:
+      - ./conf/mysql/mysql1/${MYSQL_VERSION}:/etc/mysql/conf.d
+      - ${INFRA_LOGS_PATH}/${INFRA}/mysql1/${MYSQL_VERSION}_${SSL}:/var/log/mysql
+    networks:
+      - backend
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+    cap_add:
+      - SYS_NICE  # CAP_SYS_NICE
+    profiles:
+      - mysql
+      - stress-mysql
+
+  mysql2:
+    hostname: ${MYSQL2_HOST}${INFRA}
+    container_name: ${INFRA}_mysql2
+    image: mysql:${MYSQL_VERSION}
+#    ports:
+#      - "${MYSQL2_PORT}:3306"
+    volumes:
+      - ./conf/mysql/mysql2/${MYSQL_VERSION}:/etc/mysql/conf.d
+      - ${INFRA_LOGS_PATH}/${INFRA}/mysql2/${MYSQL_VERSION}_${SSL}:/var/log/mysql
+    networks:
+      - backend
+    depends_on:
+      - mysql1
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+    cap_add:
+      - SYS_NICE  # CAP_SYS_NICE
+    profiles:
+      - mysql
+      - stress-mysql
+
+  mysql3:
+    hostname: ${MYSQL3_HOST}${INFRA}
+    container_name: ${INFRA}_mysql3
+    image: mysql:${MYSQL_VERSION}
+#    ports:
+#      - "${MYSQL3_PORT}:3306"
+    volumes:
+      - ./conf/mysql/mysql3/${MYSQL_VERSION}:/etc/mysql/conf.d
+      - ${INFRA_LOGS_PATH}/${INFRA}/mysql3/${MYSQL_VERSION}_${SSL}:/var/log/mysql
+    networks:
+      - backend
+    depends_on:
+      - mysql1
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+    cap_add:
+      - SYS_NICE  # CAP_SYS_NICE
+    profiles:
+      - mysql
+      - stress-mysql
+
+  mysql4:
+    hostname: ${MYSQL4_HOST}${INFRA}
+    container_name: ${INFRA}_mysql4
+    image: mysql:${MYSQL_VERSION}
+#    ports:
+#      - "${MYSQL3_PORT}:3306"
+    volumes:
+      - ./conf/mysql/mysql4/${MYSQL_VERSION}:/etc/mysql/conf.d
+      - ${INFRA_LOGS_PATH}/${INFRA}/mysql4/${MYSQL_VERSION}_${SSL}:/var/log/mysql
+    networks:
+      - backend
+    depends_on:
+      - mysql1
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+    cap_add:
+      - SYS_NICE  # CAP_SYS_NICE
+    profiles:
+      - stress-mysql
+
+  mysql5:
+    hostname: ${MYSQL5_HOST}${INFRA}
+    container_name: ${INFRA}_mysql5
+    image: mysql:${MYSQL_VERSION}
+#    ports:
+#      - "${MYSQL3_PORT}:3306"
+    volumes:
+      - ./conf/mysql/mysql5/${MYSQL_VERSION}:/etc/mysql/conf.d
+      - ${INFRA_LOGS_PATH}/${INFRA}/mysql5/${MYSQL_VERSION}_${SSL}:/var/log/mysql
+    networks:
+      - backend
+    depends_on:
+      - mysql1
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+    cap_add:
+      - SYS_NICE  # CAP_SYS_NICE
+    profiles:
+      - stress-mysql
+
+  zookeeper:
+    hostname: zookeeper.${INFRA}
+    container_name: ${INFRA}_zookeeper
+#    image: debezium/zookeeper
+    image: proxysql/ci-infra:debezium-zookeeper
+    networks:
+      - backend
+#    ports:
+#     - 2181:2181
+#     - 2888:2888
+#     - 3888:3888
+    environment:
+      - ZOO_LOG_DIR=/zookeeper/logs
+      - ZOO_LOG4J_PROP=INFO,ROLLINGFILE
+    volumes:
+      - ${INFRA_LOGS_PATH}/${INFRA}/zookeeper/${MYSQL_VERSION}_${SSL}:/zookeeper/logs
+    cap_add:
+      - SYS_NICE  # CAP_SYS_NICE
+    profiles:
+      - debezium
+
+  kafka:
+    hostname: kafka.${INFRA}
+    container_name: ${INFRA}_kafka
+#    image: debezium/kafka
+    image: proxysql/ci-infra:debezium-kafka
+#    ports:
+#     - 9092:9092
+    networks:
+      - backend
+    links:
+      - zookeeper
+    environment:
+      - ZOOKEEPER_CONNECT=zookeeper:2181
+    volumes:
+      - ${INFRA_LOGS_PATH}/${INFRA}/kafka/${MYSQL_VERSION}_${SSL}:/kafka/logs
+    cap_add:
+      - SYS_NICE  # CAP_SYS_NICE
+    profiles:
+      - debezium
+
+  kafka_connect:
+    hostname: kafka_connect.${INFRA}
+    container_name: ${INFRA}_kafka_connect
+#    image: debezium/connect
+    image: proxysql/ci-infra:debezium-connect
+#    ports:
+#     - 8083:8083
+    networks:
+      - backend
+    links:
+      - kafka
+      - zookeeper
+    environment:
+      - BOOTSTRAP_SERVERS=kafka:9092
+      - GROUP_ID=1
+      - CONFIG_STORAGE_TOPIC=my_connect_configs
+      - OFFSET_STORAGE_TOPIC=my_connect_offsets
+    volumes:
+      - ${INFRA_LOGS_PATH}/${INFRA}/kafka_connect/${MYSQL_VERSION}_${SSL}:/kafka/logs
+    cap_add:
+      - SYS_NICE  # CAP_SYS_NICE
+    profiles:
+      - debezium
+
+networks:
+  backend:

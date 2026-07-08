@@ -1,0 +1,40 @@
+name: CI-mysqlx
+run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: [ CI-trigger ]
+    types: [ completed ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }}
+  cancel-in-progress: true
+
+# Thin caller — the actual build / unit-tests / e2e-tests / soak-tests
+# job bodies live in ci-mysqlx.yml on the GH-Actions branch, mirroring
+# every other CI-* / ci-* pair in the project. See
+# doc/GH-Actions/README.md ("The two-branch architecture") for the
+# rationale.
+#
+# The previous version of this file defined the four jobs inline. That
+# made every CI-mysqlx run invisible on the PR's status rollup, because
+# workflow_run-triggered runs only attach check_runs to the originating
+# PR when the callee explicitly POSTs them via LouisBrunner/checks-action
+# (the canonical pattern in ci-legacy-g4.yml). PR #5852 was the visible
+# symptom: 60 green checks and the actual test workflow was silently
+# failing.
+jobs:
+  run:
+    if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
+    # write-all is required for the callee's LouisBrunner/checks-action
+    # POSTs to attach check_runs to the PR commit. Reusable-workflow
+    # permissions are the intersection of caller and callee, so the
+    # caller must grant the scope for the callee's declaration to take
+    # effect. The callee at ci-mysqlx.yml@GH-Actions also declares
+    # write-all.
+    permissions: write-all
+    uses: sysown/proxysql/.github/workflows/ci-mysqlx.yml@GH-Actions
+    secrets: inherit
+    with:
+      trigger: ${{ toJson(github) }}

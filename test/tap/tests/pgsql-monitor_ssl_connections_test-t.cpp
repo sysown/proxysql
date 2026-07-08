@@ -160,19 +160,26 @@ int main(int argc, char** argv) {
     //            PHASE 2: TEST NON-SSL (use_ssl = 0)
     // ###############################################################
     diag("---- PHASE 2: Checking NON-SSL monitoring ----");
-   
+
     ok(setUseSSL(admin, 0), "Set pgsql_server -> use_ssl = 0");
-    
+
     long initial_ssl2 = getMonitorValue(admin, "PgSQL_Monitor_ssl_connections_OK");
     long initial_non2 = getMonitorValue(admin, "PgSQL_Monitor_non_ssl_connections_OK");
 
     diag("Initial SSL OK (phase2): %ld", initial_ssl2);
     diag("Initial NON-SSL OK (phase2): %ld", initial_non2);
 
-    usleep((connect_interval_ms * 2) * 1000); // microseconds
-
-    long after_ssl2 = getMonitorValue(admin, "PgSQL_Monitor_ssl_connections_OK");
-    long after_non2 = getMonitorValue(admin, "PgSQL_Monitor_non_ssl_connections_OK");
+    // Poll for the NON-SSL counter to increase, up to 3x the connect interval.
+    // After switching use_ssl from 1 to 0, the monitor needs to complete a
+    // full cycle with the new config before the NON-SSL counter increases.
+    long after_ssl2 = initial_ssl2;
+    long after_non2 = initial_non2;
+    for (int attempt = 0; attempt < 6; attempt++) {
+        usleep(connect_interval_ms * 1000);
+        after_non2 = getMonitorValue(admin, "PgSQL_Monitor_non_ssl_connections_OK");
+        if (after_non2 > initial_non2) break;
+    }
+    after_ssl2 = getMonitorValue(admin, "PgSQL_Monitor_ssl_connections_OK");
 
     diag("After NON-SSL mode -> SSL OK: %ld", after_ssl2);
     diag("After NON-SSL mode -> NON-SSL OK: %ld", after_non2);

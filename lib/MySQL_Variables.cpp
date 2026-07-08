@@ -337,7 +337,19 @@ bool validate_charset(MySQL_Session* session, int idx, int &_rc) {
 		unsigned int replace_collation_nr = 0;
 		std::stringstream ss;
 		int charset = atoi(mysql_variables.client_get_value(session, idx));
-		if (charset >= 255 && myconn->mysql->server_version[0] != '8') {
+		// Collations with id >= 255 (e.g. utf8mb4_0900_ai_ci) are a MySQL 8.0+
+		// feature. They are not understood by:
+		//   - MySQL < 8.0 (any major version below 8)
+		//   - MariaDB (any version): MariaDB uses different collation IDs and
+		//     does not implement utf8mb4_0900_ai_ci, regardless of its numeric
+		//     major version (10.x, 11.x would otherwise pass an atoi() < 8 check).
+		const char *sv = myconn->mysql->server_version;
+		bool is_mariadb = (sv != NULL && strstr(sv, "MariaDB") != NULL);
+		// `atoi(NULL)` is undefined behavior; in practice `sv` should not be
+		// NULL here (validate_charset runs after a backend handshake has
+		// populated server_version), but the guard is essentially free.
+		int sv_major = (sv != NULL) ? atoi(sv) : 0;
+		if (charset >= 255 && (is_mariadb || sv_major < 8)) {
 			switch(mysql_thread___handle_unknown_charset) {
 				case HANDLE_UNKNOWN_CHARSET__DISCONNECT_CLIENT:
 					snprintf(msg,sizeof(msg),"Can't initialize character set %s", mysql_variables.client_get_value(session, idx));

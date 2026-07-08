@@ -35,10 +35,7 @@ static int mock_http_status = 200;
 static long total_sleep_time_ms = 0;
 
 static void mock_sleep_with_jitter(int base_delay_ms, double jitter_factor = 0.1) {
-	// Add random jitter to prevent synchronized retries
-	int jitter_ms = static_cast<int>(base_delay_ms * jitter_factor);
-	// In real implementation, this would be random, but for testing we'll use a fixed value
-	int random_jitter = 0; // (rand() % (2 * jitter_ms)) - jitter_ms;
+	int random_jitter = 0; // (rand() % (2 * static_cast<int>(base_delay_ms * jitter_factor))) - static_cast<int>(base_delay_ms * jitter_factor);
 
 	int total_delay_ms = base_delay_ms + random_jitter;
 	if (total_delay_ms < 0) total_delay_ms = 0;
@@ -87,8 +84,9 @@ static std::string mock_llm_call_with_retry(
 
 	int attempt = 0;
 	int current_backoff_ms = initial_backoff_ms;
+	int limit = (max_retries < 0) ? 0 : max_retries;
 
-	while (attempt <= max_retries) {
+	while (attempt <= limit) {
 		// Call the mock function (attempt 0 is the first try)
 		std::string result = mock_llm_call(prompt);
 
@@ -127,7 +125,7 @@ void test_exponential_backoff_timing() {
 
 	// Test basic exponential backoff
 	mock_success_on_attempt = -1; // Always fail to test retries
-	std::string result = mock_llm_call_with_retry(
+	mock_llm_call_with_retry(
 		"test prompt",
 		3,      // max_retries
 		100,    // initial_backoff_ms
@@ -220,7 +218,7 @@ void test_maximum_backoff_limit() {
 
 	// Test that backoff doesn't exceed maximum
 	mock_success_on_attempt = -1; // Always fail
-	std::string result = mock_llm_call_with_retry(
+	mock_llm_call_with_retry(
 		"test prompt",
 		5,      // max_retries
 		100,    // initial_backoff_ms
@@ -270,6 +268,32 @@ void test_configurable_parameters() {
 
 	// Expected sleep times: 100ms, 150ms = 250ms total
 	ok(total_sleep_time_ms == 250, "Slower multiplier results in different timing pattern");
+
+	// Test with different max_backoff
+	mock_success_on_attempt = -1; // Always fail
+	total_sleep_time_ms = 0;
+	result = mock_llm_call_with_retry(
+		"test prompt",
+		3,      // max_retries
+		100,    // initial_backoff_ms
+		2.0,    // backoff_multiplier
+		200     // max_backoff_ms (very low)
+	);
+	// Expected sleep times: 100ms, 200ms, 200ms = 500ms total
+	ok(total_sleep_time_ms == 500, "Lower max_backoff caps the total sleep time");
+
+	// Test with high initial backoff
+	mock_success_on_attempt = -1; // Always fail
+	total_sleep_time_ms = 0;
+	result = mock_llm_call_with_retry(
+		"test prompt",
+		1,      // max_retries
+		1000,   // initial_backoff_ms
+		2.0,    // backoff_multiplier
+		5000    // max_backoff_ms
+	);
+	// Expected sleep times: 1000ms total
+	ok(total_sleep_time_ms == 1000, "High initial backoff works correctly");
 }
 
 // ============================================================================
@@ -319,6 +343,30 @@ void test_retry_edge_cases() {
 
 	// Expected sleep times: 100ms, 100ms, 100ms = 300ms total
 	ok(total_sleep_time_ms == 300, "Linear backoff (multiplier=1.0) works correctly");
+
+	// Test with zero initial backoff
+	mock_success_on_attempt = -1; // Always fail
+	total_sleep_time_ms = 0;
+	result = mock_llm_call_with_retry(
+		"test prompt",
+		2,      // max_retries
+		0,      // 0ms initial backoff
+		2.0,    // backoff_multiplier
+		1000    // max_backoff_ms
+	);
+	// Expected sleep times: 0ms, 0ms = 0ms total
+	ok(total_sleep_time_ms == 0, "Zero initial backoff works correctly");
+
+	// Test with very large retry limit but early success
+	mock_success_on_attempt = 2; // Success on 2nd try (1st retry)
+	result = mock_llm_call_with_retry(
+		"test prompt",
+		100,    // 100 retries!
+		10,     // 10ms initial backoff
+		2.0,    // backoff_multiplier
+		1000    // max_backoff_ms
+	);
+	ok(mock_call_count == 2, "Early success works even with large retry limit");
 }
 
 // ============================================================================
@@ -332,10 +380,10 @@ int main() {
 	// Plan: 22 tests total
 	// Exponential backoff timing: 2 tests
 	// Retry limit enforcement: 4 tests
-	// Success recovery: 4 tests
+	// Success recovery: 5 tests
 	// Maximum backoff limit: 2 tests
 	// Configurable parameters: 4 tests
-	// Edge cases: 6 tests
+	// Edge cases: 5 tests
 	plan(22);
 
 	test_exponential_backoff_timing();

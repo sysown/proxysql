@@ -4,23 +4,6 @@ PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; don
 
 include $(PROXYSQL_PATH)/include/makefiles_vars.mk
 
-# Rust toolchain detection (only needed for PROXYSQLGENAI)
-ifeq ($(PROXYSQLGENAI),1)
-RUSTC := $(shell which rustc 2>/dev/null)
-CARGO := $(shell which cargo 2>/dev/null)
-ifndef RUSTC
-$(error "rustc not found. Please install Rust toolchain (required for PROXYSQLGENAI)")
-endif
-ifndef CARGO
-$(error "cargo not found. Please install Rust toolchain (required for PROXYSQLGENAI)")
-endif
-endif
-
-# SQLite environment variables for sqlite-rembed build
-export SQLITE3_INCLUDE_DIR=$(shell pwd)/sqlite3/sqlite3
-export SQLITE3_LIB_DIR=$(shell pwd)/sqlite3/sqlite3
-export SQLITE3_STATIC=1
-
 
 # to compile libmariadb_client with support for valgrind enabled, run:
 # export USEVALGRIND=1
@@ -32,8 +15,24 @@ else
 	MYCFLAGS := -O2
 	MYJEOPT := --enable-xmalloc --enable-prof
 endif
-ifeq ($(and $(IS_ARM),$(IS_CENTOS)),true)
-	MYJEOPT += --with-lg-page=16
+# jemalloc page size must match the runtime system page size.
+# Auto-detect from the build system. Override with JE_LG_PAGE env
+# var when cross-compiling (e.g. JE_LG_PAGE=16 for 64KB targets).
+ifdef JE_LG_PAGE
+	MYJEOPT += --with-lg-page=$(JE_LG_PAGE)
+else
+	JE_PAGE_SIZE := $(shell getconf PAGESIZE 2>/dev/null)
+	ifneq ($(JE_PAGE_SIZE),)
+		ifeq ($(JE_PAGE_SIZE),8192)
+			MYJEOPT += --with-lg-page=13
+		else ifeq ($(JE_PAGE_SIZE),16384)
+			MYJEOPT += --with-lg-page=14
+		else ifeq ($(JE_PAGE_SIZE),32768)
+			MYJEOPT += --with-lg-page=15
+		else ifeq ($(JE_PAGE_SIZE),65536)
+			MYJEOPT += --with-lg-page=16
+		endif
+	endif
 endif
 
 
@@ -46,6 +45,7 @@ targets :=	check_openssl_version \
 			sqlite3 \
 			pcre \
 			lz4 \
+			zstd \
 			cityhash \
 			microhttpd \
 			curl \
@@ -55,18 +55,23 @@ targets :=	check_openssl_version \
 			prometheus-cpp \
 			postgresql \
 			libusual \
-			libscram
+			libscram \
+			parsersql
 
 ifeq ($(UNAME_S),Linux)
 	targets += coredumper
+endif
+
+ifeq ($(PROXYSQL40),1)
+	targets += protobuf
 endif
 
 ifeq ($(PROXYSQLCLICKHOUSE),1)
 	targets += clickhouse-cpp
 endif
 
-ifeq ($(PROXYSQLGENAI),1)
-	targets += sqlite-vec sqlite-rembed
+ifeq ($(PROXYSQL40),1)
+	targets += sqlite-vec
 endif
 
 default: $(targets)
@@ -128,7 +133,7 @@ ev: libev/libev/.libs/libev.a
 coredumper/coredumper/src/libcoredumper.a:
 	cd coredumper && rm -rf coredumper-*/ || true
 	cd coredumper && tar -zxf coredumper-*.tar.gz
-	cd coredumper/coredumper && cmake . -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Debug
+	cd coredumper/coredumper && cmake . -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 	cd coredumper/coredumper && CC=${CC} CXX=${CXX} ${MAKE}
 
 coredumper: coredumper/coredumper/src/libcoredumper.a
@@ -174,6 +179,41 @@ lz4/lz4/lib/liblz4.a:
 lz4: lz4/lz4/lib/liblz4.a
 
 
+# zstd - Zstandard compression library
+# Used for compressed protocol support in MySQL/PostgreSQL connections
+# Source: https://github.com/facebook/zstd
+zstd/zstd/lib/libzstd.a:
+	cd zstd && rm -rf zstd-*/ || true
+	cd zstd && tar -zxf zstd-*.tar.gz
+	cd zstd/zstd/lib && CC=${CC} CXX=${CXX} ${MAKE} libzstd.a
+
+zstd: zstd/zstd/lib/libzstd.a
+
+
+PROTOBUF_VERSION := 3.21.12
+PROTOBUF_SRC_DIR := $(PROXYSQL_PATH)/deps/protobuf/protobuf-$(PROTOBUF_VERSION)
+PROTOBUF_INSTALL_DIR := $(PROTOBUF_SRC_DIR)/install
+PROTOBUF_LIB := $(PROTOBUF_INSTALL_DIR)/lib/libprotobuf.a
+
+$(PROTOBUF_LIB):
+	cd protobuf && rm -rf protobuf-*/ || true
+	cd protobuf && tar -zxf protobuf-$(PROTOBUF_VERSION).tar.gz
+	cd protobuf/protobuf-$(PROTOBUF_VERSION) && CC=${CC} CXX=${CXX} cmake -S . -B build \
+		-DCMAKE_BUILD_TYPE=RelWithDebInfo \
+		-DCMAKE_INSTALL_PREFIX=$(PROTOBUF_INSTALL_DIR) \
+		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+		-Dprotobuf_BUILD_TESTS=OFF \
+		-Dprotobuf_BUILD_CONFORMANCE=OFF \
+		-Dprotobuf_BUILD_EXAMPLES=OFF \
+		-Dprotobuf_BUILD_PROTOC_BINARIES=OFF \
+		-Dprotobuf_BUILD_LIBPROTOC=OFF \
+		-Dprotobuf_BUILD_SHARED_LIBS=OFF \
+		-Dprotobuf_WITH_ZLIB=OFF
+	cd protobuf/protobuf-$(PROTOBUF_VERSION) && CC=${CC} CXX=${CXX} ${MAKE} -C build install
+
+protobuf: $(PROTOBUF_LIB)
+
+
 clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:
 	cd clickhouse-cpp && rm -rf clickhouse-cpp-*/ || true
 	cd clickhouse-cpp && tar -zxf clickhouse-cpp-*.tar.gz
@@ -199,6 +239,7 @@ jemalloc/jemalloc/lib/libjemalloc.a:
 	cd jemalloc/jemalloc && patch src/jemalloc.c < ../issue823.520.patch
 	cd jemalloc/jemalloc && patch src/jemalloc.c < ../issue2358.patch
 	cd jemalloc/jemalloc && patch -p0 < ../nothrow.patch
+	cd jemalloc/jemalloc && patch src/jemalloc_cpp.cpp < ../throw-bad-alloc.patch
 	cd jemalloc/jemalloc && ./configure ${MYJEOPT}
 #	cd jemalloc/jemalloc && sed -i -e 's/-O3 /-O3 -fPIC /' Makefile
 	cd jemalloc/jemalloc && CC=${CC} CXX=${CXX} ${MAKE}
@@ -267,6 +308,8 @@ endif
 mariadb_client: mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a
 
 
+# NOTE: When running Valgrind on ProxySQL, remove -DSQLITE_ENABLE_MEMORY_MANAGEMENT
+# to avoid false positives in SQLite's internal memory allocator (pcache*, memjrnl*, etc.)
 sqlite3/sqlite3/sqlite3.o:
 	cd sqlite3 && rm -rf sqlite-amalgamation-*/ || true
 	cd sqlite3 && tar -zxf sqlite-amalgamation-*.tar.gz
@@ -274,21 +317,18 @@ sqlite3/sqlite3/sqlite3.o:
 	cd sqlite3/sqlite3 && patch -p0 < ../sqlite3_pass_exts.patch
 	cd sqlite3/sqlite3 && patch -p0 < ../throw.patch
 	cd sqlite3/sqlite3 && ${CC} ${MYCFLAGS} -fPIC -c -o sqlite3.o sqlite3.c -DSQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_ENABLE_JSON1 -DSQLITE_ENABLE_FTS5 -DSQLITE_DLL=1 -DSQLITE_ENABLE_MATH_FUNCTIONS
+ifeq ($(UNAME_S),Darwin)
+	cd sqlite3/sqlite3 && ${CC} -dynamiclib -undefined dynamic_lookup -install_name @rpath/libsqlite3.so -o libsqlite3.so sqlite3.o
+else
 	cd sqlite3/sqlite3 && ${CC} -shared -o libsqlite3.so sqlite3.o
+endif
 
 sqlite3/sqlite3/vec.o: sqlite3/sqlite3/sqlite3.o
 	cd sqlite3/sqlite3 && cp ../sqlite-vec-source/sqlite-vec.c . && cp ../sqlite-vec-source/sqlite-vec.h .
 	cd sqlite3/sqlite3 && ${CC} ${MYCFLAGS} -fPIC -c -o vec.o sqlite-vec.c -DSQLITE_CORE -DSQLITE_VEC_STATIC -DSQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_ENABLE_JSON1 -DSQLITE_ENABLE_FTS5 -DSQLITE_DLL=1
 
-sqlite3/libsqlite_rembed.a: sqlite3/sqlite-rembed-0.0.1-alpha.9.tar.gz
-	cd sqlite3 && rm -rf sqlite-rembed-*/ sqlite-rembed-source/ || true
-	cd sqlite3 && tar -zxf sqlite-rembed-0.0.1-alpha.9.tar.gz
-	mv sqlite3/sqlite-rembed-0.0.1-alpha.9 sqlite3/sqlite-rembed-source
-	cd sqlite3/sqlite-rembed-source && SQLITE3_INCLUDE_DIR=$(SQLITE3_INCLUDE_DIR) SQLITE3_LIB_DIR=$(SQLITE3_LIB_DIR) SQLITE3_STATIC=1 $(CARGO) build --release --features=sqlite-loadable/static --lib
-	cp sqlite3/sqlite-rembed-source/target/release/libsqlite_rembed.a sqlite3/libsqlite_rembed.a
-
-ifeq ($(PROXYSQLGENAI),1)
-sqlite3: sqlite3/sqlite3/sqlite3.o sqlite3/sqlite3/vec.o sqlite3/libsqlite_rembed.a
+ifeq ($(PROXYSQL40),1)
+sqlite3: sqlite3/sqlite3/sqlite3.o sqlite3/sqlite3/vec.o
 else
 sqlite3: sqlite3/sqlite3/sqlite3.o
 endif
@@ -296,13 +336,11 @@ endif
 # sqlite-vec: Vector similarity search extension (for GenAI)
 sqlite-vec: sqlite3/sqlite3/vec.o
 
-# sqlite-rembed: Remote embedding extension (Rust-based, for GenAI)
-sqlite-rembed: sqlite3/libsqlite_rembed.a
-
 
 libconfig/libconfig/out/libconfig++.a:
 	cd libconfig && rm -rf libconfig-*/ || true
 	cd libconfig && tar -zxf libconfig-*.tar.gz
+	cd libconfig/libconfig && patch -p1 < ../restore_unknown_escape_passthrough.patch
 	cd libconfig/libconfig && cmake -DBUILD_SHARED_LIBS=0 -DBUILD_EXAMPLES=0 -DBUILD_TESTS=0 -DBUILD_FUZZERS=0 .
 	cd libconfig/libconfig && CC=${CC} CXX=${CXX} ${MAKE}
 
@@ -356,6 +394,7 @@ postgresql/postgresql/src/interfaces/libpq/libpq.a:
 	cd postgresql/postgresql && patch -p0 < ../fmt_err_msg.patch
 	cd postgresql/postgresql && patch -p0 < ../bind_fmt_text.patch
 	cd postgresql/postgresql && patch -p0 < ../pqsendpipelinesync.patch
+	cd postgresql/postgresql && patch -p0 < ../sslkeylogfile.patch
 ifeq ($(UNAME_S),Darwin)
 	cd postgresql/postgresql && LDFLAGS="-L$$(brew --prefix icu4c)/lib" CPPFLAGS="-I$$(brew --prefix icu4c)/include" PKG_CONFIG_PATH="$$(brew --prefix icu4c)/lib/pkgconfig:$$PKG_CONFIG_PATH" DYLD_LIBRARY_PATH="$(SSL_LDIR):$$DYLD_LIBRARY_PATH" ./configure --with-ssl=openssl --with-includes="$(SSL_IDIR)" --with-libraries="$(SSL_LDIR)" --without-readline --with-icu
 else
@@ -387,15 +426,24 @@ libscram/lib/libscram.a:postgresql/postgresql/src/interfaces/libpq/libpq.a
 libscram: libscram/lib/libscram.a
 
 
+parsersql/parsersql/libsqlparser.a:
+	cd parsersql && rm -rf parsersql-*/ ParserSQL-*/ || true
+	cd parsersql && tar -zxf parsersql-*.tar.gz
+	cd parsersql && for d in ParserSQL-*/; do [ -d "$$d" ] && mv "$$d" "parsersql-$${d#ParserSQL-}"; done || true
+	cd parsersql/parsersql && CC=${CC} CXX=${CXX} ${MAKE} lib
+
+parsersql: parsersql/parsersql/libsqlparser.a
+
+
 ### clean targets
 
 cleanpart:
 	cd mariadb-client-library && rm -rf mariadb-connector-c-*/ || true
 	cd jemalloc && rm -rf jemalloc-*/ || true
 	cd sqlite3 && rm -rf sqlite-amalgamation-*/ || true
-	cd sqlite3 && rm -rf libsqlite_rembed.a sqlite-rembed-source/ sqlite-rembed-*/ || true
 	cd postgresql && rm -rf postgresql-*/ || true
 	cd postgresql && rm -rf postgres-*/ || true
+	cd protobuf && rm -rf protobuf-*/ || true
 .PHONY: cleanpart
 
 cleanall:
@@ -422,5 +470,7 @@ cleanall:
 	cd libusual && rm -rf libusual-*/ || true
 	cd libscram && rm -rf lib/* obj/* || true
 	cd json && rm -rf json-*/ || true
+	cd protobuf && rm -rf protobuf-*/ || true
+	cd zstd && rm -rf zstd-*/ || true
+	cd parsersql && rm -rf parsersql-*/ ParserSQL-*/ || true
 .PHONY: cleanall
-

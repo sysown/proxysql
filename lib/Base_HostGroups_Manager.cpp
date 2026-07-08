@@ -22,7 +22,6 @@ using json = nlohmann::json;
 #include "proxysql_utils.h"
 
 #define char_malloc (char *)malloc
-#define itostr(__s, __i)  { __s=char_malloc(32); sprintf(__s, "%lld", __i); }
 
 #include "thread.h"
 #include "wqueue.h"
@@ -868,11 +867,13 @@ int MySQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 	char *query1=(char *)"INSERT INTO mysql_servers_incoming VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
 	std::string query32s = "INSERT INTO mysql_servers_incoming VALUES " + generate_multi_rows_query(32,12);
 	char *query32 = (char *)query32s.c_str();
-	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query1, -1, &statement1, 0);
-	rc = mydb->prepare_v2(query1, &statement1);
+	auto [rc1, statement1_unique] = mydb->prepare_v2(query1);
+	rc = rc1;
+	statement1 = statement1_unique.get();
 	ASSERT_SQLITE_OK(rc, mydb);
-	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query32, -1, &statement32, 0);
-	rc = mydb->prepare_v2(query32, &statement32);
+	auto [rc2, statement32_unique] = mydb->prepare_v2(query32);
+	rc = rc2;
+	statement32 = statement32_unique.get();
 	ASSERT_SQLITE_OK(rc, mydb);
 	MySerStatus status1=MYSQL_SERVER_STATUS_ONLINE;
 	int row_idx=0;
@@ -932,8 +933,6 @@ int MySQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 		}
 		row_idx++;
 	}
-	(*proxy_sqlite3_finalize)(statement1);
-	(*proxy_sqlite3_finalize)(statement32);
 	return 0;
 }
 #endif // 0
@@ -1402,12 +1401,14 @@ bool MySQL_HostGroups_Manager::commit(
 		sqlite3_stmt *statement2=NULL;
 		//sqlite3 *mydb3=mydb->get_db();
 		char *query1=(char *)"UPDATE mysql_servers SET mem_pointer = ?1 WHERE hostgroup_id = ?2 AND hostname = ?3 AND port = ?4";
-		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query1, -1, &statement1, 0);
-		rc = mydb->prepare_v2(query1, &statement1);
+		auto [rc1, statement1_unique] = mydb->prepare_v2(query1);
+		rc = rc1;
+		statement1 = statement1_unique.get();
 		ASSERT_SQLITE_OK(rc, mydb);
 		char *query2=(char *)"UPDATE mysql_servers SET weight = ?1 , status = ?2 , compression = ?3 , max_connections = ?4 , max_replication_lag = ?5 , use_ssl = ?6 , max_latency_ms = ?7 , comment = ?8 , gtid_port = ?9 WHERE hostgroup_id = ?10 AND hostname = ?11 AND port = ?12";
-		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query2, -1, &statement2, 0);
-		rc = mydb->prepare_v2(query2, &statement2);
+		auto [rc2, statement2_unique] = mydb->prepare_v2(query2);
+		rc = rc2;
+		statement2 = statement2_unique.get();
 		ASSERT_SQLITE_OK(rc, mydb);
 
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
@@ -1537,8 +1538,6 @@ bool MySQL_HostGroups_Manager::commit(
 				}
 			}
 		}
-		(*proxy_sqlite3_finalize)(statement1);
-		(*proxy_sqlite3_finalize)(statement2);
 	}
 	if (use_gtid) {
 		has_gtid_port = true;
@@ -1731,13 +1730,15 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 	PtrArray *lst=new PtrArray();
 	//sqlite3 *mydb3=mydb->get_db();
 	char *query1=(char *)"INSERT INTO mysql_servers VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)";
-	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query1, -1, &statement1, 0);
-	rc = mydb->prepare_v2(query1, &statement1);
+	auto [rc1, statement1_unique] = mydb->prepare_v2(query1);
+	rc = rc1;
+	statement1 = statement1_unique.get();
 	ASSERT_SQLITE_OK(rc, mydb);
 	std::string query32s = "INSERT INTO mysql_servers VALUES " + generate_multi_rows_query(32,13);
 	char *query32 = (char *)query32s.c_str();
-	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query32, -1, &statement32, 0);
-	rc = mydb->prepare_v2(query32, &statement32);
+	auto [rc2, statement32_unique] = mydb->prepare_v2(query32);
+	rc = rc2;
+	statement32 = statement32_unique.get();
 	ASSERT_SQLITE_OK(rc, mydb);
 
 	if (mysql_thread___hostgroup_manager_verbose) {
@@ -1828,8 +1829,6 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 		rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, mydb);
 	}
-	(*proxy_sqlite3_finalize)(statement1);
-	(*proxy_sqlite3_finalize)(statement32);
 	if (mysql_thread___hostgroup_manager_verbose) {
 		char *error=NULL;
 		int cols=0;
@@ -1955,7 +1954,7 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) 
 	char * query = (char *)"";
 	if (name == "mysql_aws_aurora_hostgroups") {
 		query=(char *)"SELECT writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,"
-					    "check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,comment FROM mysql_aws_aurora_hostgroups";
+					    "check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,autopurge_missing_checks,comment FROM mysql_aws_aurora_hostgroups";
 	} else if (name == "mysql_galera_hostgroups") {
 		query=(char *)"SELECT writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment FROM mysql_galera_hostgroups";
 	} else if (name == "mysql_group_replication_hostgroups") {
@@ -4306,8 +4305,9 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 		"ignore_session_variables, hostgroup_settings, servers_defaults, comment) VALUES "
 		"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
 
-	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query, -1, &statement, 0);
-	rc = mydb->prepare_v2(query, &statement);
+	auto [rc1, statement_unique] = mydb->prepare_v2(query);
+	rc = rc1;
+	statement = statement_unique.get();
 	ASSERT_SQLITE_OK(rc, mydb);
 	proxy_info("New mysql_hostgroup_attributes table\n");
 	bool current_configured[MyHostGroups->len];
@@ -4411,7 +4411,6 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 		}
 	}
 
-	(*proxy_sqlite3_finalize)(statement);
 	delete incoming_hostgroup_attributes;
 	incoming_hostgroup_attributes=NULL;
 }
@@ -4428,7 +4427,9 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_ssl_params_table() {
 		"ssl_crl, ssl_crlpath, ssl_cipher, tls_version, comment) VALUES "
 		"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
 
-	rc = mydb->prepare_v2(query, &statement);
+	auto [rc1, statement_unique] = mydb->prepare_v2(query);
+	rc = rc1;
+	statement = statement_unique.get();
 	ASSERT_SQLITE_OK(rc, mydb);
 	proxy_info("New mysql_servers_ssl_params table\n");
 	std::lock_guard<std::mutex> lock(Servers_SSL_Params_map_mutex);
@@ -4466,7 +4467,6 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_ssl_params_table() {
 		string MapKey = MSSP.getMapKey(rand_del);
 		Servers_SSL_Params_map.emplace(MapKey, MSSP);
 	}
-	(*proxy_sqlite3_finalize)(statement);
 	delete incoming_mysql_servers_ssl_params;
 	incoming_mysql_servers_ssl_params=NULL;
 }

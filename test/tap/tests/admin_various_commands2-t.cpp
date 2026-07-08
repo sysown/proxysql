@@ -85,7 +85,7 @@ std::vector<std::string> queries = {
 	"SELECT CONFIG FILE",
 	};
 
-void add_commands_set1(std::vector<std::string>& queries, std::string m, bool with_config=false) {
+void add_commands_set1(std::vector<std::string>& queries, const std::string& m, bool with_config=false) {
 	queries.push_back("LOAD " + m + " TO MEMORY");
 	queries.push_back("LOAD " + m + " TO MEMORY");
 	queries.push_back("LOAD " + m + " TO MEM");

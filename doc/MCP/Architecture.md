@@ -31,7 +31,7 @@ The MCP module implements JSON-RPC 2.0 over HTTPS for LLM (Large Language Model)
 │  │  - query_tool_handler   (NEW)                                         │  │
 │  │  - admin_tool_handler   (NEW)                                         │  │
 │  │  - cache_tool_handler   (NEW)                                         │  │
-│  │  - observe_tool_handler (NEW)                                         │  │
+│  │  - stats_tool_handler   (NEW)                                         │  │
 │  │  - ai_tool_handler      (NEW)                                         │  │
 │  └──────────────────────────────────────────────────────────────────────┘  │
 │                                    │                                        │
@@ -47,7 +47,7 @@ The MCP module implements JSON-RPC 2.0 over HTTPS for LLM (Large Language Model)
 │    ┌──────────────┬──────────────┼──────────────┬──────────────┬─────────┐  │
 │    ▼              ▼              ▼              ▼              ▼         ▼  │
 │ ┌────┐        ┌────┐         ┌────┐         ┌────┐         ┌────┐    ┌───┐│
-│ │conf│        │obs │         │qry │         │adm │         │cach│    │ai ││
+│ │conf│        │sts │         │qry │         │adm │         │cach│    │ai ││
 │ │TH  │        │TH  │         │TH  │         │TH  │         │TH  │    │TH ││
 │ └─┬──┘        └─┬──┘         └─┬──┘         └─┬──┘         └─┬──┘    └─┬─┘│
 │   │             │               │               │               │        │  │
@@ -80,7 +80,7 @@ include/
 ├── Query_Tool_Handler.h  # Query endpoint tool handler (includes discovery tools)
 ├── Admin_Tool_Handler.h  # Administration endpoint tool handler
 ├── Cache_Tool_Handler.h  # Cache endpoint tool handler
-├── Observe_Tool_Handler.h # Observability endpoint tool handler
+├── Stats_Tool_Handler.h # Stats endpoint tool handler
 ├── AI_Tool_Handler.h     # AI endpoint tool handler
 ├── Discovery_Schema.h    # Discovery catalog implementation
 ├── Static_Harvester.h    # Static database harvester for discovery
@@ -94,7 +94,7 @@ lib/
 ├── Query_Tool_Handler.cpp # Query endpoint implementation
 ├── Admin_Tool_Handler.cpp # Administration endpoint implementation
 ├── Cache_Tool_Handler.cpp # Cache endpoint implementation
-├── Observe_Tool_Handler.cpp # Observability endpoint implementation
+├── Stats_Tool_Handler.cpp # Stats endpoint implementation
 ├── AI_Tool_Handler.cpp   # AI endpoint implementation
 ├── Discovery_Schema.cpp  # Discovery catalog implementation
 ├── Static_Harvester.cpp  # Static database harvester implementation
@@ -139,6 +139,13 @@ Each MCP endpoint has its own dedicated tool handler with specific tools designe
 - `reload_config` - Reload configuration from disk/memory
 - `list_variables` - List all available variables
 - `get_status` - Get server status information
+- `query` - Execute constrained SQL against the admin/config database
+
+**Query policy**:
+- Allows read/write SQL that starts with `SELECT`, `WITH`, `INSERT`, `UPDATE`, `DELETE`, `REPLACE`, or `VALUES`
+- Rejects DDL and dangerous control statements, including `PRAGMA`, `ATTACH`, `DETACH`, `LOAD_EXTENSION`, transaction control, and schema-altering statements
+- Rejects multi-statement input
+- Returns structured JSON with the SQL text, `rows_affected`, `row_count`, `columns`, and `rows`
 
 **Use Cases**:
 - LLM assistants that need to configure ProxySQL
@@ -149,7 +156,7 @@ Each MCP endpoint has its own dedicated tool handler with specific tools designe
 
 ---
 
-#### `/mcp/observe` - Observability Endpoint
+#### `/mcp/stats` - Observability Endpoint
 
 **Purpose**: Real-time metrics, statistics, and monitoring data
 
@@ -166,7 +173,7 @@ Each MCP endpoint has its own dedicated tool handler with specific tools designe
 - Automated alerting and health checks
 - Performance analysis
 
-**Authentication**: `mcp-observe_endpoint_auth` (Bearer token)
+**Authentication**: `mcp-stats_endpoint_auth` (Bearer token)
 
 ---
 
@@ -175,6 +182,7 @@ Each MCP endpoint has its own dedicated tool handler with specific tools designe
 **Purpose**: Safe database exploration and query execution
 
 **Tools**:
+- `list_targets` - List logical backend targets (hostgroup-backed routing handles)
 - `list_schemas` - List databases
 - `list_tables` - List tables in schema
 - `describe_table` - Get table structure
@@ -202,8 +210,79 @@ Each MCP endpoint has its own dedicated tool handler with specific tools designe
 - Data analysis and discovery
 - Query optimization assistance
 - Two-phase discovery (static harvest + LLM analysis)
+- Multi-backend routing via opaque `target_id` values instead of direct host/protocol details
 
 **Authentication**: `mcp-query_endpoint_auth` (Bearer token)
+
+#### Query Target Routing Model
+
+`/mcp/query` now supports a dynamic routing model based on logical targets:
+
+- Clients call `list_targets` to discover routable targets.
+- Each target exposes:
+  - `target_id` (opaque identifier)
+  - `description` (human-readable summary)
+  - `capabilities` (for example `inventory`, `readonly_sql`, `explain`)
+- Query tools (for example `run_sql_readonly`, `explain_sql`, `list_tables`) accept an optional `target_id`.
+- If `target_id` is omitted, the server uses a default executable target when available.
+
+Internally, the server resolves each `target_id` to runtime hostgroup metadata, a configured auth profile, and protocol-specific execution paths.
+
+Credential separation model:
+
+- MCP endpoint authentication (Bearer token) identifies and authorizes the MCP client.
+- Backend database credentials are server-managed in MCP runtime profile tables:
+  - `runtime_mcp_target_profiles`
+  - `runtime_mcp_auth_profiles`
+- Query execution pools are keyed by `target_id + auth_profile_id`.
+
+Current execution support:
+
+- `mysql` targets: `list_tables`, `run_sql_readonly`, `explain_sql`
+- `pgsql` targets: `list_tables`, `run_sql_readonly`, `explain_sql`
+
+#### MCP Query Rules and Stats
+
+MCP query rules support routing-aware filters so one endpoint can enforce different policies per logical target:
+
+- `username`: backend DB username from the resolved auth profile
+- `target_id`: logical MCP target selected by the client (or resolved default target)
+- `schemaname`: optional schema/database context
+- `tool_name`: MCP tool name (for example `run_sql_readonly`)
+
+The runtime and stats views expose these fields:
+
+- `runtime_mcp_query_rules`: includes `username` and `target_id` columns
+- `stats_mcp_query_rules`: includes `rule_id`, `username`, `target_id`, `hits`
+
+This allows policy verification and hit analysis per logical route without exposing backend host/protocol details to MCP clients.
+
+#### `/mcp/rag` - Retrieval Endpoint
+
+**Purpose**: RAG search, retrieval, and source re-fetch operations
+
+**Tools**:
+- `rag.search_fts` - Keyword search over chunked content
+- `rag.search_vector` - Semantic search over embeddings
+- `rag.search_hybrid` - Combined FTS + vector search
+- `rag.get_chunks` - Fetch chunk content by `chunk_id`
+- `rag.get_docs` - Fetch document content by `doc_id`
+- `rag.fetch_from_source` - Re-fetch authoritative rows from the configured source backend
+- `rag.admin.stats` - Operational statistics for the RAG subsystem
+
+**Fetch policy**:
+- Looks up each requested `doc_id` from the vector database metadata tables
+- Uses the source row's `backend_type` to connect to MySQL or PostgreSQL backends
+- Reconstructs the source `SELECT` from the stored `table_name`, primary-key metadata, and optional `where_sql`
+- Returns one result row per requested document, with per-row errors when a document is missing or the backend cannot be reached
+- Rejects unsupported backend types instead of guessing a connection path
+
+**Use Cases**:
+- LLM assistants that need indexed retrieval over documents
+- Semantic search and chunk inspection
+- Operational recovery by re-reading source-of-truth rows
+
+**Authentication**: `mcp-rag_endpoint_auth` (Bearer token)
 
 ---
 
@@ -334,8 +413,8 @@ bool MCP_JSONRPC_Resource::authenticate_request(const http_request& req) {
 
     if (endpoint_name == "config") {
         expected_token = handler->variables.mcp_config_endpoint_auth;
-    } else if (endpoint_name == "observe") {
-        expected_token = handler->variables.mcp_observe_endpoint_auth;
+    } else if (endpoint_name == "stats") {
+        expected_token = handler->variables.mcp_stats_endpoint_auth;
     } else if (endpoint_name == "query") {
         expected_token = handler->variables.mcp_query_endpoint_auth;
     } else if (endpoint_name == "admin") {
@@ -404,7 +483,7 @@ private:
 ### Phase 1: Base Infrastructure ✅ COMPLETED
 
 1. ✅ Create `MCP_Tool_Handler` base class
-2. ✅ Create implementations for all 6 tool handlers (config, query, admin, cache, observe, ai)
+2. ✅ Create implementations for all 6 tool handlers (config, query, admin, cache, stats, ai)
 3. ✅ Update `MCP_Threads_Handler` to manage all handlers
 4. ✅ Update `ProxySQL_MCP_Server` to pass handlers to endpoints
 
@@ -414,7 +493,7 @@ private:
 2. ✅ Implement Query_Tool_Handler tools (includes MySQL tools and discovery tools)
 3. ✅ Implement Admin_Tool_Handler tools
 4. ✅ Implement Cache_Tool_Handler tools
-5. ✅ Implement Observe_Tool_Handler tools
+5. ✅ Implement Stats_Tool_Handler tools
 6. ✅ Implement AI_Tool_Handler tools
 
 ### Phase 3: Authentication & Testing ✅ MOSTLY COMPLETED
@@ -443,7 +522,7 @@ The migration to multiple tool handlers has been completed while maintaining bac
 ✅ Step 3: Move MySQL tools to /mcp/query (existing tools migrate)
 ✅ Step 4: Implement /mcp/admin (new functionality)
 ✅ Step 5: Implement /mcp/cache (new functionality)
-✅ Step 6: Implement /mcp/observe (new functionality)
+✅ Step 6: Implement /mcp/stats (new functionality)
 ✅ Step 7: Enable per-endpoint auth
 ✅ Step 8: Add /mcp/ai endpoint (new AI functionality)
 ```

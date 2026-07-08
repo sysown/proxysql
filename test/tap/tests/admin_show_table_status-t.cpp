@@ -64,7 +64,7 @@ int main() {
 		"SHOW table status like '%s'",
 		"show TABLE status LIKE '%s'",
 	};
-	plan(tables.size()*queries.size());
+	plan(static_cast<int>(tables.size())*static_cast<int>(queries.size()));
 
 
 	for (std::vector<std::string>::iterator it = tables.begin(); it != tables.end(); it++) {

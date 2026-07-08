@@ -135,7 +135,7 @@ int test_variable_access(MYSQL* admin) {
 	// Test 6: Verify SHOW VARIABLES LIKE pattern
 	MYSQL_QUERY(admin, "SHOW VARIABLES LIKE 'genai-%'");
 	MYSQL_RES* res = mysql_store_result(admin);
-	int num_rows = mysql_num_rows(res);
+	int num_rows = static_cast<int>(mysql_num_rows(res));
 	ok(num_rows == 2, 
 	   "SHOW VARIABLES LIKE 'genai-%%' returns 2 rows, got %d", num_rows);
 	mysql_free_result(res);
@@ -220,7 +220,7 @@ int test_checksum_commands(MYSQL* admin) {
 	ok(rc1 == 0,  "CHECKSUM DISK GENAI VARIABLES");
 	if (rc1 == 0) {
 		MYSQL_RES* res = mysql_store_result(admin);
-		int num_rows = mysql_num_rows(res);
+		int num_rows = static_cast<int>(mysql_num_rows(res));
 		ok(num_rows == 1,  "CHECKSUM DISK GENAI VARIABLES returns 1 row");
 		mysql_free_result(res);
 	} else {
@@ -232,7 +232,7 @@ int test_checksum_commands(MYSQL* admin) {
 	ok(rc2 == 0,  "CHECKSUM MEM GENAI VARIABLES");
 	if (rc2 == 0) {
 		MYSQL_RES* res = mysql_store_result(admin);
-		int num_rows = mysql_num_rows(res);
+		int num_rows = static_cast<int>(mysql_num_rows(res));
 		ok(num_rows == 1,  "CHECKSUM MEM GENAI VARIABLES returns 1 row");
 		mysql_free_result(res);
 	} else {
@@ -244,7 +244,7 @@ int test_checksum_commands(MYSQL* admin) {
 	ok(rc3 == 0,  "CHECKSUM MEMORY GENAI VARIABLES");
 	if (rc3 == 0) {
 		MYSQL_RES* res = mysql_store_result(admin);
-		int num_rows = mysql_num_rows(res);
+		int num_rows = static_cast<int>(mysql_num_rows(res));
 		ok(num_rows == 1,  "CHECKSUM MEMORY GENAI VARIABLES returns 1 row");
 		mysql_free_result(res);
 	} else {
@@ -256,7 +256,7 @@ int test_checksum_commands(MYSQL* admin) {
 	ok(rc4 == 0,  "CHECKSUM GENAI VARIABLES");
 	if (rc4 == 0) {
 		MYSQL_RES* res = mysql_store_result(admin);
-		int num_rows = mysql_num_rows(res);
+		int num_rows = static_cast<int>(mysql_num_rows(res));
 		ok(num_rows == 1,  "CHECKSUM GENAI VARIABLES returns 1 row");
 		mysql_free_result(res);
 	} else {
@@ -351,19 +351,19 @@ int main() {
 	// Part 2: Test variable access (SET and SELECT)
 	// ============================================================================
 	diag("=== Part 2: Testing variable access (SET and SELECT) ===");
-	test_count += test_variable_access(admin);
+	test_variable_access(admin);
 
 	// ============================================================================
 	// Part 3: Test variable persistence across layers
 	// ============================================================================
 	diag("=== Part 3: Testing variable persistence across storage layers ===");
-	test_count += test_variable_persistence(admin);
+	test_variable_persistence(admin);
 
 	// ============================================================================
 	// Part 4: Test CHECKSUM commands
 	// ============================================================================
 	diag("=== Part 4: Testing CHECKSUM commands ===");
-	test_count += test_checksum_commands(admin);
+	test_checksum_commands(admin);
 
 	// ============================================================================
 	// Cleanup
