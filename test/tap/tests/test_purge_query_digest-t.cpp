@@ -137,7 +137,7 @@ void check_invalid_timestamp(MYSQL* admin, const string& query) {
 int run_query_batch(MYSQL* proxy, const char* prefix, int count, int literal) {
 	char query[128];
 	for (int i = 0; i < count; i++) {
-		sprintf(query, "SELECT %d AS %s%d", literal, prefix, i);
+		snprintf(query, sizeof(query), "SELECT %d AS %s%d", literal, prefix, i);
 		diag("Running: %s", query);
 		if (mysql_query(proxy, query)) {
 			diag("Query failed. Error: '%s'", mysql_error(proxy));
@@ -159,7 +159,7 @@ void traffic_thread_fn() {
 	char query[128];
 	int i = 0;
 	while (!stop_traffic) {
-		sprintf(query, "SELECT %d AS conc_%d", i % 97, i % 211);
+		snprintf(query, sizeof(query), "SELECT %d AS conc_%d", i % 97, i % 211);
 		if (mysql_query(proxy, query)) {
 			diag("Traffic thread query failed. Error: '%s'", mysql_error(proxy));
 			traffic_errors++;
@@ -227,11 +227,11 @@ int main(int argc, char** argv) {
 
 	// dynamically compute how many entries (any user) the purge should remove
 	char buf[256];
-	sprintf(buf, "SELECT COUNT(*) FROM stats_mysql_query_digest WHERE last_seen <= %ld", (long)cutoff);
+	snprintf(buf, sizeof(buf), "SELECT COUNT(*) FROM stats_mysql_query_digest WHERE last_seen <= %ld", (long)cutoff);
 	long long expected_purged = query_scalar(admin, buf);
 
 	unsigned long long affected = 0;
-	sprintf(buf, "PURGE stats_mysql_query_digest TO %ld", (long)cutoff);
+	snprintf(buf, sizeof(buf), "PURGE stats_mysql_query_digest TO %ld", (long)cutoff);
 	int rc = exec_ok(admin, buf, &affected);
 	ok(rc == 0, "'%s' must succeed. rc:%d error:'%s'", buf, rc, mysql_error(admin));
 
@@ -310,7 +310,7 @@ int main(int argc, char** argv) {
 	// ---------------------------------------------------------------------
 	// Section 4: syntax variants
 	// ---------------------------------------------------------------------
-	sprintf(buf, "purge table stats.stats_mysql_query_digest to %ld", (long)cutoff);
+	snprintf(buf, sizeof(buf), "purge table stats.stats_mysql_query_digest to %ld", (long)cutoff);
 	rc = exec_ok(admin, buf, &affected);
 	ok(
 		rc == 0 && affected == 0,
@@ -319,7 +319,7 @@ int main(int argc, char** argv) {
 	);
 
 	time_t future = time(NULL) + 3600;
-	sprintf(buf, "PURGE stats.stats_mysql_query_digest TO %ld", (long)future);
+	snprintf(buf, sizeof(buf), "PURGE stats.stats_mysql_query_digest TO %ld", (long)future);
 	rc = exec_ok(admin, buf, &affected);
 	ok(
 		rc == 0 && affected >= (unsigned long long)(1 + BATCH_B_SIZE),
@@ -330,7 +330,7 @@ int main(int argc, char** argv) {
 	our_digests = count_digests(admin, "SELECT ? AS batch_%");
 	ok(our_digests == 0, "No batch digest may survive a purge to a future timestamp. Act:%lld", our_digests);
 
-	sprintf(buf, "PURGE stats_pgsql_query_digest TO %ld", (long)future);
+	snprintf(buf, sizeof(buf), "PURGE stats_pgsql_query_digest TO %ld", (long)future);
 	rc = exec_ok(admin, buf, &affected);
 	ok(rc == 0, "The stats_pgsql_query_digest variant must be accepted. rc:%d error:'%s'", rc, mysql_error(admin));
 
@@ -388,7 +388,7 @@ int main(int argc, char** argv) {
 	std::thread traffic(traffic_thread_fn);
 	int purge_errors = 0;
 	for (int i = 0; i < 60; i++) {
-		sprintf(buf, "PURGE TABLE stats_mysql_query_digest TO %ld", (long)(time(NULL) - 1));
+		snprintf(buf, sizeof(buf), "PURGE TABLE stats_mysql_query_digest TO %ld", (long)(time(NULL) - 1));
 		if (exec_ok(admin, buf)) {
 			purge_errors++;
 		}
