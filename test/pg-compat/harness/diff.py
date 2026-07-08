@@ -42,16 +42,26 @@ def _parse_meta(sql):
 
 
 def _statements(sql):
-    return [
-        s.strip()
-        for s in sql.split(";")
-        if s.strip() and not s.strip().startswith("--")
-    ]
+    # Strip comment lines PER-LINE before the ";"-split. The previous
+    # chunk-based filter (`split(";")` then drop chunks starting with "--")
+    # silently discarded an ENTIRE case whose first line is a metadata
+    # comment: with only one trailing ";" the whole file is a single chunk
+    # beginning with "--", so the comment AND the SQL were thrown away
+    # together and zero statements ran (a vacuous pass). Known limitations
+    # of this simple splitter: no ";" inside string literals, and no
+    # trailing "--" comments appended to statement lines.
+    body = "\n".join(
+        line for line in sql.splitlines()
+        if not line.strip().startswith("--")
+    )
+    return [s.strip() for s in body.split(";") if s.strip()]
 
 
 def _parse_case_file(case_file):
     with open(case_file) as f:
         sql = f.read()
+    # Metadata regexes run on the ORIGINAL text (comment lines included);
+    # only statement extraction works on the comment-stripped body.
     skip, only = _parse_meta(sql)
     return _statements(sql), skip, only
 
@@ -93,13 +103,26 @@ def _run(stmts, targets, admin, skip, only):
 def run_case(case_file, targets, admin=None):
     """Run every statement in ``case_file`` against all available targets."""
     stmts, skip, only = _parse_case_file(case_file)
+    if not stmts:
+        # An empty case must be a LOUD error, never a vacuous pass: with no
+        # statements every target returns [] and compare() trivially succeeds.
+        raise ValueError(
+            f"{case_file}: no executable statements parsed — "
+            "check comment/semicolon handling"
+        )
     return _run(stmts, targets, admin, skip, only)
 
 
 def run_case_sql(sql, targets, admin=None):
     """Inline-SQL variant of ``run_case`` (a SQL string, not a file)."""
     skip, only = _parse_meta(sql)
-    return _run(_statements(sql), targets, admin, skip, only)
+    stmts = _statements(sql)
+    if not stmts:
+        raise ValueError(
+            "inline case: no executable statements parsed — "
+            "check comment/semicolon handling"
+        )
+    return _run(stmts, targets, admin, skip, only)
 
 
 def compare(results):

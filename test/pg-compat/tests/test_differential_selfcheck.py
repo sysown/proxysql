@@ -34,21 +34,29 @@ Live evidence (psql through the proxy) with rule 90 installed:
 and removed:
     SELECT 1 AS canary  ->  1
 """
+import glob
+import os
+
 from harness import targets, diff
 
 # Must sort before the infra RW-split reader rule (rule_id 101, apply=1).
 SELFCHECK_RULE_ID = 90
 
+CASES_DIR = os.path.join(os.path.dirname(__file__), "..", "cases")
+
 
 def test_engine_detects_divergence(admin):
-    admin.query(
-        "INSERT INTO pgsql_query_rules "
-        "(rule_id,active,match_pattern,replace_pattern,re_modifiers,apply) "
-        f"VALUES ({SELFCHECK_RULE_ID},1,'SELECT 1 AS canary',"
-        "'SELECT 2 AS canary','CASELESS',1)"
-    )
-    admin.query("LOAD PGSQL QUERY RULES TO RUNTIME")
     try:
+        # INSERT + LOAD inside the try so the finally ALWAYS deletes rule 90
+        # and reloads, even if either setup statement fails partway (deleting
+        # a rule that was never inserted is harmless).
+        admin.query(
+            "INSERT INTO pgsql_query_rules "
+            "(rule_id,active,match_pattern,replace_pattern,re_modifiers,apply) "
+            f"VALUES ({SELFCHECK_RULE_ID},1,'SELECT 1 AS canary',"
+            "'SELECT 2 AS canary','CASELESS',1)"
+        )
+        admin.query("LOAD PGSQL QUERY RULES TO RUNTIME")
         tgts = targets.all_targets(admin)
         results = diff.run_case_sql("SELECT 1 AS canary", tgts, admin)
         ok, detail = diff.compare(results)
@@ -61,3 +69,40 @@ def test_engine_detects_divergence(admin):
             f"DELETE FROM pgsql_query_rules WHERE rule_id={SELFCHECK_RULE_ID}"
         )
         admin.query("LOAD PGSQL QUERY RULES TO RUNTIME")
+
+
+def test_file_pipeline_executes_real_statements(admin):
+    """Guard against vacuous passes on the FILE-based path.
+
+    Review of the first Task 6 iteration found ``_statements()`` discarded an
+    entire case file whose first line was a metadata comment (one trailing
+    ``;`` -> one chunk starting with ``--``), so ``run_case`` executed ZERO
+    statements, every target returned ``[]``, and ``compare`` passed on
+    ``[] == []``. The inline-SQL divergence self-check above could not catch
+    that (no leading comment in its SQL). This test permanently pins the
+    file-parsing pipeline: every shipped case file must parse to at least one
+    statement, and running a real case file end-to-end must yield, for EVERY
+    available target, a non-empty result list whose statements each returned
+    at least one row (the shipped cases are pure single-row SELECTs).
+    """
+    case_files = sorted(glob.glob(os.path.join(CASES_DIR, "*.sql")))
+    assert case_files, f"no case files found under {CASES_DIR}"
+
+    # Every shipped case must parse to >= 1 executable statement.
+    for cf in case_files:
+        stmts, _, _ = diff._parse_case_file(cf)
+        assert stmts, f"{os.path.basename(cf)} parsed to zero statements"
+
+    # And a real file run must produce real, non-empty results per target.
+    tgts = targets.all_targets(admin)
+    results = diff.run_case(case_files[0], tgts, admin)
+    available = [t.name for t in tgts if t.available]
+    assert sorted(results) == sorted(available), (
+        f"expected results for every available target {available}, "
+        f"got {sorted(results)}"
+    )
+    for name, res in results.items():
+        assert res, f"{name}: empty result list — no statement executed"
+        for status, cols, rows in res:
+            assert cols, f"{name}: statement returned no columns ({status})"
+            assert rows, f"{name}: statement returned no rows ({status})"

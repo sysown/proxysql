@@ -39,9 +39,20 @@ NATIVE_ABSENT_REASON = f"{NATIVE_VAR} absent (PR #5882 not merged)"
 
 
 def _dsn(host, port, dbname="testuser", user="testuser", pw="testuser"):
+    # client_encoding is pinned to UTF8 on EVERY target so proxy and direct
+    # runs are apples-to-apples. Without it the two sides get DIFFERENT
+    # defaults (verified live on the sdd-sp2 infra): the dbdeployer backend
+    # databases are SQL_ASCII, so a direct session defaults client_encoding
+    # to SQL_ASCII (psycopg then maps it to Python's 'ascii' codec and cannot
+    # even send non-ASCII SQL like 'héllo'), while a session THROUGH ProxySQL
+    # reports client_encoding=UTF8 (ProxySQL imposes it on its backend
+    # connections rather than inheriting the server default -- a session-
+    # default divergence flagged in the Task 6 report). Pinning the parameter
+    # standardizes the client side only; compare() still requires identical
+    # status/columns/OIDs/rows.
     return (
         f"host={host} port={port} user={user} password={pw} "
-        f"dbname={dbname} sslmode=disable"
+        f"dbname={dbname} sslmode=disable client_encoding=UTF8"
     )
 
 
