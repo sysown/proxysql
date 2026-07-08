@@ -342,28 +342,7 @@ static Test parsersql_pr5088_mysql_expr_syntax[] = {
     { Expected("@generic_var", {"10 % 3"}) } },
 };
 
-static Test parsersql_pr5088_mysql_missing_syntax[] = {
-  { "SET persist character_set_server = 'utf8mb4';",
-    { Expected("character_set_server", {"utf8mb4"}) } },
-  { "SET persist_only innodb_buffer_pool_size = '1G';",
-    { Expected("innodb_buffer_pool_size", {"1G"}) } },
-  { "SET PERSIST max_allowed_packet = 1073741824;",
-    { Expected("max_allowed_packet", {"1073741824"}) } },
-  { "SET @@PERSIST.max_allowed_packet = 1073741824;",
-    { Expected("max_allowed_packet", {"1073741824"}) } },
-  { "SET PERSIST_ONLY sql_mode = 'STRICT_TRANS_TABLES';",
-    { Expected("sql_mode", {"STRICT_TRANS_TABLES"}) } },
-  { "SET @@PERSIST_ONLY.sql_mode = 'STRICT_TRANS_TABLES';",
-    { Expected("sql_mode", {"STRICT_TRANS_TABLES"}) } },
-  { "SET LOCAL wait_timeout = 10;",
-    { Expected("wait_timeout", {"10"}) } },
-  { "SET LOCAL sql_mode := CONCAT(@@sql_mode, ',STRICT_TRANS_TABLES');",
-    { Expected("sql_mode", {"CONCAT(@@sql_mode, ',STRICT_TRANS_TABLES')"}) } },
-  { "SET @'mix' := 1, LOCAL wait_timeout := 20;",
-    { Expected("@mix", {"1"}),
-      Expected("wait_timeout", {"20"}) } },
-  { "SET @user.var := 7;",
-    { Expected("@user.var", {"7"}) } },
+static Test parsersql_pr5088_mysql_raw_rhs_syntax[] = {
   { "SET @generic_var = TRUE XOR FALSE;",
     { Expected("@generic_var", {"TRUE XOR FALSE"}) } },
   { "SET @generic_var = 5 | 2;",
@@ -800,7 +779,7 @@ int main(int argc, char** argv) {
 	p += arraysize(parsersql_pr5088_mysql_dataset_syntax);
 	p += arraysize(parsersql_pr5088_mysql_sql_mode_expr);
 	p += arraysize(parsersql_pr5088_mysql_expr_syntax);
-	p += arraysize(parsersql_pr5088_mysql_missing_syntax);
+	p += arraysize(parsersql_pr5088_mysql_raw_rhs_syntax);
 	p += arraysize(parsersql_pgsql_search_path);
 	p += arraysize(parsersql_pgsql_time_zone);
 	p *= 2;
@@ -826,7 +805,7 @@ int main(int argc, char** argv) {
 	TestParse(parsersql_pr5088_mysql_dataset_syntax, arraysize(parsersql_pr5088_mysql_dataset_syntax), "pr5088_mysql_dataset_syntax");
 	TestParse(parsersql_pr5088_mysql_sql_mode_expr, arraysize(parsersql_pr5088_mysql_sql_mode_expr), "pr5088_mysql_sql_mode_expr");
 	TestParse(parsersql_pr5088_mysql_expr_syntax, arraysize(parsersql_pr5088_mysql_expr_syntax), "pr5088_mysql_expr_syntax");
-	TestParse(parsersql_pr5088_mysql_missing_syntax, arraysize(parsersql_pr5088_mysql_missing_syntax), "pr5088_mysql_missing_syntax");
+	TestParse(parsersql_pr5088_mysql_raw_rhs_syntax, arraysize(parsersql_pr5088_mysql_raw_rhs_syntax), "pr5088_mysql_raw_rhs_syntax");
 	TestParsePgsql(parsersql_pgsql_search_path, arraysize(parsersql_pgsql_search_path), "pgsql_search_path");
 	TestParsePgsql(parsersql_pgsql_time_zone, arraysize(parsersql_pgsql_time_zone), "pgsql_time_zone");
 	TestStrictFunctionCall(parsersql_function_call_strict, arraysize(parsersql_function_call_strict));

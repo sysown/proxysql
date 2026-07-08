@@ -93,7 +93,7 @@ static std::string strip_scope_prefix(std::string var_name) {
  * Normalises a SET variable name for consistent lookup.
  *
  * Steps:
- *   1. Strip keyword scope prefix (SESSION/GLOBAL/LOCAL).
+ *   1. Strip keyword scope prefix (SESSION/GLOBAL/LOCAL/PERSIST/PERSIST_ONLY).
  *   2. Strip @@-style scope prefix (@@session. → "").
  *   3. Lowercase the result.
  *   4. Resolve legacy aliases: "transaction_isolation" → "tx_isolation",
