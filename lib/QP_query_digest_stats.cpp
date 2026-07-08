@@ -80,6 +80,26 @@ void QP_query_digest_stats::add_time(
 	}
 	last_seen=n;
 }
+// Merges the counters of 'other' into this entry. Used when reconciling stats
+// collected while a purge operation was running (see purge_query_digests_async()).
+void QP_query_digest_stats::merge(const QP_query_digest_stats *other) {
+	count_star += other->count_star;
+	sum_time += other->sum_time;
+	rows_affected += other->rows_affected;
+	rows_sent += other->rows_sent;
+	if (other->min_time && (min_time == 0 || other->min_time < min_time)) {
+		min_time = other->min_time;
+	}
+	if (other->max_time > max_time) {
+		max_time = other->max_time;
+	}
+	if (other->first_seen && (first_seen == 0 || other->first_seen < first_seen)) {
+		first_seen = other->first_seen;
+	}
+	if (other->last_seen > last_seen) {
+		last_seen = other->last_seen;
+	}
+}
 QP_query_digest_stats::~QP_query_digest_stats() {
 	if (digest_text) {
 		free(digest_text);
