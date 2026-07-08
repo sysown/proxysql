@@ -34,6 +34,21 @@ def _admin_dsn():
     return f"host={host} port={port} user=radmin password=radmin dbname=admin sslmode=disable"
 
 
+def _sql_quote(value):
+    """SQL-quote a string literal for the ProxySQL admin parser.
+
+    Escapes by doubling single quotes (verified live against the admin:
+    `SET pgsql-server_version='16.1''test'` stores `16.1'test` and reads
+    back correctly from global_variables). Backslashes are passed through
+    literally — the admin's SQLite-based parser uses standard-conforming
+    string literals and does not treat backslash as an escape character.
+    NUL cannot be represented in a SQL string literal, so it is rejected.
+    """
+    if "\x00" in value:
+        raise ValueError("NUL byte not representable in a SQL string literal")
+    return "'" + value.replace("'", "''") + "'"
+
+
 class Admin:
     def __init__(self):
         self.conn = psycopg.connect(_admin_dsn(), autocommit=True)
@@ -44,17 +59,32 @@ class Admin:
             return cur.fetchall() if cur.description else None
 
     def set_var(self, name, value):
-        # Verified empirically against the running admin: both
-        # `SET name=1` and `SET name='1'` are accepted and applied
-        # identically for a numeric variable (pgsql-authentication_method).
-        # Quote only non-numeric strings, matching the brief.
-        self.query(f"SET {name}={value!r}" if isinstance(value, str) else f"SET {name}={value}")
+        # str  -> SQL-quoted, single quotes doubled (see _sql_quote).
+        #         Always quoting strings is safe even for numeric variables:
+        #         verified live that SET name=1 and SET name='1' behave
+        #         identically, so restore() (whose values from snapshot()
+        #         are always str) round-trips every variable type.
+        # bool -> bare true/false (verified live: SET
+        #         pgsql-connection_warming=true / =false are accepted and
+        #         read back as "true"/"false"). Checked before the generic
+        #         path because bool is a subclass of int.
+        # int/float -> bare, unquoted.
+        if isinstance(value, bool):
+            literal = "true" if value else "false"
+        elif isinstance(value, str):
+            literal = _sql_quote(value)
+        else:
+            literal = str(value)
+        self.query(f"SET {name}={literal}")
 
     def load_vars(self):
         self.query("LOAD PGSQL VARIABLES TO RUNTIME")
 
     def snapshot(self, var_names):
-        placeholders = ",".join(f"'{v}'" for v in var_names)
+        # Variable names are expected to be literals from trusted call
+        # sites, but quote them with the same doubling as values for
+        # consistency/safety.
+        placeholders = ",".join(_sql_quote(v) for v in var_names)
         rows = self.query(
             "SELECT variable_name, variable_value FROM global_variables "
             f"WHERE variable_name IN ({placeholders})"
