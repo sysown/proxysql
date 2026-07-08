@@ -35,6 +35,39 @@ If ProxySQL was rebuilt, re-run
 `test/infra/control/start-proxysql-isolated.bash` to pick up the new binary
 (it only restarts the ProxySQL container, leaving backends up).
 
+### Report output (`--junitxml` and friends)
+
+`run-pg-compat.bash`'s container runs with `--rm`, so anything pytest writes
+to its own filesystem is destroyed the moment the container exits. The
+script bind-mounts a host directory to `/pg-compat-reports` inside the
+container (default `${WORKSPACE}/pg-compat-reports`, override with
+`PGCOMPAT_REPORT_DIR`) so report files survive. Write reports there, e.g.:
+
+```bash
+WORKSPACE=$(pwd) INFRA_ID=<infra-id> test/pg-compat/run-pg-compat.bash \
+  --junitxml=/pg-compat-reports/pg-compat.xml -rxX
+# report lands at: ${WORKSPACE}/pg-compat-reports/pg-compat.xml
+```
+
+## CI
+
+The suite is wired into CI as `CI-pg-compat` (`.github/workflows/CI-pg-compat.yml`
+caller on `v3.0` + `ci-pg-compat.yml` reusable on `GH-Actions`, per the
+two-branch split in `doc/GH-Actions/README.md`). Unlike the TAP families it
+does not chain off `CI-trigger`/`CI-builds`; it builds ProxySQL inline
+(`PROXYSQL31=1 make debug`), like the `CI-3p-*` family, since its triggers
+have no guaranteed prior `CI-builds` cache to restore from.
+
+- **Triggers:** nightly at 03:00 UTC (`schedule`), any `pull_request` that
+  carries the `pg-compat` label, and manual `workflow_dispatch`.
+- **Status: non-gating.** Per the discovery-phase framing above, the run
+  step uses `|| true` so a real/uncatalogued divergence does not fail the
+  workflow. Promote to gating (drop `|| true`, tighten `xfail.toml`) once
+  the suite is green and stable.
+- **Artifact:** the junitxml report is uploaded as `pg-compat-report` on
+  every run (`if: always()`), whether the underlying pytest run passed,
+  xfailed, or hit real failures.
+
 ## Env contract
 
 Populated by `test/tap/groups/pg-compat/env.sh` (sourced by
