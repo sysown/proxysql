@@ -88,19 +88,195 @@ func connect() error {
 	return nil
 }
 
-// transactions: filled in by Task 2. Mirrors behaviors/transactions.py.
+// txTable is per-language (parallel-safe with the other drivers' behavior
+// programs, which each use their own behavior_tx_t_<lang> table; see the
+// plan's Global Constraints).
+const txTable = "behavior_tx_t_go"
+
+// transactions: BEGIN/COMMIT/ROLLBACK are honored end-to-end through
+// ProxySQL. Mirrors behaviors/transactions.py exactly, including its
+// RW-split trap fix: every verification read runs inside its own explicit
+// BEGIN/COMMIT (via conn.Begin(ctx)/tx.Commit(ctx)) so it is pinned to the
+// same (writer) backend connection as the preceding INSERT/COMMIT, instead
+// of racing replication lag on a bare SELECT routed to a reader hostgroup.
+// The verify-read carries the same "AS verify_read" alias as the Python
+// behavior for pg_stat_statements traceability.
 func transactions() error {
-	return fmt.Errorf("%w: transactions", errNotImplemented)
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dsn())
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+	defer conn.Close(ctx)
+
+	// Cleanup runs on success AND on failure (defer), leaving no state
+	// behind, same as the Python behavior's try/finally.
+	defer func() {
+		conn.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s", txTable))
+	}()
+
+	if _, err := conn.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s", txTable)); err != nil {
+		return fmt.Errorf("DROP TABLE IF EXISTS: %w", err)
+	}
+	if _, err := conn.Exec(ctx, fmt.Sprintf("CREATE TABLE %s (id int)", txTable)); err != nil {
+		return fmt.Errorf("CREATE TABLE: %w", err)
+	}
+
+	tx1, err := conn.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("BEGIN (insert 1): %w", err)
+	}
+	if _, err := tx1.Exec(ctx, fmt.Sprintf("INSERT INTO %s VALUES (1)", txTable)); err != nil {
+		return fmt.Errorf("INSERT (1): %w", err)
+	}
+	if err := tx1.Rollback(ctx); err != nil {
+		return fmt.Errorf("ROLLBACK: %w", err)
+	}
+
+	count, err := verifyCount(ctx, conn)
+	if err != nil {
+		return err
+	}
+	if count != 0 {
+		return fmt.Errorf("rollback did not discard the insert: count=%d, want 0", count)
+	}
+
+	tx2, err := conn.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("BEGIN (insert 2): %w", err)
+	}
+	if _, err := tx2.Exec(ctx, fmt.Sprintf("INSERT INTO %s VALUES (2)", txTable)); err != nil {
+		return fmt.Errorf("INSERT (2): %w", err)
+	}
+	if err := tx2.Commit(ctx); err != nil {
+		return fmt.Errorf("COMMIT (insert 2): %w", err)
+	}
+
+	count, err = verifyCount(ctx, conn)
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return fmt.Errorf("commit did not persist the insert: count=%d, want 1", count)
+	}
+
+	return nil
 }
 
-// prepared: filled in by Task 2. Mirrors behaviors/prepared.py.
+// verifyCount runs the RW-split-safe verification read described in the
+// transactions() comment above: its own explicit BEGIN...COMMIT wrapping a
+// single "SELECT count(*) AS verify_read" against txTable.
+func verifyCount(ctx context.Context, conn *pgx.Conn) (int, error) {
+	vtx, err := conn.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("BEGIN (verify): %w", err)
+	}
+	var count int
+	if err := vtx.QueryRow(ctx, fmt.Sprintf("SELECT count(*) AS verify_read FROM %s", txTable)).Scan(&count); err != nil {
+		return 0, fmt.Errorf("verify SELECT: %w", err)
+	}
+	if err := vtx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("COMMIT (verify): %w", err)
+	}
+	return count, nil
+}
+
+// prepared: a parameterized statement, reused many times, keeps working
+// across ProxySQL's connection multiplexing. Mirrors behaviors/prepared.py.
+//
+// Exec mode in play: pgx v5's default QueryExecMode is
+// QueryExecModeCacheStatement ("cache_statement") -- pgx.Connect does not
+// override it here, so this is the mode used. Under cache_statement, pgx
+// runs the full extended-protocol Parse/Bind/Describe/Execute sequence for
+// every query and additionally caches (by SQL text) the server-side
+// prepared statement it created, reusing it (Bind/Execute only, skipping
+// re-Parse) on subsequent calls with the same SQL text -- see
+// https://github.com/jackc/pgx/wiki/Automatic-Prepared-Statement-Caching.
+// That means every iteration of the loop below -- not just the ones past
+// some warm-up threshold -- already exercises real extended-protocol
+// prepared statements multiplexed by ProxySQL; the 50x loop's job is to
+// prove the cached server-side statement keeps resolving correctly across
+// many round trips through the proxy, not to cross a warm-up threshold (as
+// psycopg3's prepare_threshold requires -- see prepared.py's docstring).
+// Placeholders are pgx-native ($1, $2), unlike Python's psycopg %s -- see
+// the plan's Global Constraints on driver-native placeholder syntax.
 func prepared() error {
-	return fmt.Errorf("%w: prepared", errNotImplemented)
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dsn())
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+	defer conn.Close(ctx)
+
+	for i := 0; i < 50; i++ {
+		var sum int
+		if err := conn.QueryRow(ctx, "SELECT $1::int + $2::int", i, 1).Scan(&sum); err != nil {
+			return fmt.Errorf("iteration %d: %w", i, err)
+		}
+		if sum != i+1 {
+			return fmt.Errorf("iteration %d: got %d, want %d", i, sum, i+1)
+		}
+	}
+	return nil
 }
 
-// sessionIsolation: filled in by Task 2. Mirrors behaviors/session_isolation.py.
+// distinctiveTZ is the session-isolation probe value. NEVER application_name
+// -- ProxySQL lists it in ignore_vars, so it can never reflect a client SET
+// through the proxy (see session_isolation.py's docstring). TimeZone is a
+// tracked/forwarded/reset variable, so it is a valid probe.
+const distinctiveTZ = "Antarctica/Troll"
+
+// sessionIsolation: session state set on one connection must not leak to a
+// different connection. Mirrors behaviors/session_isolation.py exactly,
+// including closing connection A before opening B (see the module's
+// docstring for why: it makes it possible, not guaranteed, for B to reuse
+// A's just-freed backend connection, which is what makes this a real test
+// of ProxySQL resetting/not-inheriting session state on reuse).
 func sessionIsolation() error {
-	return fmt.Errorf("%w: session_isolation", errNotImplemented)
+	ctx := context.Background()
+	a, err := pgx.Connect(ctx, dsn())
+	if err != nil {
+		return fmt.Errorf("connect A: %w", err)
+	}
+	var b *pgx.Conn
+	defer func() {
+		// Idempotent-safe backstop, matching the Python finally: closing A
+		// again after the deliberate early close below is a safe no-op.
+		if a != nil {
+			a.Close(ctx)
+		}
+		if b != nil {
+			b.Close(ctx)
+		}
+	}()
+
+	if _, err := a.Exec(ctx, fmt.Sprintf("SET TimeZone = '%s'", distinctiveTZ)); err != nil {
+		return fmt.Errorf("SET TimeZone (A): %w", err)
+	}
+	var tzA string
+	if err := a.QueryRow(ctx, "SHOW TimeZone").Scan(&tzA); err != nil {
+		return fmt.Errorf("SHOW TimeZone (A): %w", err)
+	}
+	if tzA != distinctiveTZ {
+		return fmt.Errorf("SHOW TimeZone (A) = %q, want %q", tzA, distinctiveTZ)
+	}
+	// Close A before B opens (deliberate -- see the doc comment above).
+	if err := a.Close(ctx); err != nil {
+		return fmt.Errorf("close A: %w", err)
+	}
+
+	b, err = pgx.Connect(ctx, dsn())
+	if err != nil {
+		return fmt.Errorf("connect B: %w", err)
+	}
+	var tzB string
+	if err := b.QueryRow(ctx, "SHOW TimeZone").Scan(&tzB); err != nil {
+		return fmt.Errorf("SHOW TimeZone (B): %w", err)
+	}
+	if tzB == distinctiveTZ {
+		return fmt.Errorf("session state leaked across connections: B's TimeZone is %q", tzB)
+	}
+	return nil
 }
 
 func dispatch(behavior string) int {
