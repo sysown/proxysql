@@ -420,14 +420,14 @@ test_mysqlx_route_drop_inflight-t: test_mysqlx_route_drop_inflight-t.cpp $(PROXY
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(PROTOBUF_LIB) -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
 
-# test_mysqlx_sigterm_inflight-t (the C++ stub binary) was deleted in the
-# same PR that removed skip_all() from the framework. The stub had never
-# been more than a skip_all() guard pointing operators at the real
-# implementation, which lives in
-# test/scripts/mysqlx/behavioral_validation.py --scenario sigterm. Once
-# skip_all was removed, the stub had no purpose other than to BAIL_OUT
-# on invocation, so the source and this Makefile target were removed
-# together. The python scenario is the canonical sigterm-inflight test.
+# The historical inflight stub binary was deleted in the same PR that
+# removed skip_all() from the framework. The stub had never been more
+# than a skip_all() guard pointing operators at the real implementation,
+# which lives in test/scripts/mysqlx/behavioral_validation.py
+# --scenario shutdown. Once skip_all was removed, the stub had no
+# purpose other than to BAIL_OUT on invocation, so the source and this
+# Makefile target were removed together. The python scenario is the
+# canonical shutdown-inflight test.
 
 
 ### clean targets
