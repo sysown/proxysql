@@ -393,6 +393,29 @@ static std::string script_bind_dup(PgConnection& c) {
 	return collectUntilReady(c);
 }
 
+// Case 10 (PORTAL_STMT_LAST_OWNER): the client closes the STATEMENT while its
+// portal still lives, then executes the portal. PostgreSQL keeps a portal valid
+// after its source statement is closed, so Execute must still return the row on
+// both legs. On the proxy side this makes the portal's registry entry the LAST
+// shared_ptr owner of the statement info; the Sync's implicit-txn end then
+// destroys the portal and drops that final reference in the rc0 teardown — the
+// exact ordering d561b767c fixed (clear_named_portals() deferred until AFTER
+// RequestEnd()/LogQuery() has read digest/query text/stmt_client_name for the
+// eventslog). NOTE: the UAF this guards against historically fired only under
+// ASAN (on a lucky heap a plain build reads freed-but-intact bytes and the
+// differential still passes), so this case's primary value is making the path
+// EXIST — statement-closed + last-owner portal teardown + eventslog active —
+// for future ASAN runs; the runner block adds an uptime/no-restart assertion
+// for the plain-build crash-grade failure mode.
+static std::string script_stmt_last_owner(PgConnection& c) {
+	c.prepareStatement("s1", "SELECT $1::int", false);
+	c.bindStatement("s1", "p1", {{std::string("9"), 0}}, {}, false);
+	c.closeStatement("s1", false);      // statement closed, portal p1 survives
+	c.executePortal("p1", 0, false);    // must still return the row
+	c.sendSync();                       // implicit-txn end: portal + last stmt ref dropped
+	return collectUntilReady(c);
+}
+
 // Unnamed extended-query cycle (case 9 payload).
 static std::string script_unnamed(PgConnection& c) {
 	c.prepareStatement("", "SELECT $1::int", false);
@@ -432,7 +455,7 @@ static OpRecord runDifferential(const std::string& label, const std::string& kin
 }
 
 int main(int /*argc*/, char** /*argv*/) {
-	plan(1 /*smoke*/ + 9 /*corpus records*/ + 1 /*coverage summary*/ + 1 /*multiplexing*/);
+	plan(1 /*smoke*/ + 10 /*corpus records*/ + 1 /*coverage summary*/ + 1 /*multiplexing*/);
 	if (cl.getEnv()) return exit_status();
 
 	PGConnPtr admin = open_admin_conn();
@@ -504,6 +527,54 @@ int main(int /*argc*/, char** /*argv*/) {
 		"PORTAL_CLOSE_IDEMPOTENT", script_close_idempotent));
 	cov.record(runDifferential("PORTAL_ERR_BIND_DUP: Bind same portal twice, no close",
 		"PORTAL_ERR_BIND_DUP", script_bind_dup));
+
+	// ---- Case 10: statement closed while its portal lives (last-owner teardown
+	// path through the d561b767c-fixed rc0 ordering), with the EVENTSLOG ACTIVE
+	// so LogQuery's format=2 JSON writer actually reads stmt_client_name/digest
+	// before the deferred clear frees the registry entry. The infra defaults
+	// eventslog_default_log=1/format=2 (docker-pgsql16-single config.sql); we
+	// verify and force+restore if a prior run left them off. Also asserts
+	// proxysql did NOT crash/restart across the case (ProxySQL_Uptime monotonic)
+	// — see the script's comment on why the differential alone is not enough. ----
+	{
+		const std::string q_ev_log =
+			"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-eventslog_default_log'";
+		const std::string q_ev_fmt =
+			"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-eventslog_format'";
+		const std::string q_uptime =
+			"SELECT Variable_Value FROM stats_pgsql_global WHERE Variable_Name='ProxySQL_Uptime'";
+		std::string ev_log = adminScalar(admin.get(), q_ev_log);
+		std::string ev_fmt = adminScalar(admin.get(), q_ev_fmt);
+		bool ev_forced = false;
+		if (ev_log != "1" || ev_fmt != "2") {
+			ev_forced = execAdmin(admin.get(), "SET pgsql-eventslog_default_log=1") &&
+			            execAdmin(admin.get(), "SET pgsql-eventslog_format=2") &&
+			            execAdmin(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
+		}
+		diag("PORTAL_STMT_LAST_OWNER: eventslog default_log=%s format=%s%s",
+		     ev_log.c_str(), ev_fmt.c_str(), ev_forced ? " (forced on for this case)" : "");
+		long uptime_before = atol(adminScalar(admin.get(), q_uptime).c_str());
+		OpRecord rec = runDifferential(
+			"PORTAL_STMT_LAST_OWNER: Close('S') with portal open, Execute, Sync teardown (eventslog on)",
+			"PORTAL_STMT_LAST_OWNER", script_stmt_last_owner);
+		long uptime_after = atol(adminScalar(admin.get(), q_uptime).c_str());
+		// A crash would restart proxysql (angel) and reset the uptime counter.
+		bool no_restart = (uptime_before > 0 && uptime_after >= uptime_before);
+		if (!no_restart) {
+			rec.result_match = false;
+			rec.detail += " (proxysql RESTARTED during case: uptime " +
+				std::to_string(uptime_before) + " -> " + std::to_string(uptime_after) + ")";
+		} else {
+			rec.detail += " uptime_monotonic=" + std::to_string(uptime_before) + "->" +
+				std::to_string(uptime_after);
+		}
+		if (ev_forced) {  // restore only what we changed
+			execAdmin(admin.get(), "SET pgsql-eventslog_default_log=" + (ev_log.empty() ? "0" : ev_log));
+			execAdmin(admin.get(), "SET pgsql-eventslog_format=" + (ev_fmt.empty() ? "1" : ev_fmt));
+			execAdmin(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
+		}
+		cov.record(rec);
+	}
 
 	// ---- Case 4 addendum: multiplexing pin release, asserted NON-vacuously.
 	// The raw client STAYS CONNECTED AND IDLE while we watch the admin stats:
