@@ -34,13 +34,15 @@
  *     proxy-vs-backend plumbing noise unrelated to portal semantics. (Startup
  *     ParameterStatus/BackendKeyData are consumed inside connect() and never
  *     reach the compared cycle anyway.)
- *  2. ErrorResponse ('E') and NoticeResponse ('N') are reduced to their
- *     SQLSTATE ('C') field. ProxySQL SYNTHESIZES some errors locally (undefined
- *     cursor on a registry miss, feature-not-supported for a named portal in
- *     libpq mode) with severity/position/detail fields and message wording that
- *     legitimately differ from a backend-generated ErrorResponse; the SQLSTATE
- *     code is the portable, semantic contract. (This also subsumes the
- *     brief-sanctioned "error fields carrying server addresses" normalization.)
+ *  2. ErrorResponse ('E') / NoticeResponse ('N') are reduced to their SQLSTATE
+ *     ('C') field ONLY in the frames where ProxySQL SYNTHESIZES the error
+ *     locally (the post-invalidation Execute of PORTAL_TXN / PORTAL_SYNC_DESTROY
+ *     — a registry miss builds a local undefined-cursor ErrorResponse whose
+ *     field set legitimately differs from a backend-generated one; the SQLSTATE
+ *     is the semantic contract there). Frames whose errors are BACKEND-generated
+ *     on both legs (e.g. PORTAL_ERR_BIND_DUP's 42P03) are compared with the FULL
+ *     error payload — severity/message/detail/position included — proving the
+ *     native drive forwards backend errors unchanged.
  * Everything else — DataRow 'D', CommandComplete 'C', RowDescription 'T',
  * ParseComplete '1', BindComplete '2', CloseComplete '3', NoData 'n',
  * PortalSuspended 's', EmptyQueryResponse 'I', ParameterDescription 't', and the
@@ -144,21 +146,35 @@ static bool flushBackendPool(PGconn* admin, int hg, const std::vector<ServerRow>
 
 // RAII: force frontend cleartext auth (so pg_lite_client can talk to the proxy
 // without SCRAM) for the whole test, restoring the prior value on exit.
+// IMPORTANT: BAIL_OUT() is exit(255) and skips destructors — every exit path
+// taken AFTER construction must call restore() explicitly first, or the global
+// pgsql-authentication_method=1 would leak into later tests on infra failure.
+// restore() is idempotent, so the destructor calling it again is harmless.
 struct AuthMethodScope {
 	PGconn* admin;
 	std::string saved;
 	bool ok = false;
+	bool restored = false;
 	explicit AuthMethodScope(PGconn* a) : admin(a) {
 		saved = adminScalar(admin,
 			"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-authentication_method'");
+		if (saved.empty()) {
+			// Cannot read the current value -> do NOT change it (we could never
+			// restore); the caller bails out with restore() a no-op.
+			diag("AuthMethodScope: cannot read pgsql-authentication_method");
+			return;
+		}
 		ok = execAdmin(admin, "SET pgsql-authentication_method=1") &&
 		     execAdmin(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
 	}
-	~AuthMethodScope() {
-		if (saved.empty()) return;
+	void restore() {
+		if (restored) return;
+		restored = true;
+		if (saved.empty()) return;  // never changed
 		execAdmin(admin, "SET pgsql-authentication_method=" + saved);
 		execAdmin(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
 	}
+	~AuthMethodScope() { restore(); }
 	AuthMethodScope(const AuthMethodScope&) = delete;
 	AuthMethodScope& operator=(const AuthMethodScope&) = delete;
 };
@@ -202,46 +218,68 @@ static std::string errSqlstate(const std::vector<uint8_t>& body) {
 }
 
 // One normalized token per message. Returns "" for messages that are dropped.
-static std::string normToken(char type, const std::vector<uint8_t>& payload) {
+// `reduce_errors` applies normalization #2 (E/N -> SQLSTATE) and must be set
+// ONLY for frames whose errors ProxySQL synthesizes locally; frames with
+// backend-generated errors compare the full E/N payload.
+static std::string normToken(char type, const std::vector<uint8_t>& payload, bool reduce_errors) {
 	switch (type) {
 	case 'S':  // ParameterStatus — dropped (normalization #1)
 		return "";
-	case 'E':  // ErrorResponse — reduce to SQLSTATE (normalization #2)
-		return "E{C=" + errSqlstate(payload) + "}";
-	case 'N':  // NoticeResponse — reduce to SQLSTATE (normalization #2)
-		return "N{C=" + errSqlstate(payload) + "}";
+	case 'E':  // ErrorResponse
+	case 'N':  // NoticeResponse
+		if (reduce_errors)  // normalization #2, synthesized-error frames only
+			return std::string(1, type) + "{C=" + errSqlstate(payload) + "}";
+		break;  // backend-generated on both legs -> full-payload path below
 	case 'Z': {  // ReadyForQuery — keep transaction-status byte
 		char s = payload.empty() ? '?' : (char)payload[0];
 		return std::string("Z{") + s + "}";
 	}
-	default: {
-		// Everything else compared in full: type + raw payload bytes.
-		std::stringstream ss;
-		ss << type << "[";
-		for (uint8_t b : payload) {
-			// printable payload bytes verbatim, others as \xNN, so text tags
-			// ("SELECT 1") stay readable in mismatch diagnostics.
-			if (b >= 0x20 && b < 0x7f && b != '\\') ss << (char)b;
-			else { char h[6]; snprintf(h, sizeof(h), "\\x%02x", b); ss << h; }
-		}
-		ss << "]";
-		return ss.str();
+	default:
+		break;
 	}
+	// Everything else compared in full: type + raw payload bytes.
+	std::stringstream ss;
+	ss << type << "[";
+	for (uint8_t b : payload) {
+		// printable payload bytes verbatim, others as \xNN, so text tags
+		// ("SELECT 1") stay readable in mismatch diagnostics.
+		if (b >= 0x20 && b < 0x7f && b != '\\') ss << (char)b;
+		else { char h[6]; snprintf(h, sizeof(h), "\\x%02x", b); ss << h; }
 	}
+	ss << "]";
+	return ss.str();
 }
 
 // Read backend messages until (and including) the first ReadyForQuery 'Z',
 // returning the concatenation of their normalized tokens.
-static std::string collectUntilReady(PgConnection& c) {
+static std::string collectUntilReady(PgConnection& c, bool reduce_errors = false) {
 	std::string out;
 	char type;
 	std::vector<uint8_t> buf;
 	while (true) {
 		c.readMessage(type, buf);
-		out += normToken(type, buf);
+		out += normToken(type, buf, reduce_errors);
 		if (type == 'Z') break;
 	}
 	return out;
+}
+
+// ---------------------------------------------------------------------------
+// Native-path verification via the proxysql log (coverage truthfulness): a
+// case only counts as "native" if no libpq-fallback warning appeared during
+// its proxy leg. Same drain/scan pattern as pgsql-native_prepared-t.
+// ---------------------------------------------------------------------------
+static std::fstream f_proxysql_log{};
+
+static void drainLogToNow() {
+	get_matching_lines(f_proxysql_log, "__no_such_marker_line__");
+}
+
+static bool nativeFallbackObserved() {
+	// Matches the connection-level auth-capability-gap fallback and any future
+	// extended-query "falling back to libpq" warning.
+	const std::string re = ".*falling back to libpq.*";
+	return wait_for_log_match(f_proxysql_log, re, 500, 100);
 }
 
 // Read messages until 'Z' but return the raw (type,payload) list — used by the
@@ -318,7 +356,9 @@ static std::string script_txn(PgConnection& c) {
 	out += collectUntilReady(c);
 	c.executePortal("p1", 0, false);    // Frame 5: undefined cursor
 	c.sendSync();
-	out += collectUntilReady(c);
+	// reduce_errors: the proxy SYNTHESIZES this undefined-cursor ErrorResponse
+	// (registry miss) — compare at SQLSTATE level (normalization #2).
+	out += collectUntilReady(c, /*reduce_errors=*/true);
 	return out;
 }
 
@@ -332,7 +372,8 @@ static std::string script_sync_destroy(PgConnection& c) {
 	out += collectUntilReady(c);
 	c.executePortal("p1", 0, false);    // Frame 2: portal gone
 	c.sendSync();
-	out += collectUntilReady(c);
+	// reduce_errors: synthesized undefined-cursor (registry miss), see script_txn.
+	out += collectUntilReady(c, /*reduce_errors=*/true);
 	return out;
 }
 
@@ -373,17 +414,21 @@ static OpRecord runDifferential(const std::string& label, const std::string& kin
 		auto ca = connectBackend();
 		a = fn(*ca);
 		ca->disconnect();
+		drainLogToNow();  // scope the fallback scan to THIS case's proxy leg
 		auto cb = connectProxy();
 		b = fn(*cb);
 		cb->disconnect();
 		ran = true;
 	} catch (const PgException& e) {
-		return {label, kind, false, true, std::string("exception: ") + e.what()};
+		return {label, kind, false, false, std::string("exception: ") + e.what()};
 	}
+	// Coverage truthfulness: "native" is VERIFIED from the proxysql log (no
+	// libpq-fallback warning during the proxy leg), not assumed.
+	bool fell_back = nativeFallbackObserved();
 	bool match = ran && (a == b);
 	std::string detail = "backend='" + a + "'";
 	if (!match) detail += " proxy='" + b + "'";
-	return {label, kind, match, true, detail};
+	return {label, kind, match, !fell_back, detail};
 }
 
 int main(int /*argc*/, char** /*argv*/) {
@@ -403,8 +448,18 @@ int main(int /*argc*/, char** /*argv*/) {
 	diag("Backend (leg A, SCRAM): %s:%d  |  Proxy (leg B, cleartext): %s:%d",
 	     cl.pgsql_server_host, cl.pgsql_server_port, cl.pgsql_host, cl.pgsql_port);
 
+	// Open the proxysql log for the native-fallback tripwire (FIX 4) BEFORE the
+	// auth scope: BAIL_OUT skips destructors, so nothing that must be undone may
+	// precede a bail-able step without an explicit restore.
+	std::string log_path = get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log";
+	if (open_file_and_seek_end(log_path, f_proxysql_log) != EXIT_SUCCESS) {
+		BAIL_OUT("Cannot open ProxySQL log at %s", log_path.c_str());
+		return exit_status();
+	}
+
 	AuthMethodScope auth_scope(admin.get());
 	if (!auth_scope.ok) {
+		auth_scope.restore();  // BAIL_OUT is exit(255): destructor never runs
 		BAIL_OUT("failed to force frontend cleartext (pgsql-authentication_method=1)");
 		return exit_status();
 	}
@@ -427,6 +482,7 @@ int main(int /*argc*/, char** /*argv*/) {
 
 	// ---- Native mode + fresh native-only pool for the differential corpus ----
 	if (!setNativeMode(admin.get(), true) || !flushBackendPool(admin.get(), BACKEND_HG, saved)) {
+		auth_scope.restore();  // BAIL_OUT is exit(255): destructor never runs
 		BAIL_OUT("failed to enable native mode / flush pool");
 		return exit_status();
 	}
@@ -449,23 +505,51 @@ int main(int /*argc*/, char** /*argv*/) {
 	cov.record(runDifferential("PORTAL_ERR_BIND_DUP: Bind same portal twice, no close",
 		"PORTAL_ERR_BIND_DUP", script_bind_dup));
 
-	// ---- Case 4 addendum: multiplexing — after COMMIT invalidated the portal
-	// the sticky pin must release and the backend conn return to the pool. Poll
-	// stats_pgsql_connection_pool until ConnUsed for hg0 drains to 0 (all our
-	// raw clients have disconnected by now). ----
+	// ---- Case 4 addendum: multiplexing pin release, asserted NON-vacuously.
+	// The raw client STAYS CONNECTED AND IDLE while we watch the admin stats:
+	//   * during the explicit txn (portal p1 bound, Sync'd) the backend conn is
+	//     attached to the session -> SUM(ConnUsed)=1 for the hostgroup;
+	//   * after COMMIT completes, the txn ended AND the txn-'I' clear destroyed
+	//     the named portal, so the sticky portal pin must release and the conn
+	//     return to the pool -> SUM(ConnUsed) drops to 0 WHILE the client is
+	//     still connected.
+	// If the pin release were broken (e.g. named_portals surviving the txn-'I'
+	// clear kept sticky_backend_connection true), ConnUsed would stay 1 for the
+	// whole 5s window and this fails. The client disconnects only AFTER the
+	// poll, so session teardown cannot fake the release (the previous version
+	// polled after disconnect, which passes regardless — vacuous).
 	{
-		int conn_used = -1;
-		for (int i = 0; i < 30; i++) {
+		int used_in_txn = -1, used_after = -1;
+		bool released = false;
+		std::string err;
+		auto pollConnUsed = [&](void) -> int {
 			std::string v = adminScalar(admin.get(),
 				"SELECT SUM(ConnUsed) FROM stats_pgsql_connection_pool WHERE hostgroup="
 				+ std::to_string(BACKEND_HG));
-			conn_used = v.empty() ? -1 : atoi(v.c_str());
-			if (conn_used == 0) break;
-			usleep(100000);
-		}
-		ok(conn_used == 0,
-		   "Multiplexing: backend conn returned to pool after portal invalidation (ConnUsed=%d)",
-		   conn_used);
+			return v.empty() ? -1 : atoi(v.c_str());
+		};
+		try {
+			auto c = connectProxy();
+			c->execute("BEGIN");
+			c->consumeInputUntilReady();
+			c->prepareStatement("s1", "SELECT $1::int", false);
+			c->bindStatement("s1", "p1", {{std::string("5"), 0}}, {}, false);
+			c->sendSync();
+			c->consumeInputUntilReady();
+			used_in_txn = pollConnUsed();          // expect 1: pinned by open txn+portal
+			c->execute("COMMIT");
+			c->consumeInputUntilReady();
+			for (int i = 0; i < 50; i++) {         // bounded window: <= 5s
+				used_after = pollConnUsed();
+				if (used_after == 0) { released = true; break; }
+				usleep(100000);
+			}
+			c->disconnect();                       // AFTER the poll — see above
+		} catch (const PgException& e) { err = e.what(); }
+		ok(released && used_in_txn == 1,
+		   "Multiplexing pin release: ConnUsed %d (in txn, portal bound) -> %d within 5s of "
+		   "COMMIT+portal-invalidation, client still connected%s%s",
+		   used_in_txn, used_after, err.empty() ? "" : " -- ", err.c_str());
 	}
 
 	// ---- Case 8: libpq-mode named-Bind reject (leg B only, regression guard
@@ -513,11 +597,14 @@ int main(int /*argc*/, char** /*argv*/) {
 	{
 		std::string native_seq, libpq_seq, detail;
 		bool eq = false;
+		bool fell_back = true;  // pessimistic until the native phase is log-verified
 		try {
 			if (setNativeMode(admin.get(), true) && flushBackendPool(admin.get(), BACKEND_HG, saved)) {
+				drainLogToNow();  // scope the fallback scan to the native phase
 				auto c = connectProxy();
 				native_seq = script_unnamed(*c);
 				c->disconnect();
+				fell_back = nativeFallbackObserved();
 			}
 			if (setNativeMode(admin.get(), false) && flushBackendPool(admin.get(), BACKEND_HG, saved)) {
 				auto c = connectProxy();
@@ -529,7 +616,7 @@ int main(int /*argc*/, char** /*argv*/) {
 			if (!eq) detail += " libpq='" + libpq_seq + "'";
 		} catch (const PgException& e) { detail = std::string("exception: ") + e.what(); }
 		cov.record({"PORTAL_UNNAMED_UNCHANGED: native==libpq client-visible unnamed cycle",
-			"PORTAL_UNNAMED_UNCHANGED", eq, true, detail});
+			"PORTAL_UNNAMED_UNCHANGED", eq, !fell_back, detail});
 	}
 
 	// Restore defaults.
