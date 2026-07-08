@@ -31,5 +31,9 @@ done
 SQL_TEMPLATE=$(cat ./conf/proxysql/infra-config.sql)
 SQL_CONTENT=$(eval "echo \"${SQL_TEMPLATE}\"")
 
-# Apply configuration via docker exec using psql (ProxySQL Admin supports PG protocol on port 6132).
-echo "${SQL_CONTENT}" | docker exec -i "${PROXY_CONTAINER}" env PGPASSWORD='admin' psql -h127.0.0.1 -p6132 -Uadmin -dadmin
+# Apply configuration via docker exec using psql (ProxySQL Admin supports PG
+# protocol on port 6132). ON_ERROR_STOP=1 makes psql abort with a non-zero
+# exit on the FIRST SQL-level error (bad token, constraint violation, ...);
+# without it psql prints the error, keeps going, and exits 0 -- silently
+# defeating set -e and this script's fail-non-zero contract.
+echo "${SQL_CONTENT}" | docker exec -i "${PROXY_CONTAINER}" env PGPASSWORD='admin' psql -v ON_ERROR_STOP=1 -h127.0.0.1 -p6132 -Uadmin -dadmin
