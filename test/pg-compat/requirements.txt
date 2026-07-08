@@ -1,0 +1,4 @@
+psycopg[binary]==3.2.*
+asyncpg==0.30.*
+pytest==8.*
+tomli==2.*

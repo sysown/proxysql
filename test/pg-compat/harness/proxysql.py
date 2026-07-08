@@ -1,0 +1,67 @@
+"""Admin config primitive for the pg-compat suite.
+
+Talks to ProxySQL's admin interface over the PG wire protocol (port 6132)
+via psycopg. Provides the read/SET/LOAD/snapshot/restore cycle that later
+pg-compat tests use to flip a runtime variable, exercise behavior, and put
+the variable back.
+
+Deviation from the brief: the brief's DSN used user/password `admin`/`admin`.
+Empirically, ProxySQL's PG-protocol admin interface rejects the literal
+username `admin` from any peer that is not 127.0.0.1/::1/localhost
+(PgSQL_Session.cpp: "User '%s' can only connect locally" — the check is a
+strcmp() against the literal string "admin", scoped to the ADMIN_HOSTGROUP
+default hostgroup). Since this harness always connects from a separate
+container over the docker network, the literal `admin` user can never log
+in here. ProxySQL ships a second admin credential pair via
+`admin-admin_credentials` (default `admin:admin;radmin:radmin`) where
+`radmin` maps to the same ADMIN_HOSTGROUP/privileges but is NOT subject to
+the localhost-only check (the strcmp only matches "admin"). So this harness
+authenticates as radmin/radmin, verified against the running sdd-sp2 infra:
+  docker exec <dbdeployer> psql -h proxysql -p 6132 -U admin  -d admin ...  -> FATAL: User 'admin' can only connect locally
+  docker exec <dbdeployer> psql -h proxysql -p 6132 -U radmin -d admin ...  -> works
+"""
+import os
+
+import psycopg
+
+
+def _admin_dsn():
+    host = os.environ["PGCOMPAT_ADMIN_HOST"]
+    port = os.environ["PGCOMPAT_ADMIN_PORT"]
+    # See module docstring: "admin" is restricted to loopback connections
+    # only; "radmin" carries the same admin privileges without that
+    # restriction, so it is what a remote (containerized) client must use.
+    return f"host={host} port={port} user=radmin password=radmin dbname=admin sslmode=disable"
+
+
+class Admin:
+    def __init__(self):
+        self.conn = psycopg.connect(_admin_dsn(), autocommit=True)
+
+    def query(self, sql):
+        with self.conn.cursor() as cur:
+            cur.execute(sql)
+            return cur.fetchall() if cur.description else None
+
+    def set_var(self, name, value):
+        # Verified empirically against the running admin: both
+        # `SET name=1` and `SET name='1'` are accepted and applied
+        # identically for a numeric variable (pgsql-authentication_method).
+        # Quote only non-numeric strings, matching the brief.
+        self.query(f"SET {name}={value!r}" if isinstance(value, str) else f"SET {name}={value}")
+
+    def load_vars(self):
+        self.query("LOAD PGSQL VARIABLES TO RUNTIME")
+
+    def snapshot(self, var_names):
+        placeholders = ",".join(f"'{v}'" for v in var_names)
+        rows = self.query(
+            "SELECT variable_name, variable_value FROM global_variables "
+            f"WHERE variable_name IN ({placeholders})"
+        )
+        return dict(rows)
+
+    def restore(self, saved):
+        for name, value in saved.items():
+            self.set_var(name, value)
+        self.load_vars()
