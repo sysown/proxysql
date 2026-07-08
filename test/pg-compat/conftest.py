@@ -1,4 +1,5 @@
 import os
+import warnings
 
 import psycopg
 import pytest
@@ -48,11 +49,26 @@ _XFAILS = {e["test_id"]: e for e in _xfail.load()}
 
 
 def pytest_collection_modifyitems(config, items):
+    matched_ids = set()
     for item in items:
         entry = _XFAILS.get(item.nodeid)
         if entry:
+            matched_ids.add(item.nodeid)
             item.add_marker(
                 pytest.mark.xfail(
                     reason=f'{entry["reason"]} ({entry["ref"]})', strict=False
                 )
+            )
+
+    # Catalogue hygiene: a [[xfail]] entry whose test_id matched NO collected
+    # item is currently a silent no-op (e.g. a typo'd nodeid, or a test that
+    # was renamed/removed without updating xfail.toml). Warn -- don't fail
+    # collection -- so a stale/typo'd entry is visible in the run instead of
+    # quietly doing nothing forever.
+    for test_id in _XFAILS:
+        if test_id not in matched_ids:
+            warnings.warn(
+                f"xfail.toml entry test_id={test_id!r} matched no collected "
+                f"test item -- stale or typo'd entry?",
+                stacklevel=1,
             )

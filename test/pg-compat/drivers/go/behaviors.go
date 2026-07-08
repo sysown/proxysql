@@ -110,8 +110,13 @@ func transactions() error {
 	defer conn.Close(ctx)
 
 	// Cleanup runs on success AND on failure (defer), leaving no state
-	// behind, same as the Python behavior's try/finally.
+	// behind, same as the Python behavior's try/finally. Parity with
+	// Java/Node/Prisma: best-effort ROLLBACK first (error ignored) restores
+	// a usable session state before the DROP -- if a non-assertion error
+	// above left the connection mid-transaction, an aborted implicit
+	// transaction would otherwise reject the DROP.
 	defer func() {
+		conn.Exec(ctx, "ROLLBACK")
 		conn.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s", txTable))
 	}()
 
