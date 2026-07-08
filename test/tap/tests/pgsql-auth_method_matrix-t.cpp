@@ -56,7 +56,7 @@ int main(int argc, char** argv) {
 
     // Per method: (login succeeds + query runs) AND (observed challenge type matches floor).
     // Task 1 lands cleartext only (2 assertions); Tasks 2-3 add md5, scram, and failures.
-    plan(4);
+    plan(9);
 
     MYSQL* admin = admin_connect();
     if (!admin) BAIL_OUT("cannot reach admin");
@@ -75,6 +75,22 @@ int main(int argc, char** argv) {
     ok(try_frontend_login(cl.pgsql_username, cl.pgsql_password, md5_auth),
        "md5 floor: login + query succeed");
     ok(md5_auth == 5, "md5 floor: ProxySQL presented challenge type 5 (got %d)", md5_auth);
+
+    // --- SCRAM floor (method = 3) -> expect challenge type 10 on the wire ---
+    set_frontend_auth_method(admin, 3);
+    int scram_auth = 0;
+    ok(try_frontend_login(cl.pgsql_username, cl.pgsql_password, scram_auth),
+       "scram floor: login + query succeed");
+    ok(scram_auth == 10, "scram floor: ProxySQL presented SASL/SCRAM challenge type 10 (got %d)", scram_auth);
+
+    // --- Wrong-password failure paths, one per floor (challenge type irrelevant) ---
+    int ignore = 0;
+    set_frontend_auth_method(admin, 1);
+    ok(!try_frontend_login(cl.pgsql_username, "wrong-pw", ignore), "cleartext floor: wrong password rejected");
+    set_frontend_auth_method(admin, 2);
+    ok(!try_frontend_login(cl.pgsql_username, "wrong-pw", ignore), "md5 floor: wrong password rejected");
+    set_frontend_auth_method(admin, 3);
+    ok(!try_frontend_login(cl.pgsql_username, "wrong-pw", ignore), "scram floor: wrong password rejected");
 
     // restore default before exit
     set_frontend_auth_method(admin, 3);
