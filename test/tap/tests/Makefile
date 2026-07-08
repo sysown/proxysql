@@ -149,6 +149,8 @@ tests: tests-cpp \
 	test_ssl_fast_forward-2_libmysql-t \
 	test_ssl_fast_forward-3_libmariadb-t \
 	test_ssl_fast_forward-3_libmysql-t \
+	setparser_parsersql_test setparser_parsersql_test-t \
+	parsersql_digest_test parsersql_digest_test-t \
 	setparser_test2 setparser_test2-t \
 	setparser_test3 setparser_test3-t \
 	set_testing-240.csv \
@@ -438,7 +440,7 @@ clean:
 	rm -f *-t || true
 	rm -f galera_1_timeout_count galera_2_timeout_no_count aurora || true
 	rm -f generate_set_session_csv set_testing-240.csv || true
-	rm -f setparser_test setparser_test2 setparser_test3  || true
+	rm -f setparser_test setparser_test2 setparser_test3 setparser_parsersql_test parsersql_digest_test || true
 	rm -f reg_test_3504-change_user_libmariadb_helper reg_test_3504-change_user_libmysql_helper || true
 
 setparser_parsersql_test-t: setparser_parsersql_test
@@ -457,3 +459,6 @@ ifeq ($(PROXYSQL40),1)
 else
 	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) $(PARSERSQL_LDIR)/libsqlparser.a -o $@
 endif
+
+parsersql_digest_test-t: parsersql_digest_test
+	ln -fs parsersql_digest_test parsersql_digest_test-t
