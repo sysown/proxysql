@@ -3,10 +3,10 @@
 
 Exercises two specific behaviours from issue #5678:
 
-1. PROXYSQL SHUTDOWN mid-traffic: open N X-Protocol clients running
-   steady queries, issue `PROXYSQL SHUTDOWN` through the admin port,
-   verify each client sees a clean Mysqlx::Error frame with code 1053
-   instead of a TCP RST.
+1. PROXYSQL SHUTDOWN SLOW mid-traffic: open N X-Protocol clients
+   running steady queries, issue `PROXYSQL SHUTDOWN SLOW` through the
+   admin port, verify each client sees a clean Mysqlx::Error frame
+   with code 1053 instead of a TCP RST.
 
 2. LOAD MYSQLX ROUTES TO RUNTIME mid-traffic: open N clients on a
    route, drop the route from admin, reload, verify in-flight sessions
@@ -95,7 +95,7 @@ def steady_traffic_thread(args, stop_event, results: List[dict], idx: int):
 
 
 def issue_admin_shutdown(args):
-    print("Issuing `PROXYSQL SHUTDOWN` through the admin port ...")
+    print("Issuing `PROXYSQL SHUTDOWN SLOW` through the admin port ...")
     try:
         import mysql.connector  # admin port speaks classic protocol
     except ImportError as e:
@@ -111,7 +111,7 @@ def issue_admin_shutdown(args):
         )
         cur = adm.cursor()
         try:
-            cur.execute("PROXYSQL SHUTDOWN")
+            cur.execute("PROXYSQL SHUTDOWN SLOW")
             print("Admin shutdown command accepted.")
             return True
         except Exception as e:
@@ -134,7 +134,7 @@ def issue_admin_shutdown(args):
 
 
 def scenario_shutdown(args):
-    print("=== Scenario 1: PROXYSQL SHUTDOWN mid-traffic ===")
+    print("=== Scenario 1: PROXYSQL SHUTDOWN SLOW mid-traffic ===")
     stop = threading.Event()
     results: List[dict] = []
     threads = [

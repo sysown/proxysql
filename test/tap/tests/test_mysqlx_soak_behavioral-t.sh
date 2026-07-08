@@ -10,7 +10,7 @@
 # password 'alicepass' provisioned.
 #
 # This wrapper emits exactly two TAP assertions:
-#   1. the PROXYSQL SHUTDOWN mid-traffic scenario from behavioral_validation.py
+#   1. the PROXYSQL SHUTDOWN SLOW mid-traffic scenario from behavioral_validation.py
 #   2. the LOAD MYSQLX ROUTES TO RUNTIME mid-traffic scenario
 # Each assertion is "ok" if behavioral_validation.py exited 0 for that
 # scenario. The Python script's own internal asserts produce
@@ -52,7 +52,7 @@ PROXY_CONTAINER="proxysql.${INFRA_ID:-dev-$USER}"
 
 echo "1..2"
 
-# Scenario 1: PROXYSQL SHUTDOWN mid-traffic
+# Scenario 1: PROXYSQL SHUTDOWN SLOW mid-traffic
 shutdown_scenario() {
     if python3 "${HARNESS}" \
         --proxysql-host "${PROXYSQL_HOST}" --proxysql-port "${PROXYSQL_PORT}" \
@@ -61,10 +61,10 @@ shutdown_scenario() {
         --clients 5 --scenario shutdown \
         2>&1 | sed 's/^/# /'
     then
-        echo "ok 1 - PROXYSQL SHUTDOWN mid-traffic: every client received clean Mysqlx::Error 1053"
+        echo "ok 1 - PROXYSQL SHUTDOWN SLOW mid-traffic: every client received clean Mysqlx::Error 1053"
         return 0
     else
-        echo "not ok 1 - PROXYSQL SHUTDOWN mid-traffic: at least one client saw TCP RST or non-1053 error"
+        echo "not ok 1 - PROXYSQL SHUTDOWN SLOW mid-traffic: at least one client saw TCP RST or non-1053 error"
         return 1
     fi
 }
