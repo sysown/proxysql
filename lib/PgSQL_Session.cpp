@@ -3696,14 +3696,22 @@ handler_again:
 					}
 				}
 
-				// --- Named-portal lifetime + pinning (Task P1) ---
+				// --- Named-portal lifetime + pinning (Task P1; simple-query fix P3) ---
 				// At a true cycle boundary (frame fully drained), if the drained
 				// ReadyForQuery reported txn-state 'I' the backend destroyed all
 				// portals (transaction end, or the implicit txn of an autocommit
 				// Sync) — drop the registry to match. Mid-frame (has_pending_messages)
 				// the 'Z' has not arrived, so native_txn_status is stale: skip.
-				if (processing_extended_query && !has_pending_messages &&
-					myconn->native_txn_status == 'I') {
+				// NOT gated on processing_extended_query: a SIMPLE-query COMMIT /
+				// ROLLBACK ends the transaction and destroys every portal server-side
+				// too; the old extended-only gate left stale registry entries whose
+				// sticky pin (below) kept the backend conn attached to the session
+				// forever (found by pgsql-native_portals-t's pin-release check).
+				// libpq-safe: named_portals can only be non-empty in native mode
+				// (named Bind is native-only) and clear_named_portals() is a no-op
+				// when empty, so a libpq conn's unmaintained native_txn_status is
+				// never acted upon.
+				if (!has_pending_messages && myconn->native_txn_status == 'I') {
 					clear_named_portals();
 				}
 				// Pin the backend while named portals are open (same intent as the
