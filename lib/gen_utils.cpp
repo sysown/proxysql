@@ -388,6 +388,9 @@ time_t realtime_to_monotonic_time(time_t rt) {
 	time(&rt_now);
 
 	return ((mt_now - rt_now + rt) * 1000000);
+}
+
+/**
  * Strip schema prefix from the query
  *
  * @param query The input query
