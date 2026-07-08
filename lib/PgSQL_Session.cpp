@@ -3564,7 +3564,22 @@ handler_again:
 				// see bug #3549
 				if (locked_on_hostgroup >= 0) {
 					assert(myconn != NULL);
-					assert(myconn->pgsql_conn != NULL);
+					// In libpq mode the backend PGconn is authoritative and must be
+					// live here; in native mode pgsql_conn is PERMANENTLY NULL (the
+					// wire is driven by myconn->bp, txn-state lives in
+					// native_txn_status), so the libpq-only assert must not run —
+					// it would abort on every native op under a hostgroup lock
+					// (bug #3549 follow-up). The autocommit copy itself is
+					// intentionally omitted for PostgreSQL in BOTH modes: PG has no
+					// server-tracked SERVER_STATUS_AUTOCOMMIT flag (autocommit is a
+					// client-side notion; backend txn state is the ReadyForQuery
+					// 'I'/'T'/'E' byte, surfaced via get_pg_transaction_status()).
+					// The copy line has been commented out for libpq since the
+					// #3549 PG port (b01792cae9), so it is dead code regardless of
+					// mode; only the mode-appropriate liveness assert remains.
+					if (!myconn->native_mode) {
+						assert(myconn->pgsql_conn != NULL);
+					}
 					//autocommit = myconn->pgsql->server_status & SERVER_STATUS_AUTOCOMMIT;
 				}
 
