@@ -41,7 +41,8 @@ static bool try_frontend_login(const std::string& user, const std::string& passw
         PgConnection c(2000);
         c.connect(cl.pgsql_host, cl.pgsql_port, user /*dbname==user in this infra*/, user, password);
         observed_auth_type = c.getLastAuthType();
-        c.execute("SELECT 1");   // #5865 runs NO queries; proving the session works is our value-add
+        c.execute("SELECT 1");           // #5865 runs NO queries; proving the session works is our value-add
+        c.consumeInputUntilReady();      // actually round-trip the query (execute() only sends): wait for ReadyForQuery
         c.disconnect();
         return true;
     } catch (const PgException& e) {
@@ -61,7 +62,8 @@ int main(int argc, char** argv) {
     if (!admin) BAIL_OUT("cannot reach admin");
 
     // --- Cleartext floor (method = 1) -> expect challenge type 3 on the wire ---
-    set_frontend_auth_method(admin, 1);   // affects NEW frontend connections
+    if (!set_frontend_auth_method(admin, 1))   // affects NEW frontend connections
+        BAIL_OUT("could not configure cleartext auth floor (admin SET/LOAD failed)");
     int auth_type = 0;
     bool logged_in = try_frontend_login(cl.pgsql_username, cl.pgsql_password, auth_type);
     ok(logged_in, "cleartext floor: login + query succeed");
