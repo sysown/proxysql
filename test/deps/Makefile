@@ -37,7 +37,7 @@ endif
 mariadb_client: mariadb-connector-c/mariadb-connector-c/libmariadb/libmariadbclient.a
 
 mysql-connector-c/mysql-boost-5.7.44.tar.gz:
-	cd mysql-connector-c && curl -C - -O -s https://cdn.mysql.com//Downloads/MySQL-5.7/mysql-boost-5.7.44.tar.gz || wget -nc -q https://cdn.mysql.com//Downloads/MySQL-5.7/mysql-boost-5.7.44.tar.gz
+	cd mysql-connector-c && rm -f mysql-boost-5.7.44.tar.gz.part && curl -fL --retry 5 --retry-all-errors --retry-delay 5 --connect-timeout 30 -o mysql-boost-5.7.44.tar.gz.part https://cdn.mysql.com//Downloads/MySQL-5.7/mysql-boost-5.7.44.tar.gz && gzip -t mysql-boost-5.7.44.tar.gz.part && mv mysql-boost-5.7.44.tar.gz.part mysql-boost-5.7.44.tar.gz
 
 mysql-connector-c/mysql-connector-c/libmysql/libmysqlclient.a: mysql-connector-c/mysql-boost-5.7.44.tar.gz
 	cd mysql-connector-c && rm -rf mysql-*/ || true
@@ -72,7 +72,7 @@ endif
 mysql_client: mysql-connector-c/mysql-connector-c/libmysql/libmysqlclient.a
 
 mysql-connector-c-8.4.0/mysql-8.4.0.tar.gz:
-	cd mysql-connector-c-8.4.0 && curl -C - -O -s https://cdn.mysql.com//Downloads/MySQL-8.4/mysql-8.4.0.tar.gz || wget -nc -q https://cdn.mysql.com//Downloads/MySQL-8.4/mysql-8.4.0.tar.gz
+	cd mysql-connector-c-8.4.0 && rm -f mysql-8.4.0.tar.gz.part && curl -fL --retry 5 --retry-all-errors --retry-delay 5 --connect-timeout 30 -o mysql-8.4.0.tar.gz.part https://cdn.mysql.com//Downloads/MySQL-8.4/mysql-8.4.0.tar.gz && gzip -t mysql-8.4.0.tar.gz.part && mv mysql-8.4.0.tar.gz.part mysql-8.4.0.tar.gz
 
 mysql-connector-c-8.4.0/mysql-connector-c/libmysql/libmysqlclient.a: mysql-connector-c-8.4.0/mysql-8.4.0.tar.gz
 	cd mysql-connector-c-8.4.0 && rm -rf mysql-*/ || true
