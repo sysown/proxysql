@@ -42,7 +42,10 @@ jobs:
 #        fi
 
   builds:
-    runs-on: ubuntu-24.04
+    # Route to the self-hosted proxysql-ci pool only when: the actor is renecannao
+    # (trusted) AND this workflow is listed in the SELFHOSTED_WORKFLOWS repo variable.
+    # Otherwise fall back to GitHub-hosted ubuntu-24.04. Empty/absent variable = no routing.
+    runs-on: ${{ (github.actor == 'renecannao' || (inputs.trigger && fromJson(inputs.trigger).event.workflow_run.actor.login == 'renecannao')) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) && fromJson('["self-hosted","proxysql-ci"]') || 'ubuntu-24.04' }}
 #    needs: [ lock ]
 #    outputs:
 #      matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -182,6 +185,10 @@ jobs:
           # matching \-test|\-tap and selects build_tap_test_debug; -dbg takes the else
           # branch which only builds src/proxysql, leaving test/tap/tests/**/*-t unbuilt
           # (silent false-green — see v3.0 doc/GH-Actions/README.md debugging section).
+          # On shared self-hosted runners, cap build parallelism so concurrent
+          # jobs don't oversubscribe the box (Makefile honours MAKEOPT ?=, and it
+          # propagates into the build container via docker-compose + entrypoint.bash).
+          if [ "${{ runner.environment }}" = "self-hosted" ]; then export MAKEOPT="-j8"; fi
           make ${{ matrix.dist }}-tap | tee ci_build_log/build-tap.log
           
           # create matrix of all test folders containing *-t
