@@ -7,9 +7,10 @@ echo "dbdeployer entrypoint: deploying PostgreSQL 17 streaming replication"
 echo "  (1 primary + 2 replicas, master-slave topology)"
 echo "========================================================================"
 
-# Passed in via docker-compose environment.
+# Passed in via docker-compose environment. (Unlike the MySQL GR reference,
+# INFRA is not needed here: PG has no report_host equivalent and no per-infra
+# role is provisioned.)
 ROOT_PASSWORD="${ROOT_PASSWORD:-default_password}"
-INFRA="${INFRA:-infra-dbdeployer-pgsql17-repl}"
 
 # ---------------------------------------------------------------------------
 # 1. Detect the pre-baked PostgreSQL version (unpacked at image-build time).
@@ -150,6 +151,9 @@ ${PSQL_PRIMARY} -v ON_ERROR_STOP=1 -c "SET client_min_messages='error';" \
     -c "CREATE DATABASE testuser OWNER testuser;"
 psql -h 127.0.0.1 -p "${PRIMARY_PORT}" -U postgres -d testuser -v ON_ERROR_STOP=1 \
     -c "SET client_min_messages='error';" -c "GRANT ALL ON SCHEMA public TO testuser;"
+# Intentional second grant: the same grant against the 'postgres' database's
+# public schema, since some tests use 'postgres' as their default DB (mirrors
+# docker-pgsql16-single/bin/docker-pgsql-post.bash, which grants on both).
 ${PSQL_PRIMARY} -v ON_ERROR_STOP=1 \
     -c "SET client_min_messages='error';" -c "GRANT ALL ON SCHEMA public TO testuser;"
 

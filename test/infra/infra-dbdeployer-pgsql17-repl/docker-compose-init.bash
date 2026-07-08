@@ -126,7 +126,7 @@ if [ -f /.dockerenv ]; then
         docker network connect "${INFRA_ID}_backend" "${RUNNER_ID}" || true
 fi
 
-# 6. Wait for dbdeployer entrypoint to finish MySQL deployment
+# 6. Wait for dbdeployer entrypoint to finish PostgreSQL deployment
 CONTAINER="${COMPOSE_PROJECT}-dbdeployer1-1"
 echo -n "Waiting for dbdeployer to finish deployment..."
 MAX_WAIT=120

@@ -5,7 +5,8 @@ ARG DBDEPLOYER_VERSION=2.2.1
 # PostgreSQL point release to bake in. Pinned so the dbdeployer-derived ports
 # stay fixed at 16710/16711/16712 (ports = 15000 + major*100 + minor, per the
 # Task 1 spike). If PGDG retires this exact point release, bump all three of
-# PG_VERSION/PG_DEB_VERSION and the ports in .env / env.sh together.
+# PG_VERSION/PG_DEB_VERSION and the ports in .env / env.sh together (the ENV
+# PATH below auto-follows PG_VERSION).
 ARG PG_MAJOR=17
 ARG PG_VERSION=17.10
 ARG PG_DEB_VERSION=17.10-1.pgdg22.04+1
@@ -73,8 +74,10 @@ RUN mkdir -p /usr/share/postgresql \
     && ln -sf "/home/pguser/opt/postgresql/${PG_VERSION}/share/postgresql/${PG_MAJOR}" \
        "/usr/share/postgresql/${PG_MAJOR}"
 
-# Make the unpacked psql/pg_isready available on PATH for docker-exec health checks.
-ENV PATH="/home/pguser/opt/postgresql/17.10/bin:${PATH}"
+# Make the unpacked psql/pg_isready available on PATH for docker-exec health
+# checks. ${PG_VERSION} (build ARG, in scope in this stage) is expanded at build
+# time, so the baked ENV holds the concrete versioned path.
+ENV PATH="/home/pguser/opt/postgresql/${PG_VERSION}/bin:${PATH}"
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
