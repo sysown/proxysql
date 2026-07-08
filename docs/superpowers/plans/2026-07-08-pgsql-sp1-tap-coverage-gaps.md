@@ -20,6 +20,22 @@
 
 ---
 
+## Relationship to PR #5865 (PostgreSQL auth) — READ FIRST
+
+PR **#5865** ("SCRAM verifier & md5 credential storage with SCRAM/md5 backend pass-through", open, base `v3.0`) overlaps the auth portion of this plan and must be coordinated with:
+
+- **It already adds** `pgsql-verifier_auth-t` (~10 integration assertions), `pgsql-verifier_passthrough-t` (backend pass-through), and `pgsql_reconcile_unit-t` (9 unit cases) — registered in the **same** `legacy-g4` + `mysql-*-g4` group set this plan uses.
+- **It already covers**, via **libpq**: the credential-storage-type × floor matrix (plaintext / `md5<hex>` / `SCRAM-SHA-256$…` verifier, users created at runtime with `PQencryptPasswordConn()`), floor reconciliation with `pgsql-authentication_method` 1/2/3, out-of-range floor (4) clamping, SCRAM-not-downgraded-under-cleartext-floor, anti-enumeration (identical error templates), and malformed-verifier-rejected-at-LOAD.
+- **It does NOT** assert the wire-level auth **challenge type**, and **runs no queries** — its own note: *"Verifies FRONTEND auth only (connect succeeds/fails); no queries are run."* libpq hides which challenge (cleartext/md5/SASL) ProxySQL actually presented.
+- It keeps `pgsql-authentication_method` an integer floor 1–3 (unchanged), and does **not** add SCRAM-SHA-256-PLUS / channel binding. It does **not** touch `pg_lite_client`.
+
+**Consequences for this plan:**
+1. **De-duplicate.** Do NOT re-test what #5865 covers (storage-type × floor success/fail, anti-enumeration, malformed verifier, backend pass-through). This plan's auth test is repositioned to the **wire-level complement**: assert the *actual challenge type* ProxySQL presents for each floor and that the authenticated session executes a query — neither of which #5865 can do through libpq.
+2. **The MD5/SCRAM enabler (Tasks 2–3) stands unchanged** — #5865 doesn't touch `pg_lite_client`, and SP-2 + the data-type/cursor tests need raw-client MD5/SCRAM regardless.
+3. **Merge order.** Both touch `groups.json` and add pgsql auth tests. Develop this plan **on top of #5865** (or rebase onto it once merged) to avoid `groups.json` conflicts and to reuse its runtime user-creation pattern (`PQencryptPasswordConn()`) for the optional storage-type extension in Task 3 Step 7.
+
+---
+
 ## File Structure
 
 **New test files (all in `test/tap/tests/`):**
@@ -40,20 +56,35 @@
 
 ---
 
-## Task 1: Auth-matrix test scaffold + cleartext case
+## Task 1: Wire-level auth-challenge test scaffold + cleartext case
 
-Establishes the test file, the admin variable-toggling helper, and green coverage for the method ProxySQL already supports through `pg_lite_client` (cleartext, method `1`). No client changes yet.
+**Purpose (post-#5865): the wire-level complement.** #5865 already proves *connect success/fail* per storage-type × floor through libpq. This test proves the thing libpq hides — that ProxySQL presents the **correct challenge type on the wire** for the configured floor, and that the authenticated session **runs a query**. Task 1 establishes the file, the admin floor-toggling helper, a tiny `pg_lite_client` accessor exposing the observed challenge type, and the cleartext case (challenge type `3`, already supported).
 
 **Files:**
 - Create: `test/tap/tests/pgsql-auth_method_matrix-t.cpp`
+- Modify: `test/tap/tests/pg_lite_client.h` + `pg_lite_client.cpp` (add `getLastAuthType()` accessor)
 - Modify: `test/tap/tests/Makefile` (add explicit rule compiling `pg_lite_client.cpp`)
 - Modify: `test/tap/groups/groups.json` (register the test)
 
 **Interfaces:**
 - Consumes: `pg_lite_client.h` `PgConnection::connect/execute`, `command_line.h` `CommandLine`.
-- Produces: helper `static bool set_frontend_auth_method(MYSQL* admin, int method)` and `static bool try_frontend_login(int method, const std::string& user, const std::string& password, bool& got_expected_challenge)` reused by Tasks 2–3 (same file).
+- Produces: `PgConnection::getLastAuthType()` (first non-zero auth request type observed during `connect()`); helpers `set_frontend_auth_method(MYSQL*, int)` and `try_frontend_login(user, password, int& observed_auth_type)` reused by Tasks 2–3.
+- **Challenge-type codes** (PostgreSQL `Authentication*` request type ints): cleartext = `3`, md5 = `5`, SASL/SCRAM = `10`.
 
-- [ ] **Step 1: Write the failing test (cleartext case only)**
+- [ ] **Step 1a: Add the `getLastAuthType()` accessor to pg_lite_client**
+
+In `test/tap/tests/pg_lite_client.h`, add a public member + getter to `PgConnection` (near `getSocket()`):
+
+```cpp
+    inline int getLastAuthType() const { return last_auth_type_; }
+```
+and in the `private:` data section:
+```cpp
+    int last_auth_type_ = 0;
+```
+In `test/tap/tests/pg_lite_client.cpp`, inside `handleAuthentication`, set it the first time a non-zero `authType` is seen — add `if (last_auth_type_ == 0 && authType != 0) last_auth_type_ = authType;` immediately after `authType` is computed from the `AUTH_TYPE` message (so cleartext records `3`; Tasks 2–3 will make it record `5`/`10`).
+
+- [ ] **Step 1b: Write the failing test (cleartext case)**
 
 Create `test/tap/tests/pgsql-auth_method_matrix-t.cpp`:
 
@@ -88,12 +119,17 @@ static bool set_frontend_auth_method(MYSQL* admin, int method) {
     return true;
 }
 
-// Attempts a frontend login with pg_lite_client; returns true on successful auth.
-static bool try_frontend_login(const std::string& user, const std::string& password) {
+// Attempts a frontend login with pg_lite_client, running a query to prove the
+// session is usable. On success, observed_auth_type = the challenge type ProxySQL
+// presented (3=cleartext, 5=md5, 10=scram). Returns true on successful auth+query.
+static bool try_frontend_login(const std::string& user, const std::string& password,
+                               int& observed_auth_type) {
+    observed_auth_type = 0;
     try {
         PgConnection c(2000);
         c.connect(cl.pgsql_host, cl.pgsql_port, user /*dbname==user in this infra*/, user, password);
-        c.execute("SELECT 1");
+        observed_auth_type = c.getLastAuthType();
+        c.execute("SELECT 1");   // #5865 runs NO queries; proving the session works is our value-add
         c.disconnect();
         return true;
     } catch (const PgException& e) {
@@ -105,18 +141,19 @@ static bool try_frontend_login(const std::string& user, const std::string& passw
 int main(int argc, char** argv) {
     if (cl.getEnv()) return exit_status();
 
-    // 3 methods x (success + wrong-password) = plan grows as cases land.
-    // Task 1 registers only the cleartext success+failure (2 assertions).
+    // Per method: (login succeeds + query runs) AND (observed challenge type matches floor).
+    // Task 1 lands cleartext only (2 assertions); Tasks 2-3 add md5, scram, and failures.
     plan(2);
 
     MYSQL* admin = admin_connect();
     if (!admin) BAIL_OUT("cannot reach admin");
 
-    // --- Cleartext (method = 1) ---
-    ok(set_frontend_auth_method(admin, 1), "set frontend auth method = cleartext");
-    // NOTE: LOAD PGSQL VARIABLES affects NEW frontend connections.
-    ok(try_frontend_login(cl.pgsql_username, cl.pgsql_password),
-       "cleartext login succeeds with correct password");
+    // --- Cleartext floor (method = 1) -> expect challenge type 3 on the wire ---
+    set_frontend_auth_method(admin, 1);   // affects NEW frontend connections
+    int auth_type = 0;
+    bool logged_in = try_frontend_login(cl.pgsql_username, cl.pgsql_password, auth_type);
+    ok(logged_in, "cleartext floor: login + query succeed");
+    ok(auth_type == 3, "cleartext floor: ProxySQL presented challenge type 3 (got %d)", auth_type);
 
     // restore default before exit
     set_frontend_auth_method(admin, 3);
@@ -188,11 +225,15 @@ Extend `pg_lite_client` to answer an `AuthenticationMD5Password` (authType 5) ch
 In `pgsql-auth_method_matrix-t.cpp`, bump `plan(2)` → `plan(4)` and after the cleartext block add:
 
 ```cpp
-    // --- MD5 (method = 2) ---
-    ok(set_frontend_auth_method(admin, 2), "set frontend auth method = md5");
-    ok(try_frontend_login(cl.pgsql_username, cl.pgsql_password),
-       "md5 login succeeds with correct password");
+    // --- MD5 floor (method = 2) -> expect challenge type 5 on the wire ---
+    set_frontend_auth_method(admin, 2);
+    int md5_auth = 0;
+    ok(try_frontend_login(cl.pgsql_username, cl.pgsql_password, md5_auth),
+       "md5 floor: login + query succeed");
+    ok(md5_auth == 5, "md5 floor: ProxySQL presented challenge type 5 (got %d)", md5_auth);
 ```
+
+(No extra `pg_lite_client` change is needed to observe the type — the generic `last_auth_type_` capture from Task 1 Step 1a records `5` as soon as the MD5 branch added below runs.)
 
 - [ ] **Step 2: Rebuild the test and run — expect FAIL**
 
@@ -300,18 +341,21 @@ Extend `pg_lite_client` to complete a SASL/SCRAM-SHA-256 exchange using the vend
 In `pgsql-auth_method_matrix-t.cpp`, bump `plan(4)` → `plan(9)` and add:
 
 ```cpp
-    // --- SCRAM-SHA-256 (method = 3) ---
-    ok(set_frontend_auth_method(admin, 3), "set frontend auth method = scram");
-    ok(try_frontend_login(cl.pgsql_username, cl.pgsql_password),
-       "scram login succeeds with correct password");
+    // --- SCRAM floor (method = 3) -> expect challenge type 10 on the wire ---
+    set_frontend_auth_method(admin, 3);
+    int scram_auth = 0;
+    ok(try_frontend_login(cl.pgsql_username, cl.pgsql_password, scram_auth),
+       "scram floor: login + query succeed");
+    ok(scram_auth == 10, "scram floor: ProxySQL presented SASL/SCRAM challenge type 10 (got %d)", scram_auth);
 
-    // --- Wrong-password failure paths, one per method ---
-    ok(set_frontend_auth_method(admin, 1) && !try_frontend_login(cl.pgsql_username, "wrong-pw"),
-       "cleartext login FAILS with wrong password");
-    ok(set_frontend_auth_method(admin, 2) && !try_frontend_login(cl.pgsql_username, "wrong-pw"),
-       "md5 login FAILS with wrong password");
-    ok(set_frontend_auth_method(admin, 3) && !try_frontend_login(cl.pgsql_username, "wrong-pw"),
-       "scram login FAILS with wrong password");
+    // --- Wrong-password failure paths, one per floor (challenge type irrelevant) ---
+    int ignore = 0;
+    set_frontend_auth_method(admin, 1);
+    ok(!try_frontend_login(cl.pgsql_username, "wrong-pw", ignore), "cleartext floor: wrong password rejected");
+    set_frontend_auth_method(admin, 2);
+    ok(!try_frontend_login(cl.pgsql_username, "wrong-pw", ignore), "md5 floor: wrong password rejected");
+    set_frontend_auth_method(admin, 3);
+    ok(!try_frontend_login(cl.pgsql_username, "wrong-pw", ignore), "scram floor: wrong password rejected");
 ```
 
 - [ ] **Step 2: Rebuild + run — expect FAIL**
@@ -443,6 +487,28 @@ Expected: 9/9 pass. If the scram case fails on `read_server_first_message` or si
 git add test/tap/tests/pg_lite_client.h test/tap/tests/pg_lite_client.cpp test/tap/tests/pgsql-auth_method_matrix-t.cpp
 git commit -m "test(pgsql): pg_lite_client SCRAM-SHA-256 frontend auth + matrix scram/failure cases"
 ```
+
+- [ ] **Step 7 (OPTIONAL — only after #5865 is merged): wire-level no-downgrade assertion for a SCRAM-verifier user**
+
+This is the one storage-type case worth adding at the wire level, because it proves #5865's assertion 5 (*"SCRAM verifier NOT downgraded under cleartext floor"*) in a way #5865's libpq test cannot — by observing the challenge byte. Skip entirely until #5865 lands (it provides the verifier-user creation path).
+
+Add near the top of `main`, before the failure block, and bump `plan(9)` → `plan(11)`:
+
+```cpp
+    // Requires #5865: create a user whose stored secret is a SCRAM verifier.
+    // Reuse #5865's runtime pattern: PQencryptPasswordConn(conn, "verifier_pw", "scram_user", "scram-sha-256")
+    // then INSERT INTO pgsql_users(username,password,...) VALUES('scram_user', <that verifier>, ...); LOAD PGSQL USERS TO RUNTIME.
+    // (Factor #5865's helper out or copy its ~5-line create_verifier_user() here.)
+    create_verifier_user(admin, "scram_user", "verifier_pw");   // from #5865
+
+    set_frontend_auth_method(admin, 1);   // cleartext FLOOR...
+    int vt = 0;
+    bool v_ok = try_frontend_login("scram_user", "verifier_pw", vt);
+    ok(v_ok, "verifier user authenticates under cleartext floor");
+    ok(vt == 10, "no-downgrade: verifier user still challenged with SCRAM(10) under cleartext floor (got %d)", vt);
+```
+
+If #5865 is not yet merged when SP-1 is implemented, leave this step unchecked and keep `plan(9)`; add it in a follow-up once #5865 lands. Re-run and commit as `test(pgsql): wire-level no-downgrade assertion for SCRAM verifier (depends on #5865)`.
 
 ---
 
@@ -923,15 +989,17 @@ git commit -m "test(pgsql): LISTEN 0A000 rejection + NOTIFY-as-query contract (l
 ## Self-Review
 
 **Spec coverage (SP-1 items → tasks):**
-- Auth-method matrix (md5/scram/cleartext + failure) → Tasks 1–3 ✓ (incl. `pg_lite_client` SCRAM/MD5 enabler).
+- Auth-method matrix → Tasks 1–3 ✓, **repositioned around PR #5865**: #5865 owns the storage-type × floor success/fail matrix + anti-enumeration + malformed-verifier (via libpq); this plan owns the **wire-level challenge-type** assertion + post-auth query (which libpq can't see), plus the reusable `pg_lite_client` MD5/SCRAM enabler. Optional no-downgrade wire assertion (Task 3 Step 7) is gated on #5865 merging.
 - Data-type/binary matrix → Task 4 ✓ (text+binary, OID+value).
 - Server-side cursors → Task 5 ✓ (DECLARE/FETCH/MOVE + portal suspend).
 - Pool churn / session-isolation → Task 6 ✓.
 - LISTEN/NOTIFY per-mode contract → Task 7 ✓ (libpq path pinned; native deferred to #5882 per §3.5).
 - Backend-mode axis (§2.2): honored by keeping SP-1 on the default libpq path and explicitly deferring native-path assertions; cert-only frontend auth is left to the existing `pgsql-reg_test_5284_frontend_ssl_enforcement-t` (not duplicated here).
 
-**Placeholder scan:** No TBD/TODO. Two honest verification points are embedded as concrete observe-and-adjust steps (Task 3 Step 5 libscram framing; Task 4 Step 1 `readResult` vs raw-parse) — each names the exact thing to check and the fallback, which is guidance, not a placeholder.
+**Dependency / merge order:** Auth tasks (1–3) coordinate with **PR #5865** (open, base `v3.0`) — see the "Relationship to PR #5865" section. Develop on top of / rebase onto it to avoid `groups.json` conflicts; the enabler and wire-level test do not conflict semantically, only textually in `groups.json`.
 
-**Type consistency:** Helper names are stable across tasks (`set_frontend_auth_method`, `try_frontend_login`, `run_case`, `mk`, `scalar`, `sqlstate_of`). `pg_lite_client` additions (`sendMD5Password`, `doSASLAuth`) are declared in the header before use. Message constants (`ROW_DESCRIPTION`, `DATA_ROW`, `PORTAL_SUSPENDED`, `READY_FOR_QUERY`, `ERROR_RESPONSE`, `AUTH_TYPE`) match `pg_lite_client.h`.
+**Placeholder scan:** No TBD/TODO. Three honest verification points are embedded as concrete observe-and-adjust steps (Task 3 Step 5 libscram framing; Task 3 Step 7 optional #5865-gated extension; Task 4 Step 2 `readResult` vs raw-parse) — each names the exact thing to check and the fallback, which is guidance, not a placeholder.
+
+**Type consistency:** Helper names are stable across tasks (`set_frontend_auth_method`, `try_frontend_login(user, password, int&)`, `run_case`, `mk`, `scalar`, `sqlstate_of`). `pg_lite_client` additions (`getLastAuthType`, `sendMD5Password`, `doSASLAuth`) are declared in the header before use. Message constants (`ROW_DESCRIPTION`, `DATA_ROW`, `PORTAL_SUSPENDED`, `READY_FOR_QUERY`, `ERROR_RESPONSE`, `AUTH_TYPE`) match `pg_lite_client.h`.
 
 **Open dependency for the implementer:** the auth-matrix test relies on `pgsql_users` containing `testuser` with password `testuser` and a matching database — already true in `docker-pgsql16-single`'s `config.sql` + `docker-pgsql-post.bash`. No infra change is required for SP-1 (frontend auth is a server variable, not a per-user backend setting).
