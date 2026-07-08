@@ -146,6 +146,18 @@ echo " OK"
 
 # 7. Run post-scripts if they exist
 [ -f ./bin/docker-pgsql-post.bash ] && ./bin/docker-pgsql-post.bash
+
+# 7b. Bootstrap the Toxiproxy passthrough proxies (one per backend node), now
+# that the backend is up and verified. Must succeed -- a bootstrap failure
+# fails init loudly, since later SP-2 tasks (ProxySQL config, chaos suite)
+# depend on these proxies existing.
+if [ -f ./bin/toxiproxy-bootstrap.sh ]; then
+    if ! INFRA_ID="${INFRA_ID}" ./bin/toxiproxy-bootstrap.sh; then
+        echo "ERROR: toxiproxy-bootstrap.sh failed."
+        exit 1
+    fi
+fi
+
 [ -f ./bin/docker-proxy-post.bash ] && ./bin/docker-proxy-post.bash "$1"
 
 echo "================================================================================"
