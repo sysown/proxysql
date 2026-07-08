@@ -44,7 +44,7 @@ jobs:
         RELEASE_ID=""
         for attempt in 1 2 3 4 5 6; do
           IDS=$(gh api "repos/${REPO}/releases" --paginate \
-            --jq ".[] | select(.draft==true and .target_commitish==\"${SHA}\" and .tag_name==\"${TAG_NAME}\") | .id" \
+            --jq ".[] | select(.draft==true and .tag_name==\"${TAG_NAME}\") | .id" \
             | sort -n)
           if [ -n "$IDS" ]; then
             RELEASE_ID=$(echo "$IDS" | head -1)
