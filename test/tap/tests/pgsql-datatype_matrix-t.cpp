@@ -1,5 +1,6 @@
 #include <string>
 #include <vector>
+#include <cstdint>
 #include "pg_lite_client.h"
 #include "command_line.h"
 #include "tap.h"
@@ -32,63 +33,108 @@ static const std::vector<Case> cases = {
     { "inet",        "SELECT '192.168.0.1'::inet",         "192.168.0.1",    869  },
 };
 
-// Runs one case through pg_lite_client at the given result format (0=text,1=binary).
-// Returns true if the RowDescription OID matches; in text format also checks the value.
-static bool run_case(const Case& c, int16_t fmt, std::string& observed_value, int32_t& observed_oid);
+// Everything observed for one round-trip of a case at a given result format.
+struct Observed {
+    bool got_result = false;      // a RowDescription+DataRow was returned (no ErrorResponse)
+    int32_t oid = 0;              // type OID from RowDescription
+    int16_t col_format = -1;      // per-column result FORMAT CODE from RowDescription:
+                                  // this is what ProxySQL actually applied (0=text,1=binary),
+                                  // and is the load-bearing check for binary transparency.
+    bool is_null = true;          // DataRow value length == -1 ?
+    std::string text_value;       // value decoded as text (meaningful when col_format==0)
+    std::vector<uint8_t> raw_bytes; // raw DataRow payload for column 0 (both formats)
+};
+
+// Runs one case through ProxySQL's PG frontend via pg_lite_client's extended-query
+// protocol, requesting the given single result format (0=text, 1=binary) for column 0.
+//
+// We parse RowDescription(T)/DataRow(D) directly rather than calling readResult():
+// readResult() DISCARDS the type OID (pg_lite_client.cpp reads and drops it) and
+// PgResult exposes no OID accessor, but this test must assert the OID. So we read the
+// full RowDescription field layout ourselves — the SAME layout readResult() uses,
+// including the trailing per-column format code that readResult() stores into
+// columnFormat() — and additionally keep the OID. The format-code field is the whole
+// point of the binary assertions: it proves ProxySQL honored the requested format
+// rather than silently downgrading binary to text.
+static bool run_case(const Case& c, int16_t fmt, Observed& obs);
 
 int main(int argc, char** argv) {
     if (cl.getEnv()) return exit_status();
 
-    // For each case: 1 text assertion (value+oid) + 1 binary assertion (oid+format code).
+    // For each case: 1 text assertion + 1 binary assertion.
     plan((int)cases.size() * 2);
 
     for (const auto& c : cases) {
-        std::string v_text, v_bin; int32_t oid_text = 0, oid_bin = 0;
-        bool ok_text = run_case(c, 0, v_text, oid_text);
-        ok(ok_text && oid_text == c.expected_oid && v_text == c.expected_text,
-           "%s text: oid=%d value='%s'", c.label, oid_text, v_text.c_str());
+        // TEXT: format code must be 0, OID must match, value (as text) must match.
+        Observed t;
+        bool ran_t = run_case(c, 0, t);
+        ok(ran_t && t.got_result && t.col_format == 0 && t.oid == c.expected_oid
+               && !t.is_null && t.text_value == c.expected_text,
+           "%s text: fmt=%d oid=%d value='%s'",
+           c.label, (int)t.col_format, t.oid, t.text_value.c_str());
 
-        bool ok_bin = run_case(c, 1, v_bin, oid_bin);
-        ok(ok_bin && oid_bin == c.expected_oid,
-           "%s binary: oid=%d (format code honored)", c.label, oid_bin);
+        // BINARY: format code must be 1 (ProxySQL actually honored binary), OID must
+        // match, and a non-null value must be returned. For the fixed-width int4 case
+        // we additionally decode the payload end-to-end to prove the bytes are real
+        // binary (4 bytes, big-endian) rather than a text string mislabeled as binary.
+        Observed b;
+        bool ran_b = run_case(c, 1, b);
+        bool binary_ok = ran_b && b.got_result && b.col_format == 1
+                         && b.oid == c.expected_oid && !b.is_null;
+        std::string extra;
+        if (std::string(c.label) == "int4") {
+            bool decode_ok = b.raw_bytes.size() == 4;
+            int64_t decoded = 0;
+            if (decode_ok) {
+                uint32_t u = (uint32_t(b.raw_bytes[0]) << 24) | (uint32_t(b.raw_bytes[1]) << 16)
+                           | (uint32_t(b.raw_bytes[2]) << 8) | uint32_t(b.raw_bytes[3]);
+                decoded = (int32_t)u;
+                decode_ok = (decoded == 2147483647);
+            }
+            binary_ok = binary_ok && decode_ok;
+            extra = " [int4 binary payload " + std::to_string(b.raw_bytes.size())
+                  + " bytes -> " + std::to_string(decoded) + "]";
+        }
+        ok(binary_ok,
+           "%s binary: format honored (columnFormat==%d), oid=%d, %zu payload bytes%s",
+           c.label, (int)b.col_format, b.oid, b.raw_bytes.size(), extra.c_str());
     }
     return exit_status();
 }
 
-static bool run_case(const Case& c, int16_t fmt, std::string& observed_value, int32_t& observed_oid) {
+static bool run_case(const Case& c, int16_t fmt, Observed& obs) {
     try {
         PgConnection conn(2000);
         conn.connect(cl.pgsql_host, cl.pgsql_port, cl.pgsql_username, cl.pgsql_username, cl.pgsql_password);
-        // Extended protocol: unnamed prepared statement, result format = fmt.
-        // NOTE: these queries take no bind parameters, so the param-format array
-        // must be empty (a real client would never send one for a 0-param Bind).
-        // bindStatementSingleFormat() unconditionally sends a 1-element param-format
-        // array ({singleFormat}) regardless of param count, which triggers a real
-        // ProxySQL bug (see PgSQL_Connection.cpp stmt_execute_start(): the format-count
-        // normalization only expands num_param_formats==1 when param_values.size() > 1,
-        // so numPFormats==1 with 0 actual params falls into the mismatch-error branch,
-        // even though the PG protocol spec says num_param_formats==1 applies to all
-        // parameters regardless of how many there are). Use bindStatementEx() with an
-        // explicit empty paramFormats array to avoid tripping that bug, since it is
-        // orthogonal to what this test is verifying (result-format/type-OID transparency).
+        // Extended protocol: unnamed prepared statement, single result format = fmt.
+        // NOTE: these queries take no bind parameters, so the param-format array must be
+        // empty. bindStatementSingleFormat() would unconditionally send a 1-element
+        // param-format array even for a 0-param Bind, which trips a real ProxySQL bug
+        // (PgSQL_Connection.cpp stmt_execute_start() rejects num_param_formats==1 with
+        // num_params==0, though the PG protocol spec allows it). bindStatementEx() with
+        // an explicit empty paramFormats array is the protocol-correct 0-param bind and
+        // is orthogonal to the result-format/OID transparency under test here.
         conn.prepareStatement("", c.select_expr, false, {});
         conn.bindStatementEx("", "", {}, {}, { fmt }, false);
         conn.describePortal("", false);
         conn.executePortal("", 0, true);   // sync
 
-        // Read: ParseComplete(1), BindComplete(2), RowDescription(T), DataRow(D), CommandComplete(C), ReadyForQuery(Z)
+        // Read: ParseComplete(1), BindComplete(2), RowDescription(T), DataRow(D),
+        //       CommandComplete(C), ReadyForQuery(Z)
         char type; std::vector<uint8_t> buf;
-        bool got_row = false;
         while (true) {
             conn.readMessage(type, buf);
             if (type == PgConnection::ROW_DESCRIPTION) {
                 BufferReader r(buf);
                 int16_t nfields = r.readInt16();
                 if (nfields >= 1) {
-                    r.readString();            // field name
-                    r.readInt32();             // table oid
-                    r.readInt16();             // column attr
-                    observed_oid = r.readInt32(); // type oid
+                    r.readString();               // field name
+                    r.readInt32();                // table oid
+                    r.readInt16();                // column attr num
+                    obs.oid = r.readInt32();      // type oid
+                    r.readInt16();                // type size
+                    r.readInt32();                // type modifier
+                    obs.col_format = r.readInt16(); // per-column result FORMAT CODE
                 }
             } else if (type == PgConnection::DATA_ROW) {
                 BufferReader r(buf);
@@ -96,9 +142,15 @@ static bool run_case(const Case& c, int16_t fmt, std::string& observed_value, in
                 if (ncols >= 1) {
                     int32_t len = r.readInt32();
                     if (len >= 0) {
-                        auto bytes = r.readBytes(len);
-                        if (fmt == 0) observed_value.assign(bytes.begin(), bytes.end());
-                        got_row = true;
+                        obs.raw_bytes = r.readBytes(len);
+                        obs.is_null = false;
+                        // Decode to text for the text-format value assertion. In binary
+                        // format the payload is opaque bytes and text_value is unused.
+                        obs.text_value.assign(obs.raw_bytes.begin(), obs.raw_bytes.end());
+                        obs.got_result = true;
+                    } else {
+                        obs.is_null = true;
+                        obs.got_result = true;
                     }
                 }
             } else if (type == PgConnection::READY_FOR_QUERY) {
@@ -109,7 +161,7 @@ static bool run_case(const Case& c, int16_t fmt, std::string& observed_value, in
             }
         }
         conn.disconnect();
-        return got_row;
+        return obs.got_result;
     } catch (const PgException& e) {
         diag("%s fmt=%d threw: %s", c.label, (int)fmt, e.what());
         return false;
