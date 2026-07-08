@@ -228,3 +228,8 @@ test-scripts/deps/
 test/tap/tests/parsersql_digest_test
 test/tap/tests/setparser_parsersql_test
 deps/protobuf/protobuf-*/
+
+# Stray build artifact: run-tests-isolated.bash creates the real mysqlbinlog
+# symlink at runtime under test-scripts/deps/; never commit this one (it was
+# accidentally committed once with an absolute /home path).
+test/scripts/deps/mysqlbinlog
