@@ -230,6 +230,91 @@ static Test parsersql_pr5088_mysql_set_syntax[] = {
     { Expected("@quoted var", {"3"}) } },
 };
 
+static Test parsersql_pr5088_mysql_dataset_syntax[] = {
+  { "SET @my_user := 1;",
+    { Expected("@my_user", {"1"}) } },
+  { "SET @my_user_variable = 123;",
+    { Expected("@my_user_variable", {"123"}) } },
+  { "SET @my_user_variable = 123, @@GLOBAL.max_connections = 200;",
+    { Expected("@my_user_variable", {"123"}),
+      Expected("max_connections", {"200"}) } },
+  { "SET @my_custom_var = 'Test Value';",
+    { Expected("@my_custom_var", {"Test Value"}) } },
+  { "SET P_param_name = 100;",
+    { Expected("p_param_name", {"100"}) } },
+  { "SET my_local_variable = NOW();",
+    { Expected("my_local_variable", {"NOW()"}) } },
+  { "SET GLOBAL sort_buffer_size = 512000;",
+    { Expected("sort_buffer_size", {"512000"}) } },
+  { "SET @@GLOBAL.sort_buffer_size = 512000;",
+    { Expected("sort_buffer_size", {"512000"}) } },
+  { "SET SESSION wait_timeout = 180;",
+    { Expected("wait_timeout", {"180"}) } },
+  { "SET SESSION sql_select_limit = 100;",
+    { Expected("sql_select_limit", {"100"}) } },
+  { "SET @@SESSION.sql_select_limit = 100;",
+    { Expected("sql_select_limit", {"100"}) } },
+  { "SET @@sql_select_limit = 100;",
+    { Expected("sql_select_limit", {"100"}) } },
+  { "SET sql_select_limit = 100;",
+    { Expected("sql_select_limit", {"100"}) } },
+  { "SET autocommit = 0;",
+    { Expected("autocommit", {"0"}) } },
+  { "SET @mix := 1, @@SESSION.wait_timeout := 42;",
+    { Expected("@mix", {"1"}),
+      Expected("wait_timeout", {"42"}) } },
+  { "SET sql_mode = '   ';",
+    { Expected("sql_mode", {"   "}) } },
+  { "SET sql_mode = 'TRADITIONAL', sql_mode = @@sql_mode;",
+    { Expected("sql_mode", {"@@sql_mode"}) } },
+  { "SET CHARACTER SET utf8mb4;",
+    { Expected("character_set_results", {"utf8mb4"}) } },
+  { "SET NAMES 'utf8mb4';",
+    { Expected("names", {"utf8mb4"}) } },
+  { "SET NAMES 'gbk' COLLATE 'gbk_chinese_ci';",
+    { Expected("names", {"gbk", "gbk_chinese_ci"}) } },
+  { "SET NAMES utf8mb4 COLLATE utf8mb4_0900_ai_ci;",
+    { Expected("names", {"utf8mb4", "utf8mb4_0900_ai_ci"}) } },
+  { "SET sql_mode = 'STRICT_TRANS_TABLES', character_set_client = 'utf8mb4';",
+    { Expected("character_set_client", {"utf8mb4"}),
+      Expected("sql_mode", {"STRICT_TRANS_TABLES"}) } },
+};
+
+static Test parsersql_pr5088_mysql_sql_mode_expr[] = {
+  { "SET sql_mode=@@sql_mode",
+    { Expected("sql_mode", {"@@sql_mode"}) } },
+  { "SET sql_mode=  @@sql_mode",
+    { Expected("sql_mode", {"@@sql_mode"}) } },
+  { "SET sql_mode=\"NO_AUTO_VALUE_ON_ZERO\"",
+    { Expected("sql_mode", {"NO_AUTO_VALUE_ON_ZERO"}) } },
+  { "SET sql_mode = \"NO_AUTO_VALUE_ON_ZERO\"",
+    { Expected("sql_mode", {"NO_AUTO_VALUE_ON_ZERO"}) } },
+  { "SET sql_mode=\"CONCAT(@@sql_mode, 'STRICT_ALL_TABLES')\"",
+    { Expected("sql_mode", {"CONCAT(@@sql_mode, 'STRICT_ALL_TABLES')"}) } },
+  { "SET sql_mode=\"REPLACE(@@sql_mode, 'STRICT_ALL_TABLES', 'STRICT_TRANS_TABLES')\"",
+    { Expected("sql_mode", {"REPLACE(@@sql_mode, 'STRICT_ALL_TABLES', 'STRICT_TRANS_TABLES')"}) } },
+  { "SET sql_mode=\"(SELECT 'STRICT_ALL_TABLES')\"",
+    { Expected("sql_mode", {"(SELECT 'STRICT_ALL_TABLES')"}) } },
+  { "SET sql_mode=(SELECT 'foo')",
+    { Expected("sql_mode", {"(SELECT 'foo')"}) } },
+  { "SET sql_mode=(SELECT \"foo\")",
+    { Expected("sql_mode", {"(SELECT \"foo\")"}) } },
+  { "SET sql_mode=(SELECT 5)",
+    { Expected("sql_mode", {"(SELECT 5)"}) } },
+  { "SET sql_mode=(SELECT NULL)",
+    { Expected("sql_mode", {"(SELECT NULL)"}) } },
+  { "SET sql_mode=(SELECT @user_var)",
+    { Expected("sql_mode", {"(SELECT @user_var)"}) } },
+  { "SET sql_mode=(SELECT CONCAT(@@sql_mode, NULL))",
+    { Expected("sql_mode", {"(SELECT CONCAT(@@sql_mode, NULL))"}) } },
+  { "SET sql_mode=(SELECT CONCAT(@@sql_mode, 'foo'))",
+    { Expected("sql_mode", {"(SELECT CONCAT(@@sql_mode, 'foo'))"}) } },
+  { "SET sql_mode=(SELECT REPLACE(CONCAT(@@sql_mode, ''), '', '5'))",
+    { Expected("sql_mode", {"(SELECT REPLACE(CONCAT(@@sql_mode, ''), '', '5'))"}) } },
+  { "SET sql_mode=(SELECT REPLACE(CONCAT(@@sql_mode, ''), '', 5))",
+    { Expected("sql_mode", {"(SELECT REPLACE(CONCAT(@@sql_mode, ''), '', 5))"}) } },
+};
+
 static Test parsersql_pr5088_mysql_expr_syntax[] = {
   { "SET @generic_var = TRUE OR FALSE;",
     { Expected("@generic_var", {"TRUE OR FALSE"}) } },
@@ -652,6 +737,8 @@ int main(int argc, char** argv) {
 	p += arraysize(parsersql_mysql_filtered_set);
 	p += arraysize(parsersql_mysql_set_testing);
 	p += arraysize(parsersql_pr5088_mysql_set_syntax);
+	p += arraysize(parsersql_pr5088_mysql_dataset_syntax);
+	p += arraysize(parsersql_pr5088_mysql_sql_mode_expr);
 	p += arraysize(parsersql_pr5088_mysql_expr_syntax);
 	p += arraysize(parsersql_pgsql_search_path);
 	p += arraysize(parsersql_pgsql_time_zone);
@@ -675,6 +762,8 @@ int main(int argc, char** argv) {
 	TestParse(parsersql_mysql_filtered_set, arraysize(parsersql_mysql_filtered_set), "mysql_filtered_set");
 	TestParse(parsersql_mysql_set_testing, arraysize(parsersql_mysql_set_testing), "mysql_set_testing");
 	TestParse(parsersql_pr5088_mysql_set_syntax, arraysize(parsersql_pr5088_mysql_set_syntax), "pr5088_mysql_set_syntax");
+	TestParse(parsersql_pr5088_mysql_dataset_syntax, arraysize(parsersql_pr5088_mysql_dataset_syntax), "pr5088_mysql_dataset_syntax");
+	TestParse(parsersql_pr5088_mysql_sql_mode_expr, arraysize(parsersql_pr5088_mysql_sql_mode_expr), "pr5088_mysql_sql_mode_expr");
 	TestParse(parsersql_pr5088_mysql_expr_syntax, arraysize(parsersql_pr5088_mysql_expr_syntax), "pr5088_mysql_expr_syntax");
 	TestParsePgsql(parsersql_pgsql_search_path, arraysize(parsersql_pgsql_search_path), "pgsql_search_path");
 	TestParsePgsql(parsersql_pgsql_time_zone, arraysize(parsersql_pgsql_time_zone), "pgsql_time_zone");
