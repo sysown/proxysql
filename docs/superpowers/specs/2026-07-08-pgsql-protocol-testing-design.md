@@ -220,9 +220,45 @@ Adapted from pgcat. `harness/oracle.py`:
 
 ---
 
-## 6. Roadmap — SP-3 and SP-4 (not in this spec)
+## 6. Roadmap — SP-3, SP-3b and SP-4
 
-- **SP-3 — Driver matrix expansion.** Add adapters under `test/pg-compat/drivers/`: **Java** (pgjdbc, +HikariCP), **Go** (pgx native), **Node.js** (node-postgres, postgres.js, Prisma). Each runs the existing `behaviors/` set + differential cases. CI fans out one matrix job per language from the cached binary. Prisma/pgjdbc are the highest-value targets (aggressive server-side prepared statements historically break poolers).
+- **SP-3 — Driver matrix expansion (AS BUILT, complete 2026-07-08).** Ran the
+  existing SP-2 `behaviors/` contract (`connect`, `transactions`, `prepared`,
+  `session_isolation` — frozen, unchanged) through four more driver stacks:
+  **Go** (pgx v5.7.5), **Java** (pgjdbc 42.7.4), **Node.js** (pg/node-postgres
+  8.13.1), and **Node.js/Prisma** (5.22.0, raw-query API only). Each ships one
+  self-contained CLI program (`<prog> <behavior>`, exit 0/1/2) built into the
+  pg-compat image by a multi-stage `Dockerfile` extension, invoked from pytest
+  via subprocess wrappers (`tests/test_behaviors_<lang>.py` +
+  `tests/_subproc.py::run_behavior`) so the existing xfail catalogue, junit
+  report, and CI wiring apply unchanged.
+  - **Scope decision (user-approved 2026-07-08): behaviors only.** The
+    differential engine (§4.4) stays Python/psycopg-only — its comparison
+    unit is psycopg's row/type decode semantics, which the other languages
+    don't share — so it was NOT extended to the new drivers in SP-3. See
+    SP-3b below for that follow-up.
+  - CI fans out via a **single fat multi-language image**, not a one-job-
+    per-language matrix as originally sketched below: same coverage (all
+    five drivers run every CI invocation), no matrix-job complexity. Revisit
+    the split if/when this suite is promoted to gating.
+  - **Result: all five driver stacks pass the full behavior contract with
+    zero `xfail.toml` entries added** — four distinct prepared-statement
+    strategies (psycopg auto-prepare@5, pgx's default statement-cache,
+    pgjdbc's server-side NAMED statements after `prepareThreshold=5` — the
+    classic connection-pooler breaker — and Prisma's always-prepared Rust
+    engine) all stay transparent through ProxySQL's connection multiplexing.
+    See `test/pg-compat/README.md`'s "Driver matrix (SP-3)" section for the
+    full per-language table (versions, placeholder syntax, encoding-pin
+    mechanism) and the Prisma raw-vs-ORM caveat.
+- **SP-3b — Per-language differential runners (stub, deferred).** Extend each
+  non-Python driver's behavior program with a differential-case runner that
+  executes the same case files as §4.4 and emits a normalized result
+  (status, column names, OIDs/type tags, decoded row values) on stdout for
+  Python's `compare()` to consume — so the differential engine's comparisons
+  gain Go/Java/Node/Prisma coverage without reimplementing the comparator
+  once per language. Deferred pending nightly stability of the SP-3
+  behaviors-only suite (see `ci-pg-compat.yml`'s non-gating `|| true`); not
+  scheduled against a specific SP number yet.
 - **SP-4 — Chaos & resilience suite.** Build on SP-2's Toxiproxy layer: failover/shunning (1-byte `limit_data` slow-loris), latency toxics, reset-peer, health-check detection and auto-recovery — with **bounded-error-rate assertions** (pgdog/pgcat style: "≤N errors of M", "reroute within T"), exercising the automatic `pgsql_replication_hostgroups` monitor path from §4.1.
 
 ---

@@ -49,6 +49,100 @@ WORKSPACE=$(pwd) INFRA_ID=<infra-id> test/pg-compat/run-pg-compat.bash \
 # report lands at: ${WORKSPACE}/pg-compat-reports/pg-compat.xml
 ```
 
+## Driver matrix (SP-3)
+
+Beyond the reference Python/psycopg3 harness, the suite runs the same
+4-behavior contract (`connect`, `transactions`, `prepared`,
+`session_isolation` — see `behaviors/*.py`, the FROZEN cross-driver
+contract) through four more real-world driver stacks, each its own
+self-contained CLI program compiled/installed into the pg-compat image by
+the multi-stage `Dockerfile` (`drivers/<lang>/`). All five stacks pass the
+full behavior contract through ProxySQL with **zero `xfail.toml` entries
+added** — every pass below is a genuine pass, not a catalogued divergence.
+
+| Language | Driver | Version | Placeholders | Prepared-statement strategy | Encoding pin |
+|---|---|---|---|---|---|
+| Python | psycopg3 | 3.2.* | `%s` (client-side) | auto-prepare after `prepare_threshold=5` (driver default) | DSN `client_encoding=UTF8` |
+| Go | pgx | v5.7.5 | `$1, $2` | default `QueryExecMode=cache_statement` — full extended-protocol Parse/Bind every call, with the server-side statement cached and reused by SQL text | DSN param `client_encoding=UTF8` |
+| Java | pgjdbc | 42.7.4 | `?` | server-side NAMED statement after `prepareThreshold=5` (driver default); one `PreparedStatement` object reused for all 50 iterations | `options=-c client_encoding=UTF8` connection property |
+| Node | pg (node-postgres) | 8.13.1 | `$1, $2` | UNCONDITIONAL named statements — `Parse` sent once at iteration 0 via `{name, text, values}`, every later call is `Bind`/`Execute` only | `client_encoding` config key |
+| Node | Prisma | 5.22.0 | tagged-template (`$queryRaw`) | always-prepared — the Rust query engine has no simple-query mode; every `$queryRaw`/`$executeRawUnsafe` call is a real Parse/Bind/Execute; `connection_limit=1` pins the client to one backend connection | URL param `client_encoding` is accepted but IGNORED by the Rust engine (verified: `LATIN1` in the URL still yields UTF8) — the factory issues an explicit `SET client_encoding TO 'UTF8'` instead |
+
+**Headline finding:** four distinct prepared-statement strategies — including
+pgjdbc's server-side NAMED statements (the classic connection-pooler
+breaker: `prepared statement "S_1" does not exist`) and Prisma's
+always-prepared Rust engine — all stay transparent through ProxySQL's
+connection multiplexing.
+
+**Prisma caveat:** the Prisma behavior program (`drivers/prisma/behaviors.mjs`)
+exercises only the **raw-query API** (`$queryRaw`/`$executeRawUnsafe`/
+`$transaction`), not Prisma's model/ORM query path (`prisma.model.findMany()`
+etc.) — there are no real models in `schema.prisma` (a single unused dummy
+model exists only to satisfy `prisma generate`). The ORM query path is a
+possible future extension, not covered here.
+
+### Running one language
+
+Extra arguments to `run-pg-compat.bash` are forwarded to `pytest`, so a
+single language's wrapper file (or `-k`) selects just that driver, e.g.:
+
+```bash
+WORKSPACE=$(pwd) INFRA_ID=<infra-id> test/pg-compat/run-pg-compat.bash tests/test_behaviors_go.py -v
+```
+
+Per-language wrapper files: `tests/test_behaviors_go.py`,
+`tests/test_behaviors_java.py`, `tests/test_behaviors_node.py`,
+`tests/test_behaviors_prisma.py` (Python's own behaviors run via
+`tests/test_behaviors.py`, in-process rather than as a subprocess).
+
+### Behavior-CLI contract
+
+Every language ships ONE compiled/installed binary at
+`/pg-compat/bin/behaviors-<lang>` implementing the same CLI:
+
+```
+behaviors-<lang> <behavior>      # <behavior> ∈ {connect, transactions, prepared, session_isolation}
+```
+
+- **exit 0** — behavior passed.
+- **exit 1** — behavior assertion failed; a human-readable reason on stderr.
+- **exit 2** — usage or infra error (unknown behavior name, not-yet-implemented
+  behavior, missing/invalid env); never a behavior-contract failure.
+- No stdout output is required on pass.
+
+`tests/_subproc.py::run_behavior(program, behavior)` runs
+`[program, behavior]`, translates exit 0/1/2 into pytest pass/fail, and
+`pytest.skip`s if the binary is absent from the image (so a partial image
+still runs the languages it does have).
+
+### Adding a language
+
+1. Implement the 4 behaviors (`connect`, `transactions`, `prepared`,
+   `session_isolation`) against `behaviors/*.py` as the frozen reference —
+   same assertions, same trap adaptations (session-isolation probe is
+   `SET TimeZone = 'Antarctica/Troll'` / `SHOW TimeZone`, **never**
+   `application_name` — it's in ProxySQL's `ignore_vars`; every transaction
+   verification read runs inside its own `BEGIN`/`COMMIT` so it pins to the
+   writer instead of racing replica lag; every connection pins
+   `client_encoding=UTF8`; placeholders are driver-native, not psycopg's `%s`).
+2. Expose them behind the uniform CLI contract above, in its own
+   `drivers/<lang>/` directory. Use a per-language table name for the
+   transactions behavior (`behavior_tx_t_<lang>`) so runs never collide
+   with another language's.
+3. Add a build stage to `Dockerfile` that produces
+   `/pg-compat/bin/behaviors-<lang>` (a compiled binary, or a thin shell
+   wrapper invoking an interpreter — see the Java/Node stages for both
+   patterns) and pin the exact driver version in both the Dockerfile
+   (`ARG`/lockfile) and this table.
+4. Add `tests/test_behaviors_<lang>.py` — a thin subprocess wrapper using
+   `tests/_subproc.py::run_behavior` and
+   `@pytest.mark.parametrize("behavior", BEHAVIORS, ids=BEHAVIORS)` so
+   nodeids stay stable (`tests/test_behaviors_<lang>.py::test_behavior_<lang>[<behavior>]`)
+   for the `xfail.toml` exact-nodeid catalogue.
+5. A behavior that genuinely fails through ProxySQL is a FINDING, not a bug
+   to hide — add an `[[xfail]]` entry (or a `[[finding]]` if nothing fails
+   but a divergence was neutralized), never weaken the assertion.
+
 ## CI
 
 The suite is wired into CI as `CI-pg-compat` (`.github/workflows/CI-pg-compat.yml`

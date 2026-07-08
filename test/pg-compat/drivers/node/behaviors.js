@@ -235,9 +235,11 @@ async function sessionIsolation() {
     }
     // Close A before B opens (deliberate -- see the doc comment above).
     // The finally below ends A again as a resource-hygiene backstop on an
-    // assert failure above; client.end() on an already-ended client
-    // rejects, so an idempotent-guard flag (aEnded) is used instead of
-    // relying on end() itself being a safe no-op repeat call.
+    // assert failure above. end() is defensive, not strictly required --
+    // it is a no-op on an already-ended client in pg@8.13.1 (verified via a
+    // mock server during Task 4 review); the aEnded flag is kept anyway so
+    // this does not depend on that no-op behavior continuing to hold across
+    // driver upgrades.
     await a.end();
     aEnded = true;
 
