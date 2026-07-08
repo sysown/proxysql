@@ -23,10 +23,32 @@ COPY drivers/node/package.json drivers/node/package-lock.json* ./
 RUN npm ci --omit=dev || npm install --omit=dev
 COPY drivers/node/behaviors.js .
 
+# ---- Prisma deps + client generation (ORM tier, SP3-Task 5) ----
+# npm ci pulls prisma (CLI, a devDependency) AND @prisma/client, then
+# `prisma generate` produces the client + downloads the query-engine binary
+# for binaryTargets=["debian-openssl-3.0.x"] (matching the bookworm/OpenSSL-3
+# final image). This stage is bookworm/OpenSSL-3 too, so the engine it
+# fetches is the exact one the final stage runs. The engine download needs
+# network egress -> the build runs with --network=host (see
+# run-pg-compat.bash). PGCOMPAT_PRISMA_URL only has to EXIST for `generate`
+# (it does not connect); behaviors.mjs overwrites it at runtime.
+FROM node:22-bookworm-slim AS prismabuild
+WORKDIR /app
+COPY drivers/prisma/package.json drivers/prisma/package-lock.json* ./
+# devDependencies (the prisma CLI) are REQUIRED here for `prisma generate`,
+# so this is a full install, not --omit=dev. The `npm install` fallback must
+# never be reached in normal operation (package-lock.json is committed).
+RUN npm ci || npm install
+COPY drivers/prisma/schema.prisma drivers/prisma/behaviors.mjs ./
+ENV PGCOMPAT_PRISMA_URL="postgresql://build:build@localhost:5432/build?sslmode=disable"
+RUN npx prisma generate
+
 # ---- Final: python base + JRE + node runtime + artifacts ----
 FROM python:3.11-slim
+# openssl/libssl3: the Prisma query engine (debian-openssl-3.0.x) links
+# against libssl.so.3 / libcrypto.so.3 at load time.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        libpq5 curl default-jre-headless \
+        libpq5 curl default-jre-headless openssl \
     && rm -rf /var/lib/apt/lists/*
 # Node runtime copied from the official image (bookworm-glibc compatible).
 COPY --from=nodebuild /usr/local/bin/node /usr/local/bin/node
@@ -39,7 +61,11 @@ COPY --from=gobuild /out/behaviors-go /pg-compat/bin/behaviors-go
 COPY --from=javabuild /out/ /pg-compat/bin/java-classes/
 COPY --from=javabuild /pgjdbc.jar /pg-compat/bin/pgjdbc.jar
 COPY --from=nodebuild /app /pg-compat/node-app
+# Prisma app: node_modules (with the generated @prisma/client + .prisma
+# client + query-engine binary), schema.prisma, behaviors.mjs.
+COPY --from=prismabuild /app /pg-compat/prisma-app
 RUN printf '#!/bin/sh\nexec java -cp /pg-compat/bin/java-classes:/pg-compat/bin/pgjdbc.jar Behaviors "$@"\n' > /pg-compat/bin/behaviors-java \
  && printf '#!/bin/sh\nexec node /pg-compat/node-app/behaviors.js "$@"\n' > /pg-compat/bin/behaviors-node \
+ && printf '#!/bin/sh\nexec node /pg-compat/prisma-app/behaviors.mjs "$@"\n' > /pg-compat/bin/behaviors-prisma \
  && chmod +x /pg-compat/bin/behaviors-*
 ENTRYPOINT ["pytest", "-q"]
