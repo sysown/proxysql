@@ -63,7 +63,7 @@ added** — every pass below is a genuine pass, not a catalogued divergence.
 | Language | Driver | Version | Placeholders | Prepared-statement strategy | Encoding pin |
 |---|---|---|---|---|---|
 | Python | psycopg3 | 3.2.* | `%s` (client-side) | auto-prepare after `prepare_threshold=5` (driver default) | DSN `client_encoding=UTF8` |
-| Go | pgx | v5.7.5 | `$1, $2` | default `QueryExecMode=cache_statement` — full extended-protocol Parse/Bind every call, with the server-side statement cached and reused by SQL text | DSN param `client_encoding=UTF8` |
+| Go | pgx | v5.7.5 | `$1, $2` | default `QueryExecMode=cache_statement` — Parse once per distinct SQL text (extended protocol), then Bind/Execute-only on every subsequent call via the server-side statement cache | DSN param `client_encoding=UTF8` |
 | Java | pgjdbc | 42.7.4 | `?` | server-side NAMED statement after `prepareThreshold=5` (driver default); one `PreparedStatement` object reused for all 50 iterations | `options=-c client_encoding=UTF8` connection property |
 | Node | pg (node-postgres) | 8.13.1 | `$1, $2` | UNCONDITIONAL named statements — `Parse` sent once at iteration 0 via `{name, text, values}`, every later call is `Bind`/`Execute` only | `client_encoding` config key |
 | Node | Prisma | 5.22.0 | tagged-template (`$queryRaw`) | always-prepared — the Rust query engine has no simple-query mode; every `$queryRaw`/`$executeRawUnsafe` call is a real Parse/Bind/Execute; `connection_limit=1` pins the client to one backend connection | URL param `client_encoding` is accepted but IGNORED by the Rust engine (verified: `LATIN1` in the URL still yields UTF8) — the factory issues an explicit `SET client_encoding TO 'UTF8'` instead |

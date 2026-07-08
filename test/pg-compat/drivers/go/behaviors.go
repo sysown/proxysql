@@ -187,17 +187,20 @@ func verifyCount(ctx context.Context, conn *pgx.Conn) (int, error) {
 // Exec mode in play: pgx v5's default QueryExecMode is
 // QueryExecModeCacheStatement ("cache_statement") -- pgx.Connect does not
 // override it here, so this is the mode used. Under cache_statement, pgx
-// runs the full extended-protocol Parse/Bind/Describe/Execute sequence for
-// every query and additionally caches (by SQL text) the server-side
-// prepared statement it created, reusing it (Bind/Execute only, skipping
-// re-Parse) on subsequent calls with the same SQL text -- see
-// https://github.com/jackc/pgx/wiki/Automatic-Prepared-Statement-Caching.
-// That means every iteration of the loop below -- not just the ones past
-// some warm-up threshold -- already exercises real extended-protocol
-// prepared statements multiplexed by ProxySQL; the 50x loop's job is to
-// prove the cached server-side statement keeps resolving correctly across
-// many round trips through the proxy, not to cross a warm-up threshold (as
-// psycopg3's prepare_threshold requires -- see prepared.py's docstring).
+// consults its per-connection statement cache (keyed by SQL text) FIRST:
+// only a cache miss -- the first occurrence of a given SQL text -- sends an
+// extended-protocol Parse (via Prepare); every subsequent call with the
+// same SQL text goes through execPrepared, i.e. Bind/Execute only against
+// the already-parsed server-side statement (pgx v5.7.5 conn.go, the
+// QueryExecModeCacheStatement branches; also its QueryExecMode doc comment:
+// "Queries are executed in a single round trip after the statement is
+// cached"). In the 50x loop below that means iteration 0 Parses once and
+// iterations 1-49 are Bind/Execute-only reuse of one server-side prepared
+// statement -- so every iteration exercises real extended-protocol prepared
+// statements multiplexed by ProxySQL, with no warm-up threshold to cross
+// (unlike psycopg3's prepare_threshold -- see prepared.py's docstring);
+// the loop's job is to prove that cached server-side statement keeps
+// resolving correctly across many round trips through the proxy.
 // Placeholders are pgx-native ($1, $2), unlike Python's psycopg %s -- see
 // the plan's Global Constraints on driver-native placeholder syntax.
 func prepared() error {

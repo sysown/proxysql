@@ -205,7 +205,7 @@ Adapted from pgcat. `harness/oracle.py`:
 
 - **New workflow** (e.g. `.github/workflows/CI-pg-compat.yml` caller on `v3.0`, reusable on `GH-Actions` per the two-branch split in `doc/GH-Actions/README.md`).
 - **Triggers:** nightly `schedule` + `pull_request` gated on the `pg-compat` label.
-- **Shape:** build proxysql (debug, `PROXYSQL31=1`) once → cache → job spins up `infra-dbdeployer-pgsql17-repl` (+ Toxiproxy) via the standard `test/infra/control/` runners → runs `pytest test/pg-compat` across both backend modes (§2.2). SP-3 will fan out per-language matrix jobs from the same cached binary.
+- **Shape:** build proxysql (debug, `PROXYSQL31=1`) once → cache → job spins up `infra-dbdeployer-pgsql17-repl` (+ Toxiproxy) via the standard `test/infra/control/` runners → runs `pytest test/pg-compat` across both backend modes (§2.2). SP-3 (as built — see §6) runs all languages from one multi-language runner image in the same job; a per-language matrix fan-out remains an option at promote-to-gating.
 - **Not gating** on normal PRs (heavy, multi-toolchain) — and, per §2.1, **reporting-oriented** in the discovery phase: the job publishes the failure inventory / xfail summary rather than going red on expected divergences. Nightly failures triaged per `CLAUDE.md`'s "never dismiss as flaky" policy.
 
 ---
