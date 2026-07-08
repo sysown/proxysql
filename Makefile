@@ -172,10 +172,7 @@ ifneq (,$(findstring $(OS),Darwin FreeBSD))
     export CC
     export CXX
 endif
-# MAKEOPT is overridable from the environment so shared CI runners can cap
-# parallelism (e.g. MAKEOPT=-j8); unset, it auto-detects the core count.
-MAKEOPT ?= -j${NPROCS}
-export MAKEOPT
+export MAKEOPT := -j${NPROCS}
 
 ### systemd
 SYSTEMD := 0
