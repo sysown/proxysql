@@ -45,6 +45,28 @@ The same codebase produces three product tiers via feature flags:
 **`PROXYSQL40=1` implies `PROXYSQL31=1` which implies `PROXYSQLFFTO=1` and `PROXYSQLTSDB=1`.**
 There is no separate `PROXYSQLGENAI` flag — `PROXYSQL40=1` builds and packages all v4.0 plugins (mysqlx, genai/MCP, anomaly detection). All AI/MCP/RAG/LLM features live in `plugins/genai/` and load as a `.so` at runtime.
 
+### Building a tier — pass the flag on EVERY make, and clean when switching (IMPORTANT)
+
+**CI never builds the bare default.** Every CI package/test build sets a tier flag: `PROXYSQL31=1` (v3.1) or `PROXYSQL40=1` (v4.0/genai) — see `.github/workflows/CI-*.yml`. Build with the tier you are targeting. **Bare `make` compiles the Stable tier with FFTO and TSDB left OUT** (`MySQLFFTO.cpp`/`PgSQLFFTO.cpp` are excluded and the `#ifdef PROXYSQLFFTO` symbols like `*_thread___ffto_max_buffer_size` are not defined). For most work, build `PROXYSQL31=1` (or `PROXYSQL40=1` if touching plugins/genai).
+
+**The Makefile does NOT track the tier flag between invocations.** Object files and `lib/libproxysql.a` produced under one tier are silently reused when you next build under a different tier (or against a tree someone else built under a different tier). The classic symptom is a link failure:
+
+```
+undefined reference to `mysql_thread___ffto_max_buffer_size'
+undefined reference to `pgsql_thread___ffto_max_buffer_size'
+```
+
+This is **not** a real breakage and **not** a bug in the default build — it is a stale-object *tier mismatch* (e.g. an FFTO-enabled `libproxysql.a` linked against a `main.o` compiled without `PROXYSQLFFTO`). Do **not** "fix" it by dropping the tier flag.
+
+Fix / avoid it by cleaning when the tier changes, and by passing the SAME tier flag on every make in a session:
+
+```bash
+# Switching tiers (or unsure what the tree was last built with): clean first.
+make clean                       # clears lib/ + src/ objects and libproxysql.a
+PROXYSQL31=1 make -j$(nproc)      # then build the tier you want, consistently
+# If deps were built under a different tier, also: make cleanall  (rebuilds deps — slow)
+```
+
 ### Build Flags
 
 - `NOJEMALLOC=1` — disable jemalloc
@@ -60,6 +82,8 @@ Tests use TAP (Test Anything Protocol) with Docker-based backend infrastructure.
 
 **ALWAYS use `run-tests-isolated.bash`**. It handles infrastructure setup, ProxySQL start, test execution, and cleanup. Never manually create Docker networks, start containers, or run init scripts — the runner does all of that.
 
+**The proxysql binary under test must be a DEBUG build.** The isolated harness (`proxysql-tester.py`) issues debug-only admin commands (`LOAD DEBUG FROM DISK`, the `admin-debug` variable — both `#ifdef DEBUG`), so a release binary fails to (re)configure with errors like `Unknown global variable: 'admin-debug'` or `near "LOAD": syntax error`. Build with `make debug`, and pass the tier flag consistently (e.g. `PROXYSQL31=1 make debug`). The ProxySQL container runs the workspace-built binary, so after rebuilding, re-run `test/infra/control/start-proxysql-isolated.bash` to recreate **only** the ProxySQL container on the new binary (it leaves the backends up). A plain `ensure-infras.bash` will NOT pick up a rebuilt binary if ProxySQL is already running, and `docker restart` is not the supported mechanism.
+
 ```bash
 # Set up infrastructure (backends + ProxySQL container)
 WORKSPACE=$(pwd) INFRA_ID=dev-$USER TAP_GROUP=mysql84-g1 test/infra/control/ensure-infras.bash
@@ -67,12 +91,22 @@ WORKSPACE=$(pwd) INFRA_ID=dev-$USER TAP_GROUP=mysql84-g1 test/infra/control/ensu
 # Run all tests for a TAP group
 WORKSPACE=$(pwd) INFRA_ID=dev-$USER TAP_GROUP=mysql84-g1 test/infra/control/run-tests-isolated.bash
 
+# Run a SINGLE test within a group — use the TEST_PY_TAP_INCL regex filter.
+# DO NOT create a throwaway group to isolate one test; the test still lives in its
+# real group and you just filter. (See test/infra/SKILL.md and test/infra/README.md.)
+WORKSPACE=$(pwd) INFRA_ID=dev-$USER TAP_GROUP=legacy-g4 \
+  TEST_PY_TAP_INCL="pgsql-reg_test_5866_result_format-t" \
+  test/infra/control/run-tests-isolated.bash
+
+# Swap in a rebuilt binary without tearing down backends
+WORKSPACE=$(pwd) INFRA_ID=dev-$USER TAP_GROUP=mysql84-g1 test/infra/control/start-proxysql-isolated.bash
+
 # Build test binaries first (requires proxysql binary)
 make build_tap_tests          # release
 make build_tap_test_debug     # debug
 ```
 
-Available TAP groups are defined in `test/tap/groups/groups.json`. Group names follow the pattern `<infra>-g<N>` (e.g., `mysql84-g1`, `legacy-g2`, `pgsql16-g1`).
+Available TAP groups are defined in `test/tap/groups/groups.json`. Group names follow the pattern `<infra>-g<N>` (e.g., `mysql84-g1`, `legacy-g2`, `pgsql16-g1`). `TEST_PY_TAP_INCL` is a regex matched against test names in the group — the documented way to run one test.
 
 ### DO NOT
 

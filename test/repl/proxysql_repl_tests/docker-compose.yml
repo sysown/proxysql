@@ -1,3 +1,4 @@
+version: "3.3"
 services:
 
   mysql1:
@@ -104,7 +105,8 @@ services:
   zookeeper:
     hostname: zookeeper.${INFRA}
     container_name: ${INFRA}_zookeeper
-    image: debezium/zookeeper:3.0.0.Final
+#    image: debezium/zookeeper
+    image: proxysql/ci-infra:debezium-zookeeper
     networks:
       - backend
 #    ports:
@@ -124,7 +126,8 @@ services:
   kafka:
     hostname: kafka.${INFRA}
     container_name: ${INFRA}_kafka
-    image: debezium/kafka:3.0.0.Final
+#    image: debezium/kafka
+    image: proxysql/ci-infra:debezium-kafka
 #    ports:
 #     - 9092:9092
     networks:
@@ -143,7 +146,8 @@ services:
   kafka_connect:
     hostname: kafka_connect.${INFRA}
     container_name: ${INFRA}_kafka_connect
-    image: debezium/connect:3.0.0.Final
+#    image: debezium/connect
+    image: proxysql/ci-infra:debezium-connect
 #    ports:
 #     - 8083:8083
     networks:
