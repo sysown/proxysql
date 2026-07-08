@@ -56,7 +56,7 @@ int main(int argc, char** argv) {
 
     // Per method: (login succeeds + query runs) AND (observed challenge type matches floor).
     // Task 1 lands cleartext only (2 assertions); Tasks 2-3 add md5, scram, and failures.
-    plan(2);
+    plan(4);
 
     MYSQL* admin = admin_connect();
     if (!admin) BAIL_OUT("cannot reach admin");
@@ -68,6 +68,13 @@ int main(int argc, char** argv) {
     bool logged_in = try_frontend_login(cl.pgsql_username, cl.pgsql_password, auth_type);
     ok(logged_in, "cleartext floor: login + query succeed");
     ok(auth_type == 3, "cleartext floor: ProxySQL presented challenge type 3 (got %d)", auth_type);
+
+    // --- MD5 floor (method = 2) -> expect challenge type 5 on the wire ---
+    set_frontend_auth_method(admin, 2);
+    int md5_auth = 0;
+    ok(try_frontend_login(cl.pgsql_username, cl.pgsql_password, md5_auth),
+       "md5 floor: login + query succeed");
+    ok(md5_auth == 5, "md5 floor: ProxySQL presented challenge type 5 (got %d)", md5_auth);
 
     // restore default before exit
     set_frontend_auth_method(admin, 3);

@@ -213,6 +213,7 @@ private:
     void sendStartupPacket();
     void handleAuthentication(const std::string& password);
     void sendPassword(const std::string& password);
+    void sendMD5Password(const std::string& password, const uint8_t salt[4]);
     
     
     void sendParse(const std::string& query, const std::string& stmtName, const std::vector<uint32_t>& paramType);

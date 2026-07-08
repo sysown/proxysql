@@ -12,6 +12,7 @@
 #include <variant>
 #include <thread>
 #include <chrono>
+#include <openssl/md5.h>
 
 // Buffer writing helpers
 static void writeInt32ToBuffer(std::vector<uint8_t>& buffer, int32_t value) {
@@ -316,6 +317,18 @@ void PgConnection::handleAuthentication(const std::string& password) {
                     if (authType == 0) return;
                 }
             }
+            else if (authType == 5) {  // AuthenticationMD5Password (4-byte salt follows)
+                if (buffer.size() < 8) throw PgException("Invalid MD5 auth message");
+                uint8_t salt[4];
+                memcpy(salt, buffer.data() + 4, 4);
+                sendMD5Password(password, salt);
+                readMessage(type, buffer);
+                if (type == AUTH_TYPE) {
+                    authType = ntohl(*reinterpret_cast<int32_t*>(buffer.data()));
+                    if (authType == 0) return;
+                }
+                // fall through to error handling on non-OK
+            }
             else {
                 throw PgException("Unsupported authentication method: " + std::to_string(authType));
             }
@@ -340,6 +353,30 @@ void PgConnection::handleAuthentication(const std::string& password) {
 void PgConnection::sendPassword(const std::string& password) {
     std::vector<uint8_t> packet;
     writeStringToBuffer(packet, password);
+    sendMessage('p', packet);
+}
+
+static std::string md5_hex(const std::string& in) {
+    unsigned char digest[MD5_DIGEST_LENGTH];
+    MD5(reinterpret_cast<const unsigned char*>(in.data()), in.size(), digest);
+    static const char* hx = "0123456789abcdef";
+    std::string out;
+    out.reserve(MD5_DIGEST_LENGTH * 2);
+    for (int i = 0; i < MD5_DIGEST_LENGTH; ++i) {
+        out.push_back(hx[digest[i] >> 4]);
+        out.push_back(hx[digest[i] & 0x0f]);
+    }
+    return out;
+}
+
+// PostgreSQL MD5 auth: "md5" + md5( md5(password + user) + salt )
+void PgConnection::sendMD5Password(const std::string& password, const uint8_t salt[4]) {
+    std::string inner = md5_hex(password + user_);
+    std::string with_salt = inner;
+    with_salt.append(reinterpret_cast<const char*>(salt), 4);
+    std::string token = "md5" + md5_hex(with_salt);
+    std::vector<uint8_t> packet;
+    writeStringToBuffer(packet, token);   // null-terminated C string
     sendMessage('p', packet);
 }
 
