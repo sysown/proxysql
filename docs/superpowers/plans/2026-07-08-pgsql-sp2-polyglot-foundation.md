@@ -24,7 +24,7 @@
 
 | Piece | Status | Mitigation in this plan |
 |---|---|---|
-| dbdeployer PostgreSQL topology | **Greenfield / unproven** in the pinned fork | **Task 1 is a spike** with a hard decision gate → dbdeployer path (Task 2a) or native-`postgres:17` fallback (Task 2b). |
+| dbdeployer PostgreSQL topology | **Confirmed supported** by the maintainer (2026-07-08); exact PG deploy flags still to capture | **Task 1 captures the exact command** (no go/no-go gate); commit to the dbdeployer path (Task 2a). Native `postgres:17` (Task 2b) remains only an emergency fallback. |
 | Toxiproxy | Greenfield (0 refs in repo) | Task 3 adds it as a sidecar container + a bootstrap script; harness reads its host via env. |
 | `pg_stat_statements` | Greenfield | Task 2 bakes `shared_preload_libraries` into `postgresql.conf` + `CREATE EXTENSION` in post-provision. |
 | Host-published ports | Greenfield (none exist) | Harness runs **in-container** on the infra network (Task 5); no host ports needed. |
@@ -59,9 +59,9 @@
 
 ---
 
-## Task 1: SPIKE — validate dbdeployer PostgreSQL support (decision gate)
+## Task 1: Capture the exact dbdeployer PostgreSQL deploy command
 
-The user directs new infras use dbdeployer, but PG-on-dbdeployer has no in-repo precedent and may be unsupported by the pinned fork (v2.2.1). This spike resolves it before any infra is built. **This task's deliverable is a decision, not code.**
+**dbdeployer PG support is confirmed** by the maintainer (2026-07-08), so this is no longer a go/no-go gate — it only captures the **exact** flags/ports for a PG primary+2-replica sandbox against the pinned fork (v2.2.1), which Task 2a needs verbatim. Commit to the dbdeployer path (Task 2a); native `postgres:17` (Task 2b) is retained only as an emergency fallback if the pinned fork misbehaves in CI.
 
 **Files:**
 - Create: `test/pg-compat/SPIKE-dbdeployer-pg.md` (findings + decision)
@@ -90,17 +90,15 @@ dbdeployer sandboxes    # confirm 3 nodes, note the ports
 ```
 Record the exact working command and port scheme, or the error proving it's unsupported.
 
-- [ ] **Step 3: Write the decision**
+- [ ] **Step 3: Record the exact command**
 
-Create `test/pg-compat/SPIKE-dbdeployer-pg.md` recording: fork PG support (yes/no), the working deploy command + ports (if yes), and the **decision**:
-- **DECISION A (dbdeployer works):** proceed with **Task 2a**.
-- **DECISION B (dbdeployer lacks PG):** proceed with **Task 2b** (native `postgres:17`), and note the deviation from the "dbdeployer for new infras" directive with the evidence, so the maintainer can accept it or pursue a dbdeployer-fork fix separately.
+Create `test/pg-compat/SPIKE-dbdeployer-pg.md` recording the working PG deploy command, the resulting node ports, and the sandbox dir name — Task 2a copies these verbatim. (Support is already confirmed; only the exact flags/ports are being captured.) If the pinned fork unexpectedly fails, note it and fall back to Task 2b.
 
-- [ ] **Step 4: Commit the spike**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add test/pg-compat/SPIKE-dbdeployer-pg.md
-git commit -m "spike(pg-compat): dbdeployer PostgreSQL support decision + evidence"
+git commit -m "spike(pg-compat): capture exact dbdeployer PostgreSQL deploy command + ports"
 ```
 
 ---
