@@ -370,6 +370,7 @@ PgSQL_Query_Processor_Rule_t* PgSQL_Query_Processor::new_query_rule(int rule_id,
 	newQR->multiplex = multiplex;
 	newQR->apply = apply;
 	newQR->attributes = (attributes ? strdup(attributes) : NULL);
+	newQR->destination_schema = NULL; // not supported for PgSQL
 	newQR->comment = (comment ? strdup(comment) : NULL); // see issue #643
 	newQR->regex_engine1 = NULL;
 	newQR->regex_engine2 = NULL;
@@ -505,6 +506,7 @@ PgSQL_Query_Processor_Rule_t* PgSQL_Query_Processor::new_query_rule(const PgSQL_
 	newQR->multiplex = pqr->multiplex;
 	newQR->apply = pqr->apply;
 	newQR->attributes = (pqr->attributes ? strdup(pqr->attributes) : NULL);
+	newQR->destination_schema = NULL; // not supported for PgSQL
 	newQR->comment = (pqr->comment ? strdup(pqr->comment) : NULL); // see issue #643
 	newQR->regex_engine1 = NULL;
 	newQR->regex_engine2 = NULL;

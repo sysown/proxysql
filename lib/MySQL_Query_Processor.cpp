@@ -752,6 +752,7 @@ MySQL_Query_Processor_Rule_t* MySQL_Query_Processor::new_query_rule(int rule_id,
 	newQR->gtid_from_hostgroup = gtid_from_hostgroup;
 	newQR->apply = apply;
 	newQR->attributes = (attributes ? strdup(attributes) : NULL);
+	newQR->destination_schema = NULL;
 	newQR->comment = (comment ? strdup(comment) : NULL); // see issue #643
 	newQR->regex_engine1 = NULL;
 	newQR->regex_engine2 = NULL;
@@ -821,6 +822,17 @@ MySQL_Query_Processor_Rule_t* MySQL_Query_Processor::new_query_rule(int rule_id,
 					proxy_error("Failed to parse flagOUTs attributes for rule_id %d : %s\n", newQR->rule_id, flagOUTs.dump().c_str());
 				}
 			}
+			if (j_attributes.find("destination_schema") != j_attributes.end()) {
+				const nlohmann::json& dest_schema = j_attributes["destination_schema"];
+				if (dest_schema.type() == nlohmann::json::value_t::string) {
+					std::string s = dest_schema;
+					if (s.length() > 0) {
+						newQR->destination_schema = strdup(s.c_str());
+					}
+				} else {
+					proxy_error("Failed to parse destination_schema in JSON on attributes for rule_id %d : %s\n", newQR->rule_id, dest_schema.dump().c_str());
+				}
+			}
 		}
 	}
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Creating new rule in %p : rule_id:%d, active:%d, username=%s, schemaname=%s, flagIN:%d, %smatch_digest=\"%s\", %smatch_pattern=\"%s\", flagOUT:%d replace_pattern=\"%s\", destination_hostgroup:%d, apply:%d\n", newQR, newQR->rule_id, newQR->active, newQR->username, newQR->schemaname, newQR->flagIN, (newQR->negate_match_pattern ? "(!)" : ""), newQR->match_digest, (newQR->negate_match_pattern ? "(!)" : ""), newQR->match_pattern, newQR->flagOUT, newQR->replace_pattern, newQR->destination_hostgroup, newQR->apply);
@@ -888,6 +900,7 @@ MySQL_Query_Processor_Rule_t* MySQL_Query_Processor::new_query_rule(const MySQL_
 	newQR->gtid_from_hostgroup = mqr->gtid_from_hostgroup;
 	newQR->apply = mqr->apply;
 	newQR->attributes = (mqr->attributes ? strdup(mqr->attributes) : NULL);
+	newQR->destination_schema = NULL;
 	newQR->comment = (mqr->comment ? strdup(mqr->comment) : NULL); // see issue #643
 	newQR->regex_engine1 = NULL;
 	newQR->regex_engine2 = NULL;
@@ -955,6 +968,17 @@ MySQL_Query_Processor_Rule_t* MySQL_Query_Processor::new_query_rule(const MySQL_
 				}
 				else {
 					proxy_error("Failed to parse flagOUTs attributes for rule_id %d : %s\n", newQR->rule_id, flagOUTs.dump().c_str());
+				}
+			}
+			if (j_attributes.find("destination_schema") != j_attributes.end()) {
+				const nlohmann::json& dest_schema = j_attributes["destination_schema"];
+				if (dest_schema.type() == nlohmann::json::value_t::string) {
+					std::string s = dest_schema;
+					if (s.length() > 0) {
+						newQR->destination_schema = strdup(s.c_str());
+					}
+				} else {
+					proxy_error("Failed to parse destination_schema in JSON on attributes for rule_id %d : %s\n", newQR->rule_id, dest_schema.dump().c_str());
 				}
 			}
 		}

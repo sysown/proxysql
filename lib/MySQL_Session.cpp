@@ -8226,6 +8226,12 @@ __exit_set_destination_hostgroup:
 			current_hostgroup=qpo->destination_hostgroup;
 		}
 	}
+	if (qpo->destination_schema) {
+		// switch the session schema before backend connection selection: the
+		// connection pool matches on (username, schemaname) and issues
+		// COM_INIT_DB on schema mismatch, so the query lands on this schema
+		client_myds->myconn->userinfo->set_schemaname(qpo->destination_schema, strlen(qpo->destination_schema));
+	}
 
 	if (mysql_thread___set_query_lock_on_hostgroup == 1) { // algorithm introduced in 2.0.6
 		if (locked_on_hostgroup >= 0) {
