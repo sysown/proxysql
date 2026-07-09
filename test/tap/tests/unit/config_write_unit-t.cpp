@@ -327,6 +327,9 @@ static void test_write_mysql_servers_empty() {
 		"free_connections_pct INT, init_connect VARCHAR, multiplex INT, connection_warming INT, "
 		"throttle_connections_per_sec INT, ignore_session_variables VARCHAR, "
 		"hostgroup_settings VARCHAR, servers_defaults VARCHAR, comment VARCHAR)");
+	db->execute("CREATE TABLE mysql_servers_ssl_params "
+		"(hostname VARCHAR, port INT, username VARCHAR, ssl_ca VARCHAR, ssl_cert VARCHAR, ssl_key VARCHAR, "
+		"ssl_capath VARCHAR, ssl_crl VARCHAR, ssl_crlpath VARCHAR, ssl_cipher VARCHAR, tls_version VARCHAR, comment VARCHAR)");
 
 	ProxySQL_Config cfg(db);
 	std::string data;
@@ -377,6 +380,9 @@ static void test_write_mysql_servers_with_data() {
 		"free_connections_pct INT, init_connect VARCHAR, multiplex INT, connection_warming INT, "
 		"throttle_connections_per_sec INT, ignore_session_variables VARCHAR, "
 		"hostgroup_settings VARCHAR, servers_defaults VARCHAR, comment VARCHAR)");
+	db->execute("CREATE TABLE mysql_servers_ssl_params "
+		"(hostname VARCHAR, port INT, username VARCHAR, ssl_ca VARCHAR, ssl_cert VARCHAR, ssl_key VARCHAR, "
+		"ssl_capath VARCHAR, ssl_crl VARCHAR, ssl_crlpath VARCHAR, ssl_cipher VARCHAR, tls_version VARCHAR, comment VARCHAR)");
 
 	ProxySQL_Config cfg(db);
 	std::string data;
@@ -425,6 +431,9 @@ static void test_write_mysql_servers_replication_hostgroups() {
 		"free_connections_pct INT, init_connect VARCHAR, multiplex INT, connection_warming INT, "
 		"throttle_connections_per_sec INT, ignore_session_variables VARCHAR, "
 		"hostgroup_settings VARCHAR, servers_defaults VARCHAR, comment VARCHAR)");
+	db->execute("CREATE TABLE mysql_servers_ssl_params "
+		"(hostname VARCHAR, port INT, username VARCHAR, ssl_ca VARCHAR, ssl_cert VARCHAR, ssl_key VARCHAR, "
+		"ssl_capath VARCHAR, ssl_crl VARCHAR, ssl_crlpath VARCHAR, ssl_cipher VARCHAR, tls_version VARCHAR, comment VARCHAR)");
 
 	ProxySQL_Config cfg(db);
 	std::string data;
