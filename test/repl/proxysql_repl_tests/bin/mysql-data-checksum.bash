@@ -71,4 +71,24 @@ else
 fi
 echo "================================================================================"
 
+# On non-convergence, dump enough state to distinguish "mysql3 is behind" (SQL
+# thread lagging/stuck -> fewer rows / lower gtid_executed) from "mysql3 has
+# diverged" (same gtid_executed but different content -> a real relay/apply
+# correctness bug). Captured for mysql1/2/3 plus mysql3's replica status.
+if [[ ${res} -ne 0 ]]; then
+    echo ">>> DIAGNOSTIC: replicas did not converge within ${CHECKSUM_SYNC_TIMEOUT}s -- capturing state"
+    for node in "MYSQL1 ${MYSQL1_HOST} ${MYSQL1_PORT}" "MYSQL2 ${MYSQL2_HOST} ${MYSQL2_PORT}" "MYSQL3 ${MYSQL3_HOST} ${MYSQL3_PORT}"; do
+        set -- $node; nname=$1; nhost=$2; nport=$3
+        echo "--- ${nname} (${nhost}${INFRA}:${nport}) ---"
+        mysql -h${nhost}${INFRA} -P${nport} -uroot -proot --skip-column-names -e "\
+          SELECT CONCAT('gtid_executed=', @@GLOBAL.gtid_executed); \
+          SELECT CONCAT('rows[1..5]= ',(SELECT COUNT(*) FROM sysbench.sbtest1),' ',(SELECT COUNT(*) FROM sysbench.sbtest2),' ',(SELECT COUNT(*) FROM sysbench.sbtest3),' ',(SELECT COUNT(*) FROM sysbench.sbtest4),' ',(SELECT COUNT(*) FROM sysbench.sbtest5)); \
+          CHECKSUM TABLE sysbench.sbtest1, sysbench.sbtest2, sysbench.sbtest3, sysbench.sbtest4, sysbench.sbtest5;" 2>&1 | grep -vP "mysql: .?Warning"
+    done
+    echo "--- MYSQL3 replica status (IO/SQL running, lag, GTID positions, errors) ---"
+    mysql -h${MYSQL3_HOST}${INFRA} -P${MYSQL3_PORT} -uroot -proot -e "SHOW SLAVE STATUS\G" 2>&1 | grep -vP "mysql: .?Warning" \
+      | grep -iE "Slave_IO_Running|Slave_SQL_Running|Seconds_Behind|Retrieved_Gtid_Set|Executed_Gtid_Set|Read_Master_Log_Pos|Exec_Master_Log_Pos|Last_IO_Error|Last_SQL_Error|Auto_Position"
+    echo "================================================================================"
+fi
+
 exit $res
