@@ -118,6 +118,18 @@ jobs:
         path: |
           proxysql/binaries/
 
+    # Self-hosted runners reuse the working directory between jobs. The
+    # dockerized build below bind-mounts the checkout (./:/opt/proxysql) and
+    # writes files as root, so on the next job the actions/checkout pre-clean
+    # trips over them:
+    #   ##[error]File was unable to be removed Error: EACCES: permission denied,
+    #   unlink '.../proxysql/deps/prometheus-cpp/.../.bazelignore'
+    # and the job fails before it even builds. Reclaim ownership for the runner
+    # user first so checkout can clean. No-op on ephemeral GitHub-hosted runners.
+    - name: Reclaim workspace ownership (self-hosted contamination guard)
+      if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
+      run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
+
     - name: Checkout repository
       if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
       uses: actions/checkout@v4
@@ -533,6 +545,14 @@ jobs:
         if-no-files-found: error
         # cache_bin.tar.zst is produced by the "Pack bin cache" step above.
         path: cache_bin.tar.zst
+
+    # Undo the root ownership the dockerized build left behind, so (a) the next
+    # job on this self-hosted runner can clean/checkout without EACCES and (b)
+    # the failure-path artifact upload below can read the whole tree. Runs on
+    # every outcome; no-op on GitHub-hosted runners.
+    - name: Reclaim workspace ownership (leave runner clean)
+      if: always()
+      run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
 
     - name: Archive artifacts
       if: ${{ failure() && !cancelled() }}
