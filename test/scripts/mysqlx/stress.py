@@ -85,6 +85,7 @@ class ClientWorker(threading.Thread):
                     "user": self.args.user,
                     "password": self.args.password,
                     "ssl-mode": "DISABLED",
+                    "compression": "disabled",
                 })
                 while not self.stop_event.is_set():
                     sess.sql("SELECT 1").execute().fetch_all()

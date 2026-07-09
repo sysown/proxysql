@@ -122,6 +122,15 @@ LOAD MYSQLX USERS TO RUNTIME;
 LOAD MYSQLX BACKEND ENDPOINTS TO RUNTIME;
 LOAD MYSQLX ROUTES TO RUNTIME;
 
+-- proxysql-tester.py reloads core MySQL tables from disk before each
+-- TAP test. Persist this group's fixture rows so that reset keeps the
+-- mysqlx route's destination hostgroup and frontend user available.
+SAVE MYSQL USERS TO DISK;
+SAVE MYSQL SERVERS TO DISK;
+SAVE MYSQLX USERS TO DISK;
+SAVE MYSQLX BACKEND ENDPOINTS TO DISK;
+SAVE MYSQLX ROUTES TO DISK;
+
 -- Post-LOAD probes: surface what the plugin actually installed so a
 -- failure to bind the listener can be diagnosed from the CI log
 -- (counts of zero here mean install_*_from_admin saw empty source
