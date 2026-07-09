@@ -149,6 +149,8 @@ tests: tests-cpp \
 	test_ssl_fast_forward-2_libmysql-t \
 	test_ssl_fast_forward-3_libmariadb-t \
 	test_ssl_fast_forward-3_libmysql-t \
+	setparser_parsersql_test setparser_parsersql_test-t \
+	parsersql_digest_test parsersql_digest_test-t \
 	setparser_test2 setparser_test2-t \
 	setparser_test3 setparser_test3-t \
 	set_testing-240.csv \
@@ -420,14 +422,14 @@ test_mysqlx_route_drop_inflight-t: test_mysqlx_route_drop_inflight-t.cpp $(PROXY
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(PROTOBUF_LIB) -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
 
-# test_mysqlx_sigterm_inflight-t (the C++ stub binary) was deleted in the
-# same PR that removed skip_all() from the framework. The stub had never
-# been more than a skip_all() guard pointing operators at the real
-# implementation, which lives in
-# test/scripts/mysqlx/behavioral_validation.py --scenario sigterm. Once
-# skip_all was removed, the stub had no purpose other than to BAIL_OUT
-# on invocation, so the source and this Makefile target were removed
-# together. The python scenario is the canonical sigterm-inflight test.
+# The historical inflight stub binary was deleted in the same PR that
+# removed skip_all() from the framework. The stub had never been more
+# than a skip_all() guard pointing operators at the real implementation,
+# which lives in test/scripts/mysqlx/behavioral_validation.py
+# --scenario shutdown. Once skip_all was removed, the stub had no
+# purpose other than to BAIL_OUT on invocation, so the source and this
+# Makefile target were removed together. The python scenario is the
+# canonical shutdown-inflight test.
 
 
 ### clean targets
@@ -438,7 +440,7 @@ clean:
 	rm -f *-t || true
 	rm -f galera_1_timeout_count galera_2_timeout_no_count aurora || true
 	rm -f generate_set_session_csv set_testing-240.csv || true
-	rm -f setparser_test setparser_test2 setparser_test3  || true
+	rm -f setparser_test setparser_test2 setparser_test3 setparser_parsersql_test parsersql_digest_test || true
 	rm -f reg_test_3504-change_user_libmariadb_helper reg_test_3504-change_user_libmysql_helper || true
 
 setparser_parsersql_test-t: setparser_parsersql_test
@@ -457,3 +459,6 @@ ifeq ($(PROXYSQL40),1)
 else
 	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) $(PARSERSQL_LDIR)/libsqlparser.a -o $@
 endif
+
+parsersql_digest_test-t: parsersql_digest_test
+	ln -fs parsersql_digest_test parsersql_digest_test-t

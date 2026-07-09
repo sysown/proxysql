@@ -489,14 +489,27 @@ build-%:
 	@echo 'building $@'
 	@IMG_NAME=$(PKG_NAME) IMG_TYPE=$(subst -,_,$(PKG_TYPE)) IMG_COMP=$(subst -,_,$(PKG_COMP)) BLD_NAME=$(BLD_NAME) $(MAKE) $(PKG_FILE)
 
+# Scope the compose project per build variant, not just per commit. On shared
+# self-hosted CI runners several matrix variants of the same commit build
+# concurrently. The old name `"${GIT_VERSION/./}"` was make (not shell) syntax --
+# make expands `${GIT_VERSION/./}` as an undefined variable to the empty string,
+# so every build ran under compose's default project (the checkout dir basename,
+# "proxysql"). They therefore shared one project, and one variant's
+# `down -v --remove-orphans` tore down another still-building container (SIGKILL /
+# exit 137); same-dist variants (e.g. ubuntu22-tap vs ubuntu22-tap-mysqlx) also
+# collided on an identical container name. Key the project on BLD_NAME (always
+# leads with a letter -> valid project name; falls back to "proxysql" for direct
+# invocations that don't go through build-%) plus the dot-stripped version, so
+# each variant's up/down is isolated.
 .NOTPARALLEL: binaries/proxysql%
+binaries/proxysql%: COMPOSE_PROJECT = $(or $(strip $(BLD_NAME)),proxysql)-$(subst .,,$(GIT_VERSION))
 binaries/proxysql%:
 	${MAKE} cleanbuild
 	${MAKE} cleantest
 	find . -not -path "./binaries/*" -not -path "./.git/*" | xargs touch -h --date=@${SOURCE_DATE_EPOCH}
-	@docker compose -p "${GIT_VERSION/./}" down -v --remove-orphans
-	@docker compose -p "${GIT_VERSION/./}" up $(IMG_NAME)$(IMG_TYPE)$(IMG_COMP)_build
-	@docker compose -p "${GIT_VERSION/./}" down -v --remove-orphans
+	@docker compose -p "$(COMPOSE_PROJECT)" down -v --remove-orphans
+	@docker compose -p "$(COMPOSE_PROJECT)" up $(IMG_NAME)$(IMG_TYPE)$(IMG_COMP)_build
+	@docker compose -p "$(COMPOSE_PROJECT)" down -v --remove-orphans
 
 
 ### clean targets
