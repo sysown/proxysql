@@ -55,6 +55,20 @@ while :; do
     if (( SECONDS >= CHECKSUM_SYNC_TIMEOUT )); then
         break
     fi
+    # A transient backend-unreachability (e.g. an overloaded CI runner) can make
+    # ProxySQL exceed connect_timeout_server_max (10s) reaching the source
+    # hostgroup, which makes a replica's IO thread hit a FATAL error and stop for
+    # good -- MySQL never auto-restarts it, so the replica is frozen and no amount
+    # of waiting converges. Detect a stopped IO thread on the replicas and restart
+    # it so it reconnects and catches up once the backend is reachable again.
+    for rep in "${MYSQL2_HOST} ${MYSQL2_PORT}" "${MYSQL3_HOST} ${MYSQL3_PORT}"; do
+        set -- $rep; rhost=$1; rport=$2
+        io=$(mysql -h${rhost}${INFRA} -P${rport} -uroot -proot -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep -i "Slave_IO_Running:" | awk '{print $2}')
+        if [ "${io}" = "No" ]; then
+            echo "  ${rhost}${INFRA}: replica IO thread stopped -- restarting (STOP SLAVE; START SLAVE)"
+            mysql -h${rhost}${INFRA} -P${rport} -uroot -proot -e "STOP SLAVE; START SLAVE;" 2>/dev/null
+        fi
+    done
     sleep 1
 done
 
