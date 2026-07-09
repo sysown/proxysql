@@ -306,30 +306,13 @@ static void test_write_query_rules_null_fields() {
 static void test_write_mysql_servers_empty() {
 	SQLite3DB* db = create_test_db();
 	db->execute(ADMIN_SQLITE_TABLE_MYSQL_SERVERS);
-	// Also create the sub-tables that Write_MySQL_Servers reads
-	db->execute("CREATE TABLE mysql_replication_hostgroups "
-		"(writer_hostgroup INT PRIMARY KEY, reader_hostgroup INT, check_type VARCHAR, comment VARCHAR)");
-	db->execute("CREATE TABLE mysql_group_replication_hostgroups "
-		"(writer_hostgroup INT PRIMARY KEY, backup_writer_hostgroup INT, reader_hostgroup INT, "
-		"offline_hostgroup INT, active INT, max_writers INT, writer_is_also_reader INT, "
-		"max_transactions_behind INT, comment VARCHAR)");
-	db->execute("CREATE TABLE mysql_galera_hostgroups "
-		"(writer_hostgroup INT PRIMARY KEY, backup_writer_hostgroup INT, reader_hostgroup INT, "
-		"offline_hostgroup INT, active INT, max_writers INT, writer_is_also_reader INT, "
-		"max_transactions_behind INT, comment VARCHAR)");
-	db->execute("CREATE TABLE mysql_aws_aurora_hostgroups "
-		"(writer_hostgroup INT PRIMARY KEY, reader_hostgroup INT, active INT, aurora_port INT, "
-		"domain_name VARCHAR, max_lag_ms INT, check_interval_ms INT, check_timeout_ms INT, "
-		"writer_is_also_reader INT, new_reader_weight INT, add_lag_ms INT, min_lag_ms INT, "
-		"lag_num_checks INT, comment VARCHAR)");
-	db->execute("CREATE TABLE mysql_hostgroup_attributes "
-		"(hostgroup_id INT PRIMARY KEY, max_num_online_servers INT, autocommit INT, "
-		"free_connections_pct INT, init_connect VARCHAR, multiplex INT, connection_warming INT, "
-		"throttle_connections_per_sec INT, ignore_session_variables VARCHAR, "
-		"hostgroup_settings VARCHAR, servers_defaults VARCHAR, comment VARCHAR)");
-	db->execute("CREATE TABLE mysql_servers_ssl_params "
-		"(hostname VARCHAR, port INT, username VARCHAR, ssl_ca VARCHAR, ssl_cert VARCHAR, ssl_key VARCHAR, "
-		"ssl_capath VARCHAR, ssl_crl VARCHAR, ssl_crlpath VARCHAR, ssl_cipher VARCHAR, tls_version VARCHAR, comment VARCHAR)");
+	// Use the exact same table definitions as the real code (no hard-coded strings)
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS);
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_GROUP_REPLICATION_HOSTGROUPS);
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_GALERA_HOSTGROUPS);
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS);
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES);
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_SERVERS_SSL_PARAMS);
 
 	ProxySQL_Config cfg(db);
 	std::string data;
@@ -359,30 +342,19 @@ static void test_write_mysql_servers_with_data() {
 		"weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) "
 		"VALUES (1, '127.0.0.1', 3306, 0, 'ONLINE', 100, 0, 500, 10, 1, 50, 'primary')");
 
-	// Create sub-tables (empty) to avoid query errors
-	db->execute("CREATE TABLE mysql_replication_hostgroups "
-		"(writer_hostgroup INT PRIMARY KEY, reader_hostgroup INT, check_type VARCHAR, comment VARCHAR)");
-	db->execute("CREATE TABLE mysql_group_replication_hostgroups "
-		"(writer_hostgroup INT PRIMARY KEY, backup_writer_hostgroup INT, reader_hostgroup INT, "
-		"offline_hostgroup INT, active INT, max_writers INT, writer_is_also_reader INT, "
-		"max_transactions_behind INT, comment VARCHAR)");
-	db->execute("CREATE TABLE mysql_galera_hostgroups "
-		"(writer_hostgroup INT PRIMARY KEY, backup_writer_hostgroup INT, reader_hostgroup INT, "
-		"offline_hostgroup INT, active INT, max_writers INT, writer_is_also_reader INT, "
-		"max_transactions_behind INT, comment VARCHAR)");
-	db->execute("CREATE TABLE mysql_aws_aurora_hostgroups "
-		"(writer_hostgroup INT PRIMARY KEY, reader_hostgroup INT, active INT, aurora_port INT, "
-		"domain_name VARCHAR, max_lag_ms INT, check_interval_ms INT, check_timeout_ms INT, "
-		"writer_is_also_reader INT, new_reader_weight INT, add_lag_ms INT, min_lag_ms INT, "
-		"lag_num_checks INT, comment VARCHAR)");
-	db->execute("CREATE TABLE mysql_hostgroup_attributes "
-		"(hostgroup_id INT PRIMARY KEY, max_num_online_servers INT, autocommit INT, "
-		"free_connections_pct INT, init_connect VARCHAR, multiplex INT, connection_warming INT, "
-		"throttle_connections_per_sec INT, ignore_session_variables VARCHAR, "
-		"hostgroup_settings VARCHAR, servers_defaults VARCHAR, comment VARCHAR)");
-	db->execute("CREATE TABLE mysql_servers_ssl_params "
-		"(hostname VARCHAR, port INT, username VARCHAR, ssl_ca VARCHAR, ssl_cert VARCHAR, ssl_key VARCHAR, "
-		"ssl_capath VARCHAR, ssl_crl VARCHAR, ssl_crlpath VARCHAR, ssl_cipher VARCHAR, tls_version VARCHAR, comment VARCHAR)");
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS);
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_GROUP_REPLICATION_HOSTGROUPS);
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_GALERA_HOSTGROUPS);
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS);
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES);
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_SERVERS_SSL_PARAMS);
+	// Populate sub-tables with data (not empty!)
+	db->execute("INSERT INTO mysql_replication_hostgroups VALUES (10,20,'read_only','repl')");
+	db->execute("INSERT INTO mysql_group_replication_hostgroups (writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment) VALUES (30,31,32,33,1,2,0,100,'gr')");
+	db->execute("INSERT INTO mysql_galera_hostgroups (writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment) VALUES (40,41,42,43,1,3,1,50,'galera')");
+	db->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,comment) VALUES (50,51,1,3306,'aurora.example',100,1000,5000,0,1,0,0,1,'aurora')");
+	db->execute("INSERT INTO mysql_hostgroup_attributes (hostgroup_id,max_num_online_servers,autocommit,free_connections_pct,init_connect,multiplex,connection_warming,throttle_connections_per_sec,ignore_session_variables,hostgroup_settings,servers_defaults,comment) VALUES (60,100,-1,50,'SET autocommit=1',1,0,100,'','{}','{}','hg60')");
+	db->execute("INSERT INTO mysql_servers_ssl_params (hostname,port,username,ssl_ca,ssl_cert,ssl_key,ssl_capath,ssl_crl,ssl_crlpath,ssl_cipher,tls_version,comment) VALUES ('h1',3306,'u1','/ca','/cert','/key','','','','','TLSv1.2','ssl1')");
 
 	ProxySQL_Config cfg(db);
 	std::string data;
@@ -410,30 +382,16 @@ static void test_write_mysql_servers_with_data() {
 static void test_write_mysql_servers_replication_hostgroups() {
 	SQLite3DB* db = create_test_db();
 	db->execute(ADMIN_SQLITE_TABLE_MYSQL_SERVERS);
-	db->execute("CREATE TABLE mysql_replication_hostgroups "
-		"(writer_hostgroup INT PRIMARY KEY, reader_hostgroup INT, check_type VARCHAR, comment VARCHAR)");
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS);
 	db->execute("INSERT INTO mysql_replication_hostgroups VALUES (10, 20, 'read_only', 'repl group')");
-	db->execute("CREATE TABLE mysql_group_replication_hostgroups "
-		"(writer_hostgroup INT PRIMARY KEY, backup_writer_hostgroup INT, reader_hostgroup INT, "
-		"offline_hostgroup INT, active INT, max_writers INT, writer_is_also_reader INT, "
-		"max_transactions_behind INT, comment VARCHAR)");
-	db->execute("CREATE TABLE mysql_galera_hostgroups "
-		"(writer_hostgroup INT PRIMARY KEY, backup_writer_hostgroup INT, reader_hostgroup INT, "
-		"offline_hostgroup INT, active INT, max_writers INT, writer_is_also_reader INT, "
-		"max_transactions_behind INT, comment VARCHAR)");
-	db->execute("CREATE TABLE mysql_aws_aurora_hostgroups "
-		"(writer_hostgroup INT PRIMARY KEY, reader_hostgroup INT, active INT, aurora_port INT, "
-		"domain_name VARCHAR, max_lag_ms INT, check_interval_ms INT, check_timeout_ms INT, "
-		"writer_is_also_reader INT, new_reader_weight INT, add_lag_ms INT, min_lag_ms INT, "
-		"lag_num_checks INT, comment VARCHAR)");
-	db->execute("CREATE TABLE mysql_hostgroup_attributes "
-		"(hostgroup_id INT PRIMARY KEY, max_num_online_servers INT, autocommit INT, "
-		"free_connections_pct INT, init_connect VARCHAR, multiplex INT, connection_warming INT, "
-		"throttle_connections_per_sec INT, ignore_session_variables VARCHAR, "
-		"hostgroup_settings VARCHAR, servers_defaults VARCHAR, comment VARCHAR)");
-	db->execute("CREATE TABLE mysql_servers_ssl_params "
-		"(hostname VARCHAR, port INT, username VARCHAR, ssl_ca VARCHAR, ssl_cert VARCHAR, ssl_key VARCHAR, "
-		"ssl_capath VARCHAR, ssl_crl VARCHAR, ssl_crlpath VARCHAR, ssl_cipher VARCHAR, tls_version VARCHAR, comment VARCHAR)");
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_GROUP_REPLICATION_HOSTGROUPS);
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_GALERA_HOSTGROUPS);
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS);
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES);
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_SERVERS_SSL_PARAMS);
+	// Also populate one more sub for good measure
+	db->execute("INSERT INTO mysql_hostgroup_attributes (hostgroup_id, comment) VALUES (99, 'hg99')");
+	db->execute("INSERT INTO mysql_servers_ssl_params (hostname,port,username,comment) VALUES ('h99',3306,'u99','ssl99')");
 
 	ProxySQL_Config cfg(db);
 	std::string data;
@@ -450,6 +408,15 @@ static void test_write_mysql_servers_replication_hostgroups() {
 		"Write_Servers repl hg: check_type quoted");
 	ok(data.find("\"repl group\"") != std::string::npos,
 		"Write_Servers repl hg: comment quoted");
+	// Verify other subs are also serialized when present
+	ok(data.find("mysql_hostgroup_attributes:") != std::string::npos,
+		"Write_Servers repl hg: hostgroup_attributes section present");
+	ok(data.find("hostgroup_id=99") != std::string::npos,
+		"Write_Servers repl hg: hostgroup_attributes data present");
+	ok(data.find("mysql_servers_ssl_params:") != std::string::npos,
+		"Write_Servers repl hg: ssl_params section present");
+	ok(data.find("\"ssl99\"") != std::string::npos,
+		"Write_Servers repl hg: ssl_params data present");
 
 	delete db;
 }
