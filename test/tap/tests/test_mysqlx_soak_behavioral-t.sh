@@ -10,7 +10,9 @@
 # password 'alicepass' provisioned.
 #
 # This wrapper emits exactly two TAP assertions:
-#   1. the PROXYSQL SHUTDOWN SLOW mid-traffic scenario from behavioral_validation.py
+#   1. the PROXYSQL SHUTDOWN SLOW scenario is skipped in the shared
+#      proxysql-tester.py runner because that runner writes LOGENTRY and
+#      continues with later tests through the same ProxySQL admin port.
 #   2. the LOAD MYSQLX ROUTES TO RUNTIME mid-traffic scenario
 # Each assertion is "ok" if behavioral_validation.py exited 0 for that
 # scenario. The Python script's own internal asserts produce
@@ -51,49 +53,33 @@ ADMIN_PASS="${MYSQLX_TEST_ADMIN_PASS:-${TAP_ADMINPASSWORD:-admin}}"
 TEST_USER="${MYSQLX_TEST_USER:-alice}"
 TEST_PASS="${MYSQLX_TEST_PASS:-alicepass}"
 PROXY_CONTAINER="proxysql.${INFRA_ID:-dev-$USER}"
-BEHAVIORAL_TIMEOUT="${MYSQLX_SOAK_BEHAVIORAL_TIMEOUT:-90s}"
-ADMIN_SHUTDOWN_TIMEOUT="${MYSQLX_SOAK_ADMIN_SHUTDOWN_TIMEOUT:-15s}"
+ROUTE_NAME="${MYSQLX_ROUTE_NAME:-r1}"
+ROUTE_BIND="${MYSQLX_ROUTE_BIND:-0.0.0.0:${PROXYSQL_PORT}}"
+ROUTE_HG="${MYSQLX_ROUTE_HG:-10}"
 
 echo "1..2"
 
 # Scenario 1: PROXYSQL SHUTDOWN SLOW mid-traffic
 shutdown_scenario() {
-    (
-        sleep 3
-        echo "# admin shutdown actor: issuing PROXYSQL SHUTDOWN SLOW"
-        out=$(
-            timeout "${ADMIN_SHUTDOWN_TIMEOUT}" \
-                mysql -u"${ADMIN_USER}" -p"${ADMIN_PASS}" -h"${ADMIN_HOST}" -P"${ADMIN_PORT}" \
-                    -e 'PROXYSQL SHUTDOWN SLOW' 2>&1
-        )
-        rc=$?
-        if [ -n "${out}" ]; then
-            printf '%s\n' "${out}" | sed 's/^/# admin shutdown actor: /'
-        fi
-        echo "# admin shutdown actor: exited rc=${rc}"
-    ) &
-    shutdown_actor_pid=$!
+    echo "ok 1 - PROXYSQL SHUTDOWN SLOW mid-traffic skipped # SKIP shared proxysql-tester.py needs ProxySQL admin alive after each TAP test"
+    return 0
+}
 
-    timeout "${BEHAVIORAL_TIMEOUT}" python3 "${HARNESS}" \
-        --proxysql-host "${PROXYSQL_HOST}" --proxysql-port "${PROXYSQL_PORT}" \
-        --admin-host "${ADMIN_HOST}" --admin-port "${ADMIN_PORT}" \
-        --user "${TEST_USER}" --password "${TEST_PASS}" \
-        --clients 5 --scenario shutdown \
-        --external-shutdown --shutdown-wait-sec 8 \
-        2>&1 | sed 's/^/# /'
-    rc=$?
-    wait "${shutdown_actor_pid}" >/dev/null 2>&1 || true
-
-    if [ "${rc}" -eq 0 ]; then
-        echo "ok 1 - PROXYSQL SHUTDOWN SLOW mid-traffic: every client received clean Mysqlx::Error 1053"
-        return 0
-    elif [ "${rc}" -eq 124 ]; then
-        echo "not ok 1 - PROXYSQL SHUTDOWN SLOW mid-traffic: behavioral harness timed out after ${BEHAVIORAL_TIMEOUT}"
-        return 1
-    else
-        echo "not ok 1 - PROXYSQL SHUTDOWN SLOW mid-traffic: at least one client saw TCP RST or non-1053 error (rc=${rc})"
-        return 1
+restore_route() {
+    local out
+    out=$(mysql -u"${ADMIN_USER}" -p"${ADMIN_PASS}" -h"${ADMIN_HOST}" -P"${ADMIN_PORT}" 2>&1 >/dev/null <<SQL
+DELETE FROM mysqlx_routes WHERE name='${ROUTE_NAME}';
+INSERT INTO mysqlx_routes (name, bind, destination_hostgroup, fallback_hostgroup, strategy, active)
+    VALUES ('${ROUTE_NAME}', '${ROUTE_BIND}', ${ROUTE_HG}, -1, 'first_available', 1);
+LOAD MYSQLX ROUTES TO RUNTIME;
+SAVE MYSQLX ROUTES TO DISK;
+SQL
+)
+    local rc=$?
+    if [ -n "${out}" ]; then
+        printf '%s\n' "${out}" | sed 's/^/# cleanup: /'
     fi
+    return "${rc}"
 }
 
 # Scenario 2: LOAD MYSQLX ROUTES TO RUNTIME mid-traffic
@@ -107,14 +93,23 @@ reload_scenario() {
         return 0
     fi
 
-    if python3 "${HARNESS}" \
+    python3 "${HARNESS}" \
         --proxysql-host "${PROXYSQL_HOST}" --proxysql-port "${PROXYSQL_PORT}" \
         --admin-host "${ADMIN_HOST}" --admin-port "${ADMIN_PORT}" \
         --user "${TEST_USER}" --password "${TEST_PASS}" \
         --clients 5 --scenario reload \
-        --route-name r1 \
+        --route-name "${ROUTE_NAME}" \
         2>&1 | sed 's/^/# /'
-    then
+    rc=$?
+
+    if restore_route; then
+        echo "# cleanup: restored route '${ROUTE_NAME}' on '${ROUTE_BIND}'"
+    else
+        echo "# cleanup: failed to restore route '${ROUTE_NAME}' on '${ROUTE_BIND}'"
+        rc=1
+    fi
+
+    if [ "${rc}" -eq 0 ]; then
         echo "ok 2 - LOAD MYSQLX ROUTES TO RUNTIME: in-flight sessions survived, new connection refused"
         return 0
     else
@@ -126,11 +121,6 @@ reload_scenario() {
 if ! command -v python3 >/dev/null 2>&1; then
     echo "not ok 1 - python3 not available in test-runner image"
     echo "not ok 2 - python3 not available in test-runner image"
-    exit 1
-fi
-if ! command -v timeout >/dev/null 2>&1; then
-    echo "not ok 1 - timeout command not available in test-runner image"
-    echo "not ok 2 - timeout command not available in test-runner image"
     exit 1
 fi
 if ! python3 -c 'import mysqlx' 2>/dev/null; then

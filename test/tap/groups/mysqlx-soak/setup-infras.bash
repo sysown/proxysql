@@ -33,28 +33,33 @@ ADMIN_USER="admin"
 ADMIN_PASS="admin"
 TEST_USER="alice"
 TEST_PASS="alicepass"
+ROOT_PASSWORD="${ROOT_PASSWORD:-$(echo -n "${INFRA_ID}" | sha256sum | head -c 10)}"
+BACKEND_INFRA="${DEFAULT_MYSQL_INFRA:-infra-dbdeployer-mysql84}"
+BACKEND_INFRA_PROJECT="${BACKEND_INFRA}-${INFRA_ID}"
+BACKEND_CONTAINER="${BACKEND_INFRA_PROJECT}-dbdeployer1-1"
 
-echo ">>> Provisioning ${TEST_USER} on backend MySQL nodes"
+echo ">>> Provisioning ${TEST_USER} on backend MySQL source"
 # The mysqlx plugin uses backend_auth_mode='mapped' which makes the
 # backend connection authenticate as the frontend user. The X-Protocol
-# auth at the backend (MySQL 8.4 X plugin on port 33060) needs to find
-# 'alice' in mysql.user with mysql_native_password. Without this step
+# auth at the backend needs to find 'alice' in mysql.user with
+# mysql_native_password. Without this step
 # every backend session fails with "Access denied for user 'alice'",
 # so every SQL forwarded from ProxySQL's mysqlx listener errors out —
 # surfaced in soak as 100% error rate in the stress harness and as
 # 'pre-drop SELECT 1 succeeded on 0/N sessions' in route_drop_inflight.
-BACKEND_INFRA_PROJECT="infra-dbdeployer-mysql84-${INFRA_ID}"
-BACKEND_CONTAINER="${BACKEND_INFRA_PROJECT}-dbdeployer1-1"
-for SANDBOX in master node1 node2; do
-    if ! docker exec "${BACKEND_CONTAINER}" \
-        bash -lc "/root/sandboxes/rsandbox_8_4_8/${SANDBOX}/use <<SQL
-CREATE USER IF NOT EXISTS '${TEST_USER}'@'%' IDENTIFIED WITH mysql_native_password BY '${TEST_PASS}';
+if ! docker exec -i "${BACKEND_CONTAINER}" \
+    mysql --table -h127.0.0.1 -P"${MYSQLX_BACKEND_MYSQL_PORT:-3306}" \
+        -uroot -p"${ROOT_PASSWORD}" <<SQL
+CREATE USER IF NOT EXISTS '${TEST_USER}'@'%' IDENTIFIED WITH 'mysql_native_password' BY '${TEST_PASS}';
+ALTER USER '${TEST_USER}'@'%' IDENTIFIED WITH 'mysql_native_password' BY '${TEST_PASS}';
 GRANT ALL PRIVILEGES ON *.* TO '${TEST_USER}'@'%';
 FLUSH PRIVILEGES;
-SQL" >/dev/null 2>&1; then
-        echo ">>> WARNING: failed to provision ${TEST_USER} on ${SANDBOX} (may already exist or sandbox not present)"
-    fi
-done
+SELECT user, host, plugin FROM mysql.user WHERE user='${TEST_USER}';
+SQL
+then
+    echo "ERROR: failed to provision ${TEST_USER} on ${BACKEND_CONTAINER}:${MYSQLX_BACKEND_MYSQL_PORT:-3306}" >&2
+    exit 1
+fi
 
 echo ">>> Configuring mysqlx plugin in ${PROXY_CONTAINER}"
 
