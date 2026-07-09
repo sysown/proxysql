@@ -17,12 +17,6 @@ mysql_variables=
 	stacksize=1048576
 	server_version="5.5.30"
 	connect_timeout_server=3000
-	# On an overloaded CI runner the source backend can be transiently
-	# unreachable for several seconds; the default 10000ms cap makes ProxySQL
-	# return a fatal "Max connect timeout reached while reaching hostgroup N"
-	# to the relayed replica IO thread, which then stops for good. Give the
-	# backend more room to recover before that happens.
-	connect_timeout_server_max=30000
 	monitor_username="monitor"
 	monitor_password="monitor"
 	monitor_history=600000
