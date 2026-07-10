@@ -6,7 +6,9 @@ Exercises two specific behaviours from issue #5678:
 1. PROXYSQL SHUTDOWN SLOW mid-traffic: open N X-Protocol clients
    running steady queries, issue `PROXYSQL SHUTDOWN SLOW` through the
    admin port, verify each client sees a clean Mysqlx::Error frame
-   with code 1053 instead of a TCP RST.
+   with code 1053 instead of a TCP RST. In docker-isolated TAP runs the
+   shutdown command is sent by the wrapper so this observer cannot block
+   inside the admin command while clients are still active.
 
 2. LOAD MYSQLX ROUTES TO RUNTIME mid-traffic: open N clients on a
    route, drop the route from admin, reload, verify in-flight sessions
@@ -49,6 +51,13 @@ def parse_args():
     p.add_argument("--password", required=True)
     p.add_argument("--clients", type=int, default=5,
                    help="Concurrent client count")
+    p.add_argument("--external-shutdown", action="store_true",
+                   help="Don't issue PROXYSQL SHUTDOWN SLOW from this "
+                        "process; expect an external actor to send it "
+                        "while this process observes client disconnects")
+    p.add_argument("--shutdown-wait-sec", type=float, default=5.0,
+                   help="How long to wait for externally triggered "
+                        "shutdown notifications")
     p.add_argument("--scenario", choices=["shutdown", "reload", "all"],
                    default="all")
     p.add_argument("--route-name", default="r1",
@@ -63,6 +72,7 @@ def open_session(args):
         "user": args.user,
         "password": args.password,
         "ssl-mode": "DISABLED",
+        "compression": "disabled",
     })
 
 
@@ -139,24 +149,31 @@ def scenario_shutdown(args):
     results: List[dict] = []
     threads = [
         threading.Thread(target=steady_traffic_thread,
-                         args=(args, stop, results, i))
+                         args=(args, stop, results, i),
+                         daemon=True)
         for i in range(args.clients)
     ]
     for t in threads:
         t.start()
     time.sleep(2)  # let clients establish steady traffic
 
-    if not issue_admin_shutdown(args):
-        stop.set()
-        for t in threads:
-            t.join(timeout=5)
-        return 1
-    # Give the server a moment to close the listener and notify clients.
-    time.sleep(3)
+    if args.external_shutdown:
+        print("Waiting for an external actor to issue PROXYSQL SHUTDOWN SLOW ...")
+        time.sleep(args.shutdown_wait_sec)
+    else:
+        if not issue_admin_shutdown(args):
+            stop.set()
+            for t in threads:
+                t.join(timeout=5)
+            return 1
+        # Give the server a moment to close the listener and notify clients.
+        time.sleep(3)
 
     for t in threads:
         t.join(timeout=10)
     stop.set()
+    for t in threads:
+        t.join(timeout=1)
 
     print(f"Collected {len(results)} client outcomes:")
     clean_close = 0
@@ -189,7 +206,8 @@ def scenario_reload(args):
     results: List[dict] = []
     threads = [
         threading.Thread(target=steady_traffic_thread,
-                         args=(args, stop, results, i))
+                         args=(args, stop, results, i),
+                         daemon=True)
         for i in range(args.clients)
     ]
     for t in threads:
