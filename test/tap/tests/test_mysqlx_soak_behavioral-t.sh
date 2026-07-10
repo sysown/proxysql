@@ -84,13 +84,14 @@ SQL
 
 # Scenario 2: LOAD MYSQLX ROUTES TO RUNTIME mid-traffic
 reload_scenario() {
-    # The proxysql container needs to be up again for this scenario.
-    # Restart it (the test-runner can't restart proxysql directly;
-    # the right thing is to re-provision via setup-infras.bash, but
-    # for now we skip if the container isn't responsive).
-    if ! docker exec "${PROXY_CONTAINER}" mysql -uadmin -padmin -h127.0.0.1 -P6032 -e 'SELECT 1' >/dev/null 2>&1; then
-        echo "ok 2 - reload scenario skipped # SKIP proxysql container not running (shutdown scenario stopped it)"
-        return 0
+    # The proxysql container must still be up: this wrapper skips the
+    # destructive shutdown scenario above, so an admin probe failure is
+    # a real test/setup failure, not a valid skip. Use the same admin
+    # credentials as the rest of the TAP harness; admin/admin is local-
+    # only in CI and falsely reported a dead container.
+    if ! docker exec "${PROXY_CONTAINER}" mysql -u"${ADMIN_USER}" -p"${ADMIN_PASS}" -h127.0.0.1 -P6032 -e 'SELECT 1' >/dev/null 2>&1; then
+        echo "# reload scenario admin probe failed for ${PROXY_CONTAINER} using ${ADMIN_USER}@127.0.0.1:6032"
+        return 1
     fi
 
     python3 "${HARNESS}" \

@@ -219,6 +219,17 @@ def main():
     print(f"\nFinal: total_queries={total_q} total_errors={total_e} "
           f"error_rate={error_rate:.4%}")
 
+    error_samples = []
+    for w in workers:
+        if w.last_error and w.last_error not in error_samples:
+            error_samples.append(w.last_error)
+        if len(error_samples) >= 5:
+            break
+    if error_samples:
+        print("\nWorker error samples:")
+        for err in error_samples:
+            print(f"  {err}")
+
     print("\nFinal stats_mysqlx_routes:")
     for row in fetch_route_stats(args):
         print(f"  {row}")
