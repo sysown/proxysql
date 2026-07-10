@@ -11,7 +11,7 @@ WORKDIR /src
 ARG PGJDBC_VERSION=42.7.4
 RUN curl -fsSLo /pgjdbc.jar "https://repo1.maven.org/maven2/org/postgresql/postgresql/${PGJDBC_VERSION}/postgresql-${PGJDBC_VERSION}.jar"
 COPY drivers/java/Behaviors.java .
-RUN javac -cp /pgjdbc.jar Behaviors.java -d /out
+RUN javac --release 17 -cp /pgjdbc.jar Behaviors.java -d /out
 
 # ---- Node deps: install node-postgres against the lockfile ----
 FROM node:22-bookworm-slim AS nodebuild
