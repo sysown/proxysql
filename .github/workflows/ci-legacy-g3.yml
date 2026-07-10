@@ -43,28 +43,32 @@ jobs:
           if [ "${ELIGIBLE:-}" = "true" ]; then
             POOL="${POOL_SIZE:-6}"
             # Listing runners needs repo admin, which no available token has, so
-            # infer pool load from job state the default token CAN read: a
-            # proxysql-ci VM is busy iff it is running an in-progress job whose
-            # runner_name starts with 'ci-vm'. idle = POOL - busy. GitHub assigns
-            # a queued job the instant a runner frees, so busy < POOL implies a
-            # genuinely free VM (no hidden queue). Early-exit once busy hits POOL.
-            busy=0; err=0
-            ids=$(gh api --paginate "repos/${REPO}/actions/runs?status=in_progress&per_page=100" --jq '.workflow_runs[].id' 2>e1) || err=1
+            # infer pool demand from job state the default token CAN read:
+            #   demand = VMs occupied (in-progress jobs whose runner_name starts
+            #            with 'ci-vm') + jobs already queued for the pool
+            #            (status=queued carrying the 'proxysql-ci' label).
+            # Counting the queue too dampens the cycle-start thundering herd: once
+            # earlier deciders have queued self-hosted jobs, later deciders see the
+            # contention and spill. free = POOL - demand; self-hosted iff free>=1.
+            # Early-exit once demand hits POOL. Scan in-progress AND queued runs.
+            demand=0; err=0
+            ids=$( { gh api --paginate "repos/${REPO}/actions/runs?status=in_progress&per_page=100" --jq '.workflow_runs[].id';
+                     gh api --paginate "repos/${REPO}/actions/runs?status=queued&per_page=100" --jq '.workflow_runs[].id'; } 2>e1 ) || err=1
             if [ "$err" = "0" ]; then
               for rid in ${ids:-}; do
-                [ "$busy" -ge "$POOL" ] && break
-                n=$(gh api "repos/${REPO}/actions/runs/${rid}/jobs" --jq '[.jobs[]|select(.status=="in_progress" and ((.runner_name//"")|startswith("ci-vm")))]|length' 2>/dev/null) || n=0
-                busy=$(( busy + ${n:-0} ))
+                [ "$demand" -ge "$POOL" ] && break
+                n=$(gh api "repos/${REPO}/actions/runs/${rid}/jobs" --jq '[.jobs[]|select((.status=="in_progress" and ((.runner_name//"")|startswith("ci-vm"))) or (.status=="queued" and (([.labels[]]|index("proxysql-ci")) != null)))]|length' 2>/dev/null) || n=0
+                demand=$(( demand + ${n:-0} ))
               done
-              idle=$(( POOL - busy ))
-              echo ">>> self-hosted pool: busy=${busy}/${POOL} idle=${idle}"
-              if [ "${idle}" -ge 1 ]; then
-                choice='["self-hosted","proxysql-ci"]'; echo ">>> a VM is free -> self-hosted"
+              free=$(( POOL - demand ))
+              echo ">>> self-hosted pool: demand=${demand}/${POOL} free=${free} (occupied+queued)"
+              if [ "${free}" -ge 1 ]; then
+                choice='["self-hosted","proxysql-ci"]'; echo ">>> capacity available -> self-hosted"
               else
-                choice='"ubuntu-22.04"'; echo ">>> pool saturated -> spill to GitHub-hosted"
+                choice='"ubuntu-22.04"'; echo ">>> pool at/over capacity -> spill to GitHub-hosted"
               fi
             else
-              echo ">>> WARNING: could not read in-progress runs:"; sed 's/^/    /' e1
+              echo ">>> WARNING: could not read runs:"; sed 's/^/    /' e1
               choice='["self-hosted","proxysql-ci"]'; echo ">>> failing SAFE to self-hosted (offload unchanged)"
             fi
           else

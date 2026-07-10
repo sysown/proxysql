@@ -11,8 +11,75 @@ env:
   SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # Availability-aware dispatch (PROTOTYPE -- CI-legacy-g3 only for now).
+  # `runs-on` locks its pool when the job is created and never falls back, so a
+  # self-hosted-routed job queues behind the 6-VM pool even while GitHub-hosted
+  # capacity sits idle. This leading job decides the pool up front: eligible
+  # actor+workflow AND an idle proxysql-ci VM -> self-hosted; pool saturated ->
+  # SPILL to GitHub-hosted instead of queuing. Listing runners needs repo admin
+  # (GH_TOKEN_SYSOWN); if that is unavailable we fail SAFE to self-hosted so the
+  # existing offload behavior is preserved. It is a heuristic (idle-now != idle-
+  # when-the-job-lands), so it drains the tail to hosted rather than perfectly
+  # packing the VMs.
+  # ---------------------------------------------------------------------------
+  pick-runner:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read          # read in-progress runs/jobs (no repo admin needed)
+    outputs:
+      runson: ${{ steps.pick.outputs.runson }}
+    steps:
+      - name: Pick runner pool
+        id: pick
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          POOL_SIZE: ${{ vars.SELFHOSTED_POOL_SIZE || '6' }}
+          ELIGIBLE: ${{ (github.actor == 'renecannao' || (inputs.trigger && fromJson(inputs.trigger).event.workflow_run.actor.login == 'renecannao')) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) }}
+        run: |
+          set -uo pipefail
+          choice='"ubuntu-22.04"'
+          if [ "${ELIGIBLE:-}" = "true" ]; then
+            POOL="${POOL_SIZE:-6}"
+            # Listing runners needs repo admin, which no available token has, so
+            # infer pool demand from job state the default token CAN read:
+            #   demand = VMs occupied (in-progress jobs whose runner_name starts
+            #            with 'ci-vm') + jobs already queued for the pool
+            #            (status=queued carrying the 'proxysql-ci' label).
+            # Counting the queue too dampens the cycle-start thundering herd: once
+            # earlier deciders have queued self-hosted jobs, later deciders see the
+            # contention and spill. free = POOL - demand; self-hosted iff free>=1.
+            # Early-exit once demand hits POOL. Scan in-progress AND queued runs.
+            demand=0; err=0
+            ids=$( { gh api --paginate "repos/${REPO}/actions/runs?status=in_progress&per_page=100" --jq '.workflow_runs[].id';
+                     gh api --paginate "repos/${REPO}/actions/runs?status=queued&per_page=100" --jq '.workflow_runs[].id'; } 2>e1 ) || err=1
+            if [ "$err" = "0" ]; then
+              for rid in ${ids:-}; do
+                [ "$demand" -ge "$POOL" ] && break
+                n=$(gh api "repos/${REPO}/actions/runs/${rid}/jobs" --jq '[.jobs[]|select((.status=="in_progress" and ((.runner_name//"")|startswith("ci-vm"))) or (.status=="queued" and (([.labels[]]|index("proxysql-ci")) != null)))]|length' 2>/dev/null) || n=0
+                demand=$(( demand + ${n:-0} ))
+              done
+              free=$(( POOL - demand ))
+              echo ">>> self-hosted pool: demand=${demand}/${POOL} free=${free} (occupied+queued)"
+              if [ "${free}" -ge 1 ]; then
+                choice='["self-hosted","proxysql-ci"]'; echo ">>> capacity available -> self-hosted"
+              else
+                choice='"ubuntu-22.04"'; echo ">>> pool at/over capacity -> spill to GitHub-hosted"
+              fi
+            else
+              echo ">>> WARNING: could not read runs:"; sed 's/^/    /' e1
+              choice='["self-hosted","proxysql-ci"]'; echo ">>> failing SAFE to self-hosted (offload unchanged)"
+            fi
+          else
+            echo ">>> not eligible for self-hosted -> GitHub-hosted"
+          fi
+          echo "runson=${choice}" >> "$GITHUB_OUTPUT"
+          echo ">>> decision: runson=${choice}"
+
   tests:
-    runs-on: ${{ (github.actor == 'renecannao' || (inputs.trigger && fromJson(inputs.trigger).event.workflow_run.actor.login == 'renecannao')) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) && fromJson('["self-hosted","proxysql-ci"]') || 'ubuntu-22.04' }}
+    needs: pick-runner
+    runs-on: ${{ fromJson(needs.pick-runner.outputs.runson) }}
     strategy:
       fail-fast: false
       matrix:
