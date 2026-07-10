@@ -169,9 +169,15 @@ int verify_monitor_functionality(MYSQL* admin_mysql) {
  * Get all Group Replication backend nodes from mysql_servers table
  */
 int get_gr_backends(MYSQL* admin_mysql, vector<BackendNode>& backends) {
+    // Match the GR backends regardless of which infra we run against. Every GR
+    // infra registers its nodes with a hostname like
+    // "dbdeployerN.infra-dbdeployer-<infra>-gr" (e.g. mysql84/90/91/92/93/95-gr),
+    // so filter on the common "infra-dbdeployer" marker instead of a hardcoded
+    // infra name -- otherwise the test finds zero backends in every group but
+    // mysql84-gr and fails at "Find Group Replication backends".
     const char* query =
         "SELECT DISTINCT hostname, port FROM mysql_servers "
-        "WHERE comment LIKE '%infra-dbdeployer-mysql84-gr%' OR hostname LIKE '%mysql84-gr%' "
+        "WHERE hostname LIKE '%infra-dbdeployer%' "
         "ORDER BY hostname, port";
 
     if (mysql_query(admin_mysql, query)) {
@@ -243,9 +249,15 @@ int test_ansi_quotes_group_replication() {
     }
     ok(1, "Find Group Replication backends in mysql_servers table");
 
-    // Use the infrastructure-specific user created by docker-compose-init.bash
-    string backend_user = "infra-dbdeployer-mysql84-gr";
-    string backend_password = "infra-dbdeployer-mysql84-gr";
+    // Derive the infrastructure-specific user (created by docker-compose-init.bash)
+    // from a backend hostname, e.g. "dbdeployerN.infra-dbdeployer-<infra>-gr" ->
+    // "infra-dbdeployer-<infra>-gr". Keeps the test infra-agnostic so it runs
+    // across every GR group instead of only mysql84-gr.
+    const string& backend_host = backends.front().host;
+    size_t infra_dot = backend_host.find('.');
+    string infra_user = (infra_dot != string::npos) ? backend_host.substr(infra_dot + 1) : backend_host;
+    string backend_user = infra_user;
+    string backend_password = infra_user;
 
     // Test 3: Connect to all backends
     vector<string> original_sql_modes;
