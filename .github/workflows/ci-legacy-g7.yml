@@ -12,7 +12,7 @@ env:
 
 jobs:
   tests:
-    runs-on: ubuntu-22.04
+    runs-on: ${{ (github.actor == 'renecannao' || (inputs.trigger && fromJson(inputs.trigger).event.workflow_run.actor.login == 'renecannao')) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) && fromJson('["self-hosted","proxysql-ci"]') || 'ubuntu-22.04' }}
     # `write-all` grants every default GITHUB_TOKEN scope plus the
     # id-token:write scope codecov-action@v4 needs to mint a GitHub OIDC
     # token for `use_oidc: true`. Caller workflow on v3.0 must also
