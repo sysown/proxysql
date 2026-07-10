@@ -194,6 +194,17 @@ MysqlxSession::MysqlxSession()
 
 MysqlxSession::~MysqlxSession() {
 	if (backend_conn_) {
+		// If the frontend session is being destroyed while a backend
+		// operation is still outstanding, the backend socket can still
+		// have unread response frames. Pooling it would hand dirty wire
+		// state to the next frontend session.
+		if (status_ == WAITING_SERVER_XMSG ||
+		    status_ == X_SESSION_RESET_WAITING ||
+		    status_ == X_PASSTHROUGH_BACKEND_CONNECTING ||
+		    status_ == X_PASSTHROUGH_FORWARD ||
+		    response_state_ != RESP_IDLE) {
+			backend_conn_->set_reusable(false);
+		}
 		return_backend_to_pool();
 	}
 	if (client_ds_.get_fd() >= 0) {
@@ -395,6 +406,7 @@ void MysqlxSession::handler_connecting_client() {
 
 		case Mysqlx::ClientMessages_Type_CON_CLOSE:
 			client_ds_.pop_frame();
+			send_ok();
 			healthy = false;
 			break;
 
@@ -1074,6 +1086,7 @@ int MysqlxSession::dispatch_client_message(uint8_t msg_type) {
 		case Mysqlx::ClientMessages_Type_CON_CLOSE:
 		case Mysqlx::ClientMessages_Type_SESS_CLOSE:
 			client_ds_.pop_frame();
+			send_ok();
 			status_ = X_SESSION_CLOSING; healthy = false;
 			to_process = true; return 0;
 		case Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_START:
@@ -1171,6 +1184,7 @@ void MysqlxSession::forward_to_backend() {
 			return;
 		}
 		server_ds().init(XDS_BACKEND, backend_conn_->get_fd());
+		server_ds().set_status(XDS_READY);
 	}
 
 	if (client_ds_.has_complete_frame()) {
@@ -1236,6 +1250,10 @@ bool MysqlxSession::is_frame_allowed(uint8_t msg_type) const {
 			if (msg_type == Mysqlx::ServerMessages_Type_RESULTSET_FETCH_DONE_MORE_RESULTSETS) {
 				return true;
 			}
+			if (msg_type == Mysqlx::ServerMessages_Type_RESULTSET_FETCH_DONE) {
+				return response_state_ == RESP_WAITING_STMT_EXECUTE ||
+				       response_state_ == RESP_WAITING_PREPARE_EXECUTE;
+			}
 			// FETCH_DONE_MORE_OUT_PARAMS only flows through stored-proc
 			// shapes; STMT_EXECUTE and PREPARE_EXECUTE both can produce
 			// it. Allow on those two; CRUD doesn't have out-params but
@@ -1278,8 +1296,7 @@ bool MysqlxSession::is_terminal_frame(uint8_t msg_type) const {
 
 	switch (response_state_) {
 		case RESP_WAITING_STMT_EXECUTE:
-			return msg_type == Mysqlx::ServerMessages_Type_SQL_STMT_EXECUTE_OK ||
-			       msg_type == Mysqlx::ServerMessages_Type_RESULTSET_FETCH_DONE;
+			return msg_type == Mysqlx::ServerMessages_Type_SQL_STMT_EXECUTE_OK;
 		case RESP_WAITING_CRUD:
 			return msg_type == Mysqlx::ServerMessages_Type_OK ||
 			       msg_type == Mysqlx::ServerMessages_Type_RESULTSET_FETCH_DONE ||
@@ -1736,6 +1753,7 @@ void MysqlxSession::handler_passthrough_backend_connecting() {
 		// backend connection's fd (matches handler_passthrough_
 		// forward()'s client_fd / backend_fd lookup).
 		server_ds().init(XDS_BACKEND, backend_conn_->get_fd());
+		server_ds().set_status(XDS_READY);
 		// Mark the connection IN_USE so MysqlxConnection's reuse
 		// invariants hold; reusable_ remains false from start_connect.
 		backend_conn_->set_state(MysqlxConnection::IN_USE);
@@ -2208,6 +2226,7 @@ void MysqlxSession::handler_connecting_server() {
 				identity_ ? identity_->default_route : std::string(),
 				target_hostgroup_);
 			server_ds().init(XDS_BACKEND, backend_conn_->get_fd());
+			server_ds().set_status(XDS_READY);
 			status_ = WAITING_CLIENT_XMSG;
 			to_process = true;
 			return;
@@ -2347,6 +2366,7 @@ void MysqlxSession::handler_connecting_server() {
 		identity_ ? identity_->default_route : std::string(),
 		target_hostgroup_);
 	server_ds().init(XDS_BACKEND, backend_conn_->get_fd());
+	server_ds().set_status(XDS_READY);
 	backend_conn_->set_state(MysqlxConnection::IDLE);
 	backend_conn_->set_reusable(true);
 	status_ = WAITING_CLIENT_XMSG;

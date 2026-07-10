@@ -220,6 +220,19 @@ static bool send_sql_stmt(int fd, const std::string& sql) {
 	return mysqlx_write_all(fd, frame.data(), frame.size());
 }
 
+static void diag_mysqlx_error(const char* phase, int client_idx,
+                              const std::vector<uint8_t>& payload) {
+	Mysqlx::Error err;
+	if (!err.ParseFromArray(payload.data(), static_cast<int>(payload.size()))) {
+		diag("%s client %d: received Mysqlx::Error but failed to parse payload",
+		     phase, client_idx);
+		return;
+	}
+	diag("%s client %d: Mysqlx::Error code=%u sql_state='%s' msg='%s'",
+	     phase, client_idx, err.code(), err.sql_state().c_str(),
+	     err.msg().c_str());
+}
+
 struct E2EConfig {
 	std::string host;
 	uint16_t port;
@@ -276,16 +289,28 @@ static bool full_handshake(int fd, const E2EConfig& cfg) {
 
 // Drive a single SELECT 1 to completion. Returns true on
 // STMT_EXECUTE_OK. Bails on Mysqlx::Error or socket close.
-static bool exec_select_1(int fd) {
-	if (!send_sql_stmt(fd, "SELECT 1")) return false;
+static bool exec_select_1(int fd, const char* phase, int client_idx) {
+	if (!send_sql_stmt(fd, "SELECT 1")) {
+		diag("%s client %d: failed to send SELECT 1", phase, client_idx);
+		return false;
+	}
 	for (int i = 0; i < 200; i++) {
 		MysqlxFrameHeader hdr {};
 		std::vector<uint8_t> payload;
-		if (!mysqlx_read_frame(fd, hdr, payload)) return false;
-		if (hdr.message_type == MSG_SRV_ERROR) return false;
+		if (!mysqlx_read_frame(fd, hdr, payload)) {
+			diag("%s client %d: socket closed or frame read failed while waiting for SELECT 1 response",
+			     phase, client_idx);
+			return false;
+		}
+		if (hdr.message_type == MSG_SRV_ERROR) {
+			diag_mysqlx_error(phase, client_idx, payload);
+			return false;
+		}
 		if (hdr.message_type == MSG_SRV_STMT_EXECUTE_OK) return true;
 		// COLUMN_META, ROW, FETCH_DONE, NOTICE: keep reading.
 	}
+	diag("%s client %d: SELECT 1 did not complete after 200 X frames",
+	     phase, client_idx);
 	return false;
 }
 
@@ -342,11 +367,11 @@ int main() {
 		close(probe);
 	}
 
-	plan(2 + N_CLIENTS + N_CLIENTS + 1 + 1);
-	// 1 -- N pre-drop handshakes
-	// 1 -- pre-drop SELECT 1 on each of N clients
+	plan(6);
+	// 1 -- all pre-drop handshakes
+	// 1 -- pre-drop SELECT 1 on all connected clients
 	// 1 -- admin DELETE+LOAD succeeded
-	// 1 -- N post-drop SELECT 1 on each of N clients (in-flight survival)
+	// 1 -- post-drop SELECT 1 on all in-flight clients
 	// 1 -- new connection to dropped route is refused
 	// 1 -- admin restore succeeded
 
@@ -377,7 +402,7 @@ int main() {
 	int pre_ok = 0;
 	for (int i = 0; i < N_CLIENTS; i++) {
 		if (fds[i] < 0) continue;
-		if (exec_select_1(fds[i])) pre_ok++;
+		if (exec_select_1(fds[i], "pre-drop SELECT 1", i)) pre_ok++;
 	}
 	ok(pre_ok == handshakes_ok,
 	   "Stage 2: pre-drop SELECT 1 succeeded on %d/%d sessions",
@@ -424,7 +449,7 @@ int main() {
 	int post_ok = 0;
 	for (int i = 0; i < N_CLIENTS; i++) {
 		if (fds[i] < 0) continue;
-		if (exec_select_1(fds[i])) post_ok++;
+		if (exec_select_1(fds[i], "post-drop SELECT 1", i)) post_ok++;
 	}
 	ok(post_ok == pre_ok,
 	   "Stage 4: post-drop SELECT 1 still succeeds on %d/%d in-flight sessions (in-flight survival contract)",
