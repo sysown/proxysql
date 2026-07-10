@@ -64,7 +64,7 @@ MYSQL* connect_proxy(const char* db) {
 }
 
 int main() {
-	plan(8);
+	plan(12);
 
 	if (cl.getEnv())
 		return exit_status();
@@ -149,6 +149,37 @@ int main() {
 	}
 	val = fetch_single(conn, "SELECT DATABASE()");
 	ok(val == DST_DB, "USE path: DATABASE() should be remapped to '%s', got '%s'", DST_DB, val.c_str());
+	mysql_close(conn);
+	conn = NULL;
+
+	// query cache interaction: the schema switch must happen before the cache
+	// lookup, so cache keys use the remapped schema and a cache HIT still
+	// leaves the session on the remapped schema
+	snprintf(query, sizeof(query),
+		"UPDATE mysql_query_rules SET cache_ttl=60000 WHERE rule_id=%d", RULE_ID);
+	MYSQL_QUERY_ON_ERR_CLEANUP(admin, query);
+	MYSQL_QUERY_ON_ERR_CLEANUP(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
+
+	conn = connect_proxy(SRC_DB);
+	if (!conn) {
+		goto cleanup;
+	}
+	val = fetch_single(conn, "SELECT v FROM marker");
+	ok(val == "in_dst", "cache path: first (cache-miss) marker should be 'in_dst', got '%s'", val.c_str());
+	{
+		std::string hits_before = fetch_single(admin,
+			"SELECT variable_value FROM stats_mysql_global WHERE variable_name='Query_Cache_count_GET_OK'");
+		val = fetch_single(conn, "SELECT v FROM marker");
+		ok(val == "in_dst", "cache path: second (cache-hit) marker should be 'in_dst', got '%s'", val.c_str());
+		std::string hits_after = fetch_single(admin,
+			"SELECT variable_value FROM stats_mysql_global WHERE variable_name='Query_Cache_count_GET_OK'");
+		ok(atoll(hits_after.c_str()) > atoll(hits_before.c_str()),
+			"cache path: Query_Cache_count_GET_OK should increase (before=%s, after=%s)",
+			hits_before.c_str(), hits_after.c_str());
+	}
+	// even after a cache hit the session must stay on the remapped schema
+	val = fetch_single(conn, "SELECT DATABASE()");
+	ok(val == DST_DB, "cache path: DATABASE() after cache hit should be '%s', got '%s'", DST_DB, val.c_str());
 	mysql_close(conn);
 	conn = NULL;
 

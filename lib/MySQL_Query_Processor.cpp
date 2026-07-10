@@ -828,6 +828,8 @@ MySQL_Query_Processor_Rule_t* MySQL_Query_Processor::new_query_rule(int rule_id,
 					std::string s = dest_schema;
 					if (s.length() > 0) {
 						newQR->destination_schema = strdup(s.c_str());
+					} else {
+						proxy_warning("destination_schema is empty in attributes for rule_id %d , ignoring it\n", newQR->rule_id);
 					}
 				} else {
 					proxy_error("Failed to parse destination_schema in JSON on attributes for rule_id %d : %s\n", newQR->rule_id, dest_schema.dump().c_str());
@@ -976,6 +978,8 @@ MySQL_Query_Processor_Rule_t* MySQL_Query_Processor::new_query_rule(const MySQL_
 					std::string s = dest_schema;
 					if (s.length() > 0) {
 						newQR->destination_schema = strdup(s.c_str());
+					} else {
+						proxy_warning("destination_schema is empty in attributes for rule_id %d , ignoring it\n", newQR->rule_id);
 					}
 				} else {
 					proxy_error("Failed to parse destination_schema in JSON on attributes for rule_id %d : %s\n", newQR->rule_id, dest_schema.dump().c_str());

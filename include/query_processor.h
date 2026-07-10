@@ -231,6 +231,7 @@ class Query_Processor_Output {
 		}
 		if (attributes) {
 			free(attributes);
+			attributes=NULL;
 		}
 		if (destination_schema) {
 			free(destination_schema);
@@ -238,6 +239,7 @@ class Query_Processor_Output {
 		}
 		if (comment) { // #643
 			free(comment);
+			comment=NULL;
 		}
 	}
 	void get_info_json(nlohmann::json& j);

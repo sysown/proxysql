@@ -2949,6 +2949,7 @@ void Query_Processor_Output::get_info_json(json& j) {
 	j["cache_ttl"] = cache_ttl;
 	j["delay"] = delay;
 	j["destination_hostgroup"] = destination_hostgroup;
+	j["destination_schema"] = ( destination_schema ? destination_schema : "" );
 	j["firewall_whitelist_mode"] = firewall_whitelist_mode;
 	j["multiplex"] = multiplex;
 	j["timeout"] = timeout;
