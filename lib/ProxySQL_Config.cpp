@@ -1230,6 +1230,7 @@ int ProxySQL_Config::Write_MySQL_Servers_to_configfile(std::string& data) {
 	if (error) {
 		// sub-table may be absent in partial unit-test schemas; skip section
 		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
+		free(error); // execute_statement strdup's the message
 		error = NULL;
 	} else {
 		if (sqlite_resultset) {
@@ -1260,6 +1261,7 @@ int ProxySQL_Config::Write_MySQL_Servers_to_configfile(std::string& data) {
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
 	if (error) {
 		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
+		free(error); // execute_statement strdup's the message
 		error = NULL;
 	} else if (sqlite_resultset) {
 		data += "mysql_group_replication_hostgroups:\n(\n";
@@ -1293,6 +1295,7 @@ int ProxySQL_Config::Write_MySQL_Servers_to_configfile(std::string& data) {
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
 	if (error) {
 		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
+		free(error); // execute_statement strdup's the message
 		error = NULL;
 	} else if (sqlite_resultset) {
 		data += "mysql_galera_hostgroups:\n(\n";
@@ -1327,6 +1330,7 @@ int ProxySQL_Config::Write_MySQL_Servers_to_configfile(std::string& data) {
 	if (error) {
 		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
 		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
+		free(error); // execute_statement strdup's the message
 		error = NULL;
 	} else if (sqlite_resultset) {
 		data += "mysql_aws_aurora_hostgroups:\n(\n";
@@ -1366,6 +1370,7 @@ int ProxySQL_Config::Write_MySQL_Servers_to_configfile(std::string& data) {
 	if (error) {
 		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
 		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
+		free(error); // execute_statement strdup's the message
 		error = NULL;
 	} else if (sqlite_resultset) {
 		data += "mysql_hostgroup_attributes:\n(\n";
@@ -1403,8 +1408,9 @@ int ProxySQL_Config::Write_MySQL_Servers_to_configfile(std::string& data) {
 	if (error) {
 		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
 		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
+		free(error); // execute_statement strdup's the message
 		error = NULL;
-	} else if (sqlite_resultset && sqlite_resultset->rows_count > 0) {
+	} else if (sqlite_resultset) {
 		data += "mysql_servers_ssl_params:\n(\n";
 		bool isNext = false;
 		for (auto r : sqlite_resultset->rows) {
@@ -2021,6 +2027,7 @@ int ProxySQL_Config::Write_PgSQL_Servers_to_configfile(std::string& data) {
 	if (error) {
 		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
 		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
+		free(error); // execute_statement strdup's the message
 		error = NULL;
 	}
 	else if (sqlite_resultset) {
@@ -2051,6 +2058,7 @@ int ProxySQL_Config::Write_PgSQL_Servers_to_configfile(std::string& data) {
 	if (error) {
 		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
 		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
+		free(error); // execute_statement strdup's the message
 		error = NULL;
 	}
 	else if (sqlite_resultset) {
@@ -2088,6 +2096,7 @@ int ProxySQL_Config::Write_PgSQL_Servers_to_configfile(std::string& data) {
 	if (error) {
 		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
 		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
+		free(error); // execute_statement strdup's the message
 		error = NULL;
 	}
 	else if (sqlite_resultset) {
