@@ -25,45 +25,46 @@ jobs:
   # ---------------------------------------------------------------------------
   pick-runner:
     runs-on: ubuntu-latest
+    permissions:
+      actions: read          # read in-progress runs/jobs (no repo admin needed)
     outputs:
       runson: ${{ steps.pick.outputs.runson }}
     steps:
       - name: Pick runner pool
         id: pick
         env:
-          # Listing runners needs repo admin. Probe the available PATs (and the
-          # default token) and use whichever can read the runner pool.
-          TOK_SYSOWN: ${{ secrets.GH_TOKEN_SYSOWN }}
-          TOK_PROXYSQL: ${{ secrets.GH_TOKEN_PROXYSQL }}
-          TOK_DEFAULT: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
+          POOL_SIZE: ${{ vars.SELFHOSTED_POOL_SIZE || '6' }}
           ELIGIBLE: ${{ (github.actor == 'renecannao' || (inputs.trigger && fromJson(inputs.trigger).event.workflow_run.actor.login == 'renecannao')) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) }}
         run: |
           set -uo pipefail
           choice='"ubuntu-22.04"'
           if [ "${ELIGIBLE:-}" = "true" ]; then
-            out=""; used=""
-            for tk in SYSOWN PROXYSQL DEFAULT; do
-              eval "T=\${TOK_${tk}:-}"
-              [ -z "$T" ] && { echo ">>> token ${tk}: (secret empty, skipping)"; continue; }
-              if out=$(GH_TOKEN="$T" gh api "repos/${REPO}/actions/runners?per_page=100" 2>err.txt); then
-                echo ">>> token ${tk}: CAN list runners"; used="$tk"; break
-              else
-                echo ">>> token ${tk}: cannot list runners -- $(head -1 err.txt)"
-                out=""
-              fi
-            done
-            if [ -n "$used" ]; then
-              idle=$(printf '%s' "$out" | jq '[.runners[]|select(.status=="online" and (.busy==false) and ([.labels[].name]|index("proxysql-ci")))]|length')
-              total=$(printf '%s' "$out" | jq '[.runners[]|select([.labels[].name]|index("proxysql-ci"))]|length')
-              echo ">>> proxysql-ci runners (via ${used}): idle=${idle} total=${total}"
-              if [ "${idle:-0}" -ge 1 ]; then
+            POOL="${POOL_SIZE:-6}"
+            # Listing runners needs repo admin, which no available token has, so
+            # infer pool load from job state the default token CAN read: a
+            # proxysql-ci VM is busy iff it is running an in-progress job whose
+            # runner_name starts with 'ci-vm'. idle = POOL - busy. GitHub assigns
+            # a queued job the instant a runner frees, so busy < POOL implies a
+            # genuinely free VM (no hidden queue). Early-exit once busy hits POOL.
+            busy=0; err=0
+            ids=$(gh api --paginate "repos/${REPO}/actions/runs?status=in_progress&per_page=100" --jq '.workflow_runs[].id' 2>e1) || err=1
+            if [ "$err" = "0" ]; then
+              for rid in ${ids:-}; do
+                [ "$busy" -ge "$POOL" ] && break
+                n=$(gh api "repos/${REPO}/actions/runs/${rid}/jobs" --jq '[.jobs[]|select(.status=="in_progress" and ((.runner_name//"")|startswith("ci-vm")))]|length' 2>/dev/null) || n=0
+                busy=$(( busy + ${n:-0} ))
+              done
+              idle=$(( POOL - busy ))
+              echo ">>> self-hosted pool: busy=${busy}/${POOL} idle=${idle}"
+              if [ "${idle}" -ge 1 ]; then
                 choice='["self-hosted","proxysql-ci"]'; echo ">>> a VM is free -> self-hosted"
               else
-                choice='"ubuntu-22.04"'; echo ">>> pool saturated (idle=0) -> spill to GitHub-hosted"
+                choice='"ubuntu-22.04"'; echo ">>> pool saturated -> spill to GitHub-hosted"
               fi
             else
-              echo ">>> WARNING: no available token can list runners (need repo admin)"
+              echo ">>> WARNING: could not read in-progress runs:"; sed 's/^/    /' e1
               choice='["self-hosted","proxysql-ci"]'; echo ">>> failing SAFE to self-hosted (offload unchanged)"
             fi
           else
