@@ -10,7 +10,7 @@
 # password 'alicepass' provisioned.
 #
 # This wrapper emits exactly two TAP assertions:
-#   1. the SIGTERM-mid-traffic scenario from behavioral_validation.py
+#   1. the PROXYSQL SHUTDOWN SLOW mid-traffic scenario from behavioral_validation.py
 #   2. the LOAD MYSQLX ROUTES TO RUNTIME mid-traffic scenario
 # Each assertion is "ok" if behavioral_validation.py exited 0 for that
 # scenario. The Python script's own internal asserts produce
@@ -52,35 +52,19 @@ PROXY_CONTAINER="proxysql.${INFRA_ID:-dev-$USER}"
 
 echo "1..2"
 
-# Scenario 1: SIGTERM mid-traffic
-# behavioral_validation.py wants the host PID; in the docker-isolated
-# harness ProxySQL is in a separate container. We send SIGTERM via
-# `docker exec ... kill 1` (PID 1 inside the container is the
-# proxysql process via the entrypoint command). The harness's
-# --proxysql-pid-file path is ignored because we kill from outside.
-sigterm_scenario() {
-    # Run the harness in scenario=sigterm mode but tell it to NOT
-    # send SIGTERM itself; we'll kill the container's PID 1 in the
-    # background and the harness will observe the disconnect.
-    # Simplest path: run the Python in a background subshell, kill
-    # PID 1 in the proxysql container after a short delay, wait for
-    # the harness to exit, and report.
-    (
-        sleep 3
-        docker kill -s TERM "${PROXY_CONTAINER}" >/dev/null 2>&1 || true
-    ) &
-
+# Scenario 1: PROXYSQL SHUTDOWN SLOW mid-traffic
+shutdown_scenario() {
     if python3 "${HARNESS}" \
         --proxysql-host "${PROXYSQL_HOST}" --proxysql-port "${PROXYSQL_PORT}" \
+        --admin-host "${ADMIN_HOST}" --admin-port "${ADMIN_PORT}" \
         --user "${TEST_USER}" --password "${TEST_PASS}" \
-        --clients 5 --scenario sigterm \
-        --external-kill \
+        --clients 5 --scenario shutdown \
         2>&1 | sed 's/^/# /'
     then
-        echo "ok 1 - SIGTERM mid-traffic: every client received clean Mysqlx::Error 1053"
+        echo "ok 1 - PROXYSQL SHUTDOWN SLOW mid-traffic: every client received clean Mysqlx::Error 1053"
         return 0
     else
-        echo "not ok 1 - SIGTERM mid-traffic: at least one client saw TCP RST or non-1053 error"
+        echo "not ok 1 - PROXYSQL SHUTDOWN SLOW mid-traffic: at least one client saw TCP RST or non-1053 error"
         return 1
     fi
 }
@@ -92,7 +76,7 @@ reload_scenario() {
     # the right thing is to re-provision via setup-infras.bash, but
     # for now we skip if the container isn't responsive).
     if ! docker exec "${PROXY_CONTAINER}" mysql -uadmin -padmin -h127.0.0.1 -P6032 -e 'SELECT 1' >/dev/null 2>&1; then
-        echo "ok 2 - reload scenario skipped # SKIP proxysql container not running (sigterm scenario killed it)"
+        echo "ok 2 - reload scenario skipped # SKIP proxysql container not running (shutdown scenario stopped it)"
         return 0
     fi
 
@@ -124,6 +108,6 @@ if ! python3 -c 'import mysqlx' 2>/dev/null; then
 fi
 
 RC=0
-sigterm_scenario || RC=1
+shutdown_scenario || RC=1
 reload_scenario  || RC=1
 exit $RC
