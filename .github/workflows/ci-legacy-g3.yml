@@ -11,8 +11,55 @@ env:
   SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # Availability-aware dispatch (PROTOTYPE -- CI-legacy-g3 only for now).
+  # `runs-on` locks its pool when the job is created and never falls back, so a
+  # self-hosted-routed job queues behind the 6-VM pool even while GitHub-hosted
+  # capacity sits idle. This leading job decides the pool up front: eligible
+  # actor+workflow AND an idle proxysql-ci VM -> self-hosted; pool saturated ->
+  # SPILL to GitHub-hosted instead of queuing. Listing runners needs repo admin
+  # (GH_TOKEN_SYSOWN); if that is unavailable we fail SAFE to self-hosted so the
+  # existing offload behavior is preserved. It is a heuristic (idle-now != idle-
+  # when-the-job-lands), so it drains the tail to hosted rather than perfectly
+  # packing the VMs.
+  # ---------------------------------------------------------------------------
+  pick-runner:
+    runs-on: ubuntu-latest
+    outputs:
+      runson: ${{ steps.pick.outputs.runson }}
+    steps:
+      - name: Pick runner pool
+        id: pick
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN_SYSOWN }}
+          REPO: ${{ github.repository }}
+          ELIGIBLE: ${{ (github.actor == 'renecannao' || (inputs.trigger && fromJson(inputs.trigger).event.workflow_run.actor.login == 'renecannao')) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) }}
+        run: |
+          set -uo pipefail
+          choice='"ubuntu-22.04"'
+          if [ "${ELIGIBLE:-}" = "true" ]; then
+            if out=$(gh api "repos/${REPO}/actions/runners?per_page=100" 2>err.txt); then
+              idle=$(printf '%s' "$out" | jq '[.runners[]|select(.status=="online" and (.busy==false) and ([.labels[].name]|index("proxysql-ci")))]|length')
+              total=$(printf '%s' "$out" | jq '[.runners[]|select([.labels[].name]|index("proxysql-ci"))]|length')
+              echo ">>> proxysql-ci runners: idle=${idle} total=${total}"
+              if [ "${idle:-0}" -ge 1 ]; then
+                choice='["self-hosted","proxysql-ci"]'; echo ">>> a VM is free -> self-hosted"
+              else
+                echo ">>> pool saturated (idle=0) -> spill to GitHub-hosted"
+              fi
+            else
+              echo ">>> WARNING: could not list runners (GH_TOKEN_SYSOWN needs repo admin):"; sed 's/^/    /' err.txt
+              choice='["self-hosted","proxysql-ci"]'; echo ">>> failing SAFE to self-hosted (offload unchanged)"
+            fi
+          else
+            echo ">>> not eligible for self-hosted -> GitHub-hosted"
+          fi
+          echo "runson=${choice}" >> "$GITHUB_OUTPUT"
+          echo ">>> decision: runson=${choice}"
+
   tests:
-    runs-on: ${{ (github.actor == 'renecannao' || (inputs.trigger && fromJson(inputs.trigger).event.workflow_run.actor.login == 'renecannao')) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) && fromJson('["self-hosted","proxysql-ci"]') || 'ubuntu-22.04' }}
+    needs: pick-runner
+    runs-on: ${{ fromJson(needs.pick-runner.outputs.runson) }}
     # `write-all` grants every default GITHUB_TOKEN scope plus the
     # id-token:write scope codecov-action@v4 needs to mint a GitHub OIDC
     # token for `use_oidc: true`. Caller workflow on v3.0 must also
