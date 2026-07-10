@@ -52,21 +52,49 @@ jobs:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         REPO: ${{ github.repository }}
         SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+        BUILD_RUN_ID: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.id || '' }}
         HANDOFF_VARIANT: ubuntu22-tap
         HANDOFF_TYPES: src test
       run: |
         set -uo pipefail
         command -v zstd >/dev/null || sudo apt-get install -y zstd
+        # Resolve the build-handoff artifact robustly. Self-hosted runners can
+        # pick up this job within ~1 min of CI-builds finishing -- earlier than
+        # GitHub-hosted runners queue -- which lands inside the window where
+        # GitHub's GLOBAL name-filtered artifact index (artifacts?name=) still
+        # lags behind creation, returning empty for an artifact that already
+        # exists. Prefer resolving via the triggering CI-builds run's OWN
+        # artifact list (run-scoped: populated as soon as the artifact is
+        # attached, not subject to the global-index lag); fall back to the
+        # global name query. Retry on a bounded budget and surface the real gh
+        # error, so a genuine build failure is distinguishable from transient lag.
+        : "${HANDOFF_MAX_ATTEMPTS:=20}"   # bounded: 20 x 15s = up to ~5 min
+        ERRLOG="$(mktemp)"
+        resolve_aid() {
+          local name="$1" out=""
+          if [ -n "${BUILD_RUN_ID:-}" ]; then
+            out=$(gh api "repos/${REPO}/actions/runs/${BUILD_RUN_ID}/artifacts?per_page=100" \
+                    --jq "[.artifacts[]|select(.name==\"${name}\" and .expired==false)]|sort_by(.created_at)|last|.id // empty" 2>>"$ERRLOG") || true
+            [ -n "$out" ] && { printf '%s' "$out"; return 0; }
+          fi
+          out=$(gh api "repos/${REPO}/actions/artifacts?name=${name}&per_page=100" \
+                  --jq '[.artifacts[]|select(.expired==false)]|sort_by(.created_at)|last|.id // empty' 2>>"$ERRLOG") || true
+          [ -n "$out" ] && { printf '%s' "$out"; return 0; }
+          return 1
+        }
         for t in $HANDOFF_TYPES; do
           name="ci-builds-handoff-${SHA}-${HANDOFF_VARIANT}-${t}"
           aid=""
-          for attempt in 1 2 3 4 5 6; do
-            aid=$(gh api "repos/${REPO}/actions/artifacts?name=${name}&per_page=100" \
-                    --jq '[.artifacts[]|select(.expired==false)]|sort_by(.created_at)|last|.id // empty' 2>/dev/null || true)
-            [ -n "$aid" ] && break
-            echo ">>> ${name} not visible yet (${attempt}/6); sleeping 10s"; sleep 10
+          for attempt in $(seq 1 "$HANDOFF_MAX_ATTEMPTS"); do
+            aid=$(resolve_aid "$name") && [ -n "$aid" ] && break
+            aid=""
+            echo ">>> ${name} not resolvable yet (${attempt}/${HANDOFF_MAX_ATTEMPTS}); sleeping 15s"; sleep 15
           done
-          if [ -z "$aid" ]; then echo "ERROR: handoff artifact ${name} not found -- did CI-builds succeed for ${SHA}?" >&2; exit 1; fi
+          if [ -z "$aid" ]; then
+            echo "ERROR: handoff artifact ${name} not found after ${HANDOFF_MAX_ATTEMPTS} attempts (build_run=${BUILD_RUN_ID:-n/a}) -- did CI-builds succeed for ${SHA}?" >&2
+            echo "--- last gh errors ---" >&2; tail -n 20 "$ERRLOG" >&2
+            exit 1
+          fi
           echo ">>> downloading ${name} (id=${aid})"
           gh api "repos/${REPO}/actions/artifacts/${aid}/zip" > "handoff-${t}.zip" || { echo "ERROR: download ${name} failed" >&2; exit 1; }
           unzip -o "handoff-${t}.zip" || { echo "ERROR: unzip ${name} failed" >&2; exit 1; }
