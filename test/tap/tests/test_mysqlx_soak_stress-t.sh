@@ -55,9 +55,11 @@ if ! python3 -c 'import mysqlx, mysql.connector' 2>/dev/null; then
     exit 1
 fi
 
-if python3 "${HARNESS}" \
+if python3 -u "${HARNESS}" \
     --proxysql-host "${PROXYSQL_HOST}" --proxysql-port "${PROXYSQL_PORT}" \
     --admin-host "${ADMIN_HOST}" --admin-port "${ADMIN_PORT}" \
+    --admin-user "${TAP_ADMINUSERNAME:-radmin}" \
+    --admin-pass "${TAP_ADMINPASSWORD:-radmin}" \
     --user "${TEST_USER}" --password "${TEST_PASS}" \
     --concurrent "${CONCURRENT}" --duration "${DURATION}" \
     --metrics-out "${METRICS_OUT}" \

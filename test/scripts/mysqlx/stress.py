@@ -209,8 +209,13 @@ def main():
 
     print("Stopping workers...")
     stop.set()
+    shutdown_deadline = time.time() + 5
     for w in workers:
-        w.join(timeout=5)
+        remaining = max(0.0, shutdown_deadline - time.time())
+        w.join(timeout=remaining)
+    alive = sum(1 for w in workers if w.is_alive())
+    if alive:
+        print(f"WARNING: {alive} worker(s) did not stop within 5s")
 
     metrics_fh.close()
     total_q = sum(w.queries for w in workers)

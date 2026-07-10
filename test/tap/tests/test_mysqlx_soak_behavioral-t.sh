@@ -86,17 +86,18 @@ SQL
 reload_scenario() {
     # The proxysql container must still be up: this wrapper skips the
     # destructive shutdown scenario above, so an admin probe failure is
-    # a real test/setup failure, not a valid skip. Use the same admin
-    # credentials as the rest of the TAP harness; admin/admin is local-
-    # only in CI and falsely reported a dead container.
-    if ! docker exec "${PROXY_CONTAINER}" mysql -u"${ADMIN_USER}" -p"${ADMIN_PASS}" -h127.0.0.1 -P6032 -e 'SELECT 1' >/dev/null 2>&1; then
-        echo "# reload scenario admin probe failed for ${PROXY_CONTAINER} using ${ADMIN_USER}@127.0.0.1:6032"
+    # a real test/setup failure, not a valid skip. Probe the same
+    # cross-container admin endpoint that behavioral_validation.py will
+    # use; docker exec from inside the test-runner is not portable.
+    if ! mysql -u"${ADMIN_USER}" -p"${ADMIN_PASS}" -h"${ADMIN_HOST}" -P"${ADMIN_PORT}" -e 'SELECT 1' >/dev/null 2>&1; then
+        echo "# reload scenario admin probe failed using ${ADMIN_USER}@${ADMIN_HOST}:${ADMIN_PORT}"
         return 1
     fi
 
-    python3 "${HARNESS}" \
+    python3 -u "${HARNESS}" \
         --proxysql-host "${PROXYSQL_HOST}" --proxysql-port "${PROXYSQL_PORT}" \
         --admin-host "${ADMIN_HOST}" --admin-port "${ADMIN_PORT}" \
+        --admin-user "${ADMIN_USER}" --admin-pass "${ADMIN_PASS}" \
         --user "${TEST_USER}" --password "${TEST_PASS}" \
         --clients 5 --scenario reload \
         --route-name "${ROUTE_NAME}" \

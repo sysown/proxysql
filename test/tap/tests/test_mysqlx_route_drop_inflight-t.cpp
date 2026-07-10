@@ -367,11 +367,11 @@ int main() {
 		close(probe);
 	}
 
-	plan(2 + N_CLIENTS + N_CLIENTS + 1 + 1);
-	// 1 -- N pre-drop handshakes
-	// 1 -- pre-drop SELECT 1 on each of N clients
+	plan(6);
+	// 1 -- all pre-drop handshakes
+	// 1 -- pre-drop SELECT 1 on all connected clients
 	// 1 -- admin DELETE+LOAD succeeded
-	// 1 -- N post-drop SELECT 1 on each of N clients (in-flight survival)
+	// 1 -- post-drop SELECT 1 on all in-flight clients
 	// 1 -- new connection to dropped route is refused
 	// 1 -- admin restore succeeded
 
