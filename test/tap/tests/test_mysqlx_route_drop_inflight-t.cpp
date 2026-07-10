@@ -177,10 +177,21 @@ static bool send_capabilities_set_mysql41(int fd) {
 	return mysqlx_write_all(fd, frame.data(), frame.size());
 }
 
+// ProxySQL's mysqlx plugin parses the username from
+// AuthenticateStart.auth_data as `\0schema\0user` (see
+// mysqlx_session.cpp::handle_auth_mysql41), then expects
+// AuthenticateContinue.auth_data to be `*hex_scramble` (no schema/user
+// prefix). This differs from the upstream MySQL X server which accepts
+// empty AuthStart and `schema\0user\0*hex` on AuthContinue. Match
+// ProxySQL's format here since this test talks to ProxySQL's listener.
 static bool send_auth_start(int fd, const std::string& user) {
 	Mysqlx::Session::AuthenticateStart auth;
 	auth.set_mech_name("MYSQL41");
-	auth.set_auth_data(user);
+	std::string payload;
+	payload.push_back('\0');               // empty schema
+	payload.push_back('\0');
+	payload.append(user);
+	auth.set_auth_data(payload);
 	std::string s;
 	if (!auth.SerializeToString(&s)) return false;
 	auto frame = mysqlx_build_frame(MSG_SESS_AUTH_START, s);
@@ -188,8 +199,12 @@ static bool send_auth_start(int fd, const std::string& user) {
 }
 
 static bool send_auth_continue(int fd, const std::string& hex_scramble) {
+	std::string payload;
+	payload.push_back('*');
+	payload.append(hex_scramble);
+
 	Mysqlx::Session::AuthenticateContinue cont;
-	cont.set_auth_data(hex_scramble);
+	cont.set_auth_data(payload);
 	std::string s;
 	if (!cont.SerializeToString(&s)) return false;
 	auto frame = mysqlx_build_frame(MSG_SESS_AUTH_CONTINUE, s);
@@ -205,6 +220,19 @@ static bool send_sql_stmt(int fd, const std::string& sql) {
 	return mysqlx_write_all(fd, frame.data(), frame.size());
 }
 
+static void diag_mysqlx_error(const char* phase, int client_idx,
+                              const std::vector<uint8_t>& payload) {
+	Mysqlx::Error err;
+	if (!err.ParseFromArray(payload.data(), static_cast<int>(payload.size()))) {
+		diag("%s client %d: received Mysqlx::Error but failed to parse payload",
+		     phase, client_idx);
+		return;
+	}
+	diag("%s client %d: Mysqlx::Error code=%u sql_state='%s' msg='%s'",
+	     phase, client_idx, err.code(), err.sql_state().c_str(),
+	     err.msg().c_str());
+}
+
 struct E2EConfig {
 	std::string host;
 	uint16_t port;
@@ -213,12 +241,9 @@ struct E2EConfig {
 };
 
 static bool full_handshake(int fd, const E2EConfig& cfg) {
-	{
-		MysqlxFrameHeader hdr {};
-		std::vector<uint8_t> payload;
-		if (!mysqlx_read_frame(fd, hdr, payload)) return false;
-	}
-
+	// X Protocol does not send an unsolicited Capabilities frame on TCP
+	// connect; the client drives every exchange. The first server frame
+	// arrives only after we send CapabilitiesGet.
 	if (!send_capabilities_get(fd)) return false;
 	{
 		MysqlxFrameHeader hdr {};
@@ -226,14 +251,10 @@ static bool full_handshake(int fd, const E2EConfig& cfg) {
 		if (!read_frame_skip_notices(fd, hdr, payload)) return false;
 	}
 
-	if (!send_capabilities_set_mysql41(fd)) return false;
-	{
-		MysqlxFrameHeader hdr {};
-		std::vector<uint8_t> payload;
-		if (!read_frame_skip_notices(fd, hdr, payload)) return false;
-		if (hdr.message_type == MSG_SRV_ERROR) return false;
-	}
-
+	// `authentication.mechanisms` is a READ-ONLY capability; the upstream
+	// X plugin (and ProxySQL's mysqlx plugin) reject CapabilitiesSet for
+	// it (error 5001). The auth method is selected via
+	// AuthenticateStart.mech_name, so the CapabilitiesSet step is skipped.
 	if (!send_auth_start(fd, cfg.user)) return false;
 
 	std::vector<uint8_t> challenge;
@@ -247,8 +268,9 @@ static bool full_handshake(int fd, const E2EConfig& cfg) {
 		if (!cont.ParseFromArray(payload.data(), static_cast<int>(payload.size())))
 			return false;
 		if (!cont.has_auth_data()) return false;
-		std::string challenge_hex = cont.auth_data();
-		if (!mysqlx_hex_decode(challenge_hex, challenge)) return false;
+		// auth_data is the raw 20-byte challenge -- not hex-encoded.
+		const std::string& raw = cont.auth_data();
+		challenge.assign(raw.begin(), raw.end());
 	}
 
 	auto scramble = mysqlx_mysql41_scramble(challenge, cfg.pass);
@@ -267,16 +289,28 @@ static bool full_handshake(int fd, const E2EConfig& cfg) {
 
 // Drive a single SELECT 1 to completion. Returns true on
 // STMT_EXECUTE_OK. Bails on Mysqlx::Error or socket close.
-static bool exec_select_1(int fd) {
-	if (!send_sql_stmt(fd, "SELECT 1")) return false;
+static bool exec_select_1(int fd, const char* phase, int client_idx) {
+	if (!send_sql_stmt(fd, "SELECT 1")) {
+		diag("%s client %d: failed to send SELECT 1", phase, client_idx);
+		return false;
+	}
 	for (int i = 0; i < 200; i++) {
 		MysqlxFrameHeader hdr {};
 		std::vector<uint8_t> payload;
-		if (!mysqlx_read_frame(fd, hdr, payload)) return false;
-		if (hdr.message_type == MSG_SRV_ERROR) return false;
+		if (!mysqlx_read_frame(fd, hdr, payload)) {
+			diag("%s client %d: socket closed or frame read failed while waiting for SELECT 1 response",
+			     phase, client_idx);
+			return false;
+		}
+		if (hdr.message_type == MSG_SRV_ERROR) {
+			diag_mysqlx_error(phase, client_idx, payload);
+			return false;
+		}
 		if (hdr.message_type == MSG_SRV_STMT_EXECUTE_OK) return true;
 		// COLUMN_META, ROW, FETCH_DONE, NOTICE: keep reading.
 	}
+	diag("%s client %d: SELECT 1 did not complete after 200 X frames",
+	     phase, client_idx);
 	return false;
 }
 
@@ -333,11 +367,11 @@ int main() {
 		close(probe);
 	}
 
-	plan(2 + N_CLIENTS + N_CLIENTS + 1 + 1);
-	// 1 -- N pre-drop handshakes
-	// 1 -- pre-drop SELECT 1 on each of N clients
+	plan(6);
+	// 1 -- all pre-drop handshakes
+	// 1 -- pre-drop SELECT 1 on all connected clients
 	// 1 -- admin DELETE+LOAD succeeded
-	// 1 -- N post-drop SELECT 1 on each of N clients (in-flight survival)
+	// 1 -- post-drop SELECT 1 on all in-flight clients
 	// 1 -- new connection to dropped route is refused
 	// 1 -- admin restore succeeded
 
@@ -368,7 +402,7 @@ int main() {
 	int pre_ok = 0;
 	for (int i = 0; i < N_CLIENTS; i++) {
 		if (fds[i] < 0) continue;
-		if (exec_select_1(fds[i])) pre_ok++;
+		if (exec_select_1(fds[i], "pre-drop SELECT 1", i)) pre_ok++;
 	}
 	ok(pre_ok == handshakes_ok,
 	   "Stage 2: pre-drop SELECT 1 succeeded on %d/%d sessions",
@@ -415,7 +449,7 @@ int main() {
 	int post_ok = 0;
 	for (int i = 0; i < N_CLIENTS; i++) {
 		if (fds[i] < 0) continue;
-		if (exec_select_1(fds[i])) post_ok++;
+		if (exec_select_1(fds[i], "post-drop SELECT 1", i)) post_ok++;
 	}
 	ok(post_ok == pre_ok,
 	   "Stage 4: post-drop SELECT 1 still succeeds on %d/%d in-flight sessions (in-flight survival contract)",

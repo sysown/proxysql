@@ -684,6 +684,7 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 	char buff[32];
 	sprintf(buff, "%p", this);
 	j["address"] = buff;
+	j["version"] = PROXYSQL_VERSION;
 	if (thread) {
 		sprintf(buff, "%p", thread);
 		j["thread"] = buff;
@@ -7275,6 +7276,49 @@ int PgSQL_Session::handle_post_sync_bind_message(PgSQL_Bind_Message* bind_msg) {
 	if (is_named_portal && !pgsql_thread___use_native_backend_protocol) {
 		handle_post_sync_error(PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, "only unnamed portals are supported", false);
 		return 2;
+	}
+
+	// Issue #5866: on the LIBPQ backend path, prepared statements are executed
+	// through PQsendQueryPrepared(), whose API accepts only a single result-column
+	// format code that applies to every column. A Bind that requests HETEROGENEOUS
+	// per-column result formats (e.g. text for one column and binary for another,
+	// as PostgreSQL drivers such as Go's pgx do for a bytea column) cannot be
+	// honored there: the array would be collapsed to its first element and the
+	// remaining columns returned in the wrong format, silently corrupting data.
+	// Reject such a Bind with a clean error instead of returning corrupted
+	// results. Uniform arrays are honored as before: 0 codes means "all text",
+	// 1 code means "applies to all columns", and an N-code array whose values are
+	// all identical is equivalent to a single code (which libpq can represent).
+	//
+	// The NATIVE backend path has no such limitation: pg_build_bind() forwards the
+	// client's result-format array to the backend verbatim, so heterogeneous
+	// formats are fully supported and the session-level gate is skipped. The
+	// flag-flip edge (native gate skipped here, but Execute later lands on a warm
+	// POOLED libpq connection) is covered by a defensive check at the libpq
+	// drive's collapse site in stmt_execute_start(), which errors instead of
+	// collapsing.
+	if (!pgsql_thread___use_native_backend_protocol && bind_data.num_result_formats > 1) {
+		auto result_fmt_reader = bind_msg->get_result_format_reader();
+		uint16_t first_format = 0;
+		bool heterogeneous = false;
+		for (uint16_t i = 0; i < bind_data.num_result_formats; ++i) {
+			uint16_t format = 0;
+			if (!result_fmt_reader.next(&format)) {
+				break; // malformed array; let the normal path surface the protocol error
+			}
+			if (i == 0) {
+				first_format = format;
+			} else if (format != first_format) {
+				heterogeneous = true;
+				break;
+			}
+		}
+		if (heterogeneous) {
+			handle_post_sync_error(PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
+				"per-column result formats are not supported: all result columns must request the same format code",
+				false);
+			return 2;
+		}
 	}
 
 	// Look up an existing local statement info for client-provided statement name.

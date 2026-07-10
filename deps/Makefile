@@ -15,8 +15,24 @@ else
 	MYCFLAGS := -O2
 	MYJEOPT := --enable-xmalloc --enable-prof
 endif
-ifeq ($(and $(IS_ARM),$(IS_CENTOS)),true)
-	MYJEOPT += --with-lg-page=16
+# jemalloc page size must match the runtime system page size.
+# Auto-detect from the build system. Override with JE_LG_PAGE env
+# var when cross-compiling (e.g. JE_LG_PAGE=16 for 64KB targets).
+ifdef JE_LG_PAGE
+	MYJEOPT += --with-lg-page=$(JE_LG_PAGE)
+else
+	JE_PAGE_SIZE := $(shell getconf PAGESIZE 2>/dev/null)
+	ifneq ($(JE_PAGE_SIZE),)
+		ifeq ($(JE_PAGE_SIZE),8192)
+			MYJEOPT += --with-lg-page=13
+		else ifeq ($(JE_PAGE_SIZE),16384)
+			MYJEOPT += --with-lg-page=14
+		else ifeq ($(JE_PAGE_SIZE),32768)
+			MYJEOPT += --with-lg-page=15
+		else ifeq ($(JE_PAGE_SIZE),65536)
+			MYJEOPT += --with-lg-page=16
+		endif
+	endif
 endif
 
 
@@ -158,7 +174,7 @@ cityhash: cityhash/cityhash/src/.libs/libcityhash.a
 lz4/lz4/lib/liblz4.a:
 	cd lz4 && rm -rf lz4-*/ || true
 	cd lz4 && tar -zxf lz4-*.tar.gz
-	cd lz4/lz4 && CC=${CC} CXX=${CXX} ${MAKE}
+	cd lz4/lz4 && CC=${CC} CXX=${CXX} ${MAKE} MOREFLAGS=-fPIC
 
 lz4: lz4/lz4/lib/liblz4.a
 
@@ -169,7 +185,7 @@ lz4: lz4/lz4/lib/liblz4.a
 zstd/zstd/lib/libzstd.a:
 	cd zstd && rm -rf zstd-*/ || true
 	cd zstd && tar -zxf zstd-*.tar.gz
-	cd zstd/zstd/lib && CC=${CC} CXX=${CXX} ${MAKE} libzstd.a
+	cd zstd/zstd/lib && CC=${CC} CXX=${CXX} ${MAKE} MOREFLAGS=-fPIC libzstd.a
 
 zstd: zstd/zstd/lib/libzstd.a
 
@@ -185,6 +201,7 @@ $(PROTOBUF_LIB):
 	cd protobuf/protobuf-$(PROTOBUF_VERSION) && CC=${CC} CXX=${CXX} cmake -S . -B build \
 		-DCMAKE_BUILD_TYPE=RelWithDebInfo \
 		-DCMAKE_INSTALL_PREFIX=$(PROTOBUF_INSTALL_DIR) \
+		-DCMAKE_INSTALL_LIBDIR=lib \
 		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
 		-Dprotobuf_BUILD_TESTS=OFF \
 		-Dprotobuf_BUILD_CONFORMANCE=OFF \

@@ -21,6 +21,7 @@ services:
       - PROXYSQL31
       - PROXYSQLFFTO
       - PROXYSQLTSDB
+      - SKIP_GENAI_UNIT_TESTS
       - GIT_VERSION
     command: bash -l -c /opt/entrypoint/entrypoint.bash
 
@@ -419,4 +420,17 @@ services:
       - PROXYSQL_BUILD_TYPE=debug
 
 ####################################################################################################
+  tarball_build:
+    extends:
+      service: _build
+    image: proxysql/packaging:build-almalinux9-v4.0.0
+    volumes:
+      - ./docker/images/proxysql/tarball-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - PKG_RELEASE=tarball
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
 ####################################################################################################
+####################################################################################################
+

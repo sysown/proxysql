@@ -1107,10 +1107,14 @@ void PgSQL_Connection::connect_start() {
 	{
 		const std::string ip = connect_start_DNS_lookup();
 		if (!ip.empty() && ip != std::string(parent->address)) {
-			append_conninfo_param(conninfo, "hostaddr", const_cast<char*>(ip.c_str()));
+		append_conninfo_param(conninfo, "hostaddr", const_cast<char*>(ip.c_str()));
 		}
 	}
-	conninfo << "port=" << parent->port << " "; // backend port
+	// port=0 means hostname is a Unix-domain socket path; libpq rejects
+	// "port=0" with "invalid port number: \"0\"".
+	if (parent->port != 0) {
+		conninfo << "port=" << parent->port << " ";
+	}
 	conninfo << "application_name=proxysql "; // application name
 	//conninfo << "require_auth=" << AUTHENTICATION_METHOD_STR[pgsql_thread___authentication_method]; // authentication method
 	if (parent->use_ssl) {
@@ -4074,6 +4078,22 @@ void PgSQL_Connection::stmt_execute_start() {
 		}
 	}
 
+	// Issue #5866 defense-in-depth: PQsendQueryPrepared() below can express only ONE
+	// result-column format code, so a heterogeneous array would be silently collapsed
+	// to result_formats[0], corrupting every other column. The session-level gate in
+	// handle_post_sync_bind_message rejects this for libpq-mode sessions, but is
+	// skipped when pgsql-use_native_backend_protocol is on (the native drive forwards
+	// the array verbatim) — and such a session can still land here on a warm POOLED
+	// libpq connection after a flag flip. Error out rather than collapse.
+	for (size_t i = 1; i < result_formats.size(); ++i) {
+		if (result_formats[i] != result_formats[0]) {
+			set_error(PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
+				"per-column result formats are not supported: all result columns must request the same format code",
+				false);
+			return;
+		}
+	}
+
 	// If the client did not send any parameter formats (num_param_formats = 0),
 	// PostgreSQL protocol defines this as "all parameters are TEXT".
 	// libpq represents this case by passing paramFormats = nullptr.
@@ -5339,7 +5359,11 @@ void* PgSQL_backend_kill_thread(void* arg) {
 		append_conninfo_param(conninfo, "password", backend_kill_args->password); // password
 		append_conninfo_param(conninfo, "dbname", backend_kill_args->dbname); // dbname
 		append_conninfo_param(conninfo, "host", backend_kill_args->hostname); // backend address
-		conninfo << "port=" << backend_kill_args->port << " "; // backend port
+		// port=0 means hostname is a Unix-domain socket path; libpq rejects
+		// "port=0" with "invalid port number: \"0\"".
+		if (backend_kill_args->port != 0) {
+			conninfo << "port=" << backend_kill_args->port << " ";
+		}
 		conninfo << "application_name=proxysql "; // application name
 		
 		if (backend_kill_args->ssl_config.use_ssl) {

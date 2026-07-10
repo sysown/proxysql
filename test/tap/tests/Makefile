@@ -51,6 +51,29 @@ ifeq ($(UNAME_S),Linux)
 	LDIRS += -L$(COREDUMPER_LDIR)
 endif
 
+# Vendored protobuf 3.21.12 -- mirrors the definitions/usage in
+# test/tap/tests/unit/Makefile. ProxySQL builds protobuf locally under
+# deps/protobuf/ when PROXYSQL40=1 and the committed plugins/mysqlx/proto
+# /*.pb.h files require headers (e.g. <google/protobuf/generated_message
+# _bases.h>) that only exist in 3.16+. The vendored install path must be
+# on IDIRS/LDIRS so every test_mysqlx_e2e_*-t rule below resolves the
+# right headers and the link rules below reference the vendored
+# libprotobuf.a explicitly via $(PROTOBUF_LIB) (full path) instead of
+# `-lprotobuf`. Going through -lprotobuf races the system v3.12 .so
+# that the deb-compliant entrypoint apt-installs for PROXYSQL40 builds
+# -- `-Bdynamic -lprotobuf` resolves to the system .so first and the
+# .pb.o (built against vendored 3.21 headers) fails to link. Same fix
+# as test/tap/tests/unit/Makefile.
+ifeq ($(PROXYSQL40),1)
+PROTOBUF_VERSION := 3.21.12
+PROTOBUF_INSTALL_DIR := $(PROXYSQL_PATH)/deps/protobuf/protobuf-$(PROTOBUF_VERSION)/install
+PROTOBUF_INCLUDE_DIR := $(PROTOBUF_INSTALL_DIR)/include
+PROTOBUF_LDIR := $(PROTOBUF_INSTALL_DIR)/lib
+PROTOBUF_LIB := $(PROTOBUF_LDIR)/libprotobuf.a
+IDIRS += -I$(PROTOBUF_INCLUDE_DIR)
+LDIRS += -L$(PROTOBUF_LDIR)
+endif
+
 
 LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
 
@@ -126,6 +149,8 @@ tests: tests-cpp \
 	test_ssl_fast_forward-2_libmysql-t \
 	test_ssl_fast_forward-3_libmariadb-t \
 	test_ssl_fast_forward-3_libmysql-t \
+	setparser_parsersql_test setparser_parsersql_test-t \
+	parsersql_digest_test parsersql_digest_test-t \
 	setparser_test2 setparser_test2-t \
 	setparser_test3 setparser_test3-t \
 	set_testing-240.csv \
@@ -353,6 +378,9 @@ pgsql-reg_test_5273_bind_parameter_format-t: pgsql-reg_test_5273_bind_parameter_
 pgsql-reg_test_5300_threshold_resultset_deadlock-t: pgsql-reg_test_5300_threshold_resultset_deadlock-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 
+pgsql-reg_test_5866_result_format-t: pgsql-reg_test_5866_result_format-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
+	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
+
 test_ffto_pgsql_pipeline-t: test_ffto_pgsql_pipeline-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 
@@ -375,18 +403,22 @@ MYSQLX_PROTO_OBJS := $(patsubst $(MYSQLX_PROTO_DIR)/%.pb.cc,$(ODIR)/mysqlx_proto
 $(ODIR):
 	@mkdir -p $(ODIR)
 
-$(ODIR)/mysqlx_proto_%.pb.o: $(MYSQLX_PROTO_DIR)/%.pb.cc | $(ODIR)
-	$(CXX) -c -o $@ $< $(STDCPP) -O2 -ggdb -I$(MYSQLX_PROTO_DIR) -w
+# PROTOBUF_INCLUDE_DIR comes through $(IDIRS) -- added above under the
+# ifeq ($(PROXYSQL40),1) block. PROTOBUF_LIB as a prerequisite chains
+# the deps protobuf build for anyone running this target standalone.
+$(ODIR)/mysqlx_proto_%.pb.o: $(MYSQLX_PROTO_DIR)/%.pb.cc $(PROTOBUF_LIB) | $(ODIR)
+	$(CXX) -c -o $@ $< $(STDCPP) -O2 -ggdb \
+		-I$(MYSQLX_PROTO_DIR) $(IDIRS) -w
 
 test_mysqlx_e2e_handshake-t: test_mysqlx_e2e_handshake-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TAP_LDIR)/libtap.so
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
-		$(IDIRS) $(LDIRS) $(OPT) -lprotobuf -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
+		$(IDIRS) $(LDIRS) $(OPT) $(PROTOBUF_LIB) -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
 
 test_mysqlx_e2e_routing-t: test_mysqlx_e2e_routing-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TAP_LDIR)/libtap.so
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
-		$(IDIRS) $(LDIRS) $(OPT) -lprotobuf -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
+		$(IDIRS) $(LDIRS) $(OPT) $(PROTOBUF_LIB) -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
 
 # Behavioural validation TAP test for issue #5678 part (b): the X-Protocol
 # clients are driven directly via the protocol helpers (same set used by
@@ -396,16 +428,16 @@ test_mysqlx_e2e_routing-t: test_mysqlx_e2e_routing-t.cpp $(PROXYSQL_PATH)/plugin
 test_mysqlx_route_drop_inflight-t: test_mysqlx_route_drop_inflight-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TAP_LDIR)/libtap.so
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
-		$(IDIRS) $(LDIRS) $(OPT) -lprotobuf -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
+		$(IDIRS) $(LDIRS) $(OPT) $(PROTOBUF_LIB) -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
 
-# test_mysqlx_sigterm_inflight-t (the C++ stub binary) was deleted in the
-# same PR that removed skip_all() from the framework. The stub had never
-# been more than a skip_all() guard pointing operators at the real
-# implementation, which lives in
-# test/scripts/mysqlx/behavioral_validation.py --scenario sigterm. Once
-# skip_all was removed, the stub had no purpose other than to BAIL_OUT
-# on invocation, so the source and this Makefile target were removed
-# together. The python scenario is the canonical sigterm-inflight test.
+# The historical inflight stub binary was deleted in the same PR that
+# removed skip_all() from the framework. The stub had never been more
+# than a skip_all() guard pointing operators at the real implementation,
+# which lives in test/scripts/mysqlx/behavioral_validation.py
+# --scenario shutdown. Once skip_all was removed, the stub had no
+# purpose other than to BAIL_OUT on invocation, so the source and this
+# Makefile target were removed together. The python scenario is the
+# canonical shutdown-inflight test.
 
 
 ### clean targets
@@ -416,7 +448,7 @@ clean:
 	rm -f *-t || true
 	rm -f galera_1_timeout_count galera_2_timeout_no_count aurora || true
 	rm -f generate_set_session_csv set_testing-240.csv || true
-	rm -f setparser_test setparser_test2 setparser_test3  || true
+	rm -f setparser_test setparser_test2 setparser_test3 setparser_parsersql_test parsersql_digest_test || true
 	rm -f reg_test_3504-change_user_libmariadb_helper reg_test_3504-change_user_libmysql_helper || true
 
 setparser_parsersql_test-t: setparser_parsersql_test
@@ -435,3 +467,6 @@ ifeq ($(PROXYSQL40),1)
 else
 	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) $(PARSERSQL_LDIR)/libsqlparser.a -o $@
 endif
+
+parsersql_digest_test-t: parsersql_digest_test
+	ln -fs parsersql_digest_test parsersql_digest_test-t

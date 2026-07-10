@@ -92,6 +92,17 @@ CXXFLAGS += -fstack-protector-strong
 
 .DEFAULT_GOAL := all
 
+# Serialize this plugin's build. The vendored protobuf target (deps/Makefile)
+# is a recursive sub-make whose recipe first `rm -rf`s deps/protobuf and then
+# runs a slow cmake build+install. The plugin's .o, .pb.o and the final .so
+# all list $(PROTOBUF_LIB) as a prereq, but under the parent build's -j that
+# destructive rebuild has been observed to race the link -- the .so link
+# fires while protobuf is only partway rebuilt and libprotobuf.a is absent:
+#   /usr/bin/ld: cannot find .../protobuf-3.21.12/install/lib/libprotobuf.a
+# .NOTPARALLEL forces protobuf to finish before any plugin object or link.
+# The plugin build is small, so the lost parallelism is negligible.
+.NOTPARALLEL:
+
 SRCS := $(PLUGIN_DIR)/src/mysqlx_plugin.cpp \
 	$(PLUGIN_DIR)/src/mysqlx_admin_schema.cpp \
 	$(PLUGIN_DIR)/src/mysqlx_config_store.cpp \
@@ -111,8 +122,23 @@ $(ODIR):
 
 $(PROTOBUF_LIB):
 	$(MAKE) -C $(PROXYSQL_PATH)/deps PROXYSQL40=1 protobuf
+	@test -f $@ || { echo "ERROR: deps protobuf build did not produce $@" >&2; exit 1; }
 
-$(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) | $(ODIR)
+# Several plugin sources transitively include <google/protobuf/...> via
+# the .pb.h files under plugins/mysqlx/proto/ (e.g. mysqlx_protocol.cpp,
+# mysqlx_connection.cpp, mysqlx_session.cpp -- all #include "mysqlx.pb.h"
+# which #includes <google/protobuf/port_def.inc> and <google/protobuf/
+# generated_message_bases.h>). Those headers only exist after the
+# vendored protobuf 3.21.12 install is populated. Without listing
+# $(PROTOBUF_LIB) as a prereq here, parallel make can schedule these
+# .o compiles before the deps protobuf build fires -- the .pb.o rule
+# (below) has the prereq, but it isn't enough on its own.
+#
+# The bug stayed hidden on hosts with a matching system libprotobuf-dev
+# 3.21.x (e.g. Ubuntu 24.04 or 22.04 with backports) because the
+# compile resolved everything from /usr/include/. CI runs on a clean
+# ubuntu-22.04 with no system libprotobuf installed and exposes it.
+$(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) $(PROTOBUF_LIB) | $(ODIR)
 	$(CXX) -c -o $@ $< $(CXXFLAGS) $(IDIRS)
 
 $(ODIR)/%.pb.o: $(PROTO_DIR)/%.pb.cc $(PROTOBUF_LIB) | $(ODIR)
