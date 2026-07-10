@@ -6669,32 +6669,28 @@ static int aws_rds_bgd_async_query(MySQL_Monitor_State_Data *mmsd, const char *q
 }
 
 /**
-* @brief Flag the servers as switchover-in-progress so the read_only monitor leaves them alone.
-*
-* @details During a switchover AWS makes the blue writer read-only; without this, read_only_action_v2 would
-*   demote/relocate it and fight the BGD FSM. Set once when status reaches INITIATED+ and held through
-*   SWITCHOVER_COMPLETED; cleared at NONE by aws_rds_bgd_clear_bgd_in_progress
+* @brief Flag servers as switchover-in-progress so the read_only monitor skips them.
 */
 static void aws_rds_bgd_set_bgd_in_progress(AWS_RDS_BGD_State& st) {
 	if (st.bgd_in_progress_set) {
 		return;
 	}
 
-	MyHGM->set_aws_rds_bgd_in_progress(st.writer_hg, st.reader_hg, true);
+	GloMyMon->set_aws_rds_bgd_server_in_progress(st.writer_hg, st.reader_hg, true);
 	st.bgd_in_progress_set = true;
-	proxy_info("AWS RDS BGD [wHG=%u rHG=%u]: switchover in progress, suspending read_only monitor actions on these hostgroups until SWITCHOVER_COMPLETED\n",
+	proxy_info("AWS RDS BGD [wHG=%u rHG=%u]: switchover in progress, suspending read_only monitor checks on writer/reader hostgroups until SWITCHOVER_COMPLETED\n",
 		st.writer_hg, st.reader_hg);
 }
 
 /**
-* @brief Re-enable read_only monitor action on the deployment's servers (undo aws_rds_bgd_set_bgd_in_progress).
+* @brief Clear the switchover-in-progress flag from the aws_rds_bgd_server_status map
 */
 static void aws_rds_bgd_clear_bgd_in_progress(AWS_RDS_BGD_State& st) {
 	if (!st.bgd_in_progress_set) {
 		return;
 	}
 
-	MyHGM->set_aws_rds_bgd_in_progress(st.writer_hg, st.reader_hg, false);
+	GloMyMon->set_aws_rds_bgd_server_in_progress(st.writer_hg, st.reader_hg, false);
 	st.bgd_in_progress_set = false;
 }
 
@@ -7358,7 +7354,7 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 			for (const AWS_RDS_BlueGreenPair& p : st.bg_map) {
 				if (p.is_writer) {
 					auto srv = read_only_server_t{ p.blue_host, (port_t)p.port, 1 };
-					MyHGM->read_only_action_v2(std::list<read_only_server_t>{srv}, true);
+					MyHGM->read_only_action_v2(std::list<read_only_server_t>{srv});
 					break;
 				}
 			}
@@ -7647,6 +7643,65 @@ void MySQL_Monitor::aws_rds_bgd_handle_topology_absent(AWS_RDS_BGD_State& st) {
 	} else {
 		aws_rds_bgd_set_status(st, AWS_RDS_BGD_Status::NONE);
 	}
+}
+
+
+/**
+* @brief Check whether a server is flagged as BGD switchover-in-progress.
+*
+* @param hostname Server hostname.
+* @param port     Server port.
+*
+* @return true if the server is flagged IN_PROGRESS.
+*/
+bool MySQL_Monitor::is_aws_rds_bgd_server_in_progress(const std::string& hostname, int port) {
+	std::string key = hostname + ":::" + std::to_string(port);
+	pthread_mutex_lock(&aws_rds_bgd_mutex);
+	auto it = aws_rds_bgd_server_status.find(key);
+	bool r = (it != aws_rds_bgd_server_status.end()
+	       && it->second == AWS_RDS_BGD_Server_Status::IN_PROGRESS);
+	pthread_mutex_unlock(&aws_rds_bgd_mutex);
+	return r;
+}
+
+/**
+* @brief Flag/unflag every server in BGD hostgroups as switchover-in-progress.
+*
+* @details Called by the BGD worker at switchover initiation (INITIATED / IN_PROGRESS /
+*   POST_PROCESSING) and cleared after SWITCHOVER_COMPLETED. Iterates the writer and reader
+*   hostgroups and marks all member servers in the shared aws_rds_bgd_server_status map.
+*
+* @param writer_hg   Writer hostgroup for the deployment.
+* @param reader_hg   Reader hostgroup for the deployment.
+* @param in_progress true to flag servers, false to clear.
+*/
+void MySQL_Monitor::set_aws_rds_bgd_server_in_progress(unsigned int writer_hg, unsigned int reader_hg, bool in_progress) {
+	std::vector<std::string> keys;
+	MyHGM->wrlock();
+	unsigned int hgs[2] = { writer_hg, reader_hg };
+	for (unsigned int i = 0; i < 2; i++) {
+		MyHGC* myhgc = MyHGM->MyHGC_find(hgs[i]);
+		if (myhgc == nullptr || myhgc->mysrvs == nullptr) {
+			continue;
+		}
+		for (unsigned int j = 0; j < myhgc->mysrvs->cnt(); j++) {
+			MySrvC* s = myhgc->mysrvs->idx(j);
+			keys.push_back(std::string(s->address) + ":::" + std::to_string(s->port));
+		}
+	}
+	MyHGM->wrunlock();
+
+	pthread_mutex_lock(&aws_rds_bgd_mutex);
+	if (in_progress) {
+		for (const auto& k : keys) {
+			aws_rds_bgd_server_status[k] = AWS_RDS_BGD_Server_Status::IN_PROGRESS;
+		}
+	} else {
+		for (const auto& k : keys) {
+			aws_rds_bgd_server_status.erase(k);
+		}
+	}
+	pthread_mutex_unlock(&aws_rds_bgd_mutex);
 }
 
 /**
@@ -8896,6 +8951,14 @@ void MySQL_Monitor::monitor_read_only_async(SQLite3_result* resultset, bool do_d
 
 	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
 		const SQLite3_row* r = *it;
+
+		if (is_aws_rds_bgd_server_in_progress(r->fields[0], atoi(r->fields[1]))) {
+			proxy_info(
+				"Skipping read_only check for '%s:%d' because AWS RDS BGD switchover is in progress\n",
+				r->fields[0], atoi(r->fields[1]));
+			continue;
+		}
+
 		bool rc_ping = server_responds_to_ping(r->fields[0], atoi(r->fields[1]));
 		if (rc_ping) { // only if server is responding to pings
 			MySQL_Monitor_State_Data_Task_Type task_type = MON_READ_ONLY;

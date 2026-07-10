@@ -474,6 +474,11 @@ enum class AWS_RDS_BGD_Status {
 	SWITCHOVER_COMPLETED              = 7,   ///< short-lived status used for final cleanup before returning to NONE
 };
 
+enum class AWS_RDS_BGD_Server_Status {
+	NONE = 0,
+	IN_PROGRESS = 1
+};
+
 // Maps a switchover status enum to its stored/display string.
 const char* aws_rds_bgd_status_str(AWS_RDS_BGD_Status s);
 
@@ -500,7 +505,7 @@ struct AWS_RDS_BGD_State {
 	AWS_RDS_BGD_Status bgd_status = AWS_RDS_BGD_Status::NONE;  ///< drives the FSM and the deferred cleanup
 
 	bool green_writer_added_in_hg = false;        ///< green writer added to green_writer_hg
-	bool bgd_in_progress_set = false;             ///< servers flagged as switchover-in-progress
+	bool bgd_in_progress_set = false;             ///< deployment's servers flagged in aws_rds_bgd_server_status
 
 	unsigned int next_check_interval_ms = 0;    ///< FSM-controlled interval; 0 => baseline
 	std::string next_check_host;                ///< FSM-pinned probe host; when set (the green IP), the worker
@@ -525,8 +530,8 @@ inline const char* const BGD_STATUS_POST_PROC    = "SWITCHOVER_IN_POST_PROCESSIN
 inline const char* const BGD_STATUS_COMPLETED    = "SWITCHOVER_COMPLETED";
 
 // read_only monitor server-enumeration query.
-// Every server that belongs to a replication hostgroup and status NOT IN (OFFLINE_SOFT, OFFLINE_HARD, SHUNNED_AWS_BGD)
-#define SELECT_SERVERS_FOR_READ_ONLY "SELECT hostname, port, MAX(use_ssl) use_ssl, check_type, reader_hostgroup FROM mysql_servers JOIN mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE status NOT IN (2,3,5) GROUP BY hostname, port ORDER BY RANDOM()"
+// Every server that belongs to a replication hostgroup and status NOT IN (OFFLINE_SOFT, OFFLINE_HARD)
+#define SELECT_SERVERS_FOR_READ_ONLY "SELECT hostname, port, MAX(use_ssl) use_ssl, check_type, reader_hostgroup FROM mysql_servers JOIN mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE status NOT IN (2,3) GROUP BY hostname, port ORDER BY RANDOM()"
 
 // Defined in MySQL_HostGroups_Manager.h; forward-declared here because the include cycle
 // (Monitor.hpp -> HGM.h -> cpp.h -> Monitor.hpp) can leave them undefined at this point. Only
@@ -593,6 +598,7 @@ class MySQL_Monitor {
 	std::map<std::string, AWS_Aurora_monitor_node *> AWS_Aurora_Hosts_Map;
 	SQLite3_result *AWS_Aurora_Hosts_resultset;
 	uint64_t AWS_Aurora_Hosts_resultset_checksum;
+	std::unordered_map<std::string, AWS_RDS_BGD_Server_Status> aws_rds_bgd_server_status;
 	SQLite3_result *AWS_RDS_BGD_Hosts_resultset;
 	uint64_t AWS_RDS_BGD_Hosts_resultset_checksum;
 	unsigned int num_threads;
@@ -714,6 +720,27 @@ class MySQL_Monitor {
 		AWS_RDS_BGD_Status bgd_status,
 		srv_addr_t& writer, bool writer_is_also_reader,
 		unsigned int reader_hg, std::vector<srv_addr_t>& readers);
+	/**
+	* @brief Check whether a server is flagged as BGD switchover-in-progress.
+	*
+	* @param hostname Server hostname.
+	* @param port     Server port.
+	*
+	* @return true if the server is flagged IN_PROGRESS.
+	*/
+	bool is_aws_rds_bgd_server_in_progress(const std::string& hostname, int port);
+	/**
+	* @brief Flag/unflag every server in BGD hostgroups as switchover-in-progress.
+	*
+	* @details Called by the BGD worker at switchover initiation (INITIATED / IN_PROGRESS /
+	*   POST_PROCESSING) and cleared after SWITCHOVER_COMPLETED. Iterates the writer and reader
+	*   hostgroups and marks all member servers in the shared aws_rds_bgd_server_status map.
+	*
+	* @param writer_hg   Writer hostgroup for the deployment.
+	* @param reader_hg   Reader hostgroup for the deployment.
+	* @param in_progress true to flag servers, false to clear.
+	*/
+	void set_aws_rds_bgd_server_in_progress(unsigned int writer_hg, unsigned int reader_hg, bool in_progress);
 
 	void * monitor_replication_lag();
 	void * monitor_dns_cache();

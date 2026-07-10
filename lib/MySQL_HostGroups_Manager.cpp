@@ -3578,14 +3578,11 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int
  * @details New implementation of the read_only_action that does not depend on the admin table.
  *   Checks each server in the provided list and adjusts writer/reader hostgroup placement
  *   according to the corresponding read_only value. If any change occurs, the runtime
- *   mysql_servers table and checksum are regenerated. When `force` is false,
- *   servers flagged as AWS RDS BGD switchover-in-progress are skipped; when true, the supplied
- *   state is applied even for those servers.
+ *   mysql_servers table and checksum are regenerated.
  *
  * @param mysql_servers Servers and their observed/read-only state.
- * @param force Force state changes regardless of AWS RDS BGD switchover state.
  */
-void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_server_t>& mysql_servers, bool force) {
+void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_server_t>& mysql_servers) {
 
 	bool update_mysql_servers_table = false;
 
@@ -3608,13 +3605,6 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_ser
 		HostGroup_Server_Mapping* host_server_mapping = itr->second.get();
 
 		if (!host_server_mapping) {
-			continue;
-		}
-
-		if (host_server_mapping->is_aws_rds_bgd_in_progress() && !force) {
-			proxy_debug(PROXY_DEBUG_MONITOR, 5,
-				"Skipping read_only_action_v2() for server '%s:%d' because AWS RDS BGD switchover is in progress\n",
-				hostname.c_str(), port);
 			continue;
 		}
 
@@ -3970,32 +3960,6 @@ void MySQL_HostGroups_Manager::aws_rds_bgd_set_runtime_status(unsigned int write
 		"UPDATE mysql_aws_rds_bgd_hostgroups SET status=%d WHERE writer_hostgroup=%u", status, writer_hg);
 	wrlock();
 	mydb->execute(query);
-	wrunlock();
-}
-
-void MySQL_HostGroups_Manager::set_aws_rds_bgd_in_progress(unsigned int writer_hg, unsigned int reader_hg, bool in_progress) {
-	wrlock();
-
-	unsigned int hgs[2] = { writer_hg, reader_hg };
-	for (unsigned int i = 0; i < 2; i++) {
-		MyHGC* myhgc = MyHGC_find(hgs[i]);
-		if (myhgc == nullptr || myhgc->mysrvs == nullptr) {
-			continue;
-		}
-		for (unsigned int j = 0; j < myhgc->mysrvs->cnt(); j++) {
-			MySrvC* s = myhgc->mysrvs->idx(j);
-			const std::string srv_id = std::string(s->address) + ":::" + std::to_string(s->port);
-			auto itr = hostgroup_server_mapping.find(srv_id);
-			if (itr != hostgroup_server_mapping.end() && itr->second) {
-				if (in_progress) {
-					itr->second->set_aws_rds_bgd_in_progress();
-				} else {
-					itr->second->clear_aws_rds_bgd_in_progress();
-				}
-			}
-		}
-	}
-
 	wrunlock();
 }
 

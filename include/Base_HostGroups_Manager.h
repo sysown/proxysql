@@ -570,11 +570,11 @@ class Base_HostGroups_Manager {
 	PtrArray *MyHostGroups;
 	std::unordered_map<unsigned int, HGC *>MyHostGroups_map;
 
-	HGC * MyHGC_find(unsigned int);
 	HGC * MyHGC_create(unsigned int);
 
 	public:
 	Base_HostGroups_Manager();
+	HGC * MyHGC_find(unsigned int);
 	HGC * MyHGC_lookup(unsigned int);
 	SQLite3_result * execute_query(char *query, char **error);
 
