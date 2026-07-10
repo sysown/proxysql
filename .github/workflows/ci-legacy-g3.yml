@@ -31,24 +31,39 @@ jobs:
       - name: Pick runner pool
         id: pick
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN_SYSOWN }}
+          # Listing runners needs repo admin. Probe the available PATs (and the
+          # default token) and use whichever can read the runner pool.
+          TOK_SYSOWN: ${{ secrets.GH_TOKEN_SYSOWN }}
+          TOK_PROXYSQL: ${{ secrets.GH_TOKEN_PROXYSQL }}
+          TOK_DEFAULT: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           ELIGIBLE: ${{ (github.actor == 'renecannao' || (inputs.trigger && fromJson(inputs.trigger).event.workflow_run.actor.login == 'renecannao')) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) }}
         run: |
           set -uo pipefail
           choice='"ubuntu-22.04"'
           if [ "${ELIGIBLE:-}" = "true" ]; then
-            if out=$(gh api "repos/${REPO}/actions/runners?per_page=100" 2>err.txt); then
+            out=""; used=""
+            for tk in SYSOWN PROXYSQL DEFAULT; do
+              eval "T=\${TOK_${tk}:-}"
+              [ -z "$T" ] && { echo ">>> token ${tk}: (secret empty, skipping)"; continue; }
+              if out=$(GH_TOKEN="$T" gh api "repos/${REPO}/actions/runners?per_page=100" 2>err.txt); then
+                echo ">>> token ${tk}: CAN list runners"; used="$tk"; break
+              else
+                echo ">>> token ${tk}: cannot list runners -- $(head -1 err.txt)"
+                out=""
+              fi
+            done
+            if [ -n "$used" ]; then
               idle=$(printf '%s' "$out" | jq '[.runners[]|select(.status=="online" and (.busy==false) and ([.labels[].name]|index("proxysql-ci")))]|length')
               total=$(printf '%s' "$out" | jq '[.runners[]|select([.labels[].name]|index("proxysql-ci"))]|length')
-              echo ">>> proxysql-ci runners: idle=${idle} total=${total}"
+              echo ">>> proxysql-ci runners (via ${used}): idle=${idle} total=${total}"
               if [ "${idle:-0}" -ge 1 ]; then
                 choice='["self-hosted","proxysql-ci"]'; echo ">>> a VM is free -> self-hosted"
               else
-                echo ">>> pool saturated (idle=0) -> spill to GitHub-hosted"
+                choice='"ubuntu-22.04"'; echo ">>> pool saturated (idle=0) -> spill to GitHub-hosted"
               fi
             else
-              echo ">>> WARNING: could not list runners (GH_TOKEN_SYSOWN needs repo admin):"; sed 's/^/    /' err.txt
+              echo ">>> WARNING: no available token can list runners (need repo admin)"
               choice='["self-hosted","proxysql-ci"]'; echo ">>> failing SAFE to self-hosted (offload unchanged)"
             fi
           else
