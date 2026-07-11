@@ -2358,7 +2358,7 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 				strlen(q)
 				+ hostname.length() + username.length()
 				+ ssl_ca.length() + ssl_cert.length() + ssl_key.length()
-				+ ssl_crl.length() + ssl_crlpath.length() + ssl_protocol_version_range.length() + comment.length() + 64
+				+ ssl_crl.length() + ssl_crlpath.length() + ssl_protocol_version_range.length() + strlen(o) + 64
 			);
 			sprintf(query, q, hostname.c_str(), port, username.c_str(), ssl_ca.c_str(), ssl_cert.c_str(), ssl_key.c_str(), ssl_crl.c_str(), ssl_crlpath.c_str(), ssl_protocol_version_range.c_str(), o);
 			admindb->execute(query);

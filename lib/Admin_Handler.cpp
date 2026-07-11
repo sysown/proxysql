@@ -2768,10 +2768,10 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		rc = pa->proxysql_config().Write_PgSQL_Servers_to_configfile(data);
 		rc = pa->proxysql_config().Write_Scheduler_to_configfile(data);
 		rc = pa->proxysql_config().Write_ProxySQL_Servers_to_configfile(data);
-		rc = pa->proxysql_config().Write_MySQL_Query_Rules_Fast_Routing_to_configfile(data);
-		rc = pa->proxysql_config().Write_PgSQL_Query_Rules_Fast_Routing_to_configfile(data);
-		rc = pa->proxysql_config().Write_MySQL_Firewall_to_configfile(data);
-		rc = pa->proxysql_config().Write_PgSQL_Firewall_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_MySQL_Query_Rules_Fast_Routing_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_PgSQL_Query_Rules_Fast_Routing_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_MySQL_Firewall_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_PgSQL_Firewall_to_configfile(data);
 		if (rc) {
 			std::stringstream ss;
 			proxy_error("ProxySQL Admin Error: Cannot extract configuration\n");
@@ -4475,10 +4475,10 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		rc = pa->proxysql_config().Write_Scheduler_to_configfile(data);
 		rc = pa->proxysql_config().Write_Restapi_to_configfile(data);
 		rc = pa->proxysql_config().Write_ProxySQL_Servers_to_configfile(data);
-		rc = pa->proxysql_config().Write_MySQL_Query_Rules_Fast_Routing_to_configfile(data);
-		rc = pa->proxysql_config().Write_PgSQL_Query_Rules_Fast_Routing_to_configfile(data);
-		rc = pa->proxysql_config().Write_MySQL_Firewall_to_configfile(data);
-		rc = pa->proxysql_config().Write_PgSQL_Firewall_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_MySQL_Query_Rules_Fast_Routing_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_PgSQL_Query_Rules_Fast_Routing_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_MySQL_Firewall_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_PgSQL_Firewall_to_configfile(data);
 		if (rc) {
 			std::stringstream ss;
 			ss << "ProxySQL Admin Error: Cannot extract configuration";
@@ -4522,10 +4522,10 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		rc = pa->proxysql_config().Write_Scheduler_to_configfile(data);
 		rc = pa->proxysql_config().Write_Restapi_to_configfile(data);
 		rc = pa->proxysql_config().Write_ProxySQL_Servers_to_configfile(data);
-		rc = pa->proxysql_config().Write_MySQL_Query_Rules_Fast_Routing_to_configfile(data);
-		rc = pa->proxysql_config().Write_PgSQL_Query_Rules_Fast_Routing_to_configfile(data);
-		rc = pa->proxysql_config().Write_MySQL_Firewall_to_configfile(data);
-		rc = pa->proxysql_config().Write_PgSQL_Firewall_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_MySQL_Query_Rules_Fast_Routing_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_PgSQL_Query_Rules_Fast_Routing_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_MySQL_Firewall_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_PgSQL_Firewall_to_configfile(data);
 		if (rc) {
 			std::stringstream ss;
 			ss << "ProxySQL Admin Error: Cannot write proxysql.cnf";
