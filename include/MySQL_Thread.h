@@ -521,6 +521,20 @@ class MySQL_Threads_Handler
 		//unsigned int default_charset; // removed in 2.0.13 . Obsoleted previously using MySQL_Variables instead
 		int handle_unknown_charset;
 		int default_authentication_plugin_int;
+		// pass-through authentication (see doc/internal/passthrough_authentication.md)
+		bool passthrough_auth_enabled;
+		bool passthrough_auth_empty_password;
+		bool passthrough_auth_unknown_users;
+		bool passthrough_auth_require_tls;
+		int passthrough_default_hg;
+		int passthrough_auth_cache_ttl_s;
+		int passthrough_auth_max_inflight_probes;
+		int passthrough_auth_max_failures_per_user;
+		int passthrough_auth_max_failures_per_ip;
+		int passthrough_auth_failure_window_s;
+		int passthrough_auth_failure_map_cap;
+		char *passthrough_default_schema;
+		char *passthrough_auth_username_pattern;
 		bool servers_stats;
 		bool commands_stats;
 		bool query_digests;

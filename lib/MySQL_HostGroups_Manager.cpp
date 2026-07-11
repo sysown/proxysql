@@ -5919,6 +5919,9 @@ bool AWS_Aurora_Info::update(int r, int _port, char *_end_addr, int maxl, int al
  * @details Input verification is performed in the supplied 'hostgroup_settings'. It's expected to be a valid
  *  JSON that may contain the following fields:
  *   - handle_warnings: Value must be >= 0.
+ *   - default_query_timeout: Value must be in [1000, 20*24*3600*1000]; takes precedence over
+ *     'mysql-default_query_timeout' for queries that resolve to this hostgroup. Range mirrors
+ *     the global 'mysql-default_query_timeout' bounds.
  *
  *  In case input verification fails for a field, supplied 'MyHGC' is NOT updated for that field. An error
  *  message is logged specifying the source of the error.
@@ -5941,6 +5944,11 @@ void init_myhgc_hostgroup_settings(const char* hostgroup_settings, MyHGC* myhgc)
 				{ return (monitor_slave_lag_when_null >= 0 && monitor_slave_lag_when_null <= 604800); };
 			const int32_t monitor_slave_lag_when_null = j_get_srv_default_int_val<int32_t>(j, hid, "monitor_slave_lag_when_null", monitor_slave_lag_when_null_check);
 			myhgc->attributes.monitor_slave_lag_when_null = monitor_slave_lag_when_null;
+
+			const auto default_query_timeout_check = [](int32_t default_query_timeout) -> bool
+				{ return (default_query_timeout >= 1000 && default_query_timeout <= 20*24*3600*1000); };
+			const int32_t default_query_timeout = j_get_srv_default_int_val<int32_t>(j, hid, "default_query_timeout", default_query_timeout_check);
+			myhgc->attributes.default_query_timeout = default_query_timeout;
 		}
 		catch (const json::exception& e) {
 			proxy_error(
