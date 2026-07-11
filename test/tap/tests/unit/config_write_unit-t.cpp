@@ -22,6 +22,7 @@
 #include "test_init.h"
 #include "proxysql.h"
 #include "proxysql_config.h"
+#include "configfile.hpp"
 #include "sqlite3db.h"
 #include "ProxySQL_Admin_Tables_Definitions.h"
 
@@ -36,6 +37,49 @@ static SQLite3DB* create_test_db() {
 	SQLite3DB* db = new SQLite3DB();
 	db->open((char*)":memory:", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 	return db;
+}
+
+// ============================================================
+// Helpers for Write -> Read round-trip tests
+// ============================================================
+
+// The Read_*_from_configfile() methods parse the global GloVars.confFile.
+// This helper parses a writer's output string back into a throwaway
+// ProxySQL_ConfigFile and points GloVars.confFile at it for the duration
+// of the read. The caller must restore the prior value afterwards.
+static ProxySQL_ConfigFile* load_config_from_string(const std::string& s) {
+	ProxySQL_ConfigFile* cf = new ProxySQL_ConfigFile();
+	cf->cfg.readString(s.c_str());
+	return cf;
+}
+
+// Count rows in a table (single integer column) of the in-memory DB.
+static int db_count_rows(SQLite3DB* db, const char* table) {
+	char* error = NULL;
+	std::string q = std::string("SELECT COUNT(*) FROM ") + table;
+	SQLite3_result* res = db->execute_statement(q.c_str(), &error);
+	int n = -1;
+	if (res && res->rows_count > 0 && res->rows[0]->fields[0]) {
+		n = atoi(res->rows[0]->fields[0]);
+	}
+	if (error) free(error);
+	if (res) delete res;
+	return n;
+}
+
+// Fetch a single string value: SELECT <col> FROM <table> WHERE <where>
+// Returns "" if no row or NULL field.
+static std::string db_select_string(SQLite3DB* db, const char* col, const char* table, const char* where) {
+	char* error = NULL;
+	std::string q = std::string("SELECT ") + col + " FROM " + table + " WHERE " + where;
+	SQLite3_result* res = db->execute_statement(q.c_str(), &error);
+	std::string val;
+	if (res && res->rows_count > 0 && res->rows[0]->fields[0]) {
+		val = res->rows[0]->fields[0];
+	}
+	if (error) free(error);
+	if (res) delete res;
+	return val;
 }
 
 // ============================================================
@@ -832,11 +876,138 @@ static void test_write_pgsql_servers() {
 }
 
 // ============================================================
+// Write -> Read round-trip tests for the new tables.
+// These exercise the import (Read_*_from_configfile) half, which had
+// zero coverage. Flow: Write table to a config string -> parse the
+// string with libconfig -> Read_*_from_configfile into a fresh DB ->
+// verify the rows landed correctly.
+// ============================================================
+
+static void test_roundtrip_mysql_query_rules_fast_routing() {
+	// Write side: populate + serialize
+	SQLite3DB* db = create_test_db();
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_FAST_ROUTING);
+	db->execute("INSERT INTO mysql_query_rules_fast_routing (username, schemaname, flagIN, destination_hostgroup, comment) VALUES ('u1','s1',0,10,'r1')");
+	db->execute("INSERT INTO mysql_query_rules_fast_routing (username, schemaname, flagIN, destination_hostgroup, comment) VALUES ('u2','s2',1,20,'r2')");
+	ProxySQL_Config cfg(db);
+	std::string data;
+	cfg.Write_MySQL_Query_Rules_Fast_Routing_to_configfile(data);
+
+	// Read side: clear the table, reload from the serialized string
+	db->execute("DELETE FROM mysql_query_rules_fast_routing");
+	ProxySQL_ConfigFile* cf = load_config_from_string(data);
+	ProxySQL_ConfigFile* saved = GloVars.confFile;
+	GloVars.confFile = cf;
+	int rows = cfg.Read_MySQL_Query_Rules_Fast_Routing_from_configfile();
+	GloVars.confFile = saved;
+	delete cf;
+
+	ok(rows == 2, "RT MySQL_QRFR: Read returns 2 rows (got %d)", rows);
+	ok(db_count_rows(db, "mysql_query_rules_fast_routing") == 2, "RT MySQL_QRFR: table has 2 rows");
+	std::string hg = db_select_string(db, "destination_hostgroup", "mysql_query_rules_fast_routing",
+		"username='u2' AND schemaname='s2'");
+	ok(hg == "20", "RT MySQL_QRFR: u2/s2 -> hg 20 (got '%s')", hg.c_str());
+
+	delete db;
+}
+
+static void test_roundtrip_pgsql_query_rules_fast_routing() {
+	SQLite3DB* db = create_test_db();
+	db->execute(ADMIN_SQLITE_TABLE_PGSQL_QUERY_RULES_FAST_ROUTING);
+	db->execute("INSERT INTO pgsql_query_rules_fast_routing (username, database, flagIN, destination_hostgroup, comment) VALUES ('pu1','pd1',0,11,'pr1')");
+	db->execute("INSERT INTO pgsql_query_rules_fast_routing (username, database, flagIN, destination_hostgroup, comment) VALUES ('pu2','pd2',2,22,'pr2')");
+	ProxySQL_Config cfg(db);
+	std::string data;
+	cfg.Write_PgSQL_Query_Rules_Fast_Routing_to_configfile(data);
+
+	db->execute("DELETE FROM pgsql_query_rules_fast_routing");
+	ProxySQL_ConfigFile* cf = load_config_from_string(data);
+	ProxySQL_ConfigFile* saved = GloVars.confFile;
+	GloVars.confFile = cf;
+	int rows = cfg.Read_PgSQL_Query_Rules_Fast_Routing_from_configfile();
+	GloVars.confFile = saved;
+	delete cf;
+
+	ok(rows == 2, "RT PgSQL_QRFR: Read returns 2 rows (got %d)", rows);
+	ok(db_count_rows(db, "pgsql_query_rules_fast_routing") == 2, "RT PgSQL_QRFR: table has 2 rows");
+	std::string hg = db_select_string(db, "destination_hostgroup", "pgsql_query_rules_fast_routing",
+		"username='pu2' AND database='pd2'");
+	ok(hg == "22", "RT PgSQL_QRFR: pu2/pd2 -> hg 22 (got '%s')", hg.c_str());
+
+	delete db;
+}
+
+static void test_roundtrip_mysql_firewall() {
+	SQLite3DB* db = create_test_db();
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_USERS);
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_RULES);
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_SQLI_FINGERPRINTS);
+	db->execute("INSERT INTO mysql_firewall_whitelist_users (active,username,client_address,mode,comment) VALUES (1,'fwu','10.0.0.1','PROTECTING','u')");
+	db->execute("INSERT INTO mysql_firewall_whitelist_rules (active,username,client_address,schemaname,flagIN,digest,comment) VALUES (1,'fwu','10.0.0.1','dbx',0,'d1','r1')");
+	db->execute("INSERT INTO mysql_firewall_whitelist_sqli_fingerprints (active,fingerprint) VALUES (1,'sqli1')");
+	ProxySQL_Config cfg(db);
+	std::string data;
+	cfg.Write_MySQL_Firewall_to_configfile(data);
+
+	db->execute("DELETE FROM mysql_firewall_whitelist_users");
+	db->execute("DELETE FROM mysql_firewall_whitelist_rules");
+	db->execute("DELETE FROM mysql_firewall_whitelist_sqli_fingerprints");
+	ProxySQL_ConfigFile* cf = load_config_from_string(data);
+	ProxySQL_ConfigFile* saved = GloVars.confFile;
+	GloVars.confFile = cf;
+	int rows = cfg.Read_MySQL_Firewall_from_configfile();
+	GloVars.confFile = saved;
+	delete cf;
+
+	// 2 inserts (users+rules) + 1 fingerprint = 3 rows reported
+	ok(rows == 3, "RT MySQL_Firewall: Read returns 3 rows (got %d)", rows);
+	ok(db_count_rows(db, "mysql_firewall_whitelist_users") == 1, "RT MySQL_Firewall: users row restored");
+	ok(db_count_rows(db, "mysql_firewall_whitelist_rules") == 1, "RT MySQL_Firewall: rules row restored");
+	ok(db_count_rows(db, "mysql_firewall_whitelist_sqli_fingerprints") == 1, "RT MySQL_Firewall: sqli fingerprint restored");
+	std::string mode = db_select_string(db, "mode", "mysql_firewall_whitelist_users", "username='fwu'");
+	ok(mode == "PROTECTING", "RT MySQL_Firewall: mode PROTECTING restored (got '%s')", mode.c_str());
+
+	delete db;
+}
+
+static void test_roundtrip_pgsql_firewall() {
+	SQLite3DB* db = create_test_db();
+	db->execute(ADMIN_SQLITE_TABLE_PGSQL_FIREWALL_WHITELIST_USERS);
+	db->execute(ADMIN_SQLITE_TABLE_PGSQL_FIREWALL_WHITELIST_RULES);
+	db->execute(ADMIN_SQLITE_TABLE_PGSQL_FIREWALL_WHITELIST_SQLI_FINGERPRINTS);
+	db->execute("INSERT INTO pgsql_firewall_whitelist_users (active,username,client_address,mode,comment) VALUES (1,'pfu','10.0.0.2','DETECTING','pu')");
+	db->execute("INSERT INTO pgsql_firewall_whitelist_rules (active,username,client_address,database,flagIN,digest,comment) VALUES (1,'pfu','10.0.0.2','pdb',3,'pd1','pr1')");
+	db->execute("INSERT INTO pgsql_firewall_whitelist_sqli_fingerprints (active,fingerprint) VALUES (1,'psqli1')");
+	ProxySQL_Config cfg(db);
+	std::string data;
+	cfg.Write_PgSQL_Firewall_to_configfile(data);
+
+	db->execute("DELETE FROM pgsql_firewall_whitelist_users");
+	db->execute("DELETE FROM pgsql_firewall_whitelist_rules");
+	db->execute("DELETE FROM pgsql_firewall_whitelist_sqli_fingerprints");
+	ProxySQL_ConfigFile* cf = load_config_from_string(data);
+	ProxySQL_ConfigFile* saved = GloVars.confFile;
+	GloVars.confFile = cf;
+	int rows = cfg.Read_PgSQL_Firewall_from_configfile();
+	GloVars.confFile = saved;
+	delete cf;
+
+	ok(rows == 3, "RT PgSQL_Firewall: Read returns 3 rows (got %d)", rows);
+	ok(db_count_rows(db, "pgsql_firewall_whitelist_users") == 1, "RT PgSQL_Firewall: users row restored");
+	ok(db_count_rows(db, "pgsql_firewall_whitelist_rules") == 1, "RT PgSQL_Firewall: rules row restored");
+	ok(db_count_rows(db, "pgsql_firewall_whitelist_sqli_fingerprints") == 1, "RT PgSQL_Firewall: sqli fingerprint restored");
+	std::string mode = db_select_string(db, "mode", "pgsql_firewall_whitelist_users", "username='pfu'");
+	ok(mode == "DETECTING", "RT PgSQL_Firewall: mode DETECTING restored (got '%s')", mode.c_str());
+
+	delete db;
+}
+
+// ============================================================
 // Main
 // ============================================================
 
 int main() {
-	plan(145);  // matches exact number of ok() assertions in this file
+	plan(161);  // matches exact number of ok() assertions in this file
 	test_init_minimal();
 
 	// MySQL side - existing + new data-driven tests
@@ -880,6 +1051,12 @@ int main() {
 	test_write_pgsql_query_rules_fast_routing();
 	test_write_pgsql_firewall();
 	test_write_pgsql_servers();
+
+	// Write -> Read round-trip for the new tables (covers the import half)
+	test_roundtrip_mysql_query_rules_fast_routing();
+	test_roundtrip_pgsql_query_rules_fast_routing();
+	test_roundtrip_mysql_firewall();
+	test_roundtrip_pgsql_firewall();
 
 	// Error handling (still useful)
 	test_write_mysql_users_no_table();
