@@ -81,6 +81,17 @@ int main(int, char**) {
 	auto admin = adminConn();
 	if (!admin || PQstatus(admin.get()) != CONNECTION_OK) BAIL_OUT("no admin connection");
 
+	// Suite isolation: remember the floor we started with and restore exactly that at the end
+	// (the suite default is not guaranteed to be 3).
+	std::string orig_floor;
+	{
+		PGresult* r = PQexec(admin.get(),
+			"SELECT variable_value FROM runtime_global_variables WHERE variable_name='pgsql-authentication_method'");
+		if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) > 0) orig_floor = PQgetvalue(r, 0, 0);
+		PQclear(r);
+	}
+	if (orig_floor.empty()) BAIL_OUT("could not read original pgsql-authentication_method (empty)");
+
 	const char* P = "verifierpass123";
 
 	// Generate a SCRAM verifier and an md5 hash for the same password (computed locally by libpq).
@@ -112,7 +123,8 @@ int main(int, char**) {
 		auto c = frontendConn("scram_user", P);
 		ok(c && PQstatus(c.get()) == CONNECTION_OK, "verifier-stored user uses SCRAM even under a cleartext floor (no downgrade)");
 	}
-	setFloor(admin.get(), "3"); // restore scram-sha-256
+	setFloor(admin.get(), orig_floor.c_str()); // restore original floor (needed so the anti-enumeration
+	                                            // baseline below stays comparable to the floor it was captured under)
 	delUser(admin.get(), "scram_user");
 
 	// (4) Anti-enumeration: an unknown user must fail with the SAME client-visible error TEMPLATE as a
@@ -169,7 +181,7 @@ int main(int, char**) {
 		ok(!v.empty() && v != "4",
 		   "SCRAM-SHA-256-PLUS (4) not selectable; runtime value clamped to 1..3 (got '%s')", v.c_str());
 	}
-	setFloor(admin.get(), "3"); // restore
+	setFloor(admin.get(), orig_floor.c_str()); // restore original floor
 
 	// (9) Load-time validation: a malformed SCRAM verifier is rejected at LOAD (not silently stored
 	// as plaintext) — so it must NOT appear in the runtime user set.
@@ -185,6 +197,10 @@ int main(int, char**) {
 	}
 	execAdmin(admin.get(), "DELETE FROM pgsql_users WHERE username='bad_verifier_user'");
 	execAdmin(admin.get(), "LOAD PGSQL USERS TO RUNTIME");
+
+	// Unconditional final restore: guarantee the suite-wide floor is left exactly as found,
+	// regardless of the scenario sequence above.
+	if (!orig_floor.empty()) setFloor(admin.get(), orig_floor.c_str());
 
 	if (scram) PQfreemem(scram);
 	if (md5) PQfreemem(md5);
