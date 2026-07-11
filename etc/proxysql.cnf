@@ -82,6 +82,35 @@ mysql_variables=
 	commands_stats=true
 	sessions_sort=true
 	connect_retries_on_failure=10
+
+#####################################################################
+# Pass-through authentication (opt-in, off by default).
+#
+# When enabled, ProxySQL can authenticate a client to the backend
+# without a pre-provisioned password in mysql_users: it intercepts
+# the cleartext password sent during the caching_sha2_password
+# full-auth exchange, probes a backend with it, and on success
+# caches the credential in memory for the next connect. See
+# doc/internal/passthrough_authentication.md for the design.
+#
+# IMPORTANT: enabling passthrough_auth_unknown_users WITHOUT setting
+# passthrough_auth_username_pattern lets ANY username be probed
+# against the backend. ProxySQL emits a startup warning when that
+# combination is published; treat the warning seriously.
+#####################################################################
+#	passthrough_auth_enabled=false                  # master gate; nothing below applies until true
+#	passthrough_auth_empty_password=true            # honor mysql_users rows with password='' as pass-through opt-in
+#	passthrough_auth_unknown_users=false            # also allow usernames NOT in mysql_users (gated by passthrough_default_hg)
+#	passthrough_auth_require_tls=true               # refuse to send AuthMoreData{0x04} over non-TLS client connections
+#	passthrough_default_hg=0                        # hostgroup used for unknown-user probes
+#	passthrough_default_schema=""                   # default schema for unknown-user sessions (falls back to default_schema if empty)
+#	passthrough_auth_cache_ttl_s=0                  # 0 = entries never expire; nonzero = lazy eviction window in seconds
+#	passthrough_auth_max_inflight_probes=100        # concurrent probes cap (DoS / thundering-herd protection)
+#	passthrough_auth_username_pattern=""            # re2 regex; empty = allow all (HIGHLY recommended to set when unknown_users=true)
+#	passthrough_auth_max_failures_per_user=3        # per-user sliding-window threshold
+#	passthrough_auth_max_failures_per_ip=10         # per-source-IP sliding-window threshold
+#	passthrough_auth_failure_window_s=60            # sliding-window size for both counters
+#	passthrough_auth_failure_map_cap=100000         # max distinct keys retained in failure deques (defense-in-depth)
 }
 
 

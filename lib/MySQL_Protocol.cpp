@@ -11,6 +11,7 @@ using json = nlohmann::json;
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
 #include "MySQL_Authentication.hpp"
+#include "MySQL_Passthrough_Auth_Cache.h"
 #include "MySQL_LDAP_Authentication.hpp"
 #include "MySQL_Variables.h"
 
@@ -20,6 +21,7 @@ using json = nlohmann::json;
 //#include <ma_global.h>
 
 extern MySQL_Authentication *GloMyAuth;
+extern MySQL_Passthrough_Auth_Cache *GloMyPTAuthCache;
 extern MySQL_LDAP_Authentication *GloMyLdapAuth;
 extern MySQL_Threads_Handler *GloMTH;
 
@@ -1460,6 +1462,84 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	} else {
 		account_details = GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, dup_details);
 	}
+
+	/**
+	 * @brief Reject COM_CHANGE_USER for pass-through-eligible users (spec §5.4).
+	 *
+	 * Phase 1 explicitly does not support pass-through for COM_CHANGE_USER:
+	 * the protocol-level state machine in PPHR_passthrough_init assumes a
+	 * fresh client handshake and would corrupt a session that already has
+	 * a bound backend connection. Rather than try to drive the probe
+	 * mid-session, the spec says to reject and let the client fall back
+	 * to opening a new connection (which goes through the normal
+	 * PPHR_verify_password / pass-through path).
+	 *
+	 * This check MUST run BEFORE the unconditional session-state mutations
+	 * below (sess->default_hostgroup, sess->transaction_persistent,
+	 * sess->user_attributes get overwritten from @c account_details for
+	 * EVERY CHANGE_USER, success or not). If we deferred this check to
+	 * after those mutations, a rejected CHANGE_USER would leave the
+	 * already-authenticated session with the pass-through target row's
+	 * routing/attrs grafted on top of the previous user's state -- the
+	 * rejected attempt would have observable side-effects. Doing the
+	 * check here, before the lookup result touches the session, gives a
+	 * clean failure with the session state untouched.
+	 *
+	 * Two cases need explicit rejection here when mysql-passthrough_auth_enabled
+	 * is on:
+	 *
+	 *   - Empty-password row (password != NULL, strlen == 0): without this
+	 *     guard the existing
+	 *         if (pass_len==0 && strlen(password)==0) { ret = true; }
+	 *     branch below grants passwordless CHANGE_USER access to an
+	 *     admin-provisioned pass-through row -- silently violating the
+	 *     §3.2 behavior change.
+	 *
+	 *   - Unknown user (password == NULL): already falls through to
+	 *     ret=false a few lines down (the legacy behavior), so it does NOT
+	 *     need a new guard. We could mirror the explicit form for clarity
+	 *     but it would be a no-op.
+	 *
+	 * The rejection here is silent (ret=false, generic auth failure) and
+	 * leaks no information about whether the user exists or whether
+	 * pass-through is enabled.
+	 */
+	/*
+	 * Compute the row's stored password ONCE before the rejection gate.
+	 *
+	 * get_password() bumps MyHGM->status.client_connections_sha2cached
+	 * when @c clear_text_password[PRIMARY] is the value being returned
+	 * (see the in-source comment "Only count one attempt using the cache
+	 * per connection"). An earlier version of this commit called
+	 * get_password() once for the rejection check and a second time for
+	 * the legacy block below, double-bumping that counter on every
+	 * non-rejected CHANGE_USER. Compute once and share.
+	 */
+	char* password = get_password(account_details, PASSWORD_TYPE::PRIMARY);
+
+	if (mysql_thread___passthrough_auth_enabled
+		&& mysql_thread___passthrough_auth_empty_password
+		&& password != NULL
+		&& password[0] == '\0'
+		&& (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE)) {
+		// Rationale for the pre-mutation ordering and the two eligible
+		// cases is documented on the doxygen block above this gate.
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
+			"COM_CHANGE_USER to pass-through-eligible user '%s' rejected "
+			"(Phase 1 does not support pass-through via CHANGE_USER, spec §5.4)\n",
+			user ? (const char*)user : "(null)");
+		ret = false;
+		if (pass) { free(pass); pass = NULL; }
+		if (userinfo->username) free(userinfo->username);
+		if (userinfo->password) free(userinfo->password);
+		userinfo->username = strdup((const char *)user);
+		userinfo->password = strdup((const char *)"");
+		if (password) { free(password); password = NULL; }
+		free_account_details(account_details);
+		userinfo->set(NULL, NULL, NULL, NULL);
+		return ret;
+	}
+
 	// FIXME: add support for default schema and fast forward, see issue #255 and #256
 	(*myds)->sess->default_hostgroup=account_details.default_hostgroup;
 	(*myds)->sess->transaction_persistent=account_details.transaction_persistent;
@@ -1470,7 +1550,6 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	}
 	(*myds)->sess->user_attributes=account_details.attributes;
 	account_details.attributes = nullptr;
-	char* password = get_password(account_details, PASSWORD_TYPE::PRIMARY);
 
 	if (password==NULL) {
 		ret=false;
@@ -2293,6 +2372,66 @@ void MySQL_Protocol::PPHR_sha2full(
 	}
 }
 
+void MySQL_Protocol::PPHR_passthrough_init(MyProt_tmp_auth_vars& vars1) {
+	// Stage 0: first call — client just sent the HandshakeResponse with a
+	// scrambled password. Reply with AuthMoreData{0x04} so the client
+	// follows up with its cleartext (under TLS or RSA-encrypted per the
+	// caching_sha2_password protocol).
+	if ((*myds)->switching_auth_stage == 0) {
+		const unsigned char perform_full_authentication = '\4';
+		generate_one_byte_pkt(perform_full_authentication);
+		(*myds)->pkt_sid++;
+		(*myds)->switching_auth_type = AUTH_MYSQL_CACHING_SHA2_PASSWORD;
+		(*myds)->switching_auth_stage = 4;
+		(*myds)->auth_in_progress = 1;
+		return;
+	}
+
+	// Stage 5: client has replied with the cleartext password (now in
+	// vars1.pass). Treat it as "potentially right" and put it directly on
+	// userinfo->password -- the same field the normal backend connect path
+	// uses as the auth password in mysql_real_connect_start (see
+	// MySQL_Connection::connect_start). The non-blocking pass-through
+	// handler then acquires a pooled backend connection that authenticates
+	// with this credential; the backend's OK/ERR is the verdict, replacing
+	// the old one-shot synchronous probe.
+	//
+	// We previously stashed the cleartext on a dedicated
+	// client_myds->passthrough_cleartext field; that field is gone now that
+	// the credential rides userinfo->password like any other auth.
+	if ((*myds)->switching_auth_stage == 5) {
+		// Stash the captured cleartext on client_myds->passthrough_cleartext.
+		// It MUST live on a dedicated field, NOT userinfo->password: the
+		// do_auth epilogue in process_pkt_handshake_response overwrites
+		// userinfo->password with "" when auth is still in progress
+		// (the `else` branch with `if (vars1.pass_len)`), which would clobber
+		// the borrowed cleartext before the session handler runs. The
+		// dedicated field is left untouched by that epilogue. The session
+		// handler copies this cleartext onto the backend connection's
+		// userinfo->password at probe-acquire time (after the epilogue has
+		// run), so it becomes the auth password for mysql_real_connect_start.
+		if ((*myds)->passthrough_cleartext) {
+			memset((*myds)->passthrough_cleartext, 0, strlen((*myds)->passthrough_cleartext));
+			free((*myds)->passthrough_cleartext);
+			(*myds)->passthrough_cleartext = NULL;
+		}
+		if (vars1.pass && vars1.pass_len > 0) {
+			(*myds)->passthrough_cleartext =
+				strdup(reinterpret_cast<const char*>(vars1.pass));
+		}
+		// else: client sent an empty cleartext. Leave passthrough_cleartext
+		// NULL and let handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT
+		// fail the auth with a generic ERR. An empty password can never
+		// authenticate against a real backend account.
+		(*myds)->auth_in_progress = 1;
+		(*myds)->sess->set_status(AUTHENTICATING_BACKEND_FOR_CLIENT);
+		return;
+	}
+
+	// Any other stage is a protocol bug; assert in debug builds.
+	assert(0);
+}
+
 void MySQL_Protocol::PPHR_SetConnAttrs(MyProt_tmp_auth_vars& vars1, account_details_t& attr1) {
 	MySQL_Connection *myconn = NULL;
 	myconn=sess->client_myds->myconn;
@@ -2395,6 +2534,297 @@ void MySQL_Protocol::PPHR_next_auth_stage(MyProt_tmp_auth_vars& vars1, PASSWORD_
 bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_details_t& account_details) {
 	bool ret = false;
 	char reply[SHA_DIGEST_LENGTH + 1] = { 0 };
+
+	// Pass-through cache lookup and dispatch (spec §3.1, §8.2). Two
+	// eligibility cases share the same lookup-and-dispatch logic:
+	//
+	//   - empty_pw_case:    mysql_users row exists with password=''
+	//                       (admin opt-in via passthrough_auth_empty_password)
+	//   - unknown_user_case: user not in mysql_users at all
+	//                       (gated by passthrough_auth_unknown_users; routing
+	//                        and schema synthesized from globals each connect)
+	//
+	// On cache hit, replace vars1.password with the learned cleartext so
+	// the existing verification path below runs as if mysql_users had
+	// stored a cleartext password. On miss (and TLS gate satisfied),
+	// dispatch to PPHR_passthrough_init which drives the
+	// caching_sha2_password full-auth exchange and ultimately schedules a
+	// backend probe via AUTHENTICATING_BACKEND_FOR_CLIENT.
+	{
+		const bool empty_pw_case =
+			mysql_thread___passthrough_auth_empty_password
+			&& vars1.password != NULL
+			&& strlen(vars1.password) == 0;
+		const bool unknown_user_case =
+			mysql_thread___passthrough_auth_unknown_users
+			&& vars1.password == NULL;
+
+		/**
+		 * @brief Hard-reject when the row state is pass-through eligible but
+		 * the client plugin cannot drive pass-through.
+		 *
+		 * When @c mysql-passthrough_auth_enabled is on, an empty stored
+		 * password in @c mysql_users semantically means "learn this via the
+		 * caching_sha2_password full-auth exchange" -- it is NO LONGER a
+		 * marker for passwordless login (spec §3.2). However the rest of
+		 * PPHR_verify_password retains the legacy
+		 *   if (pass_len == 0 && strlen(password) == 0) ret = true;
+		 * branch a few dozen lines below, which would otherwise grant
+		 * passwordless login to e.g. a mysql_native_password client sending
+		 * an empty password against the same row -- silently bypassing the
+		 * documented behavior change of §3.2.
+		 *
+		 * Block that fallthrough explicitly here: if pass-through is enabled
+		 * AND the row signals eligibility (empty password) AND the client
+		 * isn't using caching_sha2_password (the only plugin we can actually
+		 * probe for cleartext), set ret=false and exit before any other
+		 * branch can accept the connection. Same disposition as a
+		 * legitimately failed pass-through: generic auth failure, no
+		 * information leak about whether the user exists.
+		 *
+		 * This applies only to @c empty_pw_case (admin-provisioned opt-in
+		 * row). The @c unknown_user_case already cannot reach the
+		 * passwordless-OK branch because @c vars1.password==NULL takes a
+		 * different code path that already fails.
+		 */
+		if (mysql_thread___passthrough_auth_enabled
+			&& empty_pw_case
+			&& auth_plugin_id != AUTH_MYSQL_CACHING_SHA2_PASSWORD
+			&& (*myds)->sess->session_type == PROXYSQL_SESSION_MYSQL) {
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
+				"pass-through eligible row but client plugin is not "
+				"caching_sha2_password (id=%d), rejecting auth for user='%s'\n",
+				auth_plugin_id,
+				vars1.user ? (const char*)vars1.user : "(null)");
+			ret = false;
+			return ret;
+		}
+
+		if (mysql_thread___passthrough_auth_enabled
+			&& auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD
+			&& (*myds)->sess->session_type == PROXYSQL_SESSION_MYSQL
+			&& GloMyPTAuthCache != NULL
+			&& vars1.user != NULL
+			&& (empty_pw_case || unknown_user_case)) {
+
+			/**
+			 * @brief Username allowlist gate (spec §7.1).
+			 *
+			 * When @c mysql-passthrough_auth_username_pattern is set,
+			 * only usernames that FullMatch the regex may drive a probe.
+			 * Defaults to "" which allows every username (back-compat),
+			 * but the spec lists this as the primary mitigation against
+			 * unknown-user enumeration: an admin enabling
+			 * @c passthrough_auth_unknown_users=true SHOULD set a pattern
+			 * to constrain which usernames may even reach the probe path.
+			 *
+			 * Failure mode: not in allowlist -> generic auth failure with
+			 * no further information leak. The pattern check happens
+			 * BEFORE cache lookup so a denied username never even gets a
+			 * cache-hit response (preventing trivial enumeration via
+			 * timing of "user was in cache" vs "user wasn't").
+			 *
+			 * Applies to BOTH empty_pw_case and unknown_user_case --
+			 * operators may want to constrain which admin-provisioned
+			 * empty-password rows can pass-through too.
+			 */
+			const char *pattern_raw =
+				mysql_thread___passthrough_auth_username_pattern;
+			if (pattern_raw != NULL && pattern_raw[0] != '\0') {
+				const bool allowed =
+					GloMyPTAuthCache->username_allowed(
+						std::string((const char*)vars1.user),
+						std::string(pattern_raw));
+				if (!allowed) {
+					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
+						"pass-through auth refused: user='%s' does not match "
+						"mysql-passthrough_auth_username_pattern\n",
+						(const char*)vars1.user);
+					ret = false;
+					return ret;
+				}
+			}
+
+			// Unknown-user case: synthesize routing/schema defaults from
+			// globals (spec §3.5) directly onto the session, since there's
+			// no mysql_users row to drive PPHR_5passwordTrue.
+			if (unknown_user_case) {
+				(*myds)->sess->default_hostgroup = mysql_thread___passthrough_default_hg;
+				if ((*myds)->sess->default_schema == NULL) {
+					const char *ds =
+						(mysql_thread___passthrough_default_schema
+							&& mysql_thread___passthrough_default_schema[0] != '\0')
+							? mysql_thread___passthrough_default_schema
+							: mysql_thread___default_schema;
+					if (ds != NULL && ds[0] != '\0') {
+						(*myds)->sess->default_schema = strdup(ds);
+					}
+				}
+				(*myds)->sess->schema_locked = false;
+				(*myds)->sess->transaction_persistent = true;
+				(*myds)->sess->session_fast_forward = SESSION_FORWARD_TYPE_NONE;
+				(*myds)->sess->user_max_connections = 0;
+			}
+
+			std::string cleartext;
+			const uint32_t ttl_s =
+				mysql_thread___passthrough_auth_cache_ttl_s > 0
+					? static_cast<uint32_t>(mysql_thread___passthrough_auth_cache_ttl_s)
+					: 0;
+			if (GloMyPTAuthCache->lookup(
+					std::string((const char*)vars1.user), cleartext, ttl_s)) {
+				GloMyPTAuthCache->bump_cache_hits();
+				/*
+				 * Mark the session: the credential being used to verify
+				 * this client connection came from the pass-through
+				 * cache, so the backend-rejection eviction hook in
+				 * handler_again___status_CONNECTING_SERVER is permitted
+				 * to invalidate the entry on a future ER_ACCESS_DENIED.
+				 */
+				if ((*myds) && (*myds)->sess) {
+					(*myds)->sess->passthrough_credential = true;
+				}
+				if (vars1.password) { free(vars1.password); }
+				vars1.password = strdup(cleartext.c_str());
+				/**
+				 * @brief Mirror the synthesized session defaults into
+				 * @c account_details for the unknown-user cache-hit path.
+				 *
+				 * After this `if (cache hit)` branch returns, execution
+				 * falls through to the rest of PPHR_verify_password which
+				 * (for a non-NULL @c vars1.password) calls
+				 * @ref PPHR_5passwordTrue. That helper UNCONDITIONALLY
+				 * copies every routing/schema/connection field from
+				 * @c account_details onto the session:
+				 *
+				 *   sess->default_hostgroup      <- attr1.default_hostgroup
+				 *   sess->default_schema         <- attr1.default_schema
+				 *   sess->schema_locked          <- attr1.schema_locked
+				 *   sess->transaction_persistent <- attr1.transaction_persistent
+				 *   sess->session_fast_forward   <- attr1.fast_forward ? ...
+				 *   sess->user_max_connections   <- attr1.max_connections
+				 *
+				 * For unknown users, @c GloMyAuth->lookup returns a value-
+				 * initialized @c account_details_t (all scalars zero, all
+				 * pointers null). Without explicitly populating these
+				 * fields with the synthesized defaults from globals
+				 * (which were applied to the session above), the call to
+				 * PPHR_5passwordTrue silently CLOBBERS them with zeros --
+				 * the session ends up with default_hostgroup=0 (back to
+				 * HG 0, not @c mysql-passthrough_default_hg),
+				 * default_schema=NULL, transaction_persistent=false, etc.
+				 * Worse, any non-zero scalar in the value-init struct
+				 * could surface as a stale @c fast_forward bit and bypass
+				 * query rules.
+				 *
+				 * Spec §3.5 says "Routing/defaults for unknown users are
+				 * re-derived from globals each connect" -- this block is
+				 * what makes that hold across the PPHR_5passwordTrue
+				 * fallthrough.
+				 *
+				 * Discovered by the auth-correctness, security, and
+				 * integration subagents during the PR #5810 deep review.
+				 */
+				if (unknown_user_case) {
+					account_details.default_hostgroup =
+						mysql_thread___passthrough_default_hg;
+					if (account_details.default_schema) {
+						free(account_details.default_schema);
+						account_details.default_schema = NULL;
+					}
+					const char *ds =
+						(mysql_thread___passthrough_default_schema
+							&& mysql_thread___passthrough_default_schema[0] != '\0')
+							? mysql_thread___passthrough_default_schema
+							: mysql_thread___default_schema;
+					if (ds != NULL && ds[0] != '\0') {
+						account_details.default_schema = strdup(ds);
+					}
+					account_details.schema_locked = false;
+					account_details.transaction_persistent = true;
+					account_details.fast_forward = false;
+					account_details.max_connections = 0;
+					/*
+					 * NOTE: account_details.use_ssl is intentionally NOT
+					 * touched here. It controls the row-driven "this user
+					 * requires SSL frontend connection" semantic; for an
+					 * unknown user we have no row-level intent. The
+					 * default-constructed value (false) is what we want,
+					 * but explicitly assigning it would be a dead store --
+					 * PPHR_5passwordTrue reads attr1.use_ssl only via
+					 * PPHR_SetConnAttrs later, and the value-init already
+					 * gives the right default.
+					 */
+				}
+			} else if (mysql_thread___passthrough_auth_require_tls && !(*myds)->encrypted) {
+				// Spec §7.1/§7.4: refuse to ask the client for cleartext
+				// over a non-TLS connection. Fall through to the normal
+				// rejection path.
+				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
+					"pass-through auth refused: client connection is not TLS and "
+					"mysql-passthrough_auth_require_tls=true (user='%s')\n",
+					vars1.user ? (const char*)vars1.user : "(null)");
+			} else {
+				/**
+				 * @brief Push routing/schema defaults onto the session
+				 *        BEFORE driving the AuthMoreData{0x04} round-trip.
+				 *
+				 * The cache-miss + empty-pw row case never reaches the
+				 * PPHR_5passwordTrue call site further down in this
+				 * function (control returns from PPHR_passthrough_init
+				 * for the round-trip, then the second pass through
+				 * PPHR_verify_password lands at this same else-branch
+				 * and returns again from stage 5). That means the
+				 * session never gets its default_hostgroup populated
+				 * from the mysql_users row -- it stays at the
+				 * MySQL_Session::reset() sentinel (-1).
+				 *
+				 * @ref MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT
+				 * reads @c default_hostgroup to route the probe; with
+				 * the unset sentinel, @c MyHGM->MyHGC_lookup gets the
+				 * value cast to @c UINT32_MAX (4294967295), no hostgroup
+				 * exists for that id, and the handler calls
+				 * @c fail_session("no hostgroup") which generates an
+				 * ERR packet. The generate_pkt_ERR path then trips its
+				 * @c assert(0) on an unexpected DSS state, crashing
+				 * ProxySQL with a SIGABRT signal-6 backtrace.
+				 *
+				 * The cache-hit path doesn't hit this because after the
+				 * lookup hit, control falls through to PPHR_5passwordTrue
+				 * which unconditionally pushes account_details onto the
+				 * session. The unknown_user case has its own dedicated
+				 * population block above (line ~2660) that synthesizes
+				 * defaults from @c mysql-passthrough_default_hg /
+				 * @c mysql-passthrough_default_schema globals.
+				 *
+				 * Calling PPHR_5passwordTrue here mirrors what the
+				 * cache-hit fallthrough would do. The helper is
+				 * idempotent (only field-sets, no side effects) and
+				 * the call is gated on @c !unknown_user_case because
+				 * unknown_user_case's @c account_details is a
+				 * value-initialized struct (all zeros) and would
+				 * silently clobber the synthesized session defaults.
+				 *
+				 * This bug was latent until TLS was enabled on the
+				 * frontend leg: the only way to exercise the
+				 * cache-miss + empty-pw path end-to-end is to make
+				 * caching_sha2 full-auth complete, which requires
+				 * TLS on the client. The non-TLS test fixtures
+				 * failed earlier in the protocol (errno 2061,
+				 * "Couldn't read RSA public key from server") and
+				 * never reached the probe handler.
+				 */
+				if (!unknown_user_case) {
+					PPHR_5passwordTrue(ret, vars1, reply, account_details);
+				}
+				// Cache miss → drive the caching_sha2_password full-auth
+				// exchange so the client emits its cleartext, which we will
+				// then probe against the backend.
+				PPHR_passthrough_init(vars1);
+				return ret; // not done yet; protocol state machine continues
+			}
+		}
+	}
 
 	if (vars1.password == NULL) {
 		// this is a workaround for bug #603

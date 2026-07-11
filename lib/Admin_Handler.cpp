@@ -16,6 +16,7 @@ using json = nlohmann::json;
 
 #include "Base_Thread.h"
 
+#include "MySQL_Passthrough_Auth_Cache.h"
 #include "MySQL_HostGroups_Manager.h"
 #include "PgSQL_HostGroups_Manager.h"
 #include "mysql.h"
@@ -146,6 +147,7 @@ extern MySQL_Query_Cache *GloMyQC;
 extern PgSQL_Query_Cache* GloPgQC;
 extern MySQL_Authentication *GloMyAuth;
 extern PgSQL_Authentication *GloPgAuth;
+extern MySQL_Passthrough_Auth_Cache *GloMyPTAuthCache;
 extern MySQL_LDAP_Authentication *GloMyLdapAuth;
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Query_Processor* GloMyQPro;
@@ -992,6 +994,46 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		}
 		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 		return false;
+	}
+
+	if (!strcasecmp("PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE", query_no_space)) {
+		proxy_info("Received PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE command\n");
+		ProxySQL_Admin *SPA = (ProxySQL_Admin *)pa;
+		if (GloMyPTAuthCache) {
+			GloMyPTAuthCache->clear();
+		}
+		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		return false;
+	}
+
+	{
+		static const char *pt_prefix = "PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE FOR USER ";
+		const size_t pt_prefix_len = strlen(pt_prefix);
+		if (query_no_space_length > pt_prefix_len
+			&& !strncasecmp(pt_prefix, query_no_space, pt_prefix_len)) {
+			const char *user_start = query_no_space + pt_prefix_len;
+			while (*user_start == ' ' || *user_start == '\t') user_start++;
+			std::string user_arg(user_start);
+			while (!user_arg.empty()
+				&& (user_arg.back() == ' '
+					|| user_arg.back() == '\t'
+					|| user_arg.back() == ';')) {
+				user_arg.pop_back();
+			}
+			if (user_arg.size() >= 2 && (
+				(user_arg.front() == '\'' && user_arg.back() == '\'')
+				|| (user_arg.front() == '"'  && user_arg.back() == '"')
+				|| (user_arg.front() == '`'  && user_arg.back() == '`'))) {
+				user_arg = user_arg.substr(1, user_arg.size() - 2);
+			}
+			proxy_info("Received PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE FOR USER '%s' command\n", user_arg.c_str());
+			ProxySQL_Admin *SPA = (ProxySQL_Admin *)pa;
+			if (GloMyPTAuthCache) {
+				GloMyPTAuthCache->evict(user_arg);
+			}
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
+		}
 	}
 
 	if (
