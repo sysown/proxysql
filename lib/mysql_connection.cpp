@@ -2139,6 +2139,15 @@ int MySQL_Connection::async_connect(short event) {
 		creation_time = monotonic_time();
 		return 0;
 	}
+
+	// Abort if the server went offline or was marked unhealthy while waiting to connect.
+	// The server status can change (shunned by monitor, AWS BGD switchover, manual OFFLINE)
+	// or the connection can be marked unhealthy (AWS BGD drain) between server selection and
+	// connection completion.
+	if (IsServerOffline()) {
+		return -1;
+	}
+
 	handler(event);
 	switch (async_state_machine) {
 		case ASYNC_CONNECT_SUCCESSFUL:

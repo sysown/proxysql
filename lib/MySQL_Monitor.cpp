@@ -6692,6 +6692,8 @@ static void aws_rds_bgd_clear_bgd_in_progress(AWS_RDS_BGD_State& st) {
 
 	GloMyMon->set_aws_rds_bgd_server_in_progress(st.writer_hg, st.reader_hg, false);
 	st.bgd_in_progress_set = false;
+	proxy_info("AWS RDS BGD [wHG=%u rHG=%u]: switchover completed, resuming read_only monitor checks on writer/reader hostgroups\n",
+		st.writer_hg, st.reader_hg);
 }
 
 /**
@@ -8953,7 +8955,7 @@ void MySQL_Monitor::monitor_read_only_async(SQLite3_result* resultset, bool do_d
 		const SQLite3_row* r = *it;
 
 		if (is_aws_rds_bgd_server_in_progress(r->fields[0], atoi(r->fields[1]))) {
-			proxy_info(
+			proxy_debug(PROXY_DEBUG_MONITOR, 5,
 				"Skipping read_only check for '%s:%d' because AWS RDS BGD switchover is in progress\n",
 				r->fields[0], atoi(r->fields[1]));
 			continue;
