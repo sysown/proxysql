@@ -510,6 +510,7 @@ struct AWS_RDS_BGD_State {
 	unsigned int next_check_interval_ms = 0;    ///< FSM-controlled interval; 0 => baseline
 	std::string next_check_host;                ///< FSM-pinned probe host; when set (the green IP), the worker
 	                                            ///< polls it directly instead of selecting among the blue hosts
+	unsigned int next_check_host_failures = 0;  ///< consecutive failures polling next_check_host; clears it after 3
 };
 
 /**
@@ -672,14 +673,24 @@ class MySQL_Monitor {
 	*/
 	void handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topology_Result& topology);
 	/**
-	* @brief Run deferred switchover teardown after mysql.rds_topology drains.
+	* @brief Run deferred switchover teardown or rollback cleanup.
 	*
 	* @details Restores post-switchover reader handling, unshuns readers, drops DNS pins,
 	*   drains green hostgroups, and clears BGD switchover state.
 	*
-	* @param st BGD switchover state.
+	*   When rollback is false (normal post-switchover), the caller must be in
+	*   READER_SWITCHOVER_IN_PROGRESS; the function advances through
+	*   SWITCHOVER_COMPLETED before clearing to NONE.
+	*
+	*   When rollback is true (topology table disappeared or worker exit mid-switchover),
+	*   the function accepts any non-NONE bgd_status, restores the blue writer to the
+	*   writer hostgroup if it was demoted, then runs the same cleanup and resets
+	*   switchover state.
+	*
+	* @param st       BGD switchover state.
+	* @param rollback True if called due to a rollback/cancellation, false for normal completion.
 	*/
-	void handle_aws_rds_bgd_post_switchover(AWS_RDS_BGD_State& st);
+	void handle_aws_rds_bgd_post_switchover(AWS_RDS_BGD_State& st, bool rollback = false);
 	/**
 	* @brief Evict stale DNS and drain connections for the deployment's green hostgroups after switchover.
 	*

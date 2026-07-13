@@ -6803,6 +6803,7 @@ void * monitor_RDS_BGD_thread_HG(void *arg) {
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true && exit_now==false) {
 		unsigned int glover;
 		t1 = monotonic_time();
+		bool poll_success = false;
 
 		if (!GloMTH)
 			goto __exit_monitor_RDS_BGD_thread_HG_now;
@@ -6973,12 +6974,14 @@ void * monitor_RDS_BGD_thread_HG(void *arg) {
 			// the BGD thread only monitors blue/green hostgroups; parse the topology
 			// (shared with the read_only path) and hand the struct to the handler.
 			if (mmsd->result && mysql_num_rows(mmsd->result) > 0) {
+				poll_success = true;
 				AWS_RDS_Topology_Result topo = GloMyMon->parse_aws_rds_topology(mmsd->result);
 				proxy_debug(PROXY_DEBUG_MONITOR, 5,
 					"AWS RDS BGD [wHG=%u]: topology probe on %s:%d (blue_green=%d, nodes=%zu)\n",
 					wHG, mmsd->hostname, mmsd->port, topo.blue_green ? 1 : 0, topo.nodes.size());
 				GloMyMon->handle_aws_rds_bgd(st, topo);
 			} else {
+				poll_success = true;
 				// Query succeeded with no rows: mysql.rds_topology has drained (blue-reader
 				// DNS fully propagated). Run post-switchover cleanup.
 				GloMyMon->aws_rds_bgd_handle_topology_absent(st);
@@ -6991,6 +6994,24 @@ void * monitor_RDS_BGD_thread_HG(void *arg) {
 		}
 
 __end_of_loop:
+		if (!st.next_check_host.empty()) {
+			if (poll_success) {
+				st.next_check_host_failures = 0;
+			} else {
+				st.next_check_host_failures++;
+				if (st.next_check_host_failures >= 3) {
+					proxy_warning("AWS RDS BGD [wHG=%u rHG=%u]: green probe host %s unreachable after %u attempts, falling back to blue and clearing DNS pins\n",
+						wHG, st.reader_hg, st.next_check_host.c_str(), st.next_check_host_failures);
+					st.next_check_host.clear();
+					st.next_check_host_failures = 0;
+					for (const auto& p : st.bg_map) {
+						GloMyMon->dns_cache->remove(p.blue_host);
+						GloMyMon->My_Conn_Pool->purge_connections(p.blue_host.c_str(), p.port);
+					}
+				}
+			}
+		}
+
 		mmsd->t2 = monotonic_time();
 		// the FSM tightens the interval to 100ms while a switchover is in flight
 		// (st.next_check_interval_ms); otherwise fall back to the configured baseline.
@@ -7017,7 +7038,9 @@ __end_of_loop:
 	}
 
 __exit_monitor_RDS_BGD_thread_HG_now:
-	aws_rds_bgd_clear_bgd_in_progress(st);
+	if (st.bgd_status != AWS_RDS_BGD_Status::NONE) {
+		GloMyMon->handle_aws_rds_bgd_post_switchover(st, true);
+	}
 
 	if (mmsd) {
 		delete mmsd;
@@ -7185,8 +7208,8 @@ static void aws_rds_bgd_resolve_green_ips(AWS_RDS_BGD_State& st) {
 			p.green_ip = ip;
 			p.green_ip_ttl = 0;
 			proxy_debug(PROXY_DEBUG_MONITOR, 7,
-				"AWS RDS BGD [wHG=%u]: green '%s' IP %s (DNS_Cache)\n",
-				st.writer_hg, p.green_host.c_str(), p.green_ip.c_str());
+				"AWS RDS BGD [wHG=%u rHG=%u]: green '%s' IP %s (DNS_Cache)\n",
+				st.writer_hg, st.reader_hg, p.green_host.c_str(), p.green_ip.c_str());
 			continue;
 		}
 		// Cache miss (green is not a monitored server): resolve DNS now and track its TTL.
@@ -7197,8 +7220,8 @@ static void aws_rds_bgd_resolve_green_ips(AWS_RDS_BGD_State& st) {
 				p.green_ip_ttl = monotonic_time()
 					+ (1000ULL * (unsigned long long)mysql_thread___monitor_local_dns_cache_ttl);
 				proxy_debug(PROXY_DEBUG_MONITOR, 7,
-					"AWS RDS BGD [wHG=%u]: green '%s' IP %s (resolved, ttl=%lus)\n",
-					st.writer_hg, p.green_host.c_str(), p.green_ip.c_str(),
+					"AWS RDS BGD [wHG=%u rHG=%u]: green '%s' IP %s (resolved, ttl=%lus)\n",
+					st.writer_hg, st.reader_hg, p.green_host.c_str(), p.green_ip.c_str(),
 					(unsigned long)mysql_thread___monitor_local_dns_cache_ttl);
 			}
 		}
@@ -7209,9 +7232,8 @@ static void aws_rds_bgd_resolve_green_ips(AWS_RDS_BGD_State& st) {
 		if (p.is_writer && !p.green_ip.empty()) {
 			if (st.next_check_host != p.green_ip) {
 				st.next_check_host = p.green_ip;
-				proxy_debug(PROXY_DEBUG_MONITOR, 5,
-					"AWS RDS BGD [wHG=%u]: pinning topology probe to green IP %s\n",
-					st.writer_hg, p.green_ip.c_str());
+				proxy_info("AWS RDS BGD [wHG=%u rHG=%u]: pinning rds_topology probe to green IP %s\n",
+					st.writer_hg, st.reader_hg, p.green_ip.c_str());
 			}
 			break;
 		}
@@ -7325,6 +7347,23 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 	// the table empties/vanishes, not from a status change here.
 	if (topology_status == AWS_RDS_BGD_Status::WRITER_SWITCHOVER_COMPLETED
 		&& st.bgd_status == AWS_RDS_BGD_Status::READER_SWITCHOVER_IN_PROGRESS) {
+		return;
+	}
+
+	// Detect backwards transition: the topology status moved to an earlier
+	// phase than what we've already processed. This happens when a user
+	// cancels the switchover from the AWS side, reverting to AVAILABLE,
+	// or when AWS aborts the switchover due to an error. Roll back all
+	// accumulated side effects, then re-enter the target state's setup.
+	if (topology_status < st.bgd_status) {
+		handle_aws_rds_bgd_post_switchover(st, true);
+		if (topology_status == AWS_RDS_BGD_Status::AVAILABLE) {
+			aws_rds_bgd_set_status(st, topology_status);
+			st.next_check_interval_ms = 250;
+			aws_rds_bgd_build_map(st, topology);
+			aws_rds_bgd_resolve_green_ips(st);
+			aws_rds_bgd_add_green_writer_in_hg(st);
+		}
 		return;
 	}
 
@@ -7515,20 +7554,52 @@ void MySQL_Monitor::aws_rds_bgd_hostgroup_action(
 }
 
 /**
-* @brief Run deferred switchover teardown after mysql.rds_topology drains.
+* @brief Run deferred switchover teardown or rollback cleanup.
 *
 * @details Restores post-switchover reader handling, unshuns readers, drops DNS pins,
 *   drains green hostgroups, and clears BGD switchover state.
 *
-* @param st BGD switchover state.
+*   When rollback is false (normal post-switchover), the caller must be in
+*   READER_SWITCHOVER_IN_PROGRESS; the function advances through
+*   SWITCHOVER_COMPLETED before clearing to NONE.
+*
+*   When rollback is true (topology disappeared or worker exit mid-switchover),
+*   the function accepts any non-NONE bgd_status, restores the blue writer to the
+*   writer hostgroup if it was demoted, then runs the same cleanup and resets
+*   directly to NONE without the intermediate SWITCHOVER_COMPLETED state.
+*
+* @param st       BGD switchover state.
+* @param rollback True if called due to a rollback/cancellation, false for normal completion.
 */
-void MySQL_Monitor::handle_aws_rds_bgd_post_switchover(AWS_RDS_BGD_State& st) {
-	if (st.bgd_status != AWS_RDS_BGD_Status::READER_SWITCHOVER_IN_PROGRESS) {
+void MySQL_Monitor::handle_aws_rds_bgd_post_switchover(AWS_RDS_BGD_State& st, bool rollback) {
+	if (st.bgd_status == AWS_RDS_BGD_Status::NONE) {
 		return;
 	}
 
-	aws_rds_bgd_set_status(st, AWS_RDS_BGD_Status::SWITCHOVER_COMPLETED);
-	proxy_info("AWS RDS BGD [wHG=%u rHG=%u]: running post-switchover cleanup\n", st.writer_hg, st.reader_hg);
+	if (!rollback && st.bgd_status != AWS_RDS_BGD_Status::READER_SWITCHOVER_IN_PROGRESS) {
+		return;
+	}
+
+	if (rollback) {
+		proxy_info("AWS RDS BGD [wHG=%u rHG=%u]: rolling back from %s\n",
+			st.writer_hg, st.reader_hg, aws_rds_bgd_status_str(st.bgd_status));
+
+		// Restore the blue writer to the writer hostgroup.
+		// If writer exists in writer hostgroup, this is a no-op.
+		if (st.bgd_status == AWS_RDS_BGD_Status::WRITER_SWITCHOVER_IN_PROGRESS
+			|| st.bgd_status == AWS_RDS_BGD_Status::WRITER_SWITCHOVER_POST_PROCESSING) {
+			for (const AWS_RDS_BlueGreenPair& p : st.bg_map) {
+				if (p.is_writer) {
+					auto srv = read_only_server_t{ p.blue_host, (port_t)p.port, 0 };
+					MyHGM->read_only_action_v2(std::list<read_only_server_t>{srv});
+					break;
+				}
+			}
+		}
+	} else {
+		aws_rds_bgd_set_status(st, AWS_RDS_BGD_Status::SWITCHOVER_COMPLETED);
+		proxy_info("AWS RDS BGD [wHG=%u rHG=%u]: running post-switchover cleanup\n", st.writer_hg, st.reader_hg);
+	}
 
 	// Restore the writer's original reader role based on writer_is_also_reader config and
 	// unshun the previously shunned blue readers.
@@ -7540,7 +7611,7 @@ void MySQL_Monitor::handle_aws_rds_bgd_post_switchover(AWS_RDS_BGD_State& st) {
 		}
 	}
 	bool writer_is_also_reader = (st.writer_is_also_reader != 0);
-	aws_rds_bgd_hostgroup_action(st.bgd_status, writer, writer_is_also_reader, st.reader_hg, st.shunned_readers);
+	aws_rds_bgd_hostgroup_action(AWS_RDS_BGD_Status::SWITCHOVER_COMPLETED, writer, writer_is_also_reader, st.reader_hg, st.shunned_readers);
 
 	// Drop DNS cache + purge connections for the previously shunned readers
 	// so their blue names re-resolve to the promoted (green) instances.
@@ -7552,13 +7623,8 @@ void MySQL_Monitor::handle_aws_rds_bgd_post_switchover(AWS_RDS_BGD_State& st) {
 		st.shunned_readers.clear();
 	}
 
-	// Drop DNS pins for the mapped readers so their blue names resolve natively
-	// to the promoted (green) instances. The writer pin was already cleared at
-	// WRITER_SWITCHOVER_COMPLETED, so skip it here.
+	// Drop DNS pins for all mapped pairs
 	for (const AWS_RDS_BlueGreenPair& p : st.bg_map) {
-		if (p.is_writer) {
-			continue;
-		}
 		dns_cache->remove(p.blue_host);
 		My_Conn_Pool->purge_connections(p.blue_host.c_str(), p.port);
 	}
@@ -7574,7 +7640,7 @@ void MySQL_Monitor::handle_aws_rds_bgd_post_switchover(AWS_RDS_BGD_State& st) {
 	aws_rds_bgd_set_status(st, AWS_RDS_BGD_Status::NONE);
 
 	proxy_info(
-		"AWS RDS BGD [wHG=%u rHG=%u]: post-switchover cleanup complete; state cleared\n",
+		"AWS RDS BGD [wHG=%u rHG=%u]: switchover cleanup complete; state cleared\n",
 		st.writer_hg, st.reader_hg);
 }
 
@@ -7635,15 +7701,16 @@ void MySQL_Monitor::aws_rds_bgd_drain_green_hg(AWS_RDS_BGD_State& st) {
 * @brief Handle an absent, empty, or vanished mysql.rds_topology table.
 *
 * @details Routes to deferred cleanup when bgd_status is READER_SWITCHOVER_IN_PROGRESS;
-*   otherwise clears any in-progress switchover state for this deployment.
+*   for any other non-NONE state, runs rollback cleanup to reverse accumulated side
+*   effects before resetting to NONE.
 *
 * @param st BGD switchover state.
 */
 void MySQL_Monitor::aws_rds_bgd_handle_topology_absent(AWS_RDS_BGD_State& st) {
 	if (st.bgd_status == AWS_RDS_BGD_Status::READER_SWITCHOVER_IN_PROGRESS) {
 		handle_aws_rds_bgd_post_switchover(st);
-	} else {
-		aws_rds_bgd_set_status(st, AWS_RDS_BGD_Status::NONE);
+	} else if (st.bgd_status != AWS_RDS_BGD_Status::NONE) {
+		handle_aws_rds_bgd_post_switchover(st, true);
 	}
 }
 
