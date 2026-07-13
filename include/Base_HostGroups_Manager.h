@@ -313,6 +313,7 @@ class BaseHGC {	// MySQL Host Group Container
 		uint32_t max_num_online_servers;
 		uint32_t throttle_connections_per_sec;
 		int32_t monitor_slave_lag_when_null;
+		int32_t default_query_timeout;
 		int8_t autocommit;
 		int8_t free_connections_pct;
 		int8_t handle_warnings;

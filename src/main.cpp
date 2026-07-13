@@ -33,6 +33,7 @@ using json = nlohmann::json;
 #include "MySQL_Query_Processor.h"
 #include "PgSQL_Query_Processor.h"
 #include "MySQL_Authentication.hpp"
+#include "MySQL_Passthrough_Auth_Cache.h"
 #include "PgSQL_Authentication.h"
 #include "MySQL_LDAP_Authentication.hpp"
 #include "MySQL_Query_Cache.h"
@@ -484,6 +485,7 @@ MySQL_Query_Cache *GloMyQC;
 PgSQL_Query_Cache* GloPgQC;
 MySQL_Authentication *GloMyAuth;
 PgSQL_Authentication* GloPgAuth;
+MySQL_Passthrough_Auth_Cache *GloMyPTAuthCache;
 MySQL_LDAP_Authentication *GloMyLdapAuth;
 #ifdef PROXYSQLCLICKHOUSE
 ClickHouse_Authentication *GloClickHouseAuth;
@@ -924,6 +926,7 @@ void ProxySQL_Main_init_main_modules() {
 	GloMTH=NULL;
 	GloMyAuth=NULL;
 	GloPgAuth=NULL;
+	GloMyPTAuthCache=NULL;
 	GloPTH=NULL;
 // MCP_Threads_Handler / GenAI_Threads_Handler / AI_Features_Manager
 // are all constructed by the genai plugin's init() callback now
@@ -985,6 +988,8 @@ void ProxySQL_Main_init_Auth_module() {
 	GloMyAuth->print_version();
 	GloPgAuth = new PgSQL_Authentication();
 	GloPgAuth->print_version();
+	GloMyPTAuthCache = new MySQL_Passthrough_Auth_Cache();
+	GloMyPTAuthCache->print_version();
 	GloAdmin->init_users();
 	GloAdmin->init_pgsql_users();
 	//GloMyLdapAuth = create_MySQL_LDAP_Authentication();
@@ -1284,6 +1289,20 @@ void ProxySQL_Main_shutdown_all_modules() {
 		pthread_mutex_unlock(&GloVars.global.ext_glomth_mutex);
 #ifdef DEBUG
 		std::cerr << "GloMTH shutdown in ";
+#endif
+	}
+	// NOTE: GloMyPTAuthCache MUST be destroyed AFTER GloMTH. MySQL worker
+	// threads owned by GloMTH can be inside
+	// handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT when shutdown
+	// starts; that path dereferences GloMyPTAuthCache. The `delete GloMTH`
+	// above joins those worker threads, so by the time we get here no
+	// session is mid-probe and freeing the cache singleton is safe.
+	if (GloMyPTAuthCache) {
+		cpu_timer t;
+		delete GloMyPTAuthCache;
+		GloMyPTAuthCache = NULL;
+#ifdef DEBUG
+		std::cerr << "GloMyPTAuthCache shutdown in ";
 #endif
 	}
 	if (GloPTH) {

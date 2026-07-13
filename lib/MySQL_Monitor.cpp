@@ -618,7 +618,7 @@ const char MYSQL_8_GR_QUERY[] {
 			", 'YES', 'NO')) AS viable_candidate,"
 		" (SELECT IF (@@read_only, 'YES', 'NO')) as read_only,"
 		" COUNT_TRANSACTIONS_REMOTE_IN_APPLIER_QUEUE AS transactions_behind, "
-		" (SELECT GROUP_CONCAT(CONCAT(member_host, \":\", member_port)) FROM performance_schema.replication_group_members) AS members "
+		" (SELECT GROUP_CONCAT(CONCAT(member_host, ':', member_port)) FROM performance_schema.replication_group_members) AS members "
 	"FROM "
 		"performance_schema.replication_group_members "
 		"JOIN performance_schema.replication_group_member_stats rgms USING(member_id) "

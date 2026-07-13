@@ -196,6 +196,16 @@ class MySQL_Protocol {
 	void PPHR_6auth2(bool& ret, MyProt_tmp_auth_vars& vars1);
 	bool PPHR_verify_sha2(MyProt_tmp_auth_vars& vars1, enum proxysql_auth_plugins passformat, PASSWORD_TYPE::E passtype);
 	void PPHR_sha2full(bool& ret, MyProt_tmp_auth_vars& vars1, enum proxysql_auth_plugins passformat, PASSWORD_TYPE::E passtype);
+	// Pass-through authentication (see doc/internal/passthrough_authentication.md).
+	// PPHR_passthrough_init runs the protocol-side state machine for the
+	// caching_sha2_password full-auth exchange when ProxySQL doesn't yet
+	// have a password for the user. At switching_auth_stage==0 it sends
+	// AuthMoreData{0x04} so the client emits its cleartext; at stage 5 it
+	// stashes the captured cleartext on the data stream and transitions
+	// the session to AUTHENTICATING_BACKEND_FOR_CLIENT so the backend
+	// probe (handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT)
+	// can validate the credential.
+	void PPHR_passthrough_init(MyProt_tmp_auth_vars& vars1);
 	void PPHR_7auth1(bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, account_details_t& attr1);
 	void PPHR_7auth2(bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, account_details_t& attr1);
 	void PPHR_next_auth_stage(MyProt_tmp_auth_vars& vars1, PASSWORD_TYPE::E passtype);

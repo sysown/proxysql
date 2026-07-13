@@ -29,6 +29,8 @@ enum log_event_type {
 	PROXYSQL_MYSQL_AUTH_ERR,
 	PROXYSQL_MYSQL_AUTH_CLOSE,
 	PROXYSQL_MYSQL_AUTH_QUIT,
+	PROXYSQL_MYSQL_AUTH_PASSTHROUGH_OK,
+	PROXYSQL_MYSQL_AUTH_PASSTHROUGH_FAIL,
 	PROXYSQL_MYSQL_CHANGE_USER_OK,
 	PROXYSQL_MYSQL_CHANGE_USER_ERR,
 	PROXYSQL_MYSQL_INITDB,
@@ -288,6 +290,7 @@ enum session_status {
 	CONNECTING_CLIENT,
 	CONNECTING_SERVER,
 	LDAP_AUTH_CLIENT,
+	AUTHENTICATING_BACKEND_FOR_CLIENT,
 	PINGING_SERVER,
 	WAITING_CLIENT_DATA,
 	WAITING_SERVER_DATA,
@@ -1250,6 +1253,19 @@ __thread char *mysql_thread___ldap_user_variable;
 __thread char *mysql_thread___default_session_track_gtids;
 __thread char *mysql_thread___firewall_whitelist_errormsg;
 __thread int mysql_thread___default_authentication_plugin_int;
+__thread bool mysql_thread___passthrough_auth_enabled;
+__thread bool mysql_thread___passthrough_auth_empty_password;
+__thread bool mysql_thread___passthrough_auth_unknown_users;
+__thread bool mysql_thread___passthrough_auth_require_tls;
+__thread int mysql_thread___passthrough_default_hg;
+__thread int mysql_thread___passthrough_auth_cache_ttl_s;
+__thread int mysql_thread___passthrough_auth_max_inflight_probes;
+__thread int mysql_thread___passthrough_auth_max_failures_per_user;
+__thread int mysql_thread___passthrough_auth_max_failures_per_ip;
+__thread int mysql_thread___passthrough_auth_failure_window_s;
+__thread int mysql_thread___passthrough_auth_failure_map_cap;
+__thread char *mysql_thread___passthrough_default_schema;
+__thread char *mysql_thread___passthrough_auth_username_pattern;
 __thread int mysql_thread___max_allowed_packet;
 __thread bool mysql_thread___automatic_detect_sqli;
 __thread bool mysql_thread___firewall_whitelist_enabled;
@@ -1592,6 +1608,19 @@ extern __thread char *mysql_thread___ldap_user_variable;
 extern __thread char *mysql_thread___default_session_track_gtids;
 extern __thread char *mysql_thread___firewall_whitelist_errormsg;
 extern __thread int mysql_thread___default_authentication_plugin_int;
+extern __thread bool mysql_thread___passthrough_auth_enabled;
+extern __thread bool mysql_thread___passthrough_auth_empty_password;
+extern __thread bool mysql_thread___passthrough_auth_unknown_users;
+extern __thread bool mysql_thread___passthrough_auth_require_tls;
+extern __thread int mysql_thread___passthrough_default_hg;
+extern __thread int mysql_thread___passthrough_auth_cache_ttl_s;
+extern __thread int mysql_thread___passthrough_auth_max_inflight_probes;
+extern __thread int mysql_thread___passthrough_auth_max_failures_per_user;
+extern __thread int mysql_thread___passthrough_auth_max_failures_per_ip;
+extern __thread int mysql_thread___passthrough_auth_failure_window_s;
+extern __thread int mysql_thread___passthrough_auth_failure_map_cap;
+extern __thread char *mysql_thread___passthrough_default_schema;
+extern __thread char *mysql_thread___passthrough_auth_username_pattern;
 extern __thread int mysql_thread___max_allowed_packet;
 extern __thread bool mysql_thread___automatic_detect_sqli;
 extern __thread bool mysql_thread___firewall_whitelist_enabled;
