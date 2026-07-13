@@ -128,7 +128,7 @@ class MetricsCollector;
  * @brief Generates the 'mysql_servers_v2' resultset exposed to other ProxySQL cluster members.
  * @details The generated resultset is used for the checksum computation of the runtime ProxySQL config
  *  ('mysql_servers_v2' checksum), and it's also forwarded to other cluster members when querying the Admin
- *  interface with 'CLUSTER_QUERY_MYSQL_SERVERS_V2'. It makes 'SHUNNED' state equivalent to 'ONLINE', and also
+ *  interface with 'CLUSTER_QUERY_MYSQL_SERVERS_V2'. It makes 'SHUNNED' and 'SHUNNED_AWS_BGD' states equivalent to 'ONLINE', and also
  *  filters out any 'OFFLINE_HARD' entries. This is done because none of the statuses are valid configuration
  *  statuses, they are local, transient status that ProxySQL uses during operation.
  */
@@ -137,6 +137,7 @@ class MetricsCollector;
 		"hostgroup_id, hostname, port, gtid_port, " \
 		"CASE" \
 		" WHEN status=\"SHUNNED\" THEN \"ONLINE\"" \
+		" WHEN status=\"SHUNNED_AWS_BGD\" THEN \"ONLINE\"" \
 		" ELSE status " \
 		"END AS status, " \
 		"weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment " \
