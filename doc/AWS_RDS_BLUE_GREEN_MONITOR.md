@@ -30,7 +30,8 @@ inferred, assumed, or failed to observe the behavior.
 | Label | Dimension | Meaning |
 |---|---|---|
 | `SOURCE-CODE` | Provenance | Direct description of current implementation; it does not validate an external AWS claim. |
-| `AUTHOR-VALIDATED` | External evidence | AWS behavior confirmed by the feature author from observed deployment evidence. |
+| `AUTHOR-VALIDATED` | External evidence | AWS behavior confirmed by the feature author. The statement must identify whether it is an AWS-provided contract or scoped observation. |
+| `AUTHOR-ACCEPTED-POLICY` | Intent | ProxySQL behavior explicitly accepted by the feature author, including a deliberate policy choice made under an external uncertainty. |
 | `REVIEW-VALIDATION-PENDING` | Review evidence | An external claim present in the PR, source comments, or implementation contract for which this review has not yet recorded the author's evidence or correction. It does not characterize how the author derived the claim. |
 | `PROPOSED-POLICY` | Intent | Intended ProxySQL safety behavior for later hardening PRs. |
 
@@ -39,8 +40,28 @@ current code or comments encode an external claim whose supporting evidence has
 not yet been recorded in this review. `SOURCE-CODE` alone must be used only for
 internal mechanics and never promotes an external claim.
 
-A `REVIEW-VALIDATION-PENDING` claim must be promoted to `AUTHOR-VALIDATED` or
-corrected before the deterministic controller simulator is accepted.
+A `REVIEW-VALIDATION-PENDING` claim must be promoted to `AUTHOR-VALIDATED`,
+replaced by an explicit `AUTHOR-ACCEPTED-POLICY`, or corrected before the
+deterministic controller simulator is accepted.
+
+## Author Evidence Record
+
+The feature author supplied the following evidence in the
+[author-validation response](https://github.com/sysown/proxysql/pull/5934#issuecomment-4972444890):
+
+- An [AWS-provided RDS topology metadata document](https://github.com/user-attachments/files/30019110/RDS_Topology_metadata.md)
+  describing the `mysql.rds_topology` schema, roles, statuses, switchover
+  stages, traffic availability, and polling guidance.
+- A [timestamped topology trace](https://github.com/user-attachments/files/30019175/aws-rds-topology-watch.txt)
+  from one complete switchover, polled at approximately 250 ms.
+- Source-code references and additional author observations for cancellation,
+  reader behavior, and green-hostname retirement.
+
+The captured deployment used RDS MySQL 8.4.x, a Multi-AZ DB instance with two
+read replicas, and `eu-north-1`. The trace covers one complete switchover; the
+author separately observed one cancellation. A statement supported only by
+that trace or an unrecorded author observation is scoped accordingly and is not
+promoted to a universal AWS guarantee.
 
 ## Scope
 
@@ -80,10 +101,10 @@ fetched row, when the role and status columns exist and that row's cells for
 both columns are non-NULL. Empty strings still meet this current non-NULL test.
 Later rows do not re-evaluate or reverse the classification.
 
-`SOURCE-CODE, REVIEW-VALIDATION-PENDING`: The implementation expects actual RDS
-blue/green rows to use the source and target role values and recognized target
-status values listed below. This review has not yet recorded the author's
-supporting evidence for that external contract.
+`SOURCE-CODE, AUTHOR-VALIDATED (AWS-PROVIDED CONTRACT)`: Actual RDS blue/green
+rows use the source and target role values and recognized target status values
+listed below. The AWS-provided metadata document defines these values, and all
+five statuses appeared in the supplied trace.
 
 Role values:
 
@@ -107,6 +128,10 @@ cell is NULL, `blue_green` remains false. Later malformed rows do not change a
 true first-row classification. Other RDS topology shapes may be processed by
 the Multi-AZ Cluster discovery path.
 
+`AUTHOR-VALIDATED (SCOPED OBSERVATION)`: While both rows were present in the
+supplied trace, the source and target rows carried the same status. The trace
+does not by itself establish that equality as a universal contract.
+
 ## Observation Model
 
 `PROPOSED-POLICY`: The hardened controller design distinguishes the following
@@ -128,17 +153,18 @@ current implementation state enum.
 | `MALFORMED_TOPOLOGY` | The target, endpoint, role, status, or required identity is missing. |
 | `QUERY_FAILED` | The query times out, the connection fails, or SQL reports an error other than documented absence. |
 | `CONFIG_CHANGED` | The monitor result-set checksum or generation changes and may replace the worker without losing deployment state. |
-| `CONFIG_REMOVED` | The configuration is disabled or removed; outstanding effects require rollback before the context is removed. |
+| `CONFIG_DISABLED` | The deployment remains configured but is disabled; outstanding effects require phase-appropriate settlement. |
+| `CONFIG_REMOVED` | The deployment configuration is removed; outstanding effects require phase-appropriate settlement before the context is removed. |
 | `WORKER_RESTARTED` | A replacement worker attaches to and resumes the existing context. |
 
 `PROPOSED-POLICY`: `TOPOLOGY_ABSENT`, `TOPOLOGY_EMPTY`, and `QUERY_FAILED` are
 not interchangeable. Query failure never proves cancellation or completion.
 
-## Lifecycle Claims Pending Author Validation
+## Validated Lifecycle Evidence
 
-`SOURCE-CODE, REVIEW-VALIDATION-PENDING`: Current code and comments describe
-this lifecycle; the review has not yet recorded the author's supporting
-evidence:
+`SOURCE-CODE, AUTHOR-VALIDATED (AWS-PROVIDED CONTRACT AND SCOPED OBSERVATION)`:
+The AWS-provided metadata document defines the five forward phases. The supplied
+trace observed the following row lifecycle:
 
 ```text
 Two rows:
@@ -147,27 +173,48 @@ Two rows:
   status = AVAILABLE
 
 Two rows:
-  status = SWITCHOVER_INITIATED
-    -> SWITCHOVER_IN_PROGRESS
-    -> SWITCHOVER_IN_POST_PROCESSING
+  repeated observations of SWITCHOVER_INITIATED
+    -> repeated observations of SWITCHOVER_IN_PROGRESS
+    -> repeated observations of SWITCHOVER_IN_POST_PROCESSING
 
 One target row:
-  status = SWITCHOVER_COMPLETED
+  repeated observations of SWITCHOVER_COMPLETED
 
-Zero rows or missing table:
-  interpreted as reader DNS propagation complete only if writer completion
-  was observed first
+Zero rows:
+  observed approximately 44 seconds after SWITCHOVER_COMPLETED in this trace
 ```
 
-Every external lifecycle statement remains `REVIEW-VALIDATION-PENDING` until
-the feature author records supporting evidence or a correction.
+`AUTHOR-VALIDATED (AWS-PROVIDED CONTRACT)`: `SWITCHOVER_COMPLETED` means writer
+DNS propagation completed and the original source endpoint points to the
+target. The status sequence permits cancellation during `SWITCHOVER_INITIATED`
+and `SWITCHOVER_IN_PROGRESS`; rollback is no longer allowed in
+`SWITCHOVER_IN_POST_PROCESSING`.
+
+`AUTHOR-VALIDATED (SCOPED OBSERVATION)`: The trace observed monotonic forward
+phase changes, with repeated identical observations while each phase remained
+active. At `SWITCHOVER_COMPLETED`, the source row disappeared and the target
+row remained for approximately 44 seconds before the table became empty. The
+duration is not fixed. The table remained present in `information_schema`; an
+`ER_NO_SUCH_TABLE` outcome was not observed.
+
+`AUTHOR-ACCEPTED-POLICY`: After writer completion has been observed,
+`TOPOLOGY_EMPTY` is the accepted reader-cleanup signal. The author observed
+reader errors before the table drained and normal reader behavior afterward.
+The metadata table contains writer topology only, the trace did not measure
+reader DNS timing, and AWS does not document table emptiness as proof of reader
+DNS propagation. This policy therefore records an explicitly accepted
+operational correlation, not an AWS guarantee.
+
+`AUTHOR-ACCEPTED-POLICY`: `TOPOLOGY_ABSENT` remains distinct from
+`TOPOLOGY_EMPTY` in diagnostics but selects the same phase-specific policy:
+rollback before observed writer completion and reader cleanup afterward. Only
+the empty-table outcome was observed.
 
 ## Current ProxySQL State Machine
 
 `SOURCE-CODE`: This is the nominal ordering encoded by the enum names and the
-lifecycle currently described by the implementation. The external lifecycle
-claims remain `REVIEW-VALIDATION-PENDING`, and the arrows are not enforced
-transition edges:
+lifecycle currently described by the implementation. The arrows are not
+enforced transition edges:
 
 ```text
 NONE
@@ -641,8 +688,8 @@ and reader hostgroups.
 |---|---|---|
 | `NULL` | `NULL` | Automatic discovery. |
 | Value | Value | Explicit green hostgroups. |
-| Value | `NULL` | Validation decision required. |
-| `NULL` | Value | Validation decision required. |
+| Value | `NULL` | `AUTHOR-ACCEPTED-POLICY`: Explicit green writer management with automatic reader handling. |
+| `NULL` | Value | `AUTHOR-ACCEPTED-POLICY`: Automatic writer handling with explicit green reader management. |
 
 `PROPOSED-POLICY`: Persistent Admin, runtime Admin, Hostgroup Manager (HGM),
 configuration import and export, `LOAD` and `SAVE`, and cluster representation
@@ -656,41 +703,44 @@ resuming controller processing.
 
 ## Author Validation Checklist
 
-The original author must confirm or correct every answer below before work on
-the deterministic simulator begins.
+The author response is recorded below. `RESOLVED` means the external evidence
+has been scoped correctly or the author explicitly accepted the policy.
+`PENDING` means the response did not yet establish the claimed guarantee or
+did not choose between current best-effort behavior and the proposed safety
+contract.
 
-| ID | Question | Safe default until validated |
+| ID | Recorded author evidence or decision | Review disposition |
 |---|---|---|
-| AWS-01a | Can the source row be missing before `WRITER_COMPLETED`? | Treat a missing required row identity as `MALFORMED_TOPOLOGY`; preserve state and make no destructive transition. |
-| AWS-01b | Can the source row be missing after `WRITER_COMPLETED`? | Do not treat a missing source row alone as reader completion; use the accepted reader-completion signal. |
-| AWS-01c | Can the target row be missing from a successful, nonempty result? | Treat a missing target row as `MALFORMED_TOPOLOGY`; preserve state and expose the malformed input. |
-| AWS-01d | Can `TOPOLOGY_EMPTY` occur at each phase? | Before observed writer completion, enter `ROLLING_BACK`; afterward, treat it as the accepted reader-completion signal only if the author validates that meaning. |
-| AWS-01e | Can `TOPOLOGY_ABSENT` occur at each phase? | Apply the same pre-completion and post-completion boundary policy as `TOPOLOGY_EMPTY`, but retain it as a distinct event. |
-| AWS-02a | Can AWS cancellation occur before observed writer completion? | Enter `ROLLING_BACK` with the owned effect ledger retained. |
-| AWS-02b | Can AWS cancellation occur after observed writer completion? | Use `FINALIZING_SUCCESS` or `SAFE_TEARDOWN` according to management mode and accepted evidence; never restore blue solely because of cancellation. |
-| AWS-03 | Do `TOPOLOGY_EMPTY` and `TOPOLOGY_ABSENT` have the same phase-specific meaning? | Keep them distinct until the author validates their meanings. |
-| AWS-04 | What is the exact timing relationship between source-row removal and writer DNS change? | Never infer DNS state from row count. |
-| AWS-05a | How long and through which phases is the target row retained? | Treat retention only as observation evidence, not reader completion, and record the exact author-validated phase lifecycle. |
-| AWS-05b | What exact observation is the accepted reader-completion signal? | Do not finalize until the author validates an explicit signal or equivalence. |
-| AWS-06 | When is the green hostname retired? | Retain a complete owned probe target while it is needed for observation or cleanup. |
-| AWS-07 | What is the authoritative source for the green writer port in automatic and explicit modes? | The complete direct tuple uses the green writer host or IP and green writer port from the same mapped identity; keep the action pending or enter visible `FAULTED` if unavailable; never use `hpa[0]`. |
-| AWS-08 | What is the authoritative source for the green writer SSL mode in automatic and explicit modes? | The complete direct tuple uses the green writer SSL mode from the same mapped identity; keep the action pending or enter visible `FAULTED` if unavailable; never use an arbitrary row. |
-| AWS-09 | Is incomplete reader mapping expected? | Track and reconcile each reader independently. |
-| AWS-10 | Is green writer placement temporary or persistent? | Record owned before-value and applied-value, then settle through rollback or verified handoff. |
-| AWS-11a | What happens when ProxySQL configuration is removed before observed writer completion? | Latch `REMOVAL_REQUESTED`, enter `ROLLING_BACK`, and retain the dispatcher-owned cleanup executor and deployment context. |
-| AWS-11b | What happens when ProxySQL configuration is removed after observed writer completion? | Latch `REMOVAL_REQUESTED`, enter `SAFE_TEARDOWN`, never restore blue solely because of removal, and retain the dispatcher-owned cleanup executor and deployment context. |
-| AWS-12a | What happens when the first observation is `WRITER_POST_PROCESSING`? | Reconstruct prerequisites and ownership or enter visible `FAULTED`. |
-| AWS-12b | What happens when the first observation is `WRITER_COMPLETED`? | Record writer-completion evidence; reconstruct and verify skipped effects or enter a safe visible fault; never assume they succeeded. |
-| AWS-13 | What is each effect's observed external state after a full ProxySQL process restart, and how is its ownership ledger independently recovered? | Persist ownership before mutation or perform deterministic startup reconstruction; block reconciliation or enter visible `FAULTED` until ownership is recovered. |
-| CFG-01a | Is a green writer hostgroup value with a `NULL` green reader hostgroup valid? | Reject the combination until its precise meaning is accepted. |
-| CFG-01b | Is a `NULL` green writer hostgroup with a green reader hostgroup value valid? | Reject the combination until its precise meaning is accepted. |
+| AWS-01a | One trace and the AWS examples show the source row present through all pre-completion phases. | `RESOLVED`: This is scoped observation, not a universal prohibition. Missing source identity remains `MALFORMED_TOPOLOGY` and causes no destructive transition. |
+| AWS-01b | The trace shows the source row disappearing at `SWITCHOVER_COMPLETED`, leaving one target row. | `RESOLVED`: Source-row absence after completion is expected in the observed lifecycle but is not independently the reader-completion signal. |
+| AWS-01c | One trace and the AWS examples show the target row present in every nonempty result. | `RESOLVED`: This is scoped observation. A missing target remains `MALFORMED_TOPOLOGY`. |
+| AWS-01d | `TOPOLOGY_EMPTY` was observed only after writer completion. | `RESOLVED`: The author accepts rollback before completion and reader cleanup afterward. The pre-completion impossibility is not stated as an AWS guarantee. |
+| AWS-01e | `TOPOLOGY_ABSENT` was not observed; the table remained present and empty. | `RESOLVED AS POLICY`: Preserve the distinct observation but select the same phase boundary as `TOPOLOGY_EMPTY`. |
+| AWS-02a | The AWS-provided contract permits rollback during initiated and in-progress; the author separately observed cancellation returning to `AVAILABLE`. | `RESOLVED`: Pre-completion cancellation enters rollback with owned effects retained until settled. |
+| AWS-02b | The AWS-provided contract says rollback is no longer allowed during post-processing. | `RESOLVED`: At or after writer completion, never restore obsolete blue solely because of cancellation or removal. |
+| AWS-03 | The author accepts the same phase-specific policy for empty and absent topology while retaining distinct diagnostics. | `RESOLVED AS POLICY`. |
+| AWS-04 | The contract defines `SWITCHOVER_COMPLETED` as writer DNS completion; the trace observes source-row removal in that completed snapshot. | `RESOLVED`: Use the status, not row count alone, as writer-DNS evidence. |
+| AWS-05a | The target existed through every phase and lingered about 44 seconds after completion in one trace. | `RESOLVED`: Record the duration only as variable, single-observation evidence. |
+| AWS-05b | The author accepts `TOPOLOGY_EMPTY` after observed writer completion as the reader-cleanup signal despite no AWS guarantee or direct reader-DNS timestamp. | `RESOLVED AS AUTHOR-ACCEPTED POLICY`: The observational risk is explicit. |
+| AWS-06 | The author observed the green hostname stop resolving after completion while the promoted IP survived. | `RESOLVED AS SCOPED OBSERVATION`: Retain a complete probe target while it is needed. |
+| AWS-07 | The author asserts source and target ports are guaranteed identical and proposes the configured blue writer port. The document and trace show equal example values but contain no universal equality statement. | `PENDING`: Provide the explicit contract or use the target topology row's port. Current `hpa[0].port` is an arbitrary monitor-result row, not the matched blue writer. |
+| AWS-08 | The author asserts source and target SSL modes are guaranteed identical. | `PENDING`: `use_ssl` is ProxySQL configuration and is absent from the AWS metadata contract. Define the precise matched `mysql_servers` row for automatic and explicit modes; current `hpa[0].use_ssl` is arbitrary. |
+| AWS-09 | The topology contains writer endpoints only; incomplete explicit reader mapping is expected and unmatched blue readers are shunned. | `RESOLVED AS POLICY`: Track and reconcile readers independently. |
+| AWS-10 | The author calls green placement temporary but confirms the server is left in the green hostgroup after its DNS name retires. | `PENDING`: Distinguish temporary traffic use from persistent hostgroup membership and decide whether retained membership is an intentional handoff or a residual effect. |
+| AWS-11a | The author accepts retained rollback semantics but also states the current worker-exit cleanup already satisfies them. | `PENDING`: Current code makes one best-effort cleanup call and then destroys state. Decide whether PR2 must implement retained, retryable cleanup or whether one-shot loss is accepted. |
+| AWS-11b | The author accepts `SAFE_TEARDOWN` and no obsolete-blue restoration, while stating current post-completion worker-exit cleanup is sufficient. | `PENDING`: The no-restore boundary is accepted; retained effect settlement and retry behavior still require an explicit decision. |
+| AWS-12a | Current code can enter post-processing directly and invokes prerequisite setup. | `PENDING`: Same-phase observations return before reconciliation, partial maps stop rebuilding, and failed setup has no retained result. Decide whether the proposed retry contract is accepted. |
+| AWS-12b | With a fresh empty worker state, a first completed observation has no locally recorded map or effects. | `PENDING`: Empty local state does not prove a prior worker left no external effects. Define the worker-replacement case or accept the loss explicitly. |
+| AWS-13 | The author proposes fresh start with no persistence and says runtime HGM or DNS effects may nevertheless remain without ownership context. | `PENDING`: Separate worker replacement from full process restart and complete the per-effect restart matrix with evidence that each effect disappears or is safely reconstructable. |
+| CFG-01a | Writer hostgroup value plus `NULL` reader hostgroup means explicit writer management and automatic reader handling. | `RESOLVED AS AUTHOR-ACCEPTED POLICY`: Valid combination. |
+| CFG-01b | `NULL` writer hostgroup plus reader hostgroup value means automatic writer handling and explicit reader management. | `RESOLVED AS AUTHOR-ACCEPTED POLICY`: Valid combination. |
 
 ### Probe Target Validation Matrix
 
 | Mode | Host/IP source | Port source | SSL source | Author decision/evidence |
 |---|---|---|---|---|
-| Automatic | Author validation required | Author validation required | Author validation required | Validation required. |
-| Explicit | Author validation required | Author validation required | Author validation required | Validation required. |
+| Automatic | `AUTHOR-VALIDATED`: Resolved IP of the TARGET endpoint from `mysql.rds_topology`. | `REVIEW-VALIDATION-PENDING`: Author proposes the matched blue writer port; the evidence does not establish universal port equality. The TARGET row also exposes a port. | `REVIEW-VALIDATION-PENDING`: Select the specifically matched blue writer's `use_ssl` or define another exact configuration source; never use an arbitrary monitor row. | Host/IP is resolved. Port and SSL source remain pending. |
+| Explicit | `AUTHOR-VALIDATED`: Resolved IP of the TARGET endpoint from `mysql.rds_topology`; any configured green writer must match that identity. | `REVIEW-VALIDATION-PENDING`: Author proposes the blue writer port without an explicit equality contract. | `REVIEW-VALIDATION-PENDING`: Define whether the matched explicit green writer or matched blue writer supplies `use_ssl`. | Host/IP is resolved. Port and SSL source remain pending. |
 
 `PROPOSED-POLICY`: A direct probe target is a complete host or IP, port, and
 SSL tuple from the same mapped green writer identity, never from an arbitrary
@@ -698,6 +748,13 @@ monitor row. An unresolved field keeps the action pending or enters an
 externally visible `FAULTED` state according to the accepted error policy.
 
 ### Restart Validation Matrix
+
+`REVIEW-VALIDATION-PENDING`: The author selected a no-persistence fresh-start
+policy but did not provide a full-restart trace and combined all effects into
+one row. The response also says runtime HGM and DNS-cache effects may remain
+after the ownership context is lost. Worker replacement and full process
+restart are distinct events and must be validated separately. The per-effect
+requirements therefore remain open below.
 
 | Effect | Observed external state after restart | Ledger recovery mechanism | Required reconciliation or settlement | Required evidence |
 |---|---|---|---|---|
@@ -749,19 +806,24 @@ effect disappeared.
 
 ## Review Gate
 
-The document status remains **AUTHOR VALIDATION REQUIRED** until the original
-author:
+The author supplied a validation response and resolved the topology contract,
+scoped lifecycle observations, reader-cleanup signal, cancellation boundary,
+incomplete reader mapping, and mixed green-hostgroup configurations. The
+document status remains **AUTHOR VALIDATION REQUIRED** until the remaining
+items are resolved:
 
-1. Provides evidence for or corrects every `REVIEW-VALIDATION-PENDING` claim.
-2. Answers every item in the **Author Validation Checklist** and completes
-   every author decision in both validation matrices.
-3. Confirms that the safe defaults do not contradict observed AWS behavior.
-4. Approves the observation vocabulary and transition precedence for the
-   deterministic simulator.
-5. Confirms the accepted reader-completion signal and configuration-removal
-   behavior.
-6. Records every answer, correction, evidence URL or trace, and resulting
-   policy disposition in this document's checklist and matrices.
+1. Establish the authoritative port and `use_ssl` sources for direct green
+   probes without using an arbitrary monitor-result row.
+2. Decide whether retained, retryable cleanup across configuration change and
+   worker replacement is required or whether one-shot best-effort cleanup and
+   loss of unsettled effects is explicitly accepted.
+3. Define settlement of the green server entry retained in explicit green
+   hostgroups after its DNS name retires.
+4. Decide the same-phase retry and partial-effect reconciliation contract.
+5. Separate worker replacement from full process restart and complete the
+   per-effect restart matrix with evidence.
+6. Approve the resulting observation vocabulary and transition precedence for
+   the deterministic simulator after those decisions are recorded.
 
 The status changes only after no checklist or matrix decision and no external
 `REVIEW-VALIDATION-PENDING` claim remains unresolved. PR2 must use only policy
