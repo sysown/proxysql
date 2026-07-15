@@ -438,6 +438,7 @@ struct AWS_RDS_BlueGreenPair {
 	int64_t blue_weight = 1;              ///< Blue server weight mirrored onto the green server when it is added.
 	int64_t blue_max_conns = 1000;        ///< Blue server max_connections mirrored onto the green server when it is added.
 	int32_t blue_use_ssl = 0;             ///< Blue server SSL setting mirrored onto the green server when it is added.
+	int32_t green_use_ssl = -1;           ///< Green server SSL; -1 means unset (use blue_use_ssl).
 	std::string green_ip;                 ///< Green host IP resolved at SWITCHOVER_INITIATED and held warm.
 	unsigned long long green_ip_ttl = 0;  ///< Expiry for green_ip when resolved by the BGD thread; 0 means DNS_Cache-sourced.
 	bool is_writer = false;               ///< True when this pair maps the blue writer.

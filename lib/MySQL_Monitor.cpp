@@ -6847,10 +6847,25 @@ void * monitor_RDS_BGD_thread_HG(void *arg) {
 		int poll_port;
 		bool poll_use_ssl;
 		if (!st.next_check_host.empty()) {
-			poll_host = st.next_check_host.c_str();
-			poll_port = hpa[0].port;          // port/use_ssl are uniform across the deployment
-			poll_use_ssl = hpa[0].use_ssl;
-		} else {
+			bool found_writer = false;
+			for (const auto& p : st.bg_map) {
+				if (p.is_writer) {
+					poll_host = st.next_check_host.c_str();
+					poll_port = p.port;
+					poll_use_ssl = (p.green_use_ssl >= 0) ? p.green_use_ssl : p.blue_use_ssl;
+					found_writer = true;
+					break;
+				}
+			}
+			if (!found_writer) {
+				// Highly unlikely: next_check_host is set but bg_map has no writer pair.
+				// Clear the green pin and fall through to blue host selection.
+				st.next_check_host.clear();
+				st.next_check_host_failures = 0;
+			}
+		}
+
+		if (st.next_check_host.empty()) {
 			found_pingable_host = false;
 			rnd = (size_t) rand();
 			rnd %= num_hosts;
@@ -7119,7 +7134,7 @@ static void aws_rds_bgd_build_map(AWS_RDS_BGD_State& st, const AWS_RDS_Topology_
 	MyHGM->wrlock();
 
 	// blue writer: the writer_hostgroup member whose name matches the green TARGET.
-	MyHGC* whgc = MyHGM->MyHGC_lookup(st.writer_hg);
+	MyHGC* whgc = MyHGM->MyHGC_find(st.writer_hg);
 	if (whgc && whgc->mysrvs) {
 		for (unsigned int j = 0; j < whgc->mysrvs->cnt(); j++) {
 			MySrvC* s = whgc->mysrvs->idx(j);
@@ -7135,6 +7150,24 @@ static void aws_rds_bgd_build_map(AWS_RDS_BGD_State& st, const AWS_RDS_Topology_
 				p.blue_max_conns = s->max_connections;
 				p.blue_use_ssl = s->use_ssl;
 				p.is_writer = true;
+
+				// read the green writer's use_ssl config
+				if (st.green_writer_hg >= 0) {
+					MyHGC* gwhgc = MyHGM->MyHGC_find((unsigned int)st.green_writer_hg);
+					if (gwhgc && gwhgc->mysrvs) {
+						for (unsigned int k = 0; k < gwhgc->mysrvs->cnt(); k++) {
+							MySrvC* gs = gwhgc->mysrvs->idx(k);
+							if (gs->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+								continue;
+							}
+							if (aws_rds_bgd_match_host(gs->address, green_writer_host)) {
+								p.green_use_ssl = gs->use_ssl;
+								break;
+							}
+						}
+					}
+				}
+
 				proxy_debug(PROXY_DEBUG_MONITOR, 7,
 					"AWS RDS BGD [wHG=%u]: mapped blue writer '%s:%d' <-> green '%s'\n",
 					st.writer_hg, p.blue_host.c_str(), p.port, p.green_host.c_str());
@@ -7147,7 +7180,7 @@ static void aws_rds_bgd_build_map(AWS_RDS_BGD_State& st, const AWS_RDS_Topology_
 	// reader pairs: match blue readers to user-added green readers by name.
 	if (st.green_reader_hg >= 0) {
 		std::vector<std::string> green_reader_hosts;
-		MyHGC* grhgc = MyHGM->MyHGC_lookup((unsigned int)st.green_reader_hg);
+		MyHGC* grhgc = MyHGM->MyHGC_find((unsigned int)st.green_reader_hg);
 		if (grhgc && grhgc->mysrvs) {
 			for (unsigned int j = 0; j < grhgc->mysrvs->cnt(); j++) {
 				MySrvC* s = grhgc->mysrvs->idx(j);
@@ -7158,7 +7191,7 @@ static void aws_rds_bgd_build_map(AWS_RDS_BGD_State& st, const AWS_RDS_Topology_
 			}
 		}
 
-		MyHGC* rhgc = MyHGM->MyHGC_lookup(st.reader_hg);
+		MyHGC* rhgc = MyHGM->MyHGC_find(st.reader_hg);
 		if (rhgc && rhgc->mysrvs) {
 			for (unsigned int j = 0; j < rhgc->mysrvs->cnt(); j++) {
 				MySrvC* s = rhgc->mysrvs->idx(j);
