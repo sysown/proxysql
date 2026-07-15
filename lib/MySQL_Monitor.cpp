@@ -1145,8 +1145,8 @@ MySQL_Monitor::MySQL_Monitor() {
 	pthread_mutex_init(&proxysql_servers_mutex, NULL);
 	AWS_Aurora_Hosts_resultset=NULL;
 	AWS_Aurora_Hosts_resultset_checksum = 0;
-	AWS_RDS_BGD_Hosts_resultset=NULL;
-	AWS_RDS_BGD_Hosts_resultset_checksum = 0;
+	AWS_RDS_Blue_Hosts_resultset=NULL;
+	AWS_RDS_BGD_Hosts_checksum = 0;
 	shutdown=false;
 	monitor_enabled=true;	// default
 	// create new SQLite datatabase
@@ -1247,9 +1247,9 @@ MySQL_Monitor::~MySQL_Monitor() {
 		delete AWS_Aurora_Hosts_resultset;
 		AWS_Aurora_Hosts_resultset=NULL;
 	}
-	if (AWS_RDS_BGD_Hosts_resultset) {
-		delete AWS_RDS_BGD_Hosts_resultset;
-		AWS_RDS_BGD_Hosts_resultset=NULL;
+	if (AWS_RDS_Blue_Hosts_resultset) {
+		delete AWS_RDS_Blue_Hosts_resultset;
+		AWS_RDS_Blue_Hosts_resultset=NULL;
 	}
 	std::map<std::string, AWS_Aurora_monitor_node *>::iterator it2;
 	AWS_Aurora_monitor_node *node=NULL;
@@ -6740,7 +6740,7 @@ void * monitor_RDS_BGD_thread_HG(void *arg) {
 	MySQL_Monitor__thread_MySQL_Thread_Variables_version = GloMTH->get_global_version();
 	mysql_thr->refresh_variables();
 
-	uint64_t initial_raw_checksum = 0;
+	uint64_t initial_checksum = 0;
 
 	// initial data load from the monitor resultset
 	// Columns:
@@ -6748,8 +6748,8 @@ void * monitor_RDS_BGD_thread_HG(void *arg) {
 	// 5 green_writer_hostgroup, 6 green_reader_hostgroup, 7 check_interval_ms,
 	// 8 check_timeout_ms, 9 writer_is_also_reader
 	pthread_mutex_lock(&GloMyMon->aws_rds_bgd_mutex);
-	initial_raw_checksum = GloMyMon->AWS_RDS_BGD_Hosts_resultset_checksum;
-	for (SQLite3_row *r : GloMyMon->AWS_RDS_BGD_Hosts_resultset->rows) {
+	initial_checksum = GloMyMon->AWS_RDS_BGD_Hosts_checksum;
+	for (SQLite3_row *r : GloMyMon->AWS_RDS_Blue_Hosts_resultset->rows) {
 		if (atoi(r->fields[0]) == (int)wHG) {
 			num_hosts++;
 			if (st.reader_hg == 0) {
@@ -6774,7 +6774,7 @@ void * monitor_RDS_BGD_thread_HG(void *arg) {
 	}
 
 	host_def_t *hpa = (host_def_t *)malloc(sizeof(host_def_t)*(num_hosts ? num_hosts : 1));
-	for (SQLite3_row *r : GloMyMon->AWS_RDS_BGD_Hosts_resultset->rows) {
+	for (SQLite3_row *r : GloMyMon->AWS_RDS_Blue_Hosts_resultset->rows) {
 		if (atoi(r->fields[0]) == (int)wHG) {
 			hpa[cur_host_idx].host = strdup(r->fields[2]);
 			hpa[cur_host_idx].port = atoi(r->fields[3]);
@@ -6791,7 +6791,7 @@ void * monitor_RDS_BGD_thread_HG(void *arg) {
 	unsigned long long t1 = 0;
 	unsigned long long next_loop_at = 0;
 	bool crc = false;
-	uint64_t current_raw_checksum = 0;
+	uint64_t current_checksum = 0;
 	size_t rnd;
 	bool found_pingable_host = false;
 	bool rc_ping = false;
@@ -6818,9 +6818,9 @@ void * monitor_RDS_BGD_thread_HG(void *arg) {
 
 		// if the host list/definition changed, terminate so the dispatcher respawns
 		pthread_mutex_lock(&GloMyMon->aws_rds_bgd_mutex);
-		current_raw_checksum = GloMyMon->AWS_RDS_BGD_Hosts_resultset_checksum;
+		current_checksum = GloMyMon->AWS_RDS_BGD_Hosts_checksum;
 		pthread_mutex_unlock(&GloMyMon->aws_rds_bgd_mutex);
-		if (current_raw_checksum != initial_raw_checksum) {
+		if (current_checksum != initial_checksum) {
 			exit_now = true;
 			break;
 		}
@@ -7138,7 +7138,8 @@ static void aws_rds_bgd_build_map(AWS_RDS_BGD_State& st, const AWS_RDS_Topology_
 	if (whgc && whgc->mysrvs) {
 		for (unsigned int j = 0; j < whgc->mysrvs->cnt(); j++) {
 			MySrvC* s = whgc->mysrvs->idx(j);
-			if (s->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+			if (s->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD
+				|| s->get_status() == MYSQL_SERVER_STATUS_OFFLINE_SOFT) {
 				continue;
 			}
 			if (aws_rds_bgd_match_host(s->address, green_writer_host)) {
@@ -7157,7 +7158,8 @@ static void aws_rds_bgd_build_map(AWS_RDS_BGD_State& st, const AWS_RDS_Topology_
 					if (gwhgc && gwhgc->mysrvs) {
 						for (unsigned int k = 0; k < gwhgc->mysrvs->cnt(); k++) {
 							MySrvC* gs = gwhgc->mysrvs->idx(k);
-							if (gs->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+							if (gs->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD
+								|| gs->get_status() == MYSQL_SERVER_STATUS_OFFLINE_SOFT) {
 								continue;
 							}
 							if (aws_rds_bgd_match_host(gs->address, green_writer_host)) {
@@ -7184,7 +7186,8 @@ static void aws_rds_bgd_build_map(AWS_RDS_BGD_State& st, const AWS_RDS_Topology_
 		if (grhgc && grhgc->mysrvs) {
 			for (unsigned int j = 0; j < grhgc->mysrvs->cnt(); j++) {
 				MySrvC* s = grhgc->mysrvs->idx(j);
-				if (s->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+				if (s->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD
+					|| s->get_status() == MYSQL_SERVER_STATUS_OFFLINE_SOFT) {
 					continue;
 				}
 				green_reader_hosts.push_back(s->address);
@@ -7195,7 +7198,8 @@ static void aws_rds_bgd_build_map(AWS_RDS_BGD_State& st, const AWS_RDS_Topology_
 		if (rhgc && rhgc->mysrvs) {
 			for (unsigned int j = 0; j < rhgc->mysrvs->cnt(); j++) {
 				MySrvC* s = rhgc->mysrvs->idx(j);
-				if (s->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+				if (s->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD
+					|| s->get_status() == MYSQL_SERVER_STATUS_OFFLINE_SOFT) {
 					continue;
 				}
 				for (const std::string& green_reader_host : green_reader_hosts) {
@@ -7877,7 +7881,7 @@ void * MySQL_Monitor::monitor_aws_rds_bgd() {
 	MySQL_Monitor__thread_MySQL_Thread_Variables_version = GloMTH->get_global_version();
 	mysql_thr->refresh_variables();
 
-	uint64_t last_raw_checksum = 0;
+	uint64_t last_checksum = 0;
 	unsigned int *hgs_array = NULL;
 	pthread_t *pthreads_array = NULL;
 	unsigned int hgs_num = 0;
@@ -7895,11 +7899,11 @@ void * MySQL_Monitor::monitor_aws_rds_bgd() {
 
 		// respawn the per-writer-HG workers when the host list/definition changes
 		pthread_mutex_lock(&aws_rds_bgd_mutex);
-		uint64_t new_raw_checksum = AWS_RDS_BGD_Hosts_resultset->raw_checksum();
+		uint64_t new_checksum = AWS_RDS_BGD_Hosts_checksum;
 		pthread_mutex_unlock(&aws_rds_bgd_mutex);
-		if (new_raw_checksum != last_raw_checksum) {
+		if (new_checksum != last_checksum) {
 			proxy_info("Detected new/changed definition for AWS RDS monitoring\n");
-			last_raw_checksum = new_raw_checksum;
+			last_checksum = new_checksum;
 			if (pthreads_array) {
 				for (unsigned int i=0; i < hgs_num; i++) {
 					pthread_join(pthreads_array[i], NULL);
@@ -7913,10 +7917,10 @@ void * MySQL_Monitor::monitor_aws_rds_bgd() {
 
 			hgs_num = 0;
 			pthread_mutex_lock(&aws_rds_bgd_mutex);
-			unsigned int num_rows = AWS_RDS_BGD_Hosts_resultset->rows_count;
+			unsigned int num_rows = AWS_RDS_Blue_Hosts_resultset->rows_count;
 			if (num_rows) {
 				unsigned int *tmp_hgs_array = (unsigned int *)malloc(sizeof(unsigned int)*num_rows);
-				for (SQLite3_row *r : AWS_RDS_BGD_Hosts_resultset->rows) {
+				for (SQLite3_row *r : AWS_RDS_Blue_Hosts_resultset->rows) {
 					int wHG = atoi(r->fields[0]);
 					bool found = false;
 					for (unsigned int i=0; i < hgs_num; i++) {

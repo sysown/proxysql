@@ -601,8 +601,8 @@ class MySQL_Monitor {
 	SQLite3_result *AWS_Aurora_Hosts_resultset;
 	uint64_t AWS_Aurora_Hosts_resultset_checksum;
 	std::unordered_map<std::string, AWS_RDS_BGD_Server_Status> aws_rds_bgd_server_status;
-	SQLite3_result *AWS_RDS_BGD_Hosts_resultset;
-	uint64_t AWS_RDS_BGD_Hosts_resultset_checksum;
+	SQLite3_result *AWS_RDS_Blue_Hosts_resultset;
+	uint64_t AWS_RDS_BGD_Hosts_checksum;
 	unsigned int num_threads;
 	unsigned int aux_threads;
 	unsigned int started_threads;

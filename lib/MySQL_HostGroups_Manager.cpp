@@ -7133,7 +7133,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_hosts_monitor_resultset(bool lo
 	}
 }
 
-const char SELECT_AWS_RDS_BGD_SERVERS_FOR_MONITOR[] {
+const char SELECT_AWS_RDS_BGD_BLUE_SERVERS_FOR_MONITOR[] {
 	"SELECT writer_hostgroup, reader_hostgroup, hostname, port, MAX(use_ssl) use_ssl, green_writer_hostgroup,"
 		" green_reader_hostgroup, check_interval_ms, check_timeout_ms, writer_is_also_reader FROM mysql_servers"
 		" JOIN mysql_aws_rds_bgd_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup"
@@ -7141,11 +7141,19 @@ const char SELECT_AWS_RDS_BGD_SERVERS_FOR_MONITOR[] {
 		" GROUP BY writer_hostgroup, hostname, port"
 };
 
+const char SELECT_AWS_RDS_BGD_GREEN_SERVERS_FOR_MONITOR[] {
+	"SELECT bgd.writer_hostgroup, srv.hostgroup_id, srv.hostname, srv.port, srv.use_ssl FROM mysql_servers AS srv"
+		" JOIN mysql_aws_rds_bgd_hostgroups AS bgd ON srv.hostgroup_id=bgd.green_writer_hostgroup"
+		" OR srv.hostgroup_id=bgd.green_reader_hostgroup"
+		" WHERE bgd.active=1 AND srv.status NOT IN (2,3)"
+		" ORDER BY bgd.writer_hostgroup, srv.hostgroup_id, srv.hostname, srv.port"
+};
+
 /**
  * @brief Rebuilds the AWS RDS BGD monitor's host resultset.
  *
- * @details Rebuilds `GloMyMon->AWS_RDS_BGD_Hosts_resultset` (and its checksum) from the
- *   `mysql_servers` x `mysql_aws_rds_bgd_hostgroups` join used by the RDS BGD monitor thread.
+ * @details Rebuilds `GloMyMon->AWS_RDS_Blue_Hosts_resultset` and publishes a checksum combining
+ *   the blue hosts with the green hosts.
  *
  * @param lock When true, the monitor's `aws_rds_bgd_mutex` is taken internally.
  */
@@ -7154,21 +7162,66 @@ void MySQL_HostGroups_Manager::update_aws_rds_bgd_hosts_monitor_resultset(bool l
 		pthread_mutex_lock(&GloMyMon->aws_rds_bgd_mutex);
 	}
 
-	SQLite3_result* resultset = nullptr;
-	{
-		char* error = nullptr;
-		int cols = 0;
-		int affected_rows = 0;
-		mydb->execute_statement(SELECT_AWS_RDS_BGD_SERVERS_FOR_MONITOR, &error, &cols, &affected_rows, &resultset);
+	// Unlike other monitor resultset/checksum pairs, BGD intentionally tracks different data in each.
+	//
+	// AWS_RDS_Blue_Hosts_resultset contains only blue hosts. The BGD monitor dispatcher uses it to start
+	// workers, and each worker uses it as the list of servers eligible for mysql.rds_topology polling.
+	//
+	// AWS_RDS_BGD_Hosts_checksum combines the blue and green resultset checksums. Workers and the dispatcher
+	// use it as a generation signal: relevant changes in mysql_servers or mysql_aws_rds_bgd_hostgroups
+	// stop the old workers so replacements rebuild the blue/green map from the current runtime configuration.
+
+	SQLite3_result* blue_resultset = nullptr;
+	SQLite3_result* green_resultset = nullptr;
+	char* blue_error = nullptr;
+	char* green_error = nullptr;
+	int blue_cols = 0;
+	int green_cols = 0;
+	int blue_affected_rows = 0;
+	int green_affected_rows = 0;
+
+	mydb->execute_statement(
+		SELECT_AWS_RDS_BGD_BLUE_SERVERS_FOR_MONITOR,
+		&blue_error, &blue_cols, &blue_affected_rows, &blue_resultset);
+	mydb->execute_statement(
+		SELECT_AWS_RDS_BGD_GREEN_SERVERS_FOR_MONITOR,
+		&green_error, &green_cols, &green_affected_rows, &green_resultset);
+
+	if (blue_error || green_error || !blue_resultset || !green_resultset) {
+		if (blue_error) {
+			proxy_error("Error refreshing AWS RDS BGD blue hosts: %s\n", blue_error);
+		}
+		if (green_error) {
+			proxy_error("Error refreshing AWS RDS BGD green hosts: %s\n", green_error);
+		}
+		free(blue_error);
+		free(green_error);
+		delete blue_resultset;
+		delete green_resultset;
+
+		if (lock) {
+			pthread_mutex_unlock(&GloMyMon->aws_rds_bgd_mutex);
+		}
+		return;
 	}
 
-	if (resultset) {
-		if (GloMyMon->AWS_RDS_BGD_Hosts_resultset) {
-			delete GloMyMon->AWS_RDS_BGD_Hosts_resultset;
-		}
-		GloMyMon->AWS_RDS_BGD_Hosts_resultset=resultset;
-		GloMyMon->AWS_RDS_BGD_Hosts_resultset_checksum=resultset->raw_checksum();
+	const uint64_t blue_checksum = blue_resultset->raw_checksum();
+	const uint64_t green_checksum = green_resultset->raw_checksum();
+	SpookyHash hash;
+	hash.Init(19, 3);
+	hash.Update(&blue_checksum, sizeof(blue_checksum));
+	hash.Update(&green_checksum, sizeof(green_checksum));
+
+	uint64_t combined_checksum = 0;
+	uint64_t ignored = 0;
+	hash.Final(&combined_checksum, &ignored);
+
+	if (GloMyMon->AWS_RDS_Blue_Hosts_resultset) {
+		delete GloMyMon->AWS_RDS_Blue_Hosts_resultset;
 	}
+	GloMyMon->AWS_RDS_Blue_Hosts_resultset = blue_resultset;
+	GloMyMon->AWS_RDS_BGD_Hosts_checksum = combined_checksum;
+	delete green_resultset;
 
 	if (lock) {
 		pthread_mutex_unlock(&GloMyMon->aws_rds_bgd_mutex);
