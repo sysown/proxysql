@@ -1121,6 +1121,8 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 * @param hostname     Address of the server to match.
 	 * @param port         Port of the server to match.
 	 * @return true if a matching server was found.
+	 *
+	 * @note Caller must hold wrlock().
 	 */
 	bool drain_server_connections(const char *hostname, int port);
 

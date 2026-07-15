@@ -7244,11 +7244,12 @@ static void aws_rds_bgd_resolve_green_ips(AWS_RDS_BGD_State& st) {
 * @brief Add the green writer to green_writer_hostgroup, when that hostgroup is configured.
 *
 * @details Mirrors the blue writer's connection settings (weight/max_connections/use_ssl) onto
-*   the green writer. No-op when green_writer_hostgroup is NULL (the auto-discovery path) or when
-*   the green writer was already added on a prior poll.
+*   the green writer. Existing rows, including OFFLINE_HARD rows, are left unchanged. When
+*   green_writer_added_in_hg is true (BGD owns this row), an OFFLINE_HARD tombstone left by a
+*   prior rollback is re-enabled.
 */
 static void aws_rds_bgd_add_green_writer_in_hg(AWS_RDS_BGD_State& st) {
-	if (st.green_writer_hg < 0 || st.green_writer_added_in_hg) {
+	if (st.green_writer_hg < 0) {
 		return;
 	}
 	for (const AWS_RDS_BlueGreenPair& p : st.bg_map) {
@@ -7256,9 +7257,23 @@ static void aws_rds_bgd_add_green_writer_in_hg(AWS_RDS_BGD_State& st) {
 			srv_info_t srv_info { p.green_host, (uint16_t)p.port, "AWS RDS BGD green writer" };
 			srv_opts_t srv_opts { p.blue_weight, p.blue_max_conns, p.blue_use_ssl };
 			MyHGM->wrlock();
-			MyHGM->create_new_server_in_hg((uint32_t)st.green_writer_hg, srv_info, srv_opts);
+			MySrvC* existing = MyHGM->find_server_in_hg((uint32_t)st.green_writer_hg, p.green_host, p.port);
+			bool publish = false;
+
+			if (existing == nullptr) {
+				st.green_writer_added_in_hg =
+					(MyHGM->create_new_server_in_hg((uint32_t)st.green_writer_hg, srv_info, srv_opts) == 0);
+				publish = st.green_writer_added_in_hg;
+			} else if (st.green_writer_added_in_hg
+				&& existing->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+				existing->set_status(MYSQL_SERVER_STATUS_ONLINE);
+				publish = true;
+			}
+
+			if (publish) {
+				MyHGM->publish_mysql_servers_to_runtime();
+			}
 			MyHGM->wrunlock();
-			st.green_writer_added_in_hg = true;
 			break;
 		}
 	}
@@ -7434,7 +7449,9 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 				"AWS RDS BGD [wHG=%u rHG=%u]: repointed blue '%s' to green IP %s\n",
 				st.writer_hg, st.reader_hg, p.blue_host.c_str(), p.green_ip.c_str());
 
+			MyHGM->wrlock();
 			MyHGM->drain_server_connections(p.blue_host.c_str(), p.port);
+			MyHGM->wrunlock();
 			My_Conn_Pool->purge_connections(p.blue_host.c_str(), p.port);
 		}
 
@@ -7629,14 +7646,13 @@ void MySQL_Monitor::handle_aws_rds_bgd_post_switchover(AWS_RDS_BGD_State& st, bo
 		My_Conn_Pool->purge_connections(p.blue_host.c_str(), p.port);
 	}
 
-	aws_rds_bgd_drain_green_hg(st);
+	aws_rds_bgd_drain_green_hg(st, rollback);
 
 	// state cleanup
 	st.bg_map.clear();
 	st.last_topology_status.clear();
 	st.next_check_host.clear();
 	st.next_check_interval_ms = 0;
-	st.green_writer_added_in_hg = false;
 	aws_rds_bgd_set_status(st, AWS_RDS_BGD_Status::NONE);
 
 	proxy_info(
@@ -7645,54 +7661,91 @@ void MySQL_Monitor::handle_aws_rds_bgd_post_switchover(AWS_RDS_BGD_State& st, bo
 }
 
 /**
-* @brief Evict stale DNS and drain connections for the deployment's green hostgroups after switchover.
+* @brief Clean up the deployment's green hostgroups after switchover or rollback.
 *
-* @details No-op unless the green writer/reader hostgroups are configured (the explicit green-HG path).
-*   For every non-OFFLINE_HARD member of each green hostgroup this drops the DNS cache entry, drains the
-*   server's backend connections and purges the monitor connection pool.
-*
-*   The servers are left in place; the monitor shuns them on ping/connect errors once the retired green
-*   DNS names stop resolving to an IP.
+* @details Successful cleanup drains all configured green-hostgroup members. Rollback drains and removes
+*   only the green writer auto-added by the BGD worker; user-configured rows are left unchanged.
 *
 * @param st Switchover state.
+* @param rollback Whether cleanup is handling a rollback.
 */
-void MySQL_Monitor::aws_rds_bgd_drain_green_hg(AWS_RDS_BGD_State& st) {
-	std::vector<unsigned int> green_hgs;
-	if (st.green_writer_hg >= 0) {
-		green_hgs.push_back((unsigned int)st.green_writer_hg);
-	}
-	if (st.green_reader_hg >= 0) {
-		green_hgs.push_back((unsigned int)st.green_reader_hg);
-	}
-	if (green_hgs.empty()) {
-		return;
-	}
+void MySQL_Monitor::aws_rds_bgd_drain_green_hg(AWS_RDS_BGD_State& st, bool rollback) {
+	struct hg_srv_t {
+		int hostgroup;
+		srv_addr_t server;
+		bool remove;
+	};
+	std::vector<hg_srv_t> targets;
+	bool servers_removed = false;
 
-	for (unsigned int hg : green_hgs) {
-		std::vector<srv_addr_t> servers;
+	MyHGM->wrlock();
 
-		MyHGM->wrlock();
-		MyHGC* hgc = MyHGM->MyHGC_lookup(hg);
-		if (hgc && hgc->mysrvs) {
-			for (unsigned int j = 0; j < hgc->mysrvs->cnt(); j++) {
-				MySrvC* s = hgc->mysrvs->idx(j);
-				if (s->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+	if (rollback) {
+		if (st.green_writer_added_in_hg && st.green_writer_hg >= 0) {
+			for (const AWS_RDS_BlueGreenPair& p : st.bg_map) {
+				if (!p.is_writer)
 					continue;
+
+				MySrvC* existing = MyHGM->find_server_in_hg(
+					(uint32_t)st.green_writer_hg, p.green_host, p.port);
+				if (existing) {
+					existing->ConnectionsUsed->mark_connections_unhealthy();
+					servers_removed =
+						(MyHGM->remove_server_in_hg(
+							(uint32_t)st.green_writer_hg, p.green_host, p.port) == 0);
+					targets.push_back(hg_srv_t{
+						st.green_writer_hg, srv_addr_t{ p.green_host, p.port }, true });
 				}
-				servers.push_back(srv_addr_t{ std::string(s->address), s->port });
+				break;
 			}
 		}
-		MyHGM->wrunlock();
+	} else {
+		std::vector<int> green_hgs;
+		if (st.green_writer_hg >= 0)
+			green_hgs.push_back(st.green_writer_hg);
+		if (st.green_reader_hg >= 0)
+			green_hgs.push_back(st.green_reader_hg);
 
-		for (srv_addr_t& srv : servers) {
-			std::string& host = srv.host;
-			int port = srv.port;
-			dns_cache->remove(host);
-			MyHGM->drain_server_connections(host.c_str(), port);
-			My_Conn_Pool->purge_connections(host.c_str(), port);
+		for (int hg : green_hgs) {
+			MyHGC* hgc = MyHGM->MyHGC_find(hg);
+			if (!hgc || !hgc->mysrvs)
+				continue;
+
+			for (unsigned int j = 0; j < hgc->mysrvs->cnt(); j++) {
+				MySrvC* s = hgc->mysrvs->idx(j);
+				if (s->get_status() != MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+					targets.push_back(hg_srv_t{
+						hg, srv_addr_t{ std::string(s->address), s->port }, false });
+				}
+			}
+		}
+
+		for (const hg_srv_t& target : targets) {
+			MyHGM->drain_server_connections(
+				target.server.host.c_str(), target.server.port);
+		}
+	}
+
+	if (servers_removed)
+		MyHGM->publish_mysql_servers_to_runtime();
+
+	MyHGM->wrunlock();
+
+	for (const hg_srv_t& target : targets) {
+		dns_cache->remove(target.server.host);
+		My_Conn_Pool->purge_connections(
+			target.server.host.c_str(), target.server.port);
+
+		if (target.remove) {
 			proxy_info(
-				"AWS RDS BGD [wHG=%u rHG=%u]: connections drained from green HG %u server '%s:%d'\n",
-				st.writer_hg, st.reader_hg, hg, host.c_str(), port);
+				"AWS RDS BGD [wHG=%u rHG=%u]: removed auto-added green writer '%s:%d' from HG %d\n",
+				st.writer_hg, st.reader_hg, target.server.host.c_str(), target.server.port,
+				target.hostgroup);
+		} else {
+			proxy_info(
+				"AWS RDS BGD [wHG=%u rHG=%u]: connections drained from green HG %d server '%s:%d'\n",
+				st.writer_hg, st.reader_hg, target.hostgroup, target.server.host.c_str(),
+				target.server.port);
 		}
 	}
 }

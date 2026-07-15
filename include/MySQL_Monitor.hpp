@@ -692,18 +692,15 @@ class MySQL_Monitor {
 	*/
 	void handle_aws_rds_bgd_post_switchover(AWS_RDS_BGD_State& st, bool rollback = false);
 	/**
-	* @brief Evict stale DNS and drain connections for the deployment's green hostgroups after switchover.
+	* @brief Clean up the deployment's green hostgroups after switchover or rollback.
 	*
-	* @details No-op unless the green writer/reader hostgroups are configured (the explicit green-HG path).
-	*   For every non-OFFLINE_HARD member of each green hostgroup this drops the DNS cache entry, drains the
-	*   server's backend connections and purges the monitor connection pool.
-	*
-	*   The servers are left in place; the monitor shuns them on ping/connect errors once the retired green
-	*   DNS names stop resolving to an IP.
+	* @details Successful cleanup drains all configured green-hostgroup members. Rollback drains and removes
+	*   only the green writer auto-added by the BGD worker; user-configured rows are left unchanged.
 	*
 	* @param st Switchover state.
+	* @param rollback Whether cleanup is handling a rollback.
 	*/
-	void aws_rds_bgd_drain_green_hg(AWS_RDS_BGD_State& st);
+	void aws_rds_bgd_drain_green_hg(AWS_RDS_BGD_State& st, bool rollback);
 	/**
 	* @brief Handle an absent, empty, or vanished mysql.rds_topology table.
 	*
