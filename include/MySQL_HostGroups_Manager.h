@@ -722,9 +722,8 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 *   `incoming_aws_rds_bgd_hostgroups` resultset.
 	 *
 	 * @details Inserts each staged row with `auto_generated=0` (config-loaded entries are
-	 *   user-defined) and NULL green hostgroups preserved, clears the staging resultset, then
-	 *   republishes the host list to the RDS BGD monitor thread via
-	 *   `update_aws_rds_bgd_hosts_monitor_resultset()`. No-op when nothing is staged.
+	 *   user-defined) and NULL green hostgroups preserved, then clears the staging resultset.
+	 *   No-op when nothing is staged.
 	 */
 	void generate_mysql_aws_rds_bgd_hostgroups_table();
 	SQLite3_result *incoming_aws_rds_bgd_hostgroups;

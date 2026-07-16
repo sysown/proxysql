@@ -1616,6 +1616,8 @@ bool MySQL_HostGroups_Manager::commit(
 	// NOTE: In order to guarantee the latest generated version, this should be kept after all the
 	// calls to 'generate_mysql_servers'.
 	update_table_mysql_servers_for_monitor(false);
+	// Refresh BGD monitoring after all runtime server changes are applied.
+	update_aws_rds_bgd_hosts_monitor_resultset(true);
 
 	wrunlock();
 	unsigned long long curtime2=monotonic_time();
@@ -6548,13 +6550,6 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_rds_bgd_hostgroups_table() {
 
 	delete incoming_aws_rds_bgd_hostgroups;
 	incoming_aws_rds_bgd_hostgroups=NULL;
-
-	// publish the refreshed host list to the RDS monitor thread
-	if (GloMyMon) {
-		pthread_mutex_lock(&GloMyMon->aws_rds_bgd_mutex);
-		update_aws_rds_bgd_hosts_monitor_resultset(false);
-		pthread_mutex_unlock(&GloMyMon->aws_rds_bgd_mutex);
-	}
 }
 
 
@@ -7158,6 +7153,10 @@ const char SELECT_AWS_RDS_BGD_GREEN_SERVERS_FOR_MONITOR[] {
  * @param lock When true, the monitor's `aws_rds_bgd_mutex` is taken internally.
  */
 void MySQL_HostGroups_Manager::update_aws_rds_bgd_hosts_monitor_resultset(bool lock) {
+	if (!GloMyMon) {
+		return;
+	}
+
 	if (lock) {
 		pthread_mutex_lock(&GloMyMon->aws_rds_bgd_mutex);
 	}

@@ -655,7 +655,7 @@ class MySQL_Monitor {
 	*
 	* @details Spawns one worker (monitor_RDS_BGD_thread_HG) per writer hostgroup; each worker picks a pingable host,
 	*   probes 'mysql.rds_topology' and dispatches to a handler based on the detected topology shape.
-	*   Workers are (re)spawned whenever the AWS_RDS_BGD_Hosts_resultset checksum changes.
+	*   Workers are (re)spawned whenever the AWS_RDS_BGD_Hosts_checksum changes.
 	*/
 	void * monitor_aws_rds_bgd();
 	/**
