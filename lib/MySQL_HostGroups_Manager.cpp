@@ -3969,12 +3969,14 @@ void MySQL_HostGroups_Manager::aws_rds_bgd_set_runtime_status(unsigned int write
  * @brief Aligns the runtime 'mysql_servers' table + checksums with the server state in MyHGM.
  *
  * @details One-way alignment (in-memory -> runtime): regenerates the runtime 'mysql_servers' table
- *   from the current in-memory 'MyHGC'/'MySrvC' structures and recomputes/republishes the global
- *   'mysql_servers' checksum for cluster sync.
+ *   from the current in-memory 'MyHGC'/'MySrvC' structures, recomputes/republishes the global
+ *   'mysql_servers' checksum for cluster sync, and refreshes 'mysql_servers_to_monitor' for the
+ *   regular monitor threads.
  *
  * @note the caller MUST already hold 'wrlock()'.
  */
 void MySQL_HostGroups_Manager::publish_mysql_servers_to_runtime() {
+	// update runtime table
 	purge_mysql_servers_table();
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
 	mydb->execute("DELETE FROM mysql_servers");
@@ -3990,6 +3992,9 @@ void MySQL_HostGroups_Manager::publish_mysql_servers_to_runtime() {
 	pthread_mutex_lock(&GloVars.checksum_mutex);
 	update_glovars_mysql_servers_checksum(mysrvs_checksum);
 	pthread_mutex_unlock(&GloVars.checksum_mutex);
+
+	// update monitor table
+	update_table_mysql_servers_for_monitor(false);
 }
 
 /**

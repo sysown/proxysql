@@ -1106,7 +1106,8 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 * @brief Aligns the runtime 'mysql_servers' table + checksums with the server state in MyHGM.
 	 *
 	 * @details One-way alignment (in-memory -> runtime): regenerates the runtime 'mysql_servers' table
-	 *   from the current in-memory MyHGM state and recomputes/republishes the global checksum.
+	 *   from the current in-memory MyHGM state, recomputes/republishes the global checksum, and refreshes
+	 *   'mysql_servers_to_monitor' for the regular monitor threads.
 	 *
 	 * @note Caller must hold wrlock().
 	 */
