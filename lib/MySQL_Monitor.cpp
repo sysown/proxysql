@@ -7492,7 +7492,8 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 		if (rhgc && rhgc->mysrvs) {
 			for (unsigned int j = 0; j < rhgc->mysrvs->cnt(); j++) {
 				MySrvC* s = rhgc->mysrvs->idx(j);
-				if (s->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+				if (s->get_status() == MYSQL_SERVER_STATUS_OFFLINE_SOFT
+					|| s->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
 					continue;
 				}
 				if (writer.host == s->address && writer.port == s->port) {
@@ -7694,8 +7695,8 @@ void MySQL_Monitor::handle_aws_rds_bgd_post_switchover(AWS_RDS_BGD_State& st, bo
 /**
 * @brief Drain connections from green hosts after switchover.
 *
-* @details Drains connections from every non-OFFLINE_HARD green host. Server rows
-*   and statuses are left unchanged.
+* @details Drains connections from every green host that is neither OFFLINE_SOFT nor
+*   OFFLINE_HARD. Server rows and statuses are left unchanged.
 *
 * @param st Switchover state.
 */
@@ -7718,10 +7719,13 @@ void MySQL_Monitor::aws_rds_bgd_drain_green_hg(AWS_RDS_BGD_State& st) {
 		}
 		for (unsigned int j = 0; j < hgc->mysrvs->cnt(); j++) {
 			MySrvC* s = hgc->mysrvs->idx(j);
-			if (s->get_status() != MYSQL_SERVER_STATUS_OFFLINE_HARD) {
-				targets.push_back(hg_srv_t{
-					hg, srv_addr_t{ std::string(s->address), s->port } });
+			if (s->get_status() == MYSQL_SERVER_STATUS_OFFLINE_SOFT
+				|| s->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+				continue;
 			}
+
+			targets.push_back(hg_srv_t{
+				hg, srv_addr_t{ std::string(s->address), s->port } });
 		}
 	}
 

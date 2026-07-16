@@ -694,8 +694,8 @@ class MySQL_Monitor {
 	/**
 	* @brief Drain connections from green hosts after switchover.
 	*
-	* @details Drains connections from every non-OFFLINE_HARD green host. Server rows
-	*   and statuses are left unchanged.
+	* @details Drains connections from every green host that is neither OFFLINE_SOFT nor
+	*   OFFLINE_HARD. Server rows and statuses are left unchanged.
 	*
 	* @param st Switchover state.
 	*/
