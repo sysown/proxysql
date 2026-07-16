@@ -1,6 +1,6 @@
 # AWS RDS Blue/Green Monitor
 
-**Document status:** AUTHOR VALIDATION REQUIRED
+**Document status:** AUTHOR VALIDATION COMPLETE; IMPLEMENTATION CONFORMANCE OPEN
 
 **Applies to:** Amazon RDS Multi-AZ DB instance blue/green deployment monitoring
 
@@ -33,7 +33,8 @@ inferred, assumed, or failed to observe the behavior.
 | `AUTHOR-VALIDATED` | External evidence | AWS behavior confirmed by the feature author. The statement must identify whether it is an AWS-provided contract or scoped observation. |
 | `AUTHOR-ACCEPTED-POLICY` | Intent | ProxySQL behavior explicitly accepted by the feature author, including a deliberate policy choice made under an external uncertainty. |
 | `REVIEW-VALIDATION-PENDING` | Review evidence | An external claim present in the PR, source comments, or implementation contract for which this review has not yet recorded the author's evidence or correction. It does not characterize how the author derived the claim. |
-| `PROPOSED-POLICY` | Intent | Intended ProxySQL safety behavior for later hardening PRs. |
+| `IMPLEMENTATION-CONFORMANCE-OPEN` | Review finding | The evidence or policy decision is resolved, but current source does not implement it or lacks verification. |
+| `PROPOSED-POLICY` | Intent | Reviewer-proposed hardening that is not part of the current implementation or an author-accepted production contract unless separately promoted to `AUTHOR-ACCEPTED-POLICY`. |
 
 Labels may be combined. `SOURCE-CODE, REVIEW-VALIDATION-PENDING` means the
 current code or comments encode an external claim whose supporting evidence has
@@ -42,7 +43,9 @@ internal mechanics and never promotes an external claim.
 
 A `REVIEW-VALIDATION-PENDING` claim must be promoted to `AUTHOR-VALIDATED`,
 replaced by an explicit `AUTHOR-ACCEPTED-POLICY`, or corrected before the
-deterministic controller simulator is accepted.
+author-validation gate closes. Closing that evidence gate does not imply that
+the implementation conforms to the recorded decision or that a reviewer has
+accepted the operational risk.
 
 ## Author Evidence Record
 
@@ -62,6 +65,29 @@ read replicas, and `eu-north-1`. The trace covers one complete switchover; the
 author separately observed one cancellation. A statement supported only by
 that trace or an unrecorded author observation is scoped accordingly and is not
 promoted to a universal AWS guarantee.
+
+The author then answered the eight remaining decisions in the
+[counter-review response](https://github.com/sysown/proxysql/pull/5934#issuecomment-4989347968).
+That response explicitly:
+
+- Defines the matched blue writer's configured port as the direct green-probe
+  port and accepts that a source/target pair using different ports is not
+  supported.
+- Defines explicit-mode TLS from the matched green writer's `mysql_servers`
+  row and automatic-mode TLS from the matched blue writer's row.
+- Makes green hostgroup membership persistent until an administrator removes
+  it, including membership created automatically at runtime.
+- Accepts one-shot cleanup and loss of per-effect completion state rather than
+  a retained or durable cleanup ledger.
+- Accepts the current same-phase DNS-resolution failure for this PR and commits
+  to a later per-pair reconciliation change.
+- Accepts cleanup-on-worker-exit followed by fresh worker state, and a
+  no-persistence fresh start after a full ProxySQL process restart.
+
+The source changes reviewed with that response are commits `7d272074c` through
+`ac4167cd0`, based on `0a37316c9`. A stated policy is recorded as resolved even
+when implementation conformance is still open; those cases are called out
+explicitly below.
 
 ## Scope
 
@@ -257,17 +283,46 @@ ProxySQL-inferred and cleanup states, not raw AWS status strings.
 | `WRITER_SWITCHOVER_POST_PROCESSING` | On transition, set the next-check interval to 100 ms; invoke the same setup; enable or sustain read-only suppression; pin mapped blue names to resolved green IPs; drain matching connections; configure writer placement; shun unmapped readers. |
 | `WRITER_SWITCHOVER_COMPLETED` | Enter the inferred reader phase; remove the writer DNS-cache entry; retain mapped reader pins until the topology drains; reset the next-check interval override to the baseline value of `0`. |
 | `READER_SWITCHOVER_IN_PROGRESS` plus empty or absent topology | Run successful cleanup: reconcile configured writer membership in the reader hostgroup; unshun recorded readers; remove DNS-cache entries and purge monitor-pool connections for recorded shunned readers and all mapped pairs; drain configured green hostgroups; clear worker bookkeeping; transition through `SWITCHOVER_COMPLETED` to `NONE`. |
-| Empty or absent topology from any other non-`NONE` state | Run rollback cleanup: conditionally restore a writer demoted during `WRITER_SWITCHOVER_IN_PROGRESS` or `WRITER_SWITCHOVER_POST_PROCESSING`, then run the common hostgroup, DNS-cache, monitor-pool, green-hostgroup, and worker-state cleanup before entering `NONE`. |
+| Empty or absent topology from any other non-`NONE` state | Run rollback cleanup: conditionally restore a writer demoted during `WRITER_SWITCHOVER_IN_PROGRESS` or `WRITER_SWITCHOVER_POST_PROCESSING`; reconcile blue reader membership and shuns; remove blue DNS-cache entries; purge related blue monitor-pool connections; leave green rows, statuses, DNS entries, and connections unchanged; clear worker bookkeeping; then enter `NONE`. |
 | Recognized backward status transition | Run rollback cleanup. If the new raw status is `AVAILABLE`, re-enter `AVAILABLE`, set the 250 ms interval, and rebuild mapping, resolution, and optional green-writer placement. Other backward statuses leave the worker in `NONE` after cleanup. |
 | Worker exit with non-`NONE` state | Run rollback cleanup before destroying the worker-local state. A replacement worker starts with a new state instance. |
+
+### Current Probe Tuple
+
+`SOURCE-CODE, AUTHOR-ACCEPTED-POLICY`: When direct probing is active, the
+worker takes the port from the writer pair in `bg_map`, not from an arbitrary
+blue polling row. That pair records the configured blue writer's port. The
+implementation does not consume or validate the TARGET topology row's port;
+the author explicitly accepts that a matched source/target pair with different
+ports is unsupported.
+
+`SOURCE-CODE, AUTHOR-ACCEPTED-POLICY`: Automatic mode has no independent green
+`mysql_servers` row from which to read TLS configuration, so it intentionally
+uses the matched blue writer's `use_ssl` value.
+
+`SOURCE-CODE, IMPLEMENTATION-CONFORMANCE-OPEN`: Explicit mode is intended to
+use the matching green writer row's `use_ssl`. In commit `20247dcf0`, however,
+the lookup calls `aws_rds_bgd_match_host(gs->address, green_writer_host)`.
+That helper expects a blue hostname as its first argument and a green hostname
+as its second argument. Passing the configured green hostname and TARGET green
+hostname therefore does not match the ordinary
+`<blue>-green-<random>.<domain>` case. `green_use_ssl` remains unset and the
+probe silently falls back to the blue writer's value. AWS-08's policy decision
+is resolved, but the current source does not yet implement it.
 
 ### Current Phase-Equality Behavior
 
 `SOURCE-CODE`: After status conversion, the handler returns immediately when
 the converted status equals the stored status. Phase actions run on transition,
 not on every observation. Consequently, a transient mapping or DNS failure is
-not retried while the same phase continues. This records current behavior, not
-desired behavior.
+not retried while the same phase continues.
+
+`AUTHOR-ACCEPTED-POLICY`: The author accepts this failure mode for the current
+feature PR. In particular, a first DNS failure in
+`WRITER_SWITCHOVER_POST_PROCESSING` can leave a pair unpinned and its old
+connections undrained for the remainder of that phase. A subsequent PR is to
+add worker-local, per-pair reconciliation that retries unresolved addresses
+and applies pin/drain once, rather than rerunning the entire phase action.
 
 ### Current Topology-Absence Behavior
 
@@ -280,15 +335,28 @@ For every other non-`NONE` state, it calls the same cleanup helper with
 `WRITER_SWITCHOVER_IN_PROGRESS` or `WRITER_SWITCHOVER_POST_PROCESSING` back to
 the writer role. It then runs the common completion hostgroup action, unshuns
 recorded readers, removes DNS-cache entries and purges monitor-pool connections
-for recorded shunned readers and all mapped pairs, drains configured green
-hostgroups, clears the worker bookkeeping, and enters `NONE`, which clears
-read-only suppression.
+for recorded shunned readers and all mapped blue pairs, clears the worker
+bookkeeping, and enters `NONE`, which clears read-only suppression. Rollback
+does not drain green connections, remove green DNS entries, change green
+statuses, or remove green rows.
+
+`SOURCE-CODE, AUTHOR-ACCEPTED-POLICY`: Successful cleanup drains connections
+for every server in the configured green writer and reader hostgroups except
+`OFFLINE_SOFT` and `OFFLINE_HARD` servers. It also removes those green
+hostnames from the DNS and monitor connection caches. It leaves all green
+server rows and statuses unchanged. The author assigns membership cleanup to
+the administrator, including for a row automatically added to runtime by BGD.
 
 `SOURCE-CODE`: The current rollback is a one-shot best-effort procedure. Its
 effect operations do not return an action result to this controller, there is no
 owned effect ledger, and the worker state is cleared even when external state
-has not been verified. This is why the proposed reconciliation and ownership
-invariants remain necessary.
+has not been verified.
+
+`AUTHOR-ACCEPTED-POLICY`: This loss of per-effect completion and retry state is
+intentional. The author accepts the possibility that process termination during
+cleanup prevents the controller from proving that every intended postcondition
+was reached. The retained-ledger design below remains a reviewer proposal, not
+accepted PR2 work.
 
 `SOURCE-CODE`: The interval result depends on the caller path:
 
@@ -303,13 +371,28 @@ invariants remain necessary.
 
 ### Current Worker Lifetime
 
-`SOURCE-CODE`: State lives on the per-writer-hostgroup worker stack. A monitor
-result-set checksum change terminates the worker. If its state is non-`NONE`,
-the exit path runs the one-shot rollback cleanup before discarding the state.
-The mapping, shunned-reader records, probe target, and cleanup identities are
-not transferred to the replacement; the replacement starts with a fresh state.
-The current design therefore chooses cleanup-on-detach rather than
-deployment-lifetime state continuity.
+`SOURCE-CODE`: State lives on the per-writer-hostgroup worker stack. The worker
+and dispatcher compare a generation checksum that combines eligible blue and
+green runtime rows. An Admin `mysql_servers` commit refreshes the checksum;
+when its value changes, the old worker exits and the dispatcher creates a
+replacement. If old state is non-`NONE`, the exit path runs one-shot rollback
+cleanup before discarding it. The mapping, shunned-reader records, probe
+target, and cleanup identities are not transferred; the replacement starts
+with fresh state and rebuilds its map from current runtime configuration.
+
+`SOURCE-CODE`: The combined checksum fixes the earlier case in which an Admin
+commit adding an eligible green row could leave a nonempty partial map alive.
+It is a configuration-generation signal, not a per-effect result ledger and
+not a retry trigger for DNS recovery. In-process BGD calls to
+`publish_mysql_servers_to_runtime()` do not refresh this generation checksum;
+that permits the current worker's own hostgroup actions to continue without
+self-replacement.
+
+`AUTHOR-ACCEPTED-POLICY`: Cleanup-on-detach followed by fresh worker state is
+the selected worker-replacement contract. A replacement whose first
+observation is `SWITCHOVER_COMPLETED` does not reconstruct the prior worker's
+map or effect ownership; it enters `READER_SWITCHOVER_IN_PROGRESS` and waits
+for topology drain.
 
 ### Current Source Anchors
 
@@ -320,6 +403,12 @@ deployment-lifetime state continuity.
 entry points should be reviewed with this document whenever behavior changes.
 
 ## External Effects And Cleanup Ledger
+
+`PROPOSED-POLICY`: This section records the reviewer's stronger recovery model
+for comparison and possible future reconsideration. The author explicitly
+selected one-shot cleanup, worker-local state, and no durable BGD ledger. None
+of the ledger states or invariants below is therefore an accepted requirement
+for PR #5861 or the accepted same-phase reconciliation follow-up.
 
 `PROPOSED-POLICY`: Every externally visible effect must have a stable identity
 and a cleanup record before the effect is considered applied.
@@ -425,8 +514,8 @@ ledger retained, rather than an unsafe overwrite or infinite silent retry.
 ## Proposed Controller Model
 
 `PROPOSED-POLICY`: Controller state is separate from the raw AWS status. The
-following state diagram is policy subject to author validation; it is not the
-current implementation enum.
+following state diagram is a reviewer-proposed alternative; it is not the
+current implementation enum or an author-accepted implementation contract.
 
 ```text
 IDLE
@@ -676,8 +765,10 @@ green writer placement, blue writer demotion,
 writer reader-hostgroup membership, and the direct probe target. If any effect
 does not meet that condition, the controller persists its ledger or provides
 deterministic startup recovery.
-Whether the condition holds requires author validation and is not a guarantee
-of current behavior.
+The author instead accepts a no-persistence fresh start and the loss of
+per-effect ownership across process restart. The condition above is therefore
+a reviewer hardening criterion, not a pending author-validation question or a
+guarantee of current behavior.
 
 ## Configuration Model
 
@@ -704,10 +795,9 @@ resuming controller processing.
 ## Author Validation Checklist
 
 The author response is recorded below. `RESOLVED` means the external evidence
-has been scoped correctly or the author explicitly accepted the policy.
-`PENDING` means the response did not yet establish the claimed guarantee or
-did not choose between current best-effort behavior and the proposed safety
-contract.
+has been scoped correctly or the author explicitly accepted the policy or
+limitation. An implementation can still fail to conform to a resolved policy;
+that is tracked separately rather than reopening the evidence decision.
 
 | ID | Recorded author evidence or decision | Review disposition |
 |---|---|---|
@@ -716,22 +806,22 @@ contract.
 | AWS-01c | One trace and the AWS examples show the target row present in every nonempty result. | `RESOLVED`: This is scoped observation. A missing target remains `MALFORMED_TOPOLOGY`. |
 | AWS-01d | `TOPOLOGY_EMPTY` was observed only after writer completion. | `RESOLVED`: The author accepts rollback before completion and reader cleanup afterward. The pre-completion impossibility is not stated as an AWS guarantee. |
 | AWS-01e | `TOPOLOGY_ABSENT` was not observed; the table remained present and empty. | `RESOLVED AS POLICY`: Preserve the distinct observation but select the same phase boundary as `TOPOLOGY_EMPTY`. |
-| AWS-02a | The AWS-provided contract permits rollback during initiated and in-progress; the author separately observed cancellation returning to `AVAILABLE`. | `RESOLVED`: Pre-completion cancellation enters rollback with owned effects retained until settled. |
+| AWS-02a | The AWS-provided contract permits rollback during initiated and in-progress; the author separately observed cancellation returning to `AVAILABLE`. | `RESOLVED`: Pre-completion cancellation selects the current one-shot rollback path. Retained settlement is a reviewer proposal, not accepted policy. |
 | AWS-02b | The AWS-provided contract says rollback is no longer allowed during post-processing. | `RESOLVED`: At or after writer completion, never restore obsolete blue solely because of cancellation or removal. |
 | AWS-03 | The author accepts the same phase-specific policy for empty and absent topology while retaining distinct diagnostics. | `RESOLVED AS POLICY`. |
 | AWS-04 | The contract defines `SWITCHOVER_COMPLETED` as writer DNS completion; the trace observes source-row removal in that completed snapshot. | `RESOLVED`: Use the status, not row count alone, as writer-DNS evidence. |
 | AWS-05a | The target existed through every phase and lingered about 44 seconds after completion in one trace. | `RESOLVED`: Record the duration only as variable, single-observation evidence. |
 | AWS-05b | The author accepts `TOPOLOGY_EMPTY` after observed writer completion as the reader-cleanup signal despite no AWS guarantee or direct reader-DNS timestamp. | `RESOLVED AS AUTHOR-ACCEPTED POLICY`: The observational risk is explicit. |
 | AWS-06 | The author observed the green hostname stop resolving after completion while the promoted IP survived. | `RESOLVED AS SCOPED OBSERVATION`: Retain a complete probe target while it is needed. |
-| AWS-07 | The author asserts source and target ports are guaranteed identical and proposes the configured blue writer port. The document and trace show equal example values but contain no universal equality statement. | `PENDING`: Provide the explicit contract or use the target topology row's port. Current `hpa[0].port` is an arbitrary monitor-result row, not the matched blue writer. |
-| AWS-08 | The author asserts source and target SSL modes are guaranteed identical. | `PENDING`: `use_ssl` is ProxySQL configuration and is absent from the AWS metadata contract. Define the precise matched `mysql_servers` row for automatic and explicit modes; current `hpa[0].use_ssl` is arbitrary. |
+| AWS-07 | The author agrees the evidence does not establish universal source/target port equality. Commit `20247dcf0` takes the probe port from the matched blue writer pair. Pair-specific port mismatch is explicitly unsupported; different pairs may use different ports. | `RESOLVED AS AUTHOR-ACCEPTED POLICY`: Use the matched blue writer's configured port and accept failure for a target using a different port. Do not present equality as an AWS guarantee. |
+| AWS-08 | The author agrees `use_ssl` is ProxySQL configuration. Automatic mode uses the matched blue writer's value; explicit mode must use the matched green writer row's value. | `RESOLVED AS AUTHOR-ACCEPTED POLICY; IMPLEMENTATION OPEN`: The tuple sources are precise, but commit `20247dcf0` invokes the hostname matcher with two green names, so normal explicit rows do not set `green_use_ssl` and the probe falls back to blue TLS. |
 | AWS-09 | The topology contains writer endpoints only; incomplete explicit reader mapping is expected and unmatched blue readers are shunned. | `RESOLVED AS POLICY`: Track and reconcile readers independently. |
-| AWS-10 | The author calls green placement temporary but confirms the server is left in the green hostgroup after its DNS name retires. | `PENDING`: Distinguish temporary traffic use from persistent hostgroup membership and decide whether retained membership is an intentional handoff or a residual effect. |
-| AWS-11a | The author accepts retained rollback semantics but also states the current worker-exit cleanup already satisfies them. | `PENDING`: Current code makes one best-effort cleanup call and then destroys state. Decide whether PR2 must implement retained, retryable cleanup or whether one-shot loss is accepted. |
-| AWS-11b | The author accepts `SAFE_TEARDOWN` and no obsolete-blue restoration, while stating current post-completion worker-exit cleanup is sufficient. | `PENDING`: The no-restore boundary is accepted; retained effect settlement and retry behavior still require an explicit decision. |
-| AWS-12a | Current code can enter post-processing directly and invokes prerequisite setup. | `PENDING`: Same-phase observations return before reconciliation, partial maps stop rebuilding, and failed setup has no retained result. Decide whether the proposed retry contract is accepted. |
-| AWS-12b | With a fresh empty worker state, a first completed observation has no locally recorded map or effects. | `PENDING`: Empty local state does not prove a prior worker left no external effects. Define the worker-replacement case or accept the loss explicitly. |
-| AWS-13 | The author proposes fresh start with no persistence and says runtime HGM or DNS effects may nevertheless remain without ownership context. | `PENDING`: Separate worker replacement from full process restart and complete the per-effect restart matrix with evidence that each effect disappears or is safely reconstructable. |
+| AWS-10 | Commits `cdffd77ee` and `ac4167cd0` retain auto-added and user-configured green rows on rollback and success. Rollback leaves green connections untouched; success drains eligible green connections but leaves rows and statuses unchanged. | `RESOLVED AS AUTHOR-ACCEPTED POLICY`: Green membership is persistent runtime configuration, not a temporary owned effect. Administrative cleanup is required even for an auto-added row. |
+| AWS-11a | The author explicitly chooses one-shot worker-exit/configuration-change cleanup and no retained retry ledger. | `RESOLVED AS AUTHOR-ACCEPTED POLICY`: Loss of the cleanup context, including when a process terminates during cleanup, is accepted. The stronger retained rollback model is not PR2 scope. |
+| AWS-11b | The author explicitly applies the same one-shot choice after completion and relies on the current phase-specific cleanup path. | `RESOLVED AS AUTHOR-ACCEPTED POLICY`: No retained `SAFE_TEARDOWN` executor or per-effect settlement record is required. This acceptance does not prove each one-shot operation succeeds. |
+| AWS-12a | Commits `727b2166b` and `d45c953d2` combine eligible blue/green rows into the worker generation checksum and refresh it after Admin `mysql_servers` commits. The author accepts that DNS recovery alone does not retry a failed same-phase setup. | `RESOLVED AS AUTHOR-ACCEPTED POLICY AND FOLLOW-UP`: Current PR may leave a POST_PROCESSING pair unpinned and undrained after first-resolution failure. A subsequent PR must implement per-pair retry and exactly-once pin/drain behavior. |
+| AWS-12b | The author selects cleanup-on-worker-exit and fresh replacement state. Persistent green membership and rollback-time green connections have no worker ownership under AWS-10. | `RESOLVED AS AUTHOR-ACCEPTED POLICY`: A replacement first observing COMPLETED may enter the inferred reader phase without reconstructing the prior map or effects. |
+| AWS-13 | The author separates worker replacement from full restart. Replacement performs one-shot rollback then starts fresh. Full restart rebuilds DNS cache, pools, suppression, maps, probe target, and FSM; configured state reloads, while an unsynchronized auto-added runtime green row disappears. | `RESOLVED AS AUTHOR-ACCEPTED POLICY`: No durable BGD progress or ownership persistence is required. This is an accepted fresh-start contract, not a traced per-effect guarantee. |
 | CFG-01a | Writer hostgroup value plus `NULL` reader hostgroup means explicit writer management and automatic reader handling. | `RESOLVED AS AUTHOR-ACCEPTED POLICY`: Valid combination. |
 | CFG-01b | `NULL` writer hostgroup plus reader hostgroup value means automatic writer handling and explicit reader management. | `RESOLVED AS AUTHOR-ACCEPTED POLICY`: Valid combination. |
 
@@ -739,93 +829,95 @@ contract.
 
 | Mode | Host/IP source | Port source | SSL source | Author decision/evidence |
 |---|---|---|---|---|
-| Automatic | `AUTHOR-VALIDATED`: Resolved IP of the TARGET endpoint from `mysql.rds_topology`. | `REVIEW-VALIDATION-PENDING`: Author proposes the matched blue writer port; the evidence does not establish universal port equality. The TARGET row also exposes a port. | `REVIEW-VALIDATION-PENDING`: Select the specifically matched blue writer's `use_ssl` or define another exact configuration source; never use an arbitrary monitor row. | Host/IP is resolved. Port and SSL source remain pending. |
-| Explicit | `AUTHOR-VALIDATED`: Resolved IP of the TARGET endpoint from `mysql.rds_topology`; any configured green writer must match that identity. | `REVIEW-VALIDATION-PENDING`: Author proposes the blue writer port without an explicit equality contract. | `REVIEW-VALIDATION-PENDING`: Define whether the matched explicit green writer or matched blue writer supplies `use_ssl`. | Host/IP is resolved. Port and SSL source remain pending. |
+| Automatic | `AUTHOR-VALIDATED`: Resolved IP of the TARGET endpoint from `mysql.rds_topology`. | `AUTHOR-ACCEPTED-POLICY`: Matched blue writer's configured port. A different TARGET port is unsupported and is not forbidden by the recorded AWS evidence. | `AUTHOR-ACCEPTED-POLICY`: Matched blue writer's `use_ssl`, because no independent green row exists. | Policy resolved and implemented by writer-pair selection in `20247dcf0`. |
+| Explicit | `AUTHOR-VALIDATED`: Resolved IP of the TARGET endpoint from `mysql.rds_topology`; the configured green writer must identify that target. | `AUTHOR-ACCEPTED-POLICY`: Matched blue writer's configured port. A different TARGET or explicit-green port is unsupported. | `AUTHOR-ACCEPTED-POLICY`: Exact matching green writer row's `use_ssl`. | Policy resolved; implementation is nonconforming because the current two-green-name matcher call does not select the explicit row. |
 
-`PROPOSED-POLICY`: A direct probe target is a complete host or IP, port, and
-SSL tuple from the same mapped green writer identity, never from an arbitrary
-monitor row. An unresolved field keeps the action pending or enters an
-externally visible `FAULTED` state according to the accepted error policy.
+`AUTHOR-ACCEPTED-POLICY`: A direct probe target is a complete host or IP, port,
+and SSL tuple derived from the matched writer pair, never from an arbitrary
+monitor row. The author accepts the blue-port constraint above. Explicit TLS
+must be looked up by exact green writer identity, including the supported port,
+rather than by applying a blue-to-green matcher to two green names.
 
 ### Restart Validation Matrix
 
-`REVIEW-VALIDATION-PENDING`: The author selected a no-persistence fresh-start
-policy but did not provide a full-restart trace and combined all effects into
-one row. The response also says runtime HGM and DNS-cache effects may remain
-after the ownership context is lost. Worker replacement and full process
-restart are distinct events and must be validated separately. The per-effect
-requirements therefore remain open below.
+`AUTHOR-ACCEPTED-POLICY`: Worker replacement and full process restart are
+different fresh-start events. Neither recovers a durable BGD ledger. The table
+records the selected behavior, not a claim that every one-shot operation has
+been traced or verified under crash injection.
 
-| Effect | Observed external state after restart | Ledger recovery mechanism | Required reconciliation or settlement | Required evidence |
-|---|---|---|---|---|
-| DNS pins | Author validation required | Author decision required: persisted record or deterministic startup reconstruction. | Compare the observed value with the recovered before-value and applied-value. If observed equals the before-value, including absent when before was absent, mark `REVERTED`. If observed still equals the owned applied pin, owner-safely remove it, restore a nonempty recorded before-value when required, verify, then mark `REVERTED`. If observed is a different value or owner, enter `FAULTED` with the ledger retained and never overwrite it. DNS pins have no handoff path. | Full-restart trace, DNS lookup, and recovered ownership proof. |
-| Reader shuns | Author validation required | Author decision required: persisted record or deterministic startup reconstruction. | Inspect current status plus before-value, applied-value, and ownership; compare-and-restore, hand off, or enter `FAULTED`. | Full-restart trace, runtime reader status, and recovered ownership proof. |
-| Monitor suppression | Author validation required | Author decision required: persisted record or deterministic startup reconstruction. | Inspect or reconstruct the suppression marker, or explicitly clear it only under a verified safe state. | Full-restart trace, monitor-suppression state, and recovered ownership proof. |
-| Active connections and drain generations | Author validation required | Author decision required: persisted record or deterministic startup reconstruction. | Inspect live connections and their drain generations; never revive or reuse a pre-generation connection. | Full-restart trace, connection-generation inventory, and recovered ownership proof. |
-| Green placement | Author validation required | Author decision required: persisted record or deterministic startup reconstruction. | Inspect current placement and ownership; compare, hand off, roll back, or enter `FAULTED`. | Full-restart trace, runtime hostgroup placement, and recovered ownership proof. |
-| Blue demotion | Author validation required | Author decision required: persisted record or deterministic startup reconstruction. | Inspect current writer role and ownership; compare, hand off, roll back, or enter `FAULTED`. | Full-restart trace, runtime writer role, and recovered ownership proof. |
-| Writer reader-hostgroup membership | Author validation required | Author decision required: persisted record or deterministic startup reconstruction. | Inspect current membership and ownership; compare, hand off, roll back, or enter `FAULTED`. | Full-restart trace, runtime membership, and recovered ownership proof. |
-| Direct probe | Author validation required | Author decision required: persisted record or deterministic startup reconstruction. | Reconstruct the complete owned green writer host or IP, port, and SSL tuple; if reconstruction fails, block reconciliation or enter visible `FAULTED`. | Full-restart trace, active probe target, and recovered ownership proof. |
-| Mapping and resolution | Author validation required | Author decision required: persisted record or deterministic startup reconstruction. | Reconstruct stable resource identities and resolution results before any dependent action runs. | Full-restart trace, mapping and resolution records, and recovered ownership proof. |
+| Effect | Worker replacement in the same process | Full ProxySQL process restart |
+|---|---|---|
+| Blue DNS pins | The exiting worker attempts to remove mapped blue DNS entries and purge their monitor-pool connections before discarding state. No result is retained for the replacement. | DNS cache and monitor connection pools are recreated; no BGD pin ownership is recovered. |
+| Reader shuns | The exiting worker attempts to unshun only readers recorded in its local `shunned_readers` list. The replacement receives no list. | Runtime-only BGD shuns are discarded; server status is rebuilt from administrator configuration. |
+| Monitor suppression | Entering `NONE` clears the worker's in-progress suppression entries for its current hostgroup members. | Suppression state is recreated empty. |
+| Active connections and drains | Rollback purges mapped blue and recorded-reader monitor-pool connections. Green connections are intentionally untouched. No drain generation or completion result transfers. | Connection pools are recreated; no connection or drain-generation record survives. |
+| Green placement | Auto-added and administrator-configured green rows remain in same-process runtime state. They are intentionally not worker-owned. | Administrator-configured rows reload. An auto-added runtime-only row disappears unless independently configured or synchronized into restart input. |
+| Blue demotion | Exit cleanup attempts to restore a writer demoted in `WRITER_SWITCHOVER_IN_PROGRESS` or `WRITER_SWITCHOVER_POST_PROCESSING`. The replacement trusts current runtime placement. | Writer status and placement rebuild from administrator configuration. |
+| Writer reader-hostgroup membership | Exit cleanup runs the current completion hostgroup action using local map and configuration values, then discards the map. | Membership rebuilds from administrator configuration. |
+| Direct probe | The local direct-probe IP and failure counter are discarded. The replacement derives a new target from its first observation and current map, except that a first COMPLETED observation does not rebuild prior effects. | Probe state is recreated empty and derived from newly observed topology. |
+| Mapping and resolution | Local pairs and resolved IPs are discarded after one-shot exit cleanup. The replacement builds a new map when its observed phase runs setup. | Pair map and resolution results are recreated from configuration and topology. |
 
-`PROPOSED-POLICY`: After restart, the controller cannot mutate or clear an
-effect until its ownership record has been persisted or deterministically
-reconstructed. Startup blocks reconciliation or enters externally visible
-`FAULTED` with a diagnostic until ownership is recovered; it never assumes an
-effect disappeared.
+`AUTHOR-ACCEPTED-POLICY`: If the process terminates during cleanup, no durable
+record proves which operations completed. The author accepts that uncertainty
+because the relevant in-memory structures are expected to be rebuilt at full
+restart. This explicitly rejects the stronger recovery requirement proposed in
+**External Effects And Cleanup Ledger** for the current feature and accepted
+follow-up scope.
 
 ## Test Mapping For Later PRs
 
+The six response commits add no automated test. The following cases exercise
+the code and policy changed by those commits without assuming the declined
+durable-ledger design.
+
 | Requirement | Named unit/simulator case | Named Admin/TAP case | Observable postcondition |
 |---|---|---|---|
-| Complete lifecycle | `happy_path_explicit`, `happy_path_auto` | `test_lifecycle` | Controller reaches `IDLE` with an empty active ledger and the correct backend configuration. |
-| Same-phase retry with injected failure | `dns_retry_same_post` | `repeated_post` | The second attempt applies the effect exactly once. |
-| Direct, skipped, repeated, and regressed phases | `late_entry_each_phase`, `regressed_phase` | `late_start` | Prerequisites are reconstructed and no destructive reverse transition occurs. |
-| Unknown, malformed, and query-failure observations | `invalid_observation_preserves_state` | `injected_query_errors` | State and effects remain unchanged and the error is visible. |
-| Pre-completion cancellation in every controller state | `cancel_each_precompletion_state` | `cancel_precompletion_post` | Controller selects `ROLLING_BACK`, restores only owned pre-completion effects, and leaves no stale routing. |
-| Post-completion cancellation or removal | `cancel_or_remove_postcompletion` | `cancel_or_remove_after_completed` | Controller selects `FINALIZING_SUCCESS` or `SAFE_TEARDOWN` according to management mode and accepted evidence; owned reversible DNS pins become `REVERTED`; reader shuns become `REVERTED` when their prior status is restored or `COMMITTED` after verified handoff to the accepted terminal configuration; drains and explicitly handed-off retained routing effects become `COMMITTED`; the active cleanup ledger is empty; obsolete blue is never restored. |
-| Successful-cleanup idempotence | `repeat_finalization` | `repeated_empty` | No effect is duplicated and the active ledger is empty. |
-| Rollback idempotence | `repeat_rollback` | `repeated_absence` | No effect is duplicated and the active ledger is empty. |
-| Worker replacement after every effect | `restart_after_each_effect` | `restart_post` | The replacement uses the same ledger and rejects the stale generation. |
-| Configuration generation change | `config_generation_change` | `admin_load_update` | The deployment context is retained and reconciled. |
-| Pre-completion configuration removal | `remove_config_precompletion` | `remove_during_post_before_completion` | Rollback completes through the dispatcher-owned executor. |
-| Post-completion configuration removal | `remove_config_postcompletion` | `remove_after_completed` | Safe teardown completes without restoring blue. |
-| DNS failure and recovery | `dns_fail_then_recover` | `controlled_resolver_fixture` | Resolution remains pending, then creates one owned DNS pin after recovery. |
-| Partial reader progress | `one_reader_fails` | `multiple_reader_fixture` | The successful reader action remains recorded as `APPLIED` and is not reissued; only the failed reader action retries. |
-| Ownership conflict | `compare_restore_conflict` | `external_admin_mutation` | Controller enters `FAULTED`, retains the ledger, and leaves the newer value unchanged. |
-| Stale action result | `stale_worker_result` | `forced_worker_refresh` | The stale result is rejected without mutating current state or effects. |
-| Deployment isolation | `two_deployments_interleaved` | `two_hostgroup_fixture` | No effect or ownership record crosses deployment boundaries. |
-| Effect settlement | `irreversible_and_handoff_settlement` | `final_runtime_query` | Every effect is settled as `COMMITTED` or `REVERTED`; the active cleanup ledger is empty; optional audit tombstones exist only outside the active ledger. |
-| Drain-generation concurrency | `drain_generation_barriers` | `active_traffic` | Pre-generation connections are never reused and post-generation connections remain usable. |
-| Bounded polling | `fake_clock_retry_bounds` | `monitor_timing_logs` | No zero-delay retry loop occurs and the retry reason is visible. |
-| Registry locking | `executor_runs_without_context_lock` | `diagnostic_assertion` | No external callback runs while the deployment-context registry lock is held. |
-| Configuration `NULL` and value representations | `config_matrix_roundtrip` | `config_import_admin_load_save_cluster` | Exact values round-trip, or rejection is explicit and preserves the previous valid configuration. |
-| Heterogeneous endpoint tuple | `writer_endpoint_tuple` | `distinct_blue_green_writer_port_ssl` | The fixture's blue and green writer port and SSL values differ, and the direct target uses the complete mapped green writer host or IP, port, and SSL tuple. |
-| Process-restart recovery | `restart_effect_matrix` | `proxysql_restart_fixture` | External state follows the author-accepted matrix and ledger ownership is independently recovered before mutation; otherwise startup blocks reconciliation or enters visible `FAULTED`. |
-| Second deployment after cancellation and success | `second_after_cancel_and_success` | `two_sequential_lifecycles` | The new generation has no stale ownership or effects from the prior deployment. |
+| Matched writer probe tuple | `writer_tuple_not_first_poll_row` | `multiple_blue_ports_and_ssl` | With a reader first in the polling result and different ports across pairs, the direct probe uses the mapped blue writer's port and never `hpa[0]`. |
+| Automatic TLS source | `auto_green_inherits_writer_ssl` | `automatic_green_tls` | With no explicit green row, the direct probe and auto-added green writer use the matched blue writer's `use_ssl`. |
+| Explicit TLS source | `explicit_green_ssl_override` | `explicit_green_tls_differs_from_blue` | With the same supported pair port but blue `use_ssl=0` and explicit green `use_ssl=1`, the direct IP probe enables TLS. This catches the current two-green-name matcher defect. |
+| Unsupported within-pair port mismatch | `target_port_mismatch_policy` | `target_port_mismatch_diagnostic` | The implementation's blue-port choice is explicit and observable; the test must not claim AWS guarantees equality. A future rejection diagnostic is preferable to silent probing of the wrong port. |
+| Eligible green generation checksum | `green_checksum_matrix` | `admin_green_add_remove_ssl_status` | Add/remove, port, `use_ssl`, and transitions into or out of `OFFLINE_SOFT`/`OFFLINE_HARD` change the checksum and replace workers; irrelevant changes do not. |
+| Admin commit during active phase | `config_change_exits_worker` | `load_mysql_servers_mid_switchover` | The old worker runs one-shot rollback, the dispatcher joins it, and the replacement builds a new map from the committed runtime rows. |
+| Green membership persistence | `green_row_persists_cancel_and_success` | `green_row_lifecycle` | Auto-added and user rows remain after rollback and success; no existing status is changed. |
+| Green drain policy | `green_drain_status_matrix` | `green_hg_cleanup` | Rollback drains no green connections. Success drains `ONLINE`, `SHUNNED`, and `SHUNNED_AWS_BGD` green servers while leaving `OFFLINE_SOFT` and `OFFLINE_HARD` untouched. Rows remain present. |
+| Offline status exclusions | `offline_servers_not_acted_on` | `offline_soft_hard_servers` | Blue servers in either offline status do not participate in mapping or unmatched-reader shunning; green servers in either status are not drained. |
+| First observation COMPLETED | `fresh_worker_first_completed` | `replace_worker_at_completed` | Fresh state advances to the inferred reader phase without reconstructing a prior map, then finishes on topology drain. |
+| Full restart fresh start | `restart_discards_bgd_state` | `proxysql_restart_fixture` | DNS cache, pools, suppression, mapping, probe target, and FSM are recreated; configured rows reload; an unsynchronized auto-added runtime-only green row does not. |
+| Same-phase DNS retry follow-up | `dns_retry_same_post_per_pair` | `first_resolution_fails_then_succeeds` | Accepted follow-up only: the unresolved pair retries while phase is unchanged; successful pairs are not redrained; the recovered pair is pinned and drained exactly once. |
+| Partial pair progress follow-up | `one_pair_fails` | `multiple_reader_fixture` | Accepted follow-up only: successful pair state is retained worker-locally and only the failed pair retries. |
+
+`PROPOSED-POLICY`: The simulator cases previously proposed for durable effect
+ownership, compare-and-restore, retained `FAULTED` state, cleanup across stale
+worker generations, and a persistent restart ledger remain useful reviewer
+hardening ideas. They are not author-accepted PR2 requirements after AWS-11a,
+AWS-11b, AWS-12b, and AWS-13. Implementing them would require a new policy
+decision rather than treating this document as approval.
 
 ## Review Gate
 
-The author supplied a validation response and resolved the topology contract,
-scoped lifecycle observations, reader-cleanup signal, cancellation boundary,
-incomplete reader mapping, and mixed green-hostgroup configurations. The
-document status remains **AUTHOR VALIDATION REQUIRED** until the remaining
-items are resolved:
+The author has answered all 23 validation IDs. No external
+`REVIEW-VALIDATION-PENDING` claim remains. The evidence gate is therefore
+closed, with observational scope and accepted operational risks preserved in
+the checklist rather than promoted to AWS guarantees.
 
-1. Establish the authoritative port and `use_ssl` sources for direct green
-   probes without using an arbitrary monitor-result row.
-2. Decide whether retained, retryable cleanup across configuration change and
-   worker replacement is required or whether one-shot best-effort cleanup and
-   loss of unsettled effects is explicitly accepted.
-3. Define settlement of the green server entry retained in explicit green
-   hostgroups after its DNS name retires.
-4. Decide the same-phase retry and partial-effect reconciliation contract.
-5. Separate worker replacement from full process restart and complete the
-   per-effect restart matrix with evidence.
-6. Approve the resulting observation vocabulary and transition precedence for
-   the deterministic simulator after those decisions are recorded.
+The source review remains open on implementation and verification:
 
-The status changes only after no checklist or matrix decision and no external
-`REVIEW-VALIDATION-PENDING` claim remains unresolved. PR2 must use only policy
-recorded as accepted in this document and must not define additional production
-policy.
+1. Fix explicit green TLS selection. The current
+   `aws_rds_bgd_match_host(gs->address, green_writer_host)` call supplies two
+   green names to a blue-to-green matcher, so an explicit green `use_ssl`
+   differing from blue is not selected.
+2. Add focused automated coverage for the six response commits. No unit or TAP
+   test currently exercises writer-pair tuple selection, explicit TLS,
+   blue/green checksum replacement, green-row persistence, green drain policy,
+   or offline-server exclusions.
+3. Track the author-accepted same-phase DNS failure as required follow-up work.
+   Until per-pair reconciliation exists, a transient first resolution failure
+   in POST_PROCESSING can leave traffic unpinned and old connections undrained.
+   Acceptance documents the risk; it does not make the failure safe.
+
+For the review PR sequence, PR1 is this document-only PR #5934. The originally
+proposed broad durable-ledger/controller PR2 is no longer an accepted plan.
+The author-accepted PR2 scope is worker-local per-pair reconciliation for
+same-phase DNS recovery and exactly-once pin/drain behavior, with the focused
+tests above. Any retained cleanup ledger, durable restart ownership, or
+alternative controller state machine requires a new author policy decision.
