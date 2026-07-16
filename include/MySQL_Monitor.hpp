@@ -505,7 +505,6 @@ struct AWS_RDS_BGD_State {
 	std::vector<srv_addr_t> shunned_readers;                  ///< readers we shunned
 	AWS_RDS_BGD_Status bgd_status = AWS_RDS_BGD_Status::NONE;  ///< drives the FSM and the deferred cleanup
 
-	bool green_writer_added_in_hg = false;        ///< green writer added to green_writer_hg
 	bool bgd_in_progress_set = false;             ///< deployment's servers flagged in aws_rds_bgd_server_status
 
 	unsigned int next_check_interval_ms = 0;    ///< FSM-controlled interval; 0 => baseline
@@ -677,7 +676,8 @@ class MySQL_Monitor {
 	* @brief Run deferred switchover teardown or rollback cleanup.
 	*
 	* @details Restores post-switchover reader handling, unshuns readers, drops DNS pins,
-	*   drains green hostgroups, and clears BGD switchover state.
+	*   and clears BGD switchover state. Normal post-switchover cleanup also drains
+	*   connections from green hosts; rollback leaves green rows and connections unchanged.
 	*
 	*   When rollback is false (normal post-switchover), the caller must be in
 	*   READER_SWITCHOVER_IN_PROGRESS; the function advances through
@@ -685,23 +685,21 @@ class MySQL_Monitor {
 	*
 	*   When rollback is true (topology table disappeared or worker exit mid-switchover),
 	*   the function accepts any non-NONE bgd_status, restores the blue writer to the
-	*   writer hostgroup if it was demoted, then runs the same cleanup and resets
-	*   switchover state.
+	*   writer hostgroup if it was demoted, then resets switchover state.
 	*
 	* @param st       BGD switchover state.
 	* @param rollback True if called due to a rollback/cancellation, false for normal completion.
 	*/
 	void handle_aws_rds_bgd_post_switchover(AWS_RDS_BGD_State& st, bool rollback = false);
 	/**
-	* @brief Clean up the deployment's green hostgroups after switchover or rollback.
+	* @brief Drain connections from green hosts after switchover.
 	*
-	* @details Successful cleanup drains all configured green-hostgroup members. Rollback drains and removes
-	*   only the green writer auto-added by the BGD worker; user-configured rows are left unchanged.
+	* @details Drains connections from every non-OFFLINE_HARD green host. Server rows
+	*   and statuses are left unchanged.
 	*
 	* @param st Switchover state.
-	* @param rollback Whether cleanup is handling a rollback.
 	*/
-	void aws_rds_bgd_drain_green_hg(AWS_RDS_BGD_State& st, bool rollback);
+	void aws_rds_bgd_drain_green_hg(AWS_RDS_BGD_State& st);
 	/**
 	* @brief Handle an absent, empty, or vanished mysql.rds_topology table.
 	*
