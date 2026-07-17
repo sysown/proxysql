@@ -7135,7 +7135,9 @@ void MySQL_HostGroups_Manager::update_aws_aurora_hosts_monitor_resultset(bool lo
 
 const char SELECT_AWS_RDS_BGD_BLUE_SERVERS_FOR_MONITOR[] {
 	"SELECT writer_hostgroup, reader_hostgroup, hostname, port, MAX(use_ssl) use_ssl, green_writer_hostgroup,"
-		" green_reader_hostgroup, check_interval_ms, check_timeout_ms, writer_is_also_reader FROM mysql_servers"
+		" green_reader_hostgroup, check_interval_ms, check_timeout_ms, writer_is_also_reader,"
+		" MAX(hostgroup_id=writer_hostgroup) is_writer"
+		" FROM mysql_servers"
 		" JOIN mysql_aws_rds_bgd_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup"
 		" WHERE active=1 AND mysql_servers.status NOT IN (2,3)"
 		" GROUP BY writer_hostgroup, hostname, port"
@@ -7169,7 +7171,7 @@ void MySQL_HostGroups_Manager::update_aws_rds_bgd_hosts_monitor_resultset(bool l
 	// Unlike other monitor resultset/checksum pairs, BGD intentionally tracks different data in each.
 	//
 	// AWS_RDS_Blue_Hosts_resultset contains only blue hosts. The BGD monitor dispatcher uses it to start
-	// workers, and each worker uses it as the list of servers eligible for mysql.rds_topology polling.
+	// workers, and each worker uses it to select its `mysql.rds_topology` probe candidates.
 	//
 	// AWS_RDS_BGD_Hosts_checksum combines the blue and green resultset checksums. Workers and the dispatcher
 	// use it as a generation signal: relevant changes in mysql_servers or mysql_aws_rds_bgd_hostgroups

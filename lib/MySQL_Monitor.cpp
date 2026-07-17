@@ -6746,12 +6746,14 @@ void * monitor_RDS_BGD_thread_HG(void *arg) {
 	// Columns:
 	// 0 writer_hostgroup, 1 reader_hostgroup, 2 hostname, 3 port, 4 use_ssl,
 	// 5 green_writer_hostgroup, 6 green_reader_hostgroup, 7 check_interval_ms,
-	// 8 check_timeout_ms, 9 writer_is_also_reader
+	// 8 check_timeout_ms, 9 writer_is_also_reader, 10 is_writer
 	pthread_mutex_lock(&GloMyMon->aws_rds_bgd_mutex);
 	initial_checksum = GloMyMon->AWS_RDS_BGD_Hosts_checksum;
 	for (SQLite3_row *r : GloMyMon->AWS_RDS_Blue_Hosts_resultset->rows) {
 		if (atoi(r->fields[0]) == (int)wHG) {
-			num_hosts++;
+			if (atoi(r->fields[10]) != 0) {
+				num_hosts++;
+			}
 			if (st.reader_hg == 0) {
 				st.reader_hg = atoi(r->fields[1]);
 			}
@@ -6775,7 +6777,8 @@ void * monitor_RDS_BGD_thread_HG(void *arg) {
 
 	host_def_t *hpa = (host_def_t *)malloc(sizeof(host_def_t)*(num_hosts ? num_hosts : 1));
 	for (SQLite3_row *r : GloMyMon->AWS_RDS_Blue_Hosts_resultset->rows) {
-		if (atoi(r->fields[0]) == (int)wHG) {
+		// r->writer_hostgroup == wHG && r->is_writer != 0
+		if (atoi(r->fields[0]) == (int)wHG && atoi(r->fields[10]) != 0) {
 			hpa[cur_host_idx].host = strdup(r->fields[2]);
 			hpa[cur_host_idx].port = atoi(r->fields[3]);
 			hpa[cur_host_idx].use_ssl = atoi(r->fields[4]);
@@ -7279,9 +7282,6 @@ static void aws_rds_bgd_resolve_green_ips(AWS_RDS_BGD_State& st) {
 
 /**
 * @brief Add the green writer to green_writer_hostgroup, when that hostgroup is configured.
-*
-* @details Mirrors the blue writer's connection settings (weight/max_connections/use_ssl) onto
-*   the green writer. Existing rows, including OFFLINE_HARD rows, are left unchanged.
 */
 static void aws_rds_bgd_add_green_writer_in_hg(AWS_RDS_BGD_State& st) {
 	if (st.green_writer_hg < 0) {
@@ -7293,15 +7293,11 @@ static void aws_rds_bgd_add_green_writer_in_hg(AWS_RDS_BGD_State& st) {
 		}
 
 		srv_info_t srv_info { p.green_host, (uint16_t)p.port, "AWS RDS BGD green writer" };
-		srv_opts_t srv_opts { p.blue_weight, p.blue_max_conns, p.blue_use_ssl };
+		srv_opts_t srv_opts { -1, -1, -1 };
 		MyHGM->wrlock();
-		MySrvC* srvc = MyHGM->find_server_in_hg(
-			(uint32_t)st.green_writer_hg, p.green_host, p.port);
-		if (srvc == nullptr) {
-			int rc = MyHGM->create_new_server_in_hg((uint32_t)st.green_writer_hg, srv_info, srv_opts);
-			if (rc == 0) {
-				MyHGM->publish_mysql_servers_to_runtime();
-			}
+		int rc = MyHGM->create_new_server_in_hg((uint32_t)st.green_writer_hg, srv_info, srv_opts);
+		if (rc == 0) {
+			MyHGM->publish_mysql_servers_to_runtime();
 		}
 		MyHGM->wrunlock();
 		break;
@@ -7827,8 +7823,8 @@ void MySQL_Monitor::set_aws_rds_bgd_server_in_progress(unsigned int writer_hg, u
 /**
 * @brief AWS RDS BGD monitor thread entry point.
 *
-* @details Spawns one worker (monitor_RDS_BGD_thread_HG) per writer hostgroup; each worker picks a pingable host,
-*   probes 'mysql.rds_topology' and dispatches to a handler based on the detected topology shape.
+* @details Spawns one worker (monitor_RDS_BGD_thread_HG) per writer hostgroup; each worker picks a pingable
+*   writer, probes 'mysql.rds_topology' and dispatches based on the detected topology shape.
 *   Workers are (re)spawned whenever the AWS_RDS_BGD_Hosts_checksum changes.
 */
 void * MySQL_Monitor::monitor_aws_rds_bgd() {
