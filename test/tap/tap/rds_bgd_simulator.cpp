@@ -68,8 +68,10 @@ std::vector<RDS_BGD_Topology_Row> RDS_BGD_Cluster::get_topology(
 	const std::string& status) const
 {
 	return {
-		{ blue_writer_.hostname, blue_writer_.hostname, blue_writer_.port, "SOURCE", status },
-		{ green_writer_.hostname, green_writer_.hostname, green_writer_.port, "TARGET", status },
+		{ blue_writer_.hostname, blue_writer_.hostname, blue_writer_.port,
+			"BLUE_GREEN_DEPLOYMENT_SOURCE", status },
+		{ green_writer_.hostname, green_writer_.hostname, green_writer_.port,
+			"BLUE_GREEN_DEPLOYMENT_TARGET", status },
 	};
 }
 
