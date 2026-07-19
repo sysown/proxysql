@@ -1,7 +1,7 @@
 # AWS RDS Blue/Green Monitor
 
-**Document status:** AUTHOR VALIDATION COMPLETE; FOLLOW-UP HANDOFF DEFINED;
-IMPLEMENTATION CONFORMANCE OPEN
+**Document status:** AUTHOR VALIDATION COMPLETE; PR2 SIMULATOR FOUNDATION
+COMPLETE; IMPLEMENTATION CONFORMANCE OPEN
 
 **Applies to:** Amazon RDS Multi-AZ DB instance blue/green deployment monitoring
 
@@ -1020,7 +1020,7 @@ proposed broad durable-ledger/controller PR is not part of this sequence.
 | Review PR | Scope | Dependency and completion signal |
 |---|---|---|
 | PR1: #5934 | This document only: evidence, accepted risks, current behavior, and follow-up contract. | Ready for author approval; merge into `feature/aws-rds-monitor` before implementation follow-ups so their scope is stable. |
-| PR2: BGD simulator foundation and CI | Add the TAP-controlled SQLite3-server simulator defined in [RDS_BGD_Simulator.md](RDS_BGD_Simulator.md): the `TEST_RDS_BGD` build mode, IP-keyed topology responses, common and BGD TAP helpers, a simulator group, an end-to-end acceptance smoke test, and an automatic CI job that executes the group. | No production behavior change. Provides the reusable harness required by PR6. A successful compile-only `CI-maketest` job is not completion evidence. |
+| PR2: BGD simulator foundation — COMPLETED | Add the TAP-controlled SQLite3-server simulator defined in [RDS_BGD_Simulator.md](RDS_BGD_Simulator.md): the `TEST_RDS_BGD` build mode, IP-keyed topology responses, common and BGD TAP helpers, a simulator group, and an end-to-end acceptance smoke test. | Completed after the isolated local Docker group passed. Provides the reusable harness required by PR6; automatic GitHub Actions execution remains separate follow-up work under the review gate above. |
 | PR3: probe target and explicit TLS (**complete**) | Correct AWS-08 by selecting the exact supported explicit green writer row and its resolved `use_ssl`, including a row created or restored during discovery, while retaining the matched blue writer port and automatic-mode blue TLS fallback. | **Completed:** production behavior conforms to AWS-08. Existing-row and discovered-row simulator coverage remains part of PR6. |
 | PR4: terminal connection retirement (**complete**) | Preserve `healthy=false` across `MySQL_Connection::reset()` and destroy unhealthy connections in local and global pool-return paths. Do not introduce another flag or a new locking policy. | **Completed:** `connection_unhealthy_unit-t` proves a drained used connection cannot enter either free pool after reset or release. |
 | PR5: same-phase per-pair reconciliation | Replace phase-equality no-op behavior with worker-local reconciliation for incomplete map/resolution/pin/drain work. Retry only incomplete pairs and never redrain a pair already completed in the current worker generation. | Depends on the accepted one-shot worker model; it must not introduce durable ownership or restart recovery. |
