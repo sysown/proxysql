@@ -8,6 +8,8 @@ IMPLEMENTATION CONFORMANCE OPEN
 **Primary monitor entry points:** `include/MySQL_Monitor.hpp`,
 `lib/MySQL_Monitor.cpp`
 
+**Simulator design:** [RDS_BGD_Simulator.md](RDS_BGD_Simulator.md)
+
 **Related implementation:** `include/DNS_Cache.hpp`, `lib/DNS_Cache.cpp`,
 `include/MySQL_HostGroups_Manager.h`, `lib/MySQL_HostGroups_Manager.cpp`,
 `include/mysql_connection.h`, `lib/mysql_connection.cpp`,
@@ -104,12 +106,11 @@ review:
   it, and both local and global pool-return paths must destroy an unhealthy
   connection instead of caching it.
 
-The author also selected the existing cluster simulator under
-`test/deps/cluster_simulator` and its TAP group integration under
-`test/tap/groups` as the test foundation. The simulator foundation and the BGD
-scenario suite are deliberately separate follow-up PRs. Registration in
-`groups.json` is not considered CI integration by itself; the BGD simulator
-group must be executed by an automatic PR check.
+The BGD test foundation uses ProxySQL's SQLite3 server, compiled under
+`TEST_RDS_BGD` and controlled directly by each TAP test. The simulator
+foundation and the BGD scenario suite are deliberately separate follow-up PRs.
+Registration in `groups.json` is not considered CI integration by itself; the
+BGD simulator group must be executed by an automatic PR check.
 
 ## Scope
 
@@ -1019,14 +1020,13 @@ proposed broad durable-ledger/controller PR is not part of this sequence.
 | Review PR | Scope | Dependency and completion signal |
 |---|---|---|
 | PR1: #5934 | This document only: evidence, accepted risks, current behavior, and follow-up contract. | Ready for author approval; merge into `feature/aws-rds-monitor` before implementation follow-ups so their scope is stable. |
-| PR2: BGD cluster-simulator foundation and CI | Extend the existing `test/deps/cluster_simulator` architecture with a BGD mode capable of serving ordered `mysql.rds_topology` observations and probe outcomes. Add the matching TEST build mode, thin TAP wrapper/group, one smoke payload, and an automatic CI job that actually executes the group. | No production behavior change. Provides the reusable harness required by PR6. A successful compile-only `CI-maketest` job is not completion evidence. |
+| PR2: BGD simulator foundation and CI | Add the TAP-controlled SQLite3-server simulator defined in [RDS_BGD_Simulator.md](RDS_BGD_Simulator.md): the `TEST_RDS_BGD` build mode, IP-keyed topology responses, common and BGD TAP helpers, a simulator group, an end-to-end acceptance smoke test, and an automatic CI job that executes the group. | No production behavior change. Provides the reusable harness required by PR6. A successful compile-only `CI-maketest` job is not completion evidence. |
 | PR3: probe target and explicit TLS | Correct AWS-08 by selecting the exact supported explicit green writer row and its `use_ssl`, while retaining the matched blue writer port and automatic-mode blue TLS fallback. | Depends only on the documented contract. Focused unit/TAP evidence must distinguish blue `use_ssl=0` from explicit green `use_ssl=1`. |
 | PR4: terminal connection retirement | Preserve `healthy=false` across `MySQL_Connection::reset()` and destroy unhealthy connections in local and global pool-return paths. Do not introduce another flag or a new locking policy. | Focused tests prove a drained used connection cannot enter either free pool after reset or release. |
 | PR5: same-phase per-pair reconciliation | Replace phase-equality no-op behavior with worker-local reconciliation for incomplete map/resolution/pin/drain work. Retry only incomplete pairs and never redrain a pair already completed in the current worker generation. | Depends on the accepted one-shot worker model; it must not introduce durable ownership or restart recovery. |
-| PR6: simulator-driven BGD scenario suite | Use PR2's simulator to cover normal lifecycle, late entry, cancellation, topology drain, direct probe tuple/TLS, offline exclusions, worker replacement, terminal connection retirement where observable, and PR5 DNS failure/recovery. | Depends on PR2 and should normally follow PR3-PR5 so the suite validates final behavior rather than encoding known failures. All payloads run in the automatic BGD simulator CI group. |
+| PR6: simulator-driven BGD scenario suite | Use PR2's simulator to cover configuration and discovery order, automatic and explicit rows, worker replacement, normal lifecycle, late entry, cancellation and rollback, topology drain, direct probe tuple/TLS, offline exclusions, terminal connection retirement where observable, and PR5 DNS failure/recovery. | Depends on PR2 and should normally follow PR3-PR5 so the suite validates final behavior rather than encoding known failures. All payloads run in the automatic BGD simulator CI group. |
 
 Any retained cleanup ledger, durable restart ownership, or alternative
-controller state machine requires a new author policy decision. Detailed
-implementation handoffs for PR2 through PR6 are maintained in the review
-worktree root for transfer to the author; they are review artifacts and are
-intentionally not part of this document-only PR.
+controller state machine requires a new author policy decision. The simulator
+contract and integration design consumed by PR2 and PR6 are defined in
+[RDS_BGD_Simulator.md](RDS_BGD_Simulator.md).
