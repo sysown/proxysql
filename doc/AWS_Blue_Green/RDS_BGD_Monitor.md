@@ -960,11 +960,10 @@ durable-ledger design.
 
 | Requirement | Named unit/simulator case | Named Admin/TAP case | Observable postcondition |
 |---|---|---|---|
-| Matched writer probe tuple | `writer_tuple_not_first_poll_row` | `multiple_blue_ports_and_ssl` | With a reader first in the polling result and different ports across pairs, the direct probe uses the mapped blue writer's port and never `hpa[0]`. |
+| Matched writer probe destination | `writer_tuple_not_first_poll_row` | `matched_writer_destination` | With a reader first in the polling result and every endpoint at port 3306, the direct probe uses the mapped green writer destination and never `hpa[0]`. |
 | Automatic TLS source | `auto_green_inherits_writer_ssl` | `automatic_green_tls` | With no explicit green row, the direct probe and auto-added green writer use the matched blue writer's `use_ssl`. |
-| Explicit TLS source | `explicit_green_ssl_override` | `explicit_green_tls_differs_from_blue` | With the same supported pair port but blue `use_ssl=0` and explicit green `use_ssl=1`, the direct IP probe enables TLS. This guards the exact explicit-green TLS selection. |
-| Unsupported within-pair port mismatch | `target_port_mismatch_policy` | `target_port_mismatch_diagnostic` | The implementation's blue-port choice is explicit and observable; the test must not claim AWS guarantees equality. A future rejection diagnostic is preferable to silent probing of the wrong port. |
-| Eligible green generation checksum | `green_checksum_matrix` | `admin_green_add_remove_ssl_status` | Add/remove, port, `use_ssl`, and transitions into or out of `OFFLINE_SOFT`/`OFFLINE_HARD` change the checksum and replace workers; irrelevant changes do not. |
+| Explicit TLS source | `explicit_green_ssl_override` | `explicit_green_tls_differs_from_blue` | With every endpoint at port 3306, blue `use_ssl=0`, and explicit green `use_ssl=1`, the direct IP probe enables TLS. This guards the exact explicit-green TLS selection. |
+| Eligible green generation checksum | `green_checksum_matrix` | `admin_green_add_remove_ssl_status` | Add/remove, `use_ssl`, and transitions into or out of `OFFLINE_SOFT`/`OFFLINE_HARD` change the checksum and replace workers; irrelevant changes do not. |
 | Admin commit during active phase | `config_change_exits_worker` | `load_mysql_servers_mid_switchover` | The old worker runs one-shot rollback, the dispatcher joins it, and the replacement builds a new map from the committed runtime rows. |
 | Green membership persistence | `green_row_persists_cancel_and_success` | `green_row_lifecycle` | Auto-added and user rows remain after rollback and success; no existing status is changed. |
 | Green drain policy | `green_drain_status_matrix` | `green_hg_cleanup` | Rollback drains no green connections. Success drains `ONLINE`, `SHUNNED`, and `SHUNNED_AWS_BGD` green servers while leaving `OFFLINE_SOFT` and `OFFLINE_HARD` untouched. Rows remain present. |
@@ -974,7 +973,7 @@ durable-ledger design.
 | Automatic runtime row persistence | `auto_generated_null_green_hgs` | `save_runtime_skips_auto_generated_bgd` | Auto-discovery creates a runtime row with both green hostgroups `NULL` and `auto_generated=1`; saving runtime to memory/disk does not persist that row. |
 | First observation COMPLETED | `fresh_worker_first_completed` | `replace_worker_at_completed` | Fresh state advances to the inferred reader phase without reconstructing a prior map, then finishes on topology drain. |
 | Full restart fresh start | `restart_discards_bgd_state` | `proxysql_restart_fixture` | DNS cache, pools, suppression, mapping, probe target, and FSM are recreated; configured rows reload; an unsynchronized auto-added runtime-only green row does not. |
-| Same-phase DNS retry follow-up | `dns_retry_same_post_per_pair` | `first_resolution_fails_then_succeeds` | Accepted follow-up only: the unresolved pair retries while phase is unchanged; successful pairs are not redrained; the recovered pair is pinned and drained exactly once. |
+| Same-phase DNS retry follow-up | `dns_retry_same_post_per_pair` | — | Future resolver/unit coverage only: the unresolved pair retries while phase is unchanged; successful pairs are not redrained; the recovered pair is pinned and drained exactly once. Mutable DNS is outside simulator/TAP scope. |
 | Partial pair progress follow-up | `one_pair_fails` | `multiple_reader_fixture` | Accepted follow-up only: successful pair state is retained worker-locally and only the failed pair retries. |
 
 `PROPOSED-POLICY`: The simulator cases previously proposed for durable effect
@@ -1001,7 +1000,8 @@ The source review remains open on implementation and verification:
    `healthy` field and does not add a second flag. `connection_unhealthy_unit-t`
    verifies that unhealthy connections remain terminal across reset and cannot
    enter either free pool.
-3. Track the author-accepted same-phase DNS failure as required follow-up work.
+3. Track the author-accepted same-phase DNS failure as required follow-up work
+   with focused resolver/unit coverage rather than simulator/TAP integration.
    Until per-pair reconciliation exists, a transient first resolution failure
    in POST_PROCESSING can leave traffic unpinned and old connections undrained.
    Acceptance documents the risk; it does not make the failure safe.
@@ -1024,7 +1024,7 @@ proposed broad durable-ledger/controller PR is not part of this sequence.
 | PR3: probe target and explicit TLS (**complete**) | Correct AWS-08 by selecting the exact supported explicit green writer row and its resolved `use_ssl`, including a row created or restored during discovery, while retaining the matched blue writer port and automatic-mode blue TLS fallback. | **Completed:** production behavior conforms to AWS-08. Existing-row and discovered-row simulator coverage remains part of PR6. |
 | PR4: terminal connection retirement (**complete**) | Preserve `healthy=false` across `MySQL_Connection::reset()` and destroy unhealthy connections in local and global pool-return paths. Do not introduce another flag or a new locking policy. | **Completed:** `connection_unhealthy_unit-t` proves a drained used connection cannot enter either free pool after reset or release. |
 | PR5: same-phase per-pair reconciliation | Replace phase-equality no-op behavior with worker-local reconciliation for incomplete map/resolution/pin/drain work. Retry only incomplete pairs and never redrain a pair already completed in the current worker generation. | Depends on the accepted one-shot worker model; it must not introduce durable ownership or restart recovery. |
-| PR6: simulator-driven BGD scenario suite | Use PR2's simulator to cover configuration and discovery order, automatic and explicit rows, worker replacement, normal lifecycle, late entry, cancellation and rollback, topology drain, direct probe tuple/TLS for existing and discovered explicit green rows, offline exclusions, terminal connection retirement where observable, and PR5 DNS failure/recovery. | Depends on PR2 and should normally follow PR3-PR5 so the suite validates final behavior rather than encoding known failures. All payloads run in the automatic BGD simulator CI group. |
+| PR6: simulator-driven BGD scenario suite | Use PR2's simulator to cover configuration and discovery order, automatic and explicit rows, worker replacement, normal lifecycle, late entry, cancellation and rollback, topology drain, direct probe destination/TLS for existing and discovered explicit green rows, offline exclusions, and terminal connection retirement where observable. | Depends on PR2 and should normally follow PR3-PR4 so the suite validates final behavior rather than encoding known failures. All payloads run in the automatic BGD simulator CI group. |
 
 Any retained cleanup ledger, durable restart ownership, or alternative
 controller state machine requires a new author policy decision. The simulator
