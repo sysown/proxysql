@@ -1047,6 +1047,11 @@ __run_query:
 			}
 		}
 #endif // TEST simulation
+		if (!run_query) {
+			l_free(pkt->size-sizeof(mysql_hdr),query_no_space);
+			l_free(query_length,query);
+			return;
+		}
 		SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;
 		if (sess->autocommit==false) {
 			sqlite3 *db = sqlite_sess->sessdb->get_db();
