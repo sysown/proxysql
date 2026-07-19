@@ -398,6 +398,9 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 				sess->client_myds->proxy_addr.addr = strdup(buf);
 			}
 		}
+		if (sess->client_myds->proxy_addr.addr == NULL) {
+			sess->client_myds->proxy_addr.addr = strdup("unknown");
+		}
 #else
 		struct sockaddr addr;
 		socklen_t addr_len=sizeof(struct sockaddr);
