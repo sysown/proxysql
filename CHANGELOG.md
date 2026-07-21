@@ -2,6 +2,73 @@
 
 ## Version 3.0.x Series - PostgreSQL Support Introduction
 
+### Unreleased
+
+#### Pass-Through Authentication (Phase 1 — opt-in, MySQL only)
+
+New authentication mode that lets a MySQL client authenticate through
+ProxySQL without a pre-provisioned password in `mysql_users`. ProxySQL
+intercepts the cleartext password during the `caching_sha2_password`
+*full-auth* exchange, probes the configured backend with it, and on
+success caches the credential for subsequent connects. See PR #5810 and
+`doc/internal/passthrough_authentication.md` for the design.
+
+Feature is **off by default**. Existing deployments see no behavioral
+change unless an operator explicitly enables it.
+
+To opt in (one of):
+
+- Provision a `mysql_users` row with `password=''` (empty) and set
+  `mysql-passthrough_auth_enabled=true`. The empty-password row now
+  semantically means "learn the password from the first successful
+  caching_sha2_password connect" (it no longer permits passwordless
+  login when the master gate is on — documented behavior change).
+- Set `mysql-passthrough_auth_unknown_users=true` to also pass-through
+  usernames that don't exist in `mysql_users` at all. Routing comes
+  from `mysql-passthrough_default_hg`. **SECURITY**: this combination
+  without `mysql-passthrough_auth_username_pattern` set is the most
+  dangerous pass-through configuration — ProxySQL will emit a WARNING
+  at `LOAD MYSQL VARIABLES TO RUNTIME` flagging the operator.
+
+New globals (13):
+- `mysql-passthrough_auth_enabled` (bool, default `false`)
+- `mysql-passthrough_auth_empty_password` (bool, default `true`)
+- `mysql-passthrough_auth_unknown_users` (bool, default `false`)
+- `mysql-passthrough_auth_require_tls` (bool, default `true`)
+- `mysql-passthrough_default_hg` (int, default `0`)
+- `mysql-passthrough_default_schema` (str, default `""`)
+- `mysql-passthrough_auth_cache_ttl_s` (int, default `0` = no expiry)
+- `mysql-passthrough_auth_max_inflight_probes` (int, default `100`)
+- `mysql-passthrough_auth_username_pattern` (str, default `""` = allow all; re2 regex allowlist)
+- `mysql-passthrough_auth_max_failures_per_user` (int, default `3`)
+- `mysql-passthrough_auth_max_failures_per_ip` (int, default `10`)
+- `mysql-passthrough_auth_failure_window_s` (int, default `60`)
+- `mysql-passthrough_auth_failure_map_cap` (int, default `100000`)
+
+New admin commands:
+- `PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE [FOR USER '<name>']`
+
+New stats virtual tables:
+- `stats_mysql_passthrough_auth_cache` (entries, no passwords)
+- `stats_mysql_passthrough_auth_metrics` (9 counters + 2 gauges)
+
+New audit events:
+- `MySQL_Client_Connect_Passthrough_OK`
+- `MySQL_Client_Connect_Passthrough_FAIL`
+
+Phase 1 limitations (documented in code + spec):
+- `caching_sha2_password` only (`mysql_clear_password` → Phase 2;
+  `mysql_native_password` → Phase 3)
+- Synchronous backend probe (matches MySQL_Monitor's pattern;
+  pinning a worker thread for the duration of one backend handshake)
+- One-shot probe connections do not go through the connection pool
+  (don't count against `mysql_servers.max_connections`; the effective
+  ceiling is `mysql-passthrough_auth_max_inflight_probes`)
+- No persistence; restart = cold cache
+- `COM_CHANGE_USER` targeting a pass-through user is rejected
+- Cluster sync of variables works via the standard `mysql_variables`
+  path; metric counters are per-node
+
 ### v3.0.2 (2025-08-06)
 #### PostgreSQL Enhancements
 - Improved error processing and reporting format for backend connections using libpq (#4947)

@@ -737,6 +737,43 @@ static void test_return_backend_on_session_close() {
 	close(fds[1]);
 }
 
+static void test_destroy_waiting_session_does_not_pool_backend() {
+	diag(">>> %s", __func__);
+	int client_fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds);
+
+	int backend_fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, backend_fds);
+
+	Mysqlx_Thread thr;
+	thr.init(0);
+	thr.set_max_cached_connections(10);
+
+	MysqlxSession* sess = new MysqlxSession();
+	sess->init(client_fds[0], &thr);
+
+	MysqlxConnection* conn = new MysqlxConnection();
+	conn->set_fd(backend_fds[0]);
+	conn->set_hostgroup(0);
+	conn->set_user("test");
+	conn->set_schema("test");
+	conn->set_reusable(true);
+	conn->set_state(MysqlxConnection::IN_USE);
+	conn->init_backend_ds(backend_fds[0]);
+	conn->backend_ds().set_status(XDS_READY);
+	sess->backend_conn() = conn;
+	sess->set_status(MysqlxSession::WAITING_SERVER_XMSG);
+	sess->set_response_state_for_test(RESP_WAITING_STMT_EXECUTE);
+
+	delete sess;
+
+	ok(thr.get_cached_connection_count() == 0,
+	   "backend with outstanding response is not cached on session destroy");
+
+	close(client_fds[1]);
+	close(backend_fds[1]);
+}
+
 // ------------------------------------------------------------------
 // Per-message response-state validation tests (#5694).
 //
@@ -860,6 +897,48 @@ static void test_validation_stmt_execute_metadata_then_row() {
 	   "response_state_ resets to IDLE after terminal");
 	ok(!sess.seen_column_metadata_for_test(),
 	   "seen_column_metadata_ cleared at terminal-frame flush");
+
+	detach_session_fds(sess);
+	close(client_fds[0]); close(client_fds[1]);
+	close(backend_fds[0]); close(backend_fds[1]);
+}
+
+// Test 2b: STMT_EXECUTE resultset may send FETCH_DONE before the final
+// SQL_STMT_EXECUTE_OK. FETCH_DONE closes the resultset, not the whole
+// statement response, so the proxy must keep waiting on the same backend.
+static void test_validation_stmt_execute_fetch_done_waits_for_stmt_ok() {
+	diag(">>> %s", __func__);
+	int client_fds[2], backend_fds[2];
+	MysqlxSession sess;
+	setup_session_for_validation(sess, client_fds, backend_fds,
+	                             RESP_WAITING_STMT_EXECUTE);
+
+	write_server_frame(backend_fds[1],
+		Mysqlx::ServerMessages_Type_RESULTSET_COLUMN_META_DATA, nullptr, 0);
+	write_server_frame(backend_fds[1],
+		Mysqlx::ServerMessages_Type_RESULTSET_ROW, nullptr, 0);
+	write_server_frame(backend_fds[1],
+		Mysqlx::ServerMessages_Type_RESULTSET_FETCH_DONE, nullptr, 0);
+	sess.handler();
+
+	ok(sess.is_healthy(),
+	   "STMT_EXECUTE FETCH_DONE before final OK is accepted");
+	ok(sess.response_state_for_test() == RESP_WAITING_STMT_EXECUTE,
+	   "FETCH_DONE does not terminate STMT_EXECUTE response");
+	ok(sess.backend_conn() != nullptr,
+	   "backend stays attached while waiting for final STMT_EXECUTE_OK");
+
+	sess.to_process = true;
+	write_server_frame(backend_fds[1],
+		Mysqlx::ServerMessages_Type_SQL_STMT_EXECUTE_OK, nullptr, 0);
+	sess.handler();
+
+	ok(sess.is_healthy(),
+	   "STMT_EXECUTE final OK after FETCH_DONE is accepted");
+	ok(sess.response_state_for_test() == RESP_IDLE,
+	   "STMT_EXECUTE_OK terminates response after FETCH_DONE");
+	ok(!sess.seen_column_metadata_for_test(),
+	   "seen_column_metadata_ cleared after final STMT_EXECUTE_OK");
 
 	detach_session_fds(sess);
 	close(client_fds[0]); close(client_fds[1]);
@@ -1265,10 +1344,12 @@ int main() {
 	test_forward_to_backend_no_connection();
 	test_forward_to_backend_with_socketpair();
 	test_return_backend_on_session_close();
+	test_destroy_waiting_session_does_not_pool_backend();
 
 	// Per-message response-state validation (#5694).
 	test_validation_stmt_execute_row_without_metadata();
 	test_validation_stmt_execute_metadata_then_row();
+	test_validation_stmt_execute_fetch_done_waits_for_stmt_ok();
 	test_validation_cursor_open_fetch_suspended();
 	test_validation_cursor_open_fetch_done();
 	test_validation_prepare_prepare_rejects_stmt_execute_ok();
