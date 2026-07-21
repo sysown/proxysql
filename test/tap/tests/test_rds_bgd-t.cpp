@@ -69,8 +69,13 @@ int main() {
 	}
 
 	const RDS_BGD_Cluster& cluster = rds_bgd_test_cluster();
-	for (const Simulator_Endpoint& writer : cluster.get_writers()) {
-		if (simulator.read_only_update(writer, false) != EXIT_SUCCESS) {
+	const RDS_BGD_Host* writers[] = {
+		&cluster.blue_writer(),
+		&cluster.green_writer(),
+	};
+	for (const RDS_BGD_Host* writer : writers) {
+		if (simulator.read_only_update(
+				{ writer->hostname, writer->port }, false) != EXIT_SUCCESS) {
 			mysql_close(admin);
 			BAIL_OUT("failed to configure writer read_only state");
 		}

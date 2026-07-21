@@ -361,7 +361,6 @@ vector<aurora_hg_info_t> get_hgs_info(SQLite3DB* db) {
 #endif
 
 void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *pkt) {
-
 	char *error=NULL;
 	int cols;
 	int affected_rows;
@@ -378,7 +377,6 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 
 #if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP) || defined(TEST_READONLY) || defined(TEST_REPLICATIONLAG) || defined(TEST_RDS_BGD)
 	if (sess->client_myds->proxy_addr.addr == NULL) {
-#ifdef TEST_RDS_BGD
 		struct sockaddr_storage addr;
 		socklen_t addr_len=sizeof(addr);
 		memset(&addr,0,addr_len);
@@ -401,37 +399,8 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 		if (sess->client_myds->proxy_addr.addr == NULL) {
 			sess->client_myds->proxy_addr.addr = strdup("unknown");
 		}
-#else
-		struct sockaddr addr;
-		socklen_t addr_len=sizeof(struct sockaddr);
-		memset(&addr,0,addr_len);
-		int rc;
-		rc=getsockname(sess->client_myds->fd, &addr, &addr_len);
-		if (rc==0) {
-			char buf[512];
-			switch (addr.sa_family) {
-				case AF_INET: {
-						struct sockaddr_in *ipv4 = (struct sockaddr_in *)&addr;
-						inet_ntop(addr.sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
-						sess->client_myds->proxy_addr.addr = strdup(buf);
-					}
-					break;
-				case AF_INET6: {
-						struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)&addr;
-						inet_ntop(addr.sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
-						sess->client_myds->proxy_addr.addr = strdup(buf);
-					}
-					break;
-				default:
-					sess->client_myds->proxy_addr.addr = strdup("unknown");
-					break;
-			}
-		} else {
-			sess->client_myds->proxy_addr.addr = strdup("unknown");
-		}
-#endif // TEST_RDS_BGD
 	}
-#endif // TEST simulation
+#endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP || TEST_READONLY || TEST_REPLICATIONLAG || TEST_RDS_BGD
 
 	char *query_no_space=(char *)l_alloc(query_length);
 	memcpy(query_no_space,query,query_length);
@@ -608,7 +577,7 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 			sprintf(query,a,sess->client_myds->proxy_addr.addr);
 #else
 			query=l_strdup("SELECT '(ProxySQL SQLite3 Server)'");
-#endif // TEST simulation
+#endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP || TEST_READONLY || TEST_REPLICATIONLAG || TEST_RDS_BGD
 			query_length=strlen(query)+1;
 			goto __run_query;
 		}
@@ -896,25 +865,6 @@ __run_query:
 				}
 			}
 
-			if (run_query && !rds_bgd_table_check && !rds_bgd_metadata &&
-				strcasecmp(query_no_space, "SELECT @@global.read_only read_only") == 0) {
-				if (sess->client_myds->proxy_addr.addr == NULL ||
-					sess->client_myds->proxy_addr.port <= 0) {
-					GloSQLite3Server->send_MySQL_ERR(
-						&sess->client_myds->myprot, 1105,
-						"RDS BGD simulator could not identify the accepted backend address");
-					run_query=false;
-				} else {
-					const std::string read_only_query {
-						"SELECT COALESCE((SELECT read_only FROM READONLY_STATUS WHERE hostname='" +
-						std::string(sess->client_myds->proxy_addr.addr) + "' AND port=" +
-						std::to_string(sess->client_myds->proxy_addr.port) + "),1) AS read_only"
-					};
-					l_free(query_length,query);
-					query=l_strdup(read_only_query.c_str());
-					query_length=strlen(query)+1;
-				}
-			}
 #endif // TEST_RDS_BGD
 #ifdef TEST_AURORA
 			if (strstr(query_no_space,(char *)"REPLICA_HOST_STATUS")) {
@@ -996,7 +946,7 @@ __run_query:
 				}
 			}
 #endif // TEST_GROUPREP
-#ifdef TEST_READONLY
+#if defined(TEST_READONLY) || defined(TEST_RDS_BGD)
 			if (strncasecmp("SELECT @@global.read_only read_only ",query_no_space, strlen("SELECT @@global.read_only read_only "))==0) {
 				if (strlen(query_no_space) > strlen("SELECT @@global.read_only read_only ")+5) {
 					pthread_mutex_lock(&GloSQLite3Server->test_readonly_mutex);
@@ -1013,7 +963,7 @@ __run_query:
 					pthread_mutex_unlock(&GloSQLite3Server->test_readonly_mutex);
 				}
 			}
-#endif // TEST_READONLY
+#endif // TEST_READONLY || TEST_RDS_BGD
 #ifdef TEST_REPLICATIONLAG
 			if (
 				strncasecmp("SELECT SLAVE STATUS ", query_no_space, strlen("SELECT SLAVE STATUS ")) == 0
@@ -1049,7 +999,7 @@ __run_query:
 				sprintf(query,a,rand()%30+10);
 			}
 		}
-#endif // TEST simulation
+#endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP || TEST_READONLY || TEST_REPLICATIONLAG || TEST_RDS_BGD
 		if (!run_query) {
 			l_free(pkt->size-sizeof(mysql_hdr),query_no_space);
 			l_free(query_length,query);
@@ -1118,7 +1068,7 @@ __run_query:
 		bool deprecate_eof = sess->client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
 		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot, in_trans, deprecate_eof);
 		delete resultset;
-#ifdef TEST_READONLY
+#if defined(TEST_READONLY) || defined(TEST_RDS_BGD)
 		if (strncasecmp("SELECT",query_no_space,6)) {
 			if (strstr(query_no_space,(char *)"READONLY_STATUS")) {
 				// the table is writable
@@ -1127,7 +1077,7 @@ __run_query:
 				pthread_mutex_unlock(&GloSQLite3Server->test_readonly_mutex);
 			}
 		}
-#endif // TEST_READONLY
+#endif // TEST_READONLY || TEST_RDS_BGD
 #ifdef TEST_REPLICATIONLAG
 		if (strncasecmp("SELECT", query_no_space, 6)) {
 			if (strstr(query_no_space, (char*)"REPLICATIONLAG_HOST_STATUS")) {
@@ -1547,13 +1497,13 @@ SQLite3_Server::SQLite3_Server() {
 #ifdef TEST_GROUPREP
 	init_grouprep_ifaces_string(s);
 #endif // TEST_GROUPREP
-#ifdef TEST_READONLY
-	// for readonly test we listen on all IPs because we simulate a lot of clusters
+#if defined(TEST_READONLY) || defined(TEST_RDS_BGD)
+	// Read-only simulation listens on all IPs because it can simulate many clusters.
 	if (!s.empty())
 		s += ";";
 	s += "0.0.0.0:3306";
 	pthread_mutex_init(&test_readonly_mutex, NULL);
-#endif //TEST_READONLY
+#endif // TEST_READONLY || TEST_RDS_BGD
 #ifdef TEST_REPLICATIONLAG
 	// for replication test we listen on all IPs
 	if (!s.empty())
@@ -1561,19 +1511,11 @@ SQLite3_Server::SQLite3_Server() {
 	s += "0.0.0.0:3306";
 	pthread_mutex_init(&test_replicationlag_mutex, NULL);
 #endif //TEST_REPLICATIONLAG
-#ifdef TEST_RDS_BGD
-#if !defined(TEST_READONLY) && !defined(TEST_REPLICATIONLAG)
-	if (!s.empty())
-		s += ";";
-	s += "0.0.0.0:3306";
-#endif
-#endif // TEST_RDS_BGD
-
 	variables.mysql_ifaces=strdup(s.c_str());
 
 #else
 	variables.mysql_ifaces=strdup("127.0.0.1:6030");
-#endif // TEST simulation
+#endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP || TEST_READONLY || TEST_REPLICATIONLAG || TEST_RDS_BGD
 };
 
 
@@ -1966,7 +1908,7 @@ void SQLite3_Server::drop_tables_defs(std::vector<table_def_t *> *tables_defs) {
 		delete td;
 	}
 };
-#endif // TEST simulation
+#endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP || TEST_READONLY || TEST_REPLICATIONLAG || TEST_RDS_BGD
 
 void SQLite3_Server::wrlock() {
 	pthread_rwlock_wrlock(&rwlock);
@@ -2172,10 +2114,7 @@ void SQLite3_Server::send_MySQL_ERR(MySQL_Protocol *myprot, char *msg) {
 	myds->DSS=STATE_SLEEP;
 }
 
-#ifdef TEST_RDS_BGD
-void SQLite3_Server::send_MySQL_ERR(
-	MySQL_Protocol *myprot, uint16_t error_code, const char *msg)
-{
+void SQLite3_Server::send_MySQL_ERR(MySQL_Protocol *myprot, uint16_t error_code, const char *msg) {
 	assert(myprot);
 	MySQL_Data_Stream *myds=myprot->get_myds();
 	myds->DSS=STATE_QUERY_SENT_DS;
@@ -2183,9 +2122,8 @@ void SQLite3_Server::send_MySQL_ERR(
 	myprot->generate_pkt_ERR(true,NULL,NULL,1,error_code,sqlstate,msg);
 	myds->DSS=STATE_SLEEP;
 }
-#endif // TEST_RDS_BGD
 
-#ifdef TEST_READONLY
+#if defined(TEST_READONLY) || defined(TEST_RDS_BGD)
 void SQLite3_Server::load_readonly_table(MySQL_Session *sess) {
 	// this function needs to be called with lock on mutex readonly_mutex already acquired
 	GloAdmin->mysql_servers_wrlock();
@@ -2226,7 +2164,7 @@ int SQLite3_Server::readonly_test_value(char *p) {
 	}
 	return rc;
 }
-#endif // TEST_READONLY
+#endif // TEST_READONLY || TEST_RDS_BGD
 
 #ifdef TEST_REPLICATIONLAG
 void SQLite3_Server::load_replicationlag_table(MySQL_Session* sess) {

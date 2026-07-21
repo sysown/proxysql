@@ -17,9 +17,10 @@ coverage into one implementation specification.
 ## Architecture
 
 The TAP test is the scenario controller. It configures ProxySQL with AWS-style
-hostnames, writes IP-keyed backend state to ProxySQL's SQLite3 server, changes
+hostnames, writes simulated backend state to ProxySQL's SQLite3 server, changes
 that state to drive the BGD FSM, and verifies ProxySQL through runtime,
-statistics, and simulator probe-log tables.
+statistics, and simulator probe-log tables. Topology state is keyed by backend
+IP, while read-only state is keyed by the configured hostname.
 
 No `test/deps/cluster_simulator` process or backend database container is
 required. A common TAP helper owns reusable SQLite3-server operations, while a
@@ -45,9 +46,10 @@ and green names. Every hostname resolves to a distinct loopback IP and uses
 port 3306, preserving the address shape used by AWS while a single wildcard
 SQLite3-server listener handles all simulated endpoints.
 
-Tests add servers to ProxySQL by hostname and configure simulator state using
-the corresponding IP. Distinct destination IPs retain the blue/green split
-when ProxySQL resolves a hostname or directly probes the resolved green IP.
+Tests add servers to ProxySQL by hostname. They configure topology state using
+the corresponding IP and read-only state using the configured hostname and
+port. Distinct destination IPs retain the blue/green split when ProxySQL
+resolves a hostname or directly probes the resolved green IP.
 
 The map reserves multiple clusters and two green endpoint sets for cluster 1.
 Tests configure only the endpoints they need: separate clusters support
@@ -128,9 +130,10 @@ select the response described below, append a probe-log row, and send the
 result. An address-extraction failure returns a simulator error without
 selecting state or logging an invalid backend identity.
 
-All other statements continue through normal SQLite3-server handling. TAP
-control and inspection statements against the simulator tables are not
-rewritten or recorded as BGD monitor probes.
+Simulated read-only checks follow the handling described below. All remaining
+statements continue through normal SQLite3-server handling. TAP control and
+inspection statements against the simulator tables are not rewritten or
+recorded as BGD monitor probes.
 
 ## Control-State Meaning
 
@@ -188,20 +191,21 @@ to verify the selected destination and TLS mode. A probe-log insertion failure
 is a simulator failure and must not be silently reported as a normal backend
 response.
 
-## `read_only` Reuse
+## Read-Only Simulation
 
-Build the existing `READONLY_STATUS` table for `TEST_RDS_BGD`, but do not add a
-BGD-specific read-only table or call `enable_readonly_testing()`. The TAP test
-owns ProxySQL hostgroup and server configuration.
+`TEST_RDS_BGD` builds the shared `READONLY_STATUS(hostname, port, read_only)`
+table and the read-only cache, without calling `enable_readonly_testing()`.
+The TAP test owns ProxySQL hostgroup and server configuration and writes each
+read-only value using the AWS hostname configured in `mysql_servers`.
 
-For the production `SELECT @@global.read_only ...` monitor query, resolve the
-same backend key and select `READONLY_STATUS` using the backend IP as its
-`hostname` value. Return the configured value as one `read_only` column; a
-missing entry uses the existing safe default of `read_only=1`.
+Read-only monitor tasks send the simulation query
+`SELECT @@global.read_only read_only <hostname>:<port>`. The SQLite3 server
+uses the suffix to read the cached value populated from `READONLY_STATUS` and
+returns one `read_only` column. Table writes refresh the cache, and a missing
+entry returns the safe default `read_only=1`.
 
-This path does not consult `RDS_BGD_CONTROL` or write `RDS_BGD_PROBE_LOG`. The
-legacy `TEST_READONLY` query-suffix behavior remains unchanged in its own
-build.
+BGD topology tasks send the production topology queries unchanged. Read-only
+handling does not consult `RDS_BGD_CONTROL` or write `RDS_BGD_PROBE_LOG`.
 
 ## TAP Helper API
 
@@ -219,7 +223,8 @@ struct Simulator_Endpoint {
 ```
 
 Identifies one simulated backend. For BGD topology and probe-log operations,
-`host` is the backend IP.
+`host` is the backend IP. For `read_only_update()`, `host` is the AWS hostname
+configured in ProxySQL.
 
 ### `Cluster_Simulator`
 
@@ -236,7 +241,7 @@ int read_only_update(const Simulator_Endpoint& backend, bool read_only);
 
 `connect()` opens the SQLite3-server control connection with the MySQL client
 API; the helper closes it when destroyed. `read_only_update()` changes the
-existing `READONLY_STATUS` row for one backend.
+`READONLY_STATUS` row identified by configured hostname and port.
 
 ### Topology and Host Types
 
@@ -367,6 +372,11 @@ int main() {
 		sqlite_server.first.c_str(), sqlite_server.second,
 		cl.username, cl.password) != EXIT_SUCCESS)
 		BAIL_OUT("failed to connect to SQLite3 server");
+	if (simulator.read_only_update(
+			{ cluster.blue_writer().hostname, cluster.blue_writer().port }, false) != EXIT_SUCCESS ||
+		simulator.read_only_update(
+			{ cluster.green_writer().hostname, cluster.green_writer().port }, false) != EXIT_SUCCESS)
+		BAIL_OUT("failed to configure writer read_only state");
 
 	const rc_t<uint64_t> mark = simulator.probe_log_last_sequence();
 	if (mark.first != EXIT_SUCCESS)
