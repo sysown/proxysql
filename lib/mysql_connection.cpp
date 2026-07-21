@@ -3107,7 +3107,6 @@ void MySQL_Connection::reset() {
 	bool old_no_multiplex_hg = get_status(STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG);
 	bool old_compress = get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
 	status_flags=0;
-	healthy=true;
 	// reconfigure STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG
 	set_status(old_no_multiplex_hg,STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG);
 	// reconfigure STATUS_MYSQL_CONNECTION_COMPRESSION
