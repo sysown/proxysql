@@ -6582,6 +6582,11 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
  * @param c Pointer to the MySQL_Connection object to be pushed to the local connection pool.
  */
 void MySQL_Thread::push_MyConn_local(MySQL_Connection *c) {
+	if (!c->healthy) {
+		MyHGM->push_MyConn_to_pool(c);
+		return;
+	}
+
 	// Bounded local cache: cache 1-in-N releases (N = mysql_threads), push the
 	// rest to the shared HGM pool so peer workers can pick them up.
 	// At N=1 always cache (no sibling to share with).
