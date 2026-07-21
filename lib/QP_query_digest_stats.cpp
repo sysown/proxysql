@@ -1,3 +1,4 @@
+#include "gen_utils.h"
 #include "query_processor.h"
 
 // reverse:  reverse string s in place
@@ -79,6 +80,26 @@ void QP_query_digest_stats::add_time(
 	}
 	last_seen=n;
 }
+// Merges the counters of 'other' into this entry. Used when reconciling stats
+// collected while a purge operation was running (see purge_query_digests_async()).
+void QP_query_digest_stats::merge(const QP_query_digest_stats *other) {
+	count_star += other->count_star;
+	sum_time += other->sum_time;
+	rows_affected += other->rows_affected;
+	rows_sent += other->rows_sent;
+	if (other->min_time && (min_time == 0 || other->min_time < min_time)) {
+		min_time = other->min_time;
+	}
+	if (other->max_time > max_time) {
+		max_time = other->max_time;
+	}
+	if (other->first_seen && (first_seen == 0 || other->first_seen < first_seen)) {
+		first_seen = other->first_seen;
+	}
+	if (other->last_seen > last_seen) {
+		last_seen = other->last_seen;
+	}
+}
 QP_query_digest_stats::~QP_query_digest_stats() {
 	if (digest_text) {
 		free(digest_text);
@@ -151,16 +172,13 @@ char **QP_query_digest_stats::get_row(umap_query_digest_text *digest_text_umap, 
 	my_itoa(qdsp->count_star, count_star);
 	pta[5]=qdsp->count_star;
 
-	time_t __now;
-	time(&__now);
-	unsigned long long curtime=monotonic_time();
 	time_t seen_time;
-	seen_time= __now - curtime/1000000 + first_seen/1000000;
+	seen_time=monotonic_time_to_realtime(first_seen);
 	//sprintf(qdsp->first_seen,"%ld", seen_time);
 	my_itoa(qdsp->first_seen, seen_time);
 	pta[6]=qdsp->first_seen;
 
-	seen_time= __now - curtime/1000000 + last_seen/1000000;
+	seen_time=monotonic_time_to_realtime(last_seen);
 	//sprintf(qdsp->last_seen,"%ld", seen_time);
 	my_itoa(qdsp->last_seen, seen_time);
 	pta[7]=qdsp->last_seen;
