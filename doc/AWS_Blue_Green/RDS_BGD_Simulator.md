@@ -150,7 +150,7 @@ The supported states are:
 | `topology_present=0`, `error_code=1146` | Empty | Table has been dropped. |
 
 Topology update and delete operations clear `error_code` and `error_msg`.
-Configured errors other than 1146 mark the table present and retain its rows;
+Configured errors other than 1146 treat the table as present and retain its rows;
 error 1146 marks it absent. Dropping topology also removes its rows. Other flag
 combinations are invalid helper state.
 
@@ -186,7 +186,7 @@ identify the destination, and `encrypted` records the accepted stream's TLS
 state.
 
 The TAP test is the only probe-log consumer; ProxySQL never reads it. A test
-captures a sequence watermark before changing state and then reads later rows
+reads the last sequence before changing state and then reads later rows
 to verify the selected destination and TLS mode. A probe-log insertion failure
 is a simulator failure and must not be silently reported as a normal backend
 response.
@@ -230,13 +230,13 @@ configured in ProxySQL.
 
 ```cpp
 int connect(
-	const char* host,
+	char* host,
 	int port,
-	const char* username,
-	const char* password,
+	char* username,
+	char* password,
 	bool use_ssl = false);
 
-int read_only_update(const Simulator_Endpoint& backend, bool read_only);
+int read_only_update(Simulator_Endpoint backend, bool read_only);
 ```
 
 `connect()` opens the SQLite3-server control connection with the MySQL client
@@ -259,7 +259,7 @@ struct RDS_BGD_Host {
 	std::string ip;
 	int port;
 
-	Simulator_Endpoint endpoint() const;
+	Simulator_Endpoint endpoint();
 };
 ```
 
@@ -267,24 +267,23 @@ struct RDS_BGD_Host {
 C++11-compatible field types. `RDS_BGD_Host` keeps the ProxySQL-facing
 hostname and simulator-facing IP together.
 
-### Shared Cluster Fixture
+### Cluster Fixture
 
 ```cpp
 class RDS_BGD_Cluster {
 public:
-	const RDS_BGD_Host& blue_writer() const;
-	const RDS_BGD_Host& green_writer() const;
-	const std::vector<RDS_BGD_Host>& blue_readers() const;
-	const std::vector<RDS_BGD_Host>& green_readers() const;
-	std::vector<Simulator_Endpoint> get_writers() const;
-	std::vector<RDS_BGD_Topology_Row> get_topology(
-		const std::string& status) const;
-};
+	RDS_BGD_Host blue_writer;
+	RDS_BGD_Host green_writer;
+	std::vector<RDS_BGD_Host> blue_readers;
+	std::vector<RDS_BGD_Host> green_readers;
 
-const RDS_BGD_Cluster& rds_bgd_test_cluster();
+	std::vector<Simulator_Endpoint> get_writers();
+	std::vector<RDS_BGD_Topology_Row> get_topology(std::string status);
+};
 ```
 
-The fixture encapsulates the shared `/etc/hosts` mapping. `get_writers()`
+Each TAP test owns and initializes the cluster fixtures it uses. A fixture
+keeps the selected `/etc/hosts` mapping together. `get_writers()`
 returns the selected blue and green writer IPs; `get_topology(status)` returns
 the standard two-row SOURCE/TARGET topology using the writer hostnames and the
 provided status.
@@ -293,17 +292,17 @@ provided status.
 
 ```cpp
 int topology_update(
-	const std::vector<Simulator_Endpoint>& backends,
-	const std::vector<RDS_BGD_Topology_Row>& rows);
+	std::vector<Simulator_Endpoint> backends,
+	std::vector<RDS_BGD_Topology_Row> rows);
 
-int topology_delete(const std::vector<Simulator_Endpoint>& backends);
+int topology_delete(std::vector<Simulator_Endpoint> backends);
 
-int topology_drop(const std::vector<Simulator_Endpoint>& backends);
+int topology_drop(std::vector<Simulator_Endpoint> backends);
 
 int topology_error(
-	const std::vector<Simulator_Endpoint>& backends,
+	std::vector<Simulator_Endpoint> backends,
 	unsigned int error_code,
-	const std::string& error_msg);
+	std::string error_msg);
 ```
 
 `topology_update()` marks the table present, clears any configured error, and
@@ -336,14 +335,14 @@ rc_t<std::vector<RDS_BGD_Probe_Log>> probe_log_since(uint64_t sequence_id);
 
 rc_t<RDS_BGD_Probe_Log> wait_for_probe_log(
 	uint64_t sequence_id,
-	const Simulator_Endpoint& backend,
+	Simulator_Endpoint backend,
 	RDS_BGD_Probe_Kind probe_kind,
 	uint32_t timeout_ms,
 	int encrypted = -1);
 ```
 
-The watermark method returns zero for an empty log. `probe_log_since()` returns
-rows after a watermark. `wait_for_probe_log()` waits for one matching row;
+`probe_log_last_sequence()` returns zero for an empty log. `probe_log_since()`
+returns rows after the supplied sequence. `wait_for_probe_log()` waits for one matching row;
 `encrypted` is `-1` for either mode, `0` for plaintext, and `1` for TLS.
 
 ## Typical TAP Test
@@ -359,28 +358,22 @@ int main() {
 		cl.admin_host, cl.admin_port, cl.admin_username, cl.admin_password);
 	if (!admin) BAIL_OUT("failed to connect to ProxySQL Admin");
 
-	const RDS_BGD_Cluster& cluster = rds_bgd_test_cluster();
+	RDS_BGD_Cluster cluster = bgd_cluster_init();
 	if (configure_proxysql_for_bgd(admin, cluster) != EXIT_SUCCESS)
 		BAIL_OUT("failed to configure ProxySQL");
 
-	std::pair<std::string, int> sqlite_server;
-	if (extract_sqlite3_host_port(admin, sqlite_server) != EXIT_SUCCESS)
-		BAIL_OUT("failed to find SQLite3-server address");
-
 	RDS_BGD_Simulator simulator;
-	if (simulator.connect(
-		sqlite_server.first.c_str(), sqlite_server.second,
-		cl.username, cl.password) != EXIT_SUCCESS)
+	if (simulator.connect(cl.host, 3306, cl.username, cl.password) != EXIT_SUCCESS)
 		BAIL_OUT("failed to connect to SQLite3 server");
 	if (simulator.read_only_update(
-			{ cluster.blue_writer().hostname, cluster.blue_writer().port }, false) != EXIT_SUCCESS ||
+			{ cluster.blue_writer.hostname, cluster.blue_writer.port }, false) != EXIT_SUCCESS ||
 		simulator.read_only_update(
-			{ cluster.green_writer().hostname, cluster.green_writer().port }, false) != EXIT_SUCCESS)
+			{ cluster.green_writer.hostname, cluster.green_writer.port }, false) != EXIT_SUCCESS)
 		BAIL_OUT("failed to configure writer read_only state");
 
-	const rc_t<uint64_t> mark = simulator.probe_log_last_sequence();
-	if (mark.first != EXIT_SUCCESS)
-		BAIL_OUT("failed to read probe-log watermark");
+	auto [seq_rc, last_seq] = simulator.probe_log_last_sequence();
+	if (seq_rc != EXIT_SUCCESS)
+		BAIL_OUT("failed to read the last probe-log sequence");
 
 	const int update_rc = simulator.topology_update(
 		cluster.get_writers(), cluster.get_topology("AVAILABLE"));
@@ -393,12 +386,12 @@ int main() {
 		"WHERE writer_hostgroup=10", 5) == EXIT_SUCCESS,
 		"ProxySQL enters AVAILABLE");
 
-	const rc_t<RDS_BGD_Probe_Log> green_log = simulator.wait_for_probe_log(
-		mark.second,
-		cluster.green_writer().endpoint(),
+	auto [probe_rc, green_log] = simulator.wait_for_probe_log(
+		last_seq,
+		cluster.green_writer.endpoint(),
 		RDS_BGD_Probe_Kind::metadata,
 		5000);
-	ok(green_log.first == EXIT_SUCCESS,
+	ok(probe_rc == EXIT_SUCCESS,
 		"ProxySQL probes the green writer IP directly");
 
 	mysql_close(admin);
@@ -518,7 +511,7 @@ simulator transitions. From the TAP container, the control connection uses
 Register each BGD TAP binary in `test/tap/groups/groups.json`:
 
 ```json
-"test_rds_bgd-t": [ "cluster_sim_rds_bgd-g1" ]
+"test_rds_bgd_smoke-t": [ "cluster_sim_rds_bgd-g1" ]
 ```
 
 Add the group and its `make test_rds_bgd` requirement to the simulator table in
@@ -560,7 +553,7 @@ Ubuntu TAP build dependencies, and runs:
 make -j"$(nproc)" test_rds_bgd
 ```
 
-After verifying `src/proxysql` and `test/tap/tests/test_rds_bgd-t`, it saves the
+After verifying `src/proxysql` and `test/tap/tests/test_rds_bgd_smoke-t`, it saves the
 build output as two BGD-specific cache entries, following the existing CI
 separation between daemon and test artifacts:
 
@@ -585,7 +578,7 @@ execution jobs without rebuilding ProxySQL.
 | Checkout | Check out the triggering SHA, not the default branch tip. |
 | Restore `src` | Restore the exact BGD `_src` key into `src/`; fail on a miss. |
 | Restore `test` | Restore the exact BGD `_test` key into `test/`; fail on a miss. |
-| Verify artifacts | Confirm `src/proxysql` and `test/tap/tests/test_rds_bgd-t` are executable. |
+| Verify artifacts | Confirm `src/proxysql` and `test/tap/tests/test_rds_bgd_smoke-t` are executable. |
 | Build runner image | Build `test/infra/docker-base` as `proxysql-ci-base:latest`. |
 | Start | Export the shared variables below and run `ensure-infras.bash`. |
 | Test | Run `run-tests-isolated.bash`; this execution, not compilation alone, is the required check. |
@@ -611,14 +604,14 @@ the standard runner reports no infrastructure or test failure.
 ### Simulator Acceptance
 
 The simulator implementation needs one end-to-end smoke test, not a separate
-unit-test suite for every helper method. `test_rds_bgd-t` proves that the
+unit-test suite for every helper method. `test_rds_bgd_smoke-t` proves that the
 `TEST_RDS_BGD` daemon accepts TAP-controlled topology, ProxySQL observes an
 `AVAILABLE` deployment, the green-IP probe is logged, and the automatic CI job
 executes the group without `test/deps/cluster_simulator`.
 
 The configuration and lifecycle tests below exercise the remaining helper and
 SQLite3-server paths through BGD behavior. Before changing simulator state,
-each test captures a probe watermark; failures report the configured backend
+each test reads the last probe-log sequence; failures report the configured backend
 state, last ProxySQL runtime state, and later probe rows.
 
 ### Configuration and Discovery

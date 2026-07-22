@@ -726,14 +726,12 @@ void MySQL_Monitor_State_Data::init_async() {
 		task_handler_ = &MySQL_Monitor_State_Data::read_only_handler;
 		break;
 #endif // TEST_READONLY || TEST_RDS_BGD
-#if !defined(TEST_READONLY) || defined(TEST_RDS_BGD)
 	case MON_AWS_RDS_TOPOLOGY_DISCOVERY:
 		query_ = QUERY_AWS_RDS_TOPOLOGY_DISCOVERY;
 		async_state_machine_ = ASYNC_QUERY_START;
 		task_timeout_ = mysql_thread___monitor_read_only_timeout;
 		task_handler_ = &MySQL_Monitor_State_Data::read_only_handler;
 		break;
-#endif // !TEST_READONLY || TEST_RDS_BGD
 	case MON_GROUP_REPLICATION:
 		async_state_machine_ = ASYNC_QUERY_START;
 #ifdef TEST_GROUPREP
@@ -1760,31 +1758,26 @@ void * monitor_read_only_thread(const std::vector<MySQL_Monitor_State_Data*>& da
 
 	mmsd->t1=monotonic_time();
 	mmsd->interr=0; // reset the value
-#if defined(TEST_READONLY) || defined(TEST_RDS_BGD)
-#ifdef TEST_RDS_BGD
 	if (mmsd->get_task_type() == MON_AWS_RDS_TOPOLOGY_DISCOVERY) {
 		monitor_query = QUERY_AWS_RDS_TOPOLOGY_DISCOVERY;
-	} else
-#endif // TEST_RDS_BGD
-	{
+	} else {
+#if defined(TEST_READONLY) || defined(TEST_RDS_BGD)
 		monitor_query = "SELECT @@global.read_only read_only";
 		monitor_query += " " + std::string(mmsd->hostname) + ":" + std::to_string(mmsd->port);
-	}
 #else
-	if (mmsd->get_task_type() == MON_INNODB_READ_ONLY) {
-		monitor_query = "SELECT @@global.innodb_read_only read_only";
-	} else if (mmsd->get_task_type() == MON_SUPER_READ_ONLY) {
-		monitor_query = "SELECT @@global.super_read_only read_only";
-	} else if (mmsd->get_task_type() == MON_READ_ONLY__AND__INNODB_READ_ONLY) {
-		monitor_query = "SELECT @@global.read_only&@@global.innodb_read_only read_only";
-	} else if (mmsd->get_task_type() == MON_READ_ONLY__OR__INNODB_READ_ONLY) {
-		monitor_query = "SELECT @@global.read_only|@@global.innodb_read_only read_only";
-	} else if (mmsd->get_task_type() == MON_AWS_RDS_TOPOLOGY_DISCOVERY) {
-		monitor_query = QUERY_AWS_RDS_TOPOLOGY_DISCOVERY;
-	} else { // default
-		monitor_query = "SELECT @@global.read_only read_only";
-	}
+		if (mmsd->get_task_type() == MON_INNODB_READ_ONLY) {
+			monitor_query = "SELECT @@global.innodb_read_only read_only";
+		} else if (mmsd->get_task_type() == MON_SUPER_READ_ONLY) {
+			monitor_query = "SELECT @@global.super_read_only read_only";
+		} else if (mmsd->get_task_type() == MON_READ_ONLY__AND__INNODB_READ_ONLY) {
+			monitor_query = "SELECT @@global.read_only&@@global.innodb_read_only read_only";
+		} else if (mmsd->get_task_type() == MON_READ_ONLY__OR__INNODB_READ_ONLY) {
+			monitor_query = "SELECT @@global.read_only|@@global.innodb_read_only read_only";
+		} else { // default
+			monitor_query = "SELECT @@global.read_only read_only";
+		}
 #endif // TEST_READONLY || TEST_RDS_BGD
+	}
 	mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,monitor_query.c_str());
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
