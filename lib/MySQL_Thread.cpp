@@ -141,6 +141,7 @@ mythr_st_vars_t MySQL_Thread_status_variables_counter_array[] {
 	{ st_var_frontend_stmt_prepare, p_th_counter::com_frontend_stmt_prepare, (char *)"Com_frontend_stmt_prepare" },
 	{ st_var_frontend_stmt_execute, p_th_counter::com_frontend_stmt_execute, (char *)"Com_frontend_stmt_execute" },
 	{ st_var_frontend_stmt_close,   p_th_counter::com_frontend_stmt_close,   (char *)"Com_frontend_stmt_close" },
+	{ st_var_frontend_ping,         p_th_counter::com_frontend_ping,         (char *)"Com_frontend_ping" },
 	{ st_var_queries,               p_th_counter::questions,               (char *)"Questions" },
 	{ st_var_queries_slow,          p_th_counter::slow_queries,            (char *)"Slow_queries" },
 	{ st_var_queries_gtid,          p_th_counter::gtid_consistent_queries, (char *)"GTID_consistent_queries" },
@@ -711,6 +712,14 @@ th_metrics_map = std::make_tuple(
 			metric_tags {
 				{ "protocol", "mysql" },
 				{ "op", "close" }
+			}
+		),
+		std::make_tuple (
+			p_th_counter::com_frontend_ping,
+			"proxysql_com_frontend_ping_total",
+			"'COM_PING' received from the client.",
+			metric_tags {
+				{ "protocol", "mysql" }
 			}
 		),
 		// ====================================================================
