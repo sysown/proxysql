@@ -4476,10 +4476,17 @@ void MySQL_Thread::ProcessAllSessions_Healthy0(MySQL_Session *sess, unsigned int
 	char _buf[1024];
 	if (sess->client_myds) {
 		if (mysql_thread___log_unhealthy_connections) {
+			const char *user =
+				(sess->client_myds->myconn && sess->client_myds->myconn->userinfo && sess->client_myds->myconn->userinfo->username)
+				? sess->client_myds->myconn->userinfo->username : "unknown";
+			const int current_hostgroup = sess->current_hostgroup;
+			const unsigned long backend_id =
+				(sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn)
+				? sess->mybe->server_myds->myconn->get_mysql_thread_id() : 0;
 			if (sess->session_fast_forward == SESSION_FORWARD_TYPE_NONE) {
 				proxy_warning(
-					"Closing unhealthy client connection %s:%d\n", sess->client_myds->addr.addr,
-					sess->client_myds->addr.port
+					"Closing unhealthy client connection %s:%d , user '%s' , hostgroup %d , connection %lu\n", sess->client_myds->addr.addr,
+					sess->client_myds->addr.port, user, current_hostgroup, backend_id
 				);
 			} else {
 				string extra_info = "";
@@ -4490,9 +4497,9 @@ void MySQL_Thread::ProcessAllSessions_Healthy0(MySQL_Session *sess, unsigned int
 					extra_info = "No";
 				}
 				proxy_warning(
-					"Closing 'fast_forward' client connection %s:%d . Backend already close: %s\n",
+					"Closing 'fast_forward' client connection %s:%d , user '%s' , hostgroup %d , connection %lu . Backend already close: %s\n",
 					sess->client_myds->addr.addr, sess->client_myds->addr.port,
-					extra_info.c_str()
+					user, current_hostgroup, backend_id, extra_info.c_str()
 				);
 			}
 		}
