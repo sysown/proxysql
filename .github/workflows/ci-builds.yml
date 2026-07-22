@@ -165,7 +165,23 @@ jobs:
           sed -i "/command/i \      - TEST_WITHASAN=1" docker-compose.yml
         fi
         if [[ "${{ matrix.type }}" =~ "-genai" ]]; then
-          sed -i "/command/i \      - PROXYSQLGENAI=1" docker-compose.yml
+          # GenAI / v4.0 chassis tier flag. PROXYSQLGENAI was REMOVED in
+          # #5815 -- the GenAI/MCP/AI/RAG tier is now selected with
+          # PROXYSQL40=1, which the top-level Makefile cascades into
+          # PROXYSQL31 / PROXYSQLFFTO / PROXYSQLTSDB automatically. Injecting
+          # the dead PROXYSQLGENAI flag was a silent no-op, so this build's
+          # core libproxysql compiled as BARE STABLE (GITVERSION 3.0.x, no
+          # tier defines) -- every test group consuming the genai-gcov cache
+          # was exercising a Stable core, with FFTO/TSDB/genai/pass-through
+          # #ifdef'd out. Use PROXYSQL40=1 so the core matches the tier.
+          sed -i "/command/i \      - PROXYSQL40=1" docker-compose.yml
+          # Skip the ~14 genai_*_unit-t binaries. With PROXYSQL40=1 the unit
+          # Makefile's `ifeq ($(PROXYSQL40),1)` block would otherwise add them
+          # to UNIT_TESTS; they statically link 30+ plugins/genai/.cpp at
+          # -O0 -ggdb (~160 MB each, ~2 GB total, larger still under gcov) and
+          # blow the runner's free disk. This build feeds TAP integration
+          # groups, not unit-test groups (which build separately).
+          sed -i "/command/i \      - SKIP_GENAI_UNIT_TESTS=1" docker-compose.yml
         fi
         if [[ "${{ matrix.type }}" =~ "-mysqlx" ]]; then
           # Chassis tier flag for plugins/mysqlx build. _build.environment
