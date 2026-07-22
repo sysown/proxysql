@@ -322,6 +322,7 @@ static void test_write_mysql_servers_empty() {
 		"domain_name VARCHAR, max_lag_ms INT, check_interval_ms INT, check_timeout_ms INT, "
 		"writer_is_also_reader INT, new_reader_weight INT, add_lag_ms INT, min_lag_ms INT, "
 		"lag_num_checks INT, comment VARCHAR)");
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_AWS_RDS_BGD_HOSTGROUPS);
 	db->execute("CREATE TABLE mysql_hostgroup_attributes "
 		"(hostgroup_id INT PRIMARY KEY, max_num_online_servers INT, autocommit INT, "
 		"free_connections_pct INT, init_connect VARCHAR, multiplex INT, connection_warming INT, "
@@ -372,6 +373,7 @@ static void test_write_mysql_servers_with_data() {
 		"domain_name VARCHAR, max_lag_ms INT, check_interval_ms INT, check_timeout_ms INT, "
 		"writer_is_also_reader INT, new_reader_weight INT, add_lag_ms INT, min_lag_ms INT, "
 		"lag_num_checks INT, comment VARCHAR)");
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_AWS_RDS_BGD_HOSTGROUPS);
 	db->execute("CREATE TABLE mysql_hostgroup_attributes "
 		"(hostgroup_id INT PRIMARY KEY, max_num_online_servers INT, autocommit INT, "
 		"free_connections_pct INT, init_connect VARCHAR, multiplex INT, connection_warming INT, "
@@ -420,6 +422,7 @@ static void test_write_mysql_servers_replication_hostgroups() {
 		"domain_name VARCHAR, max_lag_ms INT, check_interval_ms INT, check_timeout_ms INT, "
 		"writer_is_also_reader INT, new_reader_weight INT, add_lag_ms INT, min_lag_ms INT, "
 		"lag_num_checks INT, comment VARCHAR)");
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_AWS_RDS_BGD_HOSTGROUPS);
 	db->execute("CREATE TABLE mysql_hostgroup_attributes "
 		"(hostgroup_id INT PRIMARY KEY, max_num_online_servers INT, autocommit INT, "
 		"free_connections_pct INT, init_connect VARCHAR, multiplex INT, connection_warming INT, "

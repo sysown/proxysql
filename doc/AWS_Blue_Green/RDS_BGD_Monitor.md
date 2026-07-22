@@ -998,9 +998,11 @@ The source review remains open on implementation and verification:
    `aws_rds_bgd_match_host(gs->address, green_writer_host)` call supplies two
    green names to a blue-to-green matcher, so an explicit green `use_ssl`
    differing from blue is not selected.
-2. Make unhealthy connection retirement terminal across reset, local pool
-   return, and global pool return. The follow-up uses the existing `healthy`
-   field and does not add a second flag.
+2. **COMPLETED:** Make unhealthy connection retirement terminal across reset,
+   local pool return, and global pool return. The follow-up uses the existing
+   `healthy` field and does not add a second flag. `connection_unhealthy_unit-t`
+   verifies that unhealthy connections remain terminal across reset and cannot
+   enter either free pool.
 3. Track the author-accepted same-phase DNS failure as required follow-up work.
    Until per-pair reconciliation exists, a transient first resolution failure
    in POST_PROCESSING can leave traffic unpinned and old connections undrained.
@@ -1022,7 +1024,7 @@ proposed broad durable-ledger/controller PR is not part of this sequence.
 | PR1: #5934 | This document only: evidence, accepted risks, current behavior, and follow-up contract. | Ready for author approval; merge into `feature/aws-rds-monitor` before implementation follow-ups so their scope is stable. |
 | PR2: BGD simulator foundation and CI | Add the TAP-controlled SQLite3-server simulator defined in [RDS_BGD_Simulator.md](RDS_BGD_Simulator.md): the `TEST_RDS_BGD` build mode, IP-keyed topology responses, common and BGD TAP helpers, a simulator group, an end-to-end acceptance smoke test, and an automatic CI job that executes the group. | No production behavior change. Provides the reusable harness required by PR6. A successful compile-only `CI-maketest` job is not completion evidence. |
 | PR3: probe target and explicit TLS | Correct AWS-08 by selecting the exact supported explicit green writer row and its `use_ssl`, while retaining the matched blue writer port and automatic-mode blue TLS fallback. | Depends only on the documented contract. Focused unit/TAP evidence must distinguish blue `use_ssl=0` from explicit green `use_ssl=1`. |
-| PR4: terminal connection retirement | Preserve `healthy=false` across `MySQL_Connection::reset()` and destroy unhealthy connections in local and global pool-return paths. Do not introduce another flag or a new locking policy. | Focused tests prove a drained used connection cannot enter either free pool after reset or release. |
+| PR4: terminal connection retirement (**complete**) | Preserve `healthy=false` across `MySQL_Connection::reset()` and destroy unhealthy connections in local and global pool-return paths. Do not introduce another flag or a new locking policy. | **Completed:** `connection_unhealthy_unit-t` proves a drained used connection cannot enter either free pool after reset or release. |
 | PR5: same-phase per-pair reconciliation | Replace phase-equality no-op behavior with worker-local reconciliation for incomplete map/resolution/pin/drain work. Retry only incomplete pairs and never redrain a pair already completed in the current worker generation. | Depends on the accepted one-shot worker model; it must not introduce durable ownership or restart recovery. |
 | PR6: simulator-driven BGD scenario suite | Use PR2's simulator to cover configuration and discovery order, automatic and explicit rows, worker replacement, normal lifecycle, late entry, cancellation and rollback, topology drain, direct probe tuple/TLS, offline exclusions, terminal connection retirement where observable, and PR5 DNS failure/recovery. | Depends on PR2 and should normally follow PR3-PR5 so the suite validates final behavior rather than encoding known failures. All payloads run in the automatic BGD simulator CI group. |
 
