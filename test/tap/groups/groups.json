@@ -408,6 +408,7 @@
   "test_passthrough_auth_invalidation-t" : [ "mysql84-g4","mysql90-g4","mysql95-g4" ],
   "test_passthrough_auth_metrics-t" : [ "mysql84-g4","mysql90-g4","mysql95-g4" ],
   "test_passthrough_auth_misconfig_warning-t" : [ "no-infra-g1" ],
+  "test_passthrough_auth_pool_reuse-t" : [ "mysql84-g4","mysql90-g4","mysql95-g4" ],
   "test_passthrough_auth_ratelimit-t" : [ "mysql84-g4","mysql90-g4","mysql95-g4" ],
   "test_passthrough_auth_security-t" : [ "mysql84-g4","mysql90-g4","mysql95-g4" ],
   "test_passthrough_auth_unknown_user-t" : [ "mysql84-g4","mysql90-g4","mysql95-g4" ],
