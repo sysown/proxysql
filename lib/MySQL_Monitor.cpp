@@ -7165,7 +7165,7 @@ static void aws_rds_bgd_build_map(AWS_RDS_BGD_State& st, const AWS_RDS_Topology_
 								|| gs->get_status() == MYSQL_SERVER_STATUS_OFFLINE_SOFT) {
 								continue;
 							}
-							if (aws_rds_bgd_match_host(gs->address, green_writer_host)) {
+							if (strcasecmp(gs->address, green_writer_host.c_str()) == 0 && gs->port == p.port) {
 								p.green_use_ssl = gs->use_ssl;
 								break;
 							}
@@ -7287,7 +7287,7 @@ static void aws_rds_bgd_add_green_writer_in_hg(AWS_RDS_BGD_State& st) {
 	if (st.green_writer_hg < 0) {
 		return;
 	}
-	for (const AWS_RDS_BlueGreenPair& p : st.bg_map) {
+	for (AWS_RDS_BlueGreenPair& p : st.bg_map) {
 		if (!p.is_writer) {
 			continue;
 		}
@@ -7297,6 +7297,10 @@ static void aws_rds_bgd_add_green_writer_in_hg(AWS_RDS_BGD_State& st) {
 		MyHGM->wrlock();
 		int rc = MyHGM->create_new_server_in_hg((uint32_t)st.green_writer_hg, srv_info, srv_opts);
 		if (rc == 0) {
+			MySrvC* s = MyHGM->find_server_in_hg((unsigned int)st.green_writer_hg, p.green_host, p.port);
+			if (s) {
+				p.green_use_ssl = s->use_ssl;
+			}
 			MyHGM->publish_mysql_servers_to_runtime();
 		}
 		MyHGM->wrunlock();

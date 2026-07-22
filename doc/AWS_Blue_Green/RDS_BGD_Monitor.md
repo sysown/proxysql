@@ -323,15 +323,14 @@ ports is unsupported.
 `mysql_servers` row from which to read TLS configuration, so it intentionally
 uses the matched blue writer's `use_ssl` value.
 
-`SOURCE-CODE, IMPLEMENTATION-CONFORMANCE-OPEN`: Explicit mode is intended to
-use the matching green writer row's `use_ssl`. In commit `20247dcf0`, however,
-the lookup calls `aws_rds_bgd_match_host(gs->address, green_writer_host)`.
-That helper expects a blue hostname as its first argument and a green hostname
-as its second argument. Passing the configured green hostname and TARGET green
-hostname therefore does not match the ordinary
-`<blue>-green-<random>.<domain>` case. `green_use_ssl` remains unset and the
-probe silently falls back to the blue writer's value. AWS-08's policy decision
-is resolved, but the current source does not yet implement it.
+`SOURCE-CODE, AUTHOR-ACCEPTED-POLICY`: Explicit mode selects an eligible green
+writer row by exact TARGET hostname and the matched blue writer's port. Map
+construction copies `use_ssl` from an existing row. When discovery creates a
+missing row or restores an `OFFLINE_HARD` row, the successful add path copies
+the exact row's resolved `use_ssl` after hostgroup defaults are applied. A
+valid initially empty configured green writer hostgroup produces no warning.
+An `OFFLINE_SOFT` row remains ineligible and retains the matched-blue TLS
+fallback. Simulator coverage for both row paths is assigned to PR6.
 
 ### Current Phase-Equality Behavior
 
@@ -903,7 +902,7 @@ that is tracked separately rather than reopening the evidence decision.
 | AWS-05b | The author accepts `TOPOLOGY_EMPTY` after observed writer completion as the reader-cleanup signal despite no AWS guarantee or direct reader-DNS timestamp. | `RESOLVED AS AUTHOR-ACCEPTED POLICY`: The observational risk is explicit. |
 | AWS-06 | The author observed the green hostname stop resolving after completion while the promoted IP survived. | `RESOLVED AS SCOPED OBSERVATION`: Retain a complete probe target while it is needed. |
 | AWS-07 | The author agrees the evidence does not establish universal source/target port equality. Commit `20247dcf0` takes the probe port from the matched blue writer pair. Pair-specific port mismatch is explicitly unsupported; different pairs may use different ports. | `RESOLVED AS AUTHOR-ACCEPTED POLICY`: Use the matched blue writer's configured port and accept failure for a target using a different port. Do not present equality as an AWS guarantee. |
-| AWS-08 | The author agrees `use_ssl` is ProxySQL configuration. Automatic mode uses the matched blue writer's value; explicit mode must use the matched green writer row's value. | `RESOLVED AS AUTHOR-ACCEPTED POLICY; IMPLEMENTATION OPEN`: The tuple sources are precise, but commit `20247dcf0` invokes the hostname matcher with two green names, so normal explicit rows do not set `green_use_ssl` and the probe falls back to blue TLS. |
+| AWS-08 | The author agrees `use_ssl` is ProxySQL configuration. Automatic mode uses the matched blue writer's value; explicit mode must use the matched green writer row's value. | `RESOLVED AS AUTHOR-ACCEPTED POLICY; IMPLEMENTED`: Existing rows are selected by exact TARGET hostname and matched-blue port; successfully created or restored rows supply their resolved `use_ssl`. Simulator coverage remains assigned to PR6. |
 | AWS-09 | The topology contains writer endpoints only; incomplete explicit reader mapping is expected and unmatched blue readers are shunned. | `RESOLVED AS POLICY`: Track and reconcile readers independently. |
 | AWS-10 | Commits `cdffd77ee` and `ac4167cd0` retain auto-added and user-configured green rows on rollback and success. Rollback leaves green connections untouched; success drains eligible green connections but leaves rows and statuses unchanged. | `RESOLVED AS AUTHOR-ACCEPTED POLICY`: Green membership is persistent runtime configuration, not a temporary owned effect. Administrative cleanup is required even for an auto-added row. |
 | AWS-11a | The author explicitly chooses one-shot worker-exit/configuration-change cleanup and no retained retry ledger. | `RESOLVED AS AUTHOR-ACCEPTED POLICY`: Loss of the cleanup context, including when a process terminates during cleanup, is accepted. The stronger retained rollback model is not PR2 scope. |
@@ -919,7 +918,7 @@ that is tracked separately rather than reopening the evidence decision.
 | Mode | Host/IP source | Port source | SSL source | Author decision/evidence |
 |---|---|---|---|---|
 | Automatic | `AUTHOR-VALIDATED`: Resolved IP of the TARGET endpoint from `mysql.rds_topology`. | `AUTHOR-ACCEPTED-POLICY`: Matched blue writer's configured port. A different TARGET port is unsupported and is not forbidden by the recorded AWS evidence. | `AUTHOR-ACCEPTED-POLICY`: Matched blue writer's `use_ssl`, because no independent green row exists. | Policy resolved and implemented by writer-pair selection in `20247dcf0`. |
-| Explicit | `AUTHOR-VALIDATED`: Resolved IP of the TARGET endpoint from `mysql.rds_topology`; the configured green writer must identify that target. | `AUTHOR-ACCEPTED-POLICY`: Matched blue writer's configured port. A different TARGET or explicit-green port is unsupported. | `AUTHOR-ACCEPTED-POLICY`: Exact matching green writer row's `use_ssl`. | Policy resolved; implementation is nonconforming because the current two-green-name matcher call does not select the explicit row. |
+| Explicit | `AUTHOR-VALIDATED`: Resolved IP of the TARGET endpoint from `mysql.rds_topology`; the configured green writer must identify that target. | `AUTHOR-ACCEPTED-POLICY`: Matched blue writer's configured port. A different TARGET or explicit-green port is unsupported. | `AUTHOR-ACCEPTED-POLICY`: Exact matching green writer row's resolved `use_ssl`. | Policy resolved and implemented; PR6 owns simulator coverage. |
 
 `AUTHOR-ACCEPTED-POLICY`: A direct probe target is a complete host or IP, port,
 and SSL tuple derived from the matched writer pair, never from an arbitrary
@@ -963,7 +962,7 @@ durable-ledger design.
 |---|---|---|---|
 | Matched writer probe tuple | `writer_tuple_not_first_poll_row` | `multiple_blue_ports_and_ssl` | With a reader first in the polling result and different ports across pairs, the direct probe uses the mapped blue writer's port and never `hpa[0]`. |
 | Automatic TLS source | `auto_green_inherits_writer_ssl` | `automatic_green_tls` | With no explicit green row, the direct probe and auto-added green writer use the matched blue writer's `use_ssl`. |
-| Explicit TLS source | `explicit_green_ssl_override` | `explicit_green_tls_differs_from_blue` | With the same supported pair port but blue `use_ssl=0` and explicit green `use_ssl=1`, the direct IP probe enables TLS. This catches the current two-green-name matcher defect. |
+| Explicit TLS source | `explicit_green_ssl_override` | `explicit_green_tls_differs_from_blue` | With the same supported pair port but blue `use_ssl=0` and explicit green `use_ssl=1`, the direct IP probe enables TLS. This guards the exact explicit-green TLS selection. |
 | Unsupported within-pair port mismatch | `target_port_mismatch_policy` | `target_port_mismatch_diagnostic` | The implementation's blue-port choice is explicit and observable; the test must not claim AWS guarantees equality. A future rejection diagnostic is preferable to silent probing of the wrong port. |
 | Eligible green generation checksum | `green_checksum_matrix` | `admin_green_add_remove_ssl_status` | Add/remove, port, `use_ssl`, and transitions into or out of `OFFLINE_SOFT`/`OFFLINE_HARD` change the checksum and replace workers; irrelevant changes do not. |
 | Admin commit during active phase | `config_change_exits_worker` | `load_mysql_servers_mid_switchover` | The old worker runs one-shot rollback, the dispatcher joins it, and the replacement builds a new map from the committed runtime rows. |
@@ -994,10 +993,9 @@ the checklist rather than promoted to AWS guarantees.
 
 The source review remains open on implementation and verification:
 
-1. Fix explicit green TLS selection. The current
-   `aws_rds_bgd_match_host(gs->address, green_writer_host)` call supplies two
-   green names to a blue-to-green matcher, so an explicit green `use_ssl`
-   differing from blue is not selected.
+1. **COMPLETED:** Select explicit green TLS from the exact supported writer row,
+   including a row created or restored during discovery. Simulator coverage
+   for the existing-row and discovered-row paths remains part of PR6.
 2. **COMPLETED:** Make unhealthy connection retirement terminal across reset,
    local pool return, and global pool return. The follow-up uses the existing
    `healthy` field and does not add a second flag. `connection_unhealthy_unit-t`
@@ -1023,10 +1021,10 @@ proposed broad durable-ledger/controller PR is not part of this sequence.
 |---|---|---|
 | PR1: #5934 | This document only: evidence, accepted risks, current behavior, and follow-up contract. | Ready for author approval; merge into `feature/aws-rds-monitor` before implementation follow-ups so their scope is stable. |
 | PR2: BGD simulator foundation and CI | Add the TAP-controlled SQLite3-server simulator defined in [RDS_BGD_Simulator.md](RDS_BGD_Simulator.md): the `TEST_RDS_BGD` build mode, IP-keyed topology responses, common and BGD TAP helpers, a simulator group, an end-to-end acceptance smoke test, and an automatic CI job that executes the group. | No production behavior change. Provides the reusable harness required by PR6. A successful compile-only `CI-maketest` job is not completion evidence. |
-| PR3: probe target and explicit TLS | Correct AWS-08 by selecting the exact supported explicit green writer row and its `use_ssl`, while retaining the matched blue writer port and automatic-mode blue TLS fallback. | Depends only on the documented contract. Focused unit/TAP evidence must distinguish blue `use_ssl=0` from explicit green `use_ssl=1`. |
+| PR3: probe target and explicit TLS (**complete**) | Correct AWS-08 by selecting the exact supported explicit green writer row and its resolved `use_ssl`, including a row created or restored during discovery, while retaining the matched blue writer port and automatic-mode blue TLS fallback. | **Completed:** production behavior conforms to AWS-08. Existing-row and discovered-row simulator coverage remains part of PR6. |
 | PR4: terminal connection retirement (**complete**) | Preserve `healthy=false` across `MySQL_Connection::reset()` and destroy unhealthy connections in local and global pool-return paths. Do not introduce another flag or a new locking policy. | **Completed:** `connection_unhealthy_unit-t` proves a drained used connection cannot enter either free pool after reset or release. |
 | PR5: same-phase per-pair reconciliation | Replace phase-equality no-op behavior with worker-local reconciliation for incomplete map/resolution/pin/drain work. Retry only incomplete pairs and never redrain a pair already completed in the current worker generation. | Depends on the accepted one-shot worker model; it must not introduce durable ownership or restart recovery. |
-| PR6: simulator-driven BGD scenario suite | Use PR2's simulator to cover configuration and discovery order, automatic and explicit rows, worker replacement, normal lifecycle, late entry, cancellation and rollback, topology drain, direct probe tuple/TLS, offline exclusions, terminal connection retirement where observable, and PR5 DNS failure/recovery. | Depends on PR2 and should normally follow PR3-PR5 so the suite validates final behavior rather than encoding known failures. All payloads run in the automatic BGD simulator CI group. |
+| PR6: simulator-driven BGD scenario suite | Use PR2's simulator to cover configuration and discovery order, automatic and explicit rows, worker replacement, normal lifecycle, late entry, cancellation and rollback, topology drain, direct probe tuple/TLS for existing and discovered explicit green rows, offline exclusions, terminal connection retirement where observable, and PR5 DNS failure/recovery. | Depends on PR2 and should normally follow PR3-PR5 so the suite validates final behavior rather than encoding known failures. All payloads run in the automatic BGD simulator CI group. |
 
 Any retained cleanup ledger, durable restart ownership, or alternative
 controller state machine requires a new author policy decision. The simulator
