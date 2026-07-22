@@ -53,8 +53,6 @@ class SQLite3_Server {
 #endif // TEST_GROUPREP
 #if defined(TEST_READONLY) || defined(TEST_RDS_BGD)
 	std::vector<table_def_t *> *tables_defs_readonly;
-#endif
-#if defined(TEST_READONLY) || defined(TEST_RDS_BGD)
 	std::unordered_map<std::string, bool> readonly_map;
 #endif // TEST_READONLY || TEST_RDS_BGD
 #ifdef TEST_RDS_BGD

@@ -50,7 +50,7 @@ Groups whose name starts with `cluster_sim_` (e.g. `cluster_sim_aurora-g1`, `clu
 | `cluster_sim_repl_lag-g<N>` | `make testreplicationlag` |
 | `cluster_sim_rds_bgd-g<N>` | `make test_rds_bgd` |
 
-Each target sets the corresponding `-DTEST_<FAMILY>` flag on the ProxySQL src and lib build. The BGD target builds its TAP-controlled SQLite3-server simulator directly; the other targets also build `test/deps/cluster_simulator`. A plain `make` is **not sufficient** for these groups.
+Each target sets the corresponding `-DTEST_<FAMILY>` flag on the ProxySQL src and lib builds and triggers the required simulator build. A plain `make` is **not sufficient** for these groups.
 
 ---
 ## 1. Core Concepts

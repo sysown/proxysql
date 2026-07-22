@@ -1,3 +1,9 @@
+# AWS RDS BGD simulator endpoint aliases.
+# Format: "<hostname> <ip>" per line; '#' comments allowed.
+# These are injected into the ProxySQL container's /etc/hosts via Docker
+# --add-host by test/infra/control/start-proxysql-isolated.bash when
+# CLUSTER_SIM_HOST_FILE points at this file (see this group's env.sh).
+
 # Cluster 1: blue endpoints
 db-1.c1yqcg0ie39o.eu-north-1.rds.amazonaws.com 127.10.0.11
 db-1-reader-1.c1yqcg0ie39o.eu-north-1.rds.amazonaws.com 127.10.0.12
