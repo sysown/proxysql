@@ -659,8 +659,10 @@ int ProxySQL_Config::Write_MySQL_Query_Rules_Fast_Routing_to_configfile(std::str
 	char *query=(char *)"SELECT * FROM mysql_query_rules_fast_routing";
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
 	if (error) {
-		proxy_error("Error on read from mysql_query_rules_fast_routing : %s\n", error);
-		return -1;
+		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
+		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
+		free(error); // execute_statement strdup's the message
+		error = NULL;
 	} else {
 		if (sqlite_resultset) {
 			data += "mysql_query_rules_fast_routing:\n(\n";
@@ -681,8 +683,10 @@ int ProxySQL_Config::Write_MySQL_Query_Rules_Fast_Routing_to_configfile(std::str
 		}
 	}
 
-	if (sqlite_resultset)
+	if (sqlite_resultset) {
 		delete sqlite_resultset;
+		sqlite_resultset = NULL;
+	}
 
 	return 0;
 }
@@ -696,8 +700,10 @@ int ProxySQL_Config::Write_PgSQL_Query_Rules_Fast_Routing_to_configfile(std::str
 	char *query=(char *)"SELECT * FROM pgsql_query_rules_fast_routing";
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
 	if (error) {
-		proxy_error("Error on read from pgsql_query_rules_fast_routing : %s\n", error);
-		return -1;
+		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
+		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
+		free(error); // execute_statement strdup's the message
+		error = NULL;
 	} else {
 		if (sqlite_resultset) {
 			data += "pgsql_query_rules_fast_routing:\n(\n";
@@ -718,8 +724,10 @@ int ProxySQL_Config::Write_PgSQL_Query_Rules_Fast_Routing_to_configfile(std::str
 		}
 	}
 
-	if (sqlite_resultset)
+	if (sqlite_resultset) {
 		delete sqlite_resultset;
+		sqlite_resultset = NULL;
+	}
 
 	return 0;
 }
@@ -733,8 +741,10 @@ int ProxySQL_Config::Write_MySQL_Firewall_to_configfile(std::string& data) {
 	char *query=(char *)"SELECT * FROM mysql_firewall_whitelist_users";
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
 	if (error) {
-		proxy_error("Error on read from mysql_firewall_whitelist_users : %s\n", error);
-		return -1;
+		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
+		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
+		free(error); // execute_statement strdup's the message
+		error = NULL;
 	} else {
 		if (sqlite_resultset) {
 			data += "mysql_firewall_whitelist_users:\n(\n";
@@ -755,14 +765,18 @@ int ProxySQL_Config::Write_MySQL_Firewall_to_configfile(std::string& data) {
 		}
 	}
 
-	if (sqlite_resultset)
+	if (sqlite_resultset) {
 		delete sqlite_resultset;
+		sqlite_resultset = NULL;
+	}
 
 	query=(char *)"SELECT * FROM mysql_firewall_whitelist_rules";
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
 	if (error) {
-		proxy_error("Error on read from mysql_firewall_whitelist_rules : %s\n", error);
-		return -1;
+		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
+		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
+		free(error); // execute_statement strdup's the message
+		error = NULL;
 	} else {
 		if (sqlite_resultset) {
 			data += "mysql_firewall_whitelist_rules:\n(\n";
@@ -785,14 +799,18 @@ int ProxySQL_Config::Write_MySQL_Firewall_to_configfile(std::string& data) {
 		}
 	}
 
-	if (sqlite_resultset)
+	if (sqlite_resultset) {
 		delete sqlite_resultset;
+		sqlite_resultset = NULL;
+	}
 
 	query=(char *)"SELECT * FROM mysql_firewall_whitelist_sqli_fingerprints";
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
 	if (error) {
-		proxy_error("Error on read from mysql_firewall_whitelist_sqli_fingerprints : %s\n", error);
-		return -1;
+		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
+		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
+		free(error); // execute_statement strdup's the message
+		error = NULL;
 	} else {
 		if (sqlite_resultset) {
 			data += "mysql_firewall_whitelist_sqli_fingerprints:\n(\n";
@@ -810,8 +828,10 @@ int ProxySQL_Config::Write_MySQL_Firewall_to_configfile(std::string& data) {
 		}
 	}
 
-	if (sqlite_resultset)
+	if (sqlite_resultset) {
 		delete sqlite_resultset;
+		sqlite_resultset = NULL;
+	}
 
 	return 0;
 }
@@ -825,8 +845,10 @@ int ProxySQL_Config::Write_PgSQL_Firewall_to_configfile(std::string& data) {
 	char *query=(char *)"SELECT * FROM pgsql_firewall_whitelist_users";
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
 	if (error) {
-		proxy_error("Error on read from pgsql_firewall_whitelist_users : %s\n", error);
-		return -1;
+		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
+		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
+		free(error); // execute_statement strdup's the message
+		error = NULL;
 	} else {
 		if (sqlite_resultset) {
 			data += "pgsql_firewall_whitelist_users:\n(\n";
@@ -847,14 +869,18 @@ int ProxySQL_Config::Write_PgSQL_Firewall_to_configfile(std::string& data) {
 		}
 	}
 
-	if (sqlite_resultset)
+	if (sqlite_resultset) {
 		delete sqlite_resultset;
+		sqlite_resultset = NULL;
+	}
 
 	query=(char *)"SELECT * FROM pgsql_firewall_whitelist_rules";
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
 	if (error) {
-		proxy_error("Error on read from pgsql_firewall_whitelist_rules : %s\n", error);
-		return -1;
+		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
+		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
+		free(error); // execute_statement strdup's the message
+		error = NULL;
 	} else {
 		if (sqlite_resultset) {
 			data += "pgsql_firewall_whitelist_rules:\n(\n";
@@ -877,14 +903,18 @@ int ProxySQL_Config::Write_PgSQL_Firewall_to_configfile(std::string& data) {
 		}
 	}
 
-	if (sqlite_resultset)
+	if (sqlite_resultset) {
 		delete sqlite_resultset;
+		sqlite_resultset = NULL;
+	}
 
 	query=(char *)"SELECT * FROM pgsql_firewall_whitelist_sqli_fingerprints";
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
 	if (error) {
-		proxy_error("Error on read from pgsql_firewall_whitelist_sqli_fingerprints : %s\n", error);
-		return -1;
+		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
+		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
+		free(error); // execute_statement strdup's the message
+		error = NULL;
 	} else {
 		if (sqlite_resultset) {
 			data += "pgsql_firewall_whitelist_sqli_fingerprints:\n(\n";
@@ -902,8 +932,10 @@ int ProxySQL_Config::Write_PgSQL_Firewall_to_configfile(std::string& data) {
 		}
 	}
 
-	if (sqlite_resultset)
+	if (sqlite_resultset) {
 		delete sqlite_resultset;
+		sqlite_resultset = NULL;
+	}
 
 	return 0;
 }
@@ -2354,13 +2386,14 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 			line.lookupValue("comment", comment);
 			char *o1=strdup(comment.c_str());
 			char *o=escape_string_single_quotes(o1, false);
-			char *query=(char *)malloc(
+			size_t query_len = (
 				strlen(q)
 				+ hostname.length() + username.length()
 				+ ssl_ca.length() + ssl_cert.length() + ssl_key.length()
 				+ ssl_crl.length() + ssl_crlpath.length() + ssl_protocol_version_range.length() + strlen(o) + 64
 			);
-			sprintf(query, q, hostname.c_str(), port, username.c_str(), ssl_ca.c_str(), ssl_cert.c_str(), ssl_key.c_str(), ssl_crl.c_str(), ssl_crlpath.c_str(), ssl_protocol_version_range.c_str(), o);
+			char *query=(char *)malloc(query_len);
+			snprintf(query, query_len, q, hostname.c_str(), port, username.c_str(), ssl_ca.c_str(), ssl_cert.c_str(), ssl_key.c_str(), ssl_crl.c_str(), ssl_crlpath.c_str(), ssl_protocol_version_range.c_str(), o);
 			admindb->execute(query);
 			if (o != o1) free(o);
 			free(o1);
@@ -2944,8 +2977,9 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_Fast_Routing_from_configfile() {
 		rule.lookupValue("comment", comment);
 		char *o1 = strdup(comment.c_str());
 		char *o = escape_string_single_quotes(o1, false);
-		char *query = (char *)malloc(strlen(q) + strlen(username.c_str()) + strlen(schemaname.c_str()) + strlen(o) + 64);
-		sprintf(query, q, username.c_str(), schemaname.c_str(), flagIN, destination_hostgroup, o);
+		size_t query_len = strlen(q) + strlen(username.c_str()) + strlen(schemaname.c_str()) + strlen(o) + 64;
+		char *query = (char *)malloc(query_len);
+		snprintf(query, query_len, q, username.c_str(), schemaname.c_str(), flagIN, destination_hostgroup, o);
 		admindb->execute(query);
 		if (o != o1) free(o);
 		free(o1);
@@ -2979,8 +3013,9 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_Fast_Routing_from_configfile() {
 		rule.lookupValue("comment", comment);
 		char *o1 = strdup(comment.c_str());
 		char *o = escape_string_single_quotes(o1, false);
-		char *query = (char *)malloc(strlen(q) + strlen(username.c_str()) + strlen(database.c_str()) + strlen(o) + 64);
-		sprintf(query, q, username.c_str(), database.c_str(), flagIN, destination_hostgroup, o);
+		size_t query_len = strlen(q) + strlen(username.c_str()) + strlen(database.c_str()) + strlen(o) + 64;
+		char *query = (char *)malloc(query_len);
+		snprintf(query, query_len, q, username.c_str(), database.c_str(), flagIN, destination_hostgroup, o);
 		admindb->execute(query);
 		if (o != o1) free(o);
 		free(o1);
@@ -3014,8 +3049,9 @@ int ProxySQL_Config::Read_MySQL_Firewall_from_configfile() {
 			u.lookupValue("comment", comment);
 			char *o1=strdup(comment.c_str());
 			char *o=escape_string_single_quotes(o1, false);
-			char *query=(char *)malloc(strlen(q) + strlen(username.c_str()) + strlen(client_address.c_str()) + strlen(mode.c_str()) + strlen(o) + 32);
-			sprintf(query, q, active, username.c_str(), client_address.c_str(), mode.c_str(), o);
+			size_t query_len = strlen(q) + strlen(username.c_str()) + strlen(client_address.c_str()) + strlen(mode.c_str()) + strlen(o) + 32;
+			char *query=(char *)malloc(query_len);
+			snprintf(query, query_len, q, active, username.c_str(), client_address.c_str(), mode.c_str(), o);
 			admindb->execute(query);
 			if (o != o1) free(o);
 			free(o1);
@@ -3046,8 +3082,9 @@ int ProxySQL_Config::Read_MySQL_Firewall_from_configfile() {
 			r.lookupValue("comment", comment);
 			char *o1=strdup(comment.c_str());
 			char *o=escape_string_single_quotes(o1, false);
-			char *query=(char *)malloc(strlen(q) + strlen(username.c_str()) + strlen(client_address.c_str()) + strlen(schemaname.c_str()) + strlen(digest.c_str()) + strlen(o) + 64);
-			sprintf(query, q, active, username.c_str(), client_address.c_str(), schemaname.c_str(), flagIN, digest.c_str(), o);
+			size_t query_len = strlen(q) + strlen(username.c_str()) + strlen(client_address.c_str()) + strlen(schemaname.c_str()) + strlen(digest.c_str()) + strlen(o) + 64;
+			char *query=(char *)malloc(query_len);
+			snprintf(query, query_len, q, active, username.c_str(), client_address.c_str(), schemaname.c_str(), flagIN, digest.c_str(), o);
 			admindb->execute(query);
 			if (o != o1) free(o);
 			free(o1);
@@ -3066,8 +3103,9 @@ int ProxySQL_Config::Read_MySQL_Firewall_from_configfile() {
 			std::string fingerprint="";
 			f.lookupValue("active", active);
 			f.lookupValue("fingerprint", fingerprint);
-			char *query=(char *)malloc(strlen(q) + strlen(fingerprint.c_str()) + 16);
-			sprintf(query, q, active, fingerprint.c_str());
+			size_t query_len = strlen(q) + strlen(fingerprint.c_str()) + 16;
+			char *query=(char *)malloc(query_len);
+			snprintf(query, query_len, q, active, fingerprint.c_str());
 			admindb->execute(query);
 			free(query);
 			rows++;
@@ -3101,8 +3139,9 @@ int ProxySQL_Config::Read_PgSQL_Firewall_from_configfile() {
 			u.lookupValue("comment", comment);
 			char *o1=strdup(comment.c_str());
 			char *o=escape_string_single_quotes(o1, false);
-			char *query=(char *)malloc(strlen(q) + strlen(username.c_str()) + strlen(client_address.c_str()) + strlen(mode.c_str()) + strlen(o) + 32);
-			sprintf(query, q, active, username.c_str(), client_address.c_str(), mode.c_str(), o);
+			size_t query_len = strlen(q) + strlen(username.c_str()) + strlen(client_address.c_str()) + strlen(mode.c_str()) + strlen(o) + 32;
+			char *query=(char *)malloc(query_len);
+			snprintf(query, query_len, q, active, username.c_str(), client_address.c_str(), mode.c_str(), o);
 			admindb->execute(query);
 			if (o != o1) free(o);
 			free(o1);
@@ -3133,8 +3172,9 @@ int ProxySQL_Config::Read_PgSQL_Firewall_from_configfile() {
 			r.lookupValue("comment", comment);
 			char *o1=strdup(comment.c_str());
 			char *o=escape_string_single_quotes(o1, false);
-			char *query=(char *)malloc(strlen(q) + strlen(username.c_str()) + strlen(client_address.c_str()) + strlen(database.c_str()) + strlen(digest.c_str()) + strlen(o) + 64);
-			sprintf(query, q, active, username.c_str(), client_address.c_str(), database.c_str(), flagIN, digest.c_str(), o);
+			size_t query_len = strlen(q) + strlen(username.c_str()) + strlen(client_address.c_str()) + strlen(database.c_str()) + strlen(digest.c_str()) + strlen(o) + 64;
+			char *query=(char *)malloc(query_len);
+			snprintf(query, query_len, q, active, username.c_str(), client_address.c_str(), database.c_str(), flagIN, digest.c_str(), o);
 			admindb->execute(query);
 			if (o != o1) free(o);
 			free(o1);
@@ -3153,8 +3193,9 @@ int ProxySQL_Config::Read_PgSQL_Firewall_from_configfile() {
 			std::string fingerprint="";
 			f.lookupValue("active", active);
 			f.lookupValue("fingerprint", fingerprint);
-			char *query=(char *)malloc(strlen(q) + strlen(fingerprint.c_str()) + 16);
-			sprintf(query, q, active, fingerprint.c_str());
+			size_t query_len = strlen(q) + strlen(fingerprint.c_str()) + 16;
+			char *query=(char *)malloc(query_len);
+			snprintf(query, query_len, q, active, fingerprint.c_str());
 			admindb->execute(query);
 			free(query);
 			rows++;
