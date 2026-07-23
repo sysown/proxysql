@@ -120,9 +120,6 @@ extern struct MHD_Daemon *Admin_HTTP_Server;
 
 extern ProxySQL_Statistics *GloProxyStats;
 
-template<enum SERVER_TYPE>
-int ProxySQL_Test___PurgeDigestTable(bool async_purge, bool parallel, char **msg);
-
 extern char *ssl_key_fp;
 extern char *ssl_cert_fp;
 extern char *ssl_ca_fp;
@@ -327,6 +324,17 @@ const std::vector<std::string> LOAD_COREDUMP_FROM_MEMORY = {
 	"LOAD COREDUMP TO RUNTIME" ,
 	"LOAD COREDUMP TO RUN" };
 
+const std::vector<std::string> CMD_PREFIX_PURGE_QUERY_DIGESTS = {
+	"PURGE TABLE stats.stats_mysql_query_digest TO ",
+	"PURGE TABLE stats_mysql_query_digest TO ",
+	"PURGE stats.stats_mysql_query_digest TO ",
+	"PURGE stats_mysql_query_digest TO ",
+	"PURGE TABLE stats.stats_pgsql_query_digest TO ",
+	"PURGE TABLE stats_pgsql_query_digest TO ",
+	"PURGE stats.stats_pgsql_query_digest TO ",
+	"PURGE stats_pgsql_query_digest TO ",
+};
+
 extern unordered_map<string,std::tuple<string, vector<string>, vector<string>>> load_save_disk_commands;
 
 // Helper function: Extract pattern from c.relname OPERATOR or LIKE clause
@@ -518,6 +526,17 @@ bool is_admin_command_or_alias(const std::vector<std::string>& cmds, char *query
 	return false;
 }
 
+const char * match_command_prefix(const std::vector<std::string>& cmd_prefix, char *query, int query_len) {
+	for (auto &prefix : cmd_prefix) {
+		if ((unsigned int) query_len >= prefix.length()
+			&& !strncasecmp(prefix.c_str(), query, prefix.length()))
+		{
+			return prefix.c_str();
+		}
+	}
+
+	return nullptr;
+}
 
 
 template <typename S>
@@ -551,6 +570,38 @@ bool FlushCommandWrapper(S* sess, const string& modname, char *query_no_space, i
 	if (FlushCommandWrapper(sess, get<2>(t), query_no_space, query_no_space_length, modname, "memory_to_disk") == true)
 		return true;
 	return false;
+}
+
+std::tuple<bool, enum SERVER_TYPE, time_t> parse_command_purge_query_digests(char *query, int query_len) {
+	bool match = false;
+	enum SERVER_TYPE server_type = SERVER_TYPE_MYSQL;
+	time_t last_seen = 0;
+
+	const char *prefix = match_command_prefix(CMD_PREFIX_PURGE_QUERY_DIGESTS, query, query_len);
+	if (prefix) {
+		match = true;
+
+		if (strstr(prefix, "_pgsql_") != nullptr) {
+			server_type = SERVER_TYPE_PGSQL;
+		}
+
+		// parse timestamp
+		mf_unique_ptr<char> ts_str(strdup(query + strlen(prefix)));
+		char *ts_end = nullptr;
+		long long ts = strtoll(trim_spaces_in_place(ts_str.get()), &ts_end, 10);
+
+		// ts_str should only contain digits and respresent a valid timestamp
+		if ((*ts_end == 0) && (ts > 0)) {
+			last_seen = realtime_to_monotonic_time(ts);
+			if (last_seen <= 0) {
+				// valid timestamp, but older than the monotonic clock epoch (system
+				// boot): no entry can match, make the command a successful no-op
+				last_seen = 1;
+			}
+		}
+	}
+
+	return std::make_tuple(match, server_type, last_seen);
 }
 
 template <typename S>
@@ -3447,10 +3498,8 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 					SPA->admindb->execute("DELETE FROM stats.stats_mysql_query_digest_reset");
 					SPA->vacuum_stats(true);
 					// purge the digest map, asynchronously, in single thread
-					char *msg = NULL;
-					int r1 = ProxySQL_Test___PurgeDigestTable<SERVER_TYPE_MYSQL>(true, false, &msg);
-					SPA->send_ok_msg_to_client(sess, msg, r1, query_no_space);
-					free(msg);
+					int r1 = GloMyQPro->purge_query_digests(true, false);
+					SPA->send_ok_msg_to_client(sess, NULL, r1, query_no_space);
 					run_query=false;
 					goto __run_query;
 				}
@@ -3483,16 +3532,45 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 					SPA->admindb->execute("DELETE FROM stats.stats_pgsql_query_digest_reset");
 					SPA->vacuum_stats(true);
 					// purge the digest map, asynchronously, in single thread
-					char* msg = NULL;
-					int r1 = ProxySQL_Test___PurgeDigestTable<SERVER_TYPE_PGSQL>(true, false, &msg);
-					SPA->send_ok_msg_to_client(sess, msg, r1, query_no_space);
-					free(msg);
+					int r1 = GloPgQPro->purge_query_digests(true, false);
+					SPA->send_ok_msg_to_client(sess, NULL, r1, query_no_space);
 					run_query = false;
 					goto __run_query;
 				}
 			}
 		}
 	}
+
+	// handles 'PURGE stats_mysql_query_digest TO <value>'.
+	// any entry in stats_mysql_query_digest where last_seen is less than <value> will be deleted.
+	if (!strncasecmp("PURGE ", query_no_space, strlen("PURGE "))
+		&& sess->session_type == PROXYSQL_SESSION_ADMIN
+	) {
+		auto result = parse_command_purge_query_digests(query_no_space, query_no_space_length);
+		bool match = std::get<0>(result);
+
+		if (match == true) {
+			int ret = 0;
+			enum SERVER_TYPE type = std::get<1>(result);
+			time_t last_seen = std::get<2>(result);
+
+			if (last_seen > 0) {
+				if (type == SERVER_TYPE_MYSQL) {
+					ret = GloMyQPro->purge_query_digests(true, false, last_seen);
+				} else if (type == SERVER_TYPE_PGSQL) {
+					ret = GloPgQPro->purge_query_digests(true, false, last_seen);
+				}
+
+				pa->send_ok_msg_to_client(sess, NULL, ret, query_no_space);
+			} else {
+				pa->send_error_msg_to_client(sess, "Invalid timestamp");
+			}
+
+			run_query = false;
+			goto __run_query;
+		}
+	}
+
 #ifdef DEBUG
 	/**
 	 * @brief Handles the 'PROXYSQL_SIMULATOR' command. Performing the operation specified in the payload

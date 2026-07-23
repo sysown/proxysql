@@ -46,7 +46,7 @@ static void init_rand_del() {
 int ProxySQL_Test___GetDigestTable(bool reset, bool use_swap);
 bool ProxySQL_Test___Refresh_MySQL_Variables(unsigned int cnt);
 template<enum SERVER_TYPE>
-int ProxySQL_Test___PurgeDigestTable(bool async_purge, bool parallel, char **msg);
+int ProxySQL_Test___PurgeDigestTable(bool async_purge, bool parallel, time_t last_seen);
 int ProxySQL_Test___GenerateRandomQueryInDigestTable(int n);
 
 void ProxySQL_Admin::map_test_mysql_firewall_whitelist_rules_cleanup() {
@@ -1179,21 +1179,20 @@ void ProxySQL_Admin::ProxySQL_Test_Handler(ProxySQL_Admin *SPA, S* sess, char *q
 				break;
 			case 4:
 				// purge the digest map, synchronously, in single thread
-				r1 = ProxySQL_Test___PurgeDigestTable<SERVER_TYPE_MYSQL>(false, false, NULL);
+				r1 = ProxySQL_Test___PurgeDigestTable<SERVER_TYPE_MYSQL>(false, false, test_arg1);
 				SPA->send_ok_msg_to_client(sess, NULL, r1, query_no_space);
 				run_query=false;
 				break;
 			case 5:
 				// purge the digest map, synchronously, in multiple threads
-				r1 = ProxySQL_Test___PurgeDigestTable<SERVER_TYPE_MYSQL>(false, true, NULL);
+				r1 = ProxySQL_Test___PurgeDigestTable<SERVER_TYPE_MYSQL>(false, true, test_arg1);
 				SPA->send_ok_msg_to_client(sess, NULL, r1, query_no_space);
 				run_query=false;
 				break;
 			case 6:
 				// purge the digest map, asynchronously, in single thread
-				r1 = ProxySQL_Test___PurgeDigestTable<SERVER_TYPE_MYSQL>(true, false, &msg);
-				SPA->send_ok_msg_to_client(sess, msg, r1, query_no_space);
-				free(msg);
+				r1 = ProxySQL_Test___PurgeDigestTable<SERVER_TYPE_MYSQL>(true, false, test_arg1);
+				SPA->send_ok_msg_to_client(sess, NULL, r1, query_no_space);
 				run_query=false;
 				break;
 			case 7:

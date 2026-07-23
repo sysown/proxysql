@@ -81,6 +81,7 @@ class QP_query_digest_stats {
 		unsigned long long t, unsigned long long n, unsigned long long ra, unsigned long long rs,
 		unsigned long long cnt = 1
 	);
+	void merge(const QP_query_digest_stats *other);
 	~QP_query_digest_stats();
 	char *get_digest_text(const umap_query_digest_text *digest_text_umap) const;
 	char **get_row(umap_query_digest_text *digest_text_umap, query_digest_stats_pointers_t *qdsp);
@@ -345,7 +346,7 @@ public:
 		uint32_t max_window
 	);
 	void get_query_digests_reset(umap_query_digest* uqd, umap_query_digest_text* uqdt);
-	unsigned long long purge_query_digests(bool async_purge, bool parallel, char** msg);
+	unsigned long long purge_query_digests(bool async_purge, bool parallel, time_t last_seen = 0);
 
 	void save_query_rules(SQLite3_result* resultset);
 
@@ -457,8 +458,8 @@ private:
 	DEFINE_HAS_METHOD_STRUCT(query_parser_first_comment_extended);
 	DEFINE_HAS_METHOD_STRUCT(process_query_extended);
 
-	unsigned long long purge_query_digests_async(char** msg);
-	unsigned long long purge_query_digests_sync(bool parallel);
+	unsigned long long purge_query_digests_async(time_t last_seen = 0);
+	unsigned long long purge_query_digests_sync(bool parallel, time_t last_seen = 0);
 
 	/**
 	 * @brief Searches for a matching rule in the supplied map, returning the destination hostgroup.
