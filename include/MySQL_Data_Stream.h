@@ -297,4 +297,16 @@ class MySQL_Data_Stream
 
 	void get_client_myds_info_json(nlohmann::json&);
 };
+
+// Decompress a MySQL compressed-protocol payload into `dest` (capacity
+// `destLen` == the claimed pre-compression length from the wire header).
+// Returns true only when the payload decompresses successfully AND the
+// actual decompressed size matches the claimed `destLen`. Exposed (rather
+// than file-static) so it can be exercised directly by the unit test for
+// GHSA-fvch-fpgq-pwfx; see lib/mysql_data_stream.cpp for details.
+bool decompress_mysql_payload(
+	const MySQL_Connection* myconn, unsigned char* dest, unsigned long destLen,
+	const unsigned char* source, size_t sourceLen
+);
+
 #endif /* PROXYSQL_MYSQL_DATA_STREAM_H */
