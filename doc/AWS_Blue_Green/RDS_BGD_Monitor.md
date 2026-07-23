@@ -1,7 +1,6 @@
 # AWS RDS Blue/Green Monitor
 
-**Document status:** AUTHOR VALIDATION COMPLETE; PR2 SIMULATOR FOUNDATION
-COMPLETE; IMPLEMENTATION CONFORMANCE OPEN
+**Document status:** AUTHOR VALIDATION COMPLETE; IMPLEMENTATION CONFORMANCE OPEN
 
 **Applies to:** Amazon RDS Multi-AZ DB instance blue/green deployment monitoring
 
@@ -82,8 +81,8 @@ That response explicitly:
   it, including membership created automatically at runtime.
 - Accepts one-shot cleanup and loss of per-effect completion state rather than
   a retained or durable cleanup ledger.
-- Accepts the current same-phase DNS-resolution failure for this PR and commits
-  to a later per-pair reconciliation change.
+- Records the same-phase DNS-resolution failure for later per-pair
+  reconciliation.
 - Accepts cleanup-on-worker-exit followed by fresh worker state, and a
   no-persistence fresh start after a full ProxySQL process restart.
 
@@ -334,17 +333,16 @@ fallback. Simulator coverage for both row paths is assigned to PR6.
 
 ### Current Phase-Equality Behavior
 
-`SOURCE-CODE`: After status conversion, the handler returns immediately when
-the converted status equals the stored status. Phase actions run on transition,
-not on every observation. Consequently, a transient mapping or DNS failure is
-not retried while the same phase continues.
+`SOURCE-CODE`: After status conversion, when the converted status equals the
+stored status, the handler retries green-IP resolution from `AVAILABLE` through
+`WRITER_SWITCHOVER_POST_PROCESSING`. It then returns without rebuilding the
+configuration-derived pair map or rerunning the full phase action.
 
-`AUTHOR-ACCEPTED-POLICY`: The author accepts this failure mode for the current
-feature PR. In particular, a first DNS failure in
-`WRITER_SWITCHOVER_POST_PROCESSING` can leave a pair unpinned and its old
-connections undrained for the remainder of that phase. A subsequent PR is to
-add worker-local, per-pair reconciliation that retries unresolved addresses
-and applies pin/drain once, rather than rerunning the entire phase action.
+`SOURCE-CODE`: During an equal `WRITER_SWITCHOVER_POST_PROCESSING` observation,
+the handler pins and drains only pairs whose green IP is available and whose
+worker-local `green_ip_pinned` flag is false. Unresolved pairs remain eligible
+for the next observation, while completed pairs are skipped for the remainder
+of that worker generation.
 
 ### Current Connection-Retirement Behavior
 
@@ -489,7 +487,7 @@ entry points should be reviewed with this document whenever behavior changes.
 for comparison and possible future reconsideration. The author explicitly
 selected one-shot cleanup, worker-local state, and no durable BGD ledger. None
 of the ledger states or invariants below is therefore an accepted requirement
-for PR #5861 or the accepted same-phase reconciliation follow-up.
+for PR #5861 or the same-phase reconciliation follow-up.
 
 `PROPOSED-POLICY`: Every externally visible effect must have a stable identity
 and a cleanup record before the effect is considered applied.
@@ -907,7 +905,7 @@ that is tracked separately rather than reopening the evidence decision.
 | AWS-10 | Commits `cdffd77ee` and `ac4167cd0` retain auto-added and user-configured green rows on rollback and success. Rollback leaves green connections untouched; success drains eligible green connections but leaves rows and statuses unchanged. | `RESOLVED AS AUTHOR-ACCEPTED POLICY`: Green membership is persistent runtime configuration, not a temporary owned effect. Administrative cleanup is required even for an auto-added row. |
 | AWS-11a | The author explicitly chooses one-shot worker-exit/configuration-change cleanup and no retained retry ledger. | `RESOLVED AS AUTHOR-ACCEPTED POLICY`: Loss of the cleanup context, including when a process terminates during cleanup, is accepted. The stronger retained rollback model is not PR2 scope. |
 | AWS-11b | The author explicitly applies the same one-shot choice after completion and relies on the current phase-specific cleanup path. | `RESOLVED AS AUTHOR-ACCEPTED POLICY`: No retained `SAFE_TEARDOWN` executor or per-effect settlement record is required. This acceptance does not prove each one-shot operation succeeds. |
-| AWS-12a | Commits `727b2166b` and `d45c953d2` combine eligible blue/green rows into the worker generation checksum and refresh it after Admin `mysql_servers` commits. The author accepts that DNS recovery alone does not retry a failed same-phase setup. | `RESOLVED AS AUTHOR-ACCEPTED POLICY AND FOLLOW-UP`: Current PR may leave a POST_PROCESSING pair unpinned and undrained after first-resolution failure. A subsequent PR must implement per-pair retry and exactly-once pin/drain behavior. |
+| AWS-12a | Commits `727b2166b` and `d45c953d2` combine eligible blue/green rows into the worker generation checksum and refresh it after Admin `mysql_servers` commits. The author assigned failed same-phase DNS setup to a per-pair follow-up. | `RESOLVED; IMPLEMENTED`: Eligible same-phase observations retry green-IP resolution, and worker-local `green_ip_pinned` state prevents repeated pin/drain work for completed pairs. The existing simulator cannot reproduce mutable DNS recovery, so simulator verification is unavailable for this case. |
 | AWS-12b | The author selects cleanup-on-worker-exit and fresh replacement state. Persistent green membership and rollback-time green connections have no worker ownership under AWS-10. | `RESOLVED AS AUTHOR-ACCEPTED POLICY`: A replacement first observing COMPLETED may enter the inferred reader phase without reconstructing the prior map or effects. |
 | AWS-13 | The author separates worker replacement from full restart. Replacement performs one-shot rollback then starts fresh. Full restart rebuilds DNS cache, pools, suppression, maps, probe target, and FSM; configured state reloads, while an unsynchronized auto-added runtime green row disappears. | `RESOLVED AS AUTHOR-ACCEPTED POLICY`: No durable BGD progress or ownership persistence is required. This is an accepted fresh-start contract, not a traced per-effect guarantee. |
 | CFG-01a | User-configured rows require both green hostgroup values. The persistent Admin table declares both columns `NOT NULL`. | `RESOLVED AS AUTHOR-VALIDATED PROXYSQL CONTRACT`: A user `NULL` or mixed row is invalid; no configuration-nullability follow-up is required. |
@@ -973,8 +971,8 @@ durable-ledger design.
 | Automatic runtime row persistence | `auto_generated_null_green_hgs` | `save_runtime_skips_auto_generated_bgd` | Auto-discovery creates a runtime row with both green hostgroups `NULL` and `auto_generated=1`; saving runtime to memory/disk does not persist that row. |
 | First observation COMPLETED | `fresh_worker_first_completed` | `replace_worker_at_completed` | Fresh state advances to the inferred reader phase without reconstructing a prior map, then finishes on topology drain. |
 | Full restart fresh start | `restart_discards_bgd_state` | `proxysql_restart_fixture` | DNS cache, pools, suppression, mapping, probe target, and FSM are recreated; configured rows reload; an unsynchronized auto-added runtime-only green row does not. |
-| Same-phase DNS retry follow-up | `dns_retry_same_post_per_pair` | — | Future resolver/unit coverage only: the unresolved pair retries while phase is unchanged; successful pairs are not redrained; the recovered pair is pinned and drained exactly once. Mutable DNS is outside simulator/TAP scope. |
-| Partial pair progress follow-up | `one_pair_fails` | `multiple_reader_fixture` | Accepted follow-up only: successful pair state is retained worker-locally and only the failed pair retries. |
+| Same-phase DNS retry follow-up | — | — | Implemented in source: the unresolved pair retries while the phase is unchanged, successful pairs are not redrained, and the recovered pair is pinned and drained once. Mutable DNS recovery is outside the existing simulator contract. |
+| Partial pair progress follow-up | — | — | Implemented in source: successful pair state is retained worker-locally and only the unresolved pair retries. |
 
 `PROPOSED-POLICY`: The simulator cases previously proposed for durable effect
 ownership, compare-and-restore, retained `FAULTED` state, cleanup across stale
@@ -1000,11 +998,11 @@ The source review remains open on implementation and verification:
    `healthy` field and does not add a second flag. `connection_unhealthy_unit-t`
    verifies that unhealthy connections remain terminal across reset and cannot
    enter either free pool.
-3. Track the author-accepted same-phase DNS failure as required follow-up work
-   with focused resolver/unit coverage rather than simulator/TAP integration.
-   Until per-pair reconciliation exists, a transient first resolution failure
-   in POST_PROCESSING can leave traffic unpinned and old connections undrained.
-   Acceptance documents the risk; it does not make the failure safe.
+3. **COMPLETED:** Retry green-IP resolution during eligible same-phase
+   observations and use worker-local per-pair completion state to prevent
+   repeated pin/drain work in POST_PROCESSING. The existing simulator cannot
+   verify mutable DNS failure and recovery; the author accepts this test
+   coverage limitation.
 4. Add focused simulator and TAP coverage for the response commits and these
    follow-ups. Registration in `test/tap/groups/groups.json` is insufficient:
    an automatic PR check must build the BGD test flavor and execute the BGD
@@ -1023,7 +1021,7 @@ proposed broad durable-ledger/controller PR is not part of this sequence.
 | PR2: BGD simulator foundation — COMPLETED | Add the TAP-controlled SQLite3-server simulator defined in [RDS_BGD_Simulator.md](RDS_BGD_Simulator.md): the `TEST_RDS_BGD` build mode, IP-keyed topology responses, common and BGD TAP helpers, a simulator group, and an end-to-end acceptance smoke test. | Completed after the isolated local Docker group passed. Provides the reusable harness required by PR6; GitHub workflow execution remains separate follow-up work under the review gate above. |
 | PR3: probe target and explicit TLS (**complete**) | Correct AWS-08 by selecting the exact supported explicit green writer row and its resolved `use_ssl`, including a row created or restored during discovery, while retaining the matched blue writer port and automatic-mode blue TLS fallback. | **Completed:** production behavior conforms to AWS-08. Existing-row and discovered-row simulator coverage remains part of PR6. |
 | PR4: terminal connection retirement (**complete**) | Preserve `healthy=false` across `MySQL_Connection::reset()` and destroy unhealthy connections in local and global pool-return paths. Do not introduce another flag or a new locking policy. | **Completed:** `connection_unhealthy_unit-t` proves a drained used connection cannot enter either free pool after reset or release. |
-| PR5: same-phase per-pair reconciliation | Replace phase-equality no-op behavior with worker-local reconciliation for incomplete map/resolution/pin/drain work. Retry only incomplete pairs and never redrain a pair already completed in the current worker generation. | Depends on the accepted one-shot worker model; it must not introduce durable ownership or restart recovery. |
+| PR5: same-phase per-pair reconciliation (**complete**) | Retry green-IP resolution on eligible equal-phase observations and never redrain a pair completed in the current worker generation. Configuration-derived pair mapping remains transition/generation driven. | **Completed:** production behavior conforms to AWS-12a. The existing simulator cannot verify mutable DNS recovery. |
 | PR6: simulator-driven BGD scenario suite | Use PR2's simulator to cover configuration and discovery order, automatic and explicit rows, worker replacement, normal lifecycle, late entry, cancellation and rollback, topology drain, direct probe destination/TLS for existing and discovered explicit green rows, offline exclusions, and terminal connection retirement where observable. | Depends on PR2 and should normally follow PR3-PR4 so the suite validates final behavior rather than encoding known failures. All payloads run in the BGD simulator GitHub workflow. |
 
 Any retained cleanup ledger, durable restart ownership, or alternative
