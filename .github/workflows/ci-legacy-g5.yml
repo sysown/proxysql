@@ -308,6 +308,7 @@ jobs:
       if: ${{ !cancelled() && hashFiles('proxysql/ci_infra_logs/**/coverage-report/*.info') != '' }}
       uses: codecov/codecov-action@v4
       with:
+        codecov_yml_path: proxysql/codecov.yml
         files: proxysql/ci_infra_logs/ci-legacy-g5/coverage-report/ci-legacy-g5.info
         flags: tap-legacy-g5
         name: tap-legacy-g5-coverage
