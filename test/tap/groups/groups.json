@@ -459,6 +459,7 @@
   "test_tsdb_api-t" : [ "ai-g1","@proxysql_min_version:3.1" ],
   "test_tsdb_variables-t" : [ "ai-g1","@proxysql_min_version:3.1" ],
   "test_unexpected_packet_log_attribution-t" : [ "legacy-g6" ],
+  "test_unhealthy_connection_log_attribution-t" : [ "legacy-g6" ],
   "test_unshun_algorithm-t" : [ "legacy-g9","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g9","mysql90-g4","mysql95-g4" ],
   "test_unsupported_queries-t" : [ "legacy-g9","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g9","mysql90-g4","mysql95-g4" ],
   "test_utf8mb4_as_ci-4841-t" : [ "mysql84-g6","mysql95-g1" ],
