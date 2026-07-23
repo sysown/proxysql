@@ -243,6 +243,7 @@ jobs:
       if: ${{ !cancelled() && hashFiles('proxysql/ci_infra_logs/**/coverage-report/*.info') != '' }}
       uses: codecov/codecov-action@v4
       with:
+        codecov_yml_path: proxysql/codecov.yml
         files: proxysql/ci_infra_logs/ci-mysql84-g9/coverage-report/ci-mysql84-g9.info
         flags: tap-mysql84-g9
         name: tap-mysql84-g9-coverage

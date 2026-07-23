@@ -244,6 +244,7 @@ jobs:
       if: ${{ !cancelled() && hashFiles('proxysql/ci_infra_logs/**/coverage-report/*.info') != '' }}
       uses: codecov/codecov-action@v4
       with:
+        codecov_yml_path: proxysql/codecov.yml
         files: proxysql/ci_infra_logs/ci-legacy-clickhouse-g1/coverage-report/ci-legacy-clickhouse-g1.info
         flags: tap-legacy-clickhouse-g1
         name: tap-legacy-clickhouse-g1-coverage
