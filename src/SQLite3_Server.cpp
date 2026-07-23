@@ -797,51 +797,54 @@ __run_query:
 						"backend_ip='" + backend_ip + "' AND backend_port=" +
 						std::to_string(backend_port)
 					};
-					char *control_error=NULL;
-					int control_cols=0;
-					int control_affected_rows=0;
-					SQLite3_result *control_result=NULL;
-					const std::string control_query {
-						"SELECT topology_present,error_code,error_msg FROM RDS_BGD_CONTROL WHERE " +
-						predicate
+					const std::string log_query {
+						"INSERT INTO RDS_BGD_PROBE_LOG"
+						"(backend_ip,backend_port,probe_kind,encrypted) VALUES ('" +
+						backend_ip + "'," + std::to_string(backend_port) + ",'" +
+						(rds_bgd_table_check ? "table_check" : "metadata") + "'," +
+						(sess->client_myds->encrypted ? "1" : "0") + ")"
 					};
-					sqlite_sess->sessdb->execute_statement(
-						control_query.c_str(), &control_error, &control_cols,
-						&control_affected_rows, &control_result);
-
-					if (control_error != NULL) {
+					if (!sqlite_sess->sessdb->execute(log_query.c_str())) {
 						GloSQLite3Server->send_MySQL_ERR(
-							&sess->client_myds->myprot, 1105, control_error);
-						free(control_error);
+							&sess->client_myds->myprot, 1105,
+							"RDS BGD simulator failed to record the topology probe");
 						run_query=false;
 					} else {
+						char *control_error=NULL;
+						int control_cols=0;
+						int control_affected_rows=0;
+						SQLite3_result *control_result=NULL;
+						const std::string control_query {
+							"SELECT topology_present,error_code,error_msg FROM RDS_BGD_CONTROL WHERE " +
+							predicate
+						};
+						sqlite_sess->sessdb->execute_statement(
+							control_query.c_str(), &control_error, &control_cols,
+							&control_affected_rows, &control_result);
+
+						if (control_error != NULL) {
+							GloSQLite3Server->send_MySQL_ERR(
+								&sess->client_myds->myprot, 1105, control_error);
+							free(control_error);
+							run_query=false;
+						}
+
 						bool topology_present=false;
 						unsigned int configured_error=0;
 						std::string configured_error_msg {};
-						if (control_result && control_result->rows_count == 1) {
+						if (run_query && control_result && control_result->rows_count == 1) {
 							SQLite3_row *row=control_result->rows.front();
 							topology_present=atoi(row->fields[0]) != 0;
 							configured_error=static_cast<unsigned int>(atoi(row->fields[1]));
 							configured_error_msg=row->fields[2] ? row->fields[2] : "";
 						}
+						delete control_result;
 
-						const std::string log_query {
-							"INSERT INTO RDS_BGD_PROBE_LOG"
-							"(backend_ip,backend_port,probe_kind,encrypted) VALUES ('" +
-							backend_ip + "'," + std::to_string(backend_port) + ",'" +
-							(rds_bgd_table_check ? "table_check" : "metadata") + "'," +
-							(sess->client_myds->encrypted ? "1" : "0") + ")"
-						};
-						if (!sqlite_sess->sessdb->execute(log_query.c_str())) {
-							GloSQLite3Server->send_MySQL_ERR(
-								&sess->client_myds->myprot, 1105,
-								"RDS BGD simulator failed to record the topology probe");
-							run_query=false;
-						} else if (rds_bgd_table_check) {
+						if (run_query && rds_bgd_table_check) {
 							l_free(query_length,query);
 							query=l_strdup(topology_present ? "SELECT 1" : "SELECT 1 WHERE 0");
 							query_length=strlen(query)+1;
-						} else if (configured_error != 0 || !topology_present) {
+						} else if (run_query && (configured_error != 0 || !topology_present)) {
 							const uint16_t error_code = configured_error
 								? static_cast<uint16_t>(configured_error) : 1146;
 							const char *error_msg = configured_error
@@ -850,7 +853,7 @@ __run_query:
 							GloSQLite3Server->send_MySQL_ERR(
 								&sess->client_myds->myprot, error_code, error_msg);
 							run_query=false;
-						} else {
+						} else if (run_query) {
 							const std::string topology_query {
 								"SELECT id,endpoint,topology_port AS port,role,status "
 								"FROM RDS_BGD_TOPOLOGY WHERE " + predicate +
@@ -861,7 +864,6 @@ __run_query:
 							query_length=strlen(query)+1;
 						}
 					}
-					delete control_result;
 				}
 			}
 

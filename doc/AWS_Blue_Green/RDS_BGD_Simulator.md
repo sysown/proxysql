@@ -1,9 +1,9 @@
 # AWS RDS Blue/Green Deployment Simulator
 
-**Document status:** DESIGN APPROVED; IMPLEMENTATION NOT STARTED
+**Document status:** SIMULATOR IMPLEMENTED; GITHUB WORKFLOW FOLLOW-UP
 
 **Applies to:** `TEST_RDS_BGD`, the SQLite3-server simulation surface, BGD TAP
-helpers, the local Docker runner, and the matching GitHub Actions job
+helpers, the local Docker runner, and supported simulator coverage
 
 **Related monitor contract:** [RDS_BGD_Monitor.md](RDS_BGD_Monitor.md)
 
@@ -11,8 +11,9 @@ helpers, the local Docker runner, and the matching GitHub Actions job
 
 This document defines the simulator used to test ProxySQL's AWS RDS Blue/Green
 Deployment monitor. It combines the behavioral contract, SQLite3-server
-changes, TAP helper API, network fixture, local runner, CI job, and supported
-coverage into one implementation specification.
+changes, TAP helper API, network fixture, local runner, and supported coverage
+into one implementation specification. GitHub workflow execution is defined as
+follow-up work.
 
 ## Architecture
 
@@ -20,7 +21,7 @@ The TAP test is the scenario controller. It configures ProxySQL with AWS-style
 hostnames, writes simulated backend state to ProxySQL's SQLite3 server, changes
 that state to drive the BGD FSM, and verifies ProxySQL through runtime,
 statistics, and simulator probe-log tables. Topology state is keyed by backend
-IP, while read-only state is keyed by the configured hostname.
+IP and port, while read-only state is keyed by the configured hostname and port.
 
 No `test/deps/cluster_simulator` process or backend database container is
 required. A common TAP helper owns reusable SQLite3-server operations, while a
@@ -125,10 +126,10 @@ SELECT 1 FROM information_schema.TABLES
 SELECT * FROM mysql.rds_topology
 ```
 
-For either match, resolve the accepted backend key, load its control row,
-select the response described below, append a probe-log row, and send the
-result. An address-extraction failure returns a simulator error without
-selecting state or logging an invalid backend identity.
+For either match, resolve the accepted backend key, append a probe-log row,
+load its control row, and select the response described below. An
+address-extraction failure returns a simulator error without selecting state or
+logging an invalid backend identity.
 
 Simulated read-only checks follow the handling described below. All remaining
 statements continue through normal SQLite3-server handling. TAP control and
@@ -137,9 +138,9 @@ recorded as BGD monitor probes.
 
 ## Control-State Meaning
 
-The TAP helper updates the control and topology tables in one transaction, so
-a monitor query observes either the previous state or the complete new state.
-The supported states are:
+The TAP helper publishes control and topology changes atomically. Monitor probes
+read committed simulator state without holding a cross-query snapshot. The
+supported states are:
 
 | `RDS_BGD_CONTROL` state | Topology rows | Meaning |
 |---|---|---|
@@ -216,7 +217,7 @@ signatures below are the initial API and may grow with reviewed test cases.
 ### Common Endpoint
 
 ```cpp
-struct Simulator_Endpoint {
+struct Endpoint {
 	std::string host;
 	int port;
 };
@@ -236,7 +237,7 @@ int connect(
 	char* password,
 	bool use_ssl = false);
 
-int read_only_update(Simulator_Endpoint backend, bool read_only);
+int read_only_update(Endpoint backend, bool read_only);
 ```
 
 `connect()` opens the SQLite3-server control connection with the MySQL client
@@ -259,7 +260,8 @@ struct RDS_BGD_Host {
 	std::string ip;
 	int port;
 
-	Simulator_Endpoint endpoint();
+	Endpoint endpoint();
+	Endpoint host_endpoint();
 };
 ```
 
@@ -277,31 +279,32 @@ public:
 	std::vector<RDS_BGD_Host> blue_readers;
 	std::vector<RDS_BGD_Host> green_readers;
 
-	std::vector<Simulator_Endpoint> get_writers();
+	std::vector<Endpoint> get_writers();
+	std::vector<Endpoint> get_writer_hosts();
 	std::vector<RDS_BGD_Topology_Row> get_topology(std::string status);
 };
 ```
 
 Each TAP test owns and initializes the cluster fixtures it uses. A fixture
-keeps the selected `/etc/hosts` mapping together. `get_writers()`
-returns the selected blue and green writer IPs; `get_topology(status)` returns
-the standard two-row SOURCE/TARGET topology using the writer hostnames and the
-provided status.
+keeps the selected `/etc/hosts` mapping together. `get_writers()` returns the
+selected blue and green writer IPs, `get_writer_hosts()` returns their configured
+hostnames, and `get_topology(status)` returns the standard two-row SOURCE/TARGET
+topology using the writer hostnames and the provided status.
 
 ### BGD Topology Operations
 
 ```cpp
 int topology_update(
-	std::vector<Simulator_Endpoint> backends,
+	std::vector<Endpoint> backends,
 	std::vector<RDS_BGD_Topology_Row> rows);
 
-int topology_delete(std::vector<Simulator_Endpoint> backends);
+int topology_delete(std::vector<Endpoint> backends);
 
-int topology_drop(std::vector<Simulator_Endpoint> backends);
+int topology_drop(std::vector<Endpoint> backends);
 
 int topology_error(
-	std::vector<Simulator_Endpoint> backends,
-	unsigned int error_code,
+	std::vector<Endpoint> backends,
+	int error_code,
 	std::string error_msg);
 ```
 
@@ -324,7 +327,7 @@ enum class RDS_BGD_Probe_Kind {
 
 struct RDS_BGD_Probe_Log {
 	uint64_t sequence_id;
-	Simulator_Endpoint backend;
+	Endpoint backend;
 	RDS_BGD_Probe_Kind probe_kind;
 	bool encrypted;
 };
@@ -335,7 +338,7 @@ rc_t<std::vector<RDS_BGD_Probe_Log>> probe_log_since(uint64_t sequence_id);
 
 rc_t<RDS_BGD_Probe_Log> wait_for_probe_log(
 	uint64_t sequence_id,
-	Simulator_Endpoint backend,
+	Endpoint backend,
 	RDS_BGD_Probe_Kind probe_kind,
 	uint32_t timeout_ms,
 	int encrypted = -1);
@@ -359,17 +362,13 @@ int main() {
 	if (!admin) BAIL_OUT("failed to connect to ProxySQL Admin");
 
 	RDS_BGD_Cluster cluster = bgd_cluster_init();
-	if (configure_proxysql_for_bgd(admin, cluster) != EXIT_SUCCESS)
-		BAIL_OUT("failed to configure ProxySQL");
-
-	RDS_BGD_Simulator simulator;
+	RDS_BGD_Simulator simulator {};
 	if (simulator.connect(cl.host, 3306, cl.username, cl.password) != EXIT_SUCCESS)
 		BAIL_OUT("failed to connect to SQLite3 server");
-	if (simulator.read_only_update(
-			{ cluster.blue_writer.hostname, cluster.blue_writer.port }, false) != EXIT_SUCCESS ||
-		simulator.read_only_update(
-			{ cluster.green_writer.hostname, cluster.green_writer.port }, false) != EXIT_SUCCESS)
-		BAIL_OUT("failed to configure writer read_only state");
+	for (Endpoint& writer : cluster.get_writer_hosts()) {
+		if (simulator.read_only_update(writer, false) != EXIT_SUCCESS)
+			BAIL_OUT("failed to configure writer read_only state");
+	}
 
 	auto [seq_rc, last_seq] = simulator.probe_log_last_sequence();
 	if (seq_rc != EXIT_SUCCESS)
@@ -380,6 +379,9 @@ int main() {
 	ok(update_rc == EXIT_SUCCESS, "publish topology to both writer IPs");
 	if (update_rc != EXIT_SUCCESS)
 		BAIL_OUT("failed to publish topology");
+
+	if (configure_proxysql_for_bgd(admin, cluster) != EXIT_SUCCESS)
+		BAIL_OUT("failed to configure ProxySQL");
 
 	ok(wait_for_cond(admin,
 		"SELECT status='AVAILABLE' FROM runtime_mysql_aws_rds_bgd_hostgroups "
@@ -404,8 +406,8 @@ responses and reads probe evidence; assertions against ProxySQL use Admin SQL.
 
 ## Build Integration
 
-Add `build_lib_test_rds_bgd`, `build_src_test_rds_bgd`, and the top-level
-`test_rds_bgd` target. The lib and src targets compile with
+The build provides `build_lib_test_rds_bgd`, `build_src_test_rds_bgd`, and the
+top-level `test_rds_bgd` target. The lib and src targets compile with
 `-DDEBUG -DTEST_RDS_BGD`; none depends on `build_cluster_simulator`.
 
 `test_rds_bgd` depends on `build_src_test_rds_bgd` and then invokes `make
@@ -416,13 +418,13 @@ build_deps_debug -> build_lib_test_rds_bgd -> build_src_test_rds_bgd
                  -> TAP debug build
 ```
 
-Use `test_rds_bgd` as the single entry point. Do not invoke
+`test_rds_bgd` is the single entry point. Do not invoke
 `build_tap_test_debug` afterward because its `build_src_debug` dependency
-selects the normal debug daemon. Add `-DTEST_RDS_BGD` to `testall` as well.
+selects the normal debug daemon. `testall` includes `-DTEST_RDS_BGD` as well.
 
 ## Local CI Group
 
-Add `test/tap/groups/cluster_sim_rds_bgd/` and execute it as
+The `test/tap/groups/cluster_sim_rds_bgd/` group executes as
 `cluster_sim_rds_bgd-g1`.
 
 | File | BGD-specific content |
@@ -508,19 +510,19 @@ simulator transitions. From the TAP container, the control connection uses
 
 ### Group Registration and Local Run
 
-Register each BGD TAP binary in `test/tap/groups/groups.json`:
+Each BGD TAP binary is registered in `test/tap/groups/groups.json`:
 
 ```json
 "test_rds_bgd_smoke-t": [ "cluster_sim_rds_bgd-g1" ]
 ```
 
-Add the group and its `make test_rds_bgd` requirement to the simulator table in
-`test/infra/README.md`. Clean when switching compile flavors because Make does
-not track changed preprocessor flags:
+The simulator table in `test/infra/README.md` records the group and its
+`make test_rds_bgd` requirement. Clean when switching compile flavors because
+Make does not track changed preprocessor flags:
 
 ```bash
 make clean
-make -j"$(nproc)" test_rds_bgd
+PROXYSQL40=1 make -j"$(nproc)" test_rds_bgd
 
 export INFRA_ID="rds-bgd-$(date +%s)"
 export TAP_GROUP="cluster_sim_rds_bgd-g1"
@@ -535,9 +537,10 @@ The existing runner injects the host aliases, starts ProxySQL with
 and collects logs. No BGD branch is required in `ensure-infras.bash`,
 `start-proxysql-isolated.bash`, or `run-tests-isolated.bash`.
 
-## GitHub Actions
+## GitHub Workflow Follow-up
 
-Add `.github/workflows/CI-rds-bgd-simulator.yml`. It runs on
+A separate follow-up adds `.github/workflows/CI-rds-bgd-simulator.yml`; the
+workflow is not part of the simulator implementation described above. It runs on
 `workflow_dispatch` and after a successful `CI-trigger`, follows the repository's
 existing concurrency/cancellation pattern, and checks out the exact triggering
 SHA.
@@ -550,7 +553,7 @@ The build job checks out the triggering SHA, installs or reuses the normal
 Ubuntu TAP build dependencies, and runs:
 
 ```bash
-make -j"$(nproc)" test_rds_bgd
+PROXYSQL40=1 make -j"$(nproc)" test_rds_bgd
 ```
 
 After verifying `src/proxysql` and `test/tap/tests/test_rds_bgd_smoke-t`, it saves the
@@ -603,16 +606,16 @@ the standard runner reports no infrastructure or test failure.
 
 ### Simulator Acceptance
 
-The simulator implementation needs one end-to-end smoke test, not a separate
+The simulator implementation includes one end-to-end smoke test, not a separate
 unit-test suite for every helper method. `test_rds_bgd_smoke-t` proves that the
 `TEST_RDS_BGD` daemon accepts TAP-controlled topology, ProxySQL observes an
-`AVAILABLE` deployment, the green-IP probe is logged, and the automatic CI job
-executes the group without `test/deps/cluster_simulator`.
+`AVAILABLE` deployment, and the green-IP probe is logged. The isolated local
+runner executes the test without `test/deps/cluster_simulator`.
 
-The configuration and lifecycle tests below exercise the remaining helper and
-SQLite3-server paths through BGD behavior. Before changing simulator state,
-each test reads the last probe-log sequence; failures report the configured backend
-state, last ProxySQL runtime state, and later probe rows.
+The follow-up configuration and lifecycle tests below exercise the remaining
+helper and SQLite3-server paths through BGD behavior. Before changing simulator
+state, each test reads the last probe-log sequence; failures report the
+configured backend state, last ProxySQL runtime state, and later probe rows.
 
 ### Configuration and Discovery
 
@@ -664,17 +667,17 @@ assertion depends on them.
 
 ## Code Boundaries
 
-| Area | Required change |
+| Area | Current boundary |
 |---|---|
-| `Makefile` | Add the BGD build targets and include `TEST_RDS_BGD` in `testall`. |
-| `include/SQLite3_Server.h` | Add BGD table definitions/helpers and the coded-error overload under the flag. |
-| `src/SQLite3_Server.cpp` | Add listener setup, endpoint extraction, table creation, BGD/read-only interception, and probe logging. |
-| `test/tap` helpers | Add the common simulator and BGD-specific API defined above. |
-| `test/tap/groups/cluster_sim_rds_bgd` | Add the fixed host map and SQLite3-server group configuration. |
-| `test/tap/groups/groups.json` | Register BGD TAP binaries in `cluster_sim_rds_bgd-g1`. |
-| `test/infra/README.md` | Document the group and its required `test_rds_bgd` build target. |
-| `.github/workflows/CI-rds-bgd-simulator.yml` | Build the flagged flavor and execute the BGD simulator group automatically. |
-| BGD production monitor | Reuse existing query constants; add no simulator query decoration or test initializer. |
+| `Makefile` | Provides the BGD build targets and includes `TEST_RDS_BGD` in `testall`. |
+| `include/SQLite3_Server.h` | Defines the BGD tables and shared simulator helpers. |
+| `src/SQLite3_Server.cpp` | Handles endpoint extraction, table creation, BGD/read-only interception, and probe logging. |
+| `test/tap` helpers | Provide the common simulator and BGD-specific API defined above. |
+| `test/tap/groups/cluster_sim_rds_bgd` | Defines the fixed host map and SQLite3-server group configuration. |
+| `test/tap/groups/groups.json` | Registers BGD TAP binaries in `cluster_sim_rds_bgd-g1`. |
+| `test/infra/README.md` | Documents the group and its required `test_rds_bgd` build target. |
+| GitHub workflow | Follow-up work builds the flagged flavor and executes the BGD simulator group. |
+| BGD production monitor | Reuses existing query constants without simulator query decoration or a test initializer. |
 
 Existing simulator builds retain their behavior. The scenario, not the helper,
 owns topology publication, FSM timing, ProxySQL configuration, and expected
