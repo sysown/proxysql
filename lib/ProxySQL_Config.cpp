@@ -650,293 +650,124 @@ int ProxySQL_Config::Write_MySQL_Query_Rules_to_configfile(std::string& data) {
 	return 0;
 }
 
-int ProxySQL_Config::Write_MySQL_Query_Rules_Fast_Routing_to_configfile(std::string& data) {
-	char* error = NULL;
+// Emits one config-file section for a SELECT whose rows should be serialized.
+// Tolerates a missing/partial table (skips the section) and owns the result set
+// via unique_ptr, so callers need no manual new/delete. emit_row(row, data)
+// writes the addField(...) lines for a single row's group body.
+template <typename EmitRow>
+static void write_config_section(SQLite3DB* admindb, const char* select,
+	const char* section, std::string& data, EmitRow emit_row)
+{
+	char* error = nullptr;
 	int cols = 0;
 	int affected_rows = 0;
-	SQLite3_result* sqlite_resultset = NULL;
-
-	char *query=(char *)"SELECT * FROM mysql_query_rules_fast_routing";
-	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
+	SQLite3_result* raw = nullptr;
+	admindb->execute_statement(select, &error, &cols, &affected_rows, &raw);
+	std::unique_ptr<SQLite3_result> resultset(raw);
 	if (error) {
-		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
-		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
-		free(error); // execute_statement strdup's the message
-		error = NULL;
-	} else {
-		if (sqlite_resultset) {
-			data += "mysql_query_rules_fast_routing:\n(\n";
-			bool isNext = false;
-			for (auto r : sqlite_resultset->rows) {
-				if (isNext)
-					data += ",\n";
-				data += "\t{\n";
-				addField(data, "username", r->fields[0]);
-				addField(data, "schemaname", r->fields[1]);
-				addField(data, "flagIN", r->fields[2], "");
-				addField(data, "destination_hostgroup", r->fields[3], "");
-				addField(data, "comment", r->fields[4]);
-				data += "\t}";
-				isNext = true;
-			}
-			data += "\n)\n";
-		}
+		// tolerate a missing table (partial schemas in unit tests or old DBs)
+		free(error);
+		return;
 	}
-
-	if (sqlite_resultset) {
-		delete sqlite_resultset;
-		sqlite_resultset = NULL;
+	if (!resultset)
+		return;
+	data += section;
+	data += ":\n(\n";
+	bool isNext = false;
+	for (auto r : resultset->rows) {
+		if (isNext)
+			data += ",\n";
+		data += "\t{\n";
+		emit_row(r, data);
+		data += "\t}";
+		isNext = true;
 	}
+	data += "\n)\n";
+}
 
+int ProxySQL_Config::Write_MySQL_Query_Rules_Fast_Routing_to_configfile(std::string& data) {
+	write_config_section(admindb, "SELECT * FROM mysql_query_rules_fast_routing",
+		"mysql_query_rules_fast_routing", data,
+		[this](SQLite3_row* r, std::string& d) {
+			addField(d, "username", r->fields[0]);
+			addField(d, "schemaname", r->fields[1]);
+			addField(d, "flagIN", r->fields[2], "");
+			addField(d, "destination_hostgroup", r->fields[3], "");
+			addField(d, "comment", r->fields[4]);
+		});
 	return 0;
 }
 
 int ProxySQL_Config::Write_PgSQL_Query_Rules_Fast_Routing_to_configfile(std::string& data) {
-	char* error = NULL;
-	int cols = 0;
-	int affected_rows = 0;
-	SQLite3_result* sqlite_resultset = NULL;
-
-	char *query=(char *)"SELECT * FROM pgsql_query_rules_fast_routing";
-	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
-	if (error) {
-		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
-		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
-		free(error); // execute_statement strdup's the message
-		error = NULL;
-	} else {
-		if (sqlite_resultset) {
-			data += "pgsql_query_rules_fast_routing:\n(\n";
-			bool isNext = false;
-			for (auto r : sqlite_resultset->rows) {
-				if (isNext)
-					data += ",\n";
-				data += "\t{\n";
-				addField(data, "username", r->fields[0]);
-				addField(data, "database", r->fields[1]);
-				addField(data, "flagIN", r->fields[2], "");
-				addField(data, "destination_hostgroup", r->fields[3], "");
-				addField(data, "comment", r->fields[4]);
-				data += "\t}";
-				isNext = true;
-			}
-			data += "\n)\n";
-		}
-	}
-
-	if (sqlite_resultset) {
-		delete sqlite_resultset;
-		sqlite_resultset = NULL;
-	}
-
+	write_config_section(admindb, "SELECT * FROM pgsql_query_rules_fast_routing",
+		"pgsql_query_rules_fast_routing", data,
+		[this](SQLite3_row* r, std::string& d) {
+			addField(d, "username", r->fields[0]);
+			addField(d, "database", r->fields[1]);
+			addField(d, "flagIN", r->fields[2], "");
+			addField(d, "destination_hostgroup", r->fields[3], "");
+			addField(d, "comment", r->fields[4]);
+		});
 	return 0;
 }
 
 int ProxySQL_Config::Write_MySQL_Firewall_to_configfile(std::string& data) {
-	char* error = NULL;
-	int cols = 0;
-	int affected_rows = 0;
-	SQLite3_result* sqlite_resultset = NULL;
-
-	char *query=(char *)"SELECT * FROM mysql_firewall_whitelist_users";
-	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
-	if (error) {
-		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
-		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
-		free(error); // execute_statement strdup's the message
-		error = NULL;
-	} else {
-		if (sqlite_resultset) {
-			data += "mysql_firewall_whitelist_users:\n(\n";
-			bool isNext = false;
-			for (auto r : sqlite_resultset->rows) {
-				if (isNext)
-					data += ",\n";
-				data += "\t{\n";
-				addField(data, "active", r->fields[0], "");
-				addField(data, "username", r->fields[1]);
-				addField(data, "client_address", r->fields[2]);
-				addField(data, "mode", r->fields[3]);
-				addField(data, "comment", r->fields[4]);
-				data += "\t}";
-				isNext = true;
-			}
-			data += "\n)\n";
-		}
-	}
-
-	if (sqlite_resultset) {
-		delete sqlite_resultset;
-		sqlite_resultset = NULL;
-	}
-
-	query=(char *)"SELECT * FROM mysql_firewall_whitelist_rules";
-	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
-	if (error) {
-		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
-		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
-		free(error); // execute_statement strdup's the message
-		error = NULL;
-	} else {
-		if (sqlite_resultset) {
-			data += "mysql_firewall_whitelist_rules:\n(\n";
-			bool isNext = false;
-			for (auto r : sqlite_resultset->rows) {
-				if (isNext)
-					data += ",\n";
-				data += "\t{\n";
-				addField(data, "active", r->fields[0], "");
-				addField(data, "username", r->fields[1]);
-				addField(data, "client_address", r->fields[2]);
-				addField(data, "schemaname", r->fields[3]);
-				addField(data, "flagIN", r->fields[4], "");
-				addField(data, "digest", r->fields[5]);
-				addField(data, "comment", r->fields[6]);
-				data += "\t}";
-				isNext = true;
-			}
-			data += "\n)\n";
-		}
-	}
-
-	if (sqlite_resultset) {
-		delete sqlite_resultset;
-		sqlite_resultset = NULL;
-	}
-
-	query=(char *)"SELECT * FROM mysql_firewall_whitelist_sqli_fingerprints";
-	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
-	if (error) {
-		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
-		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
-		free(error); // execute_statement strdup's the message
-		error = NULL;
-	} else {
-		if (sqlite_resultset) {
-			data += "mysql_firewall_whitelist_sqli_fingerprints:\n(\n";
-			bool isNext = false;
-			for (auto r : sqlite_resultset->rows) {
-				if (isNext)
-					data += ",\n";
-				data += "\t{\n";
-				addField(data, "active", r->fields[0], "");
-				addField(data, "fingerprint", r->fields[1]);
-				data += "\t}";
-				isNext = true;
-			}
-			data += "\n)\n";
-		}
-	}
-
-	if (sqlite_resultset) {
-		delete sqlite_resultset;
-		sqlite_resultset = NULL;
-	}
-
+	write_config_section(admindb, "SELECT * FROM mysql_firewall_whitelist_users",
+		"mysql_firewall_whitelist_users", data,
+		[this](SQLite3_row* r, std::string& d) {
+			addField(d, "active", r->fields[0], "");
+			addField(d, "username", r->fields[1]);
+			addField(d, "client_address", r->fields[2]);
+			addField(d, "mode", r->fields[3]);
+			addField(d, "comment", r->fields[4]);
+		});
+	write_config_section(admindb, "SELECT * FROM mysql_firewall_whitelist_rules",
+		"mysql_firewall_whitelist_rules", data,
+		[this](SQLite3_row* r, std::string& d) {
+			addField(d, "active", r->fields[0], "");
+			addField(d, "username", r->fields[1]);
+			addField(d, "client_address", r->fields[2]);
+			addField(d, "schemaname", r->fields[3]);
+			addField(d, "flagIN", r->fields[4], "");
+			addField(d, "digest", r->fields[5]);
+			addField(d, "comment", r->fields[6]);
+		});
+	write_config_section(admindb, "SELECT * FROM mysql_firewall_whitelist_sqli_fingerprints",
+		"mysql_firewall_whitelist_sqli_fingerprints", data,
+		[this](SQLite3_row* r, std::string& d) {
+			addField(d, "active", r->fields[0], "");
+			addField(d, "fingerprint", r->fields[1]);
+		});
 	return 0;
 }
 
 int ProxySQL_Config::Write_PgSQL_Firewall_to_configfile(std::string& data) {
-	char* error = NULL;
-	int cols = 0;
-	int affected_rows = 0;
-	SQLite3_result* sqlite_resultset = NULL;
-
-	char *query=(char *)"SELECT * FROM pgsql_firewall_whitelist_users";
-	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
-	if (error) {
-		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
-		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
-		free(error); // execute_statement strdup's the message
-		error = NULL;
-	} else {
-		if (sqlite_resultset) {
-			data += "pgsql_firewall_whitelist_users:\n(\n";
-			bool isNext = false;
-			for (auto r : sqlite_resultset->rows) {
-				if (isNext)
-					data += ",\n";
-				data += "\t{\n";
-				addField(data, "active", r->fields[0], "");
-				addField(data, "username", r->fields[1]);
-				addField(data, "client_address", r->fields[2]);
-				addField(data, "mode", r->fields[3]);
-				addField(data, "comment", r->fields[4]);
-				data += "\t}";
-				isNext = true;
-			}
-			data += "\n)\n";
-		}
-	}
-
-	if (sqlite_resultset) {
-		delete sqlite_resultset;
-		sqlite_resultset = NULL;
-	}
-
-	query=(char *)"SELECT * FROM pgsql_firewall_whitelist_rules";
-	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
-	if (error) {
-		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
-		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
-		free(error); // execute_statement strdup's the message
-		error = NULL;
-	} else {
-		if (sqlite_resultset) {
-			data += "pgsql_firewall_whitelist_rules:\n(\n";
-			bool isNext = false;
-			for (auto r : sqlite_resultset->rows) {
-				if (isNext)
-					data += ",\n";
-				data += "\t{\n";
-				addField(data, "active", r->fields[0], "");
-				addField(data, "username", r->fields[1]);
-				addField(data, "client_address", r->fields[2]);
-				addField(data, "database", r->fields[3]);
-				addField(data, "flagIN", r->fields[4], "");
-				addField(data, "digest", r->fields[5]);
-				addField(data, "comment", r->fields[6]);
-				data += "\t}";
-				isNext = true;
-			}
-			data += "\n)\n";
-		}
-	}
-
-	if (sqlite_resultset) {
-		delete sqlite_resultset;
-		sqlite_resultset = NULL;
-	}
-
-	query=(char *)"SELECT * FROM pgsql_firewall_whitelist_sqli_fingerprints";
-	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
-	if (error) {
-		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
-		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
-		free(error); // execute_statement strdup's the message
-		error = NULL;
-	} else {
-		if (sqlite_resultset) {
-			data += "pgsql_firewall_whitelist_sqli_fingerprints:\n(\n";
-			bool isNext = false;
-			for (auto r : sqlite_resultset->rows) {
-				if (isNext)
-					data += ",\n";
-				data += "\t{\n";
-				addField(data, "active", r->fields[0], "");
-				addField(data, "fingerprint", r->fields[1]);
-				data += "\t}";
-				isNext = true;
-			}
-			data += "\n)\n";
-		}
-	}
-
-	if (sqlite_resultset) {
-		delete sqlite_resultset;
-		sqlite_resultset = NULL;
-	}
-
+	write_config_section(admindb, "SELECT * FROM pgsql_firewall_whitelist_users",
+		"pgsql_firewall_whitelist_users", data,
+		[this](SQLite3_row* r, std::string& d) {
+			addField(d, "active", r->fields[0], "");
+			addField(d, "username", r->fields[1]);
+			addField(d, "client_address", r->fields[2]);
+			addField(d, "mode", r->fields[3]);
+			addField(d, "comment", r->fields[4]);
+		});
+	write_config_section(admindb, "SELECT * FROM pgsql_firewall_whitelist_rules",
+		"pgsql_firewall_whitelist_rules", data,
+		[this](SQLite3_row* r, std::string& d) {
+			addField(d, "active", r->fields[0], "");
+			addField(d, "username", r->fields[1]);
+			addField(d, "client_address", r->fields[2]);
+			addField(d, "database", r->fields[3]);
+			addField(d, "flagIN", r->fields[4], "");
+			addField(d, "digest", r->fields[5]);
+			addField(d, "comment", r->fields[6]);
+		});
+	write_config_section(admindb, "SELECT * FROM pgsql_firewall_whitelist_sqli_fingerprints",
+		"pgsql_firewall_whitelist_sqli_fingerprints", data,
+		[this](SQLite3_row* r, std::string& d) {
+			addField(d, "active", r->fields[0], "");
+			addField(d, "fingerprint", r->fields[1]);
+		});
 	return 0;
 }
 
