@@ -1573,6 +1573,40 @@ void MySQL_Threads_Handler::commit() {
 	__sync_add_and_fetch(&__global_MySQL_Thread_Variables_version,1);
 	proxy_debug(PROXY_DEBUG_MYSQL_SERVER, 1, "Increasing version number to %d - all threads will notice this and refresh their variables\n", __global_MySQL_Thread_Variables_version);
 
+#ifndef PROXYSQL31
+	/**
+	 * @brief Tier gate: pass-through authentication is Innovative-tier only.
+	 *
+	 * Pass-through authentication is a feature of the ProxySQL Innovative
+	 * tier (3.1.x) and AI/MCP tier (4.0.x); both define PROXYSQL31 (4.0
+	 * implies 3.1). On the Stable tier (3.0.x, PROXYSQL31 undefined) the
+	 * code still ships, but the feature must not be arm-able.
+	 *
+	 * We enforce that here, at commit() time, because commit() runs once
+	 * per LOAD MYSQL VARIABLES TO RUNTIME and updates the master
+	 * `variables` struct *before* the worker threads refresh their
+	 * per-thread `mysql_thread___passthrough_auth_enabled` copies from it.
+	 * Coercing the master flag to false here therefore guarantees the
+	 * runtime gate is never armed on a Stable build, no matter how the
+	 * value arrived (SET + LOAD, config file, a saved config carried over
+	 * from a 3.1.x/4.0.x install, or a ProxySQL Cluster sync push).
+	 *
+	 * A saved config that has the flag set to 'true' still loads cleanly;
+	 * it is simply forced back to 'false' with a single log line, rather
+	 * than erroring the load. The coercion runs before the unknown_users
+	 * misconfig warning below, so that warning does not spuriously fire on
+	 * a Stable build where the feature is inert anyway.
+	 */
+	if (variables.passthrough_auth_enabled) {
+		proxy_error(
+			"pass-through authentication is not available on the ProxySQL "
+			"Stable tier (3.0.x); mysql-passthrough_auth_enabled has been "
+			"forced to 'false'. Use a 3.1.x (Innovative) or 4.0.x (AI/MCP) "
+			"build to enable it.\n");
+		variables.passthrough_auth_enabled = false;
+	}
+#endif // PROXYSQL31
+
 	/**
 	 * @brief Operator warning on dangerous pass-through configuration.
 	 *
