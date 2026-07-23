@@ -7411,7 +7411,16 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 	}
 
 	if (topology_status == st.bgd_status) {
-		// no phase change
+		// Refresh or retry green IP resolution on every eligible same-phase observation.
+		if (topology_status >= AWS_RDS_BGD_Status::AVAILABLE
+			&& topology_status <= AWS_RDS_BGD_Status::WRITER_SWITCHOVER_POST_PROCESSING) {
+			aws_rds_bgd_resolve_green_ips(st);
+		}
+
+		// Retry pinning pairs whose green IP became available while remaining in POST_PROCESSING.
+		if (topology_status == AWS_RDS_BGD_Status::WRITER_SWITCHOVER_POST_PROCESSING) {
+			aws_rds_bgd_pin_green_ips(st);
+		}
 		return;
 	}
 
@@ -7455,6 +7464,12 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 		aws_rds_bgd_add_green_writer_in_hg(st);
 		aws_rds_bgd_set_bgd_in_progress(st);
 
+		// Repoint each mapped blue host onto its green IP and drain existing
+		// connections so new backend work resolves to green.
+		aws_rds_bgd_pin_green_ips(st);
+
+		// Blue readers without a green counterpart must stop serving reads.
+
 		srv_addr_t writer;
 		for (const AWS_RDS_BlueGreenPair& p : st.bg_map) {
 			if (p.is_writer) {
@@ -7462,28 +7477,6 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 				break;
 			}
 		}
-
-		// Repoint each mapped blue host onto its green IP and drain existing
-		// connections so new backend work resolves to green.
-		for (AWS_RDS_BlueGreenPair& p : st.bg_map) {
-			if (p.green_ip.empty()) {
-				proxy_warning(
-					"AWS RDS BGD [wHG=%u rHG=%u]: no green IP for blue '%s:%d'; cannot repoint\n",
-					st.writer_hg, st.reader_hg, p.blue_host.c_str(), p.port);
-				continue;
-			}
-			dns_cache->pin(p.blue_host, p.green_ip);
-			proxy_info(
-				"AWS RDS BGD [wHG=%u rHG=%u]: repointed blue '%s' to green IP %s\n",
-				st.writer_hg, st.reader_hg, p.blue_host.c_str(), p.green_ip.c_str());
-
-			MyHGM->wrlock();
-			MyHGM->drain_server_connections(p.blue_host.c_str(), p.port);
-			MyHGM->wrunlock();
-			My_Conn_Pool->purge_connections(p.blue_host.c_str(), p.port);
-		}
-
-		// Blue readers without a green counterpart must stop serving reads.
 
 		std::vector<srv_addr_t> blue_readers;
 		MyHGM->wrlock();
@@ -7549,6 +7542,38 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 	else {
 		// unrecognized status: take no action, stay at baseline interval
 		st.next_check_interval_ms = 0;
+	}
+}
+
+/**
+* @brief Pin green IPs and drain existing blue-host connections.
+*
+* @param st BGD switchover state.
+*/
+void MySQL_Monitor::aws_rds_bgd_pin_green_ips(AWS_RDS_BGD_State& st) {
+	for (AWS_RDS_BlueGreenPair& pair : st.bg_map) {
+		if (pair.green_ip_pinned) {
+			continue;
+		}
+
+		if (pair.green_ip.empty()) {
+			proxy_debug(PROXY_DEBUG_MONITOR, 7,
+				"AWS RDS BGD [wHG=%u rHG=%u]: green host '%s' remains unresolved; "
+				"deferring pin/drain for blue '%s:%d'\n",
+				st.writer_hg, st.reader_hg, pair.green_host.c_str(), pair.blue_host.c_str(), pair.port);
+			continue;
+		}
+
+		dns_cache->pin(pair.blue_host, pair.green_ip);
+		MyHGM->wrlock();
+		MyHGM->drain_server_connections(pair.blue_host.c_str(), pair.port);
+		MyHGM->wrunlock();
+		My_Conn_Pool->purge_connections(pair.blue_host.c_str(), pair.port);
+		pair.green_ip_pinned = true;
+
+		proxy_info(
+			"AWS RDS BGD [wHG=%u rHG=%u]: repointed blue '%s' to green IP %s\n",
+			st.writer_hg, st.reader_hg, pair.blue_host.c_str(), pair.green_ip.c_str());
 	}
 }
 

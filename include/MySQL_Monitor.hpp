@@ -441,6 +441,7 @@ struct AWS_RDS_BlueGreenPair {
 	int32_t green_use_ssl = -1;           ///< Green server SSL; -1 means unset (use blue_use_ssl).
 	std::string green_ip;                 ///< Green host IP resolved at SWITCHOVER_INITIATED and held warm.
 	unsigned long long green_ip_ttl = 0;  ///< Expiry for green_ip when resolved by the BGD thread; 0 means DNS_Cache-sourced.
+	bool green_ip_pinned = false;         ///< True after green_ip has been pinned and blue_host connections drained/purged.
 	bool is_writer = false;               ///< True when this pair maps the blue writer.
 };
 
@@ -672,6 +673,12 @@ class MySQL_Monitor {
 	* @param topology  Parsed mysql.rds_topology result for this cycle.
 	*/
 	void handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topology_Result& topology);
+	/**
+	* @brief Pin green IPs and drain existing blue-host connections.
+	*
+	* @param st BGD switchover state.
+	*/
+	void aws_rds_bgd_pin_green_ips(AWS_RDS_BGD_State& st);
 	/**
 	* @brief Run deferred switchover teardown or rollback cleanup.
 	*
