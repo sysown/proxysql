@@ -422,6 +422,9 @@ pgsql-extended_query_protocol_test-t: pgsql-extended_query_protocol_test-t.cpp p
 pgsql-reg_test_5273_bind_parameter_format-t: pgsql-reg_test_5273_bind_parameter_format-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 
+pgsql-reg_test_5899_bind_zero_param_formats-t: pgsql-reg_test_5899_bind_zero_param_formats-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
+	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
+
 pgsql-reg_test_5300_threshold_resultset_deadlock-t: pgsql-reg_test_5300_threshold_resultset_deadlock-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 
