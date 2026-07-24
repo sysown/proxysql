@@ -156,6 +156,8 @@ char *binary_sha1 = nullptr;
 #include "SQLite3_Server.h"
 
 int ProxySQL_create_or_load_TLS(bool, std::string &) { return 0; }
+int ProxySQL_Admin::reload_admin_tls(std::string &) { return 0; }
+int ProxySQL_Admin::reload_admin_tls_unlocked(std::string &) { return 0; }
 
 char *SQLite3_Server::get_variable(char *) { return nullptr; }
 bool SQLite3_Server::has_variable(const char *) { return false; }
@@ -194,6 +196,32 @@ SSL *ProxySQL_GlobalVariables::get_SSL_new() {
 	std::lock_guard<std::mutex> lock(global.ssl_mutex);
 	if (global.ssl_ctx == nullptr) return nullptr;
 	return SSL_new(global.ssl_ctx);
+}
+
+SSL *ProxySQL_GlobalVariables::get_admin_SSL_new() {
+	{
+		std::lock_guard<std::mutex> lock(global.admin_ssl_mutex);
+		if (global.admin_ssl_enabled && global.admin_ssl_ctx != nullptr) {
+			return SSL_new(global.admin_ssl_ctx);
+		}
+	}
+	return get_SSL_new();
+}
+
+bool ProxySQL_GlobalVariables::is_admin_SSL_enabled() {
+	std::lock_guard<std::mutex> lock(global.admin_ssl_mutex);
+	return global.admin_ssl_enabled;
+}
+
+void ProxySQL_GlobalVariables::set_admin_SSL_ctx(SSL_CTX *ctx, bool enabled) {
+	SSL_CTX *old_ctx = nullptr;
+	{
+		std::lock_guard<std::mutex> lock(global.admin_ssl_mutex);
+		old_ctx = global.admin_ssl_ctx;
+		global.admin_ssl_ctx = enabled ? ctx : nullptr;
+		global.admin_ssl_enabled = enabled;
+	}
+	if (old_ctx && old_ctx != ctx) SSL_CTX_free(old_ctx);
 }
 
 void ProxySQL_GlobalVariables::get_SSL_pem_mem(char **key, char **cert) {
@@ -265,6 +293,8 @@ int test_globals_init() {
 	// SSL pointers — nullptr means no SSL
 	GloVars.global.ssl_ctx = nullptr;
 	GloVars.global.tmp_ssl_ctx = nullptr;
+	GloVars.global.admin_ssl_ctx = nullptr;
+	GloVars.global.admin_ssl_enabled = false;
 	GloVars.global.ssl_key_pem_mem = nullptr;
 	GloVars.global.ssl_cert_pem_mem = nullptr;
 

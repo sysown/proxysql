@@ -206,6 +206,10 @@ ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
 		free(global.tls_key_file);
 		global.tls_key_file = nullptr;
 	}
+	if (global.admin_ssl_ctx) {
+		SSL_CTX_free(global.admin_ssl_ctx);
+		global.admin_ssl_ctx = nullptr;
+	}
 };
 
 ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
@@ -286,6 +290,8 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	global.gr_bootstrap_ssl_key = nullptr;
 	global.gr_bootstrap_ssl_mode = nullptr;
 	global.ssl_keylog_enabled = false;
+	global.admin_ssl_ctx = nullptr;
+	global.admin_ssl_enabled = false;
 	global.tls_load_count = 0;
 	global.tls_last_load_timestamp = 0;
 	global.tls_last_load_ok = false;

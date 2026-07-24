@@ -499,3 +499,190 @@ int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg) {
 	BIO_free(bio_err);
 	return ret;
 }
+
+static std::string admin_tls_resolve_path(const char *path) {
+	if (path == NULL || path[0] == '\0') {
+		return "";
+	}
+	if (path[0] == '/') {
+		return path;
+	}
+	return std::string(GloVars.datadir) + "/" + path;
+}
+
+static std::string admin_tls_openssl_error(const char *operation) {
+	const unsigned long error = ERR_get_error();
+	if (error == 0) {
+		return operation;
+	}
+	char error_buf[256];
+	ERR_error_string_n(error, error_buf, sizeof(error_buf));
+	return std::string(operation) + ": " + error_buf;
+}
+
+static bool admin_tls_load_crls(
+	SSL_CTX *ctx, const std::string& crl_file, const std::string& crl_path, std::string& msg
+) {
+	if (crl_file.empty() && crl_path.empty()) {
+		return true;
+	}
+
+	X509_STORE *store = SSL_CTX_get_cert_store(ctx);
+	if (store == NULL) {
+		msg = "Unable to get Admin TLS certificate store";
+		return false;
+	}
+	if (!crl_file.empty()) {
+		X509_LOOKUP *lookup = X509_STORE_add_lookup(store, X509_LOOKUP_file());
+		if (lookup == NULL || X509_load_crl_file(lookup, crl_file.c_str(), X509_FILETYPE_PEM) != 1) {
+			msg = admin_tls_openssl_error("Unable to load Admin TLS CRL file");
+			return false;
+		}
+	}
+	if (!crl_path.empty()) {
+		X509_LOOKUP *lookup = X509_STORE_add_lookup(store, X509_LOOKUP_hash_dir());
+		if (lookup == NULL || X509_LOOKUP_add_dir(lookup, crl_path.c_str(), X509_FILETYPE_PEM) != 1) {
+			msg = admin_tls_openssl_error("Unable to load Admin TLS CRL directory");
+			return false;
+		}
+	}
+	if (X509_STORE_set_flags(store, X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL) != 1) {
+		msg = admin_tls_openssl_error("Unable to enable Admin TLS CRL checking");
+		return false;
+	}
+	return true;
+}
+
+/**
+ * Build and atomically activate the dedicated TLS context used by the Admin
+ * MySQL and PostgreSQL interfaces.
+ *
+ * The configured context is completely validated before it becomes visible
+ * to new connections. SSL objects created before a reload retain their own
+ * reference to the previous SSL_CTX.
+ */
+int ProxySQL_Admin::reload_admin_tls(std::string& msg) {
+	wrlock();
+	const int result = reload_admin_tls_unlocked(msg);
+	wrunlock();
+	return result;
+}
+
+int ProxySQL_Admin::reload_admin_tls_unlocked(std::string& msg) {
+	msg.clear();
+
+	if (!variables.admin_ssl_enabled) {
+		GloVars.set_admin_SSL_ctx(NULL, false);
+		msg = "Admin TLS disabled";
+		return 0;
+	}
+
+	const std::string key = admin_tls_resolve_path(variables.admin_ssl_key);
+	const std::string cert = admin_tls_resolve_path(variables.admin_ssl_cert);
+	const std::string ca = admin_tls_resolve_path(variables.admin_ssl_ca);
+	const std::string capath = admin_tls_resolve_path(variables.admin_ssl_capath);
+	const std::string crl = admin_tls_resolve_path(variables.admin_ssl_crl);
+	const std::string crlpath = admin_tls_resolve_path(variables.admin_ssl_crlpath);
+
+	if (key.empty()) {
+		msg = "admin-ssl_key is required when admin-ssl_enabled is true";
+		return 1;
+	}
+	if (cert.empty()) {
+		msg = "admin-ssl_cert is required when admin-ssl_enabled is true";
+		return 1;
+	}
+	if (variables.admin_ssl_verify_client != 0 && ca.empty() && capath.empty()) {
+		msg = "admin-ssl_ca or admin-ssl_capath is required when client certificate verification is enabled";
+		return 1;
+	}
+
+	ERR_clear_error();
+	SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
+	if (ctx == NULL) {
+		msg = admin_tls_openssl_error("Unable to create Admin TLS context");
+		return 1;
+	}
+
+	int ret = 1;
+	const char *tls_version = variables.admin_tls_version;
+	const int min_tls_version =
+		!strcasecmp(tls_version, "TLSv1.3") ? TLS1_3_VERSION : TLS1_2_VERSION;
+	if (SSL_CTX_set_min_proto_version(ctx, min_tls_version) != 1) {
+		msg = admin_tls_openssl_error("Unable to set minimum Admin TLS version");
+		goto cleanup;
+	}
+	if (SSL_CTX_use_certificate_chain_file(ctx, cert.c_str()) != 1) {
+		msg = admin_tls_openssl_error("Unable to load Admin TLS certificate");
+		goto cleanup;
+	}
+	if (SSL_CTX_use_PrivateKey_file(ctx, key.c_str(), SSL_FILETYPE_PEM) != 1) {
+		msg = admin_tls_openssl_error("Unable to load Admin TLS private key");
+		goto cleanup;
+	}
+	if (SSL_CTX_check_private_key(ctx) != 1) {
+		msg = admin_tls_openssl_error("Admin TLS private key does not match the certificate");
+		goto cleanup;
+	}
+
+	if (!ca.empty() || !capath.empty()) {
+		if (SSL_CTX_load_verify_locations(
+			ctx, ca.empty() ? NULL : ca.c_str(), capath.empty() ? NULL : capath.c_str()
+		) != 1) {
+			msg = admin_tls_openssl_error("Unable to load Admin TLS CA");
+			goto cleanup;
+		}
+	}
+
+	switch (variables.admin_ssl_verify_client) {
+		case 0:
+			SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
+			break;
+		case 1:
+			SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_CLIENT_ONCE, NULL);
+			break;
+		case 2:
+			SSL_CTX_set_verify(
+				ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT | SSL_VERIFY_CLIENT_ONCE, NULL
+			);
+			break;
+		default:
+			msg = "Invalid admin-ssl_verify_client value";
+			goto cleanup;
+	}
+
+	if (!admin_tls_load_crls(ctx, crl, crlpath, msg)) {
+		goto cleanup;
+	}
+	if (variables.admin_ssl_cipher[0] != '\0'
+		&& SSL_CTX_set_cipher_list(ctx, variables.admin_ssl_cipher) != 1) {
+		msg = admin_tls_openssl_error("Unable to set Admin TLS cipher list");
+		goto cleanup;
+	}
+	if (variables.admin_ssl_curves[0] != '\0'
+		&& SSL_CTX_set1_curves_list(ctx, variables.admin_ssl_curves) != 1) {
+		msg = admin_tls_openssl_error("Unable to set Admin TLS curves");
+		goto cleanup;
+	}
+	if (SSL_CTX_set_dh_auto(ctx, 1) != 1) {
+		msg = admin_tls_openssl_error("Unable to initialize Admin TLS DH parameters");
+		goto cleanup;
+	}
+
+	SSL_CTX_set_options(ctx, SSL_OP_NO_TICKET);
+	SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_OFF);
+
+	GloVars.set_admin_SSL_ctx(ctx, true);
+	ctx = NULL;
+	msg = "Admin TLS context loaded";
+	ret = 0;
+
+cleanup:
+	if (ctx != NULL) {
+		SSL_CTX_free(ctx);
+	}
+	if (ret != 0) {
+		proxy_error("Unable to load Admin TLS context: %s\n", msg.c_str());
+	}
+	return ret;
+}
