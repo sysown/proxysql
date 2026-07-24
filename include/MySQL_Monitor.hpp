@@ -60,8 +60,12 @@ struct cmp_str {
 #define N_L_ASE 16
 
 #define AWS_ENDPOINT_SUFFIX_STRING "rds.amazonaws.com"
-#define QUERY_READ_ONLY_AND_AWS_TOPOLOGY_DISCOVERY "SELECT @@global.read_only read_only, id, endpoint, port from mysql.rds_topology"
+#define QUERY_READ_ONLY_AND_AWS_RDS_TOPOLOGY_DISCOVERY "SELECT @@global.read_only read_only, id, endpoint, port from mysql.rds_topology"
+#define QUERY_INNODB_READ_ONLY_AND_AWS_RDS_TOPOLOGY_DISCOVERY "SELECT @@global.innodb_read_only read_only, id, endpoint, port from mysql.rds_topology"
+#define QUERY_READ_ONLY_AND_AWS_BLUE_GREEN_TOPOLOGY_DISCOVERY "SELECT @@global.read_only AS read_only, id, endpoint, port, role, status, version FROM mysql.rds_topology"
+#define QUERY_INNODB_READ_ONLY_AND_AWS_BLUE_GREEN_TOPOLOGY_DISCOVERY "SELECT @@global.innodb_read_only AS read_only, id, endpoint, port, role, status, version FROM mysql.rds_topology"
 
+#define SUPPORTED_AWS_RDS_TOPOLOGY_VERSION "1.0"
 /*
 
 Implementation of monitoring in AWS Aurora will be different than previous modules
@@ -126,6 +130,16 @@ class AWS_Aurora_monitor_node {
 		if (idx_last_entry == -1) return nullptr;
 		return (last_entries[idx_last_entry]);
 	}
+};
+
+class AWS_RDS_topology_server {
+	public:
+	string addr;
+	int port;
+	unsigned int writer_hostgroup;
+	unordered_set<string> hosts_in_topology;
+
+	AWS_RDS_topology_server(const string &_str_a, int _p, int _whg);
 };
 
 typedef struct _Galera_status_entry_t {
@@ -204,7 +218,16 @@ enum MySQL_Monitor_State_Data_Task_Type {
 	MON_REPLICATION_LAG,
 	MON_GALERA,
 	MON_AWS_AURORA,
-	MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY
+	MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY,
+	MON_INNODB_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY,
+	MON_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY,
+	MON_INNODB_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY,
+};
+
+enum MySQL_Monitor_Aws_Metadata_Check {
+	AWS_RDS_TOPOLOGY_CHECK,
+	AWS_RDS_BLUE_GREEN_DEPLOYMENT_STATE_CHECK,
+	NONE
 };
 
 enum class MySQL_Monitor_State_Data_Task_Result {
@@ -390,7 +413,6 @@ struct mon_metrics_map_idx {
 // live in DNS_Cache.hpp (included above) so the same machinery can back the
 // independent PgSQL_Monitor DNS cache.
 
-
 class MySQL_Monitor {
 	public:
 	static std::string dns_lookup(const std::string& hostname, bool return_hostname_if_lookup_fails = true, size_t* ip_count = nullptr);
@@ -398,8 +420,12 @@ class MySQL_Monitor {
 	static bool update_dns_cache_from_mysql_conn(const MYSQL* mysql);
 	static void trigger_dns_cache_update();
 
-	void process_discovered_topology(const std::string& originating_server_hostname, const vector<MYSQL_ROW>& discovered_servers, int reader_hostgroup);
-	bool is_aws_rds_multi_az_db_cluster_topology(const std::vector<MYSQL_ROW>& discovered_servers);
+	void process_discovered_topology(const std::string& originating_server_hostname, const vector<MYSQL_ROW>& discovered_servers, const MySQL_Monitor_State_Data* mmsd, int num_fields);
+	bool is_aws_rds_multi_az_db_cluster_topology(const string& originating_server_hostname, const vector<tuple<string, uint16_t, uint32_t, int64_t, int32_t>>& discovered_servers);
+	bool is_aws_rds_topology_query_task(const MySQL_Monitor_State_Data_Task_Type& task_type);
+	bool mysql_row_matches_query_task(const unordered_set<string> &field_names, const MySQL_Monitor_State_Data_Task_Type &task_type);
+	void add_topology_query_to_task(MySQL_Monitor_State_Data_Task_Type &task_type);
+	bool is_aws_rds_topology_version_supported(const string& version);
 
 	private:
 	std::vector<table_def_t *> *tables_defs_monitor;
@@ -422,6 +448,7 @@ class MySQL_Monitor {
 	SQLite3_result *Galera_Hosts_resultset;
 	std::map<std::string, AWS_Aurora_monitor_node *> AWS_Aurora_Hosts_Map;
 	SQLite3_result *AWS_Aurora_Hosts_resultset;
+	std::map<std::string, shared_ptr<AWS_RDS_topology_server>> AWS_RDS_Topology_Server_Map; 
 	uint64_t AWS_Aurora_Hosts_resultset_checksum;
 	unsigned int num_threads;
 	unsigned int aux_threads;
@@ -451,6 +478,8 @@ class MySQL_Monitor {
 	bool shutdown;
 	pthread_mutex_t mon_en_mutex;
 	bool monitor_enabled;
+	MySQL_Monitor_Aws_Metadata_Check rds_topology_check_type = MySQL_Monitor_Aws_Metadata_Check::AWS_RDS_TOPOLOGY_CHECK;
+	int topology_loop = 0;
 	SQLite3DB *admindb;	// internal database
 	SQLite3DB *monitordb;	// internal database
 	SQLite3DB *monitor_internal_db;	// internal database
@@ -514,7 +543,7 @@ private:
 	 * Note: Calling init_async is mandatory before executing tasks asynchronously.
 	*/
 	void monitor_ping_async(SQLite3_result* resultset);
-	void monitor_read_only_async(SQLite3_result* resultset, bool do_discovery_check);
+	void monitor_read_only_async(SQLite3_result* resultset);
 	void monitor_replication_lag_async(SQLite3_result* resultset);
 	void monitor_group_replication_async();
 	void monitor_galera_async();
