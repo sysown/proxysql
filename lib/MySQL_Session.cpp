@@ -6582,6 +6582,10 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			client_myds->ssl =
 				admin_session ? GloVars.get_admin_SSL_new() : GloVars.get_SSL_new();
 			if (client_myds->ssl == NULL) {
+				proxy_error(
+					"Unable to create %s TLS connection: SSL_new() failed\n",
+					admin_session ? "MySQL Admin" : "MySQL frontend"
+				);
 				BIO_free(client_myds->rbio_ssl);
 				BIO_free(client_myds->wbio_ssl);
 				client_myds->rbio_ssl = NULL;

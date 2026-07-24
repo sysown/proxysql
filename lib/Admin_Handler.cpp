@@ -2768,11 +2768,15 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		if ( is_admin_command_or_alias(LOAD_ADMIN_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length) ) {
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			const FlushVariableStats stats = SPA->load_admin_variables_to_runtime();
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded admin variables to RUNTIME\n");
 			if (stats.error.empty()) {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded admin variables to RUNTIME\n");
 				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 			} else {
-				SPA->send_error_msg_to_client(sess, stats.error.c_str());
+				const std::string error =
+					"Admin variables loaded, but Admin TLS was rejected and rolled back: "
+					+ stats.error;
+				proxy_error("%s\n", error.c_str());
+				SPA->send_error_msg_to_client(sess, error.c_str());
 			}
 			return false;
 		}

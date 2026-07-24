@@ -511,7 +511,11 @@ static std::string admin_tls_resolve_path(const char *path) {
 }
 
 static std::string admin_tls_openssl_error(const char *operation) {
-	const unsigned long error = ERR_get_error();
+	unsigned long error = 0;
+	unsigned long next_error = 0;
+	while ((next_error = ERR_get_error()) != 0) {
+		error = next_error;
+	}
 	if (error == 0) {
 		return operation;
 	}
@@ -636,7 +640,9 @@ int ProxySQL_Admin::reload_admin_tls_unlocked(std::string& msg) {
 
 	switch (variables.admin_ssl_verify_client) {
 		case 0:
-			SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
+			// DISABLED intentionally preserves the default behavior: Admin clients
+			// are not required to present a certificate.
+			SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL); // NOSONAR
 			break;
 		case 1:
 			SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_CLIENT_ONCE, NULL);

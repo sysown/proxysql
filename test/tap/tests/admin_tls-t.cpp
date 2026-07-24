@@ -10,6 +10,7 @@
 #include <fstream>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <unistd.h>
 
@@ -104,21 +105,27 @@ static bool set_variable(MYSQL *mysql, const char *name, const std::string& valu
 }
 
 static std::string make_libpq_key_copy(const std::string& source) {
-	char path[] = "/tmp/proxysql-admin-tls-key-XXXXXX";
-	const int fd = mkstemp(path);
+	const size_t separator = source.find_last_of('/');
+	const std::string directory =
+		separator == std::string::npos ? "." : source.substr(0, separator);
+	const std::string path_template = directory + "/proxysql-admin-tls-key-XXXXXX";
+	std::vector<char> path(path_template.begin(), path_template.end());
+	path.push_back('\0');
+
+	const int fd = mkstemp(path.data());
 	if (fd == -1) {
 		return "";
 	}
 	close(fd);
 
 	std::ifstream input(source, std::ios::binary);
-	std::ofstream output(path, std::ios::binary | std::ios::trunc);
+	std::ofstream output(path.data(), std::ios::binary | std::ios::trunc);
 	output << input.rdbuf();
 	if (!input || !output) {
-		unlink(path);
+		unlink(path.data());
 		return "";
 	}
-	return path;
+	return path.data();
 }
 
 int main() {
@@ -173,9 +180,10 @@ int main() {
 		&& query_ok(control.get(), "LOAD ADMIN VARIABLES TO RUNTIME");
 	ok(configured, "dedicated Admin TLS context loads successfully");
 
-	set_variable(control.get(), "admin-ssl_cert", "/no/such/admin-cert.pem");
+	const bool invalid_set =
+		set_variable(control.get(), "admin-ssl_cert", "/no/such/admin-cert.pem");
 	const bool invalid_rejected =
-		mysql_query(control.get(), "LOAD ADMIN VARIABLES TO RUNTIME") != 0;
+		invalid_set && mysql_query(control.get(), "LOAD ADMIN VARIABLES TO RUNTIME") != 0;
 	ok(invalid_rejected, "invalid Admin TLS reload is rejected");
 	ok(
 		scalar(control.get(),

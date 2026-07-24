@@ -1175,7 +1175,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	const FlushVariableStats admin_stats =
 		flush_admin_variables___database_to_runtime(admindb, true);
 	if (!admin_stats.error.empty()) {
-		proxy_error("Unable to initialize Admin TLS: %s\n", admin_stats.error.c_str());
+		proxy_error("Unable to load admin variables: %s\n", admin_stats.error.c_str());
 		return false;
 	}
 
