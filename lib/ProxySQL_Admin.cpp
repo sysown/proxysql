@@ -386,7 +386,7 @@ MHD_Result http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #include "ProxySQL_Admin_Tables_Definitions.h"
 
-static char * admin_variables_names[]= {
+static const char * admin_variables_names[]= {
 	(char *)"admin_credentials",
 	(char *)"stats_credentials",
 	(char *)"stats_mysql_connections",
@@ -456,17 +456,17 @@ static char * admin_variables_names[]= {
 	(char *)"coredump_generation_interval_ms",
 	(char *)"coredump_generation_threshold",
 	(char *)"ssl_keylog_file",
-	(char *)"ssl_enabled",
-	(char *)"ssl_key",
-	(char *)"ssl_cert",
-	(char *)"ssl_ca",
-	(char *)"ssl_capath",
-	(char *)"ssl_cipher",
-	(char *)"tls_version",
-	(char *)"ssl_curves",
-	(char *)"ssl_verify_client",
-	(char *)"ssl_crl",
-	(char *)"ssl_crlpath",
+	"ssl_enabled",
+	"ssl_key",
+	"ssl_cert",
+	"ssl_ca",
+	"ssl_capath",
+	"ssl_cipher",
+	"tls_version",
+	"ssl_curves",
+	"ssl_verify_client",
+	"ssl_crl",
+	"ssl_crlpath",
 	NULL
 };
 
@@ -3301,15 +3301,15 @@ void ProxySQL_Admin::admin_shutdown() {
 	if (variables.ssl_keylog_file) {
 		free(variables.ssl_keylog_file);
 	}
-	free(variables.admin_ssl_key);
-	free(variables.admin_ssl_cert);
-	free(variables.admin_ssl_ca);
-	free(variables.admin_ssl_capath);
-	free(variables.admin_ssl_cipher);
-	free(variables.admin_tls_version);
-	free(variables.admin_ssl_curves);
-	free(variables.admin_ssl_crl);
-	free(variables.admin_ssl_crlpath);
+	free_null(variables.admin_ssl_key);
+	free_null(variables.admin_ssl_cert);
+	free_null(variables.admin_ssl_ca);
+	free_null(variables.admin_ssl_capath);
+	free_null(variables.admin_ssl_cipher);
+	free_null(variables.admin_tls_version);
+	free_null(variables.admin_ssl_curves);
+	free_null(variables.admin_ssl_crl);
+	free_null(variables.admin_ssl_crlpath);
 };
 
 ProxySQL_Admin::~ProxySQL_Admin() {
@@ -4999,7 +4999,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		if (strcasecmp(value, "TLSv1.2") && strcasecmp(value, "TLSv1.3")) {
 			return false;
 		}
-		free(variables.admin_tls_version);
+		free_null(variables.admin_tls_version);
 		variables.admin_tls_version = strdup(value);
 		return true;
 	}
@@ -5023,7 +5023,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		admin_ssl_string = &variables.admin_ssl_crlpath;
 	}
 	if (admin_ssl_string) {
-		free(*admin_ssl_string);
+		free_null(*admin_ssl_string);
 		*admin_ssl_string = strdup(strcmp(value, "(null)") ? value : "");
 		return true;
 	}

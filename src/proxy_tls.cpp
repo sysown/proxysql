@@ -557,6 +557,117 @@ static bool admin_tls_load_crls(
 	return true;
 }
 
+static bool admin_tls_validate_paths(
+	const std::string& key,
+	const std::string& cert,
+	const std::string& ca,
+	const std::string& capath,
+	int verify_client,
+	std::string& msg
+) {
+	if (key.empty()) {
+		msg = "admin-ssl_key is required when admin-ssl_enabled is true";
+		return false;
+	}
+	if (cert.empty()) {
+		msg = "admin-ssl_cert is required when admin-ssl_enabled is true";
+		return false;
+	}
+	if (verify_client != 0 && ca.empty() && capath.empty()) {
+		msg = "admin-ssl_ca or admin-ssl_capath is required when client certificate verification is enabled";
+		return false;
+	}
+	return true;
+}
+
+static bool admin_tls_set_protocol_version(
+	SSL_CTX *ctx, const char *tls_version, std::string& msg
+) {
+	const int min_tls_version =
+		!strcasecmp(tls_version, "TLSv1.3") ? TLS1_3_VERSION : TLS1_2_VERSION;
+	if (SSL_CTX_set_min_proto_version(ctx, min_tls_version) != 1) {
+		msg = admin_tls_openssl_error("Unable to set minimum Admin TLS version");
+		return false;
+	}
+	return true;
+}
+
+static bool admin_tls_load_identity(
+	SSL_CTX *ctx, const std::string& key, const std::string& cert, std::string& msg
+) {
+	if (SSL_CTX_use_certificate_chain_file(ctx, cert.c_str()) != 1) {
+		msg = admin_tls_openssl_error("Unable to load Admin TLS certificate");
+		return false;
+	}
+	if (SSL_CTX_use_PrivateKey_file(ctx, key.c_str(), SSL_FILETYPE_PEM) != 1) {
+		msg = admin_tls_openssl_error("Unable to load Admin TLS private key");
+		return false;
+	}
+	if (SSL_CTX_check_private_key(ctx) != 1) {
+		msg = admin_tls_openssl_error("Admin TLS private key does not match the certificate");
+		return false;
+	}
+	return true;
+}
+
+static bool admin_tls_configure_client_verification(
+	SSL_CTX *ctx,
+	const std::string& ca,
+	const std::string& capath,
+	const std::string& crl,
+	const std::string& crlpath,
+	int verify_client,
+	std::string& msg
+) {
+	if (!ca.empty() || !capath.empty()) {
+		if (SSL_CTX_load_verify_locations(
+			ctx, ca.empty() ? NULL : ca.c_str(), capath.empty() ? NULL : capath.c_str()
+		) != 1) {
+			msg = admin_tls_openssl_error("Unable to load Admin TLS CA");
+			return false;
+		}
+	}
+
+	switch (verify_client) {
+		case 0:
+			// DISABLED intentionally preserves the default behavior: Admin clients
+			// are not required to present a certificate.
+			SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL); // NOSONAR
+			break;
+		case 1:
+			SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_CLIENT_ONCE, NULL);
+			break;
+		case 2:
+			SSL_CTX_set_verify(
+				ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT | SSL_VERIFY_CLIENT_ONCE, NULL
+			);
+			break;
+		default:
+			msg = "Invalid admin-ssl_verify_client value";
+			return false;
+	}
+
+	return admin_tls_load_crls(ctx, crl, crlpath, msg);
+}
+
+static bool admin_tls_configure_ciphers(
+	SSL_CTX *ctx, const char *cipher, const char *curves, std::string& msg
+) {
+	if (cipher[0] != '\0' && SSL_CTX_set_cipher_list(ctx, cipher) != 1) {
+		msg = admin_tls_openssl_error("Unable to set Admin TLS cipher list");
+		return false;
+	}
+	if (curves[0] != '\0' && SSL_CTX_set1_curves_list(ctx, curves) != 1) {
+		msg = admin_tls_openssl_error("Unable to set Admin TLS curves");
+		return false;
+	}
+	if (SSL_CTX_set_dh_auto(ctx, 1) != 1) {
+		msg = admin_tls_openssl_error("Unable to initialize Admin TLS DH parameters");
+		return false;
+	}
+	return true;
+}
+
 /**
  * Build and atomically activate the dedicated TLS context used by the Admin
  * MySQL and PostgreSQL interfaces.
@@ -588,16 +699,9 @@ int ProxySQL_Admin::reload_admin_tls_unlocked(std::string& msg) {
 	const std::string crl = admin_tls_resolve_path(variables.admin_ssl_crl);
 	const std::string crlpath = admin_tls_resolve_path(variables.admin_ssl_crlpath);
 
-	if (key.empty()) {
-		msg = "admin-ssl_key is required when admin-ssl_enabled is true";
-		return 1;
-	}
-	if (cert.empty()) {
-		msg = "admin-ssl_cert is required when admin-ssl_enabled is true";
-		return 1;
-	}
-	if (variables.admin_ssl_verify_client != 0 && ca.empty() && capath.empty()) {
-		msg = "admin-ssl_ca or admin-ssl_capath is required when client certificate verification is enabled";
+	if (!admin_tls_validate_paths(
+		key, cert, ca, capath, variables.admin_ssl_verify_client, msg
+	)) {
 		return 1;
 	}
 
@@ -608,87 +712,25 @@ int ProxySQL_Admin::reload_admin_tls_unlocked(std::string& msg) {
 		return 1;
 	}
 
-	int ret = 1;
-	const char *tls_version = variables.admin_tls_version;
-	const int min_tls_version =
-		!strcasecmp(tls_version, "TLSv1.3") ? TLS1_3_VERSION : TLS1_2_VERSION;
-	if (SSL_CTX_set_min_proto_version(ctx, min_tls_version) != 1) {
-		msg = admin_tls_openssl_error("Unable to set minimum Admin TLS version");
-		goto cleanup;
-	}
-	if (SSL_CTX_use_certificate_chain_file(ctx, cert.c_str()) != 1) {
-		msg = admin_tls_openssl_error("Unable to load Admin TLS certificate");
-		goto cleanup;
-	}
-	if (SSL_CTX_use_PrivateKey_file(ctx, key.c_str(), SSL_FILETYPE_PEM) != 1) {
-		msg = admin_tls_openssl_error("Unable to load Admin TLS private key");
-		goto cleanup;
-	}
-	if (SSL_CTX_check_private_key(ctx) != 1) {
-		msg = admin_tls_openssl_error("Admin TLS private key does not match the certificate");
-		goto cleanup;
-	}
-
-	if (!ca.empty() || !capath.empty()) {
-		if (SSL_CTX_load_verify_locations(
-			ctx, ca.empty() ? NULL : ca.c_str(), capath.empty() ? NULL : capath.c_str()
-		) != 1) {
-			msg = admin_tls_openssl_error("Unable to load Admin TLS CA");
-			goto cleanup;
-		}
-	}
-
-	switch (variables.admin_ssl_verify_client) {
-		case 0:
-			// DISABLED intentionally preserves the default behavior: Admin clients
-			// are not required to present a certificate.
-			SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL); // NOSONAR
-			break;
-		case 1:
-			SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_CLIENT_ONCE, NULL);
-			break;
-		case 2:
-			SSL_CTX_set_verify(
-				ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT | SSL_VERIFY_CLIENT_ONCE, NULL
-			);
-			break;
-		default:
-			msg = "Invalid admin-ssl_verify_client value";
-			goto cleanup;
-	}
-
-	if (!admin_tls_load_crls(ctx, crl, crlpath, msg)) {
-		goto cleanup;
-	}
-	if (variables.admin_ssl_cipher[0] != '\0'
-		&& SSL_CTX_set_cipher_list(ctx, variables.admin_ssl_cipher) != 1) {
-		msg = admin_tls_openssl_error("Unable to set Admin TLS cipher list");
-		goto cleanup;
-	}
-	if (variables.admin_ssl_curves[0] != '\0'
-		&& SSL_CTX_set1_curves_list(ctx, variables.admin_ssl_curves) != 1) {
-		msg = admin_tls_openssl_error("Unable to set Admin TLS curves");
-		goto cleanup;
-	}
-	if (SSL_CTX_set_dh_auto(ctx, 1) != 1) {
-		msg = admin_tls_openssl_error("Unable to initialize Admin TLS DH parameters");
-		goto cleanup;
+	const bool configured =
+		admin_tls_set_protocol_version(ctx, variables.admin_tls_version, msg)
+		&& admin_tls_load_identity(ctx, key, cert, msg)
+		&& admin_tls_configure_client_verification(
+			ctx, ca, capath, crl, crlpath, variables.admin_ssl_verify_client, msg
+		)
+		&& admin_tls_configure_ciphers(
+			ctx, variables.admin_ssl_cipher, variables.admin_ssl_curves, msg
+		);
+	if (!configured) {
+		SSL_CTX_free(ctx);
+		proxy_error("Unable to load Admin TLS context: %s\n", msg.c_str());
+		return 1;
 	}
 
 	SSL_CTX_set_options(ctx, SSL_OP_NO_TICKET);
 	SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_OFF);
 
 	GloVars.set_admin_SSL_ctx(ctx, true);
-	ctx = NULL;
 	msg = "Admin TLS context loaded";
-	ret = 0;
-
-cleanup:
-	if (ctx != NULL) {
-		SSL_CTX_free(ctx);
-	}
-	if (ret != 0) {
-		proxy_error("Unable to load Admin TLS context: %s\n", msg.c_str());
-	}
-	return ret;
+	return 0;
 }

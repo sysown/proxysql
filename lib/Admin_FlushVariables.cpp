@@ -309,7 +309,7 @@ FlushVariableStats ProxySQL_Admin::flush_admin_variables___database_to_runtime(
 			std::string tls_error;
 			if (reload_admin_tls_unlocked(tls_error) != 0) {
 				auto restore_string = [](char **target, const std::string& value) {
-					free(*target);
+					free_null(*target);
 					*target = strdup(value.c_str());
 				};
 				variables.admin_ssl_enabled = old_ssl_enabled;

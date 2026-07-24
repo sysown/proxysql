@@ -6551,8 +6551,8 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			uint8_t packet_id = client_myds->pkt_sid;
 			packet_id++;
 			client_myds->myprot.generate_pkt_ERR(
-				true, NULL, NULL, packet_id, 1045, (char *)"28000",
-				(char *)"ProxySQL Admin interface requires SSL", true
+				true, NULL, NULL, packet_id, 1045, "28000",
+				"ProxySQL Admin interface requires SSL", true
 			);
 			return;
 		}
@@ -6615,8 +6615,8 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		uint8_t packet_id = client_myds->pkt_sid;
 		packet_id++;
 		client_myds->myprot.generate_pkt_ERR(
-			true, NULL, NULL, packet_id, 1045, (char *)"28000",
-			(char *)"ProxySQL Admin interface requires SSL", true
+			true, NULL, NULL, packet_id, 1045, "28000",
+			"ProxySQL Admin interface requires SSL", true
 		);
 		return;
 	}
