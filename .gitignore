@@ -198,6 +198,8 @@ pkgroot/
 
 #files generated during CI run
 proxysql-save.cfg
+.cluster-simulator-binaries
+.cluster-simulator-runtime/
 test/tap/tests/test_cluster_sync_config/cluster_sync_node_stderr.txt
 test/tap/tests/test_cluster_sync_config/proxysql*.pem
 test/tap/tests/test_cluster_sync_config/test_cluster_sync.cnf
