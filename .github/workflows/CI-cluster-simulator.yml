@@ -29,7 +29,7 @@ env:
 
 jobs:
   build:
-    name: Build ProxySQL with simulation support
+    name: build
     runs-on: ubuntu-22.04
     outputs:
       groups: ${{ steps.simulator-groups.outputs.groups }}
@@ -75,7 +75,7 @@ jobs:
         path: ${{ env.RUNTIME_CACHE_DIR }}
 
   test:
-    name: ${{ matrix.group }}
+    name: test / ${{ matrix.group }}
     needs: build
     runs-on: ubuntu-22.04
     strategy:
