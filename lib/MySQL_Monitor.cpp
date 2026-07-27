@@ -23,6 +23,7 @@ using json = nlohmann::json;
 #include "MySQL_Protocol.h"
 #include "MySQL_HostGroups_Manager.h"
 #include "MySQL_Monitor.hpp"
+#include "AuroraMonitorDecision.h"
 #include "ProxySQL_Cluster.hpp"
 #include "proxysql.h"
 #include "cpp.h"
@@ -240,11 +241,17 @@ private:
 #endif // DEBUG
 //	std::map<std::pair<std::string, int>, std::vector<MYSQL*> > my_connections;
 	std::unique_ptr<PtrArray> servers;
+	std::unordered_map<std::string, unsigned long long> switchover_timestamps;
 public:
 	MYSQL * get_connection(char *hostname, int port, MySQL_Monitor_State_Data *mmsd);
 	void put_connection(char *hostname, MySQL_Monitor_State_Data* mmsd);
 	void purge_some_connections();
 	void purge_all_connections();
+	/**
+	 * @brief Close and remove all pooled connections for the given hostnames.
+	 * @param hostnames List of hostnames whose connections should be purged.
+	 */
+	void purge_connections_for_hostnames(const std::vector<std::string>& hostnames);
 	void destroy_mysql_connection(MySQL_Monitor_State_Data* mmsd);
 	MySQL_Monitor_Connection_Pool() {
 		servers = std::unique_ptr<PtrArray>(new PtrArray());
@@ -337,6 +344,7 @@ void MySQL_Monitor_Connection_Pool::purge_all_connections() {
 #endif
 }
 
+/** @brief Close and unregister the MYSQL connection held by the given mmsd. */
 void MySQL_Monitor_Connection_Pool::destroy_mysql_connection(MySQL_Monitor_State_Data* mmsd) {
 	if (mmsd->mysql) {
 #ifdef DEBUG
@@ -349,6 +357,7 @@ void MySQL_Monitor_Connection_Pool::destroy_mysql_connection(MySQL_Monitor_State
 	}
 }
 
+/** @brief Retrieve a pooled connection for the given hostname:port, or NULL if none available. */
 MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port, MySQL_Monitor_State_Data *mmsd) {
 	std::lock_guard<std::mutex> lock(mutex);
 #ifdef DEBUG
@@ -389,6 +398,9 @@ MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port, 
 					my = mysql;
 					break;
 				}
+				if (my && mmsd) {
+					mmsd->pool_checkout_time = now;
+				}
 #ifdef DEBUG
 				// 'my' can be NULL due to connection cleanup, and can cause crash
 				if (my) {
@@ -417,15 +429,32 @@ MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port, 
 	return my;
 }
 
+/** @brief Return a connection to the pool, or close it if the hostname is under switchover quarantine. */
 void MySQL_Monitor_Connection_Pool::put_connection(char* hostname, MySQL_Monitor_State_Data* mmsd) {
-	
+
 	if (!mmsd->mysql) return;
-	
+
 	unsigned long long now = monotonic_time();
 	int port = mmsd->port;
 	MYSQL* my = mmsd->mysql;
 
 	std::lock_guard<std::mutex> lock(mutex);
+
+	auto sit = switchover_timestamps.find(hostname);
+	unsigned long long checkout_time = mmsd->pool_checkout_time;
+	unsigned long long sw_time = (sit != switchover_timestamps.end()) ? sit->second : 0;
+	if (should_reject_pooled_connection(checkout_time, sw_time)) {
+#ifdef DEBUG
+		pthread_mutex_lock(&m2);
+		for (unsigned int j = 0; j < conns->len; ++j) {
+			if (conns->index(j) == my) { conns->remove_index_fast(j); break; }
+		}
+		pthread_mutex_unlock(&m2);
+#endif
+		close_mysql(my);
+		mmsd->mysql = NULL;
+		return;
+	}
 
 #ifdef DEBUG
 	pthread_mutex_lock(&m2);
@@ -470,6 +499,7 @@ void MySQL_Monitor_Connection_Pool::put_connection(char* hostname, MySQL_Monitor
 	mmsd->mysql = NULL;
 }
 
+/** @brief Close connections that have been idle longer than the configured TTL. */
 void MySQL_Monitor_Connection_Pool::purge_some_connections() {
 	unsigned long long now = monotonic_time();
 	std::lock_guard<std::mutex> lock(mutex);
@@ -498,6 +528,37 @@ void MySQL_Monitor_Connection_Pool::purge_some_connections() {
 #ifdef DEBUG
 	pthread_mutex_unlock(&m2);
 #endif // DEBUG
+}
+
+/**
+ * @brief Close and remove all pooled connections for the given hostnames.
+ * @details Also records switchover timestamps so that in-flight connections
+ *          returned later via put_connection() are rejected.
+ * @param hostnames List of hostnames whose connections should be purged.
+ */
+void MySQL_Monitor_Connection_Pool::purge_connections_for_hostnames(const std::vector<std::string>& hostnames) {
+	std::lock_guard<std::mutex> lock(mutex);
+#ifdef DEBUG
+	pthread_mutex_lock(&m2);
+#endif
+	unsigned long long now = monotonic_time();
+	std::set<std::string> to_purge;
+	for (const auto& hostname : hostnames) {
+		switchover_timestamps[hostname] = now;
+		to_purge.insert(hostname);
+	}
+	for (unsigned int i = 0; i < servers->len; i++) {
+		MonMySrvC *srv = (MonMySrvC *)servers->index(i);
+		if (to_purge.find(srv->address) == to_purge.end()) continue;
+		while (srv->conns->len) {
+			MYSQL *my = (MYSQL *)srv->conns->remove_index_fast(0);
+			if (!my) continue;
+			close_mysql(my);
+		}
+	}
+#ifdef DEBUG
+	pthread_mutex_unlock(&m2);
+#endif
 }
 
 /*
@@ -1590,6 +1651,7 @@ __exit_set_wait_timeout:
 	return ret;
 }
 
+/** @brief Create a new MySQL connection for monitoring, resolving DNS and setting pool_checkout_time. */
 bool MySQL_Monitor_State_Data::create_new_connection() {
 	mysql=mysql_init(NULL);
 	assert(mysql);
@@ -1641,6 +1703,7 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 		fcntl(mysql->net.fd, F_SETFL, f|O_NONBLOCK);
 #endif /* FD_CLOEXEC */
 		MySQL_Monitor::update_dns_cache_from_mysql_conn(mysql);
+		pool_checkout_time = monotonic_time();
 	}
 	return true;
 }
@@ -5811,6 +5874,7 @@ typedef struct _host_def_t {
 	int use_ssl;
 } host_def_t;
 
+/** @brief Fisher-Yates shuffle of the host array for randomized connection selection. */
 static void shuffle_hosts(host_def_t *array, size_t n) {
 	char tmp[sizeof(host_def_t)];
 	char *arr = (char *)array;
@@ -5828,6 +5892,97 @@ static void shuffle_hosts(host_def_t *array, size_t n) {
 	}
 }
 
+/**
+ * @brief Detect Aurora blue/green deployment switchover via peer IP vs DNS mismatch.
+ * @return true if switchover was detected and response actions were taken.
+ */
+static bool aws_aurora_check_blue_green_switchover(
+	MySQL_Monitor_State_Data *mmsd, unsigned int wHG,
+	host_def_t *hpa, unsigned int num_hosts
+) {
+	if (mmsd->interr != 0 || mmsd->mysql_error_msg || !mmsd->mysql || !GloMyMon->dns_cache) return false;
+
+	std::string peer_ip = get_connected_peer_ip_from_socket(mmsd->mysql->net.fd);
+	if (peer_ip.empty()) return false;
+	if (GloMyMon->dns_cache->contains_ip(mmsd->hostname, peer_ip)) return false;
+
+	struct addrinfo hints, *res = NULL;
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_protocol = IPPROTO_TCP;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_flags = AI_ADDRCONFIG;
+	hints.ai_family = mysql_resolution_family_to_ai_family(mysql_thread___resolution_family);
+
+	int gai_rc = getaddrinfo(mmsd->hostname, NULL, &hints, &res);
+	if (gai_rc != 0 || !res) {
+		if (res) freeaddrinfo(res);
+		return false;
+	}
+
+	bool ip_found = false;
+	char ip_buf[INET6_ADDRSTRLEN];
+	std::vector<std::string> resolved_ips;
+	for (struct addrinfo *p = res; p != NULL; p = p->ai_next) {
+		if (p->ai_family == AF_INET) {
+			inet_ntop(AF_INET, &((struct sockaddr_in*)p->ai_addr)->sin_addr, ip_buf, sizeof(ip_buf));
+		} else if (p->ai_family == AF_INET6) {
+			inet_ntop(AF_INET6, &((struct sockaddr_in6*)p->ai_addr)->sin6_addr, ip_buf, sizeof(ip_buf));
+		} else {
+			continue;
+		}
+		resolved_ips.push_back(ip_buf);
+		if (peer_ip == ip_buf) {
+			ip_found = true;
+		}
+	}
+	freeaddrinfo(res);
+
+	GloMyMon->dns_cache->add(std::string(mmsd->hostname), std::move(resolved_ips));
+
+	if (ip_found) return false;
+
+	proxy_warning(
+		"AWS Aurora: Blue/Green switchover detected for HG %u. "
+		"Host %s:%d peer IP %s not in current DNS resolution. "
+		"Purging stale connections and triggering re-discovery.\n",
+		wHG, mmsd->hostname, mmsd->port, peer_ip.c_str()
+	);
+
+	GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
+
+	std::vector<std::string> hg_hostnames;
+	hg_hostnames.reserve(num_hosts);
+	for (unsigned int i = 0; i < num_hosts; i++) {
+		hg_hostnames.push_back(hpa[i].host);
+	}
+	GloMyMon->My_Conn_Pool->purge_connections_for_hostnames(hg_hostnames);
+
+	MySQL_Monitor::trigger_dns_cache_update();
+
+	for (unsigned int i = 0; i < num_hosts; i++) {
+		MyHGM->shun_and_killall(hpa[i].host, hpa[i].port);
+	}
+
+	time_t __timer;
+	char lut[30];
+	struct tm __tm_info;
+	time(&__timer);
+	localtime_r(&__timer, &__tm_info);
+	strftime(lut, 25, "%Y-%m-%d %H:%M:%S", &__tm_info);
+	std::string hostname_escaped(mmsd->hostname);
+	size_t pos = 0;
+	while ((pos = hostname_escaped.find('\'', pos)) != std::string::npos) {
+		hostname_escaped.replace(pos, 1, "''");
+		pos += 2;
+	}
+	std::string q = std::string("INSERT INTO mysql_server_aws_aurora_failovers VALUES (")
+		+ std::to_string(wHG) + ", '" + hostname_escaped + "', '" + lut + "')";
+	GloMyMon->monitordb->execute(q.c_str());
+
+	return true;
+}
+
+/** @brief Per-hostgroup Aurora monitor thread: checks topology, detects switchovers, evaluates lag. */
 void * monitor_AWS_Aurora_thread_HG(void *arg) {
 	unsigned int wHG = *(unsigned int *)arg;
 	unsigned int rHG = 0;
@@ -6185,31 +6340,38 @@ __exit_monitor_aws_aurora_HG_thread:
 				mmsd->result=NULL;
 			}
 
-			if (lasts_ase[ase_idx]) {
-				AWS_Aurora_status_entry * l_ase = lasts_ase[ase_idx];
-				delete l_ase;
-			}
-			lasts_ase[ase_idx] = ase_l;
-			GloMyMon->evaluate_aws_aurora_results(wHG, rHG, &lasts_ase[0], ase_idx, max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks);
+			// Blue/Green Deployment Switchover Detection
+			// NOTE: The live getaddrinfo() inside this call is blocking and can stall
+			// this thread if DNS is unreachable (OS-dependent timeout, typically 5-30s).
+			// It only fires when the DNS cache already disagrees with the peer IP.
+			bool blue_green_detected = aws_aurora_check_blue_green_switchover(mmsd, wHG, hpa, num_hosts);
 
-			// Auto-purge servers that disappear from REPLICA_HOST_STATUS
-			// Only process if autopurge is enabled and query was successful with results
-			if (autopurge_missing_checks > 0 && mmsd->interr == 0 && ase->host_statuses->size() > 0) {
-				GloMyMon->aws_aurora_autopurge_servers(wHG, rHG, ase, autopurge_missing_checks, autopurge_counter, domain_name);
-			}
+			if (blue_green_detected) {
+				delete ase_l;
+				ase_l = NULL;
+			} else {
+				if (lasts_ase[ase_idx]) {
+					AWS_Aurora_status_entry * l_ase = lasts_ase[ase_idx];
+					delete l_ase;
+				}
+				lasts_ase[ase_idx] = ase_l;
+				GloMyMon->evaluate_aws_aurora_results(wHG, rHG, &lasts_ase[0], ase_idx, max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks);
 
-			for (auto h : *(ase_l->host_statuses)) {
-				for (auto h2 : *(ase->host_statuses)) {
-					if (strcmp(h2->server_id, h->server_id) == 0) {
-						h2->estimated_lag_ms = h->estimated_lag_ms;
+				if (autopurge_missing_checks > 0 && mmsd->interr == 0 && ase->host_statuses->size() > 0) {
+					GloMyMon->aws_aurora_autopurge_servers(wHG, rHG, ase, autopurge_missing_checks, autopurge_counter, domain_name);
+				}
+
+				for (auto h : *(ase_l->host_statuses)) {
+					for (auto h2 : *(ase->host_statuses)) {
+						if (strcmp(h2->server_id, h->server_id) == 0) {
+							h2->estimated_lag_ms = h->estimated_lag_ms;
+						}
 					}
 				}
-			}
-			// remember that we call evaluate_aws_aurora_results()
-			// *before* shifting ase_idx
-			ase_idx++;
-			if (ase_idx == N_L_ASE) {
-				ase_idx = 0;
+				ase_idx++;
+				if (ase_idx == N_L_ASE) {
+					ase_idx = 0;
+				}
 			}
 
 //__end_process_aws_aurora_result:
