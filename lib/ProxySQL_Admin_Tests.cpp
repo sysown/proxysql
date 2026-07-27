@@ -1,3 +1,4 @@
+#include <ctime>
 #include <iostream>     // std::cout
 #include <sstream>      // std::stringstream
 #include <fstream>
@@ -56,12 +57,12 @@ bool ProxySQL_Test___Refresh_MySQL_Variables(unsigned int cnt) {
 }
 
 template <enum SERVER_TYPE ST>
-int ProxySQL_Test___PurgeDigestTable(bool async_purge, bool parallel, char **msg) {
+int ProxySQL_Test___PurgeDigestTable(bool async_purge, bool parallel, time_t last_seen) {
 	int r = 0;
 	if constexpr (ST == SERVER_TYPE_MYSQL) {
-		r = GloMyQPro->purge_query_digests(async_purge, parallel, msg);
+		r = GloMyQPro->purge_query_digests(async_purge, parallel, last_seen);
 	} else if constexpr (ST == SERVER_TYPE_PGSQL) {
-		r = GloPgQPro->purge_query_digests(async_purge, parallel, msg);
+		r = GloPgQPro->purge_query_digests(async_purge, parallel, last_seen);
 	}
 	return r;
 }
@@ -147,5 +148,5 @@ int ProxySQL_Test___GenerateRandomQueryInDigestTable(int n) {
 	return n*1000;
 }
 
-template int ProxySQL_Test___PurgeDigestTable<SERVER_TYPE_MYSQL>(bool async_purge, bool parallel, char** msg);
-template int ProxySQL_Test___PurgeDigestTable<SERVER_TYPE_PGSQL>(bool async_purge, bool parallel, char** msg);
+template int ProxySQL_Test___PurgeDigestTable<SERVER_TYPE_MYSQL>(bool async_purge, bool parallel, time_t last_seen);
+template int ProxySQL_Test___PurgeDigestTable<SERVER_TYPE_PGSQL>(bool async_purge, bool parallel, time_t last_seen);

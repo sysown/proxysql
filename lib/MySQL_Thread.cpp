@@ -141,6 +141,7 @@ mythr_st_vars_t MySQL_Thread_status_variables_counter_array[] {
 	{ st_var_frontend_stmt_prepare, p_th_counter::com_frontend_stmt_prepare, (char *)"Com_frontend_stmt_prepare" },
 	{ st_var_frontend_stmt_execute, p_th_counter::com_frontend_stmt_execute, (char *)"Com_frontend_stmt_execute" },
 	{ st_var_frontend_stmt_close,   p_th_counter::com_frontend_stmt_close,   (char *)"Com_frontend_stmt_close" },
+	{ st_var_frontend_ping,         p_th_counter::com_frontend_ping,         (char *)"Com_frontend_ping" },
 	{ st_var_queries,               p_th_counter::questions,               (char *)"Questions" },
 	{ st_var_queries_slow,          p_th_counter::slow_queries,            (char *)"Slow_queries" },
 	{ st_var_queries_gtid,          p_th_counter::gtid_consistent_queries, (char *)"GTID_consistent_queries" },
@@ -712,6 +713,14 @@ th_metrics_map = std::make_tuple(
 			metric_tags {
 				{ "protocol", "mysql" },
 				{ "op", "close" }
+			}
+		),
+		std::make_tuple (
+			p_th_counter::com_frontend_ping,
+			"proxysql_com_frontend_ping_total",
+			"'COM_PING' received from the client.",
+			metric_tags {
+				{ "protocol", "mysql" }
 			}
 		),
 		// ====================================================================
@@ -1574,6 +1583,40 @@ void MySQL_Threads_Handler::wrunlock() {
 void MySQL_Threads_Handler::commit() {
 	__sync_add_and_fetch(&__global_MySQL_Thread_Variables_version,1);
 	proxy_debug(PROXY_DEBUG_MYSQL_SERVER, 1, "Increasing version number to %d - all threads will notice this and refresh their variables\n", __global_MySQL_Thread_Variables_version);
+
+#ifndef PROXYSQL31
+	/**
+	 * @brief Tier gate: pass-through authentication is Innovative-tier only.
+	 *
+	 * Pass-through authentication is a feature of the ProxySQL Innovative
+	 * tier (3.1.x) and AI/MCP tier (4.0.x); both define PROXYSQL31 (4.0
+	 * implies 3.1). On the Stable tier (3.0.x, PROXYSQL31 undefined) the
+	 * code still ships, but the feature must not be arm-able.
+	 *
+	 * We enforce that here, at commit() time, because commit() runs once
+	 * per LOAD MYSQL VARIABLES TO RUNTIME and updates the master
+	 * `variables` struct *before* the worker threads refresh their
+	 * per-thread `mysql_thread___passthrough_auth_enabled` copies from it.
+	 * Coercing the master flag to false here therefore guarantees the
+	 * runtime gate is never armed on a Stable build, no matter how the
+	 * value arrived (SET + LOAD, config file, a saved config carried over
+	 * from a 3.1.x/4.0.x install, or a ProxySQL Cluster sync push).
+	 *
+	 * A saved config that has the flag set to 'true' still loads cleanly;
+	 * it is simply forced back to 'false' with a single log line, rather
+	 * than erroring the load. The coercion runs before the unknown_users
+	 * misconfig warning below, so that warning does not spuriously fire on
+	 * a Stable build where the feature is inert anyway.
+	 */
+	if (variables.passthrough_auth_enabled) {
+		proxy_error(
+			"pass-through authentication is not available on the ProxySQL "
+			"Stable tier (3.0.x); mysql-passthrough_auth_enabled has been "
+			"forced to 'false'. Use a 3.1.x (Innovative) or 4.0.x (AI/MCP) "
+			"build to enable it.\n");
+		variables.passthrough_auth_enabled = false;
+	}
+#endif // PROXYSQL31
 
 	/**
 	 * @brief Operator warning on dangerous pass-through configuration.
@@ -4479,10 +4522,17 @@ void MySQL_Thread::ProcessAllSessions_Healthy0(MySQL_Session *sess, unsigned int
 	char _buf[1024];
 	if (sess->client_myds) {
 		if (mysql_thread___log_unhealthy_connections) {
+			const char *user =
+				(sess->client_myds->myconn && sess->client_myds->myconn->userinfo && sess->client_myds->myconn->userinfo->username)
+				? sess->client_myds->myconn->userinfo->username : "unknown";
+			const int current_hostgroup = sess->current_hostgroup;
+			const unsigned long backend_id =
+				(sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn)
+				? sess->mybe->server_myds->myconn->get_mysql_thread_id() : 0;
 			if (sess->session_fast_forward == SESSION_FORWARD_TYPE_NONE) {
 				proxy_warning(
-					"Closing unhealthy client connection %s:%d\n", sess->client_myds->addr.addr,
-					sess->client_myds->addr.port
+					"Closing unhealthy client connection %s:%d , user '%s' , hostgroup %d , connection %lu\n", sess->client_myds->addr.addr,
+					sess->client_myds->addr.port, user, current_hostgroup, backend_id
 				);
 			} else {
 				string extra_info = "";
@@ -4493,9 +4543,9 @@ void MySQL_Thread::ProcessAllSessions_Healthy0(MySQL_Session *sess, unsigned int
 					extra_info = "No";
 				}
 				proxy_warning(
-					"Closing 'fast_forward' client connection %s:%d . Backend already close: %s\n",
+					"Closing 'fast_forward' client connection %s:%d , user '%s' , hostgroup %d , connection %lu . Backend already close: %s\n",
 					sess->client_myds->addr.addr, sess->client_myds->addr.port,
-					extra_info.c_str()
+					user, current_hostgroup, backend_id, extra_info.c_str()
 				);
 			}
 		}

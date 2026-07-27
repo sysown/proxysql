@@ -4437,10 +4437,16 @@ void MySQL_Session::handler___status_NONE_or_default(PtrSize_t& pkt) {
 			sprintf(buf, "localhost");
 			break;
 		}
+	const char *user =
+		(client_myds->myconn && client_myds->myconn->userinfo && client_myds->myconn->userinfo->username)
+		? client_myds->myconn->userinfo->username : "unknown";
+	const unsigned long backend_id =
+		(mybe && mybe->server_myds && mybe->server_myds->myconn)
+		? mybe->server_myds->myconn->get_mysql_thread_id() : 0;
 	if (pkt.size == 5) {
 		unsigned char c=*((unsigned char *)pkt.ptr+sizeof(mysql_hdr));
 		if (c==_MYSQL_COM_QUIT) {
-			proxy_error("Unexpected COM_QUIT from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
+			proxy_error("Unexpected COM_QUIT from client %s , user '%s' , hostgroup %d , connection %lu . Session_status: %d , client_status: %d Disconnecting it\n", buf, user, current_hostgroup, backend_id, status, client_myds->status);
 			if (GloMyLogger) { GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_QUIT, this, NULL); }
 			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
 			l_free(pkt.size,pkt.ptr);
@@ -4450,7 +4456,7 @@ void MySQL_Session::handler___status_NONE_or_default(PtrSize_t& pkt) {
 			return;
 		}
 	}
-	proxy_error2(10001, "Unexpected packet from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
+	proxy_error2(10001, "Unexpected packet from client %s , user '%s' , hostgroup %d , connection %lu . Session_status: %d , client_status: %d Disconnecting it\n", buf, user, current_hostgroup, backend_id, status, client_myds->status);
 	if (thread) {
 		thread->status_variables.stvar[st_var_unexpected_packet]++;
 	}
@@ -4482,7 +4488,13 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___default() {
 		// PMC-10001: A unexpected packet has been received from client. This error has two potential causes:
 		//  * Bug: ProxySQL state machine wasn't in the correct state when a legitimate client packet was received.
 		//  * Client error: The client incorrectly sent a packet breaking MySQL protocol.
-		proxy_error2(10001, "Unexpected packet from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
+		const char *user =
+			(client_myds->myconn && client_myds->myconn->userinfo && client_myds->myconn->userinfo->username)
+			? client_myds->myconn->userinfo->username : "unknown";
+		const unsigned long backend_id =
+			(mybe && mybe->server_myds && mybe->server_myds->myconn)
+			? mybe->server_myds->myconn->get_mysql_thread_id() : 0;
+		proxy_error2(10001, "Unexpected packet from client %s , user '%s' , hostgroup %d , connection %lu . Session_status: %d , client_status: %d Disconnecting it\n", buf, user, current_hostgroup, backend_id, status, client_myds->status);
 	}
 }
 
@@ -6835,6 +6847,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PING(PtrSize_t *pkt) {
 	gtid_hid=-1;
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_PING packet\n");
+	thread->status_variables.stvar[st_var_frontend_ping]++;
 	l_free(pkt->size,pkt->ptr);
 	client_myds->setDSS_STATE_QUERY_SENT_NET();
 	unsigned int nTrx=NumActiveTransactions();
