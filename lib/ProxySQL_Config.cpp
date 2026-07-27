@@ -51,6 +51,202 @@ ProxySQL_Config::ProxySQL_Config(SQLite3DB* db) {
 ProxySQL_Config:: ~ProxySQL_Config() {
 }
 
+void ProxySQL_Config::add_validation_error(const std::string& section, const std::string& location,
+                                           const std::string& field, const std::string& message,
+                                           const std::string& suggestion, bool is_fatal) {
+	ConfigValidationError e;
+	e.section = section;
+	e.location = location;
+	e.field = field;
+	e.message = message;
+	e.suggestion = suggestion;
+	e.is_fatal = is_fatal;
+	validation_errors.push_back(e);
+}
+
+void ProxySQL_Config::add_validation_warning(const std::string& section, const std::string& location,
+                                             const std::string& field, const std::string& message) {
+	ConfigValidationError e;
+	e.section = section;
+	e.location = location;
+	e.field = field;
+	e.message = message;
+	e.is_fatal = false;
+	validation_warnings.push_back(e);
+}
+
+void ProxySQL_Config::report_validation_results() {
+	bool strict_mode = GloVars.global.strict_mode;
+	bool has_fatal = false;
+
+	// Report errors
+	for (const auto& e : validation_errors) {
+		if (e.is_fatal && !strict_mode) {
+			// In non-strict mode, demote fatal errors to warnings
+			proxy_warning("[WARNING] Invalid configuration in %s at %s: Unknown field '%s'. %s\n",
+			             e.section.c_str(), e.location.c_str(), e.field.c_str(), e.message.c_str());
+			if (!e.suggestion.empty()) {
+				proxy_warning("[WARNING]   Did you mean '%s'?\n", e.suggestion.c_str());
+			}
+		} else {
+			has_fatal |= e.is_fatal;
+			proxy_error("[ERROR] Invalid configuration in %s at %s: %s\n",
+			           e.section.c_str(), e.location.c_str(), e.message.c_str());
+			proxy_error("[ERROR]   Unknown field '%s'\n", e.field.c_str());
+			if (!e.suggestion.empty()) {
+				proxy_error("[ERROR]   Did you mean '%s'?\n", e.suggestion.c_str());
+			}
+		}
+	}
+
+	// Report warnings
+	for (const auto& w : validation_warnings) {
+		proxy_warning("[WARNING] Configuration issue in %s at %s: %s\n",
+		             w.section.c_str(), w.location.c_str(), w.message.c_str());
+	}
+
+	if (has_fatal && strict_mode) {
+		proxy_error("[FATAL] ProxySQL cannot start due to configuration errors\n");
+		proxy_error("[INFO]  Remove --strict to start anyway (not recommended)\n");
+		exit(EXIT_FAILURE);
+	}
+
+	if (GloVars.global.validate_only) {
+		if (has_fatal) {
+			proxy_error("[FATAL] Configuration validation failed\n");
+			exit(EXIT_FAILURE);
+		} else {
+			proxy_info("[INFO] Configuration validation passed\n");
+			exit(EXIT_SUCCESS);
+		}
+	}
+}
+
+// Levenshtein distance for typo detection
+std::string ProxySQL_Config::find_closest_match(const std::string& input,
+                                                 const std::unordered_set<std::string>& candidates) {
+	std::string closest;
+	int min_distance = INT_MAX;
+
+	for (const auto& candidate : candidates) {
+		int distance = 0;
+		size_t len1 = input.length();
+		size_t len2 = candidate.length();
+
+		// Simple Levenshtein implementation
+		std::vector<std::vector<int>> d(len1 + 1, std::vector<int>(len2 + 1));
+
+		for (size_t i = 0; i <= len1; i++) d[i][0] = i;
+		for (size_t j = 0; j <= len2; j++) d[0][j] = j;
+
+		for (size_t i = 1; i <= len1; i++) {
+			for (size_t j = 1; j <= len2; j++) {
+				int cost = (input[i-1] == candidate[j-1]) ? 0 : 1;
+				d[i][j] = std::min({d[i-1][j] + 1, d[i][j-1] + 1, d[i-1][j-1] + cost});
+			}
+		}
+
+		distance = d[len1][len2];
+		if (distance < min_distance && distance <= 3) { // Threshold for suggestion
+			min_distance = distance;
+			closest = candidate;
+		}
+	}
+	return closest;
+}
+
+bool ProxySQL_Config::validate_config_fields(const libconfig::Setting& section,
+                                              const std::string& section_name,
+                                              const std::unordered_set<std::string>& valid_fields) {
+	bool has_errors = false;
+
+	if (!section.isList() && !section.isArray()) {
+		return false;
+	}
+
+	int count = section.getLength();
+	for (int i = 0; i < count; i++) {
+		const libconfig::Setting& item = section[i];
+		int num_fields = item.getLength();
+
+		std::string location = "entry " + std::to_string(i);
+
+		for (int j = 0; j < num_fields; j++) {
+			const libconfig::Setting& field = item[j];
+			std::string field_name = field.getName();
+
+			if (valid_fields.find(field_name) == valid_fields.end()) {
+				std::string suggestion = find_closest_match(field_name, valid_fields);
+				add_validation_error(section_name, location, field_name,
+				                    "Unknown configuration field", suggestion);
+				has_errors = true;
+			}
+		}
+	}
+
+	return has_errors;
+}
+
+// Valid field definitions for configuration sections
+static const std::unordered_set<std::string> valid_mysql_query_rule_fields = {
+	"rule_id", "active", "username", "schemaname", "flagIN",
+	"client_addr", "proxy_addr", "proxy_port", "digest",
+	"match_digest", "match_pattern", "negate_match_pattern",
+	"re_modifiers", "flagOUT", "replace_pattern", "destination_hostgroup",
+	"cache_ttl", "cache_empty_result", "cache_timeout", "reconnect",
+	"timeout", "retries", "delay", "next_query_flagIN",
+	"mirror_flagOUT", "mirror_hostgroup", "error_msg", "OK_msg",
+	"sticky_conn", "multiplex", "gtid_from_hostgroup", "log",
+	"apply", "attributes", "comment"
+};
+
+static const std::unordered_set<std::string> valid_mysql_server_fields = {
+	"address", "port", "hostgroup_id", "hostname", "weight",
+	"max_connections", "max_replication_lag", "use_ssl", "compression",
+	"status", "max_latency_ms", "comment"
+};
+
+static const std::unordered_set<std::string> valid_mysql_user_fields = {
+	"username", "password", "default_hostgroup", "max_connections",
+	"default_schema", "schema_locked", "transaction_persistent",
+	"fast_forward", "backend", "frontend", "default_query_rule",
+	"compression", "comment"
+};
+
+static const std::unordered_set<std::string> valid_mysql_replication_hostgroup_fields = {"comment"};
+static const std::unordered_set<std::string> valid_mysql_group_replication_hostgroup_fields = {"comment"};
+static const std::unordered_set<std::string> valid_mysql_galera_hostgroup_fields = {"comment"};
+static const std::unordered_set<std::string> valid_mysql_hostgroup_attribute_fields = {"hostgroup_id", "disabled", "comment"};
+
+// PostgreSQL configuration validation fields
+static const std::unordered_set<std::string> valid_pgsql_server_fields = {
+	"address", "port", "hostgroup_id", "hostname", "weight",
+	"max_connections", "max_replication_lag", "use_ssl", "compression",
+	"status", "max_latency_ms", "comment"
+};
+
+static const std::unordered_set<std::string> valid_pgsql_user_fields = {
+	"username", "password", "default_hostgroup", "max_connections",
+	"default_schema", "schema_locked", "transaction_persistent",
+	"fast_forward", "backend", "frontend", "default_query_rule",
+	"compression", "comment"
+};
+
+static const std::unordered_set<std::string> valid_pgsql_replication_hostgroup_fields = {"comment"};
+static const std::unordered_set<std::string> valid_pgsql_group_replication_hostgroup_fields = {"comment"};
+
+static const std::unordered_set<std::string> valid_pgsql_query_rule_fields = {
+	"rule_id", "active", "username", "schemaname", "flagIN",
+	"client_addr", "proxy_addr", "proxy_port", "digest",
+	"match_digest", "match_pattern", "negate_match_pattern",
+	"re_modifiers", "flagOUT", "replace_pattern", "destination_hostgroup",
+	"cache_ttl", "cache_empty_result", "cache_timeout", "reconnect",
+	"timeout", "retries", "delay", "next_query_flagIN",
+	"mirror_flagOUT", "mirror_hostgroup", "error_msg", "OK_msg",
+	"sticky_conn", "multiplex", "gtid_from_hostgroup", "log",
+	"apply", "attributes", "comment"
+};
+
 void ProxySQL_Config::addField(std::string& data, const char* name, const char* value, const char* dq) {
 	std::stringstream ss;
 	if (!value || !strlen(value)) return;
@@ -920,6 +1116,14 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_from_configfile() {
 		rows++;
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
+
+	// NEW: Validate all fields after reading
+	const Setting& config_root = GloVars.confFile->cfg.getRoot();
+	if (config_root.exists("mysql_query_rules")) {
+		const Setting &mysql_query_rules = config_root["mysql_query_rules"];
+		validate_config_fields(mysql_query_rules, "mysql_query_rules", valid_mysql_query_rule_fields);
+	}
+
 	return rows;
 }
 
@@ -1542,6 +1746,30 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
 			rows++;
 		}
 	}
+
+	// NEW: Validate all fields after reading
+	const Setting& config_root = GloVars.confFile->cfg.getRoot();
+	if (config_root.exists("mysql_servers")) {
+		const Setting &mysql_servers = config_root["mysql_servers"];
+		validate_config_fields(mysql_servers, "mysql_servers", valid_mysql_server_fields);
+	}
+	if (config_root.exists("mysql_replication_hostgroups")) {
+		const Setting &mysql_replication_hostgroups = config_root["mysql_replication_hostgroups"];
+		validate_config_fields(mysql_replication_hostgroups, "mysql_replication_hostgroups", valid_mysql_replication_hostgroup_fields);
+	}
+	if (config_root.exists("mysql_group_replication_hostgroups")) {
+		const Setting &mysql_group_replication_hostgroups = config_root["mysql_group_replication_hostgroups"];
+		validate_config_fields(mysql_group_replication_hostgroups, "mysql_group_replication_hostgroups", valid_mysql_group_replication_hostgroup_fields);
+	}
+	if (config_root.exists("mysql_galera_hostgroups")) {
+		const Setting &mysql_galera_hostgroups = config_root["mysql_galera_hostgroups"];
+		validate_config_fields(mysql_galera_hostgroups, "mysql_galera_hostgroups", valid_mysql_galera_hostgroup_fields);
+	}
+	if (config_root.exists("mysql_hostgroup_attributes")) {
+		const Setting &mysql_hostgroup_attributes = config_root["mysql_hostgroup_attributes"];
+		validate_config_fields(mysql_hostgroup_attributes, "mysql_hostgroup_attributes", valid_mysql_hostgroup_attribute_fields);
+	}
+
 	admindb->execute("PRAGMA foreign_keys = ON");
 	return rows;
 }
@@ -1856,6 +2084,18 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 			rows++;
 		}
 	}
+
+	// NEW: Validate all fields after reading
+	const Setting& config_root = GloVars.confFile->cfg.getRoot();
+	if (config_root.exists("pgsql_servers")) {
+		const Setting &pgsql_servers = config_root["pgsql_servers"];
+		validate_config_fields(pgsql_servers, "pgsql_servers", valid_pgsql_server_fields);
+	}
+	if (config_root.exists("pgsql_replication_hostgroups")) {
+		const Setting &pgsql_replication_hostgroups = config_root["pgsql_replication_hostgroups"];
+		validate_config_fields(pgsql_replication_hostgroups, "pgsql_replication_hostgroups", valid_pgsql_replication_hostgroup_fields);
+	}
+
 	admindb->execute("PRAGMA foreign_keys = ON");
 	return rows;
 }
@@ -1952,6 +2192,14 @@ int ProxySQL_Config::Read_PgSQL_Users_from_configfile(std::string& error) {
 		free(query);
 		rows++;
 	}
+
+	// NEW: Validate all fields after reading
+	const Setting& config_root = GloVars.confFile->cfg.getRoot();
+	if (config_root.exists("pgsql_users")) {
+		const Setting &pgsql_users = config_root["pgsql_users"];
+		validate_config_fields(pgsql_users, "pgsql_users", valid_pgsql_user_fields);
+	}
+
 	admindb->execute("PRAGMA foreign_keys = ON");
 	return rows;
 }
@@ -2292,6 +2540,14 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
 		free(query);
 		rows++;
 	}
+
+	// NEW: Validate all fields after reading
+	const Setting& config_root = GloVars.confFile->cfg.getRoot();
+	if (config_root.exists("pgsql_query_rules")) {
+		const Setting &pgsql_query_rules = config_root["pgsql_query_rules"];
+		validate_config_fields(pgsql_query_rules, "pgsql_query_rules", valid_pgsql_query_rule_fields);
+	}
+
 	admindb->execute("PRAGMA foreign_keys = ON");
 	return rows;
 }

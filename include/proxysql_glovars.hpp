@@ -82,6 +82,9 @@ class ProxySQL_GlobalVariables {
 	bool cluster_sync_interfaces; // If true, also mysql-interfaces and admin-mysql_ifaces are synced. false by default
 	bool set_thread_name = true;
 	char *__cmd_proxysql_admin_socket;
+	bool __cmd_proxysql_strict;          // Enable strict validation mode
+	bool __cmd_proxysql_validate_only;   // Validate config and exit (like nginx -t)
+	                                      // Also aliased as --dry-run
 	char *config_file;
 	char *datadir;
 	char *uuid;
@@ -142,6 +145,8 @@ class ProxySQL_GlobalVariables {
 		char * ssl_key_pem_mem;
 		char * ssl_cert_pem_mem;
 		bool sqlite3_server;
+		bool strict_mode;
+		bool validate_only;
 		int data_packets_history_size;
 #ifdef PROXYSQLCLICKHOUSE
 		bool clickhouse_server;
