@@ -182,6 +182,7 @@ jobs:
       if: always()
       uses: codecov/codecov-action@v4
       with:
+        codecov_yml_path: codecov.yml
         files: coverage/lcov.info
         flags: unit-tests
         name: unit-tests-asan-coverage
