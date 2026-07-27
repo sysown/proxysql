@@ -7460,7 +7460,8 @@ void PgSQL_Session::unable_to_parse_set_statement(bool* lock_hostgroup, bool kno
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", query_str.c_str());
 	// A SET the caller forwards on purpose is no parse failure: it is logged as a lock, not as a bug to report.
 	known = known || known_query_for_locked_on_hostgroup(CurrentQuery.QueryParserArgs.digest);
-	if (qpo->multiplex == -1) {
+	/* User said nothing about multiplex or disabled it explicitly */
+	if (qpo->multiplex <= 0) {
 		// we have no rule about this SET statement. We set hostgroup locking
 		if (locked_on_hostgroup < 0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "SET query to cause setting lock_hostgroup: %s\n", nqn.c_str());
