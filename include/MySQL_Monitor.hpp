@@ -403,46 +403,30 @@ struct srv_addr_t {
 };
 
 /**
- * @brief A single node (row) of a 'SELECT * FROM mysql.rds_topology' result.
- */
-struct AWS_RDS_Topology_Node {
-	std::string id;
-	std::string endpoint;
-	int port = 0;
-	std::string role;    ///< empty when the column is absent or NULL
-	std::string status;  ///< empty when the column is absent or NULL
+* @brief State of the per-host RDS topology probe.
+*/
+enum RDS_BGD_Topology_Monitor_State {
+	TOPOLOGY_TABLE_CHECK,    ///< verify mysql.rds_topology exists
+	TOPOLOGY_METADATA_FETCH  ///< table confirmed present; fetch and branch on its metadata
 };
 
 /**
- * @brief Parsed representation of a 'SELECT * FROM mysql.rds_topology' result,
- *        shared by the read_only monitor's discovery path and the AWS RDS BGD
- *        monitor thread.
+ * @brief Column positions in `AWS_RDS_BGD_Hosts_resultset`.
  */
-struct AWS_RDS_Topology_Result {
-	bool blue_green = false;  ///< 'role' and 'status' present AND non-NULL
-	std::vector<AWS_RDS_Topology_Node> nodes;
-};
-
-/**
- * @brief Mapping between one blue host and its name-matched green counterpart.
- *
- * @details The RDS BGD worker builds these pairs from the current blue
- *   writer/reader hostgroups and the discovered green topology. Each entry
- *   carries the blue server attributes needed to move the matching green
- *   server during switchover handling.
- */
-struct AWS_RDS_BlueGreenPair {
-	std::string blue_host;                ///< Blue hostname from the writer or reader hostgroup.
-	std::string green_host;               ///< Matched green hostname using the RDS "-green-<random>" naming pattern.
-	int port = 0;                         ///< Shared blue/green port; hostgroup manager keys servers by host and port.
-	int64_t blue_weight = 1;              ///< Blue server weight mirrored onto the green server when it is added.
-	int64_t blue_max_conns = 1000;        ///< Blue server max_connections mirrored onto the green server when it is added.
-	int32_t blue_use_ssl = 0;             ///< Blue server SSL setting mirrored onto the green server when it is added.
-	int32_t green_use_ssl = -1;           ///< Green server SSL; -1 means unset (use blue_use_ssl).
-	std::string green_ip;                 ///< Green host IP resolved at SWITCHOVER_INITIATED and held warm.
-	unsigned long long green_ip_ttl = 0;  ///< Expiry for green_ip when resolved by the BGD thread; 0 means DNS_Cache-sourced.
-	bool green_ip_pinned = false;         ///< True after green_ip has been pinned and blue_host connections drained/purged.
-	bool is_writer = false;               ///< True when this pair maps the blue writer.
+enum AWS_RDS_BGD_Hosts_Column {
+	AWS_RDS_BGD_HOSTNAME = 0,
+	AWS_RDS_BGD_PORT,
+	AWS_RDS_BGD_USE_SSL,
+	AWS_RDS_BGD_WRITER_HOSTGROUP,
+	AWS_RDS_BGD_READER_HOSTGROUP,
+	AWS_RDS_BGD_GREEN_WRITER_HOSTGROUP,
+	AWS_RDS_BGD_GREEN_READER_HOSTGROUP,
+	AWS_RDS_BGD_CHECK_INTERVAL_MS,
+	AWS_RDS_BGD_CHECK_TIMEOUT_MS,
+	AWS_RDS_BGD_WRITER_IS_ALSO_READER,
+	AWS_RDS_BGD_SRV_TYPE,
+	AWS_RDS_BGD_IS_WRITER,
+	AWS_RDS_BGD_HOSTS_COLUMNS
 };
 
 /**
@@ -481,47 +465,6 @@ enum class AWS_RDS_BGD_Server_Status {
 	IN_PROGRESS = 1
 };
 
-// Maps a switchover status enum to its stored/display string.
-const char* aws_rds_bgd_status_str(AWS_RDS_BGD_Status s);
-
-/**
- * @brief Switchover state carried by RDS BGD worker thread.
- *
- * @details One worker (monitor_RDS_BGD_thread_HG) owns one writer hostgroup ==
- *   one blue/green deployment, so this struct lives on the worker's stack and is
- *   single-owner (no locking on the struct itself). It is passed by reference to
- *   handle_aws_rds_bgd, which runs the status-driven switchover FSM and mutates it
- *   across poll cycles. Config-derived fields are loaded once from the resultset;
- *   the rest carries topology, resolved IPs, and one-shot enforcement bookkeeping.
- */
-struct AWS_RDS_BGD_State {
-	unsigned int writer_hg = 0;               ///< blue/current writer hostgroup
-	unsigned int reader_hg = 0;               ///< blue/current reader hostgroup
-	int green_writer_hg = -1;                 ///< -1 when NULL (auto-discovery path)
-	int green_reader_hg = -1;                 ///< -1 when NULL
-	int writer_is_also_reader = 0;            ///< drives post-switchover writer cleanup
-
-	std::string last_topology_status;                 ///< raw mysql.rds_topology TARGET status from the previous poll (verbatim)
-	std::vector<AWS_RDS_BlueGreenPair> bg_map;        ///< [writer] always; [readers] only when green_reader_hg is configured
-	std::vector<srv_addr_t> shunned_readers;                  ///< readers we shunned
-	AWS_RDS_BGD_Status bgd_status = AWS_RDS_BGD_Status::NONE;  ///< drives the FSM and the deferred cleanup
-
-	bool bgd_in_progress_set = false;             ///< deployment's servers flagged in aws_rds_bgd_server_status
-
-	unsigned int next_check_interval_ms = 0;    ///< FSM-controlled interval; 0 => baseline
-	std::string next_check_host;                ///< FSM-pinned probe host; when set (the green IP), the worker
-	                                            ///< polls it directly instead of selecting among the blue hosts
-	unsigned int next_check_host_failures = 0;  ///< consecutive failures polling next_check_host; clears it after 3
-};
-
-/**
-* @brief State of the per-host RDS topology probe.
-*/
-enum RDS_BGD_Topology_Monitor_State {
-	TOPOLOGY_TABLE_CHECK,    ///< verify mysql.rds_topology exists
-	TOPOLOGY_METADATA_FETCH  ///< table confirmed present; fetch and branch on its metadata
-};
-
 // AWS RDS blue/green role and switchover-status column values (mysql.rds_topology).
 inline const char* const BGD_ROLE_SOURCE         = "BLUE_GREEN_DEPLOYMENT_SOURCE";  // blue
 inline const char* const BGD_ROLE_TARGET         = "BLUE_GREEN_DEPLOYMENT_TARGET";  // green
@@ -530,6 +473,120 @@ inline const char* const BGD_STATUS_INITIATED    = "SWITCHOVER_INITIATED";
 inline const char* const BGD_STATUS_IN_PROGRESS  = "SWITCHOVER_IN_PROGRESS";
 inline const char* const BGD_STATUS_POST_PROC    = "SWITCHOVER_IN_POST_PROCESSING";
 inline const char* const BGD_STATUS_COMPLETED    = "SWITCHOVER_COMPLETED";
+
+/**
+* @brief BGD Monitor state for one AWS RDS BGD worker.
+*/
+struct AWS_RDS_BGD_Worker {
+	int writer_hg = 0;
+	pthread_t thread {};
+	std::atomic_bool worker_stop {false};
+	std::atomic<uint64_t> current_checksum {0};
+};
+
+/**
+ * @brief A single node (row) of a 'SELECT * FROM mysql.rds_topology' result.
+ */
+struct AWS_RDS_Topology_Node {
+	std::string id;
+	std::string endpoint;
+	int port = 0;
+	std::string role;    ///< empty when the column is absent or NULL
+	std::string status;  ///< empty when the column is absent or NULL
+};
+
+/**
+ * @brief Parsed representation of a 'SELECT * FROM mysql.rds_topology' result,
+ *        shared by the read_only monitor's discovery path and the AWS RDS BGD
+ *        monitor thread.
+ */
+class AWS_RDS_Topology_Result {
+public:
+	bool blue_green = false;  ///< 'role' and 'status' present AND non-NULL
+	std::vector<AWS_RDS_Topology_Node> nodes;
+
+	/**
+	* @brief Find the blue/green deployment TARGET node.
+	*
+	* @return The TARGET node, or nullptr when it is not present.
+	*/
+	AWS_RDS_Topology_Node* target() {
+		for (AWS_RDS_Topology_Node& node : nodes) {
+			if (strcasecmp(node.role.c_str(), BGD_ROLE_TARGET) == 0) {
+				return &node;
+			}
+		}
+		return nullptr;
+	}
+};
+
+/**
+ * @brief Mapping between one blue host and its name-matched green counterpart.
+ *
+ * @details The RDS BGD worker builds these pairs from the current blue
+ *   writer/reader hostgroups and the discovered green topology. Each entry
+ *   carries the blue server attributes needed to move the matching green
+ *   server during switchover handling.
+ */
+struct AWS_RDS_BlueGreenPair {
+	std::string blue_host;                ///< Blue hostname from the writer or reader hostgroup.
+	std::string green_host;               ///< Matched green hostname using the RDS "-green-<random>" naming pattern.
+	int port = 0;                         ///< Shared blue/green port; hostgroup manager keys servers by host and port.
+	int64_t blue_weight = 1;              ///< Blue server weight mirrored onto the green server when it is added.
+	int64_t blue_max_conns = 1000;        ///< Blue server max_connections mirrored onto the green server when it is added.
+	int32_t blue_use_ssl = 0;             ///< Blue server SSL setting mirrored onto the green server when it is added.
+	int32_t green_use_ssl = -1;           ///< Green server SSL; -1 means unset (use blue_use_ssl).
+	std::string green_ip;                 ///< Green host IP resolved at SWITCHOVER_INITIATED and held warm.
+	unsigned long long green_ip_ttl = 0;  ///< Expiry for green_ip when resolved by the BGD thread; 0 means DNS_Cache-sourced.
+	bool green_ip_pinned = false;         ///< True after green_ip has been pinned and blue_host connections drained/purged.
+	bool is_writer = false;               ///< True when this pair maps the blue writer.
+};
+
+/**
+ * @brief Host used by a BGD worker to probe `mysql.rds_topology`.
+ */
+struct AWS_RDS_BGD_Probe_Host {
+	std::string hostname;
+	int port = 0;
+	int use_ssl = 0;
+};
+
+/**
+ * @brief Switchover state carried by RDS BGD worker thread.
+ *
+ * @details One worker (monitor_RDS_BGD_thread_HG) owns one writer hostgroup ==
+ *   one blue/green deployment, so this struct lives on the worker's stack and is
+ *   single-owner (no locking on the struct itself). It is passed by reference to
+ *   handle_aws_rds_bgd, which runs the status-driven switchover FSM and mutates it
+ *   across poll cycles. Config-derived fields can be refreshed in place; the rest
+ *   carries resolved IPs and state for switchover actions and cleanup.
+ */
+struct AWS_RDS_BGD_State {
+	unsigned int writer_hg = 0;               ///< blue/current writer hostgroup
+	unsigned int reader_hg = 0;               ///< blue/current reader hostgroup
+	int green_writer_hg = -1;                 ///< -1 when NULL (auto-discovery path)
+	int green_reader_hg = -1;                 ///< -1 when NULL
+	int writer_is_also_reader = 0;            ///< drives post-switchover writer cleanup
+	unsigned int check_interval_ms = 0;       ///< configured baseline check interval
+	unsigned int check_timeout_ms = 0;        ///< configured topology-check timeout
+
+	std::vector<AWS_RDS_BlueGreenPair> bg_map;        ///< [writer] always; [readers] only when green_reader_hg is configured
+	std::vector<AWS_RDS_BGD_Probe_Host> probe_hosts;  ///< hosts eligible for topology probes
+
+	std::vector<srv_addr_t> shunned_readers;                  ///< readers we shunned
+	AWS_RDS_BGD_Status bgd_status = AWS_RDS_BGD_Status::NONE;  ///< drives the FSM and the deferred cleanup
+
+	bool bgd_in_progress_set = false;             ///< deployment's servers flagged in aws_rds_bgd_server_status
+	bool config_refresh_pending = false;          ///< bg_map must be rebuilt from the next topology result
+
+	unsigned int next_check_interval_ms = 0;    ///< FSM-controlled interval; 0 => baseline
+	std::string next_check_host;                ///< FSM-pinned probe host; when set (the green IP), the worker
+	                                            ///< polls it directly instead of selecting among the blue hosts
+	unsigned int next_check_host_failures = 0;  ///< consecutive failures polling next_check_host; clears it after 3
+};
+
+// Maps a switchover status enum to its stored/display string.
+const char* aws_rds_bgd_status_str(AWS_RDS_BGD_Status s);
 
 // read_only monitor server-enumeration query.
 // Every server that belongs to a replication hostgroup and status NOT IN (OFFLINE_SOFT, OFFLINE_HARD)
@@ -590,6 +647,7 @@ class MySQL_Monitor {
 	pthread_mutex_t galera_mutex; // for simplicity, a mutex instead of a rwlock
 	pthread_mutex_t aws_aurora_mutex; // for simplicity, a mutex instead of a rwlock
 	pthread_mutex_t aws_rds_bgd_mutex;
+	pthread_mutex_t aws_rds_bgd_hosts_mutex;
 	pthread_mutex_t mysql_servers_mutex; // for simplicity, a mutex instead of a rwlock
 	pthread_mutex_t proxysql_servers_mutex; 
 	//std::map<char *, MyGR_monitor_node *, cmp_str> Group_Replication_Hosts_Map;
@@ -601,8 +659,9 @@ class MySQL_Monitor {
 	SQLite3_result *AWS_Aurora_Hosts_resultset;
 	uint64_t AWS_Aurora_Hosts_resultset_checksum;
 	std::unordered_map<std::string, AWS_RDS_BGD_Server_Status> aws_rds_bgd_server_status;
-	SQLite3_result *AWS_RDS_Blue_Hosts_resultset;
+	std::shared_ptr<SQLite3_result> AWS_RDS_BGD_Hosts_resultset;
 	uint64_t AWS_RDS_BGD_Hosts_checksum;
+	std::unordered_map<int, uint64_t> AWS_RDS_BGD_Cluster_checksum;
 	unsigned int num_threads;
 	unsigned int aux_threads;
 	unsigned int started_threads;
@@ -653,11 +712,39 @@ class MySQL_Monitor {
 	/**
 	* @brief AWS RDS BGD monitor thread entry point.
 	*
-	* @details Spawns one worker (monitor_RDS_BGD_thread_HG) per writer hostgroup; each worker picks a pingable writer,
-	*   probes 'mysql.rds_topology' and dispatches based on the detected topology shape.
-	*   Workers are (re)spawned whenever the AWS_RDS_BGD_Hosts_checksum changes.
+	* @details Maintains one worker (monitor_RDS_BGD_thread_HG) per active writer hostgroup. The parent starts
+	*   and stops workers and signals configuration changes. Each worker selects a pingable probe host,
+	*   probes 'mysql.rds_topology', and runs the switchover state machine.
 	*/
 	void * monitor_aws_rds_bgd();
+	/**
+	* @brief Run an asynchronous query and store its result on a BGD monitor connection.
+	*
+	* @param mmsd        Monitor state data holding the connection, timing, and result.
+	* @param query       SQL text to execute.
+	* @param worker_stop Per-worker shutdown signal.
+	*
+	* @return 0 on success, 1 on timeout or query error, and 2 when shutdown is requested.
+	*/
+	int aws_rds_bgd_async_query(
+		MySQL_Monitor_State_Data* mmsd, const char* query, std::atomic_bool& worker_stop);
+	/**
+	* @brief Apply changed configuration to one running BGD worker.
+	*
+	* @details Before writer post-processing, applies the configuration and schedules mapping
+	*   reconciliation after the next topology poll. At or after post-processing, rolls back the
+	*   deployment and restarts its topology state machine.
+	*
+	* @param st               Worker-owned BGD state.
+	* @param current_checksum Per-cluster checksum captured for this refresh.
+	* @param topology_state   Current topology query state.
+	* @param next_loop_at     Next scheduled worker iteration.
+	*
+	* @return true when the configuration was applied; false when it must be retried.
+	*/
+	bool aws_rds_bgd_refresh_worker_config(
+		AWS_RDS_BGD_State& st, uint64_t current_checksum,
+		RDS_BGD_Topology_Monitor_State& topology_state, unsigned long long& next_loop_at);
 	/**
 	* @brief Run the status-driven blue/green switchover FSM for one deployment.
 	*
@@ -672,7 +759,7 @@ class MySQL_Monitor {
 	* @param st        BGD switchover state.
 	* @param topology  Parsed mysql.rds_topology result for this cycle.
 	*/
-	void handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topology_Result& topology);
+	void handle_aws_rds_bgd(AWS_RDS_BGD_State& st, AWS_RDS_Topology_Result& topology);
 	/**
 	* @brief Pin green IPs and drain existing blue-host connections.
 	*
@@ -786,6 +873,64 @@ class MySQL_Monitor {
 	void monitor_gr_async_actions_handler(const vector<unique_ptr<MySQL_Monitor_State_Data>>& mmsds);
 
 private:
+	/**
+	* @brief Load one BGD worker's configuration from the published host rows.
+	*
+	* @details Copies the cluster rows, verifies their checksum, copies configuration fields from
+	*   the first row, and builds the probe host list.
+	*
+	* @param writer_hg        Writer hostgroup identifying the deployment.
+	* @param current_checksum Per-cluster checksum captured for this refresh.
+	* @param candidate        State populated from the published rows.
+	*
+	* @return true when the checksum matches and the rows contain a probe host.
+	*/
+	bool aws_rds_bgd_load_worker_config(int writer_hg, uint64_t current_checksum, AWS_RDS_BGD_State& candidate);
+	/**
+	* @brief Replace the configuration-derived fields in a live BGD worker state.
+	*
+	* @param st        Live worker state.
+	* @param candidate Parsed configuration to apply.
+	*/
+	void aws_rds_bgd_apply_cluster_config(AWS_RDS_BGD_State& st, AWS_RDS_BGD_State& candidate);
+	/**
+	* @brief Rebuild the mapping and reconcile writer state after a configuration refresh.
+	*
+	* @details Called only when config_refresh_pending is set.
+	*
+	* @param st       Worker-owned BGD state.
+	* @param topology Fresh topology used to rebuild the mapping.
+	*/
+	void aws_rds_bgd_config_refresh_action(AWS_RDS_BGD_State& st, AWS_RDS_Topology_Result& topology);
+	/**
+	* @brief Build the blue-to-green host mapping for a BGD worker.
+	*
+	* @param st       Worker-owned BGD state.
+	* @param topology Parsed topology used to identify the green target.
+	*/
+	void aws_rds_bgd_build_map(AWS_RDS_BGD_State& st, AWS_RDS_Topology_Result& topology);
+	/**
+	* @brief Resolve green host IPs and select the next topology probe host.
+	*
+	* @param st Worker-owned BGD state.
+	*/
+	void aws_rds_bgd_resolve_green_ips(AWS_RDS_BGD_State& st);
+	/**
+	* @brief Add the green writer to its configured hostgroup.
+	*
+	* @param st Worker-owned BGD state.
+	*/
+	void aws_rds_bgd_add_green_writer_in_hg(AWS_RDS_BGD_State& st);
+	/**
+	* @brief Find the writer pair in a blue-to-green host mapping.
+	*
+	* @param bg_map Host mapping to inspect.
+	* @param writer Writer address populated when a pair is found.
+	*
+	* @return true when the map contains a writer pair.
+	*/
+	bool aws_rds_bgd_find_writer(std::vector<AWS_RDS_BlueGreenPair>& bg_map, srv_addr_t& writer);
+
 	/**
 	 * @brief Handling of monitor tasks asyncronously
 	 * @details Basic workflow is same for all monitor_*_async methods:

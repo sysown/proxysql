@@ -1141,12 +1141,14 @@ MySQL_Monitor::MySQL_Monitor() {
 
 	pthread_mutex_init(&aws_aurora_mutex,NULL);
 	pthread_mutex_init(&aws_rds_bgd_mutex,NULL);
+	pthread_mutex_init(&aws_rds_bgd_hosts_mutex,NULL);
 	pthread_mutex_init(&mysql_servers_mutex,NULL);
 	pthread_mutex_init(&proxysql_servers_mutex, NULL);
 	AWS_Aurora_Hosts_resultset=NULL;
 	AWS_Aurora_Hosts_resultset_checksum = 0;
-	AWS_RDS_Blue_Hosts_resultset=NULL;
+	AWS_RDS_BGD_Hosts_resultset.reset();
 	AWS_RDS_BGD_Hosts_checksum = 0;
+	AWS_RDS_BGD_Cluster_checksum.clear();
 	shutdown=false;
 	monitor_enabled=true;	// default
 	// create new SQLite datatabase
@@ -1247,10 +1249,9 @@ MySQL_Monitor::~MySQL_Monitor() {
 		delete AWS_Aurora_Hosts_resultset;
 		AWS_Aurora_Hosts_resultset=NULL;
 	}
-	if (AWS_RDS_Blue_Hosts_resultset) {
-		delete AWS_RDS_Blue_Hosts_resultset;
-		AWS_RDS_Blue_Hosts_resultset=NULL;
-	}
+	AWS_RDS_BGD_Hosts_resultset.reset();
+	AWS_RDS_BGD_Cluster_checksum.clear();
+	pthread_mutex_destroy(&aws_rds_bgd_hosts_mutex);
 	std::map<std::string, AWS_Aurora_monitor_node *>::iterator it2;
 	AWS_Aurora_monitor_node *node=NULL;
 	for (it2 = AWS_Aurora_Hosts_Map.begin(); it2 != AWS_Aurora_Hosts_Map.end(); ++it2) {
@@ -6622,12 +6623,13 @@ void * MySQL_Monitor::monitor_aws_aurora() {
 /**
 * @brief Runs an async query + store_result on the monitor connection.
 *
-* @param mmsd  Monitor state data holding the connection, timing, and result.
-* @param query SQL text to execute.
+* @param mmsd        Monitor state data holding the connection, timing, and result.
+* @param query       SQL text to execute.
+* @param worker_stop Per-worker shutdown signal.
 *
-* @return 0 on success, 1 on timeout/query-error, 2 if shutdown was requested.
+* @return 0 on success, 1 on timeout/query-error, 2 if global or worker shutdown was requested.
 */
-static int aws_rds_bgd_async_query(MySQL_Monitor_State_Data *mmsd, const char *query) {
+int MySQL_Monitor::aws_rds_bgd_async_query(MySQL_Monitor_State_Data *mmsd, const char *query, std::atomic_bool& worker_stop) {
 	mmsd->t1 = monotonic_time();
 	mmsd->interr = 0;
 	mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, query);
@@ -6638,7 +6640,7 @@ static int aws_rds_bgd_async_query(MySQL_Monitor_State_Data *mmsd, const char *q
 			mmsd->mysql_error_msg = strdup("timeout check");
 			return 1;
 		}
-		if (GloMyMon->shutdown == true) {
+		if (shutdown == true || worker_stop.load()) {
 			return 2;
 		}
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
@@ -6653,7 +6655,7 @@ static int aws_rds_bgd_async_query(MySQL_Monitor_State_Data *mmsd, const char *q
 			mmsd->mysql_error_msg = strdup("timeout check");
 			return 1;
 		}
-		if (GloMyMon->shutdown == true) {
+		if (shutdown == true || worker_stop.load()) {
 			return 2;
 		}
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
@@ -6715,12 +6717,108 @@ static void aws_rds_bgd_set_status(AWS_RDS_BGD_State& st, AWS_RDS_BGD_Status sta
 	}
 }
 
-void * monitor_RDS_BGD_thread_HG(void *arg) {
-	unsigned int wHG = *(unsigned int *)arg;
-	unsigned int num_hosts = 0;
+/**
+* @brief Load one BGD worker's configuration from the published host rows.
+*
+* @details Copies the cluster rows, verifies their checksum, copies configuration fields from
+*   the first row, and builds the probe host list. FSM fields retain their defaults and must not
+*   replace the corresponding fields in the live state.
+*
+* @param writer_hg        Writer hostgroup identifying the deployment.
+* @param current_checksum Per-cluster checksum captured for this refresh.
+* @param candidate        State populated from the published rows.
+*
+* @return true when the checksum matches and the rows contain a blue writer; false otherwise.
+*/
+bool MySQL_Monitor::aws_rds_bgd_load_worker_config(int writer_hg, uint64_t current_checksum, AWS_RDS_BGD_State& candidate) {
+	SQLite3_result result(AWS_RDS_BGD_HOSTS_COLUMNS);
+	std::shared_ptr<SQLite3_result> hosts_resultset;
+
+	pthread_mutex_lock(&aws_rds_bgd_hosts_mutex);
+	hosts_resultset = AWS_RDS_BGD_Hosts_resultset;
+	pthread_mutex_unlock(&aws_rds_bgd_hosts_mutex);
+
+	if (hosts_resultset) {
+		for (SQLite3_row* row : hosts_resultset->rows) {
+			if (atoi(row->fields[AWS_RDS_BGD_WRITER_HOSTGROUP]) == writer_hg) {
+				result.add_row(row);
+			}
+		}
+	}
+	if (result.raw_checksum() != current_checksum) {
+		return false;
+	}
+
+	candidate.writer_hg = writer_hg;
+	bool first_row = true;
+
+	for (SQLite3_row* row : result.rows) {
+		unsigned int reader_hg = atoi(row->fields[AWS_RDS_BGD_READER_HOSTGROUP]);
+		int green_writer_hg = row->fields[AWS_RDS_BGD_GREEN_WRITER_HOSTGROUP]
+			&& row->fields[AWS_RDS_BGD_GREEN_WRITER_HOSTGROUP][0]
+			? atoi(row->fields[AWS_RDS_BGD_GREEN_WRITER_HOSTGROUP]) : -1;
+		int green_reader_hg = row->fields[AWS_RDS_BGD_GREEN_READER_HOSTGROUP]
+			&& row->fields[AWS_RDS_BGD_GREEN_READER_HOSTGROUP][0]
+			? atoi(row->fields[AWS_RDS_BGD_GREEN_READER_HOSTGROUP]) : -1;
+		unsigned int check_interval_ms = atoi(row->fields[AWS_RDS_BGD_CHECK_INTERVAL_MS]);
+		unsigned int check_timeout_ms = atoi(row->fields[AWS_RDS_BGD_CHECK_TIMEOUT_MS]);
+		int writer_is_also_reader = atoi(row->fields[AWS_RDS_BGD_WRITER_IS_ALSO_READER]);
+
+		if (first_row) {
+			candidate.reader_hg = reader_hg;
+			candidate.green_writer_hg = green_writer_hg;
+			candidate.green_reader_hg = green_reader_hg;
+			candidate.check_interval_ms = check_interval_ms;
+			candidate.check_timeout_ms = check_timeout_ms;
+			candidate.writer_is_also_reader = writer_is_also_reader;
+			first_row = false;
+		}
+
+		char* srv_type = row->fields[AWS_RDS_BGD_SRV_TYPE];
+		if (srv_type[0] == 'B' && atoi(row->fields[AWS_RDS_BGD_IS_WRITER]) != 0) {
+			candidate.probe_hosts.push_back(AWS_RDS_BGD_Probe_Host {
+				row->fields[AWS_RDS_BGD_HOSTNAME],
+				atoi(row->fields[AWS_RDS_BGD_PORT]),
+				atoi(row->fields[AWS_RDS_BGD_USE_SSL])
+			});
+		}
+	}
+
+	if (first_row || candidate.probe_hosts.empty()) {
+		proxy_error("AWS RDS BGD [wHG=%d]: no blue writer available for topology checks\n", writer_hg);
+		return false;
+	}
+
+	return true;
+}
+
+/**
+* @brief Replace only configuration-derived fields in a live BGD worker state.
+*
+* @param st        Live worker state.
+* @param candidate Parsed configuration to apply.
+*/
+void MySQL_Monitor::aws_rds_bgd_apply_cluster_config(AWS_RDS_BGD_State& st, AWS_RDS_BGD_State& candidate) {
+	st.reader_hg = candidate.reader_hg;
+	st.green_writer_hg = candidate.green_writer_hg;
+	st.green_reader_hg = candidate.green_reader_hg;
+	st.writer_is_also_reader = candidate.writer_is_also_reader;
+	st.check_interval_ms = candidate.check_interval_ms;
+	st.check_timeout_ms = candidate.check_timeout_ms;
+	st.probe_hosts = candidate.probe_hosts;
+}
+
+/**
+* @brief Run the monitor loop for one AWS RDS BGD writer hostgroup.
+*
+* @param arg Pointer to the worker state owned by the parent monitor thread.
+*
+* @return nullptr when the worker exits.
+*/
+void* monitor_RDS_BGD_thread_HG(void* arg) {
+	AWS_RDS_BGD_Worker* worker = static_cast<AWS_RDS_BGD_Worker*>(arg);
+	unsigned int wHG = worker->writer_hg;
 	unsigned int cur_host_idx = 0;
-	unsigned int check_interval_ms = 0;
-	unsigned int check_timeout_ms = 0;
 	set_thread_name("MonitorRdsBgdHG", GloVars.set_thread_name);
 	proxy_info("Started Monitor thread for AWS RDS writer HG %u\n", wHG);
 
@@ -6739,70 +6837,19 @@ void * monitor_RDS_BGD_thread_HG(void *arg) {
 	MySQL_Monitor__thread_MySQL_Thread_Variables_version = GloMTH->get_global_version();
 	mysql_thr->refresh_variables();
 
-	uint64_t initial_checksum = 0;
-
-	// initial data load from the monitor resultset
-	// Columns:
-	// 0 writer_hostgroup, 1 reader_hostgroup, 2 hostname, 3 port, 4 use_ssl,
-	// 5 green_writer_hostgroup, 6 green_reader_hostgroup, 7 check_interval_ms,
-	// 8 check_timeout_ms, 9 writer_is_also_reader, 10 is_writer
-	pthread_mutex_lock(&GloMyMon->aws_rds_bgd_mutex);
-	initial_checksum = GloMyMon->AWS_RDS_BGD_Hosts_checksum;
-	for (SQLite3_row *r : GloMyMon->AWS_RDS_Blue_Hosts_resultset->rows) {
-		if (atoi(r->fields[0]) == (int)wHG) {
-			if (atoi(r->fields[10]) != 0) {
-				num_hosts++;
-			}
-			if (st.reader_hg == 0) {
-				st.reader_hg = atoi(r->fields[1]);
-			}
-			if (st.green_writer_hg < 0 && r->fields[5] && r->fields[5][0]) {
-				st.green_writer_hg = atoi(r->fields[5]);
-			}
-			if (st.green_reader_hg < 0 && r->fields[6] && r->fields[6][0]) {
-				st.green_reader_hg = atoi(r->fields[6]);
-			}
-			if (check_interval_ms == 0) {
-				check_interval_ms = atoi(r->fields[7]);
-			}
-			if (check_timeout_ms == 0) {
-				check_timeout_ms = atoi(r->fields[8]);
-			}
-			if (r->fields[9] && r->fields[9][0]) {
-				st.writer_is_also_reader = atoi(r->fields[9]);
-			}
-		}
-	}
-
-	host_def_t *hpa = (host_def_t *)malloc(sizeof(host_def_t)*(num_hosts ? num_hosts : 1));
-	for (SQLite3_row *r : GloMyMon->AWS_RDS_Blue_Hosts_resultset->rows) {
-		// r->writer_hostgroup == wHG && r->is_writer != 0
-		if (atoi(r->fields[0]) == (int)wHG && atoi(r->fields[10]) != 0) {
-			hpa[cur_host_idx].host = strdup(r->fields[2]);
-			hpa[cur_host_idx].port = atoi(r->fields[3]);
-			hpa[cur_host_idx].use_ssl = atoi(r->fields[4]);
-			cur_host_idx++;
-		}
-	}
-	if (num_hosts && cur_host_idx >= num_hosts) {
-		cur_host_idx = num_hosts - 1;
-	}
-	pthread_mutex_unlock(&GloMyMon->aws_rds_bgd_mutex);
-
-	bool exit_now = false;
 	unsigned long long t1 = 0;
 	unsigned long long next_loop_at = 0;
 	bool crc = false;
-	uint64_t current_checksum = 0;
+	uint64_t last_checksum = 0;
 	size_t rnd;
 	bool found_pingable_host = false;
-	bool rc_ping = false;
 	MySQL_Monitor_State_Data *mmsd = NULL;
 	RDS_BGD_Topology_Monitor_State topology_state = TOPOLOGY_TABLE_CHECK;
 
 	t1 = monotonic_time();
 
-	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true && exit_now==false) {
+	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true
+		&& worker->worker_stop.load()==false) {
 		unsigned int glover;
 		t1 = monotonic_time();
 		bool poll_success = false;
@@ -6818,17 +6865,20 @@ void * monitor_RDS_BGD_thread_HG(void *arg) {
 			next_loop_at = 0;
 		}
 
-		// if the host list/definition changed, terminate so the dispatcher respawns
-		pthread_mutex_lock(&GloMyMon->aws_rds_bgd_mutex);
-		current_checksum = GloMyMon->AWS_RDS_BGD_Hosts_checksum;
-		pthread_mutex_unlock(&GloMyMon->aws_rds_bgd_mutex);
-		if (current_checksum != initial_checksum) {
-			exit_now = true;
-			break;
+		uint64_t current_checksum = worker->current_checksum.load();
+		if (current_checksum != last_checksum) {
+			if (!GloMyMon->aws_rds_bgd_refresh_worker_config(st, current_checksum, topology_state, next_loop_at)) {
+				usleep(50000);
+				continue;
+			}
+			last_checksum = current_checksum;
+			if (cur_host_idx >= st.probe_hosts.size()) {
+				cur_host_idx = 0;
+			}
 		}
 
-		if (num_hosts == 0) {
-			next_loop_at = t1 + (check_interval_ms ? check_interval_ms : 1000) * 1000;
+		if (st.probe_hosts.empty()) {
+			next_loop_at = t1 + (st.check_interval_ms ? st.check_interval_ms : 1000) * 1000;
 			usleep(50000);
 			continue;
 		}
@@ -6844,7 +6894,7 @@ void * monitor_RDS_BGD_thread_HG(void *arg) {
 
 		// Determine the host to probe. If the FSM pinned a host (the green IP, during a
 		// switchover), poll it directly and skip ping/random selection; otherwise pick a
-		// pingable host (random first, then shuffle and scan).
+		// pingable host, starting at a random position.
 		const char* poll_host;
 		int poll_port;
 		bool poll_use_ssl;
@@ -6870,43 +6920,35 @@ void * monitor_RDS_BGD_thread_HG(void *arg) {
 		if (st.next_check_host.empty()) {
 			found_pingable_host = false;
 			rnd = (size_t) rand();
-			rnd %= num_hosts;
-			rc_ping = GloMyMon->server_responds_to_ping(hpa[rnd].host, hpa[rnd].port);
-			if (rc_ping) {
-				found_pingable_host = true;
-				cur_host_idx = rnd;
-			} else {
-				MyHGM->p_update_mysql_error_counter(
-					p_mysql_error_type::proxysql, wHG, hpa[rnd].host, hpa[rnd].port, ER_PROXYSQL_AWS_NO_PINGABLE_SRV
-				);
-				shuffle_hosts(hpa, num_hosts);
-				for (unsigned int i=0; (found_pingable_host == false && i<num_hosts); i++) {
-					rc_ping = GloMyMon->server_responds_to_ping(hpa[i].host, hpa[i].port);
-					if (rc_ping) {
-						found_pingable_host = true;
-						cur_host_idx = i;
-					} else {
-						MyHGM->p_update_mysql_error_counter(
-							p_mysql_error_type::proxysql, wHG, hpa[i].host, hpa[i].port, ER_PROXYSQL_AWS_NO_PINGABLE_SRV
-						);
-					}
+			rnd %= st.probe_hosts.size();
+			for (size_t i = 0; found_pingable_host == false && i < st.probe_hosts.size(); i++) {
+				size_t host_idx = (rnd + i) % st.probe_hosts.size();
+				AWS_RDS_BGD_Probe_Host& host = st.probe_hosts[host_idx];
+				if (GloMyMon->server_responds_to_ping(host.hostname.data(), host.port)) {
+					found_pingable_host = true;
+					cur_host_idx = host_idx;
+				} else {
+					MyHGM->p_update_mysql_error_counter(
+						p_mysql_error_type::proxysql, wHG, host.hostname.data(), host.port,
+						ER_PROXYSQL_AWS_NO_PINGABLE_SRV
+					);
 				}
 			}
 			if (found_pingable_host == false) {
 				proxy_error("No node is pingable for AWS RDS cluster with writer HG %u\n", wHG);
-				next_loop_at = t1 + check_interval_ms * 1000;
+				next_loop_at = t1 + st.check_interval_ms * 1000;
 				continue;
 			}
-			poll_host = hpa[cur_host_idx].host;
-			poll_port = hpa[cur_host_idx].port;
-			poll_use_ssl = hpa[cur_host_idx].use_ssl;
+			poll_host = st.probe_hosts[cur_host_idx].hostname.c_str();
+			poll_port = st.probe_hosts[cur_host_idx].port;
+			poll_use_ssl = st.probe_hosts[cur_host_idx].use_ssl;
 		}
 
 		mmsd = new MySQL_Monitor_State_Data(
 			MON_AWS_RDS_BGD, (char*)poll_host, poll_port, poll_use_ssl
 		);
 		mmsd->writer_hostgroup = wHG;
-		mmsd->aws_aurora_check_timeout_ms = check_timeout_ms;
+		mmsd->aws_aurora_check_timeout_ms = st.check_timeout_ms;
 		mmsd->mysql = GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port, mmsd);
 		mmsd->t1 = t1;
 
@@ -6932,7 +6974,7 @@ void * monitor_RDS_BGD_thread_HG(void *arg) {
 			// we advance to TOPOLOGY_METADATA_FETCH and skip this check on subsequent
 			// iterations, until a fetch reports the table is gone.
 
-			int qrc = aws_rds_bgd_async_query(mmsd, QUERY_AWS_RDS_TOPOLOGY_TABLE_CHECK);
+			int qrc = GloMyMon->aws_rds_bgd_async_query(mmsd, QUERY_AWS_RDS_TOPOLOGY_TABLE_CHECK, worker->worker_stop);
 			if (qrc == 2) {
 				goto __exit_monitor_RDS_BGD_thread_HG_now;
 			}
@@ -6963,7 +7005,7 @@ void * monitor_RDS_BGD_thread_HG(void *arg) {
 			// differs by RDS type (the Multi-AZ Cluster topology table may not expose
 			// 'role'/'status' at all), so dump all columns and detect what is present.
 
-			int qrc = aws_rds_bgd_async_query(mmsd, QUERY_AWS_RDS_TOPOLOGY_DISCOVERY);
+			int qrc = GloMyMon->aws_rds_bgd_async_query(mmsd, QUERY_AWS_RDS_TOPOLOGY_DISCOVERY, worker->worker_stop);
 			if (qrc == 2) {
 				goto __exit_monitor_RDS_BGD_thread_HG_now;
 			}
@@ -7032,7 +7074,7 @@ __end_of_loop:
 		mmsd->t2 = monotonic_time();
 		// the FSM tightens the interval to 100ms while a switchover is in flight
 		// (st.next_check_interval_ms); otherwise fall back to the configured baseline.
-		unsigned int eff = st.next_check_interval_ms ? st.next_check_interval_ms : check_interval_ms;
+		unsigned int eff = st.next_check_interval_ms ? st.next_check_interval_ms : st.check_interval_ms;
 		next_loop_at = t1 + (eff * 1000);
 		if (mmsd->t2 > t1) {
 			next_loop_at -= (mmsd->t2 - t1);
@@ -7063,11 +7105,6 @@ __exit_monitor_RDS_BGD_thread_HG_now:
 		delete mmsd;
 		mmsd = NULL;
 	}
-
-	for (unsigned int i=0; i<num_hosts; i++) {
-		free(hpa[i].host);
-	}
-	free(hpa);
 
 	if (mysql_thr) {
 		delete mysql_thr;
@@ -7113,25 +7150,26 @@ static bool aws_rds_bgd_match_host(const std::string& blue_hostname, const std::
 	return g_host_stripped == b_host && g_domain == b_domain;
 }
 
-// Build the blue<->green map once (refreshed only after a switchover completes and
-// clears it, which also covers a worker that starts mid-switchover). The topology
-// exposes only primaries, so the writer pair is always present; reader pairs exist
-// only when green_reader_hostgroup is configured (the user populated it).
-static void aws_rds_bgd_build_map(AWS_RDS_BGD_State& st, const AWS_RDS_Topology_Result& topo) {
+/**
+* @brief Build the blue-to-green host mapping for a BGD worker.
+*
+* @details Builds the map only when it is empty. The topology exposes only primaries, so the
+*   writer pair is always present; reader pairs are added when green_reader_hostgroup is configured.
+*
+* @param st   Worker-owned BGD state.
+* @param topo Parsed topology used to identify the green target.
+*/
+void MySQL_Monitor::aws_rds_bgd_build_map(AWS_RDS_BGD_State& st, AWS_RDS_Topology_Result& topo) {
 	if (!st.bg_map.empty()) {
 		return;
 	}
 
-	std::string green_writer_host;
-	for (const AWS_RDS_Topology_Node& n : topo.nodes) {
-		if (strcasecmp(n.role.c_str(), BGD_ROLE_TARGET) == 0) {
-			green_writer_host = n.endpoint;
-			break;
-		}
-	}
-	if (green_writer_host.empty()) {
+	AWS_RDS_Topology_Node* target = topo.target();
+	if (!target || target->endpoint.empty()) {
 		return;
 	}
+
+	std::string green_writer_host = target->endpoint;
 
 	MyHGM->wrlock();
 
@@ -7236,8 +7274,10 @@ static void aws_rds_bgd_build_map(AWS_RDS_BGD_State& st, const AWS_RDS_Topology_
 *   green primary BY IP: green stays reachable through the entire cutover (blue has a connectivity
 *   gap), and the green IP survives the post-COMPLETED name swap (it becomes the promoted primary),
 *   whereas the green DNS name is retired. 'next_check_host' is cleared at COMPLETED.
+*
+* @param st Worker-owned BGD state.
 */
-static void aws_rds_bgd_resolve_green_ips(AWS_RDS_BGD_State& st) {
+void MySQL_Monitor::aws_rds_bgd_resolve_green_ips(AWS_RDS_BGD_State& st) {
 	int ai_family = mysql_resolution_family_to_ai_family(mysql_thread___resolution_family);
 	for (auto &p : st.bg_map) {
 		// Always check the cache first: a green host that is a monitored server may be there.
@@ -7281,8 +7321,10 @@ static void aws_rds_bgd_resolve_green_ips(AWS_RDS_BGD_State& st) {
 
 /**
 * @brief Add the green writer to green_writer_hostgroup, when that hostgroup is configured.
+*
+* @param st Worker-owned BGD state.
 */
-static void aws_rds_bgd_add_green_writer_in_hg(AWS_RDS_BGD_State& st) {
+void MySQL_Monitor::aws_rds_bgd_add_green_writer_in_hg(AWS_RDS_BGD_State& st) {
 	if (st.green_writer_hg < 0) {
 		return;
 	}
@@ -7304,6 +7346,126 @@ static void aws_rds_bgd_add_green_writer_in_hg(AWS_RDS_BGD_State& st) {
 		}
 		MyHGM->wrunlock();
 		break;
+	}
+}
+
+/**
+* @brief Find the writer pair in a blue/green map.
+*
+* @param bg_map Blue/green host mapping.
+* @param writer Writer address populated when a pair is found.
+*
+* @return true when the map contains a writer pair; false otherwise.
+*/
+bool MySQL_Monitor::aws_rds_bgd_find_writer(std::vector<AWS_RDS_BlueGreenPair>& bg_map, srv_addr_t& writer) {
+	for (AWS_RDS_BlueGreenPair& p : bg_map) {
+		if (p.is_writer) {
+			writer = srv_addr_t { p.blue_host, p.port };
+			return true;
+		}
+	}
+	return false;
+}
+
+/**
+* @brief Apply a changed configuration to one running BGD worker.
+*
+* @details Before writer post-processing, applies the configuration and schedules mapping
+*   reconciliation after the next topology poll. At or after post-processing, rolls back the
+*   deployment and restarts its topology FSM without replacing the worker thread.
+*
+* @param st               Worker-owned BGD state.
+* @param current_checksum Per-cluster checksum captured for this refresh.
+* @param topology_state   Current topology query state.
+* @param next_loop_at     Next scheduled worker iteration.
+*
+* @return true when the captured configuration was applied; false when it must be retried.
+*/
+bool MySQL_Monitor::aws_rds_bgd_refresh_worker_config(
+	AWS_RDS_BGD_State& st, uint64_t current_checksum,
+	RDS_BGD_Topology_Monitor_State& topology_state, unsigned long long& next_loop_at
+) {
+	AWS_RDS_BGD_State candidate;
+	if (!aws_rds_bgd_load_worker_config(st.writer_hg, current_checksum, candidate)) {
+		return false;
+	}
+
+	// Changes at or after writer post-processing require a full rollback and FSM restart.
+	if (st.bgd_status >= AWS_RDS_BGD_Status::WRITER_SWITCHOVER_POST_PROCESSING) {
+		AWS_RDS_BGD_Status old_status = st.bgd_status;
+		handle_aws_rds_bgd_post_switchover(st, true);
+		aws_rds_bgd_apply_cluster_config(st, candidate);
+		topology_state = TOPOLOGY_TABLE_CHECK;
+		next_loop_at = 0;
+		proxy_info(
+			"AWS RDS BGD [wHG=%u rHG=%u]: applied checksum %llu with full rollback from %s\n",
+			st.writer_hg, st.reader_hg, (unsigned long long)current_checksum,
+			aws_rds_bgd_status_str(old_status));
+		return true;
+	}
+
+	AWS_RDS_BGD_Status status = st.bgd_status;
+	unsigned int old_reader_hg = st.reader_hg;
+	bool refresh_in_progress = st.bgd_in_progress_set;
+	bool hostgroups_changed = old_reader_hg != candidate.reader_hg;
+
+	// Clear the in-progress marker from the old reader hostgroup before applying the new configuration.
+	if (refresh_in_progress && hostgroups_changed) {
+		aws_rds_bgd_clear_bgd_in_progress(st);
+	}
+
+	// Apply the new configuration.
+	aws_rds_bgd_apply_cluster_config(st, candidate);
+	st.next_check_host.clear();
+	st.next_check_host_failures = 0;
+	next_loop_at = 0;
+	// Rebuild bg_map from the next topology probe result.
+	st.config_refresh_pending = true;
+
+	// Apply the in-progress marker to the new reader hostgroup after the refresh.
+	if (refresh_in_progress && hostgroups_changed) {
+		aws_rds_bgd_set_bgd_in_progress(st);
+	}
+
+	proxy_info(
+		"AWS RDS BGD [wHG=%u rHG=%u]: applied checksum %llu with in-place refresh at %s\n",
+		st.writer_hg, st.reader_hg, (unsigned long long)current_checksum,
+		aws_rds_bgd_status_str(status));
+	return true;
+}
+
+/**
+* @brief Rebuild the mapping and reconcile writer state after a configuration refresh.
+*
+* @details Called only when config_refresh_pending is set.
+*
+* @param st       Worker-owned BGD state.
+* @param topology Fresh topology used to rebuild the mapping.
+*/
+void MySQL_Monitor::aws_rds_bgd_config_refresh_action(AWS_RDS_BGD_State& st, AWS_RDS_Topology_Result& topology) {
+	srv_addr_t old_writer;
+	bool had_old_writer = aws_rds_bgd_find_writer(st.bg_map, old_writer);
+	st.bg_map.clear();
+	aws_rds_bgd_build_map(st, topology);
+
+	srv_addr_t new_writer;
+	bool has_new_writer = aws_rds_bgd_find_writer(st.bg_map, new_writer);
+	aws_rds_bgd_add_green_writer_in_hg(st);
+
+	// Transfer the writer demotion when the refreshed configuration maps a different writer.
+	if (st.bgd_status == AWS_RDS_BGD_Status::WRITER_SWITCHOVER_IN_PROGRESS
+		&& (had_old_writer != has_new_writer
+			|| (had_old_writer && (old_writer.host != new_writer.host || old_writer.port != new_writer.port)))) {
+		if (had_old_writer) {
+			MyHGM->read_only_action_v2(std::list<read_only_server_t> {
+				read_only_server_t { old_writer.host, (port_t)old_writer.port, 0 }
+			});
+		}
+		if (has_new_writer) {
+			MyHGM->read_only_action_v2(std::list<read_only_server_t> {
+				read_only_server_t { new_writer.host, (port_t)new_writer.port, 1 }
+			});
+		}
 	}
 }
 
@@ -7361,28 +7523,21 @@ const char* aws_rds_bgd_status_str(AWS_RDS_BGD_Status s) {
 * @param st        BGD switchover state (worker-owned, mutated here).
 * @param topology  Parsed mysql.rds_topology result for this cycle.
 */
-void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topology_Result& topology) {
+void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, AWS_RDS_Topology_Result& topology) {
 	if (!topology.blue_green) {
 		st.next_check_interval_ms = 0;
 		aws_rds_bgd_set_status(st, AWS_RDS_BGD_Status::NONE);
 		return;
 	}
 
-	std::string status;
-	for (const AWS_RDS_Topology_Node& n : topology.nodes) {
-		if (strcasecmp(n.role.c_str(), BGD_ROLE_TARGET) == 0) {
-			status = n.status;
-			break;
-		}
-	}
-	if (status.empty()) {
+	AWS_RDS_Topology_Node* target = topology.target();
+	if (!target || target->status.empty()) {
 		st.next_check_interval_ms = 0;
 		aws_rds_bgd_set_status(st, AWS_RDS_BGD_Status::NONE);
 		return;
 	}
-	st.last_topology_status = status;
 
-	AWS_RDS_BGD_Status topology_status = aws_rds_bgd_status_from_topology(status);
+	AWS_RDS_BGD_Status topology_status = aws_rds_bgd_status_from_topology(target->status);
 
 	// Once we advance to READER_SWITCHOVER_IN_PROGRESS phase, AWS keeps reporting
 	// WRITER_SWITCHOVER_COMPLETED (a single green row) until mysql.rds_topology drains. Ignore
@@ -7408,6 +7563,12 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, const AWS_RDS_Topo
 			aws_rds_bgd_add_green_writer_in_hg(st);
 		}
 		return;
+	}
+
+	// Rebuild a refreshed worker's mapping only after receiving this current topology result.
+	if (st.config_refresh_pending) {
+		aws_rds_bgd_config_refresh_action(st, topology);
+		st.config_refresh_pending = false;
 	}
 
 	if (topology_status == st.bgd_status) {
@@ -7706,7 +7867,7 @@ void MySQL_Monitor::handle_aws_rds_bgd_post_switchover(AWS_RDS_BGD_State& st, bo
 
 	// state cleanup
 	st.bg_map.clear();
-	st.last_topology_status.clear();
+	st.config_refresh_pending = false;
 	st.next_check_host.clear();
 	st.next_check_interval_ms = 0;
 	aws_rds_bgd_set_status(st, AWS_RDS_BGD_Status::NONE);
@@ -7851,9 +8012,9 @@ void MySQL_Monitor::set_aws_rds_bgd_server_in_progress(unsigned int writer_hg, u
 /**
 * @brief AWS RDS BGD monitor thread entry point.
 *
-* @details Spawns one worker (monitor_RDS_BGD_thread_HG) per writer hostgroup; each worker picks a pingable
-*   writer, probes 'mysql.rds_topology' and dispatches based on the detected topology shape.
-*   Workers are (re)spawned whenever the AWS_RDS_BGD_Hosts_checksum changes.
+* @details Maintains one worker (monitor_RDS_BGD_thread_HG) per active writer hostgroup. The parent starts
+*   and stops workers and signals configuration changes. Each worker selects a pingable probe host,
+*   probes 'mysql.rds_topology', and runs the switchover state machine.
 */
 void * MySQL_Monitor::monitor_aws_rds_bgd() {
 	// Wait for GloMTH to be initialized
@@ -7867,14 +8028,12 @@ void * MySQL_Monitor::monitor_aws_rds_bgd() {
 	mysql_thr->refresh_variables();
 
 	uint64_t last_checksum = 0;
-	unsigned int *hgs_array = NULL;
-	pthread_t *pthreads_array = NULL;
-	unsigned int hgs_num = 0;
+	std::unordered_map<int, std::unique_ptr<AWS_RDS_BGD_Worker>> workers;
 
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
 		unsigned int glover;
 		if (!GloMTH)
-			return NULL;
+			break;
 
 		glover = GloMTH->get_global_version();
 		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover) {
@@ -7882,70 +8041,99 @@ void * MySQL_Monitor::monitor_aws_rds_bgd() {
 			mysql_thr->refresh_variables();
 		}
 
-		// respawn the per-writer-HG workers when the host list/definition changes
-		pthread_mutex_lock(&aws_rds_bgd_mutex);
-		uint64_t new_checksum = AWS_RDS_BGD_Hosts_checksum;
-		pthread_mutex_unlock(&aws_rds_bgd_mutex);
-		if (new_checksum != last_checksum) {
-			proxy_info("Detected new/changed definition for AWS RDS monitoring\n");
-			last_checksum = new_checksum;
-			if (pthreads_array) {
-				for (unsigned int i=0; i < hgs_num; i++) {
-					pthread_join(pthreads_array[i], NULL);
-					proxy_info("Stopped Monitor thread for AWS RDS writer HG %u\n", hgs_array[i]);
+		uint64_t new_checksum = 0;
+		std::shared_ptr<SQLite3_result> hosts_resultset;
+		std::unordered_map<int, uint64_t> cluster_checksums;
+
+		pthread_mutex_lock(&aws_rds_bgd_hosts_mutex);
+		new_checksum = AWS_RDS_BGD_Hosts_checksum;
+		if (new_checksum != last_checksum && AWS_RDS_BGD_Hosts_resultset) {
+			hosts_resultset = AWS_RDS_BGD_Hosts_resultset;
+			cluster_checksums = AWS_RDS_BGD_Cluster_checksum;
+		}
+		pthread_mutex_unlock(&aws_rds_bgd_hosts_mutex);
+
+		std::unordered_map<int, uint64_t> active_cluster_checksums;
+		if (hosts_resultset) {
+			for (SQLite3_row* row : hosts_resultset->rows) {
+				char* srv_type = row->fields[AWS_RDS_BGD_SRV_TYPE];
+				if (srv_type && srv_type[0] == 'B'
+					&& atoi(row->fields[AWS_RDS_BGD_IS_WRITER]) != 0) {
+					int writer_hg = atoi(row->fields[AWS_RDS_BGD_WRITER_HOSTGROUP]);
+					auto checksum_it = cluster_checksums.find(writer_hg);
+					if (checksum_it != cluster_checksums.end()) {
+						active_cluster_checksums[writer_hg] = checksum_it->second;
+					}
 				}
-				free(pthreads_array);
-				free(hgs_array);
-				pthreads_array = NULL;
-				hgs_array = NULL;
+			}
+		}
+
+		if (new_checksum != last_checksum) {
+			proxy_info("Detected changed definition for AWS RDS Blue Green monitoring\n");
+			last_checksum = new_checksum;
+			std::vector<int> stopped_workers;
+
+			for (auto& [writer_hg, worker] : workers) {
+				auto cluster_it = active_cluster_checksums.find(writer_hg);
+				if (cluster_it == active_cluster_checksums.end()) {
+					worker->worker_stop.store(true);
+					stopped_workers.push_back(writer_hg);
+					proxy_info(
+						"AWS RDS BGD [wHG=%d]: stopping worker; deployment is inactive, removed, or has no blue writer\n",
+						writer_hg);
+					continue;
+				}
+
+				uint64_t old_cluster_checksum = worker->current_checksum.load();
+				if (old_cluster_checksum != cluster_it->second) {
+					worker->current_checksum.store(cluster_it->second);
+					proxy_info(
+						"AWS RDS BGD [wHG=%d]: signaling config refresh, checksum %llu -> %llu\n",
+						writer_hg, (unsigned long long)old_cluster_checksum,
+						(unsigned long long)cluster_it->second);
+				}
 			}
 
-			hgs_num = 0;
-			pthread_mutex_lock(&aws_rds_bgd_mutex);
-			unsigned int num_rows = AWS_RDS_Blue_Hosts_resultset->rows_count;
-			if (num_rows) {
-				unsigned int *tmp_hgs_array = (unsigned int *)malloc(sizeof(unsigned int)*num_rows);
-				for (SQLite3_row *r : AWS_RDS_Blue_Hosts_resultset->rows) {
-					int wHG = atoi(r->fields[0]);
-					bool found = false;
-					for (unsigned int i=0; i < hgs_num; i++) {
-						if (tmp_hgs_array[i] == (unsigned int)wHG) {
-							found = true;
-						}
-					}
-					if (found == false) {
-						tmp_hgs_array[hgs_num] = wHG;
-						hgs_num++;
-					}
+			for (auto& [writer_hg, checksum] : active_cluster_checksums) {
+				if (workers.find(writer_hg) != workers.end()) {
+					continue;
 				}
-				proxy_info("Activating Monitoring of %u AWS RDS clusters\n", hgs_num);
-				hgs_array = (unsigned int *)malloc(sizeof(unsigned int)*hgs_num);
-				pthreads_array = (pthread_t *)malloc(sizeof(pthread_t)*hgs_num);
-				for (unsigned int i=0; i < hgs_num; i++) {
-					hgs_array[i] = tmp_hgs_array[i];
-					proxy_info("Starting Monitor thread for AWS RDS writer HG %u\n", hgs_array[i]);
-					if (pthread_create(&pthreads_array[i], NULL, monitor_RDS_BGD_thread_HG, &hgs_array[i]) != 0) {
-						// LCOV_EXCL_START
-						proxy_error("Thread creation\n");
-						assert(0);
-						// LCOV_EXCL_STOP
-					}
+
+				std::unique_ptr<AWS_RDS_BGD_Worker> worker(new AWS_RDS_BGD_Worker);
+				worker->writer_hg = writer_hg;
+				worker->current_checksum.store(checksum);
+				AWS_RDS_BGD_Worker* worker_arg = worker.get();
+				workers.emplace(writer_hg, std::move(worker));
+				proxy_info("Starting Monitor thread for AWS RDS writer HG %d\n", writer_hg);
+				if (pthread_create(&worker_arg->thread, NULL, monitor_RDS_BGD_thread_HG, worker_arg) != 0) {
+					// LCOV_EXCL_START
+					proxy_error("Thread creation\n");
+					assert(0);
+					// LCOV_EXCL_STOP
 				}
-				free(tmp_hgs_array);
 			}
-			pthread_mutex_unlock(&aws_rds_bgd_mutex);
+
+			for (int writer_hg : stopped_workers) {
+				auto worker_it = workers.find(writer_hg);
+				if (worker_it == workers.end()) {
+					continue;
+				}
+				pthread_join(worker_it->second->thread, NULL);
+				proxy_info("Stopped Monitor thread for AWS RDS writer HG %d\n", writer_hg);
+				workers.erase(worker_it);
+			}
 		}
 
 		usleep(10000);
 	}
-	// on shutdown, join any running per-HG workers
-	if (pthreads_array) {
-		for (unsigned int i=0; i < hgs_num; i++) {
-			pthread_join(pthreads_array[i], NULL);
-		}
-		free(pthreads_array);
-		free(hgs_array);
+	for (auto& [writer_hg, worker] : workers) {
+		worker->worker_stop.store(true);
 	}
+	for (auto& [writer_hg, worker] : workers) {
+		pthread_join(worker->thread, NULL);
+		proxy_info("Stopped Monitor thread for AWS RDS writer HG %d\n", writer_hg);
+	}
+	workers.clear();
 	if (mysql_thr) {
 		delete mysql_thr;
 		mysql_thr = NULL;

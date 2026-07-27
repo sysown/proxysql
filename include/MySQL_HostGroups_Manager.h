@@ -1214,12 +1214,10 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	/**
 	 * @brief Rebuilds the AWS RDS BGD monitor's host resultset.
 	 *
-	 * @details Rebuilds `GloMyMon->AWS_RDS_Blue_Hosts_resultset` and publishes a checksum combining
-	 *   the blue hosts with the green hosts.
-	 *
-	 * @param lock When true, the monitor's `aws_rds_bgd_mutex` is taken internally.
+	 * @details Rebuilds `GloMyMon->AWS_RDS_BGD_Hosts_resultset` and publishes both the full BGD hosts
+	 *   checksum and one checksum per writer hostgroup.
 	 */
-	void update_aws_rds_bgd_hosts_monitor_resultset(bool lock=false);
+	void update_aws_rds_bgd_hosts_monitor_resultset();
 	/**
 	 * @brief Auto-generate a runtime `mysql_aws_rds_bgd_hostgroups` entry for a server's writer hostgroup.
 	 *
