@@ -311,6 +311,7 @@ jobs:
       uses: codecov/codecov-action@v4
       with:
         codecov_yml_path: proxysql/codecov.yml
+        override_commit: ${{ env.SHA }}
         files: proxysql/ci_infra_logs/ci-legacy-g6/coverage-report/ci-legacy-g6.info
         flags: tap-legacy-g6
         name: tap-legacy-g6-coverage

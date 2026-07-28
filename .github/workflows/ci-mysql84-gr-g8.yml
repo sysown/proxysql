@@ -237,6 +237,7 @@ jobs:
       uses: codecov/codecov-action@v4
       with:
         codecov_yml_path: proxysql/codecov.yml
+        override_commit: ${{ env.SHA }}
         files: proxysql/ci_infra_logs/ci-mysql84-gr-g8/coverage-report/ci-mysql84-gr-g8.info
         flags: tap-mysql84-gr-g8
         name: tap-mysql84-gr-g8-coverage

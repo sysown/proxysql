@@ -235,6 +235,7 @@ jobs:
       uses: codecov/codecov-action@v4
       with:
         codecov_yml_path: proxysql/codecov.yml
+        override_commit: ${{ env.SHA }}
         files: proxysql/ci_infra_logs/ci-mariadb10-galera-g5/coverage-report/ci-mariadb10-galera-g5.info
         flags: tap-mariadb10-galera-g5
         name: tap-mariadb10-galera-g5-coverage
