@@ -1055,8 +1055,9 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 *   mysql_servers table and checksum are regenerated.
 	 *
 	 * @param mysql_servers Servers and their observed/read-only state.
+	 * @param ignore_aws_bgd True to apply the result while BGD switchover is in progress.
 	 */
-	void read_only_action_v2(const std::list<read_only_server_t>& mysql_servers);
+	void read_only_action_v2(const std::list<read_only_server_t>& mysql_servers, bool ignore_aws_bgd = false);
 	unsigned int get_servers_table_version();
 	void wait_servers_table_version(unsigned, unsigned);
 	bool shun_and_killall(char *hostname, int port);

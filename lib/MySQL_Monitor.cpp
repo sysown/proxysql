@@ -6692,7 +6692,7 @@ static void aws_rds_bgd_set_bgd_in_progress(AWS_RDS_BGD_State& st) {
 		return;
 	}
 
-	GloMyMon->set_aws_rds_bgd_server_in_progress(st.writer_hg, st.reader_hg, true);
+	GloMyMon->set_aws_rds_bgd_server_in_progress(st, true);
 	st.bgd_in_progress_set = true;
 	proxy_info("AWS RDS BGD [wHG=%u rHG=%u]: switchover in progress, suspending read_only monitor checks on writer/reader hostgroups until SWITCHOVER_COMPLETED\n",
 		st.writer_hg, st.reader_hg);
@@ -6706,7 +6706,7 @@ static void aws_rds_bgd_clear_bgd_in_progress(AWS_RDS_BGD_State& st) {
 		return;
 	}
 
-	GloMyMon->set_aws_rds_bgd_server_in_progress(st.writer_hg, st.reader_hg, false);
+	GloMyMon->set_aws_rds_bgd_server_in_progress(st, false);
 	st.bgd_in_progress_set = false;
 	proxy_info("AWS RDS BGD [wHG=%u rHG=%u]: switchover completed, resuming read_only monitor checks on writer/reader hostgroups\n",
 		st.writer_hg, st.reader_hg);
@@ -7486,12 +7486,12 @@ void MySQL_Monitor::aws_rds_bgd_config_refresh_action(AWS_RDS_BGD_State& st, AWS
 		if (writer_changed && had_old_writer) {
 			MyHGM->read_only_action_v2(std::list<read_only_server_t> {
 				read_only_server_t { old_writer.host, (port_t)old_writer.port, 0 }
-			});
+			}, true);
 		}
 		if (has_new_writer) {
 			MyHGM->read_only_action_v2(std::list<read_only_server_t> {
 				read_only_server_t { new_writer.host, (port_t)new_writer.port, 1 }
-			});
+			}, true);
 		}
 	}
 }
@@ -7635,7 +7635,7 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, AWS_RDS_Topology_R
 			for (const AWS_RDS_BlueGreenPair& p : st.bg_map) {
 				if (p.is_writer) {
 					auto srv = read_only_server_t{ p.blue_host, (port_t)p.port, 1 };
-					MyHGM->read_only_action_v2(std::list<read_only_server_t>{srv});
+					MyHGM->read_only_action_v2(std::list<read_only_server_t>{srv}, true);
 					break;
 				}
 			}
@@ -7848,7 +7848,7 @@ void MySQL_Monitor::handle_aws_rds_bgd_post_switchover(AWS_RDS_BGD_State& st, bo
 			for (const AWS_RDS_BlueGreenPair& p : st.bg_map) {
 				if (p.is_writer) {
 					auto srv = read_only_server_t{ p.blue_host, (port_t)p.port, 0 };
-					MyHGM->read_only_action_v2(std::list<read_only_server_t>{srv});
+					MyHGM->read_only_action_v2(std::list<read_only_server_t>{srv}, true);
 					break;
 				}
 			}
@@ -8001,40 +8001,46 @@ bool MySQL_Monitor::is_aws_rds_bgd_server_in_progress(const std::string& hostnam
 * @brief Flag/unflag every server in BGD hostgroups as switchover-in-progress.
 *
 * @details Called by the BGD worker at switchover initiation (INITIATED / IN_PROGRESS /
-*   POST_PROCESSING) and cleared after SWITCHOVER_COMPLETED. Iterates the writer and reader
-*   hostgroups and marks all member servers in the shared aws_rds_bgd_server_status map.
+*   POST_PROCESSING) and cleared after SWITCHOVER_COMPLETED. Saves the marked servers in the
+*   worker state so cleanup does not depend on the current hostgroup configuration.
 *
-* @param writer_hg   Writer hostgroup for the deployment.
-* @param reader_hg   Reader hostgroup for the deployment.
+* @param st          BGD worker state.
 * @param in_progress true to flag servers, false to clear.
 */
-void MySQL_Monitor::set_aws_rds_bgd_server_in_progress(unsigned int writer_hg, unsigned int reader_hg, bool in_progress) {
-	std::vector<std::string> keys;
-	MyHGM->wrlock();
-	unsigned int hgs[2] = { writer_hg, reader_hg };
-	for (unsigned int i = 0; i < 2; i++) {
-		MyHGC* myhgc = MyHGM->MyHGC_find(hgs[i]);
-		if (myhgc == nullptr || myhgc->mysrvs == nullptr) {
-			continue;
+void MySQL_Monitor::set_aws_rds_bgd_server_in_progress(AWS_RDS_BGD_State& st, bool in_progress) {
+	if (in_progress) {
+		st.read_only_check_disabled.clear();
+
+		MyHGM->wrlock();
+		unsigned int hgs[2] = { st.writer_hg, st.reader_hg };
+		for (unsigned int i = 0; i < 2; i++) {
+			MyHGC* myhgc = MyHGM->MyHGC_find(hgs[i]);
+			if (myhgc == nullptr || myhgc->mysrvs == nullptr) {
+				continue;
+			}
+			for (unsigned int j = 0; j < myhgc->mysrvs->cnt(); j++) {
+				MySrvC* s = myhgc->mysrvs->idx(j);
+				st.read_only_check_disabled.push_back(std::string(s->address) + ":::" + std::to_string(s->port));
+			}
 		}
-		for (unsigned int j = 0; j < myhgc->mysrvs->cnt(); j++) {
-			MySrvC* s = myhgc->mysrvs->idx(j);
-			keys.push_back(std::string(s->address) + ":::" + std::to_string(s->port));
-		}
+		MyHGM->wrunlock();
 	}
-	MyHGM->wrunlock();
 
 	pthread_mutex_lock(&aws_rds_bgd_mutex);
 	if (in_progress) {
-		for (const auto& k : keys) {
+		for (const auto& k : st.read_only_check_disabled) {
 			aws_rds_bgd_server_status[k] = AWS_RDS_BGD_Server_Status::IN_PROGRESS;
 		}
 	} else {
-		for (const auto& k : keys) {
+		for (const auto& k : st.read_only_check_disabled) {
 			aws_rds_bgd_server_status.erase(k);
 		}
 	}
 	pthread_mutex_unlock(&aws_rds_bgd_mutex);
+
+	if (!in_progress) {
+		st.read_only_check_disabled.clear();
+	}
 }
 
 /**

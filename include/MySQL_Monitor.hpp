@@ -575,7 +575,8 @@ struct AWS_RDS_BGD_State {
 	std::vector<AWS_RDS_BGD_Probe_Host> probe_hosts;  ///< hosts eligible for topology probes
 
 	std::vector<srv_addr_t> shunned_readers;                  ///< readers we shunned
-	AWS_RDS_BGD_Status bgd_status = AWS_RDS_BGD_Status::NONE;  ///< drives the FSM and the deferred cleanup
+	std::vector<std::string> read_only_check_disabled;        ///< servers whose read_only checks this worker disabled
+	AWS_RDS_BGD_Status bgd_status = AWS_RDS_BGD_Status::NONE; ///< drives the FSM and the deferred cleanup
 
 	bool bgd_in_progress_set = false;             ///< deployment's servers flagged in aws_rds_bgd_server_status
 	bool config_refresh_pending = false;          ///< bg_map must be rebuilt from the next topology result
@@ -835,14 +836,13 @@ class MySQL_Monitor {
 	* @brief Flag/unflag every server in BGD hostgroups as switchover-in-progress.
 	*
 	* @details Called by the BGD worker at switchover initiation (INITIATED / IN_PROGRESS /
-	*   POST_PROCESSING) and cleared after SWITCHOVER_COMPLETED. Iterates the writer and reader
-	*   hostgroups and marks all member servers in the shared aws_rds_bgd_server_status map.
+	*   POST_PROCESSING) and cleared after SWITCHOVER_COMPLETED. Saves the marked servers in the
+	*   worker state so cleanup does not depend on the current hostgroup configuration.
 	*
-	* @param writer_hg   Writer hostgroup for the deployment.
-	* @param reader_hg   Reader hostgroup for the deployment.
+	* @param st          BGD worker state.
 	* @param in_progress true to flag servers, false to clear.
 	*/
-	void set_aws_rds_bgd_server_in_progress(unsigned int writer_hg, unsigned int reader_hg, bool in_progress);
+	void set_aws_rds_bgd_server_in_progress(AWS_RDS_BGD_State& st, bool in_progress);
 
 	void * monitor_replication_lag();
 	void * monitor_dns_cache();

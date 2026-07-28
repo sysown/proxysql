@@ -3588,14 +3588,29 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int
  *   mysql_servers table and checksum are regenerated.
  *
  * @param mysql_servers Servers and their observed/read-only state.
+ * @param ignore_aws_bgd True to apply the result while BGD switchover is in progress.
  */
-void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_server_t>& mysql_servers) {
+void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_server_t>& mysql_servers, bool ignore_aws_bgd) {
+	// Skip read_only results for servers flagged as AWS RDS BGD switchover in progress.
+	std::list<read_only_server_t> filtered_servers;
+	for (const auto& server : mysql_servers) {
+		const std::string& hostname = std::get<READ_ONLY_SERVER_T::ROS_HOSTNAME>(server);
+		const int port = std::get<READ_ONLY_SERVER_T::ROS_PORT>(server);
+
+		if (!ignore_aws_bgd && GloMyMon->is_aws_rds_bgd_server_in_progress(hostname, port)) {
+			proxy_debug(PROXY_DEBUG_MONITOR, 5,
+				"Ignoring read_only result for '%s:%d' because AWS RDS BGD switchover is in progress\n",
+				hostname.c_str(), port);
+			continue;
+		}
+		filtered_servers.push_back(server);
+	}
 
 	bool update_mysql_servers_table = false;
 
 	unsigned long long curtime1 = monotonic_time();
 	wrlock();
-	for (const auto& server : mysql_servers) {
+	for (const auto& server : filtered_servers) {
 		bool is_writer = false;
 		const std::string& hostname = std::get<READ_ONLY_SERVER_T::ROS_HOSTNAME>(server);
 		const int port = std::get<READ_ONLY_SERVER_T::ROS_PORT>(server);
@@ -3731,7 +3746,7 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_ser
 	unsigned long long curtime2 = monotonic_time();
 	curtime1 = curtime1 / 1000;
 	curtime2 = curtime2 / 1000;
-	proxy_debug(PROXY_DEBUG_MONITOR, 7, "MySQL_HostGroups_Manager::read_only_action_v2() locked for %llums (server count:%ld)\n", curtime2 - curtime1, mysql_servers.size());
+	proxy_debug(PROXY_DEBUG_MONITOR, 7, "MySQL_HostGroups_Manager::read_only_action_v2() locked for %llums (server count:%ld)\n", curtime2 - curtime1, filtered_servers.size());
 }
 
 // shun_and_killall
