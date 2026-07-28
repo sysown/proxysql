@@ -7102,6 +7102,9 @@ __exit_monitor_RDS_BGD_thread_HG_now:
 	}
 
 	if (mmsd) {
+		if (mmsd->mysql) {
+			GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
+		}
 		delete mmsd;
 		mmsd = NULL;
 	}
@@ -7452,11 +7455,12 @@ void MySQL_Monitor::aws_rds_bgd_config_refresh_action(AWS_RDS_BGD_State& st, AWS
 	bool has_new_writer = aws_rds_bgd_find_writer(st.bg_map, new_writer);
 	aws_rds_bgd_add_green_writer_in_hg(st);
 
-	// Transfer the writer demotion when the refreshed configuration maps a different writer.
-	if (st.bgd_status == AWS_RDS_BGD_Status::WRITER_SWITCHOVER_IN_PROGRESS
-		&& (had_old_writer != has_new_writer
-			|| (had_old_writer && (old_writer.host != new_writer.host || old_writer.port != new_writer.port)))) {
-		if (had_old_writer) {
+	// Reapply the in-progress demotion after the configuration reload restores configured placement.
+	if (st.bgd_status == AWS_RDS_BGD_Status::WRITER_SWITCHOVER_IN_PROGRESS) {
+		bool writer_changed =
+			had_old_writer != has_new_writer ||
+			(had_old_writer && (old_writer.host != new_writer.host || old_writer.port != new_writer.port));
+		if (writer_changed && had_old_writer) {
 			MyHGM->read_only_action_v2(std::list<read_only_server_t> {
 				read_only_server_t { old_writer.host, (port_t)old_writer.port, 0 }
 			});
@@ -7766,9 +7770,7 @@ void MySQL_Monitor::aws_rds_bgd_hostgroup_action(
 		changed |= MyHGM->aws_rds_bgd_configure_writer(writer.host.c_str(), writer.port, writer_is_also_reader);
 		shun_readers = true;
 	} else if (bgd_status == AWS_RDS_BGD_Status::SWITCHOVER_COMPLETED) {
-		if (!writer_is_also_reader) {
-			changed |= (MyHGM->remove_server_in_hg(reader_hg, writer.host, writer.port) == 0);
-		}
+		changed |= MyHGM->aws_rds_bgd_configure_writer(writer.host.c_str(), writer.port, writer_is_also_reader);
 	} else {
 		MyHGM->wrunlock();
 		return;
@@ -7859,6 +7861,9 @@ void MySQL_Monitor::handle_aws_rds_bgd_post_switchover(AWS_RDS_BGD_State& st, bo
 	for (const AWS_RDS_BlueGreenPair& p : st.bg_map) {
 		dns_cache->remove(p.blue_host);
 		My_Conn_Pool->purge_connections(p.blue_host.c_str(), p.port);
+		if (!p.green_ip.empty()) {
+			My_Conn_Pool->purge_connections(p.green_ip.c_str(), p.port);
+		}
 	}
 
 	if (!rollback) {
