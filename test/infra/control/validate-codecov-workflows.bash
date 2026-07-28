@@ -6,7 +6,7 @@ EXPECTED_CONFIG="${2:-codecov.yml}"
 if [ "$#" -ge 3 ]; then
     EXPECTED_COMMIT="$3"
 else
-    EXPECTED_COMMIT='${{ env.SHA }}'
+    EXPECTED_COMMIT='${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
 fi
 
 mapfile -t WORKFLOWS < <(

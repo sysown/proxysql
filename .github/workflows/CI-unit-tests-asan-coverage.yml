@@ -183,7 +183,7 @@ jobs:
       uses: codecov/codecov-action@v4
       with:
         codecov_yml_path: codecov.yml
-        override_commit: ${{ env.SHA }}
+        override_commit: ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
         files: coverage/lcov.info
         flags: unit-tests
         name: unit-tests-asan-coverage
