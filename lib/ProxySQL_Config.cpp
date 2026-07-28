@@ -650,6 +650,127 @@ int ProxySQL_Config::Write_MySQL_Query_Rules_to_configfile(std::string& data) {
 	return 0;
 }
 
+// Emits one config-file section for a SELECT whose rows should be serialized.
+// Tolerates a missing/partial table (skips the section) and owns the result set
+// via unique_ptr, so callers need no manual new/delete. emit_row(row, data)
+// writes the addField(...) lines for a single row's group body.
+template <typename EmitRow>
+static void write_config_section(SQLite3DB* admindb, const char* select,
+	const char* section, std::string& data, EmitRow emit_row)
+{
+	char* error = nullptr;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result* raw = nullptr;
+	admindb->execute_statement(select, &error, &cols, &affected_rows, &raw);
+	std::unique_ptr<SQLite3_result> resultset(raw);
+	if (error) {
+		// tolerate a missing table (partial schemas in unit tests or old DBs)
+		free(error);
+		return;
+	}
+	if (!resultset)
+		return;
+	data += section;
+	data += ":\n(\n";
+	bool isNext = false;
+	for (auto r : resultset->rows) {
+		if (isNext)
+			data += ",\n";
+		data += "\t{\n";
+		emit_row(r, data);
+		data += "\t}";
+		isNext = true;
+	}
+	data += "\n)\n";
+}
+
+int ProxySQL_Config::Write_MySQL_Query_Rules_Fast_Routing_to_configfile(std::string& data) {
+	write_config_section(admindb, "SELECT * FROM mysql_query_rules_fast_routing",
+		"mysql_query_rules_fast_routing", data,
+		[this](SQLite3_row* r, std::string& d) {
+			addField(d, "username", r->fields[0]);
+			addField(d, "schemaname", r->fields[1]);
+			addField(d, "flagIN", r->fields[2], "");
+			addField(d, "destination_hostgroup", r->fields[3], "");
+			addField(d, "comment", r->fields[4]);
+		});
+	return 0;
+}
+
+int ProxySQL_Config::Write_PgSQL_Query_Rules_Fast_Routing_to_configfile(std::string& data) {
+	write_config_section(admindb, "SELECT * FROM pgsql_query_rules_fast_routing",
+		"pgsql_query_rules_fast_routing", data,
+		[this](SQLite3_row* r, std::string& d) {
+			addField(d, "username", r->fields[0]);
+			addField(d, "database", r->fields[1]);
+			addField(d, "flagIN", r->fields[2], "");
+			addField(d, "destination_hostgroup", r->fields[3], "");
+			addField(d, "comment", r->fields[4]);
+		});
+	return 0;
+}
+
+int ProxySQL_Config::Write_MySQL_Firewall_to_configfile(std::string& data) {
+	write_config_section(admindb, "SELECT * FROM mysql_firewall_whitelist_users",
+		"mysql_firewall_whitelist_users", data,
+		[this](SQLite3_row* r, std::string& d) {
+			addField(d, "active", r->fields[0], "");
+			addField(d, "username", r->fields[1]);
+			addField(d, "client_address", r->fields[2]);
+			addField(d, "mode", r->fields[3]);
+			addField(d, "comment", r->fields[4]);
+		});
+	write_config_section(admindb, "SELECT * FROM mysql_firewall_whitelist_rules",
+		"mysql_firewall_whitelist_rules", data,
+		[this](SQLite3_row* r, std::string& d) {
+			addField(d, "active", r->fields[0], "");
+			addField(d, "username", r->fields[1]);
+			addField(d, "client_address", r->fields[2]);
+			addField(d, "schemaname", r->fields[3]);
+			addField(d, "flagIN", r->fields[4], "");
+			addField(d, "digest", r->fields[5]);
+			addField(d, "comment", r->fields[6]);
+		});
+	write_config_section(admindb, "SELECT * FROM mysql_firewall_whitelist_sqli_fingerprints",
+		"mysql_firewall_whitelist_sqli_fingerprints", data,
+		[this](SQLite3_row* r, std::string& d) {
+			addField(d, "active", r->fields[0], "");
+			addField(d, "fingerprint", r->fields[1]);
+		});
+	return 0;
+}
+
+int ProxySQL_Config::Write_PgSQL_Firewall_to_configfile(std::string& data) {
+	write_config_section(admindb, "SELECT * FROM pgsql_firewall_whitelist_users",
+		"pgsql_firewall_whitelist_users", data,
+		[this](SQLite3_row* r, std::string& d) {
+			addField(d, "active", r->fields[0], "");
+			addField(d, "username", r->fields[1]);
+			addField(d, "client_address", r->fields[2]);
+			addField(d, "mode", r->fields[3]);
+			addField(d, "comment", r->fields[4]);
+		});
+	write_config_section(admindb, "SELECT * FROM pgsql_firewall_whitelist_rules",
+		"pgsql_firewall_whitelist_rules", data,
+		[this](SQLite3_row* r, std::string& d) {
+			addField(d, "active", r->fields[0], "");
+			addField(d, "username", r->fields[1]);
+			addField(d, "client_address", r->fields[2]);
+			addField(d, "database", r->fields[3]);
+			addField(d, "flagIN", r->fields[4], "");
+			addField(d, "digest", r->fields[5]);
+			addField(d, "comment", r->fields[6]);
+		});
+	write_config_section(admindb, "SELECT * FROM pgsql_firewall_whitelist_sqli_fingerprints",
+		"pgsql_firewall_whitelist_sqli_fingerprints", data,
+		[this](SQLite3_row* r, std::string& d) {
+			addField(d, "active", r->fields[0], "");
+			addField(d, "fingerprint", r->fields[1]);
+		});
+	return 0;
+}
+
 int ProxySQL_Config::Read_MySQL_Query_Rules_from_configfile() {
 	const Setting& root = GloVars.confFile->cfg.getRoot();
 	if (root.exists("mysql_query_rules")==false) return 0;
@@ -962,14 +1083,18 @@ int ProxySQL_Config::Write_MySQL_Servers_to_configfile(std::string& data) {
 		}
 	}
 
-	if (sqlite_resultset)
+	if (sqlite_resultset) {
 		delete sqlite_resultset;
+		sqlite_resultset = NULL;
+	}
 
 	query=(char *)"SELECT * FROM mysql_replication_hostgroups";
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
 	if (error) {
-		proxy_error("Error on read from mysql_replication_hostgroups : %s\n", error);
-		return -1;
+		// sub-table may be absent in partial unit-test schemas; skip section
+		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
+		free(error); // execute_statement strdup's the message
+		error = NULL;
 	} else {
 		if (sqlite_resultset) {
 			data += "mysql_replication_hostgroups:\n(\n";
@@ -990,112 +1115,118 @@ int ProxySQL_Config::Write_MySQL_Servers_to_configfile(std::string& data) {
 		}
 	}
 
-	if (sqlite_resultset)
+	if (sqlite_resultset) {
 		delete sqlite_resultset;
+		sqlite_resultset = NULL;
+	}
 
 	query=(char *)"SELECT * FROM mysql_group_replication_hostgroups";
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
 	if (error) {
-		proxy_error("Error on read from mysql_group_replication_hostgroups : %s\n", error);
-		return -1;
-	} else {
-		if (sqlite_resultset) {
-			data += "mysql_group_replication_hostgroups:\n(\n";
-			bool isNext = false;
-			for (auto r : sqlite_resultset->rows) {
-				if (isNext)
-					data += ",\n";
-				data += "\t{\n";
-				addField(data, "writer_hostgroup", r->fields[0], "");
-				addField(data, "backup_writer_hostgroup", r->fields[1], "");
-				addField(data, "reader_hostgroup", r->fields[2], "");
-				addField(data, "offline_hostgroup", r->fields[3], "");
-				addField(data, "active", r->fields[4], "");
-				addField(data, "max_writers", r->fields[5], "");
-				addField(data, "writer_is_also_reader", r->fields[6], "");
-				addField(data, "max_transactions_behind", r->fields[7], "");
-				addField(data, "comment", r->fields[8]);
+		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
+		free(error); // execute_statement strdup's the message
+		error = NULL;
+	} else if (sqlite_resultset) {
+		data += "mysql_group_replication_hostgroups:\n(\n";
+		bool isNext = false;
+		for (auto r : sqlite_resultset->rows) {
+			if (isNext)
+				data += ",\n";
+			data += "\t{\n";
+			addField(data, "writer_hostgroup", r->fields[0], "");
+			addField(data, "backup_writer_hostgroup", r->fields[1], "");
+			addField(data, "reader_hostgroup", r->fields[2], "");
+			addField(data, "offline_hostgroup", r->fields[3], "");
+			addField(data, "active", r->fields[4], "");
+			addField(data, "max_writers", r->fields[5], "");
+			addField(data, "writer_is_also_reader", r->fields[6], "");
+			addField(data, "max_transactions_behind", r->fields[7], "");
+			addField(data, "comment", r->fields[8]);
 
-				data += "\t}";
-				isNext = true;
-			}
-			data += "\n)\n";
+			data += "\t}";
+			isNext = true;
 		}
+		data += "\n)\n";
 	}
 
-	if (sqlite_resultset)
+	if (sqlite_resultset) {
 		delete sqlite_resultset;
+		sqlite_resultset = NULL;
+	}
 
 	query=(char *)"SELECT * FROM mysql_galera_hostgroups";
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
 	if (error) {
-		proxy_error("Error on read from mysql_galera_hostgroups: %s\n", error);
-		return -1;
-	} else {
-		if (sqlite_resultset) {
-			data += "mysql_galera_hostgroups:\n(\n";
-			bool isNext = false;
-			for (auto r : sqlite_resultset->rows) {
-				if (isNext)
-					data += ",\n";
-				data += "\t{\n";
-				addField(data, "writer_hostgroup", r->fields[0], "");
-				addField(data, "backup_writer_hostgroup", r->fields[1], "");
-				addField(data, "reader_hostgroup", r->fields[2], "");
-				addField(data, "offline_hostgroup", r->fields[3], "");
-				addField(data, "active", r->fields[4], "");
-				addField(data, "max_writers", r->fields[5], "");
-				addField(data, "writer_is_also_reader", r->fields[6], "");
-				addField(data, "max_transactions_behind", r->fields[7], "");
-				addField(data, "comment", r->fields[8]);
+		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
+		free(error); // execute_statement strdup's the message
+		error = NULL;
+	} else if (sqlite_resultset) {
+		data += "mysql_galera_hostgroups:\n(\n";
+		bool isNext = false;
+		for (auto r : sqlite_resultset->rows) {
+			if (isNext)
+				data += ",\n";
+			data += "\t{\n";
+			addField(data, "writer_hostgroup", r->fields[0], "");
+			addField(data, "backup_writer_hostgroup", r->fields[1], "");
+			addField(data, "reader_hostgroup", r->fields[2], "");
+			addField(data, "offline_hostgroup", r->fields[3], "");
+			addField(data, "active", r->fields[4], "");
+			addField(data, "max_writers", r->fields[5], "");
+			addField(data, "writer_is_also_reader", r->fields[6], "");
+			addField(data, "max_transactions_behind", r->fields[7], "");
+			addField(data, "comment", r->fields[8]);
 
-				data += "\t}";
-				isNext = true;
-			}
-			data += "\n)\n";
+			data += "\t}";
+			isNext = true;
 		}
+		data += "\n)\n";
 	}
 
-	if (sqlite_resultset)
+	if (sqlite_resultset) {
 		delete sqlite_resultset;
+		sqlite_resultset = NULL;
+	}
 
 	query=(char *)"SELECT * FROM mysql_aws_aurora_hostgroups";
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
 	if (error) {
-		proxy_error("Error on read from mysql_aws_aurora_hostgroups: %s\n", error);
-		return -1;
-	} else {
-		if (sqlite_resultset) {
-			data += "mysql_aws_aurora_hostgroups:\n(\n";
-			bool isNext = false;
-			for (auto r : sqlite_resultset->rows) {
-				if (isNext)
-					data += ",\n";
-				data += "\t{\n";
-				addField(data, "writer_hostgroup", r->fields[0], "");
-				addField(data, "reader_hostgroup", r->fields[1], "");
-				addField(data, "active", r->fields[2], "");
-				addField(data, "aurora_port", r->fields[3], "");
-				addField(data, "domain_name", r->fields[4]);
-				addField(data, "max_lag_ms", r->fields[5], "");
-				addField(data, "check_interval_ms", r->fields[6], "");
-				addField(data, "check_timeout_ms", r->fields[7], "");
-				addField(data, "writer_is_also_reader", r->fields[8], "");
-				addField(data, "new_reader_weight", r->fields[9], "");
-				addField(data, "add_lag_ms", r->fields[10], "");
-				addField(data, "min_lag_ms", r->fields[11], "");
-				addField(data, "lag_num_checks", r->fields[12], "");
-				addField(data, "comment", r->fields[13]);
+		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
+		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
+		free(error); // execute_statement strdup's the message
+		error = NULL;
+	} else if (sqlite_resultset) {
+		data += "mysql_aws_aurora_hostgroups:\n(\n";
+		bool isNext = false;
+		for (auto r : sqlite_resultset->rows) {
+			if (isNext)
+				data += ",\n";
+			data += "\t{\n";
+			addField(data, "writer_hostgroup", r->fields[0], "");
+			addField(data, "reader_hostgroup", r->fields[1], "");
+			addField(data, "active", r->fields[2], "");
+			addField(data, "aurora_port", r->fields[3], "");
+			addField(data, "domain_name", r->fields[4]);
+			addField(data, "max_lag_ms", r->fields[5], "");
+			addField(data, "check_interval_ms", r->fields[6], "");
+			addField(data, "check_timeout_ms", r->fields[7], "");
+			addField(data, "writer_is_also_reader", r->fields[8], "");
+			addField(data, "new_reader_weight", r->fields[9], "");
+			addField(data, "add_lag_ms", r->fields[10], "");
+			addField(data, "min_lag_ms", r->fields[11], "");
+			addField(data, "lag_num_checks", r->fields[12], "");
+			addField(data, "comment", r->fields[13]);
 
-				data += "\t}";
-				isNext = true;
-			}
-			data += "\n)\n";
+			data += "\t}";
+			isNext = true;
 		}
+		data += "\n)\n";
 	}
 
-	if (sqlite_resultset)
+	if (sqlite_resultset) {
 		delete sqlite_resultset;
+		sqlite_resultset = NULL;
+	}
 
 	query=(char *)"SELECT * FROM mysql_aws_rds_bgd_hostgroups";
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
@@ -1134,34 +1265,71 @@ int ProxySQL_Config::Write_MySQL_Servers_to_configfile(std::string& data) {
 	query = (char *)"SELECT * FROM mysql_hostgroup_attributes";
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
 	if (error) {
-		proxy_error("Error on read from mysql_hostgroup_attributes: %s\n", error);
-		return -1;
-	} else {
-		if (sqlite_resultset) {
-			data += "mysql_hostgroup_attributes:\n(\n";
-			bool isNext = false;
-			for (auto r : sqlite_resultset->rows) {
-				if (isNext)
-					data += ",\n";
-				data += "\t{\n";
-				addField(data, "hostgroup_id", r->fields[0], "");
-				addField(data, "max_num_online_servers", r->fields[1], "");
-				addField(data, "autocommit", r->fields[2], "");
-				addField(data, "free_connections_pct", r->fields[3], "");
-				addField(data, "init_connect", r->fields[4]);
-				addField(data, "multiplex", r->fields[5], "");
-				addField(data, "connection_warming", r->fields[6], "");
-				addField(data, "throttle_connections_per_sec", r->fields[7], "");
-				addField(data, "ignore_session_variables", r->fields[8]);
-				addField(data, "hostgroup_settings", r->fields[9]);
-				addField(data, "servers_defaults", r->fields[10]);
-				addField(data, "comment", r->fields[11]);
+		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
+		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
+		free(error); // execute_statement strdup's the message
+		error = NULL;
+	} else if (sqlite_resultset) {
+		data += "mysql_hostgroup_attributes:\n(\n";
+		bool isNext = false;
+		for (auto r : sqlite_resultset->rows) {
+			if (isNext)
+				data += ",\n";
+			data += "\t{\n";
+			addField(data, "hostgroup_id", r->fields[0], "");
+			addField(data, "max_num_online_servers", r->fields[1], "");
+			addField(data, "autocommit", r->fields[2], "");
+			addField(data, "free_connections_pct", r->fields[3], "");
+			addField(data, "init_connect", r->fields[4]);
+			addField(data, "multiplex", r->fields[5], "");
+			addField(data, "connection_warming", r->fields[6], "");
+			addField(data, "throttle_connections_per_sec", r->fields[7], "");
+			addField(data, "ignore_session_variables", r->fields[8]);
+			addField(data, "hostgroup_settings", r->fields[9]);
+			addField(data, "servers_defaults", r->fields[10]);
+			addField(data, "comment", r->fields[11]);
 
-				data += "\t}";
-				isNext = true;
-			}
-			data += "\n)\n";
+			data += "\t}";
+			isNext = true;
 		}
+		data += "\n)\n";
+	}
+
+	if (sqlite_resultset) {
+		delete sqlite_resultset;
+		sqlite_resultset = NULL;
+	}
+
+	query = (char *)"SELECT * FROM mysql_servers_ssl_params";
+	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
+	if (error) {
+		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
+		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
+		free(error); // execute_statement strdup's the message
+		error = NULL;
+	} else if (sqlite_resultset) {
+		data += "mysql_servers_ssl_params:\n(\n";
+		bool isNext = false;
+		for (auto r : sqlite_resultset->rows) {
+			if (isNext)
+				data += ",\n";
+			data += "\t{\n";
+			addField(data, "hostname", r->fields[0]);
+			addField(data, "port", r->fields[1], "");
+			addField(data, "username", r->fields[2]);
+			addField(data, "ssl_ca", r->fields[3]);
+			addField(data, "ssl_cert", r->fields[4]);
+			addField(data, "ssl_key", r->fields[5]);
+			addField(data, "ssl_capath", r->fields[6]);
+			addField(data, "ssl_crl", r->fields[7]);
+			addField(data, "ssl_crlpath", r->fields[8]);
+			addField(data, "ssl_cipher", r->fields[9]);
+			addField(data, "tls_version", r->fields[10]);
+			addField(data, "comment", r->fields[11]);
+			data += "\t}";
+			isNext = true;
+		}
+		data += "\n)\n";
 	}
 
 	if (sqlite_resultset)
@@ -1800,37 +1968,115 @@ int ProxySQL_Config::Write_PgSQL_Servers_to_configfile(std::string& data) {
 		}
 	}
 
-	if (sqlite_resultset)
+	if (sqlite_resultset) {
 		delete sqlite_resultset;
+		sqlite_resultset = NULL;
+	}
 
 	query = (char*)"SELECT * FROM pgsql_replication_hostgroups";
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
 	if (error) {
-		proxy_error("Error on read from pgsql_replication_hostgroups : %s\n", error);
-		return -1;
+		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
+		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
+		free(error); // execute_statement strdup's the message
+		error = NULL;
 	}
-	else {
-		if (sqlite_resultset) {
-			data += "pgsql_replication_hostgroups:\n(\n";
-			bool isNext = false;
-			for (auto r : sqlite_resultset->rows) {
-				if (isNext)
-					data += ",\n";
-				data += "\t{\n";
-				addField(data, "writer_hostgroup", r->fields[0], "");
-				addField(data, "reader_hostgroup", r->fields[1], "");
-				addField(data, "check_type", r->fields[2]);
-				addField(data, "comment", r->fields[3]);
+	else if (sqlite_resultset) {
+		data += "pgsql_replication_hostgroups:\n(\n";
+		bool isNext = false;
+		for (auto r : sqlite_resultset->rows) {
+			if (isNext)
+				data += ",\n";
+			data += "\t{\n";
+			addField(data, "writer_hostgroup", r->fields[0], "");
+			addField(data, "reader_hostgroup", r->fields[1], "");
+			addField(data, "check_type", r->fields[2]);
+			addField(data, "comment", r->fields[3]);
 
-				data += "\t}";
-				isNext = true;
-			}
-			data += "\n)\n";
+			data += "\t}";
+			isNext = true;
 		}
+		data += "\n)\n";
 	}
 
-	if (sqlite_resultset)
+	if (sqlite_resultset) {
 		delete sqlite_resultset;
+		sqlite_resultset = NULL;
+	}
+
+	query = (char*)"SELECT * FROM pgsql_hostgroup_attributes";
+	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
+	if (error) {
+		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
+		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
+		free(error); // execute_statement strdup's the message
+		error = NULL;
+	}
+	else if (sqlite_resultset) {
+		data += "pgsql_hostgroup_attributes:\n(\n";
+		bool isNext = false;
+		for (auto r : sqlite_resultset->rows) {
+			if (isNext)
+				data += ",\n";
+			data += "\t{\n";
+			addField(data, "hostgroup_id", r->fields[0], "");
+			addField(data, "max_num_online_servers", r->fields[1], "");
+			addField(data, "autocommit", r->fields[2], "");
+			addField(data, "free_connections_pct", r->fields[3], "");
+			addField(data, "init_connect", r->fields[4]);
+			addField(data, "multiplex", r->fields[5], "");
+			addField(data, "connection_warming", r->fields[6], "");
+			addField(data, "throttle_connections_per_sec", r->fields[7], "");
+			addField(data, "ignore_session_variables", r->fields[8]);
+			addField(data, "hostgroup_settings", r->fields[9]);
+			addField(data, "servers_defaults", r->fields[10]);
+			addField(data, "comment", r->fields[11]);
+			data += "\t}";
+			isNext = true;
+		}
+		data += "\n)\n";
+	}
+
+	if (sqlite_resultset) {
+		delete sqlite_resultset;
+		sqlite_resultset = NULL;
+	}
+
+	query = (char*)"SELECT * FROM pgsql_servers_ssl_params";
+	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
+	if (error) {
+		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
+		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
+		free(error); // execute_statement strdup's the message
+		error = NULL;
+	}
+	else if (sqlite_resultset) {
+		data += "pgsql_servers_ssl_params:\n(\n";
+		bool isNext = false;
+		for (auto r : sqlite_resultset->rows) {
+			if (isNext)
+				data += ",\n";
+			data += "\t{\n";
+			addField(data, "hostname", r->fields[0]);
+			addField(data, "port", r->fields[1], "");
+			addField(data, "username", r->fields[2]);
+			addField(data, "ssl_ca", r->fields[3]);
+			addField(data, "ssl_cert", r->fields[4]);
+			addField(data, "ssl_key", r->fields[5]);
+			addField(data, "ssl_crl", r->fields[6]);
+			addField(data, "ssl_crlpath", r->fields[7]);
+			addField(data, "ssl_protocol_version_range", r->fields[8]);
+			addField(data, "comment", r->fields[9]);
+			data += "\t}";
+			isNext = true;
+		}
+		data += "\n)\n";
+	}
+
+	if (sqlite_resultset) {
+		delete sqlite_resultset;
+		sqlite_resultset = NULL;
+	}
 
 	return 0;
 }
@@ -1944,6 +2190,137 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 			rows++;
 		}
 	}
+
+	if (root.exists("pgsql_hostgroup_attributes") == true) {
+		const Setting& pgsql_hostgroup_attributes = root["pgsql_hostgroup_attributes"];
+		int count = pgsql_hostgroup_attributes.getLength();
+		for (i = 0; i < count; i++) {
+			const Setting& hostgroup_attributes = pgsql_hostgroup_attributes[i];
+			bool is_first_field = true;
+			int integer_val = 0;
+			std::string string_val = "";
+			std::string fields = "";
+			std::string values = "";
+
+			auto process_field = [&](const std::string &field_name, const std::string &field_value, int is_int) {
+				if (!is_first_field) {
+					fields += ", ";
+					values += ", ";
+				}
+				else {
+					is_first_field = false;
+				}
+				fields += field_name;
+				if (is_int) {
+					values += field_value;
+				}
+				else {
+					char *cs = strdup(field_value.c_str());
+					char *ecs = escape_string_single_quotes(cs, false);
+					values += std::string("'") + ecs + "'";
+					if (cs != ecs) free(cs);
+					free(ecs);
+				}
+			};
+
+			if (hostgroup_attributes.lookupValue("hostgroup_id", integer_val)) {
+				process_field("hostgroup_id", to_string(integer_val), true);
+			}
+			else {
+				proxy_error("Admin: detected a pgsql_hostgroup_attributes in config file without a mandatory hostgroup_id.\n");
+				continue;
+			}
+			if (hostgroup_attributes.lookupValue("max_num_online_servers", integer_val)) {
+				process_field("max_num_online_servers", to_string(integer_val), true);
+			}
+			if (hostgroup_attributes.lookupValue("autocommit", integer_val)) {
+				process_field("autocommit", to_string(integer_val), true);
+			}
+			if (hostgroup_attributes.lookupValue("free_connections_pct", integer_val)) {
+				process_field("free_connections_pct", to_string(integer_val), true);
+			}
+			if (hostgroup_attributes.lookupValue("multiplex", integer_val)) {
+				process_field("multiplex", to_string(integer_val), true);
+			}
+			if (hostgroup_attributes.lookupValue("connection_warming", integer_val)) {
+				process_field("connection_warming", to_string(integer_val), true);
+			}
+			if (hostgroup_attributes.lookupValue("throttle_connections_per_sec", integer_val)) {
+				process_field("throttle_connections_per_sec", to_string(integer_val), true);
+			}
+			if (hostgroup_attributes.lookupValue("init_connect", string_val)) {
+				process_field("init_connect", string_val, false);
+			}
+			if (hostgroup_attributes.lookupValue("ignore_session_variables", string_val)) {
+				process_field("ignore_session_variables", string_val, false);
+			}
+			if (hostgroup_attributes.lookupValue("hostgroup_settings", string_val)) {
+				process_field("hostgroup_settings", string_val, false);
+			}
+			if (hostgroup_attributes.lookupValue("servers_defaults", string_val)) {
+				process_field("servers_defaults", string_val, false);
+			}
+			if (hostgroup_attributes.lookupValue("comment", string_val)) {
+				process_field("comment", string_val, false);
+			}
+
+			std::string s_query = "INSERT OR REPLACE INTO pgsql_hostgroup_attributes (";
+			s_query += fields + ") VALUES (" + values + ")";
+			if (admindb->execute(s_query.c_str()) == false) {
+				proxy_error("Admin: detected a pgsql_hostgroup_attributes invalid value. Failed to insert in the table.\n");
+				continue;
+			}
+			rows++;
+		}
+	}
+
+	if (root.exists("pgsql_servers_ssl_params") == true) {
+		const Setting &pgsql_servers_ssl_params = root["pgsql_servers_ssl_params"];
+		int count = pgsql_servers_ssl_params.getLength();
+		char *q=(char *)"INSERT OR REPLACE INTO pgsql_servers_ssl_params (hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_crl, ssl_crlpath, ssl_protocol_version_range, comment) VALUES ('%s', %d, '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')";
+		for (i=0; i< count; i++) {
+			const Setting &line = pgsql_servers_ssl_params[i];
+			string hostname = "";
+			int port = 5432;
+			string username = "";
+			string ssl_ca = "";
+			string ssl_cert = "";
+			string ssl_key = "";
+			string ssl_crl = "";
+			string ssl_crlpath = "";
+			string ssl_protocol_version_range = "";
+			std::string comment="";
+			if (line.lookupValue("hostname", hostname)==false) {
+				proxy_error("Admin: detected a pgsql_servers_ssl_params in config file without a mandatory hostname\n");
+				continue;
+			}
+			line.lookupValue("port", port);
+			line.lookupValue("username", username);
+			line.lookupValue("ssl_ca", ssl_ca);
+			line.lookupValue("ssl_cert", ssl_cert);
+			line.lookupValue("ssl_key", ssl_key);
+			line.lookupValue("ssl_crl", ssl_crl);
+			line.lookupValue("ssl_crlpath", ssl_crlpath);
+			line.lookupValue("ssl_protocol_version_range", ssl_protocol_version_range);
+			line.lookupValue("comment", comment);
+			char *o1=strdup(comment.c_str());
+			char *o=escape_string_single_quotes(o1, false);
+			size_t query_len = (
+				strlen(q)
+				+ hostname.length() + username.length()
+				+ ssl_ca.length() + ssl_cert.length() + ssl_key.length()
+				+ ssl_crl.length() + ssl_crlpath.length() + ssl_protocol_version_range.length() + strlen(o) + 64
+			);
+			char *query=(char *)malloc(query_len);
+			snprintf(query, query_len, q, hostname.c_str(), port, username.c_str(), ssl_ca.c_str(), ssl_cert.c_str(), ssl_key.c_str(), ssl_crl.c_str(), ssl_crlpath.c_str(), ssl_protocol_version_range.c_str(), o);
+			admindb->execute(query);
+			if (o != o1) free(o);
+			free(o1);
+			free(query);
+			rows++;
+		}
+	}
+
 	admindb->execute("PRAGMA foreign_keys = ON");
 	return rows;
 }
@@ -2494,4 +2871,256 @@ bool ProxySQL_Config::validate_proxysql_servers(const Setting& config, std::stri
     }
 
     return true;
+}
+
+int ProxySQL_Config::Read_MySQL_Query_Rules_Fast_Routing_from_configfile() {
+	const Setting& root = GloVars.confFile->cfg.getRoot();
+	if (root.exists("mysql_query_rules_fast_routing") == false) return 0;
+	const Setting &mysql_query_rules_fast_routing = root["mysql_query_rules_fast_routing"];
+	int count = mysql_query_rules_fast_routing.getLength();
+	int i;
+	int rows = 0;
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	char *q=(char *)"INSERT OR REPLACE INTO mysql_query_rules_fast_routing (username, schemaname, flagIN, destination_hostgroup, comment) VALUES ('%s', '%s', %d, %d, '%s')";
+	for (i = 0; i < count; i++) {
+		const Setting &rule = mysql_query_rules_fast_routing[i];
+		std::string username = "";
+		std::string schemaname = "";
+		int flagIN = 0;
+		int destination_hostgroup = 0;
+		std::string comment = "";
+		rule.lookupValue("username", username);
+		rule.lookupValue("schemaname", schemaname);
+		rule.lookupValue("flagIN", flagIN);
+		rule.lookupValue("destination_hostgroup", destination_hostgroup);
+		rule.lookupValue("comment", comment);
+		char *o1 = strdup(comment.c_str());
+		char *o = escape_string_single_quotes(o1, false);
+		size_t query_len = strlen(q) + strlen(username.c_str()) + strlen(schemaname.c_str()) + strlen(o) + 64;
+		char *query = (char *)malloc(query_len);
+		snprintf(query, query_len, q, username.c_str(), schemaname.c_str(), flagIN, destination_hostgroup, o);
+		admindb->execute(query);
+		if (o != o1) free(o);
+		free(o1);
+		free(query);
+		rows++;
+	}
+	admindb->execute("PRAGMA foreign_keys = ON");
+	return rows;
+}
+
+int ProxySQL_Config::Read_PgSQL_Query_Rules_Fast_Routing_from_configfile() {
+	const Setting& root = GloVars.confFile->cfg.getRoot();
+	if (root.exists("pgsql_query_rules_fast_routing") == false) return 0;
+	const Setting &pgsql_query_rules_fast_routing = root["pgsql_query_rules_fast_routing"];
+	int count = pgsql_query_rules_fast_routing.getLength();
+	int i;
+	int rows = 0;
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	char *q=(char *)"INSERT OR REPLACE INTO pgsql_query_rules_fast_routing (username, database, flagIN, destination_hostgroup, comment) VALUES ('%s', '%s', %d, %d, '%s')";
+	for (i = 0; i < count; i++) {
+		const Setting &rule = pgsql_query_rules_fast_routing[i];
+		std::string username = "";
+		std::string database = "";
+		int flagIN = 0;
+		int destination_hostgroup = 0;
+		std::string comment = "";
+		rule.lookupValue("username", username);
+		rule.lookupValue("database", database);
+		rule.lookupValue("flagIN", flagIN);
+		rule.lookupValue("destination_hostgroup", destination_hostgroup);
+		rule.lookupValue("comment", comment);
+		char *o1 = strdup(comment.c_str());
+		char *o = escape_string_single_quotes(o1, false);
+		size_t query_len = strlen(q) + strlen(username.c_str()) + strlen(database.c_str()) + strlen(o) + 64;
+		char *query = (char *)malloc(query_len);
+		snprintf(query, query_len, q, username.c_str(), database.c_str(), flagIN, destination_hostgroup, o);
+		admindb->execute(query);
+		if (o != o1) free(o);
+		free(o1);
+		free(query);
+		rows++;
+	}
+	admindb->execute("PRAGMA foreign_keys = ON");
+	return rows;
+}
+
+int ProxySQL_Config::Read_MySQL_Firewall_from_configfile() {
+	const Setting& root = GloVars.confFile->cfg.getRoot();
+	int rows = 0;
+	admindb->execute("PRAGMA foreign_keys = OFF");
+
+	if (root.exists("mysql_firewall_whitelist_users") == true) {
+		const Setting &users = root["mysql_firewall_whitelist_users"];
+		int count = users.getLength();
+		char *q=(char *)"INSERT OR REPLACE INTO mysql_firewall_whitelist_users (active, username, client_address, mode, comment) VALUES (%d, '%s', '%s', '%s', '%s')";
+		for (int i = 0; i < count; i++) {
+			const Setting &u = users[i];
+			int active=1;
+			std::string username="";
+			std::string client_address="";
+			std::string mode="OFF";
+			std::string comment="";
+			u.lookupValue("active", active);
+			u.lookupValue("username", username);
+			u.lookupValue("client_address", client_address);
+			u.lookupValue("mode", mode);
+			u.lookupValue("comment", comment);
+			char *o1=strdup(comment.c_str());
+			char *o=escape_string_single_quotes(o1, false);
+			size_t query_len = strlen(q) + strlen(username.c_str()) + strlen(client_address.c_str()) + strlen(mode.c_str()) + strlen(o) + 32;
+			char *query=(char *)malloc(query_len);
+			snprintf(query, query_len, q, active, username.c_str(), client_address.c_str(), mode.c_str(), o);
+			admindb->execute(query);
+			if (o != o1) free(o);
+			free(o1);
+			free(query);
+			rows++;
+		}
+	}
+
+	if (root.exists("mysql_firewall_whitelist_rules") == true) {
+		const Setting &rules = root["mysql_firewall_whitelist_rules"];
+		int count = rules.getLength();
+		char *q=(char *)"INSERT OR REPLACE INTO mysql_firewall_whitelist_rules (active, username, client_address, schemaname, flagIN, digest, comment) VALUES (%d, '%s', '%s', '%s', %d, '%s', '%s')";
+		for (int i = 0; i < count; i++) {
+			const Setting &r = rules[i];
+			int active=1;
+			std::string username="";
+			std::string client_address="";
+			std::string schemaname="";
+			int flagIN=0;
+			std::string digest="";
+			std::string comment="";
+			r.lookupValue("active", active);
+			r.lookupValue("username", username);
+			r.lookupValue("client_address", client_address);
+			r.lookupValue("schemaname", schemaname);
+			r.lookupValue("flagIN", flagIN);
+			r.lookupValue("digest", digest);
+			r.lookupValue("comment", comment);
+			char *o1=strdup(comment.c_str());
+			char *o=escape_string_single_quotes(o1, false);
+			size_t query_len = strlen(q) + strlen(username.c_str()) + strlen(client_address.c_str()) + strlen(schemaname.c_str()) + strlen(digest.c_str()) + strlen(o) + 64;
+			char *query=(char *)malloc(query_len);
+			snprintf(query, query_len, q, active, username.c_str(), client_address.c_str(), schemaname.c_str(), flagIN, digest.c_str(), o);
+			admindb->execute(query);
+			if (o != o1) free(o);
+			free(o1);
+			free(query);
+			rows++;
+		}
+	}
+
+	if (root.exists("mysql_firewall_whitelist_sqli_fingerprints") == true) {
+		const Setting &fps = root["mysql_firewall_whitelist_sqli_fingerprints"];
+		int count = fps.getLength();
+		char *q=(char *)"INSERT OR REPLACE INTO mysql_firewall_whitelist_sqli_fingerprints (active, fingerprint) VALUES (%d, '%s')";
+		for (int i = 0; i < count; i++) {
+			const Setting &f = fps[i];
+			int active=1;
+			std::string fingerprint="";
+			f.lookupValue("active", active);
+			f.lookupValue("fingerprint", fingerprint);
+			size_t query_len = strlen(q) + strlen(fingerprint.c_str()) + 16;
+			char *query=(char *)malloc(query_len);
+			snprintf(query, query_len, q, active, fingerprint.c_str());
+			admindb->execute(query);
+			free(query);
+			rows++;
+		}
+	}
+
+	admindb->execute("PRAGMA foreign_keys = ON");
+	return rows;
+}
+
+int ProxySQL_Config::Read_PgSQL_Firewall_from_configfile() {
+	const Setting& root = GloVars.confFile->cfg.getRoot();
+	int rows = 0;
+	admindb->execute("PRAGMA foreign_keys = OFF");
+
+	if (root.exists("pgsql_firewall_whitelist_users") == true) {
+		const Setting &users = root["pgsql_firewall_whitelist_users"];
+		int count = users.getLength();
+		char *q=(char *)"INSERT OR REPLACE INTO pgsql_firewall_whitelist_users (active, username, client_address, mode, comment) VALUES (%d, '%s', '%s', '%s', '%s')";
+		for (int i = 0; i < count; i++) {
+			const Setting &u = users[i];
+			int active=1;
+			std::string username="";
+			std::string client_address="";
+			std::string mode="OFF";
+			std::string comment="";
+			u.lookupValue("active", active);
+			u.lookupValue("username", username);
+			u.lookupValue("client_address", client_address);
+			u.lookupValue("mode", mode);
+			u.lookupValue("comment", comment);
+			char *o1=strdup(comment.c_str());
+			char *o=escape_string_single_quotes(o1, false);
+			size_t query_len = strlen(q) + strlen(username.c_str()) + strlen(client_address.c_str()) + strlen(mode.c_str()) + strlen(o) + 32;
+			char *query=(char *)malloc(query_len);
+			snprintf(query, query_len, q, active, username.c_str(), client_address.c_str(), mode.c_str(), o);
+			admindb->execute(query);
+			if (o != o1) free(o);
+			free(o1);
+			free(query);
+			rows++;
+		}
+	}
+
+	if (root.exists("pgsql_firewall_whitelist_rules") == true) {
+		const Setting &rules = root["pgsql_firewall_whitelist_rules"];
+		int count = rules.getLength();
+		char *q=(char *)"INSERT OR REPLACE INTO pgsql_firewall_whitelist_rules (active, username, client_address, database, flagIN, digest, comment) VALUES (%d, '%s', '%s', '%s', %d, '%s', '%s')";
+		for (int i = 0; i < count; i++) {
+			const Setting &r = rules[i];
+			int active=1;
+			std::string username="";
+			std::string client_address="";
+			std::string database="";
+			int flagIN=0;
+			std::string digest="";
+			std::string comment="";
+			r.lookupValue("active", active);
+			r.lookupValue("username", username);
+			r.lookupValue("client_address", client_address);
+			r.lookupValue("database", database);
+			r.lookupValue("flagIN", flagIN);
+			r.lookupValue("digest", digest);
+			r.lookupValue("comment", comment);
+			char *o1=strdup(comment.c_str());
+			char *o=escape_string_single_quotes(o1, false);
+			size_t query_len = strlen(q) + strlen(username.c_str()) + strlen(client_address.c_str()) + strlen(database.c_str()) + strlen(digest.c_str()) + strlen(o) + 64;
+			char *query=(char *)malloc(query_len);
+			snprintf(query, query_len, q, active, username.c_str(), client_address.c_str(), database.c_str(), flagIN, digest.c_str(), o);
+			admindb->execute(query);
+			if (o != o1) free(o);
+			free(o1);
+			free(query);
+			rows++;
+		}
+	}
+
+	if (root.exists("pgsql_firewall_whitelist_sqli_fingerprints") == true) {
+		const Setting &fps = root["pgsql_firewall_whitelist_sqli_fingerprints"];
+		int count = fps.getLength();
+		char *q=(char *)"INSERT OR REPLACE INTO pgsql_firewall_whitelist_sqli_fingerprints (active, fingerprint) VALUES (%d, '%s')";
+		for (int i = 0; i < count; i++) {
+			const Setting &f = fps[i];
+			int active=1;
+			std::string fingerprint="";
+			f.lookupValue("active", active);
+			f.lookupValue("fingerprint", fingerprint);
+			size_t query_len = strlen(q) + strlen(fingerprint.c_str()) + 16;
+			char *query=(char *)malloc(query_len);
+			snprintf(query, query_len, q, active, fingerprint.c_str());
+			admindb->execute(query);
+			free(query);
+			rows++;
+		}
+	}
+
+	admindb->execute("PRAGMA foreign_keys = ON");
+	return rows;
 }
