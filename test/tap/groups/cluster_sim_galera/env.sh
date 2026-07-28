@@ -8,6 +8,7 @@ export CLUSTER_SIM_TESTS_ROOT="${WORKSPACE}/test/deps/cluster_simulator/tests"
 # username/password match what enable_galera_testing() inserts (galera1/pass1).
 export GALERA_HOSTNAME=proxysql
 export GALERA_PORT=3306
+export PROXYSQL_READY_PORTS_EXTRA="3306"
 
 # Skip the background cluster nodes so their empty mysql_users do not sync
 # back to the primary and wipe galera1/2/galera.
