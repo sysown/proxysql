@@ -61,6 +61,7 @@ jobs:
         ref: ${{ env.SHA }}
         path: 'proxysql'
         sparse-checkout: |
+          codecov.yml
           test/infra
           test/tap/groups
           test/scripts
@@ -260,6 +261,7 @@ jobs:
       uses: codecov/codecov-action@v4
       with:
         codecov_yml_path: proxysql/codecov.yml
+        override_commit: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
         files: proxysql/ci_infra_logs/ci-legacy-g2-genai/coverage-report/ci-legacy-g2-genai.info
         flags: tap-legacy-g2
         name: tap-legacy-g2-genai-coverage
