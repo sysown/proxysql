@@ -1551,7 +1551,6 @@ bool MySQL_HostGroups_Manager::commit(
 		// AWS RDS
 		if (incoming_aws_rds_bgd_hostgroups) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_aws_rds_bgd_hostgroups\n");
-			mydb->execute("DELETE FROM mysql_aws_rds_bgd_hostgroups");
 			generate_mysql_aws_rds_bgd_hostgroups_table();
 		}
 
@@ -6500,24 +6499,88 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
  * @details The incoming resultset comes from the admin config table (11 columns, no `auto_generated`); config-loaded
  * entries are user-defined, so `auto_generated` is stored as 0. `green_writer_hostgroup` and
  * `green_reader_hostgroup` are optional and bound as SQL NULL when absent.
+ *
+ * @note Existing deployments preserve their runtime `status` while configured fields are reloaded.
  */
 void MySQL_HostGroups_Manager::generate_mysql_aws_rds_bgd_hostgroups_table() {
 	if (incoming_aws_rds_bgd_hostgroups==NULL) {
 		return;
 	}
 
-	int rc;
-	char *query=(char *)"INSERT INTO mysql_aws_rds_bgd_hostgroups(writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,"
-						"writer_is_also_reader,check_interval_ms,check_timeout_ms,comment,auto_generated) VALUES "
-						"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
+	struct RuntimeRow {
+		int reader_hostgroup;
+		int status;
+	};
 
-	auto [rc1, statement_unique] = mydb->prepare_v2(query);
-	ASSERT_SQLITE_OK(rc1, mydb);
-	sqlite3_stmt *statement = statement_unique.get();
+	std::map<int, RuntimeRow> runtime_rows;
+	std::map<int, int> incoming_reader_hostgroups;
+
+	for (SQLite3_row* row : incoming_aws_rds_bgd_hostgroups->rows) {
+		incoming_reader_hostgroups.emplace(atoi(row->fields[0]), atoi(row->fields[1]));
+	}
+
+	char* error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result* resultset = NULL;
+	const char* select_query = "SELECT writer_hostgroup, reader_hostgroup, status FROM mysql_aws_rds_bgd_hostgroups";
+	mydb->execute_statement(select_query, &error, &cols, &affected_rows, &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", select_query, error);
+		free(error);
+		error = NULL;
+		assert(0);
+	}
+	if (resultset) {
+		for (SQLite3_row* row : resultset->rows) {
+			runtime_rows.emplace(atoi(row->fields[0]), RuntimeRow {atoi(row->fields[1]), atoi(row->fields[2])});
+		}
+		delete resultset;
+		resultset = NULL;
+	}
+
+	int rc;
+	const char* delete_query = "DELETE FROM mysql_aws_rds_bgd_hostgroups WHERE writer_hostgroup=?1";
+	auto [delete_rc, delete_statement_unique] = mydb->prepare_v2(delete_query);
+	ASSERT_SQLITE_OK(delete_rc, mydb);
+	sqlite3_stmt* delete_statement = delete_statement_unique.get();
+
+	// Remove missing deployments and release changed reader hostgroups before inserting their replacements.
+	for (const auto& [writer_hostgroup, runtime_row] : runtime_rows) {
+		auto incoming_it = incoming_reader_hostgroups.find(writer_hostgroup);
+		bool removed = incoming_it == incoming_reader_hostgroups.end();
+		bool reader_changed = !removed && incoming_it->second != runtime_row.reader_hostgroup;
+		if (!removed && !reader_changed) {
+			continue;
+		}
+
+		rc=(*proxy_sqlite3_bind_int64)(delete_statement, 1, writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+		SAFE_SQLITE3_STEP2(delete_statement);
+		rc=(*proxy_sqlite3_clear_bindings)(delete_statement); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_reset)(delete_statement); ASSERT_SQLITE_OK(rc, mydb);
+	}
+
+	const char* update_query =
+		"UPDATE mysql_aws_rds_bgd_hostgroups SET "
+			"reader_hostgroup=?1, green_writer_hostgroup=?2, green_reader_hostgroup=?3, active=?4, "
+			"writer_is_also_reader=?5, check_interval_ms=?6, check_timeout_ms=?7, comment=?8, auto_generated=?9 "
+		"WHERE writer_hostgroup=?10";
+	auto [update_rc, update_statement_unique] = mydb->prepare_v2(update_query);
+	ASSERT_SQLITE_OK(update_rc, mydb);
+	sqlite3_stmt* update_statement = update_statement_unique.get();
+
+	const char* insert_query =
+		"INSERT INTO mysql_aws_rds_bgd_hostgroups("
+			"writer_hostgroup, reader_hostgroup, green_writer_hostgroup, green_reader_hostgroup, active,"
+			"writer_is_also_reader, check_interval_ms, check_timeout_ms, comment, auto_generated, status"
+		") VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+	auto [insert_rc, insert_statement_unique] = mydb->prepare_v2(insert_query);
+	ASSERT_SQLITE_OK(insert_rc, mydb);
+	sqlite3_stmt* insert_statement = insert_statement_unique.get();
+
 	proxy_info("New mysql_aws_rds_bgd_hostgroups table\n");
 
-	for (std::vector<SQLite3_row *>::iterator it = incoming_aws_rds_bgd_hostgroups->rows.begin() ; it != incoming_aws_rds_bgd_hostgroups->rows.end(); ++it) {
-		SQLite3_row *r=*it;
+	for (SQLite3_row* r : incoming_aws_rds_bgd_hostgroups->rows) {
 		int writer_hostgroup=atoi(r->fields[0]);
 		int reader_hostgroup=atoi(r->fields[1]);
 		const char *gw_str = r->fields[2];
@@ -6533,26 +6596,45 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_rds_bgd_hostgroups_table() {
 		proxy_info("Loading AWS RDS info for (%d,%d,%d,%d,%s,%d,%d,%d,%d,\"%s\")\n", writer_hostgroup,reader_hostgroup,
 				   green_writer_hostgroup,green_reader_hostgroup,(active ? "on" : "off"),writer_is_also_reader,
 				   check_interval_ms,check_timeout_ms,auto_generated,r->fields[8]);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 1, writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 2, reader_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+
+		auto runtime_it = runtime_rows.find(writer_hostgroup);
+		bool update_existing =
+			runtime_it != runtime_rows.end() &&
+			runtime_it->second.reader_hostgroup == reader_hostgroup;
+		sqlite3_stmt* statement = update_existing ? update_statement : insert_statement;
+		int field_offset = update_existing ? 0 : 1;
+
+		if (!update_existing) {
+			rc=(*proxy_sqlite3_bind_int64)(statement, 1, writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+		}
+		rc=(*proxy_sqlite3_bind_int64)(statement, 1 + field_offset, reader_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
 		if (green_writer_hostgroup >= 0) {
-			rc=(*proxy_sqlite3_bind_int64)(statement, 3, green_writer_hostgroup);
+			rc=(*proxy_sqlite3_bind_int64)(statement, 2 + field_offset, green_writer_hostgroup);
 		} else {
-			rc=(*proxy_sqlite3_bind_null)(statement, 3);
+			rc=(*proxy_sqlite3_bind_null)(statement, 2 + field_offset);
 		}
 		ASSERT_SQLITE_OK(rc, mydb);
 		if (green_reader_hostgroup >= 0) {
-			rc=(*proxy_sqlite3_bind_int64)(statement, 4, green_reader_hostgroup);
+			rc=(*proxy_sqlite3_bind_int64)(statement, 3 + field_offset, green_reader_hostgroup);
 		} else {
-			rc=(*proxy_sqlite3_bind_null)(statement, 4);
+			rc=(*proxy_sqlite3_bind_null)(statement, 3 + field_offset);
 		}
 		ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 5, active); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 6, writer_is_also_reader); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 7, check_interval_ms); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 8, check_timeout_ms); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_text)(statement, 9, r->fields[8], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 10, auto_generated); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 4 + field_offset, active); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 5 + field_offset, writer_is_also_reader); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 6 + field_offset, check_interval_ms); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 7 + field_offset, check_timeout_ms); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_text)(statement, 8 + field_offset, r->fields[8], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 9 + field_offset, auto_generated); ASSERT_SQLITE_OK(rc, mydb);
+
+		if (update_existing) {
+			rc=(*proxy_sqlite3_bind_int64)(statement, 10, writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+		} else {
+			int status = runtime_it == runtime_rows.end()
+				? static_cast<int>(AWS_RDS_BGD_Status::NONE)
+				: runtime_it->second.status;
+			rc=(*proxy_sqlite3_bind_int64)(statement, 11, status); ASSERT_SQLITE_OK(rc, mydb);
+		}
 
 		SAFE_SQLITE3_STEP2(statement);
 		rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mydb);
