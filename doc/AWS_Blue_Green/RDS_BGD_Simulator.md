@@ -1,9 +1,9 @@
 # AWS RDS Blue/Green Deployment Simulator
 
-**Document status:** SIMULATOR IMPLEMENTED; GITHUB WORKFLOW FOLLOW-UP
+**Document status:** IMPLEMENTED
 
 **Applies to:** `TEST_RDS_BGD`, the SQLite3-server simulation surface, BGD TAP
-helpers, the local Docker runner, and supported simulator coverage
+helpers, local and GitHub runners, and supported simulator coverage
 
 **Related monitor contract:** [RDS_BGD_Monitor.md](RDS_BGD_Monitor.md)
 
@@ -12,8 +12,7 @@ helpers, the local Docker runner, and supported simulator coverage
 This document defines the simulator used to test ProxySQL's AWS RDS Blue/Green
 Deployment monitor. It combines the behavioral contract, SQLite3-server
 changes, TAP helper API, network fixture, local runner, and supported coverage
-into one implementation specification. GitHub workflow execution is defined as
-follow-up work.
+into one implementation specification.
 
 ## Architecture
 
@@ -212,7 +211,7 @@ handling does not consult `RDS_BGD_CONTROL` or write `RDS_BGD_PROBE_LOG`.
 
 The API follows existing TAP conventions: write methods return `EXIT_SUCCESS`
 or `EXIT_FAILURE`, and read methods return the existing `rc_t<T>` type. The
-signatures below are the initial API and may grow with reviewed test cases.
+interfaces below form the simulator design surface used by BGD scenarios.
 
 ### Common Endpoint
 
@@ -280,16 +279,21 @@ public:
 	std::vector<RDS_BGD_Host> green_readers;
 
 	std::vector<Endpoint> get_writers();
-	std::vector<Endpoint> get_writer_hosts();
+	std::vector<Endpoint> get_blue_endpoints();
+	std::vector<Endpoint> get_green_endpoints();
+	std::vector<Endpoint> get_endpoints();
 	std::vector<RDS_BGD_Topology_Row> get_topology(std::string status);
 };
 ```
 
 Each TAP test owns and initializes the cluster fixtures it uses. A fixture
 keeps the selected `/etc/hosts` mapping together. `get_writers()` returns the
-selected blue and green writer IPs, `get_writer_hosts()` returns their configured
-hostnames, and `get_topology(status)` returns the standard two-row SOURCE/TARGET
-topology using the writer hostnames and the provided status.
+blue and green writer IP endpoints. `get_blue_endpoints()` and
+`get_green_endpoints()` include the writer and readers for one deployment,
+while `get_endpoints()` returns the complete cluster. `get_topology(status)`
+returns the standard two-row SOURCE/TARGET writer topology using the configured
+hostnames and status. Tests add reader rows explicitly when the scenario needs
+reader mapping.
 
 ### BGD Topology Operations
 
@@ -306,6 +310,8 @@ int topology_error(
 	std::vector<Endpoint> backends,
 	int error_code,
 	std::string error_msg);
+
+int cleanup();
 ```
 
 `topology_update()` marks the table present, clears any configured error, and
@@ -316,6 +322,10 @@ and errors while leaving the table present.
 with `Table 'mysql.rds_topology' doesn't exist`. `topology_error()` requires a
 nonzero code; 1146 marks topology absent, while any other code marks it present
 and leaves existing rows unchanged.
+
+`cleanup()` removes read-only state, topology rows, control rows, and probe-log
+rows. Tests call it together with their ProxySQL Admin cleanup so scenarios do
+not inherit simulator state from an earlier binary.
 
 ### Probe-Log Operations
 
@@ -355,54 +365,34 @@ int main() {
 	plan(3);
 
 	CommandLine cl {};
-	if (cl.getEnv()) BAIL_OUT("failed to load TAP environment");
-
-	MYSQL* admin = init_mysql_conn(
-		cl.admin_host, cl.admin_port, cl.admin_username, cl.admin_password);
-	if (!admin) BAIL_OUT("failed to connect to ProxySQL Admin");
-
-	RDS_BGD_Cluster cluster = bgd_cluster_init();
+	MYSQL* admin = nullptr;
 	RDS_BGD_Simulator simulator {};
-	if (simulator.connect(cl.host, 3306, cl.username, cl.password) != EXIT_SUCCESS)
-		BAIL_OUT("failed to connect to SQLite3 server");
-	for (Endpoint& writer : cluster.get_writer_hosts()) {
-		if (simulator.read_only_update(writer, false) != EXIT_SUCCESS)
-			BAIL_OUT("failed to configure writer read_only state");
-	}
 
-	auto [seq_rc, last_seq] = simulator.probe_log_last_sequence();
-	if (seq_rc != EXIT_SUCCESS)
-		BAIL_OUT("failed to read the last probe-log sequence");
+	if (setup(cl, admin, simulator) != EXIT_SUCCESS)
+		return exit_status();
 
-	const int update_rc = simulator.topology_update(
-		cluster.get_writers(), cluster.get_topology("AVAILABLE"));
-	ok(update_rc == EXIT_SUCCESS, "publish topology to both writer IPs");
-	if (update_rc != EXIT_SUCCESS)
-		BAIL_OUT("failed to publish topology");
+	TestState state {};
 
-	if (configure_proxysql_for_bgd(admin, cluster) != EXIT_SUCCESS)
-		BAIL_OUT("failed to configure ProxySQL");
+	if (publish_available_topology(simulator, state) != EXIT_SUCCESS)
+		goto exit_cleanup;
 
-	ok(wait_for_cond(admin,
-		"SELECT status='AVAILABLE' FROM runtime_mysql_aws_rds_bgd_hostgroups "
-		"WHERE writer_hostgroup=10", 5) == EXIT_SUCCESS,
-		"ProxySQL enters AVAILABLE");
+	if (configure_bgd_available(admin, state) != EXIT_SUCCESS)
+		goto exit_cleanup;
 
-	auto [probe_rc, green_log] = simulator.wait_for_probe_log(
-		last_seq,
-		cluster.green_writer.endpoint(),
-		RDS_BGD_Probe_Kind::metadata,
-		5000);
-	ok(probe_rc == EXIT_SUCCESS,
-		"ProxySQL probes the green writer IP directly");
+	if (test_plaintext_green_writer_probe(simulator, state) != EXIT_SUCCESS)
+		goto exit_cleanup;
 
-	mysql_close(admin);
+exit_cleanup:
+	if (cleanup(admin, simulator) != EXIT_SUCCESS)
+		return EXIT_FAILURE;
 	return exit_status();
 }
 ```
 
-ProxySQL configuration remains test-local. The simulator changes backend
-responses and reads probe evidence; assertions against ProxySQL use Admin SQL.
+Each test defines small setup, scenario, and cleanup functions around this
+control flow. ProxySQL configuration remains test-local. The simulator changes
+backend responses and reads probe evidence; assertions against ProxySQL use
+Admin SQL. Cleanup removes both Admin and simulator state before returning.
 
 ## Build Integration
 
@@ -418,9 +408,10 @@ build_deps_debug -> build_lib_test_rds_bgd -> build_src_test_rds_bgd
                  -> TAP debug build
 ```
 
-`test_rds_bgd` is the single entry point. Do not invoke
+`test_rds_bgd` is the focused local entry point. Do not invoke
 `build_tap_test_debug` afterward because its `build_src_debug` dependency
-selects the normal debug daemon. `testall` includes `-DTEST_RDS_BGD` as well.
+selects the normal debug daemon. `testall` includes `-DTEST_RDS_BGD` and is
+used by the shared cluster-simulator CI build.
 
 ## Local CI Group
 
@@ -429,7 +420,7 @@ The `test/tap/groups/cluster_sim_rds_bgd/` group executes as
 
 | File | BGD-specific content |
 |---|---|
-| `env.sh` | Set `CLUSTER_SIM_HOST_FILE` and `SKIP_CLUSTER_START=1`. |
+| `env.sh` | Set the fixed host map, wait for the SQLite3-server port, and skip backend cluster startup. |
 | `add-hosts` | Define the fixed hostname/IP map below. |
 | `pre-proxysql.bash` | Keep the existing short startup wait before Admin writes. |
 | `pre-proxysql.sql` | Add the simulator user and move the SQLite3 server to port 3306. |
@@ -439,6 +430,7 @@ The group has no `infras.lst`, `CLUSTER_SIM_BINARY_PATH`, or
 
 ```bash
 export CLUSTER_SIM_HOST_FILE="${WORKSPACE}/test/tap/groups/cluster_sim_rds_bgd/add-hosts"
+export PROXYSQL_READY_PORTS_EXTRA="3306"
 export SKIP_CLUSTER_START=1
 ```
 
@@ -510,19 +502,17 @@ simulator transitions. From the TAP container, the control connection uses
 
 ### Group Registration and Local Run
 
-Each BGD TAP binary is registered in `test/tap/groups/groups.json`:
+The BGD TAP binaries are registered in `test/tap/groups/groups.json` under
+`cluster_sim_rds_bgd-g1`. The registry is the source of truth for both local
+execution and GitHub CI. The simulator table in `test/infra/README.md` records
+the group and its `make test_rds_bgd` requirement.
 
-```json
-"test_rds_bgd_smoke-t": [ "cluster_sim_rds_bgd-g1" ]
-```
-
-The simulator table in `test/infra/README.md` records the group and its
-`make test_rds_bgd` requirement. Clean when switching compile flavors because
-Make does not track changed preprocessor flags:
+Clean when switching compile flavors because Make does not track changed
+preprocessor flags:
 
 ```bash
 make clean
-PROXYSQL40=1 make -j"$(nproc)" test_rds_bgd
+make -j"$(nproc)" test_rds_bgd
 
 export INFRA_ID="rds-bgd-$(date +%s)"
 export TAP_GROUP="cluster_sim_rds_bgd-g1"
@@ -537,128 +527,60 @@ The existing runner injects the host aliases, starts ProxySQL with
 and collects logs. No BGD branch is required in `ensure-infras.bash`,
 `start-proxysql-isolated.bash`, or `run-tests-isolated.bash`.
 
-## GitHub Workflow Follow-up
+## GitHub CI
 
-A separate follow-up adds `.github/workflows/CI-rds-bgd-simulator.yml`; the
-workflow is not part of the simulator implementation described above. It runs on
-`workflow_dispatch` and after a successful `CI-trigger`, follows the repository's
-existing concurrency/cancellation pattern, and checks out the exact triggering
-SHA.
+`.github/workflows/CI-cluster-simulator.yml` builds and executes every registered
+`cluster_sim_*` group. It discovers groups and their TAP binaries from
+`test/tap/groups/groups.json`, so registration in `cluster_sim_rds_bgd-g1`
+places the complete BGD suite in the workflow matrix without BGD-specific YAML.
+The workflow runs for pull requests and `workflow_dispatch`.
 
-The regular Ubuntu TAP cache contains a daemon built without `TEST_RDS_BGD` and
-must not be used as the BGD executable. The workflow therefore has a BGD build
-job and a dependent execution job.
+The build job uses `test/infra/control/cluster-simulator-ci.bash` to build
+`testall`, the cluster-simulator binary, the TAP library, and every registered
+simulation binary. `testall` is intentional: one ProxySQL executable contains
+all simulation flags, including `TEST_RDS_BGD`, and is shared by the matrix
+jobs. The verified runtime is staged in an exact-SHA cache.
 
-The build job checks out the triggering SHA, installs or reuses the normal
-Ubuntu TAP build dependencies, and runs:
+Each matrix job restores and verifies that runtime for its selected group,
+builds the common runner image, and executes `ensure-infras.bash` followed by
+`run-tests-isolated.bash`. Cleanup always stops ProxySQL and destroys the
+isolated runner; failure logs are archived by group and SHA.
 
-```bash
-PROXYSQL40=1 make -j"$(nproc)" test_rds_bgd
-```
-
-After verifying `src/proxysql` and `test/tap/tests/test_rds_bgd_smoke-t`, it saves the
-build output as two BGD-specific cache entries, following the existing CI
-separation between daemon and test artifacts:
-
-```text
-${SHA}_ubuntu22-tap-rds-bgd_src   -> src/
-${SHA}_ubuntu22-tap-rds-bgd_test  -> test/
-```
-
-The cache keys are exact and include the BGD build flavor. Do not configure
-`restore-keys`: falling back to the normal Ubuntu TAP cache could execute a
-daemon compiled without `TEST_RDS_BGD`. The workflow must grant the cache-save
-permission required by its `workflow_run` context.
-
-The execution job depends on the build job, checks out the same SHA, and
-restores both entries with `fail-on-cache-miss: true`. It verifies the restored
-executables before building the runner image and starting the test group. One
-producer can therefore supply the same flagged artifacts to additional BGD
-execution jobs without rebuilding ProxySQL.
-
-| Execution-job step | Required behavior |
-|---|---|
-| Checkout | Check out the triggering SHA, not the default branch tip. |
-| Restore `src` | Restore the exact BGD `_src` key into `src/`; fail on a miss. |
-| Restore `test` | Restore the exact BGD `_test` key into `test/`; fail on a miss. |
-| Verify artifacts | Confirm `src/proxysql` and `test/tap/tests/test_rds_bgd_smoke-t` are executable. |
-| Build runner image | Build `test/infra/docker-base` as `proxysql-ci-base:latest`. |
-| Start | Export the shared variables below and run `ensure-infras.bash`. |
-| Test | Run `run-tests-isolated.bash`; this execution, not compilation alone, is the required check. |
-| Cleanup | With `if: always()`, stop ProxySQL and run `destroy-infras.bash`; cleanup failures must not hide the test result. |
-| Logs | On failure, upload `ci_infra_logs/` with the workflow name, SHA, and run number in the artifact name. |
-
-The start, test, and cleanup steps use the same values:
-
-```bash
-export WORKSPACE="${GITHUB_WORKSPACE}"
-export INFRA_ID="rds-bgd-${GITHUB_RUN_ID}"
-export TAP_GROUP="cluster_sim_rds_bgd-g1"
-source test/infra/common/env.sh
-```
-
-The job starts no backend infrastructure and never invokes
-`test/deps/cluster_simulator`. Its pass condition is: the flagged build
-succeeds, the BGD TAP group executes, every TAP test exits successfully, and
-the standard runner reports no infrastructure or test failure.
+The shared runtime includes `test/deps/cluster_simulator` for groups that need
+it. The BGD group sets `SKIP_CLUSTER_START=1`, starts no backend infrastructure,
+and drives ProxySQL's SQLite3-server simulator directly.
 
 ## Supported Test Coverage
 
-### Simulator Acceptance
-
-The simulator implementation includes one end-to-end smoke test, not a separate
-unit-test suite for every helper method. `test_rds_bgd_smoke-t` proves that the
-`TEST_RDS_BGD` daemon accepts TAP-controlled topology, ProxySQL observes an
-`AVAILABLE` deployment, and the green-IP probe is logged. The isolated local
-runner executes the test without `test/deps/cluster_simulator`.
-
-The follow-up configuration and lifecycle tests below exercise the remaining
-helper and SQLite3-server paths through BGD behavior. Before changing simulator
-state, each test reads the last probe-log sequence; failures report the
-configured backend state, last ProxySQL runtime state, and later probe rows.
+The suite is behavior-driven rather than a unit test for every helper method.
+Tests publish backend observations through the simulator and verify the BGD
+monitor through Admin runtime tables, server placement, connection-pool state,
+backend routing, read-only logs, and the simulator probe log.
 
 ### Configuration and Discovery
 
-Configuration tests keep topology at `AVAILABLE` until the expected runtime row
-and worker generation are stable. A relevant case then continues through a
-switchover, proving that the configuration adopted during setup is the one used
-by the FSM.
-
-| Case | Configuration sequence | Expected observations |
-|---|---|---|
-| Available topology before blue writer | Publish `AVAILABLE`, enable automatic discovery, then add the blue writer and its replication-hostgroup mapping. | The read-only discovery path creates one runtime BGD row with derived blue hostgroups, NULL green hostgroups, and `auto_generated=1`; its worker begins probing. |
-| Blue deployment before BGD exists | Add the blue writer and readers while topology is absent, then publish `AVAILABLE`. | No BGD row is created before discovery; topology appearance creates the auto-generated runtime row and starts its worker. |
-| Blue readers added after discovery | Start from an auto-generated row with only the blue writer, then add one or more blue readers and load servers to runtime. | The host checksum changes, the worker generation is replaced, probing resumes, and later reader actions use the new reader set. |
-| Explicit BGD row before servers | Disable automatic discovery, load an explicit BGD hostgroup row, then add the blue writer, blue readers, green writer, and green readers. | The row remains `auto_generated=0`; no worker runs without an eligible blue server, and each relevant server change is incorporated by the replacement worker. |
-| Servers before explicit BGD row | Add blue and green servers first with automatic discovery disabled, then load the explicit BGD hostgroup row. | No BGD worker runs before the row exists; loading it starts a worker that uses the existing server membership. |
-| Blue first, green later | Configure blue servers, publish `AVAILABLE`, then add explicit green writer and reader rows before starting switchover. | Green membership changes replace the worker and rebuild its mapping; existing rows are not duplicated and the explicit green writer supplies its configured TLS mode. |
-| Existing explicit green TLS | Configure the blue writer with `use_ssl=0` and the exact green TARGET row at the supported port with `use_ssl=1`, then publish `AVAILABLE`. | The direct metadata probe targets the resolved green writer IP with `encrypted=1`. |
-| Discovered green TLS defaults | Configure the blue writer with `use_ssl=0`, leave the configured green writer hostgroup empty, and set its `servers_defaults.use_ssl=1`, then publish `AVAILABLE`. | Discovery adds the exact TARGET row with runtime `use_ssl=1`, and the subsequent green-IP metadata probe has `encrypted=1`. |
-| Green timing variants | With explicit green hostgroups, add green nodes before `AVAILABLE`, after discovery, or after the worker starts but before switchover. | Each ordering converges on the same runtime membership and blue/green mapping before the FSM advances. |
-| Automatic to explicit configuration | Allow discovery to create an automatic row, then load a user row with explicit green hostgroups. | The runtime row becomes user-defined with `auto_generated=0`, explicit green hostgroups replace NULLs, and a replacement worker uses the new configuration. |
-| Configuration mutation | Change `active`, hostgroup IDs, `writer_is_also_reader`, check interval/timeout, server status, or `use_ssl`; also cover row disablement and removal. | Relevant checksum changes stop the old worker, run phase-appropriate cleanup, and start or suppress a worker from the new active configuration. |
-| Persistence and validation | Save automatic and explicit runtime state, and attempt invalid persistent rows. | Auto-generated rows are not persisted; explicit rows are retained; missing or mixed green hostgroups and other schema-invalid configurations are rejected. |
-
-Configuration assertions use `runtime_mysql_aws_rds_bgd_hostgroups`,
-`runtime_mysql_servers`, probe-log destinations, and subsequent hostgroup
-effects. They do not depend only on worker log messages.
+| Behavior | Coverage |
+|---|---|
+| Automatic discovery ordering | Topology before blue configuration and blue configuration before topology both converge on one runtime-only automatic BGD row. |
+| Explicit startup ordering | A worker starts only after both an explicit BGD row and an eligible blue server exist, regardless of which is loaded first. |
+| Green membership ordering | Configured green membership may arrive before `AVAILABLE`, after discovery, or after the worker starts. |
+| Configuration ownership | Automatic rows remain runtime-only; explicit rows persist; invalid partial green-hostgroup configuration is rejected; automatic discovery does not overwrite administrator-owned rows. |
+| Probe destination and TLS | Automatic and explicit configurations select the mapped writer tuple, apply the correct TLS source, and probe table check, blue metadata, and green metadata in order. |
+| Active configuration refresh | Server TLS, membership, status, interval, timeout, hostgroups, and mapped-writer changes are incorporated while preserving the applicable BGD phase and probe policy. |
+| Disablement and removal | Disabling or deleting an active BGD row performs phase-appropriate rollback and suppresses or removes the runtime worker. |
 
 ### Switchover, Rollback, and Cleanup
 
-| Case | Simulator/configuration transition | Expected observations |
+| Behavior | Coverage |
 |---|---|---|
-| Normal lifecycle | Advance AVAILABLE → INITIATED → IN_PROGRESS → POST_PROCESSING → COMPLETED, then make topology empty or absent. | Runtime status follows every phase; writer/reader placement, server status, DNS effects, and connection-pool changes occur at their defined boundaries; final cleanup returns status to `NONE`. |
-| Cancellation rollback | Move from INITIATED or IN_PROGRESS back to `AVAILABLE`. | Accumulated effects are rolled back, the blue writer and reader policy are restored, probe pinning is rebuilt for AVAILABLE, and the deployment remains monitorable. |
-| Pre-completion topology loss | Delete or drop topology before writer completion. | Empty and absent observations remain distinguishable, but both select rollback rather than successful finalization. |
-| Configuration change during switchover | Add/remove servers, disable/remove the BGD row, or change relevant configuration while a non-NONE phase is active. | The old worker performs one-shot phase-appropriate rollback before its replacement uses the new configuration; stale mappings do not drive later actions. |
-| Rollback postconditions | Trigger rollback after writer demotion, reader shunning, or DNS pinning has occurred. | Blue writer service and configured reader membership are restored, BGD-shunned readers are unshunned, pins and direct-probe state are cleared or rebuilt, runtime status resets, green rows remain, and green connections are not drained. |
-| Successful cleanup | Complete writer switchover, enter reader switchover, then drain topology. | Eligible green connections are drained while green rows and statuses remain; readers are reconciled and the worker returns to `NONE`. |
-| Late entry | Start a fresh worker with INITIATED, IN_PROGRESS, POST_PROCESSING, or COMPLETED already published. | The worker reconstructs only the state supported by that observation and applies the defined phase actions without requiring earlier samples. |
-| Direct-probe policy | Vary blue/green IP and blue versus explicit-green `use_ssl` while every endpoint uses port 3306. | Probe-log rows identify the correct green writer destination at port 3306 and the correct automatic or explicit TLS source. |
-| Reader and offline handling | Use matched, unmatched, and `OFFLINE_SOFT`/`OFFLINE_HARD` blue and green readers. | Only eligible pairs are mapped or drained; unmatched readers follow BGD shun policy and offline nodes are excluded. |
-| Metadata failures | Return an empty result, error 1146, or another configured query error from selected writers. | Absence, empty metadata, and generic query failure remain distinct and never masquerade as a successful switchover. |
-| Repeated switchover | Complete cluster-1 deployment A, reset on empty/absent topology, replace its green rows with deployment B, and run again. | The second lifecycle uses deployment B without stale mapping, probe, or simulator state from deployment A. |
-| Concurrent switchovers | Publish independent topology for clusters 1, 2, or 3 and advance them independently. | Multiple workers make isolated progress; configuration or topology changes in one cluster do not alter another. |
+| Acceptance | An explicitly configured worker consumes TAP-controlled `AVAILABLE` topology and probes the green writer directly. |
+| Writer switchover | `AVAILABLE`, `SWITCHOVER_INITIATED`, `SWITCHOVER_IN_PROGRESS`, and `SWITCHOVER_IN_POST_PROCESSING` drive the defined status, placement, suppression, pool-drain, and routing effects. Repeated post-processing does not redrain a post-cutover pool. |
+| Reader switchover and cleanup | Target-only `SWITCHOVER_COMPLETED` enters reader switchover; terminal empty or absent topology restores reader policy, drains eligible green pools, retains configured green rows, and returns to `NONE`. |
+| Cancellation rollback | Returning from initiated or in-progress topology to `AVAILABLE` restores blue routing and monitoring without removing explicit green rows or draining green pools. |
+| Topology loss and errors | Empty topology, absent topology, metadata error 1146, and generic metadata errors retain their distinct effects before and after writer completion. |
+| Late entry | Fresh workers starting at initiated, in-progress, post-processing, or completed observations apply only the state supported by the first observation. |
+| Reader and pool policy | Matched and unmatched readers, writer fallback, and `ONLINE`, `SHUNNED`, `OFFLINE_SOFT`, and `OFFLINE_HARD` green pools follow their routing and cleanup policies. |
+| Repeated and concurrent deployments | A second deployment reuses hostgroups without stale membership or probes, while three simultaneous workers retain independent topology, phase, placement, and TLS state. |
 
 The simulator does not claim to validate application traffic, AWS control-plane
 timing, mutable DNS propagation, packet loss, or exact post-switchover address
@@ -667,16 +589,17 @@ assertion depends on them.
 
 ## Code Boundaries
 
-| Area | Current boundary |
+| Area | Boundary |
 |---|---|
 | `Makefile` | Provides the BGD build targets and includes `TEST_RDS_BGD` in `testall`. |
-| `include/SQLite3_Server.h` | Defines the BGD tables and shared simulator helpers. |
+| `include/SQLite3_Server.h` | Declares the TEST-mode table ownership and shared read-only simulator members. |
 | `src/SQLite3_Server.cpp` | Handles endpoint extraction, table creation, BGD/read-only interception, and probe logging. |
 | `test/tap` helpers | Provide the common simulator and BGD-specific API defined above. |
 | `test/tap/groups/cluster_sim_rds_bgd` | Defines the fixed host map and SQLite3-server group configuration. |
 | `test/tap/groups/groups.json` | Registers BGD TAP binaries in `cluster_sim_rds_bgd-g1`. |
 | `test/infra/README.md` | Documents the group and its required `test_rds_bgd` build target. |
-| GitHub workflow | Follow-up work builds the flagged flavor and executes the BGD simulator group. |
+| `.github/workflows/CI-cluster-simulator.yml` | Builds the combined simulation flavor and executes each registered simulator group in its own matrix job. |
+| `test/infra/control/cluster-simulator-ci.bash` | Discovers groups and binaries, builds and verifies the shared runtime, and stages the exact-SHA cache payload. |
 | BGD production monitor | Reuses existing query constants without simulator query decoration or a test initializer. |
 
 Existing simulator builds retain their behavior. The scenario, not the helper,
