@@ -35,8 +35,23 @@ vector<Endpoint> RDS_BGD_Cluster::get_writers() {
 	return { blue_writer.endpoint(), green_writer.endpoint() };
 }
 
-vector<Endpoint> RDS_BGD_Cluster::get_writer_hosts() {
-	return { blue_writer.host_endpoint(), green_writer.host_endpoint() };
+vector<Endpoint> RDS_BGD_Cluster::get_blue_endpoints() {
+	vector<Endpoint> endpoints { blue_writer.endpoint() };
+	for (RDS_BGD_Host& host : blue_readers) endpoints.push_back(host.endpoint());
+	return endpoints;
+}
+
+vector<Endpoint> RDS_BGD_Cluster::get_green_endpoints() {
+	vector<Endpoint> endpoints { green_writer.endpoint() };
+	for (RDS_BGD_Host& host : green_readers) endpoints.push_back(host.endpoint());
+	return endpoints;
+}
+
+vector<Endpoint> RDS_BGD_Cluster::get_endpoints() {
+	vector<Endpoint> endpoints = get_blue_endpoints();
+	vector<Endpoint> green_endpoints = get_green_endpoints();
+	endpoints.insert(endpoints.end(), green_endpoints.begin(), green_endpoints.end());
+	return endpoints;
 }
 
 vector<RDS_BGD_Topology_Row> RDS_BGD_Cluster::get_topology(string status) {
@@ -117,6 +132,16 @@ int RDS_BGD_Simulator::topology_error(vector<Endpoint> backends, int error_code,
 			(topology_present ? "1" : "0") + "," + to_string(error_code) + "," +
 			sql_quote(error_msg) + ")");
 	}
+	return execute_transaction(statements);
+}
+
+int RDS_BGD_Simulator::cleanup() {
+	vector<string> statements {
+		"DELETE FROM READONLY_STATUS",
+		"DELETE FROM RDS_BGD_TOPOLOGY",
+		"DELETE FROM RDS_BGD_CONTROL",
+		"DELETE FROM RDS_BGD_PROBE_LOG",
+	};
 	return execute_transaction(statements);
 }
 

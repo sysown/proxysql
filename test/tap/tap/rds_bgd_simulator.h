@@ -66,11 +66,29 @@ public:
 	vector<Endpoint> get_writers();
 
 	/**
-	 * @brief Returns both writer hostname/port endpoints for read-only simulation.
+	 * @brief Returns the blue writer and configured blue readers.
 	 *
-	 * @return Blue and green writer endpoints keyed by RDS hostname.
+	 * @return Blue deployment endpoints keyed by simulator IP address.
 	 */
-	vector<Endpoint> get_writer_hosts();
+	vector<Endpoint> get_blue_endpoints();
+
+	/**
+	 * @brief Returns the green writer and configured green readers.
+	 *
+	 * @return Green deployment endpoints keyed by simulator IP address.
+	 */
+	vector<Endpoint> get_green_endpoints();
+
+	/**
+	 * @brief Returns every simulator IP/port endpoint in this cluster.
+	 *
+	 * @details Includes both writers and all configured blue and green readers.
+	 *   Tests use this list when resetting or publishing topology for a complete
+	 *   simulated deployment.
+	 *
+	 * @return Writer and reader endpoints keyed by simulator IP address.
+	 */
+	vector<Endpoint> get_endpoints();
 
 	/**
 	 * @brief Builds the topology rows published by the simulated writers.
@@ -161,6 +179,13 @@ public:
 	 * @return EXIT_SUCCESS when every backend is updated; EXIT_FAILURE otherwise.
 	 */
 	int topology_error(vector<Endpoint> backends, int error_code, string error_msg);
+
+	/**
+	 * @brief Removes all read-only, topology-control, topology-row, and probe state.
+	 *
+	 * @return EXIT_SUCCESS when the simulator state is empty; EXIT_FAILURE otherwise.
+	 */
+	int cleanup();
 
 	/**
 	 * @brief Reads the latest sequence from the RDS BGD probe log.
