@@ -2531,12 +2531,11 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				if (GloVars.confFile->OpenFile(NULL)==true) {
 					ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 					int rows=0;
-					// FIXME: not implemented yet
 					if (query_no_space[5] == 'P' || query_no_space[5] == 'p') {
-					//	rows=SPA->proxysql_config().Read_PgSQL_Firewall_from_configfile();
+						rows = SPA->proxysql_config().Read_PgSQL_Firewall_from_configfile();
 						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql firewall from CONFIG\n");
 					} else {
-					//	rows=SPA->proxysql_config().Read_MySQL_Firewall_from_configfile();
+						rows = SPA->proxysql_config().Read_MySQL_Firewall_from_configfile();
 						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql firewall from CONFIG\n");
 					}
 					SPA->send_ok_msg_to_client(sess, NULL, rows, query_no_space);
@@ -2637,9 +2636,11 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					int rows=0;
 					if (query_no_space[5] == 'P' || query_no_space[5] == 'p') {
 						rows = SPA->proxysql_config().Read_PgSQL_Query_Rules_from_configfile();
+						rows += SPA->proxysql_config().Read_PgSQL_Query_Rules_Fast_Routing_from_configfile();
 						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql query rules from CONFIG\n");
 					} else {
 						rows = SPA->proxysql_config().Read_MySQL_Query_Rules_from_configfile();
+						rows += SPA->proxysql_config().Read_MySQL_Query_Rules_Fast_Routing_from_configfile();
 						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql query rules from CONFIG\n");
 					}
 					SPA->send_ok_msg_to_client(sess, NULL, rows, query_no_space);
@@ -2818,6 +2819,10 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		rc = pa->proxysql_config().Write_PgSQL_Servers_to_configfile(data);
 		rc = pa->proxysql_config().Write_Scheduler_to_configfile(data);
 		rc = pa->proxysql_config().Write_ProxySQL_Servers_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_MySQL_Query_Rules_Fast_Routing_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_PgSQL_Query_Rules_Fast_Routing_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_MySQL_Firewall_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_PgSQL_Firewall_to_configfile(data);
 		if (rc) {
 			std::stringstream ss;
 			proxy_error("ProxySQL Admin Error: Cannot extract configuration\n");
@@ -4548,6 +4553,10 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		rc = pa->proxysql_config().Write_Scheduler_to_configfile(data);
 		rc = pa->proxysql_config().Write_Restapi_to_configfile(data);
 		rc = pa->proxysql_config().Write_ProxySQL_Servers_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_MySQL_Query_Rules_Fast_Routing_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_PgSQL_Query_Rules_Fast_Routing_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_MySQL_Firewall_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_PgSQL_Firewall_to_configfile(data);
 		if (rc) {
 			std::stringstream ss;
 			ss << "ProxySQL Admin Error: Cannot extract configuration";
@@ -4591,6 +4600,10 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		rc = pa->proxysql_config().Write_Scheduler_to_configfile(data);
 		rc = pa->proxysql_config().Write_Restapi_to_configfile(data);
 		rc = pa->proxysql_config().Write_ProxySQL_Servers_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_MySQL_Query_Rules_Fast_Routing_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_PgSQL_Query_Rules_Fast_Routing_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_MySQL_Firewall_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_PgSQL_Firewall_to_configfile(data);
 		if (rc) {
 			std::stringstream ss;
 			ss << "ProxySQL Admin Error: Cannot write proxysql.cnf";
