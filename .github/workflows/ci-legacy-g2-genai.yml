@@ -266,6 +266,7 @@ jobs:
         flags: tap-legacy-g2
         name: tap-legacy-g2-genai-coverage
         use_oidc: true
+        network_prefix: proxysql/
         # codecov-cli's _get_file_fixes step reads every source file
         # referenced in the LCOV report to compute line-offset
         # adjustments, and crashes with FileNotFoundError if any path

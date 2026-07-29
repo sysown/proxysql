@@ -315,6 +315,7 @@ jobs:
         flags: tap-legacy-g5
         name: tap-legacy-g5-coverage
         use_oidc: true
+        network_prefix: proxysql/
         # codecov-cli's _get_file_fixes step reads every source file
         # referenced in the LCOV report and crashes with FileNotFoundError
         # if any path is missing (the _test cache prunes test deps to fit
