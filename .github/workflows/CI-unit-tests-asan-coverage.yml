@@ -198,6 +198,10 @@ jobs:
         # action silently falls back to legacy tokenless mode and the
         # upload fails.
         use_oidc: true
+        # Only the explicit LCOV file. Default plugins include gcov which
+        # auto-discovers leftover .gcno and pollutes the upload.
+        disable_search: true
+        plugins: noop
         fail_ci_if_error: false
         verbose: true
 
