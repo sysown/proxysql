@@ -45,5 +45,10 @@
 # (the cleaner long-term fix, which also needs the codecov-action `root_dir`
 # pointed at the checkout subdir in the reusable ci-*.yml workflows on the
 # GH-Actions branch), this rule becomes a harmless no-op and can be removed.
+codecov:
+  # GitHub's default branch is v3.0. Keep Codecov's repository YAML and
+  # dashboard branch aligned with the branch that owns this configuration.
+  branch: v3.0
+
 fixes:
   - "proxysql/::"
