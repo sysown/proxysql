@@ -90,14 +90,14 @@
             }
         ],
         "proxysql_init_state": [
-            { "hostgroup_id":2271,"hostname":"127.1.1.11","port":3306,"status":"SHUNNED","comment":"node_127.1.1.11" },
-            { "hostgroup_id":2271,"hostname":"127.1.1.12","port":3306,"status":"SHUNNED","comment":"node_127.1.1.12" },
-            { "hostgroup_id":2271,"hostname":"127.1.1.13","port":3306,"status":"ONLINE","comment":"node_127.1.1.13" },
-            { "hostgroup_id":2272,"hostname":"127.1.1.11","port":3306,"status":"ONLINE","comment":"node_127.1.1.11" },
-            { "hostgroup_id":2272,"hostname":"127.1.1.12","port":3306,"status":"ONLINE","comment":"node_127.1.1.12" },
-            { "hostgroup_id":2273,"hostname":"127.1.1.11","port":3306,"status":"ONLINE","comment":"node_127.1.1.11" },
-            { "hostgroup_id":2273,"hostname":"127.1.1.12","port":3306,"status":"ONLINE","comment":"node_127.1.1.12" },
-            { "hostgroup_id":2273,"hostname":"127.1.1.13","port":3306,"status":"ONLINE","comment":"node_127.1.1.13" }
+            { "hostgroup_id":2271,"hostname":"127.1.1.11","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":2271,"hostname":"127.1.1.12","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":2271,"hostname":"127.1.1.13","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2272,"hostname":"127.1.1.11","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2272,"hostname":"127.1.1.12","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.1.1.11","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.1.1.12","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.1.1.13","port":3306,"status":"ONLINE" }
         ],
         "proxysql_final_state": [
             { "hostgroup_id":2271,"hostname":"127.1.1.11","port":3306,"status":"SHUNNED","weight":1 },
