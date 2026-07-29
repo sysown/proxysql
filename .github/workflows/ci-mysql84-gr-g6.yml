@@ -243,6 +243,7 @@ jobs:
         flags: tap-mysql84-gr-g6
         name: tap-mysql84-gr-g6-coverage
         use_oidc: true
+        network_prefix: proxysql/
         # codecov-cli's _get_file_fixes step reads every source file
         # referenced in the LCOV report and crashes with FileNotFoundError
         # if any path is missing (the _test cache prunes test deps to fit
