@@ -2650,7 +2650,6 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["log_mysql_warnings_enabled"]      = make_tuple(&variables.log_mysql_warnings_enabled,      false);
 		VariablesPointers_bool["log_unhealthy_connections"]       = make_tuple(&variables.log_unhealthy_connections,       false);
 		VariablesPointers_bool["monitor_enabled"]                 = make_tuple(&variables.monitor_enabled,                 false);
-		VariablesPointers_int["aws_blue_green_deployment_auto_discovery"] = make_tuple(&variables.aws_blue_green_deployment_auto_discovery, 0, 1, false);
 		VariablesPointers_bool["monitor_replication_lag_group_by_host"] = make_tuple(&variables.monitor_replication_lag_group_by_host, false);
 		VariablesPointers_bool["monitor_wait_timeout"]            = make_tuple(&variables.monitor_wait_timeout,            false);
 		VariablesPointers_bool["monitor_writer_is_also_reader"]   = make_tuple(&variables.monitor_writer_is_also_reader,   false);
@@ -2693,6 +2692,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 	// it is safe to do it here because get_variables_list() is the first function called during start time
 	if (VariablesPointers_int.size() == 0) {
 		// Monitor variables
+		VariablesPointers_int["aws_blue_green_deployment_auto_discovery"] = make_tuple(&variables.aws_blue_green_deployment_auto_discovery, 0, 1, false);
 		VariablesPointers_int["monitor_history"]                     = make_tuple(&variables.monitor_history,                  1000, 7*24*3600*1000, false);
 
 		VariablesPointers_int["monitor_connect_interval"]  = make_tuple(&variables.monitor_connect_interval,  100, 7*24*3600*1000, false);
