@@ -168,18 +168,25 @@ jobs:
         path: coverage/lcov.info
         if-no-files-found: warn
 
+    - name: Require non-empty coverage/lcov.info
+      # With disable_search + plugins:noop, a missing/empty LCOV would
+      # make the Codecov step a silent no-op while fail_ci_if_error:false
+      # keeps the job green. Fail here so coverage-generation regressions
+      # are visible; Codecov SaaS outages remain non-blocking below.
+      id: require-lcov
+      if: always()
+      run: test -s coverage/lcov.info
+
     - name: Upload coverage to Codecov
       # Send the same lcov.info we already archive as a workflow artifact
       # to Codecov so PRs get the "this PR changes coverage of touched
       # files from N% to M%" comment and main accumulates a historical
       # graph at https://app.codecov.io/gh/sysown/proxysql.
       #
-      # `if: always()` so coverage uploads regardless of whether the unit
-      # tests themselves passed; partial coverage is still useful for
-      # diagnosing why a PR went red. `fail_ci_if_error: false` so a
-      # transient Codecov outage never gates a green CI run on a
-      # third-party SaaS.
-      if: always()
+      # Upload when LCOV exists even if unit tests failed (partial coverage
+      # is still useful). Skip only when require-lcov failed. Codecov SaaS
+      # outages stay non-blocking via fail_ci_if_error: false.
+      if: always() && steps.require-lcov.outcome == 'success'
       uses: codecov/codecov-action@v4
       with:
         codecov_yml_path: codecov.yml
