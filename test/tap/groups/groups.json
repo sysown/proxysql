@@ -109,7 +109,6 @@
   "mysql-zstd_compression_level_libmysql-t" : [ "mysql84-g1","mysql90-g1","mysql95-g1" ],
   "mysql_decompress_payload_unit-t" : [ "unit-tests-g1" ],
   "mysql_encode_unit-t" : [ "unit-tests-g1" ],
-  "mysql_decompress_payload_unit-t" : [ "unit-tests-g1" ],
   "mysql_error_classifier_unit-t" : [ "unit-tests-g1" ],
   "mysql_hostgroup_attributes-servers_defaults-t" : [ "legacy-g1","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1","mysql84-g1","mysql90-g1","mysql95-g1" ],
   "mysql_hostgroup_attributes_config_file-t" : [ "legacy-g1","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1","mysql84-g1","mysql90-g1","mysql95-g1" ],
