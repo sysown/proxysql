@@ -35,7 +35,7 @@ static int get_zstd_compression_level(const MySQL_Connection* myconn) {
 	return ZSTD_CLEVEL_DEFAULT;
 }
 
-static bool decompress_mysql_payload(
+bool decompress_mysql_payload(
 	const MySQL_Connection* myconn, Bytef* dest, uLongf destLen, const unsigned char* source, size_t sourceLen
 ) {
 	if (use_zstd_compression(myconn)) {
@@ -43,8 +43,20 @@ static bool decompress_mysql_payload(
 		return !ZSTD_isError(rc) && rc == destLen;
 	}
 
+	// GHSA-fvch-fpgq-pwfx: uncompress() updates its length argument in place to
+	// the number of bytes actually written. destLen is passed by value here, so
+	// we must capture the caller's claimed (pre-compression) length before the
+	// call and require the actual decompressed size to match it. Without this
+	// check a client can declare a large payload_length in the compressed packet
+	// header while sending a zlib stream that inflates to fewer bytes:
+	// uncompress() returns Z_OK having written only the smaller amount, leaving
+	// the tail of the malloc'd destination buffer uninitialized. The caller then
+	// walks the full claimed length, parsing stale heap memory as MySQL packet
+	// headers (heap information disclosure). This mirrors the size check the
+	// zstd path above already performs.
+	const uLongf claimed_len = destLen;
 	const int rc = uncompress(dest, &destLen, source, sourceLen);
-	return rc == Z_OK;
+	return rc == Z_OK && destLen == claimed_len;
 }
 
 static bool fallback_to_uncompressed_mysql_payload(
