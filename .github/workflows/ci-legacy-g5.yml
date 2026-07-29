@@ -315,14 +315,23 @@ jobs:
         flags: tap-legacy-g5
         name: tap-legacy-g5-coverage
         use_oidc: true
-        network_prefix: proxysql/
-        # codecov-cli's _get_file_fixes step reads every source file
-        # referenced in the LCOV report and crashes with FileNotFoundError
-        # if any path is missing (the _test cache prunes test deps to fit
-        # GitHub's 10 GB repo cache quota, so not all subdirs are restored
-        # on the runner). disable_file_fixes:true skips that step. Trade-
-        # off: Codecov line-offset annotations on PR diffs may be less
-        # precise, but aggregate coverage numbers are unaffected.
+        # Upload ONLY the explicit LCOV .info file.
+        # - disable_search + plugins:noop: default plugins include gcov,
+        #   which auto-discovers leftover .gcno from the build handoff
+        #   (lib/obj/*.gcno) and polluted uploads ("Found 33 coverage
+        #   files" instead of 1).
+        # - no network_prefix: TAP LCOV SF: paths are repo-root-relative
+        #   (lib/, src/, test/tap/). network_prefix:proxysql/ created a
+        #   phantom proxysql/ namespace that never merged with unit-tests
+        #   lib/, leaving lib/MySQL_Monitor.cpp at 0% despite real hits.
+        # - root_dir:proxysql: checkout is at path:proxysql; point
+        #   codecov-cli network listing at the git root so lib/X matches.
+        # - disable_file_fixes:true: codecov-cli _get_file_fixes crashes
+        #   FileNotFoundError when sparse checkout lacks sources referenced
+        #   in the report. Aggregate coverage is unaffected.
+        disable_search: true
+        plugins: noop
+        root_dir: proxysql
         disable_file_fixes: true
         fail_ci_if_error: false
         verbose: true
