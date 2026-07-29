@@ -21,7 +21,9 @@
 #include "rds_bgd_tap.h"
 #include "utils.h"
 
-const uint32_t kTimeoutSeconds = 3;
+// Automatic discovery is asynchronous and starts after the monitor observes the
+// runtime server. Allow the monitor and the BGD worker to become ready on slower CI runners.
+const uint32_t kTimeoutSeconds = 15;
 const uint32_t kProbeTimeoutMs = 3000;
 
 struct TestState {

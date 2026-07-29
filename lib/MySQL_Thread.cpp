@@ -2067,7 +2067,17 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 			}
 			bool special_variable = std::get<3>(it->second); // if special_variable is true, min and max values are ignored, and more input validation is needed
 			if (special_variable == false) {
-				int intv=atoi(value);
+				// This option is stored as an integer for compatibility with the
+				// existing variable interface, but is documented and commonly set
+				// using the same true/false spelling as boolean variables.
+				int intv;
+				if (nameS == "aws_blue_green_deployment_auto_discovery" && strcasecmp(value, "true") == 0) {
+					intv = 1;
+				} else if (nameS == "aws_blue_green_deployment_auto_discovery" && strcasecmp(value, "false") == 0) {
+					intv = 0;
+				} else {
+					intv = atoi(value);
+				}
 				if (intv >= std::get<1>(it->second) && intv <= std::get<2>(it->second)) {
 					int * v = std::get<0>(it->second);
 					*v = intv;

@@ -333,8 +333,59 @@ inline rc_t<uint64_t> bgd_probe_count_since(
 	return result;
 }
 
+inline void bgd_diag_runtime_state(MYSQL* admin) {
+	const string runtime_query =
+		"SELECT writer_hostgroup,reader_hostgroup,IFNULL(green_writer_hostgroup,'NULL'),"
+		"IFNULL(green_reader_hostgroup,'NULL'),auto_generated,status "
+		"FROM runtime_mysql_aws_rds_bgd_hostgroups ORDER BY writer_hostgroup";
+	auto [runtime_rc, runtime_rows] = mysql_query_ext_rows(admin, runtime_query);
+	if (runtime_rc != EXIT_SUCCESS) {
+		diag("RDS BGD diagnostic query failed with error %d", runtime_rc);
+	} else if (runtime_rows.empty()) {
+		diag("RDS BGD runtime hostgroup table is empty");
+	} else {
+		diag("RDS BGD runtime hostgroup rows:");
+		for (const mysql_res_row& row : runtime_rows) {
+			string row_text {};
+			for (size_t i = 0; i < row.size(); ++i) {
+				if (i != 0) {
+					row_text += ",";
+				}
+				row_text += row[i];
+			}
+			diag("  %s", row_text.c_str());
+		}
+	}
+
+	const string monitor_query =
+		"SELECT hostname,port,IFNULL(read_only,'NULL'),IFNULL(error,'') FROM mysql_server_read_only_log "
+		"ORDER BY time_start_us DESC LIMIT 10";
+	auto [monitor_rc, monitor_rows] = mysql_query_ext_rows(admin, monitor_query);
+	if (monitor_rc != EXIT_SUCCESS) {
+		diag("RDS read_only diagnostic query failed with error %d", monitor_rc);
+	} else if (monitor_rows.empty()) {
+		diag("RDS read_only log has no rows");
+	} else {
+		diag("Latest RDS read_only monitor rows:");
+		for (const mysql_res_row& row : monitor_rows) {
+			string row_text {};
+			for (size_t i = 0; i < row.size(); ++i) {
+				if (i != 0) {
+					row_text += ",";
+				}
+				row_text += row[i];
+			}
+			diag("  %s", row_text.c_str());
+		}
+	}
+}
+
 inline int bgd_wait_for_condition(MYSQL* admin, string query, uint32_t timeout_seconds) {
 	int rc = wait_for_cond(admin, query, timeout_seconds);
+	if (rc != EXIT_SUCCESS) {
+		diag("RDS BGD wait timed out or failed for condition: %s", query.c_str());
+		bgd_diag_runtime_state(admin);
+	}
 	return rc;
 }
 

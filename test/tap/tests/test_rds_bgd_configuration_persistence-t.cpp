@@ -21,7 +21,9 @@
 #include "rds_bgd_tap.h"
 #include "utils.h"
 
-const uint32_t kTimeoutSeconds = 3;
+// Automatic discovery is asynchronous and starts after the monitor observes the
+// runtime server. Allow the monitor and the BGD worker to become ready on slower CI runners.
+const uint32_t kTimeoutSeconds = 15;
 const uint32_t kProbeTimeoutMs = 3000;
 
 struct TestState {
@@ -99,7 +101,7 @@ int configure_monitor(MYSQL* admin, BGD_Hostgroups& hg, bool automatic) {
 	return rc;
 }
 
-int insert_explicit_bgd_row(MYSQL* admin, BGD_Hostgroups& hg, string comment, int active = 1) {
+int insert_explicit_bgd_row(MYSQL* admin, BGD_Hostgroups& hg, const string& comment, int active = 1) {
 	string query =
 		"INSERT INTO mysql_aws_rds_bgd_hostgroups("
 		"writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,"
@@ -207,7 +209,7 @@ rc_t<vector<mysql_res_row>> runtime_bgd_ownership_snapshot(MYSQL* admin, int wri
 	return result;
 }
 
-rc_t<vector<mysql_res_row>> green_server_snapshot(MYSQL* admin, string table, BGD_Hostgroups& hg) {
+rc_t<vector<mysql_res_row>> green_server_snapshot(MYSQL* admin, const string& table, BGD_Hostgroups& hg) {
 	string query =
 		"SELECT hostgroup_id,hostname,port,status,use_ssl,weight,max_connections FROM " + table +
 		" WHERE hostgroup_id IN (" + to_string(hg.green_writer) + "," + to_string(hg.green_reader) +
