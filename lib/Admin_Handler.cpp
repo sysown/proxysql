@@ -3206,6 +3206,8 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			tn = "mysql_hostgroup_attributes";
 		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_SERVERS_SSL_PARAMS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_SERVERS_SSL_PARAMS))) {
 			tn = "mysql_servers_ssl_params";
+		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_AWS_RDS_BGD, query_no_space, strlen(CLUSTER_QUERY_MYSQL_AWS_RDS_BGD))) {
+			tn = "mysql_aws_rds_bgd_hostgroups";
 		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_SERVERS_V2, query_no_space, strlen(CLUSTER_QUERY_MYSQL_SERVERS_V2))) {
 			tn = "mysql_servers_v2";
 		}

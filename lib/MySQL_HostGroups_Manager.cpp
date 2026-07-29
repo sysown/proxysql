@@ -1002,6 +1002,7 @@ void MySQL_HostGroups_Manager::commit_update_checksums_from_tables(SpookyHash& m
 	CUCFT1(myhash,init,"mysql_aws_aurora_hostgroups","writer_hostgroup", table_resultset_checksum[HGM_TABLES::MYSQL_AWS_AURORA_HOSTGROUPS]);
 	CUCFT1(myhash,init,"mysql_hostgroup_attributes","hostgroup_id", table_resultset_checksum[HGM_TABLES::MYSQL_HOSTGROUP_ATTRIBUTES]);
 	CUCFT1(myhash,init,"mysql_servers_ssl_params","hostname,port,username", table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS_SSL_PARAMS]);
+	CUCFT1(myhash,init,"mysql_aws_rds_bgd_hostgroups","writer_hostgroup", table_resultset_checksum[HGM_TABLES::MYSQL_AWS_RDS_BGD_HOSTGROUPS]);
 }
 
 /**
@@ -3180,6 +3181,8 @@ SQLite3_result* MySQL_HostGroups_Manager::get_current_mysql_table(const string& 
 		return this->incoming_hostgroup_attributes;
 	} else if (name == "mysql_servers_ssl_params") {
 		return this->incoming_mysql_servers_ssl_params;
+	} else if (name == "mysql_aws_rds_bgd_hostgroups") {
+		return this->incoming_aws_rds_bgd_hostgroups;
 	} else if (name == "cluster_mysql_servers") {
 		return this->runtime_mysql_servers;
 	} else if (name == "mysql_servers_v2") {

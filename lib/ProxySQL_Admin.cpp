@@ -876,6 +876,7 @@ incoming_servers_t::incoming_servers_t(
 	SQLite3_result* incoming_aurora_hostgroups,
 	SQLite3_result* incoming_hostgroup_attributes,
 	SQLite3_result* incoming_mysql_servers_ssl_params,
+	SQLite3_result* incoming_aws_rds_bgd_hostgroups,
 	SQLite3_result* runtime_mysql_servers
 ) :
 	incoming_mysql_servers_v2(incoming_mysql_servers_v2),
@@ -885,6 +886,7 @@ incoming_servers_t::incoming_servers_t(
 	incoming_aurora_hostgroups(incoming_aurora_hostgroups),
 	incoming_hostgroup_attributes(incoming_hostgroup_attributes),
 	incoming_mysql_servers_ssl_params(incoming_mysql_servers_ssl_params),
+	incoming_aws_rds_bgd_hostgroups(incoming_aws_rds_bgd_hostgroups),
 	runtime_mysql_servers(runtime_mysql_servers)
 {}
 
@@ -7978,6 +7980,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	SQLite3_result* incoming_aurora_hostgroups = incoming_servers.incoming_aurora_hostgroups;
 	SQLite3_result* incoming_hostgroup_attributes = incoming_servers.incoming_hostgroup_attributes;
 	SQLite3_result* incoming_mysql_servers_ssl_params = incoming_servers.incoming_mysql_servers_ssl_params;
+	SQLite3_result* incoming_aws_rds_bgd_hostgroups = incoming_servers.incoming_aws_rds_bgd_hostgroups;
 	SQLite3_result* incoming_mysql_servers_v2 = incoming_servers.incoming_mysql_servers_v2;
 
 	const char *query=(char *)"SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM main.mysql_servers ORDER BY hostgroup_id, hostname, port";
@@ -8134,7 +8137,11 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	// support for AWS RDS, table mysql_aws_rds_bgd_hostgroups
 	query=(char *)"SELECT a.* FROM mysql_aws_rds_bgd_hostgroups a LEFT JOIN mysql_aws_rds_bgd_hostgroups b ON (a.writer_hostgroup=b.reader_hostgroup) WHERE b.reader_hostgroup IS NULL ORDER BY writer_hostgroup";
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset_aws_rds_bgd);
+	if (incoming_aws_rds_bgd_hostgroups == nullptr) {
+		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset_aws_rds_bgd);
+	} else {
+		resultset_aws_rds_bgd = incoming_aws_rds_bgd_hostgroups;
+	}
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {

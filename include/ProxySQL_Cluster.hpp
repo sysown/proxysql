@@ -72,6 +72,9 @@
 /* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_aws_aurora_hostgroups'. See top comment for details. */
 #define CLUSTER_QUERY_MYSQL_AWS_AURORA "PROXY_SELECT writer_hostgroup, reader_hostgroup, active, aurora_port, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, autopurge_missing_checks, comment FROM runtime_mysql_aws_aurora_hostgroups ORDER BY writer_hostgroup"
 
+/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_aws_rds_bgd_hostgroups'. See top comment for details. */
+#define CLUSTER_QUERY_MYSQL_AWS_RDS_BGD "PROXY_SELECT writer_hostgroup, reader_hostgroup, green_writer_hostgroup, green_reader_hostgroup, active, writer_is_also_reader, check_interval_ms, check_timeout_ms, comment, auto_generated, status FROM runtime_mysql_aws_rds_bgd_hostgroups WHERE auto_generated=0 ORDER BY writer_hostgroup"
+
 /* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_galera_hostgroups'. See top comment for details. */
 #define	CLUSTER_QUERY_MYSQL_GALERA "PROXY_SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, comment FROM runtime_mysql_galera_hostgroups ORDER BY writer_hostgroup"
 
@@ -446,6 +449,8 @@ struct p_cluster_counter {
 		pulled_mysql_servers_hostgroup_attributes_failure,
 		pulled_mysql_servers_ssl_params_success,
 		pulled_mysql_servers_ssl_params_failure,
+		pulled_mysql_servers_aws_rds_bgd_hostgroups_success,
+		pulled_mysql_servers_aws_rds_bgd_hostgroups_failure,
 		pulled_mysql_servers_runtime_checks_success,
 		pulled_mysql_servers_runtime_checks_failure,
 

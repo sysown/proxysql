@@ -91,6 +91,7 @@ namespace SQLQueries {
 	const char* const DELETE_MYSQL_AWS_AURORA_HOSTGROUPS = "DELETE FROM mysql_aws_aurora_hostgroups";
 	const char* const DELETE_MYSQL_HOSTGROUP_ATTRIBUTES = "DELETE FROM mysql_hostgroup_attributes";
 	const char* const DELETE_MYSQL_SERVERS_SSL_PARAMS = "DELETE FROM mysql_servers_ssl_params";
+	const char* const DELETE_MYSQL_AWS_RDS_BGD_HOSTGROUPS = "DELETE FROM mysql_aws_rds_bgd_hostgroups";
 	const char* const DELETE_PGSQL_SERVERS = "DELETE FROM pgsql_servers";
 	const char* const DELETE_PGSQL_REPLICATION_HOSTGROUPS = "DELETE FROM pgsql_replication_hostgroups";
 	const char* const DELETE_PGSQL_HOSTGROUP_ATTRIBUTES = "DELETE FROM pgsql_hostgroup_attributes";
@@ -1821,12 +1822,14 @@ int ProxySQL_Cluster::fetch_and_store(MYSQL* conn, const fetch_query& f_query, M
 /**
  * @brief Generates a hash from the received resultsets from executing the following queries in the specified
  *   order:
- *   - CLUSTER_QUERY_RUNTIME_MYSQL_SERVERS.
+ *   - CLUSTER_QUERY_MYSQL_SERVERS_V2.
  *   - CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS.
  *   - CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS.
  *   - CLUSTER_QUERY_MYSQL_GALERA.
  *   - CLUSTER_QUERY_MYSQL_AWS_AURORA.
  *   - CLUSTER_QUERY_MYSQL_HOSTGROUP_ATTRIBUTES.
+ *   - CLUSTER_QUERY_MYSQL_SERVERS_SSL_PARAMS.
+ *   - CLUSTER_QUERY_MYSQL_AWS_RDS_BGD.
  *
  *  IMPORTANT: It's assumed that the previous queries were successful and that the resultsets are received in
  *  the specified order.
@@ -1871,6 +1874,7 @@ incoming_servers_t convert_mysql_servers_resultsets(const std::vector<MYSQL_RES*
 			get_SQLite3_resulset(results[5]).release(),
 			get_SQLite3_resulset(results[6]).release(),
 			get_SQLite3_resulset(results[7]).release(),
+			get_SQLite3_resulset(results[8]).release(),
 		};
 	}
 }
@@ -2084,7 +2088,7 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 			if (rc_conn) {
 				MySQL_Monitor::update_dns_cache_from_mysql_conn(conn);
 
-				std::vector<MYSQL_RES*> results(8,nullptr);
+				std::vector<MYSQL_RES*> results(9,nullptr);
 
 				// servers messages
 				std::string fetch_servers_done = "";
@@ -2121,6 +2125,12 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 				string_format("Cluster: Fetching 'MySQL Servers SSL Params' from peer %s:%d\n", fetch_mysql_servers_ssl_params_start, hostname, port);
 				std::string fetch_mysql_servers_ssl_params_err = "";
 				string_format("Cluster: Fetching 'MySQL Servers SSL Params' from peer %s:%d failed: \n", fetch_mysql_servers_ssl_params_err, hostname, port);
+
+				// AWS RDS BGD hostgroups messages
+				std::string fetch_aws_rds_bgd_start = "";
+				string_format("Cluster: Fetching 'MySQL AWS RDS BGD Hostgroups' from peer %s:%d\n", fetch_aws_rds_bgd_start, hostname, port);
+				std::string fetch_aws_rds_bgd_err = "";
+				string_format("Cluster: Fetching 'MySQL AWS RDS BGD Hostgroups' from peer %s:%d failed: \n", fetch_aws_rds_bgd_err, hostname, port);
 
 				// Create fetching queries
 
@@ -2170,6 +2180,12 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 						p_cluster_counter::pulled_mysql_servers_ssl_params_success,
 						p_cluster_counter::pulled_mysql_servers_ssl_params_failure,
 						{ fetch_mysql_servers_ssl_params_start, "", fetch_mysql_servers_ssl_params_err }
+					},
+					{
+						CLUSTER_QUERY_MYSQL_AWS_RDS_BGD,
+						p_cluster_counter::pulled_mysql_servers_aws_rds_bgd_hostgroups_success,
+						p_cluster_counter::pulled_mysql_servers_aws_rds_bgd_hostgroups_failure,
+						{ fetch_aws_rds_bgd_start, "", fetch_aws_rds_bgd_err }
 					}
 				};
 
@@ -2205,22 +2221,22 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 
 					MYSQL_RES* fetch_res = nullptr;
 					if (fetch_and_store(conn, query, &fetch_res) == 0) {
-						results[7] = fetch_res;
+						results[8] = fetch_res;
 					} else {
 						fetching_error = true;
 					}
 				}
 
 				if (fetching_error == false) {
-					const uint64_t servers_hash = compute_servers_tables_raw_checksum(results, 7); // ignore runtime_mysql_servers in checksum calculation
+					const uint64_t servers_hash = compute_servers_tables_raw_checksum(results, 8); // ignore runtime_mysql_servers in checksum calculation
 					const string computed_checksum{ get_checksum_from_hash(servers_hash) };
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Computed checksum for MySQL Servers v2 from peer %s:%d : %s\n", hostname, port, computed_checksum.c_str());
 					proxy_info("Cluster: Computed checksum for MySQL Servers v2 from peer %s:%d : %s\n", hostname, port, computed_checksum.c_str());
 
 					bool runtime_checksum_matches = true;
 
-					if (results[7]) {
-						const uint64_t runtime_mysql_server_hash = mysql_raw_checksum(results[7]);
+					if (results[8]) {
+						const uint64_t runtime_mysql_server_hash = mysql_raw_checksum(results[8]);
 						const std::string runtime_mysql_server_computed_checksum = get_checksum_from_hash(runtime_mysql_server_hash);
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Computed checksum for MySQL Servers from peer %s:%d : %s\n", hostname, port, runtime_mysql_server_computed_checksum.c_str());
 						proxy_info("Cluster: Computed checksum for MySQL Servers from peer %s:%d : %s\n", hostname, port, runtime_mysql_server_computed_checksum.c_str());
@@ -2481,6 +2497,49 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Dumping fetched 'mysql_servers_ssl_params'\n");
 						proxy_info("Dumping fetched 'mysql_servers_ssl_params'\n");
 						GloAdmin->admindb->execute_statement((char*)"SELECT * FROM mysql_servers_ssl_params", &error, &cols, &affected_rows, &resultset);
+						resultset->dump_to_stderr();
+						delete resultset;
+
+						// sync mysql_aws_rds_bgd_hostgroups
+						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Writing mysql_aws_rds_bgd_hostgroups table\n");
+						proxy_info("Cluster: Writing mysql_aws_rds_bgd_hostgroups table\n");
+						GloAdmin->admindb->execute(SQLQueries::DELETE_MYSQL_AWS_RDS_BGD_HOSTGROUPS);
+						{
+							const char* q = (const char*)"INSERT INTO mysql_aws_rds_bgd_hostgroups ("
+								"writer_hostgroup, reader_hostgroup, green_writer_hostgroup, green_reader_hostgroup, "
+								"active, writer_is_also_reader, check_interval_ms, check_timeout_ms, comment) "
+								"VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
+							auto [rc, statement1_unique] = GloAdmin->admindb->prepare_v2(q);
+							ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+							sqlite3_stmt *statement1 = statement1_unique.get();
+
+							while ((row = mysql_fetch_row(results[7]))) {
+								rc=(*proxy_sqlite3_bind_int64)(statement1, 1, atol(row[0])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // writer_hostgroup
+								rc=(*proxy_sqlite3_bind_int64)(statement1, 2, atol(row[1])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // reader_hostgroup
+								if (row[2]) {
+									rc=(*proxy_sqlite3_bind_int64)(statement1, 3, atol(row[2])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // green_writer_hostgroup
+								} else {
+									rc=(*proxy_sqlite3_bind_null)(statement1, 3); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+								}
+								if (row[3]) {
+									rc=(*proxy_sqlite3_bind_int64)(statement1, 4, atol(row[3])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // green_reader_hostgroup
+								} else {
+									rc=(*proxy_sqlite3_bind_null)(statement1, 4); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+								}
+								rc=(*proxy_sqlite3_bind_int64)(statement1, 5, atol(row[4])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // active
+								rc=(*proxy_sqlite3_bind_int64)(statement1, 6, atol(row[5])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // writer_is_also_reader
+								rc=(*proxy_sqlite3_bind_int64)(statement1, 7, atol(row[6])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // check_interval_ms
+								rc=(*proxy_sqlite3_bind_int64)(statement1, 8, atol(row[7])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // check_timeout_ms
+								rc=(*proxy_sqlite3_bind_text)(statement1, 9, row[8], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // comment
+								SAFE_SQLITE3_STEP2(statement1);
+								rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+								rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+							}
+						}
+
+						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Dumping fetched 'mysql_aws_rds_bgd_hostgroups'\n");
+						proxy_info("Dumping fetched 'mysql_aws_rds_bgd_hostgroups'\n");
+						GloAdmin->admindb->execute_statement((char*)"SELECT * FROM mysql_aws_rds_bgd_hostgroups", &error, &cols, &affected_rows, &resultset);
 						resultset->dump_to_stderr();
 						delete resultset;
 
@@ -4977,6 +5036,27 @@ cluster_metrics_map = std::make_tuple(
 			"Number of times a 'module' have been pulled from a peer.",
 			metric_tags {
 				{ "module_name", "mysql_servers_ssl_params" },
+				{ "status", "failure" }
+			}
+		),
+		// ====================================================================
+
+		// ====================================================================
+		std::make_tuple (
+			p_cluster_counter::pulled_mysql_servers_aws_rds_bgd_hostgroups_success,
+			"proxysql_cluster_pulled_total",
+			"Number of times a 'module' have been pulled from a peer.",
+			metric_tags {
+				{ "module_name", "mysql_servers_aws_rds_bgd_hostgroups" },
+				{ "status", "success" }
+			}
+		),
+		std::make_tuple (
+			p_cluster_counter::pulled_mysql_servers_aws_rds_bgd_hostgroups_failure,
+			"proxysql_cluster_pulled_total",
+			"Number of times a 'module' have been pulled from a peer.",
+			metric_tags {
+				{ "module_name", "mysql_servers_aws_rds_bgd_hostgroups" },
 				{ "status", "failure" }
 			}
 		),
