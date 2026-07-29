@@ -1,0 +1,129 @@
+# Builds ProxySQL once with every cluster simulation flag enabled, then runs
+# each registered cluster_sim_* TAP group as an independent matrix job.
+#
+# Maintenance notes:
+# - Groups and TAP binaries are discovered from test/tap/groups/groups.json.
+# - `testall` is intentional: every matrix job shares one ProxySQL binary built
+#   with all simulation flags.
+# - Registering a new simulation group and TAP binary requires no YAML changes.
+# - The exact-SHA cache contains only the runtime files used by matrix jobs.
+# - Command details and local examples: test/infra/control/cluster-simulator-ci.bash help.
+
+name: CI-cluster-simulator
+run-name: '${{ github.head_ref || github.ref_name }} ${{ github.workflow }} ${{ github.sha }}'
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  BUILD_CACHE_KEY: cluster-simulator-v3-ubuntu22-${{ github.sha }}
+  RUNTIME_CACHE_DIR: .cluster-simulator-runtime
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-22.04
+    outputs:
+      groups: ${{ steps.simulator-groups.outputs.groups }}
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+
+    - name: Discover simulation groups
+      id: simulator-groups
+      run: test/infra/control/cluster-simulator-ci.bash discover
+
+    - name: Restore simulation build
+      id: simulator-build
+      uses: actions/cache/restore@v4
+      with:
+        key: ${{ env.BUILD_CACHE_KEY }}
+        path: ${{ env.RUNTIME_CACHE_DIR }}
+
+    - name: Install cached simulation runtime
+      if: steps.simulator-build.outputs.cache-hit == 'true'
+      run: test/infra/control/cluster-simulator-ci.bash install
+
+    - name: Build simulation test runtime
+      if: steps.simulator-build.outputs.cache-hit != 'true'
+      run: test/infra/control/cluster-simulator-ci.bash build
+
+    - name: Verify simulation build
+      run: test/infra/control/cluster-simulator-ci.bash verify
+
+    - name: Stage simulation runtime
+      if: steps.simulator-build.outputs.cache-hit != 'true'
+      run: test/infra/control/cluster-simulator-ci.bash stage
+
+    - name: Save simulation build
+      if: steps.simulator-build.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        key: ${{ env.BUILD_CACHE_KEY }}
+        path: ${{ env.RUNTIME_CACHE_DIR }}
+
+  test:
+    name: test / ${{ matrix.group }}
+    needs: build
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ${{ fromJSON(needs.build.outputs.groups) }}
+    env:
+      INFRA_ID: ${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}
+      TAP_GROUP: ${{ matrix.group }}
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+
+    - name: Restore simulation build
+      uses: actions/cache/restore@v4
+      with:
+        key: ${{ env.BUILD_CACHE_KEY }}
+        fail-on-cache-miss: true
+        path: ${{ env.RUNTIME_CACHE_DIR }}
+
+    - name: Install simulation runtime
+      run: test/infra/control/cluster-simulator-ci.bash install
+
+    - name: Verify simulation build
+      run: test/infra/control/cluster-simulator-ci.bash verify "${TAP_GROUP}"
+
+    - name: Build CI base image
+      run: docker build --network host -t proxysql-ci-base:latest test/infra/docker-base
+
+    - name: Start infrastructure
+      run: test/infra/control/ensure-infras.bash
+
+    - name: Run simulation tests
+      run: test/infra/control/run-tests-isolated.bash
+
+    - name: Cleanup
+      if: always()
+      run: |
+        test/infra/control/stop-proxysql-isolated.bash || true
+        test/infra/control/destroy-infras.bash || true
+
+    - name: Archive failure logs
+      if: ${{ failure() && !cancelled() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.group }}-${{ github.sha }}-logs-run${{ github.run_number }}
+        path: ci_infra_logs/

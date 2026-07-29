@@ -166,6 +166,7 @@ class MySQL_Connection {
 	my_bool ret_bool;
 	bool async_fetch_row_start;
 	bool send_quit;
+	bool healthy;
 	bool reusable;
 	bool processing_multi_statement;
 	bool multiplex_delayed;

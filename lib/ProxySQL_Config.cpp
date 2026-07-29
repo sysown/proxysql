@@ -1228,6 +1228,40 @@ int ProxySQL_Config::Write_MySQL_Servers_to_configfile(std::string& data) {
 		sqlite_resultset = NULL;
 	}
 
+	query=(char *)"SELECT * FROM mysql_aws_rds_bgd_hostgroups";
+	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
+	if (error) {
+		proxy_error("Error on read from mysql_aws_rds_bgd_hostgroups: %s\n", error);
+		return -1;
+	} else {
+		if (sqlite_resultset) {
+			data += "mysql_aws_rds_bgd_hostgroups:\n(\n";
+			bool isNext = false;
+			for (auto r : sqlite_resultset->rows) {
+				if (isNext)
+					data += ",\n";
+				data += "\t{\n";
+				addField(data, "writer_hostgroup", r->fields[0], "");
+				addField(data, "reader_hostgroup", r->fields[1], "");
+				// green_writer_hostgroup / green_reader_hostgroup are nullable; addField skips NULLs
+				addField(data, "green_writer_hostgroup", r->fields[2], "");
+				addField(data, "green_reader_hostgroup", r->fields[3], "");
+				addField(data, "active", r->fields[4], "");
+				addField(data, "writer_is_also_reader", r->fields[5], "");
+				addField(data, "check_interval_ms", r->fields[6], "");
+				addField(data, "check_timeout_ms", r->fields[7], "");
+				addField(data, "comment", r->fields[8]);
+
+				data += "\t}";
+				isNext = true;
+			}
+			data += "\n)\n";
+		}
+	}
+
+	if (sqlite_resultset)
+		delete sqlite_resultset;
+
 	query = (char *)"SELECT * FROM mysql_hostgroup_attributes";
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
 	if (error) {
@@ -1619,6 +1653,60 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
                     rows++;
             }
     }
+
+    if (root.exists("mysql_aws_rds_bgd_hostgroups")==true) {
+            const Setting &mysql_aws_rds_bgd_hostgroups = root["mysql_aws_rds_bgd_hostgroups"];
+            int count = mysql_aws_rds_bgd_hostgroups.getLength();
+            // green_writer_hostgroup / green_reader_hostgroup are nullable -> passed as %s ("NULL" or an integer)
+            char *q=(char *)"INSERT OR REPLACE INTO mysql_aws_rds_bgd_hostgroups (writer_hostgroup, reader_hostgroup, green_writer_hostgroup, green_reader_hostgroup, active, writer_is_also_reader, check_interval_ms, check_timeout_ms, comment ) VALUES (%d, %d, %s, %s, %d, %d, %d, %d, '%s')";
+            for (i=0; i< count; i++) {
+                    const Setting &line = mysql_aws_rds_bgd_hostgroups[i];
+                    int writer_hostgroup;
+                    int reader_hostgroup;
+                    int green_writer_hostgroup;
+                    int green_reader_hostgroup;
+                    int active=1; // default
+                    int writer_is_also_reader;
+                    int check_interval_ms;
+                    int check_timeout_ms;
+                    std::string comment="";
+                    if (line.lookupValue("writer_hostgroup", writer_hostgroup)==false) {
+                        proxy_error("Admin: detected a mysql_aws_rds_bgd_hostgroups in config file without a mandatory writer_hostgroup\n");
+                        continue;
+                    }
+                    if (line.lookupValue("reader_hostgroup", reader_hostgroup)==false) {
+                        proxy_error("Admin: detected a mysql_aws_rds_bgd_hostgroups in config file without a mandatory reader_hostgroup\n");
+                        continue;
+                    }
+                    char green_writer_str[24];
+                    char green_reader_str[24];
+                    if (line.lookupValue("green_writer_hostgroup", green_writer_hostgroup)==false) {
+                        strcpy(green_writer_str, "NULL");
+                    } else {
+                        snprintf(green_writer_str, sizeof(green_writer_str), "%d", green_writer_hostgroup);
+                    }
+                    if (line.lookupValue("green_reader_hostgroup", green_reader_hostgroup)==false) {
+                        strcpy(green_reader_str, "NULL");
+                    } else {
+                        snprintf(green_reader_str, sizeof(green_reader_str), "%d", green_reader_hostgroup);
+                    }
+                    if (line.lookupValue("active", active)==false) active=1;
+                    if (line.lookupValue("writer_is_also_reader", writer_is_also_reader)==false) writer_is_also_reader=0;
+                    if (line.lookupValue("check_interval_ms", check_interval_ms)==false) check_interval_ms=1000;
+                    if (line.lookupValue("check_timeout_ms", check_timeout_ms)==false) check_timeout_ms=800;
+                    line.lookupValue("comment", comment);
+                    char *o1=strdup(comment.c_str());
+                    char *o=escape_string_single_quotes(o1, false);
+                    char *query=(char *)malloc(strlen(q)+strlen(o)+256); // 128 vs sizeof(int)*8
+                    sprintf(query,q, writer_hostgroup, reader_hostgroup, green_writer_str, green_reader_str, active, writer_is_also_reader, check_interval_ms, check_timeout_ms, o);
+                    admindb->execute(query);
+                    if (o!=o1) free(o);
+                    free(o1);
+                    free(query);
+                    rows++;
+            }
+    }
+
 	if (root.exists("mysql_hostgroup_attributes") == true) {
 		const Setting &mysql_hostgroup_attributes = root["mysql_hostgroup_attributes"];
 		int count = mysql_hostgroup_attributes.getLength();

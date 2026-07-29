@@ -835,3 +835,107 @@ int calculate_percentile_from_histogram(
 
 	return thresholds.back();
 }
+
+/**
+ * @brief Pretty-print a MySQL result set into a string.
+ *
+ * @details Formats the full buffered result set as an ASCII table. The current row cursor is preserved:
+ * the function seeks to the first row for formatting and restores the original cursor before returning.
+ *
+ * @param result  MySQL result set to format.
+ *
+ * @return        Pretty-printed result set, or an empty string if the result is NULL or has no fields.
+ */
+std::string mysql_result_to_string(MYSQL_RES* result) {
+	if (!result) return "";
+
+	MYSQL_ROW_OFFSET original_row = mysql_row_tell(result);
+	mysql_data_seek(result, 0);
+
+	int num_fields = mysql_num_fields(result);
+	MYSQL_FIELD* fields = mysql_fetch_fields(result);
+	if (!fields || num_fields == 0) {
+		mysql_row_seek(result, original_row);
+		return "";
+	}
+
+	std::vector<std::vector<std::string>> rows;
+	MYSQL_ROW row;
+	while ((row = mysql_fetch_row(result))) {
+		unsigned long* lens = mysql_fetch_lengths(result);
+		std::vector<std::string> r;
+		r.reserve(num_fields);
+		for (int i = 0; i < num_fields; i++) {
+			r.emplace_back(row[i] ? std::string(row[i], lens[i]) : "NULL");
+		}
+		rows.push_back(std::move(r));
+	}
+
+	std::vector<size_t> widths(num_fields);
+	for (int i = 0; i < num_fields; i++) {
+		widths[i] = strlen(fields[i].name);
+	}
+	for (const auto& r : rows) {
+		for (int i = 0; i < num_fields; i++) {
+			if (r[i].size() > widths[i]) widths[i] = r[i].size();
+		}
+	}
+
+	std::string s;
+	std::string out;
+
+	auto append_border = [&]() {
+		s = "+";
+		for (int i = 0; i < num_fields; i++) {
+			for (size_t j = 0; j < widths[i] + 2; j++) s += "-";
+			s += "+";
+		}
+		out += s;
+		out += "\n";
+	};
+
+	append_border();
+	s = "|";
+	for (int i = 0; i < num_fields; i++) {
+		size_t len = strlen(fields[i].name);
+		s += " "; s += fields[i].name;
+		for (size_t j = 0; j < widths[i] - len + 1; j++) s += " ";
+		s += "|";
+	}
+	out += s;
+	out += "\n";
+	append_border();
+
+	for (const auto& r : rows) {
+		s = "|";
+		for (int i = 0; i < num_fields; i++) {
+			s += " "; s += r[i];
+			for (size_t j = 0; j < widths[i] - r[i].size() + 1; j++) s += " ";
+			s += "|";
+		}
+		out += s;
+		out += "\n";
+	}
+	append_border();
+
+	mysql_row_seek(result, original_row);
+	return out;
+}
+
+/**
+ * @brief Pretty-print a MySQL result set to a file stream.
+ *
+ * @details Uses mysql_result_to_string() for formatting and writes the resulting string to the supplied
+ * file stream. The result set row cursor is preserved.
+ *
+ * @param file    Destination file stream.
+ * @param result  MySQL result set to format.
+ */
+void dump_mysql_result(FILE* file, MYSQL_RES* result) {
+	if (!file) return;
+
+	std::string result_string = mysql_result_to_string(result);
+	if (!result_string.empty()) {
+		fputs(result_string.c_str(), file);
+	}
+}

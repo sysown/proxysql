@@ -356,6 +356,7 @@ static void test_write_mysql_servers_empty() {
 	db->execute(ADMIN_SQLITE_TABLE_MYSQL_GROUP_REPLICATION_HOSTGROUPS);
 	db->execute(ADMIN_SQLITE_TABLE_MYSQL_GALERA_HOSTGROUPS);
 	db->execute(ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS);
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_AWS_RDS_BGD_HOSTGROUPS);
 	db->execute(ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES);
 	db->execute(ADMIN_SQLITE_TABLE_MYSQL_SERVERS_SSL_PARAMS);
 
@@ -391,6 +392,7 @@ static void test_write_mysql_servers_with_data() {
 	db->execute(ADMIN_SQLITE_TABLE_MYSQL_GROUP_REPLICATION_HOSTGROUPS);
 	db->execute(ADMIN_SQLITE_TABLE_MYSQL_GALERA_HOSTGROUPS);
 	db->execute(ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS);
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_AWS_RDS_BGD_HOSTGROUPS);
 	db->execute(ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES);
 	db->execute(ADMIN_SQLITE_TABLE_MYSQL_SERVERS_SSL_PARAMS);
 	// Populate sub-tables with data (not empty!)
@@ -398,6 +400,7 @@ static void test_write_mysql_servers_with_data() {
 	db->execute("INSERT INTO mysql_group_replication_hostgroups (writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment) VALUES (30,31,32,33,1,2,0,100,'gr')");
 	db->execute("INSERT INTO mysql_galera_hostgroups (writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment) VALUES (40,41,42,43,1,3,1,50,'galera')");
 	db->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,comment) VALUES (50,51,1,3306,'.aurora.example',100,1000,800,0,1,0,0,1,'aurora')");
+	db->execute("INSERT INTO mysql_aws_rds_bgd_hostgroups (writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,writer_is_also_reader,check_interval_ms,check_timeout_ms,comment) VALUES (70,71,72,73,1,0,1000,800,'rds')");
 	db->execute("INSERT INTO mysql_hostgroup_attributes (hostgroup_id,max_num_online_servers,autocommit,free_connections_pct,init_connect,multiplex,connection_warming,throttle_connections_per_sec,ignore_session_variables,hostgroup_settings,servers_defaults,comment) VALUES (60,100,-1,50,'SET autocommit=1',1,0,100,'','{}','{}','hg60')");
 	db->execute("INSERT INTO mysql_servers_ssl_params (hostname,port,username,ssl_ca,ssl_cert,ssl_key,ssl_capath,ssl_crl,ssl_crlpath,ssl_cipher,tls_version,comment) VALUES ('h1',3306,'u1','/ca','/cert','/key','','','','','TLSv1.2','ssl1')");
 
@@ -432,6 +435,7 @@ static void test_write_mysql_servers_replication_hostgroups() {
 	db->execute(ADMIN_SQLITE_TABLE_MYSQL_GROUP_REPLICATION_HOSTGROUPS);
 	db->execute(ADMIN_SQLITE_TABLE_MYSQL_GALERA_HOSTGROUPS);
 	db->execute(ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS);
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_AWS_RDS_BGD_HOSTGROUPS);
 	db->execute(ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES);
 	db->execute(ADMIN_SQLITE_TABLE_MYSQL_SERVERS_SSL_PARAMS);
 	// Also populate one more sub for good measure

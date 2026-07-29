@@ -1785,12 +1785,19 @@ void MySQL_Data_Stream::setDSS_STATE_QUERY_SENT_NET() {
 void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 	MySQL_Connection *mc=myconn;
 	mc->last_time_used=sess->thread->curtime;
+
 	// before detaching, check if last_HG_affected_rows matches . if yes, set it back to -1
 	if (mybe) {
 		if (mybe->hostgroup_id == sess->last_HG_affected_rows) {
 			sess->last_HG_affected_rows = -1;
 		}
 	}
+
+	if (!mc->reusable) {
+		destroy_MySQL_Connection_From_Pool(true);
+		return;
+	}
+
 	unsigned long long intv = mysql_thread___connection_max_age_ms;
 	intv *= 1000;
 	if (
@@ -1805,7 +1812,7 @@ void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 		// is used outside 'PINGING_SERVER' operation. For more context see #3502.
 		sess->status != PINGING_SERVER
 	) {
-		if (mysql_thread___reset_connection_algorithm == 2) {
+		if (mysql_thread___reset_connection_algorithm == 2 && mc->healthy) {
 			sess->create_new_session_and_reset_connection(this);
 		} else {
 			destroy_MySQL_Connection_From_Pool(true);
@@ -1850,7 +1857,7 @@ bool MySQL_Data_Stream::data_in_rbio() {
 
 void MySQL_Data_Stream::reset_connection() {
 	if (myconn) {
-		if (mysql_thread___multiplexing && (DSS == STATE_MARIADB_GENERIC || DSS == STATE_READY) && myconn->reusable == true && myconn->IsActiveTransaction() == false && myconn->MultiplexDisabled() == false && myconn->async_state_machine == ASYNC_IDLE) {
+		if (mysql_thread___multiplexing && (DSS == STATE_MARIADB_GENERIC || DSS == STATE_READY) && myconn->healthy == true && myconn->reusable == true && myconn->IsActiveTransaction() == false && myconn->MultiplexDisabled() == false && myconn->async_state_machine == ASYNC_IDLE) {
 			myconn->last_time_used = sess->thread->curtime;
 			return_MySQL_Connection_To_Pool();
 		}

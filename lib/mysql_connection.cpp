@@ -428,6 +428,7 @@ MySQL_Connection::MySQL_Connection() {
 	async_state_machine=ASYNC_CONNECT_START;
 	ret_mysql=NULL;
 	send_quit=true;
+	healthy=true;
 	myds=NULL;
 	inserted_into_pool=0;
 	reusable=false;
@@ -2138,6 +2139,15 @@ int MySQL_Connection::async_connect(short event) {
 		creation_time = monotonic_time();
 		return 0;
 	}
+
+	// Abort if the server went offline or was marked unhealthy while waiting to connect.
+	// The server status can change (shunned by monitor, AWS BGD switchover, manual OFFLINE)
+	// or the connection can be marked unhealthy (AWS BGD drain) between server selection and
+	// connection completion.
+	if (IsServerOffline()) {
+		return -1;
+	}
+
 	handler(event);
 	switch (async_state_machine) {
 		case ASYNC_CONNECT_SUCCESSFUL:
@@ -2160,21 +2170,28 @@ int MySQL_Connection::async_connect(short event) {
 
 
 bool MySQL_Connection::IsServerOffline() {
-	bool ret=false;
-	if (parent==NULL)
+	bool ret = false;
+	if (parent == NULL)
 		return ret;
-	server_status=parent->get_status(); // we copy it here to avoid race condition. The caller will see this
+
+	if (healthy == false)
+		return true;
+
+	server_status = parent->get_status(); // we copy it here to avoid race condition. The caller will see this
+	bool server_shunned = (server_status == MYSQL_SERVER_STATUS_SHUNNED) || (server_status == MYSQL_SERVER_STATUS_SHUNNED_AWS_BGD);
+
 	if (
-		(server_status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the server is OFFLINE as specific by the user
+		(server_status == MYSQL_SERVER_STATUS_OFFLINE_HARD) // the server is OFFLINE as specific by the user
 		||
-		(server_status==MYSQL_SERVER_STATUS_SHUNNED && parent->shunned_automatic==true && parent->shunned_and_kill_all_connections==true) // the server is SHUNNED due to a serious issue
+		(server_shunned && parent->shunned_automatic == true && parent->shunned_and_kill_all_connections == true) // the server is SHUNNED due to a serious issue
 		||
-		(server_status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG)  // slave is lagging! see #774
+		(server_status == MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG)  // slave is lagging! see #774
 		||
 		(parent->myhgc->online_servers_within_threshold() == false) // number of online servers in a hostgroup exceeds the configured maximum servers
 	) {
-		ret=true;
+		ret = true;
 	}
+
 	return ret;
 }
 
@@ -3031,10 +3048,13 @@ int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigne
 	assert(mysql);
 	assert(ret_mysql);
 	server_status=parent->get_status(); // we copy it here to avoid race condition. The caller will see this
+	bool server_shunned = (server_status == MYSQL_SERVER_STATUS_SHUNNED) || (server_status == MYSQL_SERVER_STATUS_SHUNNED_AWS_BGD);
 	if (
-		(parent->get_status()==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the server is OFFLINE as specific by the user
+		(healthy == false)
 		||
-		(parent->get_status()==MYSQL_SERVER_STATUS_SHUNNED && parent->shunned_automatic==true && parent->shunned_and_kill_all_connections==true) // the server is SHUNNED due to a serious issue
+		(server_status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the server is OFFLINE as specific by the user
+		||
+		(server_shunned && parent->shunned_automatic == true && parent->shunned_and_kill_all_connections==true) // the server is SHUNNED due to a serious issue
 	) {
 		return -1;
 	}

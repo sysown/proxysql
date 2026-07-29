@@ -3206,6 +3206,8 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			tn = "mysql_hostgroup_attributes";
 		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_SERVERS_SSL_PARAMS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_SERVERS_SSL_PARAMS))) {
 			tn = "mysql_servers_ssl_params";
+		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_AWS_RDS_BGD, query_no_space, strlen(CLUSTER_QUERY_MYSQL_AWS_RDS_BGD))) {
+			tn = "mysql_aws_rds_bgd_hostgroups";
 		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_SERVERS_V2, query_no_space, strlen(CLUSTER_QUERY_MYSQL_SERVERS_V2))) {
 			tn = "mysql_servers_v2";
 		}
@@ -4474,6 +4476,15 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			(strlen(query_no_space)==strlen("CHECKSUM MYSQL AURORA HOSTGROUPS") && !strncasecmp("CHECKSUM MYSQL AURORA HOSTGROUPS", query_no_space, strlen(query_no_space)))){
 			char *q=(char *)"SELECT * FROM mysql_aws_aurora_hostgroups ORDER BY writer_hostgroup";
 			tablename=(char *)"MYSQL AURORA HOSTGROUPS";
+			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
+		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL RDS BGD HOSTGROUPS") && !strncasecmp("CHECKSUM MEMORY MYSQL RDS BGD HOSTGROUPS", query_no_space, strlen(query_no_space)))
+			||
+			(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL RDS BGD HOSTGROUPS") && !strncasecmp("CHECKSUM MEM MYSQL RDS BGD HOSTGROUPS", query_no_space, strlen(query_no_space)))
+			||
+			(strlen(query_no_space)==strlen("CHECKSUM MYSQL RDS BGD HOSTGROUPS") && !strncasecmp("CHECKSUM MYSQL RDS BGD HOSTGROUPS", query_no_space, strlen(query_no_space)))){
+			char *q=(char *)"SELECT * FROM mysql_aws_rds_bgd_hostgroups ORDER BY writer_hostgroup";
+			tablename=(char *)"MYSQL RDS BGD HOSTGROUPS";
 			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
 		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL HOSTGROUP ATTRIBUTES") && !strncasecmp("CHECKSUM MEMORY MYSQL HOSTGROUP ATTRIBUTES", query_no_space, strlen(query_no_space)))

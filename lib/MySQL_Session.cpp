@@ -5601,7 +5601,7 @@ bool MySQL_Session::handler_minus1_HandleErrorCodes(MySQL_Data_Stream *myds, int
 					myds->destroy_MySQL_Connection_From_Pool(false);
 					break;
 				default:
-					if (mysql_thread___reset_connection_algorithm == 2) {
+					if (mysql_thread___reset_connection_algorithm == 2 && myds->myconn->healthy) {
 						create_new_session_and_reset_connection(myds);
 					} else {
 						myds->destroy_MySQL_Connection_From_Pool(true);
@@ -5696,7 +5696,7 @@ void MySQL_Session::handler_minus1_HandleBackendConnection(MySQL_Data_Stream *my
 		if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 			myds->DSS=STATE_NOT_INITIALIZED;
 			if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
-				if (mysql_thread___reset_connection_algorithm == 2) {
+				if (mysql_thread___reset_connection_algorithm == 2 && myds->myconn->healthy) {
 					create_new_session_and_reset_connection(myds);
 				} else {
 					myds->destroy_MySQL_Connection_From_Pool(true);
@@ -9224,7 +9224,7 @@ void MySQL_Session::finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *mycon
 							myds->wait_until=0;
 							myds->DSS=STATE_NOT_INITIALIZED;
 							if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
-								if (mysql_thread___reset_connection_algorithm == 2) {
+								if (mysql_thread___reset_connection_algorithm == 2 && myds->myconn->healthy) {
 									create_new_session_and_reset_connection(myds);
 								} else {
 									myds->destroy_MySQL_Connection_From_Pool(true);

@@ -19,7 +19,8 @@ enum MySerStatus {
 	MYSQL_SERVER_STATUS_SHUNNED,
 	MYSQL_SERVER_STATUS_OFFLINE_SOFT,
 	MYSQL_SERVER_STATUS_OFFLINE_HARD,
-	MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG
+	MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG,
+	MYSQL_SERVER_STATUS_SHUNNED_AWS_BGD
 };
 
 enum log_event_type {
@@ -1404,6 +1405,7 @@ __thread int mysql_thread___monitor_ping_interval;
 __thread int mysql_thread___monitor_ping_max_failures;
 __thread int mysql_thread___monitor_ping_timeout;
 __thread int mysql_thread___monitor_aws_rds_topology_discovery_interval;
+__thread int mysql_thread___aws_blue_green_deployment_auto_discovery;
 __thread int mysql_thread___monitor_read_only_interval;
 __thread int mysql_thread___monitor_read_only_timeout;
 __thread int mysql_thread___monitor_read_only_max_timeout_count;
@@ -1758,6 +1760,7 @@ extern __thread int mysql_thread___monitor_ping_interval;
 extern __thread int mysql_thread___monitor_ping_max_failures;
 extern __thread int mysql_thread___monitor_ping_timeout;
 extern __thread int mysql_thread___monitor_aws_rds_topology_discovery_interval;
+extern __thread int mysql_thread___aws_blue_green_deployment_auto_discovery;
 extern __thread int mysql_thread___monitor_read_only_interval;
 extern __thread int mysql_thread___monitor_read_only_timeout;
 extern __thread int mysql_thread___monitor_read_only_max_timeout_count;

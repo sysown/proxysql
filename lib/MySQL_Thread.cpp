@@ -401,6 +401,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_ping_max_failures",
 	(char *)"monitor_ping_timeout",
 	(char *)"monitor_aws_rds_topology_discovery_interval",
+	(char *)"aws_blue_green_deployment_auto_discovery",
 	(char *)"monitor_read_only_interval",
 	(char *)"monitor_read_only_timeout",
 	(char *)"monitor_read_only_max_timeout_count",
@@ -1296,6 +1297,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_ping_max_failures=3;
 	variables.monitor_ping_timeout=1000;
 	variables.monitor_aws_rds_topology_discovery_interval=0;
+	variables.aws_blue_green_deployment_auto_discovery=1;
 	variables.monitor_read_only_interval=1000;
 	variables.monitor_read_only_timeout=800;
 	variables.monitor_read_only_max_timeout_count=3;
@@ -2065,7 +2067,17 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 			}
 			bool special_variable = std::get<3>(it->second); // if special_variable is true, min and max values are ignored, and more input validation is needed
 			if (special_variable == false) {
-				int intv=atoi(value);
+				// This option is stored as an integer for compatibility with the
+				// existing variable interface, but is documented and commonly set
+				// using the same true/false spelling as boolean variables.
+				int intv;
+				if (nameS == "aws_blue_green_deployment_auto_discovery" && strcasecmp(value, "true") == 0) {
+					intv = 1;
+				} else if (nameS == "aws_blue_green_deployment_auto_discovery" && strcasecmp(value, "false") == 0) {
+					intv = 0;
+				} else {
+					intv = atoi(value);
+				}
 				if (intv >= std::get<1>(it->second) && intv <= std::get<2>(it->second)) {
 					int * v = std::get<0>(it->second);
 					*v = intv;
@@ -2690,6 +2702,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 	// it is safe to do it here because get_variables_list() is the first function called during start time
 	if (VariablesPointers_int.size() == 0) {
 		// Monitor variables
+		VariablesPointers_int["aws_blue_green_deployment_auto_discovery"] = make_tuple(&variables.aws_blue_green_deployment_auto_discovery, 0, 1, false);
 		VariablesPointers_int["monitor_history"]                     = make_tuple(&variables.monitor_history,                  1000, 7*24*3600*1000, false);
 
 		VariablesPointers_int["monitor_connect_interval"]  = make_tuple(&variables.monitor_connect_interval,  100, 7*24*3600*1000, false);
@@ -4796,6 +4809,7 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(monitor_ping_max_failures);
 	REFRESH_VARIABLE_INT(monitor_ping_timeout);
 	REFRESH_VARIABLE_INT(monitor_aws_rds_topology_discovery_interval);
+	REFRESH_VARIABLE_INT(aws_blue_green_deployment_auto_discovery);
 	REFRESH_VARIABLE_INT(monitor_read_only_interval);
 	REFRESH_VARIABLE_INT(monitor_read_only_timeout);
 	REFRESH_VARIABLE_INT(monitor_read_only_max_timeout_count);
@@ -6549,6 +6563,11 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 	for (i=0; i<cached_connections->len; i++) {
 		c = (MySQL_Connection *) cached_connections->index(i);
 
+		// Skip unhealthy or non-reusable connections
+		if (!c->healthy || !c->reusable) {
+			continue;
+		}
+
 		// Skip cached connections whose parent server is inside the session-tracking
 		// capability backoff window. See 'MySrvC::session_track_backoff_until' for the
 		// full rationale; reads are relaxed because the deadline is compared against
@@ -6623,6 +6642,11 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
  * @param c Pointer to the MySQL_Connection object to be pushed to the local connection pool.
  */
 void MySQL_Thread::push_MyConn_local(MySQL_Connection *c) {
+	if (!c->healthy) {
+		MyHGM->push_MyConn_to_pool(c);
+		return;
+	}
+
 	// Bounded local cache: cache 1-in-N releases (N = mysql_threads), push the
 	// rest to the shared HGM pool so peer workers can pick them up.
 	// At N=1 always cache (no sibling to share with).
