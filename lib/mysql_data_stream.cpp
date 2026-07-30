@@ -35,7 +35,7 @@ static int get_zstd_compression_level(const MySQL_Connection* myconn) {
 	return ZSTD_CLEVEL_DEFAULT;
 }
 
-static bool decompress_mysql_payload(
+bool decompress_mysql_payload(
 	const MySQL_Connection* myconn, Bytef* dest, uLongf destLen, const unsigned char* source, size_t sourceLen
 ) {
 	if (use_zstd_compression(myconn)) {
@@ -43,8 +43,20 @@ static bool decompress_mysql_payload(
 		return !ZSTD_isError(rc) && rc == destLen;
 	}
 
+	// GHSA-fvch-fpgq-pwfx: uncompress() updates its length argument in place to
+	// the number of bytes actually written. destLen is passed by value here, so
+	// we must capture the caller's claimed (pre-compression) length before the
+	// call and require the actual decompressed size to match it. Without this
+	// check a client can declare a large payload_length in the compressed packet
+	// header while sending a zlib stream that inflates to fewer bytes:
+	// uncompress() returns Z_OK having written only the smaller amount, leaving
+	// the tail of the malloc'd destination buffer uninitialized. The caller then
+	// walks the full claimed length, parsing stale heap memory as MySQL packet
+	// headers (heap information disclosure). This mirrors the size check the
+	// zstd path above already performs.
+	const uLongf claimed_len = destLen;
 	const int rc = uncompress(dest, &destLen, source, sourceLen);
-	return rc == Z_OK;
+	return rc == Z_OK && destLen == claimed_len;
 }
 
 static bool fallback_to_uncompressed_mysql_payload(
@@ -332,6 +344,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	switching_auth_type = AUTH_UNKNOWN_PLUGIN;
 	switching_auth_sent = AUTH_UNKNOWN_PLUGIN;
 	auth_in_progress = 0;
+	passthrough_cleartext = NULL;
 	tmp_charset = 0;
 	x509_subject_alt_name=NULL;
 	ssl=NULL;
@@ -383,6 +396,14 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 	if (com_field_wild) {
 		free(com_field_wild);
 		com_field_wild=NULL;
+	}
+
+	if (passthrough_cleartext) {
+		// Best-effort scrub before free; the cleartext password should
+		// not linger in freed heap memory.
+		memset(passthrough_cleartext, 0, strlen(passthrough_cleartext));
+		free(passthrough_cleartext);
+		passthrough_cleartext = NULL;
 	}
 
 	proxy_debug(PROXY_DEBUG_NET,1, "Shutdown Data Stream. Session=%p, DataStream=%p\n" , sess, this);
@@ -1764,12 +1785,19 @@ void MySQL_Data_Stream::setDSS_STATE_QUERY_SENT_NET() {
 void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 	MySQL_Connection *mc=myconn;
 	mc->last_time_used=sess->thread->curtime;
+
 	// before detaching, check if last_HG_affected_rows matches . if yes, set it back to -1
 	if (mybe) {
 		if (mybe->hostgroup_id == sess->last_HG_affected_rows) {
 			sess->last_HG_affected_rows = -1;
 		}
 	}
+
+	if (!mc->reusable) {
+		destroy_MySQL_Connection_From_Pool(true);
+		return;
+	}
+
 	unsigned long long intv = mysql_thread___connection_max_age_ms;
 	intv *= 1000;
 	if (
@@ -1784,7 +1812,7 @@ void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 		// is used outside 'PINGING_SERVER' operation. For more context see #3502.
 		sess->status != PINGING_SERVER
 	) {
-		if (mysql_thread___reset_connection_algorithm == 2) {
+		if (mysql_thread___reset_connection_algorithm == 2 && mc->healthy) {
 			sess->create_new_session_and_reset_connection(this);
 		} else {
 			destroy_MySQL_Connection_From_Pool(true);
@@ -1829,7 +1857,7 @@ bool MySQL_Data_Stream::data_in_rbio() {
 
 void MySQL_Data_Stream::reset_connection() {
 	if (myconn) {
-		if (mysql_thread___multiplexing && (DSS == STATE_MARIADB_GENERIC || DSS == STATE_READY) && myconn->reusable == true && myconn->IsActiveTransaction() == false && myconn->MultiplexDisabled() == false && myconn->async_state_machine == ASYNC_IDLE) {
+		if (mysql_thread___multiplexing && (DSS == STATE_MARIADB_GENERIC || DSS == STATE_READY) && myconn->healthy == true && myconn->reusable == true && myconn->IsActiveTransaction() == false && myconn->MultiplexDisabled() == false && myconn->async_state_machine == ASYNC_IDLE) {
 			myconn->last_time_used = sess->thread->curtime;
 			return_MySQL_Connection_To_Pool();
 		}

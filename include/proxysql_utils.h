@@ -4,6 +4,7 @@
 #include <cstdarg>
 #include <type_traits>
 #include <memory>
+#include <cstdio>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -14,6 +15,7 @@
 #include <unistd.h>
 #include <assert.h>
 
+#include "mysql.h"
 #include "../deps/json/json.hpp"
 
 #ifndef ProxySQL_Checksum_Value_LENGTH
@@ -423,5 +425,28 @@ static inline bool wait_for_glo_mth() {
 	}
 	return false;
 }
+
+/**
+ * @brief Pretty-print a MySQL result set into a string.
+ *
+ * @details Formats the full buffered result set as an ASCII table. The current row cursor is preserved:
+ * the function seeks to the first row for formatting and restores the original cursor before returning.
+ *
+ * @param result  MySQL result set to format.
+ *
+ * @return        Pretty-printed result set, or an empty string if the result is NULL or has no fields.
+ */
+std::string mysql_result_to_string(MYSQL_RES* result);
+
+/**
+ * @brief Pretty-print a MySQL result set to a file stream.
+ *
+ * @details Uses mysql_result_to_string() for formatting and writes the resulting string to the supplied
+ * file stream. The result set row cursor is preserved.
+ *
+ * @param file    Destination file stream.
+ * @param result  MySQL result set to format.
+ */
+void dump_mysql_result(FILE* file, MYSQL_RES* result);
 
 #endif

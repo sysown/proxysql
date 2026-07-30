@@ -3807,6 +3807,9 @@ std::unique_ptr<SQLite3_result> PgSQL_HostGroups_Manager::get_pgsql_errors(bool 
  * @details Input verification is performed in the supplied 'hostgroup_settings'. It's expected to be a valid
  *  JSON that may contain the following fields:
  *   - handle_warnings: Value must be >= 0.
+ *   - default_query_timeout: Value must be in [1000, 20*24*3600*1000]; takes precedence over
+ *     'pgsql-default_query_timeout' for queries that resolve to this hostgroup. Range mirrors
+ *     the global 'pgsql-default_query_timeout' bounds.
  *
  *  In case input verification fails for a field, supplied 'PgSQL_HGC' is NOT updated for that field. An error
  *  message is logged specifying the source of the error.
@@ -3824,6 +3827,11 @@ void init_myhgc_hostgroup_settings(const char* hostgroup_settings, PgSQL_HGC* my
 			const auto handle_warnings_check = [](int8_t handle_warnings) -> bool { return handle_warnings == 0 || handle_warnings == 1; };
 			int8_t handle_warnings = PgSQL_j_get_srv_default_int_val<int8_t>(j, hid, "handle_warnings", handle_warnings_check);
 			myhgc->attributes.handle_warnings = handle_warnings;
+
+			const auto default_query_timeout_check = [](int32_t default_query_timeout) -> bool
+				{ return (default_query_timeout >= 1000 && default_query_timeout <= 20*24*3600*1000); };
+			const int32_t default_query_timeout = PgSQL_j_get_srv_default_int_val<int32_t>(j, hid, "default_query_timeout", default_query_timeout_check);
+			myhgc->attributes.default_query_timeout = default_query_timeout;
 		}
 		catch (const json::exception& e) {
 			proxy_error(

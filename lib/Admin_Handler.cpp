@@ -16,6 +16,7 @@ using json = nlohmann::json;
 
 #include "Base_Thread.h"
 
+#include "MySQL_Passthrough_Auth_Cache.h"
 #include "MySQL_HostGroups_Manager.h"
 #include "PgSQL_HostGroups_Manager.h"
 #include "mysql.h"
@@ -119,9 +120,6 @@ extern struct MHD_Daemon *Admin_HTTP_Server;
 
 extern ProxySQL_Statistics *GloProxyStats;
 
-template<enum SERVER_TYPE>
-int ProxySQL_Test___PurgeDigestTable(bool async_purge, bool parallel, char **msg);
-
 extern char *ssl_key_fp;
 extern char *ssl_cert_fp;
 extern char *ssl_ca_fp;
@@ -146,6 +144,7 @@ extern MySQL_Query_Cache *GloMyQC;
 extern PgSQL_Query_Cache* GloPgQC;
 extern MySQL_Authentication *GloMyAuth;
 extern PgSQL_Authentication *GloPgAuth;
+extern MySQL_Passthrough_Auth_Cache *GloMyPTAuthCache;
 extern MySQL_LDAP_Authentication *GloMyLdapAuth;
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Query_Processor* GloMyQPro;
@@ -324,6 +323,17 @@ const std::vector<std::string> LOAD_COREDUMP_FROM_MEMORY = {
 	"LOAD COREDUMP FROM MEM" ,
 	"LOAD COREDUMP TO RUNTIME" ,
 	"LOAD COREDUMP TO RUN" };
+
+const std::vector<std::string> CMD_PREFIX_PURGE_QUERY_DIGESTS = {
+	"PURGE TABLE stats.stats_mysql_query_digest TO ",
+	"PURGE TABLE stats_mysql_query_digest TO ",
+	"PURGE stats.stats_mysql_query_digest TO ",
+	"PURGE stats_mysql_query_digest TO ",
+	"PURGE TABLE stats.stats_pgsql_query_digest TO ",
+	"PURGE TABLE stats_pgsql_query_digest TO ",
+	"PURGE stats.stats_pgsql_query_digest TO ",
+	"PURGE stats_pgsql_query_digest TO ",
+};
 
 extern unordered_map<string,std::tuple<string, vector<string>, vector<string>>> load_save_disk_commands;
 
@@ -516,6 +526,17 @@ bool is_admin_command_or_alias(const std::vector<std::string>& cmds, char *query
 	return false;
 }
 
+const char * match_command_prefix(const std::vector<std::string>& cmd_prefix, char *query, int query_len) {
+	for (auto &prefix : cmd_prefix) {
+		if ((unsigned int) query_len >= prefix.length()
+			&& !strncasecmp(prefix.c_str(), query, prefix.length()))
+		{
+			return prefix.c_str();
+		}
+	}
+
+	return nullptr;
+}
 
 
 template <typename S>
@@ -549,6 +570,38 @@ bool FlushCommandWrapper(S* sess, const string& modname, char *query_no_space, i
 	if (FlushCommandWrapper(sess, get<2>(t), query_no_space, query_no_space_length, modname, "memory_to_disk") == true)
 		return true;
 	return false;
+}
+
+std::tuple<bool, enum SERVER_TYPE, time_t> parse_command_purge_query_digests(char *query, int query_len) {
+	bool match = false;
+	enum SERVER_TYPE server_type = SERVER_TYPE_MYSQL;
+	time_t last_seen = 0;
+
+	const char *prefix = match_command_prefix(CMD_PREFIX_PURGE_QUERY_DIGESTS, query, query_len);
+	if (prefix) {
+		match = true;
+
+		if (strstr(prefix, "_pgsql_") != nullptr) {
+			server_type = SERVER_TYPE_PGSQL;
+		}
+
+		// parse timestamp
+		mf_unique_ptr<char> ts_str(strdup(query + strlen(prefix)));
+		char *ts_end = nullptr;
+		long long ts = strtoll(trim_spaces_in_place(ts_str.get()), &ts_end, 10);
+
+		// ts_str should only contain digits and respresent a valid timestamp
+		if ((*ts_end == 0) && (ts > 0)) {
+			last_seen = realtime_to_monotonic_time(ts);
+			if (last_seen <= 0) {
+				// valid timestamp, but older than the monotonic clock epoch (system
+				// boot): no entry can match, make the command a successful no-op
+				last_seen = 1;
+			}
+		}
+	}
+
+	return std::make_tuple(match, server_type, last_seen);
 }
 
 template <typename S>
@@ -992,6 +1045,46 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		}
 		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 		return false;
+	}
+
+	if (!strcasecmp("PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE", query_no_space)) {
+		proxy_info("Received PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE command\n");
+		ProxySQL_Admin *SPA = (ProxySQL_Admin *)pa;
+		if (GloMyPTAuthCache) {
+			GloMyPTAuthCache->clear();
+		}
+		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		return false;
+	}
+
+	{
+		static const char *pt_prefix = "PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE FOR USER ";
+		const size_t pt_prefix_len = strlen(pt_prefix);
+		if (query_no_space_length > pt_prefix_len
+			&& !strncasecmp(pt_prefix, query_no_space, pt_prefix_len)) {
+			const char *user_start = query_no_space + pt_prefix_len;
+			while (*user_start == ' ' || *user_start == '\t') user_start++;
+			std::string user_arg(user_start);
+			while (!user_arg.empty()
+				&& (user_arg.back() == ' '
+					|| user_arg.back() == '\t'
+					|| user_arg.back() == ';')) {
+				user_arg.pop_back();
+			}
+			if (user_arg.size() >= 2 && (
+				(user_arg.front() == '\'' && user_arg.back() == '\'')
+				|| (user_arg.front() == '"'  && user_arg.back() == '"')
+				|| (user_arg.front() == '`'  && user_arg.back() == '`'))) {
+				user_arg = user_arg.substr(1, user_arg.size() - 2);
+			}
+			proxy_info("Received PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE FOR USER '%s' command\n", user_arg.c_str());
+			ProxySQL_Admin *SPA = (ProxySQL_Admin *)pa;
+			if (GloMyPTAuthCache) {
+				GloMyPTAuthCache->evict(user_arg);
+			}
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
+		}
 	}
 
 	if (
@@ -2438,12 +2531,11 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				if (GloVars.confFile->OpenFile(NULL)==true) {
 					ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 					int rows=0;
-					// FIXME: not implemented yet
 					if (query_no_space[5] == 'P' || query_no_space[5] == 'p') {
-					//	rows=SPA->proxysql_config().Read_PgSQL_Firewall_from_configfile();
+						rows = SPA->proxysql_config().Read_PgSQL_Firewall_from_configfile();
 						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql firewall from CONFIG\n");
 					} else {
-					//	rows=SPA->proxysql_config().Read_MySQL_Firewall_from_configfile();
+						rows = SPA->proxysql_config().Read_MySQL_Firewall_from_configfile();
 						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql firewall from CONFIG\n");
 					}
 					SPA->send_ok_msg_to_client(sess, NULL, rows, query_no_space);
@@ -2544,9 +2636,11 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					int rows=0;
 					if (query_no_space[5] == 'P' || query_no_space[5] == 'p') {
 						rows = SPA->proxysql_config().Read_PgSQL_Query_Rules_from_configfile();
+						rows += SPA->proxysql_config().Read_PgSQL_Query_Rules_Fast_Routing_from_configfile();
 						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql query rules from CONFIG\n");
 					} else {
 						rows = SPA->proxysql_config().Read_MySQL_Query_Rules_from_configfile();
+						rows += SPA->proxysql_config().Read_MySQL_Query_Rules_Fast_Routing_from_configfile();
 						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql query rules from CONFIG\n");
 					}
 					SPA->send_ok_msg_to_client(sess, NULL, rows, query_no_space);
@@ -2725,6 +2819,10 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		rc = pa->proxysql_config().Write_PgSQL_Servers_to_configfile(data);
 		rc = pa->proxysql_config().Write_Scheduler_to_configfile(data);
 		rc = pa->proxysql_config().Write_ProxySQL_Servers_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_MySQL_Query_Rules_Fast_Routing_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_PgSQL_Query_Rules_Fast_Routing_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_MySQL_Firewall_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_PgSQL_Firewall_to_configfile(data);
 		if (rc) {
 			std::stringstream ss;
 			proxy_error("ProxySQL Admin Error: Cannot extract configuration\n");
@@ -3108,6 +3206,8 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			tn = "mysql_hostgroup_attributes";
 		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_SERVERS_SSL_PARAMS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_SERVERS_SSL_PARAMS))) {
 			tn = "mysql_servers_ssl_params";
+		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_AWS_RDS_BGD, query_no_space, strlen(CLUSTER_QUERY_MYSQL_AWS_RDS_BGD))) {
+			tn = "mysql_aws_rds_bgd_hostgroups";
 		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_SERVERS_V2, query_no_space, strlen(CLUSTER_QUERY_MYSQL_SERVERS_V2))) {
 			tn = "mysql_servers_v2";
 		}
@@ -3400,10 +3500,8 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 					SPA->admindb->execute("DELETE FROM stats.stats_mysql_query_digest_reset");
 					SPA->vacuum_stats(true);
 					// purge the digest map, asynchronously, in single thread
-					char *msg = NULL;
-					int r1 = ProxySQL_Test___PurgeDigestTable<SERVER_TYPE_MYSQL>(true, false, &msg);
-					SPA->send_ok_msg_to_client(sess, msg, r1, query_no_space);
-					free(msg);
+					int r1 = GloMyQPro->purge_query_digests(true, false);
+					SPA->send_ok_msg_to_client(sess, NULL, r1, query_no_space);
 					run_query=false;
 					goto __run_query;
 				}
@@ -3436,16 +3534,45 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 					SPA->admindb->execute("DELETE FROM stats.stats_pgsql_query_digest_reset");
 					SPA->vacuum_stats(true);
 					// purge the digest map, asynchronously, in single thread
-					char* msg = NULL;
-					int r1 = ProxySQL_Test___PurgeDigestTable<SERVER_TYPE_PGSQL>(true, false, &msg);
-					SPA->send_ok_msg_to_client(sess, msg, r1, query_no_space);
-					free(msg);
+					int r1 = GloPgQPro->purge_query_digests(true, false);
+					SPA->send_ok_msg_to_client(sess, NULL, r1, query_no_space);
 					run_query = false;
 					goto __run_query;
 				}
 			}
 		}
 	}
+
+	// handles 'PURGE stats_mysql_query_digest TO <value>'.
+	// any entry in stats_mysql_query_digest where last_seen is less than <value> will be deleted.
+	if (!strncasecmp("PURGE ", query_no_space, strlen("PURGE "))
+		&& sess->session_type == PROXYSQL_SESSION_ADMIN
+	) {
+		auto result = parse_command_purge_query_digests(query_no_space, query_no_space_length);
+		bool match = std::get<0>(result);
+
+		if (match == true) {
+			int ret = 0;
+			enum SERVER_TYPE type = std::get<1>(result);
+			time_t last_seen = std::get<2>(result);
+
+			if (last_seen > 0) {
+				if (type == SERVER_TYPE_MYSQL) {
+					ret = GloMyQPro->purge_query_digests(true, false, last_seen);
+				} else if (type == SERVER_TYPE_PGSQL) {
+					ret = GloPgQPro->purge_query_digests(true, false, last_seen);
+				}
+
+				pa->send_ok_msg_to_client(sess, NULL, ret, query_no_space);
+			} else {
+				pa->send_error_msg_to_client(sess, "Invalid timestamp");
+			}
+
+			run_query = false;
+			goto __run_query;
+		}
+	}
+
 #ifdef DEBUG
 	/**
 	 * @brief Handles the 'PROXYSQL_SIMULATOR' command. Performing the operation specified in the payload
@@ -4351,6 +4478,15 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			tablename=(char *)"MYSQL AURORA HOSTGROUPS";
 			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
+		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL RDS BGD HOSTGROUPS") && !strncasecmp("CHECKSUM MEMORY MYSQL RDS BGD HOSTGROUPS", query_no_space, strlen(query_no_space)))
+			||
+			(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL RDS BGD HOSTGROUPS") && !strncasecmp("CHECKSUM MEM MYSQL RDS BGD HOSTGROUPS", query_no_space, strlen(query_no_space)))
+			||
+			(strlen(query_no_space)==strlen("CHECKSUM MYSQL RDS BGD HOSTGROUPS") && !strncasecmp("CHECKSUM MYSQL RDS BGD HOSTGROUPS", query_no_space, strlen(query_no_space)))){
+			char *q=(char *)"SELECT * FROM mysql_aws_rds_bgd_hostgroups ORDER BY writer_hostgroup";
+			tablename=(char *)"MYSQL RDS BGD HOSTGROUPS";
+			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
 		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL HOSTGROUP ATTRIBUTES") && !strncasecmp("CHECKSUM MEMORY MYSQL HOSTGROUP ATTRIBUTES", query_no_space, strlen(query_no_space)))
 			||
 			(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL HOSTGROUP ATTRIBUTES") && !strncasecmp("CHECKSUM MEM MYSQL HOSTGROUP ATTRIBUTES", query_no_space, strlen(query_no_space)))
@@ -4428,6 +4564,10 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		rc = pa->proxysql_config().Write_Scheduler_to_configfile(data);
 		rc = pa->proxysql_config().Write_Restapi_to_configfile(data);
 		rc = pa->proxysql_config().Write_ProxySQL_Servers_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_MySQL_Query_Rules_Fast_Routing_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_PgSQL_Query_Rules_Fast_Routing_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_MySQL_Firewall_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_PgSQL_Firewall_to_configfile(data);
 		if (rc) {
 			std::stringstream ss;
 			ss << "ProxySQL Admin Error: Cannot extract configuration";
@@ -4471,6 +4611,10 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		rc = pa->proxysql_config().Write_Scheduler_to_configfile(data);
 		rc = pa->proxysql_config().Write_Restapi_to_configfile(data);
 		rc = pa->proxysql_config().Write_ProxySQL_Servers_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_MySQL_Query_Rules_Fast_Routing_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_PgSQL_Query_Rules_Fast_Routing_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_MySQL_Firewall_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_PgSQL_Firewall_to_configfile(data);
 		if (rc) {
 			std::stringstream ss;
 			ss << "ProxySQL Admin Error: Cannot write proxysql.cnf";

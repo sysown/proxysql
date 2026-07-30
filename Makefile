@@ -220,6 +220,10 @@ testreadonly: build_src_testreadonly build_cluster_simulator
 .PHONY: testreplicationlag
 testreplicationlag: build_src_testreplicationlag build_cluster_simulator
 
+.PHONY: test_rds_bgd
+test_rds_bgd: build_src_test_rds_bgd
+	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE} debug
+
 .PHONY: testall
 testall: build_src_testall
 
@@ -337,13 +341,21 @@ build_src_testreplicationlag: build_lib_testreplicationlag
 build_lib_testreplicationlag: build_deps_debug
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_REPLICATIONLAG" CC=${CC} CXX=${CXX} ${MAKE}
 
+.PHONY: build_src_test_rds_bgd
+build_src_test_rds_bgd: build_lib_test_rds_bgd
+	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_RDS_BGD" CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_lib_test_rds_bgd
+build_lib_test_rds_bgd: build_deps_debug
+	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_RDS_BGD" CC=${CC} CXX=${CXX} ${MAKE}
+
 .PHONY: build_src_testall
 build_src_testall: build_lib_testall
-	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA -DTEST_GALERA -DTEST_GROUPREP -DTEST_READONLY -DTEST_REPLICATIONLAG" CC=${CC} CXX=${CXX} ${MAKE}
+	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA -DTEST_GALERA -DTEST_GROUPREP -DTEST_READONLY -DTEST_REPLICATIONLAG -DTEST_RDS_BGD" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_testall
 build_lib_testall: build_deps_debug
-	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA -DTEST_GALERA -DTEST_GROUPREP -DTEST_READONLY -DTEST_REPLICATIONLAG" CC=${CC} CXX=${CXX} ${MAKE}
+	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA -DTEST_GALERA -DTEST_GROUPREP -DTEST_READONLY -DTEST_REPLICATIONLAG -DTEST_RDS_BGD" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_tap_test
 build_tap_test: build_tap_tests

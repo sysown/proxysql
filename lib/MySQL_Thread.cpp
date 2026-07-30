@@ -141,6 +141,7 @@ mythr_st_vars_t MySQL_Thread_status_variables_counter_array[] {
 	{ st_var_frontend_stmt_prepare, p_th_counter::com_frontend_stmt_prepare, (char *)"Com_frontend_stmt_prepare" },
 	{ st_var_frontend_stmt_execute, p_th_counter::com_frontend_stmt_execute, (char *)"Com_frontend_stmt_execute" },
 	{ st_var_frontend_stmt_close,   p_th_counter::com_frontend_stmt_close,   (char *)"Com_frontend_stmt_close" },
+	{ st_var_frontend_ping,         p_th_counter::com_frontend_ping,         (char *)"Com_frontend_ping" },
 	{ st_var_queries,               p_th_counter::questions,               (char *)"Questions" },
 	{ st_var_queries_slow,          p_th_counter::slow_queries,            (char *)"Slow_queries" },
 	{ st_var_queries_gtid,          p_th_counter::gtid_consistent_queries, (char *)"GTID_consistent_queries" },
@@ -400,6 +401,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_ping_max_failures",
 	(char *)"monitor_ping_timeout",
 	(char *)"monitor_aws_rds_topology_discovery_interval",
+	(char *)"aws_blue_green_deployment_auto_discovery",
 	(char *)"monitor_read_only_interval",
 	(char *)"monitor_read_only_timeout",
 	(char *)"monitor_read_only_max_timeout_count",
@@ -488,6 +490,19 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"select_version_forwarding",
 	(char *)"keep_multiplexing_variables",
 	(char *)"default_authentication_plugin",
+	(char *)"passthrough_auth_enabled",
+	(char *)"passthrough_auth_empty_password",
+	(char *)"passthrough_auth_unknown_users",
+	(char *)"passthrough_auth_require_tls",
+	(char *)"passthrough_default_hg",
+	(char *)"passthrough_default_schema",
+	(char *)"passthrough_auth_cache_ttl_s",
+	(char *)"passthrough_auth_max_inflight_probes",
+	(char *)"passthrough_auth_username_pattern",
+	(char *)"passthrough_auth_max_failures_per_user",
+	(char *)"passthrough_auth_max_failures_per_ip",
+	(char *)"passthrough_auth_failure_window_s",
+	(char *)"passthrough_auth_failure_map_cap",
 	(char *)"kill_backend_connection_when_disconnect",
 	(char *)"client_session_track_gtid",
 	(char *)"sessions_sort",
@@ -698,6 +713,14 @@ th_metrics_map = std::make_tuple(
 			metric_tags {
 				{ "protocol", "mysql" },
 				{ "op", "close" }
+			}
+		),
+		std::make_tuple (
+			p_th_counter::com_frontend_ping,
+			"proxysql_com_frontend_ping_total",
+			"'COM_PING' received from the client.",
+			metric_tags {
+				{ "protocol", "mysql" }
 			}
 		),
 		// ====================================================================
@@ -1274,6 +1297,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_ping_max_failures=3;
 	variables.monitor_ping_timeout=1000;
 	variables.monitor_aws_rds_topology_discovery_interval=0;
+	variables.aws_blue_green_deployment_auto_discovery=1;
 	variables.monitor_read_only_interval=1000;
 	variables.monitor_read_only_timeout=800;
 	variables.monitor_read_only_max_timeout_count=3;
@@ -1435,6 +1459,19 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.proxy_protocol_networks = strdup((char *)"");
 	variables.default_authentication_plugin=strdup((char *)"mysql_native_password");
 	variables.default_authentication_plugin_int = 0; // mysql_native_password
+	variables.passthrough_auth_enabled = false;
+	variables.passthrough_auth_empty_password = true;
+	variables.passthrough_auth_unknown_users = false;
+	variables.passthrough_auth_require_tls = true;
+	variables.passthrough_default_hg = 0;
+	variables.passthrough_default_schema = strdup((char *)"");
+	variables.passthrough_auth_cache_ttl_s = 0;
+	variables.passthrough_auth_max_inflight_probes = 100;
+	variables.passthrough_auth_username_pattern = strdup((char *)"");
+	variables.passthrough_auth_max_failures_per_user = 3;
+	variables.passthrough_auth_max_failures_per_ip = 10;
+	variables.passthrough_auth_failure_window_s = 60;
+	variables.passthrough_auth_failure_map_cap = 100000;
 #ifdef DEBUG
 	variables.session_debug=true;
 #endif /*debug */
@@ -1546,6 +1583,75 @@ void MySQL_Threads_Handler::wrunlock() {
 void MySQL_Threads_Handler::commit() {
 	__sync_add_and_fetch(&__global_MySQL_Thread_Variables_version,1);
 	proxy_debug(PROXY_DEBUG_MYSQL_SERVER, 1, "Increasing version number to %d - all threads will notice this and refresh their variables\n", __global_MySQL_Thread_Variables_version);
+
+#ifndef PROXYSQL31
+	/**
+	 * @brief Tier gate: pass-through authentication is Innovative-tier only.
+	 *
+	 * Pass-through authentication is a feature of the ProxySQL Innovative
+	 * tier (3.1.x) and AI/MCP tier (4.0.x); both define PROXYSQL31 (4.0
+	 * implies 3.1). On the Stable tier (3.0.x, PROXYSQL31 undefined) the
+	 * code still ships, but the feature must not be arm-able.
+	 *
+	 * We enforce that here, at commit() time, because commit() runs once
+	 * per LOAD MYSQL VARIABLES TO RUNTIME and updates the master
+	 * `variables` struct *before* the worker threads refresh their
+	 * per-thread `mysql_thread___passthrough_auth_enabled` copies from it.
+	 * Coercing the master flag to false here therefore guarantees the
+	 * runtime gate is never armed on a Stable build, no matter how the
+	 * value arrived (SET + LOAD, config file, a saved config carried over
+	 * from a 3.1.x/4.0.x install, or a ProxySQL Cluster sync push).
+	 *
+	 * A saved config that has the flag set to 'true' still loads cleanly;
+	 * it is simply forced back to 'false' with a single log line, rather
+	 * than erroring the load. The coercion runs before the unknown_users
+	 * misconfig warning below, so that warning does not spuriously fire on
+	 * a Stable build where the feature is inert anyway.
+	 */
+	if (variables.passthrough_auth_enabled) {
+		proxy_error(
+			"pass-through authentication is not available on the ProxySQL "
+			"Stable tier (3.0.x); mysql-passthrough_auth_enabled has been "
+			"forced to 'false'. Use a 3.1.x (Innovative) or 4.0.x (AI/MCP) "
+			"build to enable it.\n");
+		variables.passthrough_auth_enabled = false;
+	}
+#endif // PROXYSQL31
+
+	/**
+	 * @brief Operator warning on dangerous pass-through configuration.
+	 *
+	 * Fires when LOAD MYSQL VARIABLES TO RUNTIME publishes a state where:
+	 *   passthrough_auth_enabled=true
+	 *   && passthrough_auth_unknown_users=true
+	 *   && passthrough_auth_username_pattern=''
+	 *
+	 * That combination turns ProxySQL into a credential-stuffing oracle
+	 * for every username an attacker can guess against the backend in
+	 * @c passthrough_default_hg: there's no allowlist constraining which
+	 * usernames may even reach the probe, and any pre-existing backend
+	 * user can be tested with the per-IP rate-limit budget. Spec §7.1
+	 * lists the @c username_pattern allowlist as the primary mitigation
+	 * and assumes operators enabling @c unknown_users will set it.
+	 *
+	 * We emit a single proxy_warning at commit time so the warning lands
+	 * exactly once per LOAD MYSQL VARIABLES TO RUNTIME -- not per worker-
+	 * thread refresh -- and is visible in the main proxysql.log
+	 * regardless of audit-log settings. If the operator subsequently
+	 * sets a pattern, the next LOAD will not re-fire the warning.
+	 */
+	if (variables.passthrough_auth_enabled
+		&& variables.passthrough_auth_unknown_users
+		&& (variables.passthrough_auth_username_pattern == NULL
+			|| variables.passthrough_auth_username_pattern[0] == '\0')) {
+		proxy_warning(
+			"pass-through auth: unknown_users=true with empty "
+			"username_pattern (hg=%d). This permits ANY username at "
+			"the probe stage; constrain with "
+			"mysql-passthrough_auth_username_pattern. See "
+			"doc/internal/passthrough_authentication.md §7.1.\n",
+			variables.passthrough_default_hg);
+	}
 }
 
 
@@ -1674,6 +1780,8 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 	if (!strcmp(name,"resolution_family")) return strdup(variables.resolution_family);
 	if (!strcmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
 	if (!strcmp(name,"default_authentication_plugin")) return strdup(variables.default_authentication_plugin);
+	if (!strcmp(name,"passthrough_default_schema")) return strdup(variables.passthrough_default_schema ? variables.passthrough_default_schema : "");
+	if (!strcmp(name,"passthrough_auth_username_pattern")) return strdup(variables.passthrough_auth_username_pattern ? variables.passthrough_auth_username_pattern : "");
 	if (!strcmp(name,"proxy_protocol_networks")) return strdup(variables.proxy_protocol_networks);
 
 	// LCOV_EXCL_START
@@ -1832,6 +1940,8 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	if (!strcasecmp(name,"resolution_family")) return strdup(variables.resolution_family);
 	if (!strcasecmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
 	if (!strcasecmp(name,"default_authentication_plugin")) return strdup(variables.default_authentication_plugin);
+	if (!strcasecmp(name,"passthrough_default_schema")) return strdup(variables.passthrough_default_schema ? variables.passthrough_default_schema : "");
+	if (!strcasecmp(name,"passthrough_auth_username_pattern")) return strdup(variables.passthrough_auth_username_pattern ? variables.passthrough_auth_username_pattern : "");
 	if (!strcasecmp(name,"proxy_protocol_networks")) return strdup(variables.proxy_protocol_networks);
 	if (!strcasecmp(name, "interfaces")) {
 		return strdup((strlen(variables.interfaces) == 0) ? "0.0.0.0:6033" : variables.interfaces);
@@ -1957,7 +2067,17 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 			}
 			bool special_variable = std::get<3>(it->second); // if special_variable is true, min and max values are ignored, and more input validation is needed
 			if (special_variable == false) {
-				int intv=atoi(value);
+				// This option is stored as an integer for compatibility with the
+				// existing variable interface, but is documented and commonly set
+				// using the same true/false spelling as boolean variables.
+				int intv;
+				if (nameS == "aws_blue_green_deployment_auto_discovery" && strcasecmp(value, "true") == 0) {
+					intv = 1;
+				} else if (nameS == "aws_blue_green_deployment_auto_discovery" && strcasecmp(value, "false") == 0) {
+					intv = 0;
+				} else {
+					intv = atoi(value);
+				}
 				if (intv >= std::get<1>(it->second) && intv <= std::get<2>(it->second)) {
 					int * v = std::get<0>(it->second);
 					*v = intv;
@@ -2266,6 +2386,16 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 			return false;
 		}
 	}
+	if (!strcasecmp(name,"passthrough_default_schema")) {
+		if (variables.passthrough_default_schema) free(variables.passthrough_default_schema);
+		variables.passthrough_default_schema = strdup(vallen ? value : "");
+		return true;
+	}
+	if (!strcasecmp(name,"passthrough_auth_username_pattern")) {
+		if (variables.passthrough_auth_username_pattern) free(variables.passthrough_auth_username_pattern);
+		variables.passthrough_auth_username_pattern = strdup(vallen ? value : "");
+		return true;
+	}
 	if (!strcasecmp(name,"resolution_family")) {
 		if (mysql_resolution_family_is_valid(value)) {
 			free(variables.resolution_family);
@@ -2556,6 +2686,11 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 #ifdef DEBUG
 		VariablesPointers_bool["session_debug"] = make_tuple(&variables.session_debug, false);
 #endif /* DEBUG */
+		// pass-through authentication
+		VariablesPointers_bool["passthrough_auth_enabled"]        = make_tuple(&variables.passthrough_auth_enabled,        false);
+		VariablesPointers_bool["passthrough_auth_empty_password"] = make_tuple(&variables.passthrough_auth_empty_password, false);
+		VariablesPointers_bool["passthrough_auth_unknown_users"]  = make_tuple(&variables.passthrough_auth_unknown_users,  false);
+		VariablesPointers_bool["passthrough_auth_require_tls"]    = make_tuple(&variables.passthrough_auth_require_tls,    false);
 		// variables with special variable == true
 		// the input validation for these variables MUST be EXPLICIT
 		VariablesPointers_bool["have_compress"]      = make_tuple(&variables.have_compress,      true);
@@ -2567,6 +2702,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 	// it is safe to do it here because get_variables_list() is the first function called during start time
 	if (VariablesPointers_int.size() == 0) {
 		// Monitor variables
+		VariablesPointers_int["aws_blue_green_deployment_auto_discovery"] = make_tuple(&variables.aws_blue_green_deployment_auto_discovery, 0, 1, false);
 		VariablesPointers_int["monitor_history"]                     = make_tuple(&variables.monitor_history,                  1000, 7*24*3600*1000, false);
 
 		VariablesPointers_int["monitor_connect_interval"]  = make_tuple(&variables.monitor_connect_interval,  100, 7*24*3600*1000, false);
@@ -2632,6 +2768,14 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["throttle_connections_per_sec_to_hostgroup"] = make_tuple(&variables.throttle_connections_per_sec_to_hostgroup, 1, 100*1000*1000, false);
 		VariablesPointers_int["throttle_max_bytes_per_second_to_client"]   = make_tuple(&variables.throttle_max_bytes_per_second_to_client,   0,    2147483647, false);
 		VariablesPointers_int["throttle_ratio_server_to_client"]           = make_tuple(&variables.throttle_ratio_server_to_client,           0,           100, false);
+		// pass-through authentication
+		VariablesPointers_int["passthrough_default_hg"]                    = make_tuple(&variables.passthrough_default_hg,                    0,    1024*1024, false);
+		VariablesPointers_int["passthrough_auth_cache_ttl_s"]              = make_tuple(&variables.passthrough_auth_cache_ttl_s,              0, 7*24*3600,    false);
+		VariablesPointers_int["passthrough_auth_max_inflight_probes"]      = make_tuple(&variables.passthrough_auth_max_inflight_probes,      1,      10000, false);
+		VariablesPointers_int["passthrough_auth_max_failures_per_user"]    = make_tuple(&variables.passthrough_auth_max_failures_per_user,    1,    1000000, false);
+		VariablesPointers_int["passthrough_auth_max_failures_per_ip"]      = make_tuple(&variables.passthrough_auth_max_failures_per_ip,      1,    1000000, false);
+		VariablesPointers_int["passthrough_auth_failure_window_s"]         = make_tuple(&variables.passthrough_auth_failure_window_s,         1,    7*24*3600, false);
+		VariablesPointers_int["passthrough_auth_failure_map_cap"]          = make_tuple(&variables.passthrough_auth_failure_map_cap,        1000, 100000000, false);
 		// backend management
 		VariablesPointers_int["connpoll_reset_queue_length"] = make_tuple(&variables.connpoll_reset_queue_length, 0,           10000, false);
 		VariablesPointers_int["default_max_latency_ms"]      = make_tuple(&variables.default_max_latency_ms,      0, 20*24*3600*1000, false);
@@ -3130,6 +3274,8 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.server_version) free(variables.server_version);
 	if (variables.keep_multiplexing_variables) free(variables.keep_multiplexing_variables);
 	if (variables.default_authentication_plugin) free(variables.default_authentication_plugin);
+	if (variables.passthrough_default_schema) free(variables.passthrough_default_schema);
+	if (variables.passthrough_auth_username_pattern) free(variables.passthrough_auth_username_pattern);
 	if (variables.proxy_protocol_networks) free(variables.proxy_protocol_networks);
 	if (variables.firewall_whitelist_errormsg) free(variables.firewall_whitelist_errormsg);
 	if (variables.init_connect) free(variables.init_connect);
@@ -3263,6 +3409,8 @@ MySQL_Thread::~MySQL_Thread() {
 	if (mysql_thread___server_version) { free(mysql_thread___server_version); mysql_thread___server_version=NULL; }
 	if (mysql_thread___keep_multiplexing_variables) { free(mysql_thread___keep_multiplexing_variables); mysql_thread___keep_multiplexing_variables=NULL; }
 	if (mysql_thread___default_authentication_plugin) { free(mysql_thread___default_authentication_plugin); mysql_thread___default_authentication_plugin=NULL; }
+	if (mysql_thread___passthrough_default_schema) { free(mysql_thread___passthrough_default_schema); mysql_thread___passthrough_default_schema=NULL; }
+	if (mysql_thread___passthrough_auth_username_pattern) { free(mysql_thread___passthrough_auth_username_pattern); mysql_thread___passthrough_auth_username_pattern=NULL; }
 	if (mysql_thread___proxy_protocol_networks) { free(mysql_thread___proxy_protocol_networks); mysql_thread___proxy_protocol_networks=NULL; }
 	if (mysql_thread___firewall_whitelist_errormsg) { free(mysql_thread___firewall_whitelist_errormsg); mysql_thread___firewall_whitelist_errormsg=NULL; }
 	if (mysql_thread___init_connect) { free(mysql_thread___init_connect); mysql_thread___init_connect=NULL; }
@@ -4384,10 +4532,17 @@ void MySQL_Thread::ProcessAllSessions_Healthy0(MySQL_Session *sess, unsigned int
 	char _buf[1024];
 	if (sess->client_myds) {
 		if (mysql_thread___log_unhealthy_connections) {
+			const char *user =
+				(sess->client_myds->myconn && sess->client_myds->myconn->userinfo && sess->client_myds->myconn->userinfo->username)
+				? sess->client_myds->myconn->userinfo->username : "unknown";
+			const int current_hostgroup = sess->current_hostgroup;
+			const unsigned long backend_id =
+				(sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn)
+				? sess->mybe->server_myds->myconn->get_mysql_thread_id() : 0;
 			if (sess->session_fast_forward == SESSION_FORWARD_TYPE_NONE) {
 				proxy_warning(
-					"Closing unhealthy client connection %s:%d\n", sess->client_myds->addr.addr,
-					sess->client_myds->addr.port
+					"Closing unhealthy client connection %s:%d , user '%s' , hostgroup %d , connection %lu\n", sess->client_myds->addr.addr,
+					sess->client_myds->addr.port, user, current_hostgroup, backend_id
 				);
 			} else {
 				string extra_info = "";
@@ -4398,9 +4553,9 @@ void MySQL_Thread::ProcessAllSessions_Healthy0(MySQL_Session *sess, unsigned int
 					extra_info = "No";
 				}
 				proxy_warning(
-					"Closing 'fast_forward' client connection %s:%d . Backend already close: %s\n",
+					"Closing 'fast_forward' client connection %s:%d , user '%s' , hostgroup %d , connection %lu . Backend already close: %s\n",
 					sess->client_myds->addr.addr, sess->client_myds->addr.port,
-					extra_info.c_str()
+					user, current_hostgroup, backend_id, extra_info.c_str()
 				);
 			}
 		}
@@ -4654,6 +4809,7 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(monitor_ping_max_failures);
 	REFRESH_VARIABLE_INT(monitor_ping_timeout);
 	REFRESH_VARIABLE_INT(monitor_aws_rds_topology_discovery_interval);
+	REFRESH_VARIABLE_INT(aws_blue_green_deployment_auto_discovery);
 	REFRESH_VARIABLE_INT(monitor_read_only_interval);
 	REFRESH_VARIABLE_INT(monitor_read_only_timeout);
 	REFRESH_VARIABLE_INT(monitor_read_only_max_timeout_count);
@@ -4727,6 +4883,19 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_CHAR(proxy_protocol_networks);
 	REFRESH_VARIABLE_CHAR(default_authentication_plugin);
 	mysql_thread___default_authentication_plugin_int = GloMTH->variables.default_authentication_plugin_int;
+	REFRESH_VARIABLE_BOOL(passthrough_auth_enabled);
+	REFRESH_VARIABLE_BOOL(passthrough_auth_empty_password);
+	REFRESH_VARIABLE_BOOL(passthrough_auth_unknown_users);
+	REFRESH_VARIABLE_BOOL(passthrough_auth_require_tls);
+	REFRESH_VARIABLE_INT(passthrough_default_hg);
+	REFRESH_VARIABLE_INT(passthrough_auth_cache_ttl_s);
+	REFRESH_VARIABLE_INT(passthrough_auth_max_inflight_probes);
+	REFRESH_VARIABLE_INT(passthrough_auth_max_failures_per_user);
+	REFRESH_VARIABLE_INT(passthrough_auth_max_failures_per_ip);
+	REFRESH_VARIABLE_INT(passthrough_auth_failure_window_s);
+	REFRESH_VARIABLE_INT(passthrough_auth_failure_map_cap);
+	REFRESH_VARIABLE_CHAR(passthrough_default_schema);
+	REFRESH_VARIABLE_CHAR(passthrough_auth_username_pattern);
 	mysql_thread___server_capabilities=GloMTH->get_variable_uint32((char *)"server_capabilities");
 	REFRESH_VARIABLE_INT(handle_unknown_charset);
 	REFRESH_VARIABLE_INT(poll_timeout);
@@ -6394,6 +6563,11 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 	for (i=0; i<cached_connections->len; i++) {
 		c = (MySQL_Connection *) cached_connections->index(i);
 
+		// Skip unhealthy or non-reusable connections
+		if (!c->healthy || !c->reusable) {
+			continue;
+		}
+
 		// Skip cached connections whose parent server is inside the session-tracking
 		// capability backoff window. See 'MySrvC::session_track_backoff_until' for the
 		// full rationale; reads are relaxed because the deadline is compared against
@@ -6468,6 +6642,11 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
  * @param c Pointer to the MySQL_Connection object to be pushed to the local connection pool.
  */
 void MySQL_Thread::push_MyConn_local(MySQL_Connection *c) {
+	if (!c->healthy) {
+		MyHGM->push_MyConn_to_pool(c);
+		return;
+	}
+
 	// Bounded local cache: cache 1-in-N releases (N = mysql_threads), push the
 	// rest to the shared HGM pool so peer workers can pick them up.
 	// At N=1 always cache (no sibling to share with).

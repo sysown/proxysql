@@ -54,6 +54,7 @@ enum MySQL_Thread_status_variable {
 	st_var_frontend_stmt_prepare,
 	st_var_frontend_stmt_execute,
 	st_var_frontend_stmt_close,
+	st_var_frontend_ping,
 	st_var_queries,
 	st_var_queries_slow,
 	st_var_queries_gtid,
@@ -271,6 +272,7 @@ struct p_th_counter {
 		com_frontend_stmt_prepare,
 		com_frontend_stmt_execute,
 		com_frontend_stmt_close,
+		com_frontend_ping,
 		questions,
 		slow_queries,
 		gtid_consistent_queries,
@@ -453,6 +455,8 @@ class MySQL_Threads_Handler
 		int monitor_ping_timeout;
 		//! Monitor aws rds topology discovery interval. Unit: 'one discovery check per X monitor_read_only checks'.
 		int monitor_aws_rds_topology_discovery_interval;
+		//! Auto-generate runtime aws_rds_bgd_hostgroups entries when the read_only monitor detects a blue/green deployment.
+		int aws_blue_green_deployment_auto_discovery;
 		//! Monitor read only timeout. Unit: 'ms'.
 		int monitor_read_only_interval;
 		//! Monitor read only timeout. Unit: 'ms'.
@@ -521,6 +525,20 @@ class MySQL_Threads_Handler
 		//unsigned int default_charset; // removed in 2.0.13 . Obsoleted previously using MySQL_Variables instead
 		int handle_unknown_charset;
 		int default_authentication_plugin_int;
+		// pass-through authentication (see doc/internal/passthrough_authentication.md)
+		bool passthrough_auth_enabled;
+		bool passthrough_auth_empty_password;
+		bool passthrough_auth_unknown_users;
+		bool passthrough_auth_require_tls;
+		int passthrough_default_hg;
+		int passthrough_auth_cache_ttl_s;
+		int passthrough_auth_max_inflight_probes;
+		int passthrough_auth_max_failures_per_user;
+		int passthrough_auth_max_failures_per_ip;
+		int passthrough_auth_failure_window_s;
+		int passthrough_auth_failure_map_cap;
+		char *passthrough_default_schema;
+		char *passthrough_auth_username_pattern;
 		bool servers_stats;
 		bool commands_stats;
 		bool query_digests;

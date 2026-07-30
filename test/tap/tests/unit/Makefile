@@ -398,6 +398,8 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	mysql_error_classifier_unit-t \
 	backend_sync_unit-t \
 	mysql_encode_unit-t \
+	mysql_variables_unit-t \
+	mysql_decompress_payload_unit-t \
 	mysql_resolution_unit-t \
 	pgsql_variables_validator_unit-t \
 	proxysql_utils_unit-t \
@@ -421,7 +423,9 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	gtid_server_data_unit-t \
 	admin_disk_upgrade_unit-t \
 	glovars_unit-t \
-	pgsql_servers_ssl_params_unit-t
+	pgsql_servers_ssl_params_unit-t \
+	connection_unhealthy_unit-t \
+	cluster_sync_unit-t
 
 # Plugin-chassis + mysqlx-plugin unit tests — built only when
 # libproxysql.a was compiled with -DPROXYSQL40 (autodetected higher up

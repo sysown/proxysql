@@ -4106,20 +4106,24 @@ void PgSQL_Connection::stmt_execute_start() {
 	// According to the PostgreSQL Bind message specification:
 	// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-BIND
 	//  - num_param_formats = 0 -> all parameters are TEXT
-	//  - num_param_formats = 1 -> the single format applies to all parameters
+	//  - num_param_formats = 1 -> the single format applies to all parameters (even 0 of them)
 	//  - num_param_formats = num_param_values -> formats are applied per-parameter in order
 	// Any other number of parameter formats is a protocol error.
 	if (!param_formats.empty()) {
-		if (param_formats.size() == 1 && param_values.size() > 1) {
-			// PostgreSQL protocol allows 1 format for all params,
-			// libpq DOES NOT, we must expand
+		if (param_formats.size() == 1 && param_values.size() != 1) {
+			// PostgreSQL protocol allows 1 format for all params, libpq DOES NOT,
+			// so expand it (resize to 0 correctly clears it when there are no params, issue #5899)
 			int fmt = param_formats[0];
 			param_formats.resize(param_values.size(), fmt);
 		} else if (param_formats.size() != param_values.size()) {
-			proxy_error("Invalid param format count: got %zu, expected %zu\n",
+			// Mirror PostgreSQL's exec_bind_message() wording and SQLSTATE
+			// (08P01, protocol_violation) so clients see the same diagnostic.
+			char errmsg[128];
+			snprintf(errmsg, sizeof(errmsg),
+				"bind message has %zu parameter formats but %zu parameters",
 				param_formats.size(), param_values.size());
-			set_error(PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE,
-				"Invalid parameter format count", false);
+			proxy_error("%s\n", errmsg);
+			set_error(PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, errmsg, false);
 			return;
 		}
 	}

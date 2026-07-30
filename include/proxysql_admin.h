@@ -160,10 +160,11 @@ struct incoming_servers_t {
 	SQLite3_result* incoming_aurora_hostgroups = NULL;
 	SQLite3_result* incoming_hostgroup_attributes = NULL;
 	SQLite3_result* incoming_mysql_servers_ssl_params = NULL;
+	SQLite3_result* incoming_aws_rds_bgd_hostgroups = NULL;
 	SQLite3_result* runtime_mysql_servers = NULL;
 
 	incoming_servers_t();
-	incoming_servers_t(SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*);
+	incoming_servers_t(SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*);
 };
 
 // Separate structs for runtime mysql server and mysql server v2 to avoid human error
@@ -810,6 +811,8 @@ class ProxySQL_Admin {
 	void stats___mysql_prepared_statements_info();
 	void stats___mysql_gtid_executed();
 	void stats___mysql_client_host_cache(bool reset);
+	void stats___mysql_passthrough_auth_cache();
+	void stats___mysql_passthrough_auth_metrics();
 	void stats___tls_certificates();
 	void stats___proxysql_global();
 
