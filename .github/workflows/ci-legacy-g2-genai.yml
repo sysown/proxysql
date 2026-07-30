@@ -65,7 +65,6 @@ jobs:
         # omits daemon sources, codecov-cli drops those SF: entries, and
         # Codecov shows only test/+src/ -- the regression after #5967.
         sparse-checkout: |
-          codecov.yml
           include
           lib
           src
