@@ -18,13 +18,14 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref_name }}
   cancel-in-progress: true
 
 env:
-  BUILD_CACHE_KEY: cluster-simulator-v3-ubuntu22-${{ github.sha }}
+  BUILD_CACHE_KEY: cluster-simulator-v3-ubuntu24-${{ github.sha }}
   RUNTIME_CACHE_DIR: .cluster-simulator-runtime
 
 jobs:
@@ -85,6 +86,7 @@ jobs:
     env:
       INFRA_ID: ${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}
       TAP_GROUP: ${{ matrix.group }}
+      COVERAGE: "1"
 
     steps:
     - name: Checkout
@@ -120,6 +122,21 @@ jobs:
       run: |
         test/infra/control/stop-proxysql-isolated.bash || true
         test/infra/control/destroy-infras.bash || true
+
+    - name: Upload coverage to Codecov
+      if: ${{ !cancelled() && hashFiles('ci_infra_logs/**/coverage-report/*.info') != '' }}
+      uses: codecov/codecov-action@v4
+      with:
+        codecov_yml_path: codecov.yml
+        override_commit: ${{ github.event.pull_request.head.sha || github.sha }}
+        files: ci_infra_logs/${{ env.INFRA_ID }}/coverage-report/${{ env.INFRA_ID }}.info
+        flags: simulation-tests
+        name: ${{ matrix.group }}-coverage
+        use_oidc: true
+        disable_search: true
+        plugins: noop
+        fail_ci_if_error: false
+        verbose: true
 
     - name: Archive failure logs
       if: ${{ failure() && !cancelled() }}
