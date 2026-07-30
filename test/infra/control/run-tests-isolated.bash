@@ -389,34 +389,25 @@ docker run \
                             if [ -f \"\${coverage_file}\" ]; then
                                 echo \">>> Coverage report generated: \${coverage_file}\"
 
-                                # Normalize SF: source-file paths in the LCOV report
-                                # so Codecov can resolve them against the runner workspace.
+                                # Normalize SF: paths to repo-root-relative form so TAP
+                                # coverage merges with unit-tests on Codecov.
                                 # fastcov emits a mix of:
-                                #   SF:/opt/proxysql/include/X.h    (absolute container path
-                                #                                     embedded in .gcno files)
-                                #   SF:lib/Y.cpp                    (relative to fastcov cwd
-                                #                                     = /opt/proxysql)
-                                #   SF:proxysql/src/Z.cpp           (already correct)
-                                # codecov-cli's network_root_folder is the runner's
-                                # /home/runner/work/proxysql/proxysql and the repo content
-                                # lives at <network_root>/proxysql/, so only paths shaped
-                                # as 'SF:proxysql/...' get resolved -- the other two forms
+                                #   SF:/opt/proxysql/include/X.h   (absolute container path)
+                                #   SF:/gcov/proxysql/lib/Y.cpp    (GCOV_PREFIX layout)
+                                #   SF:lib/Y.cpp                   (relative to /opt/proxysql)
+                                #   SF:proxysql/src/Z.cpp          (legacy prefixed form)
+                                # Unit-tests upload SF:lib/... (repo-root). Emitting the
+                                # same shape here is required: the old proxysql/ prefix
+                                # created a phantom namespace that never merged, leaving
+                                # lib/MySQL_Monitor.cpp at 0% despite real TAP hits.
                                 # NB to future editors: this whole script body is the
                                 # argument to an outer bash -c that is wrapped in
-                                # DOUBLE QUOTES. Inside those outer double quotes,
-                                # backticks still trigger command substitution and bare
-                                # double-quote characters terminate the argument early.
-                                # That means comments here must avoid backticks (use
-                                # apostrophes for inline code) and avoid any literal
-                                # double-quote character (use apostrophes, or escape
-                                # as backslash-double-quote like the script body does
-                                # for genuine strings).
-                                # are silently dropped server-side. On the previous green
-                                # run that meant Codecov stored 27 files / 5694 lines out
-                                # of the 84621 lines fastcov actually measured.
+                                # DOUBLE QUOTES. Comments must avoid backticks and bare
+                                # double-quote characters.
                                 sed -i \
-                                    -e 's|^SF:/opt/proxysql/|SF:proxysql/|' \
-                                    -e '/^SF:proxysql\\//!s|^SF:|SF:proxysql/|' \
+                                    -e 's|^SF:/opt/proxysql/|SF:|' \
+                                    -e 's|^SF:/gcov/proxysql/|SF:|' \
+                                    -e 's|^SF:proxysql/|SF:|' \
                                     \"\${coverage_file}\"
 
                                 if command -v genhtml >/dev/null 2>&1; then
