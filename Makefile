@@ -519,9 +519,12 @@ binaries/proxysql%:
 	${MAKE} cleanbuild
 	${MAKE} cleantest
 	find . -not -path "./binaries/*" -not -path "./.git/*" | xargs touch -h --date=@${SOURCE_DATE_EPOCH}
-	@docker compose -p "$(COMPOSE_PROJECT)" down -v --remove-orphans
-	@docker compose -p "$(COMPOSE_PROJECT)" up $(IMG_NAME)$(IMG_TYPE)$(IMG_COMP)_build
-	@docker compose -p "$(COMPOSE_PROJECT)" down -v --remove-orphans
+	@set -e; \
+		docker compose -p "$(COMPOSE_PROJECT)" down -v --remove-orphans; \
+		trap 'docker compose -p "$(COMPOSE_PROJECT)" down -v --remove-orphans' EXIT; \
+		docker compose -p "$(COMPOSE_PROJECT)" up --abort-on-container-exit \
+			--exit-code-from "$(IMG_NAME)$(IMG_TYPE)$(IMG_COMP)_build" \
+			"$(IMG_NAME)$(IMG_TYPE)$(IMG_COMP)_build"
 
 
 ### clean targets
