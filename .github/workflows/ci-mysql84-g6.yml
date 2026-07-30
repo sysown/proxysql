@@ -47,10 +47,16 @@ jobs:
         repository: ${{ github.repository }}
         ref: ${{ env.SHA }}
         path: 'proxysql'
+        # include/lib/src required so Codecov can resolve LCOV SF: paths
+        # (repo-root lib/*.cpp, include/*). Without them sparse checkout
+        # omits daemon sources, codecov-cli drops those SF: entries, and
+        # Codecov shows only test/+src/ -- the regression after #5967.
         sparse-checkout: |
-          codecov.yml
+          include
+          lib
+          src
           test/infra
-          test/tap/groups
+          test/tap
           test/scripts
 
     - name: Download build handoff
