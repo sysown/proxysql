@@ -370,30 +370,34 @@ test_wexecvp_syscall_failures-t: test_wexecvp_syscall_failures-t.cpp $(TAP_LDIR)
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -Wl,--wrap=pipe,--wrap=fcntl,--wrap=read,--wrap=poll $(STATIC_LIBS) -o $@
 
 pgsql-extended_query_protocol_test-t: pgsql-extended_query_protocol_test-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
+	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual -Wl,--allow-multiple-definition -o $@
 
 pgsql-reg_test_5273_bind_parameter_format-t: pgsql-reg_test_5273_bind_parameter_format-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
+	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual -Wl,--allow-multiple-definition -o $@
 
 pgsql-reg_test_5300_threshold_resultset_deadlock-t: pgsql-reg_test_5300_threshold_resultset_deadlock-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
+	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual -Wl,--allow-multiple-definition -o $@
 
 pgsql-reg_test_5866_result_format-t: pgsql-reg_test_5866_result_format-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
+	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual -Wl,--allow-multiple-definition -o $@
 
 test_ffto_pgsql_pipeline-t: test_ffto_pgsql_pipeline-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
+	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual -Wl,--allow-multiple-definition -o $@
 
 test_ffto_pgsql_stmt_portal-t: test_ffto_pgsql_stmt_portal-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
+	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual -Wl,--allow-multiple-definition -o $@
 
-# Named-portal raw-wire differential test. pg_lite_client is compiled with
-# -DPG_LITE_CLIENT_SCRAM so the client can SCRAM-SHA-256 authenticate directly
-# to the backend (pg_hba scram-sha-256) using the in-tree pg_scram_* wrappers
-# from libproxysql.a — which pull vendored libscram/libusual, hence -lscram
-# -lusual (galera-rule precedent at :204/:207).
+# -lscram/-lusual: pg_lite_client.cpp uses libscram client SCRAM (stepwise saslBegin/saslFinish for the
+# mid-handshake reload test); --allow-multiple-definition resolves duplicate symbols between libscram/libusual
+# and other vendored static libs (test binaries only).
+pgsql-scram_reload_midhandshake-t: pgsql-scram_reload_midhandshake-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
+	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual -Wl,--allow-multiple-definition -o $@
+
+# Named-portal raw-wire differential test. The client SCRAM-SHA-256 authenticates directly to the
+# backend (pg_hba scram-sha-256) via pg_lite_client's doSASLAuth(), which uses libscram, hence
+# -lscram -lusual (galera-rule precedent at :204/:207).
 pgsql-native_portals-t: pgsql-native_portals-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) -DPG_LITE_CLIENT_SCRAM $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual -o $@
+	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual -Wl,--allow-multiple-definition -o $@
 
 
 MYSQLX_PROTO_DIR := $(PROXYSQL_PATH)/plugins/mysqlx/proto
