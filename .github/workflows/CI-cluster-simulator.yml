@@ -18,7 +18,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref_name }}
@@ -79,6 +78,9 @@ jobs:
     name: test / ${{ matrix.group }}
     needs: build
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -125,7 +127,7 @@ jobs:
 
     - name: Upload coverage to Codecov
       if: ${{ !cancelled() && hashFiles('ci_infra_logs/**/coverage-report/*.info') != '' }}
-      uses: codecov/codecov-action@v4
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # Codecov Action v4
       with:
         codecov_yml_path: codecov.yml
         override_commit: ${{ github.event.pull_request.head.sha || github.sha }}
