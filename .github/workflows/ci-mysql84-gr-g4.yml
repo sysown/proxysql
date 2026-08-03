@@ -231,8 +231,9 @@ jobs:
       # suite, so the report reflects production code paths exercised by
       # integration tests, not just the lib-only unit-test slice.
       #
-      # `flags: tap-mysql84-gr-g4` lets Codecov merge per-group uploads and show
-      # per-flag coverage trends. `use_oidc: true` is mandatory -- the
+      # integration-tests merges regular-daemon TAP shards for this commit.
+      # The group-specific name remains available for diagnostics.
+      # `use_oidc: true` is mandatory -- the
       # repo has no CODECOV_TOKEN secret and Codecov rejects tokenless
       # legacy uploads with "branch is protected" HTTP 400.
       #
@@ -243,10 +244,10 @@ jobs:
       if: ${{ !cancelled() && hashFiles('proxysql/ci_infra_logs/**/coverage-report/*.info') != '' }}
       uses: codecov/codecov-action@v4
       with:
-        codecov_yml_path: proxysql/codecov.yml
+        codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
         override_commit: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
         files: proxysql/ci_infra_logs/ci-mysql84-gr-g4/coverage-report/ci-mysql84-gr-g4.info
-        flags: tap-mysql84-gr-g4
+        flags: integration-tests
         name: tap-mysql84-gr-g4-coverage
         use_oidc: true
         # Upload ONLY the explicit LCOV .info file.
