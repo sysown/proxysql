@@ -468,6 +468,7 @@
   "test_sqlite3_pass_exts-t" : [ "legacy-g9","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g9","mysql90-g4","mysql95-g4" ],
   "test_sqlite3_server-t" : [ "legacy-g9","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g9","mysql90-g4","mysql95-g4" ],
   "test_sqlite3_server_and_fast_routing-t" : [ "legacy-g9","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g9","mysql90-g4","mysql95-g4" ],
+  "reg_test_5977_fast_forward_unix_socket_compression-t" : [ "no-infra-g1" ],
   "test_sqlite3_special_queries_libmariadb-t" : [ "legacy-g9","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g9","mysql90-g4","mysql95-g4" ],
   "test_sqlite3_special_queries_libmysql-t" : [ "legacy-g9","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g9","mysql90-g4","mysql95-g4" ],
   "test_ssl_connect-t" : [ "legacy-g9","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g9","mysql90-g4","mysql95-g4" ],

@@ -1015,7 +1015,10 @@ void MySQL_Connection::connect_start() {
 		char* host_ip = connect_start_DNS_lookup();
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, host_ip, userinfo->username, auth_password, userinfo->schemaname, parent->port, NULL, client_flags);
 	} else {
-		client_flags &= ~(CLIENT_COMPRESS | CLIENT_ZSTD_COMPRESSION_ALGORITHM); // disabling compression for connections made via Unix socket
+		const bool fast_forward = myds && myds->sess && myds->sess->session_fast_forward;
+		if (!fast_forward) {
+			client_flags &= ~(CLIENT_COMPRESS | CLIENT_ZSTD_COMPRESSION_ALGORITHM); // disabling compression for regular connections made via Unix socket
+		}
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, "localhost", userinfo->username, auth_password, userinfo->schemaname, parent->port, parent->address, client_flags);
 	}
 	fd=mysql_get_socket(mysql);
