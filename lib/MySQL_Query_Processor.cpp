@@ -701,6 +701,32 @@ MySQL_Query_Processor_Output* MySQL_Query_Processor::process_query(MySQL_Session
 	return ret;
 }
 
+/**
+ * @brief Parses the optional "destination_schema" key out of a rule's attributes JSON.
+ * @details Shared by both new_query_rule() overloads. On any problem the rule is left
+ *   with a NULL destination_schema (no schema switch) and the reason is logged: a
+ *   non-string value is a configuration error, an empty string is a no-op worth warning
+ *   about. Kept as a free function so the attributes parsing in the callers stays flat.
+ * @param newQR Rule being built; its destination_schema is set on success.
+ * @param j_attributes Already parsed attributes JSON of the rule.
+ */
+static void parse_rule_destination_schema(MySQL_Query_Processor_Rule_t* newQR, const nlohmann::json& j_attributes) {
+	const auto it = j_attributes.find("destination_schema");
+	if (it == j_attributes.end()) {
+		return;
+	}
+	if (it->type() != nlohmann::json::value_t::string) {
+		proxy_error("Failed to parse destination_schema in JSON on attributes for rule_id %d : %s\n", newQR->rule_id, it->dump().c_str());
+		return;
+	}
+	const std::string s = *it;
+	if (s.empty()) {
+		proxy_warning("destination_schema is empty in attributes for rule_id %d , ignoring it\n", newQR->rule_id);
+		return;
+	}
+	newQR->destination_schema = strdup(s.c_str());
+}
+
 MySQL_Query_Processor_Rule_t* MySQL_Query_Processor::new_query_rule(int rule_id, bool active, const char* username, const char* schemaname, int flagIN, const char* client_addr,
 	const char* proxy_addr, int proxy_port, const char* digest, const char* match_digest, const char* match_pattern, bool negate_match_pattern,
 	const char* re_modifiers, int flagOUT, const char* replace_pattern, int destination_hostgroup, int cache_ttl, int cache_empty_result,
@@ -822,19 +848,7 @@ MySQL_Query_Processor_Rule_t* MySQL_Query_Processor::new_query_rule(int rule_id,
 					proxy_error("Failed to parse flagOUTs attributes for rule_id %d : %s\n", newQR->rule_id, flagOUTs.dump().c_str());
 				}
 			}
-			if (j_attributes.find("destination_schema") != j_attributes.end()) {
-				const nlohmann::json& dest_schema = j_attributes["destination_schema"];
-				if (dest_schema.type() == nlohmann::json::value_t::string) {
-					std::string s = dest_schema;
-					if (s.length() > 0) {
-						newQR->destination_schema = strdup(s.c_str());
-					} else {
-						proxy_warning("destination_schema is empty in attributes for rule_id %d , ignoring it\n", newQR->rule_id);
-					}
-				} else {
-					proxy_error("Failed to parse destination_schema in JSON on attributes for rule_id %d : %s\n", newQR->rule_id, dest_schema.dump().c_str());
-				}
-			}
+			parse_rule_destination_schema(newQR, j_attributes);
 		}
 	}
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Creating new rule in %p : rule_id:%d, active:%d, username=%s, schemaname=%s, flagIN:%d, %smatch_digest=\"%s\", %smatch_pattern=\"%s\", flagOUT:%d replace_pattern=\"%s\", destination_hostgroup:%d, apply:%d\n", newQR, newQR->rule_id, newQR->active, newQR->username, newQR->schemaname, newQR->flagIN, (newQR->negate_match_pattern ? "(!)" : ""), newQR->match_digest, (newQR->negate_match_pattern ? "(!)" : ""), newQR->match_pattern, newQR->flagOUT, newQR->replace_pattern, newQR->destination_hostgroup, newQR->apply);
@@ -972,19 +986,7 @@ MySQL_Query_Processor_Rule_t* MySQL_Query_Processor::new_query_rule(const MySQL_
 					proxy_error("Failed to parse flagOUTs attributes for rule_id %d : %s\n", newQR->rule_id, flagOUTs.dump().c_str());
 				}
 			}
-			if (j_attributes.find("destination_schema") != j_attributes.end()) {
-				const nlohmann::json& dest_schema = j_attributes["destination_schema"];
-				if (dest_schema.type() == nlohmann::json::value_t::string) {
-					std::string s = dest_schema;
-					if (s.length() > 0) {
-						newQR->destination_schema = strdup(s.c_str());
-					} else {
-						proxy_warning("destination_schema is empty in attributes for rule_id %d , ignoring it\n", newQR->rule_id);
-					}
-				} else {
-					proxy_error("Failed to parse destination_schema in JSON on attributes for rule_id %d : %s\n", newQR->rule_id, dest_schema.dump().c_str());
-				}
-			}
+			parse_rule_destination_schema(newQR, j_attributes);
 		}
 	}
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Creating new rule in %p : rule_id:%d, active:%d, username=%s, schemaname=%s, flagIN:%d, %smatch_digest=\"%s\", %smatch_pattern=\"%s\", flagOUT:%d replace_pattern=\"%s\", destination_hostgroup:%d, apply:%d\n", newQR, newQR->rule_id, newQR->active, newQR->username, newQR->schemaname, newQR->flagIN, (newQR->negate_match_pattern ? "(!)" : ""), newQR->match_digest, (newQR->negate_match_pattern ? "(!)" : ""), newQR->match_pattern, newQR->flagOUT, newQR->replace_pattern, newQR->destination_hostgroup, newQR->apply);
