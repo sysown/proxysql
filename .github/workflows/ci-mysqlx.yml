@@ -508,6 +508,10 @@ jobs:
   soak-tests:
     runs-on: ubuntu-22.04
     needs: unit-tests
+    strategy:
+      fail-fast: false
+      matrix:
+        connector_version: ['9.7.0', '26.7.0']
     permissions: write-all
     steps:
       - uses: LouisBrunner/checks-action@v2.0.0
@@ -515,7 +519,7 @@ jobs:
         if: always()
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          name: '${{ github.workflow }} / ${{ github.job }}'
+          name: '${{ github.workflow }} / ${{ github.job }} (Connector/Python ${{ matrix.connector_version }})'
           repo: ${{ github.repository }}
           sha: ${{ env.SHA }}
           status: 'in_progress'
@@ -531,6 +535,9 @@ jobs:
             test/infra
             test/tap/groups
             test/scripts
+
+      - name: Verify Connector/Python Dockerfile pins
+        run: proxysql/test/infra/docker-base/test-connector-version-pins.bash
 
       - name: Download build handoff
         # Build payload arrives as workflow artifacts, not an Actions cache:
@@ -628,9 +635,26 @@ jobs:
         # from test/infra/docker-base. Includes mysqlx-connector-python
         # so the soak harness scripts (behavioral_validation.py,
         # stress.py) can run inside the test-runner container.
+        env:
+          MYSQLX_SOAK_IMAGE: proxysql-ci-base:mysqlx-connector-${{ matrix.connector_version }}
         run: |
           cd proxysql/test/infra/docker-base
-          docker build -t proxysql-ci-base:latest .
+          docker build \
+            --build-arg MYSQL_CONNECTOR_PYTHON_VERSION=${{ matrix.connector_version }} \
+            -t "$MYSQLX_SOAK_IMAGE" \
+            -t proxysql-ci-base:latest \
+            .
+          docker run --rm -i "$MYSQLX_SOAK_IMAGE" python3 - "${{ matrix.connector_version }}" <<'PY'
+          from importlib.metadata import version
+          import sys
+
+          expected = sys.argv[1]
+          packages = ("mysql-connector-python", "mysqlx-connector-python")
+          actual = {package: version(package) for package in packages}
+          print(actual)
+          if any(found != expected for found in actual.values()):
+              raise SystemExit(f"expected {expected}, got {actual}")
+          PY
 
       - name: Start infrastructure
         run: |
@@ -673,7 +697,7 @@ jobs:
         if: ${{ failure() && !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.workflow }}-${{ env.SHA }}-${{ github.job }}-run#${{ github.run_number }}
+          name: ${{ github.workflow }}-${{ env.SHA }}-${{ github.job }}-connector-${{ matrix.connector_version }}-run#${{ github.run_number }}
           path: |
             proxysql/ci_*_logs/
 
