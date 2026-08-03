@@ -26,6 +26,7 @@
 
 #include <unistd.h>
 #include <string.h>
+#include <cstdlib>
 #include <atomic>
 #include <string>
 #include <thread>
@@ -282,11 +283,14 @@ int main(int argc, char** argv) {
 	);
 
 	digest_row b0_after = get_digest_row(admin, "SELECT ? AS batch_b_0");
+	// first_seen and last_seen are converted from monotonic timestamps to epoch
+	// seconds on every read, so consecutive reads may differ by one second due
+	// to whole-second clock conversion.
 	ok(
 		b0_before.valid && b0_after.valid &&
 		b0_before.count_star == b0_after.count_star &&
-		b0_before.first_seen == b0_after.first_seen &&
-		b0_before.last_seen == b0_after.last_seen &&
+		std::abs(b0_before.first_seen - b0_after.first_seen) <= 1 &&
+		std::abs(b0_before.last_seen - b0_after.last_seen) <= 1 &&
 		b0_before.sum_time == b0_after.sum_time,
 		"Surviving digest stats must not be altered by purges.\n"
 		"    count_star -> before:%lld after:%lld\n"
