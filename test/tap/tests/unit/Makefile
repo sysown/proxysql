@@ -424,7 +424,12 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	glovars_unit-t \
 	pgsql_servers_ssl_params_unit-t \
 	connection_unhealthy_unit-t \
-	cluster_sync_unit-t
+	cluster_sync_unit-t \
+	parsersql_unit-t \
+	pgsql_query_processor_unit-t \
+	http_server_unit-t \
+	ffto_state_machine_unit-t \
+	restapi_server_unit-t
 
 # Plugin-chassis + mysqlx-plugin unit tests — built only when
 # libproxysql.a was compiled with -DPROXYSQL40 (autodetected higher up
