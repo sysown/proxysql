@@ -3895,9 +3895,9 @@ handler_again:
 				// backend still being the reusable connection; if it was torn down the
 				// portals are gone with it and the session either ends (destructor clears
 				// via reset()) or reconnects fresh.
-				if (processing_extended_query && rc == -1 && myconn &&
-					myconn->is_connection_in_reusable_state() &&
-					myconn->native_txn_status == 'I') {
+				if (processing_extended_query && rc == -1 && myds->myconn &&
+					myds->myconn->native_txn_status == 'I' &&
+					myds->myconn->is_connection_in_reusable_state()) {
 					clear_named_portals();
 				}
 			}
