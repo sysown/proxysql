@@ -9,6 +9,40 @@ static inline uint32_t be32(const unsigned char* p) {
 
 void PgSQL_Backend_Msg_Framer::feed(const unsigned char* data, size_t n) {
     if (failed) return;                                  // already in error state; ignore further bytes
+
+    // Reclaim the consumed prefix before appending.
+    //
+    // next() rewinds the buffer only when a message ends exactly at len (its
+    // `if (pos == len) { pos = 0; len = 0; }` reset). When a read stopped
+    // mid-message that never fired, so the bytes below pos — already framed,
+    // handed to the caller and copied into the result buffer — stayed resident
+    // while feed() appended above them. The buffer grew for the whole result
+    // set, and cap never shrinks, so the peak stayed allocated for the life of
+    // the connection.
+    //
+    // Whether the reset fires is arithmetic, not a property of the data: with
+    // reads of `chunk` bytes and messages of `msglen` it lands every
+    // msglen/gcd(msglen, chunk) reads, so retention reached
+    // chunk * msglen / gcd(msglen, chunk). Reads are 16384 bytes
+    // (native_recv_into_framer) and 8192 over TLS (MY_SSL_BUFFER), both powers
+    // of two, so any ODD message size never rewound until the stream ended.
+    // Measured: 48 MiB streamed as 2049-byte messages retained 38.6 MiB, against
+    // 28 KiB for the same run with 2048-byte messages.
+    //
+    // The fix slides the unread tail down to offset 0 and drops the consumed
+    // prefix, keeping the buffer at roughly one read in size. It compacts only
+    // when that prefix is at least as large as the tail, so the move never costs
+    // more than it reclaims and a large message is left in place while it is
+    // still being assembled across reads.
+    if (pos > 0) {
+        const size_t live = len - pos;
+        if (pos >= live) {
+            memmove(buf, buf + pos, live);   // live may be 0; memmove(_,_,0) is a no-op
+            len = live;
+            pos = 0;
+        }
+    }
+
     if (n > SIZE_MAX - len) { failed = true; return; }   // would overflow len+n
     if (len + n > cap) {
         size_t need = len + n;
