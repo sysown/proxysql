@@ -117,15 +117,16 @@ static void test_pgsql_ffto_parse_message() {
 	PgSQLFFTO ffto(nullptr);
 	const char* stmt_name = "";
 	const char* query = "SELECT 1";
-	size_t name_len = 1;
+	size_t name_len = 1; // includes terminating NUL for empty name
 	size_t query_len = strlen(query) + 1;
-	uint32_t payload_len = (uint32_t)(name_len + query_len + 2 + 4);
-	uint32_t msg_len = htonl(payload_len + 4);
+	// Parse payload: name\0 + query\0 + int16 num_params
+	size_t payload_len = name_len + query_len + 2;
+	uint32_t msg_len = htonl((uint32_t)(payload_len + 4));
 	std::vector<char> msg(1 + 4 + payload_len, 0);
 	msg[0] = 'P';
 	memcpy(&msg[1], &msg_len, 4);
 	memcpy(&msg[5], stmt_name, name_len);
-	memcpy(&msg[5 + name_len + 1], query, query_len);
+	memcpy(&msg[5 + name_len], query, query_len);
 	ffto.on_client_data(msg.data(), msg.size());
 	ok(1, "PgSQLFFTO: Parse message processed without crash");
 	ffto.on_close();
