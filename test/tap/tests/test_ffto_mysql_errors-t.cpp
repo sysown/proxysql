@@ -40,7 +40,7 @@ static constexpr int kPlannedTests = 7;
 static bool verify_mysql_error(MYSQL* admin, int expected_errno, const char* expected_msg_substr) {
     char query[1024];
     snprintf(query, sizeof(query),
-        "SELECT err_no, last_error FROM stats_mysql_errors WHERE err_no = %d",
+        "SELECT errno, last_error FROM stats_mysql_errors WHERE errno = %d",
         expected_errno);
 
     for (int attempt = 0; attempt < 20; attempt++) {
@@ -161,16 +161,16 @@ int main(int argc, char** argv) {
         ok(has_msg, "stats_mysql_errors entries have non-empty error messages");
     }
 
-    /* Verify errors have valid err_no */
+    /* Verify errors have valid errno */
     {
         bool has_errno = false;
-        if (mysql_query(admin, "SELECT err_no FROM stats_mysql_errors LIMIT 1") == 0) {
+        if (mysql_query(admin, "SELECT errno FROM stats_mysql_errors LIMIT 1") == 0) {
             MYSQL_RES* res = mysql_store_result(admin);
             MYSQL_ROW row = res ? mysql_fetch_row(res) : NULL;
             if (row && atoi(row[0]) > 0) has_errno = true;
             if (res) mysql_free_result(res);
         }
-        ok(has_errno, "stats_mysql_errors entries have non-zero err_no");
+        ok(has_errno, "stats_mysql_errors entries have non-zero errno");
     }
 
 cleanup:
