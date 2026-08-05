@@ -34,10 +34,11 @@ int main(int argc, char** argv) {
     ok(mysql_query(admin, "UPDATE global_variables SET variable_value='100' WHERE variable_name='mysql-ffto_max_buffer_size'") == 0, "Set FFTO max buffer size to 100");
     ok(mysql_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME") == 0, "Load variables to runtime");
 
-    // Ensure user exists
-    char user_query[1024];
-    snprintf(user_query, sizeof(user_query), "INSERT OR REPLACE INTO mysql_users (username, password, default_hostgroup, fast_forward, default_schema) VALUES ('%s', '%s', 0, 1, 'information_schema')", cl.username, cl.password);
-    ok(mysql_query(admin, user_query) == 0, "Configure user with fast_forward=1 and default_schema");
+    /* Enable fast_forward on ALL mysql_users rows (frontend + backend).
+     * Partial INSERT OR REPLACE only updates the backend PK row and leaves
+     * frontend credentials at fast_forward=0, so FFTO never runs. */
+    ok(mysql_query(admin, "UPDATE mysql_users SET fast_forward=1, default_schema='information_schema'") == 0,
+       "Enable fast_forward on all mysql_users");
     ok(mysql_query(admin, "LOAD MYSQL USERS TO RUNTIME") == 0, "Load users to runtime");
 
     // Ensure backend server exists

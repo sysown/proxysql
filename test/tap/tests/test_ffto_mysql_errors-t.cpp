@@ -79,17 +79,12 @@ int main(int argc, char** argv) {
     MYSQL_QUERY(admin, "UPDATE global_variables SET variable_value='true' "
                        "WHERE variable_name='mysql-ffto_enabled'");
     MYSQL_QUERY(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
-    {
-        char eu[256], ep[256];
-        mysql_real_escape_string(admin, eu, cl.mysql_username, strlen(cl.mysql_username));
-        mysql_real_escape_string(admin, ep, cl.mysql_password, strlen(cl.mysql_password));
-        char uq[1024];
-        snprintf(uq, sizeof(uq),
-            "INSERT OR REPLACE INTO mysql_users (username, password, fast_forward) "
-            "VALUES ('%s', '%s', 1)", eu, ep);
-        MYSQL_QUERY(admin, uq);
-        MYSQL_QUERY(admin, "LOAD MYSQL USERS TO RUNTIME");
-    }
+    /* Enable fast_forward on ALL mysql_users rows (frontend + backend).
+     * Partial INSERT OR REPLACE only touches PK (username, backend) and leaves
+     * the frontend credential row at fast_forward=0, so sessions never enter
+     * FAST_FORWARD and MySQLFFTO is never constructed. */
+    MYSQL_QUERY(admin, "UPDATE mysql_users SET fast_forward=1");
+    MYSQL_QUERY(admin, "LOAD MYSQL USERS TO RUNTIME");
 
     // Reset error stats
     MYSQL_QUERY(admin, "SELECT * FROM stats_mysql_errors_reset");
@@ -98,7 +93,7 @@ int main(int argc, char** argv) {
     // Connect through ProxySQL in FF mode
     conn = mysql_init(NULL);
     if (!mysql_real_connect(conn, cl.host, cl.mysql_username, cl.mysql_password,
-                           "information_schema", cl.mysql_port, NULL, 0)) {
+                           "information_schema", cl.port, NULL, 0)) {
         FAIL_AND_SKIP_REMAINING(cleanup, "FF connection failed: %s", mysql_error(conn));
     }
     ok(conn != NULL, "Connected to MySQL via ProxySQL in FF mode");

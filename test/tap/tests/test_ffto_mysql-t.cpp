@@ -110,11 +110,26 @@ int main(int argc, char** argv) {
     MYSQL_QUERY(admin, "UPDATE global_variables SET variable_value='1048576' WHERE variable_name='mysql-ffto_max_buffer_size'");
     MYSQL_QUERY(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
-    // Ensure root user has fast_forward enabled
-        char user_query[1024];
-    snprintf(user_query, sizeof(user_query), "INSERT OR REPLACE INTO mysql_users (username, password, default_hostgroup, fast_forward) VALUES ('%s', '%s', 0, 1)", cl.root_username, cl.root_password);
-    MYSQL_QUERY(admin, user_query);
+    /* Enable fast_forward on ALL mysql_users rows (frontend + backend).
+     * Partial INSERT OR REPLACE only touches PK (username, backend) and leaves
+     * the frontend credential row at fast_forward=0, so sessions never enter
+     * FAST_FORWARD and MySQLFFTO is never constructed. */
+    MYSQL_QUERY(admin, "UPDATE mysql_users SET fast_forward=1");
     MYSQL_QUERY(admin, "LOAD MYSQL USERS TO RUNTIME");
+    {
+        /* Fail hard if frontend credentials still have fast_forward=0 */
+        if (mysql_query(admin, "SELECT COUNT(*) FROM runtime_mysql_users "
+                               "WHERE frontend=1 AND fast_forward=1") == 0) {
+            MYSQL_RES* r = mysql_store_result(admin);
+            MYSQL_ROW row = r ? mysql_fetch_row(r) : NULL;
+            int cnt = row ? atoi(row[0]) : 0;
+            if (r) mysql_free_result(r);
+            if (cnt < 1) {
+                diag("FATAL: no frontend mysql_users with fast_forward=1 after LOAD");
+                return -1;
+            }
+        }
+    }
 
     // Ensure backend server exists
     snprintf(server_query, sizeof(server_query), "INSERT OR REPLACE INTO mysql_servers (hostgroup_id, hostname, port) VALUES (0, '%s', %d)", cl.mysql_host, cl.mysql_port);
