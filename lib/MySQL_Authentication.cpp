@@ -754,6 +754,11 @@ bool MySQL_Authentication::_reset(enum cred_username_type usertype) {
 bool MySQL_Authentication::reset() {
 	_reset(USERNAME_BACKEND);
 	_reset(USERNAME_FRONTEND);
+	// creds_admins is a distinct scope from PROXYSQL31 onward; without this its
+	// accounts are handed to setAllInactive() without ever being released and the
+	// account_details strings leak. On the stable tier ADMIN_CRED_SCOPE is
+	// USERNAME_FRONTEND so the scope is empty and this is a no-op.
+	_reset(USERNAME_ADMIN);
 	return true;
 }
 
