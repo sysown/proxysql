@@ -503,7 +503,7 @@ int main(int argc, char** argv) {
 	uint32_t actual_test_count =
 		INV_INPUTS.size() +           // Always run
 		PASS_GEN_COUNT * 2 +           // Always run (ProxySQL Admin SQLite3 extensions)
-		2;                             // EXTRA: Two extra correctness tests
+		5;                             // EXTRA: 2 forced-randomness + 2 salt-alphabet (#5989) + 1 legacy-salt
 
 	if (g_mysql_supports_random_password) {
 		// Phase 2: MySQL/Admin hash compatibility tests (USER_GEN_COUNT total,
@@ -600,6 +600,71 @@ int main(int argc, char** argv) {
 		// EXTRA: Two extra correctness tests; forcing randomness
 		test_pass_gen(admin, "mysql_native_password", "randpass0", "");
 		test_pass_gen(admin, "caching_sha2_password", "randpass0", "00000000000000000000");
+
+		// EXTRA: auto-generated salts must stay inside a credential-safe alphabet.
+		//
+		// Issue #5989: the salt used to be RAND_bytes() masked with 0x7f, bumping only
+		// '\0' and '$'. That produced ';' or ':' in ~27% of hashes, and those are the
+		// separators parsed by ProxySQL_Admin::add_credentials(), so such a hash is
+		// silently split into a bogus credential when stored in
+		// admin-admin_credentials / admin-stats_credentials -- the variable still
+		// reports all 70 bytes and nothing errors, but the login fails with a generic
+		// 'Access denied'. It also emitted control bytes, which are unusable in a
+		// config file. Salts are now drawn from a 64-character alphabet.
+		//
+		// Only the 1-argument form is checked: an explicitly supplied salt is passed
+		// through verbatim by design and is the caller's responsibility.
+		{
+			const string SALT_ALPHABET {
+				"./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+			};
+			const size_t SALT_SAMPLES = 500;
+
+			size_t bad_alphabet = 0, bad_shape = 0;
+			string first_bad {};
+
+			for (size_t i = 0; i < SALT_SAMPLES; i++) {
+				MYSQL_QUERY_T(admin, "SELECT CACHING_SHA2_PASSWORD('randpass0')");
+				MYSQL_RES* myres = mysql_store_result(admin);
+				MYSQL_ROW myrow = mysql_fetch_row(myres);
+				const string h { myrow[0] ? myrow[0] : "" };
+				mysql_free_result(myres);
+
+				// '$A$' + 3 rounds digits + '$' + 20 salt + 43 digest
+				if (h.size() != 70 || h.rfind("$A$", 0) != 0) {
+					bad_shape++;
+					if (first_bad.empty()) { first_bad = h; }
+					continue;
+				}
+
+				const string salt { h.substr(7, 20) };
+				if (salt.find_first_not_of(SALT_ALPHABET) != string::npos) {
+					bad_alphabet++;
+					if (first_bad.empty()) { first_bad = h; }
+				}
+			}
+
+			ok(
+				bad_shape == 0,
+				"Generated hashes should be wellformed   samples:'%lu', malformed:'%lu', first:'%s'",
+				SALT_SAMPLES, bad_shape, first_bad.c_str()
+			);
+			ok(
+				bad_alphabet == 0,
+				"Generated salts should use the credential-safe alphabet (issue #5989)   "
+				"samples:'%lu', offending:'%lu', first:'%s'",
+				SALT_SAMPLES, bad_alphabet, first_bad.c_str()
+			);
+		}
+
+		// EXTRA: a hash generated with the pre-#5989 salt style must still verify.
+		// The fix is generation-side only; PPHR_verify_sha2()/PPHR_sha2full() read the
+		// salt back with substr(7,20) and never inspect it, so previously stored hashes
+		// keep working. Passing the salt explicitly reproduces the old output exactly.
+		// NOTE: the literal is split so each \x escape terminates. C++ hex escapes are
+		// greedy, so "\x02defghijklmno" would parse \x02def as a single escape.
+		const string LEGACY_STYLE_SALT { "a;b:c" "\x01" "\x02" "defghijklmno" };
+		test_pass_gen(admin, "caching_sha2_password", "randpass0", LEGACY_STYLE_SALT);
 
 		for (size_t i = 0; i < PASS_GEN_COUNT; i++) {
 			const uint32_t pass_len = rand() % 150;
