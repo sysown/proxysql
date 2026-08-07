@@ -160,10 +160,8 @@ int main(int argc, char** argv) {
     }
 
     /* ── FFTO Configuration ─────────────────────────────────────────── */
-    MYSQL_QUERY(admin, "UPDATE global_variables SET variable_value='true' "
-                       "WHERE variable_name='mysql-ffto_enabled'");
-    MYSQL_QUERY(admin, "UPDATE global_variables SET variable_value='1048576' "
-                       "WHERE variable_name='mysql-ffto_max_buffer_size'");
+    MYSQL_QUERY(admin, "SET mysql-ffto_enabled='true'");
+    MYSQL_QUERY(admin, "SET mysql-ffto_max_buffer_size=1048576");
     MYSQL_QUERY(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
     /* Enable fast_forward on ALL mysql_users rows (frontend + backend).

@@ -30,7 +30,7 @@ int main(int argc, char** argv) {
     ok(admin != NULL, "Connected to ProxySQL Admin");
 
     // Set a very small threshold: 100 bytes
-    ok(mysql_query(admin, "UPDATE global_variables SET variable_value='true' WHERE variable_name='mysql-ffto_enabled'") == 0, "Enable FFTO");
+    ok(mysql_query(admin, "SET mysql-ffto_enabled='true'") == 0, "Enable FFTO");
     ok(mysql_query(admin, "UPDATE global_variables SET variable_value='100' WHERE variable_name='mysql-ffto_max_buffer_size'") == 0, "Set FFTO max buffer size to 100");
     ok(mysql_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME") == 0, "Load variables to runtime");
 

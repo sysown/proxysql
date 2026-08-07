@@ -134,8 +134,7 @@ int main(int argc, char** argv) {
     }
 
     /* ── FFTO Configuration — small buffer (200 bytes) ──────────────── */
-    MYSQL_QUERY(admin, "UPDATE global_variables SET variable_value='true' "
-                       "WHERE variable_name='mysql-ffto_enabled'");
+    MYSQL_QUERY(admin, "SET mysql-ffto_enabled='true'");
     MYSQL_QUERY(admin, "UPDATE global_variables SET variable_value='200' "
                        "WHERE variable_name='mysql-ffto_max_buffer_size'");
     MYSQL_QUERY(admin, "LOAD MYSQL VARIABLES TO RUNTIME");

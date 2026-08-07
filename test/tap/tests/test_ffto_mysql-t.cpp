@@ -7,6 +7,7 @@
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
+#include "ffto_mysql_helpers.h"
 
 static constexpr int kPlannedTests = 22;
 
@@ -105,30 +106,9 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    // Configure FFTO and Fast Forward
-    MYSQL_QUERY(admin, "UPDATE global_variables SET variable_value='true' WHERE variable_name='mysql-ffto_enabled'");
-    MYSQL_QUERY(admin, "UPDATE global_variables SET variable_value='1048576' WHERE variable_name='mysql-ffto_max_buffer_size'");
-    MYSQL_QUERY(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
-
-    /* Enable fast_forward on ALL mysql_users rows (frontend + backend).
-     * Partial INSERT OR REPLACE only touches PK (username, backend) and leaves
-     * the frontend credential row at fast_forward=0, so sessions never enter
-     * FAST_FORWARD and MySQLFFTO is never constructed. */
-    MYSQL_QUERY(admin, "UPDATE mysql_users SET fast_forward=1");
-    MYSQL_QUERY(admin, "LOAD MYSQL USERS TO RUNTIME");
-    {
-        /* Fail hard if frontend credentials still have fast_forward=0 */
-        if (mysql_query(admin, "SELECT COUNT(*) FROM runtime_mysql_users "
-                               "WHERE frontend=1 AND fast_forward=1") == 0) {
-            MYSQL_RES* r = mysql_store_result(admin);
-            MYSQL_ROW row = r ? mysql_fetch_row(r) : NULL;
-            int cnt = row ? atoi(row[0]) : 0;
-            if (r) mysql_free_result(r);
-            if (cnt < 1) {
-                diag("FATAL: no frontend mysql_users with fast_forward=1 after LOAD");
-                return -1;
-            }
-        }
+    if (ffto_mysql_enable_ff(admin, cl.root_username) != 0) {
+        diag("FATAL: failed to enable FFTO/fast_forward");
+        return -1;
     }
 
     // Ensure backend server exists
@@ -136,7 +116,11 @@ int main(int argc, char** argv) {
     MYSQL_QUERY(admin, server_query);
     MYSQL_QUERY(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
-    MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest"); // Reset stats
+    /* DELETE on the stats mirror does NOT clear in-memory digests. */
+    if (ffto_mysql_reset_digests(admin) != 0) {
+        diag("FATAL: failed to reset digests");
+        return -1;
+    }
 
     // USE ROOT FOR CLIENT CONNECTION
     conn = mysql_init(NULL);
@@ -145,6 +129,18 @@ int main(int argc, char** argv) {
         return -1;
     }
     ok(conn != NULL, "Connected to ProxySQL in Fast Forward mode");
+    /* Prime backend so status becomes FAST_FORWARD, then verify. */
+    if (mysql_query(conn, "DO 1") != 0) {
+        diag("DO 1 failed: %s", mysql_error(conn));
+    }
+    if (!ffto_mysql_session_is_ff(admin, cl.root_username)) {
+        diag("FATAL: session never entered fast_forward after connect");
+        return -1;
+    }
+    if (ffto_mysql_reset_digests(admin) != 0) {
+        diag("FATAL: failed to reset digests after prime");
+        return -1;
+    }
 
     // Create and use test database
     EXEC_QUERY(conn, "CREATE DATABASE IF NOT EXISTS ffto_db");
@@ -167,7 +163,9 @@ int main(int argc, char** argv) {
     verify_digest(admin, "DELETE FROM ffto_test WHERE id", 1, 1, 0);
 
     // --- Part 2: Binary Protocol (Prepared Statements) ---
-    MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest");
+    if (ffto_mysql_reset_digests(admin) != 0) {
+        FAIL_AND_SKIP_REMAINING(cleanup, "Failed to reset digests before binary protocol");
+    }
 
     stmt = mysql_stmt_init(conn);
     if (mysql_stmt_prepare(stmt, ins_query, strlen(ins_query))) {
