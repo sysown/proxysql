@@ -3934,7 +3934,10 @@ void ProxySQL_Admin::add_credentials(char *credentials, int hostgroup_id) {
 		
 		if constexpr (pt == SERVER_TYPE_MYSQL) { 
 			if (GloMyAuth) { // this check if required if GloMyAuth doesn't exist yet
-				GloMyAuth->add(user, pass, USERNAME_FRONTEND, 0, hostgroup_id, (char*)"main", 0, 0, 0, 1000, (char*)"", (char*)"");
+				// ADMIN_CRED_SCOPE keeps these out of the mysql_users namespace from
+				// the Innovative tier onward; on the stable tier it is
+				// USERNAME_FRONTEND and behaviour is unchanged. See #5987.
+				GloMyAuth->add(user, pass, ADMIN_CRED_SCOPE, 0, hostgroup_id, (char*)"main", 0, 0, 0, 1000, (char*)"", (char*)"");
 			}
 		} else if constexpr (pt == SERVER_TYPE_PGSQL) {
 			if (GloPgAuth) { // this check if required if GloPgAuth doesn't exist yet
@@ -3966,7 +3969,13 @@ void ProxySQL_Admin::delete_credentials(char *credentials) {
 
 		if constexpr (pt == SERVER_TYPE_MYSQL) {
 			if (GloMyAuth) { // this check if required if GloMyAuth doesn't exist yet
-				GloMyAuth->del(user, USERNAME_FRONTEND);
+				// Deleting from ADMIN_CRED_SCOPE. On the stable tier this is
+				// USERNAME_FRONTEND, so changing admin-admin_credentials still
+				// removes a same-named mysql_users row from the runtime auth map
+				// until the next LOAD MYSQL USERS TO RUNTIME -- the documented
+				// "do not reuse the name" rule. From PROXYSQL31 the scopes are
+				// separate and the two cannot touch each other. See #5987.
+				GloMyAuth->del(user, ADMIN_CRED_SCOPE);
 			}
 		}
 		else if constexpr (pt == SERVER_TYPE_PGSQL) {

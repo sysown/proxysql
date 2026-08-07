@@ -60,6 +60,26 @@ static const char *plugins[3] = {
 
 #include "MySQL_encode.h"
 
+/**
+ * @brief Credential scope to look a username up in for a given session type.
+ * @details ADMIN and STATS sessions resolve against ADMIN_CRED_SCOPE; everything
+ *   else (MySQL frontend, SQLite server, ClickHouse) uses USERNAME_FRONTEND.
+ *
+ *   On the stable tier ADMIN_CRED_SCOPE *is* USERNAME_FRONTEND, so this returns
+ *   the same value for every session type and nothing changes. From PROXYSQL31
+ *   the scopes are distinct, which means an Admin session no longer resolves
+ *   'mysql_users' rows and a frontend session no longer resolves Admin
+ *   credentials -- neither could usefully authenticate with the other's entry
+ *   anyway (the post-auth hostgroup gate in MySQL_Session rejects both), but
+ *   sharing one map let them overwrite each other. See #5987.
+ */
+static inline enum cred_username_type cred_scope_for_session(enum proxysql_session_type session_type) {
+	if (session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
+		return ADMIN_CRED_SCOPE;
+	}
+	return USERNAME_FRONTEND;
+}
+
 char* get_password(account_details_t& ad, PASSWORD_TYPE::E passtype) {
 	char* ret = nullptr;
 
@@ -1238,7 +1258,7 @@ bool MySQL_Protocol::process_pkt_auth_swich_response(unsigned char *pkt, unsigne
 		password = ch_account.password;
 #endif /* PROXYSQLCLICKHOUSE */
 	} else {
-		account_details = GloMyAuth->lookup((char*)userinfo->username, USERNAME_FRONTEND, dup_details);
+		account_details = GloMyAuth->lookup((char*)userinfo->username, cred_scope_for_session(session_type), dup_details);
 		password = account_details.password;
 	}
 	// FIXME: add support for default schema and fast forward , issues #255 and #256
@@ -1460,7 +1480,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		ch_account_to_my(account_details, ch_account_details);
 #endif /* PROXYSQLCLICKHOUSE */
 	} else {
-		account_details = GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, dup_details);
+		account_details = GloMyAuth->lookup((char *)user, cred_scope_for_session(session_type), dup_details);
 	}
 
 	/**
@@ -3214,7 +3234,7 @@ __do_auth:
 		ch_account_to_my(account_details, ch_account);
 #endif /* PROXYSQLCLICKHOUSE */
 	} else {
-		account_details = GloMyAuth->lookup((char*)vars1.user, USERNAME_FRONTEND, dup_details);
+		account_details = GloMyAuth->lookup((char*)vars1.user, cred_scope_for_session(session_type), dup_details);
 	}
 
 	vars1.password = get_password(account_details, PASSWORD_TYPE::PRIMARY);

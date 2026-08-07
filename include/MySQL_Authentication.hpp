@@ -65,6 +65,28 @@ typedef struct _creds_group_t {
 } creds_group_t;
 #endif // CREDS_GROUPS_T
 
+/**
+ * @brief The credential scope that 'admin-admin_credentials' and
+ *   'admin-stats_credentials' are stored in and looked up from.
+ *
+ * @details Historically these shared 'USERNAME_FRONTEND' with 'mysql_users',
+ *   one flat map keyed by username, so a row and an Admin credential of the same
+ *   name overwrote each other -- which is why the documentation states that
+ *   users in 'admin-admin_credentials' / 'admin-stats_credentials' cannot also
+ *   be used in 'mysql_users'.
+ *
+ *   From the Innovative tier onward they get their own scope, which removes the
+ *   collision entirely rather than policing it. This is an INCOMPATIBLE change
+ *   -- a colliding name currently resolves to a single entry and afterwards the
+ *   two are independent -- so it is gated to PROXYSQL31 and the stable tier
+ *   keeps the documented behaviour.
+ */
+#ifdef PROXYSQL31
+#define ADMIN_CRED_SCOPE USERNAME_ADMIN
+#else
+#define ADMIN_CRED_SCOPE USERNAME_FRONTEND
+#endif /* PROXYSQL31 */
+
 class MySQL_Authentication {
 	private:
 	/**
@@ -74,6 +96,17 @@ class MySQL_Authentication {
 	std::unique_ptr<SQLite3_result> mysql_users_resultset { nullptr };
 	creds_group_t creds_backends;
 	creds_group_t creds_frontends;
+	/**
+	 * @brief Scope holding 'admin-admin_credentials' and 'admin-stats_credentials'.
+	 * @details Separate from 'creds_frontends' so an Admin credential and a
+	 *   'mysql_users' row of the same name cannot overwrite each other. Only
+	 *   populated when PROXYSQL31 is defined (see ADMIN_CRED_SCOPE); on the stable
+	 *   tier it stays empty and admin credentials remain in 'creds_frontends'.
+	 *   Never included in 'dump_all_users()', so 'runtime_mysql_users' and the
+	 *   cluster checksum are unaffected.
+	 */
+	creds_group_t creds_admins;
+	creds_group_t& creds_for(enum cred_username_type usertype);
 	bool _reset(enum cred_username_type usertype);
 	uint64_t _get_runtime_checksum(enum cred_username_type usertype);
 	public:

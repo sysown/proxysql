@@ -47,7 +47,11 @@ enum log_event_type {
 	PROXYSQL_METADATA
 };
 
-enum cred_username_type { USERNAME_BACKEND, USERNAME_FRONTEND, USERNAME_NONE };
+// USERNAME_ADMIN is a scope for 'admin-admin_credentials' / 'admin-stats_credentials'.
+// It is compiled unconditionally, but only *used* when PROXYSQL31 is defined --
+// see ADMIN_CRED_SCOPE in MySQL_Authentication.hpp. On the stable tier those
+// credentials continue to live in USERNAME_FRONTEND alongside mysql_users.
+enum cred_username_type { USERNAME_BACKEND, USERNAME_FRONTEND, USERNAME_NONE, USERNAME_ADMIN };
 
 #define PROXYSQL_USE_RESULT
 
