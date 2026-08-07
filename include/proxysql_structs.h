@@ -775,6 +775,42 @@ enum proxysql_session_type {
 	PROXYSQL_SESSION_NONE
 };
 
+/**
+ * @brief The credential scope holding 'admin-admin_credentials' and
+ *   'admin-stats_credentials'.
+ *
+ * @details Historically these shared USERNAME_FRONTEND with mysql_users /
+ *   pgsql_users -- one flat map keyed by username -- so an Admin credential and
+ *   a row of the same name overwrote each other. That is the only reason the
+ *   documentation states those users cannot also appear in mysql_users.
+ *
+ *   From the Innovative tier onward they get their own scope, removing the
+ *   collision rather than policing it. This is an INCOMPATIBLE change (a
+ *   colliding name currently resolves to one entry; afterwards the two are
+ *   independent), so it is gated to PROXYSQL31. On the stable tier this is
+ *   USERNAME_FRONTEND, every call site passes what it always passed, and
+ *   behaviour is unchanged. See issue #5987.
+ */
+#ifdef PROXYSQL31
+#define ADMIN_CRED_SCOPE USERNAME_ADMIN
+#else
+#define ADMIN_CRED_SCOPE USERNAME_FRONTEND
+#endif /* PROXYSQL31 */
+
+/**
+ * @brief Credential scope to resolve a username in, for a given session type.
+ * @details ADMIN and STATS sessions use ADMIN_CRED_SCOPE; every other session
+ *   type (MySQL/PgSQL frontend, SQLite server, ClickHouse) uses
+ *   USERNAME_FRONTEND. Shared by both protocol implementations so the policy
+ *   exists once.
+ */
+static inline enum cred_username_type cred_scope_for_session(enum proxysql_session_type session_type) {
+	if (session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
+		return ADMIN_CRED_SCOPE;
+	}
+	return USERNAME_FRONTEND;
+}
+
 #endif /* PROXYSQL_ENUMS */
 
 

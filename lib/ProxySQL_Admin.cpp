@@ -3941,7 +3941,7 @@ void ProxySQL_Admin::add_credentials(char *credentials, int hostgroup_id) {
 			}
 		} else if constexpr (pt == SERVER_TYPE_PGSQL) {
 			if (GloPgAuth) { // this check if required if GloPgAuth doesn't exist yet
-				GloPgAuth->add(user, pass, USERNAME_FRONTEND, 0, hostgroup_id, 0, 0, 1000, (char*)"", (char*)"");
+				GloPgAuth->add(user, pass, ADMIN_CRED_SCOPE, 0, hostgroup_id, 0, 0, 1000, (char*)"", (char*)"");
 			}
 		}
 
@@ -3980,7 +3980,7 @@ void ProxySQL_Admin::delete_credentials(char *credentials) {
 		}
 		else if constexpr (pt == SERVER_TYPE_PGSQL) {
 			if (GloPgAuth) { // this check if required if GloPgAuth doesn't exist yet
-				GloPgAuth->del(user, USERNAME_FRONTEND);
+				GloPgAuth->del(user, ADMIN_CRED_SCOPE);
 			}
 		}
 		free(user);
