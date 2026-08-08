@@ -49,6 +49,19 @@ COVERAGE_REPORT_DIR="${WORKSPACE}/ci_infra_logs/${INFRA_ID}/coverage-report"
 if [ "${COVERAGE_MODE}" = "1" ]; then
     echo ">>> Code coverage enabled - reports will be saved to ${COVERAGE_REPORT_DIR}"
     mkdir -p "${COVERAGE_REPORT_DIR}"
+
+    # Coverage workflows use sparse checkout for source trees, so the tracked
+    # root codecov.yml may not be materialized in the worktree even though it
+    # exists at HEAD. codecov-action is explicitly pointed at this path; restore
+    # just that file from the tested commit without broadening sparse checkout.
+    if [ ! -f "${WORKSPACE}/codecov.yml" ]; then
+        if git -C "${WORKSPACE}" cat-file -e HEAD:codecov.yml 2>/dev/null; then
+            git -C "${WORKSPACE}" show HEAD:codecov.yml > "${WORKSPACE}/codecov.yml"
+            echo ">>> Materialized codecov.yml from HEAD for coverage upload"
+        else
+            echo ">>> WARNING: codecov.yml is not tracked at HEAD"
+        fi
+    fi
 fi
 
 # 1. Determine Required Infras
