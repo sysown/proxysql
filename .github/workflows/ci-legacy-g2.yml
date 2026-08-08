@@ -80,12 +80,13 @@ jobs:
   tests:
     needs: pick-runner
     runs-on: ${{ fromJson(needs.pick-runner.outputs.runson) }}
+    permissions: write-all
     strategy:
       fail-fast: false
       matrix:
         infradb: [ 'mysql57' ]
     env:
-      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu22-tap_src
+      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu24-tap-genai-gcov_src
       MATRIX: '(${{ matrix.infradb }})'
 
     steps:
@@ -107,9 +108,13 @@ jobs:
         repository: ${{ github.repository }}
         ref: ${{ env.SHA }}
         path: 'proxysql'
+        # Source trees are required so Codecov can resolve repo-root LCOV SF: paths.
         sparse-checkout: |
+          include
+          lib
+          src
           test/infra
-          test/tap/groups
+          test/tap
           test/scripts
 
     - name: Download build handoff
@@ -124,7 +129,7 @@ jobs:
         REPO: ${{ github.repository }}
         SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
         BUILD_RUN_ID: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.id || '' }}
-        HANDOFF_VARIANT: ubuntu22-tap
+        HANDOFF_VARIANT: ubuntu24-tap-genai-gcov
         HANDOFF_TYPES: src test
       run: |
         set -uo pipefail
@@ -232,6 +237,7 @@ jobs:
         export TAP_GROUP="legacy-g2"
         export SKIP_CLUSTER_START=1
         export TAP_USE_NOISE=1
+        export COVERAGE=1
         test/infra/control/run-tests-isolated.bash
 
     - name: Cleanup
@@ -264,6 +270,37 @@ jobs:
         name: ${{ github.workflow }}-${{ env.SHA }}-logs-run#${{ github.run_number }}
         path: |
           proxysql/ci_*_logs/
+
+    - name: Archive coverage report
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ github.workflow }}-${{ env.SHA }}-coverage-run#${{ github.run_number }}
+        path: |
+          proxysql/ci_infra_logs/ci-legacy-g2/coverage-report/
+        if-no-files-found: ignore
+
+    - name: Report missing coverage file
+      if: ${{ !cancelled() && hashFiles('proxysql/ci_infra_logs/**/coverage-report/*.info') == '' }}
+      run: |
+        echo "No coverage report was produced; skipping Codecov upload."
+
+    - name: Upload coverage to Codecov
+      if: ${{ !cancelled() && hashFiles('proxysql/ci_infra_logs/**/coverage-report/*.info') != '' }}
+      uses: codecov/codecov-action@v4
+      with:
+        codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
+        override_commit: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+        files: proxysql/ci_infra_logs/ci-legacy-g2/coverage-report/ci-legacy-g2.info
+        flags: integration-tests
+        name: tap-legacy-g2-coverage
+        use_oidc: true
+        disable_search: true
+        plugins: noop
+        root_dir: proxysql
+        disable_file_fixes: true
+        fail_ci_if_error: false
+        verbose: true
 
     - uses: LouisBrunner/checks-action@v2.0.0
       if: always()
