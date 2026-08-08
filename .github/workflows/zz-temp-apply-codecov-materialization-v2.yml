@@ -19,4 +19,6 @@ jobs:
           fetch-depth: 0
 
       - name: Apply and validate Codecov materialization fix
-        run: python3 .github/scripts/temp_apply_codecov_materialization.py
+        run: |
+          git show origin/GH-Actions:.github/scripts/temp_apply_codecov_materialization.py > /tmp/apply-codecov-fix.py
+          python3 /tmp/apply-codecov-fix.py
