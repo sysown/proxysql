@@ -1,0 +1,22 @@
+name: TEMP apply Codecov materialization v2
+
+on:
+  push:
+    branches: [ GH-Actions ]
+    paths:
+      - '.github/workflows/zz-temp-apply-codecov-materialization-v2.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: test/coverage-low-lib-files
+          fetch-depth: 0
+
+      - name: Apply and validate Codecov materialization fix
+        run: python3 .github/scripts/temp_apply_codecov_materialization.py
