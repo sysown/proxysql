@@ -1,6 +1,6 @@
 --- sqlite3.c	2024-03-22 19:22:47.046093173 +0100
 +++ sqlite3-pass-exts.c	2024-03-22 19:24:09.557303716 +0100
-@@ -26275,6 +26275,207 @@
+@@ -26275,6 +26275,228 @@
    sqlite3ResultStrAccum(context, &sRes);
  }
  
@@ -171,14 +171,35 @@
 +			sqlite3_result_text(context, err_msg, -1, SQLITE_TRANSIENT);
 +			return;
 +		} else {
++			/* Map each random byte onto a 64-character alphabet that is safe to embed
++			 * in ProxySQL's credential strings.
++			 *
++			 * The previous scheme (mask with 0x7f, then bump only '\0' and '$') left
++			 * roughly 26% of generated salts containing ';' or ':'. Those are the
++			 * separators used by 'admin-admin_credentials' and
++			 * 'admin-stats_credentials', so such a hash is silently split into a bogus
++			 * credential by ProxySQL_Admin::add_credentials() at
++			 * 'LOAD ADMIN VARIABLES TO RUNTIME' -- the variable still reports all 70
++			 * bytes and nothing errors, but the login then fails with a generic
++			 * 'Access denied'. It also emitted control bytes ~99% of the time, making
++			 * the hashes unreadable and unsafe to paste into a configuration file.
++			 *
++			 * 64 divides 256 evenly, so masking with 0x3f introduces no modulo bias.
++			 * 20 characters over a 64-symbol alphabet still carry 120 bits of salt
++			 * entropy.
++			 *
++			 * This is a generation-side change only. Verification
++			 * (MySQL_Protocol.cpp: PPHR_verify_sha2 / PPHR_sha2full) reads the salt
++			 * back out with substr(7,20) and passes it straight to sha256_crypt_r
++			 * without inspecting its contents, so hashes generated before this change
++			 * keep verifying unchanged and no migration is required.
++			 */
++			static const char SALT_ALPHABET[] =
++				"./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 +			unsigned int i = 0;
 +
-+			for (i = 0; i < sizeof(salt_buf)/sizeof(unsigned char); i++) {
-+				salt_buf[i] = salt_buf[i] & 0x7f;
-+
-+				if (salt_buf[i] == '\0' || salt_buf[i] == '$') {
-+					salt_buf[i] = salt_buf[i] + 1;
-+				}
++			for (i = 0; i < DEF_SALT_SIZE; i++) {
++				salt_buf[i] = (unsigned char)SALT_ALPHABET[salt_buf[i] & 0x3f];
 +			}
 +
 +			memcpy(salt, salt_buf, salt_size);
@@ -208,7 +229,7 @@
  /*
  ** current_time()
  **
-@@ -133230,6 +133431,10 @@
+@@ -133230,6 +133452,10 @@
      FUNCTION(substr,             3, 0, 0, substrFunc       ),
      FUNCTION(substring,          2, 0, 0, substrFunc       ),
      FUNCTION(substring,          3, 0, 0, substrFunc       ),
