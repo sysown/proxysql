@@ -386,7 +386,15 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 		MHD_destroy_response(response);
 		return ret;
 	}
-	account_details_t ad { GloMyAuth->lookup(username, USERNAME_FRONTEND, { false, false, false }) };
+	// The web UI authenticates the 'stats' account, which is populated from
+	// 'admin-stats_credentials' (see add_credentials() in ProxySQL_Admin.cpp).
+	// It must therefore be looked up in the SAME scope those credentials are
+	// added to -- ADMIN_CRED_SCOPE -- not in USERNAME_FRONTEND. On the stable
+	// tier ADMIN_CRED_SCOPE *is* USERNAME_FRONTEND, so this is a no-op there;
+	// under PROXYSQL31 the admin/stats accounts live in USERNAME_ADMIN and a
+	// USERNAME_FRONTEND lookup returns no password, failing every request with
+	// HTTP 401. See #5987.
+	account_details_t ad { GloMyAuth->lookup(username, ADMIN_CRED_SCOPE, { false, false, false }) };
 	{
 		if (
 			(ad.default_hostgroup != STATS_HOSTGROUP)

@@ -904,7 +904,10 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 		goto __exit_process_pkt_handshake_response;
 	}
 
-	password = GloPgAuth->lookup((char*)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass, &attributes);
+	// ADMIN/STATS sessions resolve against the Admin credential scope; see
+	// cred_scope_for_session(). On the stable tier this is USERNAME_FRONTEND and
+	// behaviour is unchanged. See #5987.
+	password = GloPgAuth->lookup((char*)user, cred_scope_for_session((*myds)->sess->session_type), &_ret_use_ssl, &default_hostgroup, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass, &attributes);
 
 	if (password) {
 #ifdef DEBUG

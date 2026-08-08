@@ -74,6 +74,17 @@ class MySQL_Authentication {
 	std::unique_ptr<SQLite3_result> mysql_users_resultset { nullptr };
 	creds_group_t creds_backends;
 	creds_group_t creds_frontends;
+	/**
+	 * @brief Scope holding 'admin-admin_credentials' and 'admin-stats_credentials'.
+	 * @details Separate from 'creds_frontends' so an Admin credential and a
+	 *   'mysql_users' row of the same name cannot overwrite each other. Only
+	 *   populated when PROXYSQL31 is defined (see ADMIN_CRED_SCOPE); on the stable
+	 *   tier it stays empty and admin credentials remain in 'creds_frontends'.
+	 *   Never included in 'dump_all_users()', so 'runtime_mysql_users' and the
+	 *   cluster checksum are unaffected.
+	 */
+	creds_group_t creds_admins;
+	creds_group_t& creds_for(enum cred_username_type usertype);
 	bool _reset(enum cred_username_type usertype);
 	uint64_t _get_runtime_checksum(enum cred_username_type usertype);
 	public:

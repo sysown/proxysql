@@ -1238,7 +1238,7 @@ bool MySQL_Protocol::process_pkt_auth_swich_response(unsigned char *pkt, unsigne
 		password = ch_account.password;
 #endif /* PROXYSQLCLICKHOUSE */
 	} else {
-		account_details = GloMyAuth->lookup((char*)userinfo->username, USERNAME_FRONTEND, dup_details);
+		account_details = GloMyAuth->lookup((char*)userinfo->username, cred_scope_for_session(session_type), dup_details);
 		password = account_details.password;
 	}
 	// FIXME: add support for default schema and fast forward , issues #255 and #256
@@ -1259,7 +1259,7 @@ bool MySQL_Protocol::process_pkt_auth_swich_response(unsigned char *pkt, unsigne
 				if (ret) {
 					if (account_details.sha1_pass==NULL) {
 						// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
-						GloMyAuth->set_SHA1((char *)userinfo->username, USERNAME_FRONTEND,reply);
+						GloMyAuth->set_SHA1((char *)userinfo->username, cred_scope_for_session(session_type),reply);
 					}
 					if (userinfo->sha1_pass) free(userinfo->sha1_pass);
 					userinfo->sha1_pass=sha1_pass_hex(reply);
@@ -1328,7 +1328,7 @@ bool MySQL_Protocol::verify_user_pass(
 				ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
 				if (ret) {
 					if (sha1_pass==NULL) {
-						GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,reply);
+						GloMyAuth->set_SHA1((char *)user, cred_scope_for_session(session_type),reply);
 					}
 					if (userinfo->sha1_pass) free(userinfo->sha1_pass);
 					userinfo->sha1_pass=sha1_pass_hex(reply);
@@ -1346,7 +1346,7 @@ bool MySQL_Protocol::verify_user_pass(
 				if (strcasecmp(double_hashed_password,password)==0) {
 					ret = true;
 					if (sha1_pass==NULL) {
-						GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,md1_buf);
+						GloMyAuth->set_SHA1((char *)user, cred_scope_for_session(session_type),md1_buf);
 					}
 					if (userinfo->sha1_pass)
 						free(userinfo->sha1_pass);
@@ -1460,7 +1460,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		ch_account_to_my(account_details, ch_account_details);
 #endif /* PROXYSQLCLICKHOUSE */
 	} else {
-		account_details = GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, dup_details);
+		account_details = GloMyAuth->lookup((char *)user, cred_scope_for_session(session_type), dup_details);
 	}
 
 	/**
@@ -1695,6 +1695,29 @@ int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyPr
 	if (len==5) {
 		ret = false;
 		vars1.user = (unsigned char *)(*myds)->myconn->userinfo->username;
+		// A 1-byte payload of 0x02 at this stage is not a disconnect: it is the
+		// caching_sha2_password 'request_public_key' packet. ProxySQL has no RSA
+		// key to serve (tracked in #5988), so the exchange cannot continue -- but
+		// reporting it as "client is disconnecting" sent operators looking in
+		// entirely the wrong place. Name the real cause.
+		//
+		// This only fixes the log line. The client still receives the generic
+		// error produced by the normal failure path in
+		// MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE;
+		// giving the client a specific message needs that path to carry one, and
+		// #5988 replaces this branch with a real RSA implementation anyway.
+		if ((*myds)->switching_auth_stage == 5 && *pkt == 2) {
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
+				"Session=%p , DS=%p , user='%s' . Client requested the caching_sha2_password RSA public key\n",
+				(*myds), (*myds)->sess, vars1.user);
+			proxy_error(
+				"User '%s'@'%s' requested the caching_sha2_password RSA public key, which ProxySQL does not"
+				" serve. Connect using TLS instead.\n",
+				vars1.user, (*myds)->addr.addr
+			);
+			(*myds)->auth_in_progress = 0;
+			return 1;
+		}
 		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . Client is disconnecting\n", (*myds), (*myds)->sess, vars1.user);
 		proxy_error("User '%s'@'%s' is disconnecting during switch auth\n", vars1.user, (*myds)->addr.addr);
 		(*myds)->auth_in_progress = 0;
@@ -2049,26 +2072,112 @@ void MySQL_Protocol::PPHR_5passwordTrue(
 }
 
 
+// Defined below, next to PPHR_6auth2, the other caller.
+static bool caching_sha2_fast_auth_verify(
+	const char* cleartext_password,
+	const char* scramble,
+	const unsigned char* client_response
+);
+
+/**
+ * @brief Authenticate the 'mysql-monitor_*' credential.
+ * @details This is the only code path that authenticates
+ *   'mysql-monitor_username' / 'mysql-monitor_password'. That credential is not
+ *   stored in 'GloMyAuth', so @ref MySQL_Protocol::PPHR_verify_password reaches
+ *   here through its 'vars1.password == NULL' branch, for ADMIN / STATS / SQLITE
+ *   sessions only.
+ *
+ *   It used to be hardcoded to the 'mysql_native_password' scramble: a SHA1
+ *   'proxy_scramble' compared over SHA_DIGEST_LENGTH (20) bytes. Under
+ *   'caching_sha2_password' the client's fast-auth response is a 32-byte
+ *   SHA256-derived value, so that comparison could never succeed and the
+ *   credential was rejected outright -- breaking Kubernetes liveness/readiness
+ *   probes and metrics exporters connecting to the Admin interface (issue #5363).
+ *   Note it returned false without ever sending 'perform full authentication',
+ *   which is why TLS was not a workaround either.
+ *
+ *   The password is held in cleartext (as documented for 'mysql-monitor_password'),
+ *   so every supported plugin can be verified directly and no full-auth round trip
+ *   is ever required here.
+ */
 void MySQL_Protocol::PPHR_5passwordFalse_0(
-	// FIXME: does this work only for mysql_native_password ?
 	bool& ret,
 	MyProt_tmp_auth_vars& vars1,
 	char * reply,
 	account_details_t& attr1) {
-	if (strcmp((const char *)vars1.user,mysql_thread___monitor_username)==0) {
-		proxy_scramble(reply, (*myds)->myconn->scramble_buff, mysql_thread___monitor_password);
-		if (memcmp(reply, vars1.pass, SHA_DIGEST_LENGTH)==0) {
-			(*myds)->sess->default_hostgroup=STATS_HOSTGROUP;
-			(*myds)->sess->default_schema=strdup((char *)"main"); // just the pointer is passed
-			(*myds)->sess->schema_locked=false;
-			(*myds)->sess->transaction_persistent=false;
-			(*myds)->sess->session_fast_forward=SESSION_FORWARD_TYPE_NONE;
-			(*myds)->sess->user_max_connections=0;
-			vars1.password=l_strdup(mysql_thread___monitor_password);
-			ret=true;
-		}
-	} else {
+	if (strcmp((const char *)vars1.user,mysql_thread___monitor_username)!=0) {
 		ret=false;
+		return;
+	}
+
+	bool verified = false;
+
+	switch (auth_plugin_id) {
+		case AUTH_MYSQL_NATIVE_PASSWORD:
+			proxy_scramble(reply, (*myds)->myconn->scramble_buff, mysql_thread___monitor_password);
+			// NOTE: do NOT gate this on 'vars1.pass_len == SHA_DIGEST_LENGTH'.
+			// 'pass_len' is not the amount of valid data in 'vars1.pass': PPHR_2
+			// strips a trailing NUL byte from the client's response
+			// ("remove the extra 0 if present"), so a legitimate 20-byte native
+			// response whose last byte is 0x00 -- about 1 in 256 -- arrives with
+			// pass_len == 19 while all 20 bytes are present in the buffer.
+			verified = (memcmp(reply, vars1.pass, SHA_DIGEST_LENGTH) == 0);
+			break;
+
+		case AUTH_MYSQL_CACHING_SHA2_PASSWORD:
+			if ((*myds)->switching_auth_stage == 5) {
+				// A full-auth round trip was driven by another path (e.g. pass-through
+				// auth), so 'vars1.pass' already holds the cleartext.
+				verified =
+					(vars1.pass != NULL) &&
+					(strcmp(mysql_thread___monitor_password, (const char *)vars1.pass) == 0);
+			} else {
+				verified = caching_sha2_fast_auth_verify(
+					mysql_thread___monitor_password, (*myds)->myconn->scramble_buff,
+					vars1.pass
+				);
+			}
+			break;
+
+		case AUTH_MYSQL_CLEAR_PASSWORD:
+			verified =
+				(vars1.pass != NULL) &&
+				(strcmp(mysql_thread___monitor_password, (const char *)vars1.pass) == 0);
+			break;
+
+		default:
+			// A client can request an arbitrary plugin; this is not a programming
+			// error, so do not assert. Reject and say why.
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
+				"Session=%p , DS=%p , user='%s' . Unsupported auth_plugin_id=%d for the monitor credential\n",
+				(*myds), (*myds)->sess, vars1.user, auth_plugin_id);
+			break;
+	}
+
+	if (verified == false) {
+		ret=false;
+		return;
+	}
+
+	(*myds)->sess->default_hostgroup=STATS_HOSTGROUP;
+	(*myds)->sess->default_schema=strdup((char *)"main"); // just the pointer is passed
+	(*myds)->sess->schema_locked=false;
+	(*myds)->sess->transaction_persistent=false;
+	(*myds)->sess->session_fast_forward=SESSION_FORWARD_TYPE_NONE;
+	(*myds)->sess->user_max_connections=0;
+	vars1.password=l_strdup(mysql_thread___monitor_password);
+	ret=true;
+
+	// caching_sha2_password requires an explicit 'fast_auth_success' marker before
+	// the OK packet; mirrors what the PPHR_6auth2 call site does in
+	// PPHR_verify_password. Without it the client rejects the subsequent OK.
+	if (
+		auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD
+		&&
+		(*myds)->switching_auth_stage == 0
+	) {
+		const unsigned char fast_auth_success = '\3';
+		generate_one_byte_pkt(fast_auth_success);
 	}
 }
 
@@ -2147,6 +2256,9 @@ void MySQL_Protocol::PPHR_5passwordFalse_auth2(
 						if (attr1.sha1_pass==NULL) {
 							// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
 							// TODO: CHECK these usages of 'reply'
+							// USERNAME_FRONTEND, not the session scope: this is the LDAP
+							// path, which only ever backs frontend users -- an ADMIN/STATS
+							// session never reaches it.
 							GloMyAuth->set_SHA1((char *)userinfo->username, USERNAME_FRONTEND,reply);
 						}
 						if (userinfo->sha1_pass) free(userinfo->sha1_pass);
@@ -2168,26 +2280,68 @@ void MySQL_Protocol::PPHR_5passwordFalse_auth2(
 	}
 }
 
+/**
+ * @brief Verify a 'caching_sha2_password' fast-auth response.
+ * @details The client sends
+ *     XOR( SHA256(pw), SHA256( SHA256(SHA256(pw)) || scramble ) )
+ *   which the server recomputes from a password it can derive. This is the
+ *   cache-hit path of the plugin; it requires no extra round trip and is the
+ *   only completion possible when ProxySQL holds the cleartext.
+ *
+ *   Extracted so there is exactly one implementation of the algorithm: it is
+ *   used both by @ref MySQL_Protocol::PPHR_6auth2 for credentials found in
+ *   'GloMyAuth' and by @ref MySQL_Protocol::PPHR_5passwordFalse_0 for the
+ *   'mysql-monitor_*' credential, which is not stored there.
+ *
+ * @param cleartext_password The password ProxySQL holds, NUL-terminated.
+ * @param scramble The 20-byte connection scramble.
+ * @param client_response The response bytes sent by the client.
+ * @return true when the response matches.
+ */
+static bool caching_sha2_fast_auth_verify(
+	const char* cleartext_password,
+	const char* scramble,
+	const unsigned char* client_response
+) {
+	// Deliberately NOT length-checked against 'vars1.pass_len'. That field is not
+	// the amount of valid data in the response buffer: PPHR_2 strips a trailing
+	// NUL byte ("remove the extra 0 if present"), so a legitimate 32-byte
+	// caching_sha2 response ending in 0x00 -- about 1 in 256 -- reports
+	// pass_len == 31 while all 32 bytes are present. Gating on it rejects real
+	// logins intermittently; measured at 20 spurious denials across ~6520
+	// connections in test_auth_methods-t.
+	if (cleartext_password == NULL || client_response == NULL) {
+		return false;
+	}
+
+	unsigned char a[SHA256_DIGEST_LENGTH];
+	unsigned char b[SHA256_DIGEST_LENGTH];
+	unsigned char c[SHA256_DIGEST_LENGTH+20];
+	unsigned char d[SHA256_DIGEST_LENGTH];
+	unsigned char e[SHA256_DIGEST_LENGTH];
+	SHA256((const unsigned char *)cleartext_password, strlen(cleartext_password), a);
+	SHA256(a, SHA256_DIGEST_LENGTH, b);
+	memcpy(c,b,SHA256_DIGEST_LENGTH);
+	memcpy(c+SHA256_DIGEST_LENGTH, scramble, 20);
+	SHA256(c, SHA256_DIGEST_LENGTH+20, d);
+	for (int i=0; i<SHA256_DIGEST_LENGTH; i++) {
+		e[i] = a[i] ^ d[i];
+	}
+
+	return memcmp(e, client_response, SHA256_DIGEST_LENGTH) == 0;
+}
+
 void MySQL_Protocol::PPHR_6auth2(
 	bool& ret,
 	MyProt_tmp_auth_vars& vars1
 	) {
 	enum proxysql_session_type session_type = (*myds)->sess->session_type;
 	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
-		unsigned char a[SHA256_DIGEST_LENGTH];
-		unsigned char b[SHA256_DIGEST_LENGTH];
-		unsigned char c[SHA256_DIGEST_LENGTH+20];
-		unsigned char d[SHA256_DIGEST_LENGTH];
-		unsigned char e[SHA256_DIGEST_LENGTH];
-		SHA256((const unsigned char *)vars1.password, strlen(vars1.password), a);
-		SHA256(a, SHA256_DIGEST_LENGTH, b);
-		memcpy(c,b,SHA256_DIGEST_LENGTH);
-		memcpy(c+SHA256_DIGEST_LENGTH, (*myds)->myconn->scramble_buff, 20);
-		SHA256(c, SHA256_DIGEST_LENGTH+20, d);
-		for (int i=0; i<SHA256_DIGEST_LENGTH; i++) {
-			e[i] = a[i] ^ d[i];
-		}
-		if (memcmp(e,vars1.pass,SHA256_DIGEST_LENGTH)==0) {
+		if (
+			caching_sha2_fast_auth_verify(
+				vars1.password, (*myds)->myconn->scramble_buff, vars1.pass
+			)
+		) {
 			ret = true;
 		}
 	}
@@ -2205,7 +2359,7 @@ void MySQL_Protocol::PPHR_7auth1(
 		if (ret) {
 			if (attr1.sha1_pass==NULL) {
 				// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
-				GloMyAuth->set_SHA1((char *)vars1.user, USERNAME_FRONTEND,reply);
+				GloMyAuth->set_SHA1((char *)vars1.user, cred_scope_for_session(session_type),reply);
 			}
 			if (userinfo->sha1_pass)
 				free(userinfo->sha1_pass);
@@ -2246,7 +2400,7 @@ void MySQL_Protocol::PPHR_7auth2(
 			ret = true;
 			if (attr1.sha1_pass==NULL) {
 				// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
-				GloMyAuth->set_SHA1((char *)vars1.user, USERNAME_FRONTEND,md1_buf);
+				GloMyAuth->set_SHA1((char *)vars1.user, cred_scope_for_session(session_type),md1_buf);
 			}
 			if (userinfo->sha1_pass)
 				free(userinfo->sha1_pass);
@@ -3063,7 +3217,7 @@ __do_auth:
 		ch_account_to_my(account_details, ch_account);
 #endif /* PROXYSQLCLICKHOUSE */
 	} else {
-		account_details = GloMyAuth->lookup((char*)vars1.user, USERNAME_FRONTEND, dup_details);
+		account_details = GloMyAuth->lookup((char*)vars1.user, cred_scope_for_session(session_type), dup_details);
 	}
 
 	vars1.password = get_password(account_details, PASSWORD_TYPE::PRIMARY);
