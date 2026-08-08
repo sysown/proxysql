@@ -95,6 +95,10 @@ int main(int argc, char** argv) {
 
 	MYSQL* admin = mysql_init(NULL);
 	MYSQL* conn = NULL;
+	/* Declare before any goto cleanup (C++ forbids jump over init). */
+	bool is_ff = false;
+	const char* user = NULL;
+	const char* pass = NULL;
 
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password,
 	                       NULL, cl.admin_port, NULL, 0)) {
@@ -102,8 +106,8 @@ int main(int argc, char** argv) {
 	}
 
 	/* Use root (privileged TAP user) -- same as other FFTO mysql tests. */
-	const char* user = cl.root_username;
-	const char* pass = cl.root_password;
+	user = cl.root_username;
+	pass = cl.root_password;
 
 	if (ffto_mysql_enable_ff(admin, user) != 0) {
 		FAIL_AND_SKIP_REMAINING(cleanup, "Failed to enable FFTO/fast_forward for '%s'", user);
@@ -129,7 +133,7 @@ int main(int argc, char** argv) {
 	}
 
 	/* Hard gate: session must actually be in fast_forward. */
-	bool is_ff = ffto_mysql_session_is_ff(admin, user);
+	is_ff = ffto_mysql_session_is_ff(admin, user);
 	ok(is_ff, "Session for '%s' is in fast_forward (extended_info)", user);
 	if (!is_ff) {
 		FAIL_AND_SKIP_REMAINING(cleanup,
