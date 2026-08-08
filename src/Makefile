@@ -97,7 +97,9 @@ endif
 
 MYCXXFLAGS := $(STDCPP)
 ifeq ($(CXX),clang++)
+ifneq ($(UNAME_S),Darwin)
 	MYCXXFLAGS += -fuse-ld=lld
+endif
 endif
 MYCXXFLAGS += $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
 
