@@ -1,0 +1,257 @@
+name: TEMP apply coverage fixes
+
+on:
+  push:
+    branches: [ GH-Actions ]
+    paths:
+      - '.github/workflows/zz-temp-apply-coverage-fixes.yml'
+
+permissions: write-all
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: GH-Actions
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Apply GH-Actions coverage participation fixes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          wfroot = Path('.github/workflows')
+
+          targets = {
+              'ci-legacy-g2.yml': {
+                  'infra': 'ci-legacy-g2',
+                  'coverage_name': 'tap-legacy-g2-coverage',
+                  'variant_mode': 'fixed',
+              },
+              'ci-basictests.yml': {
+                  'infra': 'ci-basictests',
+                  'coverage_name': 'tap-basictests-coverage',
+                  'variant_mode': 'matrix',
+              },
+              'ci-taptests-pgsql-cluster.yml': {
+                  'infra': 'ci-taptests-pgsql-cluster',
+                  'coverage_name': 'tap-pgsql-cluster-sync-coverage',
+                  'variant_mode': 'matrix',
+              },
+          }
+
+          sparse_old = """        sparse-checkout: |
+            test/infra
+            test/tap/groups
+            test/scripts
+          """
+          sparse_new = """        # Source trees are required so Codecov can resolve repo-root LCOV SF: paths.
+        sparse-checkout: |
+          include
+          lib
+          src
+          test/infra
+          test/tap
+          test/scripts
+          """
+
+          def add_permissions(text, name):
+              marker = '  tests:\n'
+              pos = text.index(marker) + len(marker)
+              next_job = text.find('\n  ', pos)
+              job_end = len(text) if next_job < 0 else next_job
+              job_head_end = text.find('    steps:\n', pos, job_end)
+              if job_head_end < 0:
+                  raise RuntimeError(f'{name}: tests steps marker missing')
+              head = text[pos:job_head_end]
+              if '    permissions:' in head:
+                  if '    permissions: write-all' not in head:
+                      raise RuntimeError(f'{name}: unexpected custom permissions')
+                  return text
+              runs_on_end = text.find('\n', text.index('    runs-on:', pos, job_head_end)) + 1
+              return text[:runs_on_end] + '    permissions: write-all\n' + text[runs_on_end:]
+
+          def coverage_block(infra, coverage_name):
+              return f"""    - name: Archive coverage report
+      if: ${{{{ !cancelled() }}}}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{{{ github.workflow }}}}-${{{{ env.SHA }}}}-coverage-run#${{{{ github.run_number }}}}
+        path: |
+          proxysql/ci_infra_logs/{infra}/coverage-report/
+        if-no-files-found: ignore
+
+    - name: Report missing coverage file
+      if: ${{{{ !cancelled() && hashFiles('proxysql/ci_infra_logs/**/coverage-report/*.info') == '' }}}}
+      run: |
+        echo "No coverage report was produced; skipping Codecov upload."
+
+    - name: Upload coverage to Codecov
+      if: ${{{{ !cancelled() && hashFiles('proxysql/ci_infra_logs/**/coverage-report/*.info') != '' }}}}
+      uses: codecov/codecov-action@v4
+      with:
+        codecov_yml_path: ${{{{ github.workspace }}}}/proxysql/codecov.yml
+        override_commit: ${{{{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}}}
+        files: proxysql/ci_infra_logs/{infra}/coverage-report/{infra}.info
+        flags: integration-tests
+        name: {coverage_name}
+        use_oidc: true
+        disable_search: true
+        plugins: noop
+        root_dir: proxysql
+        disable_file_fixes: true
+        fail_ci_if_error: false
+        verbose: true
+
+"""
+
+          for filename, cfg in targets.items():
+              p = wfroot / filename
+              text = p.read_text()
+
+              text = add_permissions(text, filename)
+
+              if cfg['variant_mode'] == 'fixed':
+                  old = '${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu22-tap_src'
+                  new = '${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu24-tap-genai-gcov_src'
+                  if old not in text and new not in text:
+                      raise RuntimeError(f'{filename}: BLDCACHE variant anchor missing')
+                  text = text.replace(old, new, 1)
+                  text = text.replace('        HANDOFF_VARIANT: ubuntu22-tap\n',
+                                      '        HANDOFF_VARIANT: ubuntu24-tap-genai-gcov\n', 1)
+              else:
+                  old = "        testdist: [ 'ubuntu22-tap' ]"
+                  new = "        testdist: [ 'ubuntu24-tap-genai-gcov' ]"
+                  if old in text:
+                      text = text.replace(old, new, 1)
+                  elif new not in text:
+                      raise RuntimeError(f'{filename}: testdist variant anchor missing')
+
+              if filename == 'ci-basictests.yml':
+                  text = text.replace('        HANDOFF_TYPES: src\n', '        HANDOFF_TYPES: src test\n', 1)
+
+              if sparse_old in text:
+                  text = text.replace(sparse_old, sparse_new, 1)
+              elif all(x in text for x in ('\n          include\n', '\n          lib\n', '\n          src\n', '\n          test/tap\n')):
+                  pass
+              else:
+                  raise RuntimeError(f'{filename}: sparse checkout anchor missing')
+
+              run_line = '        test/infra/control/run-tests-isolated.bash\n'
+              if '        export COVERAGE=1\n' not in text:
+                  if run_line not in text:
+                      raise RuntimeError(f'{filename}: run-tests-isolated anchor missing')
+                  text = text.replace(run_line, '        export COVERAGE=1\n' + run_line, 1)
+
+              if 'uses: codecov/codecov-action@v4' not in text:
+                  final_marker = '    - uses: LouisBrunner/checks-action@v2.0.0\n'
+                  idx = text.rfind(final_marker)
+                  if idx < 0:
+                      raise RuntimeError(f'{filename}: final checks-action anchor missing')
+                  text = text[:idx] + coverage_block(cfg['infra'], cfg['coverage_name']) + text[idx:]
+
+              p.write_text(text)
+
+          # Contract validation for newly-enabled workflows.
+          for filename in targets:
+              text = (wfroot / filename).read_text()
+              required = [
+                  'permissions: write-all',
+                  'ubuntu24-tap-genai-gcov',
+                  'export COVERAGE=1',
+                  'uses: codecov/codecov-action@v4',
+                  'flags: integration-tests',
+                  'use_oidc: true',
+                  '\n          include\n',
+                  '\n          lib\n',
+                  '\n          src\n',
+                  '\n          test/tap\n',
+              ]
+              missing = [item for item in required if item not in text]
+              if missing:
+                  raise RuntimeError(f'{filename}: missing contract items: {missing}')
+
+          # Audit every workflow using the standard isolated TAP runner. Any job
+          # without COVERAGE=1 must be an intentional exclusion, not an accident.
+          intentional = {
+              'ci-unittests.yml',       # dedicated ASAN+gcov unit coverage workflow
+              'ci-mysqlx.yml',          # special mysqlx/plugin handoff, not gcov build
+              'ci-repltests.yml',       # separate replication harness
+              'ci-shuntest.yml',        # separate shun harness
+              'ci-selftests.yml',       # direct daemon selftests
+              'ci-pg-compat.yml',       # compatibility/JUnit workflow
+          }
+          uncovered = []
+          for p in sorted(wfroot.glob('*.yml')):
+              text = p.read_text()
+              if 'test/infra/control/run-tests-isolated.bash' in text and 'export COVERAGE=1' not in text:
+                  if p.name not in intentional:
+                      uncovered.append(p.name)
+          if uncovered:
+              raise RuntimeError('Unclassified run-tests-isolated workflows without coverage: ' + ', '.join(uncovered))
+
+          print('Coverage workflow audit passed.')
+          PY
+
+          git diff --check
+          git diff -- .github/workflows/ci-legacy-g2.yml .github/workflows/ci-basictests.yml .github/workflows/ci-taptests-pgsql-cluster.yml
+          git add .github/workflows/ci-legacy-g2.yml .github/workflows/ci-basictests.yml .github/workflows/ci-taptests-pgsql-cluster.yml
+          git commit -m "ci: enable coverage for missing TAP workflows"
+          git push origin HEAD:GH-Actions
+
+      - name: Apply centralized Codecov config materialization to PR branch
+        shell: bash
+        run: |
+          git fetch origin test/coverage-low-lib-files
+          git switch -C test/coverage-low-lib-files origin/test/coverage-low-lib-files
+
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('test/infra/control/run-tests-isolated.bash')
+          text = p.read_text()
+          old = '''if [ "${COVERAGE_MODE}" = "1" ]; then
+    echo ">>> Code coverage enabled - reports will be saved to ${COVERAGE_REPORT_DIR}"
+    mkdir -p "${COVERAGE_REPORT_DIR}"
+fi
+'''
+          new = '''if [ "${COVERAGE_MODE}" = "1" ]; then
+    echo ">>> Code coverage enabled - reports will be saved to ${COVERAGE_REPORT_DIR}"
+    mkdir -p "${COVERAGE_REPORT_DIR}"
+
+    # Coverage workflows use sparse checkout for source trees, so the tracked
+    # root codecov.yml may not be materialized in the worktree even though it
+    # exists at HEAD. codecov-action is explicitly pointed at this path; restore
+    # just that file from the tested commit without broadening sparse checkout.
+    if [ ! -f "${WORKSPACE}/codecov.yml" ]; then
+        if git -C "${WORKSPACE}" cat-file -e HEAD:codecov.yml 2>/dev/null; then
+            git -C "${WORKSPACE}" show HEAD:codecov.yml > "${WORKSPACE}/codecov.yml"
+            echo ">>> Materialized codecov.yml from HEAD for coverage upload"
+        else
+            echo ">>> WARNING: codecov.yml is not tracked at HEAD"
+        fi
+    fi
+fi
+'''
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif 'Materialized codecov.yml from HEAD for coverage upload' not in text:
+              raise RuntimeError('run-tests-isolated.bash coverage anchor missing')
+          p.write_text(text)
+          PY
+
+          bash -n test/infra/control/run-tests-isolated.bash
+          git diff --check
+          git diff -- test/infra/control/run-tests-isolated.bash
+          git add test/infra/control/run-tests-isolated.bash
+          if ! git diff --cached --quiet; then
+            git commit -m "ci: materialize Codecov config for sparse coverage jobs"
+            git push origin HEAD:test/coverage-low-lib-files
+          fi
