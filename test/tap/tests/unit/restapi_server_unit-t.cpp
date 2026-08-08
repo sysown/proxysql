@@ -15,14 +15,14 @@
 
 static int find_free_port() {
 	int fd = ::socket(AF_INET, SOCK_STREAM, 0);
-	if (fd < 0) return 18080;
+	if (fd < 0) return -1;
 	sockaddr_in addr {};
 	addr.sin_family = AF_INET;
 	addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 	addr.sin_port = 0;
 	if (::bind(fd, (sockaddr*)&addr, sizeof(addr)) != 0) {
 		::close(fd);
-		return 18080;
+		return -1;
 	}
 	socklen_t len = sizeof(addr);
 	::getsockname(fd, (sockaddr*)&addr, &len);
@@ -48,6 +48,11 @@ static int curl_http_code(const char* url) {
 
 static void test_lifecycle_and_endpoint() {
 	int port = find_free_port();
+	if (port <= 0) {
+		ok(0, "RESTAPI: failed to find free port");
+		skip(5, "RESTAPI port unavailable");
+		return;
+	}
 	ok(port > 0, "RESTAPI: found free port %d", port);
 
 	// shared_ptr by value: callback outlives this stack frame (server not deleted)
@@ -78,6 +83,7 @@ static void test_lifecycle_and_endpoint() {
 	char url[128];
 	snprintf(url, sizeof(url), "http://127.0.0.1:%d/api/unit-test-ping", port);
 
+	/* Poll until ready — constructor starts the listener asynchronously. */
 	int http_code = 0;
 	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
 	while (std::chrono::steady_clock::now() < deadline) {

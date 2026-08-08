@@ -115,18 +115,25 @@ static void test_pgsql_ffto_incomplete_message() {
 static void test_pgsql_ffto_parse_message() {
 	pgsql_thread___ffto_max_buffer_size = 16 * 1024 * 1024;
 	PgSQLFFTO ffto(nullptr);
-	const char* stmt_name = "";
+	/* PostgreSQL Parse ('P'):
+	 *   Byte1 'P'
+	 *   Int32 length  = 4 + name\0 + query\0 + Int16(num_params)
+	 *   String stmt_name (NUL-terminated; empty name is a single NUL)
+	 *   String query     (NUL-terminated)
+	 *   Int16  num_params
+	 */
 	const char* query = "SELECT 1";
-	size_t name_len = 1; // includes terminating NUL for empty name
-	size_t query_len = strlen(query) + 1;
-	// Parse payload: name\0 + query\0 + int16 num_params
-	size_t payload_len = name_len + query_len + 2;
-	uint32_t msg_len = htonl((uint32_t)(payload_len + 4));
-	std::vector<char> msg(1 + 4 + payload_len, 0);
+	const size_t name_len = 1; /* empty name + NUL */
+	const size_t query_len = strlen(query) + 1;
+	const size_t payload_len = name_len + query_len + 2;
+	const uint32_t wire_len = (uint32_t)(4 + payload_len);
+	uint32_t msg_len_be = htonl(wire_len);
+	std::vector<char> msg(1 + wire_len, 0);
 	msg[0] = 'P';
-	memcpy(&msg[1], &msg_len, 4);
-	memcpy(&msg[5], stmt_name, name_len);
+	memcpy(&msg[1], &msg_len_be, 4);
+	msg[5] = '\0'; /* empty statement name */
 	memcpy(&msg[5 + name_len], query, query_len);
+	/* num_params already 0 from zero-init */
 	ffto.on_client_data(msg.data(), msg.size());
 	ok(1, "PgSQLFFTO: Parse message processed without crash");
 	ffto.on_close();

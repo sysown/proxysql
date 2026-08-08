@@ -107,8 +107,8 @@ int main(int argc, char** argv) {
     }
 
     // Configure FFTO and Fast Forward for PG
-    MYSQL_QUERY(admin, "UPDATE global_variables SET variable_value='true' WHERE variable_name='pgsql-ffto_enabled'");
-    MYSQL_QUERY(admin, "UPDATE global_variables SET variable_value='1048576' WHERE variable_name='pgsql-ffto_max_buffer_size'");
+    MYSQL_QUERY(admin, "SET pgsql-ffto_enabled='true'");
+    MYSQL_QUERY(admin, "SET pgsql-ffto_max_buffer_size=1048576");
     MYSQL_QUERY(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
 
     /* Enable fast_forward on ALL pgsql_users rows (frontend + backend).
@@ -118,15 +118,17 @@ int main(int argc, char** argv) {
     MYSQL_QUERY(admin, "LOAD PGSQL USERS TO RUNTIME");
     {
         if (mysql_query(admin, "SELECT COUNT(*) FROM runtime_pgsql_users "
-                               "WHERE frontend=1 AND fast_forward=1") == 0) {
-            MYSQL_RES* r = mysql_store_result(admin);
-            MYSQL_ROW row = r ? mysql_fetch_row(r) : NULL;
-            int cnt = row ? atoi(row[0]) : 0;
-            if (r) mysql_free_result(r);
-            if (cnt < 1) {
-                diag("FATAL: no frontend pgsql_users with fast_forward=1 after LOAD");
-                return -1;
-            }
+                               "WHERE frontend=1 AND fast_forward=1") != 0) {
+            diag("FATAL: runtime_pgsql_users check failed: %s", mysql_error(admin));
+            return -1;
+        }
+        MYSQL_RES* r = mysql_store_result(admin);
+        MYSQL_ROW row = r ? mysql_fetch_row(r) : NULL;
+        int cnt = row && row[0] ? atoi(row[0]) : 0;
+        if (r) mysql_free_result(r);
+        if (cnt < 1) {
+            diag("FATAL: no frontend pgsql_users with fast_forward=1 after LOAD");
+            return -1;
         }
     }
 
@@ -135,7 +137,9 @@ int main(int argc, char** argv) {
     MYSQL_QUERY(admin, server_query);
     MYSQL_QUERY(admin, "LOAD PGSQL SERVERS TO RUNTIME");
 
-    MYSQL_QUERY(admin, "TRUNCATE TABLE stats_pgsql_query_digest");
+    /* TRUNCATE on the stats mirror does not clear in-memory digests. */
+    MYSQL_QUERY(admin, "SELECT * FROM stats_pgsql_query_digest_reset");
+    { MYSQL_RES* r = mysql_store_result(admin); if (r) mysql_free_result(r); }
 
     // Standard libpq connection using root (postgres)
     snprintf(conninfo, sizeof(conninfo), "host=%s port=%d user=%s password=%s dbname=postgres sslmode=disable",
