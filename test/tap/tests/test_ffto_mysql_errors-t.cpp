@@ -9,7 +9,7 @@
  * @par Test scenarios
  *  1. Session is actually in fast_forward (extended_info)
  *  2. Syntax error -> errno 1064 recorded
- *  3. Table not found -> errno 1146 recorded
+ *  3. Table not found -> errno 1146 or 1109 recorded
  *  4. Recovery: successful query after error
  *  5. Error stats have count / message / errno
  */
@@ -86,6 +86,37 @@ static bool verify_mysql_error(MYSQL* admin, int expected_errno, const char* exp
 	return false;
 }
 
+/**
+ * @brief Check if either of two valid errno values appears in stats_mysql_errors.
+ * Polls both values in a single query so version-dependent server behavior does
+ * not add an unnecessary timeout before checking the alternate errno.
+ */
+static bool verify_mysql_error_any(MYSQL* admin, int errno1, int errno2) {
+	char query[1024];
+	snprintf(query, sizeof(query),
+		"SELECT errno FROM stats_mysql_errors WHERE errno IN (%d,%d) LIMIT 1",
+		errno1, errno2);
+
+	for (int attempt = 0; attempt < 30; attempt++) {
+		if (mysql_query(admin, query) != 0) {
+			diag("stats_mysql_errors query failed: %s", mysql_error(admin));
+			usleep(100000);
+			continue;
+		}
+		MYSQL_RES* res = mysql_store_result(admin);
+		if (!res) { usleep(100000); continue; }
+		MYSQL_ROW row = mysql_fetch_row(res);
+		if (row) {
+			diag("Table-not-found errno recorded as %s", row[0]);
+			mysql_free_result(res);
+			return true;
+		}
+		mysql_free_result(res);
+		usleep(100000);
+	}
+	return false;
+}
+
 int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get env vars."); return -1; }
@@ -146,11 +177,11 @@ int main(int argc, char** argv) {
 	ok(verify_mysql_error(admin, 1064, "syntax"),
 	   "Error 1064 recorded in stats_mysql_errors");
 
-	/* Scenario 2: Table not found -> errno 1146 */
+	/* Scenario 2: Table not found -> errno 1146 or 1109, depending on server version/context */
 	diag("--- Scenario 2: table not found ---");
 	mysql_query(conn, "SELECT * FROM nonexistent_table_ffto_test");
-	ok(verify_mysql_error(admin, 1146, NULL),
-	   "Error 1146 recorded in stats_mysql_errors");
+	ok(verify_mysql_error_any(admin, 1146, 1109),
+	   "Table-not-found error (1146 or 1109) recorded in stats_mysql_errors");
 
 	/* Scenario 3: Recovery -- successful query after errors */
 	diag("--- Scenario 3: recovery after error ---");
