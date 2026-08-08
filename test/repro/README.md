@@ -36,7 +36,7 @@ needs debug-only admin commands.
 
 ## COLD_START
 
-```
+```text
 COLD_START=0   (default) use the existing ProxySQL instance
 COLD_START=1   destroy and recreate it first
 ```
