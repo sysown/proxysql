@@ -884,15 +884,14 @@ bool MySQL_Caching_Sha2_RSA::decrypt_password(
 	if (plaintext_length > plaintext_allocation_size) {
 		return fail("RSA OAEP decryption returned an invalid length");
 	}
-	plaintext.resize(plaintext_length);
-	for (size_t index = 0; index < plaintext.size(); ++index) {
+	for (size_t index = 0; index < plaintext_length; ++index) {
 		plaintext[index] ^= scramble[index % scramble_length];
 	}
-	if (plaintext.back() != '\0' ||
-		std::memchr(plaintext.data(), '\0', plaintext.size() - 1) != nullptr) {
+	if (plaintext[plaintext_length - 1] != '\0' ||
+		std::memchr(plaintext.data(), '\0', plaintext_length - 1) != nullptr) {
 		return fail("decrypted password is not a single NUL-terminated string");
 	}
-	password.assign(reinterpret_cast<const char*>(plaintext.data()), plaintext.size() - 1);
+	password.assign(reinterpret_cast<const char*>(plaintext.data()), plaintext_length - 1);
 	if (error != nullptr) {
 		error->clear();
 	}
