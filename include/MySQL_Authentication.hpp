@@ -101,7 +101,7 @@ class MySQL_Authentication {
 	void decrease_frontend_user_connections(char *username, PASSWORD_TYPE::E passtype);
 	void set_all_inactive(enum cred_username_type usertype);
 	void remove_inactives(enum cred_username_type usertype);
-	bool set_SHA1(char *username, enum cred_username_type usertype, void *sha_pass);
+	bool set_SHA1(const char *username, enum cred_username_type usertype, void *sha_pass);
 	bool set_clear_text_password(char* username, enum cred_username_type usertype, const char* clear_text_password, PASSWORD_TYPE::E passtype);
 	unsigned int memory_usage();
 	uint64_t get_runtime_checksum();

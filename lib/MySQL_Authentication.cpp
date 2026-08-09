@@ -538,7 +538,7 @@ bool MySQL_Authentication::del(char * username, enum cred_username_type usertype
 	return ret;
 };
 
-bool MySQL_Authentication::set_SHA1(char * username, enum cred_username_type usertype, void *sha_pass) {
+bool MySQL_Authentication::set_SHA1(const char * username, enum cred_username_type usertype, void *sha_pass) {
 	bool ret=false;
 	uint64_t hash1, hash2;
 	SpookyHash *myhash=new SpookyHash();
