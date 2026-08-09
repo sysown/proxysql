@@ -787,16 +787,16 @@ MySQL_Caching_Sha2_RSA_Reload_Result MySQL_Caching_Sha2_RSA::reload(
 		!path_exists(public_path, public_exists, error)) {
 		return rejected_result(error, acquire());
 	}
-	if (private_exists != public_exists) {
-		return rejected_result(
-			"only one RSA key file exists; refusing to load or generate a partial pair",
-			acquire()
-		);
-	}
-	if (!private_exists) {
+	if (!private_exists || !public_exists) {
 		if (!config.auto_generate) {
-			return rejected_result("configured RSA key files do not exist", acquire());
+			const std::string missing_error = private_exists != public_exists
+				? "only one RSA key file exists; refusing to load or generate a partial pair"
+				: "configured RSA key files do not exist";
+			return rejected_result(missing_error, acquire());
 		}
+		// Another process publishes the pair under the generation lock using two
+		// non-overwriting links. Recheck every missing/partial state while holding
+		// that same lock so observers wait for an in-flight publisher.
 		if (!generate_pair(private_path, public_path, error)) {
 			return rejected_result(error, acquire());
 		}

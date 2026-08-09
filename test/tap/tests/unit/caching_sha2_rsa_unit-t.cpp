@@ -2,9 +2,13 @@
 
 #include "MySQL_Caching_Sha2_RSA.h"
 
+#include <fcntl.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <memory>
 #include <string>
@@ -173,6 +177,19 @@ static bool write_pkcs8_key_pair(
 		chmod(public_path.c_str(), 0644) == 0; // NOSONAR(cpp:S2612): RSA public keys are intentionally world-readable.
 }
 
+static bool write_public_key(EVP_PKEY* key, const std::string& public_path) {
+	if (key == nullptr) {
+		return false;
+	}
+	BIO* raw_public = BIO_new_file(public_path.c_str(), "w");
+	if (raw_public == nullptr) {
+		return false;
+	}
+	std::unique_ptr<BIO, decltype(&BIO_free)> public_bio(raw_public, &BIO_free);
+	return PEM_write_bio_PUBKEY(public_bio.get(), key) == 1 &&
+		chmod(public_path.c_str(), 0644) == 0; // NOSONAR(cpp:S2612): RSA public keys are intentionally world-readable.
+}
+
 static bool write_malformed_private_key(const std::string& path) {
 	BIO* raw_bio = BIO_new_file(path.c_str(), "w");
 	if (raw_bio == nullptr) {
@@ -246,7 +263,7 @@ static std::vector<unsigned char> encrypt_password_payload(
 }
 
 int main() {
-	plan(45);
+	plan(47);
 
 	MySQL_Caching_Sha2_RSA manager;
 	MySQL_Caching_Sha2_RSA_Config config;
@@ -544,6 +561,50 @@ int main() {
 	ok(concurrent_snapshot_one != nullptr && concurrent_snapshot_two != nullptr &&
 		concurrent_snapshot_one->public_key_pem() == concurrent_snapshot_two->public_key_pem(),
 		"concurrent generation publishes one consistent key pair");
+
+	TempDir publication_dir;
+	const std::string publication_private = publication_dir.path() + "/private.pem";
+	const std::string publication_public = publication_dir.path() + "/public.pem";
+	const std::string publication_lock = publication_private + ".lock";
+	EVPKeyPtr publication_key = generate_rsa_key(2048);
+	const int publication_lock_fd = open(
+		publication_lock.c_str(), O_RDWR | O_CREAT, 0600
+	);
+	const bool publication_prepared = publication_lock_fd >= 0 &&
+		flock(publication_lock_fd, LOCK_EX) == 0 &&
+		write_pkcs8_key_pair(
+			publication_key.get(), publication_private, publication_public
+		) && unlink(publication_public.c_str()) == 0;
+	MySQL_Caching_Sha2_RSA publication_observer;
+	MySQL_Caching_Sha2_RSA_Config publication_config;
+	publication_config.auto_generate = true;
+	publication_config.private_key_path = publication_private;
+	publication_config.public_key_path = publication_public;
+	MySQL_Caching_Sha2_RSA_Reload_Result publication_result;
+	std::atomic<bool> publication_reload_started { false };
+	std::atomic<bool> publication_reload_finished { false };
+	std::thread publication_reload([&]() {
+		publication_reload_started.store(true, std::memory_order_release);
+		publication_result = publication_observer.reload(publication_config);
+		publication_reload_finished.store(true, std::memory_order_release);
+	});
+	while (!publication_reload_started.load(std::memory_order_acquire)) {
+		std::this_thread::yield();
+	}
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	ok(publication_prepared &&
+		!publication_reload_finished.load(std::memory_order_acquire),
+		"auto-generating reload waits for a locked partial-pair publisher");
+	const bool publication_completed = publication_prepared &&
+		write_public_key(publication_key.get(), publication_public);
+	if (publication_lock_fd >= 0) {
+		flock(publication_lock_fd, LOCK_UN);
+		close(publication_lock_fd);
+	}
+	publication_reload.join();
+	ok(publication_completed && publication_result.accepted &&
+		publication_observer.acquire() != nullptr,
+		"reload accepts the pair completed by the locked publisher");
 
 	return exit_status();
 }
