@@ -8,10 +8,13 @@ export FORK_BUILDS="$base_ref:.github/workflows/CI-builds-fork.yml"
 export REUSABLE_BUILDS="$actions_ref:.github/workflows/ci-builds.yml"
 
 ruby <<'RUBY'
+require 'open3'
 require 'yaml'
 
 def workflow(ref)
-  YAML.load(`git show #{ref}`)
+  output, status = Open3.capture2('git', 'show', ref)
+  raise "cannot read #{ref}" unless status.success?
+  YAML.load(output)
 end
 
 def assert(condition, message)
@@ -35,12 +38,14 @@ assert(fork_run.fetch('if').include?('head.repo.fork'), 'fork workflow is not re
 assert(fork_run.fetch('uses') == 'sysown/proxysql/.github/workflows/ci-builds.yml@GH-Actions', 'fork workflow uses the wrong reusable workflow')
 assert(fork_run.fetch('with').fetch('trusted') == false, 'fork workflow does not select untrusted mode')
 assert(!fork_run.key?('secrets'), 'fork workflow inherits or passes secrets')
+assert(!fork_run.key?('permissions'), 'fork job overrides read-only workflow permissions')
 
 reusable_event = reusable['on'] || reusable.fetch(true)
 inputs = reusable_event.fetch('workflow_call').fetch('inputs')
 assert(inputs.fetch('trusted').fetch('default') == true, 'reusable workflow lacks trusted=true default')
 builds = reusable.fetch('jobs').fetch('builds')
-assert(builds.fetch('runs-on').include?('inputs.trusted'), 'untrusted mode does not force hosted runner selection')
+runs_on = builds.fetch('runs-on')
+assert(runs_on.match?(/inputs\.trusted\s*&&/) && runs_on.match?(/\|\|\s*'ubuntu-24\.04'/), 'untrusted mode does not force ubuntu-24.04')
 actual_matrix = builds.fetch('strategy').fetch('matrix').fetch('include').map { |entry| [entry.fetch('dist'), entry.fetch('type')] }.sort
 expected_matrix = [['debian12', '-dbg'], ['ubuntu22', '-tap'], ['ubuntu22', '-tap-mysqlx'], ['ubuntu24', '-tap-genai-gcov']].sort
 assert(actual_matrix == expected_matrix, "unexpected build matrix: #{actual_matrix.inspect}")
@@ -53,9 +58,20 @@ privileged_steps = builds.fetch('steps').select do |step|
 end
 assert(!privileged_steps.empty?, 'no privileged steps discovered')
 privileged_steps.each do |step|
-  assert(step.fetch('if', '').include?('inputs.trusted'), "privileged step is not trusted-gated: #{step['name'] || step['uses']}")
+  condition = step.fetch('if', '')
+  assert(condition.match?(/inputs\.trusted\s*&&/) && !condition.include?('||'), "privileged step is not trusted-gated: #{step['name'] || step['uses']}")
 end
 
-raw = [base, fork, reusable].map(&:to_s).join
-assert(!raw.include?('allow-unsafe-pr-checkout: true'), 'unsafe fork checkout enabled')
+def contains_unsafe_checkout?(value)
+  case value
+  when Hash
+    value.any? { |key, child| (key.to_s == 'allow-unsafe-pr-checkout' && child == true) || contains_unsafe_checkout?(child) }
+  when Array
+    value.any? { |child| contains_unsafe_checkout?(child) }
+  else
+    false
+  end
+end
+
+assert(![base, fork, reusable].any? { |workflow| contains_unsafe_checkout?(workflow) }, 'unsafe fork checkout enabled')
 RUBY
