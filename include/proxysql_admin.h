@@ -530,7 +530,8 @@ class ProxySQL_Admin {
 		const std::unordered_set<std::string>& variables_to_delete_silently,
 		const std::unordered_set<std::string>& variables_deprecated,
 		const std::unordered_set<std::string>& variables_special_values,
-		std::function<void(const std::string&, const char *, SQLite3DB *)> special_variable_action = nullptr
+		std::function<void(const std::string&, const char *, SQLite3DB *)> special_variable_action = nullptr,
+		std::unordered_set<std::string>* accepted_variables = nullptr
 	);
 
 	char **get_variables_list();

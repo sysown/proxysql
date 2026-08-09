@@ -314,7 +314,7 @@ int main() {
 		ok(enabled_ok && internal_session_rc == 0 && output.find(password) == string::npos,
 			"RSA-authenticated internal-session output does not expose the recovered password");
 	} else {
-		skip(5, "Cannot run authentication assertions after setup failure");
+		skip(8, "Cannot run authentication assertions after setup failure");
 	}
 
 	bool cleanup_ok = run_query(

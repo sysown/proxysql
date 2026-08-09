@@ -290,6 +290,20 @@ static void test_caching_sha2_rsa_rejection_restores_database_values(MySQL_Threa
 		"Grouped RSA rejection publishes the accepted value to runtime_global_variables");
 	free(restored_runtime_auto_generate);
 
+	admin->admindb->execute("DELETE FROM global_variables");
+	admin->admindb->execute(
+		"INSERT INTO global_variables VALUES "
+		"('mysql-caching_sha2_password_auto_generate_rsa_keys', 'not-a-boolean')"
+	);
+	admin->admindb->execute(
+		"INSERT INTO global_variables VALUES "
+		"('mysql-caching_sha2_password_public_key_path', 'rsa-public.pem')"
+	);
+	const FlushVariableStats invalid_boolean_stats = admin->load_mysql_variables_to_runtime();
+	ok(invalid_boolean_stats.records == 2 && invalid_boolean_stats.updated == 0 &&
+		invalid_boolean_stats.rejected == 2,
+		"Grouped RSA rejection does not double-count an already rejected boolean");
+
 	GloAdmin = nullptr;
 	GloMTH = nullptr;
 	delete admin->admindb;
@@ -306,7 +320,7 @@ static void test_caching_sha2_rsa_rejection_restores_database_values(MySQL_Threa
 
 int main() {
 #ifdef PROXYSQL31
-	plan(27);
+	plan(28);
 #else
 	plan(4);
 #endif
