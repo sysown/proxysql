@@ -12,6 +12,6 @@ permissions:
 jobs:
   run:
     if: ${{ github.event.pull_request.head.repo.fork }}
-    uses: sysown/proxysql/.github/workflows/ci-builds.yml@f3f23d1e8ad10da475261e515776d2fee68d732b
+    uses: sysown/proxysql/.github/workflows/ci-builds.yml@44ff88ee4c6949bdab5315e952b859e2f06f757b
     with:
       trusted: false
