@@ -187,7 +187,7 @@ jobs:
       # is still useful). Skip only when require-lcov failed. Codecov SaaS
       # outages stay non-blocking via fail_ci_if_error: false.
       if: always() && steps.require-lcov.outcome == 'success'
-      uses: codecov/codecov-action@v4
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4
       with:
         codecov_yml_path: codecov.yml
         override_commit: ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
