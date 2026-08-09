@@ -284,9 +284,9 @@ bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, 
 	return true;
 }
 
-void MySQL_Protocol::generate_one_byte_pkt(unsigned char b) {
+bool MySQL_Protocol::generate_one_byte_pkt(unsigned char b) {
 #ifdef PROXYSQL31
-	generate_auth_more_data(&b, 1);
+	return generate_auth_more_data(&b, 1);
 #else
 	assert((*myds) != NULL);
 	uint8_t sequence_id;
@@ -304,11 +304,12 @@ void MySQL_Protocol::generate_one_byte_pkt(unsigned char b) {
 	_ptr[l]=b;
 	(*myds)->PSarrayOUT->add((void *)_ptr,size);
 	(*myds)->pkt_sid=sequence_id;
+	return true;
 #endif
 }
 
 #ifdef PROXYSQL31
-void MySQL_Protocol::generate_auth_more_data(const unsigned char *data, size_t data_len) {
+bool MySQL_Protocol::generate_auth_more_data(const unsigned char *data, size_t data_len) {
 	assert((*myds) != NULL);
 	assert(data != NULL || data_len == 0);
 	assert(data_len <= 0xFFFFFFU - 1);
@@ -320,6 +321,9 @@ void MySQL_Protocol::generate_auth_more_data(const unsigned char *data, size_t d
 
 	const unsigned int size = myhdr.pkt_length + sizeof(mysql_hdr);
 	unsigned char *_ptr = static_cast<unsigned char *>(l_alloc(size));
+	if (_ptr == nullptr) {
+		return false;
+	}
 	memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
 	_ptr[sizeof(mysql_hdr)] = 0x01;
 	if (data_len != 0) {
@@ -328,6 +332,7 @@ void MySQL_Protocol::generate_auth_more_data(const unsigned char *data, size_t d
 
 	(*myds)->PSarrayOUT->add(static_cast<void *>(_ptr), size);
 	(*myds)->pkt_sid = sequence_id;
+	return true;
 }
 
 MySQLFrontendAuthError MySQL_Protocol::consume_frontend_auth_error() {
@@ -1844,8 +1849,16 @@ int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyPr
 				GloMTH->caching_sha2_rsa()->acquire() : nullptr;
 			if (caching_sha2_rsa_snapshot_ != nullptr) {
 				const std::string& public_key = caching_sha2_rsa_snapshot_->public_key_pem();
-				generate_auth_more_data(
-					reinterpret_cast<const unsigned char *>(public_key.data()), public_key.size());
+				if (!generate_auth_more_data(
+						reinterpret_cast<const unsigned char *>(public_key.data()), public_key.size())) {
+					caching_sha2_rsa_snapshot_.reset();
+					frontend_auth_error_ = MySQLFrontendAuthError::NONE;
+					proxy_error(
+						"User '%s'@'%s' requested the caching_sha2_password RSA public key, but ProxySQL could not allocate the response packet.\n",
+						vars1.user, (*myds)->addr.addr
+					);
+					return 1;
+				}
 				(*myds)->switching_auth_stage = 6;
 				(*myds)->auth_in_progress = 1;
 				frontend_auth_error_ = MySQLFrontendAuthError::NONE;
@@ -2359,7 +2372,9 @@ void MySQL_Protocol::PPHR_5passwordFalse_0(
 		(*myds)->switching_auth_stage == 0
 	) {
 		const unsigned char fast_auth_success = '\3';
-		generate_one_byte_pkt(fast_auth_success);
+		if (!generate_one_byte_pkt(fast_auth_success)) {
+			ret = false;
+		}
 	}
 }
 
@@ -2653,7 +2668,10 @@ void MySQL_Protocol::PPHR_sha2full(
 ) {
 	if ((*myds)->switching_auth_stage == 0) {
 		const unsigned char perform_full_authentication = '\4';
-		generate_one_byte_pkt(perform_full_authentication);
+		if (!generate_one_byte_pkt(perform_full_authentication)) {
+			ret = false;
+			return;
+		}
 		(*myds)->pkt_sid++; // increment pkt_sid by one
 		// Required to be set; later used in 'PPHR_1' for setting current 'auth_plugin_id'. E.g:
 		//  - mysql-default_authentication_plugin: 'caching_sha2_password'
@@ -2711,19 +2729,21 @@ void MySQL_Protocol::PPHR_sha2full(
 	}
 }
 
-void MySQL_Protocol::PPHR_passthrough_init(MyProt_tmp_auth_vars& vars1) {
+bool MySQL_Protocol::PPHR_passthrough_init(MyProt_tmp_auth_vars& vars1) {
 	// Stage 0: first call — client just sent the HandshakeResponse with a
 	// scrambled password. Reply with AuthMoreData{0x04} so the client
 	// follows up with its cleartext (under TLS or RSA-encrypted per the
 	// caching_sha2_password protocol).
 	if ((*myds)->switching_auth_stage == 0) {
 		const unsigned char perform_full_authentication = '\4';
-		generate_one_byte_pkt(perform_full_authentication);
+		if (!generate_one_byte_pkt(perform_full_authentication)) {
+			return false;
+		}
 		(*myds)->pkt_sid++;
 		(*myds)->switching_auth_type = AUTH_MYSQL_CACHING_SHA2_PASSWORD;
 		(*myds)->switching_auth_stage = 4;
 		(*myds)->auth_in_progress = 1;
-		return;
+		return true;
 	}
 
 	// Stage 5: client has replied with the cleartext password (now in
@@ -2762,11 +2782,12 @@ void MySQL_Protocol::PPHR_passthrough_init(MyProt_tmp_auth_vars& vars1) {
 		// authenticate against a real backend account.
 		(*myds)->auth_in_progress = 1;
 		(*myds)->sess->set_status(AUTHENTICATING_BACKEND_FOR_CLIENT);
-		return;
+		return true;
 	}
 
 	// Any other stage is a protocol bug; assert in debug builds.
 	assert(0);
+	return false;
 }
 
 void MySQL_Protocol::PPHR_SetConnAttrs(MyProt_tmp_auth_vars& vars1, account_details_t& attr1) {
@@ -3163,7 +3184,9 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 				// Cache miss → drive the caching_sha2_password full-auth
 				// exchange so the client emits its cleartext, which we will
 				// then probe against the backend.
-				PPHR_passthrough_init(vars1);
+				if (!PPHR_passthrough_init(vars1)) {
+					return false;
+				}
 				return ret; // not done yet; protocol state machine continues
 			}
 		}
@@ -3248,7 +3271,7 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 						if (ret == true) {
 							if ((*myds)->switching_auth_stage == 0) {
 								const unsigned char fast_auth_success = '\3';
-								generate_one_byte_pkt(fast_auth_success);
+								ret = generate_one_byte_pkt(fast_auth_success);
 							}
 						}
 					}

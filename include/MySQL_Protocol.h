@@ -223,7 +223,7 @@ class MySQL_Protocol {
 	// the session to AUTHENTICATING_BACKEND_FOR_CLIENT so the backend
 	// probe (handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT)
 	// can validate the credential.
-	void PPHR_passthrough_init(MyProt_tmp_auth_vars& vars1);
+	bool PPHR_passthrough_init(MyProt_tmp_auth_vars& vars1);
 	void PPHR_7auth1(bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, account_details_t& attr1);
 	void PPHR_7auth2(bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, account_details_t& attr1);
 	void PPHR_next_auth_stage(MyProt_tmp_auth_vars& vars1, PASSWORD_TYPE::E passtype);
@@ -231,9 +231,9 @@ class MySQL_Protocol {
 	bool PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_details_t& account_details);
 	bool PPHR_verify_password_2(MyProt_tmp_auth_vars& vars1, account_details_t& account_details);
 
-	void generate_one_byte_pkt(unsigned char b);
+	bool generate_one_byte_pkt(unsigned char b);
 #ifdef PROXYSQL31
-	void generate_auth_more_data(const unsigned char *data, size_t data_len);
+	bool generate_auth_more_data(const unsigned char *data, size_t data_len);
 	MySQLFrontendAuthError consume_frontend_auth_error();
 #endif
 

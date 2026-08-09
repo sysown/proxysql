@@ -234,7 +234,8 @@ static void test_auth_more_data_packet() {
 	const unsigned char public_key[] = "-----BEGIN PUBLIC KEY-----\nkey\n-----END PUBLIC KEY-----\n";
 	const size_t public_key_length = sizeof(public_key) - 1;
 
-	protocol.generate_auth_more_data(public_key, public_key_length);
+	ok(protocol.generate_auth_more_data(public_key, public_key_length),
+		"AuthMoreData reports successful packet construction");
 
 	ok(stream.PSarrayOUT->len == 1,
 		"AuthMoreData queues exactly one packet");
@@ -511,7 +512,7 @@ static void test_wildcard_matching() {
 
 int main() {
 #ifdef PROXYSQL31
-	plan(54);
+	plan(55);
 #else
 	plan(45);
 #endif
@@ -529,7 +530,7 @@ int main() {
 	// Packet header
 	test_mysql_hdr();                        // 3 tests
 #ifdef PROXYSQL31
-	test_auth_more_data_packet();            // 4 tests
+	test_auth_more_data_packet();            // 5 tests
 	test_caching_sha2_stage5_payload_validation(); // 4 tests
 	test_internal_session_redacts_password(); // 1 test
 #endif
