@@ -23,6 +23,7 @@ env:
 jobs:
   test:
     runs-on: ubuntu-24.04
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -127,6 +128,7 @@ jobs:
         rm pgjdbc/src/test/java/org/postgresql/test/jdbc2/CopyTest.java
 
     - name: Run tests
+      timeout-minutes: 90
       run: |
         set +e
         

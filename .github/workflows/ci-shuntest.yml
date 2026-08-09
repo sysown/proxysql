@@ -147,6 +147,7 @@ jobs:
         docker compose up -d
 
     - name: Shun-tests
+      timeout-minutes: 35
       run: |
         set +e
         

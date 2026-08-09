@@ -25,6 +25,7 @@ jobs:
   # ---------------------------------------------------------------------------
   pick-runner:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     permissions:
       actions: read          # read in-progress runs/jobs (no repo admin needed)
     outputs:
@@ -80,6 +81,7 @@ jobs:
   tests:
     needs: pick-runner
     runs-on: ${{ fromJson(needs.pick-runner.outputs.runson) }}
+    timeout-minutes: 120
     permissions: write-all
     strategy:
       fail-fast: false
@@ -231,6 +233,7 @@ jobs:
         test/infra/control/ensure-infras.bash
 
     - name: Run legacy-g2 tests
+      timeout-minutes: 90
       run: |
         cd proxysql
         export INFRA_ID="ci-legacy-g2"

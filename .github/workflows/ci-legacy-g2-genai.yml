@@ -13,6 +13,7 @@ env:
 jobs:
   tests:
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
     # `write-all` grants every default GITHUB_TOKEN scope plus the
     # id-token:write scope codecov-action@v4 needs to mint a GitHub OIDC
     # token for `use_oidc: true`. We arrived at this after a tight
@@ -186,6 +187,7 @@ jobs:
         test/infra/control/ensure-infras.bash
 
     - name: Run legacy-g2 tests (GenAI + Coverage)
+      timeout-minutes: 90
       run: |
         cd proxysql
         export INFRA_ID="ci-legacy-g2-genai"

@@ -25,6 +25,7 @@ jobs:
   # ---------------------------------------------------------------------------
   pick-runner:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     permissions:
       actions: read          # read in-progress runs/jobs (no repo admin needed)
     outputs:
@@ -80,6 +81,7 @@ jobs:
   tests:
     needs: pick-runner
     runs-on: ${{ fromJson(needs.pick-runner.outputs.runson) }}
+    timeout-minutes: 120
     # `write-all` grants every default GITHUB_TOKEN scope plus the
     # id-token:write scope codecov-action@v4 needs to mint a GitHub OIDC
     # token for `use_oidc: true`. Caller workflow on v3.0 must also
@@ -240,6 +242,7 @@ jobs:
         test/infra/control/ensure-infras.bash
 
     - name: Run legacy-g1 tests
+      timeout-minutes: 90
       run: |
         cd proxysql
         export INFRA_ID="ci-legacy-g1"

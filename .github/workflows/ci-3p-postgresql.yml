@@ -23,6 +23,7 @@ env:
 jobs:
   test:
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -123,6 +124,7 @@ jobs:
         #sed -i '/^fn_start_prep$/a fn_test_proxysql_dev ${{ matrix.infradb }}' run-tests.bash
 
     - name: Run tests
+      timeout-minutes: 90
       run: |
         set +e
         

@@ -13,6 +13,7 @@ env:
 jobs:
   tests:
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
     # `write-all` grants every default GITHUB_TOKEN scope plus the
     # id-token:write scope codecov-action@v4 needs to mint a GitHub OIDC
     # token for `use_oidc: true`. Caller workflow on v3.0 must also
@@ -173,6 +174,7 @@ jobs:
         test/infra/control/ensure-infras.bash
 
     - name: Run mysql84-gr-g9 tests
+      timeout-minutes: 90
       run: |
         cd proxysql
         export INFRA_ID="ci-mysql84-gr-g9"

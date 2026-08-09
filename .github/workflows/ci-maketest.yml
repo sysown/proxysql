@@ -15,6 +15,7 @@ env:
 jobs:
   builds:
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -52,6 +53,7 @@ jobs:
 #        sed -i 's/-I$(CURL_IDIR) -I$(IDIR)/-I$(CURL_IDIR) -I${SQLITE3_DIR} -I$(IDIR)/' proxysql/test/tap/tests/Makefile
         
     - name: Make-test
+      timeout-minutes: 90
       run: |
         cd proxysql/
         sed -i 's/docker-compose/docker compose/g' Makefile

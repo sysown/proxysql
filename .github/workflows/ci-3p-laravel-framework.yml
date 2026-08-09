@@ -23,6 +23,7 @@ env:
 jobs:
   test:
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -131,6 +132,7 @@ jobs:
         #sed -i '/EXPDATA=/i ls -l' test_${{ env.TESTNAME }}/run-tests.bash
 
     - name: Run tests
+      timeout-minutes: 90
       run: |
         set +e
         

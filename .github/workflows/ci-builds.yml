@@ -51,6 +51,7 @@ jobs:
     # (trusted) AND this workflow is listed in the SELFHOSTED_WORKFLOWS repo variable.
     # Otherwise fall back to GitHub-hosted ubuntu-24.04. Empty/absent variable = no routing.
     runs-on: ${{ inputs.trusted && ((github.actor == 'renecannao' || (inputs.trigger && fromJson(inputs.trigger).event.workflow_run.actor.login == 'renecannao')) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) && fromJson('["self-hosted","proxysql-ci"]')) || 'ubuntu-24.04' }}
+    timeout-minutes: 120
 #    needs: [ lock ]
 #    outputs:
 #      matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -159,6 +160,7 @@ jobs:
 #        ls -l proxysql/test/tap
 
     - name: Build
+      timeout-minutes: 90
       id: build
       if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
       run: |

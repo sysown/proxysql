@@ -13,6 +13,7 @@ env:
 jobs:
   tests:
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -138,6 +139,7 @@ jobs:
         mysql -uadmin -padmin -h127.0.0.1 -P6032 -e "SELECT version();" 2>&1 | grep -v 'Using a password'
 
     - name: Self-tests
+      timeout-minutes: 90
       run: |
         #set -x
         set +e

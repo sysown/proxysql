@@ -78,6 +78,7 @@ jobs:
       # Writing the report there is what makes it visible to the upload
       # step below.
       - name: Run pg-compat suite (non-gating, discovery phase)
+        timeout-minutes: 90
         env:
           INFRA_ID: ci-${{ github.run_id }}
           WORKSPACE: ${{ github.workspace }}
