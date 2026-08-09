@@ -11,6 +11,7 @@ concurrency:
 jobs:
   init_release:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     permissions:
       contents: write
       checks: write
@@ -77,6 +78,7 @@ jobs:
   build:
     needs: init_release
     runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
     permissions:
       contents: write
       checks: write

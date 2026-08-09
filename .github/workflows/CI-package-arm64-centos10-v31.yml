@@ -15,6 +15,7 @@ concurrency:
 jobs:
   init_release:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     # No concurrency group: GitHub's "1 running + 1 pending" rule causes
     # mass cancellations when many workflows share a group. Instead we
     # run all init jobs in parallel and converge via a race-tolerant
@@ -78,6 +79,7 @@ jobs:
   build:
     needs: init_release
     runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
     env:
       ARCH: arm64
       DIST: centos10
