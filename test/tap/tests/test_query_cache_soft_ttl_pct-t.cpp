@@ -179,37 +179,28 @@ int main(int argc, char** argv) {
 	for (unsigned int i = 0; i < NUM_THREADS; i++) {
 		num_slow_clients += (int)timer_results[i];
 	}
-	// Allow tolerance of +1 for soft TTL race: when multiple threads hit the
-	// expiry boundary simultaneously, more than one may see "needs refresh"
-	// before the first one completes the backend query.
 	int expected_num_slow_clients = 1;
-	int tolerance = 1;
 	ok(
-		num_slow_clients >= expected_num_slow_clients &&
-		num_slow_clients <= expected_num_slow_clients + tolerance,
-		"Clients taking >1s should be %d (tolerance +%d). "
-		"Number of clients that take more than 1 second - Exp:'%d-%d', Act:'%d'",
-		expected_num_slow_clients, tolerance,
-		expected_num_slow_clients, expected_num_slow_clients + tolerance, num_slow_clients
+		num_slow_clients == expected_num_slow_clients,
+		"Clients taking >1s should be %d. "
+		"Number of clients that take more than 1 second - Exp:'%d', Act:'%d'",
+		expected_num_slow_clients, expected_num_slow_clients, num_slow_clients
 	);
 
 	std::map<string, int> stats_after = get_digest_stats_dummy_query(proxy_admin);
 
-	// Same tolerance applied: one extra backend hit means one fewer cache hit
 	std::map<string, int> expected_stats {{"cache", NUM_THREADS*NUM_QUERIES-1}, {"hostgroups", 2}};
 	int actual_cache = stats_after["cache"] - stats_before["cache"];
 	int actual_hg = stats_after["hostgroups"] - stats_before["hostgroups"];
 	ok(
-		actual_cache >= expected_stats["cache"] - tolerance &&
-		actual_cache <= expected_stats["cache"],
-		"Query cache hits within tolerance. Number of hits - Exp:'%d-%d', Act:'%d'",
-		expected_stats["cache"] - tolerance, expected_stats["cache"], actual_cache
+		actual_cache == expected_stats["cache"],
+		"Query cache hits should be exact. Number of hits - Exp:'%d', Act:'%d'",
+		expected_stats["cache"], actual_cache
 	);
 	ok(
-		actual_hg >= expected_stats["hostgroups"] &&
-		actual_hg <= expected_stats["hostgroups"] + tolerance,
-		"Hostgroup hits within tolerance. Number of hits - Exp:'%d-%d', Act:'%d'",
-		expected_stats["hostgroups"], expected_stats["hostgroups"] + tolerance, actual_hg
+		actual_hg == expected_stats["hostgroups"],
+		"Hostgroup hits should be exact. Number of hits - Exp:'%d', Act:'%d'",
+		expected_stats["hostgroups"], actual_hg
 	);
 
 	return exit_status();
