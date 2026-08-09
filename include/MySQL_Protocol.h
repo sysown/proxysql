@@ -6,6 +6,17 @@
 #include "MySQL_Variables.h"
 #include "MySQL_Prepared_Stmt_info.h"
 
+#ifdef PROXYSQL31
+#include <memory>
+
+class CachingSha2RSAKeySnapshot;
+
+enum class MySQLFrontendAuthError : uint8_t {
+	NONE = 0,
+	CACHING_SHA2_RSA_UNAVAILABLE
+};
+#endif
+
 #define RESULTSET_BUFLEN 16300
 
 extern MySQL_Variables mysql_variables;
@@ -112,6 +123,9 @@ class MyProt_tmp_auth_vars {
 	uint8_t zstd_compression_level = 0;
 	bool use_ssl = false;
 	bool use_zstd_compression = false;
+#ifdef PROXYSQL31
+	bool pass_is_sensitive = false;
+#endif
 	enum proxysql_session_type session_type;
 };
 
@@ -141,6 +155,10 @@ class MySQL_Protocol {
 	enum proxysql_auth_plugins auth_plugin_id;
 	uint16_t prot_status;
 	bool more_data_needed;
+#ifdef PROXYSQL31
+	std::shared_ptr<const CachingSha2RSAKeySnapshot> caching_sha2_rsa_snapshot_;
+	MySQLFrontendAuthError frontend_auth_error_ { MySQLFrontendAuthError::NONE };
+#endif
 	MySQL_Data_Stream *get_myds() { return *myds; }
 	MySQL_Protocol()
 	  : userinfo(nullptr), sess(nullptr), myds(nullptr), current_PreStmt(nullptr)
@@ -214,6 +232,10 @@ class MySQL_Protocol {
 	bool PPHR_verify_password_2(MyProt_tmp_auth_vars& vars1, account_details_t& account_details);
 
 	void generate_one_byte_pkt(unsigned char b);
+#ifdef PROXYSQL31
+	void generate_auth_more_data(const unsigned char *data, size_t data_len);
+	MySQLFrontendAuthError consume_frontend_auth_error();
+#endif
 
 	bool process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned int len);
 	void * Query_String_to_packet(uint8_t sid, std::string *s, unsigned int *l);

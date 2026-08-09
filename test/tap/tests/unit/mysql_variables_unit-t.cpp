@@ -2,6 +2,24 @@
 #include "test_globals.h"
 
 #include "MySQL_Thread.h"
+#ifdef PROXYSQL31
+#include "MySQL_Caching_Sha2_RSA.h"
+#endif
+
+#include <cstring>
+#include <fcntl.h>
+#include <string>
+
+#include <unistd.h>
+
+static bool contains_variable(char **variables, const char *name) {
+	for (char **current = variables; current != nullptr && *current != nullptr; ++current) {
+		if (strcmp(*current, name) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
 
 static void test_mysql_integer_variables_are_registered() {
 	test_globals_init();
@@ -12,6 +30,31 @@ static void test_mysql_integer_variables_are_registered() {
 		"aws_blue_green_deployment_auto_discovery is registered as an integer variable");
 	ok(handler.get_variable_int("session_track_variables") == 0,
 		"session_track_variables is registered as an integer variable");
+
+#ifdef PROXYSQL31
+	ok(contains_variable(variables, "caching_sha2_password_auto_generate_rsa_keys"),
+		"caching_sha2 RSA auto-generation variable is registered in 3.1");
+	ok(contains_variable(variables, "caching_sha2_password_private_key_path"),
+		"caching_sha2 RSA private-key path variable is registered in 3.1");
+	ok(contains_variable(variables, "caching_sha2_password_public_key_path"),
+		"caching_sha2 RSA public-key path variable is registered in 3.1");
+
+	char auto_generate_name[] = "caching_sha2_password_auto_generate_rsa_keys";
+	char private_path_name[] = "caching_sha2_password_private_key_path";
+	char public_path_name[] = "caching_sha2_password_public_key_path";
+	char *auto_generate = handler.get_variable(auto_generate_name);
+	char *private_path = handler.get_variable(private_path_name);
+	char *public_path = handler.get_variable(public_path_name);
+	ok(auto_generate != nullptr && strcmp(auto_generate, "true") == 0,
+		"caching_sha2 RSA auto-generation defaults to true");
+	ok(private_path != nullptr && strcmp(private_path, "proxysql-caching-sha2-private-key.pem") == 0,
+		"caching_sha2 RSA private-key path has the compiled default");
+	ok(public_path != nullptr && strcmp(public_path, "proxysql-caching-sha2-public-key.pem") == 0,
+		"caching_sha2 RSA public-key path has the compiled default");
+	free(auto_generate);
+	free(private_path);
+	free(public_path);
+#endif
 
 	if (variables) {
 		for (char **p = variables; *p != nullptr; ++p) {
@@ -44,9 +87,130 @@ static void test_mysql_integer_boolean_aliases() {
 	test_globals_cleanup();
 }
 
+#ifdef PROXYSQL31
+static void free_variables_list(char **variables) {
+	if (variables != nullptr) {
+		for (char **current = variables; *current != nullptr; ++current) {
+			free(*current);
+		}
+		free(variables);
+	}
+}
+
+static void test_caching_sha2_rsa_commit_is_atomic() {
+	test_globals_init();
+	char path_template[] = "/tmp/proxysql-mth-caching-sha2-rsa-XXXXXX";
+	char *temporary_directory = mkdtemp(path_template);
+	ok(temporary_directory != nullptr, "created an isolated handler RSA directory");
+	if (temporary_directory == nullptr) {
+		test_globals_cleanup();
+		return;
+	}
+	free(GloVars.datadir);
+	GloVars.datadir = strdup(temporary_directory);
+
+	{
+		MySQL_Threads_Handler handler;
+		free_variables_list(handler.get_variables_list());
+		char auto_name[] = "caching_sha2_password_auto_generate_rsa_keys";
+		char private_name[] = "caching_sha2_password_private_key_path";
+		char public_name[] = "caching_sha2_password_public_key_path";
+
+		handler.set_variable(auto_name, "false");
+		handler.set_variable(private_name, "");
+		handler.set_variable(public_name, "");
+		const MySQLThreadsCommitResult disabled = handler.commit();
+		ok(disabled.rejected_variables == 0,
+			"commit accepts intentional RSA unavailability");
+		ok(handler.caching_sha2_rsa()->acquire() == nullptr,
+			"intentional RSA unavailability publishes no snapshot");
+
+		handler.set_variable(auto_name, "true");
+		const MySQLThreadsCommitResult invalid_empty = handler.commit();
+		ok(invalid_empty.rejected_variables == 3,
+			"invalid grouped RSA reload rejects all three variables");
+		ok(handler.get_variable_int(auto_name) == 0,
+			"invalid grouped reload restores the accepted boolean value");
+		char *restored_private = handler.get_variable(private_name);
+		char *restored_public = handler.get_variable(public_name);
+		ok(restored_private != nullptr && restored_private[0] == '\0' &&
+			restored_public != nullptr && restored_public[0] == '\0',
+			"invalid grouped reload restores both accepted paths");
+		free(restored_private);
+		free(restored_public);
+
+		handler.set_variable(auto_name, "true");
+		handler.set_variable(private_name, "rsa-private.pem");
+		handler.set_variable(public_name, "rsa-public.pem");
+		const MySQLThreadsCommitResult generated = handler.commit();
+		const auto generated_snapshot = handler.caching_sha2_rsa()->acquire();
+		ok(generated.rejected_variables == 0,
+			"commit accepts and generates a complete RSA key pair");
+		ok(generated_snapshot != nullptr,
+			"accepted generated pair is visible through the handler-owned manager");
+
+		handler.set_variable(auto_name, "false");
+		handler.set_variable(public_name, "missing-public.pem");
+		const MySQLThreadsCommitResult missing_public = handler.commit();
+		ok(missing_public.rejected_variables == 3,
+			"commit rejects a partial on-disk key pair as one grouped update");
+		ok(handler.caching_sha2_rsa()->acquire() == generated_snapshot,
+			"rejected handler reload preserves the previously published snapshot");
+		char *restored_public_after_partial = handler.get_variable(public_name);
+		ok(handler.get_variable_int(auto_name) == 1 &&
+			restored_public_after_partial != nullptr &&
+			strcmp(restored_public_after_partial, "rsa-public.pem") == 0,
+			"rejected handler reload restores all prior accepted runtime values");
+		free(restored_public_after_partial);
+	}
+
+	const std::string default_private =
+		std::string(temporary_directory) + "/proxysql-caching-sha2-private-key.pem";
+	const int partial_fd = open(default_private.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
+	if (partial_fd >= 0) {
+		close(partial_fd);
+	}
+	{
+		MySQL_Threads_Handler handler;
+		free_variables_list(handler.get_variables_list());
+		const MySQLThreadsCommitResult initial_invalid = handler.commit();
+		ok(partial_fd >= 0 && initial_invalid.rejected_variables == 3 &&
+			handler.caching_sha2_rsa()->acquire() == nullptr,
+			"initial invalid default key pair is rejected without publishing a snapshot");
+
+		char auto_name[] = "caching_sha2_password_auto_generate_rsa_keys";
+		char private_name[] = "caching_sha2_password_private_key_path";
+		char public_name[] = "caching_sha2_password_public_key_path";
+		char *fallback_private = handler.get_variable(private_name);
+		char *fallback_public = handler.get_variable(public_name);
+		ok(handler.get_variable_int(auto_name) == 0 &&
+			fallback_private != nullptr && fallback_private[0] == '\0' &&
+			fallback_public != nullptr && fallback_public[0] == '\0',
+			"failed initial defaults adopt an explicit TLS-only runtime configuration");
+		free(fallback_private);
+		free(fallback_public);
+	}
+	unlink(default_private.c_str());
+
+	const std::string directory = temporary_directory;
+	unlink((directory + "/rsa-private.pem").c_str());
+	unlink((directory + "/rsa-public.pem").c_str());
+	unlink((directory + "/rsa-private.pem.lock").c_str());
+	rmdir(directory.c_str());
+	test_globals_cleanup();
+}
+#endif
+
 int main() {
+#ifdef PROXYSQL31
+	plan(23);
+#else
 	plan(4);
+#endif
 	test_mysql_integer_variables_are_registered();
 	test_mysql_integer_boolean_aliases();
+#ifdef PROXYSQL31
+	test_caching_sha2_rsa_commit_is_atomic();
+#endif
 	return exit_status();
 }

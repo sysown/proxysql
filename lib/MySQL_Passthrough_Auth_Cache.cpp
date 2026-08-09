@@ -5,6 +5,22 @@
 #include "re2/re2.h"
 
 #include <cstdio>
+#include <openssl/crypto.h>
+
+namespace {
+
+void cleanse_string(std::string& value) {
+	if (!value.empty()) {
+		OPENSSL_cleanse(value.data(), value.size());
+	}
+	value.clear();
+}
+
+} // namespace
+
+MySQL_Passthrough_Auth_Cache::entry_t::~entry_t() {
+	cleanse_string(cleartext_password);
+}
 
 MySQL_Passthrough_Auth_Cache::MySQL_Passthrough_Auth_Cache()
 	: inflight_probes(0),
@@ -46,6 +62,7 @@ MySQL_Passthrough_Auth_Cache::~MySQL_Passthrough_Auth_Cache() {
 bool MySQL_Passthrough_Auth_Cache::lookup(
 	const std::string& username, std::string& out_cleartext, uint32_t ttl_s
 ) {
+	cleanse_string(out_cleartext);
 	/*
 	 * Reader fast-path: cache HIT and entry not expired.
 	 *
@@ -114,11 +131,12 @@ bool MySQL_Passthrough_Auth_Cache::lookup(
 }
 
 void MySQL_Passthrough_Auth_Cache::insert(
-	const std::string& username, const std::string& cleartext, int hostgroup_probed
+	const std::string& username, const char* cleartext, int hostgroup_probed
 ) {
 	pthread_rwlock_wrlock(&lock);
 	entry_t& e = entries[username];
-	e.cleartext_password = cleartext;
+	cleanse_string(e.cleartext_password);
+	e.cleartext_password.assign(cleartext);
 	e.learned_at_us = monotonic_time();
 	e.hostgroup_probed = hostgroup_probed;
 	pthread_rwlock_unlock(&lock);

@@ -37,8 +37,9 @@ class MySQL_Passthrough_Auth_Cache {
 	private:
 		struct entry_t {
 			std::string cleartext_password;
-			uint64_t learned_at_us;
-			int hostgroup_probed;
+			uint64_t learned_at_us { 0 };
+			int hostgroup_probed { 0 };
+			~entry_t();
 		};
 		mutable pthread_rwlock_t lock;
 		std::unordered_map<std::string, entry_t> entries;
@@ -109,7 +110,7 @@ class MySQL_Passthrough_Auth_Cache {
 		bool lookup(const std::string& username, std::string& out_cleartext, uint32_t ttl_s);
 
 		// Insert or replace a cached credential.
-		void insert(const std::string& username, const std::string& cleartext, int hostgroup_probed);
+		void insert(const std::string& username, const char* cleartext, int hostgroup_probed);
 
 		// Evict a single entry. Returns true if the entry was present.
 		bool evict(const std::string& username);

@@ -431,6 +431,10 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	ffto_state_machine_unit-t \
 	restapi_server_unit-t
 
+ifeq ($(PROXYSQL31),1)
+UNIT_TESTS += caching_sha2_rsa_unit-t
+endif
+
 # Plugin-chassis + mysqlx-plugin unit tests — built only when
 # libproxysql.a was compiled with -DPROXYSQL40 (autodetected higher up
 # in this Makefile).  v3.0/v3.1 builds have no plugin loader and the

@@ -574,7 +574,11 @@ FlushVariableStats ProxySQL_Admin::flush_mysql_variables___database_to_runtime(S
 		free(default_collation_connection);
 		free(previous_default_charset);
 		free(previous_default_collation_connection);
-		GloMTH->commit();
+		const MySQLThreadsCommitResult commit_result = GloMTH->commit();
+		if (commit_result.rejected_variables != 0) {
+			stats.updated = std::max(0, stats.updated - static_cast<int>(commit_result.rejected_variables));
+			stats.rejected += static_cast<int>(commit_result.rejected_variables);
+		}
 		GloMTH->wrunlock();
 
 		{
