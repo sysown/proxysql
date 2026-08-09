@@ -1,6 +1,6 @@
 --- sqlite3.c	2024-03-22 19:22:47.046093173 +0100
 +++ sqlite3-pass-exts.c	2024-03-22 19:24:09.557303716 +0100
-@@ -26275,6 +26275,235 @@
+@@ -26275,6 +26275,250 @@
    sqlite3ResultStrAccum(context, &sRes);
  }
  
@@ -58,6 +58,13 @@
 +		if (salt_size != DEF_SALT_SIZE) {
 +			return 1;
 +		}
++		/* An embedded NUL is just as unusable: the salt is appended with strcat()
++		 * below, which stops at the NUL, while the digest offset is computed from
++		 * the DECLARED salt_size. The hash comes out malformed and cannot
++		 * authenticate -- silently, exactly like a short salt. */
++		if (memchr(sqlite3_value_blob(argv[1]), '\0', salt_size) != NULL) {
++			return 2;
++		}
 +	}
 +
 +	/* argc == 3: rounds is an integer; range is checked in caching_sha2_passwordFunc(). */
@@ -81,7 +88,11 @@
 +			sqlite3_result_text(context, "Invalid argument type", -1, SQLITE_TRANSIENT);
 +			return;
 +		}
-+		if (check_args_lengths(argc, argv)) {
++		int len_err = check_args_lengths(argc, argv);
++		if (len_err == 2) {
++			sqlite3_result_text(context, "Invalid salt: must not contain NUL bytes", -1, SQLITE_TRANSIENT);
++			return;
++		} else if (len_err) {
 +			sqlite3_result_text(context, "Invalid argument size", -1, SQLITE_TRANSIENT);
 +			return;
 +		}
@@ -135,7 +146,11 @@
 +			sqlite3_result_text(context, "Invalid argument type", -1, SQLITE_TRANSIENT);
 +			return;
 +		}
-+		if (check_args_lengths(argc, argv)) {
++		int len_err = check_args_lengths(argc, argv);
++		if (len_err == 2) {
++			sqlite3_result_text(context, "Invalid salt: must not contain NUL bytes", -1, SQLITE_TRANSIENT);
++			return;
++		} else if (len_err) {
 +			sqlite3_result_text(context, "Invalid argument size", -1, SQLITE_TRANSIENT);
 +			return;
 +		}
@@ -236,7 +251,7 @@
  /*
  ** current_time()
  **
-@@ -133230,6 +133459,10 @@
+@@ -133230,6 +133474,10 @@
      FUNCTION(substr,             3, 0, 0, substrFunc       ),
      FUNCTION(substring,          2, 0, 0, substrFunc       ),
      FUNCTION(substring,          3, 0, 0, substrFunc       ),

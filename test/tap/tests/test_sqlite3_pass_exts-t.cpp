@@ -12,6 +12,7 @@
  */
 
 #include <cassert>
+#include <random>
 #include <ctime>
 #include <string>
 #include <vector>
@@ -544,6 +545,17 @@ const vector<inv_input_t> INV_INPUTS {
 	{ "SELECT CACHING_SHA2_PASSWORD('somepass', '0123456789')", 0, "Invalid argument size" },
 	{ "SELECT CACHING_SHA2_PASSWORD('somepass', '0123456789012345678')", 0, "Invalid argument size" },
 	{ "SELECT CACHING_SHA2_PASSWORD('somepass', '012345678901234567890')", 0, "Invalid argument size" },
+
+	// A 20-byte salt containing an embedded NUL is the right LENGTH but is equally
+	// unusable: the salt is appended with strcat(), which stops at the NUL, while
+	// the digest offset is computed from the declared salt_size. The resulting hash
+	// is malformed and cannot authenticate -- silently, just like a short salt.
+	// X'00...' is a 20-byte BLOB whose first byte is NUL.
+	{ "SELECT CACHING_SHA2_PASSWORD('somepass', X'000102030405060708090A0B0C0D0E0F10111213')", 0,
+		"Invalid salt: must not contain NUL bytes" },
+	// ...and one with the NUL in the middle, so it is not simply an empty-string case.
+	{ "SELECT CACHING_SHA2_PASSWORD('somepass', X'01020304050607080900000C0D0E0F1011121314')", 0,
+		"Invalid salt: must not contain NUL bytes" },
 };
 
 
@@ -883,9 +895,13 @@ int main(int argc, char** argv) {
 			const uint32_t pass_len = rand() % 150;
 			const string pass { random_string(pass_len) };
 
+			// <random> rather than rand(): SonarCloud flags rand() as cpp:S5020 /
+			// cpp:S2245 on new code. Seeded deterministically so a failing run is
+			// reproducible.
+			static std::mt19937 salt_rng { 20260809u };
 			uint32_t salt_len = 20;
 			if (i % 2 == 1) {
-				salt_len = rand() % 40;              // 0..39
+				salt_len = std::uniform_int_distribution<uint32_t>(0, 39)(salt_rng);
 				if (salt_len == 20) { salt_len = 21; }   // keep this half invalid
 			}
 			const string salt { random_string(salt_len) };
