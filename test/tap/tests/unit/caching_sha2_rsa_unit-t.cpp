@@ -7,10 +7,13 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include <atomic>
-#include <chrono>
+#include <cerrno>
 #include <cstdlib>
 #include <memory>
+#ifdef __linux__
+#include <condition_variable>
+#include <mutex>
+#endif
 #include <string>
 #include <thread>
 #include <vector>
@@ -60,6 +63,45 @@ private:
 };
 
 using EVPKeyPtr = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>;
+
+#ifdef __linux__
+static std::mutex publication_lock_observer_mutex;
+static std::condition_variable publication_lock_observer_cv;
+static bool publication_lock_observer_enabled = false;
+static bool publication_lock_attempted = false;
+static bool publication_lock_contended = false;
+static bool publication_reload_finished = false;
+
+extern "C" int __real_flock(int fd, int operation);
+
+extern "C" int __wrap_flock(int fd, int operation) {
+	bool observe_attempt = false;
+	{
+		std::lock_guard<std::mutex> lock(publication_lock_observer_mutex);
+		observe_attempt = publication_lock_observer_enabled &&
+			(operation & LOCK_EX) != 0 && (operation & LOCK_NB) == 0;
+	}
+	if (!observe_attempt) {
+		return __real_flock(fd, operation);
+	}
+
+	const int probe_result = __real_flock(fd, operation | LOCK_NB);
+	const int probe_errno = errno;
+	const bool contended = probe_result < 0 &&
+		(probe_errno == EAGAIN || probe_errno == EWOULDBLOCK);
+	if (probe_result == 0) {
+		(void)__real_flock(fd, LOCK_UN);
+	}
+	{
+		std::lock_guard<std::mutex> lock(publication_lock_observer_mutex);
+		publication_lock_attempted = true;
+		publication_lock_contended = contended;
+	}
+	publication_lock_observer_cv.notify_all();
+	errno = probe_errno;
+	return __real_flock(fd, operation);
+}
+#endif
 
 static std::string first_line(const std::string& path) {
 	BIO* raw_bio = BIO_new_file(path.c_str(), "r");
@@ -263,7 +305,7 @@ static std::vector<unsigned char> encrypt_password_payload(
 }
 
 int main() {
-	plan(47);
+	plan(48);
 
 	MySQL_Caching_Sha2_RSA manager;
 	MySQL_Caching_Sha2_RSA_Config config;
@@ -563,48 +605,80 @@ int main() {
 		"concurrent generation publishes one consistent key pair");
 
 	TempDir publication_dir;
-	const std::string publication_private = publication_dir.path() + "/private.pem";
-	const std::string publication_public = publication_dir.path() + "/public.pem";
+	const bool publication_directory_created = !publication_dir.path().empty();
+	ok(publication_directory_created,
+		"created an isolated key-publication directory");
+#ifdef __linux__
+	const std::string publication_private = publication_directory_created
+		? publication_dir.path() + "/private.pem" : std::string();
+	const std::string publication_public = publication_directory_created
+		? publication_dir.path() + "/public.pem" : std::string();
 	const std::string publication_lock = publication_private + ".lock";
 	EVPKeyPtr publication_key = generate_rsa_key(2048);
-	const int publication_lock_fd = open(
-		publication_lock.c_str(), O_RDWR | O_CREAT, 0600
-	);
-	const bool publication_prepared = publication_lock_fd >= 0 &&
+	const int publication_lock_fd = publication_directory_created
+		? open(publication_lock.c_str(), O_RDWR | O_CREAT, 0600) : -1;
+	const bool publication_prepared = publication_directory_created &&
+		publication_lock_fd >= 0 &&
 		flock(publication_lock_fd, LOCK_EX) == 0 &&
 		write_pkcs8_key_pair(
 			publication_key.get(), publication_private, publication_public
 		) && unlink(publication_public.c_str()) == 0;
-	MySQL_Caching_Sha2_RSA publication_observer;
-	MySQL_Caching_Sha2_RSA_Config publication_config;
-	publication_config.auto_generate = true;
-	publication_config.private_key_path = publication_private;
-	publication_config.public_key_path = publication_public;
-	MySQL_Caching_Sha2_RSA_Reload_Result publication_result;
-	std::atomic<bool> publication_reload_started { false };
-	std::atomic<bool> publication_reload_finished { false };
-	std::thread publication_reload([&]() {
-		publication_reload_started.store(true, std::memory_order_release);
-		publication_result = publication_observer.reload(publication_config);
-		publication_reload_finished.store(true, std::memory_order_release);
-	});
-	while (!publication_reload_started.load(std::memory_order_acquire)) {
-		std::this_thread::yield();
-	}
-	std::this_thread::sleep_for(std::chrono::milliseconds(100));
-	ok(publication_prepared &&
-		!publication_reload_finished.load(std::memory_order_acquire),
-		"auto-generating reload waits for a locked partial-pair publisher");
-	const bool publication_completed = publication_prepared &&
-		write_public_key(publication_key.get(), publication_public);
-	if (publication_lock_fd >= 0) {
-		flock(publication_lock_fd, LOCK_UN);
+	if (!publication_prepared) {
+		if (publication_lock_fd >= 0) {
+			(void)flock(publication_lock_fd, LOCK_UN);
+			close(publication_lock_fd);
+		}
+		ok(false, "auto-generating reload waits for a locked partial-pair publisher");
+		ok(false, "reload accepts the pair completed by the locked publisher");
+	} else {
+		MySQL_Caching_Sha2_RSA publication_observer;
+		MySQL_Caching_Sha2_RSA_Config publication_config;
+		publication_config.auto_generate = true;
+		publication_config.private_key_path = publication_private;
+		publication_config.public_key_path = publication_public;
+		MySQL_Caching_Sha2_RSA_Reload_Result publication_result;
+		{
+			std::lock_guard<std::mutex> lock(publication_lock_observer_mutex);
+			publication_lock_observer_enabled = true;
+			publication_lock_attempted = false;
+			publication_lock_contended = false;
+			publication_reload_finished = false;
+		}
+		std::thread publication_reload([&]() {
+			publication_result = publication_observer.reload(publication_config);
+			{
+				std::lock_guard<std::mutex> lock(publication_lock_observer_mutex);
+				publication_reload_finished = true;
+			}
+			publication_lock_observer_cv.notify_all();
+		});
+		bool observed_contended_attempt = false;
+		{
+			std::unique_lock<std::mutex> lock(publication_lock_observer_mutex);
+			publication_lock_observer_cv.wait(lock, []() {
+				return publication_lock_attempted || publication_reload_finished;
+			});
+			observed_contended_attempt = publication_lock_attempted &&
+				publication_lock_contended && !publication_reload_finished;
+		}
+		ok(observed_contended_attempt,
+			"auto-generating reload waits for a locked partial-pair publisher");
+		const bool publication_completed =
+			write_public_key(publication_key.get(), publication_public);
+		(void)flock(publication_lock_fd, LOCK_UN);
 		close(publication_lock_fd);
+		publication_reload.join();
+		{
+			std::lock_guard<std::mutex> lock(publication_lock_observer_mutex);
+			publication_lock_observer_enabled = false;
+		}
+		ok(publication_completed && publication_result.accepted &&
+			publication_observer.acquire() != nullptr,
+			"reload accepts the pair completed by the locked publisher");
 	}
-	publication_reload.join();
-	ok(publication_completed && publication_result.accepted &&
-		publication_observer.acquire() != nullptr,
-		"reload accepts the pair completed by the locked publisher");
+#else
+	skip(2, "deterministic flock interposition is only available on Linux");
+#endif
 
 	return exit_status();
 }

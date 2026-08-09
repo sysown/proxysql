@@ -860,6 +860,11 @@ genai_mysql_catalog_unit-t: genai_mysql_catalog_unit-t.cpp $(GENAI_ALL_SRCS) $(T
 		$(GENAI_PLUGIN_DEFINES) $(IDIRS) $(LDIRS) $(OPT) \
 		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
+ifeq ($(UNAME_S),Linux)
+# Let the RSA unit test observe the exact flock attempt without a production hook.
+caching_sha2_rsa_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=flock
+endif
+
 # Pattern rule: all unit tests use the same compile + link flags.
 # Each test binary is built from its .cpp source, linked against
 # the test harness objects and libproxysql.a with all dependencies.
