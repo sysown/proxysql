@@ -477,13 +477,13 @@ static void test_wildcard_matching() {
 
 	// % matches any sequence
 	ok(mywildcmp("hel%", "hello") == true,
-		"wildcard: % suffix matches");
+		"wildcard: %% suffix matches");
 	ok(mywildcmp("%llo", "hello") == true,
-		"wildcard: % prefix matches");
+		"wildcard: %% prefix matches");
 	ok(mywildcmp("%ll%", "hello") == true,
-		"wildcard: % on both sides matches");
+		"wildcard: %% on both sides matches");
 	ok(mywildcmp("%", "anything") == true,
-		"wildcard: lone % matches anything");
+		"wildcard: lone %% matches anything");
 
 	// _ matches single character
 	ok(mywildcmp("h_llo", "hello") == true,
@@ -495,7 +495,7 @@ static void test_wildcard_matching() {
 	ok(mywildcmp("hello", "world") == false,
 		"wildcard: no match on different strings");
 	ok(mywildcmp("hel%", "world") == false,
-		"wildcard: % prefix doesn't match unrelated");
+		"wildcard: %% prefix doesn't match unrelated");
 	ok(mywildcmp("h_llo", "hllo") == false,
 		"wildcard: _ requires exactly one char");
 
@@ -503,7 +503,7 @@ static void test_wildcard_matching() {
 	ok(mywildcmp("", "") == true,
 		"wildcard: empty pattern matches empty string");
 	ok(mywildcmp("%", "") == true,
-		"wildcard: % matches empty string");
+		"wildcard: %% matches empty string");
 }
 
 // ============================================================================
