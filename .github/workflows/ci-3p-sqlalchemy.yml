@@ -119,6 +119,7 @@ jobs:
         git -C ./proxysql describe --long --abbrev=7 
 
     - name: Run tests
+      timeout-minutes: 90
       run: |
         set +e
         

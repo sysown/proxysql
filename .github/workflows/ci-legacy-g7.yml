@@ -242,6 +242,7 @@ jobs:
         test/infra/control/ensure-infras.bash
 
     - name: Run legacy-g7 tests
+      timeout-minutes: 90
       run: |
         cd proxysql
         export INFRA_ID="ci-legacy-g7"

@@ -236,6 +236,7 @@ jobs:
         test/infra/control/ensure-infras.bash
 
     - name: Run basic tests
+      timeout-minutes: 90
       run: |
         cd proxysql
         export INFRA_ID="ci-basictests"

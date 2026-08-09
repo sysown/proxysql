@@ -120,6 +120,7 @@ jobs:
         sed -i 's/timeout -v -s1 800 //' run-tests.bash
         
     - name: Run tests
+      timeout-minutes: 90
       run: |
         set +e
         

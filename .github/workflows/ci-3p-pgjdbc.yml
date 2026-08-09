@@ -128,6 +128,7 @@ jobs:
         rm pgjdbc/src/test/java/org/postgresql/test/jdbc2/CopyTest.java
 
     - name: Run tests
+      timeout-minutes: 90
       run: |
         set +e
         

@@ -180,6 +180,7 @@ jobs:
         test/infra/control/ensure-infras.bash
 
     - name: Run mysql56-single-g1 tests
+      timeout-minutes: 90
       run: |
         cd proxysql
         export INFRA_ID="ci-mysql56-single-g1"

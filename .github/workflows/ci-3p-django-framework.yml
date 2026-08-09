@@ -138,6 +138,7 @@ jobs:
         fi
         
     - name: Run tests
+      timeout-minutes: 90
       run: |
         set +e
         

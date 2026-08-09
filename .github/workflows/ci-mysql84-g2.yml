@@ -242,6 +242,7 @@ jobs:
         test/infra/control/ensure-infras.bash
 
     - name: Run mysql84-g2 tests
+      timeout-minutes: 90
       run: |
         cd proxysql
         export INFRA_ID="ci-mysql84-g2"
