@@ -19,8 +19,8 @@
 
 namespace {
 
-constexpr int kMinimumRSAKeyBits = 2048;
-constexpr size_t kMaximumPEMFileSize = 1024 * 1024;
+constexpr int MINIMUM_RSA_KEY_BITS = 2048;
+constexpr size_t MAXIMUM_PEM_FILE_SIZE = 1024 * 1024;
 
 class ScopedFd {
 public:
@@ -56,6 +56,23 @@ public:
 
 private:
 	std::string& value_;
+};
+
+class ScopedBufferCleanser {
+public:
+	ScopedBufferCleanser(std::vector<unsigned char>& value, size_t allocation_size)
+		: value_(value), allocation_size_(allocation_size) {}
+	~ScopedBufferCleanser() {
+		if (allocation_size_ > 0) {
+			OPENSSL_cleanse(value_.data(), allocation_size_);
+		}
+	}
+	ScopedBufferCleanser(const ScopedBufferCleanser&) = delete;
+	ScopedBufferCleanser& operator=(const ScopedBufferCleanser&) = delete;
+
+private:
+	std::vector<unsigned char>& value_;
+	size_t allocation_size_;
 };
 
 std::string errno_message(const std::string& operation, const std::string& path) {
@@ -261,7 +278,7 @@ bool read_key_file_content(
 			error = errno_message("cannot read RSA key file", path);
 			return false;
 		}
-		if (content.size() + static_cast<size_t>(count) > kMaximumPEMFileSize) {
+		if (content.size() + static_cast<size_t>(count) > MAXIMUM_PEM_FILE_SIZE) {
 			error = "RSA key file '" + path + "' exceeds the 1 MiB safety limit";
 			return false;
 		}
@@ -306,7 +323,7 @@ bool public_pem(EVP_PKEY* key, std::string& pem, std::string& error) {
 		error = "cannot allocate public-key serialization buffer";
 		return false;
 	}
-	std::unique_ptr<BIO, decltype(&BIO_free)> bio(raw_bio, BIO_free);
+	std::unique_ptr<BIO, decltype(&BIO_free)> bio(raw_bio, &BIO_free);
 	if (PEM_write_bio_PUBKEY(bio.get(), key) != 1) {
 		error = "cannot serialize RSA public key";
 		return false;
@@ -327,7 +344,7 @@ bool private_pem(EVP_PKEY* key, std::string& pem, std::string& error) {
 		error = "cannot allocate private-key serialization buffer";
 		return false;
 	}
-	std::unique_ptr<BIO, decltype(&BIO_free)> bio(raw_bio, BIO_free);
+	std::unique_ptr<BIO, decltype(&BIO_free)> bio(raw_bio, &BIO_free);
 	if (PEM_write_bio_PKCS8PrivateKey(
 		bio.get(), key, nullptr, nullptr, 0, nullptr, nullptr
 	) != 1) {
@@ -354,7 +371,7 @@ bool validate_rsa_key(
 		error = "key file '" + path + "' does not contain an RSA key";
 		return false;
 	}
-	if (EVP_PKEY_bits(key) < kMinimumRSAKeyBits) {
+	if (EVP_PKEY_bits(key) < MINIMUM_RSA_KEY_BITS) {
 		error = "RSA key file '" + path + "' is weaker than 2048 bits";
 		return false;
 	}
@@ -364,7 +381,7 @@ bool validate_rsa_key(
 		return false;
 	}
 	std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)> context(
-		raw_context, EVP_PKEY_CTX_free
+		raw_context, &EVP_PKEY_CTX_free
 	);
 	const bool valid = private_key ?
 		EVP_PKEY_private_check(context.get()) > 0 &&
@@ -410,7 +427,7 @@ bool load_private_key(
 		error = "cannot allocate reader for private key '" + path.display_path + "'";
 		return false;
 	}
-	std::unique_ptr<BIO, decltype(&BIO_free)> bio(raw_bio, BIO_free);
+	std::unique_ptr<BIO, decltype(&BIO_free)> bio(raw_bio, &BIO_free);
 	PKCS8_PRIV_KEY_INFO* raw_key_info = PEM_read_bio_PKCS8_PRIV_KEY_INFO(
 		bio.get(), nullptr, reject_password_callback, nullptr
 	);
@@ -420,14 +437,14 @@ bool load_private_key(
 		return false;
 	}
 	std::unique_ptr<PKCS8_PRIV_KEY_INFO, decltype(&PKCS8_PRIV_KEY_INFO_free)> key_info(
-		raw_key_info, PKCS8_PRIV_KEY_INFO_free
+		raw_key_info, &PKCS8_PRIV_KEY_INFO_free
 	);
 	EVP_PKEY* raw_key = EVP_PKCS82PKEY(key_info.get());
 	if (raw_key == nullptr) {
 		error = "cannot decode PKCS#8 private key '" + path.display_path + "'";
 		return false;
 	}
-	key = std::shared_ptr<EVP_PKEY>(raw_key, EVP_PKEY_free);
+	key = std::shared_ptr<EVP_PKEY>(raw_key, &EVP_PKEY_free);
 	return validate_rsa_key(key.get(), path.display_path, true, error);
 }
 
@@ -463,13 +480,13 @@ bool load_public_key(
 		error = "cannot allocate reader for public key '" + path.display_path + "'";
 		return false;
 	}
-	std::unique_ptr<BIO, decltype(&BIO_free)> bio(raw_bio, BIO_free);
+	std::unique_ptr<BIO, decltype(&BIO_free)> bio(raw_bio, &BIO_free);
 	EVP_PKEY* raw_key = PEM_read_bio_PUBKEY(bio.get(), nullptr, nullptr, nullptr);
 	if (raw_key == nullptr) {
 		error = "public key '" + path.display_path + "' is malformed or not PKIX PEM";
 		return false;
 	}
-	key = std::shared_ptr<EVP_PKEY>(raw_key, EVP_PKEY_free);
+	key = std::shared_ptr<EVP_PKEY>(raw_key, &EVP_PKEY_free);
 	return validate_rsa_key(key.get(), path.display_path, false, error);
 }
 
@@ -520,10 +537,10 @@ bool generate_rsa_key(std::shared_ptr<EVP_PKEY>& key, std::string& error) {
 		return false;
 	}
 	std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)> context(
-		raw_context, EVP_PKEY_CTX_free
+		raw_context, &EVP_PKEY_CTX_free
 	);
 	if (EVP_PKEY_keygen_init(context.get()) <= 0 ||
-		EVP_PKEY_CTX_set_rsa_keygen_bits(context.get(), kMinimumRSAKeyBits) <= 0) {
+		EVP_PKEY_CTX_set_rsa_keygen_bits(context.get(), MINIMUM_RSA_KEY_BITS) <= 0) {
 		error = "cannot initialize RSA-2048 key generation";
 		return false;
 	}
@@ -532,7 +549,7 @@ bool generate_rsa_key(std::shared_ptr<EVP_PKEY>& key, std::string& error) {
 		error = "cannot generate RSA-2048 key";
 		return false;
 	}
-	key = std::shared_ptr<EVP_PKEY>(raw_key, EVP_PKEY_free);
+	key = std::shared_ptr<EVP_PKEY>(raw_key, &EVP_PKEY_free);
 	return true;
 }
 
@@ -684,9 +701,11 @@ bool generate_pair(
 		error = errno_message("cannot open RSA key-generation lock beside", private_path.display_path);
 		return false;
 	}
-	if (flock(lock_fd.get(), LOCK_EX) != 0) {
-		error = errno_message("cannot lock RSA key generation beside", private_path.display_path);
-		return false;
+	while (flock(lock_fd.get(), LOCK_EX) != 0) {
+		if (errno != EINTR) {
+			error = errno_message("cannot lock RSA key generation beside", private_path.display_path);
+			return false;
+		}
 	}
 
 	bool private_exists = false;
@@ -839,7 +858,7 @@ bool MySQL_Caching_Sha2_RSA::decrypt_password(
 		return fail("cannot allocate RSA decryption context");
 	}
 	std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)> context(
-		raw_context, EVP_PKEY_CTX_free
+		raw_context, &EVP_PKEY_CTX_free
 	);
 	if (EVP_PKEY_decrypt_init(context.get()) <= 0 ||
 		EVP_PKEY_CTX_set_rsa_padding(context.get(), RSA_PKCS1_OAEP_PADDING) <= 0 ||
@@ -854,12 +873,16 @@ bool MySQL_Caching_Sha2_RSA::decrypt_password(
 	) <= 0 || plaintext_length == 0) {
 		return fail("RSA OAEP decryption failed");
 	}
-	std::vector<unsigned char> plaintext(plaintext_length);
+	const size_t plaintext_allocation_size = plaintext_length;
+	std::vector<unsigned char> plaintext(plaintext_allocation_size);
+	ScopedBufferCleanser plaintext_cleanser(plaintext, plaintext_allocation_size);
 	if (EVP_PKEY_decrypt(
 		context.get(), plaintext.data(), &plaintext_length, ciphertext, ciphertext_length
 	) <= 0 || plaintext_length == 0) {
-		OPENSSL_cleanse(plaintext.data(), plaintext.size());
 		return fail("RSA OAEP decryption failed");
+	}
+	if (plaintext_length > plaintext_allocation_size) {
+		return fail("RSA OAEP decryption returned an invalid length");
 	}
 	plaintext.resize(plaintext_length);
 	for (size_t index = 0; index < plaintext.size(); ++index) {
@@ -867,11 +890,9 @@ bool MySQL_Caching_Sha2_RSA::decrypt_password(
 	}
 	if (plaintext.back() != '\0' ||
 		std::memchr(plaintext.data(), '\0', plaintext.size() - 1) != nullptr) {
-		OPENSSL_cleanse(plaintext.data(), plaintext.size());
 		return fail("decrypted password is not a single NUL-terminated string");
 	}
 	password.assign(reinterpret_cast<const char*>(plaintext.data()), plaintext.size() - 1);
-	OPENSSL_cleanse(plaintext.data(), plaintext.size());
 	if (error != nullptr) {
 		error->clear();
 	}

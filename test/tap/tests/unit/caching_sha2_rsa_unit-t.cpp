@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <thread>
@@ -57,7 +58,7 @@ static std::string first_line(const std::string& path) {
 	if (raw_bio == nullptr) {
 		return {};
 	}
-	std::unique_ptr<BIO, decltype(&BIO_free)> bio(raw_bio, BIO_free);
+	std::unique_ptr<BIO, decltype(&BIO_free)> bio(raw_bio, &BIO_free);
 	char line[128] {};
 	const int length = BIO_gets(bio.get(), line, sizeof(line));
 	return length > 0 ? std::string(line, static_cast<size_t>(length)) : std::string();
@@ -71,17 +72,17 @@ static bool write_traditional_private_key(
 	if (raw_input == nullptr) {
 		return false;
 	}
-	std::unique_ptr<BIO, decltype(&BIO_free)> input(raw_input, BIO_free);
+	std::unique_ptr<BIO, decltype(&BIO_free)> input(raw_input, &BIO_free);
 	EVP_PKEY* raw_key = PEM_read_bio_PrivateKey(input.get(), nullptr, nullptr, nullptr);
 	if (raw_key == nullptr) {
 		return false;
 	}
-	std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(raw_key, EVP_PKEY_free);
+	std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(raw_key, &EVP_PKEY_free);
 	BIO* raw_output = BIO_new_file(destination_path.c_str(), "w");
 	if (raw_output == nullptr) {
 		return false;
 	}
-	std::unique_ptr<BIO, decltype(&BIO_free)> output(raw_output, BIO_free);
+	std::unique_ptr<BIO, decltype(&BIO_free)> output(raw_output, &BIO_free);
 	const bool written = PEM_write_bio_PrivateKey_traditional(
 		output.get(), key.get(), nullptr, nullptr, 0, nullptr, nullptr
 	) == 1;
@@ -91,39 +92,39 @@ static bool write_traditional_private_key(
 static EVPKeyPtr read_private_key(const std::string& path) {
 	BIO* raw_bio = BIO_new_file(path.c_str(), "r");
 	if (raw_bio == nullptr) {
-		return EVPKeyPtr(nullptr, EVP_PKEY_free);
+		return EVPKeyPtr(nullptr, &EVP_PKEY_free);
 	}
-	std::unique_ptr<BIO, decltype(&BIO_free)> bio(raw_bio, BIO_free);
+	std::unique_ptr<BIO, decltype(&BIO_free)> bio(raw_bio, &BIO_free);
 	return EVPKeyPtr(
-		PEM_read_bio_PrivateKey(bio.get(), nullptr, nullptr, nullptr), EVP_PKEY_free
+		PEM_read_bio_PrivateKey(bio.get(), nullptr, nullptr, nullptr), &EVP_PKEY_free
 	);
 }
 
 static EVPKeyPtr generate_rsa_key(int bits) {
 	EVP_PKEY_CTX* raw_context = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr);
 	if (raw_context == nullptr) {
-		return EVPKeyPtr(nullptr, EVP_PKEY_free);
+		return EVPKeyPtr(nullptr, &EVP_PKEY_free);
 	}
 	std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)> context(
-		raw_context, EVP_PKEY_CTX_free
+		raw_context, &EVP_PKEY_CTX_free
 	);
 	EVP_PKEY* raw_key = nullptr;
 	if (EVP_PKEY_keygen_init(context.get()) <= 0 ||
 		EVP_PKEY_CTX_set_rsa_keygen_bits(context.get(), bits) <= 0 ||
 		EVP_PKEY_keygen(context.get(), &raw_key) <= 0) {
 		EVP_PKEY_free(raw_key);
-		return EVPKeyPtr(nullptr, EVP_PKEY_free);
+		return EVPKeyPtr(nullptr, &EVP_PKEY_free);
 	}
-	return EVPKeyPtr(raw_key, EVP_PKEY_free);
+	return EVPKeyPtr(raw_key, &EVP_PKEY_free);
 }
 
 static EVPKeyPtr generate_ec_key() {
 	EVP_PKEY_CTX* raw_context = EVP_PKEY_CTX_new_id(EVP_PKEY_EC, nullptr);
 	if (raw_context == nullptr) {
-		return EVPKeyPtr(nullptr, EVP_PKEY_free);
+		return EVPKeyPtr(nullptr, &EVP_PKEY_free);
 	}
 	std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)> context(
-		raw_context, EVP_PKEY_CTX_free
+		raw_context, &EVP_PKEY_CTX_free
 	);
 	EVP_PKEY* raw_key = nullptr;
 	if (EVP_PKEY_keygen_init(context.get()) <= 0 ||
@@ -131,9 +132,9 @@ static EVPKeyPtr generate_ec_key() {
 			context.get(), NID_X9_62_prime256v1
 		) <= 0 || EVP_PKEY_keygen(context.get(), &raw_key) <= 0) {
 		EVP_PKEY_free(raw_key);
-		return EVPKeyPtr(nullptr, EVP_PKEY_free);
+		return EVPKeyPtr(nullptr, &EVP_PKEY_free);
 	}
-	return EVPKeyPtr(raw_key, EVP_PKEY_free);
+	return EVPKeyPtr(raw_key, &EVP_PKEY_free);
 }
 
 static bool write_pkcs8_key_pair(
@@ -149,7 +150,7 @@ static bool write_pkcs8_key_pair(
 	if (raw_private == nullptr) {
 		return false;
 	}
-	std::unique_ptr<BIO, decltype(&BIO_free)> private_bio(raw_private, BIO_free);
+	std::unique_ptr<BIO, decltype(&BIO_free)> private_bio(raw_private, &BIO_free);
 	char passphrase[] = "test-passphrase";
 	if (PEM_write_bio_PKCS8PrivateKey(
 		private_bio.get(), key, encrypted ? EVP_aes_256_cbc() : nullptr,
@@ -163,7 +164,7 @@ static bool write_pkcs8_key_pair(
 	if (raw_public == nullptr) {
 		return false;
 	}
-	std::unique_ptr<BIO, decltype(&BIO_free)> public_bio(raw_public, BIO_free);
+	std::unique_ptr<BIO, decltype(&BIO_free)> public_bio(raw_public, &BIO_free);
 	return PEM_write_bio_PUBKEY(public_bio.get(), key) == 1 &&
 		chmod(public_path.c_str(), 0644) == 0;
 }
@@ -173,7 +174,7 @@ static bool write_malformed_private_key(const std::string& path) {
 	if (raw_bio == nullptr) {
 		return false;
 	}
-	std::unique_ptr<BIO, decltype(&BIO_free)> bio(raw_bio, BIO_free);
+	std::unique_ptr<BIO, decltype(&BIO_free)> bio(raw_bio, &BIO_free);
 	return BIO_puts(bio.get(), "-----BEGIN PRIVATE KEY-----\nnot-a-key\n") > 0 &&
 		chmod(path.c_str(), 0600) == 0;
 }
@@ -183,7 +184,7 @@ static bool append_text(const std::string& path, const char* text) {
 	if (raw_bio == nullptr) {
 		return false;
 	}
-	std::unique_ptr<BIO, decltype(&BIO_free)> bio(raw_bio, BIO_free);
+	std::unique_ptr<BIO, decltype(&BIO_free)> bio(raw_bio, &BIO_free);
 	return BIO_puts(bio.get(), text) > 0;
 }
 
@@ -205,18 +206,18 @@ static std::vector<unsigned char> encrypt_password_payload(
 	if (raw_bio == nullptr) {
 		return {};
 	}
-	std::unique_ptr<BIO, decltype(&BIO_free)> bio(raw_bio, BIO_free);
+	std::unique_ptr<BIO, decltype(&BIO_free)> bio(raw_bio, &BIO_free);
 	EVP_PKEY* raw_key = PEM_read_bio_PUBKEY(bio.get(), nullptr, nullptr, nullptr);
 	if (raw_key == nullptr) {
 		return {};
 	}
-	std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(raw_key, EVP_PKEY_free);
+	std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(raw_key, &EVP_PKEY_free);
 	EVP_PKEY_CTX* raw_context = EVP_PKEY_CTX_new(key.get(), nullptr);
 	if (raw_context == nullptr) {
 		return {};
 	}
 	std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)> context(
-		raw_context, EVP_PKEY_CTX_free
+		raw_context, &EVP_PKEY_CTX_free
 	);
 	if (EVP_PKEY_encrypt_init(context.get()) <= 0 ||
 		EVP_PKEY_CTX_set_rsa_padding(context.get(), RSA_PKCS1_OAEP_PADDING) <= 0 ||

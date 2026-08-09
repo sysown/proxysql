@@ -1,5 +1,5 @@
-#ifndef PROXYSQL_MYSQL_CACHING_SHA2_RSA_H
-#define PROXYSQL_MYSQL_CACHING_SHA2_RSA_H
+#ifndef __CLASS_MYSQL_CACHING_SHA2_RSA_H
+#define __CLASS_MYSQL_CACHING_SHA2_RSA_H
 
 #include <memory>
 #include <mutex>
