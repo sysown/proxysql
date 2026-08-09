@@ -26,7 +26,7 @@ jobs:
       release_name: ${{ steps.release.outputs.release_name }}
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         repository: ${{ github.repository }}
         ref: ${{ github.sha }}
@@ -106,7 +106,7 @@ jobs:
         brew install automake bzip2 cmake gpatch gnutls libtool openssl@3 icu4c pkg-config libiconv zlib
 
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         repository: ${{ github.repository }}
         ref: ${{ github.sha }}
