@@ -36,7 +36,7 @@ jobs:
     permissions: write-all
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # Inline build (CI-3p-* model, not the CI-trigger/CI-builds cache-chain
       # model used by the TAP families): no ccache pattern exists elsewhere

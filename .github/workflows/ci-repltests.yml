@@ -65,7 +65,7 @@ jobs:
       # off the private jenkins-build-scripts repo, so no GH_TOKEN_PROXYSQL PAT).
       # Sparse-checkout just that dir into proxysql/; the proxysql binary arrives
       # separately via the build handoff below (unpacked into the same proxysql/).
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         repository: ${{ github.repository }}
         ref: ${{ env.SHA }}
