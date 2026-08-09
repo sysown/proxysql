@@ -56,7 +56,7 @@ privileged_steps = reusable.fetch('jobs').values.flat_map { |job| job.fetch('ste
   step.fetch('uses', '').include?('LouisBrunner/checks-action') ||
     step.fetch('uses', '').include?('actions/cache/') ||
     step.fetch('uses', '').include?('actions/upload-artifact') ||
-    step.fetch('name', '').match?(/Pack (bin|test|src \+ matrix) cache|Upload handoff|Archive artifacts/)
+    step.fetch('name', '').match?(/Pack (bin|test) cache|Pack src \+ matrix for handoff|Upload handoff|Archive artifacts/)
 end
 assert(!privileged_steps.empty?, 'no privileged steps discovered')
 privileged_steps.each do |step|
