@@ -35,7 +35,7 @@ fork_run = fork.fetch('jobs').fetch('run')
 assert(fork_event.key?('pull_request'), 'fork workflow is not pull_request-triggered')
 assert(fork.fetch('permissions') == { 'contents' => 'read' }, 'fork workflow permissions are not exactly contents: read')
 assert(fork_run.fetch('if').include?('head.repo.fork'), 'fork workflow is not restricted to fork heads')
-assert(fork_run.fetch('uses') == 'sysown/proxysql/.github/workflows/ci-builds.yml@GH-Actions', 'fork workflow uses the wrong reusable workflow')
+assert(fork_run.fetch('uses').match?(%r{\Asysown/proxysql/\.github/workflows/ci-builds\.yml@[0-9a-f]{40}\z}), 'fork workflow does not pin the reusable workflow to a full commit SHA')
 assert(fork_run.fetch('with').fetch('trusted') == false, 'fork workflow does not select untrusted mode')
 fork.fetch('jobs').each_value do |job|
   assert(!job.key?('secrets'), 'fork workflow inherits or passes secrets')
