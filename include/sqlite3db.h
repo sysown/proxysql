@@ -22,7 +22,8 @@
     rc=(*proxy_sqlite3_step)(_stmt);\
     if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) {\
       usleep(_backoff_us);\
-      if (_backoff_us < 10000) { _backoff_us *= 2; }\
+      _backoff_us *= 2;\
+      if (_backoff_us > 10000) { _backoff_us = 10000; }\
     }\
   } while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);\
 } while (0)
