@@ -583,7 +583,7 @@ bool create_temporary_key_file(
 	static std::atomic<unsigned long> sequence { 0 };
 	for (unsigned int attempt = 0; attempt < 100; ++attempt) {
 		temporary_leaf = final_path.leaf + ".tmp." + std::to_string(getpid()) + "." +
-			std::to_string(sequence.fetch_add(1, std::memory_order_relaxed));
+			std::to_string(sequence.fetch_add(1, std::memory_order_relaxed)); // NOSONAR(cpp:S8417): suffix uniqueness needs no publication ordering.
 		int flags = O_WRONLY | O_CREAT | O_EXCL;
 #ifdef O_CLOEXEC
 		flags |= O_CLOEXEC;
@@ -742,17 +742,21 @@ bool generate_pair(
 	return published;
 }
 
-CachingSha2RSAReloadResult rejected_result(
+MySQL_Caching_Sha2_RSA_Reload_Result rejected_result(
 	const std::string& error,
-	const std::shared_ptr<const CachingSha2RSAKeySnapshot>& current
+	const std::shared_ptr<const MySQL_Caching_Sha2_RSA_Key_Snapshot>& current
 ) {
 	return { false, false, current != nullptr, error };
 }
 
 } // namespace
 
-CachingSha2RSAReloadResult MySQL_Caching_Sha2_RSA::reload(
-	const CachingSha2RSAConfig& config
+MySQL_Caching_Sha2_RSA::~MySQL_Caching_Sha2_RSA() {
+	pthread_mutex_destroy(&mutex_);
+}
+
+MySQL_Caching_Sha2_RSA_Reload_Result MySQL_Caching_Sha2_RSA::reload(
+	const MySQL_Caching_Sha2_RSA_Config& config
 ) {
 	if (config.private_key_path.empty() != config.public_key_path.empty()) {
 		const auto current = acquire();
@@ -763,9 +767,10 @@ CachingSha2RSAReloadResult MySQL_Caching_Sha2_RSA::reload(
 			const auto current = acquire();
 			return rejected_result("automatic RSA key generation requires non-empty key paths", current);
 		}
-		std::lock_guard<std::mutex> guard(mutex_);
+		pthread_mutex_lock(&mutex_);
 		const bool changed = snapshot_ != nullptr;
 		snapshot_.reset();
+		pthread_mutex_unlock(&mutex_);
 		return { true, changed, false, {} };
 	}
 
@@ -802,30 +807,35 @@ CachingSha2RSAReloadResult MySQL_Caching_Sha2_RSA::reload(
 		return rejected_result(error, acquire());
 	}
 
-	std::lock_guard<std::mutex> guard(mutex_);
-	if (snapshot_ != nullptr &&
-		snapshot_->private_key_path_ == loaded.private_key_path &&
-		snapshot_->public_key_path_ == loaded.public_key_path &&
-		snapshot_->public_key_pem_ == loaded.public_key_pem) {
-		return { true, false, true, {} };
-	}
-	auto candidate = std::make_shared<CachingSha2RSAKeySnapshot>();
+	auto candidate = std::make_shared<MySQL_Caching_Sha2_RSA_Key_Snapshot>();
 	candidate->private_key_ = std::move(loaded.private_key);
 	candidate->public_key_pem_ = std::move(loaded.public_key_pem);
 	candidate->private_key_path_ = std::move(loaded.private_key_path);
 	candidate->public_key_path_ = std::move(loaded.public_key_path);
 	candidate->ciphertext_size_ = loaded.ciphertext_size;
+
+	pthread_mutex_lock(&mutex_);
+	if (snapshot_ != nullptr &&
+		snapshot_->private_key_path_ == candidate->private_key_path_ &&
+		snapshot_->public_key_path_ == candidate->public_key_path_ &&
+		snapshot_->public_key_pem_ == candidate->public_key_pem_) {
+		pthread_mutex_unlock(&mutex_);
+		return { true, false, true, {} };
+	}
 	snapshot_ = std::move(candidate);
+	pthread_mutex_unlock(&mutex_);
 	return { true, true, true, {} };
 }
 
-std::shared_ptr<const CachingSha2RSAKeySnapshot> MySQL_Caching_Sha2_RSA::acquire() const {
-	std::lock_guard<std::mutex> guard(mutex_);
-	return snapshot_;
+std::shared_ptr<const MySQL_Caching_Sha2_RSA_Key_Snapshot> MySQL_Caching_Sha2_RSA::acquire() const {
+	pthread_mutex_lock(&mutex_);
+	auto snapshot = snapshot_;
+	pthread_mutex_unlock(&mutex_);
+	return snapshot;
 }
 
 bool MySQL_Caching_Sha2_RSA::decrypt_password(
-	const std::shared_ptr<const CachingSha2RSAKeySnapshot>& snapshot,
+	const std::shared_ptr<const MySQL_Caching_Sha2_RSA_Key_Snapshot>& snapshot,
 	const unsigned char* ciphertext,
 	size_t ciphertext_length,
 	const unsigned char* scramble,
@@ -862,8 +872,8 @@ bool MySQL_Caching_Sha2_RSA::decrypt_password(
 	);
 	if (EVP_PKEY_decrypt_init(context.get()) <= 0 ||
 		EVP_PKEY_CTX_set_rsa_padding(context.get(), RSA_PKCS1_OAEP_PADDING) <= 0 ||
-		EVP_PKEY_CTX_set_rsa_oaep_md(context.get(), EVP_sha1()) <= 0 ||
-		EVP_PKEY_CTX_set_rsa_mgf1_md(context.get(), EVP_sha1()) <= 0) {
+		EVP_PKEY_CTX_set_rsa_oaep_md(context.get(), EVP_sha1()) <= 0 || // NOSONAR(cpp:S4790): MySQL caching_sha2_password requires OAEP SHA-1.
+		EVP_PKEY_CTX_set_rsa_mgf1_md(context.get(), EVP_sha1()) <= 0) { // NOSONAR(cpp:S4790): MySQL caching_sha2_password requires MGF1 SHA-1.
 		return fail("cannot initialize RSA OAEP decryption");
 	}
 

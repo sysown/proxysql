@@ -39,7 +39,12 @@ class MySQL_Passthrough_Auth_Cache {
 			std::string cleartext_password;
 			uint64_t learned_at_us { 0 };
 			int hostgroup_probed { 0 };
+			entry_t() = default;
 			~entry_t();
+			entry_t(const entry_t&) = delete;
+			entry_t& operator=(const entry_t&) = delete;
+			entry_t(entry_t&&) = delete;
+			entry_t& operator=(entry_t&&) = delete;
 		};
 		mutable pthread_rwlock_t lock;
 		std::unordered_map<std::string, entry_t> entries;

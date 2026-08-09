@@ -20,7 +20,7 @@ class TempDir {
 public:
 	TempDir() {
 		char path_template[] = "/tmp/proxysql-caching-sha2-rsa-XXXXXX";
-		char* created = mkdtemp(path_template);
+		char* created = mkdtemp(path_template); // NOSONAR(cpp:S5443): mkdtemp atomically creates a unique owner-only test directory.
 		if (created != nullptr) {
 			path_ = created;
 		}
@@ -44,6 +44,10 @@ public:
 			rmdir(path_.c_str());
 		}
 	}
+	TempDir(const TempDir&) = delete;
+	TempDir& operator=(const TempDir&) = delete;
+	TempDir(TempDir&&) = delete;
+	TempDir& operator=(TempDir&&) = delete;
 
 	const std::string& path() const { return path_; }
 
@@ -166,7 +170,7 @@ static bool write_pkcs8_key_pair(
 	}
 	std::unique_ptr<BIO, decltype(&BIO_free)> public_bio(raw_public, &BIO_free);
 	return PEM_write_bio_PUBKEY(public_bio.get(), key) == 1 &&
-		chmod(public_path.c_str(), 0644) == 0;
+		chmod(public_path.c_str(), 0644) == 0; // NOSONAR(cpp:S2612): RSA public keys are intentionally world-readable.
 }
 
 static bool write_malformed_private_key(const std::string& path) {
@@ -189,7 +193,7 @@ static bool append_text(const std::string& path, const char* text) {
 }
 
 static std::vector<unsigned char> encrypt_password_payload(
-	const CachingSha2RSAKeySnapshot& snapshot,
+	const MySQL_Caching_Sha2_RSA_Key_Snapshot& snapshot,
 	const std::vector<unsigned char>& cleartext,
 	const unsigned char* scramble,
 	size_t scramble_length
@@ -221,8 +225,8 @@ static std::vector<unsigned char> encrypt_password_payload(
 	);
 	if (EVP_PKEY_encrypt_init(context.get()) <= 0 ||
 		EVP_PKEY_CTX_set_rsa_padding(context.get(), RSA_PKCS1_OAEP_PADDING) <= 0 ||
-		EVP_PKEY_CTX_set_rsa_oaep_md(context.get(), EVP_sha1()) <= 0 ||
-		EVP_PKEY_CTX_set_rsa_mgf1_md(context.get(), EVP_sha1()) <= 0) {
+		EVP_PKEY_CTX_set_rsa_oaep_md(context.get(), EVP_sha1()) <= 0 || // NOSONAR(cpp:S4790): test client must match MySQL OAEP SHA-1.
+		EVP_PKEY_CTX_set_rsa_mgf1_md(context.get(), EVP_sha1()) <= 0) { // NOSONAR(cpp:S4790): test client must match MySQL MGF1 SHA-1.
 		return {};
 	}
 	size_t ciphertext_length = 0;
@@ -245,10 +249,10 @@ int main() {
 	plan(45);
 
 	MySQL_Caching_Sha2_RSA manager;
-	CachingSha2RSAConfig config;
+	MySQL_Caching_Sha2_RSA_Config config;
 	config.auto_generate = false;
 
-	const CachingSha2RSAReloadResult result = manager.reload(config);
+	const MySQL_Caching_Sha2_RSA_Reload_Result result = manager.reload(config);
 
 	ok(result.accepted,
 		"empty key paths are accepted when automatic generation is disabled");
@@ -262,8 +266,8 @@ int main() {
 	config.datadir = temp_dir.path();
 	config.private_key_path = "private.pem";
 	config.public_key_path = "public.pem";
-	const mode_t previous_umask = umask(0077);
-	const CachingSha2RSAReloadResult generated = manager.reload(config);
+	const mode_t previous_umask = umask(0077); // NOSONAR(cpp:S5849): test temporarily restricts generated-file permissions and restores the previous mask.
+	const MySQL_Caching_Sha2_RSA_Reload_Result generated = manager.reload(config);
 	umask(previous_umask);
 	const auto snapshot = manager.acquire();
 
@@ -290,7 +294,7 @@ int main() {
 	ok(first_line(temp_dir.path() + "/private.pem") == "-----BEGIN PRIVATE KEY-----\n",
 		"generated private key uses unencrypted PKCS#8 PEM format");
 
-	const CachingSha2RSAReloadResult unchanged = manager.reload(config);
+	const MySQL_Caching_Sha2_RSA_Reload_Result unchanged = manager.reload(config);
 	ok(unchanged.accepted, "an unchanged valid key pair reload is accepted");
 	ok(!unchanged.changed, "an unchanged valid key pair reload is a no-op");
 	ok(manager.acquire() == snapshot, "an unchanged reload retains the published snapshot");
@@ -327,23 +331,23 @@ int main() {
 		scramble, sizeof(scramble), decrypted_password
 	), "RSA manager rejects decrypted plaintext without one trailing NUL");
 
-	CachingSha2RSAConfig invalid_config = config;
+	MySQL_Caching_Sha2_RSA_Config invalid_config = config;
 	invalid_config.public_key_path.clear();
-	const CachingSha2RSAReloadResult partial_paths = manager.reload(invalid_config);
+	const MySQL_Caching_Sha2_RSA_Reload_Result partial_paths = manager.reload(invalid_config);
 	ok(!partial_paths.accepted, "reload rejects a configuration with only one key path");
 	ok(manager.acquire() == snapshot, "rejected path configuration preserves the active snapshot");
 
-	chmod((temp_dir.path() + "/private.pem").c_str(), 0644);
-	const CachingSha2RSAReloadResult insecure_permissions = manager.reload(config);
+	chmod((temp_dir.path() + "/private.pem").c_str(), 0644); // NOSONAR(cpp:S2612): deliberate insecure-mode negative test.
+	const MySQL_Caching_Sha2_RSA_Reload_Result insecure_permissions = manager.reload(config);
 	ok(!insecure_permissions.accepted, "reload rejects group-readable private keys");
 	ok(manager.acquire() == snapshot, "rejected private-key permissions preserve the active snapshot");
 	chmod((temp_dir.path() + "/private.pem").c_str(), 0600);
 
 	const std::string public_link = temp_dir.path() + "/public-link.pem";
 	const int symlink_rc = symlink((temp_dir.path() + "/public.pem").c_str(), public_link.c_str());
-	CachingSha2RSAConfig symlink_config = config;
+	MySQL_Caching_Sha2_RSA_Config symlink_config = config;
 	symlink_config.public_key_path = "public-link.pem";
-	const CachingSha2RSAReloadResult symlink_result = manager.reload(symlink_config);
+	const MySQL_Caching_Sha2_RSA_Reload_Result symlink_result = manager.reload(symlink_config);
 	ok(symlink_rc == 0 && !symlink_result.accepted,
 		"reload rejects a symbolic link used as a key path");
 	ok(manager.acquire() == snapshot,
@@ -352,9 +356,9 @@ int main() {
 
 	TempDir rotated_dir;
 	ok(!rotated_dir.path().empty(), "created an isolated rotation directory");
-	CachingSha2RSAConfig rotated_config = config;
+	MySQL_Caching_Sha2_RSA_Config rotated_config = config;
 	rotated_config.datadir = rotated_dir.path();
-	const CachingSha2RSAReloadResult rotated = manager.reload(rotated_config);
+	const MySQL_Caching_Sha2_RSA_Reload_Result rotated = manager.reload(rotated_config);
 	const auto rotated_snapshot = manager.acquire();
 	ok(rotated.accepted && rotated.changed && rotated.available,
 		"reload publishes a newly generated valid key pair");
@@ -365,33 +369,33 @@ int main() {
 	) && decrypted_password == expected_password,
 		"an acquired old snapshot remains usable after key rotation");
 
-	CachingSha2RSAConfig mismatched_config;
+	MySQL_Caching_Sha2_RSA_Config mismatched_config;
 	mismatched_config.auto_generate = false;
 	mismatched_config.private_key_path = temp_dir.path() + "/private.pem";
 	mismatched_config.public_key_path = rotated_dir.path() + "/public.pem";
-	const CachingSha2RSAReloadResult mismatched = manager.reload(mismatched_config);
+	const MySQL_Caching_Sha2_RSA_Reload_Result mismatched = manager.reload(mismatched_config);
 	ok(!mismatched.accepted, "reload rejects mismatched RSA private and public keys");
 	ok(manager.acquire() == rotated_snapshot,
 		"rejected mismatched keys preserve the rotated snapshot");
 
-	CachingSha2RSAConfig missing_config;
+	MySQL_Caching_Sha2_RSA_Config missing_config;
 	missing_config.auto_generate = false;
 	missing_config.datadir = rotated_dir.path();
 	missing_config.private_key_path = "missing-private.pem";
 	missing_config.public_key_path = "missing-public.pem";
-	const CachingSha2RSAReloadResult missing = manager.reload(missing_config);
+	const MySQL_Caching_Sha2_RSA_Reload_Result missing = manager.reload(missing_config);
 	ok(!missing.accepted, "reload rejects missing configured keys when generation is disabled");
 	ok(manager.acquire() == rotated_snapshot,
 		"rejected missing keys preserve the rotated snapshot");
 
 	const std::string escaped_parent = temp_dir.path() + "/escaped-parent";
 	const int parent_symlink_rc = symlink(rotated_dir.path().c_str(), escaped_parent.c_str());
-	CachingSha2RSAConfig escaped_config;
+	MySQL_Caching_Sha2_RSA_Config escaped_config;
 	escaped_config.auto_generate = false;
 	escaped_config.datadir = temp_dir.path();
 	escaped_config.private_key_path = "escaped-parent/private.pem";
 	escaped_config.public_key_path = "escaped-parent/public.pem";
-	const CachingSha2RSAReloadResult escaped = manager.reload(escaped_config);
+	const MySQL_Caching_Sha2_RSA_Reload_Result escaped = manager.reload(escaped_config);
 	ok(parent_symlink_rc == 0 && !escaped.accepted,
 		"relative key paths cannot escape the datadir through a symlinked parent");
 	unlink(escaped_parent.c_str());
@@ -401,14 +405,14 @@ int main() {
 		"proxysql-rsa-escape-private-" + std::to_string(static_cast<long>(getpid())) + ".pem";
 	const std::string lexical_public =
 		"proxysql-rsa-escape-public-" + std::to_string(static_cast<long>(getpid())) + ".pem";
-	CachingSha2RSAConfig lexical_escape_config;
+	MySQL_Caching_Sha2_RSA_Config lexical_escape_config;
 	lexical_escape_config.auto_generate = true;
 	lexical_escape_config.datadir = temp_dir.path();
 	lexical_escape_config.private_key_path = "../" + lexical_private;
 	lexical_escape_config.public_key_path = "../" + lexical_public;
-	const CachingSha2RSAReloadResult lexical_escape = manager.reload(lexical_escape_config);
-	const std::string lexical_private_path = "/tmp/" + lexical_private;
-	const std::string lexical_public_path = "/tmp/" + lexical_public;
+	const MySQL_Caching_Sha2_RSA_Reload_Result lexical_escape = manager.reload(lexical_escape_config);
+	const std::string lexical_private_path = "/tmp/" + lexical_private; // NOSONAR(cpp:S5443): negative test asserts traversal cannot create this path.
+	const std::string lexical_public_path = "/tmp/" + lexical_public; // NOSONAR(cpp:S5443): negative test asserts traversal cannot create this path.
 	ok(!lexical_escape.accepted && access(lexical_private_path.c_str(), F_OK) != 0 &&
 		access(lexical_public_path.c_str(), F_OK) != 0,
 		"relative parent-directory components cannot generate keys outside the datadir");
@@ -419,19 +423,19 @@ int main() {
 	const bool traditional_written = write_traditional_private_key(
 		temp_dir.path() + "/private.pem", traditional_path
 	);
-	CachingSha2RSAConfig traditional_config;
+	MySQL_Caching_Sha2_RSA_Config traditional_config;
 	traditional_config.auto_generate = false;
 	traditional_config.private_key_path = traditional_path;
 	traditional_config.public_key_path = temp_dir.path() + "/public.pem";
-	const CachingSha2RSAReloadResult traditional = manager.reload(traditional_config);
+	const MySQL_Caching_Sha2_RSA_Reload_Result traditional = manager.reload(traditional_config);
 	ok(traditional_written && !traditional.accepted,
 		"reload rejects a traditional PKCS#1 RSA private-key PEM");
 
 	const std::string malformed_path = temp_dir.path() + "/malformed-private.pem";
 	const bool malformed_written = write_malformed_private_key(malformed_path);
-	CachingSha2RSAConfig malformed_config = traditional_config;
+	MySQL_Caching_Sha2_RSA_Config malformed_config = traditional_config;
 	malformed_config.private_key_path = malformed_path;
-	const CachingSha2RSAReloadResult malformed = manager.reload(malformed_config);
+	const MySQL_Caching_Sha2_RSA_Reload_Result malformed = manager.reload(malformed_config);
 	ok(malformed_written && !malformed.accepted,
 		"reload rejects malformed PKCS#8 private-key data");
 
@@ -441,11 +445,11 @@ int main() {
 	const bool encrypted_written = write_pkcs8_key_pair(
 		encrypted_key.get(), encrypted_private, encrypted_public, true
 	);
-	CachingSha2RSAConfig encrypted_config;
+	MySQL_Caching_Sha2_RSA_Config encrypted_config;
 	encrypted_config.auto_generate = false;
 	encrypted_config.private_key_path = encrypted_private;
 	encrypted_config.public_key_path = encrypted_public;
-	const CachingSha2RSAReloadResult encrypted = manager.reload(encrypted_config);
+	const MySQL_Caching_Sha2_RSA_Reload_Result encrypted = manager.reload(encrypted_config);
 	ok(encrypted_written && !encrypted.accepted,
 		"reload rejects an encrypted PKCS#8 RSA private key");
 
@@ -455,11 +459,11 @@ int main() {
 	const bool ec_written = write_pkcs8_key_pair(
 		ec_key.get(), ec_private, ec_public
 	);
-	CachingSha2RSAConfig ec_config;
+	MySQL_Caching_Sha2_RSA_Config ec_config;
 	ec_config.auto_generate = false;
 	ec_config.private_key_path = ec_private;
 	ec_config.public_key_path = ec_public;
-	const CachingSha2RSAReloadResult ec = manager.reload(ec_config);
+	const MySQL_Caching_Sha2_RSA_Reload_Result ec = manager.reload(ec_config);
 	ok(ec_written && !ec.accepted,
 		"reload rejects a matching non-RSA PKCS#8 key pair");
 
@@ -468,18 +472,18 @@ int main() {
 	const bool trailing_private_written = write_pkcs8_key_pair(
 		encrypted_key.get(), trailing_private, trailing_public
 	) && append_text(trailing_private, "unexpected trailing data\n");
-	CachingSha2RSAConfig trailing_config;
+	MySQL_Caching_Sha2_RSA_Config trailing_config;
 	trailing_config.auto_generate = false;
 	trailing_config.private_key_path = trailing_private;
 	trailing_config.public_key_path = trailing_public;
-	const CachingSha2RSAReloadResult trailing_private_result = manager.reload(trailing_config);
+	const MySQL_Caching_Sha2_RSA_Reload_Result trailing_private_result = manager.reload(trailing_config);
 	ok(trailing_private_written && !trailing_private_result.accepted,
 		"reload rejects trailing data after a PKCS#8 private key");
 
 	const bool trailing_public_written = write_pkcs8_key_pair(
 		encrypted_key.get(), trailing_private, trailing_public
 	) && append_text(trailing_public, "unexpected trailing data\n");
-	const CachingSha2RSAReloadResult trailing_public_result = manager.reload(trailing_config);
+	const MySQL_Caching_Sha2_RSA_Reload_Result trailing_public_result = manager.reload(trailing_config);
 	ok(trailing_public_written && !trailing_public_result.accepted,
 		"reload rejects trailing data after an SPKI public key");
 
@@ -492,41 +496,41 @@ int main() {
 		const bool weak_written = write_pkcs8_key_pair(
 			weak_key.get(), weak_private, weak_public
 		);
-		CachingSha2RSAConfig weak_config;
+		MySQL_Caching_Sha2_RSA_Config weak_config;
 		weak_config.auto_generate = false;
 		weak_config.private_key_path = weak_private;
 		weak_config.public_key_path = weak_public;
-		const CachingSha2RSAReloadResult weak = manager.reload(weak_config);
+		const MySQL_Caching_Sha2_RSA_Reload_Result weak = manager.reload(weak_config);
 		ok(weak_written && !weak.accepted,
 			"reload rejects a matching RSA key pair weaker than 2048 bits");
 	}
 
 	TempDir collision_dir;
-	CachingSha2RSAConfig collision_config;
+	MySQL_Caching_Sha2_RSA_Config collision_config;
 	collision_config.auto_generate = true;
 	collision_config.datadir = collision_dir.path();
 	collision_config.private_key_path = "private.pem";
 	collision_config.public_key_path = "private.pem.lock";
-	const CachingSha2RSAReloadResult collision = manager.reload(collision_config);
+	const MySQL_Caching_Sha2_RSA_Reload_Result collision = manager.reload(collision_config);
 	ok(!collision.accepted &&
 		access((collision_dir.path() + "/private.pem").c_str(), F_OK) != 0 &&
 		access((collision_dir.path() + "/private.pem.lock").c_str(), F_OK) != 0,
 		"generation rejects a public target that collides with the lock namespace without creating files");
 
 	TempDir concurrent_dir;
-	CachingSha2RSAConfig concurrent_config;
+	MySQL_Caching_Sha2_RSA_Config concurrent_config;
 	concurrent_config.auto_generate = true;
 	concurrent_config.datadir = concurrent_dir.path();
 	concurrent_config.private_key_path = "private.pem";
 	concurrent_config.public_key_path = "public.pem";
 	MySQL_Caching_Sha2_RSA concurrent_manager_one;
 	MySQL_Caching_Sha2_RSA concurrent_manager_two;
-	CachingSha2RSAReloadResult concurrent_result_one;
-	CachingSha2RSAReloadResult concurrent_result_two;
-	std::thread first_reload([&]() {
+	MySQL_Caching_Sha2_RSA_Reload_Result concurrent_result_one;
+	MySQL_Caching_Sha2_RSA_Reload_Result concurrent_result_two;
+	std::thread first_reload([&concurrent_result_one, &concurrent_manager_one, &concurrent_config]() {
 		concurrent_result_one = concurrent_manager_one.reload(concurrent_config);
 	});
-	std::thread second_reload([&]() {
+	std::thread second_reload([&concurrent_result_two, &concurrent_manager_two, &concurrent_config]() {
 		concurrent_result_two = concurrent_manager_two.reload(concurrent_config);
 	});
 	first_reload.join();

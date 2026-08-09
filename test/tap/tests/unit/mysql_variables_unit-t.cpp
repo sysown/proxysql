@@ -124,7 +124,7 @@ static void free_variables_list(char **variables) {
 static void test_caching_sha2_rsa_commit_is_atomic() {
 	test_globals_init();
 	char path_template[] = "/tmp/proxysql-mth-caching-sha2-rsa-XXXXXX";
-	char *temporary_directory = mkdtemp(path_template);
+	char *temporary_directory = mkdtemp(path_template); // NOSONAR(cpp:S5443): mkdtemp atomically creates a unique owner-only test directory.
 	ok(temporary_directory != nullptr, "created an isolated handler RSA directory");
 	if (temporary_directory == nullptr) {
 		test_globals_cleanup();

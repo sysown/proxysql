@@ -149,8 +149,8 @@ int main() {
 
 	const string suffix = std::to_string(static_cast<long>(getpid()));
 	const string username = "tap5988_" + suffix;
-	const string password = "issue5988-secret";
-	const string wrong_password = "issue5988-wrong";
+	const string password = "issue5988-secret"; // NOSONAR(cpp:S2068): deterministic process-local E2E test credential.
+	const string wrong_password = "issue5988-wrong"; // NOSONAR(cpp:S2068): deliberate authentication-rejection test credential.
 	const string comment = "reg_test_5988_" + suffix;
 	const long rule_id = 598800000L + (static_cast<long>(getpid()) % 100000L);
 	const string test_private_key = comment + "-private.pem";

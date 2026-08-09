@@ -69,6 +69,10 @@ class ScopedStringCleanser {
 			OPENSSL_cleanse(value_.data(), value_.size());
 		}
 	}
+	ScopedStringCleanser(const ScopedStringCleanser&) = delete;
+	ScopedStringCleanser& operator=(const ScopedStringCleanser&) = delete;
+	ScopedStringCleanser(ScopedStringCleanser&&) = delete;
+	ScopedStringCleanser& operator=(ScopedStringCleanser&&) = delete;
 };
 
 } // namespace
@@ -1797,6 +1801,7 @@ int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyPr
 		}
 
 		std::string plaintext_password;
+		ScopedStringCleanser plaintext_password_cleanser(plaintext_password);
 		if (!GloMTH->caching_sha2_rsa()->decrypt_password(
 				key_snapshot,
 				pkt,
@@ -1810,13 +1815,22 @@ int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyPr
 			return 1;
 		}
 
-		vars1.pass_len = plaintext_password.size();
-		vars1.pass = static_cast<unsigned char *>(malloc(vars1.pass_len + 1));
-		if (vars1.pass_len != 0) {
-			memcpy(vars1.pass, plaintext_password.data(), vars1.pass_len);
-			OPENSSL_cleanse(plaintext_password.data(), plaintext_password.size());
+		const size_t plaintext_password_length = plaintext_password.size();
+		unsigned char* plaintext_password_copy = static_cast<unsigned char *>(
+			malloc(plaintext_password_length + 1)
+		);
+		if (plaintext_password_copy == nullptr) {
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
+				"Session=%p , DS=%p , user='%s' . Cannot allocate caching_sha2_password RSA response\n",
+				(*myds)->sess, (*myds), vars1.user);
+			return 1;
 		}
-		vars1.pass[vars1.pass_len] = '\0';
+		if (plaintext_password_length != 0) {
+			memcpy(plaintext_password_copy, plaintext_password.data(), plaintext_password_length);
+		}
+		plaintext_password_copy[plaintext_password_length] = '\0';
+		vars1.pass_len = plaintext_password_length;
+		vars1.pass = plaintext_password_copy;
 		vars1.pass_is_sensitive = true;
 		vars1.db = (*myds)->myconn->userinfo->schemaname;
 		vars1.charset = (*myds)->tmp_charset;

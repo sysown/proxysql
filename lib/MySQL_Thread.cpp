@@ -1603,13 +1603,13 @@ MySQLThreadsCommitResult MySQL_Threads_Handler::commit() {
 		? variables.caching_sha2_password_private_key_path : "";
 	const char *public_path = variables.caching_sha2_password_public_key_path != nullptr
 		? variables.caching_sha2_password_public_key_path : "";
-	CachingSha2RSAConfig rsa_config {
+	MySQL_Caching_Sha2_RSA_Config rsa_config {
 		variables.caching_sha2_password_auto_generate_rsa_keys,
 		private_path,
 		public_path,
 		GloVars.datadir != nullptr ? GloVars.datadir : ""
 	};
-	CachingSha2RSAReloadResult rsa_reload = caching_sha2_rsa_manager_->reload(rsa_config);
+	MySQL_Caching_Sha2_RSA_Reload_Result rsa_reload = caching_sha2_rsa_manager_->reload(rsa_config);
 	if (rsa_reload.accepted) {
 		caching_sha2_rsa_accepted_auto_generate_ = rsa_config.auto_generate;
 		caching_sha2_rsa_accepted_private_path_ = rsa_config.private_key_path;
@@ -1632,13 +1632,13 @@ MySQLThreadsCommitResult MySQL_Threads_Handler::commit() {
 			bool default_accepted = false;
 			std::string default_error = rsa_reload.error;
 			if (!candidate_is_default) {
-				CachingSha2RSAConfig fallback_config {
+				MySQL_Caching_Sha2_RSA_Config fallback_config {
 					true,
 					default_private_path,
 					default_public_path,
 					rsa_config.datadir
 				};
-				const CachingSha2RSAReloadResult fallback = caching_sha2_rsa_manager_->reload(fallback_config);
+				const MySQL_Caching_Sha2_RSA_Reload_Result fallback = caching_sha2_rsa_manager_->reload(fallback_config);
 				default_accepted = fallback.accepted;
 				default_error = fallback.error;
 			}
@@ -1647,8 +1647,8 @@ MySQLThreadsCommitResult MySQL_Threads_Handler::commit() {
 				caching_sha2_rsa_accepted_private_path_ = default_private_path;
 				caching_sha2_rsa_accepted_public_path_ = default_public_path;
 			} else {
-				CachingSha2RSAConfig disabled_config { false, "", "", rsa_config.datadir };
-				const CachingSha2RSAReloadResult disabled =
+				MySQL_Caching_Sha2_RSA_Config disabled_config { false, "", "", rsa_config.datadir };
+				const MySQL_Caching_Sha2_RSA_Reload_Result disabled =
 					caching_sha2_rsa_manager_->reload(disabled_config);
 				if (!disabled.accepted) {
 					proxy_error("Failed to disable unavailable caching_sha2_password RSA configuration: %s\n",

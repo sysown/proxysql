@@ -9,7 +9,7 @@
 #ifdef PROXYSQL31
 #include <memory>
 
-class CachingSha2RSAKeySnapshot;
+class MySQL_Caching_Sha2_RSA_Key_Snapshot;
 
 enum class MySQLFrontendAuthError : uint8_t {
 	NONE = 0,
@@ -156,7 +156,7 @@ class MySQL_Protocol {
 	uint16_t prot_status;
 	bool more_data_needed;
 #ifdef PROXYSQL31
-	std::shared_ptr<const CachingSha2RSAKeySnapshot> caching_sha2_rsa_snapshot_;
+	std::shared_ptr<const MySQL_Caching_Sha2_RSA_Key_Snapshot> caching_sha2_rsa_snapshot_;
 	MySQLFrontendAuthError frontend_auth_error_ { MySQLFrontendAuthError::NONE };
 #endif
 	MySQL_Data_Stream *get_myds() { return *myds; }
