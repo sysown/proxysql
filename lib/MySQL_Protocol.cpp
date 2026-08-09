@@ -1201,6 +1201,29 @@ void ch_account_to_my(account_details_t& account, ch_account_details_t& ch_accou
 }
 #endif /* PROXYSQLCLICKHOUSE */
 
+/**
+ * @brief Can 'need' bytes be read from the client's authentication response?
+ * @details The response buffer is heap-allocated from a CLIENT-CONTROLLED length
+ *   as 'malloc(pass_len + 1)', with a terminating NUL written at [pass_len], so
+ *   exactly 'pass_len + 1' bytes are readable. Nothing in the packet parsing
+ *   enforces a minimum: a client may send a 1-byte response and get a 2-byte
+ *   allocation. The fixed-width comparisons below read SHA_DIGEST_LENGTH (20) or
+ *   SHA256_DIGEST_LENGTH (32) bytes, so without this check they read past the end
+ *   of the allocation, before authentication has succeeded.
+ *
+ *   Do NOT tighten this to 'pass_len == need'. 'pass_len' is not the amount of
+ *   valid data in the buffer: the packet parser strips a trailing NUL from the
+ *   client's response ("remove the extra 0 if present"), so a legitimate 20-byte
+ *   native response whose last byte is 0x00 -- about 1 in 256 -- arrives with
+ *   pass_len == 19 while all 20 bytes are present. An equality gate therefore
+ *   rejects real logins intermittently; measured at 20 spurious denials across
+ *   ~6520 connections in test_auth_methods-t. Comparing against the allocation
+ *   size ('pass_len + 1') admits that case and still bounds the read.
+ */
+static inline bool auth_response_has(int64_t pass_len, size_t need) {
+	return pass_len >= 0 && static_cast<uint64_t>(pass_len) + 1 >= need;
+}
+
 bool MySQL_Protocol::process_pkt_auth_swich_response(unsigned char *pkt, unsigned int len) {
 	bool ret=false;
 	char *password=NULL;
@@ -1251,6 +1274,10 @@ bool MySQL_Protocol::process_pkt_auth_swich_response(unsigned char *pkt, unsigne
 
 			if (password[0]!='*') { // clear text password
 				proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
+				// No bounds check needed here: 'len' is validated to be exactly
+				// sizeof(mysql_hdr)+20 above, and 'pass' is a zeroed 128-byte stack
+				// buffer holding those 20 bytes. Unlike the PPHR_* paths, nothing
+				// here is sized from a client-declared length.
 				if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
 					ret=true;
 				}
@@ -1298,7 +1325,8 @@ bool MySQL_Protocol::verify_user_pass(
 	if (password[0]!='*') { // clear text password
 		if (auth_plugin_id == 0) { // mysql_native_password
 			proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
-			if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
+			if (auth_response_has(pass_len, SHA_DIGEST_LENGTH) &&
+				memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
 				ret=true;
 			}
 		} else if (auth_plugin_id == 1) { // mysql_clear_password
@@ -1324,11 +1352,16 @@ bool MySQL_Protocol::verify_user_pass(
 		}
 	} else {
 		if (auth_plugin_id == 0) {
-			if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE) {
+			// proxy_scramble_sha1() feeds 'pass' to proxy_my_crypt() for
+			// SCRAMBLE_LENGTH (20) bytes, so it needs the same bound as the
+			// cleartext branch above. This is the COMMON path -- stored passwords are
+			// normally hashed ('*'-prefixed).
+			if ((session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE) &&
+				auth_response_has(pass_len, SCRAMBLE_LENGTH)) {
 				ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
 				if (ret) {
 					if (sha1_pass==NULL) {
-						GloMyAuth->set_SHA1((char *)user, cred_scope_for_session(session_type),reply);
+						GloMyAuth->set_SHA1(user, cred_scope_for_session(session_type),reply);
 					}
 					if (userinfo->sha1_pass) free(userinfo->sha1_pass);
 					userinfo->sha1_pass=sha1_pass_hex(reply);
@@ -1346,7 +1379,7 @@ bool MySQL_Protocol::verify_user_pass(
 				if (strcasecmp(double_hashed_password,password)==0) {
 					ret = true;
 					if (sha1_pass==NULL) {
-						GloMyAuth->set_SHA1((char *)user, cred_scope_for_session(session_type),md1_buf);
+						GloMyAuth->set_SHA1(user, cred_scope_for_session(session_type),md1_buf);
 					}
 					if (userinfo->sha1_pass)
 						free(userinfo->sha1_pass);
@@ -2076,7 +2109,8 @@ void MySQL_Protocol::PPHR_5passwordTrue(
 static bool caching_sha2_fast_auth_verify(
 	const char* cleartext_password,
 	const char* scramble,
-	const unsigned char* client_response
+	const unsigned char* client_response,
+	int64_t client_response_len
 );
 
 /**
@@ -2121,7 +2155,9 @@ void MySQL_Protocol::PPHR_5passwordFalse_0(
 			// ("remove the extra 0 if present"), so a legitimate 20-byte native
 			// response whose last byte is 0x00 -- about 1 in 256 -- arrives with
 			// pass_len == 19 while all 20 bytes are present in the buffer.
-			verified = (memcmp(reply, vars1.pass, SHA_DIGEST_LENGTH) == 0);
+			verified =
+				auth_response_has(vars1.pass_len, SHA_DIGEST_LENGTH) &&
+				(memcmp(reply, vars1.pass, SHA_DIGEST_LENGTH) == 0);
 			break;
 
 		case AUTH_MYSQL_CACHING_SHA2_PASSWORD:
@@ -2134,7 +2170,7 @@ void MySQL_Protocol::PPHR_5passwordFalse_0(
 			} else {
 				verified = caching_sha2_fast_auth_verify(
 					mysql_thread___monitor_password, (*myds)->myconn->scramble_buff,
-					vars1.pass
+					vars1.pass, vars1.pass_len
 				);
 			}
 			break;
@@ -2296,20 +2332,29 @@ void MySQL_Protocol::PPHR_5passwordFalse_auth2(
  * @param cleartext_password The password ProxySQL holds, NUL-terminated.
  * @param scramble The 20-byte connection scramble.
  * @param client_response The response bytes sent by the client.
+ * @param client_response_len The client-declared response length, i.e. the
+ *   'pass_len' the buffer was allocated from. See @ref auth_response_has: the
+ *   allocation is 'client_response_len + 1' bytes, and this function reads a
+ *   fixed SHA256_DIGEST_LENGTH (32), so a short response would otherwise be read
+ *   past its end before authentication.
  * @return true when the response matches.
  */
 static bool caching_sha2_fast_auth_verify(
 	const char* cleartext_password,
 	const char* scramble,
-	const unsigned char* client_response
+	const unsigned char* client_response,
+	int64_t client_response_len
 ) {
-	// Deliberately NOT length-checked against 'vars1.pass_len'. That field is not
-	// the amount of valid data in the response buffer: PPHR_2 strips a trailing
-	// NUL byte ("remove the extra 0 if present"), so a legitimate 32-byte
-	// caching_sha2 response ending in 0x00 -- about 1 in 256 -- reports
-	// pass_len == 31 while all 32 bytes are present. Gating on it rejects real
+	// Bounds the 32-byte compare below against the allocation, NOT against an
+	// exact length. 'client_response_len' is not the amount of valid data: PPHR_2
+	// strips a trailing NUL byte ("remove the extra 0 if present"), so a
+	// legitimate 32-byte caching_sha2 response ending in 0x00 -- about 1 in 256 --
+	// reports 31 while all 32 bytes are present. An equality gate rejects real
 	// logins intermittently; measured at 20 spurious denials across ~6520
 	// connections in test_auth_methods-t.
+	if (auth_response_has(client_response_len, SHA256_DIGEST_LENGTH) == false) {
+		return false;
+	}
 	if (cleartext_password == NULL || client_response == NULL) {
 		return false;
 	}
@@ -2339,7 +2384,7 @@ void MySQL_Protocol::PPHR_6auth2(
 	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
 		if (
 			caching_sha2_fast_auth_verify(
-				vars1.password, (*myds)->myconn->scramble_buff, vars1.pass
+				vars1.password, (*myds)->myconn->scramble_buff, vars1.pass, vars1.pass_len
 			)
 		) {
 			ret = true;
@@ -2354,7 +2399,10 @@ void MySQL_Protocol::PPHR_7auth1(
 	account_details_t& attr1
 ) {
 	enum proxysql_session_type session_type = (*myds)->sess->session_type;
-	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
+	// As in verify_user_pass(): proxy_scramble_sha1() reads SCRAMBLE_LENGTH (20)
+	// bytes from 'vars1.pass', which is sized from the client-declared length.
+	if ((session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) &&
+		auth_response_has(vars1.pass_len, SCRAMBLE_LENGTH)) {
 		ret=proxy_scramble_sha1((char *)vars1.pass,(*myds)->myconn->scramble_buff,vars1.password+1, reply);
 		if (ret) {
 			if (attr1.sha1_pass==NULL) {
@@ -3031,7 +3079,9 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 			} else if (vars1.password[0]!='*') { // clear text password
 				if (auth_plugin_id == AUTH_MYSQL_NATIVE_PASSWORD) { // mysql_native_password
 					proxy_scramble(reply, (*myds)->myconn->scramble_buff, vars1.password);
-					if (vars1.pass_len != 0 && memcmp(reply, vars1.pass, SHA_DIGEST_LENGTH)==0) {
+					if (vars1.pass_len != 0 &&
+						auth_response_has(vars1.pass_len, SHA_DIGEST_LENGTH) &&
+						memcmp(reply, vars1.pass, SHA_DIGEST_LENGTH)==0) {
 						ret=true;
 					}
 				} else if (auth_plugin_id == AUTH_MYSQL_CLEAR_PASSWORD)  { // mysql_clear_password
