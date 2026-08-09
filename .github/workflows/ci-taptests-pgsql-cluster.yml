@@ -13,6 +13,7 @@ env:
 jobs:
   pick-runner:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     permissions:
       actions: read
     outputs:
@@ -59,6 +60,7 @@ jobs:
   tests:
     needs: pick-runner
     runs-on: ${{ fromJson(needs.pick-runner.outputs.runson) }}
+    timeout-minutes: 120
     permissions: write-all
     strategy:
       fail-fast: false

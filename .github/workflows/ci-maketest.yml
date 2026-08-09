@@ -15,6 +15,7 @@ env:
 jobs:
   builds:
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:

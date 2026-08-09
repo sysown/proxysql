@@ -15,6 +15,7 @@ env:
 jobs:
   clean:
     runs-on: ubuntu-24.04
+    timeout-minutes: 120
     outputs:
       gitdescribe: ${{ steps.gitdescribe.outputs.gitdescribe }}
     steps:
@@ -53,6 +54,7 @@ jobs:
    
   select:
     runs-on: ubuntu-24.04
+    timeout-minutes: 120
     outputs:
       dists: ${{ steps.select.outputs.dists }}
     steps:
@@ -108,6 +110,7 @@ jobs:
             type: '-dbg'
 
     runs-on: ubuntu-24.04${{ matrix.arch == 'arm64' && '-arm' || '' }}
+    timeout-minutes: 120
     env:
       ARCH: ${{ matrix.arch }}
       DIST: ${{ matrix.dist }}
@@ -163,6 +166,7 @@ jobs:
 
   finalize:
     runs-on: ubuntu-24.04
+    timeout-minutes: 120
     needs: [ clean, select, build ]
     steps:
     - name: Update release

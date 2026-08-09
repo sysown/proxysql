@@ -35,6 +35,7 @@ jobs:
   # image ships protobuf 5.x; ubuntu-22.04 packages only protobuf 3.x).
   unit-tests:
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
     permissions: write-all
     steps:
       - uses: LouisBrunner/checks-action@v2.0.0
@@ -234,6 +235,7 @@ jobs:
   # arrangement.
   e2e-tests:
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
     needs: unit-tests
     permissions: write-all
     steps:
@@ -507,6 +509,7 @@ jobs:
   # mysqlx-soak/env.sh.
   soak-tests:
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
     needs: unit-tests
     strategy:
       fail-fast: false

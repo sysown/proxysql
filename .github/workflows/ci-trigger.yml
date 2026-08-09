@@ -7,6 +7,7 @@ on:
 jobs:
   trigger:
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
 
     steps:
     - name: Trigger workflow_run[in_progress]

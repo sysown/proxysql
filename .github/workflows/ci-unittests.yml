@@ -13,6 +13,7 @@ env:
 jobs:
   tests:
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
     env:
       BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu22-tap_src
       MATRIX: '(unit-tests-g1)'
