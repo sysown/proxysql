@@ -226,6 +226,9 @@ jobs:
         echo "No coverage report was produced; skipping Codecov upload."
 
     - name: Upload coverage to Codecov
+      id: codecov_1
+      if: ${{ !cancelled() && hashFiles('proxysql/ci_infra_logs/**/coverage-report/*.info') != '' }}
+      continue-on-error: true
       # Send the LCOV .info file fastcov produces in run-tests-isolated.bash
       # (under proxysql/ci_infra_logs/ci-mariadb10-galera-g7/coverage-report/) to
       # Codecov. The proxysql binary was built WITHGCOV=1 (-tap-genai-gcov
@@ -239,12 +242,11 @@ jobs:
       # repo has no CODECOV_TOKEN secret and Codecov rejects tokenless
       # legacy uploads with "branch is protected" HTTP 400.
       #
-      # `fail_ci_if_error: false` so a Codecov outage never fails the
+      # `fail_ci_if_error: true` so a Codecov outage never fails the
       # whole TAP group; `!cancelled()` so coverage uploads even when
       # the test step itself reported a failure (partial coverage is
       # still useful diagnostically).
-      if: ${{ !cancelled() && hashFiles('proxysql/ci_infra_logs/**/coverage-report/*.info') != '' }}
-      uses: codecov/codecov-action@v4
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
       with:
         codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
         override_commit: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
@@ -270,9 +272,58 @@ jobs:
         plugins: noop
         root_dir: proxysql
         disable_file_fixes: true
-        fail_ci_if_error: false
+        fail_ci_if_error: true
         verbose: true
 
+    - name: Wait before Codecov retry 1
+      if: ${{ !cancelled() && steps.codecov_1.outcome == 'failure' }}
+      run: sleep 15
+
+    - name: Upload coverage to Codecov (retry 1)
+      id: codecov_2
+      if: ${{ !cancelled() && steps.codecov_1.outcome == 'failure' }}
+      continue-on-error: true
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
+      with:
+        codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
+        override_commit: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+        files: proxysql/ci_infra_logs/ci-mariadb10-galera-g7/coverage-report/ci-mariadb10-galera-g7.info
+        flags: integration-tests
+        name: tap-mariadb10-galera-g7-coverage
+        use_oidc: true
+        disable_search: true
+        plugins: noop
+        root_dir: proxysql
+        disable_file_fixes: true
+        fail_ci_if_error: true
+        verbose: true
+
+    - name: Wait before Codecov retry 2
+      if: ${{ !cancelled() && steps.codecov_2.outcome == 'failure' }}
+      run: sleep 45
+
+    - name: Upload coverage to Codecov (retry 2)
+      id: codecov_3
+      if: ${{ !cancelled() && steps.codecov_2.outcome == 'failure' }}
+      continue-on-error: true
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
+      with:
+        codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
+        override_commit: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+        files: proxysql/ci_infra_logs/ci-mariadb10-galera-g7/coverage-report/ci-mariadb10-galera-g7.info
+        flags: integration-tests
+        name: tap-mariadb10-galera-g7-coverage
+        use_oidc: true
+        disable_search: true
+        plugins: noop
+        root_dir: proxysql
+        disable_file_fixes: true
+        fail_ci_if_error: true
+        verbose: true
+
+    - name: Report Codecov upload failure
+      if: ${{ !cancelled() && steps.codecov_3.outcome == 'failure' }}
+      run: echo "::warning::Codecov upload failed after 3 attempts; tests were unaffected."
     - uses: LouisBrunner/checks-action@v2.0.0
       continue-on-error: true
       if: ${{ always() && steps.checks.outputs.check_id != '' }}
