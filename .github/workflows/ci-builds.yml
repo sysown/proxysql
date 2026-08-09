@@ -6,6 +6,11 @@ on:
     inputs:
       trigger:
         type: string
+      trusted:
+        description: Whether the caller may use privileged CI infrastructure.
+        required: false
+        type: boolean
+        default: true
 
 permissions: write-all
 
@@ -45,7 +50,7 @@ jobs:
     # Route to the self-hosted proxysql-ci pool only when: the actor is renecannao
     # (trusted) AND this workflow is listed in the SELFHOSTED_WORKFLOWS repo variable.
     # Otherwise fall back to GitHub-hosted ubuntu-24.04. Empty/absent variable = no routing.
-    runs-on: ${{ (github.actor == 'renecannao' || (inputs.trigger && fromJson(inputs.trigger).event.workflow_run.actor.login == 'renecannao')) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) && fromJson('["self-hosted","proxysql-ci"]') || 'ubuntu-24.04' }}
+    runs-on: ${{ inputs.trusted && ((github.actor == 'renecannao' || (inputs.trigger && fromJson(inputs.trigger).event.workflow_run.actor.login == 'renecannao')) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) && fromJson('["self-hosted","proxysql-ci"]')) || 'ubuntu-24.04' }}
 #    needs: [ lock ]
 #    outputs:
 #      matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -98,7 +103,7 @@ jobs:
 
     - uses: LouisBrunner/checks-action@v2.0.0
       id: checks
-      if: always()
+      if: ${{ inputs.trusted && always() }}
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
         name: '${{ github.workflow }} / ${{ github.job }} ${{ env.MATRIX }}'
@@ -110,6 +115,7 @@ jobs:
     
     - name: Cache check
       id: cache-check
+      if: ${{ inputs.trusted && success() }}
       uses: actions/cache/restore@v4
       with:
         key: ${{ env.BLDCACHE }}_bin
@@ -127,7 +133,7 @@ jobs:
     # and the job fails before it even builds. Reclaim ownership for the runner
     # user first so checkout can clean. No-op on ephemeral GitHub-hosted runners.
     - name: Reclaim workspace ownership (self-hosted contamination guard)
-      if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
+      if: ${{ inputs.trusted && steps.cache-check.outputs.cache-hit != 'true' }}
       run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
 
     - name: Checkout repository
@@ -407,7 +413,7 @@ jobs:
 
     - name: Pack bin cache with zstd-15
       id: cache-pack-bin
-      if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' }}
       # `actions/cache@v4` compresses with zstd level ~3; we pre-compress
       # with zstd -15 to fit more under the 10 GB repo quota. Level 15
       # captures most of the size win (~80% of what --ultra -22 gives
@@ -425,7 +431,7 @@ jobs:
 
     - name: Cache save bin
       id: cache-save-bin
-      if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' }}
       uses: actions/cache/save@v4
       with:
         key: ${{ env.BLDCACHE }}_bin
@@ -434,7 +440,7 @@ jobs:
 
     - name: Cache save src
       id: cache-save-src
-      if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
       uses: actions/cache/save@v4
       with:
         key: ${{ env.BLDCACHE }}_src
@@ -474,7 +480,7 @@ jobs:
 
     - name: Pack test cache with zstd-15
       id: cache-pack-test
-      if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
       # `actions/cache@v4` compresses with zstd level ~3; we pre-compress
       # with zstd -15 to fit more under the 10 GB repo quota. See the
       # bin-cache pack step above for the rationale on dropping from
@@ -490,7 +496,7 @@ jobs:
 
     - name: Cache save test
       id: cache-save-test
-      if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
       uses: actions/cache/save@v4
       with:
         key: ${{ env.BLDCACHE }}_test
@@ -499,7 +505,7 @@ jobs:
 
     - name: Cache save matrix
       id: cache-save-matrix
-      if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
       uses: actions/cache/save@v4
       with:
         key: ${{ env.BLDCACHE }}_matrix
@@ -525,7 +531,7 @@ jobs:
     # computes), NOT the workflow_run default-branch SHA, so names line up
     # without any run-id correlation.
     - name: Pack src + matrix for handoff (zstd-15)
-      if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
       run: |
         command -v zstd >/dev/null || sudo apt-get install -y zstd
         cd proxysql/
@@ -543,7 +549,7 @@ jobs:
         fi
 
     - name: Upload handoff (src)
-      if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
       uses: actions/upload-artifact@v4
       with:
         name: ci-builds-handoff-${{ env.SHA }}-${{ matrix.dist }}${{ matrix.type }}-src
@@ -553,7 +559,7 @@ jobs:
         path: cache_src.tar.zst
 
     - name: Upload handoff (test)
-      if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
       uses: actions/upload-artifact@v4
       with:
         name: ci-builds-handoff-${{ env.SHA }}-${{ matrix.dist }}${{ matrix.type }}-test
@@ -564,7 +570,7 @@ jobs:
         path: cache_test.tar.zst
 
     - name: Upload handoff (matrix)
-      if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
       uses: actions/upload-artifact@v4
       with:
         name: ci-builds-handoff-${{ env.SHA }}-${{ matrix.dist }}${{ matrix.type }}-matrix
@@ -577,7 +583,7 @@ jobs:
     - name: Upload handoff (bin)
       # Only the debian12-dbg build feeds the 3p suites, and they consume bin
       # only. bin is large (.git/ + binaries/), so don't ship it for -tap.
-      if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-dbg') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-dbg') }}
       uses: actions/upload-artifact@v4
       with:
         name: ci-builds-handoff-${{ env.SHA }}-${{ matrix.dist }}${{ matrix.type }}-bin
@@ -592,11 +598,11 @@ jobs:
     # the failure-path artifact upload below can read the whole tree. Runs on
     # every outcome; no-op on GitHub-hosted runners.
     - name: Reclaim workspace ownership (leave runner clean)
-      if: always()
+      if: ${{ inputs.trusted && always() }}
       run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
 
     - name: Archive artifacts
-      if: ${{ failure() && !cancelled() }}
+      if: ${{ inputs.trusted && failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
         name: ci-builds-${{ env.SHA }}-run#${{ github.run_number }}-${{ matrix.dist }}${{ matrix.type }}
@@ -604,7 +610,7 @@ jobs:
           proxysql/
 
     - uses: LouisBrunner/checks-action@v2.0.0
-      if: always()
+      if: ${{ inputs.trusted && always() }}
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
         check_id: ${{ steps.checks.outputs.check_id }}
