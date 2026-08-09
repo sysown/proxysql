@@ -58,6 +58,7 @@ jobs:
       run: test/infra/control/cluster-simulator-ci.bash install
 
     - name: Build simulation test runtime
+      timeout-minutes: 90
       if: steps.simulator-build.outputs.cache-hit != 'true'
       run: test/infra/control/cluster-simulator-ci.bash build
 
@@ -115,6 +116,7 @@ jobs:
       run: test/infra/control/ensure-infras.bash
 
     - name: Run simulation tests
+      timeout-minutes: 90
       run: test/infra/control/run-tests-isolated.bash
 
     - name: Cleanup
