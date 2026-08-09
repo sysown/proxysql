@@ -12,7 +12,32 @@ on:
         type: boolean
         default: true
 
-permissions: write-all
+# Intentionally NO `permissions:` block here.
+#
+# A reusable workflow may not request more than its caller grants, so a
+# static declaration must be <= the LEAST privileged caller. That is
+# unsatisfiable here: trusted builds need the cache and artifact scopes,
+# while fork builds must hold no write-capable token at all (see
+# docs/superpowers/specs/2026-08-09-fork-pr-builds-design.md, "Security
+# Constraints"). Declaring `write-all` made every call from the
+# least-privilege caller fail before any job started -- which is why
+# CI-builds-fork.yml has never once run (startup_failure on every fork PR).
+#
+# With no block the called workflow inherits the caller's permissions:
+#   CI-builds.yml      (trusted)   grants write-all      -> unchanged
+#   CI-builds-fork.yml (untrusted) grants contents:read  -> now starts
+#
+# contents:read is sufficient for an `inputs.trusted == false` run: only
+# `Checkout repository` executes. Every cache/restore, cache/save,
+# upload-artifact and archive step is gated on inputs.trusted, and BOTH
+# LouisBrunner/checks-action steps are `inputs.trusted && always()`, so the
+# fork path creates no custom checks and needs no checks:write -- exactly as
+# the design spec requires.
+#
+# On a direct `workflow_dispatch` there is no caller, so the repository
+# default token applies (currently `write`), which covers the cache and
+# artifact steps. This workflow uses no OIDC, so the absence of id-token
+# in that default is not a concern.
 
 env:
   LOCK: CI_BUILDS_${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
