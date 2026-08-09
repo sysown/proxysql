@@ -116,10 +116,10 @@ class MyProt_tmp_auth_vars {
 	unsigned char *auth_plugin = NULL;
 	void *sha1_pass=NULL;
 	unsigned char *_ptr = NULL;;
-	unsigned int charset;
+	unsigned int charset = 0;
 	uint32_t  capabilities = 0;
 	uint32_t  max_pkt;
-	uint32_t  pass_len;
+	uint32_t  pass_len = 0;
 	uint8_t zstd_compression_level = 0;
 	bool use_ssl = false;
 	bool use_zstd_compression = false;
