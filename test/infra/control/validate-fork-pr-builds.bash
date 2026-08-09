@@ -13,4 +13,13 @@ grep -Fq 'contents: read' <<<"$fork_builds"
 grep -Fq 'trusted: false' <<<"$fork_builds"
 grep -Fq 'trusted:' <<<"$reusable_builds"
 grep -Fq 'inputs.trusted' <<<"$reusable_builds"
+for variant in 'debian12' 'ubuntu22' 'ubuntu24' '-dbg' '-tap' '-tap-genai-gcov' '-tap-mysqlx'; do
+  grep -Fq "$variant" <<<"$reusable_builds"
+done
+! grep -Fq 'secrets: inherit' <<<"$fork_builds"
+! grep -Fq 'permissions: write-all' <<<"$fork_builds"
+! grep -Fq 'self-hosted' <<<"$fork_builds"
+for privileged_step in 'LouisBrunner/checks-action' 'actions/cache/' 'Upload handoff' 'Archive artifacts'; do
+  grep -F "$privileged_step" <<<"$reusable_builds" | grep -Fq 'inputs.trusted'
+done
 ! grep -Fq 'allow-unsafe-pr-checkout: true' <<<"$base_builds$fork_builds$reusable_builds"
