@@ -278,7 +278,7 @@ jobs:
         plugins: noop
         root_dir: proxysql
         disable_file_fixes: true
-        fail_ci_if_error: false
+        fail_ci_if_error: true
         verbose: true
 
     - name: Wait before Codecov retry 1
@@ -301,7 +301,7 @@ jobs:
         plugins: noop
         root_dir: proxysql
         disable_file_fixes: true
-        fail_ci_if_error: false
+        fail_ci_if_error: true
         verbose: true
 
     - name: Wait before Codecov retry 2
@@ -324,7 +324,7 @@ jobs:
         plugins: noop
         root_dir: proxysql
         disable_file_fixes: true
-        fail_ci_if_error: false
+        fail_ci_if_error: true
         verbose: true
 
     - name: Report Codecov upload failure

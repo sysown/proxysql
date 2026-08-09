@@ -250,7 +250,7 @@ jobs:
       # repo has no CODECOV_TOKEN secret and Codecov rejects tokenless
       # legacy uploads with "branch is protected" HTTP 400.
       #
-      # `fail_ci_if_error: false` so a Codecov outage never fails the
+      # `fail_ci_if_error: true` so a Codecov outage never fails the
       # whole TAP group; `!cancelled()` so coverage uploads even when
       # the test step itself reported a failure (partial coverage is
       # still useful diagnostically).
@@ -280,7 +280,7 @@ jobs:
         plugins: noop
         root_dir: proxysql
         disable_file_fixes: true
-        fail_ci_if_error: false
+        fail_ci_if_error: true
         verbose: true
 
     - name: Wait before Codecov retry 1
@@ -303,7 +303,7 @@ jobs:
         plugins: noop
         root_dir: proxysql
         disable_file_fixes: true
-        fail_ci_if_error: false
+        fail_ci_if_error: true
         verbose: true
 
     - name: Wait before Codecov retry 2
@@ -326,7 +326,7 @@ jobs:
         plugins: noop
         root_dir: proxysql
         disable_file_fixes: true
-        fail_ci_if_error: false
+        fail_ci_if_error: true
         verbose: true
 
     - name: Report Codecov upload failure
