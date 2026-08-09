@@ -269,7 +269,7 @@ jobs:
       # whole TAP group; `!cancelled()` so coverage uploads even when
       # the test step itself reported a failure (partial coverage is
       # still useful diagnostically).
-      uses: codecov/codecov-action@v4
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
       with:
         codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
         override_commit: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
@@ -306,7 +306,7 @@ jobs:
       id: codecov_2
       if: ${{ !cancelled() && steps.codecov_1.outcome == 'failure' }}
       continue-on-error: true
-      uses: codecov/codecov-action@v4
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
       with:
         codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
         override_commit: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
@@ -329,7 +329,7 @@ jobs:
       id: codecov_3
       if: ${{ !cancelled() && steps.codecov_2.outcome == 'failure' }}
       continue-on-error: true
-      uses: codecov/codecov-action@v4
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
       with:
         codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
         override_commit: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
