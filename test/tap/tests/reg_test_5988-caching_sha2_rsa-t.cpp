@@ -116,7 +116,7 @@ int main() {
 		return EXIT_FAILURE;
 	}
 
-	plan(8);
+	plan(11);
 
 	string mysql_help;
 	const vector<const char*> help_args { "mysql", "--help" };
@@ -124,12 +124,12 @@ int main() {
 	if (help_rc != 0 ||
 		mysql_help.find("get-server-public-key") == string::npos ||
 		mysql_help.find("ssl-mode") == string::npos) {
-		skip(8, "Oracle MySQL CLI with --get-server-public-key and --ssl-mode is unavailable");
+		skip(11, "Oracle MySQL CLI with --get-server-public-key and --ssl-mode is unavailable");
 		return exit_status();
 	}
 	const char* infra_datadir = getenv("REGULAR_INFRA_DATADIR");
 	if (infra_datadir == nullptr || *infra_datadir == '\0') {
-		skip(8, "REGULAR_INFRA_DATADIR is required to clean generated RSA key artifacts");
+		skip(11, "REGULAR_INFRA_DATADIR is required to clean generated RSA key artifacts");
 		return exit_status();
 	}
 
@@ -140,7 +140,7 @@ int main() {
 			nullptr, cl.admin_port, nullptr, 0) != nullptr;
 	ok(admin_connected, "Connected to ProxySQL Admin");
 	if (!admin_connected) {
-		skip(7, "Cannot continue without an Admin connection");
+		skip(10, "Cannot continue without an Admin connection");
 		if (admin != nullptr) {
 			mysql_close(admin);
 		}
@@ -244,6 +244,54 @@ int main() {
 		ok(disabled_ok && unavailable_rc != 0 &&
 			output.find("RSA key exchange is unavailable") != string::npos,
 			"Disabled RSA keys return the caching_sha2_password TLS-or-key 1045 hint");
+
+		const bool rejected_update_ok =
+			run_query(
+				admin,
+				"DELETE FROM global_variables WHERE variable_name IN "
+				"('mysql-caching_sha2_password_private_key_path',"
+				"'mysql-caching_sha2_password_public_key_path')"
+			) &&
+			set_global_variable(
+				admin, "mysql-caching_sha2_password_auto_generate_rsa_keys", "true"
+			) &&
+			run_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+		const char* rejected_update_info = mysql_info(admin);
+		ok(rejected_update_ok && rejected_update_info != nullptr &&
+			string(rejected_update_info).find("Rejected: 1") != string::npos,
+			"Grouped RSA rejection counts only the submitted configuration variable");
+
+		string restored_runtime_auto_generate;
+		ok(query_scalar(
+			admin,
+			"SELECT variable_value FROM runtime_global_variables WHERE "
+			"variable_name='mysql-caching_sha2_password_auto_generate_rsa_keys'",
+			restored_runtime_auto_generate
+		) && restored_runtime_auto_generate == "false",
+			"Grouped RSA rejection restores the accepted runtime configuration");
+
+		string restored_global_auto_generate;
+		string restored_global_private_key;
+		string restored_global_public_key;
+		ok(query_scalar(
+			admin,
+			"SELECT variable_value FROM global_variables WHERE "
+			"variable_name='mysql-caching_sha2_password_auto_generate_rsa_keys'",
+			restored_global_auto_generate
+		) && restored_global_auto_generate == "false" &&
+			query_scalar(
+				admin,
+				"SELECT variable_value FROM global_variables WHERE "
+				"variable_name='mysql-caching_sha2_password_private_key_path'",
+				restored_global_private_key
+			) && restored_global_private_key.empty() &&
+			query_scalar(
+				admin,
+				"SELECT variable_value FROM global_variables WHERE "
+				"variable_name='mysql-caching_sha2_password_public_key_path'",
+				restored_global_public_key
+			) && restored_global_public_key.empty(),
+			"Grouped RSA rejection persists the accepted configuration in global_variables");
 
 		const bool enabled_ok = set_global_variable(
 			admin, "mysql-caching_sha2_password_auto_generate_rsa_keys", "true") &&

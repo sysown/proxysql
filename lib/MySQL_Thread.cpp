@@ -1617,7 +1617,11 @@ MySQLThreadsCommitResult MySQL_Threads_Handler::commit() {
 		caching_sha2_rsa_config_initialized_ = true;
 	} else {
 		proxy_error("Rejected caching_sha2_password RSA key configuration: %s\n", rsa_reload.error.c_str());
-		commit_result.rejected_variables = 3;
+		commit_result.rejected_variables = {
+			"caching_sha2_password_auto_generate_rsa_keys",
+			"caching_sha2_password_private_key_path",
+			"caching_sha2_password_public_key_path"
+		};
 
 		if (!caching_sha2_rsa_config_initialized_) {
 			const std::string default_private_path = "proxysql-caching-sha2-private-key.pem";

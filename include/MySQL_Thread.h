@@ -15,6 +15,7 @@
 #include <atomic>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "prometheus_helpers.h"
 
@@ -45,7 +46,7 @@ class MySQL_Caching_Sha2_RSA;
 #endif
 
 struct MySQLThreadsCommitResult {
-	unsigned int rejected_variables { 0 };
+	std::vector<std::string> rejected_variables;
 };
 
 #ifdef IDLE_THREADS
