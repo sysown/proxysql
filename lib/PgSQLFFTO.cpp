@@ -279,7 +279,9 @@ void PgSQLFFTO::report_query_stats(const std::string& query, unsigned long long 
     if (query.empty() || !GloPgQPro || !m_session) return;
     if (!m_session->client_myds || !m_session->client_myds->myconn || !m_session->client_myds->myconn->userinfo) return;
     auto* ui = m_session->client_myds->myconn->userinfo;
-    if (!ui->username || !ui->schemaname) return;
+    if (!ui->username) return;
+    char empty_schema[] = "";
+    char* schemaname = ui->schemaname ? ui->schemaname : empty_schema;
 
     options opts;
     opts.lowercase = pgsql_thread___query_digests_lowercase;
@@ -303,7 +305,7 @@ void PgSQLFFTO::report_query_stats(const std::string& query, unsigned long long 
         uint64_t hash2; SpookyHash myhash; myhash.Init(19, 3);
         myhash.Update(ui->username, strlen(ui->username));
         myhash.Update(&qp.digest, sizeof(qp.digest));
-        myhash.Update(ui->schemaname, strlen(ui->schemaname));
+        myhash.Update(schemaname, strlen(schemaname));
         myhash.Update(&m_session->current_hostgroup, sizeof(m_session->current_hostgroup));
         myhash.Update(ca, strlen(ca));
         myhash.Final(&qp.digest_total, &hash2);
@@ -322,7 +324,9 @@ void PgSQLFFTO::report_error(const unsigned char* payload, size_t len) {
     if (!err.parsed) return;
 
     auto* ui = m_session->client_myds->myconn->userinfo;
-    if (!ui->username || !ui->schemaname) return;
+    if (!ui->username) return;
+    /* database/schemaname may be unset early in the session; still record */
+    char* schemaname = ui->schemaname ? ui->schemaname : (char*)"";
 
     // Build a null-terminated copy of the error message
     std::string msg(err.message ? err.message : "", err.message_len);
@@ -348,7 +352,7 @@ void PgSQLFFTO::report_error(const unsigned char* payload, size_t len) {
     // ui->schemaname and ui->dbname are the same field (union in PgSQL_Connection_userinfo)
     PgHGM->add_pgsql_errors(
         hostgroup, hostname, port,
-        ui->username, client_addr, ui->schemaname,
+        ui->username, client_addr, schemaname,
         err.sqlstate, msg.c_str()
     );
 }

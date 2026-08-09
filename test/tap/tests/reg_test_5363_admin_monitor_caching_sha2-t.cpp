@@ -117,6 +117,27 @@ static int set_var(MYSQL* admin, const char* name, const char* value, const char
 	return EXIT_SUCCESS;
 }
 
+/**
+ * @brief Read a global variable's current value.
+ * @return true when the variable was read; 'out' is then the exact stored value,
+ *   which may legitimately be the empty string. Callers must distinguish "read an
+ *   empty value" from "could not read", because restoring a substituted default
+ *   over a legitimately empty value silently rewrites the instance's config.
+ */
+static bool read_var(MYSQL* admin, const char* name, string& out) {
+	const string q {
+		string("SELECT variable_value FROM global_variables WHERE variable_name='") + name + "'"
+	};
+	if (mysql_query(admin, q.c_str())) { return false; }
+	MYSQL_RES* r = mysql_store_result(admin);
+	if (r == NULL) { return false; }
+	MYSQL_ROW row = mysql_fetch_row(r);
+	const bool found = (row != NULL && row[0] != NULL);
+	if (found) { out = row[0]; }
+	mysql_free_result(r);
+	return found;
+}
+
 int main() {
 	CommandLine cl;
 
@@ -146,7 +167,8 @@ int main() {
 	};
 
 	// 1 admin connection + 2 preconditions + the cases + 2 restore checks
-	plan(1 + 2 + static_cast<int>(CASES.size()) + 2);
+	// connected(1) + preconditions(2) + one per case + restore checks(3)
+	plan(1 + 2 + static_cast<int>(CASES.size()) + 3);
 
 	MYSQL* admin = mysql_init(NULL);
 	if (!mysql_real_connect(admin, cl.admin_host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
@@ -155,24 +177,20 @@ int main() {
 	}
 	ok(true, "Connected to ProxySQL Admin at %s:%d", cl.admin_host, cl.admin_port);
 
-	// Remember what to put back.
+	// Remember what to put back. Every variable this test writes must be saved
+	// here, and restored to EXACTLY this value -- these run against a shared
+	// instance, so substituting a hardcoded default for a value that was
+	// legitimately empty would rewrite the instance's configuration.
 	string orig_plugin {};
+	string orig_mon_user {};
 	string orig_mon_pass {};
-	{
-		MYSQL_QUERY_T(admin, "SELECT variable_value FROM global_variables WHERE variable_name='mysql-default_authentication_plugin'");
-		MYSQL_RES* r = mysql_store_result(admin);
-		MYSQL_ROW row = mysql_fetch_row(r);
-		if (row && row[0]) { orig_plugin = row[0]; }
-		mysql_free_result(r);
-
-		MYSQL_QUERY_T(admin, "SELECT variable_value FROM global_variables WHERE variable_name='mysql-monitor_password'");
-		r = mysql_store_result(admin);
-		row = mysql_fetch_row(r);
-		if (row && row[0]) { orig_mon_pass = row[0]; }
-		mysql_free_result(r);
-	}
-	diag("Saved mysql-default_authentication_plugin='%s', mysql-monitor_password='%s'",
-		orig_plugin.c_str(), orig_mon_pass.c_str());
+	const bool have_plugin   = read_var(admin, "mysql-default_authentication_plugin", orig_plugin);
+	const bool have_mon_user = read_var(admin, "mysql-monitor_username", orig_mon_user);
+	const bool have_mon_pass = read_var(admin, "mysql-monitor_password", orig_mon_pass);
+	diag("Saved mysql-default_authentication_plugin='%s'%s, mysql-monitor_username='%s'%s, mysql-monitor_password='%s'%s",
+		orig_plugin.c_str(),   have_plugin   ? "" : " (UNREADABLE - will not be restored)",
+		orig_mon_user.c_str(), have_mon_user ? "" : " (UNREADABLE - will not be restored)",
+		orig_mon_pass.c_str(), have_mon_pass ? "" : " (UNREADABLE - will not be restored)");
 
 	// --- Preconditions ------------------------------------------------------
 	{
@@ -212,29 +230,40 @@ int main() {
 	}
 
 	// --- Restore ------------------------------------------------------------
-	set_var(admin, "mysql-default_authentication_plugin",
-		orig_plugin.empty() ? "mysql_native_password" : orig_plugin.c_str(),
-		"LOAD MYSQL VARIABLES TO RUNTIME");
-	set_var(admin, "mysql-monitor_password",
-		orig_mon_pass.empty() ? "monitor" : orig_mon_pass.c_str(),
-		"LOAD MYSQL VARIABLES TO RUNTIME");
+	// Put back exactly what was read, including an empty value. A variable that
+	// could not be read is left alone rather than being overwritten with a guess.
+	if (have_plugin) {
+		set_var(admin, "mysql-default_authentication_plugin", orig_plugin.c_str(),
+			"LOAD MYSQL VARIABLES TO RUNTIME");
+	}
+	if (have_mon_user) {
+		set_var(admin, "mysql-monitor_username", orig_mon_user.c_str(),
+			"LOAD MYSQL VARIABLES TO RUNTIME");
+	}
+	if (have_mon_pass) {
+		set_var(admin, "mysql-monitor_password", orig_mon_pass.c_str(),
+			"LOAD MYSQL VARIABLES TO RUNTIME");
+	}
 
 	{
-		MYSQL_QUERY_T(admin, "SELECT variable_value FROM global_variables WHERE variable_name='mysql-default_authentication_plugin'");
-		MYSQL_RES* r = mysql_store_result(admin);
-		MYSQL_ROW row = mysql_fetch_row(r);
-		const string now { (row && row[0]) ? row[0] : "" };
-		mysql_free_result(r);
-		ok(now == orig_plugin, "mysql-default_authentication_plugin restored   exp:'%s', got:'%s'",
+		string now {};
+		read_var(admin, "mysql-default_authentication_plugin", now);
+		ok(!have_plugin || now == orig_plugin,
+			"mysql-default_authentication_plugin restored   exp:'%s', got:'%s'",
 			orig_plugin.c_str(), now.c_str());
 	}
 	{
-		MYSQL_QUERY_T(admin, "SELECT variable_value FROM global_variables WHERE variable_name='mysql-monitor_password'");
-		MYSQL_RES* r = mysql_store_result(admin);
-		MYSQL_ROW row = mysql_fetch_row(r);
-		const string now { (row && row[0]) ? row[0] : "" };
-		mysql_free_result(r);
-		ok(now == orig_mon_pass, "mysql-monitor_password restored   exp:'%s', got:'%s'",
+		string now {};
+		read_var(admin, "mysql-monitor_username", now);
+		ok(!have_mon_user || now == orig_mon_user,
+			"mysql-monitor_username restored   exp:'%s', got:'%s'",
+			orig_mon_user.c_str(), now.c_str());
+	}
+	{
+		string now {};
+		read_var(admin, "mysql-monitor_password", now);
+		ok(!have_mon_pass || now == orig_mon_pass,
+			"mysql-monitor_password restored   exp:'%s', got:'%s'",
 			orig_mon_pass.c_str(), now.c_str());
 	}
 

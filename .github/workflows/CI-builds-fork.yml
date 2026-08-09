@@ -1,0 +1,17 @@
+name: CI-builds-fork
+
+on:
+  pull_request:
+    paths-ignore:
+      - '.github/**'
+      - '**.md'
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    if: ${{ github.event.pull_request.head.repo.fork }}
+    uses: sysown/proxysql/.github/workflows/ci-builds.yml@f3f23d1e8ad10da475261e515776d2fee68d732b
+    with:
+      trusted: false

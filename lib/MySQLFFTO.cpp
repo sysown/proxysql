@@ -252,7 +252,9 @@ void MySQLFFTO::report_query_stats(const std::string& query, unsigned long long 
     if (query.empty() || !GloMyQPro || !m_session) return;
     if (!m_session->client_myds || !m_session->client_myds->myconn || !m_session->client_myds->myconn->userinfo) return;
     auto* ui = m_session->client_myds->myconn->userinfo;
-    if (!ui->username || !ui->schemaname) return;
+    if (!ui->username) return;
+    char empty_schema[] = "";
+    char* schemaname = ui->schemaname ? ui->schemaname : empty_schema;
 
 	options opts;
 	opts.lowercase = mysql_thread___query_digests_lowercase;
@@ -276,7 +278,7 @@ void MySQLFFTO::report_query_stats(const std::string& query, unsigned long long 
         uint64_t hash2; SpookyHash myhash; myhash.Init(19, 3);
         myhash.Update(ui->username, strlen(ui->username));
         myhash.Update(&qp.digest, sizeof(qp.digest));
-        myhash.Update(ui->schemaname, strlen(ui->schemaname));
+        myhash.Update(schemaname, strlen(schemaname));
         myhash.Update(&m_session->current_hostgroup, sizeof(m_session->current_hostgroup));
         myhash.Update(ca, strlen(ca));
         myhash.Final(&qp.digest_total, &hash2);
@@ -297,7 +299,9 @@ void MySQLFFTO::report_error(const unsigned char* data, size_t len) {
     if (!mysql_parse_err_packet(data, len, &err_no, &errmsg, &errmsg_len)) return;
 
     auto* ui = m_session->client_myds->myconn->userinfo;
-    if (!ui->username || !ui->schemaname) return;
+    if (!ui->username) return;
+    /* schemaname may be unset before COM_INIT_DB; still record the error */
+    char* schemaname = ui->schemaname ? ui->schemaname : (char*)"";
 
     // Build a null-terminated copy of the error message
     std::string msg(errmsg ? errmsg : "", errmsg_len);
@@ -322,7 +326,7 @@ void MySQLFFTO::report_error(const unsigned char* data, size_t len) {
 
     MyHGM->add_mysql_errors(
         hostgroup, hostname, port,
-        ui->username, client_addr, ui->schemaname,
+        ui->username, client_addr, schemaname,
         err_no, (char*)msg.c_str()
     );
 }
