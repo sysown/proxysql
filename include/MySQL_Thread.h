@@ -45,7 +45,9 @@ extern class MySQL_Variables mysql_variables;
 class MySQL_Caching_Sha2_RSA;
 #endif
 
+/** @brief Outcome details for a staged MySQL-variable commit. */
 struct MySQLThreadsCommitResult {
+	/** @brief Exact variable names rejected as members of an invalid grouped configuration. */
 	std::vector<std::string> rejected_variables;
 };
 
@@ -813,12 +815,14 @@ class MySQL_Threads_Handler
 	unsigned int get_global_version();
 	void wrlock();
  	void wrunlock();
+	/** @brief Commit staged variables and report grouped variables that retained prior values. */
 	MySQLThreadsCommitResult commit();
 	char *get_variable(char *name);
 	bool set_variable(char *name, const char *value);
 	char **get_variables_list();
 	bool has_variable(const char * name);
 #ifdef PROXYSQL31
+	/** @brief Return the handler-owned RSA snapshot manager; ownership is not transferred. */
 	MySQL_Caching_Sha2_RSA* caching_sha2_rsa() const { return caching_sha2_rsa_manager_.get(); }
 #endif
 

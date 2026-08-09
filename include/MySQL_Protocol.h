@@ -11,6 +11,7 @@
 
 class MySQL_Caching_Sha2_RSA_Key_Snapshot;
 
+/** @brief Frontend authentication failures that require a specific client-facing diagnostic. */
 enum class MySQLFrontendAuthError : uint8_t {
 	NONE = 0,
 	CACHING_SHA2_RSA_UNAVAILABLE
@@ -214,15 +215,12 @@ class MySQL_Protocol {
 	void PPHR_6auth2(bool& ret, MyProt_tmp_auth_vars& vars1);
 	bool PPHR_verify_sha2(MyProt_tmp_auth_vars& vars1, enum proxysql_auth_plugins passformat, PASSWORD_TYPE::E passtype);
 	void PPHR_sha2full(bool& ret, MyProt_tmp_auth_vars& vars1, enum proxysql_auth_plugins passformat, PASSWORD_TYPE::E passtype);
-	// Pass-through authentication (see doc/internal/passthrough_authentication.md).
-	// PPHR_passthrough_init runs the protocol-side state machine for the
-	// caching_sha2_password full-auth exchange when ProxySQL doesn't yet
-	// have a password for the user. At switching_auth_stage==0 it sends
-	// AuthMoreData{0x04} so the client emits its cleartext; at stage 5 it
-	// stashes the captured cleartext on the data stream and transitions
-	// the session to AUTHENTICATING_BACKEND_FOR_CLIENT so the backend
-	// probe (handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT)
-	// can validate the credential.
+	/**
+	 * @brief Drive caching_sha2_password full authentication for pass-through users.
+	 * @details At stage 0 this sends AuthMoreData{0x04}; at stage 5 it transfers the
+	 * cleartext to the data stream and schedules the backend credential probe.
+	 * @return False when the request packet could not be allocated; no auth state is advanced.
+	 */
 	bool PPHR_passthrough_init(MyProt_tmp_auth_vars& vars1);
 	void PPHR_7auth1(bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, account_details_t& attr1);
 	void PPHR_7auth2(bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, account_details_t& attr1);
@@ -231,9 +229,12 @@ class MySQL_Protocol {
 	bool PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_details_t& account_details);
 	bool PPHR_verify_password_2(MyProt_tmp_auth_vars& vars1, account_details_t& account_details);
 
+	/** @brief Queue a one-byte auth packet, leaving the queue and sequence unchanged on failure. */
 	bool generate_one_byte_pkt(unsigned char b);
 #ifdef PROXYSQL31
+	/** @brief Queue AuthMoreData atomically; false means no packet or sequence update occurred. */
 	bool generate_auth_more_data(const unsigned char *data, size_t data_len);
+	/** @brief Return and clear the pending frontend authentication diagnostic. */
 	MySQLFrontendAuthError consume_frontend_auth_error();
 #endif
 
