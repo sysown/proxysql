@@ -14,7 +14,7 @@
 #include "command_line.h"
 #include "utils.h"
 
-PGconn* init_pgsql_conn(char* host, char* user, char* pass, int port) {
+PGconn* init_pgsql_conn(const char* host, const char* user, const char* pass, int port) {
 	diag("Creating PgSQL conn host=\"%s\" port=\"%d\" user=\"%s\"", host, port, user);
 
 	std::stringstream ss;
@@ -63,10 +63,16 @@ int test_session_timeout(CommandLine* cl, PGconn* admin) {
 	diag("Test: %s", __func__);
 
 	diag("Setting pgsql-wait_timeout=4000");
-	if (admin_q(admin, "SET pgsql-wait_timeout=4000")) return EXIT_FAILURE;
+	if (admin_q(admin, "SET pgsql-wait_timeout=4000")) {
+		return EXIT_FAILURE;
+	}
 	diag("Setting pgsql-poll_timeout=500 , required for more precise timeout");
-	if (admin_q(admin, "SET pgsql-poll_timeout=500")) return EXIT_FAILURE;
-	if (admin_q(admin, "LOAD PGSQL VARIABLES TO RUNTIME")) return EXIT_FAILURE;
+	if (admin_q(admin, "SET pgsql-poll_timeout=500")) {
+		return EXIT_FAILURE;
+	}
+	if (admin_q(admin, "LOAD PGSQL VARIABLES TO RUNTIME")) {
+		return EXIT_FAILURE;
+	}
 
 	PGconn* proxy = init_pgsql_conn(cl->pgsql_host, cl->pgsql_username, cl->pgsql_password, cl->pgsql_port);
 	if (!proxy) {
@@ -90,10 +96,18 @@ int test_transaction_idle_timeout(CommandLine* cl, PGconn* admin) {
 
 	// wait_timeout is left high so only max_transaction_idle_time can fire here.
 	diag("Setting pgsql-max_transaction_idle_time=3000");
-	if (admin_q(admin, "SET pgsql-max_transaction_idle_time=3000")) return EXIT_FAILURE;
-	if (admin_q(admin, "SET pgsql-wait_timeout=60000")) return EXIT_FAILURE;
-	if (admin_q(admin, "SET pgsql-poll_timeout=500")) return EXIT_FAILURE;
-	if (admin_q(admin, "LOAD PGSQL VARIABLES TO RUNTIME")) return EXIT_FAILURE;
+	if (admin_q(admin, "SET pgsql-max_transaction_idle_time=3000")) {
+		return EXIT_FAILURE;
+	}
+	if (admin_q(admin, "SET pgsql-wait_timeout=60000")) {
+		return EXIT_FAILURE;
+	}
+	if (admin_q(admin, "SET pgsql-poll_timeout=500")) {
+		return EXIT_FAILURE;
+	}
+	if (admin_q(admin, "LOAD PGSQL VARIABLES TO RUNTIME")) {
+		return EXIT_FAILURE;
+	}
 
 	PGconn* proxy = init_pgsql_conn(cl->pgsql_host, cl->pgsql_username, cl->pgsql_password, cl->pgsql_port);
 	if (!proxy) {
