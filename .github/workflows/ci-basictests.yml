@@ -254,7 +254,7 @@ jobs:
         test/infra/control/destroy-infras.bash
 
     - name: Fix artifact permissions
-      if: ${{ failure() && !cancelled() }}
+      if: ${{ !cancelled() }}
       run: |
         # actions/upload-artifact dies with EACCES when it scandirs into
         # directories under ci_*_logs/ that were created inside docker
@@ -292,13 +292,30 @@ jobs:
           proxysql/ci_infra_logs/ci-basictests/coverage-report/
         if-no-files-found: ignore
 
+    - name: Detect coverage file
+      # Replaces hashFiles(): on the self-hosted runners this job can land on,
+      # the workspace persists between runs and ci_infra_logs is left root-owned
+      # by the test containers. hashFiles() walks the tree, hits EACCES and
+      # THROWS ('Fail to hash files under directory ...'), which invalidates the
+      # template and fails the job even when every test passed. A plain readable
+      # check on the exact file cannot throw, and matches the path used by the
+      # upload step below (the old glob was '**', far wider than needed).
+      id: cov
+      if: ${{ !cancelled() }}
+      run: |
+        if [ -r "proxysql/ci_infra_logs/ci-basictests/coverage-report/ci-basictests.info" ]; then
+          echo "found=1" >> "$GITHUB_OUTPUT"
+        else
+          echo "found=0" >> "$GITHUB_OUTPUT"
+        fi
+
     - name: Report missing coverage file
-      if: ${{ !cancelled() && hashFiles('proxysql/ci_infra_logs/**/coverage-report/*.info') == '' }}
+      if: ${{ !cancelled() && steps.cov.outputs.found == '0' }}
       run: |
         echo "No coverage report was produced; skipping Codecov upload."
 
     - name: Upload coverage to Codecov
-      if: ${{ !cancelled() && hashFiles('proxysql/ci_infra_logs/**/coverage-report/*.info') != '' }}
+      if: ${{ !cancelled() && steps.cov.outputs.found == '1' }}
       uses: codecov/codecov-action@v4
       with:
         codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
