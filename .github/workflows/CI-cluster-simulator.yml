@@ -71,7 +71,7 @@ jobs:
 
     - name: Save simulation build
       if: steps.simulator-build.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         key: ${{ env.BUILD_CACHE_KEY }}
         path: ${{ env.RUNTIME_CACHE_DIR }}
