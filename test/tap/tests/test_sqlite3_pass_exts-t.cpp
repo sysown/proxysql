@@ -430,7 +430,11 @@ int test_pass_gen(MYSQL* admin, const string& auth, const string& pass, const st
 		MYSQL_RES* myres = mysql_store_result(admin);
 		MYSQL_ROW myrow = mysql_fetch_row(myres);
 
-		if (pass.size() > 0 && salt.size() > 0 && salt.size() <= 20) {
+		// An explicitly supplied salt must be EXACTLY 20 bytes: the stored
+		// '$A$rrr$' format has no delimiter after the salt, so verification reads
+		// it back positionally with substr(7,20). Any other length is rejected at
+		// generation with "Invalid argument size" (handled by the else branch).
+		if (pass.size() > 0 && salt.size() == 20) {
 			const string admin_hash { myrow[0] };
 			const string hash_start { "$A$005$" + salt };
 
@@ -520,12 +524,37 @@ const vector<inv_input_t> INV_INPUTS {
 	{ "SELECT CACHING_SHA2_PASSWORD(2, '00')", 0, "Invalid argument type" },
 	{ "SELECT CACHING_SHA2_PASSWORD('00', 2)", 0, "Invalid argument type" },
 	{ "SELECT CACHING_SHA2_PASSWORD('00', '00', '00')", 0, "Invalid argument type" },
-	{ "SELECT CACHING_SHA2_PASSWORD('00', '00', 1000)", 0,
+	// NOTE: these three exercise the ROUNDS validation, so the salt must be a
+	// valid 20 bytes -- lengths are checked before rounds, and a short salt would
+	// short-circuit with "Invalid argument size" and stop testing rounds at all.
+	{ "SELECT CACHING_SHA2_PASSWORD('00', '00000000000000000000', 1000)", 0,
 		"Invalid rounds: expected multiple of 1000 in [5000,4095000]" },
-	{ "SELECT CACHING_SHA2_PASSWORD('00', '00', 5500)", 0,
+	{ "SELECT CACHING_SHA2_PASSWORD('00', '00000000000000000000', 5500)", 0,
 		"Invalid rounds: expected multiple of 1000 in [5000,4095000]" },
-	{ "SELECT CACHING_SHA2_PASSWORD('00', '00', 4096000)", 0,
+	{ "SELECT CACHING_SHA2_PASSWORD('00', '00000000000000000000', 4096000)", 0,
 		"Invalid rounds: expected multiple of 1000 in [5000,4095000]" },
+
+	// An explicitly supplied salt must be EXACTLY 20 bytes. Anything shorter used
+	// to be accepted and produced a hash that could never authenticate: the stored
+	// '$A$rrr$' format has no delimiter after the salt, so verification reads it
+	// back positionally with substr(7,20) and picks up digest bytes as salt. The
+	// credential stored without error and every login failed with a generic
+	// 'Access denied'.
+	{ "SELECT CACHING_SHA2_PASSWORD('somepass', '0')", 0, "Invalid argument size" },
+	{ "SELECT CACHING_SHA2_PASSWORD('somepass', '0123456789')", 0, "Invalid argument size" },
+	{ "SELECT CACHING_SHA2_PASSWORD('somepass', '0123456789012345678')", 0, "Invalid argument size" },
+	{ "SELECT CACHING_SHA2_PASSWORD('somepass', '012345678901234567890')", 0, "Invalid argument size" },
+
+	// A 20-byte salt containing an embedded NUL is the right LENGTH but is equally
+	// unusable: the salt is appended with strcat(), which stops at the NUL, while
+	// the digest offset is computed from the declared salt_size. The resulting hash
+	// is malformed and cannot authenticate -- silently, just like a short salt.
+	// X'00...' is a 20-byte BLOB whose first byte is NUL.
+	{ "SELECT CACHING_SHA2_PASSWORD('somepass', X'000102030405060708090A0B0C0D0E0F10111213')", 0,
+		"Invalid salt: must not contain NUL bytes" },
+	// ...and one with the NUL in the middle, so it is not simply an empty-string case.
+	{ "SELECT CACHING_SHA2_PASSWORD('somepass', X'01020304050607080900000C0D0E0F1011121314')", 0,
+		"Invalid salt: must not contain NUL bytes" },
 };
 
 
@@ -851,11 +880,31 @@ int main(int argc, char** argv) {
 			test_pass_gen(admin, "mysql_native_password", pass, "");
 		}
 
+		// Salt lengths are now exercised deliberately rather than at random: an
+		// explicit salt must be exactly 20 bytes, so alternate between a valid
+		// 20-byte salt (hash must be wellformed) and a random invalid length (must
+		// be rejected with "Invalid argument size"). Both outcomes are asserted by
+		// test_pass_gen().
+		//
+		// This also replaces a long-standing copy/paste bug: 'salt_len' was computed
+		// as 'rand() % 20' and then never used -- the salt was built with
+		// 'random_string(pass_len)', so it tracked the PASSWORD length (0..149) and
+		// the intended salt-length sweep never happened.
 		for (size_t i = 0; i < PASS_GEN_COUNT; i++) {
 			const uint32_t pass_len = rand() % 150;
-			const uint32_t salt_len = rand() % 20;
 			const string pass { random_string(pass_len) };
-			const string salt { random_string(pass_len) };
+
+			// No PRNG here on purpose. A random length adds nothing -- the property
+			// under test is "exactly 20 is accepted, anything else is rejected" --
+			// and both rand() and <random> trip SonarCloud (cpp:S5020, cpp:S2245).
+			// A fixed sweep is fully deterministic and covers the boundaries
+			// explicitly: 0, 1, 19, 21, 40 and a few in between.
+			static const uint32_t INVALID_SALT_LENS[] = { 0, 1, 2, 19, 21, 22, 40, 64 };
+			uint32_t salt_len = 20;
+			if (i % 2 == 1) {
+				salt_len = INVALID_SALT_LENS[(i / 2) % (sizeof(INVALID_SALT_LENS) / sizeof(INVALID_SALT_LENS[0]))];
+			}
+			const string salt { random_string(salt_len) };
 
 			test_pass_gen(admin, "caching_sha2_password", pass, salt);
 		}
